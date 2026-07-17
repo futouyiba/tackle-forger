@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import { createSeedState } from "./seed";
 import type { RevisionInfo, WorkspaceState } from "./types";
+import { ensureWorkflowFields } from "./workflow";
 
 type StorageEnv = {
   DB?: D1Database;
@@ -40,7 +41,7 @@ export async function loadWorkspaceState(): Promise<{
     .first<{ state_json: string; revision: number }>();
 
   if (row) {
-    return { state: JSON.parse(row.state_json) as WorkspaceState, revision: row.revision };
+    return { state: ensureWorkflowFields(JSON.parse(row.state_json) as WorkspaceState), revision: row.revision };
   }
 
   const state = createSeedState();
@@ -125,7 +126,7 @@ export async function loadRevision(revision: number): Promise<WorkspaceState | n
     .prepare("SELECT state_json FROM workspace_revisions WHERE revision = ?")
     .bind(revision)
     .first<{ state_json: string }>();
-  return row ? (JSON.parse(row.state_json) as WorkspaceState) : null;
+  return row ? ensureWorkflowFields(JSON.parse(row.state_json) as WorkspaceState) : null;
 }
 
 export async function saveImportedFile(file: File, author: string) {

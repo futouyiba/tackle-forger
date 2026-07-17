@@ -243,6 +243,118 @@ export interface RevisionInfo {
   createdAt: string;
 }
 
+export type RuleGraphNodeKind =
+  | "baseline"
+  | "modifier"
+  | "affix"
+  | "rule"
+  | "constraint"
+  | "condition"
+  | "merge"
+  | "review"
+  | "validate"
+  | "output";
+
+export type RuleNodeExecutionStatus =
+  | "pending"
+  | "ready"
+  | "running"
+  | "waiting_review"
+  | "completed"
+  | "failed"
+  | "skipped";
+
+export interface RuleGraphCondition {
+  id: string;
+  field: string;
+  operator: "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "contains";
+  value: number | string;
+}
+
+export interface RuleGraphNode {
+  id: string;
+  name: string;
+  kind: RuleGraphNodeKind;
+  description: string;
+  x: number;
+  y: number;
+  manualStart: boolean;
+  dimensions: DimensionKey[];
+  rules: AdjustmentRule[];
+  conditions: RuleGraphCondition[];
+  conditionMode: "all" | "any";
+}
+
+export interface RuleGraphEdge {
+  id: string;
+  from: string;
+  to: string;
+  outcome: "always" | "matched" | "unmatched" | "approved";
+  label: string;
+}
+
+export interface RuleGraph {
+  id: string;
+  name: string;
+  description: string;
+  mode: "automatic" | "manual" | "hybrid";
+  entryNodeId: string;
+  nodes: RuleGraphNode[];
+  edges: RuleGraphEdge[];
+  version: number;
+  enabled: boolean;
+}
+
+export interface GraphBatchRow {
+  id: string;
+  candidateId: string;
+  comboId: string;
+  templateId: string;
+  values: Record<string, number | string>;
+  qualityId: string;
+  qualityScore: number;
+  issues: string[];
+  touchedKeys: string[];
+}
+
+export interface RuleGraphNodeRunState {
+  nodeId: string;
+  status: RuleNodeExecutionStatus;
+  inputRowIds: string[];
+  outputRowIds: string[];
+  matchedRowIds: string[];
+  unmatchedRowIds: string[];
+  error?: string;
+  startedAt?: string;
+  finishedAt?: string;
+}
+
+export interface IntermediateSnapshot {
+  id: string;
+  nodeId: string;
+  nodeName: string;
+  status: "waiting" | "approved";
+  rows: GraphBatchRow[];
+  createdAt: string;
+  reviewedAt?: string;
+  reviewer?: string;
+  notes: string;
+}
+
+export interface RuleGraphRun {
+  id: string;
+  graphId: string;
+  name: string;
+  status: "ready" | "running" | "waiting_review" | "paused" | "completed" | "failed";
+  nodeStates: RuleGraphNodeRunState[];
+  workingRows: GraphBatchRow[];
+  snapshots: IntermediateSnapshot[];
+  createdAt: string;
+  updatedAt: string;
+  startedBy: string;
+  committedAt?: string;
+}
+
 export interface WorkspaceState {
   schemaVersion: number;
   parameters: ParameterDefinition[];
@@ -256,6 +368,8 @@ export interface WorkspaceState {
   candidates: Candidate[];
   officialSkus: OfficialSku[];
   detailOverrides: DetailOverride[];
+  ruleGraphs: RuleGraph[];
+  ruleRuns: RuleGraphRun[];
   revisions: RevisionInfo[];
   notes: string;
   importedAt: string;

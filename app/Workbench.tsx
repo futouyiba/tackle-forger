@@ -9,6 +9,7 @@ import {
   Database,
   Download,
   FileSpreadsheet,
+  GitBranch,
   GitCompareArrows,
   History,
   Layers3,
@@ -29,12 +30,14 @@ import {
   XCircle,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { RuleGraphStudio } from "./RuleGraphStudio";
 import {
   generateCandidatesForRecipe,
   publishCandidate,
   recalculateWorkspace,
   suggestRulesFromOverrides,
 } from "@/lib/engine";
+import { ensureWorkflowFields } from "@/lib/workflow";
 import type {
   AdjustmentRule,
   Affix,
@@ -53,6 +56,7 @@ type PageKey =
   | "templates"
   | "modifiers"
   | "layers"
+  | "rulegraph"
   | "affixes"
   | "quality"
   | "recipes"
@@ -83,6 +87,7 @@ const pageMeta: Record<PageKey, { title: string; subtitle: string }> = {
   templates: { title: "重量模板", subtitle: "管理钓法 × 大重量段的中性杆轮线基准与动态参数" },
   modifiers: { title: "类型、材质与定位", subtitle: "在纵横矩阵中批量编辑 +、×、覆盖、上下限和公式" },
   layers: { title: "规则层栈", subtitle: "层数越大越特化；后层可以浮动或顶掉前层结果" },
+  rulegraph: { title: "规则图与执行中心", subtitle: "DAG 编排、条件分支、手动节点、人工审阅中间表和下游输出" },
   affixes: { title: "词条库", subtitle: "直接属性词条与被动机制词条共同决定装备能力和品质分" },
   quality: { title: "品质评分", subtitle: "有损相加、协同、冲突与品质阈值完全可配置" },
   recipes: { title: "系列 / SKU 配方", subtitle: "系列指定模板、定位约束、必带词条和可选词条池" },
@@ -102,6 +107,7 @@ const navGroups: Array<{ label: string; items: Array<{ key: PageKey; label: stri
       { key: "templates", label: "重量模板", icon: Database },
       { key: "modifiers", label: "类型与定位", icon: SlidersHorizontal },
       { key: "layers", label: "规则层栈", icon: Layers3 },
+      { key: "rulegraph", label: "规则图执行", icon: GitBranch },
     ],
   },
   {
@@ -348,7 +354,7 @@ function copyState<T>(value: T): T {
 }
 
 export function Workbench({ initialState }: { initialState: WorkspaceState }) {
-  const [state, setState] = useState<WorkspaceState>(() => recalculateWorkspace(initialState));
+  const [state, setState] = useState<WorkspaceState>(() => recalculateWorkspace(ensureWorkflowFields(initialState)));
   const [page, setPage] = useState<PageKey>("overview");
   const [revision, setRevision] = useState(1);
   const [user, setUser] = useState({ email: "local@tackle-forger", name: "本地管理员", role: "admin" });
@@ -407,7 +413,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       })
       .then((payload) => {
         if (!active) return;
-        setState(recalculateWorkspace(payload.state));
+        setState(recalculateWorkspace(ensureWorkflowFields(payload.state)));
         setRevision(payload.revision);
         setUser(payload.user);
         setDirty(false);
@@ -861,7 +867,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         const serialized = rows.slice(1).map((row) => String(row[1] ?? "")).join("");
         const imported = JSON.parse(serialized) as WorkspaceState;
         if (imported.schemaVersion !== 1) throw new Error("配置版本不兼容。");
-        setState(recalculateWorkspace(imported));
+        setState(recalculateWorkspace(ensureWorkflowFields(imported)));
       } else {
         const sheet = workbook.Sheets["01重量模板"];
         if (!sheet) throw new Error("找不到 01重量模板 或内部状态页。");
@@ -1960,6 +1966,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     if (page === "templates") return renderTemplates();
     if (page === "modifiers") return renderModifiers();
     if (page === "layers") return renderLayers();
+    if (page === "rulegraph") return <RuleGraphStudio state={state} mutate={mutate} notify={notify} userName={user.name} selectedCandidateIds={Array.from(selectedCandidates)} />;
     if (page === "affixes") return renderAffixes();
     if (page === "quality") return renderQuality();
     if (page === "recipes") return renderRecipes();

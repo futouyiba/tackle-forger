@@ -13,6 +13,7 @@ import type {
   WeightTemplate,
   WorkspaceState,
 } from "./types";
+import { defaultRuleGraphs } from "./workflow";
 
 type Cell = string | number | boolean | null;
 type SheetData = { values: Cell[][]; formulas: Cell[][] };
@@ -597,6 +598,8 @@ export function createSeedState(): WorkspaceState {
     candidates: importedCandidates,
     officialSkus: [],
     detailOverrides: [],
+    ruleGraphs: structuredClone(defaultRuleGraphs),
+    ruleRuns: [],
     revisions: [
       {
         revision: 1,

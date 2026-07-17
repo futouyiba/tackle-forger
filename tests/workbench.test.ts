@@ -8,6 +8,14 @@ import {
   scoreAffixes,
 } from "../lib/engine";
 import { createSeedState } from "../lib/seed";
+import {
+  advanceAutomaticNodes,
+  approveReviewSnapshot,
+  commitRuleRunToCandidates,
+  createRuleGraphRun,
+  executeRuleGraphNode,
+  validateRuleGraph,
+} from "../lib/workflow";
 
 test("Excel 数据种子完整映射主表", () => {
   const state = createSeedState();
@@ -64,4 +72,69 @@ test("受约束配方生成并发布规范 ID", () => {
   assert.equal(sku.rodId, sku.comboId + "_R");
   assert.equal(sku.reelId, sku.comboId + "_W");
   assert.equal(sku.lineId, sku.comboId + "_L");
+});
+
+test("规则图是无环 DAG，条件分支按行路由并在人工关卡暂停", () => {
+  const state = createSeedState();
+  const graph = structuredClone(state.ruleGraphs[0]);
+  assert.deepEqual(validateRuleGraph(graph), []);
+
+  const run = createRuleGraphRun(state, graph, [], "测试策划");
+  const conditionState = run.nodeStates.find((item) => item.nodeId === "node-special-condition");
+  assert.equal(conditionState?.status, "completed");
+  assert.equal(
+    (conditionState?.matchedRowIds.length ?? 0) + (conditionState?.unmatchedRowIds.length ?? 0),
+    state.candidates.length,
+  );
+  assert.equal(run.status, "paused");
+  assert.equal(
+    run.nodeStates.find((item) => item.nodeId === "node-special-adjust")?.status,
+    "ready",
+  );
+
+  executeRuleGraphNode(state, graph, run, "node-special-adjust");
+  advanceAutomaticNodes(state, graph, run);
+  assert.equal(run.status, "waiting_review");
+  assert.equal(run.snapshots.length, 1);
+  assert.equal(run.snapshots[0].rows.length, state.candidates.length);
+});
+
+test("审阅中间表可修改，批准后继续执行并只下发触碰字段", () => {
+  const state = createSeedState();
+  const graph = structuredClone(state.ruleGraphs[0]);
+  const run = createRuleGraphRun(state, graph, [], "测试策划");
+  executeRuleGraphNode(state, graph, run, "node-special-adjust");
+  advanceAutomaticNodes(state, graph, run);
+
+  const snapshot = run.snapshots[0];
+  const row = snapshot.rows[0];
+  const before = Number(row.values["杆自重g"]);
+  row.values["杆自重g"] = before + 7;
+  row.touchedKeys.push("杆自重g");
+
+  approveReviewSnapshot(state, graph, run, "node-review", "审核员");
+  assert.equal(run.status, "paused");
+  assert.equal(run.nodeStates.find((item) => item.nodeId === "node-output")?.status, "ready");
+
+  executeRuleGraphNode(state, graph, run, "node-output");
+  advanceAutomaticNodes(state, graph, run);
+  assert.equal(run.status, "completed");
+
+  commitRuleRunToCandidates(state, run);
+  const candidate = state.candidates.find((item) => item.id === row.candidateId);
+  assert.equal(candidate?.overrides["杆自重g"], before + 7);
+  assert.ok(run.committedAt);
+});
+
+test("规则图拒绝形成循环", () => {
+  const state = createSeedState();
+  const graph = structuredClone(state.ruleGraphs[0]);
+  graph.edges.push({
+    id: "cycle-edge",
+    from: "node-output",
+    to: "node-baseline",
+    outcome: "always",
+    label: "错误回路",
+  });
+  assert.ok(validateRuleGraph(graph).some((issue) => issue.includes("循环")));
 });

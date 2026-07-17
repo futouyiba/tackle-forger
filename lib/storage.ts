@@ -76,7 +76,7 @@ async function readBlobDocument(): Promise<LoadedBlobDocument | null> {
     ...entry,
     state: ensureWorkflowFields(entry.state),
   }));
-  return { document, etag: result.blob.etag };
+  return { document, etag: result.blob.etag.replace(/^W\//, "") };
 }
 
 async function ensureBlobDocument(): Promise<LoadedBlobDocument> {

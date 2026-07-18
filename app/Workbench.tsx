@@ -37,6 +37,12 @@ import {
   recalculateWorkspace,
   suggestRulesFromOverrides,
 } from "@/lib/engine";
+import {
+  buildSeriesShowcaseLayout,
+  showcaseFeatureLabel,
+  showcaseQualitySlots,
+  templateLureRange,
+} from "@/lib/showcase";
 import { ensureWorkflowFields } from "@/lib/workflow";
 import type {
   AdjustmentRule,
@@ -48,6 +54,7 @@ import type {
   OfficialSku,
   RevisionInfo,
   SeriesRecipe,
+  SeriesShowcaseEntry,
   WorkspaceState,
 } from "@/lib/types";
 
@@ -60,6 +67,7 @@ type PageKey =
   | "affixes"
   | "quality"
   | "recipes"
+  | "showcase"
   | "candidates"
   | "skus"
   | "details"
@@ -91,6 +99,7 @@ const pageMeta: Record<PageKey, { title: string; subtitle: string }> = {
   affixes: { title: "词条库", subtitle: "直接属性词条与被动机制词条共同决定装备能力和品质分" },
   quality: { title: "品质评分", subtitle: "有损相加、协同、冲突与品质阈值完全可配置" },
   recipes: { title: "系列 / SKU 配方", subtitle: "系列指定模板、定位约束、必带词条和可选词条池" },
+  showcase: { title: "系列自动演示表", subtitle: "按品质、结构、钓重与饵重自动排布已发布系列" },
   candidates: { title: "候选池", subtitle: "约束批量生成、横向比较、精调、筛选与发布" },
   skus: { title: "正式 SKU", subtitle: "已发布组合及自动生成的杆、轮、线 ID 和验收结果" },
   details: { title: "杆轮线明细", subtitle: "按正式 SKU 展开具体配置，并可自定义型号、名称与数值" },
@@ -116,6 +125,7 @@ const navGroups: Array<{ label: string; items: Array<{ key: PageKey; label: stri
       { key: "affixes", label: "词条库", icon: Tag },
       { key: "quality", label: "品质评分", icon: Sparkles },
       { key: "recipes", label: "系列配方", icon: WandSparkles },
+      { key: "showcase", label: "系列演示表", icon: GitCompareArrows },
     ],
   },
   {
@@ -157,6 +167,25 @@ function optionLabel(state: WorkspaceState, id?: string) {
   const option = state.modifiers.find((item) => item.id === id);
   if (!option) return "—";
   return option.name + (String(option.level) === "—" ? "" : " " + option.level);
+}
+
+const seriesShowcasePalettes = [
+  { background: "#e9f2ff", border: "#7aa8e8", accent: "#2f6eb7" },
+  { background: "#edf8f0", border: "#79b991", accent: "#2d7b4d" },
+  { background: "#fff2e5", border: "#e7aa68", accent: "#a45b18" },
+  { background: "#f4ecff", border: "#b899e2", accent: "#7245ae" },
+  { background: "#ffecef", border: "#e59aa7", accent: "#a53f52" },
+  { background: "#e8f8f7", border: "#75b9b4", accent: "#287973" },
+];
+
+function seriesShowcasePalette(seriesId: string) {
+  let hash = 0;
+  for (const char of seriesId) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  return seriesShowcasePalettes[hash % seriesShowcasePalettes.length];
+}
+
+function formatShowcaseRange(min: number, max: number, unit: string) {
+  return `${formatNumber(min)}-${formatNumber(max)}${unit}`;
 }
 
 function Card({
@@ -367,6 +396,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   const [showParameters, setShowParameters] = useState(false);
   const [selectedLayerId, setSelectedLayerId] = useState("layer-function");
   const [selectedRecipeId, setSelectedRecipeId] = useState("");
+  const [showcaseDraft, setShowcaseDraft] = useState<SeriesShowcaseEntry | null>(null);
   const [selectedCandidates, setSelectedCandidates] = useState<Set<string>>(new Set());
   const [selectedCandidateId, setSelectedCandidateId] = useState("");
   const [compareIds, setCompareIds] = useState<string[]>([]);
@@ -830,6 +860,32 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         recipe.fishMaxKg,
         recipe.useScene,
       ]),
+    ]);
+
+    append("11系列演示表", [
+      ["系列ID", "系列特点描述", "模板ID", "定义品质", "结构类型", "功能定位", "功能等级", "性能定位", "性能等级", "钓重下限kg", "钓重上限kg", "饵重下限g", "饵重上限g", "发布时间"],
+      ...state.seriesShowcases.map((entry) => {
+        const structure = state.modifiers.find((item) => item.id === entry.structureId);
+        const functionOption = state.modifiers.find((item) => item.id === entry.functionId);
+        const performanceOption = state.modifiers.find((item) => item.id === entry.performanceId);
+        const quality = showcaseQualitySlots(state.qualityBands).find((item) => item.qualityId === entry.qualityId);
+        return [
+          entry.seriesId,
+          entry.description,
+          entry.templateId,
+          quality?.key ?? entry.qualityId,
+          structure?.name ?? entry.structureId,
+          functionOption?.name ?? entry.functionId,
+          String(functionOption?.level ?? ""),
+          performanceOption?.name ?? entry.performanceId,
+          String(performanceOption?.level ?? ""),
+          entry.fishMinKg,
+          entry.fishMaxKg,
+          entry.lureMinG,
+          entry.lureMaxG,
+          entry.publishedAt,
+        ];
+      }),
     ]);
 
     const serialized = JSON.stringify(state);
@@ -1542,6 +1598,124 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     </div>
   );
 
+  const openSeriesShowcaseEditor = (entry?: SeriesShowcaseEntry) => {
+    if (entry) {
+      setShowcaseDraft(copyState(entry));
+      return;
+    }
+    const template = state.templates[0];
+    const lureRange = templateLureRange(template);
+    const structure = state.modifiers.find(
+      (item) => item.dimension === "structure" && (item.name.includes("直柄") || item.name.includes("枪柄")),
+    );
+    const functionOption = state.modifiers.find(
+      (item) => item.dimension === "function" && item.enabled,
+    );
+    const performanceOption = state.modifiers.find(
+      (item) => item.dimension === "performance" && item.enabled,
+    );
+    const quality = showcaseQualitySlots(state.qualityBands)[0];
+    let sequence = state.seriesShowcases.length + 1;
+    let seriesId = "SER-" + String(sequence).padStart(3, "0");
+    while (state.seriesShowcases.some((item) => item.seriesId === seriesId)) {
+      sequence += 1;
+      seriesId = "SER-" + String(sequence).padStart(3, "0");
+    }
+    const now = new Date().toISOString();
+    setShowcaseDraft({
+      id: "showcase-" + crypto.randomUUID(),
+      seriesId,
+      description: "",
+      templateId: template?.id ?? "",
+      structureId: structure?.id ?? "",
+      functionId: functionOption?.id ?? "",
+      performanceId: performanceOption?.id ?? "",
+      qualityId: quality?.qualityId ?? "",
+      fishMinKg: template?.fishMinKg ?? 0,
+      fishMaxKg: template?.fishMaxKg ?? 1,
+      lureMinG: lureRange.min,
+      lureMaxG: lureRange.max > lureRange.min ? lureRange.max : lureRange.min + 1,
+      notes: "",
+      publishedAt: now,
+      updatedAt: now,
+    });
+  };
+
+  const updateShowcaseTemplate = (templateId: string) => {
+    const template = state.templates.find((item) => item.id === templateId);
+    const lureRange = templateLureRange(template);
+    setShowcaseDraft((current) =>
+      current
+        ? {
+            ...current,
+            templateId,
+            fishMinKg: template?.fishMinKg ?? current.fishMinKg,
+            fishMaxKg: template?.fishMaxKg ?? current.fishMaxKg,
+            lureMinG: lureRange.min,
+            lureMaxG: lureRange.max > lureRange.min ? lureRange.max : Math.max(current.lureMaxG, lureRange.min + 1),
+          }
+        : current,
+    );
+  };
+
+  const publishSeriesShowcase = () => {
+    if (!showcaseDraft) return;
+    const seriesId = showcaseDraft.seriesId.trim();
+    const description = showcaseDraft.description.trim();
+    if (!seriesId || !description) {
+      notify("请填写系列 ID 和系列特点描述。");
+      return;
+    }
+    if (!showcaseDraft.templateId || !showcaseDraft.structureId || !showcaseDraft.functionId || !showcaseDraft.performanceId || !showcaseDraft.qualityId) {
+      notify("请选择模板、类型、定位、性能和品质。");
+      return;
+    }
+    if (showcaseDraft.fishMinKg < 0 || showcaseDraft.fishMaxKg <= showcaseDraft.fishMinKg) {
+      notify("钓重上限必须大于下限。");
+      return;
+    }
+    if (showcaseDraft.lureMinG < 0 || showcaseDraft.lureMaxG <= showcaseDraft.lureMinG) {
+      notify("饵重上限必须大于下限。");
+      return;
+    }
+    const duplicated = state.seriesShowcases.some(
+      (item) => item.id !== showcaseDraft.id && item.seriesId.trim().toLowerCase() === seriesId.toLowerCase(),
+    );
+    if (duplicated) {
+      notify("系列 ID 已存在。");
+      return;
+    }
+    const now = new Date().toISOString();
+    mutate((draft) => {
+      const next = {
+        ...showcaseDraft,
+        seriesId,
+        description,
+        updatedAt: now,
+      };
+      const index = draft.seriesShowcases.findIndex((item) => item.id === next.id);
+      if (index >= 0) draft.seriesShowcases[index] = next;
+      else draft.seriesShowcases.push(next);
+    }, false);
+    setShowcaseDraft(null);
+    notify("系列“" + seriesId + "”已发布到演示表。");
+  };
+
+  const deleteSeriesShowcase = () => {
+    if (!showcaseDraft) return;
+    const exists = state.seriesShowcases.some((item) => item.id === showcaseDraft.id);
+    if (!exists) {
+      setShowcaseDraft(null);
+      return;
+    }
+    if (!window.confirm("从演示表移除系列“" + showcaseDraft.seriesId + "”？")) return;
+    mutate((draft) => {
+      draft.seriesShowcases = draft.seriesShowcases.filter((item) => item.id !== showcaseDraft.id);
+    }, false);
+    setShowcaseDraft(null);
+    notify("系列已从演示表移除。");
+  };
+
   const toggleRecipeList = (
     recipeId: string,
     field: "templateIds" | "structureIds" | "functionIds" | "performanceIds" | "technologyIds" | "requiredAffixIds" | "optionalAffixPoolIds",
@@ -1638,6 +1812,184 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
             </Card>
           ) : null}
         </div>
+      </div>
+    );
+  };
+
+  const renderSeriesShowcase = () => {
+    const layout = buildSeriesShowcaseLayout(state);
+    let nextColumn = 2;
+    const laneColumns = layout.lanes.map((lane) => {
+      const columnCount = Math.max(1, lane.entries.length);
+      const positioned = { lane, startColumn: nextColumn, columnCount };
+      nextColumn += columnCount;
+      return positioned;
+    });
+    const trackColumns = laneColumns.flatMap(({ columnCount }) =>
+      Array.from({ length: columnCount }, () => "minmax(164px, 1fr)"),
+    );
+    const gridTemplateColumns = ["132px", ...trackColumns].join(" ");
+    const gridTemplateRows = `52px 42px repeat(${layout.levels.length}, 116px)`;
+
+    return (
+      <div className="page-stack">
+        <div className="toolbar">
+          <div className="toolbar-note">
+            每个系列拥有独立轨道，不会互相叠加；同一品质和结构内，最小饵重越小越靠左。
+          </div>
+          <div className="toolbar-spacer" />
+          <Button tone="primary" icon={Plus} onClick={() => openSeriesShowcaseEditor()}>
+            添加系列
+          </Button>
+        </div>
+        <div className="showcase-summary">
+          <Card>
+            <span>已发布系列</span>
+            <strong>{state.seriesShowcases.length}</strong>
+            <small>点击色块可修改或移除</small>
+          </Card>
+          <Card>
+            <span>横向规则</span>
+            <strong>C → B → A → S</strong>
+            <small>每个品质依次分直柄S、枪柄C</small>
+          </Card>
+          <Card>
+            <span>纵向规则</span>
+            <strong>{layout.levels.length} 个钓重等级</strong>
+            <small>色块按实际钓重范围跨档位</small>
+          </Card>
+        </div>
+        <Card className="showcase-card">
+          <div className="panel-title padded showcase-panel-title">
+            <div>
+              <span className="eyebrow">SERIES COVERAGE MAP</span>
+              <h3>系列覆盖演示表</h3>
+              <p>品质只用于决定所在列，不在系列色块内重复展示。</p>
+            </div>
+            <div className="showcase-legend">
+              <span><i className="legend-fish" />纵向：钓重范围</span>
+              <span><i className="legend-lure" />横向：最小饵重</span>
+            </div>
+          </div>
+          <div className="showcase-board-scroll">
+            <div
+              className="showcase-board"
+              style={{ gridTemplateColumns, gridTemplateRows }}
+            >
+              <div className="showcase-corner" style={{ gridColumn: 1, gridRow: "1 / span 2" }}>
+                <strong>钓重等级</strong>
+                <span>品质 · 结构 →</span>
+              </div>
+              {layout.qualities.map((quality) => {
+                const qualityLanes = laneColumns.filter(
+                  ({ lane }) => lane.qualityKey === quality.key,
+                );
+                const startColumn = qualityLanes[0]?.startColumn ?? 2;
+                const columnCount = qualityLanes.reduce(
+                  (total, item) => total + item.columnCount,
+                  0,
+                );
+                return (
+                  <div
+                    className="showcase-quality-head"
+                    key={quality.key}
+                    style={{
+                      gridColumn: `${startColumn} / span ${columnCount}`,
+                      gridRow: 1,
+                      borderTopColor: quality.color,
+                    }}
+                  >
+                    <strong>{quality.key} 品质</strong>
+                  </div>
+                );
+              })}
+              {laneColumns.map(({ lane, startColumn, columnCount }) => (
+                <div
+                  className="showcase-structure-head"
+                  key={lane.id}
+                  style={{
+                    gridColumn: `${startColumn} / span ${columnCount}`,
+                    gridRow: 2,
+                  }}
+                >
+                  {lane.structureLabel}
+                  <span>{lane.entries.length} 个系列</span>
+                </div>
+              ))}
+              {layout.levels.map((level, levelIndex) => {
+                const gridRow = levelIndex + 3;
+                return (
+                  <div className="showcase-level-label" key={level.id} style={{ gridColumn: 1, gridRow }}>
+                    <strong>{level.tier}</strong>
+                    <span>{formatShowcaseRange(level.fishMinKg, level.fishMaxKg, "kg")}</span>
+                  </div>
+                );
+              })}
+              {layout.levels.flatMap((level, levelIndex) =>
+                laneColumns.map(({ lane, startColumn, columnCount }) => (
+                  <div
+                    className="showcase-lane-cell"
+                    key={level.id + "-" + lane.id}
+                    style={{
+                      gridColumn: `${startColumn} / span ${columnCount}`,
+                      gridRow: levelIndex + 3,
+                    }}
+                  />
+                )),
+              )}
+              {laneColumns.flatMap(({ lane, startColumn }) =>
+                lane.entries.map((placement) => {
+                  const palette = seriesShowcasePalette(placement.entry.seriesId);
+                  const functionOption = state.modifiers.find(
+                    (item) => item.id === placement.entry.functionId,
+                  );
+                  const performanceOption = state.modifiers.find(
+                    (item) => item.id === placement.entry.performanceId,
+                  );
+                  const featureLabels = [
+                    showcaseFeatureLabel(functionOption),
+                    showcaseFeatureLabel(performanceOption),
+                  ].filter(Boolean);
+                  return (
+                    <button
+                      type="button"
+                      className="series-showcase-block"
+                      key={placement.entry.id}
+                      style={{
+                        gridColumn: startColumn + placement.trackIndex,
+                        gridRow: `${placement.startRow + 3} / span ${placement.rowSpan}`,
+                        backgroundColor: palette.background,
+                        borderColor: palette.border,
+                        color: palette.accent,
+                      }}
+                      onClick={() => openSeriesShowcaseEditor(placement.entry)}
+                      aria-label={"编辑系列 " + placement.entry.seriesId}
+                    >
+                      <span className="series-showcase-id">{placement.entry.seriesId}</span>
+                      <p>{placement.entry.description}</p>
+                      <div className="series-showcase-ranges">
+                        <span>钓重 {formatShowcaseRange(placement.entry.fishMinKg, placement.entry.fishMaxKg, "kg")}</span>
+                        <span>饵重 {formatShowcaseRange(placement.entry.lureMinG, placement.entry.lureMaxG, "g")}</span>
+                      </div>
+                      <div className="series-showcase-features">
+                        {featureLabels.map((label) => <em key={label}>{label}</em>)}
+                      </div>
+                    </button>
+                  );
+                }),
+              )}
+            </div>
+          </div>
+          {!state.seriesShowcases.length ? (
+            <div className="showcase-empty">
+              <strong>还没有发布系列</strong>
+              <span>添加第一个系列后，系统会自动计算它在品质、结构与钓重等级中的位置。</span>
+              <Button tone="primary" icon={Plus} onClick={() => openSeriesShowcaseEditor()}>
+                添加系列
+              </Button>
+            </div>
+          ) : null}
+        </Card>
       </div>
     );
   };
@@ -1955,6 +2307,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
             ["06组合SKU", "系列配方 → 候选池 → 正式SKU"],
             ["07–09明细", "杆轮线明细"],
             ["11覆盖验算", "校验与规则学习"],
+            ["11系列演示表", "系列覆盖自动排布"],
           ].map(([sheet, module]) => <div key={sheet}><code>{sheet}</code><span>→</span><strong>{module}</strong></div>)}
         </div>
       </Card>
@@ -1970,6 +2323,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     if (page === "affixes") return renderAffixes();
     if (page === "quality") return renderQuality();
     if (page === "recipes") return renderRecipes();
+    if (page === "showcase") return renderSeriesShowcase();
     if (page === "candidates") return renderCandidates();
     if (page === "skus") return renderSkus();
     if (page === "details") return renderDetails();
@@ -1998,7 +2352,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
                 return (
                   <button type="button" key={item.key} className={page === item.key ? "active" : ""} onClick={() => setPage(item.key)}>
                     <Icon size={17} strokeWidth={1.8} /><b>{item.label}</b>
-                    {item.key === "candidates" ? <em>{state.candidates.length}</em> : item.key === "skus" ? <em>{state.officialSkus.length}</em> : null}
+                    {item.key === "candidates" ? <em>{state.candidates.length}</em> : item.key === "skus" ? <em>{state.officialSkus.length}</em> : item.key === "showcase" ? <em>{state.seriesShowcases.length}</em> : null}
                   </button>
                 );
               })}
@@ -2044,6 +2398,146 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
               ))}
             </tbody></table>
           </div>
+        </div>
+      ) : null}
+
+      {showcaseDraft ? (
+        <div
+          className="showcase-modal-backdrop"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target) setShowcaseDraft(null);
+          }}
+        >
+          <section className="showcase-modal" role="dialog" aria-modal="true" aria-labelledby="showcase-editor-title">
+            <div className="showcase-modal-head">
+              <div>
+                <span className="eyebrow">SERIES PUBLISHER</span>
+                <h2 id="showcase-editor-title">
+                  {state.seriesShowcases.some((item) => item.id === showcaseDraft.id) ? "编辑已发布系列" : "添加系列"}
+                </h2>
+                <p>选择定义后手工调整范围，发布时自动填入演示表。</p>
+              </div>
+              <button type="button" aria-label="关闭" onClick={() => setShowcaseDraft(null)}>
+                <X size={20} />
+              </button>
+            </div>
+            <div className="showcase-modal-body">
+              <div className="form-grid showcase-editor-grid">
+                <label className="field-label">
+                  系列 ID
+                  <TextInput
+                    value={showcaseDraft.seriesId}
+                    onChange={(value) => setShowcaseDraft((current) => current ? { ...current, seriesId: value } : current)}
+                    placeholder="例如 SER-001"
+                  />
+                </label>
+                <label className="field-label">
+                  重量模板
+                  <SelectInput value={showcaseDraft.templateId} onChange={updateShowcaseTemplate}>
+                    <option value="">请选择模板</option>
+                    {state.templates.map((template) => (
+                      <option key={template.id} value={template.id}>{template.id} · {template.tier}</option>
+                    ))}
+                  </SelectInput>
+                </label>
+                <label className="field-label span-2">
+                  系列特点描述
+                  <textarea
+                    value={showcaseDraft.description}
+                    placeholder="例如：兼顾远投距离与轻饵启动的岸钓泛用系列"
+                    onChange={(event) => setShowcaseDraft((current) => current ? { ...current, description: event.target.value } : current)}
+                  />
+                </label>
+                <label className="field-label">
+                  类型
+                  <SelectInput
+                    value={showcaseDraft.structureId}
+                    onChange={(value) => setShowcaseDraft((current) => current ? { ...current, structureId: value } : current)}
+                  >
+                    <option value="">请选择结构类型</option>
+                    {state.modifiers
+                      .filter((item) => item.dimension === "structure" && (item.name.includes("直柄") || item.name.includes("枪柄")))
+                      .map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
+                  </SelectInput>
+                </label>
+                <label className="field-label">
+                  定义品质
+                  <SelectInput
+                    value={showcaseDraft.qualityId}
+                    onChange={(value) => setShowcaseDraft((current) => current ? { ...current, qualityId: value } : current)}
+                  >
+                    {showcaseQualitySlots(state.qualityBands).map((quality) => (
+                      <option key={quality.key} value={quality.qualityId}>{quality.key} 品质</option>
+                    ))}
+                  </SelectInput>
+                  <small>仅用于决定表格列，色块内不展示。</small>
+                </label>
+                <label className="field-label">
+                  功能定位
+                  <SelectInput
+                    value={showcaseDraft.functionId}
+                    onChange={(value) => setShowcaseDraft((current) => current ? { ...current, functionId: value } : current)}
+                  >
+                    <option value="">请选择定位</option>
+                    {state.modifiers.filter((item) => item.dimension === "function" && item.enabled).map((option) => (
+                      <option key={option.id} value={option.id}>{option.name} · {option.level}级</option>
+                    ))}
+                  </SelectInput>
+                </label>
+                <label className="field-label">
+                  性能
+                  <SelectInput
+                    value={showcaseDraft.performanceId}
+                    onChange={(value) => setShowcaseDraft((current) => current ? { ...current, performanceId: value } : current)}
+                  >
+                    <option value="">请选择性能</option>
+                    {state.modifiers.filter((item) => item.dimension === "performance" && item.enabled).map((option) => (
+                      <option key={option.id} value={option.id}>{option.name} · {option.level}级</option>
+                    ))}
+                  </SelectInput>
+                </label>
+              </div>
+              <div className="showcase-range-editor">
+                <div>
+                  <strong>钓重范围</strong>
+                  <span>决定色块纵向占用的钓重等级</span>
+                </div>
+                <label className="field-label">最小 kg<TextInput type="number" min={0} step={0.1} value={showcaseDraft.fishMinKg} onChange={(value) => setShowcaseDraft((current) => current ? { ...current, fishMinKg: Number(value) } : current)} /></label>
+                <span className="range-divider">—</span>
+                <label className="field-label">最大 kg<TextInput type="number" min={0} step={0.1} value={showcaseDraft.fishMaxKg} onChange={(value) => setShowcaseDraft((current) => current ? { ...current, fishMaxKg: Number(value) } : current)} /></label>
+              </div>
+              <div className="showcase-range-editor">
+                <div>
+                  <strong>饵重范围</strong>
+                  <span>同列中最小饵重越小，排列越靠左</span>
+                </div>
+                <label className="field-label">最小 g<TextInput type="number" min={0} step={0.1} value={showcaseDraft.lureMinG} onChange={(value) => setShowcaseDraft((current) => current ? { ...current, lureMinG: Number(value) } : current)} /></label>
+                <span className="range-divider">—</span>
+                <label className="field-label">最大 g<TextInput type="number" min={0} step={0.1} value={showcaseDraft.lureMaxG} onChange={(value) => setShowcaseDraft((current) => current ? { ...current, lureMaxG: Number(value) } : current)} /></label>
+              </div>
+              <div className="showcase-feature-preview">
+                <span>色块词条预览</span>
+                <div>
+                  {[
+                    showcaseFeatureLabel(state.modifiers.find((item) => item.id === showcaseDraft.functionId)),
+                    showcaseFeatureLabel(state.modifiers.find((item) => item.id === showcaseDraft.performanceId)),
+                  ].filter(Boolean).map((label) => <em key={label}>{label}</em>)}
+                </div>
+                <small>1 个“+”代表 1 个等级。</small>
+              </div>
+            </div>
+            <div className="showcase-modal-foot">
+              {state.seriesShowcases.some((item) => item.id === showcaseDraft.id) ? (
+                <Button tone="danger" icon={Trash2} onClick={deleteSeriesShowcase}>移除系列</Button>
+              ) : <span />}
+              <div>
+                <Button onClick={() => setShowcaseDraft(null)}>取消</Button>
+                <Button tone="primary" icon={Check} onClick={publishSeriesShowcase}>
+                  {state.seriesShowcases.some((item) => item.id === showcaseDraft.id) ? "更新发布" : "发布系列"}
+                </Button>
+              </div>
+            </div>
+          </section>
         </div>
       ) : null}
 

@@ -595,6 +595,7 @@ export function createSeedState(): WorkspaceState {
       notes: "同标签词条按递减因子有损相加；协同奖励、冲突扣分均可配置。",
     },
     recipes: defaultRecipes,
+    seriesShowcases: [],
     candidates: importedCandidates,
     officialSkus: [],
     detailOverrides: [],

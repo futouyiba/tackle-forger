@@ -195,6 +195,7 @@ export const defaultRuleGraphs: RuleGraph[] = [
 export function ensureWorkflowFields(state: WorkspaceState): WorkspaceState {
   return {
     ...state,
+    seriesShowcases: Array.isArray(state.seriesShowcases) ? state.seriesShowcases : [],
     ruleGraphs:
       Array.isArray(state.ruleGraphs) && state.ruleGraphs.length
         ? state.ruleGraphs

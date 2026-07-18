@@ -118,6 +118,24 @@ export interface SeriesRecipe {
   enabled: boolean;
 }
 
+export interface SeriesShowcaseEntry {
+  id: string;
+  seriesId: string;
+  description: string;
+  templateId: string;
+  structureId: string;
+  functionId: string;
+  performanceId: string;
+  qualityId: string;
+  fishMinKg: number;
+  fishMaxKg: number;
+  lureMinG: number;
+  lureMaxG: number;
+  notes: string;
+  publishedAt: string;
+  updatedAt: string;
+}
+
 export interface CandidateSelections {
   structureId?: string;
   materialId?: string;
@@ -365,6 +383,7 @@ export interface WorkspaceState {
   qualityBands: QualityBand[];
   affixScorePolicy: AffixScorePolicy;
   recipes: SeriesRecipe[];
+  seriesShowcases: SeriesShowcaseEntry[];
   candidates: Candidate[];
   officialSkus: OfficialSku[];
   detailOverrides: DetailOverride[];

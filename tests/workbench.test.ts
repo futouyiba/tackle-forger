@@ -8,6 +8,7 @@ import {
   scoreAffixes,
 } from "../lib/engine";
 import { createSeedState } from "../lib/seed";
+import { buildSeriesShowcaseLayout, showcaseFeatureLabel, showcaseQualitySlots } from "../lib/showcase";
 import {
   advanceAutomaticNodes,
   approveReviewSnapshot,
@@ -138,3 +139,66 @@ test("规则图拒绝形成循环", () => {
   });
   assert.ok(validateRuleGraph(graph).some((issue) => issue.includes("循环")));
 });
+test("系列演示表按品质结构分栏，并按最小饵重从左到右排布", () => {
+  const state = createSeedState();
+  const quality = showcaseQualitySlots(state.qualityBands)[0];
+  const structure = state.modifiers.find((item) => item.name.includes("直柄"));
+  const functionOption = state.modifiers.find(
+    (item) => item.dimension === "function" && Number(item.level) === 3,
+  );
+  const performanceOption = state.modifiers.find(
+    (item) => item.dimension === "performance" && Number(item.level) === 2,
+  );
+  assert.ok(structure && functionOption && performanceOption);
+
+  const now = new Date().toISOString();
+  state.seriesShowcases.push(
+    {
+      id: "showcase-high-lure",
+      seriesId: "SER-HIGH",
+      description: "高饵重系列",
+      templateId: "T06",
+      structureId: structure.id,
+      functionId: functionOption.id,
+      performanceId: performanceOption.id,
+      qualityId: quality.qualityId,
+      fishMinKg: 5,
+      fishMaxKg: 10,
+      lureMinG: 12,
+      lureMaxG: 30,
+      notes: "",
+      publishedAt: now,
+      updatedAt: now,
+    },
+    {
+      id: "showcase-low-lure",
+      seriesId: "SER-LOW",
+      description: "低饵重系列",
+      templateId: "T06",
+      structureId: structure.id,
+      functionId: functionOption.id,
+      performanceId: performanceOption.id,
+      qualityId: quality.qualityId,
+      fishMinKg: 5,
+      fishMaxKg: 10,
+      lureMinG: 5,
+      lureMaxG: 20,
+      notes: "",
+      publishedAt: now,
+      updatedAt: now,
+    },
+  );
+
+  const layout = buildSeriesShowcaseLayout(state);
+  assert.deepEqual(layout.qualities.map((item) => item.key), ["C", "B", "A", "S"]);
+  const lane = layout.lanes.find(
+    (item) => item.qualityKey === "C" && item.structureKey === "spinning",
+  );
+  assert.ok(lane);
+  assert.deepEqual(lane.entries.map((item) => item.entry.seriesId), ["SER-LOW", "SER-HIGH"]);
+  assert.deepEqual(lane.entries.map((item) => item.trackIndex), [0, 1]);
+  assert.equal(lane.entries[0].startRow, 5);
+  assert.equal(lane.entries[0].rowSpan, 2);
+  assert.equal(showcaseFeatureLabel(functionOption), "【" + functionOption.name + "+++】");
+});
+

@@ -1826,59 +1826,33 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       return positioned;
     });
     const trackColumns = laneColumns.flatMap(({ columnCount }) =>
-      Array.from({ length: columnCount }, () => "minmax(164px, 1fr)"),
+      Array.from({ length: columnCount }, () => "minmax(116px, 1fr)"),
     );
-    const gridTemplateColumns = ["132px", ...trackColumns].join(" ");
-    const gridTemplateRows = `52px 42px repeat(${layout.levels.length}, 116px)`;
+    const gridTemplateColumns = ["104px", ...trackColumns].join(" ");
+    const gridTemplateRows = `28px 28px repeat(${layout.levels.length}, 84px)`;
 
     return (
       <div className="page-stack">
         <div className="toolbar">
           <div className="toolbar-note">
-            每个系列拥有独立轨道，不会互相叠加；同一品质和结构内，最小饵重越小越靠左。
+            已发布 {state.seriesShowcases.length} 个系列 · 同一品质和结构内，最小饵重越小越靠左；系列占满独立轨道且互不叠加。
           </div>
           <div className="toolbar-spacer" />
           <Button tone="primary" icon={Plus} onClick={() => openSeriesShowcaseEditor()}>
             添加系列
           </Button>
         </div>
-        <div className="showcase-summary">
-          <Card>
-            <span>已发布系列</span>
-            <strong>{state.seriesShowcases.length}</strong>
-            <small>点击色块可修改或移除</small>
-          </Card>
-          <Card>
-            <span>横向规则</span>
-            <strong>C → B → A → S</strong>
-            <small>每个品质依次分直柄S、枪柄C</small>
-          </Card>
-          <Card>
-            <span>纵向规则</span>
-            <strong>{layout.levels.length} 个钓重等级</strong>
-            <small>色块按实际钓重范围跨档位</small>
-          </Card>
-        </div>
         <Card className="showcase-card">
-          <div className="panel-title padded showcase-panel-title">
-            <div>
-              <span className="eyebrow">SERIES COVERAGE MAP</span>
-              <h3>系列覆盖演示表</h3>
-              <p>品质只用于决定所在列，不在系列色块内重复展示。</p>
-            </div>
-            <div className="showcase-legend">
-              <span><i className="legend-fish" />纵向：钓重范围</span>
-              <span><i className="legend-lure" />横向：最小饵重</span>
-            </div>
-          </div>
           <div className="showcase-board-scroll">
             <div
               className="showcase-board"
               style={{ gridTemplateColumns, gridTemplateRows }}
             >
-              <div className="showcase-corner" style={{ gridColumn: 1, gridRow: "1 / span 2" }}>
-                <strong>钓重等级</strong>
-                <span>品质 · 结构 →</span>
+              <div className="showcase-axis-head is-quality" style={{ gridColumn: 1, gridRow: 1 }}>
+                品质
+              </div>
+              <div className="showcase-axis-head is-structure" style={{ gridColumn: 1, gridRow: 2 }}>
+                直柄/枪柄
               </div>
               {layout.qualities.map((quality) => {
                 const qualityLanes = laneColumns.filter(
@@ -1896,16 +1870,18 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
                     style={{
                       gridColumn: `${startColumn} / span ${columnCount}`,
                       gridRow: 1,
-                      borderTopColor: quality.color,
                     }}
                   >
-                    <strong>{quality.key} 品质</strong>
+                    {quality.key}
                   </div>
                 );
               })}
               {laneColumns.map(({ lane, startColumn, columnCount }) => (
                 <div
-                  className="showcase-structure-head"
+                  className={cx(
+                    "showcase-structure-head",
+                    lane.structureKey === "spinning" ? "is-spinning" : "is-casting",
+                  )}
                   key={lane.id}
                   style={{
                     gridColumn: `${startColumn} / span ${columnCount}`,
@@ -1913,7 +1889,6 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
                   }}
                 >
                   {lane.structureLabel}
-                  <span>{lane.entries.length} 个系列</span>
                 </div>
               ))}
               {layout.levels.map((level, levelIndex) => {
@@ -1939,7 +1914,6 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
               )}
               {laneColumns.flatMap(({ lane, startColumn }) =>
                 lane.entries.map((placement) => {
-                  const palette = seriesShowcasePalette(placement.entry.seriesId);
                   const functionOption = state.modifiers.find(
                     (item) => item.id === placement.entry.functionId,
                   );
@@ -1958,19 +1932,18 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
                       style={{
                         gridColumn: startColumn + placement.trackIndex,
                         gridRow: `${placement.startRow + 3} / span ${placement.rowSpan}`,
-                        backgroundColor: palette.background,
-                        borderColor: palette.border,
-                        color: palette.accent,
                       }}
                       onClick={() => openSeriesShowcaseEditor(placement.entry)}
                       aria-label={"编辑系列 " + placement.entry.seriesId}
                     >
                       <span className="series-showcase-id">{placement.entry.seriesId}</span>
                       <p>{placement.entry.description}</p>
-                      <div className="series-showcase-ranges">
-                        <span>钓重 {formatShowcaseRange(placement.entry.fishMinKg, placement.entry.fishMaxKg, "kg")}</span>
-                        <span>饵重 {formatShowcaseRange(placement.entry.lureMinG, placement.entry.lureMaxG, "g")}</span>
-                      </div>
+                      <span className="series-showcase-range">
+                        钓重 {formatShowcaseRange(placement.entry.fishMinKg, placement.entry.fishMaxKg, "kg")}
+                      </span>
+                      <span className="series-showcase-range">
+                        饵重 {formatShowcaseRange(placement.entry.lureMinG, placement.entry.lureMaxG, "g")}
+                      </span>
                       <div className="series-showcase-features">
                         {featureLabels.map((label) => <em key={label}>{label}</em>)}
                       </div>
@@ -1983,7 +1956,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           {!state.seriesShowcases.length ? (
             <div className="showcase-empty">
               <strong>还没有发布系列</strong>
-              <span>添加第一个系列后，系统会自动计算它在品质、结构与钓重等级中的位置。</span>
+              <span>添加第一个系列后，它会像合并单元格一样填入对应品质、结构和钓重区间。</span>
               <Button tone="primary" icon={Plus} onClick={() => openSeriesShowcaseEditor()}>
                 添加系列
               </Button>

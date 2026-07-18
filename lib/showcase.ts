@@ -8,7 +8,6 @@ import type {
 
 export const showcaseQualityKeys = ["C", "B", "A", "S"] as const;
 export type ShowcaseQualityKey = (typeof showcaseQualityKeys)[number];
-export type ShowcaseStructureKey = "spinning" | "casting";
 
 export interface ShowcaseQualitySlot {
   key: ShowcaseQualityKey;
@@ -16,26 +15,30 @@ export interface ShowcaseQualitySlot {
   color: string;
 }
 
+export interface ShowcaseSeriesSegment {
+  templateId: string;
+  tier: string;
+  weightMinKg: number;
+  weightMaxKg: number;
+  tensionMinKgf: number;
+  tensionMaxKgf: number;
+}
+
 export interface ShowcasePlacement {
   entry: SeriesShowcaseEntry;
   trackIndex: number;
   startRow: number;
   rowSpan: number;
+  segments: ShowcaseSeriesSegment[];
 }
 
 export interface ShowcaseLane {
   id: string;
   qualityKey: ShowcaseQualityKey;
   qualityId: string;
-  structureKey: ShowcaseStructureKey;
-  structureLabel: string;
+  color: string;
   entries: ShowcasePlacement[];
 }
-
-const structureSlots: Array<{ key: ShowcaseStructureKey; label: string }> = [
-  { key: "spinning", label: "直柄S" },
-  { key: "casting", label: "枪柄C" },
-];
 
 export function showcaseQualitySlots(bands: QualityBand[]): ShowcaseQualitySlot[] {
   const sorted = [...bands].sort((left, right) => left.minScore - right.minScore);
@@ -56,12 +59,6 @@ export function showcaseQualitySlots(bands: QualityBand[]): ShowcaseQualitySlot[
   });
 }
 
-export function showcaseStructureKey(name: string): ShowcaseStructureKey | null {
-  if (name.includes("直柄")) return "spinning";
-  if (name.includes("枪柄")) return "casting";
-  return null;
-}
-
 export function showcaseFeatureLabel(option?: ModifierOption): string {
   if (!option) return "";
   const numericLevel = Number(option.level);
@@ -71,21 +68,58 @@ export function showcaseFeatureLabel(option?: ModifierOption): string {
   return `【${option.name}${"+".repeat(level)}】`;
 }
 
-function intersectingRows(
+export function templateTensionRange(template?: WeightTemplate): { min: number; max: number } {
+  const values = template?.values ?? {};
+  const tensions = [
+    Number(values["杆最大拉力kgf"]),
+    Number(values["轮最大拉力kgf"]),
+    Number(values["线最大拉力kgf"]),
+  ].filter((value) => Number.isFinite(value) && value > 0);
+
+  if (!tensions.length) return { min: 0, max: 1 };
+  return { min: Math.min(...tensions), max: Math.max(...tensions) };
+}
+
+function tensionAtWeight(entry: SeriesShowcaseEntry, weightKg: number): number {
+  const weightSpan = entry.fishMaxKg - entry.fishMinKg;
+  if (weightSpan <= 0) return entry.tensionMinKgf;
+  const ratio = Math.max(0, Math.min(1, (weightKg - entry.fishMinKg) / weightSpan));
+  return entry.tensionMinKgf + (entry.tensionMaxKgf - entry.tensionMinKgf) * ratio;
+}
+
+export function buildSeriesSegments(
   entry: SeriesShowcaseEntry,
   levels: WeightTemplate[],
-): { startRow: number; rowSpan: number } {
-  const hits = levels
-    .map((level, index) => ({ level, index }))
-    .filter(
-      ({ level }) =>
-        entry.fishMaxKg > level.fishMinKg && entry.fishMinKg < level.fishMaxKg,
-    )
-    .map(({ index }) => index);
+): ShowcaseSeriesSegment[] {
+  return levels.flatMap((level) => {
+    const weightMinKg = Math.max(entry.fishMinKg, level.fishMinKg);
+    const weightMaxKg = Math.min(entry.fishMaxKg, level.fishMaxKg);
+    if (weightMaxKg <= weightMinKg) return [];
 
-  if (hits.length) {
-    const startRow = hits[0];
-    return { startRow, rowSpan: hits[hits.length - 1] - startRow + 1 };
+    return [{
+      templateId: level.id,
+      tier: level.tier,
+      weightMinKg,
+      weightMaxKg,
+      tensionMinKgf: tensionAtWeight(entry, weightMinKg),
+      tensionMaxKgf: tensionAtWeight(entry, weightMaxKg),
+    }];
+  });
+}
+
+function placementForEntry(
+  entry: SeriesShowcaseEntry,
+  levels: WeightTemplate[],
+  trackIndex: number,
+): ShowcasePlacement {
+  const segments = buildSeriesSegments(entry, levels);
+  if (segments.length) {
+    const hitIndexes = segments.map((segment) =>
+      levels.findIndex((level) => level.id === segment.templateId),
+    );
+    const startRow = Math.min(...hitIndexes);
+    const endRow = Math.max(...hitIndexes);
+    return { entry, trackIndex, startRow, rowSpan: endRow - startRow + 1, segments };
   }
 
   const midpoint = (entry.fishMinKg + entry.fishMaxKg) / 2;
@@ -97,7 +131,7 @@ function intersectingRows(
     },
     { index: 0, distance: Number.POSITIVE_INFINITY },
   );
-  return { startRow: nearest.index, rowSpan: 1 };
+  return { entry, trackIndex, startRow: nearest.index, rowSpan: 1, segments: [] };
 }
 
 export function buildSeriesShowcaseLayout(state: WorkspaceState): {
@@ -111,46 +145,25 @@ export function buildSeriesShowcaseLayout(state: WorkspaceState): {
   );
   const entries = Array.isArray(state.seriesShowcases) ? state.seriesShowcases : [];
 
-  const lanes = qualities.flatMap((quality) =>
-    structureSlots.map((structure) => {
-      const laneEntries = entries
-        .filter((entry) => {
-          if (entry.qualityId !== quality.qualityId) return false;
-          const option = state.modifiers.find((item) => item.id === entry.structureId);
-          return showcaseStructureKey(option?.name ?? "") === structure.key;
-        })
-        .sort(
-          (left, right) =>
-            left.lureMinG - right.lureMinG ||
-            left.fishMinKg - right.fishMinKg ||
-            left.seriesId.localeCompare(right.seriesId, "zh-CN"),
-        )
-        .map((entry, trackIndex) => ({
-          entry,
-          trackIndex,
-          ...intersectingRows(entry, levels),
-        }));
+  const lanes = qualities.map((quality) => {
+    const laneEntries = entries
+      .filter((entry) => entry.qualityId === quality.qualityId)
+      .sort(
+        (left, right) =>
+          left.fishMinKg - right.fishMinKg ||
+          left.tensionMinKgf - right.tensionMinKgf ||
+          left.seriesId.localeCompare(right.seriesId, "zh-CN"),
+      )
+      .map((entry, trackIndex) => placementForEntry(entry, levels, trackIndex));
 
-      return {
-        id: `${quality.key}-${structure.key}`,
-        qualityKey: quality.key,
-        qualityId: quality.qualityId,
-        structureKey: structure.key,
-        structureLabel: structure.label,
-        entries: laneEntries,
-      };
-    }),
-  );
+    return {
+      id: quality.key,
+      qualityKey: quality.key,
+      qualityId: quality.qualityId,
+      color: quality.color,
+      entries: laneEntries,
+    };
+  });
 
   return { qualities, levels, lanes };
-}
-
-export function templateLureRange(template?: WeightTemplate): { min: number; max: number } {
-  const values = template?.values ?? {};
-  const min = Number(values["饵重下限g"] ?? values["饵重下限"] ?? 0);
-  const max = Number(values["饵重上限g"] ?? values["饵重上限"] ?? 0);
-  return {
-    min: Number.isFinite(min) ? min : 0,
-    max: Number.isFinite(max) ? max : 0,
-  };
 }

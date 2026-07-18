@@ -8,12 +8,13 @@ import {
   scoreAffixes,
 } from "../lib/engine";
 import { createSeedState } from "../lib/seed";
-import { buildSeriesShowcaseLayout, showcaseFeatureLabel, showcaseQualitySlots } from "../lib/showcase";
+import { buildSeriesShowcaseLayout, buildSeriesSegments, showcaseFeatureLabel, showcaseQualitySlots } from "../lib/showcase";
 import {
   advanceAutomaticNodes,
   approveReviewSnapshot,
   commitRuleRunToCandidates,
   createRuleGraphRun,
+  ensureWorkflowFields,
   executeRuleGraphNode,
   validateRuleGraph,
 } from "../lib/workflow";
@@ -139,50 +140,52 @@ test("规则图拒绝形成循环", () => {
   });
   assert.ok(validateRuleGraph(graph).some((issue) => issue.includes("循环")));
 });
-test("系列演示表按品质结构分栏，并按最小饵重从左到右排布", () => {
+test("系列按品质形成甘特轨道，并自动拆分重量与拉力跨度", () => {
   const state = createSeedState();
   const quality = showcaseQualitySlots(state.qualityBands)[0];
-  const structure = state.modifiers.find((item) => item.name.includes("直柄"));
+  const structures = state.modifiers.filter(
+    (item) => item.dimension === "structure" && (item.name.includes("直柄") || item.name.includes("枪柄")),
+  );
   const functionOption = state.modifiers.find(
     (item) => item.dimension === "function" && Number(item.level) === 3,
   );
-  const performanceOption = state.modifiers.find(
-    (item) => item.dimension === "performance" && Number(item.level) === 2,
-  );
-  assert.ok(structure && functionOption && performanceOption);
+  const affixes = state.affixes.slice(0, 2);
+  assert.ok(structures.length >= 2 && functionOption && affixes.length === 2);
 
   const now = new Date().toISOString();
   state.seriesShowcases.push(
     {
-      id: "showcase-high-lure",
-      seriesId: "SER-HIGH",
-      description: "高饵重系列",
-      templateId: "T06",
-      structureId: structure.id,
+      id: "showcase-wide",
+      seriesId: "SER-WIDE",
+      description: "贯穿轻型到超重的精细远投系列",
+      templateIds: [],
+      structureIds: structures.slice(0, 2).map((item) => item.id),
+      fishingMethod: "岸抛路亚",
       functionId: functionOption.id,
-      performanceId: performanceOption.id,
       qualityId: quality.qualityId,
-      fishMinKg: 5,
-      fishMaxKg: 10,
-      lureMinG: 12,
-      lureMaxG: 30,
+      fishMinKg: 0.8,
+      fishMaxKg: 20,
+      tensionMinKgf: 2,
+      tensionMaxKgf: 10,
+      affixIds: affixes.map((item) => item.id),
       notes: "",
       publishedAt: now,
       updatedAt: now,
     },
     {
-      id: "showcase-low-lure",
-      seriesId: "SER-LOW",
-      description: "低饵重系列",
-      templateId: "T06",
-      structureId: structure.id,
+      id: "showcase-heavy",
+      seriesId: "SER-HEAVY",
+      description: "重型强攻系列",
+      templateIds: [],
+      structureIds: [structures[0].id],
+      fishingMethod: "船钓路亚",
       functionId: functionOption.id,
-      performanceId: performanceOption.id,
       qualityId: quality.qualityId,
-      fishMinKg: 5,
-      fishMaxKg: 10,
-      lureMinG: 5,
-      lureMaxG: 20,
+      fishMinKg: 4,
+      fishMaxKg: 8,
+      tensionMinKgf: 8,
+      tensionMaxKgf: 14,
+      affixIds: [affixes[0].id],
       notes: "",
       publishedAt: now,
       updatedAt: now,
@@ -191,14 +194,57 @@ test("系列演示表按品质结构分栏，并按最小饵重从左到右排�
 
   const layout = buildSeriesShowcaseLayout(state);
   assert.deepEqual(layout.qualities.map((item) => item.key), ["C", "B", "A", "S"]);
-  const lane = layout.lanes.find(
-    (item) => item.qualityKey === "C" && item.structureKey === "spinning",
-  );
+  const lane = layout.lanes.find((item) => item.qualityKey === "C");
   assert.ok(lane);
-  assert.deepEqual(lane.entries.map((item) => item.entry.seriesId), ["SER-LOW", "SER-HIGH"]);
+  assert.deepEqual(lane.entries.map((item) => item.entry.seriesId), ["SER-WIDE", "SER-HEAVY"]);
   assert.deepEqual(lane.entries.map((item) => item.trackIndex), [0, 1]);
-  assert.equal(lane.entries[0].startRow, 5);
-  assert.equal(lane.entries[0].rowSpan, 2);
+
+  const wide = lane.entries[0];
+  assert.equal(wide.startRow, 2);
+  assert.equal(wide.rowSpan, 6);
+  assert.equal(wide.segments.length, 6);
+  assert.deepEqual(wide.entry.structureIds, structures.slice(0, 2).map((item) => item.id));
+  assert.deepEqual(wide.entry.affixIds, affixes.map((item) => item.id));
+  assert.equal(wide.segments[0].weightMinKg, 0.8);
+  assert.equal(wide.segments.at(-1)?.weightMaxKg, 20);
+  assert.equal(wide.segments[0].tensionMinKgf, 2);
+  assert.equal(wide.segments.at(-1)?.tensionMaxKgf, 10);
+
+  const directSegments = buildSeriesSegments(wide.entry, layout.levels);
+  assert.deepEqual(directSegments, wide.segments);
   assert.equal(showcaseFeatureLabel(functionOption), "【" + functionOption.name + "+++】");
 });
 
+
+test("旧版单模板系列会迁移为多段系列定义", () => {
+  const state = createSeedState();
+  const structure = state.modifiers.find((item) => item.name.includes("直柄"));
+  const functionOption = state.modifiers.find((item) => item.dimension === "function");
+  const quality = showcaseQualitySlots(state.qualityBands)[0];
+  assert.ok(structure && functionOption);
+
+  state.seriesShowcases = [{
+    id: "legacy-series",
+    seriesId: "LEGACY-01",
+    description: "旧版系列",
+    templateId: "T04",
+    structureId: structure.id,
+    functionId: functionOption.id,
+    performanceId: "",
+    qualityId: quality.qualityId,
+    fishMinKg: 1,
+    fishMaxKg: 7,
+    lureMinG: 3,
+    lureMaxG: 15,
+    notes: "",
+    publishedAt: "2026-07-18T00:00:00.000Z",
+    updatedAt: "2026-07-18T00:00:00.000Z",
+  } as (typeof state.seriesShowcases)[number]];
+
+  const migrated = ensureWorkflowFields(state).seriesShowcases[0];
+  assert.deepEqual(migrated.templateIds, ["T04", "T05", "T06"]);
+  assert.deepEqual(migrated.structureIds, [structure.id]);
+  assert.equal(migrated.fishingMethod, "路亚");
+  assert.ok(migrated.tensionMaxKgf > migrated.tensionMinKgf);
+  assert.deepEqual(migrated.affixIds, []);
+});

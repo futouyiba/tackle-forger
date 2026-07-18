@@ -193,9 +193,46 @@ export const defaultRuleGraphs: RuleGraph[] = [
 ];
 
 export function ensureWorkflowFields(state: WorkspaceState): WorkspaceState {
+  const seriesShowcases = (Array.isArray(state.seriesShowcases) ? state.seriesShowcases : []).map((entry) => {
+    const coveredTemplates = state.templates.filter(
+      (template) =>
+        entry.fishMaxKg > template.fishMinKg && entry.fishMinKg < template.fishMaxKg,
+    );
+    const templateIds = Array.isArray(entry.templateIds) && entry.templateIds.length
+      ? entry.templateIds
+      : coveredTemplates.map((template) => template.id);
+    const structureIds = Array.isArray(entry.structureIds) && entry.structureIds.length
+      ? entry.structureIds
+      : entry.structureId
+        ? [entry.structureId]
+        : [];
+    const tensionValues = coveredTemplates.flatMap((template) =>
+      ["杆最大拉力kgf", "轮最大拉力kgf", "线最大拉力kgf"]
+        .map((key) => Number(template.values[key]))
+        .filter((value) => Number.isFinite(value) && value > 0),
+    );
+    const fallbackTensionMin = tensionValues.length ? Math.min(...tensionValues) : 1;
+    const fallbackTensionMax = tensionValues.length ? Math.max(...tensionValues) : Math.max(2, fallbackTensionMin);
+    const tensionMinKgf = Number.isFinite(entry.tensionMinKgf) ? entry.tensionMinKgf : fallbackTensionMin;
+    const tensionMaxKgf =
+      Number.isFinite(entry.tensionMaxKgf) && entry.tensionMaxKgf > tensionMinKgf
+        ? entry.tensionMaxKgf
+        : Math.max(fallbackTensionMax, tensionMinKgf + 1);
+
+    return {
+      ...entry,
+      templateIds,
+      structureIds,
+      fishingMethod: entry.fishingMethod?.trim() || "路亚",
+      tensionMinKgf,
+      tensionMaxKgf,
+      affixIds: Array.isArray(entry.affixIds) ? entry.affixIds : [],
+    };
+  });
+
   return {
     ...state,
-    seriesShowcases: Array.isArray(state.seriesShowcases) ? state.seriesShowcases : [],
+    seriesShowcases,
     ruleGraphs:
       Array.isArray(state.ruleGraphs) && state.ruleGraphs.length
         ? state.ruleGraphs

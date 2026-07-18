@@ -122,15 +122,29 @@ export interface SeriesShowcaseEntry {
   id: string;
   seriesId: string;
   description: string;
-  templateId: string;
-  structureId: string;
+  /** 旧版单模板字段，仅用于兼容已保存数据。 */
+  templateId?: string;
+  /** 根据重量跨度自动拆出的模板集合。 */
+  templateIds: string[];
+  /** 旧版单结构字段，仅用于兼容已保存数据。 */
+  structureId?: string;
+  /** 一个系列可以同时包含直柄、枪柄等具体结构。 */
+  structureIds: string[];
+  /** 一个系列只对应一种钓法。 */
+  fishingMethod: string;
   functionId: string;
-  performanceId: string;
+  /** 旧版性能字段，仅用于兼容已保存数据。 */
+  performanceId?: string;
   qualityId: string;
   fishMinKg: number;
   fishMaxKg: number;
-  lureMinG: number;
-  lureMaxG: number;
+  tensionMinKgf: number;
+  tensionMaxKgf: number;
+  /** 系列级贯通词条，拆分到任意重量段后保持不变。 */
+  affixIds: string[];
+  /** 旧版饵重字段，仅用于兼容已保存数据。 */
+  lureMinG?: number;
+  lureMaxG?: number;
   notes: string;
   publishedAt: string;
   updatedAt: string;

@@ -35,7 +35,7 @@
 | PatchLedger 权威账本 | 已实现 | Workspace schema v17 + PatchLedger schema v4；稳定 ID、仅 ACTIVE 重放、revision 幂等、ORPHANED、Rebase/吸收均生成新 revision、Snapshot 引用冻结 | 无 |
 | Patch 台账工作台 | 已实现 | 治理区一级入口展示 revision、稳定对象、操作顺序、基线、镜像状态、Snapshot 引用、迁移待复核及 RuleSet 发布后吸收评估；支持创建、审核、显式启用 | 镜像写入/拉取按钮在远端连接器可用前保持禁用 |
 | 个体 Patch 汇总、规则草稿与吸收 | 已实现 | Patch 确定性归组后由独立权限创建 RuleSourceChangeDraft；新 RuleSet 下以逐操作 Trace 评估完全/部分/未覆盖/Rebase，保存 assessment 并创建新 revision，不改旧 Snapshot | 草稿远端写回仍需已确认的通用规则页写入契约 |
-| 飞书 Patch 台账镜像 | 部分实现 | 已有领域契约、独立权限、幂等命令、部分失败和回读恢复状态；已确认`Patch台账/edyFx9`、`A:AJ`机器区和`AL:AY`协作事件区；不会伪造 SYNCED | 远端表头尚未物化，机器区/协作区保护边界和连接器写入、回读、缺行、篡改、hash及并发冲突联调尚未完成 |
+| 飞书 Patch 台账镜像 | 部分实现 | 已有领域契约、独立权限、幂等命令、部分失败和回读恢复状态；已确认`Patch台账/edyFx9`、`A:AK`机器区和`AM:BA`协作事件区；不会伪造 SYNCED | 远端表头尚未物化，机器区/协作区保护边界和连接器写入、回读、缺行、篡改、hash及并发冲突联调尚未完成 |
 | 硬兼容与 Affinity | 已实现 | deny/require 与软分值分离；高 Affinity 不覆盖 deny；低分合法候选仍可生成 | 无 |
 | 属性词条、被动词条与 Technology | 已实现 | Technology 只展开成员；按 affixId 去重；被动参与价值分但不执行模拟器逻辑 | 无 |
 | 品质评分 | 部分实现 | 人工选择品质、组合矩阵、Technology/Affix去重、功能系数与source=quality Trace已存在 | 2026-07-23新契约要求S包含100、>100阻断并彻底移除Performance乘数/Trace；当前内核仍有`performanceScoringEnabled/performanceScoreFactor`与旧边界冲突逻辑 |
@@ -68,7 +68,7 @@
 
 ## 3. 当前外部阻断
 
-1. OPEN-010：已确认飞书主工作簿`Patch台账/edyFx9`、`A:AJ`机器区与`AL:AY`协作事件区；远端表头尚未物化，机器区/协作区保护边界和连接器写入、回读、缺行、篡改、hash及并发冲突联调尚未完成，因此真实镜像写入/拉取仍不可启用。
+1. OPEN-010：已确认飞书主工作簿`Patch台账/edyFx9`、`A:AK`机器区与`AM:BA`协作事件区；远端表头尚未物化，机器区/协作区保护边界和连接器写入、回读、缺行、篡改、hash及并发冲突联调尚未完成，因此真实镜像写入/拉取仍不可启用。
 2. Vercel评审项目当前只配置`BLOB_READ_WRITE_TOKEN`，缺少`FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_TENANT_KEY`、`FEISHU_REDIRECT_URI`和`FEISHU_SESSION_SECRET`；首页HTTP 200，但会话端点返回503/`AUTH-CONFIG-001`，需部署方提供公司应用凭据并在飞书开放平台登记回调。
 3. OPEN-007产品语义已于2026-07-23确定；当前阻断是飞书机器源仍需修订，且运行时尚未实现S=100、无Performance乘数、双输出舍入、购买最低价和超300M WARNING确认。完成前不得把旧Draft发布为符合新契约的PricingPolicyVersion。
 4. OPEN-006 尚未确认 AI 供应方、模型和数据出网策略，因此真实 AI 连接器必须继续禁用。

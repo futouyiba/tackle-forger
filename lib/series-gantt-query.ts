@@ -18,31 +18,12 @@ import type {
   ValidationIssue,
 } from "./types";
 import { deterministicHash } from "./rule-kernel";
-
-export interface SeriesGanttQuery {
-  text?: string;
-  collectionIds?: string[];
-  methodIds?: string[];
-  typeIds?: string[];
-  qualityIds?: string[];
-  functionIds?: string[];
-  itemPartIds?: string[];
-  lifecycle?: SeriesDefinition["status"][];
-  lifecycleStates?: LifecycleState[];
-  attention?: AttentionState[];
-  attentionStates?: AttentionState[];
-  issueCodes?: string[];
-  issueSeverities?: Array<"INFO" | "WARNING" | "ERROR" | "BLOCKER">;
-  hasUpgradeCandidate?: boolean;
-  exactTargetWeightKg?: number[];
-  minTargetPullKg?: number;
-  maxTargetPullKg?: number;
-  ruleSetVersions?: string[];
-  ruleSetVersion?: string;
-  sort?: "name" | "quality_type" | "updated_desc" | "series_name" | "weight_span" | "attention" | "recently_changed";
-  cursor?: string;
-  pageSize?: number;
-}
+import type { SeriesGanttQuery } from "./series-gantt-contract";
+export {
+  seriesGanttQueryFromSearchParams,
+  seriesGanttQueryToSearchParams,
+  type SeriesGanttQuery,
+} from "./series-gantt-contract";
 
 export interface SeriesGanttAggregate {
   lifecycle: LifecycleState;
@@ -303,72 +284,42 @@ export function paginateSeriesGantt(input: {
   };
 }
 
-const ARRAY_KEYS: Array<keyof SeriesGanttQuery> = [
-  "collectionIds",
-  "methodIds",
-  "typeIds",
-  "qualityIds",
-  "functionIds",
-  "itemPartIds",
-  "lifecycle",
-  "lifecycleStates",
-  "attention",
-  "attentionStates",
-  "issueCodes",
-  "issueSeverities",
-  "exactTargetWeightKg",
-  "ruleSetVersions",
-];
-
-export function seriesGanttQueryToSearchParams(query: SeriesGanttQuery): URLSearchParams {
-  const params = new URLSearchParams();
-  if (query.text?.trim()) params.set("q", query.text.trim());
-  for (const key of ARRAY_KEYS) {
-    const values = query[key] as unknown[] | undefined;
-    values?.forEach((value) => params.append(String(key), String(value)));
-  }
-  if (query.hasUpgradeCandidate !== undefined) {
-    params.set("hasUpgradeCandidate", query.hasUpgradeCandidate ? "1" : "0");
-  }
-  if (query.minTargetPullKg !== undefined) params.set("minTargetPullKg", String(query.minTargetPullKg));
-  if (query.maxTargetPullKg !== undefined) params.set("maxTargetPullKg", String(query.maxTargetPullKg));
-  if (query.ruleSetVersion) params.set("ruleSetVersion", query.ruleSetVersion);
-  if (query.cursor) params.set("cursor", query.cursor);
-  if (query.pageSize !== undefined) params.set("pageSize", String(query.pageSize));
-  if (query.sort) params.set("sort", query.sort);
-  return params;
+export interface SeriesGanttChildPage<T> {
+  items: T[];
+  nextCursor?: string;
+  totalVisible: number;
+  pageSize: number;
 }
 
-export function seriesGanttQueryFromSearchParams(params: URLSearchParams): SeriesGanttQuery {
-  const query: SeriesGanttQuery = {};
-  const text = params.get("q");
-  if (text) query.text = text;
-  for (const key of ARRAY_KEYS) {
-    const values = params.getAll(String(key));
-    if (!values.length) continue;
-    if (key === "exactTargetWeightKg") {
-      query.exactTargetWeightKg = values
-        .map(Number)
-        .filter((value) => Number.isFinite(value));
-    } else {
-      (query as Record<string, unknown>)[key] = [...new Set(values)];
+export function paginateSeriesGanttChildren<T>(input: {
+  items: T[];
+  kind: "skus" | "models";
+  parentId: string;
+  cursor?: string;
+  pageSize?: number;
+  workspaceRevision: number;
+}): SeriesGanttChildPage<T> {
+  const pageSize = Math.max(1, Math.min(input.pageSize ?? 50, 100));
+  const hash = deterministicHash({ kind: input.kind, parentId: input.parentId, pageSize });
+  let offset = 0;
+  if (input.cursor) {
+    const match = /^gantt-child\.([0-9]+)\.([0-9]+)\.([a-z0-9]+)$/i.exec(input.cursor);
+    if (!match || Number(match[1]) !== input.workspaceRevision || match[3] !== hash) {
+      throw new Error("SERIES_GANTT_CURSOR_STALE");
+    }
+    offset = Number(match[2]);
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > input.items.length) {
+      throw new Error("SERIES_GANTT_CURSOR_STALE");
     }
   }
-  const upgrade = params.get("hasUpgradeCandidate");
-  if (upgrade === "1" || upgrade === "0") query.hasUpgradeCandidate = upgrade === "1";
-  const sort = params.get("sort");
-  if (sort === "name" || sort === "quality_type" || sort === "updated_desc" || sort === "series_name" || sort === "weight_span" || sort === "attention" || sort === "recently_changed") {
-    query.sort = sort;
-  }
-  for (const key of ["minTargetPullKg", "maxTargetPullKg"] as const) {
-    const raw = params.get(key);
-    if (raw === null || raw.trim() === "") continue;
-    const value = Number(raw);
-    if (Number.isFinite(value)) query[key] = value;
-  }
-  query.ruleSetVersion = params.get("ruleSetVersion") || undefined;
-  query.cursor = params.get("cursor") || undefined;
-  const pageSize = Number(params.get("pageSize"));
-  if (Number.isSafeInteger(pageSize) && pageSize > 0) query.pageSize = Math.min(pageSize, 100);
-  return query;
+  const items = input.items.slice(offset, offset + pageSize);
+  const nextOffset = offset + items.length;
+  return {
+    items,
+    totalVisible: input.items.length,
+    pageSize,
+    ...(nextOffset < input.items.length
+      ? { nextCursor: `gantt-child.${input.workspaceRevision}.${nextOffset}.${hash}` }
+      : {}),
+  };
 }

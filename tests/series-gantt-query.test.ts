@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   querySeriesGantt,
   paginateSeriesGantt,
+  paginateSeriesGanttChildren,
   seriesGanttQueryFromSearchParams,
   seriesGanttQueryToSearchParams,
   type SeriesGanttQuery,
@@ -185,4 +186,41 @@ test("SeriesGanttQuery 游标绑定 workspace revision 与查询 hash，变化�
       /SERIES_GANTT_CURSOR_STALE/,
     );
   }
+});
+
+test("SeriesGanttQuery 子对象游标绑定父对象、页大小与 revision", () => {
+  const items = [{ id: "sku:1" }, { id: "sku:2" }, { id: "sku:3" }];
+  const first = paginateSeriesGanttChildren({
+    items,
+    kind: "skus",
+    parentId: "series:1",
+    pageSize: 1,
+    workspaceRevision: 9,
+  });
+  assert.equal(first.items[0]?.id, "sku:1");
+  assert.ok(first.nextCursor);
+  assert.equal(paginateSeriesGanttChildren({
+    items,
+    kind: "skus",
+    parentId: "series:1",
+    pageSize: 1,
+    cursor: first.nextCursor,
+    workspaceRevision: 9,
+  }).items[0]?.id, "sku:2");
+  assert.throws(() => paginateSeriesGanttChildren({
+    items,
+    kind: "models",
+    parentId: "sku:1",
+    pageSize: 1,
+    cursor: first.nextCursor,
+    workspaceRevision: 9,
+  }), /SERIES_GANTT_CURSOR_STALE/);
+  assert.throws(() => paginateSeriesGanttChildren({
+    items,
+    kind: "skus",
+    parentId: "series:1",
+    pageSize: 1,
+    cursor: first.nextCursor,
+    workspaceRevision: 10,
+  }), /SERIES_GANTT_CURSOR_STALE/);
 });

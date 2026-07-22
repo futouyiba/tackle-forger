@@ -1,0 +1,186 @@
+{
+  "schemaVersion": 1,
+  "parameters": [
+    {
+      "key": "杆最大拉力kgf",
+      "label": "杆最大拉力kgf",
+      "itemKind": "rod",
+      "unit": "kgf",
+      "precision": 2,
+      "notes": "v1 fixture"
+    },
+    {
+      "key": "杆自重g",
+      "label": "杆自重g",
+      "itemKind": "rod",
+      "unit": "g",
+      "precision": 0,
+      "notes": "v1 fixture"
+    }
+  ],
+  "templates": [
+    {
+      "id": "T-FIXTURE",
+      "name": "代表性旧模板",
+      "fishMinKg": 1,
+      "fishMaxKg": 3,
+      "nominalFishKg": 2,
+      "tier": "fixture",
+      "values": {
+        "杆最大拉力kgf": 10,
+        "杆自重g": 100
+      },
+      "notes": "保留模板字段"
+    }
+  ],
+  "modifiers": [
+    {
+      "id": "structure:fixture",
+      "dimension": "structure",
+      "name": "直柄结构",
+      "level": 1,
+      "itemKinds": ["rod"],
+      "rules": [
+        {
+          "id": "type-force",
+          "parameterKey": "杆最大拉力kgf",
+          "operation": "multiply",
+          "value": 1.1
+        }
+      ],
+      "notes": "保留类型层",
+      "enabled": true
+    },
+    {
+      "id": "function:fixture",
+      "dimension": "function",
+      "name": "障碍强攻",
+      "level": 2,
+      "itemKinds": ["rod"],
+      "rules": [
+        {
+          "id": "function-force",
+          "parameterKey": "杆最大拉力kgf",
+          "operation": "multiply",
+          "value": 1.2
+        },
+        {
+          "id": "function-weight",
+          "parameterKey": "杆自重g",
+          "operation": "multiply",
+          "value": 1.05
+        }
+      ],
+      "notes": "包含优势与代价",
+      "enabled": true
+    },
+    {
+      "id": "performance:fixture",
+      "dimension": "performance",
+      "name": "轻量",
+      "level": "旧标签",
+      "itemKinds": ["rod"],
+      "rules": [
+        {
+          "id": "performance-weight",
+          "parameterKey": "杆自重g",
+          "operation": "multiply",
+          "value": 0.95
+        }
+      ],
+      "notes": "不推断强度语义",
+      "enabled": true
+    }
+  ],
+  "layers": [],
+  "affixes": [],
+  "qualityBands": [
+    {
+      "id": "gold",
+      "name": "金",
+      "color": "#d79b2d",
+      "minScore": 26,
+      "maxScore": null,
+      "priceIndex": 7,
+      "notes": "历史展示必须保留"
+    }
+  ],
+  "affixScorePolicy": {
+    "sameAxisFactors": [1],
+    "synergyBonus": 0,
+    "conflictPenalty": 0,
+    "passiveWeight": 1,
+    "directWeight": 1,
+    "notes": "fixture"
+  },
+  "recipes": [],
+  "seriesShowcases": [],
+  "candidates": [
+    {
+      "id": "candidate-fixture",
+      "recipeId": "",
+      "comboId": "FIXTURE-01",
+      "platformId": "fixture",
+      "platformPosition": "fixture",
+      "seriesName": "迁移样例",
+      "templateId": "T-FIXTURE",
+      "fishMinKg": 1.5,
+      "fishMaxKg": 1.8,
+      "selections": {
+        "structureId": "structure:fixture",
+        "functionId": "function:fixture",
+        "performanceId": "performance:fixture",
+        "technologyIds": []
+      },
+      "affixIds": [],
+      "useScene": "迁移回归",
+      "overrides": {
+        "杆最大拉力kgf": 12
+      },
+      "status": "candidate",
+      "calculated": {
+        "values": {
+          "杆最大拉力kgf": 12,
+          "杆自重g": 100
+        },
+        "quality": {
+          "rawScore": 0,
+          "finalScore": 0,
+          "qualityId": "gold",
+          "contributions": [],
+          "bonuses": [],
+          "penalties": []
+        },
+        "trace": [],
+        "issues": [],
+        "safeWorkingForce": 0,
+        "priceIndex": 1
+      },
+      "notes": "覆盖值不得丢失",
+      "createdAt": "2026-07-16T00:00:00.000Z",
+      "updatedAt": "2026-07-16T00:00:00.000Z"
+    }
+  ],
+  "officialSkus": [],
+  "detailOverrides": [],
+  "ruleGraphs": [],
+  "ruleRuns": [],
+  "dataSources": [],
+  "dataSourceImports": [],
+  "dataSourceBindings": [],
+  "dataSourceWritebacks": [],
+  "revisions": [
+    {
+      "revision": 1,
+      "author": "fixture",
+      "message": "代表性 v1 状态",
+      "createdAt": "2026-07-16T00:00:00.000Z"
+    }
+  ],
+  "notes": "代表性 v1 工作区状态",
+  "importedAt": "2026-07-16T00:00:00.000Z",
+  "legacyOnly": {
+    "keep": true
+  }
+}
+

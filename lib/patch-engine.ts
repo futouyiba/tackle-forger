@@ -110,7 +110,7 @@ function issue(
 function sortPatches(
   patches: ProjectionPatchRuleSource[],
 ): ProjectionPatchRuleSource[] {
-  const scopeOrder = { series: 0, sku: 1, model: 2 };
+  const scopeOrder = { series: 0, sku: 1, model: 2, final_review: 3 };
   return [...patches].sort(
     (left, right) =>
       scopeOrder[left.scope] - scopeOrder[right.scope] ||

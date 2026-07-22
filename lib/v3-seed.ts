@@ -3,6 +3,8 @@ import {
   defaultAffinityAxisWeights,
   evaluateAffinity,
   evaluateHardCompatibility,
+  evaluateStructuralHardCompatibility,
+  structuralCompatibilityContext,
 } from "./compatibility";
 import {
   calculateModelFiveAxisPreview,
@@ -326,7 +328,7 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
           (templates.find(
             (template) => template.id === projection.weightTemplateId,
           ) as (typeof templates)[number]).nominalFishKg,
-        compatibility: evaluateHardCompatibility(context, compatibilityRules),
+        compatibility: evaluateStructuralHardCompatibility(structuralCompatibilityContext({ methodId: method.id, typeId: type.id, functionId: fn.id, itemPartId: "part:rod" }), compatibilityRules),
         affinity: evaluateAffinity(
           context,
           affinityRules,
@@ -529,22 +531,23 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
       [...directAttributeIds, ...passiveIds],
       technologyIds,
     );
-    const aggregate = aggregateAffixPanel(
-      projection.values,
-      configuration,
-      ruleSet.settings.reductionStackingMode,
-      quality.id as QualityProfileId,
-    );
     const selectedPatches = patches.filter(
       (patch) =>
         series.patchIds.includes(patch.id) ||
         sku.patchIds.includes(patch.id) ||
         extraPatchIds.includes(patch.id),
     );
-    const patched = applyLayeredPatches(aggregate.values, selectedPatches, {
+    // 权威执行顺序（规范 §21.1）：Series/SKU/Model Patch 先于 Affix/Technology 结算。
+    const patched = applyLayeredPatches(projection.values, selectedPatches, {
       expectedProjectionId: projection.id,
       expectedRuleSetVersion: ruleSet.id,
     });
+    const aggregate = aggregateAffixPanel(
+      patched.value,
+      configuration,
+      ruleSet.settings.reductionStackingMode,
+      quality.id as QualityProfileId,
+    );
     const model: PurchasableModel = {
       id,
       revision: 1,
@@ -554,7 +557,7 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
       hardness: "MH",
       lengthM,
       fishWeightGradeId: skuId === sku15Id ? "fish-weight-grade:1.5kg" : "fish-weight-grade:1.8kg",
-      componentSelections: componentSelections(patched.value, id.split(":").pop() ?? id),
+      componentSelections: componentSelections(aggregate.values, id.split(":").pop() ?? id),
       technologyIds,
 
     attributeAffixIds: directAttributeIds,
@@ -567,7 +570,7 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
       createdAt: CREATED_AT,
       updatedAt: CREATED_AT,
     };
-    return { model, values: patched.value };
+    return { model, values: aggregate.values };
   };
   const built = [
     buildModel(modelIds.fast15, sku15Id, "1.5F 快调短竿", "Fast", 2.03, []),

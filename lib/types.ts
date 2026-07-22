@@ -66,10 +66,11 @@ export type ProjectionLayer =
   | "function"
   | "performance"
   | "quality"
-  | "attribute_affix"
   | "series_patch"
   | "sku_patch"
   | "model_patch"
+  | "attribute_affix"
+  | "final_review_patch"
   | "validation";
 
 export interface WorkspaceRuleSettings {
@@ -180,7 +181,7 @@ export type ProjectionPatchOperation =
   | { op: "remove"; path: string };
 export interface ProjectionPatchRuleSource {
   id: string;
-  scope: "series" | "sku" | "model";
+  scope: "series" | "sku" | "model" | "final_review";
   scopeId: string;
   reason: string;
   author: string;
@@ -225,7 +226,7 @@ export interface PatchSnapshotReference {
 export interface PatchRevisionRecord {
   patchId: string;
   patchRevision: number;
-  scopeType: "series" | "sku" | "model" | "derivation";
+  scopeType: "series" | "sku" | "model" | "derivation" | "final_review";
   layerType: PatchLayerType;
   subjectEntityId: string;
   subjectName: string;
@@ -466,7 +467,7 @@ export type CompatibilityAxis =
 export interface CompatibilityContext {
   methodId: string;
   typeId: string;
-  targetWeightKg: number;
+  targetWeightKg?: number;
   functionId?: string;
   functionIntensity?: FunctionIntensity;
   performanceId?: string;
@@ -613,7 +614,7 @@ export interface ProjectionMatch {
 
 export interface PatchApplicationTraceItem {
   patchId: string;
-  scope: "series" | "sku" | "model";
+  scope: "series" | "sku" | "model" | "final_review";
   scopeId: string;
   path: string;
   operation: ProjectionPatchOperation["op"];

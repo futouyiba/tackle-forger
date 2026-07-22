@@ -43,10 +43,11 @@ const TRACE_LAYERS: ProjectionLayer[] = [
   "function",
   "performance",
   "quality",
-  "attribute_affix",
   "series_patch",
   "sku_patch",
   "model_patch",
+  "attribute_affix",
+  "final_review_patch",
   "validation",
 ];
 
@@ -54,6 +55,7 @@ const PATCH_LAYER: Record<ProjectionPatchRuleSource["scope"], ProjectionLayer> =
   series: "series_patch",
   sku: "sku_patch",
   model: "model_patch",
+  final_review: "final_review_patch",
 };
 
 function round(value: number, precision = 12): number {
@@ -533,6 +535,32 @@ export function deriveProjection(
     );
   }
 
+  const patches = [...(input.patches ?? [])]
+    .filter((patch) => patch.status === "approved")
+    .sort((left, right) => {
+      const scopeOrder = { series: 0, sku: 1, model: 2, final_review: 3 };
+      return (
+        scopeOrder[left.scope] - scopeOrder[right.scope] ||
+        left.order - right.order ||
+        compareText(left.id, right.id)
+      );
+    });
+  // 权威执行顺序（规范 §3.2 / §8 / §21.1）：
+  // SeriesPatch → SkuPatch → ModelPatch 必须先于 Affix/Technology 结算，
+  // FinalReviewPatch 位于词条结算之后，最后做边界校验。
+  for (const patch of patches.filter((patch) => patch.scope !== "final_review")) {
+    applyRuleSource(
+      values,
+      step(PATCH_LAYER[patch.scope]),
+      patch.rules,
+      patch.id,
+      patch.reason,
+      warnings,
+      sequence,
+      setRules,
+    );
+  }
+
   applyAttributeContributions(
     values,
     step("attribute_affix"),
@@ -542,20 +570,10 @@ export function deriveProjection(
     sequence,
   );
 
-  const patches = [...(input.patches ?? [])]
-    .filter((patch) => patch.status === "approved")
-    .sort((left, right) => {
-      const scopeOrder = { series: 0, sku: 1, model: 2 };
-      return (
-        scopeOrder[left.scope] - scopeOrder[right.scope] ||
-        left.order - right.order ||
-        compareText(left.id, right.id)
-      );
-    });
-  for (const patch of patches) {
+  for (const patch of patches.filter((patch) => patch.scope === "final_review")) {
     applyRuleSource(
       values,
-      step(PATCH_LAYER[patch.scope]),
+      step("final_review_patch"),
       patch.rules,
       patch.id,
       patch.reason,

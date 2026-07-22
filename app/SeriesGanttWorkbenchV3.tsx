@@ -33,7 +33,8 @@ import { deterministicHash } from "@/lib/rule-kernel";
 import {
   defaultAffinityAxisWeights,
   evaluateAffinity,
-  evaluateHardCompatibility,
+  evaluateStructuralHardCompatibility,
+  structuralCompatibilityContext,
 } from "@/lib/compatibility";
 import {
   matchNearestProjection,
@@ -1048,7 +1049,7 @@ export function SeriesGanttWorkbenchV3({
           itemPartId: draft.itemPartId,
           derivedPullKg,
           templatePriority: template.templatePriority,
-          compatibility: evaluateHardCompatibility(contextFor(pull), state.compatibilityRules),
+          compatibility: evaluateStructuralHardCompatibility(structuralCompatibilityContext({ methodId: draft.methodId, typeId: draft.typeId, functionId: draft.functionId, itemPartId: draft.itemPartId }), state.compatibilityRules),
           affinity: evaluateAffinity(contextFor(pull), state.affinityRules, state.affinityAxisWeights ?? defaultAffinityAxisWeights),
         }];
       });

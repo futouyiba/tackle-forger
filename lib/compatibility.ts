@@ -51,12 +51,14 @@ export function compatibilitySelectorMatches(
   if (!scalarMatches(selector.lineMaterialId, context.lineMaterialId)) return false;
   if (
     selector.minWeightKg !== undefined &&
+    context.targetWeightKg !== undefined &&
     context.targetWeightKg < selector.minWeightKg
   ) {
     return false;
   }
   if (
     selector.maxWeightKg !== undefined &&
+    context.targetWeightKg !== undefined &&
     context.targetWeightKg >= selector.maxWeightKg
   ) {
     return false;
@@ -70,6 +72,66 @@ export function compatibilitySelectorMatches(
   }
   if (selector.tags?.some((tag) => !context.tags.includes(tag))) return false;
   return true;
+}
+
+/**
+ * 结构标杆匹配专用的兼容上下文（规范 §5.1/§5.2/§18.1）。
+ * 只保留结构维度（itemPart/method/type/function），刻意省略 performance、quality、
+ * material、functionIntensity、重量范围、构件与标签——这些商品层与构件层维度不得
+ * 参与结构标杆的最近匹配与排除。重量范围通过省略 targetWeightKg 令范围选择器不生效。
+ */
+export function structuralCompatibilityContext(input: {
+  methodId: string;
+  typeId: string;
+  functionId?: string;
+  itemPartId?: string;
+}): CompatibilityContext {
+  return {
+    methodId: input.methodId,
+    typeId: input.typeId,
+    functionId: input.functionId,
+    itemPartId: input.itemPartId,
+    functionIntensity: undefined,
+    performanceId: undefined,
+    qualityId: undefined,
+    lineMaterialId: undefined,
+    targetWeightKg: undefined,
+    componentIds: [],
+    tags: [],
+  };
+}
+
+/**
+ * 是否为纯结构维度的兼容选择器（仅 itemPart/method/type/function）。
+ * 含 performance、quality、material、functionIntensity、重量范围、构件或标签的选择器，
+ * 都不属于结构标杆匹配阶段，必须在最近匹配时整体忽略（规范 §5.1/§5.2/§18.1）。
+ */
+export function isStructuralCompatibilitySelector(selector: CompatibilitySelector): boolean {
+  return (
+    selector.functionIntensity === undefined &&
+    selector.performanceId === undefined &&
+    selector.qualityId === undefined &&
+    selector.lineMaterialId === undefined &&
+    selector.minWeightKg === undefined &&
+    selector.maxWeightKg === undefined &&
+    !(selector.componentIds && selector.componentIds.length > 0) &&
+    !(selector.tags && selector.tags.length > 0)
+  );
+}
+
+/**
+ * 结构标杆匹配阶段的硬兼容评估：只保留纯结构维度的规则。
+ * 非结构维度的 deny/require（例如“0.5kg 以下不支持”这类重量范围规则、performance/quality
+ * 规则）不会在最近匹配时排除结构标杆。
+ */
+export function evaluateStructuralHardCompatibility(
+  context: CompatibilityContext,
+  rules: CompatibilityRule[],
+): HardCompatibilityResult {
+  return evaluateHardCompatibility(
+    context,
+    rules.filter((rule) => isStructuralCompatibilitySelector(rule.selector)),
+  );
 }
 
 export function compatibilitySpecificity(

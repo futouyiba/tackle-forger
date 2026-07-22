@@ -91,7 +91,7 @@ function orderedPatches(state: WorkspaceState, sku: SkuDrawer | undefined, model
   if (!sku) return [];
   const series = state.seriesDefinitions.find((item) => item.id === sku.seriesId);
   const ids = new Set([...(series?.patchIds ?? []), ...sku.patchIds, ...(model?.patchIds ?? [])]);
-  const scopeOrder = { series: 0, sku: 1, model: 2 };
+  const scopeOrder = { series: 0, sku: 1, model: 2, final_review: 3 };
   return projectionPatchViewFromLedger(state.patchLedger)
     .filter((patch) => ids.has(patch.id))
     .sort((left, right) => scopeOrder[left.scope] - scopeOrder[right.scope] || left.order - right.order || left.id.localeCompare(right.id));

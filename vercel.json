@@ -1,6 +1,6 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "nextjs",
-  "buildCommand": "node -e \"const fs=require('fs');const p=require('./package.json');delete p.type;fs.writeFileSync('package.json',JSON.stringify(p,null,2))\" && npx next build",
+  "buildCommand": "next build",
   "installCommand": "npm install"
 }

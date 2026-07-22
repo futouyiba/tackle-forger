@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createSeedState } from "../lib/seed";
 import {
+  changesOnlyReadOnlyLegacyHistory,
   findGovernedStateChanges,
+  findReadOnlyLegacyProductChanges,
   GENERAL_WORKSPACE_SAVE_FIELDS,
   stableAuditActor,
 } from "../lib/api-command-boundaries";
@@ -19,21 +21,38 @@ test("通用保存契约覆盖工作台直接编辑字段", () => {
   proposed.affixes[0] = { ...proposed.affixes[0]!, description: "工作台词条编辑" };
   proposed.qualityBands[0] = { ...proposed.qualityBands[0]!, notes: "工作台品质编辑" };
   proposed.affixScorePolicy = { ...proposed.affixScorePolicy, synergyBonus: proposed.affixScorePolicy.synergyBonus + 1 };
-  proposed.recipes[0] = { ...proposed.recipes[0]!, name: "工作台配方编辑" };
   proposed.seriesShowcases = [];
-  proposed.candidates = [];
-  proposed.officialSkus = [];
-  proposed.detailOverrides = [];
   proposed.ruleGraphs = [];
   proposed.ruleRuns = [];
   proposed.dataSources[0] = { ...proposed.dataSources[0]!, notes: "工作台数据源编辑" };
 
   assert.deepEqual(findGovernedStateChanges(current, proposed), []);
   assert.deepEqual([...GENERAL_WORKSPACE_SAVE_FIELDS].sort(), [
-    "affixScorePolicy", "affixes", "candidates", "dataSources", "detailOverrides",
-    "layers", "modifiers", "notes", "officialSkus", "parameters", "qualityBands",
-    "recipes", "ruleGraphs", "ruleRuns", "seriesShowcases", "templates",
+    "affixScorePolicy", "affixes", "dataSources", "layers", "modifiers", "notes",
+    "parameters", "qualityBands", "ruleGraphs", "ruleRuns", "seriesShowcases", "templates",
   ]);
+});
+
+test("旧产品集合全部是整包保存的只读历史", () => {
+  const current = createSeedState();
+  const proposed = structuredClone(current);
+  proposed.recipes[0] = { ...proposed.recipes[0]!, name: "禁止修改的旧配方" };
+  proposed.candidates[0] = {
+    ...proposed.candidates[0]!,
+    notes: "禁止修改的旧 Candidate",
+  };
+  proposed.officialSkus.push({ id: "legacy:injected" } as never);
+  proposed.detailOverrides.push({ skuId: "legacy:injected" } as never);
+
+  assert.deepEqual(findGovernedStateChanges(current, proposed), [
+    "recipes", "candidates", "officialSkus", "detailOverrides",
+  ]);
+  assert.deepEqual(findReadOnlyLegacyProductChanges(current, proposed), [
+    "recipes", "candidates", "officialSkus", "detailOverrides",
+  ]);
+  assert.equal(changesOnlyReadOnlyLegacyHistory(["recipes", "candidates"]), true);
+  assert.equal(changesOnlyReadOnlyLegacyHistory(["recipes", "seriesDefinitions"]), false);
+  assert.equal(changesOnlyReadOnlyLegacyHistory([]), false);
 });
 
 test("整包保存拒绝领域实体、账本、审计和未知字段变化", () => {

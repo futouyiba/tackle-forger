@@ -6,7 +6,6 @@ import {
   prepareDataSourceWriteback,
   sourceFingerprint,
 } from "@/lib/data-sources";
-import { recalculateWorkspace } from "@/lib/engine";
 import {
   commitFeishuWriteback,
   fetchFeishuRecords,
@@ -21,6 +20,7 @@ import { loadWorkspaceState, saveWorkspaceState } from "@/lib/storage";
 import type { ActionCode } from "@/lib/interaction-contracts";
 import type { DataSourceProfile } from "@/lib/types";
 import { ensureWorkflowFields } from "@/lib/workflow";
+import { preserveReadOnlyLegacyProductHistory } from "@/lib/legacy-history";
 
 export const dynamic = "force-dynamic";
 
@@ -229,7 +229,10 @@ export async function POST(request: NextRequest) {
       },
       ...next.dataSourceImports,
     ].slice(0, 100);
-    next = recalculateWorkspace(ensureWorkflowFields(next));
+    next = preserveReadOnlyLegacyProductHistory(
+      current.state,
+      ensureWorkflowFields(next),
+    );
 
     const result = await saveWorkspaceState({
       state: next,

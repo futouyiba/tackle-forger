@@ -836,6 +836,45 @@ textarea {
   font-size: 11px;
 }
 
+.legacy-history-notice {
+  align-items: center;
+  background: #f7f4ec;
+  border-color: #d8cba9;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding: 14px 16px;
+}
+
+.legacy-history-notice > svg {
+  color: #846b2d;
+}
+
+.legacy-history-notice strong {
+  color: #5f4d22;
+  display: block;
+  font-size: 13px;
+}
+
+.legacy-history-notice p {
+  color: #665e4b;
+  font-size: 11px;
+  margin: 3px 0;
+}
+
+.legacy-history-notice small {
+  color: #817866;
+  display: block;
+  font-size: 10px;
+}
+
+.text-input[readonly],
+textarea[readonly] {
+  background: #f4f5f6;
+  color: #59636d;
+  cursor: default;
+}
+
 .segmented {
   background: #dde2e8;
   display: flex;

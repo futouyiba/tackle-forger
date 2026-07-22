@@ -43,8 +43,10 @@ if (sessionDataIncluded) {
 await writeFile(path.join(targetDir, "manifest.json"), `${JSON.stringify({
   createdAt: new Date().toISOString(), databasePath, dataDir, sessionDataDir, sessionDataIncluded,
   revisionDiagnostics,
-  sourceStorageFilesAtBackupStart: {
-    capturedAt: sourceRevisionDiagnostics.capturedAt,
+  sourceOnlineStorageObservation: {
+    observationMode: "online_approximate_interval",
+    sampledFrom: sourceRevisionDiagnostics.sampledFrom,
+    sampledTo: sourceRevisionDiagnostics.sampledTo,
     databaseFileBytes: sourceRevisionDiagnostics.databaseFileBytes,
     walPresent: sourceRevisionDiagnostics.walPresent,
     walFileBytes: sourceRevisionDiagnostics.walFileBytes,

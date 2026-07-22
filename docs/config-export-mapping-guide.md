@@ -1,7 +1,7 @@
 # 配置表生产映射指南
 
 > 状态：配置映射契约；从属于v3第25节
-> 最后对齐v3：2026-07-22
+> 最后对齐v3：2026-07-23
 
 本文件记录 `Tackle Forger` 到 `configsDesign` 的已确认事实、必须显式配置的语义，以及映射发布门槛。它不包含 `config_system.toml` 的内容，也不允许把该文件中的秘密写入日志、Manifest 或页面。
 
@@ -41,18 +41,19 @@
 
 每个 Model 的映射至少需要：
 
-1. 已发布`ConfigIdPolicyVersion`（v3 OPEN-008）分配的Rod、Reel、Line数值型`INT64 id`与稳定`name`；公司数字区间和命名格式未发布时只能预览，禁止用当前最大值+1或本文示例ID正式提交。
-2. Item、GoodsBasic、StoreBuy 的数值型 `INT64 id` 与稳定 `name`。
+1. 已发布`ConfigIdPolicyVersion`（v3 OPEN-008）从永久`rangeId`分配的Tackle/Item共享数值型`INT64 id`与稳定`name`。OPEN-008的区间和命名已经确认，但策略版本、ledger或新鲜Manifest门禁未完成时仍只能生成`NON_FORMAL`预览；禁止用当前最大值+1或示例ID正式提交。
+2. 由同一Bundle确定性派生的GoodsBasic、StoreBuy数值型`INT64 id`与稳定`name`。
 3. `brand`、`series`、`sub_type`、`item_type`、`quality` 等枚举展示值。
 4. 每个目标字段的 Snapshot 来源、常量、倍率、偏移、精度和空值哨兵。
 5. 是否生成 `tackle_set`、`store_recommend`、`store_room`、`pond_store_group`、`pond_store` 等可选行。
 6. mappingId、version、Profile、schema hash 与审批记录。
+7. 当前`ConfigIdPolicyVersion`引用的`ConfigTargetCatalogVersion`条目和获批`ConfigTargetScanManifest`；Manifest必须覆盖authoritative ref、不可变commit、`config.toml`及受管workbook hashes。
 
 缺任一必填输入时，生成器必须产生`ValidationIssue(gate="EXPORT")`并阻止当前“环境×渠道”目标提交；不得面向正式文件静默跳过行或生成半套tackle/item/store记录。其他已通过预检的目标默认可继续，失败目标保留预览包、Issue和恢复Manifest。
 
 ## 最小映射示例
 
-下面只演示结构，不是可发布的生产 ID：
+下面只演示映射结构。ID与名称从正式预留Bundle读取，不包含可误搬运的示例常量：
 
 ```json
 {
@@ -74,8 +75,8 @@
       "logicalTable": "rods",
       "businessKeyField": "id",
       "columns": {
-        "id": { "kind": "constant", "value": 301499001 },
-        "name": { "kind": "constant", "value": "rod_qinglu_15_fast" },
+        "id": { "kind": "reserved_bundle_value", "object": "tackle_item", "field": "numericId" },
+        "name": { "kind": "reserved_bundle_value", "object": "tackle_item", "field": "configNameKey" },
         "drag": {
           "kind": "snapshot_value",
           "key": "杆最大拉力kgf",
@@ -88,19 +89,27 @@
 }
 ```
 
-生产映射必须经过预览、关系校验和人工确认后才能绑定到已发布的`ConfigEnvironmentProfile`，再由用户对每个环境×渠道建立`LocalExportTargetBinding`。服务端只保存环境、渠道、映射版本和用户标签，不保存本机绝对路径或目录句柄。
+生产映射必须经过预览、关系校验和人工确认后才能绑定到已发布的`ConfigEnvironmentProfile`，再由用户对每个环境×渠道建立`LocalExportTargetBinding`。正式绑定还必须匹配权威目标目录条目；用户临时绑定不能创建或豁免正式目标。服务端只保存环境、渠道、映射版本和用户标签，不保存本机绝对路径或目录句柄。
 
-## 一期权威路径：浏览器目录授权
+## 分期与浏览器目录授权
 
-一期使用Chromium的File System Access API。用户先选择某环境的configs仓库根目录，再为非1001渠道选择明确的渠道目录。`FileSystemDirectoryHandle`只保存在当前用户、浏览器和origin的IndexedDB中；页面在每次导出前重新检查读写权限。
+一期只生成`ConfigPreviewPackage(publicationState=NON_FORMAL)`：没有正式Bundle时数字ID和正式name为空，仅在PreviewManifest中用`NON_FORMAL:<modelId>:<objectKind>`符号引用；不得生成可被配置编译器接受的`tackle.xlsx`、`item.xlsx`、`store.xlsx`，只允许明显标注不可提交的`*.preview.xlsx`或差异报告。
 
-当File System Access API不可用、目录句柄失效或用户未授权时，页面只能要求重新绑定，或下载包含`ExportManifest`和校验报告的变更包供人工搬运；不得声称已写入本机Git工作区。
+1.5期才使用Chromium的File System Access API执行正式写入。用户先选择dev/test/online/release某环境的configs worktree根目录，再为非1001渠道选择权威目录已登记的明确渠道目录。`FileSystemDirectoryHandle`按用户、浏览器、origin、环境和渠道保存在IndexedDB中；页面在每次导出前重新检查读写权限。
 
-## 遗留兼容：本地伴随服务（非一期规范路径）
+浏览器本地配置写入不进入服务端fenced outbox，服务端也不能取得目录句柄代写本机文件。工作区租约和fencing token只授权正式写入并约束服务端成功证据；页面在开始、每个文件写入前和最终报告前重验租约，但不能宣称token可撤销已经交给本机文件系统的写操作。文件一致性继续由基线hash/mtime、备份、恢复Manifest和逐文件回读保证。
 
-仓库中仍保留`local_companion`执行器与`docs/config-export-registry.example.json`，用于兼容已有实验性实现。它不是新部署的默认方案，不能替代`ConfigEnvironmentProfile + LocalExportTargetBinding`，也不得让服务器获取设计人员电脑上的路径。只有未来经用户明确批准修改v3部署边界后，才能将其重新提升为支持路径。
+写入期间租约失效或出现更高token时，旧页面不得报告成功。任一配置导出租约没有已验证终态便过期、断线或取消时，服务端必须把对应逻辑目标置为`recoveryState=RECOVERY_REQUIRED`并记录`reason=EXTERNAL_FILE_CONFLICT`，不能因页面未回报而假定文件未变。当前持锁者必须确认目录授权，必要时重新绑定或重新请求授权，回读全部目标文件并按Manifest恢复或前向协调，在记录新hash并关闭恢复状态前不得再次正式写入该目标。
 
-以下内容仅记录遗留实现的隔离要求，不构成一期安装步骤：
+策略发布、每次正式预留和每次正式导出都重新解析权威目标的authoritative ref，并比较当前commit、`config.toml`和受管workbook hashes与获批Manifest。正式导出还要求本地worktree HEAD和文件基线完全一致；任何漂移都返回`CONFIG_TARGET_SCAN_MANIFEST_STALE`，必须重新扫描、复核并发布引用新Manifest的策略版本。正式写入改变workbook hash后，旧策略不得继续下一批，需等待外部系统形成新commit并完成新一轮Manifest流程。
+
+当File System Access API不可用、目录句柄失效或用户未授权时，一期仍只能下载`NON_FORMAL`预览。1.5期只有在正式Bundle、目标目录/Manifest门禁和`config.export.commit`全部通过后才能下载正式人工搬运包；结果标记`FORMAL_PACKAGE_DOWNLOADED_NOT_APPLIED`，不得声称已写入本机Git工作区。
+
+## 遗留兼容：本地伴随服务（非1.5期规范路径）
+
+仓库中仍保留`local_companion`执行器与`docs/config-export-registry.example.json`，用于兼容已有实验性实现。它不是新部署的默认方案，不能替代`ConfigEnvironmentProfile + LocalExportTargetBinding`，也不得让服务器获取设计人员电脑上的路径。在1.5期目录/Manifest、策略、ledger、Model revision锁和权限契约实现前，它同样只能生成`NON_FORMAL`预览，不能凭旧Profile执行正式提交。只有未来经用户明确批准修改v3部署边界后，才能将其重新提升为支持路径。
+
+以下内容仅记录遗留实现的隔离要求，不构成1.5期安装步骤：
 
 1. 复制 `docs/config-export-registry.example.json` 到本机受控位置。
 2. 将 `pairing.workspaceId` 替换为公司飞书租户键，并在 `pairing.allowedOpenIds` 登记允许执行交付的用户。

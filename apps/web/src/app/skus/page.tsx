@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { PageToolbar, ToolbarButton } from "@/components/EditableGrid";
-import { skus, templates, dimensionOptions, affixes, qualityTiers, templateById, type SkuRow } from "@/lib/mock-data";
+import { skus, templates, dimensionOptions, affixes, templateById, type SkuRow } from "@/lib/mock-data";
 import { computeSku } from "@/lib/calc";
 import { usePersistentState } from "@/lib/usePersistentState";
 

@@ -18,8 +18,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    setSession(loadSession());
-    setReady(true);
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) return;
+      setSession(loadSession());
+      setReady(true);
+    });
+    return () => {
+      active = false;
+    };
   }, []);
 
   const value = useMemo<AuthContextValue>(() => ({

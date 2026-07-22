@@ -42,7 +42,6 @@ export function EditableGrid<T extends { id: string }>({
   onAddRow,
   onDeleteRow,
   onCloneRow,
-  onFillDown,
   emptyHint,
 }: EditableGridProps<T>) {
   const [activeCell, setActiveCell] = useState<{ rowId: string; columnKey: string } | null>(null);

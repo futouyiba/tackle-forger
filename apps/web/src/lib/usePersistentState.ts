@@ -8,14 +8,21 @@ export function usePersistentState<T>(key: string, initial: T): [T, React.Dispat
   const initialized = useRef(false);
 
   useEffect(() => {
-    try {
-      const raw = typeof window !== "undefined" ? window.localStorage.getItem(key) : null;
-      if (raw) setState(JSON.parse(raw) as T);
-    } catch {
-      // 解析失败则回退到初始值
-    }
-    setHydrated(true);
-    initialized.current = true;
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) return;
+      try {
+        const raw = typeof window !== "undefined" ? window.localStorage.getItem(key) : null;
+        if (raw) setState(JSON.parse(raw) as T);
+      } catch {
+        // 解析失败则回退到初始值
+      }
+      setHydrated(true);
+      initialized.current = true;
+    });
+    return () => {
+      active = false;
+    };
   }, [key]);
 
   useEffect(() => {

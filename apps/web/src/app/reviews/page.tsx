@@ -6,7 +6,7 @@ import { PageToolbar, ToolbarButton } from "@/components/EditableGrid";
 import { reviews, proposals, type ReviewRow, type ProposalRow } from "@/lib/mock-data";
 
 export default function ReviewsPage() {
-  const [items, setItems] = useState<ReviewRow[]>(() => reviews.map((review) => ({ ...review })));
+  const [items] = useState<ReviewRow[]>(() => reviews.map((review) => ({ ...review })));
   const [tab, setTab] = useState<"reviews" | "proposals">("reviews");
   const [proposalRows, setProposalRows] = useState<ProposalRow[]>(() => proposals.map((proposal) => ({ ...proposal })));
 

@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { EditableGrid, PageToolbar, ToolbarButton, type GridColumn } from "@/components/EditableGrid";
 import { affixes, qualityTiers, type AffixRow } from "@/lib/mock-data";

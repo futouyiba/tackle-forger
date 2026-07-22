@@ -67,6 +67,10 @@ export interface FeishuWorkbookPullAdapter {
   }>;
 }
 
+/**
+ * v3 §14 指定的唯一通用规则源。该身份是有意的 canonical config-as-code：
+ * 迁移主工作簿必须先修改权威规范并经代码审查，不能由部署环境静默改指向。
+ */
 export const CANONICAL_FEISHU_WORKBOOK: FeishuWorkbookRef = {
   id: "feishu-workbook:tackle-design",
   name: "钓具设计工作簿",
@@ -120,6 +124,35 @@ export function parseCanonicalWorkbookLink(input: string): Pick<FeishuWorkbookRe
     anchorSheetId: url.searchParams.get("sheet") ?? undefined,
     syncScope: "workbook",
   };
+}
+
+export function validateFeishuWorkbookConfiguration(
+  workbook: FeishuWorkbookRef,
+  registry: FeishuSheetRegistryEntry[],
+): void {
+  if (!workbook.id.trim() || !workbook.name.trim() || workbook.provider !== "feishu_sheets") {
+    throw new Error("飞书规则工作簿登记缺少稳定身份或 provider 无效。");
+  }
+  if (workbook.syncScope !== "workbook") {
+    throw new Error("飞书唯一规则源的同步范围必须是整本工作簿。");
+  }
+  const parsed = parseCanonicalWorkbookLink(workbook.shareUrl);
+  if (parsed.wikiToken !== workbook.wikiToken) {
+    throw new Error("工作簿链接与已登记 wikiToken 不一致。");
+  }
+  if (workbook.anchorSheetId && parsed.anchorSheetId !== workbook.anchorSheetId) {
+    throw new Error("工作簿链接的定位 sheet 与已登记 anchorSheetId 不一致。");
+  }
+  const seen = new Set<string>();
+  for (const entry of registry) {
+    if (!entry.sheetId.trim() || !entry.expectedName.trim()) {
+      throw new Error("飞书工作表注册表存在空 sheet_id 或名称。");
+    }
+    if (seen.has(entry.sheetId)) {
+      throw new Error(`飞书工作表注册表存在重复 sheet_id ${entry.sheetId}。`);
+    }
+    seen.add(entry.sheetId);
+  }
 }
 
 export function validateSheetRegistry(
@@ -188,13 +221,11 @@ export async function pullFeishuWorkbookRevision(input: {
   pulledBy: string;
 }): Promise<FeishuSourceRevision> {
   if (!input.workbook.enabled) throw new Error("飞书规则工作簿已停用。");
+  const registry = input.registry ?? CANONICAL_FEISHU_SHEET_REGISTRY;
+  validateFeishuWorkbookConfiguration(input.workbook, registry);
   const parsed = parseCanonicalWorkbookLink(input.workbook.shareUrl);
-  if (parsed.wikiToken !== input.workbook.wikiToken) {
-    throw new Error("工作簿链接与已登记 wikiToken 不一致。");
-  }
   const remote = await input.adapter.resolveWorkbook(input.workbook);
   if (!remote.sourceRevision.trim()) throw new Error("飞书未返回工作簿 revision。");
-  const registry = input.registry ?? CANONICAL_FEISHU_SHEET_REGISTRY;
   const issues = validateSheetRegistry(registry, remote.sheets);
   const content = {
     workbookRefId: input.workbook.id,

@@ -811,6 +811,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       const payload = (await response.json()) as {
         state?: WorkspaceState;
         revision?: number;
+        remoteChangesAvailable?: boolean;
         error?: string;
       };
       if (!response.ok || !payload.state || !payload.revision) {
@@ -821,7 +822,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       setDirty(false);
       setSyncState("saved");
       setWritebackPreview(null);
-      notify("已安全回写飞书，并保存审计版本 v" + payload.revision);
+      notify("已安全写回飞书并保存审计版本 v" + payload.revision + "；远端变化尚未拉取或发布。");
       void loadVersions();
     } catch (error) {
       notify(error instanceof Error ? error.message : "回写失败");

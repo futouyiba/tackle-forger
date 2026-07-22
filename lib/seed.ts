@@ -608,6 +608,7 @@ export function createSeedState(): WorkspaceState {
     dataSourceImports: [],
     dataSourceBindings: [],
     dataSourceWritebacks: [],
+    dataSourceWritebackIntents: [],
     revisions: [
       {
         revision: 1,

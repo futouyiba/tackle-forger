@@ -10,6 +10,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { CANONICAL_FEISHU_WORKBOOK } from "@/lib/feishu-workbook";
 import type { ActionAvailabilityMap } from "@/lib/interaction-contracts";
 import type { CanonicalRuleWorkbookInspection } from "@/lib/rule-workbook-inspection";
 import type { WorkspaceState } from "@/lib/types";
@@ -202,7 +203,7 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
           <span className="eyebrow">唯一通用规则源 · 整本工作簿</span>
           <h2>钓具设计工作簿</h2>
           <p>链接中的“06_系列”只是打开位置。读取范围始终覆盖整本工作簿，工作表按稳定 ID 识别。</p>
-          <a href="https://pisn3u3ony2.feishu.cn/wiki/YsEKwSUJ5i86HCkZKBVcNMw7nOh?from=from_copylink&sheet=9nE3Rx" target="_blank" rel="noreferrer">
+          <a href={CANONICAL_FEISHU_WORKBOOK.shareUrl} target="_blank" rel="noreferrer">
             在飞书中查看 <ArrowRight size={14} />
           </a>
         </div>

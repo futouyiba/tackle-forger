@@ -13,7 +13,7 @@ test("v14 将旧系列配方迁移为竿轮线约束且保留扁平字段", () =
 
   const migrated = migrateWorkspaceState(legacy);
   const recipe = migrated.recipes[0];
-  assert.equal(migrated.schemaVersion, 15);
+  assert.equal(migrated.schemaVersion, 16);
   assert.deepEqual(recipe.templateIds, before.templateIds);
   assert.deepEqual(recipe.structureIds, before.structureIds);
   assert.deepEqual(recipe.requiredAffixIds, before.requiredAffixIds);
@@ -37,11 +37,21 @@ test("v15 保留旧五维定义并明确迁移为未发布修订", () => {
   }];
   const migrated = migrateWorkspaceState(legacy);
   const definition = migrated.fiveAxisViewDefinitions[0] as unknown as Record<string, unknown>;
-  assert.equal(migrated.schemaVersion, 15);
+  assert.equal(migrated.schemaVersion, 16);
   assert.equal(definition.publicationState, "UNPUBLISHED");
   assert.equal(definition.revision, 1);
   assert.equal(typeof definition.definitionHash, "string");
   assert.equal(definition.preservedUnknown, "keep-me");
+  assert.deepEqual(migrateWorkspaceState(migrated), migrated);
+});
+
+test("v16 为旧工作区增加持久化回写意图账本且迁移幂等", () => {
+  const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
+  legacy.schemaVersion = 15;
+  delete legacy.dataSourceWritebackIntents;
+  const migrated = migrateWorkspaceState(legacy);
+  assert.equal(migrated.schemaVersion, 16);
+  assert.deepEqual(migrated.dataSourceWritebackIntents, []);
   assert.deepEqual(migrateWorkspaceState(migrated), migrated);
 });
 
@@ -103,7 +113,7 @@ test("D-02 OfficialSku 无损迁移为抽屉、默认 Model 与冻结快照", ()
 
   const migrated = migrateWorkspaceState(legacy);
   assert.equal(migrated.skuDrawers.length, 1);
-  assert.equal(migrated.schemaVersion, 15);
+  assert.equal(migrated.schemaVersion, 16);
   assert.deepEqual(migrated.qualityValuePolicyDrafts, []);
   assert.deepEqual(migrated.seriesDefinitions[0].targetPullSpecifications, [{
     targetPullKgf: migrated.skuDrawers[0].targetWeightKg,

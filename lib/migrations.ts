@@ -35,7 +35,7 @@ import { CANONICAL_FEISHU_WORKBOOK } from "./feishu-workbook";
 import { buildPatchRevision, emptyPatchLedger, migratePatchLedger } from "./patch-ledger";
 import { deterministicHash } from "./rule-kernel";
 
-export const CURRENT_WORKSPACE_SCHEMA_VERSION = 15;
+export const CURRENT_WORKSPACE_SCHEMA_VERSION = 16;
 
 const DEFAULT_RULE_SETTINGS: WorkspaceRuleSettings = {
   reductionStackingMode: "diminishing_division",
@@ -689,6 +689,16 @@ function migrateV14ToV15(state: MutableWorkspace): MutableWorkspace {
   };
 }
 
+function migrateV15ToV16(state: MutableWorkspace): MutableWorkspace {
+  return {
+    ...state,
+    schemaVersion: 16,
+    dataSourceWritebackIntents: arrayOf<WorkspaceState["dataSourceWritebackIntents"][number]>(
+      state.dataSourceWritebackIntents,
+    ),
+  };
+}
+
 const migrations: Record<number, (state: MutableWorkspace) => MutableWorkspace> = {
   1: migrateV1ToV2,
   2: migrateV2ToV3,
@@ -704,6 +714,7 @@ const migrations: Record<number, (state: MutableWorkspace) => MutableWorkspace> 
   12: migrateV12ToV13,
   13: migrateV13ToV14,
   14: migrateV14ToV15,
+  15: migrateV15ToV16,
 };
 
 export function migrateWorkspaceState(input: unknown): WorkspaceState {

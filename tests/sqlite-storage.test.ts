@@ -9,6 +9,7 @@ import {
   listSqliteRevisions,
   loadSqliteWorkspace,
   saveSqliteImportedFile,
+  saveSqliteWorkspace,
 } from "../lib/sqlite-storage";
 import { createSeedState } from "../lib/seed";
 
@@ -32,6 +33,61 @@ test("SQLite 导入历史版本后保持当前 revision 和冻结历史", async 
   });
   assert.equal((await loadSqliteWorkspace(databasePath)).revision, 2);
   assert.deepEqual((await listSqliteRevisions(databasePath)).map((entry) => entry.revision), [2, 1]);
+});
+
+test("SQLite 保存使用 revision 条件更新并持久化内容", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "tackle-forger-sqlite-save-"));
+  const databasePath = path.join(directory, "workspace.sqlite");
+  t.after(async () => {
+    await closeSqliteStorage(databasePath);
+    await rm(directory, { recursive: true, force: true });
+  });
+
+  const loaded = await loadSqliteWorkspace(databasePath);
+  const changed = structuredClone(loaded.state);
+  changed.affixScorePolicy.notes = "persisted-through-sqlite";
+  const saved = await saveSqliteWorkspace(databasePath, {
+    state: changed,
+    baseRevision: loaded.revision,
+    author: "tester",
+    message: "save",
+  });
+  assert.deepEqual(saved, { revision: loaded.revision + 1 });
+  const reloaded = await loadSqliteWorkspace(databasePath);
+  assert.equal(reloaded.revision, loaded.revision + 1);
+  assert.equal(reloaded.state.affixScorePolicy.notes, "persisted-through-sqlite");
+});
+
+test("SQLite 过期 baseRevision 返回冲突且不新增历史", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "tackle-forger-sqlite-conflict-"));
+  const databasePath = path.join(directory, "workspace.sqlite");
+  t.after(async () => {
+    await closeSqliteStorage(databasePath);
+    await rm(directory, { recursive: true, force: true });
+  });
+
+  const loaded = await loadSqliteWorkspace(databasePath);
+  const first = structuredClone(loaded.state);
+  first.affixScorePolicy.notes = "first-save";
+  const saved = await saveSqliteWorkspace(databasePath, {
+    state: first,
+    baseRevision: loaded.revision,
+    author: "first",
+    message: "first",
+  });
+  assert.equal(saved.revision, loaded.revision + 1);
+
+  const stale = structuredClone(loaded.state);
+  stale.affixScorePolicy.notes = "must-not-overwrite";
+  const conflict = await saveSqliteWorkspace(databasePath, {
+    state: stale,
+    baseRevision: loaded.revision,
+    author: "stale",
+    message: "stale",
+  });
+  assert.deepEqual(conflict, { revision: loaded.revision + 1, conflict: true });
+  assert.deepEqual((await listSqliteRevisions(databasePath)).map((entry) => entry.revision), [loaded.revision + 1, loaded.revision]);
+  assert.equal((await loadSqliteWorkspace(databasePath)).state.affixScorePolicy.notes, "first-save");
 });
 
 test("SQLite 导入文件会原子落盘并记录元数据", async (t) => {

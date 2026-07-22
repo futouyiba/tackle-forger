@@ -1,5 +1,8 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./series-gantt.css";
+import "./config-export.css";
+import "./rule-workbook.css";
 
 export const metadata: Metadata = {
   title: {

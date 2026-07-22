@@ -9,7 +9,8 @@
     "dev": "vinext dev",
     "build": "vinext build",
     "start": "vinext start",
-    "test": "npm run build && tsx --test tests/workbench.test.ts && node --test tests/rendered-html.test.mjs",
+    "config-export:companion": "tsx scripts/config-export-companion.ts",
+    "test": "npm run build && tsx --test tests/workbench.test.ts tests/v3-rule-kernel.test.ts tests/v3-end-to-end.test.ts tests/v3-migration.test.ts tests/five-axis.test.ts tests/interaction-contracts.test.ts tests/config-export.test.ts tests/config-export-mapping.test.ts tests/config-export-workbook.test.ts tests/config-export-filesystem.test.ts tests/config-export-companion.test.ts tests/browser-config-export.test.ts tests/model-candidate-generation.test.ts tests/command-contracts.test.ts tests/feishu-contracts.test.ts tests/auth.test.ts tests/storage.test.ts tests/feishu-workbook-pricing.test.ts tests/quality-value-policy.test.ts tests/pricing-policy-increment.test.ts tests/workbook-governance.test.ts tests/snapshot-batch.test.ts tests/series-gantt-query.test.ts tests/series-pull-planning.test.ts && node --test tests/rendered-html.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
     "typecheck": "tsc --noEmit"

@@ -2,6 +2,9 @@
 
 # dependencies
 /node_modules
+**/node_modules/
+**/.npm-cache/
+**/dist/
 /.pnp
 .pnp.*
 .yarn/*
@@ -30,6 +33,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # vercel
 .vercel
@@ -40,5 +44,10 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+/.run/
+/.data/
+/.codex/
+/audit-output/
 
 *.tsbuildinfo
+*.pairing-token

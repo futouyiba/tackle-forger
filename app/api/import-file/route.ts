@@ -5,7 +5,20 @@ import { saveImportedFile } from "@/lib/storage";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: NextRequest) {
-  const user = requestUser(request);
+  const user = await requestUser(request);
+  if (!user.authenticated) {
+    return NextResponse.json(
+      { error: "请使用公司飞书账号登录。", action: "feishu_login" },
+      { status: 401 },
+    );
+  }
+  const availability = user.actionAvailability.import_excel;
+  if (!availability.enabled) {
+    return NextResponse.json(
+      { error: availability.disabledReasonText ?? "当前账号不能导入 Excel。", actionAvailability: availability },
+      { status: 403 },
+    );
+  }
   const form = await request.formData();
   const file = form.get("file");
   if (!(file instanceof File)) {

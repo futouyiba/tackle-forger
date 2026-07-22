@@ -7,7 +7,13 @@ import {
   publishCandidate,
   scoreAffixes,
 } from "../lib/engine";
+import {
+  applyDataSourcePreview,
+  prepareDataSourcePreview,
+  prepareDataSourceWriteback,
+} from "../lib/data-sources";
 import { createSeedState } from "../lib/seed";
+import { parseFeishuSourceLink } from "../lib/feishu-links";
 import { buildSeriesShowcaseLayout, buildSeriesSegments, showcaseFeatureLabel, showcaseQualitySlots } from "../lib/showcase";
 import {
   advanceAutomaticNodes,
@@ -247,4 +253,191 @@ test("旧版单模板系列会迁移为多段系列定义", () => {
   assert.equal(migrated.fishingMethod, "路亚");
   assert.ok(migrated.tensionMaxKgf > migrated.tensionMinKgf);
   assert.deepEqual(migrated.affixIds, []);
+});
+test("飞书 A/B 数据源先生成暂存差异，再替换目标数据集", () => {
+  const state = createSeedState();
+  assert.equal(state.dataSources.length, 2);
+  const source = {
+    ...state.dataSources[0],
+    appToken: "bascn-test",
+    tableId: "tbl-test",
+  };
+  const preview = prepareDataSourcePreview(
+    source,
+    [
+      {
+        record_id: "rec-1",
+        fields: {
+          模板ID: "T01",
+          名称: "轻量修订",
+          鱼重下限kg: 0.5,
+          鱼重上限kg: 2,
+          标称鱼重kg: 1,
+          档位: "轻量",
+        },
+      },
+      {
+        record_id: "rec-2",
+        fields: {
+          模板ID: "T99",
+          名称: "测试重量段",
+          鱼重下限kg: 20,
+          鱼重上限kg: 30,
+          标称鱼重kg: 25,
+          档位: "测试",
+        },
+      },
+    ],
+    state,
+    "2026-07-20T00:00:00.000Z",
+  );
+
+  assert.equal(preview.recordCount, 2);
+  assert.equal(preview.summary.added, 1);
+  assert.equal(preview.summary.changed, 1);
+  assert.equal(preview.summary.removed, state.templates.length - 1);
+  assert.equal(preview.issues.filter((issue) => issue.level === "error").length, 0);
+
+  const published = applyDataSourcePreview(state, preview);
+  assert.equal(state.templates.length, 12);
+  assert.deepEqual(published.templates.map((item) => item.id), ["T01", "T99"]);
+  assert.equal(published.importedAt, "2026-07-20T00:00:00.000Z");
+});
+
+test("数据源校验阻止重复 ID、无效重量段和空表覆盖", () => {
+  const state = createSeedState();
+  const source = { ...state.dataSources[0], appToken: "base", tableId: "table" };
+  const invalid = prepareDataSourcePreview(source, [
+    {
+      record_id: "bad-1",
+      fields: {
+        模板ID: "DUP",
+        鱼重下限kg: 10,
+        鱼重上限kg: 5,
+        标称鱼重kg: 7,
+        档位: "错误",
+      },
+    },
+    {
+      record_id: "bad-2",
+      fields: {
+        模板ID: "DUP",
+        鱼重下限kg: 1,
+        鱼重上限kg: 2,
+        标称鱼重kg: 3,
+        档位: "错误",
+      },
+    },
+  ], state);
+  assert.ok(invalid.issues.filter((issue) => issue.level === "error").length >= 3);
+
+  const empty = prepareDataSourcePreview(source, [], state);
+  assert.ok(empty.issues.some((issue) => issue.message.includes("空表覆盖")));
+});
+
+test("已发布的飞书行会建立绑定，并只回写工具中改变的字段", () => {
+  const state = createSeedState();
+  const source = {
+    ...state.dataSources[0],
+    appToken: "base",
+    tableId: "table",
+  };
+  const records = [
+    {
+      record_id: "rec-1",
+      fields: {
+        模板ID: "T01",
+        名称: "轻量",
+        鱼重下限kg: 0.5,
+        鱼重上限kg: 2,
+        标称鱼重kg: 1,
+        档位: "轻量",
+        备注: "",
+      },
+    },
+  ];
+  const imported = applyDataSourcePreview(
+    state,
+    prepareDataSourcePreview(source, records, state, "2026-07-20T00:00:00.000Z"),
+  );
+  assert.equal(imported.dataSourceBindings.length, 1);
+  assert.equal(imported.dataSourceBindings[0].recordId, "rec-1");
+  assert.equal(imported.dataSourceBindings[0].fieldMap.fishMaxKg, "鱼重上限kg");
+
+  imported.templates[0].fishMaxKg = 2.5;
+  imported.templates[0].notes = "本地修订";
+  const writeback = prepareDataSourceWriteback(
+    source,
+    records,
+    imported,
+    "2026-07-20T01:00:00.000Z",
+  );
+  assert.equal(writeback.recordCount, 1);
+  assert.equal(writeback.fieldCount, 2);
+  assert.deepEqual(writeback.rows[0].fields, {
+    鱼重上限kg: 2.5,
+    备注: "本地修订",
+  });
+  assert.equal(writeback.issues.filter((issue) => issue.level === "error").length, 0);
+});
+
+test("本地和飞书同时修改同一来源行时阻止回写", () => {
+  const state = createSeedState();
+  const source = {
+    ...state.dataSources[0],
+    appToken: "base",
+    tableId: "table",
+  };
+  const records = [
+    {
+      record_id: "rec-1",
+      fields: {
+        模板ID: "T01",
+        名称: "轻量",
+        鱼重下限kg: 0.5,
+        鱼重上限kg: 2,
+        标称鱼重kg: 1,
+        档位: "轻量",
+      },
+    },
+  ];
+  const imported = applyDataSourcePreview(
+    state,
+    prepareDataSourcePreview(source, records, state),
+  );
+  imported.templates[0].fishMaxKg = 2.5;
+  const remoteChanged = structuredClone(records);
+  remoteChanged[0].fields.鱼重上限kg = 2.2;
+
+  const writeback = prepareDataSourceWriteback(source, remoteChanged, imported);
+  assert.equal(writeback.recordCount, 0);
+  assert.ok(writeback.issues.some((issue) => issue.message.includes("飞书中也发生了变化")));
+});
+test("飞书分享链接自动识别工作簿、数据表和视图", () => {
+  assert.deepEqual(
+    parseFeishuSourceLink(
+      "https://example.feishu.cn/base/appbcbWCzen6D8dezhoCH2RpMAh?table=tblKz5D60T4JlfcT&view=vewqhz51lk",
+    ),
+    {
+      appToken: "appbcbWCzen6D8dezhoCH2RpMAh",
+      tableId: "tblKz5D60T4JlfcT",
+      viewId: "vewqhz51lk",
+    },
+  );
+  assert.deepEqual(
+    parseFeishuSourceLink("https://example.feishu.cn/base/appbcbWCzen6D8dezhoCH2RpMAh"),
+    {
+      appToken: "appbcbWCzen6D8dezhoCH2RpMAh",
+      tableId: "",
+      viewId: "",
+    },
+  );
+  assert.throws(
+    () => parseFeishuSourceLink("https://example.feishu.cn/sheets/shtcnExample"),
+    /多维表格/,
+  );
+  assert.throws(
+    () => parseFeishuSourceLink("https://example.com/base/appExample"),
+    /不是飞书/,
+  );
 });

@@ -4,8 +4,10 @@ import {
   AlertTriangle,
   Anvil,
   Boxes,
+  ChevronRight,
   Check,
   CheckCircle2,
+  CloudDownload,
   Database,
   Download,
   FileSpreadsheet,
@@ -14,9 +16,14 @@ import {
   History,
   Layers3,
   ListChecks,
+  Link2,
+  LockKeyhole,
+  LogOut,
   PackageSearch,
+  PackageCheck,
   Plus,
   RotateCcw,
+  RefreshCw,
   Save,
   Search,
   ShieldCheck,
@@ -31,6 +38,10 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { RuleGraphStudio } from "./RuleGraphStudio";
+import { V3FlowWorkbench } from "./V3FlowWorkbench";
+import { BrowserConfigExportWorkbench as ConfigExportWorkbench } from "./BrowserConfigExportWorkbench";
+import { SeriesGanttWorkbenchV3 as SeriesGanttWorkbench } from "./SeriesGanttWorkbenchV3";
+import { RuleWorkbookWorkbench } from "./RuleWorkbookWorkbench";
 import {
   generateCandidatesForRecipe,
   publishCandidate,
@@ -44,10 +55,22 @@ import {
   templateTensionRange,
 } from "@/lib/showcase";
 import { ensureWorkflowFields } from "@/lib/workflow";
+import { migrateWorkspaceState } from "@/lib/migrations";
+import {
+  buildProductBreadcrumbs,
+  type BreadcrumbItem,
+} from "@/lib/interaction-contracts";
+import {
+  parseFeishuSourceLink,
+  type ResolvedFeishuSource,
+} from "@/lib/feishu-links";
 import type {
   AdjustmentRule,
   Affix,
   ApiStatePayload,
+  DataSourcePreview,
+  DataSourceProfile,
+  DataSourceWritebackPreview,
   Candidate,
   DimensionKey,
   ItemKind,
@@ -60,6 +83,7 @@ import type {
 
 type PageKey =
   | "overview"
+  | "v3flow"
   | "templates"
   | "modifiers"
   | "layers"
@@ -73,7 +97,7 @@ type PageKey =
   | "details"
   | "validation"
   | "versions"
-  | "excel";
+  | "exchange";
 
 const dimensionLabels: Record<DimensionKey, string> = {
   structure: "结构类型",
@@ -91,7 +115,8 @@ const kindLabels: Record<ItemKind, string> = {
 };
 
 const pageMeta: Record<PageKey, { title: string; subtitle: string }> = {
-  overview: { title: "装备生成总览", subtitle: "基准模板 → 分层修正 → 词条品质 → 候选审核 → 正式 SKU" },
+  overview: { title: "装备生成总览", subtitle: "基准模板 → 分层修正 → 词条品质 → Model 审核 → 正式 SKU" },
+  v3flow: { title: "V3 制造链", subtitle: "最近投影 → 兼容判定 → 严格 Series → SKU 抽屉 → 可购买 Model → 冻结快照" },
   templates: { title: "重量模板", subtitle: "管理钓法 × 大重量段的中性杆轮线基准与动态参数" },
   modifiers: { title: "类型、材质与定位", subtitle: "在纵横矩阵中批量编辑 +、×、覆盖、上下限和公式" },
   layers: { title: "规则层栈", subtitle: "层数越大越特化；后层可以浮动或顶掉前层结果" },
@@ -100,18 +125,21 @@ const pageMeta: Record<PageKey, { title: string; subtitle: string }> = {
   quality: { title: "品质评分", subtitle: "有损相加、协同、冲突与品质阈值完全可配置" },
   recipes: { title: "系列 / SKU 配方", subtitle: "系列指定模板、定位约束、必带词条和可选词条池" },
   showcase: { title: "系列跨度图", subtitle: "按品质、重量与拉力展示系列覆盖和贯通词条" },
-  candidates: { title: "候选池", subtitle: "约束批量生成、横向比较、精调、筛选与发布" },
+  candidates: { title: "钓具系列甘特图", subtitle: "按离散重量规划 Series、SKU 抽屉与可购买 Model" },
   skus: { title: "正式 SKU", subtitle: "已发布组合及自动生成的杆、轮、线 ID 和验收结果" },
   details: { title: "杆轮线明细", subtitle: "按正式 SKU 展开具体配置，并可自定义型号、名称与数值" },
   validation: { title: "校验与规则学习", subtitle: "强度闭环、模板覆盖、异常检查和精调规律候选" },
   versions: { title: "版本记录", subtitle: "团队共享配置的保存记录、冲突保护和历史恢复" },
-  excel: { title: "Excel 交换", subtitle: "保留可读工作表，并用隐藏状态页实现完整往返" },
+  exchange: { title: "数据交换", subtitle: "治理唯一飞书规则源、完成 Excel 往返，或从冻结快照交付配置表" },
 };
+
+const PAGE_KEYS = new Set<PageKey>(Object.keys(pageMeta) as PageKey[]);
 
 const navGroups: Array<{ label: string; items: Array<{ key: PageKey; label: string; icon: typeof Anvil }> }> = [
   {
     label: "建模",
     items: [
+      { key: "v3flow", label: "V3 制造链", icon: GitBranch },
       { key: "overview", label: "总览", icon: Anvil },
       { key: "templates", label: "重量模板", icon: Database },
       { key: "modifiers", label: "类型与定位", icon: SlidersHorizontal },
@@ -131,7 +159,7 @@ const navGroups: Array<{ label: string; items: Array<{ key: PageKey; label: stri
   {
     label: "生产",
     items: [
-      { key: "candidates", label: "候选池", icon: PackageSearch },
+      { key: "candidates", label: "钓具系列甘特图", icon: PackageSearch },
       { key: "skus", label: "正式 SKU", icon: Boxes },
       { key: "details", label: "杆轮线明细", icon: ListChecks },
     ],
@@ -141,7 +169,7 @@ const navGroups: Array<{ label: string; items: Array<{ key: PageKey; label: stri
     items: [
       { key: "validation", label: "校验与学习", icon: ShieldCheck },
       { key: "versions", label: "版本记录", icon: History },
-      { key: "excel", label: "Excel 交换", icon: FileSpreadsheet },
+      { key: "exchange", label: "数据交换", icon: FileSpreadsheet },
     ],
   },
 ];
@@ -155,12 +183,22 @@ function formatNumber(value: number | string | undefined, digits = 2) {
   return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: digits }).format(value);
 }
 
+function qualityBandDisplayName(band: { id: string; name: string }) {
+  return band.id === "gold" || band.name === "金" ? "S / 橙" : band.name;
+}
+
+function qualityBandDisplayColor(band: { id: string; name: string; color: string }) {
+  return band.id === "gold" || band.name === "金" ? "#f97316" : band.color;
+}
+
 function qualityName(state: WorkspaceState, id: string) {
-  return state.qualityBands.find((item) => item.id === id)?.name ?? id;
+  const band = state.qualityBands.find((item) => item.id === id);
+  return band ? qualityBandDisplayName(band) : id;
 }
 
 function qualityColor(state: WorkspaceState, id: string) {
-  return state.qualityBands.find((item) => item.id === id)?.color ?? "#667085";
+  const band = state.qualityBands.find((item) => item.id === id);
+  return band ? qualityBandDisplayColor(band) : "#667085";
 }
 
 function optionLabel(state: WorkspaceState, id?: string) {
@@ -370,8 +408,20 @@ function copyState<T>(value: T): T {
 export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   const [state, setState] = useState<WorkspaceState>(() => recalculateWorkspace(ensureWorkflowFields(initialState)));
   const [page, setPage] = useState<PageKey>("overview");
+  const [pageRouteReady, setPageRouteReady] = useState(false);
+  const [routeNonce, setRouteNonce] = useState(0);
+  const [contextBreadcrumbs, setContextBreadcrumbs] = useState<BreadcrumbItem[]>([]);
+  const [globalSearch, setGlobalSearch] = useState("");
+  const [v3SeriesId, setV3SeriesId] = useState("");
   const [revision, setRevision] = useState(1);
-  const [user, setUser] = useState({ email: "local@tackle-forger", name: "本地管理员", role: "admin" });
+  const [user, setUser] = useState<ApiStatePayload["user"]>({
+    email: "", name: "未登录", role: "viewer", authenticated: false, provider: "none",
+    capabilities: [] as string[],
+    actionAvailability: Object.fromEntries([]) as ApiStatePayload["user"]["actionAvailability"],
+  });
+  const [authStatus, setAuthStatus] = useState<"checking"|"authenticated"|"unauthenticated"|"error">("checking");
+  const [authMessage, setAuthMessage] = useState("");
+  const [authErrorCode, setAuthErrorCode] = useState("");
   const [dirty, setDirty] = useState(false);
   const [syncState, setSyncState] = useState<"ready" | "saving" | "saved" | "error">("ready");
   const [toast, setToast] = useState("");
@@ -391,8 +441,35 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   const [detailKind, setDetailKind] = useState<ItemKind>("rod");
   const [versions, setVersions] = useState<RevisionInfo[]>(initialState.revisions);
   const fileInput = useRef<HTMLInputElement>(null);
+  const [exchangeMode, setExchangeMode] = useState<"feishu" | "excel" | "config">("feishu");
+  const [sourceCatalogs, setSourceCatalogs] = useState<Record<string, ResolvedFeishuSource>>({});
+  const [sourcePreview, setSourcePreview] = useState<DataSourcePreview | null>(null);
+  const [writebackPreview, setWritebackPreview] = useState<DataSourceWritebackPreview | null>(null);
+  const [sourceAction, setSourceAction] = useState<
+    "" | "resolve" | "preview" | "publish" | "writeback-preview" | "writeback"
+  >("");
+
+  useEffect(() => {
+    const requested = new URL(window.location.href).searchParams.get("page") as PageKey | null;
+    const frame = window.requestAnimationFrame(() => {
+      if (requested && PAGE_KEYS.has(requested)) setPage(requested);
+      setPageRouteReady(true);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
+
+  useEffect(() => {
+    if (!pageRouteReady) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set("page", page);
+    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+  }, [page, pageRouteReady]);
 
   const mutate = (producer: (draft: WorkspaceState) => void, recalculate = true) => {
+    if (authStatus !== "authenticated") {
+      notify("请先使用公司飞书账号登录；未登录状态不允许编辑。");
+      return;
+    }
     setState((current) => {
       const draft = copyState(current);
       producer(draft);
@@ -405,6 +482,20 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   const notify = (message: string) => {
     setToast(message);
     window.setTimeout(() => setToast(""), 2600);
+  };
+
+  const copyServiceDiagnostic = async () => {
+    const diagnostic = JSON.stringify({
+      errorCode: authErrorCode || "AUTH-UNKNOWN-001",
+      location: window.location.href,
+      occurredAt: new Date().toISOString(),
+    }, null, 2);
+    try {
+      await navigator.clipboard.writeText(diagnostic);
+      notify("诊断信息已复制，可发送给管理员。");
+    } catch {
+      notify(`请记录错误编号：${authErrorCode || "AUTH-UNKNOWN-001"}`);
+    }
   };
 
   const loadVersions = async () => {
@@ -421,21 +512,37 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
 
   useEffect(() => {
     let active = true;
-    fetch("/api/state", { cache: "no-store" })
+    fetch("/api/auth/session", { cache: "no-store" })
       .then(async (response) => {
-        if (!response.ok) throw new Error("state");
-        return (await response.json()) as ApiStatePayload;
-      })
-      .then((payload) => {
         if (!active) return;
+        const session = (await response.json().catch(() => ({}))) as {
+          user?: ApiStatePayload["user"];
+          error?: string;
+          errorCode?: string;
+        };
+        if (response.status === 401) { setAuthStatus("unauthenticated"); setAuthMessage(session.error || "请使用公司飞书账号登录。"); setAuthErrorCode(session.errorCode || "AUTH-SESSION-001"); return; }
+        if (!response.ok || !session.user) { setAuthStatus("error"); setAuthMessage(session.error || "登录服务暂不可用。"); setAuthErrorCode(session.errorCode || "AUTH-SERVICE-001"); return; }
+        setUser(session.user);
+        const stateResponse = await fetch("/api/state", { cache: "no-store" });
+        if (!stateResponse.ok) throw new Error("state-service");
+        const payload = await stateResponse.json() as ApiStatePayload;
         setState(recalculateWorkspace(ensureWorkflowFields(payload.state)));
+        setDirty(false);
         setRevision(payload.revision);
         setUser(payload.user);
-        setDirty(false);
-        void loadVersions();
+        setAuthStatus("authenticated"); setAuthMessage(""); setAuthErrorCode("");
+        void fetch("/api/revisions", { cache: "no-store" })
+          .then(async (revisionResponse) => {
+            if (!revisionResponse.ok || !active) return;
+            const revisionPayload = (await revisionResponse.json()) as { revisions: RevisionInfo[] };
+            setVersions(revisionPayload.revisions);
+          })
+          .catch(() => undefined);
       })
       .catch(() => {
-        if (active) notify("已使用本地 Excel 种子；共享服务连接后会自动同步。");
+        if (active) {
+          setAuthStatus("error"); setAuthMessage("登录或共享服务暂时不可用，请检查网络后重试。"); setAuthErrorCode("AUTH-SERVICE-001");
+        }
       });
     return () => {
       active = false;
@@ -443,6 +550,11 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   }, []);
 
   const save = async (message = "保存配置修改") => {
+    const saveAvailability = user.actionAvailability.save_workspace;
+    if (!saveAvailability.enabled) {
+      notify(saveAvailability.disabledReasonText ?? "当前账号不能保存工作区。");
+      return;
+    }
     setSyncState("saving");
     try {
       const response = await fetch("/api/state", {
@@ -463,6 +575,253 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     }
   };
 
+  const updateDataSource = (
+    index: number,
+    key: "name" | "dataset" | "shareUrl" | "appToken" | "tableId" | "viewId" | "enabled" | "notes",
+    value: string | boolean,
+  ) => {
+    mutate((draft) => {
+      const source = draft.dataSources[index];
+      if (!source) return;
+      if (key === "enabled") source.enabled = Boolean(value);
+      else if (key === "dataset" && (value === "weight_templates" || value === "modifiers")) {
+        source.dataset = value;
+      } else if (key === "name") source.name = String(value);
+      else if (key === "shareUrl") source.shareUrl = String(value);
+      else if (key === "appToken") source.appToken = String(value);
+      else if (key === "tableId") source.tableId = String(value);
+      else if (key === "viewId") source.viewId = String(value);
+      else if (key === "notes") source.notes = String(value);
+    }, false);
+    setSourcePreview(null);
+    setWritebackPreview(null);
+    if (key === "shareUrl") {
+      setSourceCatalogs((current) => {
+        const next = { ...current };
+        delete next[state.dataSources[index]?.id ?? ""];
+        return next;
+      });
+    }
+  };
+
+  const resolveDataSource = async (
+    source: DataSourceProfile,
+    index: number,
+    selectedTableId = "",
+  ) => {
+    const availability = user.actionAvailability.resolve_data_source;
+    if (!availability.enabled) return notify(availability.disabledReasonText ?? "当前账号不能识别数据源。");
+    let parsed;
+    try {
+      parsed = parseFeishuSourceLink(source.shareUrl);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "无法识别飞书链接");
+      return;
+    }
+
+    mutate((draft) => {
+      const target = draft.dataSources[index];
+      if (!target) return;
+      target.appToken = parsed.appToken;
+      target.tableId = selectedTableId || parsed.tableId;
+      target.viewId = selectedTableId && selectedTableId !== parsed.tableId ? "" : parsed.viewId;
+    }, false);
+
+    setSourceAction("resolve");
+    try {
+      const response = await fetch("/api/data-sources", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "resolve",
+          shareUrl: source.shareUrl,
+          selectedTableId,
+        }),
+      });
+      const payload = (await response.json()) as {
+        resolved?: ResolvedFeishuSource;
+        error?: string;
+      };
+      if (!response.ok || !payload.resolved) {
+        throw new Error(payload.error || "读取飞书数据表失败");
+      }
+      setSourceCatalogs((current) => ({ ...current, [source.id]: payload.resolved! }));
+      mutate((draft) => {
+        const target = draft.dataSources[index];
+        if (!target) return;
+        target.appToken = payload.resolved!.appToken;
+        target.tableId = payload.resolved!.tableId;
+        target.viewId = payload.resolved!.viewId;
+      }, false);
+      if (!payload.resolved.tableId) {
+        notify("链接已识别，读取到 " + payload.resolved.tables.length + " 张数据表，请选择一张。");
+      } else {
+        notify("已识别飞书链接和数据表，可以保存后拉取预览。");
+      }
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "读取飞书数据表失败");
+    } finally {
+      setSourceAction("");
+    }
+  };
+  const previewDataSource = async (source: DataSourceProfile) => {
+    const availability = user.actionAvailability.preview_data_source;
+    if (!availability.enabled) return notify(availability.disabledReasonText ?? "当前账号不能预览数据源。");
+    if (dirty) {
+      notify("请先保存当前配置，再拉取飞书预览。");
+      return;
+    }
+    setSourceAction("preview");
+    try {
+      const response = await fetch("/api/data-sources", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "preview", source }),
+      });
+      const payload = (await response.json()) as {
+        preview?: DataSourcePreview;
+        error?: string;
+      };
+      if (!response.ok || !payload.preview) {
+        throw new Error(payload.error || "拉取预览失败");
+      }
+      setSourcePreview(payload.preview);
+      notify("已拉取 " + payload.preview.recordCount + " 条记录，尚未影响正式版本。");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "拉取预览失败");
+    } finally {
+      setSourceAction("");
+    }
+  };
+
+  const publishDataSource = async (source: DataSourceProfile) => {
+    const availability = user.actionAvailability.publish_data_source;
+    if (!availability.enabled) return notify(availability.disabledReasonText ?? "当前账号不能发布数据源。");
+    if (!sourcePreview || sourcePreview.sourceId !== source.id) return;
+    if (dirty) {
+      notify("当前有未保存修改，请保存并重新预览后再发布。");
+      return;
+    }
+    setSourceAction("publish");
+    try {
+      const response = await fetch("/api/data-sources", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "publish",
+          source,
+          baseRevision: revision,
+          checksum: sourcePreview.checksum,
+          sourceFingerprint: sourcePreview.sourceFingerprint,
+        }),
+      });
+      const payload = (await response.json()) as {
+        state?: WorkspaceState;
+        revision?: number;
+        preview?: DataSourcePreview;
+        error?: string;
+      };
+      if (!response.ok || !payload.state || !payload.revision) {
+        throw new Error(payload.error || "发布失败");
+      }
+      setState(recalculateWorkspace(ensureWorkflowFields(payload.state)));
+      setRevision(payload.revision);
+      setDirty(false);
+      setSyncState("saved");
+      setSourcePreview(null);
+      notify("数据源已发布为正式版本 v" + payload.revision);
+      void loadVersions();
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "发布失败");
+    } finally {
+      setSourceAction("");
+    }
+  };
+
+  const previewWriteback = async (source: DataSourceProfile) => {
+    const availability = user.actionAvailability.preview_data_source_writeback;
+    if (!availability.enabled) return notify(availability.disabledReasonText ?? "当前账号不能检查数据源回写。");
+    if (dirty) {
+      notify("请先保存当前修改，再检查回写。");
+      return;
+    }
+    setSourceAction("writeback-preview");
+    try {
+      const response = await fetch("/api/data-sources", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "writeback-preview", source }),
+      });
+      const payload = (await response.json()) as {
+        writebackPreview?: DataSourceWritebackPreview;
+        error?: string;
+      };
+      if (!response.ok || !payload.writebackPreview) {
+        throw new Error(payload.error || "检查回写失败");
+      }
+      setWritebackPreview(payload.writebackPreview);
+      setSourcePreview(null);
+      const errors = payload.writebackPreview.issues.filter(
+        (issue) => issue.level === "error",
+      ).length;
+      if (errors) notify("发现 " + errors + " 个冲突或字段问题，已阻止回写。");
+      else if (!payload.writebackPreview.recordCount) notify("本地数据与飞书一致，无需回写。");
+      else {
+        notify(
+          "发现 " +
+            payload.writebackPreview.recordCount +
+            " 条本地修订，等待确认回写。",
+        );
+      }
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "检查回写失败");
+    } finally {
+      setSourceAction("");
+    }
+  };
+
+  const publishWriteback = async (source: DataSourceProfile) => {
+    const availability = user.actionAvailability.commit_data_source_writeback;
+    if (!availability.enabled) return notify(availability.disabledReasonText ?? "当前账号不能回写数据源。");
+    if (!writebackPreview || writebackPreview.sourceId !== source.id) return;
+    if (dirty) {
+      notify("当前有未保存修改，请先保存并重新检查。");
+      return;
+    }
+    setSourceAction("writeback");
+    try {
+      const response = await fetch("/api/data-sources", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "writeback",
+          source,
+          baseRevision: revision,
+          checksum: writebackPreview.checksum,
+          sourceFingerprint: writebackPreview.sourceFingerprint,
+        }),
+      });
+      const payload = (await response.json()) as {
+        state?: WorkspaceState;
+        revision?: number;
+        error?: string;
+      };
+      if (!response.ok || !payload.state || !payload.revision) {
+        throw new Error(payload.error || "回写失败");
+      }
+      setState(recalculateWorkspace(ensureWorkflowFields(payload.state)));
+      setRevision(payload.revision);
+      setDirty(false);
+      setSyncState("saved");
+      setWritebackPreview(null);
+      notify("已安全回写飞书，并保存审计版本 v" + payload.revision);
+      void loadVersions();
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "回写失败");
+    } finally {
+      setSourceAction("");
+    }
+  };
   const parametersForKind = state.parameters.filter((parameter) => parameter.itemKind === itemKind);
   const filteredCandidates = state.candidates.filter((candidate) => {
     const matchesStatus = candidateStatus === "all" || candidate.status === candidateStatus;
@@ -900,6 +1259,13 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
 
   const importExcel = async (file: File) => {
     try {
+      const availability = user.actionAvailability.import_excel;
+      if (!availability.enabled) throw new Error(availability.disabledReasonText ?? "当前账号不能导入 Excel。");
+      const form = new FormData();
+      form.append("file", file);
+      const upload = await fetch("/api/import-file", { method: "POST", body: form });
+      const uploadPayload = (await upload.json()) as { error?: string };
+      if (!upload.ok) throw new Error(uploadPayload.error ?? "Excel 文件登记失败。");
       const XLSX = await import("xlsx");
       const arrayBuffer = await file.arrayBuffer();
       const workbook = XLSX.read(arrayBuffer, { type: "array" });
@@ -910,8 +1276,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           raw: true,
         });
         const serialized = rows.slice(1).map((row) => String(row[1] ?? "")).join("");
-        const imported = JSON.parse(serialized) as WorkspaceState;
-        if (imported.schemaVersion !== 1) throw new Error("配置版本不兼容。");
+        const imported = migrateWorkspaceState(JSON.parse(serialized));
         setState(recalculateWorkspace(ensureWorkflowFields(imported)));
       } else {
         const sheet = workbook.Sheets["01重量模板"];
@@ -952,9 +1317,6 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         });
       }
 
-      const form = new FormData();
-      form.append("file", file);
-      void fetch("/api/import-file", { method: "POST", body: form });
       setDirty(true);
       notify("Excel 已导入并重算；保存后形成团队版本。");
     } catch (error) {
@@ -973,7 +1335,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           {[
             { label: "重量模板", value: state.templates.length, hint: state.parameters.length + " 个动态参数", color: "teal" },
             { label: "规则选项", value: state.modifiers.length, hint: state.layers.length + " 层规则栈", color: "blue" },
-            { label: "候选装备", value: state.candidates.length, hint: state.recipes.length + " 个系列配方", color: "purple" },
+            { label: "Model 候选", value: state.candidates.length, hint: state.recipes.length + " 个系列配方", color: "purple" },
             { label: "正式 SKU", value: state.officialSkus.length, hint: errorCount + " 错误 / " + warningCount + " 警告", color: "amber" },
           ].map((metric) => (
             <Card key={metric.label} className={"metric-card metric-" + metric.color}>
@@ -999,7 +1361,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
               ["01", "标准模板", "钓法 × 重量段", state.templates.length + " 项"],
               ["02", "分层修正", "类型、定位、技术", state.layers.length + " 层"],
               ["03", "词条品质", "属性 + 被动机制", state.affixes.length + " 条"],
-              ["04", "候选池", "筛选、比较、精调", state.candidates.length + " 套"],
+              ["04", "Model 候选", "筛选、比较、精调", state.candidates.length + " 个"],
               ["05", "正式发布", "杆轮线明细", state.officialSkus.length + " 套"],
             ].map(([index, title, subtitle, count], position) => (
               <div className="pipeline-step" key={index}>
@@ -1025,12 +1387,14 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
             <div className="quality-bars">
               {qualityStats.map((band) => {
                 const max = Math.max(1, ...qualityStats.map((item) => item.count));
+                const displayName = qualityBandDisplayName(band);
+                const displayColor = qualityBandDisplayColor(band);
                 return (
                   <div className="quality-row" key={band.id}>
-                    <span className="quality-dot" style={{ background: band.color }} />
-                    <strong>{band.name}</strong>
+                    <span className="quality-dot" style={{ background: displayColor }} />
+                    <strong>{displayName}</strong>
                     <div className="bar-track">
-                      <span style={{ width: Math.max(4, (band.count / max) * 100) + "%", background: band.color }} />
+                      <span style={{ width: Math.max(4, (band.count / max) * 100) + "%", background: displayColor }} />
                     </div>
                     <span>{band.count}</span>
                   </div>
@@ -1192,7 +1556,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       </Card>
       <div className="legend-line">
         <Pill tone="blue">批量编辑</Pill>
-        表格可横向滚动；所有数字修改会即时重算候选池，便于比较影响。
+        表格可横向滚动；所有数字修改会即时重算 Model 候选，便于比较影响。
       </div>
     </div>
   );
@@ -1494,8 +1858,8 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     <div className="page-stack">
       <div className="quality-summary-grid">
         {qualityStats.map((band) => (
-          <Card key={band.id} className="quality-band-card" style={{ borderTopColor: band.color } as React.CSSProperties}>
-            <div className="quality-band-name"><span style={{ background: band.color }} />{band.name}</div>
+          <Card key={band.id} className="quality-band-card" style={{ borderTopColor: qualityBandDisplayColor(band) } as React.CSSProperties}>
+            <div className="quality-band-name"><span style={{ background: qualityBandDisplayColor(band) }} />{qualityBandDisplayName(band)}</div>
             <strong>{band.count}</strong>
             <span>{band.minScore} – {band.maxScore ?? "∞"} 分</span>
             <small>价格指数 ×{band.priceIndex}</small>
@@ -2181,7 +2545,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
             <td><Button icon={Trash2} size="sm" tone="ghost" onClick={() => mutate((draft) => { draft.officialSkus.splice(index, 1); }, false)} /></td>
           </tr>
         ))}</tbody></SheetTable></Card>
-      ) : <EmptyState title="还没有正式 SKU" text="在候选池中入围、比较并批量发布。" action={<Button tone="primary" onClick={() => setPage("candidates")}>前往候选池</Button>} />}
+      ) : <EmptyState title="还没有正式 SKU" text="在 Model 候选中入围、比较并批量发布。" action={<Button tone="primary" onClick={() => setPage("candidates")}>前往 Model 候选</Button>} />}
     </div>
   );
 
@@ -2258,11 +2622,469 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     );
   };
 
+  const renderSources = () => {
+    const previewSource = sourcePreview
+      ? state.dataSources.find((item) => item.id === sourcePreview.sourceId)
+      : undefined;
+    const previewHasErrors = sourcePreview?.issues.some((issue) => issue.level === "error") ?? false;
+    const writebackSource = writebackPreview
+      ? state.dataSources.find((item) => item.id === writebackPreview.sourceId)
+      : undefined;
+    const writebackHasErrors =
+      writebackPreview?.issues.some((issue) => issue.level === "error") ?? false;
+    return (
+      <div className="page-stack">
+        <RuleWorkbookWorkbench
+          state={state}
+          revision={revision}
+          dirty={dirty}
+          actionAvailabilities={user.actionAvailability}
+          actorName={user.name}
+          notify={notify}
+          onWorkspaceApplied={(nextState, nextRevision, message) => {
+            setState(recalculateWorkspace(ensureWorkflowFields(nextState)));
+            setRevision(nextRevision);
+            setDirty(false);
+            setSyncState("saved");
+            notify(message);
+            void loadVersions();
+          }}
+        />
+        <details className="legacy-feishu-connectors">
+          <summary>旧版 Base 兼容导入</summary>
+          <div className="page-stack">
+        <Card className="source-hero">
+          <div>
+            <span className="eyebrow">后台正式库 + 飞书协作表</span>
+            <h2>粘贴链接，再选择数据范围</h2>
+            <p>
+              复制飞书多维表格分享链接即可连接；链接包含数据表时直接使用，只有工作簿时再
+              读取列表并选择。发布与回写仍然经过预览、冲突检查和人工确认。
+            </p>
+          </div>
+          <div className="source-hero-actions">
+            <Pill tone="blue">当前正式版本 v{revision}</Pill>
+            {dirty ? (
+              <Button icon={Save} tone="primary" disabled={!user.actionAvailability.save_workspace.enabled} title={user.actionAvailability.save_workspace.disabledReasonText} onClick={() => void save("保存数据源配置")}>先保存配置</Button>
+            ) : null}
+          </div>
+        </Card>
+
+        <div className="data-source-grid">
+          {state.dataSources.map((source, index) => (
+            <Card className="data-source-card" key={source.id}>
+              <div className="panel-title">
+                <div>
+                  <span className="eyebrow">{source.id}</span>
+                  <h3>{source.name}</h3>
+                </div>
+                <Pill tone={source.enabled ? "success" : "neutral"}>
+                  {source.enabled ? "已启用" : "已停用"}
+                </Pill>
+              </div>
+              <div className="source-form-grid">
+                <label>
+                  <span>数据源名称</span>
+                  <TextInput
+                    value={source.name}
+                    onChange={(value) => updateDataSource(index, "name", value)}
+                  />
+                </label>
+                <label>
+                  <span>发布数据类型</span>
+                  <SelectInput
+                    value={source.dataset}
+                    onChange={(value) => updateDataSource(index, "dataset", value)}
+                  >
+                    <option value="weight_templates">重量段模板</option>
+                    <option value="modifiers">流派 / 定位系数</option>
+                  </SelectInput>
+                </label>
+                <label className="source-link-field">
+                  <span>飞书多维表格分享链接</span>
+                  <div className="source-link-row">
+                    <TextInput
+                      value={source.shareUrl}
+                      placeholder="粘贴 https://你的团队.feishu.cn/base/..."
+                      onChange={(value) => updateDataSource(index, "shareUrl", value)}
+                    />
+                    <Button
+                      icon={Link2}
+                      tone="primary"
+                      disabled={Boolean(sourceAction) || !source.shareUrl.trim() || !user.actionAvailability.resolve_data_source.enabled}
+                      title={user.actionAvailability.resolve_data_source.disabledReasonText}
+                      onClick={() => void resolveDataSource(source, index)}
+                    >
+                      {sourceAction === "resolve" ? "读取中…" : "识别链接"}
+                    </Button>
+                  </div>
+                  <small>
+                    链接包含数据表时会直接选中；只包含工作簿时，识别后从下拉列表选择。
+                  </small>
+                </label>
+                <label>
+                  <span>使用哪张数据表</span>
+                  <SelectInput
+                    value={source.tableId}
+                    onChange={(value) =>
+                      void resolveDataSource(
+                        { ...source, tableId: value, viewId: "" },
+                        index,
+                        value,
+                      )
+                    }
+                  >
+                    <option value="">
+                      {sourceCatalogs[source.id] ? "请选择数据表" : "先识别分享链接"}
+                    </option>
+                    {(sourceCatalogs[source.id]?.tables ?? []).map((table) => (
+                      <option value={table.id} key={table.id}>{table.name}</option>
+                    ))}
+                    {source.tableId &&
+                    !(sourceCatalogs[source.id]?.tables ?? []).some(
+                      (table) => table.id === source.tableId,
+                    ) ? (
+                      <option value={source.tableId}>链接中的数据表</option>
+                    ) : null}
+                  </SelectInput>
+                </label>
+                <label>
+                  <span>使用哪个视图（可选）</span>
+                  <SelectInput
+                    value={source.viewId}
+                    onChange={(value) => updateDataSource(index, "viewId", value)}
+                  >
+                    <option value="">整张数据表</option>
+                    {(sourceCatalogs[source.id]?.views ?? []).map((view) => (
+                      <option value={view.id} key={view.id}>{view.name}</option>
+                    ))}
+                    {source.viewId &&
+                    !(sourceCatalogs[source.id]?.views ?? []).some(
+                      (view) => view.id === source.viewId,
+                    ) ? (
+                      <option value={source.viewId}>链接中的视图</option>
+                    ) : null}
+                  </SelectInput>
+                </label>
+                <details className="source-technical">
+                  <summary>系统识别信息</summary>
+                  <div>
+                    <span>app_token <code>{source.appToken || "待识别"}</code></span>
+                    <span>table_id <code>{source.tableId || "待选择"}</code></span>
+                    <span>view_id <code>{source.viewId || "全部"}</code></span>
+                  </div>
+                </details>                <label>
+                  <span>备注</span>
+                  <TextInput
+                    value={source.notes}
+                    onChange={(value) => updateDataSource(index, "notes", value)}
+                  />
+                </label>
+              </div>
+              <div className="source-card-actions">
+                <label className="source-enabled">
+                  <input
+                    type="checkbox"
+                    checked={source.enabled}
+                    onChange={(event) => updateDataSource(index, "enabled", event.target.checked)}
+                  />
+                  允许拉取
+                </label>
+                <Button
+                  icon={RefreshCw}
+                  tone="primary"
+                  disabled={
+                    Boolean(sourceAction) ||
+                    dirty ||
+                    !user.actionAvailability.preview_data_source.enabled ||
+                    !source.enabled ||
+                    !source.appToken.trim() ||
+                    !source.tableId.trim()
+                  }
+                  title={user.actionAvailability.preview_data_source.disabledReasonText}
+                  onClick={() => void previewDataSource(source)}
+                >
+                  {sourceAction === "preview" && sourcePreview?.sourceId === source.id
+                    ? "拉取中…"
+                    : "拉取并预览"}
+                </Button>
+                <Button
+                  icon={Upload}
+                  disabled={
+                    Boolean(sourceAction) ||
+                    dirty ||
+                    !user.actionAvailability.preview_data_source_writeback.enabled ||
+                    !source.enabled ||
+                    !source.appToken.trim() ||
+                    !source.tableId.trim()
+                  }
+                  title={user.actionAvailability.preview_data_source_writeback.disabledReasonText}
+                  onClick={() => void previewWriteback(source)}
+                >
+                  {sourceAction === "writeback-preview" ? "检查中…" : "检查本地修订"}
+                </Button>
+              </div>
+            </Card>
+          ))}
+        </div>
+
+        <Card className="source-security-note">
+          <ShieldCheck size={22} />
+          <div>
+            <strong>飞书应用密钥不会进入浏览器</strong>
+            <span>
+              部署环境需要配置 FEISHU_APP_ID 与 FEISHU_APP_SECRET；浏览器只保存分享链接和
+              自动识别的数据范围，不接触应用密钥。
+            </span>
+          </div>
+        </Card>
+
+        {sourcePreview ? (
+          <Card className="source-preview-card">
+            <div className="panel-title">
+              <div>
+                <span className="eyebrow">暂存预览 · {sourcePreview.sourceName}</span>
+                <h3>{sourcePreview.recordCount} 条记录等待发布</h3>
+              </div>
+              <Pill tone={previewHasErrors ? "danger" : "success"}>
+                {previewHasErrors ? "校验未通过" : "可以发布"}
+              </Pill>
+            </div>
+            <div className="source-diff-grid">
+              {[
+                ["新增", sourcePreview.summary.added, "source-added"],
+                ["修改", sourcePreview.summary.changed, "source-changed"],
+                ["删除", sourcePreview.summary.removed, "source-removed"],
+                ["无变化", sourcePreview.summary.unchanged, "source-unchanged"],
+              ].map(([label, value, className]) => (
+                <div className={String(className)} key={String(label)}>
+                  <span>{label}</span>
+                  <strong>{value}</strong>
+                </div>
+              ))}
+            </div>
+            {sourcePreview.issues.length ? (
+              <div className="source-issue-list">
+                {sourcePreview.issues.map((issue, index) => (
+                  <div className={"source-issue source-issue-" + issue.level} key={index}>
+                    {issue.level === "error" ? <XCircle size={16} /> : <AlertTriangle size={16} />}
+                    <span>
+                      {issue.rowId ? <strong>{issue.rowId} · </strong> : null}
+                      {issue.message}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="source-clean">
+                <CheckCircle2 size={18} />
+                字段、ID 和数值范围校验全部通过。
+              </div>
+            )}
+            <div className="source-publish-bar">
+              <span>
+                拉取于 {new Date(sourcePreview.pulledAt).toLocaleString("zh-CN")} · 校验摘要{" "}
+                {sourcePreview.checksum}
+              </span>
+              <Button
+                icon={CloudDownload}
+                tone="primary"
+                disabled={!previewSource || previewHasErrors || dirty || Boolean(sourceAction) || !user.actionAvailability.publish_data_source.enabled}
+                title={user.actionAvailability.publish_data_source.disabledReasonText}
+                onClick={() => previewSource && void publishDataSource(previewSource)}
+              >
+                {sourceAction === "publish" ? "发布中…" : "发布为新正式版本"}
+              </Button>
+            </div>
+          </Card>
+        ) : (
+          <EmptyState
+            title="尚无暂存数据"
+            text="从 A 表或 B 表选择“拉取并预览”，正式版本不会被立即修改。"
+          />
+        )}
+
+        {writebackPreview ? (
+          <Card className="source-preview-card">
+            <div className="panel-title">
+              <div>
+                <span className="eyebrow">回写检查 · {writebackPreview.sourceName}</span>
+                <h3>
+                  {writebackPreview.recordCount
+                    ? writebackPreview.recordCount + " 条本地修订等待确认"
+                    : "本地数据与飞书一致"}
+                </h3>
+              </div>
+              <Pill
+                tone={
+                  writebackHasErrors
+                    ? "danger"
+                    : writebackPreview.recordCount
+                      ? "success"
+                      : "neutral"
+                }
+              >
+                {writebackHasErrors
+                  ? "已阻止回写"
+                  : writebackPreview.recordCount
+                    ? "可以回写"
+                    : "无需回写"}
+              </Pill>
+            </div>
+            <div className="source-diff-grid">
+              <div className="source-changed">
+                <span>修改记录</span>
+                <strong>{writebackPreview.recordCount}</strong>
+              </div>
+              <div className="source-added">
+                <span>修改字段</span>
+                <strong>{writebackPreview.fieldCount}</strong>
+              </div>
+            </div>
+            {writebackPreview.issues.length ? (
+              <div className="source-issue-list">
+                {writebackPreview.issues.map((issue, index) => (
+                  <div className={"source-issue source-issue-" + issue.level} key={index}>
+                    {issue.level === "error" ? <XCircle size={16} /> : <AlertTriangle size={16} />}
+                    <span>
+                      {issue.rowId ? <strong>{issue.rowId} · </strong> : null}
+                      {issue.message}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {writebackPreview.rows.length ? (
+              <SheetTable>
+                <thead>
+                  <tr>
+                    <th>本地记录</th>
+                    <th>飞书字段</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {writebackPreview.rows.map((row) => (
+                    <tr key={row.recordId}>
+                      <td><strong>{row.entityId}</strong></td>
+                      <td>{row.fieldNames.join("、")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </SheetTable>
+            ) : (
+              <div className="source-clean">
+                <CheckCircle2 size={18} />
+                没有检测到需要回写的已绑定记录。
+              </div>
+            )}
+            <div className="source-publish-bar">
+              <span>
+                检查于 {new Date(writebackPreview.pulledAt).toLocaleString("zh-CN")} ·
+                回写前会再次校验版本与飞书内容
+              </span>
+              <Button
+                icon={Upload}
+                tone="primary"
+                disabled={
+                  !writebackSource ||
+                  writebackHasErrors ||
+                  !writebackPreview.recordCount ||
+                  dirty ||
+                  Boolean(sourceAction) ||
+                  !user.actionAvailability.commit_data_source_writeback.enabled
+                }
+                title={user.actionAvailability.commit_data_source_writeback.disabledReasonText}
+                onClick={() => writebackSource && void publishWriteback(writebackSource)}
+              >
+                {sourceAction === "writeback" ? "回写中…" : "确认回写飞书"}
+              </Button>
+            </div>
+          </Card>
+        ) : null}
+        <Card className="flush-card">
+          <div className="panel-title">
+            <div>
+              <span className="eyebrow">发布审计</span>
+              <h3>最近的数据源发布记录</h3>
+            </div>
+          </div>
+          {state.dataSourceImports.length ? (
+            <SheetTable>
+              <thead>
+                <tr>
+                  <th>版本</th>
+                  <th>来源</th>
+                  <th>数据类型</th>
+                  <th>记录数</th>
+                  <th>发布人</th>
+                  <th>时间</th>
+                </tr>
+              </thead>
+              <tbody>
+                {state.dataSourceImports.map((entry) => (
+                  <tr key={entry.id}>
+                    <td><strong>v{entry.publishedRevision}</strong></td>
+                    <td>{entry.sourceName}</td>
+                    <td>{entry.dataset === "weight_templates" ? "重量段模板" : "流派 / 定位系数"}</td>
+                    <td>{entry.recordCount}</td>
+                    <td>{entry.publishedBy}</td>
+                    <td>{new Date(entry.publishedAt).toLocaleString("zh-CN")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </SheetTable>
+          ) : (
+            <EmptyState title="暂无发布记录" text="第一次从飞书发布后，来源和版本会记录在这里。" />
+          )}
+        </Card>
+        <Card className="flush-card">
+          <div className="panel-title">
+            <div>
+              <span className="eyebrow">回写审计</span>
+              <h3>最近的飞书回写记录</h3>
+            </div>
+          </div>
+          {state.dataSourceWritebacks.length ? (
+            <SheetTable>
+              <thead>
+                <tr>
+                  <th>版本</th>
+                  <th>目标</th>
+                  <th>记录 / 字段</th>
+                  <th>操作人</th>
+                  <th>时间</th>
+                </tr>
+              </thead>
+              <tbody>
+                {state.dataSourceWritebacks.map((entry) => (
+                  <tr key={entry.id}>
+                    <td><strong>v{entry.publishedRevision}</strong></td>
+                    <td>{entry.sourceName}</td>
+                    <td>{entry.recordCount} 条 / {entry.fieldCount} 个</td>
+                    <td>{entry.publishedBy}</td>
+                    <td>{new Date(entry.publishedAt).toLocaleString("zh-CN")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </SheetTable>
+          ) : (
+            <EmptyState
+              title="暂无回写记录"
+              text="工具中的修订经检查并人工确认回写后，会记录在这里。"
+            />
+          )}
+        </Card>
+          </div>
+        </details>
+      </div>
+    );
+  };
+
   const renderVersions = () => (
     <div className="page-stack">
       <Card className="version-hero">
         <div><span className="eyebrow">团队共享</span><h2>当前版本 v{revision}</h2><p>每次保存都会保存完整配置快照；基于旧版本保存时会触发冲突保护。</p></div>
-        <Button icon={Save} tone="primary" onClick={() => void save("手工创建版本快照")}>保存新版本</Button>
+        <Button icon={Save} tone="primary" disabled={!user.actionAvailability.save_workspace.enabled} title={user.actionAvailability.save_workspace.disabledReasonText} onClick={() => void save("手工创建版本快照")}>保存新版本</Button>
       </Card>
       <Card className="flush-card">
         <SheetTable><thead><tr><th>版本</th><th>时间</th><th>作者</th><th>说明</th><th>操作</th></tr></thead>
@@ -2270,7 +3092,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           <tr key={version.revision}>
             <td><Pill tone={version.revision === revision ? "success" : "neutral"}>v{version.revision}</Pill></td>
             <td>{new Date(version.createdAt).toLocaleString("zh-CN")}</td><td>{version.author}</td><td>{version.message}</td>
-            <td><Button size="sm" icon={RotateCcw} disabled={version.revision === revision} onClick={async () => {
+            <td><Button size="sm" icon={RotateCcw} disabled={version.revision === revision || !user.actionAvailability.view_revisions.enabled} title={user.actionAvailability.view_revisions.disabledReasonText} onClick={async () => {
               const response = await fetch("/api/revisions?revision=" + version.revision);
               if (!response.ok) return notify("读取历史版本失败。");
               const payload = (await response.json()) as { state: WorkspaceState };
@@ -2290,7 +3112,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         <Card className="exchange-card">
           <div className="exchange-icon"><Upload size={24} /></div><h3>导入 Excel</h3>
           <p>支持本网页导出的完整工作簿；也兼容只含“01重量模板”的旧表。原始文件会存入团队文件仓。</p>
-          <Button tone="primary" icon={Upload} onClick={() => fileInput.current?.click()}>选择 Excel</Button>
+          <Button tone="primary" icon={Upload} disabled={!user.actionAvailability.import_excel.enabled} title={user.actionAvailability.import_excel.disabledReasonText} onClick={() => fileInput.current?.click()}>选择 Excel</Button>
         </Card>
         <Card className="exchange-card">
           <div className="exchange-icon"><Download size={24} /></div><h3>导出 Excel</h3>
@@ -2314,7 +3136,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
             ["03功能定位", "功能定位规则矩阵"],
             ["04性能定位", "性能与技术规则矩阵"],
             ["05品质规则", "已升级为词条库 + 品质评分"],
-            ["06组合SKU", "系列配方 → 候选池 → 正式SKU"],
+            ["06组合SKU", "系列配方 → Model 候选 → 正式 SKU"],
             ["07–09明细", "杆轮线明细"],
             ["11覆盖验算", "校验与规则学习"],
             ["11系列演示表", "系列覆盖自动排布"],
@@ -2324,7 +3146,55 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     </div>
   );
 
+  const renderExchange = () => (
+    <div className="page-stack">
+      <div className="exchange-mode-tabs" role="tablist" aria-label="数据交换方式">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={exchangeMode === "feishu"}
+          className={exchangeMode === "feishu" ? "active" : ""}
+          onClick={() => setExchangeMode("feishu")}
+        >
+          <CloudDownload size={18} />
+          <span><strong>飞书连接</strong><small>团队协作与双向同步</small></span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={exchangeMode === "excel"}
+          className={exchangeMode === "excel" ? "active" : ""}
+          onClick={() => setExchangeMode("excel")}
+        >
+          <FileSpreadsheet size={18} />
+          <span><strong>Excel 文件</strong><small>离线导入与完整导出</small></span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={exchangeMode === "config"}
+          className={exchangeMode === "config" ? "active" : ""}
+          onClick={() => setExchangeMode("config")}
+        >
+          <PackageCheck size={18} />
+          <span><strong>配置表交付</strong><small>SnapshotBatch、多目标预览与恢复型提交</small></span>
+        </button>
+      </div>
+      {exchangeMode === "feishu" ? renderSources() : exchangeMode === "excel" ? renderExcel() : (
+        <ConfigExportWorkbench
+          state={state}
+          actionAvailabilities={user.actionAvailability}
+          identity={{
+            workspaceId: user.tenantKey ?? "",
+            userId: user.openId ?? "",
+          }}
+          notify={notify}
+        />
+      )}
+    </div>
+  );
   const renderPage = () => {
+    if (page === "v3flow") return <V3FlowWorkbench state={state} mutate={mutate} notify={notify} initialSeriesId={v3SeriesId} />;
     if (page === "overview") return renderOverview();
     if (page === "templates") return renderTemplates();
     if (page === "modifiers") return renderModifiers();
@@ -2334,17 +3204,118 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     if (page === "quality") return renderQuality();
     if (page === "recipes") return renderRecipes();
     if (page === "showcase") return renderSeriesShowcase();
-    if (page === "candidates") return renderCandidates();
+    if (page === "candidates") return (
+      <>
+        <SeriesGanttWorkbench
+          key={`series-gantt:${routeNonce}`}
+          state={state}
+          workspaceId={user.tenantKey || "workspace"}
+          actionAvailabilities={user.actionAvailability}
+          actor={user.name}
+          mutate={mutate}
+          notify={notify}
+          onBreadcrumbsChange={setContextBreadcrumbs}
+          onOpenSeries={(seriesId) => {
+            setV3SeriesId(seriesId);
+            setPage("v3flow");
+          }}
+        />
+        <details className="legacy-candidate-results">
+          <summary>历史 Model 候选结果（兼容旧候选池）</summary>
+          {renderCandidates()}
+        </details>
+      </>
+    );
     if (page === "skus") return renderSkus();
     if (page === "details") return renderDetails();
     if (page === "validation") return renderValidation();
     if (page === "versions") return renderVersions();
-    return renderExcel();
+    return renderExchange();
   };
 
   const compareCandidates = compareIds
     .map((id) => state.candidates.find((candidate) => candidate.id === id))
     .filter((candidate): candidate is Candidate => Boolean(candidate));
+  const v3Series = state.seriesDefinitions.find((entry) => entry.id === v3SeriesId);
+  const topBreadcrumbs = page === "v3flow" && v3Series
+    ? buildProductBreadcrumbs({
+      workspaceId: user.tenantKey || "workspace",
+      collection: v3Series.collectionId
+        ? state.collections.find((entry) => entry.id === v3Series.collectionId)
+        : undefined,
+      series: v3Series,
+      currentEntityType: "series",
+    })
+    : page === "candidates"
+      ? contextBreadcrumbs
+      : [];
+  const openEntityBreadcrumb = (item: BreadcrumbItem) => {
+    if (!item.navigable || item.unavailableReason) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set("page", "candidates");
+    if (item.ref.entityType === "collection") {
+      url.searchParams.delete("series");
+      url.searchParams.delete("sku");
+      url.searchParams.delete("model");
+      url.searchParams.delete("snapshot");
+      url.searchParams.delete("collectionIds");
+      url.searchParams.append("collectionIds", item.ref.entityId);
+    } else if (item.ref.entityType === "series") {
+      url.searchParams.set("series", item.ref.entityId);
+      url.searchParams.delete("sku");
+      url.searchParams.delete("model");
+      url.searchParams.delete("snapshot");
+    } else if (item.ref.entityType === "sku_drawer") {
+      url.searchParams.set("sku", item.ref.entityId);
+      url.searchParams.delete("model");
+      url.searchParams.delete("snapshot");
+    } else if (item.ref.entityType === "model") {
+      url.searchParams.set("model", item.ref.entityId);
+      url.searchParams.delete("snapshot");
+    } else if (item.ref.entityType === "configuration_snapshot") {
+      url.searchParams.set("snapshot", item.ref.entityId);
+    }
+    window.history.pushState(null, "", `${url.pathname}${url.search}${url.hash}`);
+    setPage("candidates");
+    setRouteNonce((value) => value + 1);
+  };
+  const submitGlobalSearch = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("page", "candidates");
+    if (globalSearch.trim()) url.searchParams.set("q", globalSearch.trim());
+    else url.searchParams.delete("q");
+    window.history.pushState(null, "", `${url.pathname}${url.search}${url.hash}`);
+    setPage("candidates");
+    setRouteNonce((value) => value + 1);
+  };
+
+  if (authStatus !== "authenticated") {
+    return (
+      <div className="workbench">
+        <main className="main">
+          <div className="content">
+            <section className="card service-required-card">
+              <LockKeyhole size={30} />
+              <span className="eyebrow">FEISHU AUTHENTICATION</span>
+              <h2>{authStatus === "checking" ? "正在检查登录状态" : "请使用公司飞书账号登录"}</h2>
+              <p>{authStatus === "checking" ? "正在读取安全会话，完成前不会启用编辑。" : authMessage}</p>
+              {authStatus !== "checking" && authErrorCode ? (
+                <code className="service-error-code">错误编号：{authErrorCode}</code>
+              ) : null}
+              {authStatus !== "checking" ? (
+                <div className="service-required-actions">
+                  <a className="button button-primary button-md" href="/api/auth/feishu/start?return_to=%2F">使用飞书登录</a>
+                  <button type="button" className="button button-default button-md" onClick={() => window.location.reload()}>重新检查</button>
+                  <button type="button" className="button button-default button-md" onClick={() => void copyServiceDiagnostic()}>复制诊断信息</button>
+                </div>
+              ) : null}
+              <small>内网部署仍保留飞书登录，也支持受信任内网代理传递飞书身份。</small>
+            </section>
+          </div>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="workbench">
@@ -2374,23 +3345,40 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
             <span className={cx("sync-dot", dirty ? "dirty" : "clean")} />
             <div><strong>{dirty ? "有未保存修改" : "已同步"}</strong><span>团队版本 v{revision}</span></div>
           </div>
-          <div className="user-chip"><span>{user.name.slice(0, 1).toUpperCase()}</span><div><strong>{user.name}</strong><small>{user.role === "admin" ? "管理员" : "编辑者"}</small></div></div>
+          <div className="user-chip"><span>{user.name.slice(0, 1).toUpperCase()}</span><div><strong>{user.name}</strong><small>编辑者</small></div><button type="button" title="退出登录" onClick={() => void fetch("/api/auth/logout",{method:"POST"}).finally(()=>window.location.reload())}><LogOut size={15}/></button></div>
         </div>
       </aside>
 
       <main className="main">
         <header className="topbar">
-          <div><span className="eyebrow">装备数据工作台</span><h1>{pageMeta[page].title}</h1><p>{pageMeta[page].subtitle}</p></div>
+          <div className="topbar-context">
+            <nav className="topbar-breadcrumbs" aria-label="当前位置">
+              <span><small>工作台</small><strong>{pageMeta[page].title}</strong></span>
+              {topBreadcrumbs.map((item) => (
+                <span key={`${item.ref.entityType}:${item.ref.entityId}`} className={item.unavailableReason ? "unavailable" : item.current ? "current" : ""}>
+                  <ChevronRight size={13} aria-hidden="true" />
+                  <button type="button" disabled={!item.navigable || Boolean(item.unavailableReason)} title={item.unavailableReason ?? `${item.ref.entityId} · revision ${item.ref.revisionId}`} onClick={() => openEntityBreadcrumb(item)}>
+                    <small>{item.objectLabel}</small><strong>{item.label}</strong>
+                  </button>
+                </span>
+              ))}
+            </nav>
+            <h1>{pageMeta[page].title}</h1><p>{pageMeta[page].subtitle}</p>
+          </div>
           <div className="top-actions">
             <input ref={fileInput} hidden type="file" accept=".xlsx,.xls" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importExcel(file); }} />
-            <Button icon={Upload} onClick={() => fileInput.current?.click()}>导入</Button>
-            <Button icon={Download} onClick={() => void exportExcel()}>导出</Button>
-            <Button icon={Save} tone="primary" disabled={!dirty || syncState === "saving"} onClick={() => void save()}>
+            <form className="topbar-global-search" role="search" onSubmit={(event) => { event.preventDefault(); submitGlobalSearch(); }}>
+              <Search size={15} aria-hidden="true" />
+              <input aria-label="全局搜索可见 Series" value={globalSearch} onChange={(event) => setGlobalSearch(event.target.value)} placeholder="搜索可见 Series…" />
+            </form>
+            <Button icon={Save} tone="primary" disabled={!dirty || syncState === "saving" || !user.actionAvailability.save_workspace.enabled} title={user.actionAvailability.save_workspace.disabledReasonText} onClick={() => void save()}>
               {syncState === "saving" ? "保存中…" : "保存版本"}
             </Button>
           </div>
         </header>
-        <div className="content">{renderPage()}</div>
+        <div className="content">
+          {renderPage()}
+        </div>
       </main>
 
       {compareOpen ? (

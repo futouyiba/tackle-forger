@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "capabilities": [
+    "config.export.preview",
+    "config.export.commit"
+  ],
+  "pairing": {
+    "workspaceId": "replace-with-feishu-tenant-key",
+    "allowedOpenIds": [
+      "replace-with-feishu-open-id"
+    ]
+  },
+  "allowedOrigins": [
+    "http://127.0.0.1:3000",
+    "http://localhost:3000"
+  ],
+  "profiles": [
+    {
+      "profileId": "profile:configs-design-main",
+      "label": "主配置",
+      "executorKind": "local_companion",
+      "projectRoot": "D:\\workOnSsd\\configsDesign",
+      "relativeWorkbookRoot": "xlsx",
+      "configTomlPath": "config.toml",
+      "enabled": false
+    },
+    {
+      "profileId": "profile:configs-design-channel",
+      "label": "数值频道",
+      "executorKind": "local_companion",
+      "projectRoot": "D:\\workOnSsd\\configsDesign",
+      "relativeWorkbookRoot": "xlsx_channel\\numerical",
+      "configTomlPath": "config.toml",
+      "enabled": false
+    }
+  ],
+  "mappings": []
+}

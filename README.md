@@ -23,11 +23,77 @@
 
 ## 本地验证
 
-\`\`\`powershell
+```powershell
 npm install
 npm run typecheck
 npm run lint
 npm test
-\`\`\`
+```
 
-生产构建由 Vinext 生成，并部署到 OpenAI Sites。
+## 本地启动
+
+Windows 推荐使用项目自带脚本，避免把重定向字符串误当成程序名：
+
+```powershell
+.\scripts\start-dev.ps1 -Port 3000
+```
+
+需要在当前窗口直接查看开发日志时，追加 `-Foreground`。
+
+生产构建由 Vinext 生成。正式目标环境是公司内网 Dell R730；Vercel 地址仅作为评审入口，
+不能替代内网持久磁盘、公司飞书凭据和真实配置仓库验收。
+
+## 公司飞书登录
+
+应用不提供匿名编辑或离线冒名提交。飞书 OAuth 仅接受配置的公司租户；未登录返回 401，
+已登录但动作能力不足返回 403 和服务端 `ActionAvailability`。登录失败显示稳定错误编号、
+重试与管理员入口；会话过期时浏览器暂存未保存草稿，重登后仅在团队 revision 未变化时
+自动恢复，否则提供冲突草稿下载。
+
+生产环境必须配置 `.env.example` 中的 OAuth、租户、会话密钥和支持入口。OAuth token、
+应用密钥不得进入前端、日志、导出包或 AI 输入。`FEISHU_SESSION_DATA_DIR` 必须指向受备份
+保护、仅服务账号可读写的持久磁盘；Vercel 临时文件系统不能作为正式会话存储。
+
+## 唯一飞书规则工作簿
+
+唯一规则源是整本工作簿：
+
+<https://pisn3u3ony2.feishu.cn/wiki/YsEKwSUJ5i86HCkZKBVcNMw7nOh?from=from_copylink&sheet=9nE3Rx>
+
+链接中的 `sheet=9nE3Rx` 只负责打开时定位到 `06_系列`，同步边界仍是 00–17 整本工作簿。
+接入器按 v3 第 14 节登记的 `sheet_id` 定位并校验期望名称；改名只告警，同名新表不会冒充
+原表。revision 必须实时读取；2302 与 2352 都只是历史观察值，禁止硬编码为“最新”。
+
+`01_重量模板` 至 `06_系列` 当前已有 176 个稳定机器 ID。已绑定 ID 必须保留；未来缺 ID
+的新行进入 `NEW_SOURCE_ROW`，经过迁移预览、人工确认、回写和回读验证后才建立绑定。
+检查、显式拉取、创建 `RuleSetVersion` 草稿、ID 回写和正式发布始终是彼此独立的动作。
+
+飞书应用凭证只配置在服务器环境中：
+
+```env
+FEISHU_APP_ID=cli_xxx
+FEISHU_APP_SECRET=xxx
+FEISHU_OPEN_API_BASE_URL=https://open.feishu.cn
+```
+
+应用需要电子表格读写权限，并能访问该工作簿。拉取只登记 `FeishuSourceRevision`；创建
+PricingPolicy/RuleSet 草稿不会发布正式版本。写回前重新读取源表并校验 revision、单元格
+Trace、ID 唯一性、前缀与实体类型；写后必须回读恢复，不能把写回等同于拉取或发布。
+
+`08_价格计算` 导入为 `PricingPolicyDraft`。C/B/A/S 到 PricingBasket 的显式映射已存在；
+评分插值、竿/轮/线零整比、金额单位、舍入、最低价格和溢出上限未发布前，只允许非正式
+试算与单元格级 Trace，正式 Store 导出继续阻断且没有手填价格兜底。
+
+## 配置表交付
+
+一期正式入口使用 Chromium File System Access API。用户分别为 dev/test 等环境显式选择
+configs 根目录；1001 渠道固定写入该环境的 `xlsx`，其他渠道只使用用户明确选择的目录。
+目录句柄保存在当前用户、浏览器和 origin 的 IndexedDB 中，服务端不保存本机绝对路径。
+
+导出先执行 `SnapshotBatch`，只读取冻结 Snapshot；随后按环境根 `config.toml` 的逻辑表名
+解析 tackle、item、GoodsBasic 和 StoreBuy，预览新增/修改、主键冲突、关系断链和格式变化。
+确认后采用可恢复提交：记录基线 hash、备份与 Manifest，逐文件写入并回读，失败时恢复；
+不得宣称三个工作簿具有跨文件原子性。StoreBuy 更新必须保留各目标已有 `enabled`。
+
+File System Access API 不可用时可以下载变更包人工搬运，但页面不得声称已经写入本地 Git
+工作区。仓库中的本地伴随服务仅保留为历史兼容与测试工具，不是 v3 一期正式交付路径。

@@ -1,0 +1,438 @@
+<title>从“交叉相乘”到可治理的钓具生产系统</title>
+
+<p>设计思路、现实依据与Tackle Forger具体工具设计</p>
+
+<callout emoji="💡" background-color="light-blue" border-color="blue">
+  <p><b>核心结论：</b>我们没有推翻最初的“基础模板 × 多层系数”，而是发现现实钓具的属性随重量、类型和功能变化时并不保持同一条等比曲线。因此，系统需要多层、可审查的派生检查点，并用分层Patch、统一Trace、独立校验和冻结快照，把一个计算公式发展成一条真正可用于生产的配置流水线。</p>
+</callout>
+<callout emoji="📖" background-color="light-gray" border-color="gray">
+  <p><b>阅读与权威关系：</b>第一部分解释“为什么这样设计”，适合用于方案沟通；第二部分汇总“工具具体怎样工作”，适合产品、UX和开发共同对齐。开发中的字段、状态转换、异常恢复和Given/When/Then验收仍以仓库中的<code>docs/tackle-forger-development-spec-v3.md</code>为唯一领域规范，页面组织与交互表达参考UX文档；两者冲突时以v3为准。</p>
+</callout>
+<h1>第一部分　设计思路：为什么需要多层模板</h1>
+
+<h2>原始想法的价值与它尚未解决的问题</h2>
+
+<p>最初的想法是：用重量段基础模板作为底座，再叠加钓法、类型和功能定位等系数，通过交叉计算生成钓具属性。</p>
+
+<pre lang="text" caption="最初的计算内核"><code>基础重量段模板 × 钓法系数 × 类型系数 × 功能定位系数 = 属性标杆</code></pre>
+
+<p>这个方向非常重要。它把“逐件手填装备”变成了“维护少量基础规则、批量生成大量装备”，解决了规模化和统一性问题，也是今天系统仍然保留的计算内核。</p>
+
+<p>但一个公式要进入真实生产，还必须继续回答几个问题：当某个属性的现实曲线不是等比放大时怎么办？如果某一步算得不合理，应该改通用规则、中间结果还是最终型号？上游变化后，怎样保留人工经验？一个最终数值怎样解释来源？同一Series中的多个重量和同一重量下的多个Model怎样稳定对应？已经发布的配置怎样避免被新规则静默改变？</p>
+
+<whiteboard type="mermaid">
+flowchart LR
+    A["最初：基础模板 × 多层系数"] --> B["批量生成属性"]
+    B --> C{"进入真实生产"}
+    C --> D["现实曲线不是等比关系"]
+    C --> E["人工修改难保存、难重放"]
+    C --> F["对象与商品层级不清"]
+    C --> G["结果来源和发布版本不安全"]
+    D --> H["多层派生检查点"]
+    E --> I["分层Patch与rebase"]
+    F --> J["Series → SKU → Model"]
+    G --> K["稳定ID、Trace与Snapshot"]
+    H --> L["可治理的钓具生产系统"]
+    I --> L
+    J --> L
+    K --> L
+</whiteboard>
+
+<h2>底层原因：属性不是一个数字，而是随重量变化的曲线</h2>
+
+<p>如果只看某一个重量段，“长度 × 1.1”似乎可以表达远投竿比泛用竿更长。但当重量跨越多个区间时，我们面对的已经不是一个数字，而是一条曲线：每个重量段都有自己的长度、调性、自重、饵重范围、回弹、操控和抛投表现。</p>
+
+<p>固定倍率有一个隐藏前提：功能定位后的曲线必须与类型基础曲线保持完全相同的形状。若基础长度曲线为<code>Ltype(w)</code>，使用常数<code>c</code>后只能得到<code>Lfunction(w)=c×Ltype(w)</code>。两条曲线在任何重量点的比值都不变，斜率、平台、拐点和反向趋势也只能跟着基线一起变化。</p>
+
+<p>现实中这个前提经常不成立。长度是典型的情境参数：更长的竿可以增加抛投行程、控线范围和岸边控鱼空间，但也会增加转动惯量、操作负担和近距离动作幅度；重型垂直作钓又可能为了杠杆、操控和持续疲劳采用更短的竿。因此，“重量更大”并不自动意味着“长度按同一比例更长”。功能定位会改变曲线的形状，而不只是整体抬高或压低。</p>
+
+<whiteboard type="mermaid">
+flowchart TD
+    A["固定倍率模型"] --> B["L功能(w) = c × L类型(w)"]
+    B --> C["只能整体放大或缩小"]
+    C --> D["斜率、平台和拐点被强制保持"]
+    D --> E["重量跨度扩大后容易与现实脱节"]
+    F["多层曲线模型"] --> G["每层按重量段、类型和场景显式变换"]
+    G --> H["支持 add / multiply / set / clamp / 条件规则"]
+    H --> I["允许平台、反转、局部变化和功能专属拐点"]
+    I --> J["每层结果可预览、校验和人工调整"]
+</whiteboard>
+
+<p>因此，多层模板真正解决的并不是“多乘几次”，而是允许每一个有独立业务含义的阶段形成自己的离散曲线，并让人看见这条曲线在当前阶段是怎样被塑造出来的。</p>
+
+<blockquote>多层模板不是保存更多份完整模板，而是建立多个语义明确的派生检查点：每层都有自己的输入、规则、输出、Trace和可选Patch；派生结果可以按需计算和缓存，但不成为新的人工源数据。</blockquote>
+
+<h2>现实规格证据：力量、长度、调性和用途并不等比联动</h2>
+
+<p>我们查阅了Shimano公开的产品规格和技术说明。它们不能直接替代游戏规则，但能验证一个重要事实：现实产品的长度、力量、调性和饵重范围由用途共同决定，不存在一条放之四海而皆准的固定倍率。</p>
+
+<table>
+  <colgroup><col width="150"/><col width="240"/><col width="250"/></colgroup>
+  <thead>
+    <tr><th background-color="light-blue">官方产品或场景</th><th background-color="light-blue">公开规格中的现象</th><th background-color="light-blue">对模板设计的启示</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Curado Casting</td><td>ML-BFS为7'2"，M为7'2"，MH反而为7'0"，H回到7'2"，XH再到7'5"；力量和饵重提高时，长度没有按固定比例单调增长。</td><td>同一种类型内部，长度曲线也会因力量与用途发生保持、缩短和再增长；不能只给Type一个固定长度倍率。</td></tr>
+    <tr><td>Game Type J</td><td>ML、M、MH可以保持6'0"并覆盖更高铁板重量；H、XH、XXH则出现5'6"甚至5'3"的更短规格。</td><td>更高负载下，垂直铁板场景可能选择更短竿；功能定位可以让长度曲线与基础重量趋势相反。</td></tr>
+    <tr><td>岸投铁板</td><td>Shimano的岸投指南建议9–10英尺，并说明长竿有利于远投和岸边、礁石附近控鱼。</td><td>长度增加来自远投与岸边控线功能，而不只是鱼重或竿体力量。</td></tr>
+    <tr><td>Action与Power说明</td><td>重型障碍场景需要更高Power；底部接触、单钩和快速控饵偏向Fast Action，而多枚三本钩、持续收线等场景需要更有缓冲的动作。</td><td>同一重量和Power也可能因功能不同采用不同Action；属性之间存在条件关系，而非独立倍率。</td></tr>
+  </tbody>
+</table>
+
+<p>资料来源：<a href="https://fish.shimano.com/en-GB/product/rods/freshwaterpredator/techniquespecificspinning/a075f00003mcqrpqa1.html">Shimano Curado Casting官方规格</a>；<a href="https://fish.shimano.com/en-US/product/rods/jigging/a075f00003hjeqwqaq.html">Shimano Game Type J官方规格</a>；<a href="https://fish.shimano.com/en-AU/content/c/Articles/how-to/how-to-a-guide-to-shore-jigging.html">Shimano岸投铁板指南</a>；<a href="https://fish.shimano.com/en-GB/content/c/rod-action-and-power-explained.html">Shimano Action与Power说明</a>。</p>
+
+<p>这些例子支持的不是“照抄某个品牌”，而是一个建模原则：属性应该被视为<code>参数 × 重量段 × 语义层 × 条件</code>的结果。系统需要允许某个功能只在轻型段增加长度、在中段快速拉长、在重型段进入平台；也需要允许大物或垂直作钓在更高负载下缩短长度。一个常数倍率无法表达这些曲线形状。</p>
+<p>以“大物搏鱼”功能为例，它可以显式定义拉力增加、自重增加、长度变化、抛投精准度下降和抛投距离下降。这里的“自重增加”是为了换取结构强度付出的代价，不应被误读成奖励。更关键的是，这些变化不必在16个基础拉力段上都保持同一比例：轻型段可能需要加长，中段进入平台，重型段又为了杠杆和疲劳缩短；拉力可以增加20%，但长度不能因此被迫在所有重量段都增加10%。所以规则除了记录数值变换，还要标记优势、代价、适用条件和重量段范围。</p>
+<h2>为什么钓法、类型和功能定位要分层</h2>
+
+<p>钓法、类型和功能定位会同时影响一件装备，但它们回答的是不同问题。钓法描述玩法环境与基础约束；类型描述结构和操作机制；功能定位描述这件装备为了某种用途主动做出的优势与代价。</p>
+
+<p>如果把三者合并成一个“钓法 × 类型 × 功能”大模板，每增加一个维度就要复制大量组合；同一条钓法规则或类型规则也会散落在多处，修改时容易漏改。反过来，如果把它们全部压成几个全局倍率，又无法表达“水滴轮在远投场景”和“纺车轮在远投场景”的不同条件关系。</p>
+
+<p>所以底层采用分层规则，同时允许真正依赖交叉条件的修正：</p>
+
+<pre lang="text" caption="分层规则与条件交叉"><code>基础重量段
+→ 钓法规则
+→ 钓法层Patch
+→ 类型规则
+→ 钓法×类型条件规则与Patch
+→ 功能定位规则
+→ 功能层Patch
+→ 结构标杆</code></pre>
+
+<p>这样既复用共性，又保留交叉特例；工作台可以把钓法和类型放在同一个操作步骤中，但计算轨迹必须分开。</p>
+
+<h2>为什么每一层都要能预览和调整</h2>
+
+<p>规则分层以后，错误也会有明确的归属层级。若所有路亚竿在某重量段都偏短，问题可能在钓法层；若只有枪柄竿偏短，问题可能在类型层；若只有远投枪柄竿在中重段偏短，问题可能在功能层或钓法×类型×功能的条件规则；若只有“青芦·远投”系列需要更长，则应当是Series Patch；若只有1.8kg规格或其中一个慢调长竿需要调整，则应分别落在SKU或Model。</p>
+
+<p>如果系统只允许改最终Model，系统性偏差会在几十件商品上重复修补；如果允许直接改只读派生结果，又会失去来源和重算能力。分层Patch让修改意图落在正确作用域。</p>
+
+<whiteboard type="mermaid">
+flowchart TD
+    A["发现长度曲线不合理"] --> B{"偏差影响范围"}
+    B -->|"所有钓法对象"| C["Method层规则或Patch"]
+    B -->|"某类型全部对象"| D["Method×Type层规则或Patch"]
+    B -->|"某功能的一段曲线"| E["Function层规则或Patch"]
+    B -->|"整个系列"| F["Series Patch"]
+    B -->|"一个目标拉力"| G["SKU Patch"]
+    B -->|"一个具体型号"| H["Model Patch"]
+    C --> I["重算依赖下游"]
+    D --> I
+    E --> I
+    F --> I
+    G --> I
+    H --> I
+    I --> J["草稿DIRTY / 已发布生成UpgradeCandidate"]
+</whiteboard>
+
+<p>每条Patch保存作用对象、参数、before、operation、operand、after、理由、作者、时间、基线版本和Trace。<code>multiply</code>表达相对修正，<code>add</code>表达固定补偿，<code>set</code>表达绝对锁定并在基底变化后强制复核，<code>min/max</code>表达边界。</p>
+
+<p>共享中间层Patch可以积累为通用规则提案，人工确认后回写飞书。Series、SKU和Model的个案Patch保留在工具内，不自动反推成通用规则。这样既能沉淀经验，也不会让一个特例改坏全局。</p>
+
+<h2>为什么不用连续插值</h2>
+
+<p>既然属性是一条曲线，直觉上似乎可以在两个标杆之间插值。但插值会制造一件没有经过任何设计判断的“混合装备”：长度、调性、饵重区间、材料和结构可能来自两个标杆的数学平均，却不对应任何经过验证的真实设计点。</p>
+
+<p>因此，系统先在相同部位、相同钓法、相同类型、相同功能定位的结构标杆中，使用拉力比例距离选择最近者；1.5kg和1.8kg可以命中同一个标杆，但仍是两个独立SKU，并通过后续的显式贡献和Patch形成差异。人工固定标杆使用独立<code>ProjectionPin</code>，而不是让普通Patch反向影响匹配。</p>
+
+<pre lang="text" caption="最近结构标杆"><code>pullDistance = abs(ln(targetPullKg / derivedPullKg))</code></pre>
+
+<p>比例距离比较的是“相差几成”，适合0.1kg到100kg的跨数量级范围。Affinity、词条、性能、品质、材料和最终拉力都不参与结构标杆选择，避免搜索语义被后置商品强化污染。</p>
+
+<h2>从计算到治理：四类数据必须分开</h2>
+
+<whiteboard type="mermaid">
+flowchart LR
+    A["源规则\n人工维护、版本化"] --> B["派生结果\n只读、可重建"]
+    B --> C["人工Patch\n局部、可追踪、可重放"]
+    C --> D["发布快照\n冻结、不可静默改写"]
+    A -."规则版本变化".-> E["下游草稿DIRTY"]
+    E --> B
+    D -."上游变化".-> F["UpgradeCandidate"]
+    F --> G["人工比较后发布新Snapshot"]
+</whiteboard>
+
+<p><b>源规则</b>是飞书中人工维护的基础模板、系数和定义；<b>派生结果</b>是确定性计算的只读输出；<b>Patch</b>保存人工修改意图；<b>ConfigurationSnapshot</b>冻结正式发布结果。把这四类数据混在一起，系统就无法回答“谁改了什么、为什么改、能否重算、历史版本是什么”。</p>
+
+<h2>自动化与人工介入的平衡</h2>
+
+<p>多层并不意味着每一层都强制审批。所有阶段默认<code>AUTO_CONTINUE</code>，用户可以把重要阶段设成<code>REVIEW_ON_CHANGE</code>。相同输入哈希不会重复要求确认；用户显式介入或上游发生变化时，相关阶段才暂停复核。</p>
+
+<p>这使工具平时像自动生产线，需要时又能在正确层级被人接管。同输入、同规则版本和同显式seed必须得到同结果；没有随机需要时不强行引入seed。</p>
+
+<h2>可以“吹”的地方</h2>
+
+<p><b>它没有把现实复杂性假装成几个全局倍率。</b>多层曲线、条件规则和Patch让系统既有规模化，又能表达真实设计中的平台、拐点和反向趋势。</p>
+
+<p><b>它把生成和治理放进了同一个系统。</b>工具不仅计算，还负责解释、校验、人工修正、版本升级、发布与恢复。</p>
+
+<p><b>它把错误修在正确层级。</b>共享偏差、系列特征、重量差异和型号差异各有明确作用域，系统不会退化成一堆无法解释的最终值覆盖。</p>
+
+<p><b>它把人工判断变成可复用资产。</b>Patch记录修改意图和证据，重复模式可以上升为通用规则，个案仍保持边界。</p>
+
+<p><b>它让自动化可被接管。</b>默认批量推进保证效率，阶段检查点、DIRTY传播和UpgradeCandidate保证人在必要时掌握决定权。</p>
+
+<p><b>它保护正式结果。</b>规则可以继续演进，但已发布Snapshot永远不会被上游变化静默替换。</p>
+
+<h2>第一部分概括</h2>
+
+<blockquote>多层模板的底层价值，不是把一个乘法拆成更多乘法，而是承认每个属性都是随重量变化的曲线，并且钓法、类型、功能定位会以不同方式改变曲线形状。每一层都要留下可查看的派生结果、规则来源和人工修正空间；最终再通过稳定匹配、分层Patch、校验和不可变快照，把设计判断安全地传递到游戏配置。</blockquote>
+
+<hr/>
+
+<h1>第二部分　具体设计：Tackle Forger怎样落地这套思路</h1>
+
+<h2>产品目标与边界</h2>
+
+<p>Tackle Forger是一套供策划使用的内部钓具配置生产工作台。它负责从飞书规则源生成结构标杆，编辑Collection、Series、SKU和Model，处理词条、技术、品质、定价、兼容与系列一致性，最终冻结快照并写入游戏配置表。</p>
+
+<p>当前工具不执行被动技能、不模拟抛投或钓鱼过程、不承担玩家背包、交易、库存和经济运行，也不生产美术资源。它可以导出这些系统需要的数据，但不冒充运行时模拟器。</p>
+
+<whiteboard type="mermaid">
+flowchart LR
+    A["飞书规则源"] --> B["RuleSetVersion"]
+    B --> C["多层结构标杆"]
+    C --> D["Collection / Series"]
+    D --> E["离散重量 SKU 抽屉"]
+    E --> F["Model候选与具体Model"]
+    F --> G["词条 / 技术 / 品质 / 定价"]
+    G --> H["兼容、不变量与发布校验"]
+    H --> I["ConfigurationSnapshot"]
+    I --> J["tackle / item / store"]
+</whiteboard>
+
+<h2>规则与模板引擎</h2>
+
+<p>结构标杆的权威层级为：</p>
+
+<pre lang="text" caption="结构标杆生成"><code>WeightTemplate
+→ MethodProfile
+→ Method-layer Patch
+→ TypeProfile
+→ Method×Type Patch
+→ FunctionProfile
+→ Function-layer Patch
+→ StructuralBenchmark / DerivedProjection</code></pre>
+
+<p>结构标杆只包含基础拉力、钓法、类型和功能定位。<code>functionIntensity</code>、Performance、Quality、Material、词条和Technology不进入结构标杆维度，也不参与最近匹配。</p>
+
+<p>匹配完成后才进入商品层：</p>
+
+<pre lang="text" caption="商品层计算顺序"><code>最近结构标杆
+→ functionIntensity显式贡献
+→ PerformanceProfile
+→ Material策略
+→ SeriesPatch
+→ SkuPatch
+→ ModelPatch
+→ Affix/Technology结算
+→ FinalReviewPatch
+→ 最终边界校验
+→ ConfigurationSnapshot</code></pre>
+
+<p>每层规则支持<code>add</code>、<code>multiply</code>、<code>set</code>、<code>min</code>、<code>max</code>和受控<code>formula</code>，并固定输出before、operation、operand、after、来源、版本、优势或代价和ValidationIssue。</p>
+
+<h2>Collection、Series、SKU和Model</h2>
+
+<whiteboard type="mermaid">
+flowchart LR
+    A["Collection\n品牌与营销产品族"] --> B["Series\n统一概念与不变量"]
+    B --> C1["SKU 1.5kg\n重量抽屉"]
+    B --> C2["SKU 3.5kg\n重量抽屉"]
+    B --> C3["SKU 8.2kg\n重量抽屉"]
+    C1 --> D1["快调短竿 Model"]
+    C1 --> D2["慢调长竿 Model"]
+    C2 --> D3["标准 Model"]
+    C3 --> D4["重型 Model"]
+    D1 --> E["实际选择、购买和发布对象"]
+    D2 --> E
+    D3 --> E
+    D4 --> E
+</whiteboard>
+
+<p><b>Collection</b>承担品牌、视觉和营销叙事，可以包含多个结构或功能不同的严格Series。<b>Series</b>固定或显式约束钓法、类型、品质、核心功能、功能强度策略、性能方向、核心词条家族、禁用词条、目标拉力集合和SeriesSignature。</p>
+
+<p><b>SKU</b>是一个离散<code>targetPullKg</code>对应的钓具抽屉。同一Series内归一化后的目标拉力必须唯一，但可以同时拥有1.5kg、3.5kg和8.2kg等多个SKU。<b>Model</b>才是玩家实际选择和购买的型号，保存长度、调性、硬度、组件、词条、技术、Patch、价格和Snapshot引用。</p>
+
+<p>名称只用于显示和搜索。对象关联、幂等生成和改名前后对齐使用稳定<code>entityId</code>、revision、持久GenerationBinding、外部稳定ID和业务身份键。SKU业务身份键为<code>seriesId + normalizedTargetPullKg</code>；同一SKU下Model可以使用<code>modelVariantKey</code>表达<code>short_fast</code>、<code>long_slow</code>等跨重量路线。</p>
+
+<h2>Series编辑与Model候选生成</h2>
+
+<p>标准商品设计顺序是：先确定Quality，再编辑Series和离散目标拉力，随后生成SKU和Model候选，最后选择词条与技术并执行价值分和定价校验。</p>
+
+<p>默认批量生成Series下所有选定SKU及Model；用户可以限制目标重量、Model数量、路线或生成范围。原“候选池”不是领域实体，而是Series或SKU上下文中的“生成Model候选”动作。</p>
+
+<p>候选生成输入至少冻结SeriesRevision、SKURevision、RuleSetVersion、结构标杆匹配、允许的Model路线、候选搜索配方和输入哈希。只有算法确实包含受控随机时才要求显式seed并一同冻结；常规确定性计算不凭空引入seed。结果保存候选ID、推荐排序、硬兼容结论、Affinity各轴贡献、Series不变量偏差、最终属性、价值分、Trace和生成时间。</p>
+
+<p>硬不兼容候选不能被选用。合法候选按配置化排序策略展示，Affinity只参与软排序。用户可以接受为Model、并列比较、调整后接受或放弃；手工选择、放弃理由和候选输入必须进入审计。确定性配方在相同输入下必须得到相同候选集合；若配方启用受控随机，则相同输入和同一seed也必须得到相同结果。</p>
+
+<h2>Patch、rebase与升级候选</h2>
+
+<p>共享中间层使用<code>DerivationLayerPatch</code>；Series、SKU、Model和最终复核使用各自Patch。作用域越靠后，影响范围越小、执行优先级越高。</p>
+
+<whiteboard type="mermaid">
+flowchart TD
+    A["源规则与只读派生"] --> B["DerivationLayerPatch"]
+    B --> C["SeriesPatch"]
+    C --> D["SkuPatch"]
+    D --> E["ModelPatch"]
+    E --> F["Affix / Technology"]
+    F --> G["FinalReviewPatch"]
+    G --> H["冻结Snapshot"]
+    A -."新RuleSetVersion".-> I["Patch rebase"]
+    I --> J{"是否冲突"}
+    J -->|"否"| K["重放并形成新revision"]
+    J -->|"是"| L["展示旧基线、新基线、草稿值和人工选择"]
+    H -."不被重算".-> M["UpgradeCandidate"]
+</whiteboard>
+
+<p>Patch rebase必须展示旧基线、新基线、Patch意图、重放结果和冲突。<code>multiply/add/min/max</code>可以按规则重放；<code>set</code>在基线变化后必须复核；同层同参数多个<code>set</code>是冲突。已发布Snapshot永远不进入DIRTY，只产生UpgradeCandidate。</p>
+
+<h2>硬兼容、Affinity、Series不变量与发布检查</h2>
+
+<p>四套语义必须独立，不能用一个模糊总分互相覆盖。</p>
+
+<whiteboard type="mermaid">
+flowchart TD
+    A["候选或待发布Model"] --> B{"硬兼容"}
+    B -->|"失败"| X["阻止组合、生成或发布"]
+    B -->|"通过"| C["Affinity Score\n软适配与排序解释"]
+    B -->|"通过"| D["Series不变量\n概念与重量曲线一致性"]
+    B -->|"通过"| E["发布检查\n版本、Trace、跨表关联"]
+    C --> F["建议，不越权"]
+    D --> G["身份破坏时阻断"]
+    E --> H["证据完整后发布"]
+</whiteboard>
+
+<p><b>硬兼容</b>覆盖Method×Type、Type×Weight、Type×Function、线材×重量或功能、Model×组件和竿轮线闭环，结果为allow、deny或require。deny永远阻止发布。</p>
+
+<p><b>Affinity Score</b>只回答合法组合中的适配程度，按method_type、type_pull_tier、type_function、function_performance、material_function、quality_specialization和model_component等轴分组，每个轴采用最具体的规则并显示原因。</p>
+
+<p><b>Series不变量</b>保证同一Series中的钓法、类型、品质、核心功能、性能方向、核心词条和概念身份一致，并检查方向签名和重量曲线。长度、调性、传动比和回弹属于contextual参数，不强制单调，但必须位于Series允许包络。</p>
+
+<p><b>发布检查</b>验证无未解决error、warning已确认、规则和Patch版本链完整、Trace完整、配置关系可解析、Snapshot哈希成功。所有问题统一使用<code>ValidationIssue</code>，操作入口使用受权限约束的<code>ActionLink</code>。</p>
+
+<h2>词条、技术、品质、价值分与定价</h2>
+
+<p>词条分为属性类和被动技能类。属性词条修改面板；被动词条只保存、计分、展示和导出，不执行、不验证模拟器运行逻辑。Technology是原子词条的命名组合包，负责组织、叙事、来源和生成限制，不得再次对成员已经修改的同名属性重复加成。</p>
+
+<p>品质固定为C/绿、B/蓝、A/紫、S/橙。Quality表示完成度，<code>functionIntensity</code>表示功能偏科程度，两者独立。先由设计人员选择Quality，再根据词条和Technology计算价值分，校验是否落入该Quality的版本化区间；系统不能根据价值分自动改品质。</p>
+
+<p>定价规则从飞书<code>08_价格计算</code>导入<code>PricingPolicyDraft</code>，由领域内核确定性执行，并保留单元格级Trace。定价重量段沿用最近结构标杆引用的源重量段，不按最终拉力重新隐式分段。评分插值曲线、零整比、金额单位、舍入方式、最低价和溢出上限仍未发布为正式策略前，只允许试算，正式Store导出继续阻断。</p>
+
+<h2>统一属性Trace</h2>
+
+<p>任意最终属性都能按同一结构展开：</p>
+
+<pre lang="text" caption="最终属性来源"><code>基础重量模板
+→ 钓法贡献
+→ 类型贡献
+→ 功能定位贡献
+→ functionIntensity / Performance / Material
+→ SeriesPatch
+→ SkuPatch
+→ ModelPatch
+→ Affix / Technology
+→ FinalReviewPatch
+→ 最终值</code></pre>
+
+<p>每个Trace节点记录来源对象、规则版本、before、operation、operand、after、警告和可执行动作。审阅者可以回答：它来自哪里、为什么变化、谁调整过、上游版本是什么、如果升级会发生什么。</p>
+
+<h2>五维属性图</h2>
+
+<p>Model右侧预览层提供版本化、可配置的五维雷达图。当前种子轴为拉力、耐久、抛投、感度和操控，但轴、聚合、顶点和缺值策略由<code>FiveAxisViewDefinition</code>决定，不能写死在前端。</p>
+
+<p>五维图支持两种模式：其一，把同一个Model的竿、轮、线和Model短板汇总曲线放在同图，观察强弱与匹配；其二，把多个同部位装备放在同图比较。所有曲线必须使用共同鱼重等级、顶点集合和规则版本，不能让每件装备各自归一化后再比较。</p>
+
+<p>缺失、不适用、上下文继承和错误必须分别表达，不能统统画成0。雷达图是只读派生预览，不是新的人工编辑源，也不能代替硬兼容。</p>
+
+<h2>工作台与钓具系列甘特图</h2>
+
+<p>产品主框架采用高密度数据驾驶舱。主要空间包括数据源与参数注册表、模板与规则实验室、兼容与Affinity、派生模板浏览器、Collection与Series设计器、SKU重量跨度与抽屉、Model与配置明细、词条与Technology、审阅发布和版本治理。</p>
+
+<p>一级入口“钓具系列甘特图”按纵向重量分段、横向品质与类型展示Series规划。甘特条只表达系列规划跨度，SKU节点才是真实离散重量；条带长度不代表连续插值，也不会自动补齐中间重量。点击Series、SKU或Model分别进入对应上下文，并保持稳定面包屑。</p>
+
+<p>Model预览与AI评估共用右侧推入层。属性来源、五维图、关键数值、词条、兼容、Patch链和发布状态在同一上下文中展示，避免用户在多个页面之间丢失当前对象。</p>
+
+<h2>AI评估与建议</h2>
+
+<p>AI规划为二期能力，是带证据的辅助层，不是规则裁决层。它可以解释当前Model、生成Model Patch草稿或飞书规则提案草稿；不得自动应用修改、自动发布、覆盖硬兼容、改变Affinity、执行被动模拟器逻辑、触发飞书拉取或重算已发布Snapshot。</p>
+
+<p><code>AIRecommendation</code>记录证据引用、影响对象、影响属性、建议动作、建议Patch、生成时间和所用规则版本。转成Patch前必须确认作用域并预览before/after；转成飞书提案前必须预览跨对象影响、指定审批人并支持提交失败恢复。</p>
+
+<h2>飞书规则源与显式同步</h2>
+
+<p>飞书电子表格是唯一通用规则源。接入器以固定<code>sheet_id</code>识别工作表，名称只用于校验和告警；规则行使用稳定<code>entityId/ruleId</code>和<code>parameterKey</code>，不能依赖名称、行号或合并单元格。</p>
+
+<whiteboard type="mermaid">
+flowchart LR
+    A["工具内RuleSourceChangeDraft"] --> B["人工确认回写飞书"]
+    B --> C["技术回读验证"]
+    C --> D["REMOTE_CHANGES_AVAILABLE"]
+    D --> E["用户显式拉取"]
+    E --> F["FeishuSourceRevision + RuleSet草稿"]
+    F --> G["校验"]
+    G --> H["用户显式发布RuleSetVersion"]
+    H --> I["下游重算与Patch吸收判断"]
+    I --> J["草稿DIRTY / 已发布UpgradeCandidate"]
+</whiteboard>
+
+<p>回写不等于拉取，拉取不等于发布。未来新增且缺少机器ID的飞书行进入<code>NEW_SOURCE_ROW</code>，由人工确认后分配并回写ID；不能按名称猜旧对象。飞书中的SeriesArchetype也不是运行时Series、SKU或Model。</p>
+
+<h2>快照、配置表与本地Git仓库</h2>
+
+<p>发布前可以批量冻结Snapshot，不要求草稿逐个手工处理：未变化对象复用已有快照，合格revision创建新快照，被阻断对象跳过并汇总报告。Snapshot冻结上游revision、RuleSetVersion、结构标杆、PatchSetHash、最终面板、词条与技术、品质评估、定价、兼容、校验、Trace、发布人和时间。</p>
+
+<p>配置目标是设计人员本地配置Git仓库。dev、test等环境各有自己的<code>configs</code>和<code>config.toml</code>；环境目录下<code>xlsx</code>表示1001渠道，<code>xlsx/channels/&lt;channel&gt;</code>表示其他渠道。</p>
+
+<p>每个目标强制生成并写入<code>tackle</code>、<code>item</code>、<code>store</code>三张xlsx表，<code>store</code>包含上架开关。写入必须经过差异预览、跨表关联校验、目标确认、备份和原子替换；无法根据TOML解析的关系必须提示并阻断，不能按名称、行号或整行覆盖进行关联。</p>
+
+<h2>飞书登录、部署与权限阶段</h2>
+
+<p>工具部署在公司内网Dell R730，支持Chromium内核浏览器，并集成飞书企业登录。身份由标准OAuth回调和服务端会话建立，浏览器只保存HttpOnly会话Cookie，不保存飞书token；服务端严格校验目标tenant。匿名用户不能读取工作区数据或执行写操作。</p>
+
+<p>一期采用统一能力集合，先解决“谁是公司成员”；三期再实现细粒度权限管理。AI审核权限、Series审核与Model发布是否职责分离、飞书提案是否多级会签仍保持配置化，不能提前硬编码。</p>
+
+<p>系统按需计算结构标杆，不预生成完整笛卡尔积。初期可以单容器部署，不要求Redis；只有批量重算影响交互后再拆Worker。</p>
+
+<h2>状态、恢复与不可执行操作</h2>
+
+<table>
+  <colgroup><col width="150"/><col width="170"/><col width="270"/></colgroup>
+  <thead><tr><th background-color="light-blue">后端状态</th><th background-color="light-blue">前端文案</th><th background-color="light-blue">关键语义</th></tr></thead>
+  <tbody>
+    <tr><td>DRAFT</td><td>草稿</td><td>可以继续编辑和自动重算</td></tr>
+    <tr><td>WAITING_FOR_REVIEW</td><td>待复核</td><td>阶段策略要求人工确认当前变化</td></tr>
+    <tr><td>DIRTY</td><td>需更新</td><td>上游已变化，草稿下游需要重算</td></tr>
+    <tr><td>HARD_CONFLICT</td><td>硬冲突</td><td>硬兼容或关键不变量失败，不能继续发布</td></tr>
+    <tr><td>READY_TO_PUBLISH</td><td>待发布</td><td>校验通过，等待人工发布</td></tr>
+    <tr><td>PUBLISHED</td><td>已发布</td><td>Snapshot冻结，不接受原地重算</td></tr>
+    <tr><td>UPGRADE_AVAILABLE</td><td>有升级候选</td><td>旧Snapshot仍有效，可比较后发布新版本</td></tr>
+    <tr><td>PUBLISH_FAILED</td><td>发布失败</td><td>保留原快照和失败证据，允许恢复重试</td></tr>
+  </tbody>
+</table>
+
+<p>冻结Snapshot上禁止直接编辑、静默重算、覆盖历史值或让AI自动发布。Patch冲突未解决、硬兼容失败、定价正式参数缺失、跨表关联失败或版本链不完整时，发布动作必须不可执行并给出恢复入口。</p>
+
+<h2>分期与仍开放的决定</h2>
+
+<p><b>一期</b>优先完成飞书规则源、稳定ID、模板派生、Series/SKU/Model、Patch、兼容与不变量、词条价值分、快照和本地三表导出，并接入飞书登录。</p>
+
+<p><b>二期</b>实现AI评估与建议，严格遵守“只生成带证据草稿、不自动裁决和发布”的边界。</p>
+
+<p><b>三期</b>实现细粒度权限管理。</p>
+
+<p>仍开放并必须保持可配置的内容包括：降低型词条最终公式、性能强度后续模型、Patch偏移阈值、五维图最终轴与比较上限、AI刷新和审核权限、扩展部位开放时间、职责分离、多级会签，以及定价剩余参数。任何可能改变已发布Snapshot冻结语义的方案都不能自行固化。</p>
+
+<h2>第二部分概括</h2>
+
+<blockquote>Tackle Forger的具体设计围绕同一条原则展开：源规则负责共性，派生层负责确定性计算，Patch负责承载人工判断，校验负责守住边界，Snapshot负责保护正式结果。Series组织概念，SKU组织离散目标拉力，Model承载真实购买型号；飞书负责通用规则源，本地配置Git仓库负责正式交付。每一个最终数字和状态都能回到明确的对象、规则版本、操作和证据。</blockquote>
+
+<h1>结语</h1>
+
+<p>这次设计演进的价值，不是单纯增加了很多功能，而是保护了原始创意，并补齐了它走向真实生产所需要的边界。</p>
+
+<p>交叉相乘提供规模化和一致性；多层曲线与条件规则负责贴近现实；最近标杆负责稳定映射；Patch负责承载人工判断；独立校验负责阻止不合理组合；Trace负责解释；版本和快照负责保护正式结果；飞书与配置导出则把策划工作真正连接到生产环境。</p>
+
+<p>最终形成的不是一个替人填表的计算器，而是一套能够沉淀设计知识、支持团队协作、经得起规则变化并保护已发布内容的钓具生产系统。</p>

@@ -13,6 +13,8 @@ import type {
   RuleGraphNodeRunState,
   WorkspaceState,
 } from "./types";
+import { defaultDataSourceProfiles } from "./data-sources";
+import { migrateWorkspaceState } from "./migrations";
 
 const now = () => new Date().toISOString();
 const uid = (prefix: string) => prefix + "-" + crypto.randomUUID();
@@ -192,7 +194,8 @@ export const defaultRuleGraphs: RuleGraph[] = [
   },
 ];
 
-export function ensureWorkflowFields(state: WorkspaceState): WorkspaceState {
+export function ensureWorkflowFields(input: WorkspaceState): WorkspaceState {
+  const state = migrateWorkspaceState(input);
   const seriesShowcases = (Array.isArray(state.seriesShowcases) ? state.seriesShowcases : []).map((entry) => {
     const coveredTemplates = state.templates.filter(
       (template) =>
@@ -233,6 +236,15 @@ export function ensureWorkflowFields(state: WorkspaceState): WorkspaceState {
   return {
     ...state,
     seriesShowcases,
+    dataSources: Array.isArray(state.dataSources) && state.dataSources.length
+      ? state.dataSources.map((source) => ({
+          ...source,
+          shareUrl: typeof source.shareUrl === "string" ? source.shareUrl : "",
+        }))
+      : defaultDataSourceProfiles(),
+    dataSourceImports: Array.isArray(state.dataSourceImports) ? state.dataSourceImports : [],
+    dataSourceBindings: Array.isArray(state.dataSourceBindings) ? state.dataSourceBindings : [],
+    dataSourceWritebacks: Array.isArray(state.dataSourceWritebacks) ? state.dataSourceWritebacks : [],
     ruleGraphs:
       Array.isArray(state.ruleGraphs) && state.ruleGraphs.length
         ? state.ruleGraphs

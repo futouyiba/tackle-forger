@@ -14,6 +14,9 @@ import type {
   WorkspaceState,
 } from "./types";
 import { defaultRuleGraphs } from "./workflow";
+import { defaultDataSourceProfiles } from "./data-sources";
+import { migrateWorkspaceState } from "./migrations";
+import { hydrateV3Seed } from "./v3-seed";
 
 type Cell = string | number | boolean | null;
 type SheetData = { values: Cell[][]; formulas: Cell[][] };
@@ -578,7 +581,7 @@ export const importedCandidates: Candidate[] = skuRows
   });
 
 export function createSeedState(): WorkspaceState {
-  return {
+  return hydrateV3Seed(migrateWorkspaceState({
     schemaVersion: 1,
     parameters: parameterDefinitions,
     templates: weightTemplates,
@@ -601,6 +604,10 @@ export function createSeedState(): WorkspaceState {
     detailOverrides: [],
     ruleGraphs: structuredClone(defaultRuleGraphs),
     ruleRuns: [],
+    dataSources: defaultDataSourceProfiles(),
+    dataSourceImports: [],
+    dataSourceBindings: [],
+    dataSourceWritebacks: [],
     revisions: [
       {
         revision: 1,
@@ -611,5 +618,5 @@ export function createSeedState(): WorkspaceState {
     ],
     notes: "以《淡水路亚杆轮线装备设计》为权威主表，旧版母表仅用于参数与验算迁移参考。",
     importedAt,
-  };
+  }));
 }

@@ -1,0 +1,115 @@
+# 配置表生产映射指南
+
+本文件记录 `Tackle Forger` 到 `configsDesign` 的已确认事实、必须显式配置的语义，以及映射发布门槛。它不包含 `config_system.toml` 的内容，也不允许把该文件中的秘密写入日志、Manifest 或页面。
+
+## 已确认的编译器语义
+
+- 根清单是 `config.toml`，逻辑表由 `[tables.<logicalName>]` 声明。
+- `workbook` 与 `sheet` 必须从 `config.toml` 解析，不能仅凭文件名猜测。
+- `enums = [{ field, table }]` 中的目标可以是逗号分隔的逻辑表并集。
+- 当前 `configsDesign` 样例单元格使用目标表的 `name` 值作为枚举引用，映射必须显式声明 `enumReferenceField: "name"`。
+- 普通工作表第 1 行是类型、第 2 行是字段名、第 3 行是说明、第 4 行是表达式/空行，数据从第 5 行开始。
+- `NULL` 是编译器使用的显式哨兵；需要空值时由字段映射声明 `nullSentinel`，不能把空字符串、空单元格和 `NULL` 混用。
+
+## 已确认的目标逻辑表
+
+| logical table | workbook | sheet | dataStartRow | 业务键候选 |
+| --- | --- | --- | ---: | --- |
+| `rods` | `tackle.xlsx` | `Rods` | 5 | `id` |
+| `reels` | `tackle.xlsx` | `Reels` | 5 | `id` |
+| `lines` | `tackle.xlsx` | `Lines` | 5 | `id` |
+| `item` | `item.xlsx` | `Item` | 5 | `id` |
+| `goods_basic` | `store.xlsx` | `GoodsBasic` | 5 | `id` |
+| `store_buy` | `store.xlsx` | `StoreBuy` | 5 | `id` |
+
+`store_buy.goods_id` 按 `name` 解析到 `goods_basic`，`goods_basic.item_id` 与 `store_buy.cost_item` 按 `name` 解析到 `item`。
+
+## 两个 Profile 的单位差异
+
+当前检查到的工作簿并非完全同构：
+
+- `xlsx/tackle.xlsx` 的部分重量列使用 `0.01g`；`xlsx_channel/numerical/tackle.xlsx` 对应列使用 `g`。
+- 拉力列在工作簿中使用 `g`，Snapshot 中使用 `kgf`，倍率必须由映射显式声明。
+- 两个 Profile 的列集合也不同，不能共享未校验的 schema hash。
+
+因此单位换算属于 Profile 对应的版本化映射，不应散落在 UI 或写入器代码中。
+
+## 发布前必须补齐
+
+每个 Model 的映射至少需要：
+
+1. Rod、Reel、Line 的数值型 `INT64 id` 与稳定 `name`。
+2. Item、GoodsBasic、StoreBuy 的数值型 `INT64 id` 与稳定 `name`。
+3. `brand`、`series`、`sub_type`、`item_type`、`quality` 等枚举展示值。
+4. 每个目标字段的 Snapshot 来源、常量、倍率、偏移、精度和空值哨兵。
+5. 是否生成 `tackle_set`、`store_recommend`、`store_room`、`pond_store_group`、`pond_store` 等可选行。
+6. mappingId、version、Profile、schema hash 与审批记录。
+
+缺任一必填输入时，生成器会产生 `ValidationIssue(gate=export)` 并跳过整行。
+
+## 最小映射示例
+
+下面只演示结构，不是可发布的生产 ID：
+
+```json
+{
+  "mappingId": "configs-design-qinglu",
+  "version": "1.0.0",
+  "enumReferenceField": "name",
+  "logicalTables": {
+    "rods": {
+      "workbook": "tackle.xlsx",
+      "sheet": "Rods",
+      "required": true,
+      "stableBusinessKey": "id",
+      "dataStartRow": 5
+    }
+  },
+  "rows": [
+    {
+      "rowMappingId": "model:qinglu-1.5-fast:rod",
+      "logicalTable": "rods",
+      "businessKeyField": "id",
+      "columns": {
+        "id": { "kind": "constant", "value": 301499001 },
+        "name": { "kind": "constant", "value": "rod_qinglu_15_fast" },
+        "drag": {
+          "kind": "snapshot_value",
+          "key": "杆最大拉力kgf",
+          "scale": 1000,
+          "precision": 0
+        }
+      }
+    }
+  ]
+}
+```
+
+生产映射必须经过预览、关系校验和人工确认后才能绑定到启用的 `ExportTargetProfile`。
+
+## 本地伴随服务
+
+浏览器不直接访问本机文件系统。管理员在执行端注册允许的 Profile 与已发布 Mapping，伴随服务只监听 `127.0.0.1`，并要求一次性配对令牌。
+
+1. 复制 `docs/config-export-registry.example.json` 到本机受控位置。
+2. 将 `pairing.workspaceId` 替换为公司飞书租户键，并在 `pairing.allowedOpenIds` 登记允许执行交付的用户。
+3. 把审核通过的完整 Mapping 加入 `mappings`，在 Profile 中填写相同的 `mappingId` 与 `mappingVersion`。
+4. 完成业务 ID、枚举值、单位与 schema 审核后，将对应 Profile 的 `enabled` 改为 `true`。
+4. 启动伴随服务：
+
+```powershell
+npm run config-export:companion -- --registry <注册表绝对路径>
+```
+
+启动窗口会显示本机地址与配对令牌文件路径；默认文件为 `<registry>.pairing-token`。进入“配置表交付”，粘贴令牌并连接后，依次完成暂存预览、关系校验、逐 Profile 精确确认和原子提交。
+
+安全边界：
+
+- 注册表由本地管理员维护；网页请求不能传入 `projectRoot`、工作簿路径或 Mapping。
+- 配对令牌长度至少 16 字符，仅写入权限受限的本地令牌文件并保存在当前页面状态，不写入 Workspace、Manifest、审计或控制台日志。
+- 服务默认只接受 `localhost` / `127.0.0.1` 来源；额外来源必须在 `allowedOrigins` 精确登记；所有请求还会校验飞书租户和当前用户。
+- 预览 30 分钟后失效；服务重启后必须重新预览，但已提交任务可按任务包 ID 从幂等记录恢复。
+- 提交重新解析登记 Profile，并检查目标路径、暂存路径、原文件 hash、文件锁与幂等键。
+- 写入前创建备份；多文件提交失败时按已替换文件逆序回滚。
+
+示例注册表故意保持 Profile 停用且不含生产 Mapping，避免把结构示例误当成可发布业务数据。

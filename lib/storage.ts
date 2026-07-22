@@ -66,6 +66,13 @@ function createBlobDocument(): BlobWorkspaceDocument {
   };
 }
 
+let localWorkspaceDocument: BlobWorkspaceDocument | null = null;
+
+function ensureLocalWorkspaceDocument() {
+  localWorkspaceDocument ??= createBlobDocument();
+  return localWorkspaceDocument;
+}
+
 async function readBlobDocument(): Promise<LoadedBlobDocument | null> {
   const result = await get(WORKSPACE_BLOB_PATH, { access: "private" });
   if (!result || result.statusCode !== 200 || !result.stream) return null;
@@ -127,7 +134,13 @@ export async function loadWorkspaceState(): Promise<{
 
   const runtime = await getRuntimeStorage();
   const db = runtime.DB;
-  if (!db) return { state: createSeedState(), revision: 1 };
+  if (!db) {
+    const document = ensureLocalWorkspaceDocument();
+    return {
+      state: ensureWorkflowFields(structuredClone(document.state)),
+      revision: document.revision,
+    };
+  }
   await ensureSchema(db);
   const row = await db
     .prepare("SELECT state_json, revision FROM workspace_state WHERE id = ?")
@@ -217,7 +230,35 @@ export async function saveWorkspaceState(input: {
 
   const runtime = await getRuntimeStorage();
   const db = runtime.DB;
-  if (!db) return { revision: input.baseRevision + 1 };
+  if (!db) {
+    const current = ensureLocalWorkspaceDocument();
+    if (current.revision !== input.baseRevision) {
+      return { revision: current.revision, conflict: true };
+    }
+    const revision = input.baseRevision + 1;
+    const createdAt = new Date().toISOString();
+    const info: RevisionInfo = {
+      revision,
+      author: input.author,
+      message: input.message,
+      createdAt,
+    };
+    const savedState = ensureWorkflowFields(structuredClone(input.state));
+    savedState.revisions = [
+      info,
+      ...(savedState.revisions ?? []).filter((entry) => entry.revision !== revision),
+    ].slice(0, 100);
+    localWorkspaceDocument = {
+      state: savedState,
+      revision,
+      revisions: [
+        { ...info, state: structuredClone(savedState) },
+        ...current.revisions.filter((entry) => entry.revision !== revision),
+      ].slice(0, 100),
+      updatedAt: createdAt,
+    };
+    return { revision };
+  }
   await ensureSchema(db);
   const current = await db
     .prepare("SELECT revision FROM workspace_state WHERE id = ?")
@@ -229,7 +270,8 @@ export async function saveWorkspaceState(input: {
 
   const revision = input.baseRevision + 1;
   const now = new Date().toISOString();
-  const json = JSON.stringify(input.state);
+  const savedState = ensureWorkflowFields(structuredClone(input.state));
+  const json = JSON.stringify(savedState);
   const updated = await db
     .prepare(
       "UPDATE workspace_state SET state_json = ?, revision = ?, updated_by = ?, updated_at = ? WHERE id = ? AND revision = ?",
@@ -262,7 +304,14 @@ export async function listRevisions(): Promise<RevisionInfo[]> {
 
   const runtime = await getRuntimeStorage();
   const db = runtime.DB;
-  if (!db) return createSeedState().revisions;
+  if (!db) {
+    return ensureLocalWorkspaceDocument().revisions.map((entry) => ({
+      revision: entry.revision,
+      author: entry.author,
+      message: entry.message,
+      createdAt: entry.createdAt,
+    }));
+  }
   await ensureSchema(db);
   const result = await db
     .prepare(
@@ -286,7 +335,10 @@ export async function loadRevision(revision: number): Promise<WorkspaceState | n
 
   const runtime = await getRuntimeStorage();
   const db = runtime.DB;
-  if (!db) return revision === 1 ? createSeedState() : null;
+  if (!db) {
+    const entry = ensureLocalWorkspaceDocument().revisions.find((item) => item.revision === revision);
+    return entry ? ensureWorkflowFields(structuredClone(entry.state)) : null;
+  }
   await ensureSchema(db);
   const row = await db
     .prepare("SELECT state_json FROM workspace_revisions WHERE revision = ?")

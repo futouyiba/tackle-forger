@@ -1,0 +1,7 @@
+audit-output/
+crystal/
+docs/
+tests/
+.codex/
+AGENTS.md
+*.log

@@ -43,14 +43,14 @@ flowchart LR
 
 查询直接使用 v3 `SeriesGanttQuery`：
 
-- 同字段 OR、不同字段 AND；文本只搜有权查看的 ID、名称、别名。
+- 同字段 OR、不同字段 AND；文本搜索服务端返回的ID、名称和别名。当前统一Capability策略不做对象级过滤。
 - 支持Collection、Method、Type、品质、功能、部位、生命周期、注意状态、Issue、升级候选、精确targetPullKg、RuleSetVersion。
-- 筛选和排序写入 URL；刷新保留滚动和选择。对象不可见时退回最近可见父级。
+- 筛选和排序写入 URL；刷新保留滚动和选择。对象已删除、路由过期或不属于当前工作区时，回到服务端返回的稳定父链并显示明确原因。
 - 纵轴是版本化重量分段；横轴先按 C/B/A/S，再按启用 Type。
 - Series 覆盖块只连接真实离散 SKU 节点。固定提示：**覆盖范围只表达系列规划跨度，不代表连续插值。**
 - 点击 Series 只更新底部摘要；点击 SKU 只进入 SKU 上下文；只有点击 Model 行才打开右侧预览。单 Model 也不得跳级。
 - 展开 Series 后 SKU 按精确重量升序；展开 SKU 后 Model 使用服务端游标。
-- 聚合返回直接生命周期、全部注意状态、后代计数、可见 Model 数、硬阻断、warning、升级候选。无权知总数时省略总数。
+- 聚合返回直接生命周期、全部注意状态、后代计数、Model总数、硬阻断、warning和升级候选；当前策略不因对象权限隐藏总数或改写为“可见数”。
 - 主状态优先级：硬冲突 > rebase > 待复核 > warning > 待发布 > 升级候选 > 已发布 > 草稿；副状态与计数保留。
 - 矩阵空白和重量分段不创建 SKU；只能通过“添加重量规格”输入精确重量并预览最近模板。
 
@@ -62,7 +62,7 @@ flowchart LR
 Collection（可缺省） → Series → SKU 抽屉 → Model → 冻结快照
 ```
 
-SKU 显示“精确重量 + SKU 抽屉”；Model 显示型号并标明“实际选择/购买对象”；Snapshot 显示版本、冻结时间和 hash。无权父级使用允许披露的占位，不泄露名称、状态、数量。read/edit/review/publish 分别判断；按钮显示服务端 disabledReason 和 requiredCapabilities。按`separation-of-duties/open009-v1`，一期、1.5期、二期和当前规划三期均由服务端返回全员统一的已启用Capability，不建设职责分离；未来只能通过新策略版本替换权限分配，不得由页面角色判断。
+SKU 显示“精确重量 + SKU 抽屉”；Model 显示型号并标明“实际选择/购买对象”；Snapshot 显示版本、冻结时间和 hash。已登录用户的深链接始终返回完整稳定父链，不渲染脱敏父级占位或部分谱系披露。read/edit/review/publish分别消费服务端`ActionAvailability`，按钮显示disabledReason和requiredCapabilities；动作只受功能开关、当前已启用Capability、领域Gate、revision与Manifest等契约约束。按`separation-of-duties/open009-v1`，一期、1.5期、二期和当前规划三期均由服务端返回全员统一的已启用Capability，不建设职责分离或对象级RBAC；未来只能通过新策略版本及同步修订的R1/R2契约改变权限分配，不得由页面角色判断。
 
 ## 4. 生成 Model 候选
 

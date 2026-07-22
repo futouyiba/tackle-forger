@@ -1100,15 +1100,15 @@ UX 设计完成，无需再等待视觉方向或核心交互决策。开发 Agen
 - SKU节点气泡至少显示精确targetPullKg、最近结构标杆/未插值、Model可见数、主状态、Issue与升级数量。
 - 点击SKU节点不因单Model跳级；Model行才打开右侧预览。
 - 矩阵空白/重量分段不支持双击创建；使用明确“添加重量规格”。
-- 权限导致总数不可见时使用“可见N个”，不显示泄密暗示；游标失效时保留筛选和滚动锚点。
+- 当前统一Capability策略始终显示服务端返回的总数与本次查询命中数，不实现“可见N个”或对象级计数隐藏；游标失效时保留筛选和滚动锚点。
 
 ### 15.2 对象上下文与右侧层
 
 - 顶部三段身份条始终为Series / SKU抽屉 / Model；缺当前Model时第三段显示“尚未选择Model”，不把SKU伪装成Model。
 - 面包屑每段同时显示对象类型标签和名称；Snapshot增加锁与版本。
-- 右侧层切换Model时不关闭，主矩阵选中行/滚动位置保持；切到无权限对象时显示受限态，不残留前一对象数据。
+- 右侧层切换Model时不关闭，主矩阵选中行/滚动位置保持；对象已删除、路由过期或不属于当前工作区时显示明确不可用原因，不残留前一对象数据。
 - `Model预览 / AI评估与建议`共用同一层；AI二期未启用时保留明确“二期能力/当前未启用”，不显示假建议。
-- 所有按钮直接消费`ActionAvailability`；禁用按钮保留原因，可请求权限时消费对应ActionLink。
+- 所有按钮直接消费`ActionAvailability`；禁用按钮保留功能开关、领域Gate、revision、Manifest或Capability原因。当前不建设应用内成员管理或请求对象权限动作。
 
 ### 15.3 候选结果
 
@@ -1168,7 +1168,7 @@ UX 设计完成，无需再等待视觉方向或核心交互决策。开发 Agen
 
 - Given 甘特图Series仅一个Model，When 点击SKU节点，Then 仍先进入SKU上下文，不自动跳到Model。
 - Given 服务端返回PUBLISHED + HAS_UPGRADE_CANDIDATE，When 渲染状态，Then 同时显示已发布和有升级候选。
-- Given Action disabled且有request_permission，When 用户查看，Then 按钮说明缺什么权限并提供服务端返回的请求动作。
+- Given 功能开关、领域Gate、revision、Manifest或当前已启用Capability使Action disabled，When 用户查看，Then 按钮显示服务端返回的精确原因和可恢复动作，不自行推断角色或对象权限。
 - Given 五维基准hash不同，When 打开预览，Then 不叠加误导曲线。
 - Given AI功能一期未启用，When 打开AI Tab，Then 核心校验、发布和Model预览仍完整可用。
 - Given 配置目标发生外部修改，When 用户提交，Then 页面保留暂存变更并引导重新预览，不覆盖文件。

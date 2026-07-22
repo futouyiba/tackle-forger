@@ -35,38 +35,29 @@
 4. 先记录基线，再做增量修改；不要顺手修复与当前工作包无关的问题。
 5. 新增领域行为必须有测试；不能只完成界面而缺失可验证的计算内核。
 
-## 3. 关于“词条具体公式”的结论
+## 3. 关于双向百分比词条公式的结论
 
-具体采用哪一种降低类词条公式，不影响总体架构，也不应阻塞其他模块开发。它只属于属性聚合内核中的一个可替换策略。
-
-必须实现为显式配置，而不是散落在页面或各业务函数里的硬编码：
-
-```ts
-type ReductionStackingMode =
-  | "linear_subtraction"
-  | "diminishing_division";
-```
-
-两种模式的参考语义：
+OPEN-001 已于 2026-07-23 确认：全局唯一使用版本化的 `bidirectional_ratio` 策略，不允许按参数、部位、词条族或单条词条切换模式。对同一参数先分别汇总百分比增加与百分比降低，再结算固定值：
 
 ```text
-linear_subtraction:
-  Final = Base × (1 - Σr)
-
-diminishing_division:
-  Final = Base ÷ (1 + Σr)
+B = ΣPercentIncreaseMagnitude
+R = ΣPercentReductionMagnitude
+PercentAdjusted = BaseValue × (1 + B) / (1 + R)
+FinalBeforeBoundary = PercentAdjusted + ΣFlatBonus - ΣFlatReduction
+FinalValue = applyParameterDefinition(FinalBeforeBoundary)
 ```
 
 实现要求：
 
-- 配置保存在工作区级规则设置中，并纳入规则版本。
-- 种子数据可暂以 `diminishing_division` 为默认值，但默认值不代表最终策划结论。
-- 每次派生和发布快照必须记录实际使用的模式与规则版本。
-- 两种模式都要有单元测试，包括零值、单条、多条、极值和确定性重放。
-- 页面只读取配置并展示解释，不自行计算另一套公式。
-- 未来切换模式只能影响新派生结果或明确发起的升级，不得静默改变已发布快照。
+- 正式百分比效果保存 `direction: increase | decrease` 与非负有限 `magnitude`；旧有符号值只在导入阶段确定性归一化，并保留原值、归一化结果与迁移证据。
+- `ReductionStackingPolicyVersion` 冻结公式、归一化、operation 阶段顺序、异常分类、`ParameterDefinition` 引用与执行点、规则源 revision 和公式区域证据；已发布版本不可原地修改。
+- `0%`、`BaseValue = 0`、`B ≥ 1`、`R ≥ 1`以及有限且在词条版本范围内的极值合法。负 Base 使用百分比、单条幅度越界、非法数值、溢出、非有限结果和理论非零结果数值下溢为零，按 v3 第 11.4 节的 Severity、Gate 和不可 waiver 规则阻断。
+- 缺少已发布 `ReductionStackingPolicyVersion` 时只允许明确标记的非正式草稿预览；禁止发布新 Model 或 `ConfigurationSnapshot`。
+- 每次派生、`ModelRevision` 和发布快照都记录实际策略版本与完整 Trace，包括源词条、有序 operation、方向/幅度、Base、B、R、百分比结果、固定值合计、边界前结果、参数定义、规则源证据和输入输出 hash。
+- 新策略版本只使受影响草稿进入 `DIRTY`，经显式重算创建新 revision；已发布 Snapshot 不重算、不改写，只生成 `UpgradeCandidate`。缺少策略版本的历史 Snapshot 不猜测绑定当前策略。
+- 飞书写入不自动激活。生效链仍是技术回读、显式拉取、生成并校验 `FeishuSourceRevision`、发布 `ReductionStackingPolicyVersion` 与 `RuleSetVersion`、再显式重算。
 
-因此，后续 Agent 遇到这一开放项时应继续开发，不需要暂停询问；只有准备把其中一种模式永久删除时才必须请求确认。
+运行时、迁移、校验和回归测试由 Issue #41 在本规范 PR 合并后独立实现。本 handoff 不再保留旧双模式作为新实现入口。
 
 ## 4. 不可更改的领域结论
 
@@ -151,7 +142,7 @@ WP2 与 WP3 可以在 WP1 稳定后并行开发；其余工作包按依赖顺序
 - `FunctionProfile` 与 `functionIntensity`。
 - 可选的 `PerformanceProfile`。
 - `ItemPartDefinition`：部件或子类型的约束与参数元数据。
-- `RuleSetVersion`、工作区规则设置和 `ReductionStackingMode`。
+- `RuleSetVersion`、工作区规则设置和不可变 `ReductionStackingPolicyVersion` 引用。
 - `DerivedProjection`、属性贡献项、规则警告和 Trace。
 
 计算管线必须固定顺序并保留每步贡献：
@@ -305,7 +296,7 @@ Affinity轴与v3固定为：
 - `attribute`：改变具体面板数值。
 - `passive`：只保存元数据、品质分和展示内容。
 
-属性词条需声明作用属性、运算类型、数值、单位、适用范围、叠加组和规则版本。建议支持固定值、百分比加成、乘法修正和降低类策略；具体降低公式由工作区配置决定。
+属性词条需声明作用属性、运算类型、数值、单位、适用范围、叠加组和规则版本。百分比效果必须归一化为 `increase | decrease` 与非负有限幅度，并由全局已发布的 `bidirectional_ratio` 策略结算；不得提供参数级或词条族级公式开关。
 
 被动词条可包含触发条件、描述、标签、稀有度、价值分和未来模拟器引用键，但本工具不得执行触发逻辑，也不得声称验证了模拟效果。
 
@@ -316,7 +307,7 @@ Affinity轴与v3固定为：
 - 编辑Series时先确定Quality，再选择词条；价值分只按原子词条成员汇总，用于校验所选Quality区间并作为自动定价输入。Technology不得重复计分，Quality本身不修改面板。
 - 展开技术时必须能看到成员、来源和最终贡献。
 
-验收：Technology展开后没有双重属性或价值分；被动词条可影响价值分但不改变面板；切换降低公式模式只改变相应属性聚合结果。
+验收：Technology展开后没有双重属性或价值分；被动词条可影响价值分但不改变面板；双向百分比、固定值后置、ParameterDefinition 边界、异常 Gate 和完整 Trace 均与 v3 第 11.3、11.4 节一致。
 
 ### WP6：工作台交互
 
@@ -343,7 +334,7 @@ Affinity轴与v3固定为：
 发布时创建不可变 `ConfigurationSnapshot`，至少冻结：
 
 - 最终属性和部件配置。
-- 所用模板、规则集和公式模式版本。
+- 所用模板、规则集和 `ReductionStackingPolicyVersion`。
 - 匹配结果与完整 Patch 链。
 - 兼容校验、Affinity 分解、品质计算结果。
 - 技术/词条版本与展示信息。
@@ -465,7 +456,7 @@ rtk npm test
 - 要决定 Patch 偏移超过多少时警告或阻断。
 - 需要改变已发布快照的冻结语义。
 
-“降低类词条采用哪种具体公式”不属于阻塞项；按第 3 节同时支持两种模式即可继续。
+OPEN-001 的公式语义已经确认，不再询问或实现双模式开关；运行时实现必须等待本规范 PR 合并，并按第 3 节和 Issue #41 使用全局 `bidirectional_ratio` 策略。
 
 ## 13. 明确不在本轮范围内
 
@@ -488,13 +479,14 @@ docs/tackle-forger-development-spec-v3.md，以及本 handoff。
 本轮只实现 WP0 和 WP1，不提前重写大面积 UI：
 1. 记录当前工作区和测试基线，保留所有用户已有修改；
 2. 建立 WorkspaceState 的顺序迁移入口与旧状态回归 fixture；
-3. 增加 v3 规则层、规则版本、公式模式、派生投影和 Trace 的领域类型；
+3. 增加 v3 规则层、规则版本、版本化双向百分比策略、派生投影和 Trace 的领域类型；
 4. 抽出与 React 无关的确定性规则内核；
 5. 为正常路径、边界、冲突、确定性重放和迁移幂等补测试；
 6. 运行 typecheck、lint、test，并区分既有失败与新增失败。
 
-不要删除旧字段；必要时增加兼容适配层。降低类词条公式必须支持
-linear_subtraction 和 diminishing_division 两种配置，本轮不需要决定唯一公式。
+不要删除旧字段；必要时增加只读兼容和迁移适配层。新派生必须使用
+已发布的全局 bidirectional_ratio 策略；旧有符号值只在导入时归一化并留证，
+历史 Snapshot 不猜测绑定当前策略，也不得被重算或改写。
 完成后汇报数据迁移影响、领域接口、验证证据以及 WP2/WP3 的可接入点。
 ```
 

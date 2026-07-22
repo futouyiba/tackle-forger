@@ -79,7 +79,9 @@
 
 问题统一使用`ValidationIssue`，动作统一使用受权限约束的`ActionLink`。Severity、Gate和State分别表达强度、关口和处理状态：`BLOCKER`不可waive；`ERROR`默认阻断命中Gate，只有版本化WaiverPolicy明确允许且服务端返回动作时才可申请例外；`WARNING`使用ACKNOWLEDGED记录理由，不得伪装成waiver；`INFO`只解释。硬deny/缺require、Snapshot或Trace完整性、必需版本和配置断链不可waive。每项必须覆盖正常、边界、冲突、恢复、权限和版本冻结验收。
 
-Model右侧预览层包含可配置五维图，支持竿轮线同图观察强弱，也支持多个同部位装备同图比较。轴、聚合、缺值和Series基准由版本化 `FiveAxisViewDefinition` 决定，并展示来源。
+Model右侧预览层包含可配置五维图。正式五轴及顺序固定为拉力、耐久、抛投、感度、操控；Model以结算后的`modelFinalPullKg`进入版本化W重量段，竿、轮、线分别绘制，不生成最弱环节汇总线。多装备比较允许混合部位2–5件，轮线抛投按比较顺序继承第一根竿；无竿时为`not_applicable`，缺失或错误不得补0。正式分封顶100，未封顶`comparisonScore`按真实比例绘制到外圈之外。
+
+Series基准只采用`projection_reference`并输出竿、轮、线三条独立结构投影参考线。引用必须由`projection-reference/current-sku-frozen-match/v1`从Snapshot锚定的SKU revision逐部位唯一选择，冻结ProjectionMatch和projection ID/revision、选择器版本、缺失状态及`projectionReferenceSetHash`；不得按默认SKU、查询顺序、同W段其他投影或页面上下文回退。顶点与候选哈希使用`five-axis-hash-input/v1`的JCS/UTF-8/SHA-256闭集契约。旧五维定义和Snapshot只读保留；符合OPEN-005的新定义成为唯一`FORMAL_CURRENT`前，新正式Snapshot必须fail-closed。
 
 “Model预览”和“AI评估与建议”共用右侧层。`AIRecommendation` 记录证据、影响对象、影响属性、动作、建议Patch、生成时间和规则版本。
 

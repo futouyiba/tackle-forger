@@ -1711,6 +1711,7 @@ interface ModelCandidate {
 正常路径：预览输入、生成、确定性排序并自动创建/更新Model草稿。  
 边界：0结果显示排除统计；截断明确提示。  
 冲突：运行中revision变化则superseded且不可选择；Recipe与冗余约束/排序断言不一致、`recipeInput`尝试覆盖冻结配置、旧组件分支进入新写入、组件revision/注册表revision/hash不一致均在枚举或物化前fail-closed。
+
 恢复：复制最新输入重跑；凭requestId恢复/重试。  
 权限：generate与materialize分离，自动物化也必须由服务端重新鉴权。  
 验收：Given 高Affinity候选命中deny，When 完成，Then 只在排除统计；合法低分候选仍可展示。Given 请求尝试把Recipe A与约束集B组合，When 服务端解析，Then 在枚举前返回`CANDIDATE_CONSTRAINT_REF_MISMATCH`。Given 兼容请求的排序版本不同或`recipeInput`包含排序/引用覆盖键，When 校验，Then 分别返回`CANDIDATE_SORT_DEFINITION_MISMATCH`或`CANDIDATE_RECIPE_INPUT_OVERRIDE_FORBIDDEN`且不生成候选。Given v14复制的rod/reel/line约束均为`NEEDS_REVIEW`，When 打开候选工作台，Then 三个部位分别显示来源和复核状态，且不得自动批准或发布。Given 旧组件读取为`LEGACY_UNVERSIONED_COMPONENT_REF`，When 尝试物化或创建新Snapshot，Then 返回`LEGACY_COMPONENT_REF_NOT_MATERIALIZABLE`且旧rawPayload/hash不变。Given 合法候选已物化，When 查看Model，Then 只有带组件/注册表revision与hash的`VERSIONED_COMPONENT_REF`进入新`componentSelections`，搜索约束仍由Recipe引用的`PartConstraintSet`拥有。Given 注册表发布新revision，When 重放旧Candidate/Model/Snapshot，Then 仍使用冻结旧revision且hash不变，不读取“当前组件”。

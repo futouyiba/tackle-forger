@@ -1059,7 +1059,9 @@ collaborationRevision, expectedCollaborationRevision,
 supersedesEventId, relatedRuleProposalId, eventHash, mirrorWriteId
 ```
 
-首版`eventType`固定为`NOTE_ADDED`、`REVIEW_OPINION_ADDED`、`SHARED_RULE_SUGGESTED`、`SHARED_RULE_SUGGESTION_ACCEPTED`、`SHARED_RULE_SUGGESTION_REJECTED`、`SHARED_RULE_SUGGESTION_WITHDRAWN`和`CORRECTION_ADDED`。更正事件引用`supersedesEventId`；共享规则建议的当前状态由事件流折叠计算，不保存可覆盖旧历史的单一状态单元格。
+首版`eventType`固定为`NOTE_ADDED`、`REVIEW_OPINION_ADDED`、`SHARED_RULE_SUGGESTED`、`SHARED_RULE_SUGGESTION_ACCEPTED`、`SHARED_RULE_SUGGESTION_REJECTED`、`SHARED_RULE_SUGGESTION_WITHDRAWN`和`CORRECTION_ADDED`。`SHARED_RULE_SUGGESTION_ACCEPTED/REJECTED/WITHDRAWN`必须通过`supersedesEventId`引用其目标`SHARED_RULE_SUGGESTED`；目标必须已经存在、属于同一个`tuple(workspaceId: string, patchId: string, patchRevision: integer)`事件流且类型恰为`SHARED_RULE_SUGGESTED`，禁止引用其他状态事件或跨流事件。缺失、错误类型、跨流引用和循环引用均使追加失败并产生协作流冲突。
+
+每条建议按原始`SHARED_RULE_SUGGESTED.collaborationEventId`独立折叠：建议事件创建`OPEN`状态，按`collaborationRevision`只接受第一条合法的`ACCEPTED`、`REJECTED`或`WITHDRAWN`终态事件；同一建议的后续终态事件视为冲突，不覆盖既有结论。`CORRECTION_ADDED`也必须用`supersedesEventId`引用同流既有事件，只补充更正证据而不改变建议终态；需要改变已形成的业务结论时创建新的建议事件。由此，同一Patch revision存在多条建议时也能按目标事件ID确定性折叠，不保存可覆盖旧历史的单一状态单元格。
 
 #### 14.4.1 规范化JSON与SHA-256契约
 
@@ -1093,19 +1095,27 @@ supersedesPatchId
 
 #### 14.4.2 幂等、组级事务与镜像同步
 
-明细幂等键、组级事务边界和同步命令幂等键分别为：
+明细幂等键和组级事务边界在数据库内必须使用带类型的真正复合唯一键，不得拼接为无边界字符串；同步命令跨系统需要标量键时，使用JCS对象摘要：
 
 ```text
-detailKey = patchId + patchRevision + operationId
-groupKey = patchId + patchRevision
-syncIdempotencyKey = workspaceId + patchId + patchRevision + patchRevisionHash
+detailKey = tuple(patchId: string, patchRevision: integer, operationId: string)
+groupKey = tuple(patchId: string, patchRevision: integer)
+syncIdempotencyKey = sha256Hex(JCS({
+  "keyType": "patch-mirror-sync/v1",
+  "workspaceId": workspaceId,
+  "patchId": patchId,
+  "patchRevision": patchRevision,
+  "patchRevisionHash": patchRevisionHash
+}))
 ```
+
+上述JCS对象中的`workspaceId/patchId/patchRevisionHash`必须是JSON string，`patchRevision`必须是JSON integer。若存储或协议要求把`detailKey/groupKey`表示成单一字符串，必须分别对包含`keyType="patch-mirror-detail/v1"`或`keyType="patch-mirror-group/v1"`及全部带字段名、带JSON类型成员的JCS对象计算SHA-256；禁止使用分隔符约定、隐式`toString()`或裸值连接。键字段缺失或类型不符直接报schema错误，不做字符串强制转换。
 
 同一Patch revision的所有远端明细共享一个`mirrorWriteId`。同步固定执行：读取本地完整组→写前回读远端→校验`expectedRemoteGroupHash`→续写缺失明细→回读完整组→校验操作数量、明细键、`operationIndex`、行哈希和整组哈希。全部一致后才可标记`SYNCED`。相同明细键但内容哈希不同视为冲突，不得自动覆盖；修改业务内容必须创建新Patch revision或完成rebase。
 
 #### 14.4.3 协作事件原子compare-and-append
 
-`collaborationRevision`的作用域固定为`workspaceId + patchId + patchRevision`对应的一条本地协作事件流；不同Patch revision互不共享计数。revision从`1`开始严格递增，首个追加命令使用`expectedCollaborationRevision=0`。`collaborationRevision`由服务端分配，客户端和飞书均不得自行选择、回退或填补。
+`collaborationRevision`的作用域固定为复合键`tuple(workspaceId: string, patchId: string, patchRevision: integer)`对应的一条本地协作事件流；不同Patch revision互不共享计数，禁止用裸字符串连接表示流键。revision从`1`开始严格递增，首个追加命令使用`expectedCollaborationRevision=0`。`collaborationRevision`由服务端分配，客户端和飞书均不得自行选择、回退或填补。
 
 追加命令必须携带`collaborationEventId`、`expectedCollaborationRevision`和独立`idempotencyKey`，并在本地`PatchLedger`事务中原子执行：锁定事件流头→按幂等键恢复既有结果→比较expected与当前head→分配`head + 1`→持久化不可变事件及新head。只有本地提交成功后才异步镜像到飞书；远端追加成功与否不改变本地事件已经成立的事实，也不能由飞书分配revision。
 
@@ -1130,9 +1140,9 @@ syncIdempotencyKey = workspaceId + patchId + patchRevision + patchRevisionHash
 | `PATCH_MIRROR_SCHEMA_MISMATCH` | `BLOCKER / NONE` | 停止远端同步；修复schema后重新回读 |
 | `PATCH_MIRROR_HASH_MISMATCH` | `BLOCKER / NONE` | 保存本地与远端规范Payload及摘要；禁止自动覆盖 |
 | `PATCH_COLLABORATION_STREAM_CONFLICT` | `ERROR / NONE` | 隔离重复、间隙或hash异常事件；按本地事件流补偿 |
-| `PATCH_SUBJECT_ORPHANED` | `ERROR / PUBLISH` | 保留原ID与历史引用；恢复稳定引用或人工迁移，禁止按名称重绑 |
+| `PATCH_SUBJECT_ORPHANED` | `ERROR / REVIEW` | 保留原ID与历史引用；阻止批准并约束后续发布；恢复稳定引用或人工迁移，禁止按名称重绑 |
 
-镜像Issue的`gate=NONE`表示不阻断本地Patch重放和既有Snapshot，但对应镜像组不能显示`SYNCED`。`ORPHANED`阻止Patch参与新的批准、重放和发布；既有Snapshot不受影响。行排序或移动不影响关联；隐藏和过滤行仍必须读取；删除或清空按缺行处理。
+镜像Issue的`gate=NONE`表示不阻断本地Patch重放和既有Snapshot，但对应镜像组不能显示`SYNCED`。`PATCH_SUBJECT_ORPHANED`使用`gate=REVIEW`阻止批准，并按统一Gate语义约束后续发布；重放不是Gate，服务端必须另外把该Patch的重放、rebase和普通编辑`ActionAvailability`设为禁用，只保留查看证据与`patch.subject.migrate`恢复动作。既有Snapshot不受影响。行排序或移动不影响关联；隐藏和过滤行仍必须读取；删除或清空按缺行处理。
 
 镜像动作必须分别声明Capability：普通写入使用`patch.mirror.write`，镜像拉取使用`patch.mirror.pull`，只读检查使用`patch.mirror.inspect`，按幂等键补写缺失内容使用`patch.mirror.repair`，显式按本地权威重建冲突组使用`patch.mirror.rebuild_from_local`，修改远端表头/保护边界使用`patch.mirror.schema.repair`，迁移本地主体稳定引用使用`patch.subject.migrate`。`repair`不得覆盖内容冲突；`rebuild_from_local`、`schema.repair`和`subject.migrate`必须二次确认、记录before/after证据并在执行时重新鉴权。当前由`separation-of-duties/open009-v1`分配这些Capability；OPEN-010不得自行扩大授权。
 

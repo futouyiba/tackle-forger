@@ -14,6 +14,7 @@
 > OPEN-007契约复核基线：`3cb6609c237c0c23d108bf305124e24f18980fa8`（2026-07-23 00:43:07 +0800）；本轮只修订文档，不把2026-07-23已决目标语义冒充为当前运行时能力。
 > 本轮完整验证时间：2026-07-23 01:57:07 +0800；在上述OPEN-007代码基线上运行`npm run typecheck`、`npm run lint`与`npm test`。
 > PR #11最新main重整复核：2026-07-23 07:30:24 +0800，基线`origin/main@18f99e136320f1989bdeb7f61312b5ea4493bae7`；根应用`npm run typecheck`、`npm run lint`、`npm test`通过（208项主测试与1项生产构建/渲染测试），历史workspace的`pnpm -r typecheck/lint/test/build`通过；根Lint为0 error、保留main已有1条warning。
+> 最后对齐v3：2026-07-23；OPEN-010契约状态同步于2026-07-23 03:33:57 +0800，依据Issue #19与PR #23父提交`80487188d7bb6850b8f35f887dbba27f42125043`；只更新远端契约/阻断事实，没有重新审计代码或重跑测试。
 > 对齐基线：v3 领域规范 > product-design-completion-v3 > implementation/requirements handoff > ux-design-v1 与 prototype 视觉证据。  
 > 状态定义：已实现、部分实现、缺失、因 v3 冲突而不采纳。
 
@@ -35,7 +36,7 @@
 | PatchLedger 权威账本 | 已实现 | Workspace schema v17 + PatchLedger schema v4；稳定 ID、仅 ACTIVE 重放、revision 幂等、ORPHANED、Rebase/吸收均生成新 revision、Snapshot 引用冻结 | 无 |
 | Patch 台账工作台 | 已实现 | 治理区一级入口展示 revision、稳定对象、操作顺序、基线、镜像状态、Snapshot 引用、迁移待复核及 RuleSet 发布后吸收评估；支持创建、审核、显式启用 | 镜像写入/拉取按钮在远端连接器可用前保持禁用 |
 | 个体 Patch 汇总、规则草稿与吸收 | 已实现 | Patch 确定性归组后由独立权限创建 RuleSourceChangeDraft；新 RuleSet 下以逐操作 Trace 评估完全/部分/未覆盖/Rebase，保存 assessment 并创建新 revision，不改旧 Snapshot | 草稿远端写回仍需已确认的通用规则页写入契约 |
-| 飞书 Patch 台账镜像 | 部分实现 | 已有领域契约、独立权限、幂等命令、部分失败和回读恢复状态；不会伪造 SYNCED | 主工作簿尚无已确认 Patch 台账 sheet_id/机器列，无法实施真实远端写入 |
+| 飞书 Patch 台账镜像 | 部分实现 | 已有领域契约、独立权限、幂等命令、部分失败和回读恢复状态；已确认`Patch台账/edyFx9`、`A:AJ`机器区和`AL:AY`协作事件区；不会伪造 SYNCED | 远端表头尚未物化，机器区/协作区保护边界和连接器写入、回读、缺行、篡改、hash及并发冲突联调尚未完成 |
 | 硬兼容与 Affinity | 已实现 | deny/require 与软分值分离；高 Affinity 不覆盖 deny；低分合法候选仍可生成 | 无 |
 | 属性词条、被动词条与 Technology | 部分实现 | Technology只展开成员、按affixId去重、被动参与价值分但不执行模拟器逻辑；但运行时仍保留`ReductionStackingMode = linear_subtraction | diminishing_division`、旧`percent_bonus/flat_bonus/reduction`字段与未冻结累加顺序 | 按[Issue #41](https://github.com/futouyiba/tackle-forger/issues/41)迁移到`direction + 非负magnitude`规范DTO、唯一`bidirectional_ratio`、完整operation顺序、binary64确定性模型、冲突隔离、Trace/hash和历史Snapshot兼容；在主工作簿规则与策略版本发布前只允许非正式预览 |
 | 品质评分 | 部分实现 | 人工选择品质、组合矩阵、Technology/Affix去重、功能系数与source=quality Trace已存在 | 2026-07-23新契约要求S包含100、>100阻断并彻底移除Performance乘数/Trace；当前内核仍有`performanceScoringEnabled/performanceScoreFactor`与旧边界冲突逻辑 |
@@ -69,7 +70,7 @@
 ## 3. 当前外部阻断
 
 1. OPEN-001：`FG数值设计v3-总表/oJO4Gi` revision `17173`只作决策证据；唯一权威主工作簿revision `3259`的`04_词条/zrVOxd`尚无稳定`ruleId + parameterKey`机器规则。完成迁入、回读、显式拉取和策略/RuleSet发布前，运行时只能非正式预览，Model/Snapshot发布与正式导出必须阻断。
-2. OPEN-010：飞书主工作簿尚未提供已确认的Patch台账工作表sheet_id、机器列布局和协作字段权限，因此真实镜像写入/拉取不可启用。
+2. OPEN-010：已确认飞书主工作簿`Patch台账/edyFx9`、`A:AK`机器区与`AM:BA`协作事件区；远端表头尚未物化，机器区/协作区保护边界和连接器写入、回读、缺行、篡改、hash及并发冲突联调尚未完成，因此真实镜像写入/拉取仍不可启用。
 3. Vercel评审项目当前只配置`BLOB_READ_WRITE_TOKEN`，缺少`FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_TENANT_KEY`、`FEISHU_REDIRECT_URI`和`FEISHU_SESSION_SECRET`；首页HTTP 200，但会话端点返回503/`AUTH-CONFIG-001`，需部署方提供公司应用凭据并在飞书开放平台登记回调。
 4. OPEN-007产品语义已于2026-07-23确定；当前阻断是飞书机器源仍需修订，且运行时尚未实现S=100、无Performance乘数、双输出舍入、购买最低价和超300M WARNING确认。完成前不得把旧Draft发布为符合新契约的PricingPolicyVersion。
 5. OPEN-006产品策略已经确认；真实AI连接器仍须由[Issue #25](https://github.com/futouyiba/tackle-forger/issues/25)完成实现、测试和显式启用，在此之前保持禁用且不得发送真实数据。

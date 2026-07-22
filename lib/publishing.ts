@@ -155,6 +155,8 @@ export function publishConfigurationSnapshot(
     if (
       input.fiveAxisPreview.fiveAxisDefinitionId !== definition.definitionId
       || input.fiveAxisPreview.fiveAxisDefinitionVersion !== definition.version
+      || input.fiveAxisPreview.fiveAxisDefinitionRevision !== definition.revision
+      || input.fiveAxisPreview.fiveAxisDefinitionHash !== definition.definitionHash
       || input.fiveAxisPreview.fiveAxisRuleVersion !== definition.fiveAxisRuleVersion
       || input.fiveAxisPreview.sourceRevision !== definition.sourceRevision
       || input.fiveAxisPreview.tackleFitComparison.fiveAxisDefinitionId !== definition.definitionId

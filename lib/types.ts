@@ -885,6 +885,10 @@ export interface ModelFiveAxisPreview {
   fishWeightGradeId: string;
   fiveAxisDefinitionId: string;
   fiveAxisDefinitionVersion: string;
+  /** 新预览冻结定义修订；历史 Snapshot 缺失时仍保持只读兼容。 */
+  fiveAxisDefinitionRevision?: number;
+  /** 新预览冻结定义内容哈希；历史 Snapshot 不补写，避免改变 contentHash。 */
+  fiveAxisDefinitionHash?: string;
   fiveAxisRuleVersion: string;
   vertexSetHash: string;
   sourceRevision: string;

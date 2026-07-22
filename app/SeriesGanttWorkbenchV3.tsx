@@ -31,11 +31,15 @@ import {
 import { buildSamePartComparison, calculateModelFiveAxisPreview, fiveAxisPlotRatio } from "@/lib/five-axis";
 import { deterministicHash } from "@/lib/rule-kernel";
 import {
-  querySeriesGantt,
+  fetchSeriesGanttList,
+  fetchSeriesGanttModels,
+  fetchSeriesGanttSkus,
   seriesGanttQueryFromSearchParams,
   seriesGanttQueryToSearchParams,
+  type SeriesGanttFacets,
+  type SeriesGanttListResponse,
   type SeriesGanttQuery,
-} from "@/lib/series-gantt-query";
+} from "@/lib/series-gantt-contract";
 import type {
   ConfigurationSnapshot,
   FiveAxisComparisonView,
@@ -173,7 +177,8 @@ function MultiSelectFilter<T extends string | number>({
 function initialQuery(): SeriesGanttQuery {
   if (typeof window === "undefined") return { sort: "quality_type" };
   const query = seriesGanttQueryFromSearchParams(new URL(window.location.href).searchParams);
-  return { sort: "quality_type", ...query };
+  delete query.cursor;
+  return { sort: "quality_type", pageSize: 24, ...query };
 }
 
 function initialSelection(key: "series" | "sku" | "model" | "snapshot") {
@@ -775,42 +780,75 @@ export function SeriesGanttWorkbenchV3({
   const [selectedSkuId, setSelectedSkuId] = useState(() => initialSelection("sku"));
   const [drawerModelId, setDrawerModelId] = useState(() => initialSelection("model"));
   const [drawerSnapshotId, setDrawerSnapshotId] = useState(() => initialSelection("snapshot"));
-  const [modelCursor, setModelCursor] = useState(12);
   const [comparisonModelIds, setComparisonModelIds] = useState<string[]>([]);
   const [candidateOpen, setCandidateOpen] = useState(false);
   const [seriesCreateDraft, setSeriesCreateDraft] = useState<SeriesCreateDraft | null>(null);
+  const [blocks, setBlocks] = useState<SeriesGanttListResponse["blocks"]>([]);
+  const [facets, setFacets] = useState<SeriesGanttFacets>({ weights: [], typeIds: [], issueCodes: [], ruleSetVersions: [] });
+  const [listRevision, setListRevision] = useState<number>();
+  const [nextSeriesCursor, setNextSeriesCursor] = useState<string>();
+  const [totalVisibleSeries, setTotalVisibleSeries] = useState(0);
+  const [listLoading, setListLoading] = useState(true);
+  const [listLoadingMore, setListLoadingMore] = useState(false);
+  const [listError, setListError] = useState("");
+  const [loadedSeriesSkus, setLoadedSeriesSkus] = useState<SkuDrawer[]>([]);
+  const [loadedSeriesId, setLoadedSeriesId] = useState("");
+  const [nextSkuCursor, setNextSkuCursor] = useState<string>();
+  const [skusLoading, setSkusLoading] = useState(false);
+  const [loadedModels, setLoadedModels] = useState<PurchasableModel[]>([]);
+  const [loadedModelSkuId, setLoadedModelSkuId] = useState("");
+  const [nextModelCursor, setNextModelCursor] = useState<string>();
+  const [modelTotal, setModelTotal] = useState(0);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const selectedSeriesIdRef = useRef(selectedSeriesId);
 
-  const blocks = useMemo(() => querySeriesGantt({
-    query,
-    series: state.seriesDefinitions,
-    skus: state.skuDrawers,
-    models: state.purchasableModels,
-    itemTypes: state.itemTypeProfiles,
-    upgrades: state.upgradeCandidates,
-  }), [query, state]);
-  const filterCatalog = useMemo(() => querySeriesGantt({
-    query: { sort: "quality_type" },
-    series: state.seriesDefinitions,
-    skus: state.skuDrawers,
-    models: state.purchasableModels,
-    itemTypes: state.itemTypeProfiles,
-    upgrades: state.upgradeCandidates,
-  }), [state]);
+  useEffect(() => {
+    selectedSeriesIdRef.current = selectedSeriesId;
+  }, [selectedSeriesId]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    queueMicrotask(() => {
+      if (!controller.signal.aborted) setListLoading(true);
+    });
+    void fetchSeriesGanttList({
+      query: { ...query, cursor: undefined },
+      anchorSeriesId: selectedSeriesIdRef.current || undefined,
+      signal: controller.signal,
+    })
+      .then(({ payload, recoveredFromStaleCursor }) => {
+        if (controller.signal.aborted) return;
+        setBlocks(payload.anchorBlock && !payload.blocks.some((block) => block.seriesId === payload.anchorBlock?.seriesId)
+          ? [...payload.blocks, payload.anchorBlock]
+          : payload.blocks);
+        setFacets(payload.facets);
+        setListRevision(payload.revision);
+        setNextSeriesCursor(payload.page.nextCursor);
+        setTotalVisibleSeries(payload.page.totalVisible);
+        setListError("");
+        if (recoveredFromStaleCursor) notify("甘特图数据已变化，已保留筛选并从第一页恢复。");
+      })
+      .catch((caught) => {
+        if (controller.signal.aborted) return;
+        setListError(caught instanceof Error ? caught.message : "钓具系列甘特图加载失败。");
+        setBlocks([]);
+        setNextSeriesCursor(undefined);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setListLoading(false);
+      });
+    return () => controller.abort();
+  }, [notify, query, state]);
+
   const visibleSeriesIds = useMemo(() => new Set(blocks.map((block) => block.seriesId)), [blocks]);
   const selectedSeries = state.seriesDefinitions.find((series) =>
     series.id === selectedSeriesId && visibleSeriesIds.has(series.id))
     ?? state.seriesDefinitions.find((series) => series.id === blocks[0]?.seriesId);
   const selectedBlock = blocks.find((block) => block.seriesId === selectedSeries?.id);
-  const seriesSkus = selectedSeries
-    ? state.skuDrawers.filter((sku) => sku.seriesId === selectedSeries.id)
-      .sort((left, right) => left.targetWeightKg - right.targetWeightKg || left.id.localeCompare(right.id))
-    : [];
+  const seriesSkus = loadedSeriesId === selectedSeries?.id ? loadedSeriesSkus : [];
   const selectedSku = seriesSkus.find((sku) => sku.id === selectedSkuId) ?? seriesSkus[0];
-  const models = selectedSku
-    ? state.purchasableModels.filter((model) => selectedSku.modelIds.includes(model.id))
-      .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id))
-    : [];
-  const visibleModels = models.slice(0, modelCursor);
+  const models = loadedModelSkuId === selectedSku?.id ? loadedModels : [];
+  const visibleModels = models;
   const deepLink = useMemo(() => resolveProductDeepLink({
     workspaceId,
     requested: {
@@ -834,22 +872,12 @@ export function SeriesGanttWorkbenchV3({
       ? state.configurationSnapshots.find((snapshot) => snapshot.id === drawerModel.configurationSnapshotId)
       : undefined;
   const typeIds = useMemo(
-    () => [...new Set(blocks.map((block) => block.typeId))].sort(),
-    [blocks],
+    () => facets.typeIds,
+    [facets.typeIds],
   );
-  const weights = useMemo(
-    () => [...new Set(filterCatalog.flatMap((block) => block.skuNodes.map((node) => node.targetWeightKg)))]
-      .sort((left, right) => left - right),
-    [filterCatalog],
-  );
-  const issueCodes = useMemo(
-    () => [...new Set(filterCatalog.flatMap((block) => block.aggregate.issueCodes))].sort(),
-    [filterCatalog],
-  );
-  const ruleSetVersions = useMemo(
-    () => [...new Set(filterCatalog.flatMap((block) => block.aggregate.ruleSetVersions))].sort(),
-    [filterCatalog],
-  );
+  const weights = facets.weights;
+  const issueCodes = facets.issueCodes;
+  const ruleSetVersions = facets.ruleSetVersions;
   const generateAvailability = actionAvailabilities.generate_candidates;
   const openSeriesAvailability = actionAvailabilities.open_series;
   const previewModelAvailability = actionAvailabilities.preview_model;
@@ -922,13 +950,148 @@ export function SeriesGanttWorkbenchV3({
     };
   }, []);
 
+  useEffect(() => {
+    const seriesId = selectedSeries?.id;
+    if (!seriesId) return;
+    const controller = new AbortController();
+    queueMicrotask(() => {
+      if (!controller.signal.aborted) setSkusLoading(true);
+    });
+    void fetchSeriesGanttSkus({ seriesId, pageSize: 50, signal: controller.signal })
+      .then(({ payload }) => {
+        if (controller.signal.aborted) return;
+        setLoadedSeriesSkus(payload.skus);
+        setLoadedSeriesId(seriesId);
+        setNextSkuCursor(payload.page.nextCursor);
+      })
+      .catch((caught) => {
+        if (!controller.signal.aborted) notify(caught instanceof Error ? caught.message : "SKU 抽屉加载失败。");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setSkusLoading(false);
+      });
+    return () => controller.abort();
+  }, [notify, selectedSeries?.id, listRevision]);
+
+  useEffect(() => {
+    const skuId = selectedSku?.id;
+    if (!skuId) return;
+    const controller = new AbortController();
+    queueMicrotask(() => {
+      if (!controller.signal.aborted) setModelsLoading(true);
+    });
+    void fetchSeriesGanttModels({ skuId, pageSize: 12, signal: controller.signal })
+      .then(({ payload }) => {
+        if (controller.signal.aborted) return;
+        setLoadedModels(payload.models);
+        setLoadedModelSkuId(skuId);
+        setNextModelCursor(payload.page.nextCursor);
+        setModelTotal(payload.page.totalVisible);
+      })
+      .catch((caught) => {
+        if (!controller.signal.aborted) notify(caught instanceof Error ? caught.message : "Model 加载失败。");
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setModelsLoading(false);
+      });
+    return () => controller.abort();
+  }, [listRevision, notify, selectedSku?.id]);
+
+  const loadMoreSeries = async () => {
+    if (!nextSeriesCursor || listLoadingMore) return;
+    setListLoadingMore(true);
+    try {
+      const { payload, recoveredFromStaleCursor } = await fetchSeriesGanttList({ query, cursor: nextSeriesCursor, anchorSeriesId: selectedSeries?.id });
+      if (recoveredFromStaleCursor || payload.revision !== listRevision) {
+        setBlocks(payload.anchorBlock && !payload.blocks.some((block) => block.seriesId === payload.anchorBlock?.seriesId)
+          ? [...payload.blocks, payload.anchorBlock]
+          : payload.blocks);
+        notify("甘特图数据已变化，已保留筛选并从第一页恢复。");
+      } else {
+        setBlocks((current) => {
+          const seen = new Set(current.map((block) => block.seriesId));
+          return [...current, ...payload.blocks.filter((block) => !seen.has(block.seriesId))];
+        });
+      }
+      setFacets(payload.facets);
+      setListRevision(payload.revision);
+      setNextSeriesCursor(payload.page.nextCursor);
+      setTotalVisibleSeries(payload.page.totalVisible);
+    } catch (caught) {
+      notify(caught instanceof Error ? caught.message : "Series 分页加载失败。");
+    } finally {
+      setListLoadingMore(false);
+    }
+  };
+
+  const loadMoreSkus = async () => {
+    if (!selectedSeries || !nextSkuCursor || skusLoading) return;
+    setSkusLoading(true);
+    try {
+      const { payload, recoveredFromStaleCursor } = await fetchSeriesGanttSkus({
+        seriesId: selectedSeries.id,
+        cursor: nextSkuCursor,
+        pageSize: 50,
+      });
+      if (recoveredFromStaleCursor || payload.revision !== listRevision) {
+        setLoadedSeriesSkus(payload.skus);
+        setLoadedSeriesId(selectedSeries.id);
+        notify("Series 子对象已变化，SKU 列表已从第一页恢复。");
+      } else {
+        setLoadedSeriesSkus((current) => {
+          const seen = new Set(current.map((sku) => sku.id));
+          return [...current, ...payload.skus.filter((sku) => !seen.has(sku.id))];
+        });
+      }
+      setNextSkuCursor(payload.page.nextCursor);
+    } catch (caught) {
+      notify(caught instanceof Error ? caught.message : "SKU 分页加载失败。");
+    } finally {
+      setSkusLoading(false);
+    }
+  };
+
+  const loadMoreModels = async () => {
+    if (!selectedSku || !nextModelCursor || modelsLoading) return;
+    setModelsLoading(true);
+    try {
+      const { payload, recoveredFromStaleCursor } = await fetchSeriesGanttModels({
+        skuId: selectedSku.id,
+        cursor: nextModelCursor,
+        pageSize: 12,
+      });
+      if (recoveredFromStaleCursor || payload.revision !== listRevision) {
+        setLoadedModels(payload.models);
+        setLoadedModelSkuId(selectedSku.id);
+        notify("SKU 子对象已变化，Model 列表已从第一页恢复。");
+      } else {
+        setLoadedModels((current) => {
+          const seen = new Set(current.map((model) => model.id));
+          return [...current, ...payload.models.filter((model) => !seen.has(model.id))];
+        });
+      }
+      setNextModelCursor(payload.page.nextCursor);
+      setModelTotal(payload.page.totalVisible);
+    } catch (caught) {
+      notify(caught instanceof Error ? caught.message : "Model 分页加载失败。");
+    } finally {
+      setModelsLoading(false);
+    }
+  };
+
   const selectSeries = (seriesId: string) => {
-    setModelCursor(12);
+    setLoadedSeriesId("");
+    setNextSkuCursor(undefined);
+    setLoadedModelSkuId("");
+    setNextModelCursor(undefined);
+    setSkusLoading(true);
     setSelectedSeriesId(seriesId);
     setSelectedSkuId("");
   };
   const selectSku = (seriesId: string, skuId: string) => {
-    setModelCursor(12);
+    setLoadedModelSkuId("");
+    setNextModelCursor(undefined);
+    setModelsLoading(true);
     setSelectedSeriesId(seriesId);
     setSelectedSkuId(skuId);
   };
@@ -1073,11 +1236,13 @@ export function SeriesGanttWorkbenchV3({
         <select value={query.sort ?? "quality_type"} onChange={(event) => setQuery((current) => ({ ...current, sort: event.target.value as SeriesGanttQuery["sort"] }))}>
           <option value="quality_type">品质 / 类型</option><option value="name">名称</option><option value="updated_desc">最近更新</option>
         </select>
-        <button type="button" onClick={() => setQuery({ sort: "quality_type" })}>重置</button>
-        <em>{blocks.length} 个 Series</em>
+        <button type="button" onClick={() => setQuery({ sort: "quality_type", pageSize: 24 })}>重置</button>
+        <em>{listLoading ? "加载中…" : `${blocks.length}/${totalVisibleSeries} 个 Series`}</em>
       </section>
 
       <div className="gantt-continuity-note"><Info size={16} /><strong>覆盖范围只表达系列规划跨度，不代表连续插值。</strong></div>
+
+      {listError ? <div className="gantt-unavailable"><AlertTriangle size={18} /><div><strong>服务端列表加载失败</strong><span>{listError}</span></div></div> : null}
 
       <section className="gantt-matrix-shell">
         <div className="gantt-quality-header" style={{ gridTemplateColumns: `88px repeat(${columnCount}, minmax(142px, 1fr))` }}>
@@ -1129,7 +1294,9 @@ export function SeriesGanttWorkbenchV3({
         </div>
       </section>
 
-      {!blocks.length ? <div className="gantt-empty"><PackageSearch size={34} /><h2>没有符合筛选的 Series</h2><p>空白不会创建 SKU。可重置筛选，或创建 Series 并确认明确的离散目标拉力规格。</p><button type="button" onClick={() => setQuery({ sort: "quality_type" })}>重置筛选</button></div> : null}
+      {nextSeriesCursor ? <button type="button" className="gantt-load-more" disabled={listLoadingMore} onClick={() => void loadMoreSeries()}>{listLoadingMore ? "加载中…" : `加载更多 Series（${blocks.length}/${totalVisibleSeries}）`}</button> : null}
+
+      {!listLoading && !listError && !blocks.length ? <div className="gantt-empty"><PackageSearch size={34} /><h2>没有符合筛选的 Series</h2><p>空白不会创建 SKU。可重置筛选，或创建 Series 并确认明确的离散目标拉力规格。</p><button type="button" onClick={() => setQuery({ sort: "quality_type", pageSize: 24 })}>重置筛选</button></div> : null}
 
       {selectedSeries ? (
         <section className="gantt-summary">
@@ -1147,6 +1314,8 @@ export function SeriesGanttWorkbenchV3({
           </div>
           <div className="gantt-sku-tabs">
             {seriesSkus.map((sku) => <button type="button" key={sku.id} className={selectedSku?.id === sku.id ? "active" : ""} onClick={() => selectSku(selectedSeries.id, sku.id)}><strong>{sku.targetWeightKg} kgf</strong><span>离散规格 · SKU 抽屉 · {sku.modelIds.length} Model · rev {sku.revision}</span></button>)}
+            {skusLoading && !seriesSkus.length ? <small>正在按需加载可见 SKU…</small> : null}
+            {nextSkuCursor ? <button type="button" disabled={skusLoading} onClick={() => void loadMoreSkus()}>{skusLoading ? "加载中…" : "加载更多 SKU"}</button> : null}
           </div>
           {selectedSku ? (
             <div className="gantt-model-list">
@@ -1159,8 +1328,9 @@ export function SeriesGanttWorkbenchV3({
                   <ChevronRight size={16} />
                 </button>
               ))}
-              {models.length > visibleModels.length ? <button type="button" className="gantt-load-more" onClick={() => setModelCursor((value) => value + 12)}>加载更多 Model（{visibleModels.length}/{models.length}）</button> : null}
-              {!models.length ? <div className="gantt-no-model">该 SKU 抽屉还没有 Model；不会自动跨层打开或创建对象。</div> : null}
+              {nextModelCursor ? <button type="button" className="gantt-load-more" disabled={modelsLoading} onClick={() => void loadMoreModels()}>{modelsLoading ? "加载中…" : `加载更多 Model（${visibleModels.length}/${modelTotal}）`}</button> : null}
+              {modelsLoading && !models.length ? <div className="gantt-no-model">正在按需加载可见 Model…</div> : null}
+              {!modelsLoading && !models.length ? <div className="gantt-no-model">该 SKU 抽屉还没有可见 Model；不会自动跨层打开或创建对象。</div> : null}
             </div>
           ) : null}
         </section>

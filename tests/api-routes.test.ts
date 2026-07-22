@@ -3,6 +3,7 @@ import test from "node:test";
 import { NextRequest } from "next/server";
 import { PUT as putState } from "../app/api/state/route";
 import { POST as createSeries } from "../app/api/series/route";
+import { GET as getSeriesGantt } from "../app/api/series-gantt/route";
 import { loadWorkspaceState } from "../lib/storage";
 
 const authHeaders = {
@@ -18,6 +19,64 @@ function withTrustedProxy() {
   process.env.FEISHU_PROXY_SHARED_SECRET = "route-test-secret";
   process.env.FEISHU_TENANT_KEY = "tenant";
 }
+
+test("Series 甘特路由要求认证，主列表只返回服务端投影", { concurrency: false }, async () => {
+  withTrustedProxy();
+  const anonymous = await getSeriesGantt(new NextRequest("http://localhost/api/series-gantt?view=series&pageSize=1"));
+  assert.equal(anonymous.status, 401);
+
+  const response = await getSeriesGantt(new NextRequest("http://localhost/api/series-gantt?view=series&pageSize=1", {
+    headers: authHeaders,
+  }));
+  assert.equal(response.status, 200);
+  const payload = await response.json() as {
+    state?: unknown;
+    revision: number;
+    blocks: Array<{ seriesId: string; skuNodes: Array<{ skuId: string }> }>;
+    page: { nextCursor?: string; totalVisible: number; pageSize: number };
+    facets: { weights: number[] };
+  };
+  assert.equal(payload.state, undefined);
+  assert.equal(payload.blocks.length, Math.min(1, payload.page.totalVisible));
+  assert.equal(payload.page.pageSize, 1);
+  assert.ok(Array.isArray(payload.facets.weights));
+
+  if (payload.page.nextCursor) {
+    const stale = await getSeriesGantt(new NextRequest(`http://localhost/api/series-gantt?view=series&pageSize=2&cursor=${encodeURIComponent(payload.page.nextCursor)}`, {
+      headers: authHeaders,
+    }));
+    assert.equal(stale.status, 409);
+    assert.equal(((await stale.json()) as { code?: string }).code, "SERIES_GANTT_CURSOR_STALE");
+  }
+});
+
+test("Series 甘特路由按父对象按需加载 SKU/Model 且隐藏父对象返回404", { concurrency: false }, async () => {
+  withTrustedProxy();
+  const { state } = await loadWorkspaceState();
+  const series = state.seriesDefinitions.find((entry) => state.skuDrawers.some((sku) => sku.seriesId === entry.id))!;
+  const skuResponse = await getSeriesGantt(new NextRequest(`http://localhost/api/series-gantt?view=skus&seriesId=${encodeURIComponent(series.id)}&pageSize=1`, {
+    headers: authHeaders,
+  }));
+  assert.equal(skuResponse.status, 200);
+  const skuPayload = await skuResponse.json() as {
+    skus: Array<{ id: string; seriesId: string }>;
+    page: { nextCursor?: string };
+  };
+  assert.ok(skuPayload.skus.every((sku) => sku.seriesId === series.id));
+  const sku = skuPayload.skus[0]!;
+
+  const modelResponse = await getSeriesGantt(new NextRequest(`http://localhost/api/series-gantt?view=models&skuId=${encodeURIComponent(sku.id)}&pageSize=1`, {
+    headers: authHeaders,
+  }));
+  assert.equal(modelResponse.status, 200);
+  const modelPayload = await modelResponse.json() as { models: Array<{ skuId: string }> };
+  assert.ok(modelPayload.models.every((model) => model.skuId === sku.id));
+
+  const hidden = await getSeriesGantt(new NextRequest("http://localhost/api/series-gantt?view=skus&seriesId=series%3Ahidden", {
+    headers: authHeaders,
+  }));
+  assert.equal(hidden.status, 404);
+});
 
 test("已认证整包 PUT 不能绕过 Series 领域命令", { concurrency: false }, async () => {
   withTrustedProxy();

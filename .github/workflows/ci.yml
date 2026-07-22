@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  root-v3-app:
+    name: Root v3 app (npm)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.16.0
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+
+  historical-workspace:
+    name: Historical workspace (pnpm)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.2
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.16.0
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r typecheck
+      - run: pnpm -r lint
+      - run: pnpm -r test
+      - run: pnpm -r build
+
+  windows-line-endings:
+    name: Windows line-ending policy
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Verify CRLF and LF checkout rules
+        shell: pwsh
+        run: |
+          $powerShell = [Text.Encoding]::UTF8.GetString(
+            [IO.File]::ReadAllBytes("scripts/start-dev.ps1")
+          )
+          if (-not $powerShell.Contains("`r`n")) {
+            throw "scripts/start-dev.ps1 was not checked out with CRLF"
+          }
+          if (($powerShell -replace "`r`n", "").Contains("`n")) {
+            throw "scripts/start-dev.ps1 contains a lone LF"
+          }
+
+          $packageJson = [Text.Encoding]::UTF8.GetString(
+            [IO.File]::ReadAllBytes("package.json")
+          )
+          if ($packageJson.Contains("`r`n")) {
+            throw "package.json was not checked out with LF"
+          }
+
+      - name: Verify committed whitespace
+        shell: pwsh
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          PUSH_AFTER_SHA: ${{ github.event.after }}
+        run: |
+          if ($env:EVENT_NAME -eq "pull_request") {
+            $baseSha = $env:PR_BASE_SHA
+            $headSha = $env:PR_HEAD_SHA
+          } elseif ($env:EVENT_NAME -eq "push") {
+            $baseSha = $env:PUSH_BEFORE_SHA
+            $headSha = $env:PUSH_AFTER_SHA
+          } else {
+            throw "Unsupported event: $($env:EVENT_NAME)"
+          }
+
+          if ([string]::IsNullOrWhiteSpace($baseSha) -or [string]::IsNullOrWhiteSpace($headSha)) {
+            throw "Unable to determine the commit range for $($env:EVENT_NAME)"
+          }
+
+          if ($baseSha -match '^0{40}$') {
+            $baseSha = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+          }
+
+          git diff --check $baseSha $headSha
+          if ($LASTEXITCODE -ne 0) {
+            throw "git diff --check failed for $baseSha..$headSha"
+          }

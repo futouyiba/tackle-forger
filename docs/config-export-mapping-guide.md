@@ -97,6 +97,10 @@
 
 1.5期才使用Chromium的File System Access API执行正式写入。用户先选择dev/test/online/release某环境的configs worktree根目录，再为非1001渠道选择权威目录已登记的明确渠道目录。`FileSystemDirectoryHandle`按用户、浏览器、origin、环境和渠道保存在IndexedDB中；页面在每次导出前重新检查读写权限。
 
+浏览器本地配置写入不进入服务端fenced outbox，服务端也不能取得目录句柄代写本机文件。工作区租约和fencing token只授权正式写入并约束服务端成功证据；页面在开始、每个文件写入前和最终报告前重验租约，但不能宣称token可撤销已经交给本机文件系统的写操作。文件一致性继续由基线hash/mtime、备份、恢复Manifest和逐文件回读保证。
+
+写入期间租约失效或出现更高token时，旧页面不得报告成功。任一配置导出租约没有已验证终态便过期、断线或取消时，服务端必须把对应逻辑目标置为`recoveryState=RECOVERY_REQUIRED`并记录`reason=EXTERNAL_FILE_CONFLICT`，不能因页面未回报而假定文件未变。当前持锁者必须确认目录授权，必要时重新绑定或重新请求授权，回读全部目标文件并按Manifest恢复或前向协调，在记录新hash并关闭恢复状态前不得再次正式写入该目标。
+
 策略发布、每次正式预留和每次正式导出都重新解析权威目标的authoritative ref，并比较当前commit、`config.toml`和受管workbook hashes与获批Manifest。正式导出还要求本地worktree HEAD和文件基线完全一致；任何漂移都返回`CONFIG_TARGET_SCAN_MANIFEST_STALE`，必须重新扫描、复核并发布引用新Manifest的策略版本。正式写入改变workbook hash后，旧策略不得继续下一批，需等待外部系统形成新commit并完成新一轮Manifest流程。
 
 当File System Access API不可用、目录句柄失效或用户未授权时，一期仍只能下载`NON_FORMAL`预览。1.5期只有在正式Bundle、目标目录/Manifest门禁和`config.export.commit`全部通过后才能下载正式人工搬运包；结果标记`FORMAL_PACKAGE_DOWNLOADED_NOT_APPLIED`，不得声称已写入本机Git工作区。

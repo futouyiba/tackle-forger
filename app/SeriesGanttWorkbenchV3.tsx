@@ -740,17 +740,17 @@ function ModelDrawer({
           <div className="gantt-ai-disabled">
             <Bot size={28} />
             <h3>AI 服务尚未启用</h3>
-            <p>OPEN-006 的供应方、模型、字段白名单和数据出网策略尚未确认。当前不展示 mock 建议，也不会创建或应用 Patch。</p>
+            <p>Fancy Hub 真实连接器默认关闭；完成独立安全配置与启用准入前不会发送数据。当前不展示 mock 建议，也不会创建或应用 Patch。</p>
             <dl>
               <div><dt>服务状态</dt><dd>一期禁用</dd></div>
               <div><dt>允许出网字段</dt><dd>未确认</dd></div>
               <div><dt>草稿能力</dt><dd>契约已就绪，运行连接器未启用</dd></div>
             </dl>
             <div className="gantt-ai-actions">
-              <button type="button" disabled title="OPEN-006 尚未确认">查看依据</button>
-              <button type="button" disabled title="OPEN-006 尚未确认">预览变化</button>
-              <button type="button" disabled title="OPEN-006 尚未确认">创建 Model Patch 草稿</button>
-              <button type="button" disabled title="OPEN-006 尚未确认">重新评估</button>
+              <button type="button" disabled title="Fancy Hub 连接器尚未启用">查看依据</button>
+              <button type="button" disabled title="Fancy Hub 连接器尚未启用">预览变化</button>
+              <button type="button" disabled title="Fancy Hub 连接器尚未启用">创建 Model Patch 草稿</button>
+              <button type="button" disabled title="Fancy Hub 连接器尚未启用">重新评估</button>
             </div>
           </div>
         </div>
@@ -1049,7 +1049,7 @@ export function SeriesGanttWorkbenchV3({
           <button type="button" disabled={!generateAvailability.enabled || !selectedSeries} title={generateAvailability.disabledReasonText} onClick={() => setCandidateOpen(true)}>
             <Sparkles size={14} />生成 Model 候选
           </button>
-          <button type="button" disabled title="OPEN-006 尚未确认">AI 评估</button>
+          <button type="button" disabled title="Fancy Hub 连接器尚未启用">AI 评估</button>
         </div>
       </section>
 

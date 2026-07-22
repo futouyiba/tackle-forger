@@ -99,6 +99,24 @@ Trace、ID 唯一性、前缀与实体类型；写后必须回读恢复，不能
 评分插值、竿/轮/线零整比、金额单位、舍入、最低价格和溢出上限未发布前，只允许非正式
 试算与单元格级 Trace，正式 Store 导出继续阻断且没有手填价格兜底。
 
+## Fancy Hub AI 连接器
+
+真实 AI 连接器默认关闭（`FANCY_HUB_ENABLED=false`），关闭、超时、限流或不可用均不影响
+派生、校验、Patch、发布和历史复现。它只允许连接部署配置中的单一 Fancy Hub HTTPS origin，
+只发送严格递归白名单的 `ai-request/v1`；真实 ID、自由文本、Evidence 正文、ActionLink、密钥
+和未知字段会在网络请求前被拒绝。
+
+启用前必须完成以下证据并由部署管理员保留：Fancy Hub 动态模型列表及不可变修订标识、
+主模型与有序降级列表、provider 与租户硬 token/并发/速率/超时/费用上限、全部本地门禁、
+独立评审和回滚演练。完成后才配置 `.env.example` 中的全部 `FANCY_HUB_*` 项并显式改为
+`FANCY_HUB_ENABLED=true`。只有 `AI_PROVIDER_ADMIN_OPEN_IDS` 中的飞书用户拥有
+`ai.provider_policy.manage`；其他已登录公司用户只在功能启用时获得评估、查看和创建草稿能力。
+
+回滚时首先把 `FANCY_HUB_ENABLED` 恢复为 `false` 并重启服务，然后撤销 Fancy Hub token；
+连接器不会自动批准 Patch、写回飞书、发布 RuleSet/Snapshot 或改写历史快照。AI 原始内容、
+语义内容、操作元数据与采纳来源分别执行 180 天、1 年、3 年和随产物永久保留策略；用户删除
+会立即隐藏，24 小时内清除主存储内容并以墓碑阻止备份恢复，备份清除期限为 30 天。
+
 ## 配置表交付
 
 一期正式入口使用 Chromium File System Access API。用户分别为 dev/test 等环境显式选择

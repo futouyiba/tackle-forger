@@ -2,7 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { feishuRuntimeConfig } from "./auth-config";
 import { findSession } from "./auth-store";
-import { PHASE_ONE_CAPABILITIES } from "./feishu-identity";
+import { feishuCapabilities } from "./feishu-identity";
 import {
   buildActionAvailabilityMap,
   type CapabilityCode,
@@ -59,16 +59,24 @@ function trustedProxyIdentity(request: NextRequest) {
   const tenantKey = request.headers.get("x-feishu-tenant-key")?.trim();
   const openId = request.headers.get("x-feishu-open-id")?.trim();
   if (!configuredTenant || tenantKey !== configuredTenant || !openId) return undefined;
+  const capabilities = feishuCapabilities(openId, aiProviderAdminOpenIds());
   return withActions({
     email: "",
     name: request.headers.get("x-feishu-display-name")?.trim() || openId,
-    role: "editor" as const,
+    role: capabilities.includes("ai.provider_policy.manage") ? "admin" as const : "editor" as const,
     authenticated: true,
     provider: "feishu" as const,
     tenantKey,
     openId,
-    capabilities: [...PHASE_ONE_CAPABILITIES],
+    capabilities,
   });
+}
+
+function aiProviderAdminOpenIds(): string[] {
+  return (process.env.AI_PROVIDER_ADMIN_OPEN_IDS ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
 }
 
 export async function requestUser(request: NextRequest) {
@@ -78,16 +86,17 @@ export async function requestUser(request: NextRequest) {
       const config = feishuRuntimeConfig();
       const session = await findSession({ sessionId, secret: config.sessionSecret });
       if (session && session.identity.tenantKey === config.tenantKey) {
+        const capabilities = feishuCapabilities(session.identity.openId, aiProviderAdminOpenIds());
         return withActions({
           email: "",
           name: session.identity.displayName,
           avatarUrl: session.identity.avatarUrl,
-          role: "editor" as const,
+          role: capabilities.includes("ai.provider_policy.manage") ? "admin" as const : "editor" as const,
           authenticated: true,
           provider: "feishu" as const,
           tenantKey: session.identity.tenantKey,
           openId: session.identity.openId,
-          capabilities: [...PHASE_ONE_CAPABILITIES],
+          capabilities,
           sessionExpiresAt: session.expiresAt,
         });
       }

@@ -180,7 +180,7 @@ function ModelDrawer({
           <div className="gantt-ai-disabled">
             <Bot size={28} />
             <h3>AI 服务尚未启用</h3>
-            <p>OPEN-006 的供应方、模型、字段白名单和数据出网策略尚未确认。核心派生、校验、Patch、发布和历史复现仍可正常使用。</p>
+            <p>Fancy Hub 真实连接器默认关闭；只有完成独立安全配置与启用准入后才会发送严格白名单数据。核心派生、校验、Patch、发布和历史复现不受影响。</p>
             <dl>
               <div><dt>服务状态</dt><dd>未配置</dd></div>
               <div><dt>允许出网字段</dt><dd>未确认</dd></div>
@@ -263,7 +263,7 @@ export function SeriesGanttWorkbench({ state, mutate, notify }: SeriesGanttWorkb
         <div className="gantt-toolbar-actions">
           <label><PackageSearch size={15} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 Series 名称或 ID" /></label>
           <button type="button" onClick={() => notify("候选搜索配方保留在历史数据中；生成命令将在当前 Series / SKU Revision 上执行。")}>生成 Model 候选</button>
-          <button type="button" disabled title="OPEN-006 尚未确认">AI 评估</button>
+          <button type="button" disabled title="Fancy Hub 连接器尚未启用">AI 评估</button>
         </div>
       </section>
 
@@ -380,4 +380,3 @@ export function SeriesGanttWorkbench({ state, mutate, notify }: SeriesGanttWorkb
     </div>
   );
 }
-

@@ -744,7 +744,21 @@ ConfigurationSnapshot至少冻结：
 → 下游重算并判断DerivationLayerPatch是否吸收
 ```
 
-写回不等于拉取，拉取不等于发布。Series、SKU、Model、FinalReview Patch和ProjectionPin是产品特例，不回写通用表。DerivationLayerPatch只有在新规则版本重算后完全覆盖其语义时才进入ABSORBED；部分覆盖保持PARTIALLY_ABSORBED。已发布Snapshot只产生UpgradeCandidate。
+写回不等于拉取，拉取不等于发布。Series、SKU、Model、FinalReview Patch和ProjectionPin是产品特例，不得未经归纳直接写入通用规则表。DerivationLayerPatch只有在新规则版本重算后完全覆盖其语义时才进入ABSORBED；部分覆盖保持PARTIALLY_ABSORBED。已发布Snapshot只产生UpgradeCandidate。
+
+### 14.1 Patch权威账本与飞书Patch台账
+
+所有保存过的Patch必须进入工具内统一、持久化、版本化的`PatchLedger`。`PatchLedger`是Patch的运行时权威来源；重新拉取、重新演绎、重新生成、对象改名、服务重启、换浏览器或换电脑均不得使Patch静默丢失。生成时按稳定对象ID、Patch作用域和基线revision加载有效Patch：基线兼容则确定性重放，基线变化则进入`REBASE_REQUIRED`，禁止跳过或按名称猜测对象。
+
+主飞书工作簿应增加单一`Patch台账`工作表，作为全部Patch的人工可见镜像、协作界面和额外审计副本。该工作表不是通用规则表，也不是Patch的唯一运行时来源；飞书行号、显示名称、排序和合并单元格不得参与关联。工具与飞书按`patchId + patchRevision`幂等同步，飞书变化必须显式拉取后才能进入工具。已被ConfigurationSnapshot引用的Patch revision不可原地修改，只能创建新revision。
+
+`Patch台账`采用“一条Patch操作一行”：同一Patch修改多个属性时，多行共享`patchId`。前三个机器字段固定为`scopeType`、`layerType`和`subjectEntityId`；至少还应包含`patchId`、`patchRevision`、`subjectName`、`parentEntityId`、`parameterKey`、`operation`、`operand`、`before`、`after`、`baseRuleSetVersion`、`baseObjectRevision`、`reason`、`evidence`、`status`、创建/审核身份与时间、`supersedesPatchId`、`ruleProposalId`和`snapshotRefs`。名称只供显示和搜索。
+
+个体Patch必须进入统一汇总分析，但不得自动成为通用规则。工具按作用层、属性、钓法、类型、功能定位、重量段、修改方向和重复频率识别稳定模式；经人工归纳、跨对象影响预览和确认后，才可生成`RuleSourceChangeDraft`并写回对应通用规则页。新RuleSetVersion发布并重算后，原Patch分别进入`ABSORBED`、`PARTIALLY_ABSORBED`、继续`ACTIVE`或`REBASE_REQUIRED`，不得因规则提案或写回而提前删除。
+
+同步权限必须区分Patch创建、Patch审核、Patch台账写入、Patch台账拉取、规则提案创建、通用规则写回和RuleSet发布。飞书Patch台账默认只开放人工备注、复核意见和“建议提升为共享规则”等协作字段；ID、基线、before/after、Snapshot引用等审计字段由工具控制。同步失败保留本地权威记录、幂等键和远端回读结果，可安全重试。
+
+验收至少覆盖：重新生成后已批准Patch被重放；对象改名后仍按ID关联；基线变化进入rebase而非消失；多属性Patch按同一patchId形成多行；重复同步不重复追加；飞书排序或改名不改变关联；Snapshot引用的Patch不能原地改写；个体Patch未经人工归纳不能写入通用规则；新规则只吸收完全覆盖的Patch；飞书同步失败不影响本地Patch可恢复性。
 
 ## 15. 工作台信息架构
 

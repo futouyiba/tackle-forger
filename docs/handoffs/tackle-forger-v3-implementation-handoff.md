@@ -79,7 +79,7 @@ diminishing_division:
 - 已发布 `ConfigurationSnapshot` 不得被上游规则更新静默重算。
 - 硬兼容规则和软 `Affinity Score` 必须分开：硬规则决定能不能生成，软分数决定适配程度和排序解释。
 - 人工修改使用分层Patch；共享中间层用DerivationLayerPatch，单个产品用Series/SKU/Model/FinalReview Patch；固定标杆选择用ProjectionPin。
-- DerivationLayerPatch可经RuleSourceChangeDraft人工确认写回飞书；写回后必须回读、显式拉取并发布RuleSetVersion。Series、SKU、Model个案Patch不反推为通用规则。
+- 所有保存过的Patch进入工具内权威`PatchLedger`，并幂等同步到飞书单一`Patch台账`页；该页是协作镜像而非唯一运行时来源。DerivationLayerPatch或多个个体Patch的稳定共性可经人工归纳生成RuleSourceChangeDraft；单个个案不得未经归纳提升为通用规则。写回后必须回读、显式拉取并发布RuleSetVersion。
 - 先确定Series的Quality，再选择具体词条；价值分校验已选Quality并作为自动定价输入，不得反向自动改品质，Quality本身不修改面板。
 - 飞书唯一规则工作簿已指定为[《钓具设计工作簿》](https://pisn3u3ony2.feishu.cn/wiki/YsEKwSUJ5i86HCkZKBVcNMw7nOh?from=from_copylink&sheet=9nE3Rx)。链接锚点虽是`06_系列/9nE3Rx`，同步对象是整个工作簿；2026-07-21首次接入基线为revision `2302`，本轮源表整改后的回读revision为`2352`。两者都不得硬编码成最新版本。
 - revision `2352`已经为01至06规则源的现有行回写稳定机器ID：64个重量模板、14个类型、19个功能定位、19个性能定位、36个词条和24个系列原型。接入器必须保留已有ID；以后缺ID新行进入`NEW_SOURCE_ROW`，经人工确认后分配并回写。长期同步不得按名称、`名称|级别`、行号或显示顺序关联。
@@ -326,10 +326,12 @@ Affinity = Σ(axisScore × axisWeight) ÷ Σ(axisWeight)
 
 上游规则变化后，只创建升级候选并展示差异；必须由人工确认后生成新的快照版本。
 
-飞书回写采用`RuleSourceChangeDraft`承载影响预览和人工确认，不从局部Patch静默覆盖：
+飞书回写分为“Patch台账镜像”和“通用规则变更”两条独立链路。全部Patch先进入工具内权威`PatchLedger`，再按`patchId + patchRevision`同步到单一`Patch台账`页；通用规则变更采用`RuleSourceChangeDraft`承载影响预览和人工确认，不从局部Patch静默覆盖：
 
 - 通用、稳定、跨系列复用的修改可以形成规则修改草稿。
-- 单个系列、SKU、Model 的平衡调整默认保留为本地 Patch。
+- 单个系列、SKU、Model 的平衡调整保存在权威Patch账本并镜像到飞书Patch台账，但不得未经归纳直接写入通用规则页。
+- Patch台账按“一条属性操作一行”保存；同一Patch的多行共享patchId，前三个机器字段为scopeType、layerType、subjectEntityId。生成时从工具账本按稳定ID重放；基线变化必须进入rebase。
+- 工具应汇总Patch并识别跨对象稳定模式；只有人工归纳和影响预览通过后才能形成RuleSourceChangeDraft。新规则发布后再计算ABSORBED或PARTIALLY_ABSORBED，原Patch不得提前删除。
 - 回写前显示影响范围、规则版本、冲突和预计变化。
 - 写回记录与回读结果进入审计；写回后必须由用户显式拉取、校验并发布RuleSetVersion，规则才生效。
 - 读取工作簿时先按`sheet_id`校验关键页，再以显式revision生成`FeishuSourceRevision`；`?sheet=`仅是界面锚点。
@@ -337,7 +339,7 @@ Affinity = Σ(axisScore × axisWeight) ÷ Σ(axisWeight)
 - 组合分按同部位无序词条对计算一次；Technology成员与直接词条先按affixId去重。当前新策略仍受S品质100分边界、性能评分来源、舍入阶段、最低价作用域和超限动作五类Issue约束；开发必须实现可追踪的Draft校验与`NON_FORMAL`试算，不能恢复旧的“全局缺参”判断，也不能自行补业务默认值。
 - 领域品质仍是C/绿、B/蓝、A/紫、S/橙；映射为C→跑刀、B→稳健、A→猛攻、S→猛攻。PricingBasket是独立价格分组。
 
-验收：旧快照在上游规则变化后字节级或语义级保持不变；升级候选可并列对比；个案 Patch 不会自动污染飞书通用规则。
+验收：旧快照在上游规则变化后字节级或语义级保持不变；升级候选可并列对比；重生成和对象改名不会丢失Patch；飞书重复同步不追加重复行；个案Patch可在Patch台账追踪，但不会自动污染飞书通用规则。
 
 ### WP8：全链路验收
 

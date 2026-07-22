@@ -1107,7 +1107,7 @@ export interface ConfigurationSnapshot {
   patchSetHash: string;
   patchReferences?: PatchSnapshotReference[];
   finalPanelValues: Record<string, number | string>;
-  /** schema v16 起的新快照冻结最终拉力；历史快照缺失时不得补写或改变 contentHash。 */
+  /** schema v17 起的新快照冻结最终拉力；历史快照缺失时不得补写或改变 contentHash。 */
   modelFinalPullKg?: number;
   componentSelections: ModelComponentSelection[];
   technologyIds: string[];

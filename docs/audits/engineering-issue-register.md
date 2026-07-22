@@ -53,7 +53,7 @@
 
 | ID | 状态 | 问题 | 解决证据 | 验证 |
 | --- | --- | --- | --- | --- |
-| AUD-024 | RESOLVED | SKU目标拉力、结构派生/命中拉力和Model最终拉力曾混用`targetWeightKg`及重复别名，历史兼容字段未收敛到迁移边界。 | `c986ea9`将活动领域、候选、兼容、甘特查询/API和UI统一为`targetPullKg/derivedPullKg/matchedStructuralPullKg/modelFinalPullKg`；schema v17仅在v16→v17顺序迁移适配器读取旧字段，归档历史payload，拒绝新旧冲突与非正边界；既有v15→v16飞书回写意图迁移保持独立；冻结ConfigurationSnapshot保持原payload/contentHash，新Snapshot才冻结`modelFinalPullKg`。 | `npm run typecheck`、`npm run lint`、完整`npm test`通过225项TypeScript测试与2项生产构建测试；迁移测试覆盖幂等、payload归档、冲突、边界与Snapshot hash冻结；甘特GET路由和查询契约验证不输出旧字段；确定性最近匹配回归通过；`git diff --check`通过。 |
+| AUD-024 | RESOLVED | SKU目标拉力、结构派生/命中拉力和Model最终拉力曾混用`targetWeightKg`及重复别名，历史兼容字段未收敛到迁移边界。 | `3ec88dc`将活动领域、候选、兼容、甘特查询/API和UI统一为`targetPullKg/derivedPullKg/matchedStructuralPullKg/modelFinalPullKg`；schema v17仅在v16→v17顺序迁移适配器读取旧字段，归档历史payload，拒绝新旧冲突与非正边界；既有v15→v16飞书回写意图迁移保持独立；冻结ConfigurationSnapshot保持原payload/contentHash，新Snapshot才冻结`modelFinalPullKg`。 | `npm run typecheck`、`npm run lint`、完整`npm test`通过225项TypeScript测试与2项生产构建测试；迁移测试覆盖幂等、payload归档、冲突、边界与Snapshot hash冻结；甘特GET路由和查询契约验证不输出旧字段；确定性最近匹配回归通过；`git diff --check`通过。 |
 | AUD-008 | RESOLVED | R730默认环境变量曾把可变数据指向只读发布目录。 | `deploy/tackle-forger.env.example`提供与systemd `ReadWritePaths`一致的`/opt/tackle-forger/data/*`绝对路径；运行手册明确禁止生产复制通用相对路径。 | 模板与`deploy/tackle-forger.service`静态核对；`git diff --check`通过。 |
 | AUD-011 | RESOLVED | 示例Nginx曾可能转发客户端伪造的可信代理身份头。 | `deploy/nginx-tackle-forger.conf.example`显式清除`X-Feishu-Tenant-Key`、`X-Feishu-Open-Id`、`X-Feishu-Display-Name`和`X-TF-Proxy-Secret`；手册明确直接OAuth拓扑且默认关闭可信代理模式。 | Nginx配置与`lib/auth.ts`读取的全部可信身份头逐项核对。 |
 | AUD-013 | RESOLVED | Node引擎下限低于备份脚本所用`node:sqlite backup()`的引入版本。 | `package.json`、`package-lock.json`和开发/部署说明统一提升到Node.js `>=22.16.0`；Node官方v22文档记录`backup()`自22.16.0加入。 | Node.js 22.23.1实际执行备份脚本成功；最低版本要求静态一致性核对。 |
@@ -66,8 +66,8 @@
 | AUD-004 | RESOLVED | 离散拉力解析静默丢弃非法token与重复项。 | `parseDiscretePulls`保留合法值并单独报告`invalidTokens/duplicateValues`；任一异常均阻止创建。 | `tests/api-command-boundaries.test.ts`与`tests/api-routes.test.ts`覆盖中英文分隔、负数、文本和重复值。 |
 | AUD-007 | RESOLVED | 飞书导入审计身份可能为空。 | `stableAuditActor`优先保存`feishu:{tenantKey}:{openId}`，再回退显示名/email，导入与Series命令共用。 | `tests/api-command-boundaries.test.ts`覆盖飞书稳定身份及非空回退。 |
 | AUD-025 | RESOLVED | 默认测试入口遗漏飞书回写回归。 | `package.json`改用`tests/*.test.ts`与`tests/*.test.mjs`自动发现正式测试，新文件无需维护长名单。 | 集成态默认`npm test`通过208项TS测试与1项渲染测试，其中飞书回写5项（字段匹配1项、提交恢复4项）均执行。 |
-| AUD-021 | RESOLVED | Feishu 远端写成功后，本地审计保存 revision 冲突曾要求人工重新拉取。 | `d00ccbed761ea428bf9b0e5f3c502ddb28273c70`新增v16持久化`DataSourceWritebackIntent`、稳定幂等键、最新revision自动对账与回读恢复；写回只登记`remoteChangesAvailable`，不刷新binding、不拉取或发布。 | `tests/data-source-writeback-recovery.test.ts`覆盖远端成功后单次冲突自动合并、持续冲突后显式重试只回读不重复追加、失败证据保留与恢复；完整`npm test`通过213项TS测试和1项渲染测试，lint/typecheck通过。 |
-| AUD-022 | RESOLVED | Feishu 主工作簿 wiki token/share URL 是否应为可变部署配置未有明确工程判定。 | v3 §14已经明确指定《钓具设计工作簿》为唯一通用规则源，因此`d00ccbed761ea428bf9b0e5f3c502ddb28273c70`将其确认成有意的canonical config-as-code；迁移必须先修订权威规范并经代码审查，UI复用唯一常量。稳定sheet注册表继续独立校验。 | `validateFeishuWorkbookConfiguration`校验链接/token、整本同步范围、anchor sheet、空值和重复sheet_id；远端仍按sheet_id校验缺失/改名/同名新表；相关测试、完整`npm test`、lint和typecheck通过。 |
+| AUD-021 | RESOLVED | Feishu 远端写成功后，本地审计保存 revision 冲突曾要求人工重新拉取。 | `3398c8e`新增v16持久化`DataSourceWritebackIntent`、稳定幂等键、最新revision自动对账与回读恢复；写回只登记`remoteChangesAvailable`，不刷新binding、不拉取或发布。 | `tests/data-source-writeback-recovery.test.ts`覆盖远端成功后单次冲突自动合并、持续冲突后显式重试只回读不重复追加、失败证据保留与恢复；完整`npm test`通过213项TS测试和1项渲染测试，lint/typecheck通过。 |
+| AUD-022 | RESOLVED | Feishu 主工作簿 wiki token/share URL 是否应为可变部署配置未有明确工程判定。 | v3 §14已经明确指定《钓具设计工作簿》为唯一通用规则源，因此`3398c8e`将其确认成有意的canonical config-as-code；迁移必须先修订权威规范并经代码审查，UI复用唯一常量。稳定sheet注册表继续独立校验。 | `validateFeishuWorkbookConfiguration`校验链接/token、整本同步范围、anchor sheet、空值和重复sheet_id；远端仍按sheet_id校验缺失/改名/同名新表；相关测试、完整`npm test`、lint和typecheck通过。 |
 | AUD-010 | RESOLVED | 甘特图 UI 曾直接对完整客户端状态执行主列表查询，未消费服务端对象可见性、游标和 stale revision。 | `41781d9`使主列表消费`/api/series-gantt`服务端投影；Series、SKU与Model分别使用revision绑定游标，子对象按父级按需加载；409保留筛选和选中Series锚点后恢复第一页。 | 路由覆盖认证、投影边界、404隐藏父对象和409；查询覆盖权限裁剪、总数防泄漏和父级/revision游标；客户端覆盖409恢复及仅消费可见Model。 |
 | AUD-015 | RESOLVED | 客户端生产构建曾有超过500 kB的chunk。 | `f77843a`把六个工作台拆成动态入口；[`bundle-analysis-aud-015.md`](./bundle-analysis-aud-015.md)记录基线和产物证据；未提高warning阈值。 | Workbench chunk从869,491 B降至101,969 B，最大chunk为424,888 B，构建不再报告>500 kB；默认测试强制500,000 B chunk预算、六个动态入口和150,000 B Workbench预算。 |
 | AUD-R001 | RESOLVED | Attribute Affix 曾先于 Series/SKU/Model Patch 执行。 | `lib/rule-kernel.ts` 已按 Patch → Affix → FinalReview 顺序执行。 | `tests/v3-rule-kernel.test.ts`；`npm test` 通过。 |
@@ -94,11 +94,11 @@
 | 2026-07-22 | 将v3-work的SQLite条件更新、生产环境禁止内存回退、v14系列配方迁移cherry-pick到审查分支；补全PatchLedger的v14 schema断言；新增`AUD-R008/009`。`AUD-008/009`仍开放。 | `45e8281d` `f0fe8232` `be1cf696` `6c233e5d` |
 | 2026-07-22 | 拉取全部远端分支并复审`origin/review/current-state-2026-07-22@fee6c83a`：新增`AUD-R008～R010`，有效未关闭问题仍为24个；完整测试190项、渲染测试1项、飞书回写单测5项及类型检查通过。 | `034a353` |
 | 2026-07-22 | 部署与工程治理复核：关闭`AUD-008/011/013/014/020`；`AUD-018`已固化行尾策略但等待Windows检出验证；`AUD-019`因历史pnpm工作区尚未完成独立CI验证继续开放。 | `9a86ee6` |
-| 2026-07-22 | 第一批领域契约修复关闭`AUD-016/017/023`；工作区升级到v15，新五维预览冻结定义revision/hash，且不改写历史Snapshot。`AUD-024`保持开放，等待完整顺序迁移。 | `b340d45` `5671769` |
-| 2026-07-22 | API/命令边界第一批修复：关闭`AUD-001～004`、`AUD-007`与`AUD-025`；追加默认拒绝、并发幂等恢复和恶意JSON类型边界。 | `36adceb` `605a6d2` `8db1e31` |
+| 2026-07-22 | 第一批领域契约修复关闭`AUD-016/017/023`；工作区升级到v15，新五维预览冻结定义revision/hash，且不改写历史Snapshot。`AUD-024`保持开放，等待完整顺序迁移。 | `a35cf72` `d9a2412` |
+| 2026-07-22 | API/命令边界第一批修复：关闭`AUD-001～004`、`AUD-007`与`AUD-025`；追加默认拒绝、并发幂等恢复和恶意JSON类型边界。 | `1c0df55` `6d6d660` `44cfc2d` |
 | 2026-07-22 | 三个独立worktree修复分支完成主分支集成复核；生产构建、208项TypeScript测试及1项渲染测试通过。有效未关闭问题由24个降为10个。 | `a9472b6` `a35cf72` `d9a2412` `1c0df55` `6d6d660` `44cfc2d` |
-| 2026-07-22 | 历史pnpm workspace完成冻结安装、类型检查、测试与生产构建，关闭`AUD-006`；`AUD-018/019`等待新增Windows/双包管理CI首次远端通过。 | 本分支提交 |
-| 2026-07-22 | 飞书恢复与规则源配置治理：关闭`AUD-021/022`；回写先持久化意图并可跨本地revision冲突自动对账，写回/拉取/发布保持独立；主工作簿按v3 §14确认为canonical config-as-code并增加配置与稳定sheet注册表校验。 | `d00ccbed761ea428bf9b0e5f3c502ddb28273c70` |
-| 2026-07-22 | 集成复核修正`AUD-001`过窄白名单造成的旧工作台保存回归；仅恢复旧工作台显式通用配置字段，v3受治理状态与未知字段继续默认拒绝。 | 本分支提交 |
+| 2026-07-22 | 历史pnpm workspace完成冻结安装、类型检查、测试与生产构建，关闭`AUD-006`；`AUD-018/019`等待新增Windows/双包管理CI首次远端通过。 | `d30c763` |
+| 2026-07-22 | 飞书恢复与规则源配置治理：关闭`AUD-021/022`；回写先持久化意图并可跨本地revision冲突自动对账，写回/拉取/发布保持独立；主工作簿按v3 §14确认为canonical config-as-code并增加配置与稳定sheet注册表校验。 | `3398c8e` |
+| 2026-07-22 | 集成复核修正`AUD-001`过窄白名单造成的旧工作台保存回归；仅恢复旧工作台显式通用配置字段，v3受治理状态与未知字段继续默认拒绝。 | `81763c3` |
 | 2026-07-22 | 甘特主列表接入服务端可见性、revision游标、409恢复及SKU/Model按需加载；六个工作台动态拆分并增加真实构建产物预算，关闭`AUD-010/015`。 | `41781d9` `f77843a` |
-| 2026-07-22 | 完成AUD-024目标拉力顺序迁移：活动契约收敛到规范四阶段字段，历史旧字段只在v16→v17迁移适配器读取，冻结Snapshot payload/hash不变；保留v15→v16飞书回写意图迁移。完整测试通过225项TypeScript测试与2项生产构建测试，有效未关闭问题降为4个。 | `c986ea9` |
+| 2026-07-22 | 完成AUD-024目标拉力顺序迁移：活动契约收敛到规范四阶段字段，历史旧字段只在v16→v17迁移适配器读取，冻结Snapshot payload/hash不变；保留v15→v16飞书回写意图迁移。完整测试通过225项TypeScript测试与2项生产构建测试，有效未关闭问题降为4个。 | `3ec88dc` |

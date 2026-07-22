@@ -4,7 +4,7 @@
 > 首次建立：2026-07-22
 > 来源审查：[`current-state-review-2026-07-22.md`](./current-state-review-2026-07-22.md)
 > 最近复核：[`remote-branches-review-2026-07-22.md`](./remote-branches-review-2026-07-22.md)
-> 当前汇总：9个有效未关闭问题（5个`OPEN`、2个`IN_PROGRESS`、2个`BLOCKED`），25个`RESOLVED`，1个`SUPERSEDED`。
+> 当前汇总：7个有效未关闭问题（3个`OPEN`、2个`IN_PROGRESS`、2个`BLOCKED`），27个`RESOLVED`，1个`SUPERSEDED`。
 
 ## 状态定义
 
@@ -36,8 +36,6 @@
 | AUD-015 | Low | OPEN | 客户端生产构建有超过 500 kB 的 chunk。 | `npm test`/`vinext build` 输出 | 记录 bundle 分析；按工作台模块动态拆分或将权威计算迁到服务端；警告消失或有明确预算。 |
 | AUD-018 | Low | IN_PROGRESS | 仓库已用`.gitattributes`统一文本LF并为PowerShell/批处理保留CRLF；macOS检查通过，CI已增加`windows-latest`检出验证，等待远端作业通过后关闭。 | `ba2111c2`；`.gitattributes`；`.github/workflows/ci.yml` | Windows作业确认PowerShell为纯CRLF、普通文本为LF，且`git diff --check`通过。 |
 | AUD-019 | Low | IN_PROGRESS | 根v3应用与历史workspace的npm/pnpm命令、锁文件和共享Vitest配置已明确分离；CI已增加独立作业，等待首次远端运行通过。 | `README.md`、`CLAUDE.md`、`.github/workflows/ci.yml`、`vitest.workspace.config.ts` | 根npm与历史pnpm作业均在干净检出上通过，且冻结安装不改写另一锁文件。 |
-| AUD-021 | Medium | OPEN | Feishu 回写已可回读恢复远端写入，但远端成功后本地审计保存冲突仍需人工重新拉取。 | `app/api/data-sources/route.ts:179-200` | 持久化写入意图/幂等记录，或提供自动对账命令；模拟远端成功、本地保存失败并可安全恢复。 |
-| AUD-022 | Low | OPEN | Feishu 主工作簿 wiki token/share URL 仍作为代码常量，工作簿迁移需要代码变更。 | `lib/feishu-workbook.ts` | 决定是否属于有意的 canonical config-as-code；若否，迁到受验证配置并保留稳定 sheet 注册表。 |
 | AUD-024 | Medium | OPEN | 后端核心契约仍以`targetWeightKg`承载SKU目标拉力，`ProjectionMatch`和查询接口同时保留新旧字段；历史兼容字段尚未收敛到迁移读取边界。 | `lib/types.ts:596-613,737-751`；`lib/projection-matcher.ts:21-35,237-248`；`lib/interaction-contracts.ts:494-540`；v3 §5.3 | 新写入、领域对象和API统一使用`targetPullKg/derivedPullKg/matchedStructuralPullKg/modelFinalPullKg`；`targetWeightKg`仅由迁移适配器读取；顺序迁移保留历史Payload与Snapshot hash；覆盖旧数据迁移、API契约和确定性匹配测试。 |
 
 ## 问题关系与去重
@@ -45,7 +43,7 @@
 - `AUD-001/002/003/004/007`已分别通过route-level测试关闭；原总括测试问题`AUD-012`保持`SUPERSEDED`，不重复计入已解决数量。
 - `AUD-005`是两套架构权威边界的父决策；“系列配方未拆分竿轮线”是旧`SeriesRecipe`仍可见造成的用户侧表现，归入`AUD-005`，不再新增重复AUD。`be1cf696`只解决v14迁移载体并记为`AUD-R010`，没有解决页面消费和架构权威边界。历史workspace本地验证已由`AUD-006`关闭；包管理与CI入口继续由`AUD-019`跟踪，二者都不替代`AUD-005`的架构决策。
 - `AUD-R003`证明Series创建主路径已进入服务端命令；通用整包保存绕过已由`AUD-001`的默认拒绝边界关闭。
-- `AUD-R006`证明飞书远端写前/写后回读恢复已经实现；默认测试入口遗漏已由`AUD-025`关闭，远端成功后的本地审计冲突仍由`AUD-021`管理。
+- `AUD-R006`证明飞书远端写前/写后回读恢复已经实现；默认测试入口遗漏已由`AUD-025`关闭；`AUD-021`进一步增加持久化写入意图、revision冲突自动对账和整次请求幂等恢复。
 - `AUD-R007`证明R730持久化、迁移、备份和运行手册的基础能力已存在；部署路径、Node下限和会话灾备已由`AUD-008/013/014`关闭，revision保留政策仍由`AUD-009`管理。
 
 ## 已取代问题
@@ -70,6 +68,8 @@
 | AUD-004 | RESOLVED | 离散拉力解析静默丢弃非法token与重复项。 | `parseDiscretePulls`保留合法值并单独报告`invalidTokens/duplicateValues`；任一异常均阻止创建。 | `tests/api-command-boundaries.test.ts`与`tests/api-routes.test.ts`覆盖中英文分隔、负数、文本和重复值。 |
 | AUD-007 | RESOLVED | 飞书导入审计身份可能为空。 | `stableAuditActor`优先保存`feishu:{tenantKey}:{openId}`，再回退显示名/email，导入与Series命令共用。 | `tests/api-command-boundaries.test.ts`覆盖飞书稳定身份及非空回退。 |
 | AUD-025 | RESOLVED | 默认测试入口遗漏飞书回写回归。 | `package.json`改用`tests/*.test.ts`与`tests/*.test.mjs`自动发现正式测试，新文件无需维护长名单。 | 集成态默认`npm test`通过208项TS测试与1项渲染测试，其中飞书回写5项（字段匹配1项、提交恢复4项）均执行。 |
+| AUD-021 | RESOLVED | Feishu 远端写成功后，本地审计保存 revision 冲突曾要求人工重新拉取。 | `d00ccbed761ea428bf9b0e5f3c502ddb28273c70`新增v16持久化`DataSourceWritebackIntent`、稳定幂等键、最新revision自动对账与回读恢复；写回只登记`remoteChangesAvailable`，不刷新binding、不拉取或发布。 | `tests/data-source-writeback-recovery.test.ts`覆盖远端成功后单次冲突自动合并、持续冲突后显式重试只回读不重复追加、失败证据保留与恢复；完整`npm test`通过213项TS测试和1项渲染测试，lint/typecheck通过。 |
+| AUD-022 | RESOLVED | Feishu 主工作簿 wiki token/share URL 是否应为可变部署配置未有明确工程判定。 | v3 §14已经明确指定《钓具设计工作簿》为唯一通用规则源，因此`d00ccbed761ea428bf9b0e5f3c502ddb28273c70`将其确认成有意的canonical config-as-code；迁移必须先修订权威规范并经代码审查，UI复用唯一常量。稳定sheet注册表继续独立校验。 | `validateFeishuWorkbookConfiguration`校验链接/token、整本同步范围、anchor sheet、空值和重复sheet_id；远端仍按sheet_id校验缺失/改名/同名新表；相关测试、完整`npm test`、lint和typecheck通过。 |
 | AUD-R001 | RESOLVED | Attribute Affix 曾先于 Series/SKU/Model Patch 执行。 | `lib/rule-kernel.ts` 已按 Patch → Affix → FinalReview 顺序执行。 | `tests/v3-rule-kernel.test.ts`；`npm test` 通过。 |
 | AUD-R002 | RESOLVED | 商品层兼容字段曾影响结构投影筛选。 | `structuralCompatibilityContext` 和 `evaluateStructuralHardCompatibility`。 | 最近匹配测试通过。 |
 | AUD-R003 | RESOLVED | Series 创建主要逻辑曾只在客户端执行。 | 新增 `POST /api/series`，客户端调用服务端命令。 | 构建包含路由；相关领域测试通过；整包state绕过后续已由`AUD-001`关闭。 |
@@ -98,3 +98,4 @@
 | 2026-07-22 | API/命令边界第一批修复：关闭`AUD-001～004`、`AUD-007`与`AUD-025`；追加默认拒绝、并发幂等恢复和恶意JSON类型边界。 | `36adceb` `605a6d2` `8db1e31` |
 | 2026-07-22 | 三个独立worktree修复分支完成主分支集成复核；生产构建、208项TypeScript测试及1项渲染测试通过。有效未关闭问题由24个降为10个。 | `a9472b6` `a35cf72` `d9a2412` `1c0df55` `6d6d660` `44cfc2d` |
 | 2026-07-22 | 历史pnpm workspace完成冻结安装、类型检查、测试与生产构建，关闭`AUD-006`；`AUD-018/019`等待新增Windows/双包管理CI首次远端通过。 | 本分支提交 |
+| 2026-07-22 | 飞书恢复与规则源配置治理：关闭`AUD-021/022`；回写先持久化意图并可跨本地revision冲突自动对账，写回/拉取/发布保持独立；主工作簿按v3 §14确认为canonical config-as-code并增加配置与稳定sheet注册表校验。 | `d00ccbed761ea428bf9b0e5f3c502ddb28273c70` |

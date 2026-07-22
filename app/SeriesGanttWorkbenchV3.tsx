@@ -31,6 +31,10 @@ import {
 import { buildSamePartComparison, calculateModelFiveAxisPreview, fiveAxisPlotRatio } from "@/lib/five-axis";
 import { deterministicHash } from "@/lib/rule-kernel";
 import {
+  enabledProductItemParts,
+  isProductItemPartEnabled,
+} from "@/lib/enabled-item-parts";
+import {
   querySeriesGantt,
   seriesGanttQueryFromSearchParams,
   seriesGanttQueryToSearchParams,
@@ -779,6 +783,10 @@ export function SeriesGanttWorkbenchV3({
   const [comparisonModelIds, setComparisonModelIds] = useState<string[]>([]);
   const [candidateOpen, setCandidateOpen] = useState(false);
   const [seriesCreateDraft, setSeriesCreateDraft] = useState<SeriesCreateDraft | null>(null);
+  const enabledItemParts = useMemo(
+    () => enabledProductItemParts(state.itemParts),
+    [state.itemParts],
+  );
 
   const blocks = useMemo(() => querySeriesGantt({
     query,
@@ -945,7 +953,7 @@ export function SeriesGanttWorkbenchV3({
 
   const openCreateSeries = () => {
     const method = state.methodProfiles.find((entry) => entry.enabled);
-    const itemPart = state.itemParts[0];
+    const itemPart = enabledItemParts[0];
     const type = state.itemTypeProfiles.find((entry) =>
       entry.enabled && (!method || entry.methodIds.includes(method.id)) &&
       (!itemPart || entry.itemPartIds.includes(itemPart.id)));
@@ -1060,7 +1068,7 @@ export function SeriesGanttWorkbenchV3({
         <MultiSelectFilter label="类型" values={query.typeIds} options={state.itemTypeProfiles.filter((entry) => entry.enabled).map((entry) => ({ value: entry.id, label: entry.name }))} onChange={(values) => setQuery((current) => ({ ...current, typeIds: values }))} />
         <MultiSelectFilter label="品质" values={query.qualityIds} options={QUALITY_ORDER.map((entry) => ({ value: entry.id, label: `${entry.letter} / ${entry.name}` }))} onChange={(values) => setQuery((current) => ({ ...current, qualityIds: values }))} />
         <MultiSelectFilter label="功能" values={query.functionIds} options={state.functionProfiles.filter((entry) => entry.enabled).map((entry) => ({ value: entry.id, label: entry.name }))} onChange={(values) => setQuery((current) => ({ ...current, functionIds: values }))} />
-        <MultiSelectFilter label="部位" values={query.itemPartIds} options={[...new Set(state.itemTypeProfiles.flatMap((entry) => entry.itemPartIds))].sort().map((value) => ({ value, label: value }))} onChange={(values) => setQuery((current) => ({ ...current, itemPartIds: values }))} />
+        <MultiSelectFilter label="部位" values={query.itemPartIds} options={enabledItemParts.map((entry) => ({ value: entry.id, label: entry.name }))} onChange={(values) => setQuery((current) => ({ ...current, itemPartIds: (values ?? []).filter(isProductItemPartEnabled) }))} />
         <MultiSelectFilter label="生命周期" values={query.lifecycleStates} options={[{ value: "ACTIVE" as const, label: "活跃" }, { value: "DEPRECATED" as const, label: "已废弃" }, { value: "ARCHIVED" as const, label: "已归档" }]} onChange={(values) => setQuery((current) => ({ ...current, lifecycleStates: values }))} />
         <MultiSelectFilter label="注意状态" values={query.attentionStates} options={[{ value: "HAS_UPGRADE_CANDIDATE" as const, label: "升级候选" }, { value: "REBASE_REQUIRED" as const, label: "需要 Rebase" }, { value: "SOURCE_STALE" as const, label: "规则源过期" }, { value: "IMPORT_CONFLICT" as const, label: "导入冲突" }, { value: "EXPORT_RELATION_BROKEN" as const, label: "导出关系断裂" }]} onChange={(values) => setQuery((current) => ({ ...current, attentionStates: values }))} />
         <MultiSelectFilter label="Issue 级别" values={query.issueSeverities} options={[{ value: "BLOCKER" as const, label: "阻断" }, { value: "ERROR" as const, label: "错误" }, { value: "WARNING" as const, label: "警告" }, { value: "INFO" as const, label: "信息" }]} onChange={(values) => setQuery((current) => ({ ...current, issueSeverities: values }))} />
@@ -1183,7 +1191,7 @@ export function SeriesGanttWorkbenchV3({
                 const itemPartId = event.target.value;
                 const type = state.itemTypeProfiles.find((entry) => entry.enabled && entry.itemPartIds.includes(itemPartId) && entry.methodIds.includes(seriesCreateDraft.methodId));
                 setSeriesCreateDraft({ ...seriesCreateDraft, itemPartId, typeId: type?.id ?? "" });
-              }}>{state.itemParts.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label>
+              }}>{enabledItemParts.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label>
               <label><span>钓法</span><select value={seriesCreateDraft.methodId} onChange={(event) => {
                 const methodId = event.target.value;
                 const type = state.itemTypeProfiles.find((entry) => entry.enabled && entry.methodIds.includes(methodId) && entry.itemPartIds.includes(seriesCreateDraft.itemPartId));

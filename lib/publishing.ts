@@ -24,6 +24,10 @@ import type {
 } from "./types";
 import type { ModelAffixValueAssessment } from "./quality-value-policy";
 import type { PricingTrialResult } from "./pricing-policy";
+import {
+  assertProductItemPartEnabled,
+  seriesItemPartId,
+} from "./enabled-item-parts";
 
 function errors(issues: ValidationIssue[]): ValidationIssue[] {
   return issues.filter((issue) => issue.level === "error");
@@ -72,6 +76,8 @@ function snapshotContent(
 export function publishConfigurationSnapshot(
   input: PublishModelInput,
 ): ConfigurationSnapshot {
+  assertProductItemPartEnabled(seriesItemPartId(input.series, [input.sku]), "model_publish");
+  assertProductItemPartEnabled(input.sku.projectionMatch.itemPartId, "snapshot");
   const combinedValidationReport = [
     ...input.validationReport,
     ...(input.fiveAxisPreview?.tackleFitComparison.validationIssues ?? []),

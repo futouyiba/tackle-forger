@@ -31,6 +31,7 @@ import {
   planSnapshotBatch,
   type SnapshotBatchPlan,
 } from "@/lib/snapshot-batch";
+import { isProductItemPartEnabled } from "@/lib/enabled-item-parts";
 import type { WorkspaceState } from "@/lib/types";
 import "./browser-config-export.css";
 
@@ -108,7 +109,9 @@ export function BrowserConfigExportWorkbench({
   const [stage, setStage] = useState<ExportStage>("batch");
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>(() =>
     state.purchasableModels
-      .filter((model) => model.configurationSnapshotId)
+      .filter((model) => model.configurationSnapshotId && isProductItemPartEnabled(
+        state.skuDrawers.find((sku) => sku.id === model.skuId)?.projectionMatch.itemPartId,
+      ))
       .map((model) => model.id),
   );
   const [batch, setBatch] = useState<SnapshotBatchPlan>();
@@ -130,6 +133,12 @@ export function BrowserConfigExportWorkbench({
   const pickerAvailable = typeof window === "undefined"
     ? true
     : browserDirectoryPickerAvailable();
+  const enabledProductModels = useMemo(
+    () => state.purchasableModels.filter((model) => isProductItemPartEnabled(
+      state.skuDrawers.find((sku) => sku.id === model.skuId)?.projectionMatch.itemPartId,
+    )),
+    [state.purchasableModels, state.skuDrawers],
+  );
 
   useEffect(() => {
     let active = true;
@@ -356,6 +365,7 @@ export function BrowserConfigExportWorkbench({
         next[binding.bindingId] = await commitBrowserExport({
           binding,
           packageId: preview.packageId,
+          itemPartIds: preview.itemPartIds,
           operations: preview.operations,
           createdAt: preview.createdAt,
         });
@@ -408,7 +418,7 @@ export function BrowserConfigExportWorkbench({
         <section className="config-export-panel">
           <header><div><span className="eyebrow">SOURCE</span><h3>批量准备发布与导出</h3></div><PackageCheck size={18} /></header>
           <div className="browser-model-grid">
-            {state.purchasableModels.map((model) => (
+            {enabledProductModels.map((model) => (
               <label key={model.id} className={selectedModelIds.includes(model.id) ? "selected" : ""}>
                 <input
                   type="checkbox"

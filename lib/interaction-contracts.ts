@@ -7,6 +7,10 @@ import type {
   PurchasableModel,
   ValidationIssue as LegacyValidationIssue,
 } from "./types";
+import {
+  isProductItemPartEnabled,
+  seriesItemPartId,
+} from "./enabled-item-parts";
 
 export type CapabilityCode =
   | "series.read" | "series.edit" | "series.approve"
@@ -214,6 +218,32 @@ export function resolveProductDeepLink(input: {
   const collection = collectionId
     ? input.collections.find((entry) => entry.id === collectionId)
     : undefined;
+  const resolvedItemPartId = series
+    ? seriesItemPartId(series, input.skus)
+    : requestedSnapshot?.projectionMatch.itemPartId;
+  if (
+    (requestedSnapshot || model || sku || series)
+    && !isProductItemPartEnabled(resolvedItemPartId)
+  ) {
+    const blockedRef = requestedSnapshot
+      ? unavailable("configuration_snapshot", requestedSnapshot.id)
+      : model
+        ? unavailable("model", model.id)
+        : sku
+          ? unavailable("sku_drawer", sku.id)
+          : unavailable("series", series!.id);
+    issues.push({
+      level: "error",
+      code: "ITEM_PART_NOT_ENABLED",
+      message: `部位未启用：${resolvedItemPartId ?? "unknown"} 不提供产品只读入口。`,
+    });
+    return {
+      collection,
+      unavailableRequestedRef: blockedRef,
+      fallbackEntityType: collection ? "collection" : undefined,
+      integrityIssues: issues,
+    };
+  }
 
   const mismatches = [
     input.requested.modelId && requestedSnapshot && requestedSnapshot.modelId !== input.requested.modelId
@@ -517,6 +547,7 @@ export function buildSeriesGanttProjection(input: {
 }): GanttSeriesBlock[] {
   const modelIds = new Set(input.models.map((model) => model.id));
   return [...input.series]
+    .filter((series) => isProductItemPartEnabled(seriesItemPartId(series, input.skus)))
     .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id))
     .map((series) => {
       const skuNodes = input.skus

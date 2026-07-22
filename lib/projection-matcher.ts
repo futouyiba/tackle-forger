@@ -7,6 +7,7 @@ import type {
   ProjectionMatchTraceItem,
   WeightTemplate,
 } from "./types";
+import { assertProductItemPartEnabled } from "./enabled-item-parts";
 
 export interface ProjectionMatchCandidate {
   projection: DerivedProjection;
@@ -175,6 +176,7 @@ export function matchNearestProjection(
   candidates: ProjectionMatchCandidate[],
   parameters: ParameterDefinition[] = [],
 ): ProjectionMatch {
+  assertProductItemPartEnabled(query.itemPartId, "projection_match");
   // 历史调用方仍传参数定义；结构匹配不得再用最终属性距离消费它。
   void parameters;
   if (!Number.isFinite(query.targetWeightKg) || query.targetWeightKg <= 0) {
@@ -253,4 +255,3 @@ export function matchNearestProjection(
     trace: buildTrace(query, ranked, winner, Boolean(pinned)),
   };
 }
-

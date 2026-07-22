@@ -10,6 +10,7 @@ import {
 } from "../lib/browser-config-export";
 import type { ConfigExportMapping } from "../lib/config-export-mapping";
 import { createSeedState } from "../lib/seed";
+import { deterministicHash } from "../lib/rule-kernel";
 
 function toBytes(data: BufferSource | Blob | string): Promise<Uint8Array> | Uint8Array {
   if (typeof data === "string") return new TextEncoder().encode(data);
@@ -175,6 +176,7 @@ test("浏览器预览从环境根 config.toml 生成三表差异，提交后回�
     root: current.root,
     binding: current.binding,
     packageId: preview.packageId,
+    itemPartIds: preview.itemPartIds,
     operations: preview.operations,
     createdAt: preview.createdAt,
   });
@@ -215,6 +217,57 @@ test("预览后源文件变化时恢复型提交拒绝覆盖", async () => {
     root: current.root,
     binding: current.binding,
     packageId: preview.packageId,
+    itemPartIds: preview.itemPartIds,
     operations: preview.operations,
   }), /预览后已变化/);
+});
+
+test("扩展部位预览与提交在浏览器文件写入前 fail-closed", async () => {
+  const current = await fixture();
+  const snapshot = structuredClone(createSeedState().configurationSnapshots[0]);
+  snapshot.projectionMatch.itemPartId = "part:hook";
+  const content = structuredClone(snapshot);
+  Reflect.deleteProperty(content, "contentHash");
+  snapshot.contentHash = deterministicHash(content);
+  const beforeFiles = Object.fromEntries(
+    [...current.xlsx.files].map(([name, file]) => [name, [...file.value()]]),
+  );
+  await assert.rejects(() => previewBrowserExportFromHandles({
+    binding: current.binding,
+    targetRoot: current.root,
+    configRoot: current.root,
+    packageId: "browser-package-hook-preview",
+    mapping: mapping(),
+    snapshots: [snapshot],
+  }), (error) => (
+    error instanceof Error
+    && "code" in error
+    && error.code === "ITEM_PART_NOT_ENABLED"
+  ));
+  assert.deepEqual(
+    Object.fromEntries([...current.xlsx.files].map(([name, file]) => [name, [...file.value()]])),
+    beforeFiles,
+  );
+
+  const allowedPreview = await previewBrowserExportFromHandles({
+    binding: current.binding,
+    targetRoot: current.root,
+    configRoot: current.root,
+    packageId: "browser-package-hook-commit",
+    mapping: mapping(),
+    snapshots: [createSeedState().configurationSnapshots[0]],
+  });
+  const beforeDirectories = [...current.root.directories.keys()];
+  await assert.rejects(() => commitBrowserExportFromHandle({
+    root: current.root,
+    binding: current.binding,
+    packageId: allowedPreview.packageId,
+    itemPartIds: ["part:hook"],
+    operations: allowedPreview.operations,
+  }), (error) => (
+    error instanceof Error
+    && "code" in error
+    && error.code === "ITEM_PART_NOT_ENABLED"
+  ));
+  assert.deepEqual([...current.root.directories.keys()], beforeDirectories);
 });

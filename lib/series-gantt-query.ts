@@ -18,6 +18,10 @@ import type {
   ValidationIssue,
 } from "./types";
 import { deterministicHash } from "./rule-kernel";
+import {
+  isProductItemPartEnabled,
+  seriesItemPartId,
+} from "./enabled-item-parts";
 
 export interface SeriesGanttQuery {
   text?: string;
@@ -153,7 +157,9 @@ export function querySeriesGantt(input: {
   const visibleSeriesIds = input.visibility?.seriesIds ? new Set(input.visibility.seriesIds) : undefined;
   const visibleSkuIds = input.visibility?.skuIds ? new Set(input.visibility.skuIds) : undefined;
   const visibleModelIds = input.visibility?.modelIds ? new Set(input.visibility.modelIds) : undefined;
-  const visibleSeries = input.series.filter((series) => !visibleSeriesIds || visibleSeriesIds.has(series.id));
+  const visibleSeries = input.series.filter((series) =>
+    (!visibleSeriesIds || visibleSeriesIds.has(series.id))
+    && isProductItemPartEnabled(seriesItemPartId(series, input.skus)));
   const visibleSkus = input.skus.filter((sku) =>
     (!visibleSkuIds || visibleSkuIds.has(sku.id)) && visibleSeries.some((series) => series.id === sku.seriesId));
   const visibleModels = input.models.filter((model) =>

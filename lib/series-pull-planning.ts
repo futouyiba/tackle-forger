@@ -1,5 +1,6 @@
 import { deterministicHash } from "./rule-kernel";
 import { seriesTargetPullSpecifications } from "./product-model";
+import { assertProductItemPartEnabled } from "./enabled-item-parts";
 import type {
   ProjectionMatch,
   SeriesDefinition,
@@ -42,6 +43,7 @@ export function createSeriesPullPlanningProposal(input: {
   source: SeriesPullPlanningProposal["source"];
   createdAt: string;
 }): SeriesPullPlanningProposal {
+  assertProductItemPartEnabled(input.series.itemPartId, "series");
   if (input.planningPullRange) assertRange(input.planningPullRange);
   const suggestedPullsKgf = normalizePulls(input.candidatePullsKgf)
     .filter((value) => !input.planningPullRange
@@ -67,6 +69,7 @@ export function updateSeriesPlanningRange(input: {
   planningPullRange: { minKgf: number; maxKgf: number };
   updatedAt: string;
 }): SeriesDefinition {
+  assertProductItemPartEnabled(input.series.itemPartId, "series");
   assertRange(input.planningPullRange);
   return {
     ...structuredClone(input.series),
@@ -85,6 +88,7 @@ export function materializeConfirmedPullSpecifications(input: {
   projectionMatchByPull: Record<string, ProjectionMatch>;
   createdAt: string;
 }): { series: SeriesDefinition; skus: SkuDrawer[]; createdSkuIds: string[] } {
+  assertProductItemPartEnabled(input.series.itemPartId, "sku");
   if (input.proposal.seriesId !== input.series.id || input.proposal.seriesRevision !== input.series.revision) {
     throw new Error("规划建议的 Series revision 已过期，必须重新生成建议。");
   }

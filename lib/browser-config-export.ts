@@ -43,6 +43,7 @@ export interface BrowserExportPreview {
   mappingVersion: string;
   snapshotIds: string[];
   snapshotHashes: Record<string, string>;
+  itemPartIds: string[];
   status: "ready" | "blocked";
   operations: BrowserExportPreviewOperation[];
   issues: ConfigExportMappingIssue[];
@@ -52,6 +53,7 @@ export interface BrowserExportPreview {
 export interface BrowserRecoveryManifest {
   packageId: string;
   bindingId: string;
+  itemPartIds: string[];
   createdAt: string;
   operations: Array<{
     relativePath: string;
@@ -300,6 +302,12 @@ export async function previewBrowserExportFromHandles(input: {
   snapshots: ConfigurationSnapshot[];
   createdAt?: string;
 }): Promise<BrowserExportPreview> {
+  for (const snapshot of input.snapshots) {
+    assertSnapshotItemPartEnabled(snapshot, "config_export");
+  }
+  const itemPartIds = [...new Set(
+    input.snapshots.map((snapshot) => snapshotItemPartId(snapshot)!),
+  )].sort();
   const createdAt = input.createdAt ?? new Date().toISOString();
   const issues: ConfigExportMappingIssue[] = [];
   const blocked = (): BrowserExportPreview => ({
@@ -311,6 +319,7 @@ export async function previewBrowserExportFromHandles(input: {
     mappingVersion: input.mapping.version,
     snapshotIds: input.snapshots.map((snapshot) => snapshot.id),
     snapshotHashes: Object.fromEntries(input.snapshots.map((snapshot) => [snapshot.id, snapshot.contentHash])),
+    itemPartIds,
     status: "blocked",
     operations: [],
     issues,
@@ -480,9 +489,16 @@ export async function commitBrowserExportFromHandle(input: {
   root: BrowserDirectoryHandle;
   binding: LocalExportTargetBinding;
   packageId: string;
+  itemPartIds: string[];
   operations: BrowserExportFileOperation[];
   createdAt?: string;
 }): Promise<BrowserRecoveryManifest> {
+  for (const itemPartId of input.itemPartIds) {
+    assertProductItemPartEnabled(itemPartId, "config_export");
+  }
+  if (!input.itemPartIds.length) {
+    assertProductItemPartEnabled(undefined, "config_export");
+  }
   const root = input.root;
   const permission = await root.queryPermission({ mode: "readwrite" });
   if (permission !== "granted") throw new Error("导出目录需要重新授权。");
@@ -506,6 +522,7 @@ export async function commitBrowserExportFromHandle(input: {
   const manifest: BrowserRecoveryManifest = {
     packageId: input.packageId,
     bindingId: input.binding.bindingId,
+    itemPartIds: [...input.itemPartIds],
     createdAt: input.createdAt ?? new Date().toISOString(),
     operations: input.operations.map((operation) => ({
       relativePath: operation.relativePath,
@@ -561,6 +578,7 @@ export async function commitBrowserExportFromHandle(input: {
 export async function commitBrowserExport(input: {
   binding: LocalExportTargetBinding;
   packageId: string;
+  itemPartIds: string[];
   operations: BrowserExportFileOperation[];
   createdAt?: string;
 }): Promise<BrowserRecoveryManifest> {
@@ -583,3 +601,8 @@ import {
 import { validateLogicalTableRelations } from "./config-export";
 import { verifySnapshotIntegrity } from "./publishing";
 import type { ConfigurationSnapshot } from "./types";
+import {
+  assertProductItemPartEnabled,
+  assertSnapshotItemPartEnabled,
+  snapshotItemPartId,
+} from "./enabled-item-parts";

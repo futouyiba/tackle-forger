@@ -31,6 +31,11 @@ import {
   type ExportCommitResult,
   type ExportFileOperation,
 } from "./config-export";
+import {
+  assertProductItemPartEnabled,
+  assertSnapshotItemPartEnabled,
+  snapshotItemPartId,
+} from "./enabled-item-parts";
 
 export interface FilesystemExportOperation extends ExportFileOperation {
   sourceHash: string;
@@ -45,6 +50,7 @@ export interface FilesystemExportPreview {
   mappingVersion: string;
   snapshotId: string;
   snapshotHash: string;
+  itemPartId: string;
   status: "ready" | "blocked";
   projectRoot: string;
   workbookRoot: string;
@@ -128,6 +134,8 @@ export async function previewFilesystemExport(input: {
   snapshot: ConfigurationSnapshot;
   createdAt?: string;
 }): Promise<FilesystemExportPreview> {
+  assertSnapshotItemPartEnabled(input.snapshot, "config_export");
+  const itemPartId = snapshotItemPartId(input.snapshot)!;
   const createdAt = input.createdAt ?? new Date().toISOString();
   const initialIssues: ConfigExportMappingIssue[] = [];
   if (!input.profile.enabled) {
@@ -168,6 +176,7 @@ export async function previewFilesystemExport(input: {
       mappingVersion: input.mapping.version,
       snapshotId: input.snapshot.id,
       snapshotHash: input.snapshot.contentHash,
+      itemPartId,
       status: "blocked",
       projectRoot: input.profile.projectRoot,
       workbookRoot: input.profile.relativeWorkbookRoot,
@@ -273,6 +282,7 @@ export async function previewFilesystemExport(input: {
       mappingVersion: input.mapping.version,
       snapshotId: input.snapshot.id,
       snapshotHash: input.snapshot.contentHash,
+      itemPartId,
       status: "blocked",
       projectRoot: resolved.projectRoot,
       workbookRoot: resolved.workbookRoot,
@@ -310,6 +320,7 @@ export async function previewFilesystemExport(input: {
     mappingVersion: input.mapping.version,
     snapshotId: input.snapshot.id,
     snapshotHash: input.snapshot.contentHash,
+    itemPartId,
     status: "ready",
     projectRoot: resolved.projectRoot,
     workbookRoot: resolved.workbookRoot,
@@ -347,6 +358,7 @@ export async function commitFilesystemExport(input: {
   canCommit: boolean;
   audit?: ExportCommitResult["audit"];
 }): Promise<ExportCommitResult> {
+  assertProductItemPartEnabled(input.preview.itemPartId, "config_export");
   if (!input.canCommit) throw new Error("缺少 config.export.commit Capability。");
   if (input.preview.status !== "ready") throw new Error("暂存预览未通过，不能提交。");
   if (!input.profile.enabled || input.profile.profileId !== input.preview.profileId) {
@@ -445,6 +457,7 @@ export async function commitFilesystemExport(input: {
     return await commitExportPackage({
       profileId: input.preview.profileId,
       packageId: input.preview.packageId,
+      itemPartIds: [input.preview.itemPartId],
       idempotencyKey: input.idempotencyKey,
       operations: input.preview.operations,
       adapter,

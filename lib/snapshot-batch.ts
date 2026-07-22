@@ -1,4 +1,8 @@
 import { deterministicHash } from "./rule-kernel";
+import {
+  isProductItemPartEnabled,
+  ITEM_PART_NOT_ENABLED_CODE,
+} from "./enabled-item-parts";
 import type {
   ConfigurationSnapshot,
   PurchasableModel,
@@ -68,6 +72,20 @@ export function planSnapshotBatch(input: {
       };
     }
     const validationIssues = issuesForModel(model, input.skus);
+    const sku = input.skus.find((entry) => entry.id === model.skuId);
+    if (!isProductItemPartEnabled(sku?.projectionMatch.itemPartId)) {
+      return {
+        modelId,
+        modelRevision: model.revision,
+        decision: "skip",
+        reasons: [ITEM_PART_NOT_ENABLED_CODE],
+        validationIssues: [{
+          level: "error",
+          code: ITEM_PART_NOT_ENABLED_CODE,
+          message: `部位未启用：${sku?.projectionMatch.itemPartId ?? "unknown"} 当前不能进入 ConfigurationSnapshot 流程。`,
+        }],
+      };
+    }
     const blocking = validationIssues.filter((issue) => issue.level === "error");
     const latest = latestSnapshot(model, input.snapshots);
     if (
@@ -134,4 +152,3 @@ export function assertSnapshotBatchCanConfirm(plan: SnapshotBatchPlan): void {
     }
   }
 }
-

@@ -3,6 +3,10 @@ import { verifySnapshotIntegrity } from "./publishing";
 import type { ConfigurationSnapshot, ValidationIssue } from "./types";
 import type { ExportTargetProfile } from "./interaction-contracts";
 import type { ConfigExportMapping } from "./config-export-mapping";
+import {
+  assertProductItemPartEnabled,
+  assertSnapshotItemPartEnabled,
+} from "./enabled-item-parts";
 export type { ConfigExportMapping } from "./config-export-mapping";
 
 
@@ -40,6 +44,7 @@ export function createExportManifest(input: {
   entries: ExportManifestEntry[];
   createdAt: string;
 }): ExportManifest {
+  assertSnapshotItemPartEnabled(input.snapshot, "config_export");
   if (!verifySnapshotIntegrity(input.snapshot)) {
     throw new Error("ConfigurationSnapshot 完整性校验失败，不能生成配置表。");
   }
@@ -240,11 +245,18 @@ export interface ExportCommitResult {
 export async function commitExportPackage(input: {
   profileId: string;
   packageId: string;
+  itemPartIds: string[];
   idempotencyKey: string;
   operations: ExportFileOperation[];
   adapter: ExportCommitAdapter;
   audit?: ExportCommitResult["audit"];
 }): Promise<ExportCommitResult> {
+  for (const itemPartId of input.itemPartIds) {
+    assertProductItemPartEnabled(itemPartId, "config_export");
+  }
+  if (!input.itemPartIds.length) {
+    assertProductItemPartEnabled(undefined, "config_export");
+  }
   const previous = await input.adapter.findCommittedResult(input.idempotencyKey);
   if (previous) return structuredClone(previous);
 
@@ -340,4 +352,3 @@ export async function commitExportPackage(input: {
     };
   }
 }
-

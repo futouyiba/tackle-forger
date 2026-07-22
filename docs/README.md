@@ -39,6 +39,15 @@
 | `tackle-forger-design-evolution-feishu.xml` | 发布副本 | 飞书发布格式，内容以Markdown源文档和v3为准 |
 | `tackle-forger-design-evolution-and-product-design-feishu-v2.xml` | 发布副本 | 历史飞书交付副本，不作为开发输入 |
 
+## 工程审计与问题管理
+
+工程审计记录实现风险、验证结果和架构决策需求，不定义产品或领域语义；与v3冲突时始终以v3为准。
+
+- [`audits/current-state-review-2026-07-22.md`](./audits/current-state-review-2026-07-22.md)：2026-07-22代码、Git、测试和架构状态快照。
+- [`audits/engineering-issue-register.md`](./audits/engineering-issue-register.md)：持续维护的工程问题台账，包含严重性、状态、证据和关闭条件。
+
+修复提交应引用对应`AUD-xxx`，关闭问题时在台账中记录提交SHA、验证命令和测试证据。历史审查快照原则上不改写；状态变化更新台账或新增审查快照。
+
 ## Agent开始开发前
 
 1. 完整阅读v3权威规范。

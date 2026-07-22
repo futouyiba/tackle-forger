@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, readFile, readdir, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -35,6 +36,42 @@ async function createDatabaseWithTwoRevisions(databasePath: string) {
   return result.revision;
 }
 
+function createRollbackJournalDatabaseWithTwoRevisions(databasePath: string) {
+  const db = new DatabaseSync(databasePath);
+  const journalMode = db.prepare("PRAGMA journal_mode = DELETE").get() as { journal_mode: string };
+  assert.equal(journalMode.journal_mode, "delete");
+  db.exec(`
+    CREATE TABLE workspace_state (
+      id TEXT PRIMARY KEY,
+      state_json TEXT NOT NULL,
+      revision INTEGER NOT NULL
+    );
+    CREATE TABLE workspace_revisions (
+      revision INTEGER PRIMARY KEY,
+      state_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+  `);
+  const firstState = JSON.stringify({ revision: 1, notes: "rollback journal fixture" });
+  const currentState = JSON.stringify({ revision: 2, notes: "rollback journal current" });
+  db.prepare("INSERT INTO workspace_revisions (revision, state_json, created_at) VALUES (?, ?, ?)")
+    .run(1, firstState, "2026-01-01T00:00:00.000Z");
+  db.prepare("INSERT INTO workspace_revisions (revision, state_json, created_at) VALUES (?, ?, ?)")
+    .run(2, currentState, "2026-01-02T00:00:00.000Z");
+  db.prepare("INSERT INTO workspace_state (id, state_json, revision) VALUES (?, ?, ?)")
+    .run("main", currentState, 2);
+  db.close();
+}
+
+async function readDirectoryFiles(directory: string) {
+  const names = (await readdir(directory)).sort();
+  const contents = await Promise.all(names.map(async (name) => [
+    name,
+    createHash("sha256").update(await readFile(path.join(directory, name))).digest("hex"),
+  ] as const));
+  return { names, contents: Object.fromEntries(contents) as Record<string, string> };
+}
+
 test("AUD-009 SQLite revision 诊断只读返回容量、时间和文件统计", async (t) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "tackle-forger-revision-diagnostics-"));
   const databasePath = path.join(directory, "workspace.sqlite");
@@ -46,9 +83,14 @@ test("AUD-009 SQLite revision 诊断只读返回容量、时间和文件统计",
   const historyBefore = await listSqliteRevisions(databasePath);
   await closeSqliteStorage(databasePath);
   const databaseBefore = await readFile(databasePath);
+  const invocationStartedAt = Date.now();
 
   const diagnostics = await inspectSqliteRevisionStorage(databasePath);
+  const invocationFinishedAt = Date.now();
 
+  assert.ok(Date.parse(diagnostics.sampledFrom) >= invocationStartedAt);
+  assert.ok(Date.parse(diagnostics.sampledFrom) <= Date.parse(diagnostics.sampledTo));
+  assert.ok(Date.parse(diagnostics.sampledTo) <= invocationFinishedAt);
   assert.equal(diagnostics.currentRevision, currentRevision);
   assert.equal(diagnostics.revisionCount, 2);
   assert.equal(diagnostics.minimumRevision, 1);
@@ -70,6 +112,25 @@ test("AUD-009 SQLite revision 诊断只读返回容量、时间和文件统计",
   assert.ok(diagnostics.walFileBytes >= 0);
   assert.deepEqual(await readFile(databasePath), databaseBefore);
   assert.deepEqual(await listSqliteRevisions(databasePath), historyBefore);
+});
+
+test("AUD-009 无 WAL 数据库诊断不创建 WAL/SHM 并显式返回零值", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "tackle-forger-revision-no-wal-"));
+  const databasePath = path.join(directory, "workspace.sqlite");
+  t.after(async () => {
+    await rm(directory, { recursive: true, force: true });
+  });
+  createRollbackJournalDatabaseWithTwoRevisions(databasePath);
+  const before = await readDirectoryFiles(directory);
+  assert.deepEqual(before.names, ["workspace.sqlite"]);
+
+  const diagnostics = await inspectSqliteRevisionStorage(databasePath);
+
+  assert.equal(diagnostics.walPresent, false);
+  assert.equal(diagnostics.walFileBytes, 0);
+  assert.deepEqual(await readDirectoryFiles(directory), before);
+  await assert.rejects(stat(`${databasePath}-wal`), { code: "ENOENT" });
+  await assert.rejects(stat(`${databasePath}-shm`), { code: "ENOENT" });
 });
 
 test("AUD-009 SQLite revision 诊断缺路径、缺数据库或缺schema时 fail-closed 且不创建文件", async (t) => {
@@ -194,7 +255,7 @@ test("AUD-009 SQLite revision 诊断遇到非法时间或当前历史错位时 f
   );
 });
 
-test("AUD-009 工作区备份 manifest 冻结备份副本诊断和源数据库/WAL体积", async (t) => {
+test("AUD-009 工作区备份 manifest 冻结静态副本诊断和在线源库近似观测", async (t) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "tackle-forger-revision-backup-"));
   const databasePath = path.join(directory, "workspace.sqlite");
   const backupRoot = path.join(directory, "backups");
@@ -222,8 +283,10 @@ test("AUD-009 工作区备份 manifest 冻结备份副本诊断和源数据库/W
   const result = JSON.parse(stdout.trim()) as { backup: string; retentionDays: number };
   const manifest = JSON.parse(await readFile(path.join(result.backup, "manifest.json"), "utf8")) as {
     revisionDiagnostics: Awaited<ReturnType<typeof inspectSqliteRevisionStorage>>;
-    sourceStorageFilesAtBackupStart: {
-      capturedAt: string;
+    sourceOnlineStorageObservation: {
+      observationMode: "online_approximate_interval";
+      sampledFrom: string;
+      sampledTo: string;
       databaseFileBytes: number;
       walPresent: boolean;
       walFileBytes: number;
@@ -231,6 +294,7 @@ test("AUD-009 工作区备份 manifest 冻结备份副本诊断和源数据库/W
   };
 
   assert.equal(result.retentionDays, 30);
+  assert.equal("sourceStorageFilesAtBackupStart" in manifest, false);
   assert.equal(manifest.revisionDiagnostics.currentRevision, currentRevision);
   assert.equal(manifest.revisionDiagnostics.revisionCount, 2);
   assert.equal(
@@ -238,9 +302,14 @@ test("AUD-009 工作区备份 manifest 冻结备份副本诊断和源数据库/W
     path.join(result.backup, "workspace.sqlite"),
   );
   assert.ok(manifest.revisionDiagnostics.stateJsonTotalBytes > 0);
-  assert.ok(manifest.sourceStorageFilesAtBackupStart.databaseFileBytes > 0);
-  assert.equal(typeof manifest.sourceStorageFilesAtBackupStart.walPresent, "boolean");
-  assert.ok(manifest.sourceStorageFilesAtBackupStart.walFileBytes >= 0);
-  assert.ok(Date.parse(manifest.sourceStorageFilesAtBackupStart.capturedAt) > 0);
+  assert.equal(manifest.sourceOnlineStorageObservation.observationMode, "online_approximate_interval");
+  assert.ok(manifest.sourceOnlineStorageObservation.databaseFileBytes > 0);
+  assert.equal(typeof manifest.sourceOnlineStorageObservation.walPresent, "boolean");
+  assert.ok(manifest.sourceOnlineStorageObservation.walFileBytes >= 0);
+  assert.ok(Date.parse(manifest.sourceOnlineStorageObservation.sampledFrom) > 0);
+  assert.ok(
+    Date.parse(manifest.sourceOnlineStorageObservation.sampledFrom)
+      <= Date.parse(manifest.sourceOnlineStorageObservation.sampledTo),
+  );
   assert.deepEqual((await listSqliteRevisions(databasePath)).map((entry) => entry.revision), [2, 1]);
 });

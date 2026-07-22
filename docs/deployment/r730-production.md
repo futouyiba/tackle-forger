@@ -34,9 +34,9 @@
 ## Revision容量诊断与备份证据
 
 - 使用与应用服务相同的环境配置，以服务账号运行`npm run storage:diagnose-revisions`。该命令要求显式`WORKSPACE_DATABASE_PATH`，不会使用默认相对路径、创建数据库、建表或播种。
-- 输出包括revision总数、最早/最新时间、`state_json`总/平均/最大字节、数据库与WAL文件体积、SQLite总页数和空闲页数。该命令只报告事实，不会按AUD-009草案的候选值删除、裁剪或预测历史。
+- 输出包括revision总数、最早/最新时间、`state_json`总/平均/最大字节、数据库与WAL文件体积、SQLite总页数和空闲页数，以及`sampledFrom`/`sampledTo`采样区间。在线数据库可能在区间内继续写入，文件与页统计是近似观测，不得解释为同一瞬间快照。该命令不会按AUD-009草案的候选值删除、裁剪或预测历史。
 - `workspace_state/main`缺失或不唯一、当前revision与最大历史revision不一致、历史为空、时间戳不可解析、路径/schema/统计异常时命令以非零状态失败。先调查并恢复，不得把异常替换为0或自动修复。
-- 每次`npm run storage:backup`会在复制前诊断源数据库，并在在线备份完成后诊断备份副本。`manifest.json.revisionDiagnostics`必须与备份副本对应；`sourceStorageFilesAtBackupStart`记录开始时源数据库与WAL体积。
+- 每次`npm run storage:backup`会在复制前诊断源数据库，并在在线备份完成后诊断备份副本。`manifest.json.revisionDiagnostics`必须与静态备份副本对应，是精确恢复验收证据；`sourceOnlineStorageObservation`以`online_approximate_interval`和采样起止时间记录在线源数据库与WAL体积，只用于趋势和容量参考。
 - 验收manifest时至少核对`currentRevision`、`revisionCount`、`earliestCreatedAt/latestCreatedAt`、`stateJsonTotalBytes`与备份数据库文件大小。缺少诊断或诊断失败的目录不能视为已验证备份。
 - 这些统计不构成保留政策批准。AUD-009确认前，禁止据此启用90天/100条或任何其他自动清理。
 

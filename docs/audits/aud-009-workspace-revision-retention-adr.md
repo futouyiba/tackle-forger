@@ -29,7 +29,7 @@
 | `lib/storage.ts` D1 路径 | 完整历史无删除；当前更新和历史插入不是一个显式事务 | 与 SQLite 一样无界，且后续实现清理时必须先保证原子性 |
 | `scripts/migrate-blob-to-sqlite.ts` | 把 Blob 中尚存的历史全部导入新 SQLite | 最多只能迁移 Blob 当时仍保存的 100 条，不能复原已裁剪历史 |
 | `lib/sqlite-revision-diagnostics.ts` / `npm run storage:diagnose-revisions` | 使用明确路径、read-only连接与`query_only`读取revision数量、时间、JSON字节及数据库/WAL页统计；异常直接失败 | 只提供事实，不预测或执行保留策略 |
-| `scripts/backup-workspace.ts` | 每日整库备份，连同导入文件与会话目录；目录按 30 天删除；manifest冻结备份副本revision诊断及源数据库/WAL体积 | 空间消耗约为“活跃数据库体积 × 保留份数”，且长期保留会话副本会扩大安全风险 |
+| `scripts/backup-workspace.ts` | 每日整库备份，连同导入文件与会话目录；目录按 30 天删除；manifest冻结静态备份副本revision诊断，并记录在线源数据库/WAL的近似采样区间 | 空间消耗约为“活跃数据库体积 × 保留份数”，且长期保留会话副本会扩大安全风险 |
 
 以2026-07-23的种子状态序列化估算，单份JSON为594,961字节，约0.57 MiB；本地现有SQLite的7条revision实测平均482,566字节、最大505,516字节，revision JSON合计约3.38 MB。两组数据说明单份状态会随样本、Snapshot、Trace、Patch和审计记录变化；下表采用约0.57 MiB作保守量级估算，SQLite页、索引和WAL还会增加额外开销。
 
@@ -47,8 +47,8 @@
 
 - `npm run storage:diagnose-revisions`要求显式`WORKSPACE_DATABASE_PATH`，不会回退到相对路径、创建schema或播种数据。
 - 诊断验证`workspace_state/main`唯一存在、当前revision等于最大历史revision、当前历史副本唯一、全部`created_at`可解析且容量统计为有效安全整数；任一异常fail-closed，不猜测或修复。
-- 输出revision总数、最小/最大revision、最早/最新时间、`state_json`总/平均/最大字节、数据库/WAL文件字节，以及SQLite页、空闲页和可复用字节。
-- 备份先诊断源数据库；完成SQLite在线备份后再次诊断备份副本。只有副本诊断成功才写manifest，其中`revisionDiagnostics`对应可恢复副本，`sourceStorageFilesAtBackupStart`记录源数据库/WAL体积。
+- 输出revision总数、最小/最大revision、最早/最新时间、`state_json`总/平均/最大字节、数据库/WAL文件字节，以及SQLite页、空闲页和可复用字节；`sampledFrom`/`sampledTo`明确给出采样区间。
+- 在线源库可能在文件stat、只读事务和WAL stat之间继续写入，因此文件与页统计只是该区间内的近似观测，不构成同一瞬间快照。备份先诊断源数据库；完成SQLite在线备份后再次诊断静态备份副本。只有副本诊断成功才写manifest，其中`revisionDiagnostics`对应可恢复的静态副本，是精确验收证据；`sourceOnlineStorageObservation`以`online_approximate_interval`记录源数据库/WAL的近似区间观测。
 - 诊断使用read-only数据库连接与只读事务；测试比较诊断前后数据库字节和revision列表，确保不会删除、裁剪或改写历史。
 
 ## 3. 方案比较
@@ -122,7 +122,7 @@ WHERE revision NOT IN (SELECT revision FROM protected)
 
 ## 8. 测试与验收条件
 
-政策确认前的只读观测已由`tests/sqlite-revision-diagnostics.test.ts`覆盖：正常容量/时间/文件统计、数据库字节与历史列表不变、缺路径/文件/schema、非法时间、当前历史错位，以及备份manifest证据。SQLite既有保存、冲突、并发和冻结历史回归继续通过；本次完整`npm test`通过229项TypeScript测试与2项生产构建测试，`npm run lint`、`npm run typecheck`和`git diff --check`亦通过。
+政策确认前的只读观测已由`tests/sqlite-revision-diagnostics.test.ts`覆盖：正常容量/时间/文件统计、数据库字节与历史列表不变、无WAL时显式返回零值且不创建WAL/SHM、缺路径/文件/schema、非法时间、当前历史错位，以及备份manifest证据。SQLite既有保存、冲突、并发和冻结历史回归继续通过；首个实现提交的完整`npm test`通过229项TypeScript测试与2项生产构建测试，本次采样区间修订另通过聚焦回归、`npm run lint`、`npm run typecheck`和`git diff --check`。
 
 未来实现获批策略时仍至少覆盖：
 

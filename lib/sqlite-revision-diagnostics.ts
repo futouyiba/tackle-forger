@@ -24,7 +24,8 @@ export class SqliteRevisionDiagnosticsError extends Error {
 }
 
 export interface SqliteRevisionStorageDiagnostics {
-  capturedAt: string;
+  sampledFrom: string;
+  sampledTo: string;
   databasePath: string;
   currentRevision: number;
   revisionCount: number;
@@ -145,6 +146,7 @@ export async function inspectSqliteRevisionStorage(
     );
   }
   const resolved = path.resolve(databasePath);
+  const sampledFrom = new Date().toISOString();
   const databaseFileBytes = await requiredDatabaseFileSize(resolved);
   let db: DatabaseSync | undefined;
   let transactionOpen = false;
@@ -311,8 +313,10 @@ export async function inspectSqliteRevisionStorage(
     db.close();
     db = undefined;
     const wal = await optionalWalFileSize(resolved);
+    const sampledTo = new Date().toISOString();
     return {
-      capturedAt: new Date().toISOString(),
+      sampledFrom,
+      sampledTo,
       databasePath: resolved,
       currentRevision,
       revisionCount,

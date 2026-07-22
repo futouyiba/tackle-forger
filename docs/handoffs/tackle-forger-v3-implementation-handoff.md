@@ -635,11 +635,13 @@ linear_subtraction 和 diminishing_division 两种配置，本轮不需要决定
 - 二期：仅在OPEN-006关闭后实现已设计的AI辅助层；继续全员统一权限。
 - 当前规划三期：保持统一Capability策略，不建设细粒度RBAC、对象级角色、职责分离或飞书审批。未来治理变化必须另建Issue并发布新`separationOfDutiesPolicy`版本。
 - 三个阶段都不得用“统一权限”为理由省略用户身份、服务端逐动作鉴权、操作记录、expectedRevision或ActionAvailability。
-- 关键共享写操作必须实现v3第20.2.7节的工作区租约与单调fencing token；本地提交和持久化fenced outbox的远端副作用都要拒绝旧token，不能只实现心跳过期。
+- 关键共享写操作必须实现v3第20.2.7节的工作区租约与单调fencing token；服务端状态提交和持久化fenced outbox中的服务端可达副作用必须拒绝旧token，不能只实现心跳过期。浏览器本地配置文件不进入服务端outbox，按第19.2节的文件冲突与恢复路径处理。
 
 ### 19.2 导出执行器
 
 一期使用Chromium File System Access API直接处理用户显式授权的目录，不要求本地伴随程序。服务端保存逻辑环境/渠道标签，目录句柄保存在当前浏览器origin的IndexedDB；Cookie只保存飞书登录会话。每次写入前重新检查readwrite权限。
+
+服务端fencing token只控制正式写入授权和成功证据，不能撤销已经交给本机文件系统的写操作。页面在开始、每个文件写入前和最终报告前重验租约；无论重验结果如何，文件一致性都必须依靠hash/mtime、备份、恢复Manifest和逐文件回读。配置导出租约没有已验证终态便过期、断线或取消时，服务端自动把逻辑目标置为`recoveryState=RECOVERY_REQUIRED`并记录`reason=EXTERNAL_FILE_CONFLICT`；旧页面不得报告成功，当前持锁者只可先执行回读恢复，完成前不得再次正式写入该目标。
 
 - dev/test是独立环境，各自有configs根目录与`config.toml`。
 - 每个环境的1001渠道固定写入根目录下`xlsx`。

@@ -94,6 +94,10 @@
 
 一期使用Chromium的File System Access API。用户先选择某环境的configs仓库根目录，再为非1001渠道选择明确的渠道目录。`FileSystemDirectoryHandle`只保存在当前用户、浏览器和origin的IndexedDB中；页面在每次导出前重新检查读写权限。
 
+浏览器本地配置写入不进入服务端fenced outbox，服务端也不能取得目录句柄代写本机文件。工作区租约和fencing token只授权正式写入并约束服务端成功证据；页面在开始、每个文件写入前和最终报告前重验租约，但不能宣称token可撤销已经交给本机文件系统的写操作。文件一致性继续由基线hash/mtime、备份、恢复Manifest和逐文件回读保证。
+
+写入期间租约失效或出现更高token时，旧页面不得报告成功。任一配置导出租约没有已验证终态便过期、断线或取消时，服务端必须把对应逻辑目标置为`recoveryState=RECOVERY_REQUIRED`并记录`reason=EXTERNAL_FILE_CONFLICT`，不能因页面未回报而假定文件未变。当前持锁者必须重新授权目录、回读全部目标文件并按Manifest恢复或前向协调，在记录新hash并关闭恢复状态前不得再次正式写入该目标。
+
 当File System Access API不可用、目录句柄失效或用户未授权时，页面只能要求重新绑定，或下载包含`ExportManifest`和校验报告的变更包供人工搬运；不得声称已写入本机Git工作区。
 
 ## 遗留兼容：本地伴随服务（非一期规范路径）

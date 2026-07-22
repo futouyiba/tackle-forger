@@ -1137,7 +1137,7 @@ Tackle Forger中的“发布”只表示发布内部RuleSetVersion、冻结Confi
 - 飞书等服务端可达但不能原生校验token的外部副作用不得由请求线程直接执行，必须进入按工作区串行的持久化fenced outbox。worker在每项副作用开始前重验最新token；同一目标的低token结果处于超时/未知状态时，必须先按幂等键回读并确认结果或进入人工恢复，禁止更高token命令越过。服务端outbox不包含第25.2节的浏览器本地配置文件写入或下载变更包，也不得保存或索取浏览器IndexedDB中的目录句柄或本机绝对路径。
 - 服务端外部调用返回后、写入成功证据前再次校验token。若调用期间租约过期且新token已经发放，旧操作只能向协调器报告未知结果，不能用旧token写入任何业务状态或成功证据；协调器必须以当前有效token追加`SUPERSEDED/RECOVERY_REQUIRED`回读证据并完成回读/补偿，再允许更高token继续。
 - 浏览器本地配置写入由持有`FileSystemDirectoryHandle`的页面按第25.2至25.5节执行，不能由服务端worker代写，也不能声称fencing token能撤销或阻止已经交给本机文件系统的写操作。取得租约只授权本次正式写入并限定服务端成功证据：页面在开始写入、每个文件写入前及报告最终结果前向服务端重验`leaseId + fencingToken`，但文件一致性仍必须依靠基线hash/mtime、备份、恢复Manifest、逐文件回读和恢复事务。
-- 浏览器本地写入期间若租约失效或出现更高token，即使部分字节已经落盘，旧客户端也不得提交成功证据。任一配置导出租约在没有已验证终态时过期、断线或取消，服务端必须先把`workspaceId + bindingId + environmentId + channel`对应逻辑目标置为`recoveryState=RECOVERY_REQUIRED`并记录`reason=EXTERNAL_FILE_CONFLICT`；不能因为客户端未回报就假定文件未变。后续只允许持有当前token的恢复操作重新绑定并回读全部目标文件，按Manifest恢复或前向协调且记录新hash；恢复完成前阻止该目标新的正式写入。
+- 浏览器本地写入期间若租约失效或出现更高token，即使部分字节已经落盘，旧客户端也不得提交成功证据。任一配置导出租约在没有已验证终态时过期、断线或取消，服务端必须先把`workspaceId + bindingId + environmentId + channelKey`对应逻辑目标置为`recoveryState=RECOVERY_REQUIRED`并记录`reason=EXTERNAL_FILE_CONFLICT`；不能因为客户端未回报就假定文件未变。后续只允许持有当前token的恢复操作先确认目录授权，必要时重新绑定，并回读全部目标文件，按Manifest恢复或前向协调且记录新hash；恢复完成前阻止该目标新的正式写入。
 - 操作成功、失败或取消后自动释放；浏览器断开或服务异常时，通过心跳和短期租约自动过期，防止永久锁死。租约过期只允许发放更高token，不代表旧操作可以继续提交。
 - 不提供绕过硬校验、Revision冲突、显式拉取、Snapshot不可变或配置关系校验的紧急通道。失败写入继续通过幂等键、回读、备份和恢复Manifest处理。
 
@@ -1155,7 +1155,7 @@ Tackle Forger中的“发布”只表示发布内部RuleSetVersion、冻结Confi
 - 三个阶段均不存在飞书审批依赖，同一用户可以连续完成规则链路中的显式动作。
 - 两名用户同时尝试关键写操作时只有一人取得锁，另一人仍可读取并看到明确的持锁提示。
 - Given A持有token 41并在服务端可达的远端写入中卡住，When 租约过期且B取得token 42，Then A恢复后的任何服务端状态提交都返回`STALE_FENCING_TOKEN`；B不能越过A的未知远端结果，必须先完成幂等回读/恢复，最终同一目标不会出现A在B之后生效。
-- Given 浏览器A用token 41写完第一份配置文件后断线且租约无已验证终态地过期，When 服务端处理过期并由B取得恢复token 42，Then 目标已是`recoveryState=RECOVERY_REQUIRED, reason=EXTERNAL_FILE_CONFLICT`且A不能再提交成功证据；B必须先重新授权目录、逐文件回读并按Manifest恢复或前向协调，不能把本机写入伪装为outbox已隔离。
+- Given 浏览器A用token 41写完第一份配置文件后断线且租约无已验证终态地过期，When 服务端处理过期并由B取得恢复token 42，Then 目标已是`recoveryState=RECOVERY_REQUIRED, reason=EXTERNAL_FILE_CONFLICT`且A不能再提交成功证据；B必须先确认或重新请求目录授权、逐文件回读并按Manifest恢复或前向协调，不能把本机写入伪装为outbox已隔离。
 - 持锁客户端断开后租约可以自动过期并发放更高fencing token；服务端副作用通过幂等回读恢复，浏览器本地文件通过hash/mtime、逐文件回读和Manifest恢复，均不得伪装重复成功。
 - 普通操作记录到期清理不改变历史Snapshot、Patch、RuleSet或导出Manifest的复现关系。
 

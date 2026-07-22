@@ -3,7 +3,7 @@
 > 状态：可进入开发  
 > 面向对象：接手实现、重构、测试或评审的 Codex Agent  
 > 权威规范：`docs/tackle-forger-development-spec-v3.md`  
-> 最后对齐v3：2026-07-22  
+> 最后对齐v3：2026-07-23
 > 文档索引：`docs/README.md`
 
 ## 1. 任务目标
@@ -75,6 +75,8 @@ diminishing_division:
 - 品质映射固定为 C/绿、B/蓝、A/紫、S/橙。
 - `functionIntensity` 表示功能专精强度，不是品质等级。
 - SKU 是类似 RF4 的钓具抽屉；Model 才是实际展示、选择和购买对象。
+- 当前`Collection → Series → SKU → Model → ConfigurationSnapshot`、`targetPullKg`、最近结构标杆匹配、甘特图和候选生成只处理竿、轮、线；SKU不包含钩、漂、真饵或拟饵。
+- 钩、漂、真饵和拟饵当前完全延期。产品界面不得提供注册表只读入口、“未启用”占位、草稿、生成、发布、Snapshot或导出动作；注册表与迁移层只保留稳定ID、历史Payload和引用。未来启动任一部位必须先建立独立产品设计Issue，本handoff不构成实现授权。
 - 技术是词条组合包。技术与其包含的词条不得重复贡献同名属性加成。
 - 被动词条在本工具中只保存、计分和展示；不执行，也不验证钓鱼模拟器逻辑。
 - 已发布 `ConfigurationSnapshot` 不得被上游规则更新静默重算。
@@ -150,7 +152,7 @@ WP2 与 WP3 可以在 WP1 稳定后并行开发；其余工作包按依赖顺序
 - `ItemTypeProfile`：类型规则层。
 - `FunctionProfile` 与 `functionIntensity`。
 - 可选的 `PerformanceProfile`。
-- `ItemPartDefinition`：部件或子类型的约束与参数元数据。
+- `ItemPartDefinition`：当前为竿、轮、线提供部件或子类型的约束与参数元数据；钩、漂、真饵和拟饵只允许保留注册表与迁移兼容，不接入产品流程。
 - `RuleSetVersion`、工作区规则设置和 `ReductionStackingMode`。
 - `DerivedProjection`、属性贡献项、规则警告和 Trace。
 
@@ -461,7 +463,7 @@ rtk npm test
 - 新需求与 v3 的固定领域结论冲突。
 - 要把开放语义变成不可配置的永久规则。
 - 要决定性能定位强度的最终命名与曲线。
-- 要决定何时开放鱼钩、浮漂、饵料等尚未纳入当前主流程的 UI。
+- 任何请求要求开放钩、漂、真饵或拟饵的只读UI、占位、草稿、生成、发布或导出。当前结论是完全延期；必须先为目标部位建立独立产品设计Issue，确认业务对象与完整准入边界，不能在实现Issue中直接决定或复用竿轮线逻辑。
 - 要决定 Patch 偏移超过多少时警告或阻断。
 - 需要改变已发布快照的冻结语义。
 
@@ -475,6 +477,7 @@ rtk npm test
 - 不做重量属性的连续插值。
 - 不自动把个案 Patch 反推为飞书通用规则。
 - 不让 SKU 直接成为最终购买对象。
+- 不为钩、漂、真饵或拟饵提供产品入口、占位、草稿、生成、发布、Snapshot或导出，也不把它们塞入竿轮线SKU。
 - 不为解决迁移困难而删除历史状态。
 
 ## 14. 给首个开发 Agent 的启动指令

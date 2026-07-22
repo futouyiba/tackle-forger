@@ -7,6 +7,7 @@
 > 远端分支复审：2026-07-22 23:03:53 +0800，`origin/review/current-state-2026-07-22@fee6c83a1f269ef310116828ad40bd6d832020c7`；完整测试与类型检查已重跑，详细证据见`../audits/remote-branches-review-2026-07-22.md`。
 > 规范同步：2026-07-23，按v3 OPEN-008已确认决策修正1/1.5期边界与外部阻断；本次只更新目标契约和差距描述，不冒充代码实现或新测试证据。  
 > OPEN-009对象可见性复核：2026-07-23 05:41:56 +0800，代码基线`origin/main@33cb47e4d923e6675f1a1bab8b2685266117bcaf`（提交时间2026-07-23 05:18:57 +0800）；确认运行时与测试仍执行对象级裁剪、隐藏计数和脱敏父链，本轮仅修正文档状态并由[Issue #31](https://github.com/futouyiba/tackle-forger/issues/31)跟踪实现迁移。
+> OPEN-003运行时复核：2026-07-23，代码基线`codex/open-003-deferred-parts@cdcbd7ce6bea60548f2224039861593c453ae028`；确认迁移层会保留四类扩展部位，创建Series页面仍渲染全部`state.itemParts`，服务端尚无独立启用策略门禁。本轮只记录实现事实，由[Issue #37](https://github.com/futouyiba/tackle-forger/issues/37)跟踪代码收口。
 > 对齐基线：v3 领域规范 > product-design-completion-v3 > implementation/requirements handoff > ux-design-v1 与 prototype 视觉证据。  
 > 状态定义：已实现、部分实现、缺失、因 v3 冲突而不采纳。
 
@@ -43,7 +44,7 @@
 | Snapshot 冻结与 UpgradeCandidate | 已实现 | 已发布 Snapshot 内容/hash/有序 Patch 引用不可原地变更；上游变化只产生升级候选 | 无 |
 | 09_甘特图作为产品实体 | 因 v3 冲突而不采纳 | 09 只属于开发排期；产品甘特图来自本地 Series/SKU/Model | 不从 09 反向生成领域对象 |
 | 11/12/14–17 反向覆盖产品真相 | 因 v3 冲突而不采纳 | 仅作为历史样例、映射参考或暂存输出 | 不反向覆盖 Snapshot |
-| 扩展部位主流程 | 部分实现 | 注册表可保留扩展部位 | OPEN-003 下钩、漂、真饵、拟饵在一期 UI 保持禁用 |
+| 扩展部位主流程 | 部分实现 | 注册表和迁移层会保留钩、漂、真饵、拟饵并标记`activeInGeneration=false`；但创建Series页面仍直接渲染全部`state.itemParts`，写接口也未独立校验启用部位策略 | OPEN-003已确认当前完全延期；按[Issue #37](https://github.com/futouyiba/tackle-forger/issues/37)移除产品入口并增加服务端门禁，同时保留稳定ID、历史Payload和引用。修复完成前不得声称运行时已经禁用 |
 
 ## 2. 产品反馈归并
 

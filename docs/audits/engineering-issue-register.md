@@ -62,7 +62,7 @@
 | AUD-014 | RESOLVED | 工作区备份没有包含飞书会话文件。 | `scripts/backup-workspace.ts`把`FEISHU_SESSION_DATA_DIR`复制到备份的`auth`目录，并在manifest记录来源与是否包含；运行手册明确停服恢复及无备份时重新登录。 | 临时SQLite、导入文件与会话目录执行备份，生成`workspace.sqlite`、`files`、`auth`和manifest，备份根权限为`0700`。 |
 | AUD-020 | RESOLVED | `.claude/scheduled_tasks.lock`运行态锁文件曾被版本化。 | 文件内容只有`sessionId/pid/acquiredAt`，属于单次工具进程锁；已从Git移除，现有`/.claude/`忽略规则防止再次提交。 | `git check-ignore -v .claude/scheduled_tasks.lock`命中`.gitignore`；工作树显示追踪文件删除。 |
 | AUD-006 | RESOLVED | 历史pnpm workspace缺少可复现安装与完整验证。 | `pnpm-lock.yaml`已与全部6个workspace项目同步；共享Vitest配置隔离根Vinext/Cloudflare插件；冻结安装可复现。 | pnpm 10.33.2下`pnpm install --frozen-lockfile`、5个子项目typecheck/test/build全部通过；domain 3项测试通过，其余无测试包按显式`passWithNoTests`通过。 |
-| AUD-001 | RESOLVED | 整包状态保存可绕过领域命令。 | `findGovernedStateChanges`只允许`notes`经整包PUT变化，其余现有、未来及额外注入字段默认拒绝；`PUT /api/state`返回`DOMAIN_COMMAND_REQUIRED`，畸形JSON返回400。 | `tests/api-command-boundaries.test.ts`覆盖新旧领域集合、规则设置和未知字段；`tests/api-routes.test.ts`覆盖已认证越权PUT和畸形JSON；集成态默认`npm test`通过208项TS测试与1项渲染测试。 |
+| AUD-001 | RESOLVED | 整包状态保存可绕过领域命令。 | `findGovernedStateChanges`仅允许旧工作台仍直接维护的显式通用配置字段经整包PUT变化；v3产品实体、不可变快照、规则设置、账本、命令记录、审计历史及未来未知字段继续默认拒绝。`PUT /api/state`返回`DOMAIN_COMMAND_REQUIRED`，畸形JSON返回400。 | `tests/api-command-boundaries.test.ts`覆盖旧工作台白名单、v3领域集合、规则设置、账本、快照和未知字段；`tests/api-routes.test.ts`覆盖通用配置正常保存、已认证越权PUT和畸形JSON。 |
 | AUD-002 | RESOLVED | Series API缺少完整运行时枚举与引用校验。 | `POST /api/series`显式校验强度、部位、钓法、类型、功能、品质、Collection与Performance存在/启用状态，并保留Type兼容校验。 | `tests/api-routes.test.ts`逐引用4xx覆盖；类型检查及默认`npm test`通过。 |
 | AUD-003 | RESOLVED | Series/SKU创建缺少命令幂等与结果恢复。 | 客户端发送稳定命令键；服务端将输入hash与Series结果引用同Workspace revision原子保存，相同输入恢复原Series/SKU，不同输入409，并发仅一次提交成功。 | `tests/api-routes.test.ts`覆盖重放、键冲突、并发冲突及冲突后恢复；默认`npm test`通过。 |
 | AUD-004 | RESOLVED | 离散拉力解析静默丢弃非法token与重复项。 | `parseDiscretePulls`保留合法值并单独报告`invalidTokens/duplicateValues`；任一异常均阻止创建。 | `tests/api-command-boundaries.test.ts`与`tests/api-routes.test.ts`覆盖中英文分隔、负数、文本和重复值。 |
@@ -99,3 +99,4 @@
 | 2026-07-22 | 三个独立worktree修复分支完成主分支集成复核；生产构建、208项TypeScript测试及1项渲染测试通过。有效未关闭问题由24个降为10个。 | `a9472b6` `a35cf72` `d9a2412` `1c0df55` `6d6d660` `44cfc2d` |
 | 2026-07-22 | 历史pnpm workspace完成冻结安装、类型检查、测试与生产构建，关闭`AUD-006`；`AUD-018/019`等待新增Windows/双包管理CI首次远端通过。 | 本分支提交 |
 | 2026-07-22 | 飞书恢复与规则源配置治理：关闭`AUD-021/022`；回写先持久化意图并可跨本地revision冲突自动对账，写回/拉取/发布保持独立；主工作簿按v3 §14确认为canonical config-as-code并增加配置与稳定sheet注册表校验。 | `d00ccbed761ea428bf9b0e5f3c502ddb28273c70` |
+| 2026-07-22 | 集成复核修正`AUD-001`过窄白名单造成的旧工作台保存回归；仅恢复旧工作台显式通用配置字段，v3受治理状态与未知字段继续默认拒绝。 | 本分支提交 |

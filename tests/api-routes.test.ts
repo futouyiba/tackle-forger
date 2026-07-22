@@ -35,6 +35,25 @@ test("已认证整包 PUT 不能绕过 Series 领域命令", { concurrency: fals
   assert.deepEqual(payload.governedChanges, ["seriesDefinitions"]);
 });
 
+test("已认证整包 PUT 可保存工作台通用配置编辑", { concurrency: false }, async () => {
+  withTrustedProxy();
+  const current = await loadWorkspaceState();
+  const state = structuredClone(current.state);
+  state.notes = `route-save-${current.revision}`;
+  state.templates[0] = { ...state.templates[0]!, notes: "route-level workbench save" };
+  const response = await putState(new NextRequest("http://localhost/api/state", {
+    method: "PUT",
+    headers: authHeaders,
+    body: JSON.stringify({ state, baseRevision: current.revision }),
+  }));
+  assert.equal(response.status, 200);
+  const payload = await response.json() as { revision?: number };
+  assert.equal(payload.revision, current.revision + 1);
+  const saved = await loadWorkspaceState();
+  assert.equal(saved.state.notes, state.notes);
+  assert.equal(saved.state.templates[0]?.notes, "route-level workbench save");
+});
+
 test("整包 PUT 的畸形 JSON 返回400", { concurrency: false }, async () => {
   withTrustedProxy();
   const response = await putState(new NextRequest("http://localhost/api/state", {

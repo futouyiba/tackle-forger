@@ -2121,11 +2121,11 @@ interface FiveAxisViewDefinition {
 
 正式视图恰好五轴，顺序为拉力、耐久、抛投、感度、操控；定义仍通过版本发布和引用，不得散落硬编码。同图共享definition、W重量段、`weightBandPolicyVersion`和`vertexSetHash`。每点返回direct/context_inherited/not_applicable/missing/error、原始值、未封顶比例、comparisonScore、officialDisplayScore、Trace和来源。not_applicable不画0，分母非正永远error。Series基准返回竿轮线三个projectionRef、理由和revision，禁止聚合或静默回退。
 
-正常路径：以最终拉力确定W段，按发布定义计算三条部件曲线与三条Series结构投影参考线，并提供数值表。  
-边界：某部位无结构投影时只省略对应参考线；轮线无参考竿时抛投为not_applicable；均不得画全0。  
+正常路径：以最终拉力确定W段，按发布定义计算三条部件曲线与三条Series结构投影参考线，并提供数值表。
+边界：某部位无结构投影时只省略对应参考线；轮线无参考竿时抛投为not_applicable；均不得画全0。
 冲突：规则版本或顶点hash不同拒绝叠加。  
-恢复：发布有效定义、顶点集合或重算；历史Snapshot仍用冻结版本。  
-权限：发布定义需rules.five_axis.publish；临时比较不改变Series或Snapshot。  
+恢复：发布有效定义、顶点集合或重算；历史Snapshot仍用冻结版本。
+权限：发布定义需rules.five_axis.publish；临时比较不改变Series或Snapshot。
 验收：Given 两件装备来自不同W段，When 选择共同W段比较，Then 二者使用同一顶点集合；Given comparisonScore为123.7，When 绘图，Then 节点按123.7伸出100分外圈、officialDisplayScore仍为100且无视觉封顶。
 
 ### 24.7 R6：AIRecommendation

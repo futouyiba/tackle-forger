@@ -61,6 +61,7 @@ import {
 } from "@/lib/enabled-item-parts";
 import {
   preserveReadOnlyLegacyProductHistory,
+  resolveLegacyCatalogReference,
   resolveCompatibleWorkbenchPage,
 } from "@/lib/legacy-history";
 import {
@@ -216,12 +217,6 @@ function qualityColor(state: WorkspaceState, id: string) {
   return band ? qualityBandDisplayColor(band) : "#667085";
 }
 
-function optionLabel(state: WorkspaceState, id?: string) {
-  const option = state.modifiers.find((item) => item.id === id);
-  if (!option) return "—";
-  return option.name + (String(option.level) === "—" ? "" : " " + option.level);
-}
-
 function formatShowcaseRange(min: number, max: number, unit: string) {
   return `${formatNumber(min)}-${formatNumber(max)}${unit}`;
 }
@@ -362,6 +357,55 @@ function LegacyHistoryNotice({
       </div>
       <Button tone="primary" size="sm" onClick={onOpenV3}>前往 v3 正式流程</Button>
     </Card>
+  );
+}
+
+function LegacyReference({
+  id,
+  label,
+}: {
+  id: string;
+  label?: string | null;
+}) {
+  return (
+    <span className={cx("legacy-reference", !label && "is-unresolved")}>
+      <span>{label || "未解析"}</span>
+      <code>{id}</code>
+      {!label ? <em>未解析</em> : null}
+    </span>
+  );
+}
+
+function LegacyReferenceList({
+  ids,
+  resolveLabel,
+}: {
+  ids: string[];
+  resolveLabel: (id: string) => string | null;
+}) {
+  if (!ids.length) return <span className="legacy-empty-value">未记录</span>;
+  return (
+    <div className="legacy-reference-list">
+      {ids.map((id, index) => (
+        <LegacyReference key={`${id}-${index}`} id={id} label={resolveLabel(id)} />
+      ))}
+    </div>
+  );
+}
+
+function LegacyValueMap({
+  values,
+}: {
+  values: Record<string, number | string>;
+}) {
+  const entries = Object.entries(values);
+  if (!entries.length) return <span className="legacy-empty-value">未记录</span>;
+  return (
+    <div className="legacy-value-map">
+      {entries.map(([key, value]) => (
+        <span key={key}><code>{key}</code><b>{String(value)}</b></span>
+      ))}
+    </div>
   );
 }
 
@@ -866,6 +910,26 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     }
   };
   const parametersForKind = state.parameters.filter((parameter) => parameter.itemKind === itemKind);
+  const legacyTemplateLabel = (id: string) => resolveLegacyCatalogReference(
+    id,
+    state.templates,
+    (template) => `${template.tier} · ${template.fishMinKg}–${template.fishMaxKg}kg`,
+  ).label;
+  const legacyModifierLabel = (id: string) => resolveLegacyCatalogReference(
+    id,
+    state.modifiers,
+    (option) => option.name + (String(option.level) === "—" ? "" : ` ${option.level}`),
+  ).label;
+  const legacyAffixLabel = (id: string) => resolveLegacyCatalogReference(
+    id,
+    state.affixes,
+    (affix) => `${affix.name} · ${affix.score}分`,
+  ).label;
+  const legacyQualityLabel = (id: string) => resolveLegacyCatalogReference(
+    id,
+    state.qualityBands,
+    (quality) => qualityBandDisplayName(quality),
+  ).label;
   const filteredCandidates = state.candidates.filter((candidate) => {
     const matchesStatus = candidateStatus === "all" || candidate.status === candidateStatus;
     const haystack = [
@@ -1275,7 +1339,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       }
 
       setDirty(true);
-      notify("Excel 已导入并重算；保存后形成团队版本。");
+      notify("Excel 已导入；当前配置已载入，只读历史数据保持原样。保存后形成团队版本。");
     } catch (error) {
       notify(error instanceof Error ? error.message : "Excel 导入失败");
     } finally {
@@ -1396,7 +1460,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       <div className="panel-title">
         <div>
           <h3>参数管理</h3>
-          <p>参数名会同步迁移模板值、规则、精调和正式 SKU。</p>
+          <p>参数名只同步迁移当前模板值与规则；历史精调和 OfficialSku 保留原始 key，不会随之改写。</p>
         </div>
         <Button icon={Plus} size="sm" onClick={addParameter}>新增{kindLabels[itemKind]}参数</Button>
       </div>
@@ -2016,7 +2080,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
               <thead><tr><th>系列</th><th>平台ID</th><th>平台定位</th><th>历史品质</th><th>模板</th><th>必带词条</th><th>候选上限</th></tr></thead>
               <tbody>{state.recipes.map((recipe) => (
                 <tr key={recipe.id} className={selected?.id === recipe.id ? "selected-row" : ""} onClick={() => setSelectedRecipeId(recipe.id)}>
-                  <td><strong>{recipe.name}</strong></td><td>{recipe.platformId}</td><td>{recipe.platformPosition}</td>
+                  <td><strong>{recipe.name}</strong><small><code>{recipe.id}</code></small></td><td><code>{recipe.platformId}</code></td><td>{recipe.platformPosition}</td>
                   <td><Pill tone="blue">{recipe.qualityTarget}</Pill></td><td>{recipe.templateIds.length || "全部"}</td><td>{recipe.requiredAffixIds.length}</td><td>{recipe.maxCandidates}</td>
                 </tr>
               ))}</tbody>
@@ -2025,7 +2089,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           {selected ? (
             <Card className="recipe-inspector">
               <div className="panel-title">
-                <div><span className="eyebrow">只读历史配方</span><h3>{selected.name}</h3></div>
+                <div><span className="eyebrow">只读历史配方</span><h3>{selected.name}</h3><code>{selected.id}</code></div>
                 <Pill tone="neutral">不可编辑</Pill>
               </div>
               <div className="form-grid">
@@ -2037,25 +2101,21 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
                 <label className="field-label">可选词条槽<TextInput type="number" value={selected.optionalSlots} readOnly /></label>
                 <label className="field-label">候选上限<TextInput type="number" value={selected.maxCandidates} readOnly /></label>
               </div>
-              <div className="recipe-section"><strong>重量模板</strong><div className="check-grid">{state.templates.map((template) => (
-                <label key={template.id}><input type="checkbox" checked={selected.templateIds.includes(template.id)} disabled />{template.id} · {template.tier}</label>
-              ))}</div></div>
+              <div className="recipe-section"><strong>重量模板 · 原始 ID</strong><LegacyReferenceList ids={selected.templateIds} resolveLabel={legacyTemplateLabel} /></div>
               {(["structure", "function", "performance", "technology"] as DimensionKey[]).map((key) => {
                 const field = key === "structure" ? "structureIds" : key === "function" ? "functionIds" : key === "performance" ? "performanceIds" : "technologyIds";
                 return (
-                  <div className="recipe-section" key={key}><strong>{dimensionLabels[key]}</strong><div className="check-grid">
-                    {state.modifiers.filter((item) => item.dimension === key).map((option) => (
-                      <label key={option.id}><input type="checkbox" checked={selected[field].includes(option.id)} disabled />{option.name} {String(option.level) === "—" ? "" : option.level}</label>
-                    ))}
-                  </div></div>
+                  <div className="recipe-section" key={key}><strong>{dimensionLabels[key]} · 原始 ID</strong><LegacyReferenceList ids={selected[field]} resolveLabel={legacyModifierLabel} /></div>
                 );
               })}
-              <div className="recipe-section"><strong>必带词条</strong><div className="check-grid">{state.affixes.map((affix) => (
-                <label key={affix.id}><input type="checkbox" checked={selected.requiredAffixIds.includes(affix.id)} disabled />{affix.name} · {affix.score}分</label>
-              ))}</div></div>
-              <div className="recipe-section"><strong>可选词条池</strong><div className="check-grid">{state.affixes.map((affix) => (
-                <label key={affix.id}><input type="checkbox" checked={selected.optionalAffixPoolIds.includes(affix.id)} disabled />{affix.name}</label>
-              ))}</div></div>
+              <div className="recipe-section"><strong>必带词条 · 原始 ID</strong><LegacyReferenceList ids={selected.requiredAffixIds} resolveLabel={legacyAffixLabel} /></div>
+              <div className="recipe-section"><strong>可选词条池 · 原始 ID</strong><LegacyReferenceList ids={selected.optionalAffixPoolIds} resolveLabel={legacyAffixLabel} /></div>
+              {selected.partConstraints ? (
+                <div className="recipe-section">
+                  <strong>分部位约束原始 payload · 不解释</strong>
+                  <pre className="legacy-raw-json">{JSON.stringify(selected.partConstraints, null, 2)}</pre>
+                </div>
+              ) : null}
             </Card>
           ) : null}
         </div>
@@ -2252,24 +2312,23 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   };
 
   const renderCandidateInspector = (candidate: Candidate) => {
-    const template = state.templates.find((item) => item.id === candidate.templateId);
     return (
       <aside className="candidate-inspector">
         <div className="inspector-head">
-          <div><span className="eyebrow">只读历史 Candidate</span><h3>{candidate.comboId}</h3><p>{candidate.seriesName} · {template?.tier}</p></div>
+          <div><span className="eyebrow">只读历史 Candidate</span><h3>{candidate.comboId}</h3><p>{candidate.seriesName}</p><LegacyReference id={candidate.templateId} label={legacyTemplateLabel(candidate.templateId)} /></div>
           <button type="button" onClick={() => setSelectedCandidateId("")}><X size={18} /></button>
         </div>
         <div className="inspector-scroll">
           <div className="quality-score-block" style={{ borderColor: qualityColor(state, candidate.calculated.quality.qualityId) }}>
             <span>词条品质</span>
-            <strong>{qualityName(state, candidate.calculated.quality.qualityId)}</strong>
+            <LegacyReference id={candidate.calculated.quality.qualityId} label={legacyQualityLabel(candidate.calculated.quality.qualityId)} />
             <b>{candidate.calculated.quality.finalScore} 分</b>
             <small>原始 {candidate.calculated.quality.rawScore} 分</small>
           </div>
           <div className="score-breakdown">
             {candidate.calculated.quality.contributions.map((contribution) => (
               <div key={contribution.affixId}>
-                <span>{state.affixes.find((item) => item.id === contribution.affixId)?.name}</span>
+                <LegacyReference id={contribution.affixId} label={legacyAffixLabel(contribution.affixId)} />
                 <em>{contribution.base} × {formatNumber(contribution.factor)} = {contribution.score}</em>
               </div>
             ))}
@@ -2286,22 +2345,27 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
             <label className="field-label span-2">使用场景<textarea value={candidate.useScene} readOnly aria-readonly="true" /></label>
           </div>
           <div className="inspector-section">
-            <div className="section-title"><strong>词条</strong><span>{candidate.affixIds.length} 条</span></div>
-            <div className="affix-checks">{state.affixes.map((affix) => (
-              <label key={affix.id} className={candidate.affixIds.includes(affix.id) ? "checked" : ""}>
-                <input type="checkbox" checked={candidate.affixIds.includes(affix.id)} disabled />
-                <span>{affix.name}<small>{affix.score}分 · {affix.category === "stat" ? "属性" : "被动"}</small></span>
-              </label>
-            ))}</div>
+            <div className="section-title"><strong>历史选择 · 原始 ID</strong><span>只读</span></div>
+            <div className="legacy-selection-grid">
+              <div><b>结构</b><LegacyReference id={candidate.selections.structureId ?? "未记录"} label={candidate.selections.structureId ? legacyModifierLabel(candidate.selections.structureId) : "未记录"} /></div>
+              <div><b>材质</b><LegacyReference id={candidate.selections.materialId ?? "未记录"} label={candidate.selections.materialId ? legacyModifierLabel(candidate.selections.materialId) : "未记录"} /></div>
+              <div><b>功能</b><LegacyReference id={candidate.selections.functionId ?? "未记录"} label={candidate.selections.functionId ? legacyModifierLabel(candidate.selections.functionId) : "未记录"} /></div>
+              <div><b>性能</b><LegacyReference id={candidate.selections.performanceId ?? "未记录"} label={candidate.selections.performanceId ? legacyModifierLabel(candidate.selections.performanceId) : "未记录"} /></div>
+              <div><b>技术</b><LegacyReferenceList ids={candidate.selections.technologyIds} resolveLabel={legacyModifierLabel} /></div>
+              <div><b>系列</b><LegacyReference id={candidate.selections.seriesId ?? "未记录"} label={candidate.selections.seriesId ? candidate.selections.seriesId : "未记录"} /></div>
+            </div>
+          </div>
+          <div className="inspector-section">
+            <div className="section-title"><strong>词条 · 原始 ID</strong><span>{candidate.affixIds.length} 条</span></div>
+            <LegacyReferenceList ids={candidate.affixIds} resolveLabel={legacyAffixLabel} />
           </div>
           <div className="inspector-section">
             <div className="section-title"><strong>历史手工参数覆盖</strong><span>只读</span></div>
-            {Object.entries(candidate.overrides).map(([key, value]) => (
-              <div className="override-row" key={key}>
-                <code>{key}</code>
-                <TextInput value={value} type={typeof value === "number" ? "number" : "text"} readOnly />
-              </div>
-            ))}
+            <LegacyValueMap values={candidate.overrides} />
+          </div>
+          <div className="inspector-section">
+            <div className="section-title"><strong>历史计算值 · 原始 key/value</strong><span>只读</span></div>
+            <LegacyValueMap values={candidate.calculated.values} />
           </div>
           <div className="inspector-section">
             <div className="section-title"><strong>计算轨迹</strong><span>{candidate.calculated.trace.length} 步</span></div>
@@ -2369,10 +2433,10 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
                     <td className="sticky-col"><button className="link-button" onClick={() => setSelectedCandidateId(candidate.id)}>{candidate.comboId}</button></td>
                     <td><Pill tone={candidate.status === "published" ? "success" : candidate.status === "rejected" ? "danger" : candidate.status === "shortlisted" ? "blue" : "neutral"}>{candidate.status === "candidate" ? "候选" : candidate.status === "shortlisted" ? "入围" : candidate.status === "rejected" ? "淘汰" : "已发布"}</Pill></td>
                     <td><strong>{candidate.seriesName}</strong><small>{candidate.platformPosition}</small></td>
-                    <td>{candidate.templateId}</td><td>{candidate.fishMinKg}–{candidate.fishMaxKg}</td>
-                    <td>{optionLabel(state, candidate.selections.structureId)}</td><td>{optionLabel(state, candidate.selections.functionId)}</td><td>{optionLabel(state, candidate.selections.performanceId)}</td>
-                    <td><div className="mini-tags">{candidate.affixIds.slice(0, 2).map((id) => <span key={id}>{state.affixes.find((item) => item.id === id)?.name}</span>)}{candidate.affixIds.length > 2 ? <b>+{candidate.affixIds.length - 2}</b> : null}</div></td>
-                    <td><Pill style={{ color: qualityColor(state, candidate.calculated.quality.qualityId), borderColor: qualityColor(state, candidate.calculated.quality.qualityId) }}>{qualityName(state, candidate.calculated.quality.qualityId)}</Pill></td>
+                    <td><LegacyReference id={candidate.templateId} label={legacyTemplateLabel(candidate.templateId)} /></td><td>{candidate.fishMinKg}–{candidate.fishMaxKg}</td>
+                    <td><LegacyReference id={candidate.selections.structureId ?? "未记录"} label={candidate.selections.structureId ? legacyModifierLabel(candidate.selections.structureId) : "未记录"} /></td><td><LegacyReference id={candidate.selections.functionId ?? "未记录"} label={candidate.selections.functionId ? legacyModifierLabel(candidate.selections.functionId) : "未记录"} /></td><td><LegacyReference id={candidate.selections.performanceId ?? "未记录"} label={candidate.selections.performanceId ? legacyModifierLabel(candidate.selections.performanceId) : "未记录"} /></td>
+                    <td><div className="mini-tags">{candidate.affixIds.slice(0, 2).map((id) => <LegacyReference key={id} id={id} label={legacyAffixLabel(id)} />)}{candidate.affixIds.length > 2 ? <b>+{candidate.affixIds.length - 2}</b> : null}</div></td>
+                    <td><LegacyReference id={candidate.calculated.quality.qualityId} label={legacyQualityLabel(candidate.calculated.quality.qualityId)} /></td>
                     <td><strong>{candidate.calculated.quality.finalScore}</strong></td>
                     <td>{formatNumber(candidate.calculated.values["杆最大拉力kgf"])} / {formatNumber(candidate.calculated.values["轮最大拉力kgf"])} / {formatNumber(candidate.calculated.values["线最大拉力kgf"])}</td>
                     <td>{formatNumber(candidate.calculated.safeWorkingForce, 3)}</td><td>×{candidate.calculated.priceIndex}</td>
@@ -2400,16 +2464,18 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       <div className="toolbar"><div className="toolbar-note">只读导出会保留原始历史 payload，不生成或改写正式对象。</div><div className="toolbar-spacer" /><Button icon={Download} onClick={() => void exportExcel()}>导出历史 Excel</Button></div>
       {state.officialSkus.length ? (
         <Card className="flush-card"><SheetTable><thead><tr>
-          <th className="sticky-col">组合ID</th><th>平台ID</th><th>平台定位</th><th>模板</th><th>历史品质</th><th>系列</th><th>结构</th><th>功能</th><th>性能</th><th>调性覆盖</th><th>硬度</th><th>长度m</th><th>使用场景</th><th>杆ID</th><th>轮ID</th><th>线ID</th><th>价格指数</th><th>杆拉力</th><th>轮拉力</th><th>线拉力</th><th>安全拉力</th>
+          <th className="sticky-col">组合ID</th><th>OfficialSku ID</th><th>Candidate ID</th><th>平台ID</th><th>平台定位</th><th>模板</th><th>历史品质</th><th>系列</th><th>结构</th><th>功能</th><th>性能</th><th>词条原始 ID</th><th>调性覆盖</th><th>硬度</th><th>长度m</th><th>使用场景</th><th>杆ID</th><th>轮ID</th><th>线ID</th><th>价格指数</th><th>杆拉力</th><th>轮拉力</th><th>线拉力</th><th>安全拉力</th><th>原始 values</th><th>原始 overrides</th>
         </tr></thead><tbody>{state.officialSkus.map((sku) => (
           <tr key={sku.id}>
-            <td className="sticky-col"><strong>{sku.comboId}</strong></td><td>{sku.platformId}</td><td>{sku.platformPosition}</td><td>{sku.templateId}</td>
-            <td><Pill style={{ color: qualityColor(state, sku.qualityId), borderColor: qualityColor(state, sku.qualityId) }}>{qualityName(state, sku.qualityId)}</Pill></td>
+            <td className="sticky-col"><strong>{sku.comboId}</strong></td><td><code>{sku.id}</code></td><td><code>{sku.candidateId}</code></td><td><code>{sku.platformId}</code></td><td>{sku.platformPosition}</td><td><LegacyReference id={sku.templateId} label={legacyTemplateLabel(sku.templateId)} /></td>
+            <td><LegacyReference id={sku.qualityId} label={legacyQualityLabel(sku.qualityId)} /></td>
             <td>{sku.seriesName}</td>
             <td>{sku.structureName}</td><td>{sku.functionName} {sku.functionLevel}</td><td>{sku.performanceName} {sku.performanceLevel}</td>
+            <td><LegacyReferenceList ids={sku.affixIds} resolveLabel={legacyAffixLabel} /></td>
             <td>{sku.tone || "—"}</td><td>{sku.hardness || "—"}</td><td>{formatNumber(sku.lengthM)}</td><td>{sku.useScene || "—"}</td>
             <td><code>{sku.rodId}</code></td><td><code>{sku.reelId}</code></td><td><code>{sku.lineId}</code></td>
             <td>×{sku.priceIndex}</td><td>{formatNumber(sku.rodForce)}</td><td>{formatNumber(sku.reelForce)}</td><td>{formatNumber(sku.lineForce)}</td><td>{formatNumber(sku.safeWorkingForce, 3)}</td>
+            <td><LegacyValueMap values={sku.values} /></td><td><LegacyValueMap values={sku.overrides} /></td>
           </tr>
         ))}</tbody></SheetTable></Card>
       ) : <EmptyState title="没有历史 OfficialSku" text="此归档为空；新的正式产品请在 v3 Series/SKU/Model 流程中创建。" action={<Button tone="primary" onClick={() => setPage("candidates")}>前往 v3 甘特图</Button>} />}
@@ -2417,7 +2483,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   );
 
   const renderDetails = () => {
-    const kindParameters = state.parameters.filter((parameter) => parameter.itemKind === detailKind);
+    const historicalDetails = state.detailOverrides.filter((entry) => entry.itemKind === detailKind);
     return (
       <div className="page-stack">
         <LegacyHistoryNotice
@@ -2427,24 +2493,26 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           onOpenV3={() => setPage("v3flow")}
         />
         <div className="toolbar"><div className="segmented">{(["rod", "reel", "line"] as ItemKind[]).map((kind) => <button key={kind} className={detailKind === kind ? "active" : ""} onClick={() => setDetailKind(kind)}>{kindLabels[kind]}明细</button>)}</div><div className="toolbar-spacer" /><span className="toolbar-note">切换部位只改变查看范围，不修改历史记录。</span></div>
-        {state.officialSkus.length ? (
-          <Card className="flush-card"><SheetTable><thead><tr><th className="sticky-col">道具ID</th><th>组合ID</th><th>型号</th><th>名字</th>{kindParameters.map((parameter) => <th key={parameter.key}>{parameter.label}</th>)}<th className="wide-col">备注</th></tr></thead>
-          <tbody>{state.officialSkus.map((sku) => {
-            const detail = state.detailOverrides.find((item) => item.skuId === sku.id && item.itemKind === detailKind);
-            const itemId = detailKind === "rod" ? sku.rodId : detailKind === "reel" ? sku.reelId : sku.lineId;
+        {historicalDetails.length ? (
+          <Card className="flush-card"><SheetTable><thead><tr><th className="sticky-col">DetailOverride SKU ID</th><th>关联状态</th><th>原始部位</th><th>道具ID</th><th>组合ID</th><th>型号</th><th>名字</th><th>原始 key/value</th><th className="wide-col">备注</th></tr></thead>
+          <tbody>{historicalDetails.map((detail, index) => {
+            const sku = state.officialSkus.find((item) => item.id === detail.skuId);
+            const itemId = sku
+              ? detailKind === "rod" ? sku.rodId : detailKind === "reel" ? sku.reelId : sku.lineId
+              : null;
             return (
-              <tr key={sku.id}>
-                <td className="sticky-col"><code>{itemId}</code></td><td>{sku.comboId}</td>
-                <td>{detail?.model || "—"}</td><td>{detail?.name || "—"}</td>
-                {kindParameters.map((parameter) => {
-                  const value = detail?.values[parameter.key] ?? sku.values[parameter.key];
-                  return <td key={parameter.key}>{formatNumber(value)}</td>;
-                })}
-                <td>{detail?.notes || "—"}</td>
+              <tr key={`${detail.skuId}-${detail.itemKind}-${index}`}>
+                <td className="sticky-col"><code>{detail.skuId}</code></td>
+                <td>{sku ? <Pill tone="success">已解析</Pill> : <Pill tone="warning">未解析 OfficialSku</Pill>}</td>
+                <td><code>{detail.itemKind}</code></td>
+                <td>{itemId ? <code>{itemId}</code> : <span className="legacy-empty-value">未解析</span>}</td><td>{sku?.comboId || <span className="legacy-empty-value">未解析</span>}</td>
+                <td>{detail.model || "—"}</td><td>{detail.name || "—"}</td>
+                <td><LegacyValueMap values={detail.values} /></td>
+                <td>{detail.notes || "—"}</td>
               </tr>
             );
           })}</tbody></SheetTable></Card>
-        ) : <EmptyState title="没有历史明细" text="此归档为空；v3 Model 的部件选择与 Patch 请在正式流程查看。" />}
+        ) : <EmptyState title={`没有历史${kindLabels[detailKind]}明细`} text="此归档为空；v3 Model 的部件选择与 Patch 请在正式流程查看。" />}
       </div>
     );
   };
@@ -3095,7 +3163,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           }}
         />
         <details className="legacy-candidate-results">
-          <summary>历史 Model 候选结果（兼容旧候选池）</summary>
+          <summary>历史 Candidate 结果（兼容旧候选池）</summary>
           {renderCandidates()}
         </details>
       </>
@@ -3112,6 +3180,9 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   const compareCandidates = compareIds
     .map((id) => state.candidates.find((candidate) => candidate.id === id))
     .filter((candidate): candidate is Candidate => Boolean(candidate));
+  const compareHistoricalParameterKeys = Array.from(new Set(
+    compareCandidates.flatMap((candidate) => Object.keys(candidate.calculated.values)),
+  ));
   const requestedV3Series = state.seriesDefinitions.find((entry) => entry.id === v3SeriesId);
   const v3Series = requestedV3Series && isProductItemPartEnabled(
     seriesItemPartId(requestedV3Series, state.skuDrawers),
@@ -3274,13 +3345,16 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           <div className="compare-scroll">
             <table><thead><tr><th>参数</th>{compareCandidates.map((candidate) => <th key={candidate.id}>{candidate.comboId}<small>{candidate.seriesName}</small></th>)}</tr></thead>
             <tbody>
-              <tr><td>品质 / 分数</td>{compareCandidates.map((candidate) => <td key={candidate.id}><Pill style={{ color: qualityColor(state, candidate.calculated.quality.qualityId) }}>{qualityName(state, candidate.calculated.quality.qualityId)}</Pill> {candidate.calculated.quality.finalScore}</td>)}</tr>
-              <tr><td>结构</td>{compareCandidates.map((candidate) => <td key={candidate.id}>{optionLabel(state, candidate.selections.structureId)}</td>)}</tr>
-              <tr><td>功能</td>{compareCandidates.map((candidate) => <td key={candidate.id}>{optionLabel(state, candidate.selections.functionId)}</td>)}</tr>
-              <tr><td>性能</td>{compareCandidates.map((candidate) => <td key={candidate.id}>{optionLabel(state, candidate.selections.performanceId)}</td>)}</tr>
-              {state.parameters.map((parameter) => (
-                <tr key={parameter.key}><td>{parameter.label}<small>{parameter.unit}</small></td>{compareCandidates.map((candidate) => <td key={candidate.id}>{formatNumber(candidate.calculated.values[parameter.key], parameter.precision)}</td>)}</tr>
-              ))}
+              <tr><td>品质 / 分数</td>{compareCandidates.map((candidate) => <td key={candidate.id}><LegacyReference id={candidate.calculated.quality.qualityId} label={legacyQualityLabel(candidate.calculated.quality.qualityId)} /> {candidate.calculated.quality.finalScore}</td>)}</tr>
+              <tr><td>结构</td>{compareCandidates.map((candidate) => <td key={candidate.id}><LegacyReference id={candidate.selections.structureId ?? "未记录"} label={candidate.selections.structureId ? legacyModifierLabel(candidate.selections.structureId) : "未记录"} /></td>)}</tr>
+              <tr><td>功能</td>{compareCandidates.map((candidate) => <td key={candidate.id}><LegacyReference id={candidate.selections.functionId ?? "未记录"} label={candidate.selections.functionId ? legacyModifierLabel(candidate.selections.functionId) : "未记录"} /></td>)}</tr>
+              <tr><td>性能</td>{compareCandidates.map((candidate) => <td key={candidate.id}><LegacyReference id={candidate.selections.performanceId ?? "未记录"} label={candidate.selections.performanceId ? legacyModifierLabel(candidate.selections.performanceId) : "未记录"} /></td>)}</tr>
+              {compareHistoricalParameterKeys.map((parameterKey) => {
+                const currentParameter = state.parameters.find((parameter) => parameter.key === parameterKey);
+                return (
+                <tr key={parameterKey}><td><code>{parameterKey}</code><small>{currentParameter?.label ?? "未解析参数"}</small></td>{compareCandidates.map((candidate) => <td key={candidate.id}>{String(candidate.calculated.values[parameterKey] ?? "—")}</td>)}</tr>
+                );
+              })}
             </tbody></table>
           </div>
         </div>

@@ -38,6 +38,10 @@ test("生产构建包含完整工作台客户端与 Worker", async () => {
   assert.match(script, /OfficialSku 已转为只读历史/);
   assert.match(script, /DetailOverride 已转为只读历史/);
   assert.match(script, /历史候选只读/);
+  assert.match(script, /原始 key\/value/);
+  assert.match(script, /未解析 OfficialSku/);
+  assert.match(script, /历史 Candidate 结果（兼容旧候选池）/);
+  assert.doesNotMatch(script, /历史 Model 候选结果/);
 
   assert.match(script, /_TackleForgerState/);
   assert.match(css, /\.workbench/);

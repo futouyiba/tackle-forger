@@ -31,7 +31,7 @@
 | ID | 严重性 | 状态 | 问题 | 主要证据 | 验收条件 |
 | --- | --- | --- | --- | --- | --- |
 | AUD-005 | Medium | OPEN | 根Vinext v3已由README、CI和R730部署配置确认为唯一权威实现，但根应用仍把旧`SeriesRecipe`、旧Candidate、`OfficialSku`和明细覆盖作为可编辑入口，并允许通用整包保存继续写`recipes`，用户仍可能误把历史流程当作v3正式流程。 | `README.md`；`.github/workflows/ci.yml`；`deploy/tackle-forger.service`；`app/Workbench.tsx`；`lib/api-command-boundaries.ts`；[`AUD-005 收敛方案`](./aud-005-architecture-decision-proposal.md) | 旧入口改为明确的只读历史查看与迁移诊断；既有深链和原始payload/Trace保留；旧集合不再通过页面或整包保存新增/修改；v3 Series/SKU/Model成为唯一正式写入流程；部署与评审入口均指向根v3构建。 |
-| AUD-009 | Medium | BLOCKED | SQLite与D1永久保存完整工作区revision，普通列表只显示最近100条；Blob则物理裁为最近100条。三种后端的历史读取、容量与归档语义不一致，正式保留政策尚未决定。 | `lib/sqlite-storage.ts`建表/插入/列表；`lib/storage.ts`的D1插入与Blob `.slice(0, 100)`；[`AUD-009 数据保留 ADR 草案`](./aud-009-workspace-revision-retention-adr.md) | 由产品/运维/审计责任人确认永久、固定条数或时间+数量混合策略，以及Blob例外和长期归档责任；若有限保留则实现事务内清理、删除证据和恢复验收；若永久保留则文档化容量、归档和备份规划。 |
+| AUD-009 | Medium | BLOCKED | SQLite与D1永久保存完整工作区revision，普通列表只显示最近100条；Blob则物理裁为最近100条。三种后端的历史读取、容量与归档语义不一致，正式保留政策尚未决定。 | `lib/sqlite-storage.ts`建表/插入/列表；`lib/storage.ts`的D1插入与Blob `.slice(0, 100)`；[`AUD-009 数据保留 ADR 草案`](./aud-009-workspace-revision-retention-adr.md)；只读诊断与备份manifest证据见`lib/sqlite-revision-diagnostics.ts`、`tests/sqlite-revision-diagnostics.test.ts` | 非破坏性容量/时间诊断已经落地；仍须由产品/运维/审计责任人确认永久、固定条数或时间+数量混合策略，以及Blob例外和长期归档责任。未确认前不得实现自动清理，问题保持`BLOCKED`。 |
 | AUD-026 | Medium | BLOCKED | `SeriesRecipe.partConstraints`已承载rod/reel/line分部位字段，但迁移复制的是旧扁平语义，旧生成器和UI均未消费；哪些字段属于`CandidateSearchRecipe`搜索约束、哪些必须落入Model `componentSelections`尚未确认。 | `lib/types.ts`；`lib/migrations.ts`；`lib/engine.ts`；`app/Workbench.tsx`；[`AUD-005 收敛方案`](./aud-005-architecture-decision-proposal.md) | 明确版本化分部位约束的语义归属和旧字段映射；未确认项保持可配置/待复核；runtime与UI按rod/reel/line分别消费并输出Trace；实际入选部件进入Model构建输入；迁移幂等且不改写已发布Snapshot。 |
 
 ## 问题关系与去重
@@ -107,3 +107,4 @@
 | 2026-07-22 | 首次远端CI三项门禁全部通过：根v3 npm、历史pnpm workspace及Windows行尾策略；关闭`AUD-018/019`，有效未关闭问题降为2个，均为待决策的`BLOCKED`项。 | [`CI #1`](https://github.com/futouyiba/tackle-forger/actions/runs/29935463528) |
 | 2026-07-23 | 为`AUD-009`补充工作区revision保留ADR草案，比较永久、固定条数与时间+数量混合策略；提出`90天 + 至少100条`候选默认值、事务清理与备份/审计边界。等待责任人决策，问题保持`BLOCKED`。 | 本分支提交 |
 | 2026-07-23 | 独立复核纠正`AUD-005`范围：根v3权威和生产目标已确定，旧入口只读化改为可执行的`OPEN`项；分部位约束语义拆为`AUD-026 BLOCKED`。已解决项复核未发现需要重开。 | 本分支提交 |
+| 2026-07-23 | 为`AUD-009`落地政策无关的只读SQLite revision诊断：输出容量/时间/数据库与WAL统计，异常fail-closed，备份manifest冻结副本诊断；没有删除、裁剪或改变历史读取语义。保留政策仍待确认。 | 本分支提交 |

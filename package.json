@@ -11,6 +11,7 @@
     "start": "vinext start",
     "config-export:companion": "tsx scripts/config-export-companion.ts",
     "storage:migrate:blob-to-sqlite": "tsx scripts/migrate-blob-to-sqlite.ts",
+    "storage:diagnose-revisions": "tsx scripts/diagnose-workspace-revisions.ts",
     "storage:backup": "tsx scripts/backup-workspace.ts",
     "test": "npm run build && tsx --test tests/*.test.ts && node --test tests/*.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern apps/web --ignore-pattern packages",

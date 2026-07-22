@@ -31,11 +31,20 @@
 3. 重新加载 systemd，启用应用服务和每日备份 timer。
 4. 应用仅监听 `127.0.0.1:3000`；浏览器只能通过 HTTPS 反向代理访问。
 
+## Revision容量诊断与备份证据
+
+- 使用与应用服务相同的环境配置，以服务账号运行`npm run storage:diagnose-revisions`。该命令要求显式`WORKSPACE_DATABASE_PATH`，不会使用默认相对路径、创建数据库、建表或播种。
+- 输出包括revision总数、最早/最新时间、`state_json`总/平均/最大字节、数据库与WAL文件体积、SQLite总页数和空闲页数。该命令只报告事实，不会按AUD-009草案的候选值删除、裁剪或预测历史。
+- `workspace_state/main`缺失或不唯一、当前revision与最大历史revision不一致、历史为空、时间戳不可解析、路径/schema/统计异常时命令以非零状态失败。先调查并恢复，不得把异常替换为0或自动修复。
+- 每次`npm run storage:backup`会在复制前诊断源数据库，并在在线备份完成后诊断备份副本。`manifest.json.revisionDiagnostics`必须与备份副本对应；`sourceStorageFilesAtBackupStart`记录开始时源数据库与WAL体积。
+- 验收manifest时至少核对`currentRevision`、`revisionCount`、`earliestCreatedAt/latestCreatedAt`、`stateJsonTotalBytes`与备份数据库文件大小。缺少诊断或诊断失败的目录不能视为已验证备份。
+- 这些统计不构成保留政策批准。AUD-009确认前，禁止据此启用90天/100条或任何其他自动清理。
+
 ## 验收与回滚
 
 - 验收 `/api/auth/session` 未登录返回 401，飞书登录成功后返回当前租户身份。
 - 在“飞书规则源”执行检查与显式拉取，确认 revision、sheet_id 和 Trace；不要把拉取误当发布。
 - 创建一个测试 Series，确认离散拉力逐项物化 SKU，规划范围不参与生成。
 - 预览 configs 三表差异，但只有登记 Profile、映射和正式 PricingPolicy 后才允许提交。
-- 执行 `npm run storage:backup` 并验证 SQLite、导入文件、`auth` 会话目录和 manifest 均存在。恢复会话目录时必须停服，保持目录仅服务账号可读写；若备份创建时尚无会话目录，manifest 的 `sessionDataIncluded` 为 `false`，恢复后用户需要重新登录。
+- 执行 `npm run storage:backup` 并验证 SQLite、导入文件、`auth` 会话目录和 manifest 均存在；manifest中的revision诊断必须与备份副本一致。恢复会话目录时必须停服，保持目录仅服务账号可读写；若备份创建时尚无会话目录，manifest 的 `sessionDataIncluded` 为 `false`，恢复后用户需要重新登录。
 - 回滚代码时切换 `current` 到上一只读发布目录并重启服务；不得回滚或覆盖 SQLite。若业务数据必须恢复，只能停服后从已验证备份恢复到新文件，再保留原数据库作审计副本。

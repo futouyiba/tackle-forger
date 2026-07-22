@@ -137,7 +137,7 @@ export function V3FlowWorkbench({ state, mutate, notify, initialSeriesId }: V3Fl
   const pendingUpgrade = state.upgradeCandidates.find((item) => item.modelId === selectedModel?.id && item.status === "pending");
 
   const seriesSkus = selectedSeries
-    ? state.skuDrawers.filter((item) => item.seriesId === selectedSeries.id).sort((left, right) => left.targetWeightKg - right.targetWeightKg)
+    ? state.skuDrawers.filter((item) => item.seriesId === selectedSeries.id).sort((left, right) => left.targetPullKg - right.targetPullKg)
     : state.skuDrawers;
   const seriesModels = selectedSku
     ? state.purchasableModels.filter((item) => selectedSku.modelIds.includes(item.id))
@@ -225,7 +225,7 @@ export function V3FlowWorkbench({ state, mutate, notify, initialSeriesId }: V3Fl
         <div><span>类型</span><strong>{profileName(state, selectedSeries.typeId)}</strong></div>
         <div><span>核心功能</span><strong>{profileName(state, selectedSeries.coreFunctionId)}</strong></div>
         <div><span>品质</span><strong style={{ color: quality.color }}>{quality.letter} / {quality.name}</strong></div>
-        <div><span>重量曲线</span><strong>{selectedSeries.targetWeightsKg.join(" / ")} kg</strong></div>
+        <div><span>拉力曲线</span><strong>{selectedSeries.targetPullSpecifications.map((entry) => entry.targetPullKgf).join(" / ")} kgf</strong></div>
         <div><span>修正规则</span><strong>{patches.length} 层 Patch</strong></div>
       </section>
 
@@ -235,7 +235,7 @@ export function V3FlowWorkbench({ state, mutate, notify, initialSeriesId }: V3Fl
           <div className="v3-sku-list">
             {seriesSkus.map((sku) => (
               <button type="button" key={sku.id} className={selectedSku.id === sku.id ? "active" : ""} onClick={() => { setSelectedSkuId(sku.id); setSelectedModelId(sku.defaultModelId ?? sku.modelIds[0] ?? ""); }}>
-                <span className="v3-weight-mark">{formatValue(sku.targetWeightKg)}<small>kgf</small></span>
+                <span className="v3-weight-mark">{formatValue(sku.targetPullKg)}<small>kgf</small></span>
                 <div><strong>{sku.id}</strong><small>基底 {sku.projectionMatch.weightTemplateId}</small></div>
                 <em>{sku.modelIds.length} 型号</em>
               </button>
@@ -257,11 +257,11 @@ export function V3FlowWorkbench({ state, mutate, notify, initialSeriesId }: V3Fl
         <main className="v3-stage-content">
           {stage === "projection" ? (
             <>
-              <div className="v3-stage-title"><div><span className="eyebrow">DETERMINISTIC MATCH</span><h3>最近离散模板命中</h3><p>目标重量只命中已有模板，不在相邻模板之间插值。</p></div><span className="v3-decision-badge"><BadgeCheck size={16} />唯一结果</span></div>
+              <div className="v3-stage-title"><div><span className="eyebrow">DETERMINISTIC MATCH</span><h3>最近离散模板命中</h3><p>目标拉力只命中已有模板，不在相邻模板之间插值。</p></div><span className="v3-decision-badge"><BadgeCheck size={16} />唯一结果</span></div>
               <div className="v3-projection-hero">
-                <div><span>目标拉力规格</span><strong>{selectedSku.targetWeightKg}<small> kgf</small></strong></div>
+                <div><span>目标拉力规格</span><strong>{selectedSku.targetPullKg}<small> kgf</small></strong></div>
                 <ArrowRight size={22} />
-                <div><span>最近模板</span><strong>{selectedSku.projectionMatch.anchorWeightKg}<small> kg</small></strong></div>
+                <div><span>最近结构标杆</span><strong>{selectedSku.projectionMatch.matchedStructuralPullKg}<small> kgf</small></strong></div>
                 <ArrowRight size={22} />
                 <div className="result"><span>派生 Projection</span><strong>{selectedSku.projectionMatch.projectionId}</strong></div>
               </div>
@@ -269,7 +269,7 @@ export function V3FlowWorkbench({ state, mutate, notify, initialSeriesId }: V3Fl
                 <div className="v3-info-card">
                   <div className="v3-info-title"><Scale size={17} /><strong>决策依据</strong><span className="v3-source-tag rule">规则源</span></div>
                   <ul>{selectedSku.projectionMatch.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>
-                  <dl><div><dt>比例距离</dt><dd>{formatValue(selectedSku.projectionMatch.weightDistance)}</dd></div><div><dt>Affinity</dt><dd>{formatValue(selectedSku.projectionMatch.affinityScore)}</dd></div><div><dt>属性距离</dt><dd>{formatValue(selectedSku.projectionMatch.normalizedAttributeDistance)}</dd></div></dl>
+                  <dl><div><dt>比例距离</dt><dd>{formatValue(selectedSku.projectionMatch.pullDistance)}</dd></div><div><dt>Affinity</dt><dd>{formatValue(selectedSku.projectionMatch.affinityScore)}</dd></div><div><dt>属性距离</dt><dd>{formatValue(selectedSku.projectionMatch.normalizedAttributeDistance)}</dd></div></dl>
                 </div>
                 <div className="v3-info-card">
                   <div className="v3-info-title"><GitBranch size={17} /><strong>匹配 Trace</strong><em>{selectedSku.projectionMatch.trace.length} 步</em></div>
@@ -297,11 +297,11 @@ export function V3FlowWorkbench({ state, mutate, notify, initialSeriesId }: V3Fl
               <div className="v3-invariant-list">
                 {[
                   ["钓法 / 类型", `${profileName(state, selectedSeries.fishingMethodId)} / ${profileName(state, selectedSeries.typeId)}`, "严格身份"],
-                  ["功能专精", `${profileName(state, selectedSeries.coreFunctionId)} · ${selectedSeries.functionIntensityPolicy.mode === "fixed" ? selectedSeries.functionIntensityPolicy.intensity : "重量曲线"}`, "functionIntensity ≠ 品质"],
+                  ["功能专精", `${profileName(state, selectedSeries.coreFunctionId)} · ${selectedSeries.functionIntensityPolicy.mode === "fixed" ? selectedSeries.functionIntensityPolicy.intensity : "目标拉力曲线"}`, "functionIntensity ≠ 品质"],
                   ["品质档", `${quality.letter} / ${quality.name}`, "C绿 B蓝 A紫 S橙"],
                   ["核心词条", `${selectedSeries.coreAffixIds.length} 个必带`, "型号不得移除"],
                   ["签名轴", `${selectedSeries.signature.length} 组方向约束`, "偏离需显式报告"],
-                  ["重量曲线", selectedSeries.targetWeightsKg.map((weight) => `${weight}kg`).join(" → "), "保持单调"],
+                  ["拉力曲线", selectedSeries.targetPullSpecifications.map((entry) => `${entry.targetPullKgf}kgf`).join(" → "), "保持单调"],
                 ].map(([title, value, hint]) => <div key={title}><span className="v3-invariant-check"><CheckCircle2 size={16} /></span><div><strong>{title}</strong><small>{hint}</small></div><b>{value}</b></div>)}
               </div>
               {selectedSku.validationSummary.length ? <div className="v3-validation-box"><strong>当前 SKU 校验</strong>{selectedSku.validationSummary.map((issue, index) => <div key={issue.code + index} className={issue.level}><span>{issue.level === "error" ? "阻断" : issue.level === "warning" ? "警告" : "信息"}</span><p>{issue.message}</p></div>)}</div> : null}
@@ -311,7 +311,7 @@ export function V3FlowWorkbench({ state, mutate, notify, initialSeriesId }: V3Fl
           {stage === "models" ? (
             <>
               <div className="v3-stage-title"><div><span className="eyebrow">IDENTITY BOUNDARY</span><h3>SKU 是抽屉，Model 才是购买对象</h3><p>同一重量抽屉共享投影基底，不同 Model 通过独立 Patch、词条和组件形成最终商品。</p></div></div>
-              <div className="v3-identity-map"><div className="drawer"><span><PackageSearch size={19} />SKU DRAWER</span><strong>{selectedSku.id}</strong><small>{selectedSku.targetWeightKg} kg · {selectedSku.modelIds.length} 个 Model</small></div><ArrowRight size={21} />{seriesModels.map((model) => <button key={model.id} type="button" className={model.id === selectedModel?.id ? "active" : ""} onClick={() => setSelectedModelId(model.id)}><Boxes size={17} /><strong>{model.name}</strong><small>¥ {model.price}</small></button>)}</div>
+              <div className="v3-identity-map"><div className="drawer"><span><PackageSearch size={19} />SKU DRAWER</span><strong>{selectedSku.id}</strong><small>{selectedSku.targetPullKg} kgf · {selectedSku.modelIds.length} 个 Model</small></div><ArrowRight size={21} />{seriesModels.map((model) => <button key={model.id} type="button" className={model.id === selectedModel?.id ? "active" : ""} onClick={() => setSelectedModelId(model.id)}><Boxes size={17} /><strong>{model.name}</strong><small>¥ {model.price}</small></button>)}</div>
               <div className="v3-source-switch"><div><button type="button" className={sourceView === "rules" ? "active" : ""} onClick={() => setSourceView("rules")}>规则源结果</button><button type="button" className={sourceView === "patches" ? "active" : ""} onClick={() => setSourceView("patches")}>人工 Patch</button></div><span>{sourceView === "rules" ? "展示不可直接覆盖的派生基底" : "固定顺序：Series → SKU → Model"}</span></div>
               {sourceView === "rules" ? <div className="v3-panel-grid">{Object.entries(selectedProjection?.values ?? {}).slice(0, 12).map(([key, value]) => <div key={key}><span>{key}</span><strong>{formatValue(value)}</strong><small>Projection</small></div>)}{!Object.keys(selectedProjection?.values ?? {}).length ? <div className="v3-empty-inline">派生投影没有面板字段。</div> : null}</div> : <PatchStack patches={patches} />}
               <div className="v3-model-spec"><div><span>动作 / 硬度</span><strong>{selectedModel?.action ?? "—"} / {selectedModel?.hardness ?? "—"}</strong></div><div><span>长度</span><strong>{selectedModel?.lengthM ?? "—"} m</strong></div><div><span>技术包</span><strong>{selectedModel?.technologyIds.length ?? 0}</strong></div><div><span>属性 / 被动词条</span><strong>{selectedModel?.attributeAffixIds.length ?? 0} / {selectedModel?.passiveAffixIds.length ?? 0}</strong></div><div><span>被动执行</span><strong>只保存 / 计分 / 展示</strong></div></div>
@@ -332,7 +332,7 @@ export function V3FlowWorkbench({ state, mutate, notify, initialSeriesId }: V3Fl
 
         <aside className="v3-context-panel">
           <div className="v3-section-head compact"><div><span className="eyebrow">CURRENT SELECTION</span><h3>选择上下文</h3></div></div>
-              <div className="v3-selection-card"><span className="v3-weight-mark large">{selectedSku.targetWeightKg}<small>kgf</small></span><div><strong>{selectedModel?.name ?? "未选择 Model"}</strong><small>{selectedSeries.name}</small></div></div>
+              <div className="v3-selection-card"><span className="v3-weight-mark large">{selectedSku.targetPullKg}<small>kgf</small></span><div><strong>{selectedModel?.name ?? "未选择 Model"}</strong><small>{selectedSeries.name}</small></div></div>
           <dl className="v3-facts"><div><dt>Projection</dt><dd>{selectedSku.projectionMatch.projectionId}</dd></div><div><dt>命中模式</dt><dd>{selectedSku.projectionMatch.pinnedByUser ? "人工 Pin" : "自动最近"}</dd></div><div><dt>规则版本</dt><dd>{ruleSetVersion}</dd></div><div><dt>Patch</dt><dd>{patches.length} 层</dd></div><div><dt>校验</dt><dd className={blockingCount ? "danger" : "success"}>{blockingCount ? `${blockingCount} 阻断` : warningCount ? `${warningCount} 警告` : "通过"}</dd></div><div><dt>快照</dt><dd>{selectedSnapshot ? `v${selectedSnapshot.version}` : "未发布"}</dd></div></dl>
           <div className="v3-context-note"><LockKeyhole size={16} /><p><strong>发布边界</strong>购买引用只指向已发布 Model 和 ConfigurationSnapshot，不直接依赖可变规则。</p></div>
         </aside>

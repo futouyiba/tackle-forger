@@ -104,10 +104,10 @@ export function materializeConfirmedPullSpecifications(input: {
     if (!skuId || !projectionMatch) {
       throw new Error(`离散拉力 ${pull}kgf 缺少稳定 skuId 或独立结构标杆匹配结果。`);
     }
-    if (allSkus.some((sku) => sku.id === skuId || (sku.seriesId === input.series.id && sku.targetWeightKg === pull))) {
+    if (allSkus.some((sku) => sku.id === skuId || (sku.seriesId === input.series.id && sku.targetPullKg === pull))) {
       throw new Error(`离散拉力 ${pull}kgf 或 SKU ID ${skuId} 已存在，禁止重复物化。`);
     }
-    if (projectionMatch.targetWeightKg !== pull) {
+    if (projectionMatch.targetPullKg !== pull) {
       throw new Error(`离散拉力 ${pull}kgf 的 ProjectionMatch 目标值不一致。`);
     }
     specifications.push({ targetPullKgf: pull, skuId });
@@ -115,7 +115,7 @@ export function materializeConfirmedPullSpecifications(input: {
       id: skuId,
       revision: 1,
       seriesId: input.series.id,
-      targetWeightKg: pull,
+      targetPullKg: pull,
       projectionMatch: structuredClone(projectionMatch),
       patchIds: [],
       modelIds: [],
@@ -139,7 +139,6 @@ export function materializeConfirmedPullSpecifications(input: {
       revision: input.series.revision + 1,
       ...(input.proposal.planningPullRange ? { planningPullRange: structuredClone(input.proposal.planningPullRange) } : {}),
       targetPullSpecifications: ordered,
-      targetWeightsKg: ordered.map((entry) => entry.targetPullKgf),
       skuIds: ordered.map((entry) => entry.skuId),
       updatedAt: input.createdAt,
     },

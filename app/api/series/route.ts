@@ -222,7 +222,6 @@ export async function POST(request: NextRequest) {
     forbiddenAffixIds: [],
     ...(minKgf !== undefined && maxKgf !== undefined ? { planningPullRange: { minKgf, maxKgf } } : {}),
     targetPullSpecifications: [],
-    targetWeightsKg: [],
     signature: [],
     patchIds: [],
     skuIds: [],
@@ -270,7 +269,7 @@ export async function POST(request: NextRequest) {
                 {
                   methodId: body.methodId,
                   typeId: body.typeId,
-                  targetWeightKg: pull,
+                  targetPullKg: pull,
                   functionId: body.functionId,
                   functionIntensity: body.functionIntensity,
                   performanceId: body.performanceId || undefined,
@@ -292,7 +291,6 @@ export async function POST(request: NextRequest) {
           {
             itemPartId: body.itemPartId,
             targetPullKg: pull,
-            targetWeightKg: pull,
             methodId: body.methodId,
             typeId: body.typeId,
             functionId: body.functionId,

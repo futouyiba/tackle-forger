@@ -22,7 +22,7 @@ test("SeriesGanttQuery 同字段 OR、不同字段 AND，并保留真实离散 S
     query: {
       qualityIds: [target.qualityId, "quality_s_orange"],
       typeIds: [target.typeId],
-      exactTargetWeightKg: target.targetWeightsKg.slice(0, 1),
+      exactTargetPullKg: target.targetPullSpecifications.slice(0, 1).map((entry) => entry.targetPullKgf),
     },
     series: workspace.seriesDefinitions,
     skus: workspace.skuDrawers,
@@ -33,10 +33,10 @@ test("SeriesGanttQuery 同字段 OR、不同字段 AND，并保留真实离散 S
   assert.ok(result.some((entry) => entry.seriesId === target.id));
   const selected = result.find((entry) => entry.seriesId === target.id)!;
   assert.deepEqual(
-    selected.skuNodes.map((node) => node.targetWeightKg),
+    selected.skuNodes.map((node) => node.targetPullKg),
     workspace.skuDrawers
       .filter((sku) => sku.seriesId === target.id)
-      .map((sku) => sku.targetWeightKg)
+      .map((sku) => sku.targetPullKg)
       .sort((left, right) => left - right),
   );
 });
@@ -98,7 +98,7 @@ test("SeriesGanttQuery URL 往返保留多选、精确重量、升级筛选和�
   const source: SeriesGanttQuery = {
     text: "青芦",
     qualityIds: ["quality_c_green", "quality_a_purple"],
-    exactTargetWeightKg: [1.5, 1.8],
+    exactTargetPullKg: [1.5, 1.8],
     attentionStates: ["SOURCE_STALE", "HAS_UPGRADE_CANDIDATE"],
     issueSeverities: ["ERROR", "WARNING"],
     hasUpgradeCandidate: true,
@@ -108,11 +108,30 @@ test("SeriesGanttQuery URL 往返保留多选、精确重量、升级筛选和�
   const parsed = seriesGanttQueryFromSearchParams(params);
   assert.equal(parsed.text, source.text);
   assert.deepEqual(parsed.qualityIds, source.qualityIds);
-  assert.deepEqual(parsed.exactTargetWeightKg, source.exactTargetWeightKg);
+  assert.deepEqual(parsed.exactTargetPullKg, source.exactTargetPullKg);
   assert.deepEqual(parsed.attentionStates, [...(source.attentionStates ?? [])]);
   assert.deepEqual(parsed.issueSeverities, [...(source.issueSeverities ?? [])]);
   assert.equal(parsed.hasUpgradeCandidate, true);
   assert.equal(parsed.sort, "quality_type");
+  assert.equal(params.has("exactTargetPullKg"), true);
+  assert.equal(params.has("exactTargetWeightKg"), false);
+});
+
+test("AUD-024 甘特查询契约只输出规范目标拉力字段", () => {
+  const workspace = state();
+  const query: SeriesGanttQuery = { exactTargetPullKg: [1.5] };
+  const blocks = querySeriesGantt({
+    query,
+    series: workspace.seriesDefinitions,
+    skus: workspace.skuDrawers,
+    models: workspace.purchasableModels,
+    itemTypes: workspace.itemTypeProfiles,
+    upgrades: workspace.upgradeCandidates,
+  });
+  const payload = JSON.stringify({ query, blocks });
+  assert.equal(payload.includes("targetWeightKg"), false);
+  assert.equal(payload.includes("exactTargetWeightKg"), false);
+  assert.equal(payload.includes("targetPullKg"), true);
 });
 
 test("SeriesGanttQuery 空 URL 不会把缺失拉力范围解析为 0..0", () => {

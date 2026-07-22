@@ -20,8 +20,7 @@ export interface ProjectionMatchCandidate {
 
 export interface ProjectionMatchQuery {
   itemPartId: string;
-  targetPullKg?: number;
-  targetWeightKg: number;
+  targetPullKg: number;
   methodId: string;
   typeId: string;
   functionId: string;
@@ -48,19 +47,28 @@ export function structuralPullParameterKey(itemPartId: string): string | undefin
   return STRUCTURAL_PULL_PARAMETER_BY_PART[itemPartId];
 }
 
-export function structuralPullFromProjection(
-  projection: DerivedProjection,
+export function structuralPullFromValues(
+  values: Record<string, number | string>,
   itemPartId: string,
 ): number | undefined {
   const key = structuralPullParameterKey(itemPartId);
-  const value = key ? projection.structuralValues?.[key] : undefined;
+  const value = key ? values[key] : undefined;
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? value
     : undefined;
 }
 
+export function structuralPullFromProjection(
+  projection: DerivedProjection,
+  itemPartId: string,
+): number | undefined {
+  return projection.structuralValues
+    ? structuralPullFromValues(projection.structuralValues, itemPartId)
+    : undefined;
+}
+
 type RankedCandidate = ProjectionMatchCandidate & {
-  weightDistance: number;
+  pullDistance: number;
 };
 
 function compareText(left: string, right: string): number {
@@ -81,24 +89,24 @@ function identityMatches(
   );
 }
 
-export function projectionWeightDistance(
-  targetWeightKg: number,
-  nominalWeightKg: number,
+export function projectionPullDistance(
+  targetPullKg: number,
+  derivedPullKg: number,
 ): number {
   if (
-    !Number.isFinite(targetWeightKg) ||
-    !Number.isFinite(nominalWeightKg) ||
-    targetWeightKg <= 0 ||
-    nominalWeightKg <= 0
+    !Number.isFinite(targetPullKg) ||
+    !Number.isFinite(derivedPullKg) ||
+    targetPullKg <= 0 ||
+    derivedPullKg <= 0
   ) {
-    throw new Error("目标重量与模板标称重量必须是大于 0 的有限数字。");
+    throw new Error("目标拉力与结构派生拉力必须是大于 0 的有限数字。");
   }
-  return Math.abs(Math.log(targetWeightKg / nominalWeightKg));
+  return Math.abs(Math.log(targetPullKg / derivedPullKg));
 }
 
 function compareRanked(left: RankedCandidate, right: RankedCandidate): number {
   return (
-    left.weightDistance - right.weightDistance ||
+    left.pullDistance - right.pullDistance ||
     right.derivedPullKg - left.derivedPullKg ||
     (right.templatePriority ?? right.weightTemplate.templatePriority ?? 0) -
       (left.templatePriority ?? left.weightTemplate.templatePriority ?? 0) ||
@@ -137,9 +145,9 @@ function buildTrace(
       stage: "weight_distance",
       candidateId: winner.projection.id,
       detail:
-        "拉力比例距离 abs(ln(" + query.targetWeightKg + "/" +
+        "拉力比例距离 abs(ln(" + query.targetPullKg + "/" +
         winner.derivedPullKg + ")) = " +
-        winner.weightDistance + "。",
+        winner.pullDistance + "。",
     },
     {
       stage: "derived_pull_tiebreak",
@@ -163,7 +171,7 @@ function buildTrace(
       candidateId: candidate.projection.id,
       detail:
         "候选 " + candidate.projection.id + "：距离 " +
-        candidate.weightDistance + "，derivedPullKg " + candidate.derivedPullKg +
+        candidate.pullDistance + "，derivedPullKg " + candidate.derivedPullKg +
         "，templatePriority " + (candidate.templatePriority ?? candidate.weightTemplate.templatePriority ?? 0) + "。",
     });
   }
@@ -177,8 +185,8 @@ export function matchNearestProjection(
 ): ProjectionMatch {
   // 历史调用方仍传参数定义；结构匹配不得再用最终属性距离消费它。
   void parameters;
-  if (!Number.isFinite(query.targetWeightKg) || query.targetWeightKg <= 0) {
-    throw new Error("目标重量必须是大于 0 的有限数字。");
+  if (!Number.isFinite(query.targetPullKg) || query.targetPullKg <= 0) {
+    throw new Error("目标拉力必须是大于 0 的有限数字。");
   }
   const identityCandidates = candidates.filter((candidate) =>
     candidate.itemPartId === query.itemPartId && identityMatches(query, candidate.projection),
@@ -203,8 +211,8 @@ export function matchNearestProjection(
     .map(
       (candidate): RankedCandidate => ({
         ...candidate,
-        weightDistance: projectionWeightDistance(
-          query.targetWeightKg,
+        pullDistance: projectionPullDistance(
+          query.targetPullKg,
           candidate.derivedPullKg,
         ),
       }),
@@ -229,22 +237,19 @@ export function matchNearestProjection(
     pinned
       ? "用户已固定该模板；系统保留选择且不自动切换。"
       : "选择拉力比例距离最近的离散结构标杆，未使用范围包含或连续插值。",
-    "拉力比例距离：" + winner.weightDistance,
+    "拉力比例距离：" + winner.pullDistance,
     "命中结构拉力：" + winner.derivedPullKg + "kgf",
     "Affinity 与最终属性距离未参与选择。",
   ];
 
   return {
-    targetPullKg: query.targetPullKg ?? query.targetWeightKg,
+    targetPullKg: query.targetPullKg,
     matchedStructuralPullKg: winner.derivedPullKg,
-    pullDistance: winner.weightDistance,
+    pullDistance: winner.pullDistance,
     itemPartId: winner.itemPartId,
-    targetWeightKg: query.targetWeightKg,
     projectionId: winner.projection.id,
     weightTemplateId: winner.weightTemplate.id,
     ruleSetVersion: winner.projection.ruleSetVersion,
-    anchorWeightKg: winner.derivedPullKg,
-    weightDistance: winner.weightDistance,
     affinityScore: winner.affinity.score,
     normalizedAttributeDistance: 0,
     reasons,
@@ -253,4 +258,3 @@ export function matchNearestProjection(
     trace: buildTrace(query, ranked, winner, Boolean(pinned)),
   };
 }
-

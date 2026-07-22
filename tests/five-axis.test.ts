@@ -537,7 +537,9 @@ test("历史五维预览缺少定义修订哈希时保持原 Snapshot hash，不
   );
   delete existing.fiveAxisPreview!.fiveAxisDefinitionRevision;
   delete existing.fiveAxisPreview!.fiveAxisDefinitionHash;
-  const { contentHash: _oldHash, ...legacyContent } = existing;
+  const legacyContent = Object.fromEntries(
+    Object.entries(existing).filter(([key]) => key !== "contentHash"),
+  );
   existing.contentHash = deterministicHash(legacyContent);
   const legacyHash = existing.contentHash;
   state.configurationSnapshots = [existing];

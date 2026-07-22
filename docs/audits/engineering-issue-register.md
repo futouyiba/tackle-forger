@@ -4,6 +4,7 @@
 > 首次建立：2026-07-22
 > 来源审查：[`current-state-review-2026-07-22.md`](./current-state-review-2026-07-22.md)
 > 最近复核：[`remote-branches-review-2026-07-22.md`](./remote-branches-review-2026-07-22.md)
+> 当前汇总：10个有效未关闭问题（7个`OPEN`、1个`IN_PROGRESS`、2个`BLOCKED`），24个`RESOLVED`，1个`SUPERSEDED`。
 
 ## 状态定义
 
@@ -42,11 +43,11 @@
 
 ## 问题关系与去重
 
-- `AUD-001/002/003/004/007`分别拥有自己的route-level测试验收；原总括测试问题`AUD-012`已标记为`SUPERSEDED`，不再独立计入开放问题。
+- `AUD-001/002/003/004/007`已分别通过route-level测试关闭；原总括测试问题`AUD-012`保持`SUPERSEDED`，不重复计入已解决数量。
 - `AUD-005`是两套架构权威边界的父决策；“系列配方未拆分竿轮线”是旧`SeriesRecipe`仍可见造成的用户侧表现，归入`AUD-005`，不再新增重复AUD。`be1cf696`只解决v14迁移载体并记为`AUD-R010`，没有解决页面消费和架构权威边界。`AUD-006`与`AUD-019`分别记录验证前置条件和包管理/CI入口，在`AUD-005`关闭前保持独立，但关闭时必须共同复核是否应`RESOLVED`或`SUPERSEDED`。
-- `AUD-R003`只证明Series创建主路径已进入服务端命令；通用整包保存绕过继续由`AUD-001`管理。
-- `AUD-R006`只证明飞书远端写前/写后回读恢复已经实现；远端成功后的本地审计冲突继续由`AUD-021`管理，默认测试入口遗漏由`AUD-025`管理。
-- `AUD-R007`证明R730持久化、迁移、备份和运行手册的基础能力已存在；本轮进一步关闭部署路径、Node下限和会话灾备的`AUD-008/013/014`，revision保留政策仍由`AUD-009`管理。
+- `AUD-R003`证明Series创建主路径已进入服务端命令；通用整包保存绕过已由`AUD-001`的默认拒绝边界关闭。
+- `AUD-R006`证明飞书远端写前/写后回读恢复已经实现；默认测试入口遗漏已由`AUD-025`关闭，远端成功后的本地审计冲突仍由`AUD-021`管理。
+- `AUD-R007`证明R730持久化、迁移、备份和运行手册的基础能力已存在；部署路径、Node下限和会话灾备已由`AUD-008/013/014`关闭，revision保留政策仍由`AUD-009`管理。
 
 ## 已取代问题
 
@@ -63,25 +64,25 @@
 | AUD-013 | RESOLVED | Node引擎下限低于备份脚本所用`node:sqlite backup()`的引入版本。 | `package.json`、`package-lock.json`和开发/部署说明统一提升到Node.js `>=22.16.0`；Node官方v22文档记录`backup()`自22.16.0加入。 | Node.js 22.23.1实际执行备份脚本成功；最低版本要求静态一致性核对。 |
 | AUD-014 | RESOLVED | 工作区备份没有包含飞书会话文件。 | `scripts/backup-workspace.ts`把`FEISHU_SESSION_DATA_DIR`复制到备份的`auth`目录，并在manifest记录来源与是否包含；运行手册明确停服恢复及无备份时重新登录。 | 临时SQLite、导入文件与会话目录执行备份，生成`workspace.sqlite`、`files`、`auth`和manifest，备份根权限为`0700`。 |
 | AUD-020 | RESOLVED | `.claude/scheduled_tasks.lock`运行态锁文件曾被版本化。 | 文件内容只有`sessionId/pid/acquiredAt`，属于单次工具进程锁；已从Git移除，现有`/.claude/`忽略规则防止再次提交。 | `git check-ignore -v .claude/scheduled_tasks.lock`命中`.gitignore`；工作树显示追踪文件删除。 |
-| AUD-001 | RESOLVED | 整包状态保存可绕过领域命令。 | `findGovernedStateChanges`只允许`notes`经整包PUT变化，其余现有及未来Workspace字段默认拒绝；`PUT /api/state`返回`DOMAIN_COMMAND_REQUIRED`，畸形JSON返回400。 | `tests/api-command-boundaries.test.ts`覆盖新旧领域集合与规则设置；`tests/api-routes.test.ts`覆盖已认证越权PUT和畸形JSON；默认`npm test`通过202项TS测试与1项渲染测试。 |
+| AUD-001 | RESOLVED | 整包状态保存可绕过领域命令。 | `findGovernedStateChanges`只允许`notes`经整包PUT变化，其余现有、未来及额外注入字段默认拒绝；`PUT /api/state`返回`DOMAIN_COMMAND_REQUIRED`，畸形JSON返回400。 | `tests/api-command-boundaries.test.ts`覆盖新旧领域集合、规则设置和未知字段；`tests/api-routes.test.ts`覆盖已认证越权PUT和畸形JSON；集成态默认`npm test`通过208项TS测试与1项渲染测试。 |
 | AUD-002 | RESOLVED | Series API缺少完整运行时枚举与引用校验。 | `POST /api/series`显式校验强度、部位、钓法、类型、功能、品质、Collection与Performance存在/启用状态，并保留Type兼容校验。 | `tests/api-routes.test.ts`逐引用4xx覆盖；类型检查及默认`npm test`通过。 |
 | AUD-003 | RESOLVED | Series/SKU创建缺少命令幂等与结果恢复。 | 客户端发送稳定命令键；服务端将输入hash与Series结果引用同Workspace revision原子保存，相同输入恢复原Series/SKU，不同输入409，并发仅一次提交成功。 | `tests/api-routes.test.ts`覆盖重放、键冲突、并发冲突及冲突后恢复；默认`npm test`通过。 |
 | AUD-004 | RESOLVED | 离散拉力解析静默丢弃非法token与重复项。 | `parseDiscretePulls`保留合法值并单独报告`invalidTokens/duplicateValues`；任一异常均阻止创建。 | `tests/api-command-boundaries.test.ts`与`tests/api-routes.test.ts`覆盖中英文分隔、负数、文本和重复值。 |
 | AUD-007 | RESOLVED | 飞书导入审计身份可能为空。 | `stableAuditActor`优先保存`feishu:{tenantKey}:{openId}`，再回退显示名/email，导入与Series命令共用。 | `tests/api-command-boundaries.test.ts`覆盖飞书稳定身份及非空回退。 |
-| AUD-025 | RESOLVED | 默认测试入口遗漏飞书回写回归。 | `package.json`改用`tests/*.test.ts`与`tests/*.test.mjs`自动发现正式测试，新文件无需维护长名单。 | 默认`npm test`通过202项TS测试与1项渲染测试，其中飞书回写5项（字段匹配1项、提交恢复4项）均执行。 |
+| AUD-025 | RESOLVED | 默认测试入口遗漏飞书回写回归。 | `package.json`改用`tests/*.test.ts`与`tests/*.test.mjs`自动发现正式测试，新文件无需维护长名单。 | 集成态默认`npm test`通过208项TS测试与1项渲染测试，其中飞书回写5项（字段匹配1项、提交恢复4项）均执行。 |
 | AUD-R001 | RESOLVED | Attribute Affix 曾先于 Series/SKU/Model Patch 执行。 | `lib/rule-kernel.ts` 已按 Patch → Affix → FinalReview 顺序执行。 | `tests/v3-rule-kernel.test.ts`；`npm test` 通过。 |
 | AUD-R002 | RESOLVED | 商品层兼容字段曾影响结构投影筛选。 | `structuralCompatibilityContext` 和 `evaluateStructuralHardCompatibility`。 | 最近匹配测试通过。 |
-| AUD-R003 | RESOLVED | Series 创建主要逻辑曾只在客户端执行。 | 新增 `POST /api/series`，客户端调用服务端命令。 | 构建包含路由；相关领域测试通过。注意整包 state 绕过由 `AUD-001` 单独管理。 |
+| AUD-R003 | RESOLVED | Series 创建主要逻辑曾只在客户端执行。 | 新增 `POST /api/series`，客户端调用服务端命令。 | 构建包含路由；相关领域测试通过；整包state绕过后续已由`AUD-001`关闭。 |
 | AUD-R004 | RESOLVED | Vercel 构建曾原地修改 `package.json`。 | `vercel.json` 改为无源码写入的 `next build`。 | 文件审查。 |
 | AUD-R005 | RESOLVED | 未使用的 ChatGPT 请求头认证模块存在误用风险。 | `app/chatgpt-auth.ts` 已删除。 | Git diff。 |
-| AUD-R006 | RESOLVED | Feishu 数据源回写缺少写前/写后回读恢复。 | `commitFeishuWriteback` 和 `tests/feishu-writeback.test.ts`。 | 5个场景单独执行通过；默认`npm test`尚未收录该文件，由`AUD-025`跟踪，不重开本实现问题。 |
-| AUD-R007 | RESOLVED | R730 缺少正式持久存储、备份和部署说明。 | SQLite、迁移/备份脚本、systemd/Nginx、部署文档。 | 根测试与 SQLite 测试通过。残余事项由 `AUD-008/009/013/014` 管理。 |
-| AUD-R008 | RESOLVED | 生产环境无持久存储时曾静默回退到进程内内存，重启后丢失团队配置。 | `lib/storage.ts`的`assertEphemeralStorageAllowed`；`f0fe8232`。 | `tests/storage.test.ts`；远端复审完整测试通过。systemd路径不一致仍由`AUD-008`管理。 |
+| AUD-R006 | RESOLVED | Feishu 数据源回写缺少写前/写后回读恢复。 | `commitFeishuWriteback` 和 `tests/feishu-writeback.test.ts`。 | 5个回写场景已纳入默认`npm test`并通过；本地审计冲突恢复仍由`AUD-021`管理。 |
+| AUD-R007 | RESOLVED | R730 缺少正式持久存储、备份和部署说明。 | SQLite、迁移/备份脚本、systemd/Nginx、部署文档。 | 根测试与SQLite测试通过；部署路径、Node下限和会话灾备已关闭，revision保留政策仍由`AUD-009`管理。 |
+| AUD-R008 | RESOLVED | 生产环境无持久存储时曾静默回退到进程内内存，重启后丢失团队配置。 | `lib/storage.ts`的`assertEphemeralStorageAllowed`；`f0fe8232`。 | `tests/storage.test.ts`及集成态完整测试通过；systemd路径不一致已由`AUD-008`关闭。 |
 | AUD-R009 | RESOLVED | SQLite保存的revision条件更新未命中时曾可能继续写入历史，形成伪revision。 | `lib/sqlite-storage.ts`检查`updated.changes`并回滚；`45e8281d`。 | 持久化、过期`baseRevision`、不新增历史及并发测试通过。revision保留政策仍由`AUD-009`管理。 |
 | AUD-R010 | RESOLVED | 旧扁平`SeriesRecipe`缺少可承载竿、轮、线独立约束的迁移结构。 | v14`SeriesRecipe.partConstraints`及v13→v14顺序迁移；`be1cf696`。 | 迁移幂等测试通过并保留旧字段。运行时/UI尚未消费该结构，继续由`AUD-005`管理。 |
 | AUD-016 | RESOLVED | `BLOCKER` 甘特筛选值与legacy `ValidationIssue.level`不一致。 | `ValidationIssue.severity`承载规范严重度；缺失时确定性兼容映射legacy level。 | `tests/series-gantt-query.test.ts`覆盖BLOCKER命中与ERROR隔离；类型检查及领域测试通过。 |
 | AUD-017 | RESOLVED | `applyLayeredPatches`跨实体批量调用可能误报set冲突。 | 冲突键加入`scopeId`，只在同作用域实体同路径间报告竞争。 | `tests/v3-end-to-end.test.ts`覆盖不同/相同scopeId；领域测试通过。 |
-| AUD-023 | RESOLVED | 未发布或过期的`FiveAxisViewDefinition`可能进入新正式Snapshot。 | v15为定义增加revision、发布状态和内容哈希；旧定义无损迁移为未发布；`new_formal`核验定义发布状态、定义哈希及preview definition/rule/vertex/source版本链。 | `tests/five-axis.test.ts`覆盖正常、未发布、篡改、过期和历史Snapshot冻结；`tests/v3-migration.test.ts`覆盖迁移幂等；类型检查及领域测试通过。 |
+| AUD-023 | RESOLVED | 未发布或过期的`FiveAxisViewDefinition`可能进入新正式Snapshot。 | v15为定义增加revision、发布状态和内容哈希；新预览冻结定义revision/hash并纳入inputHash；旧定义无损迁移为未发布；`new_formal`核验完整版本链。 | `tests/five-axis.test.ts`覆盖正常、未发布、篡改、同ID版本内容替换、过期及历史Snapshot冻结；`tests/v3-migration.test.ts`覆盖迁移幂等；集成态完整测试通过。 |
 
 ## 更新记录
 
@@ -93,5 +94,6 @@
 | 2026-07-22 | 将v3-work的SQLite条件更新、生产环境禁止内存回退、v14系列配方迁移cherry-pick到审查分支；补全PatchLedger的v14 schema断言；新增`AUD-R008/009`。`AUD-008/009`仍开放。 | `45e8281d` `f0fe8232` `be1cf696` `6c233e5d` |
 | 2026-07-22 | 拉取全部远端分支并复审`origin/review/current-state-2026-07-22@fee6c83a`：新增`AUD-R008～R010`，有效未关闭问题仍为24个；完整测试190项、渲染测试1项、飞书回写单测5项及类型检查通过。 | `034a353` |
 | 2026-07-22 | 部署与工程治理复核：关闭`AUD-008/011/013/014/020`；`AUD-018`已固化行尾策略但等待Windows检出验证；`AUD-019`因历史pnpm工作区尚未完成独立CI验证继续开放。 | `9a86ee6` |
-| 2026-07-22 | 第一批领域契约修复关闭`AUD-016/017/023`；工作区升级到v15并保留旧五维定义和历史Snapshot。`AUD-024`保持开放，等待完整的`targetPullKg`顺序迁移而不做半迁移。 | `b340d45` |
-| 2026-07-22 | API/命令边界第一批修复：关闭`AUD-001～004`、`AUD-007`与`AUD-025`；默认门禁改为自动发现测试并通过202项TS测试与1项渲染测试。 | `36adceb` `605a6d2` |
+| 2026-07-22 | 第一批领域契约修复关闭`AUD-016/017/023`；工作区升级到v15，新五维预览冻结定义revision/hash，且不改写历史Snapshot。`AUD-024`保持开放，等待完整顺序迁移。 | `b340d45` `5671769` |
+| 2026-07-22 | API/命令边界第一批修复：关闭`AUD-001～004`、`AUD-007`与`AUD-025`；追加默认拒绝、并发幂等恢复和恶意JSON类型边界。 | `36adceb` `605a6d2` `8db1e31` |
+| 2026-07-22 | 三个独立worktree修复分支完成主分支集成复核；生产构建、208项TypeScript测试及1项渲染测试通过。有效未关闭问题由24个降为10个。 | `a9472b6` `a35cf72` `d9a2412` `1c0df55` `6d6d660` `44cfc2d` |

@@ -581,7 +581,7 @@ set
 
 自由文本公式只用于说明，正式计算由operation和ParameterDefinition驱动。
 
-### 11.4 双向百分比公式：OPEN-001已确认
+### 11.4 双向百分比公式：OPEN-001决策已确认，待发布策略版本
 
 2026-07-23用户确认全局使用`bidirectional_ratio`，不允许按参数、部位、词条族或单条词条切换叠加模式。未来若确需特殊语义，必须定义新的operation和策略版本，不能给现有百分比操作增加局部开关。
 
@@ -596,18 +596,18 @@ set
 
 - `B`和`R`都可以等于或超过`1`，不设置全局总和上限，也不因总和达到100%而额外clamp；每个词条幅度仍必须落在其已发布版本声明的范围内。
 - 百分比操作只允许用于非负`BaseValue`。`BaseValue = 0`合法，百分比阶段结果仍为0，随后固定值可以改变结果；允许负基底的参数必须在`ParameterDefinition`中禁用百分比operation。
-- 不可解析值、`NaN`、正负无穷和超出词条声明范围的幅度非法。计算溢出、得到非有限值，或数学结果非零但数值下溢为精确0时，结果不可被信任并拒绝继续。
+- 不可解析值、`NaN`、正负无穷和超出词条声明范围的幅度非法。计算溢出、得到非有限值，或理论结果非0却因数值精度下溢为精确0时，结果不可被信任并拒绝继续。
 - 有限且在声明范围内的极值合法。边界和舍入由`ParameterDefinition`负责，不在本叠加策略中另设精度或截断；Trace必须保存舍入前结果。
 
 #### Severity、Gate与waiver
 
 | 条件 | Severity | Gate | waiver |
 | --- | --- | --- | --- |
-| `0%`、`B/R >= 1`、有限且在声明范围内的极值 | 无Issue | 无 | 不适用 |
+| `0%`、`B ≥ 1`或`R ≥ 1`、有限且在声明范围内的极值 | 无Issue | 无 | 不适用 |
 | 单条幅度超出已发布词条范围 | `ERROR` | `REVIEW` | 不允许 |
 | 对负`BaseValue`应用百分比operation | `ERROR` | `REVIEW` | 不允许 |
 | 不可解析、`NaN`或无穷输入 | `BLOCKER` | `REVIEW` | 不允许 |
-| 溢出、非有限结果或非零数学结果下溢为精确0 | `BLOCKER` | `REVIEW` | 不允许 |
+| 溢出、非有限结果或理论结果非0却因数值精度下溢为精确0 | `BLOCKER` | `REVIEW` | 不允许 |
 | 缺少已发布`ReductionStackingPolicyVersion` | `BLOCKER` | `PUBLISH` | 不允许 |
 
 缺少已发布策略版本时可以生成明确标记为非正式的草稿预览，但禁止发布新的Model或ConfigurationSnapshot。本规则产生的所有`ERROR`和`BLOCKER`均不可waive。
@@ -947,8 +947,8 @@ ConfigurationSnapshot必须冻结有序Patch引用集合（`patchId + patchRevis
 ### 18.5 词条
 
 - 纯增加、纯降低、同时包含增加与降低、多个正负方向词条均按`Base × (1+B)/(1+R)`计算，随后再结算固定值；
-- `0%`、`Base=0`、`B/R >= 1`和有限合法极值均有测试；
-- 负Base使用百分比、幅度越界、不可解析、`NaN`、无穷、溢出、非有限结果和非零结果下溢为0均按确认的Severity与Gate阻断；
+- `0%`、`Base=0`、`B ≥ 1`或`R ≥ 1`和有限合法极值均有测试；
+- 负Base使用百分比、幅度越界、不可解析、`NaN`、无穷、溢出、非有限结果和理论结果非0却因数值精度下溢为0均按确认的Severity与Gate阻断；
 - 全局不能按参数或词条族切换公式，缺少已发布ReductionStackingPolicyVersion时只能非正式预览；
 - 策略升级生成新revision与UpgradeCandidate，旧Snapshot和旧策略版本仍可只读重放；
 - Technology不会与词条双重加成；
@@ -980,7 +980,7 @@ ConfigurationSnapshot必须冻结有序Patch引用集合（`patchId + patchRevis
 
 | ID | 类型 | 状态 | 当前可执行边界 | 未决时的必须行为 | 关闭证据/决策责任 |
 | --- | --- | --- | --- | --- | --- |
-| OPEN-001 降低型词条叠加 | 产品决策 | `DECIDED_PENDING_POLICY_VERSION` | 全局唯一使用`bidirectional_ratio`：`Base × (1+B)/(1+R)`，随后结算固定值并执行ParameterDefinition；不得按参数或词条族切换 | 没有已发布`ReductionStackingPolicyVersion`时只允许明确标记的非正式预览，产生不可waive的PUBLISH BLOCKER并禁止新Model和Snapshot发布 | 2026-07-23用户确认；飞书`FG数值设计v3-总表/钓具词条规则`revision `17172`已回读；发布可校验策略版本并通过公式、边界、迁移和冻结回归后才能改为`RESOLVED` |
+| OPEN-001 降低型词条叠加 | 产品决策 | `DECIDED_PENDING_POLICY_VERSION` | 全局唯一使用`bidirectional_ratio`：`Base × (1+B)/(1+R)`，随后结算固定值并执行ParameterDefinition；不得按参数或词条族切换 | 没有已发布`ReductionStackingPolicyVersion`时只允许明确标记的非正式预览，产生不可waive的PUBLISH BLOCKER并禁止新Model和Snapshot发布 | 2026-07-23用户确认；飞书`FG数值设计v3-总表/钓具词条规则`revision `17173`已回读；发布可校验策略版本并通过公式、边界、迁移和冻结回归后才能改为`RESOLVED` |
 | OPEN-002 Performance后续扩展 | 延后产品决策 | `DEFERRED_NON_BLOCKING` | 一期仅支持显式`PerformanceProfile`，不引入`performanceIntensity` | 不生成强度、曲线或线性倍率；不阻断一期其他功能 | 产品/规则负责人提供新策略语义、源数据和迁移方案 |
 | OPEN-003 扩展部位启用 | 延后产品决策 | `DEFERRED_UI_DISABLED` | 一期主流程仅启用竿、轮、线 | 钩、漂、真饵和拟饵可在注册表保留，但UI、生成、发布和导出必须关闭 | 产品负责人确认启用批次，并提供参数、兼容、映射和验收覆盖 |
 | OPEN-004 Patch属性偏移阈值 | 规则策略缺口 | `DECIDED_PENDING_POLICY_VERSION` | 决策已确认：不设置独立偏移阈值；Patch立即参与草稿试算，正式结果前必须纳入Series/SKU/Model或发布批次的整体人工复核证据；按当前关口各离散对象的累计最终值和已发布参数合法范围校验 | 缺少可校验的已发布`PatchOffsetPolicyVersion`时产生`PATCH_OFFSET_POLICY_MISSING`；范围越界ERROR只有取得匹配当前Gate的Waiver后才能继续，且仅当Gate为EXPORT时额外要求精确匹配目标环境×渠道；完整性BLOCKER永不可waive | 2026-07-23用户确认决策；第20节定义契约；发布可校验策略版本并通过批量复核、多重量、Gate/渠道Waiver、rebase和冻结回归后才能改为`RESOLVED` |
@@ -1003,13 +1003,13 @@ FinalBeforeBoundary = PercentAdjusted + ΣFlatBonus - ΣFlatReduction
 FinalValue = applyParameterDefinition(FinalBeforeBoundary)
 ```
 
-该模式适用于全局所有属性百分比词条；不允许按参数、部位、词条族或单条词条覆盖。正式数据使用`increase | decrease + 非负有限幅度`，旧有符号值只在导入时归一化并留证。`0%`、`BaseValue=0`、`B/R >= 1`和有限合法极值允许；负Base使用百分比、单条幅度越界、非法数值、溢出、非有限结果和非零结果下溢为0按第11.4节阻断，且本规则所有ERROR/BLOCKER均不可waive。ParameterDefinition决定参数边界、精度和舍入，Trace保存舍入前值。
+该模式适用于全局所有属性百分比词条；不允许按参数、部位、词条族或单条词条覆盖。正式数据使用`increase | decrease + 非负有限幅度`，旧有符号值只在导入时归一化并留证。`0%`、`BaseValue=0`、`B ≥ 1`或`R ≥ 1`和有限合法极值允许；负Base使用百分比、单条幅度越界、非法数值、溢出、非有限结果和理论结果非0却因数值精度下溢为0按第11.4节阻断，且本规则所有ERROR/BLOCKER均不可waive。ParameterDefinition决定参数边界、精度和舍入，Trace保存舍入前值。
 
-`ReductionStackingPolicyVersion`必须冻结公式、归一化规则、operation顺序、边界与校验语义、规则源revision及公式区域证据。ModelRevision和ConfigurationSnapshot必须冻结实际策略版本及第14节所列详细Trace。已发布策略版本不可原地修改，历史版本保持只读和可重放。
+`ReductionStackingPolicyVersion`必须冻结公式、归一化规则、operation阶段顺序、异常分类、`ParameterDefinition`引用与执行点、规则源revision及公式区域证据；具体合法范围、精度和舍入仍由被引用的`ParameterDefinition`版本冻结。ModelRevision和ConfigurationSnapshot必须冻结实际策略版本及第14节所列详细Trace。已发布策略版本不可原地修改，历史版本保持只读和可重放。
 
 新策略版本使受影响草稿进入`DIRTY`并通过显式重算创建新revision，不得覆盖旧revision。已发布Snapshot保持不变，只生成UpgradeCandidate；人工确认后才能从新的ModelRevision发布新Snapshot。缺少策略版本的历史Snapshot保留冻结值、证据与hash，不猜测或绑定当前策略：允许查看和导出完整的冻结产物，但不得声称能够完整重放或重算；需要新Snapshot时必须在已发布策略下创建新的ModelRevision。
 
-飞书规则源更新不自动激活。生效链固定为：飞书写入并技术回读→用户显式拉取→生成新FeishuSourceRevision→校验→发布ReductionStackingPolicyVersion和RuleSetVersion→显式重算。2026-07-23已回读[《FG数值设计v3-总表》](https://pisn3u3ony2.feishu.cn/wiki/WgnfwNhjCi1VfkkU282chGBGn3b?sheet=oJO4Gi)revision `17172`的`钓具词条规则!B20:B21,B24,E24`；该revision是决策源证据，不是运行时永久常量。
+飞书规则源更新不自动激活。生效链固定为：飞书写入并技术回读→用户显式拉取→生成新FeishuSourceRevision→校验→发布ReductionStackingPolicyVersion和RuleSetVersion→显式重算。2026-07-23已回读[《FG数值设计v3-总表》](https://pisn3u3ony2.feishu.cn/wiki/WgnfwNhjCi1VfkkU282chGBGn3b?sheet=oJO4Gi)revision `17173`的`钓具词条规则!B20:B21,B24,E24`；该revision是决策源证据，不是运行时永久常量。
 
 运行时、迁移器、校验器和回归测试的后续落地由GitHub Issue #41独立跟踪，不纳入本次决策规范PR。
 

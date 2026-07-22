@@ -36,13 +36,7 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { RuleGraphStudio } from "./RuleGraphStudio";
-import { V3FlowWorkbench } from "./V3FlowWorkbench";
-import { BrowserConfigExportWorkbench as ConfigExportWorkbench } from "./BrowserConfigExportWorkbench";
-import { SeriesGanttWorkbenchV3 as SeriesGanttWorkbench } from "./SeriesGanttWorkbenchV3";
-import { RuleWorkbookWorkbench } from "./RuleWorkbookWorkbench";
-import { PatchLedgerWorkbench } from "./PatchLedgerWorkbench";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
   generateCandidatesForRecipe,
   publishCandidate,
@@ -82,6 +76,13 @@ import type {
   SeriesShowcaseEntry,
   WorkspaceState,
 } from "@/lib/types";
+
+const RuleGraphStudio = lazy(async () => ({ default: (await import("./RuleGraphStudio")).RuleGraphStudio }));
+const V3FlowWorkbench = lazy(async () => ({ default: (await import("./V3FlowWorkbench")).V3FlowWorkbench }));
+const ConfigExportWorkbench = lazy(async () => ({ default: (await import("./BrowserConfigExportWorkbench")).BrowserConfigExportWorkbench }));
+const SeriesGanttWorkbench = lazy(async () => ({ default: (await import("./SeriesGanttWorkbenchV3")).SeriesGanttWorkbenchV3 }));
+const RuleWorkbookWorkbench = lazy(async () => ({ default: (await import("./RuleWorkbookWorkbench")).RuleWorkbookWorkbench }));
+const PatchLedgerWorkbench = lazy(async () => ({ default: (await import("./PatchLedgerWorkbench")).PatchLedgerWorkbench }));
 
 type PageKey =
   | "overview"
@@ -3351,7 +3352,9 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           </div>
         </header>
         <div className="content">
-          {renderPage()}
+          <Suspense fallback={<div className="empty-state"><strong>正在加载工作台模块…</strong><span>当前页面代码按需载入，已保留导航与筛选状态。</span></div>}>
+            {renderPage()}
+          </Suspense>
         </div>
       </main>
 

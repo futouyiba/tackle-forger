@@ -65,7 +65,7 @@
 - Patch rebase 与 UpgradeCandidate 状态机；
 - ConfigurationSnapshot 数据库不可变和发布并发；
 - 飞书登录、提案幂等、统一Capability、无审批策略、fencing token和失败恢复；
-- 多 ExportProfile、本机 companion/服务器挂载与 TOML 关联校验；
+- 多 ExportProfile、浏览器目录授权、本地文件冲突/Manifest恢复与 TOML 关联校验；
 - 服务端逐动作鉴权、聚合防泄露，以及当前三个阶段不建设对象级角色或职责分离；
 - 200%/400% 缩放、键盘、读屏和真实大数据性能。
 

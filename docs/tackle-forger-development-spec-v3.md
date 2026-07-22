@@ -2,7 +2,7 @@
 
 > 状态：**唯一权威规范 / Canonical**  
 >首次定稿：2026-07-21  
-> 最后修订：2026-07-23
+> 最后修订：2026-07-23  
 > 适用对象：产品设计、领域建模、前后端开发、数据迁移、测试与代码审查  
 > 源数据参考：《淡水路亚杆轮线装备设计.xlsx》
 
@@ -968,8 +968,8 @@ ConfigurationSnapshot必须冻结有序Patch引用集合（`patchId + patchRevis
 | OPEN-005 五维图定义 | 产品决策 | `OPEN_CONFIGURED_SEED` | 可使用版本化种子定义进行预览，不得写死在UI/数据库 | 种子结果明示“草稿定义”；缺轴不补0，未发布定义不进Snapshot | 产品/数值负责人确认轴、聚合、缺值、系列基准和比较上限 |
 | OPEN-006 AI供应方与数据出网 | 安全/产品决策 | `RESOLVED` | 使用`ai-provider/open006-v1`：Fancy Hub、`ai-request/v1`严格Schema、动态模型修订、字段级保留和分层限额 | 本决策只解除产品策略阻断；真实连接器在Issue #25完成、测试并启用前继续禁用，不得发送真实数据 | 2026-07-23用户确认本节策略；AI无批准、写回或发布能力，无需另设三方会签 |
 | OPEN-007 定价执行与源表一致性 | 外部规则源阻断 | `BLOCKED_ON_RULE_SOURCE` | 可导入同revision策略并输出`NON_FORMAL`试算 | S=100边界、性能评分来源、`roundingStage`、`minimumPriceScope`和`overflowMode`任一未解决时，禁止新PricingPolicyVersion、依赖它的Model发布、Snapshot和Store导出 | 规则负责人修订飞书源；显式拉取、校验并发布新PricingPolicyVersion |
-| OPEN-008 ConfigIdPolicy区间与命名 | 公司策略缺口 | `BLOCKED_ON_COMPANY_POLICY` | 可实现策略接口、reservation ledger和冲突预检 | 未发布公司数字ID区间、各对象命名格式与保留规则时，不得正式预留ID或提交配置；禁止用“最大值+1”或示例ID代替 | 配置治理负责人发布`ConfigIdPolicyVersion`并用真实configs验证 |
-| OPEN-009 工作流治理策略 | 产品/安全决策 | `RESOLVED` | 使用`open009-2026-07-23-v1`四类策略；所有已登录公司用户拥有全部已启用业务Capability；AI一期禁用，二期连接器仍需独立实现准入 | 不接飞书审批、不在本工具实行职责分离；OPEN-006安全配置只由部署管理员修改；关键写操作使用工作区单写锁，普通操作记录保留1年 | 2026-07-23用户确认；策略正文见第20.2节，迁移与验收见Issue #18 |
+| OPEN-008 ConfigIdPolicy区间与命名 | 公司策略（已确认） | `DECIDED_PENDING_POLICY_VERSION` | 按本节确认规则实现策略版本、ledger、权威目标目录/扫描Manifest和冲突预检 | `ConfigIdPolicyVersion`尚未发布，或其引用的`ConfigTargetCatalogVersion`中任一必需目标没有获批扫描Manifest时，不得正式预留ID或提交配置；禁止用“最大值+1”、示例ID、用户临时绑定或单一渠道扫描代替 | 配置治理负责人发布策略版本；权威目录覆盖完整；reservation、导入和分裂命中验收通过 |
+| OPEN-009 工作流治理策略 | 产品/安全决策 | `RESOLVED` | 使用第20.2节发布的五类`open009-v1`策略；所有已登录公司用户拥有全部已启用业务Capability；AI一期禁用，二期连接器仍需独立实现准入 | 不接飞书审批、不在本工具实行职责分离；OPEN-006安全配置只由部署管理员修改；关键写操作使用工作区单写锁与单调fencing token，普通操作记录保留1年 | 2026-07-23用户确认；策略正文见第20.2节，迁移与验收见Issue #18 |
 | OPEN-010 飞书Patch台账远端契约 | 外部规则源阻断 | `BLOCKED_ON_SOURCE_SCHEMA` | 本地PatchLedger、镜像命令、幂等与失败恢复可以运行 | 主工作簿未提供稳定sheet_id、机器列与协作字段权限前，真实镜像写入/拉取保持禁用；不得伪造SYNCED | 规则源负责人建表并确认机器区域；完成写入、回读、缺行和冲突联调 |
 
 状态只能在决策证据进入权威规范且对应策略版本可校验后改为`RESOLVED`。代码、原型、测试种子或某次人工输入都不能单独关闭决策。
@@ -994,6 +994,101 @@ ConfigurationSnapshot必须冻结有序Patch引用集合（`patchId + patchRevis
 ### OPEN-004：Patch属性偏移阈值
 
 Series、SKU和Model的默认属性偏移上限尚未确定。实现应从配置读取，不得写死。
+
+### OPEN-008：ConfigIdPolicy数字区间与命名规则
+
+本项的公司治理语义已经确认，但在对应`ConfigIdPolicyVersion`发布，且其引用的`ConfigTargetCatalogVersion`中每个必需环境×渠道都有获批只读扫描Manifest前，状态保持`DECIDED_PENDING_POLICY_VERSION`，正式预留和配置提交继续fail-closed。TOML枚举固定通过可读`configNameKey`唯一解析数字ID，本项不得重新改为按数字ID直接配置。
+
+#### 对象区间与作用域
+
+每次为Model预留一个按部位分区的稳定`ConfigIdBundle`。Tackle与Item共享基础ID；GoodsBasic和StoreBuy由同一个基础ID确定性派生，不各自漂移游标。
+
+| 稳定`rangeId` | 部位 | Tackle / Item共享ID | GoodsBasic ID | StoreBuy ID |
+| --- | --- | --- | --- | --- |
+| `rod_301800001_301899999` | 竿 `rod` | `301800001–301899999` | `10301800001–10301899999` | `30301800001–30301899999` |
+| `reel_302800001_302899999` | 轮 `reel` | `302800001–302899999` | `10302800001–10302899999` | `30302800001–30302899999` |
+| `line_303800001_303899999` | 线 `line` | `303800001–303899999` | `10303800001–10303899999` | `30303800001–30303899999` |
+
+GoodsBasic ID按十进制字符串`"10" + baseId`派生，StoreBuy ID按`"30" + baseId`派生；禁止把前缀当成运行时可变渠道码。所有末三位为`000`的编号保留，不进入普通分配。区间为公司专属区间；外部未知对象一旦占用其中编号，必须登记为永久占用而不是覆盖。
+
+`rangeId`是allocation pool的永久身份，不属于策略版本命名空间。后续`ConfigIdPolicyVersion`引用同一`rangeId`时，其部位、上下界、保留规则和派生规则必须逐字节等价；任何语义变化或扩容都必须创建新的`rangeId`。新`rangeId`的基础ID和派生ID空间不得与任何历史或当前`rangeId`重叠，重叠策略版本禁止发布。ledger游标、占用唯一约束和容量统计均跨策略版本绑定`rangeId`，`policyVersionId`只记录本次分配采用的审计规则，不得创建新游标或重置高水位。
+
+同一个Model跨Snapshot、`dev`、`test`、`online`、`release`以及各渠道沿用同一套Bundle。环境和渠道不是ID命名空间，不能为同一个Model重复分配。首批人工导出环境为`dev/test/online/release`，各自绑定用户选择的本地Git worktree；每个环境的`1001`写入根目录`xlsx`，其他渠道绑定用户明确选择的目录。工具只负责生成、校验和写入人工导出目标，不负责后续Git合并、发布或部署。
+
+“所有启用目标”只以配置治理负责人发布的`ConfigTargetCatalogVersion`为权威集合，不从用户本机绑定数量、`config_system.toml`或目录扫描结果反推。目录中的每个条目至少冻结`environmentId`、`channelKey`、仓库身份、分支/引用规则、仓库内逻辑目录、`config.toml`路径、是否为正式必需目标和目录版本审批信息；本机绝对路径与目录句柄不进入目录版本。用户可以自由选择本机worktree完成绑定，但绑定只满足访问授权，不能创建、启用或豁免正式目标。
+
+每个必需条目必须有获批`ConfigTargetScanManifest`，至少记录目录版本、环境、渠道、仓库、authoritative ref名称、扫描时解析到的不可变commit、逻辑目录、`config.toml` hash、各workbook/sheet/hash、扫描器与规则版本、所验证`rangeId`集合、问题清单、结果hash、扫描人与复核人及时间。`ConfigIdPolicyVersion`必须冻结引用一个目录版本和覆盖其全部必需条目的Manifest集合；缺失、重复、失败、commit不可解析、Manifest所验区间不一致或未经`config.target.scan.approve`复核时禁止发布。目录新增或变更目标时发布新目录版本；新目标在新Manifest和引用它的新策略版本生效前只能做`NON_FORMAL`预览，不能正式预留或提交。工具仍不读取、修改或治理`config_system.toml`；权威目录由配置治理流程显式维护。
+
+获批Manifest不是永久豁免。发布策略、每次正式预留、生成正式人工搬运包和本地正式提交前，都必须重新解析目录条目的当前authoritative ref，并逐项验证当前commit、该commit中的`config.toml` hash和所有受管workbook hash与策略冻结的Manifest完全一致；远端不可读、ref不存在、commit变化、文件缺失或任一hash变化均产生`CONFIG_TARGET_SCAN_MANIFEST_STALE`并禁止动作。预留命令在选择候选ID前检查一次，并在ledger数据库事务提交前再次解析authoritative ref；两次结果不一致则回滚且不消耗编号。正式导出还必须验证本地worktree HEAD、逻辑目录、`config.toml`和workbook基线hash与同一Manifest一致，不能用“远端一致但本地脏”或“本地一致但远端已推进”绕过。
+
+Manifest失效后，旧`ConfigIdPolicyVersion`只保留历史审计用途，不再允许新预留或任何正式包/落盘；必须从当前authoritative ref重新扫描、复核Manifest并发布引用新Manifest的新策略版本。一次正式提交会改变workbook hash，因此提交结果必须记录post-write文件hash；待现有外部发布系统形成新的不可变commit后，再从该commit扫描和复核。在新Manifest进入新策略版本前，旧策略不得用于下一批正式预留或提交。已成功预留的Bundle仍永久保留，后续目标若外部占用同一ID则产生`RESERVED_ID_EXTERNAL_COLLISION`并隔离，不自动换号、复用或覆盖。
+
+#### `configNameKey`格式与唯一性
+
+| 对象 | 格式 |
+| --- | --- |
+| Tackle / Item | `tf_<part>_<stableModelKey>` |
+| GoodsBasic | `store_tf_<part>_<stableModelKey>` |
+| StoreBuy | `buy_tf_<part>_<stableModelKey>` |
+
+`stableModelKey`是Model revision上的显式稳定字段，不从显示名、中文拼音、数据库ID或时间戳自动生成。没有该字段的Model必须先通过普通Model编辑创建新revision，再由用户基于该revision发起预留；界面可以给建议，但建议不构成保存或预留。规范化算法固定为：只移除首尾ASCII空白`U+0009–U+000D/U+0020`，再把ASCII`A–Z`映射为`a–z`，不做Unicode转写、字符替换、下划线折叠或截断。规范化结果必须满足`^[a-z][a-z0-9_]{0,39}$`，因此非空且长度为1–40字符；否则返回`STABLE_MODEL_KEY_INVALID`。
+
+`part`只能是`rod/reel/line`。按表中模板拼接后的完整`configNameKey`最长64字符且必须满足`^[a-z][a-z0-9_]*$`。禁止随机后缀、静默截断和按环境/渠道加后缀。`stableModelKey`在正式预留前可以修改；名称与Bundle成功预留后一起冻结。业务需要改名或让新旧版本共存时创建新Model和新Bundle。
+
+名称在每个逻辑表内唯一；`part + stableModelKey`在受管Model中唯一，且`ABANDONED`、`DEPRECATED`、`LEGACY_IMPORTED`、`EXTERNAL_OCCUPIED`等永久占用状态仍参加名称冲突检查。Tackle与Item的同名同ID配对是唯一允许的跨表重复；对任一TOML合法枚举目标集合，同名必须唯一解析到同一个数字ID。同名不同ID、同ID不同名或同名解析到多个数字ID均为阻断冲突。名称唯一性检查、Model唯一Bundle检查、四个对象ID占用、ledger记录和`rangeId`游标推进必须在同一个数据库事务内完成；并发重名只有一个请求成功，失败方返回`CONFIG_NAME_KEY_CONFLICT`并由用户选择新key，系统不得自动追加后缀。
+
+#### Reservation ledger、生命周期与权限
+
+全公司只使用服务端权威reservation ledger。普通设计用户可以预览候选；动作`reserve_config_id_bundle`要求`config.id.reserve`，其命令至少携带`modelId + expectedModelRevisionId + part + expectedNormalizedStableModelKey + policyVersionId + idempotencyKey`。完成Manifest新鲜度预检后，数据库事务必须先锁定Model head row，验证当前head revision等于`expectedModelRevisionId`、其part和规范化key等于命令期望值且尚无Bundle；任一不一致返回`MODEL_REVISION_CONFLICT`并且不锁游标、不写ledger。验证通过后才按策略声明顺序锁定稳定`rangeId`游标，跳过保留号，并以ledger中基础ID、两个派生ID、名称和Model的数据库唯一约束作为最终防线；禁止扫描Excel最大值后加一，也禁止回填ledger空洞。
+
+同一事务必须再次验证authoritative refs未漂移，完成名称与ID占用、ledger和幂等记录写入，创建冻结`stableModelKey + configIdBundleRef`的后继Model revision，并以条件更新推进Model head。事务失败不留下预留或半个Model revision，事务成功后永久占用并返回`reservedAgainstModelRevisionId + resultingModelRevisionId + ConfigIdBundle`。Bundle存在后的所有Model revision必须原样继承冻结key与Bundle；任何修改key、part或Bundle引用的命令均拒绝。
+
+幂等记录与Bundle在同一事务提交。命令先查幂等记录：相同完整payload的`modelId + idempotencyKey`重试必须返回第一次已提交的原Bundle、原/新Model revision和原审计结果，不重新执行当前revision或Manifest校验，也不推进游标；数据库已提交但响应丢失也遵守此规则。同一idempotencyKey携带不同Model、expected revision或规范化输入时返回`IDEMPOTENCY_KEY_REUSED`；同一Model已存在兼容Bundle时返回该Bundle，不再分配，输入与冻结身份冲突时返回`MODEL_CONFIG_IDENTITY_CONFLICT`。
+
+- 成功预留但未使用的Bundle标记`ABANDONED`；已经导出后退役的Bundle标记`DEPRECATED`。二者都计入占用且永不复用，不提供管理员释放入口。
+- 迁移和修订不得改变既有ID或名称。需要线上新旧并存时创建新Model；仅替换当前配置时仍更新原Bundle对应行，历史Snapshot保持不可变。
+- `config.export.commit`只授权生成正式人工搬运包或写入用户已选择并授权的本地worktree。预留、导入、策略发布、Manifest复核和提交是否允许同一操作者，完全由当前有效`separationOfDutiesPolicy`决定；本节不为一期或1.5期写死豁免或强制分离。
+- 配置治理负责人分别通过`config.id.policy.publish`、`config.target.catalog.publish`、`config.target.scan.approve`发布策略/目标目录和复核Manifest；历史纳管使用`config.id.legacy_import`，ledger元数据纠错使用`config.id.ledger.correct`。纠错不得删除已成功预留记录、推进或回退游标、释放编号、修改冻结ID/name或将编号转给另一Model。
+- 审计至少记录操作者、时间、原因、Model、完整Bundle、原状态/新状态、策略版本、目标环境×渠道和关联revision/Snapshot。
+
+容量按每个部位`rangeId`的可分配编号计算，`ABANDONED`、`DEPRECATED`和外部占用均计入。达到80%产生预警；达到95%产生严重预警并要求准备扩容，但已有区间尚未耗尽时继续分配；只有该部位全部可分配编号耗尽时才阻止该部位的新预留，既有Bundle的更新和导出不受影响。扩容只能通过新`ConfigIdPolicyVersion`追加新`rangeId`，不迁移旧ID、不重排或重建原游标、不回收历史空洞。
+
+#### Upsert、分裂命中与多目标行为
+
+每个环境×渠道独立读取实际目标表并以`ID + configNameKey`联合判断：
+
+- ID和名称均未命中时新增；二者命中同一行时只更新工具负责的列；
+- 只命中ID、只命中名称、二者命中不同行、同ID不同名、同名不同ID，或Tackle/Item/GoodsBasic/StoreBuy任一对象部分缺失，均视为分裂命中并阻止该目标；
+- 不自动改名、换ID、补占未知行、合并重复行或删除历史行；冲突必须返回文件、sheet、行、ID、名称和可执行复核动作；
+- 默认只隔离发生冲突的环境×渠道，其他已通过预检的目标可以继续；用户仍可在确认页选择“任一失败则全部不写”。
+
+#### 历史与未知ID导入
+
+首次接管和新增渠道时先生成只读扫描报告，不写Excel、不预留ID、不写ledger。人工复核只能选择：关联现有Model、登记`LEGACY_IMPORTED`、登记`EXTERNAL_OCCUPIED`、保持`EXTERNAL_UNKNOWN`不纳管。
+
+- Tackle、Item、GoodsBasic、StoreBuy关系一致且业务归属明确的历史对象可登记`LEGACY_IMPORTED`，保留原ID和原名称。历史名称即使不满足新模板也按祖父条款保留，但不能成为新对象的命名模板。
+- 归属无法证明且位于专属区间外的对象保持`EXTERNAL_UNKNOWN`，工具不得覆盖；位于本策略专属区间内的未知对象登记`EXTERNAL_OCCUPIED`并永久占用。
+- 重复名称、重复ID、对象断链、部分命中、跨环境不一致或跨渠道不一致必须隔离到实际目标，未经人工选择不得自动推断。
+- 文档示例、测试夹具、下载文件名和某次扫描结果都不是正式占用证据；正式导入必须记录源仓库、环境、渠道、commit、workbook、sheet和行。
+
+2026-07-23对内网`common/configs`的`dev@79b3ac1a`、`test@fe6b5f40`、`online@5c03518b`、`release@a2f4aa5c`四个分支中1001渠道的`tackle.xlsx`、`item.xlsx`、`store.xlsx`进行了只读实表扫描：上述候选区间占用数为0；同时发现`301200101 / rod_spinning01_1`等现行对象、`3015007 / rod_spinning05_worn`等历史短ID，以及`reel_spin208_7`重复名称，证明不能从最大值或名称形态推断治理状态。该扫描只用于支持区间决策；非1001渠道尚须逐一扫描，扫描完成和策略版本发布前不得正式启用分配。
+
+验收至少覆盖：
+
+- Given 两个并发请求争用同一部位游标，When 事务预留，Then 只产生两个不同且完整的Bundle，失败重试不留下半Bundle；
+- Given v1已从某`rangeId`分配Bundle且v2继续引用同一`rangeId`，When v2首次分配，Then 继承原游标和全ledger占用，不重新发放v1的任何基础或派生ID；
+- Given 预留事务已经提交但响应丢失，When 以相同`modelId + idempotencyKey`重试，Then 返回原Bundle且游标、占用数和审计记录不增加；
+- Given 两个Model并发预留相同`part + stableModelKey`，When 提交，Then 仅一个事务成功，另一方得到`CONFIG_NAME_KEY_CONFLICT`且没有自动后缀或半Bundle；
+- Given Model revision A的key为`alpha`且预留命令携带A，When 并发编辑先把Model head推进到revision B/key=`beta`，Then 预留返回`MODEL_REVISION_CONFLICT`且不消耗编号；Given 预留先锁定A并成功，Then 后续编辑不能改变冻结key或Bundle；
+- Given 候选基础ID末三位为`000`，When 分配，Then 跳过该编号及其GoodsBasic/StoreBuy派生ID；
+- Given 预留事务失败，Then 不产生占用；Given 事务成功后Model放弃，Then 标记`ABANDONED`且后续永不复用；
+- Given 部位容量达到80%、95%和100%，Then 分别返回预警、严重预警但继续分配、仅阻止该部位新预留；
+- Given 目录版本列出四个必需目标但只有三个获批Manifest，When 发布ConfigIdPolicyVersion，Then 返回缺失目标并阻止发布；Given 用户另外绑定一个未入目录的渠道，Then 该绑定不能补足门禁或执行正式提交；
+- Given Manifest获批后任一authoritative ref推进且新workbook占用候选ID，When 请求预留，Then 返回`CONFIG_TARGET_SCAN_MANIFEST_STALE`，不推进游标、不写ledger，并要求重新扫描、复核和发布策略；
+- Given 远端ref仍与Manifest一致但本地worktree的`config.toml`或workbook已修改，When 请求正式提交，Then 阻止写入且不允许用本地文件覆盖Manifest基线；
+- Given 一批正式写入成功并改变workbook hash，When 使用原策略请求下一批预留或正式提交，Then 原策略因Manifest基线过期被拒绝，直到新commit完成扫描、复核并由新策略引用；
+- Given `dev/1001`同ID不同名而`test/1001`完整命中同一行，When 多目标提交，Then 默认只隔离`dev/1001`并允许`test/1001`继续；
+- Given 首次扫描发现专属区间内未知ID，When 尚未人工复核，Then Excel与ledger均不写；When 选择外部占用，Then 登记`EXTERNAL_OCCUPIED`并永久占用。
 
 ### 20.1 价值分自动定价与PricingPolicy
 
@@ -1137,9 +1232,11 @@ Tackle Forger中的“发布”只表示发布内部RuleSetVersion、冻结Confi
 - 锁由系统自动取得和释放，不要求用户手工管理。持锁期间其他用户仍可读取、查看差异和执行不落盘的预览或AI评估，但不能保存状态变更。
 - 前端必须显示锁持有人、正在执行的动作、开始时间和被禁用动作的原因。
 - 每次取得或重新取得锁，数据库必须在同一事务中为该工作区分配严格单调递增、永不复用的正数64位有符号`BIGINT fencingToken`，并创建含`workspaceId/leaseId/holderUserId/action/fencingToken/acquiredAt/expiresAt`的租约。API、JSON、outbox和操作记录统一把token编码为无前导零的十进制字符串，禁止经过JavaScript `number`；比较时按数据库整数值而非字符串字典序。释放、超时、失败和数据库恢复都不得回退计数器或再次发放旧token；计数器达到`9223372036854775807`或无法证明其连续性时必须fail-closed并禁止新写入。
-- 所有共享状态变更、持久化事务、远端写入命令、恢复命令和最终成功提交都必须携带`leaseId + fencingToken`。本地存储在实际写入点比较token是否仍等于该工作区最新授予值；仅检查“调用方看起来仍持锁”、只检查leaseId或只在请求开始时检查均不合格。旧token返回`STALE_FENCING_TOKEN`，不得提交状态或标记成功。
-- 飞书和配置文件等不能原生校验token的外部副作用不得由请求线程直接执行，必须进入按工作区串行的持久化fenced outbox。worker在每项副作用开始前重验最新token；同一目标的低token结果处于超时/未知状态时，必须先按幂等键回读并确认结果或进入人工恢复，禁止更高token命令越过。这样旧请求即使恢复，也不能在新token写入之后再次改变同一目标。
-- 外部调用返回后、写入本地成功证据前再次校验token。若调用期间租约过期且新token已经发放，旧操作只能向协调器报告未知结果，不能用旧token写入任何业务状态或成功证据；协调器必须以当前有效token追加`SUPERSEDED/RECOVERY_REQUIRED`回读证据并完成回读/补偿，再允许更高token继续。
+- 所有服务端共享状态变更、持久化事务、服务端可达副作用命令、恢复命令和最终成功证据都必须携带`leaseId + fencingToken`。服务端存储在实际写入点比较token是否仍等于该工作区最新授予值；仅检查“调用方看起来仍持锁”、只检查leaseId或只在请求开始时检查均不合格。旧token返回`STALE_FENCING_TOKEN`，不得提交服务端业务状态或标记成功。
+- 飞书等服务端可达但不能原生校验token的外部副作用不得由请求线程直接执行，必须进入按工作区串行的持久化fenced outbox。worker在每项副作用开始前重验最新token；同一目标的低token结果处于超时/未知状态时，必须先按幂等键回读并确认结果或进入人工恢复，禁止更高token命令越过。服务端outbox不包含第25.2节的浏览器本地配置文件写入或下载变更包，也不得保存或索取浏览器IndexedDB中的目录句柄或本机绝对路径。
+- 服务端外部调用返回后、写入成功证据前再次校验token。若调用期间租约过期且新token已经发放，旧操作只能向协调器报告未知结果，不能用旧token写入任何业务状态或成功证据；协调器必须以当前有效token追加`SUPERSEDED/RECOVERY_REQUIRED`回读证据并完成回读/补偿，再允许更高token继续。
+- 浏览器本地配置写入由持有`FileSystemDirectoryHandle`的页面按第25.2至25.5节执行，不能由服务端worker代写，也不能声称fencing token能撤销或阻止已经交给本机文件系统的写操作。取得租约只授权本次正式写入并限定服务端成功证据：页面在开始写入、每个文件写入前及报告最终结果前向服务端重验`leaseId + fencingToken`，但文件一致性仍必须依靠基线hash/mtime、备份、恢复Manifest、逐文件回读和恢复事务。
+- 浏览器本地写入期间若租约失效或出现更高token，即使部分字节已经落盘，旧客户端也不得提交成功证据。任一配置导出租约在没有已验证终态时过期、断线或取消，服务端必须先把`workspaceId + bindingId + environmentId + channelKey`对应逻辑目标置为`recoveryState=RECOVERY_REQUIRED`并记录`reason=EXTERNAL_FILE_CONFLICT`；不能因为客户端未回报就假定文件未变。后续只允许持有当前token的恢复操作先确认目录授权，必要时重新绑定，并回读全部目标文件，按Manifest恢复或前向协调且记录新hash；恢复完成前阻止该目标新的正式写入。
 - 操作成功、失败或取消后自动释放；浏览器断开或服务异常时，通过心跳和短期租约自动过期，防止永久锁死。租约过期只允许发放更高token，不代表旧操作可以继续提交。
 - 不提供绕过硬校验、Revision冲突、显式拉取、Snapshot不可变或配置关系校验的紧急通道。失败写入继续通过幂等键、回读、备份和恢复Manifest处理。
 
@@ -1156,8 +1253,9 @@ Tackle Forger中的“发布”只表示发布内部RuleSetVersion、冻结Confi
 - 任一已登录公司用户可以执行已启用业务动作；一期AI关闭时不能通过直接API绕过功能开关，普通用户也不能修改OPEN-006部署安全配置。
 - 三个阶段均不存在飞书审批依赖，同一用户可以连续完成规则链路中的显式动作。
 - 两名用户同时尝试关键写操作时只有一人取得锁，另一人仍可读取并看到明确的持锁提示。
-- Given A持有token 41并在远端写入中卡住，When 租约过期且B取得token 42，Then A恢复后的任何本地提交都返回`STALE_FENCING_TOKEN`；B不能越过A的未知远端结果，必须先完成幂等回读/恢复，最终同一目标不会出现A在B之后生效。
-- 持锁客户端断开后租约可以自动过期并发放更高fencing token；失败写入可以通过幂等回读或Manifest恢复且不会重复生效。
+- Given A持有token 41并在服务端可达的远端写入中卡住，When 租约过期且B取得token 42，Then A恢复后的任何服务端状态提交都返回`STALE_FENCING_TOKEN`；B不能越过A的未知远端结果，必须先完成幂等回读/恢复，最终同一目标不会出现A在B之后生效。
+- Given 浏览器A用token 41写完第一份配置文件后断线且租约无已验证终态地过期，When 服务端处理过期并由B取得恢复token 42，Then 目标已是`recoveryState=RECOVERY_REQUIRED, reason=EXTERNAL_FILE_CONFLICT`且A不能再提交成功证据；B必须先确认或重新请求目录授权、逐文件回读并按Manifest恢复或前向协调，不能把本机写入伪装为outbox已隔离。
+- 持锁客户端断开后租约可以自动过期并发放更高fencing token；服务端副作用通过幂等回读恢复，浏览器本地文件通过hash/mtime、逐文件回读和Manifest恢复，均不得伪装重复成功。
 - 普通操作记录到期清理不改变历史Snapshot、Patch、RuleSet或导出Manifest的复现关系。
 
 
@@ -1766,7 +1864,9 @@ interface EntityRef {
   workspaceId: string;
   entityType: "collection" | "series" | "sku_drawer" | "model"
     | "configuration_snapshot" | "model_candidate" | "adjustment_patch"
-    | "upgrade_candidate" | "rule_source_change_draft";
+    | "upgrade_candidate" | "rule_source_change_draft" | "config_id_bundle"
+    | "config_id_policy" | "config_target_catalog" | "config_target_scan_manifest"
+    | "config_export_package";
   entityId: string;
   revisionId: string;
 }
@@ -1786,6 +1886,8 @@ type CapabilityCode =
   | "snapshot.read" | "snapshot.export"
   | "ai.evaluate" | "ai.patch_draft.create" | "ai.rule_source_change_draft.create" | "ai.provider_policy.manage"
   | "feishu.rule_change.confirm_write" | "feishu.source.pull" | "ruleset.publish"
+  | "config.id.reserve" | "config.id.policy.publish" | "config.id.legacy_import" | "config.id.ledger.correct"
+  | "config.target.scan" | "config.target.scan.approve" | "config.target.catalog.publish"
   | "config.export.preview" | "config.export.commit"
   | "validation.waiver.request" | "validation.waiver.approve"
   | "rules.five_axis.publish" | "workspace.policy.manage";
@@ -1798,11 +1900,30 @@ type ActionCode =
   | "view_snapshot" | "export_snapshot"
   | "run_ai_assessment" | "create_ai_patch_draft" | "create_ai_feishu_draft" | "manage_ai_provider_policy"
   | "confirm_feishu_write" | "pull_feishu_source" | "publish_ruleset"
+  | "reserve_config_id_bundle" | "publish_config_id_policy"
+  | "import_legacy_config_id" | "correct_config_id_ledger_metadata"
+  | "scan_config_target" | "approve_config_target_scan" | "publish_config_target_catalog"
   | "preview_config_export" | "commit_config_export"
   | "request_validation_waiver" | "approve_validation_waiver"
   | "publish_five_axis_definition" | "manage_workspace_policy";
 
 ```
+
+配置身份治理动作固定映射为：
+
+| ActionCode | requiredCapabilities |
+| --- | --- |
+| `reserve_config_id_bundle` | `config.id.reserve` |
+| `publish_config_id_policy` | `config.id.policy.publish` |
+| `import_legacy_config_id` | `config.id.legacy_import` |
+| `correct_config_id_ledger_metadata` | `config.id.ledger.correct` |
+| `scan_config_target` | `config.target.scan` |
+| `approve_config_target_scan` | `config.target.scan.approve` |
+| `publish_config_target_catalog` | `config.target.catalog.publish` |
+| `preview_config_export` | `config.export.preview` |
+| `commit_config_export` | `config.export.commit` |
+
+读接口必须按当前对象、策略版本和操作者返回这些`ActionAvailability`；命令端再次校验Capability和`separationOfDutiesPolicy`。发布策略还必须校验其目标目录/Manifest覆盖，浏览器目录授权不能替代任何服务端权限。
 
 Series、SKU、Model的ID终身稳定且不复用；改名和更换默认Model不改ID。SKU修改`targetPullKg`必须遵守第6.5节：没有任何已发布后代Snapshot时保留skuId并创建新revision；已有已发布后代时原SKU的重量身份冻结，新重量创建新SKU，旧SKU可`DEPRECATED`。Revision只增不改；已批准/已发布revision不可原地改写。Snapshot ID与payload/hash永久绑定。前端不得从角色名、状态或颜色猜动作；读接口返回`ActionAvailability[]`，写接口再次鉴权。按第20.2节，所有已登录公司用户统一获得全部当前已启用业务Capability，`separationOfDutiesPolicy`使用`disabled_in_tackle_forger`；按第23.6节，`ai.provider_policy.manage`只授予部署管理员。服务端仍必须独立鉴权，功能开关关闭或未授予的Capability不得通过直接API调用。
 
@@ -1824,7 +1945,7 @@ interface GanttNodeAggregate {
   directLifecycle: LifecycleState;
   directAttention: AttentionState[];
   descendantStateCounts: Record<string, number>;
-  modelCountTotal?: number; modelCountVisible: number;
+  modelCountTotal: number; modelCountMatched: number;
   blockingIssueCount: number; warningCount: number;
   upgradeCandidateCount: number; hasMoreChildren: boolean;
 }
@@ -1833,9 +1954,9 @@ interface GanttNodeAggregate {
 - 主矩阵纵轴为版本化、可配置的重量显示分段；横轴第一层固定按品质C/绿、B/蓝、A/紫、S/橙分组，第二层按当前启用的Type分组。
 - 每个Series放入其固定Quality + Type列，并以覆盖块跨越该Series离散`targetPullsKg`的最小/最大显示位置；覆盖块只是规划轮廓，不是连续SKU或插值区间。
 - 覆盖块内部只绘制真实SKU节点。显示分段或节点位置只用于布局，最近模板匹配仍使用SKU的精确targetPullKg。
-- 同字段OR、不同字段AND；文本只搜有权查看的ID、名称、别名。
+- 同字段OR、不同字段AND；文本搜索当前工作区中的ID、名称、别名。
 - 默认加载矩阵Series摘要；选中/展开Series覆盖块时，在底部摘要按重量升序加载真实SKU；展开SKU摘要时按展示顺序加载Model，使用服务端游标。
-- 聚合区分总数和筛选/权限可见数；无权知道总数时省略`modelCountTotal`。
+- 聚合区分总数和当前查询命中数；`modelCountMatched`只表达筛选结果，不表达对象权限或安全裁剪。
 - 主状态优先级：硬冲突 > rebase > 待复核 > 警告 > 待发布 > 升级候选 > 已发布 > 草稿；全部计数保留。
 - 点击Series覆盖块只更新底部Series摘要；点击SKU节点选中对应SKU并展示抽屉入口，不因单Model跳级；点击Model行才打开右侧预览。“打开Series/进入SKU抽屉”使用显式动作。
 - 矩阵空白和重量分段标签不创建SKU；新建重量必须使用“添加重量规格”。
@@ -1843,8 +1964,9 @@ interface GanttNodeAggregate {
 正常路径：筛选矩阵，选中Series覆盖块，在底部摘要展开SKU与Model并打开预览。  
 边界：单SKU仍有一个真实节点；无SKU草稿Series显示未覆盖占位，不绘制虚假跨度。  
 冲突：翻页ETag变化使游标失效，不静默拼接新旧聚合。  
-恢复：保留筛选、矩阵滚动和选中Series刷新；节点移除则回最近可见父级。  
-权限：先做对象级过滤，聚合不得泄露无权对象名称、状态或精确数量。  
+恢复：保留筛选、矩阵滚动和选中Series刷新；节点移除则回最近仍存在的父级。
+
+权限：按第20.2节使用全员统一的已启用Capability和功能开关；R1不得实现对象级过滤、对象级总数隐藏或部分谱系披露。功能未启用或Capability不可用时，服务端返回禁用原因且写接口再次鉴权。
 验收：Given 1.5kg与1.8kg命中同一模板，When 查看同一Series覆盖块，Then 两个精确重量以独立SKU节点显示且各自状态独立，并显示“覆盖范围不代表连续插值”。
 
 ### 24.3 R2：稳定标识、面包屑和权限
@@ -1863,8 +1985,8 @@ interface BreadcrumbItem {
 边界：无Collection从Series开始；多Snapshot显式选版本。  
 冲突：父链与不变量不一致产生数据完整性error。  
 恢复：返回有效父级/迁移审计/修复引用，不自动猜父级。  
-权限：read/edit/review/publish分别判定。  
-验收：Given 用户仅有Model只读权限，When 深链接打开，Then 可看允许披露父链，写动作显示服务端禁用原因。
+权限：read/edit/review/publish继续映射为独立Capability和`ActionAvailability`，但当前策略把全部已启用Capability统一授予所有已登录公司用户，不按对象、父级或业务角色裁剪。
+验收：Given 已登录公司用户深链接打开Model或Snapshot，When 服务端解析对象，Then 返回完整稳定父链；写动作只因功能开关、领域关口、revision或当前Capability未启用而禁用，并显示服务端原因，不产生“仅披露部分父链”的对象级权限分支。
 
 ### 24.4 R3：“生成 Model 候选”
 
@@ -2052,7 +2174,7 @@ interface ValidationIssue {
   issueId: string; fingerprint: string; code: string;
   source: "hard_compatibility" | "affinity" | "series_invariant" | "patch"
     | "publish" | "data_integrity" | "import" | "five_axis" | "ai_guardrail"
-    | "config_relationship" | "quality" | "pricing";
+    | "config_identity" | "config_relationship" | "quality" | "pricing";
   severity: "INFO" | "WARNING" | "ERROR" | "BLOCKER";
   gate: "NONE" | "REVIEW" | "PUBLISH" | "EXPORT";
   subjectRef: EntityRef; affectedRefs: EntityRef[]; parameterKeys: string[];
@@ -2067,18 +2189,36 @@ interface ValidationWaiver {
   scopeRef: EntityRef; reason: string; approvedBy: string; approvedAt: string;
   expiresAt?: string; evidenceRefs: EvidenceRef[];
 }
+type IssueRemediationActionCode =
+  | "navigate" | "edit_rule" | "edit_patch" | "open_rebase"
+  | "satisfy_requirement" | "acknowledge_warning" | "request_permission"
+  | "request_waiver" | "approve_waiver"
+  | "retry" | "recompute" | "create_rule_source_change";
+interface ActionCommandPayloadRef {
+  payloadRefId: string;
+  action: ActionCode;
+  subjectRef: EntityRef;
+  expectedRevisionId?: string;
+  inputHash: string;
+  payloadHash: string;
+  idempotencyKey: string;
+  expiresAt?: string;
+}
 interface ActionLink {
   actionId: string;
-  action: "navigate" | "edit_rule" | "edit_patch" | "open_rebase"
-    | "satisfy_requirement" | "acknowledge_warning" | "request_permission"
-    | "request_waiver" | "approve_waiver"
-    | "retry" | "recompute" | "create_rule_source_change";
+  action: ActionCode | IssueRemediationActionCode;
   label: string; targetRef?: EntityRef; targetRoute?: string; enabled: boolean;
-  requiredCapabilities: CapabilityCode[]; disabledReason?: string; commandPayloadRef?: string;
+  requiredCapabilities: CapabilityCode[];
+  disabledReasonCode?: string; disabledReasonText?: string;
+  commandPayloadRef?: ActionCommandPayloadRef;
 }
 ```
 
 四套语义共用壳但source独立；Severity说明问题强度，Gate说明阻断哪个关口，二者不得合并成一个持久化boolean。`NONE`只展示；`REVIEW`要求在批准前处理且约束后续发布；`PUBLISH`阻止创建/发布新Snapshot；`EXPORT`只阻止命中的环境×渠道目标。fingerprint至少由source、code、subject、规则版本和渠道构成。动作由服务端生成并在执行时重新鉴权。AI数量不计Issue。
+
+`ActionLink.action`必须复用统一`ActionCode`表达可执行领域命令；`IssueRemediationActionCode`只保留导航、请求权限、重试等通用问题处置。对任何会改变状态的`ActionCode`，`enabled=true`时必须返回不可篡改的`commandPayloadRef`，其`action/subjectRef/inputHash/payloadHash`必须与服务端保存的类型化payload一致；配置身份动作的具体字段遵循OPEN-008和第25节，例如预留payload必须包含`expectedModelRevisionId`和`expectedNormalizedStableModelKey`。客户端只提交`actionId + payloadRefId`，不得替换action、subject、expected revision或策略/Manifest引用；服务端执行前重新读取payload、校验hash/有效期、重算`ActionAvailability`并再次鉴权。
+
+缺Capability、职责分离策略不允许、expected revision过期、Manifest stale或其他关口未满足时，`ActionLink`必须返回`enabled=false + requiredCapabilities + disabledReasonCode + disabledReasonText`且不得携带`commandPayloadRef`；直接伪造命令仍返回403或领域冲突，不能依赖按钮禁用。只读导航类动作可以没有payload。`ActionAvailability`与同一subject上的`ActionLink`对相同`ActionCode`必须给出一致的enabled、requiredCapabilities和禁用原因。
 
 状态语义固定：`OPEN`表示当前有效；`ACKNOWLEDGED`只用于已记录理由的WARNING；`RESOLVED`表示同一输入版本下根因已消失；`STALE`表示输入变化后旧Issue只读留痕；`WAIVED`只用于版本化策略明确允许的ERROR。WARNING确认不得伪装成WAIVED。
 
@@ -2089,7 +2229,7 @@ interface ActionLink {
 冲突：互斥动作执行前重验。  
 恢复：失败保留Issue并返回retry/recompute/request_permission。  
 权限：可看不等于可修；无权动作说明原因。  
-验收：Given deny、-3 Affinity、不变量偏离并存，When 返回，Then source、Severity、Gate、State和动作独立，Affinity不能抵消deny；Given策略未允许某ERROR waiver，When渲染动作，Then不显示可执行waive入口。
+验收：Given deny、-3 Affinity、不变量偏离并存，When 返回，Then source、Severity、Gate、State和动作独立，Affinity不能抵消deny；Given策略未允许某ERROR waiver，When渲染动作，Then不显示可执行waive入口；Given 用户缺少`config.id.reserve`，When 返回预留Issue动作，Then `action=reserve_config_id_bundle`、`enabled=false`、列出所需Capability和禁用原因且没有payload；Given 权限和全部门禁恢复，Then 返回同一ActionCode及绑定subject、expected revision和hash的payload引用，篡改payload或revision时服务端拒绝。
 
 ### 24.11 R10：Rebase、UpgradeCandidate与Snapshot
 
@@ -2172,7 +2312,8 @@ type PrimaryDisplayState = "HARD_CONFLICT" | "REBASE_REQUIRED" | "REVIEW_REQUIRE
 
 | 阶段 | 必做 | 明确不做 |
 | --- | --- | --- |
-| 一期 | 公司内网部署、飞书登录、统一Capability接口、全员统一权限、核心规则/Series/SKU/Model/Snapshot、配置表生成与关系校验 | AI运行连接器、细粒度RBAC、职责分离、飞书审批 |
+| 一期 | 公司内网部署、飞书登录、统一Capability接口、全员统一权限、核心规则/Series/SKU/Model/Snapshot、不可提交的`NON_FORMAL`配置预览与结构关系校验 | 正式ID预留、生产形态xlsx/正式人工搬运包、本地worktree提交、AI运行连接器、细粒度RBAC、职责分离、飞书审批 |
+| 1.5期 | 发布`ConfigTargetCatalogVersion`、获批扫描Manifest、`ConfigIdPolicyVersion`与reservation ledger；历史导入复核；生成正式人工搬运包或把正式配置差异写入用户选择的`dev/test/online/release`本地worktree | Git合并、远端发布、部署、替代现有发布系统 |
 | 二期 | OPEN-006关闭后实现第23、24节已设计的AI评估、证据、变化预览和草稿转换；继续全员统一权限 | 自动应用、自动发布、AI裁决、细粒度RBAC、职责分离、飞书审批 |
 | 三期 | 保持统一Capability策略并完成既定业务能力；治理变化必须另立Issue和策略版本 | 预设业务角色、对象级RBAC、职责分离、飞书审批，以及改变既有ID、操作记录和Snapshot语义 |
 
@@ -2187,11 +2328,11 @@ type PrimaryDisplayState = "HARD_CONFLICT" | "REBASE_REQUIRED" | "REVIEW_REQUIRE
 
 ### 25.2 本机配置目录与环境/渠道边界
 
-一期面向所有支持File System Access API的Chromium内核浏览器，默认通过HTTPS提供内网页面。无内网DNS且明确接受降级时，可通过默认关闭的显式配置，仅对RFC 1918私网IP开放HTTP；此时会话Cookie不设置Secure，且浏览器依赖安全上下文的能力（包括File System Access API）可能不可用。用户通过目录选择器显式授权本地配置仓库；一期不要求安装本地伴随程序，也不让服务器访问设计人员电脑。
+一期可以完成并下载不可提交的`NON_FORMAL`预览；1.5期才允许生成正式人工搬运包或通过支持File System Access API的Chromium内核浏览器正式写入本地，默认通过HTTPS提供内网页面。无内网DNS且明确接受降级时，可通过默认关闭的显式配置，仅对RFC 1918私网IP开放HTTP；此时会话Cookie不设置Secure，且浏览器依赖安全上下文的能力（包括File System Access API）可能不可用。用户通过目录选择器显式授权本地配置worktree；不要求安装本地伴随程序，也不让服务器访问设计人员电脑。
 
 ```ts
 interface ConfigEnvironmentProfile {
-  environmentId: string;       // 例如 dev、test
+  environmentId: string;       // dev、test、online、release
   label: string;
   configTomlRelativePath: "config.toml";
 }
@@ -2206,18 +2347,22 @@ interface LocalExportTargetBinding {
 }
 ```
 
-- dev、test是环境，不是渠道；每个环境对应一个独立configs仓库根目录，并使用自己的`config.toml`。
+- `dev`、`test`、`online`、`release`是首批人工导出环境，不是渠道；每个环境对应一个用户选择的独立configs worktree根目录，并使用自己的`config.toml`。
 - 每个环境的1001渠道固定写入该环境根目录下的`xlsx`。
-- 其他渠道只处理用户明确选择的具体目录，例如`xlsx_channel/numerical`；工具不扫描、启用、停用或治理渠道，也不解析或修正`config_system.toml`。
+- 其他渠道只处理用户明确选择的具体目录，例如`xlsx_channel/numerical`；正式提交还必须匹配当前`ConfigIdPolicyVersion`引用的权威目标目录条目，未列入的绑定只能用于`NON_FORMAL`预览。工具不从本机目录发现、启用、停用或治理渠道，也不解析或修正`config_system.toml`。
 - 服务端只保存环境、渠道和用户标签等逻辑信息，不保存本机绝对路径。
-- `FileSystemDirectoryHandle`保存在该用户、该浏览器、该站点origin的IndexedDB中；Cookie仅用于飞书登录会话。
+- `FileSystemDirectoryHandle`按`userId + browserProfile + siteOrigin + environmentId + channelKey`保存在IndexedDB中；不进入用户业务数据库，Cookie仅用于飞书登录会话。切换环境或渠道时自动切换到对应绑定，不要求用户重复输入目录。
 - 导出前调用`queryPermission({ mode: "readwrite" })`；状态至少表达已绑定已授权、已绑定需重新授权、未绑定、目录失效。
 - 换电脑、浏览器配置、站点origin或无痕会话时允许重新绑定；不同用户不共享目录句柄。
-- File System Access API不可用时可以下载变更包作为人工搬运降级，但不得声称已经写入本机Git工作区。
+- File System Access API不可用时，一期仍只能下载`NON_FORMAL`预览包；1.5期在已有正式Bundle、目标已列入权威目录且通过`config.export.commit`鉴权后，才可下载正式变更包作为人工搬运降级。下载结果审计为`FORMAL_PACKAGE_DOWNLOADED_NOT_APPLIED`，不得声称已经写入本机Git工作区。
+
+一期下载物固定为`ConfigPreviewPackage`：`packageKind=CONFIG_PREVIEW`、`publicationState=NON_FORMAL`、`formal=false`。没有正式Bundle时，数字ID和正式`configNameKey`字段必须为空，并只在预览Manifest中使用不符合生产schema的`NON_FORMAL:<modelId>:<objectKind>`符号引用来做结构关系检查。包内不得出现可被配置编译器直接接受的`tackle.xlsx`、`item.xlsx`、`store.xlsx`，只允许带明显水印/说明的`*.preview.xlsx`或差异报告；每个预览文件顶部和Manifest都必须写明“不可提交、不可人工搬运到configs”。`commit_config_export`必须拒绝`NON_FORMAL`包、占位身份和没有已预留Bundle的请求。
+
+1.5期的正式`ExportPackage`必须引用已预留Bundle、有效策略版本、目标目录版本和对应获批扫描Manifest，并要求`config.export.commit`；无论选择浏览器落盘还是正式人工搬运包，都不能由一期预览包原地升级或仅移除`NON_FORMAL`标记，必须从当前Snapshot和目标基线重新生成、重新校验。
 
 ### 25.3 发布末端两步
 
-正式流程固定为：
+1.5期正式流程固定为：
 
 ```text
 选择Series/SKU/Model范围
@@ -2237,13 +2382,13 @@ interface LocalExportTargetBinding {
 - `tackle.xlsx`：按部位写入Rods、Reels、Lines等目标sheet；
 - `item.xlsx`：写入Item及必要的展示/引用字段；
 - `store.xlsx`：每个Model强制生成GoodsBasic和StoreBuy；
-- `ExportManifest`：目标Profile、源Snapshot、目标workbook/sheet/row、before/after、原文件hash、生成器版本、映射版本。
+- `ExportManifest`：目标Profile、源Snapshot、正式Bundle、`ConfigIdPolicyVersion`、`ConfigTargetCatalogVersion`、目标扫描Manifest、目标workbook/sheet/row、before/after、原文件hash、生成器版本、映射版本。
 
 映射必须按该环境根目录`config.toml`的逻辑表名解析`workbook + sheet`，不能只凭文件名或固定sheet猜测。装备Model的最小强制映射为部位tackle表、item、goods_basic和store_buy；TackleSet及其他摆放表只有在用户显式生成相应对象时才写。
 
 配置身份规则：
 
-- 配置ID由服务端的版本化`ConfigIdPolicy`和reservation ledger分配；禁止把“扫描当前最大值+1”作为永久策略。分配必须事务化，已预留ID即使放弃也不自动复用。公司区间与命名格式尚未提供时按`OPEN-008`阻止正式预留和提交。
+- 配置ID由服务端的版本化`ConfigIdPolicy`和reservation ledger按`OPEN-008`已确认规则分配；禁止把“扫描当前最大值+1”作为永久策略。分配必须事务化，已预留ID即使放弃也不复用。策略版本未发布，或其引用的权威目标目录/获批扫描Manifest覆盖不完整时，仍按`OPEN-008`阻止正式预留和提交。
 - 一个Model拥有稳定`ConfigIdBundle`；tackle与item共享`configNumericId + configNameKey`，GoodsBasic与StoreBuy使用各自稳定ID/名称键。
 - 同一个Model跨Snapshot、环境和渠道沿用同一套ID；若游戏中需要新旧版本并存，必须创建新Model。
 - 同一Model的新Snapshot导出时更新相同配置行；旧Snapshot继续在Tackle Forger内部不可变、可审计，但配置Git仓库只表达该Model最近一次成功导出的当前状态。
@@ -2286,14 +2431,16 @@ interface LocalExportTargetBinding {
 
 ### 25.5 导出场景与验收
 
-正常路径：选择dev/test中的多个显式目标，在暂存区生成三表，关系全通过后确认并提交，各目标返回新hash与备份。  
-边界：某目标缺必需Store映射时阻止该目标，不能生成半行；浏览器不支持或未授权目录时改为重新授权或下载变更包。  
+正常路径：选择dev/test/online/release中的多个显式目标，在暂存区生成三表，关系全通过后确认并提交，各目标返回新hash与备份。  
+边界：某目标缺必需Store映射时阻止该目标，不能生成半行；一期或没有正式Bundle时只能下载`NON_FORMAL`预览；1.5期浏览器不支持或未授权目录时，在完成正式鉴权后可下载人工搬运包。  
 冲突：预览后文件被Excel或其他人修改，hash冲突阻止覆盖。  
 恢复：保留ExportPackage和报告；重新读取目标做三方差异，或从备份回滚；幂等提交不得重复插行。  
-权限：选择目标需`config.export.preview`，实际落盘需`config.export.commit`；浏览器目录授权不能替代服务端Capability。  
+权限：选择目标和生成`NON_FORMAL`预览需`config.export.preview`；生成正式人工搬运包或实际落盘需`config.export.commit`；浏览器目录授权不能替代服务端Capability。  
 验收：
 
 - Given 选择两个目标且其中一个StoreBuy引用不存在的GoodsBasic，When 校验，Then 该目标阻止提交并精确定位store.xlsx/sheet/行/字段，另一目标显示独立结果。
+- Given 一期Model没有正式Bundle，When 下载配置预览，Then 只生成标记`NON_FORMAL`的预览文件和符号引用，不出现生产文件名或有效数字ID；When 尝试提交该包，Then `commit_config_export`拒绝。
+- Given 1.5期用户绑定了未列入当前权威目标目录的渠道，When 请求正式导出，Then 只能生成`NON_FORMAL`预览并提示先发布新目录、扫描Manifest和策略版本。
 - Given 预览后tackle.xlsx发生外部修改，When 确认提交，Then 系统返回文件冲突、保留暂存包且不覆盖三张正式表。
 - Given 三张表写入到第二张失败，When 执行恢复，Then 第一张按备份恢复、第三张未写入，目标结果为失败且有完整审计。
 - Given dev/1001与test/numerical同时选择且前者预检失败，When 用户保持默认继续策略，Then test/numerical仍可写入，dev/1001标记未执行。

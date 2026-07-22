@@ -3,7 +3,6 @@ import { requestUser } from "@/lib/auth";
 import {
   applyDataSourcePreview,
   datasetLabel,
-  prepareDataSourcePreview,
   prepareDataSourceWriteback,
   sourceFingerprint,
 } from "@/lib/data-sources";
@@ -14,6 +13,10 @@ import {
   pullDataSourcePreview,
   resolveFeishuSourceLink,
 } from "@/lib/feishu";
+import {
+  dataSourceWritebackIdempotencyKey,
+  executeRecoverableDataSourceWriteback,
+} from "@/lib/data-source-writeback-recovery";
 import { loadWorkspaceState, saveWorkspaceState } from "@/lib/storage";
 import type { ActionCode } from "@/lib/interaction-contracts";
 import type { DataSourceProfile } from "@/lib/types";
@@ -94,7 +97,7 @@ export async function POST(request: NextRequest) {
     }
 
     const current = await loadWorkspaceState();
-    const isCommit = body.action === "publish" || body.action === "writeback";
+    const isCommit = body.action === "publish";
     if (isCommit && current.revision !== body.baseRevision) {
       return NextResponse.json(
         { error: "正式配置已产生新版本，请重新检查后再操作。", revision: current.revision },
@@ -103,8 +106,34 @@ export async function POST(request: NextRequest) {
     }
 
     if (body.action === "writeback-preview" || body.action === "writeback") {
-      const records = await fetchFeishuRecords(body.source);
-      const preview = prepareDataSourceWriteback(body.source, records, current.state);
+      const requestedKey = typeof body.checksum === "string" && typeof body.sourceFingerprint === "string"
+        ? dataSourceWritebackIdempotencyKey({
+            sourceId: body.source.id,
+            sourceFingerprint: body.sourceFingerprint,
+            checksum: body.checksum,
+          })
+        : undefined;
+      const recoverableIntent = requestedKey
+        ? current.state.dataSourceWritebackIntents.find((intent) => intent.idempotencyKey === requestedKey)
+        : undefined;
+      const preview = recoverableIntent
+        ? {
+            sourceId: recoverableIntent.sourceId,
+            sourceName: recoverableIntent.sourceName,
+            dataset: recoverableIntent.dataset,
+            sourceFingerprint: recoverableIntent.sourceFingerprint,
+            checksum: recoverableIntent.checksum,
+            pulledAt: recoverableIntent.requestedAt,
+            recordCount: recoverableIntent.recordCount,
+            fieldCount: recoverableIntent.fieldCount,
+            issues: [],
+            rows: structuredClone(recoverableIntent.rows),
+          }
+        : prepareDataSourceWriteback(
+            body.source,
+            await fetchFeishuRecords(body.source),
+            current.state,
+          );
       if (body.action === "writeback-preview") {
         return NextResponse.json({ writebackPreview: preview, revision: current.revision });
       }
@@ -129,81 +158,33 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "没有需要回写的本地修订。" }, { status: 422 });
       }
 
-      const beforeWrite = await loadWorkspaceState();
-      if (beforeWrite.revision !== current.revision) {
-        return NextResponse.json(
-          { error: "回写前检测到新版本，请重新检查。", revision: beforeWrite.revision },
-          { status: 409 },
-        );
-      }
-      const writeback = await commitFeishuWriteback(body.source, preview.rows);
-      if (writeback.result === "failed") {
+      const writeback = await executeRecoverableDataSourceWriteback({
+        source: body.source,
+        preview,
+        author: user.name,
+        requestedAt: new Date().toISOString(),
+        expectedBaseRevision: typeof body.baseRevision === "number" ? body.baseRevision : undefined,
+        store: { load: loadWorkspaceState, save: saveWorkspaceState },
+        writeRemote: commitFeishuWriteback,
+      });
+      if (writeback.intent.state === "WRITE_FAILED") {
         return NextResponse.json(
           {
             error: "飞书回写未确认，已停止。请重试——重试会先回读，已落地的记录不会重复写入。",
-            evidence: writeback.evidence,
-            detail: writeback.error,
+            evidence: writeback.intent.evidence,
+            detail: writeback.intent.error,
+            revision: writeback.revision,
           },
           { status: 502 },
         );
       }
-
-      const refreshedRecords = await fetchFeishuRecords(body.source);
-      const refreshed = prepareDataSourcePreview(body.source, refreshedRecords, current.state);
-      let next = structuredClone(current.state);
-      next.dataSourceBindings = [
-        ...next.dataSourceBindings.filter((binding) => binding.dataset !== body.source?.dataset),
-        ...refreshed.bindings,
-      ];
-      const sourceIndex = next.dataSources.findIndex((item) => item.id === body.source?.id);
-      if (sourceIndex >= 0) next.dataSources[sourceIndex] = body.source;
-      else next.dataSources.push(body.source);
-      const publishedRevision = current.revision + 1;
-      next.dataSourceWritebacks = [
-        {
-          id: crypto.randomUUID(),
-          sourceId: body.source.id,
-          sourceName: body.source.name,
-          dataset: body.source.dataset,
-          checksum: preview.checksum,
-          recordCount: preview.recordCount,
-          fieldCount: preview.fieldCount,
-          publishedRevision,
-          publishedAt: new Date().toISOString(),
-          publishedBy: user.name,
-        },
-        ...next.dataSourceWritebacks,
-      ].slice(0, 100);
-      next = recalculateWorkspace(ensureWorkflowFields(next));
-
-      const result = await saveWorkspaceState({
-        state: next,
-        baseRevision: current.revision,
-        author: user.name,
-        message:
-          "回写" +
-          body.source.name +
-          "的" +
-          datasetLabel(body.source.dataset) +
-          "（" +
-          preview.recordCount +
-          " 条 / " +
-          preview.fieldCount +
-          " 个字段）",
-      });
-      if (result.conflict) {
-        return NextResponse.json(
-          {
-            error: "飞书已回写，但保存本地审计时检测到新版本；请重新拉取以刷新绑定。",
-            revision: result.revision,
-          },
-          { status: 409 },
-        );
-      }
       return NextResponse.json({
-        state: next,
-        revision: result.revision,
+        state: writeback.state,
+        revision: writeback.revision,
         writebackPreview: preview,
+        idempotent: writeback.idempotent,
+        remoteChangesAvailable: true,
+        message: "飞书写回已回读确认；本地规则尚未拉取或发布。",
       });
     }
 
@@ -271,9 +252,13 @@ export async function POST(request: NextRequest) {
     }
     return NextResponse.json({ state: next, revision: result.revision, preview });
   } catch (error) {
+    const conflict = error as Error & { code?: string; revision?: number };
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "飞书数据操作失败。" },
-      { status: 502 },
+      {
+        error: error instanceof Error ? error.message : "飞书数据操作失败。",
+        revision: conflict.revision,
+      },
+      { status: conflict.code === "WORKSPACE_REVISION_CONFLICT" ? 409 : 502 },
     );
   }
 }

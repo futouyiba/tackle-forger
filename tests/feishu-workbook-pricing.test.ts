@@ -4,6 +4,7 @@ import {
   CANONICAL_FEISHU_SHEET_REGISTRY,
   CANONICAL_FEISHU_WORKBOOK,
   pullFeishuWorkbookRevision,
+  validateFeishuWorkbookConfiguration,
 } from "../lib/feishu-workbook";
 import {
   buildStableIdWriteCommands,
@@ -32,9 +33,34 @@ const observedSheets = CANONICAL_FEISHU_SHEET_REGISTRY.map((entry) => ({
 }));
 
 test("当前整本工作簿注册表覆盖 00–17，并包含 12_打包竿组的真实 sheet_id", () => {
+  validateFeishuWorkbookConfiguration(CANONICAL_FEISHU_WORKBOOK, CANONICAL_FEISHU_SHEET_REGISTRY);
   assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.length, 18);
   assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "00_使用说明")?.sheetId, "4IfBoX");
   assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "12_打包竿组")?.sheetId, "lf4wIM");
+});
+
+test("canonical 工作簿配置拒绝链接/token/定位 sheet 漂移和重复 sheet_id", () => {
+  assert.throws(
+    () => validateFeishuWorkbookConfiguration(
+      { ...CANONICAL_FEISHU_WORKBOOK, wikiToken: "different" },
+      CANONICAL_FEISHU_SHEET_REGISTRY,
+    ),
+    /wikiToken/,
+  );
+  assert.throws(
+    () => validateFeishuWorkbookConfiguration(
+      { ...CANONICAL_FEISHU_WORKBOOK, anchorSheetId: "different" },
+      CANONICAL_FEISHU_SHEET_REGISTRY,
+    ),
+    /anchorSheetId/,
+  );
+  assert.throws(
+    () => validateFeishuWorkbookConfiguration(
+      CANONICAL_FEISHU_WORKBOOK,
+      [...CANONICAL_FEISHU_SHEET_REGISTRY, CANONICAL_FEISHU_SHEET_REGISTRY[0]!],
+    ),
+    /重复 sheet_id/,
+  );
 });
 
 test("历史已绑定机器 ID 在当前工作表拓扑下仍通过唯一性、前缀与实体类型校验", () => {

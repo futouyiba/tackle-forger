@@ -1229,6 +1229,34 @@ export interface DataSourceWritebackRecord {
   publishedRevision: number;
   publishedAt: string;
   publishedBy: string;
+  idempotencyKey?: string;
+  remoteResult?: "written" | "alreadyApplied" | "recovered";
+  evidence?: DataSourceWritebackEvidence[];
+}
+
+export interface DataSourceWritebackEvidence {
+  recordId: string;
+  matched: boolean;
+}
+
+export interface DataSourceWritebackIntent {
+  idempotencyKey: string;
+  sourceId: string;
+  sourceName: string;
+  dataset: DataSourceDataset;
+  sourceFingerprint: string;
+  checksum: string;
+  recordCount: number;
+  fieldCount: number;
+  rows: DataSourceWritebackRow[];
+  state: "PENDING" | "REMOTE_VERIFIED" | "COMPLETED" | "WRITE_FAILED";
+  remoteResult?: "written" | "alreadyApplied" | "recovered" | "failed";
+  evidence: DataSourceWritebackEvidence[];
+  error?: string;
+  requestedAt: string;
+  requestedBy: string;
+  updatedAt: string;
+  completedRevision?: number;
 }
 
 export interface DataSourceWritebackRow {
@@ -1774,6 +1802,7 @@ export interface WorkspaceState {
   dataSourceImports: DataSourceImportRecord[];
   dataSourceBindings: DataSourceBinding[];
   dataSourceWritebacks: DataSourceWritebackRecord[];
+  dataSourceWritebackIntents: DataSourceWritebackIntent[];
   revisions: RevisionInfo[];
   notes: string;
   importedAt: string;

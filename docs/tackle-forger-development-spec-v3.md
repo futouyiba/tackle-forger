@@ -1098,8 +1098,8 @@ supersedesPatchId
 明细幂等键和组级事务边界在数据库内必须使用带类型的真正复合唯一键，不得拼接为无边界字符串；同步命令跨系统需要标量键时，使用JCS对象摘要：
 
 ```text
-detailKey = tuple(patchId: string, patchRevision: integer, operationId: string)
-groupKey = tuple(patchId: string, patchRevision: integer)
+detailKey = tuple(workspaceId: string, patchId: string, patchRevision: integer, operationId: string)
+groupKey = tuple(workspaceId: string, patchId: string, patchRevision: integer)
 syncIdempotencyKey = sha256Hex(JCS({
   "keyType": "patch-mirror-sync/v1",
   "workspaceId": workspaceId,
@@ -1109,7 +1109,7 @@ syncIdempotencyKey = sha256Hex(JCS({
 }))
 ```
 
-上述JCS对象中的`workspaceId/patchId/patchRevisionHash`必须是JSON string，`patchRevision`必须是JSON integer。若存储或协议要求把`detailKey/groupKey`表示成单一字符串，必须分别对包含`keyType="patch-mirror-detail/v1"`或`keyType="patch-mirror-group/v1"`及全部带字段名、带JSON类型成员的JCS对象计算SHA-256；禁止使用分隔符约定、隐式`toString()`或裸值连接。键字段缺失或类型不符直接报schema错误，不做字符串强制转换。
+上述JCS对象中的`workspaceId/patchId/patchRevisionHash`必须是JSON string，`patchRevision`必须是JSON integer。若存储或协议要求把`detailKey/groupKey`表示成单一字符串，必须分别对包含`keyType="patch-mirror-detail/v1"`或`keyType="patch-mirror-group/v1"`的JCS对象计算SHA-256；两类对象都必须显式包含`workspaceId/patchId/patchRevision`，明细对象再包含`operationId`，并保留上述JSON类型。禁止使用分隔符约定、隐式`toString()`或裸值连接。键字段缺失或类型不符直接报schema错误，不做字符串强制转换。
 
 同一Patch revision的所有远端明细共享一个`mirrorWriteId`。同步固定执行：读取本地完整组→写前回读远端→校验`expectedRemoteGroupHash`→续写缺失明细→回读完整组→校验操作数量、明细键、`operationIndex`、行哈希和整组哈希。全部一致后才可标记`SYNCED`。相同明细键但内容哈希不同视为冲突，不得自动覆盖；修改业务内容必须创建新Patch revision或完成rebase。
 

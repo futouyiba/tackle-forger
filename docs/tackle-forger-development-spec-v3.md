@@ -1096,7 +1096,7 @@ supersedesPatchId
 
 `eventHash`的规范输入对象固定包含`hashContractVersion/workspaceId/collaborationEventId/patchId/patchRevision/eventType/content/authorUserId/createdAt/collaborationRevision/expectedCollaborationRevision/supersedesEventId/relatedRuleProposalId`。`content`使用解析后的JSON值；`authorDisplayName`、`mirrorWriteId`和`eventHash`本身不参与。事件回读必须按`workspaceId + collaborationEventId`验证唯一性、按同工作区同Patch revision内的`collaborationRevision`验证连续性并重算哈希；远端行序不参与事件哈希或事件流顺序。
 
-远端回读必须先验证每行的`workspaceId`存在且类型正确，再以`tuple(workspaceId, patchId, patchRevision, operationId)`重建机器明细身份、以`tuple(workspaceId, patchId, patchRevision)`重建组和协作流。一个组内的全部机器行、事件行和本地命令必须具有相同`workspaceId`；缺失、不一致或与当前工作区不匹配时产生`PATCH_MIRROR_SCHEMA_MISMATCH`或`PATCH_MIRROR_HASH_MISMATCH`并隔离该行，不得从连接器默认工作区、Patch ID、工作簿或其他行推断补齐。
+远端回读必须先验证每行的`workspaceId`存在且类型正确。具有合法`workspaceId`但不属于当前工作区的行不在本次同步范围内，必须原样跳过，不产生当前工作区的Issue、冲突或阻断；缺失或类型错误的`workspaceId`无法安全归属，产生`PATCH_MIRROR_SCHEMA_MISMATCH`并隔离该行。完成工作区过滤后，再以`tuple(workspaceId, patchId, patchRevision, operationId)`重建机器明细身份、以`tuple(workspaceId, patchId, patchRevision)`重建组和协作流；纳入当前工作区的同一组中，全部机器行、事件行和本地命令必须具有相同`workspaceId`，不一致时产生`PATCH_MIRROR_HASH_MISMATCH`并隔离异常行。不得从连接器默认工作区、Patch ID、工作簿或其他行推断或补齐`workspaceId`。
 
 #### 14.4.2 幂等、组级事务与镜像同步
 
@@ -1189,7 +1189,7 @@ interface PatchSubjectMigrationResult {
 
 同一`idempotencyKey`与相同命令Payload/hash重试必须返回同一新revision；同一键对应不同Payload/hash返回幂等冲突。两个迁移命令并发指向同一或不同目标时，只有第一个能在expected head上提交；其余返回`PATCH_SUBJECT_MIGRATION_CONFLICT`、当前head与已提交迁移证据，不得创建分叉revision或自动改写目标。
 
-联调准入至少覆盖：首次整组写入与回读；相同命令重复执行不重复追加；两个工作区使用相同`patchId + patchRevision + operationId`时，远端行、内容/组哈希和协作流仍完全隔离；缺少或篡改`workspaceId`的行不能归属任何本地组；三行只写成两行时不标记`SYNCED`并可续传；请求超时但远端已写入时先回读而不重复追加；删除一行后产生缺行Issue并补写；重复键、未知ID、机器字段篡改、hash不符和schema缺失正确隔离；两个客户端同时追加协作事件时只有一个expectedRevision成功，冲突方可在重读后显式重试；主体迁移重试不重复建revision，两个并发目标只有一个成功，旧revision、原主体引用和历史Snapshot全部不变；基线变化生成新revision且历史Snapshot不变。
+联调准入至少覆盖：首次整组写入与回读；相同命令重复执行不重复追加；两个工作区使用相同`patchId + patchRevision + operationId`时，远端行、内容/组哈希和协作流仍完全隔离；当前工作区回读时，其他工作区具有合法`workspaceId`的行被原样跳过且不产生Issue、冲突或阻断；缺少、类型错误或遭篡改而无法安全归属的`workspaceId`行不能归属任何本地组；三行只写成两行时不标记`SYNCED`并可续传；请求超时但远端已写入时先回读而不重复追加；删除一行后产生缺行Issue并补写；重复键、未知ID、机器字段篡改、hash不符和schema缺失正确隔离；两个客户端同时追加协作事件时只有一个expectedRevision成功，冲突方可在重读后显式重试；主体迁移重试不重复建revision，两个并发目标只有一个成功，旧revision、原主体引用和历史Snapshot全部不变；基线变化生成新revision且历史Snapshot不变。
 
 ## 15. 工作台信息架构
 

@@ -1,9 +1,9 @@
 # 当前工程状态审查（2026-07-22）
 
-> 文档类型：工程审计快照，不是产品或领域规范。  
-> 权威产品语义仍以 [`../tackle-forger-development-spec-v3.md`](../tackle-forger-development-spec-v3.md) 为准。  
-> 审查分支：`review/current-state-2026-07-22`  
-> 审查提交：`d792aff2`  
+> 文档类型：工程审计快照，不是产品或领域规范。
+> 权威产品语义仍以 [`../tackle-forger-development-spec-v3.md`](../tackle-forger-development-spec-v3.md) 为准。
+> 审查分支：`review/current-state-2026-07-22`
+> 审查提交：`d792aff2`
 > 对比主线：`origin/main` at `a393c547`
 
 ## 1. 审查范围

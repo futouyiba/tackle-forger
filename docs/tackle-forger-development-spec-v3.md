@@ -2,7 +2,7 @@
 
 > 状态：**唯一权威规范 / Canonical**  
 >首次定稿：2026-07-21  
-> 最后修订：2026-07-22  
+> 最后修订：2026-07-23
 > 适用对象：产品设计、领域建模、前后端开发、数据迁移、测试与代码审查  
 > 源数据参考：《淡水路亚杆轮线装备设计.xlsx》
 
@@ -693,7 +693,9 @@ epic 史诗
 
 领域模型使用ItemPartDefinition，不继续把rod/reel/line写死为不可扩展联合类型。
 
-预留：竿、轮、线、钩、漂、真饵、拟饵。首版界面可只启用竿、轮、线，其他部位保存但不参与当前系列生成。
+注册表预留竿、轮、线、钩、漂、真饵和拟饵，但当前产品主流程只启用竿、轮、线。`Collection → Series → SKU → Model → ConfigurationSnapshot`、`targetPullKg`、最近结构模板匹配和钓具系列甘特图均只适用于竿、轮、线；SKU不包含钩、漂、真饵或拟饵。
+
+钩、漂、真饵和拟饵当前完全延期。注册表及迁移层可以保留其稳定ID和历史Payload，仅用于数据不丢失、审计和未来迁移；这不构成产品启用，也不要求提供只读UI。四类部位的专用UI、草稿、生成、发布、Snapshot和导出全部关闭，且不得用竿轮线规则、隐藏默认值或通用占位对象代替尚未完成的产品设计。具体边界见OPEN-003。
 
 ## 13. 校验与审批
 
@@ -963,7 +965,7 @@ ConfigurationSnapshot必须冻结有序Patch引用集合（`patchId + patchRevis
 | --- | --- | --- | --- | --- | --- |
 | OPEN-001 降低型词条叠加 | 产品决策 | `OPEN_CONFIGURED_SEED` | 两种算法均必须实现、版本化并测试 | 工作区可用`diminishing_division`种子试算；没有已发布`ReductionStackingPolicyVersion`时禁止新Model发布 | 规则负责人确认算法，发布策略版本并通过两模式回归 |
 | OPEN-002 Performance后续扩展 | 延后产品决策 | `DEFERRED_NON_BLOCKING` | 一期仅支持显式`PerformanceProfile`，不引入`performanceIntensity` | 不生成强度、曲线或线性倍率；不阻断一期其他功能 | 产品/规则负责人提供新策略语义、源数据和迁移方案 |
-| OPEN-003 扩展部位启用 | 延后产品决策 | `DEFERRED_UI_DISABLED` | 一期主流程仅启用竿、轮、线 | 钩、漂、真饵和拟饵可在注册表保留，但UI、生成、发布和导出必须关闭 | 产品负责人确认启用批次，并提供参数、兼容、映射和验收覆盖 |
+| OPEN-003 扩展部位启用 | 已决延期 | `RESOLVED` | 当前及已排定范围只启用竿、轮、线；SKU仅包含竿、轮、线 | 钩、漂、真饵和拟饵仅保留注册表与历史数据兼容；只读UI、草稿、生成、发布、Snapshot和所有环境/渠道导出全部关闭 | 2026-07-23产品确认“当前完全延期，未来另做产品设计”；未来任一部位启动前须另建产品设计Issue，不复用本项直接开工 |
 | OPEN-004 Patch属性偏移阈值 | 规则策略缺口 | `BLOCKED_ON_POLICY` | 计算和展示精确偏移，阈值从版本化策略读取 | 缺策略时产生`PATCH_OFFSET_POLICY_MISSING`；允许草稿试算，阻止依赖该阈值的批准和发布 | 平衡/规则负责人提供Series、SKU、Model各级warning/review/block阈值及边界归属 |
 | OPEN-005 五维图定义 | 产品决策 | `OPEN_CONFIGURED_SEED` | 可使用版本化种子定义进行预览，不得写死在UI/数据库 | 种子结果明示“草稿定义”；缺轴不补0，未发布定义不进Snapshot | 产品/数值负责人确认轴、聚合、缺值、系列基准和比较上限 |
 | OPEN-006 AI供应方与数据出网 | 安全/产品决策 | `BLOCKED_BEFORE_CONNECTOR` | AI交互壳、证据、权限和审计可实现 | 不得连接外部服务或发送真实数据；仅允许本地假数据/契约测试 | 安全、产品和数据负责人联合确认provider、字段白名单、保留周期和出网边界 |
@@ -989,7 +991,20 @@ ConfigurationSnapshot必须冻结有序Patch引用集合（`patchId + patchRevis
 
 ### OPEN-003：扩展部位启用时间
 
-领域注册表预留钩、漂、真饵和拟饵；首轮实现是否同时开放界面和生成流程，需按开发优先级确认。
+2026-07-23产品决策：钩、漂、真饵和拟饵当前完全延期，未安排首批或后续启用顺序。此前讨论中的任何拟饵、钩、漂、真饵预排顺序均不生效。本项关闭的是“当前是否启用”的决策，不为未来产品形态预设答案。
+
+当前确定边界：
+
+- 注册表和迁移层可以保留四类部位的稳定ID、原始Payload和历史引用；不得删除、改名重绑或因未启用而丢弃历史数据。
+- 不提供四类部位的产品只读入口、编辑草稿、候选生成、人工发布、Snapshot创建或配置导出。注册表中存在记录不等于已启用。
+- 四类部位不进入现有`Collection/Series/SKU/Model`谱系。现有SKU只包含竿、轮、线；不得把部位专属规格伪装成`targetPullKg`，也不得进入最近结构模板匹配、钓具系列甘特图或现有Model候选生成。
+- 当前不为四类部位定义参数模板、Method/Type、硬兼容、Affinity、Affix/Technology、品质、定价或配置映射，不得从竿轮线复制规则或补默认值。
+- 所有角色均不获得四类部位的草稿、生成、发布或导出动作；dev、test及所有渠道均无先行启用。现有导出不得因注册表或历史数据存在而新增、修改或删除相关配置行。
+- 竿、轮、线的生成、发布、ConfigurationSnapshot和导出行为保持不变。已发布Snapshot不得因本决策或未来扩展部位设计而被重算、改写或删除。
+
+未来若启动任一部位，必须先为该部位建立独立产品设计Issue，至少确认：业务身份与生命周期、是否为购买或消耗对象、对象谱系、规则与数据源、UI工作流、权限、发布冻结、配置映射、先行环境/渠道、停止条件、回退方案，以及正常、边界、冲突、恢复和历史冻结验收。产品设计完成后，再按可独立交付范围建立实现Issue和PR；不得直接以OPEN-003作为实现授权。
+
+当前验收：正常情况下主流程只显示并处理竿、轮、线；边界情况下注册表或历史迁移发现扩展部位只保留数据，不开启入口；收到扩展部位的草稿、生成、发布或导出请求时明确返回“部位未启用”，不得降级套用其他部位规则；发生迁移或禁用恢复时保留原始记录和稳定引用；任何恢复操作都不得改变既有Snapshot内容与hash。
 
 ### OPEN-004：Patch属性偏移阈值
 
@@ -1845,7 +1860,7 @@ type PrimaryDisplayState = "HARD_CONFLICT" | "REBASE_REQUIRED" | "REVIEW_REQUIRE
 
 ### 24.13 R12：开放配置与完成门槛
 
-版本化但不固化最终值：`patchOffsetPolicy`、`FiveAxisViewDefinition`、`aiRefreshPolicy`、`aiModelRecordPolicy`、`aiReviewPolicy`、`enabledItemPartPolicy`、`separationOfDutiesPolicy`、`qualityValueRangePolicy`、`PricingPolicy`与未来Performance扩展策略。一期飞书规则写回不使用飞书审批；三期如增加职责分离，只能包裹“确认写回”和“发布RuleSetVersion”等动作。Snapshot冻结语义不是配置项，改变它必须先改权威规范并获用户明确确认。
+版本化但不固化最终值：`patchOffsetPolicy`、`FiveAxisViewDefinition`、`aiRefreshPolicy`、`aiModelRecordPolicy`、`aiReviewPolicy`、`enabledItemPartPolicy`、`separationOfDutiesPolicy`、`qualityValueRangePolicy`、`PricingPolicy`与未来Performance扩展策略。当前有效`enabledItemPartPolicy`只能启用竿、轮、线；加入钩、漂、真饵或拟饵必须先满足OPEN-003规定的独立产品设计前置条件，不能仅修改策略开关。一期飞书规则写回不使用飞书审批；三期如增加职责分离，只能包裹“确认写回”和“发布RuleSetVersion”等动作。Snapshot冻结语义不是配置项，改变它必须先改权威规范并获用户明确确认。
 
 正常路径：使用已发布策略版本并记录。  
 边界：配置缺失报配置不完整，不用页面默认；历史可只读。  

@@ -10,7 +10,7 @@
     "build": "tsc -p tsconfig.json",
     "lint": "tsc -p tsconfig.json --noEmit",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --config ../../vitest.workspace.config.ts --passWithNoTests"
   },
   "dependencies": {
     "exceljs": "^4.4.0",

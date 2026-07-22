@@ -31,21 +31,6 @@ import {
 import { buildSamePartComparison, calculateModelFiveAxisPreview, fiveAxisPlotRatio } from "@/lib/five-axis";
 import { deterministicHash } from "@/lib/rule-kernel";
 import {
-  defaultAffinityAxisWeights,
-  evaluateAffinity,
-  evaluateStructuralHardCompatibility,
-  structuralCompatibilityContext,
-} from "@/lib/compatibility";
-import {
-  matchNearestProjection,
-  structuralPullFromProjection,
-  type ProjectionMatchCandidate,
-} from "@/lib/projection-matcher";
-import {
-  createSeriesPullPlanningProposal,
-  materializeConfirmedPullSpecifications,
-} from "@/lib/series-pull-planning";
-import {
   querySeriesGantt,
   seriesGanttQueryFromSearchParams,
   seriesGanttQueryToSearchParams,
@@ -72,6 +57,7 @@ interface SeriesGanttWorkbenchV3Props {
   notify: (message: string) => void;
   actor: string;
   mutate: (producer: (draft: WorkspaceState) => void, recalculate?: boolean) => void;
+  onWorkspaceApplied: (nextState: WorkspaceState, nextRevision: number, message: string) => void;
   onOpenSeries: (seriesId: string) => void;
   onBreadcrumbsChange?: (items: BreadcrumbItem[]) => void;
 }
@@ -780,6 +766,7 @@ export function SeriesGanttWorkbenchV3({
   notify,
   actor,
   mutate,
+  onWorkspaceApplied,
   onOpenSeries,
   onBreadcrumbsChange,
 }: SeriesGanttWorkbenchV3Props) {
@@ -981,14 +968,9 @@ export function SeriesGanttWorkbenchV3({
     });
   };
 
-  const createSeries = () => {
+  const createSeries = async () => {
     const draft = seriesCreateDraft;
     if (!draft || !createSeriesAvailability.enabled) return;
-    const hasPlanningMin = draft.planningMinKgf.trim() !== "";
-    const hasPlanningMax = draft.planningMaxKgf.trim() !== "";
-    const minKgf = hasPlanningMin ? Number(draft.planningMinKgf) : undefined;
-    const maxKgf = hasPlanningMax ? Number(draft.planningMaxKgf) : undefined;
-    const pulls = parseDiscretePulls(draft.discretePulls);
     if (!draft.name.trim() || !draft.concept.trim()) {
       notify("请填写 Series 名称与概念说明。");
       return;
@@ -997,123 +979,53 @@ export function SeriesGanttWorkbenchV3({
       notify("请选择部位、钓法、类型和功能定位。");
       return;
     }
-    if (hasPlanningMin !== hasPlanningMax) {
-      notify("规划拉力范围是可选项；如需填写，请同时填写最小值和最大值。");
-      return;
-    }
-    if (hasPlanningMin && (!Number.isFinite(minKgf) || !Number.isFinite(maxKgf) || minKgf! <= 0 || maxKgf! < minKgf!)) {
-      notify("规划拉力范围必须是有效的正数闭区间。");
-      return;
-    }
-    if (!pulls.length) {
+    if (!parseDiscretePulls(draft.discretePulls).length) {
       notify("请至少填写一个正数目标拉力规格；范围本身不能生成 SKU。");
       return;
     }
-    if (state.seriesDefinitions.some((entry) => entry.id === draft.seriesId)) {
-      notify("Series 稳定 ID 已存在，请重新打开创建窗口。");
-      return;
-    }
-    const type = state.itemTypeProfiles.find((entry) => entry.id === draft.typeId);
-    if (!type?.methodIds.includes(draft.methodId) || !type.itemPartIds.includes(draft.itemPartId)) {
-      notify("当前类型与所选部位或钓法不兼容。");
-      return;
-    }
-    const ruleSet = [...state.ruleSetVersions]
-      .filter((entry) => entry.status === "published")
-      .sort((left, right) => right.version - left.version || right.id.localeCompare(left.id))[0];
-    if (!ruleSet) {
-      notify("没有已发布 RuleSetVersion，不能生成结构标杆匹配。");
-      return;
-    }
-    const contextFor = (pull: number) => ({
-      methodId: draft.methodId,
-      typeId: draft.typeId,
-      targetWeightKg: pull,
-      functionId: draft.functionId,
-      functionIntensity: draft.functionIntensity,
-      performanceId: draft.performanceId || undefined,
-      qualityId: draft.qualityId,
-      itemPartId: draft.itemPartId,
-      componentIds: [],
-      tags: [],
-    });
-    const candidatesFor = (pull: number): ProjectionMatchCandidate[] => state.derivedProjections
-      .filter((projection) => projection.ruleSetVersion === ruleSet.id)
-      .flatMap((projection) => {
-        const template = state.templates.find((entry) => entry.id === projection.weightTemplateId);
-        const derivedPullKg = structuralPullFromProjection(projection, draft.itemPartId);
-        if (!template || derivedPullKg === undefined) return [];
-        return [{
-          projection,
-          weightTemplate: template,
-          itemPartId: draft.itemPartId,
-          derivedPullKg,
-          templatePriority: template.templatePriority,
-          compatibility: evaluateStructuralHardCompatibility(structuralCompatibilityContext({ methodId: draft.methodId, typeId: draft.typeId, functionId: draft.functionId, itemPartId: draft.itemPartId }), state.compatibilityRules),
-          affinity: evaluateAffinity(contextFor(pull), state.affinityRules, state.affinityAxisWeights ?? defaultAffinityAxisWeights),
-        }];
-      });
-    const now = new Date().toISOString();
-    const series: SeriesDefinition = {
-      id: draft.seriesId,
-      ...(draft.collectionId ? { collectionId: draft.collectionId } : {}),
-      revision: 1,
-      name: draft.name.trim(),
-      concept: draft.concept.trim(),
-      fishingMethodId: draft.methodId,
-      typeId: draft.typeId,
-      itemPartId: draft.itemPartId,
-      qualityId: draft.qualityId,
-      coreFunctionId: draft.functionId,
-      functionIntensityPolicy: { mode: "fixed", intensity: draft.functionIntensity },
-      ...(draft.performanceId ? { performanceProfileId: draft.performanceId } : {}),
-      coreAffixIds: [],
-      secondaryAffixPoolIds: [],
-      forbiddenAffixIds: [],
-      ...(minKgf !== undefined && maxKgf !== undefined ? { planningPullRange: { minKgf, maxKgf } } : {}),
-      targetPullSpecifications: [],
-      targetWeightsKg: [],
-      signature: [],
-      patchIds: [],
-      skuIds: [],
-      status: "draft",
-      createdAt: now,
-      updatedAt: now,
-    };
+    // Series 创建是服务端领域命令：写入由服务端重新鉴权 series.edit（create_series），
+    // 结构标杆匹配、拉力规划与 SKU 物化都在服务端完成后按 revision 受保护地提交，
+    // 客户端不能绕过 series.edit 直接写整包（规范 §24.1/§24.4/§25.1）。
     try {
-      const proposal = createSeriesPullPlanningProposal({
-        series,
-        planningPullRange: minKgf !== undefined && maxKgf !== undefined ? { minKgf, maxKgf } : undefined,
-        candidatePullsKgf: pulls,
-        source: "explicit_user_input",
-        createdAt: now,
+      const response = await fetch("/api/series", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          seriesId: draft.seriesId,
+          name: draft.name,
+          concept: draft.concept,
+          collectionId: draft.collectionId || undefined,
+          itemPartId: draft.itemPartId,
+          methodId: draft.methodId,
+          typeId: draft.typeId,
+          functionId: draft.functionId,
+          qualityId: draft.qualityId,
+          performanceId: draft.performanceId || undefined,
+          functionIntensity: draft.functionIntensity,
+          planningMinKgf: draft.planningMinKgf,
+          planningMaxKgf: draft.planningMaxKgf,
+          discretePulls: draft.discretePulls,
+        }),
       });
-      const skuIdByPull = Object.fromEntries(pulls.map((pull) => [String(pull), `sku:${crypto.randomUUID()}`]));
-      const projectionMatchByPull = Object.fromEntries(pulls.map((pull) => [String(pull), matchNearestProjection({
-        itemPartId: draft.itemPartId,
-        targetPullKg: pull,
-        targetWeightKg: pull,
-        methodId: draft.methodId,
-        typeId: draft.typeId,
-        functionId: draft.functionId,
-      }, candidatesFor(pull))]));
-      const materialized = materializeConfirmedPullSpecifications({
-        series,
-        existingSkus: state.skuDrawers,
-        proposal,
-        confirmedPullsKgf: pulls,
-        skuIdByPull,
-        projectionMatchByPull,
-        createdAt: now,
-      });
-      mutate((workspace) => {
-        workspace.seriesDefinitions.push(materialized.series);
-        workspace.skuDrawers = materialized.skus;
-      }, false);
-      setSelectedSeriesId(materialized.series.id);
-      setSelectedSkuId(materialized.createdSkuIds[0] ?? "");
+      const payload = (await response.json().catch(() => null)) as {
+        state?: WorkspaceState;
+        series?: { id: string; name: string };
+        createdSkuIds?: string[];
+        revision?: number;
+        error?: string;
+      } | null;
+      if (!response.ok || !payload?.state || !payload.series) {
+        notify(payload?.error ?? "Series 创建失败。");
+        return;
+      }
+      onWorkspaceApplied(
+        payload.state,
+        payload.revision ?? 0,
+        `已创建 ${payload.series.name}，并物化 ${payload.createdSkuIds?.length ?? 0} 个离散 SKU 抽屉。`,
+      );
+      setSelectedSeriesId(payload.series.id);
+      setSelectedSkuId(payload.createdSkuIds?.[0] ?? "");
       setSeriesCreateDraft(null);
-      notify(`已创建 ${materialized.series.name}，并物化 ${materialized.createdSkuIds.length} 个离散 SKU 抽屉；请保存版本。`);
     } catch (caught) {
       notify(caught instanceof Error ? caught.message : "Series 创建失败。");
     }

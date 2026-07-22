@@ -3170,6 +3170,14 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           actor={user.name}
           mutate={mutate}
           notify={notify}
+          onWorkspaceApplied={(nextState, nextRevision, message) => {
+            setState(recalculateWorkspace(ensureWorkflowFields(nextState)));
+            setRevision(nextRevision);
+            setDirty(false);
+            setSyncState("saved");
+            notify(message);
+            void loadVersions();
+          }}
           onBreadcrumbsChange={setContextBreadcrumbs}
           onOpenSeries={(seriesId) => {
             setV3SeriesId(seriesId);

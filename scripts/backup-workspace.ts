@@ -1,6 +1,7 @@
 import { chmod, cp, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { backup, DatabaseSync } from "node:sqlite";
+import { inspectSqliteRevisionStorage } from "../lib/sqlite-revision-diagnostics";
 
 const databasePath = path.resolve(process.env.WORKSPACE_DATABASE_PATH?.trim() || ".data/workspace.sqlite");
 const dataDir = path.resolve(process.env.WORKSPACE_FILE_DATA_DIR?.trim() || path.join(path.dirname(databasePath), "files"));
@@ -11,14 +12,24 @@ const stamp = new Date().toISOString().replace(/[:.]/g, "-");
 const targetDir = path.join(backupRoot, stamp);
 
 await stat(databasePath);
+const sourceRevisionDiagnostics = await inspectSqliteRevisionStorage(databasePath);
 await mkdir(targetDir, { recursive: true, mode: 0o700 });
+const backupDatabasePath = path.join(targetDir, "workspace.sqlite");
 const source = new DatabaseSync(databasePath, { readOnly: true, timeout: 5_000 });
 try {
-  const backupDatabasePath = path.join(targetDir, "workspace.sqlite");
   await backup(source, backupDatabasePath);
   await chmod(backupDatabasePath, 0o600);
 } finally {
   source.close();
+}
+const revisionDiagnostics = await inspectSqliteRevisionStorage(backupDatabasePath);
+if (
+  revisionDiagnostics.currentRevision < sourceRevisionDiagnostics.currentRevision
+  || revisionDiagnostics.revisionCount < sourceRevisionDiagnostics.revisionCount
+) {
+  throw new Error(
+    "备份副本的 revision 证据早于备份开始时的源数据库；拒绝写入有效 manifest。",
+  );
 }
 if (await stat(dataDir).then((entry) => entry.isDirectory()).catch(() => false)) {
   await cp(dataDir, path.join(targetDir, "files"), { recursive: true, preserveTimestamps: true });
@@ -31,6 +42,13 @@ if (sessionDataIncluded) {
 }
 await writeFile(path.join(targetDir, "manifest.json"), `${JSON.stringify({
   createdAt: new Date().toISOString(), databasePath, dataDir, sessionDataDir, sessionDataIncluded,
+  revisionDiagnostics,
+  sourceStorageFilesAtBackupStart: {
+    capturedAt: sourceRevisionDiagnostics.capturedAt,
+    databaseFileBytes: sourceRevisionDiagnostics.databaseFileBytes,
+    walPresent: sourceRevisionDiagnostics.walPresent,
+    walFileBytes: sourceRevisionDiagnostics.walFileBytes,
+  },
 }, null, 2)}\n`, { mode: 0o600 });
 
 if (Number.isFinite(retentionDays) && retentionDays > 0) {

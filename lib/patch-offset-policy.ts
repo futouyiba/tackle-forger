@@ -590,6 +590,89 @@ export function evaluatePatchFinalRanges(input: {
   return { ...content, inputHash: deterministicHash(content) };
 }
 
+function rangeEvaluationHashContent(
+  evaluation: PatchRangeEvaluation,
+): Omit<PatchRangeEvaluation, "inputHash"> {
+  return {
+    policyVersion: evaluation.policyVersion,
+    gate: evaluation.gate,
+    environmentId: evaluation.environmentId,
+    channelKey: evaluation.channelKey,
+    contexts: evaluation.contexts,
+    results: evaluation.results,
+    issues: evaluation.issues,
+  };
+}
+
+export function assertPatchRangeEvaluationIntegrity(input: {
+  evaluation: PatchRangeEvaluation;
+  policy: WorkspacePolicyRecord | PatchOffsetPolicyVersion;
+  expectedSubjectRef: PatchReviewSubjectRef;
+  expectedPatchSetHash: string;
+  expectedPatchReferences: PatchSnapshotReference[];
+  expectedObjectInputHash?: string;
+}): void {
+  assertPublishedPatchOffsetPolicy(input.policy);
+  const recomputed = evaluatePatchFinalRanges({
+    policy: input.policy,
+    gate: input.evaluation.gate,
+    environmentId: input.evaluation.environmentId,
+    channelKey: input.evaluation.channelKey,
+    contexts: input.evaluation.contexts,
+  });
+  if (
+    deterministicHash(rangeEvaluationHashContent(input.evaluation)) !== input.evaluation.inputHash
+    || recomputed.inputHash !== input.evaluation.inputHash
+    || deterministicHash(recomputed) !== deterministicHash(input.evaluation)
+  ) {
+    throw new PatchOffsetPolicyError(
+      "PATCH_RANGE_EVALUATION_HASH_MISMATCH",
+      "Patch 范围评估已被修改或无法按冻结输入重算。",
+    );
+  }
+  const matchingContexts = input.evaluation.contexts.filter((context) =>
+    subjectKey(context.subjectRef) === subjectKey(input.expectedSubjectRef));
+  if (!matchingContexts.length) {
+    throw new PatchOffsetPolicyError(
+      "PATCH_RANGE_EVALUATION_SUBJECT_MISSING",
+      "Patch 范围评估未覆盖当前对象及 revision。",
+    );
+  }
+  const expectedReferencesHash = deterministicHash(
+    normalizedPatchReferences(input.expectedPatchReferences),
+  );
+  for (const context of matchingContexts) {
+    if (
+      context.patchSetHash !== input.expectedPatchSetHash
+      || deterministicHash(normalizedPatchReferences(context.patchReferences)) !== expectedReferencesHash
+    ) {
+      throw new PatchOffsetPolicyError(
+        "PATCH_RANGE_EVALUATION_PATCH_SET_MISMATCH",
+        `上下文 ${context.contextId} 未冻结当前对象的完整有序 Patch 集合。`,
+      );
+    }
+    if (
+      input.expectedObjectInputHash !== undefined
+      && context.objectInputHash !== input.expectedObjectInputHash
+    ) {
+      throw new PatchOffsetPolicyError(
+        "PATCH_RANGE_EVALUATION_INPUT_STALE",
+        `上下文 ${context.contextId} 的对象输入已经变化。`,
+      );
+    }
+    const hasResult = input.evaluation.results.some((result) =>
+      result.contextId === context.contextId && result.parameterKey === context.parameterKey);
+    const hasIssue = input.evaluation.issues.some((issue) =>
+      issue.evidence?.contextId === context.contextId);
+    if (!hasResult && !hasIssue) {
+      throw new PatchOffsetPolicyError(
+        "PATCH_RANGE_EVALUATION_RESULT_MISSING",
+        `上下文 ${context.contextId}/${context.parameterKey} 没有范围结果或完整性 Issue。`,
+      );
+    }
+  }
+}
+
 export function assertRangeEvaluationMatchesPatchRevisions(input: {
   evaluation: PatchRangeEvaluation;
   revisions: PatchRevisionRecord[];

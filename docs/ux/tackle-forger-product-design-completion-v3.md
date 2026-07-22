@@ -13,6 +13,8 @@
 
 固定语义：有限结构标杆只由基础拉力模板×Method×Type×FunctionProfile组成；在相同身份内按拉力比例距离取最近且不插值，Affinity不参与匹配；`functionIntensity`、Performance、Material、Quality和词条均在匹配后处理；C/绿、B/蓝、A/紫、S/橙；SKU是抽屉，Model是实际选择/购买对象；Technology不重复叠加成员属性；被动只保存、计分、展示；已发布Snapshot永不被静默替换。
 
+部位边界：现有Series/SKU/Model、目标拉力、甘特图和候选生成只处理竿、轮、线。钩、漂、真饵和拟饵当前完全延期；产品界面不提供注册表只读入口、“未启用”占位、草稿、生成、发布或导出动作。历史Payload只在注册表、迁移和审计层保留，未来启用必须先建立独立产品设计Issue。
+
 ```mermaid
 flowchart LR
   G["钓具系列甘特图"] --> S["Series"]
@@ -43,8 +45,8 @@ flowchart LR
 
 查询直接使用 v3 `SeriesGanttQuery`：
 
-- 同字段 OR、不同字段 AND；文本搜索服务端返回的ID、名称和别名。当前统一Capability策略不做对象级过滤。
-- 支持Collection、Method、Type、品质、功能、部位、生命周期、注意状态、Issue、升级候选、精确targetPullKg、RuleSetVersion。
+- 同字段 OR、不同字段 AND；文本只搜索当前工作区内服务端返回的ID、名称和别名。当前统一Capability策略不做当前工作区内的对象级过滤。
+- 支持Collection、Method、Type、品质、功能、部位、生命周期、注意状态、Issue、升级候选、精确targetPullKg、RuleSetVersion；部位筛选只返回当前主流程的竿、轮、线，不展示钩、漂、真饵或拟饵占位。
 - 筛选和排序写入 URL；刷新保留滚动和选择。对象已删除或路由过期时，只能在当前工作区内回到服务端返回的稳定父链；引用不属于当前工作区时进入不可用/错误状态，不返回或渲染其父链，并显示明确原因。
 - 纵轴是版本化重量分段；横轴先按 C/B/A/S，再按启用 Type。
 - Series 覆盖块只连接真实离散 SKU 节点。固定提示：**覆盖范围只表达系列规划跨度，不代表连续插值。**
@@ -204,7 +206,7 @@ UpgradeCandidate 只描述“升级会怎样”。批准不改变旧 Snapshot；
 
 ## 13. 保持开放、不得固化
 
-本界面只消费v3第20节的唯一未决事项登记表：OPEN-001降低型叠加、OPEN-002未来Performance扩展、OPEN-003扩展部位、OPEN-004 Patch偏移阈值、OPEN-005五维定义、OPEN-006 AI供应方与出网、OPEN-007定价源表、OPEN-008 ConfigIdPolicy和OPEN-010飞书Patch台账远端契约。未决值全部通过版本化策略或明确禁用态表达。OPEN-009已经解决，界面必须消费`open009-2026-07-23-v1`及其引用的批量刷新、记录、复核和职责分离策略版本，不再显示“治理待确认”。
+本界面只消费v3第20节的唯一未决事项登记表：OPEN-001降低型叠加、OPEN-002未来Performance扩展、OPEN-003扩展部位、OPEN-004 Patch偏移阈值、OPEN-005五维定义、OPEN-006 AI供应方与出网、OPEN-007定价源表、OPEN-008 ConfigIdPolicy和OPEN-010飞书Patch台账远端契约。未决值全部通过版本化策略或明确禁用态表达。OPEN-003的产品方向已经确认“当前完全延期”，但尚无可校验的已发布`enabledItemPartPolicy`，所以继续保持`DEFERRED_UI_DISABLED`；这不是等待UI选择批次，页面不得为钩、漂、真饵或拟饵提供入口或占位。OPEN-009已经解决，界面必须消费`open009-2026-07-23-v1`及其引用的批量刷新、记录、复核和职责分离策略版本，不再显示“治理待确认”。
 
 TOML枚举引用不是开放项：当前编译器契约已确定使用可读`configNameKey/name`解析到唯一数字ID，页面不得提供“按ID或name任选”的产品开关。Snapshot冻结语义也不是配置项，改变它必须先获得用户明确确认并修订v3。
 

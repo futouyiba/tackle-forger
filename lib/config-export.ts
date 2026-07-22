@@ -1,8 +1,19 @@
 import { deterministicHash } from "./rule-kernel";
 import { verifySnapshotIntegrity } from "./publishing";
-import { assertPatchGateCanProceed, PatchOffsetPolicyError } from "./patch-offset-policy";
+import {
+  assertPatchGateCanProceed,
+  assertPatchRangeEvaluationIntegrity,
+  assertPublishedPatchOffsetPolicy,
+  PatchOffsetPolicyError,
+} from "./patch-offset-policy";
 import type { PatchRangeEvaluation } from "./patch-offset-policy";
-import type { ConfigurationSnapshot, PatchValidationWaiver, ValidationIssue } from "./types";
+import type {
+  ConfigurationSnapshot,
+  PatchOffsetPolicyVersion,
+  PatchValidationWaiver,
+  ValidationIssue,
+  WorkspacePolicyRecord,
+} from "./types";
 import type { ExportTargetProfile } from "./interaction-contracts";
 import type { ConfigExportMapping } from "./config-export-mapping";
 export type { ConfigExportMapping } from "./config-export-mapping";
@@ -50,6 +61,7 @@ export function createExportManifest(input: {
   environmentId?: string;
   channelKey?: string;
   patchOffsetGovernance?: {
+    policy?: WorkspacePolicyRecord | PatchOffsetPolicyVersion;
     rangeEvaluation: PatchRangeEvaluation;
     waivers?: PatchValidationWaiver[];
   };
@@ -82,6 +94,30 @@ export function createExportManifest(input: {
       throw new Error("正式导出缺少与 Snapshot 策略及目标环境×渠道精确匹配的 Patch 范围校验。");
     }
     try {
+      assertPublishedPatchOffsetPolicy(governance.policy);
+      if (governance.policy.version !== input.snapshot.patchOffsetPolicyVersion) {
+        throw new PatchOffsetPolicyError(
+          "PATCH_OFFSET_POLICY_VERSION_MISMATCH",
+          "正式导出的 PatchOffsetPolicyVersion 与 Snapshot 不一致。",
+        );
+      }
+      if (!input.snapshot.patchReferences?.length) {
+        throw new PatchOffsetPolicyError(
+          "PATCH_REVISION_EVIDENCE_MISSING",
+          "正式导出的 Snapshot 缺少冻结的有序 Patch revision 引用。",
+        );
+      }
+      assertPatchRangeEvaluationIntegrity({
+        evaluation: governance.rangeEvaluation,
+        policy: governance.policy,
+        expectedSubjectRef: {
+          scopeType: "model",
+          entityId: input.snapshot.modelId,
+          revision: input.snapshot.modelRevision,
+        },
+        expectedPatchSetHash: input.snapshot.patchSetHash,
+        expectedPatchReferences: input.snapshot.patchReferences,
+      });
       assertPatchGateCanProceed({
         evaluation: governance.rangeEvaluation,
         waivers: governance.waivers,

@@ -3,6 +3,7 @@ import { previewPatchRebase } from "./patch-engine";
 import { orderedPatchReferences } from "./patch-ledger";
 import {
   assertPatchGateCanProceed,
+  assertPatchRangeEvaluationIntegrity,
   assertPatchReviewCoverage,
   assertPublishedPatchOffsetPolicy,
   assertRangeEvaluationMatchesPatchRevisions,
@@ -91,7 +92,7 @@ function snapshotContent(
 export function publishConfigurationSnapshot(
   input: PublishModelInput,
 ): ConfigurationSnapshot {
-  if (input.publicationMode === "new_formal" && input.patches.length && !input.patchRevisions) {
+  if (input.publicationMode === "new_formal" && input.patches.length && !input.patchRevisions?.length) {
     throw new Error("正式 Snapshot 必须使用可冻结 operation 顺序的 Patch revision，不能只引用旧 Patch 视图。");
   }
   const frozenPatches = input.patchRevisions
@@ -122,6 +123,14 @@ export function publishConfigurationSnapshot(
           "正式 Snapshot 必须使用当前策略在 PUBLISH 关口生成的范围校验。",
         );
       }
+      assertPatchRangeEvaluationIntegrity({
+        evaluation: governance.rangeEvaluation,
+        policy,
+        expectedSubjectRef: { scopeType: "model", entityId: input.model.id, revision: input.model.revision },
+        expectedPatchSetHash: patchSetHash,
+        expectedPatchReferences: frozenPatches?.references ?? [],
+        expectedObjectInputHash: governance.objectInputHash,
+      });
       assertPatchReviewCoverage({
         batch: governance.reviewBatch,
         policyVersion: policy.version,

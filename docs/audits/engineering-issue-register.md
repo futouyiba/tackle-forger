@@ -66,12 +66,12 @@
 
 | ID | 状态 | 问题 | 解决证据 | 验证 |
 | --- | --- | --- | --- | --- |
-| AUD-001 | RESOLVED | 整包状态保存可绕过领域命令。 | `findGovernedStateChanges`对Series、SKU、Model、Patch、RuleSet、Pricing、Snapshot等受治理集合执行默认拒绝，`PUT /api/state`在保存前返回`DOMAIN_COMMAND_REQUIRED`。 | `tests/api-routes.test.ts`已认证越权PUT；默认`npm test`通过201项TS测试与1项渲染测试。 |
+| AUD-001 | RESOLVED | 整包状态保存可绕过领域命令。 | `findGovernedStateChanges`只允许`notes`经整包PUT变化，其余现有及未来Workspace字段默认拒绝；`PUT /api/state`返回`DOMAIN_COMMAND_REQUIRED`，畸形JSON返回400。 | `tests/api-command-boundaries.test.ts`覆盖新旧领域集合与规则设置；`tests/api-routes.test.ts`覆盖已认证越权PUT和畸形JSON；默认`npm test`通过202项TS测试与1项渲染测试。 |
 | AUD-002 | RESOLVED | Series API缺少完整运行时枚举与引用校验。 | `POST /api/series`显式校验强度、部位、钓法、类型、功能、品质、Collection与Performance存在/启用状态，并保留Type兼容校验。 | `tests/api-routes.test.ts`逐引用4xx覆盖；类型检查及默认`npm test`通过。 |
 | AUD-003 | RESOLVED | Series/SKU创建缺少命令幂等与结果恢复。 | 客户端发送稳定命令键；服务端将输入hash与Series结果引用同Workspace revision原子保存，相同输入恢复原Series/SKU，不同输入409，并发仅一次提交成功。 | `tests/api-routes.test.ts`覆盖重放、键冲突、并发冲突及冲突后恢复；默认`npm test`通过。 |
 | AUD-004 | RESOLVED | 离散拉力解析静默丢弃非法token与重复项。 | `parseDiscretePulls`保留合法值并单独报告`invalidTokens/duplicateValues`；任一异常均阻止创建。 | `tests/api-command-boundaries.test.ts`与`tests/api-routes.test.ts`覆盖中英文分隔、负数、文本和重复值。 |
 | AUD-007 | RESOLVED | 飞书导入审计身份可能为空。 | `stableAuditActor`优先保存`feishu:{tenantKey}:{openId}`，再回退显示名/email，导入与Series命令共用。 | `tests/api-command-boundaries.test.ts`覆盖飞书稳定身份及非空回退。 |
-| AUD-025 | RESOLVED | 默认测试入口遗漏飞书回写回归。 | `package.json`改用`tests/*.test.ts`与`tests/*.test.mjs`自动发现正式测试，新文件无需维护长名单。 | 默认`npm test`通过201项TS测试与1项渲染测试，其中飞书回写5项（字段匹配1项、提交恢复4项）均执行。 |
+| AUD-025 | RESOLVED | 默认测试入口遗漏飞书回写回归。 | `package.json`改用`tests/*.test.ts`与`tests/*.test.mjs`自动发现正式测试，新文件无需维护长名单。 | 默认`npm test`通过202项TS测试与1项渲染测试，其中飞书回写5项（字段匹配1项、提交恢复4项）均执行。 |
 | AUD-R001 | RESOLVED | Attribute Affix 曾先于 Series/SKU/Model Patch 执行。 | `lib/rule-kernel.ts` 已按 Patch → Affix → FinalReview 顺序执行。 | `tests/v3-rule-kernel.test.ts`；`npm test` 通过。 |
 | AUD-R002 | RESOLVED | 商品层兼容字段曾影响结构投影筛选。 | `structuralCompatibilityContext` 和 `evaluateStructuralHardCompatibility`。 | 最近匹配测试通过。 |
 | AUD-R003 | RESOLVED | Series 创建主要逻辑曾只在客户端执行。 | 新增 `POST /api/series`，客户端调用服务端命令。 | 构建包含路由；相关领域测试通过。注意整包 state 绕过由 `AUD-001` 单独管理。 |
@@ -92,4 +92,4 @@
 | 2026-07-22 | 归并产品反馈：“系列配方未拆分竿轮线”并入`AUD-005`验收，不增加AUD数量；品质、定价、配置导出和交互反馈转由实现差距矩阵及v3/UX权威项管理。 | `034a353` |
 | 2026-07-22 | 将v3-work的SQLite条件更新、生产环境禁止内存回退、v14系列配方迁移cherry-pick到审查分支；补全PatchLedger的v14 schema断言；新增`AUD-R008/009`。`AUD-008/009`仍开放。 | `45e8281d` `f0fe8232` `be1cf696` `6c233e5d` |
 | 2026-07-22 | 拉取全部远端分支并复审`origin/review/current-state-2026-07-22@fee6c83a`：新增`AUD-R008～R010`，有效未关闭问题仍为24个；完整测试190项、渲染测试1项、飞书回写单测5项及类型检查通过。 | `034a353` |
-| 2026-07-22 | API/命令边界第一批修复：关闭`AUD-001～004`、`AUD-007`与`AUD-025`；默认门禁改为自动发现测试并通过201项TS测试与1项渲染测试。 | `codex/audit-api-boundaries`（本分支提交） |
+| 2026-07-22 | API/命令边界第一批修复：关闭`AUD-001～004`、`AUD-007`与`AUD-025`；默认门禁改为自动发现测试并通过202项TS测试与1项渲染测试。 | `codex/audit-api-boundaries`（本分支提交） |

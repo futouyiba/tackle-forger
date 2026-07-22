@@ -4,7 +4,7 @@
 > 首次建立：2026-07-22
 > 来源审查：[`current-state-review-2026-07-22.md`](./current-state-review-2026-07-22.md)
 > 最近复核：[`remote-branches-review-2026-07-22.md`](./remote-branches-review-2026-07-22.md)
-> 当前汇总：7个有效未关闭问题（3个`OPEN`、2个`IN_PROGRESS`、2个`BLOCKED`），27个`RESOLVED`，1个`SUPERSEDED`。
+> 当前汇总：5个有效未关闭问题（1个`OPEN`、2个`IN_PROGRESS`、2个`BLOCKED`），29个`RESOLVED`，1个`SUPERSEDED`。
 
 ## 状态定义
 
@@ -32,8 +32,6 @@
 | --- | --- | --- | --- | --- | --- |
 | AUD-005 | Medium | BLOCKED | 根 Vinext 应用与`apps/web`/`packages/*` workspace两套架构并存，旧`SeriesRecipe`页面与按`itemPartId`区分竿/轮/线的v3 Series流程也同时可见，正式权威实现和迁移关系未确定。v14虽已增加竿/轮/线约束迁移，但当前运行时与页面尚未消费该字段。 | 根`app/`、`lib/`；`apps/web`；`packages/*`；`be1cf696`；`partConstraints`当前只出现于类型、迁移和测试 | 架构决策记录明确source of truth、迁移/共存边界和部署目标；正式配方运行时及页面消费分部位约束；旧入口被迁移、只读归档或移除，用户不再把旧扁平配方误认为v3正式Series。 |
 | AUD-009 | Medium | BLOCKED | SQLite `workspace_revisions` 表永久保存完整 JSON，和 Blob/列表 100 条策略不一致，容量与归档政策未决定。 | `lib/sqlite-storage.ts:108-147` | 明确永久审计或有限保留策略；若有限保留则事务内清理；若永久保留则文档化容量、归档和备份规划。 |
-| AUD-010 | Low | OPEN | 甘特图 UI 仍直接对完整客户端状态执行查询，未消费 `/api/series-gantt` 的对象可见性、游标和 stale-revision 机制。 | `app/SeriesGanttWorkbenchV3.tsx:783-800`；`app/api/series-gantt/route.ts` | 主列表通过服务端 API 加载；409 游标恢复、权限过滤和按需子对象加载有测试。 |
-| AUD-015 | Low | OPEN | 客户端生产构建有超过 500 kB 的 chunk。 | `npm test`/`vinext build` 输出 | 记录 bundle 分析；按工作台模块动态拆分或将权威计算迁到服务端；警告消失或有明确预算。 |
 | AUD-018 | Low | IN_PROGRESS | 仓库已用`.gitattributes`统一文本LF并为PowerShell/批处理保留CRLF；macOS检查通过，CI已增加`windows-latest`检出验证，等待远端作业通过后关闭。 | `ba2111c2`；`.gitattributes`；`.github/workflows/ci.yml` | Windows作业确认PowerShell为纯CRLF、普通文本为LF，且`git diff --check`通过。 |
 | AUD-019 | Low | IN_PROGRESS | 根v3应用与历史workspace的npm/pnpm命令、锁文件和共享Vitest配置已明确分离；CI已增加独立作业，等待首次远端运行通过。 | `README.md`、`CLAUDE.md`、`.github/workflows/ci.yml`、`vitest.workspace.config.ts` | 根npm与历史pnpm作业均在干净检出上通过，且冻结安装不改写另一锁文件。 |
 | AUD-024 | Medium | OPEN | 后端核心契约仍以`targetWeightKg`承载SKU目标拉力，`ProjectionMatch`和查询接口同时保留新旧字段；历史兼容字段尚未收敛到迁移读取边界。 | `lib/types.ts:596-613,737-751`；`lib/projection-matcher.ts:21-35,237-248`；`lib/interaction-contracts.ts:494-540`；v3 §5.3 | 新写入、领域对象和API统一使用`targetPullKg/derivedPullKg/matchedStructuralPullKg/modelFinalPullKg`；`targetWeightKg`仅由迁移适配器读取；顺序迁移保留历史Payload与Snapshot hash；覆盖旧数据迁移、API契约和确定性匹配测试。 |
@@ -70,6 +68,8 @@
 | AUD-025 | RESOLVED | 默认测试入口遗漏飞书回写回归。 | `package.json`改用`tests/*.test.ts`与`tests/*.test.mjs`自动发现正式测试，新文件无需维护长名单。 | 集成态默认`npm test`通过208项TS测试与1项渲染测试，其中飞书回写5项（字段匹配1项、提交恢复4项）均执行。 |
 | AUD-021 | RESOLVED | Feishu 远端写成功后，本地审计保存 revision 冲突曾要求人工重新拉取。 | `d00ccbed761ea428bf9b0e5f3c502ddb28273c70`新增v16持久化`DataSourceWritebackIntent`、稳定幂等键、最新revision自动对账与回读恢复；写回只登记`remoteChangesAvailable`，不刷新binding、不拉取或发布。 | `tests/data-source-writeback-recovery.test.ts`覆盖远端成功后单次冲突自动合并、持续冲突后显式重试只回读不重复追加、失败证据保留与恢复；完整`npm test`通过213项TS测试和1项渲染测试，lint/typecheck通过。 |
 | AUD-022 | RESOLVED | Feishu 主工作簿 wiki token/share URL 是否应为可变部署配置未有明确工程判定。 | v3 §14已经明确指定《钓具设计工作簿》为唯一通用规则源，因此`d00ccbed761ea428bf9b0e5f3c502ddb28273c70`将其确认成有意的canonical config-as-code；迁移必须先修订权威规范并经代码审查，UI复用唯一常量。稳定sheet注册表继续独立校验。 | `validateFeishuWorkbookConfiguration`校验链接/token、整本同步范围、anchor sheet、空值和重复sheet_id；远端仍按sheet_id校验缺失/改名/同名新表；相关测试、完整`npm test`、lint和typecheck通过。 |
+| AUD-010 | RESOLVED | 甘特图 UI 曾直接对完整客户端状态执行主列表查询，未消费服务端对象可见性、游标和 stale revision。 | `41781d9`使主列表消费`/api/series-gantt`服务端投影；Series、SKU与Model分别使用revision绑定游标，子对象按父级按需加载；409保留筛选和选中Series锚点后恢复第一页。 | 路由覆盖认证、投影边界、404隐藏父对象和409；查询覆盖权限裁剪、总数防泄漏和父级/revision游标；客户端覆盖409恢复及仅消费可见Model。 |
+| AUD-015 | RESOLVED | 客户端生产构建曾有超过500 kB的chunk。 | `f77843a`把六个工作台拆成动态入口；[`bundle-analysis-aud-015.md`](./bundle-analysis-aud-015.md)记录基线和产物证据；未提高warning阈值。 | Workbench chunk从869,491 B降至101,969 B，最大chunk为424,888 B，构建不再报告>500 kB；默认测试强制500,000 B chunk预算、六个动态入口和150,000 B Workbench预算。 |
 | AUD-R001 | RESOLVED | Attribute Affix 曾先于 Series/SKU/Model Patch 执行。 | `lib/rule-kernel.ts` 已按 Patch → Affix → FinalReview 顺序执行。 | `tests/v3-rule-kernel.test.ts`；`npm test` 通过。 |
 | AUD-R002 | RESOLVED | 商品层兼容字段曾影响结构投影筛选。 | `structuralCompatibilityContext` 和 `evaluateStructuralHardCompatibility`。 | 最近匹配测试通过。 |
 | AUD-R003 | RESOLVED | Series 创建主要逻辑曾只在客户端执行。 | 新增 `POST /api/series`，客户端调用服务端命令。 | 构建包含路由；相关领域测试通过；整包state绕过后续已由`AUD-001`关闭。 |
@@ -100,3 +100,4 @@
 | 2026-07-22 | 历史pnpm workspace完成冻结安装、类型检查、测试与生产构建，关闭`AUD-006`；`AUD-018/019`等待新增Windows/双包管理CI首次远端通过。 | 本分支提交 |
 | 2026-07-22 | 飞书恢复与规则源配置治理：关闭`AUD-021/022`；回写先持久化意图并可跨本地revision冲突自动对账，写回/拉取/发布保持独立；主工作簿按v3 §14确认为canonical config-as-code并增加配置与稳定sheet注册表校验。 | `d00ccbed761ea428bf9b0e5f3c502ddb28273c70` |
 | 2026-07-22 | 集成复核修正`AUD-001`过窄白名单造成的旧工作台保存回归；仅恢复旧工作台显式通用配置字段，v3受治理状态与未知字段继续默认拒绝。 | 本分支提交 |
+| 2026-07-22 | 甘特主列表接入服务端可见性、revision游标、409恢复及SKU/Model按需加载；六个工作台动态拆分并增加真实构建产物预算，关闭`AUD-010/015`。 | `41781d9` `f77843a` |

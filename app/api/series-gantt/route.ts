@@ -22,21 +22,22 @@ export async function GET(request: NextRequest) {
     }, { status: 401 });
   }
   const capabilities = user.capabilities as CapabilityCode[];
-  const readAvailability = actionAvailability("open_series", capabilities);
-  if (!readAvailability.enabled) {
+  const readActions = [
+    actionAvailability("open_series", capabilities),
+    actionAvailability("open_sku", capabilities),
+    actionAvailability("preview_model", capabilities),
+  ];
+  const blockedRead = readActions.find((action) => !action.enabled);
+  if (blockedRead) {
     return NextResponse.json({
-      error: readAvailability.disabledReasonText,
-      action: readAvailability,
+      error: "甘特图读取需要完整的 Series、SKU 与 Model 读取能力，不返回部分谱系。",
+      code: "SERIES_GANTT_READ_CAPABILITY_INCOMPLETE",
+      action: blockedRead,
+      actions: readActions,
     }, { status: 403 });
   }
   const current = await loadWorkspaceState();
   const query = seriesGanttQueryFromSearchParams(request.nextUrl.searchParams);
-  const visibility = {
-    seriesIds: capabilities.includes("series.read") ? current.state.seriesDefinitions.map((series) => series.id) : [],
-    skuIds: capabilities.includes("sku.read") ? current.state.skuDrawers.map((sku) => sku.id) : [],
-    modelIds: capabilities.includes("model.read") ? current.state.purchasableModels.map((model) => model.id) : [],
-    discloseTotalModelCount: capabilities.includes("series.read") && capabilities.includes("model.read"),
-  };
   const blocks = querySeriesGantt({
     query,
     series: current.state.seriesDefinitions,
@@ -44,7 +45,6 @@ export async function GET(request: NextRequest) {
     models: current.state.purchasableModels,
     itemTypes: current.state.itemTypeProfiles,
     upgrades: current.state.upgradeCandidates,
-    visibility,
   });
   let page;
   try {
@@ -65,7 +65,7 @@ export async function GET(request: NextRequest) {
     blocks: page.items,
     page: {
       nextCursor: page.nextCursor,
-      totalVisible: page.totalVisible,
+      totalMatched: page.totalMatched,
       pageSize: page.pageSize,
     },
     actions: [

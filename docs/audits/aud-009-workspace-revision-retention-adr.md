@@ -30,7 +30,7 @@
 | `scripts/migrate-blob-to-sqlite.ts` | 把 Blob 中尚存的历史全部导入新 SQLite | 最多只能迁移 Blob 当时仍保存的 100 条，不能复原已裁剪历史 |
 | `scripts/backup-workspace.ts` | 每日整库备份，连同导入文件与会话目录；目录按 30 天删除 | 空间消耗约为“活跃数据库体积 × 保留份数”，且长期保留会话副本会扩大安全风险 |
 
-以 2026-07-23 当前种子状态测得的单份 JSON 为 594,961 字节，约 0.57 MiB。该值只用于量级估算；实际状态会随 Snapshot、Trace、Patch 和审计记录增长，SQLite 页、索引和 WAL 还会增加额外开销。
+以2026-07-23的种子状态序列化估算，单份JSON为594,961字节，约0.57 MiB；本地现有SQLite的7条revision实测平均482,566字节、最大505,516字节，revision JSON合计约3.38 MB。两组数据说明单份状态会随样本、Snapshot、Trace、Patch和审计记录变化；下表采用约0.57 MiB作保守量级估算，SQLite页、索引和WAL还会增加额外开销。
 
 | 完整 revision 数量 | 仅 JSON 的近似体积 | 30 份同体量每日整库备份的近似上限 |
 | ---: | ---: | ---: |

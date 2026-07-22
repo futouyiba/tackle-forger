@@ -4,7 +4,7 @@
 > 首次建立：2026-07-22
 > 来源审查：[`current-state-review-2026-07-22.md`](./current-state-review-2026-07-22.md)
 > 最近复核：[`remote-branches-review-2026-07-22.md`](./remote-branches-review-2026-07-22.md)
-> 当前汇总：2个有效未关闭问题（0个`OPEN`、0个`IN_PROGRESS`、2个`BLOCKED`），32个`RESOLVED`，1个`SUPERSEDED`。
+> 当前汇总：3个有效未关闭问题（1个`OPEN`、0个`IN_PROGRESS`、2个`BLOCKED`），32个`RESOLVED`，1个`SUPERSEDED`。
 
 ## 状态定义
 
@@ -30,12 +30,15 @@
 
 | ID | 严重性 | 状态 | 问题 | 主要证据 | 验收条件 |
 | --- | --- | --- | --- | --- | --- |
-| AUD-009 | Medium | BLOCKED | SQLite `workspace_revisions` 表永久保存完整 JSON，和 Blob/列表 100 条策略不一致，容量与归档政策未决定。 | `lib/sqlite-storage.ts:108-147`；[`AUD-009 数据保留 ADR 草案`](./aud-009-workspace-revision-retention-adr.md) | 由产品/运维/审计责任人确认永久、固定条数或时间+数量混合策略，以及 Blob 例外和长期归档责任；若有限保留则实现事务内清理、删除证据和恢复验收；若永久保留则文档化容量、归档和备份规划。 |
+| AUD-005 | Medium | OPEN | 根Vinext v3已由README、CI和R730部署配置确认为唯一权威实现，但根应用仍把旧`SeriesRecipe`、旧Candidate、`OfficialSku`和明细覆盖作为可编辑入口，并允许通用整包保存继续写`recipes`，用户仍可能误把历史流程当作v3正式流程。 | `README.md`；`.github/workflows/ci.yml`；`deploy/tackle-forger.service`；`app/Workbench.tsx`；`lib/api-command-boundaries.ts`；[`AUD-005 收敛方案`](./aud-005-architecture-decision-proposal.md) | 旧入口改为明确的只读历史查看与迁移诊断；既有深链和原始payload/Trace保留；旧集合不再通过页面或整包保存新增/修改；v3 Series/SKU/Model成为唯一正式写入流程；部署与评审入口均指向根v3构建。 |
+| AUD-009 | Medium | BLOCKED | SQLite与D1永久保存完整工作区revision，普通列表只显示最近100条；Blob则物理裁为最近100条。三种后端的历史读取、容量与归档语义不一致，正式保留政策尚未决定。 | `lib/sqlite-storage.ts`建表/插入/列表；`lib/storage.ts`的D1插入与Blob `.slice(0, 100)`；[`AUD-009 数据保留 ADR 草案`](./aud-009-workspace-revision-retention-adr.md) | 由产品/运维/审计责任人确认永久、固定条数或时间+数量混合策略，以及Blob例外和长期归档责任；若有限保留则实现事务内清理、删除证据和恢复验收；若永久保留则文档化容量、归档和备份规划。 |
+| AUD-026 | Medium | BLOCKED | `SeriesRecipe.partConstraints`已承载rod/reel/line分部位字段，但迁移复制的是旧扁平语义，旧生成器和UI均未消费；哪些字段属于`CandidateSearchRecipe`搜索约束、哪些必须落入Model `componentSelections`尚未确认。 | `lib/types.ts`；`lib/migrations.ts`；`lib/engine.ts`；`app/Workbench.tsx`；[`AUD-005 收敛方案`](./aud-005-architecture-decision-proposal.md) | 明确版本化分部位约束的语义归属和旧字段映射；未确认项保持可配置/待复核；runtime与UI按rod/reel/line分别消费并输出Trace；实际入选部件进入Model构建输入；迁移幂等且不改写已发布Snapshot。 |
 
 ## 问题关系与去重
 
 - `AUD-001/002/003/004/007`已分别通过route-level测试关闭；原总括测试问题`AUD-012`保持`SUPERSEDED`，不重复计入已解决数量。
-- `AUD-005`是两套架构权威边界的父决策；“系列配方未拆分竿轮线”是旧`SeriesRecipe`仍可见造成的用户侧表现，归入`AUD-005`，不再新增重复AUD。`be1cf696`只解决v14迁移载体并记为`AUD-R010`，没有解决页面消费和架构权威边界。历史workspace本地验证已由`AUD-006`关闭，双包管理与CI入口已由`AUD-019`关闭；二者都不替代`AUD-005`的架构决策。
+- 根v3的source of truth与生产部署目标已由README、CI和R730配置确定，不再作为阻断项。`AUD-005`只管理旧可写入口的只读归档、兼容跳转和部署收敛；分部位约束的未决领域映射拆为`AUD-026`，避免把可直接执行的工程工作和必须确认的语义混在同一个`BLOCKED`项中。
+- “系列配方未拆分竿轮线”不是再新增一份重复反馈：其中“旧扁平页面仍可编辑”归`AUD-005`，“竿/轮/线约束如何进入候选与Model”归`AUD-026`。`be1cf696`只解决v14迁移载体并记为`AUD-R010`，没有解决runtime/UI消费。
 - `AUD-R003`证明Series创建主路径已进入服务端命令；通用整包保存绕过已由`AUD-001`的默认拒绝边界关闭。
 - `AUD-R006`证明飞书远端写前/写后回读恢复已经实现；默认测试入口遗漏已由`AUD-025`关闭；`AUD-021`进一步增加持久化写入意图、revision冲突自动对账和整次请求幂等恢复。
 - `AUD-R007`证明R730持久化、迁移、备份和运行手册的基础能力已存在；部署路径、Node下限和会话灾备已由`AUD-008/013/014`关闭，revision保留政策仍由`AUD-009`管理。
@@ -74,11 +77,11 @@
 | AUD-R003 | RESOLVED | Series 创建主要逻辑曾只在客户端执行。 | 新增 `POST /api/series`，客户端调用服务端命令。 | 构建包含路由；相关领域测试通过；整包state绕过后续已由`AUD-001`关闭。 |
 | AUD-R004 | RESOLVED | Vercel 构建曾原地修改 `package.json`。 | `vercel.json` 改为无源码写入的 `next build`。 | 文件审查。 |
 | AUD-R005 | RESOLVED | 未使用的 ChatGPT 请求头认证模块存在误用风险。 | `app/chatgpt-auth.ts` 已删除。 | Git diff。 |
-| AUD-R006 | RESOLVED | Feishu 数据源回写缺少写前/写后回读恢复。 | `commitFeishuWriteback` 和 `tests/feishu-writeback.test.ts`。 | 5个回写场景已纳入默认`npm test`并通过；本地审计冲突恢复仍由`AUD-021`管理。 |
+| AUD-R006 | RESOLVED | Feishu 数据源回写缺少写前/写后回读恢复。 | `commitFeishuWriteback` 和 `tests/feishu-writeback.test.ts`。 | 5个回写场景已纳入默认`npm test`并通过；本地审计冲突恢复已由`AUD-021`关闭。 |
 | AUD-R007 | RESOLVED | R730 缺少正式持久存储、备份和部署说明。 | SQLite、迁移/备份脚本、systemd/Nginx、部署文档。 | 根测试与SQLite测试通过；部署路径、Node下限和会话灾备已关闭，revision保留政策仍由`AUD-009`管理。 |
 | AUD-R008 | RESOLVED | 生产环境无持久存储时曾静默回退到进程内内存，重启后丢失团队配置。 | `lib/storage.ts`的`assertEphemeralStorageAllowed`；`f0fe8232`。 | `tests/storage.test.ts`及集成态完整测试通过；systemd路径不一致已由`AUD-008`关闭。 |
 | AUD-R009 | RESOLVED | SQLite保存的revision条件更新未命中时曾可能继续写入历史，形成伪revision。 | `lib/sqlite-storage.ts`检查`updated.changes`并回滚；`45e8281d`。 | 持久化、过期`baseRevision`、不新增历史及并发测试通过。revision保留政策仍由`AUD-009`管理。 |
-| AUD-R010 | RESOLVED | 旧扁平`SeriesRecipe`缺少可承载竿、轮、线独立约束的迁移结构。 | v14`SeriesRecipe.partConstraints`及v13→v14顺序迁移；`be1cf696`。 | 迁移幂等测试通过并保留旧字段。运行时/UI尚未消费该结构，继续由`AUD-005`管理。 |
+| AUD-R010 | RESOLVED | 旧扁平`SeriesRecipe`缺少可承载竿、轮、线独立约束的迁移结构。 | v14`SeriesRecipe.partConstraints`及v13→v14顺序迁移；`be1cf696`。 | 迁移幂等测试通过并保留旧字段。运行时/UI消费及语义映射继续由`AUD-026`管理。 |
 | AUD-016 | RESOLVED | `BLOCKER` 甘特筛选值与legacy `ValidationIssue.level`不一致。 | `ValidationIssue.severity`承载规范严重度；缺失时确定性兼容映射legacy level。 | `tests/series-gantt-query.test.ts`覆盖BLOCKER命中与ERROR隔离；类型检查及领域测试通过。 |
 | AUD-017 | RESOLVED | `applyLayeredPatches`跨实体批量调用可能误报set冲突。 | 冲突键加入`scopeId`，只在同作用域实体同路径间报告竞争。 | `tests/v3-end-to-end.test.ts`覆盖不同/相同scopeId；领域测试通过。 |
 | AUD-023 | RESOLVED | 未发布或过期的`FiveAxisViewDefinition`可能进入新正式Snapshot。 | v15为定义增加revision、发布状态和内容哈希；新预览冻结定义revision/hash并纳入inputHash；旧定义无损迁移为未发布；`new_formal`核验完整版本链。 | `tests/five-axis.test.ts`覆盖正常、未发布、篡改、同ID版本内容替换、过期及历史Snapshot冻结；`tests/v3-migration.test.ts`覆盖迁移幂等；集成态完整测试通过。 |
@@ -103,3 +106,4 @@
 | 2026-07-22 | 完成AUD-024目标拉力顺序迁移：活动契约收敛到规范四阶段字段，历史旧字段只在v16→v17迁移适配器读取，冻结Snapshot payload/hash不变；保留v15→v16飞书回写意图迁移。完整测试通过225项TypeScript测试与2项生产构建测试，有效未关闭问题降为4个。 | `3ec88dc` |
 | 2026-07-22 | 首次远端CI三项门禁全部通过：根v3 npm、历史pnpm workspace及Windows行尾策略；关闭`AUD-018/019`，有效未关闭问题降为2个，均为待决策的`BLOCKED`项。 | [`CI #1`](https://github.com/futouyiba/tackle-forger/actions/runs/29935463528) |
 | 2026-07-23 | 为`AUD-009`补充工作区revision保留ADR草案，比较永久、固定条数与时间+数量混合策略；提出`90天 + 至少100条`候选默认值、事务清理与备份/审计边界。等待责任人决策，问题保持`BLOCKED`。 | 本分支提交 |
+| 2026-07-23 | 独立复核纠正`AUD-005`范围：根v3权威和生产目标已确定，旧入口只读化改为可执行的`OPEN`项；分部位约束语义拆为`AUD-026 BLOCKED`。已解决项复核未发现需要重开。 | 本分支提交 |

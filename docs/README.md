@@ -64,6 +64,8 @@
 - [`audits/current-state-review-follow-up-2026-07-22.md`](./audits/current-state-review-follow-up-2026-07-22.md)：对首轮快照的去重复核、当前工作区差异与新增问题映射。
 - [`audits/remote-branches-review-2026-07-22.md`](./audits/remote-branches-review-2026-07-22.md)：拉取全部远端分支后的修复复审、测试证据及问题状态变化。
 - [`audits/engineering-issue-register.md`](./audits/engineering-issue-register.md)：持续维护的工程问题台账，包含严重性、状态、证据和关闭条件。
+- [`audits/aud-005-architecture-decision-proposal.md`](./audits/aud-005-architecture-decision-proposal.md)：根v3、历史workspace与旧配方入口的收敛方案、迁移边界和待确认语义。
+- [`audits/aud-009-workspace-revision-retention-adr.md`](./audits/aud-009-workspace-revision-retention-adr.md)：工作区revision保留、容量、归档和恢复策略的待决策ADR。
 
 修复提交应引用对应`AUD-xxx`，关闭问题时在台账中记录提交SHA、验证命令和测试证据。历史审查快照原则上不改写；状态变化更新台账或新增审查快照。
 

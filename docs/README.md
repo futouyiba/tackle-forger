@@ -60,12 +60,15 @@
 
 工程审计记录实现风险、验证结果和架构决策需求，不定义产品或领域语义；与v3冲突时始终以v3为准。
 
+自2026-07-23起，GitHub Issues和关联Project是活动问题状态、负责人、依赖和验收条件的唯一可变来源。仓库内审计文档保存调查、决策与验证证据，不继续维护第二套活动状态。
+
 - [`audits/current-state-review-2026-07-22.md`](./audits/current-state-review-2026-07-22.md)：2026-07-22代码、Git、测试和架构状态快照。
 - [`audits/current-state-review-follow-up-2026-07-22.md`](./audits/current-state-review-follow-up-2026-07-22.md)：对首轮快照的去重复核、当前工作区差异与新增问题映射。
 - [`audits/remote-branches-review-2026-07-22.md`](./audits/remote-branches-review-2026-07-22.md)：拉取全部远端分支后的修复复审、测试证据及问题状态变化。
-- [`audits/engineering-issue-register.md`](./audits/engineering-issue-register.md)：持续维护的工程问题台账，包含严重性、状态、证据和关闭条件。
+- [`audits/engineering-issue-register.md`](./audits/engineering-issue-register.md)：GitHub迁移前的历史工程问题台账快照；不再维护活动状态。
+- [`audits/open-007-pricing-semantics-adr.md`](./audits/open-007-pricing-semantics-adr.md)：已批准的价值分、派生性能定位、S=100、双输出舍入、购买最低价与超限二次确认语义；运行时落实由GitHub [#9](https://github.com/futouyiba/tackle-forger/issues/9)跟踪。
 
-修复提交应引用对应`AUD-xxx`，关闭问题时在台账中记录提交SHA、验证命令和测试证据。历史审查快照原则上不改写；状态变化更新台账或新增审查快照。
+修复提交应引用对应GitHub Issue，并在PR中记录提交SHA、验证命令和测试证据。历史审查快照原则上不改写；新的决策或验证证据使用ADR/补充快照，活动状态只更新GitHub。
 
 ## Agent开始开发前
 

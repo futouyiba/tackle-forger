@@ -353,13 +353,13 @@ Affinity轴与v3固定为：
 
 上游规则变化后，只创建升级候选并展示差异；必须由人工确认后生成新的快照版本。
 
-飞书回写分为“Patch台账镜像”和“通用规则变更”两条独立链路。全部Patch先进入工具内权威`PatchLedger`，再按`patchId + patchRevision`同步到单一`Patch台账`页；通用规则变更采用`RuleSourceChangeDraft`承载影响预览和人工确认，不从局部Patch静默覆盖：
+飞书回写分为“Patch台账镜像”和“通用规则变更”两条独立链路。全部Patch先进入工具内权威`PatchLedger`，再按`workspaceId + patchId + patchRevision`同步到单一`Patch台账`页；远端schema、列范围、哈希和回读以v3 §14.3为准。通用规则变更采用`RuleSourceChangeDraft`承载影响预览和人工确认，不从局部Patch静默覆盖：
 
 - 通用、稳定、跨系列复用的修改可以形成规则修改草稿。
 - 单个系列、SKU、Model 的平衡调整保存在权威Patch账本并镜像到飞书Patch台账，但不得未经归纳直接写入通用规则页。
-- Patch台账按“一条属性操作一行”保存；同一Patch的多行共享patchId，前三个机器字段为scopeType、layerType、subjectEntityId。生成时从工具账本按稳定ID重放；基线变化必须进入rebase。
+- Patch台账按“一条属性操作一行”保存；同一工作区内同一Patch的多行共享`workspaceId + patchId`，机器行和协作事件行都必须携带受控`workspaceId`。生成时从工具账本按稳定ID重放；基线变化必须进入rebase。
 - 工具应汇总Patch并识别跨对象稳定模式；只有人工归纳和影响预览通过后才能形成RuleSourceChangeDraft。新规则发布后再计算ABSORBED或PARTIALLY_ABSORBED，原Patch不得提前删除。
-- Patch业务状态与镜像同步状态使用两个正交字段；操作明细以`patchId + patchRevision + operationId`幂等，并按稳定`operationIndex`重放。完整Patch revision是组级事务边界，部分飞书行成功不能标记整组SYNCED或参与半组重放。
+- Patch业务状态与镜像同步状态使用两个正交字段；操作明细以带类型的`tuple(workspaceId, patchId, patchRevision, operationId)`幂等，并按稳定`operationIndex`重放。完整Patch revision是组级事务边界，部分飞书行成功不能标记整组SYNCED或参与半组重放。
 - 飞书镜像删除不构成Patch删除，产生`PATCH_MIRROR_ROW_MISSING`并允许补写；未知ID、审计字段篡改和不完整组隔离为Patch ValidationIssue。对象缺失进入ORPHANED，禁止按名称重绑。
 - PatchLedger必须有schemaVersion、幂等顺序迁移和语义回归；Snapshot冻结有序Patch revision/operationId集合及PatchSetHash。
 - 回写前显示影响范围、规则版本、冲突和预计变化。

@@ -568,7 +568,7 @@ linear_subtraction 和 diminishing_division 两种配置，本轮不需要决定
 4. 建立provider接口、字段白名单、超时和审计；
 5. 接入只读评估；
 6. 接入变化预览；
-7. 最后接入Patch与飞书规则修改草稿；一期不接飞书审批，只允许人工确认写回、技术回读、显式拉取和RuleSet发布。
+7. 最后接入Patch与飞书规则修改草稿；一期、二期和当前规划三期均不接飞书审批，只允许人工确认写回、技术回读、显式拉取和RuleSet发布。
 
 验收以权威规范第23节为准。AI模型选择和数据出网属于OPEN-006，在连接外部服务前必须请求确认。
 
@@ -633,13 +633,16 @@ linear_subtraction 和 diminishing_division 两种配置，本轮不需要决定
 
 - 一期：内网服务、飞书登录、统一Capability、不可提交的`NON_FORMAL`配置预览与结构关系校验；不得正式预留ID、生成生产形态xlsx/正式人工搬运包或写入本地worktree。
 - 1.5期：发布权威目标目录与获批扫描Manifest、ConfigIdPolicyVersion和reservation ledger；完成历史导入复核，生成正式人工搬运包或写入用户选择的dev/test/online/release本地worktree。
-- 二期：实现已设计的AI辅助层。
-- 三期：细粒度权限与职责分离。
-- 一期不得用“以后做权限”为理由省略用户身份、审计、expectedRevision或ActionAvailability。
+- 二期：仅在OPEN-006关闭后实现已设计的AI辅助层；继续全员统一权限。
+- 当前规划三期：保持统一Capability策略，不建设细粒度RBAC、对象级角色、职责分离或飞书审批。未来治理变化必须另建Issue并发布新`separationOfDutiesPolicy`版本。
+- 一期、1.5期、二期和当前规划三期都不得用“统一权限”为理由省略用户身份、服务端逐动作鉴权、操作记录、expectedRevision或ActionAvailability。
+- 关键共享写操作必须实现v3第20.2.7节的工作区租约与单调fencing token；服务端状态提交和持久化fenced outbox中的服务端可达副作用必须拒绝旧token，不能只实现心跳过期。浏览器本地配置文件不进入服务端outbox，按第19.2节的文件冲突与恢复路径处理。
 
 ### 19.2 导出执行器
 
 1.5期使用Chromium File System Access API直接处理用户显式授权的目录，不要求本地伴随程序。服务端保存逻辑环境/渠道标签，目录句柄按用户、浏览器、origin、环境和渠道保存在IndexedDB；Cookie只保存飞书登录会话。每次写入前重新检查readwrite权限。
+
+服务端fencing token只控制正式写入授权和成功证据，不能撤销已经交给本机文件系统的写操作。页面在开始、每个文件写入前和最终报告前重验租约；无论重验结果如何，文件一致性都必须依靠hash/mtime、备份、恢复Manifest和逐文件回读。配置导出租约没有已验证终态便过期、断线或取消时，服务端自动把逻辑目标置为`recoveryState=RECOVERY_REQUIRED`并记录`reason=EXTERNAL_FILE_CONFLICT`；旧页面不得报告成功，当前持锁者只可先执行回读恢复，完成前不得再次正式写入该目标。
 
 - dev/test/online/release是首批独立人工导出环境，各自绑定用户选择的configs worktree根目录与`config.toml`。
 - 每个环境的1001渠道固定写入根目录下`xlsx`。

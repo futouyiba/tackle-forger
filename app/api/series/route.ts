@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { requestUser } from "@/lib/auth";
 import {
@@ -19,10 +19,13 @@ import {
 import { loadWorkspaceState, saveWorkspaceState } from "@/lib/storage";
 import type { SeriesDefinition } from "@/lib/types";
 import { ensureWorkflowFields } from "@/lib/workflow";
+import { parseDiscretePulls } from "@/lib/series-create-contract";
+import { stableAuditActor } from "@/lib/api-command-boundaries";
 
 export const dynamic = "force-dynamic";
 
 interface SeriesCreateRequest {
+  idempotencyKey: string;
   seriesId: string;
   name: string;
   concept: string;
@@ -37,17 +40,6 @@ interface SeriesCreateRequest {
   planningMinKgf?: string;
   planningMaxKgf?: string;
   discretePulls?: string;
-}
-
-function parseDiscretePulls(value: string): number[] {
-  return [
-    ...new Set(
-      value
-        .split(/[,，;；\s]+/)
-        .map((entry) => Number(entry.trim()))
-        .filter((entry) => Number.isFinite(entry) && entry > 0),
-    ),
-  ].sort((left, right) => left - right);
 }
 
 /**
@@ -81,6 +73,10 @@ export async function POST(request: NextRequest) {
 
   const name = (body.name ?? "").trim();
   const concept = (body.concept ?? "").trim();
+  const idempotencyKey = (body.idempotencyKey ?? "").trim();
+  if (!idempotencyKey) {
+    return NextResponse.json({ error: "缺少创建命令幂等键。" }, { status: 422 });
+  }
   if (!name || !concept) {
     return NextResponse.json({ error: "请填写 Series 名称与概念说明。" }, { status: 422 });
   }
@@ -100,7 +96,18 @@ export async function POST(request: NextRequest) {
   ) {
     return NextResponse.json({ error: "规划拉力范围必须是有效的正数闭区间。" }, { status: 422 });
   }
-  const pulls = parseDiscretePulls(body.discretePulls ?? "");
+  if (![1, 2, 3].includes(body.functionIntensity)) {
+    return NextResponse.json({ error: "功能专精强度必须为 1、2 或 3。" }, { status: 422 });
+  }
+  const parsedPulls = parseDiscretePulls(body.discretePulls ?? "");
+  if (parsedPulls.invalidTokens.length || parsedPulls.duplicateValues.length) {
+    return NextResponse.json({
+      error: "目标拉力规格包含非法或重复项。",
+      invalidTokens: parsedPulls.invalidTokens,
+      duplicateValues: parsedPulls.duplicateValues,
+    }, { status: 422 });
+  }
+  const pulls = parsedPulls.values;
   if (!pulls.length) {
     return NextResponse.json({ error: "请至少填写一个正数目标拉力规格；范围本身不能生成 SKU。" }, { status: 422 });
   }
@@ -108,12 +115,68 @@ export async function POST(request: NextRequest) {
   const current = await loadWorkspaceState();
   const state = current.state;
 
+  const inputHash = createHash("sha256").update(JSON.stringify({
+    seriesId: body.seriesId,
+    name,
+    concept,
+    collectionId: body.collectionId || null,
+    itemPartId: body.itemPartId,
+    methodId: body.methodId,
+    typeId: body.typeId,
+    functionId: body.functionId,
+    qualityId: body.qualityId,
+    performanceId: body.performanceId || null,
+    functionIntensity: body.functionIntensity,
+    planningMinKgf: minKgf ?? null,
+    planningMaxKgf: maxKgf ?? null,
+    pulls,
+  })).digest("hex");
+  const priorCommand = state.commandIdempotencyRecords.find((entry) => entry.key === idempotencyKey);
+  if (priorCommand) {
+    if (priorCommand.inputHash !== inputHash) {
+      return NextResponse.json({ error: "同一幂等键不能用于不同的创建输入。" }, { status: 409 });
+    }
+    const priorSeries = state.seriesDefinitions.find((entry) => entry.id === priorCommand.resultRef);
+    if (!priorSeries) {
+      return NextResponse.json({ error: "幂等记录存在但原创建结果不可恢复。" }, { status: 409 });
+    }
+    return NextResponse.json({
+      state,
+      series: priorSeries,
+      createdSkuIds: priorSeries.skuIds,
+      revision: current.revision,
+      idempotent: true,
+      user,
+    });
+  }
+
   if (!body.seriesId || state.seriesDefinitions.some((entry) => entry.id === body.seriesId)) {
     return NextResponse.json({ error: "Series 稳定 ID 缺失或已存在，请重新发起。" }, { status: 409 });
   }
-  const typeProfile = state.itemTypeProfiles.find((entry) => entry.id === body.typeId);
-  if (!typeProfile?.methodIds.includes(body.methodId) || !typeProfile.itemPartIds.includes(body.itemPartId)) {
+  if (!state.itemParts.some((entry) => entry.id === body.itemPartId)) {
+    return NextResponse.json({ error: "所选部位不存在。" }, { status: 422 });
+  }
+  if (!state.methodProfiles.some((entry) => entry.id === body.methodId && entry.enabled)) {
+    return NextResponse.json({ error: "所选钓法不存在或未启用。" }, { status: 422 });
+  }
+  if (!state.functionProfiles.some((entry) => entry.id === body.functionId && entry.enabled)) {
+    return NextResponse.json({ error: "所选功能定位不存在或未启用。" }, { status: 422 });
+  }
+  const typeProfile = state.itemTypeProfiles.find((entry) => entry.id === body.typeId && entry.enabled);
+  if (!typeProfile) {
+    return NextResponse.json({ error: "所选类型不存在或未启用。" }, { status: 422 });
+  }
+  if (!typeProfile.methodIds.includes(body.methodId) || !typeProfile.itemPartIds.includes(body.itemPartId)) {
     return NextResponse.json({ error: "当前类型与所选部位或钓法不兼容。" }, { status: 422 });
+  }
+  if (!state.qualityProfiles.some((entry) => entry.id === body.qualityId)) {
+    return NextResponse.json({ error: "所选品质不存在。" }, { status: 422 });
+  }
+  if (body.collectionId && !state.collections.some((entry) => entry.id === body.collectionId)) {
+    return NextResponse.json({ error: "所选 Collection 不存在。" }, { status: 422 });
+  }
+  if (body.performanceId && !state.performanceProfiles.some((entry) => entry.id === body.performanceId && entry.enabled)) {
+    return NextResponse.json({ error: "所选性能方向不存在或未启用。" }, { status: 422 });
   }
   const ruleSet = [...state.ruleSetVersions]
     .filter((entry) => entry.status === "published")
@@ -239,12 +302,17 @@ export async function POST(request: NextRequest) {
   const next = structuredClone(state);
   next.seriesDefinitions = [...next.seriesDefinitions, materialized.series];
   next.skuDrawers = materialized.skus;
+  next.commandIdempotencyRecords = [...next.commandIdempotencyRecords, {
+    key: idempotencyKey,
+    inputHash,
+    resultRef: materialized.series.id,
+  }];
   const committed = ensureWorkflowFields(next);
 
   const result = await saveWorkspaceState({
     state: committed,
     baseRevision: current.revision,
-    author: user.name || user.email,
+    author: stableAuditActor(user),
     message: `创建 Series ${materialized.series.name}（${materialized.createdSkuIds.length} 个 SKU 抽屉）`,
   });
   if (result.conflict) {

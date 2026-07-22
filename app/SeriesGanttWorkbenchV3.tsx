@@ -991,6 +991,7 @@ export function SeriesGanttWorkbenchV3({
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
+          idempotencyKey: `create-series:${draft.seriesId}`,
           seriesId: draft.seriesId,
           name: draft.name,
           concept: draft.concept,

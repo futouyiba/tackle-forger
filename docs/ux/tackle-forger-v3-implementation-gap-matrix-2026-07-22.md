@@ -5,6 +5,7 @@
 > 原始验证时间：2026-07-22 20:58:36 +0800
 > 本次反馈归并复核：2026-07-22 22:55:13 +0800，HEAD `ba2111c2e6021d968606cfe4ee3e839732184d71`；只复核本次五条反馈及对应代码事实，没有重跑完整测试。
 > 远端分支复审：2026-07-22 23:03:53 +0800，`origin/review/current-state-2026-07-22@fee6c83a1f269ef310116828ad40bd6d832020c7`；完整测试与类型检查已重跑，详细证据见`../audits/remote-branches-review-2026-07-22.md`。
+> 规范同步：2026-07-23，按v3 OPEN-008已确认决策修正1/1.5期边界与外部阻断；本次只更新目标契约和差距描述，不冒充代码实现或新测试证据。  
 > 对齐基线：v3 领域规范 > product-design-completion-v3 > implementation/requirements handoff > ux-design-v1 与 prototype 视觉证据。  
 > 状态定义：已实现、部分实现、缺失、因 v3 冲突而不采纳。
 
@@ -35,9 +36,9 @@
 | 五维图及双模式比较 | 已实现 | 版本化 ViewDefinition/VertexSet、单装备/钓组模式、缺失值不归零、Snapshot 冻结 | 中档边界继续保持种子配置，不固化为永久常量 |
 | AI 建议壳与草稿边界 | 已实现 | AI 默认关闭；仅草稿；不能写飞书、发布或改变裁决；证据、过期和权限契约已有测试 | OPEN-006 未确认前不得连接外部模型 |
 | AI 真实供应方 | 部分实现 | UI 明确禁用并解释原因 | 等待用户确认供应方、模型、字段白名单和数据出网策略 |
-| ValidationIssue 与 ActionLink | 部分实现 | EntityRef、ActionAvailability、部分命令契约和页面问题展示已存在；品质模块已有BLOCKER概念 | 主领域仍使用`level=error/warning/info`，命令层另有小写severity+blocking，查询层又消费四档Severity；尚未统一v3的Severity/Gate/State、BLOCKER和版本化waiver，也缺跨模块适配/迁移 |
+| ValidationIssue 与 ActionLink | 部分实现 | EntityRef、ActionAvailability、部分命令契约和页面问题展示已存在；品质模块已有BLOCKER概念 | 主领域仍使用`level=error/warning/info`，命令层另有小写severity+blocking，查询层又消费四档Severity；尚未统一v3的Severity/Gate/State、BLOCKER和版本化waiver，也未实现OPEN-008新增治理ActionCode、禁用态及不可篡改payload契约 |
 | 内网飞书登录 | 已实现 | OAuth state、会话持久化、过期、防重放、可信代理和 API 401 测试 | 部署环境需配置 HTTPS 回调或明确私网 HTTP |
-| 本地 configs 多环境/多渠道三表交付 | 已实现 | config.toml、映射版本、预览、关系校验、备份、幂等、冲突恢复、GoodsBasic+StoreBuy | 真实目标仓库需要登记 Profile 与映射后才能提交 |
+| 本地 configs 多环境/多渠道三表交付 | 部分实现 | 既有代码已有config.toml、映射版本、预览、关系校验、备份、幂等、冲突恢复、GoodsBasic+StoreBuy | v3已把一期收紧为不可提交`NON_FORMAL`预览，正式预留/人工搬运包/worktree写入移到1.5期；尚未实现稳定rangeId ledger、Model revision锁、权威目标目录/获批Manifest、新鲜度复验及dev/test/online/release正式流程，现有执行器不能作为已满足新契约的证据 |
 | Snapshot 冻结与 UpgradeCandidate | 已实现 | 已发布 Snapshot 内容/hash/有序 Patch 引用不可原地变更；上游变化只产生升级候选 | 无 |
 | 09_甘特图作为产品实体 | 因 v3 冲突而不采纳 | 09 只属于开发排期；产品甘特图来自本地 Series/SKU/Model | 不从 09 反向生成领域对象 |
 | 11/12/14–17 反向覆盖产品真相 | 因 v3 冲突而不采纳 | 仅作为历史样例、映射参考或暂存输出 | 不反向覆盖 Snapshot |
@@ -52,7 +53,7 @@
 | 【品质评分】未计算【功能定位】提供的品质分 | v3正式公式使用`FunctionProfile.scoreFactor`，当前品质内核已经乘入该系数并记录Trace。 | v3 §12.1；本矩阵“品质评分” | 不新增问题；若当前页面仍出现错误结果，附Model、规则revision和Trace另建回归Bug。 |
 | 【系列配方】未拆分竿轮线 | v14已为旧配方增加竿/轮/线独立约束迁移载体，但目前仅类型、迁移和测试使用；正式运行时及页面仍未消费，且旧`SeriesRecipe`和v3流程继续并存。 | `AUD-005`；迁移子项`AUD-R010` | 迁移结构子项已解决；用户可操作的分部位配方仍保持在`AUD-005`，不重复登记产品问题。 |
 | 缺少钓具价格计算公式 | 维修价、购买价、评分插值和逐步Trace已经实现；缺的是可发布的正式策略。 | v3 `OPEN-007` | 删除“公式缺失”表述；源表未解决S=100边界、性能评分来源和执行语义前，只允许`NON_FORMAL`试算。 |
-| 缺少最终配置表格的字段映射和同步 | `ConfigExportMapping`、三表差异预览、关系校验、恢复写入和测试已存在；正式提交仍需要真实Profile/映射、已发布定价和配置ID策略。 | v3 `OPEN-007`、`OPEN-008`；`config-export-mapping-guide.md` | 不新增“同步能力缺失”问题；按外部阻断补齐生产配置并做真实仓库联调。 |
+| 缺少最终配置表格的字段映射和同步 | 既有`ConfigExportMapping`、三表差异预览、关系校验、恢复写入和测试存在，但只证明旧执行器；正式提交仍需要真实Profile/映射、已发布定价，以及OPEN-008的目录/Manifest、策略、ledger和revision锁。 | v3 `OPEN-007`、`OPEN-008`；`config-export-mapping-guide.md` | 不重复登记“完全缺失”；按1.5期目标契约改造后再做真实仓库联调，完成前不得把旧下载/写入能力视为正式路径。 |
 | 单元格编辑、规则设定不够便捷 | 属于两个可验收的持续体验问题，不与工程安全问题混记。 | `ux-design-v1`的`UX-001/UX-002` | 保持OPEN，后续实现与Design QA按对应验收条件关闭。 |
 
 ## 3. 当前外部阻断
@@ -61,8 +62,8 @@
 2. Vercel评审项目当前只配置`BLOB_READ_WRITE_TOKEN`，缺少`FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_TENANT_KEY`、`FEISHU_REDIRECT_URI`和`FEISHU_SESSION_SECRET`；首页HTTP 200，但会话端点返回503/`AUTH-CONFIG-001`，需部署方提供公司应用凭据并在飞书开放平台登记回调。
 3. OPEN-007：S=100边界、性能评分来源、PricingPolicy的roundingStage、minimumPriceScope、overflowMode尚未全部由权威规则源解决，因此新正式价格策略及其Model/Snapshot/Store导出必须继续阻断。
 4. OPEN-006 尚未确认 AI 供应方、模型和数据出网策略，因此真实 AI 连接器必须继续禁用。
-5. OPEN-008 尚未发布公司`ConfigIdPolicyVersion`的数字区间、命名格式和保留规则，因此不能正式预留ID或提交配置。
-6. 真实 configs Git 目标需由部署方登记环境、渠道、显式目录绑定与映射版本；未登记时只能预览或明确阻断。
+5. OPEN-008的数字区间、派生关系、命名、永不复用和权限语义已经确认；但尚未发布权威`ConfigTargetCatalogVersion`、覆盖全部必需目标的获批且新鲜`ConfigTargetScanManifest`、可校验`ConfigIdPolicyVersion`及reservation ledger，也未实现Model revision锁，因此仍不能正式预留ID或提交配置。
+6. 真实 configs Git 目标需由配置治理方发布环境/渠道权威目录并完成authoritative ref、commit、`config.toml`和workbook hash扫描复核；用户本机目录绑定和旧Profile不能替代该门禁，未完成时只能`NON_FORMAL`预览。
 
 ## 4. 当前验证证据
 

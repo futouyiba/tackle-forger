@@ -2,7 +2,7 @@
 
 > 状态：**唯一权威规范 / Canonical**  
 >首次定稿：2026-07-21  
-> 最后修订：2026-07-22  
+> 最后修订：2026-07-23  
 > 适用对象：产品设计、领域建模、前后端开发、数据迁移、测试与代码审查  
 > 源数据参考：《淡水路亚杆轮线装备设计.xlsx》
 
@@ -1017,7 +1017,11 @@ GoodsBasic ID按十进制字符串`"10" + baseId`派生，StoreBuy ID按`"30" + 
 
 “所有启用目标”只以配置治理负责人发布的`ConfigTargetCatalogVersion`为权威集合，不从用户本机绑定数量、`config_system.toml`或目录扫描结果反推。目录中的每个条目至少冻结`environmentId`、`channelKey`、仓库身份、分支/引用规则、仓库内逻辑目录、`config.toml`路径、是否为正式必需目标和目录版本审批信息；本机绝对路径与目录句柄不进入目录版本。用户可以自由选择本机worktree完成绑定，但绑定只满足访问授权，不能创建、启用或豁免正式目标。
 
-每个必需条目必须有获批`ConfigTargetScanManifest`，至少记录目录版本、环境、渠道、仓库、不可变commit、逻辑目录、`config.toml` hash、各workbook/sheet/hash、扫描器与规则版本、所验证`rangeId`集合、问题清单、结果hash、扫描人与复核人及时间。`ConfigIdPolicyVersion`必须冻结引用一个目录版本和覆盖其全部必需条目的Manifest集合；缺失、重复、失败、commit不可解析、Manifest所验区间不一致或未经`config.target.scan.approve`复核时禁止发布。目录新增或变更目标时发布新目录版本；新目标在新Manifest和引用它的新策略版本生效前只能做`NON_FORMAL`预览，不能正式预留或提交。工具仍不读取、修改或治理`config_system.toml`；权威目录由配置治理流程显式维护。
+每个必需条目必须有获批`ConfigTargetScanManifest`，至少记录目录版本、环境、渠道、仓库、authoritative ref名称、扫描时解析到的不可变commit、逻辑目录、`config.toml` hash、各workbook/sheet/hash、扫描器与规则版本、所验证`rangeId`集合、问题清单、结果hash、扫描人与复核人及时间。`ConfigIdPolicyVersion`必须冻结引用一个目录版本和覆盖其全部必需条目的Manifest集合；缺失、重复、失败、commit不可解析、Manifest所验区间不一致或未经`config.target.scan.approve`复核时禁止发布。目录新增或变更目标时发布新目录版本；新目标在新Manifest和引用它的新策略版本生效前只能做`NON_FORMAL`预览，不能正式预留或提交。工具仍不读取、修改或治理`config_system.toml`；权威目录由配置治理流程显式维护。
+
+获批Manifest不是永久豁免。发布策略、每次正式预留、生成正式人工搬运包和本地正式提交前，都必须重新解析目录条目的当前authoritative ref，并逐项验证当前commit、该commit中的`config.toml` hash和所有受管workbook hash与策略冻结的Manifest完全一致；远端不可读、ref不存在、commit变化、文件缺失或任一hash变化均产生`CONFIG_TARGET_SCAN_MANIFEST_STALE`并禁止动作。预留命令在选择候选ID前检查一次，并在ledger数据库事务提交前再次解析authoritative ref；两次结果不一致则回滚且不消耗编号。正式导出还必须验证本地worktree HEAD、逻辑目录、`config.toml`和workbook基线hash与同一Manifest一致，不能用“远端一致但本地脏”或“本地一致但远端已推进”绕过。
+
+Manifest失效后，旧`ConfigIdPolicyVersion`只保留历史审计用途，不再允许新预留或任何正式包/落盘；必须从当前authoritative ref重新扫描、复核Manifest并发布引用新Manifest的新策略版本。一次正式提交会改变workbook hash，因此提交结果必须记录post-write文件hash；待现有外部发布系统形成新的不可变commit后，再从该commit扫描和复核。在新Manifest进入新策略版本前，旧策略不得用于下一批正式预留或提交。已成功预留的Bundle仍永久保留，后续目标若外部占用同一ID则产生`RESERVED_ID_EXTERNAL_COLLISION`并隔离，不自动换号、复用或覆盖。
 
 #### `configNameKey`格式与唯一性
 
@@ -1027,7 +1031,7 @@ GoodsBasic ID按十进制字符串`"10" + baseId`派生，StoreBuy ID按`"30" + 
 | GoodsBasic | `store_tf_<part>_<stableModelKey>` |
 | StoreBuy | `buy_tf_<part>_<stableModelKey>` |
 
-`stableModelKey`是Model上的显式稳定字段，不从显示名、中文拼音、数据库ID或时间戳自动生成。没有该字段的Model必须在预留前由用户输入并确认；界面可以给建议，但建议不构成保存或预留。规范化算法固定为：只移除首尾ASCII空白`U+0009–U+000D/U+0020`，再把ASCII`A–Z`映射为`a–z`，不做Unicode转写、字符替换、下划线折叠或截断。规范化结果必须满足`^[a-z][a-z0-9_]{0,39}$`，因此非空且长度为1–40字符；否则返回`STABLE_MODEL_KEY_INVALID`。
+`stableModelKey`是Model revision上的显式稳定字段，不从显示名、中文拼音、数据库ID或时间戳自动生成。没有该字段的Model必须先通过普通Model编辑创建新revision，再由用户基于该revision发起预留；界面可以给建议，但建议不构成保存或预留。规范化算法固定为：只移除首尾ASCII空白`U+0009–U+000D/U+0020`，再把ASCII`A–Z`映射为`a–z`，不做Unicode转写、字符替换、下划线折叠或截断。规范化结果必须满足`^[a-z][a-z0-9_]{0,39}$`，因此非空且长度为1–40字符；否则返回`STABLE_MODEL_KEY_INVALID`。
 
 `part`只能是`rod/reel/line`。按表中模板拼接后的完整`configNameKey`最长64字符且必须满足`^[a-z][a-z0-9_]*$`。禁止随机后缀、静默截断和按环境/渠道加后缀。`stableModelKey`在正式预留前可以修改；名称与Bundle成功预留后一起冻结。业务需要改名或让新旧版本共存时创建新Model和新Bundle。
 
@@ -1035,9 +1039,11 @@ GoodsBasic ID按十进制字符串`"10" + baseId`派生，StoreBuy ID按`"30" + 
 
 #### Reservation ledger、生命周期与权限
 
-全公司只使用服务端权威reservation ledger。普通设计用户可以预览候选；动作`reserve_config_id_bundle`要求`config.id.reserve`，其命令至少携带`modelId + part + normalizedStableModelKey + policyVersionId + idempotencyKey`。事务按策略声明顺序锁定稳定`rangeId`游标，跳过保留号，并以ledger中基础ID、两个派生ID、名称和Model的数据库唯一约束作为最终防线；禁止扫描Excel最大值后加一，也禁止回填ledger空洞。事务失败不留下预留，事务成功后永久占用。
+全公司只使用服务端权威reservation ledger。普通设计用户可以预览候选；动作`reserve_config_id_bundle`要求`config.id.reserve`，其命令至少携带`modelId + expectedModelRevisionId + part + expectedNormalizedStableModelKey + policyVersionId + idempotencyKey`。完成Manifest新鲜度预检后，数据库事务必须先锁定Model head row，验证当前head revision等于`expectedModelRevisionId`、其part和规范化key等于命令期望值且尚无Bundle；任一不一致返回`MODEL_REVISION_CONFLICT`并且不锁游标、不写ledger。验证通过后才按策略声明顺序锁定稳定`rangeId`游标，跳过保留号，并以ledger中基础ID、两个派生ID、名称和Model的数据库唯一约束作为最终防线；禁止扫描Excel最大值后加一，也禁止回填ledger空洞。
 
-幂等记录与Bundle在同一事务提交。相同`modelId + idempotencyKey`重试必须返回第一次已提交的原Bundle和原审计结果，不推进游标；数据库已提交但响应丢失也遵守此规则。同一idempotencyKey携带不同Model或不同规范化输入时返回`IDEMPOTENCY_KEY_REUSED`；同一Model已存在兼容Bundle时返回该Bundle，不再分配，输入与冻结身份冲突时返回`MODEL_CONFIG_IDENTITY_CONFLICT`。
+同一事务必须再次验证authoritative refs未漂移，完成名称与ID占用、ledger和幂等记录写入，创建冻结`stableModelKey + configIdBundleRef`的后继Model revision，并以条件更新推进Model head。事务失败不留下预留或半个Model revision，事务成功后永久占用并返回`reservedAgainstModelRevisionId + resultingModelRevisionId + ConfigIdBundle`。Bundle存在后的所有Model revision必须原样继承冻结key与Bundle；任何修改key、part或Bundle引用的命令均拒绝。
+
+幂等记录与Bundle在同一事务提交。命令先查幂等记录：相同完整payload的`modelId + idempotencyKey`重试必须返回第一次已提交的原Bundle、原/新Model revision和原审计结果，不重新执行当前revision或Manifest校验，也不推进游标；数据库已提交但响应丢失也遵守此规则。同一idempotencyKey携带不同Model、expected revision或规范化输入时返回`IDEMPOTENCY_KEY_REUSED`；同一Model已存在兼容Bundle时返回该Bundle，不再分配，输入与冻结身份冲突时返回`MODEL_CONFIG_IDENTITY_CONFLICT`。
 
 - 成功预留但未使用的Bundle标记`ABANDONED`；已经导出后退役的Bundle标记`DEPRECATED`。二者都计入占用且永不复用，不提供管理员释放入口。
 - 迁移和修订不得改变既有ID或名称。需要线上新旧并存时创建新Model；仅替换当前配置时仍更新原Bundle对应行，历史Snapshot保持不可变。
@@ -1073,10 +1079,14 @@ GoodsBasic ID按十进制字符串`"10" + baseId`派生，StoreBuy ID按`"30" + 
 - Given v1已从某`rangeId`分配Bundle且v2继续引用同一`rangeId`，When v2首次分配，Then 继承原游标和全ledger占用，不重新发放v1的任何基础或派生ID；
 - Given 预留事务已经提交但响应丢失，When 以相同`modelId + idempotencyKey`重试，Then 返回原Bundle且游标、占用数和审计记录不增加；
 - Given 两个Model并发预留相同`part + stableModelKey`，When 提交，Then 仅一个事务成功，另一方得到`CONFIG_NAME_KEY_CONFLICT`且没有自动后缀或半Bundle；
+- Given Model revision A的key为`alpha`且预留命令携带A，When 并发编辑先把Model head推进到revision B/key=`beta`，Then 预留返回`MODEL_REVISION_CONFLICT`且不消耗编号；Given 预留先锁定A并成功，Then 后续编辑不能改变冻结key或Bundle；
 - Given 候选基础ID末三位为`000`，When 分配，Then 跳过该编号及其GoodsBasic/StoreBuy派生ID；
 - Given 预留事务失败，Then 不产生占用；Given 事务成功后Model放弃，Then 标记`ABANDONED`且后续永不复用；
 - Given 部位容量达到80%、95%和100%，Then 分别返回预警、严重预警但继续分配、仅阻止该部位新预留；
 - Given 目录版本列出四个必需目标但只有三个获批Manifest，When 发布ConfigIdPolicyVersion，Then 返回缺失目标并阻止发布；Given 用户另外绑定一个未入目录的渠道，Then 该绑定不能补足门禁或执行正式提交；
+- Given Manifest获批后任一authoritative ref推进且新workbook占用候选ID，When 请求预留，Then 返回`CONFIG_TARGET_SCAN_MANIFEST_STALE`，不推进游标、不写ledger，并要求重新扫描、复核和发布策略；
+- Given 远端ref仍与Manifest一致但本地worktree的`config.toml`或workbook已修改，When 请求正式提交，Then 阻止写入且不允许用本地文件覆盖Manifest基线；
+- Given 一批正式写入成功并改变workbook hash，When 使用原策略请求下一批预留或正式提交，Then 原策略因Manifest基线过期被拒绝，直到新commit完成扫描、复核并由新策略引用；
 - Given `dev/1001`同ID不同名而`test/1001`完整命中同一行，When 多目标提交，Then 默认只隔离`dev/1001`并允许`test/1001`继续；
 - Given 首次扫描发现专属区间内未知ID，When 尚未人工复核，Then Excel与ledger均不写；When 选择外部占用，Then 登记`EXTERNAL_OCCUPIED`并永久占用。
 
@@ -1546,7 +1556,9 @@ interface EntityRef {
   workspaceId: string;
   entityType: "collection" | "series" | "sku_drawer" | "model"
     | "configuration_snapshot" | "model_candidate" | "adjustment_patch"
-    | "upgrade_candidate" | "rule_source_change_draft";
+    | "upgrade_candidate" | "rule_source_change_draft" | "config_id_bundle"
+    | "config_id_policy" | "config_target_catalog" | "config_target_scan_manifest"
+    | "config_export_package";
   entityId: string;
   revisionId: string;
 }
@@ -1851,7 +1863,7 @@ interface ValidationIssue {
   issueId: string; fingerprint: string; code: string;
   source: "hard_compatibility" | "affinity" | "series_invariant" | "patch"
     | "publish" | "data_integrity" | "import" | "five_axis" | "ai_guardrail"
-    | "config_relationship" | "quality" | "pricing";
+    | "config_identity" | "config_relationship" | "quality" | "pricing";
   severity: "INFO" | "WARNING" | "ERROR" | "BLOCKER";
   gate: "NONE" | "REVIEW" | "PUBLISH" | "EXPORT";
   subjectRef: EntityRef; affectedRefs: EntityRef[]; parameterKeys: string[];
@@ -1866,18 +1878,36 @@ interface ValidationWaiver {
   scopeRef: EntityRef; reason: string; approvedBy: string; approvedAt: string;
   expiresAt?: string; evidenceRefs: EvidenceRef[];
 }
+type IssueRemediationActionCode =
+  | "navigate" | "edit_rule" | "edit_patch" | "open_rebase"
+  | "satisfy_requirement" | "acknowledge_warning" | "request_permission"
+  | "request_waiver" | "approve_waiver"
+  | "retry" | "recompute" | "create_rule_source_change";
+interface ActionCommandPayloadRef {
+  payloadRefId: string;
+  action: ActionCode;
+  subjectRef: EntityRef;
+  expectedRevisionId?: string;
+  inputHash: string;
+  payloadHash: string;
+  idempotencyKey: string;
+  expiresAt?: string;
+}
 interface ActionLink {
   actionId: string;
-  action: "navigate" | "edit_rule" | "edit_patch" | "open_rebase"
-    | "satisfy_requirement" | "acknowledge_warning" | "request_permission"
-    | "request_waiver" | "approve_waiver"
-    | "retry" | "recompute" | "create_rule_source_change";
+  action: ActionCode | IssueRemediationActionCode;
   label: string; targetRef?: EntityRef; targetRoute?: string; enabled: boolean;
-  requiredCapabilities: CapabilityCode[]; disabledReason?: string; commandPayloadRef?: string;
+  requiredCapabilities: CapabilityCode[];
+  disabledReasonCode?: string; disabledReasonText?: string;
+  commandPayloadRef?: ActionCommandPayloadRef;
 }
 ```
 
 四套语义共用壳但source独立；Severity说明问题强度，Gate说明阻断哪个关口，二者不得合并成一个持久化boolean。`NONE`只展示；`REVIEW`要求在批准前处理且约束后续发布；`PUBLISH`阻止创建/发布新Snapshot；`EXPORT`只阻止命中的环境×渠道目标。fingerprint至少由source、code、subject、规则版本和渠道构成。动作由服务端生成并在执行时重新鉴权。AI数量不计Issue。
+
+`ActionLink.action`必须复用统一`ActionCode`表达可执行领域命令；`IssueRemediationActionCode`只保留导航、请求权限、重试等通用问题处置。对任何会改变状态的`ActionCode`，`enabled=true`时必须返回不可篡改的`commandPayloadRef`，其`action/subjectRef/inputHash/payloadHash`必须与服务端保存的类型化payload一致；配置身份动作的具体字段遵循OPEN-008和第25节，例如预留payload必须包含`expectedModelRevisionId`和`expectedNormalizedStableModelKey`。客户端只提交`actionId + payloadRefId`，不得替换action、subject、expected revision或策略/Manifest引用；服务端执行前重新读取payload、校验hash/有效期、重算`ActionAvailability`并再次鉴权。
+
+缺Capability、职责分离策略不允许、expected revision过期、Manifest stale或其他关口未满足时，`ActionLink`必须返回`enabled=false + requiredCapabilities + disabledReasonCode + disabledReasonText`且不得携带`commandPayloadRef`；直接伪造命令仍返回403或领域冲突，不能依赖按钮禁用。只读导航类动作可以没有payload。`ActionAvailability`与同一subject上的`ActionLink`对相同`ActionCode`必须给出一致的enabled、requiredCapabilities和禁用原因。
 
 状态语义固定：`OPEN`表示当前有效；`ACKNOWLEDGED`只用于已记录理由的WARNING；`RESOLVED`表示同一输入版本下根因已消失；`STALE`表示输入变化后旧Issue只读留痕；`WAIVED`只用于版本化策略明确允许的ERROR。WARNING确认不得伪装成WAIVED。
 
@@ -1888,7 +1918,7 @@ interface ActionLink {
 冲突：互斥动作执行前重验。  
 恢复：失败保留Issue并返回retry/recompute/request_permission。  
 权限：可看不等于可修；无权动作说明原因。  
-验收：Given deny、-3 Affinity、不变量偏离并存，When 返回，Then source、Severity、Gate、State和动作独立，Affinity不能抵消deny；Given策略未允许某ERROR waiver，When渲染动作，Then不显示可执行waive入口。
+验收：Given deny、-3 Affinity、不变量偏离并存，When 返回，Then source、Severity、Gate、State和动作独立，Affinity不能抵消deny；Given策略未允许某ERROR waiver，When渲染动作，Then不显示可执行waive入口；Given 用户缺少`config.id.reserve`，When 返回预留Issue动作，Then `action=reserve_config_id_bundle`、`enabled=false`、列出所需Capability和禁用原因且没有payload；Given 权限和全部门禁恢复，Then 返回同一ActionCode及绑定subject、expected revision和hash的payload引用，篡改payload或revision时服务端拒绝。
 
 ### 24.11 R10：Rebase、UpgradeCandidate与Snapshot
 

@@ -965,7 +965,7 @@ ConfigurationSnapshot必须冻结有序Patch引用集合（`patchId + patchRevis
 | --- | --- | --- | --- | --- | --- |
 | OPEN-001 降低型词条叠加 | 产品决策 | `OPEN_CONFIGURED_SEED` | 两种算法均必须实现、版本化并测试 | 工作区可用`diminishing_division`种子试算；没有已发布`ReductionStackingPolicyVersion`时禁止新Model发布 | 规则负责人确认算法，发布策略版本并通过两模式回归 |
 | OPEN-002 Performance后续扩展 | 延后产品决策 | `DEFERRED_NON_BLOCKING` | 一期仅支持显式`PerformanceProfile`，不引入`performanceIntensity` | 不生成强度、曲线或线性倍率；不阻断一期其他功能 | 产品/规则负责人提供新策略语义、源数据和迁移方案 |
-| OPEN-003 扩展部位启用 | 已决延期 | `RESOLVED` | 当前及已排定范围只启用竿、轮、线；SKU仅包含竿、轮、线 | 钩、漂、真饵和拟饵仅保留注册表与历史数据兼容；只读UI、草稿、生成、发布、Snapshot和所有环境/渠道导出全部关闭 | 2026-07-23产品确认“当前完全延期，未来另做产品设计”；未来任一部位启动前须另建产品设计Issue，不复用本项直接开工 |
+| OPEN-003 扩展部位启用 | 延后产品决策 | `DEFERRED_UI_DISABLED` | 当前及已排定范围只启用竿、轮、线；SKU仅包含竿、轮、线 | 钩、漂、真饵和拟饵仅保留注册表与历史数据兼容；只读UI、草稿、生成、发布、Snapshot和所有环境/渠道导出全部关闭 | 2026-07-23产品确认“当前完全延期，未来另做产品设计”；存在可校验的已发布`enabledItemPartPolicy`前不得标记`RESOLVED`，未来任一部位启动前仍须另建产品设计Issue |
 | OPEN-004 Patch属性偏移阈值 | 规则策略缺口 | `BLOCKED_ON_POLICY` | 计算和展示精确偏移，阈值从版本化策略读取 | 缺策略时产生`PATCH_OFFSET_POLICY_MISSING`；允许草稿试算，阻止依赖该阈值的批准和发布 | 平衡/规则负责人提供Series、SKU、Model各级warning/review/block阈值及边界归属 |
 | OPEN-005 五维图定义 | 产品决策 | `OPEN_CONFIGURED_SEED` | 可使用版本化种子定义进行预览，不得写死在UI/数据库 | 种子结果明示“草稿定义”；缺轴不补0，未发布定义不进Snapshot | 产品/数值负责人确认轴、聚合、缺值、系列基准和比较上限 |
 | OPEN-006 AI供应方与数据出网 | 安全/产品决策 | `BLOCKED_BEFORE_CONNECTOR` | AI交互壳、证据、权限和审计可实现 | 不得连接外部服务或发送真实数据；仅允许本地假数据/契约测试 | 安全、产品和数据负责人联合确认provider、字段白名单、保留周期和出网边界 |
@@ -991,7 +991,7 @@ ConfigurationSnapshot必须冻结有序Patch引用集合（`patchId + patchRevis
 
 ### OPEN-003：扩展部位启用时间
 
-2026-07-23产品决策：钩、漂、真饵和拟饵当前完全延期，未安排首批或后续启用顺序。此前讨论中的任何拟饵、钩、漂、真饵预排顺序均不生效。本项关闭的是“当前是否启用”的决策，不为未来产品形态预设答案。
+2026-07-23产品决策：钩、漂、真饵和拟饵当前完全延期，未安排首批或后续启用顺序。此前讨论中的任何拟饵、钩、漂、真饵预排顺序均不生效。本次只收敛“当前是否启用”的产品决策，不为未来产品形态预设答案，也不代表仓库已经发布可校验的`enabledItemPartPolicy`版本；因此OPEN-003继续保持`DEFERRED_UI_DISABLED`，不能标记`RESOLVED`。Issue #17可在决策写入权威规范后关闭，但运行时策略的实现与发布必须由后续独立Issue提供证据。
 
 当前确定边界：
 
@@ -1860,7 +1860,7 @@ type PrimaryDisplayState = "HARD_CONFLICT" | "REBASE_REQUIRED" | "REVIEW_REQUIRE
 
 ### 24.13 R12：开放配置与完成门槛
 
-版本化但不固化最终值：`patchOffsetPolicy`、`FiveAxisViewDefinition`、`aiRefreshPolicy`、`aiModelRecordPolicy`、`aiReviewPolicy`、`enabledItemPartPolicy`、`separationOfDutiesPolicy`、`qualityValueRangePolicy`、`PricingPolicy`与未来Performance扩展策略。当前有效`enabledItemPartPolicy`只能启用竿、轮、线；加入钩、漂、真饵或拟饵必须先满足OPEN-003规定的独立产品设计前置条件，不能仅修改策略开关。一期飞书规则写回不使用飞书审批；三期如增加职责分离，只能包裹“确认写回”和“发布RuleSetVersion”等动作。Snapshot冻结语义不是配置项，改变它必须先改权威规范并获用户明确确认。
+版本化但不固化最终值：`patchOffsetPolicy`、`FiveAxisViewDefinition`、`aiRefreshPolicy`、`aiModelRecordPolicy`、`aiReviewPolicy`、`enabledItemPartPolicy`、`separationOfDutiesPolicy`、`qualityValueRangePolicy`、`PricingPolicy`与未来Performance扩展策略。仓库当前没有可校验的已发布`enabledItemPartPolicy`版本，因此按OPEN-003的`DEFERRED_UI_DISABLED`行为fail-closed：产品流程只处理竿、轮、线，钩、漂、真饵和拟饵入口及动作全部关闭。未来策略即使加入这些部位，也必须先满足OPEN-003规定的独立产品设计前置条件，不能仅修改开关。一期飞书规则写回不使用飞书审批；三期如增加职责分离，只能包裹“确认写回”和“发布RuleSetVersion”等动作。Snapshot冻结语义不是配置项，改变它必须先改权威规范并获用户明确确认。
 
 正常路径：使用已发布策略版本并记录。  
 边界：配置缺失报配置不完整，不用页面默认；历史可只读。  

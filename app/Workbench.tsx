@@ -44,9 +44,6 @@ import { SeriesGanttWorkbenchV3 as SeriesGanttWorkbench } from "./SeriesGanttWor
 import { RuleWorkbookWorkbench } from "./RuleWorkbookWorkbench";
 import { PatchLedgerWorkbench } from "./PatchLedgerWorkbench";
 import {
-  generateCandidatesForRecipe,
-  publishCandidate,
-  recalculateWorkspace,
   suggestRulesFromOverrides,
 } from "@/lib/engine";
 import {
@@ -62,6 +59,10 @@ import {
   isProductItemPartEnabled,
   seriesItemPartId,
 } from "@/lib/enabled-item-parts";
+import {
+  preserveReadOnlyLegacyProductHistory,
+  resolveCompatibleWorkbenchPage,
+} from "@/lib/legacy-history";
 import {
   buildProductBreadcrumbs,
   type BreadcrumbItem,
@@ -80,9 +81,7 @@ import type {
   Candidate,
   DimensionKey,
   ItemKind,
-  OfficialSku,
   RevisionInfo,
-  SeriesRecipe,
   SeriesShowcaseEntry,
   WorkspaceState,
 } from "@/lib/types";
@@ -131,11 +130,11 @@ const pageMeta: Record<PageKey, { title: string; subtitle: string }> = {
   rulegraph: { title: "规则图与执行中心", subtitle: "DAG 编排、条件分支、手动节点、人工审阅中间表和下游输出" },
   affixes: { title: "词条库", subtitle: "直接属性词条与被动机制词条共同决定装备能力和品质分" },
   quality: { title: "品质评分", subtitle: "有损相加、协同、冲突与品质阈值完全可配置" },
-  recipes: { title: "系列 / SKU 配方", subtitle: "系列指定模板、定位约束、必带词条和可选词条池" },
+  recipes: { title: "历史 SeriesRecipe", subtitle: "只读查看旧系列配方与迁移状态；不再生成或修改正式产品" },
   showcase: { title: "历史系列演示", subtitle: "只读兼容旧 SeriesShowcase 数据；正式 Series 请在钓具系列甘特图创建" },
   candidates: { title: "钓具系列甘特图", subtitle: "按离散重量规划 Series、SKU 抽屉与可购买 Model" },
-  skus: { title: "正式 SKU", subtitle: "已发布组合及自动生成的杆、轮、线 ID 和验收结果" },
-  details: { title: "杆轮线明细", subtitle: "按正式 SKU 展开具体配置，并可自定义型号、名称与数值" },
+  skus: { title: "历史 OfficialSku", subtitle: "只读查看旧发布组合及其 v3 迁移结果" },
+  details: { title: "历史明细覆盖", subtitle: "只读查看旧杆、轮、线 DetailOverride payload" },
   validation: { title: "校验与规则学习", subtitle: "强度闭环、模板覆盖、异常检查和精调规律候选" },
   versions: { title: "版本记录", subtitle: "团队共享配置的保存记录、冲突保护和历史恢复" },
   rulesource: { title: "飞书规则源", subtitle: "检查唯一规则工作簿、显式拉取源修订，并独立创建 RuleSet 草稿" },
@@ -162,16 +161,21 @@ const navGroups: Array<{ label: string; items: Array<{ key: PageKey; label: stri
     items: [
       { key: "affixes", label: "词条库", icon: Tag },
       { key: "quality", label: "品质评分", icon: Sparkles },
-      { key: "recipes", label: "系列配方", icon: WandSparkles },
-      { key: "showcase", label: "历史系列演示", icon: GitCompareArrows },
     ],
   },
   {
     label: "生产",
     items: [
       { key: "candidates", label: "钓具系列甘特图", icon: PackageSearch },
-      { key: "skus", label: "正式 SKU", icon: Boxes },
-      { key: "details", label: "杆轮线明细", icon: ListChecks },
+    ],
+  },
+  {
+    label: "历史归档",
+    items: [
+      { key: "recipes", label: "旧系列配方", icon: WandSparkles },
+      { key: "showcase", label: "历史系列演示", icon: GitCompareArrows },
+      { key: "skus", label: "旧 OfficialSku", icon: Boxes },
+      { key: "details", label: "旧明细覆盖", icon: ListChecks },
     ],
   },
   {
@@ -273,14 +277,16 @@ function TextInput({
   placeholder,
   min,
   step,
+  readOnly = false,
 }: {
   value: string | number | undefined;
-  onChange: (value: string) => void;
+  onChange?: (value: string) => void;
   type?: "text" | "number";
   className?: string;
   placeholder?: string;
   min?: number;
   step?: number;
+  readOnly?: boolean;
 }) {
   return (
     <input
@@ -290,7 +296,9 @@ function TextInput({
       min={min}
       step={step}
       placeholder={placeholder}
-      onChange={(event) => onChange(event.target.value)}
+      readOnly={readOnly}
+      aria-readonly={readOnly}
+      onChange={(event) => onChange?.(event.target.value)}
     />
   );
 }
@@ -330,6 +338,30 @@ function Pill({
     <span className={cx("pill", "pill-" + tone)} style={style}>
       {children}
     </span>
+  );
+}
+
+function LegacyHistoryNotice({
+  title,
+  detail,
+  diagnostic,
+  onOpenV3,
+}: {
+  title: string;
+  detail: string;
+  diagnostic: string;
+  onOpenV3: () => void;
+}) {
+  return (
+    <Card className="legacy-history-notice">
+      <LockKeyhole size={20} aria-hidden="true" />
+      <div>
+        <strong>{title}</strong>
+        <p>{detail}</p>
+        <small>{diagnostic}</small>
+      </div>
+      <Button tone="primary" size="sm" onClick={onOpenV3}>前往 v3 正式流程</Button>
+    </Card>
   );
 }
 
@@ -417,7 +449,7 @@ function copyState<T>(value: T): T {
 }
 
 export function Workbench({ initialState }: { initialState: WorkspaceState }) {
-  const [state, setState] = useState<WorkspaceState>(() => recalculateWorkspace(ensureWorkflowFields(initialState)));
+  const [state, setState] = useState<WorkspaceState>(() => ensureWorkflowFields(initialState));
   const [page, setPage] = useState<PageKey>("overview");
   const [pageRouteReady, setPageRouteReady] = useState(false);
   const [routeNonce, setRouteNonce] = useState(0);
@@ -447,7 +479,6 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   const [selectedCandidateId, setSelectedCandidateId] = useState("");
   const [compareIds, setCompareIds] = useState<string[]>([]);
   const [compareOpen, setCompareOpen] = useState(false);
-  const [bulkAffixId, setBulkAffixId] = useState("");
   const [candidateStatus, setCandidateStatus] = useState("all");
   const [detailKind, setDetailKind] = useState<ItemKind>("rod");
   const [versions, setVersions] = useState<RevisionInfo[]>(initialState.revisions);
@@ -461,9 +492,9 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   >("");
 
   useEffect(() => {
-    const requested = new URL(window.location.href).searchParams.get("page") as PageKey | null;
+    const requested = new URL(window.location.href).searchParams.get("page");
     const frame = window.requestAnimationFrame(() => {
-      if (requested && PAGE_KEYS.has(requested)) setPage(requested);
+      setPage((current) => resolveCompatibleWorkbenchPage(requested, PAGE_KEYS, current));
       setPageRouteReady(true);
     });
     return () => window.cancelAnimationFrame(frame);
@@ -476,7 +507,8 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
   }, [page, pageRouteReady]);
 
-  const mutate = (producer: (draft: WorkspaceState) => void, recalculate = true) => {
+  const mutate = (producer: (draft: WorkspaceState) => void, legacyRecalculationRequested = true) => {
+    void legacyRecalculationRequested;
     if (authStatus !== "authenticated") {
       notify("请先使用公司飞书账号登录；未登录状态不允许编辑。");
       return;
@@ -484,7 +516,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     setState((current) => {
       const draft = copyState(current);
       producer(draft);
-      return recalculate ? recalculateWorkspace(draft) : draft;
+      return preserveReadOnlyLegacyProductHistory(current, draft);
     });
     setDirty(true);
     setSyncState("ready");
@@ -537,7 +569,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         const stateResponse = await fetch("/api/state", { cache: "no-store" });
         if (!stateResponse.ok) throw new Error("state-service");
         const payload = await stateResponse.json() as ApiStatePayload;
-        setState(recalculateWorkspace(ensureWorkflowFields(payload.state)));
+        setState(ensureWorkflowFields(payload.state));
         setDirty(false);
         setRevision(payload.revision);
         setUser(payload.user);
@@ -735,7 +767,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       if (!response.ok || !payload.state || !payload.revision) {
         throw new Error(payload.error || "发布失败");
       }
-      setState(recalculateWorkspace(ensureWorkflowFields(payload.state)));
+      setState(ensureWorkflowFields(payload.state));
       setRevision(payload.revision);
       setDirty(false);
       setSyncState("saved");
@@ -820,7 +852,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       if (!response.ok || !payload.state || !payload.revision) {
         throw new Error(payload.error || "回写失败");
       }
-      setState(recalculateWorkspace(ensureWorkflowFields(payload.state)));
+      setState(ensureWorkflowFields(payload.state));
       setRevision(payload.revision);
       setDirty(false);
       setSyncState("saved");
@@ -901,12 +933,6 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           if (rule.parameterKey === oldKey) rule.parameterKey = newKey;
         }),
       );
-      draft.candidates.forEach((candidate) => migrateRecord(candidate.overrides));
-      draft.officialSkus.forEach((sku) => {
-        migrateRecord(sku.values);
-        migrateRecord(sku.overrides);
-      });
-      draft.detailOverrides.forEach((detail) => migrateRecord(detail.values));
     });
   };
 
@@ -924,7 +950,6 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       draft.affixes.forEach((affix) => {
         affix.rules = affix.rules.filter((rule) => rule.parameterKey !== key);
       });
-      draft.candidates.forEach((candidate) => delete candidate.overrides[key]);
     });
   };
 
@@ -980,88 +1005,6 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         notes: "",
         enabled: true,
       });
-    });
-  };
-
-  const generateRecipe = (recipe: SeriesRecipe) => {
-    mutate((draft) => {
-      const current = draft.recipes.find((item) => item.id === recipe.id);
-      if (!current) return;
-      const generated = generateCandidatesForRecipe(draft, current);
-      draft.candidates = draft.candidates.filter(
-        (candidate) => candidate.recipeId !== recipe.id || candidate.status === "published",
-      );
-      draft.candidates.push(...generated);
-    });
-    setPage("candidates");
-    setCandidateStatus("all");
-    notify("已按约束生成“" + recipe.name + "”候选。");
-  };
-
-  const applyCandidateStatus = (status: Candidate["status"]) => {
-    if (!selectedCandidates.size) return;
-    mutate((draft) => {
-      draft.candidates.forEach((candidate) => {
-        if (selectedCandidates.has(candidate.id)) candidate.status = status;
-      });
-    });
-    notify("已批量更新 " + selectedCandidates.size + " 条候选。");
-  };
-
-  const applyBulkAffix = () => {
-    if (!bulkAffixId || !selectedCandidates.size) return;
-    mutate((draft) => {
-      draft.candidates.forEach((candidate) => {
-        if (selectedCandidates.has(candidate.id) && !candidate.affixIds.includes(bulkAffixId)) {
-          candidate.affixIds.push(bulkAffixId);
-        }
-      });
-    });
-    notify("已批量追加词条并重算品质。");
-  };
-
-  const publishSelected = () => {
-    if (!selectedCandidates.size) return;
-    mutate((draft) => {
-      for (const candidate of draft.candidates) {
-        if (!selectedCandidates.has(candidate.id)) continue;
-        const sku = publishCandidate(draft, candidate);
-        const existing = draft.officialSkus.findIndex((item) => item.comboId === sku.comboId);
-        if (existing >= 0) draft.officialSkus[existing] = sku;
-        else draft.officialSkus.push(sku);
-        candidate.status = "published";
-      }
-    });
-    notify("已发布 " + selectedCandidates.size + " 套正式 SKU。");
-    setPage("skus");
-  };
-
-  const updateDetail = (
-    sku: OfficialSku,
-    kind: ItemKind,
-    field: "model" | "name" | "notes" | string,
-    value: string | number,
-  ) => {
-    mutate((draft) => {
-      let detail = draft.detailOverrides.find(
-        (item) => item.skuId === sku.id && item.itemKind === kind,
-      );
-      if (!detail) {
-        detail = {
-          skuId: sku.id,
-          itemKind: kind,
-          model: "",
-          name: "",
-          values: {},
-          notes: "",
-        };
-        draft.detailOverrides.push(detail);
-      }
-      if (field === "model" || field === "name" || field === "notes") {
-        detail[field] = String(value);
-      } else {
-        detail.values[field] = value;
-      }
     });
   };
 
@@ -1288,7 +1231,10 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         });
         const serialized = rows.slice(1).map((row) => String(row[1] ?? "")).join("");
         const imported = migrateWorkspaceState(JSON.parse(serialized));
-        setState(recalculateWorkspace(ensureWorkflowFields(imported)));
+        setState((current) => preserveReadOnlyLegacyProductHistory(
+          current,
+          ensureWorkflowFields(imported),
+        ));
       } else {
         const sheet = workbook.Sheets["01重量模板"];
         if (!sheet) throw new Error("找不到 01重量模板 或内部状态页。");
@@ -1346,8 +1292,8 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           {[
             { label: "重量模板", value: state.templates.length, hint: state.parameters.length + " 个动态参数", color: "teal" },
             { label: "规则选项", value: state.modifiers.length, hint: state.layers.length + " 层规则栈", color: "blue" },
-            { label: "Model 候选", value: state.candidates.length, hint: state.recipes.length + " 个系列配方", color: "purple" },
-            { label: "正式 SKU", value: state.officialSkus.length, hint: errorCount + " 错误 / " + warningCount + " 警告", color: "amber" },
+            { label: "历史 Candidate", value: state.candidates.length, hint: state.recipes.length + " 个只读 SeriesRecipe", color: "purple" },
+            { label: "历史 OfficialSku", value: state.officialSkus.length, hint: errorCount + " 错误 / " + warningCount + " 警告", color: "amber" },
           ].map((metric) => (
             <Card key={metric.label} className={"metric-card metric-" + metric.color}>
               <span>{metric.label}</span>
@@ -1360,11 +1306,11 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         <Card className="pipeline-card">
           <div className="card-heading">
             <div>
-              <span className="eyebrow">生成闭环</span>
-              <h2>从标准装备到可发布 SKU</h2>
+              <span className="eyebrow">历史生成闭环 · 只读</span>
+              <h2>旧流程仅用于迁移诊断</h2>
             </div>
-            <Button tone="primary" icon={WandSparkles} onClick={() => setPage("recipes")}>
-              开始生成
+            <Button tone="primary" icon={WandSparkles} onClick={() => setPage("candidates")}>
+              进入 v3 正式流程
             </Button>
           </div>
           <div className="pipeline">
@@ -1372,8 +1318,8 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
               ["01", "标准模板", "钓法 × 重量段", state.templates.length + " 项"],
               ["02", "分层修正", "类型、定位、技术", state.layers.length + " 层"],
               ["03", "词条品质", "属性 + 被动机制", state.affixes.length + " 条"],
-              ["04", "Model 候选", "筛选、比较、精调", state.candidates.length + " 个"],
-              ["05", "正式发布", "杆轮线明细", state.officialSkus.length + " 套"],
+              ["04", "历史 Candidate", "筛选、比较、Trace", state.candidates.length + " 个"],
+              ["05", "历史 OfficialSku", "只读杆轮线明细", state.officialSkus.length + " 套"],
             ].map(([index, title, subtitle, count], position) => (
               <div className="pipeline-step" key={index}>
                 <div className="step-number">{index}</div>
@@ -2049,61 +1995,29 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     notify("系列已从跨度图移除。");
   };
 
-  const toggleRecipeList = (
-    recipeId: string,
-    field: "templateIds" | "structureIds" | "functionIds" | "performanceIds" | "technologyIds" | "requiredAffixIds" | "optionalAffixPoolIds",
-    value: string,
-  ) => {
-    mutate((draft) => {
-      const recipe = draft.recipes.find((item) => item.id === recipeId);
-      if (!recipe) return;
-      const list = recipe[field];
-      recipe[field] = list.includes(value) ? list.filter((item) => item !== value) : [...list, value];
-    });
-  };
-
   const renderRecipes = () => {
     const selected = state.recipes.find((recipe) => recipe.id === selectedRecipeId) ?? state.recipes[0];
+    const migratedCount = new Set(
+      state.candidateSearchRecipes
+        .map((recipe) => recipe.sourceLegacyRecipeId)
+        .filter(Boolean),
+    ).size;
     return (
       <div className="page-stack">
-        <div className="toolbar">
-          <div className="toolbar-note">配方只定义允许范围；生成器对范围做受约束组合，不做无界笛卡尔积。</div>
-          <div className="toolbar-spacer" />
-          <Button tone="primary" icon={Plus} onClick={() => {
-            const id = "recipe-" + crypto.randomUUID();
-            mutate((draft) => draft.recipes.push({
-              id,
-              name: "新系列",
-              platformId: "P" + String(draft.recipes.length + 1).padStart(2, "0"),
-              platformPosition: "",
-              templateIds: [],
-              structureIds: [],
-              functionIds: [],
-              performanceIds: [],
-              technologyIds: [],
-              requiredAffixIds: [],
-              optionalAffixPoolIds: [],
-              optionalSlots: 0,
-              qualityTarget: "蓝",
-              fishMinKg: 0,
-              fishMaxKg: 1,
-              useScene: "",
-              maxCandidates: 50,
-              notes: "",
-              enabled: true,
-            }));
-            setSelectedRecipeId(id);
-          }}>新增配方</Button>
-        </div>
+        <LegacyHistoryNotice
+          title="SeriesRecipe 已转为只读历史"
+          detail="保留旧配方 payload 供审计与迁移；此页面不再新增、编辑或生成候选。新的候选搜索使用 v3 CandidateSearchRecipe。"
+          diagnostic={`迁移诊断：历史配方 ${state.recipes.length} 条，已有来源绑定 ${migratedCount} 条。竿/轮/线分部位约束语义仍由 AUD-026 待确认，本页面不会解释或改写。`}
+          onOpenV3={() => setPage("candidates")}
+        />
         <div className="recipe-layout">
           <Card className="flush-card">
             <SheetTable>
-              <thead><tr><th>系列</th><th>平台ID</th><th>平台定位</th><th>目标品质</th><th>模板</th><th>必带词条</th><th>候选上限</th><th /></tr></thead>
+              <thead><tr><th>系列</th><th>平台ID</th><th>平台定位</th><th>历史品质</th><th>模板</th><th>必带词条</th><th>候选上限</th></tr></thead>
               <tbody>{state.recipes.map((recipe) => (
                 <tr key={recipe.id} className={selected?.id === recipe.id ? "selected-row" : ""} onClick={() => setSelectedRecipeId(recipe.id)}>
                   <td><strong>{recipe.name}</strong></td><td>{recipe.platformId}</td><td>{recipe.platformPosition}</td>
                   <td><Pill tone="blue">{recipe.qualityTarget}</Pill></td><td>{recipe.templateIds.length || "全部"}</td><td>{recipe.requiredAffixIds.length}</td><td>{recipe.maxCandidates}</td>
-                  <td><Button icon={WandSparkles} size="sm" tone="primary" title="生成候选" onClick={() => generateRecipe(recipe)} /></td>
                 </tr>
               ))}</tbody>
             </SheetTable>
@@ -2111,36 +2025,36 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           {selected ? (
             <Card className="recipe-inspector">
               <div className="panel-title">
-                <div><span className="eyebrow">系列生成配方</span><h3>{selected.name}</h3></div>
-                <Button icon={WandSparkles} tone="primary" size="sm" onClick={() => generateRecipe(selected)}>生成候选</Button>
+                <div><span className="eyebrow">只读历史配方</span><h3>{selected.name}</h3></div>
+                <Pill tone="neutral">不可编辑</Pill>
               </div>
               <div className="form-grid">
-                <label className="field-label">系列名<TextInput value={selected.name} onChange={(value) => mutate((draft) => { const target = draft.recipes.find((item) => item.id === selected.id); if (target) target.name = value; })} /></label>
-                <label className="field-label">平台ID<TextInput value={selected.platformId} onChange={(value) => mutate((draft) => { const target = draft.recipes.find((item) => item.id === selected.id); if (target) target.platformId = value; })} /></label>
-                <label className="field-label span-2">平台定位<TextInput value={selected.platformPosition} onChange={(value) => mutate((draft) => { const target = draft.recipes.find((item) => item.id === selected.id); if (target) target.platformPosition = value; })} /></label>
-                <label className="field-label">鱼重下限kg<TextInput type="number" value={selected.fishMinKg} onChange={(value) => mutate((draft) => { const target = draft.recipes.find((item) => item.id === selected.id); if (target) target.fishMinKg = Number(value); })} /></label>
-                <label className="field-label">鱼重上限kg<TextInput type="number" value={selected.fishMaxKg} onChange={(value) => mutate((draft) => { const target = draft.recipes.find((item) => item.id === selected.id); if (target) target.fishMaxKg = Number(value); })} /></label>
-                <label className="field-label">可选词条槽<TextInput type="number" value={selected.optionalSlots} onChange={(value) => mutate((draft) => { const target = draft.recipes.find((item) => item.id === selected.id); if (target) target.optionalSlots = Number(value); })} /></label>
-                <label className="field-label">候选上限<TextInput type="number" value={selected.maxCandidates} onChange={(value) => mutate((draft) => { const target = draft.recipes.find((item) => item.id === selected.id); if (target) target.maxCandidates = Number(value); })} /></label>
+                <label className="field-label">系列名<TextInput value={selected.name} readOnly /></label>
+                <label className="field-label">平台ID<TextInput value={selected.platformId} readOnly /></label>
+                <label className="field-label span-2">平台定位<TextInput value={selected.platformPosition} readOnly /></label>
+                <label className="field-label">鱼重下限kg<TextInput type="number" value={selected.fishMinKg} readOnly /></label>
+                <label className="field-label">鱼重上限kg<TextInput type="number" value={selected.fishMaxKg} readOnly /></label>
+                <label className="field-label">可选词条槽<TextInput type="number" value={selected.optionalSlots} readOnly /></label>
+                <label className="field-label">候选上限<TextInput type="number" value={selected.maxCandidates} readOnly /></label>
               </div>
               <div className="recipe-section"><strong>重量模板</strong><div className="check-grid">{state.templates.map((template) => (
-                <label key={template.id}><input type="checkbox" checked={selected.templateIds.includes(template.id)} onChange={() => toggleRecipeList(selected.id, "templateIds", template.id)} />{template.id} · {template.tier}</label>
+                <label key={template.id}><input type="checkbox" checked={selected.templateIds.includes(template.id)} disabled />{template.id} · {template.tier}</label>
               ))}</div></div>
               {(["structure", "function", "performance", "technology"] as DimensionKey[]).map((key) => {
                 const field = key === "structure" ? "structureIds" : key === "function" ? "functionIds" : key === "performance" ? "performanceIds" : "technologyIds";
                 return (
                   <div className="recipe-section" key={key}><strong>{dimensionLabels[key]}</strong><div className="check-grid">
                     {state.modifiers.filter((item) => item.dimension === key).map((option) => (
-                      <label key={option.id}><input type="checkbox" checked={selected[field].includes(option.id)} onChange={() => toggleRecipeList(selected.id, field, option.id)} />{option.name} {String(option.level) === "—" ? "" : option.level}</label>
+                      <label key={option.id}><input type="checkbox" checked={selected[field].includes(option.id)} disabled />{option.name} {String(option.level) === "—" ? "" : option.level}</label>
                     ))}
                   </div></div>
                 );
               })}
               <div className="recipe-section"><strong>必带词条</strong><div className="check-grid">{state.affixes.map((affix) => (
-                <label key={affix.id}><input type="checkbox" checked={selected.requiredAffixIds.includes(affix.id)} onChange={() => toggleRecipeList(selected.id, "requiredAffixIds", affix.id)} />{affix.name} · {affix.score}分</label>
+                <label key={affix.id}><input type="checkbox" checked={selected.requiredAffixIds.includes(affix.id)} disabled />{affix.name} · {affix.score}分</label>
               ))}</div></div>
               <div className="recipe-section"><strong>可选词条池</strong><div className="check-grid">{state.affixes.map((affix) => (
-                <label key={affix.id}><input type="checkbox" checked={selected.optionalAffixPoolIds.includes(affix.id)} onChange={() => toggleRecipeList(selected.id, "optionalAffixPoolIds", affix.id)} />{affix.name}</label>
+                <label key={affix.id}><input type="checkbox" checked={selected.optionalAffixPoolIds.includes(affix.id)} disabled />{affix.name}</label>
               ))}</div></div>
             </Card>
           ) : null}
@@ -2342,7 +2256,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     return (
       <aside className="candidate-inspector">
         <div className="inspector-head">
-          <div><span className="eyebrow">候选精调</span><h3>{candidate.comboId}</h3><p>{candidate.seriesName} · {template?.tier}</p></div>
+          <div><span className="eyebrow">只读历史 Candidate</span><h3>{candidate.comboId}</h3><p>{candidate.seriesName} · {template?.tier}</p></div>
           <button type="button" onClick={() => setSelectedCandidateId("")}><X size={18} /></button>
         </div>
         <div className="inspector-scroll">
@@ -2363,50 +2277,29 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
             {candidate.calculated.quality.penalties.map((text) => <div className="penalty" key={text}><span>{text}</span></div>)}
           </div>
           <div className="form-grid">
-            <label className="field-label span-2">系列名<TextInput value={candidate.seriesName} onChange={(value) => mutate((draft) => { const target = draft.candidates.find((item) => item.id === candidate.id); if (target) target.seriesName = value; })} /></label>
-            <label className="field-label">目标下限kg<TextInput type="number" value={candidate.fishMinKg} onChange={(value) => mutate((draft) => { const target = draft.candidates.find((item) => item.id === candidate.id); if (target) target.fishMinKg = Number(value); })} /></label>
-            <label className="field-label">目标上限kg<TextInput type="number" value={candidate.fishMaxKg} onChange={(value) => mutate((draft) => { const target = draft.candidates.find((item) => item.id === candidate.id); if (target) target.fishMaxKg = Number(value); })} /></label>
-            <label className="field-label">调性覆盖<TextInput value={candidate.toneOverride ?? ""} onChange={(value) => mutate((draft) => { const target = draft.candidates.find((item) => item.id === candidate.id); if (target) target.toneOverride = value; })} /></label>
-            <label className="field-label">硬度覆盖<TextInput value={candidate.hardnessOverride ?? ""} onChange={(value) => mutate((draft) => { const target = draft.candidates.find((item) => item.id === candidate.id); if (target) target.hardnessOverride = value; })} /></label>
-            <label className="field-label span-2">长度覆盖m<TextInput type="number" value={candidate.lengthOverride ?? ""} placeholder="自动" onChange={(value) => mutate((draft) => { const target = draft.candidates.find((item) => item.id === candidate.id); if (target) target.lengthOverride = value === "" ? undefined : Number(value); })} /></label>
-            <label className="field-label span-2">使用场景<textarea value={candidate.useScene} onChange={(event) => mutate((draft) => { const target = draft.candidates.find((item) => item.id === candidate.id); if (target) target.useScene = event.target.value; }, false)} /></label>
+            <label className="field-label span-2">系列名<TextInput value={candidate.seriesName} readOnly /></label>
+            <label className="field-label">目标下限kg<TextInput type="number" value={candidate.fishMinKg} readOnly /></label>
+            <label className="field-label">目标上限kg<TextInput type="number" value={candidate.fishMaxKg} readOnly /></label>
+            <label className="field-label">调性覆盖<TextInput value={candidate.toneOverride ?? ""} readOnly /></label>
+            <label className="field-label">硬度覆盖<TextInput value={candidate.hardnessOverride ?? ""} readOnly /></label>
+            <label className="field-label span-2">长度覆盖m<TextInput type="number" value={candidate.lengthOverride ?? ""} placeholder="自动" readOnly /></label>
+            <label className="field-label span-2">使用场景<textarea value={candidate.useScene} readOnly aria-readonly="true" /></label>
           </div>
           <div className="inspector-section">
             <div className="section-title"><strong>词条</strong><span>{candidate.affixIds.length} 条</span></div>
             <div className="affix-checks">{state.affixes.map((affix) => (
               <label key={affix.id} className={candidate.affixIds.includes(affix.id) ? "checked" : ""}>
-                <input type="checkbox" checked={candidate.affixIds.includes(affix.id)} onChange={() => mutate((draft) => {
-                  const target = draft.candidates.find((item) => item.id === candidate.id);
-                  if (!target) return;
-                  target.affixIds = target.affixIds.includes(affix.id) ? target.affixIds.filter((id) => id !== affix.id) : [...target.affixIds, affix.id];
-                })} />
+                <input type="checkbox" checked={candidate.affixIds.includes(affix.id)} disabled />
                 <span>{affix.name}<small>{affix.score}分 · {affix.category === "stat" ? "属性" : "被动"}</small></span>
               </label>
             ))}</div>
           </div>
           <div className="inspector-section">
-            <div className="section-title"><strong>手工参数覆盖</strong><Button icon={Plus} size="sm" tone="ghost" onClick={() => mutate((draft) => {
-              const target = draft.candidates.find((item) => item.id === candidate.id);
-              const parameter = draft.parameters.find((item) => !(item.key in (target?.overrides ?? {})));
-              if (target && parameter) target.overrides[parameter.key] = Number(target.calculated.values[parameter.key] ?? 0);
-            })}>添加</Button></div>
+            <div className="section-title"><strong>历史手工参数覆盖</strong><span>只读</span></div>
             {Object.entries(candidate.overrides).map(([key, value]) => (
               <div className="override-row" key={key}>
-                <SelectInput value={key} onChange={(next) => mutate((draft) => {
-                  const target = draft.candidates.find((item) => item.id === candidate.id);
-                  if (!target) return;
-                  const current = target.overrides[key];
-                  delete target.overrides[key];
-                  target.overrides[next] = current;
-                })}>{state.parameters.map((parameter) => <option key={parameter.key} value={parameter.key}>{parameter.label}</option>)}</SelectInput>
-                <TextInput value={value} type={typeof value === "number" ? "number" : "text"} onChange={(next) => mutate((draft) => {
-                  const target = draft.candidates.find((item) => item.id === candidate.id);
-                  if (target) target.overrides[key] = typeof value === "number" ? Number(next) : next;
-                })} />
-                <Button icon={Trash2} size="sm" tone="ghost" onClick={() => mutate((draft) => {
-                  const target = draft.candidates.find((item) => item.id === candidate.id);
-                  if (target) delete target.overrides[key];
-                })} />
+                <code>{key}</code>
+                <TextInput value={value} type={typeof value === "number" ? "number" : "text"} readOnly />
               </div>
             ))}
           </div>
@@ -2429,9 +2322,19 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   const renderCandidates = () => {
     const selectedCandidate = state.candidates.find((candidate) => candidate.id === selectedCandidateId);
     const allVisibleSelected = filteredCandidates.length > 0 && filteredCandidates.every((candidate) => selectedCandidates.has(candidate.id));
+    const traceCount = state.candidates.reduce(
+      (total, candidate) => total + candidate.calculated.trace.length,
+      0,
+    );
     return (
       <div className="candidate-page">
         <div className="page-stack">
+          <LegacyHistoryNotice
+            title="旧 Candidate 结果仅供迁移审计"
+            detail="历史候选 payload、状态、覆盖和 Calculation Trace 原样保留。可以筛选、选择、比较和查看，但不能入围、淘汰、精调或发布 OfficialSku。"
+            diagnostic={`迁移诊断：历史 Candidate ${state.candidates.length} 条，保留 Trace ${traceCount} 步；v3 Model ${state.purchasableModels.length} 个。`}
+            onOpenV3={() => setPage("v3flow")}
+          />
           <div className="toolbar wrap-toolbar">
             <div className="search-box"><Search size={15} /><input value={search} placeholder="搜索组合ID、系列、平台定位…" onChange={(event) => setSearch(event.target.value)} /></div>
             <SelectInput value={candidateStatus} onChange={setCandidateStatus}>
@@ -2439,14 +2342,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
             </SelectInput>
             <div className="toolbar-spacer" />
             <span className="selection-count">已选 {selectedCandidates.size}</span>
-            <Button size="sm" onClick={() => applyCandidateStatus("shortlisted")}>入围</Button>
-            <Button size="sm" tone="ghost" onClick={() => applyCandidateStatus("rejected")}>淘汰</Button>
-            <SelectInput value={bulkAffixId} onChange={setBulkAffixId} className="bulk-select">
-              <option value="">批量词条…</option>{state.affixes.map((affix) => <option key={affix.id} value={affix.id}>{affix.name}</option>)}
-            </SelectInput>
-            <Button size="sm" onClick={applyBulkAffix} disabled={!bulkAffixId}>应用</Button>
             <Button size="sm" icon={GitCompareArrows} onClick={() => setCompareOpen(true)} disabled={!compareIds.length}>比较 {compareIds.length}</Button>
-            <Button size="sm" icon={Check} tone="primary" onClick={publishSelected} disabled={!selectedCandidates.size}>发布 SKU</Button>
           </div>
           <Card className="flush-card">
             <SheetTable>
@@ -2486,7 +2382,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
               })}</tbody>
             </SheetTable>
           </Card>
-          {!filteredCandidates.length ? <EmptyState title="没有符合条件的候选" text="从系列配方生成，或调整筛选条件。" action={<Button tone="primary" onClick={() => setPage("recipes")}>前往系列配方</Button>} /> : null}
+          {!filteredCandidates.length ? <EmptyState title="没有符合条件的历史候选" text="调整只读筛选条件，或前往 v3 正式流程生成新的 Model 候选。" action={<Button tone="primary" onClick={() => setPage("v3flow")}>前往 v3 正式流程</Button>} /> : null}
         </div>
         {selectedCandidate ? renderCandidateInspector(selectedCandidate) : null}
       </div>
@@ -2495,26 +2391,28 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
 
   const renderSkus = () => (
     <div className="page-stack">
-      <div className="toolbar"><div className="toolbar-note">正式 SKU 来自候选发布；再次发布同组合ID会更新原记录。</div><div className="toolbar-spacer" /><Button icon={Download} onClick={() => void exportExcel()}>导出 Excel</Button></div>
+      <LegacyHistoryNotice
+        title="OfficialSku 已转为只读历史"
+        detail="旧发布组合保留用于审计、导出和确定性迁移；SKU 只表示历史结构，不再作为 v3 的购买对象或写入入口。"
+        diagnostic={`迁移诊断：OfficialSku ${state.officialSkus.length} 条；v3 SKU Drawer ${state.skuDrawers.length} 个、Model ${state.purchasableModels.length} 个、冻结 Snapshot ${state.configurationSnapshots.length} 个。`}
+        onOpenV3={() => setPage("candidates")}
+      />
+      <div className="toolbar"><div className="toolbar-note">只读导出会保留原始历史 payload，不生成或改写正式对象。</div><div className="toolbar-spacer" /><Button icon={Download} onClick={() => void exportExcel()}>导出历史 Excel</Button></div>
       {state.officialSkus.length ? (
         <Card className="flush-card"><SheetTable><thead><tr>
-          <th className="sticky-col">组合ID</th><th>平台ID</th><th>平台定位</th><th>模板</th><th>品质</th><th>系列</th><th>结构</th><th>功能</th><th>性能</th><th>调性覆盖</th><th>硬度</th><th>长度m</th><th>使用场景</th><th>杆ID</th><th>轮ID</th><th>线ID</th><th>价格指数</th><th>杆拉力</th><th>轮拉力</th><th>线拉力</th><th>安全拉力</th><th />
-        </tr></thead><tbody>{state.officialSkus.map((sku, index) => (
+          <th className="sticky-col">组合ID</th><th>平台ID</th><th>平台定位</th><th>模板</th><th>历史品质</th><th>系列</th><th>结构</th><th>功能</th><th>性能</th><th>调性覆盖</th><th>硬度</th><th>长度m</th><th>使用场景</th><th>杆ID</th><th>轮ID</th><th>线ID</th><th>价格指数</th><th>杆拉力</th><th>轮拉力</th><th>线拉力</th><th>安全拉力</th>
+        </tr></thead><tbody>{state.officialSkus.map((sku) => (
           <tr key={sku.id}>
             <td className="sticky-col"><strong>{sku.comboId}</strong></td><td>{sku.platformId}</td><td>{sku.platformPosition}</td><td>{sku.templateId}</td>
             <td><Pill style={{ color: qualityColor(state, sku.qualityId), borderColor: qualityColor(state, sku.qualityId) }}>{qualityName(state, sku.qualityId)}</Pill></td>
-            <td><TextInput value={sku.seriesName} onChange={(value) => mutate((draft) => { draft.officialSkus[index].seriesName = value; }, false)} /></td>
+            <td>{sku.seriesName}</td>
             <td>{sku.structureName}</td><td>{sku.functionName} {sku.functionLevel}</td><td>{sku.performanceName} {sku.performanceLevel}</td>
-            <td><TextInput value={sku.tone} onChange={(value) => mutate((draft) => { draft.officialSkus[index].tone = value; }, false)} /></td>
-            <td><TextInput value={sku.hardness} onChange={(value) => mutate((draft) => { draft.officialSkus[index].hardness = value; }, false)} /></td>
-            <td><TextInput type="number" value={sku.lengthM} onChange={(value) => mutate((draft) => { draft.officialSkus[index].lengthM = Number(value); }, false)} /></td>
-            <td><TextInput value={sku.useScene} onChange={(value) => mutate((draft) => { draft.officialSkus[index].useScene = value; }, false)} /></td>
+            <td>{sku.tone || "—"}</td><td>{sku.hardness || "—"}</td><td>{formatNumber(sku.lengthM)}</td><td>{sku.useScene || "—"}</td>
             <td><code>{sku.rodId}</code></td><td><code>{sku.reelId}</code></td><td><code>{sku.lineId}</code></td>
             <td>×{sku.priceIndex}</td><td>{formatNumber(sku.rodForce)}</td><td>{formatNumber(sku.reelForce)}</td><td>{formatNumber(sku.lineForce)}</td><td>{formatNumber(sku.safeWorkingForce, 3)}</td>
-            <td><Button icon={Trash2} size="sm" tone="ghost" onClick={() => mutate((draft) => { draft.officialSkus.splice(index, 1); }, false)} /></td>
           </tr>
         ))}</tbody></SheetTable></Card>
-      ) : <EmptyState title="还没有正式 SKU" text="在 Model 候选中入围、比较并批量发布。" action={<Button tone="primary" onClick={() => setPage("candidates")}>前往 Model 候选</Button>} />}
+      ) : <EmptyState title="没有历史 OfficialSku" text="此归档为空；新的正式产品请在 v3 Series/SKU/Model 流程中创建。" action={<Button tone="primary" onClick={() => setPage("candidates")}>前往 v3 甘特图</Button>} />}
     </div>
   );
 
@@ -2522,7 +2420,13 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     const kindParameters = state.parameters.filter((parameter) => parameter.itemKind === detailKind);
     return (
       <div className="page-stack">
-        <div className="toolbar"><div className="segmented">{(["rod", "reel", "line"] as ItemKind[]).map((kind) => <button key={kind} className={detailKind === kind ? "active" : ""} onClick={() => setDetailKind(kind)}>{kindLabels[kind]}明细</button>)}</div><div className="toolbar-spacer" /><span className="toolbar-note">型号、名字和数值覆盖只作用于明细，不反写生成规则。</span></div>
+        <LegacyHistoryNotice
+          title="DetailOverride 已转为只读历史"
+          detail="型号、名称、数值和备注保持原始 payload，仅用于迁移诊断。不会自动解释为 v3 ModelPatch，也不会覆盖派生模板或 Snapshot。"
+          diagnostic={`迁移诊断：DetailOverride ${state.detailOverrides.length} 条，关联 OfficialSku ${new Set(state.detailOverrides.map((entry) => entry.skuId)).size} 个。`}
+          onOpenV3={() => setPage("v3flow")}
+        />
+        <div className="toolbar"><div className="segmented">{(["rod", "reel", "line"] as ItemKind[]).map((kind) => <button key={kind} className={detailKind === kind ? "active" : ""} onClick={() => setDetailKind(kind)}>{kindLabels[kind]}明细</button>)}</div><div className="toolbar-spacer" /><span className="toolbar-note">切换部位只改变查看范围，不修改历史记录。</span></div>
         {state.officialSkus.length ? (
           <Card className="flush-card"><SheetTable><thead><tr><th className="sticky-col">道具ID</th><th>组合ID</th><th>型号</th><th>名字</th>{kindParameters.map((parameter) => <th key={parameter.key}>{parameter.label}</th>)}<th className="wide-col">备注</th></tr></thead>
           <tbody>{state.officialSkus.map((sku) => {
@@ -2531,17 +2435,16 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
             return (
               <tr key={sku.id}>
                 <td className="sticky-col"><code>{itemId}</code></td><td>{sku.comboId}</td>
-                <td><TextInput value={detail?.model ?? ""} placeholder="自定义型号" onChange={(value) => updateDetail(sku, detailKind, "model", value)} /></td>
-                <td><TextInput value={detail?.name ?? ""} placeholder="自定义名字" onChange={(value) => updateDetail(sku, detailKind, "name", value)} /></td>
+                <td>{detail?.model || "—"}</td><td>{detail?.name || "—"}</td>
                 {kindParameters.map((parameter) => {
                   const value = detail?.values[parameter.key] ?? sku.values[parameter.key];
-                  return <td key={parameter.key}><TextInput value={value} type={typeof value === "number" ? "number" : "text"} onChange={(next) => updateDetail(sku, detailKind, parameter.key, typeof value === "number" ? Number(next) : next)} /></td>;
+                  return <td key={parameter.key}>{formatNumber(value)}</td>;
                 })}
-                <td><TextInput value={detail?.notes ?? ""} onChange={(value) => updateDetail(sku, detailKind, "notes", value)} /></td>
+                <td>{detail?.notes || "—"}</td>
               </tr>
             );
           })}</tbody></SheetTable></Card>
-        ) : <EmptyState title="明细将在发布后生成" text="杆ID、轮ID、线ID分别自动使用 组合ID_R / _W / _L。" />}
+        ) : <EmptyState title="没有历史明细" text="此归档为空；v3 Model 的部件选择与 Patch 请在正式流程查看。" />}
       </div>
     );
   };
@@ -3037,7 +2940,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       actorName={user.name}
       notify={notify}
       onWorkspaceApplied={(nextState, nextRevision, message) => {
-        setState(recalculateWorkspace(ensureWorkflowFields(nextState)));
+        setState(ensureWorkflowFields(nextState));
         setRevision(nextRevision);
         setDirty(false);
         setSyncState("saved");
@@ -3063,7 +2966,10 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
               const response = await fetch("/api/revisions?revision=" + version.revision);
               if (!response.ok) return notify("读取历史版本失败。");
               const payload = (await response.json()) as { state: WorkspaceState };
-              setState(recalculateWorkspace(payload.state));
+              setState((current) => preserveReadOnlyLegacyProductHistory(
+                current,
+                ensureWorkflowFields(payload.state),
+              ));
               setDirty(true);
               notify("已载入 v" + version.revision + "，保存后会成为新版本。");
             }}>载入副本</Button></td>
@@ -3175,7 +3081,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           mutate={mutate}
           notify={notify}
           onWorkspaceApplied={(nextState, nextRevision, message) => {
-            setState(recalculateWorkspace(ensureWorkflowFields(nextState)));
+            setState(ensureWorkflowFields(nextState));
             setRevision(nextRevision);
             setDirty(false);
             setSyncState("saved");
@@ -3314,7 +3220,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
                 return (
                   <button type="button" key={item.key} className={page === item.key ? "active" : ""} onClick={() => setPage(item.key)}>
                     <Icon size={17} strokeWidth={1.8} /><b>{item.label}</b>
-                    {item.key === "candidates" ? <em>{state.candidates.length}</em> : item.key === "skus" ? <em>{state.officialSkus.length}</em> : item.key === "showcase" ? <em>{state.seriesShowcases.length}</em> : null}
+                    {item.key === "candidates" ? <em>{state.seriesDefinitions.length}</em> : item.key === "recipes" ? <em>{state.recipes.length}</em> : item.key === "skus" ? <em>{state.officialSkus.length}</em> : item.key === "details" ? <em>{state.detailOverrides.length}</em> : item.key === "showcase" ? <em>{state.seriesShowcases.length}</em> : null}
                   </button>
                 );
               })}

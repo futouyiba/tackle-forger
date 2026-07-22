@@ -922,9 +922,9 @@ Snapshot的“下载审计归档”与“正式导出”是两种不同动作：
 
 所有保存过的Patch必须进入工具内统一、持久化、版本化的`PatchLedger`。`PatchLedger`是Patch的运行时权威来源；重新拉取、重新演绎、重新生成、对象改名、服务重启、换浏览器或换电脑均不得使Patch静默丢失。生成时按稳定对象ID、Patch作用域和基线revision加载有效Patch：基线兼容则确定性重放，基线变化则进入`REBASE_REQUIRED`，禁止跳过或按名称猜测对象。
 
-主飞书工作簿应增加单一`Patch台账`工作表，作为全部Patch的人工可见镜像、协作界面和额外审计副本。该工作表不是通用规则表，也不是Patch的唯一运行时来源；飞书行号、显示名称、排序和合并单元格不得参与关联。Patch组由`patchId + patchRevision`定位，每条镜像明细按`patchId + patchRevision + operationId`幂等同步；飞书变化必须显式拉取后才能进入工具。已被ConfigurationSnapshot引用的Patch revision不可原地修改，只能创建新revision。
+主飞书工作簿应增加单一`Patch台账`工作表，作为全部Patch的人工可见镜像、协作界面和额外审计副本。该工作表不是通用规则表，也不是Patch的唯一运行时来源；飞书行号、显示名称、排序和合并单元格不得参与关联。Patch组由带类型的`tuple(workspaceId, patchId, patchRevision)`定位，每条镜像明细按`tuple(workspaceId, patchId, patchRevision, operationId)`幂等同步；飞书变化必须显式拉取后才能进入工具。已被ConfigurationSnapshot引用的Patch revision不可原地修改，只能创建新revision。
 
-`Patch台账`采用“一条Patch操作一行”：同一Patch修改多个属性时，多行共享`patchId`。前三个机器字段固定为`scopeType`、`layerType`和`subjectEntityId`；至少还应包含`patchId`、`patchRevision`、`operationId`、`operationIndex`、`subjectName`、`parentEntityId`、`parameterKey`、`operation`、`operand`、`before`、`after`、`baseRuleSetVersion`、`baseObjectRevision`、`reason`、`evidence`、`patchState`、`mirrorSyncState`、`attentionStates`、创建/审核身份与时间、`supersedesPatchId`、`ruleProposalId`和`snapshotRefs`。名称只供显示和搜索，禁止用单一`status`混合业务与同步状态。
+`Patch台账`采用“一条Patch操作一行”：同一工作区内同一Patch修改多个属性时，多行共享`workspaceId + patchId`。前三个机器字段固定为`scopeType`、`layerType`和`subjectEntityId`，第四个机器字段固定为受控`workspaceId`；至少还应包含`patchId`、`patchRevision`、`operationId`、`operationIndex`、`subjectName`、`parentEntityId`、`parameterKey`、`operation`、`operand`、`before`、`after`、`baseRuleSetVersion`、`baseObjectRevision`、`reason`、`evidence`、`patchState`、`mirrorSyncState`、`attentionStates`、创建/审核身份与时间、`supersedesPatchId`、`ruleProposalId`和`snapshotRefs`。名称只供显示和搜索，禁止用单一`status`混合业务与同步状态。
 
 个体Patch必须进入统一汇总分析，但不得自动成为通用规则。工具按作用层、属性、钓法、类型、功能定位、重量段、修改方向和重复频率识别稳定模式；经人工归纳、跨对象影响预览和确认后，才可生成`RuleSourceChangeDraft`并写回对应通用规则页。新RuleSetVersion发布并重算后，原Patch分别进入`ABSORBED`、`PARTIALLY_ABSORBED`、继续`ACTIVE`或`REBASE_REQUIRED`，不得因规则提案或写回而提前删除。
 
@@ -945,6 +945,7 @@ type PatchMirrorSyncState = "NOT_SYNCED" | "PENDING" | "WRITING" | "SYNCED"
   | "REMOTE_CHANGED" | "CONFLICT" | "WRITE_FAILED";
 
 interface PatchOperationRecord {
+  workspaceId: string;
   patchId: string; patchRevision: number;
   operationId: string; operationIndex: number;
   parameterKey: string; operation: "set" | "add" | "multiply" | "clear";
@@ -954,7 +955,7 @@ interface PatchOperationRecord {
 
 `PatchOperationRecord`是账本、Snapshot和飞书镜像的规范明细。`clear`行的`operand`固定为`null`；飞书导入遇到`remove`时先转换为`clear`再计算幂等键。飞书出现`min/max`不得直接进入ACTIVE revision：只有能从冻结基底验证before/after的记录才可规范化为`set`，并保留原始意图证据；否则整组进入`REBASE_REQUIRED`或迁移复核。
 
-`operationId`在Patch内稳定且不可复用，飞书镜像明细的幂等键为`patchId + patchRevision + operationId`。`operationIndex`是确定性执行顺序，不得使用数据库自然顺序、飞书行号或当前排序；同一参数存在多个操作时也必须按它执行。Patch revision是组级事务边界：审核、批准、撤回、rebase、重放、吸收和Snapshot引用均针对完整revision；只有全部必需操作有效时才可重放。镜像部分写入成功不得把整组标为`SYNCED`。
+`operationId`在Patch内稳定且不可复用，飞书镜像明细的幂等键为带类型的`tuple(workspaceId, patchId, patchRevision, operationId)`。`operationIndex`是确定性执行顺序，不得使用数据库自然顺序、飞书行号或当前排序；同一参数存在多个操作时也必须按它执行。Patch revision是组级事务边界：审核、批准、撤回、rebase、重放、吸收和Snapshot引用均针对完整revision；只有全部必需操作有效时才可重放。镜像部分写入成功不得把整组标为`SYNCED`。
 
 飞书删除、清空、隐藏、移动或过滤镜像行不构成删除Patch的命令，不得级联改变本地账本、业务状态或Snapshot。缺失行产生`PATCH_MIRROR_ROW_MISSING`，允许按幂等键补写。飞书中未知`patchId`、重复明细键、受控审计字段被改写或明细组不完整时必须隔离问题行并产生`ValidationIssue(source="patch")`；不得按名称自动认领。协作记录使用独立追加事件区：备注、复核意见、共享规则建议及其接受、拒绝、撤回和更正均创建新事件；旧事件不可修改或删除。事件并发与重试遵循第14.3节的原子compare-and-append契约。
 
@@ -1148,9 +1149,9 @@ syncIdempotencyKey = sha256Hex(JCS({
 | `PATCH_SUBJECT_MIGRATION_INVALID_TARGET` | `ERROR / REVIEW` | 不创建新revision；保留ORPHANED源revision并重新选择同工作区的兼容稳定引用 |
 | `PATCH_SUBJECT_MIGRATION_CONFLICT` | `ERROR / REVIEW` | 不创建分叉revision；返回当前head与已提交迁移证据，重读后由用户显式重试 |
 
-镜像Issue的`gate=NONE`表示不阻断本地Patch重放和既有Snapshot，但对应镜像组不能显示`SYNCED`。`PATCH_SUBJECT_ORPHANED`使用`gate=REVIEW`阻止批准，并按统一Gate语义约束后续发布；重放不是Gate，服务端必须另外把该Patch的重放、rebase和普通编辑`ActionAvailability`设为禁用，只保留查看证据与`patch.subject.migrate`恢复动作。既有Snapshot不受影响。行排序或移动不影响关联；隐藏和过滤行仍必须读取；删除或清空按缺行处理。
+镜像Issue的`gate=NONE`表示不阻断本地Patch重放和既有Snapshot，但对应镜像组不能显示`SYNCED`。`PATCH_SUBJECT_ORPHANED`使用`gate=REVIEW`阻止批准，并按统一Gate语义约束后续发布；重放不是Gate，服务端必须另外把该Patch的重放、rebase和普通编辑`ActionAvailability`设为禁用，只保留查看证据与`migrate_patch_subject`恢复动作，后者要求`patch.subject.migrate` Capability。既有Snapshot不受影响。行排序或移动不影响关联；隐藏和过滤行仍必须读取；删除或清空按缺行处理。
 
-镜像动作必须分别声明Capability：普通写入使用`patch.mirror.write`，镜像拉取使用`patch.mirror.pull`，只读检查使用`patch.mirror.inspect`，按幂等键补写缺失内容使用`patch.mirror.repair`，显式按本地权威重建冲突组使用`patch.mirror.rebuild_from_local`，修改远端表头/保护边界使用`patch.mirror.schema.repair`，迁移本地主体稳定引用使用`patch.subject.migrate`。`repair`不得覆盖内容冲突；`rebuild_from_local`、`schema.repair`和`subject.migrate`必须二次确认、记录before/after证据并在执行时重新鉴权。当前由`separation-of-duties/open009-v1`分配这些Capability；OPEN-010不得自行扩大授权。
+镜像动作必须分别声明ActionCode与Capability：`write_patch_mirror`要求`patch.mirror.write`，`pull_patch_mirror`要求`patch.mirror.pull`，`inspect_patch_mirror`要求`patch.mirror.inspect`，`repair_patch_mirror`要求`patch.mirror.repair`，`rebuild_patch_mirror_from_local`要求`patch.mirror.rebuild_from_local`，`fix_patch_mirror_schema`要求`patch.mirror.schema.repair`，`migrate_patch_subject`要求`patch.subject.migrate`。`repair_patch_mirror`不得覆盖内容冲突；`rebuild_patch_mirror_from_local`、`fix_patch_mirror_schema`和`migrate_patch_subject`必须二次确认、记录before/after证据并在执行时重新鉴权。当前由`separation-of-duties/open009-v1`分配这些Capability；OPEN-010不得自行扩大授权。
 
 “拉取”只执行镜像核对、已知协作事件同步和冲突发现，绝不以飞书机器区覆盖本地Patch、删除本地Patch或修改Snapshot。写入超时或部分失败必须先回读；保留已经成功且哈希一致的行，整组进入`WRITE_FAILED`，重试只续写缺失操作。重复、篡改或哈希冲突必须保存远端原始证据；只有用户显式执行“按本地权威重建镜像”后才可修复，并再次完整回读。补偿失败不得回滚或改变本地Patch。
 

@@ -862,6 +862,56 @@ ConfigurationSnapshot必须冻结有序Patch引用集合（`patchId + patchRevis
 
 新增验收：Given同一参数含set/add/multiply，When多次重放，Then严格按operationIndex得到同一结果；Given三行镜像只写成两行，When同步结束，Then组状态不是SYNCED且Patch仍可从本地完整重放；Given人工删除镜像行，When显式拉取，Then本地Patch和Snapshot不变并产生PATCH_MIRROR_ROW_MISSING；Given旧schema迁移两次，When比较结果，Then无重复revision且PatchSetHash、最终值和Trace语义一致；Given对象缺失且存在同名新对象，When加载，ThenPatch进入ORPHANED而不重绑；GivenSnapshot引用revision 1，When产生revision 2或改变镜像，Then旧Snapshot的有序引用与hash不变。
 
+### 14.3 工作区 Revision 分层保留、归档与裁剪
+
+本节定义工作区操作恢复历史的保留政策；它不改变本章前述领域 revision、Patch 或发布快照的不可变语义。正式决策与容量依据见 `audits/aud-009-workspace-revision-retention-adr.md`。
+
+#### 14.3.1 对象边界
+
+- `workspace revision` 是一次成功保存后完整 `WorkspaceState` 的操作恢复点，用于回看或恢复整个工作区。它不是防篡改事件账本，可以在满足本节全部条件后从在线存储裁剪。
+- `ConfigurationSnapshot` 是 Model 发布时冻结的领域发布产物，Snapshot ID 与 payload/hash 永久绑定。它不属于 workspace revision 保留集合，也不得因为 workspace revision 裁剪而删除、重算、重排、覆盖或改写。
+- 领域审计、Patch revision、Calculation Trace 和发布记录同样不属于 workspace revision 裁剪对象。裁剪流程不得改变它们的内容、稳定引用、哈希、顺序或可追溯性。
+- `WorkspaceState.revisions` 中的摘要、普通 revision 列表 API 的分页/条数上限和完整 `workspace_revisions` 不是同一对象。显示最近 100 条不等于只物理保留 100 条。
+
+#### 14.3.2 在线保留政策
+
+SQLite 与 D1 必须在线保留以下两个集合的并集：
+
+1. retention run 冻结的 UTC cutoff 起最近 90 天内创建的全部完整 workspace revision；
+2. 无论创建时间如何，按 revision 稳定降序选出的最新 100 个完整 workspace revision。
+
+当前 `workspace_state.revision` 必须始终受保护，不得因时间戳或并发观测异常进入候选。恰好位于 cutoff 的 revision 属于保留集合。revision 可以不连续；同一时间戳不得导致不稳定选择，数量集合以稳定 revision 顺序决定。每个 retention run 必须一次性冻结 cutoff、策略版本、输入集合和幂等键；相同输入与策略必须得到相同的保留集合。
+
+无法解析、为空或位于未来的 `created_at` 必须 fail-closed：保留对应 revision，产生可观测的 `ValidationIssue` 或等价运维告警，不得猜测时间后删除。`retentionDays`、`minimumRevisions` 或策略版本缺失、非法、未知时也必须保留全部 revision；不得使用页面默认值、旧版本值或隐藏回退值继续裁剪。
+
+Vercel Blob 是受控例外：它仅作非权威评审存储，最多保留 100 个 workspace revision。Blob 不是生产恢复、长期归档或审计权威源；任何导入或迁移都必须披露源 Blob 当时只可能提供尚存的最多 100 个 revision，不得声称复原已裁掉历史。若 Blob 将来升级为权威或生产后端，必须先满足与 SQLite/D1 等价的保留、归档、恢复和裁剪证据要求。
+
+#### 14.3.3 允许删除的必要条件
+
+revision 位于“最近 90 天”与“最新 100 个”并集之外，只表示它具备裁剪候选资格。只有同时满足以下条件才允许删除；任一条件失败时必须 fail-closed，保留全部候选并保持自动裁剪关闭：
+
+1. 已明确并批准归档物理位置、运维责任人、加密与密钥管理、访问审批、删除授权、归档保留期和恢复目标；这些实施参数尚未确定时不得启用裁剪。
+2. 每个候选 revision 已完成可验证归档；归档 manifest、内容 SHA-256、数量与范围验证通过，并能从裁剪证据反向定位完整内容。
+3. 当前权威数据库已有独立备份，manifest 已验证，并在隔离路径完成恢复与完整性检查；备份及恢复验证标识可供 retention run 引用。
+4. 已执行只读 dry-run，报告冻结 cutoff、当前数量、最旧/最新 revision、保留与候选集合、异常时间戳、预计释放字节和不可变对象校验结果。
+5. tombstone 与 retention run 可以在删除前可靠持久化；任何归档、证据写入、删除、事务或回读验证失败都不得产生无证据删除。
+6. 首次生产裁剪已获得明确维护窗口与删除授权，并先在隔离副本通过裁剪、幂等重跑、恢复和回滚验收。自动裁剪必须另行启用；上述能力和证据完成前保持关闭。
+
+配置非法、归档不可验证、备份不可验证、恢复未验证、不可变对象校验失败或裁剪证据不完整时，必须产生可观测错误并禁止删除。任何实现都不得为了容量压力自动缩短 90 天窗口、降低最新 100 个下限或绕过归档。
+
+#### 14.3.4 确定性、幂等与审计证据
+
+- SQLite 裁剪必须与对应保存/证据操作具有明确事务边界；revision 冲突路径不得裁剪。D1 必须提供等价原子性或可证明不会产生半完成状态的事务边界。
+- 每个被裁剪 revision 必须先写入 tombstone，至少记录 revision、author、message、created_at、完整状态 SHA-256、pruned_at、策略版本、retention run ID、归档 manifest ID 和已验证备份/恢复标识。tombstone 证明受控删除，但不替代归档内容。
+- 每次 retention run 至少记录幂等键、策略版本、冻结 cutoff、输入/保留/候选数量及集合哈希、异常集合、归档证据、备份恢复证据、操作者、开始/结束时间和结果。
+- 相同策略、输入和幂等键重复运行不得重复删除、重复归档或生成重复 tombstone。部分失败重试必须先回读现有证据，再从可证明的状态继续。
+- 删除前后必须验证当前 `WorkspaceState`、全部已发布 `ConfigurationSnapshot.contentHash`、领域审计、Patch、Trace 和发布记录保持逐字节或结构等价；任何差异都阻止提交。
+- 已裁剪 revision 的精确读取必须返回“按策略裁剪”的明确结果，并提供可授权访问的 tombstone/归档引用；不得与“从未存在”或“数据损坏”混为一类。
+
+#### 14.3.5 备份、归档与恢复边界
+
+每日整库备份是灾难恢复点，不自动等于长期 revision 归档。在线保留期、备份保留期和归档保留期是三个独立策略，不能互相替代。恢复必须停服，把已验证副本恢复到新文件并保留原数据库作审计副本；不得为查看单条历史而覆盖生产数据库。包含飞书会话的整包备份不得直接延长为长期审计归档，归档必须按已批准的加密、访问控制和数据生命周期与会话副本隔离。
+
 ## 15. 工作台信息架构
 
 1. 数据源与参数注册表；
@@ -976,6 +1026,16 @@ ConfigurationSnapshot必须冻结有序Patch引用集合（`patchId + patchRevis
 - 被动技能参与分值和品质；
 - technology_only不进入普通池；
 - S/A/B/C阈值正确。
+
+### 18.6 工作区 Revision 保留
+
+- 最近 90 天与最新 100 个的并集确定且边界稳定；
+- cutoff、99/100/101 条、非连续 revision 和同一时间戳均有覆盖；
+- 非法/空白/未来时间戳、非法配置、归档不可验证或备份/恢复未验证时不删除；
+- 同一 retention run 幂等重跑不重复归档、删除或生成 tombstone；
+- 保存冲突、证据写入失败或裁剪失败不会产生半完成状态；
+- 裁剪前后 ConfigurationSnapshot、领域审计、Patch、Trace 和发布记录保持不变；
+- Blob 最多 100 个的非权威边界在导入、读取和迁移报告中准确披露。
 
 ## 19. Agent交付检查表
 

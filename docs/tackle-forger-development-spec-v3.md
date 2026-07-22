@@ -968,7 +968,7 @@ ConfigurationSnapshot必须冻结有序Patch引用集合（`patchId + patchRevis
 | OPEN-005 五维图定义 | 产品决策 | `OPEN_CONFIGURED_SEED` | 可使用版本化种子定义进行预览，不得写死在UI/数据库 | 种子结果明示“草稿定义”；缺轴不补0，未发布定义不进Snapshot | 产品/数值负责人确认轴、聚合、缺值、系列基准和比较上限 |
 | OPEN-006 AI供应方与数据出网 | 安全/产品决策 | `RESOLVED` | 使用`ai-provider/open006-v1`：Fancy Hub、`ai-request/v1`严格Schema、动态模型修订、字段级保留和分层限额 | 本决策只解除产品策略阻断；真实连接器在Issue #25完成、测试并启用前继续禁用，不得发送真实数据 | 2026-07-23用户确认本节策略；AI无批准、写回或发布能力，无需另设三方会签 |
 | OPEN-007 定价执行与源表一致性 | 外部规则源阻断 | `BLOCKED_ON_RULE_SOURCE` | 可导入同revision策略并输出`NON_FORMAL`试算 | S=100边界、性能评分来源、`roundingStage`、`minimumPriceScope`和`overflowMode`任一未解决时，禁止新PricingPolicyVersion、依赖它的Model发布、Snapshot和Store导出 | 规则负责人修订飞书源；显式拉取、校验并发布新PricingPolicyVersion |
-| OPEN-008 ConfigIdPolicy区间与命名 | 公司策略（已确认） | `DECIDED_PENDING_POLICY_VERSION` | 按本节确认规则实现策略版本、ledger、权威目标目录/扫描Manifest和冲突预检 | `ConfigIdPolicyVersion`尚未发布，或其引用的`ConfigTargetCatalogVersion`中任一必需目标没有获批扫描Manifest时，不得正式预留ID或提交配置；禁止用“最大值+1”、示例ID、用户临时绑定或单一渠道扫描代替 | 配置治理负责人发布策略版本；权威目录覆盖完整；reservation、导入和分裂命中验收通过 |
+| OPEN-008 ConfigIdPolicy区间与命名 | 公司策略（已确认） | `DECIDED_PENDING_POLICY_VERSION` | 按本节确认规则实现策略版本、ledger、权威目标目录/扫描Manifest、历史导入、正式动作治理租约/受保护ref CAS和冲突预检 | `ConfigIdPolicyVersion`尚未发布，或其引用的`ConfigTargetCatalogVersion`中任一必需目标没有获批扫描Manifest时，不得正式预留ID、历史ID正式导入或正式导出；正式预留、历史ID正式导入和正式导出任一无法取得`ConfigTargetGovernanceLease`、无法对authoritative ref执行expected-old-OID CAS或返回`CONFIG_TARGET_SERIALIZATION_UNAVAILABLE`时必须fail-closed。策略发布只复验Manifest/ref/hash，不要求治理租约；禁止用“最大值+1”、示例ID、用户临时绑定或单一渠道扫描代替 | 配置治理负责人发布策略版本；权威目录和获批Manifest覆盖完整；reservation、历史导入、正式导出和分裂命中验收通过；治理租约的物理ref别名竞争、单调fencing token、受保护ref CAS、stale token与`CONFIG_TARGET_SERIALIZATION_UNAVAILABLE`失败验收通过 |
 | OPEN-009 工作流治理策略 | 产品/安全决策 | `RESOLVED` | 使用第20.2节发布的五类`open009-v1`策略；所有已登录公司用户拥有全部已启用业务Capability；AI一期禁用，二期连接器仍需独立实现准入 | 不接飞书审批、不在本工具实行职责分离；OPEN-006安全配置只由部署管理员修改；关键写操作使用工作区单写锁与单调fencing token，普通操作记录保留1年 | 2026-07-23用户确认；策略正文见第20.2节，迁移与验收见Issue #18 |
 | OPEN-010 飞书Patch台账远端契约 | 外部规则源阻断 | `BLOCKED_ON_SOURCE_SCHEMA` | 本地PatchLedger、镜像命令、幂等与失败恢复可以运行 | 主工作簿未提供稳定sheet_id、机器列与协作字段权限前，真实镜像写入/拉取保持禁用；不得伪造SYNCED | 规则源负责人建表并确认机器区域；完成写入、回读、缺行和冲突联调 |
 
@@ -1115,7 +1115,7 @@ GoodsBasic ID按十进制字符串`"10" + baseId`派生，StoreBuy ID按`"30" + 
 
 每个必需条目必须有获批`ConfigTargetScanManifest`，至少记录目录版本、环境、渠道、仓库、authoritative ref名称、扫描时解析到的不可变commit、逻辑目录、`config.toml` hash、各workbook/sheet/hash、扫描器与规则版本、所验证`rangeId`集合、问题清单、结果hash、扫描人与复核人及时间。`ConfigIdPolicyVersion`必须冻结引用一个目录版本和覆盖其全部必需条目的Manifest集合；缺失、重复、失败、commit不可解析、Manifest所验区间不一致或未经`config.target.scan.approve`复核时禁止发布。目录新增或变更目标时发布新目录版本；新目标在新Manifest和引用它的新策略版本生效前只能做`NON_FORMAL`预览，不能正式预留或提交。工具仍不读取、修改或治理`config_system.toml`；权威目录由配置治理流程显式维护。
 
-获批Manifest不是永久豁免。发布策略、每次正式预留、历史ID正式导入、生成正式人工搬运包和本地正式提交前，都必须重新解析目录条目的当前authoritative ref，并逐项验证当前commit、该commit中的`config.toml` hash和所有受管workbook hash与策略冻结的Manifest完全一致；远端不可读、ref不存在、commit变化、文件缺失或任一hash变化均产生`CONFIG_TARGET_SCAN_MANIFEST_STALE`并禁止动作。正式导出还必须验证本地worktree HEAD、逻辑目录、`config.toml`和workbook基线hash与同一Manifest一致，不能用“远端一致但本地脏”或“本地一致但远端已推进”绕过。
+获批Manifest不是永久豁免。发布策略、每次正式预留、历史ID正式导入、生成正式人工搬运包和本地正式提交前，都必须重新解析目录条目的当前authoritative ref，并逐项验证当前commit、该commit中的`config.toml` hash和所有受管workbook hash与策略冻结的Manifest完全一致；远端不可读、ref不存在、commit变化、文件缺失或任一hash变化均产生`CONFIG_TARGET_SCAN_MANIFEST_STALE`并禁止动作。策略发布只执行本段的Manifest/ref/hash复验，不取得`ConfigTargetGovernanceLease`，也不以受保护ref CAS可用性作为发布门禁；治理租约范围只包括下文的正式预留、历史ID正式导入和正式导出。正式导出还必须验证本地worktree HEAD、逻辑目录、`config.toml`和workbook基线hash与同一Manifest一致，不能用“远端一致但本地脏”或“本地一致但远端已推进”绕过。
 
 两次读取authoritative ref不是跨Git与ledger数据库的串行化机制。任何正式预留、历史ID正式导入或正式导出必须先取得配置目标治理协调器签发的独占`ConfigTargetGovernanceLease`，并在租约保护下完成Manifest复验和业务提交：
 
@@ -2371,7 +2371,7 @@ interface ActionLink {
 
 旧持久化动作名只用于识别迁移候选，不能直接做字符串替换：`acknowledge_warning`、`request_waiver`、`approve_waiver`、`recompute`和`create_rule_source_change`分别以`acknowledge_validation_warning`、`request_validation_waiver`、`approve_validation_waiver`、`recompute_validation`和`create_rule_source_change_draft`为候选目标。迁移器必须从可信的服务端历史事件、命令记录和版本化对象中完整重建目标ActionCode要求的类型化payload，校验subject、expected revision/input hash、Issue fingerprint、人工理由、Gate、必要的环境×渠道、目标规则/source revision、证据hash及原幂等键，并重新计算`payloadHash`；不得从旧动作名、展示文案、客户端补传值推断或为缺失字段填默认值。
 
-`edit_rule/edit_patch/satisfy_requirement/request_permission`只有在历史证据能证明它们从未修改业务状态且能恢复明确路由时，才转换为`navigate + targetRoute`。`open_rebase`不再是现行`ActionCode`：若历史记录能证明它只是打开页面，则转换为`navigate + targetRoute`；若它曾执行Rebase，则只有从可信历史完整重建并校验`rebase_patch`类型化payload和原幂等键后才转换为`rebase_patch`，歧义记录不得猜测。旧`retry`同样只有能恢复原ActionCode、完整原类型化payload和原幂等键时才转换为原动作。
+`edit_rule/edit_patch/satisfy_requirement/request_permission`只有在历史证据能证明它们从未修改业务状态且能恢复明确路由时，才转换为`navigate + targetRoute`。`open_rebase`不再是现行`ActionCode`，且只允许迁移为纯导航：仅当可信历史证明该记录从未执行Rebase、只是打开页面并能恢复明确路由时，才转换为`navigate + targetRoute`。任何曾执行或可能执行Rebase、证据不足、语义冲突或无法证明纯导航的`open_rebase`记录都必须以`LEGACY_ACTION_ALIAS_UNRESOLVABLE` fail-closed，不得转换为`rebase_patch`；现行Rebase写命令只能由新`rebase_patch`记录及其完整类型化payload表达。旧`retry`同样只有能恢复原ActionCode、完整原类型化payload和原幂等键时才转换为原动作。
 
 上述任一状态写候选缺少或冲突任一必填字段时，迁移结果固定为`enabled=false`、不生成`commandPayloadRef`并记录`LEGACY_ACTION_ALIAS_UNRESOLVABLE`；直接API执行相同记录也必须以该码拒绝。任何未枚举但历史语义可能具有副作用的旧动作也默认按该码拒绝，直到迁移器为其定义完整的目标ActionCode、可信字段来源和类型化payload校验。新接口、数据库和事件不得继续写入旧别名，也不得保留绕过类型化payload的兼容执行器。
 
@@ -2387,7 +2387,7 @@ interface ActionLink {
 恢复：失败保留Issue；重试复用原ActionCode和幂等payload，重算使用`recompute_validation`，权限帮助只提供无副作用导航。
 
 权限：可看不等于可修；无权动作说明原因。  
-验收：Given deny、-3 Affinity、不变量偏离并存，When 返回，Then source、Severity、Gate、State和动作独立，Affinity不能抵消deny；Given策略未允许某ERROR waiver，When渲染动作，Then不显示可执行waive入口；Given 用户缺少`config.id.reserve`，When 返回预留Issue动作，Then `action=reserve_config_id_bundle`、`enabled=false`、列出所需Capability和禁用原因且没有payload；Given 权限和全部门禁恢复，Then 返回同一ActionCode及绑定subject、expected revision和hash的payload引用，篡改payload或revision时服务端拒绝；Given旧`approve_waiver`缺少fingerprint、reason、Gate、expected revision或EXPORT环境×渠道任一字段，When迁移或执行，Then返回`LEGACY_ACTION_ALIAS_UNRESOLVABLE`且没有payload；Given字段完整且来自可信历史，Then重建并校验不可篡改`approve_validation_waiver`payload而不是只改动作名；Given旧`open_rebase`仅有路由证据，Then只映射`navigate`且不能执行Rebase，现行Rebase写命令只使用`rebase_patch`；Given旧`retry`记录，Then只有恢复原动作、完整payload与原幂等键时才可执行；Remediation联合中不存在任何状态写动作。
+验收：Given deny、-3 Affinity、不变量偏离并存，When 返回，Then source、Severity、Gate、State和动作独立，Affinity不能抵消deny；Given策略未允许某ERROR waiver，When渲染动作，Then不显示可执行waive入口；Given 用户缺少`config.id.reserve`，When 返回预留Issue动作，Then `action=reserve_config_id_bundle`、`enabled=false`、列出所需Capability和禁用原因且没有payload；Given 权限和全部门禁恢复，Then 返回同一ActionCode及绑定subject、expected revision和hash的payload引用，篡改payload或revision时服务端拒绝；Given旧`approve_waiver`缺少fingerprint、reason、Gate、expected revision或EXPORT环境×渠道任一字段，When迁移或执行，Then返回`LEGACY_ACTION_ALIAS_UNRESOLVABLE`且没有payload；Given字段完整且来自可信历史，Then重建并校验不可篡改`approve_validation_waiver`payload而不是只改动作名；Given旧`open_rebase`仅有路由证据，Then只映射`navigate`且不能执行Rebase；Given旧`open_rebase`存在写语义证据、语义冲突或无法证明纯导航，Then返回`LEGACY_ACTION_ALIAS_UNRESOLVABLE`且不得转换为`rebase_patch`，现行Rebase写命令只使用新`rebase_patch`记录；Given旧`retry`记录，Then只有恢复原动作、完整payload与原幂等键时才可执行；Remediation联合中不存在任何状态写动作。
 
 ### 24.11 R10：Rebase、UpgradeCandidate与Snapshot
 

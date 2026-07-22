@@ -968,7 +968,7 @@ ConfigurationSnapshot必须冻结有序Patch引用集合（`patchId + patchRevis
 | OPEN-005 五维图定义 | 产品决策 | `OPEN_CONFIGURED_SEED` | 可使用版本化种子定义进行预览，不得写死在UI/数据库 | 种子结果明示“草稿定义”；缺轴不补0，未发布定义不进Snapshot | 产品/数值负责人确认轴、聚合、缺值、系列基准和比较上限 |
 | OPEN-006 AI供应方与数据出网 | 安全/产品决策 | `BLOCKED_BEFORE_CONNECTOR` | AI交互壳、证据、权限和审计可实现 | 不得连接外部服务或发送真实数据；仅允许本地假数据/契约测试 | 安全、产品和数据负责人联合确认provider、字段白名单、保留周期和出网边界 |
 | OPEN-007 定价执行与源表一致性 | 外部规则源阻断 | `BLOCKED_ON_RULE_SOURCE` | 可导入同revision策略并输出`NON_FORMAL`试算 | S=100边界、性能评分来源、`roundingStage`、`minimumPriceScope`和`overflowMode`任一未解决时，禁止新PricingPolicyVersion、依赖它的Model发布、Snapshot和Store导出 | 规则负责人修订飞书源；显式拉取、校验并发布新PricingPolicyVersion |
-| OPEN-008 ConfigIdPolicy区间与命名 | 公司策略缺口 | `BLOCKED_ON_COMPANY_POLICY` | 可实现策略接口、reservation ledger和冲突预检 | 未发布公司数字ID区间、各对象命名格式与保留规则时，不得正式预留ID或提交配置；禁止用“最大值+1”或示例ID代替 | 配置治理负责人发布`ConfigIdPolicyVersion`并用真实configs验证 |
+| OPEN-008 ConfigIdPolicy区间与命名 | 公司策略（已确认） | `DECIDED_PENDING_POLICY_VERSION` | 按本节确认规则实现策略版本、ledger、全目标扫描和冲突预检 | `ConfigIdPolicyVersion`尚未发布或任一启用环境×渠道尚未完成扫描时，不得正式预留ID或提交配置；禁止用“最大值+1”、示例ID或单一渠道扫描代替 | 配置治理负责人发布策略版本；所有启用目标扫描通过；reservation、导入和分裂命中验收通过 |
 | OPEN-009 工作流治理策略 | 延后产品决策 | `DEFERRED_NON_BLOCKING` | 一期使用统一公司Capability策略、AI禁用、飞书规则写回不接审批 | `aiRefreshPolicy`、`aiModelRecordPolicy`、`aiReviewPolicy`和`separationOfDutiesPolicy`不得写死；三期前不得自行增加多级会签 | 产品/安全负责人确认策略版本及迁移、权限和审计验收 |
 | OPEN-010 飞书Patch台账远端契约 | 外部规则源阻断 | `BLOCKED_ON_SOURCE_SCHEMA` | 本地PatchLedger、镜像命令、幂等与失败恢复可以运行 | 主工作簿未提供稳定sheet_id、机器列与协作字段权限前，真实镜像写入/拉取保持禁用；不得伪造SYNCED | 规则源负责人建表并确认机器区域；完成写入、回读、缺行和冲突联调 |
 
@@ -994,6 +994,77 @@ ConfigurationSnapshot必须冻结有序Patch引用集合（`patchId + patchRevis
 ### OPEN-004：Patch属性偏移阈值
 
 Series、SKU和Model的默认属性偏移上限尚未确定。实现应从配置读取，不得写死。
+
+### OPEN-008：ConfigIdPolicy数字区间与命名规则
+
+本项的公司治理语义已经确认，但在对应`ConfigIdPolicyVersion`发布、所有启用环境×渠道完成只读扫描并通过验收前，状态保持`DECIDED_PENDING_POLICY_VERSION`，正式预留和配置提交继续fail-closed。TOML枚举固定通过可读`configNameKey`唯一解析数字ID，本项不得重新改为按数字ID直接配置。
+
+#### 对象区间与作用域
+
+每次为Model预留一个按部位分区的稳定`ConfigIdBundle`。Tackle与Item共享基础ID；GoodsBasic和StoreBuy由同一个基础ID确定性派生，不各自漂移游标。
+
+| 部位 | Tackle / Item共享ID | GoodsBasic ID | StoreBuy ID |
+| --- | --- | --- | --- |
+| 竿 `rod` | `301800001–301899999` | `10301800001–10301899999` | `30301800001–30301899999` |
+| 轮 `reel` | `302800001–302899999` | `10302800001–10302899999` | `30302800001–30302899999` |
+| 线 `line` | `303800001–303899999` | `10303800001–10303899999` | `30303800001–30303899999` |
+
+GoodsBasic ID按十进制字符串`"10" + baseId`派生，StoreBuy ID按`"30" + baseId`派生；禁止把前缀当成运行时可变渠道码。所有末三位为`000`的编号保留，不进入普通分配。区间为公司专属区间；外部未知对象一旦占用其中编号，必须登记为永久占用而不是覆盖。
+
+同一个Model跨Snapshot、`dev`、`test`、`online`、`release`以及各渠道沿用同一套Bundle。环境和渠道不是ID命名空间，不能为同一个Model重复分配。首批人工导出环境为`dev/test/online/release`，各自绑定用户选择的本地Git worktree；每个环境的`1001`写入根目录`xlsx`，其他渠道绑定用户明确选择的目录。工具只负责生成、校验和写入人工导出目标，不负责后续Git合并、发布或部署。
+
+#### `configNameKey`格式与唯一性
+
+| 对象 | 格式 |
+| --- | --- |
+| Tackle / Item | `tf_<part>_<stableModelKey>` |
+| GoodsBasic | `store_tf_<part>_<stableModelKey>` |
+| StoreBuy | `buy_tf_<part>_<stableModelKey>` |
+
+`part`只能是`rod/reel/line`。完整名称只能包含小写ASCII字母、数字和下划线，必须以字母开头，即满足`^[a-z][a-z0-9_]*$`；`stableModelKey`最长40字符，完整`configNameKey`最长64字符。禁止随机后缀、静默截断和按环境/渠道加后缀。名称在成功预留后不可修改；业务需要改名或让新旧版本共存时创建新Model和新Bundle。
+
+名称在每个逻辑表内唯一。Tackle与Item的同名同ID配对是唯一允许的跨表重复；对任一TOML合法枚举目标集合，同名必须唯一解析到同一个数字ID。同名不同ID、同ID不同名或同名解析到多个数字ID均为阻断冲突。
+
+#### Reservation ledger、生命周期与权限
+
+全公司只使用服务端权威reservation ledger。普通设计用户可以预览候选；`config.id.reserve`在单个事务中锁定完整Bundle，事务失败不留下预留，事务成功后永久占用。游标按`policyVersion + part + range`单调前进，禁止扫描Excel最大值后加一，也禁止回填ledger空洞。
+
+- 成功预留但未使用的Bundle标记`ABANDONED`；已经导出后退役的Bundle标记`DEPRECATED`。二者都计入占用且永不复用，不提供管理员释放入口。
+- 迁移和修订不得改变既有ID或名称。需要线上新旧并存时创建新Model；仅替换当前配置时仍更新原Bundle对应行，历史Snapshot保持不可变。
+- `config.export.commit`只授权写入用户已选择并授权的本地worktree。在一期和1.5期不额外要求预留人与导出人职责分离，但所有动作仍须服务端Capability鉴权。
+- 配置治理负责人拥有策略发布、冲突隔离和ledger元数据纠错权限；不得删除已成功预留记录、释放编号或将编号转给另一Model。
+- 审计至少记录操作者、时间、原因、Model、完整Bundle、原状态/新状态、策略版本、目标环境×渠道和关联revision/Snapshot。
+
+容量按每个部位区间的可分配编号计算，`ABANDONED`、`DEPRECATED`和外部占用均计入。达到80%产生预警；达到95%产生严重预警并要求准备扩容，但已有区间尚未耗尽时继续分配；只有该部位全部可分配编号耗尽时才阻止该部位的新预留，既有Bundle的更新和导出不受影响。扩容只能通过新`ConfigIdPolicyVersion`追加新区间，不迁移旧ID、不重排游标、不回收历史空洞。
+
+#### Upsert、分裂命中与多目标行为
+
+每个环境×渠道独立读取实际目标表并以`ID + configNameKey`联合判断：
+
+- ID和名称均未命中时新增；二者命中同一行时只更新工具负责的列；
+- 只命中ID、只命中名称、二者命中不同行、同ID不同名、同名不同ID，或Tackle/Item/GoodsBasic/StoreBuy任一对象部分缺失，均视为分裂命中并阻止该目标；
+- 不自动改名、换ID、补占未知行、合并重复行或删除历史行；冲突必须返回文件、sheet、行、ID、名称和可执行复核动作；
+- 默认只隔离发生冲突的环境×渠道，其他已通过预检的目标可以继续；用户仍可在确认页选择“任一失败则全部不写”。
+
+#### 历史与未知ID导入
+
+首次接管和新增渠道时先生成只读扫描报告，不写Excel、不预留ID、不写ledger。人工复核只能选择：关联现有Model、登记`LEGACY_IMPORTED`、登记`EXTERNAL_OCCUPIED`、保持`EXTERNAL_UNKNOWN`不纳管。
+
+- Tackle、Item、GoodsBasic、StoreBuy关系一致且业务归属明确的历史对象可登记`LEGACY_IMPORTED`，保留原ID和原名称。历史名称即使不满足新模板也按祖父条款保留，但不能成为新对象的命名模板。
+- 归属无法证明且位于专属区间外的对象保持`EXTERNAL_UNKNOWN`，工具不得覆盖；位于本策略专属区间内的未知对象登记`EXTERNAL_OCCUPIED`并永久占用。
+- 重复名称、重复ID、对象断链、部分命中、跨环境不一致或跨渠道不一致必须隔离到实际目标，未经人工选择不得自动推断。
+- 文档示例、测试夹具、下载文件名和某次扫描结果都不是正式占用证据；正式导入必须记录源仓库、环境、渠道、commit、workbook、sheet和行。
+
+2026-07-23对内网`common/configs`的`dev@79b3ac1a`、`test@fe6b5f40`、`online@5c03518b`、`release@a2f4aa5c`四个分支中1001渠道的`tackle.xlsx`、`item.xlsx`、`store.xlsx`进行了只读实表扫描：上述候选区间占用数为0；同时发现`301200101 / rod_spinning01_1`等现行对象、`3015007 / rod_spinning05_worn`等历史短ID，以及`reel_spin208_7`重复名称，证明不能从最大值或名称形态推断治理状态。该扫描只用于支持区间决策；非1001渠道尚须逐一扫描，扫描完成和策略版本发布前不得正式启用分配。
+
+验收至少覆盖：
+
+- Given 两个并发请求争用同一部位游标，When 事务预留，Then 只产生两个不同且完整的Bundle，失败重试不留下半Bundle；
+- Given 候选基础ID末三位为`000`，When 分配，Then 跳过该编号及其GoodsBasic/StoreBuy派生ID；
+- Given 预留事务失败，Then 不产生占用；Given 事务成功后Model放弃，Then 标记`ABANDONED`且后续永不复用；
+- Given 部位容量达到80%、95%和100%，Then 分别返回预警、严重预警但继续分配、仅阻止该部位新预留；
+- Given `dev/1001`同ID不同名而`test/1001`完整命中同一行，When 多目标提交，Then 默认只隔离`dev/1001`并允许`test/1001`继续；
+- Given 首次扫描发现专属区间内未知ID，When 尚未人工复核，Then Excel与ledger均不写；When 选择外部占用，Then 登记`EXTERNAL_OCCUPIED`并永久占用。
 
 ### 20.1 价值分自动定价与PricingPolicy
 
@@ -1864,7 +1935,8 @@ type PrimaryDisplayState = "HARD_CONFLICT" | "REBASE_REQUIRED" | "REVIEW_REQUIRE
 
 | 阶段 | 必做 | 明确不做 |
 | --- | --- | --- |
-| 一期 | 公司内网部署、飞书登录、统一Capability接口、核心规则/Series/SKU/Model/Snapshot、配置表生成与关系校验 | AI运行连接器、细粒度RBAC |
+| 一期 | 公司内网部署、飞书登录、统一Capability接口、核心规则/Series/SKU/Model/Snapshot、配置表预览生成与关系校验 | 正式ID预留、本地worktree提交、AI运行连接器、细粒度RBAC |
+| 1.5期 | 发布`ConfigIdPolicyVersion`与reservation ledger；全目标扫描/导入复核；把正式配置差异写入用户选择的`dev/test/online/release`本地worktree | Git合并、远端发布、部署、替代现有发布系统 |
 | 二期 | 实现第23、24节已设计的AI评估、证据、变化预览和草稿转换 | 自动应用、自动发布、AI裁决 |
 | 三期 | 细粒度角色/对象/动作权限、职责分离策略落地 | 改变既有ID、审计和Snapshot语义 |
 
@@ -1878,11 +1950,11 @@ type PrimaryDisplayState = "HARD_CONFLICT" | "REBASE_REQUIRED" | "REVIEW_REQUIRE
 
 ### 25.2 本机配置目录与环境/渠道边界
 
-一期面向所有支持File System Access API的Chromium内核浏览器，默认通过HTTPS提供内网页面。无内网DNS且明确接受降级时，可通过默认关闭的显式配置，仅对RFC 1918私网IP开放HTTP；此时会话Cookie不设置Secure，且浏览器依赖安全上下文的能力（包括File System Access API）可能不可用。用户通过目录选择器显式授权本地配置仓库；一期不要求安装本地伴随程序，也不让服务器访问设计人员电脑。
+一期可以完成配置预览和下载包；1.5期面向所有支持File System Access API的Chromium内核浏览器开放正式本地写入，默认通过HTTPS提供内网页面。无内网DNS且明确接受降级时，可通过默认关闭的显式配置，仅对RFC 1918私网IP开放HTTP；此时会话Cookie不设置Secure，且浏览器依赖安全上下文的能力（包括File System Access API）可能不可用。用户通过目录选择器显式授权本地配置worktree；不要求安装本地伴随程序，也不让服务器访问设计人员电脑。
 
 ```ts
 interface ConfigEnvironmentProfile {
-  environmentId: string;       // 例如 dev、test
+  environmentId: string;       // dev、test、online、release
   label: string;
   configTomlRelativePath: "config.toml";
 }
@@ -1897,18 +1969,18 @@ interface LocalExportTargetBinding {
 }
 ```
 
-- dev、test是环境，不是渠道；每个环境对应一个独立configs仓库根目录，并使用自己的`config.toml`。
+- `dev`、`test`、`online`、`release`是首批人工导出环境，不是渠道；每个环境对应一个用户选择的独立configs worktree根目录，并使用自己的`config.toml`。
 - 每个环境的1001渠道固定写入该环境根目录下的`xlsx`。
 - 其他渠道只处理用户明确选择的具体目录，例如`xlsx_channel/numerical`；工具不扫描、启用、停用或治理渠道，也不解析或修正`config_system.toml`。
 - 服务端只保存环境、渠道和用户标签等逻辑信息，不保存本机绝对路径。
-- `FileSystemDirectoryHandle`保存在该用户、该浏览器、该站点origin的IndexedDB中；Cookie仅用于飞书登录会话。
+- `FileSystemDirectoryHandle`按`userId + browserProfile + siteOrigin + environmentId + channelKey`保存在IndexedDB中；不进入用户业务数据库，Cookie仅用于飞书登录会话。切换环境或渠道时自动切换到对应绑定，不要求用户重复输入目录。
 - 导出前调用`queryPermission({ mode: "readwrite" })`；状态至少表达已绑定已授权、已绑定需重新授权、未绑定、目录失效。
 - 换电脑、浏览器配置、站点origin或无痕会话时允许重新绑定；不同用户不共享目录句柄。
 - File System Access API不可用时可以下载变更包作为人工搬运降级，但不得声称已经写入本机Git工作区。
 
 ### 25.3 发布末端两步
 
-正式流程固定为：
+1.5期正式流程固定为：
 
 ```text
 选择Series/SKU/Model范围
@@ -1934,7 +2006,7 @@ interface LocalExportTargetBinding {
 
 配置身份规则：
 
-- 配置ID由服务端的版本化`ConfigIdPolicy`和reservation ledger分配；禁止把“扫描当前最大值+1”作为永久策略。分配必须事务化，已预留ID即使放弃也不自动复用。公司区间与命名格式尚未提供时按`OPEN-008`阻止正式预留和提交。
+- 配置ID由服务端的版本化`ConfigIdPolicy`和reservation ledger按`OPEN-008`已确认规则分配；禁止把“扫描当前最大值+1”作为永久策略。分配必须事务化，已预留ID即使放弃也不复用。策略版本未发布或启用目标未完成扫描时，仍按`OPEN-008`阻止正式预留和提交。
 - 一个Model拥有稳定`ConfigIdBundle`；tackle与item共享`configNumericId + configNameKey`，GoodsBasic与StoreBuy使用各自稳定ID/名称键。
 - 同一个Model跨Snapshot、环境和渠道沿用同一套ID；若游戏中需要新旧版本并存，必须创建新Model。
 - 同一Model的新Snapshot导出时更新相同配置行；旧Snapshot继续在Tackle Forger内部不可变、可审计，但配置Git仓库只表达该Model最近一次成功导出的当前状态。
@@ -1977,7 +2049,7 @@ interface LocalExportTargetBinding {
 
 ### 25.5 导出场景与验收
 
-正常路径：选择dev/test中的多个显式目标，在暂存区生成三表，关系全通过后确认并提交，各目标返回新hash与备份。  
+正常路径：选择dev/test/online/release中的多个显式目标，在暂存区生成三表，关系全通过后确认并提交，各目标返回新hash与备份。  
 边界：某目标缺必需Store映射时阻止该目标，不能生成半行；浏览器不支持或未授权目录时改为重新授权或下载变更包。  
 冲突：预览后文件被Excel或其他人修改，hash冲突阻止覆盖。  
 恢复：保留ExportPackage和报告；重新读取目标做三方差异，或从备份回滚；幂等提交不得重复插行。  

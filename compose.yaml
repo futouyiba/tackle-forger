@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: tackle_forger
+      POSTGRES_USER: tackle_forger
+      POSTGRES_PASSWORD: tackle_forger
+    ports:
+      - "5432:5432"
+    volumes:
+      - tackle_forger_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tackle_forger -d tackle_forger"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  tackle_forger_postgres:

@@ -783,6 +783,9 @@ export interface FiveAxisAxisDefinition {
 export interface FiveAxisViewDefinition {
   definitionId: string;
   version: string;
+  revision: number;
+  publicationState: "UNPUBLISHED" | "PUBLISHED" | "SUPERSEDED";
+  definitionHash: string;
   fiveAxisRuleVersion: string;
   sourceRevision: string;
   axes: [
@@ -1432,6 +1435,8 @@ export interface QualityResult {
 
 export interface ValidationIssue {
   level: "error" | "warning" | "info";
+  /** 规范严重度；旧记录缺失时由 level 确定性映射。 */
+  severity?: "INFO" | "WARNING" | "ERROR" | "BLOCKER";
   code: string;
   message: string;
   parameterKey?: string;

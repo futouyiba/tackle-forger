@@ -43,14 +43,11 @@
 | AUD-013 | Medium | OPEN | 当前 Node 引擎下限 `>=22.13.0` 可能低于备份脚本使用的稳定 `node:sqlite backup` API 要求。 | `package.json:4-6`；`scripts/backup-workspace.ts` | 核实实际 Node API 最低版本并提升 engines/部署文档，或改用兼容实现；在最低支持版本运行备份测试。 |
 | AUD-014 | Medium | OPEN | 备份脚本当前备份 SQLite 和导入文件，但没有包括 Feishu 会话存储。 | `scripts/backup-workspace.ts`；`lib/auth-store.ts` | 明确会话是否需要灾备；若需要，备份并验证权限/恢复；若不需要，文档化用户需重新登录的恢复行为。 |
 | AUD-015 | Low | OPEN | 客户端生产构建有超过 500 kB 的 chunk。 | `npm test`/`vinext build` 输出 | 记录 bundle 分析；按工作台模块动态拆分或将权威计算迁到服务端；警告消失或有明确预算。 |
-| AUD-016 | Low | OPEN | `BLOCKER` 甘特筛选值与现有 legacy `ValidationIssue.level` 不一致，筛选可能永远无结果。 | `lib/series-gantt-query.ts`；`lib/types.ts` | 明确 severity 映射；BLOCKER 可由正式 Issue 契约产生或从筛选中移除；增加筛选测试。 |
-| AUD-017 | Low | OPEN | `applyLayeredPatches` 的 set 冲突键未包含 `scopeId`，多实体批量调用时可能误报冲突。 | `lib/patch-engine.ts` | 冲突键包含实体作用域，或 API 明确禁止混合实体并断言；增加多 scopeId 测试。 |
 | AUD-018 | Low | IN_PROGRESS | 审计Markdown尾随空格已由`ba2111c2`清理，`git diff --check origin/main...HEAD`及本次复核时的工作树检查均通过；但仓库尚无`.gitattributes`，跨Windows/macOS的CRLF/LF策略仍未固化。 | `ba2111c2`；仓库根缺少`.gitattributes`；复核补充文档 | 添加或明确确认`.gitattributes`行尾策略；在Windows与macOS各验证一次；`git diff --check`持续无错误。 |
 | AUD-019 | Low | OPEN | 根应用和 workspace 使用 npm、pnpm 两套安装/锁文件，常用验证入口尚未统一。 | `package-lock.json`、`pnpm-lock.yaml`、根 `package.json`、workspace package | README/CLAUDE.md 明确每套命令；CI 分别验证；避免一次安装隐式改写另一锁文件。 |
 | AUD-020 | Low | OPEN | `.claude/scheduled_tasks.lock` 被主线追踪，属于工具运行状态还是项目配置尚不明确。 | `.claude/scheduled_tasks.lock` | 确认是否应版本化；若为会话运行状态则移除并忽略，若为项目配置则说明用途。 |
 | AUD-021 | Medium | OPEN | Feishu 回写已可回读恢复远端写入，但远端成功后本地审计保存冲突仍需人工重新拉取。 | `app/api/data-sources/route.ts:179-200` | 持久化写入意图/幂等记录，或提供自动对账命令；模拟远端成功、本地保存失败并可安全恢复。 |
 | AUD-022 | Low | OPEN | Feishu 主工作簿 wiki token/share URL 仍作为代码常量，工作簿迁移需要代码变更。 | `lib/feishu-workbook.ts` | 决定是否属于有意的 canonical config-as-code；若否，迁到受验证配置并保留稳定 sheet 注册表。 |
-| AUD-023 | High | OPEN | `FiveAxisViewDefinition`没有独立发布状态，`publishConfigurationSnapshot`对五维预览只校验`modelId`；未发布或过期的OPEN-005种子定义仍可能进入新正式Snapshot。 | `lib/types.ts:781-798`；`lib/publishing.ts:138-143,193-195`；v3 §20 OPEN-005、§24.6 | 五维定义具有不可变revision与发布状态；`new_formal`只接受已发布定义且预览的definition/version/rule/vertex hash完整一致；未发布或过期定义产生PUBLISH门禁Issue；历史Snapshot不变；覆盖正常、未发布、过期和历史兼容测试。 |
 | AUD-024 | Medium | OPEN | 后端核心契约仍以`targetWeightKg`承载SKU目标拉力，`ProjectionMatch`和查询接口同时保留新旧字段；历史兼容字段尚未收敛到迁移读取边界。 | `lib/types.ts:596-613,737-751`；`lib/projection-matcher.ts:21-35,237-248`；`lib/interaction-contracts.ts:494-540`；v3 §5.3 | 新写入、领域对象和API统一使用`targetPullKg/derivedPullKg/matchedStructuralPullKg/modelFinalPullKg`；`targetWeightKg`仅由迁移适配器读取；顺序迁移保留历史Payload与Snapshot hash；覆盖旧数据迁移、API契约和确定性匹配测试。 |
 | AUD-025 | Low | OPEN | 默认`npm test`脚本没有执行`tests/feishu-writeback.test.ts`；该文件单独执行通过，但后续回写恢复回归不会被默认门禁捕获。 | `package.json:15`；`tests/feishu-writeback.test.ts`；本次复核的单独测试证据 | 默认本地与CI测试入口自动覆盖全部正式测试文件，包含飞书回写5个场景；新增测试文件无需手工维护长名单或有自动完整性检查；记录完整通过数量。 |
 
@@ -82,6 +79,9 @@
 | AUD-R008 | RESOLVED | 生产环境无持久存储时曾静默回退到进程内内存，重启后丢失团队配置。 | `lib/storage.ts`的`assertEphemeralStorageAllowed`；`f0fe8232`。 | `tests/storage.test.ts`；远端复审完整测试通过。systemd路径不一致仍由`AUD-008`管理。 |
 | AUD-R009 | RESOLVED | SQLite保存的revision条件更新未命中时曾可能继续写入历史，形成伪revision。 | `lib/sqlite-storage.ts`检查`updated.changes`并回滚；`45e8281d`。 | 持久化、过期`baseRevision`、不新增历史及并发测试通过。revision保留政策仍由`AUD-009`管理。 |
 | AUD-R010 | RESOLVED | 旧扁平`SeriesRecipe`缺少可承载竿、轮、线独立约束的迁移结构。 | v14`SeriesRecipe.partConstraints`及v13→v14顺序迁移；`be1cf696`。 | 迁移幂等测试通过并保留旧字段。运行时/UI尚未消费该结构，继续由`AUD-005`管理。 |
+| AUD-016 | RESOLVED | `BLOCKER` 甘特筛选值与legacy `ValidationIssue.level`不一致。 | `ValidationIssue.severity`承载规范严重度；缺失时确定性兼容映射legacy level。 | `tests/series-gantt-query.test.ts`覆盖BLOCKER命中与ERROR隔离；类型检查及领域测试通过。 |
+| AUD-017 | RESOLVED | `applyLayeredPatches`跨实体批量调用可能误报set冲突。 | 冲突键加入`scopeId`，只在同作用域实体同路径间报告竞争。 | `tests/v3-end-to-end.test.ts`覆盖不同/相同scopeId；领域测试通过。 |
+| AUD-023 | RESOLVED | 未发布或过期的`FiveAxisViewDefinition`可能进入新正式Snapshot。 | v15为定义增加revision、发布状态和内容哈希；旧定义无损迁移为未发布；`new_formal`核验定义发布状态、定义哈希及preview definition/rule/vertex/source版本链。 | `tests/five-axis.test.ts`覆盖正常、未发布、篡改、过期和历史Snapshot冻结；`tests/v3-migration.test.ts`覆盖迁移幂等；类型检查及领域测试通过。 |
 
 ## 更新记录
 
@@ -92,3 +92,4 @@
 | 2026-07-22 | 归并产品反馈：“系列配方未拆分竿轮线”并入`AUD-005`验收，不增加AUD数量；品质、定价、配置导出和交互反馈转由实现差距矩阵及v3/UX权威项管理。 | `034a353` |
 | 2026-07-22 | 将v3-work的SQLite条件更新、生产环境禁止内存回退、v14系列配方迁移cherry-pick到审查分支；补全PatchLedger的v14 schema断言；新增`AUD-R008/009`。`AUD-008/009`仍开放。 | `45e8281d` `f0fe8232` `be1cf696` `6c233e5d` |
 | 2026-07-22 | 拉取全部远端分支并复审`origin/review/current-state-2026-07-22@fee6c83a`：新增`AUD-R008～R010`，有效未关闭问题仍为24个；完整测试190项、渲染测试1项、飞书回写单测5项及类型检查通过。 | `034a353` |
+| 2026-07-22 | 第一批领域契约修复关闭`AUD-016/017/023`；工作区升级到v15并保留旧五维定义和历史Snapshot。`AUD-024`保持开放，等待完整的`targetPullKg`顺序迁移而不做半迁移。 | 本分支提交 |

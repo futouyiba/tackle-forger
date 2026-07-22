@@ -93,6 +93,11 @@ function matchesBoolean(filter: boolean | undefined, value: boolean): boolean {
   return filter === undefined || filter === value;
 }
 
+function issueSeverity(issue: ValidationIssue): "INFO" | "WARNING" | "ERROR" | "BLOCKER" {
+  if (issue.severity) return issue.severity;
+  return issue.level === "error" ? "ERROR" : issue.level === "warning" ? "WARNING" : "INFO";
+}
+
 function collectSeriesContext(input: {
   series: SeriesDefinition;
   skus: SkuDrawer[];
@@ -193,7 +198,7 @@ export function querySeriesGantt(input: {
     if (!intersects(input.query.lifecycleStates, [context.state.lifecycle])) return [];
     if (!intersects(input.query.attention ?? input.query.attentionStates, context.state.attention)) return [];
     if (!intersects(input.query.issueCodes, issueCodes)) return [];
-    if (!intersects(input.query.issueSeverities, context.issues.map((issue) => issue.level === "error" ? "ERROR" : issue.level === "warning" ? "WARNING" : "INFO"))) return [];
+    if (!intersects(input.query.issueSeverities, context.issues.map(issueSeverity))) return [];
     if (!matchesBoolean(input.query.hasUpgradeCandidate, context.pendingUpgrades.length > 0)) return [];
     if (!intersects(input.query.exactTargetWeightKg, context.skus.map((sku) => sku.targetWeightKg))) return [];
     if (input.query.minTargetPullKg !== undefined && !context.skus.some((sku) => sku.targetWeightKg >= input.query.minTargetPullKg!)) return [];

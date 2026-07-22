@@ -2512,11 +2512,11 @@ interface LocalExportTargetBinding {
 - `FileSystemDirectoryHandle`按`userId + browserProfile + siteOrigin + environmentId + channelKey`保存在IndexedDB中；不进入用户业务数据库，Cookie仅用于飞书登录会话。切换环境或渠道时自动切换到对应绑定，不要求用户重复输入目录。
 - 导出前调用`queryPermission({ mode: "readwrite" })`；状态至少表达已绑定已授权、已绑定需重新授权、未绑定、目录失效。
 - 换电脑、浏览器配置、站点origin或无痕会话时允许重新绑定；不同用户不共享目录句柄。
-- File System Access API不可用时，一期仍只能下载`NON_FORMAL`预览包；1.5期在已有正式Bundle、目标已列入权威目录且通过`config.export.commit`鉴权后，才可下载正式变更包作为人工搬运降级。下载结果审计为`FORMAL_PACKAGE_DOWNLOADED_NOT_APPLIED`，不得声称已经写入本机Git工作区。
+- File System Access API不可用时，一期仍只能下载`NON_FORMAL`预览包；1.5期只有在已有正式Bundle、目标已列入权威目录、对应获批`ConfigTargetScanManifest`保持新鲜、通过`config.export.commit`鉴权，并在生成/下载前取得`ConfigTargetGovernanceLease`且确认全部authoritative ref可执行受保护expected-old-OID CAS时，才可下载正式变更包作为人工搬运降级。协调器不可达、token连续性无法证明、ref存在绕过路径或其他串行化门禁不成立时返回`CONFIG_TARGET_SERIALIZATION_UNAVAILABLE`，不得生成或下载正式包，只能保留`NON_FORMAL`预览。下载成功结果审计为`FORMAL_PACKAGE_DOWNLOADED_NOT_APPLIED`并冻结租约/CAS证据，不得声称已经写入本机Git工作区。
 
 一期下载物固定为`ConfigPreviewPackage`：`packageKind=CONFIG_PREVIEW`、`publicationState=NON_FORMAL`、`formal=false`。没有正式Bundle时，数字ID和正式`configNameKey`字段必须为空，并只在预览Manifest中使用不符合生产schema的`NON_FORMAL:<modelId>:<objectKind>`符号引用来做结构关系检查。包内不得出现可被配置编译器直接接受的`tackle.xlsx`、`item.xlsx`、`store.xlsx`，只允许带明显水印/说明的`*.preview.xlsx`或差异报告；每个预览文件顶部和Manifest都必须写明“不可提交、不可人工搬运到configs”。`commit_config_export`必须拒绝`NON_FORMAL`包、占位身份和没有已预留Bundle的请求。
 
-1.5期的正式`ExportPackage`必须引用已预留Bundle、有效策略版本、目标目录版本和对应获批扫描Manifest，并要求`config.export.commit`；生成和本地落盘必须取得第20节OPEN-008定义的`ConfigTargetGovernanceLease`，冻结`leaseId + fencingToken + expected old OID + manifestSetHash`。无论选择浏览器落盘还是正式人工搬运包，都不能由一期预览包原地升级或仅移除`NON_FORMAL`标记，必须从当前Snapshot和目标基线重新生成、重新校验。人工搬运包下载后不长期持有租约；下游真正推进authoritative ref时必须重新取得治理租约并以包内expected old OID执行受保护CAS，Tackle Forger只记录“已下载、未应用”。
+1.5期的正式`ExportPackage`必须引用已预留Bundle、有效策略版本、目标目录版本和对应获批扫描Manifest，并要求`config.export.commit`；正式人工搬运包的生成/下载和本地落盘都必须取得第20节OPEN-008定义的`ConfigTargetGovernanceLease`，冻结`leaseId + fencingToken + expected old OID + manifestSetHash`，并以受保护CAS/串行化可用作为生成门禁。无论选择浏览器落盘还是正式人工搬运包，都不能由一期预览包原地升级或仅移除`NON_FORMAL`标记，必须从当前Snapshot和目标基线重新生成、重新校验。人工搬运包下载完成并提交`FORMAL_PACKAGE_DOWNLOADED_NOT_APPLIED`证据后释放本次租约，不长期持有；下游真正推进authoritative ref时必须重新取得治理租约并以包内expected old OID执行受保护CAS，Tackle Forger只记录“已下载、未应用”。
 
 ### 25.3 发布末端两步
 
@@ -2590,7 +2590,7 @@ interface LocalExportTargetBinding {
 ### 25.5 导出场景与验收
 
 正常路径：选择dev/test/online/release中的多个显式目标，在暂存区生成三表，关系全通过后确认并提交，各目标返回新hash与备份。  
-边界：某目标缺必需Store映射时阻止该目标，不能生成半行；一期或没有正式Bundle时只能下载`NON_FORMAL`预览；1.5期浏览器不支持或未授权目录时，在完成正式鉴权后可下载人工搬运包。  
+边界：某目标缺必需Store映射时阻止该目标，不能生成半行；一期或没有正式Bundle时只能下载`NON_FORMAL`预览；1.5期浏览器不支持或未授权目录时，只有`config.export.commit`鉴权、新鲜Manifest、治理租约和受保护CAS/串行化门禁全部通过后才可生成并下载人工搬运包。
 冲突：预览后文件被Excel或其他人修改，hash冲突阻止覆盖。  
 恢复：保留ExportPackage和报告；重新读取目标做三方差异，或从备份回滚；幂等提交不得重复插行。  
 权限：选择目标和生成`NON_FORMAL`预览需`config.export.preview`；生成正式人工搬运包或实际落盘需`config.export.commit`；浏览器目录授权不能替代服务端Capability。  
@@ -2599,6 +2599,7 @@ interface LocalExportTargetBinding {
 - Given 选择两个目标且其中一个StoreBuy引用不存在的GoodsBasic，When 校验，Then 该目标阻止提交并精确定位store.xlsx/sheet/行/字段，另一目标显示独立结果。
 - Given 一期Model没有正式Bundle，When 下载配置预览，Then 只生成标记`NON_FORMAL`的预览文件和符号引用，不出现生产文件名或有效数字ID；When 尝试提交该包，Then `commit_config_export`拒绝。
 - Given 1.5期用户绑定了未列入当前权威目标目录的渠道，When 请求正式导出，Then 只能生成`NON_FORMAL`预览并提示先发布新目录、扫描Manifest和策略版本。
+- Given 1.5期已有正式Bundle、权威目录、新鲜获批Manifest且通过`config.export.commit`，但治理协调器或受保护expected-old-OID CAS不可用，When 请求生成或下载正式人工搬运包，Then 返回`CONFIG_TARGET_SERIALIZATION_UNAVAILABLE`，不生成、不下载且不记录`FORMAL_PACKAGE_DOWNLOADED_NOT_APPLIED`，只允许保留`NON_FORMAL`预览。
 - Given 预览后tackle.xlsx发生外部修改，When 确认提交，Then 系统返回文件冲突、保留暂存包且不覆盖三张正式表。
 - Given 三张表写入到第二张失败，When 执行恢复，Then 第一张按备份恢复、第三张未写入，目标结果为失败且有完整审计。
 - Given dev/1001与test/numerical同时选择且前者预检失败，When 用户保持默认继续策略，Then test/numerical仍可写入，dev/1001标记未执行。

@@ -1126,6 +1126,10 @@ interface ConfigTargetGovernanceLease {
   operationId: string;
   catalogVersionId: string;
   manifestSetHash: string;
+  physicalRefs: {
+    repositoryId: string; authoritativeRef: string; expectedCommitOid: string;
+    targetEntryIds: string[];
+  }[];
   targets: {
     targetEntryId: string; repositoryId: string; authoritativeRef: string;
     expectedCommitOid: string; configTomlHash: string; workbookSetHash: string;
@@ -1135,11 +1139,14 @@ interface ConfigTargetGovernanceLease {
 }
 ```
 
-- 协调器对租约覆盖的全部`targetEntryId`使用稳定全序一次取得锁，分配严格单调且永不复用的`fencingToken`，并冻结目录版本、Manifest集合hash、每个ref的expected commit OID和文件hash；租约过期只能发放更高token，不能让旧操作继续提交。
+- 租约的锁身份是物理Git ref二元组`(repositoryId, authoritativeRef)`，不是逻辑`targetEntryId`。协调器先展开全部目标条目，再按该二元组去重；同一组所有别名必须解析并声明完全相同的`expectedCommitOid`，否则返回`CONFIG_TARGET_REF_ALIAS_CONFLICT`且不得取得任何租约或写入ledger。组内`targetEntryIds`按稳定顺序冻结作审计，各条目仍分别保留自己的逻辑目录和文件hash。
+- 协调器对去重后的全部物理ref按`repositoryId`、`authoritativeRef`的逐字节稳定全序一次取得锁；任何只覆盖其中一个逻辑别名的操作也必须竞争同一个物理ref锁。协调器分配严格单调且永不复用的`fencingToken`，并冻结目录版本、Manifest集合hash、每个物理ref的expected commit OID和每个逻辑条目的文件hash；租约过期只能发放更高token，不能让旧操作继续提交。
 - 每个authoritative ref必须由受保护写入协议治理，例如配置仓库写入网关、pre-receive检查或等价服务。任何推进ref的写入都必须携带当前治理租约与token，并以expected old OID执行CAS；`ACTIVE/COMMITTING`的读保护租约存在时，冲突写入必须等待或失败，过期token和old OID不匹配必须拒绝。仅靠分支命名、客户端约定或操作前读取不合格。
-- 业务命令取得租约后重新解析全部ref和hash。数据库提交前，协调器必须以`leaseId + fencingToken + expectedCommitOids`原子CAS把租约从`ACTIVE`推进为`COMMITTING`；这一步与受保护ref写入共用同一协调状态，因此CAS成功后ref不能在业务事务提交前推进。数据库事务在实际提交点再次验证token仍为各目标最新值，并把`leaseId + fencingToken + manifestSetHash`写入ledger、导入或导出证据。
+- 业务命令取得租约后重新解析全部物理ref和各别名的文件hash。数据库提交前，协调器必须以`leaseId + fencingToken + physicalRefs[{repositoryId, authoritativeRef, expectedCommitOid}]`原子CAS把租约从`ACTIVE`推进为`COMMITTING`；这一步与受保护ref写入共用同一协调状态，因此CAS成功后ref不能在业务事务提交前推进。数据库事务在实际提交点再次验证token仍为每个物理ref的最新值，并把`leaseId + fencingToken + manifestSetHash`写入ledger、导入或导出证据。
 - 数据库提交成功后才把租约标记`COMMITTED`并释放；提交结果未知时进入`RECOVERY_REQUIRED`，先按`operationId/idempotencyKey`回读ledger和协调状态，禁止直接重放或让更高token越过。业务回滚则标记`ABORTED`且不得留下ID占用。
 - 任一配置仓库ref无法接入受保护写入协议、协调器不可达、token连续性无法证明或ref写入存在绕过路径时，返回`CONFIG_TARGET_SERIALIZATION_UNAVAILABLE`并禁止正式动作。正式人工搬运包只标记`FORMAL_PACKAGE_DOWNLOADED_NOT_APPLIED`，其中冻结expected old OID；下游真正推进ref时仍须重新取得治理租约并执行CAS，下载本身不能占有长期租约或证明已经应用。
+
+验收必须覆盖别名竞争：Given两个环境×渠道条目具有不同`targetEntryId`但共享同一`repositoryId + authoritativeRef`，When两个正式动作并发申请租约，Then它们竞争同一个物理ref锁且最多一个进入`ACTIVE/COMMITTING`；Given同组别名声明不同expected OID，When申请租约，Then返回`CONFIG_TARGET_REF_ALIAS_CONFLICT`，不发放token、不写ledger。只有逻辑目录不同而物理ref和OID相同的别名可以共存，其文件hash仍逐条复验。
 
 Manifest失效后，旧`ConfigIdPolicyVersion`只保留历史审计用途，不再允许新预留或任何正式包/落盘；必须从当前authoritative ref重新扫描、复核Manifest并发布引用新Manifest的新策略版本。一次正式提交会改变workbook hash，因此提交结果必须记录post-write文件hash；待现有外部发布系统形成新的不可变commit后，再从该commit扫描和复核。在新Manifest进入新策略版本前，旧策略不得用于下一批正式预留或提交。已成功预留的Bundle仍永久保留，后续目标若外部占用同一ID则产生`RESERVED_ID_EXTERNAL_COLLISION`并隔离，不自动换号、复用或覆盖。
 
@@ -2026,7 +2033,7 @@ type ActionCode =
   | "open_series" | "open_sku" | "preview_model"
   | "edit" | "review" | "publish" | "generate_candidates"
   | "materialize_candidates" | "override_candidate_selection" | "dismiss_candidate_run"
-  | "create_patch" | "review_patch" | "open_rebase"
+  | "create_patch" | "review_patch" | "rebase_patch"
   | "view_snapshot" | "export_snapshot"
   | "run_ai_assessment" | "create_ai_patch_draft" | "create_ai_feishu_draft" | "manage_ai_provider_policy"
   | "confirm_feishu_write" | "pull_feishu_source" | "publish_ruleset"
@@ -2040,7 +2047,7 @@ type ActionCode =
 
 ```
 
-配置身份治理动作固定映射为：
+配置身份治理、本节校验处置与Patch Rebase写动作固定映射为：
 
 | ActionCode | requiredCapabilities |
 | --- | --- |
@@ -2058,6 +2065,7 @@ type ActionCode =
 | `approve_validation_waiver` | `validation.waiver.approve` |
 | `recompute_validation` | `validation.recompute` |
 | `create_rule_source_change_draft` | `rules.source_change_draft.create` |
+| `rebase_patch` | `patch.rebase` |
 
 读接口必须按当前对象、策略版本和操作者返回这些`ActionAvailability`；命令端再次校验Capability和`separationOfDutiesPolicy`。发布策略还必须校验其目标目录/Manifest覆盖，浏览器目录授权不能替代任何服务端权限。
 
@@ -2361,7 +2369,11 @@ interface ActionLink {
 
 对任何会改变状态的`ActionCode`，`enabled=true`时必须返回不可篡改的`commandPayloadRef`，其`action/subjectRef/inputHash/payloadHash`必须与服务端保存的类型化payload一致。warning确认payload必须绑定Issue fingerprint、expected Issue revision/inputHash和人工理由；waiver payload必须绑定单一Gate及必要的环境×渠道；重算必须绑定待重算对象、expected revision和规则版本；规则源变更草稿必须绑定目标规则、source revision和证据hash；配置身份动作的具体字段遵循OPEN-008和第25节。客户端只提交`actionId + payloadRefId`，不得替换action、subject、expected revision或策略/Manifest引用；服务端执行前重新读取payload、校验hash/有效期、重算`ActionAvailability`并再次鉴权。
 
-旧持久化动作在迁移边界确定性收口：`acknowledge_warning → acknowledge_validation_warning`、`request_waiver → request_validation_waiver`、`approve_waiver → approve_validation_waiver`、`recompute → recompute_validation`、`create_rule_source_change → create_rule_source_change_draft`；旧`edit_rule/edit_patch/open_rebase/satisfy_requirement/request_permission`只有在确认为纯路由时转换为`navigate + targetRoute`。旧`retry`只有能恢复原`ActionCode`、原类型化payload和原幂等键时才转换为原动作，否则返回`LEGACY_ACTION_ALIAS_UNRESOLVABLE`并保持禁用。新接口、数据库和事件不得继续写入这些旧别名。
+旧持久化动作名只用于识别迁移候选，不能直接做字符串替换：`acknowledge_warning`、`request_waiver`、`approve_waiver`、`recompute`和`create_rule_source_change`分别以`acknowledge_validation_warning`、`request_validation_waiver`、`approve_validation_waiver`、`recompute_validation`和`create_rule_source_change_draft`为候选目标。迁移器必须从可信的服务端历史事件、命令记录和版本化对象中完整重建目标ActionCode要求的类型化payload，校验subject、expected revision/input hash、Issue fingerprint、人工理由、Gate、必要的环境×渠道、目标规则/source revision、证据hash及原幂等键，并重新计算`payloadHash`；不得从旧动作名、展示文案、客户端补传值推断或为缺失字段填默认值。
+
+`edit_rule/edit_patch/satisfy_requirement/request_permission`只有在历史证据能证明它们从未修改业务状态且能恢复明确路由时，才转换为`navigate + targetRoute`。`open_rebase`不再是现行`ActionCode`：若历史记录能证明它只是打开页面，则转换为`navigate + targetRoute`；若它曾执行Rebase，则只有从可信历史完整重建并校验`rebase_patch`类型化payload和原幂等键后才转换为`rebase_patch`，歧义记录不得猜测。旧`retry`同样只有能恢复原ActionCode、完整原类型化payload和原幂等键时才转换为原动作。
+
+上述任一状态写候选缺少或冲突任一必填字段时，迁移结果固定为`enabled=false`、不生成`commandPayloadRef`并记录`LEGACY_ACTION_ALIAS_UNRESOLVABLE`；直接API执行相同记录也必须以该码拒绝。任何未枚举但历史语义可能具有副作用的旧动作也默认按该码拒绝，直到迁移器为其定义完整的目标ActionCode、可信字段来源和类型化payload校验。新接口、数据库和事件不得继续写入旧别名，也不得保留绕过类型化payload的兼容执行器。
 
 缺Capability、职责分离策略不允许、expected revision过期、Manifest stale或其他关口未满足时，`ActionLink`必须返回`enabled=false + requiredCapabilities + disabledReasonCode + disabledReasonText`且不得携带`commandPayloadRef`；直接伪造命令仍返回403或领域冲突，不能依赖按钮禁用。只读导航类动作可以没有payload。`ActionAvailability`与同一subject上的`ActionLink`对相同`ActionCode`必须给出一致的enabled、requiredCapabilities和禁用原因。
 
@@ -2375,7 +2387,7 @@ interface ActionLink {
 恢复：失败保留Issue；重试复用原ActionCode和幂等payload，重算使用`recompute_validation`，权限帮助只提供无副作用导航。
 
 权限：可看不等于可修；无权动作说明原因。  
-验收：Given deny、-3 Affinity、不变量偏离并存，When 返回，Then source、Severity、Gate、State和动作独立，Affinity不能抵消deny；Given策略未允许某ERROR waiver，When渲染动作，Then不显示可执行waive入口；Given 用户缺少`config.id.reserve`，When 返回预留Issue动作，Then `action=reserve_config_id_bundle`、`enabled=false`、列出所需Capability和禁用原因且没有payload；Given 权限和全部门禁恢复，Then 返回同一ActionCode及绑定subject、expected revision和hash的payload引用，篡改payload或revision时服务端拒绝；Given旧`approve_waiver`或`retry`记录，When迁移，Then前者只映射到`approve_validation_waiver`，后者只有恢复原动作与payload时才可执行，Remediation联合中不存在任何状态写动作。
+验收：Given deny、-3 Affinity、不变量偏离并存，When 返回，Then source、Severity、Gate、State和动作独立，Affinity不能抵消deny；Given策略未允许某ERROR waiver，When渲染动作，Then不显示可执行waive入口；Given 用户缺少`config.id.reserve`，When 返回预留Issue动作，Then `action=reserve_config_id_bundle`、`enabled=false`、列出所需Capability和禁用原因且没有payload；Given 权限和全部门禁恢复，Then 返回同一ActionCode及绑定subject、expected revision和hash的payload引用，篡改payload或revision时服务端拒绝；Given旧`approve_waiver`缺少fingerprint、reason、Gate、expected revision或EXPORT环境×渠道任一字段，When迁移或执行，Then返回`LEGACY_ACTION_ALIAS_UNRESOLVABLE`且没有payload；Given字段完整且来自可信历史，Then重建并校验不可篡改`approve_validation_waiver`payload而不是只改动作名；Given旧`open_rebase`仅有路由证据，Then只映射`navigate`且不能执行Rebase，现行Rebase写命令只使用`rebase_patch`；Given旧`retry`记录，Then只有恢复原动作、完整payload与原幂等键时才可执行；Remediation联合中不存在任何状态写动作。
 
 ### 24.11 R10：Rebase、UpgradeCandidate与Snapshot
 

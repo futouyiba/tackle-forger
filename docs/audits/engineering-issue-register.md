@@ -4,7 +4,7 @@
 > 首次建立：2026-07-22
 > 来源审查：[`current-state-review-2026-07-22.md`](./current-state-review-2026-07-22.md)
 > 最近复核：[`remote-branches-review-2026-07-22.md`](./remote-branches-review-2026-07-22.md)
-> 当前汇总：10个有效未关闭问题（7个`OPEN`、1个`IN_PROGRESS`、2个`BLOCKED`），24个`RESOLVED`，1个`SUPERSEDED`。
+> 当前汇总：8个有效未关闭问题（5个`OPEN`、1个`IN_PROGRESS`、2个`BLOCKED`），26个`RESOLVED`，1个`SUPERSEDED`。
 
 ## 状态定义
 
@@ -33,8 +33,6 @@
 | AUD-005 | Medium | BLOCKED | 根 Vinext 应用与`apps/web`/`packages/*` workspace两套架构并存，旧`SeriesRecipe`页面与按`itemPartId`区分竿/轮/线的v3 Series流程也同时可见，正式权威实现和迁移关系未确定。v14虽已增加竿/轮/线约束迁移，但当前运行时与页面尚未消费该字段。 | 根`app/`、`lib/`；`apps/web`；`packages/*`；`be1cf696`；`partConstraints`当前只出现于类型、迁移和测试 | 架构决策记录明确source of truth、迁移/共存边界和部署目标；正式配方运行时及页面消费分部位约束；旧入口被迁移、只读归档或移除，用户不再把旧扁平配方误认为v3正式Series。 |
 | AUD-006 | Medium | OPEN | 新 pnpm workspace 尚未安装依赖并完成验证。 | `corepack pnpm -r typecheck` 报缺少 `drizzle-orm`、`exceljs`、`decimal.js`、`vitest` | 使用锁文件安装后，workspace 的 typecheck、test、build 全部通过；记录命令和结果。 |
 | AUD-009 | Medium | BLOCKED | SQLite `workspace_revisions` 表永久保存完整 JSON，和 Blob/列表 100 条策略不一致，容量与归档政策未决定。 | `lib/sqlite-storage.ts:108-147` | 明确永久审计或有限保留策略；若有限保留则事务内清理；若永久保留则文档化容量、归档和备份规划。 |
-| AUD-010 | Low | OPEN | 甘特图 UI 仍直接对完整客户端状态执行查询，未消费 `/api/series-gantt` 的对象可见性、游标和 stale-revision 机制。 | `app/SeriesGanttWorkbenchV3.tsx:783-800`；`app/api/series-gantt/route.ts` | 主列表通过服务端 API 加载；409 游标恢复、权限过滤和按需子对象加载有测试。 |
-| AUD-015 | Low | OPEN | 客户端生产构建有超过 500 kB 的 chunk。 | `npm test`/`vinext build` 输出 | 记录 bundle 分析；按工作台模块动态拆分或将权威计算迁到服务端；警告消失或有明确预算。 |
 | AUD-018 | Low | IN_PROGRESS | 审计Markdown尾随空格已由`ba2111c2`清理，仓库现已增加`.gitattributes`，统一文本LF并为PowerShell/批处理保留CRLF；macOS工作树的`git diff --check`通过，仍缺Windows检出验证。 | `ba2111c2`；`.gitattributes`；本分支验证记录 | 在Windows验证检出后的PowerShell/批处理为CRLF、其余文本为LF；`git diff --check`持续无错误。 |
 | AUD-019 | Low | OPEN | 根应用和 workspace 使用 npm、pnpm 两套安装/锁文件，常用验证入口尚未统一。 | `package-lock.json`、`pnpm-lock.yaml`、根 `package.json`、workspace package | README/CLAUDE.md 明确每套命令；CI 分别验证；避免一次安装隐式改写另一锁文件。 |
 | AUD-021 | Medium | OPEN | Feishu 回写已可回读恢复远端写入，但远端成功后本地审计保存冲突仍需人工重新拉取。 | `app/api/data-sources/route.ts:179-200` | 持久化写入意图/幂等记录，或提供自动对账命令；模拟远端成功、本地保存失败并可安全恢复。 |
@@ -70,6 +68,8 @@
 | AUD-004 | RESOLVED | 离散拉力解析静默丢弃非法token与重复项。 | `parseDiscretePulls`保留合法值并单独报告`invalidTokens/duplicateValues`；任一异常均阻止创建。 | `tests/api-command-boundaries.test.ts`与`tests/api-routes.test.ts`覆盖中英文分隔、负数、文本和重复值。 |
 | AUD-007 | RESOLVED | 飞书导入审计身份可能为空。 | `stableAuditActor`优先保存`feishu:{tenantKey}:{openId}`，再回退显示名/email，导入与Series命令共用。 | `tests/api-command-boundaries.test.ts`覆盖飞书稳定身份及非空回退。 |
 | AUD-025 | RESOLVED | 默认测试入口遗漏飞书回写回归。 | `package.json`改用`tests/*.test.ts`与`tests/*.test.mjs`自动发现正式测试，新文件无需维护长名单。 | 集成态默认`npm test`通过208项TS测试与1项渲染测试，其中飞书回写5项（字段匹配1项、提交恢复4项）均执行。 |
+| AUD-010 | RESOLVED | 甘特图 UI 曾直接对完整客户端状态执行主列表查询，未消费服务端对象可见性、游标和 stale revision。 | `511ee27`使主列表消费`/api/series-gantt`服务端投影；Series、SKU与Model分别使用revision绑定游标，子对象按父级按需加载；409保留筛选和选中Series锚点后恢复第一页。 | 路由覆盖认证、投影边界、404隐藏父对象和409；查询覆盖权限裁剪、总数防泄漏和父级/revision游标；客户端覆盖409恢复及仅消费可见Model。完整`npm test`通过214项TS测试与2项构建产物测试。 |
+| AUD-015 | RESOLVED | 客户端生产构建曾有超过500 kB的chunk。 | `a9e55ed`把六个工作台拆成动态入口；[`bundle-analysis-aud-015.md`](./bundle-analysis-aud-015.md)记录基线和产物证据；未提高warning阈值。 | Workbench chunk从869,491 B降至101,969 B，最大chunk为424,888 B，构建不再报告>500 kB；默认测试强制500,000 B chunk预算、六个动态入口和150,000 B Workbench预算。 |
 | AUD-R001 | RESOLVED | Attribute Affix 曾先于 Series/SKU/Model Patch 执行。 | `lib/rule-kernel.ts` 已按 Patch → Affix → FinalReview 顺序执行。 | `tests/v3-rule-kernel.test.ts`；`npm test` 通过。 |
 | AUD-R002 | RESOLVED | 商品层兼容字段曾影响结构投影筛选。 | `structuralCompatibilityContext` 和 `evaluateStructuralHardCompatibility`。 | 最近匹配测试通过。 |
 | AUD-R003 | RESOLVED | Series 创建主要逻辑曾只在客户端执行。 | 新增 `POST /api/series`，客户端调用服务端命令。 | 构建包含路由；相关领域测试通过；整包state绕过后续已由`AUD-001`关闭。 |
@@ -97,3 +97,4 @@
 | 2026-07-22 | 第一批领域契约修复关闭`AUD-016/017/023`；工作区升级到v15，新五维预览冻结定义revision/hash，且不改写历史Snapshot。`AUD-024`保持开放，等待完整顺序迁移。 | `b340d45` `5671769` |
 | 2026-07-22 | API/命令边界第一批修复：关闭`AUD-001～004`、`AUD-007`与`AUD-025`；追加默认拒绝、并发幂等恢复和恶意JSON类型边界。 | `36adceb` `605a6d2` `8db1e31` |
 | 2026-07-22 | 三个独立worktree修复分支完成主分支集成复核；生产构建、208项TypeScript测试及1项渲染测试通过。有效未关闭问题由24个降为10个。 | `a9472b6` `a35cf72` `d9a2412` `1c0df55` `6d6d660` `44cfc2d` |
+| 2026-07-22 | 甘特主列表接入服务端可见性、revision游标、409恢复及SKU/Model按需加载；六个工作台动态拆分并增加真实构建产物预算，关闭`AUD-010/015`。 | `511ee27` `a9e55ed` |

@@ -31,7 +31,7 @@
 | ID | 严重性 | 状态 | 问题 | 主要证据 | 验收条件 |
 | --- | --- | --- | --- | --- | --- |
 | AUD-005 | Medium | BLOCKED | 根 Vinext 应用与`apps/web`/`packages/*` workspace两套架构并存，旧`SeriesRecipe`页面与按`itemPartId`区分竿/轮/线的v3 Series流程也同时可见，正式权威实现和迁移关系未确定。v14虽已增加竿/轮/线约束迁移，但当前运行时与页面尚未消费该字段。 | 根`app/`、`lib/`；`apps/web`；`packages/*`；`be1cf696`；`partConstraints`当前只出现于类型、迁移和测试 | 架构决策记录明确source of truth、迁移/共存边界和部署目标；正式配方运行时及页面消费分部位约束；旧入口被迁移、只读归档或移除，用户不再把旧扁平配方误认为v3正式Series。 |
-| AUD-009 | Medium | BLOCKED | SQLite `workspace_revisions` 表永久保存完整 JSON，和 Blob/列表 100 条策略不一致，容量与归档政策未决定。 | `lib/sqlite-storage.ts:108-147` | 明确永久审计或有限保留策略；若有限保留则事务内清理；若永久保留则文档化容量、归档和备份规划。 |
+| AUD-009 | Medium | BLOCKED | SQLite `workspace_revisions` 表永久保存完整 JSON，和 Blob/列表 100 条策略不一致，容量与归档政策未决定。 | `lib/sqlite-storage.ts:108-147`；[`AUD-009 数据保留 ADR 草案`](./aud-009-workspace-revision-retention-adr.md) | 由产品/运维/审计责任人确认永久、固定条数或时间+数量混合策略，以及 Blob 例外和长期归档责任；若有限保留则实现事务内清理、删除证据和恢复验收；若永久保留则文档化容量、归档和备份规划。 |
 | AUD-018 | Low | IN_PROGRESS | 仓库已用`.gitattributes`统一文本LF并为PowerShell/批处理保留CRLF；macOS检查通过，CI已增加`windows-latest`检出验证，等待远端作业通过后关闭。 | `ba2111c2`；`.gitattributes`；`.github/workflows/ci.yml` | Windows作业确认PowerShell为纯CRLF、普通文本为LF，且`git diff --check`通过。 |
 | AUD-019 | Low | IN_PROGRESS | 根v3应用与历史workspace的npm/pnpm命令、锁文件和共享Vitest配置已明确分离；CI已增加独立作业，等待首次远端运行通过。 | `README.md`、`CLAUDE.md`、`.github/workflows/ci.yml`、`vitest.workspace.config.ts` | 根npm与历史pnpm作业均在干净检出上通过，且冻结安装不改写另一锁文件。 |
 
@@ -102,3 +102,4 @@
 | 2026-07-22 | 集成复核修正`AUD-001`过窄白名单造成的旧工作台保存回归；仅恢复旧工作台显式通用配置字段，v3受治理状态与未知字段继续默认拒绝。 | 本分支提交 |
 | 2026-07-22 | 甘特主列表接入服务端可见性、revision游标、409恢复及SKU/Model按需加载；六个工作台动态拆分并增加真实构建产物预算，关闭`AUD-010/015`。 | `41781d9` `f77843a` |
 | 2026-07-22 | 完成AUD-024目标拉力顺序迁移：活动契约收敛到规范四阶段字段，历史旧字段只在v16→v17迁移适配器读取，冻结Snapshot payload/hash不变；保留v15→v16飞书回写意图迁移。完整测试通过225项TypeScript测试与2项生产构建测试，有效未关闭问题降为4个。 | `c986ea9` |
+| 2026-07-23 | 为`AUD-009`补充工作区revision保留ADR草案，比较永久、固定条数与时间+数量混合策略；提出`90天 + 至少100条`候选默认值、事务清理与备份/审计边界。等待责任人决策，问题保持`BLOCKED`。 | 本分支提交 |

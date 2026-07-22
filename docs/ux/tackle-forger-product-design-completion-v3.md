@@ -43,7 +43,7 @@ flowchart LR
 
 查询直接使用 v3 `SeriesGanttQuery`：
 
-- 同字段 OR、不同字段 AND；文本搜索服务端返回的ID、名称和别名。当前统一Capability策略不做对象级过滤。
+- 同字段 OR、不同字段 AND；文本只搜索当前工作区内服务端返回的ID、名称和别名。当前统一Capability策略不做当前工作区内的对象级过滤。
 - 支持Collection、Method、Type、品质、功能、部位、生命周期、注意状态、Issue、升级候选、精确targetPullKg、RuleSetVersion。
 - 筛选和排序写入 URL；刷新保留滚动和选择。对象已删除或路由过期时，只能在当前工作区内回到服务端返回的稳定父链；引用不属于当前工作区时进入不可用/错误状态，不返回或渲染其父链，并显示明确原因。
 - 纵轴是版本化重量分段；横轴先按 C/B/A/S，再按启用 Type。

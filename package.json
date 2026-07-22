@@ -14,12 +14,10 @@
     "storage:backup": "tsx scripts/backup-workspace.ts",
     "test": "npm run build && tsx --test tests/workbench.test.ts tests/v3-rule-kernel.test.ts tests/v3-end-to-end.test.ts tests/v3-migration.test.ts tests/five-axis.test.ts tests/interaction-contracts.test.ts tests/config-export.test.ts tests/config-export-mapping.test.ts tests/config-export-workbook.test.ts tests/config-export-filesystem.test.ts tests/config-export-companion.test.ts tests/browser-config-export.test.ts tests/model-candidate-generation.test.ts tests/command-contracts.test.ts tests/feishu-contracts.test.ts tests/auth.test.ts tests/storage.test.ts tests/sqlite-storage.test.ts tests/feishu-workbook-pricing.test.ts tests/quality-value-policy.test.ts tests/pricing-policy-increment.test.ts tests/workbook-governance.test.ts tests/snapshot-batch.test.ts tests/series-gantt-query.test.ts tests/series-pull-planning.test.ts tests/patch-ledger.test.ts && node --test tests/rendered-html.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
-    "db:generate": "drizzle-kit generate",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@vercel/blob": "^2.6.1",
-    "drizzle-orm": "0.45.2",
     "lucide-react": "^1.24.0",
     "next": "16.2.6",
     "react": "19.2.6",
@@ -35,7 +33,6 @@
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.2",
     "@vitejs/plugin-rsc": "0.5.26",
-    "drizzle-kit": "0.31.10",
     "eslint": "9.39.4",
     "eslint-config-next": "16.2.6",
     "react-server-dom-webpack": "19.2.6",

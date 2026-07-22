@@ -8,7 +8,7 @@
 >
 > 权威语义：[`tackle-forger-development-spec-v3.md`](../tackle-forger-development-spec-v3.md)
 
-仓库README、CI和R730部署配置已经共同确定“根Vinext v3是当前唯一权威实现，历史workspace只用于追溯”的基线。本文件把该既有结论整理为收敛方案，但不据此删除入口或历史数据。旧入口只读化由`AUD-005`作为可执行工程项管理；分部位约束的领域语义另由`AUD-026`保持`BLOCKED`，确认前不改造相关领域类型。
+仓库README、CI和R730部署配置已经共同确定“根Vinext v3是当前唯一权威实现，历史workspace只用于追溯”的基线。本文件把该既有结论整理为收敛方案，但不据此删除入口或历史数据。旧入口只读化由`AUD-005`作为可执行工程项管理；分部位约束的领域语义已经由[`AUD-026 PartConstraintSet语义ADR`](./aud-026-part-constraint-semantics-adr.md)确认，后续实现仍由`AUD-026`独立验收。
 
 ## 1. 待决策问题
 
@@ -18,7 +18,7 @@
 2. `apps/web`与`packages/{domain,db,excel,ui}`组成的pnpm/Next.js历史workspace，仍可独立构建，但使用不同的数据模型、演示登录、本地浏览器状态和旧Excel拓扑；
 3. 根应用内部仍同时暴露旧`SeriesRecipe`、旧`Candidate`、`OfficialSku`和明细页，以及v3的Series/SKU/Model工作台。
 
-根v3作为唯一可写产品入口已由现有仓库约定决定。仍需确认的是历史实现最终采用何种归档形态，以及旧配方中的竿/轮/线约束应迁移到哪个v3概念。
+根v3作为唯一可写产品入口已由现有仓库约定决定。仍需确认的是历史实现最终采用何种归档形态。旧配方中的竿/轮/线约束已确认迁入版本化`PartConstraintSet`并由`CandidateSearchRecipe`按稳定revision引用；具体组件只在候选结果和Model的`componentSelections`中保存。
 
 ## 2. 不可突破的v3约束
 
@@ -61,7 +61,7 @@
 - 同一“Model候选”页面既承载v3甘特与实体链，也在折叠区展示旧Candidate；“正式SKU”和“杆轮线明细”仍可编辑旧`officialSkus`与明细覆盖。
 - `SeriesRecipe.partConstraints`已在schema v14中为rod/reel/line生成，但迁移只是把旧扁平模板、类型和词条复制到三个部位并标注待复核。
 - 当前旧配方UI没有编辑`partConstraints`，旧候选引擎不消费它；迁移到`CandidateSearchRecipe`时也只读取旧扁平字段。
-- v3候选运行时可接收`ModelVariantInput.componentSelections`，但现有候选页面没有把旧的分部位约束转换为该输入。
+- v3候选运行时当前只消费页面预先填写的`ModelVariantInput.componentSelections`，尚未依据分部位搜索约束枚举组件并把实际入选结果写入候选输出。
 
 这使同一用户能在两个含义不同的“配方/候选/SKU”链路上写数据，是`AUD-005`尚不能关闭的主要原因。
 
@@ -78,7 +78,7 @@
 
 | 方案 | 描述 | 优点 | 主要代价与风险 | 结论 |
 | --- | --- | --- | --- | --- |
-| A. 根v3唯一权威；历史workspace只读归档/迁移来源 | 只有根`app/lib`可以承载正式写入和部署；`apps/web/packages`保留为可验证的历史参考与数据迁移来源，不进入生产导航 | 与当前v3实现、SQLite、飞书身份、R730手册和快照冻结规则一致；迁移面最小；可逐步封存旧入口 | 需要完成旧页面降级、分部位约束语义确认、迁移工具和部署配置收敛 | **推荐，待用户确认** |
+| A. 根v3唯一权威；历史workspace只读归档/迁移来源 | 只有根`app/lib`可以承载正式写入和部署；`apps/web/packages`保留为可验证的历史参考与数据迁移来源，不进入生产导航 | 与当前v3实现、SQLite、飞书身份、R730手册和快照冻结规则一致；迁移面最小；可逐步封存旧入口 | 需要完成旧页面降级、已确认分部位约束的实现、迁移工具和部署配置收敛 | **推荐，待用户确认** |
 | B. 以`apps/web/packages`取代根应用 | 将workspace发展为唯一主线，把根v3能力迁入packages与Next应用后再切换 | 长期可能得到更传统的monorepo边界；共享包理论上便于多前端复用 | 现有workspace缺少v3实体链、真实身份、持久化、治理与测试；需要几乎重写并双向迁移，当前切换会倒退 | 当前不采用；若未来重启，需另立迁移ADR和完整等价验收 |
 | C. 两套UI长期并行，共享抽取后的领域/API | 根应用与`apps/web`服务不同用户群，统一调用新抽出的canonical API/packages | 可保留不同交互体验；理论上减少一次性UI迁移 | 当前没有已确认的双产品需求；在共享层完成前存在双写、权限分叉、版本漂移和两套部署；成本最高 | 只有用户确认存在长期双入口业务需求时才评估 |
 | D. 立即删除历史workspace和旧根页面 | 一次性移除所有旧代码和入口 | 表面上最快消除歧义 | 违反历史数据保留、迁移与可追踪要求；也失去旧Excel/DB/页面语义的取证来源 | 不可接受 |
@@ -89,7 +89,7 @@
 
 > Tackle Forger的唯一可写产品与领域实现为仓库根Vinext v3应用。正式生产部署、评审部署和数据写入均必须以根应用、根npm锁文件和根v3状态模型为准。`apps/web`与`packages/*`定义为历史workspace，只用于只读参考、兼容性测试和经审计的数据迁移；它们不构成第二个生产入口，也不能定义新领域语义。根应用中的旧SeriesRecipe/Candidate/OfficialSku页面在完成可逆迁移后转为只读历史入口，最终从默认导航移除，但原始记录和Trace继续保存。
 
-这一结论不直接决定分部位约束的新领域类型。实施该部分前仍需由用户确认：把它建模为一个版本化`PartConstraintSet`，由`CandidateSearchRecipe`引用并只参与候选过滤/枚举；或者把其中属于实际部件选择的部分迁入Model构建输入。无论哪种选择，`SeriesRecipe`本身都不应恢复为正式产品身份。
+分部位约束已经由AUD-026决策确认：建立版本化`PartConstraintSet`，由`CandidateSearchRecipe`通过稳定revision引用；template、material、required affix和optional affix pool按rod/reel/line参与候选搜索，具体组件只在候选结果和Model的`componentSelections`中保存。Series Type保持系列级语义，分部位`typeIds`只有在组件注册表提供明确、版本化的部位分类时才生效。完整语义、旧数据复核与Snapshot冻结规则见[`AUD-026 PartConstraintSet语义ADR`](./aud-026-part-constraint-semantics-adr.md)。`SeriesRecipe`本身仍不应恢复为正式产品身份。
 
 ## 6. 分阶段迁移计划
 
@@ -98,9 +98,9 @@
 - 用户确认方案、负责人、目标时间和历史入口保留期限。
 - 固定根应用为唯一生产部署目标；记录当前生产revision、数据库备份和所有入口URL。
 - 统计每类旧对象数量、未发布草稿、来源revision、引用关系和孤儿ID；只读检查，不改变数据。
-- 对`partConstraints`中template/type/material/required/optional affix的含义逐项确认，特别区分“搜索约束”与“实际Model部件选择”。
+- 依据AUD-026 ADR逐项清点`partConstraints`中template/type/material/required/optional affix的来源、未知引用和复核状态，区分“搜索约束”与“实际Model部件选择”。
 
-退出条件：根v3权威基线已在台账中记录；分部位语义另有书面结论。在后者确认前`AUD-026`保持`BLOCKED`，但不阻塞`AUD-005`推进可逆的旧入口只读化和迁移诊断。
+退出条件：根v3权威基线已记录；分部位语义以AUD-026 ADR为书面结论。`AUD-026`不再因领域选择而`BLOCKED`，但数据模型、迁移、runtime、UI和测试仍未完成，也不阻塞`AUD-005`推进可逆的旧入口只读化和迁移诊断。
 
 ### 阶段1：入口去歧义，不迁移数据
 
@@ -113,9 +113,9 @@
 
 ### 阶段2：建立可版本化的分部位约束
 
-- 在用户确认语义后，新增canonical、版本化的分部位约束载体。推荐由`CandidateSearchRecipe`通过稳定revision引用它，而不是复制可变对象。
+- 新增canonical、版本化且不可变的`PartConstraintSet`，由`CandidateSearchRecipe`通过稳定revision引用，而不是复制可变对象。
 - rod/reel/line分别保存template、type、material、required affix、optional affix pool；未选择与“允许全部”必须有不同表示。
-- runtime把搜索约束应用于相应部位的候选枚举；实际入选的部件必须落入`ModelVariantInput.componentSelections`并进入生成Trace。
+- runtime把搜索约束应用于相应部位的候选枚举；实际入选的部件必须落入候选结果的`componentSelections`，物化后进入Model并写入生成Trace。
 - UI必须分别展示和编辑竿、轮、线约束，显示命中/排除原因，不能继续只编辑扁平字段。
 - 冲突或无法解析的ID必须阻止正式物化并产生可操作诊断；不得静默放宽为“全部允许”。
 
@@ -151,7 +151,7 @@
 
 | 旧来源 | v3目标/处理 | 必须保留 | 禁止行为 |
 | --- | --- | --- | --- |
-| `SeriesRecipe`扁平字段 | 迁移输入；生成`CandidateSearchRecipe`及待确认的分部位约束 | 原ID、原payload、来源revision、诊断 | 继续作为Series或Model身份；静默覆盖分部位字段 |
+| `SeriesRecipe`扁平字段 | 迁移输入；生成`CandidateSearchRecipe`及部位级`NEEDS_REVIEW`保留记录 | 原ID、原payload、来源revision、诊断 | 继续作为Series或Model身份；把机械复制宣称为已确认语义 |
 | `SeriesRecipe.partConstraints` | rod/reel/line逐项审核后迁入版本化约束 | 未解析ID、人工复核状态 | 将同一扁平集合无条件解释为三个部位的有效结论 |
 | 旧`Candidate` | 只读候选运行/审计记录，可建立新对象链接 | 输入、输出、排序、规则revision、Trace | 自动视为可购买Model |
 | `OfficialSku` | 现有迁移生成SKU Drawer、Model和冻结Snapshot | 稳定绑定、历史状态、hash | 把SKU当Model；重复迁移生成副本 |
@@ -219,9 +219,10 @@
 
 ## 11. 需要用户最终确认的项目
 
-1. 分部位约束是否采用“版本化`PartConstraintSet`，由`CandidateSearchRecipe`引用”的推荐方向；哪些字段属于搜索约束，哪些必须落到Model部件选择？
-2. 旧根入口在只读后保留多久，是否仅管理员可见，还是所有现有用户都可查看？
-3. Vercel与Cloudflare入口分别保留为评审环境、实验环境，还是只保留其中一个？
-4. 历史workspace最终是原地冻结、移动到archive目录，还是以tag/独立仓库保存？
+AUD-026的分部位约束方向已经确认，不再属于本节待选方案；见[`AUD-026 PartConstraintSet语义ADR`](./aud-026-part-constraint-semantics-adr.md)。AUD-005仍需确认：
 
-在这些问题得到明确答复前，可以推进可逆的旧入口只读化、兼容跳转、对象清点、迁移预览和部署差异检查；不执行历史数据删除、不可逆转换或分部位语义固化。
+1. 旧根入口在只读后保留多久，是否仅管理员可见，还是所有现有用户都可查看？
+2. Vercel与Cloudflare入口分别保留为评审环境、实验环境，还是只保留其中一个？
+3. 历史workspace最终是原地冻结、移动到archive目录，还是以tag/独立仓库保存？
+
+在这些问题得到明确答复前，可以推进可逆的旧入口只读化、兼容跳转、对象清点、迁移预览和部署差异检查；不执行历史数据删除或不可逆转换。分部位语义按AUD-026 ADR实施，不再作为本节待选方案。

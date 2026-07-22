@@ -2,7 +2,7 @@
 
 > 状态：**唯一权威规范 / Canonical**  
 >首次定稿：2026-07-21  
-> 最后修订：2026-07-22  
+> 最后修订：2026-07-23
 > 适用对象：产品设计、领域建模、前后端开发、数据迁移、测试与代码审查  
 > 源数据参考：《淡水路亚杆轮线装备设计.xlsx》
 
@@ -95,6 +95,8 @@ flowchart LR
 | Series | 钓法、类型、核心功能、性能和核心词条稳定的系列 |
 | SKU | 玩家看到的钓具抽屉，对应一个离散targetPullKg；界面可显示为重量规格 |
 | Model | SKU抽屉中的具体可购买型号 |
+| PartConstraintSet | 按rod/reel/line保存候选搜索约束的版本化不可变对象，由CandidateSearchRecipe引用 |
+| CandidateSearchRecipe | 冻结搜索范围、PartConstraintSet revision、阈值和排序定义，只负责枚举、过滤和排序 |
 | ConfigurationSnapshot | Model发布时冻结的最终配置 |
 | Technology | 多个原子词条的命名组合包 |
 | Affix | 属性或被动技能的原子单位 |
@@ -305,7 +307,30 @@ Model是玩家实际选择和购买的具体型号，保存：
 
 领域内Model是实际选择和购买对象。当前配置表没有Snapshot版本字段，因此不得宣称游戏侧购买记录已经支持`modelId + snapshotId`；Snapshot仅在Tackle Forger内部保证发布和导出的可追溯性。
 
-### 6.5 稳定身份、再生成对应与重量变更
+### 6.5 PartConstraintSet、CandidateSearchRecipe与组件选择
+
+`PartConstraintSet`是版本化、不可变的候选搜索约束对象。它使用稳定`constraintSetId`和单调`revision`标识；修改任一字段、来源或复核结论都创建新revision。`CandidateSearchRecipe`必须冻结并引用精确的`constraintSetId + revision`，不得在运行时解析为后来发布的“最新revision”。
+
+`PartConstraintSet`按rod、reel、line分别保存约束。每个部位独立记录来源、来源revision、内容哈希、迁移诊断和`CONFIRMED/NEEDS_REVIEW`状态；一个部位确认不代表另外两个部位自动确认。字段语义固定为：
+
+| 字段 | 权威语义 |
+| --- | --- |
+| `templateIds` | 该部位候选组件的模板搜索约束；按稳定模板ID匹配，不是具体组件选择 |
+| `materialIds` | 该部位候选组件的材质搜索约束；缺少版本化注册表元数据时不得按名称猜测 |
+| `requiredAffixIds` | 候选必须满足的该部位词条条件；未知或无法验证时fail-closed |
+| `optionalAffixPoolIds` | 候选扩展或版本化排序使用的该部位词条池；不等于必需词条或已选词条 |
+| `typeIds` | 默认不是通用分部位字段；只有组件注册表明确提供该部位的版本化type分类时才可生效 |
+| `componentSelections` | 候选结果与Model中的具体组件引用，不属于`PartConstraintSet`或`CandidateSearchRecipe` |
+
+Series的`typeId/TypeProfile`继续表达系列级Method × Type结构语义。不得把Series Type复制为分部位type分类，也不得由本规范擅自定义当前不存在的组件type。组件注册表没有明确分类时，遗留`typeIds`只能保留、展示并进入`NEEDS_REVIEW`，不得参与权威过滤、自动批准或自动发布。
+
+`CandidateSearchRecipe`只拥有搜索范围、阈值、检查点、排序定义和`PartConstraintSet` revision引用。它按部位枚举、过滤和排序组件，但不拥有具体组件选择。每项过滤和排序必须记录部位、约束字段、约束revision、组件注册表revision及命中/排除原因；未知ID、跨部位引用、缺失分类或required冲突不得静默放宽为“允许全部”。
+
+候选结果保存本轮实际选中的`componentSelections`，但CandidateRun仍是不可变审计产物，不是商品身份。只有显式物化命令重新鉴权、重验冻结revision和硬兼容后，候选才创建或更新Model草稿revision；未物化、过期、丢弃或superseded的候选不得改变Model。搜索约束不得被机械转换为`componentSelections`。
+
+完整决策、旧数据复核与Snapshot冻结规则见[`AUD-026 PartConstraintSet语义ADR`](./audits/aud-026-part-constraint-semantics-adr.md)。
+
+### 6.6 稳定身份、再生成对应与重量变更
 
 - `entityId`终身稳定；revision不可变；displayName可修改且不得作为唯一关联键。
 - 再生成对应顺序固定为：显式目标ID→持久GenerationBinding→外部稳定ID→业务身份键→name/特征仅作为人工提示。
@@ -868,9 +893,20 @@ ConfigurationSnapshot必须冻结有序Patch引用集合（`patchId + patchRevis
 ### 阶段2：商品身份
 
 - 增加Collection、严格Series、SkuDrawer和PurchasableModel；
-- SeriesRecipe改为CandidateSearchRecipe；
+- SeriesRecipe迁移为CandidateSearchRecipe，并通过稳定revision引用版本化`PartConstraintSet`；
 - OfficialSku迁移为SKU抽屉加Model；
 - DetailOverride迁移到Model作用域。
+
+v13→v14曾把同一套旧扁平`templateIds`、`structureIds`、`requiredAffixIds`和`optionalAffixPoolIds`复制到rod、reel、line，并将三个部位的`materialIds`置空。该复制只是兼容保留载体，不是有效领域结论。后续规范化迁移必须：
+
+- 保留原始payload、来源对象ID、来源revision、迁移器版本和逐字段诊断；旧载体没有revision时记录明确缺失诊断，不得补猜；
+- 原样保留未知ID和未知字段，不按名称绑定、不删除、不改写；
+- 让rod、reel、line分别处于`NEEDS_REVIEW`，不得因内容相同或迁移成功自动确认；
+- 允许在迁移预览和UI中保留、展示、人工比较未确认字段，但不得让它们支持权威自动过滤/排序、自动批准或自动发布；
+- 将非正式试算明确标记为不可发布，遇到未知或冲突时fail-closed；
+- 由人工确认创建新的规范化`PartConstraintSet` revision，不覆盖或删除原迁移记录；
+- 保证相同输入重复迁移幂等，不重复追加revision、复核项或诊断；
+- 不补写、重算或改变任何已发布`ConfigurationSnapshot`的payload与hash。
 
 ### 阶段3：匹配与兼容
 
@@ -937,6 +973,16 @@ ConfigurationSnapshot必须冻结有序Patch引用集合（`patchId + patchRevis
 - 被动技能参与分值和品质；
 - technology_only不进入普通池；
 - S/A/B/C阈值正确。
+
+### 18.6 分部位候选搜索与旧数据
+
+- 正常：rod/reel/line各自约束只过滤相应部位；template、material和required词条确定性命中，optional池按冻结排序定义影响扩展或排序；
+- 所有权：搜索约束不能序列化为`componentSelections`，候选未物化不创建或更新Model，物化后具体组件只写入Model；
+- 边界：空约束、单一ID、未知ID、未知字段、禁用组件、缺少部位type分类、0候选和最大候选数均有确定结果；
+- 冲突：跨部位引用、required缺失、type分类revision不匹配和杆轮线硬deny均fail-closed并返回部位级原因；
+- 迁移幂等：v13→v14复制被识别为保留载体，三个部位独立`NEEDS_REVIEW`，原始payload、来源revision、未知数据和诊断不丢失，重复运行不产生副本；
+- 人工确认：新规范化revision引用原迁移记录，原记录不被覆盖或伪装成已确认；
+- Snapshot冻结：迁移、确认、候选重跑和组件注册表更新前后，历史Snapshot payload与content hash逐字节不变。
 
 ## 19. Agent交付检查表
 
@@ -1312,7 +1358,7 @@ FiveAxisComparisonView至少保存：
 | 临时结果 | Model 候选 / 候选结果 | 尚未成为正式Model的计算结果 |
 | 规则变化结果 | 升级候选 | 针对已发布Snapshot的新版本建议 |
 
-旧“候选池”不再作为主导航和产品领域层级。CandidateSearchRecipe继续存在，但权威中文名是“候选搜索配方”，只负责枚举、过滤和排序，不承担Series、SKU或Model身份。
+旧“候选池”不再作为主导航和产品领域层级。CandidateSearchRecipe继续存在，但权威中文名是“候选搜索配方”，只负责枚举、过滤和排序，不承担Series、SKU或Model身份。它通过稳定revision引用`PartConstraintSet`；具体组件只出现在候选结果的`componentSelections`中，并在物化后进入Model。
 
 甘特图采用纵向重量分段、横向品质与类型分栏。纵向重量分段是版本化、可配置的规划坐标，不是连续数轴；Series覆盖块只连接真实离散SKU节点。页面必须固定显示说明：
 
@@ -1460,6 +1506,7 @@ AI评估与建议的交互、权限边界和审计要求已经确定；具体使
 interface EntityRef {
   workspaceId: string;
   entityType: "collection" | "series" | "sku_drawer" | "model"
+    | "candidate_search_recipe" | "part_constraint_set"
     | "configuration_snapshot" | "model_candidate" | "adjustment_patch"
     | "upgrade_candidate" | "rule_source_change_draft";
   entityId: string;
@@ -1499,7 +1546,7 @@ type ActionCode =
 
 ```
 
-Series、SKU、Model的ID终身稳定且不复用；改名和更换默认Model不改ID。SKU修改`targetPullKg`必须遵守第6.5节：没有任何已发布后代Snapshot时保留skuId并创建新revision；已有已发布后代时原SKU的重量身份冻结，新重量创建新SKU，旧SKU可`DEPRECATED`。Revision只增不改；已批准/已发布revision不可原地改写。Snapshot ID与payload/hash永久绑定。前端不得从角色名、状态或颜色猜动作；读接口返回`ActionAvailability[]`，写接口再次鉴权。一期保留Capability与审计身份，细粒度权限未上线前使用公司飞书已登录用户统一策略；三期只替换策略适配器。职责分离使用`separationOfDutiesPolicy`配置。
+Series、SKU、Model的ID终身稳定且不复用；改名和更换默认Model不改ID。SKU修改`targetPullKg`必须遵守第6.6节：没有任何已发布后代Snapshot时保留skuId并创建新revision；已有已发布后代时原SKU的重量身份冻结，新重量创建新SKU，旧SKU可`DEPRECATED`。Revision只增不改；已批准/已发布revision不可原地改写。Snapshot ID与payload/hash永久绑定。前端不得从角色名、状态或颜色猜动作；读接口返回`ActionAvailability[]`，写接口再次鉴权。一期保留Capability与审计身份，细粒度权限未上线前使用公司飞书已登录用户统一策略；三期只替换策略适配器。职责分离使用`separationOfDutiesPolicy`配置。
 
 ### 24.2 R1：钓具系列甘特图
 
@@ -1566,7 +1613,8 @@ interface BreadcrumbItem {
 ```ts
 interface CandidateGenerationRequest {
   requestId: string; seriesRef: EntityRef; skuRefs: EntityRef[];
-  recipeRef: EntityRef; recipeInput: Record<string, unknown>;
+  recipeRef: EntityRef; partConstraintSetRef: EntityRef;
+  recipeInput: Record<string, unknown>;
   enabledVariantKeys: string[]; perSkuLimit: number;
   minimumAffinity?: number; acceptWarnings: boolean;
   sortDefinitionVersion: string;
@@ -1575,6 +1623,7 @@ interface CandidateGenerationRequest {
 interface ModelCandidate {
   candidateId: string; runId: string; skuRef: EntityRef;
   candidateFingerprint: string; projectionMatchRef: string;
+  componentSelections: ModelComponentSelection[];
   proposedConfiguration: Record<string, unknown>;
   hardCompatibility: HardCompatibilityResult; affinity: AffinityBreakdown;
   invariantIssues: ValidationIssue[]; rank: number; rankReasons: string[];
@@ -1582,16 +1631,18 @@ interface ModelCandidate {
 }
 ```
 
-输入冻结Series/SKU/Recipe/RuleSet/Patch revision。deny/缺require只进排除统计。权威排序为版本化字典序：配方键→warning数→Affinity降序→拉力距离升序→fingerprint；AI不得改写。结果含排除分组、枚举总数、截断、版本、hash、耗时。CandidateRun是不可变审计产物，候选不是Model。
+输入冻结Series/SKU/Recipe/PartConstraintSet/组件注册表/RuleSet/Patch revision。系统先按rod/reel/line分别枚举组件，再应用template、material、required affix和有效的部位type硬过滤；optional affix pool只按已发布扩展/排序定义参与。之后组合具体组件，执行杆轮线闭环硬兼容、Affinity、Series不变量和稳定排序。deny/缺require只进排除统计。权威排序为版本化字典序：配方键→warning数→Affinity降序→拉力距离升序→fingerprint；AI不得改写。结果含部位级约束来源、命中/排除原因、未知引用、排除分组、枚举总数、截断、版本、hash、耗时。CandidateRun是不可变审计产物，候选不是Model。
 
-默认行为是自动物化：对每个`SKU × enabledModelVariantKey`选取排名最高的合法候选并创建或更新一个Model草稿revision。用户可通过范围、重量、启用路线、每SKU数量、最低Affinity、warning接受和`REVIEW_ON_CHANGE`检查点克制批量生成。若`skuId + modelVariantKey`唯一命中旧Model，则创建新revision；无命中新建；多重或歧义命中则跳过并报Issue，禁止按name猜测。内容hash未变化时不创建空revision。同输入、版本与算法必须产生相同结果和顺序，正常流程不使用random seed。
+默认行为是自动物化：对每个`SKU × enabledModelVariantKey`选取排名最高的合法候选，将候选中实际选定的`componentSelections`写入一个新建或更新的Model草稿revision。搜索约束本身不得写入Model。用户可通过范围、重量、启用路线、每SKU数量、最低Affinity、warning接受和`REVIEW_ON_CHANGE`检查点克制批量生成。若`skuId + modelVariantKey`唯一命中旧Model，则创建新revision；无命中新建；多重或歧义命中则跳过并报Issue，禁止按name猜测。内容hash未变化时不创建空revision。同输入、版本与算法必须产生相同结果和顺序，正常流程不使用random seed。
+
+候选工作台必须把rod、reel、line分栏显示，并在每个部位展示`PartConstraintSet`身份/revision、各字段的来源与复核状态、未知ID/未知字段、命中/排除/排序原因，以及最终具体组件。搜索约束与`componentSelections`必须视觉分离；Series Type不得显示成已确认的分部位type。任一受影响部位为`NEEDS_REVIEW`时，服务端必须禁用自动批准和自动发布并返回原因。
 
 正常路径：预览输入、生成、确定性排序并自动创建/更新Model草稿。  
 边界：0结果显示排除统计；截断明确提示。  
 冲突：运行中revision变化则superseded且不可选择。  
 恢复：复制最新输入重跑；凭requestId恢复/重试。  
 权限：generate与materialize分离，自动物化也必须由服务端重新鉴权。  
-验收：Given 高Affinity候选命中deny，When 完成，Then 只在排除统计；合法低分候选仍可展示。
+验收：Given 高Affinity候选命中deny，When 完成，Then 只在排除统计；合法低分候选仍可展示。Given v14复制的rod/reel/line约束均为`NEEDS_REVIEW`，When 打开候选工作台，Then 三个部位分别显示来源和复核状态，且不得自动批准或发布。Given 合法候选已物化，When 查看Model，Then 只有具体组件进入`componentSelections`，搜索约束仍由Recipe引用的`PartConstraintSet`拥有。
 
 ### 24.5 R4：统一Trace
 

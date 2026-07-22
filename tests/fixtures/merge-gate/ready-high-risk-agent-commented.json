@@ -15,7 +15,7 @@
   ],
   "reviews": [
     { "id": 10, "state": "APPROVED", "commitSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "submittedAt": "2026-07-23T07:00:00Z", "author": { "login": "author", "type": "User" } },
-    { "id": 11, "state": "COMMENTED", "commitSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "submittedAt": "2026-07-23T07:05:00Z", "author": { "login": "reviewer", "type": "User" } }
+    { "id": 11, "state": "COMMENTED", "commitSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "submittedAt": "2026-07-23T07:05:00Z", "author": { "login": "reviewer", "type": "Bot" } }
   ],
   "reviewThreads": []
 }

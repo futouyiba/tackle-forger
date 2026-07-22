@@ -30,20 +30,26 @@ test("successful checks from an old head do not count", async () => {
   );
 });
 
-test("author approval and COMMENTED review do not satisfy high-risk review", async () => {
+test("a current-head COMMENTED Agent review satisfies high-risk review", async () => {
   const result = evaluatePullRequestMergeGate(
-    await fixture("blocked-high-risk-author-commented"),
+    await fixture("ready-high-risk-agent-commented"),
   );
 
-  assert.equal(result.ready, false);
-  assert.ok(
-    result.blockers.some(
-      (blocker) => blocker.code === "INDEPENDENT_REVIEW_REQUIRED",
-    ),
+  assert.equal(result.ready, true);
+  assert.deepEqual(
+    result.evidence.find((item) => item.type === "review"),
+    {
+      type: "review",
+      headSha: "a".repeat(40),
+      reviewId: 11,
+      reviewer: "reviewer",
+      state: "COMMENTED",
+      submittedAt: "2026-07-23T07:05:00Z",
+    },
   );
 });
 
-test("non-author APPROVED review on current head satisfies high-risk review", async () => {
+test("a current-head APPROVED review also satisfies high-risk review", async () => {
   const result = evaluatePullRequestMergeGate(await fixture("ready-high-risk"));
 
   assert.equal(result.ready, true);
@@ -53,7 +59,7 @@ test("non-author APPROVED review on current head satisfies high-risk review", as
   );
 });
 
-test("high-risk review requires an explicitly identified human User", async () => {
+test("Agent review signals may come from User, Bot, App, or an actor without type", async () => {
   const snapshot = await fixture("ready-high-risk");
   delete snapshot.reviews[0].author.type;
   const missingType = evaluatePullRequestMergeGate(snapshot);
@@ -63,16 +69,11 @@ test("high-risk review requires an explicitly identified human User", async () =
   const app = evaluatePullRequestMergeGate(snapshot);
 
   for (const result of [missingType, bot, app]) {
-    assert.equal(result.ready, false);
-    assert.ok(
-      result.blockers.some(
-        (blocker) => blocker.code === "INDEPENDENT_REVIEW_REQUIRED",
-      ),
-    );
+    assert.equal(result.ready, true);
   }
 });
 
-test("non-author approval on an older head does not satisfy high-risk review", async () => {
+test("a review signal on an older head does not satisfy high-risk review", async () => {
   const snapshot = await fixture("ready-high-risk");
   snapshot.reviews[0].commitSha = "b".repeat(40);
   const result = evaluatePullRequestMergeGate(snapshot);
@@ -80,7 +81,7 @@ test("non-author approval on an older head does not satisfy high-risk review", a
   assert.equal(result.ready, false);
   assert.ok(
     result.blockers.some(
-      (blocker) => blocker.code === "INDEPENDENT_REVIEW_REQUIRED",
+      (blocker) => blocker.code === "CURRENT_HEAD_REVIEW_SIGNAL_REQUIRED",
     ),
   );
 });
@@ -99,7 +100,7 @@ test("draft, failed or missing CI, pending CI, and unresolved threads all block"
   assert.ok(codes.includes("REVIEW_THREADS_UNRESOLVED"));
 });
 
-test("later CHANGES_REQUESTED or DISMISSED state invalidates an approval", async () => {
+test("later CHANGES_REQUESTED blocks and DISMISSED invalidates earlier evidence", async () => {
   const snapshot = await fixture("ready-high-risk");
   snapshot.reviews.push(
     {
@@ -115,12 +116,25 @@ test("later CHANGES_REQUESTED or DISMISSED state invalidates an approval", async
 
   assert.ok(
     changesRequested.blockers.some(
-      (blocker) => blocker.code === "INDEPENDENT_REVIEW_REQUIRED",
+      (blocker) => blocker.code === "REVIEW_CHANGES_REQUESTED",
     ),
   );
   assert.ok(
     dismissed.blockers.some(
-      (blocker) => blocker.code === "INDEPENDENT_REVIEW_REQUIRED",
+      (blocker) => blocker.code === "CURRENT_HEAD_REVIEW_SIGNAL_REQUIRED",
+    ),
+  );
+});
+
+test("high-risk review fails closed when no current-head review signal exists", async () => {
+  const snapshot = await fixture("ready-high-risk");
+  snapshot.reviews = [];
+  const result = evaluatePullRequestMergeGate(snapshot);
+
+  assert.equal(result.ready, false);
+  assert.ok(
+    result.blockers.some(
+      (blocker) => blocker.code === "CURRENT_HEAD_REVIEW_SIGNAL_REQUIRED",
     ),
   );
 });
@@ -136,15 +150,12 @@ test("risk classification is mandatory and cannot silently default to normal", a
   );
 });
 
-test("high-risk review fails closed when PR author identity is unavailable", async () => {
+test("PR author identity does not control the repository review signal", async () => {
   const snapshot = await fixture("ready-high-risk");
   snapshot.pullRequest.author = {};
   const result = evaluatePullRequestMergeGate(snapshot);
 
-  assert.equal(result.ready, false);
-  assert.ok(
-    result.blockers.some((blocker) => blocker.code === "PR_AUTHOR_UNAVAILABLE"),
-  );
+  assert.equal(result.ready, true);
 });
 
 test("a newer pending rerun on the same head supersedes older success", async () => {

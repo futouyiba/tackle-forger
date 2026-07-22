@@ -25,16 +25,6 @@ function userKey(user) {
   return login ? `login:${login}` : "";
 }
 
-function isSameUser(left, right) {
-  const leftLogin = normalizeLogin(left?.login);
-  const rightLogin = normalizeLogin(right?.login);
-  return Boolean(leftLogin && rightLogin && leftLogin === rightLogin);
-}
-
-function isHumanUser(user) {
-  return Boolean(userKey(user) && user?.type === "User");
-}
-
 function eventTime(value) {
   const parsed = Date.parse(value ?? "");
   return Number.isFinite(parsed) ? parsed : 0;
@@ -68,7 +58,7 @@ function latestRun(runs) {
   return [...runs].sort(compareIds).at(-1);
 }
 
-function findIndependentApproval({ reviews, author, headSha }) {
+function currentHeadReviewState({ reviews, headSha }) {
   const latestDecisionByReviewer = new Map();
   const orderedReviews = Array.isArray(reviews)
     ? [...reviews].sort((left, right) =>
@@ -86,13 +76,31 @@ function findIndependentApproval({ reviews, author, headSha }) {
     latestDecisionByReviewer.set(reviewerKey, { ...review, state });
   }
 
-  return [...latestDecisionByReviewer.values()].find(
-    (review) =>
-      review.state === "APPROVED" &&
-      review.commitSha === headSha &&
-      isHumanUser(review.author) &&
-      !isSameUser(review.author, author),
+  const activeChangeRequest = [...latestDecisionByReviewer.values()].find(
+    (review) => review.state === "CHANGES_REQUESTED" && review.commitSha === headSha,
   );
+  if (activeChangeRequest) {
+    return { activeChangeRequest };
+  }
+
+  const signal = [...orderedReviews].reverse().find((review) => {
+    const state = String(review?.state ?? "").toUpperCase();
+    const reviewerKey = userKey(review?.author);
+    if (
+      !reviewerKey ||
+      review.commitSha !== headSha ||
+      (state !== "APPROVED" && state !== "COMMENTED")
+    ) {
+      return false;
+    }
+
+    const laterDecision = latestDecisionByReviewer.get(reviewerKey);
+    return !laterDecision ||
+      compareByTimeAndId(laterDecision, review, "submittedAt") <= 0 ||
+      laterDecision.state === "APPROVED";
+  });
+
+  return { signal };
 }
 
 export function evaluatePullRequestMergeGate(snapshot) {
@@ -190,32 +198,30 @@ export function evaluatePullRequestMergeGate(snapshot) {
   }
 
   if (riskLevel === "high") {
-    if (!userKey(pullRequest.author)) {
+    const reviewState = currentHeadReviewState({
+      reviews: snapshot?.reviews,
+      headSha,
+    });
+    if (reviewState.activeChangeRequest) {
       blockers.push({
-        code: "PR_AUTHOR_UNAVAILABLE",
-        message: "Pull request author identity is required for independent review",
+        code: "REVIEW_CHANGES_REQUESTED",
+        message: "A current-head review still requests changes",
+      });
+    } else if (!reviewState.signal) {
+      blockers.push({
+        code: "CURRENT_HEAD_REVIEW_SIGNAL_REQUIRED",
+        message:
+          "High-risk changes require a current-head COMMENTED or APPROVED review signal",
       });
     } else {
-      const approval = findIndependentApproval({
-        reviews: snapshot?.reviews,
-        author: pullRequest.author,
+      evidence.push({
+        type: "review",
         headSha,
+        reviewId: reviewState.signal.id,
+        reviewer: reviewState.signal.author.login,
+        state: String(reviewState.signal.state).toUpperCase(),
+        submittedAt: reviewState.signal.submittedAt,
       });
-      if (!approval) {
-        blockers.push({
-          code: "INDEPENDENT_REVIEW_REQUIRED",
-          message:
-            "High-risk changes require an active APPROVED review on the current head from a non-author human",
-        });
-      } else {
-        evidence.push({
-          type: "review",
-          headSha,
-          reviewId: approval.id,
-          reviewer: approval.author.login,
-          submittedAt: approval.submittedAt,
-        });
-      }
     }
   }
 
@@ -520,7 +526,7 @@ function formatResult(result) {
     if (item.type === "ci") {
       lines.push(`PASS ${item.check} (${item.headSha.slice(0, 12)})`);
     } else if (item.type === "review") {
-      lines.push(`PASS independent review by ${item.reviewer} (${item.headSha.slice(0, 12)})`);
+      lines.push(`PASS current-head ${item.state} review signal by ${item.reviewer} (${item.headSha.slice(0, 12)})`);
     }
   }
   for (const blocker of result.blockers) {

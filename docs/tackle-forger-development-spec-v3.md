@@ -1052,11 +1052,28 @@ Tackle Forger中的“发布”只表示发布内部RuleSetVersion、冻结Confi
 
 #### 20.2.2 `aiRefreshPolicy`
 
-策略版本为`ai-refresh/open009-v1`：
+策略版本为`ai-refresh/open009-v1`。批量限制是该策略引用的独立已发布配置`ai-batch-limits/open009-v1`，当前值固定为：
+
+```json
+{
+  "policyVersion": "ai-batch-limits/open009-v1",
+  "maxAssessmentsPerBatch": 20,
+  "maxConcurrentAssessmentsPerWorkspace": 2,
+  "perAssessmentTimeoutMs": 60000,
+  "batchTimeoutMs": 600000,
+  "maxEstimatedInputTokensPerBatch": 200000,
+  "maxEstimatedOutputTokensPerBatch": 40000,
+  "maxEstimatedCostMicroUsdPerBatch": 1000000
+}
+```
 
 - 输入对象Revision、Patch、RuleSetVersion、五维定义或顶点、证据内容哈希等参与`inputHash`的内容变化时，旧评估立即自动标记为`stale`；标记状态本身不得调用AI。
 - 系统不得自动、定时或无人值守重新评估。已登录用户可以显式重跑单个评估，也可以明确选择范围后批量刷新。
-- 批量刷新必须由策略限制数量、并发、超时和费用，并逐项保存结果；不得用后台全量扫描替代用户选择。
+- `maxAssessmentsPerBatch`在对象范围展开、权限过滤和按`scopeRef + revisionId`去重后计算；只允许`1..20`项，超过上限整体拒绝，不静默截断或拆成无人确认的后续批次。
+- 并发上限按工作区计算，包含同一工作区所有批次和单次重跑；超过2个请求的任务排队，但排队时间计入10分钟`batchTimeoutMs`。单项从实际派发起最多60秒；超时项记录独立失败，不把未知结果伪装成成功。
+- 输入/输出token预算使用请求前确定性估算；连接器必须把输出上限传给供应方。费用统一按版本化供应方价格表换算为micro-USD，`1000000`表示每批最多1.00美元。价格版本缺失、币种无法换算、token或费用无法估算时禁止批量刷新；估算超过任一预算时整批在首次AI调用前拒绝。
+- 批次总超时后取消尚未派发项；已派发项按实际结果逐项保存，不能继续启动新调用。不得用后台全量扫描替代用户选择。
+- `ai-batch-limits`配置缺失、无已发布版本、字段非整数/非正数或版本不受支持时，服务端返回`AI_BATCH_LIMIT_POLICY_MISSING_OR_INVALID`并禁用批量刷新；页面默认值不得代替。未来改变任一数值必须发布新策略版本并把版本写入AssessmentBatch审计。
 - `stale`评估保持只读，不能继续转换为Model Patch或RuleSourceChangeDraft。
 - 三期仍不默认增加定时刷新；未来如需定时刷新，必须发布新策略版本。
 
@@ -1115,7 +1132,11 @@ Tackle Forger中的“发布”只表示发布内部RuleSetVersion、冻结Confi
 
 - 锁由系统自动取得和释放，不要求用户手工管理。持锁期间其他用户仍可读取、查看差异和执行不落盘的预览或AI评估，但不能保存状态变更。
 - 前端必须显示锁持有人、正在执行的动作、开始时间和被禁用动作的原因。
-- 操作成功、失败或取消后自动释放；浏览器断开或服务异常时，通过心跳和短期租约自动过期，防止永久锁死。
+- 每次取得或重新取得锁，数据库必须在同一事务中为该工作区分配严格单调递增、永不复用的正数64位有符号`BIGINT fencingToken`，并创建含`workspaceId/leaseId/holderUserId/action/fencingToken/acquiredAt/expiresAt`的租约。API、JSON、outbox和操作记录统一把token编码为无前导零的十进制字符串，禁止经过JavaScript `number`；比较时按数据库整数值而非字符串字典序。释放、超时、失败和数据库恢复都不得回退计数器或再次发放旧token；计数器达到`9223372036854775807`或无法证明其连续性时必须fail-closed并禁止新写入。
+- 所有共享状态变更、持久化事务、远端写入命令、恢复命令和最终成功提交都必须携带`leaseId + fencingToken`。本地存储在实际写入点比较token是否仍等于该工作区最新授予值；仅检查“调用方看起来仍持锁”、只检查leaseId或只在请求开始时检查均不合格。旧token返回`STALE_FENCING_TOKEN`，不得提交状态或标记成功。
+- 飞书和配置文件等不能原生校验token的外部副作用不得由请求线程直接执行，必须进入按工作区串行的持久化fenced outbox。worker在每项副作用开始前重验最新token；同一目标的低token结果处于超时/未知状态时，必须先按幂等键回读并确认结果或进入人工恢复，禁止更高token命令越过。这样旧请求即使恢复，也不能在新token写入之后再次改变同一目标。
+- 外部调用返回后、写入本地成功证据前再次校验token。若调用期间租约过期且新token已经发放，旧操作只能向协调器报告未知结果，不能用旧token写入任何业务状态或成功证据；协调器必须以当前有效token追加`SUPERSEDED/RECOVERY_REQUIRED`回读证据并完成回读/补偿，再允许更高token继续。
+- 操作成功、失败或取消后自动释放；浏览器断开或服务异常时，通过心跳和短期租约自动过期，防止永久锁死。租约过期只允许发放更高token，不代表旧操作可以继续提交。
 - 不提供绕过硬校验、Revision冲突、显式拉取、Snapshot不可变或配置关系校验的紧急通道。失败写入继续通过幂等键、回读、备份和恢复Manifest处理。
 
 本工具只建设用于故障定位、恢复和结果复现的轻量“操作记录”，不建设独立合规审计系统。飞书写回/回读/拉取、RuleSet与Snapshot发布、AI调用与草稿转换、单写锁、配置写入/恢复、功能开关和会话撤销的成功、失败和取消都应记录。每条至少保存飞书用户稳定ID与显示名、时间、动作、对象与Revision、请求或幂等ID、必要的before/after hash、结果和错误原因。
@@ -1131,7 +1152,8 @@ Tackle Forger中的“发布”只表示发布内部RuleSetVersion、冻结Confi
 - 任一已登录公司用户可以执行已启用动作；一期AI关闭时不能通过直接API绕过功能开关。
 - 三个阶段均不存在飞书审批依赖，同一用户可以连续完成规则链路中的显式动作。
 - 两名用户同时尝试关键写操作时只有一人取得锁，另一人仍可读取并看到明确的持锁提示。
-- 持锁客户端断开后租约可以自动过期；失败写入可以通过幂等回读或Manifest恢复且不会重复生效。
+- Given A持有token 41并在远端写入中卡住，When 租约过期且B取得token 42，Then A恢复后的任何本地提交都返回`STALE_FENCING_TOKEN`；B不能越过A的未知远端结果，必须先完成幂等回读/恢复，最终同一目标不会出现A在B之后生效。
+- 持锁客户端断开后租约可以自动过期并发放更高fencing token；失败写入可以通过幂等回读或Manifest恢复且不会重复生效。
 - 普通操作记录到期清理不改变历史Snapshot、Patch、RuleSet或导出Manifest的复现关系。
 
 

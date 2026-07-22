@@ -60,6 +60,11 @@ Windows 推荐使用项目自带脚本，避免把重定向字符串误当成程
 不能替代内网持久磁盘、公司飞书凭据和真实配置仓库验收。
 完整安装、systemd、Nginx、备份与回滚步骤见 `docs/deployment/r730-production.md`。
 
+Vercel 评审构建同样从仓库根安装 `package-lock.json`，但通过
+`npm run build:vercel` 启用 Vinext 的 Nitro 适配器。该命令生成 Vercel Build Output API
+要求的 `.vercel/output`；`vercel.json` 不执行 `next build`、不修改源码，也不把历史
+`apps/web` 当作部署入口。
+
 ## 公司飞书登录
 
 应用不提供匿名编辑或离线冒名提交。飞书 OAuth 仅接受配置的公司租户；未登录返回 401，

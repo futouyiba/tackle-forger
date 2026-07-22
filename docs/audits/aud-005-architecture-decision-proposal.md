@@ -1,10 +1,10 @@
 # AUD-005 应用权威、历史工作区与旧配方入口 ADR 草案
 
-> 状态：`PROPOSED / PENDING USER DECISION`
+> 状态：`ACCEPTED / AUD-005 IMPLEMENTED / AUD-026 DECIDED, IMPLEMENTATION OPEN`
 >
 > 提案日期：2026-07-23
 >
-> 现状证据基线：`review/current-state-2026-07-22`提交`6cf90401f7a3a06e5a8492918c06f4ab5829da40`
+> 现状证据基线：`review/current-state-2026-07-22`提交`3cb6609c237c0c23d108bf305124e24f18980fa8`
 >
 > 权威语义：[`tackle-forger-development-spec-v3.md`](../tackle-forger-development-spec-v3.md)
 
@@ -69,10 +69,11 @@
 
 - R730生产手册和systemd均指向根应用，生产构建步骤为`npm run build`，启动为`npm run start`。
 - Cloudflare Worker/Vite配置也包装根Vinext应用，可作为受控预览或未来部署适配层，但目前不是R730生产事实。
-- `vercel.json`仍显式使用`next build`，而根脚本的权威构建器是`vinext build`；这会造成评审入口与生产入口漂移。
+- Vercel评审配置从根`package-lock.json`执行`npm ci`和`npm run build:vercel`；Vite仅在Vercel/Nitro目标中切换适配器并生成`.vercel/output` Build Output API v3产物，不再执行`next build`。
+- 常规`npm run build`继续使用原有Vinext/Cloudflare集成，Vercel专用CSS预处理只解决Nitro/RSC子环境不继承根PostCSS查找的问题，不改变业务样式源或常规构建。
 - `apps/web`自身也能执行`next build/start`，但目前没有证据表明R730或正式数据指向它。
 
-部署收敛必须同时命名“代码入口、构建命令、数据后端、运行环境”，不能只写“部署根目录”。
+因此部署契约已经同时命名“代码入口、构建命令、数据后端、运行环境”：根Vinext是唯一应用入口，Vercel只承载无正式持久凭据的评审构建，R730仍是正式运行环境。
 
 ## 4. 方案比较
 

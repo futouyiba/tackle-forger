@@ -86,6 +86,42 @@ test("Series 路由拒绝非法强度、品质引用和拉力 token", { concurre
   }
 });
 
+test("Series 路由对恶意JSON字段类型稳定返回400", { concurrency: false }, async () => {
+  withTrustedProxy();
+  const validShape = {
+    idempotencyKey: "malicious-json",
+    seriesId: "series:malicious-json",
+    name: "类型测试",
+    concept: "字段类型必须在trim和split前验证",
+    itemPartId: "part:rod",
+    methodId: "method:lure",
+    typeId: "type:any",
+    functionId: "function:any",
+    qualityId: "quality_c_green",
+    functionIntensity: 2,
+    discretePulls: "1.5",
+  };
+  for (const [field, value] of [
+    ["name", 1],
+    ["idempotencyKey", {}],
+    ["seriesId", 3],
+    ["methodId", []],
+    ["collectionId", 4],
+    ["performanceId", false],
+    ["discretePulls", []],
+    ["planningMinKgf", 1],
+    ["planningMaxKgf", {}],
+  ] as const) {
+    const response = await createSeries(new NextRequest("http://localhost/api/series", {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({ ...validShape, [field]: value }),
+    }));
+    assert.equal(response.status, 400, field);
+    assert.equal(((await response.json()) as { field?: string }).field, field);
+  }
+});
+
 test("Series 创建相同幂等键恢复原结果，不同输入冲突", { concurrency: false }, async () => {
   withTrustedProxy();
   const { state } = await loadWorkspaceState();

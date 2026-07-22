@@ -204,9 +204,9 @@ UpgradeCandidate 只描述“升级会怎样”。批准不改变旧 Snapshot；
 | R13 导出 | 一期NON_FORMAL；1.5期多profile→校验 | 未登记目标/只读profile | Manifest stale、Model revision、主键/TOML断链 | 重扫复核/保留结果重跑 | preview/commit及ID治理动作分离 | G ref推进或并发改key，W预留/导出，T禁用且不消耗ID/不落盘 |
 | R14 登录 | 飞书会话 | AI 关闭 | 会话过期 | 重登并重验 | 一期仍返回 capability | G 会话过期，W 重登，T 表单保留且重验 |
 
-## 13. 保持开放、不得固化
+## 13. 策略状态与不得固化的边界
 
-本界面只消费v3第20节的唯一未决事项登记表：OPEN-001降低型叠加、OPEN-002未来Performance扩展、OPEN-003扩展部位、OPEN-004 Patch偏移阈值、OPEN-005五维定义、OPEN-006 AI供应方与出网、OPEN-007定价源表、OPEN-008 ConfigIdPolicy和OPEN-010飞书Patch台账远端契约。未决值全部通过版本化策略或明确禁用态表达。OPEN-003的产品方向已经确认“当前完全延期”，但尚无可校验的已发布`enabledItemPartPolicy`，所以继续保持`DEFERRED_UI_DISABLED`；这不是等待UI选择批次，页面不得为钩、漂、真饵或拟饵提供入口或占位。OPEN-009已经解决，界面必须消费`open009-2026-07-23-v1`及其引用的批量刷新、记录、复核和职责分离策略版本，不再显示“治理待确认”。
+本界面只消费v3第20节登记表，不自行解释状态。OPEN-001公式已经确认，界面不得继续展示`linear_subtraction/diminishing_division`切换或“等待选择公式”；在权威主工作簿机器规则与已发布`ReductionStackingPolicyVersion`缺失时，只显示`bidirectional_ratio`非正式预览及发布/正式导出阻断。OPEN-002、OPEN-003、OPEN-005、OPEN-007与OPEN-010仍按各自开放或外部阻断状态表达；OPEN-004、OPEN-008是已确认但待策略版本；OPEN-006、OPEN-009已经解决，界面消费其已确认策略和独立实现准入状态。OPEN-003的产品方向已经确认“当前完全延期”，但尚无可校验的已发布`enabledItemPartPolicy`，所以继续保持`DEFERRED_UI_DISABLED`；这不是等待UI选择批次，页面不得为钩、漂、真饵或拟饵提供入口或占位。OPEN-009必须消费`open009-2026-07-23-v1`及其引用的批量刷新、记录、复核和职责分离策略版本，不再显示“治理待确认”。所有仍未决的值只能通过版本化策略或明确禁用态表达。
 
 TOML枚举引用不是开放项：当前编译器契约已确定使用可读`configNameKey/name`解析到唯一数字ID，页面不得提供“按ID或name任选”的产品开关。Snapshot冻结语义也不是配置项，改变它必须先获得用户明确确认并修订v3。
 

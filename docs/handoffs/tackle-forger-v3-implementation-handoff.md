@@ -44,18 +44,21 @@ B = ΣPercentIncreaseMagnitude
 R = ΣPercentReductionMagnitude
 PercentAdjusted = BaseValue × (1 + B) / (1 + R)
 FinalBeforeBoundary = PercentAdjusted + ΣFlatBonus - ΣFlatReduction
-FinalValue = applyParameterDefinition(FinalBeforeBoundary)
+AffixOutput = applyClampAddInStableOrder(FinalBeforeBoundary)
+PostReviewValue = applyFinalReviewPatch(AffixOutput)
+FinalValue = applyParameterDefinition(PostReviewValue)
 ```
 
 实现要求：
 
-- 正式百分比效果保存 `direction: increase | decrease` 与非负有限 `magnitude`；旧有符号值只在导入阶段确定性归一化，并保留原值、归一化结果与迁移证据。
-- `ReductionStackingPolicyVersion` 冻结公式、归一化、operation 阶段顺序、异常分类、`ParameterDefinition` 引用与执行点、规则源 revision 和公式区域证据；已发布版本不可原地修改。
-- `0%`、`BaseValue = 0`、`B ≥ 1`、`R ≥ 1`以及有限且在词条版本范围内的极值合法。负 Base 使用百分比、单条幅度越界、非法数值、溢出、非有限结果和理论非零结果数值下溢为零，按 v3 第 11.4 节的 Severity、Gate 和不可 waiver 规则阻断。
-- 缺少已发布 `ReductionStackingPolicyVersion` 时只允许明确标记的非正式草稿预览；禁止发布新 Model 或 `ConfigurationSnapshot`。
-- 每次派生、`ModelRevision` 和发布快照都记录实际策略版本与完整 Trace，包括源词条、有序 operation、方向/幅度、Base、B、R、百分比结果、固定值合计、边界前结果、参数定义、规则源证据和输入输出 hash。
-- 新策略版本只使受影响草稿进入 `DIRTY`，经显式重算创建新 revision；已发布 Snapshot 不重算、不改写，只生成 `UpgradeCandidate`。缺少策略版本的历史 Snapshot 不猜测绑定当前策略。
-- 飞书写入不自动激活。生效链仍是技术回读、显式拉取、生成并校验 `FeishuSourceRevision`、发布 `ReductionStackingPolicyVersion` 与 `RuleSetVersion`、再显式重算。
+- 正式百分比与固定值效果保存 `direction: increase | decrease` 和非负有限 `magnitude`；旧operation与有符号值只在导入阶段按v3第11.3节确定性归一化，冲突时隔离，并保留原值、归一化结果与迁移证据。
+- 完整顺序固定为`set建立Base → 双向百分比 → 固定值 → clamp_add → FinalReviewPatch → ParameterDefinition`；`set`不是结算后覆盖，`clamp_add`不替代最终参数边界，ParameterDefinition不得在FinalReviewPatch之前提前执行。
+- `ReductionStackingPolicyVersion` 冻结公式、DTO/迁移、完整operation顺序、`ieee754-binary64-v1`数值域、稳定排序与左折叠累加、位型hash、异常分类、`ParameterDefinition`引用与执行点、规则源revision和公式区域证据；已发布版本不可原地修改。
+- `0%`、`BaseValue = 0`、`B ≥ 1`、`R ≥ 1`以及合法有限/次正规值允许。负 Base 使用百分比、方向冲突、幅度越界、非法数值、溢出、非有限结果和理论非零结果下溢为零，按 v3 第 11.4 节阻断。
+- 缺少权威主工作簿机器规则或已发布 `ReductionStackingPolicyVersion` 时只允许非正式草稿预览；禁止发布新 Model、`ConfigurationSnapshot`和正式导出。
+- 每次派生、`ModelRevision` 和发布快照记录策略版本与完整 Trace，包括源词条、有序operation、方向/幅度、Base、B、R、百分比结果、固定值合计、边界前结果、ParameterDefinition、binary64位型、规则源证据和输入输出hash。
+- 新策略版本只使受影响草稿进入 `DIRTY`，经显式重算创建新 revision；已发布 Snapshot 不重算、不改写，只生成 `UpgradeCandidate`。缺少策略版本的历史 Snapshot 只允许原样审计归档下载，不能正式导出。
+- 《FG数值设计v3-总表》revision `17173`只作决策证据。运行时规则必须迁入唯一权威《钓具设计工作簿》的`04_词条/zrVOxd`稳定机器区域，再经回读、显式拉取、`FeishuSourceRevision`、策略/RuleSet发布和显式重算生效。
 
 运行时、迁移、校验和回归测试由 Issue #41 在本规范 PR 合并后独立实现。本 handoff 不再保留旧双模式作为新实现入口。
 
@@ -76,6 +79,7 @@ FinalValue = applyParameterDefinition(FinalBeforeBoundary)
 - 所有保存过的Patch进入工具内权威`PatchLedger`，并幂等同步到飞书单一`Patch台账`页；该页是协作镜像而非唯一运行时来源。DerivationLayerPatch或多个个体Patch的稳定共性可经人工归纳生成RuleSourceChangeDraft；单个个案不得未经归纳提升为通用规则。写回后必须回读、显式拉取并发布RuleSetVersion。
 - 先确定Series的Quality，再选择具体词条；价值分校验已选Quality并作为自动定价输入，不得反向自动改品质，Quality本身不修改面板。
 - 飞书唯一规则工作簿已指定为[《钓具设计工作簿》](https://pisn3u3ony2.feishu.cn/wiki/YsEKwSUJ5i86HCkZKBVcNMw7nOh?from=from_copylink&sheet=9nE3Rx)。链接锚点虽是`06_系列/9nE3Rx`，同步对象是整个工作簿；2026-07-21首次接入基线为revision `2302`，本轮源表整改后的回读revision为`2352`。两者都不得硬编码成最新版本。
+- OPEN-001外部工作簿revision `17173`不得进入运行时生效链。主工作簿revision `3259`的`04_词条/zrVOxd`尚无对应机器规则；在稳定`sheet_id + ruleId + parameterKey`规则写入、回读和显式拉取前，发布策略必须以`REDUCTION_POLICY_SOURCE_MISSING`阻断。
 - revision `2352`的历史审计确认了176个稳定机器ID：64个重量模板、14个类型、19个功能定位、19个性能定位、36个词条和24个系列原型。这仅是历史迁移基线，不是当前工作表拓扑。revision `2869`已调整为`04_词条/zrVOxd`、`05_技术/RdZv0J`，不再有独立性能定位页。接入器必须保留历史ID且每次显式拉取后重新审计当前机器区域；缺ID新行进入`NEW_SOURCE_ROW`，经人工确认后分配并回写。长期同步不得按名称、`名称|级别`、行号或显示顺序关联。
 - 工作簿`09_甘特图`是开发计划，不是“钓具系列甘特图”；`11_组合SKU`、`12_打包竿组`及`14_Rods`至`17_Item`先按历史样例/暂存输出处理，不能反向覆盖领域对象或冻结Snapshot。飞书工作簿不替代本地tackle/item/store导出。
 
@@ -298,7 +302,7 @@ Affinity轴与v3固定为：
 - `attribute`：改变具体面板数值。
 - `passive`：只保存元数据、品质分和展示内容。
 
-属性词条需声明作用属性、运算类型、数值、单位、适用范围、叠加组和规则版本。百分比效果必须归一化为 `increase | decrease` 与非负有限幅度，并由全局已发布的 `bidirectional_ratio` 策略结算；不得提供参数级或词条族级公式开关。
+属性词条需声明作用属性、规范operation、方向、非负幅度、单位、适用范围、叠加组和规则版本。百分比效果必须由全局已发布的 `bidirectional_ratio` 策略结算；不得提供参数级或词条族级公式开关。旧`percent_bonus/reduction_diminishing/flat_bonus/flat_reduction`只在迁移适配器中出现。
 
 被动词条可包含触发条件、描述、标签、稀有度、价值分和未来模拟器引用键，但本工具不得执行触发逻辑，也不得声称验证了模拟效果。
 
@@ -309,7 +313,7 @@ Affinity轴与v3固定为：
 - 编辑Series时先确定Quality，再选择词条；价值分只按原子词条成员汇总，用于校验所选Quality区间并作为自动定价输入。Technology不得重复计分，Quality本身不修改面板。
 - 展开技术时必须能看到成员、来源和最终贡献。
 
-验收：Technology展开后没有双重属性或价值分；被动词条可影响价值分但不改变面板；双向百分比、固定值后置、ParameterDefinition 边界、异常 Gate 和完整 Trace 均与 v3 第 11.3、11.4 节一致。
+验收：Technology展开后没有双重属性或价值分；被动词条可影响价值分但不改变面板；双向百分比、固定值后置、set/clamp顺序、binary64边界、ParameterDefinition执行点、异常Gate和完整Trace均与v3第11.3、11.4节一致。
 
 ### WP6：工作台交互
 
@@ -488,8 +492,8 @@ docs/tackle-forger-development-spec-v3.md，以及本 handoff。
 6. 运行 typecheck、lint、test，并区分既有失败与新增失败。
 
 不要删除旧字段；必要时增加只读兼容和迁移适配层。新派生必须使用
-已发布的全局 bidirectional_ratio 策略；旧有符号值只在导入时归一化并留证，
-历史 Snapshot 不猜测绑定当前策略，也不得被重算或改写。
+已发布的全局 bidirectional_ratio 策略；旧operation和有符号值只在导入时归一化并留证，
+历史 Snapshot 不猜测绑定当前策略，也不得被重算、改写或正式导出。
 完成后汇报数据迁移影响、领域接口、验证证据以及 WP2/WP3 的可接入点。
 ```
 

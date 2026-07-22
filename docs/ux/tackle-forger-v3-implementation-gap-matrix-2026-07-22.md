@@ -8,6 +8,7 @@
 > 规范同步：2026-07-23，按v3 OPEN-008已确认决策修正1/1.5期边界与外部阻断；本次只更新目标契约和差距描述，不冒充代码实现或新测试证据。  
 > OPEN-009对象可见性复核：2026-07-23 05:41:56 +0800，代码基线`origin/main@33cb47e4d923e6675f1a1bab8b2685266117bcaf`（提交时间2026-07-23 05:18:57 +0800）；确认运行时与测试仍执行对象级裁剪、隐藏计数和脱敏父链，本轮仅修正文档状态并由[Issue #31](https://github.com/futouyiba/tackle-forger/issues/31)跟踪实现迁移。
 > OPEN-003运行时复核：2026-07-23，代码基线`codex/open-003-deferred-parts@cdcbd7ce6bea60548f2224039861593c453ae028`；确认迁移层会保留四类扩展部位，创建Series页面仍渲染全部`state.itemParts`，服务端尚无独立启用策略门禁。本轮只记录实现事实，由[Issue #37](https://github.com/futouyiba/tackle-forger/issues/37)跟踪代码收口。
+> OPEN-001规范同步：2026-07-23，确认当前运行时仍保留`ReductionStackingMode`双模式、旧operation和非确定累加路径；本轮只同步已确认规范与外部规则源阻断，不冒充Issue #41的运行时实现或测试证据。
 > 对齐基线：v3 领域规范 > product-design-completion-v3 > implementation/requirements handoff > ux-design-v1 与 prototype 视觉证据。  
 > 状态定义：已实现、部分实现、缺失、因 v3 冲突而不采纳。
 
@@ -31,7 +32,7 @@
 | 个体 Patch 汇总、规则草稿与吸收 | 已实现 | Patch 确定性归组后由独立权限创建 RuleSourceChangeDraft；新 RuleSet 下以逐操作 Trace 评估完全/部分/未覆盖/Rebase，保存 assessment 并创建新 revision，不改旧 Snapshot | 草稿远端写回仍需已确认的通用规则页写入契约 |
 | 飞书 Patch 台账镜像 | 部分实现 | 已有领域契约、独立权限、幂等命令、部分失败和回读恢复状态；不会伪造 SYNCED | 主工作簿尚无已确认 Patch 台账 sheet_id/机器列，无法实施真实远端写入 |
 | 硬兼容与 Affinity | 已实现 | deny/require 与软分值分离；高 Affinity 不覆盖 deny；低分合法候选仍可生成 | 无 |
-| 属性词条、被动词条与 Technology | 已实现 | Technology 只展开成员；按 affixId 去重；被动参与价值分但不执行模拟器逻辑 | 无 |
+| 属性词条、被动词条与 Technology | 部分实现 | Technology只展开成员、按affixId去重、被动参与价值分但不执行模拟器逻辑；但运行时仍保留`ReductionStackingMode = linear_subtraction | diminishing_division`、旧`percent_bonus/flat_bonus/reduction`字段与未冻结累加顺序 | 按[Issue #41](https://github.com/futouyiba/tackle-forger/issues/41)迁移到`direction + 非负magnitude`规范DTO、唯一`bidirectional_ratio`、完整operation顺序、binary64确定性模型、冲突隔离、Trace/hash和历史Snapshot兼容；在主工作簿规则与策略版本发布前只允许非正式预览 |
 | 品质评分 | 已实现 | 人工选择品质；区间、组合矩阵、功能/性能系数、score=100 冲突、source=quality Trace | 无 |
 | 自动定价与 NON_FORMAL | 已实现 | 07/08 同 revision 导入、Lerp、结构源重量段、维修/购买公式、Trace、正式发布阻断 | OPEN-007的S=100边界、性能评分来源、roundingStage、minimumPriceScope、overflowMode未全部解决时只能NON_FORMAL |
 | 手填价格兜底 | 因 v3 冲突而不采纳 | 正式价格只能来自已发布 PricingPolicyVersion | 不提供绕过动作 |
@@ -60,12 +61,13 @@
 
 ## 3. 当前外部阻断
 
-1. OPEN-010：飞书主工作簿尚未提供已确认的Patch台账工作表sheet_id、机器列布局和协作字段权限，因此真实镜像写入/拉取不可启用。
-2. Vercel评审项目当前只配置`BLOB_READ_WRITE_TOKEN`，缺少`FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_TENANT_KEY`、`FEISHU_REDIRECT_URI`和`FEISHU_SESSION_SECRET`；首页HTTP 200，但会话端点返回503/`AUTH-CONFIG-001`，需部署方提供公司应用凭据并在飞书开放平台登记回调。
-3. OPEN-007：S=100边界、性能评分来源、PricingPolicy的roundingStage、minimumPriceScope、overflowMode尚未全部由权威规则源解决，因此新正式价格策略及其Model/Snapshot/Store导出必须继续阻断。
-4. OPEN-006 尚未确认 AI 供应方、模型和数据出网策略，因此真实 AI 连接器必须继续禁用。
-5. OPEN-008的数字区间、派生关系、命名、永不复用和权限语义已经确认；但尚未发布权威`ConfigTargetCatalogVersion`、覆盖全部必需目标的获批且新鲜`ConfigTargetScanManifest`、可校验`ConfigIdPolicyVersion`及reservation ledger，也未实现Model revision锁，因此仍不能正式预留ID或提交配置。
-6. 真实 configs Git 目标需由配置治理方发布环境/渠道权威目录并完成authoritative ref、commit、`config.toml`和workbook hash扫描复核；用户本机目录绑定和旧Profile不能替代该门禁，未完成时只能`NON_FORMAL`预览。
+1. OPEN-001：`FG数值设计v3-总表/oJO4Gi` revision `17173`只作决策证据；唯一权威主工作簿revision `3259`的`04_词条/zrVOxd`尚无稳定`ruleId + parameterKey`机器规则。完成迁入、回读、显式拉取和策略/RuleSet发布前，运行时只能非正式预览，Model/Snapshot发布与正式导出必须阻断。
+2. OPEN-010：飞书主工作簿尚未提供已确认的Patch台账工作表sheet_id、机器列布局和协作字段权限，因此真实镜像写入/拉取不可启用。
+3. Vercel评审项目当前只配置`BLOB_READ_WRITE_TOKEN`，缺少`FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_TENANT_KEY`、`FEISHU_REDIRECT_URI`和`FEISHU_SESSION_SECRET`；首页HTTP 200，但会话端点返回503/`AUTH-CONFIG-001`，需部署方提供公司应用凭据并在飞书开放平台登记回调。
+4. OPEN-007：S=100边界、性能评分来源、PricingPolicy的roundingStage、minimumPriceScope、overflowMode尚未全部由权威规则源解决，因此新正式价格策略及其Model/Snapshot/Store导出必须继续阻断。
+5. OPEN-006 尚未确认 AI 供应方、模型和数据出网策略，因此真实 AI 连接器必须继续禁用。
+6. OPEN-008的数字区间、派生关系、命名、永不复用和权限语义已经确认；但尚未发布权威`ConfigTargetCatalogVersion`、覆盖全部必需目标的获批且新鲜`ConfigTargetScanManifest`、可校验`ConfigIdPolicyVersion`及reservation ledger，也未实现Model revision锁，因此仍不能正式预留ID或提交配置。
+7. 真实 configs Git 目标需由配置治理方发布环境/渠道权威目录并完成authoritative ref、commit、`config.toml`和workbook hash扫描复核；用户本机目录绑定和旧Profile不能替代该门禁，未完成时只能`NON_FORMAL`预览。
 
 ## 4. 当前验证证据
 

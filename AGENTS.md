@@ -29,3 +29,15 @@
 - 保留并迁移现有数据，不通过删除历史状态简化实现。
 - 新增领域行为必须补测试；至少覆盖正常路径、边界、冲突和版本冻结。
 
+## GitHub合并门禁
+
+- 当前不配置GitHub Ruleset、分支保护、required check或额外status context；合并门禁由首个有权限的
+  Agent或单一托管主管在实时GitHub状态上执行，不得新增重复workflow代替该流程。
+- 合并前显式把变更分类为`normal`或`high`，并运行`npm run governance:check-pr -- --repo
+  futouyiba/tackle-forger --pr <number> --risk <normal|high>`；任何相关远端状态变化后必须重跑。
+- 只接受Pull Request同一个当前head SHA上的根npm CI、历史pnpm CI和Windows行尾检查；缺失、未完成、
+  失败、跳过、取消或旧head结果均阻断。#21仅是历史事故，其事后CI不得冒充当前通过。
+- Draft或存在未解决review thread时阻断。高风险变更还必须由Pull Request作者之外的人工评审者在当前
+  head提交`APPROVED`；作者自批和`COMMENTED`不计入。
+- 检查通过只是可合并证据，不授予合并权限；合并仍需本轮用户明确授权。完整契约见
+  `.github/merge-gates.md`。

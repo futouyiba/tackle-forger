@@ -1,0 +1,18 @@
+{
+  "checkedAt": "2026-07-23T08:00:00Z",
+  "riskLevel": "normal",
+  "pullRequest": {
+    "number": 101,
+    "isDraft": false,
+    "state": "open",
+    "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "author": { "login": "author", "type": "User" }
+  },
+  "checks": [
+    { "id": 1, "name": "Root v3 app (npm)", "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "status": "completed", "conclusion": "success", "appSlug": "github-actions" },
+    { "id": 2, "name": "Historical workspace (pnpm)", "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "status": "completed", "conclusion": "success", "appSlug": "github-actions" },
+    { "id": 3, "name": "Windows line-ending policy", "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "status": "completed", "conclusion": "success", "appSlug": "github-actions" }
+  ],
+  "reviews": [],
+  "reviewThreads": []
+}

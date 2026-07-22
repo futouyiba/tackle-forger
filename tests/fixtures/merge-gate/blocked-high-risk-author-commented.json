@@ -1,0 +1,21 @@
+{
+  "checkedAt": "2026-07-23T08:00:00Z",
+  "riskLevel": "high",
+  "pullRequest": {
+    "number": 102,
+    "isDraft": false,
+    "state": "open",
+    "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "author": { "login": "author", "type": "User" }
+  },
+  "checks": [
+    { "id": 1, "name": "Root v3 app (npm)", "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "status": "completed", "conclusion": "success", "appSlug": "github-actions" },
+    { "id": 2, "name": "Historical workspace (pnpm)", "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "status": "completed", "conclusion": "success", "appSlug": "github-actions" },
+    { "id": 3, "name": "Windows line-ending policy", "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "status": "completed", "conclusion": "success", "appSlug": "github-actions" }
+  ],
+  "reviews": [
+    { "id": 10, "state": "APPROVED", "commitSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "submittedAt": "2026-07-23T07:00:00Z", "author": { "login": "author", "type": "User" } },
+    { "id": 11, "state": "COMMENTED", "commitSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "submittedAt": "2026-07-23T07:05:00Z", "author": { "login": "reviewer", "type": "User" } }
+  ],
+  "reviewThreads": []
+}

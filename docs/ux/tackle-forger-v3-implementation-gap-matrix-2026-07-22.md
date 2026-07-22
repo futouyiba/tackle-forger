@@ -15,7 +15,7 @@
 > 本轮完整验证时间：2026-07-23 01:57:07 +0800；在上述OPEN-007代码基线上运行`npm run typecheck`、`npm run lint`与`npm test`。
 > PR #11最新main重整复核：2026-07-23 07:30:24 +0800，基线`origin/main@18f99e136320f1989bdeb7f61312b5ea4493bae7`；根应用`npm run typecheck`、`npm run lint`、`npm test`通过（208项主测试与1项生产构建/渲染测试），历史workspace的`pnpm -r typecheck/lint/test/build`通过；根Lint为0 error、保留main已有1条warning。
 > 最后对齐v3：2026-07-23；OPEN-010契约状态同步于2026-07-23 03:33:57 +0800，依据Issue #19与PR #23父提交`80487188d7bb6850b8f35f887dbba27f42125043`；只更新远端契约/阻断事实，没有重新审计代码或重跑测试。
-> OPEN-010运行时差距复核：2026-07-23，代码基线PR #23 `efa74951bfb7a088e0f4e16588015a424ebbedf3`；确认当前服务端只有旧版镜像写入/拉取路径：明细键未包含`workspaceId`，尚无第14.3节的JCS哈希、远端schema/IssueCode校验，交互契约也未暴露`write_patch_mirror`/`pull_patch_mirror` ActionCode；检查、修复、按本地权威重建、schema修复和Patch主体迁移动作及其测试同样未实现。本次只登记实现差距，不冒充代码实现。
+> OPEN-010运行时差距复核：2026-07-23，代码基线PR #23 `8046a363c2642f1f88d110b0d436e25a2a5209dc`；确认本地`PatchOperationRecord`、PatchLedger schema/migration及operation/revision/Snapshot哈希尚未绑定`workspaceId`；服务端只有旧版镜像写入/拉取路径，尚无第14.3节的JCS哈希、远端schema/IssueCode校验，交互契约也未暴露`write_patch_mirror`/`pull_patch_mirror` ActionCode；检查、修复、按本地权威重建、schema修复和Patch主体迁移动作及其测试同样未实现。本次只登记实现差距，不冒充代码实现。
 > 对齐基线：v3 领域规范 > product-design-completion-v3 > implementation/requirements handoff > ux-design-v1 与 prototype 视觉证据。  
 > 状态定义：已实现、部分实现、缺失、因 v3 冲突而不采纳。
 
@@ -34,7 +34,7 @@
 | 最近结构标杆 | 已实现 | 相同部位、钓法、类型、功能内按 abs(ln(target/derived))；不插值；平局规则确定 | 无 |
 | Patch 分层与 Rebase | 已实现 | patch-engine 支持稳定层序、冲突与 rebase 差异；上游变化不改旧 Snapshot | 无 |
 | Patch操作统一契约 | 部分实现 | PatchLedger与工作台使用set/add/multiply/clear，迁移器把旧remove转换为clear | 旧ProjectionPatchOperation仍暴露remove，旧AdjustmentRule路径仍可执行min/max；需按v3规范收口适配器、冻结规范化和迁移复核 |
-| PatchLedger 权威账本 | 已实现 | Workspace schema v17 + PatchLedger schema v4；稳定 ID、仅 ACTIVE 重放、revision 幂等、ORPHANED、Rebase/吸收均生成新 revision、Snapshot 引用冻结 | 无 |
+| PatchLedger 权威账本 | 部分实现 | Workspace schema v17 + PatchLedger schema v4已有稳定 ID、仅 ACTIVE 重放、revision 幂等、ORPHANED、新revision式Rebase/吸收和Snapshot引用冻结 | 运行时`PatchOperationRecord`、PatchLedger schema/migration及operation/revision/Snapshot哈希尚未绑定`workspaceId`或第14.4节JCS哈希契约；须以版本化迁移补齐工作区归属与新哈希，无法安全归属的旧记录进入迁移复核，并保持既有revision、Snapshot引用及历史哈希证据不可变；至少补“两工作区复用相同Patch/revision/operation ID不碰撞”和迁移幂等回归 |
 | Patch 台账工作台 | 已实现 | 治理区一级入口展示 revision、稳定对象、操作顺序、基线、镜像状态、Snapshot 引用、迁移待复核及 RuleSet 发布后吸收评估；支持创建、审核、显式启用 | 镜像写入/拉取按钮在远端连接器可用前保持禁用 |
 | 个体 Patch 汇总、规则草稿与吸收 | 已实现 | Patch 确定性归组后由独立权限创建 RuleSourceChangeDraft；新 RuleSet 下以逐操作 Trace 评估完全/部分/未覆盖/Rebase，保存 assessment 并创建新 revision，不改旧 Snapshot | 草稿远端写回仍需已确认的通用规则页写入契约 |
 | 飞书 Patch 台账镜像 | 部分实现 | 已有领域契约和旧版镜像写入/拉取命令、部分失败及回读恢复状态；已确认`Patch台账/edyFx9`、`A:AK`机器区和`AM:BA`协作事件区；旧路径仍使用不含`workspaceId`的明细键，缺少第14.3节的JCS哈希、远端schema/IssueCode校验和`write_patch_mirror`/`pull_patch_mirror` ActionCode，因此不能视为符合新契约 | 除远端表头物化、机器区/协作区保护边界和连接器联调外，服务端仍须把写入/拉取升级到工作区复合键、哈希、schema、IssueCode和ActionCode/Capability契约，并实现`inspect_patch_mirror`、`repair_patch_mirror`、`rebuild_patch_mirror_from_local`、`fix_patch_mirror_schema`、`migrate_patch_subject`；全部动作均须覆盖Capability门禁、二次确认（适用时）、审计证据、重复重试、回读、缺行、篡改、hash及并发冲突测试，完成前不得标记为可用 |

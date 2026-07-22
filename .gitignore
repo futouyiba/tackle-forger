@@ -47,6 +47,7 @@ next-env.d.ts
 /.run/
 /.data/
 /.codex/
+/.claude/
 /audit-output/
 
 *.tsbuildinfo

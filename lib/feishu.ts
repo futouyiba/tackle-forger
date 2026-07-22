@@ -224,6 +224,85 @@ export async function updateFeishuRecords(
   }
 }
 
+/**
+ * 判断既有记录的待写字段是否已全部等于目标值。用于回写的幂等对账：
+ * 写前命中表示上次写入已落地（跳过重复写）；写后命中表示写入已核实。
+ */
+export function feishuWritebackFieldsMatch(
+  existing: Record<string, unknown> | undefined,
+  fields: Record<string, unknown>,
+): boolean {
+  if (!existing) return false;
+  for (const [key, value] of Object.entries(fields)) {
+    if (JSON.stringify(existing[key]) !== JSON.stringify(value)) return false;
+  }
+  return true;
+}
+
+async function readFeishuRecordsByIdMap(
+  source: DataSourceProfile,
+  recordIds: string[],
+): Promise<Map<string, FeishuRecord>> {
+  const wanted = new Set(recordIds);
+  const map = new Map<string, FeishuRecord>();
+  for (const record of await fetchFeishuRecords(source)) {
+    if (wanted.has(record.record_id)) map.set(record.record_id, record);
+  }
+  return map;
+}
+
+export interface FeishuWritebackEvidence {
+  recordId: string;
+  matched: boolean;
+}
+
+export interface FeishuWritebackResult {
+  /** written=本次写入并核实；alreadyApplied=写前回读已全部命中，跳过；recovered=写入抛错但回读确认已落地；failed=抛错且回读未全部命中。 */
+  result: "written" | "alreadyApplied" | "recovered" | "failed";
+  evidence: FeishuWritebackEvidence[];
+  error?: string;
+}
+
+/**
+ * 幂等且可恢复的飞书数据源回写（规范 §14 / §24.9）：
+ * 1. 写前回读——若所有待写字段均已为目标值，视为上次写入已落地，跳过重复写；
+ * 2. 执行 batch_update；
+ * 3. 写后回读校验；
+ * 4. 写入抛错时回读对账，按记录判定已落地/未落地，返回逐条证据，支持安全重试。
+ * records/batch_update 按 record_id 覆盖字段（非追加），叠加回读对账后重试不会重复写入。
+ */
+export async function commitFeishuWriteback(
+  source: DataSourceProfile,
+  rows: DataSourceWritebackRow[],
+): Promise<FeishuWritebackResult> {
+  if (!rows.length) return { result: "alreadyApplied", evidence: [] };
+  const evidenceFor = (records: Map<string, FeishuRecord>): FeishuWritebackEvidence[] =>
+    rows.map((row) => ({ recordId: row.recordId, matched: feishuWritebackFieldsMatch(records.get(row.recordId)?.fields, row.fields) }));
+
+  const preRead = await readFeishuRecordsByIdMap(source, rows.map((row) => row.recordId));
+  if (rows.every((row) => feishuWritebackFieldsMatch(preRead.get(row.recordId)?.fields, row.fields))) {
+    return { result: "alreadyApplied", evidence: evidenceFor(preRead) };
+  }
+
+  try {
+    await updateFeishuRecords(source, rows);
+  } catch (error) {
+    const readback = await readFeishuRecordsByIdMap(source, rows.map((row) => row.recordId)).catch(
+      () => new Map<string, FeishuRecord>(),
+    );
+    const evidence = evidenceFor(readback);
+    const allMatched = evidence.length > 0 && evidence.every((item) => item.matched);
+    return {
+      result: allMatched ? "recovered" : "failed",
+      evidence,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+
+  const verify = await readFeishuRecordsByIdMap(source, rows.map((row) => row.recordId));
+  return { result: "written", evidence: evidenceFor(verify) };
+}
+
 export async function pullDataSourcePreview(
   source: DataSourceProfile,
   state: WorkspaceState,

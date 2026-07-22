@@ -9,10 +9,10 @@ import {
 } from "@/lib/data-sources";
 import { recalculateWorkspace } from "@/lib/engine";
 import {
+  commitFeishuWriteback,
   fetchFeishuRecords,
   pullDataSourcePreview,
   resolveFeishuSourceLink,
-  updateFeishuRecords,
 } from "@/lib/feishu";
 import { loadWorkspaceState, saveWorkspaceState } from "@/lib/storage";
 import type { ActionCode } from "@/lib/interaction-contracts";
@@ -136,7 +136,17 @@ export async function POST(request: NextRequest) {
           { status: 409 },
         );
       }
-      await updateFeishuRecords(body.source, preview.rows);
+      const writeback = await commitFeishuWriteback(body.source, preview.rows);
+      if (writeback.result === "failed") {
+        return NextResponse.json(
+          {
+            error: "飞书回写未确认，已停止。请重试——重试会先回读，已落地的记录不会重复写入。",
+            evidence: writeback.evidence,
+            detail: writeback.error,
+          },
+          { status: 502 },
+        );
+      }
 
       const refreshedRecords = await fetchFeishuRecords(body.source);
       const refreshed = prepareDataSourcePreview(body.source, refreshedRecords, current.state);

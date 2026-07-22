@@ -515,7 +515,7 @@ linear_subtraction 和 diminishing_division 两种配置，本轮不需要决定
 - 抛投顶点只使用竿的direct值；轮线在比较上下文继承第一根竿，无竿时为not_applicable，均不按0；
 - 属性词条和Patch通过最终面板参数影响五维，被动词条不影响五维；
 - 将五维定义/哈希/选择器版本、W段、逐件结果、顶点哈希、投影引用证据和规则版本冻结到ConfigurationSnapshot；
-- 为旧`PUBLISHED`定义建立不改payload/hash的`LEGACY_SNAPSHOT_ONLY`处置；旧Snapshot只读重放，新正式Snapshot只接受唯一`FORMAL_CURRENT`新定义并在缺失时fail-closed；
+- 为旧`PUBLISHED`定义建立不改payload/hash的不可变处置目录修订；用途变化通过完整后继修订和可条件更新的目录头表达，替换时原子写入旧项`SUPERSEDED`与唯一新项`FORMAL_CURRENT`。旧Snapshot只读重放，新正式Snapshot冻结目录revision/hash并在正式定义缺失或目录冲突时fail-closed；
 - 按UX Agent已确认的位置接入Model预览，并提供计算解释入口；
 - 对飞书`50..800`档位歧义产生导入warning，阈值保持配置化。
 

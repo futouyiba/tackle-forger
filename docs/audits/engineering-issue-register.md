@@ -4,7 +4,7 @@
 > 首次建立：2026-07-22
 > 来源审查：[`current-state-review-2026-07-22.md`](./current-state-review-2026-07-22.md)
 > 最近复核：[`remote-branches-review-2026-07-22.md`](./remote-branches-review-2026-07-22.md)
-> 当前汇总：4个有效未关闭问题（0个`OPEN`、2个`IN_PROGRESS`、2个`BLOCKED`），30个`RESOLVED`，1个`SUPERSEDED`。
+> 当前汇总：2个有效未关闭问题（0个`OPEN`、0个`IN_PROGRESS`、2个`BLOCKED`），32个`RESOLVED`，1个`SUPERSEDED`。
 
 ## 状态定义
 
@@ -32,13 +32,11 @@
 | --- | --- | --- | --- | --- | --- |
 | AUD-005 | Medium | BLOCKED | 根 Vinext 应用与`apps/web`/`packages/*` workspace两套架构并存，旧`SeriesRecipe`页面与按`itemPartId`区分竿/轮/线的v3 Series流程也同时可见，正式权威实现和迁移关系未确定。v14虽已增加竿/轮/线约束迁移，但当前运行时与页面尚未消费该字段。 | 根`app/`、`lib/`；`apps/web`；`packages/*`；`be1cf696`；`partConstraints`当前只出现于类型、迁移和测试 | 架构决策记录明确source of truth、迁移/共存边界和部署目标；正式配方运行时及页面消费分部位约束；旧入口被迁移、只读归档或移除，用户不再把旧扁平配方误认为v3正式Series。 |
 | AUD-009 | Medium | BLOCKED | SQLite `workspace_revisions` 表永久保存完整 JSON，和 Blob/列表 100 条策略不一致，容量与归档政策未决定。 | `lib/sqlite-storage.ts:108-147` | 明确永久审计或有限保留策略；若有限保留则事务内清理；若永久保留则文档化容量、归档和备份规划。 |
-| AUD-018 | Low | IN_PROGRESS | 仓库已用`.gitattributes`统一文本LF并为PowerShell/批处理保留CRLF；macOS检查通过，CI已增加`windows-latest`检出验证，等待远端作业通过后关闭。 | `ba2111c2`；`.gitattributes`；`.github/workflows/ci.yml` | Windows作业确认PowerShell为纯CRLF、普通文本为LF，且`git diff --check`通过。 |
-| AUD-019 | Low | IN_PROGRESS | 根v3应用与历史workspace的npm/pnpm命令、锁文件和共享Vitest配置已明确分离；CI已增加独立作业，等待首次远端运行通过。 | `README.md`、`CLAUDE.md`、`.github/workflows/ci.yml`、`vitest.workspace.config.ts` | 根npm与历史pnpm作业均在干净检出上通过，且冻结安装不改写另一锁文件。 |
 
 ## 问题关系与去重
 
 - `AUD-001/002/003/004/007`已分别通过route-level测试关闭；原总括测试问题`AUD-012`保持`SUPERSEDED`，不重复计入已解决数量。
-- `AUD-005`是两套架构权威边界的父决策；“系列配方未拆分竿轮线”是旧`SeriesRecipe`仍可见造成的用户侧表现，归入`AUD-005`，不再新增重复AUD。`be1cf696`只解决v14迁移载体并记为`AUD-R010`，没有解决页面消费和架构权威边界。历史workspace本地验证已由`AUD-006`关闭；包管理与CI入口继续由`AUD-019`跟踪，二者都不替代`AUD-005`的架构决策。
+- `AUD-005`是两套架构权威边界的父决策；“系列配方未拆分竿轮线”是旧`SeriesRecipe`仍可见造成的用户侧表现，归入`AUD-005`，不再新增重复AUD。`be1cf696`只解决v14迁移载体并记为`AUD-R010`，没有解决页面消费和架构权威边界。历史workspace本地验证已由`AUD-006`关闭，双包管理与CI入口已由`AUD-019`关闭；二者都不替代`AUD-005`的架构决策。
 - `AUD-R003`证明Series创建主路径已进入服务端命令；通用整包保存绕过已由`AUD-001`的默认拒绝边界关闭。
 - `AUD-R006`证明飞书远端写前/写后回读恢复已经实现；默认测试入口遗漏已由`AUD-025`关闭；`AUD-021`进一步增加持久化写入意图、revision冲突自动对账和整次请求幂等恢复。
 - `AUD-R007`证明R730持久化、迁移、备份和运行手册的基础能力已存在；部署路径、Node下限和会话灾备已由`AUD-008/013/014`关闭，revision保留政策仍由`AUD-009`管理。
@@ -53,6 +51,8 @@
 
 | ID | 状态 | 问题 | 解决证据 | 验证 |
 | --- | --- | --- | --- | --- |
+| AUD-018 | RESOLVED | 仓库文本行尾策略曾缺少Windows真实检出验证。 | `.gitattributes`统一普通文本为LF并为PowerShell/批处理保留CRLF；`d30c763`增加独立`windows-latest`门禁。 | GitHub Actions [`CI #1`](https://github.com/futouyiba/tackle-forger/actions/runs/29935463528) 的`Windows line-ending policy`在`fd59fd3`上通过：PowerShell纯CRLF、`package.json`为LF、`git diff --check`通过。 |
+| AUD-019 | RESOLVED | 根v3应用与历史workspace使用npm/pnpm两套安装、锁文件和验证入口，曾缺少独立远端门禁。 | `d30c763`同步`pnpm-lock.yaml`、隔离共享Vitest配置，并在README/CLAUDE与CI中明确根npm和历史pnpm两套入口。 | GitHub Actions [`CI #1`](https://github.com/futouyiba/tackle-forger/actions/runs/29935463528) 的`Root v3 app (npm)`与`Historical workspace (pnpm)`在干净检出上全部通过，包括冻结安装、类型、lint、测试和构建。 |
 | AUD-024 | RESOLVED | SKU目标拉力、结构派生/命中拉力和Model最终拉力曾混用`targetWeightKg`及重复别名，历史兼容字段未收敛到迁移边界。 | `3ec88dc`将活动领域、候选、兼容、甘特查询/API和UI统一为`targetPullKg/derivedPullKg/matchedStructuralPullKg/modelFinalPullKg`；schema v17仅在v16→v17顺序迁移适配器读取旧字段，归档历史payload，拒绝新旧冲突与非正边界；既有v15→v16飞书回写意图迁移保持独立；冻结ConfigurationSnapshot保持原payload/contentHash，新Snapshot才冻结`modelFinalPullKg`。 | `npm run typecheck`、`npm run lint`、完整`npm test`通过225项TypeScript测试与2项生产构建测试；迁移测试覆盖幂等、payload归档、冲突、边界与Snapshot hash冻结；甘特GET路由和查询契约验证不输出旧字段；确定性最近匹配回归通过；`git diff --check`通过。 |
 | AUD-008 | RESOLVED | R730默认环境变量曾把可变数据指向只读发布目录。 | `deploy/tackle-forger.env.example`提供与systemd `ReadWritePaths`一致的`/opt/tackle-forger/data/*`绝对路径；运行手册明确禁止生产复制通用相对路径。 | 模板与`deploy/tackle-forger.service`静态核对；`git diff --check`通过。 |
 | AUD-011 | RESOLVED | 示例Nginx曾可能转发客户端伪造的可信代理身份头。 | `deploy/nginx-tackle-forger.conf.example`显式清除`X-Feishu-Tenant-Key`、`X-Feishu-Open-Id`、`X-Feishu-Display-Name`和`X-TF-Proxy-Secret`；手册明确直接OAuth拓扑且默认关闭可信代理模式。 | Nginx配置与`lib/auth.ts`读取的全部可信身份头逐项核对。 |
@@ -102,3 +102,4 @@
 | 2026-07-22 | 集成复核修正`AUD-001`过窄白名单造成的旧工作台保存回归；仅恢复旧工作台显式通用配置字段，v3受治理状态与未知字段继续默认拒绝。 | `81763c3` |
 | 2026-07-22 | 甘特主列表接入服务端可见性、revision游标、409恢复及SKU/Model按需加载；六个工作台动态拆分并增加真实构建产物预算，关闭`AUD-010/015`。 | `41781d9` `f77843a` |
 | 2026-07-22 | 完成AUD-024目标拉力顺序迁移：活动契约收敛到规范四阶段字段，历史旧字段只在v16→v17迁移适配器读取，冻结Snapshot payload/hash不变；保留v15→v16飞书回写意图迁移。完整测试通过225项TypeScript测试与2项生产构建测试，有效未关闭问题降为4个。 | `3ec88dc` |
+| 2026-07-22 | 首次远端CI三项门禁全部通过：根v3 npm、历史pnpm workspace及Windows行尾策略；关闭`AUD-018/019`，有效未关闭问题降为2个，均为待决策的`BLOCKED`项。 | [`CI #1`](https://github.com/futouyiba/tackle-forger/actions/runs/29935463528) |

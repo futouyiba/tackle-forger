@@ -3,7 +3,7 @@
 > 状态：可进入开发  
 > 面向对象：接手实现、重构、测试或评审的 Codex Agent  
 > 权威规范：`docs/tackle-forger-development-spec-v3.md`  
-> 最后对齐v3：2026-07-22  
+> 最后对齐v3：2026-07-23
 > 文档索引：`docs/README.md`
 
 ## 1. 任务目标
@@ -568,7 +568,7 @@ linear_subtraction 和 diminishing_division 两种配置，本轮不需要决定
 4. 建立provider接口、字段白名单、超时和审计；
 5. 接入只读评估；
 6. 接入变化预览；
-7. 最后接入Patch与飞书规则修改草稿；一期不接飞书审批，只允许人工确认写回、技术回读、显式拉取和RuleSet发布。
+7. 最后接入Patch与飞书规则修改草稿；一期、二期和当前规划三期均不接飞书审批，只允许人工确认写回、技术回读、显式拉取和RuleSet发布。
 
 验收以权威规范第23节为准。AI模型选择和数据出网属于OPEN-006，在连接外部服务前必须请求确认。
 
@@ -631,10 +631,11 @@ linear_subtraction 和 diminishing_division 两种配置，本轮不需要决定
 
 ### 19.1 分期
 
-- 一期：内网服务、飞书登录、统一Capability、配置导出与关系校验。
-- 二期：实现已设计的AI辅助层。
-- 三期：细粒度权限与职责分离。
-- 一期不得用“以后做权限”为理由省略用户身份、审计、expectedRevision或ActionAvailability。
+- 一期：内网服务、飞书登录、统一Capability、配置导出与关系校验；AI保持禁用。
+- 二期：仅在OPEN-006关闭后实现已设计的AI辅助层；继续全员统一权限。
+- 当前规划三期：保持统一Capability策略，不建设细粒度RBAC、对象级角色、职责分离或飞书审批。未来治理变化必须另建Issue并发布新`separationOfDutiesPolicy`版本。
+- 三个阶段都不得用“统一权限”为理由省略用户身份、服务端逐动作鉴权、操作记录、expectedRevision或ActionAvailability。
+- 关键共享写操作必须实现v3第20.2.7节的工作区租约与单调fencing token；本地提交和持久化fenced outbox的远端副作用都要拒绝旧token，不能只实现心跳过期。
 
 ### 19.2 导出执行器
 

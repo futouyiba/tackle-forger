@@ -914,9 +914,12 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
             enabled: false,
           },
         ],
-    workspacePolicies: state.workspacePolicies.length
+    workspacePolicies: state.workspacePolicies.some(
+      (policy) => policy.policyType === "aiServicePolicy",
+    )
       ? state.workspacePolicies
       : [
+          ...state.workspacePolicies,
           {
             policyId: "policy:ai-service-disabled",
             policyType: "aiServicePolicy",

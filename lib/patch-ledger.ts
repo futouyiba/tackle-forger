@@ -1,5 +1,6 @@
 import { deterministicHash } from "./rule-kernel";
-import type { PatchAbsorptionAssessment, PatchAbsorptionOperationEvidence, PatchLedger, PatchMirrorOperationResult, PatchMirrorPullAudit, PatchMirrorRemoteRow, PatchMirrorSyncCommand, PatchMirrorValidationIssue, PatchOperationRecord, PatchPatternSummary, PatchRevisionRecord, PatchSnapshotReference, ProjectionPatchRuleSource, RuleSourceChangeDraft } from "./types";
+import { assertPatchReviewCoverage, assertPatchRevisionDeterministicallyReplayable, assertPublishedPatchOffsetPolicy, PatchOffsetPolicyError } from "./patch-offset-policy";
+import type { PatchAbsorptionAssessment, PatchAbsorptionOperationEvidence, PatchLedger, PatchMirrorOperationResult, PatchMirrorPullAudit, PatchMirrorRemoteRow, PatchMirrorSyncCommand, PatchMirrorValidationIssue, PatchOffsetPolicyVersion, PatchOperationRecord, PatchPatternSummary, PatchReviewBatch, PatchReviewSubjectRef, PatchRevisionRecord, PatchSnapshotReference, PatchValidationWaiver, ProjectionPatchRuleSource, RuleSourceChangeDraft, WorkspacePolicyRecord } from "./types";
 
 export const CURRENT_PATCH_LEDGER_SCHEMA_VERSION = 4;
 export type PatchLedgerCapability = "patch.create" | "patch.review" | "patch.mirror.write" | "patch.mirror.pull" | "patch.rebase" | "patch.absorption.review" | "rules.proposal.create";
@@ -146,13 +147,54 @@ export function appendPatchRevision(input: { ledger: PatchLedger; revision: Patc
   if (latest && revision.patchRevision !== latest.patchRevision + 1) throw new PatchLedgerError("PATCH_REVISION_SEQUENCE_CONFLICT", "Revision sequence conflict");
   return { ledger: { ...input.ledger, revisions: [...input.ledger.revisions, revision] }, revision, idempotent: false };
 }
-export function reviewPatchRevision(input:{ledger:PatchLedger;patchId:string;patchRevision:number;nextState:"APPROVED"|"ACTIVE"|"WITHDRAWN";reviewer:string;reviewedAt:string;capabilities:Iterable<string>}):PatchLedger{
+export function reviewPatchRevision(input:{ledger:PatchLedger;patchId:string;patchRevision:number;nextState:"APPROVED"|"ACTIVE"|"WITHDRAWN";reviewer:string;reviewedAt:string;capabilities:Iterable<string>;approvalEvidence?:{policy?:WorkspacePolicyRecord|PatchOffsetPolicyVersion;reviewBatch?:PatchReviewBatch;waivers?:PatchValidationWaiver[];subjectRef:PatchReviewSubjectRef;objectInputHash:string;patchSetHash:string}}):PatchLedger{
   requireCapability(input.capabilities,"patch.review");
   const target=input.ledger.revisions.find((r)=>r.patchId===input.patchId&&r.patchRevision===input.patchRevision);
   if(!target) throw new PatchLedgerError("PATCH_REVISION_NOT_FOUND","Revision not found");
   if(target.snapshotRefs.length) throw new PatchLedgerError("PATCH_REVISION_IMMUTABLE","Snapshot-referenced revision is immutable");
+  if(input.nextState==="APPROVED"||input.nextState==="ACTIVE"){
+    try{
+      assertPublishedPatchOffsetPolicy(input.approvalEvidence?.policy);
+      if(!input.approvalEvidence) throw new PatchOffsetPolicyError("PATCH_REVIEW_EVIDENCE_MISSING","批准 Patch 前必须完成整体人工复核。");
+      assertPatchRevisionDeterministicallyReplayable(target);
+      const evidence=assertPatchReviewCoverage({
+        batch:input.approvalEvidence.reviewBatch,
+        policyVersion:input.approvalEvidence.policy.version,
+        subjectRef:input.approvalEvidence.subjectRef,
+        objectInputHash:input.approvalEvidence.objectInputHash,
+        patchSetHash:input.approvalEvidence.patchSetHash,
+        patchReference:{patchId:target.patchId,patchRevision:target.patchRevision,orderedOperationIds:sortedOperations(target.operations).map((operation)=>operation.operationId)},
+      });
+      if(input.approvalEvidence.reviewBatch?.gate!=="REVIEW") throw new PatchOffsetPolicyError("PATCH_RANGE_EVALUATION_GATE_MISMATCH","Patch 批准必须使用 REVIEW 关口整体复核证据。");
+      const uncovered=evidence.rangeResults.filter((result)=>!result.valid).filter((result)=>!result.issueFingerprint||!(input.approvalEvidence?.waivers??[]).some((waiver)=>
+        waiver.issueFingerprint===result.issueFingerprint&&waiver.gate==="REVIEW"&&waiver.policyVersion===input.approvalEvidence?.policy?.version&&waiver.objectInputHash===evidence.objectInputHash&&waiver.patchSetHash===evidence.patchSetHash));
+      if(uncovered.length) throw new PatchOffsetPolicyError("PATCH_FINAL_VALUE_OUT_OF_RANGE","REVIEW 关口仍有未获匹配 Waiver 的累计最终值越界。");
+    }catch(error){
+      if(error instanceof PatchOffsetPolicyError) throw new PatchLedgerError(error.code,error.message);
+      throw error;
+    }
+  }
   const next=buildPatchRevision({...target,state:input.nextState,reviewedBy:input.reviewer,reviewedAt:input.reviewedAt,operations:target.operations});
   return {...input.ledger,revisions:input.ledger.revisions.map((r)=>r===target?next:r)};
+}
+export function reviewPatchBatch(input:{ledger:PatchLedger;reviewBatch:PatchReviewBatch;policy?:WorkspacePolicyRecord|PatchOffsetPolicyVersion;waivers?:PatchValidationWaiver[];nextState:"APPROVED"|"ACTIVE";reviewer:string;reviewedAt:string;capabilities:Iterable<string>}):PatchLedger{
+  requireCapability(input.capabilities,"patch.review");
+  if(input.reviewBatch.gate!=="REVIEW") throw new PatchLedgerError("PATCH_RANGE_EVALUATION_GATE_MISMATCH","批量 Patch 批准只接受 REVIEW 关口证据");
+  let ledger=input.ledger;
+  const objects=[...input.reviewBatch.objectEvidence].sort((left,right)=>left.subjectRef.entityId.localeCompare(right.subjectRef.entityId)||left.subjectRef.revision-right.subjectRef.revision);
+  for(const evidence of objects){
+    for(const reference of evidence.patchReferences){
+      const target=ledger.revisions.find((revision)=>revision.patchId===reference.patchId&&revision.patchRevision===reference.patchRevision);
+      if(!target) throw new PatchLedgerError("PATCH_REVISION_NOT_FOUND",`批量复核引用的 ${reference.patchId}@${reference.patchRevision} 不存在`);
+      if(target.state===input.nextState) continue;
+      ledger=reviewPatchRevision({
+        ledger,patchId:reference.patchId,patchRevision:reference.patchRevision,nextState:input.nextState,
+        reviewer:input.reviewer,reviewedAt:input.reviewedAt,capabilities:input.capabilities,
+        approvalEvidence:{policy:input.policy,reviewBatch:input.reviewBatch,waivers:input.waivers,subjectRef:evidence.subjectRef,objectInputHash:evidence.objectInputHash,patchSetHash:evidence.patchSetHash},
+      });
+    }
+  }
+  return ledger;
 }
 export type PatchMirrorPullIssue = PatchMirrorValidationIssue;
 const mirrorKey = (patchId:string, patchRevision:number, operationId:string) => patchId+"@"+patchRevision+"@"+operationId;
@@ -232,7 +274,19 @@ export function replayPatchRevision(base: Record<string, unknown>, revision: Pat
   return { value, trace };
 }
 export function orderedPatchReferences(revisions: PatchRevisionRecord[]): { references: PatchSnapshotReference[]; patchSetHash: string } {
-  const references = [...revisions].sort((a,b)=>a.patchId.localeCompare(b.patchId)||a.patchRevision-b.patchRevision).map((r)=>({
+  const layerOrder: Record<PatchRevisionRecord["layerType"], number> = {
+    derivation: 0,
+    series: 1,
+    sku: 2,
+    model: 3,
+    final_review: 4,
+    projection_pin: 5,
+  };
+  const references = [...revisions].sort((a,b)=>
+    layerOrder[a.layerType]-layerOrder[b.layerType]
+    || a.subjectEntityId.localeCompare(b.subjectEntityId)
+    || a.patchId.localeCompare(b.patchId)
+    || a.patchRevision-b.patchRevision).map((r)=>({
     patchId:r.patchId, patchRevision:r.patchRevision, orderedOperationIds:sortedOperations(r.operations).map((op)=>op.operationId),
   }));
   return { references, patchSetHash: deterministicHash(references) };

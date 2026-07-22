@@ -1,6 +1,14 @@
 import { deterministicHash } from "./rule-kernel";
 import { previewPatchRebase } from "./patch-engine";
 import { orderedPatchReferences } from "./patch-ledger";
+import {
+  assertPatchGateCanProceed,
+  assertPatchReviewCoverage,
+  assertPublishedPatchOffsetPolicy,
+  assertRangeEvaluationMatchesPatchRevisions,
+  PatchOffsetPolicyError,
+} from "./patch-offset-policy";
+import type { PatchRangeEvaluation } from "./patch-offset-policy";
 import type {
   AffinityScoreResult,
   AffixQualityEvaluation,
@@ -12,7 +20,10 @@ import type {
   ModelFiveAxisPreview,
   FiveAxisViewDefinition,
   PatchRebaseDifference,
+  PatchOffsetPolicyVersion,
+  PatchReviewBatch,
   PatchRevisionRecord,
+  PatchValidationWaiver,
   ProjectionPatchRuleSource,
   PurchasableModel,
   RuleChangeProposal,
@@ -21,6 +32,7 @@ import type {
   UpgradeCandidate,
   ValidationIssue,
   PassiveSkillPayload,
+  WorkspacePolicyRecord,
 } from "./types";
 import type { ModelAffixValueAssessment } from "./quality-value-policy";
 import type { PricingTrialResult } from "./pricing-policy";
@@ -43,6 +55,13 @@ export interface PublishModelInput {
   componentSelections: ModelComponentSelection[];
   patches: ProjectionPatchRuleSource[];
   patchRevisions?: PatchRevisionRecord[];
+  patchOffsetGovernance?: {
+    policy?: WorkspacePolicyRecord | PatchOffsetPolicyVersion;
+    rangeEvaluation: PatchRangeEvaluation;
+    reviewBatch?: PatchReviewBatch;
+    waivers?: PatchValidationWaiver[];
+    objectInputHash: string;
+  };
   attributeAffixIds: string[];
   passiveAffixIds: string[];
   technologyIds: string[];
@@ -72,6 +91,59 @@ function snapshotContent(
 export function publishConfigurationSnapshot(
   input: PublishModelInput,
 ): ConfigurationSnapshot {
+  if (input.publicationMode === "new_formal" && input.patches.length && !input.patchRevisions) {
+    throw new Error("正式 Snapshot 必须使用可冻结 operation 顺序的 Patch revision，不能只引用旧 Patch 视图。");
+  }
+  const frozenPatches = input.patchRevisions
+    ? orderedPatchReferences(input.patchRevisions)
+    : undefined;
+  const legacyPatchSetHash = deterministicHash(
+    [...input.patches].sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
+  );
+  const patchSetHash = frozenPatches?.patchSetHash ?? legacyPatchSetHash;
+  const hasPatchDependency = Boolean(input.patchRevisions?.length || input.patches.length);
+  if (input.publicationMode === "new_formal" && hasPatchDependency) {
+    try {
+      const governance = input.patchOffsetGovernance;
+      if (!governance) {
+        throw new PatchOffsetPolicyError(
+          "PATCH_OFFSET_POLICY_MISSING",
+          "正式发布缺少 PatchOffsetPolicyVersion 与整体复核证据。",
+        );
+      }
+      const policy = governance.policy;
+      assertPublishedPatchOffsetPolicy(policy);
+      if (
+        governance.rangeEvaluation.policyVersion !== policy.version
+        || governance.rangeEvaluation.gate !== "PUBLISH"
+      ) {
+        throw new PatchOffsetPolicyError(
+          "PATCH_RANGE_EVALUATION_GATE_MISMATCH",
+          "正式 Snapshot 必须使用当前策略在 PUBLISH 关口生成的范围校验。",
+        );
+      }
+      assertPatchReviewCoverage({
+        batch: governance.reviewBatch,
+        policyVersion: policy.version,
+        subjectRef: { scopeType: "model", entityId: input.model.id, revision: input.model.revision },
+        objectInputHash: governance.objectInputHash,
+        patchSetHash,
+      });
+      assertRangeEvaluationMatchesPatchRevisions({
+        evaluation: governance.rangeEvaluation,
+        revisions: input.patchRevisions ?? [],
+      });
+      assertPatchGateCanProceed({
+        evaluation: governance.rangeEvaluation,
+        waivers: governance.waivers,
+      });
+    } catch (error) {
+      if (error instanceof PatchOffsetPolicyError) {
+        throw new Error(`配置快照发布被阻止：[${error.code}] ${error.message}`);
+      }
+      throw error;
+    }
+  }
   const combinedValidationReport = [
     ...input.validationReport,
     ...(input.fiveAxisPreview?.tackleFitComparison.validationIssues ?? []),
@@ -168,11 +240,7 @@ export function publishConfigurationSnapshot(
     }
   }
 
-  const frozenPatches = input.patchRevisions?.length ? orderedPatchReferences(input.patchRevisions) : undefined;
-  const legacyPatchSetHash = deterministicHash(
-    [...input.patches].sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
-  );
-  const patchSetHash = frozenPatches?.patchSetHash ?? legacyPatchSetHash;
+  const governance = input.patchOffsetGovernance;
   const snapshotWithoutHash: Omit<ConfigurationSnapshot, "contentHash"> = {
     id:
       input.snapshotId ??
@@ -187,6 +255,14 @@ export function publishConfigurationSnapshot(
     reductionStackingMode: input.projection.reductionStackingMode,
     patchSetHash,
     ...(frozenPatches ? { patchReferences: frozenPatches.references } : {}),
+    ...(input.publicationMode === "new_formal" && hasPatchDependency && governance ? {
+      patchOffsetPolicyVersion: governance.policy?.version,
+      patchReviewBatchRef: governance.reviewBatch?.batchId,
+      patchValidationIssueFingerprints: governance.rangeEvaluation.issues
+        .flatMap((issue) => issue.fingerprint ? [issue.fingerprint] : [])
+        .sort(),
+      patchValidationWaiverRefs: (governance.waivers ?? []).map((waiver) => waiver.waiverId).sort(),
+    } : {}),
     finalPanelValues: structuredClone(input.finalPanelValues),
     componentSelections: structuredClone(input.componentSelections),
     technologyIds: structuredClone(input.technologyIds),

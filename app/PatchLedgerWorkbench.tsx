@@ -3,6 +3,7 @@
 import { AlertTriangle, CheckCircle2, DatabaseZap, FileClock, Link2, Plus, Search, ShieldCheck, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { analyzePatchPatterns, appendPatchRevision, buildPatchRevision, createRuleSourceChangeDraft, reviewPatchRevision } from "@/lib/patch-ledger";
+import { findPublishedPatchOffsetPolicy } from "@/lib/patch-offset-policy";
 import type { PatchPatternSummary, PatchRevisionRecord, WorkspaceState } from "@/lib/types";
 
 interface PatchLedgerWorkbenchProps {
@@ -64,6 +65,20 @@ export function PatchLedgerWorkbench({ state, capabilities, actorName, mutate, n
       ? state.skuDrawers.map((entry)=>({id:entry.id,name:entry.id+" · "+entry.targetWeightKg+" kgf",revision:entry.revision}))
       : state.purchasableModels.map((entry)=>({id:entry.id,name:entry.name,revision:entry.revision}));
 
+  const approvalEvidenceFor=(workspace:WorkspaceState,target:PatchRevisionRecord)=>{
+    let policy;
+    try{policy=findPublishedPatchOffsetPolicy(workspace.workspacePolicies);}catch{return undefined;}
+    if(!policy)return undefined;
+    const batch=[...workspace.patchReviewBatches]
+      .filter((entry)=>entry.gate==="REVIEW"&&entry.policyVersion===policy.version)
+      .sort((left,right)=>right.reviewedAt.localeCompare(left.reviewedAt))
+      .find((entry)=>entry.objectEvidence.some((evidence)=>evidence.state==="FRESH"&&evidence.patchReferences.some((reference)=>reference.patchId===target.patchId&&reference.patchRevision===target.patchRevision)));
+    const evidence=batch?.objectEvidence.find((entry)=>entry.state==="FRESH"&&entry.patchReferences.some((reference)=>reference.patchId===target.patchId&&reference.patchRevision===target.patchRevision));
+    if(!batch||!evidence)return undefined;
+    return {policy,reviewBatch:batch,waivers:workspace.patchValidationWaivers,subjectRef:evidence.subjectRef,objectInputHash:evidence.objectInputHash,patchSetHash:evidence.patchSetHash};
+  };
+  const selectedApprovalEvidence=selected?approvalEvidenceFor(state,selected):undefined;
+
   const openCreate=()=>setDraft({scopeType:"model",subjectEntityId:state.purchasableModels[0]?.id??"",parameterKey:"",operation:"set",operand:"",reason:""});
   const createPatch=()=>{
     if(!draft||!canCreate)return;
@@ -90,7 +105,7 @@ export function PatchLedgerWorkbench({ state, capabilities, actorName, mutate, n
   const transition=(nextState:"APPROVED"|"ACTIVE"|"WITHDRAWN")=>{
     if(!selected||!canReview)return;
     try{
-      mutate((workspace)=>{workspace.patchLedger=reviewPatchRevision({ledger:workspace.patchLedger,patchId:selected.patchId,patchRevision:selected.patchRevision,nextState,reviewer:actorName,reviewedAt:new Date().toISOString(),capabilities});},false);
+      mutate((workspace)=>{workspace.patchLedger=reviewPatchRevision({ledger:workspace.patchLedger,patchId:selected.patchId,patchRevision:selected.patchRevision,nextState,reviewer:actorName,reviewedAt:new Date().toISOString(),capabilities,approvalEvidence:nextState==="WITHDRAWN"?undefined:approvalEvidenceFor(workspace,selected)});},false);
       notify(nextState==="APPROVED"?"Patch 已批准，仍需显式启用。":nextState==="ACTIVE"?"Patch 已进入生效状态。":"Patch 已撤回。");
     }catch(error){notify(error instanceof Error?error.message:"Patch 状态更新失败");}
   };
@@ -138,7 +153,8 @@ export function PatchLedgerWorkbench({ state, capabilities, actorName, mutate, n
     <section className="patch-ledger-layout">
       <div className="patch-ledger-list"><label className="patch-ledger-search"><Search size={15}/><input value={query} onChange={(event)=>setQuery(event.target.value)} placeholder="按稳定 ID、状态或原因搜索"/></label><div className="patch-ledger-list-scroll">{filtered.map((entry)=>{const key=entry.patchId+"@"+entry.patchRevision;return <button type="button" className={selected===entry?"active":""} key={key} onClick={()=>setSelectedKey(key)}><span><strong>{entry.patchId}</strong><small>revision {entry.patchRevision} · {entry.layerType}</small></span><em>{stateLabels[entry.state]}</em></button>;})}{!filtered.length?<p className="patch-ledger-empty">没有符合条件的 Patch revision。</p>:null}</div></div>
       <div className="patch-ledger-detail">{selected?<><header><div><span className="eyebrow">STABLE SUBJECT</span><h3>{selected.subjectName||selected.subjectEntityId}</h3><code>{selected.subjectEntityId}</code></div><div className="patch-ledger-badges"><span>{stateLabels[selected.state]}</span><span>{mirrorLabels[selected.mirrorSyncState]}</span>{selected.attentionStates.map((attention)=><span className="warning" key={attention}>{attention}</span>)}</div></header>
-        <div className="patch-ledger-review-actions">{selected.state==="DRAFT"||selected.state==="PENDING_REVIEW"?<button type="button" disabled={!canReview||selected.snapshotRefs.length>0} onClick={()=>transition("APPROVED")}><CheckCircle2 size={15}/>批准 revision</button>:null}{selected.state==="APPROVED"?<button type="button" disabled={!canReview||selected.snapshotRefs.length>0} onClick={()=>transition("ACTIVE")}><ShieldCheck size={15}/>启用 Patch</button>:null}{["DRAFT","PENDING_REVIEW","APPROVED"].includes(selected.state)?<button type="button" disabled={!canReview||selected.snapshotRefs.length>0} onClick={()=>transition("WITHDRAWN")}>撤回</button>:null}</div>
+        <div className="patch-ledger-review-actions">{selected.state==="DRAFT"||selected.state==="PENDING_REVIEW"?<button type="button" disabled={!canReview||selected.snapshotRefs.length>0||!selectedApprovalEvidence} title={selectedApprovalEvidence?"使用当前对象的整体复核证据批准":"请先在对象整体结果页完成范围校验与人工复核"} onClick={()=>transition("APPROVED")}><CheckCircle2 size={15}/>批准 revision</button>:null}{selected.state==="APPROVED"?<button type="button" disabled={!canReview||selected.snapshotRefs.length>0||!selectedApprovalEvidence} title={selectedApprovalEvidence?"使用当前对象的整体复核证据启用":"整体复核证据缺失或已失效"} onClick={()=>transition("ACTIVE")}><ShieldCheck size={15}/>启用 Patch</button>:null}{["DRAFT","PENDING_REVIEW","APPROVED"].includes(selected.state)?<button type="button" disabled={!canReview||selected.snapshotRefs.length>0} onClick={()=>transition("WITHDRAWN")}>撤回</button>:null}</div>
+        {!selectedApprovalEvidence&&["DRAFT","PENDING_REVIEW","APPROVED"].includes(selected.state)?<p className="patch-ledger-empty">批准与启用已关闭：请先在 Series / SKU / Model 整体结果页完成最终范围校验和批量人工复核；Patch 无需逐条单独审批。</p>:null}
         <dl><div><dt>Patch</dt><dd>{selected.patchId} / revision {selected.patchRevision}</dd></div><div><dt>作用层</dt><dd>{selected.scopeType} · {selected.layerType}</dd></div><div><dt>基线</dt><dd>{selected.baseRuleSetVersion} · object revision {selected.baseObjectRevision}</dd></div><div><dt>创建</dt><dd>{selected.createdBy} · {selected.createdAt}</dd></div><div><dt>原因</dt><dd>{selected.reason||"未填写"}</dd></div></dl>
         <div className="patch-ledger-operations"><h4><ShieldCheck size={16}/>确定性操作顺序</h4>{[...selected.operations].sort((a,b)=>a.operationIndex-b.operationIndex).map((operation)=><div key={operation.operationId}><b>{operation.operationIndex+1}</b><code>{operation.parameterKey}</code><span>{operation.operation}</span><strong>{String(operation.operand??"—")}</strong><small>{operation.operationId}</small></div>)}</div>
         <div className="patch-ledger-snapshots"><h4><Link2 size={16}/>Snapshot 引用</h4>{selected.snapshotRefs.length?selected.snapshotRefs.map((snapshotId)=><code key={snapshotId}>{snapshotId}</code>):<span>尚未被 Snapshot 引用</span>}</div>

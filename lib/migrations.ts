@@ -34,8 +34,12 @@ import { migrateLegacyProductIdentity } from "./legacy-product-migration";
 import { CANONICAL_FEISHU_WORKBOOK } from "./feishu-workbook";
 import { buildPatchRevision, emptyPatchLedger, migratePatchLedger } from "./patch-ledger";
 import { deterministicHash } from "./rule-kernel";
+import {
+  CANONICAL_PATCH_OFFSET_POLICY_ID,
+  createCanonicalPatchOffsetPolicyVersion,
+} from "./patch-offset-policy";
 
-export const CURRENT_WORKSPACE_SCHEMA_VERSION = 15;
+export const CURRENT_WORKSPACE_SCHEMA_VERSION = 16;
 
 const DEFAULT_RULE_SETTINGS: WorkspaceRuleSettings = {
   reductionStackingMode: "diminishing_division",
@@ -689,6 +693,52 @@ function migrateV14ToV15(state: MutableWorkspace): MutableWorkspace {
   };
 }
 
+function migrateV15ToV16(state: MutableWorkspace): MutableWorkspace {
+  const ledger = state.patchLedger && typeof state.patchLedger === "object"
+    ? migratePatchLedger(state.patchLedger as WorkspaceState["patchLedger"])
+    : emptyPatchLedger();
+  const legacyLimits = state.ruleSettings?.patchOffsetLimits;
+  if (
+    legacyLimits
+    && (legacyLimits.warning !== undefined || legacyLimits.error !== undefined)
+    && !ledger.migrationReviewItems.some((entry) => entry.id === "patch-offset-policy:legacy-thresholds")
+  ) {
+    ledger.migrationReviewItems.push({
+      id: "patch-offset-policy:legacy-thresholds",
+      patchId: "legacy-patch-offset-policy",
+      patchRevision: 1,
+      reason: "LEGACY_PATCH_OFFSET_THRESHOLDS_QUARANTINED",
+      preservedPayload: structuredClone(legacyLimits),
+    });
+  }
+  const policies = arrayOf<WorkspaceState["workspacePolicies"][number]>(state.workspacePolicies)
+    .map((policy) => policy.policyType === "patchOffsetPolicy"
+      && policy.policyId !== CANONICAL_PATCH_OFFSET_POLICY_ID
+      && policy.status === "published"
+      ? { ...policy, status: "superseded" as const }
+      : policy);
+  if (!policies.some((policy) => policy.policyId === CANONICAL_PATCH_OFFSET_POLICY_ID)) {
+    policies.push(createCanonicalPatchOffsetPolicyVersion({
+      createdAt: "2026-07-23T00:00:00.000Z",
+      publishedAt: "2026-07-23T00:00:00.000Z",
+      publishedBy: "OPEN-004 / GitHub Issue #32",
+    }) as unknown as WorkspaceState["workspacePolicies"][number]);
+  }
+  return {
+    ...state,
+    schemaVersion: 16,
+    ruleSettings: {
+      ...(state.ruleSettings ?? DEFAULT_RULE_SETTINGS),
+      patchOffsetLimits: {},
+    },
+    patchLedger: ledger,
+    workspacePolicies: policies,
+    patchReviewBatches: arrayOf<WorkspaceState["patchReviewBatches"][number]>(state.patchReviewBatches),
+    patchValidationWaivers: arrayOf<WorkspaceState["patchValidationWaivers"][number]>(state.patchValidationWaivers),
+    patchValidationWaiverDecisions: arrayOf<WorkspaceState["patchValidationWaiverDecisions"][number]>(state.patchValidationWaiverDecisions),
+  };
+}
+
 const migrations: Record<number, (state: MutableWorkspace) => MutableWorkspace> = {
   1: migrateV1ToV2,
   2: migrateV2ToV3,
@@ -704,6 +754,7 @@ const migrations: Record<number, (state: MutableWorkspace) => MutableWorkspace> 
   12: migrateV12ToV13,
   13: migrateV13ToV14,
   14: migrateV14ToV15,
+  15: migrateV15ToV16,
 };
 
 export function migrateWorkspaceState(input: unknown): WorkspaceState {

@@ -62,9 +62,12 @@
 | AUD-R005 | RESOLVED | 未使用的 ChatGPT 请求头认证模块存在误用风险。 | `app/chatgpt-auth.ts` 已删除。 | Git diff。 |
 | AUD-R006 | RESOLVED | Feishu 数据源回写缺少写前/写后回读恢复。 | `commitFeishuWriteback` 和 `tests/feishu-writeback.test.ts`。 | 写前幂等、成功核实、错误恢复和失败场景测试。 |
 | AUD-R007 | RESOLVED | R730 缺少正式持久存储、备份和部署说明。 | SQLite、迁移/备份脚本、systemd/Nginx、部署文档。 | 根测试与 SQLite 测试通过。残余事项由 `AUD-008/009/013/014` 管理。 |
+| AUD-R008 | RESOLVED | 生产环境无持久存储时曾静默回退到进程内内存，重启后丢失团队配置。 | `lib/storage.ts` `assertEphemeralStorageAllowed`；`f0fe8232`。 | `tests/storage.test.ts`；`npm test` 通过。systemd 路径不一致仍由 `AUD-008` 管理。 |
+| AUD-R009 | RESOLVED | SQLite 保存的 revision 条件 UPDATE 未命中时未回滚，可能产生伪历史。 | `lib/sqlite-storage.ts` 命中校验与回滚；`45e8281d`。 | `tests/sqlite-storage.test.ts` 持久化、过期 baseRevision、不新增历史用例。 |
 
 ## 更新记录
 
 | 日期 | 变更 | 提交 |
 | --- | --- | --- |
 | 2026-07-22 | 建立审查台账，登记 22 个开放问题和 7 个已解决问题。 | `c1a6070d` |
+| 2026-07-22 | 将 v3-work 的 SQLite 条件更新、生产环境禁止内存回退、v14 系列配方迁移 cherry-pick 到审查分支；补全 patch-ledger 的 v14 schema 断言；新增 `AUD-R008`、`AUD-R009`。`AUD-008/009` 仍开放。 | `45e8281d` `f0fe8232` `be1cf696` `6c233e5d` |

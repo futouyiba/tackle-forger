@@ -10,8 +10,10 @@
 - 节点内部保留可排序规则栈，支持加、乘、覆盖、上下限和安全公式
 - 直接属性词条与被动机制词条
 - 有损相加、协同与冲突驱动的品质评分
-- 系列配方、受约束候选生成、批量筛选、对比和精调
-- 正式组合 SKU 及杆、轮、线明细
+- v3 Collection / Series、离散重量 SKU 抽屉与可购买 Model
+- CandidateSearchRecipe 驱动的确定性 Model 候选生成、物化与审计
+- Series / SKU / Model 分层 Patch、冻结 ConfigurationSnapshot 与升级候选
+- 旧 SeriesRecipe、Candidate、OfficialSku 与 DetailOverride 只读归档及迁移诊断
 - 强度闭环、重量段覆盖校验和精调规则学习
 - D1 团队共享状态、版本记录与冲突保护
 - R2 保存 Excel 原始导入文件
@@ -115,4 +117,4 @@ File System Access API 不可用时可以下载变更包人工搬运，但页面
 
 ## 旧版工作区
 
-合并前的 pnpm 多包实现仍保留在 `apps/web` 与 `packages/*`，用于历史追溯；当前开发、验证与部署均以仓库根目录的 v3 应用和 npm 脚本为准。
+合并前的 pnpm 多包实现仍保留在 `apps/web` 与 `packages/*`，仅用于历史追溯、兼容性测试和经审计的数据迁移；其中的浏览器本地状态不属于正式产品数据。当前开发、验证、评审和生产部署均以仓库根目录的 v3 应用和 npm 脚本为准。

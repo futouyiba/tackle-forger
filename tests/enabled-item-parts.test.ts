@@ -104,7 +104,14 @@ test("OPEN-003 fail-closed 策略只启用竿轮线且不信任 activeInGenerati
     "part:reel",
     "part:line",
   ]);
-  assert.equal(isProductItemPartEnabled("part:hook"), false);
+  for (const deferredPartId of [
+    "part:hook",
+    "part:float",
+    "part:natural_bait",
+    "part:artificial_lure",
+  ]) {
+    assert.equal(isProductItemPartEnabled(deferredPartId), false);
+  }
   assert.equal(isProductItemPartEnabled("part:unknown"), false);
 });
 

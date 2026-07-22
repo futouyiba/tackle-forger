@@ -115,6 +115,11 @@ export function validateSeriesInvariants(
   input: ValidateSeriesInput,
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
+  const seriesType = input.projections.find((projection) => projection.typeId === input.series.typeId);
+  if (input.series.itemPartId && seriesType && !input.projections.some((projection) =>
+    projection.typeId === input.series.typeId && projection.structuralValues)) {
+    issue(issues, "warning", "SERIES_STRUCTURAL_SOURCE_MISSING", "Series 部位已指定，但当前投影缺少可追踪的结构标杆基础值。");
+  }
   const skus = input.skus
     .filter((sku) => sku.seriesId === input.series.id)
     .sort((left, right) => left.targetWeightKg - right.targetWeightKg);

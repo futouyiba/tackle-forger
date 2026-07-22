@@ -10,6 +10,8 @@
 4. [`handoffs/tackle-forger-requirements-handoff-2026-07-21.md`](./handoffs/tackle-forger-requirements-handoff-2026-07-21.md)：本轮已确认需求、飞书源表整改结果和开发执行边界的集中交接；只摘录v3，不覆盖v3。
 5. [`ux/tackle-forger-ux-design-v1.md`](./ux/tackle-forger-ux-design-v1.md)与`ux/prototype-v1/*`：页面组织、视觉和交互证据。
 
+第2至5级文档必须在文首记录最后对齐的v3日期或版本。它们若与v3冲突，冲突段立即视为过期说明，不能继续作为开发验收依据；修复时应修改消费文档，不为了迎合旧文档反向改写v3。
+
 若代码、旧文档、工作簿示例和权威规范发生冲突：
 
 1. 用户最新明确决定优先；
@@ -27,6 +29,15 @@
 | `2026-07-20-design-decisions-method-quality-affinity-sku-passive.md` | 历史 | 决策补充001；其中模拟器结论已被补充002覆盖 |
 | `2026-07-20-design-decisions-affix-scope-stacking-and-technology.md` | 历史 | 决策补充002；内容已合入v3权威规范 |
 | `../crystal/2026-07-17-tackle-forger-rule-system-v1.md` | 历史 | 当前代码架构和早期规则系统结晶 |
+
+说明性、非规范文档：
+
+| 文档 | 状态 | 说明 |
+| --- | --- | --- |
+| `tackle-forger-design-evolution.md` | 说明 | 解释设计演进，不定义当前行为 |
+| `tackle-forger-design-evolution-illustrated.md` | 说明 | 演进文档的图文版，不作为验收规范 |
+| `tackle-forger-design-evolution-feishu.xml` | 发布副本 | 飞书发布格式，内容以Markdown源文档和v3为准 |
+| `tackle-forger-design-evolution-and-product-design-feishu-v2.xml` | 发布副本 | 历史飞书交付副本，不作为开发输入 |
 
 ## Agent开始开发前
 

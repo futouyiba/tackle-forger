@@ -176,7 +176,9 @@ export function querySeriesGantt(input: {
         : undefined,
     });
     const issueCodes = [...new Set(context.issues.map((issue) => issue.code))].sort();
-    const typePartIds = typeById.get(series.typeId)?.itemPartIds ?? [];
+    const typePartIds = series.itemPartId
+      ? [series.itemPartId]
+      : typeById.get(series.typeId)?.itemPartIds ?? [];
     if (text && ![series.id, series.name, series.concept]
       .join(" ")
       .toLocaleLowerCase("zh-CN")

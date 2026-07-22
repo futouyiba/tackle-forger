@@ -42,6 +42,7 @@ import { V3FlowWorkbench } from "./V3FlowWorkbench";
 import { BrowserConfigExportWorkbench as ConfigExportWorkbench } from "./BrowserConfigExportWorkbench";
 import { SeriesGanttWorkbenchV3 as SeriesGanttWorkbench } from "./SeriesGanttWorkbenchV3";
 import { RuleWorkbookWorkbench } from "./RuleWorkbookWorkbench";
+import { PatchLedgerWorkbench } from "./PatchLedgerWorkbench";
 import {
   generateCandidatesForRecipe,
   publishCandidate,
@@ -52,6 +53,7 @@ import {
   buildSeriesShowcaseLayout,
   showcaseFeatureLabel,
   showcaseQualitySlots,
+  showcaseTargetPulls,
   templateTensionRange,
 } from "@/lib/showcase";
 import { ensureWorkflowFields } from "@/lib/workflow";
@@ -97,6 +99,8 @@ type PageKey =
   | "details"
   | "validation"
   | "versions"
+  | "rulesource"
+  | "patchledger"
   | "exchange";
 
 const dimensionLabels: Record<DimensionKey, string> = {
@@ -124,12 +128,14 @@ const pageMeta: Record<PageKey, { title: string; subtitle: string }> = {
   affixes: { title: "词条库", subtitle: "直接属性词条与被动机制词条共同决定装备能力和品质分" },
   quality: { title: "品质评分", subtitle: "有损相加、协同、冲突与品质阈值完全可配置" },
   recipes: { title: "系列 / SKU 配方", subtitle: "系列指定模板、定位约束、必带词条和可选词条池" },
-  showcase: { title: "系列跨度图", subtitle: "按品质、重量与拉力展示系列覆盖和贯通词条" },
+  showcase: { title: "历史系列演示", subtitle: "只读兼容旧 SeriesShowcase 数据；正式 Series 请在钓具系列甘特图创建" },
   candidates: { title: "钓具系列甘特图", subtitle: "按离散重量规划 Series、SKU 抽屉与可购买 Model" },
   skus: { title: "正式 SKU", subtitle: "已发布组合及自动生成的杆、轮、线 ID 和验收结果" },
   details: { title: "杆轮线明细", subtitle: "按正式 SKU 展开具体配置，并可自定义型号、名称与数值" },
   validation: { title: "校验与规则学习", subtitle: "强度闭环、模板覆盖、异常检查和精调规律候选" },
   versions: { title: "版本记录", subtitle: "团队共享配置的保存记录、冲突保护和历史恢复" },
+  rulesource: { title: "飞书规则源", subtitle: "检查唯一规则工作簿、显式拉取源修订，并独立创建 RuleSet 草稿" },
+  patchledger: { title: "Patch 台账", subtitle: "按稳定对象 ID 审计 Patch revision、操作顺序、Rebase、Snapshot 引用与飞书镜像状态" },
   exchange: { title: "数据交换", subtitle: "治理唯一飞书规则源、完成 Excel 往返，或从冻结快照交付配置表" },
 };
 
@@ -153,7 +159,7 @@ const navGroups: Array<{ label: string; items: Array<{ key: PageKey; label: stri
       { key: "affixes", label: "词条库", icon: Tag },
       { key: "quality", label: "品质评分", icon: Sparkles },
       { key: "recipes", label: "系列配方", icon: WandSparkles },
-      { key: "showcase", label: "系列演示表", icon: GitCompareArrows },
+      { key: "showcase", label: "历史系列演示", icon: GitCompareArrows },
     ],
   },
   {
@@ -169,6 +175,7 @@ const navGroups: Array<{ label: string; items: Array<{ key: PageKey; label: stri
     items: [
       { key: "validation", label: "校验与学习", icon: ShieldCheck },
       { key: "versions", label: "版本记录", icon: History },
+      { key: "patchledger", label: "Patch 台账", icon: GitCompareArrows },
       { key: "exchange", label: "数据交换", icon: FileSpreadsheet },
     ],
   },
@@ -441,7 +448,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   const [detailKind, setDetailKind] = useState<ItemKind>("rod");
   const [versions, setVersions] = useState<RevisionInfo[]>(initialState.revisions);
   const fileInput = useRef<HTMLInputElement>(null);
-  const [exchangeMode, setExchangeMode] = useState<"feishu" | "excel" | "config">("feishu");
+  const [exchangeMode, setExchangeMode] = useState<"excel" | "config">("excel");
   const [sourceCatalogs, setSourceCatalogs] = useState<Record<string, ResolvedFeishuSource>>({});
   const [sourcePreview, setSourcePreview] = useState<DataSourcePreview | null>(null);
   const [writebackPreview, setWritebackPreview] = useState<DataSourceWritebackPreview | null>(null);
@@ -1951,50 +1958,6 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     </div>
   );
 
-  const openSeriesShowcaseEditor = (entry?: SeriesShowcaseEntry) => {
-    if (entry) {
-      setShowcaseDraft(copyState(entry));
-      return;
-    }
-    const template = state.templates[0];
-    const tensionRange = templateTensionRange(template);
-    const structure = state.modifiers.find(
-      (item) =>
-        item.dimension === "structure" &&
-        item.enabled &&
-        (item.name.includes("直柄") || item.name.includes("枪柄")),
-    );
-    const functionOption = state.modifiers.find(
-      (item) => item.dimension === "function" && item.enabled,
-    );
-    const quality = showcaseQualitySlots(state.qualityBands)[0];
-    let sequence = state.seriesShowcases.length + 1;
-    let seriesId = "SER-" + String(sequence).padStart(3, "0");
-    while (state.seriesShowcases.some((item) => item.seriesId === seriesId)) {
-      sequence += 1;
-      seriesId = "SER-" + String(sequence).padStart(3, "0");
-    }
-    const now = new Date().toISOString();
-    setShowcaseDraft({
-      id: "showcase-" + crypto.randomUUID(),
-      seriesId,
-      description: "",
-      templateIds: template ? [template.id] : [],
-      structureIds: structure ? [structure.id] : [],
-      fishingMethod: "路亚",
-      functionId: functionOption?.id ?? "",
-      qualityId: quality?.qualityId ?? "",
-      fishMinKg: template?.fishMinKg ?? 0,
-      fishMaxKg: template?.fishMaxKg ?? 1,
-      tensionMinKgf: tensionRange.min,
-      tensionMaxKgf: tensionRange.max > tensionRange.min ? tensionRange.max : tensionRange.min + 1,
-      affixIds: [],
-      notes: "",
-      publishedAt: now,
-      updatedAt: now,
-    });
-  };
-
   const toggleShowcaseSelection = (
     field: "structureIds" | "affixIds",
     value: string,
@@ -2028,8 +1991,11 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       notify("重量上限必须大于下限。");
       return;
     }
-    if (showcaseDraft.tensionMinKgf < 0 || showcaseDraft.tensionMaxKgf <= showcaseDraft.tensionMinKgf) {
-      notify("拉力上限必须大于下限；拉力与重量是两组独立数值。");
+    const targetPullsKgf = [...new Set(showcaseDraft.targetPullsKgf ?? [])]
+      .filter((value) => Number.isFinite(value) && value > 0)
+      .sort((left, right) => left - right);
+    if (!targetPullsKgf.length) {
+      notify("请至少填写一个正数目标拉力规格。");
       return;
     }
     const duplicated = state.seriesShowcases.some(
@@ -2198,11 +2164,11 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       <div className="page-stack">
         <div className="toolbar showcase-toolbar">
           <div className="toolbar-note">
-            已发布 {state.seriesShowcases.length} 个系列 · 每列是一条系列轨道；纵向跨度由重量决定，拉力作为独立范围随重量段拆分。
+            历史演示记录 {state.seriesShowcases.length} 条 · 这里只兼容旧范围数据，不创建运行时 Series、SKU 或 Snapshot。
           </div>
           <div className="toolbar-spacer" />
-          <Button tone="primary" icon={Plus} onClick={() => openSeriesShowcaseEditor()}>
-            添加系列
+          <Button tone="primary" icon={Plus} onClick={() => setPage("candidates")}>
+            去创建正式 Series
           </Button>
         </div>
         <Card className="showcase-card">
@@ -2316,8 +2282,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
                         gridRow: `${placement.startRow + 3} / span ${placement.rowSpan}`,
                         "--series-color": lane.color,
                       } as React.CSSProperties}
-                      onClick={() => openSeriesShowcaseEditor(placement.entry)}
-                      aria-label={"编辑系列 " + placement.entry.seriesId}
+                      aria-label={"查看历史系列 " + placement.entry.seriesId}
                     >
                       <div className="series-gantt-main">
                         <span className="series-showcase-id">{placement.entry.seriesId}</span>
@@ -2328,7 +2293,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
                         </div>
                         <div className="series-gantt-span">
                           <strong>重量 {formatShowcaseRange(placement.entry.fishMinKg, placement.entry.fishMaxKg, "kg")}</strong>
-                          <strong>拉力 {formatShowcaseRange(placement.entry.tensionMinKgf, placement.entry.tensionMaxKgf, "kgf")}</strong>
+                          <strong>目标拉力 {showcaseTargetPulls(placement.entry).join(" / ")} kgf</strong>
                         </div>
                         <div className="series-showcase-features">
                           {featureLabels.map((label) => <em key={label}>{label}</em>)}
@@ -2341,10 +2306,10 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
                             title={
                               segment.tier + " · " +
                               formatShowcaseRange(segment.weightMinKg, segment.weightMaxKg, "kg") + " · " +
-                              formatShowcaseRange(segment.tensionMinKgf, segment.tensionMaxKgf, "kgf")
+                              segment.targetPullsKgf.join(" / ") + " kgf"
                             }
                           >
-                            {segment.tier} · {formatShowcaseRange(segment.tensionMinKgf, segment.tensionMaxKgf, "kgf")}
+                            {segment.tier} · {segment.targetPullsKgf.join(" / ") + " kgf"}
                           </span>
                         ))}
                       </div>
@@ -2356,10 +2321,10 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           </div>
           {!state.seriesShowcases.length ? (
             <div className="showcase-empty">
-              <strong>还没有发布系列</strong>
-              <span>添加系列后，它会像甘特任务一样横跨多个重量段，并显示独立拉力范围和贯通词条。</span>
-              <Button tone="primary" icon={Plus} onClick={() => openSeriesShowcaseEditor()}>
-                添加系列
+              <strong>没有历史演示记录</strong>
+              <span>这里不创建运行时 Series。正式 Series 必须确认离散目标拉力规格后，逐项生成 SKU 抽屉。</span>
+              <Button tone="primary" icon={Plus} onClick={() => setPage("candidates")}>
+                去创建正式 Series
               </Button>
             </div>
           ) : null}
@@ -2634,25 +2599,6 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       writebackPreview?.issues.some((issue) => issue.level === "error") ?? false;
     return (
       <div className="page-stack">
-        <RuleWorkbookWorkbench
-          state={state}
-          revision={revision}
-          dirty={dirty}
-          actionAvailabilities={user.actionAvailability}
-          actorName={user.name}
-          notify={notify}
-          onWorkspaceApplied={(nextState, nextRevision, message) => {
-            setState(recalculateWorkspace(ensureWorkflowFields(nextState)));
-            setRevision(nextRevision);
-            setDirty(false);
-            setSyncState("saved");
-            notify(message);
-            void loadVersions();
-          }}
-        />
-        <details className="legacy-feishu-connectors">
-          <summary>旧版 Base 兼容导入</summary>
-          <div className="page-stack">
         <Card className="source-hero">
           <div>
             <span className="eyebrow">后台正式库 + 飞书协作表</span>
@@ -3074,11 +3020,28 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
             />
           )}
         </Card>
-          </div>
-        </details>
       </div>
     );
   };
+
+  const renderRuleSource = () => (
+    <RuleWorkbookWorkbench
+      state={state}
+      revision={revision}
+      dirty={dirty}
+      actionAvailabilities={user.actionAvailability}
+      actorName={user.name}
+      notify={notify}
+      onWorkspaceApplied={(nextState, nextRevision, message) => {
+        setState(recalculateWorkspace(ensureWorkflowFields(nextState)));
+        setRevision(nextRevision);
+        setDirty(false);
+        setSyncState("saved");
+        notify(message);
+        void loadVersions();
+      }}
+    />
+  );
 
   const renderVersions = () => (
     <div className="page-stack">
@@ -3146,19 +3109,12 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     </div>
   );
 
+  void renderSources;
+
   const renderExchange = () => (
     <div className="page-stack">
       <div className="exchange-mode-tabs" role="tablist" aria-label="数据交换方式">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={exchangeMode === "feishu"}
-          className={exchangeMode === "feishu" ? "active" : ""}
-          onClick={() => setExchangeMode("feishu")}
-        >
-          <CloudDownload size={18} />
-          <span><strong>飞书连接</strong><small>团队协作与双向同步</small></span>
-        </button>
+
         <button
           type="button"
           role="tab"
@@ -3180,7 +3136,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           <span><strong>配置表交付</strong><small>SnapshotBatch、多目标预览与恢复型提交</small></span>
         </button>
       </div>
-      {exchangeMode === "feishu" ? renderSources() : exchangeMode === "excel" ? renderExcel() : (
+      {exchangeMode === "excel" ? renderExcel() : (
         <ConfigExportWorkbench
           state={state}
           actionAvailabilities={user.actionAvailability}
@@ -3230,6 +3186,8 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     if (page === "details") return renderDetails();
     if (page === "validation") return renderValidation();
     if (page === "versions") return renderVersions();
+    if (page === "rulesource") return renderRuleSource();
+    if (page === "patchledger") return <PatchLedgerWorkbench state={state} capabilities={user.capabilities} actorName={user.name} mutate={mutate} notify={notify} />;
     return renderExchange();
   };
 
@@ -3324,6 +3282,14 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           <div className="brand-mark"><Anvil size={20} /></div>
           <div><strong>钓具配置工坊</strong><span>TACKLE FORGER</span></div>
         </div>
+        <button
+          type="button"
+          className={cx("rule-source-shortcut", page === "rulesource" && "active")}
+          onClick={() => setPage("rulesource")}
+        >
+          <CloudDownload size={18} strokeWidth={1.8} />
+          <span><strong>飞书规则源</strong><small>显式拉取工作簿</small></span>
+        </button>
         <nav>
           {navGroups.map((group) => (
             <div className="nav-group" key={group.label}>
@@ -3409,11 +3375,11 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           <section className="showcase-modal" role="dialog" aria-modal="true" aria-labelledby="showcase-editor-title">
             <div className="showcase-modal-head">
               <div>
-                <span className="eyebrow">SERIES PUBLISHER</span>
+                <span className="eyebrow">LEGACY SERIES SHOWCASE</span>
                 <h2 id="showcase-editor-title">
-                  {state.seriesShowcases.some((item) => item.id === showcaseDraft.id) ? "编辑已发布系列" : "添加系列"}
+                  {state.seriesShowcases.some((item) => item.id === showcaseDraft.id) ? "编辑历史演示记录" : "添加历史演示记录"}
                 </h2>
-                <p>定义一条贯穿多个重量段的系列轨道，发布时自动拆段。</p>
+                <p>此记录只供历史跨度图展示，不会创建 SeriesDefinition 或 SKU。正式创建请使用钓具系列甘特图。</p>
               </div>
               <button type="button" aria-label="关闭" onClick={() => setShowcaseDraft(null)}>
                 <X size={20} />
@@ -3504,12 +3470,12 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
 
               <div className="showcase-range-editor is-tension">
                 <div>
-                  <strong>拉力跨度</strong>
-                  <span>独立的 kgf 数值，不是重量；拆段后按重量进度分配</span>
+                  <strong>目标拉力规格</strong>
+                  <span>填写离散 SKU 拉力，使用逗号分隔；不会插值，也不会自动补齐中间规格。</span>
                 </div>
-                <label className="field-label">最小 kgf<TextInput type="number" min={0} step={0.1} value={showcaseDraft.tensionMinKgf} onChange={(value) => setShowcaseDraft((current) => current ? { ...current, tensionMinKgf: Number(value) } : current)} /></label>
-                <span className="range-divider">—</span>
-                <label className="field-label">最大 kgf<TextInput type="number" min={0} step={0.1} value={showcaseDraft.tensionMaxKgf} onChange={(value) => setShowcaseDraft((current) => current ? { ...current, tensionMaxKgf: Number(value) } : current)} /></label>
+                <label className="field-label span-2">目标 kgf
+                  <TextInput value={showcaseTargetPulls(showcaseDraft).join(", ")} placeholder="例如：1.5, 1.8, 3.8" onChange={(value) => setShowcaseDraft((current) => current ? { ...current, targetPullsKgf: value.split(/[,，\s]+/).map(Number).filter((item) => Number.isFinite(item) && item > 0) } : current)} />
+                </label>
               </div>
 
               <div className="showcase-definition-section">
@@ -3564,7 +3530,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
               <div>
                 <Button onClick={() => setShowcaseDraft(null)}>取消</Button>
                 <Button tone="primary" icon={Check} onClick={publishSeriesShowcase}>
-                  {state.seriesShowcases.some((item) => item.id === showcaseDraft.id) ? "更新发布" : "发布系列"}
+                  {state.seriesShowcases.some((item) => item.id === showcaseDraft.id) ? "更新演示记录" : "保存演示记录"}
                 </Button>
               </div>
             </div>

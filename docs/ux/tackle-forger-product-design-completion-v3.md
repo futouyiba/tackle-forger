@@ -5,6 +5,7 @@
 > 交互权威：本文；不得改变 v3 领域语义  
 > 视觉方向：`docs/ux/tackle-forger-ux-design-v1.md` 与 `docs/ux/prototype-v1/`  
 > 审查日期：2026-07-20
+> 最后对齐v3：2026-07-22
 
 ## 0. 核心边界
 
@@ -36,7 +37,7 @@ flowchart LR
 | 发布管理 | Model、SnapshotBuild | 发布检查、冻结、升级候选 |
 | 配置表交付 | SnapshotBatch、环境×渠道目标 | 预览、写入、关联校验 |
 
-采用高密度数据驾驶舱。左侧稳定一级导航；顶部面包屑与全局搜索；主区优先矩阵、表格和差异；右侧 520–640px 推入层承载“Model 预览”和“AI评估与建议”两个 Tab。所有写按钮消费后端 `ActionAvailability`，前端不从角色、颜色或状态猜动作。
+采用高密度数据驾驶舱。左侧稳定一级导航；顶部面包屑与全局搜索；主区优先矩阵、表格和差异；右侧 520–640px 推入层按“1 常用概览 → 2 五维与适配 → 3 来源与版本”渐进披露，并保留独立的“Patch / Rebase”和“AI评估与建议”入口。常用概览默认展示对象身份、离散目标拉力、调性/硬度、长度、发布/冻结面、品质定价和四套独立裁决；五维层才展开三种比较模式；来源层展示完整Trace。所有写按钮消费后端 `ActionAvailability`，前端不从角色、颜色或状态猜动作。
 
 ## 2. 钓具系列甘特图
 
@@ -174,7 +175,7 @@ UpgradeCandidate 只描述“升级会怎样”。批准不改变旧 Snapshot；
 
 一个目标失败不伪装全成功；默认继续写入其他合格目标，失败项保留预览和恢复Manifest。工具不读取`config_system.toml`，不执行Git命令。StoreBuy新增`enabled`上架开关：新行默认false，更新普通属性保留目标原值。
 
-价值分自动定价继续登记为`OPEN-PRICING-001`，但主飞书工作簿`08_价格计算/u87sRh`已提供公式骨架和部分查表值。界面可展示“价格试算”、来源revision和逐步Trace；评分插值、零整比、舍入及品质到PricingBasket映射尚未发布时，试算必须标记“非正式”，正式Store写入显示“定价策略未完成”并阻断，不提供手填价格兜底。
+价值分自动定价不再使用未在v3登记的`OPEN-PRICING-001`编号。主飞书工作簿revision `2869`中，`07_品质评分/FqD4j7`已提供品质区间、Quality→PricingBasket映射和价格系数区间，`08_价格计算/u87sRh`已提供评分线性插值、重量段查表、零整比、金币和三位有效数字向下取整。当前精确阻断项是：`QUALITY_SCORE_BOUNDARY_CONFLICT`（S品质100分边界）、`QUALITY_SCORE_SOURCE_MISSING`（性能评分来源），以及缺少`roundingStage`、`minimumPriceScope`和`overflowMode`。界面可展示带`NON_FORMAL`标记的价格试算、来源revision和逐步Trace；上述Issue未解决时，新PricingPolicyVersion、依赖它的Model发布、Snapshot和Store导出均必须精确阻断，不提供手填价格兜底。
 
 ## 12. 六面验收矩阵
 

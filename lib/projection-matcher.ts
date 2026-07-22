@@ -35,6 +35,30 @@ export interface ProjectionMatchQuery {
   targetValues?: Record<string, number>;
 }
 
+const STRUCTURAL_PULL_PARAMETER_BY_PART: Record<string, string> = {
+  "part:rod": "杆最大拉力kgf",
+  rod: "杆最大拉力kgf",
+  "part:reel": "轮最大拉力kgf",
+  reel: "轮最大拉力kgf",
+  "part:line": "线最大拉力kgf",
+  line: "线最大拉力kgf",
+};
+
+export function structuralPullParameterKey(itemPartId: string): string | undefined {
+  return STRUCTURAL_PULL_PARAMETER_BY_PART[itemPartId];
+}
+
+export function structuralPullFromProjection(
+  projection: DerivedProjection,
+  itemPartId: string,
+): number | undefined {
+  const key = structuralPullParameterKey(itemPartId);
+  const value = key ? projection.structuralValues?.[key] : undefined;
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : undefined;
+}
+
 type RankedCandidate = ProjectionMatchCandidate & {
   weightDistance: number;
 };

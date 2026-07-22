@@ -1,7 +1,15 @@
 import { BlobPreconditionFailedError, get, put } from "@vercel/blob";
+import path from "node:path";
 import { createSeedState } from "./seed";
 import type { RevisionInfo, WorkspaceState } from "./types";
 import { ensureWorkflowFields } from "./workflow";
+import {
+  listSqliteRevisions,
+  loadSqliteRevision,
+  loadSqliteWorkspace,
+  saveSqliteImportedFile,
+  saveSqliteWorkspace,
+} from "./sqlite-storage";
 
 type StorageEnv = {
   DB?: D1Database;
@@ -31,6 +39,15 @@ function hasVercelBlob() {
   return typeof process !== "undefined" && Boolean(process.env.BLOB_READ_WRITE_TOKEN);
 }
 
+function sqliteDatabasePath() {
+  if (typeof process === "undefined" || process.env.VERCEL) return undefined;
+  return process.env.WORKSPACE_DATABASE_PATH?.trim() || ".data/workspace.sqlite";
+}
+
+function sqliteFileDataDir(databasePath: string) {
+  return process.env.WORKSPACE_FILE_DATA_DIR?.trim()
+    || path.join(path.dirname(path.resolve(databasePath)), "files");
+}
 async function getRuntimeStorage(): Promise<StorageEnv> {
   if (runtimePromise) return runtimePromise;
   runtimePromise = (async () => {
@@ -124,6 +141,9 @@ export async function loadWorkspaceState(): Promise<{
   state: WorkspaceState;
   revision: number;
 }> {
+  const sqlitePath = sqliteDatabasePath();
+  if (sqlitePath) return loadSqliteWorkspace(sqlitePath);
+
   if (hasVercelBlob()) {
     const current = await ensureBlobDocument();
     return {
@@ -178,6 +198,9 @@ export async function saveWorkspaceState(input: {
   author: string;
   message: string;
 }): Promise<{ revision: number; conflict?: boolean }> {
+  const sqlitePath = sqliteDatabasePath();
+  if (sqlitePath) return saveSqliteWorkspace(sqlitePath, input);
+
   if (hasVercelBlob()) {
     const current = await ensureBlobDocument();
     if (current.document.revision !== input.baseRevision) {
@@ -292,6 +315,9 @@ export async function saveWorkspaceState(input: {
 }
 
 export async function listRevisions(): Promise<RevisionInfo[]> {
+  const sqlitePath = sqliteDatabasePath();
+  if (sqlitePath) return listSqliteRevisions(sqlitePath);
+
   if (hasVercelBlob()) {
     const current = await ensureBlobDocument();
     return current.document.revisions.map((entry) => ({
@@ -327,6 +353,9 @@ export async function listRevisions(): Promise<RevisionInfo[]> {
 }
 
 export async function loadRevision(revision: number): Promise<WorkspaceState | null> {
+  const sqlitePath = sqliteDatabasePath();
+  if (sqlitePath) return loadSqliteRevision(sqlitePath, revision);
+
   if (hasVercelBlob()) {
     const current = await ensureBlobDocument();
     const entry = current.document.revisions.find((item) => item.revision === revision);
@@ -350,6 +379,9 @@ export async function loadRevision(revision: number): Promise<WorkspaceState | n
 }
 
 export async function saveImportedFile(file: File, author: string) {
+  const sqlitePath = sqliteDatabasePath();
+  if (sqlitePath) return saveSqliteImportedFile(sqlitePath, sqliteFileDataDir(sqlitePath), file, author);
+
   const id = crypto.randomUUID();
   const safeName = file.name.replace(/[^\p{L}\p{N}._-]+/gu, "_");
   const key =

@@ -45,7 +45,7 @@
 5. 是否生成 `tackle_set`、`store_recommend`、`store_room`、`pond_store_group`、`pond_store` 等可选行。
 6. mappingId、version、Profile、schema hash 与审批记录。
 
-缺任一必填输入时，生成器会产生 `ValidationIssue(gate=export)` 并跳过整行。
+缺任一必填输入时，生成器必须产生`ValidationIssue(gate="EXPORT")`并阻止当前“环境×渠道”目标提交；不得面向正式文件静默跳过行或生成半套tackle/item/store记录。其他已通过预检的目标默认可继续，失败目标保留预览包、Issue和恢复Manifest。
 
 ## 最小映射示例
 
@@ -85,17 +85,25 @@
 }
 ```
 
-生产映射必须经过预览、关系校验和人工确认后才能绑定到启用的 `ExportTargetProfile`。
+生产映射必须经过预览、关系校验和人工确认后才能绑定到已发布的`ConfigEnvironmentProfile`，再由用户对每个环境×渠道建立`LocalExportTargetBinding`。服务端只保存环境、渠道、映射版本和用户标签，不保存本机绝对路径或目录句柄。
 
-## 本地伴随服务
+## 一期权威路径：浏览器目录授权
 
-浏览器不直接访问本机文件系统。管理员在执行端注册允许的 Profile 与已发布 Mapping，伴随服务只监听 `127.0.0.1`，并要求一次性配对令牌。
+一期使用Chromium的File System Access API。用户先选择某环境的configs仓库根目录，再为非1001渠道选择明确的渠道目录。`FileSystemDirectoryHandle`只保存在当前用户、浏览器和origin的IndexedDB中；页面在每次导出前重新检查读写权限。
+
+当File System Access API不可用、目录句柄失效或用户未授权时，页面只能要求重新绑定，或下载包含`ExportManifest`和校验报告的变更包供人工搬运；不得声称已写入本机Git工作区。
+
+## 遗留兼容：本地伴随服务（非一期规范路径）
+
+仓库中仍保留`local_companion`执行器与`docs/config-export-registry.example.json`，用于兼容已有实验性实现。它不是新部署的默认方案，不能替代`ConfigEnvironmentProfile + LocalExportTargetBinding`，也不得让服务器获取设计人员电脑上的路径。只有未来经用户明确批准修改v3部署边界后，才能将其重新提升为支持路径。
+
+以下内容仅记录遗留实现的隔离要求，不构成一期安装步骤：
 
 1. 复制 `docs/config-export-registry.example.json` 到本机受控位置。
 2. 将 `pairing.workspaceId` 替换为公司飞书租户键，并在 `pairing.allowedOpenIds` 登记允许执行交付的用户。
 3. 把审核通过的完整 Mapping 加入 `mappings`，在 Profile 中填写相同的 `mappingId` 与 `mappingVersion`。
 4. 完成业务 ID、枚举值、单位与 schema 审核后，将对应 Profile 的 `enabled` 改为 `true`。
-4. 启动伴随服务：
+5. 启动伴随服务：
 
 ```powershell
 npm run config-export:companion -- --registry <注册表绝对路径>

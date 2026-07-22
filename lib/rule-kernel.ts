@@ -488,7 +488,18 @@ export function deriveProjection(
   applyRuleSource(
     values,
     step("function"),
-    [...input.functionProfile.rules, ...(intensityRules?.rules ?? [])],
+    input.functionProfile.rules,
+    input.functionProfile.id,
+    input.functionProfile.name,
+    warnings,
+    sequence,
+    setRules,
+  );
+  const structuralValues = sortRecord(structuredClone(values));
+  applyRuleSource(
+    values,
+    step("function"),
+    intensityRules?.rules ?? [],
     input.functionProfile.id,
     input.functionProfile.name + " / 强度 " + input.functionIntensity,
     warnings,
@@ -567,6 +578,7 @@ export function deriveProjection(
     ruleSet: input.ruleSet,
     attributeContributions: input.attributeContributions ?? [],
     patches,
+    structuralValues,
     values: finalValues,
     trace,
     warnings,
@@ -583,6 +595,7 @@ export function deriveProjection(
     qualityId: input.qualityProfile?.id,
     ruleSetVersion: input.ruleSet.id,
     reductionStackingMode: input.ruleSet.settings.reductionStackingMode,
+    structuralValues,
     values: finalValues,
     trace,
     warnings,
@@ -590,4 +603,3 @@ export function deriveProjection(
     createdAt: input.createdAt ?? input.ruleSet.createdAt,
   };
 }
-

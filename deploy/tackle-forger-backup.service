@@ -1,0 +1,14 @@
+[Unit]
+Description=Backup Tackle Forger workspace database and imported files
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=tackleforger
+Group=tackleforger
+WorkingDirectory=/opt/tackle-forger/current
+EnvironmentFile=/opt/tackle-forger/.env.local
+ExecStart=/usr/local/bin/npm run storage:backup
+
+[Install]
+WantedBy=multi-user.target

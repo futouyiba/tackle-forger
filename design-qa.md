@@ -1,28 +1,32 @@
-# 系列跨度图：设计验收
+# Tackle Forger UX 原型 Design QA
 
-- 参考来源：`E:/DocsHDD/tackleForger/design-qa-assets/series-table-reference.png`
-- 实现截图：`E:/DocsHDD/tackleForger/design-qa-assets/series-table-implementation.png`
-- 对照图：`E:/DocsHDD/tackleForger/design-qa-assets/series-table-comparison.png`
-- 验收地址：`https://tackle-forger-workbench.vercel.app/`
-- 桌面视口：1400 × 900
-- 响应式视口：980 × 800、390 × 844
+日期：2026-07-22
 
-## 验收状态
+## 验证对象
 
-- 横向：C、B、A、S 四个品质分组，每个系列拥有一条独立甘特轨道。
-- 纵向：按重量模板从轻到重排列，同时显示该重量段的杆、轮、线基准拉力范围。
-- 系列跨度：0.8–20kg 系列正确覆盖 6 个重量段；4–50kg 系列正确覆盖 5 个重量段。
-- 拉力分段：系列最小、最大拉力作为独立 kgf 数值，按照重量进度线性拆分到各段。
-- 系列继承：唯一钓法、功能定位、多结构和贯通词条在所有拆分段中保持一致。
-- 交互：添加、发布、选择多结构、选择多个词条、点击系列回显编辑均已验证。
-- 数据安全：验收示例未点击“保存版本”，不会写入正式配置数据。
-- 控制台：0 个 error，0 个 warning。
-- 响应式：桌面、平板和手机宽度下页面无整体横向溢出；甘特图使用独立滚动区保留完整轨道。
+- 路由：`/?page=candidates`
+- 主要视口：1440px 桌面工作台
+- 视觉基准：
+  - `docs/ux/assets/audit-final-01-series-gantt.png`
+  - `docs/ux/prototype-v1/audit-output/product-design-completion-2026-07-20/01-current-model-preview.png`
+  - `docs/ux/prototype-v1/audit-output/product-design-completion-2026-07-20/02-current-gantt.png`
 
-## 对照结论
+## 已通过
 
-实现保留参考表的品质分组、重量纵轴和系列跨格关系，同时按本轮需求升级为更接近 Monday.com／飞书多维表格的彩色甘特任务块。直柄、枪柄不再是固定全局列，而是作为同一系列内部的结构标签展示；拉力与重量明确分离。
+- 钓具系列甘特图采用纵向离散目标拉力档位、横向 C/B/A/S 后再按类型分列。
+- Series 轨道只连接真实 SKU 节点，不表达连续插值。
+- Model 右侧预览分为“常用概览 / 五维与适配 / 来源与版本”三层。
+- 五维图明确标注 OPEN-005 草稿定义；缺失值不补零，Series 基准不静默猜测。
+- 硬兼容、Affinity、系列不变量与 AI 建议保持独立语义。
+- 已发布快照与草稿、升级候选保持分离。
+- 类型检查、构建、关键领域测试与渲染 HTML 断言通过。
 
-未发现 P0、P1 或 P2 问题。
+## 待补视觉验证
 
-final result: passed
+Figma 可编辑捕获在本机 Chrome 会话中持续处于 pending，Product Design 浏览器控制会话同时不可用。临时采集脚本已完整移除，没有进入产品实现。
+
+因此：
+- 代码与交互验证：通过。
+- 视觉对照与 Figma 同步：待浏览器捕获恢复后补做。
+- 最终 Design QA 状态：BLOCKED（仅阻塞视觉证据，不阻塞当前本地原型使用）。
+

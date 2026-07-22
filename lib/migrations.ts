@@ -32,8 +32,9 @@ import type {
 import { defaultAffinityAxisWeights } from "./compatibility";
 import { migrateLegacyProductIdentity } from "./legacy-product-migration";
 import { CANONICAL_FEISHU_WORKBOOK } from "./feishu-workbook";
+import { buildPatchRevision, emptyPatchLedger, migratePatchLedger } from "./patch-ledger";
 
-export const CURRENT_WORKSPACE_SCHEMA_VERSION = 9;
+export const CURRENT_WORKSPACE_SCHEMA_VERSION = 13;
 
 const DEFAULT_RULE_SETTINGS: WorkspaceRuleSettings = {
   reductionStackingMode: "diminishing_division",
@@ -642,6 +643,10 @@ const migrations: Record<number, (state: MutableWorkspace) => MutableWorkspace> 
   6: migrateV6ToV7,
   7: migrateV7ToV8,
   8: migrateV8ToV9,
+  9: migrateV9ToV10,
+  10: migrateV10ToV11,
+  11: migrateV11ToV12,
+  12: migrateV12ToV13,
 };
 
 export function migrateWorkspaceState(input: unknown): WorkspaceState {
@@ -675,6 +680,12 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
     version = nextVersion;
   }
 
+  state = {
+    ...state,
+    patchLedger: state.patchLedger && typeof state.patchLedger === "object"
+      ? migratePatchLedger(state.patchLedger as WorkspaceState["patchLedger"])
+      : emptyPatchLedger(),
+  };
   return state as WorkspaceState;
 }
 
@@ -757,6 +768,121 @@ function migrateV7ToV8(state: MutableWorkspace): MutableWorkspace {
         };
       }),
   };
+}
+
+function migrateV12ToV13(state: MutableWorkspace): MutableWorkspace {
+  const ledger = state.patchLedger && typeof state.patchLedger === "object"
+    ? migratePatchLedger(state.patchLedger as WorkspaceState["patchLedger"])
+    : emptyPatchLedger();
+  return { ...state, schemaVersion: 13, patchLedger: ledger };
+}
+function migrateV11ToV12(state: MutableWorkspace): MutableWorkspace {
+  const ledger = state.patchLedger && typeof state.patchLedger === "object"
+    ? structuredClone(state.patchLedger) as WorkspaceState["patchLedger"]
+    : emptyPatchLedger();
+  ledger.revisions = ledger.revisions.map((revision) => {
+    const legacy = revision.rawPayload as { status?: unknown } | undefined;
+    return revision.state === "APPROVED" && legacy?.status === "approved"
+      ? { ...revision, state: "ACTIVE" as const }
+      : revision;
+  });
+  return { ...state, schemaVersion: 12, patchLedger: ledger };
+}
+function migrateV10ToV11(state: MutableWorkspace): MutableWorkspace {
+  const ledger = state.patchLedger && typeof state.patchLedger === "object"
+    ? structuredClone(state.patchLedger) as WorkspaceState["patchLedger"]
+    : emptyPatchLedger();
+  for (const snapshot of arrayOf<WorkspaceState["configurationSnapshots"][number]>(state.configurationSnapshots)) {
+    if (snapshot.patchReferences?.length || !snapshot.patchSetHash) continue;
+    const id = "patch-snapshot-migration:" + snapshot.id;
+    if (ledger.migrationReviewItems.some((entry) => entry.id === id)) continue;
+    ledger.migrationReviewItems.push({
+      id,
+      patchId: "legacy-snapshot:" + snapshot.id,
+      patchRevision: 1,
+      reason: "LEGACY_SNAPSHOT_PATCH_REFERENCES_UNAVAILABLE",
+      preservedPayload: structuredClone(snapshot),
+    });
+  }
+  return { ...state, schemaVersion: 11, patchLedger: ledger };
+}
+
+function migrateV9ToV10(state: MutableWorkspace): MutableWorkspace {
+  const existing = state.patchLedger && typeof state.patchLedger === "object"
+    ? structuredClone(state.patchLedger) as WorkspaceState["patchLedger"]
+    : emptyPatchLedger();
+  const withSnapshotMigrationReviews = (ledger: WorkspaceState["patchLedger"]) => {
+    const next = structuredClone(ledger);
+    for (const snapshot of arrayOf<WorkspaceState["configurationSnapshots"][number]>(state.configurationSnapshots)) {
+      if (snapshot.patchReferences?.length || !snapshot.patchSetHash) continue;
+      const id = "patch-snapshot-migration:" + snapshot.id;
+      if (next.migrationReviewItems.some((entry) => entry.id === id)) continue;
+      next.migrationReviewItems.push({
+        id,
+        patchId: "legacy-snapshot:" + snapshot.id,
+        patchRevision: 1,
+        reason: "LEGACY_SNAPSHOT_PATCH_REFERENCES_UNAVAILABLE",
+        preservedPayload: structuredClone(snapshot),
+      });
+    }
+    return next;
+  };
+  if (existing.revisions.length || !arrayOf<ProjectionPatchRuleSource>(state.projectionPatches).length) {
+    return { ...state, schemaVersion: 10, patchLedger: withSnapshotMigrationReviews(existing) };
+  }
+  const ledger = emptyPatchLedger();
+  for (const patch of arrayOf<ProjectionPatchRuleSource>(state.projectionPatches)) {
+    const sourceOperations = patch.operations ?? [];
+    if (!sourceOperations.length) {
+      ledger.migrationReviewItems.push({
+        id: "patch-migration:" + patch.id,
+        patchId: patch.id,
+        patchRevision: 1,
+        reason: "LEGACY_PATCH_OPERATION_MISSING",
+        preservedPayload: structuredClone(patch),
+      });
+      continue;
+    }
+    try {
+      ledger.revisions.push(buildPatchRevision({
+        patchId: patch.id,
+        patchRevision: 1,
+        scopeType: patch.scope,
+        layerType: patch.scope,
+        subjectEntityId: patch.scopeId,
+        subjectName: patch.scopeId,
+        baseRuleSetVersion: patch.baseRuleSetVersion,
+        baseObjectRevision: 1,
+        state: patch.status === "approved" ? "ACTIVE" : patch.status === "superseded" ? "SUPERSEDED" : "DRAFT",
+        mirrorSyncState: "NOT_SYNCED",
+        attentionStates: [],
+        reason: patch.reason,
+        evidence: [],
+        createdBy: patch.author,
+        createdAt: patch.createdAt ?? "1970-01-01T00:00:00.000Z",
+        snapshotRefs: [],
+        rawPayload: structuredClone(patch),
+        operations: sourceOperations.map((operation, index) => ({
+          operationId: patch.id + ":op:" + String(index + 1),
+          operationIndex: index,
+          parameterKey: operation.path,
+          operation: operation.op === "remove" ? "clear" : operation.op,
+          operand: "value" in operation ? operation.value : null,
+          before: undefined,
+          after: undefined,
+        })),
+      }));
+    } catch {
+      ledger.migrationReviewItems.push({
+        id: "patch-migration:" + patch.id,
+        patchId: patch.id,
+        patchRevision: 1,
+        reason: "LEGACY_PATCH_REQUIRES_REVIEW",
+        preservedPayload: structuredClone(patch),
+      });
+    }
+  }
+  return { ...state, schemaVersion: 10, patchLedger: withSnapshotMigrationReviews(ledger) };
 }
 
 function migrateV8ToV9(state: MutableWorkspace): MutableWorkspace {

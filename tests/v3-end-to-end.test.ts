@@ -15,6 +15,7 @@ import { applyLayeredPatches, previewPatchRebase } from "../lib/patch-engine";
 import {
   matchNearestProjection,
   projectionWeightDistance,
+  structuralPullFromProjection,
   type ProjectionMatchCandidate,
 } from "../lib/projection-matcher";
 import {
@@ -64,7 +65,7 @@ function matchCandidates(
         (template) => template.id === projection.weightTemplateId,
       )!,
       itemPartId: "part:rod",
-      derivedPullKg: state.templates.find(
+      derivedPullKg: structuralPullFromProjection(projection, "part:rod") ?? state.templates.find(
         (template) => template.id === projection.weightTemplateId,
       )!.nominalFishKg,
       compatibility: allowed
@@ -96,10 +97,11 @@ test("M-01/M-03 最近模板精确命中，1.5kg 与 1.8kg 共享基底但 Patch
   const projection = state.derivedProjections.find(
     (candidate) => candidate.weightTemplateId === "T04" && !candidate.id.endsWith("-next"),
   )!;
+  const structuralPull = structuralPullFromProjection(projection, "part:rod")!;
   const exact = matchNearestProjection(
     {
       itemPartId: "part:rod",
-      targetWeightKg: 1.4,
+      targetWeightKg: structuralPull,
       methodId: projection.methodId,
       typeId: projection.typeId,
       functionId: projection.functionId,
@@ -107,10 +109,11 @@ test("M-01/M-03 最近模板精确命中，1.5kg 与 1.8kg 共享基底但 Patch
       performanceId: projection.performanceId,
       qualityId: projection.qualityId,
     },
-    matchCandidates(1.4),
+    matchCandidates(structuralPull),
     state.parameters,
   );
   assert.equal(exact.weightTemplateId, "T04");
+  assert.equal(structuralPull, exact.matchedStructuralPullKg);
   assert.equal(exact.weightDistance, 0);
   assert.equal(state.skuDrawers[0].projectionMatch.projectionId, state.skuDrawers[1].projectionMatch.projectionId);
   assert.notDeepEqual(state.skuDrawers[0].patchIds, state.skuDrawers[1].patchIds);

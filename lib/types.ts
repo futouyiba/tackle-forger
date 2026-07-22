@@ -89,6 +89,9 @@ export interface RuleSetVersion {
   sourceRevisionIds: string[];
   createdAt: string;
   publishedAt?: string;
+  publishedBy?: string;
+  warningAcknowledgements?: Array<{ issueKey: string; reason: string }>;
+  publicationHash?: string;
   notes: string;
 }
 
@@ -190,6 +193,212 @@ export interface ProjectionPatchRuleSource {
   operations?: ProjectionPatchOperation[];
 }
 
+export type PatchState =
+  | "DRAFT" | "PENDING_REVIEW" | "APPROVED" | "ACTIVE"
+  | "REBASE_REQUIRED" | "ABSORBED" | "PARTIALLY_ABSORBED"
+  | "WITHDRAWN" | "SUPERSEDED";
+export type PatchMirrorSyncState =
+  | "NOT_SYNCED" | "PENDING" | "WRITING" | "SYNCED"
+  | "REMOTE_CHANGED" | "CONFLICT" | "WRITE_FAILED";
+export type PatchAttentionState = "ORPHANED";
+export type PatchLayerType =
+  | "derivation" | "series" | "sku" | "model" | "final_review" | "projection_pin";
+
+export interface PatchOperationRecord {
+  patchId: string;
+  patchRevision: number;
+  operationId: string;
+  operationIndex: number;
+  parameterKey: string;
+  operation: "set" | "add" | "multiply" | "clear";
+  operand: unknown;
+  before: unknown;
+  after: unknown;
+}
+
+export interface PatchSnapshotReference {
+  patchId: string;
+  patchRevision: number;
+  orderedOperationIds: string[];
+}
+
+export interface PatchRevisionRecord {
+  patchId: string;
+  patchRevision: number;
+  scopeType: "series" | "sku" | "model" | "derivation";
+  layerType: PatchLayerType;
+  subjectEntityId: string;
+  subjectName: string;
+  parentEntityId?: string;
+  baseRuleSetVersion: string;
+  baseObjectRevision: number;
+  state: PatchState;
+  mirrorSyncState: PatchMirrorSyncState;
+  attentionStates: PatchAttentionState[];
+  reason: string;
+  evidence: string[];
+  createdBy: string;
+  createdAt: string;
+  reviewedBy?: string;
+  reviewedAt?: string;
+  supersedesPatchId?: string;
+  ruleProposalId?: string;
+  snapshotRefs: string[];
+  operations: PatchOperationRecord[];
+  revisionHash: string;
+  rawPayload?: unknown;
+}
+
+export interface PatchMirrorOperationResult {
+  operationId: string;
+  status: "PENDING" | "WRITTEN" | "FAILED" | "VERIFIED";
+  remoteRowId?: string;
+  errorCode?: string;
+  message?: string;
+}
+
+export interface PatchMirrorSyncCommand {
+  idempotencyKey: string;
+  patchId: string;
+  patchRevision: number;
+  expectedRemoteRevision?: string;
+  state: "PENDING" | "WRITING" | "READBACK_REQUIRED" | "COMPLETED" | "FAILED";
+  operationResults: PatchMirrorOperationResult[];
+  readbackEvidence?: unknown;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PatchMirrorCollaborationEntry {
+  entryId: string;
+  kind: "NOTE" | "REVIEW_COMMENT";
+  authorId: string;
+  authoredAt: string;
+  remoteRevision: string;
+  content: string;
+}
+
+export interface PatchMirrorRemoteRow {
+  remoteRowId: string;
+  patchId: string;
+  patchRevision: number;
+  operationId: string;
+  operationIndex: number;
+  scopeType: PatchRevisionRecord["scopeType"];
+  layerType: PatchLayerType;
+  subjectEntityId: string;
+  baseRuleSetVersion: string;
+  baseObjectRevision: number;
+  parameterKey: string;
+  operation: PatchOperationRecord["operation"];
+  operand: unknown;
+  before: unknown;
+  after: unknown;
+  snapshotRefs: string[];
+  collaborationEntries?: PatchMirrorCollaborationEntry[];
+  sharedRuleSuggestion?: { value: boolean; revision: string };
+}
+
+export interface PatchMirrorValidationIssue {
+  source: "patch";
+  code: "PATCH_MIRROR_ROW_MISSING" | "PATCH_MIRROR_UNKNOWN_KEY" | "PATCH_MIRROR_DUPLICATE_KEY" | "PATCH_MIRROR_AUDIT_FIELD_TAMPERED" | "PATCH_MIRROR_GROUP_INCOMPLETE" | "PATCH_MIRROR_COLLABORATION_INVALID" | "PATCH_MIRROR_EXPECTED_REVISION_CONFLICT";
+  severity: "ERROR" | "WARNING";
+  key: string;
+  patchId?: string;
+  patchRevision?: number;
+  operationId?: string;
+  remoteRowId?: string;
+  field?: string;
+  message: string;
+}
+
+export interface PatchMirrorPullAudit {
+  pulledAt: string;
+  remoteRevision: string;
+  issues: PatchMirrorValidationIssue[];
+  quarantinedRemoteRowIds: string[];
+  refillDetailKeys: string[];
+}
+
+export interface PatchPatternSummary {
+  patternId: string;
+  layerType: PatchLayerType;
+  parameterKey: string;
+  operation: PatchOperationRecord["operation"];
+  direction: "increase" | "decrease" | "replace" | "clear" | "mixed";
+  methodId?: string;
+  typeId?: string;
+  functionId?: string;
+  weightBandId?: string;
+  patchRevisionRefs: Array<{ patchId: string; patchRevision: number }>;
+  subjectEntityIds: string[];
+  frequency: number;
+  analysisHash: string;
+}
+
+export interface RuleSourceChangeDraft {
+  id: string;
+  patternId: string;
+  sourcePatchRevisionRefs: Array<{ patchId: string; patchRevision: number }>;
+  targetLayerType: PatchLayerType;
+  parameterKey: string;
+  proposedOperation: PatchOperationRecord["operation"];
+  impactSubjectEntityIds: string[];
+  rationale: string;
+  status: "DRAFT" | "WITHDRAWN" | "SUBMITTED";
+  createdBy: string;
+  createdAt: string;
+  inputHash: string;
+}
+
+
+export type PatchAbsorptionOutcome =
+  | "FULLY_COVERED" | "PARTIALLY_COVERED" | "NOT_COVERED" | "REBASE_REQUIRED";
+
+export interface PatchAbsorptionOperationEvidence {
+  operationId: string;
+  outcome: PatchAbsorptionOutcome;
+  oldPatchedValue: unknown;
+  newRuleValue: unknown;
+  newRulePlusPatchValue: unknown;
+  traceHash: string;
+  residualOperation?: {
+    operation: PatchOperationRecord["operation"];
+    operand: unknown;
+    before: unknown;
+    after: unknown;
+  };
+}
+
+export interface PatchAbsorptionAssessment {
+  assessmentId: string;
+  patchId: string;
+  sourcePatchRevision: number;
+  resultPatchRevision: number;
+  ruleProposalId: string;
+  publishedRuleSetVersion: string;
+  resultState: "ABSORBED" | "PARTIALLY_ABSORBED" | "ACTIVE" | "REBASE_REQUIRED";
+  operationEvidence: PatchAbsorptionOperationEvidence[];
+  inputHash: string;
+  assessedBy: string;
+  assessedAt: string;
+}
+export interface PatchLedger {
+  schemaVersion: number;
+  revisions: PatchRevisionRecord[];
+  mirrorCommands: PatchMirrorSyncCommand[];
+  ruleSourceChangeDrafts: RuleSourceChangeDraft[];
+  absorptionAssessments: PatchAbsorptionAssessment[];
+  mirrorPullAudits: PatchMirrorPullAudit[];
+  migrationReviewItems: Array<{
+    id: string;
+    patchId: string;
+    patchRevision: number;
+    reason: string;
+    preservedPayload: unknown;
+  }>;
+}
+
 export interface ProjectionTraceContribution {
   sequence: number;
   ruleId: string;
@@ -228,6 +437,8 @@ export interface DerivedProjection {
   qualityId?: string;
   ruleSetVersion: string;
   reductionStackingMode: ReductionStackingMode;
+  /** 仅包含 WeightTemplate × Method × Type × FunctionProfile 基础层，早于 functionIntensity 与商品层。 */
+  structuralValues?: Record<string, number | string>;
   values: Record<string, number | string>;
   trace: ProjectionTraceStep[];
   warnings: ProjectionWarning[];
@@ -488,6 +699,8 @@ export interface SeriesDefinition {
   concept: string;
   fishingMethodId: string;
   typeId: string;
+  /** 结构标杆匹配的明确部位；旧数据缺失时仅作兼容读取。 */
+  itemPartId?: string;
   qualityId: QualityProfileId;
   coreFunctionId: string;
   functionIntensityPolicy:
@@ -887,6 +1100,7 @@ export interface ConfigurationSnapshot {
   projectionId: string;
   reductionStackingMode: ReductionStackingMode;
   patchSetHash: string;
+  patchReferences?: PatchSnapshotReference[];
   finalPanelValues: Record<string, number | string>;
   componentSelections: ModelComponentSelection[];
   technologyIds: string[];
@@ -1156,6 +1370,8 @@ export interface SeriesShowcaseEntry {
   fishMaxKg: number;
   tensionMinKgf: number;
   tensionMaxKgf: number;
+  /** 离散目标拉力规格；旧 min/max 只保留给历史展示和迁移，绝不用于插值。 */
+  targetPullsKgf?: number[];
   /** 系列级贯通词条，拆分到任意重量段后保持不变。 */
   affixIds: string[];
   /** 旧版饵重字段，仅用于兼容已保存数据。 */
@@ -1482,6 +1698,7 @@ export interface WorkspaceState {
   performanceProfiles: PerformanceProfile[];
   qualityProfiles: QualityProfile[];
   projectionPatches: ProjectionPatchRuleSource[];
+  patchLedger: PatchLedger;
   derivedProjections: DerivedProjection[];
   projectionMatches: ProjectionMatch[];
   compatibilityRules: CompatibilityRule[];

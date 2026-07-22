@@ -87,6 +87,88 @@ export function createRuleSetDraftFromPull(input: {
   return { state: next, ruleSetDraft: structuredClone(ruleSetDraft) };
 }
 
+export function ruleSetWarningIssueKey(issue: { code: string; sheetId: string }) {
+  return `${issue.code}:${issue.sheetId}`;
+}
+
+export function publishRuleSetVersion(input: {
+  state: WorkspaceState;
+  ruleSetDraftId: string;
+  publishedAt: string;
+  publishedBy: string;
+  warningAcknowledgements?: Array<{ issueKey: string; reason: string }>;
+}): { state: WorkspaceState; ruleSetVersion: RuleSetVersion } {
+  const existing = input.state.ruleSetVersions.find((item) => item.id === input.ruleSetDraftId);
+  if (!existing) throw new Error("找不到待发布的 RuleSet 草稿。");
+  if (existing.status === "published") {
+    return { state: structuredClone(input.state), ruleSetVersion: structuredClone(existing) };
+  }
+  if (existing.status !== "draft") throw new Error("只有草稿状态的 RuleSetVersion 可以发布。");
+  if (!existing.sourceRevisionIds.length) throw new Error("RuleSet 草稿没有引用 FeishuSourceRevision，不能发布。");
+
+  const sources = existing.sourceRevisionIds.map((sourceRevisionId) => {
+    const source = input.state.feishuSourceRevisions.find((item) => item.id === sourceRevisionId);
+    if (!source) throw new Error(`RuleSet 草稿引用的源修订不存在：${sourceRevisionId}`);
+    if (source.state !== "RULESET_DRAFT") {
+      throw new Error(`源修订 ${source.sourceRevision} 未处于待发布状态。`);
+    }
+    return source;
+  });
+  const latestSourceByWorkbook = new Map<string, (typeof input.state.feishuSourceRevisions)[number]>();
+  for (const source of input.state.feishuSourceRevisions) {
+    const latest = latestSourceByWorkbook.get(source.workbookRefId);
+    if (!latest || source.pulledAt > latest.pulledAt) latestSourceByWorkbook.set(source.workbookRefId, source);
+  }
+  const staleSources = sources.filter((source) => latestSourceByWorkbook.get(source.workbookRefId)?.id !== source.id);
+  if (staleSources.length) {
+    throw new Error(`RuleSet 草稿引用的源修订已过期，请基于最新显式拉取重新创建草稿：${staleSources.map((source) => source.sourceRevision).join("、")}`);
+  }
+  const errors = sources.flatMap((source) => source.issues.filter((issue) => issue.severity === "error"));
+  if (errors.length) throw new Error(`源修订仍有阻断错误：${errors.map((issue) => issue.code).join("、")}`);
+
+  const acknowledgements = input.warningAcknowledgements ?? [];
+  const acknowledgementByKey = new Map(acknowledgements.map((item) => [item.issueKey, item.reason.trim()]));
+  const warnings = sources.flatMap((source) => source.issues.filter((issue) => issue.severity === "warning"));
+  const missingAcknowledgements = warnings
+    .map(ruleSetWarningIssueKey)
+    .filter((issueKey) => !acknowledgementByKey.get(issueKey));
+  if (missingAcknowledgements.length) {
+    throw new Error(`发布前必须逐项确认 warning 并填写理由：${missingAcknowledgements.join("、")}`);
+  }
+  const normalizedAcknowledgements = [...new Set(warnings.map(ruleSetWarningIssueKey))]
+    .sort()
+    .map((issueKey) => ({ issueKey, reason: acknowledgementByKey.get(issueKey)! }));
+  const publicationHash = deterministicHash({
+    ruleSetId: existing.id,
+    version: existing.version,
+    sourceRevisionIds: [...existing.sourceRevisionIds].sort(),
+    settings: existing.settings,
+    warningAcknowledgements: normalizedAcknowledgements,
+    publishedAt: input.publishedAt,
+    publishedBy: input.publishedBy,
+  });
+
+  const next = structuredClone(input.state);
+  next.ruleSetVersions = next.ruleSetVersions.map((item) => {
+    if (item.id === existing.id) {
+      return {
+        ...item,
+        status: "published" as const,
+        publishedAt: input.publishedAt,
+        publishedBy: input.publishedBy,
+        warningAcknowledgements: normalizedAcknowledgements,
+        publicationHash,
+        notes: `${item.notes}\n已由 ${input.publishedBy} 显式发布。`,
+      };
+    }
+    return item.status === "published" ? { ...item, status: "superseded" as const } : item;
+  });
+  next.feishuSourceRevisions = next.feishuSourceRevisions.map((source) =>
+    existing.sourceRevisionIds.includes(source.id) ? { ...source, state: "PUBLISHED" as const } : source,
+  );
+  const published = next.ruleSetVersions.find((item) => item.id === existing.id)!;
+  return { state: next, ruleSetVersion: structuredClone(published) };
+}
 export function assertExplicitPullDidNotPublish(before: WorkspaceState, after: WorkspaceState) {
   const beforePublished = before.ruleSetVersions.filter((item) => item.status === "published").map((item) => item.id).sort();
   const afterPublished = after.ruleSetVersions.filter((item) => item.status === "published").map((item) => item.id).sort();

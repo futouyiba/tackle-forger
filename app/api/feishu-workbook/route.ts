@@ -18,6 +18,7 @@ import { loadWorkspaceState, saveWorkspaceState } from "@/lib/storage";
 import {
   assertExplicitPullDidNotPublish,
   createRuleSetDraftFromPull,
+  publishRuleSetVersion,
   recordFeishuSourceRevision,
   recordPricingPolicyDraft,
   recordQualityValuePolicyDraft,
@@ -26,7 +27,7 @@ import {
 
 export const dynamic = "force-dynamic";
 
-type WorkbookAction = "pull" | "create_ruleset_draft" | "identity_write";
+type WorkbookAction = "pull" | "create_ruleset_draft" | "publish_ruleset" | "identity_write";
 
 function unavailable() {
   return NextResponse.json(
@@ -68,6 +69,8 @@ export async function POST(request: NextRequest) {
     baseRevision?: number;
     expectedSourceRevision?: string;
     sourceRevisionId?: string;
+    ruleSetDraftId?: string;
+    warningAcknowledgements?: Array<{ issueKey: string; reason: string }>;
     reportId?: string;
     confirmations?: SourceIdentityConfirmation[];
   };
@@ -160,6 +163,46 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    if (body.action === "publish_ruleset") {
+      if (!hasCapability(user.capabilities, "ruleset.publish")) {
+        return NextResponse.json({ error: "当前账号没有发布 RuleSetVersion 的权限。" }, { status: 403 });
+      }
+      if (!Number.isInteger(body.baseRevision) || !body.ruleSetDraftId) {
+        return NextResponse.json({ error: "缺少工作区版本或 RuleSet 草稿。" }, { status: 400 });
+      }
+      const current = await loadWorkspaceState();
+      if (current.revision !== body.baseRevision) {
+        return NextResponse.json(
+          { error: "团队工作区已有新版本，请刷新后重新审查规则草稿。", revision: current.revision },
+          { status: 409 },
+        );
+      }
+      const existingRuleSet = current.state.ruleSetVersions.find((item) => item.id === body.ruleSetDraftId);
+      if (existingRuleSet?.status === "published") {
+        return NextResponse.json({ state: current.state, revision: current.revision, ruleSetVersion: existingRuleSet });
+      }
+      const published = publishRuleSetVersion({
+        state: current.state,
+        ruleSetDraftId: body.ruleSetDraftId,
+        publishedAt: new Date().toISOString(),
+        publishedBy: user.name,
+        warningAcknowledgements: body.warningAcknowledgements,
+      });
+      const saved = await saveWorkspaceState({
+        state: published.state,
+        baseRevision: current.revision,
+        author: user.name,
+        message: `显式发布 RuleSetVersion ${published.ruleSetVersion.id}`,
+      });
+      if (saved.conflict) {
+        return NextResponse.json({ error: "发布 RuleSetVersion 时发生版本冲突。" }, { status: 409 });
+      }
+      return NextResponse.json({
+        state: published.state,
+        revision: saved.revision,
+        ruleSetVersion: published.ruleSetVersion,
+      });
+    }
     if (!hasCapability(user.capabilities, "feishu.identity.write")) {
       return NextResponse.json({ error: "当前账号没有稳定 ID 回写权限。" }, { status: 403 });
     }

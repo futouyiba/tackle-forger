@@ -61,12 +61,21 @@ test("R2 前端动作由 Capability 与服务端禁用原因共同决定", () =>
 });
 
 test("R2 服务端一次返回完整 ActionAvailability 映射", () => {
-  const actions = buildActionAvailabilityMap(["series.read", "candidate.generate"]);
+  const actions = buildActionAvailabilityMap(["series.read", "series.edit", "candidate.generate"]);
   assert.equal(actions.open_series.enabled, true);
+  assert.equal(actions.create_series.enabled, true);
   assert.equal(actions.generate_candidates.enabled, true);
   assert.equal(actions.materialize_candidates.enabled, false);
   assert.equal(actions.materialize_candidates.disabledReasonCode, "CAPABILITY_MISSING");
   assert.deepEqual(actions.materialize_candidates.requiredCapabilities, ["candidate.materialize"]);
+});
+
+test("正式 Series 创建与查看分别授权", () => {
+  assert.equal(buildActionAvailabilityMap(["series.read"]).create_series.enabled, false);
+  const editor = buildActionAvailabilityMap(["series.edit"]);
+  assert.equal(editor.create_series.enabled, true);
+  assert.deepEqual(editor.create_series.requiredCapabilities, ["series.edit"]);
+  assert.equal(editor.open_series.enabled, false);
 });
 
 test("R2 规则工作簿检查、拉取、建草稿与 ID 回写分别授权", () => {
@@ -74,11 +83,14 @@ test("R2 规则工作簿检查、拉取、建草稿与 ID 回写分别授权", (
     "feishu.workbook.read",
     "feishu.workbook.pull",
     "ruleset.draft.create",
+    "ruleset.publish",
   ]);
   assert.equal(actions.inspect_feishu_workbook.enabled, true);
   assert.equal(actions.pull_feishu_workbook.enabled, true);
   assert.equal(actions.create_ruleset_draft.enabled, true);
+  assert.equal(actions.publish_ruleset.enabled, true);
   assert.equal(actions.write_feishu_identity.enabled, false);
+  assert.equal(buildActionAvailabilityMap(["ruleset.draft.create"]).publish_ruleset.enabled, false);
   assert.deepEqual(actions.write_feishu_identity.requiredCapabilities, ["feishu.identity.write"]);
   assert.equal(actions.save_workspace.enabled, false);
   assert.equal(buildActionAvailabilityMap(["workspace.save"]).save_workspace.enabled, true);

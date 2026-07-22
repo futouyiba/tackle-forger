@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { hydrateV3Seed } from "@/lib/v3-seed";
+import { projectionPatchViewFromLedger } from "@/lib/patch-ledger";
 import type {
   ConfigurationSnapshot,
   ProjectionPatchRuleSource,
@@ -91,7 +92,7 @@ function orderedPatches(state: WorkspaceState, sku: SkuDrawer | undefined, model
   const series = state.seriesDefinitions.find((item) => item.id === sku.seriesId);
   const ids = new Set([...(series?.patchIds ?? []), ...sku.patchIds, ...(model?.patchIds ?? [])]);
   const scopeOrder = { series: 0, sku: 1, model: 2 };
-  return state.projectionPatches
+  return projectionPatchViewFromLedger(state.patchLedger)
     .filter((patch) => ids.has(patch.id))
     .sort((left, right) => scopeOrder[left.scope] - scopeOrder[right.scope] || left.order - right.order || left.id.localeCompare(right.id));
 }

@@ -1,5 +1,7 @@
 # Tackle Forger 需求集中交接（2026-07-21）
 
+> 最后对齐v3：2026-07-22
+
 ## 1. 文档定位
 
 本文把本轮讨论中已确认、且已合入v3权威规范的需求集中交给开发Agent，避免从聊天记录或视觉稿猜测语义。
@@ -57,6 +59,9 @@
 - 飞书`Patch台账`是人工可见镜像和审计副本，不是通用规则表或唯一运行时来源；按`patchId + patchRevision`同步，一条属性操作一行，前三个机器字段为`scopeType`、`layerType`、`subjectEntityId`。
 - 通用中间层Patch及多个个体Patch呈现的稳定模式，可经汇总分析、人工归纳和影响预览转为 `RuleSourceChangeDraft`，确认后回写对应通用规则页；一期不接飞书审批。
 - Series、SKU、Model个案Patch不得未经归纳自动反推通用规则；新RuleSet发布后再判断`ABSORBED`、`PARTIALLY_ABSORBED`、继续有效或需要rebase。
+- Patch业务状态与飞书镜像同步状态必须分开；一条操作具有稳定`operationId`和`operationIndex`，明细幂等键为`patchId + patchRevision + operationId`。完整Patch revision是审核、重放、rebase、吸收和Snapshot引用的事务边界，部分镜像成功不等于整组同步成功。
+- 飞书镜像行被删除、清空、隐藏或移动不得删除本地Patch；缺失产生`PATCH_MIRROR_ROW_MISSING`并可补写。对象缺失时进入`ORPHANED`，不得按名称重绑。
+- `PatchLedger`使用版本化schema和幂等顺序迁移；Snapshot冻结有序Patch revision及operationId集合和PatchSetHash。
 
 ## 5. 校验、兼容性、五维图与AI
 

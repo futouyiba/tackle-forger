@@ -173,6 +173,7 @@ test("系列按品质形成甘特轨道，并自动拆分重量与拉力跨度",
       fishMaxKg: 20,
       tensionMinKgf: 2,
       tensionMaxKgf: 10,
+      targetPullsKgf: [2, 3.8, 10],
       affixIds: affixes.map((item) => item.id),
       notes: "",
       publishedAt: now,
@@ -215,6 +216,7 @@ test("系列按品质形成甘特轨道，并自动拆分重量与拉力跨度",
   assert.equal(wide.segments.at(-1)?.weightMaxKg, 20);
   assert.equal(wide.segments[0].tensionMinKgf, 2);
   assert.equal(wide.segments.at(-1)?.tensionMaxKgf, 10);
+  assert.deepEqual(wide.segments.map((segment) => segment.targetPullsKgf), Array.from({ length: wide.segments.length }, () => [2, 3.8, 10]));
 
   const directSegments = buildSeriesSegments(wide.entry, layout.levels);
   assert.deepEqual(directSegments, wide.segments);

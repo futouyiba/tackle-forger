@@ -1,4 +1,7 @@
 {
+  "status": "LEGACY_COMPATIBILITY_ONLY",
+  "canonicalReplacement": "ConfigEnvironmentProfile + browser LocalExportTargetBinding",
+  "warning": "Not a phase-1 deployment template. Do not enable without an explicit v3 design decision.",
   "version": 1,
   "capabilities": [
     "config.export.preview",

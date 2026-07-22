@@ -14,10 +14,11 @@ export type CapabilityCode =
   | "model.read" | "model.edit" | "model.review" | "model.publish"
   | "candidate.generate" | "candidate.materialize" | "candidate.override_selection" | "candidate.select" | "candidate.dismiss"
   | "model.patch.create" | "model.patch.review" | "patch.rebase"
+  | "patch.create" | "patch.review" | "patch.mirror.write" | "patch.mirror.pull" | "patch.absorption.review" | "rules.proposal.create"
   | "snapshot.read" | "snapshot.export"
   | "ai.evaluate" | "ai.patch_draft.create" | "ai.feishu_proposal_draft.create"
   | "feishu.proposal.submit" | "feishu.proposal.review" | "feishu.proposal.apply"
-  | "feishu.workbook.read" | "feishu.workbook.pull" | "feishu.identity.write" | "ruleset.draft.create"
+  | "feishu.workbook.read" | "feishu.workbook.pull" | "feishu.identity.write" | "ruleset.draft.create" | "ruleset.publish"
   | "data_source.resolve" | "data_source.preview" | "data_source.publish"
   | "data_source.writeback.preview" | "data_source.writeback.commit"
   | "excel.import" | "revision.read"
@@ -25,14 +26,14 @@ export type CapabilityCode =
   | "rules.five_axis.publish" | "workspace.policy.manage" | "workspace.save";
 
 export type ActionCode =
-  | "open_series" | "open_sku" | "preview_model"
+  | "open_series" | "create_series" | "open_sku" | "preview_model"
   | "edit" | "review" | "publish" | "generate_candidates" | "materialize_candidates"
   | "select_candidate" | "dismiss_candidate_run"
   | "create_patch" | "review_patch" | "open_rebase"
   | "view_snapshot" | "export_snapshot"
   | "run_ai_assessment" | "create_ai_patch_draft" | "create_ai_feishu_draft"
   | "submit_feishu_proposal" | "review_feishu_proposal" | "apply_feishu_proposal"
-  | "inspect_feishu_workbook" | "pull_feishu_workbook" | "create_ruleset_draft" | "write_feishu_identity"
+  | "inspect_feishu_workbook" | "pull_feishu_workbook" | "create_ruleset_draft" | "publish_ruleset" | "write_feishu_identity"
   | "resolve_data_source" | "preview_data_source" | "publish_data_source"
   | "preview_data_source_writeback" | "commit_data_source_writeback"
   | "import_excel" | "view_revisions"
@@ -40,12 +41,12 @@ export type ActionCode =
   | "publish_five_axis_definition" | "manage_workspace_policy" | "save_workspace";
 
 export const ACTION_CODES: ActionCode[] = [
-  "open_series", "open_sku", "preview_model", "edit", "review", "publish",
+  "open_series", "create_series", "open_sku", "preview_model", "edit", "review", "publish",
   "generate_candidates", "materialize_candidates", "select_candidate", "dismiss_candidate_run",
   "create_patch", "review_patch", "open_rebase", "view_snapshot", "export_snapshot",
   "run_ai_assessment", "create_ai_patch_draft", "create_ai_feishu_draft",
   "submit_feishu_proposal", "review_feishu_proposal", "apply_feishu_proposal",
-  "inspect_feishu_workbook", "pull_feishu_workbook", "create_ruleset_draft", "write_feishu_identity",
+  "inspect_feishu_workbook", "pull_feishu_workbook", "create_ruleset_draft", "publish_ruleset", "write_feishu_identity",
   "resolve_data_source", "preview_data_source", "publish_data_source",
   "preview_data_source_writeback", "commit_data_source_writeback", "import_excel", "view_revisions",
   "preview_config_export", "commit_config_export", "publish_five_axis_definition",
@@ -271,6 +272,7 @@ export type ActionAvailabilityMap = Record<ActionCode, ActionAvailability>;
 
 const ACTION_CAPABILITIES: Partial<Record<ActionCode, CapabilityCode[]>> = {
   open_series: ["series.read"],
+  create_series: ["series.edit"],
   open_sku: ["sku.read"],
   preview_model: ["model.read"],
   edit: ["model.edit"],
@@ -294,6 +296,7 @@ const ACTION_CAPABILITIES: Partial<Record<ActionCode, CapabilityCode[]>> = {
   inspect_feishu_workbook: ["feishu.workbook.read"],
   pull_feishu_workbook: ["feishu.workbook.pull"],
   create_ruleset_draft: ["ruleset.draft.create"],
+  publish_ruleset: ["ruleset.publish"],
   write_feishu_identity: ["feishu.identity.write"],
   resolve_data_source: ["data_source.resolve"],
   preview_data_source: ["data_source.preview"],

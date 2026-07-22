@@ -221,6 +221,9 @@ export function ensureWorkflowFields(input: WorkspaceState): WorkspaceState {
       Number.isFinite(entry.tensionMaxKgf) && entry.tensionMaxKgf > tensionMinKgf
         ? entry.tensionMaxKgf
         : Math.max(fallbackTensionMax, tensionMinKgf + 1);
+    const targetPullsKgf = [...new Set(Array.isArray(entry.targetPullsKgf) ? entry.targetPullsKgf : [tensionMinKgf, tensionMaxKgf])]
+      .filter((value) => Number.isFinite(value) && value > 0)
+      .sort((left, right) => left - right);
 
     return {
       ...entry,
@@ -229,6 +232,7 @@ export function ensureWorkflowFields(input: WorkspaceState): WorkspaceState {
       fishingMethod: entry.fishingMethod?.trim() || "路亚",
       tensionMinKgf,
       tensionMaxKgf,
+      targetPullsKgf,
       affixIds: Array.isArray(entry.affixIds) ? entry.affixIds : [],
     };
   });

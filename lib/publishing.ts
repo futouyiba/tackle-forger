@@ -1,5 +1,6 @@
 import { deterministicHash } from "./rule-kernel";
 import { previewPatchRebase } from "./patch-engine";
+import { orderedPatchReferences } from "./patch-ledger";
 import type {
   AffinityScoreResult,
   AffixQualityEvaluation,
@@ -10,6 +11,7 @@ import type {
   ModelComponentSelection,
   ModelFiveAxisPreview,
   PatchRebaseDifference,
+  PatchRevisionRecord,
   ProjectionPatchRuleSource,
   PurchasableModel,
   RuleChangeProposal,
@@ -39,6 +41,7 @@ export interface PublishModelInput {
   finalPanelValues: Record<string, number | string>;
   componentSelections: ModelComponentSelection[];
   patches: ProjectionPatchRuleSource[];
+  patchRevisions?: PatchRevisionRecord[];
   attributeAffixIds: string[];
   passiveAffixIds: string[];
   technologyIds: string[];
@@ -139,9 +142,11 @@ export function publishConfigurationSnapshot(
     throw new Error("五轴预览与待发布 Model 不一致。");
   }
 
-  const patchSetHash = deterministicHash(
+  const frozenPatches = input.patchRevisions?.length ? orderedPatchReferences(input.patchRevisions) : undefined;
+  const legacyPatchSetHash = deterministicHash(
     [...input.patches].sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
   );
+  const patchSetHash = frozenPatches?.patchSetHash ?? legacyPatchSetHash;
   const snapshotWithoutHash: Omit<ConfigurationSnapshot, "contentHash"> = {
     id:
       input.snapshotId ??
@@ -155,6 +160,7 @@ export function publishConfigurationSnapshot(
     projectionId: input.projection.id,
     reductionStackingMode: input.projection.reductionStackingMode,
     patchSetHash,
+    ...(frozenPatches ? { patchReferences: frozenPatches.references } : {}),
     finalPanelValues: structuredClone(input.finalPanelValues),
     componentSelections: structuredClone(input.componentSelections),
     technologyIds: structuredClone(input.technologyIds),
@@ -209,6 +215,7 @@ export interface CreateUpgradeCandidateInput {
   proposedProjection: DerivedProjection;
   proposedValues: Record<string, number | string>;
   patches: ProjectionPatchRuleSource[];
+  patchRevisions?: PatchRevisionRecord[];
   validationReport: ValidationIssue[];
   createdAt: string;
 }
@@ -275,6 +282,7 @@ export function createRuleChangeProposal(input: {
   title: string;
   description: string;
   patches: ProjectionPatchRuleSource[];
+  patchRevisions?: PatchRevisionRecord[];
   targetRuleSetVersion: string;
   impactEntityIds: string[];
   expectedChanges: PatchRebaseDifference[];

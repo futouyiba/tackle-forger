@@ -29,7 +29,7 @@ interface RuleWorkbookWorkbenchProps {
   notify: (message: string) => void;
 }
 
-type ActionState = "" | "inspect" | "pull" | "draft";
+type ActionState = "" | "inspect" | "pull" | "draft" | "publish";
 
 function dateTime(value?: string) {
   if (!value) return "尚未读取";
@@ -40,6 +40,7 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
   const [inspection, setInspection] = useState<CanonicalRuleWorkbookInspection | null>(null);
   const [action, setAction] = useState<ActionState>("");
   const [error, setError] = useState("");
+  const [warningReason, setWarningReason] = useState("");
 
   const inspect = async () => {
     setAction("inspect");
@@ -84,10 +85,12 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
       : undefined;
   }, [inspection, props.state.feishuSourceRevisions]);
 
-  const ruleSetDraft = savedSource
-    ? props.state.ruleSetVersions.find((item) =>
-      item.status === "draft" && item.sourceRevisionIds.includes(savedSource.id))
+  const ruleSetForSource = savedSource
+    ? props.state.ruleSetVersions.find((item) => item.sourceRevisionIds.includes(savedSource.id))
     : undefined;
+  const ruleSetDraft = ruleSetForSource?.status === "draft" ? ruleSetForSource : undefined;
+  const publishedRuleSet = ruleSetForSource?.status === "published" ? ruleSetForSource : undefined;
+  const sourceWarnings = savedSource?.issues.filter((issue) => issue.severity === "warning") ?? [];
   const identityItems = inspection?.identityReport.items ?? [];
   const identified = identityItems.filter((item) => item.state === "ALREADY_IDENTIFIED").length;
   const pending = identityItems.filter((item) => item.state === "NEW_SOURCE_ROW" || item.requiresHumanConfirmation);
@@ -104,6 +107,7 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
   const inspectAvailability = props.actionAvailabilities.inspect_feishu_workbook;
   const pullAvailability = props.actionAvailabilities.pull_feishu_workbook;
   const draftAvailability = props.actionAvailabilities.create_ruleset_draft;
+  const publishAvailability = props.actionAvailabilities.publish_ruleset;
   const identityWriteAvailability = props.actionAvailabilities.write_feishu_identity;
 
   const pull = async () => {
@@ -161,6 +165,36 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
     }
   };
 
+  const publishRuleSet = async () => {
+    if (!ruleSetDraft) return;
+    if (sourceWarnings.length && !warningReason.trim()) {
+      props.notify("发布前必须填写工作表 warning 的确认理由。");
+      return;
+    }
+    setAction("publish");
+    try {
+      const response = await fetch("/api/feishu-workbook", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "publish_ruleset",
+          baseRevision: props.revision,
+          ruleSetDraftId: ruleSetDraft.id,
+          warningAcknowledgements: sourceWarnings.map((issue) => ({
+            issueKey: `${issue.code}:${issue.sheetId}`,
+            reason: warningReason.trim(),
+          })),
+        }),
+      });
+      const payload = (await response.json()) as { state?: WorkspaceState; revision?: number; error?: string };
+      if (!response.ok || !payload.state || !payload.revision) throw new Error(payload.error || "发布 RuleSetVersion 失败");
+      props.onWorkspaceApplied(payload.state, payload.revision, "RuleSetVersion 已显式发布；拉取与草稿创建均未代替本动作");
+    } catch (caught) {
+      props.notify(caught instanceof Error ? caught.message : "发布 RuleSetVersion 失败");
+    } finally {
+      setAction("");
+    }
+  };
   return (
     <section className="rule-workbook-stack" aria-label="飞书唯一规则工作簿">
       <div className="card rule-workbook-hero">
@@ -220,12 +254,36 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
           <button
             className="button button-default button-sm"
             type="button"
-            disabled={Boolean(action) || props.dirty || !savedSource || Boolean(ruleSetDraft) || !draftAvailability.enabled}
+            disabled={Boolean(action) || props.dirty || !savedSource || Boolean(ruleSetForSource) || !draftAvailability.enabled}
             title={draftAvailability.disabledReasonText}
             onClick={() => void createDraft()}
           >
             {action === "draft" ? <LoaderCircle className="spin" size={14} /> : <FileSpreadsheet size={14} />}
-            {ruleSetDraft ? "草稿已创建" : "创建规则草稿"}
+            {publishedRuleSet ? "已发布" : ruleSetDraft ? "草稿已创建" : "创建规则草稿"}
+          </button>
+        </div>
+        <ArrowRight size={18} />
+        <div className="card">
+          <span className="rule-step">04 · 人工关卡</span>
+          <strong>发布 RuleSetVersion</strong>
+          <small>独立校验并发布；不会同时发布 PricingPolicy，也不会改写历史 Snapshot。</small>
+          {sourceWarnings.length && ruleSetDraft ? (
+            <input
+              value={warningReason}
+              onChange={(event) => setWarningReason(event.target.value)}
+              placeholder={`确认 ${sourceWarnings.length} 项 warning 的理由`}
+              aria-label="RuleSet warning 确认理由"
+            />
+          ) : null}
+          <button
+            className="button button-primary button-sm"
+            type="button"
+            disabled={Boolean(action) || props.dirty || !ruleSetDraft || !publishAvailability.enabled || Boolean(sourceWarnings.length && !warningReason.trim())}
+            title={publishAvailability.disabledReasonText}
+            onClick={() => void publishRuleSet()}
+          >
+            {action === "publish" ? <LoaderCircle className="spin" size={14} /> : <ShieldCheck size={14} />}
+            {publishedRuleSet ? "已发布" : "显式发布"}
           </button>
         </div>
       </div>

@@ -1,7 +1,8 @@
 # Tackle Forger 产品与领域开发规范 v3
 
 > 状态：**唯一权威规范 / Canonical**  
-> 日期：2026-07-21  
+>首次定稿：2026-07-21  
+> 最后修订：2026-07-22  
 > 适用对象：产品设计、领域建模、前后端开发、数据迁移、测试与代码审查  
 > 源数据参考：《淡水路亚杆轮线装备设计.xlsx》
 
@@ -759,6 +760,34 @@ ConfigurationSnapshot至少冻结：
 同步权限必须区分Patch创建、Patch审核、Patch台账写入、Patch台账拉取、规则提案创建、通用规则写回和RuleSet发布。飞书Patch台账默认只开放人工备注、复核意见和“建议提升为共享规则”等协作字段；ID、基线、before/after、Snapshot引用等审计字段由工具控制。同步失败保留本地权威记录、幂等键和远端回读结果，可安全重试。
 
 验收至少覆盖：重新生成后已批准Patch被重放；对象改名后仍按ID关联；基线变化进入rebase而非消失；多属性Patch按同一patchId形成多行；重复同步不重复追加；飞书排序或改名不改变关联；Snapshot引用的Patch不能原地改写；个体Patch未经人工归纳不能写入通用规则；新规则只吸收完全覆盖的Patch；飞书同步失败不影响本地Patch可恢复性。
+### 14.2 Patch状态、操作顺序、镜像同步与迁移契约
+
+Patch业务生命周期与飞书镜像同步状态必须正交保存，禁止用一个`status`混合表达：
+
+```ts
+type PatchState = "DRAFT" | "PENDING_REVIEW" | "APPROVED" | "ACTIVE"
+  | "REBASE_REQUIRED" | "ABSORBED" | "PARTIALLY_ABSORBED"
+  | "WITHDRAWN" | "SUPERSEDED";
+type PatchMirrorSyncState = "NOT_SYNCED" | "PENDING" | "WRITING" | "SYNCED"
+  | "REMOTE_CHANGED" | "CONFLICT" | "WRITE_FAILED";
+
+interface PatchOperationRecord {
+  patchId: string; patchRevision: number;
+  operationId: string; operationIndex: number;
+  parameterKey: string; operation: "set" | "add" | "multiply" | "clear";
+  operand: unknown; before: unknown; after: unknown;
+}
+```
+
+`operationId`在Patch内稳定且不可复用，飞书镜像明细的幂等键为`patchId + patchRevision + operationId`。`operationIndex`是确定性执行顺序，不得使用数据库自然顺序、飞书行号或当前排序；同一参数存在多个操作时也必须按它执行。Patch revision是组级事务边界：审核、批准、撤回、rebase、重放、吸收和Snapshot引用均针对完整revision；只有全部必需操作有效时才可重放。镜像部分写入成功不得把整组标为`SYNCED`。
+
+飞书删除、清空、隐藏、移动或过滤镜像行不构成删除Patch的命令，不得级联改变本地账本、业务状态或Snapshot。缺失行产生`PATCH_MIRROR_ROW_MISSING`，允许按幂等键补写。飞书中未知`patchId`、重复明细键、受控审计字段被改写或明细组不完整时必须隔离问题行并产生`ValidationIssue(source="patch")`；不得按名称自动认领。协作字段中，备注和复核意见采用带作者、时间、revision的追加记录；“建议提升为共享规则”等状态字段使用expectedRevision，冲突进入`CONFLICT`并人工解决。
+
+`PatchLedger`必须有独立`schemaVersion`和顺序迁移。迁移保留未知字段和原始Payload，重复执行幂等；迁移前后至少校验Patch revision数量、操作顺序、PatchSetHash、代表性最终值和Trace语义。无法无损迁移的记录保留原值并进入人工复核，不得删除。对象归档、缺失、合并或迁移后无法按稳定ID解析的Patch进入`ORPHANED`注意状态，保留原`subjectEntityId`和历史引用，禁止按名称重新绑定。
+
+ConfigurationSnapshot必须冻结有序Patch引用集合（`patchId + patchRevision + ordered operationIds`）及`PatchSetHash`。被引用revision及其操作顺序不可原地修改；镜像行变化、Patch吸收、rebase和数据库迁移均不得改变历史Snapshot。同步命令和补偿重试记录独立`idempotencyKey`、expected remote revision、逐操作结果和回读证据；超时先回读，部分失败可安全续传但不可产生半组生效状态。
+
+新增验收：Given同一参数含set/add/multiply，When多次重放，Then严格按operationIndex得到同一结果；Given三行镜像只写成两行，When同步结束，Then组状态不是SYNCED且Patch仍可从本地完整重放；Given人工删除镜像行，When显式拉取，Then本地Patch和Snapshot不变并产生PATCH_MIRROR_ROW_MISSING；Given旧schema迁移两次，When比较结果，Then无重复revision且PatchSetHash、最终值和Trace语义一致；Given对象缺失且存在同名新对象，When加载，ThenPatch进入ORPHANED而不重绑；GivenSnapshot引用revision 1，When产生revision 2或改变镜像，Then旧Snapshot的有序引用与hash不变。
 
 ## 15. 工作台信息架构
 
@@ -891,6 +920,19 @@ ConfigurationSnapshot至少冻结：
 - [ ] 未确认公式通过配置表达，没有散落硬编码。
 
 ## 20. 开放决策
+
+本节是唯一开放决策登记表。“开放”不表示实现可以留空。每个未决项都必须有可确定执行的未决行为：使用明确的草稿/种子配置、显示状态和Issue，并在指定关口fail-closed；不得使用隐藏默认值。
+
+| ID | 状态 | 当前可执行边界 | 未决时的必须行为 | 关闭证据/决策责任 |
+| --- | --- | --- | --- | --- |
+| OPEN-001 降低型词条叠加 | `OPEN_CONFIGURED_SEED` | 两种算法均必须实现、版本化并测试 | 工作区可用`diminishing_division`种子试算；没有已发布`ReductionStackingPolicyVersion`时禁止新Model发布 | 规则负责人确认算法，发布策略版本并通过两模式回归 |
+| OPEN-002 Performance后续扩展 | `DEFERRED_NON_BLOCKING` | 一期仅支持显式`PerformanceProfile`，不引入`performanceIntensity` | 不生成强度、曲线或线性倍率；不阻断一期其他功能 | 产品/规则负责人提供新策略语义、源数据和迁移方案 |
+| OPEN-003 扩展部位启用 | `DEFERRED_UI_DISABLED` | 一期主流程仅启用竿、轮、线 | 钩、漂、真饵和拟饵可在注册表保留，但UI、生成、发布和导出必须关闭 | 产品负责人确认启用批次，并提供参数、兼容、映射和验收覆盖 |
+| OPEN-004 Patch属性偏移阈值 | `BLOCKED_ON_POLICY` | 计算和展示精确偏移，阈值从版本化策略读取 | 缺策略时产生`PATCH_OFFSET_POLICY_MISSING`；允许草稿试算，阻止依赖该阈值的批准和发布 | 平衡/规则负责人提供Series、SKU、Model各级warning/review/block阈值及边界归属 |
+| OPEN-005 五维图定义 | `OPEN_CONFIGURED_SEED` | 可使用版本化种子定义进行预览，不得写死在UI/数据库 | 种子结果明示“草稿定义”；缺轴不补0，未发布定义不进Snapshot | 产品/数值负责人确认轴、聚合、缺值、系列基准和比较上限 |
+| OPEN-006 AI供应方与数据出网 | `BLOCKED_BEFORE_CONNECTOR` | AI交互壳、证据、权限和审计可实现 | 不得连接外部服务或发送真实数据；仅允许本地假数据/契约测试 | 安全、产品和数据负责人联合确认provider、字段白名单、保留周期和出网边界 |
+
+状态只能在决策证据进入权威规范且对应策略版本可校验后改为`RESOLVED`。代码、原型、测试种子或某次人工输入都不能单独关闭决策。
 
 ### OPEN-001：降低型词条叠加
 

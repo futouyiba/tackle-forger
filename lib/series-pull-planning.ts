@@ -10,7 +10,7 @@ export interface SeriesPullPlanningProposal {
   proposalId: string;
   seriesId: string;
   seriesRevision: number;
-  planningPullRange: { minKgf: number; maxKgf: number };
+  planningPullRange?: { minKgf: number; maxKgf: number };
   suggestedPullsKgf: number[];
   existingPullsKgf: number[];
   source: "explicit_user_input" | "standard_load_grades";
@@ -37,14 +37,15 @@ function assertRange(range: { minKgf: number; maxKgf: number }) {
 
 export function createSeriesPullPlanningProposal(input: {
   series: SeriesDefinition;
-  planningPullRange: { minKgf: number; maxKgf: number };
+  planningPullRange?: { minKgf: number; maxKgf: number };
   candidatePullsKgf: number[];
   source: SeriesPullPlanningProposal["source"];
   createdAt: string;
 }): SeriesPullPlanningProposal {
-  assertRange(input.planningPullRange);
+  if (input.planningPullRange) assertRange(input.planningPullRange);
   const suggestedPullsKgf = normalizePulls(input.candidatePullsKgf)
-    .filter((value) => value >= input.planningPullRange.minKgf && value <= input.planningPullRange.maxKgf);
+    .filter((value) => !input.planningPullRange
+      || (value >= input.planningPullRange.minKgf && value <= input.planningPullRange.maxKgf));
   if (!suggestedPullsKgf.length) {
     throw new Error("规划范围内没有可供确认的离散目标拉力规格。");
   }
@@ -136,7 +137,7 @@ export function materializeConfirmedPullSpecifications(input: {
     series: {
       ...structuredClone(input.series),
       revision: input.series.revision + 1,
-      planningPullRange: structuredClone(input.proposal.planningPullRange),
+      ...(input.proposal.planningPullRange ? { planningPullRange: structuredClone(input.proposal.planningPullRange) } : {}),
       targetPullSpecifications: ordered,
       targetWeightsKg: ordered.map((entry) => entry.targetPullKgf),
       skuIds: ordered.map((entry) => entry.skuId),

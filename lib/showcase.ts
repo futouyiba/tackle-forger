@@ -22,6 +22,7 @@ export interface ShowcaseSeriesSegment {
   weightMaxKg: number;
   tensionMinKgf: number;
   tensionMaxKgf: number;
+  targetPullsKgf: number[];
 }
 
 export interface ShowcasePlacement {
@@ -80,17 +81,22 @@ export function templateTensionRange(template?: WeightTemplate): { min: number; 
   return { min: Math.min(...tensions), max: Math.max(...tensions) };
 }
 
-function tensionAtWeight(entry: SeriesShowcaseEntry, weightKg: number): number {
-  const weightSpan = entry.fishMaxKg - entry.fishMinKg;
-  if (weightSpan <= 0) return entry.tensionMinKgf;
-  const ratio = Math.max(0, Math.min(1, (weightKg - entry.fishMinKg) / weightSpan));
-  return entry.tensionMinKgf + (entry.tensionMaxKgf - entry.tensionMinKgf) * ratio;
+export function showcaseTargetPulls(entry: SeriesShowcaseEntry): number[] {
+  const explicit = [...new Set(entry.targetPullsKgf ?? [])]
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .sort((left, right) => left - right);
+  // 历史记录只有上下限时，只保留两个端点，绝不推导中间规格。
+  if (explicit.length) return explicit;
+  return [...new Set([entry.tensionMinKgf, entry.tensionMaxKgf])]
+    .filter((value) => Number.isFinite(value) && value > 0)
+    .sort((left, right) => left - right);
 }
 
 export function buildSeriesSegments(
   entry: SeriesShowcaseEntry,
   levels: WeightTemplate[],
 ): ShowcaseSeriesSegment[] {
+  const targetPullsKgf = showcaseTargetPulls(entry);
   return levels.flatMap((level) => {
     const weightMinKg = Math.max(entry.fishMinKg, level.fishMinKg);
     const weightMaxKg = Math.min(entry.fishMaxKg, level.fishMaxKg);
@@ -101,8 +107,9 @@ export function buildSeriesSegments(
       tier: level.tier,
       weightMinKg,
       weightMaxKg,
-      tensionMinKgf: tensionAtWeight(entry, weightMinKg),
-      tensionMaxKgf: tensionAtWeight(entry, weightMaxKg),
+      tensionMinKgf: targetPullsKgf[0] ?? entry.tensionMinKgf,
+      tensionMaxKgf: targetPullsKgf.at(-1) ?? entry.tensionMaxKgf,
+      targetPullsKgf,
     }];
   });
 }

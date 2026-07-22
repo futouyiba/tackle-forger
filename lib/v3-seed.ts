@@ -9,7 +9,11 @@ import {
   createFiveAxisVertexSet,
 } from "./five-axis";
 import { applyLayeredPatches } from "./patch-engine";
-import { matchNearestProjection } from "./projection-matcher";
+import { importLegacyPatchesToLedger } from "./patch-ledger";
+import {
+  matchNearestProjection,
+  structuralPullFromProjection,
+} from "./projection-matcher";
 import { validateSeriesInvariants } from "./product-model";
 import {
   createRuleChangeProposal,
@@ -318,9 +322,10 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
           (template) => template.id === projection.weightTemplateId,
         ) as (typeof templates)[number],
         itemPartId: "part:rod",
-        derivedPullKg: (templates.find(
-          (template) => template.id === projection.weightTemplateId,
-        ) as (typeof templates)[number]).nominalFishKg,
+        derivedPullKg: structuralPullFromProjection(projection, "part:rod") ??
+          (templates.find(
+            (template) => template.id === projection.weightTemplateId,
+          ) as (typeof templates)[number]).nominalFishKg,
         compatibility: evaluateHardCompatibility(context, compatibilityRules),
         affinity: evaluateAffinity(
           context,
@@ -375,6 +380,7 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
     concept: "中轻量障碍区强攻，保持拉力、耐力与可控代价的清晰方向。",
     fishingMethodId: method.id,
     typeId: type.id,
+    itemPartId: "part:rod",
     qualityId: "quality_a_purple",
     coreFunctionId: fn.id,
     functionIntensityPolicy: { mode: "fixed", intensity: 2 },
@@ -495,6 +501,7 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
     ),
   ];
 
+  const seedPatchLedger = importLegacyPatchesToLedger(state.patchLedger, patches);
   const directAttributeIds = ["v3:affix-light"];
   const passiveIds = [
     "v3:affix-impact",
@@ -549,7 +556,8 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
       fishWeightGradeId: skuId === sku15Id ? "fish-weight-grade:1.5kg" : "fish-weight-grade:1.8kg",
       componentSelections: componentSelections(patched.value, id.split(":").pop() ?? id),
       technologyIds,
-      attributeAffixIds: directAttributeIds,
+
+    attributeAffixIds: directAttributeIds,
       passiveAffixIds: passiveIds,
       patchIds: extraPatchIds,
       price: skuId === sku15Id ? 1280 : 1380,
@@ -701,6 +709,7 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
   const publishIssues: ValidationIssue[] = seriesIssues.filter(
     (entry) => entry.level !== "error",
   );
+  const snapshotPatchIds = new Set([...series.patchIds, ...sku15.patchIds, ...publishTarget.model.patchIds]);
   const snapshot = publishConfigurationSnapshot({
     publicationMode: "historical_import",
     model: publishTarget.model,
@@ -713,6 +722,7 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
       (patch) =>
         series.patchIds.includes(patch.id) || sku15.patchIds.includes(patch.id),
     ),
+    patchRevisions: seedPatchLedger.revisions.filter((revision) => snapshotPatchIds.has(revision.patchId)),
     attributeAffixIds: directAttributeIds,
     passiveAffixIds: passiveIds,
     technologyIds,
@@ -730,6 +740,12 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
     publishedBy: "seed-designer",
     publishedAt: CREATED_AT,
   });
+  const frozenPatchLedger = {
+    ...seedPatchLedger,
+    revisions: seedPatchLedger.revisions.map((revision) => snapshotPatchIds.has(revision.patchId)
+      ? { ...revision, snapshotRefs: [...new Set([...revision.snapshotRefs, snapshot.id])] }
+      : revision),
+  };
   const publishedModels = models.map((model) =>
     model.id === publishTarget.model.id
       ? {
@@ -798,6 +814,7 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
     derivedProjections: [...projections, proposedProjection],
     projectionMatches: [match15, match18],
     projectionPatches: [...state.projectionPatches, ...patches],
+    patchLedger: frozenPatchLedger,
     collections: [
       {
         id: "collection:qinglu",

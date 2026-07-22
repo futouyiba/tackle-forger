@@ -3,6 +3,7 @@
 > 状态：可进入开发  
 > 面向对象：接手实现、重构、测试或评审的 Codex Agent  
 > 权威规范：`docs/tackle-forger-development-spec-v3.md`  
+> 最后对齐v3：2026-07-22  
 > 文档索引：`docs/README.md`
 
 ## 1. 任务目标
@@ -82,7 +83,7 @@ diminishing_division:
 - 所有保存过的Patch进入工具内权威`PatchLedger`，并幂等同步到飞书单一`Patch台账`页；该页是协作镜像而非唯一运行时来源。DerivationLayerPatch或多个个体Patch的稳定共性可经人工归纳生成RuleSourceChangeDraft；单个个案不得未经归纳提升为通用规则。写回后必须回读、显式拉取并发布RuleSetVersion。
 - 先确定Series的Quality，再选择具体词条；价值分校验已选Quality并作为自动定价输入，不得反向自动改品质，Quality本身不修改面板。
 - 飞书唯一规则工作簿已指定为[《钓具设计工作簿》](https://pisn3u3ony2.feishu.cn/wiki/YsEKwSUJ5i86HCkZKBVcNMw7nOh?from=from_copylink&sheet=9nE3Rx)。链接锚点虽是`06_系列/9nE3Rx`，同步对象是整个工作簿；2026-07-21首次接入基线为revision `2302`，本轮源表整改后的回读revision为`2352`。两者都不得硬编码成最新版本。
-- revision `2352`已经为01至06规则源的现有行回写稳定机器ID：64个重量模板、14个类型、19个功能定位、19个性能定位、36个词条和24个系列原型。接入器必须保留已有ID；以后缺ID新行进入`NEW_SOURCE_ROW`，经人工确认后分配并回写。长期同步不得按名称、`名称|级别`、行号或显示顺序关联。
+- revision `2352`的历史审计确认了176个稳定机器ID：64个重量模板、14个类型、19个功能定位、19个性能定位、36个词条和24个系列原型。这仅是历史迁移基线，不是当前工作表拓扑。revision `2869`已调整为`04_词条/zrVOxd`、`05_技术/RdZv0J`，不再有独立性能定位页。接入器必须保留历史ID且每次显式拉取后重新审计当前机器区域；缺ID新行进入`NEW_SOURCE_ROW`，经人工确认后分配并回写。长期同步不得按名称、`名称|级别`、行号或显示顺序关联。
 - 工作簿`09_甘特图`是开发计划，不是“钓具系列甘特图”；`11_组合SKU`、`12_打包竿组`及`14_Rods`至`17_Item`先按历史样例/暂存输出处理，不能反向覆盖领域对象或冻结Snapshot。飞书工作簿不替代本地tackle/item/store导出。
 
 ## 5. 全局完成标准
@@ -332,6 +333,9 @@ Affinity = Σ(axisScore × axisWeight) ÷ Σ(axisWeight)
 - 单个系列、SKU、Model 的平衡调整保存在权威Patch账本并镜像到飞书Patch台账，但不得未经归纳直接写入通用规则页。
 - Patch台账按“一条属性操作一行”保存；同一Patch的多行共享patchId，前三个机器字段为scopeType、layerType、subjectEntityId。生成时从工具账本按稳定ID重放；基线变化必须进入rebase。
 - 工具应汇总Patch并识别跨对象稳定模式；只有人工归纳和影响预览通过后才能形成RuleSourceChangeDraft。新规则发布后再计算ABSORBED或PARTIALLY_ABSORBED，原Patch不得提前删除。
+- Patch业务状态与镜像同步状态使用两个正交字段；操作明细以`patchId + patchRevision + operationId`幂等，并按稳定`operationIndex`重放。完整Patch revision是组级事务边界，部分飞书行成功不能标记整组SYNCED或参与半组重放。
+- 飞书镜像删除不构成Patch删除，产生`PATCH_MIRROR_ROW_MISSING`并允许补写；未知ID、审计字段篡改和不完整组隔离为Patch ValidationIssue。对象缺失进入ORPHANED，禁止按名称重绑。
+- PatchLedger必须有schemaVersion、幂等顺序迁移和语义回归；Snapshot冻结有序Patch revision/operationId集合及PatchSetHash。
 - 回写前显示影响范围、规则版本、冲突和预计变化。
 - 写回记录与回读结果进入审计；写回后必须由用户显式拉取、校验并发布RuleSetVersion，规则才生效。
 - 读取工作簿时先按`sheet_id`校验关键页，再以显式revision生成`FeishuSourceRevision`；`?sheet=`仅是界面锚点。

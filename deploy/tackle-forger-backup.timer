@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Tackle Forger workspace backup
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=15m
+Persistent=true
+Unit=tackle-forger-backup.service
+
+[Install]
+WantedBy=timers.target

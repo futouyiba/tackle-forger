@@ -34,7 +34,7 @@ import { migrateLegacyProductIdentity } from "./legacy-product-migration";
 import { CANONICAL_FEISHU_WORKBOOK } from "./feishu-workbook";
 import { buildPatchRevision, emptyPatchLedger, migratePatchLedger } from "./patch-ledger";
 
-export const CURRENT_WORKSPACE_SCHEMA_VERSION = 13;
+export const CURRENT_WORKSPACE_SCHEMA_VERSION = 14;
 
 const DEFAULT_RULE_SETTINGS: WorkspaceRuleSettings = {
   reductionStackingMode: "diminishing_division",
@@ -634,6 +634,40 @@ function migrateV3ToV4(state: MutableWorkspace): MutableWorkspace {
 }
 
 
+function emptyRecipePartConstraint(recipe: SeriesRecipe): NonNullable<SeriesRecipe["partConstraints"]>["rod"] {
+  return {
+    templateIds: [...recipe.templateIds],
+    typeIds: [...recipe.structureIds],
+    materialIds: [],
+    requiredAffixIds: [...recipe.requiredAffixIds],
+    optionalAffixPoolIds: [...recipe.optionalAffixPoolIds],
+    notes: "由旧版扁平系列配方迁移；请按竿、轮、线复核类型与材质约束。",
+  };
+}
+
+function migrateV13ToV14(state: MutableWorkspace): MutableWorkspace {
+  const recipes = arrayOf<SeriesRecipe>(state.recipes).map((recipe) => {
+    if (recipe.partConstraints) return recipe;
+    return {
+      ...recipe,
+      partConstraints: {
+        rod: emptyRecipePartConstraint(recipe),
+        reel: emptyRecipePartConstraint(recipe),
+        line: emptyRecipePartConstraint(recipe),
+      },
+    };
+  });
+  return {
+    ...state,
+    schemaVersion: 14,
+    functionProfiles: arrayOf<FunctionProfile>(state.functionProfiles).map((profile) => ({
+      ...profile,
+      intensityRules: profile.intensityRules.map((rule) => ({ ...rule })),
+    })),
+    recipes,
+  };
+}
+
 const migrations: Record<number, (state: MutableWorkspace) => MutableWorkspace> = {
   1: migrateV1ToV2,
   2: migrateV2ToV3,
@@ -647,6 +681,7 @@ const migrations: Record<number, (state: MutableWorkspace) => MutableWorkspace> 
   10: migrateV10ToV11,
   11: migrateV11ToV12,
   12: migrateV12ToV13,
+  13: migrateV13ToV14,
 };
 
 export function migrateWorkspaceState(input: unknown): WorkspaceState {

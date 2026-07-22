@@ -90,6 +90,14 @@ function ensureLocalWorkspaceDocument() {
   return localWorkspaceDocument;
 }
 
+function assertEphemeralStorageAllowed(action: "读取" | "保存" | "读取版本" | "存储导入文件") {
+  if (typeof process !== "undefined" && process.env.NODE_ENV === "production") {
+    throw new Error(
+      `生产环境未配置持久化存储，无法${action}工作区。请配置 WORKSPACE_DATABASE_PATH、Vercel Blob 或 D1/R2；禁止回退到进程内临时数据。`,
+    );
+  }
+}
+
 async function readBlobDocument(): Promise<LoadedBlobDocument | null> {
   const result = await get(WORKSPACE_BLOB_PATH, { access: "private" });
   if (!result || result.statusCode !== 200 || !result.stream) return null;
@@ -155,6 +163,7 @@ export async function loadWorkspaceState(): Promise<{
   const runtime = await getRuntimeStorage();
   const db = runtime.DB;
   if (!db) {
+    assertEphemeralStorageAllowed("读取");
     const document = ensureLocalWorkspaceDocument();
     return {
       state: ensureWorkflowFields(structuredClone(document.state)),
@@ -254,6 +263,7 @@ export async function saveWorkspaceState(input: {
   const runtime = await getRuntimeStorage();
   const db = runtime.DB;
   if (!db) {
+    assertEphemeralStorageAllowed("保存");
     const current = ensureLocalWorkspaceDocument();
     if (current.revision !== input.baseRevision) {
       return { revision: current.revision, conflict: true };
@@ -331,6 +341,7 @@ export async function listRevisions(): Promise<RevisionInfo[]> {
   const runtime = await getRuntimeStorage();
   const db = runtime.DB;
   if (!db) {
+    assertEphemeralStorageAllowed("读取版本");
     return ensureLocalWorkspaceDocument().revisions.map((entry) => ({
       revision: entry.revision,
       author: entry.author,
@@ -365,6 +376,7 @@ export async function loadRevision(revision: number): Promise<WorkspaceState | n
   const runtime = await getRuntimeStorage();
   const db = runtime.DB;
   if (!db) {
+    assertEphemeralStorageAllowed("读取版本");
     const entry = ensureLocalWorkspaceDocument().revisions.find((item) => item.revision === revision);
     return entry ? ensureWorkflowFields(structuredClone(entry.state)) : null;
   }
@@ -399,6 +411,7 @@ export async function saveImportedFile(file: File, author: string) {
   const runtime = await getRuntimeStorage();
   const bucket = runtime.FILES;
   const db = runtime.DB;
+  if (!bucket && !db) assertEphemeralStorageAllowed("存储导入文件");
   if (bucket) {
     await bucket.put(key, await file.arrayBuffer(), {
       httpMetadata: { contentType: file.type || "application/octet-stream" },

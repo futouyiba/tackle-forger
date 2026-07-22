@@ -127,8 +127,13 @@ export async function saveSqliteWorkspace(databasePath: string, input: {
     const savedState = ensureWorkflowFields(structuredClone(input.state));
     savedState.revisions = [info, ...(savedState.revisions ?? []).filter((entry) => entry.revision !== revision)].slice(0, 100);
     const json = JSON.stringify(savedState);
-    db.prepare("UPDATE workspace_state SET state_json = ?, revision = ?, updated_by = ?, updated_at = ? WHERE id = ? AND revision = ?")
+    const updated = db.prepare("UPDATE workspace_state SET state_json = ?, revision = ?, updated_by = ?, updated_at = ? WHERE id = ? AND revision = ?")
       .run(json, revision, input.author, createdAt, "main", input.baseRevision);
+    if (updated.changes !== 1) {
+      db.exec("ROLLBACK");
+      const latest = db.prepare("SELECT revision FROM workspace_state WHERE id = ?").get("main") as { revision: number } | undefined;
+      return { revision: latest?.revision ?? input.baseRevision, conflict: true as const };
+    }
     db.prepare("INSERT INTO workspace_revisions (revision, state_json, author, message, created_at) VALUES (?, ?, ?, ?, ?)")
       .run(revision, json, input.author, input.message, createdAt);
     db.exec("COMMIT");

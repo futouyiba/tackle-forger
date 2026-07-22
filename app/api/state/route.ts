@@ -3,6 +3,7 @@ import { requestUser } from "@/lib/auth";
 import { loadWorkspaceState, saveWorkspaceState } from "@/lib/storage";
 import type { WorkspaceState } from "@/lib/types";
 import { CURRENT_WORKSPACE_SCHEMA_VERSION } from "@/lib/migrations";
+import { findGovernedStateChanges, stableAuditActor } from "@/lib/api-command-boundaries";
 
 export const dynamic = "force-dynamic";
 
@@ -48,10 +49,29 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ error: "配置数据或版本号无效。" }, { status: 400 });
   }
 
+  const current = await loadWorkspaceState();
+  if (body.baseRevision !== current.revision) {
+    return NextResponse.json(
+      { error: "其他成员已保存新版本，请刷新后再合并。", revision: current.revision },
+      { status: 409 },
+    );
+  }
+  const governedChanges = findGovernedStateChanges(current.state, body.state);
+  if (governedChanges.length) {
+    return NextResponse.json(
+      {
+        error: "受治理的状态只能通过对应领域命令修改。",
+        code: "DOMAIN_COMMAND_REQUIRED",
+        governedChanges,
+      },
+      { status: 422 },
+    );
+  }
+
   const result = await saveWorkspaceState({
     state: body.state,
     baseRevision: body.baseRevision,
-    author: user.name || user.email,
+    author: stableAuditActor(user),
     message: body.message?.trim() || "保存配置修改",
   });
   if (result.conflict) {

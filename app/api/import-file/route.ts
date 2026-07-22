@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requestUser } from "@/lib/auth";
 import { saveImportedFile } from "@/lib/storage";
+import { stableAuditActor } from "@/lib/api-command-boundaries";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +28,6 @@ export async function POST(request: NextRequest) {
   if (file.size > 20 * 1024 * 1024) {
     return NextResponse.json({ error: "文件超过 20MB 限制。" }, { status: 413 });
   }
-  const result = await saveImportedFile(file, user.email);
+  const result = await saveImportedFile(file, stableAuditActor(user));
   return NextResponse.json(result);
 }

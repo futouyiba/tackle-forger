@@ -2210,7 +2210,7 @@ type PrimaryDisplayState = "HARD_CONFLICT" | "REBASE_REQUIRED" | "REVIEW_REQUIRE
 
 ### 24.13 R12：版本化策略与完成门槛
 
-仍保持开放、版本化但不固化最终值的策略包括`patchOffsetPolicy`、`FiveAxisViewDefinition`、`enabledItemPartPolicy`、`qualityValueRangePolicy`、`PricingPolicy`与未来Performance扩展策略。`aiRefreshPolicy`、`aiModelRecordPolicy`、`aiReviewPolicy`和`separationOfDutiesPolicy`已由第20.2节的`open009-2026-07-23-v1`关闭，但仍以策略版本保存，未来只能通过新决策和新版本改变。三个阶段均不接飞书审批，当前不在Tackle Forger内实行职责分离。Snapshot冻结语义不是配置项，改变它必须先改权威规范并获用户明确确认。
+`patchOffsetPolicy`的产品语义已经由OPEN-004完成决策：已发布`PatchOffsetPolicyVersion`必须固定表达`mode=FINAL_RANGE_WITH_MANDATORY_REVIEW`、`offsetThresholds=NONE`和`rangeEndpoints=INCLUSIVE`，不得重新引入独立偏移阈值；在可校验的策略版本发布并通过回归前，状态保持`DECIDED_PENDING_POLICY_VERSION`。仍保持开放、版本化但不固化最终值的策略包括`FiveAxisViewDefinition`、`enabledItemPartPolicy`、`qualityValueRangePolicy`、`PricingPolicy`与未来Performance扩展策略。`aiRefreshPolicy`、`aiModelRecordPolicy`、`aiReviewPolicy`和`separationOfDutiesPolicy`已由第20.2节的`open009-2026-07-23-v1`关闭，但仍以策略版本保存，未来只能通过新决策和新版本改变。三个阶段均不接飞书审批，当前不在Tackle Forger内实行职责分离。Snapshot冻结语义不是配置项，改变它必须先改权威规范并获用户明确确认。
 
 正常路径：使用已发布策略版本并记录。  
 边界：配置缺失报配置不完整，不用页面默认；历史可只读。  
@@ -2218,7 +2218,7 @@ type PrimaryDisplayState = "HARD_CONFLICT" | "REBASE_REQUIRED" | "REVIEW_REQUIRE
 恢复：回到有效策略或发布新版本，不回写历史快照。  
 权限：策略编辑、审核和发布仍是独立动作；第20.2节当前允许同一已登录用户连续执行。Agent不得永久固化仍未确认的其他OPEN项。
 
-验收：Given Patch阈值未确认，When 实现，Then 阈值来自版本化配置且测试多套策略，无永久数值。
+验收：Given OPEN-004已经完成决策但尚无可校验的已发布`PatchOffsetPolicyVersion`，When 实现或尝试批准与发布，Then 草稿只可按固定`FINAL_RANGE_WITH_MANDATORY_REVIEW`语义试算，批准与发布返回`PATCH_OFFSET_POLICY_MISSING`；When 策略版本已发布，Then 全部Patch进入人工复核，只按当前关口各离散对象的累计最终值和包含端点的已发布参数合法范围校验，并覆盖多离散重量、单Gate及逐环境×渠道Waiver、rebase和历史Snapshot冻结回归，不读取或测试任何独立偏移阈值。
 
 ### 24.14 完成标准
 

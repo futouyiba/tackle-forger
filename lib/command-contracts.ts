@@ -36,7 +36,7 @@ export interface CandidateEnumerationInput {
   affinity: AffinityScoreResult;
   invariantIssueCount: number;
   warningCount: number;
-  weightDistance: number;
+  pullDistance: number;
   recipeSortValues: Record<string, string | number>;
   rankReasons: string[];
 }
@@ -103,7 +103,7 @@ export async function generateModelCandidates(input: {
     return (
       left.warningCount - right.warningCount ||
       right.affinity.score - left.affinity.score ||
-      left.weightDistance - right.weightDistance ||
+      left.pullDistance - right.pullDistance ||
       left.candidateFingerprint.localeCompare(right.candidateFingerprint)
     );
   });
@@ -360,4 +360,3 @@ export function assertSnapshotMutationForbidden(action:
 ): never {
   throw new Error(`ConfigurationSnapshot 已冻结，禁止 ${action}；请创建新修订或 UpgradeCandidate。`);
 }
-

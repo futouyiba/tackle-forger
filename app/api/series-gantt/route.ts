@@ -62,7 +62,7 @@ export async function GET(request: NextRequest) {
     }
     const skus = current.state.skuDrawers
       .filter((sku) => sku.seriesId === seriesId && visibleSkuIds.has(sku.id))
-      .sort((left, right) => left.targetWeightKg - right.targetWeightKg || left.id.localeCompare(right.id));
+      .sort((left, right) => left.targetPullKg - right.targetPullKg || left.id.localeCompare(right.id));
     try {
       const page = paginateSeriesGanttChildren({
         items: skus,
@@ -163,7 +163,7 @@ export async function GET(request: NextRequest) {
       pageSize: page.pageSize,
     },
     facets: {
-      weights: [...new Set(visibleCatalog.flatMap((block) => block.skuNodes.map((node) => node.targetWeightKg)))].sort((left, right) => left - right),
+      weights: [...new Set(visibleCatalog.flatMap((block) => block.skuNodes.map((node) => node.targetPullKg)))].sort((left, right) => left - right),
       typeIds: [...new Set(visibleCatalog.map((block) => block.typeId))].sort(),
       issueCodes: [...new Set(visibleCatalog.flatMap((block) => block.aggregate.issueCodes))].sort(),
       ruleSetVersions: [...new Set(visibleCatalog.flatMap((block) => block.aggregate.ruleSetVersions))].sort(),

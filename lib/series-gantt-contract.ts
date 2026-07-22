@@ -17,7 +17,7 @@ export interface SeriesGanttQuery {
   issueCodes?: string[];
   issueSeverities?: Array<"INFO" | "WARNING" | "ERROR" | "BLOCKER">;
   hasUpgradeCandidate?: boolean;
-  exactTargetWeightKg?: number[];
+  exactTargetPullKg?: number[];
   minTargetPullKg?: number;
   maxTargetPullKg?: number;
   ruleSetVersions?: string[];
@@ -77,7 +77,7 @@ const ARRAY_KEYS: Array<keyof SeriesGanttQuery> = [
   "attentionStates",
   "issueCodes",
   "issueSeverities",
-  "exactTargetWeightKg",
+  "exactTargetPullKg",
   "ruleSetVersions",
 ];
 
@@ -107,8 +107,8 @@ export function seriesGanttQueryFromSearchParams(params: URLSearchParams): Serie
   for (const key of ARRAY_KEYS) {
     const values = params.getAll(String(key));
     if (!values.length) continue;
-    if (key === "exactTargetWeightKg") {
-      query.exactTargetWeightKg = values
+    if (key === "exactTargetPullKg") {
+      query.exactTargetPullKg = values
         .map(Number)
         .filter((value) => Number.isFinite(value));
     } else {

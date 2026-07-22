@@ -16,7 +16,7 @@ The UI and domain vocabulary are primarily Chinese. Preserve established termino
 
 ## Commands
 
-Node.js 22.13 or newer is required. The project is ESM.
+Node.js 22.16 or newer is required. The project is ESM; this lower bound is required by the workspace backup command's `node:sqlite` `backup()` API.
 
 ```powershell
 npm install

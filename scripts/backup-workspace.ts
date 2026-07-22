@@ -4,6 +4,7 @@ import { backup, DatabaseSync } from "node:sqlite";
 
 const databasePath = path.resolve(process.env.WORKSPACE_DATABASE_PATH?.trim() || ".data/workspace.sqlite");
 const dataDir = path.resolve(process.env.WORKSPACE_FILE_DATA_DIR?.trim() || path.join(path.dirname(databasePath), "files"));
+const sessionDataDir = path.resolve(process.env.FEISHU_SESSION_DATA_DIR?.trim() || ".data/auth");
 const backupRoot = path.resolve(process.env.WORKSPACE_BACKUP_DIR?.trim() || path.join(path.dirname(databasePath), "backups"));
 const retentionDays = Number(process.env.WORKSPACE_BACKUP_RETENTION_DAYS || "30");
 const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -22,8 +23,14 @@ try {
 if (await stat(dataDir).then((entry) => entry.isDirectory()).catch(() => false)) {
   await cp(dataDir, path.join(targetDir, "files"), { recursive: true, preserveTimestamps: true });
 }
+const sessionDataIncluded = await stat(sessionDataDir).then((entry) => entry.isDirectory()).catch(() => false);
+if (sessionDataIncluded) {
+  const sessionBackupDir = path.join(targetDir, "auth");
+  await cp(sessionDataDir, sessionBackupDir, { recursive: true, preserveTimestamps: true });
+  await chmod(sessionBackupDir, 0o700);
+}
 await writeFile(path.join(targetDir, "manifest.json"), `${JSON.stringify({
-  createdAt: new Date().toISOString(), databasePath, dataDir,
+  createdAt: new Date().toISOString(), databasePath, dataDir, sessionDataDir, sessionDataIncluded,
 }, null, 2)}\n`, { mode: 0o600 });
 
 if (Number.isFinite(retentionDays) && retentionDays > 0) {

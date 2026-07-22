@@ -22,6 +22,8 @@ import {
   verifySnapshotIntegrity,
 } from "../lib/publishing";
 import { createSeedState } from "../lib/seed";
+import { migrateWorkspaceState } from "../lib/migrations";
+import { hydrateV3Seed } from "../lib/v3-seed";
 import type {
   FiveAxisEntityInput,
   FiveAxisViewDefinition,
@@ -507,9 +509,41 @@ test("正式快照拒绝未发布、篡改或版本链过期的五维定义", ()
     }),
     /版本链不一致/,
   );
+  const replacedContent: Omit<FiveAxisViewDefinition, "definitionHash"> = {
+    ...def,
+    axes: structuredClone(def.axes),
+  };
+  delete (replacedContent as Partial<FiveAxisViewDefinition>).definitionHash;
+  replacedContent.axes[0].label = "同标识但内容已替换";
+  const replacedDefinition: FiveAxisViewDefinition = {
+    ...replacedContent,
+    definitionHash: deterministicHash(replacedContent),
+  };
+  assert.throws(
+    () => publishConfigurationSnapshot({ ...common, fiveAxisDefinition: replacedDefinition }),
+    /版本链不一致/,
+  );
   const snapshot = publishConfigurationSnapshot({ ...common, fiveAxisDefinition: def });
   assert.equal(verifySnapshotIntegrity(snapshot), true);
   const frozen = structuredClone(snapshot);
   def.axes[0].label = "changed after publish";
   assert.deepEqual(snapshot, frozen);
+});
+
+test("历史五维预览缺少定义修订哈希时保持原 Snapshot hash，不被迁移补写", () => {
+  const state = hydrateV3Seed(createSeedState());
+  const existing = structuredClone(
+    state.configurationSnapshots.find((entry) => entry.fiveAxisPreview)!,
+  );
+  delete existing.fiveAxisPreview!.fiveAxisDefinitionRevision;
+  delete existing.fiveAxisPreview!.fiveAxisDefinitionHash;
+  const { contentHash: _oldHash, ...legacyContent } = existing;
+  existing.contentHash = deterministicHash(legacyContent);
+  const legacyHash = existing.contentHash;
+  state.configurationSnapshots = [existing];
+  const migrated = migrateWorkspaceState(state);
+  assert.equal(migrated.configurationSnapshots[0].contentHash, legacyHash);
+  assert.equal(migrated.configurationSnapshots[0].fiveAxisPreview?.fiveAxisDefinitionRevision, undefined);
+  assert.equal(migrated.configurationSnapshots[0].fiveAxisPreview?.fiveAxisDefinitionHash, undefined);
+  assert.equal(verifySnapshotIntegrity(migrated.configurationSnapshots[0]), true);
 });

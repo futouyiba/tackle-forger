@@ -6,8 +6,6 @@ import { EditableGrid, PageToolbar, ToolbarButton, type GridColumn } from "@/com
 import { ruleLayers, dimensionOptions, modifierRules, type RuleLayer, type ModifierRuleCell, type DimensionOption } from "@/lib/mock-data";
 import { usePersistentState } from "@/lib/usePersistentState";
 
-const scopeLabel: Record<string, string> = { ROD: "杆", REEL: "轮", LINE: "线", SHARED: "通用", COMBINATION: "组合" };
-
 export default function LayersPage() {
   const [layers, setLayers] = usePersistentState<RuleLayer[]>("tf:layers", ruleLayers.map((layer) => ({ ...layer })));
   const [rules, setRules] = usePersistentState<ModifierRuleCell[]>("tf:rules", modifierRules.map((rule) => ({ ...rule })));

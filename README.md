@@ -23,12 +23,26 @@
 
 ## 本地验证
 
+仓库根目录的v3应用是当前权威实现，使用`package-lock.json`和npm验证：
+
 ```powershell
-npm install
+npm ci
 npm run typecheck
 npm run lint
 npm test
 ```
+
+`apps/web`与`packages/*`是历史pnpm workspace，使用独立锁文件和门禁，不得用pnpm安装隐式替代根应用的npm验证：
+
+```powershell
+pnpm install --frozen-lockfile
+pnpm -r typecheck
+pnpm -r lint
+pnpm -r test
+pnpm -r build
+```
+
+GitHub Actions分别运行上述两套作业；修改任一架构时都不能以另一套门禁通过代替本套验证。
 
 ## 本地启动
 

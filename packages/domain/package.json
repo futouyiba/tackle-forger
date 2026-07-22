@@ -8,7 +8,7 @@
     "build": "tsc -p tsconfig.json",
     "lint": "tsc -p tsconfig.json --noEmit",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run --config ../../vitest.workspace.config.ts"
   },
   "dependencies": {
     "decimal.js": "^10.6.0",

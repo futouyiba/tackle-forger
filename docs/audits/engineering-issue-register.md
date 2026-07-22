@@ -4,7 +4,7 @@
 > 首次建立：2026-07-22
 > 来源审查：[`current-state-review-2026-07-22.md`](./current-state-review-2026-07-22.md)
 > 最近复核：[`remote-branches-review-2026-07-22.md`](./remote-branches-review-2026-07-22.md)
-> 当前汇总：10个有效未关闭问题（7个`OPEN`、1个`IN_PROGRESS`、2个`BLOCKED`），24个`RESOLVED`，1个`SUPERSEDED`。
+> 当前汇总：9个有效未关闭问题（5个`OPEN`、2个`IN_PROGRESS`、2个`BLOCKED`），25个`RESOLVED`，1个`SUPERSEDED`。
 
 ## 状态定义
 
@@ -31,12 +31,11 @@
 | ID | 严重性 | 状态 | 问题 | 主要证据 | 验收条件 |
 | --- | --- | --- | --- | --- | --- |
 | AUD-005 | Medium | BLOCKED | 根 Vinext 应用与`apps/web`/`packages/*` workspace两套架构并存，旧`SeriesRecipe`页面与按`itemPartId`区分竿/轮/线的v3 Series流程也同时可见，正式权威实现和迁移关系未确定。v14虽已增加竿/轮/线约束迁移，但当前运行时与页面尚未消费该字段。 | 根`app/`、`lib/`；`apps/web`；`packages/*`；`be1cf696`；`partConstraints`当前只出现于类型、迁移和测试 | 架构决策记录明确source of truth、迁移/共存边界和部署目标；正式配方运行时及页面消费分部位约束；旧入口被迁移、只读归档或移除，用户不再把旧扁平配方误认为v3正式Series。 |
-| AUD-006 | Medium | OPEN | 新 pnpm workspace 尚未安装依赖并完成验证。 | `corepack pnpm -r typecheck` 报缺少 `drizzle-orm`、`exceljs`、`decimal.js`、`vitest` | 使用锁文件安装后，workspace 的 typecheck、test、build 全部通过；记录命令和结果。 |
 | AUD-009 | Medium | BLOCKED | SQLite `workspace_revisions` 表永久保存完整 JSON，和 Blob/列表 100 条策略不一致，容量与归档政策未决定。 | `lib/sqlite-storage.ts:108-147` | 明确永久审计或有限保留策略；若有限保留则事务内清理；若永久保留则文档化容量、归档和备份规划。 |
 | AUD-010 | Low | OPEN | 甘特图 UI 仍直接对完整客户端状态执行查询，未消费 `/api/series-gantt` 的对象可见性、游标和 stale-revision 机制。 | `app/SeriesGanttWorkbenchV3.tsx:783-800`；`app/api/series-gantt/route.ts` | 主列表通过服务端 API 加载；409 游标恢复、权限过滤和按需子对象加载有测试。 |
 | AUD-015 | Low | OPEN | 客户端生产构建有超过 500 kB 的 chunk。 | `npm test`/`vinext build` 输出 | 记录 bundle 分析；按工作台模块动态拆分或将权威计算迁到服务端；警告消失或有明确预算。 |
-| AUD-018 | Low | IN_PROGRESS | 审计Markdown尾随空格已由`ba2111c2`清理，仓库现已增加`.gitattributes`，统一文本LF并为PowerShell/批处理保留CRLF；macOS工作树的`git diff --check`通过，仍缺Windows检出验证。 | `ba2111c2`；`.gitattributes`；本分支验证记录 | 在Windows验证检出后的PowerShell/批处理为CRLF、其余文本为LF；`git diff --check`持续无错误。 |
-| AUD-019 | Low | OPEN | 根应用和 workspace 使用 npm、pnpm 两套安装/锁文件，常用验证入口尚未统一。 | `package-lock.json`、`pnpm-lock.yaml`、根 `package.json`、workspace package | README/CLAUDE.md 明确每套命令；CI 分别验证；避免一次安装隐式改写另一锁文件。 |
+| AUD-018 | Low | IN_PROGRESS | 仓库已用`.gitattributes`统一文本LF并为PowerShell/批处理保留CRLF；macOS检查通过，CI已增加`windows-latest`检出验证，等待远端作业通过后关闭。 | `ba2111c2`；`.gitattributes`；`.github/workflows/ci.yml` | Windows作业确认PowerShell为纯CRLF、普通文本为LF，且`git diff --check`通过。 |
+| AUD-019 | Low | IN_PROGRESS | 根v3应用与历史workspace的npm/pnpm命令、锁文件和共享Vitest配置已明确分离；CI已增加独立作业，等待首次远端运行通过。 | `README.md`、`CLAUDE.md`、`.github/workflows/ci.yml`、`vitest.workspace.config.ts` | 根npm与历史pnpm作业均在干净检出上通过，且冻结安装不改写另一锁文件。 |
 | AUD-021 | Medium | OPEN | Feishu 回写已可回读恢复远端写入，但远端成功后本地审计保存冲突仍需人工重新拉取。 | `app/api/data-sources/route.ts:179-200` | 持久化写入意图/幂等记录，或提供自动对账命令；模拟远端成功、本地保存失败并可安全恢复。 |
 | AUD-022 | Low | OPEN | Feishu 主工作簿 wiki token/share URL 仍作为代码常量，工作簿迁移需要代码变更。 | `lib/feishu-workbook.ts` | 决定是否属于有意的 canonical config-as-code；若否，迁到受验证配置并保留稳定 sheet 注册表。 |
 | AUD-024 | Medium | OPEN | 后端核心契约仍以`targetWeightKg`承载SKU目标拉力，`ProjectionMatch`和查询接口同时保留新旧字段；历史兼容字段尚未收敛到迁移读取边界。 | `lib/types.ts:596-613,737-751`；`lib/projection-matcher.ts:21-35,237-248`；`lib/interaction-contracts.ts:494-540`；v3 §5.3 | 新写入、领域对象和API统一使用`targetPullKg/derivedPullKg/matchedStructuralPullKg/modelFinalPullKg`；`targetWeightKg`仅由迁移适配器读取；顺序迁移保留历史Payload与Snapshot hash；覆盖旧数据迁移、API契约和确定性匹配测试。 |
@@ -44,7 +43,7 @@
 ## 问题关系与去重
 
 - `AUD-001/002/003/004/007`已分别通过route-level测试关闭；原总括测试问题`AUD-012`保持`SUPERSEDED`，不重复计入已解决数量。
-- `AUD-005`是两套架构权威边界的父决策；“系列配方未拆分竿轮线”是旧`SeriesRecipe`仍可见造成的用户侧表现，归入`AUD-005`，不再新增重复AUD。`be1cf696`只解决v14迁移载体并记为`AUD-R010`，没有解决页面消费和架构权威边界。`AUD-006`与`AUD-019`分别记录验证前置条件和包管理/CI入口，在`AUD-005`关闭前保持独立，但关闭时必须共同复核是否应`RESOLVED`或`SUPERSEDED`。
+- `AUD-005`是两套架构权威边界的父决策；“系列配方未拆分竿轮线”是旧`SeriesRecipe`仍可见造成的用户侧表现，归入`AUD-005`，不再新增重复AUD。`be1cf696`只解决v14迁移载体并记为`AUD-R010`，没有解决页面消费和架构权威边界。历史workspace本地验证已由`AUD-006`关闭；包管理与CI入口继续由`AUD-019`跟踪，二者都不替代`AUD-005`的架构决策。
 - `AUD-R003`证明Series创建主路径已进入服务端命令；通用整包保存绕过已由`AUD-001`的默认拒绝边界关闭。
 - `AUD-R006`证明飞书远端写前/写后回读恢复已经实现；默认测试入口遗漏已由`AUD-025`关闭，远端成功后的本地审计冲突仍由`AUD-021`管理。
 - `AUD-R007`证明R730持久化、迁移、备份和运行手册的基础能力已存在；部署路径、Node下限和会话灾备已由`AUD-008/013/014`关闭，revision保留政策仍由`AUD-009`管理。
@@ -64,6 +63,7 @@
 | AUD-013 | RESOLVED | Node引擎下限低于备份脚本所用`node:sqlite backup()`的引入版本。 | `package.json`、`package-lock.json`和开发/部署说明统一提升到Node.js `>=22.16.0`；Node官方v22文档记录`backup()`自22.16.0加入。 | Node.js 22.23.1实际执行备份脚本成功；最低版本要求静态一致性核对。 |
 | AUD-014 | RESOLVED | 工作区备份没有包含飞书会话文件。 | `scripts/backup-workspace.ts`把`FEISHU_SESSION_DATA_DIR`复制到备份的`auth`目录，并在manifest记录来源与是否包含；运行手册明确停服恢复及无备份时重新登录。 | 临时SQLite、导入文件与会话目录执行备份，生成`workspace.sqlite`、`files`、`auth`和manifest，备份根权限为`0700`。 |
 | AUD-020 | RESOLVED | `.claude/scheduled_tasks.lock`运行态锁文件曾被版本化。 | 文件内容只有`sessionId/pid/acquiredAt`，属于单次工具进程锁；已从Git移除，现有`/.claude/`忽略规则防止再次提交。 | `git check-ignore -v .claude/scheduled_tasks.lock`命中`.gitignore`；工作树显示追踪文件删除。 |
+| AUD-006 | RESOLVED | 历史pnpm workspace缺少可复现安装与完整验证。 | `pnpm-lock.yaml`已与全部6个workspace项目同步；共享Vitest配置隔离根Vinext/Cloudflare插件；冻结安装可复现。 | pnpm 10.33.2下`pnpm install --frozen-lockfile`、5个子项目typecheck/test/build全部通过；domain 3项测试通过，其余无测试包按显式`passWithNoTests`通过。 |
 | AUD-001 | RESOLVED | 整包状态保存可绕过领域命令。 | `findGovernedStateChanges`只允许`notes`经整包PUT变化，其余现有、未来及额外注入字段默认拒绝；`PUT /api/state`返回`DOMAIN_COMMAND_REQUIRED`，畸形JSON返回400。 | `tests/api-command-boundaries.test.ts`覆盖新旧领域集合、规则设置和未知字段；`tests/api-routes.test.ts`覆盖已认证越权PUT和畸形JSON；集成态默认`npm test`通过208项TS测试与1项渲染测试。 |
 | AUD-002 | RESOLVED | Series API缺少完整运行时枚举与引用校验。 | `POST /api/series`显式校验强度、部位、钓法、类型、功能、品质、Collection与Performance存在/启用状态，并保留Type兼容校验。 | `tests/api-routes.test.ts`逐引用4xx覆盖；类型检查及默认`npm test`通过。 |
 | AUD-003 | RESOLVED | Series/SKU创建缺少命令幂等与结果恢复。 | 客户端发送稳定命令键；服务端将输入hash与Series结果引用同Workspace revision原子保存，相同输入恢复原Series/SKU，不同输入409，并发仅一次提交成功。 | `tests/api-routes.test.ts`覆盖重放、键冲突、并发冲突及冲突后恢复；默认`npm test`通过。 |
@@ -97,3 +97,4 @@
 | 2026-07-22 | 第一批领域契约修复关闭`AUD-016/017/023`；工作区升级到v15，新五维预览冻结定义revision/hash，且不改写历史Snapshot。`AUD-024`保持开放，等待完整顺序迁移。 | `b340d45` `5671769` |
 | 2026-07-22 | API/命令边界第一批修复：关闭`AUD-001～004`、`AUD-007`与`AUD-025`；追加默认拒绝、并发幂等恢复和恶意JSON类型边界。 | `36adceb` `605a6d2` `8db1e31` |
 | 2026-07-22 | 三个独立worktree修复分支完成主分支集成复核；生产构建、208项TypeScript测试及1项渲染测试通过。有效未关闭问题由24个降为10个。 | `a9472b6` `a35cf72` `d9a2412` `1c0df55` `6d6d660` `44cfc2d` |
+| 2026-07-22 | 历史pnpm workspace完成冻结安装、类型检查、测试与生产构建，关闭`AUD-006`；`AUD-018/019`等待新增Windows/双包管理CI首次远端通过。 | 本分支提交 |

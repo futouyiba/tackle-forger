@@ -29,6 +29,18 @@ npm test
 npm run db:generate
 ```
 
+The repository also retains the historical `apps/web` and `packages/*` pnpm workspace. Validate it separately; do not use pnpm success as a substitute for the authoritative root v3 app's npm checks, and do not use npm installation to rewrite `pnpm-lock.yaml`:
+
+```powershell
+pnpm install --frozen-lockfile
+pnpm -r typecheck
+pnpm -r lint
+pnpm -r test
+pnpm -r build
+```
+
+CI runs the npm root application and pnpm historical workspace as independent jobs so one lockfile or toolchain cannot silently mask the other.
+
 On Windows, the recommended local launcher is:
 
 ```powershell

@@ -16,5 +16,12 @@ server {
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Real-IP $remote_addr;
+
+        # This topology uses direct Feishu OAuth. Never forward identity headers
+        # supplied by an external client to the application.
+        proxy_set_header X-Feishu-Tenant-Key "";
+        proxy_set_header X-Feishu-Open-Id "";
+        proxy_set_header X-Feishu-Display-Name "";
+        proxy_set_header X-TF-Proxy-Secret "";
     }
 }

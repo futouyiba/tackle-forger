@@ -1,5 +1,8 @@
 # 配置表生产映射指南
 
+> 状态：配置映射契约；从属于v3第25节
+> 最后对齐v3：2026-07-22
+
 本文件记录 `Tackle Forger` 到 `configsDesign` 的已确认事实、必须显式配置的语义，以及映射发布门槛。它不包含 `config_system.toml` 的内容，也不允许把该文件中的秘密写入日志、Manifest 或页面。
 
 ## 已确认的编译器语义
@@ -38,7 +41,7 @@
 
 每个 Model 的映射至少需要：
 
-1. Rod、Reel、Line 的数值型 `INT64 id` 与稳定 `name`。
+1. 已发布`ConfigIdPolicyVersion`（v3 OPEN-008）分配的Rod、Reel、Line数值型`INT64 id`与稳定`name`；公司数字区间和命名格式未发布时只能预览，禁止用当前最大值+1或本文示例ID正式提交。
 2. Item、GoodsBasic、StoreBuy 的数值型 `INT64 id` 与稳定 `name`。
 3. `brand`、`series`、`sub_type`、`item_type`、`quality` 等枚举展示值。
 4. 每个目标字段的 Snapshot 来源、常量、倍率、偏移、精度和空值哨兵。
@@ -109,7 +112,7 @@
 npm run config-export:companion -- --registry <注册表绝对路径>
 ```
 
-启动窗口会显示本机地址与配对令牌文件路径；默认文件为 `<registry>.pairing-token`。进入“配置表交付”，粘贴令牌并连接后，依次完成暂存预览、关系校验、逐 Profile 精确确认和原子提交。
+启动窗口会显示本机地址与配对令牌文件路径；默认文件为 `<registry>.pairing-token`。进入“配置表交付”，粘贴令牌并连接后，依次完成暂存预览、关系校验、逐Profile精确确认和恢复型提交。这里的遗留执行器也只能保证单文件替换配合多文件备份/恢复，不能宣称三个工作簿跨文件原子提交。
 
 安全边界：
 
@@ -118,6 +121,6 @@ npm run config-export:companion -- --registry <注册表绝对路径>
 - 服务默认只接受 `localhost` / `127.0.0.1` 来源；额外来源必须在 `allowedOrigins` 精确登记；所有请求还会校验飞书租户和当前用户。
 - 预览 30 分钟后失效；服务重启后必须重新预览，但已提交任务可按任务包 ID 从幂等记录恢复。
 - 提交重新解析登记 Profile，并检查目标路径、暂存路径、原文件 hash、文件锁与幂等键。
-- 写入前创建备份；多文件提交失败时按已替换文件逆序回滚。
+- 写入前记录基线hash并创建备份与恢复Manifest；逐文件写入后回读验证，多文件提交失败时按Manifest恢复已写文件并保留完整审计。
 
 示例注册表故意保持 Profile 停用且不含生产 Mapping，避免把结构示例误当成可发布业务数据。

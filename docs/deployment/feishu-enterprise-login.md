@@ -1,5 +1,8 @@
 # 飞书企业登录部署
 
+> 状态：身份与会话运行手册；不替代Capability契约
+> 最后对齐v3：2026-07-22
+
 Tackle Forger 直接使用飞书网页 OAuth，不依赖 `FEISHU_LOGIN_URL` 或浏览器提交的身份头。
 
 ## 飞书开放平台

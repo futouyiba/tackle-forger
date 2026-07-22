@@ -372,29 +372,56 @@ DerivedProjection
 ```
 
 ```ts
+type CanonicalPatchOperation = "set" | "add" | "multiply" | "clear";
+
+interface AdjustmentPatchOperation {
+  operationId: string;
+  operationIndex: number;
+  parameterKey: string;
+  operation: CanonicalPatchOperation;
+  operand: unknown; // clear固定为null
+  before: unknown;
+  after: unknown;
+}
+
 interface AdjustmentPatch {
   id: string;
-  scopeType: "series" | "sku" | "model";
+  patchRevision: number;
+  scopeType: "series" | "sku" | "model" | "final_review";
   scopeId: string;
-  parameterKey: string;
-  operation: "add" | "multiply" | "set" | "min" | "max";
-  operand: number | string;
-  order: number;
+  operations: AdjustmentPatchOperation[];
   baseProjectionId: string;
   baseRuleSetVersion: string;
+  baseObjectRevision: string;
   reason: string;
   author: string;
-  status: "draft" | "approved" | "superseded";
+  state: PatchState;
+  mirrorSyncState: PatchMirrorSyncState;
 }
 ```
+
+新建、批准、持久化、重放和飞书镜像统一使用`set/add/multiply/clear`四种规范操作：
+
+| 操作 | 规范语义 |
+| --- | --- |
+| `set` | 把参数设为类型化operand；基底变化后必须人工复核 |
+| `add` | 对数值参数加operand；参数仍存在且类型、单位兼容时可在新基底重放 |
+| `multiply` | 对数值参数乘operand；参数仍存在且类型、单位兼容时可在新基底重放 |
+| `clear` | 清除当前Patch层提供的覆盖，重新暴露继承值；不是把值设为`null`，operand固定为`null` |
+
+`ProjectionPatchOperation.remove`仅是旧投影Patch/API的兼容输入别名。适配器必须在进入`PatchLedger`前确定性转换为`clear`；新API、账本、Snapshot引用和飞书镜像不得继续写`remove`。
+
+`min/max`仍是模板与通用规则层的合法操作，但不是规范AdjustmentPatch操作。旧Patch或草稿若表达`min/max`，在批准时必须对冻结的`baseRuleSetVersion + baseObjectRevision`求值，并保存为规范`set`操作，同时在原始Payload/证据中保留原操作、边界operand、before和after；基底变化后按`set`进入人工rebase。无法无损求值的记录进入迁移复核，不得动态重放或静默丢弃。参数类型与`ParameterDefinition.allowedOperations`不允许的操作必须产生Issue并禁止批准。
+
+`AdjustmentPatch`用于Series/SKU/Model/FinalReview；共享中间层`DerivationLayerPatch`复用同一操作明细与revision事务契约，但使用稳定阶段选择器和`scopeType=derivation`。`ProjectionPin`和`RuleSuppressionPatch`是独立记录，不伪装成数值操作。业务生命周期统一使用第14.2节的大写`PatchState`，镜像同步使用独立`PatchMirrorSyncState`；旧`draft/approved/superseded`只在迁移适配器中转换。
 
 共享中间层人工修正使用独立`DerivationLayerPatch`，作用于稳定的阶段选择器、源模板、Method、Type或FunctionProfile，不引用易失缓存ID。它可以参与草稿试算，但正式发布前必须完成：回写飞书表格→技术回读验证→用户显式“拉取”→发布新RuleSetVersion→重算确认吸收。Series/SKU/Model Patch与ProjectionPin无需回写飞书即可发布。
 
 重放语义：
 
-- multiply/add/min/max可在新基底上重放；
-- set在基底变化后必须人工复核；
-- 同作用域同参数多个set是冲突；
+- multiply/add在参数仍存在且类型、单位兼容时可在新基底上重放，重放后最多回到`PENDING_REVIEW`；
+- set在基底变化后必须人工复核；clear只有在目标仍表示可继承覆盖时可重放，参数删除、重命名或必填性变化时进入`REBASE_REQUIRED`；
+- 同作用域同参数多个set，或set与clear互相竞争，是冲突；
 - 屏蔽继承规则使用独立RuleSuppressionPatch；
 - `FinalReviewPatch`位于词条结算之后，只处理最终复核差异；上游变化后必须重新复核。
 - `ProjectionPin`只固定结构模板选择，不冻结模板旧值；源模板删除或失配时进入`REBASE_REQUIRED`，不得静默回退。
@@ -678,11 +705,16 @@ epic 史诗
 
 ### 13.2 严重级别
 
+Severity描述问题强度，Gate描述受影响关口，State描述当前处理状态；三者不得互相代替：
+
 | 级别 | 行为 |
 | --- | --- |
-| error | 阻止批准或发布 |
-| warning | 必须确认并记录理由 |
-| info | 展示继承和正常取舍 |
+| `BLOCKER` | 结果无法被信任或命中绝对业务禁令；命中的Gate必阻断且永远不可waive |
+| `ERROR` | 必须修复或按版本化WaiverPolicy获得例外；OPEN时阻断命中的Gate，不等于全部ERROR永久不可waive |
+| `WARNING` | 不直接越过关口；必须在命中的Gate前`ACKNOWLEDGED`并记录理由，acknowledge不是waive |
+| `INFO` | 展示继承、正常取舍和解释，不阻断 |
+
+`BLOCKER`用于硬deny/缺失require、Snapshot或Trace不可重放、必需版本缺失、配置关系断链等继续执行会产生不可信产物的情况。普通可修复字段错误使用`ERROR`。是否允许`ERROR`例外必须由版本化`WaiverPolicyVersion`按`source + code + gate`显式列出；未列出即不可waive。
 
 ### 13.3 最低校验集合
 
@@ -692,7 +724,7 @@ epic 史诗
 - Series：身份、核心词条、方向签名和重量曲线；
 - SKU：最近匹配、共享基底和重复规格；
 - Model：部件、技术、词条、Patch和杆轮线闭环；
-- 发布：无error、warning已确认、版本链完整、快照哈希成功。
+- 发布：目标Gate无OPEN的BLOCKER/ERROR、warning已确认、版本链完整、快照哈希成功；被策略允许且有效的ERROR waiver必须冻结到发布证据。
 
 被动技能只校验配置完整性和文案一致性，不校验运行时逻辑。
 
@@ -751,9 +783,9 @@ ConfigurationSnapshot至少冻结：
 
 所有保存过的Patch必须进入工具内统一、持久化、版本化的`PatchLedger`。`PatchLedger`是Patch的运行时权威来源；重新拉取、重新演绎、重新生成、对象改名、服务重启、换浏览器或换电脑均不得使Patch静默丢失。生成时按稳定对象ID、Patch作用域和基线revision加载有效Patch：基线兼容则确定性重放，基线变化则进入`REBASE_REQUIRED`，禁止跳过或按名称猜测对象。
 
-主飞书工作簿应增加单一`Patch台账`工作表，作为全部Patch的人工可见镜像、协作界面和额外审计副本。该工作表不是通用规则表，也不是Patch的唯一运行时来源；飞书行号、显示名称、排序和合并单元格不得参与关联。工具与飞书按`patchId + patchRevision`幂等同步，飞书变化必须显式拉取后才能进入工具。已被ConfigurationSnapshot引用的Patch revision不可原地修改，只能创建新revision。
+主飞书工作簿应增加单一`Patch台账`工作表，作为全部Patch的人工可见镜像、协作界面和额外审计副本。该工作表不是通用规则表，也不是Patch的唯一运行时来源；飞书行号、显示名称、排序和合并单元格不得参与关联。Patch组由`patchId + patchRevision`定位，每条镜像明细按`patchId + patchRevision + operationId`幂等同步；飞书变化必须显式拉取后才能进入工具。已被ConfigurationSnapshot引用的Patch revision不可原地修改，只能创建新revision。
 
-`Patch台账`采用“一条Patch操作一行”：同一Patch修改多个属性时，多行共享`patchId`。前三个机器字段固定为`scopeType`、`layerType`和`subjectEntityId`；至少还应包含`patchId`、`patchRevision`、`subjectName`、`parentEntityId`、`parameterKey`、`operation`、`operand`、`before`、`after`、`baseRuleSetVersion`、`baseObjectRevision`、`reason`、`evidence`、`status`、创建/审核身份与时间、`supersedesPatchId`、`ruleProposalId`和`snapshotRefs`。名称只供显示和搜索。
+`Patch台账`采用“一条Patch操作一行”：同一Patch修改多个属性时，多行共享`patchId`。前三个机器字段固定为`scopeType`、`layerType`和`subjectEntityId`；至少还应包含`patchId`、`patchRevision`、`operationId`、`operationIndex`、`subjectName`、`parentEntityId`、`parameterKey`、`operation`、`operand`、`before`、`after`、`baseRuleSetVersion`、`baseObjectRevision`、`reason`、`evidence`、`patchState`、`mirrorSyncState`、`attentionStates`、创建/审核身份与时间、`supersedesPatchId`、`ruleProposalId`和`snapshotRefs`。名称只供显示和搜索，禁止用单一`status`混合业务与同步状态。
 
 个体Patch必须进入统一汇总分析，但不得自动成为通用规则。工具按作用层、属性、钓法、类型、功能定位、重量段、修改方向和重复频率识别稳定模式；经人工归纳、跨对象影响预览和确认后，才可生成`RuleSourceChangeDraft`并写回对应通用规则页。新RuleSetVersion发布并重算后，原Patch分别进入`ABSORBED`、`PARTIALLY_ABSORBED`、继续`ACTIVE`或`REBASE_REQUIRED`，不得因规则提案或写回而提前删除。
 
@@ -778,6 +810,8 @@ interface PatchOperationRecord {
   operand: unknown; before: unknown; after: unknown;
 }
 ```
+
+`PatchOperationRecord`是账本、Snapshot和飞书镜像的规范明细。`clear`行的`operand`固定为`null`；飞书导入遇到`remove`时先转换为`clear`再计算幂等键。飞书出现`min/max`不得直接进入ACTIVE revision：只有能从冻结基底验证before/after的记录才可规范化为`set`，并保留原始意图证据；否则整组进入`REBASE_REQUIRED`或迁移复核。
 
 `operationId`在Patch内稳定且不可复用，飞书镜像明细的幂等键为`patchId + patchRevision + operationId`。`operationIndex`是确定性执行顺序，不得使用数据库自然顺序、飞书行号或当前排序；同一参数存在多个操作时也必须按它执行。Patch revision是组级事务边界：审核、批准、撤回、rebase、重放、吸收和Snapshot引用均针对完整revision；只有全部必需操作有效时才可重放。镜像部分写入成功不得把整组标为`SYNCED`。
 
@@ -875,14 +909,16 @@ ConfigurationSnapshot必须冻结有序Patch引用集合（`patchId + patchRevis
 - Method和Type分别留下轨迹；
 - Series出现不同Type时阻止批准；
 - SKU可包含多个Model；
-- 购买引用Model和Snapshot；
+- 游戏侧购买身份只引用Model；Tackle Forger内部发布、审计和导出链引用Model与Snapshot；
 - 历史Snapshot不被重算。
 
 ### 18.3 Patch
 
 - add/multiply在新基底重放；
 - set在新基底进入复核；
-- 同层多个set冲突；
+- clear清除本层覆盖而不是写null；旧remove迁移后只留下clear；
+- 旧min/max按冻结基底规范化为set，无法无损转换时进入复核；
+- 同层多个set或set/clear竞争冲突；
 - Series/SKU/Model优先级确定。
 
 ### 18.4 兼容
@@ -919,18 +955,22 @@ ConfigurationSnapshot必须冻结有序Patch引用集合（`patchId + patchRevis
 - [ ] 数据迁移保留历史兼容；
 - [ ] 未确认公式通过配置表达，没有散落硬编码。
 
-## 20. 开放决策
+## 20. 未决事项登记表
 
-本节是唯一开放决策登记表。“开放”不表示实现可以留空。每个未决项都必须有可确定执行的未决行为：使用明确的草稿/种子配置、显示状态和Issue，并在指定关口fail-closed；不得使用隐藏默认值。
+本节是唯一产品语义、规则源阻断和公司策略缺口登记表。“开放”不表示实现可以留空。每个未决项都必须有可确定执行的未决行为：使用明确的草稿/种子配置、显示状态和Issue，并在指定关口fail-closed；不得使用隐藏默认值。部署凭据、某台机器的目录绑定和某次服务不可用等环境状态不属于产品决策，记录在“当前实现差距矩阵”，不得伪装成OPEN项。
 
-| ID | 状态 | 当前可执行边界 | 未决时的必须行为 | 关闭证据/决策责任 |
-| --- | --- | --- | --- | --- |
-| OPEN-001 降低型词条叠加 | `OPEN_CONFIGURED_SEED` | 两种算法均必须实现、版本化并测试 | 工作区可用`diminishing_division`种子试算；没有已发布`ReductionStackingPolicyVersion`时禁止新Model发布 | 规则负责人确认算法，发布策略版本并通过两模式回归 |
-| OPEN-002 Performance后续扩展 | `DEFERRED_NON_BLOCKING` | 一期仅支持显式`PerformanceProfile`，不引入`performanceIntensity` | 不生成强度、曲线或线性倍率；不阻断一期其他功能 | 产品/规则负责人提供新策略语义、源数据和迁移方案 |
-| OPEN-003 扩展部位启用 | `DEFERRED_UI_DISABLED` | 一期主流程仅启用竿、轮、线 | 钩、漂、真饵和拟饵可在注册表保留，但UI、生成、发布和导出必须关闭 | 产品负责人确认启用批次，并提供参数、兼容、映射和验收覆盖 |
-| OPEN-004 Patch属性偏移阈值 | `BLOCKED_ON_POLICY` | 计算和展示精确偏移，阈值从版本化策略读取 | 缺策略时产生`PATCH_OFFSET_POLICY_MISSING`；允许草稿试算，阻止依赖该阈值的批准和发布 | 平衡/规则负责人提供Series、SKU、Model各级warning/review/block阈值及边界归属 |
-| OPEN-005 五维图定义 | `OPEN_CONFIGURED_SEED` | 可使用版本化种子定义进行预览，不得写死在UI/数据库 | 种子结果明示“草稿定义”；缺轴不补0，未发布定义不进Snapshot | 产品/数值负责人确认轴、聚合、缺值、系列基准和比较上限 |
-| OPEN-006 AI供应方与数据出网 | `BLOCKED_BEFORE_CONNECTOR` | AI交互壳、证据、权限和审计可实现 | 不得连接外部服务或发送真实数据；仅允许本地假数据/契约测试 | 安全、产品和数据负责人联合确认provider、字段白名单、保留周期和出网边界 |
+| ID | 类型 | 状态 | 当前可执行边界 | 未决时的必须行为 | 关闭证据/决策责任 |
+| --- | --- | --- | --- | --- | --- |
+| OPEN-001 降低型词条叠加 | 产品决策 | `OPEN_CONFIGURED_SEED` | 两种算法均必须实现、版本化并测试 | 工作区可用`diminishing_division`种子试算；没有已发布`ReductionStackingPolicyVersion`时禁止新Model发布 | 规则负责人确认算法，发布策略版本并通过两模式回归 |
+| OPEN-002 Performance后续扩展 | 延后产品决策 | `DEFERRED_NON_BLOCKING` | 一期仅支持显式`PerformanceProfile`，不引入`performanceIntensity` | 不生成强度、曲线或线性倍率；不阻断一期其他功能 | 产品/规则负责人提供新策略语义、源数据和迁移方案 |
+| OPEN-003 扩展部位启用 | 延后产品决策 | `DEFERRED_UI_DISABLED` | 一期主流程仅启用竿、轮、线 | 钩、漂、真饵和拟饵可在注册表保留，但UI、生成、发布和导出必须关闭 | 产品负责人确认启用批次，并提供参数、兼容、映射和验收覆盖 |
+| OPEN-004 Patch属性偏移阈值 | 规则策略缺口 | `BLOCKED_ON_POLICY` | 计算和展示精确偏移，阈值从版本化策略读取 | 缺策略时产生`PATCH_OFFSET_POLICY_MISSING`；允许草稿试算，阻止依赖该阈值的批准和发布 | 平衡/规则负责人提供Series、SKU、Model各级warning/review/block阈值及边界归属 |
+| OPEN-005 五维图定义 | 产品决策 | `OPEN_CONFIGURED_SEED` | 可使用版本化种子定义进行预览，不得写死在UI/数据库 | 种子结果明示“草稿定义”；缺轴不补0，未发布定义不进Snapshot | 产品/数值负责人确认轴、聚合、缺值、系列基准和比较上限 |
+| OPEN-006 AI供应方与数据出网 | 安全/产品决策 | `BLOCKED_BEFORE_CONNECTOR` | AI交互壳、证据、权限和审计可实现 | 不得连接外部服务或发送真实数据；仅允许本地假数据/契约测试 | 安全、产品和数据负责人联合确认provider、字段白名单、保留周期和出网边界 |
+| OPEN-007 定价执行与源表一致性 | 外部规则源阻断 | `BLOCKED_ON_RULE_SOURCE` | 可导入同revision策略并输出`NON_FORMAL`试算 | S=100边界、性能评分来源、`roundingStage`、`minimumPriceScope`和`overflowMode`任一未解决时，禁止新PricingPolicyVersion、依赖它的Model发布、Snapshot和Store导出 | 规则负责人修订飞书源；显式拉取、校验并发布新PricingPolicyVersion |
+| OPEN-008 ConfigIdPolicy区间与命名 | 公司策略缺口 | `BLOCKED_ON_COMPANY_POLICY` | 可实现策略接口、reservation ledger和冲突预检 | 未发布公司数字ID区间、各对象命名格式与保留规则时，不得正式预留ID或提交配置；禁止用“最大值+1”或示例ID代替 | 配置治理负责人发布`ConfigIdPolicyVersion`并用真实configs验证 |
+| OPEN-009 工作流治理策略 | 延后产品决策 | `DEFERRED_NON_BLOCKING` | 一期使用统一公司Capability策略、AI禁用、飞书规则写回不接审批 | `aiRefreshPolicy`、`aiModelRecordPolicy`、`aiReviewPolicy`和`separationOfDutiesPolicy`不得写死；三期前不得自行增加多级会签 | 产品/安全负责人确认策略版本及迁移、权限和审计验收 |
+| OPEN-010 飞书Patch台账远端契约 | 外部规则源阻断 | `BLOCKED_ON_SOURCE_SCHEMA` | 本地PatchLedger、镜像命令、幂等与失败恢复可以运行 | 主工作簿未提供稳定sheet_id、机器列与协作字段权限前，真实镜像写入/拉取保持禁用；不得伪造SYNCED | 规则源负责人建表并确认机器区域；完成写入、回读、缺行和冲突联调 |
 
 状态只能在决策证据进入权威规范且对应策略版本可校验后改为`RESOLVED`。代码、原型、测试种子或某次人工输入都不能单独关闭决策。
 
@@ -956,6 +996,8 @@ ConfigurationSnapshot必须冻结有序Patch引用集合（`patchId + patchRevis
 Series、SKU和Model的默认属性偏移上限尚未确定。实现应从配置读取，不得写死。
 
 ### 20.1 价值分自动定价与PricingPolicy
+
+本节的当前未决源表项统一登记为`OPEN-007`；这里定义确定性计算与关闭条件，不另设第二套开放项编号。
 
 定价权威来源是主工作簿`07_品质评分/FqD4j7`与`08_价格计算/u87sRh`的联合策略。revision `2869`中，07提供品质区间、Quality→PricingBasket映射和品质内最小/最大价格系数；08提供业务公式、评分插值、重量段查表、零整比、货币、舍入和价格边界。两页必须按同一`FeishuSourceRevision`导入为一个`PricingPolicyDraft`，禁止跨revision拼接。
 
@@ -1440,6 +1482,7 @@ type CapabilityCode =
   | "ai.evaluate" | "ai.patch_draft.create" | "ai.rule_source_change_draft.create"
   | "feishu.rule_change.confirm_write" | "feishu.source.pull" | "ruleset.publish"
   | "config.export.preview" | "config.export.commit"
+  | "validation.waiver.request" | "validation.waiver.approve"
   | "rules.five_axis.publish" | "workspace.policy.manage";
 
 type ActionCode =
@@ -1451,11 +1494,12 @@ type ActionCode =
   | "run_ai_assessment" | "create_ai_patch_draft" | "create_ai_feishu_draft"
   | "confirm_feishu_write" | "pull_feishu_source" | "publish_ruleset"
   | "preview_config_export" | "commit_config_export"
+  | "request_validation_waiver" | "approve_validation_waiver"
   | "publish_five_axis_definition" | "manage_workspace_policy";
 
 ```
 
-Series、SKU、Model的ID终身稳定且不复用；改名、改重量、更换默认Model不改ID。Revision只增不改；已批准/已发布revision不可原地改写。Snapshot ID与payload/hash永久绑定。前端不得从角色名、状态或颜色猜动作；读接口返回`ActionAvailability[]`，写接口再次鉴权。一期保留Capability与审计身份，细粒度权限未上线前使用公司飞书已登录用户统一策略；三期只替换策略适配器。职责分离使用`separationOfDutiesPolicy`配置。
+Series、SKU、Model的ID终身稳定且不复用；改名和更换默认Model不改ID。SKU修改`targetPullKg`必须遵守第6.5节：没有任何已发布后代Snapshot时保留skuId并创建新revision；已有已发布后代时原SKU的重量身份冻结，新重量创建新SKU，旧SKU可`DEPRECATED`。Revision只增不改；已批准/已发布revision不可原地改写。Snapshot ID与payload/hash永久绑定。前端不得从角色名、状态或颜色猜动作；读接口返回`ActionAvailability[]`，写接口再次鉴权。一期保留Capability与审计身份，细粒度权限未上线前使用公司飞书已登录用户统一策略；三期只替换策略适配器。职责分离使用`separationOfDutiesPolicy`配置。
 
 ### 24.2 R1：钓具系列甘特图
 
@@ -1707,28 +1751,38 @@ interface ValidationIssue {
   subjectRef: EntityRef; affectedRefs: EntityRef[]; parameterKeys: string[];
   title: string; message: string; evidenceRefs: EvidenceRef[]; ruleRefs: string[];
   state: "OPEN" | "ACKNOWLEDGED" | "RESOLVED" | "WAIVED" | "STALE";
+  waiverRef?: string;
   actions: ActionLink[];
+}
+interface ValidationWaiver {
+  waiverId: string; issueFingerprint: string;
+  policyVersion: string; gate: "REVIEW" | "PUBLISH" | "EXPORT";
+  scopeRef: EntityRef; reason: string; approvedBy: string; approvedAt: string;
+  expiresAt?: string; evidenceRefs: EvidenceRef[];
 }
 interface ActionLink {
   actionId: string;
   action: "navigate" | "edit_rule" | "edit_patch" | "open_rebase"
     | "satisfy_requirement" | "acknowledge_warning" | "request_permission"
+    | "request_waiver" | "approve_waiver"
     | "retry" | "recompute" | "create_rule_source_change";
   label: string; targetRef?: EntityRef; targetRoute?: string; enabled: boolean;
   requiredCapabilities: CapabilityCode[]; disabledReason?: string; commandPayloadRef?: string;
 }
 ```
 
-四套语义共用壳但source独立；Severity说明问题强度，Gate说明阻断哪个关口，二者不得合并成一个boolean。fingerprint至少由source、code、subject、规则版本和渠道构成。动作由服务端生成并在执行时重新鉴权。AI数量不计Issue。
+四套语义共用壳但source独立；Severity说明问题强度，Gate说明阻断哪个关口，二者不得合并成一个持久化boolean。`NONE`只展示；`REVIEW`要求在批准前处理且约束后续发布；`PUBLISH`阻止创建/发布新Snapshot；`EXPORT`只阻止命中的环境×渠道目标。fingerprint至少由source、code、subject、规则版本和渠道构成。动作由服务端生成并在执行时重新鉴权。AI数量不计Issue。
 
-waiver是独立、受审计的决定。硬deny、缺失require、Snapshot完整性错误、配置断链、缺少必需版本和不可重放结果不得waive；其他warning/error是否可waive由版本化策略决定。
+状态语义固定：`OPEN`表示当前有效；`ACKNOWLEDGED`只用于已记录理由的WARNING；`RESOLVED`表示同一输入版本下根因已消失；`STALE`表示输入变化后旧Issue只读留痕；`WAIVED`只用于版本化策略明确允许的ERROR。WARNING确认不得伪装成WAIVED。
+
+`BLOCKER`是绝对不可waive的严重度：用于硬deny/缺失require、Snapshot完整性错误、配置断链、缺少必需版本和不可重放结果等继续执行会产生不可信产物的情况。`ERROR`是否可waive由`WaiverPolicyVersion`按source、code、gate、作用域和有效期决定；默认不可waive，只有服务端返回有效waive动作时UI才展示。Waiver必须独立保存、审计并冻结到批准/发布/导出证据；策略变化或Issue fingerprint变化不会自动沿用旧waiver。
 
 正常路径：校验器产Issue，页面按来源、Severity和Gate分区并执行后端动作。  
 边界：一根因多对象用主Issue+affectedRefs。  
 冲突：互斥动作执行前重验。  
 恢复：失败保留Issue并返回retry/recompute/request_permission。  
 权限：可看不等于可修；无权动作说明原因。  
-验收：Given deny、-3 Affinity、不变量偏离并存，When 返回，Then source/blocking/动作独立，Affinity不能抵消deny。
+验收：Given deny、-3 Affinity、不变量偏离并存，When 返回，Then source、Severity、Gate、State和动作独立，Affinity不能抵消deny；Given策略未允许某ERROR waiver，When渲染动作，Then不显示可执行waive入口。
 
 ### 24.11 R10：Rebase、UpgradeCandidate与Snapshot
 
@@ -1744,7 +1798,7 @@ generated/ready_for_review → dismissed
 任意非终态 + upstream_changed → superseded
 ```
 
-set基线变化、参数删除/重命名、边界/公式/兼容变化必须rebase。add/multiply自动重放最多到pending_review。rebase生成新Patch revision。approved/dismissed候选不改旧Snapshot；只有发布命令新建Snapshot。SnapshotBuild可building/failed/ready；ConfigurationSnapshot创建即frozen，只允许查看、导出、审计、复制新修订、生成升级候选，禁止原地编辑/重算/rebase/换hash/删除引用。
+set基线变化、参数删除/重命名、边界/公式/兼容变化必须rebase。clear在目标仍是可继承覆盖时可以确定性重放；目标删除、重命名或必填性变化时必须rebase。add/multiply自动重放最多到pending_review。rebase生成新Patch revision。approved/dismissed候选不改旧Snapshot；只有发布命令新建Snapshot。SnapshotBuild可building/failed/ready；ConfigurationSnapshot创建即frozen，只允许查看、导出、审计、复制新修订、生成升级候选，禁止原地编辑/重算/rebase/换hash/删除引用。
 
 正常路径：解决rebase并发布新Snapshot。  
 边界：语义相同也只关闭候选，不重写hash。  
@@ -1880,7 +1934,7 @@ interface LocalExportTargetBinding {
 
 配置身份规则：
 
-- 配置ID由服务端的版本化`ConfigIdPolicy`和reservation ledger分配；禁止把“扫描当前最大值+1”作为永久策略。分配必须事务化，已预留ID即使放弃也不自动复用。公司区间与命名格式尚未提供时保持开放配置。
+- 配置ID由服务端的版本化`ConfigIdPolicy`和reservation ledger分配；禁止把“扫描当前最大值+1”作为永久策略。分配必须事务化，已预留ID即使放弃也不自动复用。公司区间与命名格式尚未提供时按`OPEN-008`阻止正式预留和提交。
 - 一个Model拥有稳定`ConfigIdBundle`；tackle与item共享`configNumericId + configNameKey`，GoodsBasic与StoreBuy使用各自稳定ID/名称键。
 - 同一个Model跨Snapshot、环境和渠道沿用同一套ID；若游戏中需要新旧版本并存，必须创建新Model。
 - 同一Model的新Snapshot导出时更新相同配置行；旧Snapshot继续在Tackle Forger内部不可变、可审计，但配置Git仓库只表达该Model最近一次成功导出的当前状态。
@@ -1936,4 +1990,3 @@ interface LocalExportTargetBinding {
 - Given dev/1001与test/numerical同时选择且前者预检失败，When 用户保持默认继续策略，Then test/numerical仍可写入，dev/1001标记未执行。
 - Given 当前Model revision未变化且已有Snapshot，When 批量准备发布与导出，Then SnapshotBatch复用原Snapshot，不创建重复版本。
 - Given 新建StoreBuy，When 生成差异，Then`enabled=false`；Given 更新已有StoreBuy且未显式改变上架状态，Then保留该目标原enabled值。
-

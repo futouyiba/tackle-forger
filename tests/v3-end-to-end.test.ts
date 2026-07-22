@@ -301,6 +301,29 @@ test("P-01 Series/SKU/Model Patch 固定优先级得到唯一结果", () => {
   assert.deepEqual(result.appliedPatchIds, ["series", "sku", "model"]);
 });
 
+test("P-01b 不同实体 scopeId 的同路径 set 不会误报冲突", () => {
+  const patches: ProjectionPatchRuleSource[] = ["sku:a", "sku:b"].map((scopeId, index) => ({
+    id: `patch:${index}`,
+    scope: "sku",
+    scopeId,
+    reason: "批量不同实体",
+    author: "test",
+    baseProjectionId: "p",
+    baseRuleSetVersion: "r",
+    status: "approved",
+    order: index,
+    rules: [],
+    operations: [{ op: "set", path: "force", value: 20 + index }],
+  }));
+  const result = applyLayeredPatches({ force: 10 }, patches);
+  assert.equal(result.issues.some((issue) => issue.code === "PATCH_SET_CONFLICT"), false);
+  const sameScope = applyLayeredPatches({ force: 10 }, [
+    patches[0],
+    { ...patches[1], id: "patch:same", scopeId: "sku:a" },
+  ]);
+  assert.equal(sameScope.issues.some((issue) => issue.code === "PATCH_SET_CONFLICT"), true);
+});
+
 test("P-02/P-03 上游更新生成 rebase 差异，set 基础变化要求复核", () => {
   const patches: ProjectionPatchRuleSource[] = [
     {
@@ -709,4 +732,3 @@ test("WP8 全链路种子包含 Series→SKU→Model→Snapshot→Upgrade", () =
     true,
   );
 });
-

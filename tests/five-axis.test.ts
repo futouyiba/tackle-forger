@@ -30,9 +30,11 @@ import type {
 const PARTS = ["part:rod", "part:reel", "part:line"];
 
 function definition(): FiveAxisViewDefinition {
-  return {
+  const content: Omit<FiveAxisViewDefinition, "definitionHash"> = {
     definitionId: "five-axis:test",
     version: "1.0.0",
+    revision: 1,
+    publicationState: "PUBLISHED",
     fiveAxisRuleVersion: "feishu-3563-test",
     sourceRevision: "3563",
     axes: [
@@ -100,6 +102,7 @@ function definition(): FiveAxisViewDefinition {
     ],
     seriesBaselinePolicy: { mode: "explicit_model", required: true },
   };
+  return { ...content, definitionHash: deterministicHash(content) };
 }
 
 function component(
@@ -435,3 +438,78 @@ test("发布快照冻结五轴预览，后续输入变化不改写历史内容",
   assert.equal(verifySnapshotIntegrity(existing), true);
 });
 
+test("正式快照拒绝未发布、篡改或版本链过期的五维定义", () => {
+  const state = createSeedState();
+  const existing = state.configurationSnapshots[0];
+  const model = state.purchasableModels.find((entry) => entry.id === existing.modelId)!;
+  const sku = state.skuDrawers.find((entry) => entry.id === model.skuId)!;
+  const series = state.seriesDefinitions.find((entry) => entry.id === sku.seriesId)!;
+  const projection = state.derivedProjections.find((entry) => entry.id === existing.projectionId)!;
+  const { def, vertexSet } = setup();
+  const preview = calculateModelFiveAxisPreview({
+    modelId: model.id,
+    modelRevision: model.revision,
+    referenceFishWeightGradeId: "grade:15",
+    definition: def,
+    vertexSet,
+    components: modelComponents(),
+    finalPanelHash: deterministicHash(existing.finalPanelValues),
+  });
+  const common = {
+    publicationMode: "new_formal" as const,
+    model, sku, series, projection,
+    finalPanelValues: existing.finalPanelValues,
+    componentSelections: existing.componentSelections,
+    patches: [],
+    attributeAffixIds: existing.attributeAffixIds,
+    passiveAffixIds: existing.passiveAffixIds,
+    technologyIds: existing.technologyIds,
+    passiveAffixPayloads: existing.passiveAffixPayloads,
+    compatibilityReport: existing.compatibilityReport,
+    affinityReport: existing.affinityReport,
+    qualityReport: existing.qualityReport,
+    qualityValueAssessment: {
+      modelRevisionId: `${model.id}@${model.revision}`, selectedQualityId: series.qualityId,
+      baseAffixScore: 1, combinationScore: 0, functionScoreFactor: 1,
+      performanceScoreFactor: 1, finalValueScore: 1, affixBreakdown: [],
+      combinationBreakdown: [], qualityRangePolicyVersion: "q:1",
+      scoringPolicyVersion: "s:1", inSelectedQualityRange: true, formal: true,
+      issues: [], trace: [], inputHash: "quality-hash",
+    },
+    pricingPolicyVersion: "pricing:1",
+    automaticPricing: {
+      formal: true, pricingPolicyRef: "pricing:1", pricingWeightBandId: "band:1",
+      pricingBasketId: "basket:1", repairPriceUnrounded: 100,
+      purchasePriceUnrounded: 100, purchasePrice: 100, trace: [], issues: [],
+      warnings: [], inputHash: "pricing-hash",
+    },
+    validationReport: [], fiveAxisPreview: preview, warningConfirmations: {},
+    publishedBy: "tester", publishedAt: "2026-07-22T00:00:00.000Z",
+  };
+  const unpublishedContent = { ...def, publicationState: "UNPUBLISHED" as const };
+  const unpublished = {
+    ...unpublishedContent,
+    definitionHash: deterministicHash(Object.fromEntries(Object.entries(unpublishedContent).filter(([key]) => key !== "definitionHash"))),
+  };
+  assert.throws(
+    () => publishConfigurationSnapshot({ ...common, fiveAxisDefinition: unpublished }),
+    /尚未发布/,
+  );
+  assert.throws(
+    () => publishConfigurationSnapshot({ ...common, fiveAxisDefinition: { ...def, sourceRevision: "changed" } }),
+    /完整性校验失败/,
+  );
+  assert.throws(
+    () => publishConfigurationSnapshot({
+      ...common,
+      fiveAxisPreview: { ...preview, fiveAxisDefinitionVersion: "stale" },
+      fiveAxisDefinition: def,
+    }),
+    /版本链不一致/,
+  );
+  const snapshot = publishConfigurationSnapshot({ ...common, fiveAxisDefinition: def });
+  assert.equal(verifySnapshotIntegrity(snapshot), true);
+  const frozen = structuredClone(snapshot);
+  def.axes[0].label = "changed after publish";
+  assert.deepEqual(snapshot, frozen);
+});

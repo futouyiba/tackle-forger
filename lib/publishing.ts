@@ -10,6 +10,7 @@ import type {
   HardCompatibilityResult,
   ModelComponentSelection,
   ModelFiveAxisPreview,
+  FiveAxisViewDefinition,
   PatchRebaseDifference,
   PatchRevisionRecord,
   ProjectionPatchRuleSource,
@@ -54,6 +55,7 @@ export interface PublishModelInput {
   automaticPricing?: PricingTrialResult;
   validationReport: ValidationIssue[];
   fiveAxisPreview?: ModelFiveAxisPreview;
+  fiveAxisDefinition?: FiveAxisViewDefinition;
   warningConfirmations: Record<string, string>;
   publishedBy: string;
   publishedAt: string;
@@ -140,6 +142,28 @@ export function publishConfigurationSnapshot(
     input.fiveAxisPreview.modelId !== input.model.id
   ) {
     throw new Error("五轴预览与待发布 Model 不一致。");
+  }
+  if (input.publicationMode === "new_formal" && input.fiveAxisPreview) {
+    const definition = input.fiveAxisDefinition;
+    if (!definition || definition.publicationState !== "PUBLISHED") {
+      throw new Error("五轴预览使用的 FiveAxisViewDefinition 尚未发布，禁止创建正式 Snapshot。");
+    }
+    const { definitionHash, ...definitionContent } = definition;
+    if (deterministicHash(definitionContent) !== definitionHash) {
+      throw new Error("FiveAxisViewDefinition 完整性校验失败，禁止创建正式 Snapshot。");
+    }
+    if (
+      input.fiveAxisPreview.fiveAxisDefinitionId !== definition.definitionId
+      || input.fiveAxisPreview.fiveAxisDefinitionVersion !== definition.version
+      || input.fiveAxisPreview.fiveAxisRuleVersion !== definition.fiveAxisRuleVersion
+      || input.fiveAxisPreview.sourceRevision !== definition.sourceRevision
+      || input.fiveAxisPreview.tackleFitComparison.fiveAxisDefinitionId !== definition.definitionId
+      || input.fiveAxisPreview.tackleFitComparison.fiveAxisDefinitionVersion !== definition.version
+      || input.fiveAxisPreview.tackleFitComparison.fiveAxisRuleVersion !== definition.fiveAxisRuleVersion
+      || input.fiveAxisPreview.tackleFitComparison.vertexSetHash !== input.fiveAxisPreview.vertexSetHash
+    ) {
+      throw new Error("五轴预览的定义、规则或顶点版本链不一致，禁止创建正式 Snapshot。");
+    }
   }
 
   const frozenPatches = input.patchRevisions?.length ? orderedPatchReferences(input.patchRevisions) : undefined;
@@ -316,4 +340,3 @@ export function auditEntry(
 ): GovernanceAuditLogEntry {
   return structuredClone(entry);
 }
-

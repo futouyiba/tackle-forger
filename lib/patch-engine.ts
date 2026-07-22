@@ -193,7 +193,7 @@ export function applyLayeredPatches<T extends Record<string, unknown>>(
         continue;
       }
       if (operation.op === "set") {
-        const conflictKey = patch.scope + ":" + operation.path;
+        const conflictKey = patch.scope + ":" + patch.scopeId + ":" + operation.path;
         const previousPatchId = setByScopePath.get(conflictKey);
         if (previousPatchId) {
           issue(issues, {
@@ -352,4 +352,3 @@ export function previewPatchRebase<T extends Record<string, unknown>>(
     requiresReview: issues.some((entry) => entry.requiresReview),
   };
 }
-

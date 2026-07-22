@@ -13,13 +13,35 @@ test("v14 将旧系列配方迁移为竿轮线约束且保留扁平字段", () =
 
   const migrated = migrateWorkspaceState(legacy);
   const recipe = migrated.recipes[0];
-  assert.equal(migrated.schemaVersion, 14);
+  assert.equal(migrated.schemaVersion, 15);
   assert.deepEqual(recipe.templateIds, before.templateIds);
   assert.deepEqual(recipe.structureIds, before.structureIds);
   assert.deepEqual(recipe.requiredAffixIds, before.requiredAffixIds);
   assert.deepEqual(recipe.partConstraints?.rod?.templateIds, before.templateIds);
   assert.deepEqual(recipe.partConstraints?.reel?.typeIds, before.structureIds);
   assert.deepEqual(recipe.partConstraints?.line?.requiredAffixIds, before.requiredAffixIds);
+  assert.deepEqual(migrateWorkspaceState(migrated), migrated);
+});
+
+test("v15 保留旧五维定义并明确迁移为未发布修订", () => {
+  const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
+  legacy.schemaVersion = 14;
+  legacy.fiveAxisViewDefinitions = [{
+    definitionId: "five-axis:legacy",
+    version: "legacy-v1",
+    fiveAxisRuleVersion: "rule-v1",
+    sourceRevision: "source-v1",
+    axes: [],
+    seriesBaselinePolicy: { mode: "projection_reference" },
+    preservedUnknown: "keep-me",
+  }];
+  const migrated = migrateWorkspaceState(legacy);
+  const definition = migrated.fiveAxisViewDefinitions[0] as unknown as Record<string, unknown>;
+  assert.equal(migrated.schemaVersion, 15);
+  assert.equal(definition.publicationState, "UNPUBLISHED");
+  assert.equal(definition.revision, 1);
+  assert.equal(typeof definition.definitionHash, "string");
+  assert.equal(definition.preservedUnknown, "keep-me");
   assert.deepEqual(migrateWorkspaceState(migrated), migrated);
 });
 
@@ -81,7 +103,7 @@ test("D-02 OfficialSku 无损迁移为抽屉、默认 Model 与冻结快照", ()
 
   const migrated = migrateWorkspaceState(legacy);
   assert.equal(migrated.skuDrawers.length, 1);
-  assert.equal(migrated.schemaVersion, 14);
+  assert.equal(migrated.schemaVersion, 15);
   assert.deepEqual(migrated.qualityValuePolicyDrafts, []);
   assert.deepEqual(migrated.seriesDefinitions[0].targetPullSpecifications, [{
     targetPullKgf: migrated.skuDrawers[0].targetWeightKg,

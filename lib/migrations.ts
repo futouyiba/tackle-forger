@@ -33,8 +33,9 @@ import { defaultAffinityAxisWeights } from "./compatibility";
 import { migrateLegacyProductIdentity } from "./legacy-product-migration";
 import { CANONICAL_FEISHU_WORKBOOK } from "./feishu-workbook";
 import { buildPatchRevision, emptyPatchLedger, migratePatchLedger } from "./patch-ledger";
+import { deterministicHash } from "./rule-kernel";
 
-export const CURRENT_WORKSPACE_SCHEMA_VERSION = 14;
+export const CURRENT_WORKSPACE_SCHEMA_VERSION = 15;
 
 const DEFAULT_RULE_SETTINGS: WorkspaceRuleSettings = {
   reductionStackingMode: "diminishing_division",
@@ -668,6 +669,26 @@ function migrateV13ToV14(state: MutableWorkspace): MutableWorkspace {
   };
 }
 
+function migrateV14ToV15(state: MutableWorkspace): MutableWorkspace {
+  return {
+    ...state,
+    schemaVersion: 15,
+    fiveAxisViewDefinitions: arrayOf<WorkspaceState["fiveAxisViewDefinitions"][number]>(
+      state.fiveAxisViewDefinitions,
+    ).map((definition) => {
+      if (definition.definitionHash && definition.revision && definition.publicationState) {
+        return definition;
+      }
+      const content = {
+        ...definition,
+        revision: definition.revision ?? 1,
+        publicationState: definition.publicationState ?? "UNPUBLISHED" as const,
+      };
+      return { ...content, definitionHash: deterministicHash(content) };
+    }),
+  };
+}
+
 const migrations: Record<number, (state: MutableWorkspace) => MutableWorkspace> = {
   1: migrateV1ToV2,
   2: migrateV2ToV3,
@@ -682,6 +703,7 @@ const migrations: Record<number, (state: MutableWorkspace) => MutableWorkspace> 
   11: migrateV11ToV12,
   12: migrateV12ToV13,
   13: migrateV13ToV14,
+  14: migrateV14ToV15,
 };
 
 export function migrateWorkspaceState(input: unknown): WorkspaceState {
@@ -929,4 +951,3 @@ function migrateV8ToV9(state: MutableWorkspace): MutableWorkspace {
     >(state.qualityValuePolicyDrafts),
   };
 }
-

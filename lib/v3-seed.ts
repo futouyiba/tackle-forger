@@ -626,9 +626,11 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
   sku18.validationSummary = structuredClone(seriesIssues);
 
   const publishTarget = built[0];
-  const fiveAxisDefinition: FiveAxisViewDefinition = {
+  const fiveAxisDefinitionContent: Omit<FiveAxisViewDefinition, "definitionHash"> = {
     definitionId: "five-axis:seed-rod-v1",
     version: "1.0.0",
+    revision: 1,
+    publicationState: "PUBLISHED",
     fiveAxisRuleVersion: "seed-v3-five-axis-1",
     sourceRevision: "seed-v3-2026-07-21",
     axes: [
@@ -651,6 +653,10 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
       missingPolicy: "ignore_not_applicable",
     })) as FiveAxisViewDefinition["axes"],
     seriesBaselinePolicy: { mode: "explicit_model", required: true },
+  };
+  const fiveAxisDefinition: FiveAxisViewDefinition = {
+    ...fiveAxisDefinitionContent,
+    definitionHash: deterministicHash(fiveAxisDefinitionContent),
   };
   const fiveAxisGradeId = "fish-weight-grade:1.5kg";
   const toFiveAxisEntity = (
@@ -930,4 +936,3 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
     ruleSetVersions: [...state.ruleSetVersions, nextRuleSet],
   };
 }
-

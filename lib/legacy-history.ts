@@ -67,3 +67,26 @@ export function resolveCompatibleWorkbenchPage<T extends string>(
     ? requested as T
     : fallback;
 }
+
+export interface LegacyCatalogReference {
+  id: string;
+  label: string | null;
+  resolved: boolean;
+}
+
+/**
+ * Resolve a historical ID only for display enrichment. The original ID is
+ * always returned, even when today's mutable catalog no longer contains it.
+ */
+export function resolveLegacyCatalogReference<T extends { id: string }>(
+  id: string,
+  currentCatalog: readonly T[],
+  labelFor: (entry: T) => string,
+): LegacyCatalogReference {
+  const current = currentCatalog.find((entry) => entry.id === id);
+  return {
+    id,
+    label: current ? labelFor(current) : null,
+    resolved: Boolean(current),
+  };
+}

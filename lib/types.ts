@@ -128,6 +128,8 @@ export interface ItemTypeProfile {
 export interface FunctionIntensityRuleSet {
   intensity: FunctionIntensity;
   rules: AdjustmentRule[];
+  /** 飞书 03_功能定位中的稳定源行 ID（func_*）；只用于溯源，不作为聚合 FunctionProfile 的 ID。 */
+  sourceRowId?: string;
 }
 
 export interface FunctionProfile {
@@ -1327,6 +1329,15 @@ export interface AffixScorePolicy {
   notes: string;
 }
 
+export interface SeriesRecipePartConstraint {
+  templateIds: string[];
+  typeIds: string[];
+  materialIds: string[];
+  requiredAffixIds: string[];
+  optionalAffixPoolIds: string[];
+  notes: string;
+}
+
 export interface SeriesRecipe {
   id: string;
   name: string;
@@ -1339,6 +1350,8 @@ export interface SeriesRecipe {
   technologyIds: string[];
   requiredAffixIds: string[];
   optionalAffixPoolIds: string[];
+  /** v14：竿、轮、线分别约束；旧扁平字段继续保留供历史数据兼容。 */
+  partConstraints?: Partial<Record<ItemKind, SeriesRecipePartConstraint>>;
   optionalSlots: number;
   qualityTarget: string;
   fishMinKg: number;

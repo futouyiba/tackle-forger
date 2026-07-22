@@ -1235,6 +1235,8 @@ OPEN-009于2026-07-23关闭，统一策略版本为`open009-2026-07-23-v1`。本
 
 一期只允许内网可达且通过指定公司飞书租户登录的用户进入。AI保持禁用；除OPEN-006的`ai.provider_policy.manage`仅授予部署管理员外，所有已登录用户拥有全部当前已启用业务Capability；不设置其他业务角色、对象级权限、职责分离、代理人或应用内成员管理。飞书规则写回不接审批，关键写操作使用工作区单写锁。
 
+1.5期只扩展OPEN-008确定的正式配置治理、目标Manifest和本地导出能力，继续沿用一期的全员统一Capability与无职责分离策略。
+
 二期只有在OPEN-006关闭后才允许启用AI连接器。启用后继续采用全员统一权限，所有已登录用户均可运行AI、采纳建议和创建AI草稿。AI仍只能提供解释、建议和草稿，不能裁决规则、覆盖校验、直接写回飞书或发布产物。
 
 当前规划中的三期不再引入细粒度RBAC、业务审核角色、职责分离或飞书审批。如果未来出现明确合规要求、团队规模变化或实际事故证据，必须另立Issue并发布新策略版本，不得静默改变本节结论。
@@ -1298,7 +1300,7 @@ Tackle Forger中的“发布”只表示发布内部RuleSetVersion、冻结Confi
 
 策略版本为`separation-of-duties/open009-v1`，模式固定为`disabled_in_tackle_forger`：
 
-- 一期、二期和当前规划三期均不要求经办人与审核人、发布人或导出人为不同人员。
+- 一期、1.5期、二期和当前规划三期均不要求经办人与审核人、发布人或导出人为不同人员。
 - 不设置Operator、Publisher、Auditor等业务角色，也不建设请假代理、临时授权、代审批或应用内成员管理。
 - 所有符合内网与公司飞书登录条件的用户统一获得全部当前已启用业务Capability；未启用模块的Capability仍由功能开关关闭。第23.6节的provider、模型降级、字段白名单、保留和软运行参数属于部署安全配置，只允许部署管理员修改，不属于全员业务Capability。
 - 服务端继续返回并校验Capability，前端不得绕过服务端或根据角色名猜动作；保留Capability适配器，以便未来通过新策略版本改变策略而不修改业务命令契约。
@@ -1306,7 +1308,7 @@ Tackle Forger中的“发布”只表示发布内部RuleSetVersion、冻结Confi
 
 #### 20.2.6 飞书审批与规则生效
 
-一期、二期和当前规划三期均不接飞书审批。规则修改继续使用以下链路：
+一期、1.5期、二期和当前规划三期均不接飞书审批。规则修改继续使用以下链路：
 
 ```text
 本地草稿
@@ -1347,7 +1349,7 @@ Tackle Forger中的“发布”只表示发布内部RuleSetVersion、冻结Confi
 - 原始AI内容到期删除，但已采纳建议的assessmentId、人工差异和产物来源仍可追溯。
 - AI建议与硬校验冲突时，硬校验保持不变且草稿转换被阻止。
 - 任一已登录公司用户可以执行已启用业务动作；一期AI关闭时不能通过直接API绕过功能开关，普通用户也不能修改OPEN-006部署安全配置。
-- 三个阶段均不存在飞书审批依赖，同一用户可以连续完成规则链路中的显式动作。
+- 一期、1.5期、二期和当前规划三期均不存在飞书审批依赖，同一用户可以连续完成规则链路中的显式动作。
 - 两名用户同时尝试关键写操作时只有一人取得锁，另一人仍可读取并看到明确的持锁提示。
 - Given A持有token 41并在服务端可达的远端写入中卡住，When 租约过期且B取得token 42，Then A恢复后的任何服务端状态提交都返回`STALE_FENCING_TOKEN`；B不能越过A的未知远端结果，必须先完成幂等回读/恢复，最终同一目标不会出现A在B之后生效。
 - Given 浏览器A用token 41写完第一份配置文件后断线且租约无已验证终态地过期，When 服务端处理过期并由B取得恢复token 42，Then 目标已是`recoveryState=RECOVERY_REQUIRED, reason=EXTERNAL_FILE_CONFLICT`且A不能再提交成功证据；B必须先确认或重新请求目录授权、逐文件回读并按Manifest恢复或前向协调，不能把本机写入伪装为outbox已隔离。
@@ -2251,7 +2253,7 @@ interface RuleSourceChangeDraft {
 }
 ```
 
-飞书电子表格是唯一规则源，一期、二期和当前规划三期均不引入飞书审批。AI只能生成`LOCAL_DRAFT`，不能确认写入、执行写入、拉取或发布RuleSet。人工确认后直接写回飞书表格，并立即技术回读验证；写回成功只表示远端有变化，绝不自动激活规则。用户必须显式点击“拉取”，生成FeishuSourceRevision和RuleSet草稿，通过校验后再显式发布RuleSetVersion。
+飞书电子表格是唯一规则源，一期、1.5期、二期和当前规划三期均不引入飞书审批。AI只能生成`LOCAL_DRAFT`，不能确认写入、执行写入、拉取或发布RuleSet。人工确认后直接写回飞书表格，并立即技术回读验证；写回成功只表示远端有变化，绝不自动激活规则。用户必须显式点击“拉取”，生成FeishuSourceRevision和RuleSet草稿，通过校验后再显式发布RuleSetVersion。
 
 影响预览使用沙盒RuleSet，Snapshot变化恒为0，潜在变化转UpgradeCandidate。写入前比较sourceRevision，变化则进入`NEEDS_REBASE`。写入超时先回读目标单元格和写回日志，以幂等键确认是否已经成功，禁止重复追加。
 
@@ -2397,7 +2399,7 @@ type PrimaryDisplayState = "HARD_CONFLICT" | "REBASE_REQUIRED" | "REVIEW_REQUIRE
 
 ### 24.13 R12：版本化策略与完成门槛
 
-`patchOffsetPolicy`的产品语义已经由OPEN-004完成决策：已发布`PatchOffsetPolicyVersion`必须固定表达`mode=FINAL_RANGE_WITH_MANDATORY_REVIEW`、`offsetThresholds=NONE`和`rangeEndpoints=INCLUSIVE`，不得重新引入独立偏移阈值；在可校验的策略版本发布并通过回归前，状态保持`DECIDED_PENDING_POLICY_VERSION`。仍保持开放、版本化但不固化最终值的策略包括`FiveAxisViewDefinition`、`enabledItemPartPolicy`、`qualityValueRangePolicy`、`PricingPolicy`与未来Performance扩展策略。`aiRefreshPolicy`、`aiModelRecordPolicy`、`aiReviewPolicy`和`separationOfDutiesPolicy`已由第20.2节的`open009-2026-07-23-v1`关闭，但仍以策略版本保存，未来只能通过新决策和新版本改变。三个阶段均不接飞书审批，当前不在Tackle Forger内实行职责分离。Snapshot冻结语义不是配置项，改变它必须先改权威规范并获用户明确确认。
+`patchOffsetPolicy`的产品语义已经由OPEN-004完成决策：已发布`PatchOffsetPolicyVersion`必须固定表达`mode=FINAL_RANGE_WITH_MANDATORY_REVIEW`、`offsetThresholds=NONE`和`rangeEndpoints=INCLUSIVE`，不得重新引入独立偏移阈值；在可校验的策略版本发布并通过回归前，状态保持`DECIDED_PENDING_POLICY_VERSION`。仍保持开放、版本化但不固化最终值的策略包括`FiveAxisViewDefinition`、`enabledItemPartPolicy`、`qualityValueRangePolicy`、`PricingPolicy`与未来Performance扩展策略。`aiRefreshPolicy`、`aiModelRecordPolicy`、`aiReviewPolicy`和`separationOfDutiesPolicy`已由第20.2节的`open009-2026-07-23-v1`关闭，但仍以策略版本保存，未来只能通过新决策和新版本改变。一期、1.5期、二期和当前规划三期均不接飞书审批，当前不在Tackle Forger内实行职责分离。Snapshot冻结语义不是配置项，改变它必须先改权威规范并获用户明确确认。
 
 正常路径：使用已发布策略版本并记录。  
 边界：配置缺失报配置不完整，不用页面默认；历史可只读。  

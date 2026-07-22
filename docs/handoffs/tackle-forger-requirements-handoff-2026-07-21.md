@@ -59,7 +59,7 @@
 - 中间层修改使受影响下游进入DIRTY或待升级；已发布Snapshot不变。
 - 所有保存过的Patch进入工具内权威`PatchLedger`，并同步到主飞书工作簿的单一`Patch台账`页；重生成、改名、重启和重新拉取均不得丢失。
 - 飞书`Patch台账`是人工可见镜像和审计副本，不是通用规则表或唯一运行时来源；Patch组按`patchId + patchRevision`定位，逐操作镜像按`patchId + patchRevision + operationId`幂等同步；一条属性操作一行，前三个机器字段为`scopeType`、`layerType`、`subjectEntityId`。
-- 通用中间层Patch及多个个体Patch呈现的稳定模式，可经汇总分析、人工归纳和影响预览转为 `RuleSourceChangeDraft`，确认后回写对应通用规则页；一期、二期和当前规划三期均不接飞书审批。
+- 通用中间层Patch及多个个体Patch呈现的稳定模式，可经汇总分析、人工归纳和影响预览转为 `RuleSourceChangeDraft`，确认后回写对应通用规则页；一期、1.5期、二期和当前规划三期均不接飞书审批。
 - Series、SKU、Model个案Patch不得未经归纳自动反推通用规则；新RuleSet发布后再判断`ABSORBED`、`PARTIALLY_ABSORBED`、继续有效或需要rebase。
 - Patch业务状态与飞书镜像同步状态必须分开；一条操作具有稳定`operationId`和`operationIndex`，明细幂等键为`patchId + patchRevision + operationId`。完整Patch revision是审核、重放、rebase、吸收和Snapshot引用的事务边界，部分镜像成功不等于整组同步成功。
 - 新建、账本、Snapshot和飞书镜像的规范操作集统一为`set/add/multiply/clear`。旧`ProjectionPatchOperation.remove`只在兼容读取时转换为`clear`；`clear`表示清除当前层覆盖而非写null。`min/max`只用于模板/通用规则；旧Patch或草稿必须在冻结基底上求值并规范化为保留原始意图证据的`set`，无法无损转换则进入复核。

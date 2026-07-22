@@ -43,6 +43,31 @@ test("SQLite 保存可跨读取、冲突受保护且历史版本冻结", async (
   assert.equal(conflict.revision, saved.revision);
 });
 
+test("生产环境没有持久化后端时拒绝进程内临时存储", async (t) => {
+  const env = process.env as Record<string, string | undefined>;
+  const previous = {
+    nodeEnv: env.NODE_ENV,
+    databasePath: env.WORKSPACE_DATABASE_PATH,
+    blobToken: env.BLOB_READ_WRITE_TOKEN,
+    vercel: env.VERCEL,
+  };
+  env.NODE_ENV = "production";
+  delete env.WORKSPACE_DATABASE_PATH;
+  delete env.BLOB_READ_WRITE_TOKEN;
+  env.VERCEL = "1";
+  t.after(() => {
+    if (previous.nodeEnv === undefined) delete env.NODE_ENV; else env.NODE_ENV = previous.nodeEnv;
+    if (previous.databasePath === undefined) delete env.WORKSPACE_DATABASE_PATH; else env.WORKSPACE_DATABASE_PATH = previous.databasePath;
+    if (previous.blobToken === undefined) delete env.BLOB_READ_WRITE_TOKEN; else env.BLOB_READ_WRITE_TOKEN = previous.blobToken;
+    if (previous.vercel === undefined) delete env.VERCEL; else env.VERCEL = previous.vercel;
+  });
+
+  await assert.rejects(
+    loadWorkspaceState(),
+    /生产环境未配置持久化存储/,
+  );
+});
+
 test("SQLite 并发写入同一基线 revision 时只有一个成功，其余进入冲突", async (t) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "tackle-forger-storage-concurrency-"));
   process.env.WORKSPACE_DATABASE_PATH = path.join(directory, "workspace.sqlite");

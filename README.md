@@ -32,16 +32,20 @@ npm run lint
 npm test
 ```
 
-`apps/web`与`packages/*`是历史pnpm workspace，使用独立锁文件和门禁，不得用pnpm安装隐式替代根应用的npm验证：
+`apps/web`与`packages/*`是历史pnpm workspace。它的workspace声明和锁文件隔离在
+`legacy-workspace/`；必须从这个目录边界运行pnpm，不得把仓库根npm应用重新加入pnpm importer，
+也不得用pnpm安装隐式替代根应用的npm验证：
 
 ```powershell
-pnpm install --frozen-lockfile
-pnpm -r typecheck
-pnpm -r lint
-pnpm -r test
-pnpm -r build
+pnpm --dir legacy-workspace install --frozen-lockfile
+pnpm --dir legacy-workspace --filter '@tackle-forger/*' typecheck
+pnpm --dir legacy-workspace --filter '@tackle-forger/*' lint
+pnpm --dir legacy-workspace --filter '@tackle-forger/*' test
+pnpm --dir legacy-workspace --filter '@tackle-forger/*' build
 ```
 
+根`package.json`或`package-lock.json`的单独变化不应改写
+`legacy-workspace/pnpm-lock.yaml`；历史workspace依赖变化必须同步该锁文件，否则冻结安装会失败。
 GitHub Actions分别运行上述两套作业；修改任一架构时都不能以另一套门禁通过代替本套验证。
 
 ## 本地启动

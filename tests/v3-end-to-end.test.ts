@@ -116,7 +116,7 @@ test("M-01/M-03 最近模板精确命中，1.5kg 与 1.8kg 共享基底但 Patch
   assert.notDeepEqual(state.skuDrawers[0].patchIds, state.skuDrawers[1].patchIds);
 });
 
-test("M-02 比例距离中点按稳定 ID 唯一决胜，不做插值", () => {
+test("M-02 比例距离中点优先较高 derivedPullKg，不做插值且忽略商品层维度", () => {
   const state = createSeedState();
   const source = state.derivedProjections.find(
     (projection) => !projection.id.endsWith("-next"),

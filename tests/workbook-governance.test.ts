@@ -5,8 +5,10 @@ import {
   assertExplicitPullDidNotPublish,
   createRuleSetDraftFromPull,
   recordFeishuSourceRevision,
+  recordQualityValuePolicyDraft,
 } from "../lib/workbook-governance";
 import { CANONICAL_FEISHU_SHEET_REGISTRY } from "../lib/feishu-workbook";
+import type { QualityValuePolicyDraft } from "../lib/quality-value-policy";
 
 test("显式拉取只登记 FeishuSourceRevision，创建草稿也不会发布 RuleSetVersion", () => {
   const initial = createSeedState();
@@ -25,11 +27,29 @@ test("显式拉取只登记 FeishuSourceRevision，创建草稿也不会发布 R
     state: "PULLED" as const,
   };
   const pulled = recordFeishuSourceRevision(initial, revision);
+  const qualityDraft: QualityValuePolicyDraft = {
+    id: "quality-policy-draft:test-2352",
+    sourceRevisionId: revision.id,
+    sourceRevision: revision.sourceRevision,
+    qualitySheetId: "FqD4j7",
+    affixSheetId: "zrVOxd",
+    ranges: [],
+    combinationRules: [],
+    issues: [],
+    formalStatus: "NON_FORMAL",
+    inputHash: "quality-hash:test-2352",
+    importedAt: revision.pulledAt,
+  };
+  const withQuality = recordQualityValuePolicyDraft(pulled, qualityDraft);
+  const withQualityAgain = recordQualityValuePolicyDraft(withQuality, qualityDraft);
   assertExplicitPullDidNotPublish(initial, pulled);
   assert.equal(pulled.feishuSourceRevisions[0].sourceRevision, "2352");
+  assert.equal(withQualityAgain.qualityValuePolicyDrafts.length, 1);
+  assert.equal(withQualityAgain.qualityValuePolicyDrafts[0].sourceRevisionId, revision.id);
+  assertExplicitPullDidNotPublish(initial, withQualityAgain);
 
   const drafted = createRuleSetDraftFromPull({
-    state: pulled,
+    state: withQualityAgain,
     sourceRevisionId: revision.id,
     createdAt: "2026-07-21T10:01:00.000Z",
     createdBy: "tester",
@@ -38,6 +58,23 @@ test("显式拉取只登记 FeishuSourceRevision，创建草稿也不会发布 R
   assert.deepEqual(drafted.ruleSetDraft.sourceRevisionIds, [revision.id]);
   assertExplicitPullDidNotPublish(initial, drafted.state);
   assert.equal(drafted.state.feishuSourceRevisions[0].state, "RULESET_DRAFT");
+});
+
+test("品质策略草稿不能引用未登记的飞书修订", () => {
+  const initial = createSeedState();
+  assert.throws(() => recordQualityValuePolicyDraft(initial, {
+    id: "quality-policy-draft:orphan",
+    sourceRevisionId: "feishu-revision:missing",
+    sourceRevision: "missing",
+    qualitySheetId: "FqD4j7",
+    affixSheetId: "zrVOxd",
+    ranges: [],
+    combinationRules: [],
+    issues: [],
+    formalStatus: "NON_FORMAL",
+    inputHash: "orphan",
+    importedAt: "2026-07-22T00:00:00.000Z",
+  }), /尚未登记/);
 });
 
 test("相同源修订重复创建 RuleSet 草稿保持幂等", () => {

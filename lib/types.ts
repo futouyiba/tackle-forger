@@ -9,7 +9,10 @@ import type {
 } from "./pricing-policy";
 import type { SourceIdentityMigrationReport } from "./source-id-migration";
 import type { ConfigExportMapping } from "./config-export-mapping";
-import type { ModelAffixValueAssessment } from "./quality-value-policy";
+import type {
+  ModelAffixValueAssessment,
+  QualityValuePolicyDraft,
+} from "./quality-value-policy";
 
 export type ItemKind = "rod" | "reel" | "line";
 export type RuleOperation = "add" | "multiply" | "set" | "min" | "max" | "formula";
@@ -1497,6 +1500,7 @@ export interface WorkspaceState {
   feishuWorkbooks: FeishuWorkbookRef[];
   feishuSourceRevisions: FeishuSourceRevision[];
   sourceIdentityMigrationReports: SourceIdentityMigrationReport[];
+  qualityValuePolicyDrafts: QualityValuePolicyDraft[];
   pricingPolicyDrafts: PricingPolicyDraft[];
   pricingPolicyVersions: PricingPolicyVersion[];
   fiveAxisViewDefinitions: FiveAxisViewDefinition[];

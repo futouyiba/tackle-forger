@@ -33,7 +33,7 @@ import { defaultAffinityAxisWeights } from "./compatibility";
 import { migrateLegacyProductIdentity } from "./legacy-product-migration";
 import { CANONICAL_FEISHU_WORKBOOK } from "./feishu-workbook";
 
-export const CURRENT_WORKSPACE_SCHEMA_VERSION = 8;
+export const CURRENT_WORKSPACE_SCHEMA_VERSION = 9;
 
 const DEFAULT_RULE_SETTINGS: WorkspaceRuleSettings = {
   reductionStackingMode: "diminishing_division",
@@ -641,6 +641,7 @@ const migrations: Record<number, (state: MutableWorkspace) => MutableWorkspace> 
   5: migrateV5ToV6,
   6: migrateV6ToV7,
   7: migrateV7ToV8,
+  8: migrateV8ToV9,
 };
 
 export function migrateWorkspaceState(input: unknown): WorkspaceState {
@@ -755,6 +756,16 @@ function migrateV7ToV8(state: MutableWorkspace): MutableWorkspace {
           skuIds: series.skuIds?.length ? [...series.skuIds] : specifications.map((entry) => entry.skuId),
         };
       }),
+  };
+}
+
+function migrateV8ToV9(state: MutableWorkspace): MutableWorkspace {
+  return {
+    ...state,
+    schemaVersion: 9,
+    qualityValuePolicyDrafts: arrayOf<
+      WorkspaceState["qualityValuePolicyDrafts"][number]
+    >(state.qualityValuePolicyDrafts),
   };
 }
 

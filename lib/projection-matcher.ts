@@ -149,8 +149,10 @@ function buildTrace(
 export function matchNearestProjection(
   query: ProjectionMatchQuery,
   candidates: ProjectionMatchCandidate[],
-  _parameters: ParameterDefinition[] = [],
+  parameters: ParameterDefinition[] = [],
 ): ProjectionMatch {
+  // 历史调用方仍传参数定义；结构匹配不得再用最终属性距离消费它。
+  void parameters;
   if (!Number.isFinite(query.targetWeightKg) || query.targetWeightKg <= 0) {
     throw new Error("目标重量必须是大于 0 的有限数字。");
   }

@@ -1,6 +1,7 @@
 import { deterministicHash } from "./rule-kernel";
 import type { FeishuSourceRevision } from "./feishu-workbook";
 import type { PricingPolicyDraft } from "./pricing-policy";
+import type { QualityValuePolicyDraft } from "./quality-value-policy";
 import type { SourceIdentityMigrationReport } from "./source-id-migration";
 import type { RuleSetVersion, WorkspaceState } from "./types";
 
@@ -39,6 +40,20 @@ export function recordPricingPolicyDraft(
   const index = next.pricingPolicyDrafts.findIndex((item) => item.id === draft.id);
   if (index >= 0) next.pricingPolicyDrafts[index] = structuredClone(draft);
   else next.pricingPolicyDrafts.unshift(structuredClone(draft));
+  return next;
+}
+
+export function recordQualityValuePolicyDraft(
+  state: WorkspaceState,
+  draft: QualityValuePolicyDraft,
+): WorkspaceState {
+  if (!state.feishuSourceRevisions.some((revision) => revision.id === draft.sourceRevisionId)) {
+    throw new Error("QualityValuePolicyDraft 引用的 FeishuSourceRevision 尚未登记。");
+  }
+  const next = structuredClone(state);
+  const index = next.qualityValuePolicyDrafts.findIndex((item) => item.id === draft.id);
+  if (index >= 0) next.qualityValuePolicyDrafts[index] = structuredClone(draft);
+  else next.qualityValuePolicyDrafts.unshift(structuredClone(draft));
   return next;
 }
 

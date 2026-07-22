@@ -20,6 +20,7 @@ import {
   createRuleSetDraftFromPull,
   recordFeishuSourceRevision,
   recordPricingPolicyDraft,
+  recordQualityValuePolicyDraft,
   recordSourceIdentityMigrationReport,
 } from "@/lib/workbook-governance";
 
@@ -105,6 +106,7 @@ export async function POST(request: NextRequest) {
       }
       let next = recordFeishuSourceRevision(current.state, inspection.sourceRevision);
       next = recordSourceIdentityMigrationReport(next, inspection.identityReport);
+      next = recordQualityValuePolicyDraft(next, inspection.qualityDraft);
       next = recordPricingPolicyDraft(next, inspection.pricingDraft);
       assertExplicitPullDidNotPublish(current.state, next);
       const saved = await saveWorkspaceState({

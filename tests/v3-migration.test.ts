@@ -62,7 +62,8 @@ test("D-02 OfficialSku 无损迁移为抽屉、默认 Model 与冻结快照", ()
 
   const migrated = migrateWorkspaceState(legacy);
   assert.equal(migrated.skuDrawers.length, 1);
-  assert.equal(migrated.schemaVersion, 8);
+  assert.equal(migrated.schemaVersion, 9);
+  assert.deepEqual(migrated.qualityValuePolicyDrafts, []);
   assert.deepEqual(migrated.seriesDefinitions[0].targetPullSpecifications, [{
     targetPullKgf: migrated.skuDrawers[0].targetWeightKg,
     skuId: migrated.skuDrawers[0].id,

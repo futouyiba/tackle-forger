@@ -426,7 +426,7 @@ interface AdjustmentPatch {
 - `FinalReviewPatch`位于词条结算之后，只处理最终复核差异；上游变化后必须重新复核。
 - `ProjectionPin`只固定结构模板选择，不冻结模板旧值；源模板删除或失配时进入`REBASE_REQUIRED`，不得静默回退。
 
-“Patch预算”统一称为“Patch属性偏移上限”，与服务器资源无关。
+“Patch预算”是历史术语。当前统一称为“Patch最终范围校验”；OPEN-004已经确认不设置独立的数值偏移上限，与服务器资源无关。
 
 ## 9. 兼容规则与Affinity Score
 
@@ -524,7 +524,7 @@ impact = directionSign × balanceWeight × ln(after / before)
 impact = directionSign × balanceWeight × (after - before) / normalizationScale
 ```
 
-Function必须有优势和代价；Performance和Quality可以有有限净增益；Series/SKU/Model Patch受属性偏移上限约束。
+Function必须有优势和代价；Performance和Quality可以有有限净增益；Series/SKU/Model/FinalReview Patch必须纳入其作用对象或发布批次的整体人工复核证据，并受已发布参数最终合法范围约束，不使用独立数值偏移上限。人工可以一次确认一批对象及其Patch，不要求逐Patch单独审批。
 
 执行Pareto检查：同重量、同品质和同价格预算下，如果一个组合所有关键属性都不差且至少一项更好，则产生支配警告。
 
@@ -964,7 +964,7 @@ ConfigurationSnapshot必须冻结有序Patch引用集合（`patchId + patchRevis
 | OPEN-001 降低型词条叠加 | 产品决策 | `OPEN_CONFIGURED_SEED` | 两种算法均必须实现、版本化并测试 | 工作区可用`diminishing_division`种子试算；没有已发布`ReductionStackingPolicyVersion`时禁止新Model发布 | 规则负责人确认算法，发布策略版本并通过两模式回归 |
 | OPEN-002 Performance后续扩展 | 延后产品决策 | `DEFERRED_NON_BLOCKING` | 一期仅支持显式`PerformanceProfile`，不引入`performanceIntensity` | 不生成强度、曲线或线性倍率；不阻断一期其他功能 | 产品/规则负责人提供新策略语义、源数据和迁移方案 |
 | OPEN-003 扩展部位启用 | 延后产品决策 | `DEFERRED_UI_DISABLED` | 一期主流程仅启用竿、轮、线 | 钩、漂、真饵和拟饵可在注册表保留，但UI、生成、发布和导出必须关闭 | 产品负责人确认启用批次，并提供参数、兼容、映射和验收覆盖 |
-| OPEN-004 Patch属性偏移阈值 | 规则策略缺口 | `BLOCKED_ON_POLICY` | 计算和展示精确偏移，阈值从版本化策略读取 | 缺策略时产生`PATCH_OFFSET_POLICY_MISSING`；允许草稿试算，阻止依赖该阈值的批准和发布 | 平衡/规则负责人提供Series、SKU、Model各级warning/review/block阈值及边界归属 |
+| OPEN-004 Patch属性偏移阈值 | 规则策略缺口 | `DECIDED_PENDING_POLICY_VERSION` | 决策已确认：不设置独立偏移阈值；Patch立即参与草稿试算，正式结果前必须纳入Series/SKU/Model或发布批次的整体人工复核证据；按当前关口各离散对象的累计最终值和已发布参数合法范围校验 | 缺少可校验的已发布`PatchOffsetPolicyVersion`时产生`PATCH_OFFSET_POLICY_MISSING`；范围越界ERROR只有取得匹配当前Gate的Waiver后才能继续，且仅当Gate为EXPORT时额外要求精确匹配目标环境×渠道；完整性BLOCKER永不可waive | 2026-07-23用户确认决策；第20节定义契约；发布可校验策略版本并通过批量复核、多重量、Gate/渠道Waiver、rebase和冻结回归后才能改为`RESOLVED` |
 | OPEN-005 五维图定义 | 产品决策 | `OPEN_CONFIGURED_SEED` | 可使用版本化种子定义进行预览，不得写死在UI/数据库 | 种子结果明示“草稿定义”；缺轴不补0，未发布定义不进Snapshot | 产品/数值负责人确认轴、聚合、缺值、系列基准和比较上限 |
 | OPEN-006 AI供应方与数据出网 | 安全/产品决策 | `RESOLVED` | 使用`ai-provider/open006-v1`：Fancy Hub、`ai-request/v1`严格Schema、动态模型修订、字段级保留和分层限额 | 本决策只解除产品策略阻断；真实连接器在Issue #25完成、测试并启用前继续禁用，不得发送真实数据 | 2026-07-23用户确认本节策略；AI无批准、写回或发布能力，无需另设三方会签 |
 | OPEN-007 定价执行与源表一致性 | 外部规则源阻断 | `BLOCKED_ON_RULE_SOURCE` | 可导入同revision策略并输出`NON_FORMAL`试算 | S=100边界、性能评分来源、`roundingStage`、`minimumPriceScope`和`overflowMode`任一未解决时，禁止新PricingPolicyVersion、依赖它的Model发布、Snapshot和Store导出 | 规则负责人修订飞书源；显式拉取、校验并发布新PricingPolicyVersion |
@@ -993,7 +993,103 @@ ConfigurationSnapshot必须冻结有序Patch引用集合（`patchId + patchRevis
 
 ### OPEN-004：Patch属性偏移阈值
 
-Series、SKU和Model的默认属性偏移上限尚未确定。实现应从配置读取，不得写死。
+2026-07-23用户确认OPEN-004采用“最终范围校验 + 整体批次人工复核”，不设置Series、SKU、Model或FinalReview作用域的独立绝对偏移、相对比例、方向性偏移或warning/review/block数值档位。Patch创建或修改后立即参与隔离的草稿试算，供设计人员查看整体属性、五维、兼容、不变量与范围校验；它不得仅因进入试算而影响已批准对象、正式配置或历史Snapshot。正式结果前，Patch必须作为对应Series/SKU/Model对象批次或发布批次整体结果的一部分被人工确认，但不要求逐Patch单独审批。2026-07-23对主飞书工作簿revision `3259`的只读核对显示，`10_校验规则/KZv4o2`当前按部位类型、重量段和参数，以米、克、线径、传动比等业务原始单位表达最终合法范围，没有Patch偏移阈值列；该revision只是决策证据，不是永久运行常量。产品语义已经确定，但在可校验的已发布`PatchOffsetPolicyVersion`落地前，本项保持`DECIDED_PENDING_POLICY_VERSION`而不是`RESOLVED`。
+
+#### 作用域、粒度与策略版本
+
+本策略适用于`SeriesPatch`、`SkuPatch`、`ModelPatch`和`FinalReviewPatch`。Patch数值大小不决定是否需要被人工确认，Quality不参与范围选择或容差分档；但“需要被人工确认”不等于每个Patch revision都要单独执行一次审批动作。人工复核的操作单位可以是Series/SKU/Model对象批次或Snapshot发布批次，一次决定可以确认当前页面明确列出的多个对象及其完整Patch集合。
+
+每次整体复核必须冻结批次作用域、对象revision、按顺序排列的`patchId + patchRevision + operationIds`、`PatchSetHash`、累计最终值、范围校验与Issue引用、复核人和时间。每个被覆盖的Patch revision都保存或可反查该复核证据。批次未列出的Patch不得借用该结论；复核后新增、修改、rebase或替换Patch，或者任何参与计算的输入发生变化时，受影响对象的旧复核证据立即`STALE`并重新进入整体复核。没有变化的其他对象无需因为同批中某个对象变化而逐一重审。
+
+运行时仍必须引用已发布的版本化`PatchOffsetPolicyVersion`，以便确定性重放、审计和Snapshot冻结。该策略的规范语义固定为：
+
+```text
+mode = FINAL_RANGE_WITH_MANDATORY_REVIEW
+offsetThresholds = NONE
+rangeEndpoints = INCLUSIVE
+```
+
+策略版本只记录和冻结上述行为及其适用范围，不得重新引入未经权威规范确认的隐藏数值阈值。缺少有效策略版本时产生`PATCH_OFFSET_POLICY_MISSING`：草稿可以试算，依赖该策略的批准和发布保持阻断。
+
+最终范围必须从当前已发布RuleSetVersion中按稳定规则解析。SKU和Model使用其真实离散SKU、ProjectionMatch及对应源重量段形成校验上下文；具体选择维度由相应参数约束定义，名称和Quality不得作为隐式关联键。
+
+Series没有单一`weightBandId`。SeriesPatch必须展开为以下离散校验上下文，分别累计到Series层并逐一校验：
+
+- 已存在SKU时，对Series下每个真实离散SKU分别使用其精确`targetPullKg`、ProjectionMatch和命中的源重量段；
+- SKU尚未物化时，对Series声明的每个离散`targetPullKg`分别执行权威最近标杆匹配，并使用各自Projection和源重量段；
+- 禁止选择一个代表性、默认或最重/最轻`weightBandId`代替整个Series，也禁止从最小/最大跨度推断连续中间重量。
+
+每个范围校验Issue必须定位到唯一离散上下文，至少记录`scopeType`、`itemPartId`、`parameterKey`、标准单位、对象及revision、`skuRef`或尚未物化的精确`targetPullKg`、`projectionId`、命中的`weightBandId`、约束规则引用和版本。Series关口只有在全部离散上下文分别通过、确认WARNING或取得各自有效Waiver后才能通过；一个重量的结果不得覆盖或抵消另一个重量的Issue。
+
+#### 计量、端点与累计
+
+范围判断使用当前关口按确定性顺序累计后的最终属性值，不计算相对基底的绝对偏移、比例偏移或方向性幅度。所有数值先按`ParameterDefinition`归一到标准单位，再与最终合法范围比较；Patch仍保存before、operation、operand、after和完整Trace，用于解释与重放，但这些偏移不生成数值等级。
+
+合法区间两端都包含：
+
+```text
+valid = min <= finalValue && finalValue <= max
+```
+
+等于下限或上限时合法；严格小于下限或严格大于上限时越界。范围内不因接近边界产生额外WARNING。Patch偏移本身不产生WARNING；WARNING只来自飞书或其他已发布规则明确配置的条件警告，并按第13、24节要求确认。
+
+多个Patch及同一Patch内的多个操作严格按权威层级和`operationIndex`累计。范围校验针对当前关口完成后的累计值，不针对每个中间数值单独判定；操作本身存在类型、单位、允许操作或重放错误时仍立即产生完整性Issue。Series批准对每个真实或待物化的离散重量分别计算到Series层，不能依赖未来SKU或Model修正；SKU和Model关口分别计算到当前层；Model发布按第3.2节的完整顺序计算到FinalReviewPatch后再执行最终范围校验。
+
+例如合法范围为`[8,12]kg`，基底为`10kg`，同一确定性链依次执行`+5kg`和`-3kg`，当前关口累计结果为`12kg`，范围校验通过；若Series关口结束时仍为`15kg`，则该关口产生范围越界Issue。
+
+#### Severity、Gate与“保留意见通过”
+
+累计最终值超出合法范围时产生：
+
+```text
+code = PATCH_FINAL_VALUE_OUT_OF_RANGE
+source = patch
+severity = ERROR
+state = OPEN
+gate = 当前命中的 REVIEW、PUBLISH 或 EXPORT
+```
+
+OPEN状态阻断命中的关口。只有以下条件全部满足时，该ERROR允许按版本化`WaiverPolicyVersion`由具备`validation.waiver.approve`能力的人工执行“保留意见通过”：
+
+- `ParameterDefinition`、标准单位和允许操作完整；
+- 基底对象、RuleSetVersion和revision完整；
+- Patch操作合法，before、operation、operand、after可以确定性重放；
+- Trace、input/output hash和PatchSetHash一致；
+- 最终合法范围能够从已发布规则唯一解析；
+- 唯一问题是累计最终值超出合法范围。
+
+通过后Severity仍为`ERROR`，State变为`WAIVED`，界面固定显示“保留意见通过”，不得降级为WARNING或伪装成`ACKNOWLEDGED`。`ValidationWaiver.gate`保持单值；任何单份Waiver都不得跨REVIEW、PUBLISH和EXPORT复用，也不得从一个环境×渠道自动沿用到另一个导出目标。
+
+一次人工“保留意见通过”可以作为一个原子`ValidationWaiverDecision`，批量批准当前页面明确列出的多份独立Waiver：REVIEW一份、PUBLISH一份，以及每个已选择环境×渠道各一份EXPORT Waiver。每份Waiver都必须引用自己的Issue fingerprint，并精确记录单一Gate；EXPORT Waiver还必须精确记录`environmentId + channelKey`。事务中任一目标在批准前重验失败时整组不生效，不得产生半组放行状态。后续新增环境、渠道或未包含的Gate必须重新请求人工决定，不能从既有REVIEW/PUBLISH/其他渠道Waiver派生或自动放行。
+
+每份Waiver至少冻结`waiverDecisionId`、对象revision、`parameterKey`、实际值、合法范围、标准单位、RuleSetVersion、范围规则版本、Patch策略版本、PatchSetHash、理由、审批人、审批时间、单一Gate、环境与渠道（EXPORT时必填）及证据引用。Waiver不修改飞书合法范围，不自动适用于其他离散重量、对象或revision。ConfigurationSnapshot冻结命中REVIEW/PUBLISH的Issue与Waiver引用；每个ExportManifest只冻结与该环境×渠道精确匹配的EXPORT Issue、Waiver及共同`waiverDecisionId`，使越界配置在导出后仍可追溯。
+
+以下情况说明结果本身不可信，必须产生不可waive的`BLOCKER`：参数定义或必需版本缺失；单位或类型不兼容；基底引用断裂；规则缺失、重复或冲突；操作不被允许；出现NaN或无穷值；无法确定性重放；before/after、Trace或hash不一致。BLOCKER永远不能通过“保留意见通过”放行。
+
+#### 基底变化、Rebase与STALE
+
+任何基底revision、RuleSetVersion、Patch、参数范围、对象revision或计算输入变化，旧ValidationIssue、人工复核结论和Waiver立即变为`STALE`，不得自动沿用：
+
+- `add/multiply`在参数、类型和单位仍兼容时可以在新基底上确定性重放，但Patch最多回到`PENDING_REVIEW`；
+- `set`在基底变化后进入`REBASE_REQUIRED`，由人工重新确认意图；
+- `clear`在目标仍表示可继承覆盖时可以重放并重新复核；参数删除、重命名或必填性变化时进入`REBASE_REQUIRED`；
+- `FinalReviewPatch`在任何上游变化后必须重新复核；
+- 不能安全重放的Patch进入`REBASE_REQUIRED`或产生BLOCKER，不得静默跳过。
+
+已发布ConfigurationSnapshot永远不被重算或改写；上游变化只生成UpgradeCandidate。旧“保留意见通过”不能自动沿用到新基底或新对象revision。
+
+#### 迁移、Trace与Snapshot冻结
+
+本策略生效后：
+
+- 历史ConfigurationSnapshot、Patch引用、校验证据和hash保持不变；
+- `DRAFT`、`PENDING_REVIEW`及尚未进入Snapshot的`APPROVED` Patch，在下一个批准或发布关口按新策略重新校验；
+- 已被历史Snapshot引用的Patch revision不原地改写；用于生成新对象revision或新Snapshot时必须重新校验、复核并重新办理所需Waiver；
+- 新Snapshot冻结Patch策略版本、参数范围规则版本、ValidationIssue、Waiver、有序Patch引用、PatchSetHash和累计Trace；
+- ExportManifest冻结“保留意见通过”标记及其引用，避免越界配置脱离审批上下文；
+- 策略、规则或账本迁移不得改变历史Snapshot内容或hash。
+
+验收至少覆盖：Patch新增后立即影响草稿预览但不改变已批准对象、正式配置或历史Snapshot；一次整体复核可以确认多个Series/SKU/Model及其完整Patch集合，每个Patch revision均可追溯到同一批次证据且无需逐Patch操作；批次外Patch不能借用结论，批次内某对象Patch变化只使受影响对象的覆盖关系STALE；最终值等于上下端点时通过；中间值越界但当前关口累计最终值合法时通过；Series所有真实SKU和未物化`targetPullKg`分别命中自己的Projection/重量段且任一失败都会阻断Series关口；累计最终值越界且未获Waiver时阻断；一次人工决定原子创建单Gate及逐环境×渠道Waiver且不能跨Gate/渠道复用；新增导出目标要求新Waiver；范围越界ERROR取得匹配当前Gate的“保留意见通过”后可以发布或导出且保留标记，EXPORT还必须精确匹配目标环境×渠道；不可重放或规则解析失败时产生不可waive BLOCKER；基底变化后旧复核与Waiver变为STALE；新策略和新Patch不改变任何历史Snapshot内容或hash。可校验的`PatchOffsetPolicyVersion`发布并通过这些回归之前，OPEN-004不得改为`RESOLVED`。
 
 ### OPEN-008：ConfigIdPolicy数字区间与命名规则
 
@@ -2186,10 +2282,19 @@ interface ValidationIssue {
   actions: ActionLink[];
 }
 interface ValidationWaiver {
-  waiverId: string; issueFingerprint: string;
+  waiverId: string; waiverDecisionId: string; issueFingerprint: string;
   policyVersion: string; gate: "REVIEW" | "PUBLISH" | "EXPORT";
+  environmentId?: string; channelKey?: string;
   scopeRef: EntityRef; reason: string; approvedBy: string; approvedAt: string;
   expiresAt?: string; evidenceRefs: EvidenceRef[];
+}
+interface ValidationWaiverDecision {
+  waiverDecisionId: string; scopeRef: EntityRef; reason: string;
+  requestedWaivers: {
+    issueFingerprint: string; gate: "REVIEW" | "PUBLISH" | "EXPORT";
+    environmentId?: string; channelKey?: string;
+  }[];
+  approvedBy: string; approvedAt: string; waiverIds: string[];
 }
 type IssueRemediationActionCode =
   | "navigate" | "edit_rule" | "edit_patch" | "open_rebase"
@@ -2216,7 +2321,7 @@ interface ActionLink {
 }
 ```
 
-四套语义共用壳但source独立；Severity说明问题强度，Gate说明阻断哪个关口，二者不得合并成一个持久化boolean。`NONE`只展示；`REVIEW`要求在批准前处理且约束后续发布；`PUBLISH`阻止创建/发布新Snapshot；`EXPORT`只阻止命中的环境×渠道目标。fingerprint至少由source、code、subject、规则版本和渠道构成。动作由服务端生成并在执行时重新鉴权。AI数量不计Issue。
+四套语义共用壳但source独立；Severity说明问题强度，Gate说明阻断哪个关口，二者不得合并成一个持久化boolean。`NONE`只展示；`REVIEW`要求在批准前处理且约束后续发布；`PUBLISH`阻止创建/发布新Snapshot；`EXPORT`只阻止命中的环境×渠道目标。fingerprint至少由source、code、subject、规则版本和Gate构成；EXPORT fingerprint还必须包含`environmentId + channelKey`，REVIEW/PUBLISH fingerprint不得携带导出目标。`ValidationWaiver.gate`始终是单值；EXPORT Waiver必须同时具有`environmentId`和`channelKey`，REVIEW/PUBLISH Waiver不得携带或匹配导出目标。一次人工决定可以原子创建多份Waiver，但每份只能匹配自己的Issue fingerprint和Gate；仅当Gate为EXPORT时还必须匹配环境×渠道。Waiver不能跨关口复用，EXPORT Waiver也不能跨环境或渠道复用。动作由服务端生成并在执行时重新鉴权。AI数量不计Issue。
 
 `ActionLink.action`必须复用统一`ActionCode`表达可执行领域命令；`IssueRemediationActionCode`只保留导航、请求权限、重试等通用问题处置。对任何会改变状态的`ActionCode`，`enabled=true`时必须返回不可篡改的`commandPayloadRef`，其`action/subjectRef/inputHash/payloadHash`必须与服务端保存的类型化payload一致；配置身份动作的具体字段遵循OPEN-008和第25节，例如预留payload必须包含`expectedModelRevisionId`和`expectedNormalizedStableModelKey`。客户端只提交`actionId + payloadRefId`，不得替换action、subject、expected revision或策略/Manifest引用；服务端执行前重新读取payload、校验hash/有效期、重算`ActionAvailability`并再次鉴权。
 
@@ -2224,7 +2329,7 @@ interface ActionLink {
 
 状态语义固定：`OPEN`表示当前有效；`ACKNOWLEDGED`只用于已记录理由的WARNING；`RESOLVED`表示同一输入版本下根因已消失；`STALE`表示输入变化后旧Issue只读留痕；`WAIVED`只用于版本化策略明确允许的ERROR。WARNING确认不得伪装成WAIVED。
 
-`BLOCKER`是绝对不可waive的严重度：用于硬deny/缺失require、Snapshot完整性错误、配置断链、缺少必需版本和不可重放结果等继续执行会产生不可信产物的情况。`ERROR`是否可waive由`WaiverPolicyVersion`按source、code、gate、作用域和有效期决定；默认不可waive，只有服务端返回有效waive动作时UI才展示。Waiver必须独立保存、审计并冻结到批准/发布/导出证据；策略变化或Issue fingerprint变化不会自动沿用旧waiver。
+`BLOCKER`是绝对不可waive的严重度：用于硬deny/缺失require、Snapshot完整性错误、配置断链、缺少必需版本和不可重放结果等继续执行会产生不可信产物的情况。`ERROR`是否可waive由`WaiverPolicyVersion`按source、code、gate、作用域和有效期决定；默认不可waive，只有服务端返回有效waive动作时UI才展示。Waiver必须独立保存、审计并冻结到批准/发布/导出证据；策略变化、Issue fingerprint变化或Gate变化不会自动沿用旧waiver，EXPORT还在环境×渠道变化时失效。批量决定使用`ValidationWaiverDecision`记录一次人工动作和原子目标集合，不改变每份Waiver的单Gate、单fingerprint语义。
 
 正常路径：校验器产Issue，页面按来源、Severity和Gate分区并执行后端动作。  
 边界：一根因多对象用主Issue+affectedRefs。  
@@ -2294,7 +2399,7 @@ type PrimaryDisplayState = "HARD_CONFLICT" | "REBASE_REQUIRED" | "REVIEW_REQUIRE
 
 ### 24.13 R12：版本化策略与完成门槛
 
-仍保持开放、版本化但不固化最终值的策略包括`patchOffsetPolicy`、`FiveAxisViewDefinition`、`enabledItemPartPolicy`、`qualityValueRangePolicy`、`PricingPolicy`与未来Performance扩展策略。`aiRefreshPolicy`、`aiModelRecordPolicy`、`aiReviewPolicy`和`separationOfDutiesPolicy`已由第20.2节的`open009-2026-07-23-v1`关闭，但仍以策略版本保存，未来只能通过新决策和新版本改变。一期、1.5期、二期和当前规划三期均不接飞书审批，当前不在Tackle Forger内实行职责分离。Snapshot冻结语义不是配置项，改变它必须先改权威规范并获用户明确确认。
+`patchOffsetPolicy`的产品语义已经由OPEN-004完成决策：已发布`PatchOffsetPolicyVersion`必须固定表达`mode=FINAL_RANGE_WITH_MANDATORY_REVIEW`、`offsetThresholds=NONE`和`rangeEndpoints=INCLUSIVE`，不得重新引入独立偏移阈值；在可校验的策略版本发布并通过回归前，状态保持`DECIDED_PENDING_POLICY_VERSION`。仍保持开放、版本化但不固化最终值的策略包括`FiveAxisViewDefinition`、`enabledItemPartPolicy`、`qualityValueRangePolicy`、`PricingPolicy`与未来Performance扩展策略。`aiRefreshPolicy`、`aiModelRecordPolicy`、`aiReviewPolicy`和`separationOfDutiesPolicy`已由第20.2节的`open009-2026-07-23-v1`关闭，但仍以策略版本保存，未来只能通过新决策和新版本改变。一期、1.5期、二期和当前规划三期均不接飞书审批，当前不在Tackle Forger内实行职责分离。Snapshot冻结语义不是配置项，改变它必须先改权威规范并获用户明确确认。
 
 正常路径：使用已发布策略版本并记录。  
 边界：配置缺失报配置不完整，不用页面默认；历史可只读。  
@@ -2302,7 +2407,7 @@ type PrimaryDisplayState = "HARD_CONFLICT" | "REBASE_REQUIRED" | "REVIEW_REQUIRE
 恢复：回到有效策略或发布新版本，不回写历史快照。  
 权限：策略编辑、审核和发布仍是独立动作；第20.2节当前允许同一已登录用户连续执行。Agent不得永久固化仍未确认的其他OPEN项。
 
-验收：Given Patch阈值未确认，When 实现，Then 阈值来自版本化配置且测试多套策略，无永久数值。
+验收：Given OPEN-004已经完成决策但尚无可校验的已发布`PatchOffsetPolicyVersion`，When 新增Patch，Then Patch立即参与固定`FINAL_RANGE_WITH_MANDATORY_REVIEW`语义的草稿试算，但批准与发布返回`PATCH_OFFSET_POLICY_MISSING`；When 策略版本已发布，Then 人工可以在Series/SKU/Model或发布批次的整体结果页一次确认多个对象及其完整Patch集合，每个Patch revision可追溯到该冻结证据且无需逐Patch审批，只按当前关口各离散对象的累计最终值和包含端点的已发布参数合法范围校验，并覆盖批次变化失效、多离散重量、单Gate及逐环境×渠道Waiver、rebase和历史Snapshot冻结回归。独立偏移阈值不得作为可配置运行策略；迁移和反向测试可以用旧阈值输入验证其被拒绝、隔离或不影响新策略结果。
 
 ### 24.14 完成标准
 

@@ -34,12 +34,13 @@ export async function PUT(request: NextRequest) {
       { status: 403 },
     );
   }
-  const body = (await request.json()) as {
+  const body = (await request.json().catch(() => null)) as {
     state?: WorkspaceState;
     baseRevision?: number;
     message?: string;
-  };
+  } | null;
   if (
+    !body ||
     !body.state ||
     !Number.isInteger(body.state.schemaVersion) ||
     body.state.schemaVersion < 1 ||

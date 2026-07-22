@@ -35,6 +35,14 @@ test("已认证整包 PUT 不能绕过 Series 领域命令", { concurrency: fals
   assert.deepEqual(payload.governedChanges, ["seriesDefinitions"]);
 });
 
+test("整包 PUT 的畸形 JSON 返回400", { concurrency: false }, async () => {
+  withTrustedProxy();
+  const response = await putState(new NextRequest("http://localhost/api/state", {
+    method: "PUT", headers: authHeaders, body: "{",
+  }));
+  assert.equal(response.status, 400);
+});
+
 test("Series 路由拒绝非法强度、品质引用和拉力 token", { concurrency: false }, async () => {
   withTrustedProxy();
   const { state } = await loadWorkspaceState();
@@ -122,8 +130,7 @@ test("Series 创建相同幂等键恢复原结果，不同输入冲突", { concu
     name: "并发幂等创建验证",
   };
   const concurrent = await Promise.all([send(concurrentBody), send(concurrentBody)]);
-  assert.ok(concurrent.every((response) => response.status === 200 || response.status === 409));
-  assert.ok(concurrent.some((response) => response.status === 200));
+  assert.deepEqual(concurrent.map((response) => response.status), [200, 200]);
   const afterConcurrent = await loadWorkspaceState();
   assert.equal(afterConcurrent.state.seriesDefinitions.filter(
     (entry) => entry.id === concurrentBody.seriesId,

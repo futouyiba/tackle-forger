@@ -316,6 +316,23 @@ export async function POST(request: NextRequest) {
     message: `创建 Series ${materialized.series.name}（${materialized.createdSkuIds.length} 个 SKU 抽屉）`,
   });
   if (result.conflict) {
+    const latest = await loadWorkspaceState();
+    const recoveredCommand = latest.state.commandIdempotencyRecords.find(
+      (entry) => entry.key === idempotencyKey,
+    );
+    const recoveredSeries = recoveredCommand?.inputHash === inputHash
+      ? latest.state.seriesDefinitions.find((entry) => entry.id === recoveredCommand.resultRef)
+      : undefined;
+    if (recoveredSeries) {
+      return NextResponse.json({
+        state: latest.state,
+        series: recoveredSeries,
+        createdSkuIds: recoveredSeries.skuIds,
+        revision: latest.revision,
+        idempotent: true,
+        user,
+      });
+    }
     return NextResponse.json(
       { error: "其他成员已保存新版本，请刷新后重试创建。", revision: result.revision },
       { status: 409 },

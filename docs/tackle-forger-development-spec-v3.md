@@ -1830,7 +1830,7 @@ interface FiveAxisDefinitionDispositionCatalogRevision {
 }
 ```
 
-每个目录修订都是完整不可变快照：同一`definitionId + definitionVersion + definitionHash`在一个修订中恰好出现一次，`entries`按这三个字段的无符号UTF-8字节逐分量排序。`catalogHash`的闭集输入固定为`{schemaVersion, previousCatalogHash, entries}`，显式排除`catalogRevisionId`、`previousCatalogRevisionId`、`catalogHash`自身和`decidedAt`；按严格Schema、JCS、无BOM UTF-8与SHA-256小写十六进制计算。首个修订的两个前驱字段均为`null`；后继修订的`previousCatalogRevisionId + previousCatalogHash`必须共同命中同一不可变前驱。工作区只保存一个可条件更新的当前目录头`currentFiveAxisDispositionCatalogRevisionId`；读写正式用途只能解析该头，禁止按`decidedAt`、最大ID或数据库行序选择处置。目录链断裂、循环、前驱ID/hash不一致、同定义重复、hash不符或同一修订出现多个`FORMAL_CURRENT`均为处置冲突并fail-closed。
+每个目录修订都是完整不可变快照：同一`definitionId + definitionVersion`在一个修订中恰好出现一次；同一ID/版本对应多个`definitionHash`时不得择一，必须作为定义身份冲突fail-closed。`entries`按`definitionId + definitionVersion`的无符号UTF-8字节逐分量排序，`definitionHash`仅作为该唯一身份的内容校验字段，不参与制造第二个同名条目。`catalogHash`的闭集输入固定为`{schemaVersion, previousCatalogHash, entries}`，显式排除`catalogRevisionId`、`previousCatalogRevisionId`、`catalogHash`自身和`decidedAt`；按严格Schema、JCS、无BOM UTF-8与SHA-256小写十六进制计算。首个修订的两个前驱字段均为`null`；后继修订的`previousCatalogRevisionId + previousCatalogHash`必须共同命中同一不可变前驱。工作区只保存一个可条件更新的当前目录头`currentFiveAxisDispositionCatalogRevisionId`；读写正式用途只能解析该头，禁止按`decidedAt`、最大ID或数据库行序选择处置。目录链断裂、循环、前驱ID/hash不一致、同ID/版本重复、定义记录与目录`definitionHash`不符或同一修订出现多个`FORMAL_CURRENT`均为处置冲突并fail-closed。
 
 迁移边界固定如下：
 
@@ -1842,7 +1842,7 @@ interface FiveAxisDefinitionDispositionCatalogRevision {
 - 新定义发布后，旧定义可继续保持`LEGACY_SNAPSHOT_ONLY`；此前符合本契约的正式定义被替换时，必须在同一个后继目录修订中把旧项写为`SUPERSEDED`、把新项写为唯一`FORMAL_CURRENT`。新定义、完整后继目录修订和目录头条件更新必须在一个数据库事务提交；并发头冲突方回滚并基于新头重算。任何替换都不修改历史定义、历史目录修订或Snapshot。
 - 新正式Snapshot必须冻结其解析使用的`catalogRevisionId + catalogHash`以及命中的处置项；历史Snapshot没有该字段时仍按原冻结定义重放，不得补写。仅目录证据revision变化而命中的定义及全部五维语义输入未变化时，不得单独造成五维UpgradeCandidate。
 
-迁移与发布门禁最低测试：旧定义迁移前后payload/hash及全部历史Snapshot字节不变；迁移重复运行不产生重复目录修订；仅有旧`PUBLISHED`定义时新正式Snapshot被拒绝；目录链断裂、前驱ID/hash不一致、重复项、hash错误、多个正式项或并发头冲突时fail-closed；改变`catalogRevisionId`或`decidedAt`不改变相同目录语义的`catalogHash`；符合新契约且固定哈希向量、投影选择器和比较策略均通过的定义才能成为唯一`FORMAL_CURRENT`；替换定义时旧项`SUPERSEDED`、新项`FORMAL_CURRENT`与目录头原子切换；切换正式定义只产生面向新版本的UpgradeCandidate，不改写旧Snapshot。
+迁移与发布门禁最低测试：旧定义迁移前后payload/hash及全部历史Snapshot字节不变；迁移重复运行不产生重复目录修订；仅有旧`PUBLISHED`定义时新正式Snapshot被拒绝；目录链断裂、前驱ID/hash不一致、同一`definitionId + definitionVersion`出现不同hash、目录hash与定义记录不一致、多个正式项或并发头冲突时fail-closed；改变`catalogRevisionId`或`decidedAt`不改变相同目录语义的`catalogHash`；符合新契约且固定哈希向量、投影选择器和比较策略均通过的定义才能成为唯一`FORMAL_CURRENT`；替换定义时旧项`SUPERSEDED`、新项`FORMAL_CURRENT`与目录头原子切换；切换正式定义只产生面向新版本的UpgradeCandidate，不改写旧Snapshot。
 
 ## 22. 五维图双模式叠加比较
 

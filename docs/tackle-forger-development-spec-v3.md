@@ -1760,7 +1760,7 @@ interface GanttNodeAggregate {
   directLifecycle: LifecycleState;
   directAttention: AttentionState[];
   descendantStateCounts: Record<string, number>;
-  modelCountTotal?: number; modelCountVisible: number;
+  modelCountTotal: number; modelCountMatched: number;
   blockingIssueCount: number; warningCount: number;
   upgradeCandidateCount: number; hasMoreChildren: boolean;
 }
@@ -1769,9 +1769,9 @@ interface GanttNodeAggregate {
 - 主矩阵纵轴为版本化、可配置的重量显示分段；横轴第一层固定按品质C/绿、B/蓝、A/紫、S/橙分组，第二层按当前启用的Type分组。
 - 每个Series放入其固定Quality + Type列，并以覆盖块跨越该Series离散`targetPullsKg`的最小/最大显示位置；覆盖块只是规划轮廓，不是连续SKU或插值区间。
 - 覆盖块内部只绘制真实SKU节点。显示分段或节点位置只用于布局，最近模板匹配仍使用SKU的精确targetPullKg。
-- 同字段OR、不同字段AND；文本只搜有权查看的ID、名称、别名。
+- 同字段OR、不同字段AND；文本搜索当前工作区中的ID、名称、别名。
 - 默认加载矩阵Series摘要；选中/展开Series覆盖块时，在底部摘要按重量升序加载真实SKU；展开SKU摘要时按展示顺序加载Model，使用服务端游标。
-- 聚合区分总数和筛选/权限可见数；无权知道总数时省略`modelCountTotal`。
+- 聚合区分总数和当前查询命中数；`modelCountMatched`只表达筛选结果，不表达对象权限或安全裁剪。
 - 主状态优先级：硬冲突 > rebase > 待复核 > 警告 > 待发布 > 升级候选 > 已发布 > 草稿；全部计数保留。
 - 点击Series覆盖块只更新底部Series摘要；点击SKU节点选中对应SKU并展示抽屉入口，不因单Model跳级；点击Model行才打开右侧预览。“打开Series/进入SKU抽屉”使用显式动作。
 - 矩阵空白和重量分段标签不创建SKU；新建重量必须使用“添加重量规格”。
@@ -1779,8 +1779,9 @@ interface GanttNodeAggregate {
 正常路径：筛选矩阵，选中Series覆盖块，在底部摘要展开SKU与Model并打开预览。  
 边界：单SKU仍有一个真实节点；无SKU草稿Series显示未覆盖占位，不绘制虚假跨度。  
 冲突：翻页ETag变化使游标失效，不静默拼接新旧聚合。  
-恢复：保留筛选、矩阵滚动和选中Series刷新；节点移除则回最近可见父级。  
-权限：先做对象级过滤，聚合不得泄露无权对象名称、状态或精确数量。  
+恢复：保留筛选、矩阵滚动和选中Series刷新；节点移除则回最近仍存在的父级。
+
+权限：按第20.2节使用全员统一的已启用Capability和功能开关；R1不得实现对象级过滤、对象级总数隐藏或部分谱系披露。功能未启用或Capability不可用时，服务端返回禁用原因且写接口再次鉴权。
 验收：Given 1.5kg与1.8kg命中同一模板，When 查看同一Series覆盖块，Then 两个精确重量以独立SKU节点显示且各自状态独立，并显示“覆盖范围不代表连续插值”。
 
 ### 24.3 R2：稳定标识、面包屑和权限
@@ -1799,8 +1800,8 @@ interface BreadcrumbItem {
 边界：无Collection从Series开始；多Snapshot显式选版本。  
 冲突：父链与不变量不一致产生数据完整性error。  
 恢复：返回有效父级/迁移审计/修复引用，不自动猜父级。  
-权限：read/edit/review/publish分别判定。  
-验收：Given 用户仅有Model只读权限，When 深链接打开，Then 可看允许披露父链，写动作显示服务端禁用原因。
+权限：read/edit/review/publish继续映射为独立Capability和`ActionAvailability`，但当前策略把全部已启用Capability统一授予所有已登录公司用户，不按对象、父级或业务角色裁剪。
+验收：Given 已登录公司用户深链接打开Model或Snapshot，When 服务端解析对象，Then 返回完整稳定父链；写动作只因功能开关、领域关口、revision或当前Capability未启用而禁用，并显示服务端原因，不产生“仅披露部分父链”的对象级权限分支。
 
 ### 24.4 R3：“生成 Model 候选”
 

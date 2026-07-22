@@ -71,9 +71,27 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "请求体无效。" }, { status: 400 });
   }
 
-  const name = (body.name ?? "").trim();
-  const concept = (body.concept ?? "").trim();
-  const idempotencyKey = (body.idempotencyKey ?? "").trim();
+  const requiredStringFields = [
+    "idempotencyKey", "seriesId", "name", "concept", "itemPartId", "methodId",
+    "typeId", "functionId", "qualityId", "discretePulls",
+  ] as const satisfies readonly (keyof SeriesCreateRequest)[];
+  const optionalStringFields = [
+    "collectionId", "performanceId", "planningMinKgf", "planningMaxKgf",
+  ] as const satisfies readonly (keyof SeriesCreateRequest)[];
+  const invalidField = requiredStringFields.find((field) => typeof body[field] !== "string")
+    ?? optionalStringFields.find(
+      (field) => body[field] !== undefined && typeof body[field] !== "string",
+    );
+  if (invalidField) {
+    return NextResponse.json(
+      { error: `字段 ${invalidField} 必须是字符串。`, field: invalidField },
+      { status: 400 },
+    );
+  }
+
+  const name = body.name.trim();
+  const concept = body.concept.trim();
+  const idempotencyKey = body.idempotencyKey.trim();
   if (!idempotencyKey) {
     return NextResponse.json({ error: "缺少创建命令幂等键。" }, { status: 422 });
   }

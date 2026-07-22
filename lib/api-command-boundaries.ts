@@ -1,16 +1,14 @@
 import type { RequestIdentity } from "./auth";
 import type { WorkspaceState } from "./types";
 
-const wholeStatePutAllowedKeys = new Set<keyof WorkspaceState>(["notes"]);
-
 export function findGovernedStateChanges(
   current: WorkspaceState,
   proposed: WorkspaceState,
 ): string[] {
-  return (Object.keys(current) as (keyof WorkspaceState)[]).filter(
-    (key) => !wholeStatePutAllowedKeys.has(key),
-  ).filter(
-    (key) => JSON.stringify(current[key]) !== JSON.stringify(proposed[key]),
+  const keys = new Set([...Object.keys(current), ...Object.keys(proposed)]);
+  return [...keys].filter((key) => key !== "notes").filter(
+    (key) => JSON.stringify((current as unknown as Record<string, unknown>)[key])
+      !== JSON.stringify((proposed as unknown as Record<string, unknown>)[key]),
   );
 }
 

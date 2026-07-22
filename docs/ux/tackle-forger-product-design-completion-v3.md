@@ -179,7 +179,9 @@ UpgradeCandidate 只描述“升级会怎样”。批准不改变旧 Snapshot；
 
 一个目标失败不伪装全成功；默认继续写入其他合格目标，失败项保留预览和恢复Manifest。工具不读取`config_system.toml`，不执行Git命令。StoreBuy新增`enabled`上架开关：新行默认false，更新普通属性保留目标原值。
 
-策略发布、每次ID预留和每次1.5期正式导出前都重新比较authoritative ref、commit、`config.toml`和workbook hashes与获批Manifest；导出还检查本地worktree HEAD与文件基线。任何漂移显示`CONFIG_TARGET_SCAN_MANIFEST_STALE`，禁用预留/正式导出动作并引导重新扫描、复核和发布策略。预留动作同时绑定Model expected revision；并发改key时显示`MODEL_REVISION_CONFLICT`且不消耗ID。
+策略发布、每次ID预留、历史ID正式导入和每次1.5期正式导出前都重新比较authoritative ref、commit、`config.toml`和workbook hashes与获批Manifest；导出还检查本地worktree HEAD与文件基线。正式动作必须显示并使用配置目标治理租约，冻结Manifest集合、expected old OID、`leaseId`和单调`fencingToken`；配置仓库ref不能接入受保护CAS时显示`CONFIG_TARGET_SERIALIZATION_UNAVAILABLE`并禁用动作。任何漂移显示`CONFIG_TARGET_SCAN_MANIFEST_STALE`，引导重新扫描、复核和发布策略。预留动作同时绑定Model expected revision；历史导入绑定finding/review revision与源行hash；并发冲突均不消耗ID或写永久占用。
+
+问题动作中，导航、查看证据和帮助是无副作用链接；确认warning、申请/批准waiver、重算和创建规则源变更草稿必须使用统一`ActionCode`及不可篡改payload。界面不得发送`approve_waiver`、`request_waiver`、`retry`等旧通用写动作；重试复用原ActionCode和幂等payload。
 
 价值分自动定价的未决源表项统一登记为v3 `OPEN-007`。主飞书工作簿revision `2869`中，`07_品质评分/FqD4j7`已提供品质区间、Quality→PricingBasket映射和价格系数区间，`08_价格计算/u87sRh`已提供评分线性插值、重量段查表、零整比、金币和三位有效数字向下取整。当前精确阻断项是：`QUALITY_SCORE_BOUNDARY_CONFLICT`（S品质100分边界）、`QUALITY_SCORE_SOURCE_MISSING`（性能评分来源），以及缺少`roundingStage`、`minimumPriceScope`和`overflowMode`。界面可展示带`NON_FORMAL`标记的价格试算、来源revision和逐步Trace；上述Issue未解决时，新PricingPolicyVersion、依赖它的Model发布、Snapshot和Store导出均必须精确阻断，不提供手填价格兜底。
 
@@ -195,11 +197,11 @@ UpgradeCandidate 只描述“升级会怎样”。批准不改变旧 Snapshot；
 | R6 AI | 带证据建议 | 证据不足 | 与硬校验冲突 | 重评，旧建议只读 | evaluate/draft 分离 | G AI 要降硬冲突，W 展示，T 冲突不变 |
 | R7 AI→Patch | 确认差异建 draft | 部分参数移除 | Model 已变/未决 set | 保留表单并刷新 | create/review 分离 | G Revision 变化，W 创建，T 阻止旧 before |
 | R8 AI→飞书 | 草稿→影响→人工确认写回→回读→显式拉取 | 覆盖率不足 | sourceRevision变 | 幂等回读/重试 | AI草稿、写回、拉取、发布分离 | G超时但已写入，W回读恢复，T不重复 |
-| R9 Issue | 分区并执行动作 | 一根因多对象 | 互斥动作 | retry/recompute | 可看不等于可修 | G deny/Affinity/不变量并存，W 返回，T 不互抵 |
+| R9 Issue | 分区并执行动作 | 一根因多对象 | 互斥动作 | 原动作幂等重试/统一重算动作 | 可看不等于可修 | G旧waiver/retry别名，W迁移，T不绕过payload |
 | R10 冻结 | rebase→新快照 | 语义相同 | 基线再变 | 复制到最新候选 | rebase/review/publish 分离 | G S1 已发布，W 批准升级，T S1 不变 |
 | R11 状态 | 三组状态映射 | 未知码只读 | 非法组合 | 重同步/审计 | 文案不授权 | G PUBLISHED+UPGRADE，W 渲染，T 两标签并存 |
 | R12 开放配置 | 已发布策略驱动 | 配置缺失 | 草稿混正式 | 回有效版本 | 策略三权分离 | G 阈值未确认，W 实现，T 从配置读取 |
-| R13 导出 | 一期NON_FORMAL；1.5期多profile→校验 | 未登记目标/只读profile | Manifest stale、Model revision、主键/TOML断链 | 重扫复核/保留结果重跑 | preview/commit及ID治理动作分离 | G ref推进或并发改key，W预留/导出，T禁用且不消耗ID/不落盘 |
+| R13 导出 | 一期NON_FORMAL；1.5期多profile→校验 | 未登记目标/只读profile | Manifest stale、治理租约/CAS、Model或review revision、主键/TOML断链 | 重扫复核/幂等恢复 | preview/commit及ID治理动作分离 | G最后ref检查后并发推进，W预留/导入，T写入被拒或事务回滚且无永久冲突 |
 | R14 登录 | 飞书会话 | AI 关闭 | 会话过期 | 重登并重验 | 一期仍返回 capability | G 会话过期，W 重登，T 表单保留且重验 |
 
 ## 13. 保持开放、不得固化

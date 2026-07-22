@@ -6,6 +6,7 @@
 > 本次反馈归并复核：2026-07-22 22:55:13 +0800，HEAD `ba2111c2e6021d968606cfe4ee3e839732184d71`；只复核本次五条反馈及对应代码事实，没有重跑完整测试。
 > 远端分支复审：2026-07-22 23:03:53 +0800，`origin/review/current-state-2026-07-22@fee6c83a1f269ef310116828ad40bd6d832020c7`；完整测试与类型检查已重跑，详细证据见`../audits/remote-branches-review-2026-07-22.md`。
 > 规范同步：2026-07-23，按v3 OPEN-008已确认决策修正1/1.5期边界与外部阻断；本次只更新目标契约和差距描述，不冒充代码实现或新测试证据。  
+> OPEN-008合并后修正：2026-07-23，补充跨Git/ledger治理租约与fencing/CAS、统一ActionCode写动作及历史导入并发幂等目标契约；仍只记录规范目标，不冒充运行时实现。
 > OPEN-009对象可见性复核：2026-07-23 05:41:56 +0800，代码基线`origin/main@33cb47e4d923e6675f1a1bab8b2685266117bcaf`（提交时间2026-07-23 05:18:57 +0800）；确认运行时与测试仍执行对象级裁剪、隐藏计数和脱敏父链，本轮仅修正文档状态并由[Issue #31](https://github.com/futouyiba/tackle-forger/issues/31)跟踪实现迁移。
 > 对齐基线：v3 领域规范 > product-design-completion-v3 > implementation/requirements handoff > ux-design-v1 与 prototype 视觉证据。  
 > 状态定义：已实现、部分实现、缺失、因 v3 冲突而不采纳。
@@ -37,9 +38,9 @@
 | 五维图及双模式比较 | 已实现 | 版本化 ViewDefinition/VertexSet、单装备/钓组模式、缺失值不归零、Snapshot 冻结 | 中档边界继续保持种子配置，不固化为永久常量 |
 | AI 建议壳与草稿边界 | 已实现 | AI 默认关闭；仅草稿；不能写飞书、发布或改变裁决；证据、过期和权限契约已有测试 | OPEN-006 未确认前不得连接外部模型 |
 | AI 真实供应方 | 部分实现 | UI 明确禁用并解释原因 | 等待用户确认供应方、模型、字段白名单和数据出网策略 |
-| ValidationIssue 与 ActionLink | 部分实现 | EntityRef、ActionAvailability、部分命令契约和页面问题展示已存在；品质模块已有BLOCKER概念 | 主领域仍使用`level=error/warning/info`，命令层另有小写severity+blocking，查询层又消费四档Severity；尚未统一v3的Severity/Gate/State、BLOCKER和版本化waiver，也未实现OPEN-008新增治理ActionCode、禁用态及不可篡改payload契约 |
+| ValidationIssue 与 ActionLink | 部分实现 | EntityRef、ActionAvailability、部分命令契约和页面问题展示已存在；品质模块已有BLOCKER概念 | 主领域仍使用`level=error/warning/info`，命令层另有小写severity+blocking，查询层又消费四档Severity；尚未统一v3的Severity/Gate/State、BLOCKER和版本化waiver，也未把warning确认、waiver、重算、规则草稿等全部写动作收口到统一ActionCode/不可篡改payload；旧同义动作仍需迁移拒绝测试 |
 | 内网飞书登录 | 已实现 | OAuth state、会话持久化、过期、防重放、可信代理和 API 401 测试 | 部署环境需配置 HTTPS 回调或明确私网 HTTP |
-| 本地 configs 多环境/多渠道三表交付 | 部分实现 | 既有代码已有config.toml、映射版本、预览、关系校验、备份、幂等、冲突恢复、GoodsBasic+StoreBuy | v3已把一期收紧为不可提交`NON_FORMAL`预览，正式预留/人工搬运包/worktree写入移到1.5期；尚未实现稳定rangeId ledger、Model revision锁、权威目标目录/获批Manifest、新鲜度复验及dev/test/online/release正式流程，现有执行器不能作为已满足新契约的证据 |
+| 本地 configs 多环境/多渠道三表交付 | 部分实现 | 既有代码已有config.toml、映射版本、预览、关系校验、备份、幂等、冲突恢复、GoodsBasic+StoreBuy | v3已把一期收紧为不可提交`NON_FORMAL`预览，正式预留/人工搬运包/worktree写入移到1.5期；尚未实现稳定rangeId ledger、Model revision锁、权威目标目录/获批Manifest、跨Git/ledger治理租约与受保护CAS、历史导入并发幂等及dev/test/online/release正式流程，现有执行器不能作为已满足新契约的证据 |
 | Snapshot 冻结与 UpgradeCandidate | 已实现 | 已发布 Snapshot 内容/hash/有序 Patch 引用不可原地变更；上游变化只产生升级候选 | 无 |
 | 09_甘特图作为产品实体 | 因 v3 冲突而不采纳 | 09 只属于开发排期；产品甘特图来自本地 Series/SKU/Model | 不从 09 反向生成领域对象 |
 | 11/12/14–17 反向覆盖产品真相 | 因 v3 冲突而不采纳 | 仅作为历史样例、映射参考或暂存输出 | 不反向覆盖 Snapshot |
@@ -63,7 +64,7 @@
 2. Vercel评审项目当前只配置`BLOB_READ_WRITE_TOKEN`，缺少`FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_TENANT_KEY`、`FEISHU_REDIRECT_URI`和`FEISHU_SESSION_SECRET`；首页HTTP 200，但会话端点返回503/`AUTH-CONFIG-001`，需部署方提供公司应用凭据并在飞书开放平台登记回调。
 3. OPEN-007：S=100边界、性能评分来源、PricingPolicy的roundingStage、minimumPriceScope、overflowMode尚未全部由权威规则源解决，因此新正式价格策略及其Model/Snapshot/Store导出必须继续阻断。
 4. OPEN-006 尚未确认 AI 供应方、模型和数据出网策略，因此真实 AI 连接器必须继续禁用。
-5. OPEN-008的数字区间、派生关系、命名、永不复用和权限语义已经确认；但尚未发布权威`ConfigTargetCatalogVersion`、覆盖全部必需目标的获批且新鲜`ConfigTargetScanManifest`、可校验`ConfigIdPolicyVersion`及reservation ledger，也未实现Model revision锁，因此仍不能正式预留ID或提交配置。
+5. OPEN-008的数字区间、派生关系、命名、永不复用和权限语义已经确认；但尚未发布权威`ConfigTargetCatalogVersion`、覆盖全部必需目标的获批且新鲜`ConfigTargetScanManifest`、可校验`ConfigIdPolicyVersion`及reservation ledger，也未实现Model revision锁、跨Git/ledger治理租约与受保护ref CAS、历史导入并发幂等和统一ActionCode payload收口，因此仍不能正式预留ID、导入永久占用或提交配置。
 6. 真实 configs Git 目标需由配置治理方发布环境/渠道权威目录并完成authoritative ref、commit、`config.toml`和workbook hash扫描复核；用户本机目录绑定和旧Profile不能替代该门禁，未完成时只能`NON_FORMAL`预览。
 
 ## 4. 当前验证证据

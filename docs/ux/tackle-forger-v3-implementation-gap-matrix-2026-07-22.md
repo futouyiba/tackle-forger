@@ -7,7 +7,7 @@
 > 远端分支复审：2026-07-22 23:03:53 +0800，`origin/review/current-state-2026-07-22@fee6c83a1f269ef310116828ad40bd6d832020c7`；完整测试与类型检查已重跑，详细证据见`../audits/remote-branches-review-2026-07-22.md`。
 > 规范同步：2026-07-23，按v3 OPEN-008已确认决策修正1/1.5期边界与外部阻断；本次只更新目标契约和差距描述，不冒充代码实现或新测试证据。  
 > OPEN-009对象可见性复核：2026-07-23 05:41:56 +0800，代码基线`origin/main@33cb47e4d923e6675f1a1bab8b2685266117bcaf`（提交时间2026-07-23 05:18:57 +0800）；确认运行时与测试仍执行对象级裁剪、隐藏计数和脱敏父链，本轮仅修正文档状态并由[Issue #31](https://github.com/futouyiba/tackle-forger/issues/31)跟踪实现迁移。
-> OPEN-003运行时复核：2026-07-23，代码基线`codex/open-003-deferred-parts@cdcbd7ce6bea60548f2224039861593c453ae028`；确认迁移层会保留四类扩展部位，创建Series页面仍渲染全部`state.itemParts`，服务端尚无独立启用策略门禁。本轮只记录实现事实，由[Issue #37](https://github.com/futouyiba/tackle-forger/issues/37)跟踪代码收口。
+> OPEN-003运行时收口：2026-07-23 07:05:00 +0800，代码基线`codex/issue-37-enabled-parts@2eec6d70755d1f72cffe6f2302d63a35ac09f241`；在尚无可校验已发布`enabledItemPartPolicy`时统一fail-closed，只允许竿、轮、线进入产品入口、Series/SKU、候选生成、发布、Snapshot与配置导出。钩、漂、真饵、拟饵继续保留稳定ID、历史Payload、未知字段和引用，但不再进入产品主流程；由[Issue #37](https://github.com/futouyiba/tackle-forger/issues/37)跟踪评审交付，且不据此宣称OPEN-003已有已发布策略或已RESOLVED。
 > 对齐基线：v3 领域规范 > product-design-completion-v3 > implementation/requirements handoff > ux-design-v1 与 prototype 视觉证据。  
 > 状态定义：已实现、部分实现、缺失、因 v3 冲突而不采纳。
 
@@ -44,7 +44,7 @@
 | Snapshot 冻结与 UpgradeCandidate | 已实现 | 已发布 Snapshot 内容/hash/有序 Patch 引用不可原地变更；上游变化只产生升级候选 | 无 |
 | 09_甘特图作为产品实体 | 因 v3 冲突而不采纳 | 09 只属于开发排期；产品甘特图来自本地 Series/SKU/Model | 不从 09 反向生成领域对象 |
 | 11/12/14–17 反向覆盖产品真相 | 因 v3 冲突而不采纳 | 仅作为历史样例、映射参考或暂存输出 | 不反向覆盖 Snapshot |
-| 扩展部位主流程 | 部分实现 | 注册表和迁移层会保留钩、漂、真饵、拟饵并标记`activeInGeneration=false`；但创建Series页面仍直接渲染全部`state.itemParts`，写接口也未独立校验启用部位策略 | OPEN-003已确认当前完全延期；按[Issue #37](https://github.com/futouyiba/tackle-forger/issues/37)移除产品入口并增加服务端门禁，同时保留稳定ID、历史Payload和引用。修复完成前不得声称运行时已经禁用 |
+| 扩展部位主流程 | 已实现 | `enabled-item-parts`在OPEN-003未发布策略时统一fail-closed，且不信任注册表的`activeInGeneration`；产品创建/只读入口、Series/SKU、结构匹配、候选生成与物化、Model发布、Snapshot批次、文件系统和浏览器配置导出均只允许竿、轮、线。被延期部位返回稳定`ITEM_PART_NOT_ENABLED`且在幂等记录、备份或文件写入前失败；迁移测试证明稳定ID、历史Payload、未知字段和引用保持不变，冻结Snapshot/hash不被重算 | 等待独立评审与GitHub Actions；OPEN-003仍没有可校验的已发布策略，因此继续保持fail-closed，不标记OPEN-003为RESOLVED |
 
 ## 2. 产品反馈归并
 
@@ -69,6 +69,7 @@
 
 ## 4. 当前验证证据
 
+- Issue #37代码基线`2eec6d70755d1f72cffe6f2302d63a35ac09f241`：完整`npm test`为216项主测试通过，另有1项渲染测试通过；`npm run typecheck`通过；`npm run lint`为0错误，仅保留仓库既有`vitest.workspace.config.ts`匿名默认导出警告。新增回归覆盖迁移/重启保留未知Payload、产品入口隐藏、服务端稳定拒绝与无副作用、候选生成/物化、发布/Snapshot冻结，以及文件系统和浏览器导出在写入前拒绝。
 - 远端复审完整`npm test`为190项主测试通过，另有1项渲染测试通过，覆盖领域、API、迁移、权限、冲突、恢复、SQLite持久化和冻结。
 - 默认入口遗漏的`tests/feishu-writeback.test.ts`单独5项通过；遗漏本身仍由`AUD-025`管理。
 - `npm run typecheck`通过。

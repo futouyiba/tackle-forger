@@ -6,6 +6,7 @@
 > 本次反馈归并复核：2026-07-22 22:55:13 +0800，HEAD `ba2111c2e6021d968606cfe4ee3e839732184d71`；只复核本次五条反馈及对应代码事实，没有重跑完整测试。
 > 远端分支复审：2026-07-22 23:03:53 +0800，`origin/review/current-state-2026-07-22@fee6c83a1f269ef310116828ad40bd6d832020c7`；完整测试与类型检查已重跑，详细证据见`../audits/remote-branches-review-2026-07-22.md`。
 > 规范同步：2026-07-23，按v3 OPEN-008已确认决策修正1/1.5期边界与外部阻断；本次只更新目标契约和差距描述，不冒充代码实现或新测试证据。  
+> OPEN-009对象可见性复核：2026-07-23 05:41:56 +0800，代码基线`origin/main@33cb47e4d923e6675f1a1bab8b2685266117bcaf`（提交时间2026-07-23 05:18:57 +0800）；确认运行时与测试仍执行对象级裁剪、隐藏计数和脱敏父链，本轮仅修正文档状态并由[Issue #31](https://github.com/futouyiba/tackle-forger/issues/31)跟踪实现迁移。
 > 对齐基线：v3 领域规范 > product-design-completion-v3 > implementation/requirements handoff > ux-design-v1 与 prototype 视觉证据。  
 > 状态定义：已实现、部分实现、缺失、因 v3 冲突而不采纳。
 
@@ -19,7 +20,7 @@
 | Series 规划范围与离散拉力规格 | 已实现 | 正式创建以明确离散列表为唯一必填生成输入；planningPullRange 可选且不参与生成；每个值独立匹配并物化一个 SKU | 无 |
 | 连续范围自动生成 SKU | 因 v3 冲突而不采纳 | v3 固定“范围负责规划，离散拉力负责生成” | 不实现连续插值或静默补规格 |
 | 纵向重量轴、横向品质/类型泳道 | 已实现 | SeriesGanttWorkbenchV3 使用真实离散 SKU 节点与 Series 覆盖块；范围不充当实体 | 实际页面继续做视觉密度微调 |
-| SKU 抽屉与多个 Model | 已实现 | Series/SKU/Model 稳定父链、Model 候选生成、抽屉及右侧 Model 预览 | 无 |
+| SKU 抽屉与多个 Model | 部分实现 | SKU抽屉、多Model、候选生成与右侧预览已存在；但`SeriesGanttQuery`仍按对象可见性裁剪Series/SKU/Model并隐藏总数，R2父链仍会返回脱敏占位，与当前OPEN-009统一业务Capability契约冲突 | 按[Issue #31](https://github.com/futouyiba/tackle-forger/issues/31)移除对象级裁剪、隐藏计数和脱敏父链，改为Model总数/当前查询命中数、完整稳定父链及跨工作区明确拒绝，并补齐R1/R2回归 |
 | SKU targetPullKg变更身份保护 | 部分实现 | 已有离散拉力唯一性、稳定skuId、revision和Snapshot冻结基础 | 尚缺统一重量变更命令及回归：无已发布后代时同skuId新revision；有已发布后代时强制新SKU并可废弃旧SKU |
 | 最近结构标杆 | 已实现 | 相同部位、钓法、类型、功能内按 abs(ln(target/derived))；不插值；平局规则确定 | 无 |
 | Patch 分层与 Rebase | 已实现 | patch-engine 支持稳定层序、冲突与 rebase 差异；上游变化不改旧 Snapshot | 无 |

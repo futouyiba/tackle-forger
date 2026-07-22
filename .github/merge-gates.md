@@ -4,6 +4,38 @@ Tackle Forger currently does not use a GitHub Ruleset or branch protection as
 the merge gate. Issue #27 deliberately chose an Agent/managed-flow gate. Do not
 add required checks, status contexts, or a duplicate workflow for this policy.
 
+## Review readiness is not merge readiness
+
+Use separate decisions for entering formal review and entering the merge path:
+
+- A pull request is **ready for review** when its scoped implementation,
+  validation, migration notes, risks, and rollback evidence are complete enough
+  for a reviewer to decide. At that point, remove Draft and move the linked
+  Issue to `In review`.
+- A pull request is **merge-ready** only when the live checker accepts its
+  current head, all required reviews and threads are settled, dependencies and
+  the base are current, and the user has authorized the merge.
+
+Do not require this merge checker to pass before removing Draft. The checker
+intentionally rejects Draft pull requests, while a high-risk approval is
+normally collected after formal review begins. Requiring both in the opposite
+order creates a circular blocker. The correct high-risk sequence is:
+
+```text
+complete implementation and scoped validation
+→ remove Draft and enter formal review
+→ obtain a current-head non-author APPROVED review
+→ run the live merge checker
+→ obtain explicit merge authorization
+```
+
+Classify blockers before changing ownership: implementation or acceptance
+defects return to implementation; evidence gaps require collection or reruns;
+metadata lag is reconciled by an authorized observer; external approval blocks
+merge without making the code defective; dependency or base changes require a
+sync and fresh current-head CI. Never return work to an implementer solely to
+change Draft or Issue status.
+
 Before recommending or performing a merge, the supervising Agent must classify
 the change as `normal` or `high` risk and run the read-only checker against the
 live pull request:

@@ -33,6 +33,12 @@
 
 - 当前不配置GitHub Ruleset、分支保护、required check或额外status context；合并门禁由首个有权限的
   Agent或单一托管主管在实时GitHub状态上执行，不得新增重复workflow代替该流程。
+- `Ready for review`与“可合并”是两个独立判断。实现、范围内验证、迁移/风险/回滚说明已足以让评审者
+  作出决定时，Pull Request应退出Draft，关联Issue同步进入`In review`；不得先要求只能在非Draft阶段
+  取得的人工批准或合并门禁放行结果，否则会形成流程死锁。
+- 阻断必须归类为实现/验收缺陷、证据缺口、元数据滞后、外部授权或依赖/基线变化。只有实现、测试、
+  代码冲突或验收条件问题才退回实现；Draft和Issue状态由有权限的观察者幂等修正，缺少人工批准只阻断
+  合并，不表示代码有缺陷，也不阻止已完成变更进入正式评审。
 - 合并前显式把变更分类为`normal`或`high`，并运行`npm run governance:check-pr -- --repo
   futouyiba/tackle-forger --pr <number> --risk <normal|high>`；任何相关远端状态变化后必须重跑。
 - 只接受Pull Request同一个当前head SHA上的根npm CI、历史pnpm CI和Windows行尾检查；缺失、未完成、

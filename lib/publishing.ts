@@ -37,6 +37,7 @@ import type {
   PassiveSkillPayload,
   WorkspacePolicyRecord,
 } from "./types";
+import { structuralPullParameterKey } from "./projection-matcher";
 import type { ModelAffixValueAssessment } from "./quality-value-policy";
 import type { PricingTrialResult } from "./pricing-policy";
 import {
@@ -51,6 +52,15 @@ import {
   verifyCalculationTraceArchive,
   type CalculationTraceEntry,
 } from "./calculation-trace";
+
+export function modelFinalPullKgForSnapshot(
+  itemPartId: string | undefined,
+  finalPanelValues: Record<string, number | string>,
+): number | undefined {
+  const parameterKey = itemPartId ? structuralPullParameterKey(itemPartId) : undefined;
+  const value = parameterKey ? finalPanelValues[parameterKey] : undefined;
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
 
 function errors(issues: ValidationIssue[]): ValidationIssue[] {
   return issues.filter((issue) => issue.level === "error");
@@ -341,6 +351,10 @@ export function publishConfigurationSnapshot(
     : undefined;
 
   const governance = input.patchOffsetGovernance;
+  const modelFinalPullKg = modelFinalPullKgForSnapshot(
+    input.sku.projectionMatch.itemPartId,
+    input.finalPanelValues,
+  );
   const snapshotWithoutHash: Omit<ConfigurationSnapshot, "contentHash"> = {
     id:
       input.snapshotId ??
@@ -364,6 +378,9 @@ export function publishConfigurationSnapshot(
       patchValidationWaiverRefs: (governance.waivers ?? []).map((waiver) => waiver.waiverId).sort(),
     } : {}),
     finalPanelValues: structuredClone(input.finalPanelValues),
+    ...(modelFinalPullKg !== undefined
+      ? { modelFinalPullKg }
+      : {}),
     componentSelections: structuredClone(input.componentSelections),
     technologyIds: structuredClone(input.technologyIds),
     attributeAffixIds: structuredClone(input.attributeAffixIds),

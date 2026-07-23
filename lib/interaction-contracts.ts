@@ -158,7 +158,7 @@ export function buildProductBreadcrumbs(input: BreadcrumbEntity & {
   if (input.sku) {
     push(
       { workspaceId: input.workspaceId, entityType: "sku_drawer", entityId: input.sku.id, revisionId: String(input.sku.revision) },
-      `${input.sku.targetWeightKg} kg · SKU 抽屉`,
+      `${input.sku.targetPullKg} kg · SKU 抽屉`,
       "SKU 抽屉",
     );
   }
@@ -737,7 +737,7 @@ export function legacyEntityState(input: {
 
 export interface GanttSkuNode {
   skuId: string;
-  targetWeightKg: number;
+  targetPullKg: number;
   modelIds: string[];
   status: string;
   validationIssues: LegacyValidationIssue[];
@@ -770,15 +770,15 @@ export function buildSeriesGanttProjection(input: {
           sku.seriesId === series.id
           && isProductItemPartEnabled(sku.projectionMatch.itemPartId)
           && sku.projectionMatch.itemPartId === itemPartId)
-        .sort((left, right) => left.targetWeightKg - right.targetWeightKg || left.id.localeCompare(right.id))
+        .sort((left, right) => left.targetPullKg - right.targetPullKg || left.id.localeCompare(right.id))
         .map((sku) => ({
           skuId: sku.id,
-          targetWeightKg: sku.targetWeightKg,
+          targetPullKg: sku.targetPullKg,
           modelIds: sku.modelIds.filter((id) => modelIds.has(id)),
           status: sku.status,
           validationIssues: structuredClone(sku.validationSummary),
         }));
-      const weights = skuNodes.map((node) => node.targetWeightKg);
+      const weights = skuNodes.map((node) => node.targetPullKg);
       return {
         seriesId: series.id,
         name: series.name,

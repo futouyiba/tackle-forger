@@ -13,6 +13,7 @@ import {
   canonicalDecimal,
   hashCandidateSemanticInput,
   hashCandidateSet,
+  hashProjectionReferenceSet,
 } from "../lib/five-axis-hash";
 import { deterministicHash } from "../lib/rule-kernel";
 import type {
@@ -79,6 +80,39 @@ test("CanonicalDecimal 无浮点舍入地归一化并拒绝非法值", () => {
   assert.equal(canonicalDecimal("0.0000000000000000001"), "0.0000000000000000001");
   assert.throws(() => canonicalDecimal("NaN"), /非法 CanonicalDecimal/);
   assert.throws(() => canonicalDecimal("Infinity"), /非法 CanonicalDecimal/);
+});
+
+test("投影参考 hash 锚定 baseline Snapshot 且缺失引用显式为 null", () => {
+  const references = ["part:rod", "part:reel", "part:line"].map((itemPartId) => ({
+    itemPartId,
+    state: "missing" as const,
+    projectionMatchId: null,
+    projectionMatchRevisionId: null,
+    projectionId: null,
+    projectionRevisionId: null,
+  }));
+  const common = {
+    selectorVersion: "projection-reference/current-sku-frozen-match/v1" as const,
+    anchor: {
+      baselineSnapshotId: "snapshot:a",
+      seriesId: "series:1",
+      skuId: "sku:1",
+      skuRevisionId: "sku:1@1",
+    },
+    references,
+  };
+  const first = hashProjectionReferenceSet(common);
+  const second = hashProjectionReferenceSet({
+    ...common,
+    anchor: { ...common.anchor, baselineSnapshotId: "snapshot:b" },
+  });
+  assert.notEqual(first, second);
+  assert.throws(() => hashProjectionReferenceSet({
+    ...common,
+    references: references.map((reference, index) => index === 0
+      ? { ...reference, projectionId: "projection:illegal" }
+      : reference),
+  }), /必须显式为 null/);
 });
 
 function legacyDefinition(): LegacyFiveAxisViewDefinition {

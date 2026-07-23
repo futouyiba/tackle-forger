@@ -1091,6 +1091,9 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
     fiveAxisVertexSets: arrayOf<WorkspaceState["fiveAxisVertexSets"][number]>(
       state.fiveAxisVertexSets,
     ),
+    fiveAxisVertexGroupStates: arrayOf<WorkspaceState["fiveAxisVertexGroupStates"][number]>(
+      state.fiveAxisVertexGroupStates,
+    ),
     fiveAxisDispositionCatalogRevisions: dispositionMigration.revisions,
     currentFiveAxisDispositionCatalogRevisionId:
       dispositionMigration.currentRevisionId,

@@ -1063,6 +1063,45 @@ export type StoredFiveAxisVertexSet =
   | LegacyFiveAxisVertexSet
   | FiveAxisVertexSet;
 
+export interface FiveAxisCandidateMembership {
+  groupKey: FiveAxisVertexGroupKey;
+  candidateSources: FiveAxisVertexCandidateSource[];
+}
+
+export interface FiveAxisCandidateDelta {
+  deltaId: string;
+  modelId: string;
+  operation: "ADD" | "REPLACE" | "REMOVE";
+  groupKey: FiveAxisVertexGroupKey;
+  before: FiveAxisCandidateMembership | null;
+  after: FiveAxisCandidateMembership | null;
+  migrationId: string | null;
+}
+
+export interface FiveAxisVertexGroupState {
+  groupKey: FiveAxisVertexGroupKey;
+  state: "AVAILABLE" | "UNAVAILABLE_NO_ELIGIBLE_CANDIDATE";
+  candidateSources: FiveAxisVertexCandidateSource[];
+  candidateSetHash: string;
+  candidateEvidenceHash: string;
+  currentVertexSetId: string | null;
+  currentVertexSetHash: string | null;
+  missingAxisIds: string[];
+  reasonCode: string | null;
+}
+
+export interface FiveAxisTransactionComponent {
+  componentId: string;
+  groupKeys: FiveAxisVertexGroupKey[];
+  deltas: FiveAxisCandidateDelta[];
+  snapshotBuildModelIds: string[];
+}
+
+export interface FiveAxisTransactionPlan {
+  components: FiveAxisTransactionComponent[];
+  inputHash: string;
+}
+
 export interface FiveAxisTraceEntry {
   step: string;
   message: string;
@@ -1103,7 +1142,7 @@ export interface FiveAxisAxisSummary {
 }
 
 export interface FiveAxisComparisonView {
-  mode: "tackle_fit" | "same_part_compare";
+  mode: "tackle_fit" | "same_part_compare" | "equipment_compare";
   referenceFishWeightGradeId: string;
   fiveAxisDefinitionId: string;
   fiveAxisDefinitionVersion: string;
@@ -2050,6 +2089,7 @@ export interface WorkspaceState {
   fiveAxisVertexSets: StoredFiveAxisVertexSet[];
   fiveAxisDispositionCatalogRevisions: FiveAxisDefinitionDispositionCatalogRevision[];
   currentFiveAxisDispositionCatalogRevisionId: string | null;
+  fiveAxisVertexGroupStates: FiveAxisVertexGroupState[];
   workspacePolicies: WorkspacePolicyRecord[];
   patchReviewBatches: PatchReviewBatch[];
   patchValidationWaivers: PatchValidationWaiver[];

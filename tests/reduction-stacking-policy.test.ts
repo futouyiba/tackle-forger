@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   assertFormalSnapshotHasReplayPolicy,
   assertSnapshotReplayPolicyAvailable,
+  applyParameterDefinitions,
   canonicalizeAffixOperations,
   createSnapshotAuditReplayManifest,
   evaluateBidirectionalRatio,
@@ -127,6 +128,47 @@ test("权威机器规则缺失时给出 REDUCTION_POLICY_SOURCE_MISSING，外部
     }),
     /REDUCTION_POLICY_SOURCE_INVALID/,
   );
+});
+
+test("策略发布拒绝与规范内容不一致的 hash、version 和 ID", () => {
+  const draft = importReductionStackingPolicyDraft({
+    sourceRevision: sourceRevision(),
+    machineRules,
+    createdAt: "2026-07-23T01:01:00.000Z",
+  });
+  for (const tampered of [
+    { ...draft, inputHash: "tampered" },
+    { ...draft, contentHash: "tampered" },
+    { ...draft, version: "tampered" },
+    { ...draft, id: "reduction-policy:bidirectional-ratio:tampered" },
+    { ...draft, source: { ...draft.source!, sourceRevision: "tampered" } },
+  ]) {
+    assert.throws(
+      () => publishReductionStackingPolicyVersion({
+        draft: tampered,
+        publishedAt: "2026-07-23T01:02:00.000Z",
+        publishedBy: "reviewer",
+      }),
+      /REDUCTION_POLICY_CONTENT_MISMATCH/,
+    );
+  }
+});
+
+test("运行时拒绝被原地篡改的已发布策略形成正式证据", () => {
+  const policy = publishedPolicy();
+  const result = evaluateBidirectionalRatio({
+    baseValues: { force: 100 },
+    operations: [],
+    policy: {
+      ...policy,
+      source: { ...policy.source!, sourceRevision: "tampered" },
+    },
+  });
+  assert.equal(result.formalStatus, "NON_FORMAL");
+  assert.ok(result.issues.some((entry) =>
+    entry.code === "REDUCTION_POLICY_SOURCE_MISSING"
+    && entry.severity === "BLOCKER"
+  ));
 });
 
 test("bidirectional_ratio 是唯一公式，固定顺序与 binary64 Trace/hash 对输入排列不敏感", () => {
@@ -488,6 +530,22 @@ test("历史 Snapshot 保持完整、允许查看/审计归档，但缺策略时
       version: "different-published-policy",
     }])
   , /SNAPSHOT_REPLAY_POLICY_MISSING/);
+  for (const status of ["published", "superseded"] as const) {
+    for (const tampered of [
+      { ...policy, status, inputHash: "tampered" },
+      { ...policy, status, contentHash: "tampered" },
+      { ...policy, status, id: "reduction-policy:bidirectional-ratio:tampered" },
+      { ...policy, status, source: { ...policy.source!, sourceRevisionId: "tampered" } },
+      { ...policy, status, source: { ...policy.source!, sourceRevision: "tampered" } },
+      { ...policy, status, source: { ...policy.source!, ruleId: "tampered" } },
+      { ...policy, status, source: { ...policy.source!, parameterKey: "tampered" } },
+    ]) {
+      assert.throws(
+        () => assertFormalSnapshotHasReplayPolicy(replayableSnapshot, [tampered]),
+        /SNAPSHOT_REPLAY_POLICY_MISSING/,
+      );
+    }
+  }
   const proposedProjection = {
     ...state.derivedProjections.find((entry) => entry.id === snapshot.projectionId)!,
     id: "projection:policy-upgrade",
@@ -507,6 +565,42 @@ test("历史 Snapshot 保持完整、允许查看/审计归档，但缺策略时
   assert.equal(upgrade.fromSnapshotId, snapshot.id);
   assert.equal(upgrade.proposedReductionStackingPolicyVersion, policy.version);
   assert.equal(verifySnapshotIntegrity(snapshot), true);
+});
+
+test("ParameterDefinition 非法 precision 或 targetRange 保留原值并 fail-closed", () => {
+  for (const definition of [
+    { precision: -1, targetRange: { min: 0, max: 100 } },
+    { precision: 0.5, targetRange: { min: 0, max: 100 } },
+    { precision: Number.POSITIVE_INFINITY, targetRange: { min: 0, max: 100 } },
+    { precision: 0, targetRange: { min: 100, max: 0 } },
+    { precision: 0, targetRange: { min: Number.NEGATIVE_INFINITY, max: 100 } },
+    { precision: 0, targetRange: { min: 0, max: Number.POSITIVE_INFINITY } },
+  ]) {
+    const result = applyParameterDefinitions({
+      values: { force: 50 },
+      definitions: [{
+        key: "force",
+        label: "拉力",
+        itemKind: "rod",
+        itemPartId: "part:rod",
+        unit: "kg",
+        benefitMode: "higher_better",
+        balanceWeight: 1,
+        normalizationScale: 1,
+        allowedOperations: ["set"],
+        notes: "",
+        ...definition,
+      }],
+    });
+    assert.equal(result.values.force, 50);
+    assert.equal(result.trace.length, 0);
+    assert.ok(result.issues.some((entry) =>
+      entry.code === "PARAMETER_DEFINITION_INVALID"
+      && entry.severity === "ERROR"
+      && entry.gate === "REVIEW"
+      && entry.evidence?.waivable === false
+    ));
+  }
 });
 
 test("clamp_add 缺少任一有限端点时隔离参数并保持非正式", () => {

@@ -1,12 +1,13 @@
 import { deterministicHash } from "../../lib/rule-kernel";
 import type { ConfigurationSnapshot } from "../../lib/types";
+import { testReductionPolicy } from "./reduction-policy";
 
 export function formalExportSnapshot(
   source: ConfigurationSnapshot,
   mutate?: (snapshot: ConfigurationSnapshot) => void,
 ): ConfigurationSnapshot {
   const snapshot = structuredClone(source);
-  snapshot.reductionStackingPolicyVersion = "test:reduction-policy:published";
+  snapshot.reductionStackingPolicyVersion = testReductionPolicy().version;
   mutate?.(snapshot);
   const content = structuredClone(snapshot) as Partial<ConfigurationSnapshot>;
   Reflect.deleteProperty(content, "contentHash");

@@ -47,6 +47,35 @@ function stableJson(value: unknown): string {
   return JSON.stringify(stableValue(value));
 }
 
+function reductionPolicyContent(policy: Pick<
+  ReductionStackingPolicyVersion,
+  "strategy" | "numericContract" | "operationOrder" | "source"
+>): Record<string, unknown> {
+  return {
+    strategy: policy.strategy,
+    numericContract: policy.numericContract,
+    operationOrder: policy.operationOrder,
+    source: policy.source ?? null,
+  };
+}
+
+export function reductionPolicyContentHash(policy: Pick<
+  ReductionStackingPolicyVersion,
+  "strategy" | "numericContract" | "operationOrder" | "source"
+>): string {
+  return sha256Text(stableJson(reductionPolicyContent(policy)));
+}
+
+export function hasCanonicalReductionPolicyIdentity(
+  policy: ReductionStackingPolicyVersion,
+): boolean {
+  const contentHash = reductionPolicyContentHash(policy);
+  return policy.contentHash === contentHash
+    && policy.inputHash === contentHash
+    && policy.version === contentHash
+    && policy.id === `${BIDIRECTIONAL_RATIO_POLICY_ID}:${contentHash.slice(0, 16)}`;
+}
+
 function fingerprint(code: string, evidence: Record<string, unknown>): string {
   return sha256Text(stableJson({ code, evidence }));
 }
@@ -127,34 +156,31 @@ export function importReductionStackingPolicyDraft(input: {
     compareUtf8(left.parameterKey, right.parameterKey)
     || compareUtf8(left.ruleId, right.ruleId)
   );
-  const inputHash = sha256Text(stableJson({
-    workbookRefId: sourceRevision.workbookRefId,
+  const source = issues.length || !normalizedRules.length ? undefined : {
+    workbookRefId: "feishu-workbook:tackle-design" as const,
+    sheetId: "zrVOxd" as const,
     sourceRevisionId: sourceRevision.id,
     sourceRevision: sourceRevision.sourceRevision,
-    sheetId: "zrVOxd",
-    rules: normalizedRules,
+    ruleId: normalizedRules.map((rule) => rule.ruleId).join(","),
+    parameterKey: normalizedRules.map((rule) => rule.parameterKey).join(","),
+  };
+  const contentHash = reductionPolicyContentHash({
+    strategy: "bidirectional_ratio",
     numericContract: "ieee754-binary64-v1",
-    operationOrder: BIDIRECTIONAL_RATIO_OPERATION_ORDER,
-  }));
+    operationOrder: [...BIDIRECTIONAL_RATIO_OPERATION_ORDER],
+    source,
+  });
   return {
-    id: `${BIDIRECTIONAL_RATIO_POLICY_ID}:${inputHash.slice(0, 16)}`,
-    version: inputHash,
+    id: `${BIDIRECTIONAL_RATIO_POLICY_ID}:${contentHash.slice(0, 16)}`,
+    version: contentHash,
     status: "draft",
     strategy: "bidirectional_ratio",
     numericContract: "ieee754-binary64-v1",
     operationOrder: [...BIDIRECTIONAL_RATIO_OPERATION_ORDER],
-    ...(issues.length || !normalizedRules.length ? {} : {
-      source: {
-        workbookRefId: "feishu-workbook:tackle-design" as const,
-        sheetId: "zrVOxd" as const,
-        sourceRevisionId: sourceRevision.id,
-        sourceRevision: sourceRevision.sourceRevision,
-        ruleId: normalizedRules.map((rule) => rule.ruleId).join(","),
-        parameterKey: normalizedRules.map((rule) => rule.parameterKey).join(","),
-      },
-    }),
+    ...(source ? { source } : {}),
     issues,
-    inputHash,
+    contentHash,
+    inputHash: contentHash,
     createdAt: input.createdAt,
   };
 }
@@ -164,6 +190,9 @@ export function publishReductionStackingPolicyVersion(input: {
   publishedAt: string;
   publishedBy: string;
 }): ReductionStackingPolicyVersion {
+  if (!hasCanonicalReductionPolicyIdentity(input.draft)) {
+    throw new Error("ReductionStackingPolicyVersion 发布被阻止：REDUCTION_POLICY_CONTENT_MISMATCH");
+  }
   if (input.draft.status === "published") return structuredClone(input.draft);
   if (input.draft.status !== "draft") throw new Error("只有草稿 ReductionStackingPolicyVersion 可以发布。");
   if (!input.draft.source || input.draft.issues.some((entry) => entry.severity === "BLOCKER")) {
@@ -590,6 +619,7 @@ export function evaluateBidirectionalRatio(input: {
   const trace: ProjectionTraceContribution[] = [];
   let sequence = input.sequenceStart ?? 0;
   const policyFormal = input.policy?.status === "published"
+    && hasCanonicalReductionPolicyIdentity(input.policy)
     && input.policy.strategy === "bidirectional_ratio"
     && input.policy.numericContract === "ieee754-binary64-v1"
     && input.policy.issues.every((entry) => entry.severity !== "BLOCKER");
@@ -973,6 +1003,29 @@ export function applyParameterDefinitions(input: {
   for (const definition of [...input.definitions].sort((a, b) => compareUtf8(a.key, b.key))) {
     const before = values[definition.key];
     if (typeof before !== "number") continue;
+    const validPrecision = Number.isInteger(definition.precision)
+      && definition.precision >= 0
+      && Number.isFinite(10 ** definition.precision);
+    const validRange = !definition.targetRange || (
+      Number.isFinite(definition.targetRange.min)
+      && Number.isFinite(definition.targetRange.max)
+      && definition.targetRange.min <= definition.targetRange.max
+    );
+    if (!validPrecision || !validRange) {
+      addRuntimeIssue(
+        issues,
+        "PARAMETER_DEFINITION_INVALID",
+        "ParameterDefinition 的 precision 或 targetRange 非法，已保留结算前值并阻止正式结果。",
+        definition.key,
+        {
+          precision: definition.precision,
+          targetRange: definition.targetRange ?? null,
+          waivable: false,
+        },
+        "ERROR",
+      );
+      continue;
+    }
     const bounded = definition.targetRange
       ? Math.min(definition.targetRange.max, Math.max(definition.targetRange.min, before))
       : before;
@@ -1022,6 +1075,7 @@ export function assertSnapshotReplayPolicyAvailable(input: {
       && policy.source?.workbookRefId === "feishu-workbook:tackle-design"
       && policy.source.sheetId === "zrVOxd"
       && policy.source.sourceRevision !== "17173"
+      && hasCanonicalReductionPolicyIdentity(policy)
       && policy.issues.every((entry) =>
         entry.severity !== "ERROR" && entry.severity !== "BLOCKER"
       )

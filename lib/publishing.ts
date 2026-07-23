@@ -46,6 +46,7 @@ import {
   assertSeriesItemPartChainEnabled,
 } from "./enabled-item-parts";
 import {
+  hasCanonicalReductionPolicyIdentity,
   hashAffixRuntimeEvidence,
   numberToBinary64Hex,
 } from "./reduction-stacking-policy";
@@ -72,6 +73,7 @@ function hasValidReductionPolicyBinding(input: PublishModelInput): boolean {
   return Boolean(
     policy
     && policy.status === "published"
+    && hasCanonicalReductionPolicyIdentity(policy)
     && policy.source
     && policy.source.workbookRefId === "feishu-workbook:tackle-design"
     && policy.source.sheetId === "zrVOxd"

@@ -164,6 +164,7 @@ export interface ReductionStackingPolicyVersion {
   ];
   source?: ReductionStackingPolicySource;
   issues: ValidationIssue[];
+  contentHash: string;
   inputHash: string;
   createdAt: string;
   publishedAt?: string;

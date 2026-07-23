@@ -4,14 +4,12 @@ import type {
   ReductionStackingPolicyVersion,
 } from "../../lib/types";
 import { hashAffixRuntimeEvidence } from "../../lib/reduction-stacking-policy";
+import { reductionPolicyContentHash } from "../../lib/reduction-stacking-policy";
 
 export function testReductionPolicy(): ReductionStackingPolicyVersion {
-  return {
-    id: "test:reduction-policy",
-    version: "test:reduction-policy:published",
-    status: "published",
-    strategy: "bidirectional_ratio",
-    numericContract: "ieee754-binary64-v1",
+  const content = {
+    strategy: "bidirectional_ratio" as const,
+    numericContract: "ieee754-binary64-v1" as const,
     operationOrder: [
       "set",
       "percent_adjust",
@@ -19,17 +17,25 @@ export function testReductionPolicy(): ReductionStackingPolicyVersion {
       "clamp_add",
       "final_review_patch",
       "parameter_definition",
-    ],
+    ] as ReductionStackingPolicyVersion["operationOrder"],
     source: {
-      workbookRefId: "feishu-workbook:tackle-design",
-      sheetId: "zrVOxd",
+      workbookRefId: "feishu-workbook:tackle-design" as const,
+      sheetId: "zrVOxd" as const,
       sourceRevisionId: "test:feishu-revision",
       sourceRevision: "test:machine-revision",
       ruleId: "OPEN-001:bidirectional-ratio",
       parameterKey: "*",
     },
+  };
+  const contentHash = reductionPolicyContentHash(content);
+  return {
+    id: `reduction-policy:bidirectional-ratio:${contentHash.slice(0, 16)}`,
+    version: contentHash,
+    status: "published",
+    ...content,
     issues: [],
-    inputHash: "test:reduction-policy:published",
+    contentHash,
+    inputHash: contentHash,
     createdAt: "2026-07-23T00:00:00.000Z",
     publishedAt: "2026-07-23T00:01:00.000Z",
     publishedBy: "test",

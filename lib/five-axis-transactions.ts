@@ -690,6 +690,7 @@ export function executeFiveAxisSnapshotBatchTransactions(input: {
         assertFormalModelFiveAxisPreview({
           definition,
           preview,
+          expectedCandidateSources: stagedGroup.candidateSources,
           expectedModelId: commit.modelId,
           expectedModelRevisionId:
             `${commit.modelId}@${stagedModels[modelIndex].revision}`,

@@ -597,7 +597,6 @@ function ModelDrawer({
       const hasMatchingFormalEvidence = Boolean(
         frozenPreview
         && frozenPreview.modelFinalPullKg === finalPull
-        && frozenPreview.weightBandId === vertexSet.weightBandId
         && frozenPreview.weightBandPolicyVersion
           === vertexSet.weightBandPolicyVersion
         && frozenPreview.hashInputSchemaVersion
@@ -608,7 +607,8 @@ function ModelDrawer({
           === formalComparisonDefinition.version
         && frozenPreview.fiveAxisRuleVersion
           === formalComparisonDefinition.fiveAxisRuleVersion
-        && frozenPreview.vertexSetHash === vertexSet.vertexSetHash
+        && frozenPreview.weightBandId
+        && frozenPreview.vertexSetHash
         && frozenPreview.candidateSources?.length
         && frozenPreview.candidateSetHash
         && frozenPreview.candidateEvidenceHash

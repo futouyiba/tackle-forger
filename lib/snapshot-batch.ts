@@ -238,13 +238,20 @@ export function planSnapshotBatchFiveAxisTransactions(input: {
   const createItems = new Map(input.batchPlan.items
     .filter((item) => item.decision === "create")
     .map((item) => [item.modelId, item]));
-  for (const delta of input.deltas) {
-    const createItem = createItems.get(delta.modelId);
-    if (!createItem || !delta.after) continue;
-    if (delta.after.candidateSources.some((source) =>
+  for (const [modelId, createItem] of createItems) {
+    const createDeltas = input.deltas.filter((delta) =>
+      delta.modelId === modelId
+      && (delta.operation === "ADD" || delta.operation === "REPLACE")
+      && delta.after);
+    if (createDeltas.length !== 1) {
+      throw new Error(
+        `FIVE_AXIS_SNAPSHOT_DELTA_MISSING：Model ${modelId} 的 create 项必须恰好对应一个 ADD/REPLACE delta。`,
+      );
+    }
+    if (createDeltas[0].after!.candidateSources.some((source) =>
       source.snapshotId !== createItem.snapshotId)) {
       throw new Error(
-        `FIVE_AXIS_SNAPSHOT_ID_CONFLICT：Model ${delta.modelId} 候选未使用批次预分配 snapshotId。`,
+        `FIVE_AXIS_SNAPSHOT_ID_CONFLICT：Model ${modelId} 候选未使用批次预分配 snapshotId。`,
       );
     }
   }

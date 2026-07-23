@@ -112,6 +112,8 @@ Trace、ID 唯一性、前缀与实体类型；写后必须回读恢复，不能
 持久化 `AI_RETENTION_DATA_DIR`、32 字节留存加密密钥及版本，并显式改为
 `FANCY_HUB_ENABLED=true`。缺少任一项时产品入口保持关闭。只有 `AI_PROVIDER_ADMIN_OPEN_IDS` 中的飞书用户拥有
 `ai.provider_policy.manage`；其他已登录公司用户只在功能启用时获得评估、查看和创建草稿能力。
+部署期 provider 硬限额是首次模型发现请求的启动上限；运行时模型列表只能进一步收紧本次调用，
+不能用首次出网后的发现结果补偿缺失的启动配置。
 
 回滚时首先把 `FANCY_HUB_ENABLED` 恢复为 `false` 并重启服务，然后撤销 Fancy Hub token；
 连接器不会自动批准 Patch、写回飞书、发布 RuleSet/Snapshot 或改写历史快照。AI 原始内容、
@@ -122,6 +124,10 @@ Trace、ID 唯一性、前缀与实体类型；写后必须回读恢复，不能
 上界、最大输出 token 与批准费率计算硬准入估算；成功后同步写入审计事件和加密留存记录。Fancy Hub
 响应同样使用严格的 `ai-response/v1`，未知字段、超限内容和请求外别名在生成建议前拒绝，成功
 结果记录规范化 `outputHash`。工作台的 AI 按钮只消费服务端启用状态，并通过认证接口运行。
+生产备份会把 `AI_RETENTION_DATA_DIR` 纳入独立 `ai-retention` 目录；每小时 systemd timer 运行
+`npm run ai-retention:sweep`，完成主存储期限清理，并在备份期限到达后按 assessmentId 删除所有备份副本、
+回读确认后才把墓碑标记为已清除。`GET/DELETE /api/ai/assessments/:assessmentId` 只允许已登录所有者读取或删除；
+删除幂等并立即从读取路径隐藏。
 
 ## 配置表交付
 

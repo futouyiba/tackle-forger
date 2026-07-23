@@ -1,9 +1,15 @@
 import { randomBytes } from "node:crypto";
-import { appendFile, mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, open, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   AI_RETENTION_POLICY_VERSION,
+  assertAIAssessmentVisible,
   encryptAIRawContent,
+  purgeAIAssessmentBackups,
+  requestAIAssessmentDeletion,
+  sweepAIAssessmentRetention,
+  type AIBackupPurgeAdapter,
+  type AIRetentionSweepResult,
   type AIAssessmentRetentionRecord,
 } from "./ai-retention";
 import {
@@ -42,6 +48,21 @@ interface AIAdmissionDocument {
   leases: Record<string, { workspaceId: string; expiresAtMs: number }>;
   assessmentRequestTimesMs: number[];
   providerHardLimits?: AIProviderHardLimits;
+}
+
+export interface AIRetentionAuditEvent {
+  action: AIRetentionSweepResult["auditEvents"][number]["action"];
+  assessmentId: string;
+  actorStableId?: string;
+  occurredAt: string;
+  resultCode: "SUCCESS" | "FAILED";
+}
+
+export interface AIRetentionSweepSummary {
+  recordsScanned: number;
+  recordsChanged: number;
+  auditEventsWritten: number;
+  backupPurgeFailures: number;
 }
 
 const EMPTY_ADMISSION_DOCUMENT: AIAdmissionDocument = {
@@ -100,6 +121,50 @@ export class FileAIRuntimeStore {
     this.assessmentsDir = path.join(config.dataDir, "assessments");
     this.auditFile = path.join(config.dataDir, "audit.jsonl");
     this.admissionFile = path.join(config.dataDir, "admission.json");
+  }
+
+  private assessmentTarget(assessmentId: string): string {
+    if (!/^[A-Za-z0-9-]{1,128}$/.test(assessmentId)) {
+      throw new AIRuntimeStoreError("AI_RETENTION_STORE_UNAVAILABLE", "AI 留存记录 ID 格式无效。");
+    }
+    return path.join(this.assessmentsDir, `${assessmentId}.json`);
+  }
+
+  private async readAssessmentFile(target: string): Promise<AIAssessmentRetentionRecord | undefined> {
+    try {
+      const parsed = JSON.parse(await readFile(target, "utf8")) as AIAssessmentRetentionRecord;
+      if (!parsed || typeof parsed !== "object" || parsed.policyVersion !== AI_RETENTION_POLICY_VERSION) {
+        throw new AIRuntimeStoreError("AI_RETENTION_STORE_UNAVAILABLE", "AI 留存记录格式无效。");
+      }
+      return parsed;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      if (error instanceof AIRuntimeStoreError) throw error;
+      throw new AIRuntimeStoreError("AI_RETENTION_STORE_UNAVAILABLE", "AI 留存记录无法读取。");
+    }
+  }
+
+  private async writeAssessmentFile(target: string, record: AIAssessmentRetentionRecord): Promise<void> {
+    const temporary = `${target}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+    await writeFile(temporary, `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: 0o600 });
+    await rename(temporary, target);
+  }
+
+  private async mutateAssessment<T>(
+    assessmentId: string,
+    operation: (record: AIAssessmentRetentionRecord | undefined) => Promise<{ record?: AIAssessmentRetentionRecord; result: T }> | { record?: AIAssessmentRetentionRecord; result: T },
+  ): Promise<T> {
+    await mkdir(this.assessmentsDir, { recursive: true, mode: 0o700 });
+    const target = this.assessmentTarget(assessmentId);
+    const release = await acquireLock(target);
+    try {
+      const current = await this.readAssessmentFile(target);
+      const next = await operation(current ? structuredClone(current) : undefined);
+      if (next.record) await this.writeAssessmentFile(target, next.record);
+      return next.result;
+    } finally {
+      await release();
+    }
   }
 
   private async mutateAdmission<T>(operation: (document: AIAdmissionDocument) => T): Promise<T> {
@@ -190,7 +255,7 @@ export class FileAIRuntimeStore {
     }
   }
 
-  async appendAuditEvent(event: FancyHubAuditEvent): Promise<void> {
+  async appendAuditEvent(event: FancyHubAuditEvent | AIRetentionAuditEvent): Promise<void> {
     await mkdir(this.config.dataDir, { recursive: true, mode: 0o700 });
     const release = await acquireLock(this.auditFile);
     try {
@@ -202,25 +267,104 @@ export class FileAIRuntimeStore {
 
   async saveAssessment(record: AIAssessmentRetentionRecord): Promise<void> {
     const assessmentId = record.metadata?.assessmentId;
-    if (!assessmentId || !/^[A-Za-z0-9-]{1,128}$/.test(assessmentId)) {
+    if (!assessmentId) {
       throw new AIRuntimeStoreError("AI_RETENTION_STORE_UNAVAILABLE", "AI 留存记录缺少安全 assessmentId。");
     }
-    await mkdir(this.assessmentsDir, { recursive: true, mode: 0o700 });
-    const target = path.join(this.assessmentsDir, `${assessmentId}.json`);
-    const release = await acquireLock(target);
-    try {
-      try {
-        await readFile(target, "utf8");
+    await this.mutateAssessment(assessmentId, (current) => {
+      if (current) {
         throw new AIRuntimeStoreError("AI_RETENTION_STORE_UNAVAILABLE", "AI 留存记录 ID 重复。");
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
-      const temporary = `${target}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
-      await writeFile(temporary, `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: 0o600 });
-      await rename(temporary, target);
-    } finally {
-      await release();
+      return { record: structuredClone(record), result: undefined };
+    });
+  }
+
+  async readAssessmentForActor(input: {
+    assessmentId: string;
+    actorStableId: string;
+    includeHidden?: boolean;
+  }): Promise<AIAssessmentRetentionRecord | undefined> {
+    const record = await this.readAssessmentFile(this.assessmentTarget(input.assessmentId));
+    if (!record || record.metadata?.actorStableId !== input.actorStableId) return undefined;
+    if (!input.includeHidden) {
+      try {
+        assertAIAssessmentVisible(record);
+      } catch {
+        return undefined;
+      }
     }
+    return structuredClone(record);
+  }
+
+  async requestAssessmentDeletion(input: {
+    assessmentId: string;
+    actorStableId: string;
+    now?: Date;
+  }): Promise<AIAssessmentRetentionRecord | undefined> {
+    const now = input.now ?? new Date();
+    let auditEvents: AIRetentionSweepResult["auditEvents"] = [];
+    const result = await this.mutateAssessment(input.assessmentId, (record) => {
+      if (!record || record.metadata?.actorStableId !== input.actorStableId) {
+        return { result: undefined };
+      }
+      if (record.deletionTombstone) return { record, result: structuredClone(record) };
+      const deleted = requestAIAssessmentDeletion({ record, requestedBy: input.actorStableId, now });
+      auditEvents = deleted.auditEvents;
+      return { record: deleted.record, result: structuredClone(deleted.record) };
+    });
+    for (const event of auditEvents) {
+      await this.appendAuditEvent({
+        ...event,
+        assessmentId: input.assessmentId,
+        actorStableId: input.actorStableId,
+        resultCode: "SUCCESS",
+      });
+    }
+    return result;
+  }
+
+  async sweepRetention(input: {
+    now?: Date;
+    backupAdapter: AIBackupPurgeAdapter;
+  }): Promise<AIRetentionSweepSummary> {
+    const now = input.now ?? new Date();
+    await mkdir(this.assessmentsDir, { recursive: true, mode: 0o700 });
+    const assessmentIds = (await readdir(this.assessmentsDir, { withFileTypes: true }))
+      .filter((entry) => entry.isFile() && /^[A-Za-z0-9-]{1,128}\.json$/.test(entry.name))
+      .map((entry) => entry.name.slice(0, -5))
+      .sort();
+    const summary: AIRetentionSweepSummary = {
+      recordsScanned: assessmentIds.length,
+      recordsChanged: 0,
+      auditEventsWritten: 0,
+      backupPurgeFailures: 0,
+    };
+    for (const id of assessmentIds) {
+      let events: AIRetentionSweepResult["auditEvents"] = [];
+      let actorStableId: string | undefined;
+      await this.mutateAssessment(id, async (record) => {
+        if (!record) return { result: undefined };
+        actorStableId = record.metadata?.actorStableId ?? record.deletionTombstone?.requestedBy;
+        const before = JSON.stringify(record);
+        let swept = sweepAIAssessmentRetention({ record, now });
+        events = [...swept.auditEvents];
+        swept = await purgeAIAssessmentBackups({ record: swept.record, now, adapter: input.backupAdapter });
+        events.push(...swept.auditEvents);
+        if (JSON.stringify(swept.record) !== before) summary.recordsChanged += 1;
+        return { record: swept.record, result: undefined };
+      });
+      for (const event of events) {
+        const failed = event.action === "AI_BACKUP_PURGE_FAILED";
+        if (failed) summary.backupPurgeFailures += 1;
+        await this.appendAuditEvent({
+          ...event,
+          assessmentId: id,
+          actorStableId,
+          resultCode: failed ? "FAILED" : "SUCCESS",
+        });
+        summary.auditEventsWritten += 1;
+      }
+    }
+    return summary;
   }
 
   successfulAssessmentRecord(input: {

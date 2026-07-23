@@ -55,6 +55,12 @@ export interface FancyHubConnectorConfig {
   apiToken?: string;
   primaryModelId?: string;
   fallbackModelIds: string[];
+  /**
+   * Provider limits obtained out-of-band during deployment. These bootstrap
+   * limits are mandatory because `/v1/models` is itself a provider request and
+   * must not be sent before provider admission limits are known.
+   */
+  providerHardLimits?: AIProviderHardLimits;
   tenantHardLimits?: AIProviderHardLimits;
   batchLimits?: AIBatchLimitPolicyV1;
   assessmentEstimatePolicy?: AIAssessmentEstimatePolicyV1;
@@ -142,6 +148,7 @@ export interface FancyHubTransport {
 export interface FancyHubAuditEvent {
   action: "AI_FANCY_HUB_ASSESSMENT";
   workspaceId: string;
+  actorStableId: string;
   requestedAt: string;
   completedAt: string;
   durationMs: number;
@@ -230,6 +237,7 @@ export function fancyHubEnablement(config: FancyHubConnectorConfig): { enabled: 
   if (config.policyVersion !== AI_PROVIDER_POLICY_VERSION) return { enabled: false, code: "AI_CONNECTOR_DISABLED" };
   try {
     assertConfiguredTarget(config);
+    parseHardLimits(config.providerHardLimits, "providerHardLimits");
     parseHardLimits(config.tenantHardLimits, "tenantHardLimits");
     validateBatchLimitPolicy(config.batchLimits);
     parseAssessmentEstimatePolicy(config.assessmentEstimatePolicy);
@@ -346,7 +354,11 @@ function responseTextArray(value: unknown, label: string): string[] {
   return value.map((entry, index) => responseString(entry, `${label}[${index}]`, 1_024));
 }
 
-function parseAssessmentResult(value: unknown, authorizedAliases: ReadonlySet<string>): FancyHubAssessmentResultV1 {
+function parseAssessmentResult(
+  value: unknown,
+  authorizedAliases: ReadonlySet<string>,
+  evidenceAliases: ReadonlySet<string>,
+): FancyHubAssessmentResultV1 {
   if (!plainObject(value)) throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", "Fancy Hub result 无效。" );
   exactKeys(value, ["schemaVersion", "assessmentAlias", "findings", "recommendations", "assumptions", "uncoveredInformation"], "assessment result");
   if (value.schemaVersion !== "ai-response/v1") throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", "Fancy Hub result Schema 版本无效。" );
@@ -359,7 +371,7 @@ function parseAssessmentResult(value: unknown, authorizedAliases: ReadonlySet<st
       findingCode: responseCode(entry.findingCode, `findings[${index}].findingCode`),
       summary: responseString(entry.summary, `findings[${index}].summary`, 4_096),
       subjectAliases: responseAliasArray(entry.subjectAliases, `findings[${index}].subjectAliases`, authorizedAliases),
-      evidenceAliases: responseAliasArray(entry.evidenceAliases, `findings[${index}].evidenceAliases`, authorizedAliases),
+      evidenceAliases: responseAliasArray(entry.evidenceAliases, `findings[${index}].evidenceAliases`, evidenceAliases),
     };
   });
   const recommendations = value.recommendations.map((entry, index): FancyHubRecommendationV1 => {
@@ -368,12 +380,23 @@ function parseAssessmentResult(value: unknown, authorizedAliases: ReadonlySet<st
     if (!["preview_only", "create_model_patch_draft", "create_rule_source_change_draft"].includes(String(entry.suggestedAction))) {
       throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", `recommendations[${index}].suggestedAction 无效。`);
     }
+    const recommendationEvidenceAliases = responseAliasArray(
+      entry.evidenceAliases,
+      `recommendations[${index}].evidenceAliases`,
+      evidenceAliases,
+    );
+    if (!recommendationEvidenceAliases.length) {
+      throw new FancyHubError(
+        "AI_FANCY_HUB_RESPONSE_INVALID",
+        `recommendations[${index}] 缺少证据；无依据内容必须进入 uncoveredInformation。`,
+      );
+    }
     return {
       recommendationCode: responseCode(entry.recommendationCode, `recommendations[${index}].recommendationCode`),
       title: responseString(entry.title, `recommendations[${index}].title`, 512),
       summary: responseString(entry.summary, `recommendations[${index}].summary`, 4_096),
       subjectAliases: responseAliasArray(entry.subjectAliases, `recommendations[${index}].subjectAliases`, authorizedAliases),
-      evidenceAliases: responseAliasArray(entry.evidenceAliases, `recommendations[${index}].evidenceAliases`, authorizedAliases),
+      evidenceAliases: recommendationEvidenceAliases,
       suggestedAction: entry.suggestedAction as FancyHubRecommendationV1["suggestedAction"],
     };
   });
@@ -391,7 +414,10 @@ function parseAssessmentResult(value: unknown, authorizedAliases: ReadonlySet<st
   return result;
 }
 
-function parseAssessmentResponse(value: unknown, authorizedAliases: ReadonlySet<string>): FancyHubAssessmentResponse {
+function parseAssessmentResponse(
+  value: unknown,
+  authorization: { aliases: ReadonlySet<string>; evidenceAliases: ReadonlySet<string> },
+): FancyHubAssessmentResponse {
   if (!plainObject(value)) throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", "Fancy Hub 评估响应无效。" );
   exactKeys(value, ["model", "result", "usage"], "assessment response");
   if (!plainObject(value.usage)) throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", "Fancy Hub usage 无效。" );
@@ -399,7 +425,7 @@ function parseAssessmentResponse(value: unknown, authorizedAliases: ReadonlySet<
   for (const key of ["inputTokens", "outputTokens", "costMicroUsd"] as const) {
     if (!Number.isInteger(value.usage[key]) || (value.usage[key] as number) < 0) throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", `usage.${key} 无效。`);
   }
-  const result = parseAssessmentResult(value.result, authorizedAliases);
+  const result = parseAssessmentResult(value.result, authorization.aliases, authorization.evidenceAliases);
   const model = value.model as AIModelDescriptorV1;
   return {
     model,
@@ -409,8 +435,12 @@ function parseAssessmentResponse(value: unknown, authorizedAliases: ReadonlySet<
   };
 }
 
-function authorizedResponseAliases(envelope: AIRequestEnvelopeV1): ReadonlySet<string> {
-  return new Set([
+function authorizedResponseAliases(envelope: AIRequestEnvelopeV1): {
+  aliases: ReadonlySet<string>;
+  evidenceAliases: ReadonlySet<string>;
+} {
+  const evidenceAliases = new Set(envelope.evidenceRefs.map((entry) => entry.evidenceAlias));
+  return { aliases: new Set([
     envelope.assessmentAlias,
     envelope.scope.scopeAlias,
     envelope.scope.revisionAlias,
@@ -421,8 +451,8 @@ function authorizedResponseAliases(envelope: AIRequestEnvelopeV1): ReadonlySet<s
     ...envelope.affinity.map((entry) => entry.subjectAlias),
     ...envelope.invariants.map((entry) => entry.subjectAlias),
     ...envelope.fiveAxis.flatMap((entry) => [entry.subjectAlias, ...(entry.componentAlias ? [entry.componentAlias] : [])]),
-    ...envelope.evidenceRefs.map((entry) => entry.evidenceAlias),
-  ]);
+    ...evidenceAliases,
+  ]), evidenceAliases };
 }
 
 function effectiveLimits(provider: AIProviderHardLimits, tenant: AIProviderHardLimits): AIProviderHardLimits {
@@ -577,6 +607,7 @@ export class FancyHubConnector {
   ) {}
 
   private assertEnabled(): {
+    providerLimits: AIProviderHardLimits;
     tenantLimits: AIProviderHardLimits;
     batchLimits: AIBatchLimitPolicyV1;
     estimatePolicy: AIAssessmentEstimatePolicyV1;
@@ -584,6 +615,7 @@ export class FancyHubConnector {
     if (!this.config.enabled || this.config.policyVersion !== AI_PROVIDER_POLICY_VERSION) throw new FancyHubError("AI_CONNECTOR_DISABLED", "Fancy Hub 真实连接器默认关闭." );
     assertConfiguredTarget(this.config);
     return {
+      providerLimits: parseHardLimits(this.config.providerHardLimits, "providerHardLimits"),
       tenantLimits: parseHardLimits(this.config.tenantHardLimits, "tenantHardLimits"),
       batchLimits: validateBatchLimitPolicy(this.config.batchLimits),
       estimatePolicy: parseAssessmentEstimatePolicy(this.config.assessmentEstimatePolicy),
@@ -605,6 +637,7 @@ export class FancyHubConnector {
 
   async assess(input: {
     workspaceId: string;
+    actorStableId: string;
     loadedCredentialValues?: readonly string[];
     buildEnvelope: (model: AIModelDescriptorV1) => AIRequestEnvelopeV1;
     batch?: Pick<AIBatchAdmissionInput, "assessmentCount" | "inFlightForUser" | "startedAtMs">;
@@ -618,7 +651,7 @@ export class FancyHubConnector {
     const auditStartedAt = new Date();
     const auditAttemptedModelIds: string[] = [];
     try {
-      const { tenantLimits, batchLimits, estimatePolicy } = this.assertEnabled();
+      const { providerLimits, tenantLimits, batchLimits, estimatePolicy } = this.assertEnabled();
       const batchStartedAtMs = input.batch?.startedAtMs ?? Date.now();
       const batchDeadlineMs = batchStartedAtMs + batchLimits.batchHardTimeoutMs;
       const discoveryRemainingMs = batchDeadlineMs - Date.now();
@@ -627,8 +660,11 @@ export class FancyHubConnector {
       const cachedProviderLimitsValue = await this.admissionCoordinator.readProviderHardLimits();
       const cachedProviderLimits = cachedProviderLimitsValue
         ? parseHardLimits(cachedProviderLimitsValue, "cachedProviderHardLimits")
-        : tenantLimits;
-      const preDiscoveryLimits = effectiveLimits(cachedProviderLimits, tenantLimits);
+        : providerLimits;
+      const preDiscoveryLimits = effectiveLimits(
+        cachedProviderLimits,
+        effectiveLimits(providerLimits, tenantLimits),
+      );
       const lease = await this.admissionCoordinator.acquire({
         workspaceId: input.workspaceId,
         maxConcurrentForWorkspace: Math.min(batchLimits.maxConcurrentAssessmentsPerWorkspace, preDiscoveryLimits.maxConcurrentRequests),
@@ -641,9 +677,12 @@ export class FancyHubConnector {
           nowMs: Date.now(),
           maxRequestsPerMinute: preDiscoveryLimits.maxRequestsPerMinute,
         });
-        const discovery = await this.listAvailableModels(Math.min(tenantLimits.requestTimeoutMs, discoveryRemainingMs));
+        const discovery = await this.listAvailableModels(Math.min(preDiscoveryLimits.requestTimeoutMs, discoveryRemainingMs));
         await this.admissionCoordinator.writeProviderHardLimits(discovery.providerHardLimits);
-        const limits = effectiveLimits(discovery.providerHardLimits, tenantLimits);
+        const limits = effectiveLimits(
+          discovery.providerHardLimits,
+          effectiveLimits(providerLimits, tenantLimits),
+        );
         if (lease.inFlightForWorkspaceBefore >= Math.min(batchLimits.maxConcurrentAssessmentsPerWorkspace, limits.maxConcurrentRequests)
           || lease.inFlightTotalBefore >= limits.maxConcurrentRequests) {
           throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "模型发现返回的 provider 并发硬上限已满。" );
@@ -702,6 +741,7 @@ export class FancyHubConnector {
             await this.auditSink({
               action: "AI_FANCY_HUB_ASSESSMENT",
               workspaceId: input.workspaceId,
+              actorStableId: input.actorStableId,
               requestedAt: auditStartedAt.toISOString(),
               completedAt: new Date().toISOString(),
               durationMs: Date.now() - auditStartedAt.getTime(),
@@ -732,6 +772,7 @@ export class FancyHubConnector {
       await this.auditSink({
         action: "AI_FANCY_HUB_ASSESSMENT",
         workspaceId: input.workspaceId,
+        actorStableId: input.actorStableId,
         requestedAt: auditStartedAt.toISOString(),
         completedAt: new Date().toISOString(),
         durationMs: Date.now() - auditStartedAt.getTime(),
@@ -758,6 +799,17 @@ function envPositiveInteger(name: string): number | undefined {
 }
 
 export function fancyHubConfigFromEnvironment(): FancyHubConnectorConfig {
+  const providerValues = {
+    maxInputTokens: envPositiveInteger("FANCY_HUB_PROVIDER_MAX_INPUT_TOKENS"),
+    maxOutputTokens: envPositiveInteger("FANCY_HUB_PROVIDER_MAX_OUTPUT_TOKENS"),
+    maxConcurrentRequests: envPositiveInteger("FANCY_HUB_PROVIDER_MAX_CONCURRENT_REQUESTS"),
+    maxRequestsPerMinute: envPositiveInteger("FANCY_HUB_PROVIDER_MAX_REQUESTS_PER_MINUTE"),
+    requestTimeoutMs: envPositiveInteger("FANCY_HUB_PROVIDER_REQUEST_TIMEOUT_MS"),
+    maxCostMicroUsdPerRequest: envPositiveInteger("FANCY_HUB_PROVIDER_MAX_COST_MICRO_USD_PER_REQUEST"),
+  };
+  const providerHardLimits = Object.values(providerValues).every((entry) => entry !== undefined)
+    ? providerValues as AIProviderHardLimits
+    : undefined;
   const tenantValues = {
     maxInputTokens: envPositiveInteger("FANCY_HUB_TENANT_MAX_INPUT_TOKENS"),
     maxOutputTokens: envPositiveInteger("FANCY_HUB_TENANT_MAX_OUTPUT_TOKENS"),
@@ -784,6 +836,7 @@ export function fancyHubConfigFromEnvironment(): FancyHubConnectorConfig {
     apiToken: process.env.FANCY_HUB_API_TOKEN?.trim(),
     primaryModelId: process.env.FANCY_HUB_PRIMARY_MODEL_ID?.trim(),
     fallbackModelIds: (process.env.FANCY_HUB_FALLBACK_MODEL_IDS ?? "").split(",").map((entry) => entry.trim()).filter(Boolean),
+    providerHardLimits,
     tenantHardLimits,
     batchLimits: OPEN009_AI_BATCH_LIMITS,
     assessmentEstimatePolicy,

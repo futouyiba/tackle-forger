@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { requestUser } from "@/lib/auth";
-import { buildWorkspaceAssessmentEnvelope } from "@/lib/ai-assessment-request";
+import { buildWorkspaceAssessmentEnvelope, workspaceAssessmentScopeExists } from "@/lib/ai-assessment-request";
 import { AIRuntimeStoreError, createAIRuntimeStoreFromEnvironment } from "@/lib/ai-runtime-store";
 import { createFancyHubConnectorFromEnvironment, FancyHubError } from "@/lib/fancy-hub";
 import { AIOutboundError } from "@/lib/ai-outbound";
@@ -28,6 +28,9 @@ export async function POST(request: NextRequest) {
   const body = assessmentRequest(await request.json().catch(() => undefined));
   if (!body) return NextResponse.json({ error: "AI 评估请求格式无效。", code: "AI_ASSESSMENT_REQUEST_INVALID" }, { status: 400 });
   const current = await loadWorkspaceState();
+  if (!workspaceAssessmentScopeExists(current.state, body)) {
+    return NextResponse.json({ error: "评估对象不存在或已经变化。", code: "AI_SCOPE_NOT_FOUND" }, { status: 404 });
+  }
   const assessmentId = randomUUID();
   try {
     const runtimeStore = createAIRuntimeStoreFromEnvironment();
@@ -39,6 +42,7 @@ export async function POST(request: NextRequest) {
     });
     const result = await connector.assess({
       workspaceId: "default",
+      actorStableId: user.openId ?? user.email,
       buildEnvelope: (model) => buildWorkspaceAssessmentEnvelope({ state: current.state, scope: body, assessmentId, model }),
     });
     const completedAt = new Date().toISOString();

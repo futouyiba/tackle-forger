@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 import { NextRequest } from "next/server";
 import { PUT as putState } from "../app/api/state/route";
 import { POST as createSeries } from "../app/api/series/route";
+import { POST as assessWithAI } from "../app/api/ai/assessments/route";
 import { loadWorkspaceState } from "../lib/storage";
 
 const authHeaders = {
@@ -41,6 +44,55 @@ test("整包 PUT 的畸形 JSON 返回400", { concurrency: false }, async () => 
     method: "PUT", headers: authHeaders, body: "{",
   }));
   assert.equal(response.status, 400);
+});
+
+test("AI 评估对不存在的 Series/Model 在连接器初始化和出网前返回404", { concurrency: false }, async () => {
+  withTrustedProxy();
+  const configuration = {
+    FANCY_HUB_ENABLED: "true",
+    FANCY_HUB_BASE_URL: "https://fancy-hub.invalid/",
+    FANCY_HUB_API_TOKEN: "route-ai-token",
+    FANCY_HUB_PRIMARY_MODEL_ID: "model.alpha",
+    FANCY_HUB_PROVIDER_MAX_INPUT_TOKENS: "50000",
+    FANCY_HUB_PROVIDER_MAX_OUTPUT_TOKENS: "8000",
+    FANCY_HUB_PROVIDER_MAX_CONCURRENT_REQUESTS: "4",
+    FANCY_HUB_PROVIDER_MAX_REQUESTS_PER_MINUTE: "60",
+    FANCY_HUB_PROVIDER_REQUEST_TIMEOUT_MS: "30000",
+    FANCY_HUB_PROVIDER_MAX_COST_MICRO_USD_PER_REQUEST: "200000",
+    FANCY_HUB_TENANT_MAX_INPUT_TOKENS: "50000",
+    FANCY_HUB_TENANT_MAX_OUTPUT_TOKENS: "8000",
+    FANCY_HUB_TENANT_MAX_CONCURRENT_REQUESTS: "4",
+    FANCY_HUB_TENANT_MAX_REQUESTS_PER_MINUTE: "60",
+    FANCY_HUB_REQUEST_TIMEOUT_MS: "30000",
+    FANCY_HUB_TENANT_MAX_COST_MICRO_USD_PER_REQUEST: "200000",
+    FANCY_HUB_ASSESSMENT_MAX_OUTPUT_TOKENS: "1000",
+    FANCY_HUB_MAX_INPUT_COST_MICRO_USD_PER_1K_TOKENS: "1000",
+    FANCY_HUB_MAX_OUTPUT_COST_MICRO_USD_PER_1K_TOKENS: "1000",
+    AI_RETENTION_DATA_DIR: path.join(tmpdir(), `tackle-forger-route-ai-unused-${process.pid}`),
+    AI_RETENTION_ENCRYPTION_KEY_BASE64: Buffer.alloc(32, 7).toString("base64"),
+    AI_RETENTION_ENCRYPTION_KEY_VERSION: "route-test-v1",
+  } as const;
+  const previous = new Map(Object.keys(configuration).map((name) => [name, process.env[name]]));
+  try {
+    for (const [name, value] of Object.entries(configuration)) process.env[name] = value;
+    for (const body of [
+      { scopeType: "series", scopeId: "series:missing" },
+      { scopeType: "model", scopeId: "model:missing" },
+    ]) {
+      const response = await assessWithAI(new NextRequest("http://localhost/api/ai/assessments", {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify(body),
+      }));
+      assert.equal(response.status, 404);
+      assert.equal(((await response.json()) as { code?: string }).code, "AI_SCOPE_NOT_FOUND");
+    }
+  } finally {
+    for (const [name, value] of previous) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
 });
 
 test("Series 路由拒绝非法强度、品质引用和拉力 token", { concurrency: false }, async () => {

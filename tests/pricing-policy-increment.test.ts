@@ -13,6 +13,7 @@ import {
 import { publishConfigurationSnapshot, verifySnapshotIntegrity } from "../lib/publishing";
 import { deterministicHash } from "../lib/rule-kernel";
 import {
+  adaptPatchTraceToCanonical,
   adaptRuleTraceToCanonical,
   createCalculationTraceEntry,
 } from "../lib/calculation-trace";
@@ -292,4 +293,37 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     }),
     /finalPanelValues 缺少 Trace 面板参数：ghost_panel_key/,
   );
+  const removeThenSetTrace = adaptPatchTraceToCanonical({
+    trace: [
+      {
+        patchId: "patch:remove",
+        scope: "final_review",
+        scopeId: model.id,
+        path: `values.${changedParameterKey}`,
+        operation: "remove",
+        before: changedBefore,
+        operand: undefined,
+        after: undefined,
+      },
+      {
+        patchId: "patch:restore",
+        scope: "final_review",
+        scopeId: model.id,
+        path: `values.${changedParameterKey}`,
+        operation: "set",
+        before: undefined,
+        operand: changedBefore + 1,
+        after: changedBefore + 1,
+      },
+    ],
+    subjectRef,
+    sourceVersion: "patch:remove-restore@1",
+    ruleSetVersion: projection.ruleSetVersion,
+    sequenceStart: baseTraceLength + 1,
+  });
+  const removeThenSetSnapshot = publishConfigurationSnapshot({
+    ...publishInput,
+    finalPanelTraceEntries: removeThenSetTrace,
+  });
+  assert.equal(verifySnapshotIntegrity(removeThenSetSnapshot), true);
 });

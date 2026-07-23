@@ -11,7 +11,8 @@ export class ConfigPreviewSnapshotError extends Error {
   readonly code:
     | "SNAPSHOT_INTEGRITY_INVALID"
     | "SNAPSHOT_REPLAY_POLICY_MISSING"
-    | "SNAPSHOT_EXPORT_BLOCKED";
+    | "SNAPSHOT_EXPORT_BLOCKED"
+    | "SNAPSHOT_MODEL_DUPLICATE";
 
   constructor(
     code: ConfigPreviewSnapshotError["code"],
@@ -122,6 +123,7 @@ export function createConfigPreviewPackage(input: {
     throw new Error("ConfigPreviewPackage 至少需要一个冻结 ConfigurationSnapshot。");
   }
   const snapshotIds = new Set<string>();
+  const modelIds = new Set<string>();
   for (const snapshot of input.snapshots) {
     assertSnapshotItemPartEnabled(snapshot, "config_export");
     if (!verifySnapshotIntegrity(snapshot)) {
@@ -163,6 +165,13 @@ export function createConfigPreviewPackage(input: {
       throw new Error(`ConfigPreviewPackage 包含重复 Snapshot：${snapshot.id}。`);
     }
     snapshotIds.add(snapshot.id);
+    if (modelIds.has(snapshot.modelId)) {
+      throw new ConfigPreviewSnapshotError(
+        "SNAPSHOT_MODEL_DUPLICATE",
+        `ConfigPreviewPackage 不能同时包含 Model ${snapshot.modelId} 的多个冻结 Snapshot。`,
+      );
+    }
+    modelIds.add(snapshot.modelId);
   }
   const payload: Omit<ConfigPreviewPackage, "manifestHash"> = {
     packageKind: "CONFIG_PREVIEW" as const,

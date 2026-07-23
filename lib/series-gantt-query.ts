@@ -161,7 +161,11 @@ export function querySeriesGantt(input: {
     (!visibleSeriesIds || visibleSeriesIds.has(series.id))
     && isProductItemPartEnabled(seriesItemPartId(series, input.skus)));
   const visibleSkus = input.skus.filter((sku) =>
-    (!visibleSkuIds || visibleSkuIds.has(sku.id)) && visibleSeries.some((series) => series.id === sku.seriesId));
+    (!visibleSkuIds || visibleSkuIds.has(sku.id))
+    && isProductItemPartEnabled(sku.projectionMatch.itemPartId)
+    && visibleSeries.some((series) =>
+      series.id === sku.seriesId
+      && seriesItemPartId(series, input.skus) === sku.projectionMatch.itemPartId));
   const visibleModels = input.models.filter((model) =>
     (!visibleModelIds || visibleModelIds.has(model.id)) && visibleSkus.some((sku) => sku.id === model.skuId));
   const projectionById = new Map(

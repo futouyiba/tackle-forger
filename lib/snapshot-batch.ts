@@ -1,11 +1,14 @@
 import { deterministicHash } from "./rule-kernel";
 import {
-  isProductItemPartEnabled,
+  assertProductItemPartChainEnabled,
+  assertSeriesItemPartChainEnabled,
   ITEM_PART_NOT_ENABLED_CODE,
+  ItemPartNotEnabledError,
 } from "./enabled-item-parts";
 import type {
   ConfigurationSnapshot,
   PurchasableModel,
+  SeriesDefinition,
   SkuDrawer,
   ValidationIssue,
 } from "./types";
@@ -49,6 +52,7 @@ function issuesForModel(model: PurchasableModel, skus: SkuDrawer[]): ValidationI
 
 export function planSnapshotBatch(input: {
   models: PurchasableModel[];
+  series: SeriesDefinition[];
   skus: SkuDrawer[];
   snapshots: ConfigurationSnapshot[];
   selectedModelIds: string[];
@@ -73,21 +77,41 @@ export function planSnapshotBatch(input: {
     }
     const validationIssues = issuesForModel(model, input.skus);
     const sku = input.skus.find((entry) => entry.id === model.skuId);
-    if (!isProductItemPartEnabled(sku?.projectionMatch.itemPartId)) {
+    const series = sku
+      ? input.series.find((entry) => entry.id === sku.seriesId)
+      : undefined;
+    const latest = latestSnapshot(model, input.snapshots);
+    try {
+      if (!series || !sku) {
+        throw new ItemPartNotEnabledError(undefined, "snapshot");
+      }
+      const seriesItemPartId = assertSeriesItemPartChainEnabled(series, input.skus, "snapshot");
+      if (latest) {
+        assertProductItemPartChainEnabled([
+          seriesItemPartId,
+          sku.projectionMatch.itemPartId,
+          latest.projectionMatch.itemPartId,
+        ], "snapshot");
+      }
+    } catch (error) {
+      const code = typeof error === "object" && error && "code" in error
+        ? String(error.code)
+        : ITEM_PART_NOT_ENABLED_CODE;
       return {
         modelId,
         modelRevision: model.revision,
         decision: "skip",
-        reasons: [ITEM_PART_NOT_ENABLED_CODE],
+        reasons: [code],
         validationIssues: [{
           level: "error",
-          code: ITEM_PART_NOT_ENABLED_CODE,
-          message: `部位未启用：${sku?.projectionMatch.itemPartId ?? "unknown"} 当前不能进入 ConfigurationSnapshot 流程。`,
+          code,
+          message: error instanceof Error
+            ? error.message
+            : `部位未启用：${sku?.projectionMatch.itemPartId ?? "unknown"} 当前不能进入 ConfigurationSnapshot 流程。`,
         }],
       };
     }
     const blocking = validationIssues.filter((issue) => issue.level === "error");
-    const latest = latestSnapshot(model, input.snapshots);
     if (
       latest &&
       latest.modelRevision === model.revision &&

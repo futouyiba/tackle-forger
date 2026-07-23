@@ -4,7 +4,6 @@ import type { ConfigurationSnapshot, ValidationIssue } from "./types";
 import type { ExportTargetProfile } from "./interaction-contracts";
 import type { ConfigExportMapping } from "./config-export-mapping";
 import {
-  assertProductItemPartEnabled,
   assertSnapshotItemPartEnabled,
 } from "./enabled-item-parts";
 export type { ConfigExportMapping } from "./config-export-mapping";
@@ -245,17 +244,18 @@ export interface ExportCommitResult {
 export async function commitExportPackage(input: {
   profileId: string;
   packageId: string;
-  itemPartIds: string[];
+  snapshots: ConfigurationSnapshot[];
   idempotencyKey: string;
   operations: ExportFileOperation[];
   adapter: ExportCommitAdapter;
   audit?: ExportCommitResult["audit"];
 }): Promise<ExportCommitResult> {
-  for (const itemPartId of input.itemPartIds) {
-    assertProductItemPartEnabled(itemPartId, "config_export");
-  }
-  if (!input.itemPartIds.length) {
-    assertProductItemPartEnabled(undefined, "config_export");
+  if (!input.snapshots.length) throw new Error("导出提交缺少冻结 ConfigurationSnapshot。");
+  for (const snapshot of input.snapshots) {
+    assertSnapshotItemPartEnabled(snapshot, "config_export");
+    if (!verifySnapshotIntegrity(snapshot)) {
+      throw new Error(`冻结 ConfigurationSnapshot ${snapshot.id} 的内容哈希校验失败。`);
+    }
   }
   const previous = await input.adapter.findCommittedResult(input.idempotencyKey);
   if (previous) return structuredClone(previous);

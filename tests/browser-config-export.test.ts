@@ -161,13 +161,14 @@ enums = [{ field = "goods_id", table = "goods_basic" }]
 
 test("浏览器预览从环境根 config.toml 生成三表差异，提交后回读并保留 StoreBuy.enabled", async () => {
   const current = await fixture();
+  const snapshot = createSeedState().configurationSnapshots[0]!;
   const preview = await previewBrowserExportFromHandles({
     binding: current.binding,
     targetRoot: current.root,
     configRoot: current.root,
     packageId: "browser-package-1",
     mapping: mapping(),
-    snapshots: [createSeedState().configurationSnapshots[0]],
+    snapshots: [snapshot],
     createdAt: "2026-07-21T00:00:00.000Z",
   });
   assert.equal(preview.status, "ready");
@@ -175,10 +176,8 @@ test("浏览器预览从环境根 config.toml 生成三表差异，提交后回�
   const manifest = await commitBrowserExportFromHandle({
     root: current.root,
     binding: current.binding,
-    packageId: preview.packageId,
-    itemPartIds: preview.itemPartIds,
-    operations: preview.operations,
-    createdAt: preview.createdAt,
+    preview,
+    snapshots: [snapshot],
   });
   assert.equal(manifest.operations.every((operation) => operation.state === "verified"), true);
   const store = XLSX.read(current.xlsx.files.get("store.xlsx")!.value(), { type: "array" });
@@ -202,13 +201,14 @@ test("ID 与 configNameKey 分裂命中时阻断目标，不产生可提交操�
 
 test("预览后源文件变化时恢复型提交拒绝覆盖", async () => {
   const current = await fixture();
+  const snapshot = createSeedState().configurationSnapshots[0]!;
   const preview = await previewBrowserExportFromHandles({
     binding: current.binding,
     targetRoot: current.root,
     configRoot: current.root,
     packageId: "browser-package-conflict",
     mapping: mapping(),
-    snapshots: [createSeedState().configurationSnapshots[0]],
+    snapshots: [snapshot],
   });
   assert.equal(preview.status, "ready");
   const tackle = current.xlsx.files.get("tackle.xlsx")!;
@@ -216,9 +216,8 @@ test("预览后源文件变化时恢复型提交拒绝覆盖", async () => {
   await assert.rejects(() => commitBrowserExportFromHandle({
     root: current.root,
     binding: current.binding,
-    packageId: preview.packageId,
-    itemPartIds: preview.itemPartIds,
-    operations: preview.operations,
+    preview,
+    snapshots: [snapshot],
   }), /预览后已变化/);
 });
 
@@ -261,9 +260,8 @@ test("扩展部位预览与提交在浏览器文件写入前 fail-closed", async
   await assert.rejects(() => commitBrowserExportFromHandle({
     root: current.root,
     binding: current.binding,
-    packageId: allowedPreview.packageId,
-    itemPartIds: ["part:hook"],
-    operations: allowedPreview.operations,
+    preview: allowedPreview,
+    snapshots: [snapshot],
   }), (error) => (
     error instanceof Error
     && "code" in error

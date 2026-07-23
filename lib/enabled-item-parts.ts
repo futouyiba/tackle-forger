@@ -1,6 +1,7 @@
 import type { ConfigurationSnapshot, SeriesDefinition, SkuDrawer } from "./types";
 
 export const ITEM_PART_NOT_ENABLED_CODE = "ITEM_PART_NOT_ENABLED";
+export const ITEM_PART_CHAIN_INCONSISTENT_CODE = "ITEM_PART_CHAIN_INCONSISTENT";
 
 /**
  * OPEN-003 当前没有可校验的已发布 enabledItemPartPolicy。
@@ -55,6 +56,21 @@ export class ItemPartNotEnabledError extends Error {
   }
 }
 
+export class ItemPartChainInconsistentError extends Error {
+  readonly code = ITEM_PART_CHAIN_INCONSISTENT_CODE;
+  readonly itemPartIds: string[];
+  readonly action: ProductItemPartAction;
+  readonly policyMode = OPEN_003_FAIL_CLOSED_POLICY.mode;
+
+  constructor(itemPartIds: readonly string[], action: ProductItemPartAction) {
+    const stableItemPartIds = [...new Set(itemPartIds.map((value) => value.trim()).filter(Boolean))].sort();
+    super(`部位链不一致：${stableItemPartIds.join("、")} 不能共同进入${ACTION_LABELS[action]}。`);
+    this.name = "ItemPartChainInconsistentError";
+    this.itemPartIds = stableItemPartIds;
+    this.action = action;
+  }
+}
+
 export function isProductItemPartEnabled(itemPartId: string | undefined): boolean {
   return Boolean(itemPartId && ENABLED_ITEM_PART_IDS.has(itemPartId));
 }
@@ -76,8 +92,45 @@ export function seriesItemPartId(
   series: SeriesDefinition,
   skus: readonly SkuDrawer[] = [],
 ): string | undefined {
-  if (series.itemPartId) return series.itemPartId;
-  return skus.find((sku) => sku.seriesId === series.id)?.projectionMatch.itemPartId;
+  if (series.itemPartId?.trim()) return series.itemPartId.trim();
+  const descendantItemPartIds = [...new Set(
+    skus
+      .filter((sku) => sku.seriesId === series.id)
+      .map((sku) => sku.projectionMatch.itemPartId?.trim())
+      .filter((itemPartId): itemPartId is string => Boolean(itemPartId)),
+  )];
+  return descendantItemPartIds.length === 1 ? descendantItemPartIds[0] : undefined;
+}
+
+export function assertProductItemPartChainEnabled(
+  itemPartIds: readonly (string | undefined)[],
+  action: ProductItemPartAction,
+): "part:rod" | "part:reel" | "part:line" {
+  if (!itemPartIds.length || itemPartIds.some((itemPartId) => !itemPartId?.trim())) {
+    throw new ItemPartNotEnabledError(undefined, action);
+  }
+  const normalized = itemPartIds.map((itemPartId) => itemPartId!.trim());
+  for (const itemPartId of normalized) assertProductItemPartEnabled(itemPartId, action);
+  const unique = [...new Set(normalized)];
+  if (unique.length !== 1) throw new ItemPartChainInconsistentError(unique, action);
+  return unique[0] as "part:rod" | "part:reel" | "part:line";
+}
+
+export function assertSeriesItemPartChainEnabled(
+  series: SeriesDefinition,
+  skus: readonly SkuDrawer[],
+  action: ProductItemPartAction,
+  additionalItemPartIds: readonly (string | undefined)[] = [],
+): "part:rod" | "part:reel" | "part:line" {
+  const descendantItemPartIds = skus
+    .filter((sku) => sku.seriesId === series.id)
+    .map((sku) => sku.projectionMatch.itemPartId);
+  const declaredItemPartId = series.itemPartId?.trim();
+  return assertProductItemPartChainEnabled([
+    ...(declaredItemPartId ? [declaredItemPartId] : []),
+    ...descendantItemPartIds,
+    ...additionalItemPartIds,
+  ], action);
 }
 
 export function snapshotItemPartId(snapshot: ConfigurationSnapshot): string | undefined {

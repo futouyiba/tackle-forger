@@ -8,6 +8,7 @@ import type {
   ValidationIssue as LegacyValidationIssue,
 } from "./types";
 import {
+  assertProductItemPartChainEnabled,
   isProductItemPartEnabled,
   seriesItemPartId,
 } from "./enabled-item-parts";
@@ -218,13 +219,20 @@ export function resolveProductDeepLink(input: {
   const collection = collectionId
     ? input.collections.find((entry) => entry.id === collectionId)
     : undefined;
-  const resolvedItemPartId = series
-    ? seriesItemPartId(series, input.skus)
-    : requestedSnapshot?.projectionMatch.itemPartId;
-  if (
-    (requestedSnapshot || model || sku || series)
-    && !isProductItemPartEnabled(resolvedItemPartId)
-  ) {
+  const frozenSnapshot = requestedSnapshot ?? (
+    model?.configurationSnapshotId
+      ? input.snapshots.find((entry) => entry.id === model.configurationSnapshotId)
+      : undefined
+  );
+  try {
+    if (requestedSnapshot || model || sku || series) {
+      assertProductItemPartChainEnabled([
+        ...(series ? [seriesItemPartId(series, input.skus)] : []),
+        ...(sku ? [sku.projectionMatch.itemPartId] : []),
+        ...(frozenSnapshot ? [frozenSnapshot.projectionMatch.itemPartId] : []),
+      ], "product_ui");
+    }
+  } catch (error) {
     const blockedRef = requestedSnapshot
       ? unavailable("configuration_snapshot", requestedSnapshot.id)
       : model
@@ -234,8 +242,10 @@ export function resolveProductDeepLink(input: {
           : unavailable("series", series!.id);
     issues.push({
       level: "error",
-      code: "ITEM_PART_NOT_ENABLED",
-      message: `部位未启用：${resolvedItemPartId ?? "unknown"} 不提供产品只读入口。`,
+      code: typeof error === "object" && error && "code" in error
+        ? String(error.code)
+        : "ITEM_PART_NOT_ENABLED",
+      message: error instanceof Error ? error.message : "部位未启用：unknown 不提供产品只读入口。",
     });
     return {
       collection,
@@ -550,8 +560,12 @@ export function buildSeriesGanttProjection(input: {
     .filter((series) => isProductItemPartEnabled(seriesItemPartId(series, input.skus)))
     .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id))
     .map((series) => {
+      const itemPartId = seriesItemPartId(series, input.skus);
       const skuNodes = input.skus
-        .filter((sku) => sku.seriesId === series.id)
+        .filter((sku) =>
+          sku.seriesId === series.id
+          && isProductItemPartEnabled(sku.projectionMatch.itemPartId)
+          && sku.projectionMatch.itemPartId === itemPartId)
         .sort((left, right) => left.targetWeightKg - right.targetWeightKg || left.id.localeCompare(right.id))
         .map((sku) => ({
           skuId: sku.id,

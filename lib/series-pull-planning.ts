@@ -1,6 +1,6 @@
 import { deterministicHash } from "./rule-kernel";
 import { seriesTargetPullSpecifications } from "./product-model";
-import { assertProductItemPartEnabled } from "./enabled-item-parts";
+import { assertSeriesItemPartChainEnabled } from "./enabled-item-parts";
 import type {
   ProjectionMatch,
   SeriesDefinition,
@@ -38,12 +38,13 @@ function assertRange(range: { minKgf: number; maxKgf: number }) {
 
 export function createSeriesPullPlanningProposal(input: {
   series: SeriesDefinition;
+  existingSkus?: SkuDrawer[];
   planningPullRange?: { minKgf: number; maxKgf: number };
   candidatePullsKgf: number[];
   source: SeriesPullPlanningProposal["source"];
   createdAt: string;
 }): SeriesPullPlanningProposal {
-  assertProductItemPartEnabled(input.series.itemPartId, "series");
+  assertSeriesItemPartChainEnabled(input.series, input.existingSkus ?? [], "series");
   if (input.planningPullRange) assertRange(input.planningPullRange);
   const suggestedPullsKgf = normalizePulls(input.candidatePullsKgf)
     .filter((value) => !input.planningPullRange
@@ -66,10 +67,11 @@ export function createSeriesPullPlanningProposal(input: {
 
 export function updateSeriesPlanningRange(input: {
   series: SeriesDefinition;
+  existingSkus?: SkuDrawer[];
   planningPullRange: { minKgf: number; maxKgf: number };
   updatedAt: string;
 }): SeriesDefinition {
-  assertProductItemPartEnabled(input.series.itemPartId, "series");
+  assertSeriesItemPartChainEnabled(input.series, input.existingSkus ?? [], "series");
   assertRange(input.planningPullRange);
   return {
     ...structuredClone(input.series),
@@ -88,7 +90,6 @@ export function materializeConfirmedPullSpecifications(input: {
   projectionMatchByPull: Record<string, ProjectionMatch>;
   createdAt: string;
 }): { series: SeriesDefinition; skus: SkuDrawer[]; createdSkuIds: string[] } {
-  assertProductItemPartEnabled(input.series.itemPartId, "sku");
   if (input.proposal.seriesId !== input.series.id || input.proposal.seriesRevision !== input.series.revision) {
     throw new Error("规划建议的 Series revision 已过期，必须重新生成建议。");
   }
@@ -98,22 +99,40 @@ export function materializeConfirmedPullSpecifications(input: {
   }
   const specifications = seriesTargetPullSpecifications(input.series);
   const existingByPull = new Map(specifications.map((entry) => [entry.targetPullKgf, entry]));
+  const prepared = confirmed
+    .filter((pull) => !existingByPull.has(pull))
+    .map((pull) => {
+      const key = String(pull);
+      const skuId = input.skuIdByPull[key];
+      const projectionMatch = input.projectionMatchByPull[key];
+      if (!skuId || !projectionMatch) {
+        throw new Error(`离散拉力 ${pull}kgf 缺少稳定 skuId 或独立结构标杆匹配结果。`);
+      }
+      if (
+        input.existingSkus.some((sku) =>
+          sku.id === skuId || (sku.seriesId === input.series.id && sku.targetWeightKg === pull))
+      ) {
+        throw new Error(`离散拉力 ${pull}kgf 或 SKU ID ${skuId} 已存在，禁止重复物化。`);
+      }
+      if (projectionMatch.targetWeightKg !== pull) {
+        throw new Error(`离散拉力 ${pull}kgf 的 ProjectionMatch 目标值不一致。`);
+      }
+      return { pull, skuId, projectionMatch };
+    });
+  const preparedSkuIds = prepared.map((entry) => entry.skuId);
+  if (new Set(preparedSkuIds).size !== preparedSkuIds.length) {
+    throw new Error("同一批次不能为多个离散拉力复用同一个稳定 SKU ID。");
+  }
+  assertSeriesItemPartChainEnabled(
+    input.series,
+    input.existingSkus,
+    "sku",
+    prepared.map((entry) => entry.projectionMatch.itemPartId),
+  );
+
   const allSkus = structuredClone(input.existingSkus);
   const createdSkuIds: string[] = [];
-  for (const pull of confirmed) {
-    if (existingByPull.has(pull)) continue;
-    const key = String(pull);
-    const skuId = input.skuIdByPull[key];
-    const projectionMatch = input.projectionMatchByPull[key];
-    if (!skuId || !projectionMatch) {
-      throw new Error(`离散拉力 ${pull}kgf 缺少稳定 skuId 或独立结构标杆匹配结果。`);
-    }
-    if (allSkus.some((sku) => sku.id === skuId || (sku.seriesId === input.series.id && sku.targetWeightKg === pull))) {
-      throw new Error(`离散拉力 ${pull}kgf 或 SKU ID ${skuId} 已存在，禁止重复物化。`);
-    }
-    if (projectionMatch.targetWeightKg !== pull) {
-      throw new Error(`离散拉力 ${pull}kgf 的 ProjectionMatch 目标值不一致。`);
-    }
+  for (const { pull, skuId, projectionMatch } of prepared) {
     specifications.push({ targetPullKgf: pull, skuId });
     allSkus.push({
       id: skuId,

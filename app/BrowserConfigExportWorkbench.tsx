@@ -210,6 +210,7 @@ export function BrowserConfigExportWorkbench({
   const createBatch = () => {
     const next = planSnapshotBatch({
       models: state.purchasableModels,
+      series: state.seriesDefinitions,
       skus: state.skuDrawers,
       snapshots: state.configurationSnapshots,
       selectedModelIds,
@@ -364,10 +365,8 @@ export function BrowserConfigExportWorkbench({
       try {
         next[binding.bindingId] = await commitBrowserExport({
           binding,
-          packageId: preview.packageId,
-          itemPartIds: preview.itemPartIds,
-          operations: preview.operations,
-          createdAt: preview.createdAt,
+          preview,
+          snapshots: selectedSnapshots,
         });
       } catch (caught) {
         next[binding.bindingId] = {

@@ -488,23 +488,39 @@ function safePackageDirectory(packageId: string): string {
 export async function commitBrowserExportFromHandle(input: {
   root: BrowserDirectoryHandle;
   binding: LocalExportTargetBinding;
-  packageId: string;
-  itemPartIds: string[];
-  operations: BrowserExportFileOperation[];
-  createdAt?: string;
+  preview: BrowserExportPreview;
+  snapshots: ConfigurationSnapshot[];
 }): Promise<BrowserRecoveryManifest> {
-  for (const itemPartId of input.itemPartIds) {
-    assertProductItemPartEnabled(itemPartId, "config_export");
+  if (!input.snapshots.length) throw new Error("导出提交缺少冻结 ConfigurationSnapshot。");
+  for (const snapshot of input.snapshots) {
+    assertSnapshotItemPartEnabled(snapshot, "config_export");
+    if (!verifySnapshotIntegrity(snapshot)) {
+      throw new Error(`冻结 ConfigurationSnapshot ${snapshot.id} 的内容哈希校验失败。`);
+    }
   }
-  if (!input.itemPartIds.length) {
-    assertProductItemPartEnabled(undefined, "config_export");
+  const snapshotIds = input.snapshots.map((snapshot) => snapshot.id).sort();
+  const previewSnapshotIds = [...input.preview.snapshotIds].sort();
+  const itemPartIds = [...new Set(input.snapshots.map((snapshot) => snapshotItemPartId(snapshot)!))].sort();
+  if (
+    input.preview.status !== "ready"
+    || input.preview.bindingId !== input.binding.bindingId
+    || input.preview.environmentId !== input.binding.environmentId
+    || input.preview.channelKey !== input.binding.channelKey
+    || input.preview.mappingId !== input.binding.mappingId
+    || input.preview.mappingVersion !== input.binding.mappingVersion
+    || JSON.stringify(snapshotIds) !== JSON.stringify(previewSnapshotIds)
+    || JSON.stringify(itemPartIds) !== JSON.stringify([...input.preview.itemPartIds].sort())
+    || input.snapshots.some((snapshot) => input.preview.snapshotHashes[snapshot.id] !== snapshot.contentHash)
+  ) {
+    throw new Error("提交使用的冻结 Preview/Package/Snapshot 证明不一致，必须重新预览。");
   }
+  const operations = input.preview.operations;
   const root = input.root;
   const permission = await root.queryPermission({ mode: "readwrite" });
   if (permission !== "granted") throw new Error("导出目录需要重新授权。");
-  if (!input.operations.length) throw new Error("导出包没有文件操作。");
+  if (!operations.length) throw new Error("导出包没有文件操作。");
 
-  for (const operation of input.operations) {
+  for (const operation of operations) {
     const file = await getFile(root, operation.relativePath, false);
     const currentHash = await sha256(await readBytes(file));
     if (currentHash !== operation.sourceHash) {
@@ -517,23 +533,23 @@ export async function commitBrowserExportFromHandle(input: {
   }
 
   const backupRoot = await root.getDirectoryHandle(".tackle-forger-backups", { create: true });
-  const packageRoot = await backupRoot.getDirectoryHandle(safePackageDirectory(input.packageId), { create: true });
+  const packageRoot = await backupRoot.getDirectoryHandle(safePackageDirectory(input.preview.packageId), { create: true });
   const originals = new Map<string, Uint8Array>();
   const manifest: BrowserRecoveryManifest = {
-    packageId: input.packageId,
+    packageId: input.preview.packageId,
     bindingId: input.binding.bindingId,
-    itemPartIds: [...input.itemPartIds],
-    createdAt: input.createdAt ?? new Date().toISOString(),
-    operations: input.operations.map((operation) => ({
+    itemPartIds,
+    createdAt: input.preview.createdAt,
+    operations: operations.map((operation) => ({
       relativePath: operation.relativePath,
       sourceHash: operation.sourceHash,
       stagedHash: operation.stagedHash,
-      backupPath: `.tackle-forger-backups/${safePackageDirectory(input.packageId)}/${operation.relativePath}`,
+      backupPath: `.tackle-forger-backups/${safePackageDirectory(input.preview.packageId)}/${operation.relativePath}`,
       state: "pending",
     })),
   };
 
-  for (const operation of input.operations) {
+  for (const operation of operations) {
     const source = await getFile(root, operation.relativePath, false);
     const original = await readBytes(source);
     originals.set(operation.relativePath, original);
@@ -543,7 +559,7 @@ export async function commitBrowserExportFromHandle(input: {
 
   const written: string[] = [];
   try {
-    for (const operation of input.operations) {
+    for (const operation of operations) {
       const target = await getFile(root, operation.relativePath, false);
       await writeBytes(target, operation.stagedBytes);
       written.push(operation.relativePath);
@@ -577,10 +593,8 @@ export async function commitBrowserExportFromHandle(input: {
 
 export async function commitBrowserExport(input: {
   binding: LocalExportTargetBinding;
-  packageId: string;
-  itemPartIds: string[];
-  operations: BrowserExportFileOperation[];
-  createdAt?: string;
+  preview: BrowserExportPreview;
+  snapshots: ConfigurationSnapshot[];
 }): Promise<BrowserRecoveryManifest> {
   const root = await loadDirectoryHandle(input.binding.directoryHandleStorageKey);
   if (!root) throw new Error("导出目录尚未绑定。");
@@ -602,7 +616,6 @@ import { validateLogicalTableRelations } from "./config-export";
 import { verifySnapshotIntegrity } from "./publishing";
 import type { ConfigurationSnapshot } from "./types";
 import {
-  assertProductItemPartEnabled,
   assertSnapshotItemPartEnabled,
   snapshotItemPartId,
 } from "./enabled-item-parts";

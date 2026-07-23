@@ -33,6 +33,7 @@ import { deterministicHash } from "@/lib/rule-kernel";
 import {
   enabledProductItemParts,
   isProductItemPartEnabled,
+  seriesItemPartId,
 } from "@/lib/enabled-item-parts";
 import {
   querySeriesGantt,
@@ -810,7 +811,10 @@ export function SeriesGanttWorkbenchV3({
     ?? state.seriesDefinitions.find((series) => series.id === blocks[0]?.seriesId);
   const selectedBlock = blocks.find((block) => block.seriesId === selectedSeries?.id);
   const seriesSkus = selectedSeries
-    ? state.skuDrawers.filter((sku) => sku.seriesId === selectedSeries.id)
+    ? state.skuDrawers.filter((sku) =>
+      sku.seriesId === selectedSeries.id
+      && isProductItemPartEnabled(sku.projectionMatch.itemPartId)
+      && sku.projectionMatch.itemPartId === seriesItemPartId(selectedSeries, state.skuDrawers))
       .sort((left, right) => left.targetWeightKg - right.targetWeightKg || left.id.localeCompare(right.id))
     : [];
   const selectedSku = seriesSkus.find((sku) => sku.id === selectedSkuId) ?? seriesSkus[0];

@@ -32,7 +32,6 @@ import {
   type ExportFileOperation,
 } from "./config-export";
 import {
-  assertProductItemPartEnabled,
   assertSnapshotItemPartEnabled,
   snapshotItemPartId,
 } from "./enabled-item-parts";
@@ -352,13 +351,24 @@ async function atomicReplace(sourcePath: string, targetPath: string) {
 
 export async function commitFilesystemExport(input: {
   preview: FilesystemExportPreview;
+  snapshot: ConfigurationSnapshot;
   profile: ExportTargetProfile;
   confirmationProfileId: string;
   idempotencyKey: string;
   canCommit: boolean;
   audit?: ExportCommitResult["audit"];
 }): Promise<ExportCommitResult> {
-  assertProductItemPartEnabled(input.preview.itemPartId, "config_export");
+  assertSnapshotItemPartEnabled(input.snapshot, "config_export");
+  if (!verifySnapshotIntegrity(input.snapshot)) {
+    throw new Error("冻结 ConfigurationSnapshot 的内容哈希校验失败。");
+  }
+  if (
+    input.snapshot.id !== input.preview.snapshotId
+    || input.snapshot.contentHash !== input.preview.snapshotHash
+    || snapshotItemPartId(input.snapshot) !== input.preview.itemPartId
+  ) {
+    throw new Error("提交使用的冻结 Snapshot 与暂存 Manifest 不一致，必须重新预览。");
+  }
   if (!input.canCommit) throw new Error("缺少 config.export.commit Capability。");
   if (input.preview.status !== "ready") throw new Error("暂存预览未通过，不能提交。");
   if (!input.profile.enabled || input.profile.profileId !== input.preview.profileId) {
@@ -457,7 +467,7 @@ export async function commitFilesystemExport(input: {
     return await commitExportPackage({
       profileId: input.preview.profileId,
       packageId: input.preview.packageId,
-      itemPartIds: [input.preview.itemPartId],
+      snapshots: [input.snapshot],
       idempotencyKey: input.idempotencyKey,
       operations: input.preview.operations,
       adapter,

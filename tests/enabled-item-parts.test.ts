@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  ITEM_PART_CHAIN_INCONSISTENT_CODE,
   ITEM_PART_NOT_ENABLED_CODE,
   ItemPartNotEnabledError,
   enabledProductItemParts,
@@ -214,7 +215,7 @@ test("扩展部位候选生成和物化在任何模型写入前拒绝且状态�
   assert.throws(
     () => materializeCandidateRun({
       state: current.state,
-      run: allowedRun,
+      run: { ...allowedRun, candidates: [] },
       actor: "tester",
       occurredAt: "2026-07-23T00:01:00.000Z",
     }),
@@ -257,6 +258,7 @@ test("扩展部位不能发布或进入 SnapshotBatch，历史 Snapshot/hash 保
   }), (error) => error instanceof ItemPartNotEnabledError && error.action === "model_publish");
   const plan = planSnapshotBatch({
     models: [model],
+    series: [series],
     skus: [sku],
     snapshots: [snapshot],
     selectedModelIds: [model.id],
@@ -265,4 +267,82 @@ test("扩展部位不能发布或进入 SnapshotBatch，历史 Snapshot/hash 保
   assert.deepEqual(plan.items[0]?.reasons, [ITEM_PART_NOT_ENABLED_CODE]);
   assert.equal(JSON.stringify(snapshot), frozen);
   assert.equal(verifySnapshotIntegrity(snapshot), true);
+});
+
+test("甘特图逐 SKU 过滤扩展部位并同步移除其 Model 后代", () => {
+  const state = createSeedState();
+  const series = state.seriesDefinitions[0]!;
+  const sourceSku = state.skuDrawers.find((sku) => sku.seriesId === series.id)!;
+  const sourceModel = state.purchasableModels.find((model) => model.skuId === sourceSku.id)!;
+  const hookSku = {
+    ...structuredClone(sourceSku),
+    id: "sku:hook-descendant",
+    projectionMatch: { ...structuredClone(sourceSku.projectionMatch), itemPartId: "part:hook" },
+    modelIds: ["model:hook-descendant"],
+  };
+  const hookModel = { ...structuredClone(sourceModel), id: "model:hook-descendant", skuId: hookSku.id };
+  const blocks = querySeriesGantt({
+    query: { sort: "quality_type" },
+    series: state.seriesDefinitions,
+    skus: [...state.skuDrawers, hookSku],
+    models: [...state.purchasableModels, hookModel],
+    itemTypes: state.itemTypeProfiles,
+    upgrades: state.upgradeCandidates,
+  });
+  const block = blocks.find((entry) => entry.seriesId === series.id)!;
+  assert.equal(block.skuNodes.some((node) => node.skuId === hookSku.id), false);
+  assert.equal(block.skuNodes.some((node) => node.modelIds.includes(hookModel.id)), false);
+});
+
+test("产品深链分别校验 Series、SKU 与冻结 Snapshot 的部位链", () => {
+  const state = createSeedState();
+  const sourceSnapshot = state.configurationSnapshots[0]!;
+  const forgedSnapshot = extendedSnapshot({
+    ...structuredClone(sourceSnapshot),
+    id: "snapshot:forged-hook-chain",
+    version: sourceSnapshot.version + 1,
+  }, "part:hook");
+  const resolution = resolveProductDeepLink({
+    workspaceId: "workspace:test",
+    requested: { snapshotId: forgedSnapshot.id },
+    collections: state.collections,
+    series: state.seriesDefinitions,
+    skus: state.skuDrawers,
+    models: state.purchasableModels,
+    snapshots: [...state.configurationSnapshots, forgedSnapshot],
+  });
+  assert.equal(resolution.snapshot, undefined);
+  assert.equal(resolution.model, undefined);
+  assert.equal(resolution.integrityIssues[0]?.code, ITEM_PART_NOT_ENABLED_CODE);
+});
+
+test("SnapshotBatch 校验 Series/SKU/冻结 Snapshot 全链并拒绝伪造快照", () => {
+  const state = createSeedState();
+  const sourceSnapshot = state.configurationSnapshots[0]!;
+  const model = state.purchasableModels.find((entry) => entry.id === sourceSnapshot.modelId)!;
+  const forgedSnapshot = extendedSnapshot({
+    ...structuredClone(sourceSnapshot),
+    id: "snapshot:batch-forged-hook",
+    version: sourceSnapshot.version + 1,
+  }, "part:hook");
+  const plan = planSnapshotBatch({
+    models: state.purchasableModels,
+    series: state.seriesDefinitions,
+    skus: state.skuDrawers,
+    snapshots: [forgedSnapshot],
+    selectedModelIds: [model.id],
+  });
+  assert.equal(plan.items[0]?.decision, "skip");
+  assert.deepEqual(plan.items[0]?.reasons, [ITEM_PART_NOT_ENABLED_CODE]);
+
+  const sku = structuredClone(state.skuDrawers.find((entry) => entry.id === model.skuId)!);
+  sku.projectionMatch.itemPartId = "part:reel";
+  const inconsistent = planSnapshotBatch({
+    models: [model],
+    series: state.seriesDefinitions,
+    skus: [sku],
+    snapshots: [],
+    selectedModelIds: [model.id],
+  });
+  assert.deepEqual(inconsistent.items[0]?.reasons, [ITEM_PART_CHAIN_INCONSISTENT_CODE]);
 });

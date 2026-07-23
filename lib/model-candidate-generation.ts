@@ -1,8 +1,7 @@
 import { evaluateAffinity, evaluateHardCompatibility } from "./compatibility";
 import { deterministicHash } from "./rule-kernel";
 import {
-  assertProductItemPartEnabled,
-  seriesItemPartId,
+  assertSeriesItemPartChainEnabled,
 } from "./enabled-item-parts";
 import type {
   CandidateGenerationRequest,
@@ -83,13 +82,10 @@ export function generateModelCandidateRun(input: {
   const skus = input.request.skuRefs.map((ref) => input.state.skuDrawers.find((entry) => entry.id === ref.entityId));
   if (skus.some((sku) => !sku)) throw new Error("CandidateGenerationRequest 引用了不存在的 SKU。");
   const selectedSkus = skus as SkuDrawer[];
-  assertProductItemPartEnabled(
-    seriesItemPartId(series, selectedSkus),
-    "candidate_generation",
-  );
-  for (const sku of selectedSkus) {
-    assertProductItemPartEnabled(sku.projectionMatch.itemPartId, "candidate_generation");
+  if (selectedSkus.some((sku) => sku.seriesId !== series.id)) {
+    throw new Error("CandidateGenerationRequest 的 SKU 不属于请求的 Series。");
   }
+  assertSeriesItemPartChainEnabled(series, input.state.skuDrawers, "candidate_generation");
   const ruleSetVersion = input.state.ruleSetVersions.find((entry) => entry.status === "published")?.id ?? "";
   const options = {
     seriesRef: input.request.seriesRef,
@@ -215,16 +211,42 @@ export function materializeCandidateRun(input: {
     input.run.status !== "completed"
     && !(input.run.status === "waiting_for_review" && input.reviewConfirmed)
   ) throw new Error("CandidateRun 未处于可物化状态，或 REVIEW_ON_CHANGE 尚未确认。");
+  const requestSeries = input.state.seriesDefinitions.find(
+    (entry) => entry.id === input.run.request.seriesRef.entityId,
+  );
+  if (!requestSeries) {
+    throw new Error("CandidateRun 引用的 Series 不存在，禁止物化旧运行结果。");
+  }
+  if (String(requestSeries.revision) !== input.run.request.seriesRef.revisionId) {
+    throw new Error("CandidateRun 引用的 Series revision 已变化，禁止物化旧运行结果。");
+  }
+  const requestSkus = input.run.request.skuRefs.map((ref) => {
+    const sku = input.state.skuDrawers.find((entry) => entry.id === ref.entityId);
+    if (!sku) throw new Error(`CandidateRun 引用的 SKU ${ref.entityId} 不存在，禁止物化旧运行结果。`);
+    if (String(sku.revision) !== ref.revisionId) {
+      throw new Error(`CandidateRun 引用的 SKU ${ref.entityId} revision 已变化，禁止物化旧运行结果。`);
+    }
+    if (sku.seriesId !== requestSeries.id) {
+      throw new Error(`CandidateRun 引用的 SKU ${ref.entityId} 不属于请求的 Series。`);
+    }
+    return sku;
+  });
+  assertSeriesItemPartChainEnabled(
+    requestSeries,
+    input.state.skuDrawers,
+    "candidate_materialization",
+  );
+  const requestedSkuIds = new Set(requestSkus.map((sku) => sku.id));
   for (const candidate of input.run.candidates) {
+    if (!requestedSkuIds.has(candidate.skuRef.entityId)) {
+      throw new Error(`Candidate ${candidate.candidateId} 引用了请求范围外的 SKU。`);
+    }
     const sku = input.state.skuDrawers.find((entry) => entry.id === candidate.skuRef.entityId);
     const series = sku
       ? input.state.seriesDefinitions.find((entry) => entry.id === sku.seriesId)
       : undefined;
-    assertProductItemPartEnabled(
-      series ? seriesItemPartId(series, input.state.skuDrawers) : sku?.projectionMatch.itemPartId,
-      "candidate_materialization",
-    );
-    assertProductItemPartEnabled(sku?.projectionMatch.itemPartId, "candidate_materialization");
+    if (!series || !sku) throw new Error(`Candidate ${candidate.candidateId} 的 SKU/Series 父链不存在。`);
+    assertSeriesItemPartChainEnabled(series, [sku], "candidate_materialization");
   }
   const models = structuredClone(input.state.purchasableModels);
   const skus = structuredClone(input.state.skuDrawers);

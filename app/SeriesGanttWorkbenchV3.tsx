@@ -894,12 +894,12 @@ export function SeriesGanttWorkbenchV3({
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
-      if (deepLink.unavailableRequestedRef?.entityType === "configuration_snapshot") {
+      if (deepLink.unavailable && !deepLink.snapshot && drawerSnapshotId) {
         setDrawerSnapshotId("");
         notify("请求的冻结快照不可见或已不存在，已退回最近可见对象。");
         return;
       }
-      if (deepLink.unavailableRequestedRef?.entityType === "model") {
+      if (deepLink.unavailable && !deepLink.model && drawerModelId) {
         setDrawerModelId("");
         if (deepLink.series) setSelectedSeriesId(deepLink.series.id);
         if (deepLink.sku) setSelectedSkuId(deepLink.sku.id);
@@ -1106,7 +1106,7 @@ export function SeriesGanttWorkbenchV3({
               <div className={`gantt-series-block ${selectedSeries?.id === block.seriesId ? "selected" : ""}`} key={block.seriesId} style={{ gridColumn: column, gridRow: `${minRow + 1} / ${maxRow + 2}`, "--series-color": color } as React.CSSProperties}>
                 <button type="button" className="gantt-series-select" onClick={() => selectSeries(block.seriesId)}>
                   <strong>{block.name}</strong>
-                  <small>{block.aggregate.skuCount} SKU · {block.aggregate.modelCountVisible} Model</small>
+                  <small>{block.aggregate.skuCount} SKU · {block.aggregate.modelCountMatched} Model</small>
                   <span className={`gantt-primary-state ${block.aggregate.primary.toLowerCase()}`}>{statusText(block.aggregate.primary)}</span>
                   <span className="gantt-secondary-counts">
                     {block.aggregate.hardBlockingCount ? <em>{block.aggregate.hardBlockingCount} 阻断</em> : null}

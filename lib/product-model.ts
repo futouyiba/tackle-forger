@@ -30,6 +30,7 @@ export interface ValidateSeriesInput {
   resolvedPanels?: ResolvedModelPanel[];
   hardCompatibilityByModelId?: Record<string, HardCompatibilityResult>;
   parameters?: ParameterDefinition[];
+  /** @deprecated OPEN-004 已禁止独立偏移阈值；保留该输入只为旧调用方兼容，校验器会忽略。 */
   patchOffsetLimits?: { warning?: number; error?: number };
   neutralValuesBySkuId?: Record<string, Record<string, number | string>>;
 }
@@ -68,44 +69,6 @@ function valueDirection(value: number, neutral: number): "positive" | "negative"
   const delta = value - neutral;
   if (Math.abs(delta) <= Number.EPSILON) return "neutral";
   return delta > 0 ? "positive" : "negative";
-}
-
-function checkPatchOffsets(
-  input: ValidateSeriesInput,
-  issues: ValidationIssue[],
-): void {
-  const limits = input.patchOffsetLimits;
-  if (!limits || (limits.warning === undefined && limits.error === undefined)) {
-    return;
-  }
-  const panels = input.resolvedPanels ?? [];
-  for (const panel of panels) {
-    const neutral = input.neutralValuesBySkuId?.[panel.skuId];
-    if (!neutral) continue;
-    for (const [parameterKey, finalValue] of Object.entries(panel.values)) {
-      const baseValue = neutral[parameterKey];
-      if (typeof finalValue !== "number" || typeof baseValue !== "number") continue;
-      const scale = Math.max(Math.abs(baseValue), 1);
-      const offset = Math.abs(finalValue - baseValue) / scale;
-      if (limits.error !== undefined && offset > limits.error) {
-        issue(
-          issues,
-          "error",
-          "PATCH_OFFSET_ERROR",
-          "Model " + panel.modelId + " 的属性偏移超过配置的阻断阈值。",
-          parameterKey,
-        );
-      } else if (limits.warning !== undefined && offset > limits.warning) {
-        issue(
-          issues,
-          "warning",
-          "PATCH_OFFSET_WARNING",
-          "Model " + panel.modelId + " 的属性偏移超过配置的警告阈值。",
-          parameterKey,
-        );
-      }
-    }
-  }
 }
 
 export function validateSeriesInvariants(
@@ -355,7 +318,6 @@ export function validateSeriesInvariants(
     }
   }
 
-  checkPatchOffsets(input, issues);
   if (!issues.length) {
     issue(issues, "info", "SERIES_VALID", "Series、SKU 与 Model 不变量校验通过。");
   }

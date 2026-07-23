@@ -1,7 +1,15 @@
 import { deterministicHash } from "./rule-kernel";
 import { previewPatchRebase } from "./patch-engine";
 import { orderedPatchReferences } from "./patch-ledger";
-import { structuralPullFromValues } from "./projection-matcher";
+import { authoritativeObjectIdentity, evaluateAuthoritativePatchFinalRanges, type AuthoritativePatchObject } from "./patch-authority";
+import {
+  assertPatchGateCanProceed,
+  assertPatchReviewCoverage,
+  assertPublishedPatchOffsetPolicy,
+  assertRangeEvaluationMatchesPatchRevisions,
+  PatchOffsetPolicyError,
+} from "./patch-offset-policy";
+import type { PatchRangeEvaluation } from "./patch-offset-policy";
 import type {
   AffinityScoreResult,
   AffixQualityEvaluation,
@@ -13,18 +21,27 @@ import type {
   ModelFiveAxisPreview,
   FiveAxisViewDefinition,
   PatchRebaseDifference,
+  PatchOffsetPolicyVersion,
+  ParameterDefinition,
+  PatchReviewBatch,
   PatchRevisionRecord,
+  PatchValidationWaiver,
   ProjectionPatchRuleSource,
   PurchasableModel,
   RuleChangeProposal,
+  RuleSetVersion,
   SeriesDefinition,
   SkuDrawer,
   UpgradeCandidate,
   ValidationIssue,
   PassiveSkillPayload,
+  WorkspacePolicyRecord,
 } from "./types";
 import type { ModelAffixValueAssessment } from "./quality-value-policy";
 import type { PricingTrialResult } from "./pricing-policy";
+import {
+  assertSeriesItemPartChainEnabled,
+} from "./enabled-item-parts";
 
 function errors(issues: ValidationIssue[]): ValidationIssue[] {
   return issues.filter((issue) => issue.level === "error");
@@ -38,12 +55,20 @@ export interface PublishModelInput {
   publicationMode: "new_formal" | "historical_import";
   model: PurchasableModel;
   sku: SkuDrawer;
+  seriesSkus: SkuDrawer[];
   series: SeriesDefinition;
   projection: DerivedProjection;
   finalPanelValues: Record<string, number | string>;
   componentSelections: ModelComponentSelection[];
   patches: ProjectionPatchRuleSource[];
   patchRevisions?: PatchRevisionRecord[];
+  patchOffsetGovernance?: {
+    policy?: WorkspacePolicyRecord | PatchOffsetPolicyVersion;
+    ruleSet: RuleSetVersion;
+    parameterDefinitions: ParameterDefinition[];
+    reviewBatch?: PatchReviewBatch;
+    waivers?: PatchValidationWaiver[];
+  };
   attributeAffixIds: string[];
   passiveAffixIds: string[];
   technologyIds: string[];
@@ -73,6 +98,82 @@ function snapshotContent(
 export function publishConfigurationSnapshot(
   input: PublishModelInput,
 ): ConfigurationSnapshot {
+  if (input.publicationMode === "new_formal" && input.patches.length && !input.patchRevisions?.length) {
+    throw new Error("正式 Snapshot 必须使用可冻结 operation 顺序的 Patch revision，不能只引用旧 Patch 视图。");
+  }
+  const frozenPatches = input.patchRevisions
+    ? orderedPatchReferences(input.patchRevisions)
+    : undefined;
+  const legacyPatchSetHash = deterministicHash(
+    [...input.patches].sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
+  );
+  const patchSetHash = frozenPatches?.patchSetHash ?? legacyPatchSetHash;
+  const hasPatchDependency = Boolean(input.patchRevisions?.length || input.patches.length);
+  let patchRangeEvaluation: PatchRangeEvaluation | undefined;
+  if (input.publicationMode === "new_formal" && hasPatchDependency) {
+    try {
+      const governance = input.patchOffsetGovernance;
+      if (!governance) {
+        throw new PatchOffsetPolicyError(
+          "PATCH_OFFSET_POLICY_MISSING",
+          "正式发布缺少 PatchOffsetPolicyVersion 与整体复核证据。",
+        );
+      }
+      const policy = governance.policy;
+      assertPublishedPatchOffsetPolicy(policy);
+      const authority: AuthoritativePatchObject = {
+        subjectRef: { scopeType: "model", entityId: input.model.id, revision: input.model.revision },
+        ruleSet: governance.ruleSet,
+        parameterDefinitions: governance.parameterDefinitions,
+        patchRevisions: input.patchRevisions ?? [],
+        contexts: [{
+          contextId: `${input.model.id}:${input.sku.id}:${input.projection.id}`,
+          itemPartId: input.sku.projectionMatch.itemPartId,
+          projection: input.projection,
+          finalPanelValues: input.finalPanelValues,
+          weightBandId: input.sku.projectionMatch.weightTemplateId,
+          skuRef: input.sku.id,
+          targetPullKg: input.sku.projectionMatch.targetPullKg,
+        }],
+      };
+      patchRangeEvaluation = evaluateAuthoritativePatchFinalRanges({
+        policy,
+        gate: "PUBLISH",
+        objects: [authority],
+      });
+      const identity = authoritativeObjectIdentity(authority);
+      if (identity.patchSetHash !== patchSetHash) {
+        throw new PatchOffsetPolicyError("PATCH_SET_HASH_MISMATCH", "发布命令派生的 PatchSetHash 与待冻结引用不一致。");
+      }
+      assertPatchReviewCoverage({
+        batch: governance.reviewBatch,
+        policyVersion: policy.version,
+        subjectRef: { scopeType: "model", entityId: input.model.id, revision: input.model.revision },
+        objectInputHash: identity.objectInputHash,
+        patchSetHash,
+      });
+      assertRangeEvaluationMatchesPatchRevisions({
+        evaluation: patchRangeEvaluation,
+        revisions: input.patchRevisions ?? [],
+      });
+      assertPatchGateCanProceed({
+        evaluation: patchRangeEvaluation,
+        waivers: governance.waivers,
+      });
+    } catch (error) {
+      if (error instanceof PatchOffsetPolicyError) {
+        throw new Error(`配置快照发布被阻止：[${error.code}] ${error.message}`);
+      }
+      throw error;
+    }
+  }
+  assertSeriesItemPartChainEnabled(
+    input.series,
+    [input.sku],
+    "model_publish",
+    [],
+    input.seriesSkus,
+  );
   const combinedValidationReport = [
     ...input.validationReport,
     ...(input.fiveAxisPreview?.tackleFitComparison.validationIssues ?? []),
@@ -169,18 +270,7 @@ export function publishConfigurationSnapshot(
     }
   }
 
-  const frozenPatches = input.patchRevisions?.length ? orderedPatchReferences(input.patchRevisions) : undefined;
-  const legacyPatchSetHash = deterministicHash(
-    [...input.patches].sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
-  );
-  const patchSetHash = frozenPatches?.patchSetHash ?? legacyPatchSetHash;
-  const modelFinalPullKg = structuralPullFromValues(
-    input.finalPanelValues,
-    input.sku.projectionMatch.itemPartId,
-  );
-  if (modelFinalPullKg === undefined) {
-    throw new Error("最终 Model 面板缺少所属部位的有效 modelFinalPullKg，禁止创建 Snapshot。");
-  }
+  const governance = input.patchOffsetGovernance;
   const snapshotWithoutHash: Omit<ConfigurationSnapshot, "contentHash"> = {
     id:
       input.snapshotId ??
@@ -195,8 +285,18 @@ export function publishConfigurationSnapshot(
     reductionStackingMode: input.projection.reductionStackingMode,
     patchSetHash,
     ...(frozenPatches ? { patchReferences: frozenPatches.references } : {}),
+    ...(input.publicationMode === "new_formal" && hasPatchDependency && governance ? {
+      patchOffsetPolicyVersion: governance.policy?.version,
+      patchReviewBatchRef: governance.reviewBatch?.batchId,
+      patchValidationIssueFingerprints: (patchRangeEvaluation?.issues ?? [])
+        .flatMap((issue) => issue.fingerprint ? [issue.fingerprint] : [])
+        .sort(),
+      patchValidationWaiverRefs: (governance.waivers ?? []).map((waiver) => waiver.waiverId).sort(),
+    } : {}),
     finalPanelValues: structuredClone(input.finalPanelValues),
-    modelFinalPullKg,
+    ...(typeof input.finalPanelValues["杆最大拉力kgf"] === "number"
+      ? { modelFinalPullKg: input.finalPanelValues["杆最大拉力kgf"] }
+      : {}),
     componentSelections: structuredClone(input.componentSelections),
     technologyIds: structuredClone(input.technologyIds),
     attributeAffixIds: structuredClone(input.attributeAffixIds),

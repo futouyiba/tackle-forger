@@ -6,6 +6,17 @@ import {
   type ExportCommitAdapter,
   type ExportCommitResult,
 } from "../lib/config-export";
+import { deterministicHash } from "../lib/rule-kernel";
+import { createSeedState } from "../lib/seed";
+
+function exportSnapshot(itemPartId = "part:rod") {
+  const snapshot = structuredClone(createSeedState().configurationSnapshots[0]!);
+  snapshot.projectionMatch.itemPartId = itemPartId;
+  const content = structuredClone(snapshot);
+  Reflect.deleteProperty(content, "contentHash");
+  snapshot.contentHash = deterministicHash(content);
+  return snapshot;
+}
 
 test("配置表枚举关系未声明按 id/name 解析时阻止而不猜测", () => {
   const issues = validateLogicalTableRelations({
@@ -107,6 +118,7 @@ test("三表替换到第二张失败时回滚第一张且不替换第三张", as
   const result = await commitExportPackage({
     profileId: "dev",
     packageId: "package:1",
+    snapshots: [exportSnapshot()],
     idempotencyKey: "key:1",
     operations,
     adapter: io,
@@ -122,6 +134,7 @@ test("导出提交使用幂等键，相同提交不重复插入或替换", async
   const first = await commitExportPackage({
     profileId: "dev",
     packageId: "package:1",
+    snapshots: [exportSnapshot()],
     idempotencyKey: "key:same",
     operations,
     adapter: io,
@@ -129,6 +142,7 @@ test("导出提交使用幂等键，相同提交不重复插入或替换", async
   const second = await commitExportPackage({
     profileId: "dev",
     packageId: "package:1",
+    snapshots: [exportSnapshot()],
     idempotencyKey: "key:same",
     operations,
     adapter: io,
@@ -138,3 +152,20 @@ test("导出提交使用幂等键，相同提交不重复插入或替换", async
   assert.deepEqual(io.replaced, ["tackle.xlsx", "item.xlsx", "store.xlsx"]);
 });
 
+test("扩展部位提交在任何备份或文件替换前返回稳定错误", async () => {
+  const io = adapter();
+  await assert.rejects(() => commitExportPackage({
+    profileId: "dev",
+    packageId: "package:hook",
+    snapshots: [exportSnapshot("part:hook")],
+    idempotencyKey: "key:hook",
+    operations,
+    adapter: io,
+  }), (error) => (
+    error instanceof Error
+    && "code" in error
+    && error.code === "ITEM_PART_NOT_ENABLED"
+  ));
+  assert.deepEqual(io.replaced, []);
+  assert.deepEqual(io.restored, []);
+});

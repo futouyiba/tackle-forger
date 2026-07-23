@@ -75,7 +75,10 @@ export type ProjectionLayer =
 
 export interface WorkspaceRuleSettings {
   reductionStackingMode: ReductionStackingMode;
-  /** OPEN-004：未确认前保持为空，不在代码中写死阈值。 */
+  /**
+   * @deprecated OPEN-004 已决定不使用独立偏移阈值。仅用于读取旧工作区；
+   * v16 迁移会把非空值隔离到迁移复核记录并清空，运行时不得消费。
+   */
   patchOffsetLimits: {
     warning?: number;
     error?: number;
@@ -223,6 +226,98 @@ export interface PatchSnapshotReference {
   patchId: string;
   patchRevision: number;
   orderedOperationIds: string[];
+}
+
+export type PatchOffsetPolicyMode = "FINAL_RANGE_WITH_MANDATORY_REVIEW";
+export type PatchOffsetThresholdMode = "NONE";
+export type PatchRangeEndpointMode = "INCLUSIVE";
+
+export interface PatchOffsetPolicyVersion {
+  policyId: string;
+  policyType: "patchOffsetPolicy";
+  version: string;
+  status: "draft" | "published" | "superseded";
+  value: {
+    mode: PatchOffsetPolicyMode;
+    offsetThresholds: PatchOffsetThresholdMode;
+    rangeEndpoints: PatchRangeEndpointMode;
+    applicableScopes: Array<"series" | "sku" | "model" | "final_review">;
+  };
+  createdAt: string;
+  publishedAt?: string;
+  publishedBy?: string;
+  contentHash: string;
+}
+
+export interface PatchReviewSubjectRef {
+  scopeType: "series" | "sku" | "model" | "final_review" | "snapshot_batch";
+  entityId: string;
+  revision: number;
+}
+
+export interface PatchRangeResultEvidence {
+  contextId: string;
+  parameterKey: string;
+  standardUnit: string;
+  finalValue: number;
+  min: number;
+  max: number;
+  valid: boolean;
+  issueFingerprint?: string;
+  skuRef?: string;
+  targetPullKg?: number;
+  projectionId: string;
+  weightBandId: string;
+  constraintRuleRef: string;
+  constraintRuleVersion: string;
+}
+
+export interface PatchReviewObjectEvidence {
+  subjectRef: PatchReviewSubjectRef;
+  objectInputHash: string;
+  patchReferences: PatchSnapshotReference[];
+  patchSetHash: string;
+  finalValues: Record<string, number>;
+  rangeResults: PatchRangeResultEvidence[];
+  issueFingerprints: string[];
+  state: "FRESH" | "STALE";
+}
+
+export interface PatchReviewBatch {
+  batchId: string;
+  policyVersion: string;
+  gate: "REVIEW" | "PUBLISH";
+  status: "FRESH" | "PARTIALLY_STALE" | "STALE";
+  objectEvidence: PatchReviewObjectEvidence[];
+  reviewedBy: string;
+  reviewedAt: string;
+  inputHash: string;
+}
+
+export interface PatchValidationWaiver {
+  waiverId: string;
+  waiverDecisionId: string;
+  issueFingerprint: string;
+  policyVersion: string;
+  gate: "REVIEW" | "PUBLISH" | "EXPORT";
+  environmentId?: string;
+  channelKey?: string;
+  scopeRef: PatchReviewSubjectRef;
+  objectInputHash: string;
+  patchSetHash: string;
+  reason: string;
+  approvedBy: string;
+  approvedAt: string;
+}
+
+export interface PatchValidationWaiverDecision {
+  waiverDecisionId: string;
+  scopeRef: PatchReviewSubjectRef;
+  reason: string;
+  approvedBy: string;
+  approvedAt: string;
+  waiverIds: string[];
+  decisionHash: string;
 }
 
 export interface PatchRevisionRecord {
@@ -1106,6 +1201,11 @@ export interface ConfigurationSnapshot {
   reductionStackingMode: ReductionStackingMode;
   patchSetHash: string;
   patchReferences?: PatchSnapshotReference[];
+  /** 历史 Snapshot 可缺失；新正式 Snapshot 必须冻结以下 OPEN-004 证据。 */
+  patchOffsetPolicyVersion?: string;
+  patchReviewBatchRef?: string;
+  patchValidationIssueFingerprints?: string[];
+  patchValidationWaiverRefs?: string[];
   finalPanelValues: Record<string, number | string>;
   /** schema v16 起的新快照冻结最终拉力；历史快照缺失时不得补写或改变 contentHash。 */
   modelFinalPullKg?: number;
@@ -1438,9 +1538,16 @@ export interface ValidationIssue {
   level: "error" | "warning" | "info";
   /** 规范严重度；旧记录缺失时由 level 确定性映射。 */
   severity?: "INFO" | "WARNING" | "ERROR" | "BLOCKER";
+  source?: "patch" | "data_integrity" | "publish" | "series_invariant" | "hard_compatibility" | "quality" | "pricing" | "five_axis" | "import";
+  gate?: "NONE" | "REVIEW" | "PUBLISH" | "EXPORT";
+  state?: "OPEN" | "ACKNOWLEDGED" | "RESOLVED" | "WAIVED" | "STALE";
+  fingerprint?: string;
   code: string;
   message: string;
   parameterKey?: string;
+  environmentId?: string;
+  channelKey?: string;
+  evidence?: Record<string, unknown>;
 }
 
 export interface CalculatedEquipment {
@@ -1743,6 +1850,9 @@ export interface WorkspaceState {
   fiveAxisViewDefinitions: FiveAxisViewDefinition[];
   fiveAxisVertexSets: FiveAxisVertexSet[];
   workspacePolicies: WorkspacePolicyRecord[];
+  patchReviewBatches: PatchReviewBatch[];
+  patchValidationWaivers: PatchValidationWaiver[];
+  patchValidationWaiverDecisions: PatchValidationWaiverDecision[];
   aiAssessments: AIAssessmentRecord[];
   exportTargetProfiles: WorkspaceExportTargetProfile[];
   configEnvironmentProfiles: ConfigEnvironmentProfile[];

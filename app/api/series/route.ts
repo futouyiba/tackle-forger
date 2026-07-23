@@ -21,6 +21,11 @@ import type { SeriesDefinition } from "@/lib/types";
 import { ensureWorkflowFields } from "@/lib/workflow";
 import { parseDiscretePulls } from "@/lib/series-create-contract";
 import { stableAuditActor } from "@/lib/api-command-boundaries";
+import {
+  ItemPartNotEnabledError,
+  OPEN_003_FAIL_CLOSED_POLICY,
+  isProductItemPartEnabled,
+} from "@/lib/enabled-item-parts";
 
 export const dynamic = "force-dynamic";
 
@@ -132,6 +137,16 @@ export async function POST(request: NextRequest) {
 
   const current = await loadWorkspaceState();
   const state = current.state;
+  if (!isProductItemPartEnabled(body.itemPartId)) {
+    const error = new ItemPartNotEnabledError(body.itemPartId, "series");
+    return NextResponse.json({
+      error: error.message,
+      code: error.code,
+      itemPartId: error.itemPartId,
+      action: "create_series",
+      policyMode: OPEN_003_FAIL_CLOSED_POLICY.mode,
+    }, { status: 422 });
+  }
 
   const inputHash = createHash("sha256").update(JSON.stringify({
     seriesId: body.seriesId,

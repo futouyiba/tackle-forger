@@ -150,16 +150,15 @@ test("R2 无 Collection 从 Series 开始，缺失可选层不造占位", () => 
   assert.deepEqual(breadcrumbs.map((entry) => entry.objectLabel), ["Series"]);
 });
 
-test("R2 已知但不可见父级仅披露占位且禁止导航", () => {
+test("R2 缺失父级拒绝构造部分谱系或脱敏占位", () => {
   const state = createSeedState();
   const series = { ...state.seriesDefinitions[0], collectionId: "collection:hidden" };
-  const breadcrumbs = buildProductBreadcrumbs({ workspaceId: "tenant:test", series });
-  const hidden = breadcrumbs[0];
-  assert.equal(hidden.label, "不可见对象");
-  assert.equal(hidden.ref.entityId, "collection:hidden");
-  assert.equal(hidden.ref.revisionId, "unavailable");
-  assert.equal(hidden.navigable, false);
-  assert.match(hidden.unavailableReason ?? "", /无权查看/);
+  assert.throws(
+    () => buildProductBreadcrumbs({ workspaceId: "tenant:test", series }),
+    (error) => error instanceof Error
+      && "code" in error
+      && error.code === "PRODUCT_PARENT_CHAIN_INCOMPLETE",
+  );
 });
 
 test("R2 Snapshot 深链接按冻结引用解析完整父链", () => {
@@ -178,10 +177,10 @@ test("R2 Snapshot 深链接按冻结引用解析完整父链", () => {
   assert.equal(resolution.model?.id, snapshot.modelId);
   assert.equal(resolution.sku?.id, resolution.model?.skuId);
   assert.equal(resolution.series?.id, resolution.sku?.seriesId);
-  assert.equal(resolution.unavailableRequestedRef, undefined);
+  assert.equal(resolution.unavailable, undefined);
 });
 
-test("R2 不可见 Snapshot 退回明确 Model，父链冲突不静默接受", () => {
+test("R2 已删除 Snapshot 退回明确 Model，父链冲突返回稳定原因", () => {
   const state = createSeedState();
   const model = state.purchasableModels[0];
   const fallback = resolveProductDeepLink({
@@ -193,7 +192,8 @@ test("R2 不可见 Snapshot 退回明确 Model，父链冲突不静默接受", (
     models: state.purchasableModels,
     snapshots: state.configurationSnapshots,
   });
-  assert.equal(fallback.unavailableRequestedRef?.entityType, "configuration_snapshot");
+  assert.equal(fallback.unavailable?.code, "DEEP_LINK_OBJECT_DELETED");
+  assert.equal(fallback.unavailable?.requestedRef.entityType, "configuration_snapshot");
   assert.equal(fallback.fallbackEntityType, "model");
   assert.equal(fallback.model?.id, model.id);
 
@@ -210,8 +210,123 @@ test("R2 不可见 Snapshot 退回明确 Model，父链冲突不静默接受", (
       snapshots: state.configurationSnapshots,
     });
     assert.equal(conflict.model?.id, snapshot.modelId);
-    assert.ok(conflict.integrityIssues.some((issue) => issue.code === "DEEP_LINK_PARENT_MISMATCH"));
+    assert.equal(conflict.unavailable?.code, "DEEP_LINK_REFERENCE_INVALID");
+    assert.ok(conflict.integrityIssues.some((issue) => issue.code === "DEEP_LINK_REFERENCE_INVALID"));
   }
+});
+
+test("R2 过期 revision 路由返回完整当前父链与稳定恢复引用", () => {
+  const state = createSeedState();
+  const model = state.purchasableModels[0];
+  const resolution = resolveProductDeepLink({
+    workspaceId: "tenant:test",
+    requested: {
+      ref: {
+        workspaceId: "tenant:test",
+        entityType: "model",
+        entityId: model.id,
+        revisionId: String(model.revision - 1),
+      },
+    },
+    collections: state.collections,
+    series: state.seriesDefinitions,
+    skus: state.skuDrawers,
+    models: state.purchasableModels,
+    snapshots: state.configurationSnapshots,
+  });
+  assert.equal(resolution.unavailable?.code, "DEEP_LINK_ROUTE_STALE");
+  assert.equal(resolution.unavailable?.recoveryRef?.revisionId, String(model.revision));
+  const breadcrumbs = buildProductBreadcrumbs({
+    workspaceId: "tenant:test",
+    collection: resolution.collection,
+    series: resolution.series,
+    sku: resolution.sku,
+    model: resolution.model,
+    currentEntityType: "model",
+  });
+  assert.deepEqual(
+    breadcrumbs.map((item) => item.ref.entityType),
+    resolution.series?.collectionId
+      ? ["collection", "series", "sku_drawer", "model"]
+      : ["series", "sku_drawer", "model"],
+  );
+});
+
+test("R2 跨工作区引用明确拒绝且不返回任何父链", () => {
+  const state = createSeedState();
+  const model = state.purchasableModels[0];
+  const resolution = resolveProductDeepLink({
+    workspaceId: "tenant:current",
+    requested: {
+      ref: {
+        workspaceId: "tenant:other",
+        entityType: "model",
+        entityId: model.id,
+        revisionId: String(model.revision),
+      },
+    },
+    collections: state.collections,
+    series: state.seriesDefinitions,
+    skus: state.skuDrawers,
+    models: state.purchasableModels,
+    snapshots: state.configurationSnapshots,
+  });
+  assert.equal(resolution.unavailable?.code, "DEEP_LINK_CROSS_WORKSPACE");
+  assert.equal(resolution.collection, undefined);
+  assert.equal(resolution.series, undefined);
+  assert.equal(resolution.sku, undefined);
+  assert.equal(resolution.model, undefined);
+  assert.equal(resolution.snapshot, undefined);
+});
+
+test("R2 对象父引用失效时返回稳定完整性错误，不渲染部分子链", () => {
+  const state = createSeedState();
+  const brokenModel = { ...state.purchasableModels[0], skuId: "sku:deleted" };
+  const resolution = resolveProductDeepLink({
+    workspaceId: "tenant:test",
+    requested: {
+      ref: {
+        workspaceId: "tenant:test",
+        entityType: "model",
+        entityId: brokenModel.id,
+        revisionId: String(brokenModel.revision),
+      },
+    },
+    collections: state.collections,
+    series: state.seriesDefinitions,
+    skus: state.skuDrawers,
+    models: [brokenModel, ...state.purchasableModels.slice(1)],
+    snapshots: state.configurationSnapshots,
+  });
+  assert.equal(resolution.unavailable?.code, "DEEP_LINK_REFERENCE_INVALID");
+  assert.equal(resolution.model, undefined);
+  assert.ok(resolution.integrityIssues.some((issue) => issue.code === "DEEP_LINK_REFERENCE_INVALID"));
+});
+
+test("R1/R2 只读查询与恢复不会改写历史 Snapshot 或 revision", () => {
+  const state = createSeedState();
+  const beforeSnapshots = structuredClone(state.configurationSnapshots);
+  const beforeModels = state.purchasableModels.map((model) => ({ id: model.id, revision: model.revision }));
+  const snapshot = state.configurationSnapshots[0];
+  resolveProductDeepLink({
+    workspaceId: "tenant:test",
+    requested: { snapshotId: snapshot.id },
+    collections: state.collections,
+    series: state.seriesDefinitions,
+    skus: state.skuDrawers,
+    models: state.purchasableModels,
+    snapshots: state.configurationSnapshots,
+  });
+  buildSeriesGanttProjection({
+    series: state.seriesDefinitions,
+    skus: state.skuDrawers,
+    models: state.purchasableModels,
+  });
+  assert.deepEqual(state.configurationSnapshots, beforeSnapshots);
+  assert.deepEqual(
+    state.purchasableModels.map((model) => ({ id: model.id, revision: model.revision })),
+    beforeModels,
+  );
 });
 
 test("R11 主状态优先级不吞掉生命周期与注意状态", () => {

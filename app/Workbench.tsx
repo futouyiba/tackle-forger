@@ -59,6 +59,10 @@ import {
 import { ensureWorkflowFields } from "@/lib/workflow";
 import { migrateWorkspaceState } from "@/lib/migrations";
 import {
+  isProductItemPartEnabled,
+  seriesItemPartId,
+} from "@/lib/enabled-item-parts";
+import {
   buildProductBreadcrumbs,
   type BreadcrumbItem,
 } from "@/lib/interaction-contracts";
@@ -3202,7 +3206,10 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   const compareCandidates = compareIds
     .map((id) => state.candidates.find((candidate) => candidate.id === id))
     .filter((candidate): candidate is Candidate => Boolean(candidate));
-  const v3Series = state.seriesDefinitions.find((entry) => entry.id === v3SeriesId);
+  const requestedV3Series = state.seriesDefinitions.find((entry) => entry.id === v3SeriesId);
+  const v3Series = requestedV3Series && isProductItemPartEnabled(
+    seriesItemPartId(requestedV3Series, state.skuDrawers),
+  ) ? requestedV3Series : undefined;
   const topBreadcrumbs = page === "v3flow" && v3Series
     ? buildProductBreadcrumbs({
       workspaceId: user.tenantKey || "workspace",

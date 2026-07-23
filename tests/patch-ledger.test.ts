@@ -43,6 +43,7 @@ test("review permission is separate and snapshot referenced revision is immutabl
   assert.throws(()=>reviewPatchRevision({ledger,patchId:"patch:rod:1",patchRevision:1,nextState:"APPROVED",reviewer:"x",reviewedAt:now,capabilities:[]}), (e:unknown)=>e instanceof PatchLedgerError&&e.code==="PATCH_PERMISSION_DENIED");
   const frozen={...ledger,revisions:[{...ledger.revisions[0],snapshotRefs:["snapshot:1"]}]};
   assert.throws(()=>reviewPatchRevision({ledger:frozen,patchId:"patch:rod:1",patchRevision:1,nextState:"APPROVED",reviewer:"x",reviewedAt:now,capabilities:["patch.review"]}), (e:unknown)=>e instanceof PatchLedgerError&&e.code==="PATCH_REVISION_IMMUTABLE");
+  assert.throws(()=>reviewPatchRevision({ledger,patchId:"patch:rod:1",patchRevision:1,nextState:"APPROVED",reviewer:"x",reviewedAt:now,capabilities:["patch.review"]}), (e:unknown)=>e instanceof PatchLedgerError&&e.code==="PATCH_OFFSET_POLICY_MISSING");
 });
 test("unavailable or partial mirror never reports SYNCED and retry is idempotent", () => {
   const ledger: ReturnType<typeof emptyPatchLedger>={...emptyPatchLedger(),revisions:[makeRevision()]};

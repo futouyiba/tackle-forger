@@ -33,6 +33,10 @@ import { defaultAffinityAxisWeights } from "./compatibility";
 import { migrateLegacyProductIdentity } from "./legacy-product-migration";
 import { CANONICAL_FEISHU_WORKBOOK } from "./feishu-workbook";
 import { buildPatchRevision, emptyPatchLedger, migratePatchLedger } from "./patch-ledger";
+import {
+  CANONICAL_PATCH_OFFSET_POLICY_ID,
+  createCanonicalPatchOffsetPolicyVersion,
+} from "./patch-offset-policy";
 import { deterministicHash } from "./rule-kernel";
 
 export const CURRENT_WORKSPACE_SCHEMA_VERSION = 17;
@@ -690,9 +694,40 @@ function migrateV14ToV15(state: MutableWorkspace): MutableWorkspace {
 }
 
 function migrateV15ToV16(state: MutableWorkspace): MutableWorkspace {
+  const ledger = state.patchLedger && typeof state.patchLedger === "object"
+    ? migratePatchLedger(state.patchLedger as WorkspaceState["patchLedger"])
+    : emptyPatchLedger();
+  const legacyLimits = state.ruleSettings?.patchOffsetLimits;
+  if (legacyLimits && (legacyLimits.warning !== undefined || legacyLimits.error !== undefined)
+    && !ledger.migrationReviewItems.some((entry) => entry.id === "patch-offset-policy:legacy-thresholds")) {
+    ledger.migrationReviewItems.push({
+      id: "patch-offset-policy:legacy-thresholds",
+      patchId: "legacy-patch-offset-policy",
+      patchRevision: 1,
+      reason: "LEGACY_PATCH_OFFSET_THRESHOLDS_QUARANTINED",
+      preservedPayload: structuredClone(legacyLimits),
+    });
+  }
+  const policies = arrayOf<WorkspaceState["workspacePolicies"][number]>(state.workspacePolicies)
+    .map((policy) => policy.policyType === "patchOffsetPolicy"
+      && policy.policyId !== CANONICAL_PATCH_OFFSET_POLICY_ID && policy.status === "published"
+      ? { ...policy, status: "superseded" as const } : policy);
+  if (!policies.some((policy) => policy.policyId === CANONICAL_PATCH_OFFSET_POLICY_ID)) {
+    policies.push(createCanonicalPatchOffsetPolicyVersion({
+      createdAt: "2026-07-23T00:00:00.000Z",
+      publishedAt: "2026-07-23T00:00:00.000Z",
+      publishedBy: "OPEN-004 / GitHub Issue #32",
+    }) as unknown as WorkspaceState["workspacePolicies"][number]);
+  }
   return {
     ...state,
     schemaVersion: 16,
+    ruleSettings: { ...(state.ruleSettings ?? DEFAULT_RULE_SETTINGS), patchOffsetLimits: {} },
+    patchLedger: ledger,
+    workspacePolicies: policies,
+    patchReviewBatches: arrayOf<WorkspaceState["patchReviewBatches"][number]>(state.patchReviewBatches),
+    patchValidationWaivers: arrayOf<WorkspaceState["patchValidationWaivers"][number]>(state.patchValidationWaivers),
+    patchValidationWaiverDecisions: arrayOf<WorkspaceState["patchValidationWaiverDecisions"][number]>(state.patchValidationWaiverDecisions),
   };
 }
 
@@ -996,7 +1031,7 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
   // Some production databases were marked v17 before every persisted payload had
   // been normalized. Keep this normalizer idempotent so current-version states
   // are readable on startup without changing frozen snapshots.
-  if (version === 17) {
+  if ((input as { schemaVersion?: unknown }).schemaVersion === 17) {
     state = migrateV16ToV17(state);
   }
 

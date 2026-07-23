@@ -11,9 +11,12 @@
 > OPEN-003运行时复核：2026-07-23，代码基线`codex/open-003-deferred-parts@cdcbd7ce6bea60548f2224039861593c453ae028`；确认迁移层会保留四类扩展部位，创建Series页面仍渲染全部`state.itemParts`，服务端尚无独立启用策略门禁。本轮只记录实现事实，由[Issue #37](https://github.com/futouyiba/tackle-forger/issues/37)跟踪代码收口。
 > OPEN-001规范同步：2026-07-23，确认当前运行时仍保留`ReductionStackingMode`双模式、旧operation和非确定累加路径；本轮只同步已确认规范与外部规则源阻断，不冒充Issue #41的运行时实现或测试证据。
 > OPEN-005契约复核：2026-07-23 07:43:42 +0800，PR #30基线`52b8ab6fbfc84cde1e6530724a75aad23f6872d8`；当前代码仍使用`fishWeightGradeId`、`component_min_ratio`、`same_part_compare`、三种Series基准策略和旧`PUBLISHED`种子定义。本轮只同步正式目标契约并纠正实现状态，没有修改运行时代码或冒充新测试证据。
+> OPEN-003运行时收口：2026-07-23 07:05:00 +0800，代码基线`codex/issue-37-enabled-parts@2eec6d70755d1f72cffe6f2302d63a35ac09f241`；取代上述OPEN-003运行时复核。在尚无可校验已发布`enabledItemPartPolicy`时统一fail-closed，只允许竿、轮、线进入产品入口、Series/SKU、候选生成、发布、Snapshot与配置导出。钩、漂、真饵、拟饵继续保留稳定ID、历史Payload、未知字段和引用，但不再进入产品主流程；由[Issue #37](https://github.com/futouyiba/tackle-forger/issues/37)跟踪评审交付，且不据此宣称OPEN-003已有已发布策略或已RESOLVED。
 > OPEN-007契约复核基线：`3cb6609c237c0c23d108bf305124e24f18980fa8`（2026-07-23 00:43:07 +0800）；本轮只修订文档，不把2026-07-23已决目标语义冒充为当前运行时能力。
 > 本轮完整验证时间：2026-07-23 01:57:07 +0800；在上述OPEN-007代码基线上运行`npm run typecheck`、`npm run lint`与`npm test`。
 > PR #11最新main重整复核：2026-07-23 07:30:24 +0800，基线`origin/main@18f99e136320f1989bdeb7f61312b5ea4493bae7`；根应用`npm run typecheck`、`npm run lint`、`npm test`通过（208项主测试与1项生产构建/渲染测试），历史workspace的`pnpm -r typecheck/lint/test/build`通过；根Lint为0 error、保留main已有1条warning。
+> 最后对齐v3：2026-07-23；OPEN-010契约状态同步于2026-07-23 03:33:57 +0800，依据Issue #19与PR #23父提交`80487188d7bb6850b8f35f887dbba27f42125043`；只更新远端契约/阻断事实，没有重新审计代码或重跑测试。
+> OPEN-010运行时差距复核：2026-07-23，代码基线`origin/main@a99801303b07700c5c7d786a9eb49025a0989bd7`；确认本地`PatchOperationRecord`、PatchLedger schema/migration及operation/revision/Snapshot哈希尚未绑定`workspaceId`；第14.4.3节不可变协作事件流、事务内compare-and-append、action availability及幂等/冲突测试也未实现，现有代码仍是旧版`PatchMirrorCollaborationEntry`/建议状态更新路径；服务端只有旧版镜像写入/拉取，尚无第14.4节的JCS哈希、远端schema/IssueCode校验和新ActionCode；检查、修复、按本地权威重建、schema修复和Patch主体迁移动作及其测试同样未实现。本次只登记实现差距，不冒充代码实现。
 > 对齐基线：v3 领域规范 > product-design-completion-v3 > implementation/requirements handoff > ux-design-v1 与 prototype 视觉证据。  
 > 状态定义：已实现、部分实现、缺失、因 v3 冲突而不采纳。
 
@@ -32,10 +35,10 @@
 | 最近结构标杆 | 已实现 | 相同部位、钓法、类型、功能内按 abs(ln(target/derived))；不插值；平局规则确定 | 无 |
 | Patch 分层与 Rebase | 已实现 | patch-engine 支持稳定层序、冲突与 rebase 差异；上游变化不改旧 Snapshot | 无 |
 | Patch操作统一契约 | 部分实现 | PatchLedger与工作台使用set/add/multiply/clear，迁移器把旧remove转换为clear | 旧ProjectionPatchOperation仍暴露remove，旧AdjustmentRule路径仍可执行min/max；需按v3规范收口适配器、冻结规范化和迁移复核 |
-| PatchLedger 权威账本 | 已实现 | Workspace schema v17 + PatchLedger schema v4；稳定 ID、仅 ACTIVE 重放、revision 幂等、ORPHANED、Rebase/吸收均生成新 revision、Snapshot 引用冻结 | 无 |
+| PatchLedger 权威账本 | 部分实现 | Workspace schema v15 + PatchLedger schema v4已有稳定 ID、仅 ACTIVE 重放、revision 幂等、ORPHANED、新revision式Rebase/吸收和Snapshot引用冻结 | 运行时`PatchOperationRecord`、PatchLedger schema/migration及operation/revision/Snapshot哈希尚未绑定`workspaceId`或第14.4节JCS哈希契约；须以版本化迁移补齐工作区归属与新哈希，无法安全归属的旧记录进入迁移复核，并保持既有revision、Snapshot引用及历史哈希证据不可变。还须实现不可变`PatchCollaborationEvent`存储，在同一PatchLedger事务内校验`expectedCollaborationRevision`、分配下一revision并按`collaborationEventId`幂等追加，建议接受/拒绝/撤回直接校验原始`SHARED_RULE_SUGGESTED`；远端镜像只能发生在本地提交后。至少补“两工作区复用相同Patch/revision/operation ID不碰撞”、迁移幂等、事件重复重试、两个客户端并发冲突/重读后显式重试回归 |
 | Patch 台账工作台 | 已实现 | 治理区一级入口展示 revision、稳定对象、操作顺序、基线、镜像状态、Snapshot 引用、迁移待复核及 RuleSet 发布后吸收评估；支持创建、审核、显式启用 | 镜像写入/拉取按钮在远端连接器可用前保持禁用 |
 | 个体 Patch 汇总、规则草稿与吸收 | 已实现 | Patch 确定性归组后由独立权限创建 RuleSourceChangeDraft；新 RuleSet 下以逐操作 Trace 评估完全/部分/未覆盖/Rebase，保存 assessment 并创建新 revision，不改旧 Snapshot | 草稿远端写回仍需已确认的通用规则页写入契约 |
-| 飞书 Patch 台账镜像 | 部分实现 | 已有领域契约、独立权限、幂等命令、部分失败和回读恢复状态；不会伪造 SYNCED | 主工作簿尚无已确认 Patch 台账 sheet_id/机器列，无法实施真实远端写入 |
+| 飞书 Patch 台账镜像 | 部分实现 | 已有领域契约和旧版镜像写入/拉取命令、部分失败及回读恢复状态；已确认`Patch台账/edyFx9`、`A:AK`机器区和`AM:BA`协作事件区；旧路径仍使用不含`workspaceId`的明细键，缺少第14.4节的JCS哈希、远端schema/IssueCode校验和`write_patch_mirror`/`pull_patch_mirror` ActionCode，因此不能视为符合新契约 | 除远端表头物化、机器区/协作区保护边界和连接器联调外，服务端仍须把写入/拉取升级到工作区复合键、哈希、schema、IssueCode和ActionCode/Capability契约，并实现本地协作事件原子追加后镜像、对应action availability，以及`inspect_patch_mirror`、`repair_patch_mirror`、`rebuild_patch_mirror_from_local`、`fix_patch_mirror_schema`、`migrate_patch_subject`；全部动作均须覆盖Capability门禁、二次确认（适用时）、审计证据、重复重试、回读、缺行、篡改、hash及并发冲突测试，完成前不得标记为可用 |
 | 硬兼容与 Affinity | 已实现 | deny/require 与软分值分离；高 Affinity 不覆盖 deny；低分合法候选仍可生成 | 无 |
 | 属性词条、被动词条与 Technology | 部分实现 | Technology只展开成员、按affixId去重、被动参与价值分但不执行模拟器逻辑；但运行时仍保留`ReductionStackingMode = linear_subtraction | diminishing_division`、旧`percent_bonus/flat_bonus/reduction`字段与未冻结累加顺序 | 按[Issue #41](https://github.com/futouyiba/tackle-forger/issues/41)迁移到`direction + 非负magnitude`规范DTO、唯一`bidirectional_ratio`、完整operation顺序、binary64确定性模型、冲突隔离、Trace/hash和历史Snapshot兼容；在主工作簿规则与策略版本发布前只允许非正式预览 |
 | 品质评分 | 部分实现 | 人工选择品质、组合矩阵、Technology/Affix去重、功能系数与source=quality Trace已存在 | 2026-07-23新契约要求S包含100、>100阻断并彻底移除Performance乘数/Trace；当前内核仍有`performanceScoringEnabled/performanceScoreFactor`与旧边界冲突逻辑 |
@@ -52,7 +55,7 @@
 | 工作区revision归档与裁剪 | 缺失 | SQLite/D1当前不删除完整revision，符合一期全量保留和所有裁剪关闭的安全边界；Blob最多100条仍只是非权威评审例外 | 尚无归档包、恢复入口、tombstone、retention run、裁剪migration或自动裁剪；按v3 `OPEN-011`和父Issue #1保持阻断，本矩阵不构成实现或删除授权 |
 | 09_甘特图作为产品实体 | 因 v3 冲突而不采纳 | 09 只属于开发排期；产品甘特图来自本地 Series/SKU/Model | 不从 09 反向生成领域对象 |
 | 11/12/14–17 反向覆盖产品真相 | 因 v3 冲突而不采纳 | 仅作为历史样例、映射参考或暂存输出 | 不反向覆盖 Snapshot |
-| 扩展部位主流程 | 部分实现 | 注册表和迁移层会保留钩、漂、真饵、拟饵并标记`activeInGeneration=false`；但创建Series页面仍直接渲染全部`state.itemParts`，写接口也未独立校验启用部位策略 | OPEN-003已确认当前完全延期；按[Issue #37](https://github.com/futouyiba/tackle-forger/issues/37)移除产品入口并增加服务端门禁，同时保留稳定ID、历史Payload和引用。修复完成前不得声称运行时已经禁用 |
+| 扩展部位主流程 | 已实现 | `enabled-item-parts`在OPEN-003未发布策略时统一fail-closed，且不信任注册表的`activeInGeneration`；产品创建/只读入口、Series/SKU、结构匹配、候选生成与物化、Model发布、Snapshot批次、文件系统和浏览器配置导出均只允许竿、轮、线。被延期部位返回稳定`ITEM_PART_NOT_ENABLED`且在幂等记录、备份或文件写入前失败；迁移测试证明稳定ID、历史Payload、未知字段和引用保持不变，冻结Snapshot/hash不被重算 | 等待独立评审与GitHub Actions；OPEN-003仍没有可校验的已发布策略，因此继续保持fail-closed，不标记OPEN-003为RESOLVED |
 
 ## 2. 产品反馈归并
 
@@ -69,7 +72,7 @@
 ## 3. 当前外部阻断
 
 1. OPEN-001：`FG数值设计v3-总表/oJO4Gi` revision `17173`只作决策证据；唯一权威主工作簿revision `3259`的`04_词条/zrVOxd`尚无稳定`ruleId + parameterKey`机器规则。完成迁入、回读、显式拉取和策略/RuleSet发布前，运行时只能非正式预览，Model/Snapshot发布与正式导出必须阻断。
-2. OPEN-010：飞书主工作簿尚未提供已确认的Patch台账工作表sheet_id、机器列布局和协作字段权限，因此真实镜像写入/拉取不可启用。
+2. OPEN-010：已确认飞书主工作簿`Patch台账/edyFx9`、`A:AK`机器区与`AM:BA`协作事件区；远端表头尚未物化，机器区/协作区保护边界和连接器写入、回读、缺行、篡改、hash及并发冲突联调尚未完成，因此真实镜像写入/拉取仍不可启用。
 3. Vercel评审项目当前只配置`BLOB_READ_WRITE_TOKEN`，缺少`FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_TENANT_KEY`、`FEISHU_REDIRECT_URI`和`FEISHU_SESSION_SECRET`；首页HTTP 200，但会话端点返回503/`AUTH-CONFIG-001`，需部署方提供公司应用凭据并在飞书开放平台登记回调。
 4. OPEN-007产品语义已于2026-07-23确定；当前阻断是飞书机器源仍需修订，且运行时尚未实现S=100、无Performance乘数、双输出舍入、购买最低价和超300M WARNING确认。完成前不得把旧Draft发布为符合新契约的PricingPolicyVersion。
 5. OPEN-006产品策略已经确认；真实AI连接器仍须由[Issue #25](https://github.com/futouyiba/tackle-forger/issues/25)完成实现、测试和显式启用，在此之前保持禁用且不得发送真实数据。
@@ -79,10 +82,11 @@
 
 ## 4. 当前验证证据
 
-- 本轮完整`npm test`为237项主测试通过，另有2项生产构建/渲染测试通过，覆盖领域、API、迁移、权限、冲突、恢复、SQLite持久化、冻结与生产产物预算。
-- `tests/feishu-writeback.test.ts`的5项测试已包含在默认主套件中并通过，不再需要单独补跑。
-- `npm run typecheck`与`npm run lint`通过。
+- Issue #37当前分支：完整`npm test`为221项主测试通过，另有1项渲染测试通过；`npm run typecheck`通过；`npm run lint`为0错误，仅保留仓库既有`vitest.workspace.config.ts`匿名默认导出警告。新增回归覆盖迁移/重启保留未知Payload、产品入口隐藏、服务端稳定拒绝与无副作用、候选生成/物化、Series/SKU/Snapshot部位链、混合批次、历史Series兼容、发布/Snapshot冻结，以及文件系统和浏览器导出在写入前拒绝。
+- 远端复审完整`npm test`为190项主测试通过，另有1项渲染测试通过，覆盖领域、API、迁移、权限、冲突、恢复、SQLite持久化和冻结。
+- OPEN-007/OPEN-011文档复核轮次曾记录完整`npm test`为237项主测试及2项生产构建/渲染测试通过；该记录属于当时基线，不替代上方Issue #37当前分支的准确门禁结果。
+- `tests/feishu-writeback.test.ts`已包含在当前默认主套件中并通过，不再需要单独补跑。
 - 生产构建与渲染验收覆盖飞书规则源、离散 Series 创建和 Patch 台账入口。
-- PatchLedger单测覆盖独立schema v4、Workspace schema v17、幂等、仅ACTIVE生效、操作顺序、稳定ID、Rebase新revision、ORPHANED、规则草稿权限、镜像失败、显式拉取与Snapshot冻结。
+- PatchLedger单测覆盖独立schema v4、Workspace schema v15、幂等、仅ACTIVE生效、操作顺序、稳定ID、Rebase新revision、ORPHANED、规则草稿权限、镜像失败、显式拉取与Snapshot冻结。
 - 最新评审构建已部署到`https://tackle-forger-workbench.vercel.app`；首页HTTP 200，会话端点503/`AUTH-CONFIG-001`，浏览器因缺少飞书OAuth环境变量停在明确登录配置错误页。
 - 最终完成仍需在真实内网部署环境完成飞书 OAuth、真实工作簿回读、目标 configs Profile 和多分辨率页面的联调验收。

@@ -2,7 +2,8 @@
 
 import { AlertTriangle, CheckCircle2, DatabaseZap, FileClock, Link2, Plus, Search, ShieldCheck, X } from "lucide-react";
 import { useMemo, useState } from "react";
-import { analyzePatchPatterns, appendPatchRevision, buildPatchRevision, createRuleSourceChangeDraft, reviewPatchRevision } from "@/lib/patch-ledger";
+import { analyzePatchPatterns, appendPatchRevision, buildPatchRevision, createRuleSourceChangeDraft } from "@/lib/patch-ledger";
+import { createWorkspacePatchReview, currentPatchApprovalEvidence, preparePatchOperationFromWorkspace, reviewWorkspacePatchRevision } from "@/lib/patch-authority";
 import type { PatchPatternSummary, PatchRevisionRecord, WorkspaceState } from "@/lib/types";
 
 interface PatchLedgerWorkbenchProps {
@@ -64,6 +65,8 @@ export function PatchLedgerWorkbench({ state, capabilities, actorName, mutate, n
       ? state.skuDrawers.map((entry)=>({id:entry.id,name:entry.id+" · "+entry.targetPullKg+" kgf",revision:entry.revision}))
       : state.purchasableModels.map((entry)=>({id:entry.id,name:entry.name,revision:entry.revision}));
 
+  const selectedApprovalEvidence=selected?currentPatchApprovalEvidence(state,selected):undefined;
+
   const openCreate=()=>setDraft({scopeType:"model",subjectEntityId:state.purchasableModels[0]?.id??"",parameterKey:"",operation:"set",operand:"",reason:""});
   const createPatch=()=>{
     if(!draft||!canCreate)return;
@@ -71,26 +74,42 @@ export function PatchLedgerWorkbench({ state, capabilities, actorName, mutate, n
     if(!subject||!publishedRuleSet||!draft.parameterKey.trim()||!draft.reason.trim()){notify("请选择稳定对象、填写属性键和修改原因。");return;}
     const operand=draft.operation==="clear"?null:Number(draft.operand);
     if(draft.operation!=="clear"&&!Number.isFinite(operand)){notify("set/add/multiply 的操作值必须是数字。");return;}
+    let record:PatchRevisionRecord;
     const patchId="patch:"+draft.scopeType+":"+crypto.randomUUID();
-    const record=buildPatchRevision({
-      patchId,patchRevision:1,scopeType:draft.scopeType,layerType:draft.scopeType,
-      subjectEntityId:subject.id,subjectName:subject.name,baseRuleSetVersion:publishedRuleSet.id,
-      baseObjectRevision:subject.revision,state:"DRAFT",mirrorSyncState:"NOT_SYNCED",attentionStates:[],
-      reason:draft.reason.trim(),evidence:[],createdBy:actorName,createdAt:new Date().toISOString(),snapshotRefs:[],
-      operations:[{operationId:patchId+":op:1",operationIndex:0,parameterKey:draft.parameterKey.trim(),operation:draft.operation,operand,before:undefined,after:undefined}],
-    });
+    try{
+      const prepared=preparePatchOperationFromWorkspace({state,scopeType:draft.scopeType,subjectEntityId:subject.id,parameterKey:draft.parameterKey.trim(),operation:draft.operation,operand});
+      record=buildPatchRevision({
+        patchId,patchRevision:1,scopeType:draft.scopeType,layerType:draft.scopeType,
+        subjectEntityId:subject.id,subjectName:subject.name,baseRuleSetVersion:publishedRuleSet.id,
+        baseObjectRevision:subject.revision,state:"PENDING_REVIEW",mirrorSyncState:"NOT_SYNCED",attentionStates:[],
+        reason:draft.reason.trim(),evidence:[prepared.traceHash],createdBy:actorName,createdAt:new Date().toISOString(),snapshotRefs:[],
+        operations:[{operationId:patchId+":op:1",operationIndex:0,parameterKey:draft.parameterKey.trim(),operation:draft.operation,operand,before:prepared.before,after:prepared.after}],
+      });
+    }catch(error){notify(error instanceof Error?error.message:"无法从当前权威面板计算 Patch Trace");return;}
     mutate((workspace)=>{
       workspace.patchLedger=appendPatchRevision({ledger:workspace.patchLedger,revision:record,capabilities}).ledger;
       if(draft.scopeType==="series"){const entity=workspace.seriesDefinitions.find((entry)=>entry.id===subject.id);if(entity&&!entity.patchIds.includes(patchId))entity.patchIds.push(patchId);}
       if(draft.scopeType==="sku"){const entity=workspace.skuDrawers.find((entry)=>entry.id===subject.id);if(entity&&!entity.patchIds.includes(patchId))entity.patchIds.push(patchId);}
       if(draft.scopeType==="model"){const entity=workspace.purchasableModels.find((entry)=>entry.id===subject.id);if(entity&&!entity.patchIds.includes(patchId))entity.patchIds.push(patchId);}
     },false);
-    setSelectedKey(patchId+"@1");setDraft(null);notify("Patch revision 1 已保存为草稿；请审核后再生效，并保存工作区版本。");
+    setSelectedKey(patchId+"@1");setDraft(null);notify("Patch revision 1 已按当前权威面板计算 Trace，等待整体结果复核。");
+  };
+  const reviewCurrentObject=()=>{
+    if(!selected||!canReview)return;
+    try{
+      mutate((workspace)=>{
+        const current=workspace.patchLedger.revisions.find((entry)=>entry.patchId===selected.patchId&&entry.patchRevision===selected.patchRevision);
+        if(!current)throw new Error("Patch revision 不存在");
+        const {batch}=createWorkspacePatchReview({state:workspace,target:current,reviewedBy:actorName,reviewedAt:new Date().toISOString()});
+        workspace.patchReviewBatches=[...workspace.patchReviewBatches.filter((entry)=>entry.batchId!==batch.batchId),batch];
+      },false);
+      notify("当前对象的最终面板、合法范围与完整 Patch 集合已完成整体复核。");
+    }catch(error){notify(error instanceof Error?error.message:"整体复核失败");}
   };
   const transition=(nextState:"APPROVED"|"ACTIVE"|"WITHDRAWN")=>{
     if(!selected||!canReview)return;
     try{
-      mutate((workspace)=>{workspace.patchLedger=reviewPatchRevision({ledger:workspace.patchLedger,patchId:selected.patchId,patchRevision:selected.patchRevision,nextState,reviewer:actorName,reviewedAt:new Date().toISOString(),capabilities});},false);
+      mutate((workspace)=>{workspace.patchLedger=reviewWorkspacePatchRevision({state:workspace,patchId:selected.patchId,patchRevision:selected.patchRevision,nextState,reviewer:actorName,reviewedAt:new Date().toISOString(),capabilities}).patchLedger;},false);
       notify(nextState==="APPROVED"?"Patch 已批准，仍需显式启用。":nextState==="ACTIVE"?"Patch 已进入生效状态。":"Patch 已撤回。");
     }catch(error){notify(error instanceof Error?error.message:"Patch 状态更新失败");}
   };
@@ -138,7 +157,8 @@ export function PatchLedgerWorkbench({ state, capabilities, actorName, mutate, n
     <section className="patch-ledger-layout">
       <div className="patch-ledger-list"><label className="patch-ledger-search"><Search size={15}/><input value={query} onChange={(event)=>setQuery(event.target.value)} placeholder="按稳定 ID、状态或原因搜索"/></label><div className="patch-ledger-list-scroll">{filtered.map((entry)=>{const key=entry.patchId+"@"+entry.patchRevision;return <button type="button" className={selected===entry?"active":""} key={key} onClick={()=>setSelectedKey(key)}><span><strong>{entry.patchId}</strong><small>revision {entry.patchRevision} · {entry.layerType}</small></span><em>{stateLabels[entry.state]}</em></button>;})}{!filtered.length?<p className="patch-ledger-empty">没有符合条件的 Patch revision。</p>:null}</div></div>
       <div className="patch-ledger-detail">{selected?<><header><div><span className="eyebrow">STABLE SUBJECT</span><h3>{selected.subjectName||selected.subjectEntityId}</h3><code>{selected.subjectEntityId}</code></div><div className="patch-ledger-badges"><span>{stateLabels[selected.state]}</span><span>{mirrorLabels[selected.mirrorSyncState]}</span>{selected.attentionStates.map((attention)=><span className="warning" key={attention}>{attention}</span>)}</div></header>
-        <div className="patch-ledger-review-actions">{selected.state==="DRAFT"||selected.state==="PENDING_REVIEW"?<button type="button" disabled={!canReview||selected.snapshotRefs.length>0} onClick={()=>transition("APPROVED")}><CheckCircle2 size={15}/>批准 revision</button>:null}{selected.state==="APPROVED"?<button type="button" disabled={!canReview||selected.snapshotRefs.length>0} onClick={()=>transition("ACTIVE")}><ShieldCheck size={15}/>启用 Patch</button>:null}{["DRAFT","PENDING_REVIEW","APPROVED"].includes(selected.state)?<button type="button" disabled={!canReview||selected.snapshotRefs.length>0} onClick={()=>transition("WITHDRAWN")}>撤回</button>:null}</div>
+        <div className="patch-ledger-review-actions">{["DRAFT","PENDING_REVIEW","APPROVED"].includes(selected.state)?<button type="button" disabled={!canReview||selected.snapshotRefs.length>0} onClick={reviewCurrentObject}><ShieldCheck size={15}/>复核当前整体结果</button>:null}{selected.state==="DRAFT"||selected.state==="PENDING_REVIEW"?<button type="button" disabled={!canReview||selected.snapshotRefs.length>0||!selectedApprovalEvidence} title={selectedApprovalEvidence?"使用当前对象的整体复核证据批准":"请先完成当前对象最终范围与完整 Patch 集合复核"} onClick={()=>transition("APPROVED")}><CheckCircle2 size={15}/>批准 revision</button>:null}{selected.state==="APPROVED"?<button type="button" disabled={!canReview||selected.snapshotRefs.length>0||!selectedApprovalEvidence} title={selectedApprovalEvidence?"使用当前对象的整体复核证据启用":"整体复核证据缺失或已失效"} onClick={()=>transition("ACTIVE")}><ShieldCheck size={15}/>启用 Patch</button>:null}{["DRAFT","PENDING_REVIEW","APPROVED"].includes(selected.state)?<button type="button" disabled={!canReview||selected.snapshotRefs.length>0} onClick={()=>transition("WITHDRAWN")}>撤回</button>:null}</div>
+        {!selectedApprovalEvidence&&["DRAFT","PENDING_REVIEW","APPROVED"].includes(selected.state)?<p className="patch-ledger-empty">批准与启用已关闭：请先在 Series / SKU / Model 整体结果页完成最终范围校验和批量人工复核；Patch 无需逐条单独审批。</p>:null}
         <dl><div><dt>Patch</dt><dd>{selected.patchId} / revision {selected.patchRevision}</dd></div><div><dt>作用层</dt><dd>{selected.scopeType} · {selected.layerType}</dd></div><div><dt>基线</dt><dd>{selected.baseRuleSetVersion} · object revision {selected.baseObjectRevision}</dd></div><div><dt>创建</dt><dd>{selected.createdBy} · {selected.createdAt}</dd></div><div><dt>原因</dt><dd>{selected.reason||"未填写"}</dd></div></dl>
         <div className="patch-ledger-operations"><h4><ShieldCheck size={16}/>确定性操作顺序</h4>{[...selected.operations].sort((a,b)=>a.operationIndex-b.operationIndex).map((operation)=><div key={operation.operationId}><b>{operation.operationIndex+1}</b><code>{operation.parameterKey}</code><span>{operation.operation}</span><strong>{String(operation.operand??"—")}</strong><small>{operation.operationId}</small></div>)}</div>
         <div className="patch-ledger-snapshots"><h4><Link2 size={16}/>Snapshot 引用</h4>{selected.snapshotRefs.length?selected.snapshotRefs.map((snapshotId)=><code key={snapshotId}>{snapshotId}</code>):<span>尚未被 Snapshot 引用</span>}</div>

@@ -122,6 +122,40 @@ test("Series 路由对恶意JSON字段类型稳定返回400", { concurrency: fal
   }
 });
 
+test("Series 路由拒绝扩展部位并且不产生 revision、Series 或 SKU 副作用", { concurrency: false }, async () => {
+  withTrustedProxy();
+  const before = await loadWorkspaceState();
+  const projection = before.state.derivedProjections[0]!;
+  const response = await createSeries(new NextRequest("http://localhost/api/series", {
+    method: "POST",
+    headers: authHeaders,
+    body: JSON.stringify({
+      idempotencyKey: "route-disabled-part:hook",
+      seriesId: "series:disabled-hook",
+      name: "不应创建的钩系列",
+      concept: "验证 OPEN-003 服务端门禁",
+      itemPartId: "part:hook",
+      methodId: projection.methodId,
+      typeId: projection.typeId,
+      functionId: projection.functionId,
+      qualityId: projection.qualityId,
+      functionIntensity: projection.functionIntensity,
+      discretePulls: "1.5",
+    }),
+  }));
+  assert.equal(response.status, 422);
+  const payload = await response.json() as { code?: string; itemPartId?: string; policyMode?: string; error?: string };
+  assert.equal(payload.code, "ITEM_PART_NOT_ENABLED");
+  assert.equal(payload.itemPartId, "part:hook");
+  assert.equal(payload.policyMode, "OPEN_003_FAIL_CLOSED");
+  assert.match(payload.error ?? "", /部位未启用/);
+  const after = await loadWorkspaceState();
+  assert.equal(after.revision, before.revision);
+  assert.equal(after.state.seriesDefinitions.some((entry) => entry.id === "series:disabled-hook"), false);
+  assert.equal(after.state.skuDrawers.some((entry) => entry.seriesId === "series:disabled-hook"), false);
+  assert.equal(after.state.commandIdempotencyRecords.some((entry) => entry.key === "route-disabled-part:hook"), false);
+});
+
 test("Series 创建相同幂等键恢复原结果，不同输入冲突", { concurrency: false }, async () => {
   withTrustedProxy();
   const { state } = await loadWorkspaceState();

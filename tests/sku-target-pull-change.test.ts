@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildSeriesGanttProjection } from "../lib/interaction-contracts";
-import { candidateGenerationEligibleSkus } from "../lib/enabled-item-parts";
+import {
+  candidateGenerationEligibleSkus,
+  SKU_NOT_CURRENT_SERIES_SPECIFICATION_CODE,
+} from "../lib/enabled-item-parts";
 import { validateSeriesInvariants } from "../lib/product-model";
 import { deterministicHash } from "../lib/rule-kernel";
 import { createSeedState } from "../lib/seed";
+import { planSnapshotBatch } from "../lib/snapshot-batch";
 import {
   changeSkuTargetPull,
   previewSkuTargetPullChange,
@@ -165,6 +169,23 @@ test("存在已发布后代时创建新 SKU、可 DEPRECATED 旧 SKU 且冻结�
     gantt.skuNodes.some((entry) => entry.skuId === result.sku.id),
     true,
   );
+  const historicalModel = result.state.purchasableModels.find(
+    (model) =>
+      model.skuId === sku.id &&
+      Boolean(model.configurationSnapshotId),
+  );
+  assert.ok(historicalModel);
+  const exportPlan = planSnapshotBatch({
+    models: result.state.purchasableModels,
+    series: result.state.seriesDefinitions,
+    skus: result.state.skuDrawers,
+    snapshots: result.state.configurationSnapshots,
+    selectedModelIds: [historicalModel.id],
+  });
+  assert.equal(exportPlan.items[0]?.decision, "skip");
+  assert.deepEqual(exportPlan.items[0]?.reasons, [
+    SKU_NOT_CURRENT_SERIES_SPECIFICATION_CODE,
+  ]);
 });
 
 test("已发布后代分支可保留旧 SKU 生命周期状态，但仍不会重绑历史对象", () => {

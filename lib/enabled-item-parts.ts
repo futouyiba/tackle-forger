@@ -154,7 +154,11 @@ export function isCurrentSeriesSkuSpecification(
 export function assertCurrentSeriesSkuSpecifications(
   series: SeriesDefinition,
   skus: readonly SkuDrawer[],
-  action: "candidate_generation" | "candidate_materialization",
+  action:
+    | "candidate_generation"
+    | "candidate_materialization"
+    | "snapshot"
+    | "config_export",
 ): void {
   const rejectedSkuIds = skus
     .filter((sku) => !isCurrentSeriesSkuSpecification(series, sku))

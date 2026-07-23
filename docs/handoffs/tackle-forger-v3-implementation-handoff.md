@@ -75,6 +75,7 @@ FinalValue = applyParameterDefinition(PostReviewValue)
 - 技术是词条组合包。技术与其包含的词条不得重复贡献同名属性加成。
 - 被动词条在本工具中只保存、计分和展示；不执行，也不验证钓鱼模拟器逻辑。
 - 已发布 `ConfigurationSnapshot` 不得被上游规则更新静默重算。
+- AUD-009只批准在线保留政策，不代表归档或裁剪已实现：一期SQLite/D1全量保留且人工/自动裁剪均关闭；二期归档、恢复、dry-run、首次裁剪和自动裁剪启用受v3 `OPEN-011`及父Issue #1约束。本handoff不授权实现删除逻辑。
 - 硬兼容规则和软 `Affinity Score` 必须分开：硬规则决定能不能生成，软分数决定适配程度和排序解释。
 - 人工修改使用分层Patch；共享中间层用DerivationLayerPatch，单个产品用Series/SKU/Model/FinalReview Patch；固定标杆选择用ProjectionPin。
 - 所有保存过的Patch进入工具内权威`PatchLedger`，并幂等同步到飞书单一`Patch台账`页；该页是协作镜像而非唯一运行时来源。DerivationLayerPatch或多个个体Patch的稳定共性可经人工归纳生成RuleSourceChangeDraft；单个个案不得未经归纳提升为通用规则。写回后必须回读、显式拉取并发布RuleSetVersion。
@@ -636,6 +637,7 @@ docs/tackle-forger-development-spec-v3.md，以及本 handoff。
 - 一期：内网服务、飞书登录、统一Capability、不可提交的`NON_FORMAL`配置预览与结构关系校验；不得正式预留ID、生成生产形态xlsx/正式人工搬运包或写入本地worktree。
 - 1.5期：发布权威目标目录与获批扫描Manifest、ConfigIdPolicyVersion和reservation ledger；完成历史导入复核，生成正式人工搬运包或写入用户选择的dev/test/online/release本地worktree。
 - 二期：仅在OPEN-006关闭后实现已设计的AI辅助层；继续全员统一权限。
+- AUD-009分期：一期只保留全量workspace revision和只读容量诊断；二期只有在独立Issue中才可验证用户主动归档、恢复与dry-run，`OPEN-011`关闭证据和首次生产裁剪授权完成前不得删除revision，自动裁剪还需独立启用授权。
 - 当前规划三期：保持统一Capability策略，不建设细粒度RBAC、对象级角色、职责分离或飞书审批。未来治理变化必须另建Issue并发布新`separationOfDutiesPolicy`版本。
 - 一期、1.5期、二期和当前规划三期都不得用“统一权限”为理由省略用户身份、服务端逐动作鉴权、操作记录、expectedRevision或ActionAvailability。
 - 关键共享写操作必须实现v3第20.2.7节的工作区租约与单调fencing token；服务端状态提交和持久化fenced outbox中的服务端可达副作用必须拒绝旧token，不能只实现心跳过期。浏览器本地配置文件不进入服务端outbox，按第19.2节的文件冲突与恢复路径处理。

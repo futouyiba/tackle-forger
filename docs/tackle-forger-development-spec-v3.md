@@ -958,6 +958,70 @@ ConfigurationSnapshot必须冻结有序Patch引用集合（`patchId + patchRevis
 
 新增验收：Given同一参数含set/add/multiply，When多次重放，Then严格按operationIndex得到同一结果；Given三行镜像只写成两行，When同步结束，Then组状态不是SYNCED且Patch仍可从本地完整重放；Given人工删除镜像行，When显式拉取，Then本地Patch和Snapshot不变并产生PATCH_MIRROR_ROW_MISSING；Given旧schema迁移两次，When比较结果，Then无重复revision且PatchSetHash、最终值和Trace语义一致；Given对象缺失且存在同名新对象，When加载，ThenPatch进入ORPHANED而不重绑；GivenSnapshot引用revision 1，When产生revision 2或改变镜像，Then旧Snapshot的有序引用与hash不变。
 
+### 14.3 工作区 Revision 分层保留、归档与裁剪
+
+本节定义工作区操作恢复历史的保留政策；它不改变本章前述领域 revision、Patch 或发布快照的不可变语义。正式决策与容量依据见 `audits/aud-009-workspace-revision-retention-adr.md`。
+
+#### 14.3.1 对象边界
+
+- `workspace revision` 是一次成功保存后完整 `WorkspaceState` 的操作恢复点，用于回看或恢复整个工作区。它不是防篡改事件账本，可以在满足本节全部条件后从在线存储裁剪。
+- `ConfigurationSnapshot` 是 Model 发布时冻结的领域发布产物，Snapshot ID 与 payload/hash 永久绑定。它不属于 workspace revision 保留集合，也不得因为 workspace revision 裁剪而删除、重算、重排、覆盖或改写。
+- 领域审计、Patch revision、Calculation Trace 和发布记录同样不属于 workspace revision 裁剪对象。裁剪流程不得改变它们的内容、稳定引用、哈希、顺序或可追溯性。
+- `WorkspaceState.revisions` 中的摘要、普通 revision 列表 API 的分页/条数上限和完整 `workspace_revisions` 不是同一对象。显示最近 100 条不等于只物理保留 100 条。
+
+#### 14.3.2 在线保留政策
+
+SQLite 与 D1 必须在线保留以下两个集合的并集：
+
+1. retention run 冻结的 UTC cutoff 起最近 90 天内创建的全部完整 workspace revision；
+2. 无论创建时间如何，按 revision 稳定降序选出的最新 100 个完整 workspace revision。
+
+当前 `workspace_state.revision` 必须始终受保护，不得因时间戳或并发观测异常进入候选。恰好位于 cutoff 的 revision 属于保留集合。revision 可以不连续；同一时间戳不得导致不稳定选择，数量集合以稳定 revision 顺序决定。每个 retention run 必须一次性冻结 cutoff、策略版本、输入集合和幂等键；相同输入与策略必须得到相同的保留集合。
+
+无法解析、为空或位于未来的 `created_at` 必须 fail-closed：保留对应 revision，产生可观测的 `ValidationIssue` 或等价运维告警，不得猜测时间后删除。`retentionDays`、`minimumRevisions` 或策略版本缺失、非法、未知时也必须保留全部 revision；不得使用页面默认值、旧版本值或隐藏回退值继续裁剪。
+
+Vercel Blob 是受控例外：它仅作非权威评审存储，最多保留 100 个 workspace revision。Blob 不是生产恢复、长期归档或审计权威源；任何导入或迁移都必须披露源 Blob 当时只可能提供尚存的最多 100 个 revision，不得声称复原已裁掉历史。若 Blob 将来升级为权威或生产后端，必须先满足与 SQLite/D1 等价的保留、归档、恢复和裁剪证据要求。
+
+#### 14.3.3 分期与用户主动归档
+
+归档与裁剪不属于一期跑通主流程的完成门槛：
+
+- 一期不实现归档按钮、自动归档或 workspace revision 裁剪。SQLite/D1 继续保留全部已有完整 revision；缺少归档配置不得阻止登录、规则、Series/SKU/Model、Snapshot、导出和其他非删除流程。
+- 一期可以保留只读容量诊断、整库灾备和告警，但不得把诊断、备份或“已超过 90 天”解释为删除授权。自动裁剪必须关闭。
+- 二期归档由当前已登录工具用户主动执行，典型操作者是数值策划或系统策划。系统不得在后台代替用户选择归档时机或本机保存位置。
+- 二期优先验证最简交互：用户点击“归档”→浏览器立即打开保存窗口→用户在工作 PC 上选择文件名与位置→工具流式写入单一归档包→回读或计算 manifest/hash→明确显示成功或失败。归档包不得包含飞书令牌、登录会话、应用密钥或其他凭据。
+- 正式 Chromium + HTTPS 入口优先使用 `showSaveFilePicker()` 与 `FileSystemWritableFileStream`；调用必须来自用户手势，并先取得文件句柄再生成或写入大体积内容。API 不可用时可以评估普通文件下载作为降级，但降级也必须生成同等 manifest/hash，且不得宣称已经写入用户未选择的位置。
+- 用户取消、权限拒绝、写入中断、浏览器不支持、包体超限或校验失败时，不产生“已归档”记录，也不允许裁剪。若二期无法以可接受复杂度验证本机保存与恢复，归档和裁剪继续延期，系统保持全量在线保留。
+
+单一归档包的格式、大小上限、是否压缩/加密、恢复入口和保留周期由二期实现 Issue 明确；不得为了提前实现裁剪而把这些决策塞回一期。
+
+#### 14.3.4 允许删除的必要条件
+
+revision 位于“最近 90 天”与“最新 100 个”并集之外，只表示它具备裁剪候选资格。只有二期或更晚、且同时满足以下条件才允许删除；任一条件失败时必须 fail-closed，保留全部候选并保持自动裁剪关闭：
+
+1. 归档由当前已登录工具用户显式触发，操作者身份、用户选择的目标和导出结果已有审计记录；系统没有静默后台归档。
+2. 每个候选 revision 已完成可验证归档；归档 manifest、内容 SHA-256、数量与范围验证通过，并能从裁剪证据反向定位完整内容。
+3. 当前权威数据库已有独立备份，manifest 已验证，并在隔离路径完成恢复与完整性检查；备份及恢复验证标识可供 retention run 引用。
+4. 已执行只读 dry-run，报告冻结 cutoff、当前数量、最旧/最新 revision、保留与候选集合、异常时间戳、预计释放字节和不可变对象校验结果。
+5. tombstone 与 retention run 可以在删除前可靠持久化；任何归档、证据写入、删除、事务或回读验证失败都不得产生无证据删除。
+6. 首次生产裁剪已获得明确维护窗口与删除授权，并先在隔离副本通过裁剪、幂等重跑、恢复和回滚验收。自动裁剪必须另行启用；上述能力和证据完成前保持关闭。
+
+配置非法、归档不可验证、备份不可验证、恢复未验证、不可变对象校验失败或裁剪证据不完整时，必须产生可观测错误并禁止删除。任何实现都不得为了容量压力自动缩短 90 天窗口、降低最新 100 个下限或绕过归档。
+
+#### 14.3.5 确定性、幂等与审计证据
+
+- 正常工作区保存与 retention run 必须使用两个独立事务边界。保存事务只负责验证 `baseRevision`、更新当前态、插入新 revision 并提交；只有保存已经成功提交后，才允许通过独立显式命令或任务启动 retention run。即使由保存动作请求后续 retention，也不得在保存提交前执行任何归档预检、证据写入或删除。
+- SQLite retention run 必须在自己的事务中原子写入 run/tombstone 证据并执行获准删除；任一预检、归档、证据、删除、回读或提交失败只回滚 retention 事务，保留全部候选、记录可观测告警且不得回滚已经成功的工作区保存。revision 冲突路径不得启动 retention。D1 必须提供等价事务分离与原子性，或可证明不会产生半完成删除的边界。
+- 每个被裁剪 revision 必须先写入 tombstone，至少记录 revision、author、message、created_at、完整状态 SHA-256、pruned_at、策略版本、retention run ID、归档 manifest ID 和已验证备份/恢复标识。tombstone 证明受控删除，但不替代归档内容。
+- 每次 retention run 至少记录幂等键、策略版本、冻结 cutoff、输入/保留/候选数量及集合哈希、异常集合、归档证据、备份恢复证据、操作者、开始/结束时间和结果。
+- 相同策略、输入和幂等键重复运行不得重复删除、重复归档或生成重复 tombstone。部分失败重试必须先回读现有证据，再从可证明的状态继续。
+- 删除前后必须验证当前 `WorkspaceState`、全部已发布 `ConfigurationSnapshot.contentHash`、领域审计、Patch、Trace 和发布记录保持逐字节或结构等价；任何差异都阻止提交。
+- 已裁剪 revision 的精确读取必须返回“按策略裁剪”的明确结果，并提供可授权访问的 tombstone/归档引用；不得与“从未存在”或“数据损坏”混为一类。
+
+#### 14.3.6 备份、归档与恢复边界
+
+每日整库备份是灾难恢复点，不自动等于长期 revision 归档。在线保留期、备份保留期和归档保留期是三个独立策略，不能互相替代。恢复必须停服，把已验证副本恢复到新文件并保留原数据库作审计副本；不得为查看单条历史而覆盖生产数据库。包含飞书会话的整包备份不得直接延长为长期审计归档；二期本地归档包必须排除凭据并与会话副本隔离，压缩/加密、共享和访问方式由二期实现 Issue 评估，不阻塞一期。
+
 ## 15. 工作台信息架构
 
 1. 数据源与参数注册表；
@@ -1081,6 +1145,20 @@ ConfigurationSnapshot必须冻结有序Patch引用集合（`patchId + patchRevis
 - technology_only不进入普通池；
 - S/A/B/C阈值正确。
 
+### 18.6 工作区 Revision 保留
+
+- 一期缺少归档能力时仍可跑通非删除主流程，且 SQLite/D1 不裁剪任何 revision；
+- 二期归档必须由当前已登录工具用户显式点击并选择工作 PC 保存位置；数值策划或系统策划只是典型操作者示例，不构成角色门禁；
+- 保存窗口取消、权限拒绝、浏览器不支持、写入中断或校验失败不产生归档成功记录，也不触发裁剪；
+- 本机归档包排除令牌、会话和密钥，并能用 manifest/hash 验证内容；
+- 最近 90 天与最新 100 个的并集确定且边界稳定；
+- cutoff、99/100/101 条、非连续 revision 和同一时间戳均有覆盖；
+- 非法/空白/未来时间戳、非法配置、归档不可验证或备份/恢复未验证时不删除；
+- 同一 retention run 幂等重跑不重复归档、删除或生成 tombstone；
+- 保存冲突不得启动 retention；成功保存先独立提交，后续证据写入或裁剪失败只回滚 retention run、保留旧 revision 并告警，不回滚正常保存，也不会产生半完成删除；
+- 裁剪前后 ConfigurationSnapshot、领域审计、Patch、Trace 和发布记录保持不变；
+- Blob 最多 100 个的非权威边界在导入、读取和迁移报告中准确披露。
+
 ## 19. Agent交付检查表
 
 开发Agent提交前必须确认：
@@ -1114,6 +1192,7 @@ ConfigurationSnapshot必须冻结有序Patch引用集合（`patchId + patchRevis
 | OPEN-008 ConfigIdPolicy区间与命名 | 公司策略（已确认） | `DECIDED_PENDING_POLICY_VERSION` | 按本节确认规则实现策略版本、ledger、权威目标目录/扫描Manifest和冲突预检 | `ConfigIdPolicyVersion`尚未发布，或其引用的`ConfigTargetCatalogVersion`中任一必需目标没有获批扫描Manifest时，不得正式预留ID或提交配置；禁止用“最大值+1”、示例ID、用户临时绑定或单一渠道扫描代替 | 配置治理负责人发布策略版本；权威目录覆盖完整；reservation、导入和分裂命中验收通过 |
 | OPEN-009 工作流治理策略 | 产品/安全决策 | `RESOLVED` | 使用第20.2节发布的五类`open009-v1`策略；所有已登录公司用户拥有全部已启用业务Capability；AI一期禁用，二期连接器仍需独立实现准入 | 不接飞书审批、不在本工具实行职责分离；OPEN-006安全配置只由部署管理员修改；关键写操作使用工作区单写锁与单调fencing token，普通操作记录保留1年 | 2026-07-23用户确认；策略正文见第20.2节，迁移与验收见Issue #18 |
 | OPEN-010 飞书Patch台账远端契约 | 外部规则源阻断 | `BLOCKED_ON_SOURCE_SCHEMA` | 本地PatchLedger、镜像命令、幂等与失败恢复可以运行 | 主工作簿未提供稳定sheet_id、机器列与协作字段权限前，真实镜像写入/拉取保持禁用；不得伪造SYNCED | 规则源负责人建表并确认机器区域；完成写入、回读、缺行和冲突联调 |
+| OPEN-011 工作区revision归档与裁剪启用 | 二期实施/公司策略缺口 | `BLOCKED_BEFORE_PRUNING` | 已批准“最近90天与最新100个的并集”在线保留政策；一期SQLite/D1继续全量保留，人工与自动裁剪均关闭；二期只可在独立Issue范围内实现和验证归档、恢复与只读dry-run | 归档包格式/大小/压缩/加密、恢复入口、归档保留期、RTO/RPO、团队共享与访问控制、维护窗口、删除授权或自动裁剪启用标准任一未确定或证据不可验证时，不得删除任何revision；非删除主流程不得因此被阻断 | 父Issue [#1](https://github.com/futouyiba/tackle-forger/issues/1)；发布覆盖全部实施参数的版本化`WorkspaceRevisionRetentionPolicyVersion`，完成目标浏览器归档与manifest/hash回读、隔离恢复和完整性/Snapshot hash验证，取得首次生产裁剪授权并通过回滚验收；自动裁剪另需独立启用授权 |
 
 `DECIDED_IMPLEMENTATION_PENDING`和`DECIDED_SOURCE_UPDATE_REQUIRED`表示产品选择已经完成，不得继续向用户重复提问，但运行时或外部规则源尚不能宣称完成。状态只有在决策证据进入权威规范、对应策略版本可校验且实现验收通过后才改为`RESOLVED`。代码、原型、测试种子或某次人工输入都不能单独关闭整项工作。
 
@@ -1161,6 +1240,12 @@ FinalValue = applyParameterDefinition(PostReviewValue)
 未来若启动任一部位，必须先为该部位建立独立产品设计Issue，至少确认：业务身份与生命周期、是否为购买或消耗对象、对象谱系、规则与数据源、UI工作流、权限、发布冻结、配置映射、先行环境/渠道、停止条件、回退方案，以及正常、边界、冲突、恢复和历史冻结验收。产品设计完成后，再按可独立交付范围建立实现Issue和PR；不得直接以OPEN-003作为实现授权。
 
 当前验收：正常情况下主流程只显示并处理竿、轮、线；边界情况下注册表或历史迁移发现扩展部位只保留数据，不开启入口；收到扩展部位的草稿、生成、发布或导出请求时明确返回“部位未启用”，不得降级套用其他部位规则；发生迁移或禁用恢复时保留原始记录和稳定引用；任何恢复操作都不得改变既有Snapshot内容与hash。
+
+### OPEN-011：工作区revision归档与裁剪启用
+
+AUD-009已批准在线保留集合和一期全量保留边界，但归档、恢复、删除授权与自动裁剪启用仍是父Issue [#1](https://github.com/futouyiba/tackle-forger/issues/1)下的二期未决工作。当前可执行行为固定为：SQLite/D1保留全部完整workspace revision，不提供或调用人工/自动裁剪；Blob继续仅作最多100条的非权威评审存储；归档、恢复或裁剪异常全部fail-closed。第14.3节定义的是未来实现必须满足的安全约束，不代表对应能力已经存在或获准启用。
+
+关闭本项至少需要同一个已发布`WorkspaceRevisionRetentionPolicyVersion`明确归档包格式与schema版本、包体上限、压缩/加密、归档保留期、恢复入口、RTO/RPO、团队共享与访问控制、容量/告警阈值、维护窗口、删除授权和自动裁剪启用标准；随后以目标Chromium环境完成归档写入与manifest/hash回读、隔离恢复、数据库完整性和不可变Snapshot/Patch/Trace hash验证，在隔离副本完成dry-run、首次裁剪、幂等重跑与回滚验收。首次生产裁剪必须另有明确授权；自动裁剪只能在首次生产裁剪及观察期通过后取得独立启用授权。任一参数、策略版本、恢复证据或授权缺失时，本项保持阻断且不删除数据。
 
 ### OPEN-004：Patch属性偏移阈值
 
@@ -2644,9 +2729,9 @@ type PrimaryDisplayState = "HARD_CONFLICT" | "REBASE_REQUIRED" | "REVIEW_REQUIRE
 
 | 阶段 | 必做 | 明确不做 |
 | --- | --- | --- |
-| 一期 | 公司内网部署、飞书登录、统一Capability接口、全员统一权限、核心规则/Series/SKU/Model/Snapshot、不可提交的`NON_FORMAL`配置预览与结构关系校验 | 正式ID预留、生产形态xlsx/正式人工搬运包、本地worktree提交、AI运行连接器、细粒度RBAC、职责分离、飞书审批 |
+| 一期 | 公司内网部署、飞书登录、统一Capability接口、全员统一权限、核心规则/Series/SKU/Model/Snapshot、不可提交的`NON_FORMAL`配置预览与结构关系校验；SQLite/D1全量保留workspace revision且保持所有裁剪关闭 | 正式ID预留、生产形态xlsx/正式人工搬运包、本地worktree提交、归档/恢复入口、人工或自动裁剪、AI运行连接器、细粒度RBAC、职责分离、飞书审批 |
 | 1.5期 | 发布`ConfigTargetCatalogVersion`、获批扫描Manifest、`ConfigIdPolicyVersion`与reservation ledger；历史导入复核；生成正式人工搬运包或把正式配置差异写入用户选择的`dev/test/online/release`本地worktree | Git合并、远端发布、部署、替代现有发布系统 |
-| 二期 | OPEN-006关闭后实现第23、24节已设计的AI评估、证据、变化预览和草稿转换；继续全员统一权限 | 自动应用、自动发布、AI裁决、细粒度RBAC、职责分离、飞书审批 |
+| 二期 | OPEN-006关闭后实现第23、24节已设计的AI评估、证据、变化预览和草稿转换；在OPEN-011独立Issue中验证用户主动归档、恢复和只读dry-run；继续全员统一权限 | OPEN-011关闭证据和首次生产裁剪授权完成前的任何revision删除、未经独立授权的自动裁剪、自动应用、自动发布、AI裁决、细粒度RBAC、职责分离、飞书审批 |
 | 三期 | 保持统一Capability策略并完成既定业务能力；治理变化必须另立Issue和策略版本 | 预设业务角色、对象级RBAC、职责分离、飞书审批，以及改变既有ID、操作记录和Snapshot语义 |
 
 当前飞书登录同时构成身份边界和统一权限入口：

@@ -6,6 +6,7 @@ import {
   evaluatePullRequestMergeGate,
   graphqlNextPageCursor,
   AGENT_REVIEW_PASS_MARKER,
+  parsePullRequestRunName,
   readStableMergeGateSnapshot,
 } from "../scripts/check-pr-merge-gate.mjs";
 
@@ -197,6 +198,32 @@ test("later CHANGES_REQUESTED blocks and DISMISSED invalidates earlier evidence"
   );
 });
 
+test("a later old-head decision cannot clear a current-head change request", async () => {
+  const snapshot = await fixture("ready-high-risk-agent-commented");
+  snapshot.reviews.unshift({
+    id: 10,
+    state: "CHANGES_REQUESTED",
+    commitSha: snapshot.pullRequest.headSha,
+    submittedAt: "2026-07-23T07:00:00Z",
+    author: { login: "blocking-reviewer", type: "User" },
+  });
+  snapshot.reviews.push({
+    id: 12,
+    state: "APPROVED",
+    commitSha: "b".repeat(40),
+    submittedAt: "2026-07-23T07:10:00Z",
+    author: { login: "blocking-reviewer", type: "User" },
+  });
+
+  const result = evaluatePullRequestMergeGate(snapshot);
+  assert.equal(result.ready, false);
+  assert.ok(
+    result.blockers.some(
+      (blocker) => blocker.code === "REVIEW_CHANGES_REQUESTED",
+    ),
+  );
+});
+
 test("high-risk review fails closed when no current-head review signal exists", async () => {
   const snapshot = await fixture("ready-high-risk");
   snapshot.reviews = [];
@@ -291,6 +318,31 @@ test("GraphQL pagination fails closed when the next-page cursor is absent", () =
     graphqlNextPageCursor(
       { hasNextPage: false, endCursor: null },
       "Pull request review threads",
+    ),
+    null,
+  );
+});
+
+test("pull request run names carry immutable PR, head, and base provenance", () => {
+  assert.deepEqual(
+    parsePullRequestRunName(
+      `gate-context event=pull_request pr=63 head=${"a".repeat(40)} base=${"d".repeat(40)}`,
+    ),
+    {
+      pullNumber: 63,
+      headSha: "a".repeat(40),
+      baseSha: "d".repeat(40),
+    },
+  );
+  assert.equal(
+    parsePullRequestRunName(
+      `gate-context event=push pr=0 head=${"a".repeat(40)} base=${"d".repeat(40)}`,
+    ),
+    null,
+  );
+  assert.equal(
+    parsePullRequestRunName(
+      `gate-context event=pull_request pr=63 head=${"a".repeat(39)} base=${"d".repeat(40)}`,
     ),
     null,
   );

@@ -83,7 +83,11 @@ current head SHA, pull request number, and current base SHA:
   from that reviewer until a fresh current-head signal is recorded.
 
 Missing, pending, failed, cancelled, skipped, push-only, old-head, or stale-base
-CI blocks. The checker
+CI blocks. The workflow's structured `run-name` records the event-time PR
+number, head, and base; do not use the workflow-run API's nested current PR
+object as historical evidence because those fields can drift with the PR. Runs
+without the exact provenance format, workflow name, and workflow path fail
+closed. The checker
 uses the monotonic GitHub Actions job ID to select the latest same-name run, so a
 new queued rerun supersedes an older completed success even before the rerun has
 timestamps. It prints a stable blocker code for every unmet condition and exits
@@ -113,3 +117,7 @@ rejected, unresolved thread and active change request rejected, old-head
 review rejected, arbitrary `COMMENTED` rejected, and a current-head Agent
 `COMMENTED` with `Agent-Review: PASS` or `APPROVED` signal accepted for a
 high-risk PR.
+
+Review decisions are scoped to the current head. A later decision submitted on
+an older commit cannot clear a current-head `CHANGES_REQUESTED`; only a later
+current-head decision from the same reviewer can replace it.

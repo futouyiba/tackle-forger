@@ -12,6 +12,11 @@ export const REQUIRED_CURRENT_HEAD_CHECKS = [
 
 export const AGENT_REVIEW_PASS_MARKER = "Agent-Review: PASS";
 
+const CI_WORKFLOW_NAME = "CI";
+const CI_WORKFLOW_PATH = ".github/workflows/ci.yml";
+const PR_RUN_NAME_PATTERN =
+  /^gate-context event=pull_request pr=([1-9]\d*) head=([a-f0-9]{40}) base=([a-f0-9]{40})$/i;
+
 const DECISIVE_REVIEW_STATES = new Set([
   "APPROVED",
   "CHANGES_REQUESTED",
@@ -54,7 +59,7 @@ function compareByTimeAndId(left, right, timeField) {
 }
 
 function latestRun(runs) {
-  // GitHub check-run IDs are monotonic. A rerun can be queued before it has
+  // GitHub Actions job IDs are monotonic. A rerun can be queued before it has
   // started_at/completed_at, so timestamps must never make an older completed
   // run override the newer pending run.
   return [...runs].sort(compareIds).at(-1);
@@ -77,7 +82,11 @@ function currentHeadReviewState({ reviews, headSha }) {
   for (const review of orderedReviews) {
     const state = String(review?.state ?? "").toUpperCase();
     const reviewerKey = userKey(review?.author);
-    if (!reviewerKey || !DECISIVE_REVIEW_STATES.has(state)) {
+    if (
+      !reviewerKey ||
+      review.commitSha !== headSha ||
+      !DECISIVE_REVIEW_STATES.has(state)
+    ) {
       continue;
     }
 
@@ -421,6 +430,18 @@ export function graphqlNextPageCursor(pageInfo, connectionName) {
   return endCursor;
 }
 
+export function parsePullRequestRunName(displayTitle) {
+  const match = PR_RUN_NAME_PATTERN.exec(displayTitle ?? "");
+  if (!match) {
+    return null;
+  }
+  return {
+    pullNumber: Number(match[1]),
+    headSha: match[2].toLowerCase(),
+    baseSha: match[3].toLowerCase(),
+  };
+}
+
 function normalizePullRequest(payload) {
   return {
     number: payload.number,
@@ -524,19 +545,24 @@ async function readPullRequestWorkflowChecks(client, prefix, pullRequest) {
     "workflow_runs",
   );
   const matchingRuns = workflowRuns.flatMap((run) => {
-    if (run.event !== "pull_request" || run.head_sha !== pullRequest.headSha) {
+    const provenance = parsePullRequestRunName(run.display_title);
+    if (
+      run.event !== "pull_request" ||
+      run.name !== CI_WORKFLOW_NAME ||
+      run.path !== CI_WORKFLOW_PATH ||
+      run.head_sha !== pullRequest.headSha ||
+      provenance?.pullNumber !== pullRequest.number ||
+      provenance?.headSha !== pullRequest.headSha
+    ) {
       return [];
     }
-    const pull = (run.pull_requests ?? []).find(
-      (candidate) => candidate?.number === pullRequest.number,
-    );
-    return pull ? [{ run, pull }] : [];
+    return [{ run, provenance }];
   });
 
   const jobsByRun = await Promise.all(
-    matchingRuns.map(async ({ run, pull }) => ({
+    matchingRuns.map(async ({ run, provenance }) => ({
       run,
-      pull,
+      provenance,
       jobs: await client.paginate(
         `${prefix}/actions/runs/${run.id}/jobs?filter=all`,
         "jobs",
@@ -544,14 +570,14 @@ async function readPullRequestWorkflowChecks(client, prefix, pullRequest) {
     })),
   );
 
-  return jobsByRun.flatMap(({ run, pull, jobs }) =>
+  return jobsByRun.flatMap(({ run, provenance, jobs }) =>
     jobs.map((job) => ({
       id: job.id,
       name: job.name,
       headSha: job.head_sha ?? run.head_sha,
-      baseSha: pull.base?.sha,
+      baseSha: provenance.baseSha,
       event: run.event,
-      pullNumber: pull.number,
+      pullNumber: provenance.pullNumber,
       workflowRunId: run.id,
       status: job.status,
       conclusion: job.conclusion,

@@ -261,6 +261,28 @@ test("HTTP 服务只接受本机来源和有效 Bearer 配对令牌", async () =
     });
     assert.equal(wrongIdentity.status, 401);
 
+    const unavailable = await fetch(`${started.url}/preview`, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer 0123456789abcdef",
+        origin: "http://localhost:3000",
+        "content-type": "application/json",
+        "x-tackle-forger-workspace": identity.workspaceId,
+        "x-tackle-forger-user": identity.userId,
+      },
+      body: JSON.stringify({
+        packageId: "package-http-unavailable",
+        profileIds: ["profile:test"],
+        snapshot: createSeedState().configurationSnapshots[0],
+        formalAuthorization: FORMAL_AUTHORIZATION,
+      }),
+    });
+    assert.equal(unavailable.status, 400);
+    assert.equal(
+      (await unavailable.json() as { code?: string }).code,
+      "CONFIG_TARGET_SERIALIZATION_UNAVAILABLE",
+    );
+
     const rejected = await fetch(`${started.url}/health`, {
       headers: {
         authorization: "Bearer 0123456789abcdef",

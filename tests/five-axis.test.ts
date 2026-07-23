@@ -32,9 +32,21 @@ import {
 import type {
   FiveAxisEntityInput,
   FiveAxisViewDefinition,
+  ProjectionTraceStep,
 } from "../lib/types";
 
 const PARTS = ["part:rod", "part:reel", "part:line"];
+
+function finalSettlementTrace(values: Record<string, number | string>): ProjectionTraceStep[] {
+  return [{
+    layer: "final_review_patch",
+    sourceIds: ["test:final-settlement"],
+    contributions: Object.entries(values).map(([parameterKey, value], index) => ({
+      sequence: index + 1, ruleId: `test:${parameterKey}`, sourceId: "test:final-settlement",
+      sourceName: "最终结算", parameterKey, operation: "base", before: null, operand: value, after: value,
+    })),
+  }];
+}
 
 function definition(): FiveAxisViewDefinition {
   const content: Omit<FiveAxisViewDefinition, "definitionHash"> = {
@@ -484,6 +496,8 @@ test("正式快照拒绝未发布、篡改或版本链过期的五维定义", ()
     attributeAffixIds: existing.attributeAffixIds,
     passiveAffixIds: existing.passiveAffixIds,
     technologyIds: existing.technologyIds,
+    technologyDefinitions: state.technologies,
+    finalSettlementTrace: finalSettlementTrace(existing.finalPanelValues),
     passiveAffixPayloads: existing.passiveAffixPayloads,
     compatibilityReport: existing.compatibilityReport,
     affinityReport: existing.affinityReport,
@@ -491,7 +505,7 @@ test("正式快照拒绝未发布、篡改或版本链过期的五维定义", ()
     qualityValueAssessment: {
       modelRevisionId: `${model.id}@${model.revision}`, selectedQualityId: series.qualityId,
       baseAffixScore: 1, combinationScore: 0, functionScoreFactor: 1,
-      performanceScoreFactor: 1, finalValueScore: 1, affixBreakdown: [],
+      finalValueScore: 1, affixBreakdown: [],
       combinationBreakdown: [], qualityRangePolicyVersion: "q:1",
       scoringPolicyVersion: "s:1", inSelectedQualityRange: true, formal: true,
       issues: [], trace: [], inputHash: "quality-hash",
@@ -499,6 +513,7 @@ test("正式快照拒绝未发布、篡改或版本链过期的五维定义", ()
     pricingPolicyVersion: "pricing:1",
     automaticPricing: {
       formal: true, pricingPolicyRef: "pricing:1", pricingWeightBandId: "band:1",
+      valueScore: 1,
       pricingBasketId: "basket:1", repairPriceUnrounded: 100,
       purchasePriceUnrounded: 100, purchasePrice: 100, trace: [], issues: [],
       warnings: [], inputHash: "pricing-hash",

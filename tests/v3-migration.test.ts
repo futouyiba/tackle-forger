@@ -239,3 +239,15 @@ test("脱敏生产 schema v17 形态可直接读取，未知字段与已发布 S
   assert.equal(migrated.configurationSnapshots[0].contentHash, "sha256:production-published-snapshot-redacted");
   assert.deepEqual(migrateWorkspaceState(migrated), migrated);
 });
+
+test("schema v18 只新增不可变 PerformanceSummary 定义注册表且不改写历史 Snapshot", () => {
+  const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
+  legacy.schemaVersion = 17;
+  delete legacy.performanceSummaryDefinitions;
+  const snapshotsBefore = structuredClone(legacy.configurationSnapshots);
+  const migrated = migrateWorkspaceState(legacy);
+  assert.equal(migrated.schemaVersion, 18);
+  assert.deepEqual(migrated.performanceSummaryDefinitions, []);
+  assert.deepEqual(migrated.configurationSnapshots, snapshotsBefore);
+  assert.deepEqual(migrateWorkspaceState(migrated), migrated);
+});

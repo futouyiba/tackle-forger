@@ -1,6 +1,21 @@
 import { deterministicHash } from "./rule-kernel";
 import { verifySnapshotIntegrity } from "./publishing";
-import type { ConfigurationSnapshot, ValidationIssue } from "./types";
+import { authoritativeObjectIdentity, evaluateAuthoritativePatchFinalRanges, type AuthoritativePatchObject } from "./patch-authority";
+import {
+  assertPatchGateCanProceed,
+  assertPublishedPatchOffsetPolicy,
+  PatchOffsetPolicyError,
+} from "./patch-offset-policy";
+import type {
+  ConfigurationSnapshot,
+  PatchOffsetPolicyVersion,
+  ParameterDefinition,
+  PatchRevisionRecord,
+  PatchValidationWaiver,
+  RuleSetVersion,
+  ValidationIssue,
+  WorkspacePolicyRecord,
+} from "./types";
 import type { ExportTargetProfile } from "./interaction-contracts";
 import type { ConfigExportMapping } from "./config-export-mapping";
 export type { ConfigExportMapping } from "./config-export-mapping";
@@ -22,10 +37,16 @@ export interface ExportManifest {
   mappingId: string;
   mappingVersion: string;
   profileId: string;
+  environmentId?: string;
+  channelKey?: string;
   sourceSnapshotId: string;
   sourceSnapshotHash: string;
   originalFileHashes: Record<string, string>;
   entries: ExportManifestEntry[];
+  patchOffsetPolicyVersion?: string;
+  patchValidationIssueFingerprints?: string[];
+  patchValidationWaiverRefs?: string[];
+  patchValidationWaiverDecisionRefs?: string[];
   createdAt: string;
   manifestHash: string;
 }
@@ -39,6 +60,15 @@ export function createExportManifest(input: {
   originalFileHashes: Record<string, string>;
   entries: ExportManifestEntry[];
   createdAt: string;
+  environmentId?: string;
+  channelKey?: string;
+  patchOffsetGovernance?: {
+    policy?: WorkspacePolicyRecord | PatchOffsetPolicyVersion;
+    ruleSet: RuleSetVersion;
+    parameterDefinitions: ParameterDefinition[];
+    patchRevisions: PatchRevisionRecord[];
+    waivers?: PatchValidationWaiver[];
+  };
 }): ExportManifest {
   if (!verifySnapshotIntegrity(input.snapshot)) {
     throw new Error("ConfigurationSnapshot 完整性校验失败，不能生成配置表。");
@@ -52,16 +82,103 @@ export function createExportManifest(input: {
   if (includesStore && (!input.snapshot.pricingPolicyVersion || !input.snapshot.automaticPricing?.formal)) {
     throw new Error("PricingPolicy 尚未形成可执行的已发布版本：请查看策略 Trace 中的精确缺参或执行语义问题；正式 Store 导出已阻断。");
   }
+  let frozenPatchGovernance: Pick<ExportManifest,
+    "patchOffsetPolicyVersion" | "patchValidationIssueFingerprints" | "patchValidationWaiverRefs" | "patchValidationWaiverDecisionRefs"> = {};
+  if (input.snapshot.patchOffsetPolicyVersion) {
+    const governance = input.patchOffsetGovernance;
+    let rangeEvaluation: ReturnType<typeof evaluateAuthoritativePatchFinalRanges>;
+    if (
+      !input.environmentId?.trim()
+      || !input.channelKey?.trim()
+      || !governance
+    ) {
+      throw new Error("正式导出缺少与 Snapshot 策略及目标环境×渠道精确匹配的 Patch 范围校验。");
+    }
+    try {
+      assertPublishedPatchOffsetPolicy(governance.policy);
+      if (governance.policy.version !== input.snapshot.patchOffsetPolicyVersion) {
+        throw new PatchOffsetPolicyError(
+          "PATCH_OFFSET_POLICY_VERSION_MISMATCH",
+          "正式导出的 PatchOffsetPolicyVersion 与 Snapshot 不一致。",
+        );
+      }
+      if (!input.snapshot.patchReferences?.length) {
+        throw new PatchOffsetPolicyError(
+          "PATCH_REVISION_EVIDENCE_MISSING",
+          "正式导出的 Snapshot 缺少冻结的有序 Patch revision 引用。",
+        );
+      }
+      const authority: AuthoritativePatchObject = {
+        subjectRef: {
+          scopeType: "model",
+          entityId: input.snapshot.modelId,
+          revision: input.snapshot.modelRevision,
+        },
+        ruleSet: governance.ruleSet,
+        parameterDefinitions: governance.parameterDefinitions,
+        patchRevisions: governance.patchRevisions,
+        contexts: [{
+          contextId: `${input.snapshot.modelId}:${input.snapshot.projectionId}:snapshot`,
+          itemPartId: input.snapshot.projectionMatch.itemPartId,
+          projection: {
+            id: input.snapshot.projectionId,
+            ruleSetVersion: input.snapshot.ruleSetVersion,
+            sourceHash: input.snapshot.contentHash,
+            values: input.snapshot.finalPanelValues,
+          },
+          finalPanelValues: input.snapshot.finalPanelValues,
+          weightBandId: input.snapshot.projectionMatch.weightTemplateId,
+          targetPullKg: input.snapshot.projectionMatch.targetPullKg,
+        }],
+      };
+      rangeEvaluation = evaluateAuthoritativePatchFinalRanges({
+        policy: governance.policy,
+        gate: "EXPORT",
+        environmentId: input.environmentId,
+        channelKey: input.channelKey,
+        objects: [authority],
+      });
+      const identity = authoritativeObjectIdentity(authority);
+      if (
+        identity.patchSetHash !== input.snapshot.patchSetHash
+        || deterministicHash(identity.patchReferences) !== deterministicHash(input.snapshot.patchReferences)
+      ) {
+        throw new PatchOffsetPolicyError("PATCH_SET_HASH_MISMATCH", "导出命令派生的 Patch revision 引用与冻结 Snapshot 不一致。");
+      }
+      assertPatchGateCanProceed({
+        evaluation: rangeEvaluation,
+        waivers: governance.waivers,
+      });
+    } catch (error) {
+      if (error instanceof PatchOffsetPolicyError) {
+        throw new Error(`配置导出被阻止：[${error.code}] ${error.message}`);
+      }
+      throw error;
+    }
+    frozenPatchGovernance = {
+      patchOffsetPolicyVersion: input.snapshot.patchOffsetPolicyVersion,
+      patchValidationIssueFingerprints: rangeEvaluation.issues
+        .flatMap((issue) => issue.fingerprint ? [issue.fingerprint] : [])
+        .sort(),
+      patchValidationWaiverRefs: (governance.waivers ?? []).map((waiver) => waiver.waiverId).sort(),
+      patchValidationWaiverDecisionRefs: [...new Set(
+        (governance.waivers ?? []).map((waiver) => waiver.waiverDecisionId),
+      )].sort(),
+    };
+  }
   const content = {
     packageId: input.packageId,
     generatorVersion: input.generatorVersion,
     mappingId: input.mapping.mappingId,
     mappingVersion: input.mapping.version,
     profileId: input.profile.profileId,
+    ...(input.environmentId ? { environmentId: input.environmentId } : {}),
+    ...(input.channelKey ? { channelKey: input.channelKey } : {}),
     sourceSnapshotId: input.snapshot.id,
     sourceSnapshotHash: input.snapshot.contentHash,
     originalFileHashes: structuredClone(input.originalFileHashes),
     entries: structuredClone(input.entries),
+    ...frozenPatchGovernance,
     createdAt: input.createdAt,
   };
   return { ...content, manifestHash: deterministicHash(content) };
@@ -340,4 +457,3 @@ export async function commitExportPackage(input: {
     };
   }
 }
-

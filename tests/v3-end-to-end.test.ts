@@ -514,7 +514,7 @@ test("S-01 SKU 类型偏离 Series 时阻断", () => {
   assert.ok(issues.some((issue) => issue.code === "SERIES_TYPE_MISMATCH"));
 });
 
-test("S-02 属性偏移阈值只从配置读取", () => {
+test("S-02 旧属性偏移阈值不再参与运行时校验", () => {
   const state = createSeedState();
   const series = state.seriesDefinitions[0];
   const sku = state.skuDrawers[0];
@@ -537,7 +537,7 @@ test("S-02 属性偏移阈值只从配置读取", () => {
     neutralValuesBySkuId: { [sku.id]: { force: 100 } },
     patchOffsetLimits: { warning: 0.2, error: 0.4 },
   });
-  assert.ok(issues.some((issue) => issue.code === "PATCH_OFFSET_ERROR"));
+  assert.equal(issues.some((issue) => issue.code.startsWith("PATCH_OFFSET_")), false);
   assert.equal(projection.typeId, series.typeId);
 });
 
@@ -681,7 +681,10 @@ test("D-01 v1 状态顺序迁移到当前版本，两次迁移无额外变化", 
   assert.equal(once.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
   assert.deepEqual(once.fiveAxisViewDefinitions, []);
   assert.deepEqual(once.fiveAxisVertexSets, []);
-  assert.deepEqual(once.workspacePolicies, []);
+  assert.equal(
+    once.workspacePolicies.filter((policy) => policy.policyType === "patchOffsetPolicy").length,
+    1,
+  );
   assert.deepEqual(once.aiAssessments, []);
   assert.deepEqual(once.exportTargetProfiles, []);
   assert.deepEqual(once.identityAuditLog, []);

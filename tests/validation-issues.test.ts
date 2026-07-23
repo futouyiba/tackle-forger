@@ -10,6 +10,7 @@ import {
   createValidationIssue,
   createWaiverPolicyVersion,
   invalidateValidationEvidence,
+  verifyValidationWaiverDecision,
   ValidationIssueContractError,
 } from "../lib/validation-issues";
 import type {
@@ -115,6 +116,71 @@ test("旧 Issue 安全适配保留原 payload 证据且默认只读 STALE", () =
   assert.equal(adapted.actions.length, 0);
   assert.equal(adapted.evidenceRefs[0].evidenceType, "validation_issue");
   assert.ok(adapted.evidenceRefs[0].contentHash);
+
+  const activeUnified = adaptLegacyValidationIssue(
+    {
+      issueId: "legacy-unified:1",
+      fingerprint: "legacy-fingerprint",
+      code: "LEGACY_BLOCKING_ERROR",
+      source: "publish",
+      severity: "error",
+      blocking: true,
+      gate: "publish",
+      subjectRef: subject,
+      affectedRefs: [],
+      parameterKeys: ["drag"],
+      title: "旧统一错误",
+      message: "必须继续阻断发布。",
+      state: "open",
+      deny: false,
+      actions: [],
+    },
+    {
+      subjectRef: subject,
+      inputHash: "legacy-unified-input",
+      ruleRefs: ["legacy-unified/v1"],
+      mode: "active_gate",
+    },
+  );
+  assert.equal(activeUnified.severity, "ERROR");
+  assert.equal(activeUnified.gate, "PUBLISH");
+  assert.equal(activeUnified.state, "OPEN");
+  const acknowledgedUnified = adaptLegacyValidationIssue(
+    {
+      issueId: "legacy-unified:2",
+      fingerprint: "legacy-fingerprint:2",
+      code: "LEGACY_REVIEW_WARNING",
+      source: "series_invariant",
+      severity: "warning",
+      blocking: false,
+      gate: "model_review",
+      subjectRef: subject,
+      affectedRefs: [],
+      parameterKeys: [],
+      title: "旧确认警告",
+      message: "确认状态仍需证据复验。",
+      state: "acknowledged",
+      deny: false,
+      actions: [],
+    },
+    {
+      subjectRef: subject,
+      inputHash: "legacy-unified-input:2",
+      ruleRefs: ["legacy-unified/v1"],
+      mode: "active_gate",
+    },
+  );
+  assert.equal(acknowledgedUnified.severity, "WARNING");
+  assert.equal(acknowledgedUnified.gate, "REVIEW");
+  assert.equal(acknowledgedUnified.state, "ACKNOWLEDGED");
+  assert.throws(
+    () => assertValidationGateCanProceed({
+      issues: [activeUnified],
+      gate: "PUBLISH",
+      at: "2026-07-23T03:00:00.000Z",
+    }),
+    /当前有效 WaiverPolicyVersion/,
+  );
 });
 
 test("WARNING 确认重验权限/revision/inputHash，并以原幂等 payload 安全重试", () => {
@@ -225,6 +291,89 @@ test("ERROR 默认不可 waive，只有完整且精确命中的已发布策略�
     retry.issues.map((entry) => entry.issueRevision),
     approved.issues.map((entry) => entry.issueRevision),
   );
+  assert.equal(verifyValidationWaiverDecision(approved.decision), true);
+  assert.equal(
+    verifyValidationWaiverDecision({
+      ...approved.decision,
+      waiverIds: approved.decision.waiverIds.slice(1),
+    }),
+    false,
+  );
+  assert.throws(
+    () => approveValidationWaiverDecision({
+      ...command,
+      issues: approved.issues,
+      existingDecisions: [{
+        ...approved.decision,
+        waiverIds: approved.decision.waiverIds.slice(1),
+      }],
+      existingWaivers: approved.waivers,
+    }),
+    /WaiverDecision 完整性校验失败/,
+  );
+
+  assert.doesNotThrow(() => assertValidationGateCanProceed({
+    issues: approved.issues,
+    gate: "PUBLISH",
+    waivers: approved.waivers,
+    activeWaiverPolicies: [policy],
+    at: "2026-07-23T03:30:00.000Z",
+  }));
+  assert.throws(
+    () => assertValidationGateCanProceed({
+      issues: approved.issues,
+      gate: "PUBLISH",
+      waivers: approved.waivers,
+      at: "2026-07-23T03:30:00.000Z",
+    }),
+    /当前有效 WaiverPolicyVersion/,
+  );
+  const changedPolicy = createWaiverPolicyVersion({
+    policyId: policy.policyId,
+    version: policy.version,
+    status: "PUBLISHED",
+    publishedAt: policy.publishedAt,
+    rules: [{
+      source: "quality",
+      code: "CHANGED_RULE",
+      gates: ["PUBLISH"],
+    }],
+  });
+  assert.throws(
+    () => assertValidationGateCanProceed({
+      issues: approved.issues,
+      gate: "PUBLISH",
+      waivers: approved.waivers,
+      activeWaiverPolicies: [changedPolicy],
+      at: "2026-07-23T03:30:00.000Z",
+    }),
+    /当前有效 WaiverPolicyVersion/,
+  );
+  const retiredPolicy = createWaiverPolicyVersion({
+    policyId: policy.policyId,
+    version: policy.version,
+    status: "RETIRED",
+    publishedAt: policy.publishedAt,
+    rules: policy.rules,
+  });
+  assert.throws(
+    () => assertValidationGateCanProceed({
+      issues: approved.issues,
+      gate: "PUBLISH",
+      waivers: approved.waivers,
+      activeWaiverPolicies: [retiredPolicy],
+      at: "2026-07-23T03:30:00.000Z",
+    }),
+    /当前有效 WaiverPolicyVersion/,
+  );
+  const invalidatedByPolicy = invalidateValidationEvidence({
+    issues: approved.issues,
+    waivers: approved.waivers,
+    activeFingerprints: approved.issues.map((entry) => entry.fingerprint),
+    activeWaiverPolicies: [retiredPolicy],
+    at: "2026-07-23T03:30:00.000Z",
+  });
+  assert.equal(invalidatedByPolicy.waivers.every((entry) => entry.state === "STALE"), true);
 
   const defaultDenyPolicy = createWaiverPolicyVersion({
     policyId: "validation-waiver-policy",
@@ -510,7 +659,7 @@ test("ExportManifest 只冻结精确环境×渠道命中的统一 Issue 与证�
     createdAt: "2026-07-23T04:00:00.000Z",
   };
   const snapshotWithFrozenIssue = structuredClone(snapshot);
-  snapshotWithFrozenIssue.validationReport = [acknowledged.issue];
+  snapshotWithFrozenIssue.validationReport = [exportWarning];
   const snapshotContent = structuredClone(snapshotWithFrozenIssue);
   Reflect.deleteProperty(snapshotContent, "contentHash");
   snapshotWithFrozenIssue.contentHash = deterministicHash(snapshotContent);
@@ -524,14 +673,45 @@ test("ExportManifest 只冻结精确环境×渠道命中的统一 Issue 与证�
   assert.throws(
     () => createExportManifest({
       ...common,
+      snapshot: snapshotWithFrozenIssue,
       validationGovernance: {
-        issues: [acknowledged.issue],
+        issues: [exportWarning],
       },
     }),
     /尚无有效 WARNING 确认证据/,
   );
+  assert.throws(
+    () => createExportManifest({
+      ...common,
+      snapshot: snapshotWithFrozenIssue,
+      validationGovernance: {
+        issues: [{
+          ...acknowledged.issue,
+          severity: "INFO",
+          state: "RESOLVED",
+        }],
+        acknowledgements: [acknowledged.acknowledgement],
+      },
+    }),
+    /规范内容与 Snapshot 冻结版本不一致/,
+  );
+  assert.throws(
+    () => createExportManifest({
+      ...common,
+      snapshot: snapshotWithFrozenIssue,
+      validationGovernance: {
+        issues: [{
+          ...acknowledged.issue,
+          state: "RESOLVED",
+        }],
+        acknowledgements: [acknowledged.acknowledgement],
+      },
+    }),
+    /未从 Snapshot 冻结 revision 产生可验证的确认或 Waiver/,
+  );
   const manifest = createExportManifest({
     ...common,
+    snapshot: snapshotWithFrozenIssue,
     validationGovernance: {
       issues: [acknowledged.issue],
       acknowledgements: [acknowledged.acknowledgement],

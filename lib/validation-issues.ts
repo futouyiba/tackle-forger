@@ -2,6 +2,7 @@ import { deterministicHash } from "./rule-kernel";
 import type {
   CanonicalValidationIssue,
   LegacyValidationIssue,
+  LegacyUnifiedValidationIssue,
   ValidationAcknowledgement,
   ValidationActionLink,
   ValidationEntityRef,
@@ -32,12 +33,19 @@ export class ValidationIssueContractError extends Error {
 export function isCanonicalValidationIssue(
   issue: ValidationIssue,
 ): issue is CanonicalValidationIssue {
-  return "issueId" in issue && "subjectRef" in issue && "fingerprintVersion" in issue;
+  return "issueId" in issue
+    && "subjectRef" in issue
+    && issue.fingerprintVersion === VALIDATION_ISSUE_FINGERPRINT_VERSION
+    && normalizeValidationSeverity(issue.severity) === issue.severity
+    && normalizeValidationGate(issue.gate) === issue.gate
+    && normalizeValidationState(issue.state) === issue.state;
 }
 
 export function validationIssueSeverity(issue: ValidationIssue): ValidationIssueSeverity {
-  if ("severity" in issue && issue.severity) return issue.severity;
-  return issue.level === "error" ? "ERROR" : issue.level === "warning" ? "WARNING" : "INFO";
+  const severity = "severity" in issue ? normalizeValidationSeverity(issue.severity) : undefined;
+  if (severity) return severity;
+  const level = "level" in issue ? issue.level : undefined;
+  return level === "error" ? "ERROR" : level === "warning" ? "WARNING" : "INFO";
 }
 
 export function validationIssueLevel(
@@ -84,6 +92,55 @@ function normalizeRefs(refs: ValidationEntityRef[]): ValidationEntityRef[] {
 
 function normalizeStrings(values: string[]): string[] {
   return [...new Set(values)].sort();
+}
+
+function normalizeValidationSeverity(value: unknown): ValidationIssueSeverity | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.toUpperCase();
+  return normalized === "INFO"
+    || normalized === "WARNING"
+    || normalized === "ERROR"
+    || normalized === "BLOCKER"
+    ? normalized
+    : undefined;
+}
+
+function normalizeValidationGate(value: unknown): ValidationIssueGate | undefined {
+  if (typeof value !== "string") return undefined;
+  switch (value.toUpperCase()) {
+    case "NONE":
+    case "GENERATE":
+      return "NONE";
+    case "REVIEW":
+    case "SERIES_APPROVE":
+    case "MODEL_REVIEW":
+      return "REVIEW";
+    case "PUBLISH":
+      return "PUBLISH";
+    case "EXPORT":
+      return "EXPORT";
+    default:
+      return undefined;
+  }
+}
+
+function normalizeValidationState(value: unknown): CanonicalValidationIssue["state"] | undefined {
+  if (typeof value !== "string") return undefined;
+  switch (value.toUpperCase()) {
+    case "OPEN":
+      return "OPEN";
+    case "ACKNOWLEDGED":
+      return "ACKNOWLEDGED";
+    case "RESOLVED":
+      return "RESOLVED";
+    case "WAIVED":
+      return "WAIVED";
+    case "STALE":
+    case "SUPERSEDED":
+      return "STALE";
+    default:
+      return undefined;
+  }
 }
 
 export interface CreateValidationIssueInput {
@@ -236,21 +293,51 @@ export interface AdaptLegacyValidationIssueContext {
 }
 
 export function adaptLegacyValidationIssue(
-  legacy: LegacyValidationIssue,
+  legacy: LegacyValidationIssue | LegacyUnifiedValidationIssue,
   context: AdaptLegacyValidationIssueContext,
 ): CanonicalValidationIssue {
   const mode = context.mode ?? "historical";
-  const gate = context.gate ?? "NONE";
+  const normalizedLegacyGate = normalizeValidationGate(legacy.gate);
+  let gate = normalizedLegacyGate ?? context.gate ?? "NONE";
+  const severity = "deny" in legacy && legacy.deny
+    ? "BLOCKER"
+    : normalizeValidationSeverity(legacy.severity)
+      ?? ("level" in legacy && legacy.level === "error"
+        ? "ERROR"
+        : "level" in legacy && legacy.level === "warning"
+          ? "WARNING"
+          : "INFO");
+  const normalizedLegacyState = normalizeValidationState(legacy.state) ?? "OPEN";
+  const state = mode === "historical"
+    ? "STALE"
+    : normalizedLegacyState === "WAIVED"
+      ? "OPEN"
+      : normalizedLegacyState === "ACKNOWLEDGED" && severity !== "WARNING"
+        ? "OPEN"
+        : normalizedLegacyState;
+  const environmentId = context.environmentId ?? legacy.environmentId;
+  const channelKey = context.channelKey ?? legacy.channelKey;
+  if (gate === "EXPORT" && (!environmentId?.trim() || !channelKey?.trim())) {
+    if (mode === "active_gate") {
+      throw new ValidationIssueContractError(
+        "VALIDATION_EXPORT_TARGET_REQUIRED",
+        "旧 EXPORT Issue 缺少 environmentId/channelKey，不能进入活动 Gate。",
+      );
+    }
+    gate = "NONE";
+  }
   const originalPayloadHash = deterministicHash(legacy);
   const canonical = createValidationIssue({
     code: legacy.code,
     source: legacy.source ?? context.source ?? "import",
-    severity: legacy.severity
-      ?? (legacy.level === "error" ? "ERROR" : legacy.level === "warning" ? "WARNING" : "INFO"),
+    severity,
     gate,
-    subjectRef: context.subjectRef,
-    parameterKeys: legacy.parameterKey ? [legacy.parameterKey] : [],
-    title: legacy.code,
+    subjectRef: "subjectRef" in legacy ? legacy.subjectRef : context.subjectRef,
+    affectedRefs: "affectedRefs" in legacy ? legacy.affectedRefs : undefined,
+    parameterKeys: "parameterKeys" in legacy
+      ? legacy.parameterKeys
+      : legacy.parameterKey ? [legacy.parameterKey] : [],
+    title: "title" in legacy ? legacy.title : legacy.code,
     message: legacy.message,
     evidenceRefs: [{
       evidenceType: "validation_issue",
@@ -258,7 +345,7 @@ export function adaptLegacyValidationIssue(
       contentHash: originalPayloadHash,
     }],
     ruleRefs: context.ruleRefs,
-    state: mode === "historical" ? "STALE" : legacy.state ?? "OPEN",
+    state,
     inputHash: context.inputHash,
     fingerprintInputs: {
       legacyFingerprint: legacy.fingerprint,
@@ -267,8 +354,8 @@ export function adaptLegacyValidationIssue(
     },
     ...(gate === "EXPORT"
       ? {
-        environmentId: context.environmentId ?? legacy.environmentId,
-        channelKey: context.channelKey ?? legacy.channelKey,
+        environmentId,
+        channelKey,
       }
       : {}),
     // 旧动作缺少可信 typed payload，一律不恢复状态写动作。
@@ -459,8 +546,9 @@ export function verifyValidationWaiverDecision(
     idempotencyKey: decision.idempotencyKey,
     payloadHash: decision.payloadHash,
   };
-  return decision.waiverDecisionId === `validation-waiver-decision:${decision.decisionHash}`
-    && deterministicHash(content) === decision.decisionHash;
+  const waiverDecisionId = `validation-waiver-decision:${deterministicHash(content)}`;
+  return decision.waiverDecisionId === waiverDecisionId
+    && deterministicHash({ ...content, waiverIds: decision.waiverIds }) === decision.decisionHash;
 }
 
 function policyAllows(
@@ -638,8 +726,7 @@ export function approveValidationWaiverDecision(input: {
     idempotencyKey: input.idempotencyKey,
     payloadHash,
   };
-  const decisionHash = deterministicHash(decisionContent);
-  const waiverDecisionId = `validation-waiver-decision:${decisionHash}`;
+  const waiverDecisionId = `validation-waiver-decision:${deterministicHash(decisionContent)}`;
   const waivers = targets.map((issue, index): ValidationWaiver => {
     const request = requestedWaivers[index];
     const content = {
@@ -669,7 +756,10 @@ export function approveValidationWaiverDecision(input: {
     waiverDecisionId,
     ...decisionContent,
     waiverIds: waivers.map((entry) => entry.waiverId),
-    decisionHash,
+    decisionHash: deterministicHash({
+      ...decisionContent,
+      waiverIds: waivers.map((entry) => entry.waiverId),
+    }),
   };
   return {
     issues: input.issues.map((issue) => {
@@ -686,12 +776,21 @@ export function invalidateValidationEvidence(input: {
   acknowledgements?: ValidationAcknowledgement[];
   waivers?: ValidationWaiver[];
   activeFingerprints: Iterable<string>;
+  activeWaiverPolicies?: WaiverPolicyVersion[];
+  at?: string;
 }): {
   issues: CanonicalValidationIssue[];
   acknowledgements: ValidationAcknowledgement[];
   waivers: ValidationWaiver[];
 } {
+  if (input.activeWaiverPolicies && !input.at) {
+    throw new ValidationIssueContractError(
+      "VALIDATION_INVALIDATION_TIME_REQUIRED",
+      "按当前 WaiverPolicyVersion 失效证据时必须提供确定的 at 时间。",
+    );
+  }
   const active = new Set(input.activeFingerprints);
+  const issuesByFingerprint = new Map(input.issues.map((issue) => [issue.fingerprint, issue]));
   return {
     issues: input.issues.map((issue) =>
       active.has(issue.fingerprint) ? structuredClone(issue) : replaceIssueState(issue, "STALE")),
@@ -699,11 +798,84 @@ export function invalidateValidationEvidence(input: {
       active.has(entry.issueFingerprint)
         ? structuredClone(entry)
         : { ...structuredClone(entry), state: "STALE" }),
-    waivers: (input.waivers ?? []).map((entry) =>
-      active.has(entry.issueFingerprint)
+    waivers: (input.waivers ?? []).map((entry) => {
+      const issue = issuesByFingerprint.get(entry.issueFingerprint);
+      const activePolicy = input.activeWaiverPolicies?.find((policy) =>
+        policy.version === entry.policyVersion
+        && policy.policyHash === entry.policyHash
+        && policy.status === "PUBLISHED"
+        && verifyWaiverPolicyVersion(policy));
+      const policyStillAllows = !input.activeWaiverPolicies
+        || Boolean(issue && activePolicy && policyAllows(activePolicy, issue, input.at!));
+      return active.has(entry.issueFingerprint) && policyStillAllows
         ? structuredClone(entry)
-        : { ...structuredClone(entry), state: "STALE" }),
+        : { ...structuredClone(entry), state: "STALE" };
+    }),
   };
+}
+
+function frozenIssueContentHash(issue: CanonicalValidationIssue): string {
+  const content: Partial<CanonicalValidationIssue> = structuredClone(issue);
+  Reflect.deleteProperty(content, "issueRevision");
+  Reflect.deleteProperty(content, "state");
+  Reflect.deleteProperty(content, "waiverRef");
+  return deterministicHash(content);
+}
+
+export function assertFrozenValidationIssuesMatch(input: {
+  frozenIssues: CanonicalValidationIssue[];
+  currentIssues: CanonicalValidationIssue[];
+  acknowledgements?: ValidationAcknowledgement[];
+  waivers?: ValidationWaiver[];
+}): void {
+  for (const frozen of input.frozenIssues) {
+    const candidates = input.currentIssues.filter((issue) => issue.fingerprint === frozen.fingerprint);
+    if (candidates.length !== 1) {
+      throw new ValidationIssueContractError(
+        "VALIDATION_FROZEN_ISSUE_MISSING_OR_DUPLICATE",
+        `导出命令必须精确携带一次 Snapshot 冻结的 Issue ${frozen.fingerprint}。`,
+      );
+    }
+    const current = candidates[0];
+    if (frozenIssueContentHash(current) !== frozenIssueContentHash(frozen)) {
+      throw new ValidationIssueContractError(
+        "VALIDATION_FROZEN_ISSUE_CONTENT_MISMATCH",
+        `Issue ${frozen.fingerprint} 的规范内容与 Snapshot 冻结版本不一致。`,
+      );
+    }
+    if (
+      current.issueRevision === frozen.issueRevision
+      && current.state === frozen.state
+      && current.waiverRef === frozen.waiverRef
+    ) {
+      continue;
+    }
+    const acknowledgedFromFrozen = frozen.state === "OPEN"
+      && frozen.severity === "WARNING"
+      && current.state === "ACKNOWLEDGED"
+      && (input.acknowledgements ?? []).some((entry) =>
+        verifyValidationAcknowledgement(entry)
+        && entry.issueId === frozen.issueId
+        && entry.issueFingerprint === frozen.fingerprint
+        && entry.inputHash === frozen.inputHash
+        && entry.issueRevision === frozen.issueRevision);
+    const waivedFromFrozen = frozen.state === "OPEN"
+      && frozen.severity === "ERROR"
+      && current.state === "WAIVED"
+      && (input.waivers ?? []).some((entry) =>
+        verifyValidationWaiver(entry)
+        && entry.waiverId === current.waiverRef
+        && entry.issueId === frozen.issueId
+        && entry.issueFingerprint === frozen.fingerprint
+        && entry.inputHash === frozen.inputHash
+        && entry.issueRevision === frozen.issueRevision);
+    if (!acknowledgedFromFrozen && !waivedFromFrozen) {
+      throw new ValidationIssueContractError(
+        "VALIDATION_FROZEN_ISSUE_REVISION_MISMATCH",
+        `Issue ${frozen.fingerprint} 未从 Snapshot 冻结 revision 产生可验证的确认或 Waiver。`,
+      );
+    }
+  }
 }
 
 export function assertValidationGateCanProceed(input: {
@@ -713,6 +885,7 @@ export function assertValidationGateCanProceed(input: {
   channelKey?: string;
   acknowledgements?: ValidationAcknowledgement[];
   waivers?: ValidationWaiver[];
+  activeWaiverPolicies?: WaiverPolicyVersion[];
   at?: string;
 }): void {
   assertExportTarget(input);
@@ -768,10 +941,18 @@ export function assertValidationGateCanProceed(input: {
       && entry.environmentId === issue.environmentId
       && entry.channelKey === issue.channelKey
       && (!entry.expiresAt || !input.at || entry.expiresAt >= input.at));
-    if (issue.state !== "WAIVED" || !waiver) {
+    const activePolicy = waiver && input.at
+      ? (input.activeWaiverPolicies ?? []).find((policy) =>
+        policy.version === waiver.policyVersion
+        && policy.policyHash === waiver.policyHash
+        && policy.status === "PUBLISHED"
+        && verifyWaiverPolicyVersion(policy)
+        && policyAllows(policy, issue, input.at!))
+      : undefined;
+    if (issue.state !== "WAIVED" || !waiver || !activePolicy) {
       throw new ValidationIssueContractError(
         "VALIDATION_ERROR_NOT_WAIVED",
-        `${issue.code} 是未解决且未获有效策略 Waiver 的 ERROR。`,
+        `${issue.code} 是未解决或未获当前有效 WaiverPolicyVersion 支持的 ERROR。`,
       );
     }
   }

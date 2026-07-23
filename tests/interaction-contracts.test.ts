@@ -25,7 +25,7 @@ test("R1 甘特图只返回真实离散 SKU，不补齐连续重量", () => {
     models: state.purchasableModels,
   });
   const block = projection[0];
-  assert.deepEqual(block.skuNodes.map((node) => node.targetWeightKg), [1.5, 1.8]);
+  assert.deepEqual(block.skuNodes.map((node) => node.targetPullKg), [1.5, 1.8]);
   assert.equal(block.minDisplayWeightKg, 1.5);
   assert.equal(block.maxDisplayWeightKg, 1.8);
   assert.equal(

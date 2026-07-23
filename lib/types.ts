@@ -564,7 +564,7 @@ export type CompatibilityAxis =
 export interface CompatibilityContext {
   methodId: string;
   typeId: string;
-  targetWeightKg?: number;
+  targetPullKg?: number;
   functionId?: string;
   functionIntensity?: FunctionIntensity;
   performanceId?: string;
@@ -584,8 +584,8 @@ export interface CompatibilitySelector {
   qualityId?: string;
   itemPartId?: string;
   lineMaterialId?: string;
-  minWeightKg?: number;
-  maxWeightKg?: number;
+  minPullKg?: number;
+  maxPullKg?: number;
   componentIds?: string[];
   tags?: string[];
 }
@@ -695,12 +695,9 @@ export interface ProjectionMatch {
   matchedStructuralPullKg: number;
   pullDistance: number;
   itemPartId: string;
-  targetWeightKg: number;
   projectionId: string;
   weightTemplateId: string;
   ruleSetVersion: string;
-  anchorWeightKg: number;
-  weightDistance: number;
   affinityScore: number;
   normalizedAttributeDistance: number;
   reasons: string[];
@@ -820,8 +817,6 @@ export interface SeriesDefinition {
     targetPullKgf: number;
     skuId: string;
   }>;
-  /** @deprecated 只用于旧工作区兼容；新逻辑消费 targetPullSpecifications。 */
-  targetWeightsKg: number[];
   signature: SeriesSignatureAxis[];
   patchIds: string[];
   /** @deprecated 只用于旧工作区兼容；新逻辑消费 targetPullSpecifications。 */
@@ -835,7 +830,7 @@ export interface SkuDrawer {
   id: string;
   revision: number;
   seriesId: string;
-  targetWeightKg: number;
+  targetPullKg: number;
   projectionMatch: ProjectionMatch;
   patchIds: string[];
   modelIds: string[];
@@ -1025,7 +1020,7 @@ export interface CandidateSearchRecipe {
   functionIds: string[];
   performanceIds: string[];
   qualityIds: QualityProfileId[];
-  targetWeightRangeKg: { min: number; max: number };
+  targetPullRangeKg: { min: number; max: number };
   maxCandidates: number;
   sourceLegacyRecipeId?: string;
   notes: string;
@@ -1212,6 +1207,8 @@ export interface ConfigurationSnapshot {
   patchValidationIssueFingerprints?: string[];
   patchValidationWaiverRefs?: string[];
   finalPanelValues: Record<string, number | string>;
+  /** schema v16 起的新快照冻结最终拉力；历史快照缺失时不得补写或改变 contentHash。 */
+  modelFinalPullKg?: number;
   componentSelections: ModelComponentSelection[];
   technologyIds: string[];
   attributeAffixIds: string[];
@@ -1639,8 +1636,36 @@ export interface LegacyValidationIssue {
   evidence?: Record<string, unknown>;
 }
 
+/** pre-R9 UnifiedValidationIssue 的持久化形状；读取时必须规范化小写枚举。 */
+export interface LegacyUnifiedValidationIssue {
+  fingerprintVersion?: undefined;
+  issueId: string;
+  fingerprint: string;
+  code: string;
+  source: ValidationIssueSource;
+  severity: "info" | "warning" | "error";
+  blocking: boolean;
+  gate: "generate" | "series_approve" | "model_review" | "publish" | "export";
+  subjectRef: ValidationEntityRef;
+  affectedRefs: ValidationEntityRef[];
+  parameterKeys: string[];
+  title: string;
+  message: string;
+  state: "open" | "acknowledged" | "resolved" | "waived" | "superseded";
+  deny: boolean;
+  actions: unknown[];
+  level?: "error" | "warning" | "info";
+  parameterKey?: string;
+  environmentId?: string;
+  channelKey?: string;
+  evidence?: Record<string, unknown>;
+}
+
 /** 读取边界兼容旧记录；新领域代码必须创建 CanonicalValidationIssue。 */
-export type ValidationIssue = CanonicalValidationIssue | LegacyValidationIssue;
+export type ValidationIssue =
+  | CanonicalValidationIssue
+  | LegacyValidationIssue
+  | LegacyUnifiedValidationIssue;
 
 export interface ValidationAcknowledgement {
   acknowledgementId: string;

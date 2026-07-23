@@ -19,6 +19,7 @@ import type {
   ValidationIssue,
   ValidationWaiver,
   ValidationWaiverDecision,
+  WaiverPolicyVersion,
   WorkspacePolicyRecord,
 } from "./types";
 import type { ExportTargetProfile } from "./interaction-contracts";
@@ -27,6 +28,7 @@ import {
   assertSnapshotItemPartEnabled,
 } from "./enabled-item-parts";
 import {
+  assertFrozenValidationIssuesMatch,
   assertValidationGateCanProceed,
   isCanonicalValidationIssue,
 } from "./validation-issues";
@@ -90,6 +92,7 @@ export function createExportManifest(input: {
     acknowledgements?: ValidationAcknowledgement[];
     waivers?: ValidationWaiver[];
     decisions?: ValidationWaiverDecision[];
+    activeWaiverPolicies?: WaiverPolicyVersion[];
   };
 }): ExportManifest {
   assertSnapshotItemPartEnabled(input.snapshot, "config_export");
@@ -206,6 +209,12 @@ export function createExportManifest(input: {
     if (!input.environmentId?.trim() || !input.channelKey?.trim()) {
       throw new Error("统一 EXPORT 校验证据必须精确绑定 environmentId 与 channelKey。");
     }
+    assertFrozenValidationIssuesMatch({
+      frozenIssues: frozenSnapshotExportIssues,
+      currentIssues: input.validationGovernance.issues,
+      acknowledgements: input.validationGovernance.acknowledgements,
+      waivers: input.validationGovernance.waivers,
+    });
     assertValidationGateCanProceed({
       issues: input.validationGovernance.issues,
       gate: "EXPORT",
@@ -213,6 +222,7 @@ export function createExportManifest(input: {
       channelKey: input.channelKey,
       acknowledgements: input.validationGovernance.acknowledgements,
       waivers: input.validationGovernance.waivers,
+      activeWaiverPolicies: input.validationGovernance.activeWaiverPolicies,
       at: input.createdAt,
     });
     const relevantFingerprints = new Set(
@@ -223,12 +233,6 @@ export function createExportManifest(input: {
           && issue.channelKey === input.channelKey)
         .map((issue) => issue.fingerprint),
     );
-    const missingFrozenIssue = frozenSnapshotExportIssues.find(
-      (issue) => !relevantFingerprints.has(issue.fingerprint),
-    );
-    if (missingFrozenIssue) {
-      throw new Error(`导出命令未携带 Snapshot 冻结的 Issue ${missingFrozenIssue.fingerprint}。`);
-    }
     const waivers = (input.validationGovernance.waivers ?? [])
       .filter((waiver) =>
         relevantFingerprints.has(waiver.issueFingerprint)

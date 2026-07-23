@@ -37,6 +37,7 @@ import type {
   ValidationAcknowledgement,
   ValidationWaiver,
   ValidationWaiverDecision,
+  WaiverPolicyVersion,
   PassiveSkillPayload,
   WorkspacePolicyRecord,
 } from "./types";
@@ -46,11 +47,21 @@ import {
   isCanonicalValidationIssue,
   validationIssueSeverity,
 } from "./validation-issues";
+import { structuralPullParameterKey } from "./projection-matcher";
 import type { ModelAffixValueAssessment } from "./quality-value-policy";
 import type { PricingTrialResult } from "./pricing-policy";
 import {
   assertSeriesItemPartChainEnabled,
 } from "./enabled-item-parts";
+
+export function modelFinalPullKgForSnapshot(
+  itemPartId: string | undefined,
+  finalPanelValues: Record<string, number | string>,
+): number | undefined {
+  const parameterKey = itemPartId ? structuralPullParameterKey(itemPartId) : undefined;
+  const value = parameterKey ? finalPanelValues[parameterKey] : undefined;
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
 
 function errors(issues: ValidationIssue[]): ValidationIssue[] {
   return issues.filter((issue) => {
@@ -96,6 +107,7 @@ export interface PublishModelInput {
   validationAcknowledgements?: ValidationAcknowledgement[];
   validationWaivers?: ValidationWaiver[];
   validationWaiverDecisions?: ValidationWaiverDecision[];
+  activeValidationWaiverPolicies?: WaiverPolicyVersion[];
   fiveAxisPreview?: ModelFiveAxisPreview;
   fiveAxisDefinition?: FiveAxisViewDefinition;
   /** @deprecated 仅 historical_import 可读取；新正式发布必须提供指纹绑定的确认记录。 */
@@ -280,6 +292,7 @@ export function publishConfigurationSnapshot(
         gate: "PUBLISH",
         acknowledgements: input.validationAcknowledgements,
         waivers: input.validationWaivers,
+        activeWaiverPolicies: input.activeValidationWaiverPolicies,
         at: input.publishedAt,
       });
     } catch (error) {
@@ -326,6 +339,10 @@ export function publishConfigurationSnapshot(
   }
 
   const governance = input.patchOffsetGovernance;
+  const modelFinalPullKg = modelFinalPullKgForSnapshot(
+    input.sku.projectionMatch.itemPartId,
+    input.finalPanelValues,
+  );
   const snapshotWithoutHash: Omit<ConfigurationSnapshot, "contentHash"> = {
     id:
       input.snapshotId ??
@@ -349,6 +366,9 @@ export function publishConfigurationSnapshot(
       patchValidationWaiverRefs: (governance.waivers ?? []).map((waiver) => waiver.waiverId).sort(),
     } : {}),
     finalPanelValues: structuredClone(input.finalPanelValues),
+    ...(modelFinalPullKg !== undefined
+      ? { modelFinalPullKg }
+      : {}),
     componentSelections: structuredClone(input.componentSelections),
     technologyIds: structuredClone(input.technologyIds),
     attributeAffixIds: structuredClone(input.attributeAffixIds),

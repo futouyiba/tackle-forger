@@ -182,6 +182,7 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     model,
     sku,
     series,
+    seriesSkus: state.skuDrawers,
     projection,
     finalPanelValues: oldSnapshot.finalPanelValues,
     componentSelections: oldSnapshot.componentSelections,

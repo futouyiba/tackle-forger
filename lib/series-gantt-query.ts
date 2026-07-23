@@ -18,6 +18,10 @@ import type {
   ValidationIssue,
 } from "./types";
 import { deterministicHash } from "./rule-kernel";
+import {
+  isProductItemPartEnabled,
+  seriesItemPartId,
+} from "./enabled-item-parts";
 
 export interface SeriesGanttQuery {
   text?: string;
@@ -52,8 +56,8 @@ export interface SeriesGanttAggregate {
   attention: AttentionState[];
   primary: PrimaryDisplayState;
   skuCount: number;
-  modelCountTotal?: number;
-  modelCountVisible: number;
+  modelCountTotal: number;
+  modelCountMatched: number;
   descendantStateCounts: Record<string, number>;
   hardBlockingCount: number;
   warningCount: number;
@@ -103,7 +107,6 @@ function collectSeriesContext(input: {
   skus: SkuDrawer[];
   models: PurchasableModel[];
   upgrades: UpgradeCandidate[];
-  modelCountTotal?: number;
 }) {
   const skus = input.skus.filter((sku) => sku.seriesId === input.series.id);
   const modelIds = new Set(skus.flatMap((sku) => sku.modelIds));
@@ -134,11 +137,57 @@ function collectSeriesContext(input: {
   };
 }
 
-export interface SeriesGanttVisibility {
-  seriesIds?: Iterable<string>;
-  skuIds?: Iterable<string>;
-  modelIds?: Iterable<string>;
-  discloseTotalModelCount?: boolean;
+function searchableText(values: Array<string | number | undefined>): string {
+  return values.filter((value) => value !== undefined).join(" ").toLocaleLowerCase("zh-CN");
+}
+
+function matchesSkuQuery(sku: SkuDrawer, query: SeriesGanttQuery): boolean {
+  if (!intersects(query.exactTargetWeightKg, [sku.targetWeightKg])) return false;
+  if (query.minTargetPullKg !== undefined && sku.targetWeightKg < query.minTargetPullKg) return false;
+  if (query.maxTargetPullKg !== undefined && sku.targetWeightKg > query.maxTargetPullKg) return false;
+  if (!intersects(query.issueCodes, sku.validationSummary.map((issue) => issue.code))) return false;
+  if (!intersects(query.issueSeverities, sku.validationSummary.map(issueSeverity))) return false;
+  return true;
+}
+
+function matchingModelsForQuery(input: {
+  query: SeriesGanttQuery;
+  series: SeriesDefinition;
+  skus: SkuDrawer[];
+  models: PurchasableModel[];
+  upgrades: UpgradeCandidate[];
+}): { models: PurchasableModel[]; textMatches: boolean; matchingSkus: SkuDrawer[] } {
+  const matchingSkus = input.skus.filter((sku) => matchesSkuQuery(sku, input.query));
+  const matchingSkuIds = new Set(matchingSkus.map((sku) => sku.id));
+  const text = input.query.text?.trim().toLocaleLowerCase("zh-CN");
+  const seriesTextMatches = !text || searchableText([
+    input.series.id,
+    input.series.name,
+    input.series.concept,
+  ]).includes(text);
+  const skuTextMatches = new Set(matchingSkus
+    .filter((sku) => !text || searchableText([
+      sku.id,
+      sku.targetWeightKg,
+      `${sku.targetWeightKg}kg`,
+      `${sku.targetWeightKg}kgf`,
+    ]).includes(text))
+    .map((sku) => sku.id));
+  const pendingUpgradeModelIds = new Set(input.upgrades
+    .filter((upgrade) => upgrade.status === "pending")
+    .map((upgrade) => upgrade.modelId));
+  const models = input.models.filter((model) => {
+    if (!matchingSkuIds.has(model.skuId)) return false;
+    if (input.query.hasUpgradeCandidate !== undefined
+      && pendingUpgradeModelIds.has(model.id) !== input.query.hasUpgradeCandidate) return false;
+    if (!text || seriesTextMatches || skuTextMatches.has(model.skuId)) return true;
+    return searchableText([model.id, model.name, model.modelVariantKey]).includes(text);
+  });
+  const textMatches = !text
+    || seriesTextMatches
+    || skuTextMatches.size > 0
+    || models.length > 0;
+  return { models, textMatches, matchingSkus };
 }
 
 export function querySeriesGantt(input: {
@@ -148,46 +197,47 @@ export function querySeriesGantt(input: {
   models: PurchasableModel[];
   itemTypes: ItemTypeProfile[];
   upgrades: UpgradeCandidate[];
-  visibility?: SeriesGanttVisibility;
 }): QueriedGanttSeriesBlock[] {
-  const visibleSeriesIds = input.visibility?.seriesIds ? new Set(input.visibility.seriesIds) : undefined;
-  const visibleSkuIds = input.visibility?.skuIds ? new Set(input.visibility.skuIds) : undefined;
-  const visibleModelIds = input.visibility?.modelIds ? new Set(input.visibility.modelIds) : undefined;
-  const visibleSeries = input.series.filter((series) => !visibleSeriesIds || visibleSeriesIds.has(series.id));
-  const visibleSkus = input.skus.filter((sku) =>
-    (!visibleSkuIds || visibleSkuIds.has(sku.id)) && visibleSeries.some((series) => series.id === sku.seriesId));
-  const visibleModels = input.models.filter((model) =>
-    (!visibleModelIds || visibleModelIds.has(model.id)) && visibleSkus.some((sku) => sku.id === model.skuId));
+  const productSeries = input.series.filter((series) =>
+    isProductItemPartEnabled(seriesItemPartId(series, input.skus)));
+  const productSkus = input.skus.filter((sku) =>
+    isProductItemPartEnabled(sku.projectionMatch.itemPartId)
+    && productSeries.some((series) =>
+      series.id === sku.seriesId
+      && seriesItemPartId(series, input.skus) === sku.projectionMatch.itemPartId));
+  const productSkuIds = new Set(productSkus.map((sku) => sku.id));
+  const productModels = input.models.filter((model) => productSkuIds.has(model.skuId));
+  const productModelIds = new Set(productModels.map((model) => model.id));
+  const productUpgrades = input.upgrades.filter((upgrade) => productModelIds.has(upgrade.modelId));
   const projectionById = new Map(
     buildSeriesGanttProjection({
-      series: visibleSeries,
-      skus: visibleSkus,
-      models: visibleModels,
+      series: productSeries,
+      skus: productSkus,
+      models: productModels,
     }).map((block) => [block.seriesId, block]),
   );
-  const typeById = new Map(input.itemTypes.map((type) => [type.id, type]));
-  const text = input.query.text?.trim().toLocaleLowerCase("zh-CN");
 
-  const result = visibleSeries.flatMap((series): QueriedGanttSeriesBlock[] => {
+  const result = productSeries.flatMap((series): QueriedGanttSeriesBlock[] => {
     const block = projectionById.get(series.id);
     if (!block) return [];
     const context = collectSeriesContext({
       series,
-      skus: visibleSkus,
-      models: visibleModels,
-      upgrades: input.upgrades.filter((upgrade) => !visibleModelIds || visibleModelIds.has(upgrade.modelId)),
-      modelCountTotal: input.visibility?.discloseTotalModelCount
-        ? input.models.filter((model) => input.skus.some((sku) => sku.seriesId === series.id && sku.modelIds.includes(model.id))).length
-        : undefined,
+      skus: productSkus,
+      models: productModels,
+      upgrades: productUpgrades,
+    });
+    const matched = matchingModelsForQuery({
+      query: input.query,
+      series,
+      skus: context.skus,
+      models: context.models,
+      upgrades: context.pendingUpgrades,
     });
     const issueCodes = [...new Set(context.issues.map((issue) => issue.code))].sort();
-    const typePartIds = series.itemPartId
-      ? [series.itemPartId]
-      : typeById.get(series.typeId)?.itemPartIds ?? [];
-    if (text && ![series.id, series.name, series.concept]
-      .join(" ")
-      .toLocaleLowerCase("zh-CN")
-      .includes(text)) return [];
+    const typePartIds = [seriesItemPartId(series, input.skus)].filter(
+      (itemPartId): itemPartId is string => Boolean(itemPartId),
+    );
+    if (!matched.textMatches) return [];
     if (!intersects(input.query.collectionIds, series.collectionId ? [series.collectionId] : [])) return [];
     if (!intersects(input.query.methodIds, [series.fishingMethodId])) return [];
     if (!intersects(input.query.typeIds, [series.typeId])) return [];
@@ -197,12 +247,13 @@ export function querySeriesGantt(input: {
     if (!intersects(input.query.lifecycle, [series.status])) return [];
     if (!intersects(input.query.lifecycleStates, [context.state.lifecycle])) return [];
     if (!intersects(input.query.attention ?? input.query.attentionStates, context.state.attention)) return [];
-    if (!intersects(input.query.issueCodes, issueCodes)) return [];
-    if (!intersects(input.query.issueSeverities, context.issues.map(issueSeverity))) return [];
+    if ((input.query.issueCodes?.length || input.query.issueSeverities?.length)
+      && matched.matchingSkus.length === 0) return [];
     if (!matchesBoolean(input.query.hasUpgradeCandidate, context.pendingUpgrades.length > 0)) return [];
-    if (!intersects(input.query.exactTargetWeightKg, context.skus.map((sku) => sku.targetWeightKg))) return [];
-    if (input.query.minTargetPullKg !== undefined && !context.skus.some((sku) => sku.targetWeightKg >= input.query.minTargetPullKg!)) return [];
-    if (input.query.maxTargetPullKg !== undefined && !context.skus.some((sku) => sku.targetWeightKg <= input.query.maxTargetPullKg!)) return [];
+    if ((input.query.exactTargetWeightKg?.length
+      || input.query.minTargetPullKg !== undefined
+      || input.query.maxTargetPullKg !== undefined)
+      && matched.matchingSkus.length === 0) return [];
     if (!intersects(input.query.ruleSetVersions, context.ruleSetVersions)) return [];
     if (input.query.ruleSetVersion && !context.ruleSetVersions.includes(input.query.ruleSetVersion)) return [];
     return [{
@@ -216,8 +267,8 @@ export function querySeriesGantt(input: {
         attention: context.state.attention,
         primary: context.state.primary,
         skuCount: context.skus.length,
-        ...(input.visibility?.discloseTotalModelCount ? { modelCountTotal: input.models.filter((model) => input.skus.some((sku) => sku.seriesId === series.id && sku.modelIds.includes(model.id))).length } : {}),
-        modelCountVisible: context.models.length,
+        modelCountTotal: context.models.length,
+        modelCountMatched: matched.models.length,
         descendantStateCounts: context.descendantStateCounts,
         hardBlockingCount: context.issues.filter((issue) => issue.level === "error").length,
         warningCount: context.issues.filter((issue) => issue.level === "warning").length,
@@ -263,7 +314,7 @@ export function querySeriesGantt(input: {
 export interface SeriesGanttPage {
   items: QueriedGanttSeriesBlock[];
   nextCursor?: string;
-  totalVisible: number;
+  totalMatched: number;
   pageSize: number;
 }
 
@@ -295,7 +346,7 @@ export function paginateSeriesGantt(input: {
   const nextOffset = offset + items.length;
   return {
     items,
-    totalVisible: input.items.length,
+    totalMatched: input.items.length,
     pageSize,
     ...(nextOffset < input.items.length
       ? { nextCursor: `gantt.${input.workspaceRevision}.${nextOffset}.${hash}` }

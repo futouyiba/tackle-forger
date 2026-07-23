@@ -354,11 +354,30 @@ export function weightTemplateDraftFromCanonicalRuleDraft(input: { sourceRevisio
     return cells;
   };
   const issueSourceCell = (issue: CanonicalRuleSourceDraft["issues"][number]) => {
-    const cells = sourceCellsFor(issue.row ?? 0);
+    const sourceRow = issue.row ?? 0;
+    const cells = sourceCellsFor(sourceRow);
+    const block = blockFor(sourceRow);
+    const row = sourceRow > 0 ? input.weightValues?.[sourceRow - 1] ?? [] : [];
+    const valueFor = (...labels: string[]) => {
+      const index = block?.headers.findIndex((header) => labels.some((label) => header === label || header.includes(label))) ?? -1;
+      return index >= 0 ? row[index] : undefined;
+    };
+    const finite = (value: unknown) => {
+      if (value === null || value === undefined || text(value) === "") return undefined;
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : undefined;
+    };
+    const min = finite(valueFor("最小拉力", "鱼重下限kg"));
+    const max = finite(valueFor("最大拉力", "鱼重上限kg"));
+    const invalidRangeCell = min === undefined
+      ? cells.fishMinKg
+      : max === undefined
+        ? cells.fishMaxKg
+        : `${cells.fishMinKg}:${cells.fishMaxKg}`;
     const cell = issue.code.includes("ID_") ? cells.machineId
-      : issue.code.includes("ROW_INVALID") ? (cells.fishMinKg ?? cells.fishMaxKg)
+      : issue.code.includes("ROW_INVALID") ? invalidRangeCell
       : cells.machineId ?? cells.fishMinKg ?? `A${issue.row ?? 1}`;
-    return { sheetId: "d6e928" as const, cell };
+    return { sheetId: "d6e928" as const, cell: cell ?? `A${sourceRow || 1}` };
   };
   for (const issue of input.canonicalRuleDraft.issues) {
     if (issue.sheetId !== WEIGHT_TEMPLATE_SHEET_ID || !issue.code.startsWith("WEIGHT_TEMPLATE_")) continue;

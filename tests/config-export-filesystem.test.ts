@@ -193,6 +193,45 @@ test("预览后正式文件变化触发 hash 冲突且不覆盖外部内容", as
   }
 });
 
+test("预览后暂存文件变化在替换前阻断且不覆盖正式文件", async () => {
+  const current = await fixture();
+  try {
+    const snapshot = createSeedState().configurationSnapshots[0]!;
+    const target = path.join(current.workbookRoot, "tackle.xlsx");
+    const before = await readFile(target);
+    const preview = await previewFilesystemExport({
+      packageId: "package-staged-tampered",
+      profile: current.profile,
+      mapping: mapping(),
+      snapshot,
+    });
+    assert.equal(preview.status, "ready");
+    const operation = preview.operations[0]!;
+    await writeFile(
+      operation.stagedPath,
+      new Uint8Array([...(await readFile(operation.stagedPath)), 0]),
+    );
+
+    const result = await commitFilesystemExport({
+      preview,
+      snapshot,
+      profile: current.profile,
+      confirmationProfileId: current.profile.profileId,
+      idempotencyKey: "commit-staged-tampered",
+      canCommit: true,
+      formalAuthorization: FORMAL_AUTHORIZATION,
+      formalAuthorizationVerifier: FORMAL_VERIFIER,
+    });
+
+    assert.equal(result.status, "failed");
+    assert.match(result.issues[0]?.message ?? "", /stagedHash 不一致/);
+    assert.deepEqual(await readFile(target), before);
+  } finally {
+    assert.ok(current.root.startsWith(os.tmpdir()));
+    await rm(current.root, { recursive: true, force: true });
+  }
+});
+
 test("Profile 相对路径越过允许根目录时在读取前阻止", async () => {
   const current = await fixture();
   try {

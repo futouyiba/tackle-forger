@@ -341,11 +341,19 @@ export async function previewFilesystemExport(input: {
   return preview;
 }
 
-async function atomicReplace(sourcePath: string, targetPath: string) {
+async function atomicReplace(
+  sourcePath: string,
+  targetPath: string,
+  expectedSourceHash?: string,
+) {
   const token = randomUUID();
   const pending = `${targetPath}.tackle-forger-new-${token}`;
   const displaced = `${targetPath}.tackle-forger-old-${token}`;
   await copyFile(sourcePath, pending);
+  if (expectedSourceHash && await hashFile(pending) !== expectedSourceHash) {
+    await rm(pending, { force: true });
+    throw new Error("暂存文件内容与已验证 stagedHash 不一致，拒绝替换正式文件。");
+  }
   await rename(targetPath, displaced);
   try {
     await rename(pending, targetPath);
@@ -478,7 +486,15 @@ export async function commitFilesystemExport(input: {
       return backupPath;
     },
     async replaceFile(stagedPath, targetPath) {
-      await atomicReplace(stagedPath, targetPath);
+      const operation = input.preview.operations.find(
+        (candidate) =>
+          candidate.stagedPath === stagedPath
+          && candidate.targetPath === targetPath,
+      );
+      if (!operation) {
+        throw new Error("待替换文件不属于已验证的暂存操作。");
+      }
+      await atomicReplace(stagedPath, targetPath, operation.stagedHash);
       return hashFile(targetPath);
     },
     async restoreBackup(backupPath, targetPath) {

@@ -5,18 +5,22 @@ import {
   hashCandidateSemanticInput,
   hashCandidateSet,
   hashCanonicalJson,
+  hashProjectionReferenceSet,
   hashVertexSet,
 } from "./five-axis-hash";
 import type {
   FiveAxisDefinitionDisposition,
   FiveAxisDefinitionDispositionCatalogRevision,
   FiveAxisEntityInput,
+  FiveAxisProjectionReferenceAnchor,
+  FiveAxisProjectionReferenceEvidence,
   FiveAxisSeries,
   FiveAxisSeriesPoint,
   FiveAxisVertexCandidateSource,
   FiveAxisVertexGroupKey,
   FiveAxisVertexSet,
   FiveAxisViewDefinition,
+  ModelFiveAxisPreview,
   StoredFiveAxisViewDefinition,
 } from "./types";
 
@@ -87,6 +91,23 @@ export function hashFiveAxisViewDefinition(
   definition: Omit<FiveAxisViewDefinition, "definitionHash"> | FiveAxisViewDefinition,
 ): string {
   return hashCanonicalJson(definitionContent(definition) as never);
+}
+
+export function hashFormalFinalPanelValues(
+  values: Record<string, number | string>,
+): string {
+  return hashCanonicalJson({
+    schemaVersion: "five-axis-hash-input/v1",
+    kind: "final_panel",
+    values: Object.fromEntries(
+      Object.entries(values).map(([key, value]) => [
+        key,
+        typeof value === "number"
+          ? canonicalFiniteNumber(value, `finalPanelValues.${key}`)
+          : value,
+      ]),
+    ),
+  } as never);
 }
 
 export function createFormalFiveAxisViewDefinition(input?: {
@@ -283,7 +304,35 @@ export function createFiveAxisDispositionCatalogRevision(input: {
   const entries = sortDispositionEntries([...byIdentity.values()].map((definition) => {
     const formal = targetFormal?.definitionId === definition.definitionId
       && targetFormal.definitionVersion === definition.version;
+    const previousEntry = current?.entries.find((entry) =>
+      entry.definitionId === definition.definitionId
+      && entry.definitionVersion === definition.version);
+    const newlySuperseded = Boolean(
+      targetFormal
+      && inheritedFormal
+      && inheritedFormal.definitionId === definition.definitionId
+      && inheritedFormal.definitionVersion === definition.version
+      && !formal,
+    );
     if (formal) assertFormalFiveAxisViewDefinition(definition);
+    const superseded = newlySuperseded
+      ? {
+          definitionId: definition.definitionId,
+          definitionVersion: definition.version,
+          definitionHash: definition.definitionHash,
+          effectiveUse: "SUPERSEDED" as const,
+          semanticContractVersion: FIVE_AXIS_SEMANTIC_CONTRACT_VERSION,
+          supersededByDefinitionId: targetFormal!.definitionId,
+          supersededByDefinitionVersion: targetFormal!.definitionVersion,
+          reasonCode: "OPEN005_FORMAL_SUPERSEDED",
+        }
+      : previousEntry?.effectiveUse === "SUPERSEDED"
+        ? {
+            ...structuredClone(previousEntry),
+            definitionHash: definition.definitionHash,
+          }
+        : null;
+    if (superseded) return superseded;
     return {
       definitionId: definition.definitionId,
       definitionVersion: definition.version,
@@ -495,6 +544,29 @@ export function createFormalFiveAxisVertexSet(input: {
     if (calculated.hash !== source.semanticInputHash) {
       throw new Error("FIVE_AXIS_CANDIDATE_INTEGRITY_ERROR：semanticInputHash 不匹配。");
     }
+    for (const axis of input.definition.axes) {
+      if (!axis.applicablePartIds.includes(source.candidateSemanticKey.itemPartId)) {
+        continue;
+      }
+      const directInputs = source.directInputs.filter((entry) =>
+        entry.axisId === axis.axisId);
+      if (
+        directInputs.length !== 1
+        || !axis.sourceParameterKeys.includes(directInputs[0].parameterKey)
+      ) {
+        throw new Error(
+          `FIVE_AXIS_CANDIDATE_INCOMPLETE：${source.candidateSemanticKey.componentEntityId}`
+          + ` 缺少或重复 ${axis.axisId} 的合法 direct 输入。`,
+        );
+      }
+      const rawValue = canonicalDecimal(directInputs[0].rawValue);
+      if (rawValue === "0" || rawValue.startsWith("-")) {
+        throw new Error(
+          `FIVE_AXIS_CANDIDATE_INCOMPLETE：${source.candidateSemanticKey.componentEntityId}`
+          + ` 的 ${axis.axisId} 必须为大于 0 的 CanonicalDecimal。`,
+        );
+      }
+    }
     return structuredClone(source);
   });
   const candidateSetHash = hashCandidateSet({
@@ -698,4 +770,461 @@ export function calculateFormalFiveAxisComponentSeries(input: {
     fishWeightGradeId: input.vertexSet.weightBandId,
     points,
   };
+}
+
+function canonicalFiniteNumber(value: number, field: string): string {
+  if (!Number.isFinite(value)) {
+    throw new Error(`FIVE_AXIS_FORMAL_PREVIEW_INVALID：${field} 必须是有限数值。`);
+  }
+  return canonicalDecimal(String(Object.is(value, -0) ? 0 : value));
+}
+
+function formalSeriesHashInput(series: FiveAxisSeries): object {
+  return {
+    entityId: series.entityId,
+    itemPartId: series.itemPartId,
+    modelFinalPullKg: series.modelFinalPullKg === undefined
+      ? null
+      : canonicalFiniteNumber(series.modelFinalPullKg, "series.modelFinalPullKg"),
+    weightBandId: series.weightBandId ?? null,
+    comparisonOrder: series.comparisonOrder ?? null,
+    points: series.points.map((point) => ({
+      axisId: point.axisId,
+      axisDefinitionVersion: point.axisDefinitionVersion,
+      source: point.source,
+      rawValue: point.rawValue === null
+        ? null
+        : canonicalFiniteNumber(point.rawValue, `${point.axisId}.rawValue`),
+      vertexValue: point.vertexValue === null
+        ? null
+        : canonicalFiniteNumber(point.vertexValue, `${point.axisId}.vertexValue`),
+      componentRatio: point.unclampedRatio === null
+        ? null
+        : canonicalFiniteNumber(point.unclampedRatio, `${point.axisId}.componentRatio`),
+      comparisonScore: point.comparisonScore === null
+        ? null
+        : canonicalFiniteNumber(point.comparisonScore, `${point.axisId}.comparisonScore`),
+      officialDisplayScore: point.officialDisplayScore,
+    })),
+  };
+}
+
+export function hashFormalFiveAxisPreviewInput(
+  preview: ModelFiveAxisPreview,
+): string {
+  if (
+    preview.modelFinalPullKg === undefined
+    || !preview.weightBandId
+    || !preview.weightBandPolicyVersion
+    || !preview.hashInputSchemaVersion
+    || !preview.candidateSources
+    || !preview.candidateSetHash
+    || !preview.candidateEvidenceHash
+    || !preview.componentSeries
+    || !preview.tackleFitComparison.projectionReferenceAnchor
+    || !preview.tackleFitComparison.projectionReferenceSetHash
+    || !preview.tackleFitComparison.projectionReferences
+  ) {
+    throw new Error("FIVE_AXIS_FORMAL_PREVIEW_INVALID：正式预览证据不完整。");
+  }
+  return hashCanonicalJson({
+    schemaVersion: preview.hashInputSchemaVersion,
+    kind: "formal_model_preview",
+    modelId: preview.modelId,
+    modelFinalPullKg: canonicalFiniteNumber(
+      preview.modelFinalPullKg,
+      "modelFinalPullKg",
+    ),
+    vertexGroupKey: {
+      weightBandId: preview.weightBandId,
+      weightBandPolicyVersion: preview.weightBandPolicyVersion,
+      fiveAxisDefinitionId: preview.fiveAxisDefinitionId,
+      fiveAxisDefinitionVersion: preview.fiveAxisDefinitionVersion,
+      fiveAxisRuleVersion: preview.fiveAxisRuleVersion,
+    },
+    fiveAxisDefinitionRevision: preview.fiveAxisDefinitionRevision ?? null,
+    fiveAxisDefinitionHash: preview.fiveAxisDefinitionHash ?? null,
+    sourceRevision: preview.sourceRevision,
+    vertexSetHash: preview.vertexSetHash,
+    candidateSetHash: preview.candidateSetHash,
+    candidateEvidenceHash: preview.candidateEvidenceHash,
+    candidateSources: preview.candidateSources,
+    componentSeries: preview.componentSeries.map(formalSeriesHashInput),
+    projectionReferenceAnchor:
+      preview.tackleFitComparison.projectionReferenceAnchor,
+    projectionReferenceSetHash:
+      preview.tackleFitComparison.projectionReferenceSetHash,
+    projectionReferences:
+      preview.tackleFitComparison.projectionReferences,
+  } as never);
+}
+
+function almostEqual(left: number | null, right: number, tolerance = 1e-9): boolean {
+  return left !== null
+    && Number.isFinite(left)
+    && Math.abs(left - right) <= tolerance * Math.max(1, Math.abs(right));
+}
+
+function assertFormalSeriesPoint(input: {
+  definition: FiveAxisViewDefinition;
+  vertexSet: FiveAxisVertexSet;
+  series: FiveAxisSeries;
+  point: FiveAxisSeriesPoint;
+  axisIndex: number;
+  referenceRod: FiveAxisSeries;
+}): void {
+  const axis = input.definition.axes[input.axisIndex];
+  const expectedVersion = `${input.definition.definitionId}@${input.definition.version}`;
+  if (
+    input.point.axisId !== axis.axisId
+    || input.point.axisDefinitionVersion !== expectedVersion
+  ) {
+    throw new Error("FIVE_AXIS_FORMAL_PREVIEW_INVALID：逐部件曲线的轴身份或顺序不匹配。");
+  }
+  const directlyApplicable = axis.applicablePartIds.includes(input.series.itemPartId);
+  if (!directlyApplicable) {
+    const referencePoint = input.referenceRod.points[input.axisIndex];
+    if (
+      axis.axisId !== "cast"
+      || input.series.itemPartId === "part:rod"
+      || input.point.source !== "context_inherited"
+      || !referencePoint
+      || referencePoint.source !== "direct"
+      || input.point.rawValue !== referencePoint.rawValue
+      || input.point.vertexValue !== referencePoint.vertexValue
+      || input.point.unclampedRatio !== referencePoint.unclampedRatio
+      || input.point.comparisonScore !== referencePoint.comparisonScore
+      || input.point.officialDisplayScore !== referencePoint.officialDisplayScore
+      || input.point.participatesInRanking
+    ) {
+      throw new Error("FIVE_AXIS_FORMAL_PREVIEW_INVALID：继承抛投证据与参考竿不一致。");
+    }
+    return;
+  }
+  const vertex = input.vertexSet.vertices[input.axisIndex];
+  const rawValue = input.point.rawValue;
+  const vertexValue = Number(vertex?.vertexRawValue);
+  if (
+    input.point.source !== "direct"
+    || !input.point.participatesInRanking
+    || rawValue === null
+    || !Number.isFinite(rawValue)
+    || rawValue <= 0
+    || !Number.isFinite(vertexValue)
+    || vertexValue <= 0
+    || input.point.vertexValue !== vertexValue
+  ) {
+    throw new Error("FIVE_AXIS_FORMAL_PREVIEW_INVALID：正式 direct 点缺少合法原始值或顶点。");
+  }
+  const ratio = axis.direction === "lower_better"
+    ? vertexValue / rawValue
+    : rawValue / vertexValue;
+  const comparisonScore = ratio * 100;
+  if (
+    !almostEqual(input.point.unclampedRatio, ratio)
+    || !almostEqual(input.point.normalizedRatio, ratio)
+    || !almostEqual(input.point.comparisonScore, comparisonScore)
+    || input.point.officialDisplayScore
+      !== Math.round(Math.min(100, comparisonScore))
+    || !almostEqual(input.point.overflow, Math.max(0, comparisonScore - 100))
+  ) {
+    throw new Error("FIVE_AXIS_FORMAL_PREVIEW_INVALID：正式点的比例或分值证据不可重放。");
+  }
+}
+
+export function assertFormalModelFiveAxisPreview(input: {
+  definition: FiveAxisViewDefinition;
+  preview: ModelFiveAxisPreview;
+  expectedModelId: string;
+  expectedModelRevisionId: string;
+  expectedSnapshotId: string;
+  expectedSeriesId: string;
+  expectedSkuId: string;
+  expectedSkuRevisionId: string;
+  expectedFinalPanelHash: string;
+  expectedComponentSelections: Array<{ itemPartId: string; componentId: string }>;
+  expectedModelFinalPullKg: number;
+}): FiveAxisVertexSet {
+  assertFormalFiveAxisViewDefinition(input.definition);
+  const preview = input.preview;
+  if (
+    preview.modelId !== input.expectedModelId
+    || preview.modelFinalPullKg !== input.expectedModelFinalPullKg
+    || preview.weightBandPolicyVersion !== input.definition.weightBandPolicyVersion
+    || preview.hashInputSchemaVersion !== input.definition.hashInputSchemaVersion
+    || !preview.weightBandId
+    || preview.fiveAxisDefinitionId !== input.definition.definitionId
+    || preview.fiveAxisDefinitionVersion !== input.definition.version
+    || preview.fiveAxisDefinitionRevision !== input.definition.revision
+    || preview.fiveAxisDefinitionHash !== input.definition.definitionHash
+    || preview.fiveAxisRuleVersion !== input.definition.fiveAxisRuleVersion
+    || preview.sourceRevision !== input.definition.sourceRevision
+    || preview.metrics.length !== 0
+    || !preview.candidateSources?.length
+    || !preview.candidateSetHash
+    || !preview.candidateEvidenceHash
+    || !preview.componentSeries
+  ) {
+    throw new Error("FIVE_AXIS_FORMAL_PREVIEW_INVALID：预览不是完整 OPEN-005 正式结果。");
+  }
+  const groupKey: FiveAxisVertexGroupKey = {
+    weightBandId: preview.weightBandId,
+    weightBandPolicyVersion: preview.weightBandPolicyVersion,
+    fiveAxisDefinitionId: preview.fiveAxisDefinitionId,
+    fiveAxisDefinitionVersion: preview.fiveAxisDefinitionVersion,
+    fiveAxisRuleVersion: preview.fiveAxisRuleVersion,
+  };
+  const vertexSet = createFormalFiveAxisVertexSet({
+    definition: input.definition,
+    groupKey,
+    candidateSources: preview.candidateSources,
+  });
+  if (
+    vertexSet.vertexSetHash !== preview.vertexSetHash
+    || vertexSet.candidateSetHash !== preview.candidateSetHash
+    || vertexSet.candidateEvidenceHash !== preview.candidateEvidenceHash
+  ) {
+    throw new Error("FIVE_AXIS_FORMAL_PREVIEW_INVALID：候选或顶点哈希不可重放。");
+  }
+
+  const expectedParts = ["part:rod", "part:reel", "part:line"];
+  if (
+    preview.componentSeries.length !== expectedParts.length
+    || preview.componentSeries.some((series, index) =>
+      series.itemPartId !== expectedParts[index]
+      || series.weightBandId !== preview.weightBandId
+      || series.fishWeightGradeId !== preview.weightBandId
+      || series.modelFinalPullKg !== preview.modelFinalPullKg
+      || series.comparisonOrder !== index)
+  ) {
+    throw new Error("FIVE_AXIS_FORMAL_PREVIEW_INVALID：逐部件曲线必须按竿、轮、线冻结。");
+  }
+  const expectedSelections = new Map(
+    input.expectedComponentSelections.map((selection) =>
+      [selection.itemPartId, selection.componentId] as const),
+  );
+  if (
+    expectedSelections.size !== expectedParts.length
+    || expectedParts.some((partId, index) =>
+      expectedSelections.get(partId) !== preview.componentSeries![index].entityId)
+  ) {
+    throw new Error("FIVE_AXIS_FORMAL_PREVIEW_INVALID：逐部件曲线与 Model 组件选择不一致。");
+  }
+  const referenceRod = preview.componentSeries[0];
+  for (const series of preview.componentSeries) {
+    if (series.points.length !== input.definition.axes.length) {
+      throw new Error("FIVE_AXIS_FORMAL_PREVIEW_INVALID：逐部件曲线缺少正式轴。");
+    }
+    series.points.forEach((point, axisIndex) =>
+      assertFormalSeriesPoint({
+        definition: input.definition,
+        vertexSet,
+        series,
+        point,
+        axisIndex,
+        referenceRod,
+      }));
+  }
+
+  const currentSources = preview.candidateSources.filter((source) =>
+    source.candidateSemanticKey.modelId === input.expectedModelId);
+  if (
+    currentSources.length !== expectedParts.length
+    || currentSources.some((source) => {
+      const series = preview.componentSeries!.find((entry) =>
+        entry.entityId === source.candidateSemanticKey.componentEntityId
+        && entry.itemPartId === source.candidateSemanticKey.itemPartId);
+      return !series
+        || source.snapshotId !== input.expectedSnapshotId
+        || source.modelRevisionId !== input.expectedModelRevisionId
+        || source.finalPanelHash !== input.expectedFinalPanelHash
+        || canonicalDecimal(source.modelFinalPullKg)
+          !== canonicalDecimal(String(input.expectedModelFinalPullKg))
+        || source.directInputs.some((directInput) => {
+          const point = series.points.find((entry) =>
+            entry.axisId === directInput.axisId);
+          const axis = input.definition.axes.find((entry) =>
+            entry.axisId === directInput.axisId);
+          return Boolean(
+            axis?.applicablePartIds.includes(series.itemPartId)
+            && (!point
+              || point.source !== "direct"
+              || canonicalDecimal(directInput.rawValue)
+                !== canonicalDecimal(String(point.rawValue))),
+          );
+        });
+    })
+  ) {
+    throw new Error("FIVE_AXIS_FORMAL_PREVIEW_INVALID：当前 Model 的冻结候选证据不一致。");
+  }
+
+  const comparison = preview.tackleFitComparison;
+  const anchor = comparison.projectionReferenceAnchor;
+  const references = comparison.projectionReferences;
+  if (
+    comparison.mode !== "tackle_fit"
+    || comparison.referenceFishWeightGradeId !== preview.weightBandId
+    || comparison.weightBandPolicyVersion !== preview.weightBandPolicyVersion
+    || comparison.fiveAxisDefinitionId !== preview.fiveAxisDefinitionId
+    || comparison.fiveAxisDefinitionVersion !== preview.fiveAxisDefinitionVersion
+    || comparison.fiveAxisRuleVersion !== preview.fiveAxisRuleVersion
+    || comparison.vertexSetHash !== preview.vertexSetHash
+    || comparison.referenceRodEntityId !== referenceRod.entityId
+    || JSON.stringify(comparison.series) !== JSON.stringify(preview.componentSeries)
+    || comparison.validationIssues.some((issue) => issue.level === "error")
+    || !anchor
+    || anchor.baselineSnapshotId !== input.expectedSnapshotId
+    || anchor.seriesId !== input.expectedSeriesId
+    || anchor.skuId !== input.expectedSkuId
+    || anchor.skuRevisionId !== input.expectedSkuRevisionId
+    || anchor.selectorVersion !== FIVE_AXIS_PROJECTION_REFERENCE_SELECTOR_VERSION
+    || !references
+    || references.some((reference) =>
+      reference.state === "error" || reference.state === "not_selected")
+  ) {
+    throw new Error("FIVE_AXIS_FORMAL_PREVIEW_INVALID：钓组或投影引用证据不完整。");
+  }
+  const projectionReferenceSetHash = hashProjectionReferenceSet({
+    selectorVersion: anchor.selectorVersion,
+    anchor: {
+      baselineSnapshotId: anchor.baselineSnapshotId,
+      seriesId: anchor.seriesId,
+      skuId: anchor.skuId,
+      skuRevisionId: anchor.skuRevisionId,
+    },
+    references: references as Array<{
+      itemPartId: string;
+      state: "available" | "missing" | "error";
+      projectionMatchId: string | null;
+      projectionMatchRevisionId: string | null;
+      projectionId: string | null;
+      projectionRevisionId: string | null;
+    }>,
+  });
+  if (
+    comparison.projectionReferenceSetHash !== projectionReferenceSetHash
+    || preview.inputHash !== hashFormalFiveAxisPreviewInput(preview)
+  ) {
+    throw new Error("FIVE_AXIS_FORMAL_PREVIEW_INVALID：投影引用或预览 inputHash 不匹配。");
+  }
+  return vertexSet;
+}
+
+function buildAxisSummaries(
+  definition: FiveAxisViewDefinition,
+  series: FiveAxisSeries[],
+) {
+  return definition.axes.map((axis) => {
+    const direct = series.flatMap((entry) => {
+      const point = entry.points.find((candidate) => candidate.axisId === axis.axisId);
+      return point?.source === "direct" && point.comparisonScore !== null
+        ? [{ entityId: entry.entityId, score: point.comparisonScore }]
+        : [];
+    });
+    const scores = direct.map((entry) => entry.score);
+    const strongest = scores.length ? Math.max(...scores) : null;
+    const weakest = scores.length ? Math.min(...scores) : null;
+    return {
+      axisId: axis.axisId,
+      strongestEntityIds: strongest === null
+        ? []
+        : direct.filter((entry) => entry.score === strongest).map((entry) => entry.entityId),
+      weakestEntityIds: weakest === null
+        ? []
+        : direct.filter((entry) => entry.score === weakest).map((entry) => entry.entityId),
+      spread: scores.length < 2 || strongest === null || weakest === null
+        ? null
+        : (strongest - weakest) / 100,
+    };
+  });
+}
+
+export function createFormalModelFiveAxisPreview(input: {
+  definition: FiveAxisViewDefinition;
+  vertexSet: FiveAxisVertexSet;
+  modelId: string;
+  modelRevisionId: string;
+  modelFinalPullKg: number;
+  finalPanelHash: string;
+  componentSeries: FiveAxisSeries[];
+  projectionReferenceAnchor: FiveAxisProjectionReferenceAnchor;
+  projectionReferences: Array<
+    FiveAxisProjectionReferenceEvidence & {
+      state: "available" | "missing" | "error";
+    }
+  >;
+}): ModelFiveAxisPreview {
+  const componentSeries = input.componentSeries.map((series, comparisonOrder) => ({
+    ...structuredClone(series),
+    fishWeightGradeId: input.vertexSet.weightBandId,
+    modelFinalPullKg: input.modelFinalPullKg,
+    weightBandId: input.vertexSet.weightBandId,
+    comparisonOrder,
+  }));
+  const projectionReferenceSetHash = hashProjectionReferenceSet({
+    selectorVersion: input.projectionReferenceAnchor.selectorVersion,
+    anchor: {
+      baselineSnapshotId: input.projectionReferenceAnchor.baselineSnapshotId,
+      seriesId: input.projectionReferenceAnchor.seriesId,
+      skuId: input.projectionReferenceAnchor.skuId,
+      skuRevisionId: input.projectionReferenceAnchor.skuRevisionId,
+    },
+    references: input.projectionReferences,
+  });
+  const preview: ModelFiveAxisPreview = {
+    modelId: input.modelId,
+    modelFinalPullKg: input.modelFinalPullKg,
+    weightBandId: input.vertexSet.weightBandId,
+    weightBandPolicyVersion: input.vertexSet.weightBandPolicyVersion,
+    hashInputSchemaVersion: input.vertexSet.hashInputSchemaVersion,
+    fishWeightGradeId: input.vertexSet.weightBandId,
+    fiveAxisDefinitionId: input.definition.definitionId,
+    fiveAxisDefinitionVersion: input.definition.version,
+    fiveAxisDefinitionRevision: input.definition.revision,
+    fiveAxisDefinitionHash: input.definition.definitionHash,
+    fiveAxisRuleVersion: input.definition.fiveAxisRuleVersion,
+    vertexSetHash: input.vertexSet.vertexSetHash,
+    sourceRevision: input.definition.sourceRevision,
+    metrics: [],
+    candidateSources: structuredClone(input.vertexSet.candidateSources),
+    candidateSetHash: input.vertexSet.candidateSetHash,
+    candidateEvidenceHash: input.vertexSet.candidateEvidenceHash,
+    componentSeries,
+    tackleFitComparison: {
+      mode: "tackle_fit",
+      referenceFishWeightGradeId: input.vertexSet.weightBandId,
+      weightBandPolicyVersion: input.vertexSet.weightBandPolicyVersion,
+      fiveAxisDefinitionId: input.definition.definitionId,
+      fiveAxisDefinitionVersion: input.definition.version,
+      fiveAxisRuleVersion: input.definition.fiveAxisRuleVersion,
+      vertexSetHash: input.vertexSet.vertexSetHash,
+      scaleMode: "comparison_expanded",
+      referenceRodEntityId: componentSeries[0]?.entityId ?? null,
+      projectionReferenceAnchor: structuredClone(input.projectionReferenceAnchor),
+      projectionReferenceSetHash,
+      projectionReferences: structuredClone(input.projectionReferences),
+      series: structuredClone(componentSeries),
+      axisSummaries: buildAxisSummaries(input.definition, componentSeries),
+      validationIssues: [],
+    },
+    inputHash: "",
+  };
+  preview.inputHash = hashFormalFiveAxisPreviewInput(preview);
+  assertFormalModelFiveAxisPreview({
+    definition: input.definition,
+    preview,
+    expectedModelId: input.modelId,
+    expectedModelRevisionId: input.modelRevisionId,
+    expectedSnapshotId: input.projectionReferenceAnchor.baselineSnapshotId,
+    expectedSeriesId: input.projectionReferenceAnchor.seriesId,
+    expectedSkuId: input.projectionReferenceAnchor.skuId,
+    expectedSkuRevisionId: input.projectionReferenceAnchor.skuRevisionId,
+    expectedFinalPanelHash: input.finalPanelHash,
+    expectedComponentSelections: componentSeries.map((series) => ({
+      itemPartId: series.itemPartId,
+      componentId: series.entityId,
+    })),
+    expectedModelFinalPullKg: input.modelFinalPullKg,
+  });
+  return preview;
 }

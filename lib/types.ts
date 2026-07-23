@@ -1084,6 +1084,9 @@ export interface FiveAxisSeries {
   itemPartId: string;
   label: string;
   fishWeightGradeId: string;
+  modelFinalPullKg?: number;
+  weightBandId?: string;
+  comparisonOrder?: number;
   points: FiveAxisSeriesPoint[];
 }
 
@@ -1102,9 +1105,31 @@ export interface FiveAxisComparisonView {
   fiveAxisRuleVersion: string;
   vertexSetHash: string;
   scaleMode: "official_locked" | "comparison_expanded";
+  weightBandPolicyVersion?: string;
+  referenceRodEntityId?: string | null;
+  projectionReferenceAnchor?: FiveAxisProjectionReferenceAnchor | null;
+  projectionReferenceSetHash?: string | null;
+  projectionReferences?: FiveAxisProjectionReferenceEvidence[];
   series: FiveAxisSeries[];
   axisSummaries: FiveAxisAxisSummary[];
   validationIssues: ValidationIssue[];
+}
+
+export interface FiveAxisProjectionReferenceAnchor {
+  baselineSnapshotId: string;
+  seriesId: string;
+  skuId: string;
+  skuRevisionId: string;
+  selectorVersion: FiveAxisProjectionReferenceSelectorVersion;
+}
+
+export interface FiveAxisProjectionReferenceEvidence {
+  itemPartId: string;
+  state: "available" | "missing" | "error" | "not_selected";
+  projectionMatchId: string | null;
+  projectionMatchRevisionId: string | null;
+  projectionId: string | null;
+  projectionRevisionId: string | null;
 }
 
 export interface FiveAxisMetric {
@@ -1120,6 +1145,11 @@ export interface FiveAxisMetric {
 
 export interface ModelFiveAxisPreview {
   modelId: string;
+  /** OPEN-005 正式预览使用；历史预览继续保留 fishWeightGradeId。 */
+  modelFinalPullKg?: number;
+  weightBandId?: string;
+  weightBandPolicyVersion?: string;
+  hashInputSchemaVersion?: FiveAxisHashInputSchemaVersion;
   fishWeightGradeId: string;
   fiveAxisDefinitionId: string;
   fiveAxisDefinitionVersion: string;
@@ -1131,6 +1161,10 @@ export interface ModelFiveAxisPreview {
   vertexSetHash: string;
   sourceRevision: string;
   metrics: FiveAxisMetric[];
+  candidateSources?: FiveAxisVertexCandidateSource[];
+  candidateSetHash?: string;
+  candidateEvidenceHash?: string;
+  componentSeries?: FiveAxisSeries[];
   tackleFitComparison: FiveAxisComparisonView;
   inputHash: string;
 }

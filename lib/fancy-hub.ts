@@ -503,6 +503,8 @@ export interface FancyHubAdmissionLease {
 }
 
 export interface FancyHubAdmissionCoordinator {
+  readProviderHardLimits(): Promise<AIProviderHardLimits | undefined>;
+  writeProviderHardLimits(limits: AIProviderHardLimits): Promise<void>;
   acquire(input: {
     workspaceId: string;
     maxConcurrentForWorkspace: number;
@@ -515,6 +517,15 @@ export class InMemoryFancyHubAdmissionCoordinator implements FancyHubAdmissionCo
   private readonly inFlightByWorkspace = new Map<string, number>();
   private inFlightTotal = 0;
   private readonly assessmentRequestTimes: number[] = [];
+  private providerHardLimits: AIProviderHardLimits | undefined;
+
+  async readProviderHardLimits(): Promise<AIProviderHardLimits | undefined> {
+    return this.providerHardLimits ? structuredClone(this.providerHardLimits) : undefined;
+  }
+
+  async writeProviderHardLimits(limits: AIProviderHardLimits): Promise<void> {
+    this.providerHardLimits = structuredClone(limits);
+  }
 
   async acquire(input: {
     workspaceId: string;
@@ -613,19 +624,25 @@ export class FancyHubConnector {
       const discoveryRemainingMs = batchDeadlineMs - Date.now();
       if (discoveryRemainingMs <= 0) throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "批次已经达到 10 分钟硬期限。" );
       const assessmentCount = input.batch?.assessmentCount ?? 1;
+      const cachedProviderLimitsValue = await this.admissionCoordinator.readProviderHardLimits();
+      const cachedProviderLimits = cachedProviderLimitsValue
+        ? parseHardLimits(cachedProviderLimitsValue, "cachedProviderHardLimits")
+        : tenantLimits;
+      const preDiscoveryLimits = effectiveLimits(cachedProviderLimits, tenantLimits);
       const lease = await this.admissionCoordinator.acquire({
         workspaceId: input.workspaceId,
-        maxConcurrentForWorkspace: Math.min(batchLimits.maxConcurrentAssessmentsPerWorkspace, tenantLimits.maxConcurrentRequests),
-        maxConcurrentTotal: tenantLimits.maxConcurrentRequests,
+        maxConcurrentForWorkspace: Math.min(batchLimits.maxConcurrentAssessmentsPerWorkspace, preDiscoveryLimits.maxConcurrentRequests),
+        maxConcurrentTotal: preDiscoveryLimits.maxConcurrentRequests,
         leaseExpiresAtMs: batchDeadlineMs,
       });
       const attemptedModelIds: string[] = [];
       try {
         await lease.consumeAssessmentRequest({
           nowMs: Date.now(),
-          maxRequestsPerMinute: tenantLimits.maxRequestsPerMinute,
+          maxRequestsPerMinute: preDiscoveryLimits.maxRequestsPerMinute,
         });
         const discovery = await this.listAvailableModels(Math.min(tenantLimits.requestTimeoutMs, discoveryRemainingMs));
+        await this.admissionCoordinator.writeProviderHardLimits(discovery.providerHardLimits);
         const limits = effectiveLimits(discovery.providerHardLimits, tenantLimits);
         if (lease.inFlightForWorkspaceBefore >= Math.min(batchLimits.maxConcurrentAssessmentsPerWorkspace, limits.maxConcurrentRequests)
           || lease.inFlightTotalBefore >= limits.maxConcurrentRequests) {

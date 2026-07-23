@@ -13,6 +13,7 @@ import {
 } from "./ai-outbound";
 import {
   FancyHubError,
+  type AIProviderHardLimits,
   type FancyHubAdmissionCoordinator,
   type FancyHubAdmissionLease,
   type FancyHubAssessmentResponse,
@@ -40,6 +41,7 @@ interface AIAdmissionDocument {
   version: 1;
   leases: Record<string, { workspaceId: string; expiresAtMs: number }>;
   assessmentRequestTimesMs: number[];
+  providerHardLimits?: AIProviderHardLimits;
 }
 
 const EMPTY_ADMISSION_DOCUMENT: AIAdmissionDocument = {
@@ -125,6 +127,13 @@ export class FileAIRuntimeStore {
 
   admissionCoordinator(): FancyHubAdmissionCoordinator {
     return {
+      readProviderHardLimits: async () => this.mutateAdmission((document) =>
+        document.providerHardLimits ? structuredClone(document.providerHardLimits) : undefined),
+      writeProviderHardLimits: async (limits) => {
+        await this.mutateAdmission((document) => {
+          document.providerHardLimits = structuredClone(limits);
+        });
+      },
       acquire: async (input): Promise<FancyHubAdmissionLease> => {
         const leaseId = randomBytes(24).toString("base64url");
         const admissionCounts = await this.mutateAdmission((document) => {

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
@@ -12,7 +13,8 @@ export const REQUIRED_CURRENT_HEAD_CHECKS = [
 
 export const AGENT_REVIEW_PASS_MARKER = "Agent-Review: PASS";
 
-const CI_WORKFLOW_PATH = ".github/workflows/ci.yml";
+export const CI_WORKFLOW_PATH = ".github/workflows/ci.yml";
+export const MERGE_GATE_PROGRAM_PATH = "scripts/check-pr-merge-gate.mjs";
 const PR_RUN_NAME_PATTERN =
   /^gate-context event=pull_request pr=([1-9]\d*) head=([a-f0-9]{40}) base=([a-f0-9]{40})$/i;
 
@@ -129,11 +131,16 @@ function currentHeadReviewState({ reviews, headSha }) {
   return { signal };
 }
 
+function isContentSha256(value) {
+  return /^[a-f0-9]{64}$/i.test(value ?? "");
+}
+
 export function evaluatePullRequestMergeGate(snapshot) {
   const pullRequest = snapshot?.pullRequest ?? {};
   const headSha = pullRequest.headSha;
   const baseSha = pullRequest.baseSha;
   const riskLevel = snapshot?.riskLevel;
+  const trust = snapshot?.trust ?? {};
   const blockers = [];
   const evidence = [];
 
@@ -169,6 +176,73 @@ export function evaluatePullRequestMergeGate(snapshot) {
     blockers.push({
       code: "RISK_UNCLASSIFIED",
       message: "Risk must be classified explicitly as normal or high",
+    });
+  }
+
+  const baseWorkflowHash = trust.ciWorkflow?.baseContentSha256;
+  const headWorkflowHash = trust.ciWorkflow?.headContentSha256;
+  if (
+    !isContentSha256(baseWorkflowHash) ||
+    !isContentSha256(headWorkflowHash)
+  ) {
+    blockers.push({
+      code: "CI_WORKFLOW_TRUST_UNAVAILABLE",
+      message:
+        `Unable to compare ${CI_WORKFLOW_PATH} on the live base and current head`,
+    });
+  } else if (baseWorkflowHash !== headWorkflowHash) {
+    blockers.push({
+      code: "CI_WORKFLOW_CHANGED",
+      message:
+        `${CI_WORKFLOW_PATH} differs from the live base and requires the separate workflow-governance path`,
+    });
+  } else {
+    evidence.push({
+      type: "trusted-ci-workflow",
+      path: CI_WORKFLOW_PATH,
+      contentSha256: baseWorkflowHash,
+      baseSha,
+      headSha,
+    });
+  }
+
+  const trustedGateHash = trust.gateProgram?.baseContentSha256;
+  const headGateHash = trust.gateProgram?.headContentSha256;
+  const localGateHash = trust.gateProgram?.localContentSha256;
+  if (!isContentSha256(trustedGateHash)) {
+    blockers.push({
+      code: "GATE_PROGRAM_BOOTSTRAP_REQUIRED",
+      message:
+        `${MERGE_GATE_PROGRAM_PATH} is not present on the live base; the one-time bootstrap governance path is required`,
+    });
+  } else if (!isContentSha256(headGateHash)) {
+    blockers.push({
+      code: "GATE_PROGRAM_TRUST_UNAVAILABLE",
+      message:
+        `Unable to read ${MERGE_GATE_PROGRAM_PATH} from the current head`,
+    });
+  } else if (
+    !isContentSha256(localGateHash) ||
+    trustedGateHash !== localGateHash
+  ) {
+    blockers.push({
+      code: "GATE_PROGRAM_UNTRUSTED",
+      message:
+        `${MERGE_GATE_PROGRAM_PATH} must be executed unchanged from a clean checkout of the live base`,
+    });
+  } else if (trustedGateHash !== headGateHash) {
+    blockers.push({
+      code: "GATE_PROGRAM_CHANGED",
+      message:
+        `${MERGE_GATE_PROGRAM_PATH} differs from the live base and requires the separate gate-governance path`,
+    });
+  } else {
+    evidence.push({
+      type: "trusted-gate-program",
+      path: MERGE_GATE_PROGRAM_PATH,
+      contentSha256: trustedGateHash,
+      baseSha,
+      headSha,
     });
   }
 
@@ -358,7 +432,11 @@ function createGithubClient(token) {
     const payload = await response.json();
     if (!response.ok || payload?.errors) {
       const detail = payload?.message ?? payload?.errors?.[0]?.message ?? response.statusText;
-      throw new Error(`GitHub API request failed (${response.status}): ${detail}`);
+      const error = new Error(
+        `GitHub API request failed (${response.status}): ${detail}`,
+      );
+      error.status = response.status;
+      throw error;
     }
     return payload;
   }
@@ -537,6 +615,119 @@ export async function readPullRequestWithCurrentBase({
   return normalizePullRequest(payload, currentBaseSha);
 }
 
+function sha256(content) {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+function encodeRepositoryPath(path) {
+  return path
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+}
+
+async function readRepositoryFileAtRef({
+  client,
+  prefix,
+  path,
+  ref,
+  allowMissing = false,
+}) {
+  if (!/^[a-f0-9]{40}$/i.test(ref ?? "")) {
+    return null;
+  }
+
+  try {
+    const payload = await client.request(
+      `${prefix}/contents/${encodeRepositoryPath(path)}?ref=${encodeURIComponent(ref)}`,
+    );
+    if (
+      payload?.type !== "file" ||
+      payload?.encoding !== "base64" ||
+      typeof payload?.content !== "string"
+    ) {
+      throw new Error(
+        `GitHub contents response for ${path} at ${ref} is not a base64 file`,
+      );
+    }
+    const content = Buffer.from(payload.content.replace(/\s/gu, ""), "base64");
+    return {
+      path,
+      ref,
+      blobSha: payload.sha ?? null,
+      contentSha256: sha256(content),
+    };
+  } catch (error) {
+    if (allowMissing && error?.status === 404) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export async function readTrustedContentEvidence({
+  client,
+  prefix,
+  pullRequest,
+  localGateContent,
+}) {
+  const localContent =
+    localGateContent ?? await readFile(new URL(import.meta.url));
+  const [baseWorkflow, headWorkflow, baseGateProgram, headGateProgram] =
+    await Promise.all([
+      readRepositoryFileAtRef({
+        client,
+        prefix,
+        path: CI_WORKFLOW_PATH,
+        ref: pullRequest?.baseSha,
+        allowMissing: true,
+      }),
+      readRepositoryFileAtRef({
+        client,
+        prefix,
+        path: CI_WORKFLOW_PATH,
+        ref: pullRequest?.headSha,
+        allowMissing: true,
+      }),
+      readRepositoryFileAtRef({
+        client,
+        prefix,
+        path: MERGE_GATE_PROGRAM_PATH,
+        ref: pullRequest?.baseSha,
+        allowMissing: true,
+      }),
+      readRepositoryFileAtRef({
+        client,
+        prefix,
+        path: MERGE_GATE_PROGRAM_PATH,
+        ref: pullRequest?.headSha,
+        allowMissing: true,
+      }),
+    ]);
+
+  return {
+    ciWorkflow: {
+      path: CI_WORKFLOW_PATH,
+      baseRefSha: pullRequest?.baseSha ?? null,
+      headRefSha: pullRequest?.headSha ?? null,
+      baseBlobSha: baseWorkflow?.blobSha ?? null,
+      headBlobSha: headWorkflow?.blobSha ?? null,
+      baseContentSha256: baseWorkflow?.contentSha256 ?? null,
+      headContentSha256: headWorkflow?.contentSha256 ?? null,
+    },
+    gateProgram: {
+      path: MERGE_GATE_PROGRAM_PATH,
+      baseRefSha: pullRequest?.baseSha ?? null,
+      headRefSha: pullRequest?.headSha ?? null,
+      baseBlobSha: baseGateProgram?.blobSha ?? null,
+      headBlobSha: headGateProgram?.blobSha ?? null,
+      baseContentSha256: baseGateProgram?.contentSha256 ?? null,
+      headContentSha256: headGateProgram?.contentSha256 ?? null,
+      localContentSha256: sha256(localContent),
+    },
+  };
+}
+
 function compareCanonicalElements(left, right) {
   const leftValue = JSON.stringify(left);
   const rightValue = JSON.stringify(right);
@@ -548,6 +739,32 @@ function compareCanonicalElements(left, right) {
 
 export function mergeGateEvidenceFingerprint(evidence) {
   const canonical = {
+    trust: {
+      ciWorkflow: {
+        path: evidence?.trust?.ciWorkflow?.path ?? null,
+        baseRefSha: evidence?.trust?.ciWorkflow?.baseRefSha ?? null,
+        headRefSha: evidence?.trust?.ciWorkflow?.headRefSha ?? null,
+        baseBlobSha: evidence?.trust?.ciWorkflow?.baseBlobSha ?? null,
+        headBlobSha: evidence?.trust?.ciWorkflow?.headBlobSha ?? null,
+        baseContentSha256:
+          evidence?.trust?.ciWorkflow?.baseContentSha256 ?? null,
+        headContentSha256:
+          evidence?.trust?.ciWorkflow?.headContentSha256 ?? null,
+      },
+      gateProgram: {
+        path: evidence?.trust?.gateProgram?.path ?? null,
+        baseRefSha: evidence?.trust?.gateProgram?.baseRefSha ?? null,
+        headRefSha: evidence?.trust?.gateProgram?.headRefSha ?? null,
+        baseBlobSha: evidence?.trust?.gateProgram?.baseBlobSha ?? null,
+        headBlobSha: evidence?.trust?.gateProgram?.headBlobSha ?? null,
+        baseContentSha256:
+          evidence?.trust?.gateProgram?.baseContentSha256 ?? null,
+        headContentSha256:
+          evidence?.trust?.gateProgram?.headContentSha256 ?? null,
+        localContentSha256:
+          evidence?.trust?.gateProgram?.localContentSha256 ?? null,
+      },
+    },
     checks: [...(evidence?.checks ?? [])]
       .map((check) => ({
         id: check.id ?? null,
@@ -663,10 +880,11 @@ async function readLiveSnapshot({ repository, pullNumber, riskLevel }) {
   const readPullRequest = async () =>
     readPullRequestWithCurrentBase({ client, prefix, pullNumber });
   const readEvidence = async (_headSha, pullRequest) => {
-    const [reviewPayloads, checks, reviewThreads] = await Promise.all([
+    const [reviewPayloads, checks, reviewThreads, trust] = await Promise.all([
       client.paginate(`${prefix}/pulls/${pullNumber}/reviews`),
       readPullRequestWorkflowChecks(client, prefix, pullRequest),
       readReviewThreads(client, repository, pullNumber),
+      readTrustedContentEvidence({ client, prefix, pullRequest }),
     ]);
     return {
       reviews: reviewPayloads.map((review) => ({
@@ -682,6 +900,7 @@ async function readLiveSnapshot({ repository, pullNumber, riskLevel }) {
       })),
       reviewThreads,
       checks,
+      trust,
     };
   };
 
@@ -720,6 +939,10 @@ function formatResult(result) {
       lines.push(`PASS ${item.check} (${item.headSha.slice(0, 12)})`);
     } else if (item.type === "review") {
       lines.push(`PASS current-head ${item.state} review signal by ${item.reviewer} [${item.signalKind}] (${item.headSha.slice(0, 12)})`);
+    } else if (item.type === "trusted-ci-workflow") {
+      lines.push(`PASS trusted CI workflow ${item.contentSha256.slice(0, 12)}`);
+    } else if (item.type === "trusted-gate-program") {
+      lines.push(`PASS trusted gate program ${item.contentSha256.slice(0, 12)}`);
     }
   }
   for (const blocker of result.blockers) {

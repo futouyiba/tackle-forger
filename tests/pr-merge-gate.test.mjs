@@ -11,6 +11,7 @@ import {
   pullRequestRunProvenance,
   readPullRequestWithCurrentBase,
   readStableMergeGateSnapshot,
+  readTrustedContentEvidence,
   selectLatestPullRequestWorkflowRun,
 } from "../scripts/check-pr-merge-gate.mjs";
 
@@ -24,6 +25,116 @@ test("normal-risk current-head CI is merge-ready", async () => {
 
   assert.equal(result.ready, true);
   assert.equal(result.evidence.filter((item) => item.type === "ci").length, 3);
+  assert.ok(
+    result.evidence.some((item) => item.type === "trusted-ci-workflow"),
+  );
+  assert.ok(
+    result.evidence.some((item) => item.type === "trusted-gate-program"),
+  );
+});
+
+test("a pull request that changes the canonical CI workflow fails closed", async () => {
+  const snapshot = await fixture("ready-normal");
+  snapshot.trust.ciWorkflow.headContentSha256 = "3".repeat(64);
+
+  const result = evaluatePullRequestMergeGate(snapshot);
+
+  assert.equal(result.ready, false);
+  assert.ok(
+    result.blockers.some(
+      (blocker) => blocker.code === "CI_WORKFLOW_CHANGED",
+    ),
+  );
+});
+
+test("missing canonical workflow content cannot become trusted CI evidence", async () => {
+  const snapshot = await fixture("ready-normal");
+  snapshot.trust.ciWorkflow.baseContentSha256 = null;
+
+  const result = evaluatePullRequestMergeGate(snapshot);
+
+  assert.equal(result.ready, false);
+  assert.ok(
+    result.blockers.some(
+      (blocker) => blocker.code === "CI_WORKFLOW_TRUST_UNAVAILABLE",
+    ),
+  );
+});
+
+test("the gate program must match the live base copy", async () => {
+  const snapshot = await fixture("ready-normal");
+  snapshot.trust.gateProgram.localContentSha256 = "3".repeat(64);
+
+  const untrusted = evaluatePullRequestMergeGate(snapshot);
+  snapshot.trust.gateProgram.localContentSha256 =
+    snapshot.trust.gateProgram.baseContentSha256;
+  snapshot.trust.gateProgram.headContentSha256 = "3".repeat(64);
+  const changed = evaluatePullRequestMergeGate(snapshot);
+  snapshot.trust.gateProgram.baseContentSha256 = null;
+  const bootstrap = evaluatePullRequestMergeGate(snapshot);
+
+  assert.ok(
+    untrusted.blockers.some(
+      (blocker) => blocker.code === "GATE_PROGRAM_UNTRUSTED",
+    ),
+  );
+  assert.ok(
+    changed.blockers.some(
+      (blocker) => blocker.code === "GATE_PROGRAM_CHANGED",
+    ),
+  );
+  assert.ok(
+    bootstrap.blockers.some(
+      (blocker) => blocker.code === "GATE_PROGRAM_BOOTSTRAP_REQUIRED",
+    ),
+  );
+});
+
+test("trusted content evidence reads workflow and gate bytes from immutable refs", async () => {
+  const workflow = "name: CI\non: pull_request\n";
+  const gateProgram = "console.log('trusted gate');\n";
+  const requestedPaths = [];
+  const client = {
+    request: async (path) => {
+      requestedPaths.push(path);
+      const isWorkflow = path.includes("/contents/.github/workflows/ci.yml");
+      return {
+        type: "file",
+        encoding: "base64",
+        sha: isWorkflow ? "workflow-blob" : "gate-blob",
+        content: Buffer.from(isWorkflow ? workflow : gateProgram).toString("base64"),
+      };
+    },
+  };
+
+  const evidence = await readTrustedContentEvidence({
+    client,
+    prefix: "/repos/owner/repo",
+    pullRequest: {
+      baseSha: "d".repeat(40),
+      headSha: "a".repeat(40),
+    },
+    localGateContent: Buffer.from(gateProgram),
+  });
+
+  assert.equal(
+    evidence.ciWorkflow.baseContentSha256,
+    evidence.ciWorkflow.headContentSha256,
+  );
+  assert.equal(
+    evidence.gateProgram.baseContentSha256,
+    evidence.gateProgram.localContentSha256,
+  );
+  assert.equal(
+    evidence.gateProgram.baseContentSha256,
+    evidence.gateProgram.headContentSha256,
+  );
+  assert.deepEqual(requestedPaths, [
+    `/repos/owner/repo/contents/.github/workflows/ci.yml?ref=${"d".repeat(40)}`,
+    `/repos/owner/repo/contents/.github/workflows/ci.yml?ref=${"a".repeat(40)}`,
+    `/repos/owner/repo/contents/scripts/check-pr-merge-gate.mjs?ref=${"d".repeat(40)}`,
+    `/repos/owner/repo/contents/scripts/check-pr-merge-gate.mjs?ref=${"a".repeat(40)}`,
+  ]);
 });
 
 test("successful checks from an old head do not count", async () => {
@@ -621,11 +732,13 @@ test("evidence changes during collection trigger a retry and use the stable seco
             checks: base.checks,
             reviews: base.reviews,
             reviewThreads: base.reviewThreads,
+            trust: base.trust,
           }
         : {
             checks: pending.checks,
             reviews: pending.reviews,
             reviewThreads: pending.reviewThreads,
+            trust: pending.trust,
           };
     },
   });
@@ -635,6 +748,37 @@ test("evidence changes during collection trigger a retry and use the stable seco
   assert.equal(evidenceReads, 4);
   assert.equal(result.ready, false);
   assert.ok(result.blockers.some((blocker) => blocker.code === "CI_PENDING"));
+});
+
+test("trusted content changes during collection participate in stability sampling", async () => {
+  const base = await fixture("ready-normal");
+  let evidenceReads = 0;
+
+  const snapshot = await readStableMergeGateSnapshot({
+    riskLevel: "normal",
+    maxAttempts: 2,
+    readPullRequest: async () => base.pullRequest,
+    readEvidence: async () => {
+      evidenceReads += 1;
+      const trust = structuredClone(base.trust);
+      if (evidenceReads === 1) {
+        trust.ciWorkflow.headContentSha256 = "3".repeat(64);
+      }
+      return {
+        checks: base.checks,
+        reviews: base.reviews,
+        reviewThreads: base.reviewThreads,
+        trust,
+      };
+    },
+  });
+
+  assert.equal(evidenceReads, 4);
+  assert.equal(
+    snapshot.trust.ciWorkflow.headContentSha256,
+    base.trust.ciWorkflow.headContentSha256,
+  );
+  assert.equal(evaluatePullRequestMergeGate(snapshot).ready, true);
 });
 
 test("continuously changing review or thread evidence fails closed", async () => {

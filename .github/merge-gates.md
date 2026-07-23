@@ -56,11 +56,20 @@ explicit owner decision separately requires it.
 
 Before recommending or performing a merge, the supervising Agent must classify
 the change as `normal` or `high` risk and run the read-only checker against the
-live pull request:
+live pull request. The command itself must be run from a clean, up-to-date
+checkout of the live target branch, never from the pull request worktree:
 
 ```powershell
 npm run governance:check-pr -- --repo futouyiba/tackle-forger --pr <number> --risk <normal|high>
 ```
+
+The checker hashes its own loaded file and compares it with
+`scripts/check-pr-merge-gate.mjs` at the live base SHA. A missing base copy
+returns `GATE_PROGRAM_BOOTSTRAP_REQUIRED`; any mismatch returns
+`GATE_PROGRAM_UNTRUSTED`. It also compares the reviewed head's gate-program
+content with the base copy; a change returns `GATE_PROGRAM_CHANGED`. Do not copy
+the checker from the reviewed branch or use a reviewed branch's `package.json`
+command to evade this check.
 
 The command reads the pull request around two complete evidence queries. It
 compares normalized CI, review, and review-thread fingerprints and retries if
@@ -69,6 +78,8 @@ attempts it fails closed. It then evaluates only evidence bound to the reported
 current head SHA, pull request number, and current base SHA:
 
 - the PR is not Draft;
+- the current head's `.github/workflows/ci.yml` has the same SHA-256 content as
+  the file read from the live base SHA;
 - `Root v3 app (npm)`, `Historical workspace (pnpm)`, and
   `Windows line-ending policy` are present, explicitly owned by the
   `github-actions` app, and successful in a `pull_request` workflow run for that
@@ -98,6 +109,55 @@ prints a stable blocker code for every unmet condition and exits
 machine-readable output. Malformed pagination evidence also fails closed as an
 API error; a connection that declares another page must supply a non-empty
 cursor.
+
+## Workflow governance path
+
+GitHub runs a `pull_request` workflow from the pull request merge context.
+Therefore the path, run name, and job display names do not prove that the
+trusted commands ran. The checker reads `.github/workflows/ci.yml` at both the
+live base SHA and current head SHA and compares the decoded file contents. Any
+difference returns `CI_WORKFLOW_CHANGED`, even when all reported jobs succeed.
+Missing or malformed contents return `CI_WORKFLOW_TRUST_UNAVAILABLE`.
+
+A pull request that intentionally changes the canonical workflow or gate
+program must be a dedicated governance change. It cannot receive an automated
+exception from its own branch. Before such a change can be considered:
+
+1. keep unrelated application changes out of the pull request;
+2. inspect the exact workflow diff and the commands behind every required job;
+3. run the trusted-base checker and confirm all non-governance blockers are
+   cleared;
+4. record an independent current-head review that explicitly accepts the
+   workflow change and identifies `CI_WORKFLOW_CHANGED`;
+5. obtain owner merge authorization that explicitly names the governance
+   exception;
+6. after merge, update a clean target-branch checkout and verify that the new
+   trusted checker and workflow are the live base copies.
+
+The successful Actions run on the workflow-changing pull request is
+supplementary evidence only. It cannot prove its own workflow definition.
+There is no CLI flag, environment variable, review marker, or fixture field
+that turns `CI_WORKFLOW_CHANGED` or `GATE_PROGRAM_CHANGED` into `READY`.
+
+### One-time bootstrap for PR #63
+
+PR #63 first introduces both the structured `run-name` and
+`scripts/check-pr-merge-gate.mjs`. Its base therefore has neither an identical
+workflow nor a trusted gate-program copy. The expected automated blockers are
+`CI_WORKFLOW_CHANGED` and `GATE_PROGRAM_BOOTSTRAP_REQUIRED`. This is a single,
+named bootstrap case, not a reusable allowlist:
+
+- independently review the exact PR #63 workflow and gate implementation;
+- require every other normal blocker, current-head review finding, and thread
+  to be cleared;
+- record the bootstrap decision and exact reviewed head SHA in the review;
+- merge only after explicit owner authorization naming PR #63;
+- immediately after merge, run the checker from a clean updated `main`.
+
+No later pull request inherits this bootstrap treatment. A later workflow
+change follows the dedicated workflow-governance path above, and a later gate
+program change must be evaluated by the trusted program already present on its
+live base.
 
 Because repository settings do not enforce this policy, the Agent must run the
 checker again immediately before the merge decision. Any new commit, review,

@@ -46,6 +46,12 @@
   PR编号、head和base必须来自CI运行时固化的结构化run name，且run必须来自规范workflow路径；不得把
   workflow run API中会随PR漂移的嵌套PR字段当作历史证据。只读取最新规范run的当前attempt，三个必需job
   各须恰好出现一次；缺失、重名或跨run/attempt拼接均阻断。#21仅是历史事故，其事后CI不得冒充当前通过。
+- 门禁必须从干净、同步到实时base tip的目标分支工作树执行；门禁脚本内容必须与实时base上的
+  `scripts/check-pr-merge-gate.mjs`一致。规范`.github/workflows/ci.yml`在PR head与实时base之间必须
+  内容完全一致；PR修改该workflow时即使Actions成功也必须fail closed，转入独立workflow治理变更流程，
+  门禁脚本本身的变更也遵循同一治理原则。不得由被审PR通过参数、环境变量、评论或自身代码自动放行。
+  PR #63首次引入run-name和门禁脚本，只允许
+  按`.github/merge-gates.md`记录一次明确的人工bootstrap决定；任何后续PR不得继承该例外。
 - Draft、当前头存在有效`CHANGES_REQUESTED`或存在未解决review thread时阻断。高风险变更还必须在
   当前head留下可追溯的审查信号；本仓库由单一负责人管理多个Agent，因此`COMMENTED`、Bot或同一GitHub
   账号提交的审查均可承载Agent复核证据。`COMMENTED`必须在review正文中包含独立一行

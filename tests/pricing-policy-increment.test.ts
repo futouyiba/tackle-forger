@@ -11,6 +11,7 @@ import {
   type QualityId,
 } from "../lib/pricing-policy";
 import { publishConfigurationSnapshot, verifySnapshotIntegrity } from "../lib/publishing";
+import { deterministicHash } from "../lib/rule-kernel";
 import { createSeedState } from "../lib/seed";
 
 const REVISION = "2922";
@@ -179,6 +180,7 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
   };
   const snapshot = publishConfigurationSnapshot({
     publicationMode: "new_formal",
+    workspaceId: "workspace:test",
     model,
     sku,
     series,
@@ -206,5 +208,13 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
   assert.equal(snapshot.pricingPolicyVersion, version.id);
   assert.equal(snapshot.automaticPricing?.formal, true);
   assert.equal(snapshot.qualityValueAssessment?.formal, true);
+  assert.equal(snapshot.calculationTrace?.schemaVersion, "calculation-trace/v1");
+  assert.ok(snapshot.calculationTrace?.entries.length);
   assert.equal(verifySnapshotIntegrity(snapshot), true);
+  const tampered = structuredClone(snapshot);
+  tampered.calculationTrace!.entries[0].outputHash = "tampered";
+  tampered.contentHash = deterministicHash(
+    Object.fromEntries(Object.entries(tampered).filter(([key]) => key !== "contentHash")),
+  );
+  assert.equal(verifySnapshotIntegrity(tampered), false);
 });

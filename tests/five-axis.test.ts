@@ -460,6 +460,7 @@ test("正式快照拒绝未发布、篡改或版本链过期的五维定义", ()
   });
   const common = {
     publicationMode: "new_formal" as const,
+    workspaceId: "workspace:test",
     model, sku, series, projection,
     seriesSkus: state.skuDrawers,
     finalPanelValues: existing.finalPanelValues,
@@ -527,6 +528,8 @@ test("正式快照拒绝未发布、篡改或版本链过期的五维定义", ()
   );
   const snapshot = publishConfigurationSnapshot({ ...common, fiveAxisDefinition: def });
   assert.equal(verifySnapshotIntegrity(snapshot), true);
+  assert.ok(snapshot.calculationTrace?.entries.some((entry) =>
+    entry.evidence?.adapter === "five_axis_trace/v1"));
   const frozen = structuredClone(snapshot);
   def.axes[0].label = "changed after publish";
   assert.deepEqual(snapshot, frozen);
@@ -543,6 +546,7 @@ test("历史五维预览缺少定义修订哈希时保持原 Snapshot hash，不
     Object.entries(existing).filter(([key]) => key !== "contentHash"),
   );
   existing.contentHash = deterministicHash(legacyContent);
+  assert.equal(existing.calculationTrace, undefined);
   const legacyHash = existing.contentHash;
   state.configurationSnapshots = [existing];
   const migrated = migrateWorkspaceState(state);

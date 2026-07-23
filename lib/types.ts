@@ -13,6 +13,11 @@ import type {
   ModelAffixValueAssessment,
   QualityValuePolicyDraft,
 } from "./quality-value-policy";
+import type { CalculationTraceArchive } from "./calculation-trace";
+export type {
+  CalculationTraceArchive,
+  CalculationTraceEntry,
+} from "./calculation-trace";
 
 export type ItemKind = "rod" | "reel" | "line";
 export type RuleOperation = "add" | "multiply" | "set" | "min" | "max" | "formula";
@@ -1217,6 +1222,8 @@ export interface ConfigurationSnapshot {
   attributeAffixIds: string[];
   passiveAffixIds: string[];
   attributeTrace: ProjectionTraceStep[];
+  /** 新正式 Snapshot 冻结 canonical Trace；历史 Snapshot 不补写，避免改变 contentHash。 */
+  calculationTrace?: CalculationTraceArchive;
   passiveAffixPayloads: PassiveSkillPayload[];
   projectionMatch: ProjectionMatch;
   compatibilityReport: HardCompatibilityResult;

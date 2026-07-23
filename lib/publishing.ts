@@ -42,6 +42,13 @@ import type { PricingTrialResult } from "./pricing-policy";
 import {
   assertSeriesItemPartChainEnabled,
 } from "./enabled-item-parts";
+import {
+  adaptFiveAxisTraceToCanonical,
+  adaptPricingTraceToCanonical,
+  adaptRuleTraceToCanonical,
+  createCalculationTraceArchive,
+  verifyCalculationTraceArchive,
+} from "./calculation-trace";
 
 function errors(issues: ValidationIssue[]): ValidationIssue[] {
   return issues.filter((issue) => issue.level === "error");
@@ -53,6 +60,8 @@ function warnings(issues: ValidationIssue[]): ValidationIssue[] {
 
 export interface PublishModelInput {
   publicationMode: "new_formal" | "historical_import";
+  /** 新正式 Snapshot 的 canonical Trace 主体工作区；历史导入不得据此补写 Trace。 */
+  workspaceId?: string;
   model: PurchasableModel;
   sku: SkuDrawer;
   seriesSkus: SkuDrawer[];
@@ -196,6 +205,13 @@ export function publishConfigurationSnapshot(
     );
   }
   if (input.publicationMode === "new_formal") {
+    if (!input.workspaceId?.trim()) {
+      blocking.push({
+        level: "error",
+        code: "CALCULATION_TRACE_SUBJECT_MISSING",
+        message: "新 Snapshot 必须提供 workspaceId，以冻结 canonical CalculationTrace 的 subjectRef。",
+      });
+    }
     if (!input.qualityValueAssessment?.formal) {
       blocking.push({
         level: "error",
@@ -270,6 +286,39 @@ export function publishConfigurationSnapshot(
     }
   }
 
+  const calculationTrace = input.publicationMode === "new_formal"
+    ? (() => {
+        const subjectRef = {
+          workspaceId: input.workspaceId!,
+          entityType: "model" as const,
+          entityId: input.model.id,
+          revisionId: String(input.model.revision),
+        };
+        const entries = adaptRuleTraceToCanonical({
+          projection: input.projection,
+          subjectRef,
+          parameterDefinitions: input.patchOffsetGovernance?.parameterDefinitions,
+        });
+        if (input.automaticPricing) {
+          entries.push(...adaptPricingTraceToCanonical({
+            pricing: input.automaticPricing,
+            subjectRef,
+            ruleSetVersion: input.projection.ruleSetVersion,
+            sequenceStart: entries.length + 1,
+          }));
+        }
+        if (input.fiveAxisPreview) {
+          entries.push(...adaptFiveAxisTraceToCanonical({
+            preview: input.fiveAxisPreview,
+            subjectRef,
+            ruleSetVersion: input.projection.ruleSetVersion,
+            sequenceStart: entries.length + 1,
+          }));
+        }
+        return createCalculationTraceArchive(entries);
+      })()
+    : undefined;
+
   const governance = input.patchOffsetGovernance;
   const snapshotWithoutHash: Omit<ConfigurationSnapshot, "contentHash"> = {
     id:
@@ -299,6 +348,7 @@ export function publishConfigurationSnapshot(
     attributeAffixIds: structuredClone(input.attributeAffixIds),
     passiveAffixIds: structuredClone(input.passiveAffixIds),
     attributeTrace: structuredClone(input.projection.trace),
+    ...(calculationTrace ? { calculationTrace } : {}),
     passiveAffixPayloads: structuredClone(input.passiveAffixPayloads),
     projectionMatch: structuredClone(input.sku.projectionMatch),
     compatibilityReport: structuredClone(input.compatibilityReport),
@@ -336,6 +386,10 @@ export function publishConfigurationSnapshot(
 export function verifySnapshotIntegrity(
   snapshot: ConfigurationSnapshot,
 ): boolean {
+  if (
+    snapshot.calculationTrace
+    && !verifyCalculationTraceArchive(snapshot.calculationTrace)
+  ) return false;
   const { contentHash, ...content } = snapshot;
   return deterministicHash(content) === contentHash;
 }

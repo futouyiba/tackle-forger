@@ -1,6 +1,6 @@
 import { deterministicHash } from "./rule-kernel";
 import { previewPatchRebase } from "./patch-engine";
-import { orderedPatchReferences } from "./patch-ledger";
+import { orderedPatchReferences, verifyPatchSetHash } from "./patch-ledger";
 import { authoritativeObjectIdentity, evaluateAuthoritativePatchFinalRanges, type AuthoritativePatchObject } from "./patch-authority";
 import {
   assertPatchGateCanProceed,
@@ -196,7 +196,7 @@ function affixEvidenceStagesAreClosed(evidence: AffixRuntimeEvidence): boolean {
 
 export interface PublishModelInput {
   publicationMode: "new_formal" | "historical_import";
-  /** 新正式 Snapshot 的 canonical Trace 主体工作区；历史导入不得据此补写 Trace。 */
+  /** 新正式 Snapshot 的稳定工作区身份和 canonical Trace 主体；历史导入不得据此补写。 */
   workspaceId?: string;
   model: PurchasableModel;
   sku: SkuDrawer;
@@ -256,12 +256,17 @@ function snapshotContent(
 export function publishConfigurationSnapshot(
   input: PublishModelInput,
 ): ConfigurationSnapshot {
+  if(input.publicationMode==="new_formal"&&!input.workspaceId?.trim()){
+    throw new Error("新正式 Snapshot 必须提供稳定 workspaceId。");
+  }
   if (input.publicationMode === "new_formal" && input.patches.length && !input.patchRevisions?.length) {
     throw new Error("正式 Snapshot 必须使用可冻结 operation 顺序的 Patch revision，不能只引用旧 Patch 视图。");
   }
-  const frozenPatches = input.patchRevisions
-    ? orderedPatchReferences(input.patchRevisions)
-    : undefined;
+  const frozenPatches = input.publicationMode==="new_formal"
+    ? orderedPatchReferences(input.patchRevisions??[],input.workspaceId!)
+    : input.patchRevisions
+      ? orderedPatchReferences(input.patchRevisions)
+      : undefined;
   const legacyPatchSetHash = deterministicHash(
     [...input.patches].sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
   );
@@ -280,6 +285,7 @@ export function publishConfigurationSnapshot(
       const policy = governance.policy;
       assertPublishedPatchOffsetPolicy(policy);
       const authority: AuthoritativePatchObject = {
+        workspaceId:input.workspaceId,
         subjectRef: { scopeType: "model", entityId: input.model.id, revision: input.model.revision },
         ruleSet: governance.ruleSet,
         parameterDefinitions: governance.parameterDefinitions,
@@ -766,6 +772,7 @@ export function publishConfigurationSnapshot(
     input.finalPanelValues,
   );
   const snapshotWithoutHash: Omit<ConfigurationSnapshot, "contentHash"> = {
+    ...(input.publicationMode==="new_formal"?{workspaceId:input.workspaceId}:{}),
     id:
       input.snapshotId ??
       "snapshot-" + input.model.id + "-v" + (input.version ?? 1),
@@ -783,6 +790,9 @@ export function publishConfigurationSnapshot(
       ? { reductionStackingPolicyVersion: input.reductionStackingPolicy.version }
       : {}),
     patchSetHash,
+    ...(frozenPatches?.patchSetHashContractVersion
+      ? {patchSetHashContractVersion:frozenPatches.patchSetHashContractVersion}
+      : {}),
     ...(frozenPatches ? { patchReferences: frozenPatches.references } : {}),
     ...(input.publicationMode === "new_formal" && hasPatchDependency && governance ? {
       patchOffsetPolicyVersion: governance.policy?.version,
@@ -908,7 +918,13 @@ export function verifySnapshotIntegrity(
     }
   }
   const { contentHash, ...content } = snapshot;
-  return deterministicHash(content) === contentHash;
+  if(deterministicHash(content)!==contentHash) return false;
+  if(snapshot.patchSetHashContractVersion){
+    if(!snapshot.workspaceId?.trim()) return false;
+    if(!(snapshot.patchReferences??[]).every((reference)=>reference.workspaceId===snapshot.workspaceId)) return false;
+    if(!verifyPatchSetHash(snapshot.patchReferences??[],snapshot.patchSetHash,snapshot.patchSetHashContractVersion)) return false;
+  }
+  return true;
 }
 
 export interface CreateUpgradeCandidateInput {

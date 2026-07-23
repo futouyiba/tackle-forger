@@ -405,7 +405,7 @@ test("pricing、patch 与 legacy 只读适配器幂等并保留原始 evidence",
       before: 12,
       operand: undefined,
       after: undefined,
-    }],
+    }] as unknown as typeof patchInput.trace,
   });
   assert.equal(removeEntries[0].operation, "clear");
   assert.equal(removeEntries[0].operand, null);
@@ -456,7 +456,7 @@ test("pricing、patch 与 legacy 只读适配器幂等并保留原始 evidence",
         operand: 15,
         after: 15,
       },
-    ],
+    ] as unknown as typeof patchInput.trace,
   });
   assert.deepEqual(removeThenSetEntries[1].before, CALCULATION_TRACE_ABSENT_VALUE);
   assert.equal(

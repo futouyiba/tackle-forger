@@ -195,6 +195,7 @@ test("发布门禁拒绝空范围评估、被改写结果和空 Patch revision �
   assert.throws(
     () => publishConfigurationSnapshot({
       publicationMode: "new_formal",
+      workspaceId: "workspace:test",
       patches: [{}],
       patchRevisions: [],
     } as never),
@@ -867,7 +868,7 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
     }],
   });
   const patchRevisions = [governedRevision];
-  const frozen = orderedPatchReferences(patchRevisions);
+  const frozen = orderedPatchReferences(patchRevisions,"workspace:test");
   const ruleSet = state.ruleSetVersions.find((entry) =>
     entry.id === projection.ruleSetVersion || String(entry.version) === projection.ruleSetVersion)!;
   const parameterDefinitions = state.parameters.map((parameter) =>
@@ -875,6 +876,7 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
       ? { ...parameter, targetRange: { min: numericEntry[1] - 2, max: numericEntry[1] - 1 } }
       : parameter);
   const publishAuthority: AuthoritativePatchObject = {
+    workspaceId:"workspace:test",
     subjectRef: { scopeType: "model", entityId: model.id, revision: model.revision },
     ruleSet,
     parameterDefinitions,
@@ -889,6 +891,30 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
       targetPullKg: sku.projectionMatch.targetPullKg,
     }],
   };
+  const competingSet=(patchId:string,operation:"set"|"clear")=>buildPatchRevision({
+    ...governedRevision,
+    patchId,
+    operations:[{
+      operationId:`${patchId}:op:1`,
+      operationIndex:0,
+      parameterKey:numericEntry[0],
+      operation,
+      operand:operation==="clear"?null:numericEntry[1],
+      before:numericEntry[1],
+      after:numericEntry[1],
+    }],
+  });
+  const firstSet=competingSet("patch:authority:set:1","set");
+  const secondSet=competingSet("patch:authority:set:2","set");
+  const clear=competingSet("patch:authority:clear","clear");
+  assert.throws(
+    ()=>deriveAuthoritativePatchContexts({...publishAuthority,patchRevisions:[firstSet,secondSet]}),
+    (error:unknown)=>error instanceof PatchOffsetPolicyError&&error.code==="PATCH_SET_CONFLICT",
+  );
+  assert.throws(
+    ()=>deriveAuthoritativePatchContexts({...publishAuthority,patchRevisions:[firstSet,clear]}),
+    (error:unknown)=>error instanceof PatchOffsetPolicyError&&error.code==="PATCH_SET_CLEAR_CONFLICT",
+  );
   const publishIdentity = authoritativeObjectIdentity(publishAuthority);
   const rangeEvaluation = evaluateAuthoritativePatchFinalRanges({
     policy: publishedPolicy,
@@ -1004,6 +1030,7 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
   assert.equal(verifySnapshotIntegrity(oldSnapshot), true);
 
   const exportAuthority: AuthoritativePatchObject = {
+    workspaceId: snapshot.workspaceId,
     subjectRef: { scopeType: "model", entityId: snapshot.modelId, revision: snapshot.modelRevision },
     ruleSet,
     parameterDefinitions,

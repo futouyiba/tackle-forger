@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { migrateWorkspaceState } from "../lib/migrations";
+import { CURRENT_WORKSPACE_SCHEMA_VERSION, migrateWorkspaceState } from "../lib/migrations";
 import { verifySnapshotIntegrity } from "../lib/publishing";
+import { deterministicHash } from "../lib/rule-kernel";
+import { validateSeriesInvariants } from "../lib/product-model";
 import { createSeedState } from "../lib/seed";
+import { ensureWorkflowFields } from "../lib/workflow";
 
 test("v16 隔离旧独立偏移阈值、发布规范策略且不改写历史 Snapshot", () => {
   const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
@@ -17,7 +22,7 @@ test("v16 隔离旧独立偏移阈值、发布规范策略且不改写历史 Sna
   const snapshotsBefore = structuredClone(legacy.configurationSnapshots);
 
   const migrated = migrateWorkspaceState(legacy);
-  assert.equal(migrated.schemaVersion, 16);
+  assert.equal(migrated.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
   assert.deepEqual(migrated.ruleSettings.patchOffsetLimits, {});
   assert.ok(migrated.patchLedger.migrationReviewItems.some((entry) =>
     entry.reason === "LEGACY_PATCH_OFFSET_THRESHOLDS_QUARANTINED"
@@ -44,7 +49,7 @@ test("v14 将旧系列配方迁移为竿轮线约束且保留扁平字段", () =
 
   const migrated = migrateWorkspaceState(legacy);
   const recipe = migrated.recipes[0];
-  assert.equal(migrated.schemaVersion, 16);
+  assert.equal(migrated.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
   assert.deepEqual(recipe.templateIds, before.templateIds);
   assert.deepEqual(recipe.structureIds, before.structureIds);
   assert.deepEqual(recipe.requiredAffixIds, before.requiredAffixIds);
@@ -68,7 +73,7 @@ test("v15 保留旧五维定义并明确迁移为未发布修订", () => {
   }];
   const migrated = migrateWorkspaceState(legacy);
   const definition = migrated.fiveAxisViewDefinitions[0] as unknown as Record<string, unknown>;
-  assert.equal(migrated.schemaVersion, 16);
+  assert.equal(migrated.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
   assert.equal(definition.publicationState, "UNPUBLISHED");
   assert.equal(definition.revision, 1);
   assert.equal(typeof definition.definitionHash, "string");
@@ -134,15 +139,15 @@ test("D-02 OfficialSku 无损迁移为抽屉、默认 Model 与冻结快照", ()
 
   const migrated = migrateWorkspaceState(legacy);
   assert.equal(migrated.skuDrawers.length, 1);
-  assert.equal(migrated.schemaVersion, 16);
+  assert.equal(migrated.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
   assert.deepEqual(migrated.qualityValuePolicyDrafts, []);
   assert.deepEqual(migrated.seriesDefinitions[0].targetPullSpecifications, [{
-    targetPullKgf: migrated.skuDrawers[0].targetWeightKg,
+    targetPullKgf: migrated.skuDrawers[0].targetPullKg,
     skuId: migrated.skuDrawers[0].id,
   }]);
   assert.deepEqual(migrated.seriesDefinitions[0].planningPullRange, {
-    minKgf: migrated.skuDrawers[0].targetWeightKg,
-    maxKgf: migrated.skuDrawers[0].targetWeightKg,
+    minKgf: migrated.skuDrawers[0].targetPullKg,
+    maxKgf: migrated.skuDrawers[0].targetPullKg,
   });
   assert.equal(migrated.purchasableModels.length, 1);
   assert.equal(migrated.configurationSnapshots.length, 1);
@@ -150,5 +155,84 @@ test("D-02 OfficialSku 无损迁移为抽屉、默认 Model 与冻结快照", ()
   assert.deepEqual(migrated.configurationSnapshots[0].finalPanelValues, (legacy.officialSkus as Array<{ values: unknown }>)[0].values);
   assert.equal(migrated.purchasableModels[0].componentSelections[0].componentId, "LEGACY-ROD");
   assert.equal(verifySnapshotIntegrity(migrated.configurationSnapshots[0]), true);
+  assert.deepEqual(migrateWorkspaceState(migrated), migrated);
+});
+
+test("schema v17 迁移仅适配活动对象的历史拉力字段，冻结快照保持逐字节不变", () => {
+  const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
+  legacy.schemaVersion = 16;
+  const sku = (legacy.skuDrawers as Array<Record<string, unknown>>)[0];
+  const match = sku.projectionMatch as Record<string, unknown>;
+  sku.targetWeightKg = sku.targetPullKg;
+  delete sku.targetPullKg;
+  match.targetWeightKg = match.targetPullKg;
+  match.anchorWeightKg = match.matchedStructuralPullKg;
+  match.weightDistance = match.pullDistance;
+  delete match.targetPullKg;
+  delete match.matchedStructuralPullKg;
+  delete match.pullDistance;
+  const snapshotBefore = structuredClone((legacy.configurationSnapshots as Array<Record<string, unknown>>)[0]);
+
+  const migrated = migrateWorkspaceState(legacy);
+  const migratedSku = migrated.skuDrawers[0] as unknown as Record<string, unknown>;
+  assert.equal(migrated.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
+  assert.equal(migratedSku.targetPullKg, 1.5);
+  assert.equal(Object.hasOwn(migratedSku, "targetWeightKg"), false);
+  assert.equal(Object.hasOwn(migratedSku.projectionMatch as object, "targetWeightKg"), false);
+  assert.deepEqual(migrated.configurationSnapshots[0], snapshotBefore);
+  assert.equal(deterministicHash(migrated.configurationSnapshots[0]), deterministicHash(snapshotBefore));
+  assert.deepEqual(migrateWorkspaceState(migrated), migrated);
+});
+
+test("schema v17 迁移拒绝矛盾的目标拉力，绝不静默择一", () => {
+  const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
+  legacy.schemaVersion = 16;
+  const sku = (legacy.skuDrawers as Array<Record<string, unknown>>)[0];
+  sku.targetWeightKg = Number(sku.targetPullKg) + 0.1;
+  assert.throws(() => migrateWorkspaceState(legacy), /TARGET_PULL_MIGRATION_CONFLICT.*SKU/);
+});
+
+test("schema v17 归一化归档仅在 SKU 内嵌的历史 ProjectionMatch 字段", () => {
+  const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
+  legacy.schemaVersion = 17;
+  const sku = (legacy.skuDrawers as Array<Record<string, unknown>>)[0];
+  const match = sku.projectionMatch as Record<string, unknown>;
+  match.targetWeightKg = match.targetPullKg;
+  match.anchorWeightKg = match.matchedStructuralPullKg;
+  match.weightDistance = match.pullDistance;
+  delete match.targetPullKg;
+  delete match.matchedStructuralPullKg;
+  delete match.pullDistance;
+  legacy.projectionMatches = [];
+
+  const migrated = migrateWorkspaceState(legacy);
+  const migratedMatch = migrated.skuDrawers[0].projectionMatch as unknown as Record<string, unknown>;
+  const archived = migrated.migrationReviewItems.find((item) =>
+    item.id === `target-pull-migration:sku-projection-match:${migrated.skuDrawers[0].id}`);
+  assert.equal(migratedMatch.targetPullKg, 1.5);
+  assert.equal(Object.hasOwn(migratedMatch, "targetWeightKg"), false);
+  assert.deepEqual(archived?.preservedPayload, match);
+  assert.deepEqual(migrateWorkspaceState(migrated), migrated);
+});
+
+test("脱敏生产 schema v17 形态可直接读取，未知字段与已发布 Snapshot 完全冻结", () => {
+  const fixtureUrl = new URL("./fixtures/workspace-production-schema-v17.json", import.meta.url);
+  const productionShape = JSON.parse(readFileSync(fileURLToPath(fixtureUrl), "utf8")) as Record<string, unknown>;
+  const snapshotBefore = structuredClone((productionShape.configurationSnapshots as unknown[])[0]);
+  const migrated = ensureWorkflowFields(productionShape as never);
+  const sku = migrated.skuDrawers[0] as unknown as Record<string, unknown>;
+  const projectionMatch = sku.projectionMatch as Record<string, unknown>;
+
+  assert.equal(migrated.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
+  assert.equal(sku.targetPullKg, 3.6);
+  assert.equal(Object.hasOwn(sku, "targetWeightKg"), false);
+  assert.equal(projectionMatch.targetPullKg, 3.6);
+  assert.equal(Object.hasOwn(projectionMatch, "targetWeightKg"), false);
+  assert.deepEqual(migrated.seriesDefinitions[0].targetPullSpecifications, [{ targetPullKgf: 3.6, skuId: "sku:production-redacted" }]);
+  assert.equal(validateSeriesInvariants({ series: migrated.seriesDefinitions[0], skus: migrated.skuDrawers, models: [], projections: [] }).some((issue) => issue.code === "SERIES_PULL_SPECIFICATION_MISSING"), false);
+  assert.deepEqual((migrated as unknown as Record<string, unknown>).legacyImportedField, { source: "production-redacted", preserve: true });
+  assert.deepEqual(sku.legacySkuMetadata, { preserve: true });
+  assert.deepEqual(migrated.configurationSnapshots[0], snapshotBefore);
+  assert.equal(migrated.configurationSnapshots[0].contentHash, "sha256:production-published-snapshot-redacted");
   assert.deepEqual(migrateWorkspaceState(migrated), migrated);
 });

@@ -10,6 +10,11 @@ import {
 import type { ExportCommitResult } from "./config-export";
 import type { ExportTargetProfile } from "./interaction-contracts";
 import type { ConfigurationSnapshot } from "./types";
+import type {
+  FormalConfigExportAuthorization,
+  FormalConfigExportEvidenceVerifier,
+} from "./config-export-stage";
+import { ConfigExportStageError } from "./config-export-stage";
 
 export type CompanionCapability = "config.export.preview" | "config.export.commit";
 export interface CompanionPairingIdentity {
@@ -34,6 +39,7 @@ export interface CompanionPreviewRequest {
   packageId: string;
   profileIds: string[];
   snapshot: ConfigurationSnapshot;
+  formalAuthorization?: FormalConfigExportAuthorization;
 }
 
 export interface CompanionPreviewEntry {
@@ -61,6 +67,7 @@ export interface CompanionPreviewResponse {
 export interface CompanionCommitRequest {
   previewToken: string;
   confirmations: Record<string, string>;
+  formalAuthorization?: FormalConfigExportAuthorization;
 }
 
 export interface CompanionCommitResponse {
@@ -155,12 +162,18 @@ export async function loadCompanionRegistry(
 export class ConfigExportCompanionController {
   readonly registry: ConfigExportCompanionRegistry;
   private readonly token: string;
+  private readonly formalAuthorizationVerifier?: FormalConfigExportEvidenceVerifier;
   private readonly previews = new Map<string, StoredPreview>();
 
-  constructor(input: { registry: ConfigExportCompanionRegistry; token: string }) {
+  constructor(input: {
+    registry: ConfigExportCompanionRegistry;
+    token: string;
+    formalAuthorizationVerifier?: FormalConfigExportEvidenceVerifier;
+  }) {
     if (input.token.length < 16) throw new Error("配对令牌至少需要 16 个字符。");
     this.registry = validateCompanionRegistry(input.registry);
     this.token = input.token;
+    this.formalAuthorizationVerifier = input.formalAuthorizationVerifier;
   }
 
   authorize(token: string | undefined, identity: CompanionPairingIdentity) {
@@ -199,6 +212,12 @@ export class ConfigExportCompanionController {
     if (!this.registry.capabilities.includes("config.export.preview")) {
       throw new Error("伴随服务未授予 config.export.preview Capability。");
     }
+    if (!this.registry.capabilities.includes("config.export.commit")) {
+      throw new ConfigExportStageError(
+        "CONFIG_TARGET_SERIALIZATION_UNAVAILABLE",
+        "本地助手缺少 config.export.commit，只能使用服务端 NON_FORMAL 预览。",
+      );
+    }
     if (!request.profileIds.length) throw new Error("至少选择一个目标 Profile。");
     const profileIds = [...new Set(request.profileIds)];
     const stored = new Map<string, FilesystemExportPreview>();
@@ -217,6 +236,9 @@ export class ConfigExportCompanionController {
         profile,
         mapping,
         snapshot: request.snapshot,
+        canCommit: true,
+        formalAuthorization: request.formalAuthorization,
+        formalAuthorizationVerifier: this.formalAuthorizationVerifier,
       });
       stored.set(profileId, preview);
       results.push({
@@ -293,6 +315,8 @@ export class ConfigExportCompanionController {
           requestedAt: new Date().toISOString(),
         },
         canCommit: true,
+        formalAuthorization: request.formalAuthorization,
+        formalAuthorizationVerifier: this.formalAuthorizationVerifier,
       }));
     }
     return { packageId: stored.packageId, results };

@@ -13,16 +13,25 @@ import type {
   PatchRevisionRecord,
   PatchValidationWaiver,
   RuleSetVersion,
-  ReductionStackingPolicyVersion,
   ValidationIssue,
   WorkspacePolicyRecord,
 } from "./types";
 import type { ExportTargetProfile } from "./interaction-contracts";
 import type { ConfigExportMapping } from "./config-export-mapping";
+import { assertConfigExportSnapshotReplayable } from "./config-preview-package";
 import {
   assertSnapshotItemPartEnabled,
 } from "./enabled-item-parts";
-import { assertFormalSnapshotHasReplayPolicy } from "./reduction-stacking-policy";
+import {
+  assertFormalConfigExportAllowed,
+  assertFormalConfigExportStageEnabled,
+  recoverVerifiedFormalConfigExportEvidence,
+  type FormalConfigExportAuthorization,
+  type FormalConfigExportContext,
+  type FormalConfigExportEvidenceVerifier,
+  type VerifiedFormalConfigExportEvidence,
+} from "./config-export-stage";
+import type { ReductionStackingPolicyVersion } from "./types";
 export type { ConfigExportMapping } from "./config-export-mapping";
 
 
@@ -62,12 +71,12 @@ export function createExportManifest(input: {
   mapping: ConfigExportMapping;
   profile: ExportTargetProfile;
   snapshot: ConfigurationSnapshot;
+  availableReductionPolicies: ReductionStackingPolicyVersion[];
   originalFileHashes: Record<string, string>;
   entries: ExportManifestEntry[];
   createdAt: string;
   environmentId?: string;
   channelKey?: string;
-  availableReductionPolicies: ReductionStackingPolicyVersion[];
   patchOffsetGovernance?: {
     policy?: WorkspacePolicyRecord | PatchOffsetPolicyVersion;
     ruleSet: RuleSetVersion;
@@ -77,7 +86,6 @@ export function createExportManifest(input: {
   };
 }): ExportManifest {
   assertSnapshotItemPartEnabled(input.snapshot, "config_export");
-  assertFormalSnapshotHasReplayPolicy(input.snapshot, input.availableReductionPolicies);
   if (!verifySnapshotIntegrity(input.snapshot)) {
     throw new Error("ConfigurationSnapshot 完整性校验失败，不能生成配置表。");
   }
@@ -90,6 +98,10 @@ export function createExportManifest(input: {
   if (includesStore && (!input.snapshot.pricingPolicyVersion || !input.snapshot.automaticPricing?.formal)) {
     throw new Error("PricingPolicy 尚未形成可执行的已发布版本：请查看策略 Trace 中的精确缺参或执行语义问题；正式 Store 导出已阻断。");
   }
+  assertConfigExportSnapshotReplayable(
+    input.snapshot,
+    input.availableReductionPolicies,
+  );
   let frozenPatchGovernance: Pick<ExportManifest,
     "patchOffsetPolicyVersion" | "patchValidationIssueFingerprints" | "patchValidationWaiverRefs" | "patchValidationWaiverDecisionRefs"> = {};
   if (input.snapshot.patchOffsetPolicyVersion) {
@@ -333,9 +345,11 @@ export function validateLogicalTableRelations(input: {
 
 export interface ExportFileOperation {
   workbook: string;
+  targetRef: string;
   stagedPath: string;
   targetPath: string;
   expectedOriginalHash: string;
+  stagedHash: string;
 }
 
 export interface ExportCommitAdapter {
@@ -355,6 +369,7 @@ export interface ExportCommitResult {
   rolledBackWorkbooks: string[];
   newHashes: Record<string, string>;
   issues: ValidationIssue[];
+  formalEvidence: VerifiedFormalConfigExportEvidence;
   audit?: {
     workspaceId: string;
     userId: string;
@@ -370,18 +385,55 @@ export async function commitExportPackage(input: {
   idempotencyKey: string;
   operations: ExportFileOperation[];
   adapter: ExportCommitAdapter;
+  formalAuthorization?: FormalConfigExportAuthorization;
+  formalAuthorizationVerifier?: FormalConfigExportEvidenceVerifier;
+  formalTargetContext: Pick<
+    FormalConfigExportContext,
+    "environmentId" | "channelKey" | "mappingId" | "mappingVersion"
+  >;
   audit?: ExportCommitResult["audit"];
 }): Promise<ExportCommitResult> {
+  const formalExportContext: FormalConfigExportContext = {
+    packageId: input.packageId,
+    profileId: input.profileId,
+    ...input.formalTargetContext,
+    snapshots: input.snapshots.map((snapshot) => ({
+      snapshotId: snapshot.id,
+      snapshotHash: snapshot.contentHash,
+    })),
+    operations: input.operations.map((operation) => ({
+      workbook: operation.workbook,
+      targetRef: operation.targetRef,
+      expectedOriginalHash: operation.expectedOriginalHash,
+      stagedHash: operation.stagedHash,
+    })),
+  };
+  assertFormalConfigExportStageEnabled();
   if (!input.snapshots.length) throw new Error("导出提交缺少冻结 ConfigurationSnapshot。");
   for (const snapshot of input.snapshots) {
-    assertSnapshotItemPartEnabled(snapshot, "config_export");
-    assertFormalSnapshotHasReplayPolicy(snapshot, input.availableReductionPolicies);
-    if (!verifySnapshotIntegrity(snapshot)) {
-      throw new Error(`冻结 ConfigurationSnapshot ${snapshot.id} 的内容哈希校验失败。`);
-    }
+    assertConfigExportSnapshotReplayable(snapshot, input.availableReductionPolicies);
   }
   const previous = await input.adapter.findCommittedResult(input.idempotencyKey);
-  if (previous) return structuredClone(previous);
+  if (previous) {
+    if (
+      previous.status !== "committed"
+      || previous.packageId !== input.packageId
+      || previous.profileId !== input.profileId
+    ) {
+      throw new Error("幂等记录不是当前包与 Profile 的已提交结果，拒绝恢复。");
+    }
+    recoverVerifiedFormalConfigExportEvidence({
+      authorization: input.formalAuthorization,
+      context: formalExportContext,
+      evidence: previous.formalEvidence,
+    });
+    return structuredClone(previous);
+  }
+  const formalEvidence = await assertFormalConfigExportAllowed(
+    input.formalAuthorization,
+    input.formalAuthorizationVerifier,
+    formalExportContext,
+  );
 
   const conflictIssues: ValidationIssue[] = [];
   for (const operation of input.operations) {
@@ -404,6 +456,7 @@ export async function commitExportPackage(input: {
       rolledBackWorkbooks: [],
       newHashes: {},
       issues: conflictIssues,
+      formalEvidence,
       ...(input.audit ? { audit: input.audit } : {}),
     };
   }
@@ -434,6 +487,7 @@ export async function commitExportPackage(input: {
       rolledBackWorkbooks: [],
       newHashes,
       issues: [],
+      formalEvidence,
       ...(input.audit ? { audit: input.audit } : {}),
     };
     await input.adapter.recordCommittedResult(input.idempotencyKey, result);
@@ -471,6 +525,7 @@ export async function commitExportPackage(input: {
         },
         ...rollbackIssues,
       ],
+      formalEvidence,
       ...(input.audit ? { audit: input.audit } : {}),
     };
   }

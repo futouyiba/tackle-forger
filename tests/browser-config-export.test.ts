@@ -2,18 +2,55 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import * as XLSX from "xlsx";
 import {
-  commitBrowserExportFromHandle,
-  previewBrowserExportFromHandles,
+  commitBrowserExportFromHandle as commitBrowserExportFromHandleWithPolicies,
+  previewBrowserExportFromHandles as previewBrowserExportFromHandlesWithPolicies,
   type BrowserDirectoryHandle,
   type BrowserFileHandle,
   type LocalExportTargetBinding,
 } from "../lib/browser-config-export";
 import type { ConfigExportMapping } from "../lib/config-export-mapping";
 import { createSeedState } from "../lib/seed";
-import { formalExportSnapshot } from "./helpers/formal-export-snapshot";
+import { deterministicHash } from "../lib/rule-kernel";
+import {
+  ConfigExportStageError,
+  type FormalConfigExportAuthorization,
+} from "../lib/config-export-stage";
 import { testReductionPolicy } from "./helpers/reduction-policy";
 
-const availableReductionPolicies = [testReductionPolicy()];
+const AVAILABLE_REDUCTION_POLICIES = [testReductionPolicy()];
+function commitBrowserExportFromHandle(
+  input: Omit<Parameters<typeof commitBrowserExportFromHandleWithPolicies>[0], "availableReductionPolicies">,
+) {
+  return commitBrowserExportFromHandleWithPolicies({
+    ...input,
+    availableReductionPolicies: AVAILABLE_REDUCTION_POLICIES,
+  });
+}
+function previewBrowserExportFromHandles(
+  input: Omit<Parameters<typeof previewBrowserExportFromHandlesWithPolicies>[0], "availableReductionPolicies">,
+) {
+  return previewBrowserExportFromHandlesWithPolicies({
+    ...input,
+    availableReductionPolicies: AVAILABLE_REDUCTION_POLICIES,
+  });
+}
+
+process.env.TACKLE_FORGER_PRODUCT_DELIVERY_STAGE = "PHASE_ONE_POINT_FIVE";
+process.env.TACKLE_FORGER_FORMAL_CONFIG_EXPORT_RUNTIME_ENABLED = "true";
+
+const FORMAL_AUTHORIZATION: FormalConfigExportAuthorization = {
+  packageKind: "EXPORT_PACKAGE",
+  publicationState: "FORMAL",
+  formal: true,
+  configIdBundleId: "bundle:test",
+  configIdPolicyVersionId: "config-id:test",
+  configTargetCatalogVersionId: "catalog:test",
+  approvedFreshManifestId: "manifest:test",
+  governanceLeaseId: "lease:test",
+  fencingToken: "1",
+  expectedOldOid: "a".repeat(40),
+  protectedRefCasAvailable: true,
+};
 
 function toBytes(data: BufferSource | Blob | string): Promise<Uint8Array> | Uint8Array {
   if (typeof data === "string") return new TextEncoder().encode(data);
@@ -162,120 +199,91 @@ enums = [{ field = "goods_id", table = "goods_basic" }]
   return { root, xlsx, binding };
 }
 
-test("浏览器预览从环境根 config.toml 生成三表差异，提交后回读并保留 StoreBuy.enabled", async () => {
+test("1.5 浏览器骨架缺少受信服务端治理时在本地读取前拒绝生产形态预览", async () => {
   const current = await fixture();
-  const snapshot = formalExportSnapshot(createSeedState().configurationSnapshots[0]!);
-  const preview = await previewBrowserExportFromHandles({
-    binding: current.binding,
-    targetRoot: current.root,
-    configRoot: current.root,
-    packageId: "browser-package-1",
-    mapping: mapping(),
-    snapshots: [snapshot],
-    availableReductionPolicies,
-    createdAt: "2026-07-21T00:00:00.000Z",
-  });
-  assert.equal(preview.status, "ready");
-  assert.equal(preview.operations.length, 3);
-  const manifest = await commitBrowserExportFromHandle({
-    root: current.root,
-    binding: current.binding,
-    preview,
-    snapshots: [snapshot],
-    availableReductionPolicies,
-  });
-  assert.equal(manifest.operations.every((operation) => operation.state === "verified"), true);
-  const store = XLSX.read(current.xlsx.files.get("store.xlsx")!.value(), { type: "array" });
-  assert.equal(store.Sheets.StoreBuy.D5.v, true);
-});
-
-test("ID 与 configNameKey 分裂命中时阻断目标，不产生可提交操作", async () => {
-  const current = await fixture("different_name");
-  const preview = await previewBrowserExportFromHandles({
-    binding: current.binding,
-    targetRoot: current.root,
-    configRoot: current.root,
-    packageId: "browser-package-split",
-    mapping: mapping(),
-    snapshots: [formalExportSnapshot(createSeedState().configurationSnapshots[0])],
-    availableReductionPolicies,
-  });
-  assert.equal(preview.status, "blocked");
-  assert.deepEqual(preview.operations, []);
-  assert.ok(preview.issues.some((issue) => issue.code === "EXPORT_IDENTITY_SPLIT_MATCH"));
-});
-
-test("预览后源文件变化时恢复型提交拒绝覆盖", async () => {
-  const current = await fixture();
-  const snapshot = formalExportSnapshot(createSeedState().configurationSnapshots[0]!);
-  const preview = await previewBrowserExportFromHandles({
-    binding: current.binding,
-    targetRoot: current.root,
-    configRoot: current.root,
-    packageId: "browser-package-conflict",
-    mapping: mapping(),
-    snapshots: [snapshot],
-    availableReductionPolicies,
-  });
-  assert.equal(preview.status, "ready");
-  const tackle = current.xlsx.files.get("tackle.xlsx")!;
-  tackle.replace(new Uint8Array([...tackle.value(), 0]));
-  await assert.rejects(() => commitBrowserExportFromHandle({
-    root: current.root,
-    binding: current.binding,
-    preview,
-    snapshots: [snapshot],
-    availableReductionPolicies,
-  }), /预览后已变化/);
-});
-
-test("扩展部位预览与提交在浏览器文件写入前 fail-closed", async () => {
-  const current = await fixture();
-  const snapshot = formalExportSnapshot(
-    createSeedState().configurationSnapshots[0],
-    (value) => { value.projectionMatch.itemPartId = "part:hook"; },
-  );
+  const snapshot = createSeedState().configurationSnapshots[0]!;
   const beforeFiles = Object.fromEntries(
     [...current.xlsx.files].map(([name, file]) => [name, [...file.value()]]),
   );
-  await assert.rejects(() => previewBrowserExportFromHandles({
-    binding: current.binding,
-    targetRoot: current.root,
-    configRoot: current.root,
-    packageId: "browser-package-hook-preview",
-    mapping: mapping(),
-    snapshots: [snapshot],
-    availableReductionPolicies,
-  }), (error) => (
-    error instanceof Error
-    && "code" in error
-    && error.code === "ITEM_PART_NOT_ENABLED"
-  ));
+  await assert.rejects(
+    () => previewBrowserExportFromHandles({
+      binding: current.binding,
+      targetRoot: current.root,
+      configRoot: current.root,
+      packageId: "browser-package-1",
+      mapping: mapping(),
+      snapshots: [snapshot],
+      createdAt: "2026-07-21T00:00:00.000Z",
+    }),
+    (error) => error instanceof ConfigExportStageError
+      && error.code === "CONFIG_TARGET_SERIALIZATION_UNAVAILABLE",
+  );
   assert.deepEqual(
     Object.fromEntries([...current.xlsx.files].map(([name, file]) => [name, [...file.value()]])),
     beforeFiles,
   );
+});
 
-  const allowedPreview = await previewBrowserExportFromHandles({
-    binding: current.binding,
-    targetRoot: current.root,
-    configRoot: current.root,
-    packageId: "browser-package-hook-commit",
-    mapping: mapping(),
-    snapshots: [formalExportSnapshot(createSeedState().configurationSnapshots[0])],
-    availableReductionPolicies,
-  });
-  const beforeDirectories = [...current.root.directories.keys()];
-  await assert.rejects(() => commitBrowserExportFromHandle({
-    root: current.root,
-    binding: current.binding,
-    preview: allowedPreview,
-    snapshots: [snapshot],
-    availableReductionPolicies,
-  }), (error) => (
-    error instanceof Error
-    && "code" in error
-    && error.code === "ITEM_PART_NOT_ENABLED"
-  ));
-  assert.deepEqual([...current.root.directories.keys()], beforeDirectories);
+test("浏览器直接绕过对身份冲突或扩展部位仍只返回稳定序列化阻断", async () => {
+  const current = await fixture("different_name");
+  const ordinary = createSeedState().configurationSnapshots[0]!;
+  const extended = structuredClone(ordinary);
+  extended.projectionMatch.itemPartId = "part:hook";
+  const content = structuredClone(extended);
+  Reflect.deleteProperty(content, "contentHash");
+  extended.contentHash = deterministicHash(content);
+  for (const [packageId, snapshot] of [
+    ["browser-package-split", ordinary],
+    ["browser-package-hook", extended],
+  ] as const) {
+    await assert.rejects(
+      () => previewBrowserExportFromHandles({
+        binding: current.binding,
+        targetRoot: current.root,
+        configRoot: current.root,
+        packageId,
+        mapping: mapping(),
+        snapshots: [snapshot],
+      }),
+      (error) => error instanceof ConfigExportStageError
+        && error.code === "CONFIG_TARGET_SERIALIZATION_UNAVAILABLE",
+    );
+  }
+});
+
+test("浏览器正式提交在治理验证前不读取或覆盖文件", async () => {
+  const current = await fixture();
+  const snapshot = createSeedState().configurationSnapshots[0]!;
+  const beforeFiles = Object.fromEntries(
+    [...current.xlsx.files].map(([name, file]) => [name, [...file.value()]]),
+  );
+  await assert.rejects(
+    () => commitBrowserExportFromHandle({
+      root: current.root,
+      binding: current.binding,
+      preview: {
+        packageId: "browser-package-forged",
+        bindingId: current.binding.bindingId,
+        environmentId: current.binding.environmentId,
+        channelKey: current.binding.channelKey,
+        mappingId: current.binding.mappingId,
+        mappingVersion: current.binding.mappingVersion,
+        snapshotIds: [snapshot.id],
+        snapshotHashes: { [snapshot.id]: snapshot.contentHash },
+        itemPartIds: ["part:rod"],
+        status: "ready",
+        operations: [],
+        issues: [],
+        createdAt: "2026-07-23T00:00:00.000Z",
+      },
+      snapshots: [snapshot],
+      formalAuthorization: FORMAL_AUTHORIZATION,
+    }),
+    (error) => error instanceof ConfigExportStageError
+      && error.code === "CONFIG_EXPORT_GOVERNANCE_VERIFIER_UNAVAILABLE",
+  );
+  assert.deepEqual(
+    Object.fromEntries([...current.xlsx.files].map(([name, file]) => [name, [...file.value()]])),
+    beforeFiles,
+  );
 });

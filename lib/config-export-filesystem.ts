@@ -11,7 +11,7 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import type { ExportTargetProfile } from "./interaction-contracts";
-import type { ConfigurationSnapshot, ReductionStackingPolicyVersion } from "./types";
+import type { ConfigurationSnapshot } from "./types";
 import { verifySnapshotIntegrity } from "./publishing";
 import {
   materializeConfigExport,
@@ -35,7 +35,18 @@ import {
   assertSnapshotItemPartEnabled,
   snapshotItemPartId,
 } from "./enabled-item-parts";
-import { assertFormalSnapshotHasReplayPolicy } from "./reduction-stacking-policy";
+import { assertConfigExportSnapshotReplayable } from "./config-preview-package";
+import type { ReductionStackingPolicyVersion } from "./types";
+import {
+  assertFormalConfigExportAllowed,
+  assertFormalConfigExportStageEnabled,
+  assertProductionShapeConfigExportAllowed,
+  recoverVerifiedFormalConfigExportEvidence,
+  type FormalConfigExportAuthorization,
+  type FormalConfigExportContext,
+  type FormalConfigExportEvidenceVerifier,
+  type VerifiedFormalConfigExportEvidence,
+} from "./config-export-stage";
 
 export interface FilesystemExportOperation extends ExportFileOperation {
   sourceHash: string;
@@ -58,6 +69,7 @@ export interface FilesystemExportPreview {
   backupRoot?: string;
   operations: FilesystemExportOperation[];
   issues: ConfigExportMappingIssue[];
+  formalEvidence?: VerifiedFormalConfigExportEvidence;
   createdAt: string;
 }
 
@@ -133,10 +145,41 @@ export async function previewFilesystemExport(input: {
   mapping: ConfigExportMapping;
   snapshot: ConfigurationSnapshot;
   availableReductionPolicies: ReductionStackingPolicyVersion[];
+  canCommit: boolean;
+  formalAuthorization?: FormalConfigExportAuthorization;
+  formalAuthorizationVerifier?: FormalConfigExportEvidenceVerifier;
   createdAt?: string;
 }): Promise<FilesystemExportPreview> {
-  assertSnapshotItemPartEnabled(input.snapshot, "config_export");
-  assertFormalSnapshotHasReplayPolicy(input.snapshot, input.availableReductionPolicies);
+  assertConfigExportSnapshotReplayable(input.snapshot, input.availableReductionPolicies);
+  const workbookNames = Array.from(new Set(
+    Object.values(input.mapping.logicalTables).map((table) => table.workbook),
+  )).sort();
+  const previewContextBase = {
+    packageId: input.packageId,
+    profileId: input.profile.profileId,
+    environmentId: input.profile.environmentId ?? "",
+    channelKey: input.profile.channelKey ?? "",
+    mappingId: input.mapping.mappingId,
+    mappingVersion: input.mapping.version,
+    snapshots: [{
+      snapshotId: input.snapshot.id,
+      snapshotHash: input.snapshot.contentHash,
+    }],
+  };
+  await assertProductionShapeConfigExportAllowed({
+    canCommit: input.canCommit,
+    authorization: input.formalAuthorization,
+    verifier: input.formalAuthorizationVerifier,
+    context: {
+      ...previewContextBase,
+      operations: workbookNames.map((workbook) => ({
+        workbook,
+        targetRef: workbook.replaceAll("\\", "/"),
+        expectedOriginalHash: "PREVIEW_NOT_MATERIALIZED",
+        stagedHash: "PREVIEW_NOT_MATERIALIZED",
+      })),
+    },
+  });
   const itemPartId = snapshotItemPartId(input.snapshot)!;
   const createdAt = input.createdAt ?? new Date().toISOString();
   const initialIssues: ConfigExportMappingIssue[] = [];
@@ -192,13 +235,11 @@ export async function previewFilesystemExport(input: {
   const compilerTables = parseConfigTomlTables(toml);
   const materialized = materializeConfigExport({
     snapshot: input.snapshot,
+    availableReductionPolicies: input.availableReductionPolicies,
     mapping: input.mapping,
     compilerTables,
   });
   const issues = [...initialIssues, ...materialized.issues];
-  const workbookNames = Array.from(new Set(
-    Object.values(input.mapping.logicalTables).map((table) => table.workbook),
-  )).sort();
   const staged = new Map<string, Uint8Array>();
   const pendingOperations: FilesystemExportOperation[] = [];
 
@@ -234,6 +275,7 @@ export async function previewFilesystemExport(input: {
       staged.set(workbook, result.output);
       pendingOperations.push({
         workbook,
+        targetRef: workbook.replaceAll("\\", "/"),
         stagedPath: "",
         targetPath,
         expectedOriginalHash: hashBytes(source),
@@ -294,6 +336,20 @@ export async function previewFilesystemExport(input: {
     };
   }
 
+  const formalEvidence = await assertProductionShapeConfigExportAllowed({
+    canCommit: input.canCommit,
+    authorization: input.formalAuthorization,
+    verifier: input.formalAuthorizationVerifier,
+    context: {
+      ...previewContextBase,
+      operations: pendingOperations.map((operation) => ({
+        workbook: operation.workbook,
+        targetRef: operation.targetRef,
+        expectedOriginalHash: operation.expectedOriginalHash,
+        stagedHash: operation.stagedHash,
+      })),
+    },
+  });
   const stagingRoot = path.join(
     resolved.projectRoot,
     ".tackle-forger",
@@ -330,17 +386,26 @@ export async function previewFilesystemExport(input: {
     backupRoot,
     operations,
     issues,
+    formalEvidence,
     createdAt,
   };
   await writeFile(path.join(stagingRoot, "ExportManifest.json"), JSON.stringify(preview, null, 2));
   return preview;
 }
 
-async function atomicReplace(sourcePath: string, targetPath: string) {
+async function atomicReplace(
+  sourcePath: string,
+  targetPath: string,
+  expectedSourceHash?: string,
+) {
   const token = randomUUID();
   const pending = `${targetPath}.tackle-forger-new-${token}`;
   const displaced = `${targetPath}.tackle-forger-old-${token}`;
   await copyFile(sourcePath, pending);
+  if (expectedSourceHash && await hashFile(pending) !== expectedSourceHash) {
+    await rm(pending, { force: true });
+    throw new Error("暂存文件内容与已验证 stagedHash 不一致，拒绝替换正式文件。");
+  }
   await rename(targetPath, displaced);
   try {
     await rename(pending, targetPath);
@@ -360,10 +425,31 @@ export async function commitFilesystemExport(input: {
   confirmationProfileId: string;
   idempotencyKey: string;
   canCommit: boolean;
+  formalAuthorization?: FormalConfigExportAuthorization;
+  formalAuthorizationVerifier?: FormalConfigExportEvidenceVerifier;
   audit?: ExportCommitResult["audit"];
 }): Promise<ExportCommitResult> {
+  assertConfigExportSnapshotReplayable(input.snapshot, input.availableReductionPolicies);
+  const formalExportContext: FormalConfigExportContext = {
+    packageId: input.preview.packageId,
+    profileId: input.preview.profileId,
+    environmentId: input.profile.environmentId ?? "",
+    channelKey: input.profile.channelKey ?? "",
+    mappingId: input.preview.mappingId,
+    mappingVersion: input.preview.mappingVersion,
+    snapshots: [{
+      snapshotId: input.snapshot.id,
+      snapshotHash: input.snapshot.contentHash,
+    }],
+    operations: input.preview.operations.map((operation) => ({
+      workbook: operation.workbook,
+      targetRef: operation.targetRef,
+      expectedOriginalHash: operation.expectedOriginalHash,
+      stagedHash: operation.stagedHash,
+    })),
+  };
+  assertFormalConfigExportStageEnabled();
   assertSnapshotItemPartEnabled(input.snapshot, "config_export");
-  assertFormalSnapshotHasReplayPolicy(input.snapshot, input.availableReductionPolicies);
   if (!verifySnapshotIntegrity(input.snapshot)) {
     throw new Error("冻结 ConfigurationSnapshot 的内容哈希校验失败。");
   }
@@ -376,6 +462,11 @@ export async function commitFilesystemExport(input: {
   }
   if (!input.canCommit) throw new Error("缺少 config.export.commit Capability。");
   if (input.preview.status !== "ready") throw new Error("暂存预览未通过，不能提交。");
+  recoverVerifiedFormalConfigExportEvidence({
+    authorization: input.formalAuthorization,
+    context: formalExportContext,
+    evidence: input.preview.formalEvidence,
+  });
   if (!input.profile.enabled || input.profile.profileId !== input.preview.profileId) {
     throw new Error("提交 Profile 未启用或与暂存目标不一致。");
   }
@@ -423,6 +514,35 @@ export async function commitFilesystemExport(input: {
   const lockRoot = path.join(controlRoot, "locks");
   const backupRoot = expectedBackupRoot;
   const commitRoot = path.join(controlRoot, "commits");
+  const recordPath = path.join(
+    commitRoot,
+    `${createHash("sha256").update(input.idempotencyKey).digest("hex")}.json`,
+  );
+  try {
+    const previous = JSON.parse(
+      await readFile(recordPath, "utf8"),
+    ) as ExportCommitResult;
+    if (
+      previous.status !== "committed"
+      || previous.packageId !== input.preview.packageId
+      || previous.profileId !== input.preview.profileId
+    ) {
+      throw new Error("幂等记录不是当前包与 Profile 的已提交结果，拒绝恢复。");
+    }
+    recoverVerifiedFormalConfigExportEvidence({
+      authorization: input.formalAuthorization,
+      context: formalExportContext,
+      evidence: previous.formalEvidence,
+    });
+    return structuredClone(previous);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  await assertFormalConfigExportAllowed(
+    input.formalAuthorization,
+    input.formalAuthorizationVerifier,
+    formalExportContext,
+  );
   await mkdir(lockRoot, { recursive: true });
   await mkdir(backupRoot, { recursive: true });
   await mkdir(commitRoot, { recursive: true });
@@ -436,10 +556,6 @@ export async function commitFilesystemExport(input: {
     createdAt: new Date().toISOString(),
   }));
 
-  const recordPath = path.join(
-    commitRoot,
-    `${createHash("sha256").update(input.idempotencyKey).digest("hex")}.json`,
-  );
   const backupByTarget = new Map<string, string>();
   const adapter: ExportCommitAdapter = {
     getCurrentHash: hashFile,
@@ -450,7 +566,15 @@ export async function commitFilesystemExport(input: {
       return backupPath;
     },
     async replaceFile(stagedPath, targetPath) {
-      await atomicReplace(stagedPath, targetPath);
+      const operation = input.preview.operations.find(
+        (candidate) =>
+          candidate.stagedPath === stagedPath
+          && candidate.targetPath === targetPath,
+      );
+      if (!operation) {
+        throw new Error("待替换文件不属于已验证的暂存操作。");
+      }
+      await atomicReplace(stagedPath, targetPath, operation.stagedHash);
       return hashFile(targetPath);
     },
     async restoreBackup(backupPath, targetPath) {
@@ -477,6 +601,14 @@ export async function commitFilesystemExport(input: {
       idempotencyKey: input.idempotencyKey,
       operations: input.preview.operations,
       adapter,
+      formalAuthorization: input.formalAuthorization,
+      formalAuthorizationVerifier: input.formalAuthorizationVerifier,
+      formalTargetContext: {
+        environmentId: formalExportContext.environmentId,
+        channelKey: formalExportContext.channelKey,
+        mappingId: formalExportContext.mappingId,
+        mappingVersion: formalExportContext.mappingVersion,
+      },
       audit: input.audit,
     });
   } finally {

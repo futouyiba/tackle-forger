@@ -303,9 +303,14 @@ export async function previewBrowserExportFromHandles(input: {
   availableReductionPolicies: ReductionStackingPolicyVersion[];
   createdAt?: string;
 }): Promise<BrowserExportPreview> {
+  await assertProductionShapeConfigExportAllowed({
+    canCommit: false,
+    authorization: undefined,
+    verifier: undefined,
+    context: undefined,
+  });
   for (const snapshot of input.snapshots) {
     assertSnapshotItemPartEnabled(snapshot, "config_export");
-    assertFormalSnapshotHasReplayPolicy(snapshot, input.availableReductionPolicies);
   }
   const itemPartIds = [...new Set(
     input.snapshots.map((snapshot) => snapshotItemPartId(snapshot)!),
@@ -362,7 +367,12 @@ export async function previewBrowserExportFromHandles(input: {
   const compilerTables = parseConfigTomlTables(configToml);
   const rows: MaterializedConfigRow[] = [];
   for (const snapshot of input.snapshots) {
-    const materialized = materializeConfigExport({ snapshot, mapping: input.mapping, compilerTables });
+    const materialized = materializeConfigExport({
+      snapshot,
+      availableReductionPolicies: input.availableReductionPolicies,
+      mapping: input.mapping,
+      compilerTables,
+    });
     rows.push(...materialized.rows);
     issues.push(...materialized.issues);
   }
@@ -466,6 +476,12 @@ export async function previewBrowserExport(input: {
   availableReductionPolicies: ReductionStackingPolicyVersion[];
   createdAt?: string;
 }): Promise<BrowserExportPreview> {
+  await assertProductionShapeConfigExportAllowed({
+    canCommit: false,
+    authorization: undefined,
+    verifier: undefined,
+    context: undefined,
+  });
   const targetRoot = await loadDirectoryHandle(input.binding.directoryHandleStorageKey);
   const configRoot = await loadDirectoryHandle(input.configRootBinding.directoryHandleStorageKey);
   if (!targetRoot) throw new Error(`${input.binding.userLabel} 的目标目录尚未绑定。`);
@@ -494,11 +510,30 @@ export async function commitBrowserExportFromHandle(input: {
   preview: BrowserExportPreview;
   snapshots: ConfigurationSnapshot[];
   availableReductionPolicies: ReductionStackingPolicyVersion[];
+  formalAuthorization?: FormalConfigExportAuthorization;
 }): Promise<BrowserRecoveryManifest> {
+  await assertFormalConfigExportAllowed(input.formalAuthorization, undefined, {
+    packageId: input.preview.packageId,
+    profileId: input.binding.bindingId,
+    environmentId: input.binding.environmentId,
+    channelKey: input.binding.channelKey,
+    mappingId: input.preview.mappingId,
+    mappingVersion: input.preview.mappingVersion,
+    snapshots: input.snapshots.map((snapshot) => ({
+      snapshotId: snapshot.id,
+      snapshotHash: snapshot.contentHash,
+    })),
+    operations: input.preview.operations.map((operation) => ({
+      workbook: operation.workbook,
+      targetRef: operation.relativePath,
+      expectedOriginalHash: operation.sourceHash,
+      stagedHash: operation.stagedHash,
+    })),
+  });
   if (!input.snapshots.length) throw new Error("导出提交缺少冻结 ConfigurationSnapshot。");
   for (const snapshot of input.snapshots) {
-    assertSnapshotItemPartEnabled(snapshot, "config_export");
     assertFormalSnapshotHasReplayPolicy(snapshot, input.availableReductionPolicies);
+    assertSnapshotItemPartEnabled(snapshot, "config_export");
     if (!verifySnapshotIntegrity(snapshot)) {
       throw new Error(`冻结 ConfigurationSnapshot ${snapshot.id} 的内容哈希校验失败。`);
     }
@@ -601,6 +636,7 @@ export async function commitBrowserExport(input: {
   preview: BrowserExportPreview;
   snapshots: ConfigurationSnapshot[];
   availableReductionPolicies: ReductionStackingPolicyVersion[];
+  formalAuthorization?: FormalConfigExportAuthorization;
 }): Promise<BrowserRecoveryManifest> {
   const root = await loadDirectoryHandle(input.binding.directoryHandleStorageKey);
   if (!root) throw new Error("导出目录尚未绑定。");
@@ -620,9 +656,17 @@ import {
 } from "./config-export-workbook";
 import { validateLogicalTableRelations } from "./config-export";
 import { verifySnapshotIntegrity } from "./publishing";
-import type { ConfigurationSnapshot, ReductionStackingPolicyVersion } from "./types";
+import type {
+  ConfigurationSnapshot,
+  ReductionStackingPolicyVersion,
+} from "./types";
+import { assertFormalSnapshotHasReplayPolicy } from "./reduction-stacking-policy";
 import {
   assertSnapshotItemPartEnabled,
   snapshotItemPartId,
 } from "./enabled-item-parts";
-import { assertFormalSnapshotHasReplayPolicy } from "./reduction-stacking-policy";
+import {
+  assertFormalConfigExportAllowed,
+  assertProductionShapeConfigExportAllowed,
+  type FormalConfigExportAuthorization,
+} from "./config-export-stage";

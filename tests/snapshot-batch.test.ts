@@ -31,6 +31,7 @@ test("SnapshotBatch 复用未变化快照、创建合格新 revision 并跳过�
 
   const plan = planSnapshotBatch({
     models: [...state.purchasableModels, createCandidate, blockedCandidate],
+    series: state.seriesDefinitions,
     skus: [...state.skuDrawers, blockedSku],
     snapshots: state.configurationSnapshots,
     selectedModelIds: [blockedCandidate.id, createCandidate.id, published.id],
@@ -51,6 +52,7 @@ test("SnapshotBatch 输入排序稳定且全跳过时拒绝确认", () => {
   draft.configurationSnapshotId = undefined;
   const left = planSnapshotBatch({
     models: [draft],
+    series: state.seriesDefinitions,
     skus: state.skuDrawers,
     snapshots: state.configurationSnapshots,
     selectedModelIds: [draft.id],
@@ -58,6 +60,7 @@ test("SnapshotBatch 输入排序稳定且全跳过时拒绝确认", () => {
   });
   const right = planSnapshotBatch({
     models: [draft],
+    series: state.seriesDefinitions,
     skus: state.skuDrawers,
     snapshots: state.configurationSnapshots,
     selectedModelIds: [draft.id, draft.id],

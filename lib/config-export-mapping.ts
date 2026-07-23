@@ -1,4 +1,5 @@
 import type { ConfigurationSnapshot } from "./types";
+import { assertSnapshotItemPartEnabled } from "./enabled-item-parts";
 
 export type ExportSnapshotProperty =
   | "id"
@@ -302,6 +303,7 @@ export function materializeConfigExport(input: {
   mapping: ConfigExportMapping;
   compilerTables: Record<string, ConfigCompilerTableDefinition>;
 }): MaterializedConfigExport {
+  assertSnapshotItemPartEnabled(input.snapshot, "config_export");
   const issues = validateConfigExportMapping({
     mapping: input.mapping,
     compilerTables: input.compilerTables,

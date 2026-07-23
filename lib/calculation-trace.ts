@@ -281,7 +281,10 @@ function applyOperation(
 ): unknown {
   if (operation === "no_effect") return before;
   if (operation === "base" || operation === "set") return operand;
-  if (operation === "clear") return absentValue();
+  if (operation === "clear") {
+    if (operand !== null) throw new Error("clear 的 operand 必须为 null。");
+    return absentValue();
+  }
   if (typeof before !== "number" || typeof operand !== "number") {
     throw new Error(`${operation} 只接受数字。`);
   }
@@ -910,9 +913,9 @@ export function assertCalculationTraceMatchesPricing(input: {
     return;
   }
   if (pricingEntries.length === 0) {
-    if (input.pricing.trace.length > 0) {
+    if (input.pricing.formal || input.pricing.trace.length > 0) {
       throw new CalculationTraceReplayError(
-        "Snapshot 已冻结 pricing Trace，但 canonical Trace 缺少对应条目。",
+        "Snapshot 已冻结正式价格或 pricing Trace，但 canonical Trace 缺少对应条目。",
       );
     }
     // v1 发布前的历史 Snapshot 可能只有空 automaticPricing Trace，不能补写并改变其 hash。

@@ -421,6 +421,23 @@ test("pricing、patch 与 legacy 只读适配器幂等并保留原始 evidence",
   );
   assert.deepEqual(JSON.parse(JSON.stringify(removeArchive)), removeArchive);
   assert.equal(verifyCalculationTraceArchive(removeArchive), true);
+  assert.throws(
+    () => createCalculationTraceEntry({
+      ...removeEntries[0],
+      sequence: 1,
+      operand: 1,
+    }),
+    /clear 的 operand 必须为 null/,
+  );
+  const tamperedClear = structuredClone(removeEntries[0]);
+  tamperedClear.operand = 1;
+  assert.throws(
+    () => replayCalculationTrace({
+      entries: [tamperedClear],
+      initialState: [{ subjectRef, parameterKey: "drag", value: 12 }],
+    }),
+    /clear 的 operand 必须为 null/,
+  );
   const removeThenSetEntries = adaptPatchTraceToCanonical({
     ...patchInput,
     trace: [
@@ -518,6 +535,20 @@ test("pricing Trace 必须逐步连续且最终值等于 purchasePrice", () => {
     "pricing:purchase_price",
   ]);
   assert.equal(verifyCalculationTraceArchive(createCalculationTraceArchive(entries)), true);
+  const panelOnlyArchive = createCalculationTraceArchive(adaptRuleTraceToCanonical({
+    projection,
+    subjectRef,
+    parameterDefinitions,
+  }));
+  assert.throws(
+    () => assertCalculationTraceMatchesPricing({
+      archive: panelOnlyArchive,
+      subjectRef,
+      pricing: { ...pricing, trace: [] },
+      ruleSetVersion: "rules:1",
+    }),
+    /正式价格或 pricing Trace/,
+  );
   const historicalV1Entries = entries.map((item, index) => {
     const generatedKeys = new Set(["schemaVersion", "traceEntryId", "inputHash", "outputHash"]);
     const entryInput = Object.fromEntries(

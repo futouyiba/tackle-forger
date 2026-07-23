@@ -47,3 +47,36 @@ test("受治理字段永远使用最新值，未知普通字段仍保留", () =>
   assert.equal(merged.state.seriesDefinitions.some((entry) => entry.id === "series:stale"), false);
   assert.deepEqual((merged.state as unknown as Record<string, unknown>).futureWorkspaceField, { nested: "local" });
 });
+
+test("领域命令推进基线后遇到409，普通本地修改仍按命令结果三方合并", () => {
+  const beforeCommand = createSeedState();
+  const commandResult = structuredClone(beforeCommand) as typeof beforeCommand;
+  // A domain command may return an updated workspace which also carries an
+  // ordinary workspace note. This returned state is the only valid next base.
+  commandResult.notes = "数据源发布：规则指纹已更新";
+
+  const localDraft = structuredClone(commandResult);
+  localDraft.notes = "数据源发布后补充的本地说明";
+  const latest = structuredClone(commandResult) as typeof commandResult & Record<string, unknown>;
+  latest.futureRemoteField = { revision: "after-command" };
+
+  const staleBaseline = mergeWorkspaceConflict({
+    baseline: beforeCommand,
+    draft: localDraft,
+    latest,
+  });
+  assert.deepEqual(staleBaseline.conflicts, ["notes"]);
+
+  const merged = mergeWorkspaceConflict({
+    baseline: commandResult,
+    draft: localDraft,
+    latest,
+  });
+
+  assert.deepEqual(merged.conflicts, []);
+  assert.deepEqual(merged.replayedLocalFields, ["notes"]);
+  assert.equal(merged.state.notes, "数据源发布后补充的本地说明");
+  assert.deepEqual((merged.state as unknown as Record<string, unknown>).futureRemoteField, {
+    revision: "after-command",
+  });
+});

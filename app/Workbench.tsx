@@ -536,6 +536,21 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     setRevision(nextRevision);
     setDirty(false);
   };
+  /**
+   * Domain commands return the new authoritative workspace, not a local draft.
+   * Keep every conflict/revision baseline in lockstep so a later 409 compares
+   * against the command result rather than a state from before that command.
+   */
+  const replaceAuthoritativeWorkspace = (nextState: WorkspaceState, nextRevision: number) => {
+    const normalized = ensureWorkflowFields(nextState);
+    setState(normalized);
+    baselineStateRef.current = copyState(normalized);
+    conflictDraftRef.current = null;
+    conflictLatestRef.current = null;
+    applyWorkspaceRevision(nextRevision);
+    setSaveFeedback(null);
+    setSyncState("saved");
+  };
   const [syncState, setSyncState] = useState<"ready" | "saving" | "saved" | "error">("ready");
   const [saveFeedback, setSaveFeedback] = useState<SaveFeedback | null>(null);
   const [toast, setToast] = useState("");
@@ -641,9 +656,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         const stateResponse = await fetch("/api/state", { cache: "no-store" });
         if (!stateResponse.ok) throw new Error("state-service");
         const payload = await stateResponse.json() as ApiStatePayload;
-        setState(ensureWorkflowFields(payload.state));
-        baselineStateRef.current = ensureWorkflowFields(payload.state);
-        applyWorkspaceRevision(payload.revision);
+        replaceAuthoritativeWorkspace(payload.state, payload.revision);
         setUser(payload.user);
         setAuthStatus("authenticated"); setAuthMessage(""); setAuthErrorCode("");
         void fetch("/api/revisions", { cache: "no-store" })
@@ -934,9 +947,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       if (!response.ok || !payload.state || !payload.revision) {
         throw new Error(payload.error || "发布失败");
       }
-      setState(ensureWorkflowFields(payload.state));
-      applyWorkspaceRevision(payload.revision);
-      setSyncState("saved");
+      replaceAuthoritativeWorkspace(payload.state, payload.revision);
       setSourcePreview(null);
       notify("数据源已发布为正式版本 v" + payload.revision);
       void loadVersions();
@@ -1026,9 +1037,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       if (!response.ok || !payload.state || !payload.revision) {
         throw new Error(payload.error || "回写失败");
       }
-      setState(ensureWorkflowFields(payload.state));
-      applyWorkspaceRevision(payload.revision);
-      setSyncState("saved");
+      replaceAuthoritativeWorkspace(payload.state, payload.revision);
       setWritebackPreview(null);
       notify("已安全回写飞书，并保存审计版本 v" + payload.revision);
       void loadVersions();
@@ -3176,9 +3185,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       actorName={user.name}
       notify={notify}
       onWorkspaceApplied={(nextState, nextRevision, message) => {
-        setState(ensureWorkflowFields(nextState));
-        applyWorkspaceRevision(nextRevision);
-        setSyncState("saved");
+        replaceAuthoritativeWorkspace(nextState, nextRevision);
         notify(message);
         void loadVersions();
       }}
@@ -3331,9 +3338,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           workspaceFreshness={() => workspaceFreshnessRef.current}
           notify={notify}
           onWorkspaceApplied={(nextState, nextRevision, message) => {
-            setState(ensureWorkflowFields(nextState));
-            applyWorkspaceRevision(nextRevision);
-            setSyncState("saved");
+            replaceAuthoritativeWorkspace(nextState, nextRevision);
             notify(message);
             void loadVersions();
           }}
@@ -3354,7 +3359,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     if (page === "validation") return renderValidation();
     if (page === "versions") return renderVersions();
     if (page === "rulesource") return renderRuleSource();
-    if (page === "patchledger") return <PatchLedgerWorkbench state={state} revision={revision} dirty={dirty} getWorkspaceFreshness={()=>workspaceFreshnessRef.current} capabilities={user.capabilities} actorName={user.name} mutate={mutate} notify={notify} replaceWorkspace={(next,nextRevision)=>{setState(ensureWorkflowFields(next));applyWorkspaceRevision(nextRevision);setSyncState("saved");}} />;
+    if (page === "patchledger") return <PatchLedgerWorkbench state={state} revision={revision} dirty={dirty} getWorkspaceFreshness={()=>workspaceFreshnessRef.current} capabilities={user.capabilities} actorName={user.name} mutate={mutate} notify={notify} replaceWorkspace={replaceAuthoritativeWorkspace} />;
     return renderExchange();
   };
 

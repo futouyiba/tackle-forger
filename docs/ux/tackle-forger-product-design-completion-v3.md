@@ -40,7 +40,7 @@ flowchart LR
 | 发布管理 | Model、SnapshotBuild | 发布检查、冻结、升级候选 |
 | 配置表交付 | SnapshotBatch、环境×渠道目标 | 一期NON_FORMAL预览；1.5期正式包/写入与关联校验 |
 
-采用高密度数据驾驶舱。左侧稳定一级导航；顶部面包屑与全局搜索；主区优先矩阵、表格和差异；右侧 520–640px 推入层按“1 常用概览 → 2 五维与适配 → 3 来源与版本”渐进披露，并保留独立的“Patch / Rebase”和“AI评估与建议”入口。常用概览默认展示对象身份、离散目标拉力、调性/硬度、长度、发布/冻结面、品质定价和四套独立裁决；五维层才展开三种比较模式；来源层展示完整Trace。所有写按钮消费后端 `ActionAvailability`，前端不从角色、颜色或状态猜动作。
+采用高密度数据驾驶舱。左侧稳定一级导航；顶部面包屑与全局搜索；主区优先矩阵、表格和差异；右侧 520–640px 推入层按“1 常用概览 → 2 五维与适配 → 3 来源与版本”渐进披露，并保留独立的“Patch / Rebase”和“AI评估与建议”入口。常用概览默认展示对象身份、离散目标拉力、调性/硬度、长度、发布/冻结面、品质定价和四套独立裁决；五维层才展开钓组匹配与多装备比较两个视图；来源层展示完整Trace。所有写按钮消费后端 `ActionAvailability`，前端不从角色、颜色或状态猜动作。
 
 ## 2. 钓具系列甘特图
 
@@ -88,17 +88,18 @@ SKU 显示“精确重量 + SKU 抽屉”；Model 显示型号并标明“实际
 
 ## 6. 可配置五维图
 
-前端只消费版本化 `FiveAxisViewDefinition`。恰好五轴，但 axisId、名称、顺序、输入、变换、顶点、聚合、缺值、档位都不得写死。图旁显示 definition/version、fiveAxisRuleVersion、fishWeightGradeId、vertexSetHash、刻度和“查看来源”。定义、鱼重基准或 hash 不同的曲线不得叠加。
+前端只消费符合`five-axis/open005-2026-07-23/v1`的版本化`FiveAxisViewDefinition`。正式五轴及顺序固定为拉力、耐久、抛投、感度、操控，但axisId、输入、变换、W重量段、顶点、缺值、档位和比较策略仍由发布定义提供，页面不得复制公式。图旁显示definition/version、fiveAxisRuleVersion、`modelFinalPullKg`、weightBandId/policyVersion、vertexSetHash、`projectionReferenceSelectorVersion`、`projectionReferenceSetHash`、刻度和“查看来源”。定义、W段或vertex hash不同的曲线不得叠加。
 
-右侧层提供三个视图：
+右侧层提供两个视图：
 
-1. **Model / Series**：当前 Model 与明确 Series 基准。
-2. **竿轮线匹配**：Rod/Reel/Line 同图，可开关 Model 短板汇总，共享 Model 鱼重基准。
-3. **同部位比较**：比较篮中 2–5 个同部位对象，共用一个鱼重基准；上限配置化。
+1. **钓组匹配**：当前Model的Rod/Reel/Line三条单件曲线同图，共享Model最终拉力命中的W段；不生成Model最弱环节汇总线。可开关显示竿、轮、线三条Series结构投影参考线。
+2. **多装备比较**：比较篮中2–5件竿、轮、线可混合部位，共用用户可见、可切换的一个W段；上限由当前定义实例配置且服务端强制。
 
-“加入比较”写入页面级比较篮；混入不同部位时阻止并提供“新建比较组”。轮/线无参考竿时抛投为 not_applicable；指定参考竿后为 context_inherited，不参与排名。
+“加入比较”写入页面级比较篮，不因混合部位阻止。轮/线按稳定比较顺序继承第一根竿的抛投并显示`context_inherited`提示，不参与排名；无竿时为`not_applicable`，不得补0。拉力、耐久、抛投使用直接比例，感度、操控使用反向比例；`officialDisplayScore`封顶100，`comparisonScore`不封顶并按真实比例伸出100分外圈，绘图区不得裁切。
 
-Series 基准只允许 explicit_model、approved_model_median、projection_reference 三种后端策略；必须显示 baselineRef/aggregateRef、Revision、样本数和理由。失效时不静默回退。
+Series基准只允许`projection_reference`。Model/钓组视图从当前Snapshot冻结的SKU revision按`projection-reference/current-sku-frozen-match/v1`逐部位唯一读取ProjectionMatch；必须显示基准Snapshot、SKU revision、选择器版本、projectionMatch/projection ID与revision、逐部位`available/missing/error`状态和理由。同Series其他SKU、默认SKU、查询第一项、同W段其他投影及页面上下文均不得作为回退。独立多装备比较未显式选择`baselineSnapshotId`时不显示Series参考线；选择后锚点保持稳定，共同W段变化不改锚点。
+
+旧`PUBLISHED`五维定义及其Snapshot只读展示并标记“历史定义”；新正式Snapshot只接受唯一`FORMAL_CURRENT`定义。若当前只有legacy定义，发布动作禁用并显示`FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE`，不得以旧种子预览冒充正式结果。
 
 状态：direct 实线；context_inherited 虚线/链接标；not_applicable 不画 0；missing 显示补齐动作；error 阻断且不画 0。雷达图下必须有原始值、归一化比值、正式分、comparisonScore、overflow、相对差、来源状态和 Trace 的数值表。
 
@@ -189,7 +190,9 @@ UpgradeCandidate 只描述“升级会怎样”。批准不改变旧 Snapshot；
 
 一个目标失败不伪装全成功；默认继续写入其他合格目标，失败项保留预览和恢复Manifest。工具不读取`config_system.toml`，不执行Git命令。StoreBuy新增`enabled`上架开关：新行默认false，更新普通属性保留目标原值。
 
-策略发布、每次ID预留和每次1.5期正式导出前都重新比较authoritative ref、commit、`config.toml`和workbook hashes与获批Manifest；导出还检查本地worktree HEAD与文件基线。任何漂移显示`CONFIG_TARGET_SCAN_MANIFEST_STALE`，禁用预留/正式导出动作并引导重新扫描、复核和发布策略。预留动作同时绑定Model expected revision；并发改key时显示`MODEL_REVISION_CONFLICT`且不消耗ID。
+策略发布、每次ID预留、历史ID正式导入和每次1.5期正式导出前都重新比较authoritative ref、commit、`config.toml`和workbook hashes与获批Manifest；策略发布只执行该复验，不显示或取得配置目标治理租约，导出还检查本地worktree HEAD与文件基线。每次ID预留、历史ID正式导入和正式导出才必须显示并使用治理租约，按去重后的物理`repositoryId + authoritativeRef`互斥并冻结Manifest集合、expected old OID、`leaseId`和单调`fencingToken`；多个环境×渠道别名共享同一ref时只取得一个物理ref锁，别名OID不一致则显示`CONFIG_TARGET_REF_ALIAS_CONFLICT`并禁用动作。配置仓库ref不能接入受保护CAS时，对上述三类正式动作显示`CONFIG_TARGET_SERIALIZATION_UNAVAILABLE`并禁用动作。任何漂移显示`CONFIG_TARGET_SCAN_MANIFEST_STALE`，引导重新扫描、复核和发布策略。预留动作同时绑定Model expected revision；历史导入绑定finding/review revision与源行hash；并发冲突均不消耗ID或写永久占用。
+
+问题动作中，导航、查看证据和帮助是无副作用链接；确认warning、申请/批准waiver、重算、Rebase和创建规则源变更草稿必须使用统一`ActionCode`及不可篡改payload，Rebase写命令固定为`rebase_patch`。界面不得发送`approve_waiver`、`request_waiver`、`retry`、`open_rebase`等旧通用动作；旧状态写记录只有从可信历史完整重建fingerprint、revision、reason、Gate、必要环境×渠道和原幂等payload后才能启用，否则显示`LEGACY_ACTION_ALIAS_UNRESOLVABLE`。历史`open_rebase`仅在可信历史证明从未执行Rebase且可恢复明确路由时转为`navigate`；存在写语义、歧义或证据不足时固定显示`LEGACY_ACTION_ALIAS_UNRESOLVABLE`，不得转为`rebase_patch`。重试复用原ActionCode和幂等payload。
 
 价值分与定价执行语义已于2026-07-23确定，`OPEN-007`只继续跟踪飞书机器源和运行时落地。界面按`(去重词条分 + 无序组合分) × FunctionProfile.scoreFactor`展示价值分；不展示Performance乘数。S区间为`[65,100]`，大于100报错。维修价与购买价分别在最终输出阶段做三位有效数字向下取整，购买价使用未舍入维修价，最低价100在购买价舍入后应用。`purchasePriceRaw`超过300,000,000时显示二次确认WARNING；确认后保留实际价格与超限标记，不报ERROR、不BLOCK、不CLAMP。确认卡必须显示阈值、Raw/舍入/最终价格、Model revision、PricingPolicyVersion、理由和确认人；动作由服务端返回，仅在具备`pricing.warning.acknowledge`能力时可执行，提交时重验fingerprint。任一输入变化后旧确认STALE。目标字段无法表达价格时单独显示EXPORT BLOCKER。当前代码和飞书源尚未完成新schema时，只能准确标记为旧契约`NON_FORMAL`，不得冒充已实现，也不提供手填价格兜底。
 
@@ -205,11 +208,11 @@ UpgradeCandidate 只描述“升级会怎样”。批准不改变旧 Snapshot；
 | R6 AI | 带证据建议 | 证据不足 | 与硬校验冲突 | 重评，旧建议只读 | evaluate/draft 分离 | G AI 要降硬冲突，W 展示，T 冲突不变 |
 | R7 AI→Patch | 确认差异建 draft | 部分参数移除 | Model 已变/未决 set | 保留表单并刷新 | create/review 分离 | G Revision 变化，W 创建，T 阻止旧 before |
 | R8 AI→飞书 | 草稿→影响→人工确认写回→回读→显式拉取 | 覆盖率不足 | sourceRevision变 | 幂等回读/重试 | AI草稿、写回、拉取、发布分离 | G超时但已写入，W回读恢复，T不重复 |
-| R9 Issue | 分区并执行动作 | 一根因多对象 | 互斥动作 | retry/recompute | 可看不等于可修 | G deny/Affinity/不变量并存，W 返回，T 不互抵 |
+| R9 Issue | 分区并执行动作 | 一根因多对象 | 互斥动作 | 原动作幂等重试/统一重算动作 | 可看不等于可修 | G旧waiver/open_rebase/retry记录，W完整重建或禁用，T不绕过payload且纯路由不执行Rebase |
 | R10 冻结 | rebase→新快照 | 语义相同 | 基线再变 | 复制到最新候选 | rebase/review/publish 分离 | G S1 已发布，W 批准升级，T S1 不变 |
 | R11 状态 | 三组状态映射 | 未知码只读 | 非法组合 | 重同步/审计 | 文案不授权 | G PUBLISHED+UPGRADE，W 渲染，T 两标签并存 |
 | R12 开放配置 | 已发布策略驱动 | 配置缺失 | 草稿混正式 | 回有效版本 | 策略三权分离 | G 阈值未确认，W 实现，T 从配置读取 |
-| R13 导出 | 一期NON_FORMAL；1.5期多profile→校验 | 未登记目标/只读profile | Manifest stale、Model revision、主键/TOML断链 | 重扫复核/保留结果重跑 | preview/commit及ID治理动作分离 | G ref推进或并发改key，W预留/导出，T禁用且不消耗ID/不落盘 |
+| R13 导出 | 一期NON_FORMAL；1.5期多profile→校验 | 未登记目标/只读profile | Manifest stale、物理ref租约/CAS、Model或review revision、主键/TOML断链 | 重扫复核/幂等恢复 | preview/commit及ID治理动作分离 | G不同targetEntryId共享同一ref或别名OID冲突，W并发预留/导入，T只取得一个物理锁或以`CONFIG_TARGET_REF_ALIAS_CONFLICT`阻断且无永久冲突 |
 | R14 登录 | 飞书会话 | AI 关闭 | 会话过期 | 重登并重验 | 一期仍返回 capability | G 会话过期，W 重登，T 表单保留且重验 |
 
 ## 13. 策略状态与不得固化的边界

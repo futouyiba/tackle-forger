@@ -2,6 +2,7 @@ import { deterministicHash } from "./rule-kernel";
 import type {
   AffinityScoreResult,
   HardCompatibilityResult,
+  PatchState,
 } from "./types";
 import type {
   ActionAvailability,
@@ -283,19 +284,18 @@ export function createUnifiedIssue(input: Omit<
   };
 }
 
-export type PatchWorkflowState =
-  | "draft" | "pending_review" | "approved" | "base_changed"
-  | "rebase_required" | "rebasing" | "withdrawn" | "superseded";
+export type PatchWorkflowState = PatchState;
 
 const PATCH_TRANSITIONS: Record<PatchWorkflowState, PatchWorkflowState[]> = {
-  draft: ["pending_review", "withdrawn", "superseded"],
-  pending_review: ["approved", "withdrawn", "base_changed", "superseded"],
-  approved: ["base_changed", "superseded"],
-  base_changed: ["rebase_required", "superseded"],
-  rebase_required: ["rebasing", "superseded"],
-  rebasing: ["pending_review", "superseded"],
-  withdrawn: [],
-  superseded: [],
+  DRAFT: ["PENDING_REVIEW", "WITHDRAWN", "SUPERSEDED"],
+  PENDING_REVIEW: ["APPROVED", "REBASE_REQUIRED", "WITHDRAWN", "SUPERSEDED"],
+  APPROVED: ["ACTIVE", "REBASE_REQUIRED", "WITHDRAWN", "SUPERSEDED"],
+  ACTIVE: ["REBASE_REQUIRED", "ABSORBED", "PARTIALLY_ABSORBED", "SUPERSEDED"],
+  REBASE_REQUIRED: ["SUPERSEDED"],
+  ABSORBED: ["SUPERSEDED"],
+  PARTIALLY_ABSORBED: ["SUPERSEDED"],
+  WITHDRAWN: [],
+  SUPERSEDED: [],
 };
 
 export function transitionPatchState(

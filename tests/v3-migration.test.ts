@@ -192,6 +192,29 @@ test("schema v17 迁移拒绝矛盾的目标拉力，绝不静默择一", () => 
   assert.throws(() => migrateWorkspaceState(legacy), /TARGET_PULL_MIGRATION_CONFLICT.*SKU/);
 });
 
+test("schema v17 归一化归档仅在 SKU 内嵌的历史 ProjectionMatch 字段", () => {
+  const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
+  legacy.schemaVersion = 17;
+  const sku = (legacy.skuDrawers as Array<Record<string, unknown>>)[0];
+  const match = sku.projectionMatch as Record<string, unknown>;
+  match.targetWeightKg = match.targetPullKg;
+  match.anchorWeightKg = match.matchedStructuralPullKg;
+  match.weightDistance = match.pullDistance;
+  delete match.targetPullKg;
+  delete match.matchedStructuralPullKg;
+  delete match.pullDistance;
+  legacy.projectionMatches = [];
+
+  const migrated = migrateWorkspaceState(legacy);
+  const migratedMatch = migrated.skuDrawers[0].projectionMatch as unknown as Record<string, unknown>;
+  const archived = migrated.migrationReviewItems.find((item) =>
+    item.id === `target-pull-migration:sku-projection-match:${migrated.skuDrawers[0].id}`);
+  assert.equal(migratedMatch.targetPullKg, 1.5);
+  assert.equal(Object.hasOwn(migratedMatch, "targetWeightKg"), false);
+  assert.deepEqual(archived?.preservedPayload, match);
+  assert.deepEqual(migrateWorkspaceState(migrated), migrated);
+});
+
 test("脱敏生产 schema v17 形态可直接读取，未知字段与已发布 Snapshot 完全冻结", () => {
   const fixtureUrl = new URL("./fixtures/workspace-production-schema-v17.json", import.meta.url);
   const productionShape = JSON.parse(readFileSync(fileURLToPath(fixtureUrl), "utf8")) as Record<string, unknown>;

@@ -23,7 +23,6 @@ import {
   useState,
 } from "react";
 import {
-  buildProductBreadcrumbs,
   resolveProductDeepLink,
   type ActionAvailabilityMap,
   type BreadcrumbItem,
@@ -49,6 +48,10 @@ import type {
 } from "@/lib/types";
 import "./series-gantt-v3.css";
 import { CandidateGenerationWorkbench } from "./CandidateGenerationWorkbench";
+import {
+  buildProductBreadcrumbView,
+  ProductDeepLinkUnavailableNotice,
+} from "./product-deep-link-ui";
 
 interface SeriesGanttWorkbenchV3Props {
   state: WorkspaceState;
@@ -451,7 +454,7 @@ function ModelDrawer({
       entry.definitionId === activeFiveAxisPreview.fiveAxisDefinitionId &&
       entry.version === activeFiveAxisPreview.fiveAxisDefinitionVersion)
     : undefined;
-  const breadcrumbs = buildProductBreadcrumbs({
+  const breadcrumbView = buildProductBreadcrumbView({
     workspaceId,
     collection: series?.collectionId
       ? state.collections.find((entry) => entry.id === series.collectionId)
@@ -462,6 +465,7 @@ function ModelDrawer({
     snapshot,
     currentEntityType,
   });
+  const breadcrumbs = breadcrumbView.breadcrumbs;
 
   useEffect(() => {
     const previouslyFocused = document.activeElement instanceof HTMLElement
@@ -575,6 +579,7 @@ function ModelDrawer({
           </span>
         ))}
       </nav>
+      <ProductDeepLinkUnavailableNotice unavailable={breadcrumbView.unavailable} />
       <div className="gantt-drawer-tabs">
         <button type="button" className={tab === "overview" ? "active" : ""} onClick={() => setTab("overview")}><b>1</b> 常用概览</button>
         <button type="button" className={tab === "five_axis" ? "active" : ""} onClick={() => setTab("five_axis")}><b>2</b> 五维与适配</button>
@@ -855,7 +860,7 @@ export function SeriesGanttWorkbenchV3({
   const previewModelAvailability = actionAvailabilities.preview_model;
   const rebaseAvailability = actionAvailabilities.open_rebase;
   const createSeriesAvailability = actionAvailabilities.create_series;
-  const contextBreadcrumbs = buildProductBreadcrumbs({
+  const contextBreadcrumbView = buildProductBreadcrumbView({
     workspaceId,
     collection: drawerSeries?.collectionId
       ? state.collections.find((entry) => entry.id === drawerSeries.collectionId)
@@ -874,6 +879,7 @@ export function SeriesGanttWorkbenchV3({
           ? "sku_drawer"
           : "series",
   });
+  const contextBreadcrumbs = contextBreadcrumbView.breadcrumbs;
   const contextBreadcrumbSignature = JSON.stringify(contextBreadcrumbs);
   const emittedBreadcrumbSignature = useRef("");
 
@@ -1052,6 +1058,7 @@ export function SeriesGanttWorkbenchV3({
           <button type="button" disabled title="OPEN-006 尚未确认">AI 评估</button>
         </div>
       </section>
+      <ProductDeepLinkUnavailableNotice unavailable={contextBreadcrumbView.unavailable} />
 
       <section className="gantt-filter-bar" aria-label="甘特图筛选">
         <span><ListFilter size={15} />筛选</span>

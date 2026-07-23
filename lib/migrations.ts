@@ -845,6 +845,20 @@ function migrateV16ToV17(state: MutableWorkspace): MutableWorkspace {
         sku,
       ));
     }
+    const legacyProjectionMatch = sku.projectionMatch;
+    if (
+      legacyProjectionMatch && typeof legacyProjectionMatch === "object" && !Array.isArray(legacyProjectionMatch)
+      && (Object.hasOwn(legacyProjectionMatch, "targetWeightKg")
+        || Object.hasOwn(legacyProjectionMatch, "anchorWeightKg")
+        || Object.hasOwn(legacyProjectionMatch, "weightDistance"))
+    ) {
+      archive(migrationArchiveItem(
+        "target-pull-migration:sku-projection-match:" + String(sku.id ?? "unknown"),
+        String(sku.id ?? "unknown"),
+        "AUD-024：SKU 内嵌历史 ProjectionMatch payload 已归档。",
+        legacyProjectionMatch,
+      ));
+    }
     const { targetWeightKg: _targetWeightKg, ...preserved } = sku;
     void _targetWeightKg;
     const projectionMatch = migrateLegacyProjectionMatchV16(sku.projectionMatch);

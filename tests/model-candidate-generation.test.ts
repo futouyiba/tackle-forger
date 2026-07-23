@@ -26,7 +26,7 @@ function fixture() {
     functionIds: [series.coreFunctionId],
     performanceIds: series.performanceProfileId ? [series.performanceProfileId] : [],
     qualityIds: [series.qualityId],
-    targetWeightRangeKg: { min: 0, max: 1000 },
+    targetPullRangeKg: { min: 0, max: 1000 },
     maxCandidates: 20,
     notes: "test",
   };

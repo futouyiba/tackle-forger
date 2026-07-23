@@ -67,7 +67,7 @@
 - Patch业务状态与飞书镜像同步状态必须分开；一条操作具有稳定`operationId`和`operationIndex`，明细幂等键为带类型的`tuple(workspaceId, patchId, patchRevision, operationId)`。完整Patch revision是审核、重放、rebase、吸收和Snapshot引用的事务边界，部分镜像成功不等于整组同步成功。
 - 新建、账本、Snapshot和飞书镜像的规范操作集统一为`set/add/multiply/clear`。旧`ProjectionPatchOperation.remove`只在兼容读取时转换为`clear`；`clear`表示清除当前层覆盖而非写null。`min/max`只用于模板/通用规则；旧Patch或草稿必须在冻结基底上求值并规范化为保留原始意图证据的`set`，无法无损转换则进入复核。
 - 飞书镜像行被删除、清空、隐藏或移动不得删除本地Patch；缺失产生`PATCH_MIRROR_ROW_MISSING`并可补写。对象缺失时进入`ORPHANED`，不得按名称重绑。
-- `PatchLedger`使用版本化schema和幂等顺序迁移；Snapshot冻结有序Patch revision及operationId集合和PatchSetHash。
+- `PatchLedger`使用版本化schema和幂等顺序迁移；新Snapshot冻结带类型的`tuple(workspaceId, patchId, patchRevision, orderedOperationIds)`集合及绑定`workspaceId`的版本化`PatchSetHash`，既有已发布Snapshot与历史hash不得回写或重算。
 
 ## 5. 校验、兼容性、五维图与AI
 

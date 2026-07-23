@@ -356,7 +356,7 @@ Affinity轴与v3固定为：
 - 工具应汇总Patch并识别跨对象稳定模式；只有人工归纳和影响预览通过后才能形成RuleSourceChangeDraft。新规则发布后再计算ABSORBED或PARTIALLY_ABSORBED，原Patch不得提前删除。
 - Patch业务状态与镜像同步状态使用两个正交字段；操作明细以带类型的`tuple(workspaceId, patchId, patchRevision, operationId)`幂等，并按稳定`operationIndex`重放。完整Patch revision是组级事务边界，部分飞书行成功不能标记整组SYNCED或参与半组重放。
 - 飞书镜像删除不构成Patch删除，产生`PATCH_MIRROR_ROW_MISSING`并允许补写；未知ID、审计字段篡改和不完整组隔离为Patch ValidationIssue。对象缺失进入ORPHANED，禁止按名称重绑。
-- PatchLedger必须有schemaVersion、幂等顺序迁移和语义回归；Snapshot冻结有序Patch revision/operationId集合及PatchSetHash。
+- PatchLedger必须有schemaVersion、幂等顺序迁移和语义回归；新Snapshot冻结带类型的`tuple(workspaceId, patchId, patchRevision, orderedOperationIds)`集合及绑定`workspaceId`的版本化`PatchSetHash`，既有已发布Snapshot与历史hash不得回写或重算。
 - 回写前显示影响范围、规则版本、冲突和预计变化。
 - 写回记录与回读结果进入审计；写回后必须由用户显式拉取、校验并发布RuleSetVersion，规则才生效。
 - 读取工作簿时先按`sheet_id`校验关键页，再以显式revision生成`FeishuSourceRevision`；`?sheet=`仅是界面锚点。

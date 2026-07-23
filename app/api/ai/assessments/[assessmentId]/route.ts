@@ -1,9 +1,13 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { requestUser } from "@/lib/auth";
 import {
+  assertWorkspaceAssessmentScopeEligible,
   buildWorkspaceAssessmentRequestProjection,
-  workspaceAssessmentScopeExists,
 } from "@/lib/ai-assessment-request";
+import {
+  ItemPartChainInconsistentError,
+  ItemPartNotEnabledError,
+} from "@/lib/enabled-item-parts";
 import { prepareAIRequest } from "@/lib/ai-outbound";
 import { evaluateAIAssessmentFreshness } from "@/lib/ai-retention";
 import { AIRuntimeStoreError, createAIRuntimeStoreFromEnvironment } from "@/lib/ai-runtime-store";
@@ -42,7 +46,8 @@ export async function GET(
       && (metadata.scope.scopeType === "series" || metadata.scope.scopeType === "model")) {
       const scope = { scopeType: metadata.scope.scopeType, scopeId: metadata.scope.scopeId };
       const current = await loadWorkspaceState();
-      if (workspaceAssessmentScopeExists(current.state, scope)) {
+      try {
+        assertWorkspaceAssessmentScopeEligible(current.state, scope);
         const projection = buildWorkspaceAssessmentRequestProjection({
           state: current.state,
           scope,
@@ -57,6 +62,20 @@ export async function GET(
           fiveAxisRuleVersion: projection.operationMetadataContext.fiveAxisRuleVersion,
           inputHash: prepareAIRequest({ envelope: projection.envelope }).inputHash,
         };
+      } catch (error) {
+        if (error instanceof ItemPartNotEnabledError || error instanceof ItemPartChainInconsistentError) {
+          return NextResponse.json(
+            { error: "AI 评估不存在。", code: "AI_ASSESSMENT_NOT_FOUND" },
+            { status: 404 },
+          );
+        }
+        if (error instanceof Error && error.message === "AI_SCOPE_NOT_FOUND") {
+          return NextResponse.json(
+            { error: "AI 评估不存在。", code: "AI_ASSESSMENT_NOT_FOUND" },
+            { status: 404 },
+          );
+        }
+        throw error;
       }
     }
     const freshness = metadata

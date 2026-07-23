@@ -7,6 +7,11 @@ import type {
   PurchasableModel,
   ValidationIssue as LegacyValidationIssue,
 } from "./types";
+import {
+  assertProductItemPartChainEnabled,
+  isProductItemPartEnabled,
+  seriesItemPartId,
+} from "./enabled-item-parts";
 
 export type CapabilityCode =
   | "series.read" | "series.edit" | "series.approve"
@@ -156,7 +161,7 @@ export function buildProductBreadcrumbs(input: BreadcrumbEntity & {
   if (input.sku) {
     push(
       { workspaceId: input.workspaceId, entityType: "sku_drawer", entityId: input.sku.id, revisionId: String(input.sku.revision) },
-      `${input.sku.targetWeightKg} kg · SKU 抽屉`,
+      `${input.sku.targetPullKg} kg · SKU 抽屉`,
       "SKU 抽屉",
     );
   }
@@ -333,6 +338,55 @@ export function resolveProductDeepLink(input: {
   const collection = collectionId
     ? input.collections.find((entry) => entry.id === collectionId)
     : undefined;
+  const frozenSnapshot = requestedSnapshot ?? (
+    model?.configurationSnapshotId
+      ? input.snapshots.find((entry) => entry.id === model.configurationSnapshotId)
+      : undefined
+  );
+  try {
+    if (requestedSnapshot || model || sku || series) {
+      assertProductItemPartChainEnabled([
+        ...(series ? [seriesItemPartId(series, input.skus)] : []),
+        ...(sku ? [sku.projectionMatch.itemPartId] : []),
+        ...(frozenSnapshot ? [frozenSnapshot.projectionMatch.itemPartId] : []),
+      ], "product_ui");
+    }
+  } catch (error) {
+    const blockedRef = requestedRef ?? (requestedSnapshot
+      ? { workspaceId: input.workspaceId, entityType: "configuration_snapshot", entityId: requestedSnapshot.id, revisionId: String(requestedSnapshot.version) }
+      : model
+        ? { workspaceId: input.workspaceId, entityType: "model", entityId: model.id, revisionId: String(model.revision) }
+        : sku
+          ? { workspaceId: input.workspaceId, entityType: "sku_drawer", entityId: sku.id, revisionId: String(sku.revision) }
+          : { workspaceId: input.workspaceId, entityType: "series", entityId: series!.id, revisionId: String(series!.revision) }) satisfies EntityRef;
+    issues.push({
+      level: "error",
+      code: typeof error === "object" && error && "code" in error
+        ? String(error.code)
+        : "ITEM_PART_NOT_ENABLED",
+      message: error instanceof Error ? error.message : "部位未启用：unknown 不提供产品只读入口。",
+    });
+    return {
+      collection,
+      unavailable: {
+        code: "DEEP_LINK_REFERENCE_INVALID",
+        message: "对象部位谱系未启用或不一致，未返回不完整产品父链。",
+        requestedRef: blockedRef,
+        ...(collection
+          ? {
+              recoveryRef: {
+                workspaceId: input.workspaceId,
+                entityType: "collection" as const,
+                entityId: collection.id,
+                revisionId: collection.updatedAt,
+              },
+            }
+          : {}),
+      },
+      fallbackEntityType: collection ? "collection" : undefined,
+      integrityIssues: issues,
+    };
+  }
 
   const mismatches = [
     requestedRefConflicts
@@ -687,7 +741,7 @@ export function legacyEntityState(input: {
 
 export interface GanttSkuNode {
   skuId: string;
-  targetWeightKg: number;
+  targetPullKg: number;
   modelIds: string[];
   status: string;
   validationIssues: LegacyValidationIssue[];
@@ -711,19 +765,24 @@ export function buildSeriesGanttProjection(input: {
 }): GanttSeriesBlock[] {
   const modelIds = new Set(input.models.map((model) => model.id));
   return [...input.series]
+    .filter((series) => isProductItemPartEnabled(seriesItemPartId(series, input.skus)))
     .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id))
     .map((series) => {
+      const itemPartId = seriesItemPartId(series, input.skus);
       const skuNodes = input.skus
-        .filter((sku) => sku.seriesId === series.id)
-        .sort((left, right) => left.targetWeightKg - right.targetWeightKg || left.id.localeCompare(right.id))
+        .filter((sku) =>
+          sku.seriesId === series.id
+          && isProductItemPartEnabled(sku.projectionMatch.itemPartId)
+          && sku.projectionMatch.itemPartId === itemPartId)
+        .sort((left, right) => left.targetPullKg - right.targetPullKg || left.id.localeCompare(right.id))
         .map((sku) => ({
           skuId: sku.id,
-          targetWeightKg: sku.targetWeightKg,
+          targetPullKg: sku.targetPullKg,
           modelIds: sku.modelIds.filter((id) => modelIds.has(id)),
           status: sku.status,
           validationIssues: structuredClone(sku.validationSummary),
         }));
-      const weights = skuNodes.map((node) => node.targetWeightKg);
+      const weights = skuNodes.map((node) => node.targetPullKg);
       return {
         seriesId: series.id,
         name: series.name,

@@ -2,10 +2,14 @@ import { randomUUID } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { requestUser } from "@/lib/auth";
 import {
+  assertWorkspaceAssessmentScopeEligible,
   buildWorkspaceAssessmentRequestProjection,
-  workspaceAssessmentScopeExists,
   type WorkspaceAssessmentRequestProjection,
 } from "@/lib/ai-assessment-request";
+import {
+  ItemPartChainInconsistentError,
+  ItemPartNotEnabledError,
+} from "@/lib/enabled-item-parts";
 import {
   AIRuntimeStoreError,
   createAIRuntimeStoreFromEnvironment,
@@ -21,6 +25,32 @@ import { evaluateAIAssessmentFreshness } from "@/lib/ai-retention";
 import { loadWorkspaceState } from "@/lib/storage";
 
 export const dynamic = "force-dynamic";
+
+function scopeError(error: unknown): NextResponse | undefined {
+  if (error instanceof ItemPartNotEnabledError) {
+    return NextResponse.json({
+      error: error.message,
+      code: error.code,
+      itemPartId: error.itemPartId,
+      policyMode: error.policyMode,
+    }, { status: 422 });
+  }
+  if (error instanceof ItemPartChainInconsistentError) {
+    return NextResponse.json({
+      error: error.message,
+      code: error.code,
+      itemPartIds: error.itemPartIds,
+      policyMode: error.policyMode,
+    }, { status: 422 });
+  }
+  if (error instanceof Error && error.message === "AI_SCOPE_NOT_FOUND") {
+    return NextResponse.json(
+      { error: "评估对象不存在或已经变化。", code: "AI_SCOPE_NOT_FOUND" },
+      { status: 404 },
+    );
+  }
+  return undefined;
+}
 
 function assessmentRequest(value: unknown): { scopeType: "series" | "model"; scopeId: string } | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
@@ -53,8 +83,11 @@ export async function GET(request: NextRequest) {
     );
   }
   const current = await loadWorkspaceState();
-  if (!workspaceAssessmentScopeExists(current.state, scope)) {
-    return NextResponse.json({ error: "评估对象不存在或已经变化。", code: "AI_SCOPE_NOT_FOUND" }, { status: 404 });
+  try {
+    assertWorkspaceAssessmentScopeEligible(current.state, scope);
+  } catch (error) {
+    return scopeError(error)
+      ?? NextResponse.json({ error: "评估对象不可用。", code: "AI_SCOPE_INVALID" }, { status: 422 });
   }
   try {
     const store = createAIRuntimeStoreFromEnvironment();
@@ -113,8 +146,11 @@ export async function POST(request: NextRequest) {
   const body = assessmentRequest(await request.json().catch(() => undefined));
   if (!body) return NextResponse.json({ error: "AI 评估请求格式无效。", code: "AI_ASSESSMENT_REQUEST_INVALID" }, { status: 400 });
   const current = await loadWorkspaceState();
-  if (!workspaceAssessmentScopeExists(current.state, body)) {
-    return NextResponse.json({ error: "评估对象不存在或已经变化。", code: "AI_SCOPE_NOT_FOUND" }, { status: 404 });
+  try {
+    assertWorkspaceAssessmentScopeEligible(current.state, body);
+  } catch (error) {
+    return scopeError(error)
+      ?? NextResponse.json({ error: "评估对象不可用。", code: "AI_SCOPE_INVALID" }, { status: 422 });
   }
   const assessmentId = randomUUID();
   const actorStableId = user.openId ?? user.email;
@@ -198,9 +234,8 @@ export async function POST(request: NextRequest) {
         error = retentionError;
       }
     }
-    if (error instanceof Error && error.message === "AI_SCOPE_NOT_FOUND") {
-      return NextResponse.json({ error: "评估对象不存在或已经变化。", code: "AI_SCOPE_NOT_FOUND" }, { status: 404 });
-    }
+    const invalidScope = scopeError(error);
+    if (invalidScope) return invalidScope;
     if (error instanceof FancyHubError || error instanceof AIOutboundError || error instanceof AIRuntimeStoreError) {
       return NextResponse.json({ error: "AI 评估未完成，核心工作流不受影响。", code: error.code }, { status: error instanceof FancyHubError && error.retryable ? 503 : 422 });
     }

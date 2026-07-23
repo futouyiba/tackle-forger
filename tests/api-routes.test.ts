@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -6,7 +7,7 @@ import { NextRequest } from "next/server";
 import { PUT as putState } from "../app/api/state/route";
 import { POST as createSeries } from "../app/api/series/route";
 import { POST as assessWithAI } from "../app/api/ai/assessments/route";
-import { loadWorkspaceState } from "../lib/storage";
+import { loadWorkspaceState, saveWorkspaceState } from "../lib/storage";
 
 const authHeaders = {
   "content-type": "application/json",
@@ -20,6 +21,33 @@ function withTrustedProxy() {
   process.env.FEISHU_TRUST_PROXY_HEADERS = "true";
   process.env.FEISHU_PROXY_SHARED_SECRET = "route-test-secret";
   process.env.FEISHU_TENANT_KEY = "tenant";
+}
+
+function routeAIConfiguration(dataDir: string) {
+  return {
+    FANCY_HUB_ENABLED: "true",
+    FANCY_HUB_BASE_URL: "https://fancy-hub.invalid/",
+    FANCY_HUB_API_TOKEN: "route-ai-token",
+    FANCY_HUB_PRIMARY_MODEL_ID: "model.alpha",
+    FANCY_HUB_PROVIDER_MAX_INPUT_TOKENS: "50000",
+    FANCY_HUB_PROVIDER_MAX_OUTPUT_TOKENS: "8000",
+    FANCY_HUB_PROVIDER_MAX_CONCURRENT_REQUESTS: "4",
+    FANCY_HUB_PROVIDER_MAX_REQUESTS_PER_MINUTE: "60",
+    FANCY_HUB_PROVIDER_REQUEST_TIMEOUT_MS: "30000",
+    FANCY_HUB_PROVIDER_MAX_COST_MICRO_USD_PER_REQUEST: "200000",
+    FANCY_HUB_TENANT_MAX_INPUT_TOKENS: "50000",
+    FANCY_HUB_TENANT_MAX_OUTPUT_TOKENS: "8000",
+    FANCY_HUB_TENANT_MAX_CONCURRENT_REQUESTS: "4",
+    FANCY_HUB_TENANT_MAX_REQUESTS_PER_MINUTE: "60",
+    FANCY_HUB_REQUEST_TIMEOUT_MS: "30000",
+    FANCY_HUB_TENANT_MAX_COST_MICRO_USD_PER_REQUEST: "200000",
+    FANCY_HUB_ASSESSMENT_MAX_OUTPUT_TOKENS: "1000",
+    FANCY_HUB_MAX_INPUT_COST_MICRO_USD_PER_1K_TOKENS: "1000",
+    FANCY_HUB_MAX_OUTPUT_COST_MICRO_USD_PER_1K_TOKENS: "1000",
+    AI_RETENTION_DATA_DIR: dataDir,
+    AI_RETENTION_ENCRYPTION_KEY_BASE64: Buffer.alloc(32, 7).toString("base64"),
+    AI_RETENTION_ENCRYPTION_KEY_VERSION: "route-test-v1",
+  } as const;
 }
 
 test("已认证整包 PUT 不能绕过 Series 领域命令", { concurrency: false }, async () => {
@@ -48,30 +76,9 @@ test("整包 PUT 的畸形 JSON 返回400", { concurrency: false }, async () => 
 
 test("AI 评估对不存在的 Series/Model 在连接器初始化和出网前返回404", { concurrency: false }, async () => {
   withTrustedProxy();
-  const configuration = {
-    FANCY_HUB_ENABLED: "true",
-    FANCY_HUB_BASE_URL: "https://fancy-hub.invalid/",
-    FANCY_HUB_API_TOKEN: "route-ai-token",
-    FANCY_HUB_PRIMARY_MODEL_ID: "model.alpha",
-    FANCY_HUB_PROVIDER_MAX_INPUT_TOKENS: "50000",
-    FANCY_HUB_PROVIDER_MAX_OUTPUT_TOKENS: "8000",
-    FANCY_HUB_PROVIDER_MAX_CONCURRENT_REQUESTS: "4",
-    FANCY_HUB_PROVIDER_MAX_REQUESTS_PER_MINUTE: "60",
-    FANCY_HUB_PROVIDER_REQUEST_TIMEOUT_MS: "30000",
-    FANCY_HUB_PROVIDER_MAX_COST_MICRO_USD_PER_REQUEST: "200000",
-    FANCY_HUB_TENANT_MAX_INPUT_TOKENS: "50000",
-    FANCY_HUB_TENANT_MAX_OUTPUT_TOKENS: "8000",
-    FANCY_HUB_TENANT_MAX_CONCURRENT_REQUESTS: "4",
-    FANCY_HUB_TENANT_MAX_REQUESTS_PER_MINUTE: "60",
-    FANCY_HUB_REQUEST_TIMEOUT_MS: "30000",
-    FANCY_HUB_TENANT_MAX_COST_MICRO_USD_PER_REQUEST: "200000",
-    FANCY_HUB_ASSESSMENT_MAX_OUTPUT_TOKENS: "1000",
-    FANCY_HUB_MAX_INPUT_COST_MICRO_USD_PER_1K_TOKENS: "1000",
-    FANCY_HUB_MAX_OUTPUT_COST_MICRO_USD_PER_1K_TOKENS: "1000",
-    AI_RETENTION_DATA_DIR: path.join(tmpdir(), `tackle-forger-route-ai-unused-${process.pid}`),
-    AI_RETENTION_ENCRYPTION_KEY_BASE64: Buffer.alloc(32, 7).toString("base64"),
-    AI_RETENTION_ENCRYPTION_KEY_VERSION: "route-test-v1",
-  } as const;
+  const configuration = routeAIConfiguration(
+    path.join(tmpdir(), `tackle-forger-route-ai-unused-${process.pid}`),
+  );
   const previous = new Map(Object.keys(configuration).map((name) => [name, process.env[name]]));
   try {
     for (const [name, value] of Object.entries(configuration)) process.env[name] = value;
@@ -87,6 +94,51 @@ test("AI 评估对不存在的 Series/Model 在连接器初始化和出网前返
       assert.equal(response.status, 404);
       assert.equal(((await response.json()) as { code?: string }).code, "AI_SCOPE_NOT_FOUND");
     }
+  } finally {
+    for (const [name, value] of previous) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+});
+
+test("AI 评估对延期部位在留存初始化和出网前返回稳定门禁错误", { concurrency: false }, async () => {
+  withTrustedProxy();
+  const root = await mkdtemp(path.join(tmpdir(), "tackle-forger-route-ai-disabled-part-"));
+  const configuration = {
+    ...routeAIConfiguration(path.join(root, "ai-retention")),
+    WORKSPACE_DATABASE_PATH: path.join(root, "workspace.sqlite"),
+  };
+  const previous = new Map(Object.keys(configuration).map((name) => [name, process.env[name]]));
+  try {
+    for (const [name, value] of Object.entries(configuration)) process.env[name] = value;
+    const initial = await loadWorkspaceState();
+    const state = structuredClone(initial.state);
+    const series = state.seriesDefinitions[0]!;
+    series.itemPartId = "part:hook";
+    for (const sku of state.skuDrawers.filter((entry) => entry.seriesId === series.id)) {
+      sku.projectionMatch.itemPartId = "part:hook";
+    }
+    const saved = await saveWorkspaceState({
+      state,
+      baseRevision: initial.revision,
+      author: "route-test",
+      message: "prepare delayed part assessment scope",
+    });
+    assert.equal(saved.conflict, undefined);
+
+    const before = await loadWorkspaceState();
+    const response = await assessWithAI(new NextRequest("http://localhost/api/ai/assessments", {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({ scopeType: "series", scopeId: series.id }),
+    }));
+    assert.equal(response.status, 422);
+    const payload = await response.json() as { code?: string; itemPartId?: string; policyMode?: string };
+    assert.equal(payload.code, "ITEM_PART_NOT_ENABLED");
+    assert.equal(payload.itemPartId, "part:hook");
+    assert.equal(payload.policyMode, "OPEN_003_FAIL_CLOSED");
+    assert.equal((await loadWorkspaceState()).revision, before.revision);
   } finally {
     for (const [name, value] of previous) {
       if (value === undefined) delete process.env[name];
@@ -172,6 +224,40 @@ test("Series 路由对恶意JSON字段类型稳定返回400", { concurrency: fal
     assert.equal(response.status, 400, field);
     assert.equal(((await response.json()) as { field?: string }).field, field);
   }
+});
+
+test("Series 路由拒绝扩展部位并且不产生 revision、Series 或 SKU 副作用", { concurrency: false }, async () => {
+  withTrustedProxy();
+  const before = await loadWorkspaceState();
+  const projection = before.state.derivedProjections[0]!;
+  const response = await createSeries(new NextRequest("http://localhost/api/series", {
+    method: "POST",
+    headers: authHeaders,
+    body: JSON.stringify({
+      idempotencyKey: "route-disabled-part:hook",
+      seriesId: "series:disabled-hook",
+      name: "不应创建的钩系列",
+      concept: "验证 OPEN-003 服务端门禁",
+      itemPartId: "part:hook",
+      methodId: projection.methodId,
+      typeId: projection.typeId,
+      functionId: projection.functionId,
+      qualityId: projection.qualityId,
+      functionIntensity: projection.functionIntensity,
+      discretePulls: "1.5",
+    }),
+  }));
+  assert.equal(response.status, 422);
+  const payload = await response.json() as { code?: string; itemPartId?: string; policyMode?: string; error?: string };
+  assert.equal(payload.code, "ITEM_PART_NOT_ENABLED");
+  assert.equal(payload.itemPartId, "part:hook");
+  assert.equal(payload.policyMode, "OPEN_003_FAIL_CLOSED");
+  assert.match(payload.error ?? "", /部位未启用/);
+  const after = await loadWorkspaceState();
+  assert.equal(after.revision, before.revision);
+  assert.equal(after.state.seriesDefinitions.some((entry) => entry.id === "series:disabled-hook"), false);
+  assert.equal(after.state.skuDrawers.some((entry) => entry.seriesId === "series:disabled-hook"), false);
+  assert.equal(after.state.commandIdempotencyRecords.some((entry) => entry.key === "route-disabled-part:hook"), false);
 });
 
 test("Series 创建相同幂等键恢复原结果，不同输入冲突", { concurrency: false }, async () => {

@@ -9,6 +9,10 @@ import {
 import { AIRuntimeStoreError, createAIRuntimeStoreFromEnvironment } from "@/lib/ai-runtime-store";
 import { stableAuditActor } from "@/lib/api-command-boundaries";
 import { requestUser } from "@/lib/auth";
+import {
+  ItemPartChainInconsistentError,
+  ItemPartNotEnabledError,
+} from "@/lib/enabled-item-parts";
 import { PatchOffsetPolicyError } from "@/lib/patch-offset-policy";
 import { loadWorkspaceState, saveWorkspaceState } from "@/lib/storage";
 import type { WorkspaceState } from "@/lib/types";
@@ -280,6 +284,28 @@ export async function POST(
       throw error;
     }
   } catch (error) {
+    if (error instanceof ItemPartNotEnabledError) {
+      return NextResponse.json(
+        {
+          error: error.message,
+          code: error.code,
+          itemPartId: error.itemPartId,
+          policyMode: error.policyMode,
+        },
+        { status: 422 },
+      );
+    }
+    if (error instanceof ItemPartChainInconsistentError) {
+      return NextResponse.json(
+        {
+          error: error.message,
+          code: error.code,
+          itemPartIds: error.itemPartIds,
+          policyMode: error.policyMode,
+        },
+        { status: 422 },
+      );
+    }
     if (error instanceof AIDraftConversionError) {
       return NextResponse.json(
         { error: error.message, code: error.code },

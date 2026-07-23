@@ -84,6 +84,7 @@ interface StoredPreview {
   packageId: string;
   expiresAtMs: number;
   previews: Map<string, FilesystemExportPreview>;
+  snapshot: ConfigurationSnapshot;
   identity: CompanionPairingIdentity;
 }
 
@@ -240,6 +241,7 @@ export class ConfigExportCompanionController {
       packageId: request.packageId,
       expiresAtMs,
       previews: stored,
+      snapshot: structuredClone(request.snapshot),
       identity: structuredClone(identity),
     });
     return {
@@ -281,6 +283,7 @@ export class ConfigExportCompanionController {
       if (!profile) throw new Error(`Profile ${profileId} 未在伴随服务登记。`);
       results.push(await commitFilesystemExport({
         preview,
+        snapshot: stored.snapshot,
         profile,
         confirmationProfileId: request.confirmations[profileId],
         idempotencyKey: `commit:${stored.packageId}:${profileId}`,

@@ -725,9 +725,9 @@ export function expectedSeriesDiscreteRangeContexts(input: {
 }): Array<{ skuRef?: string; targetPullKg: number }> {
   const realSkus = input.skus
     .filter((sku) => sku.seriesId === input.series.id)
-    .sort((left, right) => left.targetWeightKg - right.targetWeightKg || left.id.localeCompare(right.id));
+    .sort((left, right) => left.targetPullKg - right.targetPullKg || left.id.localeCompare(right.id));
   if (realSkus.length) {
-    return realSkus.map((sku) => ({ skuRef: sku.id, targetPullKg: sku.targetWeightKg }));
+    return realSkus.map((sku) => ({ skuRef: sku.id, targetPullKg: sku.targetPullKg }));
   }
   return [...input.series.targetPullSpecifications]
     .sort((left, right) => left.targetPullKgf - right.targetPullKgf || left.skuId.localeCompare(right.skuId))

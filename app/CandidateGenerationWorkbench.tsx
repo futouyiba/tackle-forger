@@ -14,6 +14,7 @@ import type {
   SeriesDefinition,
   WorkspaceState,
 } from "@/lib/types";
+import { candidateGenerationEligibleSkus } from "@/lib/enabled-item-parts";
 import "./candidate-generation.css";
 
 interface Props {
@@ -39,15 +40,19 @@ function blankVariant(index: number): ModelVariantInput {
 }
 
 export function CandidateGenerationWorkbench({ state, series, initialSkuId, actionAvailabilities, actor, mutate, notify, onClose }: Props) {
-  const seriesSkus = useMemo(() => state.skuDrawers.filter((sku) => sku.seriesId === series.id)
-    .sort((left, right) => left.targetWeightKg - right.targetWeightKg), [series.id, state.skuDrawers]);
+  const seriesSkus = useMemo(
+    () => candidateGenerationEligibleSkus(series, state.skuDrawers),
+    [series, state.skuDrawers],
+  );
   const matchingRecipes = state.candidateSearchRecipes.filter((recipe) =>
     recipe.methodIds.includes(series.fishingMethodId)
     && recipe.typeIds.includes(series.typeId)
     && recipe.functionIds.includes(series.coreFunctionId)
     && recipe.qualityIds.includes(series.qualityId));
   const [recipeId, setRecipeId] = useState(matchingRecipes[0]?.id ?? "");
-  const [skuIds, setSkuIds] = useState<string[]>(initialSkuId ? [initialSkuId] : seriesSkus.map((sku) => sku.id));
+  const [skuIds, setSkuIds] = useState<string[]>(() => initialSkuId && seriesSkus.some((sku) => sku.id === initialSkuId)
+    ? [initialSkuId]
+    : seriesSkus.map((sku) => sku.id));
   const [variants, setVariants] = useState<ModelVariantInput[]>([blankVariant(0)]);
   const [perSkuLimit, setPerSkuLimit] = useState(8);
   const [minimumAffinity, setMinimumAffinity] = useState("");
@@ -137,7 +142,7 @@ export function CandidateGenerationWorkbench({ state, series, initialSkuId, acti
           <section className="candidate-input-card">
             <h3>1. 冻结范围与配方</h3>
             <label><span>候选搜索配方 / Revision</span><select value={recipeId} onChange={(event) => setRecipeId(event.target.value)}><option value="">选择配方</option>{matchingRecipes.map((recipe) => <option key={recipe.id} value={recipe.id}>{recipe.name} · rev {recipe.revision}</option>)}</select></label>
-            <div className="candidate-sku-grid">{seriesSkus.map((sku) => <label key={sku.id}><input type="checkbox" checked={skuIds.includes(sku.id)} onChange={() => setSkuIds((current) => current.includes(sku.id) ? current.filter((id) => id !== sku.id) : [...current, sku.id])} /><span><strong>{sku.targetWeightKg} kgf</strong><small>离散目标拉力 · {sku.id} · 最近标杆 {sku.projectionMatch.projectionId}</small></span></label>)}</div>
+            <div className="candidate-sku-grid">{seriesSkus.map((sku) => <label key={sku.id}><input type="checkbox" checked={skuIds.includes(sku.id)} onChange={() => setSkuIds((current) => current.includes(sku.id) ? current.filter((id) => id !== sku.id) : [...current, sku.id])} /><span><strong>{sku.targetPullKg} kgf</strong><small>离散目标拉力 · {sku.id} · 最近标杆 {sku.projectionMatch.projectionId}</small></span></label>)}</div>
           </section>
           <section className="candidate-input-card">
             <div className="candidate-card-title"><h3>2. 启用 Model 路线</h3><button type="button" onClick={() => setVariants((current) => [...current, blankVariant(current.length)])}><Plus size={14} />添加路线</button></div>

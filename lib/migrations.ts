@@ -33,13 +33,13 @@ import { defaultAffinityAxisWeights } from "./compatibility";
 import { migrateLegacyProductIdentity } from "./legacy-product-migration";
 import { CANONICAL_FEISHU_WORKBOOK } from "./feishu-workbook";
 import { buildPatchRevision, emptyPatchLedger, migratePatchLedger } from "./patch-ledger";
-import { deterministicHash } from "./rule-kernel";
 import {
   CANONICAL_PATCH_OFFSET_POLICY_ID,
   createCanonicalPatchOffsetPolicyVersion,
 } from "./patch-offset-policy";
+import { deterministicHash } from "./rule-kernel";
 
-export const CURRENT_WORKSPACE_SCHEMA_VERSION = 17;
+export const CURRENT_WORKSPACE_SCHEMA_VERSION = 18;
 
 const DEFAULT_RULE_SETTINGS: WorkspaceRuleSettings = {
   reductionStackingMode: "diminishing_division",
@@ -525,7 +525,7 @@ function migrateSearchRecipes(state: MutableWorkspace): CandidateSearchRecipe[] 
     functionIds: structuredClone(recipe.functionIds),
     performanceIds: structuredClone(recipe.performanceIds),
     qualityIds: [legacyQualityId(recipe.qualityTarget)],
-    targetWeightRangeKg: {
+    targetPullRangeKg: {
       min: recipe.fishMinKg,
       max: recipe.fishMaxKg,
     },
@@ -698,11 +698,8 @@ function migrateV15ToV16(state: MutableWorkspace): MutableWorkspace {
     ? migratePatchLedger(state.patchLedger as WorkspaceState["patchLedger"])
     : emptyPatchLedger();
   const legacyLimits = state.ruleSettings?.patchOffsetLimits;
-  if (
-    legacyLimits
-    && (legacyLimits.warning !== undefined || legacyLimits.error !== undefined)
-    && !ledger.migrationReviewItems.some((entry) => entry.id === "patch-offset-policy:legacy-thresholds")
-  ) {
+  if (legacyLimits && (legacyLimits.warning !== undefined || legacyLimits.error !== undefined)
+    && !ledger.migrationReviewItems.some((entry) => entry.id === "patch-offset-policy:legacy-thresholds")) {
     ledger.migrationReviewItems.push({
       id: "patch-offset-policy:legacy-thresholds",
       patchId: "legacy-patch-offset-policy",
@@ -713,10 +710,8 @@ function migrateV15ToV16(state: MutableWorkspace): MutableWorkspace {
   }
   const policies = arrayOf<WorkspaceState["workspacePolicies"][number]>(state.workspacePolicies)
     .map((policy) => policy.policyType === "patchOffsetPolicy"
-      && policy.policyId !== CANONICAL_PATCH_OFFSET_POLICY_ID
-      && policy.status === "published"
-      ? { ...policy, status: "superseded" as const }
-      : policy);
+      && policy.policyId !== CANONICAL_PATCH_OFFSET_POLICY_ID && policy.status === "published"
+      ? { ...policy, status: "superseded" as const } : policy);
   if (!policies.some((policy) => policy.policyId === CANONICAL_PATCH_OFFSET_POLICY_ID)) {
     policies.push(createCanonicalPatchOffsetPolicyVersion({
       createdAt: "2026-07-23T00:00:00.000Z",
@@ -727,10 +722,7 @@ function migrateV15ToV16(state: MutableWorkspace): MutableWorkspace {
   return {
     ...state,
     schemaVersion: 16,
-    ruleSettings: {
-      ...(state.ruleSettings ?? DEFAULT_RULE_SETTINGS),
-      patchOffsetLimits: {},
-    },
+    ruleSettings: { ...(state.ruleSettings ?? DEFAULT_RULE_SETTINGS), patchOffsetLimits: {} },
     patchLedger: ledger,
     workspacePolicies: policies,
     patchReviewBatches: arrayOf<WorkspaceState["patchReviewBatches"][number]>(state.patchReviewBatches),
@@ -739,10 +731,271 @@ function migrateV15ToV16(state: MutableWorkspace): MutableWorkspace {
   };
 }
 
+type LegacyProjectionMatchV16 = Record<string, unknown> & {
+  targetPullKg?: number;
+  targetWeightKg?: number;
+  matchedStructuralPullKg?: number;
+  anchorWeightKg?: number;
+  pullDistance?: number;
+  weightDistance?: number;
+};
+
+function resolveLegacyNumber(input: {
+  canonical: unknown;
+  legacy: unknown;
+  label: string;
+  positive?: boolean;
+  nonNegative?: boolean;
+}): number {
+  if (
+    typeof input.canonical === "number"
+    && typeof input.legacy === "number"
+    && input.canonical !== input.legacy
+  ) {
+    throw new Error(`TARGET_PULL_MIGRATION_CONFLICT：${input.label} 的新旧字段不一致。`);
+  }
+  const value = typeof input.canonical === "number" ? input.canonical : input.legacy;
+  if (
+    typeof value !== "number"
+    || !Number.isFinite(value)
+    || (input.positive && value <= 0)
+    || (input.nonNegative && value < 0)
+  ) {
+    throw new Error(`TARGET_PULL_MIGRATION_INVALID：${input.label} 缺少可无损迁移的有限数值。`);
+  }
+  return value;
+}
+
+function migrateLegacyProjectionMatchV16(value: unknown): ProjectionMatch {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("历史 ProjectionMatch 必须是对象。");
+  }
+  const source = value as LegacyProjectionMatchV16;
+  const targetPullKg = resolveLegacyNumber({
+    canonical: source.targetPullKg,
+    legacy: source.targetWeightKg,
+    label: "ProjectionMatch.targetPullKg",
+    positive: true,
+  });
+  const matchedStructuralPullKg = resolveLegacyNumber({
+    canonical: source.matchedStructuralPullKg,
+    legacy: source.anchorWeightKg,
+    label: "ProjectionMatch.matchedStructuralPullKg",
+    positive: true,
+  });
+  const pullDistance = resolveLegacyNumber({
+    canonical: source.pullDistance,
+    legacy: source.weightDistance,
+    label: "ProjectionMatch.pullDistance",
+    nonNegative: true,
+  });
+  const {
+    targetWeightKg: _targetWeightKg,
+    anchorWeightKg: _anchorWeightKg,
+    weightDistance: _weightDistance,
+    ...preserved
+  } = source;
+  void _targetWeightKg;
+  void _anchorWeightKg;
+  void _weightDistance;
+  return {
+    ...preserved,
+    targetPullKg,
+    matchedStructuralPullKg,
+    pullDistance,
+  } as ProjectionMatch;
+}
+
+function migrationArchiveItem(
+  id: string,
+  sourceId: string,
+  message: string,
+  preservedPayload: unknown,
+): MigrationReviewItem {
+  return {
+    id,
+    sourceType: "unknown",
+    sourceId,
+    message,
+    preservedPayload: structuredClone(preservedPayload),
+    status: "resolved",
+  };
+}
+
 function migrateV16ToV17(state: MutableWorkspace): MutableWorkspace {
+  const migrationReviewItems = arrayOf<MigrationReviewItem>(state.migrationReviewItems)
+    .map((item) => structuredClone(item));
+  const archive = (item: MigrationReviewItem) => {
+    if (!migrationReviewItems.some((existing) => existing.id === item.id)) {
+      migrationReviewItems.push(item);
+    }
+  };
+  const skuDrawers: Array<Record<string, unknown>> = arrayOf<Record<string, unknown>>(state.skuDrawers).map((sku) => {
+    const legacyTargetPullKg = resolveLegacyNumber({
+      canonical: sku.targetPullKg,
+      legacy: sku.targetWeightKg,
+      label: "SKU " + String(sku.id ?? "unknown") + ".targetPullKg",
+      positive: true,
+    });
+    if (Object.hasOwn(sku, "targetWeightKg")) {
+      archive(migrationArchiveItem(
+        "target-pull-migration:sku:" + String(sku.id ?? "unknown"),
+        String(sku.id ?? "unknown"),
+        "AUD-024：历史 SKU 拉力 payload 已归档；活动对象仅保留 targetPullKg。",
+        sku,
+      ));
+    }
+    const legacyProjectionMatch = sku.projectionMatch;
+    if (
+      legacyProjectionMatch && typeof legacyProjectionMatch === "object" && !Array.isArray(legacyProjectionMatch)
+      && (Object.hasOwn(legacyProjectionMatch, "targetWeightKg")
+        || Object.hasOwn(legacyProjectionMatch, "anchorWeightKg")
+        || Object.hasOwn(legacyProjectionMatch, "weightDistance"))
+    ) {
+      archive(migrationArchiveItem(
+        "target-pull-migration:sku-projection-match:" + String(sku.id ?? "unknown"),
+        String(sku.id ?? "unknown"),
+        "AUD-024：SKU 内嵌历史 ProjectionMatch payload 已归档。",
+        legacyProjectionMatch,
+      ));
+    }
+    const { targetWeightKg: _targetWeightKg, ...preserved } = sku;
+    void _targetWeightKg;
+    const projectionMatch = migrateLegacyProjectionMatchV16(sku.projectionMatch);
+    if (projectionMatch.targetPullKg !== legacyTargetPullKg) {
+      throw new Error("TARGET_PULL_MIGRATION_CONFLICT：SKU 与 ProjectionMatch 目标拉力不一致。");
+    }
+    return {
+      ...preserved,
+      targetPullKg: legacyTargetPullKg,
+      projectionMatch,
+    };
+  });
+  const projectionMatches = arrayOf<unknown>(state.projectionMatches).map((match, index) => {
+    const source = match as Record<string, unknown>;
+    if (Object.hasOwn(source, "targetWeightKg")) {
+      archive(migrationArchiveItem(
+        "target-pull-migration:projection-match:" + index,
+        String(source.projectionId ?? index),
+        "AUD-024：历史 ProjectionMatch payload 已归档。",
+        source,
+      ));
+    }
+    return migrateLegacyProjectionMatchV16(source);
+  });
+  const migrateSelector = (selector: unknown, sourceId: string) => {
+    const source = selector && typeof selector === "object" && !Array.isArray(selector)
+      ? selector as Record<string, unknown>
+      : {};
+    const { minWeightKg, maxWeightKg, ...preserved } = source;
+    if (minWeightKg !== undefined || maxWeightKg !== undefined) {
+      archive(migrationArchiveItem(
+        "target-pull-migration:selector:" + sourceId,
+        sourceId,
+        "AUD-024：历史拉力范围 selector payload 已归档。",
+        source,
+      ));
+    }
+    if (typeof source.minPullKg === "number" && typeof minWeightKg === "number" && source.minPullKg !== minWeightKg) {
+      throw new Error("TARGET_PULL_MIGRATION_CONFLICT：" + sourceId + " 最小拉力新旧字段不一致。");
+    }
+    if (typeof source.maxPullKg === "number" && typeof maxWeightKg === "number" && source.maxPullKg !== maxWeightKg) {
+      throw new Error("TARGET_PULL_MIGRATION_CONFLICT：" + sourceId + " 最大拉力新旧字段不一致。");
+    }
+    return {
+      ...preserved,
+      ...(typeof source.minPullKg === "number" ? {} : typeof minWeightKg === "number" ? { minPullKg: minWeightKg } : {}),
+      ...(typeof source.maxPullKg === "number" ? {} : typeof maxWeightKg === "number" ? { maxPullKg: maxWeightKg } : {}),
+    };
+  };
+  const compatibilityRules = arrayOf<Record<string, unknown>>(state.compatibilityRules).map((rule) => ({
+    ...rule,
+    selector: migrateSelector(rule.selector, "compatibility:" + String(rule.id ?? "unknown")),
+  }));
+  const affinityRules = arrayOf<Record<string, unknown>>(state.affinityRules).map((rule) => ({
+    ...rule,
+    selector: migrateSelector(rule.selector, "affinity:" + String(rule.id ?? "unknown")),
+  }));
+  const candidateSearchRecipes = arrayOf<Record<string, unknown>>(state.candidateSearchRecipes).map((recipe) => {
+    const legacyRange = recipe.targetWeightRangeKg;
+    if (legacyRange !== undefined) {
+      archive(migrationArchiveItem(
+        "target-pull-migration:candidate-recipe:" + String(recipe.id ?? "unknown"),
+        String(recipe.id ?? "unknown"),
+        "AUD-024：历史候选搜索拉力范围 payload 已归档。",
+        recipe,
+      ));
+    }
+    if (
+      recipe.targetPullRangeKg !== undefined
+      && legacyRange !== undefined
+      && deterministicHash(recipe.targetPullRangeKg) !== deterministicHash(legacyRange)
+    ) {
+      throw new Error("TARGET_PULL_MIGRATION_CONFLICT：候选搜索配方拉力范围新旧字段不一致。");
+    }
+    const { targetWeightRangeKg: _targetWeightRangeKg, ...preserved } = recipe;
+    void _targetWeightRangeKg;
+    const targetPullRangeKg = recipe.targetPullRangeKg ?? legacyRange;
+    if (!targetPullRangeKg || typeof targetPullRangeKg !== "object" || Array.isArray(targetPullRangeKg)) {
+      throw new Error("TARGET_PULL_MIGRATION_INVALID：候选搜索配方缺少拉力范围。");
+    }
+    return {
+      ...preserved,
+      targetPullRangeKg,
+    };
+  });
+  const seriesDefinitions = arrayOf<Record<string, unknown>>(state.seriesDefinitions).map((series) => {
+    const { targetWeightsKg: _targetWeightsKg, ...preserved } = series;
+    if (_targetWeightsKg !== undefined) {
+      archive(migrationArchiveItem(
+        "target-pull-migration:series:" + String(series.id ?? "unknown"),
+        String(series.id ?? "unknown"),
+        "AUD-024：历史 Series 重量数组已归档；活动对象消费离散 targetPullSpecifications。",
+        series,
+      ));
+    }
+    const declaredSkuIds = new Set(arrayOf<string>(series.skuIds));
+    const seriesSkus = skuDrawers
+      .filter((sku) => sku.seriesId === series.id)
+      .filter((sku) => !declaredSkuIds.size || declaredSkuIds.has(String(sku.id)))
+      .sort((left, right) => {
+        const leftPull = Number(left.targetPullKg);
+        const rightPull = Number(right.targetPullKg);
+        return leftPull - rightPull || String(left.id).localeCompare(String(right.id));
+      });
+    const existingSpecifications = arrayOf<Record<string, unknown>>(series.targetPullSpecifications);
+    const targetPullSpecifications = existingSpecifications.length
+      ? structuredClone(existingSpecifications)
+      : seriesSkus.map((sku) => ({
+          targetPullKgf: Number(sku.targetPullKg),
+          skuId: String(sku.id),
+        }));
+    return {
+      ...preserved,
+      targetPullSpecifications,
+    };
+  });
   return {
     ...state,
     schemaVersion: 17,
+    skuDrawers,
+    projectionMatches,
+    compatibilityRules,
+    affinityRules,
+    candidateSearchRecipes,
+    seriesDefinitions,
+    migrationReviewItems,
+    // ConfigurationSnapshot 是冻结 payload；此迁移不得补字段、重算或改变 contentHash。
+    configurationSnapshots: arrayOf<WorkspaceState["configurationSnapshots"][number]>(
+      state.configurationSnapshots,
+    ),
+  } as unknown as MutableWorkspace;
+}
+
+function migrateV17ToV18(state: MutableWorkspace): MutableWorkspace {
+  return {
+    ...state,
+    schemaVersion: 18,
     aiRuleSourceChangeDrafts: arrayOf<
       WorkspaceState["aiRuleSourceChangeDrafts"][number]
     >(state.aiRuleSourceChangeDrafts),
@@ -769,6 +1022,7 @@ const migrations: Record<number, (state: MutableWorkspace) => MutableWorkspace> 
   14: migrateV14ToV15,
   15: migrateV15ToV16,
   16: migrateV16ToV17,
+  17: migrateV17ToV18,
 };
 
 export function migrateWorkspaceState(input: unknown): WorkspaceState {
@@ -787,6 +1041,13 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
       "工作区版本 " + version + " 高于当前支持版本 " +
         CURRENT_WORKSPACE_SCHEMA_VERSION + "。",
     );
+  }
+
+  // Some production databases were marked v17 before every persisted payload had
+  // been normalized. Normalize those active objects before advancing to v18;
+  // frozen snapshots remain byte-for-byte untouched by migrateV16ToV17.
+  if (version === 17) {
+    state = migrateV16ToV17(state);
   }
 
   while (version < CURRENT_WORKSPACE_SCHEMA_VERSION) {
@@ -861,17 +1122,36 @@ function migrateV6ToV7(state: MutableWorkspace): MutableWorkspace {
 }
 
 function migrateV7ToV8(state: MutableWorkspace): MutableWorkspace {
-  const skuDrawers = arrayOf<WorkspaceState["skuDrawers"][number]>(state.skuDrawers);
+  type LegacySku = Record<string, unknown> & {
+    id: string;
+    seriesId: string;
+    targetPullKg?: number;
+    targetWeightKg?: number;
+  };
+  type LegacySeries = Record<string, unknown> & {
+    id: string;
+    planningPullRange?: { minKgf: number; maxKgf: number };
+    targetPullSpecifications?: Array<{ targetPullKgf: number; skuId: string }>;
+    targetWeightsKg?: number[];
+    skuIds?: string[];
+  };
+  const skuDrawers = arrayOf<LegacySku>(state.skuDrawers);
+  const pullForLegacySku = (sku: LegacySku) => resolveLegacyNumber({
+    canonical: sku.targetPullKg,
+    legacy: sku.targetWeightKg,
+    label: "schema v7 SKU " + sku.id,
+    positive: true,
+  });
   return {
     ...state,
     schemaVersion: 8,
-    seriesDefinitions: arrayOf<WorkspaceState["seriesDefinitions"][number]>(state.seriesDefinitions)
+    seriesDefinitions: arrayOf<LegacySeries>(state.seriesDefinitions)
       .map((series) => {
         const seriesSkus = skuDrawers
           .filter((sku) => sku.seriesId === series.id)
-          .sort((left, right) => left.targetWeightKg - right.targetWeightKg || left.id.localeCompare(right.id));
+          .sort((left, right) => pullForLegacySku(left) - pullForLegacySku(right) || left.id.localeCompare(right.id));
         const specifications = seriesSkus.map((sku) => ({
-          targetPullKgf: sku.targetWeightKg,
+          targetPullKgf: pullForLegacySku(sku),
           skuId: sku.id,
         }));
         const pulls = specifications.map((entry) => entry.targetPullKgf);
@@ -889,7 +1169,7 @@ function migrateV7ToV8(state: MutableWorkspace): MutableWorkspace {
           skuIds: series.skuIds?.length ? [...series.skuIds] : specifications.map((entry) => entry.skuId),
         };
       }),
-  };
+  } as unknown as MutableWorkspace;
 }
 
 function migrateV12ToV13(state: MutableWorkspace): MutableWorkspace {

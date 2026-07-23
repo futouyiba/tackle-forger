@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 17,
+  "legacyImportedField": {
+    "source": "production-redacted",
+    "preserve": true
+  },
+  "skuDrawers": [
+    {
+      "id": "sku:production-redacted",
+      "seriesId": "series:production-redacted",
+      "targetWeightKg": 3.6,
+      "projectionMatch": {
+        "projectionMatchId": "match:production-redacted",
+        "projectionRevisionId": "match-revision:redacted",
+        "itemPartId": "part:rod",
+        "projectionId": "projection:production-redacted",
+        "projectionRevisionId": "projection-revision:redacted",
+        "weightTemplateId": "template:production-redacted",
+        "ruleSetVersion": "ruleset:production-redacted",
+        "targetWeightKg": 3.6,
+        "anchorWeightKg": 4,
+        "weightDistance": 0.10536051565782628,
+        "legacyProjectionEvidence": "redacted-preserve"
+      },
+      "patchIds": [],
+      "modelIds": ["model:production-redacted"],
+      "revision": 7,
+      "legacySkuMetadata": {
+        "preserve": true
+      }
+    }
+  ],
+  "projectionMatches": [
+    {
+      "projectionMatchId": "match:production-redacted",
+      "projectionRevisionId": "match-revision:redacted",
+      "itemPartId": "part:rod",
+      "projectionId": "projection:production-redacted",
+      "projectionRevisionId": "projection-revision:redacted",
+      "weightTemplateId": "template:production-redacted",
+      "ruleSetVersion": "ruleset:production-redacted",
+      "targetWeightKg": 3.6,
+      "anchorWeightKg": 4,
+      "weightDistance": 0.10536051565782628
+    }
+  ],
+  "compatibilityRules": [
+    {
+      "id": "compatibility:production-redacted",
+      "selector": {
+        "minWeightKg": 1,
+        "maxWeightKg": 8
+      }
+    }
+  ],
+  "affinityRules": [],
+  "candidateSearchRecipes": [
+    {
+      "id": "candidate-recipe:production-redacted",
+      "targetWeightRangeKg": {
+        "min": 1,
+        "max": 8
+      }
+    }
+  ],
+  "seriesDefinitions": [
+    {
+      "id": "series:production-redacted",
+      "skuIds": ["sku:production-redacted"],
+      "signature": [],
+      "targetWeightsKg": [3.6]
+    }
+  ],
+  "migrationReviewItems": [],
+  "configurationSnapshots": [
+    {
+      "id": "snapshot:published-redacted",
+      "contentHash": "sha256:production-published-snapshot-redacted",
+      "status": "published",
+      "projectionMatch": {
+        "targetWeightKg": 3.6,
+        "anchorWeightKg": 4,
+        "weightDistance": 0.10536051565782628
+      },
+      "legacySnapshotPayload": {
+        "doNotRewrite": true
+      }
+    }
+  ]
+}

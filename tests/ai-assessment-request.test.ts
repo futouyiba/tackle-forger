@@ -95,3 +95,101 @@ test("不存在的 Series/Model scope 在构造出站请求前 fail-closed", () 
     );
   }
 });
+
+test("延期部位和不一致的 Model→SKU→Series→Snapshot 链在出站前 fail-closed", () => {
+  const disabledSeriesState = createSeedState();
+  const disabledSeries = disabledSeriesState.seriesDefinitions[0]!;
+  disabledSeries.itemPartId = "part:hook";
+  for (const sku of disabledSeriesState.skuDrawers.filter((entry) =>
+    entry.seriesId === disabledSeries.id)) {
+    sku.projectionMatch.itemPartId = "part:hook";
+  }
+  const disabledSeriesScope = {
+    scopeType: "series" as const,
+    scopeId: disabledSeries.id,
+  };
+  assert.equal(workspaceAssessmentScopeExists(disabledSeriesState, disabledSeriesScope), false);
+  assert.throws(
+    () => buildWorkspaceAssessmentEnvelope({
+      state: disabledSeriesState,
+      scope: disabledSeriesScope,
+      assessmentId: "assessment:disabled-series",
+      model: providerModel,
+    }),
+    (error: unknown) =>
+      error instanceof Error
+      && "code" in error
+      && error.code === "ITEM_PART_NOT_ENABLED",
+  );
+
+  const disabledModelState = createSeedState();
+  const disabledModel = disabledModelState.purchasableModels[0]!;
+  const disabledSku = disabledModelState.skuDrawers.find((entry) =>
+    entry.id === disabledModel.skuId)!;
+  disabledSku.projectionMatch.itemPartId = "part:hook";
+  assert.throws(
+    () => buildWorkspaceAssessmentEnvelope({
+      state: disabledModelState,
+      scope: { scopeType: "model", scopeId: disabledModel.id },
+      assessmentId: "assessment:disabled-model",
+      model: providerModel,
+    }),
+    (error: unknown) =>
+      error instanceof Error
+      && "code" in error
+      && error.code === "ITEM_PART_NOT_ENABLED",
+  );
+
+  const inconsistentSnapshotState = createSeedState();
+  const frozenModel = inconsistentSnapshotState.purchasableModels.find((entry) =>
+    Boolean(entry.configurationSnapshotId))!;
+  const frozenSnapshot = inconsistentSnapshotState.configurationSnapshots.find((entry) =>
+    entry.id === frozenModel.configurationSnapshotId)!;
+  frozenSnapshot.projectionMatch.itemPartId = "part:reel";
+  assert.throws(
+    () => buildWorkspaceAssessmentEnvelope({
+      state: inconsistentSnapshotState,
+      scope: { scopeType: "model", scopeId: frozenModel.id },
+      assessmentId: "assessment:inconsistent-snapshot",
+      model: providerModel,
+    }),
+    (error: unknown) =>
+      error instanceof Error
+      && "code" in error
+      && error.code === "ITEM_PART_CHAIN_INCONSISTENT",
+  );
+});
+
+test("启用 Series 可保留延期 sibling，但安全投影不会带出其拉力规格", () => {
+  const state = createSeedState();
+  const series = state.seriesDefinitions[0]!;
+  const enabledSku = state.skuDrawers.find((entry) => entry.seriesId === series.id)!;
+  const delayedSku = structuredClone(enabledSku);
+  delayedSku.id = `${enabledSku.id}:delayed-hook`;
+  delayedSku.projectionMatch.itemPartId = "part:hook";
+  delayedSku.targetPullKg = enabledSku.targetPullKg + 99;
+  delayedSku.modelIds = [];
+  state.skuDrawers.push(delayedSku);
+  series.targetPullSpecifications.push({
+    targetPullKgf: delayedSku.targetPullKg,
+    skuId: delayedSku.id,
+  });
+
+  const projection = buildWorkspaceAssessmentRequestProjection({
+    state,
+    scope: { scopeType: "series", scopeId: series.id },
+    assessmentId: "assessment:enabled-series-with-delayed-sibling",
+    model: providerModel,
+  });
+  assert.equal(workspaceAssessmentScopeExists(
+    state,
+    { scopeType: "series", scopeId: series.id },
+  ), true);
+  assert.equal(
+    projection.envelope.panelValues.some((entry) =>
+      entry.parameterKey === "target_pull_kgf"
+      && entry.value.kind === "number"
+      && entry.value.value === delayedSku.targetPullKg),
+    false,
+  );
+});

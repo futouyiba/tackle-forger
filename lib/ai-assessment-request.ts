@@ -11,6 +11,12 @@ import {
   type LocalAliasReferenceV1,
   type RequestAlias,
 } from "./ai-outbound";
+import {
+  assertSeriesItemPartChainEnabled,
+  isProductSkuChainEnabled,
+  type ItemPartChainInconsistentError,
+  type ItemPartNotEnabledError,
+} from "./enabled-item-parts";
 import { currentPatchPanelValuesFromWorkspace } from "./patch-authority";
 import type { WorkspaceState } from "./types";
 
@@ -25,6 +31,9 @@ export const AI_ASSESSMENT_PROMPT = [
 ].join("\n");
 
 type AssessmentScope = { scopeType: "series" | "model"; scopeId: string };
+export type WorkspaceAssessmentScopeError =
+  | ItemPartNotEnabledError
+  | ItemPartChainInconsistentError;
 
 export interface WorkspaceAssessmentRequestProjection {
   envelope: AIRequestEnvelopeV1;
@@ -47,9 +56,54 @@ export interface WorkspaceAssessmentRequestProjection {
 }
 
 export function workspaceAssessmentScopeExists(state: WorkspaceState, scope: AssessmentScope): boolean {
-  return scope.scopeType === "series"
-    ? state.seriesDefinitions.some((entry) => entry.id === scope.scopeId)
-    : state.purchasableModels.some((entry) => entry.id === scope.scopeId);
+  try {
+    assertWorkspaceAssessmentScopeEligible(state, scope);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function assertWorkspaceAssessmentScopeEligible(
+  state: WorkspaceState,
+  scope: AssessmentScope,
+): void {
+  if (scope.scopeType === "series") {
+    const series = state.seriesDefinitions.find((entry) => entry.id === scope.scopeId);
+    if (!series) throw new Error("AI_SCOPE_NOT_FOUND");
+    // Validate the declared part against enabled descendants. Delayed historical
+    // siblings remain retained but are excluded from the safe projection below.
+    assertSeriesItemPartChainEnabled(
+      series,
+      [],
+      "ai_assessment",
+      [],
+      state.skuDrawers,
+    );
+    return;
+  }
+  const model = state.purchasableModels.find((entry) => entry.id === scope.scopeId);
+  if (!model) throw new Error("AI_SCOPE_NOT_FOUND");
+  const sku = state.skuDrawers.find((entry) => entry.id === model.skuId);
+  const series = sku
+    ? state.seriesDefinitions.find((entry) => entry.id === sku.seriesId)
+    : undefined;
+  if (!sku || !series || !sku.modelIds.includes(model.id)) {
+    throw new Error("AI_SCOPE_NOT_FOUND");
+  }
+  const snapshot = model.configurationSnapshotId
+    ? state.configurationSnapshots.find((entry) => entry.id === model.configurationSnapshotId)
+    : undefined;
+  if (model.configurationSnapshotId && (!snapshot || snapshot.modelId !== model.id)) {
+    throw new Error("AI_SCOPE_NOT_FOUND");
+  }
+  assertSeriesItemPartChainEnabled(
+    series,
+    [sku],
+    "ai_assessment",
+    snapshot ? [snapshot.projectionMatch.itemPartId] : [],
+    state.skuDrawers,
+  );
 }
 
 function reference(referenceKindCode: LocalAliasReferenceV1["referenceKindCode"], stableLocalId: string, stableRevisionId?: string): LocalAliasReferenceV1 {
@@ -89,12 +143,20 @@ export function buildWorkspaceAssessmentRequestProjection(input: {
   assessmentId: string;
   model: AIModelDescriptorV1;
 }): WorkspaceAssessmentRequestProjection {
+  assertWorkspaceAssessmentScopeEligible(input.state, input.scope);
   const ruleSetVersion = currentPublishedRuleSetVersion(input.state);
   const fiveAxisRuleVersion = currentFiveAxisRuleVersion(input.state);
   const assessmentRef = reference("assessment", input.assessmentId);
   if (input.scope.scopeType === "series") {
     const series = input.state.seriesDefinitions.find((entry) => entry.id === input.scope.scopeId);
     if (!series) throw new Error("AI_SCOPE_NOT_FOUND");
+    const eligibleSkuIds = new Set(
+      input.state.skuDrawers
+        .filter((sku) => isProductSkuChainEnabled(series, sku, input.state.skuDrawers))
+        .map((sku) => sku.id),
+    );
+    const targetPullSpecifications = series.targetPullSpecifications.filter((entry) =>
+      eligibleSkuIds.has(entry.skuId));
     const seriesRef = reference("series", series.id, String(series.revision));
     const revisionRef = reference("revision", `${series.id}:revision`, String(series.revision));
     const evidenceRef = reference("evidence", `${series.id}:assessment-snapshot`, String(series.revision));
@@ -107,7 +169,7 @@ export function buildWorkspaceAssessmentRequestProjection(input: {
       ruleSetVersion,
       fiveAxisRuleVersion,
       functionIntensityPolicy: series.functionIntensityPolicy,
-      targetPullSpecifications: series.targetPullSpecifications,
+      targetPullSpecifications,
     }));
     return {
       prompt: AI_ASSESSMENT_PROMPT,
@@ -133,7 +195,7 @@ export function buildWorkspaceAssessmentRequestProjection(input: {
         ...(series.functionIntensityPolicy.mode === "fixed"
           ? [{ subjectAlias, parameterKey: "function_intensity", value: { kind: "number" as const, value: series.functionIntensityPolicy.intensity } }]
           : []),
-        ...series.targetPullSpecifications.map((entry) => ({
+        ...targetPullSpecifications.map((entry) => ({
           subjectAlias,
           parameterKey: "target_pull_kgf",
           value: { kind: "number" as const, value: entry.targetPullKgf },
@@ -162,7 +224,7 @@ export function buildWorkspaceAssessmentRequestProjection(input: {
     skuId: model.skuId,
     lengthM: model.lengthM,
     price: model.price,
-    targetWeightKg: sku?.targetWeightKg ?? null,
+    targetPullKg: sku?.targetPullKg ?? null,
   }));
   const finalPanelValues = currentPatchPanelValuesFromWorkspace({
     state: input.state,

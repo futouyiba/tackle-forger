@@ -37,8 +37,21 @@ import type {
   PassiveSkillPayload,
   WorkspacePolicyRecord,
 } from "./types";
+import { structuralPullParameterKey } from "./projection-matcher";
 import type { ModelAffixValueAssessment } from "./quality-value-policy";
 import type { PricingTrialResult } from "./pricing-policy";
+import {
+  assertSeriesItemPartChainEnabled,
+} from "./enabled-item-parts";
+
+export function modelFinalPullKgForSnapshot(
+  itemPartId: string | undefined,
+  finalPanelValues: Record<string, number | string>,
+): number | undefined {
+  const parameterKey = itemPartId ? structuralPullParameterKey(itemPartId) : undefined;
+  const value = parameterKey ? finalPanelValues[parameterKey] : undefined;
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
 
 function errors(issues: ValidationIssue[]): ValidationIssue[] {
   return issues.filter((issue) => issue.level === "error");
@@ -52,6 +65,7 @@ export interface PublishModelInput {
   publicationMode: "new_formal" | "historical_import";
   model: PurchasableModel;
   sku: SkuDrawer;
+  seriesSkus: SkuDrawer[];
   series: SeriesDefinition;
   projection: DerivedProjection;
   finalPanelValues: Record<string, number | string>;
@@ -163,6 +177,13 @@ export function publishConfigurationSnapshot(
       throw error;
     }
   }
+  assertSeriesItemPartChainEnabled(
+    input.series,
+    [input.sku],
+    "model_publish",
+    [],
+    input.seriesSkus,
+  );
   const combinedValidationReport = [
     ...input.validationReport,
     ...(input.fiveAxisPreview?.tackleFitComparison.validationIssues ?? []),
@@ -260,6 +281,10 @@ export function publishConfigurationSnapshot(
   }
 
   const governance = input.patchOffsetGovernance;
+  const modelFinalPullKg = modelFinalPullKgForSnapshot(
+    input.sku.projectionMatch.itemPartId,
+    input.finalPanelValues,
+  );
   const snapshotWithoutHash: Omit<ConfigurationSnapshot, "contentHash"> = {
     id:
       input.snapshotId ??
@@ -283,6 +308,9 @@ export function publishConfigurationSnapshot(
       patchValidationWaiverRefs: (governance.waivers ?? []).map((waiver) => waiver.waiverId).sort(),
     } : {}),
     finalPanelValues: structuredClone(input.finalPanelValues),
+    ...(modelFinalPullKg !== undefined
+      ? { modelFinalPullKg }
+      : {}),
     componentSelections: structuredClone(input.componentSelections),
     technologyIds: structuredClone(input.technologyIds),
     attributeAffixIds: structuredClone(input.attributeAffixIds),

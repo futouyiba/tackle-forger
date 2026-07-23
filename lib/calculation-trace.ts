@@ -208,7 +208,36 @@ export function assertCalculationTraceJsonSafe(
 }
 
 function sameValue(left: unknown, right: unknown): boolean {
-  return deterministicHash(left) === deterministicHash(right);
+  if (Object.is(left, right)) return true;
+  if (
+    left === null
+    || right === null
+    || typeof left !== "object"
+    || typeof right !== "object"
+  ) return false;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
+      return false;
+    }
+    for (let index = 0; index < left.length; index += 1) {
+      if ((index in left) !== (index in right) || !sameValue(left[index], right[index])) {
+        return false;
+      }
+    }
+    return true;
+  }
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  if (
+    leftKeys.length !== rightKeys.length
+    || leftKeys.some((key, index) => key !== rightKeys[index])
+  ) return false;
+  return leftKeys.every((key) =>
+    sameValue(
+      (left as Record<string, unknown>)[key],
+      (right as Record<string, unknown>)[key],
+    ),
+  );
 }
 
 export function isCalculationTraceAbsentValue(value: unknown): boolean {
@@ -501,7 +530,10 @@ function isAuxiliaryTraceEntry(entry: CalculationTraceEntry): boolean {
     ? entry.sourceRef.sourceType
     : undefined;
   return (
-    entry.evidence?.adapter === "pricing_trace/v1"
+    (
+      entry.evidence?.adapter === "pricing_trace/v1"
+      || entry.evidence?.adapter === "pricing_trace/v2"
+    )
     && entry.parameterKey.startsWith("pricing:")
     && sourceType === "pricing_cell"
   ) || (
@@ -748,9 +780,39 @@ export function adaptPricingTraceToCanonical(input: {
   ruleSetVersion: string;
   sequenceStart?: number;
 }): CalculationTraceEntry[] {
+  const pricingTrace = [...input.pricing.trace]
+    .sort((left, right) => left.sequence - right.sequence || left.formulaStep.localeCompare(right.formulaStep));
+  if (input.pricing.formal && pricingTrace.length === 0) {
+    throw new CalculationTraceReplayError("正式价格缺少可重放的 pricing Trace。");
+  }
+  if (input.pricing.formal && input.pricing.purchasePrice === null) {
+    throw new CalculationTraceReplayError("正式价格缺少最终 purchasePrice。");
+  }
+  for (let index = 1; index < pricingTrace.length; index += 1) {
+    const previous = pricingTrace[index - 1];
+    const current = pricingTrace[index];
+    if (current.sequence !== previous.sequence + 1) {
+      throw new CalculationTraceReplayError(
+        `pricing Trace sequence 不连续：${previous.sequence} → ${current.sequence}。`,
+      );
+    }
+    if (!sameValue(previous.after, current.before)) {
+      throw new CalculationTraceReplayError(
+        `pricing Trace 步骤不连续：${previous.formulaStep}.after 与 ${current.formulaStep}.before 不一致。`,
+      );
+    }
+  }
+  if (
+    input.pricing.purchasePrice !== null
+    && pricingTrace.length > 0
+    && !sameValue(pricingTrace[pricingTrace.length - 1].after, input.pricing.purchasePrice)
+  ) {
+    throw new CalculationTraceReplayError(
+      "pricing Trace 最终值与 purchasePrice 不一致。",
+    );
+  }
   let sequence = input.sequenceStart ?? 1;
-  return [...input.pricing.trace]
-    .sort((left, right) => left.sequence - right.sequence || left.formulaStep.localeCompare(right.formulaStep))
+  return pricingTrace
     .map((entry) => {
       const executable = executableOperation(
         entry.operation,
@@ -760,7 +822,7 @@ export function adaptPricingTraceToCanonical(input: {
       );
       return createCalculationTraceEntry({
         subjectRef: input.subjectRef,
-        parameterKey: `pricing:${entry.formulaStep}:${entry.sequence}`,
+        parameterKey: "pricing:purchase_price",
         sequence: sequence++,
         layer: pricingLayer(entry),
         sourceRef: {
@@ -779,9 +841,61 @@ export function adaptPricingTraceToCanonical(input: {
           .map((issue) => `pricing-issue-${deterministicHash(issue)}`)
           .sort(),
         actions: [],
-        evidence: { adapter: "pricing_trace/v1", ...entry },
+        evidence: { adapter: "pricing_trace/v2", ...entry },
       });
     });
+}
+
+export function assertCalculationTraceMatchesPricing(input: {
+  archive: CalculationTraceArchive;
+  subjectRef: EntityRef;
+  pricing?: PricingTrialResult;
+  ruleSetVersion: string;
+}): void {
+  const pricingEntries = input.archive.entries.filter((entry) =>
+    sameEntityRef(entry.subjectRef, input.subjectRef)
+    && entry.parameterKey.startsWith("pricing:")
+    && "sourceType" in entry.sourceRef
+    && entry.sourceRef.sourceType === "pricing_cell"
+    && (
+      entry.evidence?.adapter === "pricing_trace/v1"
+      || entry.evidence?.adapter === "pricing_trace/v2"
+    ),
+  );
+  if (!input.pricing) {
+    if (pricingEntries.length > 0) {
+      throw new CalculationTraceReplayError("Snapshot 未冻结价格，但 canonical Trace 含 pricing 条目。");
+    }
+    return;
+  }
+  if (pricingEntries.length === 0) {
+    if (input.pricing.trace.length > 0) {
+      throw new CalculationTraceReplayError(
+        "Snapshot 已冻结 pricing Trace，但 canonical Trace 缺少对应条目。",
+      );
+    }
+    // v1 发布前的历史 Snapshot 可能只有空 automaticPricing Trace，不能补写并改变其 hash。
+    return;
+  }
+  const adapters = new Set(pricingEntries.map((entry) => entry.evidence?.adapter));
+  if (adapters.size !== 1) {
+    throw new CalculationTraceReplayError("pricing Trace 混用了不同 adapter 版本。");
+  }
+  const expected = adaptPricingTraceToCanonical({
+    pricing: input.pricing,
+    subjectRef: input.subjectRef,
+    ruleSetVersion: input.ruleSetVersion,
+    sequenceStart: pricingEntries[0].sequence,
+  });
+  if (adapters.has("pricing_trace/v1")) {
+    // v1 每步使用独立 parameterKey，无法证明步骤链；仅保持已发布历史归档可读。
+    return;
+  }
+  if (!sameValue(pricingEntries, expected)) {
+    throw new CalculationTraceReplayError(
+      "canonical pricing Trace 与冻结的 automaticPricing 不一致。",
+    );
+  }
 }
 
 function flattenFiveAxisTrace(preview: ModelFiveAxisPreview): Array<{

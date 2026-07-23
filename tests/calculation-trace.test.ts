@@ -16,6 +16,7 @@ import {
   type CalculationTraceEntry,
 } from "../lib/calculation-trace";
 import type { EntityRef } from "../lib/interaction-contracts";
+import { deterministicHash } from "../lib/rule-kernel";
 import type { DerivedProjection, ParameterDefinition } from "../lib/types";
 
 const subjectRef: EntityRef = {
@@ -238,6 +239,32 @@ test("非有限值和非 JSON 安全值在建档前 fail-closed，合法归档�
   assert.equal(verifyCalculationTraceArchive(persisted), true);
 });
 
+test("值等价使用结构比较，32 位 hash 碰撞不能绕过冲突", () => {
+  const left = "4x47h135er6o";
+  const right = "a4f3v0xp2x1k";
+  assert.notEqual(left, right);
+  assert.equal(deterministicHash(left), deterministicHash(right));
+  assert.throws(
+    () => createCalculationTraceEntry({
+      subjectRef,
+      parameterKey: "collision",
+      sequence: 1,
+      layer: "boundary",
+      sourceRef: { sourceType: "test", sourceId: "hash-collision" },
+      sourceVersion: "source:1",
+      ruleSetVersion: "rules:1",
+      before: null,
+      operation: "set",
+      operand: left,
+      after: right,
+      effect: "neutral",
+      warningIssueIds: [],
+      actions: [],
+    }),
+    /TRACE_REPLAY_MISMATCH/,
+  );
+});
+
 test("canonical Trace 终态必须完整重放 finalPanelValues", () => {
   const archive = createCalculationTraceArchive(adaptRuleTraceToCanonical({
     projection,
@@ -344,7 +371,8 @@ test("pricing、patch 与 legacy 只读适配器幂等并保留原始 evidence",
   });
   assert.equal(pricingEntries[0].operation, "set");
   assert.equal(pricingEntries[0].unit, "金币");
-  assert.equal(pricingEntries[0].evidence?.adapter, "pricing_trace/v1");
+  assert.equal(pricingEntries[0].parameterKey, "pricing:purchase_price");
+  assert.equal(pricingEntries[0].evidence?.adapter, "pricing_trace/v2");
 
   const patchInput = {
     trace: [{
@@ -436,6 +464,78 @@ test("pricing、patch 与 legacy 只读适配器幂等并保留原始 evidence",
   assert.equal(legacyEntries[0].operation, "set");
   assert.equal(legacyEntries[0].evidence?.adapter, "legacy_calculation_trace/v1");
   assert.equal(verifyCalculationTraceArchive(createCalculationTraceArchive(legacyEntries)), true);
+});
+
+test("pricing Trace 必须逐步连续且最终值等于 purchasePrice", () => {
+  const pricing = {
+    formal: true,
+    pricingPolicyRef: "pricing:1",
+    pricingWeightBandId: "band:1",
+    pricingBasketId: "basket:1",
+    repairPriceUnrounded: 10,
+    purchasePriceUnrounded: 12,
+    purchasePrice: 12,
+    moneyUnit: "金币",
+    trace: [
+      {
+        sequence: 1,
+        formulaStep: "repair",
+        sourceRevision: "sheet:r4",
+        source: { sheetId: "sheet:1", cell: "A1" },
+        before: 1,
+        operation: "multiply" as const,
+        operand: 10,
+        after: 10,
+        inputStatus: "CONFIRMED" as const,
+      },
+      {
+        sequence: 2,
+        formulaStep: "purchase",
+        sourceRevision: "sheet:r4",
+        source: { sheetId: "sheet:1", cell: "A2" },
+        before: 10,
+        operation: "multiply" as const,
+        operand: 1.2,
+        after: 12,
+        inputStatus: "CONFIRMED" as const,
+      },
+    ],
+    issues: [],
+    warnings: [],
+    inputHash: "pricing-input",
+  };
+  const entries = adaptPricingTraceToCanonical({
+    pricing,
+    subjectRef,
+    ruleSetVersion: "rules:1",
+  });
+  assert.deepEqual(entries.map((item) => item.parameterKey), [
+    "pricing:purchase_price",
+    "pricing:purchase_price",
+  ]);
+  assert.equal(verifyCalculationTraceArchive(createCalculationTraceArchive(entries)), true);
+  assert.throws(
+    () => adaptPricingTraceToCanonical({
+      pricing: {
+        ...pricing,
+        trace: [
+          pricing.trace[0],
+          { ...pricing.trace[1], before: 11 },
+        ],
+      },
+      subjectRef,
+      ruleSetVersion: "rules:1",
+    }),
+    /pricing Trace 步骤不连续/,
+  );
+  assert.throws(
+    () => adaptPricingTraceToCanonical({
+      pricing: { ...pricing, purchasePrice: 13 },
+      subjectRef,
+      ruleSetVersion: "rules:1",
+    }),
+    /最终值与 purchasePrice 不一致/,
+  );
 });
 
 test("rule formula 降级为 set 时无损保留公式身份、版本和原始 operand", () => {

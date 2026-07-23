@@ -485,7 +485,17 @@ test("正式快照拒绝未发布、篡改或版本链过期的五维定义", ()
     automaticPricing: {
       formal: true, pricingPolicyRef: "pricing:1", pricingWeightBandId: "band:1",
       pricingBasketId: "basket:1", repairPriceUnrounded: 100,
-      purchasePriceUnrounded: 100, purchasePrice: 100, trace: [], issues: [],
+      purchasePriceUnrounded: 100, purchasePrice: 100, trace: [{
+        sequence: 1,
+        formulaStep: "purchasePrice",
+        sourceRevision: "pricing:test",
+        source: { sheetId: "pricing:test", cell: "A1" },
+        before: 100,
+        operation: "multiply",
+        operand: 1,
+        after: 100,
+        inputStatus: "CONFIRMED",
+      }], issues: [],
       warnings: [], inputHash: "pricing-hash",
     },
     validationReport: [], fiveAxisPreview: preview, warningConfirmations: {},

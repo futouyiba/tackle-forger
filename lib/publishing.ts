@@ -48,10 +48,25 @@ import {
   adaptPricingTraceToCanonical,
   adaptRuleTraceToCanonical,
   assertCalculationTraceMatchesFinalPanel,
+  assertCalculationTraceMatchesPricing,
   createCalculationTraceArchive,
   verifyCalculationTraceArchive,
   type CalculationTraceEntry,
 } from "./calculation-trace";
+
+function entityRefIdentity(ref: {
+  workspaceId: string;
+  entityType: string;
+  entityId: string;
+  revisionId: string;
+}): string {
+  return JSON.stringify([
+    ref.workspaceId,
+    ref.entityType,
+    ref.entityId,
+    ref.revisionId,
+  ]);
+}
 
 export function modelFinalPullKgForSnapshot(
   itemPartId: string | undefined,
@@ -316,7 +331,7 @@ export function publishConfigurationSnapshot(
         if (input.finalPanelTraceEntries?.length) {
           for (const entry of input.finalPanelTraceEntries) {
             if (
-              deterministicHash(entry.subjectRef) !== deterministicHash(subjectRef)
+              entityRefIdentity(entry.subjectRef) !== entityRefIdentity(subjectRef)
               || entry.ruleSetVersion !== input.projection.ruleSetVersion
             ) {
               throw new Error("finalPanelTraceEntries 的 subjectRef 或 ruleSetVersion 与发布对象不一致。");
@@ -345,6 +360,12 @@ export function publishConfigurationSnapshot(
           archive,
           subjectRef,
           finalPanelValues: input.finalPanelValues,
+        });
+        assertCalculationTraceMatchesPricing({
+          archive,
+          subjectRef,
+          pricing: input.automaticPricing,
+          ruleSetVersion: input.projection.ruleSetVersion,
         });
         return archive;
       })()
@@ -437,7 +458,7 @@ export function verifySnapshotIntegrity(
         && subjectRef.revisionId === String(snapshot.modelRevision),
       );
     const uniqueSubjects = new Map(
-      matchingSubjects.map((subjectRef) => [deterministicHash(subjectRef), subjectRef]),
+      matchingSubjects.map((subjectRef) => [entityRefIdentity(subjectRef), subjectRef]),
     );
     if (uniqueSubjects.size !== 1) return false;
     try {
@@ -445,6 +466,12 @@ export function verifySnapshotIntegrity(
         archive: snapshot.calculationTrace,
         subjectRef: [...uniqueSubjects.values()][0],
         finalPanelValues: snapshot.finalPanelValues,
+      });
+      assertCalculationTraceMatchesPricing({
+        archive: snapshot.calculationTrace,
+        subjectRef: [...uniqueSubjects.values()][0],
+        pricing: snapshot.automaticPricing,
+        ruleSetVersion: snapshot.ruleSetVersion,
       });
     } catch {
       return false;

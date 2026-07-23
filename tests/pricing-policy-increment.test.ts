@@ -256,6 +256,13 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     Object.fromEntries(Object.entries(tampered).filter(([key]) => key !== "contentHash")),
   );
   assert.equal(verifySnapshotIntegrity(tampered), false);
+  const pricingTampered = structuredClone(snapshot);
+  pricingTampered.automaticPricing!.purchasePrice =
+    pricingTampered.automaticPricing!.purchasePrice! + 1;
+  pricingTampered.contentHash = deterministicHash(
+    Object.fromEntries(Object.entries(pricingTampered).filter(([key]) => key !== "contentHash")),
+  );
+  assert.equal(verifySnapshotIntegrity(pricingTampered), false);
   const panelTampered = structuredClone(snapshot);
   panelTampered.finalPanelValues[changedParameterKey] =
     Number(panelTampered.finalPanelValues[changedParameterKey]) + 1;

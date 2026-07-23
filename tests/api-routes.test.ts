@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import { NextRequest } from "next/server";
 import { PUT as putState } from "../app/api/state/route";
@@ -217,7 +218,7 @@ test("Series 路由拒绝非法强度、品质引用和拉力 token", { concurre
     [{ functionId: "function:missing" }, "功能定位"],
     [{ qualityId: "quality:missing" }, "品质"],
     [{ collectionId: "collection:missing" }, "Collection"],
-    [{ performanceId: "performance:missing" }, "性能方向"],
+    [{ performanceId: "performance:missing" }, "Performance"],
     [{ discretePulls: "1.5, abc, 1.5" }, "非法或重复项"],
   ] as const) {
     const response = await createSeries(new NextRequest("http://localhost/api/series", {
@@ -353,6 +354,82 @@ test("Series 创建相同幂等键恢复原结果，不同输入冲突", { concu
   const recovered = await send(concurrentBody);
   assert.equal(recovered.status, 200);
   assert.equal(((await recovered.json()) as { idempotent?: boolean }).idempotent, true);
+});
+
+test("Series 创建在拒绝新 Performance 输入前恢复旧幂等命令", { concurrency: false }, async () => {
+  withTrustedProxy();
+  const current = await loadWorkspaceState();
+  const state = structuredClone(current.state);
+  const series = state.seriesDefinitions[0]!;
+  const projection = state.derivedProjections.find(
+    (entry) => entry.id === state.skuDrawers.find((sku) => sku.seriesId === series.id)?.projectionMatch.projectionId,
+  )!;
+  const body = {
+    idempotencyKey: "route-idempotency:legacy-performance",
+    seriesId: series.id,
+    name: series.name,
+    concept: series.concept,
+    collectionId: series.collectionId || null,
+    itemPartId: series.itemPartId!,
+    methodId: series.fishingMethodId,
+    typeId: series.typeId,
+    functionId: series.coreFunctionId,
+    qualityId: series.qualityId,
+    performanceId: "performance:legacy",
+    functionIntensity: projection.functionIntensity,
+    planningMinKgf: null,
+    planningMaxKgf: null,
+    pulls: [1.5],
+  };
+  const inputHash = createHash("sha256").update(JSON.stringify({
+    seriesId: body.seriesId,
+    name: body.name,
+    concept: body.concept,
+    collectionId: body.collectionId,
+    itemPartId: body.itemPartId,
+    methodId: body.methodId,
+    typeId: body.typeId,
+    functionId: body.functionId,
+    qualityId: body.qualityId,
+    performanceId: body.performanceId,
+    functionIntensity: body.functionIntensity,
+    planningMinKgf: body.planningMinKgf,
+    planningMaxKgf: body.planningMaxKgf,
+    pulls: body.pulls,
+  })).digest("hex");
+  state.commandIdempotencyRecords.push({
+    key: body.idempotencyKey,
+    inputHash,
+    resultRef: series.id,
+  });
+  const saved = await saveWorkspaceState({
+    state,
+    baseRevision: current.revision,
+    author: "route-tester",
+    message: "注入旧 Series 幂等记录",
+  });
+  assert.equal(saved.conflict, undefined);
+  const response = await createSeries(new NextRequest("http://localhost/api/series", {
+    method: "POST",
+    headers: authHeaders,
+    body: JSON.stringify({
+      idempotencyKey: body.idempotencyKey,
+      seriesId: body.seriesId,
+      name: body.name,
+      concept: body.concept,
+      collectionId: body.collectionId,
+      itemPartId: body.itemPartId,
+      methodId: body.methodId,
+      typeId: body.typeId,
+      functionId: body.functionId,
+      qualityId: body.qualityId,
+      performanceId: body.performanceId,
+      functionIntensity: body.functionIntensity,
+      discretePulls: "1.5",
+    }),
+  }));
+  assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
+  assert.equal(((await response.json()) as { idempotent?: boolean }).idempotent, true);
 });
 
 test("SKU 拉力提交拒绝与预览不一致的冻结分支并返回409", { concurrency: false }, async () => {

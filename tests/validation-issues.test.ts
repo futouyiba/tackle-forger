@@ -17,6 +17,7 @@ import {
 } from "../lib/validation-issues";
 import type {
   CanonicalValidationIssue,
+  ProjectionTraceStep,
   ValidationEntityRef,
 } from "../lib/types";
 import { createSeedState } from "../lib/seed";
@@ -33,6 +34,24 @@ const subject: ValidationEntityRef = {
   entityId: "model:1",
   revisionId: "7",
 };
+
+function finalSettlementTrace(values: Record<string, number | string>): ProjectionTraceStep[] {
+  return [{
+    layer: "final_review_patch",
+    sourceIds: ["test:final-settlement"],
+    contributions: Object.entries(values).map(([parameterKey, value], index) => ({
+      sequence: index + 1,
+      ruleId: `test:${parameterKey}`,
+      sourceId: "test:final-settlement",
+      sourceName: "最终结算",
+      parameterKey,
+      operation: "base",
+      before: null,
+      operand: value,
+      after: value,
+    })),
+  }];
+}
 
 function issue(overrides: Partial<Parameters<typeof createValidationIssue>[0]> = {}) {
   return createValidationIssue({
@@ -650,6 +669,8 @@ test("新正式 Snapshot 只接受并冻结指纹绑定的确认记录，旧 cod
     attributeAffixIds: existing.attributeAffixIds,
     passiveAffixIds: existing.passiveAffixIds,
     technologyIds: existing.technologyIds,
+    technologyDefinitions: state.technologies,
+    finalSettlementTrace: finalSettlementTrace(existing.finalPanelValues),
     passiveAffixPayloads: existing.passiveAffixPayloads,
     compatibilityReport: existing.compatibilityReport,
     affinityReport: existing.affinityReport,
@@ -660,7 +681,6 @@ test("新正式 Snapshot 只接受并冻结指纹绑定的确认记录，旧 cod
       baseAffixScore: 1,
       combinationScore: 0,
       functionScoreFactor: 1,
-      performanceScoreFactor: 1,
       finalValueScore: 1,
       affixBreakdown: [],
       combinationBreakdown: [],
@@ -677,6 +697,7 @@ test("新正式 Snapshot 只接受并冻结指纹绑定的确认记录，旧 cod
       formal: true,
       pricingPolicyRef: "pricing:v1",
       pricingWeightBandId: "band:1",
+      valueScore: 1,
       pricingBasketId: "basket:1",
       repairPriceUnrounded: 100,
       purchasePriceUnrounded: 100,

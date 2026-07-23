@@ -45,6 +45,7 @@ const GOVERNED_STATE_FIELDS: readonly GovernedStateField[] = [
   { field: "candidateMaterializations", reason: "published_history", action: "materialize_candidates", actionLabel: "使用候选物化动作" },
   { field: "configurationSnapshots", reason: "published_history", action: "publish / view_snapshot", actionLabel: "使用 Model 发布或查看冻结 Snapshot" },
   { field: "ruleSetVersions", reason: "published_history", action: "publish_ruleset", actionLabel: "使用 RuleSet 草稿与发布" },
+  { field: "performanceSummaryDefinitions", reason: "published_history", action: "只读：当前没有发布或修改 PerformanceSummaryDefinition 的领域命令", actionLabel: "保留已发布定义；等待专用版本化发布命令" },
   { field: "pricingPolicyVersions", reason: "published_history", action: "定价策略发布", actionLabel: "使用定价策略发布流程" },
   { field: "qualityValuePolicyDrafts", reason: "domain_command", action: "规则源草稿/发布动作", actionLabel: "使用品质策略草稿或发布动作" },
   { field: "pricingPolicyDrafts", reason: "domain_command", action: "规则源草稿/发布动作", actionLabel: "使用定价策略草稿或发布动作" },
@@ -64,6 +65,7 @@ const GOVERNED_STATE_FIELDS: readonly GovernedStateField[] = [
   { field: "dataSourceImports", reason: "audit_or_reserved_identity", action: "publish_data_source", actionLabel: "使用数据源发布动作" },
   { field: "dataSourceBindings", reason: "audit_or_reserved_identity", action: "publish_data_source / commit_data_source_writeback", actionLabel: "通过数据源发布或回写回读重建绑定" },
   { field: "dataSourceWritebacks", reason: "audit_or_reserved_identity", action: "commit_data_source_writeback", actionLabel: "使用数据源回写动作" },
+  { field: "importedAt", reason: "audit_or_reserved_identity", action: "publish_data_source", actionLabel: "通过数据源发布回读更新时间" },
   { field: "identityAuditLog", reason: "audit_or_reserved_identity", action: "服务器身份/审计动作", actionLabel: "重新执行对应身份动作" },
   { field: "commandIdempotencyRecords", reason: "audit_or_reserved_identity", action: "服务器领域命令", actionLabel: "重试原领域动作" },
   { field: "governanceAuditLog", reason: "audit_or_reserved_identity", action: "服务器领域命令", actionLabel: "重新执行对应领域动作" },
@@ -87,16 +89,21 @@ export function governedStateFieldDetails(fields: readonly string[]): GovernedSt
 }
 
 /**
- * `revisions` is response metadata maintained by the storage transaction, not
- * an editable WorkspaceState aggregate. A tab may legitimately carry an older
- * projection after another save. Always replace it with the current authority
- * before applying whole-state validation or persistence.
+ * These fields are response/source metadata maintained by server transactions,
+ * not editable WorkspaceState aggregates. A tab may legitimately carry older
+ * projections after another save. Always replace them with current authority
+ * before validation or persistence.
  */
 export function preserveServerManagedWorkspaceMetadata(
   current: WorkspaceState,
   proposed: WorkspaceState,
 ): WorkspaceState {
-  return { ...proposed, revisions: current.revisions };
+  return {
+    ...proposed,
+    schemaVersion: current.schemaVersion,
+    revisions: current.revisions,
+    importedAt: current.importedAt,
+  };
 }
 
 export function findGovernedStateChanges(current: WorkspaceState, proposed: WorkspaceState): string[] {

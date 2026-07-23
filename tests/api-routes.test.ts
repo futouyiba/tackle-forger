@@ -299,13 +299,14 @@ test("整包 PUT 默认保存多个普通字段和未来字段，并在混合治
   assert.equal(afterRejected.state.commandIdempotencyRecords.length, beforeMixed.commandIdempotencyRecords.length);
 });
 
-test("整包 PUT 拒绝嵌套约束、遗留 Patch、数据源绑定与迁移复核证据，且混合请求无副作用", { concurrency: false }, async () => {
+test("整包 PUT 拒绝嵌套约束、性能定义、遗留 Patch、数据源绑定与迁移复核证据，且混合请求无副作用", { concurrency: false }, async () => {
   withTrustedProxy();
   const current = await loadWorkspaceState();
   const state = structuredClone(current.state);
   state.templates[0]!.notes = "must not partially save";
   state.partConstraintSets = [...state.partConstraintSets, { nested: { changed: true } } as never];
   state.candidateSearchRecipes = [...state.candidateSearchRecipes, { nested: { changed: true } } as never];
+  state.performanceSummaryDefinitions = [...state.performanceSummaryDefinitions, { nested: { changed: true } } as never];
   state.projectionPatches = [...state.projectionPatches, { nested: { changed: true } } as never];
   state.dataSourceBindings = [...state.dataSourceBindings, { nested: { changed: true } } as never];
   state.migrationReviewItems = [...state.migrationReviewItems, { nested: { changed: true } } as never];
@@ -316,13 +317,14 @@ test("整包 PUT 拒绝嵌套约束、遗留 Patch、数据源绑定与迁移复
   });
   assert.equal(rejected.status, 422);
   const body = await rejected.json() as { governedChanges?: string[]; governedFields?: Array<{ action: string }> };
-  assert.deepEqual(body.governedChanges, ["projectionPatches", "partConstraintSets", "candidateSearchRecipes", "dataSourceBindings", "migrationReviewItems"]);
+  assert.deepEqual(body.governedChanges, ["projectionPatches", "partConstraintSets", "candidateSearchRecipes", "performanceSummaryDefinitions", "dataSourceBindings", "migrationReviewItems"]);
   assert.match(body.governedFields?.[0]?.action ?? "", /只读/);
   const after = await loadWorkspaceState();
   assert.equal(after.revision, current.revision);
   assert.deepEqual(after.state.templates, before.templates);
   assert.deepEqual(after.state.projectionPatches, before.projectionPatches);
   assert.deepEqual(after.state.dataSourceBindings, before.dataSourceBindings);
+  assert.deepEqual(after.state.performanceSummaryDefinitions, before.performanceSummaryDefinitions);
   assert.deepEqual(after.state.migrationReviewItems, before.migrationReviewItems);
 });
 
@@ -394,6 +396,8 @@ test("两标签页后的普通字段保存忽略陈旧 revisions 投影，且不
   assert.equal(otherSave.status, 200);
   const latest = await loadWorkspaceState();
   staleTabState.notes = "local tab after conflict recovery";
+  staleTabState.schemaVersion = 1;
+  staleTabState.importedAt = "2020-01-01T00:00:00.000Z";
   staleTabState.revisions = [{ revision: 0, author: "forged", message: "forged", createdAt: "2020-01-01T00:00:00.000Z" }];
   const localSave = await issueAndInvoke({
     action: "save_workspace", url: "http://localhost/api/state", method: "PUT",
@@ -402,6 +406,8 @@ test("两标签页后的普通字段保存忽略陈旧 revisions 投影，且不
   assert.equal(localSave.status, 200, "陈旧 revisions 不得把普通字段保存变为422");
   const after = await loadWorkspaceState();
   assert.equal(after.state.notes, "local tab after conflict recovery");
+  assert.equal(after.state.schemaVersion, latest.state.schemaVersion);
+  assert.equal(after.state.importedAt, latest.state.importedAt);
   assert.equal(after.state.revisions.some((entry) => entry.author === "forged"), false);
   assert.ok(after.revision > latest.revision);
 });

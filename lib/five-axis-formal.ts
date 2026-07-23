@@ -435,6 +435,14 @@ export function validateFiveAxisDispositionCatalog(input: {
   let current = byId.get(input.currentRevisionId);
   if (!current) throw new Error("FIVE_AXIS_DISPOSITION_CATALOG_CONFLICT：目录头不存在。");
   const head = current;
+  const headIdentities = new Set(head.entries.map((entry) =>
+    `${entry.definitionId}\u0000${entry.definitionVersion}`));
+  if (
+    headIdentities.size !== byDefinition.size
+    || [...byDefinition.keys()].some((identity) => !headIdentities.has(identity))
+  ) {
+    throw new Error("FIVE_AXIS_DISPOSITION_CATALOG_CONFLICT：当前目录头未完整分类全部已知定义。");
+  }
   const visited = new Set<string>();
   while (current) {
     if (visited.has(current.catalogRevisionId)) {
@@ -956,6 +964,7 @@ function assertFormalSeriesPoint(input: {
 export function assertFormalModelFiveAxisPreview(input: {
   definition: FiveAxisViewDefinition;
   preview: ModelFiveAxisPreview;
+  expectedCandidateSources: FiveAxisVertexCandidateSource[];
   expectedModelId: string;
   expectedModelRevisionId: string;
   expectedSnapshotId: string;
@@ -1002,12 +1011,20 @@ export function assertFormalModelFiveAxisPreview(input: {
     groupKey,
     candidateSources: preview.candidateSources,
   });
+  const expectedVertexSet = createFormalFiveAxisVertexSet({
+    definition: input.definition,
+    groupKey,
+    candidateSources: input.expectedCandidateSources,
+  });
   if (
     vertexSet.vertexSetHash !== preview.vertexSetHash
     || vertexSet.candidateSetHash !== preview.candidateSetHash
     || vertexSet.candidateEvidenceHash !== preview.candidateEvidenceHash
+    || expectedVertexSet.vertexSetHash !== vertexSet.vertexSetHash
+    || expectedVertexSet.candidateSetHash !== vertexSet.candidateSetHash
+    || expectedVertexSet.candidateEvidenceHash !== vertexSet.candidateEvidenceHash
   ) {
-    throw new Error("FIVE_AXIS_FORMAL_PREVIEW_INVALID：候选或顶点哈希不可重放。");
+    throw new Error("FIVE_AXIS_FORMAL_PREVIEW_INVALID：预览未绑定完整权威候选池，或候选/顶点哈希不可重放。");
   }
 
   const expectedParts = ["part:rod", "part:reel", "part:line"];
@@ -1261,6 +1278,7 @@ export function createFormalModelFiveAxisPreview(input: {
   assertFormalModelFiveAxisPreview({
     definition: input.definition,
     preview,
+    expectedCandidateSources: input.vertexSet.candidateSources,
     expectedModelId: input.modelId,
     expectedModelRevisionId: input.modelRevisionId,
     expectedSnapshotId: input.projectionReferenceAnchor.baselineSnapshotId,
@@ -1268,7 +1286,7 @@ export function createFormalModelFiveAxisPreview(input: {
     expectedSkuId: input.projectionReferenceAnchor.skuId,
     expectedSkuRevisionId: input.projectionReferenceAnchor.skuRevisionId,
     expectedFinalPanelHash: input.finalPanelHash,
-      expectedComponentSelections: input.componentSelections,
+    expectedComponentSelections: input.componentSelections,
     expectedModelFinalPullKg: input.modelFinalPullKg,
   });
   return preview;

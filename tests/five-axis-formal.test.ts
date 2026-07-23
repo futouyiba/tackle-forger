@@ -7,6 +7,7 @@ import {
   createFormalFiveAxisViewDefinition,
   hashFiveAxisDispositionCatalog,
   resolveFormalFiveAxisDefinition,
+  validateFiveAxisDispositionCatalog,
 } from "../lib/five-axis-formal";
 import {
   canonicalDecimal,
@@ -178,6 +179,34 @@ test("正式定义恰好五轴且只有唯一 FORMAL_CURRENT 可供新发布解�
     previousCatalogHash: changedMetadata.previousCatalogHash,
     entries: changedMetadata.entries,
   }), resolved.catalogRevision.catalogHash);
+});
+
+test("当前处置目录头必须完整分类全部已知定义", () => {
+  const legacy = legacyDefinition();
+  const formal = createFormalFiveAxisViewDefinition();
+  const catalog = createFiveAxisDispositionCatalogRevision({
+    definitions: [legacy, formal],
+    existingRevisions: [],
+    currentRevisionId: null,
+    formalCurrent: {
+      definitionId: formal.definitionId,
+      definitionVersion: formal.version,
+    },
+    decidedAt: "2026-07-23T00:00:00.000Z",
+  });
+  const truncated = structuredClone(catalog.revision);
+  truncated.entries = truncated.entries.filter((entry) =>
+    entry.definitionId !== legacy.definitionId);
+  truncated.catalogHash = hashFiveAxisDispositionCatalog({
+    previousCatalogHash: truncated.previousCatalogHash,
+    entries: truncated.entries,
+  });
+  truncated.catalogRevisionId = `five-axis-disposition:${truncated.catalogHash.slice(0, 20)}`;
+  assert.throws(() => validateFiveAxisDispositionCatalog({
+    definitions: [legacy, formal],
+    revisions: [truncated],
+    currentRevisionId: truncated.catalogRevisionId,
+  }), /未完整分类全部已知定义/);
 });
 
 test("切换正式定义时旧正式项进入 SUPERSEDED 并保留不可变前驱", () => {

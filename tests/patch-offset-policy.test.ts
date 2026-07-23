@@ -1021,6 +1021,7 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
       inputHash: "quality-hash",
     },
     fiveAxisPreview: formalPreview,
+    fiveAxisAuthoritativeCandidateSources: formalPreview.candidateSources,
     fiveAxisDefinition: formalDefinition,
     fiveAxisDefinitions: state.fiveAxisViewDefinitions,
     fiveAxisDispositionCatalogRevisions:

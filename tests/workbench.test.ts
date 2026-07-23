@@ -93,6 +93,10 @@ test("受约束配方生成并发布规范 ID", () => {
     legacy!,
     { executionMode: "legacy_performance_replay" },
   );
+  assert.equal(
+    legacy!.selections.performanceId,
+    explicitlyReplayed.selections.performanceId,
+  );
   assert.deepEqual(legacy!.calculated.values, explicitlyReplayed.calculated.values);
   assert.deepEqual(legacy!.calculated.trace, explicitlyReplayed.calculated.trace);
   assert.equal(legacy!.calculated.priceIndex, explicitlyReplayed.calculated.priceIndex);

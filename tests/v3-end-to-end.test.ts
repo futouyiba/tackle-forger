@@ -558,6 +558,27 @@ test("S-02 旧属性偏移阈值不再参与运行时校验", () => {
   assert.equal(projection.typeId, series.typeId);
 });
 
+test("S-02b 旧 Series 的 Performance 引用不再成为规范投影硬不变量", () => {
+  const state = createSeedState();
+  const series = {
+    ...state.seriesDefinitions[0],
+    performanceProfileId: "performance:legacy",
+  };
+  const sku = state.skuDrawers.find((entry) => entry.seriesId === series.id)!;
+  const projection = {
+    ...state.derivedProjections.find((entry) => entry.id === sku.projectionMatch.projectionId)!,
+    performanceId: undefined,
+  };
+  const issues = validateSeriesInvariants({
+    series,
+    skus: [sku],
+    models: state.purchasableModels.filter((model) => model.skuId === sku.id),
+    projections: state.derivedProjections.map((entry) =>
+      entry.id === projection.id ? projection : entry),
+  });
+  assert.equal(issues.some((issue) => issue.code === "SERIES_PERFORMANCE_MISMATCH"), false);
+});
+
 test("A-01 Technology 成员与直接词条重复时只计算一次", () => {
   const state = createSeedState();
   const technology = state.technologies[0];

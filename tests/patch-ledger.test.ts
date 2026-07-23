@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { analyzePatchPatterns, assessPatchAbsorption, appendPatchRevision, beginPatchMirrorSync, buildPatchRevision, createRuleSourceChangeDraft, emptyPatchLedger, importLegacyPatchesToLedger, migratePatchLedger, orderedPatchReferences, PatchLedgerError, projectionPatchViewFromLedger, reconcilePatchMirrorPull, recordPatchMirrorResult, rebasePatchRevision, replayPatchRevision, resolvePatchRevision, reviewPatchRevision, updatePatchMirrorSuggestion, verifyPatchSetHash } from "../lib/patch-ledger";
+import { analyzePatchPatterns, assessPatchAbsorption, appendPatchRevision, beginPatchMirrorSync, buildPatchRevision, createRuleSourceChangeDraft, emptyPatchLedger, importLegacyPatchesToLedger, migratePatchLedger, orderedPatchReferences, PatchLedgerError, patchRevisionHash, projectionPatchViewFromLedger, reconcilePatchMirrorPull, recordPatchMirrorResult, rebasePatchRevision, replayPatchRevision, resolvePatchRevision, reviewPatchRevision, submitPatchRevision, updatePatchMirrorSuggestion, verifyPatchSetHash } from "../lib/patch-ledger";
 import { CURRENT_WORKSPACE_SCHEMA_VERSION, migrateWorkspaceState } from "../lib/migrations";
 import { createSeedState } from "../lib/seed";
 
@@ -171,13 +171,77 @@ test("stable ID survives rename, baseline changes rebase, missing ID is orphaned
   assert.equal(resolvePatchRevision({revision:r,existingSubjectIds:["model:rod:1"],currentRuleSetVersion:"ruleset:2",currentObjectRevision:3}).state,"REBASE_REQUIRED");
   const orphan=resolvePatchRevision({revision:r,existingSubjectIds:["model:same-name"],currentRuleSetVersion:"ruleset:1",currentObjectRevision:3});
   assert.deepEqual(orphan.attentionStates,["ORPHANED"]); assert.equal(orphan.subjectEntityId,"model:rod:1");
+  assert.equal(resolvePatchRevision({revision:makeRevision({state:"DRAFT"}),existingSubjectIds:["model:rod:1"],currentRuleSetVersion:"ruleset:2",currentObjectRevision:3}).state,"REBASE_REQUIRED");
 });
 test("review permission is separate and snapshot referenced revision is immutable", () => {
-  const ledger: ReturnType<typeof emptyPatchLedger>={...emptyPatchLedger(),revisions:[makeRevision()]};
+  const ledger: ReturnType<typeof emptyPatchLedger>={...emptyPatchLedger(),revisions:[makeRevision({state:"PENDING_REVIEW"})]};
   assert.throws(()=>reviewPatchRevision({ledger,patchId:"patch:rod:1",patchRevision:1,nextState:"APPROVED",reviewer:"x",reviewedAt:now,capabilities:[]}), (e:unknown)=>e instanceof PatchLedgerError&&e.code==="PATCH_PERMISSION_DENIED");
   const frozen={...ledger,revisions:[{...ledger.revisions[0],snapshotRefs:["snapshot:1"]}]};
   assert.throws(()=>reviewPatchRevision({ledger:frozen,patchId:"patch:rod:1",patchRevision:1,nextState:"APPROVED",reviewer:"x",reviewedAt:now,capabilities:["patch.review"]}), (e:unknown)=>e instanceof PatchLedgerError&&e.code==="PATCH_REVISION_IMMUTABLE");
   assert.throws(()=>reviewPatchRevision({ledger,patchId:"patch:rod:1",patchRevision:1,nextState:"APPROVED",reviewer:"x",reviewedAt:now,capabilities:["patch.review"]}), (e:unknown)=>e instanceof PatchLedgerError&&e.code==="PATCH_OFFSET_POLICY_MISSING");
+});
+test("PatchLedger 写路径统一拒绝 APPROVED、ACTIVE 与终态撤回且不改写 revision", () => {
+  const rejectedStates = ["APPROVED", "ACTIVE", "REBASE_REQUIRED", "ABSORBED", "PARTIALLY_ABSORBED", "WITHDRAWN", "SUPERSEDED"] as const;
+  for (const state of rejectedStates) {
+    const revision = makeRevision({ state });
+    const ledger = { ...emptyPatchLedger(), revisions: [revision] };
+    const before = structuredClone(ledger);
+    assert.throws(
+      () => reviewPatchRevision({
+        ledger,
+        patchId: revision.patchId,
+        patchRevision: revision.patchRevision,
+        nextState: "WITHDRAWN",
+        reviewer: "reviewer",
+        reviewedAt: now,
+        capabilities: ["patch.review"],
+      }),
+      (error: unknown) => error instanceof PatchLedgerError && error.code === "PATCH_STATE_TRANSITION_INVALID",
+    );
+    assert.deepEqual(ledger, before);
+    assert.equal(ledger.revisions[0].revisionHash, revision.revisionHash);
+  }
+});
+test("PatchLedger 只允许 DRAFT 或 PENDING_REVIEW 撤回", () => {
+  for (const state of ["DRAFT", "PENDING_REVIEW"] as const) {
+    const revision = makeRevision({ state });
+    const ledger = { ...emptyPatchLedger(), revisions: [revision] };
+    const result = reviewPatchRevision({
+      ledger,
+      patchId: revision.patchId,
+      patchRevision: revision.patchRevision,
+      nextState: "WITHDRAWN",
+      reviewer: "reviewer",
+      reviewedAt: now,
+      capabilities: ["patch.review"],
+    });
+    assert.equal(result.revisions[0].state, "WITHDRAWN");
+  }
+});
+test("迁移 DRAFT 可由创建方提交复核，非法或冻结提交不会改写 revision", () => {
+  const legacy = {
+    id: "patch:legacy:draft", scope: "model" as const, scopeId: "model:rod:1", reason: "legacy", author: "legacy",
+    baseProjectionId: "projection:rod:1", baseRuleSetVersion: "ruleset:1", status: "draft" as const, order: 0, rules: [],
+    operations: [{ op: "set" as const, path: "power", value: 4 }],
+  };
+  const ledger = importLegacyPatchesToLedger(emptyPatchLedger(), [legacy]);
+  const draft = ledger.revisions[0];
+  assert.equal(draft.state, "DRAFT");
+  const submitted = submitPatchRevision({ledger,patchId:draft.patchId,patchRevision:draft.patchRevision,capabilities:["patch.create"]});
+  assert.equal(submitted.revisions[0].state, "PENDING_REVIEW");
+  assert.equal(submitted.revisions[0].createdBy, draft.createdBy);
+  assert.equal(submitted.revisions[0].createdAt, draft.createdAt);
+  const before = structuredClone(ledger);
+  assert.throws(() => submitPatchRevision({ledger,patchId:draft.patchId,patchRevision:draft.patchRevision,capabilities:[]}), (error:unknown) => error instanceof PatchLedgerError && error.code === "PATCH_PERMISSION_DENIED");
+  assert.deepEqual(ledger, before);
+  const frozen = {...ledger,revisions:[{...draft,snapshotRefs:["snapshot:legacy"]}]};
+  const frozenBefore = structuredClone(frozen);
+  assert.throws(() => submitPatchRevision({ledger:frozen,patchId:draft.patchId,patchRevision:draft.patchRevision,capabilities:["patch.create"]}), (error:unknown) => error instanceof PatchLedgerError && error.code === "PATCH_REVISION_IMMUTABLE");
+  assert.deepEqual(frozen, frozenBefore);
+  const submittedBefore = structuredClone(submitted);
+  assert.throws(() => submitPatchRevision({ledger:submitted,patchId:draft.patchId,patchRevision:draft.patchRevision,capabilities:["patch.create"]}), (error:unknown) => error instanceof PatchLedgerError && error.code === "PATCH_STATE_TRANSITION_INVALID");
+  assert.deepEqual(submitted, submittedBefore);
+  assert.equal(submitted.revisions[0].revisionHash, submittedBefore.revisions[0].revisionHash);
 });
 test("unavailable or partial mirror never reports SYNCED and retry is idempotent", () => {
   const ledger: ReturnType<typeof emptyPatchLedger>={...emptyPatchLedger(),revisions:[makeRevision()]};
@@ -286,6 +350,24 @@ test("镜像受控字段篡改和不完整组被隔离，并生成可补写幂�
   assert.deepEqual(pulled.quarantinedRemoteRowIds,["row:1"]);
   assert.equal(pulled.refillDetailKeys.length,2);
   assert.deepEqual(pulled.ledger.revisions,ledger.revisions);
+});
+
+test("镜像拉取在规范化前隔离携带非 null operand 的 canonical clear", () => {
+  const revision=makeRevision({
+    patchId:"patch:mirror:clear-tamper",
+    operations:[{operationId:"op:clear",operationIndex:0,parameterKey:"power",operation:"clear",operand:null,before:10,after:8}],
+  });
+  const started=beginPatchMirrorSync({
+    workspaceId,ledger:{...emptyPatchLedger(),revisions:[revision]},patchId:revision.patchId,
+    patchRevision:revision.patchRevision,idempotencyKey:"sync:clear-tamper",now,capabilities:["patch.mirror.write"],
+  });
+  const pulled=reconcilePatchMirrorPull({
+    workspaceId,ledger:started.ledger,capabilities:["patch.mirror.pull"],remoteRows:[{
+      ...started.command.payload[0],remoteRowId:"row:clear-tamper",operand:123,
+    }],
+  });
+  assert.ok(pulled.issues.some((issue)=>issue.code==="PATCH_CLEAR_OPERAND_INVALID"));
+  assert.ok(pulled.quarantinedRemoteRowIds.includes("row:clear-tamper"));
 });
 
 test("协作状态 expectedRevision 冲突只进入 CONFLICT，不覆盖本地Patch", () => {
@@ -433,6 +515,22 @@ test("PatchLedger v4 只跳过符合 workspace JCS/SHA-256 契约的镜像命令
   assert.ok(preserved.migrationReviewItems.some((item)=>
     item.id==="patch-mirror-command-migration:sync:legacy-payload"
     && item.reason==="PATCH_MIRROR_SCHEMA_MISMATCH"));
+});
+
+test("PatchLedger v4 重算 revisionHash 时排除旧 revisionHash 字段", () => {
+  const revision=makeRevision({
+    patchId:"patch:legacy:revision-hash",
+    operations:[{operationId:"op:remove",operationIndex:0,parameterKey:"power",operation:"clear",operand:null,before:10,after:8}],
+  });
+  (revision.operations[0] as unknown as {operation:string}).operation="remove";
+  revision.revisionHash="legacy-hash-must-not-be-input";
+  const migrated=migratePatchLedger({
+    ...emptyPatchLedger(),schemaVersion:4,revisions:[revision],
+  } as never);
+  const normalized=migrated.revisions[0];
+  const { revisionHash, ...content }=normalized;
+  assert.equal(revisionHash,patchRevisionHash(content));
+  assert.notEqual(revisionHash,"legacy-hash-must-not-be-input");
 });
 
 test("APPROVED revision 不可提前重放，只有 ACTIVE 才生效", () => {

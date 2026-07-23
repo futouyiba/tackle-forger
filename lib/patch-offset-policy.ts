@@ -1,5 +1,6 @@
 import { deterministicHash } from "./rule-kernel";
 import { PATCH_SET_HASH_CONTRACT_VERSION, patchSetHashForReferences } from "./patch-contract";
+import { isCurrentSeriesSkuSpecification } from "./enabled-item-parts";
 import type {
   PatchOffsetPolicyVersion,
   PatchRangeResultEvidence,
@@ -737,7 +738,7 @@ export function expectedSeriesDiscreteRangeContexts(input: {
   skus: SkuDrawer[];
 }): Array<{ skuRef?: string; targetPullKg: number }> {
   const realSkus = input.skus
-    .filter((sku) => sku.seriesId === input.series.id)
+    .filter((sku) => isCurrentSeriesSkuSpecification(input.series, sku))
     .sort((left, right) => left.targetPullKg - right.targetPullKg || left.id.localeCompare(right.id));
   if (realSkus.length) {
     return realSkus.map((sku) => ({ skuRef: sku.id, targetPullKg: sku.targetPullKg }));

@@ -7,7 +7,6 @@ import {
   prepareDataSourceWriteback,
   sourceFingerprint,
 } from "@/lib/data-sources";
-import { recalculateWorkspace } from "@/lib/engine";
 import {
   commitFeishuWriteback,
   fetchFeishuRecords,
@@ -18,6 +17,12 @@ import { loadWorkspaceState, saveWorkspaceState } from "@/lib/storage";
 import type { ActionCode } from "@/lib/interaction-contracts";
 import type { DataSourceProfile } from "@/lib/types";
 import { ensureWorkflowFields } from "@/lib/workflow";
+import { preserveReadOnlyLegacyProductHistory } from "@/lib/legacy-history";
+import { ActionCommandPayloadError } from "@/lib/action-command-payloads";
+import {
+  executeProductionWorkspaceCommand,
+  WorkspaceCommandTransientHttpError,
+} from "@/lib/production-action-commands";
 
 export const dynamic = "force-dynamic";
 
@@ -42,7 +47,7 @@ function validSource(value: unknown): value is DataSourceProfile {
   );
 }
 
-export async function POST(request: NextRequest) {
+async function executeDataSourceBusinessRequest(request: NextRequest) {
   const user = await requestUser(request);
   if (!user.authenticated) {
     return NextResponse.json(
@@ -174,7 +179,10 @@ export async function POST(request: NextRequest) {
         },
         ...next.dataSourceWritebacks,
       ].slice(0, 100);
-      next = recalculateWorkspace(ensureWorkflowFields(next));
+      next = preserveReadOnlyLegacyProductHistory(
+        current.state,
+        ensureWorkflowFields(next),
+      );
 
       const result = await saveWorkspaceState({
         state: next,
@@ -248,7 +256,10 @@ export async function POST(request: NextRequest) {
       },
       ...next.dataSourceImports,
     ].slice(0, 100);
-    next = recalculateWorkspace(ensureWorkflowFields(next));
+    next = preserveReadOnlyLegacyProductHistory(
+      current.state,
+      ensureWorkflowFields(next),
+    );
 
     const result = await saveWorkspaceState({
       state: next,
@@ -275,5 +286,99 @@ export async function POST(request: NextRequest) {
       { error: error instanceof Error ? error.message : "飞书数据操作失败。" },
       { status: 502 },
     );
+  }
+}
+
+function commandErrorStatus(error: ActionCommandPayloadError): number {
+  if (error.code === "ACTION_COMMAND_PAYLOAD_NOT_FOUND") return 404;
+  if (error.code === "ACTION_COMMAND_CAPABILITY_CHANGED") return 403;
+  if (
+    error.code === "ACTION_COMMAND_REVISION_CONFLICT"
+    || error.code === "ACTION_COMMAND_INPUT_HASH_MISMATCH"
+    || error.code === "STALE_FENCING_TOKEN"
+    || error.code === "IDEMPOTENCY_KEY_REUSED"
+  ) return 409;
+  return 422;
+}
+
+export async function POST(request: NextRequest) {
+  const user = await requestUser(request);
+  if (!user.authenticated) {
+    return NextResponse.json(
+      { error: "请使用公司飞书账号登录。", action: "feishu_login" },
+      { status: 401 },
+    );
+  }
+  const body = await request.json().catch(() => null) as
+    | Record<string, unknown>
+    | null;
+  if (
+    body?.action !== "publish"
+    && body?.action !== "writeback"
+  ) {
+    if (body?.actionId === undefined && body?.payloadRefId === undefined) {
+      return executeDataSourceBusinessRequest(new NextRequest(request.url, {
+        method: "POST",
+        headers: request.headers,
+        body: JSON.stringify(body),
+      }));
+    }
+  } else {
+    return NextResponse.json(
+      {
+        error: "数据源状态写必须先取得服务端命令载荷引用。",
+        code: "ACTION_COMMAND_PAYLOAD_REQUIRED",
+      },
+      { status: 422 },
+    );
+  }
+  const current = await loadWorkspaceState();
+  try {
+    const execution = await executeProductionWorkspaceCommand({
+      expectedAction: ["publish_data_source", "commit_data_source_writeback"],
+      invocation: body,
+      user,
+      current,
+      execute: async (storedPayload, commandAction) => {
+        const expectedBusinessAction = commandAction === "publish_data_source"
+          ? "publish"
+          : "writeback";
+        if (storedPayload.action !== expectedBusinessAction) {
+          throw new ActionCommandPayloadError(
+            "ACTION_COMMAND_ACTION_MISMATCH",
+            "数据源命令动作与服务端保存的业务载荷不一致。",
+          );
+        }
+        const response = await executeDataSourceBusinessRequest(
+          new NextRequest(request.url, {
+            method: "POST",
+            headers: request.headers,
+            body: JSON.stringify(storedPayload),
+          }),
+        );
+        return { status: response.status, body: await response.json() };
+      },
+    });
+    return NextResponse.json(
+      {
+        ...(execution.result.body as Record<string, unknown>),
+        replayed: execution.replayed,
+      },
+      { status: execution.result.status },
+    );
+  } catch (error) {
+    if (error instanceof WorkspaceCommandTransientHttpError) {
+      return NextResponse.json(
+        error.result.body,
+        { status: error.result.status },
+      );
+    }
+    if (error instanceof ActionCommandPayloadError) {
+      return NextResponse.json(
+        { error: error.message, code: error.code },
+        { status: commandErrorStatus(error) },
+      );
+    }
+    throw error;
   }
 }

@@ -10,8 +10,10 @@
 - 节点内部保留可排序规则栈，支持加、乘、覆盖、上下限和安全公式
 - 直接属性词条与被动机制词条
 - 有损相加、协同与冲突驱动的品质评分
-- 系列配方、受约束候选生成、批量筛选、对比和精调
-- 正式组合 SKU 及杆、轮、线明细
+- v3 Collection / Series、离散重量 SKU 抽屉与可购买 Model
+- CandidateSearchRecipe 驱动的确定性 Model 候选生成、物化与审计
+- Series / SKU / Model 分层 Patch、冻结 ConfigurationSnapshot 与升级候选
+- 旧 SeriesRecipe、Candidate、OfficialSku 与 DetailOverride 只读归档及迁移诊断
 - 强度闭环、重量段覆盖校验和精调规则学习
 - D1 团队共享状态、版本记录与冲突保护
 - R2 保存 Excel 原始导入文件
@@ -58,6 +60,11 @@ Windows 推荐使用项目自带脚本，避免把重定向字符串误当成程
 不能替代内网持久磁盘、公司飞书凭据和真实配置仓库验收。
 完整安装、systemd、Nginx、备份与回滚步骤见 `docs/deployment/r730-production.md`。
 
+Vercel 评审构建同样从仓库根安装 `package-lock.json`，但通过
+`npm run build:vercel` 启用 Vinext 的 Nitro 适配器。该命令生成 Vercel Build Output API
+要求的 `.vercel/output`；`vercel.json` 不执行 `next build`、不修改源码，也不把历史
+`apps/web` 当作部署入口。
+
 ## 公司飞书登录
 
 应用不提供匿名编辑或离线冒名提交。飞书 OAuth 仅接受配置的公司租户；未登录返回 401，
@@ -101,18 +108,28 @@ Trace、ID 唯一性、前缀与实体类型；写后必须回读恢复，不能
 
 ## 配置表交付
 
-一期正式入口使用 Chromium File System Access API。用户分别为 dev/test 等环境显式选择
-configs 根目录；1001 渠道固定写入该环境的 `xlsx`，其他渠道只使用用户明确选择的目录。
-目录句柄保存在当前用户、浏览器和 origin 的 IndexedDB 中，服务端不保存本机绝对路径。
+一期只提供服务端生成的 `ConfigPreviewPackage`：固定
+`packageKind=CONFIG_PREVIEW`、`publicationState=NON_FORMAL`、`formal=false`。
+没有正式 Bundle 时，数字 ID 与正式 `configNameKey` 均为空，关系检查只使用
+`NON_FORMAL:<modelId>:<objectKind>` 符号引用。下载物是带“不可提交、不可人工搬运到configs”
+声明的预览关系报告，不使用生产工作簿文件名。
 
-导出先执行 `SnapshotBatch`，只读取冻结 Snapshot；随后按环境根 `config.toml` 的逻辑表名
-解析 tackle、item、GoodsBasic 和 StoreBuy，预览新增/修改、主键冲突、关系断链和格式变化。
-确认后采用可恢复提交：记录基线 hash、备份与 Manifest，逐文件写入并回读，失败时恢复；
-不得宣称三个工作簿具有跨文件原子性。StoreBuy 更新必须保留各目标已有 `enabled`。
-
-File System Access API 不可用时可以下载变更包人工搬运，但页面不得声称已经写入本地 Git
-工作区。仓库中的本地伴随服务仅保留为历史兼容与测试工具，不是 v3 一期正式交付路径。
+一期不提供本地目录绑定、正式人工搬运包或配置提交。浏览器、文件系统与历史伴随服务中的
+1.5 期恢复型写入骨架继续保留，但生产形态预览、暂存与 `commit_config_export` 同时受服务端
+阶段开关、独立运行时启用、`config.export.commit`、正式 Bundle、策略/目录/新鲜 Manifest、
+治理租约与受保护 expected-old-OID CAS 门禁；这些证据还必须由服务端验证器在读取本地
+`config.toml`/工作簿前预检，并在写入 staging 前绑定实际文件 hash 再次确认，调用方自报字符串
+无效。浏览器没有受信服务端验证器、伴随服务只有 preview Capability 或任一前置缺失时，稳定
+返回 `CONFIG_TARGET_SERIALIZATION_UNAVAILABLE`，只保留 NON_FORMAL 预览。
+验证请求绑定 package、Profile、环境×渠道、映射版本、Snapshot id/hash 与每个暂存操作；目标
+使用工作簿相对逻辑引用，不把执行机 projectRoot 或绝对路径写入远端证据。验证后的
+上下文 hash、Manifest 集合 hash、验证时间、ConfigId/目录版本、lease、fencing token 与
+expected-old-OID 冻结进提交结果，不能换目标、内容或授权证据重放。已提交的同上下文、同授权
+幂等重试可从冻结结果恢复，不要求已消费的原租约再次在线验证，也不会重新写文件。
+正式 ConfigId 与导出治理分别由 GitHub #55、#56 实现并独立启用。缺少可重放正式品质或定价
+策略引用，或仍有未解决 EXPORT ERROR/BLOCKER 的历史 Snapshot，只能下载原样审计归档，
+不能进入配置预览或提交链；同一 Model 的多个冻结修订也不能进入同一个预览包。
 
 ## 旧版工作区
 
-合并前的 pnpm 多包实现仍保留在 `apps/web` 与 `packages/*`，用于历史追溯；当前开发、验证与部署均以仓库根目录的 v3 应用和 npm 脚本为准。
+合并前的 pnpm 多包实现仍保留在 `apps/web` 与 `packages/*`，仅用于历史追溯、兼容性测试和经审计的数据迁移；其中的浏览器本地状态不属于正式产品数据。当前开发、验证、评审和生产部署均以仓库根目录的 v3 应用和 npm 脚本为准。

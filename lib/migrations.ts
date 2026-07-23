@@ -42,9 +42,10 @@ import {
   CANONICAL_PATCH_OFFSET_POLICY_ID,
   createCanonicalPatchOffsetPolicyVersion,
 } from "./patch-offset-policy";
+import { migrateConfigIdGovernanceState } from "./config-id-governance";
 import { deterministicHash } from "./rule-kernel";
 
-export const CURRENT_WORKSPACE_SCHEMA_VERSION = 17;
+export const CURRENT_WORKSPACE_SCHEMA_VERSION = 18;
 
 const DEFAULT_RULE_SETTINGS: WorkspaceRuleSettings = {
   reductionStackingMode: "diminishing_division",
@@ -1001,6 +1002,20 @@ function migrateV16ToV17(state: MutableWorkspace): MutableWorkspace {
   } as unknown as MutableWorkspace;
 }
 
+function migrateV17ToV18(state: MutableWorkspace): MutableWorkspace {
+  return {
+    ...state,
+    schemaVersion: 18,
+    performanceSummaryDefinitions: arrayOf<
+      WorkspaceState["performanceSummaryDefinitions"][number]
+    >(state.performanceSummaryDefinitions),
+    // ConfigurationSnapshot 是冻结 payload；定义注册表迁移不得补写历史摘要或 contentHash。
+    configurationSnapshots: arrayOf<WorkspaceState["configurationSnapshots"][number]>(
+      state.configurationSnapshots,
+    ),
+  };
+}
+
 const migrations: Record<number, (state: MutableWorkspace) => MutableWorkspace> = {
   1: migrateV1ToV2,
   2: migrateV2ToV3,
@@ -1018,6 +1033,7 @@ const migrations: Record<number, (state: MutableWorkspace) => MutableWorkspace> 
   14: migrateV14ToV15,
   15: migrateV15ToV16,
   16: migrateV16ToV17,
+  17: migrateV17ToV18,
 };
 
 export function migrateWorkspaceState(input: unknown): WorkspaceState {
@@ -1038,6 +1054,13 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
     );
   }
 
+  // Some production databases were marked v17 before every persisted payload had
+  // been normalized. Normalize them while they are still v17, then advance through
+  // the ordinary sequential migration without changing frozen snapshots.
+  if (version === 17) {
+    state = migrateV16ToV17(state);
+  }
+
   while (version < CURRENT_WORKSPACE_SCHEMA_VERSION) {
     const migrate = migrations[version];
     if (!migrate) {
@@ -1051,18 +1074,12 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
     version = nextVersion;
   }
 
-  // Some production databases were marked v17 before every persisted payload had
-  // been normalized. Keep this normalizer idempotent so current-version states
-  // are readable on startup without changing frozen snapshots.
-  if ((input as { schemaVersion?: unknown }).schemaVersion === 17) {
-    state = migrateV16ToV17(state);
-  }
-
   state = {
     ...state,
     patchLedger: state.patchLedger && typeof state.patchLedger === "object"
       ? migratePatchLedger(state.patchLedger as WorkspaceState["patchLedger"],patchLedgerMigrationContext(state))
       : emptyPatchLedger(),
+    configIdGovernance: migrateConfigIdGovernanceState(state.configIdGovernance),
   };
   return state as WorkspaceState;
 }

@@ -1,5 +1,5 @@
 import { deterministicHash } from "./rule-kernel";
-import { orderedPatchReferences, reviewPatchBatch, reviewPatchRevision } from "./patch-ledger";
+import { markPatchRevisionRebaseRequired, orderedPatchReferences, PatchLedgerError, reviewPatchBatch, reviewPatchRevision, submitPatchRevision } from "./patch-ledger";
 import {
   createPatchReviewBatch,
   evaluatePatchFinalRanges,
@@ -631,6 +631,53 @@ export function reviewWorkspacePatchRevision(input: {
       reviewedAt: input.reviewedAt,
       capabilities: input.capabilities,
       approvalEvidence,
+    }),
+  };
+}
+
+export function submitWorkspacePatchRevision(input: {
+  state: WorkspaceState;
+  patchId: string;
+  patchRevision: number;
+  capabilities: Iterable<string>;
+}): WorkspaceState {
+  const capabilities = [...input.capabilities];
+  if (!capabilities.includes("patch.create")) {
+    throw new PatchLedgerError("PATCH_PERMISSION_DENIED", "Missing patch.create");
+  }
+  const target = input.state.patchLedger.revisions.find((revision) =>
+    revision.patchId === input.patchId && revision.patchRevision === input.patchRevision);
+  if (!target) {
+    throw new PatchLedgerError("PATCH_REVISION_NOT_FOUND", "Revision not found");
+  }
+  if (target.state !== "DRAFT") {
+    throw new PatchLedgerError("PATCH_STATE_TRANSITION_INVALID", "Only DRAFT revisions can be submitted");
+  }
+  if (target.snapshotRefs.length) {
+    throw new PatchLedgerError("PATCH_REVISION_IMMUTABLE", "Snapshot-referenced revision is immutable");
+  }
+  const currentRuleSet = currentPublishedRuleSet(input.state);
+  const currentSubject = currentPatchSubjectRef(input.state, target);
+  const ruleSetCurrent = target.baseRuleSetVersion === currentRuleSet.id
+    || target.baseRuleSetVersion === String(currentRuleSet.version);
+  if (!ruleSetCurrent || target.baseObjectRevision !== currentSubject.revision) {
+    return {
+      ...input.state,
+      patchLedger: markPatchRevisionRebaseRequired({
+        ledger: input.state.patchLedger,
+        patchId: input.patchId,
+        patchRevision: input.patchRevision,
+        capabilities,
+      }),
+    };
+  }
+  return {
+    ...input.state,
+    patchLedger: submitPatchRevision({
+      ledger: input.state.patchLedger,
+      patchId: input.patchId,
+      patchRevision: input.patchRevision,
+      capabilities,
     }),
   };
 }

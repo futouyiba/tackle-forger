@@ -2,6 +2,7 @@ import { deterministicHash } from "./rule-kernel";
 import { jcsSha256Hex } from "./canonical-json";
 import { PATCH_SET_HASH_CONTRACT_VERSION, patchMirrorDetailKey, patchMirrorGroupKey, patchSetHashForReferences } from "./patch-contract";
 import { assertPatchReviewCoverage, assertPatchRevisionDeterministicallyReplayable, assertPublishedPatchOffsetPolicy, invalidatePatchReviewBatch, PatchOffsetPolicyError } from "./patch-offset-policy";
+import { transitionPatchState } from "./patch-state";
 import type { PatchAbsorptionAssessment, PatchAbsorptionOperationEvidence, PatchLedger, PatchMirrorOperationResult, PatchMirrorPayloadRow, PatchMirrorPullAudit, PatchMirrorRemoteRow, PatchMirrorSyncCommand, PatchMirrorValidationIssue, PatchOffsetPolicyVersion, PatchOperationRecord, PatchPatternSummary, PatchReviewBatch, PatchReviewSubjectRef, PatchRevisionRecord, PatchSnapshotReference, PatchValidationWaiver, ProjectionPatchRuleSource, RuleSourceChangeDraft, WorkspacePolicyRecord } from "./types";
 
 export const CURRENT_PATCH_LEDGER_SCHEMA_VERSION = 5;
@@ -289,6 +290,7 @@ export function migratePatchLedger(input: PatchLedger | Record<string, unknown>,
         }));
         for (const operation of operations) assertCanonicalOperation(operation);
         const normalized = { ...rawRevision, operations };
+        delete (normalized as { revisionHash?: unknown }).revisionHash;
         return { ...normalized, revisionHash: patchRevisionHash(normalized) };
       } catch (error) {
         if (!migrationReviewItems.some((item) => item.id === reviewId)) {
@@ -510,11 +512,51 @@ export function appendPatchRevision(input: { ledger: PatchLedger; revision: Patc
   if (latest && revision.patchRevision !== latest.patchRevision + 1) throw new PatchLedgerError("PATCH_REVISION_SEQUENCE_CONFLICT", "Revision sequence conflict");
   return { ledger: { ...input.ledger, revisions: [...input.ledger.revisions, revision] }, revision, idempotent: false };
 }
+export function submitPatchRevision(input:{ledger:PatchLedger;patchId:string;patchRevision:number;capabilities:Iterable<string>}):PatchLedger{
+  requireCapability(input.capabilities,"patch.create");
+  const target=input.ledger.revisions.find((r)=>r.patchId===input.patchId&&r.patchRevision===input.patchRevision);
+  if(!target) throw new PatchLedgerError("PATCH_REVISION_NOT_FOUND","Revision not found");
+  if(target.snapshotRefs.length) throw new PatchLedgerError("PATCH_REVISION_IMMUTABLE","Snapshot-referenced revision is immutable");
+  try {
+    transitionPatchState(target.state, "PENDING_REVIEW");
+  } catch (error) {
+    throw new PatchLedgerError(
+      "PATCH_STATE_TRANSITION_INVALID",
+      error instanceof Error ? error.message : "Invalid Patch state transition",
+    );
+  }
+  const next=buildPatchRevision({...target,state:"PENDING_REVIEW",operations:target.operations});
+  return {...input.ledger,revisions:input.ledger.revisions.map((r)=>r===target?next:r)};
+}
+export function markPatchRevisionRebaseRequired(input:{ledger:PatchLedger;patchId:string;patchRevision:number;capabilities:Iterable<string>}):PatchLedger{
+  requireCapability(input.capabilities,"patch.create");
+  const target=input.ledger.revisions.find((r)=>r.patchId===input.patchId&&r.patchRevision===input.patchRevision);
+  if(!target) throw new PatchLedgerError("PATCH_REVISION_NOT_FOUND","Revision not found");
+  if(target.snapshotRefs.length) throw new PatchLedgerError("PATCH_REVISION_IMMUTABLE","Snapshot-referenced revision is immutable");
+  try {
+    transitionPatchState(target.state, "REBASE_REQUIRED");
+  } catch (error) {
+    throw new PatchLedgerError(
+      "PATCH_STATE_TRANSITION_INVALID",
+      error instanceof Error ? error.message : "Invalid Patch state transition",
+    );
+  }
+  const next=buildPatchRevision({...target,state:"REBASE_REQUIRED",operations:target.operations});
+  return {...input.ledger,revisions:input.ledger.revisions.map((r)=>r===target?next:r)};
+}
 export function reviewPatchRevision(input:{ledger:PatchLedger;patchId:string;patchRevision:number;nextState:"APPROVED"|"ACTIVE"|"WITHDRAWN";reviewer:string;reviewedAt:string;capabilities:Iterable<string>;approvalEvidence?:{policy?:WorkspacePolicyRecord|PatchOffsetPolicyVersion;reviewBatch?:PatchReviewBatch;waivers?:PatchValidationWaiver[];subjectRef:PatchReviewSubjectRef;objectInputHash:string;patchSetHash:string}}):PatchLedger{
   requireCapability(input.capabilities,"patch.review");
   const target=input.ledger.revisions.find((r)=>r.patchId===input.patchId&&r.patchRevision===input.patchRevision);
   if(!target) throw new PatchLedgerError("PATCH_REVISION_NOT_FOUND","Revision not found");
   if(target.snapshotRefs.length) throw new PatchLedgerError("PATCH_REVISION_IMMUTABLE","Snapshot-referenced revision is immutable");
+  try {
+    transitionPatchState(target.state, input.nextState);
+  } catch (error) {
+    throw new PatchLedgerError(
+      "PATCH_STATE_TRANSITION_INVALID",
+      error instanceof Error ? error.message : "Invalid Patch state transition",
+    );
+  }
   if(input.nextState==="APPROVED"||input.nextState==="ACTIVE"){
     try{
       assertPublishedPatchOffsetPolicy(input.approvalEvidence?.policy);
@@ -605,6 +647,16 @@ export function reconcilePatchMirrorPull(input:{
     }
     if(rawWorkspaceId!==input.workspaceId) return [];
     try {
+      // Canonical clear is a remote integrity boundary.  Do not let the legacy
+      // adapter erase a malformed operand before it is recorded as tampering.
+      if (rawOperationName(row as unknown as RawPatchOperation) === "clear"
+        && own(row as unknown as RawPatchOperation, "operand")
+        && row.operand !== null) {
+        throw new PatchLedgerError(
+          "PATCH_CLEAR_OPERAND_INVALID",
+          "远端 canonical clear 的 operand 必须为 null",
+        );
+      }
       const normalized = normalizeLegacyOperation({
         raw: row as unknown as RawPatchOperation,
         operationId: row.operationId,

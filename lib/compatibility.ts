@@ -134,6 +134,37 @@ export function evaluateStructuralHardCompatibility(
   );
 }
 
+function withoutLegacyPerformanceRequirements(rule: CompatibilityRule): CompatibilityRule | undefined {
+  if (rule.selector.performanceId !== undefined) return undefined;
+  const canonical = {
+    ...rule,
+    requirements: rule.requirements.filter(
+      (requirement) => !(requirement.kind === "field" && requirement.key === "performanceId"),
+    ),
+  };
+  if (rule.effect === "require" && rule.requirements.length > 0 && canonical.requirements.length === 0) {
+    return undefined;
+  }
+  return canonical;
+}
+
+/**
+ * 新运行时的硬兼容入口。旧 Performance selector 与 field requirement 都是历史证据，
+ * 不得因为 canonical context 不再携带 performanceId 而排除候选。
+ */
+export function evaluateCanonicalHardCompatibility(
+  context: CompatibilityContext,
+  rules: CompatibilityRule[],
+): HardCompatibilityResult {
+  return evaluateHardCompatibility(
+    context,
+    rules.flatMap((rule) => {
+      const canonical = withoutLegacyPerformanceRequirements(rule);
+      return canonical ? [canonical] : [];
+    }),
+  );
+}
+
 export function compatibilitySpecificity(
   selector: CompatibilitySelector,
 ): number {
@@ -360,6 +391,33 @@ export function evaluateAffinity(
       .map((contribution) => contribution.ruleId)
       .filter((ruleId): ruleId is string => Boolean(ruleId)),
     warnings,
+  };
+}
+
+/**
+ * 新规范化运行时的 Affinity。旧 function_performance 轴与 performanceId 选择器
+ * 只供历史结果重放，不进入新候选、Series 或 Model 的兼容评分。
+ */
+export function evaluateCanonicalAffinity(
+  context: CompatibilityContext,
+  rules: AffinityRule[],
+  axisWeights: AffinityAxisWeights,
+): AffinityScoreResult {
+  const canonicalContext = { ...context, performanceId: undefined };
+  const result = evaluateAffinity(
+    canonicalContext,
+    rules.filter(
+      (rule) =>
+        rule.axis !== "function_performance"
+        && rule.selector.performanceId === undefined,
+    ),
+    { ...axisWeights, function_performance: 0 },
+  );
+  return {
+    ...result,
+    warnings: result.warnings.filter(
+      (warning) => !warning.includes("function_performance"),
+    ),
   };
 }
 

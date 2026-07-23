@@ -37,6 +37,7 @@ import {
   CANONICAL_PATCH_OFFSET_POLICY_ID,
   createCanonicalPatchOffsetPolicyVersion,
 } from "./patch-offset-policy";
+import { migrateConfigIdGovernanceState } from "./config-id-governance";
 import { deterministicHash } from "./rule-kernel";
 
 export const CURRENT_WORKSPACE_SCHEMA_VERSION = 18;
@@ -1084,6 +1085,7 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
     patchLedger: state.patchLedger && typeof state.patchLedger === "object"
       ? migratePatchLedger(state.patchLedger as WorkspaceState["patchLedger"])
       : emptyPatchLedger(),
+    configIdGovernance: migrateConfigIdGovernanceState(state.configIdGovernance),
   };
   return state as WorkspaceState;
 }

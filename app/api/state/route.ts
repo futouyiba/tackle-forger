@@ -9,6 +9,10 @@ import {
   findReadOnlyLegacyProductChanges,
   stableAuditActor,
 } from "@/lib/api-command-boundaries";
+import {
+  assertFrozenConfigIdentityTransition,
+  ConfigIdGovernanceError,
+} from "@/lib/config-id-governance";
 
 export const dynamic = "force-dynamic";
 
@@ -61,6 +65,17 @@ export async function PUT(request: NextRequest) {
       { error: "其他成员已保存新版本，请刷新后再合并。", revision: current.revision },
       { status: 409 },
     );
+  }
+  try {
+    assertFrozenConfigIdentityTransition(current.state, body.state);
+  } catch (error) {
+    if (error instanceof ConfigIdGovernanceError) {
+      return NextResponse.json(
+        { error: error.message, code: error.code, details: error.details },
+        { status: 422 },
+      );
+    }
+    throw error;
   }
   const governedChanges = findGovernedStateChanges(current.state, body.state);
   if (governedChanges.length) {

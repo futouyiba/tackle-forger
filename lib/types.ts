@@ -13,6 +13,7 @@ import type {
   ModelAffixValueAssessment,
   QualityValuePolicyDraft,
 } from "./quality-value-policy";
+import type { ConfigIdGovernanceState } from "./config-id-governance";
 import type { CalculationTraceArchive } from "./calculation-trace";
 export type {
   CalculationTraceArchive,
@@ -1004,6 +1005,12 @@ export interface PurchasableModel {
   skuId: string;
   name: string;
   modelVariantKey?: string;
+  /**
+   * OPEN-008 显式稳定配置键。正式预留前可由普通 Model 编辑创建新 revision；
+   * 一旦 configIdBundleRef 存在，二者都必须由领域命令原样继承。
+   */
+  stableModelKey?: string;
+  configIdBundleRef?: string;
   action: string;
   hardness: string;
   lengthM: number;
@@ -1923,6 +1930,11 @@ export interface IdentityAuditRecord {
 
 export interface WorkspaceState {
   schemaVersion: number;
+  /**
+   * OPEN-008 使用独立子 schema，避免把配置身份治理与工作区 revision
+   * 的迁移编号耦合。旧工作区在读取时补为空状态，不改写历史 Snapshot。
+   */
+  configIdGovernance: ConfigIdGovernanceState;
   ruleSettings: WorkspaceRuleSettings;
   ruleSetVersions: RuleSetVersion[];
   itemParts: ItemPartDefinition[];

@@ -11,6 +11,11 @@ import {
   type QualityId,
 } from "../lib/pricing-policy";
 import { publishConfigurationSnapshot, verifySnapshotIntegrity } from "../lib/publishing";
+import { deterministicHash } from "../lib/rule-kernel";
+import {
+  adaptRuleTraceToCanonical,
+  createCalculationTraceArchive,
+} from "../lib/calculation-trace";
 import { createPerformanceSummaryDefinition } from "../lib/performance-summary";
 import { createSeedState } from "../lib/seed";
 import type { ProjectionTraceStep } from "../lib/types";
@@ -219,21 +224,35 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     trace: [],
     inputHash: "quality-assessment-hash",
   };
+  const subjectRef = {
+    workspaceId: "workspace:test",
+    entityType: "model" as const,
+    entityId: model.id,
+    revisionId: String(model.revision),
+  };
+  const [changedParameterKey, changedBefore] = Object.entries(projection.values)
+    .find((entry): entry is [string, number] => typeof entry[1] === "number")!;
+  const finalPanelValues = {
+    ...projection.values,
+    [changedParameterKey]: changedBefore + 1,
+  };
+  const settlementTrace = finalSettlementTrace(finalPanelValues);
   const publishInput = {
     publicationMode: "new_formal",
+    workspaceId: "workspace:test",
     model,
     sku,
     series,
     seriesSkus: state.skuDrawers,
     projection,
-    finalPanelValues: oldSnapshot.finalPanelValues,
+    finalPanelValues,
     componentSelections: oldSnapshot.componentSelections,
     patches: [],
     attributeAffixIds: oldSnapshot.attributeAffixIds,
     passiveAffixIds: oldSnapshot.passiveAffixIds,
     technologyIds: oldSnapshot.technologyIds,
     technologyDefinitions: state.technologies,
-    finalSettlementTrace: finalSettlementTrace(oldSnapshot.finalPanelValues),
+    finalSettlementTrace: settlementTrace,
     performanceSummaryDefinition: performanceDefinition,
     performanceSummaryDefinitions: state.performanceSummaryDefinitions,
     passiveAffixPayloads: oldSnapshot.passiveAffixPayloads,
@@ -263,6 +282,69 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
   assert.equal(snapshot.pricingPolicyVersion, version.id);
   assert.equal(snapshot.automaticPricing?.formal, true);
   assert.equal(snapshot.qualityValueAssessment?.formal, true);
+  assert.equal(snapshot.calculationTrace?.schemaVersion, "calculation-trace/v1");
+  assert.ok(snapshot.calculationTrace?.entries.length);
+  const expectedPanelTrace = adaptRuleTraceToCanonical({
+    projection: { ...projection, trace: settlementTrace },
+    subjectRef,
+  });
+  assert.deepEqual(
+    snapshot.calculationTrace?.entries.slice(0, expectedPanelTrace.length),
+    expectedPanelTrace,
+  );
+  assert.deepEqual(snapshot.attributeTrace, settlementTrace);
+  assert.equal(verifySnapshotIntegrity(snapshot), true);
+  const tampered = structuredClone(snapshot);
+  tampered.calculationTrace!.entries[0].outputHash = "tampered";
+  tampered.contentHash = deterministicHash(
+    Object.fromEntries(Object.entries(tampered).filter(([key]) => key !== "contentHash")),
+  );
+  assert.equal(verifySnapshotIntegrity(tampered), false);
+  const ruleSetTampered = structuredClone(snapshot);
+  const panelEntry = ruleSetTampered.calculationTrace!.entries.find((entry) =>
+    !entry.parameterKey.startsWith("pricing:")
+    && !entry.parameterKey.startsWith("five_axis:"))!;
+  panelEntry.ruleSetVersion = "rules:tampered";
+  ruleSetTampered.calculationTrace = createCalculationTraceArchive(
+    ruleSetTampered.calculationTrace!.entries,
+  );
+  ruleSetTampered.contentHash = deterministicHash(
+    Object.fromEntries(Object.entries(ruleSetTampered).filter(([key]) => key !== "contentHash")),
+  );
+  assert.equal(verifySnapshotIntegrity(ruleSetTampered), false);
+  const pricingTampered = structuredClone(snapshot);
+  pricingTampered.automaticPricing!.purchasePrice =
+    pricingTampered.automaticPricing!.purchasePrice! + 1;
+  pricingTampered.contentHash = deterministicHash(
+    Object.fromEntries(Object.entries(pricingTampered).filter(([key]) => key !== "contentHash")),
+  );
+  assert.equal(verifySnapshotIntegrity(pricingTampered), false);
+  const panelTampered = structuredClone(snapshot);
+  panelTampered.finalPanelValues[changedParameterKey] =
+    Number(panelTampered.finalPanelValues[changedParameterKey]) + 1;
+  panelTampered.contentHash = deterministicHash(
+    Object.fromEntries(Object.entries(panelTampered).filter(([key]) => key !== "contentHash")),
+  );
+  assert.equal(verifySnapshotIntegrity(panelTampered), false);
+  const ghostSettlementTrace = structuredClone(settlementTrace);
+  ghostSettlementTrace[0].contributions.push({
+    sequence: ghostSettlementTrace[0].contributions.length + 1,
+    ruleId: "test:final:ghost_panel_key",
+    sourceId: "test:final-settlement",
+    sourceName: "最终结算",
+    parameterKey: "ghost_panel_key",
+    operation: "base",
+    before: null,
+    operand: 99,
+    after: 99,
+  });
+  assert.throws(
+    () => publishConfigurationSnapshot({
+      ...publishInput,
+      finalSettlementTrace: ghostSettlementTrace,
+    }),
+    /最终结算 Trace 与面板值不一致：ghost_panel_key/,
+  );
   assert.equal(snapshot.performanceSummary?.status, "AVAILABLE");
   if (snapshot.performanceSummary?.status === "AVAILABLE") {
     assert.deepEqual(

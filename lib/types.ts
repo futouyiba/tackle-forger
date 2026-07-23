@@ -13,6 +13,11 @@ import type {
   ModelAffixValueAssessment,
   QualityValuePolicyDraft,
 } from "./quality-value-policy";
+import type { CalculationTraceArchive } from "./calculation-trace";
+export type {
+  CalculationTraceArchive,
+  CalculationTraceEntry,
+} from "./calculation-trace";
 import type {
   PerformanceSummaryDefinition,
   PerformanceSummarySnapshot,
@@ -1221,6 +1226,8 @@ export interface ConfigurationSnapshot {
   attributeAffixIds: string[];
   passiveAffixIds: string[];
   attributeTrace: ProjectionTraceStep[];
+  /** 新正式 Snapshot 冻结 canonical Trace；历史 Snapshot 不补写，避免改变 contentHash。 */
+  calculationTrace?: CalculationTraceArchive;
   passiveAffixPayloads: PassiveSkillPayload[];
   projectionMatch: ProjectionMatch;
   compatibilityReport: HardCompatibilityResult;

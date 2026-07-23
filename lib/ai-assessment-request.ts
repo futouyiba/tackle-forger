@@ -94,7 +94,7 @@ export function assertWorkspaceAssessmentScopeEligible(
   const snapshot = model.configurationSnapshotId
     ? state.configurationSnapshots.find((entry) => entry.id === model.configurationSnapshotId)
     : undefined;
-  if (model.configurationSnapshotId && (!snapshot || snapshot.modelId !== model.id)) {
+  if (snapshot && snapshot.modelId !== model.id) {
     throw new Error("AI_SCOPE_NOT_FOUND");
   }
   assertSeriesItemPartChainEnabled(

@@ -948,9 +948,19 @@ export class FancyHubConnector {
           || lease.inFlightTotalBefore >= limits.maxConcurrentRequests) {
           throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "模型发现返回的 provider 并发硬上限已满。" );
         }
-        const byId = new Map(discovery.models.map((model) => [model.modelId, model]));
         const configured = [this.config.primaryModelId, ...this.config.fallbackModelIds]
           .filter((entry): entry is string => Boolean(entry));
+        const configuredSet = new Set(configured);
+        const discoveredConfiguredIds = discovery.models
+          .filter((model) => configuredSet.has(model.modelId))
+          .map((model) => model.modelId);
+        if (new Set(discoveredConfiguredIds).size !== discoveredConfiguredIds.length) {
+          throw new FancyHubError(
+            "AI_FANCY_HUB_RESPONSE_INVALID",
+            "Fancy Hub 对已配置 modelId 返回了多个修订，无法确定性选择模型。",
+          );
+        }
+        const byId = new Map(discovery.models.map((model) => [model.modelId, model]));
         const models = configured.map((id) => byId.get(id)).filter((entry): entry is AIModelDescriptorV1 => Boolean(entry));
         if (!models.length) throw new FancyHubError("AI_NO_CONFIGURED_MODEL_AVAILABLE", "主模型和有序降级列表当前均不可用。" );
         const preparedModels = models.map((model) => {

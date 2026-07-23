@@ -9,7 +9,7 @@
 .rule-workbook-error { align-items: center; background: #fff5f4; border-color: #f3cbc6; color: #a7352c; display: flex; gap: 10px; }
 .rule-workbook-error div { display: flex; flex-direction: column; gap: 3px; }
 .rule-workbook-error span { font-size: 10px; }
-.rule-workbook-flow { align-items: stretch; display: grid; grid-template-columns: 1fr 22px 1fr 22px 1fr; }
+.rule-workbook-flow { align-items: stretch; display: grid; grid-template-columns: minmax(0,1fr) 22px minmax(0,1fr) 22px minmax(0,1fr) 22px minmax(0,1fr); }
 .rule-workbook-flow > svg { align-self: center; color: #98a3af; justify-self: center; }
 .rule-workbook-flow > .card { display: flex; flex-direction: column; gap: 7px; min-height: 145px; }
 .rule-workbook-flow .rule-step { color: var(--accent); font-size: 9px; font-weight: 800; letter-spacing: .08em; }

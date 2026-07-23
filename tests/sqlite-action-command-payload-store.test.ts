@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -21,6 +21,7 @@ import { SqliteActionCommandPayloadStore } from "../lib/sqlite-action-command-pa
 import {
   closeSqliteStorage,
   loadSqliteWorkspace,
+  saveSqliteImportedFile,
   saveSqliteWorkspace,
 } from "../lib/sqlite-storage";
 
@@ -291,6 +292,55 @@ test("SQLite 命令回调失败会同时回滚业务 revision 和执行结果", 
     assert.equal(
       (await loadSqliteWorkspace(databasePath)).state.notes,
       "retry-committed",
+    );
+  });
+});
+
+test("命令事务失败会清理已落盘但尚未提交的导入文件", async () => {
+  await withDatabase(async (databasePath) => {
+    const store = new SqliteActionCommandPayloadStore(databasePath);
+    const current = await loadSqliteWorkspace(databasePath);
+    const payloadRef = await issue({
+      store,
+      action: "import_excel",
+      capability: "excel.import",
+      revision: current.revision,
+      idempotencyKey: "sqlite:import-file-rollback",
+    });
+    const record = await store.findByPayloadRefId(payloadRef.payloadRefId);
+    assert.ok(record);
+    const dataDir = path.join(path.dirname(databasePath), "data");
+    let storedPath = "";
+    await assert.rejects(
+      executeActionCommandPayload({
+        store,
+        invocation: {
+          actionId: record.actionId,
+          payloadRefId: record.payloadRefId,
+        },
+        actorId,
+        capabilities: ["excel.import"],
+        currentSubjectRef: workspaceCommandSubject(current.revision),
+        currentInputHash: workspaceCommandInputHash(current.revision),
+        execute: async () => {
+          const saved = await saveSqliteImportedFile(
+            databasePath,
+            dataDir,
+            new File(["immutable import"], "rules.xlsx", {
+              type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            }),
+            actorId,
+          );
+          storedPath = path.join(dataDir, saved.key);
+          throw new Error("simulated result persistence failure");
+        },
+      }),
+      /simulated result persistence failure/,
+    );
+    assert.ok(storedPath);
+    await assert.rejects(
+      access(storedPath),
+      (error) => (error as NodeJS.ErrnoException).code === "ENOENT",
     );
   });
 });

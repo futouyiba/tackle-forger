@@ -11,7 +11,11 @@ type StoredRevision = RevisionInfo & { state: WorkspaceState };
 
 const databases = new Map<string, Promise<DatabaseSync>>();
 const transactionTails = new Map<string, Promise<void>>();
-const transactionContext = new AsyncLocalStorage<string>();
+interface SqliteTransactionContext {
+  key: string;
+  rollbackHooks: Array<() => Promise<void>>;
+}
+const transactionContext = new AsyncLocalStorage<SqliteTransactionContext>();
 
 export async function openSqliteDatabase(databasePath: string) {
   const resolved = path.resolve(databasePath);
@@ -70,7 +74,7 @@ export async function runSqliteImmediateTransaction<T>(
 ): Promise<T> {
   const key = path.resolve(databasePath);
   const db = await openSqliteDatabase(databasePath);
-  if (transactionContext.getStore() === key && db.isTransaction) {
+  if (transactionContext.getStore()?.key === key && db.isTransaction) {
     return execute(db);
   }
   const prior = transactionTails.get(key) ?? Promise.resolve();
@@ -79,15 +83,19 @@ export async function runSqliteImmediateTransaction<T>(
       throw new Error("检测到未完成的 SQLite 事务。");
     }
     db.exec("BEGIN IMMEDIATE");
+    const context: SqliteTransactionContext = { key, rollbackHooks: [] };
     try {
       const result = await transactionContext.run(
-        key,
+        context,
         () => execute(db),
       );
       db.exec("COMMIT");
       return result;
     } catch (error) {
       if (db.isTransaction) db.exec("ROLLBACK");
+      for (const rollback of context.rollbackHooks.reverse()) {
+        await rollback().catch(() => undefined);
+      }
       throw error;
     }
   });
@@ -102,13 +110,23 @@ export async function runSqliteImmediateTransaction<T>(
 
 export async function waitForSqliteTransaction(databasePath: string) {
   const key = path.resolve(databasePath);
-  if (transactionContext.getStore() === key) return;
+  if (transactionContext.getStore()?.key === key) return;
   while (true) {
     const tail = transactionTails.get(key);
     if (!tail) return;
     await tail;
     if (transactionTails.get(key) === tail) return;
   }
+}
+
+export function registerSqliteRollbackHook(
+  databasePath: string,
+  rollback: () => Promise<void>,
+) {
+  const context = transactionContext.getStore();
+  if (!context || context.key !== path.resolve(databasePath)) return false;
+  context.rollbackHooks.push(rollback);
+  return true;
 }
 
 export async function closeSqliteStorage(databasePath: string) {
@@ -222,6 +240,10 @@ export async function saveSqliteImportedFile(databasePath: string, dataDir: stri
   const temporary = `${target}.${process.pid}.tmp`;
   await writeFile(temporary, new Uint8Array(await file.arrayBuffer()), { mode: 0o600 });
   await rename(temporary, target);
+  registerSqliteRollbackHook(
+    databasePath,
+    () => unlink(target),
+  );
   try {
     db.prepare("INSERT INTO imported_files (id, file_name, content_type, size, uploaded_by, uploaded_at, r2_key) VALUES (?, ?, ?, ?, ?, ?, ?)")
       .run(id, file.name, file.type || "application/octet-stream", file.size, author, new Date().toISOString(), relativeKey);

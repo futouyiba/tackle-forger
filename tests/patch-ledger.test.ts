@@ -39,11 +39,49 @@ test("stable ID survives rename, baseline changes rebase, missing ID is orphaned
   assert.deepEqual(orphan.attentionStates,["ORPHANED"]); assert.equal(orphan.subjectEntityId,"model:rod:1");
 });
 test("review permission is separate and snapshot referenced revision is immutable", () => {
-  const ledger: ReturnType<typeof emptyPatchLedger>={...emptyPatchLedger(),revisions:[makeRevision()]};
+  const ledger: ReturnType<typeof emptyPatchLedger>={...emptyPatchLedger(),revisions:[makeRevision({state:"PENDING_REVIEW"})]};
   assert.throws(()=>reviewPatchRevision({ledger,patchId:"patch:rod:1",patchRevision:1,nextState:"APPROVED",reviewer:"x",reviewedAt:now,capabilities:[]}), (e:unknown)=>e instanceof PatchLedgerError&&e.code==="PATCH_PERMISSION_DENIED");
   const frozen={...ledger,revisions:[{...ledger.revisions[0],snapshotRefs:["snapshot:1"]}]};
   assert.throws(()=>reviewPatchRevision({ledger:frozen,patchId:"patch:rod:1",patchRevision:1,nextState:"APPROVED",reviewer:"x",reviewedAt:now,capabilities:["patch.review"]}), (e:unknown)=>e instanceof PatchLedgerError&&e.code==="PATCH_REVISION_IMMUTABLE");
   assert.throws(()=>reviewPatchRevision({ledger,patchId:"patch:rod:1",patchRevision:1,nextState:"APPROVED",reviewer:"x",reviewedAt:now,capabilities:["patch.review"]}), (e:unknown)=>e instanceof PatchLedgerError&&e.code==="PATCH_OFFSET_POLICY_MISSING");
+});
+test("PatchLedger 写路径统一拒绝 APPROVED、ACTIVE 与终态撤回且不改写 revision", () => {
+  const rejectedStates = ["APPROVED", "ACTIVE", "REBASE_REQUIRED", "ABSORBED", "PARTIALLY_ABSORBED", "WITHDRAWN", "SUPERSEDED"] as const;
+  for (const state of rejectedStates) {
+    const revision = makeRevision({ state });
+    const ledger = { ...emptyPatchLedger(), revisions: [revision] };
+    const before = structuredClone(ledger);
+    assert.throws(
+      () => reviewPatchRevision({
+        ledger,
+        patchId: revision.patchId,
+        patchRevision: revision.patchRevision,
+        nextState: "WITHDRAWN",
+        reviewer: "reviewer",
+        reviewedAt: now,
+        capabilities: ["patch.review"],
+      }),
+      (error: unknown) => error instanceof PatchLedgerError && error.code === "PATCH_STATE_TRANSITION_INVALID",
+    );
+    assert.deepEqual(ledger, before);
+    assert.equal(ledger.revisions[0].revisionHash, revision.revisionHash);
+  }
+});
+test("PatchLedger 只允许 DRAFT 或 PENDING_REVIEW 撤回", () => {
+  for (const state of ["DRAFT", "PENDING_REVIEW"] as const) {
+    const revision = makeRevision({ state });
+    const ledger = { ...emptyPatchLedger(), revisions: [revision] };
+    const result = reviewPatchRevision({
+      ledger,
+      patchId: revision.patchId,
+      patchRevision: revision.patchRevision,
+      nextState: "WITHDRAWN",
+      reviewer: "reviewer",
+      reviewedAt: now,
+      capabilities: ["patch.review"],
+    });
+    assert.equal(result.revisions[0].state, "WITHDRAWN");
+  }
 });
 test("unavailable or partial mirror never reports SYNCED and retry is idempotent", () => {
   const ledger: ReturnType<typeof emptyPatchLedger>={...emptyPatchLedger(),revisions:[makeRevision()]};

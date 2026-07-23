@@ -269,6 +269,8 @@ test("R10 Patch与UpgradeCandidate只允许权威状态迁移", () => {
   assert.throws(() => transitionPatchState("ACTIVE", "SUPERSEDED"), /非法/);
   assert.throws(() => transitionPatchState("ABSORBED", "SUPERSEDED"), /非法/);
   assert.throws(() => transitionPatchState("PARTIALLY_ABSORBED", "SUPERSEDED"), /非法/);
+  assert.throws(() => transitionPatchState("APPROVED", "WITHDRAWN"), /非法/);
+  assert.throws(() => transitionPatchState("DRAFT", "APPROVED"), /非法/);
   assert.throws(() => transitionPatchState("APPROVED", "DRAFT"), /非法/);
   assert.equal(transitionUpgradeState("ready_for_review", "approved"), "approved");
   assert.equal(

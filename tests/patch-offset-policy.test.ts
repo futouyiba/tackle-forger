@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   assertPatchGateCanProceed,
+  assertPatchValidationWaiverDecisionCoverage,
   assertPatchRangeEvaluationIntegrity,
   assertPatchReviewCoverage,
   assertPublishedPatchOffsetPolicy,
@@ -30,6 +31,7 @@ import {
   evaluateAuthoritativePatchFinalRanges,
   preparePatchOperationFromWorkspace,
   reviewWorkspacePatchRevision,
+  submitWorkspacePatchRevision,
   type AuthoritativePatchObject,
 } from "../lib/patch-authority";
 import { deterministicHash } from "../lib/rule-kernel";
@@ -229,19 +231,21 @@ test("只校验当前关口累计最终值，端点包含且先归一到标准�
 });
 
 test("Waiver 单 Gate 生效，EXPORT 还必须精确匹配环境与渠道", () => {
+  const publishPolicy = policy();
+  const publishContext = context({ finalValue: 13 });
   const publishEvaluation = evaluatePatchFinalRanges({
-    policy: policy(),
+    policy: publishPolicy,
     gate: "PUBLISH",
-    contexts: [context({ finalValue: 13 })],
+    contexts: [publishContext],
   });
   const issue = publishEvaluation.issues[0];
   const approved = createPatchValidationWaiverDecision({
     issues: publishEvaluation.issues,
     requested: [{ issueFingerprint: issue.fingerprint!, gate: "PUBLISH" }],
-    policyVersion: policy().version,
-    scopeRef: context().subjectRef,
-    objectInputHash: context().objectInputHash,
-    patchSetHash: context().patchSetHash,
+    policyVersion: publishPolicy.version,
+    scopeRef: publishContext.subjectRef,
+    objectInputHash: publishContext.objectInputHash,
+    patchSetHash: publishContext.patchSetHash,
     reason: "保留当前设计取舍",
     approvedBy: "reviewer",
     approvedAt: NOW,
@@ -249,6 +253,40 @@ test("Waiver 单 Gate 生效，EXPORT 还必须精确匹配环境与渠道", () 
   assert.doesNotThrow(() => assertPatchGateCanProceed({
     evaluation: publishEvaluation,
     waivers: approved.waivers,
+  }));
+  assert.throws(
+    () => createPatchValidationWaiverDecision({
+      issues: publishEvaluation.issues,
+      requested: [
+        { issueFingerprint: issue.fingerprint!, gate: "PUBLISH" },
+        { issueFingerprint: issue.fingerprint!, gate: "PUBLISH" },
+      ],
+      policyVersion: publishPolicy.version,
+      scopeRef: publishContext.subjectRef,
+      objectInputHash: publishContext.objectInputHash,
+      patchSetHash: publishContext.patchSetHash,
+      reason: "重复目标必须拒绝",
+      approvedBy: "reviewer",
+      approvedAt: NOW,
+    }),
+    (error: unknown) => error instanceof PatchOffsetPolicyError && error.code === "PATCH_WAIVER_TARGET_DUPLICATE",
+  );
+  const legacyFingerprint = deterministicHash({
+    source: "patch",
+    code: issue.code,
+    gate: issue.gate,
+    policyVersion: publishPolicy.version,
+    subjectRef: publishContext.subjectRef,
+    objectInputHash: publishContext.objectInputHash,
+    contextId: publishContext.contextId,
+    parameterKey: publishContext.parameterKey,
+    constraintRuleVersion: publishContext.constraintRuleVersion,
+    patchSetHash: publishContext.patchSetHash,
+  });
+  assert.notEqual(legacyFingerprint, issue.fingerprint);
+  assert.doesNotThrow(() => assertPatchGateCanProceed({
+    evaluation: publishEvaluation,
+    waivers: [{ ...approved.waivers[0], issueFingerprint: legacyFingerprint }],
   }));
 
   const reviewEvaluation = evaluatePatchFinalRanges({
@@ -679,6 +717,104 @@ test("实际工作区命令计算 Trace、包含端点，并在伪造或当前�
   );
 });
 
+test("Workspace Patch 写入口拒绝 ACTIVE 撤回且保持账本逐字节不变", () => {
+  const state = createSeedState();
+  const frozenActive = state.patchLedger.revisions.find((revision) => revision.state === "ACTIVE");
+  assert.ok(frozenActive);
+  const active = buildPatchRevision({
+    ...frozenActive,
+    snapshotRefs: [],
+    operations: frozenActive.operations,
+  });
+  state.patchLedger.revisions = state.patchLedger.revisions.map((revision) =>
+    revision === frozenActive ? active : revision);
+  const before = JSON.stringify(state.patchLedger);
+  assert.throws(
+    () => reviewWorkspacePatchRevision({
+      state,
+      patchId: active.patchId,
+      patchRevision: active.patchRevision,
+      nextState: "WITHDRAWN",
+      reviewer: "reviewer",
+      reviewedAt: NOW,
+      capabilities: ["patch.review"],
+    }),
+    (error: unknown) => error instanceof PatchLedgerError
+      && error.code === "PATCH_STATE_TRANSITION_INVALID",
+  );
+  assert.equal(JSON.stringify(state.patchLedger), before);
+});
+
+test("Workspace Patch 提交入口只允许当前 DRAFT，过期基线进入 REBASE_REQUIRED", () => {
+  const state = createSeedState();
+  const source = state.patchLedger.revisions.find((revision) => revision.state === "ACTIVE");
+  assert.ok(source);
+  const draft = buildPatchRevision({...source,snapshotRefs:[],state:"DRAFT",operations:source.operations});
+  state.patchLedger.revisions = state.patchLedger.revisions.map((revision) => revision === source ? draft : revision);
+  const submitted = submitWorkspacePatchRevision({state,patchId:draft.patchId,patchRevision:draft.patchRevision,capabilities:["patch.create"]});
+  assert.equal(submitted.patchLedger.revisions.find((revision) => revision.patchId === draft.patchId)?.state, "PENDING_REVIEW");
+  const before = JSON.stringify(state.patchLedger);
+  assert.throws(() => submitWorkspacePatchRevision({state,patchId:draft.patchId,patchRevision:draft.patchRevision,capabilities:[]}), (error:unknown) => error instanceof PatchLedgerError && error.code === "PATCH_PERMISSION_DENIED");
+  assert.equal(JSON.stringify(state.patchLedger), before);
+
+  for (const stale of [
+    buildPatchRevision({...draft,baseRuleSetVersion:"ruleset:stale",operations:draft.operations}),
+    buildPatchRevision({...draft,baseObjectRevision:draft.baseObjectRevision + 1,operations:draft.operations}),
+  ]) {
+    const staleState = structuredClone(state);
+    staleState.patchLedger.revisions = staleState.patchLedger.revisions.map((revision) =>
+      revision.patchId === stale.patchId && revision.patchRevision === stale.patchRevision ? stale : revision);
+    const ledgerBefore = JSON.stringify(staleState.patchLedger);
+    const snapshotsBefore = JSON.stringify(staleState.configurationSnapshots);
+    assert.throws(
+      () => submitWorkspacePatchRevision({
+        state: staleState,
+        patchId: stale.patchId,
+        patchRevision: stale.patchRevision,
+        capabilities: [],
+      }),
+      (error: unknown) => error instanceof PatchLedgerError && error.code === "PATCH_PERMISSION_DENIED",
+    );
+    assert.equal(JSON.stringify(staleState.patchLedger), ledgerBefore);
+    assert.equal(JSON.stringify(staleState.configurationSnapshots), snapshotsBefore);
+    const rebased = submitWorkspacePatchRevision({
+      state: staleState,
+      patchId: stale.patchId,
+      patchRevision: stale.patchRevision,
+      capabilities: ["patch.create"],
+    });
+    const result = rebased.patchLedger.revisions.find((revision) => revision.patchId === stale.patchId && revision.patchRevision === stale.patchRevision);
+    assert.equal(result?.state, "REBASE_REQUIRED");
+    assert.equal(result?.snapshotRefs.join(","), stale.snapshotRefs.join(","));
+    assert.equal(JSON.stringify(staleState.patchLedger), ledgerBefore);
+    assert.equal(JSON.stringify(staleState.configurationSnapshots), snapshotsBefore);
+  }
+
+  for (const rejected of [
+    buildPatchRevision({...draft,state:"PENDING_REVIEW",operations:draft.operations}),
+    buildPatchRevision({...draft,state:"PENDING_REVIEW",baseRuleSetVersion:"ruleset:stale",operations:draft.operations}),
+    buildPatchRevision({...draft,snapshotRefs:["snapshot:frozen"],operations:draft.operations}),
+  ]) {
+    const rejectedState = structuredClone(state);
+    rejectedState.patchLedger.revisions = rejectedState.patchLedger.revisions.map((revision) =>
+      revision.patchId === rejected.patchId && revision.patchRevision === rejected.patchRevision ? rejected : revision);
+    const ledgerBefore = JSON.stringify(rejectedState.patchLedger);
+    const snapshotsBefore = JSON.stringify(rejectedState.configurationSnapshots);
+    assert.throws(
+      () => submitWorkspacePatchRevision({
+        state: rejectedState,
+        patchId: rejected.patchId,
+        patchRevision: rejected.patchRevision,
+        capabilities: ["patch.create"],
+      }),
+      (error: unknown) => error instanceof PatchLedgerError
+        && error.code === (rejected.snapshotRefs.length ? "PATCH_REVISION_IMMUTABLE" : "PATCH_STATE_TRANSITION_INVALID"),
+    );
+    assert.equal(JSON.stringify(rejectedState.patchLedger), ledgerBefore);
+    assert.equal(JSON.stringify(rejectedState.configurationSnapshots), snapshotsBefore);
+  }
+});
+
 test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证据且旧快照不变", () => {
   const state = createSeedState();
   const publishedPolicy = findPublishedPatchOffsetPolicy(state.workspacePolicies);
@@ -783,6 +919,7 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
       parameterDefinitions,
       reviewBatch,
       waivers: publishWaiver.waivers,
+      decisions: [publishWaiver.decision],
     },
     attributeAffixIds: oldSnapshot.attributeAffixIds,
     passiveAffixIds: oldSnapshot.passiveAffixIds,
@@ -842,6 +979,7 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
     snapshotId: "snapshot:open004-v1",
     version: oldSnapshot.version + 1,
   });
+  assert.deepEqual(snapshot.patchValidationWaiverDecisionRefs, [publishWaiver.decision.waiverDecisionId]);
   assert.equal(snapshot.patchOffsetPolicyVersion, publishedPolicy.version);
   assert.equal(snapshot.patchReviewBatchRef, reviewBatch.batchId);
   assert.equal(snapshot.patchSetHash, frozen.patchSetHash);
@@ -906,6 +1044,7 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
       parameterDefinitions,
       patchRevisions,
       waivers: exportWaiver.waivers,
+      decisions: [exportWaiver.decision],
     },
     originalFileHashes: {},
     entries: [{ logicalTable: "item", workbook: "item.xlsx", sheet: "Item", businessKey: model.id, operation: "update" }],
@@ -915,4 +1054,28 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
   assert.deepEqual(manifest.patchValidationWaiverDecisionRefs, [exportWaiver.decision.waiverDecisionId]);
   assert.equal(manifest.environmentId, "online");
   assert.equal(manifest.channelKey, "1001");
+});
+
+test("Patch Waiver 必须由完整且未篡改的 Decision 覆盖", () => {
+  const evaluation = evaluatePatchFinalRanges({ policy: policy(), gate: "PUBLISH", contexts: [context({ finalValue: 13 })] });
+  const approved = createPatchValidationWaiverDecision({
+    issues: evaluation.issues,
+    requested: [{ issueFingerprint: evaluation.issues[0]!.fingerprint!, gate: "PUBLISH" }],
+    policyVersion: policy().version,
+    scopeRef: context().subjectRef,
+    objectInputHash: context().objectInputHash,
+    patchSetHash: context().patchSetHash,
+    reason: "发布例外",
+    approvedBy: "publisher",
+    approvedAt: NOW,
+  });
+  assert.throws(
+    () => assertPatchValidationWaiverDecisionCoverage({ waivers: approved.waivers }),
+    (error: unknown) => error instanceof PatchOffsetPolicyError && error.code === "PATCH_WAIVER_DECISION_EVIDENCE_MISSING",
+  );
+  assert.throws(
+    () => assertPatchValidationWaiverDecisionCoverage({ waivers: approved.waivers, decisions: [{ ...approved.decision, waiverIds: [] }] }),
+    (error: unknown) => error instanceof PatchOffsetPolicyError && error.code === "PATCH_WAIVER_DECISION_EVIDENCE_INVALID",
+  );
+  assert.doesNotThrow(() => assertPatchValidationWaiverDecisionCoverage({ waivers: approved.waivers, decisions: [approved.decision] }));
 });

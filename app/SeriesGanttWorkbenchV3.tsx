@@ -30,6 +30,7 @@ import {
 import { issueClientActionCommand } from "@/lib/client-action-command";
 import { buildSamePartComparison, calculateModelFiveAxisPreview, fiveAxisPlotRatio } from "@/lib/five-axis";
 import { deterministicHash } from "@/lib/rule-kernel";
+import { isActiveValidationIssue, validationIssueLevel } from "@/lib/validation-issues";
 import {
   querySeriesGantt,
   seriesGanttQueryFromSearchParams,
@@ -699,7 +700,7 @@ function ModelDrawer({
             <div className="gantt-guardrails gantt-four-semantics">
               <div><ShieldCheck size={16} /><span>硬兼容</span><strong>{snapshot?.compatibilityReport.allowed ? "通过" : snapshot ? "有阻断" : "待校验"}</strong></div>
               <div><Scale size={16} /><span>Affinity</span><strong>{snapshot ? snapshot.affinityReport.score.toFixed(1) : "—"}</strong></div>
-              <div><CircleDot size={16} /><span>Series 不变量</span><strong>{sku ? (sku.validationSummary.some((issue) => issue.level === "error") ? "有阻断" : "通过") : "不可验证"}</strong></div>
+              <div><CircleDot size={16} /><span>Series 不变量</span><strong>{sku ? (sku.validationSummary.some((issue) => isActiveValidationIssue(issue) && validationIssueLevel(issue) === "error") ? "有阻断" : "通过") : "不可验证"}</strong></div>
               <div><Bot size={16} /><span>AI 建议</span><strong>未启用</strong></div>
             </div>
           </section>

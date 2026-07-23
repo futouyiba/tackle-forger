@@ -169,6 +169,7 @@ export interface ActionCommandPayloadRecord {
   fencingToken?: string;
   idempotencyKey: string;
   payload: JsonObject;
+  commandHash: string;
   payloadHash: string;
   issuedForActorId: string;
   issuedAt: string;
@@ -183,7 +184,8 @@ export interface ActionCommandExecution<T> {
 export interface ActionCommandPayloadStore {
   /**
    * 生产实现必须把签发记录与执行结果持久化，并以唯一约束或事务保证
-   * idempotencyKey 与 payloadRefId 的原子性。内存实现仅供单进程测试。
+   * idempotencyKey 与 payloadRefId 的原子性，并返回唯一约束选出的规范记录。
+   * 内存实现仅供单进程测试。
    */
   findByPayloadRefId(payloadRefId: string): Promise<ActionCommandPayloadRecord | undefined>;
   findIssuedByIdempotencyKey(input: {
@@ -191,7 +193,7 @@ export interface ActionCommandPayloadStore {
     action: ActionCode;
     idempotencyKey: string;
   }): Promise<ActionCommandPayloadRecord | undefined>;
-  saveIssued(record: ActionCommandPayloadRecord): Promise<void>;
+  saveIssued(record: ActionCommandPayloadRecord): Promise<ActionCommandPayloadRecord>;
   executeOnce<T>(input: {
     record: ActionCommandPayloadRecord;
     execute: () => Promise<T>;
@@ -235,23 +237,24 @@ export class InMemoryActionCommandPayloadStore implements ActionCommandPayloadSt
     const existingRef = this.issuedKeys.get(key);
     if (existingRef) {
       const existing = this.records.get(existingRef);
-      if (!existing || existing.payloadHash !== record.payloadHash) {
+      if (!existing || existing.commandHash !== record.commandHash) {
         throw new ActionCommandPayloadError(
           "IDEMPOTENCY_KEY_REUSED",
           "同一幂等键不能签发不同的命令载荷。",
         );
       }
-      return;
+      return structuredClone(existing);
     }
     this.records.set(record.payloadRefId, structuredClone(record));
     this.issuedKeys.set(key, record.payloadRefId);
+    return structuredClone(record);
   }
 
   async executeOnce<T>(input: {
     record: ActionCommandPayloadRecord;
     execute: () => Promise<T>;
   }): Promise<ActionCommandExecution<T>> {
-    const key = input.record.payloadRefId;
+    const key = input.record.commandHash;
     if (this.executionResults.has(key)) {
       return {
         result: structuredClone(this.executionResults.get(key)) as T,
@@ -277,7 +280,8 @@ export class InMemoryActionCommandPayloadStore implements ActionCommandPayloadSt
   }
 }
 
-function payloadHashInput(input: {
+function commandHashInput(input: {
+  schemaVersion: string;
   actionId: string;
   action: ActionCode;
   subjectRef: EntityRef;
@@ -291,7 +295,7 @@ function payloadHashInput(input: {
   expiresAt?: string;
 }) {
   return {
-    schemaVersion: ACTION_COMMAND_PAYLOAD_SCHEMA_VERSION,
+    schemaVersion: input.schemaVersion,
     actionId: input.actionId,
     action: input.action,
     subjectRef: input.subjectRef,
@@ -304,6 +308,58 @@ function payloadHashInput(input: {
     issuedForActorId: input.issuedForActorId,
     expiresAt: input.expiresAt ?? null,
   };
+}
+
+function payloadHashInput(input: {
+  schemaVersion: string;
+  payloadRefId: string;
+  commandHash: string;
+  issuedAt: string;
+}) {
+  return {
+    schemaVersion: input.schemaVersion,
+    payloadRefId: input.payloadRefId,
+    commandHash: input.commandHash,
+    issuedAt: input.issuedAt,
+  };
+}
+
+function assertRecordIntegrity(record: ActionCommandPayloadRecord) {
+  if (record.schemaVersion !== ACTION_COMMAND_PAYLOAD_SCHEMA_VERSION) {
+    throw new ActionCommandPayloadError(
+      "ACTION_COMMAND_PAYLOAD_TAMPERED",
+      "命令载荷 schemaVersion 未知或已被改写。",
+    );
+  }
+  const expectedCommandHash = actionCommandHash(commandHashInput({
+    schemaVersion: record.schemaVersion,
+    actionId: record.actionId,
+    action: record.action,
+    subjectRef: record.subjectRef,
+    expectedRevisionId: record.expectedRevisionId,
+    inputHash: record.inputHash,
+    manifestHash: record.manifestHash,
+    fencingToken: record.fencingToken,
+    idempotencyKey: record.idempotencyKey,
+    payload: record.payload,
+    issuedForActorId: record.issuedForActorId,
+    expiresAt: record.expiresAt,
+  }));
+  const expectedPayloadHash = actionCommandHash(payloadHashInput({
+    schemaVersion: record.schemaVersion,
+    payloadRefId: record.payloadRefId,
+    commandHash: record.commandHash,
+    issuedAt: record.issuedAt,
+  }));
+  if (
+    record.commandHash !== expectedCommandHash
+    || record.payloadHash !== expectedPayloadHash
+  ) {
+    throw new ActionCommandPayloadError(
+      "ACTION_COMMAND_PAYLOAD_TAMPERED",
+      "服务端命令载荷身份或 hash 校验失败。",
+    );
+  }
 }
 
 function toPayloadRef(record: ActionCommandPayloadRecord): ActionCommandPayloadRef {
@@ -381,7 +437,8 @@ export async function issueActionCommandPayload(input: {
     );
   }
   const payload = normalizeJson(input.payload) as JsonObject;
-  const hashInput = payloadHashInput({
+  const commandHash = actionCommandHash(commandHashInput({
+    schemaVersion: ACTION_COMMAND_PAYLOAD_SCHEMA_VERSION,
     actionId: input.actionId,
     action: input.action,
     subjectRef: input.subjectRef,
@@ -393,15 +450,15 @@ export async function issueActionCommandPayload(input: {
     payload,
     issuedForActorId: input.actorId,
     expiresAt: input.expiresAt,
-  });
-  const payloadHash = actionCommandHash(hashInput);
+  }));
   const prior = await input.store.findIssuedByIdempotencyKey({
     actorId: input.actorId,
     action: input.action,
     idempotencyKey: input.idempotencyKey,
   });
   if (prior) {
-    if (prior.payloadHash !== payloadHash) {
+    assertRecordIntegrity(prior);
+    if (prior.commandHash !== commandHash) {
       throw new ActionCommandPayloadError(
         "IDEMPOTENCY_KEY_REUSED",
         "同一幂等键不能签发不同的命令载荷。",
@@ -409,9 +466,17 @@ export async function issueActionCommandPayload(input: {
     }
     return toPayloadRef(prior);
   }
+  const payloadRefId = randomUUID();
+  const issuedAt = now.toISOString();
+  const payloadHash = actionCommandHash(payloadHashInput({
+    schemaVersion: ACTION_COMMAND_PAYLOAD_SCHEMA_VERSION,
+    payloadRefId,
+    commandHash,
+    issuedAt,
+  }));
   const record: ActionCommandPayloadRecord = {
     schemaVersion: ACTION_COMMAND_PAYLOAD_SCHEMA_VERSION,
-    payloadRefId: randomUUID(),
+    payloadRefId,
     actionId: input.actionId,
     action: input.action,
     subjectRef: structuredClone(input.subjectRef),
@@ -419,15 +484,23 @@ export async function issueActionCommandPayload(input: {
     inputHash: input.inputHash,
     idempotencyKey: input.idempotencyKey,
     payload,
+    commandHash,
     payloadHash,
     issuedForActorId: input.actorId,
-    issuedAt: now.toISOString(),
+    issuedAt,
     ...(input.manifestHash ? { manifestHash: input.manifestHash } : {}),
     ...(input.fencingToken ? { fencingToken: input.fencingToken } : {}),
     ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
   };
-  await input.store.saveIssued(record);
-  return toPayloadRef(record);
+  const saved = await input.store.saveIssued(record);
+  assertRecordIntegrity(saved);
+  if (saved.commandHash !== commandHash) {
+    throw new ActionCommandPayloadError(
+      "IDEMPOTENCY_KEY_REUSED",
+      "同一幂等键不能签发不同的命令载荷。",
+    );
+  }
+  return toPayloadRef(saved);
 }
 
 export function parseActionCommandInvocation(value: unknown): {
@@ -485,25 +558,7 @@ export async function executeActionCommandPayload<T>(input: {
       "actionId 与服务端保存的命令不一致。",
     );
   }
-  const expectedHash = actionCommandHash(payloadHashInput({
-    actionId: record.actionId,
-    action: record.action,
-    subjectRef: record.subjectRef,
-    expectedRevisionId: record.expectedRevisionId,
-    inputHash: record.inputHash,
-    manifestHash: record.manifestHash,
-    fencingToken: record.fencingToken,
-    idempotencyKey: record.idempotencyKey,
-    payload: record.payload,
-    issuedForActorId: record.issuedForActorId,
-    expiresAt: record.expiresAt,
-  }));
-  if (record.payloadHash !== expectedHash) {
-    throw new ActionCommandPayloadError(
-      "ACTION_COMMAND_PAYLOAD_TAMPERED",
-      "服务端命令载荷 hash 校验失败。",
-    );
-  }
+  assertRecordIntegrity(record);
   if (record.issuedForActorId !== input.actorId) {
     throw new ActionCommandPayloadError(
       "ACTION_COMMAND_ACTOR_MISMATCH",
@@ -688,7 +743,7 @@ function hasTypedLegacyPayload(action: ActionCode, payload: JsonObject): boolean
       && nonEmptyString(payload.expectedHeadPatchRevision)
       && nonEmptyString(payload.baseObjectRevision);
   }
-  return true;
+  return false;
 }
 
 export async function migrateLegacyActionRecord(input: {

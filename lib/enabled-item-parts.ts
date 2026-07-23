@@ -163,6 +163,16 @@ export function enabledSeriesSkus(
     && isProductItemPartEnabled(sku.projectionMatch.itemPartId));
 }
 
+/** Candidate generation must never preselect retained, disabled sibling SKUs. */
+export function candidateGenerationEligibleSkus(
+  series: SeriesDefinition,
+  skus: readonly SkuDrawer[],
+): SkuDrawer[] {
+  return skus
+    .filter((sku) => isProductSkuChainEnabled(series, sku, skus))
+    .sort((left, right) => left.targetPullKg - right.targetPullKg || left.id.localeCompare(right.id));
+}
+
 export function snapshotItemPartId(snapshot: ConfigurationSnapshot): string | undefined {
   return snapshot.projectionMatch.itemPartId;
 }

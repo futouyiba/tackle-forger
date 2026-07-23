@@ -93,12 +93,10 @@ jobs:
           }
 
           if ($baseSha -match '^0{40}$') {
-            $defaultBranchRef = "origin/$($env:DEFAULT_BRANCH)"
-            $mergeBase = git merge-base $defaultBranchRef $headSha
-            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($mergeBase)) {
-              throw "Unable to determine merge-base for initial push: $defaultBranchRef..$headSha"
+            $baseSha = git merge-base $headSha "origin/$env:DEFAULT_BRANCH"
+            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($baseSha)) {
+              throw "Unable to determine the merge base for the first push"
             }
-            $baseSha = $mergeBase.Trim()
           }
 
           git diff --check $baseSha $headSha

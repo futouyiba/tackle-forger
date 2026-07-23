@@ -30,11 +30,6 @@ import {
 import { buildSamePartComparison, calculateModelFiveAxisPreview, fiveAxisPlotRatio } from "@/lib/five-axis";
 import { deterministicHash } from "@/lib/rule-kernel";
 import {
-  enabledProductItemParts,
-  isProductItemPartEnabled,
-  seriesItemPartId,
-} from "@/lib/enabled-item-parts";
-import {
   querySeriesGantt,
   seriesGanttQueryFromSearchParams,
   seriesGanttQueryToSearchParams,
@@ -55,7 +50,6 @@ import "./series-gantt-v3.css";
 import { CandidateGenerationWorkbench } from "./CandidateGenerationWorkbench";
 import {
   buildProductBreadcrumbView,
-  planProductRouteRecovery,
   ProductDeepLinkUnavailableNotice,
 } from "./product-deep-link-ui";
 
@@ -390,12 +384,13 @@ function componentEntityInput(model: PurchasableModel, itemPartId: string, fishW
 
 function ModelDrawer({
   state,
+  workspaceId,
   model,
   sku,
   series,
   snapshot,
-  breadcrumbs,
   comparisonModelIds,
+  currentEntityType,
   rebaseEnabled,
   rebaseDisabledReason,
   onOpenRebase,
@@ -404,12 +399,13 @@ function ModelDrawer({
   onClose,
 }: {
   state: WorkspaceState;
+  workspaceId: string;
   model: PurchasableModel;
-  sku: SkuDrawer;
-  series: SeriesDefinition;
+  sku?: SkuDrawer;
+  series?: SeriesDefinition;
   snapshot?: ConfigurationSnapshot;
-  breadcrumbs: BreadcrumbItem[];
   comparisonModelIds: string[];
+  currentEntityType: "model" | "configuration_snapshot";
   rebaseEnabled: boolean;
   rebaseDisabledReason?: string;
   onOpenRebase: () => void;
@@ -458,6 +454,19 @@ function ModelDrawer({
       entry.definitionId === activeFiveAxisPreview.fiveAxisDefinitionId &&
       entry.version === activeFiveAxisPreview.fiveAxisDefinitionVersion)
     : undefined;
+  const breadcrumbView = buildProductBreadcrumbView({
+    workspaceId,
+    collection: series?.collectionId
+      ? state.collections.find((entry) => entry.id === series.collectionId)
+      : undefined,
+    series,
+    sku,
+    model,
+    snapshot,
+    currentEntityType,
+  });
+  const breadcrumbs = breadcrumbView.breadcrumbs;
+
   useEffect(() => {
     const previouslyFocused = document.activeElement instanceof HTMLElement
       ? document.activeElement
@@ -543,7 +552,7 @@ function ModelDrawer({
         <div>
           <span className="eyebrow">MODEL · 实际选择 / 购买对象</span>
           <h2>{model.name}</h2>
-          <p>{model.id} · revision {model.revision} · {sku.targetWeightKg} kgf SKU 抽屉</p>
+          <p>{model.id} · revision {model.revision}{sku ? ` · ${sku.targetPullKg} kgf SKU 抽屉` : " · 父级不可见"}</p>
         </div>
         <button ref={closeButtonRef} type="button" onClick={onClose} aria-label="关闭 Model 预览"><X size={18} /></button>
       </header>
@@ -570,6 +579,7 @@ function ModelDrawer({
           </span>
         ))}
       </nav>
+      <ProductDeepLinkUnavailableNotice unavailable={breadcrumbView.unavailable} />
       <div className="gantt-drawer-tabs">
         <button type="button" className={tab === "overview" ? "active" : ""} onClick={() => setTab("overview")}><b>1</b> 常用概览</button>
         <button type="button" className={tab === "five_axis" ? "active" : ""} onClick={() => setTab("five_axis")}><b>2</b> 五维与适配</button>
@@ -585,13 +595,13 @@ function ModelDrawer({
             <small>{tab === "overview" ? "默认只展示策划最常用的信息；完整计算在第 3 层。" : "图形用于比较，硬兼容结论仍由确定性规则单独裁决。"}</small>
           </div>
           <div className="gantt-identity-grid">
-            <div><span>Series</span><strong>{series.name}</strong><small>{series.id} · rev {series.revision}</small></div>
-            <div><span>SKU 抽屉</span><strong>{sku.targetWeightKg} kgf</strong><small>{sku.id} · rev {sku.revision}</small></div>
+            <div><span>Series</span><strong>{series?.name ?? "不可见对象"}</strong><small>{series ? `${series.id} · rev ${series.revision}` : "名称、状态和数量不披露"}</small></div>
+            <div><span>SKU 抽屉</span><strong>{sku ? `${sku.targetPullKg} kgf` : "不可见对象"}</strong><small>{sku ? `${sku.id} · rev ${sku.revision}` : `${model.skuId} · revision unavailable`}</small></div>
             <div><span>Model</span><strong>{model.id}</strong><small>rev {model.revision}</small></div>
             <div><span>ConfigurationSnapshot</span><strong>{snapshot?.id ?? "尚未发布"}</strong><small>{snapshot ? `v${snapshot.version} · ${snapshot.contentHash.slice(0, 10)}` : "没有冻结内容"}</small></div>
           </div>
           <div className={tab === "overview" ? "gantt-quick-facts" : "gantt-layer-hidden"} aria-label="Model 常用要素">
-            <div><span>目标拉力</span><strong>{sku.targetWeightKg} kgf</strong><small>离散 SKU 规格</small></div>
+            <div><span>目标拉力</span><strong>{sku ? `${sku.targetPullKg} kgf` : "不可见"}</strong><small>离散 SKU 规格</small></div>
             <div><span>调性 / 硬度</span><strong>{model.action} / {model.hardness}</strong><small>Model 专属配置</small></div>
             <div><span>长度</span><strong>{model.lengthM} m</strong><small>实际购买型号</small></div>
             <div><span>当前发布面</span><strong>{snapshot ? "已发布 · 已冻结" : "草稿 · 可调整"}</strong><small>{pendingUpgrade ? "另有升级候选" : "旧快照不会被重算"}</small></div>
@@ -774,10 +784,6 @@ export function SeriesGanttWorkbenchV3({
   const [comparisonModelIds, setComparisonModelIds] = useState<string[]>([]);
   const [candidateOpen, setCandidateOpen] = useState(false);
   const [seriesCreateDraft, setSeriesCreateDraft] = useState<SeriesCreateDraft | null>(null);
-  const enabledItemParts = useMemo(
-    () => enabledProductItemParts(state.itemParts),
-    [state.itemParts],
-  );
 
   const blocks = useMemo(() => querySeriesGantt({
     query,
@@ -801,11 +807,8 @@ export function SeriesGanttWorkbenchV3({
     ?? state.seriesDefinitions.find((series) => series.id === blocks[0]?.seriesId);
   const selectedBlock = blocks.find((block) => block.seriesId === selectedSeries?.id);
   const seriesSkus = selectedSeries
-    ? state.skuDrawers.filter((sku) =>
-      sku.seriesId === selectedSeries.id
-      && isProductItemPartEnabled(sku.projectionMatch.itemPartId)
-      && sku.projectionMatch.itemPartId === seriesItemPartId(selectedSeries, state.skuDrawers))
-      .sort((left, right) => left.targetWeightKg - right.targetWeightKg || left.id.localeCompare(right.id))
+    ? state.skuDrawers.filter((sku) => sku.seriesId === selectedSeries.id)
+      .sort((left, right) => left.targetPullKg - right.targetPullKg || left.id.localeCompare(right.id))
     : [];
   const selectedSku = seriesSkus.find((sku) => sku.id === selectedSkuId) ?? seriesSkus[0];
   const models = selectedSku
@@ -840,7 +843,7 @@ export function SeriesGanttWorkbenchV3({
     [blocks],
   );
   const weights = useMemo(
-    () => [...new Set(filterCatalog.flatMap((block) => block.skuNodes.map((node) => node.targetWeightKg)))]
+    () => [...new Set(filterCatalog.flatMap((block) => block.skuNodes.map((node) => node.targetPullKg)))]
       .sort((left, right) => left - right),
     [filterCatalog],
   );
@@ -859,15 +862,15 @@ export function SeriesGanttWorkbenchV3({
   // 真正的状态写只能使用 rebase_patch + 服务端命令载荷引用。
   const rebaseRouteAvailability = openSeriesAvailability;
   const createSeriesAvailability = actionAvailabilities.create_series;
-  const breadcrumbSeries = drawerSeries ?? selectedSeries;
-  const breadcrumbSku = drawerModel ? drawerSku : selectedSku;
-  const breadcrumbView = buildProductBreadcrumbView({
+  const contextBreadcrumbView = buildProductBreadcrumbView({
     workspaceId,
-    collection: breadcrumbSeries?.collectionId
-      ? state.collections.find((entry) => entry.id === breadcrumbSeries.collectionId)
-      : undefined,
-    series: breadcrumbSeries,
-    sku: breadcrumbSku,
+    collection: drawerSeries?.collectionId
+      ? state.collections.find((entry) => entry.id === drawerSeries.collectionId)
+      : selectedSeries?.collectionId
+        ? state.collections.find((entry) => entry.id === selectedSeries.collectionId)
+        : undefined,
+    series: drawerSeries ?? selectedSeries,
+    sku: drawerModel ? drawerSku : selectedSku,
     model: drawerModel,
     snapshot: drawerSnapshotId ? drawerSnapshot : undefined,
     currentEntityType: drawerSnapshotId
@@ -878,8 +881,7 @@ export function SeriesGanttWorkbenchV3({
           ? "sku_drawer"
           : "series",
   });
-  const contextBreadcrumbs = breadcrumbView.breadcrumbs;
-  const displayedDeepLinkUnavailable = deepLink.unavailable ?? breadcrumbView.unavailable;
+  const contextBreadcrumbs = contextBreadcrumbView.breadcrumbs;
   const contextBreadcrumbSignature = JSON.stringify(contextBreadcrumbs);
   const emittedBreadcrumbSignature = useRef("");
 
@@ -891,32 +893,29 @@ export function SeriesGanttWorkbenchV3({
 
   useEffect(() => {
     updateLocation(query, {
-      seriesId: drawerSeries?.id ?? selectedSeries?.id,
-      skuId: drawerSku?.id ?? selectedSku?.id,
+      seriesId: selectedSeries?.id,
+      skuId: selectedSku?.id,
       modelId: drawerModel?.id,
       snapshotId: drawerSnapshotId || undefined,
     });
-  }, [drawerModel?.id, drawerSeries?.id, drawerSku?.id, drawerSnapshotId, query, selectedSeries?.id, selectedSku?.id]);
+  }, [drawerModel?.id, drawerSnapshotId, query, selectedSeries?.id, selectedSku?.id]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
-      const recovery = planProductRouteRecovery(deepLink, {
-        seriesId: selectedSeriesId,
-        skuId: selectedSkuId,
-        modelId: drawerModelId,
-        snapshotId: drawerSnapshotId,
-      });
-      if (!recovery) return;
-      if (recovery.changed) {
-        setSelectedSeriesId(recovery.next.seriesId);
-        setSelectedSkuId(recovery.next.skuId);
-        setDrawerModelId(recovery.next.modelId);
-        setDrawerSnapshotId(recovery.next.snapshotId);
+      if (deepLink.unavailable && !deepLink.snapshot && drawerSnapshotId) {
+        setDrawerSnapshotId("");
+        notify("请求的冻结快照不可见或已不存在，已退回最近可见对象。");
+        return;
       }
-      if (recovery.announcement) notify(recovery.announcement);
+      if (deepLink.unavailable && !deepLink.model && drawerModelId) {
+        setDrawerModelId("");
+        if (deepLink.series) setSelectedSeriesId(deepLink.series.id);
+        if (deepLink.sku) setSelectedSkuId(deepLink.sku.id);
+        notify("请求的 Model 不可见或已不存在，已退回最近可见父级。");
+      }
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [deepLink, drawerModelId, drawerSnapshotId, notify, selectedSeriesId, selectedSkuId]);
+  }, [deepLink, drawerModelId, drawerSnapshotId, notify]);
 
   useEffect(() => {
     const key = "tackle-forger:series-gantt-scroll";
@@ -954,7 +953,7 @@ export function SeriesGanttWorkbenchV3({
 
   const openCreateSeries = () => {
     const method = state.methodProfiles.find((entry) => entry.enabled);
-    const itemPart = enabledItemParts[0];
+    const itemPart = state.itemParts[0];
     const type = state.itemTypeProfiles.find((entry) =>
       entry.enabled && (!method || entry.methodIds.includes(method.id)) &&
       (!itemPart || entry.itemPartIds.includes(itemPart.id)));
@@ -1061,8 +1060,7 @@ export function SeriesGanttWorkbenchV3({
           <button type="button" disabled title="OPEN-006 尚未确认">AI 评估</button>
         </div>
       </section>
-
-      <ProductDeepLinkUnavailableNotice unavailable={displayedDeepLinkUnavailable} />
+      <ProductDeepLinkUnavailableNotice unavailable={contextBreadcrumbView.unavailable} />
 
       <section className="gantt-filter-bar" aria-label="甘特图筛选">
         <span><ListFilter size={15} />筛选</span>
@@ -1071,12 +1069,12 @@ export function SeriesGanttWorkbenchV3({
         <MultiSelectFilter label="类型" values={query.typeIds} options={state.itemTypeProfiles.filter((entry) => entry.enabled).map((entry) => ({ value: entry.id, label: entry.name }))} onChange={(values) => setQuery((current) => ({ ...current, typeIds: values }))} />
         <MultiSelectFilter label="品质" values={query.qualityIds} options={QUALITY_ORDER.map((entry) => ({ value: entry.id, label: `${entry.letter} / ${entry.name}` }))} onChange={(values) => setQuery((current) => ({ ...current, qualityIds: values }))} />
         <MultiSelectFilter label="功能" values={query.functionIds} options={state.functionProfiles.filter((entry) => entry.enabled).map((entry) => ({ value: entry.id, label: entry.name }))} onChange={(values) => setQuery((current) => ({ ...current, functionIds: values }))} />
-        <MultiSelectFilter label="部位" values={query.itemPartIds} options={enabledItemParts.map((entry) => ({ value: entry.id, label: entry.name }))} onChange={(values) => setQuery((current) => ({ ...current, itemPartIds: (values ?? []).filter(isProductItemPartEnabled) }))} />
+        <MultiSelectFilter label="部位" values={query.itemPartIds} options={[...new Set(state.itemTypeProfiles.flatMap((entry) => entry.itemPartIds))].sort().map((value) => ({ value, label: value }))} onChange={(values) => setQuery((current) => ({ ...current, itemPartIds: values }))} />
         <MultiSelectFilter label="生命周期" values={query.lifecycleStates} options={[{ value: "ACTIVE" as const, label: "活跃" }, { value: "DEPRECATED" as const, label: "已废弃" }, { value: "ARCHIVED" as const, label: "已归档" }]} onChange={(values) => setQuery((current) => ({ ...current, lifecycleStates: values }))} />
         <MultiSelectFilter label="注意状态" values={query.attentionStates} options={[{ value: "HAS_UPGRADE_CANDIDATE" as const, label: "升级候选" }, { value: "REBASE_REQUIRED" as const, label: "需要 Rebase" }, { value: "SOURCE_STALE" as const, label: "规则源过期" }, { value: "IMPORT_CONFLICT" as const, label: "导入冲突" }, { value: "EXPORT_RELATION_BROKEN" as const, label: "导出关系断裂" }]} onChange={(values) => setQuery((current) => ({ ...current, attentionStates: values }))} />
         <MultiSelectFilter label="Issue 级别" values={query.issueSeverities} options={[{ value: "BLOCKER" as const, label: "阻断" }, { value: "ERROR" as const, label: "错误" }, { value: "WARNING" as const, label: "警告" }, { value: "INFO" as const, label: "信息" }]} onChange={(values) => setQuery((current) => ({ ...current, issueSeverities: values }))} />
         <MultiSelectFilter label="Issue" values={query.issueCodes} options={issueCodes.map((value) => ({ value, label: value }))} onChange={(values) => setQuery((current) => ({ ...current, issueCodes: values }))} />
-        <MultiSelectFilter label="精确目标拉力" values={query.exactTargetWeightKg} options={weights.map((value) => ({ value, label: `${value} kgf` }))} onChange={(values) => setQuery((current) => ({ ...current, exactTargetWeightKg: values }))} />
+        <MultiSelectFilter label="精确目标拉力" values={query.exactTargetPullKg} options={weights.map((value) => ({ value, label: `${value} kgf` }))} onChange={(values) => setQuery((current) => ({ ...current, exactTargetPullKg: values }))} />
         <MultiSelectFilter label="RuleSet" values={query.ruleSetVersions} options={ruleSetVersions.map((value) => ({ value, label: value }))} onChange={(values) => setQuery((current) => ({ ...current, ruleSetVersions: values }))} />
         <select aria-label="升级候选" value={query.hasUpgradeCandidate === undefined ? "" : query.hasUpgradeCandidate ? "1" : "0"} onChange={(event) => setQuery((current) => ({ ...current, hasUpgradeCandidate: event.target.value === "" ? undefined : event.target.value === "1" }))}>
           <option value="">升级候选：全部</option><option value="1">仅有升级候选</option><option value="0">仅无升级候选</option>
@@ -1108,7 +1106,7 @@ export function SeriesGanttWorkbenchV3({
             const qualityIndex = QUALITY_ORDER.findIndex((quality) => quality.id === block.qualityId);
             const typeIndex = Math.max(0, typeIds.indexOf(block.typeId));
             const column = 2 + Math.max(0, qualityIndex) * Math.max(1, typeIds.length) + typeIndex;
-            const rowIndexes = block.skuNodes.map((sku) => weights.indexOf(sku.targetWeightKg)).filter((index) => index >= 0);
+            const rowIndexes = block.skuNodes.map((sku) => weights.indexOf(sku.targetPullKg)).filter((index) => index >= 0);
             if (!rowIndexes.length) return null;
             const minRow = Math.min(...rowIndexes);
             const maxRow = Math.max(...rowIndexes);
@@ -1117,7 +1115,7 @@ export function SeriesGanttWorkbenchV3({
               <div className={`gantt-series-block ${selectedSeries?.id === block.seriesId ? "selected" : ""}`} key={block.seriesId} style={{ gridColumn: column, gridRow: `${minRow + 1} / ${maxRow + 2}`, "--series-color": color } as React.CSSProperties}>
                 <button type="button" className="gantt-series-select" onClick={() => selectSeries(block.seriesId)}>
                   <strong>{block.name}</strong>
-                  <small>{block.aggregate.skuCount} SKU · {block.aggregate.modelCountMatched}/{block.aggregate.modelCountTotal} Model（命中/总数）</small>
+                  <small>{block.aggregate.skuCount} SKU · {block.aggregate.modelCountMatched} Model</small>
                   <span className={`gantt-primary-state ${block.aggregate.primary.toLowerCase()}`}>{statusText(block.aggregate.primary)}</span>
                   <span className="gantt-secondary-counts">
                     {block.aggregate.hardBlockingCount ? <em>{block.aggregate.hardBlockingCount} 阻断</em> : null}
@@ -1127,10 +1125,10 @@ export function SeriesGanttWorkbenchV3({
                 </button>
                 {block.skuNodes.map((sku) => {
                   const denominator = Math.max(1, maxRow - minRow);
-                  const offset = ((weights.indexOf(sku.targetWeightKg) - minRow) / denominator) * 100;
+                  const offset = ((weights.indexOf(sku.targetPullKg) - minRow) / denominator) * 100;
                   return (
-                    <button type="button" className={`gantt-sku-node ${selectedSku?.id === sku.skuId ? "selected" : ""}`} key={sku.skuId} style={{ top: `calc(${offset}% - 8px)` }} title={`${sku.targetWeightKg} kgf · ${sku.modelIds.length} 个 Model · ${sku.validationIssues.length} Issue`} onClick={() => selectSku(block.seriesId, sku.skuId)}>
-                      <span />{sku.targetWeightKg}<small>{sku.modelIds.length}</small>
+                    <button type="button" className={`gantt-sku-node ${selectedSku?.id === sku.skuId ? "selected" : ""}`} key={sku.skuId} style={{ top: `calc(${offset}% - 8px)` }} title={`${sku.targetPullKg} kgf · ${sku.modelIds.length} 个可见 Model · ${sku.validationIssues.length} Issue`} onClick={() => selectSku(block.seriesId, sku.skuId)}>
+                      <span />{sku.targetPullKg}<small>{sku.modelIds.length}</small>
                     </button>
                   );
                 })}
@@ -1157,7 +1155,7 @@ export function SeriesGanttWorkbenchV3({
             {selectedBlock?.aggregate.attention.map((stateCode) => <span key={stateCode}>{statusText(stateCode)}</span>)}
           </div>
           <div className="gantt-sku-tabs">
-            {seriesSkus.map((sku) => <button type="button" key={sku.id} className={selectedSku?.id === sku.id ? "active" : ""} onClick={() => selectSku(selectedSeries.id, sku.id)}><strong>{sku.targetWeightKg} kgf</strong><span>离散规格 · SKU 抽屉 · {sku.modelIds.length} Model · rev {sku.revision}</span></button>)}
+            {seriesSkus.map((sku) => <button type="button" key={sku.id} className={selectedSku?.id === sku.id ? "active" : ""} onClick={() => selectSku(selectedSeries.id, sku.id)}><strong>{sku.targetPullKg} kgf</strong><span>离散规格 · SKU 抽屉 · {sku.modelIds.length} Model · rev {sku.revision}</span></button>)}
           </div>
           {selectedSku ? (
             <div className="gantt-model-list">
@@ -1194,7 +1192,7 @@ export function SeriesGanttWorkbenchV3({
                 const itemPartId = event.target.value;
                 const type = state.itemTypeProfiles.find((entry) => entry.enabled && entry.itemPartIds.includes(itemPartId) && entry.methodIds.includes(seriesCreateDraft.methodId));
                 setSeriesCreateDraft({ ...seriesCreateDraft, itemPartId, typeId: type?.id ?? "" });
-              }}>{enabledItemParts.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label>
+              }}>{state.itemParts.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label>
               <label><span>钓法</span><select value={seriesCreateDraft.methodId} onChange={(event) => {
                 const methodId = event.target.value;
                 const type = state.itemTypeProfiles.find((entry) => entry.enabled && entry.methodIds.includes(methodId) && entry.itemPartIds.includes(seriesCreateDraft.itemPartId));
@@ -1213,10 +1211,10 @@ export function SeriesGanttWorkbenchV3({
         </div>
       ) : null}
 
-      {drawerModel && drawerSku && drawerSeries ? (
+      {drawerModel ? (
         <>
           <button className="gantt-drawer-backdrop" type="button" aria-label="关闭预览" onClick={() => { setDrawerModelId(""); setDrawerSnapshotId(""); }} />
-          <ModelDrawer state={state} model={drawerModel} sku={drawerSku} series={drawerSeries} snapshot={drawerSnapshot} breadcrumbs={contextBreadcrumbs} comparisonModelIds={comparisonModelIds} rebaseEnabled={rebaseRouteAvailability.enabled} rebaseDisabledReason={rebaseRouteAvailability.disabledReasonText} onToggleCompare={toggleCompare} onOpenSnapshot={setDrawerSnapshotId} onOpenRebase={() => { setDrawerModelId(""); setDrawerSnapshotId(""); onOpenSeries(drawerSeries.id); }} onClose={() => { setDrawerModelId(""); setDrawerSnapshotId(""); }} />
+          <ModelDrawer state={state} workspaceId={workspaceId} model={drawerModel} sku={drawerSku} series={drawerSeries} snapshot={drawerSnapshot} currentEntityType={drawerSnapshotId ? "configuration_snapshot" : "model"} comparisonModelIds={comparisonModelIds} rebaseEnabled={Boolean(drawerSeries) && rebaseRouteAvailability.enabled} rebaseDisabledReason={drawerSeries ? rebaseRouteAvailability.disabledReasonText : "父级 Series 不可见，不能进入 Rebase。"} onToggleCompare={toggleCompare} onOpenSnapshot={setDrawerSnapshotId} onOpenRebase={() => { setDrawerModelId(""); setDrawerSnapshotId(""); if (drawerSeries) onOpenSeries(drawerSeries.id); }} onClose={() => { setDrawerModelId(""); setDrawerSnapshotId(""); }} />
         </>
       ) : null}
       {candidateOpen && selectedSeries ? (

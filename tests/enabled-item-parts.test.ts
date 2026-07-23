@@ -4,6 +4,7 @@ import {
   ITEM_PART_CHAIN_INCONSISTENT_CODE,
   ITEM_PART_NOT_ENABLED_CODE,
   ItemPartNotEnabledError,
+  candidateGenerationEligibleSkus,
   enabledProductItemParts,
   isProductItemPartEnabled,
   isProductSkuChainEnabled,
@@ -18,7 +19,11 @@ import {
   generateModelCandidateRun,
   materializeCandidateRun,
 } from "../lib/model-candidate-generation";
-import { publishConfigurationSnapshot, verifySnapshotIntegrity } from "../lib/publishing";
+import {
+  modelFinalPullKgForSnapshot,
+  publishConfigurationSnapshot,
+  verifySnapshotIntegrity,
+} from "../lib/publishing";
 import { planSnapshotBatch } from "../lib/snapshot-batch";
 import { deterministicHash } from "../lib/rule-kernel";
 import type {
@@ -49,7 +54,7 @@ function candidateFixture() {
     functionIds: [series.coreFunctionId],
     performanceIds: series.performanceProfileId ? [series.performanceProfileId] : [],
     qualityIds: [series.qualityId],
-    targetWeightRangeKg: { min: 0, max: 1000 },
+    targetPullRangeKg: { min: 0, max: 1000 },
     maxCandidates: 5,
     notes: "test",
   };
@@ -94,6 +99,13 @@ function candidateFixture() {
   };
   return { state, series, skus, recipe, variants, request, requestOptions };
 }
+
+test("Snapshot 按部位冻结杆、轮、线的最终拉力", () => {
+  assert.equal(modelFinalPullKgForSnapshot("part:rod", { "杆最大拉力kgf": 3.7 }), 3.7);
+  assert.equal(modelFinalPullKgForSnapshot("part:reel", { "轮最大拉力kgf": 3.7 }), 3.7);
+  assert.equal(modelFinalPullKgForSnapshot("part:line", { "线最大拉力kgf": 3.7 }), 3.7);
+  assert.equal(modelFinalPullKgForSnapshot("part:reel", { "杆最大拉力kgf": 3.7 }), undefined);
+});
 
 test("OPEN-003 fail-closed 策略只启用竿轮线且不信任 activeInGeneration", () => {
   const state = createSeedState();
@@ -330,6 +342,10 @@ test("选中的启用 SKU 不被历史延期兄弟节点阻断，显式选择延
     },
     modelIds: [],
   };
+  assert.deepEqual(
+    candidateGenerationEligibleSkus(current.series, [...current.state.skuDrawers, retainedHookSku]).map((sku) => sku.id),
+    current.state.skuDrawers.filter((sku) => sku.seriesId === current.series.id).map((sku) => sku.id),
+  );
   current.state.skuDrawers.push(retainedHookSku);
 
   const allowedRun = generateModelCandidateRun({

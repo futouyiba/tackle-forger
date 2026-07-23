@@ -14,6 +14,7 @@ import type {
   FormalConfigExportAuthorization,
   FormalConfigExportEvidenceVerifier,
 } from "../lib/config-export-stage";
+import { formalConfigExportContextHash } from "../lib/config-export-stage";
 
 process.env.TACKLE_FORGER_PRODUCT_DELIVERY_STAGE = "PHASE_ONE_POINT_FIVE";
 process.env.TACKLE_FORGER_FORMAL_CONFIG_EXPORT_RUNTIME_ENABLED = "true";
@@ -32,11 +33,12 @@ const FORMAL_AUTHORIZATION: FormalConfigExportAuthorization = {
   protectedRefCasAvailable: true,
 };
 const FORMAL_VERIFIER: FormalConfigExportEvidenceVerifier = {
-  async verify() {
+  async verify(_authorization, context) {
     return {
       verified: true,
       manifestSetHash: "manifest-set:test",
       verifiedAt: "2026-07-23T00:00:00.000Z",
+      contextHash: formalConfigExportContextHash(context),
     };
   },
 };
@@ -85,6 +87,8 @@ enums = []
       relativeWorkbookRoot: "xlsx",
       configTomlPath: "config.toml",
       enabled: true,
+      environmentId: "test",
+      channelKey: "1001",
       mappingId: "mapping:test",
       mappingVersion: "1",
     }],

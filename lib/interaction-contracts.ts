@@ -935,6 +935,8 @@ export interface ExportTargetProfile {
   expectedSchemaHash?: string;
   mappingId?: string;
   mappingVersion?: string;
+  environmentId?: string;
+  channelKey?: string;
 }
 
 export interface ExportPreviewTarget {

@@ -493,7 +493,24 @@ export async function commitBrowserExportFromHandle(input: {
   snapshots: ConfigurationSnapshot[];
   formalAuthorization?: FormalConfigExportAuthorization;
 }): Promise<BrowserRecoveryManifest> {
-  await assertFormalConfigExportAllowed(input.formalAuthorization, undefined);
+  await assertFormalConfigExportAllowed(input.formalAuthorization, undefined, {
+    packageId: input.preview.packageId,
+    profileId: input.binding.bindingId,
+    environmentId: input.binding.environmentId,
+    channelKey: input.binding.channelKey,
+    mappingId: input.preview.mappingId,
+    mappingVersion: input.preview.mappingVersion,
+    snapshots: input.snapshots.map((snapshot) => ({
+      snapshotId: snapshot.id,
+      snapshotHash: snapshot.contentHash,
+    })),
+    operations: input.preview.operations.map((operation) => ({
+      workbook: operation.workbook,
+      targetRef: operation.relativePath,
+      expectedOriginalHash: operation.sourceHash,
+      stagedHash: operation.stagedHash,
+    })),
+  });
   if (!input.snapshots.length) throw new Error("导出提交缺少冻结 ConfigurationSnapshot。");
   for (const snapshot of input.snapshots) {
     assertSnapshotItemPartEnabled(snapshot, "config_export");

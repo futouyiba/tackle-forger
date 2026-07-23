@@ -141,10 +141,17 @@ export function createConfigPreviewPackage(input: {
         `ConfigurationSnapshot ${snapshot.id} 缺少可重放的正式品质或 PricingPolicy 引用；只能下载原样审计归档，不能进入配置预览。`,
       );
     }
-    const exportBlocker = snapshot.validationReport.find(
-      (issue) =>
-        issue.severity === "BLOCKER"
-        && issue.state !== "RESOLVED",
+    const exportBlocker = snapshot.validationReport.find((issue) => {
+      const severity = issue.severity
+        ?? (issue.level === "error" ? "ERROR" : issue.level === "warning" ? "WARNING" : "INFO");
+      if (severity === "BLOCKER") return issue.state !== "RESOLVED";
+      return severity === "ERROR"
+        && issue.gate !== "NONE"
+        && issue.gate !== "REVIEW"
+        && issue.gate !== "PUBLISH"
+        && issue.state !== "RESOLVED"
+        && issue.state !== "WAIVED";
+    },
     );
     if (exportBlocker) {
       throw new ConfigPreviewSnapshotError(

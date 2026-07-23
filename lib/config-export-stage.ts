@@ -1,3 +1,5 @@
+import { deterministicHash } from "./rule-kernel";
+
 export type ProductDeliveryStage = "PHASE_ONE" | "PHASE_ONE_POINT_FIVE";
 
 export interface ConfigExportRuntimePolicy {
@@ -22,17 +24,57 @@ export interface FormalConfigExportAuthorization {
 export interface FormalConfigExportEvidenceVerifier {
   verify(
     authorization: FormalConfigExportAuthorization,
+    context: FormalConfigExportContext,
   ): Promise<
     | {
         verified: true;
         manifestSetHash: string;
         verifiedAt: string;
+        contextHash: string;
       }
     | {
         verified: false;
         reason: string;
       }
   >;
+}
+
+export interface FormalConfigExportContext {
+  packageId: string;
+  profileId: string;
+  environmentId: string;
+  channelKey: string;
+  mappingId: string;
+  mappingVersion: string;
+  snapshots: Array<{
+    snapshotId: string;
+    snapshotHash: string;
+  }>;
+  operations: Array<{
+    workbook: string;
+    targetRef: string;
+    expectedOriginalHash: string;
+    stagedHash: string;
+  }>;
+}
+
+export interface VerifiedFormalConfigExportEvidence {
+  contextHash: string;
+  manifestSetHash: string;
+  verifiedAt: string;
+}
+
+export function formalConfigExportContextHash(
+  context: FormalConfigExportContext,
+): string {
+  return deterministicHash({
+    ...context,
+    snapshots: [...context.snapshots].sort((left, right) =>
+      left.snapshotId.localeCompare(right.snapshotId)),
+    operations: [...context.operations].sort((left, right) =>
+      left.workbook.localeCompare(right.workbook)
+      || left.targetRef.localeCompare(right.targetRef)),
+  });
 }
 
 export class ConfigExportStageError extends Error {
@@ -91,8 +133,9 @@ export function formalConfigExportActionBlock(
 export async function assertFormalConfigExportAllowed(
   authorization: FormalConfigExportAuthorization | undefined,
   verifier: FormalConfigExportEvidenceVerifier | undefined,
+  context: FormalConfigExportContext | undefined,
   policy = readConfigExportRuntimePolicy(),
-): Promise<void> {
+): Promise<VerifiedFormalConfigExportEvidence> {
   const actionBlock = formalConfigExportActionBlock(policy);
   if (actionBlock) {
     throw new ConfigExportStageError(
@@ -144,19 +187,49 @@ export async function assertFormalConfigExportAllowed(
       "服务端尚未安装 ConfigId、目录 Manifest、治理租约与 protected CAS 验证器，禁止正式配置提交。",
     );
   }
-  const verification = await verifier.verify(authorization);
+  if (
+    !context
+    || !context.packageId.trim()
+    || !context.profileId.trim()
+    || !context.environmentId.trim()
+    || !context.channelKey.trim()
+    || !context.mappingId.trim()
+    || !context.mappingVersion.trim()
+    || !context.snapshots.length
+    || !context.operations.length
+    || context.snapshots.some((entry) =>
+      !entry.snapshotId.trim() || !entry.snapshotHash.trim())
+    || context.operations.some((entry) =>
+      !entry.workbook.trim()
+      || !entry.targetRef.trim()
+      || !entry.expectedOriginalHash.trim()
+      || !entry.stagedHash.trim())
+  ) {
+    throw new ConfigExportStageError(
+      "CONFIG_EXPORT_GOVERNANCE_EVIDENCE_MISSING",
+      "正式配置提交缺少包、目标、环境×渠道、Snapshot 或暂存操作上下文。",
+    );
+  }
+  const expectedContextHash = formalConfigExportContextHash(context);
+  const verification = await verifier.verify(authorization, context);
   if (
     !verification.verified
     || !verification.manifestSetHash.trim()
     || !verification.verifiedAt.trim()
+    || verification.contextHash !== expectedContextHash
   ) {
     throw new ConfigExportStageError(
       "CONFIG_EXPORT_GOVERNANCE_EVIDENCE_UNVERIFIED",
       verification.verified
-        ? "服务端治理验证结果缺少 Manifest 集合哈希或验证时间。"
+        ? "服务端治理验证结果缺少 Manifest 集合哈希、验证时间或精确匹配的导出上下文哈希。"
         : `服务端拒绝正式配置治理证据：${verification.reason}`,
     );
   }
+  return {
+    contextHash: verification.contextHash,
+    manifestSetHash: verification.manifestSetHash,
+    verifiedAt: verification.verifiedAt,
+  };
 }
 
 export function assertProductionShapeConfigExportEnabled(

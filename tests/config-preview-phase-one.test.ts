@@ -12,7 +12,9 @@ import {
   assertProductionShapeConfigExportEnabled,
   ConfigExportStageError,
   formalConfigExportActionBlock,
+  formalConfigExportContextHash,
   type FormalConfigExportAuthorization,
+  type FormalConfigExportContext,
   type FormalConfigExportEvidenceVerifier,
 } from "../lib/config-export-stage";
 import { commitExportPackage, type ExportCommitAdapter } from "../lib/config-export";
@@ -37,15 +39,32 @@ const FORMAL_AUTHORIZATION: FormalConfigExportAuthorization = {
 };
 
 const FORMAL_VERIFIER: FormalConfigExportEvidenceVerifier = {
-  async verify(authorization) {
+  async verify(authorization, context) {
     return authorization === FORMAL_AUTHORIZATION
       ? {
           verified: true,
           manifestSetHash: "manifest-set:test",
           verifiedAt: "2026-07-23T00:00:00.000Z",
+          contextHash: formalConfigExportContextHash(context),
         }
       : { verified: false, reason: "unknown authorization" };
   },
+};
+
+const FORMAL_CONTEXT: FormalConfigExportContext = {
+  packageId: "preview:test",
+  profileId: "dev",
+  environmentId: "dev",
+  channelKey: "1001",
+  mappingId: "mapping:test",
+  mappingVersion: "1",
+  snapshots: [{ snapshotId: "snapshot:test", snapshotHash: "snapshot-hash" }],
+  operations: [{
+    workbook: "production.xlsx",
+    targetRef: "target",
+    expectedOriginalHash: "before",
+    stagedHash: "staged-hash",
+  }],
 };
 
 function replayableSnapshot(): ConfigurationSnapshot {
@@ -160,7 +179,7 @@ test("一期服务端阶段门禁优先于 Capability，PHASE_ONE 能力集不�
 
 test("1.5 期骨架只有阶段、运行时和服务端验证同时具备才开放", async () => {
   await assert.rejects(
-    () => assertFormalConfigExportAllowed(FORMAL_AUTHORIZATION, FORMAL_VERIFIER, {
+    () => assertFormalConfigExportAllowed(FORMAL_AUTHORIZATION, FORMAL_VERIFIER, FORMAL_CONTEXT, {
       stage: "PHASE_ONE",
       formalExportRuntimeEnabled: true,
     }),
@@ -168,7 +187,7 @@ test("1.5 期骨架只有阶段、运行时和服务端验证同时具备才开�
       && error.code === "CONFIG_EXPORT_PHASE_DISABLED",
   );
   await assert.rejects(
-    () => assertFormalConfigExportAllowed(FORMAL_AUTHORIZATION, FORMAL_VERIFIER, {
+    () => assertFormalConfigExportAllowed(FORMAL_AUTHORIZATION, FORMAL_VERIFIER, FORMAL_CONTEXT, {
       stage: "PHASE_ONE_POINT_FIVE",
       formalExportRuntimeEnabled: false,
     }),
@@ -176,7 +195,7 @@ test("1.5 期骨架只有阶段、运行时和服务端验证同时具备才开�
       && error.code === "CONFIG_EXPORT_RUNTIME_NOT_READY",
   );
   await assert.rejects(
-    () => assertFormalConfigExportAllowed(undefined, FORMAL_VERIFIER, {
+    () => assertFormalConfigExportAllowed(undefined, FORMAL_VERIFIER, FORMAL_CONTEXT, {
       stage: "PHASE_ONE_POINT_FIVE",
       formalExportRuntimeEnabled: true,
     }),
@@ -187,7 +206,7 @@ test("1.5 期骨架只有阶段、运行时和服务端验证同时具备才开�
     () => assertFormalConfigExportAllowed({
       ...FORMAL_AUTHORIZATION,
       configIdBundleId: "",
-    }, FORMAL_VERIFIER, {
+    }, FORMAL_VERIFIER, FORMAL_CONTEXT, {
       stage: "PHASE_ONE_POINT_FIVE",
       formalExportRuntimeEnabled: true,
     }),
@@ -198,7 +217,7 @@ test("1.5 期骨架只有阶段、运行时和服务端验证同时具备才开�
     () => assertFormalConfigExportAllowed({
       ...FORMAL_AUTHORIZATION,
       governanceLeaseId: "",
-    }, FORMAL_VERIFIER, {
+    }, FORMAL_VERIFIER, FORMAL_CONTEXT, {
       stage: "PHASE_ONE_POINT_FIVE",
       formalExportRuntimeEnabled: true,
     }),
@@ -206,7 +225,7 @@ test("1.5 期骨架只有阶段、运行时和服务端验证同时具备才开�
       && error.code === "CONFIG_EXPORT_GOVERNANCE_EVIDENCE_MISSING",
   );
   await assert.rejects(
-    () => assertFormalConfigExportAllowed(FORMAL_AUTHORIZATION, undefined, {
+    () => assertFormalConfigExportAllowed(FORMAL_AUTHORIZATION, undefined, FORMAL_CONTEXT, {
       stage: "PHASE_ONE_POINT_FIVE",
       formalExportRuntimeEnabled: true,
     }),
@@ -217,6 +236,29 @@ test("1.5 期骨架只有阶段、运行时和服务端验证同时具备才开�
     () => assertFormalConfigExportAllowed(
       FORMAL_AUTHORIZATION,
       { async verify() { return { verified: false, reason: "stale lease" }; } },
+      FORMAL_CONTEXT,
+      {
+        stage: "PHASE_ONE_POINT_FIVE",
+        formalExportRuntimeEnabled: true,
+      },
+    ),
+    (error) => error instanceof ConfigExportStageError
+      && error.code === "CONFIG_EXPORT_GOVERNANCE_EVIDENCE_UNVERIFIED",
+  );
+  await assert.rejects(
+    () => assertFormalConfigExportAllowed(
+      FORMAL_AUTHORIZATION,
+      {
+        async verify() {
+          return {
+            verified: true,
+            manifestSetHash: "manifest-set:test",
+            verifiedAt: "2026-07-23T00:00:00.000Z",
+            contextHash: "wrong-context",
+          };
+        },
+      },
+      FORMAL_CONTEXT,
       {
         stage: "PHASE_ONE_POINT_FIVE",
         formalExportRuntimeEnabled: true,
@@ -228,6 +270,7 @@ test("1.5 期骨架只有阶段、运行时和服务端验证同时具备才开�
   await assert.doesNotReject(() => assertFormalConfigExportAllowed(
     FORMAL_AUTHORIZATION,
     FORMAL_VERIFIER,
+    FORMAL_CONTEXT,
     {
       stage: "PHASE_ONE_POINT_FIVE",
       formalExportRuntimeEnabled: true,
@@ -261,10 +304,17 @@ test("直接调用底层 commit_config_export 在一期无任何文件副作用"
           stagedPath: "staged",
           targetPath: "target",
           expectedOriginalHash: "before",
+          stagedHash: "staged-hash",
         }],
         adapter,
         formalAuthorization: FORMAL_AUTHORIZATION,
         formalAuthorizationVerifier: FORMAL_VERIFIER,
+        formalTargetContext: {
+          environmentId: FORMAL_CONTEXT.environmentId,
+          channelKey: FORMAL_CONTEXT.channelKey,
+          mappingId: FORMAL_CONTEXT.mappingId,
+          mappingVersion: FORMAL_CONTEXT.mappingVersion,
+        },
       }),
       (error) => error instanceof ConfigExportStageError
         && error.code === "CONFIG_EXPORT_PHASE_DISABLED",
@@ -278,6 +328,49 @@ test("直接调用底层 commit_config_export 在一期无任何文件副作用"
     } else {
       process.env.TACKLE_FORGER_FORMAL_CONFIG_EXPORT_RUNTIME_ENABLED = previousRuntime;
     }
+  }
+});
+
+test("配置预览阻断未解决 EXPORT ERROR、BLOCKER 和旧 level:error", () => {
+  const cases: Array<ConfigurationSnapshot["validationReport"][number]> = [
+    {
+      level: "error",
+      severity: "ERROR",
+      gate: "EXPORT",
+      state: "OPEN",
+      code: "EXPORT_POLICY_ERROR",
+      message: "export error",
+    },
+    {
+      level: "error",
+      severity: "BLOCKER",
+      gate: "EXPORT",
+      state: "WAIVED",
+      code: "EXPORT_BLOCKER",
+      message: "blocker cannot be waived",
+    },
+    {
+      level: "error",
+      code: "LEGACY_EXPORT_ERROR",
+      message: "legacy error",
+    },
+  ];
+  for (const issue of cases) {
+    const snapshot = replayableSnapshot();
+    snapshot.validationReport = [issue];
+    const content = structuredClone(snapshot);
+    Reflect.deleteProperty(content, "contentHash");
+    snapshot.contentHash = deterministicHash(content);
+    assert.throws(
+      () => createConfigPreviewPackage({
+        packageId: `preview:${issue.code}`,
+        workspaceId: "workspace:test",
+        snapshots: [snapshot],
+      }),
+      (error) => error instanceof Error
+        && "code" in error
+        && error.code === "SNAPSHOT_EXPORT_BLOCKED",
+    );
   }
 });
 

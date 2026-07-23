@@ -39,6 +39,7 @@ import {
   assertFormalConfigExportAllowed,
   assertProductionShapeConfigExportEnabled,
   type FormalConfigExportAuthorization,
+  type FormalConfigExportContext,
   type FormalConfigExportEvidenceVerifier,
 } from "./config-export-stage";
 
@@ -367,9 +368,28 @@ export async function commitFilesystemExport(input: {
   formalAuthorizationVerifier?: FormalConfigExportEvidenceVerifier;
   audit?: ExportCommitResult["audit"];
 }): Promise<ExportCommitResult> {
+  const formalExportContext: FormalConfigExportContext = {
+    packageId: input.preview.packageId,
+    profileId: input.preview.profileId,
+    environmentId: input.profile.environmentId ?? "",
+    channelKey: input.profile.channelKey ?? "",
+    mappingId: input.preview.mappingId,
+    mappingVersion: input.preview.mappingVersion,
+    snapshots: [{
+      snapshotId: input.snapshot.id,
+      snapshotHash: input.snapshot.contentHash,
+    }],
+    operations: input.preview.operations.map((operation) => ({
+      workbook: operation.workbook,
+      targetRef: operation.targetPath,
+      expectedOriginalHash: operation.expectedOriginalHash,
+      stagedHash: operation.stagedHash,
+    })),
+  };
   await assertFormalConfigExportAllowed(
     input.formalAuthorization,
     input.formalAuthorizationVerifier,
+    formalExportContext,
   );
   assertSnapshotItemPartEnabled(input.snapshot, "config_export");
   if (!verifySnapshotIntegrity(input.snapshot)) {
@@ -486,6 +506,12 @@ export async function commitFilesystemExport(input: {
       adapter,
       formalAuthorization: input.formalAuthorization,
       formalAuthorizationVerifier: input.formalAuthorizationVerifier,
+      formalTargetContext: {
+        environmentId: formalExportContext.environmentId,
+        channelKey: formalExportContext.channelKey,
+        mappingId: formalExportContext.mappingId,
+        mappingVersion: formalExportContext.mappingVersion,
+      },
       audit: input.audit,
     });
   } finally {

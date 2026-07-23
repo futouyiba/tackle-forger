@@ -10,8 +10,10 @@ import { deterministicHash } from "../lib/rule-kernel";
 import { createSeedState } from "../lib/seed";
 import type {
   FormalConfigExportAuthorization,
+  FormalConfigExportContext,
   FormalConfigExportEvidenceVerifier,
 } from "../lib/config-export-stage";
+import { formalConfigExportContextHash } from "../lib/config-export-stage";
 
 process.env.TACKLE_FORGER_PRODUCT_DELIVERY_STAGE = "PHASE_ONE_POINT_FIVE";
 process.env.TACKLE_FORGER_FORMAL_CONFIG_EXPORT_RUNTIME_ENABLED = "true";
@@ -30,11 +32,12 @@ const FORMAL_AUTHORIZATION: FormalConfigExportAuthorization = {
   protectedRefCasAvailable: true,
 };
 const FORMAL_VERIFIER: FormalConfigExportEvidenceVerifier = {
-  async verify() {
+  async verify(_authorization, context) {
     return {
       verified: true,
       manifestSetHash: "manifest-set:test",
       verifiedAt: "2026-07-23T00:00:00.000Z",
+      contextHash: formalConfigExportContextHash(context),
     };
   },
 };
@@ -141,21 +144,61 @@ const operations = ["tackle.xlsx", "item.xlsx", "store.xlsx"].map((workbook) => 
   stagedPath: "staged/" + workbook,
   targetPath: "target/" + workbook,
   expectedOriginalHash: "before",
+  stagedHash: `staged-hash:${workbook}`,
 }));
+
+function formalContext(
+  snapshot: ReturnType<typeof exportSnapshot>,
+  packageId: string,
+): FormalConfigExportContext {
+  return {
+    packageId,
+    profileId: "dev",
+    environmentId: "dev",
+    channelKey: "1001",
+    mappingId: "mapping:test",
+    mappingVersion: "1",
+    snapshots: [{
+      snapshotId: snapshot.id,
+      snapshotHash: snapshot.contentHash,
+    }],
+    operations: operations.map((operation) => ({
+      workbook: operation.workbook,
+      targetRef: operation.targetPath,
+      expectedOriginalHash: operation.expectedOriginalHash,
+      stagedHash: operation.stagedHash,
+    })),
+  };
+}
+
+function formalTargetContext(channelKey = "1001") {
+  return {
+    environmentId: "dev",
+    channelKey,
+    mappingId: "mapping:test",
+    mappingVersion: "1",
+  };
+}
 
 test("三表替换到第二张失败时回滚第一张且不替换第三张", async () => {
   const io = adapter("item.xlsx");
+  const snapshot = exportSnapshot();
   const result = await commitExportPackage({
     profileId: "dev",
     packageId: "package:1",
-    snapshots: [exportSnapshot()],
+    snapshots: [snapshot],
     idempotencyKey: "key:1",
     operations,
     adapter: io,
     formalAuthorization: FORMAL_AUTHORIZATION,
     formalAuthorizationVerifier: FORMAL_VERIFIER,
+    formalTargetContext: formalTargetContext(),
   });
   assert.equal(result.status, "failed");
+  assert.equal(
+    result.formalEvidence.contextHash,
+    formalConfigExportContextHash(formalContext(snapshot, "package:1")),
+  );
   assert.deepEqual(io.replaced, ["tackle.xlsx"]);
   assert.deepEqual(io.restored, ["tackle.xlsx"]);
   assert.deepEqual(result.rolledBackWorkbooks, ["tackle.xlsx"]);
@@ -163,42 +206,83 @@ test("三表替换到第二张失败时回滚第一张且不替换第三张", as
 
 test("导出提交使用幂等键，相同提交不重复插入或替换", async () => {
   const io = adapter();
+  const snapshot = exportSnapshot();
   const first = await commitExportPackage({
     profileId: "dev",
     packageId: "package:1",
-    snapshots: [exportSnapshot()],
+    snapshots: [snapshot],
     idempotencyKey: "key:same",
     operations,
     adapter: io,
     formalAuthorization: FORMAL_AUTHORIZATION,
     formalAuthorizationVerifier: FORMAL_VERIFIER,
+    formalTargetContext: formalTargetContext(),
   });
   const second = await commitExportPackage({
     profileId: "dev",
     packageId: "package:1",
-    snapshots: [exportSnapshot()],
+    snapshots: [snapshot],
     idempotencyKey: "key:same",
     operations,
     adapter: io,
     formalAuthorization: FORMAL_AUTHORIZATION,
     formalAuthorizationVerifier: FORMAL_VERIFIER,
+    formalTargetContext: formalTargetContext(),
   });
   assert.equal(first.status, "committed");
   assert.deepEqual(second, first);
   assert.deepEqual(io.replaced, ["tackle.xlsx", "item.xlsx", "store.xlsx"]);
 });
 
+test("幂等恢复冻结正式上下文 hash，不允许换目标重放治理证据", async () => {
+  const io = adapter();
+  const snapshot = exportSnapshot();
+  const context = formalContext(snapshot, "package:context");
+  const first = await commitExportPackage({
+    profileId: "dev",
+    packageId: "package:context",
+    snapshots: [snapshot],
+    idempotencyKey: "key:context",
+    operations,
+    adapter: io,
+    formalAuthorization: FORMAL_AUTHORIZATION,
+    formalAuthorizationVerifier: FORMAL_VERIFIER,
+    formalTargetContext: formalTargetContext(),
+  });
+  assert.equal(
+    first.formalEvidence.contextHash,
+    formalConfigExportContextHash(context),
+  );
+  await assert.rejects(
+    () => commitExportPackage({
+      profileId: "dev",
+      packageId: "package:context",
+      snapshots: [snapshot],
+      idempotencyKey: "key:context",
+      operations,
+      adapter: io,
+      formalAuthorization: FORMAL_AUTHORIZATION,
+      formalAuthorizationVerifier: FORMAL_VERIFIER,
+      formalTargetContext: formalTargetContext("2001"),
+    }),
+    /相同幂等键绑定了不同正式导出上下文/,
+  );
+  assert.deepEqual(io.replaced, ["tackle.xlsx", "item.xlsx", "store.xlsx"]);
+});
+
 test("扩展部位提交在任何备份或文件替换前返回稳定错误", async () => {
   const io = adapter();
+  const snapshot = exportSnapshot("part:hook");
   await assert.rejects(() => commitExportPackage({
     profileId: "dev",
     packageId: "package:hook",
-    snapshots: [exportSnapshot("part:hook")],
+    snapshots: [snapshot],
     idempotencyKey: "key:hook",
     operations,
     adapter: io,
     formalAuthorization: FORMAL_AUTHORIZATION,
     formalAuthorizationVerifier: FORMAL_VERIFIER,
+    formalTargetContext: formalTargetContext(),
   }), (error) => (
     error instanceof Error
     && "code" in error

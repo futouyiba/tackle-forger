@@ -24,7 +24,9 @@ import {
 import {
   assertFormalConfigExportAllowed,
   type FormalConfigExportAuthorization,
+  type FormalConfigExportContext,
   type FormalConfigExportEvidenceVerifier,
+  type VerifiedFormalConfigExportEvidence,
 } from "./config-export-stage";
 export type { ConfigExportMapping } from "./config-export-mapping";
 
@@ -337,6 +339,7 @@ export interface ExportFileOperation {
   stagedPath: string;
   targetPath: string;
   expectedOriginalHash: string;
+  stagedHash: string;
 }
 
 export interface ExportCommitAdapter {
@@ -356,6 +359,7 @@ export interface ExportCommitResult {
   rolledBackWorkbooks: string[];
   newHashes: Record<string, string>;
   issues: ValidationIssue[];
+  formalEvidence: VerifiedFormalConfigExportEvidence;
   audit?: {
     workspaceId: string;
     userId: string;
@@ -372,11 +376,31 @@ export async function commitExportPackage(input: {
   adapter: ExportCommitAdapter;
   formalAuthorization?: FormalConfigExportAuthorization;
   formalAuthorizationVerifier?: FormalConfigExportEvidenceVerifier;
+  formalTargetContext: Pick<
+    FormalConfigExportContext,
+    "environmentId" | "channelKey" | "mappingId" | "mappingVersion"
+  >;
   audit?: ExportCommitResult["audit"];
 }): Promise<ExportCommitResult> {
-  await assertFormalConfigExportAllowed(
+  const formalExportContext: FormalConfigExportContext = {
+    packageId: input.packageId,
+    profileId: input.profileId,
+    ...input.formalTargetContext,
+    snapshots: input.snapshots.map((snapshot) => ({
+      snapshotId: snapshot.id,
+      snapshotHash: snapshot.contentHash,
+    })),
+    operations: input.operations.map((operation) => ({
+      workbook: operation.workbook,
+      targetRef: operation.targetPath,
+      expectedOriginalHash: operation.expectedOriginalHash,
+      stagedHash: operation.stagedHash,
+    })),
+  };
+  const formalEvidence = await assertFormalConfigExportAllowed(
     input.formalAuthorization,
     input.formalAuthorizationVerifier,
+    formalExportContext,
   );
   if (!input.snapshots.length) throw new Error("导出提交缺少冻结 ConfigurationSnapshot。");
   for (const snapshot of input.snapshots) {
@@ -386,7 +410,12 @@ export async function commitExportPackage(input: {
     }
   }
   const previous = await input.adapter.findCommittedResult(input.idempotencyKey);
-  if (previous) return structuredClone(previous);
+  if (previous) {
+    if (previous.formalEvidence.contextHash !== formalEvidence.contextHash) {
+      throw new Error("相同幂等键绑定了不同正式导出上下文，拒绝恢复旧提交结果。");
+    }
+    return structuredClone(previous);
+  }
 
   const conflictIssues: ValidationIssue[] = [];
   for (const operation of input.operations) {
@@ -409,6 +438,7 @@ export async function commitExportPackage(input: {
       rolledBackWorkbooks: [],
       newHashes: {},
       issues: conflictIssues,
+      formalEvidence,
       ...(input.audit ? { audit: input.audit } : {}),
     };
   }
@@ -439,6 +469,7 @@ export async function commitExportPackage(input: {
       rolledBackWorkbooks: [],
       newHashes,
       issues: [],
+      formalEvidence,
       ...(input.audit ? { audit: input.audit } : {}),
     };
     await input.adapter.recordCommittedResult(input.idempotencyKey, result);
@@ -476,6 +507,7 @@ export async function commitExportPackage(input: {
         },
         ...rollbackIssues,
       ],
+      formalEvidence,
       ...(input.audit ? { audit: input.audit } : {}),
     };
   }

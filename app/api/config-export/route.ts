@@ -50,7 +50,7 @@ export async function POST(request: NextRequest) {
       );
     }
     try {
-      await assertFormalConfigExportAllowed(body.formalAuthorization, undefined);
+      await assertFormalConfigExportAllowed(body.formalAuthorization, undefined, undefined);
     } catch (error) {
       if (error instanceof ConfigExportStageError) {
         return NextResponse.json(

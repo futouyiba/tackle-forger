@@ -29,6 +29,7 @@
 | [`config-export-mapping-guide.md`](./config-export-mapping-guide.md) | 配置映射契约 | 记录`config.toml`、workbook/sheet、枚举引用、环境/渠道目录和恢复型写入边界；从属于v3第25节，示例ID不是生产策略 |
 | [`deployment/r730-production.md`](./deployment/r730-production.md) | 生产运行手册 | Dell R730部署、持久化、备份、验收与回滚；明确一期全量保留且不做归档/裁剪，二期再验证用户一键保存到工作PC及后续裁剪门槛，不定义领域规则 |
 | [`audits/aud-009-workspace-revision-retention-adr.md`](./audits/aud-009-workspace-revision-retention-adr.md) | `ACCEPTED`正式决策 | 记录工作区revision分层保留政策、方案比较、容量证据和分期边界；一期不实现归档/裁剪，二期优先验证由数值/系统策划主动保存到工作PC，文档接受不表示裁剪已获准启用 |
+| [`audits/aud-026-part-constraint-semantics-adr.md`](./audits/aud-026-part-constraint-semantics-adr.md) | `ACCEPTED`正式决策 | 记录分部位约束、候选搜索、版本化组件引用、旧数据复核与Snapshot冻结语义；实现由Issue #49及后续独立Issue跟踪 |
 | [`deployment/feishu-enterprise-login.md`](./deployment/feishu-enterprise-login.md) | 身份运行手册 | 飞书OAuth、会话和代理安全边界；不替代Capability契约 |
 
 这些文档的维护顺序是：先修订v3中的产品/领域结论，再同步正式决策、UI与handoff，再更新映射/运行手册，最后用差距矩阵记录实际实现和验证证据。差距矩阵中的“已实现”必须能定位到当前代码/测试；发现并存旧契约时标记“部分实现”，不能用计划中的目标契约冒充实现事实。
@@ -67,6 +68,7 @@
 - [`audits/current-state-review-follow-up-2026-07-22.md`](./audits/current-state-review-follow-up-2026-07-22.md)：对首轮快照的去重复核、当前工作区差异与新增问题映射。
 - [`audits/remote-branches-review-2026-07-22.md`](./audits/remote-branches-review-2026-07-22.md)：拉取全部远端分支后的修复复审、测试证据及问题状态变化。
 - [`audits/engineering-issue-register.md`](./audits/engineering-issue-register.md)：GitHub迁移前的历史工程问题台账快照；不再维护活动状态。
+- [`audits/aud-005-architecture-decision-proposal.md`](./audits/aud-005-architecture-decision-proposal.md)：根Vinext v3、历史workspace与legacy产品入口的已接受收敛边界；AUD-026语义已确认但实现仍独立开放。
 - [`audits/open-007-pricing-semantics-adr.md`](./audits/open-007-pricing-semantics-adr.md)：已批准的价值分、派生性能定位、S=100、双输出舍入、购买最低价与超限二次确认语义；运行时落实由GitHub [#9](https://github.com/futouyiba/tackle-forger/issues/9)跟踪。
 
 修复提交应引用对应GitHub Issue，并在PR中记录提交SHA、验证命令和测试证据。历史审查快照原则上不改写；新的决策或验证证据使用ADR/补充快照，活动状态只更新GitHub。

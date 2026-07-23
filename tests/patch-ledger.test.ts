@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { analyzePatchPatterns, assessPatchAbsorption, appendPatchRevision, beginPatchMirrorSync, buildPatchRevision, createRuleSourceChangeDraft, emptyPatchLedger, migratePatchLedger, orderedPatchReferences, PatchLedgerError, projectionPatchViewFromLedger, reconcilePatchMirrorPull, recordPatchMirrorResult, rebasePatchRevision, replayPatchRevision, resolvePatchRevision, reviewPatchRevision, updatePatchMirrorSuggestion } from "../lib/patch-ledger";
-import { migrateWorkspaceState } from "../lib/migrations";
+import { analyzePatchPatterns, assessPatchAbsorption, appendPatchRevision, beginPatchMirrorSync, buildPatchRevision, createRuleSourceChangeDraft, emptyPatchLedger, importLegacyPatchesToLedger, migratePatchLedger, orderedPatchReferences, PatchLedgerError, projectionPatchViewFromLedger, reconcilePatchMirrorPull, recordPatchMirrorResult, rebasePatchRevision, replayPatchRevision, resolvePatchRevision, reviewPatchRevision, submitPatchRevision, updatePatchMirrorSuggestion } from "../lib/patch-ledger";
+import { CURRENT_WORKSPACE_SCHEMA_VERSION, migrateWorkspaceState } from "../lib/migrations";
 import { createSeedState } from "../lib/seed";
 
 const now = "2026-07-22T00:00:00.000Z";
@@ -37,13 +37,77 @@ test("stable ID survives rename, baseline changes rebase, missing ID is orphaned
   assert.equal(resolvePatchRevision({revision:r,existingSubjectIds:["model:rod:1"],currentRuleSetVersion:"ruleset:2",currentObjectRevision:3}).state,"REBASE_REQUIRED");
   const orphan=resolvePatchRevision({revision:r,existingSubjectIds:["model:same-name"],currentRuleSetVersion:"ruleset:1",currentObjectRevision:3});
   assert.deepEqual(orphan.attentionStates,["ORPHANED"]); assert.equal(orphan.subjectEntityId,"model:rod:1");
+  assert.equal(resolvePatchRevision({revision:makeRevision({state:"DRAFT"}),existingSubjectIds:["model:rod:1"],currentRuleSetVersion:"ruleset:2",currentObjectRevision:3}).state,"REBASE_REQUIRED");
 });
 test("review permission is separate and snapshot referenced revision is immutable", () => {
-  const ledger: ReturnType<typeof emptyPatchLedger>={...emptyPatchLedger(),revisions:[makeRevision()]};
+  const ledger: ReturnType<typeof emptyPatchLedger>={...emptyPatchLedger(),revisions:[makeRevision({state:"PENDING_REVIEW"})]};
   assert.throws(()=>reviewPatchRevision({ledger,patchId:"patch:rod:1",patchRevision:1,nextState:"APPROVED",reviewer:"x",reviewedAt:now,capabilities:[]}), (e:unknown)=>e instanceof PatchLedgerError&&e.code==="PATCH_PERMISSION_DENIED");
   const frozen={...ledger,revisions:[{...ledger.revisions[0],snapshotRefs:["snapshot:1"]}]};
   assert.throws(()=>reviewPatchRevision({ledger:frozen,patchId:"patch:rod:1",patchRevision:1,nextState:"APPROVED",reviewer:"x",reviewedAt:now,capabilities:["patch.review"]}), (e:unknown)=>e instanceof PatchLedgerError&&e.code==="PATCH_REVISION_IMMUTABLE");
   assert.throws(()=>reviewPatchRevision({ledger,patchId:"patch:rod:1",patchRevision:1,nextState:"APPROVED",reviewer:"x",reviewedAt:now,capabilities:["patch.review"]}), (e:unknown)=>e instanceof PatchLedgerError&&e.code==="PATCH_OFFSET_POLICY_MISSING");
+});
+test("PatchLedger 写路径统一拒绝 APPROVED、ACTIVE 与终态撤回且不改写 revision", () => {
+  const rejectedStates = ["APPROVED", "ACTIVE", "REBASE_REQUIRED", "ABSORBED", "PARTIALLY_ABSORBED", "WITHDRAWN", "SUPERSEDED"] as const;
+  for (const state of rejectedStates) {
+    const revision = makeRevision({ state });
+    const ledger = { ...emptyPatchLedger(), revisions: [revision] };
+    const before = structuredClone(ledger);
+    assert.throws(
+      () => reviewPatchRevision({
+        ledger,
+        patchId: revision.patchId,
+        patchRevision: revision.patchRevision,
+        nextState: "WITHDRAWN",
+        reviewer: "reviewer",
+        reviewedAt: now,
+        capabilities: ["patch.review"],
+      }),
+      (error: unknown) => error instanceof PatchLedgerError && error.code === "PATCH_STATE_TRANSITION_INVALID",
+    );
+    assert.deepEqual(ledger, before);
+    assert.equal(ledger.revisions[0].revisionHash, revision.revisionHash);
+  }
+});
+test("PatchLedger 只允许 DRAFT 或 PENDING_REVIEW 撤回", () => {
+  for (const state of ["DRAFT", "PENDING_REVIEW"] as const) {
+    const revision = makeRevision({ state });
+    const ledger = { ...emptyPatchLedger(), revisions: [revision] };
+    const result = reviewPatchRevision({
+      ledger,
+      patchId: revision.patchId,
+      patchRevision: revision.patchRevision,
+      nextState: "WITHDRAWN",
+      reviewer: "reviewer",
+      reviewedAt: now,
+      capabilities: ["patch.review"],
+    });
+    assert.equal(result.revisions[0].state, "WITHDRAWN");
+  }
+});
+test("迁移 DRAFT 可由创建方提交复核，非法或冻结提交不会改写 revision", () => {
+  const legacy = {
+    id: "patch:legacy:draft", scope: "model" as const, scopeId: "model:rod:1", reason: "legacy", author: "legacy",
+    baseProjectionId: "projection:rod:1", baseRuleSetVersion: "ruleset:1", status: "draft" as const, order: 0, rules: [],
+    operations: [{ op: "set" as const, path: "power", value: 4 }],
+  };
+  const ledger = importLegacyPatchesToLedger(emptyPatchLedger(), [legacy]);
+  const draft = ledger.revisions[0];
+  assert.equal(draft.state, "DRAFT");
+  const submitted = submitPatchRevision({ledger,patchId:draft.patchId,patchRevision:draft.patchRevision,capabilities:["patch.create"]});
+  assert.equal(submitted.revisions[0].state, "PENDING_REVIEW");
+  assert.equal(submitted.revisions[0].createdBy, draft.createdBy);
+  assert.equal(submitted.revisions[0].createdAt, draft.createdAt);
+  const before = structuredClone(ledger);
+  assert.throws(() => submitPatchRevision({ledger,patchId:draft.patchId,patchRevision:draft.patchRevision,capabilities:[]}), (error:unknown) => error instanceof PatchLedgerError && error.code === "PATCH_PERMISSION_DENIED");
+  assert.deepEqual(ledger, before);
+  const frozen = {...ledger,revisions:[{...draft,snapshotRefs:["snapshot:legacy"]}]};
+  const frozenBefore = structuredClone(frozen);
+  assert.throws(() => submitPatchRevision({ledger:frozen,patchId:draft.patchId,patchRevision:draft.patchRevision,capabilities:["patch.create"]}), (error:unknown) => error instanceof PatchLedgerError && error.code === "PATCH_REVISION_IMMUTABLE");
+  assert.deepEqual(frozen, frozenBefore);
+  const submittedBefore = structuredClone(submitted);
+  assert.throws(() => submitPatchRevision({ledger:submitted,patchId:draft.patchId,patchRevision:draft.patchRevision,capabilities:["patch.create"]}), (error:unknown) => error instanceof PatchLedgerError && error.code === "PATCH_STATE_TRANSITION_INVALID");
+  assert.deepEqual(submitted, submittedBefore);
+  assert.equal(submitted.revisions[0].revisionHash, submittedBefore.revisions[0].revisionHash);
 });
 test("unavailable or partial mirror never reports SYNCED and retry is idempotent", () => {
   const ledger: ReturnType<typeof emptyPatchLedger>={...emptyPatchLedger(),revisions:[makeRevision()]};
@@ -95,7 +159,7 @@ test("workspace v9 migrates sequentially to current ledger schema and repeated m
   const legacy=structuredClone(createSeedState()) as unknown as Record<string,unknown>;
   legacy.schemaVersion=9; delete legacy.patchLedger;
   const once=migrateWorkspaceState(legacy), twice=migrateWorkspaceState(once);
-  assert.equal(once.schemaVersion,16); assert.deepEqual(twice.patchLedger,once.patchLedger);
+  assert.equal(once.schemaVersion,CURRENT_WORKSPACE_SCHEMA_VERSION); assert.deepEqual(twice.patchLedger,once.patchLedger);
   assert.equal(twice.projectionPatches.length,once.projectionPatches.length);
 });
 
@@ -131,7 +195,7 @@ test("already migrated v10 workspace receives the v11 snapshot audit", () => {
   const ledger=legacy.patchLedger as {migrationReviewItems:Array<{id:string}>};
   ledger.migrationReviewItems=ledger.migrationReviewItems.filter((entry)=>!entry.id.startsWith("patch-snapshot-migration:"));
   const migrated=migrateWorkspaceState(legacy);
-  assert.equal(migrated.schemaVersion,16);
+  assert.equal(migrated.schemaVersion,CURRENT_WORKSPACE_SCHEMA_VERSION);
   assert.ok(migrated.patchLedger.migrationReviewItems.some((entry)=>entry.reason==="LEGACY_SNAPSHOT_PATCH_REFERENCES_UNAVAILABLE"));
 });
 
@@ -150,7 +214,7 @@ test("v11 只把 legacy approved 迁为 ACTIVE，不误激活原生审核态", (
     makeRevision({patchId:"patch:native",state:"APPROVED",rawPayload:{source:"native"}}),
   ];
   const migrated=migrateWorkspaceState(legacy);
-  assert.equal(migrated.schemaVersion,16);
+  assert.equal(migrated.schemaVersion,CURRENT_WORKSPACE_SCHEMA_VERSION);
   assert.equal(migrated.patchLedger.revisions.find((entry)=>entry.patchId==="patch:legacy")?.state,"ACTIVE");
   assert.equal(migrated.patchLedger.revisions.find((entry)=>entry.patchId==="patch:native")?.state,"APPROVED");
 });
@@ -270,7 +334,7 @@ test("Workspace 已是 v14 时仍独立迁移 PatchLedger v2 到 v4", () => {
   const legacyLedger={...state.patchLedger,schemaVersion:2} as typeof state.patchLedger;
   delete (legacyLedger as unknown as {absorptionAssessments?:unknown}).absorptionAssessments;
   const migrated=migrateWorkspaceState({...state,patchLedger:legacyLedger});
-  assert.equal(migrated.schemaVersion,16);
+  assert.equal(migrated.schemaVersion,CURRENT_WORKSPACE_SCHEMA_VERSION);
   assert.equal(migrated.patchLedger.schemaVersion,4);
   assert.deepEqual(migrated.patchLedger.absorptionAssessments,[]);
   assert.deepEqual(migrateWorkspaceState(migrated),migrated);

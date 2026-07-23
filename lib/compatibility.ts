@@ -50,16 +50,16 @@ export function compatibilitySelectorMatches(
   if (!scalarMatches(selector.itemPartId, context.itemPartId)) return false;
   if (!scalarMatches(selector.lineMaterialId, context.lineMaterialId)) return false;
   if (
-    selector.minWeightKg !== undefined &&
-    context.targetWeightKg !== undefined &&
-    context.targetWeightKg < selector.minWeightKg
+    selector.minPullKg !== undefined &&
+    context.targetPullKg !== undefined &&
+    context.targetPullKg < selector.minPullKg
   ) {
     return false;
   }
   if (
-    selector.maxWeightKg !== undefined &&
-    context.targetWeightKg !== undefined &&
-    context.targetWeightKg >= selector.maxWeightKg
+    selector.maxPullKg !== undefined &&
+    context.targetPullKg !== undefined &&
+    context.targetPullKg >= selector.maxPullKg
   ) {
     return false;
   }
@@ -78,7 +78,7 @@ export function compatibilitySelectorMatches(
  * 结构标杆匹配专用的兼容上下文（规范 §5.1/§5.2/§18.1）。
  * 只保留结构维度（itemPart/method/type/function），刻意省略 performance、quality、
  * material、functionIntensity、重量范围、构件与标签——这些商品层与构件层维度不得
- * 参与结构标杆的最近匹配与排除。重量范围通过省略 targetWeightKg 令范围选择器不生效。
+ * 参与结构标杆的最近匹配与排除。拉力范围通过省略 targetPullKg 令范围选择器不生效。
  */
 export function structuralCompatibilityContext(input: {
   methodId: string;
@@ -95,7 +95,7 @@ export function structuralCompatibilityContext(input: {
     performanceId: undefined,
     qualityId: undefined,
     lineMaterialId: undefined,
-    targetWeightKg: undefined,
+    targetPullKg: undefined,
     componentIds: [],
     tags: [],
   };
@@ -112,8 +112,8 @@ export function isStructuralCompatibilitySelector(selector: CompatibilitySelecto
     selector.performanceId === undefined &&
     selector.qualityId === undefined &&
     selector.lineMaterialId === undefined &&
-    selector.minWeightKg === undefined &&
-    selector.maxWeightKg === undefined &&
+    selector.minPullKg === undefined &&
+    selector.maxPullKg === undefined &&
     !(selector.componentIds && selector.componentIds.length > 0) &&
     !(selector.tags && selector.tags.length > 0)
   );
@@ -134,6 +134,37 @@ export function evaluateStructuralHardCompatibility(
   );
 }
 
+function withoutLegacyPerformanceRequirements(rule: CompatibilityRule): CompatibilityRule | undefined {
+  if (rule.selector.performanceId !== undefined) return undefined;
+  const canonical = {
+    ...rule,
+    requirements: rule.requirements.filter(
+      (requirement) => !(requirement.kind === "field" && requirement.key === "performanceId"),
+    ),
+  };
+  if (rule.effect === "require" && rule.requirements.length > 0 && canonical.requirements.length === 0) {
+    return undefined;
+  }
+  return canonical;
+}
+
+/**
+ * 新运行时的硬兼容入口。旧 Performance selector 与 field requirement 都是历史证据，
+ * 不得因为 canonical context 不再携带 performanceId 而排除候选。
+ */
+export function evaluateCanonicalHardCompatibility(
+  context: CompatibilityContext,
+  rules: CompatibilityRule[],
+): HardCompatibilityResult {
+  return evaluateHardCompatibility(
+    context,
+    rules.flatMap((rule) => {
+      const canonical = withoutLegacyPerformanceRequirements(rule);
+      return canonical ? [canonical] : [];
+    }),
+  );
+}
+
 export function compatibilitySpecificity(
   selector: CompatibilitySelector,
 ): number {
@@ -146,8 +177,8 @@ export function compatibilitySpecificity(
     "qualityId",
     "itemPartId",
     "lineMaterialId",
-    "minWeightKg",
-    "maxWeightKg",
+    "minPullKg",
+    "maxPullKg",
   ];
   const scalarCount = scalarKeys.filter(
     (key) => selector[key] !== undefined,
@@ -363,6 +394,33 @@ export function evaluateAffinity(
   };
 }
 
+/**
+ * 新规范化运行时的 Affinity。旧 function_performance 轴与 performanceId 选择器
+ * 只供历史结果重放，不进入新候选、Series 或 Model 的兼容评分。
+ */
+export function evaluateCanonicalAffinity(
+  context: CompatibilityContext,
+  rules: AffinityRule[],
+  axisWeights: AffinityAxisWeights,
+): AffinityScoreResult {
+  const canonicalContext = { ...context, performanceId: undefined };
+  const result = evaluateAffinity(
+    canonicalContext,
+    rules.filter(
+      (rule) =>
+        rule.axis !== "function_performance"
+        && rule.selector.performanceId === undefined,
+    ),
+    { ...axisWeights, function_performance: 0 },
+  );
+  return {
+    ...result,
+    warnings: result.warnings.filter(
+      (warning) => !warning.includes("function_performance"),
+    ),
+  };
+}
+
 export const defaultAffinityAxisWeights: AffinityAxisWeights = {
   method_type: 1,
   type_weight: 1,
@@ -373,4 +431,3 @@ export const defaultAffinityAxisWeights: AffinityAxisWeights = {
   model_component: 1,
   series_coherence: 1,
 };
-

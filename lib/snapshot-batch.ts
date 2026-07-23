@@ -1,7 +1,11 @@
 import { deterministicHash } from "./rule-kernel";
+import { isCanonicalValidationIssue, validationIssueLevel } from "./validation-issues";
 import {
+  assertCurrentSeriesSkuSpecifications,
   assertProductItemPartChainEnabled,
   assertSeriesItemPartChainEnabled,
+  isCurrentSeriesSkuSpecification,
+  isProductItemPartEnabled,
   ITEM_PART_NOT_ENABLED_CODE,
   ItemPartNotEnabledError,
 } from "./enabled-item-parts";
@@ -50,6 +54,27 @@ function issuesForModel(model: PurchasableModel, skus: SkuDrawer[]): ValidationI
   return structuredClone(sku?.validationSummary ?? []);
 }
 
+export function snapshotBatchEligibleModels(input: {
+  models: PurchasableModel[];
+  series: SeriesDefinition[];
+  skus: SkuDrawer[];
+}): PurchasableModel[] {
+  const skuById = new Map(input.skus.map((sku) => [sku.id, sku]));
+  const seriesById = new Map(
+    input.series.map((series) => [series.id, series]),
+  );
+  return input.models.filter((model) => {
+    const sku = skuById.get(model.skuId);
+    const series = sku ? seriesById.get(sku.seriesId) : undefined;
+    return Boolean(
+      sku &&
+      series &&
+      isCurrentSeriesSkuSpecification(series, sku) &&
+      isProductItemPartEnabled(sku.projectionMatch.itemPartId),
+    );
+  });
+}
+
 export function planSnapshotBatch(input: {
   models: PurchasableModel[];
   series: SeriesDefinition[];
@@ -85,12 +110,13 @@ export function planSnapshotBatch(input: {
       if (!series || !sku) {
         throw new ItemPartNotEnabledError(undefined, "snapshot");
       }
+      assertCurrentSeriesSkuSpecifications(series, [sku], "snapshot");
       const seriesItemPartId = assertSeriesItemPartChainEnabled(
         series,
         [sku],
         "snapshot",
         [],
-        input.skus,
+        input.skus.filter((entry) => entry.status !== "superseded"),
       );
       if (latest) {
         assertProductItemPartChainEnabled([
@@ -117,7 +143,11 @@ export function planSnapshotBatch(input: {
         }],
       };
     }
-    const blocking = validationIssues.filter((issue) => issue.level === "error");
+    // 旧格式 error 没有可验证的治理状态，继续 fail-closed；规范 Issue 则只让
+    // 仍处于 OPEN 的记录阻断，不能把已 WAIVED/RESOLVED/STALE 的历史证据重新激活。
+    const blocking = validationIssues.filter((issue) =>
+      validationIssueLevel(issue) === "error"
+      && (!isCanonicalValidationIssue(issue) || issue.state === "OPEN"));
     if (
       latest &&
       latest.modelRevision === model.revision &&

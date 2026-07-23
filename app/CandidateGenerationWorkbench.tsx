@@ -3,7 +3,6 @@
 import { AlertTriangle, CheckCircle2, Plus, ShieldCheck, Sparkles, Trash2, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { ActionAvailabilityMap } from "@/lib/interaction-contracts";
-import { isProductItemPartEnabled, seriesItemPartId } from "@/lib/enabled-item-parts";
 import {
   candidateGenerationInputHash,
   generateModelCandidateRun,
@@ -15,6 +14,11 @@ import type {
   SeriesDefinition,
   WorkspaceState,
 } from "@/lib/types";
+import { candidateGenerationEligibleSkus } from "@/lib/enabled-item-parts";
+import {
+  canPresentCandidateRunCompletion,
+  runCandidateGenerationWorkbenchAction,
+} from "@/lib/candidate-generation-workbench";
 import "./candidate-generation.css";
 
 interface Props {
@@ -40,18 +44,19 @@ function blankVariant(index: number): ModelVariantInput {
 }
 
 export function CandidateGenerationWorkbench({ state, series, initialSkuId, actionAvailabilities, actor, mutate, notify, onClose }: Props) {
-  const seriesSkus = useMemo(() => state.skuDrawers.filter((sku) =>
-    sku.seriesId === series.id
-    && isProductItemPartEnabled(sku.projectionMatch.itemPartId)
-    && sku.projectionMatch.itemPartId === seriesItemPartId(series, state.skuDrawers))
-    .sort((left, right) => left.targetWeightKg - right.targetWeightKg), [series, state.skuDrawers]);
+  const seriesSkus = useMemo(
+    () => candidateGenerationEligibleSkus(series, state.skuDrawers),
+    [series, state.skuDrawers],
+  );
   const matchingRecipes = state.candidateSearchRecipes.filter((recipe) =>
     recipe.methodIds.includes(series.fishingMethodId)
     && recipe.typeIds.includes(series.typeId)
     && recipe.functionIds.includes(series.coreFunctionId)
     && recipe.qualityIds.includes(series.qualityId));
   const [recipeId, setRecipeId] = useState(matchingRecipes[0]?.id ?? "");
-  const [skuIds, setSkuIds] = useState<string[]>(initialSkuId ? [initialSkuId] : seriesSkus.map((sku) => sku.id));
+  const [skuIds, setSkuIds] = useState<string[]>(() => initialSkuId && seriesSkus.some((sku) => sku.id === initialSkuId)
+    ? [initialSkuId]
+    : seriesSkus.map((sku) => sku.id));
   const [variants, setVariants] = useState<ModelVariantInput[]>([blankVariant(0)]);
   const [perSkuLimit, setPerSkuLimit] = useState(8);
   const [minimumAffinity, setMinimumAffinity] = useState("");
@@ -72,12 +77,21 @@ export function CandidateGenerationWorkbench({ state, series, initialSkuId, acti
     }, false);
   };
 
-  const materialize = (targetRun: CandidateRun, reviewConfirmed = false) => {
+  const materialize = (targetRun: CandidateRun, reviewConfirmed = false): boolean => {
     if (!materializeAvailability.enabled) {
       setError(materializeAvailability.disabledReasonText ?? "缺少候选物化权限。");
-      return;
+      return false;
     }
-    const result = materializeCandidateRun({ state, run: targetRun, actor, occurredAt: new Date().toISOString(), reviewConfirmed });
+    const outcome = runCandidateGenerationWorkbenchAction("物化候选", () =>
+      materializeCandidateRun({ state, run: targetRun, actor, occurredAt: new Date().toISOString(), reviewConfirmed }),
+    );
+    if (!outcome.ok || !outcome.value) {
+      const message = outcome.message ?? "物化候选已被安全阻止。";
+      setError(message);
+      notify(message);
+      return false;
+    }
+    const result = outcome.value;
     mutate((draft) => {
       draft.purchasableModels = result.models;
       draft.skuDrawers = result.skus;
@@ -85,6 +99,7 @@ export function CandidateGenerationWorkbench({ state, series, initialSkuId, acti
       draft.candidateMaterializations.push(result.record);
     }, false);
     notify(`已按 skuId + modelVariantKey 物化 ${result.record.materializedModelIds.length} 个 Model；${result.record.issues.length} 项跳过。`);
+    return true;
   };
 
   const generate = () => {
@@ -117,17 +132,29 @@ export function CandidateGenerationWorkbench({ state, series, initialSkuId, acti
       requestOptions: options,
     });
     const now = new Date().toISOString();
-    const nextRun = generateModelCandidateRun({
-      state,
-      request: { requestId: `candidate-request:${inputHash.slice(0, 20)}`, ...options, inputHash, idempotencyKey: `candidate:${inputHash}` },
-      variants: cleanVariants,
-      startedAt: now,
-      completedAt: now,
-    });
+    const outcome = runCandidateGenerationWorkbenchAction("生成候选", () =>
+      generateModelCandidateRun({
+        state,
+        request: { requestId: `candidate-request:${inputHash.slice(0, 20)}`, ...options, inputHash, idempotencyKey: `candidate:${inputHash}` },
+        variants: cleanVariants,
+        startedAt: now,
+        completedAt: now,
+      }),
+    );
+    if (!outcome.ok || !outcome.value) {
+      const message = outcome.message ?? "生成候选已被安全阻止。";
+      setError(message);
+      notify(message);
+      return;
+    }
+    const nextRun = outcome.value;
     setRun(nextRun);
-    if (nextRun.status === "completed" && materializeAvailability.enabled) {
-      materialize(nextRun);
-    } else {
+    const automaticallyMaterializing = nextRun.status === "completed" && materializeAvailability.enabled;
+    const materialized = automaticallyMaterializing ? materialize(nextRun) : false;
+    if (!canPresentCandidateRunCompletion(automaticallyMaterializing, materialized)) {
+      return;
+    }
+    if (!automaticallyMaterializing) {
       persistRun(nextRun);
     }
     notify(nextRun.status === "waiting_for_review" ? "候选运行已冻结，等待人工确认后物化。" : "候选运行已完成。");
@@ -141,7 +168,7 @@ export function CandidateGenerationWorkbench({ state, series, initialSkuId, acti
           <section className="candidate-input-card">
             <h3>1. 冻结范围与配方</h3>
             <label><span>候选搜索配方 / Revision</span><select value={recipeId} onChange={(event) => setRecipeId(event.target.value)}><option value="">选择配方</option>{matchingRecipes.map((recipe) => <option key={recipe.id} value={recipe.id}>{recipe.name} · rev {recipe.revision}</option>)}</select></label>
-            <div className="candidate-sku-grid">{seriesSkus.map((sku) => <label key={sku.id}><input type="checkbox" checked={skuIds.includes(sku.id)} onChange={() => setSkuIds((current) => current.includes(sku.id) ? current.filter((id) => id !== sku.id) : [...current, sku.id])} /><span><strong>{sku.targetWeightKg} kgf</strong><small>离散目标拉力 · {sku.id} · 最近标杆 {sku.projectionMatch.projectionId}</small></span></label>)}</div>
+            <div className="candidate-sku-grid">{seriesSkus.map((sku) => <label key={sku.id}><input type="checkbox" checked={skuIds.includes(sku.id)} onChange={() => setSkuIds((current) => current.includes(sku.id) ? current.filter((id) => id !== sku.id) : [...current, sku.id])} /><span><strong>{sku.targetPullKg} kgf</strong><small>离散目标拉力 · {sku.id} · 最近标杆 {sku.projectionMatch.projectionId}</small></span></label>)}</div>
           </section>
           <section className="candidate-input-card">
             <div className="candidate-card-title"><h3>2. 启用 Model 路线</h3><button type="button" onClick={() => setVariants((current) => [...current, blankVariant(current.length)])}><Plus size={14} />添加路线</button></div>

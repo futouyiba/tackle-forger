@@ -140,7 +140,7 @@ function ModelDrawer({
         <div>
           <span className="eyebrow">MODEL PREVIEW</span>
           <h2>{model.name}</h2>
-          <p>{sku.targetWeightKg} kg · {model.action} · {model.hardness} · {model.lengthM} m</p>
+          <p>{sku.targetPullKg} kgf · {model.action} · {model.hardness} · {model.lengthM} m</p>
         </div>
         <button type="button" onClick={onClose} aria-label="关闭 Model 预览"><X size={18} /></button>
       </header>
@@ -152,7 +152,7 @@ function ModelDrawer({
         <div className="gantt-drawer-body">
           <div className="gantt-identity-grid">
             <div><span>Series</span><strong>{series.name}</strong></div>
-            <div><span>SKU 抽屉</span><strong>{sku.targetWeightKg} kg</strong></div>
+            <div><span>SKU 抽屉</span><strong>{sku.targetPullKg} kgf</strong></div>
             <div><span>Model</span><strong>{model.id}</strong></div>
             <div><span>冻结快照</span><strong>{snapshot?.id ?? "尚未发布"}</strong></div>
           </div>
@@ -216,12 +216,12 @@ export function SeriesGanttWorkbench({ state, mutate, notify }: SeriesGanttWorkb
     return ids.length ? ids : state.itemTypeProfiles.slice(0, 1).map((item) => item.id);
   }, [state.seriesDefinitions, state.itemTypeProfiles]);
   const weights = useMemo(
-    () => Array.from(new Set(state.skuDrawers.map((sku) => sku.targetWeightKg))).sort((a, b) => a - b),
+    () => Array.from(new Set(state.skuDrawers.map((sku) => sku.targetPullKg))).sort((a, b) => a - b),
     [state.skuDrawers],
   );
   const selectedSeries = state.seriesDefinitions.find((series) => series.id === selectedSeriesId) ?? seriesList[0];
   const seriesSkus = selectedSeries
-    ? state.skuDrawers.filter((sku) => sku.seriesId === selectedSeries.id).sort((a, b) => a.targetWeightKg - b.targetWeightKg)
+    ? state.skuDrawers.filter((sku) => sku.seriesId === selectedSeries.id).sort((a, b) => a.targetPullKg - b.targetPullKg)
     : [];
   const selectedSku = seriesSkus.find((sku) => sku.id === selectedSkuId) ?? seriesSkus[0];
   const models = selectedSku
@@ -302,7 +302,7 @@ export function SeriesGanttWorkbench({ state, mutate, notify }: SeriesGanttWorkb
             const typeIndex = Math.max(0, typeIds.indexOf(series.typeId));
             const column = 2 + Math.max(0, qualityIndex) * Math.max(1, typeIds.length) + typeIndex;
             const skus = state.skuDrawers.filter((sku) => sku.seriesId === series.id);
-            const rowIndexes = skus.map((sku) => weights.indexOf(sku.targetWeightKg)).filter((index) => index >= 0);
+            const rowIndexes = skus.map((sku) => weights.indexOf(sku.targetPullKg)).filter((index) => index >= 0);
             if (!rowIndexes.length) return null;
             const minRow = Math.min(...rowIndexes);
             const maxRow = Math.max(...rowIndexes);
@@ -318,16 +318,16 @@ export function SeriesGanttWorkbench({ state, mutate, notify }: SeriesGanttWorkb
                 </button>
                 {skus.map((sku) => {
                   const denominator = Math.max(1, maxRow - minRow);
-                  const offset = ((weights.indexOf(sku.targetWeightKg) - minRow) / denominator) * 100;
+                  const offset = ((weights.indexOf(sku.targetPullKg) - minRow) / denominator) * 100;
                   return (
                     <button
                       type="button"
                       className={`gantt-sku-node ${selectedSku?.id === sku.id ? "selected" : ""}`}
                       key={sku.id}
                       style={{ top: `calc(${offset}% - 8px)` }}
-                      title={`${sku.targetWeightKg} kg · ${sku.modelIds.length} 个 Model`}
+                      title={`${sku.targetPullKg} kgf · ${sku.modelIds.length} 个 Model`}
                       onClick={() => { setSelectedSeriesId(series.id); setSelectedSkuId(sku.id); }}
-                    ><span />{sku.targetWeightKg}</button>
+                    ><span />{sku.targetPullKg}</button>
                   );
                 })}
               </div>
@@ -350,7 +350,7 @@ export function SeriesGanttWorkbench({ state, mutate, notify }: SeriesGanttWorkb
           <div className="gantt-sku-tabs">
             {seriesSkus.map((sku) => (
               <button type="button" key={sku.id} className={selectedSku?.id === sku.id ? "active" : ""} onClick={() => setSelectedSkuId(sku.id)}>
-                <strong>{sku.targetWeightKg} kg</strong><span>SKU 抽屉 · {sku.modelIds.length} Model</span>
+                <strong>{sku.targetPullKg} kgf</strong><span>SKU 抽屉 · {sku.modelIds.length} Model</span>
               </button>
             ))}
           </div>
@@ -380,4 +380,3 @@ export function SeriesGanttWorkbench({ state, mutate, notify }: SeriesGanttWorkb
     </div>
   );
 }
-

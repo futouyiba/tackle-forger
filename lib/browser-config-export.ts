@@ -302,6 +302,12 @@ export async function previewBrowserExportFromHandles(input: {
   snapshots: ConfigurationSnapshot[];
   createdAt?: string;
 }): Promise<BrowserExportPreview> {
+  await assertProductionShapeConfigExportAllowed({
+    canCommit: false,
+    authorization: undefined,
+    verifier: undefined,
+    context: undefined,
+  });
   for (const snapshot of input.snapshots) {
     assertSnapshotItemPartEnabled(snapshot, "config_export");
   }
@@ -463,6 +469,12 @@ export async function previewBrowserExport(input: {
   snapshots: ConfigurationSnapshot[];
   createdAt?: string;
 }): Promise<BrowserExportPreview> {
+  await assertProductionShapeConfigExportAllowed({
+    canCommit: false,
+    authorization: undefined,
+    verifier: undefined,
+    context: undefined,
+  });
   const targetRoot = await loadDirectoryHandle(input.binding.directoryHandleStorageKey);
   const configRoot = await loadDirectoryHandle(input.configRootBinding.directoryHandleStorageKey);
   if (!targetRoot) throw new Error(`${input.binding.userLabel} 的目标目录尚未绑定。`);
@@ -490,7 +502,26 @@ export async function commitBrowserExportFromHandle(input: {
   binding: LocalExportTargetBinding;
   preview: BrowserExportPreview;
   snapshots: ConfigurationSnapshot[];
+  formalAuthorization?: FormalConfigExportAuthorization;
 }): Promise<BrowserRecoveryManifest> {
+  await assertFormalConfigExportAllowed(input.formalAuthorization, undefined, {
+    packageId: input.preview.packageId,
+    profileId: input.binding.bindingId,
+    environmentId: input.binding.environmentId,
+    channelKey: input.binding.channelKey,
+    mappingId: input.preview.mappingId,
+    mappingVersion: input.preview.mappingVersion,
+    snapshots: input.snapshots.map((snapshot) => ({
+      snapshotId: snapshot.id,
+      snapshotHash: snapshot.contentHash,
+    })),
+    operations: input.preview.operations.map((operation) => ({
+      workbook: operation.workbook,
+      targetRef: operation.relativePath,
+      expectedOriginalHash: operation.sourceHash,
+      stagedHash: operation.stagedHash,
+    })),
+  });
   if (!input.snapshots.length) throw new Error("导出提交缺少冻结 ConfigurationSnapshot。");
   for (const snapshot of input.snapshots) {
     assertSnapshotItemPartEnabled(snapshot, "config_export");
@@ -595,6 +626,7 @@ export async function commitBrowserExport(input: {
   binding: LocalExportTargetBinding;
   preview: BrowserExportPreview;
   snapshots: ConfigurationSnapshot[];
+  formalAuthorization?: FormalConfigExportAuthorization;
 }): Promise<BrowserRecoveryManifest> {
   const root = await loadDirectoryHandle(input.binding.directoryHandleStorageKey);
   if (!root) throw new Error("导出目录尚未绑定。");
@@ -619,3 +651,8 @@ import {
   assertSnapshotItemPartEnabled,
   snapshotItemPartId,
 } from "./enabled-item-parts";
+import {
+  assertFormalConfigExportAllowed,
+  assertProductionShapeConfigExportAllowed,
+  type FormalConfigExportAuthorization,
+} from "./config-export-stage";

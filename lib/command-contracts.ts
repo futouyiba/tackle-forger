@@ -1,14 +1,66 @@
 import { deterministicHash } from "./rule-kernel";
 import type {
   AffinityScoreResult,
+  CanonicalValidationIssue,
   HardCompatibilityResult,
+  PatchState,
+  ValidationActionLink,
 } from "./types";
 import type {
-  ActionAvailability,
+  ActionCode,
+  ActionCommandPayloadRef,
   CapabilityCode,
   EntityRef,
+  IssuePresentationActionCode,
 } from "./interaction-contracts";
-import { actionAvailability } from "./interaction-contracts";
+import {
+  actionAvailability,
+  buildActionLink,
+  ISSUE_PRESENTATION_ACTION_CODES,
+} from "./interaction-contracts";
+import { createValidationIssue } from "./validation-issues";
+import {
+  adaptLegacyUnifiedTraceToCanonical,
+  calculationTraceValuesEqual,
+  CalculationTraceReplayError,
+  replayCalculationTrace,
+  type CalculationTraceStateValue,
+} from "./calculation-trace";
+
+export {
+  CALCULATION_TRACE_ABSENT_VALUE,
+  CALCULATION_TRACE_HASH_CONTRACT_VERSION,
+  CALCULATION_TRACE_REPLAY_CONTRACT_VERSION,
+  CALCULATION_TRACE_SCHEMA_VERSION,
+  adaptFiveAxisTraceToCanonical,
+  adaptLegacyCalculationTraceToCanonical,
+  adaptLegacyUnifiedTraceToCanonical,
+  adaptPatchTraceToCanonical,
+  adaptPricingTraceToCanonical,
+  adaptProjectionTraceToCanonical,
+  adaptRuleTraceToCanonical,
+  assertCalculationTraceJsonSafe,
+  assertCalculationTraceMatchesFinalPanel,
+  calculationTraceValuesEqual,
+  createCalculationTraceArchive,
+  createCalculationTraceEntry,
+  isCalculationTraceAbsentValue,
+  replayCalculationTrace,
+  tryReplayCalculationTrace,
+  verifyCalculationTraceArchive,
+} from "./calculation-trace";
+export type {
+  CalculationTraceActionLink,
+  CalculationTraceArchive,
+  CalculationTraceEffect,
+  CalculationTraceEntry,
+  CalculationTraceEntryRef,
+  CalculationTraceLayer,
+  CalculationTraceOperation,
+  CalculationTraceReplayIssue,
+  CalculationTraceStateValue,
+} from "./calculation-trace";
+export { transitionPatchState } from "./patch-state";
 
 export interface CandidateGenerationRequest {
   requestId: string;
@@ -36,7 +88,7 @@ export interface CandidateEnumerationInput {
   affinity: AffinityScoreResult;
   invariantIssueCount: number;
   warningCount: number;
-  weightDistance: number;
+  pullDistance: number;
   recipeSortValues: Record<string, string | number>;
   rankReasons: string[];
 }
@@ -103,7 +155,7 @@ export async function generateModelCandidates(input: {
     return (
       left.warningCount - right.warningCount ||
       right.affinity.score - left.affinity.score ||
-      left.weightDistance - right.weightDistance ||
+      left.pullDistance - right.pullDistance ||
       left.candidateFingerprint.localeCompare(right.candidateFingerprint)
     );
   });
@@ -164,149 +216,116 @@ export interface UnifiedTraceEntry {
   outputHash: string;
 }
 
-function traceOperation(before: unknown, operation: UnifiedTraceEntry["operation"], operand: unknown): unknown {
-  if (operation === "no_effect") return before;
-  if (operation === "set") return operand;
-  if (typeof before !== "number" || typeof operand !== "number") {
-    throw new Error("add/multiply Trace 只接受数字。");
-  }
-  return operation === "add" ? before + operand : before * operand;
-}
-
 export function replayUnifiedTrace(input: {
   initialValues: Record<string, unknown>;
   entries: UnifiedTraceEntry[];
 }): { values: Record<string, unknown>; replayHash: string } {
-  const values = structuredClone(input.initialValues);
-  const entries = [...input.entries].sort((left, right) => left.sequence - right.sequence);
-  entries.forEach((entry, index) => {
-    if (entry.sequence !== index + 1) {
-      throw new Error("TRACE_REPLAY_MISMATCH：Trace sequence 不连续。");
-    }
-    const before = values[entry.parameterKey];
+  for (const entry of input.entries) {
     if (
-      deterministicHash({ parameterKey: entry.parameterKey, value: before }) !==
-      entry.inputHash
+      deterministicHash({ parameterKey: entry.parameterKey, value: entry.before })
+        !== entry.inputHash
+      || deterministicHash({ parameterKey: entry.parameterKey, value: entry.after })
+        !== entry.outputHash
     ) {
-      throw new Error("TRACE_REPLAY_MISMATCH：输入 hash 不一致。");
+      throw new CalculationTraceReplayError(
+        `旧 UnifiedTraceEntry hash 不一致：${entry.parameterKey}。`,
+      );
     }
-    if (before !== entry.before) {
-      throw new Error("TRACE_REPLAY_MISMATCH：before 不一致。");
-    }
-    const after = traceOperation(before, entry.operation, entry.operand);
+  }
+  const entries = adaptLegacyUnifiedTraceToCanonical(input.entries);
+  const firstSubject = entries[0]?.subjectRef;
+  const fallbackSubject: EntityRef = firstSubject ?? {
+    workspaceId: "legacy",
+    entityType: "model",
+    entityId: "legacy",
+    revisionId: "legacy",
+  };
+  const subjectsByParameter = new Map<string, Map<string, EntityRef>>();
+  for (const entry of entries) {
+    const subjectKey = JSON.stringify([
+      entry.subjectRef.workspaceId,
+      entry.subjectRef.entityType,
+      entry.subjectRef.entityId,
+      entry.subjectRef.revisionId,
+    ]);
+    const subjects = subjectsByParameter.get(entry.parameterKey) ?? new Map<string, EntityRef>();
+    subjects.set(subjectKey, entry.subjectRef);
+    subjectsByParameter.set(entry.parameterKey, subjects);
+  }
+  const initialState: CalculationTraceStateValue[] = Object.entries(input.initialValues).flatMap(
+    ([parameterKey, value]) => {
+      const subjects = [...(subjectsByParameter.get(parameterKey)?.values() ?? [])];
+      return (subjects.length > 0 ? subjects : [fallbackSubject]).map((subjectRef) => ({
+        subjectRef,
+        parameterKey,
+        value,
+      }));
+    },
+  );
+  const replay = replayCalculationTrace({ entries, initialState });
+  const values: Record<string, unknown> = {};
+  for (const entry of replay.finalState) {
     if (
-      after !== entry.after ||
-      deterministicHash({ parameterKey: entry.parameterKey, value: after }) !==
-        entry.outputHash
+      Object.prototype.hasOwnProperty.call(values, entry.parameterKey)
+      && !calculationTraceValuesEqual(values[entry.parameterKey], entry.value)
     ) {
-      throw new Error("TRACE_REPLAY_MISMATCH：输出 hash 不一致。");
+      throw new CalculationTraceReplayError(
+        `旧 UnifiedTraceEntry 无法表示多个 subject 的不同终态：${entry.parameterKey}。`,
+      );
     }
-    values[entry.parameterKey] = after;
-  });
-  return { values, replayHash: deterministicHash({ values, entries }) };
+    values[entry.parameterKey] = structuredClone(entry.value);
+  }
+  return { values, replayHash: replay.replayHash };
 }
 
-export type IssueSource =
-  | "hard_compatibility" | "affinity" | "series_invariant" | "patch"
-  | "publish" | "data_integrity" | "import" | "five_axis" | "ai_guardrail";
-
-export interface IssueAction {
-  actionId: string;
-  action:
-    | "navigate" | "edit_rule" | "edit_patch" | "open_rebase"
-    | "satisfy_requirement" | "acknowledge_warning" | "request_permission"
-    | "retry" | "recompute" | "create_proposal";
-  label: string;
-  availability: ActionAvailability;
-}
-
-export interface UnifiedValidationIssue {
-  issueId: string;
-  fingerprint: string;
-  code: string;
-  source: IssueSource;
-  severity: "error" | "warning" | "info";
-  blocking: boolean;
-  gate: "generate" | "series_approve" | "model_review" | "publish" | "export";
-  subjectRef: EntityRef;
-  affectedRefs: EntityRef[];
-  parameterKeys: string[];
-  title: string;
-  message: string;
-  state: "open" | "acknowledged" | "resolved" | "waived" | "superseded";
-  deny: boolean;
-  actions: IssueAction[];
-}
+/** @deprecated 使用 CanonicalValidationIssue；保留导出名避免旧调用方复制第三套结构。 */
+export type UnifiedValidationIssue = CanonicalValidationIssue;
+export type IssueAction = ValidationActionLink;
 
 export function createUnifiedIssue(input: Omit<
-  UnifiedValidationIssue,
-  "issueId" | "fingerprint" | "blocking" | "actions"
+  Parameters<typeof createValidationIssue>[0],
+  "actions"
 > & {
   actionSpecs: Array<{
     actionId: string;
-    action: IssueAction["action"];
+    action: ActionCode | IssuePresentationActionCode;
     label: string;
-    command: Parameters<typeof actionAvailability>[0];
-    capabilities: CapabilityCode[];
     heldCapabilities: CapabilityCode[];
+    targetRef?: EntityRef;
+    targetRoute?: string;
+    commandPayloadRef?: ActionCommandPayloadRef;
+    domainBlock?: { code: string; text: string };
   }>;
 }): UnifiedValidationIssue {
-  const blocking = input.severity === "error" || input.deny;
-  if (input.deny && input.state === "waived") {
-    throw new Error("硬 deny 不允许 waive。");
-  }
-  const fingerprint = deterministicHash({
-    code: input.code,
-    source: input.source,
-    subjectRef: input.subjectRef,
-    affectedRefs: input.affectedRefs,
-    parameterKeys: input.parameterKeys,
-  });
   const { actionSpecs, ...issue } = input;
-  return {
-    ...structuredClone(issue),
-    blocking,
-    issueId: "issue-" + fingerprint,
-    fingerprint,
-    actions: actionSpecs.map((spec) => ({
-      actionId: spec.actionId,
-      action: spec.action,
-      label: spec.label,
-      availability: actionAvailability(
-        spec.command,
-        spec.heldCapabilities,
-        spec.capabilities.some((capability) => !spec.heldCapabilities.includes(capability))
-          ? { code: "ISSUE_ACTION_FORBIDDEN", text: "无权执行此修复动作。" }
-          : undefined,
-      ),
-    })),
-  };
+  return createValidationIssue({
+    ...issue,
+    actions: actionSpecs.map((spec) => {
+      const presentation = (ISSUE_PRESENTATION_ACTION_CODES as readonly string[])
+        .includes(spec.action);
+      const availability = presentation
+        ? undefined
+        : actionAvailability(
+            spec.action as ActionCode,
+            spec.heldCapabilities,
+            spec.domainBlock,
+          );
+      return buildActionLink({
+        actionId: spec.actionId,
+        action: spec.action,
+        label: spec.label,
+        targetRef: spec.targetRef ?? input.subjectRef as EntityRef,
+        targetRoute: spec.targetRoute,
+        ...(availability ? { availability } : {}),
+        ...(availability?.enabled && spec.commandPayloadRef
+          ? { commandPayloadRef: spec.commandPayloadRef }
+          : {}),
+      });
+    }),
+  });
 }
 
-export type PatchWorkflowState =
-  | "draft" | "pending_review" | "approved" | "base_changed"
-  | "rebase_required" | "rebasing" | "withdrawn" | "superseded";
-
-const PATCH_TRANSITIONS: Record<PatchWorkflowState, PatchWorkflowState[]> = {
-  draft: ["pending_review", "withdrawn", "superseded"],
-  pending_review: ["approved", "withdrawn", "base_changed", "superseded"],
-  approved: ["base_changed", "superseded"],
-  base_changed: ["rebase_required", "superseded"],
-  rebase_required: ["rebasing", "superseded"],
-  rebasing: ["pending_review", "superseded"],
-  withdrawn: [],
-  superseded: [],
-};
-
-export function transitionPatchState(
-  current: PatchWorkflowState,
-  next: PatchWorkflowState,
-): PatchWorkflowState {
-  if (!PATCH_TRANSITIONS[current].includes(next)) {
-    throw new Error(`非法 Patch 状态迁移：${current} → ${next}。`);
-  }
-  return next;
-}
+export type PatchWorkflowState = PatchState;
 
 export type UpgradeWorkflowState =
   | "generated" | "analyzing" | "blocked" | "rebase_required"
@@ -360,4 +379,3 @@ export function assertSnapshotMutationForbidden(action:
 ): never {
   throw new Error(`ConfigurationSnapshot 已冻结，禁止 ${action}；请创建新修订或 UpgradeCandidate。`);
 }
-

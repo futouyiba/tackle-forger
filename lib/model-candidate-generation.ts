@@ -1,8 +1,14 @@
-import { evaluateAffinity, evaluateHardCompatibility } from "./compatibility";
+import { evaluateCanonicalAffinity, evaluateCanonicalHardCompatibility } from "./compatibility";
 import { deterministicHash } from "./rule-kernel";
+import { validationIssueLevel } from "./validation-issues";
 import {
+  assertCurrentSeriesSkuSpecifications,
   assertSeriesItemPartChainEnabled,
 } from "./enabled-item-parts";
+import {
+  partConstraintSetBlockingTraceRefs,
+  resolvePartConstraintSetRef,
+} from "./part-constraints";
 import type {
   CandidateGenerationRequest,
   CandidateMaterializationRecord,
@@ -43,22 +49,20 @@ function recipeAccepts(recipe: CandidateSearchRecipe, series: SeriesDefinition, 
     && recipe.typeIds.includes(series.typeId)
     && recipe.functionIds.includes(series.coreFunctionId)
     && recipe.qualityIds.includes(series.qualityId)
-    && (!series.performanceProfileId || recipe.performanceIds.includes(series.performanceProfileId))
-    && sku.targetWeightKg >= recipe.targetWeightRangeKg.min
-    && sku.targetWeightKg <= recipe.targetWeightRangeKg.max;
+    && sku.targetPullKg >= recipe.targetPullRangeKg.min
+    && sku.targetPullKg <= recipe.targetPullRangeKg.max;
 }
 
 function contextFor(series: SeriesDefinition, sku: SkuDrawer, variant: ModelVariantInput): CompatibilityContext {
   const intensity = series.functionIntensityPolicy.mode === "fixed"
     ? series.functionIntensityPolicy.intensity
-    : series.functionIntensityPolicy.values[String(sku.targetWeightKg)] ?? 2;
+    : series.functionIntensityPolicy.values[String(sku.targetPullKg)] ?? 2;
   return {
     methodId: series.fishingMethodId,
     typeId: series.typeId,
-    targetWeightKg: sku.targetWeightKg,
+    targetPullKg: sku.targetPullKg,
     functionId: series.coreFunctionId,
     functionIntensity: intensity,
-    performanceId: series.performanceProfileId,
     qualityId: series.qualityId,
     componentIds: variant.componentSelections.map((entry) => entry.componentId),
     tags: variant.tags,
@@ -67,6 +71,32 @@ function contextFor(series: SeriesDefinition, sku: SkuDrawer, variant: ModelVari
 
 function bump(counter: Record<string, number>, code: string) {
   counter[code] = (counter[code] ?? 0) + 1;
+}
+
+function assertRecipePartConstraintsConsumable(
+  state: WorkspaceState,
+  recipe: CandidateSearchRecipe,
+  boundary: "candidate_generation" | "candidate_materialization",
+): void {
+  if (!recipe.partConstraintSetRef) return;
+  const constraintSet = resolvePartConstraintSetRef(
+    state.partConstraintSets,
+    recipe.partConstraintSetRef,
+  );
+  const blockingTraceRefs = partConstraintSetBlockingTraceRefs(constraintSet);
+  if (
+    constraintSet.reviewStatus === "NEEDS_REVIEW"
+    || blockingTraceRefs.length > 0
+  ) {
+    throw new Error(
+      `PART_CONSTRAINT_SET_NEEDS_REVIEW：${boundary} 禁止消费 ${constraintSet.constraintSetId}@${constraintSet.revision}；${blockingTraceRefs.length} 条字段 Trace 尚未确认。`,
+    );
+  }
+  // Issue #50 才会实现按冻结约束集与组件注册表进行权威枚举。
+  // 在此之前，已挂接新 ref 的 Recipe 即使全部确认，也不能退回旧枚举器静默忽略约束。
+  throw new Error(
+    `PART_CONSTRAINT_SET_CANDIDATE_RUNTIME_UNAVAILABLE：${boundary} 尚不能权威消费 ref-backed Recipe；等待 Issue #50。`,
+  );
 }
 
 export function generateModelCandidateRun(input: {
@@ -79,18 +109,28 @@ export function generateModelCandidateRun(input: {
   const series = input.state.seriesDefinitions.find((entry) => entry.id === input.request.seriesRef.entityId);
   const recipe = input.state.candidateSearchRecipes.find((entry) => entry.id === input.request.recipeRef.entityId);
   if (!series || !recipe) throw new Error("CandidateGenerationRequest 引用的 Series 或 Recipe 不存在。");
+  assertRecipePartConstraintsConsumable(
+    input.state,
+    recipe,
+    "candidate_generation",
+  );
   const skus = input.request.skuRefs.map((ref) => input.state.skuDrawers.find((entry) => entry.id === ref.entityId));
   if (skus.some((sku) => !sku)) throw new Error("CandidateGenerationRequest 引用了不存在的 SKU。");
   const selectedSkus = skus as SkuDrawer[];
   if (selectedSkus.some((sku) => sku.seriesId !== series.id)) {
     throw new Error("CandidateGenerationRequest 的 SKU 不属于请求的 Series。");
   }
+  assertCurrentSeriesSkuSpecifications(
+    series,
+    selectedSkus,
+    "candidate_generation",
+  );
   assertSeriesItemPartChainEnabled(
     series,
     selectedSkus,
     "candidate_generation",
     [],
-    input.state.skuDrawers,
+    input.state.skuDrawers.filter((sku) => sku.status !== "superseded"),
   );
   const ruleSetVersion = input.state.ruleSetVersions.find((entry) => entry.status === "published")?.id ?? "";
   const options = {
@@ -129,19 +169,24 @@ export function generateModelCandidateRun(input: {
       enumerationTotal += 1;
       if (!recipeAccepts(recipe, series, sku)) { bump(excludedByCode, "RECIPE_SCOPE_MISMATCH"); continue; }
       const context = contextFor(series, sku, variant);
-      const hard = evaluateHardCompatibility(context, input.state.compatibilityRules);
+      const hard = evaluateCanonicalHardCompatibility(context, input.state.compatibilityRules);
       if (!hard.allowed) { bump(excludedByCode, "HARD_COMPATIBILITY_DENIED"); continue; }
-      const affinity = evaluateAffinity(context, input.state.affinityRules, input.state.affinityAxisWeights);
+      const affinity = evaluateCanonicalAffinity(
+        context,
+        input.state.affinityRules,
+        input.state.affinityAxisWeights,
+      );
       if (input.request.minimumAffinity !== undefined && affinity.score < input.request.minimumAffinity) {
         bump(excludedByCode, "AFFINITY_BELOW_MINIMUM"); continue;
       }
       const invariantIssues = structuredClone(sku.validationSummary);
-      const warningCount = invariantIssues.filter((issue) => issue.level === "warning").length + affinity.warnings.length;
+      const warningCount = invariantIssues.filter((issue) => validationIssueLevel(issue) === "warning").length + affinity.warnings.length;
       if (!input.request.acceptWarnings && warningCount) { bump(excludedByCode, "WARNING_NOT_ACCEPTED"); continue; }
       const proposedConfiguration = {
         projectionId: sku.projectionMatch.projectionId,
         projectionValues: structuredClone(input.state.derivedProjections.find((entry) => entry.id === sku.projectionMatch.projectionId)?.values ?? {}),
-        targetWeightKg: sku.targetWeightKg,
+        targetPullKg: sku.targetPullKg,
+        matchedStructuralPullKg: sku.projectionMatch.matchedStructuralPullKg,
         variant: structuredClone(variant),
       };
       const candidateFingerprint = deterministicHash({ skuId: sku.id, variantKey: variant.modelVariantKey, proposedConfiguration, ruleSetVersion });
@@ -158,7 +203,7 @@ export function generateModelCandidateRun(input: {
         affinity,
         invariantIssues,
         warningCount,
-        pullDistance: sku.projectionMatch.weightDistance,
+        pullDistance: sku.projectionMatch.pullDistance,
         rank: 0,
         rankReasons: [],
         state: "generated",
@@ -226,6 +271,20 @@ export function materializeCandidateRun(input: {
   if (String(requestSeries.revision) !== input.run.request.seriesRef.revisionId) {
     throw new Error("CandidateRun 引用的 Series revision 已变化，禁止物化旧运行结果。");
   }
+  const requestRecipe = input.state.candidateSearchRecipes.find(
+    (entry) => entry.id === input.run.request.recipeRef.entityId,
+  );
+  if (!requestRecipe) {
+    throw new Error("CandidateRun 引用的 Recipe 不存在，禁止物化旧运行结果。");
+  }
+  if (String(requestRecipe.revision) !== input.run.request.recipeRef.revisionId) {
+    throw new Error("CandidateRun 引用的 Recipe revision 已变化，禁止物化旧运行结果。");
+  }
+  assertRecipePartConstraintsConsumable(
+    input.state,
+    requestRecipe,
+    "candidate_materialization",
+  );
   const requestSkus = input.run.request.skuRefs.map((ref) => {
     const sku = input.state.skuDrawers.find((entry) => entry.id === ref.entityId);
     if (!sku) throw new Error(`CandidateRun 引用的 SKU ${ref.entityId} 不存在，禁止物化旧运行结果。`);
@@ -237,12 +296,17 @@ export function materializeCandidateRun(input: {
     }
     return sku;
   });
+  assertCurrentSeriesSkuSpecifications(
+    requestSeries,
+    requestSkus,
+    "candidate_materialization",
+  );
   assertSeriesItemPartChainEnabled(
     requestSeries,
     requestSkus,
     "candidate_materialization",
     [],
-    input.state.skuDrawers,
+    input.state.skuDrawers.filter((sku) => sku.status !== "superseded"),
   );
   const requestedSkuIds = new Set(requestSkus.map((sku) => sku.id));
   for (const candidate of input.run.candidates) {
@@ -254,12 +318,17 @@ export function materializeCandidateRun(input: {
       ? input.state.seriesDefinitions.find((entry) => entry.id === sku.seriesId)
       : undefined;
     if (!series || !sku) throw new Error(`Candidate ${candidate.candidateId} 的 SKU/Series 父链不存在。`);
+    assertCurrentSeriesSkuSpecifications(
+      series,
+      [sku],
+      "candidate_materialization",
+    );
     assertSeriesItemPartChainEnabled(
       series,
       [sku],
       "candidate_materialization",
       [],
-      input.state.skuDrawers,
+      input.state.skuDrawers.filter((entry) => entry.status !== "superseded"),
     );
   }
   const models = structuredClone(input.state.purchasableModels);

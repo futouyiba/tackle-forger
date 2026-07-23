@@ -310,7 +310,36 @@ Model是玩家实际选择和购买的具体型号，保存：
 
 领域内Model是实际选择和购买对象。当前配置表没有Snapshot版本字段，因此不得宣称游戏侧购买记录已经支持`modelId + snapshotId`；Snapshot仅在Tackle Forger内部保证发布和导出的可追溯性。
 
-### 6.5 稳定身份、再生成对应与重量变更
+### 6.5 PartConstraintSet、CandidateSearchRecipe与组件选择
+
+`PartConstraintSet`是版本化、不可变的候选搜索约束对象。它使用非空稳定`constraintSetId`和从1开始、严格单调的安全整数`revision`标识；修改任一字段、来源或复核结论都创建新revision。非法身份或revision必须在迁移、精确引用解析和新revision构造边界fail-closed。`CandidateSearchRecipe`必须冻结并引用精确的`constraintSetId + revision + contentHash`，同时冻结本轮可枚举组件的`componentRegistryId + revision + contentHash`；不得在运行时解析为后来发布的“最新revision”。候选生成请求只提交不可变的Recipe引用，服务端必须从该Recipe revision解析约束集与组件注册表。规范请求不得再接收可由调用方任意组合的独立`partConstraintSetRef`或注册表引用。
+
+`PartConstraintSet`按rod、reel、line分别保存约束。每个部位独立记录来源、来源revision、内容哈希、迁移诊断和`CONFIRMED/NEEDS_REVIEW`状态；一个部位确认不代表另外两个部位自动确认。字段语义固定为：
+
+| 字段 | 权威语义 |
+| --- | --- |
+| `templateIds` | 该部位候选组件的模板搜索约束；按稳定模板ID匹配，不是具体组件选择 |
+| `materialIds` | 该部位候选组件的材质搜索约束；缺少版本化注册表元数据时不得按名称猜测 |
+| `requiredAffixIds` | 候选必须满足的该部位词条条件；未知或无法验证时fail-closed |
+| `optionalAffixPoolIds` | 候选扩展或版本化排序使用的该部位词条池；不等于必需词条或已选词条 |
+| `typeIds` | 默认不是通用分部位字段；只有组件注册表明确提供该部位的版本化type分类时才可生效 |
+| `componentSelections` | 候选结果与Model中的具体组件引用，不属于`PartConstraintSet`或`CandidateSearchRecipe` |
+
+Series的`typeId/TypeProfile`继续表达系列级Method × Type结构语义。不得把Series Type复制为分部位type分类，也不得由本规范擅自定义当前不存在的组件type。组件注册表没有明确分类时，遗留`typeIds`只能保留、展示并进入`NEEDS_REVIEW`，不得参与权威过滤、自动批准或自动发布。
+
+`CandidateSearchRecipe`只拥有搜索范围、阈值、检查点、排序定义和`PartConstraintSet` revision引用。它按部位枚举、过滤和排序组件，但不拥有具体组件选择。每项过滤和排序必须记录部位、约束字段、约束revision、组件注册表revision及命中/排除原因；未知ID、跨部位引用、缺失分类或required冲突不得静默放宽为“允许全部”。
+
+新候选结果保存本轮实际选中的`componentSelections`，但CandidateRun仍是不可变审计产物，不是商品身份。新Candidate、新建或更新的Model revision和新ConfigurationSnapshot只能写入`referenceKind="VERSIONED_COMPONENT_REF"`的版本化分支；每个具体组件选择必须冻结：部位、稳定`componentId`、不可变`componentRevisionId`、组件内容哈希、精确的组件注册表revision及其内容哈希、来源revision，以及当时用于计算和展示的名称/值快照。组件revision必须确实属于冻结的注册表revision，部位、ID、revision和hash任一不一致、缺失或无法解析时fail-closed。
+
+`componentContentHash`覆盖该组件revision的规范注册表记录；`selectionContentHash`覆盖完整组件引用与`nameSnapshot/valuesSnapshot`。Candidate fingerprint、CandidateRun输入/输出hash、Model revision内容hash和ConfigurationSnapshot content hash都必须覆盖完整`componentSelections`，不能只覆盖组件ID。组件注册表发布新revision只能产生新候选、Model revision或UpgradeCandidate，不得让既有Candidate、Model revision或Snapshot改指“最新组件”。
+
+只有显式物化命令重新鉴权、重验Recipe内冻结的约束集/注册表引用、逐项组件引用与硬兼容后，候选才创建或更新Model草稿revision；未物化、过期、丢弃或superseded的候选不得改变Model。搜索约束不得被机械转换为`componentSelections`。
+
+历史`ModelComponentSelection`若只有`itemPartId/componentId/name/values`，读取/迁移适配器必须将其表达为`referenceKind="LEGACY_UNVERSIONED_COMPONENT_REF"`的判别联合分支，并在`rawPayload`中原样保留旧对象及未知字段；不得按名称或当前注册表补写revision/hash。该判别包装是运行时读模型与迁移诊断，不得回写或改变已发布Snapshot的原始payload/content hash。旧分支只允许历史读取、展示、导出原始证据和人工解析；任何Candidate生成、物化、新Model revision、批准或新Snapshot构建遇到旧分支都必须返回`LEGACY_COMPONENT_REF_NOT_MATERIALIZABLE`并fail-closed。人工解析到精确组件revision后创建使用版本化分支的新Model revision，原记录与旧Snapshot保持不变。
+
+完整决策、旧数据复核与Snapshot冻结规则见[`AUD-026 PartConstraintSet语义ADR`](./audits/aud-026-part-constraint-semantics-adr.md)。
+
+### 6.6 稳定身份、再生成对应与重量变更
 
 - `entityId`终身稳定；revision不可变；displayName可修改且不得作为唯一关联键。
 - 再生成对应顺序固定为：显式目标ID→持久GenerationBinding→外部稳定ID→业务身份键→name/特征仅作为人工提示。
@@ -2877,7 +2906,7 @@ type ActionCode =
 
 读接口必须按当前对象、策略版本和操作者返回这些`ActionAvailability`；命令端再次校验Capability和`separationOfDutiesPolicy`。发布策略还必须校验其目标目录/Manifest覆盖，浏览器目录授权不能替代任何服务端权限。
 
-Series、SKU、Model的ID终身稳定且不复用；改名和更换默认Model不改ID。SKU修改`targetPullKg`必须遵守第6.5节：没有任何已发布后代Snapshot时保留skuId并创建新revision；已有已发布后代时原SKU的重量身份冻结，新重量创建新SKU，旧SKU可`DEPRECATED`。Revision只增不改；已批准/已发布revision不可原地改写。Snapshot ID与payload/hash永久绑定。前端不得从角色名、状态或颜色猜动作；读接口返回`ActionAvailability[]`，写接口再次鉴权。按第20.2节，所有已登录公司用户统一获得全部当前已启用业务Capability，`separationOfDutiesPolicy`使用`disabled_in_tackle_forger`；按第23.6节，`ai.provider_policy.manage`只授予部署管理员。服务端仍必须独立鉴权，功能开关关闭或未授予的Capability不得通过直接API调用。
+Series、SKU、Model的ID终身稳定且不复用；改名和更换默认Model不改ID。SKU修改`targetPullKg`必须遵守第6.6节：没有任何已发布后代Snapshot时保留skuId并创建新revision；已有已发布后代时原SKU的重量身份冻结，新重量创建新SKU，旧SKU可`DEPRECATED`。Revision只增不改；已批准/已发布revision不可原地改写。Snapshot ID与payload/hash永久绑定。前端不得从角色名、状态或颜色猜动作；读接口返回`ActionAvailability[]`，写接口再次鉴权。按第20.2节，所有已登录公司用户统一获得全部当前已启用业务Capability，`separationOfDutiesPolicy`使用`disabled_in_tackle_forger`；按第23.6节，`ai.provider_policy.manage`只授予部署管理员。服务端仍必须独立鉴权，功能开关关闭或未授予的Capability不得通过直接API调用。
 
 ### 24.2 R1：钓具系列甘特图
 
@@ -3217,9 +3246,12 @@ interface ActionLink {
 ### 24.11 R10：Rebase、UpgradeCandidate与Snapshot
 
 ```text
-Patch: draft → pending_review → approved
-base_changed → rebase_required → rebasing → pending_review
-draft/pending_review → withdrawn；任意未发布状态 → superseded
+Patch revision:
+DRAFT → PENDING_REVIEW → APPROVED → ACTIVE
+DRAFT/PENDING_REVIEW → WITHDRAWN
+任意未发布状态 → SUPERSEDED
+基线变化：当前Patch revision → REBASE_REQUIRED
+rebase成功：创建新Patch revision，状态为PENDING_REVIEW
 
 UpgradeCandidate:
 generated → analyzing → blocked | rebase_required | ready_for_review
@@ -3228,14 +3260,27 @@ generated/ready_for_review → dismissed
 任意非终态 + upstream_changed → superseded
 ```
 
-set基线变化、参数删除/重命名、边界/公式/兼容变化必须rebase。clear在目标仍是可继承覆盖时可以确定性重放；目标删除、重命名或必填性变化时必须rebase。add/multiply自动重放最多到pending_review。rebase生成新Patch revision。approved/dismissed候选不改旧Snapshot；只有发布命令新建Snapshot。SnapshotBuild可building/failed/ready；ConfigurationSnapshot创建即frozen，只允许查看、下载原样审计归档、在完整性门禁通过时正式导出、审计、复制新修订、生成升级候选，禁止原地编辑/重算/rebase/换hash/删除引用。`download_snapshot_audit_archive`只要求`snapshot.audit_archive.download`并遵守第14节的原样打包语义；`export_snapshot`要求`snapshot.export`，不可重放或缺策略引用的BLOCKER必须阻断它以及后续配置导出。
+Patch业务生命周期只使用第14.2节的规范大写`PatchState`；小写状态只允许出现在迁移适配器。`base_changed`是触发原因而不是持久化状态，`rebasing/REBASING`是动作执行进度而不是`PatchState`，不得写入Patch revision、账本、Snapshot引用或飞书镜像。
+
+set基线变化、参数删除/重命名、边界/公式/兼容变化必须rebase。clear在目标仍是可继承覆盖时可以确定性重放；目标删除、重命名或必填性变化时必须rebase。add/multiply自动重放最多创建`PENDING_REVIEW`的新revision。基线变化只使当前revision进入`REBASE_REQUIRED`；rebase必须通过`rebase_patch`动作创建严格递增的新`patchRevision`，不得把原revision从`REBASE_REQUIRED`原地改回`PENDING_REVIEW`。
+
+`rebase_patch`命令至少绑定`patchId + expectedHeadPatchRevision + expectedBaseRuleSetVersion + expectedBaseObjectRevision + targetBaseRuleSetVersion + targetBaseObjectRevision + inputHash + idempotencyKey`。服务端固定按以下事务执行：
+
+1. 重新鉴权并锁定Patch head，重验expected head、当前基线和目标基线；任一不一致返回revision或baseline冲突。
+2. 在事务内存中对完整有序操作组计算新before/after、Trace、Issue和hash；未解决冲突、非法操作或任何校验失败时不创建revision。
+3. 只有全部操作和证据有效时，原子写入一个新Patch revision、完整操作组、幂等记录和审计；新revision最多为`PENDING_REVIEW`，不得直接成为`APPROVED`或`ACTIVE`。
+4. 同一idempotencyKey和完整payload重试返回第一次已提交结果；同一key携带不同payload时拒绝。提交前基线或Patch head再次变化时整个事务回滚，调用方必须基于最新基线重新预览和执行。
+
+失败、超时后无法证明已提交、权限拒绝或并发基线变化均不得留下半revision、半操作组或执行中的持久化业务状态；原Patch revision、有序操作、历史Snapshot、Patch引用、`PatchSetHash`和内容hash保持不变。超时重试必须先按幂等键回读，不得猜测成功或重复追加。
+
+approved/dismissed候选不改旧Snapshot；只有发布命令新建Snapshot。SnapshotBuild可building/failed/ready；ConfigurationSnapshot创建即frozen，只允许查看、下载原样审计归档、在完整性门禁通过时正式导出、审计、复制新修订、生成升级候选，禁止原地编辑/重算/rebase/换hash/删除引用。`download_snapshot_audit_archive`只要求`snapshot.audit_archive.download`并遵守第14节的原样打包语义；`export_snapshot`要求`snapshot.export`，不可重放或缺策略引用的BLOCKER必须阻断它以及后续配置导出。
 
 正常路径：解决rebase并发布新Snapshot。  
 边界：语义相同也只关闭候选，不重写hash。  
-冲突：处理时基线再变则superseded。  
-恢复：复制决定到最新候选；失败Build可重试且无半快照。  
+冲突：处理时Patch head或基线再变则本次rebase事务回滚，旧revision保持`REBASE_REQUIRED`，调用方基于最新基线重新预览；UpgradeCandidate按其独立状态机进入superseded。
+恢复：rebase按幂等键回读或在最新基线上重试；复制决定到最新候选；失败Build可重试且无半快照。
 权限：rebase、审核、发布分开；冻结快照无edit。  
-验收：Given S1已发布，When 批准升级候选，Then S1/hash不变；再次发布才生成S2。
+验收：Given Patch revision 7因基线变化进入`REBASE_REQUIRED`，When `rebase_patch`重验相同head和基线并成功，Then 原子创建revision 8且状态为`PENDING_REVIEW`，revision 7及其操作/hash保持不变；Given计算、校验或写入任一步失败，Then不存在revision 8或半操作组；Given提交前基线再次变化，Then返回冲突且revision 7、历史Snapshot及`PatchSetHash`不变。Given S1已发布，When 批准升级候选，Then S1/hash不变；再次发布才生成S2。
 
 ### 24.12 R11：状态与文案
 

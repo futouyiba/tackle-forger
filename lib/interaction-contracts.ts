@@ -131,7 +131,7 @@ export function isStateChangingActionCode(action: ActionCode): boolean {
 export interface EntityRef {
   workspaceId: string;
   entityType:
-    | "collection" | "series" | "sku_drawer" | "model"
+    | "workspace" | "collection" | "series" | "sku_drawer" | "model"
     | "configuration_snapshot" | "model_candidate" | "adjustment_patch"
     | "upgrade_candidate" | "rule_source_change_draft" | "feishu_rule_proposal"
     | "config_id_bundle" | "config_id_policy" | "config_target_catalog"

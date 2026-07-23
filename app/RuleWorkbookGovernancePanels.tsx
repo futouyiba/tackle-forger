@@ -19,6 +19,7 @@ import type {
   SourceIdentityConfirmation,
   StableIdWriteResult,
 } from "@/lib/source-id-migration";
+import { issueClientActionCommand } from "@/lib/client-action-command";
 import "./rule-workbook-governance.css";
 
 interface IdentityMigrationPanelProps {
@@ -83,15 +84,23 @@ export function IdentityMigrationPanel({
     setBusy(true);
     setError("");
     try {
+      const businessPayload = {
+        action: "identity_write",
+        baseRevision,
+        reportId: report.reportId,
+        confirmations,
+      };
+      const invocation = await issueClientActionCommand({
+        action: "write_feishu_identity",
+        idempotencyKey:
+          `write-feishu-identity:${baseRevision}:${report.reportId}:` +
+          crypto.randomUUID(),
+        payload: businessPayload,
+      });
       const response = await fetch("/api/feishu-workbook", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          action: "identity_write",
-          baseRevision,
-          reportId: report.reportId,
-          confirmations,
-        }),
+        body: JSON.stringify(invocation),
       });
       const payload = (await response.json()) as {
         result?: StableIdWriteResult;

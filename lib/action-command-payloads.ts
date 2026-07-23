@@ -242,11 +242,8 @@ export class InMemoryActionCommandPayloadStore implements ActionCommandPayloadSt
     for (const leaseRef of currentLeases) this.setCurrentLease(leaseRef);
   }
 
-  private leaseKey(input: Pick<ActionCommandLeaseRef, "workspaceId" | "action">) {
-    return actionCommandHash({
-      workspaceId: input.workspaceId,
-      action: input.action,
-    });
+  private leaseKey(input: Pick<ActionCommandLeaseRef, "workspaceId">) {
+    return actionCommandHash({ workspaceId: input.workspaceId });
   }
 
   setCurrentLease(leaseRef: ActionCommandLeaseRef): void {
@@ -256,7 +253,7 @@ export class InMemoryActionCommandPayloadStore implements ActionCommandPayloadSt
     this.currentLeases.set(key, structuredClone(leaseRef));
   }
 
-  clearCurrentLease(input: Pick<ActionCommandLeaseRef, "workspaceId" | "action">): void {
+  clearCurrentLease(input: Pick<ActionCommandLeaseRef, "workspaceId">): void {
     const key = this.leaseKey(input);
     this.assertLeaseMutable(key);
     this.currentLeases.delete(key);
@@ -492,6 +489,12 @@ export async function issueActionCommandPayload(input: {
       "只读动作不得签发状态写命令载荷。",
     );
   }
+  // 所有状态写先验证完整租约身份；功能开关或能力禁用不能形成一个
+  // 可绕过工作区单写锁的无租约签发分支。
+  assertLeaseRef(input.leaseRef, {
+    workspaceId: input.subjectRef.workspaceId,
+    action: input.action,
+  });
   const availability = actionAvailability(input.action, input.capabilities);
   if (!availability.enabled) {
     throw new ActionCommandPayloadError(
@@ -523,10 +526,6 @@ export async function issueActionCommandPayload(input: {
   if (input.manifestHash) assertSha256(input.manifestHash, "manifestHash");
   // v3 §20.2.7 要求所有服务端共享状态写绑定完整租约身份；实际写入点
   // 由 store 从权威 WorkspaceActionLease 原子重验，不能信任调用方自报当前值。
-  assertLeaseRef(input.leaseRef, {
-    workspaceId: input.subjectRef.workspaceId,
-    action: input.action,
-  });
   const now = input.now ?? new Date();
   const expiresAt = parseExpiresAt(input.expiresAt);
   if (expiresAt !== undefined && expiresAt <= now.getTime()) {

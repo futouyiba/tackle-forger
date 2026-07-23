@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { chmod, mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -9,8 +10,10 @@ import { ensureWorkflowFields } from "./workflow";
 type StoredRevision = RevisionInfo & { state: WorkspaceState };
 
 const databases = new Map<string, Promise<DatabaseSync>>();
+const transactionTails = new Map<string, Promise<void>>();
+const transactionContext = new AsyncLocalStorage<string>();
 
-async function openDatabase(databasePath: string) {
+export async function openSqliteDatabase(databasePath: string) {
   const resolved = path.resolve(databasePath);
   let pending = databases.get(resolved);
   if (!pending) {
@@ -59,6 +62,55 @@ async function openDatabase(databasePath: string) {
   return pending;
 }
 
+const openDatabase = openSqliteDatabase;
+
+export async function runSqliteImmediateTransaction<T>(
+  databasePath: string,
+  execute: (db: DatabaseSync) => Promise<T>,
+): Promise<T> {
+  const key = path.resolve(databasePath);
+  const db = await openSqliteDatabase(databasePath);
+  if (transactionContext.getStore() === key && db.isTransaction) {
+    return execute(db);
+  }
+  const prior = transactionTails.get(key) ?? Promise.resolve();
+  const run = prior.catch(() => undefined).then(async () => {
+    if (db.isTransaction) {
+      throw new Error("检测到未完成的 SQLite 事务。");
+    }
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const result = await transactionContext.run(
+        key,
+        () => execute(db),
+      );
+      db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      if (db.isTransaction) db.exec("ROLLBACK");
+      throw error;
+    }
+  });
+  const tail = run.then(() => undefined, () => undefined);
+  transactionTails.set(key, tail);
+  try {
+    return await run;
+  } finally {
+    if (transactionTails.get(key) === tail) transactionTails.delete(key);
+  }
+}
+
+export async function waitForSqliteTransaction(databasePath: string) {
+  const key = path.resolve(databasePath);
+  if (transactionContext.getStore() === key) return;
+  while (true) {
+    const tail = transactionTails.get(key);
+    if (!tail) return;
+    await tail;
+    if (transactionTails.get(key) === tail) return;
+  }
+}
+
 export async function closeSqliteStorage(databasePath: string) {
   const resolved = path.resolve(databasePath);
   const pending = databases.get(resolved);
@@ -67,7 +119,7 @@ export async function closeSqliteStorage(databasePath: string) {
   if (db.isOpen) db.close();
   databases.delete(resolved);
 }
-function seedDatabase(db: DatabaseSync) {
+export function ensureSqliteWorkspaceSeeded(db: DatabaseSync) {
   const existing = db.prepare("SELECT revision FROM workspace_state WHERE id = ?").get("main") as
     | { revision: number }
     | undefined;
@@ -93,9 +145,12 @@ function seedDatabase(db: DatabaseSync) {
   }
 }
 
+const seedDatabase = ensureSqliteWorkspaceSeeded;
+
 export async function loadSqliteWorkspace(databasePath: string) {
   const db = await openDatabase(databasePath);
   seedDatabase(db);
+  await waitForSqliteTransaction(databasePath);
   const row = db.prepare("SELECT state_json, revision FROM workspace_state WHERE id = ?").get("main") as {
     state_json: string;
     revision: number;
@@ -114,11 +169,9 @@ export async function saveSqliteWorkspace(databasePath: string, input: {
 }) {
   const db = await openDatabase(databasePath);
   seedDatabase(db);
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    const current = db.prepare("SELECT revision FROM workspace_state WHERE id = ?").get("main") as { revision: number };
+  return runSqliteImmediateTransaction(databasePath, async (transaction) => {
+    const current = transaction.prepare("SELECT revision FROM workspace_state WHERE id = ?").get("main") as { revision: number };
     if (current.revision !== input.baseRevision) {
-      db.exec("ROLLBACK");
       return { revision: current.revision, conflict: true as const };
     }
     const revision = input.baseRevision + 1;
@@ -127,26 +180,22 @@ export async function saveSqliteWorkspace(databasePath: string, input: {
     const savedState = ensureWorkflowFields(structuredClone(input.state));
     savedState.revisions = [info, ...(savedState.revisions ?? []).filter((entry) => entry.revision !== revision)].slice(0, 100);
     const json = JSON.stringify(savedState);
-    const updated = db.prepare("UPDATE workspace_state SET state_json = ?, revision = ?, updated_by = ?, updated_at = ? WHERE id = ? AND revision = ?")
+    const updated = transaction.prepare("UPDATE workspace_state SET state_json = ?, revision = ?, updated_by = ?, updated_at = ? WHERE id = ? AND revision = ?")
       .run(json, revision, input.author, createdAt, "main", input.baseRevision);
     if (updated.changes !== 1) {
-      db.exec("ROLLBACK");
-      const latest = db.prepare("SELECT revision FROM workspace_state WHERE id = ?").get("main") as { revision: number } | undefined;
+      const latest = transaction.prepare("SELECT revision FROM workspace_state WHERE id = ?").get("main") as { revision: number } | undefined;
       return { revision: latest?.revision ?? input.baseRevision, conflict: true as const };
     }
-    db.prepare("INSERT INTO workspace_revisions (revision, state_json, author, message, created_at) VALUES (?, ?, ?, ?, ?)")
+    transaction.prepare("INSERT INTO workspace_revisions (revision, state_json, author, message, created_at) VALUES (?, ?, ?, ?, ?)")
       .run(revision, json, input.author, input.message, createdAt);
-    db.exec("COMMIT");
     return { revision };
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
+  });
 }
 
 export async function listSqliteRevisions(databasePath: string): Promise<RevisionInfo[]> {
   const db = await openDatabase(databasePath);
   seedDatabase(db);
+  await waitForSqliteTransaction(databasePath);
   const rows = db.prepare("SELECT revision, author, message, created_at FROM workspace_revisions ORDER BY revision DESC LIMIT 100").all() as Array<{
     revision: number; author: string; message: string; created_at: string;
   }>;
@@ -156,6 +205,7 @@ export async function listSqliteRevisions(databasePath: string): Promise<Revisio
 export async function loadSqliteRevision(databasePath: string, revision: number) {
   const db = await openDatabase(databasePath);
   seedDatabase(db);
+  await waitForSqliteTransaction(databasePath);
   const row = db.prepare("SELECT state_json FROM workspace_revisions WHERE revision = ?").get(revision) as
     | { state_json: string }
     | undefined;

@@ -27,6 +27,7 @@ import {
   type ActionAvailabilityMap,
   type BreadcrumbItem,
 } from "@/lib/interaction-contracts";
+import { issueClientActionCommand } from "@/lib/client-action-command";
 import { buildSamePartComparison, calculateModelFiveAxisPreview, fiveAxisPlotRatio } from "@/lib/five-axis";
 import { deterministicHash } from "@/lib/rule-kernel";
 import {
@@ -1002,26 +1003,33 @@ export function SeriesGanttWorkbenchV3({
     // 结构标杆匹配、拉力规划与 SKU 物化都在服务端完成后按 revision 受保护地提交，
     // 客户端不能绕过 series.edit 直接写整包（规范 §24.1/§24.4/§25.1）。
     try {
+      const idempotencyKey = `create-series:${draft.seriesId}`;
+      const businessPayload = {
+        idempotencyKey,
+        seriesId: draft.seriesId,
+        name: draft.name,
+        concept: draft.concept,
+        collectionId: draft.collectionId || undefined,
+        itemPartId: draft.itemPartId,
+        methodId: draft.methodId,
+        typeId: draft.typeId,
+        functionId: draft.functionId,
+        qualityId: draft.qualityId,
+        performanceId: draft.performanceId || undefined,
+        functionIntensity: draft.functionIntensity,
+        planningMinKgf: draft.planningMinKgf,
+        planningMaxKgf: draft.planningMaxKgf,
+        discretePulls: draft.discretePulls,
+      };
+      const invocation = await issueClientActionCommand({
+        action: "create_series",
+        idempotencyKey,
+        payload: businessPayload,
+      });
       const response = await fetch("/api/series", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          idempotencyKey: `create-series:${draft.seriesId}`,
-          seriesId: draft.seriesId,
-          name: draft.name,
-          concept: draft.concept,
-          collectionId: draft.collectionId || undefined,
-          itemPartId: draft.itemPartId,
-          methodId: draft.methodId,
-          typeId: draft.typeId,
-          functionId: draft.functionId,
-          qualityId: draft.qualityId,
-          performanceId: draft.performanceId || undefined,
-          functionIntensity: draft.functionIntensity,
-          planningMinKgf: draft.planningMinKgf,
-          planningMaxKgf: draft.planningMaxKgf,
-          discretePulls: draft.discretePulls,
-        }),
+        body: JSON.stringify(invocation),
       });
       const payload = (await response.json().catch(() => null)) as {
         state?: WorkspaceState;
@@ -1113,23 +1121,30 @@ export function SeriesGanttWorkbenchV3({
       if (!confirmed) return;
 
       const replacementSkuId = `sku:${crypto.randomUUID()}`;
+      const idempotencyKey =
+        `change-sku-target-pull:${selectedSku.id}:` +
+        `${selectedSku.revision}:${crypto.randomUUID()}`;
+      const businessPayload = {
+        skuId: selectedSku.id,
+        expectedRevision: selectedSku.revision,
+        targetPullKg,
+        projectionMatch: match,
+        expectedMode: previewPayload.mode,
+        publishedDescendantFingerprint:
+          previewPayload.publishedDescendantFingerprint,
+        replacementSkuId,
+        deprecateOriginal: true,
+        idempotencyKey,
+      };
+      const invocation = await issueClientActionCommand({
+        action: "change_sku_target_pull",
+        idempotencyKey,
+        payload: businessPayload,
+      });
       const response = await fetch("/api/skus/target-pull", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          skuId: selectedSku.id,
-          expectedRevision: selectedSku.revision,
-          targetPullKg,
-          projectionMatch: match,
-          expectedMode: previewPayload.mode,
-          publishedDescendantFingerprint:
-            previewPayload.publishedDescendantFingerprint,
-          replacementSkuId,
-          deprecateOriginal: true,
-          idempotencyKey:
-            `change-sku-target-pull:${selectedSku.id}:` +
-            `${selectedSku.revision}:${crypto.randomUUID()}`,
-        }),
+        body: JSON.stringify(invocation),
       });
       const payload = (await response.json().catch(() => null)) as
         | {

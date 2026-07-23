@@ -255,6 +255,70 @@ test("租约变更不能插入权威校验与实际状态写之间", async () =>
   }));
 });
 
+test("同一工作区切换动作会废止旧动作租约，且不同动作不能并发进入写窗口", async () => {
+  const store = createStore();
+  const createPatchRef = await issueCreatePatch(store, {
+    idempotencyKey: "create-patch:cross-action-lease",
+  });
+  const saveWorkspaceLease = leaseFor(
+    "save_workspace",
+    "42",
+    subjectRef.workspaceId,
+    "lease:save_workspace:new",
+  );
+
+  store.setCurrentLease(saveWorkspaceLease);
+  await assert.rejects(
+    executeActionCommandPayload({
+      store,
+      invocation: {
+        actionId: "issue-action:create-patch",
+        payloadRefId: createPatchRef.payloadRefId,
+      },
+      actorId: "feishu:tenant:user-1",
+      capabilities: ["model.patch.create"],
+      currentSubjectRef: subjectRef,
+      currentInputHash: inputHash,
+      execute: async () => ({ impossible: true }),
+    }),
+    errorCode("STALE_FENCING_TOKEN"),
+  );
+
+  store.setCurrentLease(createPatchLease);
+  let releaseWrite!: () => void;
+  let markStarted!: () => void;
+  const released = new Promise<void>((resolve) => {
+    releaseWrite = resolve;
+  });
+  const started = new Promise<void>((resolve) => {
+    markStarted = resolve;
+  });
+  const execution = executeActionCommandPayload({
+    store,
+    invocation: {
+      actionId: "issue-action:create-patch",
+      payloadRefId: createPatchRef.payloadRefId,
+    },
+    actorId: "feishu:tenant:user-1",
+    capabilities: ["model.patch.create"],
+    currentSubjectRef: subjectRef,
+    currentInputHash: inputHash,
+    execute: async () => {
+      markStarted();
+      await released;
+      return { resultingPatchRevision: 8 };
+    },
+  });
+  await started;
+  assert.throws(
+    () => store.setCurrentLease(saveWorkspaceLease),
+    /状态写事务锁定/,
+  );
+  releaseWrite();
+  assert.equal((await execution).replayed, false);
+  assert.doesNotThrow(() => store.setCurrentLease(saveWorkspaceLease));
+});
+
 test("状态写 ActionLink 必须携带匹配的服务端命令载荷；禁用动作与导航不得携带载荷", async () => {
   const store = createStore();
   const payloadRef = await issueCreatePatch(store);

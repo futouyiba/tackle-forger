@@ -57,6 +57,8 @@ Windows 推荐使用项目自带脚本，避免把重定向字符串误当成程
 生产构建由 Vinext 生成。正式目标环境是公司内网 Dell R730；Vercel 地址仅作为评审入口，
 不能替代内网持久磁盘、公司飞书凭据和真实配置仓库验收。
 完整安装、systemd、Nginx、备份与回滚步骤见 `docs/deployment/r730-production.md`。
+一期部署前预检、只读 smoke、真实 OAuth/工作簿/主流程证据与回填格式见
+`docs/deployment/phase-one-acceptance.md`。预检结果不能替代真实环境端到端验收。
 
 ## 公司飞书登录
 

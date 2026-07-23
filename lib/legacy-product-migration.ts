@@ -162,7 +162,6 @@ export function migrateLegacyProductIdentity(
           skuId: stableId("legacy-sku-drawer:", sku.id),
         };
       }),
-      targetWeightsKg: Array.from(new Set(targetWeights)),
       signature: [],
       patchIds: [],
       skuIds: migratedSkuIds,
@@ -174,22 +173,19 @@ export function migrateLegacyProductIdentity(
     for (const sku of seriesSkus) {
       const candidate = candidates.find((item) => item.id === sku.candidateId);
       const template = templates.find((item) => item.id === sku.templateId);
-      const targetWeightKg = template?.nominalFishKg ?? (sku.fishMinKg + sku.fishMaxKg) / 2;
+      const targetPullKg = template?.nominalFishKg ?? (sku.fishMinKg + sku.fishMaxKg) / 2;
       const drawerId = stableId("legacy-sku-drawer:", sku.id);
       const modelId = stableId("legacy-model:", sku.id);
       const snapshotId = stableId("legacy-snapshot:", sku.id);
       const projectionId = "legacy-projection:" + sku.templateId;
       const match: ProjectionMatch = {
-        targetPullKg: targetWeightKg,
-        matchedStructuralPullKg: targetWeightKg,
+        targetPullKg,
+        matchedStructuralPullKg: targetPullKg,
         pullDistance: 0,
         itemPartId: "part:rod",
-        targetWeightKg,
         projectionId,
         weightTemplateId: sku.templateId,
         ruleSetVersion,
-        anchorWeightKg: targetWeightKg,
-        weightDistance: 0,
         affinityScore: 0,
         normalizedAttributeDistance: 0,
         reasons: ["历史 OfficialSku 迁移：原模板 ID 与发布值原样保留。"],
@@ -232,7 +228,7 @@ export function migrateLegacyProductIdentity(
         id: drawerId,
         revision: 1,
         seriesId,
-        targetWeightKg,
+        targetPullKg,
         projectionMatch: match,
         patchIds: [],
         modelIds: [modelId],
@@ -256,6 +252,9 @@ export function migrateLegacyProductIdentity(
         reductionStackingMode: state.ruleSettings?.reductionStackingMode ?? "diminishing_division",
         patchSetHash: deterministicHash(patchIds),
         finalPanelValues: structuredClone(sku.values),
+        modelFinalPullKg: typeof sku.values["杆最大拉力kgf"] === "number"
+          ? sku.values["杆最大拉力kgf"]
+          : targetPullKg,
         componentSelections,
         technologyIds: structuredClone(model.technologyIds),
         attributeAffixIds,

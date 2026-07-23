@@ -31,7 +31,7 @@ export type CapabilityCode =
   | "rules.five_axis.publish" | "workspace.policy.manage" | "workspace.save";
 
 export type ActionCode =
-  | "open_series" | "create_series" | "open_sku" | "preview_model"
+  | "open_series" | "create_series" | "open_sku" | "change_sku_target_pull" | "preview_model"
   | "edit" | "review" | "publish" | "generate_candidates" | "materialize_candidates"
   | "select_candidate" | "dismiss_candidate_run"
   | "create_patch" | "review_patch" | "open_rebase"
@@ -46,7 +46,7 @@ export type ActionCode =
   | "publish_five_axis_definition" | "manage_workspace_policy" | "save_workspace";
 
 export const ACTION_CODES: ActionCode[] = [
-  "open_series", "create_series", "open_sku", "preview_model", "edit", "review", "publish",
+  "open_series", "create_series", "open_sku", "change_sku_target_pull", "preview_model", "edit", "review", "publish",
   "generate_candidates", "materialize_candidates", "select_candidate", "dismiss_candidate_run",
   "create_patch", "review_patch", "open_rebase", "view_snapshot", "export_snapshot",
   "run_ai_assessment", "create_ai_patch_draft", "create_ai_feishu_draft", "manage_ai_provider_policy",
@@ -517,6 +517,7 @@ const ACTION_CAPABILITIES: Partial<Record<ActionCode, CapabilityCode[]>> = {
   open_series: ["series.read"],
   create_series: ["series.edit"],
   open_sku: ["sku.read"],
+  change_sku_target_pull: ["sku.edit"],
   preview_model: ["model.read"],
   edit: ["model.edit"],
   review: ["model.review"],
@@ -768,6 +769,7 @@ export function buildSeriesGanttProjection(input: {
       const skuNodes = input.skus
         .filter((sku) =>
           sku.seriesId === series.id
+          && sku.status !== "superseded"
           && isProductItemPartEnabled(sku.projectionMatch.itemPartId)
           && sku.projectionMatch.itemPartId === itemPartId)
         .sort((left, right) => left.targetPullKg - right.targetPullKg || left.id.localeCompare(right.id))

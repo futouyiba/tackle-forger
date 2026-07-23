@@ -8,6 +8,7 @@ import {
   unavailablePerformanceSummary,
   verifyPerformanceSummaryDefinition,
 } from "../lib/performance-summary";
+import { deterministicHash } from "../lib/rule-kernel";
 import type { ProjectionTraceStep } from "../lib/types";
 
 const trace: ProjectionTraceStep[] = [
@@ -199,4 +200,47 @@ test("缺少定义冻结精确 UNAVAILABLE 分支，草稿或被篡改定义 fai
 
   const tampered = { ...definition(), definitionVersion: "changed" };
   assert.equal(verifyPerformanceSummaryDefinition(tampered), false);
+});
+
+test("持久化定义中的未知 matcher 枚举与缺失 source ID 均 fail closed", () => {
+  const current = definition();
+  const malformed = [
+    {
+      ...current,
+      rules: current.rules.map((rule) => rule.matcher.source === "final_panel"
+        ? { ...rule, matcher: { ...rule.matcher, comparison: "gteq" } }
+        : rule),
+    },
+    {
+      ...current,
+      rules: current.rules.map((rule) => rule.matcher.source === "technology"
+        ? { ...rule, matcher: { source: "technology", technologyId: "" } }
+        : rule),
+    },
+    {
+      ...current,
+      rules: current.rules.map((rule) => rule.matcher.source === "affix"
+        ? { ...rule, matcher: { source: "unknown", affixId: "affix:sensitive" } }
+        : rule),
+    },
+    {
+      ...current,
+      rules: current.rules.map((rule) => ({ ...rule, direction: "up" })),
+    },
+  ].map((candidate) => {
+    const content = {
+      definitionId: candidate.definitionId,
+      definitionVersion: candidate.definitionVersion,
+      publicationState: candidate.publicationState,
+      rules: candidate.rules,
+    };
+    return { ...candidate, definitionHash: deterministicHash(content) };
+  });
+
+  for (const candidate of malformed) {
+    assert.equal(
+      verifyPerformanceSummaryDefinition(candidate as unknown as typeof current),
+      false,
+    );
+  }
 });

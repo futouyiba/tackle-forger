@@ -1,6 +1,7 @@
 import { evaluateCanonicalAffinity, evaluateCanonicalHardCompatibility } from "./compatibility";
 import { deterministicHash } from "./rule-kernel";
 import {
+  assertCurrentSeriesSkuSpecifications,
   assertSeriesItemPartChainEnabled,
 } from "./enabled-item-parts";
 import type {
@@ -83,12 +84,17 @@ export function generateModelCandidateRun(input: {
   if (selectedSkus.some((sku) => sku.seriesId !== series.id)) {
     throw new Error("CandidateGenerationRequest 的 SKU 不属于请求的 Series。");
   }
+  assertCurrentSeriesSkuSpecifications(
+    series,
+    selectedSkus,
+    "candidate_generation",
+  );
   assertSeriesItemPartChainEnabled(
     series,
     selectedSkus,
     "candidate_generation",
     [],
-    input.state.skuDrawers,
+    input.state.skuDrawers.filter((sku) => sku.status !== "superseded"),
   );
   const ruleSetVersion = input.state.ruleSetVersions.find((entry) => entry.status === "published")?.id ?? "";
   const options = {
@@ -240,12 +246,17 @@ export function materializeCandidateRun(input: {
     }
     return sku;
   });
+  assertCurrentSeriesSkuSpecifications(
+    requestSeries,
+    requestSkus,
+    "candidate_materialization",
+  );
   assertSeriesItemPartChainEnabled(
     requestSeries,
     requestSkus,
     "candidate_materialization",
     [],
-    input.state.skuDrawers,
+    input.state.skuDrawers.filter((sku) => sku.status !== "superseded"),
   );
   const requestedSkuIds = new Set(requestSkus.map((sku) => sku.id));
   for (const candidate of input.run.candidates) {
@@ -257,12 +268,17 @@ export function materializeCandidateRun(input: {
       ? input.state.seriesDefinitions.find((entry) => entry.id === sku.seriesId)
       : undefined;
     if (!series || !sku) throw new Error(`Candidate ${candidate.candidateId} 的 SKU/Series 父链不存在。`);
+    assertCurrentSeriesSkuSpecifications(
+      series,
+      [sku],
+      "candidate_materialization",
+    );
     assertSeriesItemPartChainEnabled(
       series,
       [sku],
       "candidate_materialization",
       [],
-      input.state.skuDrawers,
+      input.state.skuDrawers.filter((entry) => entry.status !== "superseded"),
     );
   }
   const models = structuredClone(input.state.purchasableModels);

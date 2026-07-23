@@ -116,7 +116,15 @@ export function createPerformanceSummaryDefinition(
 export function verifyPerformanceSummaryDefinition(
   definition: PerformanceSummaryDefinition,
 ): boolean {
-  if (!definition.definitionId.trim() || !definition.definitionVersion.trim()) {
+  if (
+    typeof definition.definitionId !== "string"
+    || !definition.definitionId.trim()
+    || typeof definition.definitionVersion !== "string"
+    || !definition.definitionVersion.trim()
+    || !["DRAFT", "PUBLISHED", "SUPERSEDED"].includes(definition.publicationState)
+    || typeof definition.definitionHash !== "string"
+    || !Array.isArray(definition.rules)
+  ) {
     return false;
   }
   try {
@@ -161,18 +169,46 @@ export function resolvePerformanceSummaryDefinition(input: {
 function validateRules(rules: PerformanceSummaryRule[]): void {
   const keys = new Set<string>();
   for (const rule of rules) {
-    if (!rule.key.trim() || !rule.label.trim() || !Number.isInteger(rule.order)) {
+    if (
+      !rule
+      || typeof rule !== "object"
+      || typeof rule.key !== "string"
+      || !rule.key.trim()
+      || typeof rule.label !== "string"
+      || !rule.label.trim()
+      || !Number.isInteger(rule.order)
+      || !["positive", "negative", "neutral", "contextual"].includes(rule.direction)
+      || !rule.matcher
+      || typeof rule.matcher !== "object"
+    ) {
       throw new Error("PerformanceSummaryDefinition 的 key、label 与整数 order 均为必填。");
     }
     if (keys.has(rule.key)) {
       throw new Error(`PerformanceSummaryDefinition 包含重复标签 key：${rule.key}。`);
     }
     keys.add(rule.key);
-    if (
-      rule.matcher.source === "final_panel"
-      && (!rule.matcher.parameterKey.trim() || !Number.isFinite(rule.matcher.threshold))
-    ) {
-      throw new Error(`PerformanceSummaryDefinition 的 ${rule.key} 数值匹配器无效。`);
+    if (rule.matcher.source === "technology") {
+      if (
+        typeof rule.matcher.technologyId !== "string"
+        || !rule.matcher.technologyId.trim()
+      ) {
+        throw new Error(`PerformanceSummaryDefinition 的 ${rule.key} Technology 匹配器无效。`);
+      }
+    } else if (rule.matcher.source === "affix") {
+      if (typeof rule.matcher.affixId !== "string" || !rule.matcher.affixId.trim()) {
+        throw new Error(`PerformanceSummaryDefinition 的 ${rule.key} Affix 匹配器无效。`);
+      }
+    } else if (rule.matcher.source === "final_panel") {
+      if (
+        typeof rule.matcher.parameterKey !== "string"
+        || !rule.matcher.parameterKey.trim()
+        || !["gte", "gt", "lte", "lt", "eq"].includes(rule.matcher.comparison)
+        || !Number.isFinite(rule.matcher.threshold)
+      ) {
+        throw new Error(`PerformanceSummaryDefinition 的 ${rule.key} 数值匹配器无效。`);
+      }
+    } else {
+      throw new Error(`PerformanceSummaryDefinition 的 ${rule.key} matcher source 无效。`);
     }
   }
 }
@@ -186,7 +222,8 @@ function numberMatches(
   if (comparison === "gt") return value > threshold;
   if (comparison === "lte") return value <= threshold;
   if (comparison === "lt") return value < threshold;
-  return Object.is(value, threshold);
+  if (comparison === "eq") return Object.is(value, threshold);
+  throw new Error(`PerformanceSummaryDefinition 包含未知 comparison：${String(comparison)}。`);
 }
 
 function traceEvidence(

@@ -88,6 +88,15 @@ test("受约束配方生成并发布规范 ID", () => {
     { executionMode: "legacy_performance_replay" },
   ).find((candidate) => candidate.selections.performanceId);
   assert.ok(legacy);
+  const explicitlyReplayed = calculateCandidate(
+    state,
+    legacy!,
+    { executionMode: "legacy_performance_replay" },
+  );
+  assert.deepEqual(legacy!.calculated.values, explicitlyReplayed.calculated.values);
+  assert.deepEqual(legacy!.calculated.trace, explicitlyReplayed.calculated.trace);
+  assert.equal(legacy!.calculated.priceIndex, explicitlyReplayed.calculated.priceIndex);
+  assert.ok(legacy!.calculated.trace.some((entry) => entry.layer === "性能定位"));
   assert.throws(
     () => publishCandidate(state, legacy!),
     /只读历史证据/,

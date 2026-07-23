@@ -500,7 +500,7 @@ export function generateCandidatesForRecipe(
             createdAt: now,
             updatedAt: now,
           };
-          generated.push(calculateCandidate(state, draft));
+          generated.push(calculateCandidate(state, draft, options));
           if (generated.length >= recipe.maxCandidates) break outer;
         }
       }

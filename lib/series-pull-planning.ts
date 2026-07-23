@@ -118,7 +118,12 @@ export function materializeConfirmedPullSpecifications(input: {
       }
       if (
         input.existingSkus.some((sku) =>
-          sku.id === skuId || (sku.seriesId === input.series.id && sku.targetPullKg === pull))
+          sku.id === skuId
+          || (
+            sku.status !== "superseded"
+            && sku.seriesId === input.series.id
+            && sku.targetPullKg === pull
+          ))
       ) {
         throw new Error(`离散拉力 ${pull}kgf 或 SKU ID ${skuId} 已存在，禁止重复物化。`);
       }

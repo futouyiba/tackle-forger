@@ -377,6 +377,31 @@ test("整包 PUT 保留 revision 冲突、授权与已发布 Snapshot 冻结", {
   assert.equal(unauthenticated.status, 401);
 });
 
+test("两标签页后的普通字段保存忽略陈旧 revisions 投影，且不能伪造历史", { concurrency: false }, async () => {
+  withTrustedProxy();
+  const first = await loadWorkspaceState();
+  const staleTabState = structuredClone(first.state);
+  const otherTab = structuredClone(first.state);
+  otherTab.notes = "other tab saved";
+  const otherSave = await issueAndInvoke({
+    action: "save_workspace", url: "http://localhost/api/state", method: "PUT",
+    payload: { state: otherTab, baseRevision: first.revision }, invoke: putState,
+  });
+  assert.equal(otherSave.status, 200);
+  const latest = await loadWorkspaceState();
+  staleTabState.notes = "local tab after conflict recovery";
+  staleTabState.revisions = [{ revision: 0, author: "forged", message: "forged", createdAt: "2020-01-01T00:00:00.000Z" }];
+  const localSave = await issueAndInvoke({
+    action: "save_workspace", url: "http://localhost/api/state", method: "PUT",
+    payload: { state: staleTabState, baseRevision: latest.revision }, invoke: putState,
+  });
+  assert.equal(localSave.status, 200, "陈旧 revisions 不得把普通字段保存变为422");
+  const after = await loadWorkspaceState();
+  assert.equal(after.state.notes, "local tab after conflict recovery");
+  assert.equal(after.state.revisions.some((entry) => entry.author === "forged"), false);
+  assert.ok(after.revision > latest.revision);
+});
+
 test("数据源发布更新规则但不重算或改写四组历史产品数据", { concurrency: false }, async () => {
   withTrustedProxy();
   const originalFeishuAppId = process.env.FEISHU_APP_ID;

@@ -84,6 +84,19 @@ export function governedStateFieldDetails(fields: readonly string[]): GovernedSt
   });
 }
 
+/**
+ * `revisions` is response metadata maintained by the storage transaction, not
+ * an editable WorkspaceState aggregate. A tab may legitimately carry an older
+ * projection after another save. Always replace it with the current authority
+ * before applying whole-state validation or persistence.
+ */
+export function preserveServerManagedWorkspaceMetadata(
+  current: WorkspaceState,
+  proposed: WorkspaceState,
+): WorkspaceState {
+  return { ...proposed, revisions: current.revisions };
+}
+
 export function findGovernedStateChanges(current: WorkspaceState, proposed: WorkspaceState): string[] {
   const currentRecord = current as unknown as Record<string, unknown>;
   const proposedRecord = proposed as unknown as Record<string, unknown>;

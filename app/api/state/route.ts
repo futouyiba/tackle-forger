@@ -16,6 +16,7 @@ import {
   findGovernedStateChanges,
   findReadOnlyLegacyProductChanges,
   governedStateFieldDetails,
+  preserveServerManagedWorkspaceMetadata,
   stableAuditActor,
 } from "@/lib/api-command-boundaries";
 import {
@@ -112,8 +113,15 @@ export async function PUT(request: NextRequest) {
             },
           };
         }
+        // `revisions` is server-maintained response metadata. Project it from
+        // the authoritative current state so a second tab cannot be rejected
+        // merely for carrying an older list, nor forge workspace history.
+        const proposedWithServerMetadata = preserveServerManagedWorkspaceMetadata(
+          current.state,
+          proposed,
+        );
         try {
-          assertFrozenConfigIdentityTransition(current.state, proposed);
+          assertFrozenConfigIdentityTransition(current.state, proposedWithServerMetadata);
         } catch (error) {
           if (error instanceof ConfigIdGovernanceError) {
             const frozenField = error.code === "PUBLISHED_CONFIGURATION_SNAPSHOT_FROZEN"
@@ -134,11 +142,11 @@ export async function PUT(request: NextRequest) {
           }
           throw error;
         }
-        const governedChanges = findGovernedStateChanges(current.state, proposed);
+        const governedChanges = findGovernedStateChanges(current.state, proposedWithServerMetadata);
         if (governedChanges.length) {
           const legacyHistoryChanges = findReadOnlyLegacyProductChanges(
             current.state,
-            proposed,
+            proposedWithServerMetadata,
           );
           const legacyHistoryOnly = changesOnlyReadOnlyLegacyHistory(governedChanges);
           const governedFields = governedStateFieldDetails(governedChanges);
@@ -158,7 +166,7 @@ export async function PUT(request: NextRequest) {
           };
         }
         const result = await saveWorkspaceState({
-          state: proposed,
+          state: proposedWithServerMetadata,
           baseRevision: body.baseRevision,
           author: stableAuditActor(user),
           message: typeof body.message === "string" && body.message.trim()

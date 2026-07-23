@@ -15,6 +15,7 @@ import { deterministicHash } from "../lib/rule-kernel";
 import {
   adaptPatchTraceToCanonical,
   adaptRuleTraceToCanonical,
+  createCalculationTraceArchive,
   createCalculationTraceEntry,
 } from "../lib/calculation-trace";
 import { createSeedState } from "../lib/seed";
@@ -256,6 +257,18 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     Object.fromEntries(Object.entries(tampered).filter(([key]) => key !== "contentHash")),
   );
   assert.equal(verifySnapshotIntegrity(tampered), false);
+  const ruleSetTampered = structuredClone(snapshot);
+  const panelEntry = ruleSetTampered.calculationTrace!.entries.find((entry) =>
+    !entry.parameterKey.startsWith("pricing:")
+    && !entry.parameterKey.startsWith("five_axis:"))!;
+  panelEntry.ruleSetVersion = "rules:tampered";
+  ruleSetTampered.calculationTrace = createCalculationTraceArchive(
+    ruleSetTampered.calculationTrace!.entries,
+  );
+  ruleSetTampered.contentHash = deterministicHash(
+    Object.fromEntries(Object.entries(ruleSetTampered).filter(([key]) => key !== "contentHash")),
+  );
+  assert.equal(verifySnapshotIntegrity(ruleSetTampered), false);
   const pricingTampered = structuredClone(snapshot);
   pricingTampered.automaticPricing!.purchasePrice =
     pricingTampered.automaticPricing!.purchasePrice! + 1;

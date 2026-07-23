@@ -528,6 +528,23 @@ function sameEntityRef(left: EntityRef, right: EntityRef): boolean {
   return entityKey(left) === entityKey(right);
 }
 
+export function assertCalculationTraceUsesRuleSetVersion(input: {
+  archive: CalculationTraceArchive;
+  subjectRef: EntityRef;
+  ruleSetVersion: string;
+}): void {
+  const mismatch = input.archive.entries.find((entry) =>
+    sameEntityRef(entry.subjectRef, input.subjectRef)
+    && entry.ruleSetVersion !== input.ruleSetVersion,
+  );
+  if (mismatch) {
+    throw new CalculationTraceReplayError(
+      `canonical Trace ruleSetVersion 与 Snapshot 不一致：${mismatch.parameterKey}。`,
+      mismatch,
+    );
+  }
+}
+
 function isAuxiliaryTraceEntry(entry: CalculationTraceEntry): boolean {
   const sourceType = "sourceType" in entry.sourceRef
     ? entry.sourceRef.sourceType

@@ -50,6 +50,7 @@ import {
   assertCalculationTraceMatchesFiveAxis,
   assertCalculationTraceMatchesFinalPanel,
   assertCalculationTraceMatchesPricing,
+  assertCalculationTraceUsesRuleSetVersion,
   createCalculationTraceArchive,
   verifyCalculationTraceArchive,
   type CalculationTraceEntry,
@@ -357,6 +358,11 @@ export function publishConfigurationSnapshot(
           }));
         }
         const archive = createCalculationTraceArchive(entries);
+        assertCalculationTraceUsesRuleSetVersion({
+          archive,
+          subjectRef,
+          ruleSetVersion: input.projection.ruleSetVersion,
+        });
         assertCalculationTraceMatchesFinalPanel({
           archive,
           subjectRef,
@@ -469,6 +475,11 @@ export function verifySnapshotIntegrity(
     );
     if (uniqueSubjects.size !== 1) return false;
     try {
+      assertCalculationTraceUsesRuleSetVersion({
+        archive: snapshot.calculationTrace,
+        subjectRef: [...uniqueSubjects.values()][0],
+        ruleSetVersion: snapshot.ruleSetVersion,
+      });
       assertCalculationTraceMatchesFinalPanel({
         archive: snapshot.calculationTrace,
         subjectRef: [...uniqueSubjects.values()][0],

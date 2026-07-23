@@ -9,6 +9,7 @@ import {
   sameModelDescriptor,
   sha256Hex,
   type RequestAlias,
+  type SafeValue,
 } from "./ai-outbound";
 
 export const AI_BATCH_LIMIT_POLICY_VERSION = "ai-batch-limits/open009-v1" as const;
@@ -118,6 +119,15 @@ export interface FancyHubRecommendationV1 {
   subjectAliases: RequestAlias[];
   evidenceAliases: RequestAlias[];
   suggestedAction: "preview_only" | "create_model_patch_draft" | "create_rule_source_change_draft";
+  suggestedChanges: FancyHubSuggestedChangeV1[];
+}
+
+export interface FancyHubSuggestedChangeV1 {
+  changeId: string;
+  parameterKey: string;
+  operation: "set" | "add" | "multiply" | "clear";
+  operand: SafeValue;
+  expectedBefore: SafeValue;
 }
 
 export interface FancyHubAssessmentResultV1 {
@@ -175,6 +185,16 @@ export interface FancyHubTruncatedRawResponseV1 {
   capturedBytes: number;
   prefixBase64: string;
   truncated: true;
+}
+
+export interface FancyHubInvalidUtf8RawResponseV1 {
+  schemaVersion: "fancy-hub-invalid-utf8-response/v1";
+  endpoint: FancyHubTruncatedRawResponseV1["endpoint"];
+  status: number;
+  byteLimit: number;
+  capturedBytes: number;
+  bodyBase64: string;
+  truncated: false;
 }
 
 export interface FancyHubAuditEvent {
@@ -415,7 +435,26 @@ async function readBoundedFancyHubResponse(
   } finally {
     reader.releaseLock();
   }
-  return new TextDecoder().decode(Buffer.concat(chunks, capturedBytes));
+  const capturedBody = Buffer.concat(chunks, capturedBytes);
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(capturedBody);
+  } catch {
+    const rawResponse: FancyHubInvalidUtf8RawResponseV1 = {
+      schemaVersion: "fancy-hub-invalid-utf8-response/v1",
+      endpoint: input.endpoint,
+      status: response.status,
+      byteLimit: input.byteLimit,
+      capturedBytes,
+      bodyBase64: capturedBody.toString("base64"),
+      truncated: false,
+    };
+    throw new FancyHubError(
+      "AI_FANCY_HUB_RESPONSE_INVALID",
+      "Fancy Hub 响应不是合法 UTF-8。",
+      false,
+      rawResponse,
+    );
+  }
 }
 
 class FancyHubDecodedTransportResponse {
@@ -470,10 +509,83 @@ function responseTextArray(value: unknown, label: string): string[] {
   return value.map((entry, index) => responseString(entry, `${label}[${index}]`, 1_024));
 }
 
+function responseSafeValue(value: unknown, label: string): SafeValue {
+  if (!plainObject(value)) throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", `${label} 必须是 SafeValue。`);
+  exactKeys(value, ["kind", "value"], label);
+  if (value.kind === "number") {
+    if (typeof value.value !== "number" || !Number.isFinite(value.value)) {
+      throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", `${label}.value 必须是有限数。`);
+    }
+    return { kind: "number", value: value.value };
+  }
+  if (value.kind === "boolean") {
+    if (typeof value.value !== "boolean") {
+      throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", `${label}.value 必须是 boolean。`);
+    }
+    return { kind: "boolean", value: value.value };
+  }
+  if (value.kind === "enum") {
+    return { kind: "enum", value: responseCode(value.value, `${label}.value`) };
+  }
+  if (value.kind === "null" && value.value === null) return { kind: "null", value: null };
+  throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", `${label}.kind 无效。`);
+}
+
+function responseSuggestedChanges(
+  value: unknown,
+  label: string,
+  suggestedAction: FancyHubRecommendationV1["suggestedAction"],
+  draftableParameterKeys: ReadonlySet<string>,
+): FancyHubSuggestedChangeV1[] {
+  if (!Array.isArray(value) || value.length > 32) {
+    throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", `${label} 必须是最多 32 项的数组。`);
+  }
+  if (suggestedAction === "preview_only" ? value.length !== 0 : value.length === 0) {
+    throw new FancyHubError(
+      "AI_FANCY_HUB_RESPONSE_INVALID",
+      suggestedAction === "preview_only"
+        ? `${label} 在 preview_only 建议中必须为空。`
+        : `${label} 在草稿建议中不能为空。`,
+    );
+  }
+  const changes = value.map((entry, index): FancyHubSuggestedChangeV1 => {
+    if (!plainObject(entry)) {
+      throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", `${label}[${index}] 无效。`);
+    }
+    exactKeys(entry, ["changeId", "parameterKey", "operation", "operand", "expectedBefore"], `${label}[${index}]`);
+    if (!["set", "add", "multiply", "clear"].includes(String(entry.operation))) {
+      throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", `${label}[${index}].operation 无效。`);
+    }
+    const operand = responseSafeValue(entry.operand, `${label}[${index}].operand`);
+    if (entry.operation === "clear" && (operand.kind !== "null" || operand.value !== null)) {
+      throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", `${label}[${index}] 的 clear operand 必须为 null。`);
+    }
+    const parameterKey = responseCode(entry.parameterKey, `${label}[${index}].parameterKey`);
+    if (!draftableParameterKeys.has(parameterKey)) {
+      throw new FancyHubError(
+        "AI_FANCY_HUB_RESPONSE_INVALID",
+        `${label}[${index}].parameterKey 不属于本次请求可转换的参数别名。`,
+      );
+    }
+    return {
+      changeId: responseCode(entry.changeId, `${label}[${index}].changeId`),
+      parameterKey,
+      operation: entry.operation as FancyHubSuggestedChangeV1["operation"],
+      operand,
+      expectedBefore: responseSafeValue(entry.expectedBefore, `${label}[${index}].expectedBefore`),
+    };
+  });
+  if (new Set(changes.map((entry) => entry.changeId)).size !== changes.length) {
+    throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", `${label} 的 changeId 不能重复。`);
+  }
+  return changes;
+}
+
 function parseAssessmentResult(
   value: unknown,
   authorizedAliases: ReadonlySet<string>,
   evidenceAliases: ReadonlySet<string>,
+  draftableParameterKeys: ReadonlySet<string>,
 ): FancyHubAssessmentResultV1 {
   if (!plainObject(value)) throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", "Fancy Hub result 无效。" );
   exactKeys(value, ["schemaVersion", "assessmentAlias", "findings", "recommendations", "assumptions", "uncoveredInformation"], "assessment result");
@@ -492,7 +604,7 @@ function parseAssessmentResult(
   });
   const recommendations = value.recommendations.map((entry, index): FancyHubRecommendationV1 => {
     if (!plainObject(entry)) throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", `recommendations[${index}] 无效。`);
-    exactKeys(entry, ["recommendationCode", "title", "summary", "subjectAliases", "evidenceAliases", "suggestedAction"], `recommendations[${index}]`);
+    exactKeys(entry, ["recommendationCode", "title", "summary", "subjectAliases", "evidenceAliases", "suggestedAction", "suggestedChanges"], `recommendations[${index}]`);
     if (!["preview_only", "create_model_patch_draft", "create_rule_source_change_draft"].includes(String(entry.suggestedAction))) {
       throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", `recommendations[${index}].suggestedAction 无效。`);
     }
@@ -507,15 +619,25 @@ function parseAssessmentResult(
         `recommendations[${index}] 缺少证据；无依据内容必须进入 uncoveredInformation。`,
       );
     }
+    const suggestedAction = entry.suggestedAction as FancyHubRecommendationV1["suggestedAction"];
     return {
       recommendationCode: responseCode(entry.recommendationCode, `recommendations[${index}].recommendationCode`),
       title: responseString(entry.title, `recommendations[${index}].title`, 512),
       summary: responseString(entry.summary, `recommendations[${index}].summary`, 4_096),
       subjectAliases: responseAliasArray(entry.subjectAliases, `recommendations[${index}].subjectAliases`, authorizedAliases),
       evidenceAliases: recommendationEvidenceAliases,
-      suggestedAction: entry.suggestedAction as FancyHubRecommendationV1["suggestedAction"],
+      suggestedAction,
+      suggestedChanges: responseSuggestedChanges(
+        entry.suggestedChanges,
+        `recommendations[${index}].suggestedChanges`,
+        suggestedAction,
+        draftableParameterKeys,
+      ),
     };
   });
+  if (new Set(recommendations.map((entry) => entry.recommendationCode)).size !== recommendations.length) {
+    throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", "recommendationCode 不能重复。");
+  }
   const result: FancyHubAssessmentResultV1 = {
     schemaVersion: "ai-response/v1",
     assessmentAlias: responseAlias(value.assessmentAlias, "assessmentAlias", authorizedAliases),
@@ -532,7 +654,11 @@ function parseAssessmentResult(
 
 function parseAssessmentResponse(
   value: unknown,
-  authorization: { aliases: ReadonlySet<string>; evidenceAliases: ReadonlySet<string> },
+  authorization: {
+    aliases: ReadonlySet<string>;
+    evidenceAliases: ReadonlySet<string>;
+    draftableParameterKeys: ReadonlySet<string>;
+  },
 ): FancyHubAssessmentResponse {
   if (!plainObject(value)) throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", "Fancy Hub 评估响应无效。" );
   exactKeys(value, ["model", "result", "usage"], "assessment response");
@@ -541,7 +667,12 @@ function parseAssessmentResponse(
   for (const key of ["inputTokens", "outputTokens", "costMicroUsd"] as const) {
     if (!Number.isInteger(value.usage[key]) || (value.usage[key] as number) < 0) throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", `usage.${key} 无效。`);
   }
-  const result = parseAssessmentResult(value.result, authorization.aliases, authorization.evidenceAliases);
+  const result = parseAssessmentResult(
+    value.result,
+    authorization.aliases,
+    authorization.evidenceAliases,
+    authorization.draftableParameterKeys,
+  );
   const model = value.model as AIModelDescriptorV1;
   return {
     model,
@@ -554,6 +685,7 @@ function parseAssessmentResponse(
 function authorizedResponseAliases(envelope: AIRequestEnvelopeV1): {
   aliases: ReadonlySet<string>;
   evidenceAliases: ReadonlySet<string>;
+  draftableParameterKeys: ReadonlySet<string>;
 } {
   const evidenceAliases = new Set(envelope.evidenceRefs.map((entry) => entry.evidenceAlias));
   return { aliases: new Set([
@@ -568,7 +700,11 @@ function authorizedResponseAliases(envelope: AIRequestEnvelopeV1): {
     ...envelope.invariants.map((entry) => entry.subjectAlias),
     ...envelope.fiveAxis.flatMap((entry) => [entry.subjectAlias, ...(entry.componentAlias ? [entry.componentAlias] : [])]),
     ...evidenceAliases,
-  ]), evidenceAliases };
+  ]),
+  evidenceAliases,
+  draftableParameterKeys: new Set(
+    envelope.panelValues.map((entry) => entry.parameterKey).filter((key) => /^p[0-9]{3,7}$/.test(key)),
+  ) };
 }
 
 function effectiveLimits(provider: AIProviderHardLimits, tenant: AIProviderHardLimits): AIProviderHardLimits {

@@ -28,16 +28,24 @@ function withActions<T extends RequestIdentity>(identity: T) {
   const actionAvailabilityMap = buildActionAvailabilityMap(identity.capabilities);
   const connector = fancyHubEnablement(fancyHubConfigFromEnvironment());
   const runtimeStore = aiRuntimeStoreEnablement();
-  const aiDomainBlock = connector.enabled && runtimeStore.enabled ? undefined : {
+  const assessmentDomainBlock = connector.enabled && runtimeStore.enabled ? undefined : {
       code: connector.code ?? runtimeStore.code ?? "AI_CONNECTOR_DISABLED",
       text: "Fancy Hub 连接器未通过服务端启用准入。",
     };
-  for (const action of [
+  actionAvailabilityMap.run_ai_assessment = actionAvailability(
     "run_ai_assessment",
+    identity.capabilities,
+    assessmentDomainBlock,
+  );
+  const draftDomainBlock = runtimeStore.enabled ? undefined : {
+    code: runtimeStore.code ?? "AI_RETENTION_STORE_DISABLED",
+    text: "AI 留存服务未通过服务端启用准入，不能验证评估来源。",
+  };
+  for (const action of [
     "create_ai_patch_draft",
     "create_ai_rule_source_change_draft",
   ] as const) {
-    actionAvailabilityMap[action] = actionAvailability(action, identity.capabilities, aiDomainBlock);
+    actionAvailabilityMap[action] = actionAvailability(action, identity.capabilities, draftDomainBlock);
   }
   return {
     ...identity,

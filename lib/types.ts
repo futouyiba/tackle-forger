@@ -1784,6 +1784,87 @@ export interface AIAssessmentRecord {
   generatedAt: string;
 }
 
+export interface AIDraftEntityRef {
+  workspaceId: string;
+  entityType: "series" | "sku_drawer" | "model" | "rule_source_change_draft";
+  entityId: string;
+  revisionId: string;
+}
+
+export interface AIDraftEvidenceRef {
+  evidenceType: "trace" | "validation_issue" | "hard_compatibility" | "affinity_axis"
+    | "series_invariant" | "five_axis" | "rule" | "snapshot";
+  refId: string;
+  revisionId?: string;
+  contentHash: string;
+}
+
+export interface AIRuleSourceChangeDraft {
+  changeDraftId: string;
+  originAssessmentId: string;
+  originRecommendationId: string;
+  sourceObjectRefs: AIDraftEntityRef[];
+  targetRuleRef: {
+    spreadsheetToken: string;
+    sheetId: string;
+    stableRuleId: string;
+    parameterKey: string;
+    sourceRevision: string;
+  };
+  proposedChange: {
+    changeId: string;
+    parameterKey: string;
+    operation: "set" | "add" | "multiply" | "clear";
+    operand: unknown;
+    expectedBefore: unknown;
+  };
+  evidenceRefs: AIDraftEvidenceRef[];
+  impactPreview: {
+    evaluatedRuleSetVersion: string;
+    affectedSeries: number;
+    affectedSkus: number;
+    affectedModels: number;
+    newErrors: number;
+    resolvedErrors: number;
+    sampleDiffRefs: string[];
+    publishedSnapshotsChanged: 0;
+    upgradeCandidatesExpected: number;
+    coverage: {
+      evaluatedModels: number;
+      totalModels: number;
+      complete: boolean;
+      unavailableModelIds: string[];
+    };
+  };
+  state: "LOCAL_DRAFT";
+  idempotencyKey: string;
+  commandHash: string;
+  createdBy: string;
+  createdAt: string;
+  provenance: {
+    assessmentInputHash: string;
+    modelDescriptor: import("./ai-outbound").AIModelDescriptorV1;
+    selectedRecommendation: unknown;
+    evidenceContentHashes: string[];
+    humanDiff: unknown;
+  };
+}
+
+export interface AIArtifactProvenanceSyncRecord {
+  syncRecordId: string;
+  assessmentId: string;
+  actorStableId: string;
+  artifactStableRefs: string[];
+  acceptedArtifactProvenance: import("./ai-retention").AIAcceptedArtifactProvenance;
+  idempotencyKey: string;
+  commandHash: string;
+  state: "PENDING" | "SYNCED" | "FAILED";
+  attempts: number;
+  createdAt: string;
+  updatedAt: string;
+  lastErrorCode?: string;
+}
+
 export interface WorkspaceExportTargetProfile {
   profileId: string;
   label: string;
@@ -1857,6 +1938,8 @@ export interface WorkspaceState {
   patchValidationWaivers: PatchValidationWaiver[];
   patchValidationWaiverDecisions: PatchValidationWaiverDecision[];
   aiAssessments: AIAssessmentRecord[];
+  aiRuleSourceChangeDrafts: AIRuleSourceChangeDraft[];
+  aiArtifactProvenanceSyncRecords: AIArtifactProvenanceSyncRecord[];
   exportTargetProfiles: WorkspaceExportTargetProfile[];
   configEnvironmentProfiles: ConfigEnvironmentProfile[];
   configExportMappings: ConfigExportMapping[];

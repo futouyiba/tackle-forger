@@ -27,6 +27,7 @@ import {
   type ActionAvailabilityMap,
   type BreadcrumbItem,
 } from "@/lib/interaction-contracts";
+import { CANONICAL_FEISHU_SHEET_REGISTRY } from "@/lib/feishu-workbook";
 import { buildSamePartComparison, calculateModelFiveAxisPreview, fiveAxisPlotRatio } from "@/lib/five-axis";
 import { deterministicHash } from "@/lib/rule-kernel";
 import {
@@ -98,6 +99,7 @@ interface AIAssessmentUiState {
   status: "running" | "success" | "error";
   error?: string;
   assessmentId?: string;
+  inputHash?: string;
   outputHash?: string;
   freshness?: {
     state: "fresh" | "stale";
@@ -106,9 +108,180 @@ interface AIAssessmentUiState {
   };
   result?: {
     findings: Array<{ findingCode: string; summary: string; evidenceAliases: string[] }>;
-    recommendations: Array<{ recommendationCode: string; title: string; summary: string; suggestedAction: string; evidenceAliases: string[] }>;
+    recommendations: Array<{
+      recommendationCode: string;
+      title: string;
+      summary: string;
+      suggestedAction: "preview_only" | "create_model_patch_draft" | "create_rule_source_change_draft";
+      evidenceAliases: string[];
+      suggestedChanges?: Array<{
+        changeId: string;
+        parameterKey: string;
+        operation: "set" | "add" | "multiply" | "clear";
+        operand: unknown;
+        expectedBefore: unknown;
+      }>;
+    }>;
     assumptions: string[];
     uncoveredInformation: string[];
+    feedback?: {
+      recommendations?: Array<{
+        recommendationId: string;
+        state: "dismissed";
+      }>;
+    };
+  };
+}
+
+interface AIDraftPreviewChange {
+  changeId?: string;
+  parameterKey: string;
+  before: unknown;
+  operation: string;
+  operand: unknown;
+  after: unknown;
+}
+
+interface AIDraftPreviewPayload {
+  previewId?: string;
+  previewHash?: string;
+  scope?: unknown;
+  targetRef?: unknown;
+  changes?: AIDraftPreviewChange[];
+  selectedChanges?: AIDraftPreviewChange[];
+  diffs?: {
+    validation?: {
+      beforeIssueCodes?: string[];
+      afterIssueCodes?: string[];
+      newBlockingIssueCodes?: string[];
+    };
+    fiveAxis?: { status?: string; affectedAxisIds?: string[] };
+    affinity?: { status?: string };
+    invariants?: {
+      beforeIssueCodes?: string[];
+      afterIssueCodes?: string[];
+      newBlockingIssueCodes?: string[];
+    };
+  };
+  evidenceRefs?: Array<{
+    evidenceType: string;
+    refId: string;
+    revisionId?: string;
+    contentHash: string;
+  }>;
+  canCreateDraft?: boolean;
+  blockingReasonCodes?: string[];
+}
+
+interface AIDraftPreviewUiState {
+  status: "idle" | "running" | "success" | "error" | "creating";
+  requestFingerprint?: string;
+  payload?: AIDraftPreviewPayload;
+  error?: string;
+}
+
+interface AIRuleTargetForm {
+  sourceRevisionId: string;
+  sheetId: string;
+  parameterKey: string;
+  stableRuleId: string;
+}
+
+function normalizedAssessmentPayload(
+  payload: (Partial<AIAssessmentUiState> & {
+    metadata?: { assessmentId?: string; inputHash?: string; outputHash?: string };
+    semanticContent?: AIAssessmentUiState["result"];
+  }) | null,
+  scopeKey: string,
+): AIAssessmentUiState | undefined {
+  const result = payload?.result ?? payload?.semanticContent;
+  const assessmentId = payload?.assessmentId ?? payload?.metadata?.assessmentId;
+  if (!payload || !assessmentId) return undefined;
+  return {
+    scopeKey,
+    status: result ? "success" : "error",
+    assessmentId,
+    inputHash: payload.inputHash ?? payload.metadata?.inputHash,
+    outputHash: payload.outputHash ?? payload.metadata?.outputHash,
+    freshness: payload.freshness,
+    result,
+    error: result ? undefined : payload.error ?? "最近一次 AI 评估未成功生成可用建议。",
+  };
+}
+
+function renderAIValue(value: unknown): string {
+  if (value === undefined) return "—";
+  if (value === null) return "null";
+  if (typeof value === "object") {
+    const safeValue = value as { kind?: unknown; value?: unknown };
+    if (typeof safeValue.kind === "string" && Object.hasOwn(safeValue, "value")) {
+      return renderAIValue(safeValue.value);
+    }
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return "无法显示";
+    }
+  }
+  return String(value);
+}
+
+function previewFromResponse(payload: unknown): AIDraftPreviewPayload | undefined {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+  const record = payload as Record<string, unknown>;
+  const preview = record.preview && typeof record.preview === "object" && !Array.isArray(record.preview)
+    ? record.preview as Record<string, unknown>
+    : record;
+  const rawChanges = Array.isArray(preview.changes)
+    ? preview.changes
+    : Array.isArray(preview.selectedChanges)
+      ? preview.selectedChanges
+      : undefined;
+  const changes = rawChanges?.flatMap((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+    const change = entry as Record<string, unknown>;
+    if (typeof change.parameterKey !== "string" || typeof change.operation !== "string") return [];
+    return [{
+      changeId: typeof change.changeId === "string" ? change.changeId : undefined,
+      parameterKey: change.parameterKey,
+      before: change.before,
+      operation: change.operation,
+      operand: change.operand,
+      after: change.after,
+    }];
+  });
+  return {
+    previewId: typeof preview.previewId === "string" ? preview.previewId : undefined,
+    previewHash: typeof preview.previewHash === "string" ? preview.previewHash : undefined,
+    scope: preview.scope,
+    targetRef: preview.targetRef,
+    changes,
+    diffs: preview.diffs && typeof preview.diffs === "object" && !Array.isArray(preview.diffs)
+      ? preview.diffs as AIDraftPreviewPayload["diffs"]
+      : undefined,
+    evidenceRefs: Array.isArray(preview.evidenceRefs)
+      ? preview.evidenceRefs.flatMap((entry) => {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+        const evidence = entry as Record<string, unknown>;
+        if (typeof evidence.evidenceType !== "string"
+          || typeof evidence.refId !== "string"
+          || typeof evidence.contentHash !== "string") return [];
+        return [{
+          evidenceType: evidence.evidenceType,
+          refId: evidence.refId,
+          revisionId: typeof evidence.revisionId === "string" ? evidence.revisionId : undefined,
+          contentHash: evidence.contentHash,
+        }];
+      })
+      : undefined,
+    canCreateDraft: typeof preview.canCreate === "boolean"
+      ? preview.canCreate
+      : typeof preview.canCreateDraft === "boolean"
+        ? preview.canCreateDraft
+        : undefined,
+    blockingReasonCodes: Array.isArray(preview.blockingReasonCodes)
+      ? preview.blockingReasonCodes.filter((entry): entry is string => typeof entry === "string")
+      : undefined,
   };
 }
 
@@ -413,8 +586,12 @@ function ModelDrawer({
   rebaseEnabled,
   rebaseDisabledReason,
   aiAvailability,
+  aiPatchDraftAvailability,
+  aiRuleDraftAvailability,
   aiAssessment,
   onRunAssessment,
+  onWorkspaceApplied,
+  notify,
   onOpenRebase,
   onToggleCompare,
   onOpenSnapshot,
@@ -430,8 +607,12 @@ function ModelDrawer({
   rebaseEnabled: boolean;
   rebaseDisabledReason?: string;
   aiAvailability: ActionAvailabilityMap["run_ai_assessment"];
+  aiPatchDraftAvailability: ActionAvailabilityMap["create_ai_patch_draft"];
+  aiRuleDraftAvailability: ActionAvailabilityMap["create_ai_rule_source_change_draft"];
   aiAssessment?: AIAssessmentUiState;
   onRunAssessment: () => void;
+  onWorkspaceApplied: SeriesGanttWorkbenchV3Props["onWorkspaceApplied"];
+  notify: SeriesGanttWorkbenchV3Props["notify"];
   onOpenRebase: () => void;
   onToggleCompare: (modelId: string) => void;
   onOpenSnapshot: (snapshotId: string) => void;
@@ -441,6 +622,20 @@ function ModelDrawer({
   const [mode, setMode] = useState<FiveAxisMode>("model_series");
   const [comparisonPartId, setComparisonPartId] = useState("part:rod");
   const [comparisonScaleMode, setComparisonScaleMode] = useState<FiveAxisComparisonView["scaleMode"]>("official_locked");
+  const [selectedRecommendationCode, setSelectedRecommendationCode] = useState("");
+  const [selectedChangeIds, setSelectedChangeIds] = useState<string[]>([]);
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
+  const [userReason, setUserReason] = useState("");
+  const [previewState, setPreviewState] = useState<AIDraftPreviewUiState>({ status: "idle" });
+  const [draftIdempotencyKey, setDraftIdempotencyKey] = useState("");
+  const [dismissedRecommendationCodes, setDismissedRecommendationCodes] = useState<string[]>([]);
+  const [dismissRunning, setDismissRunning] = useState(false);
+  const [ruleTargetForm, setRuleTargetForm] = useState<AIRuleTargetForm>({
+    sourceRevisionId: "",
+    sheetId: "",
+    parameterKey: "",
+    stableRuleId: "",
+  });
   const drawerRef = useRef<HTMLElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const draftFiveAxisPreview = useMemo(() => {
@@ -551,6 +746,279 @@ function ModelDrawer({
       return { error: caught instanceof Error ? caught.message : "同部位比较失败。" };
     }
   }, [activeFiveAxisPreview, comparisonModelIds, comparisonPartId, comparisonScaleMode, definition, model, state.fiveAxisVertexSets, state.purchasableModels]);
+  const recommendations = aiAssessment?.result?.recommendations ?? [];
+  const persistedDismissedRecommendationCodes = aiAssessment?.result?.feedback?.recommendations
+    ?.filter((entry) => entry.state === "dismissed")
+    .map((entry) => entry.recommendationId) ?? [];
+  const visibleRecommendations = recommendations.filter((entry) =>
+    !dismissedRecommendationCodes.includes(entry.recommendationCode)
+    && !persistedDismissedRecommendationCodes.includes(entry.recommendationCode));
+  const selectedRecommendation = recommendations.find((entry) =>
+    entry.recommendationCode === selectedRecommendationCode);
+  const selectedSuggestedChanges = selectedRecommendation?.suggestedChanges ?? [];
+  const effectiveSelectedChangeIds = selectedChangeIds.filter((changeId) =>
+    selectedSuggestedChanges.some((entry) => entry.changeId === changeId));
+  const targetModelFrozen = Boolean(snapshot || model.configurationSnapshotId);
+  const isRuleSourceDraft = selectedRecommendation?.suggestedAction === "create_rule_source_change_draft";
+  const selectedDraftAvailability = isRuleSourceDraft ? aiRuleDraftAvailability : aiPatchDraftAvailability;
+  const latestFeishuSourceRevisions = [...state.feishuSourceRevisions]
+    .sort((left, right) => right.pulledAt.localeCompare(left.pulledAt) || right.id.localeCompare(left.id))
+    .filter((entry, index, entries) =>
+      entries.findIndex((candidate) => candidate.spreadsheetToken === entry.spreadsheetToken) === index);
+  const selectedFeishuSourceRevision = latestFeishuSourceRevisions.find((entry) =>
+    entry.id === ruleTargetForm.sourceRevisionId);
+  const allowedRuleSourceSheets = selectedFeishuSourceRevision?.sheets.flatMap((sheet) => {
+    const registered = CANONICAL_FEISHU_SHEET_REGISTRY.find((entry) =>
+      entry.sheetId === sheet.sheetId && entry.role === "rule_source" && entry.importsRules);
+    return registered ? [{ sheetId: sheet.sheetId, name: sheet.name || registered.expectedName }] : [];
+  }) ?? [];
+  const stableRulesForParameter = [
+    ...state.methodProfiles.flatMap((profile) => profile.rules.map((rule) => ({ rule, sheetId: "fATowU" }))),
+    ...state.itemTypeProfiles.flatMap((profile) => profile.rules.map((rule) => ({ rule, sheetId: "fATowU" }))),
+    ...state.functionProfiles.flatMap((profile) => [
+      ...profile.rules.map((rule) => ({ rule, sheetId: "vviXo0" })),
+      ...profile.intensityRules.flatMap((entry) =>
+        entry.rules.map((rule) => ({ rule, sheetId: "vviXo0" }))),
+    ]),
+    ...state.qualityProfiles.flatMap((profile) => profile.rules.map((rule) => ({ rule, sheetId: "FqD4j7" }))),
+  ].filter((entry, index, rules) =>
+    entry.sheetId === ruleTargetForm.sheetId
+    && entry.rule.parameterKey === ruleTargetForm.parameterKey
+    && rules.findIndex((candidate) => candidate.rule.id === entry.rule.id) === index);
+  const selectedRuleTarget = isRuleSourceDraft && selectedFeishuSourceRevision
+    ? {
+      spreadsheetToken: selectedFeishuSourceRevision.spreadsheetToken,
+      sheetId: ruleTargetForm.sheetId,
+      stableRuleId: ruleTargetForm.stableRuleId.trim(),
+      parameterKey: ruleTargetForm.parameterKey,
+      sourceRevision: selectedFeishuSourceRevision.sourceRevision,
+    }
+    : undefined;
+  const hasSafeRuleTarget = !isRuleSourceDraft || Boolean(
+    selectedRuleTarget?.spreadsheetToken
+    && selectedRuleTarget.sheetId
+    && allowedRuleSourceSheets.some((entry) => entry.sheetId === selectedRuleTarget.sheetId)
+    && selectedRuleTarget.stableRuleId
+    && selectedRuleTarget.parameterKey
+    && state.parameters.some((entry) => entry.key === selectedRuleTarget.parameterKey)
+    && selectedRuleTarget.sourceRevision,
+  );
+  const previewRequestFingerprint = selectedRecommendation && aiAssessment?.assessmentId && aiAssessment.inputHash
+    ? JSON.stringify({
+      assessmentId: aiAssessment.assessmentId,
+      assessmentInputHash: aiAssessment.inputHash,
+      recommendationId: selectedRecommendation.recommendationCode,
+      selectedChangeIds: [...effectiveSelectedChangeIds].sort(),
+      targetModelRef: { entityId: model.id, revisionId: String(model.revision) },
+      ...(selectedRuleTarget ? { targetRuleRef: selectedRuleTarget } : {}),
+    })
+    : "";
+  const selectedRecommendationDraftable = selectedRecommendation?.suggestedAction !== "preview_only"
+    && selectedSuggestedChanges.length > 0
+    && effectiveSelectedChangeIds.length > 0
+    && (!isRuleSourceDraft || effectiveSelectedChangeIds.length === 1);
+  const freshnessAllowsDraft = aiAssessment?.freshness?.state === "fresh"
+    && aiAssessment.freshness.canCreateDraft;
+  const successfulMatchingPreview = previewState.status === "success"
+    && previewState.requestFingerprint === previewRequestFingerprint
+    && previewState.payload?.canCreateDraft !== false
+    && !(previewState.payload?.blockingReasonCodes?.length);
+  const frozenTargetBlocksDraft = targetModelFrozen && !isRuleSourceDraft;
+  const createDisabledReason = frozenTargetBlocksDraft
+    ? "当前 Model 已有冻结 Snapshot；AI 不能在冻结 revision 上创建草稿。"
+    : !selectedRecommendation
+      ? "请先选择一条建议。"
+      : selectedRecommendation.suggestedAction === "preview_only"
+        ? "该建议仅供查看，不包含可转换的结构化变更。"
+        : !selectedSuggestedChanges.length
+          ? "该建议没有结构化 suggestedChanges；不会从自然语言推断 Patch。"
+          : isRuleSourceDraft && effectiveSelectedChangeIds.length !== 1
+            ? "规则源变更草稿每次只能选择一个 typed 参数变化。"
+          : !hasSafeRuleTarget
+            ? "规则源建议缺少可验证的 targetRuleRef；不会猜测工作表、规则或 sourceRevision。"
+            : !freshnessAllowsDraft
+              ? "评估已过期或服务端未确认可创建草稿，请重新评估。"
+              : !selectedDraftAvailability.enabled
+                ? selectedDraftAvailability.disabledReasonText
+                : !evidenceOpen
+                  ? "请先查看依据、假设与未覆盖信息。"
+                  : !successfulMatchingPreview
+                    ? "请先对当前选择执行一次成功的确定性差异预览。"
+                    : !userReason.trim()
+                      ? "请填写创建草稿的人工理由。"
+                      : undefined;
+
+  const selectRecommendation = (recommendationCode: string) => {
+    const recommendation = recommendations.find((entry) => entry.recommendationCode === recommendationCode);
+    setSelectedRecommendationCode(recommendationCode);
+    setSelectedChangeIds(recommendation?.suggestedChanges?.map((entry) => entry.changeId) ?? []);
+    setEvidenceOpen(false);
+    setUserReason("");
+    setPreviewState({ status: "idle" });
+    setDraftIdempotencyKey(crypto.randomUUID());
+    setRuleTargetForm({
+      sourceRevisionId: latestFeishuSourceRevisions[0]?.id ?? "",
+      sheetId: "",
+      parameterKey: "",
+      stableRuleId: "",
+    });
+  };
+
+  const toggleSuggestedChange = (changeId: string) => {
+    setSelectedChangeIds((current) => current.includes(changeId)
+      ? current.filter((entry) => entry !== changeId)
+      : [...current, changeId]);
+    setPreviewState({ status: "idle" });
+    setDraftIdempotencyKey(`ai-draft:${crypto.randomUUID()}`);
+  };
+
+  const updateRuleTarget = (next: AIRuleTargetForm) => {
+    setRuleTargetForm(next);
+    setPreviewState({ status: "idle" });
+    setDraftIdempotencyKey(`ai-draft:${crypto.randomUUID()}`);
+  };
+
+  const updateUserReason = (next: string) => {
+    setUserReason(next);
+    setDraftIdempotencyKey(`ai-draft:${crypto.randomUUID()}`);
+  };
+
+  const requestDraftAction = async (mode: "preview" | "create") => {
+    if (!selectedRecommendation || !aiAssessment?.assessmentId || !aiAssessment.inputHash) return;
+    const requestFingerprint = previewRequestFingerprint;
+    if (!requestFingerprint || !effectiveSelectedChangeIds.length) return;
+    if (mode === "create" && createDisabledReason) {
+      notify(createDisabledReason);
+      return;
+    }
+    setPreviewState((current) => ({
+      ...current,
+      status: mode === "preview" ? "running" : "creating",
+      error: undefined,
+    }));
+    try {
+      const response = await fetch(
+        `/api/ai/assessments/${encodeURIComponent(aiAssessment.assessmentId)}/drafts`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            mode,
+            recommendationId: selectedRecommendation.recommendationCode,
+            assessmentInputHash: aiAssessment.inputHash,
+            selectedChangeIds: effectiveSelectedChangeIds,
+            userReason: userReason.trim(),
+            idempotencyKey: mode === "preview"
+              ? `ai-preview:${crypto.randomUUID()}`
+              : draftIdempotencyKey || `ai-draft:${crypto.randomUUID()}`,
+            targetModelRef: {
+              entityId: model.id,
+              revisionId: String(model.revision),
+            },
+            ...(isRuleSourceDraft && selectedRuleTarget
+              ? { targetRuleRef: selectedRuleTarget }
+              : {}),
+          }),
+        },
+      );
+      const payload = await response.json().catch(() => null) as ({
+        state?: WorkspaceState;
+        revision?: number;
+        workspaceRevision?: number;
+        message?: string;
+        error?: string;
+        code?: string;
+        artifactRef?: {
+          artifactType?: "model_patch" | "rule_source_change_draft";
+          artifactId?: string;
+          state?: "DRAFT" | "LOCAL_DRAFT";
+        };
+      } & Record<string, unknown>) | null;
+      if (!response.ok || !payload) {
+        if (response.status === 503 && payload?.code === "AI_ARTIFACT_PROVENANCE_SYNC_PENDING") {
+          throw new Error("草稿已写入，但来源留存仍在同步；请使用相同请求安全重试，系统不会重复创建草稿。");
+        }
+        throw new Error(payload?.error ?? "AI 建议转换请求未完成。");
+      }
+      if (mode === "preview") {
+        const preview = previewFromResponse(payload);
+        if (!preview?.changes?.length) {
+          throw new Error("服务端未返回结构化确定性差异；不会把自然语言当作 Patch 预览。");
+        }
+        setPreviewState({
+          status: "success",
+          requestFingerprint,
+          payload: preview,
+        });
+        if (!draftIdempotencyKey) setDraftIdempotencyKey(`ai-draft:${crypto.randomUUID()}`);
+        notify("确定性差异预览已生成；请核对作用域、数值与校验变化。");
+        return;
+      }
+      let nextState = payload.state;
+      let nextRevision = payload.revision ?? payload.workspaceRevision;
+      if (!nextState) {
+        const currentResponse = await fetch("/api/state", { method: "GET" });
+        const currentPayload = await currentResponse.json().catch(() => null) as {
+          state?: WorkspaceState;
+          revision?: number;
+          error?: string;
+        } | null;
+        if (!currentResponse.ok || !currentPayload?.state || !Number.isInteger(currentPayload.revision)) {
+          throw new Error(currentPayload?.error ?? "草稿已创建，但无法刷新最新工作区；请重新载入页面。");
+        }
+        nextState = currentPayload.state;
+        nextRevision = currentPayload.revision;
+      }
+      if (!Number.isInteger(nextRevision)) {
+        throw new Error("草稿已创建，但响应缺少可验证的工作区 revision；请重新载入页面。");
+      }
+      onWorkspaceApplied(
+        nextState,
+        nextRevision!,
+        payload.message ?? `${payload.artifactRef?.artifactId ?? "AI 草稿"} 已创建。`,
+      );
+      notify(payload.message ?? `${payload.artifactRef?.artifactId ?? "AI 草稿"} 已创建。`);
+      setPreviewState({ status: "idle" });
+      setDraftIdempotencyKey("");
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "AI 建议转换请求未完成。";
+      setPreviewState((current) => ({
+        ...current,
+        status: mode === "create" && current.payload ? "success" : "error",
+        error: message,
+      }));
+      notify(message);
+    }
+  };
+
+  const dismissRecommendation = async () => {
+    if (!selectedRecommendation || !aiAssessment?.assessmentId || dismissRunning) return;
+    setDismissRunning(true);
+    try {
+      const response = await fetch(
+        `/api/ai/assessments/${encodeURIComponent(aiAssessment.assessmentId)}/feedback`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ recommendationId: selectedRecommendation.recommendationCode }),
+        },
+      );
+      const payload = await response.json().catch(() => null) as { error?: string } | null;
+      if (!response.ok) throw new Error(payload?.error ?? "无法保存忽略反馈。");
+      setDismissedRecommendationCodes((current) => [
+        ...new Set([...current, selectedRecommendation.recommendationCode]),
+      ]);
+      setSelectedRecommendationCode("");
+      setSelectedChangeIds([]);
+      setEvidenceOpen(false);
+      setPreviewState({ status: "idle" });
+      notify("已忽略该建议并保存反馈；不会影响校验或发布资格。");
+    } catch (caught) {
+      notify(caught instanceof Error ? caught.message : "无法保存忽略反馈。");
+    } finally {
+      setDismissRunning(false);
+    }
+  };
   return (
     <aside
       ref={drawerRef}
@@ -755,11 +1223,11 @@ function ModelDrawer({
           <div className="gantt-ai-disabled">
             <Bot size={28} />
             <h3>{aiAvailability.enabled ? "Fancy Hub 已通过启用准入" : "AI 服务尚未启用"}</h3>
-            <p>{aiAvailability.enabled ? "评估请求由服务端按严格白名单构造；结果只提供辅助解释，不会创建、批准或应用 Patch。" : aiAvailability.disabledReasonText}</p>
+            <p>{aiAvailability.enabled ? "评估请求由服务端按严格白名单构造；AI 只能提供建议或创建草稿，确定性校验、审核与发布保持独立。" : aiAvailability.disabledReasonText}</p>
             <dl>
               <div><dt>服务状态</dt><dd>{aiAssessment?.status === "running" ? "评估中" : aiAvailability.enabled ? "可用" : "关闭"}</dd></div>
               <div><dt>允许出网字段</dt><dd>ai-request/v1 严格安全投影</dd></div>
-              <div><dt>草稿能力</dt><dd>仅建议；草稿仍需独立确定性预览</dd></div>
+              <div><dt>草稿能力</dt><dd>{aiPatchDraftAvailability.enabled ? "Model Patch 草稿可用" : aiPatchDraftAvailability.disabledReasonText}</dd></div>
             </dl>
             {aiAssessment?.status === "error" ? <div className="gantt-unavailable"><AlertTriangle size={18} /><div><strong>评估未完成</strong><span>{aiAssessment.error}</span></div></div> : null}
             {aiAssessment?.status === "success" && aiAssessment.freshness?.state === "stale" ? (
@@ -769,14 +1237,214 @@ function ModelDrawer({
               <div className="gantt-ai-result">
                 <strong>{aiAssessment.result.findings.length} 条发现 · {aiAssessment.result.recommendations.length} 条建议</strong>
                 {aiAssessment.result.findings.map((finding) => <p key={finding.findingCode}><b>{finding.findingCode}</b> · {finding.summary}{finding.evidenceAliases.length > 0 ? <small> · 依据 {finding.evidenceAliases.join("、")}</small> : null}</p>)}
-                {aiAssessment.result.recommendations.map((recommendation) => <p key={recommendation.recommendationCode}><b>{recommendation.title}</b> · {recommendation.summary}{recommendation.evidenceAliases.length > 0 ? <small> · 依据 {recommendation.evidenceAliases.join("、")}</small> : null}</p>)}
+                <div className="gantt-ai-recommendations" role="listbox" aria-label="AI 建议">
+                  {visibleRecommendations.map((recommendation) => (
+                    <button
+                      type="button"
+                      role="option"
+                      aria-selected={recommendation.recommendationCode === selectedRecommendationCode}
+                      className={recommendation.recommendationCode === selectedRecommendationCode ? "selected" : ""}
+                      key={recommendation.recommendationCode}
+                      onClick={() => selectRecommendation(recommendation.recommendationCode)}
+                    >
+                      <b>{recommendation.title}</b>
+                      <span>{recommendation.summary}</span>
+                      <small>
+                        {recommendation.suggestedAction === "create_model_patch_draft"
+                          ? "Model Patch 草稿"
+                          : recommendation.suggestedAction === "create_rule_source_change_draft"
+                            ? "规则源变更草稿"
+                            : "仅预览"}
+                        {recommendation.evidenceAliases.length > 0 ? ` · ${recommendation.evidenceAliases.length} 项依据` : ""}
+                      </small>
+                    </button>
+                  ))}
+                  {!visibleRecommendations.length ? <small>没有未忽略的建议。</small> : null}
+                </div>
                 <small>output {aiAssessment.outputHash?.slice(0, 12)}</small>
               </div>
             ) : null}
+            {selectedRecommendation ? (
+              <section className="gantt-ai-selection">
+                <header>
+                  <div><span className="eyebrow">SELECTED RECOMMENDATION</span><h4>{selectedRecommendation.title}</h4></div>
+                  <small>{selectedRecommendation.recommendationCode}</small>
+                </header>
+                {selectedSuggestedChanges.length ? (
+                  <fieldset>
+                    <legend>选择需要预览的结构化变更</legend>
+                    {selectedSuggestedChanges.map((change) => (
+                      <label key={change.changeId}>
+                        <input
+                          type="checkbox"
+                          checked={effectiveSelectedChangeIds.includes(change.changeId)}
+                          onChange={() => toggleSuggestedChange(change.changeId)}
+                        />
+                        <span><b>{change.parameterKey}</b><small>{change.operation} {renderAIValue(change.operand)} · 评估时 before {renderAIValue(change.expectedBefore)}</small></span>
+                      </label>
+                    ))}
+                  </fieldset>
+                ) : (
+                  <div className="gantt-unavailable"><Info size={18} /><div><strong>没有结构化变更</strong><span>该建议不会从 summary 文本推断 parameter、operation 或 operand。</span></div></div>
+                )}
+                {isRuleSourceDraft ? (
+                  <div className="gantt-ai-rule-target">
+                    <strong>选择精确规则源目标</strong>
+                    <small>目标来自当前工作区已拉取的规则源和稳定规则 ID，不读取 AI 文本推断。</small>
+                    <div>
+                      <label>
+                        <span>最新源 Revision</span>
+                        <select
+                          value={ruleTargetForm.sourceRevisionId}
+                          onChange={(event) => updateRuleTarget({
+                            ...ruleTargetForm,
+                            sourceRevisionId: event.target.value,
+                            sheetId: "",
+                          })}
+                        >
+                          <option value="">请选择规则源</option>
+                          {latestFeishuSourceRevisions.map((entry) => (
+                            <option key={entry.id} value={entry.id}>
+                              {entry.sourceRevision} · {entry.spreadsheetToken}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        <span>规则工作表</span>
+                        <select
+                          value={ruleTargetForm.sheetId}
+                          disabled={!selectedFeishuSourceRevision}
+                          onChange={(event) => updateRuleTarget({ ...ruleTargetForm, sheetId: event.target.value })}
+                        >
+                          <option value="">请选择 rule_source 工作表</option>
+                          {allowedRuleSourceSheets.map((entry) => <option key={entry.sheetId} value={entry.sheetId}>{entry.name} · {entry.sheetId}</option>)}
+                        </select>
+                      </label>
+                      <label>
+                        <span>真实 Parameter</span>
+                        <select
+                          value={ruleTargetForm.parameterKey}
+                          onChange={(event) => updateRuleTarget({
+                            ...ruleTargetForm,
+                            parameterKey: event.target.value,
+                            stableRuleId: "",
+                          })}
+                        >
+                          <option value="">请选择参数</option>
+                          {state.parameters.map((parameter) => <option key={parameter.key} value={parameter.key}>{parameter.label} · {parameter.key}</option>)}
+                        </select>
+                      </label>
+                      <label>
+                        <span>稳定 Rule ID</span>
+                        <input
+                          list="gantt-ai-stable-rule-ids"
+                          value={ruleTargetForm.stableRuleId}
+                          onChange={(event) => updateRuleTarget({ ...ruleTargetForm, stableRuleId: event.target.value })}
+                          placeholder="选择现有规则或输入已确认的稳定 ID"
+                        />
+                        <datalist id="gantt-ai-stable-rule-ids">
+                          {stableRulesForParameter.map(({ rule }) => <option key={rule.id} value={rule.id}>{rule.operation}</option>)}
+                        </datalist>
+                      </label>
+                    </div>
+                    {selectedFeishuSourceRevision ? <small>sourceRevision {selectedFeishuSourceRevision.sourceRevision} · 仅显示 registry 中 importsRules 的工作表。</small> : null}
+                  </div>
+                ) : null}
+                {isRuleSourceDraft && !hasSafeRuleTarget ? (
+                  <div className="gantt-unavailable"><AlertTriangle size={18} /><div><strong>规则源目标缺失</strong><span>缺少 spreadsheetToken、sheetId、stableRuleId、parameterKey 或 sourceRevision；当前只能查看，不能猜测后创建草稿。</span></div></div>
+                ) : null}
+                <label className="gantt-ai-reason">
+                  <span>创建草稿理由</span>
+                  <textarea value={userReason} onChange={(event) => updateUserReason(event.target.value)} placeholder="说明为什么采纳这些变化；创建草稿前不能为空。" />
+                </label>
+              </section>
+            ) : null}
+            {evidenceOpen && selectedRecommendation && aiAssessment?.result ? (
+              <section className="gantt-ai-evidence">
+                <header><span className="eyebrow">EVIDENCE & UNCERTAINTY</span><h4>依据、假设与未覆盖信息</h4></header>
+                <div>
+                  <strong>依据别名</strong>
+                  {selectedRecommendation.evidenceAliases.length
+                    ? <ul>{selectedRecommendation.evidenceAliases.map((alias) => <li key={alias}>{alias}</li>)}</ul>
+                    : <p>没有依据引用；该建议不能转换为草稿。</p>}
+                </div>
+                <div>
+                  <strong>假设</strong>
+                  {aiAssessment.result.assumptions.length
+                    ? <ul>{aiAssessment.result.assumptions.map((assumption, index) => <li key={`${index}:${assumption}`}>{assumption}</li>)}</ul>
+                    : <p>没有声明额外假设。</p>}
+                </div>
+                <div>
+                  <strong>未覆盖信息</strong>
+                  {aiAssessment.result.uncoveredInformation.length
+                    ? <ul>{aiAssessment.result.uncoveredInformation.map((entry, index) => <li key={`${index}:${entry}`}>{entry}</li>)}</ul>
+                    : <p>没有声明未覆盖信息。</p>}
+                </div>
+              </section>
+            ) : null}
+            {previewState.error ? (
+              <div className="gantt-unavailable"><AlertTriangle size={18} /><div><strong>转换未完成</strong><span>{previewState.error}</span></div></div>
+            ) : null}
+            {previewState.status === "success" && previewState.payload ? (
+              <section className="gantt-ai-preview">
+                <header>
+                  <div><span className="eyebrow">DETERMINISTIC PREVIEW</span><h4>确定性差异预览</h4></div>
+                  <small>{previewState.payload.previewHash?.slice(0, 12)}</small>
+                </header>
+                <div className="gantt-ai-preview-scope"><b>作用域</b><span>{renderAIValue(previewState.payload.targetRef ?? previewState.payload.scope ?? { entityId: model.id, revisionId: String(model.revision) })}</span></div>
+                <div className="gantt-ai-change-table">
+                  <div><b>属性</b><b>before</b><b>operation</b><b>operand</b><b>after</b></div>
+                  {previewState.payload.changes?.map((change, index) => (
+                    <div key={change.changeId ?? `${change.parameterKey}:${index}`}>
+                      <strong>{change.parameterKey}</strong>
+                      <span>{renderAIValue(change.before)}</span>
+                      <span>{change.operation}</span>
+                      <span>{renderAIValue(change.operand)}</span>
+                      <span>{renderAIValue(change.after)}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="gantt-ai-diff-grid">
+                  <article><span>Validation / Issue</span><strong>{previewState.payload.diffs?.validation?.newBlockingIssueCodes?.length ? "新增阻断" : "无新增阻断"}</strong><small>before {(previewState.payload.diffs?.validation?.beforeIssueCodes ?? []).join("、") || "无"}<br />after {(previewState.payload.diffs?.validation?.afterIssueCodes ?? []).join("、") || "无"}</small></article>
+                  <article><span>五维</span><strong>{previewState.payload.diffs?.fiveAxis?.status ?? "未返回"}</strong><small>{previewState.payload.diffs?.fiveAxis?.affectedAxisIds?.join("、") || "无受影响轴"}</small></article>
+                  <article><span>Affinity</span><strong>{previewState.payload.diffs?.affinity?.status ?? "未返回"}</strong><small>AI 不覆盖规则化软评分</small></article>
+                  <article><span>Series 不变量</span><strong>{previewState.payload.diffs?.invariants?.newBlockingIssueCodes?.length ? "新增阻断" : "无新增阻断"}</strong><small>after {(previewState.payload.diffs?.invariants?.afterIssueCodes ?? []).join("、") || "无"}</small></article>
+                </div>
+              </section>
+            ) : null}
             <div className="gantt-ai-actions">
-              <button type="button" disabled title="依据别名已随每条发现和建议展开">查看依据</button>
-              <button type="button" disabled title="建议转草稿前需独立确定性差异预览">预览变化</button>
-              <button type="button" disabled title="当前连接器只返回建议，不直接创建草稿">创建 Model Patch 草稿</button>
+              <button type="button" disabled={!selectedRecommendation} title={!selectedRecommendation ? "请先选择一条建议。" : undefined} onClick={() => setEvidenceOpen((current) => !current)}>{evidenceOpen ? "收起依据" : "查看依据"}</button>
+              <button
+                type="button"
+                disabled={!selectedRecommendationDraftable || !freshnessAllowsDraft || frozenTargetBlocksDraft || !hasSafeRuleTarget || !selectedDraftAvailability.enabled || !evidenceOpen || previewState.status === "running" || previewState.status === "creating"}
+                title={frozenTargetBlocksDraft
+                  ? "冻结 Model 只能查看建议。"
+                  : !hasSafeRuleTarget
+                    ? "请先选择可验证的规则源目标。"
+                    : !selectedDraftAvailability.enabled
+                      ? selectedDraftAvailability.disabledReasonText
+                      : !evidenceOpen
+                        ? "请先查看依据、假设与未覆盖信息。"
+                        : undefined}
+                onClick={() => void requestDraftAction("preview")}
+              >
+                {previewState.status === "running" ? "预览中…" : "预览变化"}
+              </button>
+              <button
+                type="button"
+                className="v3-primary-action"
+                disabled={Boolean(createDisabledReason) || previewState.status === "creating" || previewState.status === "running"}
+                title={createDisabledReason}
+                onClick={() => void requestDraftAction("create")}
+              >
+                {previewState.status === "creating"
+                  ? "创建中…"
+                  : isRuleSourceDraft
+                    ? "创建规则源变更草稿"
+                    : "创建 Model Patch 草稿"}
+              </button>
+              <button type="button" disabled={!selectedRecommendation || dismissRunning} onClick={() => void dismissRecommendation()}>{dismissRunning ? "保存中…" : "忽略"}</button>
               <button type="button" disabled={!aiAvailability.enabled || aiAssessment?.status === "running"} title={aiAvailability.disabledReasonText} onClick={onRunAssessment}>{aiAssessment?.status === "running" ? "评估中…" : "重新评估"}</button>
             </div>
           </div>
@@ -884,6 +1552,8 @@ export function SeriesGanttWorkbenchV3({
   const rebaseAvailability = actionAvailabilities.open_rebase;
   const createSeriesAvailability = actionAvailabilities.create_series;
   const aiAvailability = actionAvailabilities.run_ai_assessment;
+  const aiPatchDraftAvailability = actionAvailabilities.create_ai_patch_draft;
+  const aiRuleDraftAvailability = actionAvailabilities.create_ai_rule_source_change_draft;
   const runAiAssessment = async (scopeType: "series" | "model", scopeId: string) => {
     const scopeKey = `${scopeType}:${scopeId}`;
     setAiAssessment({ scopeKey, status: "running" });
@@ -895,7 +1565,14 @@ export function SeriesGanttWorkbenchV3({
       });
       const payload = await response.json().catch(() => null) as (AIAssessmentUiState & { error?: string }) | null;
       if (!response.ok || !payload?.result) throw new Error(payload?.error ?? "AI 评估未完成。");
-      setAiAssessment({ ...payload, scopeKey, status: "success" });
+      const retainedResponse = payload.assessmentId
+        ? await fetch(`/api/ai/assessments/${encodeURIComponent(payload.assessmentId)}`, { method: "GET" })
+        : undefined;
+      const retainedPayload = retainedResponse?.ok
+        ? await retainedResponse.json().catch(() => null) as Parameters<typeof normalizedAssessmentPayload>[0]
+        : null;
+      const retainedAssessment = normalizedAssessmentPayload(retainedPayload, scopeKey);
+      setAiAssessment(retainedAssessment ?? { ...payload, scopeKey, status: "success" });
       notify(`AI 评估完成：${payload.result.findings.length} 条发现，${payload.result.recommendations.length} 条建议。`);
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : "AI 评估未完成。";
@@ -922,16 +1599,15 @@ export function SeriesGanttWorkbenchV3({
               : undefined);
           return;
         }
-        const payload = await response.json().catch(() => null) as (AIAssessmentUiState & { error?: string }) | null;
-        if (!response.ok || !payload?.assessmentId) {
+        const payload = await response.json().catch(() => null) as Parameters<typeof normalizedAssessmentPayload>[0];
+        const normalized = normalizedAssessmentPayload(payload, scopeKey);
+        if (!response.ok || !normalized) {
           throw new Error(payload?.error ?? "无法恢复最近一次 AI 评估。");
         }
         setAiAssessment((currentAssessment) =>
           currentAssessment?.scopeKey === scopeKey && currentAssessment.status === "running"
             ? currentAssessment
-            : payload.result
-              ? { ...payload, scopeKey, status: "success" }
-              : { ...payload, scopeKey, status: "error", error: "最近一次 AI 评估未成功生成可用建议。" });
+            : normalized);
       } catch (caught) {
         if (controller.signal.aborted) return;
         const message = caught instanceof Error ? caught.message : "无法恢复最近一次 AI 评估。";
@@ -1303,7 +1979,7 @@ export function SeriesGanttWorkbenchV3({
       {drawerModel && drawerSku && drawerSeries ? (
         <>
           <button className="gantt-drawer-backdrop" type="button" aria-label="关闭预览" onClick={() => { setDrawerModelId(""); setDrawerSnapshotId(""); }} />
-          <ModelDrawer state={state} model={drawerModel} sku={drawerSku} series={drawerSeries} snapshot={drawerSnapshot} breadcrumbs={contextBreadcrumbs} comparisonModelIds={comparisonModelIds} rebaseEnabled={rebaseAvailability.enabled} rebaseDisabledReason={rebaseAvailability.disabledReasonText} aiAvailability={aiAvailability} aiAssessment={aiAssessment?.scopeKey === `model:${drawerModel.id}` ? aiAssessment : undefined} onRunAssessment={() => void runAiAssessment("model", drawerModel.id)} onToggleCompare={toggleCompare} onOpenSnapshot={setDrawerSnapshotId} onOpenRebase={() => { setDrawerModelId(""); setDrawerSnapshotId(""); onOpenSeries(drawerSeries.id); }} onClose={() => { setDrawerModelId(""); setDrawerSnapshotId(""); }} />
+          <ModelDrawer key={`${drawerModel.id}:${drawerModel.revision}:${aiAssessment?.assessmentId ?? "none"}`} state={state} model={drawerModel} sku={drawerSku} series={drawerSeries} snapshot={drawerSnapshot} breadcrumbs={contextBreadcrumbs} comparisonModelIds={comparisonModelIds} rebaseEnabled={rebaseAvailability.enabled} rebaseDisabledReason={rebaseAvailability.disabledReasonText} aiAvailability={aiAvailability} aiPatchDraftAvailability={aiPatchDraftAvailability} aiRuleDraftAvailability={aiRuleDraftAvailability} aiAssessment={aiAssessment?.scopeKey === `model:${drawerModel.id}` ? aiAssessment : undefined} onRunAssessment={() => void runAiAssessment("model", drawerModel.id)} onWorkspaceApplied={onWorkspaceApplied} notify={notify} onToggleCompare={toggleCompare} onOpenSnapshot={setDrawerSnapshotId} onOpenRebase={() => { setDrawerModelId(""); setDrawerSnapshotId(""); onOpenSeries(drawerSeries.id); }} onClose={() => { setDrawerModelId(""); setDrawerSnapshotId(""); }} />
         </>
       ) : null}
       {candidateOpen && selectedSeries ? (

@@ -32,6 +32,7 @@ import {
   type FancyHubAdmissionCoordinator,
   type FancyHubAssessmentResponse,
   type FancyHubConnectorConfig,
+  type FancyHubInvalidUtf8RawResponseV1,
   type FancyHubTransport,
   type FancyHubTruncatedRawResponseV1,
 } from "../lib/fancy-hub";
@@ -412,6 +413,7 @@ test("响应结果递归拒绝未知字段、越界正文与请求外别名，�
     subjectAliases: ["a002"],
     evidenceAliases: ["a008"],
     suggestedAction: "preview_only",
+    suggestedChanges: [],
   } as const;
   for (const [raw, code] of [
     [{ ...response(requested), result: { ...response(requested).result, unknown: true } }, "AI_FANCY_HUB_RESPONSE_INVALID"],
@@ -799,6 +801,155 @@ test("HTTP transport 对成功、错误和模型列表正文执行流式字节�
       && (error.rawResponse as FancyHubTruncatedRawResponseV1).status === 503,
   );
   assert.equal(oversizedError.stats().cancellations, 1);
+});
+
+test("HTTP transport 对成功、错误和模型列表正文使用 fatal UTF-8 解码并保留有界字节证据", async () => {
+  const invalidUtf8 = new Uint8Array([0x7b, 0x22, 0x78, 0x22, 0x3a, 0x22, 0xc3, 0x28, 0x22, 0x7d]);
+  for (const probe of [
+    {
+      endpoint: "model_list" as const,
+      status: 200,
+      invoke: (transport: FetchFancyHubTransport) => transport.listModels({ timeoutMs: 1_000 }),
+      byteLimit: FANCY_HUB_RESPONSE_BYTE_LIMITS.modelList,
+    },
+    {
+      endpoint: "assessment" as const,
+      status: 200,
+      invoke: (transport: FetchFancyHubTransport) => transport.assess({
+        canonicalJson: "{}",
+        inputHash: "a".repeat(64),
+        model: modelList(),
+        maxOutputTokens: 1,
+        timeoutMs: 1_000,
+      }),
+      byteLimit: FANCY_HUB_RESPONSE_BYTE_LIMITS.assessment,
+    },
+    {
+      endpoint: "assessment" as const,
+      status: 503,
+      invoke: (transport: FetchFancyHubTransport) => transport.assess({
+        canonicalJson: "{}",
+        inputHash: "a".repeat(64),
+        model: modelList(),
+        maxOutputTokens: 1,
+        timeoutMs: 1_000,
+      }),
+      byteLimit: FANCY_HUB_RESPONSE_BYTE_LIMITS.assessment,
+    },
+  ]) {
+    const transport = new FetchFancyHubTransport(
+      "https://fancy-hub.internal/",
+      "top-secret-token",
+      (async () => new Response(invalidUtf8, { status: probe.status })) as typeof fetch,
+    );
+    await assert.rejects(probe.invoke(transport), (error) => {
+      if (!(error instanceof FancyHubError) || error.code !== "AI_FANCY_HUB_RESPONSE_INVALID") return false;
+      const raw = error.rawResponse as FancyHubInvalidUtf8RawResponseV1;
+      assert.deepEqual(raw, {
+        schemaVersion: "fancy-hub-invalid-utf8-response/v1",
+        endpoint: probe.endpoint,
+        status: probe.status,
+        byteLimit: probe.byteLimit,
+        capturedBytes: invalidUtf8.byteLength,
+        bodyBase64: Buffer.from(invalidUtf8).toString("base64"),
+        truncated: false,
+      });
+      assert.equal(error.message.includes("top-secret-token"), false);
+      assert.equal(error.message.includes(raw.bodyBase64), false);
+      return true;
+    });
+  }
+});
+
+test("非法 UTF-8 评估响应不产生语义结果，并把有界原始字节留存为失败 attempt", async () => {
+  const invalidUtf8 = new Uint8Array([0x7b, 0x22, 0x78, 0x22, 0x3a, 0x22, 0xed, 0xa0, 0x80, 0x22, 0x7d]);
+  let fetchCalls = 0;
+  const rawAttempts: Parameters<NonNullable<Parameters<FancyHubConnector["assess"]>[0]["rawAttemptSink"]>>[0][] = [];
+  const connector = new FancyHubConnector(
+    connectorConfig({ fallbackModelIds: [] }),
+    new FetchFancyHubTransport(
+      "https://fancy-hub.internal/",
+      "top-secret-token",
+      (async () => {
+        fetchCalls += 1;
+        return fetchCalls === 1
+          ? Response.json(discoveryModels())
+          : new Response(invalidUtf8, { status: 200 });
+      }) as typeof fetch,
+    ),
+  );
+  await assert.rejects(
+    connector.assess({
+      workspaceId: "w1",
+      actorStableId: "ou-test",
+      buildEnvelope: envelope,
+      rawAttemptSink: (attempt) => { rawAttempts.push(attempt); },
+    }),
+    (error) => error instanceof FancyHubError && error.code === "AI_FANCY_HUB_RESPONSE_INVALID",
+  );
+  assert.equal(rawAttempts.length, 1);
+  assert.equal(rawAttempts[0]?.resultCode, "AI_FANCY_HUB_RESPONSE_INVALID");
+  const raw = rawAttempts[0]?.rawResponse as FancyHubInvalidUtf8RawResponseV1;
+  assert.equal(raw.schemaVersion, "fancy-hub-invalid-utf8-response/v1");
+  assert.equal(raw.endpoint, "assessment");
+  assert.equal(raw.capturedBytes, invalidUtf8.byteLength);
+  assert.equal(raw.bodyBase64, Buffer.from(invalidUtf8).toString("base64"));
+  assert.equal("result" in raw, false);
+
+  const directory = await mkdtemp(path.join(tmpdir(), "tackle-forger-ai-invalid-utf8-"));
+  const key = randomBytes(32);
+  const previous = {
+    dataDir: process.env.AI_RETENTION_DATA_DIR,
+    key: process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64,
+    keyVersion: process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION,
+  };
+  process.env.AI_RETENTION_DATA_DIR = directory;
+  process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64 = key.toString("base64");
+  process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION = "key-v1";
+  try {
+    const store = createAIRuntimeStoreFromEnvironment();
+    const record = store.failedAssessmentRecord({
+      assessmentId: "assessment-invalid-utf8",
+      actorStableId: "ou-test",
+      operationMetadataContext: {
+        scopeType: "model",
+        scopeId: "model-1",
+        scopeRevision: "model-revision-1",
+        ruleSetVersion: "ruleset-1",
+        fiveAxisRuleVersion: "five-axis-1",
+      },
+      requestedAt: rawAttempts[0]!.requestedAt,
+      completedAt: rawAttempts[0]!.completedAt,
+      resultCode: rawAttempts[0]!.resultCode,
+      prompt: "controlled prompt\n",
+      requestAliasMapping: [{
+        alias: "a001",
+        reference: { referenceKindCode: "assessment", stableLocalId: "assessment-invalid-utf8" },
+      }],
+      rawAttempts,
+    });
+    await store.saveAssessment(record);
+    const persisted = await store.readAssessmentForActor({
+      assessmentId: "assessment-invalid-utf8",
+      actorStableId: "ou-test",
+    });
+    assert.equal(persisted?.semanticContent, undefined);
+    assert.equal(JSON.stringify(persisted).includes(raw.bodyBase64), false);
+    const retained = JSON.parse(decryptAIRawContent({
+      assessmentId: "assessment-invalid-utf8",
+      encrypted: persisted!.encryptedRawContent!,
+      key,
+    })) as { attempts: Array<{ rawModelResponse: FancyHubInvalidUtf8RawResponseV1 }> };
+    assert.deepEqual(retained.attempts[0]?.rawModelResponse, raw);
+  } finally {
+    if (previous.dataDir === undefined) delete process.env.AI_RETENTION_DATA_DIR;
+    else process.env.AI_RETENTION_DATA_DIR = previous.dataDir;
+    if (previous.key === undefined) delete process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64;
+    else process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64 = previous.key;
+    if (previous.keyVersion === undefined) delete process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION;
+    else process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION = previous.keyVersion;
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test("超限评估响应零有效建议，并形成有界且可稳定加密的失败 raw record", async () => {

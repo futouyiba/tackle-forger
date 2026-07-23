@@ -9,6 +9,7 @@ import {
   requestAIAssessmentDeletion,
   sweepAIAssessmentRetention,
   type AIBackupPurgeAdapter,
+  type AIAcceptedArtifactProvenance,
   type AIRetentionSweepResult,
   type AIAssessmentRetentionRecord,
   type AIOperationMetadataRecord,
@@ -29,6 +30,7 @@ import {
   type FancyHubAuditEvent,
   type FancyHubRawAssessmentAttempt,
 } from "./fancy-hub";
+import { deterministicHash } from "./rule-kernel";
 
 const LOCK_RETRIES = 100;
 
@@ -64,7 +66,9 @@ interface AIAdmissionDocument {
 }
 
 export interface AIRetentionAuditEvent {
-  action: AIRetentionSweepResult["auditEvents"][number]["action"];
+  action: AIRetentionSweepResult["auditEvents"][number]["action"]
+    | "AI_ARTIFACT_PROVENANCE_ACCEPTED"
+    | "AI_RECOMMENDATION_DISMISSED";
   assessmentId: string;
   actorStableId?: string;
   occurredAt: string;
@@ -420,6 +424,123 @@ export class FileAIRuntimeStore {
     return this.publicAssessmentRecord(record);
   }
 
+  async acceptAssessmentArtifact(input: {
+    assessmentId: string;
+    actorStableId: string;
+    provenance: AIAcceptedArtifactProvenance;
+    acceptedAt: string;
+  }): Promise<{ record: AIAssessmentRetentionRecord; idempotent: boolean }> {
+    if (input.provenance.assessmentId !== input.assessmentId) {
+      throw new AIRuntimeStoreError("AI_RETENTION_STORE_UNAVAILABLE", "采纳来源与 assessmentId 不一致。");
+    }
+    const transaction = await this.mutateAssessmentWithAudit(input.assessmentId, (record) => {
+      if (!record || record.metadata?.actorStableId !== input.actorStableId) {
+        throw new AIRuntimeStoreError("AI_RETENTION_STORE_UNAVAILABLE", "AI 评估不存在或不属于当前用户。");
+      }
+      assertAIAssessmentVisible(record);
+      if (record.metadata.resultCode !== "SUCCESS") {
+        throw new AIRuntimeStoreError("AI_RETENTION_STORE_UNAVAILABLE", "失败评估不能进入 accepted。");
+      }
+      if (record.acceptedArtifactProvenance) {
+        if (deterministicHash(record.acceptedArtifactProvenance) !== deterministicHash(input.provenance)) {
+          throw new AIRuntimeStoreError("AI_RETENTION_STORE_UNAVAILABLE", "评估已经绑定不同的采纳产物来源。");
+        }
+        return {
+          record,
+          result: { record: this.publicAssessmentRecord(record), idempotent: true },
+        };
+      }
+      record.acceptedArtifactProvenance = structuredClone(input.provenance);
+      record.metadata.state = "ACCEPTED";
+      if (record.semanticContent) {
+        record.semanticContent.feedback = {
+          recommendations: structuredClone(record.semanticContent.feedback?.recommendations ?? []),
+          acceptedArtifact: {
+            acceptedAt: input.acceptedAt,
+            artifactStableRefs: structuredClone(input.provenance.artifactStableRefs),
+          },
+        };
+      }
+      return {
+        record,
+        result: { record: this.publicAssessmentRecord(record), idempotent: false },
+        auditEvents: [{
+          action: "AI_ARTIFACT_PROVENANCE_ACCEPTED",
+          assessmentId: input.assessmentId,
+          actorStableId: input.actorStableId,
+          occurredAt: input.acceptedAt,
+          resultCode: "SUCCESS",
+        }],
+      };
+    });
+    return transaction.result;
+  }
+
+  async dismissAssessmentRecommendation(input: {
+    assessmentId: string;
+    actorStableId: string;
+    recommendationId: string;
+    dismissedAt: string;
+    reason?: string;
+  }): Promise<{ record: AIAssessmentRetentionRecord; idempotent: boolean }> {
+    if (!/^[A-Za-z0-9_.:-]{1,128}$/.test(input.recommendationId)) {
+      throw new AIRuntimeStoreError("AI_RETENTION_STORE_UNAVAILABLE", "recommendationId 格式无效。");
+    }
+    const reason = input.reason?.trim();
+    if (reason && Buffer.byteLength(reason, "utf8") > 1_024) {
+      throw new AIRuntimeStoreError("AI_RETENTION_STORE_UNAVAILABLE", "忽略理由超过 1024 字节。");
+    }
+    const transaction = await this.mutateAssessmentWithAudit(input.assessmentId, (record) => {
+      if (!record || record.metadata?.actorStableId !== input.actorStableId) {
+        throw new AIRuntimeStoreError("AI_RETENTION_STORE_UNAVAILABLE", "AI 评估不存在或不属于当前用户。");
+      }
+      assertAIAssessmentVisible(record);
+      const recommendations = record.semanticContent?.recommendations;
+      const exists = Array.isArray(recommendations) && recommendations.some((entry) =>
+        entry !== null
+        && typeof entry === "object"
+        && !Array.isArray(entry)
+        && (entry as Record<string, unknown>).recommendationCode === input.recommendationId);
+      if (!exists || !record.semanticContent) {
+        throw new AIRuntimeStoreError("AI_RETENTION_STORE_UNAVAILABLE", "AI 建议不存在或语义内容已到期。");
+      }
+      const current = record.semanticContent.feedback?.recommendations ?? [];
+      const existing = current.find((entry) => entry.recommendationId === input.recommendationId);
+      if (existing) {
+        if ((existing.reason ?? "") !== (reason ?? "")) {
+          throw new AIRuntimeStoreError("AI_RETENTION_STORE_UNAVAILABLE", "该建议已使用不同理由忽略。");
+        }
+        return {
+          record,
+          result: { record: this.publicAssessmentRecord(record), idempotent: true },
+        };
+      }
+      record.semanticContent.feedback = {
+        recommendations: [...structuredClone(current), {
+          recommendationId: input.recommendationId,
+          state: "dismissed",
+          dismissedAt: input.dismissedAt,
+          ...(reason ? { reason } : {}),
+        }],
+        ...(record.semanticContent.feedback?.acceptedArtifact
+          ? { acceptedArtifact: structuredClone(record.semanticContent.feedback.acceptedArtifact) }
+          : {}),
+      };
+      return {
+        record,
+        result: { record: this.publicAssessmentRecord(record), idempotent: false },
+        auditEvents: [{
+          action: "AI_RECOMMENDATION_DISMISSED",
+          assessmentId: input.assessmentId,
+          actorStableId: input.actorStableId,
+          occurredAt: input.dismissedAt,
+          resultCode: "SUCCESS",
+        }],
+      };
+    });
+    return transaction.result;
+  }
+
   async listAssessmentsForActorScope(input: {
     actorStableId: string;
     scopeType: "series" | "sku" | "model" | "candidate_set";
@@ -548,6 +669,7 @@ export class FileAIRuntimeStore {
       alias: RequestAlias;
       reference: LocalAliasReferenceV1;
     }>;
+    parameterKeyMapping?: Array<{ alias: string; parameterKey: string }>;
     rawAttempts: readonly FancyHubRawAssessmentAttempt[];
   }): AIAssessmentRetentionRecord {
     const rawContent = this.rawAssessmentContent({
@@ -555,6 +677,7 @@ export class FileAIRuntimeStore {
       prompt: input.prompt,
       promptTemplateHash: input.requestEnvelope.promptTemplateHash,
       requestAliasMapping: input.requestAliasMapping,
+      parameterKeyMapping: input.parameterKeyMapping ?? [],
       rawAttempts: input.rawAttempts,
     });
     const durationMs = Math.max(0, Date.parse(input.completedAt) - Date.parse(input.requestedAt));
@@ -622,6 +745,7 @@ export class FileAIRuntimeStore {
       alias: RequestAlias;
       reference: LocalAliasReferenceV1;
     }>;
+    parameterKeyMapping?: Array<{ alias: string; parameterKey: string }>;
     rawAttempts: readonly FancyHubRawAssessmentAttempt[];
   }): AIAssessmentRetentionRecord {
     const lastAttempt = input.rawAttempts.at(-1);
@@ -636,6 +760,7 @@ export class FileAIRuntimeStore {
       prompt: input.prompt,
       promptTemplateHash: lastAttempt.requestEnvelope.promptTemplateHash,
       requestAliasMapping: input.requestAliasMapping,
+      parameterKeyMapping: input.parameterKeyMapping ?? [],
       rawAttempts: input.rawAttempts,
     });
     const durationMs = Math.max(0, Date.parse(input.completedAt) - Date.parse(input.requestedAt));
@@ -728,6 +853,7 @@ export class FileAIRuntimeStore {
       alias: RequestAlias;
       reference: LocalAliasReferenceV1;
     }>;
+    parameterKeyMapping: Array<{ alias: string; parameterKey: string }>;
     rawAttempts: readonly FancyHubRawAssessmentAttempt[];
   }): string {
     if (promptTemplateHash(input.prompt) !== input.promptTemplateHash) {
@@ -753,6 +879,7 @@ export class FileAIRuntimeStore {
       assessmentId: input.assessmentId,
       prompt: input.prompt,
       requestAliasMapping: structuredClone(input.requestAliasMapping),
+      parameterKeyMapping: structuredClone(input.parameterKeyMapping),
       attempts: input.rawAttempts.map((attempt) => ({
         requestedAt: attempt.requestedAt,
         completedAt: attempt.completedAt,

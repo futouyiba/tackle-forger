@@ -1,0 +1,325 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  buildWorkspaceAssessmentRequestProjection,
+} from "../lib/ai-assessment-request";
+import {
+  applyAIDraftArtifactPlan,
+  AIDraftConversionError,
+  planAIDraftConversion,
+  type AIDraftConversionCommand,
+} from "../lib/ai-draft-conversion";
+import { AI_RETENTION_POLICY_VERSION, type AIAssessmentRetentionRecord } from "../lib/ai-retention";
+import { describeFancyHubModels, prepareAIRequest } from "../lib/ai-outbound";
+import { createSeedState } from "../lib/seed";
+import type { WorkspaceState } from "../lib/types";
+
+const assessmentId = "assessment:model-draft";
+const actorStableId = "user:planner-test";
+const now = "2026-07-23T00:00:00.000Z";
+const providerModel = describeFancyHubModels([{
+  modelId: "model.alpha",
+  modelVersion: "2026-07-23",
+  deploymentRevision: "deploy.7",
+  modelArtifactDigest: "sha256:abc",
+}]).models[0]!;
+
+function fixture(): {
+  state: WorkspaceState;
+  record: AIAssessmentRetentionRecord;
+  command: AIDraftConversionCommand;
+  parameterKey: string;
+} {
+  const state = createSeedState();
+  const model = state.purchasableModels.find((entry) =>
+    entry.status !== "published" && !entry.configurationSnapshotId && entry.patchIds.length === 0)!;
+  for (const definition of state.parameters) {
+    if (definition.allowedOperations?.some((operation) =>
+      operation === "set" || operation === "add" || operation === "multiply")) {
+      definition.targetRange = { min: -1_000_000_000, max: 1_000_000_000 };
+    }
+  }
+  const projection = buildWorkspaceAssessmentRequestProjection({
+    state,
+    scope: { scopeType: "model", scopeId: model.id },
+    assessmentId,
+    model: providerModel,
+  });
+  const prepared = prepareAIRequest({ envelope: projection.envelope });
+  const parameter = projection.parameterKeyMapping.find((mapping) => {
+    const definition = state.parameters.find((entry) => entry.key === mapping.parameterKey);
+    return definition?.allowedOperations?.includes("add");
+  })!;
+  const panelValue = projection.envelope.panelValues.find((entry) =>
+    entry.parameterKey === parameter.alias)!.value;
+  assert.equal(panelValue.kind, "number");
+  const scopeAlias = projection.requestAliasMapping.find((entry) =>
+    entry.reference.referenceKindCode === "model"
+    && entry.reference.stableLocalId === model.id)!.alias;
+  const evidence = projection.envelope.evidenceRefs[0]!;
+  const recommendation = {
+    recommendationCode: "recommendation.model.patch",
+    title: "保持数值不变的草稿验证",
+    summary: "用 add 0 验证确定性转换边界。",
+    subjectAliases: [scopeAlias],
+    evidenceAliases: [evidence.evidenceAlias],
+    suggestedAction: "create_model_patch_draft" as const,
+    suggestedChanges: [{
+      changeId: "change.add-zero",
+      parameterKey: parameter.alias,
+      operation: "add" as const,
+      operand: { kind: "number" as const, value: 0 },
+      expectedBefore: structuredClone(panelValue),
+    }],
+  };
+  const record: AIAssessmentRetentionRecord = {
+    policyVersion: AI_RETENTION_POLICY_VERSION,
+    metadata: {
+      assessmentId,
+      actorStableId,
+      scopeStableRef: model.id,
+      metadataSchemaVersion: "ai-operation-metadata/v2",
+      scope: {
+        scopeType: "model",
+        scopeId: model.id,
+        inputRevision: String(model.revision),
+      },
+      ruleSetVersion: projection.operationMetadataContext.ruleSetVersion,
+      fiveAxisRuleVersion: projection.operationMetadataContext.fiveAxisRuleVersion,
+      attempts: [],
+      retryCount: 0,
+      cancellationStatus: "NOT_REQUESTED",
+      modelDescriptor: providerModel,
+      promptTemplateVersion: projection.envelope.promptTemplateVersion,
+      promptTemplateHash: projection.envelope.promptTemplateHash,
+      schemaVersion: projection.envelope.schemaVersion,
+      allowlistPolicyVersion: projection.envelope.policyVersion,
+      inputHash: prepared.inputHash,
+      requestedAt: now,
+      completedAt: now,
+      resultCode: "SUCCESS",
+      state: "ACTIVE",
+    },
+    semanticContent: {
+      findings: [],
+      recommendations: [recommendation],
+      assumptions: [],
+      uncoveredInformation: [],
+      evidenceRefs: [structuredClone(evidence)],
+    },
+    visibility: "VISIBLE",
+  };
+  return {
+    state,
+    record,
+    parameterKey: parameter.parameterKey,
+    command: {
+      mode: "preview",
+      recommendationId: recommendation.recommendationCode,
+      assessmentInputHash: prepared.inputHash,
+      selectedChangeIds: [recommendation.suggestedChanges[0]!.changeId],
+      userReason: "",
+      idempotencyKey: "idempotency.preview.1",
+      targetModelRef: { entityId: model.id, revisionId: String(model.revision) },
+    },
+  };
+}
+
+function plan(value = fixture()) {
+  return planAIDraftConversion({
+    state: value.state,
+    record: value.record,
+    assessmentId,
+    actorStableId,
+    actorDisplayName: "Planner Test",
+    capabilities: ["ai.patch_draft.create"],
+    command: value.command,
+    now,
+  });
+}
+
+function assertCode(code: AIDraftConversionError["code"], operation: () => unknown): void {
+  assert.throws(operation, (error: unknown) =>
+    error instanceof AIDraftConversionError && error.code === code);
+}
+
+test("Model preview 只生成确定性 DRAFT 计划，不修改 workspace", () => {
+  const value = fixture();
+  const revisionCount = value.state.patchLedger.revisions.length;
+  const result = plan(value);
+
+  assert.equal(result.kind, "model_patch");
+  assert.equal(result.preview.mode, "preview");
+  assert.equal(result.preview.kind, "model_patch");
+  assert.equal(result.preview.canCreate, true);
+  assert.equal(result.preview.changes.length, 1);
+  assert.equal(result.preview.changes[0]?.parameterKey, value.parameterKey);
+  assert.equal(result.preview.changes[0]?.before, result.preview.changes[0]?.after);
+  assert.equal(result.patch.state, "DRAFT");
+  assert.equal(result.patch.operations[0]?.operation, "add");
+  assert.match(result.commandHash, /^[a-f0-9]{8}$/);
+  assert.match(result.preview.previewHash, /^[a-f0-9]{8}$/);
+  assert.equal(value.state.patchLedger.revisions.length, revisionCount);
+});
+
+test("stale state 或 assessmentInputHash 不一致时 fail-closed", () => {
+  const wrongHash = fixture();
+  wrongHash.command.assessmentInputHash = "f".repeat(64);
+  assertCode("AI_ASSESSMENT_NOT_ACTIONABLE", () => plan(wrongHash));
+
+  const stale = fixture();
+  const model = stale.state.purchasableModels.find((entry) =>
+    entry.id === stale.command.targetModelRef!.entityId)!;
+  model.price += 1;
+  assertCode("AI_ASSESSMENT_NOT_ACTIONABLE", () => plan(stale));
+});
+
+test("目标 revision 与冻结状态均在计划阶段阻断", () => {
+  const changedRevision = fixture();
+  changedRevision.command.targetModelRef!.revisionId = "999";
+  assertCode("AI_DRAFT_TARGET_REVISION_CHANGED", () => plan(changedRevision));
+
+  const frozen = fixture();
+  const model = frozen.state.purchasableModels.find((entry) =>
+    entry.id === frozen.command.targetModelRef!.entityId)!;
+  model.configurationSnapshotId = "snapshot:frozen";
+  assertCode("AI_DRAFT_TARGET_FROZEN", () => plan(frozen));
+});
+
+test("非法 operation、before drift 与非法 selection 均阻断", () => {
+  const illegalOperation = fixture();
+  const definition = illegalOperation.state.parameters.find((entry) =>
+    entry.key === illegalOperation.parameterKey)!;
+  definition.allowedOperations = definition.allowedOperations?.filter((entry) => entry !== "add");
+  assertCode("AI_DRAFT_RECOMMENDATION_INVALID", () => plan(illegalOperation));
+
+  const beforeDrift = fixture();
+  const recommendation = beforeDrift.record.semanticContent!.recommendations[0] as {
+    suggestedChanges: Array<{ expectedBefore: { kind: "number"; value: number } }>;
+  };
+  recommendation.suggestedChanges[0]!.expectedBefore.value += 1;
+  assertCode("AI_DRAFT_TARGET_REVISION_CHANGED", () => plan(beforeDrift));
+
+  const invalidSelection = fixture();
+  invalidSelection.command.selectedChangeIds = ["change.not-in-recommendation"];
+  assertCode("AI_DRAFT_RECOMMENDATION_INVALID", () => plan(invalidSelection));
+});
+
+test("相同幂等命令产生相同 plan hash，不同幂等键只改变 artifact identity", () => {
+  const value = fixture();
+  const first = plan(value);
+  const replay = plan(structuredClone(value));
+  assert.equal(first.commandHash, replay.commandHash);
+  assert.equal(first.preview.previewHash, replay.preview.previewHash);
+  assert.equal(first.artifactRef.artifactId, replay.artifactRef.artifactId);
+
+  const differentKey = structuredClone(value);
+  differentKey.command.idempotencyKey = "idempotency.preview.2";
+  const changed = plan(differentKey);
+  assert.notEqual(first.commandHash, changed.commandHash);
+  assert.equal(first.preview.previewHash, changed.preview.previewHash);
+  assert.notEqual(first.artifactRef.artifactId, changed.artifactRef.artifactId);
+});
+
+test("RuleSourceChangeDraft 使用全工作区沙盒影响预览并只保存 LOCAL_DRAFT", () => {
+  const value = fixture();
+  const model = value.state.purchasableModels.find((entry) =>
+    entry.id === value.command.targetModelRef?.entityId)!;
+  const sku = value.state.skuDrawers.find((entry) => entry.id === model.skuId)!;
+  const projection = value.state.derivedProjections.find((entry) =>
+    entry.id === sku.projectionMatch.projectionId)!;
+  const candidates = [
+    ...value.state.methodProfiles
+      .filter((profile) => profile.id === projection.methodId)
+      .flatMap((profile) => profile.rules.map((rule) => ({ rule, sheetId: "fATowU" }))),
+    ...value.state.itemTypeProfiles
+      .filter((profile) => profile.id === projection.typeId)
+      .flatMap((profile) => profile.rules.map((rule) => ({ rule, sheetId: "fATowU" }))),
+    ...value.state.functionProfiles
+      .filter((profile) => profile.id === projection.functionId)
+      .flatMap((profile) => [
+        ...profile.rules.map((rule) => ({ rule, sheetId: "vviXo0" })),
+        ...profile.intensityRules
+          .filter((entry) => entry.intensity === projection.functionIntensity)
+          .flatMap((entry) => entry.rules.map((rule) => ({ rule, sheetId: "vviXo0" }))),
+      ]),
+    ...value.state.qualityProfiles
+      .filter((profile) => profile.id === projection.qualityId)
+      .flatMap((profile) => profile.rules.map((rule) => ({ rule, sheetId: "FqD4j7" }))),
+  ];
+  const source = candidates.find((entry) =>
+    value.state.parameters.some((parameter) =>
+      parameter.key === entry.rule.parameterKey
+      && parameter.targetRange
+      && parameter.allowedOperations?.includes("add")));
+  assert.ok(source, "fixture must contain a supported current rule target");
+  const currentProjection = buildWorkspaceAssessmentRequestProjection({
+    state: value.state,
+    scope: { scopeType: "model", scopeId: model.id },
+    assessmentId,
+    model: providerModel,
+  });
+  const mapping = currentProjection.parameterKeyMapping.find((entry) =>
+    entry.parameterKey === source.rule.parameterKey)!;
+  const panelValue = currentProjection.envelope.panelValues.find((entry) =>
+    entry.parameterKey === mapping.alias)!.value;
+  const recommendation = (value.record.semanticContent!.recommendations as Array<Record<string, unknown>>)[0]!;
+  recommendation.suggestedAction = "create_rule_source_change_draft";
+  recommendation.suggestedChanges = [{
+    changeId: "change.rule.add-zero",
+    parameterKey: mapping.alias,
+    operation: "add",
+    operand: { kind: "number", value: 0 },
+    expectedBefore: structuredClone(panelValue),
+  }];
+  value.state.feishuSourceRevisions = [{
+    id: "feishu-revision:rule-preview",
+    workbookRefId: "feishu-workbook:tackle-design",
+    sourceRevision: "source-revision-1",
+    spreadsheetToken: "spreadsheet-token-1",
+    pulledAt: now,
+    pulledBy: "planner-test",
+    syncScope: "workbook",
+    registryHash: "registry-hash",
+    sheets: [{ sheetId: source.sheetId, name: source.sheetId }],
+    issues: [],
+    state: "PULLED",
+  }];
+  value.command = {
+    ...value.command,
+    mode: "create",
+    selectedChangeIds: ["change.rule.add-zero"],
+    userReason: "验证规则源沙盒影响",
+    idempotencyKey: "idempotency.rule.1",
+    targetRuleRef: {
+      spreadsheetToken: "spreadsheet-token-1",
+      sheetId: source.sheetId,
+      stableRuleId: source.rule.id,
+      parameterKey: source.rule.parameterKey,
+      sourceRevision: "source-revision-1",
+    },
+  };
+
+  const result = planAIDraftConversion({
+    state: value.state,
+    record: value.record,
+    assessmentId,
+    actorStableId,
+    actorDisplayName: "Planner Test",
+    capabilities: ["ai.rule_source_change_draft.create"],
+    command: value.command,
+    now,
+  });
+  assert.equal(result.kind, "rule_source_change_draft");
+  assert.equal(result.ruleDraft.state, "LOCAL_DRAFT");
+  assert.equal(result.ruleDraft.impactPreview.coverage.complete, true);
+  assert.equal(result.ruleDraft.impactPreview.coverage.evaluatedModels, value.state.purchasableModels.length);
+  assert.equal(result.ruleDraft.impactPreview.publishedSnapshotsChanged, 0);
+  const applied = applyAIDraftArtifactPlan(value.state, result);
+  assert.equal(applied.idempotent, false);
+  assert.equal(applied.state.aiRuleSourceChangeDrafts.at(-1)?.changeDraftId, result.ruleDraft.changeDraftId);
+  assert.equal(
+    applied.state.ruleSetVersions.filter((entry) => entry.status === "published").length,
+    value.state.ruleSetVersions.filter((entry) => entry.status === "published").length,
+  );
+});

@@ -473,6 +473,46 @@ export function preparePatchOperationFromWorkspace(input: {
   };
 }
 
+export function currentPatchPanelValuesFromWorkspace(input: {
+  state: WorkspaceState;
+  scopeType: "series" | "sku" | "model";
+  subjectEntityId: string;
+}): Record<string, number | string> {
+  const placeholder: PatchRevisionRecord = {
+    patchId: "__panel_preview__",
+    patchRevision: 1,
+    scopeType: input.scopeType,
+    layerType: input.scopeType,
+    subjectEntityId: input.subjectEntityId,
+    subjectName: input.subjectEntityId,
+    baseRuleSetVersion: currentPublishedRuleSet(input.state).id,
+    baseObjectRevision: 1,
+    state: "DRAFT",
+    mirrorSyncState: "NOT_SYNCED",
+    attentionStates: [],
+    reason: "panel preview",
+    evidence: [],
+    createdBy: "panel-preview",
+    createdAt: "1970-01-01T00:00:00.000Z",
+    snapshotRefs: [],
+    operations: [],
+    revisionHash: "panel-preview",
+  };
+  const chain = subjectChain(input.state, placeholder);
+  const active = currentRevisionByPatchId(input.state, chain.patchIds, placeholder)
+    .filter((revision) => revision.patchId !== placeholder.patchId);
+  const sku = "sku" in chain
+    ? chain.sku
+    : input.state.skuDrawers
+      .filter((entry) => entry.seriesId === chain.series.id)
+      .sort((left, right) => left.targetWeightKg - right.targetWeightKg || left.id.localeCompare(right.id))[0];
+  const projection = input.state.derivedProjections.find((entry) => entry.id === sku?.projectionMatch.projectionId);
+  if (!projection) {
+    throw new PatchOffsetPolicyError("PATCH_PROJECTION_MISSING", "当前对象没有权威 Projection 基线。");
+  }
+  return applyRevisions(projection.values, active);
+}
+
 export function createWorkspacePatchReview(input: {
   state: WorkspaceState;
   target: PatchRevisionRecord;

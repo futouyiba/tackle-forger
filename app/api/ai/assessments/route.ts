@@ -162,6 +162,7 @@ export async function POST(request: NextRequest) {
       response: result.response,
       prompt: requestProjection.prompt,
       requestAliasMapping: requestProjection.requestAliasMapping,
+      parameterKeyMapping: requestProjection.parameterKeyMapping,
       rawAttempts,
     }));
     return NextResponse.json({
@@ -190,6 +191,7 @@ export async function POST(request: NextRequest) {
           resultCode,
           prompt: requestProjection.prompt,
           requestAliasMapping: requestProjection.requestAliasMapping,
+          parameterKeyMapping: requestProjection.parameterKeyMapping,
           rawAttempts,
         }));
       } catch (retentionError) {

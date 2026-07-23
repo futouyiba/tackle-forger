@@ -11,13 +11,16 @@ import {
   type LocalAliasReferenceV1,
   type RequestAlias,
 } from "./ai-outbound";
+import { currentPatchPanelValuesFromWorkspace } from "./patch-authority";
 import type { WorkspaceState } from "./types";
 
-export const AI_ASSESSMENT_PROMPT_VERSION = "tackle-forger-assessment-v2";
+export const AI_ASSESSMENT_PROMPT_VERSION = "tackle-forger-assessment-v3";
 export const AI_ASSESSMENT_PROMPT = [
   "Explain deterministic validation and trade-offs using only the supplied codes and values.",
   "Do not override validation, approve changes, or claim uncovered information as fact.",
   "Every recommendation must cite at least one supplied evidence alias, and evidence aliases may only refer to supplied evidenceRefs.",
+  "For a draft recommendation, return typed suggestedChanges with the exact supplied parameter code, expected before SafeValue, canonical operation, and SafeValue operand; never infer an operation from prose.",
+  "For preview_only, suggestedChanges must be empty.",
   "When supporting evidence is absent, report the gap in uncoveredInformation instead of making a recommendation.",
 ].join("\n");
 
@@ -36,6 +39,10 @@ export interface WorkspaceAssessmentRequestProjection {
   requestAliasMapping: Array<{
     alias: RequestAlias;
     reference: LocalAliasReferenceV1;
+  }>;
+  parameterKeyMapping: Array<{
+    alias: string;
+    parameterKey: string;
   }>;
 }
 
@@ -112,13 +119,14 @@ export function buildWorkspaceAssessmentRequestProjection(input: {
         fiveAxisRuleVersion,
       },
       requestAliasMapping: requestAliasMapping(aliases, [assessmentRef, seriesRef, revisionRef, evidenceRef]),
+      parameterKeyMapping: [],
       envelope: {
       schemaVersion: AI_REQUEST_SCHEMA_VERSION,
       policyVersion: AI_PROVIDER_POLICY_VERSION,
       promptTemplateVersion: AI_ASSESSMENT_PROMPT_VERSION,
       promptTemplateHash: promptTemplateHash(AI_ASSESSMENT_PROMPT),
       assessmentAlias: requestAliasFor(aliases, assessmentRef),
-      analysisIntent: "suggest_tradeoffs",
+      analysisIntent: "draft_rule_change",
       model: input.model,
       scope: { scopeType: "series", scopeAlias: subjectAlias, revisionAlias: requestAliasFor(aliases, revisionRef) },
       panelValues: [
@@ -156,6 +164,32 @@ export function buildWorkspaceAssessmentRequestProjection(input: {
     price: model.price,
     targetWeightKg: sku?.targetWeightKg ?? null,
   }));
+  const finalPanelValues = currentPatchPanelValuesFromWorkspace({
+    state: input.state,
+    scopeType: "model",
+    subjectEntityId: model.id,
+  });
+  const parameterKeys = Object.keys(finalPanelValues)
+    .filter((key) => {
+      if (typeof finalPanelValues[key] !== "number" || !Number.isFinite(finalPanelValues[key])) return false;
+      const definition = input.state.parameters.find((entry) => entry.key === key);
+      const range = definition?.targetRange;
+      return Boolean(
+        definition
+        && range
+        && Number.isFinite(range.min)
+        && Number.isFinite(range.max)
+        && range.min <= range.max
+        && definition.allowedOperations?.some((operation) =>
+          operation === "set" || operation === "add" || operation === "multiply"),
+      );
+    })
+    .sort((left, right) => Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8")));
+  if (parameterKeys.length > 256) throw new Error("AI_PAYLOAD_LIMIT_EXCEEDED");
+  const parameterKeyMapping = parameterKeys.map((parameterKey, index) => ({
+    alias: `p${String(index + 1).padStart(3, "0")}`,
+    parameterKey,
+  }));
   return {
     prompt: AI_ASSESSMENT_PROMPT,
     operationMetadataContext: {
@@ -166,20 +200,21 @@ export function buildWorkspaceAssessmentRequestProjection(input: {
       fiveAxisRuleVersion,
     },
     requestAliasMapping: requestAliasMapping(aliases, [assessmentRef, modelRef, revisionRef, evidenceRef]),
+    parameterKeyMapping,
     envelope: {
     schemaVersion: AI_REQUEST_SCHEMA_VERSION,
     policyVersion: AI_PROVIDER_POLICY_VERSION,
     promptTemplateVersion: AI_ASSESSMENT_PROMPT_VERSION,
     promptTemplateHash: promptTemplateHash(AI_ASSESSMENT_PROMPT),
     assessmentAlias: requestAliasFor(aliases, assessmentRef),
-    analysisIntent: "suggest_tradeoffs",
+    analysisIntent: "draft_model_patch",
     model: input.model,
     scope: { scopeType: "model", scopeAlias: subjectAlias, revisionAlias: requestAliasFor(aliases, revisionRef) },
-    panelValues: [
-      { subjectAlias, parameterKey: "length_m", value: { kind: "number", value: model.lengthM }, unitCode: "m" },
-      { subjectAlias, parameterKey: "price", value: { kind: "number", value: model.price } },
-      ...(sku ? [{ subjectAlias, parameterKey: "target_pull_kgf", value: { kind: "number" as const, value: sku.targetWeightKg }, unitCode: "kgf" }] : []),
-    ],
+    panelValues: parameterKeyMapping.map((entry) => ({
+      subjectAlias,
+      parameterKey: entry.alias,
+      value: { kind: "number" as const, value: finalPanelValues[entry.parameterKey] as number },
+    })),
     traces: [], patches: [], compatibility: [], affinity: [], invariants: [], fiveAxis: [],
     evidenceRefs: [{ evidenceType: "snapshot", evidenceAlias: requestAliasFor(aliases, evidenceRef), contentHash: evidenceHash }],
     },

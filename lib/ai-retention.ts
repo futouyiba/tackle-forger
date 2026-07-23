@@ -61,7 +61,7 @@ export interface AIOperationMetadataRecord {
   outputTokens?: number;
   costMicroUsd?: number;
   resultCode: string;
-  state: "ACTIVE" | "USER_DELETED" | "EXPIRED";
+  state: "ACTIVE" | "ACCEPTED" | "USER_DELETED" | "EXPIRED";
 }
 
 export interface AIAssessmentCurrentInput {
@@ -95,7 +95,18 @@ export interface AIUnacceptedSemanticContent {
   assumptions: unknown[];
   uncoveredInformation: unknown[];
   evidenceRefs: unknown[];
-  feedback?: unknown;
+  feedback?: {
+    recommendations: Array<{
+      recommendationId: string;
+      state: "dismissed";
+      dismissedAt: string;
+      reason?: string;
+    }>;
+    acceptedArtifact?: {
+      acceptedAt: string;
+      artifactStableRefs: string[];
+    };
+  };
 }
 
 export interface AIAcceptedArtifactProvenance {

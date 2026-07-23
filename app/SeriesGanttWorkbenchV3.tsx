@@ -33,6 +33,7 @@ import {
   isProductSkuChainEnabled,
 } from "@/lib/enabled-item-parts";
 import { CANONICAL_FEISHU_SHEET_REGISTRY } from "@/lib/feishu-workbook";
+import { issueClientActionCommand } from "@/lib/client-action-command";
 import { buildSamePartComparison, calculateModelFiveAxisPreview, fiveAxisPlotRatio } from "@/lib/five-axis";
 import { deterministicHash } from "@/lib/rule-kernel";
 import {
@@ -1707,7 +1708,9 @@ export function SeriesGanttWorkbenchV3({
   const generateAvailability = actionAvailabilities.generate_candidates;
   const openSeriesAvailability = actionAvailabilities.open_series;
   const previewModelAvailability = actionAvailabilities.preview_model;
-  const rebaseAvailability = actionAvailabilities.open_rebase;
+  // 此按钮只导航到 Series/Patch 上下文，不执行 Rebase 写命令。
+  // 真正的状态写只能使用 rebase_patch + 服务端命令载荷引用。
+  const rebaseRouteAvailability = openSeriesAvailability;
   const createSeriesAvailability = actionAvailabilities.create_series;
   const aiAvailability = actionAvailabilities.run_ai_assessment;
   const aiPatchDraftAvailability = actionAvailabilities.create_ai_patch_draft;
@@ -1916,25 +1919,32 @@ export function SeriesGanttWorkbenchV3({
     // 结构标杆匹配、拉力规划与 SKU 物化都在服务端完成后按 revision 受保护地提交，
     // 客户端不能绕过 series.edit 直接写整包（规范 §24.1/§24.4/§25.1）。
     try {
+      const idempotencyKey = `create-series:${draft.seriesId}`;
+      const businessPayload = {
+        idempotencyKey,
+        seriesId: draft.seriesId,
+        name: draft.name,
+        concept: draft.concept,
+        collectionId: draft.collectionId || undefined,
+        itemPartId: draft.itemPartId,
+        methodId: draft.methodId,
+        typeId: draft.typeId,
+        functionId: draft.functionId,
+        qualityId: draft.qualityId,
+        functionIntensity: draft.functionIntensity,
+        planningMinKgf: draft.planningMinKgf,
+        planningMaxKgf: draft.planningMaxKgf,
+        discretePulls: draft.discretePulls,
+      };
+      const invocation = await issueClientActionCommand({
+        action: "create_series",
+        idempotencyKey,
+        payload: businessPayload,
+      });
       const response = await fetch("/api/series", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          idempotencyKey: `create-series:${draft.seriesId}`,
-          seriesId: draft.seriesId,
-          name: draft.name,
-          concept: draft.concept,
-          collectionId: draft.collectionId || undefined,
-          itemPartId: draft.itemPartId,
-          methodId: draft.methodId,
-          typeId: draft.typeId,
-          functionId: draft.functionId,
-          qualityId: draft.qualityId,
-          functionIntensity: draft.functionIntensity,
-          planningMinKgf: draft.planningMinKgf,
-          planningMaxKgf: draft.planningMaxKgf,
-          discretePulls: draft.discretePulls,
-        }),
+        body: JSON.stringify(invocation),
       });
       const payload = (await response.json().catch(() => null)) as {
         state?: WorkspaceState;
@@ -2028,23 +2038,30 @@ export function SeriesGanttWorkbenchV3({
       if (!confirmed) return;
 
       const replacementSkuId = `sku:${crypto.randomUUID()}`;
+      const idempotencyKey =
+        `change-sku-target-pull:${selectedSku.id}:` +
+        `${selectedSku.revision}:${crypto.randomUUID()}`;
+      const businessPayload = {
+        skuId: selectedSku.id,
+        expectedRevision: selectedSku.revision,
+        targetPullKg,
+        projectionMatch: match,
+        expectedMode: previewPayload.mode,
+        publishedDescendantFingerprint:
+          previewPayload.publishedDescendantFingerprint,
+        replacementSkuId,
+        deprecateOriginal: true,
+        idempotencyKey,
+      };
+      const invocation = await issueClientActionCommand({
+        action: "change_sku_target_pull",
+        idempotencyKey,
+        payload: businessPayload,
+      });
       const response = await fetch("/api/skus/target-pull", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          skuId: selectedSku.id,
-          expectedRevision: selectedSku.revision,
-          targetPullKg,
-          projectionMatch: match,
-          expectedMode: previewPayload.mode,
-          publishedDescendantFingerprint:
-            previewPayload.publishedDescendantFingerprint,
-          replacementSkuId,
-          deprecateOriginal: true,
-          idempotencyKey:
-            `change-sku-target-pull:${selectedSku.id}:` +
-            `${selectedSku.revision}:${crypto.randomUUID()}`,
-        }),
+        body: JSON.stringify(invocation),
       });
       const payload = (await response.json().catch(() => null)) as
         | {
@@ -2278,7 +2295,7 @@ export function SeriesGanttWorkbenchV3({
       {drawerModel ? (
         <>
           <button className="gantt-drawer-backdrop" type="button" aria-label="关闭预览" onClick={() => { setDrawerModelId(""); setDrawerSnapshotId(""); }} />
-          <ModelDrawer key={`${drawerModel.id}:${drawerModel.revision}:${aiAssessment?.assessmentId ?? "none"}`} state={state} workspaceId={workspaceId} model={drawerModel} sku={drawerSku} series={drawerSeries} snapshot={drawerSnapshot} currentEntityType={drawerSnapshotId ? "configuration_snapshot" : "model"} comparisonModelIds={comparisonModelIds} rebaseEnabled={Boolean(drawerSeries) && rebaseAvailability.enabled} rebaseDisabledReason={drawerSeries ? rebaseAvailability.disabledReasonText : "父级 Series 不可见，不能进入 Rebase。"} aiAvailability={aiAvailability} aiPatchDraftAvailability={aiPatchDraftAvailability} aiRuleDraftAvailability={aiRuleDraftAvailability} aiAssessment={aiAssessment?.scopeKey === `model:${drawerModel.id}` ? aiAssessment : undefined} onRunAssessment={() => void runAiAssessment("model", drawerModel.id)} onAssessmentDeleted={(assessmentId) => setAiAssessment((currentAssessment) => currentAssessment?.assessmentId === assessmentId ? undefined : currentAssessment)} onWorkspaceApplied={onWorkspaceApplied} workspaceFreshness={workspaceFreshness} notify={notify} onToggleCompare={toggleCompare} onOpenSnapshot={setDrawerSnapshotId} onOpenRebase={() => { setDrawerModelId(""); setDrawerSnapshotId(""); if (drawerSeries) onOpenSeries(drawerSeries.id); }} onClose={() => { setDrawerModelId(""); setDrawerSnapshotId(""); }} />
+          <ModelDrawer key={`${drawerModel.id}:${drawerModel.revision}:${aiAssessment?.assessmentId ?? "none"}`} state={state} workspaceId={workspaceId} model={drawerModel} sku={drawerSku} series={drawerSeries} snapshot={drawerSnapshot} currentEntityType={drawerSnapshotId ? "configuration_snapshot" : "model"} comparisonModelIds={comparisonModelIds} rebaseEnabled={Boolean(drawerSeries) && rebaseRouteAvailability.enabled} rebaseDisabledReason={drawerSeries ? rebaseRouteAvailability.disabledReasonText : "父级 Series 不可见，不能进入 Rebase。"} aiAvailability={aiAvailability} aiPatchDraftAvailability={aiPatchDraftAvailability} aiRuleDraftAvailability={aiRuleDraftAvailability} aiAssessment={aiAssessment?.scopeKey === `model:${drawerModel.id}` ? aiAssessment : undefined} onRunAssessment={() => void runAiAssessment("model", drawerModel.id)} onAssessmentDeleted={(assessmentId) => setAiAssessment((currentAssessment) => currentAssessment?.assessmentId === assessmentId ? undefined : currentAssessment)} onWorkspaceApplied={onWorkspaceApplied} workspaceFreshness={workspaceFreshness} notify={notify} onToggleCompare={toggleCompare} onOpenSnapshot={setDrawerSnapshotId} onOpenRebase={() => { setDrawerModelId(""); setDrawerSnapshotId(""); if (drawerSeries) onOpenSeries(drawerSeries.id); }} onClose={() => { setDrawerModelId(""); setDrawerSnapshotId(""); }} />
         </>
       ) : null}
       {candidateOpen && selectedSeries ? (

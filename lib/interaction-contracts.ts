@@ -20,31 +20,42 @@ export type CapabilityCode =
   | "model.read" | "model.edit" | "model.review" | "model.publish"
   | "candidate.generate" | "candidate.materialize" | "candidate.override_selection" | "candidate.select" | "candidate.dismiss"
   | "model.patch.create" | "model.patch.review" | "patch.rebase"
-  | "patch.create" | "patch.review" | "patch.mirror.write" | "patch.mirror.pull" | "patch.absorption.review" | "rules.proposal.create"
-  | "snapshot.read" | "snapshot.export"
+  | "patch.create" | "patch.review" | "patch.mirror.write" | "patch.mirror.pull"
+  | "patch.mirror.inspect" | "patch.mirror.repair" | "patch.mirror.rebuild_from_local"
+  | "patch.mirror.schema.repair" | "patch.subject.migrate"
+  | "patch.absorption.review" | "rules.proposal.create"
+  | "snapshot.read" | "snapshot.audit_archive.download" | "snapshot.export"
   | "ai.evaluate" | "ai.patch_draft.create" | "ai.rule_source_change_draft.create"
   | "ai.feishu_proposal_draft.create" | "ai.provider_policy.manage"
   | "feishu.proposal.submit" | "feishu.proposal.review" | "feishu.proposal.apply"
-  | "feishu.workbook.read" | "feishu.workbook.pull" | "feishu.identity.write" | "ruleset.draft.create" | "ruleset.publish"
-  | "feishu.rule_change.confirm_write"
+  | "feishu.workbook.read" | "feishu.workbook.pull" | "feishu.identity.write"
+  | "feishu.rule_change.confirm_write" | "feishu.source.pull"
+  | "ruleset.draft.create" | "ruleset.publish"
   | "data_source.resolve" | "data_source.preview" | "data_source.publish"
   | "data_source.writeback.preview" | "data_source.writeback.commit"
   | "excel.import" | "revision.read"
-  | "config.id.reserve" | "config.id.policy.publish" | "config.id.legacy_import" | "config.id.ledger.correct"
+  | "config.id.reserve" | "config.id.policy.publish" | "config.id.legacy_import"
+  | "config.id.ledger.correct"
   | "config.target.scan" | "config.target.scan.approve" | "config.target.catalog.publish"
   | "config.export.preview" | "config.export.commit"
+  | "validation.warning.acknowledge" | "pricing.warning.acknowledge"
+  | "validation.waiver.request" | "validation.waiver.approve"
+  | "validation.recompute" | "rules.source_change_draft.create"
   | "rules.five_axis.publish" | "workspace.policy.manage" | "workspace.save";
 
 export type ActionCode =
   | "open_series" | "create_series" | "open_sku" | "change_sku_target_pull" | "preview_model"
   | "edit" | "review" | "publish" | "generate_candidates" | "materialize_candidates"
-  | "select_candidate" | "dismiss_candidate_run"
-  | "create_patch" | "review_patch" | "open_rebase"
-  | "view_snapshot" | "export_snapshot"
-  | "run_ai_assessment" | "create_ai_patch_draft" | "create_ai_rule_source_change_draft"
-  | "create_ai_feishu_draft" | "manage_ai_provider_policy"
+  | "override_candidate_selection" | "select_candidate" | "dismiss_candidate_run"
+  | "create_patch" | "review_patch" | "rebase_patch"
+  | "view_snapshot" | "download_snapshot_audit_archive" | "export_snapshot"
+  | "write_patch_mirror" | "pull_patch_mirror" | "inspect_patch_mirror"
+  | "repair_patch_mirror" | "rebuild_patch_mirror_from_local"
+  | "fix_patch_mirror_schema" | "migrate_patch_subject"
+  | "run_ai_assessment" | "create_ai_patch_draft" | "create_ai_rule_source_change_draft" | "create_ai_feishu_draft" | "manage_ai_provider_policy"
   | "submit_feishu_proposal" | "review_feishu_proposal" | "apply_feishu_proposal"
   | "inspect_feishu_workbook" | "pull_feishu_workbook" | "create_ruleset_draft" | "publish_ruleset" | "write_feishu_identity"
+  | "confirm_feishu_write" | "pull_feishu_source"
   | "resolve_data_source" | "preview_data_source" | "publish_data_source"
   | "preview_data_source_writeback" | "commit_data_source_writeback"
   | "import_excel" | "view_revisions"
@@ -52,36 +63,114 @@ export type ActionCode =
   | "import_legacy_config_id" | "correct_config_id_ledger_metadata"
   | "scan_config_target" | "approve_config_target_scan" | "publish_config_target_catalog"
   | "preview_config_export" | "commit_config_export"
+  | "acknowledge_validation_warning" | "acknowledge_price_warning"
+  | "request_validation_waiver" | "approve_validation_waiver"
+  | "recompute_validation" | "create_rule_source_change_draft"
   | "publish_five_axis_definition" | "manage_workspace_policy" | "save_workspace";
 
-export const ACTION_CODES: ActionCode[] = [
-  "open_series", "create_series", "open_sku", "change_sku_target_pull", "preview_model", "edit", "review", "publish",
-  "generate_candidates", "materialize_candidates", "select_candidate", "dismiss_candidate_run",
-  "create_patch", "review_patch", "open_rebase", "view_snapshot", "export_snapshot",
-  "run_ai_assessment", "create_ai_patch_draft", "create_ai_rule_source_change_draft",
-  "create_ai_feishu_draft", "manage_ai_provider_policy",
+export const ACTION_CODES = [
+  "open_series", "create_series", "open_sku", "change_sku_target_pull", "preview_model",
+  "edit", "review", "publish",
+  "generate_candidates", "materialize_candidates", "override_candidate_selection",
+  "select_candidate", "dismiss_candidate_run",
+  "create_patch", "review_patch", "rebase_patch",
+  "view_snapshot", "download_snapshot_audit_archive", "export_snapshot",
+  "write_patch_mirror", "pull_patch_mirror", "inspect_patch_mirror",
+  "repair_patch_mirror", "rebuild_patch_mirror_from_local",
+  "fix_patch_mirror_schema", "migrate_patch_subject",
+  "run_ai_assessment", "create_ai_patch_draft", "create_ai_rule_source_change_draft", "create_ai_feishu_draft", "manage_ai_provider_policy",
   "submit_feishu_proposal", "review_feishu_proposal", "apply_feishu_proposal",
   "inspect_feishu_workbook", "pull_feishu_workbook", "create_ruleset_draft", "publish_ruleset", "write_feishu_identity",
+  "confirm_feishu_write", "pull_feishu_source",
   "resolve_data_source", "preview_data_source", "publish_data_source",
   "preview_data_source_writeback", "commit_data_source_writeback", "import_excel", "view_revisions",
   "reserve_config_id_bundle", "publish_config_id_policy",
   "import_legacy_config_id", "correct_config_id_ledger_metadata",
   "scan_config_target", "approve_config_target_scan", "publish_config_target_catalog",
   "preview_config_export", "commit_config_export", "publish_five_axis_definition",
+  "acknowledge_validation_warning", "acknowledge_price_warning",
+  "request_validation_waiver", "approve_validation_waiver",
+  "recompute_validation", "create_rule_source_change_draft",
   "manage_workspace_policy",
   "save_workspace",
-];
+] as const satisfies readonly ActionCode[];
+
+export type IssuePresentationActionCode = "navigate" | "view_evidence" | "open_help";
+
+export const ISSUE_PRESENTATION_ACTION_CODES = [
+  "navigate",
+  "view_evidence",
+  "open_help",
+] as const satisfies readonly IssuePresentationActionCode[];
+
+/**
+ * 只有这里列出的动作可以在没有 ActionCommandPayloadRef 的情况下执行。
+ * 这些动作不得修改数据库、文件、远端系统或业务状态。
+ */
+export const READ_ONLY_ACTION_CODES = [
+  "open_series",
+  "open_sku",
+  "preview_model",
+  "view_snapshot",
+  "download_snapshot_audit_archive",
+  "inspect_patch_mirror",
+  "inspect_feishu_workbook",
+  "resolve_data_source",
+  "preview_data_source",
+  "preview_data_source_writeback",
+  "view_revisions",
+  "preview_config_export",
+] as const satisfies readonly ActionCode[];
+
+const READ_ONLY_ACTION_CODE_SET = new Set<ActionCode>(READ_ONLY_ACTION_CODES);
+
+export function isStateChangingActionCode(action: ActionCode): boolean {
+  return !READ_ONLY_ACTION_CODE_SET.has(action);
+}
 
 export interface EntityRef {
   workspaceId: string;
   entityType:
-    | "collection" | "series" | "sku_drawer" | "model"
+    | "workspace" | "collection" | "series" | "sku_drawer" | "model"
     | "configuration_snapshot" | "model_candidate" | "adjustment_patch"
     | "upgrade_candidate" | "rule_source_change_draft" | "feishu_rule_proposal"
     | "config_id_bundle" | "config_id_policy" | "config_target_catalog"
-    | "config_target_scan_manifest";
+    | "config_target_scan_manifest" | "config_export_package";
   entityId: string;
   revisionId: string;
+}
+
+export interface ActionCommandLeaseRef {
+  workspaceId: string;
+  leaseId: string;
+  action: ActionCode;
+  fencingToken: string;
+}
+
+export interface ActionCommandPayloadRef {
+  payloadRefId: string;
+  action: ActionCode;
+  subjectRef: EntityRef;
+  expectedRevisionId: string;
+  inputHash: string;
+  manifestHash?: string;
+  payloadHash: string;
+  idempotencyKey: string;
+  leaseRef: ActionCommandLeaseRef;
+  expiresAt?: string;
+}
+
+export interface ActionLink {
+  actionId: string;
+  action: ActionCode | IssuePresentationActionCode;
+  label: string;
+  targetRef?: EntityRef;
+  targetRoute?: string;
+  enabled: boolean;
+  requiredCapabilities: CapabilityCode[];
+  disabledReasonCode?: string;
+  disabledReasonText?: string;
+  commandPayloadRef?: ActionCommandPayloadRef;
 }
 
 export interface BreadcrumbItem {
@@ -528,7 +617,7 @@ export interface ActionAvailability {
 
 export type ActionAvailabilityMap = Record<ActionCode, ActionAvailability>;
 
-const ACTION_CAPABILITIES: Partial<Record<ActionCode, CapabilityCode[]>> = {
+const ACTION_CAPABILITIES = {
   open_series: ["series.read"],
   create_series: ["series.edit"],
   open_sku: ["sku.read"],
@@ -539,13 +628,22 @@ const ACTION_CAPABILITIES: Partial<Record<ActionCode, CapabilityCode[]>> = {
   publish: ["model.publish"],
   generate_candidates: ["candidate.generate"],
   materialize_candidates: ["candidate.materialize"],
+  override_candidate_selection: ["candidate.override_selection"],
   select_candidate: ["candidate.select"],
   dismiss_candidate_run: ["candidate.dismiss"],
   create_patch: ["model.patch.create"],
   review_patch: ["model.patch.review"],
-  open_rebase: ["patch.rebase"],
+  rebase_patch: ["patch.rebase"],
   view_snapshot: ["snapshot.read"],
+  download_snapshot_audit_archive: ["snapshot.audit_archive.download"],
   export_snapshot: ["snapshot.export"],
+  write_patch_mirror: ["patch.mirror.write"],
+  pull_patch_mirror: ["patch.mirror.pull"],
+  inspect_patch_mirror: ["patch.mirror.inspect"],
+  repair_patch_mirror: ["patch.mirror.repair"],
+  rebuild_patch_mirror_from_local: ["patch.mirror.rebuild_from_local"],
+  fix_patch_mirror_schema: ["patch.mirror.schema.repair"],
+  migrate_patch_subject: ["patch.subject.migrate"],
   run_ai_assessment: ["ai.evaluate"],
   create_ai_patch_draft: ["ai.patch_draft.create"],
   create_ai_rule_source_change_draft: ["ai.rule_source_change_draft.create"],
@@ -559,6 +657,8 @@ const ACTION_CAPABILITIES: Partial<Record<ActionCode, CapabilityCode[]>> = {
   create_ruleset_draft: ["ruleset.draft.create"],
   publish_ruleset: ["ruleset.publish"],
   write_feishu_identity: ["feishu.identity.write"],
+  confirm_feishu_write: ["feishu.rule_change.confirm_write"],
+  pull_feishu_source: ["feishu.source.pull"],
   resolve_data_source: ["data_source.resolve"],
   preview_data_source: ["data_source.preview"],
   publish_data_source: ["data_source.publish"],
@@ -575,10 +675,20 @@ const ACTION_CAPABILITIES: Partial<Record<ActionCode, CapabilityCode[]>> = {
   publish_config_target_catalog: ["config.target.catalog.publish"],
   preview_config_export: ["config.export.preview"],
   commit_config_export: ["config.export.commit"],
+  acknowledge_validation_warning: ["validation.warning.acknowledge"],
+  acknowledge_price_warning: ["pricing.warning.acknowledge"],
+  request_validation_waiver: ["validation.waiver.request"],
+  approve_validation_waiver: ["validation.waiver.approve"],
+  recompute_validation: ["validation.recompute"],
+  create_rule_source_change_draft: ["rules.source_change_draft.create"],
   publish_five_axis_definition: ["rules.five_axis.publish"],
   manage_workspace_policy: ["workspace.policy.manage"],
   save_workspace: ["workspace.save"],
-};
+} satisfies Partial<Record<ActionCode, readonly CapabilityCode[]>>;
+
+export function requiredCapabilitiesForAction(action: ActionCode): CapabilityCode[] {
+  return [...(ACTION_CAPABILITIES[action] ?? [])];
+}
 
 export function actionAvailability(
   action: ActionCode,
@@ -586,7 +696,7 @@ export function actionAvailability(
   domainBlock?: { code: string; text: string },
 ): ActionAvailability {
   const held = new Set(capabilities);
-  const requiredCapabilities = ACTION_CAPABILITIES[action] ?? [];
+  const requiredCapabilities = requiredCapabilitiesForAction(action);
   const stageBlock = action === "commit_config_export" || action === "export_snapshot"
     ? formalConfigExportActionBlock()
     : undefined;
@@ -619,6 +729,84 @@ export function actionAvailability(
     };
   }
   return { action, enabled: true, requiredCapabilities };
+}
+
+export function buildActionLink(input: {
+  actionId: string;
+  action: ActionCode | IssuePresentationActionCode;
+  label: string;
+  availability?: ActionAvailability;
+  targetRef?: EntityRef;
+  targetRoute?: string;
+  commandPayloadRef?: ActionCommandPayloadRef;
+  disabledReasonCode?: string;
+  disabledReasonText?: string;
+}): ActionLink {
+  const presentation = (ISSUE_PRESENTATION_ACTION_CODES as readonly string[])
+    .includes(input.action);
+  if (presentation) {
+    if (input.commandPayloadRef) {
+      throw new Error("只读展示动作不得携带命令载荷。");
+    }
+    return {
+      actionId: input.actionId,
+      action: input.action,
+      label: input.label,
+      targetRef: input.targetRef,
+      targetRoute: input.targetRoute,
+      enabled: input.disabledReasonCode === undefined,
+      requiredCapabilities: [],
+      ...(input.disabledReasonCode
+        ? {
+            disabledReasonCode: input.disabledReasonCode,
+            disabledReasonText: input.disabledReasonText,
+          }
+        : {}),
+    };
+  }
+
+  const action = input.action as ActionCode;
+  const availability = input.availability;
+  if (!availability || availability.action !== action) {
+    throw new Error("领域动作必须使用同一 ActionCode 的服务端 ActionAvailability。");
+  }
+  if (!availability.enabled && input.commandPayloadRef) {
+    throw new Error("禁用动作不得携带命令载荷。");
+  }
+  if (availability.enabled && isStateChangingActionCode(action)) {
+    const payloadRef = input.commandPayloadRef;
+    if (!payloadRef) {
+      throw new Error("ACTION_COMMAND_PAYLOAD_REQUIRED");
+    }
+    if (
+      payloadRef.action !== action
+      || payloadRef.leaseRef.action !== action
+      || payloadRef.leaseRef.workspaceId !== payloadRef.subjectRef.workspaceId
+      || (input.targetRef
+        && (
+          payloadRef.subjectRef.workspaceId !== input.targetRef.workspaceId
+          || payloadRef.subjectRef.entityType !== input.targetRef.entityType
+          || payloadRef.subjectRef.entityId !== input.targetRef.entityId
+          || payloadRef.subjectRef.revisionId !== input.targetRef.revisionId
+        ))
+    ) {
+      throw new Error("ACTION_COMMAND_PAYLOAD_BINDING_MISMATCH");
+    }
+  }
+  return {
+    actionId: input.actionId,
+    action,
+    label: input.label,
+    targetRef: input.targetRef,
+    targetRoute: input.targetRoute,
+    enabled: availability.enabled,
+    requiredCapabilities: availability.requiredCapabilities,
+    disabledReasonCode: availability.disabledReasonCode,
+    disabledReasonText: availability.disabledReasonText,
+    ...(availability.enabled && input.commandPayloadRef
+      ? { commandPayloadRef: input.commandPayloadRef }
+      : {}),
+  };
 }
 
 export function buildActionAvailabilityMap(

@@ -30,7 +30,8 @@ mock、Vercel 评审入口和只读预检都只能作为准备证据，不能替
 
 Issue #73 使用三层证据，禁止互相替代：
 
-1. `preflight`：检查构建 commit、Node 版本、部署模板、一期源码契约和可选的目标环境文件。
+1. `preflight`：检查构建 commit、Node 版本、部署模板、一期依赖 commit、源码提示和可选的
+   目标环境文件。源码字符串只记 `INFO`；缺失会阻断，但存在不计作通过证据。
 2. `public-smoke`：仅以未登录身份 GET 内网入口、登录起点和受保护 API。
 3. `authenticated-read-only`：使用已经由真实用户登录得到的临时会话，只读检查会话、
    Capability、工作区、revision 和权威工作簿。
@@ -59,13 +60,22 @@ npm run acceptance:phase-one -- preflight \
 预检会显式阻断：
 
 - Node 低于 22.16.0、工作树不干净或 commit 不可解析；
+- 环境未记录 #67、#71、#72 已通过审查和 CI 后的完整合入 commit，或任一 commit
+  不是待部署 HEAD 的祖先；源码字符串标记只作辅助提示，不能替代这项门禁；
 - #66 数据链未落地；
 - #68 schema v17 读取契约未落地；
 - #72 `NON_FORMAL` 契约缺失，或一期仍授予 `snapshot.export`、`config.export.commit`、
   ConfigId/AI Capability；
 - 回调协议/路径、会话密钥、TTL、飞书 HTTPS 基址或生产持久路径不合法；
+- 权威工作簿解析后的 spreadsheet token 与服务器保存的
+  `FEISHU_CANONICAL_SPREADSHEET_TOKEN` 不同；
 - 环境启用 AI、revision 裁剪或可信代理身份模式；
 - systemd 未限制回环监听/写目录，或 Nginx 未清除客户端身份头。
+
+环境还需填写 `PHASE_ONE_CANONICAL_PULL_COMMIT`、`PHASE_ONE_SCHEMA_V17_COMMIT` 和
+`PHASE_ONE_NON_FORMAL_COMMIT` 三个完整 40 位 commit SHA。只有对应 PR 已完成实质审查、
+CI 并合入后才能填写；脚本会验证它们都是待部署 HEAD 的祖先。持久路径会在规范化后检查
+重复/越界，并核对真实路径存在、归当前服务账号所有且不可由组或其他用户写入。
 
 ### 3.2 未登录只读 smoke
 
@@ -82,22 +92,24 @@ npm run acceptance:phase-one -- public-smoke \
 
 - 根页面可达；
 - `/api/auth/session` 未登录返回 `401 / AUTH-SESSION-001`；
-- 登录起点返回飞书 HTTPS 跳转、随机 state 和 `HttpOnly + SameSite=Lax + Secure` Cookie；
+- 连续两次登录起点都返回配置的飞书授权来源和精确登记回调，state 非空且互不相同，
+  pending Cookie 与各自 state 一致，并含 `HttpOnly + SameSite=Lax + Secure`；
 - `/api/state`、`/api/revisions`、`/api/feishu-workbook` 未登录均返回 401；
 - 响应未回显环境文件中的密钥值。
 
 若会话端点返回 `503 / AUTH-CONFIG-001`，结果是 `BLOCKED`，表示真实 OAuth 尚未配置；
 不得记录为“匿名边界通过”后继续验收。
 
-只有在已批准的 RFC 1918 私网 HTTP 降级中才能追加 `--allow-private-http`。该模式必须与
-`FEISHU_ALLOW_INSECURE_HTTP=true` 和飞书登记回调一致，并明确记录 File System Access API
-等安全上下文能力不可用；公网 HTTP 永远拒绝。
+只有在已批准的 RFC 1918 数值 IPv4 降级中才能追加 `--allow-private-http`。该模式必须与
+`FEISHU_ALLOW_INSECURE_HTTP=true` 和飞书登记回调 origin 一致；域名、localhost、回环地址、
+IPv6 ULA 与公网 HTTP 永远拒绝。降级时还需明确记录 File System Access API 等安全上下文
+能力不可用。
 
 ### 3.3 已登录只读核对
 
 真实用户先通过浏览器完成飞书登录。若运维选择使用脚本核对，需把当前
-`tf_session=<opaque-id>` 临时写入仓库外 `0600` 文件；不要放在命令参数、shell history、
-Issue、日志或聊天中：
+`tf_session=<opaque-id>` 临时写入仓库外绝对路径的 `0600` 普通文件；相对路径、仓库内
+文件和符号链接都会被拒绝。不要把 Cookie 放在命令参数、shell history、Issue、日志或聊天中：
 
 ```bash
 npm run acceptance:phase-one -- authenticated-read-only \
@@ -120,6 +132,10 @@ npm run acceptance:phase-one -- authenticated-read-only \
 - HTTP 状态、响应大小和响应体哈希。
 
 脚本不会保存 Cookie、环境值、工作簿 token、飞书用户 ID、工作区 Payload 或 Trace 正文。
+发出首个携带 Cookie 的请求前，脚本会要求目标 origin 与 `FEISHU_REDIRECT_URI` 精确一致，
+并要求环境提供预期 tenant key 和权威工作簿 token。已登录 PASS 还要求 tenant 精确匹配、
+会话未过期、Capability 精确匹配一期允许集合、workspace schema 精确为 17，以及必需的
+01–08、10 稳定 sheet_id/名称完整无重复、工作簿身份/token 匹配且没有 error inspection issue。
 
 ## 4. 真实部署记录
 
@@ -229,4 +245,3 @@ Series/SKU/Model/Snapshot:
 
 只有真实环境所有必需项均有直接证据时才能勾选 #73。部分完成时逐项写
 `PASS/BLOCKED/NOT_RUN`，不得用“整体通过”覆盖未执行项。
-

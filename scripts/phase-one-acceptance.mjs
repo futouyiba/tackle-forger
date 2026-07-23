@@ -2,29 +2,72 @@
 
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { readFile, stat, writeFile } from "node:fs/promises";
+import { lstat, readFile, realpath, stat, writeFile } from "node:fs/promises";
+import { isIP } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const EVIDENCE_SCHEMA_VERSION = "phase-one-acceptance-evidence/v1";
+const EXPECTED_WORKBOOK_REF_ID = "feishu-workbook:tackle-design";
+export const EXPECTED_CANONICAL_SHEETS = new Map([
+  ["d6e928", "01_重量模板"],
+  ["fATowU", "02_类型材质"],
+  ["vviXo0", "03_功能定位"],
+  ["zrVOxd", "04_词条"],
+  ["RdZv0J", "05_技术"],
+  ["9nE3Rx", "06_系列"],
+  ["FqD4j7", "07_品质评分"],
+  ["u87sRh", "08_价格计算"],
+  ["KZv4o2", "10_校验规则"],
+]);
 const FORBIDDEN_PHASE_ONE_CAPABILITIES = new Set([
-  "ai.evaluate",
-  "ai.patch_draft.create",
-  "ai.rule_source_change_draft.create",
   "config.export.commit",
   "config.id.reserve",
   "snapshot.export",
 ]);
-const REQUIRED_PHASE_ONE_CAPABILITIES = new Set([
+export const EXPECTED_PHASE_ONE_CAPABILITIES = new Set([
+  "candidate.dismiss",
+  "candidate.generate",
+  "candidate.materialize",
+  "candidate.select",
   "config.export.preview",
+  "data_source.preview",
+  "data_source.publish",
+  "data_source.resolve",
+  "data_source.writeback.commit",
+  "data_source.writeback.preview",
+  "excel.import",
+  "feishu.identity.write",
+  "feishu.workbook.read",
   "feishu.workbook.pull",
+  "model.edit",
+  "model.patch.create",
+  "model.patch.review",
   "model.publish",
+  "model.read",
+  "model.review",
+  "patch.absorption.review",
+  "patch.create",
+  "patch.mirror.pull",
+  "patch.mirror.write",
+  "patch.rebase",
+  "patch.review",
+  "revision.read",
+  "rules.five_axis.publish",
+  "rules.proposal.create",
+  "ruleset.draft.create",
   "ruleset.publish",
+  "series.edit",
+  "series.read",
+  "sku.read",
   "snapshot.read",
+  "workspace.policy.manage",
+  "workspace.save",
 ]);
 const REQUIRED_ENV_KEYS = [
   "FEISHU_APP_ID",
   "FEISHU_APP_SECRET",
+  "FEISHU_CANONICAL_SPREADSHEET_TOKEN",
   "FEISHU_TENANT_KEY",
   "FEISHU_REDIRECT_URI",
   "FEISHU_SESSION_SECRET",
@@ -32,6 +75,14 @@ const REQUIRED_ENV_KEYS = [
   "WORKSPACE_DATABASE_PATH",
   "WORKSPACE_FILE_DATA_DIR",
   "WORKSPACE_BACKUP_DIR",
+  "PHASE_ONE_CANONICAL_PULL_COMMIT",
+  "PHASE_ONE_SCHEMA_V17_COMMIT",
+  "PHASE_ONE_NON_FORMAL_COMMIT",
+];
+const DEPENDENCY_COMMIT_KEYS = [
+  "PHASE_ONE_CANONICAL_PULL_COMMIT",
+  "PHASE_ONE_SCHEMA_V17_COMMIT",
+  "PHASE_ONE_NON_FORMAL_COMMIT",
 ];
 const SECRET_ENV_KEYS = [
   "FEISHU_APP_SECRET",
@@ -52,7 +103,7 @@ function check(id, status, summary, evidence = undefined) {
 }
 
 function summarize(checks) {
-  const counts = { PASS: 0, BLOCKED: 0, FAIL: 0 };
+  const counts = { PASS: 0, BLOCKED: 0, FAIL: 0, INFO: 0 };
   for (const item of checks) counts[item.status] += 1;
   return {
     ...counts,
@@ -80,18 +131,10 @@ function parseEnv(text) {
   return values;
 }
 
-function isPrivateHostname(hostname) {
-  const normalized = hostname.toLowerCase();
-  if (normalized === "localhost" || normalized === "::1") return true;
-  const octets = normalized.split(".").map(Number);
-  if (
-    octets.length !== 4
-    || octets.some((value) => !Number.isInteger(value) || value < 0 || value > 255)
-  ) {
-    return normalized.startsWith("fc") || normalized.startsWith("fd");
-  }
+function isRfc1918Ipv4Hostname(hostname) {
+  if (isIP(hostname) !== 4) return false;
+  const octets = hostname.split(".").map(Number);
   return octets[0] === 10
-    || octets[0] === 127
     || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)
     || (octets[0] === 192 && octets[1] === 168);
 }
@@ -101,7 +144,7 @@ function inspectRedirectUrl(env) {
     const redirect = new URL(env.FEISHU_REDIRECT_URI ?? "");
     const privateHttp = redirect.protocol === "http:"
       && env.FEISHU_ALLOW_INSECURE_HTTP?.toLowerCase() === "true"
-      && isPrivateHostname(redirect.hostname);
+      && isRfc1918Ipv4Hostname(redirect.hostname);
     if (redirect.protocol !== "https:" && !privateHttp) {
       return check(
         "oauth_redirect",
@@ -127,20 +170,26 @@ function inspectRedirectUrl(env) {
 }
 
 function inspectRuntimePaths(env) {
+  const dataRoot = "/opt/tackle-forger/data";
   const entries = [
     ["WORKSPACE_DATABASE_PATH", env.WORKSPACE_DATABASE_PATH],
     ["WORKSPACE_FILE_DATA_DIR", env.WORKSPACE_FILE_DATA_DIR],
     ["WORKSPACE_BACKUP_DIR", env.WORKSPACE_BACKUP_DIR],
     ["FEISHU_SESSION_DATA_DIR", env.FEISHU_SESSION_DATA_DIR],
   ];
-  const invalid = entries.filter(([, value]) => (
+  const normalized = entries.map(([key, value]) => [
+    key,
+    value ? path.resolve(value) : value,
+  ]);
+  const invalid = normalized.filter(([, value]) => (
     !value
     || !path.isAbsolute(value)
-    || !value.startsWith("/opt/tackle-forger/data/")
+    || path.relative(dataRoot, value).startsWith("..")
+    || path.relative(dataRoot, value) === ""
     || value.startsWith("/opt/tackle-forger/current/")
   ));
-  const duplicate = new Set(entries.map(([, value]) => value).filter(Boolean)).size
-    !== entries.filter(([, value]) => Boolean(value)).length;
+  const duplicate = new Set(normalized.map(([, value]) => value).filter(Boolean)).size
+    !== normalized.filter(([, value]) => Boolean(value)).length;
   if (invalid.length || duplicate) {
     return check(
       "persistent_paths",
@@ -152,6 +201,79 @@ function inspectRuntimePaths(env) {
   return check("persistent_paths", "PASS", "四类持久数据路径互相隔离且不位于代码发布目录。", {
     keys: entries.map(([key]) => key),
   });
+}
+
+async function inspectRuntimePathFilesystem(env) {
+  const entries = [
+    ["WORKSPACE_DATABASE_PATH", env.WORKSPACE_DATABASE_PATH],
+    ["WORKSPACE_FILE_DATA_DIR", env.WORKSPACE_FILE_DATA_DIR],
+    ["WORKSPACE_BACKUP_DIR", env.WORKSPACE_BACKUP_DIR],
+    ["FEISHU_SESSION_DATA_DIR", env.FEISHU_SESSION_DATA_DIR],
+  ];
+  const missingKeys = [];
+  const outsideRootKeys = [];
+  const ownerMismatchKeys = [];
+  const writableByOthersKeys = [];
+  const canonicalPaths = [];
+  let canonicalRoot;
+  try {
+    canonicalRoot = await realpath("/opt/tackle-forger/data");
+  } catch {
+    return check(
+      "persistent_path_filesystem",
+      "BLOCKED",
+      "目标服务器尚无可解析的 /opt/tackle-forger/data 持久根。",
+    );
+  }
+  for (const [key, value] of entries) {
+    try {
+      const canonical = await realpath(value);
+      const info = await stat(canonical);
+      canonicalPaths.push(canonical);
+      const relative = path.relative(canonicalRoot, canonical);
+      if (
+        relative === ""
+        || relative.startsWith("..")
+        || path.isAbsolute(relative)
+      ) {
+        outsideRootKeys.push(key);
+      }
+      if (typeof process.getuid === "function" && info.uid !== process.getuid()) {
+        ownerMismatchKeys.push(key);
+      }
+      if ((info.mode & 0o022) !== 0) writableByOthersKeys.push(key);
+    } catch {
+      missingKeys.push(key);
+    }
+  }
+  const duplicateCanonicalPaths = canonicalPaths.length
+    !== new Set(canonicalPaths).size;
+  if (
+    missingKeys.length
+    || outsideRootKeys.length
+    || ownerMismatchKeys.length
+    || writableByOthersKeys.length
+    || duplicateCanonicalPaths
+  ) {
+    return check(
+      "persistent_path_filesystem",
+      "BLOCKED",
+      "持久路径必须真实存在、解析后位于数据根内、归当前服务账号所有且不可由组/其他用户写入。",
+      {
+        missingKeys,
+        outsideRootKeys,
+        ownerMismatchKeys,
+        writableByOthersKeys,
+        duplicateCanonicalPaths,
+      },
+    );
+  }
+  return check(
+    "persistent_path_filesystem",
+    "PASS",
+    "持久路径的真实位置、所有者和写权限边界符合部署要求。",
+    { keys: entries.map(([key]) => key) },
+  );
 }
 
 function inspectDisabledFeatures(env) {
@@ -225,20 +347,33 @@ function parseCapabilityLiterals(source) {
   return [...block.matchAll(/["']([^"']+)["']/gu)].map((match) => match[1]);
 }
 
+function activeConfigLines(source) {
+  return source
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#"));
+}
+
 function inspectSourceContracts(sources) {
   const checks = [];
   const capabilities = parseCapabilityLiterals(sources.capabilities);
-  const forbidden = capabilities.filter((capability) => FORBIDDEN_PHASE_ONE_CAPABILITIES.has(capability));
-  const missing = [...REQUIRED_PHASE_ONE_CAPABILITIES].filter((capability) => !capabilities.includes(capability));
+  const forbidden = capabilities.filter((capability) => (
+    capability.startsWith("ai.")
+    || FORBIDDEN_PHASE_ONE_CAPABILITIES.has(capability)
+    || !EXPECTED_PHASE_ONE_CAPABILITIES.has(capability)
+  ));
+  const missing = [...EXPECTED_PHASE_ONE_CAPABILITIES]
+    .filter((capability) => !capabilities.includes(capability));
   checks.push(forbidden.length || missing.length
     ? check(
       "phase_one_capability_boundary",
       "BLOCKED",
-      "一期 Capability 仍暴露正式导出/AI 动作，或缺少一期必需动作。",
-      { forbiddenCapabilities: forbidden, missingCapabilities: missing },
+      "一期 Capability 未精确匹配允许集合，或仍暴露 AI/正式导出/未知动作。",
+      { forbiddenCapabilities: forbidden.sort(), missingCapabilities: missing.sort() },
     )
-    : check("phase_one_capability_boundary", "PASS", "一期 Capability 边界符合 v3 §25.1。", {
+    : check("phase_one_capability_boundary", "INFO", "源码 Capability 标记精确匹配允许集合。", {
       capabilityCount: capabilities.length,
+      advisoryOnly: true,
     }));
 
   const schemaVersion = Number.parseInt(
@@ -246,8 +381,9 @@ function inspectSourceContracts(sources) {
     10,
   );
   checks.push(Number.isInteger(schemaVersion) && schemaVersion >= 17
-    ? check("schema_v17_read_compatibility", "PASS", "运行时声明支持生产 schema v17。", {
+    ? check("schema_v17_read_compatibility", "INFO", "源码声明 schema v17；运行证据仍单独核对。", {
       currentWorkspaceSchemaVersion: schemaVersion,
+      advisoryOnly: true,
     })
     : check(
       "schema_v17_read_compatibility",
@@ -261,7 +397,12 @@ function inspectSourceContracts(sources) {
     && sources.workbookRoute.includes("canonicalRuleSource")
   );
   checks.push(canonicalPullImplemented
-    ? check("canonical_rule_source_chain", "PASS", "显式拉取路径包含规范规则源导入与工作台切换。")
+    ? check(
+      "canonical_rule_source_chain",
+      "INFO",
+      "源码包含规范规则源导入标记；该静态提示不能替代依赖 commit、测试与 review 门禁。",
+      { advisoryOnly: true },
+    )
     : check(
       "canonical_rule_source_chain",
       "BLOCKED",
@@ -274,26 +415,39 @@ function inspectSourceContracts(sources) {
     && sources.repositoryText.includes("NON_FORMAL:")
   );
   checks.push(nonFormalContract
-    ? check("non_formal_preview_contract", "PASS", "仓库包含一期固定 NON_FORMAL 预览契约。")
+    ? check(
+      "non_formal_preview_contract",
+      "INFO",
+      "源码包含 NON_FORMAL 契约标记；该静态提示不能替代可执行测试与依赖门禁。",
+      { advisoryOnly: true },
+    )
     : check(
       "non_formal_preview_contract",
       "BLOCKED",
       "一期固定 ConfigPreviewPackage/NON_FORMAL 契约尚未落地；#72 仍是部署阻断。",
     ));
 
-  const serviceOk = (
-    sources.systemd.includes("--hostname 127.0.0.1")
-    && sources.systemd.includes("ReadWritePaths=/opt/tackle-forger/data")
-  );
+  const systemdLines = activeConfigLines(sources.systemd);
+  const execStart = systemdLines.find((line) => line.startsWith("ExecStart="))?.slice(10) ?? "";
+  const readWritePaths = systemdLines
+    .filter((line) => line.startsWith("ReadWritePaths="))
+    .flatMap((line) => line.slice("ReadWritePaths=".length).split(/\s+/u));
+  const serviceOk = /(?:^|\s)--hostname\s+127\.0\.0\.1(?:\s|$)/u.test(execStart)
+    && readWritePaths.length === 1
+    && readWritePaths[0] === "/opt/tackle-forger/data";
   checks.push(serviceOk
     ? check("systemd_isolation", "PASS", "应用只监听回环地址，systemd 仅开放持久数据根写权限。")
     : check("systemd_isolation", "BLOCKED", "systemd 模板未满足回环监听或持久目录隔离。"));
 
+  const nginxHeaders = new Map(activeConfigLines(sources.nginx).flatMap((line) => {
+    const match = /^proxy_set_header\s+(\S+)\s+"";$/u.exec(line);
+    return match ? [[match[1].toLowerCase(), ""]] : [];
+  }));
   const nginxOk = [
-    "X-Feishu-Tenant-Key \"\"",
-    "X-Feishu-Open-Id \"\"",
-    "X-TF-Proxy-Secret \"\"",
-  ].every((marker) => sources.nginx.includes(marker));
+    "x-feishu-tenant-key",
+    "x-feishu-open-id",
+    "x-tf-proxy-secret",
+  ].every((header) => nginxHeaders.has(header));
   checks.push(nginxOk
     ? check("nginx_identity_header_strip", "PASS", "Nginx 模板清除客户端身份与代理密钥头。")
     : check("nginx_identity_header_strip", "BLOCKED", "Nginx 模板未完整清除身份/代理密钥头。"));
@@ -337,6 +491,46 @@ function safeGit(root, args) {
   }
 }
 
+function gitSucceeds(root, args) {
+  try {
+    execFileSync("git", args, {
+      cwd: root,
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function inspectDependencyCommits(root, env) {
+  const invalidKeys = [];
+  const nonAncestorKeys = [];
+  for (const key of DEPENDENCY_COMMIT_KEYS) {
+    const commit = env[key]?.trim() ?? "";
+    if (!/^[0-9a-f]{40}$/u.test(commit)) {
+      invalidKeys.push(key);
+      continue;
+    }
+    if (!gitSucceeds(root, ["merge-base", "--is-ancestor", commit, "HEAD"])) {
+      nonAncestorKeys.push(key);
+    }
+  }
+  return invalidKeys.length || nonAncestorKeys.length
+    ? check(
+      "merged_dependency_commits",
+      "BLOCKED",
+      "未证明 #67、#71、#72 的已审核实现 commit 均包含在待部署 HEAD 中。",
+      { invalidKeys, nonAncestorKeys },
+    )
+    : check(
+      "merged_dependency_commits",
+      "PASS",
+      "三项依赖 commit 均为待部署 HEAD 的祖先；GitHub review/CI 仍需人工核对。",
+      { keys: [...DEPENDENCY_COMMIT_KEYS] },
+    );
+}
+
 function safeNodeVersion() {
   const [major, minor] = process.versions.node.split(".").map(Number);
   return {
@@ -377,6 +571,7 @@ async function environmentFileChecks(envFile) {
         }),
         permissionCheck,
         ...inspectEnvironmentValues(env),
+        await inspectRuntimePathFilesystem(env),
       ],
     };
   } catch (error) {
@@ -414,6 +609,7 @@ export async function runPreflight({ root = process.cwd(), envFile } = {}) {
   }
   const environment = await environmentFileChecks(envFile);
   checks.push(...environment.checks);
+  checks.push(inspectDependencyCommits(root, environment.env));
   return {
     schemaVersion: EVIDENCE_SCHEMA_VERSION,
     mode: "preflight",
@@ -456,16 +652,43 @@ async function responseEvidence(response, secrets) {
   };
 }
 
-function normalizeBaseUrl(value, allowPrivateHttp) {
+function configuredRedirectUrl(env) {
+  try {
+    return new URL(env.FEISHU_REDIRECT_URI ?? "");
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeBaseUrl(value, {
+  allowPrivateHttp = false,
+  env = {},
+  requireConfiguredOrigin = false,
+} = {}) {
   const url = new URL(value);
-  if (url.username || url.password || url.search || url.hash) {
-    throw new Error("base URL 不得包含凭据、查询参数或 fragment。");
+  if (url.username || url.password || url.search || url.hash || url.pathname !== "/") {
+    throw new Error("base URL 必须只包含 origin，不得包含凭据、路径、查询参数或 fragment。");
   }
-  const privateHttp = url.protocol === "http:" && allowPrivateHttp && isPrivateHostname(url.hostname);
+  const privateHttp = url.protocol === "http:"
+    && allowPrivateHttp
+    && env.FEISHU_ALLOW_INSECURE_HTTP?.trim().toLowerCase() === "true"
+    && isRfc1918Ipv4Hostname(url.hostname);
   if (url.protocol !== "https:" && !privateHttp) {
-    throw new Error("base URL 必须使用 HTTPS；仅显式允许 RFC 1918 私网 HTTP。");
+    throw new Error(
+      "base URL 必须使用 HTTPS；RFC 1918 HTTP 同时要求 CLI 开关和 FEISHU_ALLOW_INSECURE_HTTP=true。",
+    );
   }
-  url.pathname = "/";
+  const redirect = configuredRedirectUrl(env);
+  if (
+    requireConfiguredOrigin
+    && (
+      !redirect
+      || redirect.origin !== url.origin
+      || redirect.pathname !== "/api/auth/feishu/callback"
+    )
+  ) {
+    throw new Error("携带会话前，base URL 必须与已配置飞书回调 origin 精确一致。");
+  }
   return url;
 }
 
@@ -485,7 +708,7 @@ export async function runPublicSmoke({
   fetchImpl = fetch,
 } = {}) {
   const generatedAt = new Date().toISOString();
-  const target = normalizeBaseUrl(baseUrl, allowPrivateHttp);
+  const target = normalizeBaseUrl(baseUrl, { allowPrivateHttp, env });
   const secrets = secretCandidates(env);
   const checks = [];
 
@@ -499,7 +722,11 @@ export async function runPublicSmoke({
     }));
 
   const session = await fetchProbe(fetchImpl, target, "/api/auth/session", {}, secrets);
-  if (session.status === 401 && session.json?.errorCode === "AUTH-SESSION-001") {
+  if (
+    session.status === 401
+    && session.json?.errorCode === "AUTH-SESSION-001"
+    && !session.leakedConfiguredSecret
+  ) {
     checks.push(check("anonymous_session", "PASS", "未登录会话按预期返回 401。", {
       status: session.status, errorCode: session.json.errorCode,
     }));
@@ -508,56 +735,102 @@ export async function runPublicSmoke({
       "anonymous_session",
       "BLOCKED",
       "目标环境仍缺少飞书 OAuth/会话配置，真实登录不可验收。",
-      { status: session.status, errorCode: session.json.errorCode },
+      {
+        status: session.status,
+        errorCode: session.leakedConfiguredSecret ? null : session.json.errorCode,
+        leakedConfiguredSecret: session.leakedConfiguredSecret,
+      },
     ));
   } else {
     checks.push(check("anonymous_session", "FAIL", "未登录会话端点返回了非预期结果。", {
       status: session.status,
-      errorCode: session.json?.errorCode ?? null,
+      errorCode: session.leakedConfiguredSecret ? null : session.json?.errorCode ?? null,
+      leakedConfiguredSecret: session.leakedConfiguredSecret,
     }));
   }
 
-  const start = await fetchProbe(
+  const starts = await Promise.all([0, 1].map(() => fetchProbe(
     fetchImpl,
     target,
     "/api/auth/feishu/start?return_to=%2F",
     {},
     secrets,
-  );
-  let redirect;
+  )));
+  const redirects = starts.map((start) => {
+    try {
+      return new URL(start.location ?? "");
+    } catch {
+      return undefined;
+    }
+  });
+  const configuredRedirect = configuredRedirectUrl(env);
+  let configuredAuthorization;
   try {
-    redirect = new URL(start.location ?? "");
+    configuredAuthorization = new URL(
+      "/open-apis/authen/v1/authorize",
+      env.FEISHU_ACCOUNTS_BASE_URL ?? "https://accounts.feishu.cn",
+    );
   } catch {
-    redirect = undefined;
+    configuredAuthorization = undefined;
   }
-  const cookie = start.setCookie ?? "";
-  const redirectValid = (
-    (start.status === 302 || start.status === 303 || start.status === 307 || start.status === 308)
-    && redirect?.protocol === "https:"
-    && redirect.searchParams.has("state")
-    && redirect.searchParams.has("client_id")
-    && redirect.searchParams.has("redirect_uri")
-  );
-  const cookieValid = (
-    /tf_feishu_pending=/iu.test(cookie)
-    && /HttpOnly/iu.test(cookie)
-    && /SameSite=Lax/iu.test(cookie)
-    && /Path=\//iu.test(cookie)
-    && (target.protocol === "http:" || /Secure/iu.test(cookie))
-  );
-  checks.push(redirectValid && cookieValid && !start.leakedConfiguredSecret
-    ? check("oauth_start", "PASS", "OAuth 起点返回带 state 的飞书 HTTPS 跳转和安全短期 Cookie。", {
-      status: start.status,
-      authorizationHost: redirect.hostname,
-      callbackPath: new URL(redirect.searchParams.get("redirect_uri")).pathname,
-      secureCookie: /Secure/iu.test(cookie),
+  const states = redirects.map((redirect) => redirect?.searchParams.get("state") ?? "");
+  const redirectValid = redirects.every((redirect, index) => {
+    if (!redirect || !configuredRedirect || !configuredAuthorization) return false;
+    let returnedCallback;
+    try {
+      returnedCallback = new URL(redirect.searchParams.get("redirect_uri") ?? "");
+    } catch {
+      return false;
+    }
+    return (
+      [302, 303, 307, 308].includes(starts[index].status)
+      && configuredAuthorization.protocol === "https:"
+      && redirect.protocol === "https:"
+      && redirect.origin === configuredAuthorization.origin
+      && redirect.pathname === configuredAuthorization.pathname
+      && configuredRedirect.origin === target.origin
+      && configuredRedirect.pathname === "/api/auth/feishu/callback"
+      && returnedCallback.toString() === configuredRedirect.toString()
+      && redirect.searchParams.has("client_id")
+      && states[index].length >= 16
+    );
+  }) && states[0] !== states[1];
+  const cookieValid = starts.every((start, index) => {
+    const cookie = start.setCookie ?? "";
+    const pendingState = /(?:^|;\s*)tf_feishu_pending=([^;]+)/iu.exec(cookie)?.[1] ?? "";
+    return (
+      pendingState === states[index]
+      && /HttpOnly/iu.test(cookie)
+      && /SameSite=Lax/iu.test(cookie)
+      && /Path=\//iu.test(cookie)
+      && (target.protocol === "http:" || /Secure/iu.test(cookie))
+    );
+  });
+  const leakedConfiguredSecret = starts.some((start) => start.leakedConfiguredSecret);
+  const configurationMissing = starts.some((start) => start.status === 503)
+    || !configuredRedirect
+    || !configuredAuthorization;
+  checks.push(redirectValid && cookieValid && !leakedConfiguredSecret
+    ? check("oauth_start", "PASS", "两次 OAuth 起点返回不同 state、精确回调和安全短期 Cookie。", {
+      statuses: starts.map((start) => start.status),
+      authorizationOrigin: configuredAuthorization.origin,
+      callbackOrigin: configuredRedirect.origin,
+      callbackPath: configuredRedirect.pathname,
+      statesDistinct: true,
+      secureCookie: target.protocol === "https:",
     })
-    : check("oauth_start", start.status === 503 ? "BLOCKED" : "FAIL", "OAuth 起点未满足安全跳转/Cookie 契约。", {
-      status: start.status,
-      redirectValid,
-      cookieValid,
-      leakedConfiguredSecret: start.leakedConfiguredSecret,
-    }));
+    : check(
+      "oauth_start",
+      configurationMissing ? "BLOCKED" : "FAIL",
+      "OAuth 起点未满足授权来源、精确回调、state 新鲜性或 Cookie 契约。",
+      {
+        statuses: starts.map((start) => start.status),
+        redirectValid,
+        cookieValid,
+        statesDistinct: Boolean(states[0] && states[1] && states[0] !== states[1]),
+        leakedConfiguredSecret,
+      },
+    ));
 
   for (const [id, pathname] of [
     ["anonymous_state", "/api/state"],
@@ -587,6 +860,26 @@ function hashIdentity(value) {
   return typeof value === "string" && value ? sha256(value) : null;
 }
 
+function capabilityBoundary(capabilities) {
+  const unique = [...new Set(capabilities)];
+  const forbidden = unique.filter((capability) => (
+    capability.startsWith("ai.")
+    || FORBIDDEN_PHASE_ONE_CAPABILITIES.has(capability)
+    || !EXPECTED_PHASE_ONE_CAPABILITIES.has(capability)
+  )).sort();
+  const missing = [...EXPECTED_PHASE_ONE_CAPABILITIES]
+    .filter((capability) => !unique.includes(capability))
+    .sort();
+  return {
+    valid: forbidden.length === 0
+      && missing.length === 0
+      && unique.length === capabilities.length,
+    forbidden,
+    missing,
+    duplicateCount: capabilities.length - unique.length,
+  };
+}
+
 function workbookEvidence(inspection) {
   const source = inspection?.sourceRevision;
   const sheets = Array.isArray(source?.sheets) ? source.sheets : [];
@@ -596,6 +889,55 @@ function workbookEvidence(inspection) {
     sheets: sheets
       .map((sheet) => ({ sheetId: sheet.sheetId, name: sheet.name ?? null }))
       .sort((left, right) => String(left.sheetId).localeCompare(String(right.sheetId))),
+  };
+}
+
+function validateCanonicalWorkbook(inspection, expectedSpreadsheetToken) {
+  const source = inspection?.sourceRevision;
+  const sheets = Array.isArray(source?.sheets) ? source.sheets : [];
+  const sheetIds = sheets.map((sheet) => String(sheet?.sheetId ?? ""));
+  const duplicateSheetIds = [...new Set(
+    sheetIds.filter((sheetId, index) => sheetId && sheetIds.indexOf(sheetId) !== index),
+  )].sort();
+  const observedById = new Map(sheets.map((sheet) => [
+    String(sheet?.sheetId ?? ""),
+    String(sheet?.name ?? ""),
+  ]));
+  const missingSheets = [...EXPECTED_CANONICAL_SHEETS.keys()]
+    .filter((sheetId) => !observedById.has(sheetId));
+  const renamedSheets = [...EXPECTED_CANONICAL_SHEETS]
+    .filter(([sheetId, expectedName]) => (
+      observedById.has(sheetId) && observedById.get(sheetId) !== expectedName
+    ))
+    .map(([sheetId]) => sheetId);
+  const blockingIssueCodes = (Array.isArray(source?.issues) ? source.issues : [])
+    .filter((issue) => issue?.severity === "error")
+    .map((issue) => String(issue.code ?? "UNKNOWN"))
+    .sort();
+  const valid = (
+    source?.workbookRefId === EXPECTED_WORKBOOK_REF_ID
+    && typeof source?.sourceRevision === "string"
+    && source.sourceRevision.trim().length > 0
+    && typeof source?.registryHash === "string"
+    && source.registryHash.trim().length > 0
+    && typeof source?.spreadsheetToken === "string"
+    && source.spreadsheetToken === expectedSpreadsheetToken
+    && duplicateSheetIds.length === 0
+    && missingSheets.length === 0
+    && renamedSheets.length === 0
+    && blockingIssueCodes.length === 0
+  );
+  return {
+    valid,
+    evidence: {
+      ...workbookEvidence(inspection),
+      workbookRefMatched: source?.workbookRefId === EXPECTED_WORKBOOK_REF_ID,
+      spreadsheetTokenMatched: source?.spreadsheetToken === expectedSpreadsheetToken,
+      duplicateSheetIds,
+      missingSheets,
+      renamedSheets,
+      blockingIssueCodes,
+    },
   };
 }
 
@@ -622,42 +964,91 @@ export async function runAuthenticatedReadOnlySmoke({
   allowPrivateHttp = false,
   env = {},
   fetchImpl = fetch,
+  now = new Date(),
 } = {}) {
   const generatedAt = new Date().toISOString();
-  const target = normalizeBaseUrl(baseUrl, allowPrivateHttp);
+  const expectedTenant = env.FEISHU_TENANT_KEY?.trim();
+  const expectedSpreadsheetToken = env.FEISHU_CANONICAL_SPREADSHEET_TOKEN?.trim();
+  if (!expectedTenant || !expectedSpreadsheetToken) {
+    throw new Error(
+      "authenticated-read-only 需要环境中的 FEISHU_TENANT_KEY 和 FEISHU_CANONICAL_SPREADSHEET_TOKEN。",
+    );
+  }
+  if (!/^tf_session=[^;\s]+$/u.test(cookieHeader ?? "")) {
+    throw new Error("authenticated-read-only 需要单一不透明 tf_session Cookie。");
+  }
+  const target = normalizeBaseUrl(baseUrl, {
+    allowPrivateHttp,
+    env,
+    requireConfiguredOrigin: true,
+  });
   const secrets = [...secretCandidates(env), cookieHeader].filter(Boolean);
   const headers = { cookie: cookieHeader };
   const checks = [];
 
   const session = await fetchProbe(fetchImpl, target, "/api/auth/session", { headers }, secrets);
   const user = session.json?.user;
-  const capabilities = Array.isArray(user?.capabilities) ? user.capabilities : [];
-  checks.push(session.status === 200 && session.json?.authenticated === true && user?.tenantKey && user?.openId
+  const capabilities = !session.leakedConfiguredSecret && Array.isArray(user?.capabilities)
+    ? user.capabilities
+    : [];
+  const tenantMatched = user?.tenantKey === expectedTenant;
+  const expiresAtMs = Date.parse(user?.sessionExpiresAt ?? "");
+  const sessionUnexpired = Number.isFinite(expiresAtMs) && expiresAtMs > now.getTime();
+  checks.push(
+    !session.leakedConfiguredSecret
+      && session.status === 200
+      && session.json?.authenticated === true
+      && tenantMatched
+      && user?.openId
+      && sessionUnexpired
     ? check("authenticated_session", "PASS", "已登录会话有效，证据仅保留身份哈希。", {
       tenantKeyHash: hashIdentity(user.tenantKey),
       openIdHash: hashIdentity(user.openId),
-      sessionExpiresAt: user.sessionExpiresAt ?? null,
+      sessionExpiresAt: user.sessionExpiresAt,
+      tenantMatched: true,
+      sessionUnexpired: true,
     })
-    : check("authenticated_session", "BLOCKED", "没有可用于只读验收的真实公司飞书会话。", {
-      status: session.status,
-      errorCode: session.json?.errorCode ?? null,
-    }));
+    : check(
+      "authenticated_session",
+      "BLOCKED",
+      "会话无效、租户不匹配或已经过期，不能作为公司飞书验收身份。",
+      {
+        status: session.status,
+        errorCode: session.leakedConfiguredSecret ? null : session.json?.errorCode ?? null,
+        tenantMatched,
+        sessionUnexpired,
+        leakedConfiguredSecret: session.leakedConfiguredSecret,
+      },
+    ),
+  );
 
-  const forbidden = capabilities.filter((capability) => FORBIDDEN_PHASE_ONE_CAPABILITIES.has(capability));
-  const missing = [...REQUIRED_PHASE_ONE_CAPABILITIES].filter((capability) => !capabilities.includes(capability));
-  checks.push(forbidden.length || missing.length
-    ? check("runtime_capability_boundary", "BLOCKED", "真实会话的一期 Capability 边界不符合 v3。", {
-      forbiddenCapabilities: forbidden,
-      missingCapabilities: missing,
+  const runtimeCapabilities = capabilityBoundary(capabilities);
+  checks.push(!runtimeCapabilities.valid
+    ? check("runtime_capability_boundary", "BLOCKED", "真实会话未精确匹配一期 Capability 允许集合。", {
+      forbiddenCapabilities: runtimeCapabilities.forbidden,
+      missingCapabilities: runtimeCapabilities.missing,
+      duplicateCount: runtimeCapabilities.duplicateCount,
     })
     : check("runtime_capability_boundary", "PASS", "真实会话只获得一期已启用业务 Capability。", {
       capabilityCount: capabilities.length,
     }));
 
   const state = await fetchProbe(fetchImpl, target, "/api/state", { headers }, secrets);
-  checks.push(state.status === 200 && state.json?.state
-    ? check("workspace_read", "PASS", "已只读读取工作区并生成去敏计数/哈希证据。", stateEvidence(state.json))
-    : check("workspace_read", "BLOCKED", "无法只读读取目标工作区。", { status: state.status }));
+  const validWorkspace = state.status === 200
+    && Number.isInteger(state.json?.revision)
+    && state.json?.state?.schemaVersion === 17;
+  checks.push(validWorkspace
+    ? check(
+      "workspace_read",
+      "PASS",
+      "已只读读取 schema 17 工作区并生成去敏计数/哈希证据。",
+      stateEvidence(state.json),
+    )
+    : check("workspace_read", "BLOCKED", "目标工作区不是可验证的 schema 17 revision。", {
+      status: state.status,
+      revisionValid: Number.isInteger(state.json?.revision),
+      schemaVersion: state.json?.state?.schemaVersion ?? null,
+    }));
 
   const revisions = await fetchProbe(fetchImpl, target, "/api/revisions", { headers }, secrets);
   const revisionList = revisions.json?.revisions;
@@ -670,16 +1061,30 @@ export async function runAuthenticatedReadOnlySmoke({
     }));
 
   const workbook = await fetchProbe(fetchImpl, target, "/api/feishu-workbook", { headers }, secrets);
-  checks.push(workbook.status === 200 && workbook.json?.inspection?.sourceRevision
+  const canonicalWorkbook = validateCanonicalWorkbook(
+    workbook.json?.inspection,
+    expectedSpreadsheetToken,
+  );
+  const canonicalWorkbookEvidence = workbook.leakedConfiguredSecret
+    ? { leakedConfiguredSecret: true }
+    : canonicalWorkbook.evidence;
+  checks.push(
+    workbook.status === 200
+      && canonicalWorkbook.valid
+      && !workbook.leakedConfiguredSecret
     ? check(
       "authoritative_workbook_read",
       "PASS",
-      "已只读检查权威工作簿；token 与用户身份只保留哈希。",
-      workbookEvidence(workbook.json.inspection),
+      "已只读核对规范工作簿身份、完整稳定表集合和阻断 issue；token 只保留哈希。",
+      canonicalWorkbookEvidence,
     )
-    : check("authoritative_workbook_read", "BLOCKED", "无法以真实会话只读检查权威工作簿。", {
-      status: workbook.status,
-    }));
+    : check(
+      "authoritative_workbook_read",
+      "BLOCKED",
+      "工作簿身份、token、稳定表集合或 inspection issue 不满足权威契约。",
+      { status: workbook.status, ...canonicalWorkbookEvidence },
+    ),
+  );
 
   const leaked = [session, state, revisions, workbook].some((probe) => probe.leakedConfiguredSecret);
   checks.push(leaked
@@ -719,7 +1124,7 @@ function usage() {
     "用法：",
     "  npm run acceptance:phase-one -- preflight [--env-file /opt/tackle-forger/.env.local] [--output audit-output/preflight.json]",
     "  npm run acceptance:phase-one -- public-smoke --base-url https://tackle.internal [--env-file /opt/tackle-forger/.env.local] [--output ...]",
-    "  npm run acceptance:phase-one -- authenticated-read-only --base-url https://tackle.internal --cookie-file /run/user/.../cookie [--env-file ...] [--output ...]",
+    "  npm run acceptance:phase-one -- authenticated-read-only --base-url https://tackle.internal --cookie-file /run/user/.../cookie --env-file /opt/tackle-forger/.env.local [--output ...]",
     "",
     "脚本只执行读取和 HTTP GET；不会拉取、发布、写入工作区、退出会话、部署或裁剪 revision。",
   ].join("\n");
@@ -727,6 +1132,35 @@ function usage() {
 
 async function readOptionalEnv(envFile) {
   return envFile ? parseEnv(await readFile(envFile, "utf8")) : {};
+}
+
+export async function readSessionCookieFile({ cookieFile, root = process.cwd() }) {
+  if (!path.isAbsolute(cookieFile)) {
+    throw new Error("cookie 文件必须使用仓库外绝对路径。");
+  }
+  const info = await lstat(cookieFile);
+  if (!info.isFile() || info.isSymbolicLink()) {
+    throw new Error("cookie 文件必须是普通文件，不能是目录或符号链接。");
+  }
+  if ((info.mode & 0o077) !== 0) {
+    throw new Error("cookie 文件必须为 0600 或更严格，且不得提交仓库。");
+  }
+  const [canonicalCookie, canonicalRoot] = await Promise.all([
+    realpath(cookieFile),
+    realpath(root),
+  ]);
+  const relativeToRoot = path.relative(canonicalRoot, canonicalCookie);
+  if (
+    relativeToRoot === ""
+    || (!relativeToRoot.startsWith("..") && !path.isAbsolute(relativeToRoot))
+  ) {
+    throw new Error("cookie 文件必须位于仓库工作树之外。");
+  }
+  const cookieHeader = (await readFile(canonicalCookie, "utf8")).trim();
+  if (!/^tf_session=[^;\s]+$/u.test(cookieHeader)) {
+    throw new Error("cookie 文件只能包含单行 tf_session=<opaque-id>。");
+  }
+  return cookieHeader;
 }
 
 export async function writeEvidenceFile(output, evidence) {
@@ -751,17 +1185,15 @@ async function main() {
       env: await readOptionalEnv(args.envFile),
     });
   } else if (args.mode === "authenticated-read-only") {
-    if (!args.baseUrl || !args.cookieFile) {
-      throw new Error("authenticated-read-only 需要 --base-url 和 --cookie-file。");
+    if (!args.baseUrl || !args.cookieFile || !args.envFile) {
+      throw new Error(
+        "authenticated-read-only 需要 --base-url、--cookie-file 和 --env-file。",
+      );
     }
-    const cookieInfo = await stat(args.cookieFile);
-    if ((cookieInfo.mode & 0o077) !== 0) {
-      throw new Error("cookie 文件必须为 0600 或更严格，且不得提交仓库。");
-    }
-    const cookieHeader = (await readFile(args.cookieFile, "utf8")).trim();
-    if (!/^tf_session=[^;\s]+$/u.test(cookieHeader)) {
-      throw new Error("cookie 文件只能包含单行 tf_session=<opaque-id>。");
-    }
+    const cookieHeader = await readSessionCookieFile({
+      cookieFile: args.cookieFile,
+      root: process.cwd(),
+    });
     evidence = await runAuthenticatedReadOnlySmoke({
       baseUrl: args.baseUrl,
       cookieHeader,

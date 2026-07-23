@@ -19,6 +19,7 @@ import {
   savePendingLogin,
 } from "../lib/auth-store";
 import {
+  feishuRuntimeConfig,
   safeReturnTo,
   type FeishuRuntimeConfig,
 } from "../lib/auth-config";
@@ -85,6 +86,34 @@ test("登录回跳只允许本站相对路径", () => {
   assert.equal(safeReturnTo("//evil.example"), "/");
   assert.equal(safeReturnTo("https://evil.example"), "/");
   assert.equal(safeReturnTo("/\\evil.example"), "/");
+});
+
+test("HTTP 降级只接受显式启用的 RFC 1918 数值 IPv4", async () => {
+  const baseEnvironment = {
+    FEISHU_ALLOW_INSECURE_HTTP: "true",
+    FEISHU_APP_ID: oauthConfig.appId,
+    FEISHU_APP_SECRET: oauthConfig.appSecret,
+    FEISHU_TENANT_KEY: oauthConfig.tenantKey,
+    FEISHU_SESSION_SECRET: oauthConfig.sessionSecret,
+  };
+  await withEnvironment({
+    ...baseEnvironment,
+    FEISHU_REDIRECT_URI: "http://10.20.30.40/api/auth/feishu/callback",
+  }, async () => {
+    assert.equal(
+      feishuRuntimeConfig().redirectUri,
+      "http://10.20.30.40/api/auth/feishu/callback",
+    );
+  });
+  for (const hostname of ["127.0.0.1", "localhost", "fdattacker.example", "fc00::1"]) {
+    const literal = hostname.includes(":") ? `[${hostname}]` : hostname;
+    await withEnvironment({
+      ...baseEnvironment,
+      FEISHU_REDIRECT_URI: `http://${literal}/api/auth/feishu/callback`,
+    }, async () => {
+      assert.throws(() => feishuRuntimeConfig(), /HTTPS|RFC 1918/u);
+    });
+  }
 });
 
 test("OAuth state 支持正常消费、过期和防重放", async () => {

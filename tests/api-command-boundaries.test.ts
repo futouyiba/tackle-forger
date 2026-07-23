@@ -1,8 +1,35 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createSeedState } from "../lib/seed";
-import { findGovernedStateChanges, stableAuditActor } from "../lib/api-command-boundaries";
+import {
+  changesOnlyReadOnlyLegacyHistory,
+  findGovernedStateChanges,
+  findReadOnlyLegacyProductChanges,
+  stableAuditActor,
+} from "../lib/api-command-boundaries";
 import { parseDiscretePulls } from "../lib/series-create-contract";
+
+test("旧产品集合全部是整包保存的只读历史", () => {
+  const current = createSeedState();
+  const proposed = structuredClone(current);
+  proposed.recipes[0] = { ...proposed.recipes[0]!, name: "禁止修改的旧配方" };
+  proposed.candidates[0] = {
+    ...proposed.candidates[0]!,
+    notes: "禁止修改的旧 Candidate",
+  };
+  proposed.officialSkus.push({ id: "legacy:injected" } as never);
+  proposed.detailOverrides.push({ skuId: "legacy:injected" } as never);
+
+  assert.deepEqual(findGovernedStateChanges(current, proposed), [
+    "recipes", "candidates", "officialSkus", "detailOverrides",
+  ]);
+  assert.deepEqual(findReadOnlyLegacyProductChanges(current, proposed), [
+    "recipes", "candidates", "officialSkus", "detailOverrides",
+  ]);
+  assert.equal(changesOnlyReadOnlyLegacyHistory(["recipes", "candidates"]), true);
+  assert.equal(changesOnlyReadOnlyLegacyHistory(["recipes", "seriesDefinitions"]), false);
+  assert.equal(changesOnlyReadOnlyLegacyHistory([]), false);
+});
 
 test("整包保存拒绝受治理集合变化，但允许普通说明字段变化", () => {
   const current = createSeedState();

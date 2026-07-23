@@ -18,6 +18,7 @@ import {
 } from "../lib/calculation-trace";
 import { createPerformanceSummaryDefinition } from "../lib/performance-summary";
 import { createSeedState } from "../lib/seed";
+import { buildFormalPreviewFixture } from "./helpers/formal-five-axis";
 import type { ProjectionTraceStep } from "../lib/types";
 
 const REVISION = "2922";
@@ -237,9 +238,22 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     [changedParameterKey]: changedBefore + 1,
   };
   const settlementTrace = finalSettlementTrace(finalPanelValues);
+  const formalDefinition = state.fiveAxisViewDefinitions.find((definition) =>
+    "semanticContractVersion" in definition)!;
+  const formalPreview = buildFormalPreviewFixture({
+    definition: formalDefinition,
+    snapshotId: "snapshot:new-formal",
+    modelId: model.id,
+    modelRevision: model.revision,
+    seriesId: series.id,
+    skuId: sku.id,
+    skuRevision: sku.revision,
+    modelFinalPullKg: oldSnapshot.modelFinalPullKg!,
+    finalPanelValues,
+    componentSelections: oldSnapshot.componentSelections,
+  });
   const publishInput = {
     publicationMode: "new_formal",
-    workspaceId: "workspace:test",
     model,
     sku,
     series,

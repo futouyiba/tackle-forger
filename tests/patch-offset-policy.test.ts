@@ -782,7 +782,6 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
   });
   const snapshot = publishConfigurationSnapshot({
     publicationMode: "new_formal",
-    workspaceId: "workspace:test",
     model,
     sku: {
       ...sku,

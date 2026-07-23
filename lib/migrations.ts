@@ -146,12 +146,31 @@ function bootstrapFiveAxisVertexGroupStates(input: {
           if (!definition) {
             throw new Error("FIVE_AXIS_VERTEX_GROUP_MIGRATION_CONFLICT：缺少正式定义，无法重建当前顶点。");
           }
-          const sources = [...new Map(
-            selectable.flatMap((set) => set.candidateSources).map((source) => [
-              `${source.candidateSemanticKey.modelId}:${source.candidateSemanticKey.componentEntityId}:${source.candidateSemanticKey.itemPartId}`,
+          const sourcesByIdentity = new Map<string, FiveAxisVertexSet["candidateSources"]>();
+          for (const source of selectable.flatMap((set) => set.candidateSources)) {
+            const identity = [
+              source.candidateSemanticKey.modelId,
+              source.candidateSemanticKey.componentEntityId,
+              source.candidateSemanticKey.itemPartId,
+            ].join("\u0000");
+            sourcesByIdentity.set(identity, [
+              ...(sourcesByIdentity.get(identity) ?? []),
               source,
-            ]),
-          ).values()];
+            ]);
+          }
+          const sources = [...sourcesByIdentity.entries()].map(([identity, entries]) => {
+            const semanticHashes = new Set(entries.map((entry) => entry.semanticInputHash));
+            if (semanticHashes.size !== 1) {
+              throw new Error(
+                `FIVE_AXIS_VERTEX_GROUP_MIGRATION_CONFLICT：候选 ${identity} 的冻结语义输入不一致。`,
+              );
+            }
+            return [...entries].sort((left, right) =>
+              compareUnsignedUtf8(left.snapshotId, right.snapshotId)
+              || compareUnsignedUtf8(left.modelRevisionId, right.modelRevisionId)
+              || compareUnsignedUtf8(left.finalPanelHash, right.finalPanelHash)
+            )[0];
+          });
           const rebuilt = createFormalFiveAxisVertexSet({
             definition,
             groupKey: {

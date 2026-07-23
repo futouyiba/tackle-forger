@@ -288,13 +288,19 @@ function FiveAxisRadar({
     };
   });
   const completePolygon = points.every((entry) => entry.x !== null && entry.y !== null);
+  const maxRatio = Math.max(1, ...metrics.flatMap((metric) => {
+    const ratio = fiveAxisPlotRatio(metric.displayScore);
+    return ratio === null ? [] : [ratio];
+  }));
+  const extent = radius * maxRatio + 30;
+  const viewBox = `${center - extent} ${center - extent} ${extent * 2} ${extent * 2}`;
   const outer = metrics.map((_metric, index) => {
     const angle = -Math.PI / 2 + (index * Math.PI * 2) / metrics.length;
     return `${center + Math.cos(angle) * radius},${center + Math.sin(angle) * radius}`;
   }).join(" ");
   return (
     <div className="gantt-radar-layout">
-      <svg className="gantt-radar" viewBox="0 0 220 220" role="img" aria-label="Model 五维正式分">
+      <svg className="gantt-radar" viewBox={viewBox} role="img" aria-label="Model 五维正式分">
         <polygon points={outer} className="radar-grid" />
         {[0.25, 0.5, 0.75].map((scale) => (
           <polygon

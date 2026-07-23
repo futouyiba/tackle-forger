@@ -3,7 +3,7 @@ import test from "node:test";
 import { importCanonicalRuleSource } from "../lib/canonical-rule-source";
 import { calculateCandidate } from "../lib/engine";
 import { migrateWorkspaceState } from "../lib/migrations";
-import { identityRowsFromRanges } from "../lib/rule-workbook-inspection";
+import { identityRowsFromRanges, weightTemplateDraftFromCanonicalRuleDraft } from "../lib/rule-workbook-inspection";
 import { createSeedState } from "../lib/seed";
 import {
   applyCanonicalRuleSourceDraft,
@@ -33,6 +33,22 @@ const revision: FeishuSourceRevision = {
   issues: [],
   state: "PULLED",
 };
+
+test("重量模板草稿继承 canonical 坏行错误并冻结表头驱动单元格来源", () => {
+  const values = [
+    ["", "机器ID（勿改）", "同步状态", "钓法", "备注", "重量段", "最小拉力", "最大拉力", "鱼重等级", "竿拉力"],
+    ["", "wtpl_ok", "BOUND", "路亚", "说明", "轻", 1, 2, 3, 10],
+    ["", "", "BOUND", "路亚", "坏行", "中", "", 3, 4, 12],
+  ];
+  const canonicalRuleDraft = importCanonicalRuleSource({ sourceRevision: revision, ...baseFixture(), weightValues: values, importedAt: revision.pulledAt });
+  const draft = weightTemplateDraftFromCanonicalRuleDraft({ sourceRevision: revision, canonicalRuleDraft, weightValues: values, importedAt: revision.pulledAt });
+  assert.equal(draft.formalStatus, "NON_FORMAL");
+  assert.ok(draft.issues.some((issue) => issue.code === "WEIGHT_TEMPLATE_ID_MISSING"));
+  assert.deepEqual(draft.templates[0]?.source.cells, {
+    machineId: "B2", fishMinKg: "G2", fishMaxKg: "H2", nominalFishKg: "G2:H2", weightBand: "F2",
+    "机器ID（勿改）": "B2", "同步状态": "C2", "钓法": "D2", "备注": "E2", "重量段": "F2", "最小拉力": "G2", "最大拉力": "H2", "鱼重等级": "I2", "竿拉力": "J2",
+  });
+});
 
 function baseFixture() {
   const weightHeader = row({ 1: "机器ID（勿改）", 2: "同步状态", 3: "钓法", 4: "备注", 5: "重量段", 6: "最小拉力", 7: "最大拉力", 8: "鱼重等级", 9: "竿拉力", 10: "轮拉力", 11: "线拉力", 12: "竿调性" });

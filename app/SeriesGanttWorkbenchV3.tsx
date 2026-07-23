@@ -855,7 +855,9 @@ export function SeriesGanttWorkbenchV3({
   const generateAvailability = actionAvailabilities.generate_candidates;
   const openSeriesAvailability = actionAvailabilities.open_series;
   const previewModelAvailability = actionAvailabilities.preview_model;
-  const rebaseAvailability = actionAvailabilities.open_rebase;
+  // 此按钮只导航到 Series/Patch 上下文，不执行 Rebase 写命令。
+  // 真正的状态写只能使用 rebase_patch + 服务端命令载荷引用。
+  const rebaseRouteAvailability = openSeriesAvailability;
   const createSeriesAvailability = actionAvailabilities.create_series;
   const breadcrumbSeries = drawerSeries ?? selectedSeries;
   const breadcrumbSku = drawerModel ? drawerSku : selectedSku;
@@ -1214,7 +1216,7 @@ export function SeriesGanttWorkbenchV3({
       {drawerModel && drawerSku && drawerSeries ? (
         <>
           <button className="gantt-drawer-backdrop" type="button" aria-label="关闭预览" onClick={() => { setDrawerModelId(""); setDrawerSnapshotId(""); }} />
-          <ModelDrawer state={state} model={drawerModel} sku={drawerSku} series={drawerSeries} snapshot={drawerSnapshot} breadcrumbs={contextBreadcrumbs} comparisonModelIds={comparisonModelIds} rebaseEnabled={rebaseAvailability.enabled} rebaseDisabledReason={rebaseAvailability.disabledReasonText} onToggleCompare={toggleCompare} onOpenSnapshot={setDrawerSnapshotId} onOpenRebase={() => { setDrawerModelId(""); setDrawerSnapshotId(""); onOpenSeries(drawerSeries.id); }} onClose={() => { setDrawerModelId(""); setDrawerSnapshotId(""); }} />
+          <ModelDrawer state={state} model={drawerModel} sku={drawerSku} series={drawerSeries} snapshot={drawerSnapshot} breadcrumbs={contextBreadcrumbs} comparisonModelIds={comparisonModelIds} rebaseEnabled={rebaseRouteAvailability.enabled} rebaseDisabledReason={rebaseRouteAvailability.disabledReasonText} onToggleCompare={toggleCompare} onOpenSnapshot={setDrawerSnapshotId} onOpenRebase={() => { setDrawerModelId(""); setDrawerSnapshotId(""); onOpenSeries(drawerSeries.id); }} onClose={() => { setDrawerModelId(""); setDrawerSnapshotId(""); }} />
         </>
       ) : null}
       {candidateOpen && selectedSeries ? (

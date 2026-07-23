@@ -4,11 +4,18 @@ import type {
   HardCompatibilityResult,
 } from "./types";
 import type {
-  ActionAvailability,
+  ActionCode,
+  ActionCommandPayloadRef,
+  ActionLink,
   CapabilityCode,
   EntityRef,
+  IssuePresentationActionCode,
 } from "./interaction-contracts";
-import { actionAvailability } from "./interaction-contracts";
+import {
+  actionAvailability,
+  buildActionLink,
+  ISSUE_PRESENTATION_ACTION_CODES,
+} from "./interaction-contracts";
 
 export interface CandidateGenerationRequest {
   requestId: string;
@@ -210,15 +217,7 @@ export type IssueSource =
   | "hard_compatibility" | "affinity" | "series_invariant" | "patch"
   | "publish" | "data_integrity" | "import" | "five_axis" | "ai_guardrail";
 
-export interface IssueAction {
-  actionId: string;
-  action:
-    | "navigate" | "edit_rule" | "edit_patch" | "open_rebase"
-    | "satisfy_requirement" | "acknowledge_warning" | "request_permission"
-    | "retry" | "recompute" | "create_proposal";
-  label: string;
-  availability: ActionAvailability;
-}
+export type IssueAction = ActionLink;
 
 export interface UnifiedValidationIssue {
   issueId: string;
@@ -244,11 +243,13 @@ export function createUnifiedIssue(input: Omit<
 > & {
   actionSpecs: Array<{
     actionId: string;
-    action: IssueAction["action"];
+    action: ActionCode | IssuePresentationActionCode;
     label: string;
-    command: Parameters<typeof actionAvailability>[0];
-    capabilities: CapabilityCode[];
     heldCapabilities: CapabilityCode[];
+    targetRef?: EntityRef;
+    targetRoute?: string;
+    commandPayloadRef?: ActionCommandPayloadRef;
+    domainBlock?: { code: string; text: string };
   }>;
 }): UnifiedValidationIssue {
   const blocking = input.severity === "error" || input.deny;
@@ -268,18 +269,27 @@ export function createUnifiedIssue(input: Omit<
     blocking,
     issueId: "issue-" + fingerprint,
     fingerprint,
-    actions: actionSpecs.map((spec) => ({
-      actionId: spec.actionId,
-      action: spec.action,
-      label: spec.label,
-      availability: actionAvailability(
-        spec.command,
-        spec.heldCapabilities,
-        spec.capabilities.some((capability) => !spec.heldCapabilities.includes(capability))
-          ? { code: "ISSUE_ACTION_FORBIDDEN", text: "无权执行此修复动作。" }
-          : undefined,
-      ),
-    })),
+    actions: actionSpecs.map((spec) => {
+      const presentation = (ISSUE_PRESENTATION_ACTION_CODES as readonly string[])
+        .includes(spec.action);
+      return buildActionLink({
+        actionId: spec.actionId,
+        action: spec.action,
+        label: spec.label,
+        targetRef: spec.targetRef ?? input.subjectRef,
+        targetRoute: spec.targetRoute,
+        ...(presentation
+          ? {}
+          : {
+              availability: actionAvailability(
+                spec.action as ActionCode,
+                spec.heldCapabilities,
+                spec.domainBlock,
+              ),
+            }),
+        commandPayloadRef: spec.commandPayloadRef,
+      });
+    }),
   };
 }
 
@@ -360,4 +370,3 @@ export function assertSnapshotMutationForbidden(action:
 ): never {
   throw new Error(`ConfigurationSnapshot 已冻结，禁止 ${action}；请创建新修订或 UpgradeCandidate。`);
 }
-

@@ -181,15 +181,13 @@ test("R9 error必阻断、deny不可waive、修复动作由Capability决定", ()
     deny: true,
     actionSpecs: [{
       actionId: "action:1",
-      action: "edit_patch",
+      action: "create_patch",
       label: "修正Patch",
-      command: "create_patch",
-      capabilities: ["model.patch.create"],
       heldCapabilities: ["model.read"],
     }],
   });
   assert.equal(issue.blocking, true);
-  assert.equal(issue.actions[0].availability.enabled, false);
+  assert.equal(issue.actions[0].enabled, false);
   assert.throws(
     () => createUnifiedIssue({
       ...issue,
@@ -228,4 +226,3 @@ test("R12 开放策略必须明确命中已发布版本，不用页面默认", (
     /配置不完整/,
   );
 });
-

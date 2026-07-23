@@ -216,7 +216,7 @@ test("OAuth pending Cookie 必须唯一并精确包含安全属性与 600 秒过
     const headers = new Headers({ location: redirect.toString() });
     headers.append(
       "set-cookie",
-      `tf_feishu_pending=${state}; Path=/evil; HttpOnlyX; Max-Age=3600`,
+      `tf_feishu_pending=${state}; Path=/evil; HttpOnlyX; Max-Age=3600; Priority=High`,
     );
     headers.append("set-cookie", "helper=1; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600");
     return new Response(null, { status: 307, headers });
@@ -230,6 +230,25 @@ test("OAuth pending Cookie 必须唯一并精确包含安全属性与 600 秒过
     evidence.checks.find((item) => item.id === "oauth_start")?.status,
     "FAIL",
   );
+});
+
+test("OAuth 响应 Cookie 中回显配置密钥时验收 FAIL 且不保存密钥", async () => {
+  const routes = publicRoutes();
+  const start = routes["/api/auth/feishu/start"];
+  routes["/api/auth/feishu/start"] = (url) => {
+    const response = start(url);
+    const headers = new Headers(response.headers);
+    headers.append("set-cookie", "debug=super-secret-value; Path=/; HttpOnly");
+    return new Response(null, { status: response.status, headers });
+  };
+  const evidence = await runPublicSmoke({
+    baseUrl: "https://tackle.internal",
+    env: smokeEnv(),
+    fetchImpl: mockFetch(routes),
+  });
+  assert.equal(evidence.summary.overall, "FAIL");
+  assert.equal(evidence.checks.find((item) => item.id === "oauth_start")?.status, "FAIL");
+  assert.equal(JSON.stringify(evidence).includes("super-secret-value"), false);
 });
 
 test("OAuth 起点必须精确匹配配置的 app id、scope 且参数不可重复", async () => {
@@ -343,6 +362,39 @@ test("公网 HTTP 与带凭据 base URL 在出网前拒绝", async () => {
     }),
   });
   assert.equal(evidence.summary.overall, "PASS");
+
+  const insecureCookieRoutes = publicRoutes();
+  let insecureSequence = 0;
+  insecureCookieRoutes["/api/auth/feishu/start"] = () => {
+    insecureSequence += 1;
+    const state = `insecure-state-${insecureSequence.toString().padStart(8, "0")}`;
+    const redirect = new URL("https://accounts.feishu.cn/open-apis/authen/v1/authorize");
+    redirect.searchParams.set("client_id", "cli_public");
+    redirect.searchParams.set("redirect_uri", "http://192.168.1.157/api/auth/feishu/callback");
+    redirect.searchParams.set("state", state);
+    redirect.searchParams.set("scope", "contact:user.base:readonly");
+    return new Response(null, {
+      status: 307,
+      headers: {
+        location: redirect.toString(),
+        "set-cookie": `tf_feishu_pending=${state}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`,
+      },
+    });
+  };
+  const insecureCookieEvidence = await runPublicSmoke({
+    baseUrl: "http://192.168.1.157",
+    allowPrivateHttp: true,
+    env: smokeEnv({
+      FEISHU_ALLOW_INSECURE_HTTP: "true",
+      FEISHU_REDIRECT_URI: "http://192.168.1.157/api/auth/feishu/callback",
+    }),
+    fetchImpl: mockFetch(insecureCookieRoutes),
+  });
+  assert.equal(insecureCookieEvidence.summary.overall, "FAIL");
+  assert.equal(
+    insecureCookieEvidence.checks.find((item) => item.id === "oauth_start")?.status,
+    "FAIL",
+  );
 });
 
 test("已登录只读 smoke 只保存身份与工作簿 token 哈希、计数和冻结引用哈希", async () => {
@@ -516,7 +568,7 @@ test("响应恶意回显 Cookie 时证据 FAIL 且不会再次序列化该 Cooki
     "/api/auth/session": json({
       authenticated: true,
       user: {
-        tenantKey: cookie,
+        tenantKey: "must-stay-secret",
         openId: "user",
         sessionExpiresAt: "2026-07-24T00:00:00.000Z",
         capabilities: [cookie],
@@ -748,7 +800,33 @@ test("依赖门禁绑定受版本控制的 Issue/PR 映射、唯一 commit 与�
     [76, { merge: commits[2], head: commits[2] }],
   ]);
   const fetchImpl = async (input) => {
-    const pr = Number(new URL(input).pathname.split("/").at(-1));
+    const url = new URL(input);
+    if (url.pathname === "/graphql") {
+      return json({
+        data: { repository: { pullRequest: { reviewThreads: { nodes: [{ isResolved: true }], pageInfo: { hasNextPage: false } } } } },
+      });
+    }
+    if (url.pathname.endsWith("/actions/runs")) {
+      const head = url.searchParams.get("head_sha");
+      return json({ workflow_runs: [{
+        id: `run-${head}`,
+        event: "pull_request",
+        head_sha: head,
+        name: "CI",
+        run_attempt: 1,
+        status: "completed",
+        conclusion: "success",
+        pull_requests: [{ number: [...githubPulls.entries()].find(([, value]) => value.head === head)?.[0] }],
+      }] });
+    }
+    if (url.pathname.includes("/actions/runs/") && url.pathname.endsWith("/jobs")) {
+      return json({ jobs: [
+        "Root v3 app (npm)",
+        "Historical workspace (pnpm)",
+        "Windows line-ending policy",
+      ].map((name) => ({ name, status: "completed", conclusion: "success" })) });
+    }
+    const pr = Number(url.pathname.split("/").at(-1));
     const expected = githubPulls.get(pr);
     return json({
       number: pr,
@@ -758,7 +836,7 @@ test("依赖门禁绑定受版本控制的 Issue/PR 映射、唯一 commit 与�
       head: { sha: expected?.head },
     });
   };
-  const spoofed = await inspectDependencyManifest(root, { fetchImpl });
+  const spoofed = await inspectDependencyManifest(root, { fetchImpl, githubToken: "test-token" });
   assert.equal(spoofed.status, "BLOCKED");
   assert.deepEqual(spoofed.evidence.duplicateCommits, [
     "schema_v17",
@@ -769,7 +847,104 @@ test("依赖门禁绑定受版本控制的 Issue/PR 映射、唯一 commit 与�
     path.join(root, "deploy/phase-one-dependencies.json"),
     `${JSON.stringify(manifest(commits), null, 2)}\n`,
   );
-  assert.equal((await inspectDependencyManifest(root, { fetchImpl })).status, "PASS");
+  const missingToken = await inspectDependencyManifest(root, { fetchImpl });
+  assert.equal(missingToken.status, "BLOCKED");
+  assert.deepEqual(
+    missingToken.evidence.githubVerificationFailedIds,
+    ["canonical_rule_source", "schema_v17", "non_formal_preview"],
+  );
+  assert.equal((await inspectDependencyManifest(root, { fetchImpl, githubToken: "test-token" })).status, "PASS");
+
+  const failedCheck = await inspectDependencyManifest(root, {
+    githubToken: "test-token",
+    fetchImpl: async (input) => new URL(input).pathname.endsWith("/jobs")
+      ? json({ jobs: [{ name: "Root v3 app (npm)", status: "completed", conclusion: "failure" }] })
+      : fetchImpl(input),
+  });
+  assert.equal(failedCheck.status, "BLOCKED");
+  assert.deepEqual(failedCheck.evidence.githubRequiredCheckVerificationFailedIds, [
+    "canonical_rule_source", "schema_v17", "non_formal_preview",
+  ]);
+
+  const staleSuccess = await inspectDependencyManifest(root, {
+    githubToken: "test-token",
+    fetchImpl: async (input) => {
+      const url = new URL(input);
+      if (!url.pathname.endsWith("/actions/runs")) return fetchImpl(input);
+      const head = url.searchParams.get("head_sha");
+      const pr = [...githubPulls.entries()].find(([, value]) => value.head === head)?.[0];
+      return json({ workflow_runs: [
+        {
+          id: `old-success-${head}`,
+          event: "pull_request",
+          head_sha: head,
+          name: "CI",
+          run_number: 1,
+          run_attempt: 1,
+          status: "completed",
+          conclusion: "success",
+          pull_requests: [{ number: pr }],
+        },
+        {
+          id: `new-failure-${head}`,
+          event: "pull_request",
+          head_sha: head,
+          name: "CI",
+          run_number: 2,
+          run_attempt: 1,
+          status: "completed",
+          conclusion: "failure",
+          pull_requests: [{ number: pr }],
+        },
+      ] });
+    },
+  });
+  assert.equal(staleSuccess.status, "BLOCKED");
+  assert.deepEqual(staleSuccess.evidence.githubRequiredCheckVerificationFailedIds, [
+    "canonical_rule_source", "schema_v17", "non_formal_preview",
+  ]);
+
+  const pushOnly = await inspectDependencyManifest(root, {
+    githubToken: "test-token",
+    fetchImpl: async (input) => new URL(input).pathname.endsWith("/actions/runs")
+      ? json({ workflow_runs: [{
+        id: "push-run",
+        event: "push",
+        head_sha: commits[0],
+        name: "CI",
+        run_attempt: 1,
+        status: "completed",
+        conclusion: "success",
+        pull_requests: [],
+      }] })
+      : fetchImpl(input),
+  });
+  assert.equal(pushOnly.status, "BLOCKED");
+  assert.deepEqual(pushOnly.evidence.githubRequiredCheckVerificationFailedIds, [
+    "canonical_rule_source", "schema_v17", "non_formal_preview",
+  ]);
+
+  const unresolvedThread = await inspectDependencyManifest(root, {
+    githubToken: "test-token",
+    fetchImpl: async (input) => new URL(input).pathname === "/graphql"
+      ? json({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ isResolved: false }], pageInfo: { hasNextPage: false } } } } } })
+      : fetchImpl(input),
+  });
+  assert.equal(unresolvedThread.status, "BLOCKED");
+  assert.deepEqual(unresolvedThread.evidence.githubReviewThreadVerificationFailedIds, [
+    "canonical_rule_source", "schema_v17", "non_formal_preview",
+  ]);
+
+  const apiFailure = await inspectDependencyManifest(root, {
+    githubToken: "test-token",
+    fetchImpl: async (input) => new URL(input).pathname === "/graphql"
+      ? new Response("unavailable", { status: 503 })
+      : fetchImpl(input),
+  });
+  assert.equal(apiFailure.status, "BLOCKED");
+  assert.deepEqual(apiFailure.evidence.githubReviewThreadVerificationFailedIds, [
+    "canonical_rule_source", "schema_v17", "non_formal_preview",
+  ]);
   await rm(root, { recursive: true, force: true });
 });
 

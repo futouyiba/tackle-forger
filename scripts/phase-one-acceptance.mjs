@@ -15,6 +15,12 @@ const EXPECTED_DEPENDENCIES = new Map([
   ["schema_v17", { issue: 68, pr: 71 }],
   ["non_formal_preview", { issue: 72, pr: 76 }],
 ]);
+const REQUIRED_CI_WORKFLOW_NAME = "CI";
+const REQUIRED_CI_JOB_NAMES = [
+  "Root v3 app (npm)",
+  "Historical workspace (pnpm)",
+  "Windows line-ending policy",
+];
 export const EXPECTED_CANONICAL_SHEETS = new Map([
   ["d6e928", "01_重量模板"],
   ["fATowU", "02_类型材质"],
@@ -88,6 +94,7 @@ const SECRET_ENV_KEYS = [
   "FEISHU_PROXY_SHARED_SECRET",
   "FANCY_HUB_API_KEY",
   "AI_RETENTION_ENCRYPTION_KEY",
+  "GITHUB_ACCEPTANCE_TOKEN",
 ];
 
 function sha256(value) {
@@ -586,7 +593,7 @@ function gitSucceeds(root, args) {
   }
 }
 
-export async function inspectDependencyManifest(root, { fetchImpl = fetch } = {}) {
+export async function inspectDependencyManifest(root, { fetchImpl = fetch, githubToken } = {}) {
   const manifestPath = path.join(root, "deploy/phase-one-dependencies.json");
   try {
     const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
@@ -607,6 +614,8 @@ export async function inspectDependencyManifest(root, { fetchImpl = fetch } = {}
     const commitMessageMismatchIds = [];
     const incompleteReviewIds = [];
     const githubVerificationFailedIds = [];
+    const githubRequiredCheckVerificationFailedIds = [];
+    const githubReviewThreadVerificationFailedIds = [];
     const evidence = [];
     const seenCommits = new Set();
 
@@ -650,19 +659,23 @@ export async function inspectDependencyManifest(root, { fetchImpl = fetch } = {}
       ) {
         incompleteReviewIds.push(dependency.id);
       }
-      if (
+      if (!githubToken?.trim()) {
+        githubVerificationFailedIds.push(dependency.id);
+      } else if (
         /^[0-9a-f]{40}$/u.test(commit)
         && /^[0-9a-f]{40}$/u.test(reviewedHeadCommit)
         && dependency.merged === true
       ) {
         try {
+          const headers = {
+            Accept: "application/vnd.github+json",
+            Authorization: `Bearer ${githubToken.trim()}`,
+            "X-GitHub-Api-Version": "2022-11-28",
+          };
           const response = await fetchImpl(
             `https://api.github.com/repos/futouyiba/tackle-forger/pulls/${expected.pr}`,
             {
-              headers: {
-                Accept: "application/vnd.github+json",
-                "X-GitHub-Api-Version": "2022-11-28",
-              },
+              headers,
             },
           );
           const pullRequest = response.ok ? await response.json() : undefined;
@@ -675,9 +688,69 @@ export async function inspectDependencyManifest(root, { fetchImpl = fetch } = {}
           ) {
             githubVerificationFailedIds.push(dependency.id);
           }
+          const runsResponse = await fetchImpl(
+            `https://api.github.com/repos/futouyiba/tackle-forger/actions/runs?event=pull_request&head_sha=${reviewedHeadCommit}&per_page=100`,
+            { headers },
+          );
+          const runs = runsResponse.ok ? await runsResponse.json() : undefined;
+          const matchingRuns = (runs?.workflow_runs ?? []).filter((run) => (
+            run?.event === "pull_request"
+            && run?.head_sha === reviewedHeadCommit
+            && run?.name === REQUIRED_CI_WORKFLOW_NAME
+            && Array.isArray(run?.pull_requests)
+            && run.pull_requests.some((pull) => pull?.number === expected.pr)
+          ));
+          const newestRunNumber = Math.max(
+            ...matchingRuns.map((run) => Number(run?.run_number) || 0),
+          );
+          const newestRuns = matchingRuns.filter(
+            (run) => (Number(run?.run_number) || 0) === newestRunNumber,
+          );
+          const latestRun = newestRuns.length === 1 ? newestRuns[0] : undefined;
+          if (
+            !latestRun
+            || latestRun.status !== "completed"
+            || latestRun.conclusion !== "success"
+          ) {
+            githubRequiredCheckVerificationFailedIds.push(dependency.id);
+          } else {
+            const jobsResponse = await fetchImpl(
+              `https://api.github.com/repos/futouyiba/tackle-forger/actions/runs/${latestRun.id}/jobs?filter=latest&per_page=100`,
+              { headers },
+            );
+            const jobs = jobsResponse.ok ? await jobsResponse.json() : undefined;
+            if (REQUIRED_CI_JOB_NAMES.some((name) => {
+              const matching = (jobs?.jobs ?? []).filter((job) => job?.name === name);
+              return matching.length !== 1
+                || matching[0]?.status !== "completed"
+                || matching[0]?.conclusion !== "success";
+            })) {
+              githubRequiredCheckVerificationFailedIds.push(dependency.id);
+            }
+          }
+          const threadResponse = await fetchImpl("https://api.github.com/graphql", {
+            method: "POST",
+            headers: { ...headers, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              query: "query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}}}}}",
+              variables: { owner: "futouyiba", repo: "tackle-forger", number: expected.pr },
+            }),
+          });
+          const threadResult = threadResponse.ok ? await threadResponse.json() : undefined;
+          const threads = threadResult?.data?.repository?.pullRequest?.reviewThreads;
+          if (
+            threadResult?.errors?.length
+            || !Array.isArray(threads?.nodes)
+            || threads.pageInfo?.hasNextPage !== false
+            || threads.nodes.some((thread) => thread?.isResolved !== true)
+          ) {
+            githubReviewThreadVerificationFailedIds.push(dependency.id);
+          }
         } catch {
           githubVerificationFailedIds.push(dependency.id);
         }
+      } else {
+        githubVerificationFailedIds.push(dependency.id);
       }
       evidence.push({
         id: dependency.id,
@@ -688,6 +761,8 @@ export async function inspectDependencyManifest(root, { fetchImpl = fetch } = {}
         merged: dependency.merged === true,
         reviewThreadsResolved: dependency.reviewThreadsResolved === true,
         requiredChecksPassed: dependency.requiredChecksPassed === true,
+        requiredCiWorkflowName: REQUIRED_CI_WORKFLOW_NAME,
+        requiredCiJobNames: REQUIRED_CI_JOB_NAMES,
         evidenceUrl: expectedUrl,
       });
     }
@@ -705,6 +780,8 @@ export async function inspectDependencyManifest(root, { fetchImpl = fetch } = {}
       || commitMessageMismatchIds.length > 0
       || incompleteReviewIds.length > 0
       || githubVerificationFailedIds.length > 0
+      || githubRequiredCheckVerificationFailedIds.length > 0
+      || githubReviewThreadVerificationFailedIds.length > 0
     );
     return invalid
       ? check(
@@ -725,6 +802,8 @@ export async function inspectDependencyManifest(root, { fetchImpl = fetch } = {}
           commitMessageMismatchIds,
           incompleteReviewIds,
           githubVerificationFailedIds,
+          githubRequiredCheckVerificationFailedIds,
+          githubReviewThreadVerificationFailedIds,
           dependencies: evidence,
         },
       )
@@ -822,7 +901,7 @@ export async function runPreflight({ root = process.cwd(), envFile } = {}) {
   }
   const environment = await environmentFileChecks(envFile, root);
   checks.push(...environment.checks);
-  checks.push(await inspectDependencyManifest(root));
+  checks.push(await inspectDependencyManifest(root, { githubToken: environment.env.GITHUB_ACCEPTANCE_TOKEN }));
   return {
     schemaVersion: EVIDENCE_SCHEMA_VERSION,
     mode: "preflight",
@@ -858,7 +937,10 @@ async function responseEvidence(response, secrets) {
     status: response.status,
     bodyHash: sha256(body),
     bodyBytes: Buffer.byteLength(body),
-    leakedConfiguredSecret: containsSecret(`${body}\n${JSON.stringify(headers)}`, secrets),
+    leakedConfiguredSecret: containsSecret(
+      `${body}\n${JSON.stringify(headers)}\n${JSON.stringify(setCookies)}`,
+      secrets,
+    ),
     json: (() => {
       try {
         return JSON.parse(body);
@@ -876,12 +958,13 @@ function parseSetCookie(value) {
   const separator = nameValue.indexOf("=");
   if (separator <= 0) return undefined;
   const attributes = new Map();
+  const allowedAttributes = new Set(["httponly", "samesite", "path", "max-age", "secure"]);
   for (const rawAttribute of rawAttributes) {
     const attributeSeparator = rawAttribute.indexOf("=");
     const name = (
       attributeSeparator >= 0 ? rawAttribute.slice(0, attributeSeparator) : rawAttribute
     ).trim().toLowerCase();
-    if (!name || attributes.has(name)) return undefined;
+    if (!name || !allowedAttributes.has(name) || attributes.has(name)) return undefined;
     attributes.set(
       name,
       attributeSeparator >= 0 ? rawAttribute.slice(attributeSeparator + 1).trim() : null,
@@ -1057,7 +1140,9 @@ export async function runPublicSmoke({
       && attributes.get("samesite")?.toLowerCase() === "lax"
       && attributes.get("path") === "/"
       && attributes.get("max-age") === "600"
-      && (target.protocol === "http:" || attributes.get("secure") === null)
+      && (target.protocol === "https:"
+        ? attributes.get("secure") === null
+        : !attributes.has("secure"))
     );
   });
   const leakedConfiguredSecret = starts.some((start) => start.leakedConfiguredSecret);
@@ -1339,7 +1424,8 @@ export async function runAuthenticatedReadOnlySmoke({
     env,
     requireConfiguredOrigin: true,
   });
-  const secrets = [...secretCandidates(env), cookieHeader].filter(Boolean);
+  const rawSessionValue = cookieHeader.slice("tf_session=".length);
+  const secrets = [...secretCandidates(env), cookieHeader, rawSessionValue].filter(Boolean);
   const headers = { cookie: cookieHeader };
   const checks = [];
 
@@ -1501,6 +1587,9 @@ export async function readSessionCookieFile({ cookieFile, root = process.cwd() }
   const info = await lstat(cookieFile);
   if (!info.isFile() || info.isSymbolicLink()) {
     throw new Error("cookie 文件必须是普通文件，不能是目录或符号链接。");
+  }
+  if (typeof process.getuid === "function" && info.uid !== process.getuid()) {
+    throw new Error("cookie 文件必须归当前执行用户所有。");
   }
   if ((info.mode & 0o077) !== 0) {
     throw new Error("cookie 文件必须为 0600 或更严格，且不得提交仓库。");

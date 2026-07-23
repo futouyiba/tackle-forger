@@ -79,9 +79,12 @@ npm run acceptance:phase-one -- preflight \
 
 依赖满足后，在单独评审的提交中更新 `deploy/phase-one-dependencies.json`：记录固定
 Issue/PR 映射、GitHub reviewed head、唯一 merge commit、review threads 已清零、必需
-CI 已通过和已合入状态。脚本会在线读取公开 GitHub PR 元数据，把实际 SHA 作为非敏感
-审计证据，并核对 reviewed head、merge commit、commit 标题来源及 HEAD 祖先关系；无法
-访问或不匹配时保持 BLOCKED。不得用环境变量、伪造标题或重复填写当前 HEAD 代替依赖证据。
+CI 已通过和已合入状态。预检从安全的仓库外 `0600` 环境文件读取专用
+`GITHUB_ACCEPTANCE_TOKEN`（最小只读权限；只读仓库元数据与 GraphQL，绝不输出），在线核对
+PR head/merge commit、reviewed head 对应的唯一预期 check-runs 均为 `completed/success`，并以
+GitHub GraphQL 核对全部 review threads 的 `isResolved=true`。token 缺失、认证/网络错误、响应
+分页或结构不完整、CI 失败/重复或任何未解决线程均保持 BLOCKED；清单中的布尔值只是辅助证据，
+不得自行证明通过。不得用环境变量、伪造标题或重复填写当前 HEAD 代替依赖证据。
 持久路径会在规范化后检查重复/
 越界，并核对数据库为普通文件、其余路径为目录、必要父目录与各路径均归服务账号所有且
 不向组或其他用户开放读写/访问权限。
@@ -118,8 +121,8 @@ IPv6 ULA 与公网 HTTP 永远拒绝。降级时还需明确记录 File System A
 ### 3.3 已登录只读核对
 
 真实用户先通过浏览器完成飞书登录。若运维选择使用脚本核对，需把当前
-`tf_session=<opaque-id>` 临时写入仓库外绝对路径的 `0600` 普通文件；相对路径、仓库内
-文件和符号链接都会被拒绝。不要把 Cookie 放在命令参数、shell history、Issue、日志或聊天中：
+`tf_session=<opaque-id>` 临时写入仓库外绝对路径、由当前执行用户拥有的 `0600` 普通文件；相对路径、仓库内
+文件、符号链接和其他用户拥有的文件都会被拒绝。不要把 Cookie 放在命令参数、shell history、Issue、日志或聊天中：
 
 ```bash
 npm run acceptance:phase-one -- authenticated-read-only \

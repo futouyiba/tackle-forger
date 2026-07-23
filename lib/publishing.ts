@@ -240,9 +240,31 @@ export function publishConfigurationSnapshot(
       },
     )
     : [];
-  const canonicalPublishValidationReport = canonicalValidationReport.filter(
-    (issue) => issue.gate === "REVIEW" || issue.gate === "PUBLISH",
-  );
+  const canonicalPublishValidationReport = input.publicationMode === "new_formal"
+    ? canonicalValidationReport.filter(
+      (issue) => issue.gate === "REVIEW" || issue.gate === "PUBLISH",
+    )
+    : canonicalizeValidationIssues(
+      publishValidationReport,
+      {
+        subjectRef: {
+          workspaceId: "workspace:legacy",
+          entityType: "model",
+          entityId: input.model.id,
+          revisionId: String(input.model.revision),
+        },
+        inputHash: deterministicHash({
+          modelId: input.model.id,
+          modelRevision: input.model.revision,
+          projectionId: input.projection.id,
+          validationReport: publishValidationReport,
+        }),
+        ruleRefs: [input.projection.ruleSetVersion],
+        gate: "PUBLISH",
+        source: "publish",
+        mode: "active_gate",
+      },
+    );
   const blocking = publishErrors(canonicalPublishValidationReport);
   if (!input.compatibilityReport.allowed) {
     blocking.push({

@@ -670,23 +670,43 @@ export function assertValidationWaiverDecisionCoverage(input: {
   waivers?: ValidationWaiver[];
   decisions?: ValidationWaiverDecision[];
 }): void {
-  if ((input.decisions ?? []).some((decision) => !verifyValidationWaiverDecision(decision))) {
+  const decisions = input.decisions ?? [];
+  const waivers = input.waivers ?? [];
+  if (
+    new Set(decisions.map((decision) => decision.waiverDecisionId)).size !== decisions.length
+    || decisions.some((decision) => !verifyValidationWaiverDecision(decision))
+  ) {
     throw new ValidationIssueContractError(
       "VALIDATION_WAIVER_DECISION_INVALID",
       "ValidationWaiverDecision 完整性校验失败。",
     );
   }
-  for (const waiver of input.waivers ?? []) {
-    const decisions = (input.decisions ?? []).filter(
+  for (const decision of decisions) {
+    const coveredWaiverIds = waivers
+      .filter((waiver) => waiver.waiverDecisionId === decision.waiverDecisionId)
+      .map((waiver) => waiver.waiverId);
+    if (
+      coveredWaiverIds.length !== decision.waiverIds.length
+      || new Set(coveredWaiverIds).size !== coveredWaiverIds.length
+      || coveredWaiverIds.some((waiverId) => !decision.waiverIds.includes(waiverId))
+    ) {
+      throw new ValidationIssueContractError(
+        "VALIDATION_WAIVER_DECISION_COVERAGE_INCOMPLETE",
+        `ValidationWaiverDecision ${decision.waiverDecisionId} 声明的原子 Waiver 集合未完整冻结。`,
+      );
+    }
+  }
+  for (const waiver of waivers) {
+    const matchingDecisions = decisions.filter(
       (decision) => decision.waiverDecisionId === waiver.waiverDecisionId,
     );
     if (
       !verifyValidationWaiver(waiver)
-      || decisions.length !== 1
-      || !decisions[0].waiverIds.includes(waiver.waiverId)
-      || decisions[0].policyVersion !== waiver.policyVersion
-      || decisions[0].policyHash !== waiver.policyHash
-      || !decisions[0].requestedWaivers.some((request) =>
+      || matchingDecisions.length !== 1
+      || !matchingDecisions[0].waiverIds.includes(waiver.waiverId)
+      || matchingDecisions[0].policyVersion !== waiver.policyVersion
+      || matchingDecisions[0].policyHash !== waiver.policyHash
+      || !matchingDecisions[0].requestedWaivers.some((request) =>
         request.issueFingerprint === waiver.issueFingerprint
         && request.gate === waiver.gate
         && request.environmentId === waiver.environmentId

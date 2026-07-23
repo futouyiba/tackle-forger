@@ -223,6 +223,7 @@ export function createUnifiedIssue(input: Omit<
     command: Parameters<typeof actionAvailability>[0];
     capabilities: CapabilityCode[];
     heldCapabilities: CapabilityCode[];
+    commandPayloadRef?: NonNullable<ValidationActionLink["commandPayloadRef"]>;
   }>;
 }): UnifiedValidationIssue {
   const { actionSpecs, ...issue } = input;
@@ -244,6 +245,9 @@ export function createUnifiedIssue(input: Omit<
         requiredCapabilities: availability.requiredCapabilities,
         disabledReasonCode: availability.disabledReasonCode,
         disabledReasonText: availability.disabledReasonText,
+        ...(spec.commandPayloadRef
+          ? { commandPayloadRef: structuredClone(spec.commandPayloadRef) }
+          : {}),
       };
     }),
   });

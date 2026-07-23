@@ -772,6 +772,52 @@ test("新正式 Snapshot 只接受并冻结指纹绑定的确认记录，旧 cod
   assert.equal(snapshotWithDecision.validationWaivers?.length, 1);
   assert.equal(snapshotWithDecision.validationWaiverDecisions?.length, 1);
 
+  const secondPublishError = issue({
+    code: "SECOND_PUBLISH_WAIVER_REQUIRED",
+    source: "publish",
+    subjectRef: publishError.subjectRef,
+    ruleRefs: publishError.ruleRefs,
+    inputHash: "second-publish-waiver-input",
+  });
+  const dualPolicy = createWaiverPolicyVersion({
+    policyId: "validation-waiver-policy",
+    version: "validation-waiver/publish-snapshot-dual-v1",
+    status: "PUBLISHED",
+    publishedAt: "2026-07-23T02:00:00.000Z",
+    rules: [publishError, secondPublishError].map((entry) => ({
+      source: entry.source,
+      code: entry.code,
+      gates: ["PUBLISH"],
+    })),
+  });
+  const dualWaiver = approveValidationWaiverDecision({
+    issues: [publishError, secondPublishError],
+    requestedWaivers: [publishError, secondPublishError].map((entry) => ({
+      issueFingerprint: entry.fingerprint,
+      expectedIssueRevision: entry.issueRevision,
+      expectedInputHash: entry.inputHash,
+      gate: "PUBLISH" as const,
+    })),
+    policy: dualPolicy,
+    scopeRef: publishError.subjectRef,
+    reason: "一次原子批准两个发布例外。",
+    approvedBy: "publisher:1",
+    approvedAt: "2026-07-23T03:30:00.000Z",
+    idempotencyKey: "waiver:snapshot-dual-decision",
+    capabilities: [APPROVE_VALIDATION_WAIVER_CAPABILITY],
+  });
+  assert.throws(
+    () => publishConfigurationSnapshot({
+      ...common,
+      snapshotId: "snapshot:partial-dual-decision",
+      validationReport: dualWaiver.issues,
+      validationWaivers: [dualWaiver.waivers[0]],
+      validationWaiverDecisions: [dualWaiver.decision],
+      activeValidationWaiverPolicies: [dualPolicy],
+    }),
+    /原子 Waiver 集合未完整冻结/,
+  );
+
   const exportOnly = issue({
     code: "EXPORT_ONLY_FROZEN",
     source: "config_relationship",
@@ -811,6 +857,23 @@ test("新正式 Snapshot 只接受并冻结指纹绑定的确认记录，旧 cod
     warningConfirmations: {},
   });
   assert.equal(publishWithLegacyExportOnly.validationReport.length, 1);
+  assert.throws(
+    () => publishConfigurationSnapshot({
+      ...common,
+      publicationMode: "historical_import",
+      snapshotId: "snapshot:historical-publish-error",
+      validationReport: [{
+        level: "error",
+        severity: "ERROR",
+        gate: "PUBLISH",
+        state: "OPEN",
+        code: "HISTORICAL_PUBLISH_ERROR",
+        message: "历史导入仍须阻断发布错误。",
+      }],
+      warningConfirmations: {},
+    }),
+    /历史导入仍须阻断发布错误/,
+  );
 });
 
 test("ExportManifest 只冻结精确环境×渠道命中的统一 Issue 与证据引用", () => {

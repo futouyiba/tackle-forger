@@ -1,4 +1,5 @@
 import { deterministicHash } from "./rule-kernel";
+import { isActiveValidationIssue, validationIssueLevel } from "./validation-issues";
 import type {
   Collection,
   ConfigurationSnapshot,
@@ -943,9 +944,12 @@ export function legacyEntityState(input: {
   hasPublishedSnapshot?: boolean;
 }): CanonicalEntityState {
   const issues = input.issues ?? [];
-  const validation: ValidationState = issues.some((issue) => issue.level === "error")
+  // 旧 Issue 没有可验证的生命周期，继续按原有 fail-closed 语义处理；规范
+  // ValidationIssue 则只能由仍未治理的 OPEN 状态影响当前展示状态。
+  const activeIssues = issues.filter(isActiveValidationIssue);
+  const validation: ValidationState = activeIssues.some((issue) => validationIssueLevel(issue) === "error")
     ? "BLOCKED"
-    : issues.some((issue) => issue.level === "warning")
+    : activeIssues.some((issue) => validationIssueLevel(issue) === "warning")
       ? "WARNING"
       : issues.length ? "PASSED" : "NOT_EVALUATED";
   const mapping = {
@@ -1199,7 +1203,7 @@ export function createExportPreviewTarget(input: {
     sourceSnapshotId: input.sourceSnapshotId,
     sourceSnapshotHash: input.sourceSnapshotHash,
     sourceFileHashes: structuredClone(input.sourceFileHashes),
-    status: issues.some((issue) => issue.level === "error") ? "blocked" : "ready",
+    status: issues.some((issue) => validationIssueLevel(issue) === "error") ? "blocked" : "ready",
     issues,
   };
 }

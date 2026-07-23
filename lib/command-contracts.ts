@@ -1,13 +1,14 @@
 import { deterministicHash } from "./rule-kernel";
 import type {
   AffinityScoreResult,
+  CanonicalValidationIssue,
   HardCompatibilityResult,
   PatchState,
+  ValidationActionLink,
 } from "./types";
 import type {
   ActionCode,
   ActionCommandPayloadRef,
-  ActionLink,
   CapabilityCode,
   EntityRef,
   IssuePresentationActionCode,
@@ -17,6 +18,7 @@ import {
   buildActionLink,
   ISSUE_PRESENTATION_ACTION_CODES,
 } from "./interaction-contracts";
+import { createValidationIssue } from "./validation-issues";
 import {
   adaptLegacyUnifiedTraceToCanonical,
   calculationTraceValuesEqual,
@@ -276,33 +278,13 @@ export function replayUnifiedTrace(input: {
   return { values, replayHash: replay.replayHash };
 }
 
-export type IssueSource =
-  | "hard_compatibility" | "affinity" | "series_invariant" | "patch"
-  | "publish" | "data_integrity" | "import" | "five_axis" | "ai_guardrail";
-
-export type IssueAction = ActionLink;
-
-export interface UnifiedValidationIssue {
-  issueId: string;
-  fingerprint: string;
-  code: string;
-  source: IssueSource;
-  severity: "error" | "warning" | "info";
-  blocking: boolean;
-  gate: "generate" | "series_approve" | "model_review" | "publish" | "export";
-  subjectRef: EntityRef;
-  affectedRefs: EntityRef[];
-  parameterKeys: string[];
-  title: string;
-  message: string;
-  state: "open" | "acknowledged" | "resolved" | "waived" | "superseded";
-  deny: boolean;
-  actions: IssueAction[];
-}
+/** @deprecated 使用 CanonicalValidationIssue；保留导出名避免旧调用方复制第三套结构。 */
+export type UnifiedValidationIssue = CanonicalValidationIssue;
+export type IssueAction = ValidationActionLink;
 
 export function createUnifiedIssue(input: Omit<
-  UnifiedValidationIssue,
-  "issueId" | "fingerprint" | "blocking" | "actions"
+  Parameters<typeof createValidationIssue>[0],
+  "actions"
 > & {
   actionSpecs: Array<{
     actionId: string;
@@ -315,45 +297,32 @@ export function createUnifiedIssue(input: Omit<
     domainBlock?: { code: string; text: string };
   }>;
 }): UnifiedValidationIssue {
-  const blocking = input.severity === "error" || input.deny;
-  if (input.deny && input.state === "waived") {
-    throw new Error("硬 deny 不允许 waive。");
-  }
-  const fingerprint = deterministicHash({
-    code: input.code,
-    source: input.source,
-    subjectRef: input.subjectRef,
-    affectedRefs: input.affectedRefs,
-    parameterKeys: input.parameterKeys,
-  });
   const { actionSpecs, ...issue } = input;
-  return {
-    ...structuredClone(issue),
-    blocking,
-    issueId: "issue-" + fingerprint,
-    fingerprint,
+  return createValidationIssue({
+    ...issue,
     actions: actionSpecs.map((spec) => {
       const presentation = (ISSUE_PRESENTATION_ACTION_CODES as readonly string[])
         .includes(spec.action);
+      const availability = presentation
+        ? undefined
+        : actionAvailability(
+            spec.action as ActionCode,
+            spec.heldCapabilities,
+            spec.domainBlock,
+          );
       return buildActionLink({
         actionId: spec.actionId,
         action: spec.action,
         label: spec.label,
-        targetRef: spec.targetRef ?? input.subjectRef,
+        targetRef: spec.targetRef ?? input.subjectRef as EntityRef,
         targetRoute: spec.targetRoute,
-        ...(presentation
-          ? {}
-          : {
-              availability: actionAvailability(
-                spec.action as ActionCode,
-                spec.heldCapabilities,
-                spec.domainBlock,
-              ),
-            }),
-        commandPayloadRef: spec.commandPayloadRef,
+        ...(availability ? { availability } : {}),
+        ...(availability?.enabled && spec.commandPayloadRef
+          ? { commandPayloadRef: spec.commandPayloadRef }
+          : {}),
       });
     }),
-  };
+  });
 }
 
 export type PatchWorkflowState = PatchState;

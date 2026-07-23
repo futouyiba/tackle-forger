@@ -2266,6 +2266,8 @@ export interface IdentityAuditRecord {
 
 
 export interface WorkspaceState {
+  /** 新正式 Patch/发布链的权威工作区身份；历史 Snapshot 仍可保留无此字段的 legacy 证据。 */
+  workspaceId?: string;
   schemaVersion: number;
   /**
    * OPEN-008 使用独立子 schema，避免把配置身份治理与工作区 revision

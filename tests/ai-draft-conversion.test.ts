@@ -14,6 +14,7 @@ import { AI_RETENTION_POLICY_VERSION, type AIAssessmentRetentionRecord } from ".
 import { describeFancyHubModels, prepareAIRequest } from "../lib/ai-outbound";
 import { createSeedState } from "../lib/seed";
 import { currentPatchPanelValuesFromWorkspace } from "../lib/patch-authority";
+import { buildPatchRevision } from "../lib/patch-ledger";
 import type { WorkspaceState } from "../lib/types";
 
 const assessmentId = "assessment:model-draft";
@@ -345,6 +346,48 @@ test("AI Model Patch 首次持久化绑定目标 Model，激活后进入权威�
   const frozen = structuredClone(value.state);
   frozen.purchasableModels.find((entry) => entry.id === draft.patch.subjectEntityId)!.configurationSnapshotId = "snapshot:late-freeze";
   assertCode("AI_DRAFT_TARGET_FROZEN", () => applyAIDraftArtifactPlan(frozen, draft));
+});
+
+test("AI clear 预览、持久化和激活均复用 canonical replay 的完整面板", () => {
+  const value = fixture();
+  const model = value.state.purchasableModels.find((entry) => entry.id === value.command.targetModelRef!.entityId)!;
+  const key = value.parameterKey;
+  const baseline = currentPatchPanelValuesFromWorkspace({ state: value.state, scopeType: "model", subjectEntityId: model.id });
+  const inherited = baseline[key] as number;
+  const activeAdd = buildPatchRevision({
+    patchId: "patch:model:active-add",
+    patchRevision: 1,
+    scopeType: "model", layerType: "model", subjectEntityId: model.id, subjectName: model.name,
+    baseRuleSetVersion: value.state.ruleSetVersions.find((entry) => entry.status === "published")!.id,
+    baseObjectRevision: model.revision, state: "ACTIVE", mirrorSyncState: "NOT_SYNCED", attentionStates: [],
+    reason: "existing same-layer add", evidence: [], createdBy: "tester", createdAt: now, snapshotRefs: [],
+    operations: [{ patchId: "patch:model:active-add", patchRevision: 1, operationId: "patch:model:active-add:op", operationIndex: 0, parameterKey: key, operation: "add", operand: 1, before: inherited, after: inherited + 1 }],
+  });
+  value.state.patchLedger.revisions.push(activeAdd);
+  model.patchIds.push(activeAdd.patchId);
+  const refreshed = prepareAIRequest({ envelope: buildWorkspaceAssessmentRequestProjection({
+    state: value.state,
+    scope: { scopeType: "model", scopeId: model.id },
+    assessmentId,
+    model: providerModel,
+  }).envelope });
+  value.record.metadata!.inputHash = refreshed.inputHash;
+  value.command.assessmentInputHash = refreshed.inputHash;
+  const recommendation = value.record.semanticContent!.recommendations[0]! as { suggestedChanges: Array<Record<string, unknown>> };
+  recommendation.suggestedChanges[0] = {
+    ...recommendation.suggestedChanges[0], operation: "clear", operand: { kind: "null", value: null },
+    expectedBefore: { kind: "number", value: inherited + 1 },
+  };
+  const draft = plan(value);
+  assert.equal(draft.kind, "model_patch");
+  assert.equal(draft.preview.changes[0]?.after, inherited);
+  assert.equal(draft.preview.diffs.invariants.newBlockingIssueCodes.length, 0);
+  const persisted = applyAIDraftArtifactPlan(value.state, draft);
+  const activated = structuredClone(persisted.state);
+  activated.patchLedger.revisions.find((entry) => entry.patchId === draft.patch.patchId)!.state = "ACTIVE";
+  const replayed = currentPatchPanelValuesFromWorkspace({ state: activated, scopeType: "model", subjectEntityId: model.id });
+  assert.equal(replayed[key], inherited);
+  assert.equal(Object.hasOwn(replayed, key), true);
 });
 
 test("RuleSourceChangeDraft 使用全工作区沙盒影响预览并只保存 LOCAL_DRAFT", () => {

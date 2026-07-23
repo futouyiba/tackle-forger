@@ -27,6 +27,7 @@ import {
   authoritativeObjectIdentity,
   createAuthoritativePatchObjectFromWorkspace,
   createWorkspacePatchReview,
+  currentPatchApprovalEvidence,
   deriveAuthoritativePatchContexts,
   evaluateAuthoritativePatchFinalRanges,
   preparePatchOperationFromWorkspace,
@@ -656,11 +657,14 @@ test("实际工作区命令计算 Trace、包含端点，并在伪造或当前�
     (error: unknown) => error instanceof PatchOffsetPolicyError && error.code === "PATCH_REVIEW_EVIDENCE_STALE",
   );
   state.patchReviewBatches = [];
-  const review = createWorkspacePatchReview({ state, target: revision, reviewedBy: "reviewer", reviewedAt: NOW });
+  state.workspaceId = "workspace:ai-formal";
+  const review = createWorkspacePatchReview({ state, target: revision, reviewedBy: "reviewer", reviewedAt: NOW, workspaceId: "workspace:ai-formal" });
   assert.equal(review.evaluation.results[0].valid, true);
   assert.equal(review.evaluation.results[0].min, numeric[1]);
   assert.equal(review.evaluation.results[0].max, numeric[1]);
   state.patchReviewBatches.push(review.batch);
+  assert.equal(currentPatchApprovalEvidence(state, revision, "workspace:other"), undefined);
+  assert.ok(currentPatchApprovalEvidence(state, revision, "workspace:ai-formal"));
   const approved = reviewWorkspacePatchRevision({
     state,
     patchId: revision.patchId,
@@ -669,6 +673,7 @@ test("实际工作区命令计算 Trace、包含端点，并在伪造或当前�
     reviewer: "reviewer",
     reviewedAt: NOW,
     capabilities: ["patch.review"],
+    workspaceId: "workspace:ai-formal",
   });
   assert.equal(approved.patchLedger.revisions.find((entry) => entry.patchId === revision.patchId)?.state, "APPROVED");
   const active = reviewWorkspacePatchRevision({
@@ -679,6 +684,7 @@ test("实际工作区命令计算 Trace、包含端点，并在伪造或当前�
     reviewer: "reviewer",
     reviewedAt: NOW,
     capabilities: ["patch.review"],
+    workspaceId: "workspace:ai-formal",
   });
   assert.equal(active.patchLedger.revisions.find((entry) => entry.patchId === revision.patchId)?.state, "ACTIVE");
 

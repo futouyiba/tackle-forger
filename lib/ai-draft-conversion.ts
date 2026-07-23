@@ -621,11 +621,11 @@ export function planAIDraftConversion(input: {
   });
   ensureNoPendingConflict(input.state, model.id, changes, command.idempotencyKey, commandHash);
   const validation = patchRangeDiff(input.state, patch);
-  const panel = currentPatchPanelValuesFromWorkspace({ state: input.state, scopeType: "model", subjectEntityId: model.id });
-  for (const change of changes) {
-    if (change.operation === "clear") delete panel[change.parameterKey];
-    else panel[change.parameterKey] = change.after as number | string;
-  }
+  // The preview must be the same full panel that the canonical Patch replay
+  // will persist and activate. In particular, clear restores the inherited
+  // value; it never deletes a field from the preview-only panel.
+  const canonicalAfter = createAuthoritativePatchObjectFromWorkspace(input.state, patch);
+  const panel = structuredClone(canonicalAfter.contexts[0]?.finalPanelValues ?? {});
   const invariants = invariantDiff(input.state, model, panel);
   const diffs: AIDraftDiffPreview = {
     validation,
@@ -718,7 +718,7 @@ export function planAIDraftConversion(input: {
     originAssessmentId: input.assessmentId,
     originRecommendationId: recommendation.recommendationCode,
     sourceObjectRefs: [{
-      workspaceId: "default",
+      workspaceId: input.state.workspaceId!,
       entityType: "model",
       entityId: model.id,
       revisionId: String(model.revision),

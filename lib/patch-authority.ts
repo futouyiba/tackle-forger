@@ -329,6 +329,12 @@ function applyRevisions(
         if(priorSet) throw new PatchOffsetPolicyError("PATCH_SET_CLEAR_CONFLICT",`同层参数 ${operation.parameterKey} 的 set 与 clear 冲突：${priorSet}、${operation.operationId}。`);
         clearByLayerParameter.set(layerParameter,operation.operationId);
       }
+      // clear removes the current-layer override. Its result must not depend
+      // on opaque patchId ordering relative to same-layer add/multiply.
+      if (operation.operation !== "clear" && operation.operation !== "set"
+        && clearByLayerParameter.has(layerParameter)) {
+        continue;
+      }
       if (operation.operation === "clear") {
         if (!inheritedByLayerParameter.has(layerParameter)) {
           throw new PatchOffsetPolicyError(
@@ -400,7 +406,15 @@ export function currentPatchSubjectRef(
 export function createAuthoritativePatchObjectFromWorkspace(
   state: WorkspaceState,
   target: PatchRevisionRecord,
+  requestedWorkspaceId?: string,
 ): AuthoritativePatchObject {
+  const workspaceId = state.workspaceId;
+  if (!workspaceId?.trim()) {
+    throw new PatchOffsetPolicyError("PATCH_WORKSPACE_ID_REQUIRED", "正式 Patch 复核必须提供权威 workspaceId。");
+  }
+  if (requestedWorkspaceId !== undefined && requestedWorkspaceId !== workspaceId) {
+    throw new PatchOffsetPolicyError("PATCH_WORKSPACE_ID_MISMATCH", "Patch 复核请求 workspaceId 与当前权威工作区不一致。");
+  }
   const chain = subjectChain(state, target);
   const ruleSet = currentPublishedRuleSet(state);
   const revisions = currentRevisionByPatchId(state, [...chain.patchIds, target.patchId], target);
@@ -434,6 +448,7 @@ export function createAuthoritativePatchObjectFromWorkspace(
     };
   });
   return {
+    workspaceId,
     subjectRef: currentPatchSubjectRef(state, target),
     ruleSet,
     parameterDefinitions: state.parameters,
@@ -484,7 +499,25 @@ export function preparePatchOperationFromWorkspace(input: {
   const before = panel[input.parameterKey];
   let after: unknown;
   if (input.operation === "set") after = input.operand;
-  else if (input.operation === "clear") after = before;
+  else if (input.operation === "clear") {
+    const previewRevision: PatchRevisionRecord = {
+      ...placeholder,
+      operations: [{
+        patchId: placeholder.patchId,
+        patchRevision: placeholder.patchRevision,
+        operationId: "__preview_clear__",
+        operationIndex: 0,
+        parameterKey: input.parameterKey,
+        operation: "clear",
+        operand: null,
+        before,
+        after: undefined,
+      }],
+    };
+    // clear restores this layer's inherited value. Compute it through the
+    // same canonical replay used by persisted/activated revisions.
+    after = applyRevisions(projection.values, [...active, previewRevision])[input.parameterKey];
+  }
   else {
     if (typeof before !== "number" || typeof input.operand !== "number") {
       throw new PatchOffsetPolicyError("PATCH_NUMERIC_OPERATION_INVALID", "add/multiply 必须作用于当前面板有限数值。");
@@ -546,9 +579,10 @@ export function createWorkspacePatchReview(input: {
   target: PatchRevisionRecord;
   reviewedBy: string;
   reviewedAt: string;
+  workspaceId?: string;
 }): { evaluation: PatchRangeEvaluation; batch: import("./types").PatchReviewBatch } {
   const policy = findPublishedPatchOffsetPolicy(input.state.workspacePolicies);
-  const object = createAuthoritativePatchObjectFromWorkspace(input.state, input.target);
+  const object = createAuthoritativePatchObjectFromWorkspace(input.state, input.target, input.workspaceId);
   const evaluation = evaluateAuthoritativePatchFinalRanges({
     policy,
     gate: "REVIEW",
@@ -565,6 +599,7 @@ export function createWorkspacePatchReview(input: {
 export function currentPatchApprovalEvidence(
   state: WorkspaceState,
   target: PatchRevisionRecord,
+  workspaceId?: string,
 ): {
   policy: PatchOffsetPolicyVersion;
   reviewBatch: import("./types").PatchReviewBatch;
@@ -578,7 +613,7 @@ export function currentPatchApprovalEvidence(
   try {
     policy = findPublishedPatchOffsetPolicy(state.workspacePolicies);
     if (!policy) return undefined;
-    object = createAuthoritativePatchObjectFromWorkspace(state, target);
+    object = createAuthoritativePatchObjectFromWorkspace(state, target, workspaceId);
   } catch {
     return undefined;
   }
@@ -642,6 +677,7 @@ export function reviewWorkspacePatchRevision(input: {
   reviewer: string;
   reviewedAt: string;
   capabilities: Iterable<string>;
+  workspaceId?: string;
 }): WorkspaceState {
   const target = input.state.patchLedger.revisions.find((revision) =>
     revision.patchId === input.patchId && revision.patchRevision === input.patchRevision);
@@ -650,7 +686,7 @@ export function reviewWorkspacePatchRevision(input: {
   }
   const approvalEvidence = input.nextState === "WITHDRAWN"
     ? undefined
-    : currentPatchApprovalEvidence(input.state, target);
+    : currentPatchApprovalEvidence(input.state, target, input.workspaceId);
   if (input.nextState !== "WITHDRAWN" && !findPublishedPatchOffsetPolicy(input.state.workspacePolicies)) {
     throw new PatchOffsetPolicyError("PATCH_OFFSET_POLICY_MISSING", "批准 Patch 前缺少已发布 PatchOffsetPolicyVersion。");
   }
@@ -729,6 +765,7 @@ export function reviewWorkspacePatchBatch(input: {
   reviewer: string;
   reviewedAt: string;
   capabilities: Iterable<string>;
+  workspaceId?: string;
 }): WorkspaceState {
   const batch = input.state.patchReviewBatches.find((entry) => entry.batchId === input.batchId);
   if (!batch) throw new PatchOffsetPolicyError("PATCH_REVIEW_EVIDENCE_MISSING", "整体复核批次不存在。");
@@ -739,7 +776,7 @@ export function reviewWorkspacePatchBatch(input: {
     const target = reference && input.state.patchLedger.revisions.find((revision) =>
       revision.patchId === reference.patchId && revision.patchRevision === reference.patchRevision);
     if (!target) throw new PatchOffsetPolicyError("PATCH_REVISION_EVIDENCE_MISSING", "批次引用的 Patch revision 不存在。");
-    return createAuthoritativePatchObjectFromWorkspace(input.state, target);
+    return createAuthoritativePatchObjectFromWorkspace(input.state, target, input.workspaceId);
   });
   const currentEvaluation = evaluateAuthoritativePatchFinalRanges({
     policy,

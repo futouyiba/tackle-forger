@@ -191,7 +191,37 @@ function sourceLabel(source: { sheetId: string; cell: string; label?: string }) 
   return `${source.sheetId}!${source.cell}${source.label ? ` · ${source.label}` : ""}`;
 }
 
-export function QualityValuePolicyPanel({ draft }: { draft: QualityValuePolicyDraft }) {
+function qualityIssuePart(itemPartId?: string) {
+  return itemPartId === "part:rod"
+    ? { id: itemPartId, label: "竿" }
+    : itemPartId === "part:reel"
+      ? { id: itemPartId, label: "轮" }
+      : itemPartId === "part:line"
+        ? { id: itemPartId, label: "线" }
+        : { id: "part:unknown", label: "其他" };
+}
+
+export function QualityValuePolicyPanel({
+  draft,
+  affixSheetRowCount,
+}: {
+  draft: QualityValuePolicyDraft;
+  affixSheetRowCount?: number;
+}) {
+  const issueGroups = useMemo(() => {
+    const groups = new Map<string, {
+      label: string;
+      issues: QualityValuePolicyDraft["issues"];
+    }>();
+    for (const issue of draft.issues) {
+      const part = qualityIssuePart(issue.itemPartId);
+      const group = groups.get(part.id) ?? { label: part.label, issues: [] };
+      group.issues.push(issue);
+      groups.set(part.id, group);
+    }
+    return [...groups.entries()];
+  }, [draft.issues]);
+
   return (
     <section className="card pricing-trial-panel">
       <div className="panel-title">
@@ -210,15 +240,47 @@ export function QualityValuePolicyPanel({ draft }: { draft: QualityValuePolicyDr
           </div>
         ))}
       </div>
-      <div className="pricing-blockers">
-        <strong>{draft.combinationRules.length} 个稳定 ID 无序词条组合 · 单元格级 Trace</strong>
-        {draft.issues.map((issue) => (
-          <span key={`${issue.code}:${issue.sourceCell?.cell ?? ""}`}>
-            <AlertTriangle size={13} />
-            {issue.code} · {issue.message}
-            {issue.sourceCell ? ` · ${sourceLabel(issue.sourceCell)}` : ""}
-            {issue.actions.map((action) => <a key={action.label} href={action.targetRoute}>{action.label}</a>)}
+      <div className="quality-import-evidence">
+        <CheckCircle2 size={16} />
+        <div>
+          <strong>{draft.combinationRules.length} 个稳定 ID 组合已解析</strong>
+          <span>
+            {Number.isSafeInteger(affixSheetRowCount)
+              ? `04_词条读取覆盖 zrVOxd!B2:F${affixSheetRowCount}；高行号合法词条参与同部位绑定。`
+              : "04_词条读取上界缺少可信元数据时会停止导入，不会沿用固定末行。"}
           </span>
+        </div>
+      </div>
+      <div className="quality-diagnostics">
+        <header>
+          <div>
+            <strong>仍需规则负责人处理</strong>
+            <span>{draft.issues.length} 条诊断继续阻断发布；未做别名猜测或跨部位回退。</span>
+          </div>
+          <span className={draft.issues.length ? "rule-badge danger" : "rule-badge success"}>
+            {draft.issues.length ? `${draft.issues.length} ERRORS` : "NO ERRORS"}
+          </span>
+        </header>
+        {issueGroups.map(([partId, group]) => (
+          <details key={partId} open className="quality-diagnostic-group">
+            <summary><strong>{group.label}部位</strong><span>{group.issues.length} 条</span></summary>
+            <div>
+              {group.issues.map((issue) => (
+                <article key={`${issue.code}:${issue.sourceCell?.cell ?? ""}`}>
+                  <AlertTriangle size={14} />
+                  <div>
+                    <strong>{issue.code}</strong>
+                    <span>{issue.message}</span>
+                    <small>
+                      {issue.gate} 阻断
+                      {issue.sourceCell ? ` · ${sourceLabel(issue.sourceCell)}` : ""}
+                    </small>
+                  </div>
+                  {issue.actions.map((action) => <a key={action.label} href={action.targetRoute}>{action.label}</a>)}
+                </article>
+              ))}
+            </div>
+          </details>
         ))}
       </div>
     </section>

@@ -19,9 +19,12 @@ import {
 } from "../lib/pricing-policy";
 import {
   CANONICAL_IDENTITY_SHEET_SPECS,
+  canonicalAffixSheetRanges,
   canonicalIdentityPolicies,
+  canonicalRuleWorkbookRangeRequests,
   identityRowsFromRanges,
   pricingDraftFromRanges,
+  qualityDraftFromRanges,
 } from "../lib/rule-workbook-inspection";
 import { createExportManifest } from "../lib/config-export";
 import { createSeedState } from "../lib/seed";
@@ -32,6 +35,94 @@ const observedSheets = CANONICAL_FEISHU_SHEET_REGISTRY.map((entry) => ({
   sheetId: entry.sheetId,
   name: entry.expectedName,
 }));
+
+function sourceRevisionWithAffixGrid(rowCount = 86) {
+  return {
+    id: "feishu-revision:fixture", workbookRefId: CANONICAL_FEISHU_WORKBOOK.id,
+    sourceRevision: "fixture", spreadsheetToken: "spreadsheet:fixture", pulledAt: "2026-07-24T00:00:00.000Z",
+    pulledBy: "tester", syncScope: "workbook" as const, registryHash: "hash",
+    sheets: observedSheets.map((sheet) => sheet.sheetId === "zrVOxd"
+      ? { ...sheet, rowCount, columnCount: 6 }
+      : sheet),
+    issues: [], state: "PULLED" as const,
+  };
+}
+
+test("04_词条的身份与别名读取共同跟随同 revision grid 上界，不遗留固定末行", () => {
+  const sourceRevision = sourceRevisionWithAffixGrid(86);
+  assert.deepEqual(canonicalAffixSheetRanges(sourceRevision), {
+    identityRange: "B1:C86",
+    aliasRange: "B2:F86",
+  });
+  const requests = canonicalRuleWorkbookRangeRequests(sourceRevision);
+  assert.equal(requests.find((entry) => entry.sheetId === "zrVOxd" && entry.range === "B1:C86")?.range, "B1:C86");
+  assert.equal(requests.find((entry) => entry.sheetId === "zrVOxd" && entry.range === "B2:F86")?.range, "B2:F86");
+});
+
+test("04_词条 grid 元数据不完整时 fail-closed，不以旧行号截断", () => {
+  for (const sheets of [
+    observedSheets,
+    sourceRevisionWithAffixGrid(2).sheets,
+    sourceRevisionWithAffixGrid(86).sheets.map((sheet) => sheet.sheetId === "zrVOxd" ? { ...sheet, rowCount: Number.NaN } : sheet),
+    sourceRevisionWithAffixGrid(86).sheets.map((sheet) => sheet.sheetId === "zrVOxd" ? { ...sheet, columnCount: 5 } : sheet),
+  ]) {
+    assert.throws(() => canonicalAffixSheetRanges({ ...sourceRevisionWithAffixGrid(), sheets }));
+  }
+});
+
+test("高行号的竿轮线合法缩写均能绑定稳定 ID，真实未知缩写与跨部位错误仍阻断", () => {
+  const sourceRevision = sourceRevisionWithAffixGrid();
+  const qualityValues = Array.from({ length: 47 }, () => [] as unknown[]);
+  qualityValues[1] = ["C/绿", "C", "", 0, 20];
+  qualityValues[2] = ["B/蓝", "B", "", 20, 40];
+  qualityValues[3] = ["A/紫", "A", "", 40, 65];
+  qualityValues[4] = ["S/橙", "S", "", 65, 100];
+  for (const { headerRow, dataRow, alias } of [
+    { headerRow: 10, dataRow: 11, alias: "竿高行" },
+    { headerRow: 24, dataRow: 25, alias: "轮高行" },
+    { headerRow: 38, dataRow: 39, alias: "线高行" },
+  ]) {
+    qualityValues[headerRow - 4] = ["", alias];
+    qualityValues[dataRow - 4] = [alias.replace("高", "低"), 0];
+  }
+  const affixValues = Array.from({ length: 85 }, () => [] as unknown[]);
+  affixValues[0] = ["机器ID（勿改）", "", "部位", "", "缩写"];
+  affixValues[1] = ["affix_rod_low", "", "竿", "", "竿低行"];
+  affixValues[3] = ["affix_reel_low", "", "轮", "", "轮低行"];
+  affixValues[5] = ["affix_line_low", "", "线", "", "线低行"];
+  affixValues[80] = ["affix_rod_high", "", "竿", "", "竿高行"];
+  affixValues[82] = ["affix_reel_high", "", "轮", "", "轮高行"];
+  affixValues[84] = ["affix_line_high", "", "线", "", "线高行"];
+  const valid = qualityDraftFromRanges({
+    sourceRevision,
+    qualityValues,
+    affixValues,
+    pricingEndpointValues: [[100]],
+    importedAt: "2026-07-24T00:00:00.000Z",
+  });
+  assert.equal(valid.issues.some((issue) => issue.code === "QUALITY_COMBINATION_ALIAS_UNKNOWN"), false);
+
+  qualityValues[11 - 4] = ["不存在", 0];
+  const unknown = qualityDraftFromRanges({ sourceRevision, qualityValues, affixValues, pricingEndpointValues: [[100]], importedAt: "2026-07-24T00:00:00.000Z" });
+  assert.ok(unknown.issues.some((issue) => issue.code === "QUALITY_COMBINATION_ALIAS_UNKNOWN"));
+
+  qualityValues[11 - 4] = ["轮高行", 0];
+  const crossPart = qualityDraftFromRanges({ sourceRevision, qualityValues, affixValues, pricingEndpointValues: [[100]], importedAt: "2026-07-24T00:00:00.000Z" });
+  assert.ok(crossPart.issues.some((issue) => issue.code === "QUALITY_COMBINATION_ALIAS_UNKNOWN"));
+});
+
+test("同一完整高行号工作簿导入保持幂等", () => {
+  const sourceRevision = sourceRevisionWithAffixGrid();
+  const qualityValues = Array.from({ length: 47 }, () => [] as unknown[]);
+  qualityValues[1] = ["C/绿", "C", "", 0, 20]; qualityValues[2] = ["B/蓝", "B", "", 20, 40];
+  qualityValues[3] = ["A/紫", "A", "", 40, 65]; qualityValues[4] = ["S/橙", "S", "", 65, 100];
+  qualityValues[6] = ["", "高行词条"]; qualityValues[7] = ["高行词条", "—"];
+  const affixValues = Array.from({ length: 85 }, () => [] as unknown[]);
+  affixValues[0] = ["机器ID（勿改）", "", "部位", "", "缩写"];
+  affixValues[84] = ["affix_rod_high", "", "竿", "", "高行词条"];
+  const input = { sourceRevision, qualityValues, affixValues, pricingEndpointValues: [[100]], importedAt: "2026-07-24T00:00:00.000Z" };
+  assert.deepEqual(qualityDraftFromRanges(input), qualityDraftFromRanges(input));
+});
 
 test("当前整本工作簿注册表覆盖 00–17，并包含 12_打包竿组的真实 sheet_id", () => {
   assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.length, 18);

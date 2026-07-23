@@ -47,6 +47,53 @@ export const CANONICAL_IDENTITY_SHEET_SPECS: IdentitySheetSpec[] = [
   { sheetId: "9nE3Rx", range: "B1:C10", idColumnKey: "B", fixedEntityType: "SeriesArchetype", allowedEntityTypes: ["SeriesArchetype"], idPrefixesByEntityType: { SeriesArchetype: ["series_rod_", "series_reel_", "series_line_"] } },
 ];
 
+const AFFIX_SHEET_ID = "zrVOxd";
+/** The header occupies row 2; a smaller grid cannot hold an affix machine row. */
+const MINIMUM_AFFIX_MACHINE_ROW_COUNT = 3;
+
+export interface CanonicalAffixSheetRanges {
+  identityRange: string;
+  aliasRange: string;
+}
+
+/**
+ * `04_词条` has no fixed last data row.  The grid size returned in the same
+ * FeishuSourceRevision is the only authoritative read boundary: extending the
+ * machine region therefore extends both identity and alias reads without a
+ * second, silently stale constant.  Missing or malformed grid metadata is a
+ * source-structure error, not permission to truncate the import.
+ */
+export function canonicalAffixSheetRanges(sourceRevision: FeishuSourceRevision): CanonicalAffixSheetRanges {
+  const sheet = sourceRevision.sheets.find((candidate) => candidate.sheetId === AFFIX_SHEET_ID);
+  const rowCount = sheet?.rowCount;
+  const columnCount = sheet?.columnCount;
+  if (typeof rowCount !== "number" || !Number.isSafeInteger(rowCount) || rowCount < MINIMUM_AFFIX_MACHINE_ROW_COUNT) {
+    throw new Error("04_词条/zrVOxd 缺少可验证的 grid rowCount；已停止读取，避免截断词条机器区。");
+  }
+  if (typeof columnCount !== "number" || !Number.isSafeInteger(columnCount) || columnCount < 6) {
+    throw new Error("04_词条/zrVOxd 缺少至少 6 列的可验证 grid 元数据；已停止读取，避免不完整别名导入。");
+  }
+  return {
+    identityRange: `B1:C${rowCount}`,
+    aliasRange: `B2:F${rowCount}`,
+  };
+}
+
+export function canonicalRuleWorkbookRangeRequests(sourceRevision: FeishuSourceRevision) {
+  const affixRanges = canonicalAffixSheetRanges(sourceRevision);
+  return [
+    ...CANONICAL_IDENTITY_SHEET_SPECS.map(({ sheetId, range }) => ({
+      sheetId,
+      range: sheetId === AFFIX_SHEET_ID ? affixRanges.identityRange : range,
+    })),
+    { sheetId: "FqD4j7", range: "B4:N50" },
+    { sheetId: AFFIX_SHEET_ID, range: affixRanges.aliasRange },
+    { sheetId: "u87sRh", range: "B10:R70" },
+    { sheetId: "fATowU", range: "B2:V10" },
+    { sheetId: "u87sRh", range: "B179:E179" },
+  ];
+}
+
 function text(value: unknown) {
   return value === null || value === undefined ? "" : String(value).trim();
 }
@@ -320,16 +367,10 @@ export async function inspectCanonicalRuleWorkbook(input: {
     pulledAt: input.observedAt,
     pulledBy: input.observedBy,
   });
+  const requests = canonicalRuleWorkbookRangeRequests(sourceRevision);
   const ranges = await readFeishuSheetRanges({
     spreadsheetToken: sourceRevision.spreadsheetToken,
-    requests: [
-      ...CANONICAL_IDENTITY_SHEET_SPECS.map(({ sheetId, range }) => ({ sheetId, range })),
-      { sheetId: "FqD4j7", range: "B4:N50" },
-      { sheetId: "zrVOxd", range: "B2:F38" },
-      { sheetId: "u87sRh", range: "B10:R70" },
-      { sheetId: "fATowU", range: "B2:V10" },
-      { sheetId: "u87sRh", range: "B179:E179" },
-    ],
+    requests,
   });
   const identityRows = identityRowsFromRanges(ranges);
   const identityReport = prepareSourceIdentityMigration({
@@ -342,7 +383,7 @@ export async function inspectCanonicalRuleWorkbook(input: {
     generatedAt: input.observedAt,
   });
   const qualityRange = ranges.find((entry) => entry.sheetId === "FqD4j7" && entry.range === "B4:N50");
-  const affixRange = ranges.find((entry) => entry.sheetId === "zrVOxd" && entry.range === "B2:F38");
+  const affixRange = ranges.find((entry) => entry.sheetId === AFFIX_SHEET_ID && entry.range === canonicalAffixSheetRanges(sourceRevision).aliasRange);
   const pricingEndpointRange = ranges.find((entry) => entry.sheetId === "u87sRh" && entry.range === "B179:E179");
   const pricingRange = ranges.find((entry) => entry.sheetId === "u87sRh" && entry.range === "B10:R70");
   const typeRange = ranges.find((entry) => entry.sheetId === "fATowU" && entry.range === "B2:V10");

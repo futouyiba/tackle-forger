@@ -1,4 +1,4 @@
-import { evaluateAffinity, evaluateHardCompatibility } from "./compatibility";
+import { evaluateCanonicalAffinity, evaluateHardCompatibility } from "./compatibility";
 import { deterministicHash } from "./rule-kernel";
 import {
   assertSeriesItemPartChainEnabled,
@@ -43,7 +43,6 @@ function recipeAccepts(recipe: CandidateSearchRecipe, series: SeriesDefinition, 
     && recipe.typeIds.includes(series.typeId)
     && recipe.functionIds.includes(series.coreFunctionId)
     && recipe.qualityIds.includes(series.qualityId)
-    && (!series.performanceProfileId || recipe.performanceIds.includes(series.performanceProfileId))
     && sku.targetPullKg >= recipe.targetPullRangeKg.min
     && sku.targetPullKg <= recipe.targetPullRangeKg.max;
 }
@@ -58,7 +57,6 @@ function contextFor(series: SeriesDefinition, sku: SkuDrawer, variant: ModelVari
     targetPullKg: sku.targetPullKg,
     functionId: series.coreFunctionId,
     functionIntensity: intensity,
-    performanceId: series.performanceProfileId,
     qualityId: series.qualityId,
     componentIds: variant.componentSelections.map((entry) => entry.componentId),
     tags: variant.tags,
@@ -131,7 +129,11 @@ export function generateModelCandidateRun(input: {
       const context = contextFor(series, sku, variant);
       const hard = evaluateHardCompatibility(context, input.state.compatibilityRules);
       if (!hard.allowed) { bump(excludedByCode, "HARD_COMPATIBILITY_DENIED"); continue; }
-      const affinity = evaluateAffinity(context, input.state.affinityRules, input.state.affinityAxisWeights);
+      const affinity = evaluateCanonicalAffinity(
+        context,
+        input.state.affinityRules,
+        input.state.affinityAxisWeights,
+      );
       if (input.request.minimumAffinity !== undefined && affinity.score < input.request.minimumAffinity) {
         bump(excludedByCode, "AFFINITY_BELOW_MINIMUM"); continue;
       }

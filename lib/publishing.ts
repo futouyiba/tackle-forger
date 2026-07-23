@@ -41,6 +41,12 @@ import { structuralPullParameterKey } from "./projection-matcher";
 import type { ModelAffixValueAssessment } from "./quality-value-policy";
 import type { PricingTrialResult } from "./pricing-policy";
 import {
+  derivePerformanceSummary,
+  unavailablePerformanceSummary,
+  type PerformanceSummaryDefinition,
+  type PerformanceSummarySnapshot,
+} from "./performance-summary";
+import {
   assertSeriesItemPartChainEnabled,
 } from "./enabled-item-parts";
 
@@ -87,6 +93,8 @@ export interface PublishModelInput {
   affinityReport: AffinityScoreResult;
   qualityReport: AffixQualityEvaluation;
   qualityValueAssessment?: ModelAffixValueAssessment;
+  performanceSummaryDefinition?: PerformanceSummaryDefinition;
+  performanceSummary?: PerformanceSummarySnapshot;
   pricingPolicyVersion?: string;
   automaticPricing?: PricingTrialResult;
   validationReport: ValidationIssue[];
@@ -189,6 +197,17 @@ export function publishConfigurationSnapshot(
     ...(input.fiveAxisPreview?.tackleFitComparison.validationIssues ?? []),
   ];
   const blocking = errors(combinedValidationReport);
+  const derivedPerformanceSummary = input.publicationMode === "new_formal"
+    ? derivePerformanceSummary({
+        subjectId: input.model.id,
+        subjectRevisionId: String(input.model.revision),
+        definition: input.performanceSummaryDefinition,
+        technologyIds: input.technologyIds,
+        affixIds: [...input.attributeAffixIds, ...input.passiveAffixIds],
+        finalPanelValues: input.finalPanelValues,
+        attributeTrace: input.projection.trace,
+      })
+    : input.performanceSummary;
   if (!input.compatibilityReport.allowed) {
     blocking.push({
       level: "error",
@@ -224,6 +243,17 @@ export function publishConfigurationSnapshot(
         message: "新 Snapshot 必须绑定同一已发布 PricingPolicyVersion 的正式自动价格。",
       });
     }
+  }
+  if (
+    input.publicationMode === "new_formal"
+    && input.performanceSummary
+    && deterministicHash(input.performanceSummary) !== deterministicHash(derivedPerformanceSummary)
+  ) {
+    blocking.push({
+      level: "error",
+      code: "PERFORMANCE_SUMMARY_REFERENCE_MISMATCH",
+      message: "调用方提供的派生性能摘要与服务端按 Model revision、定义和冻结输入重算的结果不一致。",
+    });
   }
   const unconfirmedWarnings = warnings(combinedValidationReport).filter(
     (warning) => !input.warningConfirmations[warning.code]?.trim(),
@@ -323,6 +353,13 @@ export function publishConfigurationSnapshot(
     qualityReport: structuredClone(input.qualityReport),
     ...(input.qualityValueAssessment
       ? { qualityValueAssessment: structuredClone(input.qualityValueAssessment) }
+      : {}),
+    ...(input.publicationMode === "new_formal" || derivedPerformanceSummary
+      ? {
+          performanceSummary: structuredClone(
+            derivedPerformanceSummary ?? unavailablePerformanceSummary(),
+          ),
+        }
       : {}),
     ...(input.pricingPolicyVersion
       ? { pricingPolicyVersion: input.pricingPolicyVersion }

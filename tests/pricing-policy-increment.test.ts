@@ -206,5 +206,10 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
   assert.equal(snapshot.pricingPolicyVersion, version.id);
   assert.equal(snapshot.automaticPricing?.formal, true);
   assert.equal(snapshot.qualityValueAssessment?.formal, true);
+  assert.deepEqual(snapshot.performanceSummary, {
+    status: "UNAVAILABLE",
+    reason: "definition_missing",
+  });
   assert.equal(verifySnapshotIntegrity(snapshot), true);
+  assert.equal(verifySnapshotIntegrity(oldSnapshot), true);
 });

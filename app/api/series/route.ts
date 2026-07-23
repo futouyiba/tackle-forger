@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requestUser } from "@/lib/auth";
 import {
   defaultAffinityAxisWeights,
-  evaluateAffinity,
+  evaluateCanonicalAffinity,
   evaluateStructuralHardCompatibility,
   structuralCompatibilityContext,
 } from "@/lib/compatibility";
@@ -40,7 +40,6 @@ interface SeriesCreateRequest {
   typeId: string;
   functionId: string;
   qualityId: SeriesDefinition["qualityId"];
-  performanceId?: string;
   functionIntensity: 1 | 2 | 3;
   planningMinKgf?: string;
   planningMaxKgf?: string;
@@ -75,13 +74,32 @@ export async function POST(request: NextRequest) {
   if (!body || typeof body !== "object") {
     return NextResponse.json({ error: "请求体无效。" }, { status: 400 });
   }
+  if (
+    "performanceId" in body
+    && typeof (body as Record<string, unknown>).performanceId !== "string"
+  ) {
+    return NextResponse.json(
+      { error: "字段 performanceId 必须是字符串。", field: "performanceId" },
+      { status: 400 },
+    );
+  }
+  if (
+    "performanceId" in body
+    && String((body as Record<string, unknown>).performanceId).trim()
+  ) {
+    return NextResponse.json({
+      error: "Performance 已改为配置完成后的只读派生摘要，不能作为 Series 创建输入。",
+      code: "PERFORMANCE_INPUT_NOT_ALLOWED",
+      field: "performanceId",
+    }, { status: 422 });
+  }
 
   const requiredStringFields = [
     "idempotencyKey", "seriesId", "name", "concept", "itemPartId", "methodId",
     "typeId", "functionId", "qualityId", "discretePulls",
   ] as const satisfies readonly (keyof SeriesCreateRequest)[];
   const optionalStringFields = [
-    "collectionId", "performanceId", "planningMinKgf", "planningMaxKgf",
+    "collectionId", "planningMinKgf", "planningMaxKgf",
   ] as const satisfies readonly (keyof SeriesCreateRequest)[];
   const invalidField = requiredStringFields.find((field) => typeof body[field] !== "string")
     ?? optionalStringFields.find(
@@ -158,7 +176,6 @@ export async function POST(request: NextRequest) {
     typeId: body.typeId,
     functionId: body.functionId,
     qualityId: body.qualityId,
-    performanceId: body.performanceId || null,
     functionIntensity: body.functionIntensity,
     planningMinKgf: minKgf ?? null,
     planningMaxKgf: maxKgf ?? null,
@@ -208,9 +225,6 @@ export async function POST(request: NextRequest) {
   if (body.collectionId && !state.collections.some((entry) => entry.id === body.collectionId)) {
     return NextResponse.json({ error: "所选 Collection 不存在。" }, { status: 422 });
   }
-  if (body.performanceId && !state.performanceProfiles.some((entry) => entry.id === body.performanceId && entry.enabled)) {
-    return NextResponse.json({ error: "所选性能方向不存在或未启用。" }, { status: 422 });
-  }
   const ruleSet = [...state.ruleSetVersions]
     .filter((entry) => entry.status === "published")
     .sort((left, right) => right.version - left.version || right.id.localeCompare(left.id))[0];
@@ -231,7 +245,6 @@ export async function POST(request: NextRequest) {
     qualityId: body.qualityId,
     coreFunctionId: body.functionId,
     functionIntensityPolicy: { mode: "fixed", intensity: body.functionIntensity },
-    ...(body.performanceId ? { performanceProfileId: body.performanceId } : {}),
     coreAffixIds: [],
     secondaryAffixPoolIds: [],
     forbiddenAffixIds: [],
@@ -280,14 +293,13 @@ export async function POST(request: NextRequest) {
                 }),
                 state.compatibilityRules,
               ),
-              affinity: evaluateAffinity(
+              affinity: evaluateCanonicalAffinity(
                 {
                   methodId: body.methodId,
                   typeId: body.typeId,
                   targetPullKg: pull,
                   functionId: body.functionId,
                   functionIntensity: body.functionIntensity,
-                  performanceId: body.performanceId || undefined,
                   qualityId: body.qualityId,
                   itemPartId: body.itemPartId,
                   componentIds: [],

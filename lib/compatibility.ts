@@ -363,6 +363,33 @@ export function evaluateAffinity(
   };
 }
 
+/**
+ * 新规范化运行时的 Affinity。旧 function_performance 轴与 performanceId 选择器
+ * 只供历史结果重放，不进入新候选、Series 或 Model 的兼容评分。
+ */
+export function evaluateCanonicalAffinity(
+  context: CompatibilityContext,
+  rules: AffinityRule[],
+  axisWeights: AffinityAxisWeights,
+): AffinityScoreResult {
+  const canonicalContext = { ...context, performanceId: undefined };
+  const result = evaluateAffinity(
+    canonicalContext,
+    rules.filter(
+      (rule) =>
+        rule.axis !== "function_performance"
+        && rule.selector.performanceId === undefined,
+    ),
+    { ...axisWeights, function_performance: 0 },
+  );
+  return {
+    ...result,
+    warnings: result.warnings.filter(
+      (warning) => !warning.includes("function_performance"),
+    ),
+  };
+}
+
 export const defaultAffinityAxisWeights: AffinityAxisWeights = {
   method_type: 1,
   type_weight: 1,

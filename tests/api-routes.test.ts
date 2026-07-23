@@ -215,7 +215,7 @@ test("Series 路由拒绝非法强度、品质引用和拉力 token", { concurre
     [{ functionId: "function:missing" }, "功能定位"],
     [{ qualityId: "quality:missing" }, "品质"],
     [{ collectionId: "collection:missing" }, "Collection"],
-    [{ performanceId: "performance:missing" }, "性能方向"],
+    [{ performanceId: "performance:missing" }, "Performance"],
     [{ discretePulls: "1.5, abc, 1.5" }, "非法或重复项"],
   ] as const) {
     const response = await createSeries(new NextRequest("http://localhost/api/series", {

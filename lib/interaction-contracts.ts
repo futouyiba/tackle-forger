@@ -28,6 +28,8 @@ export type CapabilityCode =
   | "data_source.resolve" | "data_source.preview" | "data_source.publish"
   | "data_source.writeback.preview" | "data_source.writeback.commit"
   | "excel.import" | "revision.read"
+  | "config.id.reserve" | "config.id.policy.publish" | "config.id.legacy_import" | "config.id.ledger.correct"
+  | "config.target.scan" | "config.target.scan.approve" | "config.target.catalog.publish"
   | "config.export.preview" | "config.export.commit"
   | "rules.five_axis.publish" | "workspace.policy.manage" | "workspace.save";
 
@@ -43,6 +45,9 @@ export type ActionCode =
   | "resolve_data_source" | "preview_data_source" | "publish_data_source"
   | "preview_data_source_writeback" | "commit_data_source_writeback"
   | "import_excel" | "view_revisions"
+  | "reserve_config_id_bundle" | "publish_config_id_policy"
+  | "import_legacy_config_id" | "correct_config_id_ledger_metadata"
+  | "scan_config_target" | "approve_config_target_scan" | "publish_config_target_catalog"
   | "preview_config_export" | "commit_config_export"
   | "publish_five_axis_definition" | "manage_workspace_policy" | "save_workspace";
 
@@ -55,6 +60,9 @@ export const ACTION_CODES: ActionCode[] = [
   "inspect_feishu_workbook", "pull_feishu_workbook", "create_ruleset_draft", "publish_ruleset", "write_feishu_identity",
   "resolve_data_source", "preview_data_source", "publish_data_source",
   "preview_data_source_writeback", "commit_data_source_writeback", "import_excel", "view_revisions",
+  "reserve_config_id_bundle", "publish_config_id_policy",
+  "import_legacy_config_id", "correct_config_id_ledger_metadata",
+  "scan_config_target", "approve_config_target_scan", "publish_config_target_catalog",
   "preview_config_export", "commit_config_export", "publish_five_axis_definition",
   "manage_workspace_policy",
   "save_workspace",
@@ -65,7 +73,9 @@ export interface EntityRef {
   entityType:
     | "collection" | "series" | "sku_drawer" | "model"
     | "configuration_snapshot" | "model_candidate" | "adjustment_patch"
-    | "upgrade_candidate" | "rule_source_change_draft" | "feishu_rule_proposal";
+    | "upgrade_candidate" | "rule_source_change_draft" | "feishu_rule_proposal"
+    | "config_id_bundle" | "config_id_policy" | "config_target_catalog"
+    | "config_target_scan_manifest";
   entityId: string;
   revisionId: string;
 }
@@ -551,6 +561,13 @@ const ACTION_CAPABILITIES: Partial<Record<ActionCode, CapabilityCode[]>> = {
   commit_data_source_writeback: ["data_source.writeback.commit"],
   import_excel: ["excel.import"],
   view_revisions: ["revision.read"],
+  reserve_config_id_bundle: ["config.id.reserve"],
+  publish_config_id_policy: ["config.id.policy.publish"],
+  import_legacy_config_id: ["config.id.legacy_import"],
+  correct_config_id_ledger_metadata: ["config.id.ledger.correct"],
+  scan_config_target: ["config.target.scan"],
+  approve_config_target_scan: ["config.target.scan.approve"],
+  publish_config_target_catalog: ["config.target.catalog.publish"],
   preview_config_export: ["config.export.preview"],
   commit_config_export: ["config.export.commit"],
   publish_five_axis_definition: ["rules.five_axis.publish"],

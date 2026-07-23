@@ -10,6 +10,7 @@ import type {
   EntityRef,
 } from "./interaction-contracts";
 import { actionAvailability } from "./interaction-contracts";
+export { transitionPatchState } from "./patch-state";
 
 export interface CandidateGenerationRequest {
   requestId: string;
@@ -285,28 +286,6 @@ export function createUnifiedIssue(input: Omit<
 }
 
 export type PatchWorkflowState = PatchState;
-
-const PATCH_TRANSITIONS: Record<PatchWorkflowState, PatchWorkflowState[]> = {
-  DRAFT: ["PENDING_REVIEW", "WITHDRAWN", "SUPERSEDED"],
-  PENDING_REVIEW: ["APPROVED", "REBASE_REQUIRED", "WITHDRAWN", "SUPERSEDED"],
-  APPROVED: ["ACTIVE", "REBASE_REQUIRED", "WITHDRAWN", "SUPERSEDED"],
-  ACTIVE: ["REBASE_REQUIRED", "ABSORBED", "PARTIALLY_ABSORBED"],
-  REBASE_REQUIRED: ["SUPERSEDED"],
-  ABSORBED: [],
-  PARTIALLY_ABSORBED: [],
-  WITHDRAWN: [],
-  SUPERSEDED: [],
-};
-
-export function transitionPatchState(
-  current: PatchWorkflowState,
-  next: PatchWorkflowState,
-): PatchWorkflowState {
-  if (!PATCH_TRANSITIONS[current].includes(next)) {
-    throw new Error(`非法 Patch 状态迁移：${current} → ${next}。`);
-  }
-  return next;
-}
 
 export type UpgradeWorkflowState =
   | "generated" | "analyzing" | "blocked" | "rebase_required"

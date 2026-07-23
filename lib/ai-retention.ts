@@ -227,8 +227,22 @@ export async function purgeAIAssessmentBackups(input: {
   tombstone.backupPurgeState = "PENDING";
   delete tombstone.backupPurgeLastErrorCode;
   try {
-    await input.adapter.purgeAssessmentBackups({ assessmentId: tombstone.assessmentId, tombstoneRequestedAt: tombstone.requestedAt });
-    const absent = await input.adapter.verifyAssessmentBackupsAbsent({ assessmentId: tombstone.assessmentId, tombstoneRequestedAt: tombstone.requestedAt });
+    // Recovery may arrive after the physical deletion succeeded but before its
+    // tombstone update committed. Verify first so replay does not delete twice.
+    let absent = await input.adapter.verifyAssessmentBackupsAbsent({
+      assessmentId: tombstone.assessmentId,
+      tombstoneRequestedAt: tombstone.requestedAt,
+    });
+    if (!absent) {
+      await input.adapter.purgeAssessmentBackups({
+        assessmentId: tombstone.assessmentId,
+        tombstoneRequestedAt: tombstone.requestedAt,
+      });
+      absent = await input.adapter.verifyAssessmentBackupsAbsent({
+        assessmentId: tombstone.assessmentId,
+        tombstoneRequestedAt: tombstone.requestedAt,
+      });
+    }
     if (!absent) throw new Error("AI_BACKUP_PURGE_VERIFICATION_FAILED");
     tombstone.backupPurgeState = "PURGED";
     tombstone.backupPurgedAt = occurredAt;

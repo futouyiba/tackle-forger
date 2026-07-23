@@ -4,9 +4,10 @@ import {
   AI_ASSESSMENT_PROMPT,
   AI_ASSESSMENT_PROMPT_VERSION,
   buildWorkspaceAssessmentEnvelope,
+  buildWorkspaceAssessmentRequestProjection,
   workspaceAssessmentScopeExists,
 } from "../lib/ai-assessment-request";
-import { describeFancyHubModels, prepareAIRequest } from "../lib/ai-outbound";
+import { describeFancyHubModels, prepareAIRequest, promptTemplateHash } from "../lib/ai-outbound";
 import { createSeedState } from "../lib/seed";
 
 const providerModel = describeFancyHubModels([{
@@ -39,6 +40,26 @@ test("Series 与 Model 评估请求绑定真实且随源投影变化的 snapshot
     assert.match(envelope.evidenceRefs[0]?.contentHash ?? "", /^[a-f0-9]{64}$/);
     assert.notEqual(envelope.evidenceRefs[0]?.evidenceAlias, envelope.scope.scopeAlias);
     assert.doesNotThrow(() => prepareAIRequest({ envelope }));
+
+    const retainedProjection = buildWorkspaceAssessmentRequestProjection({
+      state,
+      scope,
+      assessmentId: `assessment:${scope.scopeType}`,
+      model: providerModel,
+    });
+    assert.equal(retainedProjection.prompt, AI_ASSESSMENT_PROMPT);
+    assert.equal(
+      promptTemplateHash(retainedProjection.prompt),
+      retainedProjection.envelope.promptTemplateHash,
+    );
+    assert.deepEqual(
+      retainedProjection.requestAliasMapping.map((entry) => entry.alias),
+      [...retainedProjection.requestAliasMapping.map((entry) => entry.alias)].sort(),
+    );
+    assert.equal(retainedProjection.requestAliasMapping.length, 4);
+    assert.ok(retainedProjection.requestAliasMapping.some(
+      (entry) => entry.reference.stableLocalId === scope.scopeId,
+    ));
   }
 
   const originalModelEnvelope = buildWorkspaceAssessmentEnvelope({

@@ -98,6 +98,137 @@ test("文件留存只允许所有者读取和删除，删除幂等且立即隐�
   }
 });
 
+test("删除状态提交后审计进程中断，重试补写且不产生重复事件", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "tackle-forger-ai-retention-outbox-"));
+  const previous = {
+    dataDir: process.env.AI_RETENTION_DATA_DIR,
+    key: process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64,
+    keyVersion: process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION,
+  };
+  process.env.AI_RETENTION_DATA_DIR = path.join(root, "primary");
+  process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64 = randomBytes(32).toString("base64");
+  process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION = "key-v1";
+  let interruptAfterAppend = true;
+  try {
+    const store = createAIRuntimeStoreFromEnvironment({
+      afterRetentionAuditAppended(event) {
+        if (interruptAfterAppend && event.action === "AI_ASSESSMENT_HIDDEN") {
+          interruptAfterAppend = false;
+          throw new Error("INJECTED_CRASH_AFTER_AUDIT_APPEND");
+        }
+      },
+    });
+    await store.initialize();
+    await store.saveAssessment(record({
+      assessmentId: "assessment-outbox",
+      actorStableId: "owner-outbox",
+      createdAt: "2026-07-23T00:00:00.000Z",
+    }));
+
+    await assert.rejects(
+      store.requestAssessmentDeletion({
+        assessmentId: "assessment-outbox",
+        actorStableId: "owner-outbox",
+        now: new Date("2026-07-23T01:00:00.000Z"),
+      }),
+      /INJECTED_CRASH_AFTER_AUDIT_APPEND/,
+    );
+    const hidden = await store.readAssessmentForActor({
+      assessmentId: "assessment-outbox",
+      actorStableId: "owner-outbox",
+      includeHidden: true,
+    });
+    assert.equal(hidden?.visibility, "HIDDEN");
+    assert.equal("runtimeAuditOutbox" in (hidden ?? {}), false);
+
+    const recovered = await store.requestAssessmentDeletion({
+      assessmentId: "assessment-outbox",
+      actorStableId: "owner-outbox",
+      now: new Date("2026-07-24T00:00:00.000Z"),
+    });
+    assert.equal(recovered?.deletionTombstone?.requestedAt, "2026-07-23T01:00:00.000Z");
+    const audits = (await readFile(path.join(root, "primary", "audit.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { action: string; eventId?: string });
+    assert.equal(audits.filter((event) => event.action === "AI_ASSESSMENT_HIDDEN").length, 1);
+    assert.match(audits[0]?.eventId ?? "", /^[A-Za-z0-9_-]{32}$/);
+    const stored = JSON.parse(await readFile(
+      path.join(root, "primary", "assessments", "assessment-outbox.json"),
+      "utf8",
+    )) as { runtimeAuditOutbox?: unknown };
+    assert.equal(stored.runtimeAuditOutbox, undefined);
+  } finally {
+    if (previous.dataDir === undefined) delete process.env.AI_RETENTION_DATA_DIR;
+    else process.env.AI_RETENTION_DATA_DIR = previous.dataDir;
+    if (previous.key === undefined) delete process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64;
+    else process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64 = previous.key;
+    if (previous.keyVersion === undefined) delete process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION;
+    else process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION = previous.keyVersion;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("审计 append 前失败时保留待写事件，恢复后只写一次", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "tackle-forger-ai-retention-before-append-"));
+  const previous = {
+    dataDir: process.env.AI_RETENTION_DATA_DIR,
+    key: process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64,
+    keyVersion: process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION,
+  };
+  process.env.AI_RETENTION_DATA_DIR = path.join(root, "primary");
+  process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64 = randomBytes(32).toString("base64");
+  process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION = "key-v1";
+  let interruptBeforeAppend = true;
+  try {
+    const store = createAIRuntimeStoreFromEnvironment({
+      beforeRetentionAuditAppend(event) {
+        if (interruptBeforeAppend && event.action === "AI_ASSESSMENT_HIDDEN") {
+          interruptBeforeAppend = false;
+          throw new Error("INJECTED_FAILURE_BEFORE_AUDIT_APPEND");
+        }
+      },
+    });
+    await store.initialize();
+    await store.saveAssessment(record({
+      assessmentId: "assessment-before-append",
+      actorStableId: "owner-before-append",
+      createdAt: "2026-07-23T00:00:00.000Z",
+    }));
+    await assert.rejects(
+      store.requestAssessmentDeletion({
+        assessmentId: "assessment-before-append",
+        actorStableId: "owner-before-append",
+        now: new Date("2026-07-23T01:00:00.000Z"),
+      }),
+      /INJECTED_FAILURE_BEFORE_AUDIT_APPEND/,
+    );
+    assert.equal(
+      await readFile(path.join(root, "primary", "audit.jsonl"), "utf8").then(() => true).catch(() => false),
+      false,
+    );
+
+    await store.requestAssessmentDeletion({
+      assessmentId: "assessment-before-append",
+      actorStableId: "owner-before-append",
+      now: new Date("2026-07-24T00:00:00.000Z"),
+    });
+    const audits = (await readFile(path.join(root, "primary", "audit.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { action: string });
+    assert.equal(audits.filter((event) => event.action === "AI_ASSESSMENT_HIDDEN").length, 1);
+  } finally {
+    if (previous.dataDir === undefined) delete process.env.AI_RETENTION_DATA_DIR;
+    else process.env.AI_RETENTION_DATA_DIR = previous.dataDir;
+    if (previous.key === undefined) delete process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64;
+    else process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64 = previous.key;
+    if (previous.keyVersion === undefined) delete process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION;
+    else process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION = previous.keyVersion;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("全量 sweep 清除主内容，并按 assessmentId 删除所有备份且回读确认", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "tackle-forger-ai-retention-sweep-"));
   const primary = path.join(root, "primary");
@@ -148,6 +279,113 @@ test("全量 sweep 清除主内容，并按 assessmentId 删除所有备份且�
     const audit = await readFile(path.join(primary, "audit.jsonl"), "utf8");
     assert.match(audit, /"action":"AI_PRIMARY_CONTENT_PURGED"/);
     assert.match(audit, /"action":"AI_BACKUP_PURGED"/);
+  } finally {
+    if (previous.dataDir === undefined) delete process.env.AI_RETENTION_DATA_DIR;
+    else process.env.AI_RETENTION_DATA_DIR = previous.dataDir;
+    if (previous.key === undefined) delete process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64;
+    else process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64 = previous.key;
+    if (previous.keyVersion === undefined) delete process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION;
+    else process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION = previous.keyVersion;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("备份清除审计中断后重试只补账，不重复执行物理删除", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "tackle-forger-ai-retention-purge-outbox-"));
+  const primary = path.join(root, "primary");
+  const backups = path.join(root, "backups");
+  const previous = {
+    dataDir: process.env.AI_RETENTION_DATA_DIR,
+    key: process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64,
+    keyVersion: process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION,
+  };
+  process.env.AI_RETENTION_DATA_DIR = primary;
+  process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64 = randomBytes(32).toString("base64");
+  process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION = "key-v1";
+  let interruptBeforeCommit = false;
+  let interruptBackupAudit = false;
+  let purgeCalls = 0;
+  try {
+    const store = createAIRuntimeStoreFromEnvironment({
+      afterRetentionAuditAppended(event) {
+        if (interruptBackupAudit && event.action === "AI_BACKUP_PURGED") {
+          interruptBackupAudit = false;
+          throw new Error("INJECTED_CRASH_AFTER_BACKUP_AUDIT_APPEND");
+        }
+      },
+      beforeAssessmentMutationCommitted(input) {
+        if (interruptBeforeCommit
+          && input.auditEvents.some((event) => event.action === "AI_BACKUP_PURGED")) {
+          interruptBeforeCommit = false;
+          throw new Error("INJECTED_CRASH_AFTER_PHYSICAL_PURGE");
+        }
+      },
+    });
+    await store.initialize();
+    await store.saveAssessment(record({
+      assessmentId: "assessment-purge-outbox",
+      actorStableId: "owner-purge",
+      createdAt: "2026-07-23T00:00:00.000Z",
+    }));
+    const deletedAt = new Date("2026-07-23T01:00:00.000Z");
+    await store.requestAssessmentDeletion({
+      assessmentId: "assessment-purge-outbox",
+      actorStableId: "owner-purge",
+      now: deletedAt,
+    });
+    const backupFile = path.join(
+      backups,
+      "2026-07-23T03-30-00-000Z",
+      "ai-retention",
+      "assessments",
+      "assessment-purge-outbox.json",
+    );
+    await mkdir(path.dirname(backupFile), { recursive: true });
+    await writeFile(backupFile, "backup copy\n", "utf8");
+    const fileAdapter = createFileAIBackupPurgeAdapter(backups);
+    const adapter = {
+      async purgeAssessmentBackups(input: Parameters<typeof fileAdapter.purgeAssessmentBackups>[0]) {
+        purgeCalls += 1;
+        await fileAdapter.purgeAssessmentBackups(input);
+      },
+      verifyAssessmentBackupsAbsent: fileAdapter.verifyAssessmentBackupsAbsent,
+    };
+    const sweepAt = new Date(deletedAt.getTime() + 30 * 24 * 60 * 60 * 1_000);
+    interruptBeforeCommit = true;
+    await assert.rejects(
+      store.sweepRetention({ now: sweepAt, backupAdapter: adapter }),
+      /INJECTED_CRASH_AFTER_PHYSICAL_PURGE/,
+    );
+    assert.equal(purgeCalls, 1);
+    assert.equal(await lstat(backupFile).then(() => true).catch(() => false), false);
+    const notCommitted = await store.readAssessmentForActor({
+      assessmentId: "assessment-purge-outbox",
+      actorStableId: "owner-purge",
+      includeHidden: true,
+    });
+    assert.equal(notCommitted?.deletionTombstone?.backupPurgeState, undefined);
+
+    interruptBackupAudit = true;
+    await assert.rejects(
+      store.sweepRetention({ now: sweepAt, backupAdapter: adapter }),
+      /INJECTED_CRASH_AFTER_BACKUP_AUDIT_APPEND/,
+    );
+    assert.equal(purgeCalls, 1);
+
+    await store.sweepRetention({ now: sweepAt, backupAdapter: adapter });
+    assert.equal(purgeCalls, 1);
+    const audits = (await readFile(path.join(primary, "audit.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { action: string });
+    assert.equal(audits.filter((event) => event.action === "AI_BACKUP_PURGED").length, 1);
+    assert.equal(audits.filter((event) => event.action === "AI_PRIMARY_CONTENT_PURGED").length, 1);
+    const swept = await store.readAssessmentForActor({
+      assessmentId: "assessment-purge-outbox",
+      actorStableId: "owner-purge",
+      includeHidden: true,
+    });
+    assert.equal(swept?.deletionTombstone?.backupPurgeState, "PURGED");
   } finally {
     if (previous.dataDir === undefined) delete process.env.AI_RETENTION_DATA_DIR;
     else process.env.AI_RETENTION_DATA_DIR = previous.dataDir;

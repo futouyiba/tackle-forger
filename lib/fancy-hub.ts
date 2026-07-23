@@ -87,7 +87,12 @@ export type FancyHubErrorCode =
   | "AI_PROVIDER_TEMPORARILY_UNAVAILABLE";
 
 export class FancyHubError extends Error {
-  constructor(public readonly code: FancyHubErrorCode, message: string, public readonly retryable = false) {
+  constructor(
+    public readonly code: FancyHubErrorCode,
+    message: string,
+    public readonly retryable = false,
+    public readonly rawResponse?: unknown,
+  ) {
     super(message);
     this.name = "FancyHubError";
   }
@@ -143,6 +148,17 @@ export interface FancyHubTransport {
     maxOutputTokens: number;
     timeoutMs: number;
   }): Promise<unknown>;
+}
+
+export interface FancyHubRawAssessmentAttempt {
+  requestedAt: string;
+  completedAt: string;
+  modelDescriptor: AIModelDescriptorV1;
+  requestEnvelope: AIRequestEnvelopeV1;
+  canonicalRequestJson: string;
+  inputHash: string;
+  rawResponse?: unknown;
+  resultCode: string;
 }
 
 export interface FancyHubAuditEvent {
@@ -266,7 +282,10 @@ export class FetchFancyHubTransport implements FancyHubTransport {
     return target;
   }
 
-  private async request(path: "v1/models" | "v1/assessments", init: RequestInit): Promise<unknown> {
+  private async request(path: "v1/models" | "v1/assessments", init: RequestInit): Promise<{
+    value: unknown;
+    rawResponseText: string;
+  }> {
     let response: Response;
     try {
       const headers = new Headers(init.headers);
@@ -281,22 +300,36 @@ export class FetchFancyHubTransport implements FancyHubTransport {
     } catch {
       throw new FancyHubError("AI_PROVIDER_TEMPORARILY_UNAVAILABLE", "Fancy Hub 网络请求失败。", true);
     }
+    const rawResponseText = await response.text().catch(() => "");
     if (!response.ok) {
       throw new FancyHubError(
         response.status === 429 || response.status >= 500 ? "AI_PROVIDER_TEMPORARILY_UNAVAILABLE" : "AI_FANCY_HUB_RESPONSE_INVALID",
         `Fancy Hub 返回 HTTP ${response.status}。`,
         response.status === 429 || response.status >= 500,
+        rawResponseText,
       );
     }
-    try { return await response.json(); } catch { throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", "Fancy Hub 返回的 JSON 无效。" ); }
+    try {
+      return { value: JSON.parse(rawResponseText), rawResponseText };
+    } catch {
+      throw new FancyHubError(
+        "AI_FANCY_HUB_RESPONSE_INVALID",
+        "Fancy Hub 返回的 JSON 无效。",
+        false,
+        rawResponseText,
+      );
+    }
   }
 
-  listModels(input: { timeoutMs: number }): Promise<unknown> {
-    return this.request("v1/models", { method: "GET", signal: AbortSignal.timeout(input.timeoutMs) });
+  async listModels(input: { timeoutMs: number }): Promise<unknown> {
+    return (await this.request("v1/models", {
+      method: "GET",
+      signal: AbortSignal.timeout(input.timeoutMs),
+    })).value;
   }
 
-  assess(input: { canonicalJson: string; inputHash: string; model: AIModelDescriptorV1; maxOutputTokens: number; timeoutMs: number }): Promise<unknown> {
-    return this.request("v1/assessments", {
+  async assess(input: { canonicalJson: string; inputHash: string; model: AIModelDescriptorV1; maxOutputTokens: number; timeoutMs: number }): Promise<unknown> {
+    const response = await this.request("v1/assessments", {
       method: "POST",
       signal: AbortSignal.timeout(input.timeoutMs),
       headers: {
@@ -306,7 +339,15 @@ export class FetchFancyHubTransport implements FancyHubTransport {
       },
       body: input.canonicalJson,
     });
+    return new FancyHubDecodedTransportResponse(response.value, response.rawResponseText);
   }
+}
+
+class FancyHubDecodedTransportResponse {
+  constructor(
+    readonly value: unknown,
+    readonly rawResponseText: string,
+  ) {}
 }
 
 function parseModelListResponse(value: unknown): FancyHubModelListResponse {
@@ -640,6 +681,7 @@ export class FancyHubConnector {
     actorStableId: string;
     loadedCredentialValues?: readonly string[];
     buildEnvelope: (model: AIModelDescriptorV1) => AIRequestEnvelopeV1;
+    rawAttemptSink?: (attempt: FancyHubRawAssessmentAttempt) => void | Promise<void>;
     batch?: Pick<AIBatchAdmissionInput, "assessmentCount" | "inFlightForUser" | "startedAtMs">;
   }): Promise<{
     response: FancyHubAssessmentResponse;
@@ -725,19 +767,46 @@ export class FancyHubConnector {
           if (remainingMs <= 0) throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "批次已经达到 10 分钟硬期限，不再启动降级调用。" );
           attemptedModelIds.push(model.modelId);
           auditAttemptedModelIds.push(model.modelId);
+          const attemptRequestedAt = new Date().toISOString();
+          let rawResponse: unknown;
+          let rawAttemptEmitted = false;
+          const emitRawAttempt = async (resultCode: string) => {
+            if (rawAttemptEmitted || !input.rawAttemptSink) return;
+            rawAttemptEmitted = true;
+            await input.rawAttemptSink({
+              requestedAt: attemptRequestedAt,
+              completedAt: new Date().toISOString(),
+              modelDescriptor: structuredClone(model),
+              requestEnvelope: structuredClone(prepared.envelope),
+              canonicalRequestJson: prepared.canonicalJson,
+              inputHash: prepared.inputHash,
+              ...(rawResponse === undefined ? {} : { rawResponse }),
+              resultCode,
+            });
+          };
           try {
             await lease.consumeAssessmentRequest({ nowMs: Date.now(), maxRequestsPerMinute: limits.maxRequestsPerMinute });
-            const response = parseAssessmentResponse(await this.transport.assess({
+            const transportResponse = await this.transport.assess({
               canonicalJson: prepared.canonicalJson,
               inputHash: prepared.inputHash,
               model,
               maxOutputTokens: Math.min(modelEstimate.outputTokens, limits.maxOutputTokens),
               timeoutMs: Math.min(limits.requestTimeoutMs, remainingMs),
-            }), authorizedResponseAliases(prepared.envelope));
+            });
+            rawResponse = transportResponse instanceof FancyHubDecodedTransportResponse
+              ? transportResponse.rawResponseText
+              : transportResponse;
+            const response = parseAssessmentResponse(
+              transportResponse instanceof FancyHubDecodedTransportResponse
+                ? transportResponse.value
+                : transportResponse,
+              authorizedResponseAliases(prepared.envelope),
+            );
             if (!sameModelDescriptor(response.model, model)) throw new FancyHubError("AI_MODEL_REVISION_MISMATCH", "Fancy Hub 响应模型描述与请求不一致。" );
             if (response.usage.inputTokens > limits.maxInputTokens || response.usage.outputTokens > limits.maxOutputTokens || response.usage.costMicroUsd > limits.maxCostMicroUsdPerRequest) {
               throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "Fancy Hub 响应用量超过硬上限。" );
             }
+            await emitRawAttempt("SUCCESS");
             await this.auditSink({
               action: "AI_FANCY_HUB_ASSESSMENT",
               workspaceId: input.workspaceId,
@@ -760,6 +829,14 @@ export class FancyHubConnector {
               canonicalRequestJson: prepared.canonicalJson,
             };
           } catch (error) {
+            if (rawResponse === undefined && error instanceof FancyHubError && error.rawResponse !== undefined) {
+              rawResponse = error.rawResponse;
+            }
+            await emitRawAttempt(
+              error instanceof FancyHubError || error instanceof AIOutboundError
+                ? error.code
+                : "AI_UNKNOWN_FAILURE",
+            );
             if (error instanceof FancyHubError && error.retryable) { lastRetryable = error; continue; }
             throw error;
           }

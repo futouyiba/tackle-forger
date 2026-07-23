@@ -14,8 +14,10 @@ import {
 } from "./ai-retention";
 import {
   AI_PROVIDER_POLICY_VERSION,
-  jcsCanonicalize,
+  promptTemplateHash,
   type AIRequestEnvelopeV1,
+  type LocalAliasReferenceV1,
+  type RequestAlias,
 } from "./ai-outbound";
 import {
   FancyHubError,
@@ -24,6 +26,7 @@ import {
   type FancyHubAdmissionLease,
   type FancyHubAssessmentResponse,
   type FancyHubAuditEvent,
+  type FancyHubRawAssessmentAttempt,
 } from "./fancy-hub";
 
 const LOCK_RETRIES = 100;
@@ -41,6 +44,15 @@ interface AIRuntimeStoreConfig {
   dataDir: string;
   encryptionKey: Uint8Array;
   encryptionKeyVersion: string;
+}
+
+export interface AIRuntimeStoreFaultHooks {
+  beforeRetentionAuditAppend?: (event: AIRetentionAuditEvent & { eventId: string }) => Promise<void> | void;
+  afterRetentionAuditAppended?: (event: AIRetentionAuditEvent & { eventId: string }) => Promise<void> | void;
+  beforeAssessmentMutationCommitted?: (input: {
+    assessmentId: string;
+    auditEvents: AIRetentionAuditEvent[];
+  }) => Promise<void> | void;
 }
 
 interface AIAdmissionDocument {
@@ -64,6 +76,14 @@ export interface AIRetentionSweepSummary {
   auditEventsWritten: number;
   backupPurgeFailures: number;
 }
+
+interface StoredAIRetentionAuditEvent extends AIRetentionAuditEvent {
+  eventId: string;
+}
+
+type StoredAIAssessmentRetentionRecord = AIAssessmentRetentionRecord & {
+  runtimeAuditOutbox?: StoredAIRetentionAuditEvent[];
+};
 
 const EMPTY_ADMISSION_DOCUMENT: AIAdmissionDocument = {
   version: 1,
@@ -117,7 +137,10 @@ export class FileAIRuntimeStore {
   private readonly auditFile: string;
   private readonly admissionFile: string;
 
-  constructor(private readonly config: AIRuntimeStoreConfig) {
+  constructor(
+    private readonly config: AIRuntimeStoreConfig,
+    private readonly faultHooks: AIRuntimeStoreFaultHooks = {},
+  ) {
     this.assessmentsDir = path.join(config.dataDir, "assessments");
     this.auditFile = path.join(config.dataDir, "audit.jsonl");
     this.admissionFile = path.join(config.dataDir, "admission.json");
@@ -130,11 +153,16 @@ export class FileAIRuntimeStore {
     return path.join(this.assessmentsDir, `${assessmentId}.json`);
   }
 
-  private async readAssessmentFile(target: string): Promise<AIAssessmentRetentionRecord | undefined> {
+  private async readAssessmentFile(target: string): Promise<StoredAIAssessmentRetentionRecord | undefined> {
     try {
-      const parsed = JSON.parse(await readFile(target, "utf8")) as AIAssessmentRetentionRecord;
+      const parsed = JSON.parse(await readFile(target, "utf8")) as StoredAIAssessmentRetentionRecord;
       if (!parsed || typeof parsed !== "object" || parsed.policyVersion !== AI_RETENTION_POLICY_VERSION) {
         throw new AIRuntimeStoreError("AI_RETENTION_STORE_UNAVAILABLE", "AI 留存记录格式无效。");
+      }
+      if (parsed.runtimeAuditOutbox && (!Array.isArray(parsed.runtimeAuditOutbox)
+        || parsed.runtimeAuditOutbox.some((event) => !event || typeof event !== "object"
+          || typeof event.eventId !== "string" || !/^[A-Za-z0-9_-]{32}$/.test(event.eventId)))) {
+        throw new AIRuntimeStoreError("AI_RETENTION_STORE_UNAVAILABLE", "AI 留存审计待写队列格式无效。");
       }
       return parsed;
     } catch (error) {
@@ -144,7 +172,7 @@ export class FileAIRuntimeStore {
     }
   }
 
-  private async writeAssessmentFile(target: string, record: AIAssessmentRetentionRecord): Promise<void> {
+  private async writeAssessmentFile(target: string, record: StoredAIAssessmentRetentionRecord): Promise<void> {
     const temporary = `${target}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
     await writeFile(temporary, `${JSON.stringify(record)}\n`, { encoding: "utf8", mode: 0o600 });
     await rename(temporary, target);
@@ -152,7 +180,7 @@ export class FileAIRuntimeStore {
 
   private async mutateAssessment<T>(
     assessmentId: string,
-    operation: (record: AIAssessmentRetentionRecord | undefined) => Promise<{ record?: AIAssessmentRetentionRecord; result: T }> | { record?: AIAssessmentRetentionRecord; result: T },
+    operation: (record: StoredAIAssessmentRetentionRecord | undefined) => Promise<{ record?: StoredAIAssessmentRetentionRecord; result: T }> | { record?: StoredAIAssessmentRetentionRecord; result: T },
   ): Promise<T> {
     await mkdir(this.assessmentsDir, { recursive: true, mode: 0o700 });
     const target = this.assessmentTarget(assessmentId);
@@ -162,6 +190,102 @@ export class FileAIRuntimeStore {
       const next = await operation(current ? structuredClone(current) : undefined);
       if (next.record) await this.writeAssessmentFile(target, next.record);
       return next.result;
+    } finally {
+      await release();
+    }
+  }
+
+  private publicAssessmentRecord(record: StoredAIAssessmentRetentionRecord): AIAssessmentRetentionRecord {
+    const result = structuredClone(record);
+    delete result.runtimeAuditOutbox;
+    return result;
+  }
+
+  private async appendRetentionAuditEventsOnce(events: StoredAIRetentionAuditEvent[]): Promise<number> {
+    if (events.length === 0) return 0;
+    await mkdir(this.config.dataDir, { recursive: true, mode: 0o700 });
+    const release = await acquireLock(this.auditFile);
+    try {
+      const existingIds = new Set<string>();
+      try {
+        const content = await readFile(this.auditFile, "utf8");
+        for (const line of content.split("\n")) {
+          if (!line) continue;
+          const event = JSON.parse(line) as { eventId?: unknown };
+          if (typeof event.eventId === "string") existingIds.add(event.eventId);
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      let written = 0;
+      for (const event of events) {
+        if (existingIds.has(event.eventId)) continue;
+        await this.faultHooks.beforeRetentionAuditAppend?.(structuredClone(event));
+        await appendFile(this.auditFile, `${JSON.stringify(event)}\n`, { encoding: "utf8", mode: 0o600 });
+        existingIds.add(event.eventId);
+        written += 1;
+        await this.faultHooks.afterRetentionAuditAppended?.(structuredClone(event));
+      }
+      return written;
+    } finally {
+      await release();
+    }
+  }
+
+  private async flushAssessmentAuditOutbox(
+    target: string,
+    record: StoredAIAssessmentRetentionRecord,
+  ): Promise<number> {
+    const events = record.runtimeAuditOutbox ?? [];
+    if (events.length === 0) return 0;
+    // The stable eventId makes replay safe if the process stopped after append
+    // but before this assessment record could acknowledge the outbox.
+    const written = await this.appendRetentionAuditEventsOnce(events);
+    delete record.runtimeAuditOutbox;
+    await this.writeAssessmentFile(target, record);
+    return written;
+  }
+
+  private async mutateAssessmentWithAudit<T>(
+    assessmentId: string,
+    operation: (record: StoredAIAssessmentRetentionRecord | undefined) => Promise<{
+      record?: StoredAIAssessmentRetentionRecord;
+      result: T;
+      auditEvents?: AIRetentionAuditEvent[];
+    }> | {
+      record?: StoredAIAssessmentRetentionRecord;
+      result: T;
+      auditEvents?: AIRetentionAuditEvent[];
+    },
+  ): Promise<{ result: T; auditEventsWritten: number }> {
+    await mkdir(this.assessmentsDir, { recursive: true, mode: 0o700 });
+    const target = this.assessmentTarget(assessmentId);
+    const release = await acquireLock(target);
+    try {
+      let current = await this.readAssessmentFile(target);
+      let auditEventsWritten = current
+        ? await this.flushAssessmentAuditOutbox(target, current)
+        : 0;
+      const next = await operation(current ? structuredClone(current) : undefined);
+      if (next.record) {
+        current = next.record;
+        await this.faultHooks.beforeAssessmentMutationCommitted?.({
+          assessmentId,
+          auditEvents: structuredClone(next.auditEvents ?? []),
+        });
+        if (next.auditEvents?.length) {
+          current.runtimeAuditOutbox = [
+            ...(current.runtimeAuditOutbox ?? []),
+            ...next.auditEvents.map((event) => ({
+              ...event,
+              eventId: randomBytes(24).toString("base64url"),
+            })),
+          ];
+        }
+        await this.writeAssessmentFile(target, current);
+        auditEventsWritten += await this.flushAssessmentAuditOutbox(target, current);
+      }
+      return { result: next.result, auditEventsWritten };
     } finally {
       await release();
     }
@@ -292,7 +416,7 @@ export class FileAIRuntimeStore {
         return undefined;
       }
     }
-    return structuredClone(record);
+    return this.publicAssessmentRecord(record);
   }
 
   async requestAssessmentDeletion(input: {
@@ -301,25 +425,26 @@ export class FileAIRuntimeStore {
     now?: Date;
   }): Promise<AIAssessmentRetentionRecord | undefined> {
     const now = input.now ?? new Date();
-    let auditEvents: AIRetentionSweepResult["auditEvents"] = [];
-    const result = await this.mutateAssessment(input.assessmentId, (record) => {
+    const transaction = await this.mutateAssessmentWithAudit(input.assessmentId, (record) => {
       if (!record || record.metadata?.actorStableId !== input.actorStableId) {
         return { result: undefined };
       }
-      if (record.deletionTombstone) return { record, result: structuredClone(record) };
+      if (record.deletionTombstone) {
+        return { record, result: this.publicAssessmentRecord(record) };
+      }
       const deleted = requestAIAssessmentDeletion({ record, requestedBy: input.actorStableId, now });
-      auditEvents = deleted.auditEvents;
-      return { record: deleted.record, result: structuredClone(deleted.record) };
+      return {
+        record: deleted.record,
+        result: this.publicAssessmentRecord(deleted.record),
+        auditEvents: deleted.auditEvents.map((event) => ({
+          ...event,
+          assessmentId: input.assessmentId,
+          actorStableId: input.actorStableId,
+          resultCode: "SUCCESS",
+        })),
+      };
     });
-    for (const event of auditEvents) {
-      await this.appendAuditEvent({
-        ...event,
-        assessmentId: input.assessmentId,
-        actorStableId: input.actorStableId,
-        resultCode: "SUCCESS",
-      });
-    }
-    return result;
+    return transaction.result;
   }
 
   async sweepRetention(input: {
@@ -339,30 +464,31 @@ export class FileAIRuntimeStore {
       backupPurgeFailures: 0,
     };
     for (const id of assessmentIds) {
-      let events: AIRetentionSweepResult["auditEvents"] = [];
       let actorStableId: string | undefined;
-      await this.mutateAssessment(id, async (record) => {
+      let backupPurgeFailures = 0;
+      const transaction = await this.mutateAssessmentWithAudit(id, async (record) => {
         if (!record) return { result: undefined };
         actorStableId = record.metadata?.actorStableId ?? record.deletionTombstone?.requestedBy;
         const before = JSON.stringify(record);
         let swept = sweepAIAssessmentRetention({ record, now });
-        events = [...swept.auditEvents];
+        const events = [...swept.auditEvents];
         swept = await purgeAIAssessmentBackups({ record: swept.record, now, adapter: input.backupAdapter });
         events.push(...swept.auditEvents);
         if (JSON.stringify(swept.record) !== before) summary.recordsChanged += 1;
-        return { record: swept.record, result: undefined };
+        backupPurgeFailures = events.filter((event) => event.action === "AI_BACKUP_PURGE_FAILED").length;
+        return {
+          record: swept.record,
+          result: undefined,
+          auditEvents: events.map((event) => ({
+            ...event,
+            assessmentId: id,
+            actorStableId,
+            resultCode: event.action === "AI_BACKUP_PURGE_FAILED" ? "FAILED" : "SUCCESS",
+          })),
+        };
       });
-      for (const event of events) {
-        const failed = event.action === "AI_BACKUP_PURGE_FAILED";
-        if (failed) summary.backupPurgeFailures += 1;
-        await this.appendAuditEvent({
-          ...event,
-          assessmentId: id,
-          actorStableId,
-          resultCode: failed ? "FAILED" : "SUCCESS",
-        });
-        summary.auditEventsWritten += 1;
-      }
+      summary.backupPurgeFailures += backupPurgeFailures;
+      summary.auditEventsWritten += transaction.auditEventsWritten;
     }
     return summary;
   }
@@ -377,10 +503,19 @@ export class FileAIRuntimeStore {
     canonicalRequestJson: string;
     inputHash: string;
     response: FancyHubAssessmentResponse;
+    prompt: string;
+    requestAliasMapping: Array<{
+      alias: RequestAlias;
+      reference: LocalAliasReferenceV1;
+    }>;
+    rawAttempts: readonly FancyHubRawAssessmentAttempt[];
   }): AIAssessmentRetentionRecord {
-    const rawContent = jcsCanonicalize({
-      request: JSON.parse(input.canonicalRequestJson),
-      response: input.response,
+    const rawContent = this.rawAssessmentContent({
+      assessmentId: input.assessmentId,
+      prompt: input.prompt,
+      promptTemplateHash: input.requestEnvelope.promptTemplateHash,
+      requestAliasMapping: input.requestAliasMapping,
+      rawAttempts: input.rawAttempts,
     });
     const durationMs = Math.max(0, Date.parse(input.completedAt) - Date.parse(input.requestedAt));
     return {
@@ -425,10 +560,125 @@ export class FileAIRuntimeStore {
       visibility: "VISIBLE",
     };
   }
+
+  failedAssessmentRecord(input: {
+    assessmentId: string;
+    actorStableId: string;
+    scopeStableRef: string;
+    requestedAt: string;
+    completedAt: string;
+    resultCode: string;
+    prompt: string;
+    requestAliasMapping: Array<{
+      alias: RequestAlias;
+      reference: LocalAliasReferenceV1;
+    }>;
+    rawAttempts: readonly FancyHubRawAssessmentAttempt[];
+  }): AIAssessmentRetentionRecord {
+    const lastAttempt = input.rawAttempts.at(-1);
+    if (!lastAttempt) {
+      throw new AIRuntimeStoreError(
+        "AI_RETENTION_STORE_UNAVAILABLE",
+        "没有实际 provider 调用的失败不能伪造原始响应留存记录。",
+      );
+    }
+    const rawContent = this.rawAssessmentContent({
+      assessmentId: input.assessmentId,
+      prompt: input.prompt,
+      promptTemplateHash: lastAttempt.requestEnvelope.promptTemplateHash,
+      requestAliasMapping: input.requestAliasMapping,
+      rawAttempts: input.rawAttempts,
+    });
+    const durationMs = Math.max(0, Date.parse(input.completedAt) - Date.parse(input.requestedAt));
+    return {
+      policyVersion: AI_RETENTION_POLICY_VERSION,
+      metadata: {
+        assessmentId: input.assessmentId,
+        actorStableId: input.actorStableId,
+        scopeStableRef: input.scopeStableRef,
+        modelDescriptor: structuredClone(lastAttempt.modelDescriptor),
+        promptTemplateVersion: lastAttempt.requestEnvelope.promptTemplateVersion,
+        promptTemplateHash: lastAttempt.requestEnvelope.promptTemplateHash,
+        schemaVersion: lastAttempt.requestEnvelope.schemaVersion,
+        allowlistPolicyVersion: AI_PROVIDER_POLICY_VERSION,
+        inputHash: lastAttempt.inputHash,
+        requestedAt: input.requestedAt,
+        completedAt: input.completedAt,
+        durationMs,
+        resultCode: input.resultCode,
+        state: "ACTIVE",
+      },
+      encryptedRawContent: encryptAIRawContent({
+        assessmentId: input.assessmentId,
+        plaintext: rawContent,
+        key: this.config.encryptionKey,
+        keyVersion: this.config.encryptionKeyVersion,
+      }),
+      rawContentCreatedAt: input.completedAt,
+      operationLogCreatedAt: input.completedAt,
+      operationLog: {
+        action: "AI_FANCY_HUB_ASSESSMENT",
+        resultCode: input.resultCode,
+      },
+      visibility: "VISIBLE",
+    };
+  }
+
+  private rawAssessmentContent(input: {
+    assessmentId: string;
+    prompt: string;
+    promptTemplateHash: string;
+    requestAliasMapping: Array<{
+      alias: RequestAlias;
+      reference: LocalAliasReferenceV1;
+    }>;
+    rawAttempts: readonly FancyHubRawAssessmentAttempt[];
+  }): string {
+    if (promptTemplateHash(input.prompt) !== input.promptTemplateHash) {
+      throw new AIRuntimeStoreError(
+        "AI_RETENTION_STORE_UNAVAILABLE",
+        "留存的完整 prompt 与实际 Envelope 中的模板 hash 不一致。",
+      );
+    }
+    if (!input.rawAttempts.length) {
+      throw new AIRuntimeStoreError(
+        "AI_RETENTION_STORE_UNAVAILABLE",
+        "实际 provider 调用缺少原始尝试记录。",
+      );
+    }
+    const aliases = input.requestAliasMapping.map((entry) => entry.alias);
+    if (aliases.some((alias) => !/^[a-z][0-9]{3,7}$/.test(alias)) || new Set(aliases).size !== aliases.length) {
+      throw new AIRuntimeStoreError(
+        "AI_RETENTION_STORE_UNAVAILABLE",
+        "请求级别名映射无效。",
+      );
+    }
+    const serialized = JSON.stringify({
+      assessmentId: input.assessmentId,
+      prompt: input.prompt,
+      requestAliasMapping: structuredClone(input.requestAliasMapping),
+      attempts: input.rawAttempts.map((attempt) => ({
+        requestedAt: attempt.requestedAt,
+        completedAt: attempt.completedAt,
+        modelDescriptor: structuredClone(attempt.modelDescriptor),
+        envelope: JSON.parse(attempt.canonicalRequestJson),
+        inputHash: attempt.inputHash,
+        resultCode: attempt.resultCode,
+        ...(attempt.rawResponse === undefined ? {} : { rawModelResponse: attempt.rawResponse }),
+      })),
+    });
+    if (serialized === undefined) {
+      throw new AIRuntimeStoreError(
+        "AI_RETENTION_STORE_UNAVAILABLE",
+        "AI 原始调用材料无法序列化。",
+      );
+    }
+    return serialized;
+  }
 }
 
-export function createAIRuntimeStoreFromEnvironment(): FileAIRuntimeStore {
+export function createAIRuntimeStoreFromEnvironment(faultHooks: AIRuntimeStoreFaultHooks = {}): FileAIRuntimeStore {
   const config = aiRuntimeStoreConfigFromEnvironment();
   if (!config) throw new AIRuntimeStoreError("AI_RETENTION_CONFIG_INVALID", "AI 留存目录、32 字节加密密钥或密钥版本未配置。");
-  return new FileAIRuntimeStore(config);
+  return new FileAIRuntimeStore(config, faultHooks);
 }

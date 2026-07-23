@@ -9,6 +9,7 @@ import {
   type AIModelDescriptorV1,
   type AIRequestEnvelopeV1,
   type LocalAliasReferenceV1,
+  type RequestAlias,
 } from "./ai-outbound";
 import type { WorkspaceState } from "./types";
 
@@ -22,6 +23,15 @@ export const AI_ASSESSMENT_PROMPT = [
 
 type AssessmentScope = { scopeType: "series" | "model"; scopeId: string };
 
+export interface WorkspaceAssessmentRequestProjection {
+  envelope: AIRequestEnvelopeV1;
+  prompt: string;
+  requestAliasMapping: Array<{
+    alias: RequestAlias;
+    reference: LocalAliasReferenceV1;
+  }>;
+}
+
 export function workspaceAssessmentScopeExists(state: WorkspaceState, scope: AssessmentScope): boolean {
   return scope.scopeType === "series"
     ? state.seriesDefinitions.some((entry) => entry.id === scope.scopeId)
@@ -32,12 +42,21 @@ function reference(referenceKindCode: LocalAliasReferenceV1["referenceKindCode"]
   return { referenceKindCode, stableLocalId, ...(stableRevisionId === undefined ? {} : { stableRevisionId }) };
 }
 
-export function buildWorkspaceAssessmentEnvelope(input: {
+function requestAliasMapping(
+  aliases: ReadonlyMap<string, RequestAlias>,
+  references: readonly LocalAliasReferenceV1[],
+): WorkspaceAssessmentRequestProjection["requestAliasMapping"] {
+  return references
+    .map((entry) => ({ alias: requestAliasFor(aliases, entry), reference: structuredClone(entry) }))
+    .sort((left, right) => left.alias < right.alias ? -1 : left.alias > right.alias ? 1 : 0);
+}
+
+export function buildWorkspaceAssessmentRequestProjection(input: {
   state: WorkspaceState;
   scope: AssessmentScope;
   assessmentId: string;
   model: AIModelDescriptorV1;
-}): AIRequestEnvelopeV1 {
+}): WorkspaceAssessmentRequestProjection {
   const assessmentRef = reference("assessment", input.assessmentId);
   if (input.scope.scopeType === "series") {
     const series = input.state.seriesDefinitions.find((entry) => entry.id === input.scope.scopeId);
@@ -55,6 +74,9 @@ export function buildWorkspaceAssessmentEnvelope(input: {
       targetPullSpecifications: series.targetPullSpecifications,
     }));
     return {
+      prompt: AI_ASSESSMENT_PROMPT,
+      requestAliasMapping: requestAliasMapping(aliases, [assessmentRef, seriesRef, revisionRef, evidenceRef]),
+      envelope: {
       schemaVersion: AI_REQUEST_SCHEMA_VERSION,
       policyVersion: AI_PROVIDER_POLICY_VERSION,
       promptTemplateVersion: AI_ASSESSMENT_PROMPT_VERSION,
@@ -76,6 +98,7 @@ export function buildWorkspaceAssessmentEnvelope(input: {
       ],
       traces: [], patches: [], compatibility: [], affinity: [], invariants: [], fiveAxis: [],
       evidenceRefs: [{ evidenceType: "snapshot", evidenceAlias: requestAliasFor(aliases, evidenceRef), contentHash: evidenceHash }],
+      },
     };
   }
   const model = input.state.purchasableModels.find((entry) => entry.id === input.scope.scopeId);
@@ -96,6 +119,9 @@ export function buildWorkspaceAssessmentEnvelope(input: {
     targetWeightKg: sku?.targetWeightKg ?? null,
   }));
   return {
+    prompt: AI_ASSESSMENT_PROMPT,
+    requestAliasMapping: requestAliasMapping(aliases, [assessmentRef, modelRef, revisionRef, evidenceRef]),
+    envelope: {
     schemaVersion: AI_REQUEST_SCHEMA_VERSION,
     policyVersion: AI_PROVIDER_POLICY_VERSION,
     promptTemplateVersion: AI_ASSESSMENT_PROMPT_VERSION,
@@ -111,5 +137,15 @@ export function buildWorkspaceAssessmentEnvelope(input: {
     ],
     traces: [], patches: [], compatibility: [], affinity: [], invariants: [], fiveAxis: [],
     evidenceRefs: [{ evidenceType: "snapshot", evidenceAlias: requestAliasFor(aliases, evidenceRef), contentHash: evidenceHash }],
+    },
   };
+}
+
+export function buildWorkspaceAssessmentEnvelope(input: {
+  state: WorkspaceState;
+  scope: AssessmentScope;
+  assessmentId: string;
+  model: AIModelDescriptorV1;
+}): AIRequestEnvelopeV1 {
+  return buildWorkspaceAssessmentRequestProjection(input).envelope;
 }

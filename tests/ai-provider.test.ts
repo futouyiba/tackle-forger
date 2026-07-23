@@ -293,17 +293,27 @@ test("Fancy Hub 正常调用冻结模型描述，临时错误才按有序列表�
   const transient = new FancyHubError("AI_PROVIDER_TEMPORARILY_UNAVAILABLE", "temporary", true);
   const transport = new MockTransport(discoveryModels(), [transient, response(discovered.models.find((entry) => entry.modelId === "model.beta")!)]);
   let auditedActor: string | undefined;
+  const rawAttempts: Parameters<NonNullable<Parameters<FancyHubConnector["assess"]>[0]["rawAttemptSink"]>>[0][] = [];
   const connector = new FancyHubConnector(connectorConfig(), transport, (event) => { auditedActor = event.actorStableId; });
   const result = await connector.assess({
     workspaceId: "w1",
     actorStableId: "ou-test",
     loadedCredentialValues: ["hub-secret"],
     buildEnvelope: envelope,
+    rawAttemptSink: (attempt) => { rawAttempts.push(attempt); },
   });
   assert.deepEqual(result.attemptedModelIds, ["model.alpha", "model.beta"]);
   assert.equal(result.response.model.modelId, "model.beta");
   assert.match(result.response.outputHash, /^[a-f0-9]{64}$/);
   assert.deepEqual(transport.calls, ["models", "assess", "assess"]);
+  assert.deepEqual(rawAttempts.map((attempt) => attempt.resultCode), [
+    "AI_PROVIDER_TEMPORARILY_UNAVAILABLE",
+    "SUCCESS",
+  ]);
+  assert.deepEqual(rawAttempts.map((attempt) => attempt.modelDescriptor.modelId), [
+    "model.alpha",
+    "model.beta",
+  ]);
   assert.equal(auditedActor, "ou-test");
 });
 
@@ -472,14 +482,73 @@ test("真实 HTTP adapter 只向配置 HTTPS origin 发送 canonical ai-request/
   assert.throws(() => new FetchFancyHubTransport("http://outside.example/", "secret", fetchImpl), (error) => error instanceof FancyHubError && error.code === "AI_OUTBOUND_TARGET_REJECTED");
 });
 
+test("真实 HTTP adapter 的非 JSON 模型响应按原始字节留存，不进入有效结果", async () => {
+  const malformedRaw = "{\"model\":";
+  let callCount = 0;
+  const fetchImpl = (async () => {
+    callCount += 1;
+    return callCount === 1
+      ? Response.json(discoveryModels())
+      : new Response(malformedRaw, { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  const rawAttempts: Parameters<NonNullable<Parameters<FancyHubConnector["assess"]>[0]["rawAttemptSink"]>>[0][] = [];
+  const connector = new FancyHubConnector(
+    connectorConfig({ fallbackModelIds: [] }),
+    new FetchFancyHubTransport("https://fancy-hub.internal/", "top-secret-token", fetchImpl),
+  );
+  await assert.rejects(
+    connector.assess({
+      workspaceId: "w1",
+      actorStableId: "ou-test",
+      buildEnvelope: envelope,
+      rawAttemptSink: (attempt) => { rawAttempts.push(attempt); },
+    }),
+    (error) => error instanceof FancyHubError && error.code === "AI_FANCY_HUB_RESPONSE_INVALID",
+  );
+  assert.equal(rawAttempts[0]?.rawResponse, malformedRaw);
+  assert.equal(rawAttempts[0]?.resultCode, "AI_FANCY_HUB_RESPONSE_INVALID");
+});
+
 test("响应增加、减少或改变模型修订标识均 fail-closed，不形成有效结果", async () => {
   const requested = describeFancyHubModels(discoveryModels().models).models[0]!;
   const changed = { ...requested, revisions: { modelVersion: "v2" }, revisionIdentityHash: describeFancyHubModels([{ modelId: "model.alpha", modelVersion: "v2" }]).models[0]!.revisionIdentityHash };
-  const transport = new MockTransport(discoveryModels(), [response(changed)]);
+  const rawResponse = response(changed);
+  const transport = new MockTransport(discoveryModels(), [rawResponse]);
+  const rawAttempts: Parameters<NonNullable<Parameters<FancyHubConnector["assess"]>[0]["rawAttemptSink"]>>[0][] = [];
   await assert.rejects(
-    new FancyHubConnector(connectorConfig(), transport).assess({ workspaceId: "w1", actorStableId: "ou-test", buildEnvelope: envelope }),
+    new FancyHubConnector(connectorConfig(), transport).assess({
+      workspaceId: "w1",
+      actorStableId: "ou-test",
+      buildEnvelope: envelope,
+      rawAttemptSink: (attempt) => { rawAttempts.push(attempt); },
+    }),
     (error) => error instanceof FancyHubError && error.code === "AI_MODEL_REVISION_MISMATCH",
   );
+  assert.equal(rawAttempts.length, 1);
+  assert.equal(rawAttempts[0]?.resultCode, "AI_MODEL_REVISION_MISMATCH");
+  assert.deepEqual(rawAttempts[0]?.rawResponse, rawResponse);
+  assert.equal(rawAttempts[0]?.requestEnvelope.model.modelId, requested.modelId);
+});
+
+test("畸形模型响应在规范化失败前按失败调用捕获原始正文", async () => {
+  const malformed = {
+    model: modelList(),
+    result: { schemaVersion: "ai-response/v1", unknown: true },
+    usage: { inputTokens: 1, outputTokens: 1, costMicroUsd: 1 },
+  };
+  const rawAttempts: Parameters<NonNullable<Parameters<FancyHubConnector["assess"]>[0]["rawAttemptSink"]>>[0][] = [];
+  await assert.rejects(
+    new FancyHubConnector(connectorConfig(), new MockTransport(discoveryModels(), [malformed])).assess({
+      workspaceId: "w1",
+      actorStableId: "ou-test",
+      buildEnvelope: envelope,
+      rawAttemptSink: (attempt) => { rawAttempts.push(attempt); },
+    }),
+    (error) => error instanceof FancyHubError && error.code === "AI_FANCY_HUB_RESPONSE_INVALID",
+  );
+  assert.equal(rawAttempts.length, 1);
+  assert.equal(rawAttempts[0]?.resultCode, "AI_FANCY_HUB_RESPONSE_INVALID");
+  assert.deepEqual(rawAttempts[0]?.rawResponse, malformed);
 });
 
 test("请求估算超过 provider/租户硬 token 或费用上限时不发评估请求", async () => {
@@ -648,6 +717,27 @@ test("真实运行时在响应返回前持久化审计事件与加密留存记�
       canonicalRequestJson,
       inputHash: sha256Hex(canonicalRequestJson),
       response: successfulResponse,
+      prompt: "controlled prompt\n",
+      requestAliasMapping: [
+        {
+          alias: "a001",
+          reference: { referenceKindCode: "assessment", stableLocalId: "assessment-1" },
+        },
+        {
+          alias: "a002",
+          reference: { referenceKindCode: "model", stableLocalId: "model-1", stableRevisionId: "1" },
+        },
+      ],
+      rawAttempts: [{
+        requestedAt: "2026-07-23T00:00:00.000Z",
+        completedAt: "2026-07-23T00:00:01.000Z",
+        modelDescriptor: requestEnvelope.model,
+        requestEnvelope,
+        canonicalRequestJson,
+        inputHash: sha256Hex(canonicalRequestJson),
+        rawResponse,
+        resultCode: "SUCCESS",
+      }],
     });
     await store.saveAssessment(record);
     const persisted = JSON.parse(await readFile(path.join(directory, "assessments", "assessment-1.json"), "utf8")) as AIAssessmentRetentionRecord;
@@ -656,7 +746,57 @@ test("真实运行时在响应返回前持久化审计事件与加密留存记�
     assert.equal(persisted.metadata?.outputHash, successfulResponse.outputHash);
     assert.equal(JSON.stringify(persisted).includes(canonicalRequestJson), false);
     const raw = decryptAIRawContent({ assessmentId: "assessment-1", encrypted: persisted.encryptedRawContent!, key });
-    assert.equal(JSON.parse(raw).request.schemaVersion, "ai-request/v1");
+    const retained = JSON.parse(raw) as {
+      prompt: string;
+      requestAliasMapping: Array<{ alias: string; reference: { stableLocalId: string } }>;
+      attempts: Array<{ envelope: AIRequestEnvelopeV1; rawModelResponse: unknown; resultCode: string }>;
+    };
+    assert.equal(retained.prompt, "controlled prompt\n");
+    assert.equal(retained.requestAliasMapping[1]?.reference.stableLocalId, "model-1");
+    assert.equal(retained.attempts[0]?.envelope.schemaVersion, "ai-request/v1");
+    assert.deepEqual(retained.attempts[0]?.rawModelResponse, rawResponse);
+    assert.equal(retained.attempts[0]?.resultCode, "SUCCESS");
+
+    const revisionMismatchRaw = {
+      ...rawResponse,
+      model: modelList("2026-07-24"),
+    };
+    const failedRecord = store.failedAssessmentRecord({
+      assessmentId: "assessment-2",
+      actorStableId: "ou-user-1",
+      scopeStableRef: "model:model-1",
+      requestedAt: "2026-07-23T00:00:02.000Z",
+      completedAt: "2026-07-23T00:00:03.000Z",
+      resultCode: "AI_MODEL_REVISION_MISMATCH",
+      prompt: "controlled prompt\n",
+      requestAliasMapping: [{
+        alias: "a001",
+        reference: { referenceKindCode: "assessment", stableLocalId: "assessment-2" },
+      }],
+      rawAttempts: [{
+        requestedAt: "2026-07-23T00:00:02.000Z",
+        completedAt: "2026-07-23T00:00:03.000Z",
+        modelDescriptor: requestEnvelope.model,
+        requestEnvelope,
+        canonicalRequestJson,
+        inputHash: sha256Hex(canonicalRequestJson),
+        rawResponse: revisionMismatchRaw,
+        resultCode: "AI_MODEL_REVISION_MISMATCH",
+      }],
+    });
+    await store.saveAssessment(failedRecord);
+    const failedPersisted = JSON.parse(
+      await readFile(path.join(directory, "assessments", "assessment-2.json"), "utf8"),
+    ) as AIAssessmentRetentionRecord;
+    assert.equal(failedPersisted.metadata?.resultCode, "AI_MODEL_REVISION_MISMATCH");
+    assert.equal(failedPersisted.semanticContent, undefined);
+    const failedRaw = JSON.parse(decryptAIRawContent({
+      assessmentId: "assessment-2",
+      encrypted: failedPersisted.encryptedRawContent!,
+      key,
+    })) as { attempts: Array<{ rawModelResponse: unknown; resultCode: string }> };
+    assert.deepEqual(failedRaw.attempts[0]?.rawModelResponse, revisionMismatchRaw);
+    assert.equal(failedRaw.attempts[0]?.resultCode, "AI_MODEL_REVISION_MISMATCH");
     assert.match(await readFile(path.join(directory, "audit.jsonl"), "utf8"), /"resultCode":"SUCCESS"/);
   } finally {
     if (previous.dataDir === undefined) delete process.env.AI_RETENTION_DATA_DIR;

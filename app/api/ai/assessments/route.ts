@@ -1,9 +1,21 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { requestUser } from "@/lib/auth";
-import { buildWorkspaceAssessmentEnvelope, workspaceAssessmentScopeExists } from "@/lib/ai-assessment-request";
-import { AIRuntimeStoreError, createAIRuntimeStoreFromEnvironment } from "@/lib/ai-runtime-store";
-import { createFancyHubConnectorFromEnvironment, FancyHubError } from "@/lib/fancy-hub";
+import {
+  buildWorkspaceAssessmentRequestProjection,
+  workspaceAssessmentScopeExists,
+  type WorkspaceAssessmentRequestProjection,
+} from "@/lib/ai-assessment-request";
+import {
+  AIRuntimeStoreError,
+  createAIRuntimeStoreFromEnvironment,
+  type FileAIRuntimeStore,
+} from "@/lib/ai-runtime-store";
+import {
+  createFancyHubConnectorFromEnvironment,
+  FancyHubError,
+  type FancyHubRawAssessmentAttempt,
+} from "@/lib/fancy-hub";
 import { AIOutboundError } from "@/lib/ai-outbound";
 import { loadWorkspaceState } from "@/lib/storage";
 
@@ -32,23 +44,42 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "评估对象不存在或已经变化。", code: "AI_SCOPE_NOT_FOUND" }, { status: 404 });
   }
   const assessmentId = randomUUID();
+  const actorStableId = user.openId ?? user.email;
+  const requestedAt = new Date().toISOString();
+  const rawAttempts: FancyHubRawAssessmentAttempt[] = [];
+  let requestProjection: WorkspaceAssessmentRequestProjection | undefined;
+  let runtimeStore: FileAIRuntimeStore | undefined;
   try {
-    const runtimeStore = createAIRuntimeStoreFromEnvironment();
-    await runtimeStore.initialize();
-    const requestedAt = new Date().toISOString();
+    const store = createAIRuntimeStoreFromEnvironment();
+    runtimeStore = store;
+    await store.initialize();
     const connector = createFancyHubConnectorFromEnvironment({
-      auditSink: (event) => runtimeStore.appendAuditEvent(event),
-      admissionCoordinator: runtimeStore.admissionCoordinator(),
+      auditSink: (event) => store.appendAuditEvent(event),
+      admissionCoordinator: store.admissionCoordinator(),
     });
     const result = await connector.assess({
       workspaceId: "default",
-      actorStableId: user.openId ?? user.email,
-      buildEnvelope: (model) => buildWorkspaceAssessmentEnvelope({ state: current.state, scope: body, assessmentId, model }),
+      actorStableId,
+      buildEnvelope: (model) => {
+        requestProjection = buildWorkspaceAssessmentRequestProjection({
+          state: current.state,
+          scope: body,
+          assessmentId,
+          model,
+        });
+        return requestProjection.envelope;
+      },
+      rawAttemptSink: (attempt) => {
+        rawAttempts.push(attempt);
+      },
     });
     const completedAt = new Date().toISOString();
-    await runtimeStore.saveAssessment(runtimeStore.successfulAssessmentRecord({
+    if (!requestProjection) {
+      throw new AIRuntimeStoreError("AI_RETENTION_STORE_UNAVAILABLE", "AI 请求缺少可留存的安全投影。");
+    }
+    await store.saveAssessment(store.successfulAssessmentRecord({
       assessmentId,
-      actorStableId: user.openId ?? user.email,
+      actorStableId,
       scopeStableRef: `${body.scopeType}:${body.scopeId}`,
       requestedAt,
       completedAt,
@@ -56,6 +87,9 @@ export async function POST(request: NextRequest) {
       canonicalRequestJson: result.canonicalRequestJson,
       inputHash: result.inputHash,
       response: result.response,
+      prompt: requestProjection.prompt,
+      requestAliasMapping: requestProjection.requestAliasMapping,
+      rawAttempts,
     }));
     return NextResponse.json({
       assessmentId,
@@ -66,7 +100,29 @@ export async function POST(request: NextRequest) {
       usage: result.response.usage,
       attemptedModelIds: result.attemptedModelIds,
     });
-  } catch (error) {
+  } catch (caughtError) {
+    let error = caughtError;
+    if (runtimeStore && requestProjection && rawAttempts.length) {
+      const completedAt = new Date().toISOString();
+      const resultCode = caughtError instanceof FancyHubError || caughtError instanceof AIOutboundError || caughtError instanceof AIRuntimeStoreError
+        ? caughtError.code
+        : "AI_UNKNOWN_FAILURE";
+      try {
+        await runtimeStore.saveAssessment(runtimeStore.failedAssessmentRecord({
+          assessmentId,
+          actorStableId,
+          scopeStableRef: `${body.scopeType}:${body.scopeId}`,
+          requestedAt,
+          completedAt,
+          resultCode,
+          prompt: requestProjection.prompt,
+          requestAliasMapping: requestProjection.requestAliasMapping,
+          rawAttempts,
+        }));
+      } catch (retentionError) {
+        error = retentionError;
+      }
+    }
     if (error instanceof Error && error.message === "AI_SCOPE_NOT_FOUND") {
       return NextResponse.json({ error: "评估对象不存在或已经变化。", code: "AI_SCOPE_NOT_FOUND" }, { status: 404 });
     }

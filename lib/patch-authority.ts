@@ -1,5 +1,5 @@
 import { deterministicHash } from "./rule-kernel";
-import { markPatchRevisionRebaseRequired, reviewPatchBatch, reviewPatchRevision, submitPatchRevision } from "./patch-ledger";
+import { markPatchRevisionRebaseRequired, PatchLedgerError, reviewPatchBatch, reviewPatchRevision, submitPatchRevision } from "./patch-ledger";
 import {
   createPatchReviewBatch,
   evaluatePatchFinalRanges,
@@ -613,10 +613,20 @@ export function submitWorkspacePatchRevision(input: {
   patchRevision: number;
   capabilities: Iterable<string>;
 }): WorkspaceState {
+  const capabilities = [...input.capabilities];
+  if (!capabilities.includes("patch.create")) {
+    throw new PatchLedgerError("PATCH_PERMISSION_DENIED", "Missing patch.create");
+  }
   const target = input.state.patchLedger.revisions.find((revision) =>
     revision.patchId === input.patchId && revision.patchRevision === input.patchRevision);
   if (!target) {
-    throw new PatchOffsetPolicyError("PATCH_REVISION_NOT_FOUND", "Patch revision 不存在。");
+    throw new PatchLedgerError("PATCH_REVISION_NOT_FOUND", "Revision not found");
+  }
+  if (target.state !== "DRAFT") {
+    throw new PatchLedgerError("PATCH_STATE_TRANSITION_INVALID", "Only DRAFT revisions can be submitted");
+  }
+  if (target.snapshotRefs.length) {
+    throw new PatchLedgerError("PATCH_REVISION_IMMUTABLE", "Snapshot-referenced revision is immutable");
   }
   const currentRuleSet = currentPublishedRuleSet(input.state);
   const currentSubject = currentPatchSubjectRef(input.state, target);
@@ -629,7 +639,7 @@ export function submitWorkspacePatchRevision(input: {
         ledger: input.state.patchLedger,
         patchId: input.patchId,
         patchRevision: input.patchRevision,
-        capabilities: input.capabilities,
+        capabilities,
       }),
     };
   }
@@ -639,7 +649,7 @@ export function submitWorkspacePatchRevision(input: {
       ledger: input.state.patchLedger,
       patchId: input.patchId,
       patchRevision: input.patchRevision,
-      capabilities: input.capabilities,
+      capabilities,
     }),
   };
 }

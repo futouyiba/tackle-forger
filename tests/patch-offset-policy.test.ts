@@ -729,6 +729,17 @@ test("Workspace Patch 提交入口只允许当前 DRAFT，过期基线进入 REB
       revision.patchId === stale.patchId && revision.patchRevision === stale.patchRevision ? stale : revision);
     const ledgerBefore = JSON.stringify(staleState.patchLedger);
     const snapshotsBefore = JSON.stringify(staleState.configurationSnapshots);
+    assert.throws(
+      () => submitWorkspacePatchRevision({
+        state: staleState,
+        patchId: stale.patchId,
+        patchRevision: stale.patchRevision,
+        capabilities: [],
+      }),
+      (error: unknown) => error instanceof PatchLedgerError && error.code === "PATCH_PERMISSION_DENIED",
+    );
+    assert.equal(JSON.stringify(staleState.patchLedger), ledgerBefore);
+    assert.equal(JSON.stringify(staleState.configurationSnapshots), snapshotsBefore);
     const rebased = submitWorkspacePatchRevision({
       state: staleState,
       patchId: stale.patchId,
@@ -740,6 +751,30 @@ test("Workspace Patch 提交入口只允许当前 DRAFT，过期基线进入 REB
     assert.equal(result?.snapshotRefs.join(","), stale.snapshotRefs.join(","));
     assert.equal(JSON.stringify(staleState.patchLedger), ledgerBefore);
     assert.equal(JSON.stringify(staleState.configurationSnapshots), snapshotsBefore);
+  }
+
+  for (const rejected of [
+    buildPatchRevision({...draft,state:"PENDING_REVIEW",operations:draft.operations}),
+    buildPatchRevision({...draft,state:"PENDING_REVIEW",baseRuleSetVersion:"ruleset:stale",operations:draft.operations}),
+    buildPatchRevision({...draft,snapshotRefs:["snapshot:frozen"],operations:draft.operations}),
+  ]) {
+    const rejectedState = structuredClone(state);
+    rejectedState.patchLedger.revisions = rejectedState.patchLedger.revisions.map((revision) =>
+      revision.patchId === rejected.patchId && revision.patchRevision === rejected.patchRevision ? rejected : revision);
+    const ledgerBefore = JSON.stringify(rejectedState.patchLedger);
+    const snapshotsBefore = JSON.stringify(rejectedState.configurationSnapshots);
+    assert.throws(
+      () => submitWorkspacePatchRevision({
+        state: rejectedState,
+        patchId: rejected.patchId,
+        patchRevision: rejected.patchRevision,
+        capabilities: ["patch.create"],
+      }),
+      (error: unknown) => error instanceof PatchLedgerError
+        && error.code === (rejected.snapshotRefs.length ? "PATCH_REVISION_IMMUTABLE" : "PATCH_STATE_TRANSITION_INVALID"),
+    );
+    assert.equal(JSON.stringify(rejectedState.patchLedger), ledgerBefore);
+    assert.equal(JSON.stringify(rejectedState.configurationSnapshots), snapshotsBefore);
   }
 });
 

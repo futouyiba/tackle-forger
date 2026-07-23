@@ -586,6 +586,47 @@ test("A-02 被动词条参与品质评分但不改变面板", () => {
   assert.ok(aggregated.passivePayloads.length > 0);
 });
 
+test("A-03 被隔离的属性词条保留审计证据，但不参与面板或品质计分", () => {
+  const quarantined: V3Affix = {
+    id: "affix:quarantined",
+    version: 3,
+    name: "冲突词条",
+    category: "attribute",
+    itemPartId: "part:rod",
+    generationPolicy: "normal",
+    rarity: "rare",
+    valueScore: 25,
+    tags: [],
+    attributeEffects: [{
+      id: "quarantined-effect",
+      parameterKey: "force",
+      operation: "percent_bonus",
+      value: -0.2,
+      unit: "%",
+      stackingGroup: "force",
+      ruleSetVersion: "legacy",
+    }],
+    description: "",
+    enabled: true,
+  };
+  const configuration = resolveAffixConfiguration(
+    [quarantined],
+    [],
+    [quarantined.id],
+    [],
+  );
+  const quality = evaluateAffixQuality(configuration, "quality_c_green");
+
+  assert.equal(configuration.affixes.length, 1);
+  assert.equal(configuration.attributeAffixes.length, 0);
+  assert.deepEqual(configuration.isolatedAffixRevisionIds, ["affix:quarantined@3"]);
+  assert.equal(quality.attributeAffixScore, 0);
+  assert.equal(quality.totalScore, 0);
+  assert.ok(configuration.validationIssues.some(
+    (entry) => entry.code === "AFFIX_DIRECTION_CONFLICT",
+  ));
+});
+
 function syntheticAffix(id: string, score: number): V3Affix {
   return {
     id,

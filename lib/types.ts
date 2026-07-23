@@ -635,6 +635,8 @@ export interface DerivedProjection {
   /** 仅包含 WeightTemplate × Method × Type × FunctionProfile 基础层，早于 functionIntensity 与商品层。 */
   structuralValues?: Record<string, number | string>;
   values: Record<string, number | string>;
+  /** OPEN-001 新投影冻结从 AffixOutput 到最终 ParameterDefinition 的完整证据链。 */
+  affixRuntimeEvidence?: AffixRuntimeEvidence;
   trace: ProjectionTraceStep[];
   warnings: ProjectionWarning[];
   sourceHash: string;
@@ -1298,7 +1300,13 @@ export interface AffixQualityEvaluation {
 
 export interface AffixRuntimeEvidence {
   reductionStackingPolicyVersion?: string;
+  /** Affix/Technology 结算完成、FinalReviewPatch 之前的值。 */
   values: Record<string, number | string>;
+  /** FinalReviewPatch 完成、ParameterDefinition 之前的值。 */
+  postReviewValues: Record<string, number | string>;
+  /** ParameterDefinition 完成后的正式最终值。 */
+  finalValues: Record<string, number | string>;
+  /** 按执行顺序包含 affix、FinalReviewPatch 与 ParameterDefinition 的同一条 Trace。 */
   trace: ProjectionTraceContribution[];
   issues: ValidationIssue[];
   formalStatus: "FORMAL" | "NON_FORMAL";
@@ -1335,6 +1343,10 @@ export interface ConfigurationSnapshot {
   attributeTrace: ProjectionTraceStep[];
   /** 新正式 Snapshot 冻结 aggregateAffixPanel 实际执行的完整 affix Trace。 */
   attributeAffixRuntimeTrace?: ProjectionTraceContribution[];
+  /** 新正式 Snapshot 冻结 AffixOutput；历史快照可以缺失。 */
+  attributeAffixOutputValues?: Record<string, number | string>;
+  /** 新正式 Snapshot 冻结 PostReviewValue；历史快照可以缺失。 */
+  attributePostReviewValues?: Record<string, number | string>;
   /** 新正式 Snapshot 冻结实际 affix runtime Trace 的确定性 hash；历史快照可以缺失。 */
   attributeAffixTraceHash?: string;
   passiveAffixPayloads: PassiveSkillPayload[];

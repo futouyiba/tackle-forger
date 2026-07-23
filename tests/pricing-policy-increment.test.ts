@@ -11,7 +11,10 @@ import {
   type QualityId,
 } from "../lib/pricing-policy";
 import { publishConfigurationSnapshot, verifySnapshotIntegrity } from "../lib/publishing";
-import { hashAffixRuntimeEvidence } from "../lib/reduction-stacking-policy";
+import {
+  hashAffixRuntimeEvidence,
+  numberToBinary64Hex,
+} from "../lib/reduction-stacking-policy";
 import { createSeedState } from "../lib/seed";
 import {
   formalAffixRuntimeEvidence,
@@ -232,6 +235,8 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
   detachedEvidence.traceHash = hashAffixRuntimeEvidence({
     reductionStackingPolicyVersion: detachedEvidence.reductionStackingPolicyVersion,
     values: detachedEvidence.values,
+    postReviewValues: detachedEvidence.postReviewValues,
+    finalValues: detachedEvidence.finalValues,
     trace: detachedEvidence.trace,
     issues: detachedEvidence.issues,
   });
@@ -239,19 +244,75 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     ...publishInput,
     affixRuntimeEvidence: detachedEvidence,
   }), /AFFIX_RUNTIME_TRACE_INVALID/);
+  const stagedEvidence = structuredClone(publishInput.affixRuntimeEvidence);
+  const stagedKey = Object.keys(stagedEvidence.finalValues).find(
+    (key) => typeof stagedEvidence.finalValues[key] === "number",
+  )!;
+  const stagedFinal = stagedEvidence.finalValues[stagedKey] as number;
+  stagedEvidence.values[stagedKey] = stagedFinal - 2;
+  stagedEvidence.postReviewValues[stagedKey] = stagedFinal - 1;
+  stagedEvidence.trace.push(
+    {
+      sequence: 10_001,
+      ruleId: "final-review:test",
+      sourceId: "patch:final-review:test",
+      sourceName: "最终复核",
+      parameterKey: stagedKey,
+      operation: "set",
+      before: stagedFinal - 2,
+      operand: stagedFinal - 1,
+      after: stagedFinal - 1,
+      numericEvidence: {
+        stage: "final_review_patch",
+        beforeBinary64: numberToBinary64Hex(stagedFinal - 2),
+        operandBinary64: numberToBinary64Hex(stagedFinal - 1),
+        afterBinary64: numberToBinary64Hex(stagedFinal - 1),
+        anomaly: "none",
+      },
+    },
+    {
+      sequence: 10_002,
+      ruleId: `parameter-definition:${stagedKey}`,
+      sourceId: `parameter-definition:${stagedKey}`,
+      sourceName: stagedKey,
+      parameterKey: stagedKey,
+      operation: "set",
+      before: stagedFinal - 1,
+      operand: 0,
+      after: stagedFinal,
+      numericEvidence: {
+        stage: "parameter_definition",
+        beforeBinary64: numberToBinary64Hex(stagedFinal - 1),
+        operandBinary64: numberToBinary64Hex(0),
+        afterBinary64: numberToBinary64Hex(stagedFinal),
+        anomaly: "none",
+      },
+    },
+  );
+  stagedEvidence.traceHash = hashAffixRuntimeEvidence({
+    reductionStackingPolicyVersion: stagedEvidence.reductionStackingPolicyVersion,
+    values: stagedEvidence.values,
+    postReviewValues: stagedEvidence.postReviewValues,
+    finalValues: stagedEvidence.finalValues,
+    trace: stagedEvidence.trace,
+    issues: stagedEvidence.issues,
+  });
   const snapshot = publishConfigurationSnapshot({
     ...publishInput,
+    affixRuntimeEvidence: stagedEvidence,
   });
   assert.equal(snapshot.pricingPolicyVersion, version.id);
   assert.equal(snapshot.automaticPricing?.formal, true);
   assert.equal(snapshot.qualityValueAssessment?.formal, true);
   assert.equal(
     snapshot.attributeAffixTraceHash,
-    publishInput.affixRuntimeEvidence.traceHash,
+    stagedEvidence.traceHash,
   );
   assert.deepEqual(
     snapshot.attributeAffixRuntimeTrace,
-    publishInput.affixRuntimeEvidence.trace,
+    stagedEvidence.trace,
   );
+  assert.deepEqual(snapshot.attributeAffixOutputValues, stagedEvidence.values);
+  assert.deepEqual(snapshot.attributePostReviewValues, stagedEvidence.postReviewValues);
   assert.equal(verifySnapshotIntegrity(snapshot), true);
 });

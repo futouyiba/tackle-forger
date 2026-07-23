@@ -91,13 +91,17 @@ export function resolveAffixConfiguration(
     }
     return [affix];
   });
-  const attributeAffixes = affixes.filter(
+  const candidateAttributeAffixes = affixes.filter(
     (affix) => affix.category === "attribute",
   );
   const passiveAffixes = affixes.filter((affix) => affix.category === "passive");
 
-  const canonical = canonicalizeAffixOperations(attributeAffixes);
-  const affixNameById = new Map(attributeAffixes.map((affix) => [affix.id, affix.name]));
+  const canonical = canonicalizeAffixOperations(candidateAttributeAffixes);
+  const isolatedRevisionIds = new Set(canonical.isolatedAffixRevisionIds);
+  const attributeAffixes = candidateAttributeAffixes.filter(
+    (affix) => !isolatedRevisionIds.has(`${affix.id}@${affix.version}`),
+  );
+  const affixNameById = new Map(candidateAttributeAffixes.map((affix) => [affix.id, affix.name]));
   const contributions = canonical.operations.map((operation): AttributeContribution => ({
     id: operation.operationId,
     sourceId: operation.sourceAffixId,
@@ -223,6 +227,8 @@ export function aggregateAffixPanel(
     runtimeEvidence: {
       reductionStackingPolicyVersion: policy?.version,
       values: structuredClone(runtime.values),
+      postReviewValues: structuredClone(runtime.values),
+      finalValues: structuredClone(runtime.values),
       trace: structuredClone(runtime.trace),
       issues: structuredClone(runtime.issues),
       formalStatus: runtime.formalStatus,

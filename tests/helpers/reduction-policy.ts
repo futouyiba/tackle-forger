@@ -52,9 +52,17 @@ export function formalAffixRuntimeEvidence(
   policy = testReductionPolicy(),
   finalValues: Record<string, number | string> = projection.values,
 ): AffixRuntimeEvidence {
+  if (
+    projection.affixRuntimeEvidence
+    && projection.affixRuntimeEvidence.reductionStackingPolicyVersion === policy.version
+  ) {
+    return structuredClone(projection.affixRuntimeEvidence);
+  }
   const evidence = {
     reductionStackingPolicyVersion: policy.version,
     values: structuredClone(finalValues),
+    postReviewValues: structuredClone(finalValues),
+    finalValues: structuredClone(finalValues),
     trace: structuredClone(
       projection.trace.find((step) => step.layer === "attribute_affix")?.contributions ?? [],
     ),

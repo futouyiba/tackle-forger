@@ -3,11 +3,13 @@ import {
   applyParameterDefinitions,
   canonicalizeContributions,
   evaluateBidirectionalRatio,
+  hashAffixRuntimeEvidence,
   numberToBinary64Hex,
 } from "./reduction-stacking-policy";
 import { sha256Text } from "./sha256";
 import type {
   AdjustmentRule,
+  AffixRuntimeEvidence,
   AttributeContribution,
   DerivedProjection,
   FunctionIntensity,
@@ -184,19 +186,19 @@ function applyRule(
       before,
       operand: rule.value,
       after,
-      ...(typeof after === "number" ? {
-        numericEvidence: {
-          stage: layer,
-          ...(typeof before === "number"
-            ? { beforeBinary64: numberToBinary64Hex(before) }
-            : {}),
-          ...(typeof rule.value === "number"
-            ? { operandBinary64: numberToBinary64Hex(rule.value) }
-            : {}),
-          afterBinary64: numberToBinary64Hex(after),
-          anomaly: before === after ? "no_effect" as const : "none" as const,
-        },
-      } : {}),
+      numericEvidence: {
+        stage: layer,
+        ...(typeof before === "number"
+          ? { beforeBinary64: numberToBinary64Hex(before) }
+          : {}),
+        ...(typeof rule.value === "number"
+          ? { operandBinary64: numberToBinary64Hex(rule.value) }
+          : {}),
+        ...(typeof after === "number"
+          ? { afterBinary64: numberToBinary64Hex(after) }
+          : {}),
+        anomaly: before === after ? "no_effect" as const : "none" as const,
+      },
     };
   } catch (error) {
     addWarning(warnings, {
@@ -264,7 +266,7 @@ function applyAttributeContributions(
   policy: ReductionStackingPolicyVersion | undefined,
   warnings: ProjectionWarning[],
   sequence: { value: number },
-): void {
+): AffixRuntimeEvidence {
   for (const contribution of contributions) addSource(step, contribution.sourceId);
   const canonical = canonicalizeContributions(contributions);
   const result = evaluateBidirectionalRatio({
@@ -289,6 +291,19 @@ function applyAttributeContributions(
       evidence: runtimeIssue.evidence,
     });
   }
+  const evidence = {
+    reductionStackingPolicyVersion: policy?.version,
+    values: structuredClone(result.values),
+    postReviewValues: structuredClone(result.values),
+    finalValues: structuredClone(result.values),
+    trace: structuredClone(result.trace),
+    issues: structuredClone([...canonical.issues, ...result.issues]),
+  };
+  return {
+    ...evidence,
+    formalStatus: result.formalStatus,
+    traceHash: hashAffixRuntimeEvidence(evidence),
+  };
 }
 
 function validateProjection(
@@ -504,7 +519,7 @@ export function deriveProjection(
     );
   }
 
-  applyAttributeContributions(
+  const affixRuntime = applyAttributeContributions(
     values,
     step("attribute_affix"),
     input.attributeContributions ?? [],
@@ -525,6 +540,7 @@ export function deriveProjection(
       setRules,
     );
   }
+  const postReviewValues = sortRecord(values);
 
   const parameterResult = applyParameterDefinitions({
     values,
@@ -553,6 +569,37 @@ export function deriveProjection(
 
   validateProjection(input, values, warnings, step("validation"));
   const finalValues = sortRecord(values);
+  const affixEvidenceWithoutHash = {
+    reductionStackingPolicyVersion: affixRuntime.reductionStackingPolicyVersion,
+    values: structuredClone(affixRuntime.values),
+    postReviewValues: structuredClone(postReviewValues),
+    finalValues: structuredClone(finalValues),
+    trace: [
+      ...structuredClone(
+        trace.find((entry) => entry.layer === "attribute_affix")?.contributions ?? [],
+      ),
+      ...structuredClone(
+        trace.find((entry) => entry.layer === "final_review_patch")?.contributions ?? [],
+      ),
+      ...structuredClone(
+        trace.find((entry) => entry.layer === "parameter_definition")?.contributions ?? [],
+      ),
+    ],
+    issues: [
+      ...structuredClone(affixRuntime.issues),
+      ...structuredClone(parameterResult.issues),
+    ],
+  };
+  const finalAffixRuntimeEvidence: AffixRuntimeEvidence = {
+    ...affixEvidenceWithoutHash,
+    formalStatus: affixRuntime.formalStatus === "FORMAL"
+      && !parameterResult.issues.some((entry) =>
+        entry.severity === "ERROR" || entry.severity === "BLOCKER"
+      )
+      ? "FORMAL"
+      : "NON_FORMAL",
+    traceHash: hashAffixRuntimeEvidence(affixEvidenceWithoutHash),
+  };
   const sourceHash = sha256Text(stableStringify({
     weightTemplate: input.weightTemplate,
     methodProfile: input.methodProfile,
@@ -579,6 +626,7 @@ export function deriveProjection(
     patches,
     structuralValues,
     values: finalValues,
+    affixRuntimeEvidence: finalAffixRuntimeEvidence,
     trace,
     warnings,
   }));
@@ -607,6 +655,7 @@ export function deriveProjection(
     ) ? "NON_FORMAL" : "FORMAL",
     structuralValues,
     values: finalValues,
+    affixRuntimeEvidence: finalAffixRuntimeEvidence,
     trace,
     warnings,
     sourceHash,

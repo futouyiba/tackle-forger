@@ -45,7 +45,10 @@ import type { PricingTrialResult } from "./pricing-policy";
 import {
   assertSeriesItemPartChainEnabled,
 } from "./enabled-item-parts";
-import { hashAffixRuntimeEvidence } from "./reduction-stacking-policy";
+import {
+  hashAffixRuntimeEvidence,
+  numberToBinary64Hex,
+} from "./reduction-stacking-policy";
 
 export function modelFinalPullKgForSnapshot(
   itemPartId: string | undefined,
@@ -76,6 +79,58 @@ function hasValidReductionPolicyBinding(input: PublishModelInput): boolean {
     && input.projection.reductionStackingPolicyVersion === policy.version
     && input.projection.formalStatus === "FORMAL",
   );
+}
+
+function affixEvidenceStagesAreClosed(evidence: AffixRuntimeEvidence): boolean {
+  const sameValue = (left: unknown, right: unknown): boolean =>
+    deterministicHash(left) === deterministicHash(right);
+  const replay = (
+    start: Record<string, number | string>,
+    stage: "final_review_patch" | "parameter_definition",
+  ): Record<string, number | string> | undefined => {
+    const values = structuredClone(start);
+    const contributions = evidence.trace.filter(
+      (entry) => entry.numericEvidence?.stage === stage,
+    );
+    for (const contribution of contributions) {
+      const numeric = contribution.numericEvidence;
+      if (
+        (typeof contribution.before === "number"
+          && numeric?.beforeBinary64 !== numberToBinary64Hex(contribution.before))
+        || (typeof contribution.operand === "number"
+          && numeric?.operandBinary64 !== numberToBinary64Hex(contribution.operand))
+        || (typeof contribution.after === "number"
+          && numeric?.afterBinary64 !== numberToBinary64Hex(contribution.after))
+      ) {
+        return undefined;
+      }
+      const before = values[contribution.parameterKey];
+      if (!sameValue(before, contribution.before)) return undefined;
+      if (
+        typeof contribution.after !== "number"
+        && typeof contribution.after !== "string"
+      ) {
+        return undefined;
+      }
+      values[contribution.parameterKey] = contribution.after;
+    }
+    return values;
+  };
+
+  let previousSequence = -Infinity;
+  let parameterDefinitionStarted = false;
+  for (const contribution of evidence.trace) {
+    if (contribution.sequence <= previousSequence) return false;
+    previousSequence = contribution.sequence;
+    const stage = contribution.numericEvidence?.stage;
+    if (stage === "parameter_definition") parameterDefinitionStarted = true;
+    if (stage === "final_review_patch" && parameterDefinitionStarted) return false;
+  }
+
+  const postReview = replay(evidence.values, "final_review_patch");
+  if (!postReview || !sameValue(postReview, evidence.postReviewValues)) return false;
+  const finalValues = replay(postReview, "parameter_definition");
+  return Boolean(finalValues && sameValue(finalValues, evidence.finalValues));
 }
 
 export interface PublishModelInput {
@@ -219,7 +274,8 @@ export function publishConfigurationSnapshot(
     ? input.qualityReport.blockingIssues.filter(
         (message) =>
           !message.includes("REDUCTION_POLICY_SOURCE_MISSING")
-          && !message.includes("AFFIX_DIRECTION_CONFLICT"),
+          && !message.includes("AFFIX_DIRECTION_CONFLICT")
+          && !message.includes("AFFIX_MAGNITUDE_RANGE_MISSING"),
       )
     : input.qualityReport.blockingIssues;
   if (qualityBlockingIssues.length) {
@@ -322,10 +378,13 @@ export function publishConfigurationSnapshot(
       || hashAffixRuntimeEvidence({
         reductionStackingPolicyVersion: evidence.reductionStackingPolicyVersion,
         values: evidence.values,
+        postReviewValues: evidence.postReviewValues,
+        finalValues: evidence.finalValues,
         trace: evidence.trace,
         issues: evidence.issues,
       }) !== evidence.traceHash
-      || deterministicHash(evidence.values)
+      || !affixEvidenceStagesAreClosed(evidence)
+      || deterministicHash(evidence.finalValues)
         !== deterministicHash(input.finalPanelValues)
     ) {
       throw new Error(
@@ -379,6 +438,10 @@ export function publishConfigurationSnapshot(
       ? {
           attributeAffixRuntimeTrace: structuredClone(input.affixRuntimeEvidence.trace),
           attributeAffixTraceHash: input.affixRuntimeEvidence.traceHash,
+          attributeAffixOutputValues: structuredClone(input.affixRuntimeEvidence.values),
+          attributePostReviewValues: structuredClone(
+            input.affixRuntimeEvidence.postReviewValues,
+          ),
         }
       : {}),
     passiveAffixPayloads: structuredClone(input.passiveAffixPayloads),

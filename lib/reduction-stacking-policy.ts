@@ -323,16 +323,7 @@ function canonicalFromEffect(
           publishedMagnitudeRange:
             raw.publishedMagnitudeRange as CanonicalAttributeOperation["publishedMagnitudeRange"],
         }
-      : typeof raw.ruleSetVersion === "string" && raw.ruleSetVersion.trim()
-        && (explicitMagnitude !== undefined || legacyValue !== undefined)
-        ? {
-            publishedMagnitudeRange: {
-              min: explicitMagnitude ?? Math.abs(legacyValue!),
-              max: explicitMagnitude ?? Math.abs(legacyValue!),
-              ruleSetVersion: raw.ruleSetVersion,
-            },
-          }
-        : {}),
+      : {}),
   };
   if (["percent_adjust", "flat_adjust", "clamp_add"].includes(String(raw.operation))) {
     if (
@@ -561,7 +552,9 @@ export function hashAffixRuntimeEvidence(
 ): string {
   return sha256Text(stableJson({
     policyVersion: evidence.reductionStackingPolicyVersion ?? null,
-    values: evidence.values,
+    affixOutputValues: evidence.values,
+    postReviewValues: evidence.postReviewValues,
+    finalValues: evidence.finalValues,
     trace: evidence.trace,
     issues: evidence.issues.map((entry) => ({
       code: entry.code,
@@ -932,6 +925,8 @@ export function evaluateBidirectionalRatio(input: {
   const traceHash = hashAffixRuntimeEvidence({
     reductionStackingPolicyVersion: input.policy?.version,
     values,
+    postReviewValues: values,
+    finalValues: values,
     trace,
     issues,
   });

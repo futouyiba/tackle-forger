@@ -453,7 +453,7 @@ test("发布快照冻结五轴预览，后续输入变化不改写历史内容",
   assert.equal(verifySnapshotIntegrity(existing), true);
 });
 
-test("正式快照拒绝未发布、篡改或版本链过期的五维定义", () => {
+test("旧 PUBLISHED 五维定义只能用于历史重放，不能服务新正式快照", () => {
   const state = createSeedState();
   const existing = state.configurationSnapshots[0];
   const model = state.purchasableModels.find((entry) => entry.id === existing.modelId)!;
@@ -515,43 +515,49 @@ test("正式快照拒绝未发布、篡改或版本链过期的五维定义", ()
     },
     validationReport: [], fiveAxisPreview: preview, warningConfirmations: {},
     publishedBy: "tester", publishedAt: "2026-07-22T00:00:00.000Z",
-  };
-  const unpublishedContent = { ...def, publicationState: "UNPUBLISHED" as const };
-  const unpublished = {
-    ...unpublishedContent,
-    definitionHash: deterministicHash(Object.fromEntries(Object.entries(unpublishedContent).filter(([key]) => key !== "definitionHash"))),
-  };
-  assert.throws(
-    () => publishConfigurationSnapshot({ ...common, fiveAxisDefinition: unpublished }),
-    /尚未发布/,
-  );
-  assert.throws(
-    () => publishConfigurationSnapshot({ ...common, fiveAxisDefinition: { ...def, sourceRevision: "changed" } }),
-    /完整性校验失败/,
-  );
-  assert.throws(
-    () => publishConfigurationSnapshot({
-      ...common,
-      fiveAxisPreview: { ...preview, fiveAxisDefinitionVersion: "stale" },
-      fiveAxisDefinition: def,
-    }),
-    /版本链不一致/,
-  );
-  const replacedContent: Omit<FiveAxisViewDefinition, "definitionHash"> = {
-    ...def,
-    axes: structuredClone(def.axes),
-  };
-  delete (replacedContent as Partial<FiveAxisViewDefinition>).definitionHash;
-  replacedContent.axes[0].label = "同标识但内容已替换";
-  const replacedDefinition: FiveAxisViewDefinition = {
-    ...replacedContent,
-    definitionHash: deterministicHash(replacedContent),
+    fiveAxisDefinitions: state.fiveAxisViewDefinitions,
+    fiveAxisDispositionCatalogRevisions:
+      state.fiveAxisDispositionCatalogRevisions,
+    currentFiveAxisDispositionCatalogRevisionId:
+      state.currentFiveAxisDispositionCatalogRevisionId,
   };
   assert.throws(
-    () => publishConfigurationSnapshot({ ...common, fiveAxisDefinition: replacedDefinition }),
-    /版本链不一致/,
+    () => publishConfigurationSnapshot({ ...common, fiveAxisDefinition: def }),
+    /FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE/,
   );
-  const snapshot = publishConfigurationSnapshot({ ...common, fiveAxisDefinition: def });
+  const formalDefinition = state.fiveAxisViewDefinitions.find(
+    (definition) => "semanticContractVersion" in definition,
+  )!;
+  const formalPreview = {
+    ...preview,
+    fiveAxisDefinitionId: formalDefinition.definitionId,
+    fiveAxisDefinitionVersion: formalDefinition.version,
+    fiveAxisDefinitionRevision: formalDefinition.revision,
+    fiveAxisDefinitionHash: formalDefinition.definitionHash,
+    fiveAxisRuleVersion: formalDefinition.fiveAxisRuleVersion,
+    sourceRevision: formalDefinition.sourceRevision,
+    tackleFitComparison: {
+      ...preview.tackleFitComparison,
+      fiveAxisDefinitionId: formalDefinition.definitionId,
+      fiveAxisDefinitionVersion: formalDefinition.version,
+      fiveAxisRuleVersion: formalDefinition.fiveAxisRuleVersion,
+    },
+  };
+  const formalSnapshot = publishConfigurationSnapshot({
+    ...common,
+    fiveAxisPreview: formalPreview,
+    fiveAxisDefinition: formalDefinition,
+  });
+  assert.equal(
+    formalSnapshot.fiveAxisDispositionEvidence?.disposition.effectiveUse,
+    "FORMAL_CURRENT",
+  );
+  assert.equal(verifySnapshotIntegrity(formalSnapshot), true);
+  const snapshot = publishConfigurationSnapshot({
+    ...common,
+    publicationMode: "historical_import",
+    fiveAxisDefinition: def,
+  });
   assert.equal(verifySnapshotIntegrity(snapshot), true);
   assert.ok(snapshot.calculationTrace?.entries.some((entry) =>
     entry.evidence?.adapter === "five_axis_trace/v1"));

@@ -1,6 +1,6 @@
 import { deterministicHash } from "./rule-kernel";
 import type {
-  FiveAxisAxisDefinition,
+  LegacyFiveAxisAxisDefinition,
   FiveAxisAxisSummary,
   FiveAxisComparisonView,
   FiveAxisEntityInput,
@@ -8,8 +8,8 @@ import type {
   FiveAxisSeries,
   FiveAxisSeriesPoint,
   FiveAxisTraceEntry,
-  FiveAxisVertexSet,
-  FiveAxisViewDefinition,
+  LegacyFiveAxisVertexSet,
+  LegacyFiveAxisViewDefinition,
   ModelFiveAxisPreview,
   ValidationIssue,
 } from "./types";
@@ -32,14 +32,14 @@ function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
 
-function orderedAxes(definition: FiveAxisViewDefinition): FiveAxisAxisDefinition[] {
+function orderedAxes(definition: LegacyFiveAxisViewDefinition): LegacyFiveAxisAxisDefinition[] {
   return [...definition.axes].sort((left, right) =>
     left.order - right.order || left.axisId.localeCompare(right.axisId),
   );
 }
 
 export function validateFiveAxisDefinition(
-  definition: FiveAxisViewDefinition,
+  definition: LegacyFiveAxisViewDefinition,
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   if (definition.axes.length !== 5) {
@@ -159,7 +159,7 @@ interface AxisValueResult {
 }
 
 function readAxisValue(
-  axis: FiveAxisAxisDefinition,
+  axis: LegacyFiveAxisAxisDefinition,
   input: FiveAxisEntityInput,
 ): AxisValueResult {
   if (!axis.applicablePartIds.includes(input.itemPartId)) {
@@ -278,7 +278,7 @@ function readAxisValue(
   };
 }
 
-function assertUsableDefinition(definition: FiveAxisViewDefinition): void {
+function assertUsableDefinition(definition: LegacyFiveAxisViewDefinition): void {
   const errors = validateFiveAxisDefinition(definition).filter(
     (issue) => issue.level === "error",
   );
@@ -288,10 +288,10 @@ function assertUsableDefinition(definition: FiveAxisViewDefinition): void {
 }
 
 export function createFiveAxisVertexSet(input: {
-  definition: FiveAxisViewDefinition;
+  definition: LegacyFiveAxisViewDefinition;
   fishWeightGradeId: string;
   referenceComponents: FiveAxisEntityInput[];
-}): FiveAxisVertexSet {
+}): LegacyFiveAxisVertexSet {
   assertUsableDefinition(input.definition);
   const values: Record<string, number> = {};
   for (const axis of orderedAxes(input.definition)) {
@@ -324,8 +324,8 @@ export function createFiveAxisVertexSet(input: {
 }
 
 function assertVertexSetMatches(
-  definition: FiveAxisViewDefinition,
-  vertexSet: FiveAxisVertexSet,
+  definition: LegacyFiveAxisViewDefinition,
+  vertexSet: LegacyFiveAxisVertexSet,
   referenceFishWeightGradeId: string,
 ): void {
   if (
@@ -349,10 +349,10 @@ function assertVertexSetMatches(
 }
 
 function pointFor(
-  axis: FiveAxisAxisDefinition,
-  definition: FiveAxisViewDefinition,
+  axis: LegacyFiveAxisAxisDefinition,
+  definition: LegacyFiveAxisViewDefinition,
   input: FiveAxisEntityInput,
-  vertexSet: FiveAxisVertexSet,
+  vertexSet: LegacyFiveAxisVertexSet,
 ): { point: FiveAxisSeriesPoint; issue?: ValidationIssue } {
   const read = readAxisValue(axis, input);
   const base = {
@@ -428,8 +428,8 @@ function pointFor(
 }
 
 function seriesFor(
-  definition: FiveAxisViewDefinition,
-  vertexSet: FiveAxisVertexSet,
+  definition: LegacyFiveAxisViewDefinition,
+  vertexSet: LegacyFiveAxisVertexSet,
   input: FiveAxisEntityInput,
 ): { series: FiveAxisSeries; issues: ValidationIssue[] } {
   const issues: ValidationIssue[] = [];
@@ -451,7 +451,7 @@ function seriesFor(
 }
 
 function inheritContextPoints(
-  definition: FiveAxisViewDefinition,
+  definition: LegacyFiveAxisViewDefinition,
   series: FiveAxisSeries[],
   contextSeries: FiveAxisSeries,
 ): FiveAxisSeries[] {
@@ -486,7 +486,7 @@ function inheritContextPoints(
 }
 
 function axisSummaries(
-  definition: FiveAxisViewDefinition,
+  definition: LegacyFiveAxisViewDefinition,
   series: FiveAxisSeries[],
 ): FiveAxisAxisSummary[] {
   return orderedAxes(definition).map((axis) => {
@@ -529,7 +529,7 @@ function axisSummaries(
 function modelSummarySeries(
   modelId: string,
   fishWeightGradeId: string,
-  definition: FiveAxisViewDefinition,
+  definition: LegacyFiveAxisViewDefinition,
   componentSeries: FiveAxisSeries[],
 ): FiveAxisSeries {
   return {
@@ -588,8 +588,8 @@ function modelSummarySeries(
 export function buildTackleFitComparison(input: {
   modelId: string;
   referenceFishWeightGradeId: string;
-  definition: FiveAxisViewDefinition;
-  vertexSet: FiveAxisVertexSet;
+  definition: LegacyFiveAxisViewDefinition;
+  vertexSet: LegacyFiveAxisVertexSet;
   components: FiveAxisEntityInput[];
   scaleMode?: FiveAxisComparisonView["scaleMode"];
 }): FiveAxisComparisonView {
@@ -636,8 +636,8 @@ export function buildTackleFitComparison(input: {
 
 export function buildSamePartComparison(input: {
   referenceFishWeightGradeId: string;
-  definition: FiveAxisViewDefinition;
-  vertexSet: FiveAxisVertexSet;
+  definition: LegacyFiveAxisViewDefinition;
+  vertexSet: LegacyFiveAxisVertexSet;
   entities: FiveAxisEntityInput[];
   referenceContext?: FiveAxisEntityInput;
   comparisonLimit?: number;
@@ -695,8 +695,8 @@ export function calculateModelFiveAxisPreview(input: {
   modelId: string;
   modelRevision: number;
   referenceFishWeightGradeId: string;
-  definition: FiveAxisViewDefinition;
-  vertexSet: FiveAxisVertexSet;
+  definition: LegacyFiveAxisViewDefinition;
+  vertexSet: LegacyFiveAxisVertexSet;
   components: FiveAxisEntityInput[];
   finalPanelHash: string;
 }): ModelFiveAxisPreview {

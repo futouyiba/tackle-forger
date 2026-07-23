@@ -42,6 +42,8 @@ import type {
   ModelFiveAxisPreview,
   FiveAxisViewDefinition,
   ProjectionMatch,
+  LegacyFiveAxisVertexSet,
+  LegacyFiveAxisViewDefinition,
   PurchasableModel,
   SeriesDefinition,
   SkuDrawer,
@@ -53,6 +55,18 @@ import {
   buildProductBreadcrumbView,
   ProductDeepLinkUnavailableNotice,
 } from "./product-deep-link-ui";
+
+function isLegacyFiveAxisDefinition(
+  definition: WorkspaceState["fiveAxisViewDefinitions"][number],
+): definition is LegacyFiveAxisViewDefinition {
+  return !("semanticContractVersion" in definition);
+}
+
+function isLegacyFiveAxisVertexSet(
+  vertexSet: WorkspaceState["fiveAxisVertexSets"][number],
+): vertexSet is LegacyFiveAxisVertexSet {
+  return "fishWeightGradeId" in vertexSet;
+}
 
 interface SeriesGanttWorkbenchV3Props {
   state: WorkspaceState;
@@ -204,7 +218,7 @@ function FiveAxisRadar({
   definition,
 }: {
   preview?: ModelFiveAxisPreview;
-  definition?: FiveAxisViewDefinition;
+  definition?: LegacyFiveAxisViewDefinition;
 }) {
   if (!preview) {
     return (
@@ -301,7 +315,7 @@ function FiveAxisComparisonPanel({
   definition,
 }: {
   view: FiveAxisComparisonView;
-  definition?: FiveAxisViewDefinition;
+  definition?: LegacyFiveAxisViewDefinition;
 }) {
   const axes = definition?.axes ?? [];
   const numericScores = view.series.flatMap((entry) => entry.points.flatMap((point) =>
@@ -421,9 +435,13 @@ function ModelDrawer({
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const draftFiveAxisPreview = useMemo(() => {
     if (snapshot?.fiveAxisPreview || !model.fishWeightGradeId) return undefined;
-    const draftDefinition = state.fiveAxisViewDefinitions[0];
+    const draftDefinition = state.fiveAxisViewDefinitions.find(
+      isLegacyFiveAxisDefinition,
+    );
     if (!draftDefinition) return undefined;
-    const vertexSet = state.fiveAxisVertexSets.find((entry) =>
+    const vertexSet = state.fiveAxisVertexSets.filter(
+      isLegacyFiveAxisVertexSet,
+    ).find((entry) =>
       entry.fishWeightGradeId === model.fishWeightGradeId &&
       entry.definitionId === draftDefinition.definitionId &&
       entry.definitionVersion === draftDefinition.version);
@@ -450,7 +468,7 @@ function ModelDrawer({
   }, [model, snapshot, state.fiveAxisVertexSets, state.fiveAxisViewDefinitions]);
   const activeFiveAxisPreview = snapshot?.fiveAxisPreview ?? draftFiveAxisPreview;
   const definition = activeFiveAxisPreview
-    ? state.fiveAxisViewDefinitions.find((entry) =>
+    ? state.fiveAxisViewDefinitions.filter(isLegacyFiveAxisDefinition).find((entry) =>
       entry.definitionId === activeFiveAxisPreview.fiveAxisDefinitionId &&
       entry.version === activeFiveAxisPreview.fiveAxisDefinitionVersion)
     : undefined;
@@ -526,7 +544,7 @@ function ModelDrawer({
   const pendingUpgrade = state.upgradeCandidates.find((entry) => entry.modelId === model.id && entry.status === "pending");
   const comparisonResult = useMemo(() => {
     if (comparisonModelIds.length < 2 || !definition || !activeFiveAxisPreview) return {};
-    const vertexSet = state.fiveAxisVertexSets.find((entry) =>
+    const vertexSet = state.fiveAxisVertexSets.filter(isLegacyFiveAxisVertexSet).find((entry) =>
       entry.vertexSetHash === activeFiveAxisPreview.vertexSetHash &&
       entry.definitionId === definition.definitionId &&
       entry.definitionVersion === definition.version);

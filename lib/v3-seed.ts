@@ -10,6 +10,10 @@ import {
   calculateModelFiveAxisPreview,
   createFiveAxisVertexSet,
 } from "./five-axis";
+import {
+  createFiveAxisDispositionCatalogRevision,
+  createFormalFiveAxisViewDefinition,
+} from "./five-axis-formal";
 import { applyLayeredPatches } from "./patch-engine";
 import { importLegacyPatchesToLedger } from "./patch-ledger";
 import {
@@ -29,7 +33,7 @@ import type {
   CompatibilityContext,
   CompatibilityRule,
   FiveAxisEntityInput,
-  FiveAxisViewDefinition,
+  LegacyFiveAxisViewDefinition,
   ModelComponentSelection,
   ProjectionPatchRuleSource,
   PurchasableModel,
@@ -611,7 +615,7 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
   sku18.validationSummary = structuredClone(seriesIssues);
 
   const publishTarget = built[0];
-  const fiveAxisDefinitionContent: Omit<FiveAxisViewDefinition, "definitionHash"> = {
+  const fiveAxisDefinitionContent: Omit<LegacyFiveAxisViewDefinition, "definitionHash"> = {
     definitionId: "five-axis:seed-rod-v1",
     version: "1.0.0",
     revision: 1,
@@ -636,10 +640,10 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
       componentAggregationId: "component_min_ratio",
       contextInheritanceId: "single_applicable_source",
       missingPolicy: "ignore_not_applicable",
-    })) as FiveAxisViewDefinition["axes"],
+    })) as LegacyFiveAxisViewDefinition["axes"],
     seriesBaselinePolicy: { mode: "explicit_model", required: true },
   };
-  const fiveAxisDefinition: FiveAxisViewDefinition = {
+  const fiveAxisDefinition: LegacyFiveAxisViewDefinition = {
     ...fiveAxisDefinitionContent,
     definitionHash: deterministicHash(fiveAxisDefinitionContent),
   };
@@ -799,6 +803,28 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
     createdBy: "seed-designer",
     createdAt: CREATED_AT,
   });
+  const formalFiveAxisDefinition = createFormalFiveAxisViewDefinition();
+  const fiveAxisDefinitions = state.fiveAxisViewDefinitions.some(
+    (definition) => definition.definitionId === fiveAxisDefinition.definitionId
+      && definition.version === fiveAxisDefinition.version,
+  )
+    ? [...state.fiveAxisViewDefinitions]
+    : [...state.fiveAxisViewDefinitions, fiveAxisDefinition];
+  if (!fiveAxisDefinitions.some((definition) =>
+    definition.definitionId === formalFiveAxisDefinition.definitionId
+    && definition.version === formalFiveAxisDefinition.version)) {
+    fiveAxisDefinitions.push(formalFiveAxisDefinition);
+  }
+  const fiveAxisDisposition = createFiveAxisDispositionCatalogRevision({
+    definitions: fiveAxisDefinitions,
+    existingRevisions: state.fiveAxisDispositionCatalogRevisions,
+    currentRevisionId: state.currentFiveAxisDispositionCatalogRevisionId,
+    formalCurrent: {
+      definitionId: formalFiveAxisDefinition.definitionId,
+      definitionVersion: formalFiveAxisDefinition.version,
+    },
+    decidedAt: CREATED_AT,
+  });
 
   return {
     ...state,
@@ -844,17 +870,15 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
           },
         ],
     configurationSnapshots: [snapshot],
-    fiveAxisViewDefinitions: state.fiveAxisViewDefinitions.some(
-      (definition) => definition.definitionId === fiveAxisDefinition.definitionId
-        && definition.version === fiveAxisDefinition.version,
-    )
-      ? state.fiveAxisViewDefinitions
-      : [...state.fiveAxisViewDefinitions, fiveAxisDefinition],
+    fiveAxisViewDefinitions: fiveAxisDefinitions,
     fiveAxisVertexSets: state.fiveAxisVertexSets.some(
       (vertexSet) => vertexSet.vertexSetHash === fiveAxisVertexSet.vertexSetHash,
     )
       ? state.fiveAxisVertexSets
       : [...state.fiveAxisVertexSets, fiveAxisVertexSet],
+    fiveAxisDispositionCatalogRevisions: fiveAxisDisposition.revisions,
+    currentFiveAxisDispositionCatalogRevisionId:
+      fiveAxisDisposition.currentRevisionId,
     upgradeCandidates: [upgrade],
     ruleChangeProposals: [proposal],
     governanceAuditLog: [

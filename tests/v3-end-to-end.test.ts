@@ -703,6 +703,8 @@ test("D-01 v1 状态顺序迁移到当前版本，两次迁移无额外变化", 
   assert.equal(once.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
   assert.deepEqual(once.fiveAxisViewDefinitions, []);
   assert.deepEqual(once.fiveAxisVertexSets, []);
+  assert.equal(once.fiveAxisDispositionCatalogRevisions.length, 1);
+  assert.ok(once.currentFiveAxisDispositionCatalogRevisionId);
   assert.equal(
     once.workspacePolicies.filter((policy) => policy.policyType === "patchOffsetPolicy").length,
     1,
@@ -739,8 +741,23 @@ test("WP8 全链路种子包含 Series→SKU→Model→Snapshot→Upgrade", () =
     Object.hasOwn(state.configurationSnapshots[0].projectionMatch as unknown as object, "targetWeightKg"),
     false,
   );
-  assert.equal(state.fiveAxisViewDefinitions.length, 1);
+  assert.equal(state.fiveAxisViewDefinitions.length, 2);
   assert.equal(state.fiveAxisVertexSets.length, 1);
+  const dispositionHead = state.fiveAxisDispositionCatalogRevisions.find(
+    (revision) =>
+      revision.catalogRevisionId
+      === state.currentFiveAxisDispositionCatalogRevisionId,
+  )!;
+  assert.equal(
+    dispositionHead.entries.filter((entry) =>
+      entry.effectiveUse === "FORMAL_CURRENT").length,
+    1,
+  );
+  assert.equal(
+    dispositionHead.entries.filter((entry) =>
+      entry.effectiveUse === "LEGACY_SNAPSHOT_ONLY").length,
+    1,
+  );
   assert.equal(state.configurationSnapshots[0].fiveAxisPreview?.metrics.length, 5);
   assert.equal(state.upgradeCandidates.length, 1);
   assert.equal(state.exportTargetProfiles.length, 2);

@@ -67,6 +67,7 @@
 - [`audits/current-state-review-follow-up-2026-07-22.md`](./audits/current-state-review-follow-up-2026-07-22.md)：对首轮快照的去重复核、当前工作区差异与新增问题映射。
 - [`audits/remote-branches-review-2026-07-22.md`](./audits/remote-branches-review-2026-07-22.md)：拉取全部远端分支后的修复复审、测试证据及问题状态变化。
 - [`audits/engineering-issue-register.md`](./audits/engineering-issue-register.md)：GitHub迁移前的历史工程问题台账快照；不再维护活动状态。
+- [`audits/aud-005-architecture-decision-proposal.md`](./audits/aud-005-architecture-decision-proposal.md)：根Vinext v3、历史workspace与legacy产品入口的已接受收敛边界；AUD-026语义已确认但实现仍独立开放。
 - [`audits/open-007-pricing-semantics-adr.md`](./audits/open-007-pricing-semantics-adr.md)：已批准的价值分、派生性能定位、S=100、双输出舍入、购买最低价与超限二次确认语义；运行时落实由GitHub [#9](https://github.com/futouyiba/tackle-forger/issues/9)跟踪。
 
 修复提交应引用对应GitHub Issue，并在PR中记录提交SHA、验证命令和测试证据。历史审查快照原则上不改写；新的决策或验证证据使用ADR/补充快照，活动状态只更新GitHub。

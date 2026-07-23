@@ -37,6 +37,7 @@ export const PHASE_ONE_CAPABILITIES = [
   "ai.rule_source_change_draft.create",
   "feishu.workbook.read",
   "feishu.workbook.pull",
+  "feishu.rule_change.confirm_write",
   "feishu.identity.write",
   "ruleset.draft.create",
   "ruleset.publish",

@@ -388,9 +388,11 @@ test("RuleSourceChangeDraft 使用全工作区沙盒影响预览并只保存 LOC
     changeDraftId: discoverable.changeDraftId,
     actorStableId,
     confirmedAt: "2026-07-23T00:01:00.000Z",
-    capabilities: ["ai.rule_source_change_draft.create"],
+    expectedCommandHash: discoverable.commandHash,
+    idempotencyKey: "confirm-rule-draft:1",
+    capabilities: ["feishu.rule_change.confirm_write"],
   });
-  const reviewed = confirmed.aiRuleSourceChangeDrafts.find((entry) =>
+  const reviewed = confirmed.state.aiRuleSourceChangeDrafts.find((entry) =>
     entry.changeDraftId === discoverable.changeDraftId)!;
   assert.equal(reviewed.state, "CONFIRMED");
   assert.deepEqual(reviewed.humanReview, {
@@ -400,6 +402,27 @@ test("RuleSourceChangeDraft 使用全工作区沙盒影响预览并只保存 LOC
     reviewedSourceRevision: "source-revision-1",
   });
   assert.equal(applied.state.aiRuleSourceChangeDrafts.at(-1)?.state, "LOCAL_DRAFT");
+  const retried = confirmAIRuleSourceChangeDraft({
+    state: confirmed.state,
+    changeDraftId: discoverable.changeDraftId,
+    actorStableId,
+    confirmedAt: "2026-07-23T00:05:00.000Z",
+    expectedCommandHash: discoverable.commandHash,
+    idempotencyKey: "confirm-rule-draft:1",
+    capabilities: ["feishu.rule_change.confirm_write"],
+  });
+  assert.equal(retried.idempotent, true);
+  assert.equal(retried.draft.humanReview?.confirmedAt, "2026-07-23T00:01:00.000Z");
+  assert.throws(() => confirmAIRuleSourceChangeDraft({
+    state: reloaded,
+    changeDraftId: discoverable.changeDraftId,
+    actorStableId,
+    confirmedAt: "2026-07-23T00:01:00.000Z",
+    expectedCommandHash: discoverable.commandHash,
+    idempotencyKey: "confirm-rule-draft:permission",
+    capabilities: ["ai.rule_source_change_draft.create"],
+  }), (error: unknown) => error instanceof AIDraftConversionError
+    && error.code === "AI_DRAFT_PERMISSION_DENIED");
 
   const changedSource = structuredClone(reloaded);
   changedSource.feishuSourceRevisions.push({
@@ -414,7 +437,9 @@ test("RuleSourceChangeDraft 使用全工作区沙盒影响预览并只保存 LOC
       changeDraftId: discoverable.changeDraftId,
       actorStableId,
       confirmedAt: "2026-07-23T00:03:00.000Z",
-      capabilities: ["ai.rule_source_change_draft.create"],
+      expectedCommandHash: discoverable.commandHash,
+      idempotencyKey: "confirm-rule-draft:2",
+      capabilities: ["feishu.rule_change.confirm_write"],
     }),
     (error: unknown) => error instanceof AIDraftConversionError
       && error.code === "AI_RULE_SOURCE_REVISION_CHANGED",

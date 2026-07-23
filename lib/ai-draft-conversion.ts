@@ -1201,17 +1201,38 @@ export function confirmAIRuleSourceChangeDraft(input: {
   changeDraftId: string;
   actorStableId: string;
   confirmedAt: string;
+  idempotencyKey: string;
+  expectedCommandHash: string;
   capabilities: Iterable<string>;
-}): WorkspaceState {
-  if (!new Set(input.capabilities).has("ai.rule_source_change_draft.create")) {
+}): { state: WorkspaceState; draft: AIRuleSourceChangeDraft; idempotent: boolean } {
+  if (!new Set(input.capabilities).has("feishu.rule_change.confirm_write")) {
     throw new AIDraftConversionError("AI_DRAFT_PERMISSION_DENIED", "缺少 AI 规则草稿复核权限。");
+  }
+  const commandHash = deterministicHash({
+    action: "confirm_ai_rule_source_change_draft/v1",
+    changeDraftId: input.changeDraftId,
+    expectedCommandHash: input.expectedCommandHash,
+    actorStableId: input.actorStableId,
+  });
+  const prior = input.state.commandIdempotencyRecords.find((entry) =>
+    entry.key === input.idempotencyKey);
+  if (prior) {
+    if (prior.inputHash !== commandHash) {
+      throw new AIDraftConversionError("AI_DRAFT_IDEMPOTENCY_CONFLICT", "idempotencyKey 已绑定不同确认命令。");
+    }
+    const existing = input.state.aiRuleSourceChangeDrafts.find((entry) =>
+      entry.changeDraftId === input.changeDraftId);
+    if (!existing) throw new AIDraftConversionError("AI_RULE_DRAFT_NOT_FOUND", "AI 规则草稿不存在。");
+    return { state: input.state, draft: existing, idempotent: true };
   }
   const draft = input.state.aiRuleSourceChangeDrafts.find((entry) =>
     entry.changeDraftId === input.changeDraftId);
   if (!draft) {
     throw new AIDraftConversionError("AI_RULE_DRAFT_NOT_FOUND", "AI 规则草稿不存在。");
   }
-  if (draft.state === "CONFIRMED") return input.state;
+  if (draft.commandHash !== input.expectedCommandHash) {
+    throw new AIDraftConversionError("AI_DRAFT_TARGET_REVISION_CHANGED", "AI 规则草稿内容已变化，请重载后确认。");
+  }
   if (draft.state !== "LOCAL_DRAFT" && draft.state !== "IMPACT_PREVIEW_READY") {
     throw new AIDraftConversionError("AI_RULE_DRAFT_STATE_INVALID", "当前状态不能执行人工确认。");
   }
@@ -1237,5 +1258,11 @@ export function confirmAIRuleSourceChangeDraft(input: {
     reviewedCommandHash: mutable.commandHash,
     reviewedSourceRevision: mutable.targetRuleRef.sourceRevision,
   };
-  return next;
+  next.commandIdempotencyRecords.push({
+    key: input.idempotencyKey,
+    inputHash: commandHash,
+    resultRef: mutable.changeDraftId,
+    resultPayload: { changeDraftId: mutable.changeDraftId, state: mutable.state },
+  });
+  return { state: next, draft: mutable, idempotent: false };
 }

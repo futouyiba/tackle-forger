@@ -25,6 +25,7 @@ export type CapabilityCode =
   | "ai.feishu_proposal_draft.create" | "ai.provider_policy.manage"
   | "feishu.proposal.submit" | "feishu.proposal.review" | "feishu.proposal.apply"
   | "feishu.workbook.read" | "feishu.workbook.pull" | "feishu.identity.write" | "ruleset.draft.create" | "ruleset.publish"
+  | "feishu.rule_change.confirm_write"
   | "data_source.resolve" | "data_source.preview" | "data_source.publish"
   | "data_source.writeback.preview" | "data_source.writeback.commit"
   | "excel.import" | "revision.read"

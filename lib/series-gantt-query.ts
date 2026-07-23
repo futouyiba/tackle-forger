@@ -34,7 +34,7 @@ export interface SeriesGanttQuery {
   issueCodes?: string[];
   issueSeverities?: Array<"INFO" | "WARNING" | "ERROR" | "BLOCKER">;
   hasUpgradeCandidate?: boolean;
-  exactTargetWeightKg?: number[];
+  exactTargetPullKg?: number[];
   minTargetPullKg?: number;
   maxTargetPullKg?: number;
   ruleSetVersions?: string[];
@@ -200,9 +200,9 @@ export function querySeriesGantt(input: {
     if (!intersects(input.query.issueCodes, issueCodes)) return [];
     if (!intersects(input.query.issueSeverities, context.issues.map(issueSeverity))) return [];
     if (!matchesBoolean(input.query.hasUpgradeCandidate, context.pendingUpgrades.length > 0)) return [];
-    if (!intersects(input.query.exactTargetWeightKg, context.skus.map((sku) => sku.targetWeightKg))) return [];
-    if (input.query.minTargetPullKg !== undefined && !context.skus.some((sku) => sku.targetWeightKg >= input.query.minTargetPullKg!)) return [];
-    if (input.query.maxTargetPullKg !== undefined && !context.skus.some((sku) => sku.targetWeightKg <= input.query.maxTargetPullKg!)) return [];
+    if (!intersects(input.query.exactTargetPullKg, context.skus.map((sku) => sku.targetPullKg))) return [];
+    if (input.query.minTargetPullKg !== undefined && !context.skus.some((sku) => sku.targetPullKg >= input.query.minTargetPullKg!)) return [];
+    if (input.query.maxTargetPullKg !== undefined && !context.skus.some((sku) => sku.targetPullKg <= input.query.maxTargetPullKg!)) return [];
     if (!intersects(input.query.ruleSetVersions, context.ruleSetVersions)) return [];
     if (input.query.ruleSetVersion && !context.ruleSetVersions.includes(input.query.ruleSetVersion)) return [];
     return [{
@@ -316,7 +316,7 @@ const ARRAY_KEYS: Array<keyof SeriesGanttQuery> = [
   "attentionStates",
   "issueCodes",
   "issueSeverities",
-  "exactTargetWeightKg",
+  "exactTargetPullKg",
   "ruleSetVersions",
 ];
 
@@ -346,8 +346,8 @@ export function seriesGanttQueryFromSearchParams(params: URLSearchParams): Serie
   for (const key of ARRAY_KEYS) {
     const values = params.getAll(String(key));
     if (!values.length) continue;
-    if (key === "exactTargetWeightKg") {
-      query.exactTargetWeightKg = values
+    if (key === "exactTargetPullKg") {
+      query.exactTargetPullKg = values
         .map(Number)
         .filter((value) => Number.isFinite(value));
     } else {

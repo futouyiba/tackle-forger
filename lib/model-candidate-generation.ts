@@ -41,18 +41,18 @@ function recipeAccepts(recipe: CandidateSearchRecipe, series: SeriesDefinition, 
     && recipe.functionIds.includes(series.coreFunctionId)
     && recipe.qualityIds.includes(series.qualityId)
     && (!series.performanceProfileId || recipe.performanceIds.includes(series.performanceProfileId))
-    && sku.targetWeightKg >= recipe.targetWeightRangeKg.min
-    && sku.targetWeightKg <= recipe.targetWeightRangeKg.max;
+    && sku.targetPullKg >= recipe.targetPullRangeKg.min
+    && sku.targetPullKg <= recipe.targetPullRangeKg.max;
 }
 
 function contextFor(series: SeriesDefinition, sku: SkuDrawer, variant: ModelVariantInput): CompatibilityContext {
   const intensity = series.functionIntensityPolicy.mode === "fixed"
     ? series.functionIntensityPolicy.intensity
-    : series.functionIntensityPolicy.values[String(sku.targetWeightKg)] ?? 2;
+    : series.functionIntensityPolicy.values[String(sku.targetPullKg)] ?? 2;
   return {
     methodId: series.fishingMethodId,
     typeId: series.typeId,
-    targetWeightKg: sku.targetWeightKg,
+    targetPullKg: sku.targetPullKg,
     functionId: series.coreFunctionId,
     functionIntensity: intensity,
     performanceId: series.performanceProfileId,
@@ -128,7 +128,8 @@ export function generateModelCandidateRun(input: {
       const proposedConfiguration = {
         projectionId: sku.projectionMatch.projectionId,
         projectionValues: structuredClone(input.state.derivedProjections.find((entry) => entry.id === sku.projectionMatch.projectionId)?.values ?? {}),
-        targetWeightKg: sku.targetWeightKg,
+        targetPullKg: sku.targetPullKg,
+        matchedStructuralPullKg: sku.projectionMatch.matchedStructuralPullKg,
         variant: structuredClone(variant),
       };
       const candidateFingerprint = deterministicHash({ skuId: sku.id, variantKey: variant.modelVariantKey, proposedConfiguration, ruleSetVersion });
@@ -145,7 +146,7 @@ export function generateModelCandidateRun(input: {
         affinity,
         invariantIssues,
         warningCount,
-        pullDistance: sku.projectionMatch.weightDistance,
+        pullDistance: sku.projectionMatch.pullDistance,
         rank: 0,
         rankReasons: [],
         state: "generated",

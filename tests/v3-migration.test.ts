@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { migrateWorkspaceState } from "../lib/migrations";
+import { CURRENT_WORKSPACE_SCHEMA_VERSION, migrateWorkspaceState } from "../lib/migrations";
+import { deterministicHash } from "../lib/rule-kernel";
 import { verifySnapshotIntegrity } from "../lib/publishing";
 import { createSeedState } from "../lib/seed";
 
@@ -13,7 +14,7 @@ test("v14 将旧系列配方迁移为竿轮线约束且保留扁平字段", () =
 
   const migrated = migrateWorkspaceState(legacy);
   const recipe = migrated.recipes[0];
-  assert.equal(migrated.schemaVersion, 15);
+  assert.equal(migrated.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
   assert.deepEqual(recipe.templateIds, before.templateIds);
   assert.deepEqual(recipe.structureIds, before.structureIds);
   assert.deepEqual(recipe.requiredAffixIds, before.requiredAffixIds);
@@ -37,12 +38,47 @@ test("v15 保留旧五维定义并明确迁移为未发布修订", () => {
   }];
   const migrated = migrateWorkspaceState(legacy);
   const definition = migrated.fiveAxisViewDefinitions[0] as unknown as Record<string, unknown>;
-  assert.equal(migrated.schemaVersion, 15);
+  assert.equal(migrated.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
   assert.equal(definition.publicationState, "UNPUBLISHED");
   assert.equal(definition.revision, 1);
   assert.equal(typeof definition.definitionHash, "string");
   assert.equal(definition.preservedUnknown, "keep-me");
   assert.deepEqual(migrateWorkspaceState(migrated), migrated);
+});
+
+test("schema v17 迁移仅适配活动对象的历史拉力字段，冻结快照保持逐字节不变", () => {
+  const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
+  legacy.schemaVersion = 16;
+  const sku = (legacy.skuDrawers as Array<Record<string, unknown>>)[0];
+  const match = sku.projectionMatch as Record<string, unknown>;
+  sku.targetWeightKg = sku.targetPullKg;
+  delete sku.targetPullKg;
+  match.targetWeightKg = match.targetPullKg;
+  match.anchorWeightKg = match.matchedStructuralPullKg;
+  match.weightDistance = match.pullDistance;
+  delete match.targetPullKg;
+  delete match.matchedStructuralPullKg;
+  delete match.pullDistance;
+  const snapshot = (legacy.configurationSnapshots as Array<Record<string, unknown>>)[0];
+  const snapshotBefore = structuredClone(snapshot);
+
+  const migrated = migrateWorkspaceState(legacy);
+  const migratedSku = migrated.skuDrawers[0] as unknown as Record<string, unknown>;
+  assert.equal(migrated.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
+  assert.equal(migratedSku.targetPullKg, 1.5);
+  assert.equal(Object.hasOwn(migratedSku, "targetWeightKg"), false);
+  assert.equal(Object.hasOwn(migratedSku.projectionMatch as object, "targetWeightKg"), false);
+  assert.deepEqual(migrated.configurationSnapshots[0], snapshotBefore);
+  assert.equal(deterministicHash(migrated.configurationSnapshots[0]), deterministicHash(snapshotBefore));
+  assert.deepEqual(migrateWorkspaceState(migrated), migrated);
+});
+
+test("schema v17 迁移拒绝矛盾的目标拉力，绝不静默择一", () => {
+  const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
+  legacy.schemaVersion = 16;
+  const sku = (legacy.skuDrawers as Array<Record<string, unknown>>)[0];
+  sku.targetWeightKg = Number(sku.targetPullKg) + 0.1;
+  assert.throws(() => migrateWorkspaceState(legacy), /TARGET_PULL_MIGRATION_CONFLICT.*SKU/);
 });
 
 test("D-02 OfficialSku 无损迁移为抽屉、默认 Model 与冻结快照", () => {
@@ -103,15 +139,15 @@ test("D-02 OfficialSku 无损迁移为抽屉、默认 Model 与冻结快照", ()
 
   const migrated = migrateWorkspaceState(legacy);
   assert.equal(migrated.skuDrawers.length, 1);
-  assert.equal(migrated.schemaVersion, 15);
+  assert.equal(migrated.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
   assert.deepEqual(migrated.qualityValuePolicyDrafts, []);
   assert.deepEqual(migrated.seriesDefinitions[0].targetPullSpecifications, [{
-    targetPullKgf: migrated.skuDrawers[0].targetWeightKg,
+    targetPullKgf: migrated.skuDrawers[0].targetPullKg,
     skuId: migrated.skuDrawers[0].id,
   }]);
   assert.deepEqual(migrated.seriesDefinitions[0].planningPullRange, {
-    minKgf: migrated.skuDrawers[0].targetWeightKg,
-    maxKgf: migrated.skuDrawers[0].targetWeightKg,
+    minKgf: migrated.skuDrawers[0].targetPullKg,
+    maxKgf: migrated.skuDrawers[0].targetPullKg,
   });
   assert.equal(migrated.purchasableModels.length, 1);
   assert.equal(migrated.configurationSnapshots.length, 1);

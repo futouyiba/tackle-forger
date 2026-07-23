@@ -469,7 +469,7 @@ export type CompatibilityAxis =
 export interface CompatibilityContext {
   methodId: string;
   typeId: string;
-  targetWeightKg?: number;
+  targetPullKg?: number;
   functionId?: string;
   functionIntensity?: FunctionIntensity;
   performanceId?: string;
@@ -489,8 +489,8 @@ export interface CompatibilitySelector {
   qualityId?: string;
   itemPartId?: string;
   lineMaterialId?: string;
-  minWeightKg?: number;
-  maxWeightKg?: number;
+  minPullKg?: number;
+  maxPullKg?: number;
   componentIds?: string[];
   tags?: string[];
 }
@@ -600,12 +600,9 @@ export interface ProjectionMatch {
   matchedStructuralPullKg: number;
   pullDistance: number;
   itemPartId: string;
-  targetWeightKg: number;
   projectionId: string;
   weightTemplateId: string;
   ruleSetVersion: string;
-  anchorWeightKg: number;
-  weightDistance: number;
   affinityScore: number;
   normalizedAttributeDistance: number;
   reasons: string[];
@@ -725,8 +722,6 @@ export interface SeriesDefinition {
     targetPullKgf: number;
     skuId: string;
   }>;
-  /** @deprecated 只用于旧工作区兼容；新逻辑消费 targetPullSpecifications。 */
-  targetWeightsKg: number[];
   signature: SeriesSignatureAxis[];
   patchIds: string[];
   /** @deprecated 只用于旧工作区兼容；新逻辑消费 targetPullSpecifications。 */
@@ -740,7 +735,7 @@ export interface SkuDrawer {
   id: string;
   revision: number;
   seriesId: string;
-  targetWeightKg: number;
+  targetPullKg: number;
   projectionMatch: ProjectionMatch;
   patchIds: string[];
   modelIds: string[];
@@ -930,7 +925,7 @@ export interface CandidateSearchRecipe {
   functionIds: string[];
   performanceIds: string[];
   qualityIds: QualityProfileId[];
-  targetWeightRangeKg: { min: number; max: number };
+  targetPullRangeKg: { min: number; max: number };
   maxCandidates: number;
   sourceLegacyRecipeId?: string;
   notes: string;
@@ -1112,6 +1107,8 @@ export interface ConfigurationSnapshot {
   patchSetHash: string;
   patchReferences?: PatchSnapshotReference[];
   finalPanelValues: Record<string, number | string>;
+  /** schema v16 起的新快照冻结最终拉力；历史快照缺失时不得补写或改变 contentHash。 */
+  modelFinalPullKg?: number;
   componentSelections: ModelComponentSelection[];
   technologyIds: string[];
   attributeAffixIds: string[];

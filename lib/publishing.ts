@@ -1,6 +1,7 @@
 import { deterministicHash } from "./rule-kernel";
 import { previewPatchRebase } from "./patch-engine";
 import { orderedPatchReferences } from "./patch-ledger";
+import { structuralPullFromValues } from "./projection-matcher";
 import type {
   AffinityScoreResult,
   AffixQualityEvaluation,
@@ -173,6 +174,13 @@ export function publishConfigurationSnapshot(
     [...input.patches].sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
   );
   const patchSetHash = frozenPatches?.patchSetHash ?? legacyPatchSetHash;
+  const modelFinalPullKg = structuralPullFromValues(
+    input.finalPanelValues,
+    input.sku.projectionMatch.itemPartId,
+  );
+  if (modelFinalPullKg === undefined) {
+    throw new Error("最终 Model 面板缺少所属部位的有效 modelFinalPullKg，禁止创建 Snapshot。");
+  }
   const snapshotWithoutHash: Omit<ConfigurationSnapshot, "contentHash"> = {
     id:
       input.snapshotId ??
@@ -188,6 +196,7 @@ export function publishConfigurationSnapshot(
     patchSetHash,
     ...(frozenPatches ? { patchReferences: frozenPatches.references } : {}),
     finalPanelValues: structuredClone(input.finalPanelValues),
+    modelFinalPullKg,
     componentSelections: structuredClone(input.componentSelections),
     technologyIds: structuredClone(input.technologyIds),
     attributeAffixIds: structuredClone(input.attributeAffixIds),

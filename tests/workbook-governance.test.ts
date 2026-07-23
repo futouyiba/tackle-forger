@@ -221,7 +221,7 @@ test("同源 RuleSet 草稿不会将已发布 reduction policy 降级为 draft",
   }).state;
 
   const drafted = createRuleSetDraftFromPull({
-    state: published,
+    state: withCanonicalPullDraft(published, revision),
     sourceRevisionId: revision.id,
     createdAt: "2026-07-23T10:03:00.000Z",
     createdBy: "author",

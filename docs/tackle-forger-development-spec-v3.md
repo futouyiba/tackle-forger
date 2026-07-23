@@ -931,7 +931,7 @@ Snapshot的“下载审计归档”与“正式导出”是两种不同动作：
 
 `04_功能定位/vviXo0`每个功能行必须有不可变`FunctionProfile ID（勿改）`。它是FunctionProfile父级身份；`func_*`仅是强度行身份。相同父ID的显示名必须一致，非泛用组必须恰好各有一次强度1、2、3；泛用组允许仅有强度1，保留源数据而不得补造强度。缺父ID、重复强度或不完整非泛用组必须fail-closed，绝不由名称、`名称|级别`、行号或排序归组。revision 4226 的机器区域含竿/轮/线三块、空隔行与重复表头（`d6e928 A1:AE54`、`rgFPUu A1:AB12`、`m3eQCg A1:AB83`、`fATowU A1:AE20`、`vviXo0 A1:AG63`）；每块都必须独立按表头解析。
 
-对`02.5`的可选写回使用准备、写入、回读验证、激活四阶段：prepare冻结输入内容哈希、源revision baseline和幂等键；write只写经人工审核的拟写单元格；readback验证稳定ID、值与revision；activation仅在完整回读后标记`REMOTE_CHANGES_AVAILABLE`。部分失败必须保留准备证据并要求重新拉取，不能声称已激活或自动覆盖历史Snapshot。
+对`02.5`的可选写回最终必须使用准备、写入、回读验证、激活四阶段：prepare冻结输入内容哈希、源revision baseline和幂等键；write只写经人工审核的拟写单元格；readback验证稳定ID、值与revision；activation仅在完整回读后标记`REMOTE_CHANGES_AVAILABLE`。部分失败必须保留准备证据并要求重新拉取，不能声称已激活或自动覆盖历史Snapshot。当前版本尚未提供可从应用调用并跨重启恢复的`02.5`专用写回命令；本轮对飞书revision `4226→4227`的人工写入与技术回读仅是迁移证据，不得被界面或实现宣称为该持久化工作流已经上线。
 
 规则工作表必须使用不可变`ruleId/entityId`和稳定`parameterKey`，机器区域不得依赖行号、名称或合并单元格。revision `2869`的当前规则源拓扑已将词条和技术调整为`04_词条`、`05_技术`，且不再包含独立“性能定位”工作表。`04_词条/zrVOxd`的稳定ID扫描与组合矩阵别名绑定必须以同一`FeishuSourceRevision.sheets`中经验证的`grid rowCount`作为读取上界（分别读取`B1:C<rowCount>`与`B2:F<rowCount>`）；不得固定末行。缺失、非安全整数、过小行数或不足六列的grid元数据必须fail-closed，不能截断为旧范围或猜测别名。接入器必须按最新显式拉取的workbook revision核对sheet_id与机器ID，保留既有ID；任何缺ID新行进入`NEW_SOURCE_ROW`等待人工确认。历史revision中的性能定位ID不得擅自迁移、删除、复用或继续作为新Series/Model输入；名称只用于历史显示、搜索和迁移候选，不用于长期对象关联。新的`PerformanceSummary`从已结算配置派生，不接管或复用这些历史ID。
 

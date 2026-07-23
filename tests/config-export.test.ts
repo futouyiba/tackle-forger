@@ -8,6 +8,7 @@ import {
 } from "../lib/config-export";
 import { deterministicHash } from "../lib/rule-kernel";
 import { createSeedState } from "../lib/seed";
+import type { ConfigurationSnapshot } from "../lib/types";
 import type {
   FormalConfigExportAuthorization,
   FormalConfigExportContext,
@@ -45,6 +46,14 @@ const FORMAL_VERIFIER: FormalConfigExportEvidenceVerifier = {
 function exportSnapshot(itemPartId = "part:rod") {
   const snapshot = structuredClone(createSeedState().configurationSnapshots[0]!);
   snapshot.projectionMatch.itemPartId = itemPartId;
+  snapshot.qualityValueAssessment = {
+    formal: true,
+  } as NonNullable<ConfigurationSnapshot["qualityValueAssessment"]>;
+  snapshot.pricingPolicyVersion = "pricing-policy:test";
+  snapshot.automaticPricing = {
+    formal: true,
+    pricingPolicyRef: snapshot.pricingPolicyVersion,
+  } as NonNullable<ConfigurationSnapshot["automaticPricing"]>;
   const content = structuredClone(snapshot);
   Reflect.deleteProperty(content, "contentHash");
   snapshot.contentHash = deterministicHash(content);
@@ -311,4 +320,66 @@ test("扩展部位提交在任何备份或文件替换前返回稳定错误", as
   ));
   assert.deepEqual(io.replaced, []);
   assert.deepEqual(io.restored, []);
+});
+
+test("正式提交在治理验证和文件操作前重查 Snapshot 可重放策略与导出阻断", async () => {
+  const cases = [
+    {
+      code: "SNAPSHOT_REPLAY_POLICY_MISSING",
+      mutate(snapshot: ReturnType<typeof exportSnapshot>) {
+        Reflect.deleteProperty(snapshot, "qualityValueAssessment");
+      },
+    },
+    {
+      code: "SNAPSHOT_EXPORT_BLOCKED",
+      mutate(snapshot: ReturnType<typeof exportSnapshot>) {
+        snapshot.validationReport = [{
+          level: "error",
+          severity: "BLOCKER",
+          gate: "EXPORT",
+          state: "OPEN",
+          code: "EXPORT_REPLAY_BLOCKER",
+          message: "blocked",
+        }];
+      },
+    },
+  ] as const;
+  for (const current of cases) {
+    const io = adapter();
+    const snapshot = exportSnapshot();
+    current.mutate(snapshot);
+    const content = structuredClone(snapshot);
+    Reflect.deleteProperty(content, "contentHash");
+    snapshot.contentHash = deterministicHash(content);
+    let verifierCalls = 0;
+    await assert.rejects(
+      () => commitExportPackage({
+        profileId: "dev",
+        packageId: `package:${current.code}`,
+        snapshots: [snapshot],
+        idempotencyKey: `key:${current.code}`,
+        operations,
+        adapter: io,
+        formalAuthorization: FORMAL_AUTHORIZATION,
+        formalAuthorizationVerifier: {
+          async verify(_authorization, context) {
+            verifierCalls += 1;
+            return {
+              verified: true,
+              manifestSetHash: "manifest-set:test",
+              verifiedAt: "2026-07-23T00:00:00.000Z",
+              contextHash: formalConfigExportContextHash(context),
+            };
+          },
+        },
+        formalTargetContext: formalTargetContext(),
+      }),
+      (error) => error instanceof Error
+        && "code" in error
+        && error.code === current.code,
+    );
+    assert.equal(verifierCalls, 0);
+    assert.deepEqual(io.replaced, []);
+    assert.deepEqual(io.restored, []);
+  }
 });

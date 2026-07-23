@@ -35,6 +35,7 @@ import {
   assertSnapshotItemPartEnabled,
   snapshotItemPartId,
 } from "./enabled-item-parts";
+import { assertConfigExportSnapshotReplayable } from "./config-preview-package";
 import {
   assertFormalConfigExportAllowed,
   assertFormalConfigExportStageEnabled,
@@ -147,6 +148,7 @@ export async function previewFilesystemExport(input: {
   formalAuthorizationVerifier?: FormalConfigExportEvidenceVerifier;
   createdAt?: string;
 }): Promise<FilesystemExportPreview> {
+  assertConfigExportSnapshotReplayable(input.snapshot);
   const workbookNames = Array.from(new Set(
     Object.values(input.mapping.logicalTables).map((table) => table.workbook),
   )).sort();
@@ -176,7 +178,6 @@ export async function previewFilesystemExport(input: {
       })),
     },
   });
-  assertSnapshotItemPartEnabled(input.snapshot, "config_export");
   const itemPartId = snapshotItemPartId(input.snapshot)!;
   const createdAt = input.createdAt ?? new Date().toISOString();
   const initialIssues: ConfigExportMappingIssue[] = [];

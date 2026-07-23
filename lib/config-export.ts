@@ -18,6 +18,7 @@ import type {
 } from "./types";
 import type { ExportTargetProfile } from "./interaction-contracts";
 import type { ConfigExportMapping } from "./config-export-mapping";
+import { assertConfigExportSnapshotReplayable } from "./config-preview-package";
 import {
   assertSnapshotItemPartEnabled,
 } from "./enabled-item-parts";
@@ -403,10 +404,7 @@ export async function commitExportPackage(input: {
   assertFormalConfigExportStageEnabled();
   if (!input.snapshots.length) throw new Error("导出提交缺少冻结 ConfigurationSnapshot。");
   for (const snapshot of input.snapshots) {
-    assertSnapshotItemPartEnabled(snapshot, "config_export");
-    if (!verifySnapshotIntegrity(snapshot)) {
-      throw new Error(`冻结 ConfigurationSnapshot ${snapshot.id} 的内容哈希校验失败。`);
-    }
+    assertConfigExportSnapshotReplayable(snapshot);
   }
   const previous = await input.adapter.findCommittedResult(input.idempotencyKey);
   if (previous) {

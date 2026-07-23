@@ -108,6 +108,46 @@ function previewObjects(snapshot: ConfigurationSnapshot): ConfigPreviewObject[] 
   ];
 }
 
+export function assertConfigExportSnapshotReplayable(
+  snapshot: ConfigurationSnapshot,
+): void {
+  assertSnapshotItemPartEnabled(snapshot, "config_export");
+  if (!verifySnapshotIntegrity(snapshot)) {
+    throw new ConfigPreviewSnapshotError(
+      "SNAPSHOT_INTEGRITY_INVALID",
+      `冻结 ConfigurationSnapshot ${snapshot.id} 的内容哈希校验失败。`,
+    );
+  }
+  if (
+    !snapshot.qualityValueAssessment?.formal
+    || !snapshot.pricingPolicyVersion?.trim()
+    || !snapshot.automaticPricing?.formal
+    || snapshot.automaticPricing.pricingPolicyRef !== snapshot.pricingPolicyVersion
+  ) {
+    throw new ConfigPreviewSnapshotError(
+      "SNAPSHOT_REPLAY_POLICY_MISSING",
+      `ConfigurationSnapshot ${snapshot.id} 缺少可重放的正式品质或 PricingPolicy 引用；只能下载原样审计归档，不能进入配置预览。`,
+    );
+  }
+  const exportBlocker = snapshot.validationReport.find((issue) => {
+    const severity = issue.severity
+      ?? (issue.level === "error" ? "ERROR" : issue.level === "warning" ? "WARNING" : "INFO");
+    if (severity === "BLOCKER") return issue.state !== "RESOLVED";
+    return severity === "ERROR"
+      && issue.gate !== "NONE"
+      && issue.gate !== "REVIEW"
+      && issue.gate !== "PUBLISH"
+      && issue.state !== "RESOLVED"
+      && issue.state !== "WAIVED";
+  });
+  if (exportBlocker) {
+    throw new ConfigPreviewSnapshotError(
+      "SNAPSHOT_EXPORT_BLOCKED",
+      `ConfigurationSnapshot ${snapshot.id} 存在不可waive的导出 BLOCKER：${exportBlocker.code}。`,
+    );
+  }
+}
+
 export function createConfigPreviewPackage(input: {
   packageId: string;
   workspaceId: string;
@@ -125,42 +165,7 @@ export function createConfigPreviewPackage(input: {
   const snapshotIds = new Set<string>();
   const modelIds = new Set<string>();
   for (const snapshot of input.snapshots) {
-    assertSnapshotItemPartEnabled(snapshot, "config_export");
-    if (!verifySnapshotIntegrity(snapshot)) {
-      throw new ConfigPreviewSnapshotError(
-        "SNAPSHOT_INTEGRITY_INVALID",
-        `冻结 ConfigurationSnapshot ${snapshot.id} 的内容哈希校验失败。`,
-      );
-    }
-    if (
-      !snapshot.qualityValueAssessment?.formal
-      || !snapshot.pricingPolicyVersion?.trim()
-      || !snapshot.automaticPricing?.formal
-      || snapshot.automaticPricing.pricingPolicyRef !== snapshot.pricingPolicyVersion
-    ) {
-      throw new ConfigPreviewSnapshotError(
-        "SNAPSHOT_REPLAY_POLICY_MISSING",
-        `ConfigurationSnapshot ${snapshot.id} 缺少可重放的正式品质或 PricingPolicy 引用；只能下载原样审计归档，不能进入配置预览。`,
-      );
-    }
-    const exportBlocker = snapshot.validationReport.find((issue) => {
-      const severity = issue.severity
-        ?? (issue.level === "error" ? "ERROR" : issue.level === "warning" ? "WARNING" : "INFO");
-      if (severity === "BLOCKER") return issue.state !== "RESOLVED";
-      return severity === "ERROR"
-        && issue.gate !== "NONE"
-        && issue.gate !== "REVIEW"
-        && issue.gate !== "PUBLISH"
-        && issue.state !== "RESOLVED"
-        && issue.state !== "WAIVED";
-    },
-    );
-    if (exportBlocker) {
-      throw new ConfigPreviewSnapshotError(
-        "SNAPSHOT_EXPORT_BLOCKED",
-        `ConfigurationSnapshot ${snapshot.id} 存在不可waive的导出 BLOCKER：${exportBlocker.code}。`,
-      );
-    }
+    assertConfigExportSnapshotReplayable(snapshot);
     if (snapshotIds.has(snapshot.id)) {
       throw new Error(`ConfigPreviewPackage 包含重复 Snapshot：${snapshot.id}。`);
     }

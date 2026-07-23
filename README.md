@@ -10,8 +10,10 @@
 - 节点内部保留可排序规则栈，支持加、乘、覆盖、上下限和安全公式
 - 直接属性词条与被动机制词条
 - 有损相加、协同与冲突驱动的品质评分
-- 系列配方、受约束候选生成、批量筛选、对比和精调
-- 正式组合 SKU 及杆、轮、线明细
+- v3 Collection / Series、离散重量 SKU 抽屉与可购买 Model
+- CandidateSearchRecipe 驱动的确定性 Model 候选生成、物化与审计
+- Series / SKU / Model 分层 Patch、冻结 ConfigurationSnapshot 与升级候选
+- 旧 SeriesRecipe、Candidate、OfficialSku 与 DetailOverride 只读归档及迁移诊断
 - 强度闭环、重量段覆盖校验和精调规则学习
 - D1 团队共享状态、版本记录与冲突保护
 - R2 保存 Excel 原始导入文件
@@ -57,6 +59,11 @@ Windows 推荐使用项目自带脚本，避免把重定向字符串误当成程
 生产构建由 Vinext 生成。正式目标环境是公司内网 Dell R730；Vercel 地址仅作为评审入口，
 不能替代内网持久磁盘、公司飞书凭据和真实配置仓库验收。
 完整安装、systemd、Nginx、备份与回滚步骤见 `docs/deployment/r730-production.md`。
+
+Vercel 评审构建同样从仓库根安装 `package-lock.json`，但通过
+`npm run build:vercel` 启用 Vinext 的 Nitro 适配器。该命令生成 Vercel Build Output API
+要求的 `.vercel/output`；`vercel.json` 不执行 `next build`、不修改源码，也不把历史
+`apps/web` 当作部署入口。
 
 ## 公司飞书登录
 
@@ -125,4 +132,4 @@ expected-old-OID 冻结进提交结果，不能换目标、内容或授权证据
 
 ## 旧版工作区
 
-合并前的 pnpm 多包实现仍保留在 `apps/web` 与 `packages/*`，用于历史追溯；当前开发、验证与部署均以仓库根目录的 v3 应用和 npm 脚本为准。
+合并前的 pnpm 多包实现仍保留在 `apps/web` 与 `packages/*`，仅用于历史追溯、兼容性测试和经审计的数据迁移；其中的浏览器本地状态不属于正式产品数据。当前开发、验证、评审和生产部署均以仓库根目录的 v3 应用和 npm 脚本为准。

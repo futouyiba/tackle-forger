@@ -12,6 +12,7 @@ export const PHASE_ONE_CAPABILITIES = [
   "series.read",
   "series.edit",
   "sku.read",
+  "sku.edit",
   "model.read",
   "model.edit",
   "model.review",

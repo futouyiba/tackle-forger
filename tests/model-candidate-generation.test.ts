@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createSeedState } from "../lib/seed";
 import {
+  SKU_NOT_CURRENT_SERIES_SPECIFICATION_CODE,
+  SkuNotCurrentSeriesSpecificationError,
+} from "../lib/enabled-item-parts";
+import {
   candidateGenerationInputHash,
   generateModelCandidateRun,
   materializeCandidateRun,
@@ -151,4 +155,46 @@ test("同一 SKU + modelVariantKey 多重命中时跳过并报告，不按名称
   const nextState = { ...current.state, purchasableModels: [...first.models, duplicate], skuDrawers: first.skus };
   const result = materializeCandidateRun({ state: nextState, run: generated, actor: "tester", occurredAt: "2026-07-21T02:00:00.000Z" });
   assert.ok(result.record.issues.some((issue) => issue.code === "MODEL_VARIANT_BINDING_AMBIGUOUS"));
+});
+
+test("候选生成和物化在领域边界拒绝 DEPRECATED 或非当前规格 SKU", () => {
+  const current = fixture();
+  const allowedRun = run(current);
+  const selectedSku = current.skus[0]!;
+  const originalStatus = selectedSku.status;
+
+  selectedSku.status = "superseded";
+  assert.throws(
+    () => run(current),
+    (error) =>
+      error instanceof SkuNotCurrentSeriesSpecificationError &&
+      error.code === SKU_NOT_CURRENT_SERIES_SPECIFICATION_CODE &&
+      error.action === "candidate_generation" &&
+      error.skuIds.includes(selectedSku.id),
+  );
+  assert.throws(
+    () => materializeCandidateRun({
+      state: current.state,
+      run: allowedRun,
+      actor: "tester",
+      occurredAt: "2026-07-21T02:00:00.000Z",
+    }),
+    (error) =>
+      error instanceof SkuNotCurrentSeriesSpecificationError &&
+      error.action === "candidate_materialization" &&
+      error.skuIds.includes(selectedSku.id),
+  );
+
+  selectedSku.status = originalStatus;
+  current.series.targetPullSpecifications =
+    current.series.targetPullSpecifications.filter(
+      (entry) => entry.skuId !== selectedSku.id,
+    );
+  assert.throws(
+    () => run(current),
+    (error) =>
+      error instanceof SkuNotCurrentSeriesSpecificationError &&
+      error.action === "candidate_generation" &&
+      error.skuIds.includes(selectedSku.id),
+  );
 });

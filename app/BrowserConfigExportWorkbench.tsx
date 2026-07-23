@@ -19,9 +19,9 @@ import type { ActionAvailabilityMap } from "@/lib/interaction-contracts";
 import {
   assertSnapshotBatchCanConfirm,
   planSnapshotBatch,
+  snapshotBatchEligibleModels,
   type SnapshotBatchPlan,
 } from "@/lib/snapshot-batch";
-import { isProductItemPartEnabled } from "@/lib/enabled-item-parts";
 import type { WorkspaceState } from "@/lib/types";
 import "./browser-config-export.css";
 
@@ -58,11 +58,14 @@ export function BrowserConfigExportWorkbench({
   actionAvailabilities,
   notify,
 }: BrowserConfigExportWorkbenchProps) {
+  const currentExportModels = snapshotBatchEligibleModels({
+    models: state.purchasableModels,
+    series: state.seriesDefinitions,
+    skus: state.skuDrawers,
+  });
   const [selectedModelIds, setSelectedModelIds] = useState<string[]>(() =>
-    state.purchasableModels
-      .filter((model) => model.configurationSnapshotId && isProductItemPartEnabled(
-        state.skuDrawers.find((sku) => sku.id === model.skuId)?.projectionMatch.itemPartId,
-      ))
+    currentExportModels
+      .filter((model) => model.configurationSnapshotId)
       .map((model) => model.id),
   );
   const [batch, setBatch] = useState<SnapshotBatchPlan>();
@@ -74,10 +77,16 @@ export function BrowserConfigExportWorkbench({
   const previewAvailability = actionAvailabilities.preview_config_export;
   const commitAvailability = actionAvailabilities.commit_config_export;
   const enabledProductModels = useMemo(
-    () => state.purchasableModels.filter((model) => isProductItemPartEnabled(
-      state.skuDrawers.find((sku) => sku.id === model.skuId)?.projectionMatch.itemPartId,
-    )),
-    [state.purchasableModels, state.skuDrawers],
+    () => snapshotBatchEligibleModels({
+      models: state.purchasableModels,
+      series: state.seriesDefinitions,
+      skus: state.skuDrawers,
+    }),
+    [
+      state.purchasableModels,
+      state.seriesDefinitions,
+      state.skuDrawers,
+    ],
   );
   const selectedSnapshotIds = useMemo(
     () => (batch?.items ?? [])

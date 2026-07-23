@@ -10,7 +10,6 @@ interface PatchLedgerWorkbenchProps {
   state: WorkspaceState;
   revision: number;
   capabilities: string[];
-  actorStableId: string;
   actorName: string;
   mutate: (producer: (draft: WorkspaceState) => void, recalculate?: boolean) => void;
   notify: (message: string) => void;
@@ -47,7 +46,7 @@ function analysisContexts(state: WorkspaceState) {
   }
   return contexts;
 }
-export function PatchLedgerWorkbench({ state, revision, capabilities, actorStableId: _actorStableId, actorName, mutate, notify, replaceWorkspace }: PatchLedgerWorkbenchProps) {
+export function PatchLedgerWorkbench({ state, revision, capabilities, actorName, mutate, notify, replaceWorkspace }: PatchLedgerWorkbenchProps) {
   const [query,setQuery]=useState("");
   const [selectedKey,setSelectedKey]=useState("");
   const [draft,setDraft]=useState<PatchDraft|null>(null);

@@ -248,12 +248,15 @@ test("同一物理 Git ref 别名的 expected OID 不一致时 fail closed", () 
 
 test("Manifest 必须无问题且逐项验证策略声明的 rangeId", () => {
   const fixture = buildGovernanceFixture();
+  fixture.governance.scanManifests[0]!.verifiedRangeIds = [
+    CANONICAL_CONFIG_ID_RANGES[0]!.rangeId,
+  ];
   assert.throws(
     () => publishConfigIdPolicyVersion(fixture.governance, {
       policyVersionId: "policy:partial-ranges",
       catalogVersionId: "catalog:v1",
       manifestIds: ["manifest:dev:v1", "manifest:test:v1"],
-      ranges: [{ ...CANONICAL_CONFIG_ID_RANGES[0]! }],
+      ranges: CANONICAL_CONFIG_ID_RANGES.map((range) => ({ ...range })),
       publishedBy: "reviewer",
       publishedAt: NOW,
       observedTargets: fixture.observations,
@@ -602,22 +605,37 @@ test("稳定 rangeId 不得改语义，历史与新策略区间不得重叠", ()
   assert.throws(
     () => publishConfigIdPolicyVersion(fixture.governance, {
       ...baseInput,
-      ranges: [{
-        ...CANONICAL_CONFIG_ID_RANGES[0]!,
-        maximumBaseId: "301899998",
-      }],
+      ranges: CANONICAL_CONFIG_ID_RANGES.map((range, index) => index === 0
+        ? { ...range, maximumBaseId: "301899998" }
+        : { ...range }),
     }),
     (error) => errorCode(error) === "CONFIG_ID_RANGE_SEMANTICS_CHANGED",
   );
   assert.throws(
     () => publishConfigIdPolicyVersion(fixture.governance, {
       ...baseInput,
-      ranges: [{
-        ...CANONICAL_CONFIG_ID_RANGES[0]!,
-        rangeId: "rod_overlap",
-      }],
+      ranges: [
+        ...CANONICAL_CONFIG_ID_RANGES.map((range) => ({ ...range })),
+        { ...CANONICAL_CONFIG_ID_RANGES[0]!, rangeId: "rod_overlap" },
+      ],
     }),
     (error) => errorCode(error) === "CONFIG_ID_RANGE_OVERLAP",
+  );
+});
+
+test("替代正式策略必须携带当前已发布策略的所有稳定 rangeId", () => {
+  const fixture = buildGovernanceFixture();
+  assert.throws(
+    () => publishConfigIdPolicyVersion(fixture.governance, {
+      policyVersionId: "policy:missing-existing-range",
+      catalogVersionId: "catalog:v1",
+      manifestIds: ["manifest:dev:v1", "manifest:test:v1"],
+      ranges: CANONICAL_CONFIG_ID_RANGES.slice(0, -1).map((range) => ({ ...range })),
+      publishedBy: "reviewer",
+      publishedAt: NOW,
+      observedTargets: fixture.observations,
+    }),
+    (error) => errorCode(error) === "CONFIG_ID_RANGE_CARRY_FORWARD_REQUIRED",
   );
 });
 

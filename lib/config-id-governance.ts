@@ -500,6 +500,20 @@ function assertRangeDefinitions(
   ranges: ConfigIdRangeDefinition[],
 ) {
   uniqueBy(ranges, (range) => range.rangeId, "CONFIG_ID_RANGE_DUPLICATE");
+  const publishedRangeIds = governance.policies
+    .filter((policy) => policy.status === "PUBLISHED")
+    .flatMap((policy) => policy.ranges.map((range) => range.rangeId))
+    .sort(compareText);
+  const declaredRangeIds = ranges.map((range) => range.rangeId).sort(compareText);
+  const missingPublishedRangeIds = publishedRangeIds.filter((rangeId) =>
+    !declaredRangeIds.includes(rangeId));
+  if (missingPublishedRangeIds.length) {
+    throw new ConfigIdGovernanceError(
+      "CONFIG_ID_RANGE_CARRY_FORWARD_REQUIRED",
+      "替代正式策略必须携带当前已发布策略的全部稳定 rangeId。",
+      { missingPublishedRangeIds, publishedRangeIds, declaredRangeIds },
+    );
+  }
   const knownRanges = governance.policies.flatMap((policy) => policy.ranges);
   for (const range of ranges) {
     if (

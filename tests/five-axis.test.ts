@@ -456,14 +456,14 @@ test("正式快照拒绝未发布、篡改或版本链过期的五维定义", ()
     definition: def,
     vertexSet,
     components: modelComponents(),
-    finalPanelHash: deterministicHash(existing.finalPanelValues),
+    finalPanelHash: deterministicHash(projection.values),
   });
   const common = {
     publicationMode: "new_formal" as const,
     workspaceId: "workspace:test",
     model, sku, series, projection,
     seriesSkus: state.skuDrawers,
-    finalPanelValues: existing.finalPanelValues,
+    finalPanelValues: projection.values,
     componentSelections: existing.componentSelections,
     patches: [],
     attributeAffixIds: existing.attributeAffixIds,

@@ -6,6 +6,7 @@ import {
   adaptPricingTraceToCanonical,
   adaptRuleTraceToCanonical,
   CalculationTraceReplayError,
+  assertCalculationTraceMatchesFinalPanel,
   createCalculationTraceArchive,
   createCalculationTraceEntry,
   replayCalculationTrace,
@@ -185,6 +186,86 @@ test("sequence 缺口、before 冲突和 outputHash 篡改均 fail-closed", () =
   );
 });
 
+test("非有限值和非 JSON 安全值在建档前 fail-closed，合法归档可无损往返", () => {
+  for (const unsafe of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -0]) {
+    assert.throws(
+      () => createCalculationTraceEntry({
+        subjectRef,
+        parameterKey: "unsafe",
+        sequence: 1,
+        layer: "boundary",
+        sourceRef: { sourceType: "test", sourceId: "unsafe" },
+        sourceVersion: "source:1",
+        ruleSetVersion: "rules:1",
+        before: unsafe,
+        operation: "no_effect",
+        operand: null,
+        after: unsafe,
+        effect: "neutral",
+        warningIssueIds: [],
+        actions: [],
+      }),
+      /TRACE_REPLAY_MISMATCH/,
+    );
+  }
+  assert.throws(
+    () => createCalculationTraceEntry({
+      subjectRef,
+      parameterKey: "unsafe-evidence",
+      sequence: 1,
+      layer: "boundary",
+      sourceRef: { sourceType: "test", sourceId: "unsafe-evidence" },
+      sourceVersion: "source:1",
+      ruleSetVersion: "rules:1",
+      before: null,
+      operation: "no_effect",
+      operand: null,
+      after: null,
+      effect: "neutral",
+      warningIssueIds: [],
+      actions: [],
+      evidence: { nested: { value: Number.NaN } },
+    }),
+    /TRACE_REPLAY_MISMATCH/,
+  );
+
+  const archive = createCalculationTraceArchive([
+    entry({ sequence: 1, before: 10, operand: 2, after: 12 }),
+  ]);
+  const persisted = JSON.parse(JSON.stringify(archive));
+  assert.deepEqual(persisted, archive);
+  assert.equal(verifyCalculationTraceArchive(persisted), true);
+});
+
+test("canonical Trace 终态必须完整重放 finalPanelValues", () => {
+  const archive = createCalculationTraceArchive(adaptRuleTraceToCanonical({
+    projection,
+    subjectRef,
+    parameterDefinitions,
+  }));
+  assert.doesNotThrow(() => assertCalculationTraceMatchesFinalPanel({
+    archive,
+    subjectRef,
+    finalPanelValues: { drag: 12 },
+  }));
+  assert.throws(
+    () => assertCalculationTraceMatchesFinalPanel({
+      archive,
+      subjectRef,
+      finalPanelValues: { drag: 99 },
+    }),
+    /TRACE_REPLAY_MISMATCH/,
+  );
+  assert.throws(
+    () => assertCalculationTraceMatchesFinalPanel({
+      archive,
+      subjectRef,
+      finalPanelValues: {},
+    }),
+    /finalPanelValues 缺少 Trace 面板参数/,
+  );
+});
+
 test("pricing、patch 与 legacy 只读适配器幂等并保留原始 evidence", () => {
   const pricing = {
     formal: true,
@@ -260,4 +341,36 @@ test("pricing、patch 与 legacy 只读适配器幂等并保留原始 evidence",
   assert.equal(legacyEntries[0].operation, "set");
   assert.equal(legacyEntries[0].evidence?.adapter, "legacy_calculation_trace/v1");
   assert.equal(verifyCalculationTraceArchive(createCalculationTraceArchive(legacyEntries)), true);
+});
+
+test("rule formula 降级为 set 时无损保留公式身份、版本和原始 operand", () => {
+  const formulaProjection = structuredClone(projection);
+  formulaProjection.trace = [{
+    layer: "function",
+    sourceIds: ["formula-source"],
+    contributions: [{
+      sequence: 1,
+      ruleId: "formula:drag-plus-two",
+      sourceId: "formula-source",
+      sourceName: "公式规则",
+      parameterKey: "drag",
+      operation: "formula",
+      before: 10,
+      operand: "drag + 2",
+      after: 12,
+    }],
+  }];
+  const [formulaEntry] = adaptRuleTraceToCanonical({
+    projection: formulaProjection,
+    subjectRef,
+    parameterDefinitions,
+  });
+  assert.equal(formulaEntry.operation, "set");
+  assert.equal(formulaEntry.operand, 12);
+  assert.equal(formulaEntry.evidence?.legacyOperand, "drag + 2");
+  assert.deepEqual(formulaEntry.evidence?.formula, {
+    formulaId: "formula:drag-plus-two",
+    formulaVersion: "rules:7",
+    operand: "drag + 2",
+  });
 });

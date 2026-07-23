@@ -27,6 +27,8 @@ export {
   adaptPricingTraceToCanonical,
   adaptProjectionTraceToCanonical,
   adaptRuleTraceToCanonical,
+  assertCalculationTraceJsonSafe,
+  assertCalculationTraceMatchesFinalPanel,
   createCalculationTraceArchive,
   createCalculationTraceEntry,
   replayCalculationTrace,

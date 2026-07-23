@@ -12,6 +12,10 @@ import {
 } from "../lib/pricing-policy";
 import { publishConfigurationSnapshot, verifySnapshotIntegrity } from "../lib/publishing";
 import { deterministicHash } from "../lib/rule-kernel";
+import {
+  adaptRuleTraceToCanonical,
+  createCalculationTraceEntry,
+} from "../lib/calculation-trace";
 import { createSeedState } from "../lib/seed";
 
 const REVISION = "2922";
@@ -178,7 +182,39 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     trace: [],
     inputHash: "quality-assessment-hash",
   };
-  const snapshot = publishConfigurationSnapshot({
+  const subjectRef = {
+    workspaceId: "workspace:test",
+    entityType: "model" as const,
+    entityId: model.id,
+    revisionId: String(model.revision),
+  };
+  const baseTraceLength = adaptRuleTraceToCanonical({
+    projection,
+    subjectRef,
+  }).length;
+  const [changedParameterKey, changedBefore] = Object.entries(projection.values)
+    .find((entry): entry is [string, number] => typeof entry[1] === "number")!;
+  const finalPanelValues = {
+    ...projection.values,
+    [changedParameterKey]: changedBefore + 1,
+  };
+  const finalPanelTraceEntries = [createCalculationTraceEntry({
+    subjectRef,
+    parameterKey: changedParameterKey,
+    sequence: baseTraceLength + 1,
+    layer: "final_review_patch",
+    sourceRef: { sourceType: "final_review_patch", sourceId: "review:pricing-test" },
+    sourceVersion: "review:1",
+    ruleSetVersion: projection.ruleSetVersion,
+    before: changedBefore,
+    operation: "add",
+    operand: 1,
+    after: changedBefore + 1,
+    effect: "contextual",
+    warningIssueIds: [],
+    actions: [],
+  })];
+  const publishInput: Parameters<typeof publishConfigurationSnapshot>[0] = {
     publicationMode: "new_formal",
     workspaceId: "workspace:test",
     model,
@@ -186,7 +222,8 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     series,
     seriesSkus: state.skuDrawers,
     projection,
-    finalPanelValues: oldSnapshot.finalPanelValues,
+    finalPanelValues,
+    finalPanelTraceEntries,
     componentSelections: oldSnapshot.componentSelections,
     patches: [],
     attributeAffixIds: oldSnapshot.attributeAffixIds,
@@ -204,7 +241,8 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     publishedBy: "tester",
     publishedAt: "2026-07-22T00:00:00.000Z",
     snapshotId: "snapshot:new-formal",
-  });
+  };
+  const snapshot = publishConfigurationSnapshot(publishInput);
   assert.equal(snapshot.pricingPolicyVersion, version.id);
   assert.equal(snapshot.automaticPricing?.formal, true);
   assert.equal(snapshot.qualityValueAssessment?.formal, true);
@@ -217,4 +255,18 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     Object.fromEntries(Object.entries(tampered).filter(([key]) => key !== "contentHash")),
   );
   assert.equal(verifySnapshotIntegrity(tampered), false);
+  const panelTampered = structuredClone(snapshot);
+  panelTampered.finalPanelValues[changedParameterKey] =
+    Number(panelTampered.finalPanelValues[changedParameterKey]) + 1;
+  panelTampered.contentHash = deterministicHash(
+    Object.fromEntries(Object.entries(panelTampered).filter(([key]) => key !== "contentHash")),
+  );
+  assert.equal(verifySnapshotIntegrity(panelTampered), false);
+  assert.throws(
+    () => publishConfigurationSnapshot({
+      ...publishInput,
+      finalPanelValues: oldSnapshot.finalPanelValues,
+    }),
+    /TRACE_REPLAY_MISMATCH/,
+  );
 });

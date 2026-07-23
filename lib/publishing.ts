@@ -46,8 +46,10 @@ import {
   adaptFiveAxisTraceToCanonical,
   adaptPricingTraceToCanonical,
   adaptRuleTraceToCanonical,
+  assertCalculationTraceMatchesFinalPanel,
   createCalculationTraceArchive,
   verifyCalculationTraceArchive,
+  type CalculationTraceEntry,
 } from "./calculation-trace";
 
 function errors(issues: ValidationIssue[]): ValidationIssue[] {
@@ -68,6 +70,8 @@ export interface PublishModelInput {
   series: SeriesDefinition;
   projection: DerivedProjection;
   finalPanelValues: Record<string, number | string>;
+  /** 投影之后所有面板变更层的 canonical 条目；必须延续全局 sequence。 */
+  finalPanelTraceEntries?: CalculationTraceEntry[];
   componentSelections: ModelComponentSelection[];
   patches: ProjectionPatchRuleSource[];
   patchRevisions?: PatchRevisionRecord[];
@@ -299,6 +303,17 @@ export function publishConfigurationSnapshot(
           subjectRef,
           parameterDefinitions: input.patchOffsetGovernance?.parameterDefinitions,
         });
+        if (input.finalPanelTraceEntries?.length) {
+          for (const entry of input.finalPanelTraceEntries) {
+            if (
+              deterministicHash(entry.subjectRef) !== deterministicHash(subjectRef)
+              || entry.ruleSetVersion !== input.projection.ruleSetVersion
+            ) {
+              throw new Error("finalPanelTraceEntries 的 subjectRef 或 ruleSetVersion 与发布对象不一致。");
+            }
+          }
+          entries.push(...structuredClone(input.finalPanelTraceEntries));
+        }
         if (input.automaticPricing) {
           entries.push(...adaptPricingTraceToCanonical({
             pricing: input.automaticPricing,
@@ -315,7 +330,13 @@ export function publishConfigurationSnapshot(
             sequenceStart: entries.length + 1,
           }));
         }
-        return createCalculationTraceArchive(entries);
+        const archive = createCalculationTraceArchive(entries);
+        assertCalculationTraceMatchesFinalPanel({
+          archive,
+          subjectRef,
+          finalPanelValues: input.finalPanelValues,
+        });
+        return archive;
       })()
     : undefined;
 
@@ -390,6 +411,28 @@ export function verifySnapshotIntegrity(
     snapshot.calculationTrace
     && !verifyCalculationTraceArchive(snapshot.calculationTrace)
   ) return false;
+  if (snapshot.calculationTrace) {
+    const matchingSubjects = snapshot.calculationTrace.entries
+      .map((entry) => entry.subjectRef)
+      .filter((subjectRef) =>
+        subjectRef.entityType === "model"
+        && subjectRef.entityId === snapshot.modelId
+        && subjectRef.revisionId === String(snapshot.modelRevision),
+      );
+    const uniqueSubjects = new Map(
+      matchingSubjects.map((subjectRef) => [deterministicHash(subjectRef), subjectRef]),
+    );
+    if (uniqueSubjects.size !== 1) return false;
+    try {
+      assertCalculationTraceMatchesFinalPanel({
+        archive: snapshot.calculationTrace,
+        subjectRef: [...uniqueSubjects.values()][0],
+        finalPanelValues: snapshot.finalPanelValues,
+      });
+    } catch {
+      return false;
+    }
+  }
   const { contentHash, ...content } = snapshot;
   return deterministicHash(content) === contentHash;
 }

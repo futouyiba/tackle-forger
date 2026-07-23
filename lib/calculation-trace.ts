@@ -13,7 +13,7 @@ import type {
 import type { PricingTraceEntry, PricingTrialResult } from "./pricing-policy";
 
 export const CALCULATION_TRACE_SCHEMA_VERSION = "calculation-trace/v1" as const;
-export const CALCULATION_TRACE_HASH_CONTRACT_VERSION = "deterministic-json-fnv1a/v1" as const;
+export const CALCULATION_TRACE_HASH_CONTRACT_VERSION = "json-lossless-fnv1a/v2" as const;
 export const CALCULATION_TRACE_REPLAY_CONTRACT_VERSION = "strict-contiguous/v1" as const;
 
 export type CalculationTraceLayer =
@@ -146,6 +146,64 @@ export class CalculationTraceReplayError extends Error {
   }
 }
 
+export function assertCalculationTraceJsonSafe(
+  value: unknown,
+  path = "calculationTrace",
+): void {
+  const ancestors = new WeakSet<object>();
+  const visit = (candidate: unknown, currentPath: string): void => {
+    if (
+      candidate === null
+      || typeof candidate === "string"
+      || typeof candidate === "boolean"
+    ) return;
+    if (typeof candidate === "number") {
+      if (!Number.isFinite(candidate) || Object.is(candidate, -0)) {
+        throw new CalculationTraceReplayError(
+          `${currentPath} 必须是可无损 JSON 持久化的有限数值。`,
+        );
+      }
+      return;
+    }
+    if (typeof candidate !== "object") {
+      throw new CalculationTraceReplayError(
+        `${currentPath} 包含不可 JSON 持久化的 ${typeof candidate}。`,
+      );
+    }
+    if (ancestors.has(candidate)) {
+      throw new CalculationTraceReplayError(`${currentPath} 包含循环引用。`);
+    }
+    ancestors.add(candidate);
+    if (Array.isArray(candidate)) {
+      for (let index = 0; index < candidate.length; index += 1) {
+        if (!(index in candidate)) {
+          throw new CalculationTraceReplayError(`${currentPath}[${index}] 是稀疏数组空位。`);
+        }
+        visit(candidate[index], `${currentPath}[${index}]`);
+      }
+      ancestors.delete(candidate);
+      return;
+    }
+    const prototype = Object.getPrototypeOf(candidate);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new CalculationTraceReplayError(`${currentPath} 必须是普通 JSON 对象。`);
+    }
+    const ownKeys = Reflect.ownKeys(candidate);
+    for (const key of ownKeys) {
+      if (typeof key !== "string") {
+        throw new CalculationTraceReplayError(`${currentPath} 包含 Symbol key。`);
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(candidate, key);
+      if (!descriptor?.enumerable || descriptor.get || descriptor.set) {
+        throw new CalculationTraceReplayError(`${currentPath}.${key} 不是普通可枚举 JSON 字段。`);
+      }
+      visit((candidate as Record<string, unknown>)[key], `${currentPath}.${key}`);
+    }
+    ancestors.delete(candidate);
+  };
+  visit(value, path);
+}
+
 function sameValue(left: unknown, right: unknown): boolean {
   return deterministicHash(left) === deterministicHash(right);
 }
@@ -202,6 +260,9 @@ export function createCalculationTraceEntry(
   if (!Number.isInteger(input.sequence) || input.sequence < 1) {
     throw new Error("CalculationTraceEntry.sequence 必须是从 1 开始的正整数。");
   }
+  assertCalculationTraceJsonSafe(input.before, "CalculationTraceEntry.before");
+  assertCalculationTraceJsonSafe(input.operand, "CalculationTraceEntry.operand");
+  assertCalculationTraceJsonSafe(input.after, "CalculationTraceEntry.after");
   let calculatedAfter: unknown;
   try {
     calculatedAfter = applyOperation(input.before, input.operation, input.operand);
@@ -226,12 +287,13 @@ export function createCalculationTraceEntry(
     operation: input.operation,
     operand: input.operand,
     after: input.after,
-    unit: input.unit,
+    ...(input.unit !== undefined ? { unit: input.unit } : {}),
     effect: input.effect,
     warningIssueIds: [...input.warningIssueIds].sort(),
     actions: input.actions,
-    evidence: input.evidence,
+    ...(input.evidence !== undefined ? { evidence: input.evidence } : {}),
   };
+  assertCalculationTraceJsonSafe(identity, "CalculationTraceEntry");
   return {
     ...identity,
     traceEntryId: input.traceEntryId ?? "trace-" + deterministicHash(identity),
@@ -264,6 +326,7 @@ export function replayCalculationTrace(input: {
   entries: CalculationTraceEntry[];
   initialState: CalculationTraceStateValue[];
 }): { finalState: CalculationTraceStateValue[]; replayHash: string } {
+  assertCalculationTraceJsonSafe(input, "CalculationTraceReplayInput");
   const entries = [...input.entries].sort((left, right) => left.sequence - right.sequence);
   const values = stateMap(input.initialState);
   entries.forEach((entry, index) => {
@@ -357,6 +420,7 @@ function inferInitialState(entries: CalculationTraceEntry[]): CalculationTraceSt
 export function createCalculationTraceArchive(
   entries: CalculationTraceEntry[],
 ): CalculationTraceArchive {
+  assertCalculationTraceJsonSafe(entries, "CalculationTraceArchive.entries");
   const frozenEntries = structuredClone(
     [...entries].sort((left, right) => left.sequence - right.sequence),
   );
@@ -391,6 +455,7 @@ export function verifyCalculationTraceArchive(archive: CalculationTraceArchive):
     || archive.replayContractVersion !== CALCULATION_TRACE_REPLAY_CONTRACT_VERSION
   ) return false;
   try {
+    assertCalculationTraceJsonSafe(archive, "CalculationTraceArchive");
     const recreated = createCalculationTraceArchive(archive.entries);
     return (
       recreated.traceHash === archive.traceHash
@@ -401,6 +466,50 @@ export function verifyCalculationTraceArchive(archive: CalculationTraceArchive):
     );
   } catch {
     return false;
+  }
+}
+
+function sameEntityRef(left: EntityRef, right: EntityRef): boolean {
+  return entityKey(left) === entityKey(right);
+}
+
+export function assertCalculationTraceMatchesFinalPanel(input: {
+  archive: CalculationTraceArchive;
+  subjectRef: EntityRef;
+  finalPanelValues: Record<string, number | string>;
+}): void {
+  assertCalculationTraceJsonSafe(input.finalPanelValues, "finalPanelValues");
+  const expectedKeys = new Set(Object.keys(input.finalPanelValues));
+  for (const entry of input.archive.entries) {
+    if (
+      sameEntityRef(entry.subjectRef, input.subjectRef)
+      && entry.evidence?.adapter === "projection_trace/v1"
+      && !entry.parameterKey.startsWith("__")
+    ) {
+      expectedKeys.add(entry.parameterKey);
+    }
+  }
+  const finalValues = new Map(
+    input.archive.finalState
+      .filter((entry) => sameEntityRef(entry.subjectRef, input.subjectRef))
+      .map((entry) => [entry.parameterKey, entry.value]),
+  );
+  for (const parameterKey of [...expectedKeys].sort()) {
+    if (!Object.hasOwn(input.finalPanelValues, parameterKey)) {
+      throw new CalculationTraceReplayError(
+        `finalPanelValues 缺少 Trace 面板参数：${parameterKey}。`,
+      );
+    }
+    if (!finalValues.has(parameterKey)) {
+      throw new CalculationTraceReplayError(
+        `canonical Trace 未覆盖最终面板参数：${parameterKey}。`,
+      );
+    }
+    if (!sameValue(finalValues.get(parameterKey), input.finalPanelValues[parameterKey])) {
+      throw new CalculationTraceReplayError(
+        `canonical Trace 终态与 finalPanelValues 不一致：${parameterKey}。`,
+      );
+    }
   }
 }
 
@@ -567,6 +676,14 @@ export function adaptRuleTraceToCanonical(input: {
           ruleId: contribution.ruleId,
           sourceName: contribution.sourceName,
           legacyOperation: contribution.operation,
+          legacyOperand: structuredClone(contribution.operand),
+          ...(contribution.operation === "formula" ? {
+            formula: {
+              formulaId: contribution.ruleId,
+              formulaVersion: input.projection.ruleSetVersion,
+              operand: structuredClone(contribution.operand),
+            },
+          } : {}),
         },
       }));
     }

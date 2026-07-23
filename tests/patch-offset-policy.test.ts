@@ -648,7 +648,7 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
   const sku = state.skuDrawers.find((entry) => entry.id === model.skuId)!;
   const series = state.seriesDefinitions.find((entry) => entry.id === sku.seriesId)!;
   const projection = state.derivedProjections.find((entry) => entry.id === oldSnapshot.projectionId)!;
-  const numericEntry = Object.entries(oldSnapshot.finalPanelValues)
+  const numericEntry = Object.entries(projection.values)
     .find((entry): entry is [string, number] => typeof entry[1] === "number")!;
   const governedRevision = buildPatchRevision({
     patchId: "patch:open004:publish",
@@ -694,7 +694,7 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
       contextId: `${model.id}:${sku.id}:${projection.id}`,
       itemPartId: sku.projectionMatch.itemPartId,
       projection,
-      finalPanelValues: oldSnapshot.finalPanelValues,
+      finalPanelValues: projection.values,
       weightBandId: sku.projectionMatch.weightTemplateId,
       skuRef: sku.id,
       targetPullKg: sku.projectionMatch.targetPullKg,
@@ -730,7 +730,7 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
     seriesSkus: state.skuDrawers.filter((entry) => entry.seriesId === series.id),
     series,
     projection,
-    finalPanelValues: oldSnapshot.finalPanelValues,
+    finalPanelValues: projection.values,
     componentSelections: oldSnapshot.componentSelections,
     patches: [],
     patchRevisions,

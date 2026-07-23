@@ -1,6 +1,6 @@
 # Tackle Forger v3 当前实现与 UX 原型差距矩阵
 
-> 审计日期：2026-07-22  
+> 审计日期：2026-07-23
 > 原始实现审计代码基线：`a393c5470a73081967690dab733cf9cc5202cdc1`（2026-07-22 20:06:22 +0800）
 > 原始验证时间：2026-07-22 20:58:36 +0800
 > 本次反馈归并复核：2026-07-22 22:55:13 +0800，HEAD `ba2111c2e6021d968606cfe4ee3e839732184d71`；只复核本次五条反馈及对应代码事实，没有重跑完整测试。
@@ -9,6 +9,9 @@
 > OPEN-009对象可见性复核：2026-07-23 05:41:56 +0800，代码基线`origin/main@33cb47e4d923e6675f1a1bab8b2685266117bcaf`（提交时间2026-07-23 05:18:57 +0800）；确认运行时与测试仍执行对象级裁剪、隐藏计数和脱敏父链，本轮仅修正文档状态并由[Issue #31](https://github.com/futouyiba/tackle-forger/issues/31)跟踪实现迁移。
 > OPEN-003运行时复核：2026-07-23，代码基线`codex/open-003-deferred-parts@cdcbd7ce6bea60548f2224039861593c453ae028`；确认迁移层会保留四类扩展部位，创建Series页面仍渲染全部`state.itemParts`，服务端尚无独立启用策略门禁。本轮只记录实现事实，由[Issue #37](https://github.com/futouyiba/tackle-forger/issues/37)跟踪代码收口。
 > OPEN-005契约复核：2026-07-23 07:43:42 +0800，PR #30基线`52b8ab6fbfc84cde1e6530724a75aad23f6872d8`；当前代码仍使用`fishWeightGradeId`、`component_min_ratio`、`same_part_compare`、三种Series基准策略和旧`PUBLISHED`种子定义。本轮只同步正式目标契约并纠正实现状态，没有修改运行时代码或冒充新测试证据。
+> OPEN-007契约复核基线：`3cb6609c237c0c23d108bf305124e24f18980fa8`（2026-07-23 00:43:07 +0800）；本轮只修订文档，不把2026-07-23已决目标语义冒充为当前运行时能力。
+> 本轮完整验证时间：2026-07-23 01:57:07 +0800；在上述OPEN-007代码基线上运行`npm run typecheck`、`npm run lint`与`npm test`。
+> PR #11最新main重整复核：2026-07-23 07:30:24 +0800，基线`origin/main@18f99e136320f1989bdeb7f61312b5ea4493bae7`；根应用`npm run typecheck`、`npm run lint`、`npm test`通过（208项主测试与1项生产构建/渲染测试），历史workspace的`pnpm -r typecheck/lint/test/build`通过；根Lint为0 error、保留main已有1条warning。
 > 对齐基线：v3 领域规范 > product-design-completion-v3 > implementation/requirements handoff > ux-design-v1 与 prototype 视觉证据。  
 > 状态定义：已实现、部分实现、缺失、因 v3 冲突而不采纳。
 
@@ -27,14 +30,15 @@
 | 最近结构标杆 | 已实现 | 相同部位、钓法、类型、功能内按 abs(ln(target/derived))；不插值；平局规则确定 | 无 |
 | Patch 分层与 Rebase | 已实现 | patch-engine 支持稳定层序、冲突与 rebase 差异；上游变化不改旧 Snapshot | 无 |
 | Patch操作统一契约 | 部分实现 | PatchLedger与工作台使用set/add/multiply/clear，迁移器把旧remove转换为clear | 旧ProjectionPatchOperation仍暴露remove，旧AdjustmentRule路径仍可执行min/max；需按v3规范收口适配器、冻结规范化和迁移复核 |
-| PatchLedger 权威账本 | 已实现 | Workspace schema v14 + PatchLedger schema v4；稳定 ID、仅 ACTIVE 重放、revision 幂等、ORPHANED、Rebase/吸收均生成新 revision、Snapshot 引用冻结 | 无 |
+| PatchLedger 权威账本 | 已实现 | Workspace schema v17 + PatchLedger schema v4；稳定 ID、仅 ACTIVE 重放、revision 幂等、ORPHANED、Rebase/吸收均生成新 revision、Snapshot 引用冻结 | 无 |
 | Patch 台账工作台 | 已实现 | 治理区一级入口展示 revision、稳定对象、操作顺序、基线、镜像状态、Snapshot 引用、迁移待复核及 RuleSet 发布后吸收评估；支持创建、审核、显式启用 | 镜像写入/拉取按钮在远端连接器可用前保持禁用 |
 | 个体 Patch 汇总、规则草稿与吸收 | 已实现 | Patch 确定性归组后由独立权限创建 RuleSourceChangeDraft；新 RuleSet 下以逐操作 Trace 评估完全/部分/未覆盖/Rebase，保存 assessment 并创建新 revision，不改旧 Snapshot | 草稿远端写回仍需已确认的通用规则页写入契约 |
 | 飞书 Patch 台账镜像 | 部分实现 | 已有领域契约、独立权限、幂等命令、部分失败和回读恢复状态；不会伪造 SYNCED | 主工作簿尚无已确认 Patch 台账 sheet_id/机器列，无法实施真实远端写入 |
 | 硬兼容与 Affinity | 已实现 | deny/require 与软分值分离；高 Affinity 不覆盖 deny；低分合法候选仍可生成 | 无 |
 | 属性词条、被动词条与 Technology | 已实现 | Technology 只展开成员；按 affixId 去重；被动参与价值分但不执行模拟器逻辑 | 无 |
-| 品质评分 | 已实现 | 人工选择品质；区间、组合矩阵、功能/性能系数、score=100 冲突、source=quality Trace | 无 |
-| 自动定价与 NON_FORMAL | 已实现 | 07/08 同 revision 导入、Lerp、结构源重量段、维修/购买公式、Trace、正式发布阻断 | OPEN-007的S=100边界、性能评分来源、roundingStage、minimumPriceScope、overflowMode未全部解决时只能NON_FORMAL |
+| 品质评分 | 部分实现 | 人工选择品质、组合矩阵、Technology/Affix去重、功能系数与source=quality Trace已存在 | 2026-07-23新契约要求S包含100、>100阻断并彻底移除Performance乘数/Trace；当前内核仍有`performanceScoringEnabled/performanceScoreFactor`与旧边界冲突逻辑 |
+| 性能定位摘要 | 缺失 | 当前Series、候选、规则内核、Affinity和UI仍把PerformanceProfile/performanceId作为显式输入或贡献 | 迁移为结算后只读PerformanceSummary；历史字段只读保留，不再参与搜索、计分、兼容、Affinity或定价 |
+| 自动定价与 NON_FORMAL | 部分实现 | 07/08 同 revision 导入、Lerp、结构源重量段、维修/购买Raw公式、Trace和旧策略发布阻断已存在 | 尚未实现维修/购买分别最终舍入、购买使用未舍入维修价、舍入后购买最低价，以及超300M的fingerprint WARNING确认；当前`error/clamp`不能代表新契约 |
 | 手填价格兜底 | 因 v3 冲突而不采纳 | 正式价格只能来自已发布 PricingPolicyVersion | 不提供绕过动作 |
 | 五维图及双模式比较 | 部分实现 | 已有版本化ViewDefinition/VertexSet、基础逐点计算、缺失值不归零和Snapshot冻结骨架；但运行时仍是鱼重等级、`component_min_ratio`汇总、仅同部位比较、旧五轴/三种Series基准，且旧种子定义标记为`PUBLISHED`并可进入现有发布检查 | 迁移到按`modelFinalPullKg`选择W段、竿轮线逐件且无汇总线、混合部位2–5件、仅`projection_reference`唯一选择器、`five-axis-hash-input/v1`固定向量和`FORMAL_CURRENT`发布门禁；旧定义/Snapshot只读保留且hash不变。定义发布、运行时迁移、UI与自动化验收仍由Issue #13后续独立交付 |
 | AI 建议壳与草稿边界 | 已实现 | AI 默认关闭；仅草稿；不能写飞书、发布或改变裁决；证据、过期和权限契约已有测试 | OPEN-006 未确认前不得连接外部模型 |
@@ -55,7 +59,7 @@
 | --- | --- | --- | --- |
 | 【品质评分】未计算【功能定位】提供的品质分 | v3正式公式使用`FunctionProfile.scoreFactor`，当前品质内核已经乘入该系数并记录Trace。 | v3 §12.1；本矩阵“品质评分” | 不新增问题；若当前页面仍出现错误结果，附Model、规则revision和Trace另建回归Bug。 |
 | 【系列配方】未拆分竿轮线 | v14已为旧配方增加竿/轮/线独立约束迁移载体，但目前仅类型、迁移和测试使用；正式运行时及页面仍未消费，且旧`SeriesRecipe`和v3流程继续并存。 | `AUD-005`；迁移子项`AUD-R010` | 迁移结构子项已解决；用户可操作的分部位配方仍保持在`AUD-005`，不重复登记产品问题。 |
-| 缺少钓具价格计算公式 | 维修价、购买价、评分插值和逐步Trace已经实现；缺的是可发布的正式策略。 | v3 `OPEN-007` | 删除“公式缺失”表述；源表未解决S=100边界、性能评分来源和执行语义前，只允许`NON_FORMAL`试算。 |
+| 缺少钓具价格计算公式 | 维修价、购买价、评分插值和逐步Trace已经实现；2026-07-23已确定正式执行语义，缺的是源表与运行时落地。 | v3 `OPEN-007`；Issue #9/#10 | 删除“公式缺失”表述；在新schema、确认记录和飞书机器源完成前，旧实现仍只允许准确标记的`NON_FORMAL`试算。 |
 | 缺少最终配置表格的字段映射和同步 | 既有`ConfigExportMapping`、三表差异预览、关系校验、恢复写入和测试存在，但只证明旧执行器；正式提交仍需要真实Profile/映射、已发布定价，以及OPEN-008的目录/Manifest、策略、ledger和revision锁。 | v3 `OPEN-007`、`OPEN-008`；`config-export-mapping-guide.md` | 不重复登记“完全缺失”；按1.5期目标契约改造后再做真实仓库联调，完成前不得把旧下载/写入能力视为正式路径。 |
 | 单元格编辑、规则设定不够便捷 | 属于两个可验收的持续体验问题，不与工程安全问题混记。 | `ux-design-v1`的`UX-001/UX-002` | 保持OPEN，后续实现与Design QA按对应验收条件关闭。 |
 
@@ -63,17 +67,17 @@
 
 1. OPEN-010：飞书主工作簿尚未提供已确认的Patch台账工作表sheet_id、机器列布局和协作字段权限，因此真实镜像写入/拉取不可启用。
 2. Vercel评审项目当前只配置`BLOB_READ_WRITE_TOKEN`，缺少`FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_TENANT_KEY`、`FEISHU_REDIRECT_URI`和`FEISHU_SESSION_SECRET`；首页HTTP 200，但会话端点返回503/`AUTH-CONFIG-001`，需部署方提供公司应用凭据并在飞书开放平台登记回调。
-3. OPEN-007：S=100边界、性能评分来源、PricingPolicy的roundingStage、minimumPriceScope、overflowMode尚未全部由权威规则源解决，因此新正式价格策略及其Model/Snapshot/Store导出必须继续阻断。
+3. OPEN-007产品语义已于2026-07-23确定；当前阻断是飞书机器源仍需修订，且运行时尚未实现S=100、无Performance乘数、双输出舍入、购买最低价和超300M WARNING确认。完成前不得把旧Draft发布为符合新契约的PricingPolicyVersion。
 4. OPEN-006 尚未确认 AI 供应方、模型和数据出网策略，因此真实 AI 连接器必须继续禁用。
 5. OPEN-008的数字区间、派生关系、命名、永不复用和权限语义已经确认；但尚未发布权威`ConfigTargetCatalogVersion`、覆盖全部必需目标的获批且新鲜`ConfigTargetScanManifest`、可校验`ConfigIdPolicyVersion`及reservation ledger，也未实现Model revision锁，因此仍不能正式预留ID或提交配置。
 6. 真实 configs Git 目标需由配置治理方发布环境/渠道权威目录并完成authoritative ref、commit、`config.toml`和workbook hash扫描复核；用户本机目录绑定和旧Profile不能替代该门禁，未完成时只能`NON_FORMAL`预览。
 
 ## 4. 当前验证证据
 
-- 远端复审完整`npm test`为190项主测试通过，另有1项渲染测试通过，覆盖领域、API、迁移、权限、冲突、恢复、SQLite持久化和冻结。
-- 默认入口遗漏的`tests/feishu-writeback.test.ts`单独5项通过；遗漏本身仍由`AUD-025`管理。
-- `npm run typecheck`通过。
+- 本轮完整`npm test`为237项主测试通过，另有2项生产构建/渲染测试通过，覆盖领域、API、迁移、权限、冲突、恢复、SQLite持久化、冻结与生产产物预算。
+- `tests/feishu-writeback.test.ts`的5项测试已包含在默认主套件中并通过，不再需要单独补跑。
+- `npm run typecheck`与`npm run lint`通过。
 - 生产构建与渲染验收覆盖飞书规则源、离散 Series 创建和 Patch 台账入口。
-- PatchLedger单测覆盖独立schema v4、Workspace schema v14、幂等、仅ACTIVE生效、操作顺序、稳定ID、Rebase新revision、ORPHANED、规则草稿权限、镜像失败、显式拉取与Snapshot冻结。
+- PatchLedger单测覆盖独立schema v4、Workspace schema v17、幂等、仅ACTIVE生效、操作顺序、稳定ID、Rebase新revision、ORPHANED、规则草稿权限、镜像失败、显式拉取与Snapshot冻结。
 - 最新评审构建已部署到`https://tackle-forger-workbench.vercel.app`；首页HTTP 200，会话端点503/`AUTH-CONFIG-001`，浏览器因缺少飞书OAuth环境变量停在明确登录配置错误页。
 - 最终完成仍需在真实内网部署环境完成飞书 OAuth、真实工作簿回读、目标 configs Profile 和多分辨率页面的联调验收。

@@ -336,8 +336,11 @@ test("04 生产同形的 7 父级、21 分组与 57 成员规则可确定导入"
   shared.functionValues[43]![10] = "购买系数";
   const sharedDraft = importCanonicalRuleSource({ sourceRevision: revision, ...shared, importedAt: revision.pulledAt });
   assert.deepEqual(sharedDraft.issues, []);
+  assert.ok(sharedDraft.parameters.some((entry) => entry.key === "轮修理系数" && entry.itemPartId === "part:reel"));
+  assert.ok(sharedDraft.parameters.some((entry) => entry.key === "线购买系数" && entry.itemPartId === "part:line"));
   assert.ok(sharedDraft.functionProfiles.some((profile) => profile.intensityRules.some((rule) => rule.itemPartId === "part:reel" && rule.rules.some((entry) => entry.parameterKey === "轮修理系数"))));
   assert.ok(sharedDraft.functionProfiles.some((profile) => profile.intensityRules.some((rule) => rule.itemPartId === "part:line" && rule.rules.some((entry) => entry.parameterKey === "线购买系数"))));
+  assert.ok(sharedDraft.functionProfiles.every((profile) => profile.intensityRules.every((entry) => entry.rules.every((rule) => sharedDraft.parameters.filter((parameter) => parameter.key === rule.parameterKey).length === 1))));
 });
 
 test("钓法不兼容的类型不会套用规则，且作为硬错误返回", () => {

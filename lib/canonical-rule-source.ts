@@ -155,8 +155,12 @@ function sourceParameterHeaders(input: {
     const kind: ItemKind = typeLabel.includes("轮") ? "reel" : typeLabel.includes("线") ? "line" : "rod";
     result.push(...row.slice(5).map(asText).filter(Boolean).map((label) => ({ label, kind })));
   }
+  let functionBlock = -1;
   for (const functionHeader of input.functionValues.filter((row) => row.some((value) => asText(value).includes("机器ID")))) {
-    result.push(...functionHeader.map(asText).filter((label) => label && !FUNCTION_METADATA_LABELS.has(label)).map((label) => ({ label })));
+    functionBlock += 1;
+    const kind = (["rod", "reel", "line"] as const)[functionBlock];
+    if (!kind) continue;
+    result.push(...functionHeader.map(asText).filter((label) => label && !FUNCTION_METADATA_LABELS.has(label)).map((label) => ({ label, kind })));
   }
   return result;
 }

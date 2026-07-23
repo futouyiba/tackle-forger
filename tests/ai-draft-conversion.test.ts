@@ -34,6 +34,7 @@ function fixture(): {
   parameterKey: string;
 } {
   const state = createSeedState();
+  state.workspaceId = "workspace:ai-draft-test";
   const model = state.purchasableModels.find((entry) =>
     entry.status !== "published" && !entry.configurationSnapshotId && entry.patchIds.length === 0)!;
   for (const definition of state.parameters) {
@@ -212,6 +213,7 @@ test("目标 revision 与冻结状态均在计划阶段阻断", () => {
 
 test("已发布 Model 的规则源草稿以冻结快照面板为基线，缺快照字段则 fail-closed", () => {
   const state = createSeedState();
+  state.workspaceId = "workspace:ai-draft-test";
   const model = state.purchasableModels.find((entry) => entry.configurationSnapshotId)!;
   const snapshot = state.configurationSnapshots.find((entry) => entry.id === model.configurationSnapshotId)!;
   const projection = buildWorkspaceAssessmentRequestProjection({

@@ -32,7 +32,10 @@ import {
   calculateModelFiveAxisPreview,
   fiveAxisPlotRatio,
 } from "@/lib/five-axis";
-import { buildFormalEquipmentComparison } from "@/lib/five-axis-formal";
+import {
+  buildFormalEquipmentComparison,
+  buildFormalFiveAxisEntityFromSnapshot,
+} from "@/lib/five-axis-formal";
 import { deterministicHash } from "@/lib/rule-kernel";
 import {
   querySeriesGantt,
@@ -43,7 +46,6 @@ import {
 import type {
   ConfigurationSnapshot,
   FiveAxisComparisonView,
-  FiveAxisEntityInput,
   ModelFiveAxisPreview,
   ProjectionMatch,
   FiveAxisVertexSet,
@@ -404,19 +406,6 @@ function FiveAxisComparisonPanel({
   );
 }
 
-function componentEntityInput(model: PurchasableModel, itemPartId: string, fishWeightGradeId: string): FiveAxisEntityInput | undefined {
-  const component = model.componentSelections.find((entry) => entry.itemPartId === itemPartId);
-  if (!component) return undefined;
-  return {
-    entityId: `${model.id}:${component.componentId}`,
-    itemPartId,
-    label: `${model.name} · ${component.name}`,
-    fishWeightGradeId,
-    revision: model.revision,
-    values: Object.fromEntries(Object.entries(component.values).map(([key, value]) => [key, typeof value === "number" ? value : null])),
-  };
-}
-
 function ModelDrawer({
   state,
   workspaceId,
@@ -585,14 +574,18 @@ function ModelDrawer({
         ? state.configurationSnapshots.find((entry) =>
             entry.id === candidate.configurationSnapshotId)
         : undefined;
-      const finalPull = candidateSnapshot?.finalPanelValues.modelFinalPullKg
-        ?? candidateSnapshot?.finalPanelValues["杆最大拉力kgf"];
-      const entity = candidate
-        ? componentEntityInput(
-            candidate,
-            selection.itemPartId,
-            vertexSet.weightBandId,
-          )
+      const frozenSnapshot = candidateSnapshot?.modelId === selection.modelId
+        ? candidateSnapshot
+        : undefined;
+      const finalPull = frozenSnapshot?.finalPanelValues.modelFinalPullKg
+        ?? frozenSnapshot?.finalPanelValues["杆最大拉力kgf"];
+      const entity = candidate && frozenSnapshot
+        ? buildFormalFiveAxisEntityFromSnapshot({
+            snapshot: frozenSnapshot,
+            itemPartId: selection.itemPartId,
+            weightBandId: vertexSet.weightBandId,
+            modelName: candidate.name,
+          })
         : undefined;
       return entity && typeof finalPull === "number"
         ? [{

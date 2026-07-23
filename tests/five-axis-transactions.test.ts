@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildFormalEquipmentComparison,
+  buildFormalFiveAxisEntityFromSnapshot,
   createFormalFiveAxisVertexSet,
   createFormalFiveAxisViewDefinition,
 } from "../lib/five-axis-formal";
@@ -281,11 +282,41 @@ test("Snapshot、Model 指针与顶点在分量内共同提交或共同回滚", 
     deltas,
     snapshotBuildModelIds: models.map((model) => model.id),
   });
+  const expectedVertexSets = memberships.map((entry) =>
+    createFormalFiveAxisVertexSet({
+      definition,
+      groupKey: entry.groupKey,
+      candidateSources: entry.candidateSources,
+    }));
   const snapshots = models.map((model, index) => {
     const content = {
       ...structuredClone(sourceSnapshot),
       id: memberships[index].candidateSources[0].snapshotId,
       modelId: model.id,
+      fiveAxisPreview: {
+        ...structuredClone(sourceSnapshot.fiveAxisPreview!),
+        modelId: model.id,
+        modelFinalPullKg: 1.5,
+        weightBandId: memberships[index].groupKey.weightBandId,
+        weightBandPolicyVersion: definition.weightBandPolicyVersion,
+        hashInputSchemaVersion: definition.hashInputSchemaVersion,
+        fiveAxisDefinitionId: definition.definitionId,
+        fiveAxisDefinitionVersion: definition.version,
+        fiveAxisDefinitionRevision: definition.revision,
+        fiveAxisDefinitionHash: definition.definitionHash,
+        fiveAxisRuleVersion: definition.fiveAxisRuleVersion,
+        sourceRevision: definition.sourceRevision,
+        vertexSetHash: expectedVertexSets[index].vertexSetHash,
+        tackleFitComparison: {
+          ...structuredClone(
+            sourceSnapshot.fiveAxisPreview!.tackleFitComparison,
+          ),
+          fiveAxisDefinitionId: definition.definitionId,
+          fiveAxisDefinitionVersion: definition.version,
+          fiveAxisRuleVersion: definition.fiveAxisRuleVersion,
+          vertexSetHash: expectedVertexSets[index].vertexSetHash,
+        },
+      },
     };
     const withoutHash = { ...content };
     delete (withoutHash as Partial<typeof content>).contentHash;
@@ -323,6 +354,58 @@ test("Snapshot、Model 指针与顶点在分量内共同提交或共同回滚", 
   ]);
   assert.deepEqual(result.groupStates.map((group) =>
     group.groupKey.weightBandId), ["W1"]);
+
+  const staleContent = {
+    ...structuredClone(snapshots[0]),
+    fiveAxisPreview: {
+      ...structuredClone(snapshots[0].fiveAxisPreview!),
+      vertexSetHash: "f".repeat(64),
+    },
+  };
+  const staleWithoutHash = { ...staleContent };
+  delete (staleWithoutHash as Partial<typeof staleContent>).contentHash;
+  const stale = {
+    ...staleWithoutHash,
+    contentHash: deterministicHash(staleWithoutHash),
+  };
+  const staleResult = executeFiveAxisSnapshotBatchTransactions({
+    plan,
+    definitions: [definition],
+    currentGroupStates: [],
+    currentVertexSets: [],
+    currentModels: models,
+    currentSnapshots: [],
+    snapshotCommits: [{ modelId: stale.modelId, snapshot: stale }],
+    failComponentIds: [plan.components[1].componentId],
+  });
+  assert.equal(staleResult.componentResults[0].state, "rolled_back");
+  assert.match(
+    staleResult.componentResults[0].error!,
+    /Snapshot 五维预览与事务后 W 段、定义或顶点不一致/,
+  );
+  assert.deepEqual(staleResult.groupStates, []);
+  assert.deepEqual(staleResult.snapshots, []);
+});
+
+test("混合比较实体只读取冻结 Snapshot 的部件值与 Model revision", () => {
+  const state = createSeedState();
+  const model = state.purchasableModels.find((entry) =>
+    entry.configurationSnapshotId)!;
+  const snapshot = state.configurationSnapshots.find((entry) =>
+    entry.id === model.configurationSnapshotId)!;
+  const component = snapshot.componentSelections[0];
+  const draft = structuredClone(model);
+  draft.revision += 1;
+  draft.componentSelections[0].values.drag = 999;
+  const entity = buildFormalFiveAxisEntityFromSnapshot({
+    snapshot,
+    itemPartId: component.itemPartId,
+    weightBandId: "W1",
+    modelName: draft.name,
+  })!;
+  assert.equal(entity.revision, snapshot.modelRevision);
+  assert.equal(entity.values.drag, component.values.drag);
+  assert.notEqual(entity.values.drag, draft.componentSelections[0].values.drag);
 });
 
 test("SnapshotBuild 缺必需顶点时整分量回滚；纯 Lifecycle 移除则原子进入不可用", () => {

@@ -9,6 +9,7 @@ import {
   hashVertexSet,
 } from "./five-axis-hash";
 import type {
+  ConfigurationSnapshot,
   FiveAxisDefinitionDisposition,
   FiveAxisDefinitionDispositionCatalogRevision,
   FiveAxisComparisonView,
@@ -49,6 +50,28 @@ export function resolveFormalFiveAxisWeightBand(input: {
   const upperBounds = [2, 4, 6, 10, 15];
   const index = upperBounds.findIndex((upper) => input.modelFinalPullKg <= upper);
   return `W${index < 0 ? 6 : index + 1}`;
+}
+
+export function buildFormalFiveAxisEntityFromSnapshot(input: {
+  snapshot: ConfigurationSnapshot;
+  itemPartId: string;
+  weightBandId: string;
+  modelName: string;
+}): FiveAxisEntityInput | undefined {
+  const component = input.snapshot.componentSelections.find((entry) =>
+    entry.itemPartId === input.itemPartId);
+  if (!component) return undefined;
+  return {
+    entityId: `${input.snapshot.modelId}:snapshot:${input.snapshot.id}@v${input.snapshot.version}:${component.componentId}`,
+    itemPartId: input.itemPartId,
+    label: `${input.modelName} · ${component.name}`,
+    fishWeightGradeId: input.weightBandId,
+    revision: input.snapshot.modelRevision,
+    values: Object.fromEntries(
+      Object.entries(component.values).map(([key, value]) =>
+        [key, typeof value === "number" ? value : null]),
+    ),
+  };
 }
 
 const FORMAL_AXIS_CONTRACT = [

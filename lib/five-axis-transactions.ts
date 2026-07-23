@@ -578,6 +578,33 @@ export function executeFiveAxisSnapshotBatchTransactions(input: {
         ) {
           throw new Error("FIVE_AXIS_SNAPSHOT_COMMIT_INVALID：Snapshot 与候选差量指针不一致。");
         }
+        const stagedGroup = stagedFiveAxis.groupStates.find((group) =>
+          sameGroup(group.groupKey, delta.groupKey));
+        const stagedVertexSet = stagedFiveAxis.vertexSets.find((vertexSet) =>
+          vertexSet.vertexSetHash === stagedGroup?.currentVertexSetHash);
+        const preview = commit.snapshot.fiveAxisPreview;
+        if (
+          !stagedGroup
+          || stagedGroup.state !== "AVAILABLE"
+          || !stagedVertexSet
+          || !preview
+          || preview.modelId !== commit.modelId
+          || preview.weightBandId !== delta.groupKey.weightBandId
+          || preview.weightBandPolicyVersion
+            !== delta.groupKey.weightBandPolicyVersion
+          || preview.fiveAxisDefinitionId
+            !== delta.groupKey.fiveAxisDefinitionId
+          || preview.fiveAxisDefinitionVersion
+            !== delta.groupKey.fiveAxisDefinitionVersion
+          || preview.fiveAxisRuleVersion !== delta.groupKey.fiveAxisRuleVersion
+          || preview.hashInputSchemaVersion
+            !== stagedVertexSet.hashInputSchemaVersion
+          || preview.vertexSetHash !== stagedVertexSet.vertexSetHash
+        ) {
+          throw new Error(
+            "FIVE_AXIS_SNAPSHOT_COMMIT_INVALID：Snapshot 五维预览与事务后 W 段、定义或顶点不一致。",
+          );
+        }
         const modelIndex = stagedModels.findIndex((model) =>
           model.id === commit.modelId);
         if (modelIndex < 0) {

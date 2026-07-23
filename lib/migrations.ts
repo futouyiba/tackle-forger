@@ -756,6 +756,7 @@ function migrateV15ToV16(state: MutableWorkspace): MutableWorkspace {
     patchReviewBatches: arrayOf<WorkspaceState["patchReviewBatches"][number]>(state.patchReviewBatches),
     patchValidationWaivers: arrayOf<WorkspaceState["patchValidationWaivers"][number]>(state.patchValidationWaivers),
     patchValidationWaiverDecisions: arrayOf<WorkspaceState["patchValidationWaiverDecisions"][number]>(state.patchValidationWaiverDecisions),
+    canonicalRuleSourceDrafts: arrayOf<WorkspaceState["canonicalRuleSourceDrafts"][number]>(state.canonicalRuleSourceDrafts),
   };
 }
 

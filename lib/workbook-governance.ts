@@ -3,12 +3,127 @@ import type { FeishuSourceRevision } from "./feishu-workbook";
 import type { PricingPolicyDraft } from "./pricing-policy";
 import type { QualityValuePolicyDraft } from "./quality-value-policy";
 import type { SourceIdentityMigrationReport } from "./source-id-migration";
-import type { RuleSetVersion, WorkspaceState } from "./types";
+import type {
+  CanonicalRuleSourceDraft,
+  ReductionStackingPolicyVersion,
+  RuleSetVersion,
+  WorkspaceState,
+} from "./types";
 import {
   importReductionStackingPolicyDraft,
   publishReductionStackingPolicyVersion,
 } from "./reduction-stacking-policy";
-import type { ReductionStackingPolicyVersion } from "./types";
+
+function canonicalDraftContent(draft: CanonicalRuleSourceDraft) {
+  return {
+    parameters: draft.parameters, templates: draft.templates, methodProfiles: draft.methodProfiles,
+    itemTypeProfiles: draft.itemTypeProfiles, functionProfiles: draft.functionProfiles,
+    modifiers: draft.modifiers, layers: draft.layers,
+  };
+}
+
+function assertCanonicalDraftIntegrity(draft: CanonicalRuleSourceDraft) {
+  const errors = draft.issues.filter((issue) => issue.level === "error");
+  if (errors.length) throw new Error(`飞书 01/02/03 规则数据存在阻断错误，已保留当前可用规则：${errors.map((issue) => issue.code).join("、")}`);
+  if (draft.contentHash !== deterministicHash(canonicalDraftContent(draft))) {
+    throw new Error("CanonicalRuleSourceDraft 内容哈希不一致，已保留当前可用规则。");
+  }
+}
+
+function assertLegacyReferencesCanBePreserved(state: WorkspaceState, draft: CanonicalRuleSourceDraft) {
+  const templateIds = new Set(draft.templates.map((item) => item.id));
+  const modifierIds = new Set(draft.modifiers.map((item) => item.id));
+  const methodIds = new Set(draft.methodProfiles.map((item) => item.id));
+  const typeIds = new Set(draft.itemTypeProfiles.map((item) => item.id));
+  const functionIds = new Set(draft.functionProfiles.map((item) => item.id));
+  const projectionIds = new Set(state.derivedProjections.map((item) => item.id));
+  const invalid: string[] = [];
+  const requireId = (kind: string, id: string | undefined, allowed: Set<string>) => {
+    if (id && !allowed.has(id)) invalid.push(`${kind}=${id}`);
+  };
+  const requireAll = (kind: string, ids: string[], allowed: Set<string>) => {
+    for (const id of ids) requireId(kind, id, allowed);
+  };
+  for (const candidate of state.candidates) {
+    if (!templateIds.has(candidate.templateId)) invalid.push(`Candidate ${candidate.id}.templateId=${candidate.templateId}`);
+    for (const optionId of [candidate.selections.structureId, candidate.selections.materialId, candidate.selections.functionId, candidate.selections.performanceId, ...candidate.selections.technologyIds]) {
+      if (optionId && !modifierIds.has(optionId)) invalid.push(`Candidate ${candidate.id}.selection=${optionId}`);
+    }
+  }
+  for (const recipe of state.recipes) {
+    for (const templateId of recipe.templateIds) if (!templateIds.has(templateId)) invalid.push(`Recipe ${recipe.id}.templateId=${templateId}`);
+    for (const optionId of [...recipe.structureIds, ...recipe.functionIds, ...recipe.performanceIds, ...recipe.technologyIds]) {
+      if (optionId && !modifierIds.has(optionId)) invalid.push(`Recipe ${recipe.id}.selection=${optionId}`);
+    }
+    for (const [part, constraint] of Object.entries(recipe.partConstraints ?? {})) {
+      if (!constraint) continue;
+      requireAll(`Recipe ${recipe.id}.partConstraints.${part}.templateId`, constraint.templateIds, templateIds);
+      requireAll(`Recipe ${recipe.id}.partConstraints.${part}.typeId`, constraint.typeIds, typeIds);
+      requireAll(`Recipe ${recipe.id}.partConstraints.${part}.materialId`, constraint.materialIds, typeIds);
+    }
+  }
+  for (const series of state.seriesDefinitions) {
+    requireId(`Series ${series.id}.fishingMethodId`, series.fishingMethodId, methodIds);
+    requireId(`Series ${series.id}.typeId`, series.typeId, typeIds);
+    requireId(`Series ${series.id}.coreFunctionId`, series.coreFunctionId, functionIds);
+  }
+  for (const recipe of state.candidateSearchRecipes) {
+    requireAll(`CandidateSearchRecipe ${recipe.id}.methodId`, recipe.methodIds, methodIds);
+    requireAll(`CandidateSearchRecipe ${recipe.id}.typeId`, recipe.typeIds, typeIds);
+    requireAll(`CandidateSearchRecipe ${recipe.id}.functionId`, recipe.functionIds, functionIds);
+  }
+  for (const projection of state.derivedProjections) {
+    requireId(`DerivedProjection ${projection.id}.weightTemplateId`, projection.weightTemplateId, templateIds);
+    requireId(`DerivedProjection ${projection.id}.methodId`, projection.methodId, methodIds);
+    requireId(`DerivedProjection ${projection.id}.typeId`, projection.typeId, typeIds);
+    requireId(`DerivedProjection ${projection.id}.functionId`, projection.functionId, functionIds);
+  }
+  for (const match of [...state.projectionMatches, ...state.skuDrawers.map((sku) => sku.projectionMatch)]) {
+    requireId("ProjectionMatch.weightTemplateId", match.weightTemplateId, templateIds);
+    requireId("ProjectionMatch.projectionId", match.projectionId, projectionIds);
+  }
+  for (const showcase of state.seriesShowcases) {
+    requireId(`SeriesShowcase ${showcase.id}.templateId`, showcase.templateId, templateIds);
+    requireAll(`SeriesShowcase ${showcase.id}.templateId`, showcase.templateIds, templateIds);
+    requireId(`SeriesShowcase ${showcase.id}.structureId`, showcase.structureId, typeIds);
+    requireAll(`SeriesShowcase ${showcase.id}.structureId`, showcase.structureIds, typeIds);
+    requireId(`SeriesShowcase ${showcase.id}.functionId`, showcase.functionId, functionIds);
+  }
+  for (const rule of [...state.compatibilityRules, ...state.affinityRules]) {
+    requireId(`Rule ${rule.id}.selector.methodId`, rule.selector.methodId, methodIds);
+    requireId(`Rule ${rule.id}.selector.typeId`, rule.selector.typeId, typeIds);
+    requireId(`Rule ${rule.id}.selector.functionId`, rule.selector.functionId, functionIds);
+  }
+  if (invalid.length) throw new Error(`CANONICAL_RULE_SOURCE_REFERENCE_MIGRATION_REQUIRED：无法无损迁移既有引用，已保留当前可用规则：${invalid.slice(0, 8).join("；")}`);
+}
+
+export function applyCanonicalRuleSourceDraft(
+  state: WorkspaceState,
+  draft: CanonicalRuleSourceDraft,
+): WorkspaceState {
+  if (!state.feishuSourceRevisions.some((revision) => revision.id === draft.sourceRevisionId)) {
+    throw new Error("CanonicalRuleSourceDraft 引用的 FeishuSourceRevision 尚未登记。");
+  }
+  assertCanonicalDraftIntegrity(draft);
+  assertLegacyReferencesCanBePreserved(state, draft);
+  const next = structuredClone(state);
+  const existing = next.canonicalRuleSourceDrafts.findIndex((entry) => entry.id === draft.id);
+  if (existing >= 0) next.canonicalRuleSourceDrafts[existing] = structuredClone(draft);
+  else next.canonicalRuleSourceDrafts.unshift(structuredClone(draft));
+  next.parameters = structuredClone(draft.parameters);
+  next.templates = structuredClone(draft.templates);
+  next.methodProfiles = structuredClone(draft.methodProfiles);
+  next.itemTypeProfiles = structuredClone(draft.itemTypeProfiles);
+  next.functionProfiles = structuredClone(draft.functionProfiles);
+  next.modifiers = structuredClone(draft.modifiers);
+  next.layers = structuredClone(draft.layers);
+  next.itemParts = next.itemParts.map((part) => ({
+    ...part,
+    parameterKeys: draft.parameters.filter((parameter) => parameter.itemPartId === part.id).map((parameter) => parameter.key),
+  }));
+  next.importedAt = draft.importedAt;
+  return next;
+}
 
 export function recordFeishuSourceRevision(
   state: WorkspaceState,
@@ -114,6 +229,10 @@ export function createRuleSetDraftFromPull(input: {
   const source = input.state.feishuSourceRevisions.find((revision) => revision.id === input.sourceRevisionId);
   if (!source) throw new Error("找不到待转换的 FeishuSourceRevision。");
   if (source.state === "PUBLISHED") throw new Error("该源修订已关联发布规则版本，无需重复创建草稿。");
+  const canonicalDrafts = input.state.canonicalRuleSourceDrafts.filter((draft) => draft.sourceRevisionId === source.id);
+  if (canonicalDrafts.length !== 1) throw new Error("该 FeishuSourceRevision 必须恰好对应一份可验证的 CanonicalRuleSourceDraft。");
+  const canonicalDraft = canonicalDrafts[0]!;
+  assertCanonicalDraftIntegrity(canonicalDraft);
   const existing = input.state.ruleSetVersions.find((ruleSet) =>
     ruleSet.sourceRevisionIds.includes(source.id) && ruleSet.status === "draft",
   );
@@ -123,6 +242,8 @@ export function createRuleSetDraftFromPull(input: {
     version: Math.max(0, ...input.state.ruleSetVersions.map((item) => item.version)) + 1,
     status: "draft",
     sourceRevisionIds: [source.id],
+    canonicalRuleSourceDraftId: canonicalDraft.id,
+    sourceContentHash: canonicalDraft.contentHash,
     settings: structuredClone(input.state.ruleSettings),
     createdAt: input.createdAt,
     publishedAt: undefined,
@@ -171,6 +292,20 @@ export function publishRuleSetVersion(input: {
   }
   if (existing.status !== "draft") throw new Error("只有草稿状态的 RuleSetVersion 可以发布。");
   if (!existing.sourceRevisionIds.length) throw new Error("RuleSet 草稿没有引用 FeishuSourceRevision，不能发布。");
+
+  if (!existing.canonicalRuleSourceDraftId || !existing.sourceContentHash) {
+    throw new Error("RuleSet 草稿缺少 CanonicalRuleSourceDraft 或内容哈希，不能发布。");
+  }
+  const canonicalDraft = input.state.canonicalRuleSourceDrafts.find(
+    (draft) => draft.id === existing.canonicalRuleSourceDraftId,
+  );
+  if (!canonicalDraft || canonicalDraft.sourceRevisionId !== existing.sourceRevisionIds[0]) {
+    throw new Error("RuleSet 草稿引用的 CanonicalRuleSourceDraft 不存在或源修订不匹配。");
+  }
+  assertCanonicalDraftIntegrity(canonicalDraft);
+  if (existing.sourceContentHash !== canonicalDraft.contentHash) {
+    throw new Error("RuleSet 草稿引用的飞书规则内容哈希不一致，不能发布。");
+  }
 
   const sources = existing.sourceRevisionIds.map((sourceRevisionId) => {
     const source = input.state.feishuSourceRevisions.find((item) => item.id === sourceRevisionId);
@@ -222,6 +357,8 @@ export function publishRuleSetVersion(input: {
       ...existing.settings,
       reductionStackingPolicyVersion: reductionPolicy.version,
     },
+    canonicalRuleSourceDraftId: existing.canonicalRuleSourceDraftId,
+    sourceContentHash: existing.sourceContentHash,
     warningAcknowledgements: normalizedAcknowledgements,
     publishedAt: input.publishedAt,
     publishedBy: input.publishedBy,

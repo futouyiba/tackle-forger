@@ -101,6 +101,7 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
     : false;
   const registryErrors = inspection?.sourceRevision.issues.filter((issue) => issue.severity === "error") ?? [];
   const registryWarnings = inspection?.sourceRevision.issues.filter((issue) => issue.severity === "warning") ?? [];
+  const canonicalRuleErrors = inspection?.canonicalRuleDraft.issues.filter((issue) => issue.level === "error") ?? [];
   const qualityMappingIssue = inspection?.pricingDraft.issues.some((issue) =>
     issue.code.startsWith("QUALITY_PRICING_MAPPING_"));
   const missingPricing = inspection?.pricingDraft.issues.filter((issue) =>
@@ -143,7 +144,12 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
         throw new Error(payload.error || "显式拉取失败");
       }
       if (payload.inspection) setInspection(payload.inspection);
-      props.onWorkspaceApplied(payload.state, payload.revision, `已登记飞书 revision ${payload.inspection?.sourceRevision.sourceRevision ?? ""}`);
+      const rules = payload.inspection?.canonicalRuleDraft;
+      props.onWorkspaceApplied(
+        payload.state,
+        payload.revision,
+        `已拉取飞书 revision ${payload.inspection?.sourceRevision.sourceRevision ?? ""}：${rules?.templates.length ?? 0} 个重量模板、${rules?.itemTypeProfiles.length ?? 0} 个类型、${rules?.functionProfiles.length ?? 0} 个功能；工作台已切换到该版本。`,
+      );
     } catch (caught) {
       props.notify(caught instanceof Error ? caught.message : "显式拉取失败");
     } finally {
@@ -251,18 +257,18 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
         <div className="card">
           <span className="rule-step">01 · 检查</span>
           <strong>回读工作簿</strong>
-          <small>只读取结构、revision、机器 ID 与定价契约，不修改任何规则。</small>
+          <small>读取 revision、机器 ID、01/02/03 完整规则矩阵与定价契约，不修改飞书。</small>
           <em className={inspection ? "is-ok" : ""}>{inspection ? "本次观测完成" : "等待连接"}</em>
         </div>
         <ArrowRight size={18} />
         <div className="card">
           <span className="rule-step">02 · 显式动作</span>
-          <strong>登记源修订</strong>
-          <small>生成 FeishuSourceRevision、ID 报告与 PricingPolicyDraft；不发布规则。</small>
+          <strong>拉取并切换工作台数据</strong>
+          <small>重量模板、类型、功能和规则层立即显示并用于工作台计算；正式 RuleSet 仍需独立发布。</small>
           <button
             className="button button-primary button-sm"
             type="button"
-            disabled={Boolean(action) || props.dirty || !inspection || Boolean(registryErrors.length) || !pullAvailability.enabled}
+            disabled={Boolean(action) || props.dirty || !inspection || Boolean(registryErrors.length) || Boolean(canonicalRuleErrors.length) || !pullAvailability.enabled}
             title={pullAvailability.disabledReasonText}
             onClick={() => void pull()}
           >
@@ -274,7 +280,7 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
         <div className="card">
           <span className="rule-step">03 · 独立动作</span>
           <strong>创建 RuleSet 草稿</strong>
-          <small>草稿仍不生效。正式发布必须在规则审查流程中单独完成。</small>
+          <small>冻结本次拉取的内容哈希供审查；工作台预览已使用拉取内容，正式生产仍未发布。</small>
           <button
             className="button button-default button-sm"
             type="button"
@@ -396,8 +402,8 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
           <strong>边界已锁定</strong>
           <span>09_甘特图只作开发排期；11、12、14–17 不反向覆盖领域真相；正式配置仍由冻结 Snapshot 输出到本地 Git 配置仓库。</span>
         </div>
-        <span className={!inspection || registryErrors.length || registryWarnings.length ? "rule-badge warning" : "rule-badge success"}>
-          {!inspection ? "等待 sheet_id 校验" : registryErrors.length ? `${registryErrors.length} 个注册表错误` : registryWarnings.length ? `${registryWarnings.length} 个名称告警` : "18 张表已按 ID 校验"}
+        <span className={!inspection || registryErrors.length || canonicalRuleErrors.length || registryWarnings.length ? "rule-badge warning" : "rule-badge success"}>
+          {!inspection ? "等待 sheet_id 校验" : registryErrors.length ? `${registryErrors.length} 个注册表错误` : canonicalRuleErrors.length ? `${canonicalRuleErrors.length} 个规则数据错误` : registryWarnings.length ? `${registryWarnings.length} 个名称告警` : "18 张表已按 ID 校验"}
         </span>
       </div>
     </section>

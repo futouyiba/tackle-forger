@@ -237,6 +237,22 @@ function validatePartConstraintComponents(input: {
 export function assertPartConstraintSetRevisionStructure(
   constraintSet: PartConstraintSet,
 ): void {
+  if (
+    typeof constraintSet.constraintSetId !== "string"
+    || !constraintSet.constraintSetId.trim()
+  ) {
+    throw new Error(
+      "PART_CONSTRAINT_SET_ID_INVALID：constraintSetId 必须是非空稳定身份。",
+    );
+  }
+  if (
+    !Number.isSafeInteger(constraintSet.revision)
+    || constraintSet.revision < 1
+  ) {
+    throw new Error(
+      `PART_CONSTRAINT_SET_REVISION_INVALID：${constraintSet.constraintSetId} 的 revision 必须是 >= 1 的安全整数。`,
+    );
+  }
   assertReviewStatus(
     constraintSet.reviewStatus,
     `${constraintSet.constraintSetId}@${constraintSet.revision}`,
@@ -351,10 +367,12 @@ export function createNeedsReviewPartConstraintSet(
     createdBy: input.createdBy ?? "workspace-migration",
     createdAt: input.migratedAt,
   };
-  return {
+  const constraintSet = {
     ...withoutHash,
     contentHash: partConstraintSetContentHash(withoutHash),
   };
+  assertPartConstraintSetRevisionStructure(constraintSet);
+  return constraintSet;
 }
 
 export function partConstraintSourceContentHash(

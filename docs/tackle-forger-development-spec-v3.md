@@ -2906,7 +2906,7 @@ type ActionCode =
 
 读接口必须按当前对象、策略版本和操作者返回这些`ActionAvailability`；命令端再次校验Capability和`separationOfDutiesPolicy`。发布策略还必须校验其目标目录/Manifest覆盖，浏览器目录授权不能替代任何服务端权限。
 
-Series、SKU、Model的ID终身稳定且不复用；改名和更换默认Model不改ID。SKU修改`targetPullKg`必须遵守第6.5节：没有任何已发布后代Snapshot时保留skuId并创建新revision；已有已发布后代时原SKU的重量身份冻结，新重量创建新SKU，旧SKU可`DEPRECATED`。Revision只增不改；已批准/已发布revision不可原地改写。Snapshot ID与payload/hash永久绑定。前端不得从角色名、状态或颜色猜动作；读接口返回`ActionAvailability[]`，写接口再次鉴权。按第20.2节，所有已登录公司用户统一获得全部当前已启用业务Capability，`separationOfDutiesPolicy`使用`disabled_in_tackle_forger`；按第23.6节，`ai.provider_policy.manage`只授予部署管理员。服务端仍必须独立鉴权，功能开关关闭或未授予的Capability不得通过直接API调用。
+Series、SKU、Model的ID终身稳定且不复用；改名和更换默认Model不改ID。SKU修改`targetPullKg`必须遵守第6.6节：没有任何已发布后代Snapshot时保留skuId并创建新revision；已有已发布后代时原SKU的重量身份冻结，新重量创建新SKU，旧SKU可`DEPRECATED`。Revision只增不改；已批准/已发布revision不可原地改写。Snapshot ID与payload/hash永久绑定。前端不得从角色名、状态或颜色猜动作；读接口返回`ActionAvailability[]`，写接口再次鉴权。按第20.2节，所有已登录公司用户统一获得全部当前已启用业务Capability，`separationOfDutiesPolicy`使用`disabled_in_tackle_forger`；按第23.6节，`ai.provider_policy.manage`只授予部署管理员。服务端仍必须独立鉴权，功能开关关闭或未授予的Capability不得通过直接API调用。
 
 ### 24.2 R1：钓具系列甘特图
 

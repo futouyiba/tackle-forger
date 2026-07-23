@@ -402,6 +402,18 @@ test("schema v18 拒绝字段容器或 set/part/trace 状态枚举非法的 v17 
   }> = [
     {
       mutate: (constraintSet) => {
+        constraintSet.constraintSetId = " ";
+      },
+      error: /PART_CONSTRAINT_SET_ID_INVALID/,
+    },
+    ...[0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1].map((revision) => ({
+      mutate: (constraintSet: Record<string, unknown>) => {
+        constraintSet.revision = revision;
+      },
+      error: /PART_CONSTRAINT_SET_REVISION_INVALID/,
+    })),
+    {
+      mutate: (constraintSet) => {
         const parts = constraintSet.parts as Record<string, Record<string, unknown>>;
         parts.rod.templateIds = "template:not-an-array";
       },
@@ -592,6 +604,47 @@ test("新 PartConstraintSet revision 拒绝 Trace 映射或复核状态矛盾", 
     }),
     /PART_CONSTRAINT_TRACE_ID_DUPLICATE/,
   );
+});
+
+test("新 PartConstraintSet revision 拒绝非法当前身份或 revision", () => {
+  for (const mutation of [
+    (current: Record<string, unknown>) => {
+      current.constraintSetId = "";
+    },
+    (current: Record<string, unknown>) => {
+      current.revision = 0;
+    },
+    (current: Record<string, unknown>) => {
+      current.revision = -1;
+    },
+    (current: Record<string, unknown>) => {
+      current.revision = 1.5;
+    },
+    (current: Record<string, unknown>) => {
+      current.revision = Number.MAX_SAFE_INTEGER + 1;
+    },
+  ]) {
+    const current = structuredClone(
+      createSeedState().partConstraintSets[0],
+    ) as unknown as Record<string, unknown>;
+    mutation(current);
+    current.contentHash = partConstraintSetContentHash(current as never);
+    const typedCurrent = current as unknown as ReturnType<
+      typeof createSeedState
+    >["partConstraintSets"][number];
+    assert.throws(
+      () => createPartConstraintSetRevision({
+        current: typedCurrent,
+        expectedCurrentRef: partConstraintSetRef(typedCurrent),
+        parts: structuredClone(typedCurrent.parts),
+        traces: structuredClone(typedCurrent.traces),
+        sourceRef: structuredClone(typedCurrent.sourceRef),
+        createdBy: "reviewer:test",
+        createdAt: "2026-07-23T12:00:00.000Z",
+      }),
+      /PART_CONSTRAINT_SET_(?:ID|REVISION)_INVALID/,
+    );
+  }
 });
 
 test("D-02 OfficialSku 无损迁移为抽屉、默认 Model 与冻结快照", () => {

@@ -76,6 +76,32 @@ test("整包 PUT 拒绝修改只读历史并保留 payload 与 Trace", { concurr
   }, before);
 });
 
+test("整包 PUT 允许常规工作台字段(templates)编辑保存", { concurrency: false }, async () => {
+  withTrustedProxy();
+  const current = await loadWorkspaceState();
+  const state = structuredClone(current.state);
+  const sample = state.templates[0] ?? { id: "t", name: "", values: {} };
+  const probeId = "template:put-allowed-probe";
+  state.templates = [...state.templates, { ...sample, id: probeId, name: "PUT 允许测试" }];
+  const response = await putState(new NextRequest("http://localhost/api/state", {
+    method: "PUT",
+    headers: authHeaders,
+    body: JSON.stringify({ state, baseRevision: current.revision, message: "测试:加重量段" }),
+  }));
+  assert.equal(response.status, 200);
+  const payload = await response.json() as { revision: number };
+  const after = await loadWorkspaceState();
+  assert.ok(after.state.templates.some((entry) => entry.id === probeId), "重量段应已保存");
+  const restored = structuredClone(after.state);
+  restored.templates = restored.templates.filter((entry) => entry.id !== probeId);
+  await saveWorkspaceState({
+    state: restored,
+    baseRevision: payload.revision,
+    author: "route-test-cleanup",
+    message: "清理 PUT 允许测试",
+  });
+});
+
 test("数据源发布更新规则但不重算或改写四组历史产品数据", { concurrency: false }, async () => {
   withTrustedProxy();
   const originalFeishuAppId = process.env.FEISHU_APP_ID;

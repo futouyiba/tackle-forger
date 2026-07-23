@@ -1,4 +1,11 @@
 import { evaluateFormula } from "./engine";
+import {
+  applyParameterDefinitions,
+  canonicalizeContributions,
+  evaluateBidirectionalRatio,
+  numberToBinary64Hex,
+} from "./reduction-stacking-policy";
+import { sha256Text } from "./sha256";
 import type {
   AdjustmentRule,
   AttributeContribution,
@@ -14,8 +21,9 @@ import type {
   ProjectionTraceStep,
   ProjectionWarning,
   QualityProfile,
-  ReductionStackingMode,
+  ReductionStackingPolicyVersion,
   RuleSetVersion,
+  ParameterDefinition,
   WeightTemplate,
 } from "./types";
 
@@ -32,6 +40,8 @@ export interface DeriveProjectionInput {
   qualityProfile?: QualityProfile;
   ruleSet: RuleSetVersion;
   attributeContributions?: AttributeContribution[];
+  reductionStackingPolicy?: ReductionStackingPolicyVersion;
+  parameterDefinitions?: ParameterDefinition[];
   patches?: ProjectionPatchRuleSource[];
   createdAt?: string;
 }
@@ -48,6 +58,7 @@ const TRACE_LAYERS: ProjectionLayer[] = [
   "model_patch",
   "attribute_affix",
   "final_review_patch",
+  "parameter_definition",
   "validation",
 ];
 
@@ -58,10 +69,6 @@ const PATCH_LAYER: Record<ProjectionPatchRuleSource["scope"], ProjectionLayer> =
   final_review: "final_review_patch",
 };
 
-function round(value: number, precision = 12): number {
-  const factor = 10 ** precision;
-  return Math.round((value + Number.EPSILON) * factor) / factor;
-}
 function compareText(left: string, right: string): number {
   if (left < right) return -1;
   if (left > right) return 1;
@@ -103,18 +110,18 @@ export function deterministicHash(value: unknown): string {
 export function applyReduction(
   base: number,
   totalReduction: number,
-  mode: ReductionStackingMode,
 ): number {
   if (!Number.isFinite(base) || !Number.isFinite(totalReduction)) {
     throw new Error("降低类聚合只接受有限数字。");
   }
-  const result = mode === "linear_subtraction"
-    ? base * (1 - totalReduction)
-    : base / (1 + totalReduction);
+  if (base < 0 || totalReduction < 0) {
+    throw new Error("bidirectional_ratio 只接受非负基础值与幅度。");
+  }
+  const result = base / (1 + totalReduction);
   if (!Number.isFinite(result)) {
     throw new Error("降低类聚合结果不是有限数字。");
   }
-  return round(result);
+  return result;
 }
 
 function addSource(step: ProjectionTraceStep, sourceId: string): void {
@@ -145,24 +152,22 @@ function applyRule(
     if (rule.operation === "set") {
       after = rule.value;
     } else if (rule.operation === "add") {
-      after = round(current + Number(rule.value));
+      after = Number(current + Number(rule.value));
     } else if (rule.operation === "multiply") {
-      after = round(current * Number(rule.value));
+      after = Number(current * Number(rule.value));
     } else if (rule.operation === "min") {
-      after = round(Math.min(current, Number(rule.value)));
+      after = Number(Math.min(current, Number(rule.value)));
     } else if (rule.operation === "max") {
-      after = round(Math.max(current, Number(rule.value)));
+      after = Number(Math.max(current, Number(rule.value)));
     } else {
-      after = round(
-        evaluateFormula(String(rule.value), {
+      after = Number(evaluateFormula(String(rule.value), {
           current,
           ...Object.fromEntries(
             Object.entries(values).filter(
               (entry): entry is [string, number] => typeof entry[1] === "number",
             ),
           ),
-        }),
-      );
+        }));
     }
 
     if (typeof after === "number" && !Number.isFinite(after)) {
@@ -179,6 +184,19 @@ function applyRule(
       before,
       operand: rule.value,
       after,
+      ...(typeof after === "number" ? {
+        numericEvidence: {
+          stage: layer,
+          ...(typeof before === "number"
+            ? { beforeBinary64: numberToBinary64Hex(before) }
+            : {}),
+          ...(typeof rule.value === "number"
+            ? { operandBinary64: numberToBinary64Hex(rule.value) }
+            : {}),
+          afterBinary64: numberToBinary64Hex(after),
+          anomaly: before === after ? "no_effect" as const : "none" as const,
+        },
+      } : {}),
     };
   } catch (error) {
     addWarning(warnings, {
@@ -243,108 +261,32 @@ function applyAttributeContributions(
   values: ProjectionValues,
   step: ProjectionTraceStep,
   contributions: AttributeContribution[],
-  mode: ReductionStackingMode,
+  policy: ReductionStackingPolicyVersion | undefined,
   warnings: ProjectionWarning[],
   sequence: { value: number },
 ): void {
-  const grouped = new Map<string, AttributeContribution[]>();
-  for (const contribution of contributions) {
-    const entries = grouped.get(contribution.parameterKey) ?? [];
-    entries.push(contribution);
-    grouped.set(contribution.parameterKey, entries);
-    addSource(step, contribution.sourceId);
-  }
-
-  for (const parameterKey of Array.from(grouped.keys()).sort()) {
-    const entries = grouped.get(parameterKey) ?? [];
-    const original = values[parameterKey];
-    if (typeof original !== "number") {
-      addWarning(warnings, {
-        level: "error",
-        code: "ATTRIBUTE_BASE_NOT_NUMERIC",
-        message: "属性词条 " + parameterKey + " 的基础值不是数字。",
-        layer: "attribute_affix",
-        parameterKey,
-      });
-      continue;
-    }
-
-    let current = original;
-    let percentTotal = 0;
-    for (const entry of entries.filter((item) => item.operation === "percent_bonus")) {
-      percentTotal += entry.value;
-      const after = round(original * (1 + percentTotal));
-      sequence.value += 1;
-      step.contributions.push({
-        sequence: sequence.value,
-        ruleId: entry.id,
-        sourceId: entry.sourceId,
-        sourceName: entry.sourceName,
-        parameterKey,
-        operation: entry.operation,
-        before: current,
-        operand: entry.value,
-        after,
-      });
-      current = after;
-    }
-
-    for (const entry of entries.filter((item) => item.operation === "flat_bonus")) {
-      const after = round(current + entry.value);
-      sequence.value += 1;
-      step.contributions.push({
-        sequence: sequence.value,
-        ruleId: entry.id,
-        sourceId: entry.sourceId,
-        sourceName: entry.sourceName,
-        parameterKey,
-        operation: entry.operation,
-        before: current,
-        operand: entry.value,
-        after,
-      });
-      current = after;
-    }
-
-    const reductionBase = current;
-    let reductionTotal = 0;
-    for (const entry of entries.filter((item) => item.operation === "reduction")) {
-      reductionTotal += entry.value;
-      if (entry.value < 0) {
-        addWarning(warnings, {
-          level: "warning",
-          code: "NEGATIVE_REDUCTION",
-          message: "降低类词条 " + entry.id + " 使用了负值，需人工复核。",
-          layer: "attribute_affix",
-          parameterKey,
-          sourceId: entry.sourceId,
-        });
-      }
-      const after = applyReduction(reductionBase, reductionTotal, mode);
-      sequence.value += 1;
-      step.contributions.push({
-        sequence: sequence.value,
-        ruleId: entry.id,
-        sourceId: entry.sourceId,
-        sourceName: entry.sourceName,
-        parameterKey,
-        operation: entry.operation,
-        before: current,
-        operand: entry.value,
-        after,
-      });
-      current = after;
-    }
-    if (mode === "linear_subtraction" && reductionTotal > 1) {
-      addWarning(warnings, {
-        level: "warning",
-        code: "LINEAR_REDUCTION_OVER_100_PERCENT",
-        message: "线性降低总量超过 100%，结果可能为负值。",
-        layer: "attribute_affix",
-        parameterKey,
-      });
-    }
-    values[parameterKey] = current;
+  for (const contribution of contributions) addSource(step, contribution.sourceId);
+  const result = evaluateBidirectionalRatio({
+    baseValues: values,
+    operations: canonicalizeContributions(contributions),
+    policy,
+    sequenceStart: sequence.value,
+  });
+  Object.assign(values, result.values);
+  step.contributions.push(...result.trace);
+  sequence.value = result.trace.at(-1)?.sequence ?? sequence.value;
+  for (const runtimeIssue of result.issues) {
+    addWarning(warnings, {
+      level: runtimeIssue.level,
+      code: runtimeIssue.code,
+      message: runtimeIssue.message,
+      layer: "attribute_affix",
+      parameterKey: runtimeIssue.parameterKey,
+      severity: runtimeIssue.severity,
+      gate: runtimeIssue.gate,
+      fingerprint: runtimeIssue.fingerprint,
+      evidence: runtimeIssue.evidence,
+    });
   }
 }
 
@@ -565,7 +507,7 @@ export function deriveProjection(
     values,
     step("attribute_affix"),
     input.attributeContributions ?? [],
-    input.ruleSet.settings.reductionStackingMode,
+    input.reductionStackingPolicy,
     warnings,
     sequence,
   );
@@ -583,9 +525,34 @@ export function deriveProjection(
     );
   }
 
+  const parameterResult = applyParameterDefinitions({
+    values,
+    definitions: input.parameterDefinitions ?? [],
+    sequenceStart: sequence.value,
+  });
+  Object.assign(values, parameterResult.values);
+  step("parameter_definition").contributions.push(...parameterResult.trace);
+  for (const definition of input.parameterDefinitions ?? []) {
+    addSource(step("parameter_definition"), `parameter-definition:${definition.key}`);
+  }
+  sequence.value = parameterResult.trace.at(-1)?.sequence ?? sequence.value;
+  for (const runtimeIssue of parameterResult.issues) {
+    addWarning(warnings, {
+      level: runtimeIssue.level,
+      code: runtimeIssue.code,
+      message: runtimeIssue.message,
+      layer: "parameter_definition",
+      parameterKey: runtimeIssue.parameterKey,
+      severity: runtimeIssue.severity,
+      gate: runtimeIssue.gate,
+      fingerprint: runtimeIssue.fingerprint,
+      evidence: runtimeIssue.evidence,
+    });
+  }
+
   validateProjection(input, values, warnings, step("validation"));
   const finalValues = sortRecord(values);
-  const sourceHash = deterministicHash({
+  const sourceHash = sha256Text(stableStringify({
     weightTemplate: input.weightTemplate,
     methodProfile: input.methodProfile,
     itemTypeProfile: input.itemTypeProfile,
@@ -593,14 +560,27 @@ export function deriveProjection(
     functionIntensity: input.functionIntensity,
     performanceProfile: input.performanceProfile ?? null,
     qualityProfile: input.qualityProfile ?? null,
-    ruleSet: input.ruleSet,
+    ruleSet: {
+      ...input.ruleSet,
+      settings: {
+        patchOffsetLimits: input.ruleSet.settings.patchOffsetLimits,
+        ...(input.ruleSet.settings.reductionStackingPolicyVersion
+          ? {
+              reductionStackingPolicyVersion:
+                input.ruleSet.settings.reductionStackingPolicyVersion,
+            }
+          : {}),
+      },
+    },
     attributeContributions: input.attributeContributions ?? [],
+    reductionStackingPolicyVersion: input.reductionStackingPolicy?.version ?? null,
+    parameterDefinitions: input.parameterDefinitions ?? [],
     patches,
     structuralValues,
     values: finalValues,
     trace,
     warnings,
-  });
+  }));
 
   return {
     id: input.id ?? "projection-" + sourceHash,
@@ -612,7 +592,16 @@ export function deriveProjection(
     performanceId: input.performanceProfile?.id,
     qualityId: input.qualityProfile?.id,
     ruleSetVersion: input.ruleSet.id,
-    reductionStackingMode: input.ruleSet.settings.reductionStackingMode,
+    ...(input.ruleSet.settings.reductionStackingMode
+      ? { reductionStackingMode: input.ruleSet.settings.reductionStackingMode }
+      : {}),
+    ...(input.reductionStackingPolicy
+      ? { reductionStackingPolicyVersion: input.reductionStackingPolicy.version }
+      : {}),
+    formalStatus: warnings.some((warning) =>
+      warning.severity === "BLOCKER"
+      || warning.code === "REDUCTION_POLICY_SOURCE_MISSING"
+    ) ? "NON_FORMAL" : "FORMAL",
     structuralValues,
     values: finalValues,
     trace,

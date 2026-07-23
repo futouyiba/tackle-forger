@@ -12,6 +12,10 @@ import {
 } from "../lib/pricing-policy";
 import { publishConfigurationSnapshot, verifySnapshotIntegrity } from "../lib/publishing";
 import { createSeedState } from "../lib/seed";
+import {
+  formalProjection,
+  testReductionPolicy,
+} from "./helpers/reduction-policy";
 
 const REVISION = "2922";
 const ref = (cell: string, sheetId = "u87sRh") => ({ sheetId, cell });
@@ -177,13 +181,15 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     trace: [],
     inputHash: "quality-assessment-hash",
   };
+  const reductionStackingPolicy = testReductionPolicy();
   const snapshot = publishConfigurationSnapshot({
     publicationMode: "new_formal",
     model,
     sku,
     series,
     seriesSkus: state.skuDrawers,
-    projection,
+    projection: formalProjection(projection, reductionStackingPolicy),
+    reductionStackingPolicy,
     finalPanelValues: oldSnapshot.finalPanelValues,
     componentSelections: oldSnapshot.componentSelections,
     patches: [],

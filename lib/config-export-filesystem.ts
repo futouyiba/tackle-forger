@@ -35,6 +35,7 @@ import {
   assertSnapshotItemPartEnabled,
   snapshotItemPartId,
 } from "./enabled-item-parts";
+import { assertFormalSnapshotHasReplayPolicy } from "./reduction-stacking-policy";
 
 export interface FilesystemExportOperation extends ExportFileOperation {
   sourceHash: string;
@@ -134,6 +135,7 @@ export async function previewFilesystemExport(input: {
   createdAt?: string;
 }): Promise<FilesystemExportPreview> {
   assertSnapshotItemPartEnabled(input.snapshot, "config_export");
+  assertFormalSnapshotHasReplayPolicy(input.snapshot);
   const itemPartId = snapshotItemPartId(input.snapshot)!;
   const createdAt = input.createdAt ?? new Date().toISOString();
   const initialIssues: ConfigExportMappingIssue[] = [];
@@ -359,6 +361,7 @@ export async function commitFilesystemExport(input: {
   audit?: ExportCommitResult["audit"];
 }): Promise<ExportCommitResult> {
   assertSnapshotItemPartEnabled(input.snapshot, "config_export");
+  assertFormalSnapshotHasReplayPolicy(input.snapshot);
   if (!verifySnapshotIntegrity(input.snapshot)) {
     throw new Error("冻结 ConfigurationSnapshot 的内容哈希校验失败。");
   }

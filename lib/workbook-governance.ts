@@ -4,6 +4,11 @@ import type { PricingPolicyDraft } from "./pricing-policy";
 import type { QualityValuePolicyDraft } from "./quality-value-policy";
 import type { SourceIdentityMigrationReport } from "./source-id-migration";
 import type { RuleSetVersion, WorkspaceState } from "./types";
+import {
+  importReductionStackingPolicyDraft,
+  publishReductionStackingPolicyVersion,
+} from "./reduction-stacking-policy";
+import type { ReductionStackingPolicyVersion } from "./types";
 
 export function recordFeishuSourceRevision(
   state: WorkspaceState,
@@ -57,6 +62,49 @@ export function recordQualityValuePolicyDraft(
   return next;
 }
 
+export function recordReductionStackingPolicyDraft(
+  state: WorkspaceState,
+  draft: ReductionStackingPolicyVersion,
+): WorkspaceState {
+  if (
+    draft.source
+    && !state.feishuSourceRevisions.some((revision) => revision.id === draft.source?.sourceRevisionId)
+  ) {
+    throw new Error("ReductionStackingPolicyVersion 引用的 FeishuSourceRevision 尚未登记。");
+  }
+  const next = structuredClone(state);
+  const index = next.reductionStackingPolicyVersions.findIndex((item) => item.id === draft.id);
+  if (index >= 0) next.reductionStackingPolicyVersions[index] = structuredClone(draft);
+  else next.reductionStackingPolicyVersions.unshift(structuredClone(draft));
+  return next;
+}
+
+export function publishReductionStackingPolicyFromPull(input: {
+  state: WorkspaceState;
+  policyDraftId: string;
+  publishedAt: string;
+  publishedBy: string;
+}): { state: WorkspaceState; policy: ReductionStackingPolicyVersion } {
+  const draft = input.state.reductionStackingPolicyVersions.find(
+    (entry) => entry.id === input.policyDraftId,
+  );
+  if (!draft) throw new Error("找不到待发布的 ReductionStackingPolicyVersion 草稿。");
+  const published = publishReductionStackingPolicyVersion({
+    draft,
+    publishedAt: input.publishedAt,
+    publishedBy: input.publishedBy,
+  });
+  if (published.status === "published" && draft.status === "published") {
+    return { state: structuredClone(input.state), policy: structuredClone(published) };
+  }
+  const next = structuredClone(input.state);
+  next.reductionStackingPolicyVersions = next.reductionStackingPolicyVersions.map((entry) => {
+    if (entry.id === published.id) return published;
+    return entry.status === "published" ? { ...entry, status: "superseded" as const } : entry;
+  });
+  return { state: next, policy: structuredClone(published) };
+}
+
 export function createRuleSetDraftFromPull(input: {
   state: WorkspaceState;
   sourceRevisionId: string;
@@ -82,6 +130,19 @@ export function createRuleSetDraftFromPull(input: {
   };
   const next = structuredClone(input.state);
   next.ruleSetVersions.unshift(ruleSetDraft);
+  const reductionDraft = importReductionStackingPolicyDraft({
+    sourceRevision: source,
+    machineRules: source.reductionPolicyMachineRules,
+    createdAt: input.createdAt,
+  });
+  const existingPolicyIndex = next.reductionStackingPolicyVersions.findIndex(
+    (entry) => entry.id === reductionDraft.id,
+  );
+  if (existingPolicyIndex >= 0) {
+    next.reductionStackingPolicyVersions[existingPolicyIndex] = reductionDraft;
+  } else {
+    next.reductionStackingPolicyVersions.unshift(reductionDraft);
+  }
   const sourceIndex = next.feishuSourceRevisions.findIndex((revision) => revision.id === source.id);
   next.feishuSourceRevisions[sourceIndex] = { ...next.feishuSourceRevisions[sourceIndex], state: "RULESET_DRAFT" };
   return { state: next, ruleSetDraft: structuredClone(ruleSetDraft) };
@@ -125,6 +186,16 @@ export function publishRuleSetVersion(input: {
   }
   const errors = sources.flatMap((source) => source.issues.filter((issue) => issue.severity === "error"));
   if (errors.length) throw new Error(`源修订仍有阻断错误：${errors.map((issue) => issue.code).join("、")}`);
+  const reductionPolicy = input.state.reductionStackingPolicyVersions.find((policy) =>
+    policy.status === "published"
+    && policy.source
+    && existing.sourceRevisionIds.includes(policy.source.sourceRevisionId)
+  );
+  if (!reductionPolicy) {
+    throw new Error(
+      "RuleSet 发布被阻止：[REDUCTION_POLICY_SOURCE_MISSING] 权威主工作簿机器规则尚未形成已发布 ReductionStackingPolicyVersion。",
+    );
+  }
 
   const acknowledgements = input.warningAcknowledgements ?? [];
   const acknowledgementByKey = new Map(acknowledgements.map((item) => [item.issueKey, item.reason.trim()]));
@@ -142,7 +213,10 @@ export function publishRuleSetVersion(input: {
     ruleSetId: existing.id,
     version: existing.version,
     sourceRevisionIds: [...existing.sourceRevisionIds].sort(),
-    settings: existing.settings,
+    settings: {
+      ...existing.settings,
+      reductionStackingPolicyVersion: reductionPolicy.version,
+    },
     warningAcknowledgements: normalizedAcknowledgements,
     publishedAt: input.publishedAt,
     publishedBy: input.publishedBy,
@@ -156,6 +230,10 @@ export function publishRuleSetVersion(input: {
         status: "published" as const,
         publishedAt: input.publishedAt,
         publishedBy: input.publishedBy,
+        settings: {
+          ...item.settings,
+          reductionStackingPolicyVersion: reductionPolicy.version,
+        },
         warningAcknowledgements: normalizedAcknowledgements,
         publicationHash,
         notes: `${item.notes}\n已由 ${input.publishedBy} 显式发布。`,

@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { migrateWorkspaceState } from "../lib/migrations";
+import {
+  CURRENT_WORKSPACE_SCHEMA_VERSION,
+  migrateWorkspaceState,
+} from "../lib/migrations";
 import { verifySnapshotIntegrity } from "../lib/publishing";
 import { createSeedState } from "../lib/seed";
 
@@ -17,7 +20,7 @@ test("v16 隔离旧独立偏移阈值、发布规范策略且不改写历史 Sna
   const snapshotsBefore = structuredClone(legacy.configurationSnapshots);
 
   const migrated = migrateWorkspaceState(legacy);
-  assert.equal(migrated.schemaVersion, 16);
+  assert.equal(migrated.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
   assert.deepEqual(migrated.ruleSettings.patchOffsetLimits, {});
   assert.ok(migrated.patchLedger.migrationReviewItems.some((entry) =>
     entry.reason === "LEGACY_PATCH_OFFSET_THRESHOLDS_QUARANTINED"
@@ -44,7 +47,7 @@ test("v14 将旧系列配方迁移为竿轮线约束且保留扁平字段", () =
 
   const migrated = migrateWorkspaceState(legacy);
   const recipe = migrated.recipes[0];
-  assert.equal(migrated.schemaVersion, 16);
+  assert.equal(migrated.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
   assert.deepEqual(recipe.templateIds, before.templateIds);
   assert.deepEqual(recipe.structureIds, before.structureIds);
   assert.deepEqual(recipe.requiredAffixIds, before.requiredAffixIds);
@@ -68,7 +71,7 @@ test("v15 保留旧五维定义并明确迁移为未发布修订", () => {
   }];
   const migrated = migrateWorkspaceState(legacy);
   const definition = migrated.fiveAxisViewDefinitions[0] as unknown as Record<string, unknown>;
-  assert.equal(migrated.schemaVersion, 16);
+  assert.equal(migrated.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
   assert.equal(definition.publicationState, "UNPUBLISHED");
   assert.equal(definition.revision, 1);
   assert.equal(typeof definition.definitionHash, "string");
@@ -134,7 +137,7 @@ test("D-02 OfficialSku 无损迁移为抽屉、默认 Model 与冻结快照", ()
 
   const migrated = migrateWorkspaceState(legacy);
   assert.equal(migrated.skuDrawers.length, 1);
-  assert.equal(migrated.schemaVersion, 16);
+  assert.equal(migrated.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
   assert.deepEqual(migrated.qualityValuePolicyDrafts, []);
   assert.deepEqual(migrated.seriesDefinitions[0].targetPullSpecifications, [{
     targetPullKgf: migrated.skuDrawers[0].targetWeightKg,

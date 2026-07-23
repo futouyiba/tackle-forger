@@ -6,16 +6,14 @@ import {
   type ExportCommitAdapter,
   type ExportCommitResult,
 } from "../lib/config-export";
-import { deterministicHash } from "../lib/rule-kernel";
 import { createSeedState } from "../lib/seed";
+import { formalExportSnapshot } from "./helpers/formal-export-snapshot";
 
 function exportSnapshot(itemPartId = "part:rod") {
-  const snapshot = structuredClone(createSeedState().configurationSnapshots[0]!);
-  snapshot.projectionMatch.itemPartId = itemPartId;
-  const content = structuredClone(snapshot);
-  Reflect.deleteProperty(content, "contentHash");
-  snapshot.contentHash = deterministicHash(content);
-  return snapshot;
+  return formalExportSnapshot(
+    createSeedState().configurationSnapshots[0]!,
+    (snapshot) => { snapshot.projectionMatch.itemPartId = itemPartId; },
+  );
 }
 
 test("配置表枚举关系未声明按 id/name 解析时阻止而不猜测", () => {

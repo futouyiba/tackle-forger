@@ -10,7 +10,7 @@ import {
 } from "../lib/browser-config-export";
 import type { ConfigExportMapping } from "../lib/config-export-mapping";
 import { createSeedState } from "../lib/seed";
-import { deterministicHash } from "../lib/rule-kernel";
+import { formalExportSnapshot } from "./helpers/formal-export-snapshot";
 
 function toBytes(data: BufferSource | Blob | string): Promise<Uint8Array> | Uint8Array {
   if (typeof data === "string") return new TextEncoder().encode(data);
@@ -161,7 +161,7 @@ enums = [{ field = "goods_id", table = "goods_basic" }]
 
 test("浏览器预览从环境根 config.toml 生成三表差异，提交后回读并保留 StoreBuy.enabled", async () => {
   const current = await fixture();
-  const snapshot = createSeedState().configurationSnapshots[0]!;
+  const snapshot = formalExportSnapshot(createSeedState().configurationSnapshots[0]!);
   const preview = await previewBrowserExportFromHandles({
     binding: current.binding,
     targetRoot: current.root,
@@ -192,7 +192,7 @@ test("ID 与 configNameKey 分裂命中时阻断目标，不产生可提交操�
     configRoot: current.root,
     packageId: "browser-package-split",
     mapping: mapping(),
-    snapshots: [createSeedState().configurationSnapshots[0]],
+    snapshots: [formalExportSnapshot(createSeedState().configurationSnapshots[0])],
   });
   assert.equal(preview.status, "blocked");
   assert.deepEqual(preview.operations, []);
@@ -201,7 +201,7 @@ test("ID 与 configNameKey 分裂命中时阻断目标，不产生可提交操�
 
 test("预览后源文件变化时恢复型提交拒绝覆盖", async () => {
   const current = await fixture();
-  const snapshot = createSeedState().configurationSnapshots[0]!;
+  const snapshot = formalExportSnapshot(createSeedState().configurationSnapshots[0]!);
   const preview = await previewBrowserExportFromHandles({
     binding: current.binding,
     targetRoot: current.root,
@@ -223,11 +223,10 @@ test("预览后源文件变化时恢复型提交拒绝覆盖", async () => {
 
 test("扩展部位预览与提交在浏览器文件写入前 fail-closed", async () => {
   const current = await fixture();
-  const snapshot = structuredClone(createSeedState().configurationSnapshots[0]);
-  snapshot.projectionMatch.itemPartId = "part:hook";
-  const content = structuredClone(snapshot);
-  Reflect.deleteProperty(content, "contentHash");
-  snapshot.contentHash = deterministicHash(content);
+  const snapshot = formalExportSnapshot(
+    createSeedState().configurationSnapshots[0],
+    (value) => { value.projectionMatch.itemPartId = "part:hook"; },
+  );
   const beforeFiles = Object.fromEntries(
     [...current.xlsx.files].map(([name, file]) => [name, [...file.value()]]),
   );
@@ -254,7 +253,7 @@ test("扩展部位预览与提交在浏览器文件写入前 fail-closed", async
     configRoot: current.root,
     packageId: "browser-package-hook-commit",
     mapping: mapping(),
-    snapshots: [createSeedState().configurationSnapshots[0]],
+    snapshots: [formalExportSnapshot(createSeedState().configurationSnapshots[0])],
   });
   const beforeDirectories = [...current.root.directories.keys()];
   await assert.rejects(() => commitBrowserExportFromHandle({

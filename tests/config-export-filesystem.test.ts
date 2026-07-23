@@ -11,6 +11,7 @@ import {
   previewFilesystemExport,
 } from "../lib/config-export-filesystem";
 import type { ExportTargetProfile } from "../lib/interaction-contracts";
+import { formalExportSnapshot } from "./helpers/formal-export-snapshot";
 
 function mapping(): ConfigExportMapping {
   return {
@@ -82,7 +83,7 @@ enums = []
 test("文件系统执行器预览不改正式文件，确认后备份并提交，重试幂等", async () => {
   const current = await fixture();
   try {
-    const snapshot = createSeedState().configurationSnapshots[0]!;
+    const snapshot = formalExportSnapshot(createSeedState().configurationSnapshots[0]!);
     const target = path.join(current.workbookRoot, "tackle.xlsx");
     const before = await readFile(target);
     const preview = await previewFilesystemExport({
@@ -126,7 +127,7 @@ test("文件系统执行器预览不改正式文件，确认后备份并提交�
 test("预览后正式文件变化触发 hash 冲突且不覆盖外部内容", async () => {
   const current = await fixture();
   try {
-    const snapshot = createSeedState().configurationSnapshots[0]!;
+    const snapshot = formalExportSnapshot(createSeedState().configurationSnapshots[0]!);
     const target = path.join(current.workbookRoot, "tackle.xlsx");
     const preview = await previewFilesystemExport({
       packageId: "package-2",
@@ -156,7 +157,7 @@ test("预览后正式文件变化触发 hash 冲突且不覆盖外部内容", as
 test("Profile 相对路径越过允许根目录时在读取前阻止", async () => {
   const current = await fixture();
   try {
-    const snapshot = createSeedState().configurationSnapshots[0]!;
+    const snapshot = formalExportSnapshot(createSeedState().configurationSnapshots[0]!);
     const preview = await previewFilesystemExport({
       packageId: "package-escape",
       profile: { ...current.profile, relativeWorkbookRoot: "../outside" },
@@ -174,7 +175,7 @@ test("Profile 相对路径越过允许根目录时在读取前阻止", async () 
 test("提交时拒绝被篡改到允许目录之外的 Manifest 路径", async () => {
   const current = await fixture();
   try {
-    const snapshot = createSeedState().configurationSnapshots[0]!;
+    const snapshot = formalExportSnapshot(createSeedState().configurationSnapshots[0]!);
     const preview = await previewFilesystemExport({
       packageId: "package-tampered",
       profile: current.profile,

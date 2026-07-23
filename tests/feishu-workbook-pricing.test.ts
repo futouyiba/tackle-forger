@@ -25,6 +25,7 @@ import {
 } from "../lib/rule-workbook-inspection";
 import { createExportManifest } from "../lib/config-export";
 import { createSeedState } from "../lib/seed";
+import { formalExportSnapshot } from "./helpers/formal-export-snapshot";
 
 const observedSheets = CANONICAL_FEISHU_SHEET_REGISTRY.map((entry) => ({
   sheetId: entry.sheetId,
@@ -325,7 +326,7 @@ test("价格试算使用最近结构标杆源重量段，系数为 1 仍进入�
 });
 
 test("未发布 PricingPolicy 时正式 Store Manifest 阻断且不再误报品质映射缺失", () => {
-  const snapshot = createSeedState().configurationSnapshots[0];
+  const snapshot = formalExportSnapshot(createSeedState().configurationSnapshots[0]);
   assert.throws(() => createExportManifest({
     packageId: "pkg:1",
     generatorVersion: "1",

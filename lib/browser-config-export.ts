@@ -304,6 +304,7 @@ export async function previewBrowserExportFromHandles(input: {
 }): Promise<BrowserExportPreview> {
   for (const snapshot of input.snapshots) {
     assertSnapshotItemPartEnabled(snapshot, "config_export");
+    assertFormalSnapshotHasReplayPolicy(snapshot);
   }
   const itemPartIds = [...new Set(
     input.snapshots.map((snapshot) => snapshotItemPartId(snapshot)!),
@@ -494,6 +495,7 @@ export async function commitBrowserExportFromHandle(input: {
   if (!input.snapshots.length) throw new Error("导出提交缺少冻结 ConfigurationSnapshot。");
   for (const snapshot of input.snapshots) {
     assertSnapshotItemPartEnabled(snapshot, "config_export");
+    assertFormalSnapshotHasReplayPolicy(snapshot);
     if (!verifySnapshotIntegrity(snapshot)) {
       throw new Error(`冻结 ConfigurationSnapshot ${snapshot.id} 的内容哈希校验失败。`);
     }
@@ -619,3 +621,4 @@ import {
   assertSnapshotItemPartEnabled,
   snapshotItemPartId,
 } from "./enabled-item-parts";
+import { assertFormalSnapshotHasReplayPolicy } from "./reduction-stacking-policy";

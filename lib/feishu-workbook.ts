@@ -1,4 +1,5 @@
 import { deterministicHash } from "./rule-kernel";
+import type { ReductionPolicyMachineRule } from "./reduction-stacking-policy";
 
 export type FeishuSheetRole =
   | "rule_source"
@@ -56,6 +57,8 @@ export interface FeishuSourceRevision {
   registryHash: string;
   sheets: RemoteFeishuSheet[];
   issues: FeishuSheetRegistryIssue[];
+  /** 仅由权威 04_词条/zrVOxd 机器规则区解析；外部工作簿不得填充为运行时规则。 */
+  reductionPolicyMachineRules?: ReductionPolicyMachineRule[];
   state: "PULLED" | "RULESET_DRAFT" | "PUBLISHED";
 }
 

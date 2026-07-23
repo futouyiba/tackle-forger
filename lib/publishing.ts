@@ -30,6 +30,7 @@ import type {
   PurchasableModel,
   RuleChangeProposal,
   RuleSetVersion,
+  ReductionStackingPolicyVersion,
   SeriesDefinition,
   SkuDrawer,
   UpgradeCandidate,
@@ -51,6 +52,20 @@ function warnings(issues: ValidationIssue[]): ValidationIssue[] {
   return issues.filter((issue) => issue.level === "warning");
 }
 
+function hasValidReductionPolicyBinding(input: PublishModelInput): boolean {
+  const policy = input.reductionStackingPolicy;
+  return Boolean(
+    policy
+    && policy.status === "published"
+    && policy.source
+    && policy.source.workbookRefId === "feishu-workbook:tackle-design"
+    && policy.source.sheetId === "zrVOxd"
+    && policy.source.sourceRevision !== "17173"
+    && input.projection.reductionStackingPolicyVersion === policy.version
+    && input.projection.formalStatus === "FORMAL",
+  );
+}
+
 export interface PublishModelInput {
   publicationMode: "new_formal" | "historical_import";
   model: PurchasableModel;
@@ -58,6 +73,7 @@ export interface PublishModelInput {
   seriesSkus: SkuDrawer[];
   series: SeriesDefinition;
   projection: DerivedProjection;
+  reductionStackingPolicy?: ReductionStackingPolicyVersion;
   finalPanelValues: Record<string, number | string>;
   componentSelections: ModelComponentSelection[];
   patches: ProjectionPatchRuleSource[];
@@ -186,9 +202,17 @@ export function publishConfigurationSnapshot(
       message: "硬兼容失败，禁止发布。",
     });
   }
-  if (input.qualityReport.blockingIssues.length) {
+  const qualityBlockingIssues = (
+    input.publicationMode === "historical_import"
+    || hasValidReductionPolicyBinding(input)
+  )
+    ? input.qualityReport.blockingIssues.filter(
+        (message) => !message.includes("REDUCTION_POLICY_SOURCE_MISSING"),
+      )
+    : input.qualityReport.blockingIssues;
+  if (qualityBlockingIssues.length) {
     blocking.push(
-      ...input.qualityReport.blockingIssues.map((message) => ({
+      ...qualityBlockingIssues.map((message) => ({
         level: "error" as const,
         code: "QUALITY_BLOCKED",
         message,
@@ -269,6 +293,13 @@ export function publishConfigurationSnapshot(
       throw new Error("五轴预览的定义、规则或顶点版本链不一致，禁止创建正式 Snapshot。");
     }
   }
+  if (input.publicationMode === "new_formal") {
+    if (!hasValidReductionPolicyBinding(input)) {
+      throw new Error(
+        "配置快照发布被阻止：[REDUCTION_POLICY_SOURCE_MISSING] 新正式 Snapshot 必须冻结来自权威主工作簿的已发布 ReductionStackingPolicyVersion。",
+      );
+    }
+  }
 
   const governance = input.patchOffsetGovernance;
   const snapshotWithoutHash: Omit<ConfigurationSnapshot, "contentHash"> = {
@@ -282,7 +313,12 @@ export function publishConfigurationSnapshot(
     seriesRevision: input.series.revision,
     ruleSetVersion: input.projection.ruleSetVersion,
     projectionId: input.projection.id,
-    reductionStackingMode: input.projection.reductionStackingMode,
+    ...(input.projection.reductionStackingMode
+      ? { reductionStackingMode: input.projection.reductionStackingMode }
+      : {}),
+    ...(input.publicationMode === "new_formal" && input.reductionStackingPolicy
+      ? { reductionStackingPolicyVersion: input.reductionStackingPolicy.version }
+      : {}),
     patchSetHash,
     ...(frozenPatches ? { patchReferences: frozenPatches.references } : {}),
     ...(input.publicationMode === "new_formal" && hasPatchDependency && governance ? {
@@ -397,6 +433,12 @@ export function createUpgradeCandidate(
     fromSnapshotId: input.currentSnapshot.id,
     proposedProjectionId: input.proposedProjection.id,
     proposedRuleSetVersion: input.proposedProjection.ruleSetVersion,
+    ...(input.proposedProjection.reductionStackingPolicyVersion
+      ? {
+          proposedReductionStackingPolicyVersion:
+            input.proposedProjection.reductionStackingPolicyVersion,
+        }
+      : {}),
     proposedValues: structuredClone(input.proposedValues),
     differences: valueDifferences(
       input.currentSnapshot.finalPanelValues,

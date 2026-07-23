@@ -561,8 +561,8 @@ test("A-01 Technology 成员与直接词条重复时只计算一次", () => {
   assert.ok(duplicated.warnings.some((warning) => warning.includes("去重")));
   const base = state.templates[3].values;
   assert.deepEqual(
-    aggregateAffixPanel(base, duplicated, state.ruleSettings.reductionStackingMode, "quality_a_purple").values,
-    aggregateAffixPanel(base, technologyOnly, state.ruleSettings.reductionStackingMode, "quality_a_purple").values,
+    aggregateAffixPanel(base, duplicated, "quality_a_purple").values,
+    aggregateAffixPanel(base, technologyOnly, "quality_a_purple").values,
   );
 });
 
@@ -579,7 +579,6 @@ test("A-02 被动词条参与品质评分但不改变面板", () => {
   const aggregated = aggregateAffixPanel(
     base,
     configuration,
-    state.ruleSettings.reductionStackingMode,
     "quality_a_purple",
   );
   assert.deepEqual(aggregated.values, base);
@@ -672,7 +671,7 @@ test("F-02 新 Snapshot 缺正式品质评估或正式定价策略时阻断，�
     warningConfirmations: {},
     publishedBy: "tester",
     publishedAt: "2026-07-22T00:00:00.000Z",
-  }), /正式品质评分结果.*已发布 PricingPolicyVersion|新 Snapshot 必须绑定/);
+  }), /REDUCTION_POLICY_SOURCE_MISSING|正式品质评分结果.*已发布 PricingPolicyVersion|新 Snapshot 必须绑定/);
   assert.equal(verifySnapshotIntegrity(existing), true);
 });
 

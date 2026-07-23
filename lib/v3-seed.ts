@@ -310,6 +310,12 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
       performanceProfile: performance,
       qualityProfile: quality,
       ruleSet,
+      reductionStackingPolicy: state.reductionStackingPolicyVersions.find(
+        (policy) =>
+          policy.status === "published"
+          && policy.version === ruleSet.settings.reductionStackingPolicyVersion,
+      ),
+      parameterDefinitions: state.parameters,
     }),
   );
   const candidatesFor = (targetWeightKg: number) =>
@@ -545,8 +551,12 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
     const aggregate = aggregateAffixPanel(
       patched.value,
       configuration,
-      ruleSet.settings.reductionStackingMode,
       quality.id as QualityProfileId,
+      state.reductionStackingPolicyVersions.find(
+        (policy) =>
+          policy.status === "published"
+          && policy.version === ruleSet.settings.reductionStackingPolicyVersion,
+      ),
     );
     const model: PurchasableModel = {
       id,
@@ -699,8 +709,12 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
   const aggregated = aggregateAffixPanel(
     baseProjection.values,
     affixConfiguration,
-    ruleSet.settings.reductionStackingMode,
     quality.id as QualityProfileId,
+    state.reductionStackingPolicyVersions.find(
+      (policy) =>
+        policy.status === "published"
+        && policy.version === ruleSet.settings.reductionStackingPolicyVersion,
+    ),
   );
   const publishCompatibility = compatibilityByModelId[publishTarget.model.id];
   const publishAffinity = evaluateAffinity(

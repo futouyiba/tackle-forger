@@ -1,11 +1,16 @@
-import { applyReduction } from "./rule-kernel";
+import {
+  canonicalizeAffixOperations,
+  evaluateBidirectionalRatio,
+} from "./reduction-stacking-policy";
 import type {
   AffixQualityEvaluation,
   AttributeContribution,
+  CanonicalAttributeOperation,
   PassiveSkillPayload,
   QualityProfileId,
-  ReductionStackingMode,
+  ReductionStackingPolicyVersion,
   Technology,
+  ValidationIssue,
   V3Affix,
 } from "./types";
 
@@ -26,6 +31,9 @@ export interface ResolvedAffixConfiguration {
   technologyAffixIds: string[];
   directAffixIds: string[];
   contributions: AttributeContribution[];
+  canonicalOperations: CanonicalAttributeOperation[];
+  validationIssues: ValidationIssue[];
+  isolatedAffixRevisionIds: string[];
   passivePayloads: PassiveSkillPayload[];
   warnings: string[];
   blockingIssues: string[];
@@ -87,15 +95,29 @@ export function resolveAffixConfiguration(
   );
   const passiveAffixes = affixes.filter((affix) => affix.category === "passive");
 
-  const contributions = attributeAffixes.flatMap((affix) =>
-    affix.attributeEffects.map((effect): AttributeContribution => ({
-      id: effect.id,
-      sourceId: affix.id,
-      sourceName: affix.name,
-      parameterKey: effect.parameterKey,
-      operation: effect.operation,
-      value: effect.value,
-    })),
+  const canonical = canonicalizeAffixOperations(attributeAffixes);
+  const affixNameById = new Map(attributeAffixes.map((affix) => [affix.id, affix.name]));
+  const contributions = canonical.operations.map((operation): AttributeContribution => ({
+    id: operation.operationId,
+    sourceId: operation.sourceAffixId,
+    sourceName: affixNameById.get(operation.sourceAffixId) ?? operation.sourceAffixId,
+    parameterKey: operation.parameterKey,
+    operation: operation.operation,
+    value: operation.magnitude ?? (
+      typeof operation.value === "number" ? operation.value : 0
+    ),
+    sourceAffixRevision: operation.sourceAffixRevision,
+    operationIndex: operation.operationIndex,
+    operationId: operation.operationId,
+    direction: operation.direction,
+    magnitude: operation.magnitude,
+    rawLexical: operation.rawLexical,
+    clampMin: operation.clampMin,
+    clampMax: operation.clampMax,
+    setValue: operation.value,
+  }));
+  blockingIssues.push(
+    ...canonical.issues.map((entry) => `[${entry.code}] ${entry.message}`),
   );
   const passivePayloads = passiveAffixes.flatMap((affix) => {
     if (affix.passivePayload) return [structuredClone(affix.passivePayload)];
@@ -110,6 +132,9 @@ export function resolveAffixConfiguration(
     technologyAffixIds,
     directAffixIds: uniqueDirect,
     contributions,
+    canonicalOperations: canonical.operations,
+    validationIssues: canonical.issues,
+    isolatedAffixRevisionIds: canonical.isolatedAffixRevisionIds,
     passivePayloads,
     warnings,
     blockingIssues,
@@ -155,55 +180,43 @@ export interface AggregatedAffixPanel {
   quality: AffixQualityEvaluation;
   warnings: string[];
   blockingIssues: string[];
+  validationIssues: ValidationIssue[];
+  formalStatus: "FORMAL" | "NON_FORMAL";
+  traceHash: string;
 }
 
 export function aggregateAffixPanel(
   baseValues: Record<string, number | string>,
   configuration: ResolvedAffixConfiguration,
-  reductionMode: ReductionStackingMode,
   selectedQualityId: QualityProfileId,
+  policy?: ReductionStackingPolicyVersion,
 ): AggregatedAffixPanel {
-  const values = structuredClone(baseValues);
   const blockingIssues = [...configuration.blockingIssues];
-  const byParameter = new Map<string, AttributeContribution[]>();
-  for (const contribution of configuration.contributions) {
-    const entries = byParameter.get(contribution.parameterKey) ?? [];
-    entries.push(contribution);
-    byParameter.set(contribution.parameterKey, entries);
-  }
-
-  for (const [parameterKey, entries] of byParameter) {
-    const base = values[parameterKey];
-    if (typeof base !== "number") {
-      blockingIssues.push(
-        "属性词条目标不是数字：" + parameterKey,
-      );
-      continue;
-    }
-    const percent = entries
-      .filter((entry) => entry.operation === "percent_bonus")
-      .reduce((sum, entry) => sum + entry.value, 0);
-    const flat = entries
-      .filter((entry) => entry.operation === "flat_bonus")
-      .reduce((sum, entry) => sum + entry.value, 0);
-    const reduction = entries
-      .filter((entry) => entry.operation === "reduction")
-      .reduce((sum, entry) => sum + entry.value, 0);
-    let finalValue = base * (1 + percent) + flat;
-    if (reduction !== 0) {
-      finalValue = applyReduction(finalValue, reduction, reductionMode);
-    }
-    values[parameterKey] = finalValue;
-  }
+  const runtime = evaluateBidirectionalRatio({
+    baseValues,
+    operations: configuration.canonicalOperations,
+    policy,
+  });
+  blockingIssues.push(
+    ...runtime.issues
+      .filter((entry) => entry.severity === "BLOCKER" || entry.severity === "ERROR")
+      .map((entry) => `[${entry.code}] ${entry.message}`),
+  );
 
   const quality = evaluateAffixQuality({ ...configuration, blockingIssues }, selectedQualityId);
   return {
-    values,
+    values: runtime.values,
     contributions: structuredClone(configuration.contributions),
     passivePayloads: structuredClone(configuration.passivePayloads),
     quality,
     warnings: structuredClone(configuration.warnings),
     blockingIssues: structuredClone(quality.blockingIssues),
+    validationIssues: [
+      ...structuredClone(configuration.validationIssues),
+      ...structuredClone(runtime.issues),
+    ],
+    formalStatus: runtime.formalStatus,
+    traceHash: runtime.traceHash,
   };
 }
 

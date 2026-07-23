@@ -33,6 +33,10 @@ import {
   type AuthoritativePatchObject,
 } from "../lib/patch-authority";
 import { deterministicHash } from "../lib/rule-kernel";
+import {
+  formalProjection,
+  testReductionPolicy,
+} from "./helpers/reduction-policy";
 import { createSeedState } from "../lib/seed";
 import type {
   PatchOffsetPolicyVersion,
@@ -647,7 +651,11 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
   const model = state.purchasableModels.find((entry) => entry.id === oldSnapshot.modelId)!;
   const sku = state.skuDrawers.find((entry) => entry.id === model.skuId)!;
   const series = state.seriesDefinitions.find((entry) => entry.id === sku.seriesId)!;
-  const projection = state.derivedProjections.find((entry) => entry.id === oldSnapshot.projectionId)!;
+  const reductionStackingPolicy = testReductionPolicy();
+  const projection = formalProjection(
+    state.derivedProjections.find((entry) => entry.id === oldSnapshot.projectionId)!,
+    reductionStackingPolicy,
+  );
   const numericEntry = Object.entries(oldSnapshot.finalPanelValues)
     .find((entry): entry is [string, number] => typeof entry[1] === "number")!;
   const governedRevision = buildPatchRevision({
@@ -729,6 +737,7 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
     seriesSkus: state.skuDrawers.filter((entry) => entry.seriesId === series.id),
     series,
     projection,
+    reductionStackingPolicy,
     finalPanelValues: oldSnapshot.finalPanelValues,
     componentSelections: oldSnapshot.componentSelections,
     patches: [],

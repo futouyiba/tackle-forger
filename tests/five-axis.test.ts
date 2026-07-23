@@ -24,6 +24,10 @@ import {
 import { createSeedState } from "../lib/seed";
 import { migrateWorkspaceState } from "../lib/migrations";
 import { hydrateV3Seed } from "../lib/v3-seed";
+import {
+  formalProjection,
+  testReductionPolicy,
+} from "./helpers/reduction-policy";
 import type {
   FiveAxisEntityInput,
   FiveAxisViewDefinition,
@@ -447,7 +451,11 @@ test("正式快照拒绝未发布、篡改或版本链过期的五维定义", ()
   const model = state.purchasableModels.find((entry) => entry.id === existing.modelId)!;
   const sku = state.skuDrawers.find((entry) => entry.id === model.skuId)!;
   const series = state.seriesDefinitions.find((entry) => entry.id === sku.seriesId)!;
-  const projection = state.derivedProjections.find((entry) => entry.id === existing.projectionId)!;
+  const reductionStackingPolicy = testReductionPolicy();
+  const projection = formalProjection(
+    state.derivedProjections.find((entry) => entry.id === existing.projectionId)!,
+    reductionStackingPolicy,
+  );
   const { def, vertexSet } = setup();
   const preview = calculateModelFiveAxisPreview({
     modelId: model.id,
@@ -460,6 +468,7 @@ test("正式快照拒绝未发布、篡改或版本链过期的五维定义", ()
   });
   const common = {
     publicationMode: "new_formal" as const,
+    reductionStackingPolicy,
     model, sku, series, projection,
     seriesSkus: state.skuDrawers,
     finalPanelValues: existing.finalPanelValues,

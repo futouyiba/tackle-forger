@@ -34,12 +34,13 @@ import { migrateLegacyProductIdentity } from "./legacy-product-migration";
 import { CANONICAL_FEISHU_WORKBOOK } from "./feishu-workbook";
 import { buildPatchRevision, emptyPatchLedger, migratePatchLedger } from "./patch-ledger";
 import { deterministicHash } from "./rule-kernel";
+import { canonicalizeAffixOperations } from "./reduction-stacking-policy";
 import {
   CANONICAL_PATCH_OFFSET_POLICY_ID,
   createCanonicalPatchOffsetPolicyVersion,
 } from "./patch-offset-policy";
 
-export const CURRENT_WORKSPACE_SCHEMA_VERSION = 16;
+export const CURRENT_WORKSPACE_SCHEMA_VERSION = 17;
 
 const DEFAULT_RULE_SETTINGS: WorkspaceRuleSettings = {
   reductionStackingMode: "diminishing_division",
@@ -739,6 +740,51 @@ function migrateV15ToV16(state: MutableWorkspace): MutableWorkspace {
   };
 }
 
+function migrateV16ToV17(state: MutableWorkspace): MutableWorkspace {
+  const migrationReviewItems = arrayOf<MigrationReviewItem>(state.migrationReviewItems);
+  const v3Affixes = arrayOf<V3Affix>(state.v3Affixes).map((affix) => {
+    if (affix.category !== "attribute") return affix;
+    const canonical = canonicalizeAffixOperations([affix]);
+    if (canonical.issues.length) {
+      const reviewId = `affix-direction-migration:${affix.id}@${affix.version}`;
+      if (!migrationReviewItems.some((entry) => entry.id === reviewId)) {
+        migrationReviewItems.push({
+          id: reviewId,
+          sourceType: "unknown",
+          sourceId: `${affix.id}@${affix.version}`,
+          message: "AFFIX_DIRECTION_CONFLICT：旧词条方向与幅度无法无损规范化，已保留原始修订并隔离等待复核。",
+          preservedPayload: structuredClone(affix),
+          status: "pending",
+        });
+      }
+      return affix;
+    }
+    return {
+      ...affix,
+      attributeEffects: canonical.operations.map((operation, index) => {
+        const legacy = affix.attributeEffects[index];
+        return {
+          ...operation,
+          id: operation.operationId,
+          unit: legacy?.unit ?? "",
+          stackingGroup: legacy?.stackingGroup ?? "",
+          ruleSetVersion: legacy?.ruleSetVersion ?? "",
+        };
+      }),
+    };
+  });
+  return {
+    ...state,
+    schemaVersion: 17,
+    v3Affixes,
+    migrationReviewItems,
+    // 不凭历史文档或外部 revision 17173 合成已发布策略。机器规则未就绪时保持空集合。
+    reductionStackingPolicyVersions: arrayOf<
+      WorkspaceState["reductionStackingPolicyVersions"][number]
+    >(state.reductionStackingPolicyVersions),
+  };
+}
+
 const migrations: Record<number, (state: MutableWorkspace) => MutableWorkspace> = {
   1: migrateV1ToV2,
   2: migrateV2ToV3,
@@ -755,6 +801,7 @@ const migrations: Record<number, (state: MutableWorkspace) => MutableWorkspace> 
   13: migrateV13ToV14,
   14: migrateV14ToV15,
   15: migrateV15ToV16,
+  16: migrateV16ToV17,
 };
 
 export function migrateWorkspaceState(input: unknown): WorkspaceState {

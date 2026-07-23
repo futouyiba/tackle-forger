@@ -108,9 +108,12 @@ Trace、ID 唯一性、前缀与实体类型；写后必须回读恢复，不能
 声明的预览关系报告，不使用生产工作簿文件名。
 
 一期不提供本地目录绑定、正式人工搬运包或配置提交。浏览器、文件系统与历史伴随服务中的
-1.5 期恢复型写入骨架继续保留，但 `commit_config_export` 同时受服务端阶段开关、独立运行时
-启用、正式 Bundle、策略/目录/新鲜 Manifest、治理租约与受保护 expected-old-OID CAS 门禁；
-这些证据还必须由服务端验证器回读确认，调用方自报字符串无效；任一条件缺失均 fail-closed。
+1.5 期恢复型写入骨架继续保留，但生产形态预览、暂存与 `commit_config_export` 同时受服务端
+阶段开关、独立运行时启用、`config.export.commit`、正式 Bundle、策略/目录/新鲜 Manifest、
+治理租约与受保护 expected-old-OID CAS 门禁；这些证据还必须由服务端验证器在读取本地
+`config.toml`/工作簿前预检，并在写入 staging 前绑定实际文件 hash 再次确认，调用方自报字符串
+无效。浏览器没有受信服务端验证器、伴随服务只有 preview Capability 或任一前置缺失时，稳定
+返回 `CONFIG_TARGET_SERIALIZATION_UNAVAILABLE`，只保留 NON_FORMAL 预览。
 验证请求绑定 package、Profile、环境×渠道、映射版本、Snapshot id/hash 与每个暂存操作；目标
 使用工作簿相对逻辑引用，不把执行机 projectRoot 或绝对路径写入远端证据。验证后的
 上下文 hash、Manifest 集合 hash、验证时间、ConfigId/目录版本、lease、fencing token 与
@@ -118,7 +121,7 @@ expected-old-OID 冻结进提交结果，不能换目标、内容或授权证据
 幂等重试可从冻结结果恢复，不要求已消费的原租约再次在线验证，也不会重新写文件。
 正式 ConfigId 与导出治理分别由 GitHub #55、#56 实现并独立启用。缺少可重放正式品质或定价
 策略引用，或仍有未解决 EXPORT ERROR/BLOCKER 的历史 Snapshot，只能下载原样审计归档，
-不能进入配置预览或提交链。
+不能进入配置预览或提交链；同一 Model 的多个冻结修订也不能进入同一个预览包。
 
 ## 旧版工作区
 

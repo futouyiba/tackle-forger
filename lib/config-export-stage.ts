@@ -313,3 +313,42 @@ export function assertProductionShapeConfigExportEnabled(
     );
   }
 }
+
+export async function assertProductionShapeConfigExportAllowed(input: {
+  canCommit: boolean;
+  authorization: FormalConfigExportAuthorization | undefined;
+  verifier: FormalConfigExportEvidenceVerifier | undefined;
+  context: FormalConfigExportContext | undefined;
+  policy?: ConfigExportRuntimePolicy;
+}): Promise<VerifiedFormalConfigExportEvidence> {
+  const policy = input.policy ?? readConfigExportRuntimePolicy();
+  assertProductionShapeConfigExportEnabled(policy);
+  if (!input.canCommit) {
+    throw new ConfigExportStageError(
+      "CONFIG_TARGET_SERIALIZATION_UNAVAILABLE",
+      "缺少 config.export.commit，禁止读取本地 configs 或生成可人工搬运的生产形态暂存包。",
+    );
+  }
+  try {
+    return await assertFormalConfigExportAllowed(
+      input.authorization,
+      input.verifier,
+      input.context,
+      policy,
+    );
+  } catch (error) {
+    if (
+      error instanceof ConfigExportStageError
+      && (
+        error.code === "CONFIG_EXPORT_PHASE_DISABLED"
+        || error.code === "CONFIG_EXPORT_RUNTIME_NOT_READY"
+      )
+    ) {
+      throw error;
+    }
+    throw new ConfigExportStageError(
+      "CONFIG_TARGET_SERIALIZATION_UNAVAILABLE",
+      "正式 Bundle、获批新鲜 Manifest、治理租约、fencing、expected-old-OID CAS 与服务端验证未全部满足；只能生成 NON_FORMAL 预览。",
+    );
+  }
+}

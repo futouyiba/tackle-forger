@@ -38,11 +38,12 @@ import {
 import {
   assertFormalConfigExportAllowed,
   assertFormalConfigExportStageEnabled,
-  assertProductionShapeConfigExportEnabled,
+  assertProductionShapeConfigExportAllowed,
   recoverVerifiedFormalConfigExportEvidence,
   type FormalConfigExportAuthorization,
   type FormalConfigExportContext,
   type FormalConfigExportEvidenceVerifier,
+  type VerifiedFormalConfigExportEvidence,
 } from "./config-export-stage";
 
 export interface FilesystemExportOperation extends ExportFileOperation {
@@ -66,6 +67,7 @@ export interface FilesystemExportPreview {
   backupRoot?: string;
   operations: FilesystemExportOperation[];
   issues: ConfigExportMappingIssue[];
+  formalEvidence?: VerifiedFormalConfigExportEvidence;
   createdAt: string;
 }
 
@@ -140,9 +142,40 @@ export async function previewFilesystemExport(input: {
   profile: ExportTargetProfile;
   mapping: ConfigExportMapping;
   snapshot: ConfigurationSnapshot;
+  canCommit: boolean;
+  formalAuthorization?: FormalConfigExportAuthorization;
+  formalAuthorizationVerifier?: FormalConfigExportEvidenceVerifier;
   createdAt?: string;
 }): Promise<FilesystemExportPreview> {
-  assertProductionShapeConfigExportEnabled();
+  const workbookNames = Array.from(new Set(
+    Object.values(input.mapping.logicalTables).map((table) => table.workbook),
+  )).sort();
+  const previewContextBase = {
+    packageId: input.packageId,
+    profileId: input.profile.profileId,
+    environmentId: input.profile.environmentId ?? "",
+    channelKey: input.profile.channelKey ?? "",
+    mappingId: input.mapping.mappingId,
+    mappingVersion: input.mapping.version,
+    snapshots: [{
+      snapshotId: input.snapshot.id,
+      snapshotHash: input.snapshot.contentHash,
+    }],
+  };
+  await assertProductionShapeConfigExportAllowed({
+    canCommit: input.canCommit,
+    authorization: input.formalAuthorization,
+    verifier: input.formalAuthorizationVerifier,
+    context: {
+      ...previewContextBase,
+      operations: workbookNames.map((workbook) => ({
+        workbook,
+        targetRef: workbook.replaceAll("\\", "/"),
+        expectedOriginalHash: "PREVIEW_NOT_MATERIALIZED",
+        stagedHash: "PREVIEW_NOT_MATERIALIZED",
+      })),
+    },
+  });
   assertSnapshotItemPartEnabled(input.snapshot, "config_export");
   const itemPartId = snapshotItemPartId(input.snapshot)!;
   const createdAt = input.createdAt ?? new Date().toISOString();
@@ -203,9 +236,6 @@ export async function previewFilesystemExport(input: {
     compilerTables,
   });
   const issues = [...initialIssues, ...materialized.issues];
-  const workbookNames = Array.from(new Set(
-    Object.values(input.mapping.logicalTables).map((table) => table.workbook),
-  )).sort();
   const staged = new Map<string, Uint8Array>();
   const pendingOperations: FilesystemExportOperation[] = [];
 
@@ -302,6 +332,20 @@ export async function previewFilesystemExport(input: {
     };
   }
 
+  const formalEvidence = await assertProductionShapeConfigExportAllowed({
+    canCommit: input.canCommit,
+    authorization: input.formalAuthorization,
+    verifier: input.formalAuthorizationVerifier,
+    context: {
+      ...previewContextBase,
+      operations: pendingOperations.map((operation) => ({
+        workbook: operation.workbook,
+        targetRef: operation.targetRef,
+        expectedOriginalHash: operation.expectedOriginalHash,
+        stagedHash: operation.stagedHash,
+      })),
+    },
+  });
   const stagingRoot = path.join(
     resolved.projectRoot,
     ".tackle-forger",
@@ -338,6 +382,7 @@ export async function previewFilesystemExport(input: {
     backupRoot,
     operations,
     issues,
+    formalEvidence,
     createdAt,
   };
   await writeFile(path.join(stagingRoot, "ExportManifest.json"), JSON.stringify(preview, null, 2));
@@ -411,6 +456,11 @@ export async function commitFilesystemExport(input: {
   }
   if (!input.canCommit) throw new Error("缺少 config.export.commit Capability。");
   if (input.preview.status !== "ready") throw new Error("暂存预览未通过，不能提交。");
+  recoverVerifiedFormalConfigExportEvidence({
+    authorization: input.formalAuthorization,
+    context: formalExportContext,
+    evidence: input.preview.formalEvidence,
+  });
   if (!input.profile.enabled || input.profile.profileId !== input.preview.profileId) {
     throw new Error("提交 Profile 未启用或与暂存目标不一致。");
   }

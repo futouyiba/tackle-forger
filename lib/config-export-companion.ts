@@ -14,6 +14,7 @@ import type {
   FormalConfigExportAuthorization,
   FormalConfigExportEvidenceVerifier,
 } from "./config-export-stage";
+import { ConfigExportStageError } from "./config-export-stage";
 
 export type CompanionCapability = "config.export.preview" | "config.export.commit";
 export interface CompanionPairingIdentity {
@@ -38,6 +39,7 @@ export interface CompanionPreviewRequest {
   packageId: string;
   profileIds: string[];
   snapshot: ConfigurationSnapshot;
+  formalAuthorization?: FormalConfigExportAuthorization;
 }
 
 export interface CompanionPreviewEntry {
@@ -210,6 +212,12 @@ export class ConfigExportCompanionController {
     if (!this.registry.capabilities.includes("config.export.preview")) {
       throw new Error("伴随服务未授予 config.export.preview Capability。");
     }
+    if (!this.registry.capabilities.includes("config.export.commit")) {
+      throw new ConfigExportStageError(
+        "CONFIG_TARGET_SERIALIZATION_UNAVAILABLE",
+        "本地助手缺少 config.export.commit，只能使用服务端 NON_FORMAL 预览。",
+      );
+    }
     if (!request.profileIds.length) throw new Error("至少选择一个目标 Profile。");
     const profileIds = [...new Set(request.profileIds)];
     const stored = new Map<string, FilesystemExportPreview>();
@@ -228,6 +236,9 @@ export class ConfigExportCompanionController {
         profile,
         mapping,
         snapshot: request.snapshot,
+        canCommit: true,
+        formalAuthorization: request.formalAuthorization,
+        formalAuthorizationVerifier: this.formalAuthorizationVerifier,
       });
       stored.set(profileId, preview);
       results.push({

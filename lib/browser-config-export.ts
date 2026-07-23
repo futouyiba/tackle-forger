@@ -302,7 +302,12 @@ export async function previewBrowserExportFromHandles(input: {
   snapshots: ConfigurationSnapshot[];
   createdAt?: string;
 }): Promise<BrowserExportPreview> {
-  assertProductionShapeConfigExportEnabled();
+  await assertProductionShapeConfigExportAllowed({
+    canCommit: false,
+    authorization: undefined,
+    verifier: undefined,
+    context: undefined,
+  });
   for (const snapshot of input.snapshots) {
     assertSnapshotItemPartEnabled(snapshot, "config_export");
   }
@@ -464,6 +469,12 @@ export async function previewBrowserExport(input: {
   snapshots: ConfigurationSnapshot[];
   createdAt?: string;
 }): Promise<BrowserExportPreview> {
+  await assertProductionShapeConfigExportAllowed({
+    canCommit: false,
+    authorization: undefined,
+    verifier: undefined,
+    context: undefined,
+  });
   const targetRoot = await loadDirectoryHandle(input.binding.directoryHandleStorageKey);
   const configRoot = await loadDirectoryHandle(input.configRootBinding.directoryHandleStorageKey);
   if (!targetRoot) throw new Error(`${input.binding.userLabel} 的目标目录尚未绑定。`);
@@ -642,6 +653,6 @@ import {
 } from "./enabled-item-parts";
 import {
   assertFormalConfigExportAllowed,
-  assertProductionShapeConfigExportEnabled,
+  assertProductionShapeConfigExportAllowed,
   type FormalConfigExportAuthorization,
 } from "./config-export-stage";

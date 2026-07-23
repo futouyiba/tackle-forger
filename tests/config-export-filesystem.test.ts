@@ -15,7 +15,10 @@ import type {
   FormalConfigExportAuthorization,
   FormalConfigExportEvidenceVerifier,
 } from "../lib/config-export-stage";
-import { formalConfigExportContextHash } from "../lib/config-export-stage";
+import {
+  ConfigExportStageError,
+  formalConfigExportContextHash,
+} from "../lib/config-export-stage";
 
 process.env.TACKLE_FORGER_PRODUCT_DELIVERY_STAGE = "PHASE_ONE_POINT_FIVE";
 process.env.TACKLE_FORGER_FORMAL_CONFIG_EXPORT_RUNTIME_ENABLED = "true";
@@ -113,23 +116,57 @@ enums = []
   return { root, workbookRoot, profile };
 }
 
+test("生产形态文件系统预览在本地读取前要求完整治理证据和提交能力", async () => {
+  const profile: ExportTargetProfile = {
+    profileId: "profile:unavailable",
+    label: "不可用",
+    executorKind: "server_mounted_workspace",
+    projectRoot: path.join(os.tmpdir(), "tackle-forger-must-not-read"),
+    relativeWorkbookRoot: "xlsx",
+    configTomlPath: "config.toml",
+    enabled: true,
+    environmentId: "test",
+    channelKey: "1001",
+    mappingId: "mapping:filesystem-test",
+    mappingVersion: "1",
+  };
+  for (const access of [
+    {
+      canCommit: false,
+      formalAuthorization: FORMAL_AUTHORIZATION,
+      formalAuthorizationVerifier: FORMAL_VERIFIER,
+    },
+    {
+      canCommit: true,
+      formalAuthorization: FORMAL_AUTHORIZATION,
+      formalAuthorizationVerifier: undefined,
+    },
+    {
+      canCommit: true,
+      formalAuthorization: undefined,
+      formalAuthorizationVerifier: FORMAL_VERIFIER,
+    },
+  ]) {
+    await assert.rejects(
+      () => previewFilesystemExport({
+        packageId: "package-unavailable",
+        profile,
+        mapping: mapping(),
+        snapshot: createSeedState().configurationSnapshots[0]!,
+        ...access,
+      }),
+      (error) => error instanceof ConfigExportStageError
+        && error.code === "CONFIG_TARGET_SERIALIZATION_UNAVAILABLE",
+    );
+  }
+});
+
 test("文件系统执行器预览不改正式文件，确认后备份并提交，重试幂等", async () => {
   const current = await fixture();
   try {
     const snapshot = createSeedState().configurationSnapshots[0]!;
     const target = path.join(current.workbookRoot, "tackle.xlsx");
     const before = await readFile(target);
-    const preview = await previewFilesystemExport({
-      packageId: "package-1",
-      profile: current.profile,
-      mapping: mapping(),
-      snapshot,
-      createdAt: "2026-07-21T00:00:00.000Z",
-    });
-    assert.equal(preview.status, "ready");
-    assert.deepEqual(await readFile(target), before);
-    assert.equal(preview.operations.length, 1);
-    assert.equal(preview.operations[0]?.targetRef, "tackle.xlsx");
     const verifiedTargetRefs: string[] = [];
     const verifier: FormalConfigExportEvidenceVerifier = {
       async verify(_authorization, context) {
@@ -144,6 +181,20 @@ test("文件系统执行器预览不改正式文件，确认后备份并提交�
         };
       },
     };
+    const preview = await previewFilesystemExport({
+      packageId: "package-1",
+      profile: current.profile,
+      mapping: mapping(),
+      snapshot,
+      canCommit: true,
+      formalAuthorization: FORMAL_AUTHORIZATION,
+      formalAuthorizationVerifier: verifier,
+      createdAt: "2026-07-21T00:00:00.000Z",
+    });
+    assert.equal(preview.status, "ready");
+    assert.deepEqual(await readFile(target), before);
+    assert.equal(preview.operations.length, 1);
+    assert.equal(preview.operations[0]?.targetRef, "tackle.xlsx");
 
     const committed = await commitFilesystemExport({
       preview,
@@ -156,7 +207,12 @@ test("文件系统执行器预览不改正式文件，确认后备份并提交�
       formalAuthorizationVerifier: verifier,
     });
     assert.equal(committed.status, "committed");
-    assert.deepEqual(verifiedTargetRefs, ["tackle.xlsx", "tackle.xlsx"]);
+    assert.deepEqual(verifiedTargetRefs, [
+      "tackle.xlsx",
+      "tackle.xlsx",
+      "tackle.xlsx",
+      "tackle.xlsx",
+    ]);
     const workbook = XLSX.read(await readFile(target), { type: "buffer" });
     assert.equal(workbook.Sheets.Rods.B5.v, "rod_qinglu_15_fast");
 
@@ -187,6 +243,9 @@ test("预览后正式文件变化触发 hash 冲突且不覆盖外部内容", as
       profile: current.profile,
       mapping: mapping(),
       snapshot,
+      canCommit: true,
+      formalAuthorization: FORMAL_AUTHORIZATION,
+      formalAuthorizationVerifier: FORMAL_VERIFIER,
     });
     assert.equal(preview.status, "ready");
     const externallyChanged = new Uint8Array([...(await readFile(target)), 0]);
@@ -220,6 +279,9 @@ test("预览后暂存文件变化在替换前阻断且不覆盖正式文件", as
       profile: current.profile,
       mapping: mapping(),
       snapshot,
+      canCommit: true,
+      formalAuthorization: FORMAL_AUTHORIZATION,
+      formalAuthorizationVerifier: FORMAL_VERIFIER,
     });
     assert.equal(preview.status, "ready");
     const operation = preview.operations[0]!;
@@ -257,6 +319,9 @@ test("Profile 相对路径越过允许根目录时在读取前阻止", async () 
       profile: { ...current.profile, relativeWorkbookRoot: "../outside" },
       mapping: mapping(),
       snapshot,
+      canCommit: true,
+      formalAuthorization: FORMAL_AUTHORIZATION,
+      formalAuthorizationVerifier: FORMAL_VERIFIER,
     });
     assert.equal(preview.status, "blocked");
     assert.ok(preview.issues.some((entry) => entry.code === "EXPORT_PROFILE_PATH_INVALID"));
@@ -275,6 +340,9 @@ test("提交时拒绝被篡改到允许目录之外的 Manifest 路径", async (
       profile: current.profile,
       mapping: mapping(),
       snapshot,
+      canCommit: true,
+      formalAuthorization: FORMAL_AUTHORIZATION,
+      formalAuthorizationVerifier: FORMAL_VERIFIER,
     });
     assert.equal(preview.status, "ready");
     const tampered = {

@@ -13,6 +13,34 @@ import {
 import { CANONICAL_FEISHU_SHEET_REGISTRY } from "../lib/feishu-workbook";
 import { importReductionStackingPolicyDraft } from "../lib/reduction-stacking-policy";
 import type { QualityValuePolicyDraft } from "../lib/quality-value-policy";
+import { deterministicHash } from "../lib/rule-kernel";
+import type { FeishuSourceRevision } from "../lib/feishu-workbook";
+import type { WorkspaceState } from "../lib/types";
+
+function withCanonicalPullDraft(state: WorkspaceState, source: FeishuSourceRevision): WorkspaceState {
+  const content = {
+    parameters: state.parameters,
+    templates: state.templates,
+    methodProfiles: state.methodProfiles,
+    itemTypeProfiles: state.itemTypeProfiles,
+    functionProfiles: state.functionProfiles,
+    modifiers: state.modifiers,
+    layers: state.layers,
+  };
+  const contentHash = deterministicHash(content);
+  return {
+    ...state,
+    canonicalRuleSourceDrafts: [{
+      id: `canonical-rule-draft:${source.id}`,
+      sourceRevisionId: source.id,
+      sourceRevision: source.sourceRevision,
+      contentHash,
+      importedAt: source.pulledAt,
+      ...content,
+      issues: [],
+    }],
+  };
+}
 
 const reductionPolicyMachineRules = [{
   ruleId: "OPEN-001:bidirectional-ratio",
@@ -81,7 +109,7 @@ test("显式拉取只登记 FeishuSourceRevision，创建草稿也不会发布 R
     inputHash: "quality-hash:test-2352",
     importedAt: revision.pulledAt,
   };
-  const withQuality = recordQualityValuePolicyDraft(pulled, qualityDraft);
+  const withQuality = recordQualityValuePolicyDraft(withCanonicalPullDraft(pulled, revision), qualityDraft);
   const withQualityAgain = recordQualityValuePolicyDraft(withQuality, qualityDraft);
   assertExplicitPullDidNotPublish(initial, pulled);
   assert.equal(pulled.feishuSourceRevisions[0].sourceRevision, "2352");
@@ -118,6 +146,29 @@ test("品质策略草稿不能引用未登记的飞书修订", () => {
   }), /尚未登记/);
 });
 
+test("新显式拉取缺少 CanonicalRuleSourceDraft 时，RuleSet 草稿 fail closed", () => {
+  const source: FeishuSourceRevision = {
+    id: "feishu-revision:missing-canonical",
+    workbookRefId: "feishu-workbook:tackle-design",
+    sourceRevision: "missing-canonical",
+    spreadsheetToken: "spreadsheet:missing-canonical",
+    pulledAt: "2026-07-23T00:00:00.000Z",
+    pulledBy: "tester",
+    syncScope: "workbook",
+    registryHash: "registry:missing-canonical",
+    sheets: [],
+    issues: [],
+    state: "PULLED",
+  };
+  const state = recordFeishuSourceRevision(createSeedState(), source);
+  assert.throws(() => createRuleSetDraftFromPull({
+    state,
+    sourceRevisionId: source.id,
+    createdAt: source.pulledAt,
+    createdBy: "tester",
+  }), /必须恰好对应一份可验证/);
+});
+
 test("相同源修订重复创建 RuleSet 草稿保持幂等", () => {
   const initial = createSeedState();
   const revision = {
@@ -133,7 +184,7 @@ test("相同源修订重复创建 RuleSet 草稿保持幂等", () => {
     issues: [],
     state: "PULLED" as const,
   };
-  const pulled = recordFeishuSourceRevision(initial, revision);
+  const pulled = withCanonicalPullDraft(recordFeishuSourceRevision(initial, revision), revision);
   const first = createRuleSetDraftFromPull({ state: pulled, sourceRevisionId: revision.id, createdAt: "2026-07-21T10:01:00.000Z", createdBy: "tester" });
   const second = createRuleSetDraftFromPull({ state: first.state, sourceRevisionId: revision.id, createdAt: "2026-07-21T10:02:00.000Z", createdBy: "tester" });
   assert.equal(second.ruleSetDraft.id, first.ruleSetDraft.id);
@@ -170,7 +221,7 @@ test("同源 RuleSet 草稿不会将已发布 reduction policy 降级为 draft",
   }).state;
 
   const drafted = createRuleSetDraftFromPull({
-    state: published,
+    state: withCanonicalPullDraft(published, revision),
     sourceRevisionId: revision.id,
     createdAt: "2026-07-23T10:03:00.000Z",
     createdBy: "author",
@@ -199,7 +250,7 @@ test("RuleSetVersion 只能经独立发布动作生效，重复发布幂等且 S
     issues: [],
     state: "PULLED" as const,
   };
-  const pulled = recordFeishuSourceRevision(initial, revision);
+  const pulled = withCanonicalPullDraft(recordFeishuSourceRevision(initial, revision), revision);
   const drafted = createRuleSetDraftFromPull({ state: pulled, sourceRevisionId: revision.id, createdAt: "2026-07-22T02:01:00.000Z", createdBy: "author" });
   assert.equal(drafted.ruleSetDraft.status, "draft");
   const withPolicy = publishReductionPolicy(drafted.state, revision.id);
@@ -245,7 +296,7 @@ test("RuleSet 发布阻断源 error，并要求逐项确认 warning", () => {
     const pulled = severity === "error"
       ? { ...initial, feishuSourceRevisions: [revision] }
       : recordFeishuSourceRevision(initial, revision);
-    return createRuleSetDraftFromPull({ state: pulled, sourceRevisionId: revision.id, createdAt: "2026-07-22T02:01:00.000Z", createdBy: "author" });
+    return createRuleSetDraftFromPull({ state: withCanonicalPullDraft(pulled, revision), sourceRevisionId: revision.id, createdAt: "2026-07-22T02:01:00.000Z", createdBy: "author" });
   };
 
   const warned = makeDraft("warning");
@@ -293,7 +344,7 @@ test("新显式拉取出现后，旧 RuleSet 草稿必须重建而不能发布",
   });
   const oldSource = source("revision:old", "2026-07-22T01:00:00.000Z");
   const drafted = createRuleSetDraftFromPull({
-    state: recordFeishuSourceRevision(initial, oldSource),
+    state: withCanonicalPullDraft(recordFeishuSourceRevision(initial, oldSource), oldSource),
     sourceRevisionId: oldSource.id,
     createdAt: "2026-07-22T01:01:00.000Z",
     createdBy: "author",

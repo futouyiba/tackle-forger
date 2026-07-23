@@ -1583,10 +1583,11 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           <thead>
             <tr>
               <th className="sticky-col">模板ID</th>
+              <th>钓法</th>
               <th>档位</th>
-              <th>鱼重下限kg</th>
-              <th>鱼重上限kg</th>
-              <th>标称鱼重kg</th>
+              <th>最小拉力kgf</th>
+              <th>最大拉力kgf</th>
+              <th>鱼重等级</th>
               {parametersForKind.map((parameter) => <th key={parameter.key}>{parameter.label}<small>{parameter.unit}</small></th>)}
               <th className="wide-col">备注</th>
               <th />
@@ -1596,10 +1597,32 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
             {state.templates.map((template, index) => (
               <tr key={template.id}>
                 <td className="sticky-col"><TextInput value={template.id} onChange={(value) => mutate((draft) => { draft.templates[index].id = value; })} /></td>
+                <td>{state.methodProfiles.find((profile) => profile.id === template.methodId)?.name ?? "—"}</td>
                 <td><TextInput value={template.tier} onChange={(value) => mutate((draft) => { draft.templates[index].tier = value; draft.templates[index].name = value; })} /></td>
-                {(["fishMinKg", "fishMaxKg", "nominalFishKg"] as const).map((key) => (
-                  <td key={key}><TextInput type="number" value={template[key]} step={0.01} onChange={(value) => mutate((draft) => { draft.templates[index][key] = Number(value); })} /></td>
-                ))}
+                {(["min", "max"] as const).map((edge) => {
+                  const targetPull = template.rangeSemantics === "target_pull";
+                  const key = edge === "min" ? "targetPullMinKgf" : "targetPullMaxKgf";
+                  const legacyKey = edge === "min" ? "fishMinKg" : "fishMaxKg";
+                  return (
+                    <td key={edge}><TextInput type="number" value={targetPull ? template[key] ?? 0 : template[legacyKey]} step={0.01} onChange={(value) => mutate((draft) => {
+                      const numeric = Number(value);
+                      const current = draft.templates[index];
+                      if (current.rangeSemantics === "target_pull") {
+                        current[key] = numeric;
+                        const min = current.targetPullMinKgf ?? 0;
+                        const max = current.targetPullMaxKgf ?? 0;
+                        current.nominalTargetPullKgf = (min + max) / 2;
+                      } else {
+                        current[legacyKey] = numeric;
+                        current.nominalFishKg = (current.fishMinKg + current.fishMaxKg) / 2;
+                      }
+                    })} /></td>
+                  );
+                })}
+                <td><TextInput value={template.fishWeightLevel ?? template.nominalFishKg} onChange={(value) => mutate((draft) => {
+                  const numeric = Number(value);
+                  draft.templates[index].fishWeightLevel = value !== "" && Number.isFinite(numeric) ? numeric : value;
+                })} /></td>
                 {parametersForKind.map((parameter) => (
                   <td key={parameter.key}>
                     <TextInput

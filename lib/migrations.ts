@@ -246,6 +246,7 @@ function buildFunctionProfiles(state: MutableWorkspace): FunctionProfile[] {
     intensityRules: modifiers
       .map((modifier) => ({
         intensity: asFunctionIntensity(modifier.level),
+        legacyItemPartAgnostic: true,
         rules: structuredClone(modifier.rules),
       }))
       .sort((left, right) => left.intensity - right.intensity),
@@ -756,6 +757,7 @@ function migrateV15ToV16(state: MutableWorkspace): MutableWorkspace {
     patchReviewBatches: arrayOf<WorkspaceState["patchReviewBatches"][number]>(state.patchReviewBatches),
     patchValidationWaivers: arrayOf<WorkspaceState["patchValidationWaivers"][number]>(state.patchValidationWaivers),
     patchValidationWaiverDecisions: arrayOf<WorkspaceState["patchValidationWaiverDecisions"][number]>(state.patchValidationWaiverDecisions),
+    canonicalRuleSourceDrafts: arrayOf<WorkspaceState["canonicalRuleSourceDrafts"][number]>(state.canonicalRuleSourceDrafts),
   };
 }
 

@@ -29,6 +29,11 @@ import {
   type SourceIdentityPolicy,
   type SourceIdentityRow,
 } from "./source-id-migration";
+import {
+  CANONICAL_RULE_RANGES,
+  importCanonicalRuleSource,
+} from "./canonical-rule-source";
+import type { CanonicalRuleSourceDraft } from "./types";
 
 export interface IdentitySheetSpec {
   sheetId: string;
@@ -40,9 +45,11 @@ export interface IdentitySheetSpec {
 }
 
 export const CANONICAL_IDENTITY_SHEET_SPECS: IdentitySheetSpec[] = [
-  { sheetId: "d6e928", range: "B1:C66", idColumnKey: "B", fixedEntityType: "WeightTemplate", allowedEntityTypes: ["WeightTemplate"], idPrefixesByEntityType: { WeightTemplate: ["wtpl_"] } },
-  { sheetId: "fATowU", range: "B1:C10", idColumnKey: "B", allowedEntityTypes: ["RodType", "ReelType", "LineType"], idPrefixesByEntityType: { RodType: ["type_rod_"], ReelType: ["type_reel_"], LineType: ["type_line_"] } },
-  { sheetId: "vviXo0", range: "B1:C21", idColumnKey: "B", fixedEntityType: "FunctionProfile", allowedEntityTypes: ["FunctionProfile"], idPrefixesByEntityType: { FunctionProfile: ["func_"] } },
+  { sheetId: "mLpTLK", range: "A1:S8", idColumnKey: "A", fixedEntityType: "FunctionProfile", allowedEntityTypes: ["FunctionProfile"], idPrefixesByEntityType: { FunctionProfile: ["function:"] } },
+  { sheetId: "d6e928", range: "B1:C54", idColumnKey: "B", fixedEntityType: "WeightTemplate", allowedEntityTypes: ["WeightTemplate"], idPrefixesByEntityType: { WeightTemplate: ["wtpl_"] } },
+  { sheetId: "fATowU", range: "B1:C20", idColumnKey: "B", allowedEntityTypes: ["RodType", "ReelType", "LineType"], idPrefixesByEntityType: { RodType: ["type_rod_"], ReelType: ["type_reel_"], LineType: ["type_line_"] } },
+  { sheetId: "vviXo0", range: "B1:C63", idColumnKey: "B", fixedEntityType: "FunctionProfile", allowedEntityTypes: ["FunctionProfile"], idPrefixesByEntityType: { FunctionProfile: ["func_"] } },
+  { sheetId: "mLpTLK", range: "Q1:S8", idColumnKey: "Q:S", fixedEntityType: "FunctionPartGroup", allowedEntityTypes: ["FunctionPartGroup"], idPrefixesByEntityType: { FunctionPartGroup: ["funcgrp_rod_", "funcgrp_reel_", "funcgrp_line_"] } },
   { sheetId: "zrVOxd", range: "B1:C38", idColumnKey: "B", allowedEntityTypes: ["RodAffix", "ReelAffix", "LineAffix"], idPrefixesByEntityType: { RodAffix: ["affix_rod_"], ReelAffix: ["affix_reel_"], LineAffix: ["affix_line_"] } },
   { sheetId: "9nE3Rx", range: "B1:C10", idColumnKey: "B", fixedEntityType: "SeriesArchetype", allowedEntityTypes: ["SeriesArchetype"], idPrefixesByEntityType: { SeriesArchetype: ["series_rod_", "series_reel_", "series_line_"] } },
 ];
@@ -81,7 +88,7 @@ export function canonicalAffixSheetRanges(sourceRevision: FeishuSourceRevision):
 
 export function canonicalRuleWorkbookRangeRequests(sourceRevision: FeishuSourceRevision) {
   const affixRanges = canonicalAffixSheetRanges(sourceRevision);
-  return [
+  const requests = [
     ...CANONICAL_IDENTITY_SHEET_SPECS.map(({ sheetId, range }) => ({
       sheetId,
       range: sheetId === AFFIX_SHEET_ID ? affixRanges.identityRange : range,
@@ -89,9 +96,16 @@ export function canonicalRuleWorkbookRangeRequests(sourceRevision: FeishuSourceR
     { sheetId: "FqD4j7", range: "B4:N50" },
     { sheetId: AFFIX_SHEET_ID, range: affixRanges.aliasRange },
     { sheetId: "u87sRh", range: "B10:R70" },
-    { sheetId: "fATowU", range: "B2:V10" },
+    { sheetId: "fATowU", range: "B2:AD20" },
     { sheetId: "u87sRh", range: "B179:E179" },
+    CANONICAL_RULE_RANGES.weight,
+    CANONICAL_RULE_RANGES.type,
+    CANONICAL_RULE_RANGES.function,
+    CANONICAL_RULE_RANGES.functionProfiles,
+    CANONICAL_RULE_RANGES.method,
+    CANONICAL_RULE_RANGES.methodTemplateReview,
   ];
+  return [...new Map(requests.map((request) => [`${request.sheetId}:${request.range}`, request])).values()];
 }
 
 function text(value: unknown) {
@@ -99,15 +113,32 @@ function text(value: unknown) {
 }
 
 export function identityRowsFromRanges(
-  ranges: Array<{ sheetId: string; valueRange: Pick<FeishuValueRange, "values"> }>,
+  ranges: Array<{ sheetId: string; range?: string; valueRange: Pick<FeishuValueRange, "values"> }>,
   specs = CANONICAL_IDENTITY_SHEET_SPECS,
 ): SourceIdentityRow[] {
-  const rangeBySheet = new Map(ranges.map((entry) => [entry.sheetId, entry.valueRange.values]));
-  return specs.flatMap((spec) => (rangeBySheet.get(spec.sheetId) ?? []).flatMap((values, index) => {
+  const hasExplicitRanges = ranges.some((entry) => entry.range !== undefined);
+  const rangeByIdentitySpec = new Map(ranges.filter((entry) => entry.range).map((entry) => [`${entry.sheetId}:${entry.range}`, entry.valueRange.values]));
+  const legacyRangeBySheet = new Map(ranges.map((entry) => [entry.sheetId, entry.valueRange.values]));
+  return specs.flatMap((spec) => (
+    (spec.sheetId === AFFIX_SHEET_ID && spec.range === "B1:C38"
+      ? ranges.find((entry) => entry.sheetId === AFFIX_SHEET_ID && /^B1:C\d+$/.test(entry.range ?? ""))?.valueRange.values
+      : rangeByIdentitySpec.get(`${spec.sheetId}:${spec.range}`))
+    ?? (hasExplicitRanges ? [] : legacyRangeBySheet.get(spec.sheetId) ?? [])
+  ).flatMap((values, index) => {
+    if (spec.fixedEntityType === "FunctionPartGroup") {
+      return (values as unknown[]).flatMap((value, columnIndex) => {
+        const stableId = text(value);
+        // Q:S 的第 1 行是 rod/reel/lineFunctionGroupId 表头；Id 的大小写不应参与身份判断。
+        if (!stableId || index === 0) return [];
+        const part = ["rod", "reel", "line"][columnIndex];
+        return [{ sheetId: spec.sheetId, rowKey: `${index + 1}:${part}`, displayName: `FunctionPartGroup · ${part} · 第 ${index + 1} 行`, entityType: "FunctionPartGroup", stableId, idColumnKey: ["Q", "R", "S"][columnIndex]! }];
+      });
+    }
+    if (spec.sheetId === "mLpTLK" && spec.range === "A1:S8" && index === 0) return [];
     const stableId = text(values[0]);
     const adjacentValue = text(values[1]);
     if (!stableId && !adjacentValue) return [];
-    if (stableId.includes("机器ID") || adjacentValue === "实体类型" || adjacentValue === "同步状态") return [];
+    if (/ID（勿改）|ID（永久）|机器ID/.test(stableId) || adjacentValue === "实体类型" || adjacentValue === "同步状态") return [];
     const entityType = spec.fixedEntityType ?? adjacentValue;
     if (!entityType) return [];
     return [{
@@ -122,11 +153,14 @@ export function identityRowsFromRanges(
 }
 
 export function canonicalIdentityPolicies(): SourceIdentityPolicy[] {
-  return CANONICAL_IDENTITY_SHEET_SPECS.map((spec) => ({
-    sheetId: spec.sheetId,
-    allowedEntityTypes: [...spec.allowedEntityTypes],
-    idPrefixesByEntityType: structuredClone(spec.idPrefixesByEntityType),
-  }));
+  const grouped = new Map<string, SourceIdentityPolicy>();
+  for (const spec of CANONICAL_IDENTITY_SHEET_SPECS) {
+    const current = grouped.get(spec.sheetId) ?? { sheetId: spec.sheetId, allowedEntityTypes: [], idPrefixesByEntityType: {} };
+    current.allowedEntityTypes = [...new Set([...current.allowedEntityTypes, ...spec.allowedEntityTypes])];
+    for (const [entityType, prefixes] of Object.entries(spec.idPrefixesByEntityType)) current.idPrefixesByEntityType[entityType] = [...new Set([...(current.idPrefixesByEntityType[entityType] ?? []), ...prefixes])];
+    grouped.set(spec.sheetId, current);
+  }
+  return [...grouped.values()];
 }
 
 const qualityIds: Record<string, QualityPricingBasketMapping["qualityId"]> = {
@@ -353,6 +387,7 @@ export interface CanonicalRuleWorkbookInspection {
   identityReport: SourceIdentityMigrationReport;
   pricingDraft: PricingPolicyDraft;
   qualityDraft: QualityValuePolicyDraft;
+  canonicalRuleDraft: CanonicalRuleSourceDraft;
   pricingWeightBandPolicy: "MATCHED_STRUCTURAL_SOURCE_BAND";
 }
 
@@ -386,7 +421,7 @@ export async function inspectCanonicalRuleWorkbook(input: {
   const affixRange = ranges.find((entry) => entry.sheetId === AFFIX_SHEET_ID && entry.range === canonicalAffixSheetRanges(sourceRevision).aliasRange);
   const pricingEndpointRange = ranges.find((entry) => entry.sheetId === "u87sRh" && entry.range === "B179:E179");
   const pricingRange = ranges.find((entry) => entry.sheetId === "u87sRh" && entry.range === "B10:R70");
-  const typeRange = ranges.find((entry) => entry.sheetId === "fATowU" && entry.range === "B2:V10");
+  const typeRange = ranges.find((entry) => entry.sheetId === "fATowU" && entry.range === "B2:AD20");
   const pricingDraft = pricingDraftFromRanges({
     sourceRevision,
     qualityValues: (qualityRange?.valueRange.values ?? []).slice(1, 5),
@@ -401,6 +436,16 @@ export async function inspectCanonicalRuleWorkbook(input: {
     pricingEndpointValues: pricingEndpointRange?.valueRange.values ?? [],
     importedAt: input.observedAt,
   });
+  const canonicalRuleDraft = importCanonicalRuleSource({
+    sourceRevision,
+    weightValues: ranges.find((entry) => entry.sheetId === CANONICAL_RULE_RANGES.weight.sheetId && entry.range === CANONICAL_RULE_RANGES.weight.range)?.valueRange.values ?? [],
+    typeValues: ranges.find((entry) => entry.sheetId === CANONICAL_RULE_RANGES.type.sheetId && entry.range === CANONICAL_RULE_RANGES.type.range)?.valueRange.values ?? [],
+    functionValues: ranges.find((entry) => entry.sheetId === CANONICAL_RULE_RANGES.function.sheetId && entry.range === CANONICAL_RULE_RANGES.function.range)?.valueRange.values ?? [],
+    functionProfileValues: ranges.find((entry) => entry.sheetId === CANONICAL_RULE_RANGES.functionProfiles.sheetId && entry.range === CANONICAL_RULE_RANGES.functionProfiles.range)?.valueRange.values ?? [],
+    methodValues: ranges.find((entry) => entry.sheetId === CANONICAL_RULE_RANGES.method.sheetId && entry.range === CANONICAL_RULE_RANGES.method.range)?.valueRange.values ?? [],
+    methodTemplateReviewValues: ranges.find((entry) => entry.sheetId === CANONICAL_RULE_RANGES.methodTemplateReview.sheetId && entry.range === CANONICAL_RULE_RANGES.methodTemplateReview.range)?.valueRange.values ?? [],
+    importedAt: input.observedAt,
+  });
   return {
     observedAt: input.observedAt,
     sourceRevision,
@@ -408,6 +453,7 @@ export async function inspectCanonicalRuleWorkbook(input: {
     identityReport,
     pricingDraft,
     qualityDraft,
+    canonicalRuleDraft,
     pricingWeightBandPolicy: "MATCHED_STRUCTURAL_SOURCE_BAND",
   };
 }

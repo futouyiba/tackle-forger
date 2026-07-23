@@ -51,7 +51,7 @@ export const defaultRuleGraphs: RuleGraph[] = [
         x: 270,
         y: 145,
         manualStart: false,
-        dimensions: ["structure", "material", "function", "performance", "technology", "series"],
+        dimensions: ["structure", "material", "function", "technology", "series"],
         rules: [],
         conditions: [],
         conditionMode: "all",
@@ -265,7 +265,7 @@ function selectedOptionIds(candidate: Candidate, dimension: DimensionKey): strin
   if (dimension === "structure") return candidate.selections.structureId ? [candidate.selections.structureId] : [];
   if (dimension === "material") return candidate.selections.materialId ? [candidate.selections.materialId] : [];
   if (dimension === "function") return candidate.selections.functionId ? [candidate.selections.functionId] : [];
-  if (dimension === "performance") return candidate.selections.performanceId ? [candidate.selections.performanceId] : [];
+  if (dimension === "performance") return [];
   if (dimension === "technology") return candidate.selections.technologyIds;
   return candidate.selections.seriesId ? [candidate.selections.seriesId] : [];
 }

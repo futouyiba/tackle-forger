@@ -47,8 +47,11 @@ import {
   createNeedsReviewPartConstraintSet,
   PART_CONSTRAINT_SOURCE_HASH_PROJECTION,
   partConstraintSourceContentHash,
+  partConstraintSourceRevisionId,
+  partConstraintSourceStableId,
   partConstraintSetContentHash,
   partConstraintSetRef,
+  resolvePartConstraintSourceRevision,
   resolvePartConstraintSetRef,
 } from "./part-constraints";
 import { deterministicHash } from "./rule-kernel";
@@ -1029,25 +1032,6 @@ const LEGACY_SERIES_RECIPE_FIELDS = new Set([
   "enabled",
 ]);
 
-function sourceRevisionId(source: Record<string, unknown>): string | null {
-  const revision = source.revisionId ?? source.revision;
-  if (
-    (typeof revision === "string" && revision.trim())
-    || (typeof revision === "number" && Number.isFinite(revision))
-  ) {
-    return String(revision);
-  }
-  return null;
-}
-
-function stableSourceId(
-  source: Record<string, unknown>,
-  sourceType: string,
-): string {
-  if (typeof source.id === "string" && source.id.trim()) return source.id;
-  return `missing:${sourceType}:${deterministicHash(source)}`;
-}
-
 function stableConstraintSetId(sourceType: string, sourceId: string): string {
   return `part-constraint-set:${sourceType}:${encodeURIComponent(sourceId)}`;
 }
@@ -1267,11 +1251,11 @@ function migrateV17ToV18(input: MutableWorkspace): MutableWorkspace {
 
   const migratedLegacyRefs = new Map<string, PartConstraintSetRef>();
   for (const recipe of arrayOf<Record<string, unknown>>(state.recipes)) {
-    const sourceId = stableSourceId(recipe, "legacy-series-recipe");
+    const sourceId = partConstraintSourceStableId(recipe, "legacy_series_recipe");
     const sourceRef = {
       sourceType: "legacy_series_recipe" as const,
       sourceId,
-      revisionId: sourceRevisionId(recipe),
+      revisionId: partConstraintSourceRevisionId(recipe),
       hashProjectionVersion: PART_CONSTRAINT_SOURCE_HASH_PROJECTION,
       contentHash: partConstraintSourceContentHash(recipe),
     };
@@ -1336,11 +1320,11 @@ function migrateV17ToV18(input: MutableWorkspace): MutableWorkspace {
       };
     }
 
-    const sourceId = stableSourceId(recipe, "candidate-search-recipe");
+    const sourceId = partConstraintSourceStableId(recipe, "candidate_search_recipe");
     const sourceRef = {
       sourceType: "candidate_search_recipe" as const,
       sourceId,
-      revisionId: sourceRevisionId(recipe),
+      revisionId: partConstraintSourceRevisionId(recipe),
       hashProjectionVersion: PART_CONSTRAINT_SOURCE_HASH_PROJECTION,
       contentHash: partConstraintSourceContentHash(recipe),
     };
@@ -1373,11 +1357,11 @@ function migrateV17ToV18(input: MutableWorkspace): MutableWorkspace {
       }
       return structuredClone(series);
     }
-    const sourceId = stableSourceId(series, "series-definition");
+    const sourceId = partConstraintSourceStableId(series, "series_definition");
     const sourceRef = {
       sourceType: "series_definition" as const,
       sourceId,
-      revisionId: sourceRevisionId(series),
+      revisionId: partConstraintSourceRevisionId(series),
       hashProjectionVersion: PART_CONSTRAINT_SOURCE_HASH_PROJECTION,
       contentHash: partConstraintSourceContentHash(series),
     };
@@ -1395,6 +1379,21 @@ function migrateV17ToV18(input: MutableWorkspace): MutableWorkspace {
       partConstraintSetRef: partConstraintSetRef(constraintSet),
     };
   });
+
+  const sourcesByType: Record<
+    PartConstraintSourceRevisionRef["sourceType"],
+    Record<string, unknown>[]
+  > = {
+    legacy_series_recipe: arrayOf<Record<string, unknown>>(state.recipes),
+    candidate_search_recipe: candidateSearchRecipes,
+    series_definition: seriesDefinitions,
+  };
+  for (const constraintSet of constraintSets) {
+    resolvePartConstraintSourceRevision(
+      sourcesByType[constraintSet.sourceRef.sourceType],
+      constraintSet.sourceRef,
+    );
+  }
 
   return {
     ...state,

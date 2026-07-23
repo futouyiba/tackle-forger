@@ -35,6 +35,22 @@ const ITEM_PART_BY_SLOT: Record<PartConstraintSlot, PartConstraintItemPartId> = 
   line: "part:line",
 };
 
+const PART_CONSTRAINT_REVIEW_STATUSES = new Set<PartConstraintReviewStatus>([
+  "CONFIRMED",
+  "NEEDS_REVIEW",
+]);
+
+function assertReviewStatus(
+  value: unknown,
+  location: string,
+): asserts value is PartConstraintReviewStatus {
+  if (!PART_CONSTRAINT_REVIEW_STATUSES.has(value as PartConstraintReviewStatus)) {
+    throw new Error(
+      `PART_CONSTRAINT_REVIEW_STATUS_INVALID：${location} 的 reviewStatus 非法。`,
+    );
+  }
+}
+
 interface MigratedConstraintSource {
   sourceRef: PartConstraintSourceRevisionRef;
   rawPayload: unknown;
@@ -106,6 +122,7 @@ function validatePartConstraintComponents(input: {
   }
   const tracesById = new Map<string, PartConstraintFieldTrace>();
   for (const trace of input.traces) {
+    assertReviewStatus(trace.reviewStatus, `Trace ${trace.traceId}`);
     if (tracesById.has(trace.traceId)) {
       throw new Error(
         `PART_CONSTRAINT_TRACE_ID_DUPLICATE：${trace.traceId} 重复。`,
@@ -129,6 +146,7 @@ function validatePartConstraintComponents(input: {
   const sourceRefHash = deterministicHash(input.sourceRef);
   for (const slot of PART_CONSTRAINT_SLOTS) {
     const part = input.parts[slot];
+    assertReviewStatus(part.reviewStatus, `部位 ${slot}`);
     const expectedItemPartId = ITEM_PART_BY_SLOT[slot];
     if (part.itemPartId !== expectedItemPartId) {
       throw new Error(
@@ -147,6 +165,15 @@ function validatePartConstraintComponents(input: {
 
     const traceStatuses: PartConstraintReviewStatus[] = [];
     for (const field of PART_CONSTRAINT_FIELDS) {
+      const values = part[field];
+      if (
+        !Array.isArray(values)
+        || values.some((value) => typeof value !== "string")
+      ) {
+        throw new Error(
+          `PART_CONSTRAINT_FIELD_VALUES_INVALID：${slot}.${field} 必须是纯字符串数组。`,
+        );
+      }
       const ref = part.fieldTraceRefs[field];
       const trace = tracesById.get(ref);
       if (!trace) {
@@ -210,6 +237,10 @@ function validatePartConstraintComponents(input: {
 export function assertPartConstraintSetRevisionStructure(
   constraintSet: PartConstraintSet,
 ): void {
+  assertReviewStatus(
+    constraintSet.reviewStatus,
+    `${constraintSet.constraintSetId}@${constraintSet.revision}`,
+  );
   validatePartConstraintComponents({
     constraintSetId: constraintSet.constraintSetId,
     revision: constraintSet.revision,
@@ -337,6 +368,29 @@ export function partConstraintSourceContentHash(
   return deterministicHash(projected);
 }
 
+export function partConstraintSourceStableId(
+  source: object,
+  sourceType: string,
+): string {
+  const id = (source as Record<string, unknown>).id;
+  if (typeof id === "string" && id.trim()) return id;
+  return `missing:${sourceType}:${partConstraintSourceContentHash(source)}`;
+}
+
+export function partConstraintSourceRevisionId(
+  source: object,
+): string | null {
+  const record = source as Record<string, unknown>;
+  const revision = record.revisionId ?? record.revision;
+  if (
+    (typeof revision === "string" && revision.trim())
+    || (typeof revision === "number" && Number.isFinite(revision))
+  ) {
+    return String(revision);
+  }
+  return null;
+}
+
 export function partConstraintSetContentHash(
   constraintSet: Omit<PartConstraintSet, "contentHash"> | PartConstraintSet,
 ): string {
@@ -358,12 +412,10 @@ export function resolvePartConstraintSourceRevision<T extends object>(
     );
   }
   const matches = sources.filter((source) => {
-    const record = source as Record<string, unknown>;
-    if (record.id !== ref.sourceId) return false;
-    const revision = record.revisionId ?? record.revision;
-    return ref.revisionId === null
-      ? revision === undefined || revision === null || revision === ""
-      : String(revision) === ref.revisionId;
+    if (partConstraintSourceStableId(source, ref.sourceType) !== ref.sourceId) {
+      return false;
+    }
+    return partConstraintSourceRevisionId(source) === ref.revisionId;
   });
   if (!matches.length) {
     throw new Error(

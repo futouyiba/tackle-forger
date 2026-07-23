@@ -310,7 +310,36 @@ Model是玩家实际选择和购买的具体型号，保存：
 
 领域内Model是实际选择和购买对象。当前配置表没有Snapshot版本字段，因此不得宣称游戏侧购买记录已经支持`modelId + snapshotId`；Snapshot仅在Tackle Forger内部保证发布和导出的可追溯性。
 
-### 6.5 稳定身份、再生成对应与重量变更
+### 6.5 PartConstraintSet、CandidateSearchRecipe与组件选择
+
+`PartConstraintSet`是版本化、不可变的候选搜索约束对象。它使用稳定`constraintSetId`和单调`revision`标识；修改任一字段、来源或复核结论都创建新revision。`CandidateSearchRecipe`必须冻结并引用精确的`constraintSetId + revision + contentHash`，同时冻结本轮可枚举组件的`componentRegistryId + revision + contentHash`；不得在运行时解析为后来发布的“最新revision”。候选生成请求只提交不可变的Recipe引用，服务端必须从该Recipe revision解析约束集与组件注册表。规范请求不得再接收可由调用方任意组合的独立`partConstraintSetRef`或注册表引用。
+
+`PartConstraintSet`按rod、reel、line分别保存约束。每个部位独立记录来源、来源revision、内容哈希、迁移诊断和`CONFIRMED/NEEDS_REVIEW`状态；一个部位确认不代表另外两个部位自动确认。字段语义固定为：
+
+| 字段 | 权威语义 |
+| --- | --- |
+| `templateIds` | 该部位候选组件的模板搜索约束；按稳定模板ID匹配，不是具体组件选择 |
+| `materialIds` | 该部位候选组件的材质搜索约束；缺少版本化注册表元数据时不得按名称猜测 |
+| `requiredAffixIds` | 候选必须满足的该部位词条条件；未知或无法验证时fail-closed |
+| `optionalAffixPoolIds` | 候选扩展或版本化排序使用的该部位词条池；不等于必需词条或已选词条 |
+| `typeIds` | 默认不是通用分部位字段；只有组件注册表明确提供该部位的版本化type分类时才可生效 |
+| `componentSelections` | 候选结果与Model中的具体组件引用，不属于`PartConstraintSet`或`CandidateSearchRecipe` |
+
+Series的`typeId/TypeProfile`继续表达系列级Method × Type结构语义。不得把Series Type复制为分部位type分类，也不得由本规范擅自定义当前不存在的组件type。组件注册表没有明确分类时，遗留`typeIds`只能保留、展示并进入`NEEDS_REVIEW`，不得参与权威过滤、自动批准或自动发布。
+
+`CandidateSearchRecipe`只拥有搜索范围、阈值、检查点、排序定义和`PartConstraintSet` revision引用。它按部位枚举、过滤和排序组件，但不拥有具体组件选择。每项过滤和排序必须记录部位、约束字段、约束revision、组件注册表revision及命中/排除原因；未知ID、跨部位引用、缺失分类或required冲突不得静默放宽为“允许全部”。
+
+新候选结果保存本轮实际选中的`componentSelections`，但CandidateRun仍是不可变审计产物，不是商品身份。新Candidate、新建或更新的Model revision和新ConfigurationSnapshot只能写入`referenceKind="VERSIONED_COMPONENT_REF"`的版本化分支；每个具体组件选择必须冻结：部位、稳定`componentId`、不可变`componentRevisionId`、组件内容哈希、精确的组件注册表revision及其内容哈希、来源revision，以及当时用于计算和展示的名称/值快照。组件revision必须确实属于冻结的注册表revision，部位、ID、revision和hash任一不一致、缺失或无法解析时fail-closed。
+
+`componentContentHash`覆盖该组件revision的规范注册表记录；`selectionContentHash`覆盖完整组件引用与`nameSnapshot/valuesSnapshot`。Candidate fingerprint、CandidateRun输入/输出hash、Model revision内容hash和ConfigurationSnapshot content hash都必须覆盖完整`componentSelections`，不能只覆盖组件ID。组件注册表发布新revision只能产生新候选、Model revision或UpgradeCandidate，不得让既有Candidate、Model revision或Snapshot改指“最新组件”。
+
+只有显式物化命令重新鉴权、重验Recipe内冻结的约束集/注册表引用、逐项组件引用与硬兼容后，候选才创建或更新Model草稿revision；未物化、过期、丢弃或superseded的候选不得改变Model。搜索约束不得被机械转换为`componentSelections`。
+
+历史`ModelComponentSelection`若只有`itemPartId/componentId/name/values`，读取/迁移适配器必须将其表达为`referenceKind="LEGACY_UNVERSIONED_COMPONENT_REF"`的判别联合分支，并在`rawPayload`中原样保留旧对象及未知字段；不得按名称或当前注册表补写revision/hash。该判别包装是运行时读模型与迁移诊断，不得回写或改变已发布Snapshot的原始payload/content hash。旧分支只允许历史读取、展示、导出原始证据和人工解析；任何Candidate生成、物化、新Model revision、批准或新Snapshot构建遇到旧分支都必须返回`LEGACY_COMPONENT_REF_NOT_MATERIALIZABLE`并fail-closed。人工解析到精确组件revision后创建使用版本化分支的新Model revision，原记录与旧Snapshot保持不变。
+
+完整决策、旧数据复核与Snapshot冻结规则见[`AUD-026 PartConstraintSet语义ADR`](./audits/aud-026-part-constraint-semantics-adr.md)。
+
+### 6.6 稳定身份、再生成对应与重量变更
 
 - `entityId`终身稳定；revision不可变；displayName可修改且不得作为唯一关联键。
 - 再生成对应顺序固定为：显式目标ID→持久GenerationBinding→外部稳定ID→业务身份键→name/特征仅作为人工提示。

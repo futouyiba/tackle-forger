@@ -8,6 +8,10 @@ import { deterministicHash } from "../lib/rule-kernel";
 import { validateSeriesInvariants } from "../lib/product-model";
 import {
   createPartConstraintSetRevision,
+  partConstraintSourceContentHash,
+  partConstraintSourceRevisionId,
+  partConstraintSourceStableId,
+  partConstraintSetContentHash,
   partConstraintSetRef,
   partConstraintSetBlockingTraceRefs,
   resolvePartConstraintSourceRevision,
@@ -388,6 +392,122 @@ test("PartConstraintSet 稳定 ref 对缺失、重复、篡改或 hash 不符均
       partConstraintSetRef(constraintSet),
     ),
     /PART_CONSTRAINT_SET_REVISION_DUPLICATE/,
+  );
+});
+
+test("schema v18 拒绝字段容器或 set/part/trace 状态枚举非法的 v17 规范对象", () => {
+  const cases: Array<{
+    mutate: (constraintSet: Record<string, unknown>) => void;
+    error: RegExp;
+  }> = [
+    {
+      mutate: (constraintSet) => {
+        const parts = constraintSet.parts as Record<string, Record<string, unknown>>;
+        parts.rod.templateIds = "template:not-an-array";
+      },
+      error: /PART_CONSTRAINT_FIELD_VALUES_INVALID/,
+    },
+    {
+      mutate: (constraintSet) => {
+        const parts = constraintSet.parts as Record<string, Record<string, unknown>>;
+        parts.rod.templateIds = ["template:ok", 7];
+      },
+      error: /PART_CONSTRAINT_FIELD_VALUES_INVALID/,
+    },
+    {
+      mutate: (constraintSet) => {
+        constraintSet.reviewStatus = "INVALID";
+      },
+      error: /PART_CONSTRAINT_REVIEW_STATUS_INVALID/,
+    },
+    {
+      mutate: (constraintSet) => {
+        const parts = constraintSet.parts as Record<string, Record<string, unknown>>;
+        parts.rod.reviewStatus = "INVALID";
+      },
+      error: /PART_CONSTRAINT_REVIEW_STATUS_INVALID/,
+    },
+    {
+      mutate: (constraintSet) => {
+        const traces = constraintSet.traces as Array<Record<string, unknown>>;
+        traces[0].reviewStatus = "INVALID";
+      },
+      error: /PART_CONSTRAINT_REVIEW_STATUS_INVALID/,
+    },
+  ];
+
+  for (const entry of cases) {
+    const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
+    legacy.schemaVersion = 17;
+    const constraintSet = (
+      legacy.partConstraintSets as Array<Record<string, unknown>>
+    )[0];
+    entry.mutate(constraintSet);
+    constraintSet.contentHash = partConstraintSetContentHash(
+      constraintSet as never,
+    );
+    const before = structuredClone(legacy);
+    assert.throws(() => migrateWorkspaceState(legacy), entry.error);
+    assert.deepEqual(legacy, before);
+  }
+});
+
+test("合成来源身份对缺失或空白 ID、非法 revision 可回读，重复身份 fail-closed", () => {
+  for (const id of [undefined, ""]) {
+    const source = {
+      id,
+      revision: { invalid: true },
+      name: "anonymous-series",
+    };
+    const sourceId = partConstraintSourceStableId(source, "series_definition");
+    const ref = {
+      sourceType: "series_definition" as const,
+      sourceId,
+      revisionId: partConstraintSourceRevisionId(source),
+      hashProjectionVersion: "WITHOUT_PART_CONSTRAINT_SET_REF_V1" as const,
+      contentHash: partConstraintSourceContentHash(source),
+    };
+    assert.equal(ref.revisionId, null);
+    assert.equal(resolvePartConstraintSourceRevision([source], ref), source);
+    assert.throws(
+      () => resolvePartConstraintSourceRevision(
+        [source, structuredClone(source)],
+        ref,
+      ),
+      /PART_CONSTRAINT_SOURCE_REVISION_DUPLICATE/,
+    );
+  }
+
+  const legacy = legacyV17ForPartConstraintMigration();
+  const series = legacy.seriesDefinitions as Array<Record<string, unknown>>;
+  delete series[0].id;
+  series[0].revision = { invalid: true };
+  const migrated = migrateWorkspaceState(legacy);
+  const migratedSeries = migrated.seriesDefinitions[0] as unknown as Record<string, unknown>;
+  const constraintSet = resolvePartConstraintSetRef(
+    migrated.partConstraintSets,
+    migratedSeries.partConstraintSetRef as never,
+  );
+  assert.equal(
+    resolvePartConstraintSourceRevision(
+      migrated.seriesDefinitions,
+      constraintSet.sourceRef,
+    ),
+    migrated.seriesDefinitions[0],
+  );
+
+  const duplicateLegacy = legacyV17ForPartConstraintMigration();
+  const duplicateSeries = duplicateLegacy.seriesDefinitions as Array<Record<string, unknown>>;
+  const anonymous = structuredClone(duplicateSeries[0]);
+  delete anonymous.id;
+  anonymous.revision = { invalid: true };
+  duplicateLegacy.seriesDefinitions = [
+    structuredClone(anonymous),
+    structuredClone(anonymous),
+  ];
+  assert.throws(
+    () => migrateWorkspaceState(duplicateLegacy),
+    /PART_CONSTRAINT_SOURCE_REVISION_DUPLICATE/,
   );
 });
 

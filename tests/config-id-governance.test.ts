@@ -262,6 +262,91 @@ test("Manifest 必须无问题且逐项验证策略声明的 rangeId", () => {
   );
 });
 
+test("正式策略拒绝空 Manifest 集与零必需目标，optional-only 目录只可用于 NON_FORMAL", () => {
+  const requiredFixture = buildGovernanceFixture();
+  assert.throws(
+    () => publishConfigIdPolicyVersion(requiredFixture.governance, {
+      policyVersionId: "policy:empty-manifests",
+      catalogVersionId: "catalog:v1",
+      manifestIds: [],
+      ranges: CANONICAL_CONFIG_ID_RANGES.map((range) => ({ ...range })),
+      publishedBy: "reviewer",
+      publishedAt: NOW,
+      observedTargets: [],
+    }),
+    (error) => errorCode(error) === "CONFIG_TARGET_SCAN_MANIFEST_SET_EMPTY",
+  );
+
+  let optionalGovernance = publishConfigTargetCatalogVersion(emptyConfigIdGovernanceState(), {
+    catalogVersionId: "catalog:optional-only",
+    entries: [{
+      targetEntryId: "target:preview",
+      environmentId: "preview",
+      channelKey: "default",
+      repositoryId: "repo:game-config",
+      authoritativeRef: "refs/heads/config",
+      logicalDirectory: "preview",
+      configTomlPath: "preview/config.toml",
+      managedWorkbooks: managedWorkbooks("preview"),
+      requiredForFormal: false,
+    }],
+    approvedBy: "reviewer",
+    approvedAt: NOW,
+  });
+  optionalGovernance = approveConfigTargetScanManifest(optionalGovernance, {
+    manifestId: "manifest:preview:v1",
+    catalogVersionId: "catalog:optional-only",
+    targetEntryId: "target:preview",
+    environmentId: "preview",
+    channelKey: "default",
+    repositoryId: "repo:game-config",
+    authoritativeRef: "refs/heads/config",
+    resolvedCommitOid: "a".repeat(40),
+    logicalDirectory: "preview",
+    configTomlHash: hash("preview:config.toml"),
+    workbooks: scannedWorkbooks("preview"),
+    scannerVersion: "scanner:v1",
+    ruleVersion: "open-008:v1",
+    verifiedRangeIds: CANONICAL_CONFIG_ID_RANGES.map((range) => range.rangeId),
+    issueCodes: [],
+    scannedBy: "scanner",
+    scannedAt: NOW,
+    approvedBy: "reviewer",
+    approvedAt: NOW,
+  });
+  assert.throws(
+    () => publishConfigIdPolicyVersion(optionalGovernance, {
+      policyVersionId: "policy:optional-only",
+      catalogVersionId: "catalog:optional-only",
+      manifestIds: ["manifest:preview:v1"],
+      ranges: CANONICAL_CONFIG_ID_RANGES.map((range) => ({ ...range })),
+      publishedBy: "reviewer",
+      publishedAt: NOW,
+      observedTargets: observationsFor(optionalGovernance),
+    }),
+    (error) => errorCode(error) === "CONFIG_TARGET_CATALOG_FORMAL_TARGETS_EMPTY",
+  );
+
+  const emptyCatalog = publishConfigTargetCatalogVersion(emptyConfigIdGovernanceState(), {
+    catalogVersionId: "catalog:empty",
+    entries: [],
+    approvedBy: "reviewer",
+    approvedAt: NOW,
+  });
+  assert.throws(
+    () => publishConfigIdPolicyVersion(emptyCatalog, {
+      policyVersionId: "policy:empty-catalog",
+      catalogVersionId: "catalog:empty",
+      manifestIds: [],
+      ranges: CANONICAL_CONFIG_ID_RANGES.map((range) => ({ ...range })),
+      publishedBy: "reviewer",
+      publishedAt: NOW,
+      observedTargets: [],
+    }),
+    (error) => errorCode(error) === "CONFIG_TARGET_SCAN_MANIFEST_SET_EMPTY",
+  );
+});
+
 test("Manifest 必须逐 workbook/sheet/hash 恰好覆盖目录声明的闭集", () => {
   const fixture = buildGovernanceFixture();
   const prior = fixture.governance.scanManifests[0]!;

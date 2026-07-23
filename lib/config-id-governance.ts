@@ -801,6 +801,12 @@ function policyManifests(
   if (!catalog) {
     throw new ConfigIdGovernanceError("CONFIG_TARGET_CATALOG_UNPUBLISHED", "ConfigTargetCatalogVersion 未发布。");
   }
+  if (!policy.manifestIds.length) {
+    throw new ConfigIdGovernanceError(
+      "CONFIG_TARGET_SCAN_MANIFEST_SET_EMPTY",
+      "正式 ConfigIdPolicyVersion 必须引用非空的获批 Manifest 集合。",
+    );
+  }
   const manifests = policy.manifestIds.map((manifestId) => {
     const manifest = governance.scanManifests.find((entry) => entry.manifestId === manifestId);
     if (!manifest || manifest.state !== "APPROVED") {
@@ -814,6 +820,12 @@ function policyManifests(
   uniqueBy(manifests, (manifest) => manifest.manifestId, "CONFIG_TARGET_SCAN_MANIFEST_DUPLICATE");
   const requiredIds = catalog.entries.filter((entry) => entry.requiredForFormal)
     .map((entry) => entry.targetEntryId).sort(compareText);
+  if (!requiredIds.length) {
+    throw new ConfigIdGovernanceError(
+      "CONFIG_TARGET_CATALOG_FORMAL_TARGETS_EMPTY",
+      "正式 ConfigIdPolicyVersion 的目录必须声明至少一个必需目标。",
+    );
+  }
   const coveredIds = manifests.filter((manifest) => requiredIds.includes(manifest.targetEntryId))
     .map((manifest) => manifest.targetEntryId).sort(compareText);
   if (stableStringify(requiredIds) !== stableStringify(coveredIds)) {

@@ -44,6 +44,7 @@ function sourceRevisionWithAffixGrid(rowCount = 86) {
     pulledBy: "tester", syncScope: "workbook" as const, registryHash: "hash",
     sheets: observedSheets.map((sheet) => sheet.sheetId === "zrVOxd"
       ? { ...sheet, rowCount, columnCount: 6 }
+      : sheet.sheetId === "d6e928" ? { ...sheet, rowCount: 66, columnCount: 60 }
       : sheet),
     issues: [], state: "PULLED" as const,
   };
@@ -59,9 +60,11 @@ test("04_词条的身份与别名读取共同跟随同 revision grid 上界，�
   assert.equal(requests.find((entry) => entry.sheetId === "zrVOxd" && entry.range === "B1:C86")?.range, "B1:C86");
   assert.equal(requests.find((entry) => entry.sheetId === "zrVOxd" && entry.range === "B2:F86")?.range, "B2:F86");
   assert.equal(requests.find((entry) => entry.sheetId === "fATowU" && entry.range === "B2:AD20")?.range, "B2:AD20");
-  for (const range of Object.values(CANONICAL_RULE_RANGES)) {
+  for (const range of Object.values(CANONICAL_RULE_RANGES).filter((range) => range.sheetId !== "d6e928")) {
     assert.equal(requests.find((entry) => entry.sheetId === range.sheetId && entry.range === range.range)?.range, range.range);
   }
+  assert.equal(requests.find((entry) => entry.sheetId === "d6e928" && entry.range === "BG1:BH66")?.range, "BG1:BH66");
+  assert.equal(requests.find((entry) => entry.sheetId === "d6e928" && entry.range === "A1:BH66")?.range, "A1:BH66");
   const identities = identityRowsFromRanges([{
     sheetId: "zrVOxd", range: "B1:C86", valueRange: { values: [["机器ID（勿改）", "实体类型"], ...Array.from({ length: 84 }, () => []), ["affix_rod_high", "RodAffix"]] },
   }]);

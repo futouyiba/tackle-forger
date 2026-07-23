@@ -148,7 +148,7 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
       props.onWorkspaceApplied(
         payload.state,
         payload.revision,
-        `已拉取飞书 revision ${payload.inspection?.sourceRevision.sourceRevision ?? ""}：${rules?.templates.length ?? 0} 个重量模板、${rules?.itemTypeProfiles.length ?? 0} 个类型、${rules?.functionProfiles.length ?? 0} 个功能；工作台已切换到该版本。`,
+        `已拉取飞书 revision ${payload.inspection?.sourceRevision.sourceRevision ?? ""}：已生成 ${rules?.templates.length ?? 0} 个重量模板草稿、${rules?.itemTypeProfiles.length ?? 0} 个类型、${rules?.functionProfiles.length ?? 0} 个功能；重量模板将在正式发布时激活。`,
       );
     } catch (caught) {
       props.notify(caught instanceof Error ? caught.message : "显式拉取失败");
@@ -264,7 +264,7 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
         <div className="card">
           <span className="rule-step">02 · 显式动作</span>
           <strong>拉取并切换工作台数据</strong>
-          <small>重量模板、类型、功能和规则层立即显示并用于工作台计算；正式 RuleSet 仍需独立发布。</small>
+          <small>生成 FeishuSourceRevision、规则草稿与重量模板草稿；不激活重量模板或发布规则。</small>
           <button
             className="button button-primary button-sm"
             type="button"
@@ -280,7 +280,7 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
         <div className="card">
           <span className="rule-step">03 · 独立动作</span>
           <strong>创建 RuleSet 草稿</strong>
-          <small>冻结本次拉取的内容哈希供审查；工作台预览已使用拉取内容，正式生产仍未发布。</small>
+          <small>冻结本次拉取的内容哈希与重量模板草稿供审查；正式生产仍未发布。</small>
           <button
             className="button button-default button-sm"
             type="button"

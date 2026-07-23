@@ -77,6 +77,22 @@ export interface WeightTemplate {
   fishWeightLevel?: number | string;
 }
 
+/** Frozen, source-traceable 01_重量模板 import. It is recorded on pull and only
+ * becomes the active template collection through explicit RuleSet publish. */
+export interface WeightTemplatePolicyDraft {
+  id: string;
+  sourceRevisionId: string;
+  sourceRevision: string;
+  sheetId: "d6e928";
+  templates: Array<WeightTemplate & {
+    source: { sheetId: "d6e928"; rowKey: string; cells: Record<string, string> };
+  }>;
+  issues: Array<{ code: string; severity: "WARNING" | "ERROR"; message: string; sourceCell?: { sheetId: "d6e928"; cell: string } }>;
+  formalStatus: "NON_FORMAL" | "READY_TO_PUBLISH";
+  inputHash: string;
+  importedAt: string;
+}
+
 export type ReductionStackingMode =
   | "linear_subtraction"
   | "diminishing_division";
@@ -123,6 +139,7 @@ export interface RuleSetVersion {
   sourceRevisionIds: string[];
   canonicalRuleSourceDraftId?: string;
   sourceContentHash?: string;
+  weightTemplateDraftId?: string;
   createdAt: string;
   publishedAt?: string;
   publishedBy?: string;
@@ -2489,6 +2506,7 @@ export interface WorkspaceState {
   feishuWorkbooks: FeishuWorkbookRef[];
   feishuSourceRevisions: FeishuSourceRevision[];
   canonicalRuleSourceDrafts: CanonicalRuleSourceDraft[];
+  weightTemplatePolicyDrafts: WeightTemplatePolicyDraft[];
   sourceIdentityMigrationReports: SourceIdentityMigrationReport[];
   qualityValuePolicyDrafts: QualityValuePolicyDraft[];
   pricingPolicyDrafts: PricingPolicyDraft[];

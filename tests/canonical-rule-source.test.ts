@@ -248,15 +248,16 @@ test("schema v15 顺序迁移保留历史状态并补 canonical 草稿集合", (
   const v15 = { ...structuredClone(current), schemaVersion: 15 } as unknown as Record<string, unknown>;
   delete v15.canonicalRuleSourceDrafts;
   const migrated = migrateWorkspaceState(v15);
-  assert.equal(migrated.schemaVersion, 18);
+  assert.equal(migrated.schemaVersion, 19);
   assert.deepEqual(migrated.canonicalRuleSourceDrafts, []);
+  assert.deepEqual(migrated.weightTemplatePolicyDrafts, []);
   assert.deepEqual(migrated.configurationSnapshots, current.configurationSnapshots);
 });
 
-test("稳定身份只读取精确 B:C 区间，不被同表 canonical A1 全表覆盖", () => {
+test("重量模板稳定身份只读取精确 BG:BH 区间，不被同表完整值区覆盖", () => {
   const rows = identityRowsFromRanges([
-    { sheetId: "d6e928", range: "B1:C54", valueRange: { values: [["机器ID", "同步状态"], ["wtpl_0001", "BOUND"]] } },
-    { sheetId: "d6e928", range: "A1:BJ66", valueRange: { values: [["展示名", "机器ID"], ["路亚", "wtpl_0001"]] } },
+    { sheetId: "d6e928", range: "BG1:BH66", valueRange: { values: [["机器ID", "同步状态"], ["wtpl_0001", "BOUND"]] } },
+    { sheetId: "d6e928", range: "A1:BH66", valueRange: { values: [["展示名", "机器ID"], ["路亚", "wtpl_0001"]] } },
   ]);
   assert.equal(rows.length, 1);
   assert.equal(rows[0]?.stableId, "wtpl_0001");

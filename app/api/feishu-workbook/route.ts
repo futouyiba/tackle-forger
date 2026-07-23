@@ -21,6 +21,7 @@ import {
   createRuleSetDraftFromPull,
   publishRuleSetVersion,
   recordFeishuSourceRevision,
+  recordWeightTemplatePolicyDraft,
   recordPricingPolicyDraft,
   recordQualityValuePolicyDraft,
   recordSourceIdentityMigrationReport,
@@ -129,7 +130,8 @@ async function executeWorkbookBusinessRequest(request: NextRequest) {
         );
       }
       let next = recordFeishuSourceRevision(current.state, inspection.sourceRevision);
-      next = applyCanonicalRuleSourceDraft(next, inspection.canonicalRuleDraft);
+      next = applyCanonicalRuleSourceDraft(next, inspection.canonicalRuleDraft, { activateTemplates: false });
+      next = recordWeightTemplatePolicyDraft(next, inspection.weightTemplateDraft);
       next = recordSourceIdentityMigrationReport(next, inspection.identityReport);
       next = recordQualityValuePolicyDraft(next, inspection.qualityDraft);
       next = recordPricingPolicyDraft(next, inspection.pricingDraft);

@@ -7,8 +7,10 @@ import type {
   CanonicalRuleSourceDraft,
   ReductionStackingPolicyVersion,
   RuleSetVersion,
+  WeightTemplatePolicyDraft,
   WorkspaceState,
 } from "./types";
+import { assertCanonicalWeightTemplatePolicyDraft } from "./rule-workbook-inspection";
 import {
   importReductionStackingPolicyDraft,
   publishReductionStackingPolicyVersion,
@@ -100,6 +102,7 @@ function assertLegacyReferencesCanBePreserved(state: WorkspaceState, draft: Cano
 export function applyCanonicalRuleSourceDraft(
   state: WorkspaceState,
   draft: CanonicalRuleSourceDraft,
+  options: { activateTemplates?: boolean } = {},
 ): WorkspaceState {
   if (!state.feishuSourceRevisions.some((revision) => revision.id === draft.sourceRevisionId)) {
     throw new Error("CanonicalRuleSourceDraft 引用的 FeishuSourceRevision 尚未登记。");
@@ -111,7 +114,7 @@ export function applyCanonicalRuleSourceDraft(
   if (existing >= 0) next.canonicalRuleSourceDrafts[existing] = structuredClone(draft);
   else next.canonicalRuleSourceDrafts.unshift(structuredClone(draft));
   next.parameters = structuredClone(draft.parameters);
-  next.templates = structuredClone(draft.templates);
+  if (options.activateTemplates !== false) next.templates = structuredClone(draft.templates);
   next.methodProfiles = structuredClone(draft.methodProfiles);
   next.itemTypeProfiles = structuredClone(draft.itemTypeProfiles);
   next.functionProfiles = structuredClone(draft.functionProfiles);
@@ -122,6 +125,17 @@ export function applyCanonicalRuleSourceDraft(
     parameterKeys: draft.parameters.filter((parameter) => parameter.itemPartId === part.id).map((parameter) => parameter.key),
   }));
   next.importedAt = draft.importedAt;
+  return next;
+}
+
+export function recordWeightTemplatePolicyDraft(state: WorkspaceState, draft: WeightTemplatePolicyDraft): WorkspaceState {
+  assertCanonicalWeightTemplatePolicyDraft(draft);
+  if (!state.feishuSourceRevisions.some((revision) => revision.id === draft.sourceRevisionId)) throw new Error("WeightTemplatePolicyDraft 引用的 FeishuSourceRevision 尚未登记。");
+  const next = structuredClone(state);
+  const index = next.weightTemplatePolicyDrafts.findIndex((entry) => entry.id === draft.id);
+  if (index >= 0) {
+    if (deterministicHash(next.weightTemplatePolicyDrafts[index]) !== deterministicHash(draft)) throw new Error("同一重量模板草稿 ID 的冻结内容不一致，拒绝覆盖既有证据。");
+  } else next.weightTemplatePolicyDrafts.unshift(structuredClone(draft));
   return next;
 }
 
@@ -244,6 +258,7 @@ export function createRuleSetDraftFromPull(input: {
     sourceRevisionIds: [source.id],
     canonicalRuleSourceDraftId: canonicalDraft.id,
     sourceContentHash: canonicalDraft.contentHash,
+    weightTemplateDraftId: input.state.weightTemplatePolicyDrafts.find((draft) => draft.sourceRevisionId === source.id)?.id,
     settings: structuredClone(input.state.ruleSettings),
     createdAt: input.createdAt,
     publishedAt: undefined,
@@ -306,6 +321,11 @@ export function publishRuleSetVersion(input: {
   if (existing.sourceContentHash !== canonicalDraft.contentHash) {
     throw new Error("RuleSet 草稿引用的飞书规则内容哈希不一致，不能发布。");
   }
+  const templateDraft = existing.weightTemplateDraftId ? input.state.weightTemplatePolicyDrafts.find((draft) => draft.id === existing.weightTemplateDraftId) : undefined;
+  if (!existing.weightTemplateDraftId || !templateDraft) throw new Error("RuleSet 草稿缺少冻结的重量模板源证据；请重新显式拉取并创建草稿。");
+  assertCanonicalWeightTemplatePolicyDraft(templateDraft);
+  if (!existing.sourceRevisionIds.includes(templateDraft.sourceRevisionId) || !input.state.feishuSourceRevisions.some((source) => source.id === templateDraft.sourceRevisionId && source.sourceRevision === templateDraft.sourceRevision)) throw new Error("RuleSet 草稿引用的重量模板源证据与其 FeishuSourceRevision 不一致，不能发布。");
+  if (templateDraft.formalStatus !== "READY_TO_PUBLISH") throw new Error("重量模板源草稿存在阻断错误，不能发布。");
 
   const sources = existing.sourceRevisionIds.map((sourceRevisionId) => {
     const source = input.state.feishuSourceRevisions.find((item) => item.id === sourceRevisionId);
@@ -359,12 +379,17 @@ export function publishRuleSetVersion(input: {
     },
     canonicalRuleSourceDraftId: existing.canonicalRuleSourceDraftId,
     sourceContentHash: existing.sourceContentHash,
+    weightTemplateDraft: { id: templateDraft.id, sourceRevisionId: templateDraft.sourceRevisionId, sourceRevision: templateDraft.sourceRevision, inputHash: templateDraft.inputHash },
     warningAcknowledgements: normalizedAcknowledgements,
     publishedAt: input.publishedAt,
     publishedBy: input.publishedBy,
   });
 
   const next = structuredClone(input.state);
+  next.templates = templateDraft.templates.map(({ source, ...template }) => {
+    void source;
+    return template;
+  });
   next.ruleSetVersions = next.ruleSetVersions.map((item) => {
     if (item.id === existing.id) {
       return {

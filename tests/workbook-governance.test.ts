@@ -10,6 +10,7 @@ import {
   recordQualityValuePolicyDraft,
   recordReductionStackingPolicyDraft,
 } from "../lib/workbook-governance";
+import { weightTemplateDraftFromCanonicalRuleDraft } from "../lib/rule-workbook-inspection";
 import { CANONICAL_FEISHU_SHEET_REGISTRY } from "../lib/feishu-workbook";
 import { importReductionStackingPolicyDraft } from "../lib/reduction-stacking-policy";
 import type { QualityValuePolicyDraft } from "../lib/quality-value-policy";
@@ -28,17 +29,27 @@ function withCanonicalPullDraft(state: WorkspaceState, source: FeishuSourceRevis
     layers: state.layers,
   };
   const contentHash = deterministicHash(content);
+  const canonicalRuleDraft = {
+    id: `canonical-rule-draft:${source.id}`,
+    sourceRevisionId: source.id,
+    sourceRevision: source.sourceRevision,
+    contentHash,
+    importedAt: source.pulledAt,
+    ...content,
+    issues: [],
+  };
+  const templateDraft = weightTemplateDraftFromCanonicalRuleDraft({
+    sourceRevision: source,
+    canonicalRuleDraft: {
+      ...canonicalRuleDraft,
+      templates: [{ ...state.templates[0], id: "wtpl_fixture", sourceRow: 4 }],
+    },
+    importedAt: source.pulledAt,
+  });
   return {
     ...state,
-    canonicalRuleSourceDrafts: [{
-      id: `canonical-rule-draft:${source.id}`,
-      sourceRevisionId: source.id,
-      sourceRevision: source.sourceRevision,
-      contentHash,
-      importedAt: source.pulledAt,
-      ...content,
-      issues: [],
-    }],
+    canonicalRuleSourceDrafts: [canonicalRuleDraft],
+    weightTemplatePolicyDrafts: [templateDraft],
   };
 }
 

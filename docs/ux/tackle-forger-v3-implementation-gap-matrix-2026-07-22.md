@@ -9,6 +9,7 @@
 > OPEN-008合并后修正：2026-07-23，补充按物理Git ref去重的跨Git/ledger治理租约与fencing/CAS、统一ActionCode写动作、旧写别名完整payload重建及历史导入并发幂等目标契约；仍只记录规范目标，不冒充运行时实现。
 > OPEN-009对象可见性复核：2026-07-23 05:41:56 +0800，代码基线`origin/main@33cb47e4d923e6675f1a1bab8b2685266117bcaf`（提交时间2026-07-23 05:18:57 +0800）；确认运行时与测试仍执行对象级裁剪、隐藏计数和脱敏父链，本轮仅修正文档状态并由[Issue #31](https://github.com/futouyiba/tackle-forger/issues/31)跟踪实现迁移。
 > OPEN-003运行时复核：2026-07-23，代码基线`codex/open-003-deferred-parts@cdcbd7ce6bea60548f2224039861593c453ae028`；确认迁移层会保留四类扩展部位，创建Series页面仍渲染全部`state.itemParts`，服务端尚无独立启用策略门禁。本轮只记录实现事实，由[Issue #37](https://github.com/futouyiba/tackle-forger/issues/37)跟踪代码收口。
+> OPEN-001规范同步：2026-07-23，确认当前运行时仍保留`ReductionStackingMode`双模式、旧operation和非确定累加路径；本轮只同步已确认规范与外部规则源阻断，不冒充Issue #41的运行时实现或测试证据。
 > OPEN-005契约复核：2026-07-23 07:43:42 +0800，PR #30基线`52b8ab6fbfc84cde1e6530724a75aad23f6872d8`；当前代码仍使用`fishWeightGradeId`、`component_min_ratio`、`same_part_compare`、三种Series基准策略和旧`PUBLISHED`种子定义。本轮只同步正式目标契约并纠正实现状态，没有修改运行时代码或冒充新测试证据。
 > OPEN-007契约复核基线：`3cb6609c237c0c23d108bf305124e24f18980fa8`（2026-07-23 00:43:07 +0800）；本轮只修订文档，不把2026-07-23已决目标语义冒充为当前运行时能力。
 > 本轮完整验证时间：2026-07-23 01:57:07 +0800；在上述OPEN-007代码基线上运行`npm run typecheck`、`npm run lint`与`npm test`。
@@ -36,14 +37,14 @@
 | 个体 Patch 汇总、规则草稿与吸收 | 已实现 | Patch 确定性归组后由独立权限创建 RuleSourceChangeDraft；新 RuleSet 下以逐操作 Trace 评估完全/部分/未覆盖/Rebase，保存 assessment 并创建新 revision，不改旧 Snapshot | 草稿远端写回仍需已确认的通用规则页写入契约 |
 | 飞书 Patch 台账镜像 | 部分实现 | 已有领域契约、独立权限、幂等命令、部分失败和回读恢复状态；不会伪造 SYNCED | 主工作簿尚无已确认 Patch 台账 sheet_id/机器列，无法实施真实远端写入 |
 | 硬兼容与 Affinity | 已实现 | deny/require 与软分值分离；高 Affinity 不覆盖 deny；低分合法候选仍可生成 | 无 |
-| 属性词条、被动词条与 Technology | 已实现 | Technology 只展开成员；按 affixId 去重；被动参与价值分但不执行模拟器逻辑 | 无 |
+| 属性词条、被动词条与 Technology | 部分实现 | Technology只展开成员、按affixId去重、被动参与价值分但不执行模拟器逻辑；但运行时仍保留`ReductionStackingMode = linear_subtraction | diminishing_division`、旧`percent_bonus/flat_bonus/reduction`字段与未冻结累加顺序 | 按[Issue #41](https://github.com/futouyiba/tackle-forger/issues/41)迁移到`direction + 非负magnitude`规范DTO、唯一`bidirectional_ratio`、完整operation顺序、binary64确定性模型、冲突隔离、Trace/hash和历史Snapshot兼容；在主工作簿规则与策略版本发布前只允许非正式预览 |
 | 品质评分 | 部分实现 | 人工选择品质、组合矩阵、Technology/Affix去重、功能系数与source=quality Trace已存在 | 2026-07-23新契约要求S包含100、>100阻断并彻底移除Performance乘数/Trace；当前内核仍有`performanceScoringEnabled/performanceScoreFactor`与旧边界冲突逻辑 |
 | 性能定位摘要 | 缺失 | 当前Series、候选、规则内核、Affinity和UI仍把PerformanceProfile/performanceId作为显式输入或贡献 | 迁移为结算后只读PerformanceSummary；历史字段只读保留，不再参与搜索、计分、兼容、Affinity或定价 |
 | 自动定价与 NON_FORMAL | 部分实现 | 07/08 同 revision 导入、Lerp、结构源重量段、维修/购买Raw公式、Trace和旧策略发布阻断已存在 | 尚未实现维修/购买分别最终舍入、购买使用未舍入维修价、舍入后购买最低价，以及超300M的fingerprint WARNING确认；当前`error/clamp`不能代表新契约 |
 | 手填价格兜底 | 因 v3 冲突而不采纳 | 正式价格只能来自已发布 PricingPolicyVersion | 不提供绕过动作 |
 | 五维图及双模式比较 | 部分实现 | 已有版本化ViewDefinition/VertexSet、基础逐点计算、缺失值不归零和Snapshot冻结骨架；但运行时仍是鱼重等级、`component_min_ratio`汇总、仅同部位比较、旧五轴/三种Series基准，且旧种子定义标记为`PUBLISHED`并可进入现有发布检查 | 迁移到按`modelFinalPullKg`选择W段、竿轮线逐件且无汇总线、混合部位2–5件、仅`projection_reference`唯一选择器、`five-axis-hash-input/v1`固定向量和`FORMAL_CURRENT`发布门禁；旧定义/Snapshot只读保留且hash不变。定义发布、运行时迁移、UI与自动化验收仍由Issue #13后续独立交付 |
-| AI 建议壳与草稿边界 | 已实现 | AI 默认关闭；仅草稿；不能写飞书、发布或改变裁决；证据、过期和权限契约已有测试 | OPEN-006 未确认前不得连接外部模型 |
-| AI 真实供应方 | 部分实现 | UI 明确禁用并解释原因 | 等待用户确认供应方、模型、字段白名单和数据出网策略 |
+| AI 建议壳与草稿边界 | 已实现 | AI 默认关闭；仅草稿；不能写飞书、发布或改变裁决；证据、过期和权限契约已有测试 | 产品策略已由OPEN-006确认；真实连接器在Issue #25完成、测试并启用前保持禁用 |
+| AI 真实供应方 | 部分实现 | OPEN-006已确认Fancy Hub、动态模型修订、`ai-request/v1`字段白名单和数据出网策略；UI当前明确禁用并解释原因 | 按[Issue #25](https://github.com/futouyiba/tackle-forger/issues/25)实现连接器、契约测试、密钥扫描、失败降级、保留清理和启用准入；完成前不得发送真实数据 |
 | ValidationIssue 与 ActionLink | 部分实现 | EntityRef、ActionAvailability、部分命令契约和页面问题展示已存在；品质模块已有BLOCKER概念 | 主领域仍使用`level=error/warning/info`，命令层另有小写severity+blocking，查询层又消费四档Severity；尚未统一v3的Severity/Gate/State、BLOCKER和版本化waiver，也未把warning确认、waiver、重算、Rebase、规则草稿等全部写动作收口到统一ActionCode/不可篡改payload；旧状态写别名必须完整重建可信payload或以`LEGACY_ACTION_ALIAS_UNRESOLVABLE`拒绝，纯路由`open_rebase`不得与`rebase_patch`混用 |
 | 内网飞书登录 | 已实现 | OAuth state、会话持久化、过期、防重放、可信代理和 API 401 测试 | 部署环境需配置 HTTPS 回调或明确私网 HTTP |
 | 本地 configs 多环境/多渠道三表交付 | 部分实现 | 既有代码已有config.toml、映射版本、预览、关系校验、备份、幂等、冲突恢复、GoodsBasic+StoreBuy | v3已把一期收紧为不可提交`NON_FORMAL`预览，正式预留/人工搬运包/worktree写入移到1.5期；尚未实现稳定rangeId ledger、Model revision锁、权威目标目录/获批Manifest、按物理Git ref去重并校验别名OID的跨Git/ledger治理租约与受保护CAS、历史导入并发幂等及dev/test/online/release正式流程，现有执行器不能作为已满足新契约的证据 |
@@ -67,13 +68,14 @@
 
 ## 3. 当前外部阻断
 
-1. OPEN-010：飞书主工作簿尚未提供已确认的Patch台账工作表sheet_id、机器列布局和协作字段权限，因此真实镜像写入/拉取不可启用。
-2. Vercel评审项目当前只配置`BLOB_READ_WRITE_TOKEN`，缺少`FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_TENANT_KEY`、`FEISHU_REDIRECT_URI`和`FEISHU_SESSION_SECRET`；首页HTTP 200，但会话端点返回503/`AUTH-CONFIG-001`，需部署方提供公司应用凭据并在飞书开放平台登记回调。
-3. OPEN-007产品语义已于2026-07-23确定；当前阻断是飞书机器源仍需修订，且运行时尚未实现S=100、无Performance乘数、双输出舍入、购买最低价和超300M WARNING确认。完成前不得把旧Draft发布为符合新契约的PricingPolicyVersion。
-4. OPEN-006 尚未确认 AI 供应方、模型和数据出网策略，因此真实 AI 连接器必须继续禁用。
-5. OPEN-008的数字区间、派生关系、命名、永不复用和权限语义已经确认；但尚未发布权威`ConfigTargetCatalogVersion`、覆盖全部必需目标的获批且新鲜`ConfigTargetScanManifest`、可校验`ConfigIdPolicyVersion`及reservation ledger，也未实现Model revision锁、按物理Git ref去重并验证别名OID的跨Git/ledger治理租约与受保护ref CAS、历史导入并发幂等、统一ActionCode payload收口和旧写别名完整重建/拒绝，因此仍不能正式预留ID、导入永久占用或提交配置。
-6. 真实 configs Git 目标需由配置治理方发布环境/渠道权威目录并完成authoritative ref、commit、`config.toml`和workbook hash扫描复核；用户本机目录绑定和旧Profile不能替代该门禁，未完成时只能`NON_FORMAL`预览。
-7. OPEN-011：归档包、恢复入口、归档保留期、RTO/RPO、共享访问、维护窗口、删除授权和自动裁剪启用标准尚未形成已发布策略版本及验证证据；SQLite/D1必须继续全量保留，人工与自动裁剪均保持关闭。
+1. OPEN-001：`FG数值设计v3-总表/oJO4Gi` revision `17173`只作决策证据；唯一权威主工作簿revision `3259`的`04_词条/zrVOxd`尚无稳定`ruleId + parameterKey`机器规则。完成迁入、回读、显式拉取和策略/RuleSet发布前，运行时只能非正式预览，Model/Snapshot发布与正式导出必须阻断。
+2. OPEN-010：飞书主工作簿尚未提供已确认的Patch台账工作表sheet_id、机器列布局和协作字段权限，因此真实镜像写入/拉取不可启用。
+3. Vercel评审项目当前只配置`BLOB_READ_WRITE_TOKEN`，缺少`FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_TENANT_KEY`、`FEISHU_REDIRECT_URI`和`FEISHU_SESSION_SECRET`；首页HTTP 200，但会话端点返回503/`AUTH-CONFIG-001`，需部署方提供公司应用凭据并在飞书开放平台登记回调。
+4. OPEN-007产品语义已于2026-07-23确定；当前阻断是飞书机器源仍需修订，且运行时尚未实现S=100、无Performance乘数、双输出舍入、购买最低价和超300M WARNING确认。完成前不得把旧Draft发布为符合新契约的PricingPolicyVersion。
+5. OPEN-006产品策略已经确认；真实AI连接器仍须由[Issue #25](https://github.com/futouyiba/tackle-forger/issues/25)完成实现、测试和显式启用，在此之前保持禁用且不得发送真实数据。
+6. OPEN-008的数字区间、派生关系、命名、永不复用和权限语义已经确认；但尚未发布权威`ConfigTargetCatalogVersion`、覆盖全部必需目标的获批且新鲜`ConfigTargetScanManifest`、可校验`ConfigIdPolicyVersion`及reservation ledger，也未实现Model revision锁、按物理Git ref去重并验证别名OID的跨Git/ledger治理租约与受保护ref CAS、历史导入并发幂等、统一ActionCode payload收口和旧写别名完整重建/拒绝，因此仍不能正式预留ID、导入永久占用或提交配置。
+7. 真实 configs Git 目标需由配置治理方发布环境/渠道权威目录并完成authoritative ref、commit、`config.toml`和workbook hash扫描复核；用户本机目录绑定和旧Profile不能替代该门禁，未完成时只能`NON_FORMAL`预览。
+8. OPEN-011：归档包、恢复入口、归档保留期、RTO/RPO、共享访问、维护窗口、删除授权和自动裁剪启用标准尚未形成已发布策略版本及验证证据；SQLite/D1必须继续全量保留，人工与自动裁剪均保持关闭。
 
 ## 4. 当前验证证据
 

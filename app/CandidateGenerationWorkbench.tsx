@@ -14,6 +14,7 @@ import type {
   SeriesDefinition,
   WorkspaceState,
 } from "@/lib/types";
+import { candidateGenerationEligibleSkus } from "@/lib/enabled-item-parts";
 import "./candidate-generation.css";
 
 interface Props {
@@ -39,15 +40,19 @@ function blankVariant(index: number): ModelVariantInput {
 }
 
 export function CandidateGenerationWorkbench({ state, series, initialSkuId, actionAvailabilities, actor, mutate, notify, onClose }: Props) {
-  const seriesSkus = useMemo(() => state.skuDrawers.filter((sku) => sku.seriesId === series.id)
-    .sort((left, right) => left.targetPullKg - right.targetPullKg), [series.id, state.skuDrawers]);
+  const seriesSkus = useMemo(
+    () => candidateGenerationEligibleSkus(series, state.skuDrawers),
+    [series, state.skuDrawers],
+  );
   const matchingRecipes = state.candidateSearchRecipes.filter((recipe) =>
     recipe.methodIds.includes(series.fishingMethodId)
     && recipe.typeIds.includes(series.typeId)
     && recipe.functionIds.includes(series.coreFunctionId)
     && recipe.qualityIds.includes(series.qualityId));
   const [recipeId, setRecipeId] = useState(matchingRecipes[0]?.id ?? "");
-  const [skuIds, setSkuIds] = useState<string[]>(initialSkuId ? [initialSkuId] : seriesSkus.map((sku) => sku.id));
+  const [skuIds, setSkuIds] = useState<string[]>(() => initialSkuId && seriesSkus.some((sku) => sku.id === initialSkuId)
+    ? [initialSkuId]
+    : seriesSkus.map((sku) => sku.id));
   const [variants, setVariants] = useState<ModelVariantInput[]>([blankVariant(0)]);
   const [perSkuLimit, setPerSkuLimit] = useState(8);
   const [minimumAffinity, setMinimumAffinity] = useState("");

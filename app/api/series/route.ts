@@ -27,6 +27,11 @@ import {
   OPEN_003_FAIL_CLOSED_POLICY,
   isProductItemPartEnabled,
 } from "@/lib/enabled-item-parts";
+import { ActionCommandPayloadError } from "@/lib/action-command-payloads";
+import {
+  executeProductionWorkspaceCommand,
+  WorkspaceCommandTransientHttpError,
+} from "@/lib/production-action-commands";
 
 export const dynamic = "force-dynamic";
 
@@ -54,7 +59,7 @@ interface SeriesCreateRequest {
  * 写入由服务端重新鉴权（create_series → series.edit），并在服务端完成结构标杆匹配、
  * 拉力规划与 SKU 物化后按 revision 受保护地提交，避免客户端绕过 series.edit 直接写整包。
  */
-export async function POST(request: NextRequest) {
+async function executeSeriesBusinessRequest(request: NextRequest) {
   const user = await requestUser(request);
   if (!user.authenticated) {
     return NextResponse.json(
@@ -406,4 +411,73 @@ export async function POST(request: NextRequest) {
     revision: result.revision,
     user,
   });
+}
+
+function commandErrorStatus(error: ActionCommandPayloadError): number {
+  if (error.code === "ACTION_COMMAND_PAYLOAD_NOT_FOUND") return 404;
+  if (error.code === "ACTION_COMMAND_CAPABILITY_CHANGED") return 403;
+  if (
+    error.code === "ACTION_COMMAND_REVISION_CONFLICT"
+    || error.code === "ACTION_COMMAND_INPUT_HASH_MISMATCH"
+    || error.code === "STALE_FENCING_TOKEN"
+    || error.code === "IDEMPOTENCY_KEY_REUSED"
+  ) return 409;
+  return 422;
+}
+
+export async function POST(request: NextRequest) {
+  const user = await requestUser(request);
+  if (!user.authenticated) {
+    return NextResponse.json(
+      { error: "请使用公司飞书账号登录。", action: "feishu_login" },
+      { status: 401 },
+    );
+  }
+  const invocation = await request.json().catch(() => null);
+  const current = await loadWorkspaceState();
+  try {
+    const execution = await executeProductionWorkspaceCommand({
+      expectedAction: "create_series",
+      invocation,
+      user,
+      current,
+      execute: async (storedPayload) => {
+        const businessRequest = new NextRequest(request.url, {
+          method: "POST",
+          headers: request.headers,
+          body: JSON.stringify(storedPayload),
+        });
+        const response = await executeSeriesBusinessRequest(businessRequest);
+        const responseBody = await response.json() as Record<string, unknown>;
+        const durableBody = { ...responseBody };
+        delete durableBody.user;
+        return {
+          status: response.status,
+          body: durableBody,
+        };
+      },
+    });
+    return NextResponse.json(
+      {
+        ...(execution.result.body as Record<string, unknown>),
+        user,
+        replayed: execution.replayed,
+      },
+      { status: execution.result.status },
+    );
+  } catch (error) {
+    if (error instanceof WorkspaceCommandTransientHttpError) {
+      return NextResponse.json(
+        error.result.body,
+        { status: error.result.status },
+      );
+    }
+    if (error instanceof ActionCommandPayloadError) {
+      return NextResponse.json(
+        { error: error.message, code: error.code },
+        { status: commandErrorStatus(error) },
+      );
+    }
+    throw error;
+  }
 }

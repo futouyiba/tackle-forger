@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { ActionAvailabilityMap } from "@/lib/interaction-contracts";
+import { issueClientActionCommand } from "@/lib/client-action-command";
 import type { CanonicalRuleWorkbookInspection } from "@/lib/rule-workbook-inspection";
 import type { WorkspaceState } from "@/lib/types";
 import {
@@ -114,14 +115,22 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
     if (!inspection) return;
     setAction("pull");
     try {
+      const businessPayload = {
+        action: "pull",
+        baseRevision: props.revision,
+        expectedSourceRevision: inspection.sourceRevision.sourceRevision,
+      };
+      const invocation = await issueClientActionCommand({
+        action: "pull_feishu_workbook",
+        idempotencyKey:
+          `pull-feishu-workbook:${props.revision}:` +
+          inspection.sourceRevision.sourceRevision,
+        payload: businessPayload,
+      });
       const response = await fetch("/api/feishu-workbook", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          action: "pull",
-          baseRevision: props.revision,
-          expectedSourceRevision: inspection.sourceRevision.sourceRevision,
-        }),
+        body: JSON.stringify(invocation),
       });
       const payload = (await response.json()) as {
         state?: WorkspaceState;
@@ -146,14 +155,21 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
     if (!savedSource) return;
     setAction("draft");
     try {
+      const businessPayload = {
+        action: "create_ruleset_draft",
+        baseRevision: props.revision,
+        sourceRevisionId: savedSource.id,
+      };
+      const invocation = await issueClientActionCommand({
+        action: "create_ruleset_draft",
+        idempotencyKey:
+          `create-ruleset-draft:${props.revision}:${savedSource.id}`,
+        payload: businessPayload,
+      });
       const response = await fetch("/api/feishu-workbook", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          action: "create_ruleset_draft",
-          baseRevision: props.revision,
-          sourceRevisionId: savedSource.id,
-        }),
+        body: JSON.stringify(invocation),
       });
       const payload = (await response.json()) as { state?: WorkspaceState; revision?: number; error?: string };
       if (!response.ok || !payload.state || !payload.revision) throw new Error(payload.error || "创建规则草稿失败");
@@ -173,18 +189,26 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
     }
     setAction("publish");
     try {
+      const businessPayload = {
+        action: "publish_ruleset",
+        baseRevision: props.revision,
+        ruleSetDraftId: ruleSetDraft.id,
+        warningAcknowledgements: sourceWarnings.map((issue) => ({
+          issueKey: `${issue.code}:${issue.sheetId}`,
+          reason: warningReason.trim(),
+        })),
+      };
+      const invocation = await issueClientActionCommand({
+        action: "publish_ruleset",
+        idempotencyKey:
+          `publish-ruleset:${props.revision}:${ruleSetDraft.id}:` +
+          crypto.randomUUID(),
+        payload: businessPayload,
+      });
       const response = await fetch("/api/feishu-workbook", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          action: "publish_ruleset",
-          baseRevision: props.revision,
-          ruleSetDraftId: ruleSetDraft.id,
-          warningAcknowledgements: sourceWarnings.map((issue) => ({
-            issueKey: `${issue.code}:${issue.sheetId}`,
-            reason: warningReason.trim(),
-          })),
-        }),
+        body: JSON.stringify(invocation),
       });
       const payload = (await response.json()) as { state?: WorkspaceState; revision?: number; error?: string };
       if (!response.ok || !payload.state || !payload.revision) throw new Error(payload.error || "发布 RuleSetVersion 失败");

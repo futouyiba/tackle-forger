@@ -81,10 +81,16 @@ export type ProjectionLayer =
   | "model_patch"
   | "attribute_affix"
   | "final_review_patch"
+  | "parameter_definition"
   | "validation";
 
 export interface WorkspaceRuleSettings {
-  reductionStackingMode: ReductionStackingMode;
+  /**
+   * @deprecated 仅用于重放旧 RuleSet/Snapshot。新运行时固定使用
+   * ReductionStackingPolicyVersion，不得再把该字段作为公式选择器。
+   */
+  reductionStackingMode?: ReductionStackingMode;
+  reductionStackingPolicyVersion?: string;
   /**
    * @deprecated OPEN-004 已决定不使用独立偏移阈值。仅用于读取旧工作区；
    * v16 迁移会把非空值隔离到迁移复核记录并清空，运行时不得消费。
@@ -107,6 +113,72 @@ export interface RuleSetVersion {
   warningAcknowledgements?: Array<{ issueKey: string; reason: string }>;
   publicationHash?: string;
   notes: string;
+}
+
+export type AffixNumericDirection = "increase" | "decrease";
+export type CanonicalAffixOperationKind =
+  | "percent_adjust"
+  | "flat_adjust"
+  | "clamp_add"
+  | "enum_add"
+  | "set";
+
+export interface CanonicalAttributeOperation {
+  operationId: string;
+  operationIndex: number;
+  sourceAffixId: string;
+  sourceAffixRevision: string;
+  parameterKey: string;
+  operation: CanonicalAffixOperationKind;
+  direction?: AffixNumericDirection;
+  magnitude?: number;
+  publishedMagnitudeRange?: {
+    min: number;
+    max: number;
+    ruleSetVersion: string;
+  };
+  rawLexical?: string;
+  clampMin?: number;
+  clampMax?: number;
+  value?: number | string | boolean;
+  migrationEvidence?: {
+    sourceShape: "canonical" | "legacy_named" | "legacy_signed";
+    originalOperation?: string;
+    originalValue?: number;
+    negativeZero?: boolean;
+  };
+}
+
+export interface ReductionStackingPolicySource {
+  workbookRefId: "feishu-workbook:tackle-design";
+  sheetId: "zrVOxd";
+  sourceRevisionId: string;
+  sourceRevision: string;
+  ruleId: string;
+  parameterKey: string;
+}
+
+export interface ReductionStackingPolicyVersion {
+  id: string;
+  version: string;
+  status: "draft" | "published" | "superseded";
+  strategy: "bidirectional_ratio";
+  numericContract: "ieee754-binary64-v1";
+  operationOrder: [
+    "set",
+    "percent_adjust",
+    "flat_adjust",
+    "clamp_add",
+    "final_review_patch",
+    "parameter_definition",
+  ];
+  source?: ReductionStackingPolicySource;
+  issues: ValidationIssue[];
+  contentHash: string;
+  inputHash: string;
+  createdAt: string;
+  publishedAt?: string;
+  publishedBy?: string;
 }
 
 export interface ItemPartDefinition {
@@ -178,7 +250,10 @@ export interface QualityProfile {
 export type AttributeContributionOperation =
   | "percent_bonus"
   | "flat_bonus"
-  | "reduction";
+  | "reduction"
+  | "reduction_diminishing"
+  | "flat_reduction"
+  | CanonicalAffixOperationKind;
 
 export interface AttributeContribution {
   id: string;
@@ -187,6 +262,16 @@ export interface AttributeContribution {
   parameterKey: string;
   operation: AttributeContributionOperation;
   value: number;
+  sourceAffixRevision?: string;
+  operationIndex?: number;
+  operationId?: string;
+  direction?: AffixNumericDirection;
+  magnitude?: number;
+  publishedMagnitudeRange?: CanonicalAttributeOperation["publishedMagnitudeRange"];
+  rawLexical?: string;
+  clampMin?: number;
+  clampMax?: number;
+  setValue?: number | string | boolean;
 }
 
 export type ProjectionPatchOperation =
@@ -547,6 +632,14 @@ export interface ProjectionTraceContribution {
   before: number | string | null;
   operand: number | string;
   after: number | string | null;
+  numericEvidence?: {
+    stage: string;
+    rawLexical?: string;
+    operandBinary64?: string;
+    beforeBinary64?: string;
+    afterBinary64?: string;
+    anomaly: "none" | "no_effect" | "overflow" | "underflow_to_zero" | "invalid";
+  };
 }
 
 export interface ProjectionTraceStep {
@@ -562,6 +655,10 @@ export interface ProjectionWarning {
   layer: ProjectionLayer;
   parameterKey?: string;
   sourceId?: string;
+  severity?: "INFO" | "WARNING" | "ERROR" | "BLOCKER";
+  gate?: "NONE" | "REVIEW" | "PUBLISH" | "EXPORT";
+  fingerprint?: string;
+  evidence?: Record<string, unknown>;
 }
 
 export interface DerivedProjection {
@@ -574,10 +671,15 @@ export interface DerivedProjection {
   performanceId?: string;
   qualityId?: string;
   ruleSetVersion: string;
-  reductionStackingMode: ReductionStackingMode;
+  /** 旧投影重放字段；新投影不得消费它来选择公式。 */
+  reductionStackingMode?: ReductionStackingMode;
+  reductionStackingPolicyVersion?: string;
+  formalStatus?: "FORMAL" | "NON_FORMAL";
   /** 仅包含 WeightTemplate × Method × Type × FunctionProfile 基础层，早于 functionIntensity 与商品层。 */
   structuralValues?: Record<string, number | string>;
   values: Record<string, number | string>;
+  /** OPEN-001 新投影冻结从 AffixOutput 到最终 ParameterDefinition 的完整证据链。 */
+  affixRuntimeEvidence?: AffixRuntimeEvidence;
   trace: ProjectionTraceStep[];
   warnings: ProjectionWarning[];
   sourceHash: string;
@@ -1283,15 +1385,25 @@ export type AffixRarity =
   | "ultra_rare"
   | "epic";
 
-export interface AttributeAffixEffect {
+export interface LegacyAttributeAffixEffect {
   id: string;
   parameterKey: string;
   operation: AttributeContributionOperation;
   value: number;
+  publishedMagnitudeRange?: CanonicalAttributeOperation["publishedMagnitudeRange"];
   unit: string;
   stackingGroup: string;
   ruleSetVersion: string;
 }
+
+export type AttributeAffixEffect =
+  | LegacyAttributeAffixEffect
+  | (CanonicalAttributeOperation & {
+      id: string;
+      unit: string;
+      stackingGroup: string;
+      ruleSetVersion: string;
+    });
 
 export interface V3Affix {
   id: string;
@@ -1336,6 +1448,21 @@ export interface AffixQualityEvaluation {
   blockingIssues: string[];
 }
 
+export interface AffixRuntimeEvidence {
+  reductionStackingPolicyVersion?: string;
+  /** Affix/Technology 结算完成、FinalReviewPatch 之前的值。 */
+  values: Record<string, number | string>;
+  /** FinalReviewPatch 完成、ParameterDefinition 之前的值。 */
+  postReviewValues: Record<string, number | string>;
+  /** ParameterDefinition 完成后的正式最终值。 */
+  finalValues: Record<string, number | string>;
+  /** 按执行顺序包含 affix、FinalReviewPatch 与 ParameterDefinition 的同一条 Trace。 */
+  trace: ProjectionTraceContribution[];
+  issues: ValidationIssue[];
+  formalStatus: "FORMAL" | "NON_FORMAL";
+  traceHash: string;
+}
+
 export interface ConfigurationSnapshot {
   /** 历史 Snapshot 可缺失；新正式 Snapshot 必须提供。 */
   workspaceId?: string;
@@ -1347,7 +1474,10 @@ export interface ConfigurationSnapshot {
   seriesRevision: number;
   ruleSetVersion: string;
   projectionId: string;
-  reductionStackingMode: ReductionStackingMode;
+  /** 历史快照读取字段；不得作为新运行时公式选择器。 */
+  reductionStackingMode?: ReductionStackingMode;
+  /** 新正式快照必须冻结；历史快照可以缺失并继续查看/审计归档。 */
+  reductionStackingPolicyVersion?: string;
   patchSetHash: string;
   patchSetHashContractVersion?: string;
   patchReferences?: PatchSnapshotReference[];
@@ -1394,6 +1524,7 @@ export interface UpgradeCandidate {
   fromSnapshotId: string;
   proposedProjectionId: string;
   proposedRuleSetVersion: string;
+  proposedReductionStackingPolicyVersion?: string;
   proposedValues: Record<string, number | string>;
   differences: PatchRebaseDifference[];
   patchRebasePreview: PatchRebasePreview;
@@ -1780,7 +1911,8 @@ export interface CanonicalValidationIssue {
 export interface LegacyValidationIssue {
   level: "error" | "warning" | "info";
   severity?: ValidationIssueSeverity;
-  source?: ValidationIssueSource;
+  /** `affix` 仅是 #47 迁移前的旧来源；新记录必须使用 ValidationIssueSource。 */
+  source?: ValidationIssueSource | "affix";
   gate?: ValidationIssueGate;
   state?: ValidationIssueState;
   fingerprint?: string;
@@ -2307,6 +2439,7 @@ export interface WorkspaceState {
   qualityValuePolicyDrafts: QualityValuePolicyDraft[];
   pricingPolicyDrafts: PricingPolicyDraft[];
   pricingPolicyVersions: PricingPolicyVersion[];
+  reductionStackingPolicyVersions: ReductionStackingPolicyVersion[];
   fiveAxisViewDefinitions: FiveAxisViewDefinition[];
   fiveAxisVertexSets: FiveAxisVertexSet[];
   workspacePolicies: WorkspacePolicyRecord[];

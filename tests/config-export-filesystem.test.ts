@@ -9,8 +9,8 @@ import { deterministicHash } from "../lib/rule-kernel";
 import type { ConfigurationSnapshot } from "../lib/types";
 import type { ConfigExportMapping } from "../lib/config-export-mapping";
 import {
-  commitFilesystemExport,
-  previewFilesystemExport,
+  commitFilesystemExport as commitFilesystemExportWithPolicies,
+  previewFilesystemExport as previewFilesystemExportWithPolicies,
 } from "../lib/config-export-filesystem";
 import type { ExportTargetProfile } from "../lib/interaction-contracts";
 import type {
@@ -22,6 +22,25 @@ import {
   formalConfigExportContextHash,
 } from "../lib/config-export-stage";
 import { ConfigPreviewSnapshotError } from "../lib/config-preview-package";
+import { testReductionPolicy } from "./helpers/reduction-policy";
+
+const AVAILABLE_REDUCTION_POLICIES = [testReductionPolicy()];
+function previewFilesystemExport(
+  input: Omit<Parameters<typeof previewFilesystemExportWithPolicies>[0], "availableReductionPolicies">,
+) {
+  return previewFilesystemExportWithPolicies({
+    ...input,
+    availableReductionPolicies: AVAILABLE_REDUCTION_POLICIES,
+  });
+}
+function commitFilesystemExport(
+  input: Omit<Parameters<typeof commitFilesystemExportWithPolicies>[0], "availableReductionPolicies">,
+) {
+  return commitFilesystemExportWithPolicies({
+    ...input,
+    availableReductionPolicies: AVAILABLE_REDUCTION_POLICIES,
+  });
+}
 
 process.env.TACKLE_FORGER_PRODUCT_DELIVERY_STAGE = "PHASE_ONE_POINT_FIVE";
 process.env.TACKLE_FORGER_FORMAL_CONFIG_EXPORT_RUNTIME_ENABLED = "true";
@@ -52,6 +71,7 @@ const FORMAL_VERIFIER: FormalConfigExportEvidenceVerifier = {
 
 function replayableSnapshot(): ConfigurationSnapshot {
   const snapshot = structuredClone(createSeedState().configurationSnapshots[0]!);
+  snapshot.reductionStackingPolicyVersion = AVAILABLE_REDUCTION_POLICIES[0].version;
   snapshot.qualityValueAssessment = {
     formal: true,
   } as NonNullable<ConfigurationSnapshot["qualityValueAssessment"]>;

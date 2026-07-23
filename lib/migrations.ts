@@ -44,6 +44,7 @@ import {
   patchRevisionIdentityKey,
   type PatchLedgerMigrationContext,
 } from "./patch-ledger";
+import { canonicalizeAffixOperations } from "./reduction-stacking-policy";
 import {
   CANONICAL_PATCH_OFFSET_POLICY_ID,
   createCanonicalPatchOffsetPolicyVersion,
@@ -857,6 +858,37 @@ function migrateV16ToV17(state: MutableWorkspace): MutableWorkspace {
       migrationReviewItems.push(item);
     }
   };
+  const v3Affixes = arrayOf<V3Affix>(state.v3Affixes).map((affix) => {
+    if (affix.category !== "attribute") return affix;
+    const canonical = canonicalizeAffixOperations([affix]);
+    if (canonical.issues.length) {
+      const reviewId = `affix-direction-migration:${affix.id}@${affix.version}`;
+      if (!migrationReviewItems.some((entry) => entry.id === reviewId)) {
+        migrationReviewItems.push({
+          id: reviewId,
+          sourceType: "unknown",
+          sourceId: `${affix.id}@${affix.version}`,
+          message: "AFFIX_DIRECTION_CONFLICT：旧词条方向与幅度无法无损规范化，已保留原始修订并隔离等待复核。",
+          preservedPayload: structuredClone(affix),
+          status: "pending",
+        });
+      }
+      return affix;
+    }
+    return {
+      ...affix,
+      attributeEffects: canonical.operations.map((operation, index) => {
+        const legacy = affix.attributeEffects[index];
+        return {
+          ...operation,
+          id: operation.operationId,
+          unit: legacy?.unit ?? "",
+          stackingGroup: legacy?.stackingGroup ?? "",
+          ruleSetVersion: legacy?.ruleSetVersion ?? "",
+        };
+      }),
+    };
+  });
   const skuDrawers: Array<Record<string, unknown>> = arrayOf<Record<string, unknown>>(state.skuDrawers).map((sku) => {
     const legacyTargetPullKg = resolveLegacyNumber({
       canonical: sku.targetPullKg,
@@ -1005,6 +1037,7 @@ function migrateV16ToV17(state: MutableWorkspace): MutableWorkspace {
   return {
     ...state,
     schemaVersion: 17,
+    v3Affixes,
     skuDrawers,
     projectionMatches,
     compatibilityRules,
@@ -1016,6 +1049,10 @@ function migrateV16ToV17(state: MutableWorkspace): MutableWorkspace {
     configurationSnapshots: arrayOf<WorkspaceState["configurationSnapshots"][number]>(
       state.configurationSnapshots,
     ),
+    // 不凭历史文档或外部 revision 17173 合成已发布策略。机器规则未就绪时保持空集合。
+    reductionStackingPolicyVersions: arrayOf<
+      WorkspaceState["reductionStackingPolicyVersions"][number]
+    >(state.reductionStackingPolicyVersions),
   } as unknown as MutableWorkspace;
 }
 

@@ -24,6 +24,11 @@ import {
 import { createSeedState } from "../lib/seed";
 import { migrateWorkspaceState } from "../lib/migrations";
 import { hydrateV3Seed } from "../lib/v3-seed";
+import {
+  formalAffixRuntimeEvidence,
+  formalProjection,
+  testReductionPolicy,
+} from "./helpers/reduction-policy";
 import type {
   FiveAxisEntityInput,
   FiveAxisViewDefinition,
@@ -438,7 +443,7 @@ test("发布快照冻结五轴预览，后续输入变化不改写历史内容",
     passiveAffixPayloads: existing.passiveAffixPayloads,
     compatibilityReport: existing.compatibilityReport,
     affinityReport: existing.affinityReport,
-    qualityReport: existing.qualityReport,
+    qualityReport: { ...existing.qualityReport, blockingIssues: [] },
     validationReport: [],
     fiveAxisPreview: preview,
     warningConfirmations: {},
@@ -459,7 +464,12 @@ test("正式快照拒绝未发布、篡改或版本链过期的五维定义", ()
   const model = state.purchasableModels.find((entry) => entry.id === existing.modelId)!;
   const sku = state.skuDrawers.find((entry) => entry.id === model.skuId)!;
   const series = state.seriesDefinitions.find((entry) => entry.id === sku.seriesId)!;
-  const projection = state.derivedProjections.find((entry) => entry.id === existing.projectionId)!;
+  const reductionStackingPolicy = testReductionPolicy();
+  const projection = formalProjection(
+    state.derivedProjections.find((entry) => entry.id === existing.projectionId)!,
+    reductionStackingPolicy,
+    existing.finalPanelValues,
+  );
   const { def, vertexSet } = setup();
   const preview = calculateModelFiveAxisPreview({
     modelId: model.id,
@@ -472,21 +482,27 @@ test("正式快照拒绝未发布、篡改或版本链过期的五维定义", ()
   });
   const common = {
     publicationMode: "new_formal" as const,
+    reductionStackingPolicy,
+    affixRuntimeEvidence: formalAffixRuntimeEvidence(
+      projection,
+      reductionStackingPolicy,
+      existing.finalPanelValues,
+    ),
     workspaceId: "workspace:test",
     model, sku, series, projection,
     seriesSkus: state.skuDrawers,
-    finalPanelValues: projection.values,
+    finalPanelValues: existing.finalPanelValues,
     componentSelections: existing.componentSelections,
     patches: [],
     attributeAffixIds: existing.attributeAffixIds,
     passiveAffixIds: existing.passiveAffixIds,
     technologyIds: existing.technologyIds,
     technologyDefinitions: state.technologies,
-    finalSettlementTrace: finalSettlementTrace(projection.values),
+    finalSettlementTrace: finalSettlementTrace(existing.finalPanelValues),
     passiveAffixPayloads: existing.passiveAffixPayloads,
     compatibilityReport: existing.compatibilityReport,
     affinityReport: existing.affinityReport,
-    qualityReport: existing.qualityReport,
+    qualityReport: { ...existing.qualityReport, blockingIssues: [] },
     qualityValueAssessment: {
       modelRevisionId: `${model.id}@${model.revision}`, selectedQualityId: series.qualityId,
       baseAffixScore: 1, combinationScore: 0, functionScoreFactor: 1,

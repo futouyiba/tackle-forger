@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { CURRENT_WORKSPACE_SCHEMA_VERSION, migrateWorkspaceState } from "../lib/migrations";
+import {
+  CURRENT_WORKSPACE_SCHEMA_VERSION,
+  migrateWorkspaceState,
+} from "../lib/migrations";
 import { verifySnapshotIntegrity } from "../lib/publishing";
 import { deterministicHash } from "../lib/rule-kernel";
 import { validateSeriesInvariants } from "../lib/product-model";

@@ -105,6 +105,7 @@ export async function POST(request: NextRequest) {
       packageId: body.packageId,
       workspaceId: user.tenantKey ?? "workspace",
       snapshots,
+      availableReductionPolicies: current.state.reductionStackingPolicyVersions,
     });
     return NextResponse.json({ previewPackage });
   } catch (error) {

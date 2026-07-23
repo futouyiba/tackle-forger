@@ -815,8 +815,8 @@ export function beginPatchMirrorSync(input: { workspaceId:string; ledger: PatchL
   const payloadHash = jcsSha256Hex(payload);
   const old = input.ledger.mirrorCommands.find((c)=>c.idempotencyKey===input.idempotencyKey);
   if (old) {
-    if (old.workspaceId !== input.workspaceId || old.patchId !== input.patchId || old.patchRevision !== input.patchRevision || old.payloadHash !== payloadHash) {
-      throw new PatchLedgerError("PATCH_MIRROR_IDEMPOTENCY_CONFLICT", "Mirror idempotency key is already bound to a different canonical payload");
+    if (old.workspaceId !== input.workspaceId || old.patchId !== input.patchId || old.patchRevision !== input.patchRevision || old.payloadHash !== payloadHash || old.expectedRemoteRevision !== input.expectedRemoteRevision) {
+      throw new PatchLedgerError("PATCH_MIRROR_IDEMPOTENCY_CONFLICT", "Mirror idempotency key is already bound to a different canonical payload or CAS baseline");
     }
     return { ledger:input.ledger, command:old, idempotent:true };
   }

@@ -816,9 +816,6 @@ export function adaptProjectionAuthorityMirrorToCanonical(input: {
   runtimeContributions: ProjectionTraceContribution[];
   sequenceStart?: number;
 }): CalculationTraceEntry[] {
-  const required = new Set(input.runtimeContributions.map((contribution) =>
-    deterministicHash(contribution),
-  ));
   let sequence = input.sequenceStart ?? 1;
   return input.projection.trace.flatMap((step) =>
     [...step.contributions]
@@ -841,10 +838,52 @@ export function adaptProjectionAuthorityMirrorToCanonical(input: {
         evidence: {
           adapter: "projection_authority/v1",
           contribution: structuredClone(contribution),
-          runtimeBindingRequired: required.has(deterministicHash(contribution)),
         },
       })),
   );
+}
+
+/**
+ * 冻结 runtime 必须覆盖的 Projection contribution 集合。它与 mirror/runtime
+ * 分离，且本身不可执行；因此 mirror 与 runtime 不能通过一同缩减来伪造完整性。
+ */
+export function adaptProjectionAuthorityManifestToCanonical(input: {
+  runtimeContributions: ProjectionTraceContribution[];
+  subjectRef: EntityRef;
+  ruleSetVersion: string;
+  sequence: number;
+}): CalculationTraceEntry {
+  const expected = [...input.runtimeContributions]
+    .map((contribution) => ({
+      bindingKey: deterministicHash(contribution),
+      contribution: structuredClone(contribution),
+    }))
+    .sort((left, right) => left.bindingKey.localeCompare(right.bindingKey));
+  if (new Set(expected.map((entry) => entry.bindingKey)).size !== expected.length) {
+    throw new CalculationTraceReplayError("Projection authority manifest 含重复 contribution 身份。");
+  }
+  return createCalculationTraceEntry({
+    subjectRef: input.subjectRef,
+    parameterKey: "__projection_authority_manifest__",
+    sequence: input.sequence,
+    layer: "attribute_affix",
+    sourceRef: { sourceType: "projection_authority", sourceId: "runtime-manifest" },
+    sourceVersion: input.ruleSetVersion,
+    ruleSetVersion: input.ruleSetVersion,
+    before: null,
+    operation: "no_effect",
+    operand: null,
+    after: null,
+    effect: "neutral",
+    warningIssueIds: [],
+    actions: [],
+    evidence: {
+      adapter: "projection_authority_manifest/v1",
+      expected,
+      expectedCount: expected.length,
+      expectedHash: deterministicHash(expected),
+    },
+  });
 }
 
 /**
@@ -1004,7 +1043,44 @@ export function assertCalculationTraceMatchesAffixRuntime(input: {
     sameEntityRef(entry.subjectRef, input.subjectRef)
     && entry.evidence?.adapter === "projection_authority/v1",
   );
+  const manifests = input.archive.entries.filter((entry) =>
+    sameEntityRef(entry.subjectRef, input.subjectRef)
+    && entry.evidence?.adapter === "projection_authority_manifest/v1",
+  );
+  if (manifests.length !== 1) {
+    throw new CalculationTraceReplayError("canonical affix runtime 缺少或重复 Projection authority manifest。", summary);
+  }
+  const manifestEvidence = manifests[0].evidence!;
+  const expected = manifestEvidence.expected;
+  if (
+    !Array.isArray(expected)
+    || !Number.isSafeInteger(manifestEvidence.expectedCount)
+    || manifestEvidence.expectedCount !== expected.length
+    || manifestEvidence.expectedHash !== deterministicHash(expected)
+  ) {
+    throw new CalculationTraceReplayError("Projection authority manifest 不完整或已篡改。", manifests[0]);
+  }
+  const expectedByKey = new Map<string, ProjectionTraceContribution>();
+  for (const entry of expected) {
+    if (
+      !entry || typeof entry !== "object"
+      || typeof (entry as Record<string, unknown>).bindingKey !== "string"
+      || !(entry as Record<string, unknown>).contribution
+    ) {
+      throw new CalculationTraceReplayError("Projection authority manifest 条目非法。", manifests[0]);
+    }
+    const bindingKey = (entry as Record<string, unknown>).bindingKey as string;
+    const contribution = (entry as Record<string, unknown>).contribution as ProjectionTraceContribution;
+    if (bindingKey !== deterministicHash(contribution) || expectedByKey.has(bindingKey)) {
+      throw new CalculationTraceReplayError("Projection authority manifest 身份不唯一。", manifests[0]);
+    }
+    expectedByKey.set(bindingKey, contribution);
+  }
+  if (expectedByKey.size !== typedContributions.length || authorityEntries.length < expectedByKey.size) {
+    throw new CalculationTraceReplayError("canonical affix runtime 与 authority manifest 基数不一致。", summary);
+  }
   const boundAuthorityIds = new Set<string>();
+  const boundKeys = new Set<string>();
   let previousContributionSequence = -1;
   for (let index = 0; index < typedContributions.length; index += 1) {
     const contribution = typedContributions[index];
@@ -1024,20 +1100,29 @@ export function assertCalculationTraceMatchesAffixRuntime(input: {
     }
     const runtimeEvidence = affixEvidenceRecord(contributionEntries[index])!;
     const authorityRef = runtimeEvidence.authorityRef as Record<string, unknown> | undefined;
+    const bindingKey = authorityRef?.bindingKey;
+    const expectedContribution = typeof bindingKey === "string"
+      ? expectedByKey.get(bindingKey)
+      : undefined;
     const authoritative = authorityEntries.filter((entry) =>
       entry.traceEntryId === authorityRef?.traceEntryId
       && entry.sequence === authorityRef?.sequence
-      && authorityRef?.bindingKey === deterministicHash(contribution)
+      && bindingKey === deterministicHash(contribution)
+      && calculationTraceValuesEqual(expectedContribution, contribution)
       && calculationTraceValuesEqual(entry.evidence?.contribution, contribution),
     );
-    if (authoritative.length !== 1 || boundAuthorityIds.has(authoritative[0].traceEntryId)) {
+    if (
+      authoritative.length !== 1
+      || !expectedContribution
+      || boundAuthorityIds.has(authoritative[0].traceEntryId)
+      || boundKeys.has(bindingKey as string)
+    ) {
       throw new CalculationTraceReplayError("canonical affix runtime 未唯一绑定权威 Projection contribution。", summary);
     }
     boundAuthorityIds.add(authoritative[0].traceEntryId);
+    boundKeys.add(bindingKey as string);
   }
-  const requiredAuthority = authorityEntries.filter((entry) => entry.evidence?.runtimeBindingRequired === true);
-  if (requiredAuthority.length !== typedContributions.length
-    || requiredAuthority.some((entry) => !boundAuthorityIds.has(entry.traceEntryId))) {
+  if (boundKeys.size !== expectedByKey.size) {
     throw new CalculationTraceReplayError("canonical affix runtime Trace 缺失、重复或含额外条目。", summary);
   }
   const recomputedHash = hashAffixRuntimeEvidence({

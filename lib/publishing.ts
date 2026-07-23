@@ -71,6 +71,7 @@ import {
 import {
   adaptFiveAxisTraceToCanonical,
   adaptAffixRuntimeEvidenceToCanonical,
+  adaptProjectionAuthorityManifestToCanonical,
   adaptProjectionAuthorityMirrorToCanonical,
   assertCalculationTraceMatchesAffixRuntime,
   adaptPricingTraceToCanonical,
@@ -348,7 +349,7 @@ export function publishConfigurationSnapshot(
       combinedValidationReport,
     {
       subjectRef: {
-        workspaceId: "workspace:legacy",
+        workspaceId: input.workspaceId!,
         entityType: "model",
         entityId: input.model.id,
         revisionId: String(input.model.revision),
@@ -366,6 +367,21 @@ export function publishConfigurationSnapshot(
       },
     )
     : [];
+  if (input.publicationMode === "new_formal") {
+    const validationSubject = {
+      workspaceId: input.workspaceId!,
+      entityType: "model" as const,
+      entityId: input.model.id,
+      revisionId: String(input.model.revision),
+    };
+    if (canonicalValidationReport.some((issue) =>
+      entityRefIdentity(issue.subjectRef) !== entityRefIdentity(validationSubject)
+      || issue.issueId !== `validation-issue:${issue.fingerprint}`
+      || !issue.fingerprint.trim(),
+    )) {
+      throw new Error("新正式 Snapshot 的 ValidationIssue 必须冻结真实 workspace subject 与当前 input fingerprint。");
+    }
+  }
   const canonicalPublishValidationReport = input.publicationMode === "new_formal"
     ? canonicalValidationReport.filter(
       (issue) => issue.gate === "REVIEW" || issue.gate === "PUBLISH",
@@ -374,7 +390,7 @@ export function publishConfigurationSnapshot(
       publishValidationReport,
       {
         subjectRef: {
-          workspaceId: "workspace:legacy",
+          workspaceId: input.workspaceId!,
           entityType: "model",
           entityId: input.model.id,
           revisionId: String(input.model.revision),
@@ -667,6 +683,13 @@ export function publishConfigurationSnapshot(
           parameterDefinitions: input.patchOffsetGovernance?.parameterDefinitions,
         });
         if (input.projection.affixRuntimeEvidence) {
+          const authorityManifest = adaptProjectionAuthorityManifestToCanonical({
+            runtimeContributions: input.projection.affixRuntimeEvidence.trace,
+            subjectRef,
+            ruleSetVersion: input.projection.ruleSetVersion,
+            sequence: entries.length + 1,
+          });
+          entries.push(authorityManifest);
           const authorityEntries = adaptProjectionAuthorityMirrorToCanonical({
             projection: input.projection,
             subjectRef,

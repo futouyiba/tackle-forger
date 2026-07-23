@@ -430,6 +430,14 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
   assert.equal(snapshot.pricingPolicyVersion, version.id);
   assert.equal(snapshot.automaticPricing?.formal, true);
   assert.equal(snapshot.qualityValueAssessment?.formal, true);
+  assert.ok(snapshot.validationReport.every((issue) =>
+    "subjectRef" in issue
+    && "issueId" in issue
+    && issue.subjectRef.workspaceId === publishInput.workspaceId
+    && issue.subjectRef.entityId === model.id
+    && issue.subjectRef.revisionId === String(model.revision)
+    && issue.issueId === `validation-issue:${issue.fingerprint}`,
+  ));
   assert.throws(
     () => publishConfigurationSnapshot({
       ...publishInput,
@@ -522,6 +530,28 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
       Object.fromEntries(Object.entries(candidate).filter(([key]) => key !== "contentHash")),
     );
   };
+  const rehashedSnapshotWithConsistentBindings = (candidate: typeof snapshot) => {
+    rehashedSnapshot(candidate);
+    const mirrors = candidate.calculationTrace!.entries.filter((entry) =>
+      entry.evidence?.adapter === "projection_authority/v1",
+    );
+    for (const runtime of candidate.calculationTrace!.entries.filter((entry) =>
+      entry.evidence?.adapter === "affix_runtime/v1" && entry.parameterKey !== "__affix_runtime_summary__",
+    )) {
+      const runtimeEvidence = runtime.evidence as Record<string, unknown>;
+      const contribution = runtimeEvidence.contribution;
+      const mirror = mirrors.find((entry) =>
+        deterministicHash(entry.evidence?.contribution) === deterministicHash(contribution),
+      );
+      assert.ok(mirror);
+      runtimeEvidence.authorityRef = {
+        traceEntryId: mirror.traceEntryId,
+        sequence: mirror.sequence,
+        bindingKey: deterministicHash(contribution),
+      };
+    }
+    rehashedSnapshot(candidate);
+  };
   const rewriteRuntimeSummary = (candidate: typeof snapshot) => {
     const summary = candidate.calculationTrace!.entries.find((entry) =>
       entry.parameterKey === "__affix_runtime_summary__",
@@ -595,13 +625,42 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
   assert.equal(verifySnapshotIntegrity(bindingTampered), false);
 
   const authorityTampered = structuredClone(snapshot);
+  const authorityRuntime = authorityTampered.calculationTrace!.entries.find((entry) =>
+    entry.evidence?.adapter === "affix_runtime/v1" && entry.parameterKey !== "__affix_runtime_summary__",
+  )!;
+  const authorityRef = (authorityRuntime.evidence as Record<string, unknown>).authorityRef as Record<string, unknown>;
   const authorityEntry = authorityTampered.calculationTrace!.entries.find((entry) =>
-    entry.evidence?.adapter === "projection_authority/v1"
-    && entry.evidence.runtimeBindingRequired === true,
+    entry.traceEntryId === authorityRef.traceEntryId,
   )!;
   ((authorityEntry.evidence as Record<string, unknown>).contribution as { sourceName: string }).sourceName = "forged authority";
   rehashedSnapshot(authorityTampered);
   assert.equal(verifySnapshotIntegrity(authorityTampered), false);
+
+  const pairedRuntimeMirrorDeletion = structuredClone(snapshot);
+  const pairedRuntime = pairedRuntimeMirrorDeletion.calculationTrace!.entries.find((entry) =>
+    entry.evidence?.adapter === "affix_runtime/v1" && entry.parameterKey !== "__affix_runtime_summary__",
+  )!;
+  const pairedRef = (pairedRuntime.evidence as Record<string, unknown>).authorityRef as Record<string, unknown>;
+  pairedRuntimeMirrorDeletion.calculationTrace!.entries = pairedRuntimeMirrorDeletion.calculationTrace!.entries.filter(
+    (entry) => entry !== pairedRuntime && entry.traceEntryId !== pairedRef.traceEntryId,
+  );
+  rewriteRuntimeSummary(pairedRuntimeMirrorDeletion);
+  rehashedSnapshotWithConsistentBindings(pairedRuntimeMirrorDeletion);
+  assert.equal(verifySnapshotIntegrity(pairedRuntimeMirrorDeletion), false);
+
+  const pairedRuntimeMirrorTamper = structuredClone(snapshot);
+  const pairedTamperedRuntime = pairedRuntimeMirrorTamper.calculationTrace!.entries.find((entry) =>
+    entry.evidence?.adapter === "affix_runtime/v1" && entry.parameterKey !== "__affix_runtime_summary__",
+  )!;
+  const pairedTamperedRef = (pairedTamperedRuntime.evidence as Record<string, unknown>).authorityRef as Record<string, unknown>;
+  const pairedTamperedMirror = pairedRuntimeMirrorTamper.calculationTrace!.entries.find((entry) =>
+    entry.traceEntryId === pairedTamperedRef.traceEntryId,
+  )!;
+  ((pairedTamperedRuntime.evidence as Record<string, unknown>).contribution as { sourceName: string }).sourceName = "paired forged";
+  ((pairedTamperedMirror.evidence as Record<string, unknown>).contribution as { sourceName: string }).sourceName = "paired forged";
+  rewriteRuntimeSummary(pairedRuntimeMirrorTamper);
+  rehashedSnapshotWithConsistentBindings(pairedRuntimeMirrorTamper);
+  assert.equal(verifySnapshotIntegrity(pairedRuntimeMirrorTamper), false);
 
   const affixEvidenceTampered = structuredClone(snapshot);
   const runtimeSummary = affixEvidenceTampered.calculationTrace!.entries.find((entry) =>

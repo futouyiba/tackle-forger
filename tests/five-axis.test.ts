@@ -465,8 +465,15 @@ test("正式快照拒绝未发布、篡改或版本链过期的五维定义", ()
   const sku = state.skuDrawers.find((entry) => entry.id === model.skuId)!;
   const series = state.seriesDefinitions.find((entry) => entry.id === sku.seriesId)!;
   const reductionStackingPolicy = testReductionPolicy();
+  const sourceProjection = state.derivedProjections.find((entry) => entry.id === existing.projectionId)!;
   const projection = formalProjection(
-    state.derivedProjections.find((entry) => entry.id === existing.projectionId)!,
+    {
+      ...sourceProjection,
+      // This fixture has only attribute-affix runtime evidence; retain the
+      // matching authoritative layer instead of claiming later stages it
+      // cannot replay.
+      trace: sourceProjection.trace.filter((step) => step.layer === "attribute_affix"),
+    },
     reductionStackingPolicy,
     existing.finalPanelValues,
   );

@@ -73,6 +73,7 @@ import {
   adaptAffixRuntimeEvidenceToCanonical,
   adaptProjectionAuthorityManifestToCanonical,
   adaptProjectionAuthorityMirrorToCanonical,
+  projectionAffixAuthorityContributions,
   assertCalculationTraceMatchesAffixRuntime,
   adaptPricingTraceToCanonical,
   adaptRuleTraceToCanonical,
@@ -655,7 +656,7 @@ export function publishConfigurationSnapshot(
       );
     }
     const evidence = input.projection.affixRuntimeEvidence;
-    if (
+    const affixRuntimeInvalid = (
       !evidence
       || !input.affixRuntimeEvidence
       || deterministicHash(input.affixRuntimeEvidence)
@@ -668,7 +669,8 @@ export function publishConfigurationSnapshot(
       || !affixEvidenceStagesAreClosed(evidence)
       || deterministicHash(evidence.finalValues)
         !== deterministicHash(input.finalPanelValues)
-    ) {
+    );
+    if (affixRuntimeInvalid) {
       throw new Error(
         "配置快照发布被阻止：[AFFIX_RUNTIME_TRACE_INVALID] 新正式 Snapshot 必须冻结与投影及已发布 ReductionStackingPolicyVersion 一致的实际 affix Trace。",
       );
@@ -689,17 +691,18 @@ export function publishConfigurationSnapshot(
           parameterDefinitions: input.patchOffsetGovernance?.parameterDefinitions,
         });
         if (input.projection.affixRuntimeEvidence) {
+          const authorityContributions = projectionAffixAuthorityContributions(input.projection);
           const authorityManifest = adaptProjectionAuthorityManifestToCanonical({
-            runtimeContributions: input.projection.affixRuntimeEvidence.trace,
+            runtimeContributions: authorityContributions.map((entry) => entry.contribution),
             subjectRef,
             ruleSetVersion: input.projection.ruleSetVersion,
             sequence: entries.length + 1,
           });
           entries.push(authorityManifest);
           const authorityEntries = adaptProjectionAuthorityMirrorToCanonical({
-            projection: input.projection,
             subjectRef,
-            runtimeContributions: input.projection.affixRuntimeEvidence.trace,
+            authorityContributions,
+            ruleSetVersion: input.projection.ruleSetVersion,
             sequenceStart: entries.length + 1,
           });
           entries.push(...authorityEntries);

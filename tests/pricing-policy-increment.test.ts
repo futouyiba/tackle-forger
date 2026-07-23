@@ -415,13 +415,53 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
   });
   const stagedProjection = {
     ...publishInput.projection,
-    trace: [...publishInput.projection.trace, {
-      layer: "final_review_patch" as const,
-      sourceIds: ["patch:final-review:test", `parameter-definition:${stagedKey}`, "affix-runtime:no-effect:test"],
-      contributions: structuredClone(stagedEvidence.trace.slice(-3)),
-    }],
+    trace: [
+      ...publishInput.projection.trace.filter((step) => ![
+        "attribute_affix",
+        "final_review_patch",
+        "parameter_definition",
+      ].includes(step.layer)),
+      {
+        layer: "attribute_affix" as const,
+        sourceIds: ["affix-runtime:no-effect:test"],
+        contributions: structuredClone([
+          ...stagedEvidence.trace.slice(0, -3),
+          ...stagedEvidence.trace.slice(-3, -2),
+        ]),
+      },
+      {
+        layer: "final_review_patch" as const,
+        sourceIds: ["patch:final-review:test"],
+        contributions: structuredClone(stagedEvidence.trace.slice(-2, -1)),
+      },
+      {
+        layer: "parameter_definition" as const,
+        sourceIds: [`parameter-definition:${stagedKey}`],
+        contributions: structuredClone(stagedEvidence.trace.slice(-1)),
+      },
+    ],
     affixRuntimeEvidence: structuredClone(stagedEvidence),
   };
+  const omittedNoEffectEvidence = structuredClone(stagedEvidence);
+  omittedNoEffectEvidence.trace = omittedNoEffectEvidence.trace.filter(
+    (entry) => entry.ruleId !== "affix-runtime:no-effect:test",
+  );
+  omittedNoEffectEvidence.traceHash = hashAffixRuntimeEvidence({
+    reductionStackingPolicyVersion: omittedNoEffectEvidence.reductionStackingPolicyVersion,
+    values: omittedNoEffectEvidence.values,
+    postReviewValues: omittedNoEffectEvidence.postReviewValues,
+    finalValues: omittedNoEffectEvidence.finalValues,
+    trace: omittedNoEffectEvidence.trace,
+    issues: omittedNoEffectEvidence.issues,
+  });
+  assert.throws(() => publishConfigurationSnapshot({
+    ...publishInput,
+    projection: {
+      ...stagedProjection,
+      affixRuntimeEvidence: structuredClone(omittedNoEffectEvidence),
+    },
+    affixRuntimeEvidence: omittedNoEffectEvidence,
+  }), /authority manifest|AFFIX_RUNTIME_TRACE_INVALID/);
   const snapshot = publishConfigurationSnapshot({
     ...publishInput,
     projection: stagedProjection,

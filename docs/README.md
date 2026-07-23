@@ -27,10 +27,11 @@
 | --- | --- | --- |
 | [`ux/tackle-forger-v3-implementation-gap-matrix-2026-07-22.md`](./ux/tackle-forger-v3-implementation-gap-matrix-2026-07-22.md) | 当前实现审计 | 记录代码事实、缺口、外部阻断和产品反馈归并；已经实现的能力不重复登记为缺失。必须写明审计commit完整hash与精确时间；代码变化后应重新验证而不是沿用“同日通过” |
 | [`config-export-mapping-guide.md`](./config-export-mapping-guide.md) | 配置映射契约 | 记录`config.toml`、workbook/sheet、枚举引用、环境/渠道目录和恢复型写入边界；从属于v3第25节，示例ID不是生产策略 |
-| [`deployment/r730-production.md`](./deployment/r730-production.md) | 生产运行手册 | Dell R730部署、持久化、备份、验收与回滚；不定义领域规则 |
+| [`deployment/r730-production.md`](./deployment/r730-production.md) | 生产运行手册 | Dell R730部署、持久化、备份、验收与回滚；明确一期全量保留且不做归档/裁剪，二期再验证用户一键保存到工作PC及后续裁剪门槛，不定义领域规则 |
+| [`audits/aud-009-workspace-revision-retention-adr.md`](./audits/aud-009-workspace-revision-retention-adr.md) | `ACCEPTED`正式决策 | 记录工作区revision分层保留政策、方案比较、容量证据和分期边界；一期不实现归档/裁剪，二期优先验证由数值/系统策划主动保存到工作PC，文档接受不表示裁剪已获准启用 |
 | [`deployment/feishu-enterprise-login.md`](./deployment/feishu-enterprise-login.md) | 身份运行手册 | 飞书OAuth、会话和代理安全边界；不替代Capability契约 |
 
-这四类文档的维护顺序是：先修订v3中的产品/领域结论，再同步UI与handoff，再更新映射/运行手册，最后用差距矩阵记录实际实现和验证证据。差距矩阵中的“已实现”必须能定位到当前代码/测试；发现并存旧契约时标记“部分实现”，不能用计划中的目标契约冒充实现事实。
+这些文档的维护顺序是：先修订v3中的产品/领域结论，再同步正式决策、UI与handoff，再更新映射/运行手册，最后用差距矩阵记录实际实现和验证证据。差距矩阵中的“已实现”必须能定位到当前代码/测试；发现并存旧契约时标记“部分实现”，不能用计划中的目标契约冒充实现事实。
 
 ## 原型证据治理
 

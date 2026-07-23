@@ -123,7 +123,7 @@ async function persistArtifact(input: {
   author: string;
 }): Promise<{ state: WorkspaceState; revision: number; idempotent: boolean }> {
   const applied = applyAIDraftArtifactPlan(input.state, input.plan);
-  if (applied.idempotent) {
+  if (applied.idempotent && !applied.changed) {
     if (!artifactExists(applied.state, input.plan)) {
       throw new AIDraftConversionError(
         "AI_DRAFT_IDEMPOTENCY_CONFLICT",
@@ -136,10 +136,12 @@ async function persistArtifact(input: {
     state: applied.state,
     baseRevision: input.revision,
     author: input.author,
-    message: `创建 ${input.plan.artifactRef.artifactId}`,
+    message: applied.idempotent
+      ? `修复 ${input.plan.artifactRef.artifactId} 的 Model Patch 关联`
+      : `创建 ${input.plan.artifactRef.artifactId}`,
   });
   if (!saved.conflict) {
-    return { state: applied.state, revision: saved.revision, idempotent: false };
+    return { state: applied.state, revision: saved.revision, idempotent: applied.idempotent };
   }
   const latest = await loadWorkspaceState();
   const recovered = applyAIDraftArtifactPlan(latest.state, input.plan);
@@ -149,7 +151,20 @@ async function persistArtifact(input: {
       "其他成员已保存新版本，请刷新并重新预览。",
     );
   }
-  return { state: recovered.state, revision: latest.revision, idempotent: true };
+  if (!recovered.changed) return { state: recovered.state, revision: latest.revision, idempotent: true };
+  const repaired = await saveWorkspaceState({
+    state: recovered.state,
+    baseRevision: latest.revision,
+    author: input.author,
+    message: `修复 ${input.plan.artifactRef.artifactId} 的 Model Patch 关联`,
+  });
+  if (repaired.conflict) {
+    throw new AIDraftConversionError(
+      "AI_DRAFT_TARGET_REVISION_CHANGED",
+      "其他成员已保存新版本，请刷新并重新预览。",
+    );
+  }
+  return { state: recovered.state, revision: repaired.revision, idempotent: true };
 }
 
 async function markProvenanceSynced(input: {

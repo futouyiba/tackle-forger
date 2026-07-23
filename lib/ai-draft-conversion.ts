@@ -1161,9 +1161,9 @@ function provenanceSyncRecord(
 export function applyAIDraftArtifactPlan(
   state: WorkspaceState,
   plan: AIDraftArtifactPlan,
-): { state: WorkspaceState; idempotent: boolean } {
-  const validateAndLinkModelPatch = (target: WorkspaceState): void => {
-    if (plan.kind !== "model_patch") return;
+): { state: WorkspaceState; idempotent: boolean; changed: boolean } {
+  const validateAndLinkModelPatch = (target: WorkspaceState): boolean => {
+    if (plan.kind !== "model_patch") return false;
     const model = target.purchasableModels.find((entry) => entry.id === plan.patch.subjectEntityId);
     if (!model || plan.patch.scopeType !== "model" || plan.patch.layerType !== "model"
       || String(model.revision) !== String(plan.patch.baseObjectRevision)) {
@@ -1172,7 +1172,9 @@ export function applyAIDraftArtifactPlan(
     if (model.configurationSnapshotId || model.status === "published") {
       throw new AIDraftConversionError("AI_DRAFT_TARGET_FROZEN", "冻结 Model / Snapshot 不允许持久化 Model Patch 草稿。");
     }
-    if (!model.patchIds.includes(plan.patch.patchId)) model.patchIds.push(plan.patch.patchId);
+    if (model.patchIds.includes(plan.patch.patchId)) return false;
+    model.patchIds.push(plan.patch.patchId);
+    return true;
   };
   const existingSync = state.aiArtifactProvenanceSyncRecords.find((entry) =>
     entry.idempotencyKey === plan.provenanceSyncRecord.idempotencyKey);
@@ -1183,8 +1185,8 @@ export function applyAIDraftArtifactPlan(
       throw new AIDraftConversionError("AI_DRAFT_IDEMPOTENCY_CONFLICT", "idempotencyKey 已绑定不同命令。");
     }
     const next = structuredClone(state);
-    validateAndLinkModelPatch(next);
-    return { state: next, idempotent: true };
+    const repaired = validateAndLinkModelPatch(next);
+    return { state: next, idempotent: true, changed: repaired };
   }
   const conflictingAssessmentReservation = state.aiArtifactProvenanceSyncRecords.find((entry) =>
     entry.assessmentId === plan.provenanceSyncRecord.assessmentId
@@ -1213,7 +1215,7 @@ export function applyAIDraftArtifactPlan(
     if (!duplicate) next.aiRuleSourceChangeDrafts.push(structuredClone(plan.ruleDraft));
   }
   next.aiArtifactProvenanceSyncRecords.push(structuredClone(plan.provenanceSyncRecord));
-  return { state: next, idempotent: false };
+  return { state: next, idempotent: false, changed: true };
 }
 
 export function assertAIDraftArtifactProvenanceCompatible(

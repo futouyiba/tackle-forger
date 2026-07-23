@@ -208,8 +208,6 @@ export function createExportManifest(input: {
       ruleRefs: [input.snapshot.ruleSetVersion],
       gate: "NONE",
       source: "import",
-      environmentId: input.environmentId,
-      channelKey: input.channelKey,
       mode: "active_gate",
     },
   );

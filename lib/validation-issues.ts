@@ -50,6 +50,10 @@ export function validationIssueSeverity(issue: ValidationIssue): ValidationIssue
   return level === "error" ? "ERROR" : level === "warning" ? "WARNING" : "INFO";
 }
 
+export function validationIssueGate(issue: ValidationIssue): ValidationIssueGate | undefined {
+  return normalizeValidationGate(issue.gate);
+}
+
 export function validationIssueLevel(
   issue: ValidationIssue,
 ): "error" | "warning" | "info" {
@@ -317,8 +321,8 @@ export function adaptLegacyValidationIssue(
       : normalizedLegacyState === "ACKNOWLEDGED" && severity !== "WARNING"
         ? "OPEN"
         : normalizedLegacyState;
-  const environmentId = context.environmentId ?? legacy.environmentId;
-  const channelKey = context.channelKey ?? legacy.channelKey;
+  const environmentId = legacy.environmentId ?? context.environmentId;
+  const channelKey = legacy.channelKey ?? context.channelKey;
   if (gate === "EXPORT" && (!environmentId?.trim() || !channelKey?.trim())) {
     if (mode === "active_gate") {
       throw new ValidationIssueContractError(

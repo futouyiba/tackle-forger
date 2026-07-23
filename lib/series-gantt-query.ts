@@ -108,7 +108,10 @@ function collectSeriesContext(input: {
   models: PurchasableModel[];
   upgrades: UpgradeCandidate[];
 }) {
-  const skus = input.skus.filter((sku) => sku.seriesId === input.series.id);
+  const skus = input.skus.filter(
+    (sku) =>
+      sku.seriesId === input.series.id && sku.status !== "superseded",
+  );
   const modelIds = new Set(skus.flatMap((sku) => sku.modelIds));
   const models = input.models.filter((model) => modelIds.has(model.id));
   const issues = skus.flatMap((sku) => sku.validationSummary);

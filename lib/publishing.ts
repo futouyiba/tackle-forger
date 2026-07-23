@@ -45,6 +45,7 @@ import {
   assertValidationGateCanProceed,
   canonicalizeValidationIssues,
   isCanonicalValidationIssue,
+  validationIssueGate,
   validationIssueSeverity,
 } from "./validation-issues";
 import { structuralPullParameterKey } from "./projection-matcher";
@@ -211,8 +212,12 @@ export function publishConfigurationSnapshot(
     ...input.validationReport,
     ...(input.fiveAxisPreview?.tackleFitComparison.validationIssues ?? []),
   ];
+  const publishValidationReport = combinedValidationReport.filter((issue) => {
+    const gate = validationIssueGate(issue);
+    return gate === undefined || gate === "REVIEW" || gate === "PUBLISH";
+  });
   const canonicalValidationReport = canonicalizeValidationIssues(
-    combinedValidationReport,
+    publishValidationReport,
     {
       subjectRef: {
         workspaceId: "workspace:legacy",
@@ -224,7 +229,7 @@ export function publishConfigurationSnapshot(
         modelId: input.model.id,
         modelRevision: input.model.revision,
         projectionId: input.projection.id,
-        validationReport: combinedValidationReport,
+        validationReport: publishValidationReport,
       }),
       ruleRefs: [input.projection.ruleSetVersion],
       gate: "PUBLISH",

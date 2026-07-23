@@ -1275,7 +1275,8 @@ export interface GovernanceAuditLogEntry {
     | "create_upgrade"
     | "review_upgrade"
     | "submit_rule_proposal"
-    | "publish_rule_proposal";
+    | "publish_rule_proposal"
+    | "change_sku_target_pull";
   entityType: string;
   entityId: string;
   actor: string;
@@ -2063,7 +2064,14 @@ export interface WorkspaceState {
   configEnvironmentProfiles: ConfigEnvironmentProfile[];
   configExportMappings: ConfigExportMapping[];
   identityAuditLog: IdentityAuditRecord[];
-  commandIdempotencyRecords: Array<{ key: string; inputHash: string; resultRef: string }>;
+  commandIdempotencyRecords: Array<{
+    key: string;
+    inputHash: string;
+    resultRef: string;
+    /** 命令可选的冻结响应；旧记录缺失时保持只读兼容。 */
+    resultPayload?: Record<string, unknown>;
+    resultPayloadHash?: string;
+  }>;
   upgradeCandidates: UpgradeCandidate[];
   ruleChangeProposals: RuleChangeProposal[];
   governanceAuditLog: GovernanceAuditLogEntry[];

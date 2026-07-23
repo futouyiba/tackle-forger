@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildSeriesGanttProjection } from "../lib/interaction-contracts";
+import { candidateGenerationEligibleSkus } from "../lib/enabled-item-parts";
 import { validateSeriesInvariants } from "../lib/product-model";
 import { deterministicHash } from "../lib/rule-kernel";
 import { createSeedState } from "../lib/seed";
@@ -131,6 +132,12 @@ test("存在已发布后代时创建新 SKU、可 DEPRECATED 旧 SKU 且冻结�
     ),
     false,
   );
+  const eligibleSkuIds = candidateGenerationEligibleSkus(
+    result.series,
+    result.state.skuDrawers,
+  ).map((entry) => entry.id);
+  assert.equal(eligibleSkuIds.includes(sku.id), false);
+  assert.equal(eligibleSkuIds.includes(result.sku.id), true);
   const issues = validateSeriesInvariants({
     series: result.series,
     skus: result.state.skuDrawers,
@@ -179,6 +186,32 @@ test("已发布后代分支可保留旧 SKU 生命周期状态，但仍不会重
   assert.equal(result.originalSku.status, sku.status);
   assert.equal(result.originalSku.revision, sku.revision);
   assert.deepEqual(result.originalSku, sku);
+  assert.deepEqual(
+    result.series.targetPullSpecifications.find(
+      (entry) => entry.skuId === sku.id,
+    ),
+    { targetPullKgf: sku.targetPullKg, skuId: sku.id },
+  );
+  assert.deepEqual(
+    result.series.targetPullSpecifications.find(
+      (entry) => entry.skuId === result.sku.id,
+    ),
+    { targetPullKgf: 1.65, skuId: result.sku.id },
+  );
+  const issues = validateSeriesInvariants({
+    series: result.series,
+    skus: result.state.skuDrawers,
+    models: result.state.purchasableModels,
+    projections: result.state.derivedProjections,
+  });
+  assert.equal(
+    issues.some(
+      (issue) =>
+        issue.code === "SERIES_WEIGHT_UNDECLARED" &&
+        issue.message.includes(sku.id),
+    ),
+    false,
+  );
 });
 
 test("幂等重试恢复同一结果，复用幂等键的不同输入被拒绝", () => {

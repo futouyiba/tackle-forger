@@ -2,6 +2,8 @@ import type { ConfigurationSnapshot, SeriesDefinition, SkuDrawer } from "./types
 
 export const ITEM_PART_NOT_ENABLED_CODE = "ITEM_PART_NOT_ENABLED";
 export const ITEM_PART_CHAIN_INCONSISTENT_CODE = "ITEM_PART_CHAIN_INCONSISTENT";
+export const SKU_NOT_CURRENT_SERIES_SPECIFICATION_CODE =
+  "SKU_NOT_CURRENT_SERIES_SPECIFICATION";
 
 /**
  * OPEN-003 当前没有可校验的已发布 enabledItemPartPolicy。
@@ -71,6 +73,25 @@ export class ItemPartChainInconsistentError extends Error {
   }
 }
 
+export class SkuNotCurrentSeriesSpecificationError extends Error {
+  readonly code = SKU_NOT_CURRENT_SERIES_SPECIFICATION_CODE;
+  readonly skuIds: string[];
+  readonly action: ProductItemPartAction;
+
+  constructor(
+    skuIds: readonly string[],
+    action: ProductItemPartAction,
+  ) {
+    const stableSkuIds = [...new Set(skuIds)].sort();
+    super(
+      `SKU ${stableSkuIds.join("、")} 不是所属 Series 的当前活动规格，不能进入${ACTION_LABELS[action]}。`,
+    );
+    this.name = "SkuNotCurrentSeriesSpecificationError";
+    this.skuIds = stableSkuIds;
+    this.action = action;
+  }
+}
+
 export function isProductItemPartEnabled(itemPartId: string | undefined): boolean {
   return Boolean(itemPartId && ENABLED_ITEM_PART_IDS.has(itemPartId));
 }
@@ -116,6 +137,31 @@ export function isProductSkuChainEnabled(
     return false;
   }
   return sku.projectionMatch.itemPartId === seriesItemPartId(series, knownSkus);
+}
+
+export function isCurrentSeriesSkuSpecification(
+  series: SeriesDefinition,
+  sku: SkuDrawer,
+): boolean {
+  if (sku.seriesId !== series.id || sku.status === "superseded") return false;
+  return series.targetPullSpecifications.some(
+    (specification) =>
+      specification.skuId === sku.id &&
+      specification.targetPullKgf === sku.targetPullKg,
+  );
+}
+
+export function assertCurrentSeriesSkuSpecifications(
+  series: SeriesDefinition,
+  skus: readonly SkuDrawer[],
+  action: "candidate_generation" | "candidate_materialization",
+): void {
+  const rejectedSkuIds = skus
+    .filter((sku) => !isCurrentSeriesSkuSpecification(series, sku))
+    .map((sku) => sku.id);
+  if (rejectedSkuIds.length) {
+    throw new SkuNotCurrentSeriesSpecificationError(rejectedSkuIds, action);
+  }
 }
 
 export function assertProductItemPartChainEnabled(
@@ -168,8 +214,10 @@ export function candidateGenerationEligibleSkus(
   series: SeriesDefinition,
   skus: readonly SkuDrawer[],
 ): SkuDrawer[] {
-  return skus
-    .filter((sku) => isProductSkuChainEnabled(series, sku, skus))
+  const currentSkus = skus.filter((sku) =>
+    isCurrentSeriesSkuSpecification(series, sku));
+  return currentSkus
+    .filter((sku) => isProductSkuChainEnabled(series, sku, currentSkus))
     .sort((left, right) => left.targetPullKg - right.targetPullKg || left.id.localeCompare(right.id));
 }
 

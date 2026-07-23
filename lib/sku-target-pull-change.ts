@@ -468,16 +468,35 @@ export function changeSkuTargetPull(
     );
   }
   const next = structuredClone(state);
+  const replacementSkuId = command.replacementSkuId?.trim();
+  if (mode === "REPLACEMENT_SKU") {
+    if (!replacementSkuId) {
+      throw new SkuTargetPullChangeError(
+        "REPLACEMENT_SKU_ID_REQUIRED",
+        "存在已发布后代时必须提供新的稳定 replacementSkuId。",
+      );
+    }
+    if (state.skuDrawers.some((entry) => entry.id === replacementSkuId)) {
+      throw new SkuTargetPullChangeError(
+        "REPLACEMENT_SKU_ID_CONFLICT",
+        "replacementSkuId 已存在，不能覆盖历史 SKU。",
+      );
+    }
+  }
+  const replacementSpecification = {
+    targetPullKgf: command.targetPullKg,
+    skuId: mode === "REPLACEMENT_SKU"
+      ? replacementSkuId!
+      : original.id,
+  };
   const specifications = orderSpecifications(
-    series.targetPullSpecifications.map((entry) =>
-      entry.skuId === original.id
-        ? {
-          targetPullKgf: command.targetPullKg,
-          skuId: mode === "REPLACEMENT_SKU"
-            ? command.replacementSkuId?.trim() || ""
-            : original.id,
-        }
-        : entry),
+    mode === "REPLACEMENT_SKU" && !command.deprecateOriginal
+      ? [
+        ...series.targetPullSpecifications,
+        replacementSpecification,
+      ]
+      : series.targetPullSpecifications.map((entry) =>
+        entry.skuId === original.id ? replacementSpecification : entry),
   );
 
   let resultSku: SkuDrawer;
@@ -506,21 +525,8 @@ export function changeSkuTargetPull(
     next.skuDrawers = next.skuDrawers.map((entry) =>
       entry.id === original.id ? resultSku : entry);
   } else {
-    const replacementSkuId = command.replacementSkuId?.trim();
-    if (!replacementSkuId) {
-      throw new SkuTargetPullChangeError(
-        "REPLACEMENT_SKU_ID_REQUIRED",
-        "存在已发布后代时必须提供新的稳定 replacementSkuId。",
-      );
-    }
-    if (state.skuDrawers.some((entry) => entry.id === replacementSkuId)) {
-      throw new SkuTargetPullChangeError(
-        "REPLACEMENT_SKU_ID_CONFLICT",
-        "replacementSkuId 已存在，不能覆盖历史 SKU。",
-      );
-    }
     resultSku = {
-      id: replacementSkuId,
+      id: replacementSkuId!,
       revision: 1,
       seriesId: original.seriesId,
       targetPullKg: command.targetPullKg,

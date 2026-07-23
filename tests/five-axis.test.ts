@@ -29,7 +29,10 @@ import {
   formalProjection,
   testReductionPolicy,
 } from "./helpers/reduction-policy";
-import { buildFormalPreviewFixture } from "./helpers/formal-five-axis";
+import {
+  buildFormalComponentSelectionsFixture,
+  buildFormalPreviewFixture,
+} from "./helpers/formal-five-axis";
 import type {
   FiveAxisEntityInput,
   FiveAxisViewDefinition,
@@ -553,6 +556,9 @@ test("旧 PUBLISHED 五维定义只能用于历史重放，不能服务新正式
   const formalDefinition = state.fiveAxisViewDefinitions.find(
     (definition) => "semanticContractVersion" in definition,
   )!;
+  const formalComponentSelections = buildFormalComponentSelectionsFixture(
+    existing.componentSelections,
+  );
   assert.throws(
     () => publishConfigurationSnapshot({
       ...common,
@@ -571,10 +577,11 @@ test("旧 PUBLISHED 五维定义只能用于历史重放，不能服务新正式
     skuRevision: sku.revision,
     modelFinalPullKg: existing.modelFinalPullKg!,
     finalPanelValues: existing.finalPanelValues,
-    componentSelections: existing.componentSelections,
+    componentSelections: formalComponentSelections,
   });
   const formalSnapshot = publishConfigurationSnapshot({
     ...common,
+    componentSelections: formalComponentSelections,
     fiveAxisPreview: formalPreview,
     fiveAxisDefinition: formalDefinition,
   });

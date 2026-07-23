@@ -20,6 +20,7 @@ import type {
   FiveAxisVertexGroupKey,
   FiveAxisVertexSet,
   FiveAxisViewDefinition,
+  ModelComponentSelection,
   ModelFiveAxisPreview,
   StoredFiveAxisViewDefinition,
 } from "./types";
@@ -104,6 +105,26 @@ export function hashFormalFinalPanelValues(
         key,
         typeof value === "number"
           ? canonicalFiniteNumber(value, `finalPanelValues.${key}`)
+          : value,
+      ]),
+    ),
+  } as never);
+}
+
+export function hashFormalComponentValues(
+  component: Pick<
+    ModelComponentSelection,
+    "componentId" | "itemPartId" | "values"
+  >,
+): string {
+  return hashCanonicalJson({
+    componentId: component.componentId,
+    itemPartId: component.itemPartId,
+    values: Object.fromEntries(
+      Object.entries(component.values).map(([key, value]) => [
+        key,
+        typeof value === "number"
+          ? canonicalFiniteNumber(value, `componentValues.${key}`)
           : value,
       ]),
     ),
@@ -942,7 +963,9 @@ export function assertFormalModelFiveAxisPreview(input: {
   expectedSkuId: string;
   expectedSkuRevisionId: string;
   expectedFinalPanelHash: string;
-  expectedComponentSelections: Array<{ itemPartId: string; componentId: string }>;
+  expectedComponentSelections: Array<
+    Pick<ModelComponentSelection, "itemPartId" | "componentId" | "values">
+  >;
   expectedModelFinalPullKg: number;
 }): FiveAxisVertexSet {
   assertFormalFiveAxisViewDefinition(input.definition);
@@ -1001,12 +1024,13 @@ export function assertFormalModelFiveAxisPreview(input: {
   }
   const expectedSelections = new Map(
     input.expectedComponentSelections.map((selection) =>
-      [selection.itemPartId, selection.componentId] as const),
+      [selection.itemPartId, selection] as const),
   );
   if (
     expectedSelections.size !== expectedParts.length
     || expectedParts.some((partId, index) =>
-      expectedSelections.get(partId) !== preview.componentSeries![index].entityId)
+      expectedSelections.get(partId)?.componentId
+        !== preview.componentSeries![index].entityId)
   ) {
     throw new Error("FIVE_AXIS_FORMAL_PREVIEW_INVALID：逐部件曲线与 Model 组件选择不一致。");
   }
@@ -1034,7 +1058,16 @@ export function assertFormalModelFiveAxisPreview(input: {
       const series = preview.componentSeries!.find((entry) =>
         entry.entityId === source.candidateSemanticKey.componentEntityId
         && entry.itemPartId === source.candidateSemanticKey.itemPartId);
+      const expectedSelection = expectedSelections.get(
+        source.candidateSemanticKey.itemPartId,
+      );
+      const expectedInputHash = expectedSelection
+        ? hashFormalComponentValues(expectedSelection)
+        : null;
       return !series
+        || !expectedSelection
+        || expectedSelection.componentId
+          !== source.candidateSemanticKey.componentEntityId
         || source.snapshotId !== input.expectedSnapshotId
         || source.modelRevisionId !== input.expectedModelRevisionId
         || source.finalPanelHash !== input.expectedFinalPanelHash
@@ -1045,12 +1078,24 @@ export function assertFormalModelFiveAxisPreview(input: {
             entry.axisId === directInput.axisId);
           const axis = input.definition.axes.find((entry) =>
             entry.axisId === directInput.axisId);
+          const expectedValue =
+            expectedSelection.values[directInput.parameterKey];
+          const expectedRawValue =
+            typeof expectedValue === "number" || typeof expectedValue === "string"
+              ? canonicalDecimal(String(expectedValue))
+              : null;
           return Boolean(
-            axis?.applicablePartIds.includes(series.itemPartId)
-            && (!point
-              || point.source !== "direct"
-              || canonicalDecimal(directInput.rawValue)
-                !== canonicalDecimal(String(point.rawValue))),
+            !axis
+            || directInput.inputHash !== expectedInputHash
+            || expectedRawValue === null
+            || canonicalDecimal(directInput.rawValue) !== expectedRawValue
+            || (
+              axis.applicablePartIds.includes(series.itemPartId)
+              && (!point
+                || point.source !== "direct"
+                || canonicalDecimal(directInput.rawValue)
+                  !== canonicalDecimal(String(point.rawValue)))
+            ),
           );
         });
     })
@@ -1146,6 +1191,9 @@ export function createFormalModelFiveAxisPreview(input: {
   modelRevisionId: string;
   modelFinalPullKg: number;
   finalPanelHash: string;
+  componentSelections: Array<
+    Pick<ModelComponentSelection, "itemPartId" | "componentId" | "values">
+  >;
   componentSeries: FiveAxisSeries[];
   projectionReferenceAnchor: FiveAxisProjectionReferenceAnchor;
   projectionReferences: Array<
@@ -1220,10 +1268,7 @@ export function createFormalModelFiveAxisPreview(input: {
     expectedSkuId: input.projectionReferenceAnchor.skuId,
     expectedSkuRevisionId: input.projectionReferenceAnchor.skuRevisionId,
     expectedFinalPanelHash: input.finalPanelHash,
-    expectedComponentSelections: componentSeries.map((series) => ({
-      itemPartId: series.itemPartId,
-      componentId: series.entityId,
-    })),
+      expectedComponentSelections: input.componentSelections,
     expectedModelFinalPullKg: input.modelFinalPullKg,
   });
   return preview;

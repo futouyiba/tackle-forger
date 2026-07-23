@@ -675,6 +675,7 @@ export function publishConfigurationSnapshot(
       expectedComponentSelections: input.componentSelections.map((component) => ({
         itemPartId: component.itemPartId,
         componentId: component.componentId,
+        values: component.values,
       })),
       expectedModelFinalPullKg: modelFinalPullKg,
     });

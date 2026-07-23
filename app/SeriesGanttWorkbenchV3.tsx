@@ -59,6 +59,7 @@ import type {
   PurchasableModel,
   SeriesDefinition,
   SkuDrawer,
+  StoredFiveAxisViewDefinition,
   WorkspaceState,
 } from "@/lib/types";
 import "./series-gantt-v3.css";
@@ -388,7 +389,7 @@ function FiveAxisRadar({
   definition,
 }: {
   preview?: ModelFiveAxisPreview;
-  definition?: LegacyFiveAxisViewDefinition;
+  definition?: StoredFiveAxisViewDefinition;
 }) {
   if (!preview) {
     return (
@@ -485,7 +486,7 @@ function FiveAxisComparisonPanel({
   definition,
 }: {
   view: FiveAxisComparisonView;
-  definition?: LegacyFiveAxisViewDefinition;
+  definition?: StoredFiveAxisViewDefinition;
 }) {
   const axes = definition?.axes ?? [];
   const numericScores = view.series.flatMap((entry) => entry.points.flatMap((point) =>
@@ -674,7 +675,7 @@ function ModelDrawer({
   }, [model, snapshot, state.fiveAxisVertexSets, state.fiveAxisViewDefinitions]);
   const activeFiveAxisPreview = snapshot?.fiveAxisPreview ?? draftFiveAxisPreview;
   const definition = activeFiveAxisPreview
-    ? state.fiveAxisViewDefinitions.filter(isLegacyFiveAxisDefinition).find((entry) =>
+    ? state.fiveAxisViewDefinitions.find((entry) =>
       entry.definitionId === activeFiveAxisPreview.fiveAxisDefinitionId &&
       entry.version === activeFiveAxisPreview.fiveAxisDefinitionVersion)
     : undefined;
@@ -749,7 +750,12 @@ function ModelDrawer({
   const inComparison = comparisonModelIds.includes(model.id);
   const pendingUpgrade = state.upgradeCandidates.find((entry) => entry.modelId === model.id && entry.status === "pending");
   const comparisonResult = useMemo(() => {
-    if (comparisonModelIds.length < 2 || !definition || !activeFiveAxisPreview) return {};
+    if (
+      comparisonModelIds.length < 2
+      || !definition
+      || !isLegacyFiveAxisDefinition(definition)
+      || !activeFiveAxisPreview
+    ) return {};
     const vertexSet = state.fiveAxisVertexSets.filter(isLegacyFiveAxisVertexSet).find((entry) =>
       entry.vertexSetHash === activeFiveAxisPreview.vertexSetHash &&
       entry.definitionId === definition.definitionId &&
@@ -1189,7 +1195,19 @@ function ModelDrawer({
             ) : null}
             {mode === "model_series" && activeFiveAxisPreview ? (
               <>
-                <FiveAxisRadar preview={activeFiveAxisPreview} definition={definition} />
+                {activeFiveAxisPreview.componentSeries?.length
+                  ? (
+                      <FiveAxisComparisonPanel
+                        view={activeFiveAxisPreview.tackleFitComparison}
+                        definition={definition}
+                      />
+                    )
+                  : (
+                      <FiveAxisRadar
+                        preview={activeFiveAxisPreview}
+                        definition={definition}
+                      />
+                    )}
                 <div className="gantt-baseline-note"><Info size={16} /><span><strong>Series 基准策略：{definition?.seriesBaselinePolicy.mode ?? "未发布"}</strong>当前原型未返回可用 baselineRef，因此只绘制 Model，不会静默换用默认 Model。</span></div>
               </>
             ) : null}

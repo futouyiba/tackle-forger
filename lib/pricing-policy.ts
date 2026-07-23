@@ -129,6 +129,8 @@ export interface PricingTraceEntry {
 export interface PricingTrialResult {
   formal: boolean;
   pricingPolicyRef: string;
+  /** 绑定本次价格试算实际消费的规范品质价值分。 */
+  valueScore: number;
   pricingWeightBandId: string;
   pricingBasketId: string;
   repairPriceUnrounded: number;
@@ -473,6 +475,7 @@ export function calculatePricingTrial(input: {
   const result = {
     formal,
     pricingPolicyRef: policy.id,
+    valueScore: input.valueScore,
     pricingWeightBandId: input.pricingWeightBandId,
     pricingBasketId: basketId,
     repairPriceUnrounded,

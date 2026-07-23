@@ -13,6 +13,10 @@ import type {
   ModelAffixValueAssessment,
   QualityValuePolicyDraft,
 } from "./quality-value-policy";
+import type {
+  PerformanceSummaryDefinition,
+  PerformanceSummarySnapshot,
+} from "./performance-summary";
 
 export type ItemKind = "rod" | "reel" | "line";
 export type RuleOperation = "add" | "multiply" | "set" | "min" | "max" | "formula";
@@ -801,7 +805,9 @@ export interface SeriesDefinition {
   functionIntensityPolicy:
     | { mode: "fixed"; intensity: FunctionIntensity }
     | { mode: "weight_curve"; values: Record<string, FunctionIntensity> };
+  /** @deprecated 旧 Series 只读证据；新 revision 不得写入或消费。 */
   performanceProfileId?: string;
+  /** @deprecated 与旧性能定位一同只读保留。 */
   performanceIntensityPolicy?: {
     mode: "legacy_label";
     label: string;
@@ -1018,6 +1024,7 @@ export interface CandidateSearchRecipe {
   methodIds: string[];
   typeIds: string[];
   functionIds: string[];
+  /** @deprecated 旧搜索配方证据；新候选运行时忽略且不得写入。 */
   performanceIds: string[];
   qualityIds: QualityProfileId[];
   targetPullRangeKg: { min: number; max: number };
@@ -1222,6 +1229,8 @@ export interface ConfigurationSnapshot {
   affinityReport: AffinityScoreResult;
   qualityReport: AffixQualityEvaluation;
   qualityValueAssessment?: ModelAffixValueAssessment;
+  /** 历史 Snapshot 可缺失；新正式 Snapshot 必须冻结 AVAILABLE 或 definition_missing。 */
+  performanceSummary?: PerformanceSummarySnapshot;
   validationReport: ValidationIssue[];
   fiveAxisPreview?: ModelFiveAxisPreview;
   publishedBy: string;
@@ -1914,6 +1923,7 @@ export interface WorkspaceState {
   itemTypeProfiles: ItemTypeProfile[];
   functionProfiles: FunctionProfile[];
   performanceProfiles: PerformanceProfile[];
+  performanceSummaryDefinitions: PerformanceSummaryDefinition[];
   qualityProfiles: QualityProfile[];
   projectionPatches: ProjectionPatchRuleSource[];
   patchLedger: PatchLedger;

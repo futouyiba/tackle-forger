@@ -11,7 +11,9 @@ import {
   type QualityId,
 } from "../lib/pricing-policy";
 import { publishConfigurationSnapshot, verifySnapshotIntegrity } from "../lib/publishing";
+import { createPerformanceSummaryDefinition } from "../lib/performance-summary";
 import { createSeedState } from "../lib/seed";
+import type { ProjectionTraceStep } from "../lib/types";
 
 const REVISION = "2922";
 const ref = (cell: string, sheetId = "u87sRh") => ({ sheetId, cell });
@@ -84,6 +86,24 @@ function trial(draft: PricingPolicyDraft | PricingPolicyVersion, qualityId: Qual
     qualityId,
     valueScore,
   });
+}
+
+function finalSettlementTrace(values: Record<string, number | string>): ProjectionTraceStep[] {
+  return [{
+    layer: "final_review_patch",
+    sourceIds: ["test:final-settlement"],
+    contributions: Object.entries(values).map(([parameterKey, value], index) => ({
+      sequence: index + 1,
+      ruleId: `test:final:${parameterKey}`,
+      sourceId: "test:final-settlement",
+      sourceName: "最终结算",
+      parameterKey,
+      operation: "base",
+      before: null,
+      operand: value,
+      after: value,
+    })),
+  }];
 }
 
 test("B score=30 在 0.8~1.2 区间线性插值得到 1.0", () => {
@@ -159,14 +179,36 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
   const sku = state.skuDrawers.find((entry) => entry.id === model.skuId)!;
   const series = state.seriesDefinitions.find((entry) => entry.id === sku.seriesId)!;
   const projection = state.derivedProjections.find((entry) => entry.id === oldSnapshot.projectionId)!;
+  const technologyAffixId = state.technologies
+    .find((entry) => oldSnapshot.technologyIds.includes(entry.id))?.affixIds[0];
+  assert.ok(technologyAffixId);
+  const performanceDefinition = createPerformanceSummaryDefinition({
+    definitionId: "performance-summary:test",
+    definitionVersion: "1",
+    publicationState: "PUBLISHED",
+    rules: [{
+      key: "technology_member",
+      label: "技术成员词条",
+      direction: "positive",
+      order: 1,
+      matcher: { source: "affix", affixId: technologyAffixId! },
+    }],
+  });
+  const conflictingPerformanceDefinition = createPerformanceSummaryDefinition({
+    ...performanceDefinition,
+    rules: performanceDefinition.rules.map((rule) => ({
+      ...rule,
+      label: rule.label + "（冲突版本）",
+    })),
+  });
+  state.performanceSummaryDefinitions = [performanceDefinition];
   const qualityValueAssessment = {
     modelRevisionId: `${model.id}@${model.revision}`,
     selectedQualityId: oldSnapshot.qualityReport.qualityId,
-    baseAffixScore: oldSnapshot.qualityReport.totalScore,
+    baseAffixScore: 30,
     combinationScore: 0,
     functionScoreFactor: 1,
-    performanceScoreFactor: 1,
-    finalValueScore: oldSnapshot.qualityReport.totalScore,
+    finalValueScore: 30,
     affixBreakdown: [],
     combinationBreakdown: [],
     qualityRangePolicyVersion: "quality-policy:v1",
@@ -177,7 +219,7 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     trace: [],
     inputHash: "quality-assessment-hash",
   };
-  const snapshot = publishConfigurationSnapshot({
+  const publishInput = {
     publicationMode: "new_formal",
     model,
     sku,
@@ -190,6 +232,10 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     attributeAffixIds: oldSnapshot.attributeAffixIds,
     passiveAffixIds: oldSnapshot.passiveAffixIds,
     technologyIds: oldSnapshot.technologyIds,
+    technologyDefinitions: state.technologies,
+    finalSettlementTrace: finalSettlementTrace(oldSnapshot.finalPanelValues),
+    performanceSummaryDefinition: performanceDefinition,
+    performanceSummaryDefinitions: state.performanceSummaryDefinitions,
     passiveAffixPayloads: oldSnapshot.passiveAffixPayloads,
     compatibilityReport: oldSnapshot.compatibilityReport,
     affinityReport: oldSnapshot.affinityReport,
@@ -202,9 +248,122 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     publishedBy: "tester",
     publishedAt: "2026-07-22T00:00:00.000Z",
     snapshotId: "snapshot:new-formal",
-  });
+  } satisfies Parameters<typeof publishConfigurationSnapshot>[0];
+  assert.throws(
+    () => publishConfigurationSnapshot({
+      ...publishInput,
+      performanceSummaryDefinitions: [
+        performanceDefinition,
+        conflictingPerformanceDefinition,
+      ],
+    }),
+    /同一 definitionId \+ definitionVersion 存在内容冲突/,
+  );
+  const snapshot = publishConfigurationSnapshot(publishInput);
   assert.equal(snapshot.pricingPolicyVersion, version.id);
   assert.equal(snapshot.automaticPricing?.formal, true);
   assert.equal(snapshot.qualityValueAssessment?.formal, true);
+  assert.equal(snapshot.performanceSummary?.status, "AVAILABLE");
+  if (snapshot.performanceSummary?.status === "AVAILABLE") {
+    assert.deepEqual(
+      snapshot.performanceSummary.summary.labels.map((entry) => entry.key),
+      ["technology_member"],
+    );
+    assert.deepEqual(snapshot.performanceSummary.definitionRef.definition, performanceDefinition);
+  }
   assert.equal(verifySnapshotIntegrity(snapshot), true);
+  assert.equal(verifySnapshotIntegrity(oldSnapshot), true);
+});
+
+test("新正式 Snapshot 拒绝旧 Performance 评分及不匹配的定价分数", () => {
+  const draft = importPricingPolicyDraft(completeInput());
+  const version = publishPricingPolicyDraft({
+    draft,
+    version: "pricing-policy:guard-v1",
+    publishedAt: "2026-07-22T00:00:00.000Z",
+    publishedBy: "tester",
+  });
+  const state = createSeedState();
+  const existing = state.configurationSnapshots[0]!;
+  const model = state.purchasableModels.find((entry) => entry.id === existing.modelId)!;
+  const sku = state.skuDrawers.find((entry) => entry.id === model.skuId)!;
+  const series = state.seriesDefinitions.find((entry) => entry.id === sku.seriesId)!;
+  const projection = state.derivedProjections.find((entry) => entry.id === existing.projectionId)!;
+  const assessment = {
+    modelRevisionId: `${model.id}@${model.revision}`,
+    selectedQualityId: existing.qualityReport.qualityId,
+    baseAffixScore: 30,
+    combinationScore: 0,
+    functionScoreFactor: 1,
+    performanceScoreFactor: 1.1,
+    finalValueScore: 33,
+    affixBreakdown: [],
+    combinationBreakdown: [],
+    qualityRangePolicyVersion: "quality-policy:v1",
+    scoringPolicyVersion: "quality-scoring:v1",
+    inSelectedQualityRange: true,
+    formal: true,
+    issues: [],
+    trace: [],
+    inputHash: "legacy-quality-assessment",
+  };
+  const base = {
+    publicationMode: "new_formal" as const,
+    model, sku, series, seriesSkus: state.skuDrawers, projection,
+    finalPanelValues: existing.finalPanelValues,
+    componentSelections: existing.componentSelections,
+    patches: [],
+    attributeAffixIds: existing.attributeAffixIds,
+    passiveAffixIds: existing.passiveAffixIds,
+    technologyIds: existing.technologyIds,
+    technologyDefinitions: state.technologies,
+    finalSettlementTrace: finalSettlementTrace(existing.finalPanelValues),
+    passiveAffixPayloads: existing.passiveAffixPayloads,
+    compatibilityReport: existing.compatibilityReport,
+    affinityReport: existing.affinityReport,
+    qualityReport: existing.qualityReport,
+    qualityValueAssessment: assessment,
+    pricingPolicyVersion: version.id,
+    automaticPricing: trial(version, "quality_b_blue", assessment.finalValueScore),
+    validationReport: [],
+    warningConfirmations: {},
+    publishedBy: "tester",
+    publishedAt: "2026-07-22T00:00:00.000Z",
+  };
+  assert.throws(
+    () => publishConfigurationSnapshot(base),
+    /不得冻结或定价包含旧 Performance 因子/,
+  );
+  assert.throws(
+    () => publishConfigurationSnapshot({
+      ...base,
+      qualityValueAssessment: { ...assessment, performanceScoreFactor: undefined, finalValueScore: 30 },
+    }),
+    /valueScore 与规范品质评分结果不一致/,
+  );
+  assert.throws(
+    () => publishConfigurationSnapshot({
+      ...base,
+      qualityValueAssessment: { ...assessment, performanceScoreFactor: undefined },
+      finalSettlementTrace: finalSettlementTrace(existing.finalPanelValues).map((step) => ({
+        ...step,
+        contributions: step.contributions.slice(1),
+      })),
+    }),
+    /最终结算 Trace 未覆盖面板参数/,
+  );
+  assert.throws(
+    () => publishConfigurationSnapshot({
+      ...base,
+      qualityValueAssessment: { ...assessment, performanceScoreFactor: undefined },
+      finalSettlementTrace: [{
+        ...finalSettlementTrace(existing.finalPanelValues)[0],
+        contributions: [{
+          ...finalSettlementTrace(existing.finalPanelValues)[0].contributions[0],
+          after: -1,
+        }],
+      }],
+    }),
+    /最终结算 Trace 与面板值不一致/,
+  );
 });

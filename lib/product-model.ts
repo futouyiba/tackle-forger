@@ -167,17 +167,8 @@ export function validateSeriesInvariants(
     if (projection.qualityId !== input.series.qualityId) {
       issue(issues, "error", "SERIES_QUALITY_MISMATCH", "SKU 的品质偏离 Series。");
     }
-    if (
-      input.series.performanceProfileId &&
-      projection.performanceId !== input.series.performanceProfileId
-    ) {
-      issue(
-        issues,
-        "error",
-        "SERIES_PERFORMANCE_MISMATCH",
-        "SKU 的性能方向偏离 Series。",
-      );
-    }
+    // performanceProfileId is historical evidence only. Canonical projections intentionally
+    // omit Performance, so this legacy field must never become a new hard invariant.
     if (input.series.functionIntensityPolicy.mode === "fixed") {
       if (
         projection.functionIntensity !==

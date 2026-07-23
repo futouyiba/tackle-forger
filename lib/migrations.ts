@@ -1002,6 +1002,13 @@ function migrateV17ToV18(state: MutableWorkspace): MutableWorkspace {
     aiArtifactProvenanceSyncRecords: arrayOf<
       WorkspaceState["aiArtifactProvenanceSyncRecords"][number]
     >(state.aiArtifactProvenanceSyncRecords),
+    performanceSummaryDefinitions: arrayOf<
+      WorkspaceState["performanceSummaryDefinitions"][number]
+    >(state.performanceSummaryDefinitions),
+    // ConfigurationSnapshot 是冻结 payload；定义注册表迁移不得补写历史摘要或 contentHash。
+    configurationSnapshots: arrayOf<WorkspaceState["configurationSnapshots"][number]>(
+      state.configurationSnapshots,
+    ),
   };
 }
 
@@ -1044,8 +1051,8 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
   }
 
   // Some production databases were marked v17 before every persisted payload had
-  // been normalized. Normalize those active objects before advancing to v18;
-  // frozen snapshots remain byte-for-byte untouched by migrateV16ToV17.
+  // been normalized. Normalize them while they are still v17, then advance through
+  // the ordinary sequential migration without changing frozen snapshots.
   if (version === 17) {
     state = migrateV16ToV17(state);
   }
@@ -1065,6 +1072,15 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
 
   state = {
     ...state,
+    aiRuleSourceChangeDrafts: arrayOf<
+      WorkspaceState["aiRuleSourceChangeDrafts"][number]
+    >(state.aiRuleSourceChangeDrafts),
+    aiArtifactProvenanceSyncRecords: arrayOf<
+      WorkspaceState["aiArtifactProvenanceSyncRecords"][number]
+    >(state.aiArtifactProvenanceSyncRecords),
+    performanceSummaryDefinitions: arrayOf<
+      WorkspaceState["performanceSummaryDefinitions"][number]
+    >(state.performanceSummaryDefinitions),
     patchLedger: state.patchLedger && typeof state.patchLedger === "object"
       ? migratePatchLedger(state.patchLedger as WorkspaceState["patchLedger"])
       : emptyPatchLedger(),

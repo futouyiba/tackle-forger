@@ -1218,6 +1218,7 @@ export interface ConfigurationSnapshot {
   patchReviewBatchRef?: string;
   patchValidationIssueFingerprints?: string[];
   patchValidationWaiverRefs?: string[];
+  patchValidationWaiverDecisionRefs?: string[];
   finalPanelValues: Record<string, number | string>;
   /** schema v16 起的新快照冻结最终拉力；历史快照缺失时不得补写或改变 contentHash。 */
   modelFinalPullKg?: number;

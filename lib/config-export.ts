@@ -3,6 +3,7 @@ import { verifySnapshotIntegrity } from "./publishing";
 import { authoritativeObjectIdentity, evaluateAuthoritativePatchFinalRanges, type AuthoritativePatchObject } from "./patch-authority";
 import {
   assertPatchGateCanProceed,
+  assertPatchValidationWaiverDecisionCoverage,
   assertPublishedPatchOffsetPolicy,
   PatchOffsetPolicyError,
 } from "./patch-offset-policy";
@@ -14,6 +15,7 @@ import type {
   ParameterDefinition,
   PatchRevisionRecord,
   PatchValidationWaiver,
+  PatchValidationWaiverDecision,
   RuleSetVersion,
   ValidationAcknowledgement,
   ValidationIssue,
@@ -97,6 +99,7 @@ export function createExportManifest(input: {
     parameterDefinitions: ParameterDefinition[];
     patchRevisions: PatchRevisionRecord[];
     waivers?: PatchValidationWaiver[];
+    decisions?: PatchValidationWaiverDecision[];
   };
   validationGovernance?: {
     issues: CanonicalValidationIssue[];
@@ -186,6 +189,10 @@ export function createExportManifest(input: {
         evaluation: rangeEvaluation,
         waivers: governance.waivers,
       });
+      assertPatchValidationWaiverDecisionCoverage({
+        waivers: governance.waivers,
+        decisions: governance.decisions,
+      });
     } catch (error) {
       if (error instanceof PatchOffsetPolicyError) {
         throw new Error(`配置导出被阻止：[${error.code}] ${error.message}`);
@@ -198,9 +205,9 @@ export function createExportManifest(input: {
         .flatMap((issue) => issue.fingerprint ? [issue.fingerprint] : [])
         .sort(),
       patchValidationWaiverRefs: (governance.waivers ?? []).map((waiver) => waiver.waiverId).sort(),
-      patchValidationWaiverDecisionRefs: [...new Set(
-        (governance.waivers ?? []).map((waiver) => waiver.waiverDecisionId),
-      )].sort(),
+      patchValidationWaiverDecisionRefs: (governance.decisions ?? [])
+        .map((decision) => decision.waiverDecisionId)
+        .sort(),
     };
   }
   let frozenValidationGovernance: Pick<ExportManifest,

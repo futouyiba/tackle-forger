@@ -48,6 +48,11 @@ export function isCanonicalValidationIssue(
       : !hasEnvironment && !hasChannel);
 }
 
+/** 旧格式缺少可验证的治理生命周期，因此保守地视为活动；规范 Issue 仅 OPEN 活动。 */
+export function isActiveValidationIssue(issue: ValidationIssue): boolean {
+  return !isCanonicalValidationIssue(issue) || issue.state === "OPEN";
+}
+
 export function validationIssueSeverity(issue: ValidationIssue): ValidationIssueSeverity {
   const severity = "severity" in issue ? normalizeValidationSeverity(issue.severity) : undefined;
   if (severity) return severity;

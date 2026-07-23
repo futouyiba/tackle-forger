@@ -20,7 +20,7 @@ import {
 import { useMemo, useState } from "react";
 import { hydrateV3Seed } from "@/lib/v3-seed";
 import { projectionPatchViewFromLedger } from "@/lib/patch-ledger";
-import { validationIssueLevel } from "@/lib/validation-issues";
+import { isActiveValidationIssue, validationIssueLevel } from "@/lib/validation-issues";
 import type {
   ConfigurationSnapshot,
   ProjectionPatchRuleSource,
@@ -146,8 +146,8 @@ export function V3FlowWorkbench({ state, mutate, notify, initialSeriesId }: V3Fl
 
   const ruleSetVersion = selectedSku?.projectionMatch.ruleSetVersion ?? state.ruleSetVersions[0]?.id ?? "—";
   const quality = selectedSeries ? qualityMeta[selectedSeries.qualityId] : qualityMeta.quality_c_green;
-  const blockingCount = selectedSku?.validationSummary.filter((issue) => validationIssueLevel(issue) === "error").length ?? 0;
-  const warningCount = selectedSku?.validationSummary.filter((issue) => validationIssueLevel(issue) === "warning").length ?? 0;
+  const blockingCount = selectedSku?.validationSummary.filter((issue) => isActiveValidationIssue(issue) && validationIssueLevel(issue) === "error").length ?? 0;
+  const warningCount = selectedSku?.validationSummary.filter((issue) => isActiveValidationIssue(issue) && validationIssueLevel(issue) === "warning").length ?? 0;
 
   const approveUpgrade = () => {
     if (!pendingUpgrade) return;

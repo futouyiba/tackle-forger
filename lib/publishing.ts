@@ -4,6 +4,7 @@ import { orderedPatchReferences } from "./patch-ledger";
 import { authoritativeObjectIdentity, evaluateAuthoritativePatchFinalRanges, type AuthoritativePatchObject } from "./patch-authority";
 import {
   assertPatchGateCanProceed,
+  assertPatchValidationWaiverDecisionCoverage,
   assertPatchReviewCoverage,
   assertPublishedPatchOffsetPolicy,
   assertRangeEvaluationMatchesPatchRevisions,
@@ -26,6 +27,7 @@ import type {
   PatchReviewBatch,
   PatchRevisionRecord,
   PatchValidationWaiver,
+  PatchValidationWaiverDecision,
   ProjectionPatchRuleSource,
   ProjectionTraceStep,
   PurchasableModel,
@@ -134,6 +136,7 @@ export interface PublishModelInput {
     parameterDefinitions: ParameterDefinition[];
     reviewBatch?: PatchReviewBatch;
     waivers?: PatchValidationWaiver[];
+    decisions?: PatchValidationWaiverDecision[];
   };
   attributeAffixIds: string[];
   passiveAffixIds: string[];
@@ -235,6 +238,10 @@ export function publishConfigurationSnapshot(
       assertPatchGateCanProceed({
         evaluation: patchRangeEvaluation,
         waivers: governance.waivers,
+      });
+      assertPatchValidationWaiverDecisionCoverage({
+        waivers: governance.waivers,
+        decisions: governance.decisions,
       });
     } catch (error) {
       if (error instanceof PatchOffsetPolicyError) {
@@ -625,6 +632,9 @@ export function publishConfigurationSnapshot(
         .flatMap((issue) => issue.fingerprint ? [issue.fingerprint] : [])
         .sort(),
       patchValidationWaiverRefs: (governance.waivers ?? []).map((waiver) => waiver.waiverId).sort(),
+      patchValidationWaiverDecisionRefs: (governance.decisions ?? [])
+        .map((decision) => decision.waiverDecisionId)
+        .sort(),
     } : {}),
     finalPanelValues: structuredClone(input.finalPanelValues),
     ...(modelFinalPullKg !== undefined

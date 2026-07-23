@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   assertPatchGateCanProceed,
+  assertPatchValidationWaiverDecisionCoverage,
   assertPatchRangeEvaluationIntegrity,
   assertPatchReviewCoverage,
   assertPublishedPatchOffsetPolicy,
@@ -252,6 +253,23 @@ test("Waiver 单 Gate 生效，EXPORT 还必须精确匹配环境与渠道", () 
     evaluation: publishEvaluation,
     waivers: approved.waivers,
   }));
+  assert.throws(
+    () => createPatchValidationWaiverDecision({
+      issues: publishEvaluation.issues,
+      requested: [
+        { issueFingerprint: issue.fingerprint!, gate: "PUBLISH" },
+        { issueFingerprint: issue.fingerprint!, gate: "PUBLISH" },
+      ],
+      policyVersion: publishPolicy.version,
+      scopeRef: publishContext.subjectRef,
+      objectInputHash: publishContext.objectInputHash,
+      patchSetHash: publishContext.patchSetHash,
+      reason: "重复目标必须拒绝",
+      approvedBy: "reviewer",
+      approvedAt: NOW,
+    }),
+    (error: unknown) => error instanceof PatchOffsetPolicyError && error.code === "PATCH_WAIVER_TARGET_DUPLICATE",
+  );
   const legacyFingerprint = deterministicHash({
     source: "patch",
     code: issue.code,
@@ -802,6 +820,7 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
       parameterDefinitions,
       reviewBatch,
       waivers: publishWaiver.waivers,
+      decisions: [publishWaiver.decision],
     },
     attributeAffixIds: oldSnapshot.attributeAffixIds,
     passiveAffixIds: oldSnapshot.passiveAffixIds,
@@ -861,6 +880,7 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
     snapshotId: "snapshot:open004-v1",
     version: oldSnapshot.version + 1,
   });
+  assert.deepEqual(snapshot.patchValidationWaiverDecisionRefs, [publishWaiver.decision.waiverDecisionId]);
   assert.equal(snapshot.patchOffsetPolicyVersion, publishedPolicy.version);
   assert.equal(snapshot.patchReviewBatchRef, reviewBatch.batchId);
   assert.equal(snapshot.patchSetHash, frozen.patchSetHash);
@@ -925,6 +945,7 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
       parameterDefinitions,
       patchRevisions,
       waivers: exportWaiver.waivers,
+      decisions: [exportWaiver.decision],
     },
     originalFileHashes: {},
     entries: [{ logicalTable: "item", workbook: "item.xlsx", sheet: "Item", businessKey: model.id, operation: "update" }],
@@ -934,4 +955,28 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
   assert.deepEqual(manifest.patchValidationWaiverDecisionRefs, [exportWaiver.decision.waiverDecisionId]);
   assert.equal(manifest.environmentId, "online");
   assert.equal(manifest.channelKey, "1001");
+});
+
+test("Patch Waiver 必须由完整且未篡改的 Decision 覆盖", () => {
+  const evaluation = evaluatePatchFinalRanges({ policy: policy(), gate: "PUBLISH", contexts: [context({ finalValue: 13 })] });
+  const approved = createPatchValidationWaiverDecision({
+    issues: evaluation.issues,
+    requested: [{ issueFingerprint: evaluation.issues[0]!.fingerprint!, gate: "PUBLISH" }],
+    policyVersion: policy().version,
+    scopeRef: context().subjectRef,
+    objectInputHash: context().objectInputHash,
+    patchSetHash: context().patchSetHash,
+    reason: "发布例外",
+    approvedBy: "publisher",
+    approvedAt: NOW,
+  });
+  assert.throws(
+    () => assertPatchValidationWaiverDecisionCoverage({ waivers: approved.waivers }),
+    (error: unknown) => error instanceof PatchOffsetPolicyError && error.code === "PATCH_WAIVER_DECISION_EVIDENCE_MISSING",
+  );
+  assert.throws(
+    () => assertPatchValidationWaiverDecisionCoverage({ waivers: approved.waivers, decisions: [{ ...approved.decision, waiverIds: [] }] }),
+    (error: unknown) => error instanceof PatchOffsetPolicyError && error.code === "PATCH_WAIVER_DECISION_EVIDENCE_INVALID",
+  );
+  assert.doesNotThrow(() => assertPatchValidationWaiverDecisionCoverage({ waivers: approved.waivers, decisions: [approved.decision] }));
 });

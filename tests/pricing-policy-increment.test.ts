@@ -13,10 +13,8 @@ import {
 import { publishConfigurationSnapshot, verifySnapshotIntegrity } from "../lib/publishing";
 import { deterministicHash } from "../lib/rule-kernel";
 import {
-  adaptPatchTraceToCanonical,
   adaptRuleTraceToCanonical,
   createCalculationTraceArchive,
-  createCalculationTraceEntry,
 } from "../lib/calculation-trace";
 import { createPerformanceSummaryDefinition } from "../lib/performance-summary";
 import { createSeedState } from "../lib/seed";
@@ -232,32 +230,13 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     entityId: model.id,
     revisionId: String(model.revision),
   };
-  const baseTraceLength = adaptRuleTraceToCanonical({
-    projection,
-    subjectRef,
-  }).length;
   const [changedParameterKey, changedBefore] = Object.entries(projection.values)
     .find((entry): entry is [string, number] => typeof entry[1] === "number")!;
   const finalPanelValues = {
     ...projection.values,
     [changedParameterKey]: changedBefore + 1,
   };
-  const finalPanelTraceEntries = [createCalculationTraceEntry({
-    subjectRef,
-    parameterKey: changedParameterKey,
-    sequence: baseTraceLength + 1,
-    layer: "final_review_patch",
-    sourceRef: { sourceType: "final_review_patch", sourceId: "review:pricing-test" },
-    sourceVersion: "review:1",
-    ruleSetVersion: projection.ruleSetVersion,
-    before: changedBefore,
-    operation: "add",
-    operand: 1,
-    after: changedBefore + 1,
-    effect: "contextual",
-    warningIssueIds: [],
-    actions: [],
-  })];
+  const settlementTrace = finalSettlementTrace(finalPanelValues);
   const publishInput = {
     publicationMode: "new_formal",
     workspaceId: "workspace:test",
@@ -267,14 +246,13 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     seriesSkus: state.skuDrawers,
     projection,
     finalPanelValues,
-    finalPanelTraceEntries,
     componentSelections: oldSnapshot.componentSelections,
     patches: [],
     attributeAffixIds: oldSnapshot.attributeAffixIds,
     passiveAffixIds: oldSnapshot.passiveAffixIds,
     technologyIds: oldSnapshot.technologyIds,
     technologyDefinitions: state.technologies,
-    finalSettlementTrace: finalSettlementTrace(finalPanelValues),
+    finalSettlementTrace: settlementTrace,
     performanceSummaryDefinition: performanceDefinition,
     performanceSummaryDefinitions: state.performanceSummaryDefinitions,
     passiveAffixPayloads: oldSnapshot.passiveAffixPayloads,
@@ -306,6 +284,15 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
   assert.equal(snapshot.qualityValueAssessment?.formal, true);
   assert.equal(snapshot.calculationTrace?.schemaVersion, "calculation-trace/v1");
   assert.ok(snapshot.calculationTrace?.entries.length);
+  const expectedPanelTrace = adaptRuleTraceToCanonical({
+    projection: { ...projection, trace: settlementTrace },
+    subjectRef,
+  });
+  assert.deepEqual(
+    snapshot.calculationTrace?.entries.slice(0, expectedPanelTrace.length),
+    expectedPanelTrace,
+  );
+  assert.deepEqual(snapshot.attributeTrace, settlementTrace);
   assert.equal(verifySnapshotIntegrity(snapshot), true);
   const tampered = structuredClone(snapshot);
   tampered.calculationTrace!.entries[0].outputHash = "tampered";
@@ -339,70 +326,25 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     Object.fromEntries(Object.entries(panelTampered).filter(([key]) => key !== "contentHash")),
   );
   assert.equal(verifySnapshotIntegrity(panelTampered), false);
-  assert.throws(
-    () => publishConfigurationSnapshot({
-      ...publishInput,
-      finalPanelValues: oldSnapshot.finalPanelValues,
-      finalSettlementTrace: finalSettlementTrace(oldSnapshot.finalPanelValues),
-    }),
-    /TRACE_REPLAY_MISMATCH/,
-  );
-  const ghostPanelEntry = createCalculationTraceEntry({
-    subjectRef,
+  const ghostSettlementTrace = structuredClone(settlementTrace);
+  ghostSettlementTrace[0].contributions.push({
+    sequence: ghostSettlementTrace[0].contributions.length + 1,
+    ruleId: "test:final:ghost_panel_key",
+    sourceId: "test:final-settlement",
+    sourceName: "最终结算",
     parameterKey: "ghost_panel_key",
-    sequence: baseTraceLength + 2,
-    layer: "final_review_patch",
-    sourceRef: { sourceType: "final_review_patch", sourceId: "review:ghost" },
-    sourceVersion: "review:1",
-    ruleSetVersion: projection.ruleSetVersion,
+    operation: "base",
     before: null,
-    operation: "set",
     operand: 99,
     after: 99,
-    effect: "contextual",
-    warningIssueIds: [],
-    actions: [],
   });
   assert.throws(
     () => publishConfigurationSnapshot({
       ...publishInput,
-      finalPanelTraceEntries: [...finalPanelTraceEntries, ghostPanelEntry],
+      finalSettlementTrace: ghostSettlementTrace,
     }),
-    /finalPanelValues 缺少 Trace 面板参数：ghost_panel_key/,
+    /最终结算 Trace 与面板值不一致：ghost_panel_key/,
   );
-  const removeThenSetTrace = adaptPatchTraceToCanonical({
-    trace: [
-      {
-        patchId: "patch:remove",
-        scope: "final_review",
-        scopeId: model.id,
-        path: `values.${changedParameterKey}`,
-        operation: "remove",
-        before: changedBefore,
-        operand: undefined,
-        after: undefined,
-      },
-      {
-        patchId: "patch:restore",
-        scope: "final_review",
-        scopeId: model.id,
-        path: `values.${changedParameterKey}`,
-        operation: "set",
-        before: undefined,
-        operand: changedBefore + 1,
-        after: changedBefore + 1,
-      },
-    ],
-    subjectRef,
-    sourceVersion: "patch:remove-restore@1",
-    ruleSetVersion: projection.ruleSetVersion,
-    sequenceStart: baseTraceLength + 1,
-  });
-  const removeThenSetSnapshot = publishConfigurationSnapshot({
-    ...publishInput,
-    finalPanelTraceEntries: removeThenSetTrace,
-  });
-  assert.equal(verifySnapshotIntegrity(removeThenSetSnapshot), true);
   assert.equal(snapshot.performanceSummary?.status, "AVAILABLE");
   if (snapshot.performanceSummary?.status === "AVAILABLE") {
     assert.deepEqual(

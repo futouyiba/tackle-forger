@@ -62,7 +62,6 @@ import {
   assertCalculationTraceUsesRuleSetVersion,
   createCalculationTraceArchive,
   verifyCalculationTraceArchive,
-  type CalculationTraceEntry,
 } from "./calculation-trace";
 
 function entityRefIdentity(ref: {
@@ -106,8 +105,6 @@ export interface PublishModelInput {
   series: SeriesDefinition;
   projection: DerivedProjection;
   finalPanelValues: Record<string, number | string>;
-  /** 投影之后所有面板变更层的 canonical 条目；必须延续全局 sequence。 */
-  finalPanelTraceEntries?: CalculationTraceEntry[];
   componentSelections: ModelComponentSelection[];
   patches: ProjectionPatchRuleSource[];
   patchRevisions?: PatchRevisionRecord[];
@@ -449,28 +446,14 @@ export function publishConfigurationSnapshot(
           entityId: input.model.id,
           revisionId: String(input.model.revision),
         };
-        const canonicalProjection = input.finalPanelTraceEntries?.length
-          ? input.projection
-          : {
-              ...input.projection,
-              trace: input.finalSettlementTrace ?? input.projection.trace,
-            };
         const entries = adaptRuleTraceToCanonical({
-          projection: canonicalProjection,
+          projection: {
+            ...input.projection,
+            trace: input.finalSettlementTrace!,
+          },
           subjectRef,
           parameterDefinitions: input.patchOffsetGovernance?.parameterDefinitions,
         });
-        if (input.finalPanelTraceEntries?.length) {
-          for (const entry of input.finalPanelTraceEntries) {
-            if (
-              entityRefIdentity(entry.subjectRef) !== entityRefIdentity(subjectRef)
-              || entry.ruleSetVersion !== input.projection.ruleSetVersion
-            ) {
-              throw new Error("finalPanelTraceEntries 的 subjectRef 或 ruleSetVersion 与发布对象不一致。");
-            }
-          }
-          entries.push(...structuredClone(input.finalPanelTraceEntries));
-        }
         if (input.automaticPricing) {
           entries.push(...adaptPricingTraceToCanonical({
             pricing: input.automaticPricing,

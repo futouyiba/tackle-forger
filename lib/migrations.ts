@@ -32,10 +32,11 @@ import { defaultAffinityAxisWeights } from "./compatibility";
 import { migrateLegacyProductIdentity } from "./legacy-product-migration";
 import { CANONICAL_FEISHU_WORKBOOK } from "./feishu-workbook";
 import {
-  buildPatchRevision,
   emptyPatchLedger,
   importLegacyPatchesToLedger,
   migratePatchLedger,
+  patchRevisionIdentityKey,
+  type PatchLedgerMigrationContext,
 } from "./patch-ledger";
 import {
   CANONICAL_PATCH_OFFSET_POLICY_ID,
@@ -90,6 +91,14 @@ const QUALITY_PROFILES: QualityProfile[] = [
 ];
 
 type MutableWorkspace = Record<string, unknown> & Partial<WorkspaceState>;
+
+function patchLedgerMigrationContext(state:MutableWorkspace):PatchLedgerMigrationContext{
+  return {
+    frozenPatchRevisionKeys:arrayOf<WorkspaceState["configurationSnapshots"][number]>(state.configurationSnapshots)
+      .flatMap((snapshot)=>snapshot.patchReferences??[])
+      .map((reference)=>patchRevisionIdentityKey(reference.patchId,reference.patchRevision)),
+  };
+}
 
 function arrayOf<T>(value: unknown): T[] {
   return Array.isArray(value) ? value as T[] : [];
@@ -695,7 +704,7 @@ function migrateV14ToV15(state: MutableWorkspace): MutableWorkspace {
 
 function migrateV15ToV16(state: MutableWorkspace): MutableWorkspace {
   const ledger = state.patchLedger && typeof state.patchLedger === "object"
-    ? migratePatchLedger(state.patchLedger as WorkspaceState["patchLedger"])
+    ? migratePatchLedger(state.patchLedger as WorkspaceState["patchLedger"],patchLedgerMigrationContext(state))
     : emptyPatchLedger();
   const legacyLimits = state.ruleSettings?.patchOffsetLimits;
   if (legacyLimits && (legacyLimits.warning !== undefined || legacyLimits.error !== undefined)
@@ -1052,7 +1061,7 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
   state = {
     ...state,
     patchLedger: state.patchLedger && typeof state.patchLedger === "object"
-      ? migratePatchLedger(state.patchLedger as WorkspaceState["patchLedger"])
+      ? migratePatchLedger(state.patchLedger as WorkspaceState["patchLedger"],patchLedgerMigrationContext(state))
       : emptyPatchLedger(),
   };
   return state as WorkspaceState;
@@ -1160,7 +1169,7 @@ function migrateV7ToV8(state: MutableWorkspace): MutableWorkspace {
 
 function migrateV12ToV13(state: MutableWorkspace): MutableWorkspace {
   const ledger = state.patchLedger && typeof state.patchLedger === "object"
-    ? migratePatchLedger(state.patchLedger as WorkspaceState["patchLedger"])
+    ? migratePatchLedger(state.patchLedger as WorkspaceState["patchLedger"],patchLedgerMigrationContext(state))
     : emptyPatchLedger();
   return { ...state, schemaVersion: 13, patchLedger: ledger };
 }

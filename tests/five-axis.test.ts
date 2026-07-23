@@ -460,6 +460,7 @@ test("正式快照拒绝未发布、篡改或版本链过期的五维定义", ()
   });
   const common = {
     publicationMode: "new_formal" as const,
+    workspaceId: "workspace:test",
     model, sku, series, projection,
     seriesSkus: state.skuDrawers,
     finalPanelValues: existing.finalPanelValues,

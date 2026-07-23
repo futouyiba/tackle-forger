@@ -225,6 +225,8 @@ export interface PatchOperationRecord {
 }
 
 export interface PatchSnapshotReference {
+  /** 历史 Snapshot 可缺失；新正式 Snapshot 必须提供。 */
+  workspaceId?: string;
   patchId: string;
   patchRevision: number;
   orderedOperationIds: string[];
@@ -359,6 +361,8 @@ export interface PatchMirrorOperationResult {
 
 export interface PatchMirrorSyncCommand {
   idempotencyKey: string;
+  /** 历史命令可缺失；新命令必须提供。 */
+  workspaceId?: string;
   patchId: string;
   patchRevision: number;
   payloadHash: string;
@@ -382,6 +386,7 @@ export interface PatchMirrorCollaborationEntry {
 
 export interface PatchMirrorRemoteRow {
   remoteRowId: string;
+  workspaceId: string;
   patchId: string;
   patchRevision: number;
   operationId: string;
@@ -416,11 +421,14 @@ export interface PatchMirrorValidationIssue {
     | "PATCH_MIRROR_GROUP_INCOMPLETE"
     | "PATCH_MIRROR_COLLABORATION_INVALID"
     | "PATCH_MIRROR_EXPECTED_REVISION_CONFLICT"
+    | "PATCH_MIRROR_SCHEMA_MISMATCH"
+    | "PATCH_MIRROR_HASH_MISMATCH"
     | "PATCH_OPERATION_UNSUPPORTED"
     | "PATCH_PARAMETER_KEY_REQUIRED"
     | "PATCH_CLEAR_OPERAND_INVALID"
     | "PATCH_NUMERIC_REQUIRED"
     | "LEGACY_PATCH_MIN_MAX_REVIEW_REQUIRED"
+    | "LEGACY_PATCH_FROZEN_BASE_MISMATCH"
     | "LEGACY_PATCH_FROZEN_RESULT_MISMATCH";
   severity: "ERROR" | "WARNING";
   key: string;
@@ -1215,6 +1223,8 @@ export interface AffixQualityEvaluation {
 }
 
 export interface ConfigurationSnapshot {
+  /** 历史 Snapshot 可缺失；新正式 Snapshot 必须提供。 */
+  workspaceId?: string;
   id: string;
   version: number;
   modelId: string;
@@ -1225,6 +1235,7 @@ export interface ConfigurationSnapshot {
   projectionId: string;
   reductionStackingMode: ReductionStackingMode;
   patchSetHash: string;
+  patchSetHashContractVersion?: string;
   patchReferences?: PatchSnapshotReference[];
   /** 历史 Snapshot 可缺失；新正式 Snapshot 必须冻结以下 OPEN-004 证据。 */
   patchOffsetPolicyVersion?: string;

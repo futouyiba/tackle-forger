@@ -32,6 +32,8 @@ export interface AuthoritativePatchDiscreteContext {
 }
 
 export interface AuthoritativePatchObject {
+  /** 新正式复核/发布必须提供；历史证据可缺失并沿用旧 PatchSetHash。 */
+  workspaceId?: string;
   subjectRef: PatchReviewSubjectRef;
   ruleSet: RuleSetVersion;
   parameterDefinitions: ParameterDefinition[];
@@ -63,8 +65,9 @@ function orderedOperations(revision: PatchRevisionRecord) {
 
 export function authoritativePatchReferences(
   revisions: PatchRevisionRecord[],
+  workspaceId?:string,
 ): { references: PatchSnapshotReference[]; patchSetHash: string } {
-  return orderedPatchReferences(revisions);
+  return orderedPatchReferences(revisions,workspaceId);
 }
 
 function assertAuthorityVersions(object: AuthoritativePatchObject): void {
@@ -144,7 +147,7 @@ export function deriveAuthoritativePatchContexts(
       `对象 ${object.subjectRef.entityId} 没有可校验的真实离散 Projection/最终面板。`,
     );
   }
-  const { references, patchSetHash } = authoritativePatchReferences(object.patchRevisions);
+  const { references, patchSetHash } = authoritativePatchReferences(object.patchRevisions,object.workspaceId);
   const objectInputHash = authorityObjectInputHash(object, references);
   const trace = orderedRevisions(object.patchRevisions).flatMap((revision) =>
     orderedOperations(revision).map((operation) => ({
@@ -167,7 +170,12 @@ export function deriveAuthoritativePatchContexts(
 
   return [...object.contexts]
     .sort((left, right) => left.contextId.localeCompare(right.contextId))
-    .flatMap((discrete) => patchedParameterKeys.map((parameterKey): PatchFinalRangeContext => {
+    .flatMap((discrete) => {
+      // Replaying every authoritative discrete base is also the fail-closed
+      // conflict gate. The caller-provided final panel remains frozen evidence,
+      // but it cannot bypass invalid same-layer operation combinations.
+      applyRevisions(discrete.projection.values, object.patchRevisions);
+      return patchedParameterKeys.map((parameterKey): PatchFinalRangeContext => {
       const parameter = parameterByKey.get(parameterKey);
       if (!parameter) {
         throw new PatchOffsetPolicyError(
@@ -217,7 +225,8 @@ export function deriveAuthoritativePatchContexts(
         operationTrace: structuredClone(trace),
         traceHash,
       };
-    }));
+      });
+    });
 }
 
 export function evaluateAuthoritativePatchFinalRanges(input: {
@@ -262,7 +271,7 @@ export function authoritativeObjectIdentity(object: AuthoritativePatchObject): {
   patchSetHash: string;
   patchReferences: PatchSnapshotReference[];
 } {
-  const { references, patchSetHash } = authoritativePatchReferences(object.patchRevisions);
+  const { references, patchSetHash } = authoritativePatchReferences(object.patchRevisions,object.workspaceId);
   return {
     objectInputHash: authorityObjectInputHash(object, references),
     patchSetHash,
@@ -300,12 +309,25 @@ function applyRevisions(
 ): Record<string, number | string> {
   const values: Record<string, number | string> = structuredClone(base);
   const inheritedByLayerParameter = new Map<string, number | string>();
+  const setByLayerParameter = new Map<string,string>();
+  const clearByLayerParameter = new Map<string,string>();
   for (const revision of orderedRevisions(revisions)) {
     for (const operation of orderedOperations(revision)) {
       const before = values[operation.parameterKey];
       const layerParameter = `${revision.layerType}:${revision.subjectEntityId}:${operation.parameterKey}`;
       if (!inheritedByLayerParameter.has(layerParameter) && before !== undefined) {
         inheritedByLayerParameter.set(layerParameter, structuredClone(before));
+      }
+      if(operation.operation==="set"){
+        const priorSet=setByLayerParameter.get(layerParameter);
+        const priorClear=clearByLayerParameter.get(layerParameter);
+        if(priorSet) throw new PatchOffsetPolicyError("PATCH_SET_CONFLICT",`同层参数 ${operation.parameterKey} 存在多个 set：${priorSet}、${operation.operationId}。`);
+        if(priorClear) throw new PatchOffsetPolicyError("PATCH_SET_CLEAR_CONFLICT",`同层参数 ${operation.parameterKey} 的 set 与 clear 冲突：${priorClear}、${operation.operationId}。`);
+        setByLayerParameter.set(layerParameter,operation.operationId);
+      }else if(operation.operation==="clear"){
+        const priorSet=setByLayerParameter.get(layerParameter);
+        if(priorSet) throw new PatchOffsetPolicyError("PATCH_SET_CLEAR_CONFLICT",`同层参数 ${operation.parameterKey} 的 set 与 clear 冲突：${priorSet}、${operation.operationId}。`);
+        clearByLayerParameter.set(layerParameter,operation.operationId);
       }
       if (operation.operation === "clear") {
         if (!inheritedByLayerParameter.has(layerParameter)) {

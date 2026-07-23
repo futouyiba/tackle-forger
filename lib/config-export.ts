@@ -113,6 +113,7 @@ export function createExportManifest(input: {
         );
       }
       const authority: AuthoritativePatchObject = {
+        workspaceId:input.snapshot.workspaceId,
         subjectRef: {
           scopeType: "model",
           entityId: input.snapshot.modelId,

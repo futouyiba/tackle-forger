@@ -1,4 +1,6 @@
 import { deterministicHash } from "./rule-kernel";
+import { jcsSha256Hex } from "./canonical-json";
+import { PATCH_SET_HASH_CONTRACT_VERSION, patchMirrorDetailKey, patchMirrorGroupKey, patchSetHashForReferences } from "./patch-contract";
 import { assertPatchReviewCoverage, assertPatchRevisionDeterministicallyReplayable, assertPublishedPatchOffsetPolicy, invalidatePatchReviewBatch, PatchOffsetPolicyError } from "./patch-offset-policy";
 import type { PatchAbsorptionAssessment, PatchAbsorptionOperationEvidence, PatchLedger, PatchMirrorOperationResult, PatchMirrorPayloadRow, PatchMirrorPullAudit, PatchMirrorRemoteRow, PatchMirrorSyncCommand, PatchMirrorValidationIssue, PatchOffsetPolicyVersion, PatchOperationRecord, PatchPatternSummary, PatchReviewBatch, PatchReviewSubjectRef, PatchRevisionRecord, PatchSnapshotReference, PatchValidationWaiver, ProjectionPatchRuleSource, RuleSourceChangeDraft, WorkspacePolicyRecord } from "./types";
 
@@ -10,6 +12,31 @@ export class PatchLedgerError extends Error {
 
 type RawPatchOperation = Record<string, unknown>;
 const CANONICAL_PATCH_OPERATIONS = new Set(["set", "add", "multiply", "clear"]);
+
+export interface FrozenPatchBaseLookup {
+  found: boolean;
+  value?: unknown;
+  evidenceRef?: string;
+}
+
+export interface FrozenPatchBaseRequest {
+  patchId: string;
+  patchRevision: number;
+  subjectEntityId: string;
+  baseRuleSetVersion: string;
+  baseObjectRevision: number;
+  parameterKey: string;
+}
+
+export interface PatchLedgerMigrationContext {
+  workspaceId?: string;
+  frozenPatchRevisionKeys?: Iterable<string>;
+  resolveFrozenBaseValue?: (request: FrozenPatchBaseRequest) => FrozenPatchBaseLookup;
+}
+
+export function patchRevisionIdentityKey(patchId:string,patchRevision:number):string{
+  return JSON.stringify({patchId,patchRevision});
+}
 
 function own(record: RawPatchOperation, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(record, key);
@@ -25,6 +52,7 @@ function normalizeLegacyOperation(input: {
   operationIndex: number;
   baseRuleSetVersion: string;
   baseObjectRevision: number;
+  frozenBase?: FrozenPatchBaseLookup;
 }): Omit<PatchOperationRecord, "patchId" | "patchRevision"> {
   const name = rawOperationName(input.raw);
   const parameterKey = input.raw.parameterKey ?? input.raw.path;
@@ -55,6 +83,7 @@ function normalizeLegacyOperation(input: {
       !input.baseRuleSetVersion.trim()
       || !Number.isSafeInteger(input.baseObjectRevision)
       || input.baseObjectRevision < 1
+      || !input.frozenBase?.found
       || typeof before !== "number"
       || typeof operand !== "number"
       || typeof after !== "number"
@@ -65,6 +94,12 @@ function normalizeLegacyOperation(input: {
       throw new PatchLedgerError(
         "LEGACY_PATCH_MIN_MAX_REVIEW_REQUIRED",
         "旧 min/max 缺少可验证的冻结基底、before 或 after",
+      );
+    }
+    if (typeof input.frozenBase.value !== "number" || !Object.is(input.frozenBase.value,before)) {
+      throw new PatchLedgerError(
+        "LEGACY_PATCH_FROZEN_BASE_MISMATCH",
+        "旧 min/max 的 before 与冻结版本对象真实参数值不一致",
       );
     }
     const expected = name === "min" ? Math.min(before, operand) : Math.max(before, operand);
@@ -117,10 +152,12 @@ function assertCanonicalOperation(operation: PatchOperationRecord | Omit<PatchOp
   }
 }
 
-function mirrorPayloadForRevision(revision: PatchRevisionRecord): PatchMirrorPayloadRow[] {
+function mirrorPayloadForRevision(revision: PatchRevisionRecord,workspaceId:string): PatchMirrorPayloadRow[] {
+  if(!workspaceId.trim()) throw new PatchLedgerError("PATCH_MIRROR_SCHEMA_MISMATCH","Patch 镜像 workspaceId 不能为空");
   return sortedOperations(revision.operations).map((operation) => {
     assertCanonicalOperation(operation);
     return {
+      workspaceId,
       patchId: revision.patchId,
       patchRevision: revision.patchRevision,
       operationId: operation.operationId,
@@ -142,17 +179,40 @@ function mirrorPayloadForRevision(revision: PatchRevisionRecord): PatchMirrorPay
 export function emptyPatchLedger(): PatchLedger {
   return { schemaVersion: CURRENT_PATCH_LEDGER_SCHEMA_VERSION, revisions: [], mirrorCommands: [], ruleSourceChangeDrafts: [], absorptionAssessments: [], mirrorPullAudits: [], migrationReviewItems: [] };
 }
-function migrationSemanticFingerprint(revisions: PatchRevisionRecord[]): string {
+function resolvedFrozenBase(
+  context:PatchLedgerMigrationContext|undefined,
+  revision:Pick<PatchRevisionRecord,"patchId"|"patchRevision"|"subjectEntityId"|"baseRuleSetVersion"|"baseObjectRevision">,
+  parameterKey:string,
+):FrozenPatchBaseLookup|undefined{
+  return context?.resolveFrozenBaseValue?.({
+    patchId:revision.patchId,
+    patchRevision:revision.patchRevision,
+    subjectEntityId:revision.subjectEntityId,
+    baseRuleSetVersion:revision.baseRuleSetVersion,
+    baseObjectRevision:revision.baseObjectRevision,
+    parameterKey,
+  });
+}
+
+function migrationSemanticFingerprint(revisions: PatchRevisionRecord[],context?:PatchLedgerMigrationContext): string {
   return deterministicHash(revisions.map((revision)=>({
     patchId:revision.patchId,patchRevision:revision.patchRevision,
     orderedOperations:[...revision.operations].sort((a,b)=>a.operationIndex-b.operationIndex||a.operationId.localeCompare(b.operationId)).map((operation)=>{
       try {
+        const rawIntent = operation.rawIntent as RawPatchOperation | undefined;
+        const raw = rawIntent && ["remove","min","max"].includes(String(rawOperationName(rawIntent)))
+          ? rawIntent
+          : operation as unknown as RawPatchOperation;
+        const parameterKey = raw.parameterKey ?? raw.path ?? operation.parameterKey;
         const normalized = normalizeLegacyOperation({
-          raw: operation as unknown as RawPatchOperation,
+          raw,
           operationId: operation.operationId,
           operationIndex: operation.operationIndex,
           baseRuleSetVersion: revision.baseRuleSetVersion,
           baseObjectRevision: revision.baseObjectRevision,
+          frozenBase: typeof parameterKey === "string"
+            ? resolvedFrozenBase(context,revision,parameterKey)
+            : undefined,
         });
         return {
           operationId:normalized.operationId,operationIndex:normalized.operationIndex,parameterKey:normalized.parameterKey,operation:normalized.operation,
@@ -167,11 +227,11 @@ function migrationSemanticFingerprint(revisions: PatchRevisionRecord[]): string 
     }),
   })).sort((a,b)=>a.patchId.localeCompare(b.patchId)||a.patchRevision-b.patchRevision));
 }
-export function verifyPatchLedgerMigrationSemantics(before:PatchRevisionRecord[], after:PatchRevisionRecord[]):{valid:boolean;beforeHash:string;afterHash:string}{
-  const beforeHash=migrationSemanticFingerprint(before), afterHash=migrationSemanticFingerprint(after);
+export function verifyPatchLedgerMigrationSemantics(before:PatchRevisionRecord[], after:PatchRevisionRecord[],context?:PatchLedgerMigrationContext):{valid:boolean;beforeHash:string;afterHash:string}{
+  const beforeHash=migrationSemanticFingerprint(before,context), afterHash=migrationSemanticFingerprint(after,context);
   return {valid:before.length===after.length&&beforeHash===afterHash,beforeHash,afterHash};
 }
-export function migratePatchLedger(input: PatchLedger | Record<string, unknown>): PatchLedger {
+export function migratePatchLedger(input: PatchLedger | Record<string, unknown>,context:PatchLedgerMigrationContext={}): PatchLedger {
   const source = structuredClone(input) as PatchLedger & Record<string, unknown>;
   const version = typeof source.schemaVersion === "number" ? source.schemaVersion : 1;
   if (version > CURRENT_PATCH_LEDGER_SCHEMA_VERSION || version < 1) {
@@ -183,6 +243,7 @@ export function migratePatchLedger(input: PatchLedger | Record<string, unknown>)
   if (migrated.schemaVersion === 2) migrated = { ...migrated, schemaVersion: 3, absorptionAssessments: [] } as PatchLedger & Record<string, unknown>;
   if (migrated.schemaVersion === 3) migrated = { ...migrated, schemaVersion: 4, mirrorPullAudits: [] } as PatchLedger & Record<string, unknown>;
   if (migrated.schemaVersion === 4) {
+    const frozenRevisionKeys = new Set(context.frozenPatchRevisionKeys ?? []);
     const migrationReviewItems = Array.isArray(migrated.migrationReviewItems)
       ? structuredClone(migrated.migrationReviewItems)
       : [];
@@ -201,7 +262,7 @@ export function migratePatchLedger(input: PatchLedger | Record<string, unknown>)
       });
       if (!requiresNormalization) return rawRevision;
       const reviewId = `patch-operation-migration:${rawRevision.patchId}@${rawRevision.patchRevision}`;
-      if (rawRevision.snapshotRefs.length) {
+      if (rawRevision.snapshotRefs.length || frozenRevisionKeys.has(patchRevisionIdentityKey(rawRevision.patchId,rawRevision.patchRevision))) {
         if (!migrationReviewItems.some((item) => item.id === reviewId)) {
           migrationReviewItems.push({
             id: reviewId,
@@ -221,6 +282,7 @@ export function migratePatchLedger(input: PatchLedger | Record<string, unknown>)
             operationIndex: operation.operationIndex,
             baseRuleSetVersion: rawRevision.baseRuleSetVersion,
             baseObjectRevision: rawRevision.baseObjectRevision,
+            frozenBase: resolvedFrozenBase(context,rawRevision,operation.parameterKey),
           }),
           patchId: rawRevision.patchId,
           patchRevision: rawRevision.patchRevision,
@@ -243,13 +305,28 @@ export function migratePatchLedger(input: PatchLedger | Record<string, unknown>)
     });
     const mirrorCommands = (Array.isArray(migrated.mirrorCommands) ? migrated.mirrorCommands : []).map((command) => {
       const legacyCommand = command as PatchMirrorSyncCommand & Record<string, unknown>;
-      if (typeof legacyCommand.payloadHash === "string" && Array.isArray(legacyCommand.payload)) return legacyCommand;
+      const existingWorkspaceId = typeof legacyCommand.workspaceId === "string"
+        ? legacyCommand.workspaceId
+        : "";
+      if (
+        existingWorkspaceId.trim()
+        && typeof legacyCommand.payloadHash === "string"
+        && Array.isArray(legacyCommand.payload)
+        && legacyCommand.payload.every((row) => row.workspaceId === existingWorkspaceId)
+        && legacyCommand.payloadHash === jcsSha256Hex(legacyCommand.payload)
+      ) {
+        return legacyCommand;
+      }
       const revision = revisions.find((entry) =>
         entry.patchId === legacyCommand.patchId && entry.patchRevision === legacyCommand.patchRevision);
       try {
         if (!revision) throw new PatchLedgerError("PATCH_REVISION_NOT_FOUND", "Mirror command revision not found");
-        const payload = mirrorPayloadForRevision(revision);
-        return { ...legacyCommand, payload, payloadHash: deterministicHash(payload) };
+        const workspaceId = typeof legacyCommand.workspaceId === "string" && legacyCommand.workspaceId.trim()
+          ? legacyCommand.workspaceId
+          : context.workspaceId;
+        if(!workspaceId) throw new PatchLedgerError("PATCH_MIRROR_SCHEMA_MISMATCH","旧镜像命令缺少 workspaceId");
+        const payload = mirrorPayloadForRevision(revision,workspaceId);
+        return { ...legacyCommand, workspaceId, payload, payloadHash: jcsSha256Hex(payload) };
       } catch (error) {
         const reviewId = `patch-mirror-command-migration:${legacyCommand.idempotencyKey}`;
         if (!migrationReviewItems.some((item) => item.id === reviewId)) {
@@ -261,7 +338,7 @@ export function migratePatchLedger(input: PatchLedger | Record<string, unknown>)
             preservedPayload: structuredClone(legacyCommand),
           });
         }
-        return { ...legacyCommand, payload: [], payloadHash: deterministicHash([]) };
+        return legacyCommand;
       }
     });
     migrated = { ...migrated, schemaVersion: 5, revisions, mirrorCommands, migrationReviewItems } as PatchLedger & Record<string, unknown>;
@@ -275,7 +352,7 @@ export function migratePatchLedger(input: PatchLedger | Record<string, unknown>)
     mirrorPullAudits: Array.isArray(migrated.mirrorPullAudits) ? migrated.mirrorPullAudits : [],
     migrationReviewItems: Array.isArray(migrated.migrationReviewItems) ? migrated.migrationReviewItems : [],
   } as PatchLedger;
-  const verification=verifyPatchLedgerMigrationSemantics(beforeRevisions,result.revisions);
+  const verification=verifyPatchLedgerMigrationSemantics(beforeRevisions,result.revisions,context);
   if(!verification.valid&&!result.migrationReviewItems.some((item)=>item.id==="patch-ledger-migration:semantic")) result.migrationReviewItems.push({
     id:"patch-ledger-migration:semantic",patchId:"PATCH_LEDGER",patchRevision:version,reason:"PATCH_LEDGER_MIGRATION_SEMANTIC_MISMATCH",
     preservedPayload:{beforeHash:verification.beforeHash,afterHash:verification.afterHash,source:structuredClone(input)},
@@ -318,7 +395,11 @@ export function buildPatchRevision(input: Omit<PatchRevisionRecord, "revisionHas
   const record = { ...input, operations: sortedOperations(operations) };
   return { ...record, revisionHash: patchRevisionHash(record) };
 }
-export function importLegacyPatchesToLedger(ledger: PatchLedger, patches: ProjectionPatchRuleSource[]): PatchLedger {
+export function importLegacyPatchesToLedger(
+  ledger: PatchLedger,
+  patches: ProjectionPatchRuleSource[],
+  context:PatchLedgerMigrationContext={},
+): PatchLedger {
   const next = structuredClone(ledger);
   for (const patch of patches) {
     if (next.revisions.some((entry) => entry.patchId === patch.id)) continue;
@@ -361,6 +442,15 @@ export function importLegacyPatchesToLedger(ledger: PatchLedger, patches: Projec
             : operationIndex,
           baseRuleSetVersion: patch.baseRuleSetVersion,
           baseObjectRevision,
+          frozenBase: resolvedFrozenBase(context,{
+            patchId:patch.id,
+            patchRevision:1,
+            subjectEntityId:patch.scopeId,
+            baseRuleSetVersion:patch.baseRuleSetVersion,
+            baseObjectRevision,
+          },typeof (operation.parameterKey ?? operation.path)==="string"
+            ? String(operation.parameterKey ?? operation.path)
+            : ""),
         })),
       }));
     } catch (error) {
@@ -485,16 +575,35 @@ export function reviewPatchBatch(input:{ledger:PatchLedger;reviewBatch:PatchRevi
   return ledger;
 }
 export type PatchMirrorPullIssue = PatchMirrorValidationIssue;
-const mirrorKey = (patchId:string, patchRevision:number, operationId:string) => patchId+"@"+patchRevision+"@"+operationId;
 function mirrorIssue(code:PatchMirrorValidationIssue["code"], key:string, message:string, extra:Partial<PatchMirrorValidationIssue>={}):PatchMirrorValidationIssue {
   return {source:"patch",code,severity:"ERROR",key,message,...extra};
 }
-export function reconcilePatchMirrorPull(input:{ledger:PatchLedger;remoteDetailKeys?:string[];remoteRows?:PatchMirrorRemoteRow[];remoteRevision?:string;pulledAt?:string;capabilities:Iterable<string>}):{ledger:PatchLedger;issues:PatchMirrorPullIssue[];quarantinedRemoteRowIds:string[];refillDetailKeys:string[]}{
+export function reconcilePatchMirrorPull(input:{
+  workspaceId:string;
+  ledger:PatchLedger;
+  remoteDetailKeys?:string[];
+  remoteRows?:PatchMirrorRemoteRow[];
+  remoteRevision?:string;
+  pulledAt?:string;
+  capabilities:Iterable<string>;
+  resolveFrozenBaseValue?:PatchLedgerMigrationContext["resolveFrozenBaseValue"];
+}):{ledger:PatchLedger;issues:PatchMirrorPullIssue[];quarantinedRemoteRowIds:string[];refillDetailKeys:string[]}{
   requireCapability(input.capabilities,"patch.mirror.pull");
-  const localByKey=new Map(input.ledger.revisions.flatMap((r)=>r.operations.map((o)=>[mirrorKey(r.patchId,r.patchRevision,o.operationId),{revision:r,operation:o}] as const)));
+  if(!input.workspaceId.trim()) throw new PatchLedgerError("PATCH_MIRROR_SCHEMA_MISMATCH","Patch 镜像 workspaceId 不能为空");
+  const localByKey=new Map(input.ledger.revisions.flatMap((r)=>r.operations.map((o)=>[
+    patchMirrorDetailKey({workspaceId:input.workspaceId,patchId:r.patchId,patchRevision:r.patchRevision,operationId:o.operationId}),
+    {revision:r,operation:o},
+  ] as const)));
   const issues:PatchMirrorPullIssue[]=[];
   const quarantined=new Set<string>();
   const normalizedRemoteRows=(input.remoteRows??[]).flatMap((row) => {
+    const rawWorkspaceId=(row as unknown as {workspaceId?:unknown}).workspaceId;
+    if(typeof rawWorkspaceId!=="string"||!rawWorkspaceId.trim()){
+      issues.push(mirrorIssue("PATCH_MIRROR_SCHEMA_MISMATCH",row.remoteRowId,"远端 Patch 行缺少合法 workspaceId",{remoteRowId:row.remoteRowId}));
+      quarantined.add(row.remoteRowId);
+      return [];
+    }
+    if(rawWorkspaceId!==input.workspaceId) return [];
     try {
       const normalized = normalizeLegacyOperation({
         raw: row as unknown as RawPatchOperation,
@@ -502,6 +611,14 @@ export function reconcilePatchMirrorPull(input:{ledger:PatchLedger;remoteDetailK
         operationIndex: row.operationIndex,
         baseRuleSetVersion: row.baseRuleSetVersion,
         baseObjectRevision: row.baseObjectRevision,
+        frozenBase: input.resolveFrozenBaseValue?.({
+          patchId:row.patchId,
+          patchRevision:row.patchRevision,
+          subjectEntityId:row.subjectEntityId,
+          baseRuleSetVersion:row.baseRuleSetVersion,
+          baseObjectRevision:row.baseObjectRevision,
+          parameterKey:row.parameterKey,
+        }),
       });
       assertCanonicalOperation(normalized);
       return [{
@@ -517,7 +634,7 @@ export function reconcilePatchMirrorPull(input:{ledger:PatchLedger;remoteDetailK
         : "PATCH_OPERATION_UNSUPPORTED";
       issues.push(mirrorIssue(
         code,
-        mirrorKey(row.patchId,row.patchRevision,row.operationId),
+        patchMirrorDetailKey({workspaceId:input.workspaceId,patchId:row.patchId,patchRevision:row.patchRevision,operationId:row.operationId}),
         "远端旧 Patch 操作无法无损规范化，已隔离等待复核",
         {patchId:row.patchId,patchRevision:row.patchRevision,operationId:row.operationId,remoteRowId:row.remoteRowId},
       ));
@@ -527,17 +644,17 @@ export function reconcilePatchMirrorPull(input:{ledger:PatchLedger;remoteDetailK
   });
   const rows=normalizedRemoteRows.length?normalizedRemoteRows:(input.remoteDetailKeys??[]).map((key,index)=>({remoteRowId:"legacy:"+index,key}));
   const counts=new Map<string,number>();
-  for(const row of rows){const key="key" in row?row.key:mirrorKey(row.patchId,row.patchRevision,row.operationId);counts.set(key,(counts.get(key)??0)+1);}
+  for(const row of rows){const key="key" in row?row.key:patchMirrorDetailKey({workspaceId:row.workspaceId,patchId:row.patchId,patchRevision:row.patchRevision,operationId:row.operationId});counts.set(key,(counts.get(key)??0)+1);}
   for(const key of localByKey.keys()) if(!counts.has(key)) issues.push(mirrorIssue("PATCH_MIRROR_ROW_MISSING",key,"飞书镜像缺少本地权威操作行"));
   for(const [key,count] of counts) {
     if(!localByKey.has(key)) issues.push(mirrorIssue("PATCH_MIRROR_UNKNOWN_KEY",key,"飞书镜像包含未知稳定ID"));
     if(count>1) issues.push(mirrorIssue("PATCH_MIRROR_DUPLICATE_KEY",key,"飞书镜像明细幂等键重复"));
   }
   for(const row of normalizedRemoteRows){
-    const key=mirrorKey(row.patchId,row.patchRevision,row.operationId), local=localByKey.get(key);
+    const key=patchMirrorDetailKey({workspaceId:row.workspaceId,patchId:row.patchId,patchRevision:row.patchRevision,operationId:row.operationId}), local=localByKey.get(key);
     if(!local||counts.get(key)!==1){quarantined.add(row.remoteRowId);continue;}
     const controlled: Array<[string,unknown,unknown]>=[
-      ["operationIndex",row.operationIndex,local.operation.operationIndex],["scopeType",row.scopeType,local.revision.scopeType],
+      ["workspaceId",row.workspaceId,input.workspaceId],["operationIndex",row.operationIndex,local.operation.operationIndex],["scopeType",row.scopeType,local.revision.scopeType],
       ["layerType",row.layerType,local.revision.layerType],["subjectEntityId",row.subjectEntityId,local.revision.subjectEntityId],
       ["baseRuleSetVersion",row.baseRuleSetVersion,local.revision.baseRuleSetVersion],["baseObjectRevision",row.baseObjectRevision,local.revision.baseObjectRevision],
       ["parameterKey",row.parameterKey,local.operation.parameterKey],["operation",row.operation,local.operation.operation],
@@ -552,21 +669,22 @@ export function reconcilePatchMirrorPull(input:{ledger:PatchLedger;remoteDetailK
     }
   }
   for(const revision of input.ledger.revisions){
-    const keys=revision.operations.map((op)=>mirrorKey(revision.patchId,revision.patchRevision,op.operationId));
+    const keys=revision.operations.map((op)=>patchMirrorDetailKey({workspaceId:input.workspaceId,patchId:revision.patchId,patchRevision:revision.patchRevision,operationId:op.operationId}));
     const present=keys.filter((key)=>counts.get(key)===1).length;
-    if(present>0&&present<keys.length) issues.push(mirrorIssue("PATCH_MIRROR_GROUP_INCOMPLETE",revision.patchId+"@"+revision.patchRevision,"飞书镜像中的Patch revision明细组不完整",{patchId:revision.patchId,patchRevision:revision.patchRevision}));
+    if(present>0&&present<keys.length) issues.push(mirrorIssue("PATCH_MIRROR_GROUP_INCOMPLETE",patchMirrorGroupKey({workspaceId:input.workspaceId,patchId:revision.patchId,patchRevision:revision.patchRevision}),"飞书镜像中的Patch revision明细组不完整",{patchId:revision.patchId,patchRevision:revision.patchRevision}));
   }
   const refillDetailKeys=issues.filter((issue)=>issue.code==="PATCH_MIRROR_ROW_MISSING").map((issue)=>issue.key).sort();
   const audit:PatchMirrorPullAudit={pulledAt:input.pulledAt??new Date(0).toISOString(),remoteRevision:input.remoteRevision??"UNKNOWN",issues,quarantinedRemoteRowIds:[...quarantined].sort(),refillDetailKeys};
   return {ledger:{...input.ledger,mirrorPullAudits:[...input.ledger.mirrorPullAudits,audit]},issues,quarantinedRemoteRowIds:audit.quarantinedRemoteRowIds,refillDetailKeys};
 }
 
-export function updatePatchMirrorSuggestion(input:{ledger:PatchLedger;patchId:string;patchRevision:number;expectedRemoteRevision:string;actualRemoteRevision:string;value:boolean;now:string;capabilities:Iterable<string>}):PatchLedger{
+export function updatePatchMirrorSuggestion(input:{workspaceId:string;ledger:PatchLedger;patchId:string;patchRevision:number;expectedRemoteRevision:string;actualRemoteRevision:string;value:boolean;now:string;capabilities:Iterable<string>}):PatchLedger{
   requireCapability(input.capabilities,"patch.mirror.write");
+  if(!input.workspaceId.trim()) throw new PatchLedgerError("PATCH_MIRROR_SCHEMA_MISMATCH","Patch 镜像 workspaceId 不能为空");
   const revision=input.ledger.revisions.find((r)=>r.patchId===input.patchId&&r.patchRevision===input.patchRevision);
   if(!revision) throw new PatchLedgerError("PATCH_REVISION_NOT_FOUND","Revision not found");
   if(input.expectedRemoteRevision!==input.actualRemoteRevision){
-    const issue=mirrorIssue("PATCH_MIRROR_EXPECTED_REVISION_CONFLICT",input.patchId+"@"+input.patchRevision,"协作状态远端revision已变化，禁止覆盖",{patchId:input.patchId,patchRevision:input.patchRevision});
+    const issue=mirrorIssue("PATCH_MIRROR_EXPECTED_REVISION_CONFLICT",patchMirrorGroupKey({workspaceId:input.workspaceId,patchId:input.patchId,patchRevision:input.patchRevision}),"协作状态远端revision已变化，禁止覆盖",{patchId:input.patchId,patchRevision:input.patchRevision});
     const audit:PatchMirrorPullAudit={pulledAt:input.now,remoteRevision:input.actualRemoteRevision,issues:[issue],quarantinedRemoteRowIds:[],refillDetailKeys:[]};
     return {...input.ledger,revisions:input.ledger.revisions.map((r)=>r===revision?{...r,mirrorSyncState:"CONFLICT" as const}:r),mirrorPullAudits:[...input.ledger.mirrorPullAudits,audit]};
   }
@@ -599,7 +717,11 @@ export function replayPatchRevision(base: Record<string, unknown>, revision: Pat
   }
   return { value, trace };
 }
-export function orderedPatchReferences(revisions: PatchRevisionRecord[]): { references: PatchSnapshotReference[]; patchSetHash: string } {
+export function orderedPatchReferences(
+  revisions:PatchRevisionRecord[],
+  workspaceId?:string,
+):{references:PatchSnapshotReference[];patchSetHash:string;patchSetHashContractVersion?:string}{
+  if(workspaceId!==undefined&&!workspaceId.trim()) throw new PatchLedgerError("PATCH_WORKSPACE_ID_REQUIRED","新 PatchSet 的 workspaceId 不能为空");
   const layerOrder: Record<PatchRevisionRecord["layerType"], number> = {
     derivation: 0,
     series: 1,
@@ -625,24 +747,28 @@ export function orderedPatchReferences(revisions: PatchRevisionRecord[]): { refe
     || a.subjectEntityId.localeCompare(b.subjectEntityId)
     || a.patchId.localeCompare(b.patchId)
     || a.patchRevision-b.patchRevision).map((r)=>({
+    ...(workspaceId?{workspaceId}:{}),
     patchId:r.patchId, patchRevision:r.patchRevision, orderedOperationIds:sortedOperations(r.operations).map((op)=>op.operationId),
   }));
-  return { references, patchSetHash: deterministicHash(references) };
+  return workspaceId
+    ? {references,patchSetHash:patchSetHashForReferences(references,PATCH_SET_HASH_CONTRACT_VERSION),patchSetHashContractVersion:PATCH_SET_HASH_CONTRACT_VERSION}
+    : {references,patchSetHash:patchSetHashForReferences(references)};
 }
-export function beginPatchMirrorSync(input: { ledger: PatchLedger; patchId:string; patchRevision:number; idempotencyKey:string; expectedRemoteRevision?:string; now:string; capabilities:Iterable<string> }) {
+export function beginPatchMirrorSync(input: { workspaceId:string; ledger: PatchLedger; patchId:string; patchRevision:number; idempotencyKey:string; expectedRemoteRevision?:string; now:string; capabilities:Iterable<string> }) {
   requireCapability(input.capabilities, "patch.mirror.write");
+  if(!input.workspaceId.trim()) throw new PatchLedgerError("PATCH_MIRROR_SCHEMA_MISMATCH","Patch 镜像 workspaceId 不能为空");
   const revision=input.ledger.revisions.find((r)=>r.patchId===input.patchId&&r.patchRevision===input.patchRevision);
   if(!revision) throw new PatchLedgerError("PATCH_REVISION_NOT_FOUND","Revision not found");
-  const payload = mirrorPayloadForRevision(revision);
-  const payloadHash = deterministicHash(payload);
+  const payload = mirrorPayloadForRevision(revision,input.workspaceId);
+  const payloadHash = jcsSha256Hex(payload);
   const old = input.ledger.mirrorCommands.find((c)=>c.idempotencyKey===input.idempotencyKey);
   if (old) {
-    if (old.patchId !== input.patchId || old.patchRevision !== input.patchRevision || old.payloadHash !== payloadHash) {
+    if (old.workspaceId !== input.workspaceId || old.patchId !== input.patchId || old.patchRevision !== input.patchRevision || old.payloadHash !== payloadHash) {
       throw new PatchLedgerError("PATCH_MIRROR_IDEMPOTENCY_CONFLICT", "Mirror idempotency key is already bound to a different canonical payload");
     }
     return { ledger:input.ledger, command:old, idempotent:true };
   }
-  const command:PatchMirrorSyncCommand={idempotencyKey:input.idempotencyKey,patchId:input.patchId,patchRevision:input.patchRevision,payloadHash,payload,expectedRemoteRevision:input.expectedRemoteRevision,state:"PENDING",operationResults:revision.operations.map((op)=>({operationId:op.operationId,status:"PENDING"})),createdAt:input.now,updatedAt:input.now};
+  const command:PatchMirrorSyncCommand={idempotencyKey:input.idempotencyKey,workspaceId:input.workspaceId,patchId:input.patchId,patchRevision:input.patchRevision,payloadHash,payload,expectedRemoteRevision:input.expectedRemoteRevision,state:"PENDING",operationResults:revision.operations.map((op)=>({operationId:op.operationId,status:"PENDING"})),createdAt:input.now,updatedAt:input.now};
   return {ledger:{...input.ledger,revisions:input.ledger.revisions.map((r)=>r===revision?{...r,mirrorSyncState:"PENDING" as const}:r),mirrorCommands:[...input.ledger.mirrorCommands,command]},command,idempotent:false};
 }
 export function recordPatchMirrorResult(input:{ledger:PatchLedger;idempotencyKey:string;operationResults:PatchMirrorOperationResult[];readbackEvidence?:unknown;connectorAvailable:boolean;now:string}):PatchLedger{
@@ -655,7 +781,9 @@ export function recordPatchMirrorResult(input:{ledger:PatchLedger;idempotencyKey
   const mirrorState: PatchRevisionRecord["mirrorSyncState"]=synced?"SYNCED":failed?"WRITE_FAILED":"WRITING";
   return {...input.ledger,revisions:input.ledger.revisions.map((r)=>r.patchId===command.patchId&&r.patchRevision===command.patchRevision?{...r,mirrorSyncState:mirrorState}:r),mirrorCommands:input.ledger.mirrorCommands.map((c)=>c===command?{...c,state:synced?"COMPLETED":failed?"FAILED":"READBACK_REQUIRED",operationResults:results,readbackEvidence:input.readbackEvidence,updatedAt:input.now}:c)};
 }
-export function verifyPatchSetHash(references: PatchSnapshotReference[], expectedHash:string){return deterministicHash(references)===expectedHash;}
+export function verifyPatchSetHash(references:PatchSnapshotReference[],expectedHash:string,contractVersion?:string){
+  try{return patchSetHashForReferences(references,contractVersion)===expectedHash;}catch{return false;}
+}
 
 export interface PatchAnalysisContext {
   subjectEntityId: string;

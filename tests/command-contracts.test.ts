@@ -262,9 +262,15 @@ test("R9 error必阻断、deny不可waive、修复动作由Capability决定", ()
 });
 
 test("R10 Patch与UpgradeCandidate只允许权威状态迁移", () => {
-  assert.equal(transitionPatchState("base_changed", "rebase_required"), "rebase_required");
-  assert.equal(transitionPatchState("rebasing", "pending_review"), "pending_review");
-  assert.throws(() => transitionPatchState("approved", "draft"), /非法/);
+  assert.equal(transitionPatchState("DRAFT", "REBASE_REQUIRED"), "REBASE_REQUIRED");
+  assert.equal(transitionPatchState("PENDING_REVIEW", "REBASE_REQUIRED"), "REBASE_REQUIRED");
+  assert.throws(() => transitionPatchState("REBASE_REQUIRED", "PENDING_REVIEW"), /非法/);
+  assert.throws(() => transitionPatchState("ACTIVE", "SUPERSEDED"), /非法/);
+  assert.throws(() => transitionPatchState("ABSORBED", "SUPERSEDED"), /非法/);
+  assert.throws(() => transitionPatchState("PARTIALLY_ABSORBED", "SUPERSEDED"), /非法/);
+  assert.throws(() => transitionPatchState("APPROVED", "WITHDRAWN"), /非法/);
+  assert.throws(() => transitionPatchState("DRAFT", "APPROVED"), /非法/);
+  assert.throws(() => transitionPatchState("APPROVED", "DRAFT"), /非法/);
   assert.equal(transitionUpgradeState("ready_for_review", "approved"), "approved");
   assert.equal(
     transitionUpgradeState("approved", "published_as_new_snapshot"),

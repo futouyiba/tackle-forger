@@ -3645,7 +3645,8 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     const workspaceUnavailable = authErrorCode.startsWith("WORKSPACE-");
     return (
       <div className="workbench">
-        <main className="main">
+        <a className="skip-link" href="#main-content">跳至主内容</a>
+        <main className="main" id="main-content" tabIndex={-1}>
           <div className="content">
             <section className="card service-required-card">
               <LockKeyhole size={30} />
@@ -3672,6 +3673,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
 
   return (
     <div className="workbench">
+      <a className="skip-link" href="#main-content">跳至主内容</a>
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark"><Anvil size={20} /></div>
@@ -3710,7 +3712,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         </div>
       </aside>
 
-      <main className="main">
+      <main className="main" id="main-content" tabIndex={-1}>
         <header className="topbar">
           <div className="topbar-context">
             <nav className="topbar-breadcrumbs" aria-label="当前位置">

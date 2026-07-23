@@ -671,7 +671,14 @@ test("新正式 Snapshot 只接受并冻结指纹绑定的确认记录，旧 cod
   const reductionStackingPolicy = testReductionPolicy();
   const formalizedProjection = {
     ...formalProjection(
-    projection,
+    {
+      ...projection,
+      trace: projection.trace.filter((step) => ![
+        "attribute_affix",
+        "final_review_patch",
+        "parameter_definition",
+      ].includes(step.layer)),
+    },
     reductionStackingPolicy,
     existing.finalPanelValues,
     ),

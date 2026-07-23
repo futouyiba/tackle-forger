@@ -843,8 +843,14 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
   const sku = state.skuDrawers.find((entry) => entry.id === model.skuId)!;
   const series = state.seriesDefinitions.find((entry) => entry.id === sku.seriesId)!;
   const reductionStackingPolicy = testReductionPolicy();
+  const sourceProjection = state.derivedProjections.find((entry) => entry.id === oldSnapshot.projectionId)!;
   const projection = formalProjection(
-    state.derivedProjections.find((entry) => entry.id === oldSnapshot.projectionId)!,
+    {
+      ...sourceProjection,
+      // The fixture's formal runtime evidence covers this authoritative layer
+      // only; do not leave unmatched later-stage contributions in Projection.
+      trace: sourceProjection.trace.filter((step) => step.layer === "attribute_affix"),
+    },
     reductionStackingPolicy,
     oldSnapshot.finalPanelValues,
   );

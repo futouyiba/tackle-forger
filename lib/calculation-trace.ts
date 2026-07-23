@@ -14,6 +14,7 @@ import type {
   PatchApplicationTraceItem,
   ProjectionLayer,
   ProjectionTraceContribution,
+  ProjectionTraceStep,
   ProjectionWarning,
   ValidationIssue,
 } from "./types";
@@ -806,28 +807,56 @@ export function adaptRuleTraceToCanonical(input: {
 export const adaptProjectionTraceToCanonical = adaptRuleTraceToCanonical;
 
 /**
+ * The runtime evidence is authoritative only for the affix settlement chain.
+ * Keep this selection derived from the projection itself: a caller-provided
+ * runtime trace must never be able to shrink the set it is asked to prove.
+ */
+export interface ProjectionAffixAuthorityContribution {
+  layer: ProjectionTraceStep["layer"];
+  contribution: ProjectionTraceContribution;
+}
+
+export function projectionAffixAuthorityContributions(
+  projection: DerivedProjection,
+): ProjectionAffixAuthorityContribution[] {
+  const authorityLayers = new Set([
+    "attribute_affix",
+    "final_review_patch",
+    "parameter_definition",
+  ]);
+  return projection.trace.flatMap((step) => authorityLayers.has(step.layer)
+    ? step.contributions.map((contribution) => ({
+        layer: step.layer,
+        contribution: structuredClone(contribution),
+      }))
+    : []);
+}
+
+/**
  * Projection 的原始 contribution 以不可执行的镜像保存在同一 canonical archive。
  * 它只为 affix runtime 提供冻结的身份锚点：no_effect 且 before/after 均为 null，
  * 因此不会参与或改变 archive 的 replay 状态，更不是可选择的第二规则模型。
  */
 export function adaptProjectionAuthorityMirrorToCanonical(input: {
-  projection: DerivedProjection;
   subjectRef: EntityRef;
-  runtimeContributions: ProjectionTraceContribution[];
+  authorityContributions: ProjectionAffixAuthorityContribution[];
+  ruleSetVersion: string;
   sequenceStart?: number;
 }): CalculationTraceEntry[] {
   let sequence = input.sequenceStart ?? 1;
-  return input.projection.trace.flatMap((step) =>
-    [...step.contributions]
-      .sort((left, right) => left.sequence - right.sequence || left.ruleId.localeCompare(right.ruleId))
-      .map((contribution) => createCalculationTraceEntry({
+  return [...input.authorityContributions]
+    .sort((left, right) =>
+      left.contribution.sequence - right.contribution.sequence
+      || left.contribution.ruleId.localeCompare(right.contribution.ruleId),
+    )
+    .map(({ layer, contribution }) => createCalculationTraceEntry({
         subjectRef: input.subjectRef,
         parameterKey: `__projection_authority__:${contribution.parameterKey}:${contribution.sequence}`,
         sequence: sequence++,
-        layer: canonicalLayer(step.layer),
+        layer: canonicalLayer(layer),
         sourceRef: { sourceType: "projection_authority", sourceId: contribution.sourceId },
-        sourceVersion: input.projection.ruleSetVersion,
-        ruleSetVersion: input.projection.ruleSetVersion,
+        sourceVersion: input.ruleSetVersion,
+        ruleSetVersion: input.ruleSetVersion,
         before: null,
         operation: "no_effect",
         operand: null,
@@ -839,8 +868,7 @@ export function adaptProjectionAuthorityMirrorToCanonical(input: {
           adapter: "projection_authority/v1",
           contribution: structuredClone(contribution),
         },
-      })),
-  );
+      }));
 }
 
 /**
@@ -1076,7 +1104,7 @@ export function assertCalculationTraceMatchesAffixRuntime(input: {
     }
     expectedByKey.set(bindingKey, contribution);
   }
-  if (expectedByKey.size !== typedContributions.length || authorityEntries.length < expectedByKey.size) {
+  if (expectedByKey.size !== typedContributions.length || authorityEntries.length !== expectedByKey.size) {
     throw new CalculationTraceReplayError("canonical affix runtime 与 authority manifest 基数不一致。", summary);
   }
   const boundAuthorityIds = new Set<string>();

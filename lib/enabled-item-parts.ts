@@ -97,7 +97,7 @@ export function seriesItemPartId(
     skus
       .filter((sku) => sku.seriesId === series.id)
       .map((sku) => sku.projectionMatch.itemPartId?.trim())
-      .filter((itemPartId): itemPartId is string => Boolean(itemPartId)),
+      .filter((itemPartId): itemPartId is string => isProductItemPartEnabled(itemPartId)),
   )];
   return descendantItemPartIds.length === 1 ? descendantItemPartIds[0] : undefined;
 }

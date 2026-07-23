@@ -6,6 +6,7 @@ import {
   ItemPartNotEnabledError,
   enabledProductItemParts,
   isProductItemPartEnabled,
+  seriesItemPartId,
 } from "../lib/enabled-item-parts";
 import { createSeedState } from "../lib/seed";
 import { migrateWorkspaceState } from "../lib/migrations";
@@ -175,6 +176,38 @@ test("甘特图和产品深链不披露扩展部位 Series/SKU/Model/Snapshot", 
   assert.equal(deepLink.model, undefined);
   assert.equal(deepLink.snapshot, undefined);
   assert.equal(deepLink.integrityIssues[0]?.code, ITEM_PART_NOT_ENABLED_CODE);
+});
+
+test("缺少声明部位的历史 Series 从启用后代推导，延期 sibling 不隐藏合法产品视图", () => {
+  const state = createSeedState();
+  const sourceSeries = state.seriesDefinitions[0]!;
+  const legacySeries = { ...structuredClone(sourceSeries), itemPartId: undefined };
+  const enabledSku = state.skuDrawers.find((sku) => sku.seriesId === legacySeries.id)!;
+  const retainedHookSku = {
+    ...structuredClone(enabledSku),
+    id: "sku:retained-hook-read-history",
+    projectionMatch: {
+      ...structuredClone(enabledSku.projectionMatch),
+      itemPartId: "part:hook",
+    },
+    modelIds: [],
+  };
+  const series = state.seriesDefinitions.map((entry) => entry.id === legacySeries.id ? legacySeries : entry);
+  const skus = [...state.skuDrawers, retainedHookSku];
+  assert.equal(seriesItemPartId(legacySeries, skus), enabledSku.projectionMatch.itemPartId);
+
+  const blocks = querySeriesGantt({
+    query: { sort: "quality_type" },
+    series,
+    skus,
+    models: state.purchasableModels,
+    itemTypes: state.itemTypeProfiles,
+    upgrades: state.upgradeCandidates,
+  });
+  const block = blocks.find((entry) => entry.seriesId === legacySeries.id);
+  assert.ok(block);
+  assert.ok(block.skuNodes.some((node) => node.skuId === enabledSku.id));
+  assert.equal(block.skuNodes.some((node) => node.skuId === retainedHookSku.id), false);
 });
 
 test("扩展部位候选生成和物化在任何模型写入前拒绝且状态不变", () => {

@@ -1,4 +1,5 @@
 import { deterministicHash } from "./rule-kernel";
+import { createValidationIssue } from "./validation-issues";
 import { isCurrentSeriesSkuSpecification } from "./enabled-item-parts";
 import type {
   PatchOffsetPolicyVersion,
@@ -347,31 +348,6 @@ export function assertPatchRevisionDeterministicallyReplayable(revision: PatchRe
   });
 }
 
-function issueFingerprint(input: {
-  code: string;
-  gate: PatchRangeEvaluation["gate"];
-  context?: PatchFinalRangeContext;
-  policyVersion?: string;
-  environmentId?: string;
-  channelKey?: string;
-}): string {
-  return deterministicHash({
-    source: "patch",
-    code: input.code,
-    gate: input.gate,
-    policyVersion: input.policyVersion,
-    subjectRef: input.context?.subjectRef,
-    objectInputHash: input.context?.objectInputHash,
-    contextId: input.context?.contextId,
-    parameterKey: input.context?.parameterKey,
-    constraintRuleVersion: input.context?.constraintRuleVersion,
-    patchSetHash: input.context?.patchSetHash,
-    ...(input.gate === "EXPORT"
-      ? { environmentId: input.environmentId, channelKey: input.channelKey }
-      : {}),
-  });
-}
-
 function policyIssue(input: {
   code: string;
   message: string;
@@ -383,30 +359,86 @@ function policyIssue(input: {
   channelKey?: string;
   evidence?: Record<string, unknown>;
 }): ValidationIssue {
-  return {
-    level: "error",
-    severity: input.severity,
-    source: input.severity === "BLOCKER" ? "data_integrity" : "patch",
-    gate: input.gate,
-    state: "OPEN",
+  const legacyEvidence = {
+    ...(input.context ? {
+      contextId: input.context.contextId,
+      subjectRef: input.context.subjectRef,
+      objectInputHash: input.context.objectInputHash,
+      patchSetHash: input.context.patchSetHash,
+      traceHash: input.context.traceHash,
+    } : {}),
+    ...input.evidence,
+  };
+  const issue = createValidationIssue({
     code: input.code,
+    source: input.severity === "BLOCKER" ? "data_integrity" : "patch",
+    severity: input.severity,
+    gate: input.gate,
+    subjectRef: {
+      workspaceId: "workspace:patch-authority",
+      entityType: input.context?.subjectRef.scopeType ?? "patch_policy",
+      entityId: input.context?.subjectRef.entityId ?? input.policyVersion ?? "missing",
+      revisionId: String(input.context?.subjectRef.revision ?? input.policyVersion ?? "missing"),
+    },
+    affectedRefs: [],
+    parameterKeys: input.context?.parameterKey ? [input.context.parameterKey] : [],
+    title: input.code,
     message: input.message,
-    parameterKey: input.context?.parameterKey,
-    fingerprint: issueFingerprint(input),
+    evidenceRefs: [{
+      evidenceType: "trace",
+      refId: input.context?.contextId ?? `patch-policy:${input.policyVersion ?? "missing"}`,
+      revisionId: input.context?.constraintRuleVersion,
+      contentHash: deterministicHash(legacyEvidence),
+    }],
+    ruleRefs: [
+      input.policyVersion ?? "patch-offset-policy:missing",
+      ...(input.context?.constraintRuleVersion ? [input.context.constraintRuleVersion] : []),
+    ],
+    inputHash: input.context?.objectInputHash ?? deterministicHash(legacyEvidence),
+    fingerprintInputs: {
+      contextId: input.context?.contextId,
+      patchSetHash: input.context?.patchSetHash,
+      constraintRuleVersion: input.context?.constraintRuleVersion,
+    },
     ...(input.gate === "EXPORT"
       ? { environmentId: input.environmentId, channelKey: input.channelKey }
       : {}),
-    evidence: {
-      ...(input.context ? {
-        contextId: input.context.contextId,
-        subjectRef: input.context.subjectRef,
-        objectInputHash: input.context.objectInputHash,
-        patchSetHash: input.context.patchSetHash,
-        traceHash: input.context.traceHash,
-      } : {}),
-      ...input.evidence,
-    },
-  };
+  });
+  // 旧 PatchOffsetPolicy 读取路径在迁移完成前仍从内联 evidence 取上下文。
+  return { ...issue, evidence: legacyEvidence };
+}
+
+/**
+ * R9 之前的 PatchValidationWaiver 只保存了旧版 patch 专用 fingerprint。
+ * 不能改写已发布记录，因此仅用冻结的现有 Issue 上下文重建旧 fingerprint
+ * 作兼容比对；Gate、目标及输入/PatchSetHash 仍由 waiverCoversIssue 校验。
+ */
+function legacyPatchIssueFingerprint(issue: ValidationIssue): string | undefined {
+  if (issue.code !== "PATCH_FINAL_VALUE_OUT_OF_RANGE" || issue.source !== "patch") return undefined;
+  if (!("ruleRefs" in issue) || !("parameterKeys" in issue)) return undefined;
+  const evidence = issue.evidence;
+  const contextId = typeof evidence?.contextId === "string" ? evidence.contextId : undefined;
+  const subjectRef = evidence?.subjectRef;
+  const objectInputHash = typeof evidence?.objectInputHash === "string"
+    ? evidence.objectInputHash
+    : undefined;
+  const patchSetHash = typeof evidence?.patchSetHash === "string" ? evidence.patchSetHash : undefined;
+  if (!contextId || !subjectRef || !objectInputHash || !patchSetHash) return undefined;
+  return deterministicHash({
+    source: "patch",
+    code: issue.code,
+    gate: issue.gate,
+    policyVersion: issue.ruleRefs[0],
+    subjectRef,
+    objectInputHash,
+    contextId,
+    parameterKey: issue.parameterKeys[0],
+    constraintRuleVersion: issue.ruleRefs[1],
+    patchSetHash,
+    ...(issue.gate === "EXPORT"
+      ? { environmentId: issue.environmentId, channelKey: issue.channelKey }
+      : {}),
+  });
 }
 
 function validateExportTarget(input: {
@@ -957,6 +989,18 @@ export function createPatchValidationWaiverDecision(input: {
       "Waiver 决定必须包含目标和人工理由。",
     );
   }
+  const requestTargets = input.requested.map((request) => JSON.stringify([
+    request.issueFingerprint,
+    request.gate,
+    request.environmentId ?? null,
+    request.channelKey ?? null,
+  ]));
+  if (new Set(requestTargets).size !== requestTargets.length) {
+    throw new PatchOffsetPolicyError(
+      "PATCH_WAIVER_TARGET_DUPLICATE",
+      "同一个 Issue/Gate/导出目标只能在一次 WaiverDecision 中出现一次。",
+    );
+  }
   const issueByFingerprint = new Map(input.issues.map((issue) => [issue.fingerprint, issue]));
   for (const request of input.requested) {
     validateExportTarget(request);
@@ -1029,13 +1073,128 @@ export function createPatchValidationWaiverDecision(input: {
   return { decision, waivers };
 }
 
+export function assertPatchValidationWaiverDecisionCoverage(input: {
+  waivers?: PatchValidationWaiver[];
+  decisions?: PatchValidationWaiverDecision[];
+}): void {
+  const waivers = input.waivers ?? [];
+  const decisions = input.decisions ?? [];
+  if (!waivers.length && !decisions.length) return;
+  if (!decisions.length) {
+    throw new PatchOffsetPolicyError(
+      "PATCH_WAIVER_DECISION_EVIDENCE_MISSING",
+      "Patch Waiver 必须由完整的 ValidationWaiverDecision 冻结并验证。",
+    );
+  }
+  if (
+    new Set(waivers.map((waiver) => waiver.waiverId)).size !== waivers.length
+    || new Set(decisions.map((decision) => decision.waiverDecisionId)).size !== decisions.length
+  ) {
+    throw new PatchOffsetPolicyError(
+      "PATCH_WAIVER_DECISION_EVIDENCE_INVALID",
+      "Patch Waiver 与 WaiverDecision 的稳定 ID 必须唯一。",
+    );
+  }
+  const waiversById = new Map(waivers.map((waiver) => [waiver.waiverId, waiver]));
+  const referencedIds = new Set<string>();
+  for (const decision of decisions) {
+    if (!decision.waiverIds.length || new Set(decision.waiverIds).size !== decision.waiverIds.length) {
+      throw new PatchOffsetPolicyError(
+        "PATCH_WAIVER_DECISION_EVIDENCE_INVALID",
+        "Patch WaiverDecision 必须一次且仅一次引用每个 Waiver。",
+      );
+    }
+    const decisionWaivers = decision.waiverIds.map((waiverId) => {
+      if (referencedIds.has(waiverId)) {
+        throw new PatchOffsetPolicyError(
+          "PATCH_WAIVER_DECISION_EVIDENCE_INVALID",
+          "同一个 Patch Waiver 不能被多个 WaiverDecision 重复引用。",
+        );
+      }
+      referencedIds.add(waiverId);
+      const waiver = waiversById.get(waiverId);
+      if (!waiver || waiver.waiverDecisionId !== decision.waiverDecisionId) {
+        throw new PatchOffsetPolicyError(
+          "PATCH_WAIVER_DECISION_EVIDENCE_INVALID",
+          "Patch WaiverDecision 与 Waiver 的引用关系不完整或不匹配。",
+        );
+      }
+      return waiver;
+    });
+    const first = decisionWaivers[0]!;
+    if (decisionWaivers.some((waiver) =>
+      deterministicHash(waiver.scopeRef) !== deterministicHash(decision.scopeRef)
+      || waiver.reason !== decision.reason
+      || waiver.approvedBy !== decision.approvedBy
+      || waiver.approvedAt !== decision.approvedAt
+      || waiver.policyVersion !== first.policyVersion
+      || waiver.objectInputHash !== first.objectInputHash
+      || waiver.patchSetHash !== first.patchSetHash)) {
+      throw new PatchOffsetPolicyError(
+        "PATCH_WAIVER_DECISION_EVIDENCE_INVALID",
+        "Patch WaiverDecision 的审批上下文必须与全部原子 Waiver 完全一致。",
+      );
+    }
+    const requested = decisionWaivers.map((waiver) => ({
+      issueFingerprint: waiver.issueFingerprint,
+      gate: waiver.gate,
+      ...(waiver.gate === "EXPORT"
+        ? { environmentId: waiver.environmentId, channelKey: waiver.channelKey }
+        : {}),
+    })).sort((left, right) =>
+      left.issueFingerprint.localeCompare(right.issueFingerprint)
+      || left.gate.localeCompare(right.gate)
+      || (left.environmentId ?? "").localeCompare(right.environmentId ?? "")
+      || (left.channelKey ?? "").localeCompare(right.channelKey ?? ""));
+    const atomicTargets = requested.map((request) => JSON.stringify([
+      request.issueFingerprint,
+      request.gate,
+      request.environmentId ?? null,
+      request.channelKey ?? null,
+    ]));
+    if (new Set(atomicTargets).size !== atomicTargets.length) {
+      throw new PatchOffsetPolicyError(
+        "PATCH_WAIVER_DECISION_EVIDENCE_INVALID",
+        "Patch WaiverDecision 不能冻结重复的原子 Waiver 目标。",
+      );
+    }
+    const decisionContent = {
+      scopeRef: decision.scopeRef,
+      requested,
+      policyVersion: first.policyVersion,
+      objectInputHash: first.objectInputHash,
+      patchSetHash: first.patchSetHash,
+      reason: decision.reason,
+      approvedBy: decision.approvedBy,
+      approvedAt: decision.approvedAt,
+    };
+    const decisionHash = deterministicHash(decisionContent);
+    if (
+      decision.decisionHash !== decisionHash
+      || decision.waiverDecisionId !== `patch-waiver-decision:${decisionHash}`
+    ) {
+      throw new PatchOffsetPolicyError(
+        "PATCH_WAIVER_DECISION_EVIDENCE_INVALID",
+        "Patch WaiverDecision 的冻结哈希校验失败。",
+      );
+    }
+  }
+  if (referencedIds.size !== waivers.length) {
+    throw new PatchOffsetPolicyError(
+      "PATCH_WAIVER_DECISION_EVIDENCE_INVALID",
+      "Patch Waiver 不能脱离 WaiverDecision 单独用于正式关口。",
+    );
+  }
+}
+
 export function waiverCoversIssue(
   waiver: PatchValidationWaiver,
   issue: ValidationIssue,
 ): boolean {
   return issue.code === "PATCH_FINAL_VALUE_OUT_OF_RANGE"
     && issue.severity === "ERROR"
-    && issue.fingerprint === waiver.issueFingerprint
+    && (issue.fingerprint === waiver.issueFingerprint
+      || legacyPatchIssueFingerprint(issue) === waiver.issueFingerprint)
     && issue.gate === waiver.gate
     && issue.environmentId === waiver.environmentId
     && issue.channelKey === waiver.channelKey

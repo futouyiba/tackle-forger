@@ -23,6 +23,7 @@ import {
   publishConfigurationSnapshot,
 } from "./publishing";
 import { deriveProjection, deterministicHash } from "./rule-kernel";
+import { validationIssueLevel } from "./validation-issues";
 import type {
   AffinityRule,
   CandidateSearchRecipe,
@@ -714,7 +715,7 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
     defaultAffinityAxisWeights,
   );
   const publishIssues: ValidationIssue[] = seriesIssues.filter(
-    (entry) => entry.level !== "error",
+    (entry) => validationIssueLevel(entry) !== "error",
   );
   const snapshotPatchIds = new Set([...series.patchIds, ...sku15.patchIds, ...publishTarget.model.patchIds]);
   const snapshot = publishConfigurationSnapshot({
@@ -741,7 +742,7 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
     validationReport: publishIssues,
     warningConfirmations: Object.fromEntries(
       publishIssues
-        .filter((entry) => entry.level === "warning")
+        .filter((entry) => validationIssueLevel(entry) === "warning")
         .map((entry) => [entry.code, "种子数据已由策划确认。"]),
     ),
     fiveAxisPreview,

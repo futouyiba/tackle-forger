@@ -229,19 +229,20 @@ test("R4 legacy UnifiedTrace 的 32 位 hash 碰撞不能伪装为相同终态",
   );
 });
 
-test("R9 error必阻断、deny不可waive、修复动作由Capability决定", () => {
+test("R9 Severity与Gate分离、BLOCKER不可waive、修复动作由Capability决定", () => {
   const issue = createUnifiedIssue({
     code: "HARD_DENY",
     source: "hard_compatibility",
-    severity: "error",
-    gate: "publish",
+    severity: "BLOCKER",
+    gate: "PUBLISH",
     subjectRef: ref("model", "model:1"),
     affectedRefs: [],
     parameterKeys: ["typeId"],
     title: "硬冲突",
     message: "类型不兼容",
-    state: "open",
-    deny: true,
+    state: "OPEN",
+    inputHash: "input:1",
+    ruleRefs: ["compatibility:v1"],
     actionSpecs: [{
       actionId: "action:1",
       action: "create_patch",
@@ -249,15 +250,103 @@ test("R9 error必阻断、deny不可waive、修复动作由Capability决定", ()
       heldCapabilities: ["model.read"],
     }],
   });
-  assert.equal(issue.blocking, true);
+  assert.equal(issue.severity, "BLOCKER");
+  assert.equal(issue.gate, "PUBLISH");
+  assert.equal("blocking" in issue, false);
   assert.equal(issue.actions[0].enabled, false);
+  const enabledIssue = createUnifiedIssue({
+    code: "PATCH_FIX_AVAILABLE",
+    source: "patch",
+    severity: "ERROR",
+    gate: "REVIEW",
+    subjectRef: ref("model", "model:1"),
+    affectedRefs: [],
+    parameterKeys: ["drag"],
+    title: "可修复",
+    message: "创建 Patch 修复。",
+    state: "OPEN",
+    inputHash: "input:enabled-action",
+    ruleRefs: ["patch:v1"],
+    actionSpecs: [{
+      actionId: "action:enabled",
+      action: "create_patch",
+      label: "修正 Patch",
+      heldCapabilities: ["model.patch.create"],
+      commandPayloadRef: {
+        payloadRefId: "payload:patch-fix",
+        action: "create_patch",
+        subjectRef: ref("model", "model:1"),
+        expectedRevisionId: "1",
+        inputHash: "input:enabled-action",
+        payloadHash: "payload-hash",
+        idempotencyKey: "patch-fix:1",
+        leaseRef: {
+          workspaceId: "workspace:1",
+          leaseId: "lease:patch-fix",
+          action: "create_patch",
+          fencingToken: "fence:1",
+        },
+      },
+    }],
+  });
+  assert.equal(enabledIssue.actions[0].enabled, true);
+  assert.equal(enabledIssue.actions[0].commandPayloadRef?.payloadRefId, "payload:patch-fix");
+  const disabledPayloadIssue = createUnifiedIssue({
+    code: "PATCH_FIX_FORBIDDEN",
+    source: "patch",
+    severity: "ERROR",
+    gate: "REVIEW",
+    subjectRef: ref("model", "model:1"),
+    affectedRefs: [],
+    parameterKeys: ["drag"],
+    title: "无权限修复",
+    message: "没有修复权限时仍应能查看 Issue。",
+    state: "OPEN",
+    inputHash: "input:disabled-action",
+    ruleRefs: ["patch:v1"],
+    actionSpecs: [{
+      actionId: "action:disabled-payload",
+      action: "create_patch",
+      label: "修正 Patch",
+      heldCapabilities: [],
+      commandPayloadRef: {
+        payloadRefId: "payload:forbidden-patch-fix",
+        action: "create_patch",
+        subjectRef: ref("model", "model:1"),
+        expectedRevisionId: "1",
+        inputHash: "input:disabled-action",
+        payloadHash: "payload-hash",
+        idempotencyKey: "patch-fix:forbidden",
+        leaseRef: {
+          workspaceId: "workspace:1",
+          leaseId: "lease:forbidden-patch-fix",
+          action: "create_patch",
+          fencingToken: "fence:2",
+        },
+      },
+    }],
+  });
+  assert.equal(disabledPayloadIssue.actions[0].enabled, false);
+  assert.equal(disabledPayloadIssue.actions[0].commandPayloadRef, undefined);
   assert.throws(
     () => createUnifiedIssue({
-      ...issue,
-      state: "waived",
+      code: issue.code,
+      source: issue.source,
+      severity: issue.severity,
+      gate: issue.gate,
+      subjectRef: issue.subjectRef,
+      affectedRefs: issue.affectedRefs,
+      parameterKeys: issue.parameterKeys,
+      title: issue.title,
+      message: issue.message,
+      evidenceRefs: issue.evidenceRefs,
+      ruleRefs: issue.ruleRefs,
+      inputHash: issue.inputHash,
+      state: "WAIVED",
+      waiverRef: "waiver:forbidden",
       actionSpecs: [],
     }),
-    /不允许 waive/,
+    /BLOCKER 永远不可 waive/,
   );
 });
 

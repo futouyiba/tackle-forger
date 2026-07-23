@@ -4,6 +4,7 @@ import { orderedPatchReferences } from "./patch-ledger";
 import { authoritativeObjectIdentity, evaluateAuthoritativePatchFinalRanges, type AuthoritativePatchObject } from "./patch-authority";
 import {
   assertPatchGateCanProceed,
+  assertPatchValidationWaiverDecisionCoverage,
   assertPatchReviewCoverage,
   assertPublishedPatchOffsetPolicy,
   assertRangeEvaluationMatchesPatchRevisions,
@@ -27,6 +28,7 @@ import type {
   PatchReviewBatch,
   PatchRevisionRecord,
   PatchValidationWaiver,
+  PatchValidationWaiverDecision,
   ProjectionPatchRuleSource,
   ProjectionTraceStep,
   PurchasableModel,
@@ -38,9 +40,21 @@ import type {
   Technology,
   UpgradeCandidate,
   ValidationIssue,
+  ValidationAcknowledgement,
+  ValidationWaiver,
+  ValidationWaiverDecision,
+  WaiverPolicyVersion,
   PassiveSkillPayload,
   WorkspacePolicyRecord,
 } from "./types";
+import {
+  assertValidationGateCanProceed,
+  assertValidationWaiverDecisionCoverage,
+  canonicalizeValidationIssues,
+  isCanonicalValidationIssue,
+  validationIssueGate,
+  validationIssueSeverity,
+} from "./validation-issues";
 import { structuralPullParameterKey } from "./projection-matcher";
 import type { ModelAffixValueAssessment } from "./quality-value-policy";
 import type { PricingTrialResult } from "./pricing-policy";
@@ -95,12 +109,20 @@ export function modelFinalPullKgForSnapshot(
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function errors(issues: ValidationIssue[]): ValidationIssue[] {
-  return issues.filter((issue) => issue.level === "error");
+function publishErrors(issues: ValidationIssue[]): ValidationIssue[] {
+  return issues.filter((issue) => {
+    const severity = validationIssueSeverity(issue);
+    return (severity === "ERROR" || severity === "BLOCKER")
+      && (!isCanonicalValidationIssue(issue)
+        || (
+          issue.state === "OPEN"
+          && (issue.gate === "REVIEW" || issue.gate === "PUBLISH")
+        ));
+  });
 }
 
 function warnings(issues: ValidationIssue[]): ValidationIssue[] {
-  return issues.filter((issue) => issue.level === "warning");
+  return issues.filter((issue) => validationIssueSeverity(issue) === "WARNING");
 }
 
 function hasValidReductionPolicyBinding(input: PublishModelInput): boolean {
@@ -191,6 +213,7 @@ export interface PublishModelInput {
     parameterDefinitions: ParameterDefinition[];
     reviewBatch?: PatchReviewBatch;
     waivers?: PatchValidationWaiver[];
+    decisions?: PatchValidationWaiverDecision[];
   };
   attributeAffixIds: string[];
   passiveAffixIds: string[];
@@ -208,8 +231,13 @@ export interface PublishModelInput {
   pricingPolicyVersion?: string;
   automaticPricing?: PricingTrialResult;
   validationReport: ValidationIssue[];
+  validationAcknowledgements?: ValidationAcknowledgement[];
+  validationWaivers?: ValidationWaiver[];
+  validationWaiverDecisions?: ValidationWaiverDecision[];
+  activeValidationWaiverPolicies?: WaiverPolicyVersion[];
   fiveAxisPreview?: ModelFiveAxisPreview;
   fiveAxisDefinition?: FiveAxisViewDefinition;
+  /** @deprecated 仅 historical_import 可读取；新正式发布必须提供指纹绑定的确认记录。 */
   warningConfirmations: Record<string, string>;
   publishedBy: string;
   publishedAt: string;
@@ -288,6 +316,10 @@ export function publishConfigurationSnapshot(
         evaluation: patchRangeEvaluation,
         waivers: governance.waivers,
       });
+      assertPatchValidationWaiverDecisionCoverage({
+        waivers: governance.waivers,
+        decisions: governance.decisions,
+      });
     } catch (error) {
       if (error instanceof PatchOffsetPolicyError) {
         throw new Error(`配置快照发布被阻止：[${error.code}] ${error.message}`);
@@ -306,7 +338,59 @@ export function publishConfigurationSnapshot(
     ...input.validationReport,
     ...(input.fiveAxisPreview?.tackleFitComparison.validationIssues ?? []),
   ];
-  const blocking = errors(combinedValidationReport);
+  const publishValidationReport = combinedValidationReport.filter((issue) => {
+    const gate = validationIssueGate(issue);
+    return gate === undefined || gate === "REVIEW" || gate === "PUBLISH";
+  });
+  const canonicalValidationReport = input.publicationMode === "new_formal"
+    ? canonicalizeValidationIssues(
+      combinedValidationReport,
+    {
+      subjectRef: {
+        workspaceId: "workspace:legacy",
+        entityType: "model",
+        entityId: input.model.id,
+        revisionId: String(input.model.revision),
+      },
+      inputHash: deterministicHash({
+        modelId: input.model.id,
+        modelRevision: input.model.revision,
+        projectionId: input.projection.id,
+        validationReport: combinedValidationReport,
+      }),
+      ruleRefs: [input.projection.ruleSetVersion],
+      gate: "PUBLISH",
+      source: "publish",
+      mode: "active_gate",
+      },
+    )
+    : [];
+  const canonicalPublishValidationReport = input.publicationMode === "new_formal"
+    ? canonicalValidationReport.filter(
+      (issue) => issue.gate === "REVIEW" || issue.gate === "PUBLISH",
+    )
+    : canonicalizeValidationIssues(
+      publishValidationReport,
+      {
+        subjectRef: {
+          workspaceId: "workspace:legacy",
+          entityType: "model",
+          entityId: input.model.id,
+          revisionId: String(input.model.revision),
+        },
+        inputHash: deterministicHash({
+          modelId: input.model.id,
+          modelRevision: input.model.revision,
+          projectionId: input.projection.id,
+          validationReport: publishValidationReport,
+        }),
+        ruleRefs: [input.projection.ruleSetVersion],
+        gate: "PUBLISH",
+        source: "publish",
+        mode: "active_gate",
+      },
+    );
+  const blocking = publishErrors(canonicalPublishValidationReport);
   let registeredPerformanceSummaryDefinition = input.performanceSummaryDefinition;
   if (input.publicationMode === "new_formal" && input.performanceSummaryDefinition) {
     registeredPerformanceSummaryDefinition = resolvePerformanceSummaryDefinition({
@@ -336,7 +420,7 @@ export function publishConfigurationSnapshot(
         ],
         finalPanelValues: input.finalPanelValues,
         attributeTrace: finalSettlementTrace ?? [],
-      })
+       })
     : input.performanceSummary;
   if (!input.compatibilityReport.allowed) {
     blocking.push({
@@ -468,9 +552,11 @@ export function publishConfigurationSnapshot(
       message: "调用方提供的派生性能摘要与服务端按 Model revision、定义和冻结输入重算的结果不一致。",
     });
   }
-  const unconfirmedWarnings = warnings(combinedValidationReport).filter(
-    (warning) => !input.warningConfirmations[warning.code]?.trim(),
-  );
+  const unconfirmedWarnings = input.publicationMode === "historical_import"
+    ? warnings(publishValidationReport).filter(
+      (warning) => !input.warningConfirmations[warning.code]?.trim(),
+    )
+    : [];
   if (unconfirmedWarnings.length) {
     blocking.push({
       level: "error",
@@ -485,6 +571,23 @@ export function publishConfigurationSnapshot(
       "配置快照发布被阻止：" +
         blocking.map((issue) => issue.message).join("；"),
     );
+  }
+  if (input.publicationMode === "new_formal") {
+    try {
+      assertValidationGateCanProceed({
+        issues: canonicalPublishValidationReport,
+        gate: "PUBLISH",
+        acknowledgements: input.validationAcknowledgements,
+        waivers: input.validationWaivers,
+        decisions: input.validationWaiverDecisions,
+        activeWaiverPolicies: input.activeValidationWaiverPolicies,
+        at: input.publishedAt,
+      });
+    } catch (error) {
+      throw new Error(
+        "配置快照发布被阻止：" + (error instanceof Error ? error.message : String(error)),
+      );
+    }
   }
   if (input.model.skuId !== input.sku.id || input.sku.seriesId !== input.series.id) {
     throw new Error("Model、SKU 与 Series 版本链不完整。");
@@ -623,6 +726,12 @@ export function publishConfigurationSnapshot(
     : undefined;
 
   const governance = input.patchOffsetGovernance;
+  if (input.publicationMode === "new_formal") {
+    assertValidationWaiverDecisionCoverage({
+      waivers: input.validationWaivers,
+      decisions: input.validationWaiverDecisions,
+    });
+  }
   const modelFinalPullKg = modelFinalPullKgForSnapshot(
     input.sku.projectionMatch.itemPartId,
     input.finalPanelValues,
@@ -653,6 +762,9 @@ export function publishConfigurationSnapshot(
         .flatMap((issue) => issue.fingerprint ? [issue.fingerprint] : [])
         .sort(),
       patchValidationWaiverRefs: (governance.waivers ?? []).map((waiver) => waiver.waiverId).sort(),
+      patchValidationWaiverDecisionRefs: (governance.decisions ?? [])
+        .map((decision) => decision.waiverDecisionId)
+        .sort(),
     } : {}),
     finalPanelValues: structuredClone(input.finalPanelValues),
     ...(modelFinalPullKg !== undefined
@@ -685,14 +797,21 @@ export function publishConfigurationSnapshot(
     ...(input.automaticPricing
       ? { automaticPricing: structuredClone(input.automaticPricing) }
       : {}),
-    validationReport: [
-      ...structuredClone(combinedValidationReport),
-      ...Object.entries(input.warningConfirmations).map(([code, reason]) => ({
-        level: "info" as const,
-        code: "WARNING_CONFIRMED_" + code,
-        message: reason,
-      })),
-    ],
+    validationReport: input.publicationMode === "new_formal"
+      ? structuredClone(canonicalValidationReport)
+      : [
+          ...structuredClone(combinedValidationReport),
+          ...Object.entries(input.warningConfirmations).map(([code, reason]) => ({
+            level: "info" as const,
+            code: "WARNING_CONFIRMED_" + code,
+            message: reason,
+          })),
+        ],
+    ...(input.publicationMode === "new_formal" ? {
+      validationAcknowledgements: structuredClone(input.validationAcknowledgements ?? []),
+      validationWaivers: structuredClone(input.validationWaivers ?? []),
+      validationWaiverDecisions: structuredClone(input.validationWaiverDecisions ?? []),
+    } : {}),
     publishedBy: input.publishedBy,
     ...(input.fiveAxisPreview
       ? { fiveAxisPreview: structuredClone(input.fiveAxisPreview) }

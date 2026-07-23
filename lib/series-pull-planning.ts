@@ -1,6 +1,6 @@
 import { deterministicHash } from "./rule-kernel";
 import { seriesTargetPullSpecifications } from "./product-model";
-import { assertSeriesItemPartChainEnabled } from "./enabled-item-parts";
+import { assertSeriesItemPartChainEnabled, enabledSeriesSkus } from "./enabled-item-parts";
 import type {
   ProjectionMatch,
   SeriesDefinition,
@@ -44,7 +44,11 @@ export function createSeriesPullPlanningProposal(input: {
   source: SeriesPullPlanningProposal["source"];
   createdAt: string;
 }): SeriesPullPlanningProposal {
-  assertSeriesItemPartChainEnabled(input.series, input.existingSkus ?? [], "series");
+  assertSeriesItemPartChainEnabled(
+    input.series,
+    enabledSeriesSkus(input.series, input.existingSkus ?? []),
+    "series",
+  );
   if (input.planningPullRange) assertRange(input.planningPullRange);
   const suggestedPullsKgf = normalizePulls(input.candidatePullsKgf)
     .filter((value) => !input.planningPullRange
@@ -71,7 +75,11 @@ export function updateSeriesPlanningRange(input: {
   planningPullRange: { minKgf: number; maxKgf: number };
   updatedAt: string;
 }): SeriesDefinition {
-  assertSeriesItemPartChainEnabled(input.series, input.existingSkus ?? [], "series");
+  assertSeriesItemPartChainEnabled(
+    input.series,
+    enabledSeriesSkus(input.series, input.existingSkus ?? []),
+    "series",
+  );
   assertRange(input.planningPullRange);
   return {
     ...structuredClone(input.series),
@@ -125,7 +133,7 @@ export function materializeConfirmedPullSpecifications(input: {
   }
   assertSeriesItemPartChainEnabled(
     input.series,
-    input.existingSkus,
+    enabledSeriesSkus(input.series, input.existingSkus),
     "sku",
     prepared.map((entry) => entry.projectionMatch.itemPartId),
   );

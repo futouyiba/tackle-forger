@@ -118,19 +118,28 @@ export function assertProductItemPartChainEnabled(
 
 export function assertSeriesItemPartChainEnabled(
   series: SeriesDefinition,
-  skus: readonly SkuDrawer[],
+  selectedSkus: readonly SkuDrawer[],
   action: ProductItemPartAction,
   additionalItemPartIds: readonly (string | undefined)[] = [],
 ): "part:rod" | "part:reel" | "part:line" {
-  const descendantItemPartIds = skus
+  const selectedItemPartIds = selectedSkus
     .filter((sku) => sku.seriesId === series.id)
     .map((sku) => sku.projectionMatch.itemPartId);
   const declaredItemPartId = series.itemPartId?.trim();
   return assertProductItemPartChainEnabled([
     ...(declaredItemPartId ? [declaredItemPartId] : []),
-    ...descendantItemPartIds,
+    ...selectedItemPartIds,
     ...additionalItemPartIds,
   ], action);
+}
+
+export function enabledSeriesSkus(
+  series: SeriesDefinition,
+  skus: readonly SkuDrawer[],
+): SkuDrawer[] {
+  return skus.filter((sku) =>
+    sku.seriesId === series.id
+    && isProductItemPartEnabled(sku.projectionMatch.itemPartId));
 }
 
 export function snapshotItemPartId(snapshot: ConfigurationSnapshot): string | undefined {

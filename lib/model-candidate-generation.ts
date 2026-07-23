@@ -85,7 +85,7 @@ export function generateModelCandidateRun(input: {
   if (selectedSkus.some((sku) => sku.seriesId !== series.id)) {
     throw new Error("CandidateGenerationRequest 的 SKU 不属于请求的 Series。");
   }
-  assertSeriesItemPartChainEnabled(series, input.state.skuDrawers, "candidate_generation");
+  assertSeriesItemPartChainEnabled(series, selectedSkus, "candidate_generation");
   const ruleSetVersion = input.state.ruleSetVersions.find((entry) => entry.status === "published")?.id ?? "";
   const options = {
     seriesRef: input.request.seriesRef,
@@ -233,7 +233,7 @@ export function materializeCandidateRun(input: {
   });
   assertSeriesItemPartChainEnabled(
     requestSeries,
-    input.state.skuDrawers,
+    requestSkus,
     "candidate_materialization",
   );
   const requestedSkuIds = new Set(requestSkus.map((sku) => sku.id));

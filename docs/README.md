@@ -12,6 +12,8 @@
 6. [`handoffs/tackle-forger-motion-experience-backlog-v1.md`](./handoffs/tackle-forger-motion-experience-backlog-v1.md)：动效体验的工程排期、交接与验证线索；从属于v3和上述体验契约，不是产品、领域或业务验收权威。
 7. [`ux/tackle-forger-ux-design-v1.md`](./ux/tackle-forger-ux-design-v1.md)与`ux/prototype-v1/*`：页面组织、视觉和交互证据。
 
+工作区整包保存的默认允许边界、受治理字段到领域动作的映射，以及保存失败的交互验收，见 v3 [§14.3.7](./tackle-forger-development-spec-v3.md#1437-工作区整包保存边界issue-96)。Issue #98 的文档治理入口以该章节为准；历史审计材料只作背景，不定义该边界。
+
 第2至7级文档必须在文首记录最后对齐的v3日期或版本。它们若与v3冲突，冲突段立即视为过期说明，不能继续作为开发验收依据；修复时应修改消费文档，不为了迎合旧文档反向改写v3。
 
 若代码、旧文档、工作簿示例和权威规范发生冲突：

@@ -214,6 +214,114 @@ test("整包 PUT 拒绝修改只读历史并保留 payload 与 Trace", { concurr
   }, before);
 });
 
+test("整包 PUT 允许常规工作台字段(templates)编辑保存", { concurrency: false }, async () => {
+  withTrustedProxy();
+  const current = await loadWorkspaceState();
+  const state = structuredClone(current.state);
+  const sample = state.templates[0] ?? { id: "t", name: "", values: {} };
+  const probeId = "template:put-allowed-probe";
+  state.templates = [...state.templates, { ...sample, id: probeId, name: "PUT 允许测试" }];
+  const response = await issueAndInvoke({
+    action: "save_workspace", url: "http://localhost/api/state", method: "PUT",
+    payload: { state, baseRevision: current.revision, message: "测试:加重量段" }, invoke: putState,
+  });
+  assert.equal(response.status, 200);
+  const payload = await response.json() as { revision: number };
+  const after = await loadWorkspaceState();
+  assert.ok(after.state.templates.some((entry) => entry.id === probeId), "重量段应已保存");
+  const restored = structuredClone(after.state);
+  restored.templates = restored.templates.filter((entry) => entry.id !== probeId);
+  await saveWorkspaceState({
+    state: restored,
+    baseRevision: payload.revision,
+    author: "route-test-cleanup",
+    message: "清理 PUT 允许测试",
+  });
+});
+
+test("整包 PUT 默认保存多个普通字段和未来字段，并在混合治理改动时原子拒绝", { concurrency: false }, async () => {
+  withTrustedProxy();
+  const current = await loadWorkspaceState();
+  const state = structuredClone(current.state) as typeof current.state & Record<string, unknown>;
+  const probeId = "template:multi-field-probe";
+  const sample = state.templates[0] ?? { id: "t", name: "", values: {} };
+  state.templates = [...state.templates, { ...sample, id: probeId, name: "多字段保存" }];
+  state.notes = "ordinary notes persist";
+  state.compatibilityRules = [];
+  state.futureWorkspaceField = { nested: { preserved: true } };
+  const allowed = await issueAndInvoke({
+    action: "save_workspace", url: "http://localhost/api/state", method: "PUT",
+    payload: { state, baseRevision: current.revision, message: "测试多普通字段" }, invoke: putState,
+  });
+  assert.equal(allowed.status, 200);
+  const allowedPayload = await allowed.json() as { revision: number };
+  const afterAllowed = await loadWorkspaceState();
+  assert.equal(afterAllowed.state.notes, "ordinary notes persist");
+  assert.ok(afterAllowed.state.templates.some((entry) => entry.id === probeId));
+  assert.deepEqual((afterAllowed.state as unknown as Record<string, unknown>).futureWorkspaceField, { nested: { preserved: true } });
+
+  const mixed = structuredClone(afterAllowed.state);
+  mixed.notes = "must not partially save";
+  mixed.seriesDefinitions.push({ ...mixed.seriesDefinitions[0]!, id: "series:atomic-probe" });
+  const beforeMixed = structuredClone(afterAllowed.state);
+  const rejected = await issueAndInvoke({
+    action: "save_workspace", url: "http://localhost/api/state", method: "PUT",
+    payload: { state: mixed, baseRevision: allowedPayload.revision }, invoke: putState,
+  });
+  assert.equal(rejected.status, 422);
+  const rejection = await rejected.json() as {
+    code?: string; governedChanges?: string[];
+    governedFields?: Array<{ field: string; action: string; actionLabel: string; reason: string }>;
+  };
+  assert.equal(rejection.code, "DOMAIN_COMMAND_REQUIRED");
+  assert.deepEqual(rejection.governedChanges, ["seriesDefinitions"]);
+  assert.deepEqual(rejection.governedFields?.[0], {
+    field: "seriesDefinitions", reason: "domain_command",
+    action: "POST /api/series（create_series）", actionLabel: "使用创建 Series",
+  });
+  const afterRejected = await loadWorkspaceState();
+  assert.equal(afterRejected.revision, allowedPayload.revision, "拒绝不得创建 partial revision");
+  assert.deepEqual(afterRejected.state.notes, beforeMixed.notes, "普通字段也不得部分保存");
+  assert.equal(afterRejected.state.governanceAuditLog.length, beforeMixed.governanceAuditLog.length);
+  assert.equal(afterRejected.state.commandIdempotencyRecords.length, beforeMixed.commandIdempotencyRecords.length);
+});
+
+test("整包 PUT 保留 revision 冲突、授权与已发布 Snapshot 冻结", { concurrency: false }, async () => {
+  withTrustedProxy();
+  const current = await loadWorkspaceState();
+  const stale = structuredClone(current.state);
+  stale.notes = "stale save";
+  const advanced = structuredClone(current.state);
+  advanced.notes = "advance revision";
+  const advancedSave = await issueAndInvoke({
+    action: "save_workspace", url: "http://localhost/api/state", method: "PUT",
+    payload: { state: advanced, baseRevision: current.revision }, invoke: putState,
+  });
+  assert.equal(advancedSave.status, 200);
+  const staleSave = await issueAndInvoke({
+    action: "save_workspace", url: "http://localhost/api/state", method: "PUT",
+    payload: { state: stale, baseRevision: current.revision }, invoke: putState,
+  });
+  assert.equal(staleSave.status, 409);
+
+  const latest = await loadWorkspaceState();
+  const frozen = structuredClone(latest.state);
+  frozen.configurationSnapshots.push({ id: "snapshot:put-bypass" } as never);
+  const frozenSave = await issueAndInvoke({
+    action: "save_workspace", url: "http://localhost/api/state", method: "PUT",
+    payload: { state: frozen, baseRevision: latest.revision }, invoke: putState,
+  });
+  assert.equal(frozenSave.status, 422);
+  const frozenPayload = await frozenSave.json() as { governedFields?: Array<{ field: string; action: string }> };
+  assert.equal(frozenPayload.governedFields?.[0]?.field, "configurationSnapshots");
+
+  const unauthenticated = await putState(new NextRequest("http://localhost/api/state", {
+    method: "PUT", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ state: latest.state, baseRevision: latest.revision }),
+  }));
+  assert.equal(unauthenticated.status, 401);
+});
+
 test("数据源发布更新规则但不重算或改写四组历史产品数据", { concurrency: false }, async () => {
   withTrustedProxy();
   const originalFeishuAppId = process.env.FEISHU_APP_ID;

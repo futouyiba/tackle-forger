@@ -15,6 +15,7 @@ import {
   changesOnlyReadOnlyLegacyHistory,
   findGovernedStateChanges,
   findReadOnlyLegacyProductChanges,
+  governedStateFieldDetails,
   stableAuditActor,
 } from "@/lib/api-command-boundaries";
 import {
@@ -118,6 +119,7 @@ export async function PUT(request: NextRequest) {
             proposed,
           );
           const legacyHistoryOnly = changesOnlyReadOnlyLegacyHistory(governedChanges);
+          const governedFields = governedStateFieldDetails(governedChanges);
           return {
             status: 422,
             body: {
@@ -128,6 +130,7 @@ export async function PUT(request: NextRequest) {
                 ? "LEGACY_HISTORY_READ_ONLY"
                 : "DOMAIN_COMMAND_REQUIRED",
               governedChanges,
+              governedFields,
               legacyHistoryChanges,
             },
           };

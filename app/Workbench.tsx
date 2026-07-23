@@ -495,6 +495,13 @@ function copyState<T>(value: T): T {
   return structuredClone(value);
 }
 
+type SaveFeedback = {
+  kind: "governed" | "conflict" | "error";
+  message: string;
+  fields?: Array<{ field: string; actionLabel?: string }>;
+  revision?: number;
+};
+
 export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   const [state, setState] = useState<WorkspaceState>(() => ensureWorkflowFields(initialState));
   const [page, setPage] = useState<PageKey>("overview");
@@ -524,6 +531,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     setDirty(false);
   };
   const [syncState, setSyncState] = useState<"ready" | "saving" | "saved" | "error">("ready");
+  const [saveFeedback, setSaveFeedback] = useState<SaveFeedback | null>(null);
   const [toast, setToast] = useState("");
   const [search, setSearch] = useState("");
   const [itemKind, setItemKind] = useState<ItemKind>("rod");
@@ -577,6 +585,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     });
     markWorkspaceDirty();
     setSyncState("ready");
+    setSaveFeedback(null);
   };
 
   const notify = (message: string) => {
@@ -655,6 +664,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       return;
     }
     setSyncState("saving");
+    setSaveFeedback(null);
     try {
       const idempotencyKey = `save-workspace:${revision}:${crypto.randomUUID()}`;
       const invocation = await issueClientActionCommand({
@@ -667,16 +677,43 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify(invocation),
       });
-      const payload = (await response.json()) as { revision?: number; error?: string };
-      if (!response.ok) throw new Error(payload.error || "保存失败");
+      const payload = (await response.json()) as {
+        revision?: number; error?: string; code?: string; governedFields?: Array<{ field: string; actionLabel?: string }>;
+      };
+      if (!response.ok) {
+        if (response.status === 409) {
+          setSaveFeedback({
+            kind: "conflict", message: payload.error || "其他成员已保存新版本。",
+            revision: payload.revision,
+          });
+        } else if (response.status === 422 && payload.governedFields?.length) {
+          setSaveFeedback({
+            kind: "governed", message: payload.error || "这些字段必须通过领域动作修改。",
+            fields: payload.governedFields,
+          });
+        } else {
+          setSaveFeedback({ kind: "error", message: payload.error || "保存失败" });
+        }
+        throw new Error(payload.error || "保存失败");
+      }
       applyWorkspaceRevision(payload.revision ?? revision + 1);
       setSyncState("saved");
+      setSaveFeedback(null);
       notify("已保存为版本 v" + (payload.revision ?? revision + 1));
       void loadVersions();
     } catch (error) {
       setSyncState("error");
       notify(error instanceof Error ? error.message : "保存失败");
     }
+  };
+
+  const pageForGovernedField = (field: string): PageKey => {
+    if (field === "seriesDefinitions" || field === "skuDrawers" || field === "purchasableModels") return "candidates";
+    if (field === "patchLedger" || field.startsWith("patch")) return "patchledger";
+    if (field === "configurationSnapshots" || field === "derivedProjections" || field === "projectionMatches") return "v3flow";
+    if (field.includes("Source") || field.includes("Policy") || field === "ruleSetVersions") return "rulesource";
+    if (["recipes", "candidates", "officialSkus", "detailOverrides"].includes(field)) return field === "officialSkus" ? "skus" : field as PageKey;
+    return "versions";
   };
 
   const updateDataSource = (
@@ -3416,6 +3453,25 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
             </Button>
           </div>
         </header>
+        {saveFeedback ? (
+          <section className={cx("save-feedback", saveFeedback.kind)} role="alert" aria-live="assertive">
+            <div>
+              <strong>{saveFeedback.kind === "conflict" ? "保存冲突：本地输入仍未丢失" : "保存未完成"}</strong>
+              <p>{saveFeedback.message}</p>
+              {saveFeedback.kind === "conflict" ? <small>请先在“版本记录”查看最新版本；当前表单输入会保留，确认合并后可再次保存。</small> : null}
+            </div>
+            <div className="save-feedback-actions">
+              {saveFeedback.fields?.map((entry) => (
+                <button type="button" key={entry.field} onClick={() => setPage(pageForGovernedField(entry.field))}>
+                  {entry.field}：{entry.actionLabel ?? "查看领域动作"}
+                </button>
+              ))}
+              {saveFeedback.kind === "conflict" ? <button type="button" onClick={() => setPage("versions")}>查看版本记录{saveFeedback.revision ? `（v${saveFeedback.revision}）` : ""}</button> : null}
+              <button type="button" onClick={() => void save()}>重试保存</button>
+              <button type="button" aria-label="关闭保存提示" onClick={() => setSaveFeedback(null)}><X size={16} /></button>
+            </div>
+          </section>
+        ) : null}
         <div className="content">
           {renderPage()}
         </div>

@@ -29,17 +29,17 @@ npm test
 npm run db:generate
 ```
 
-The repository also retains the historical `apps/web` and `packages/*` pnpm workspace. Validate it separately; do not use pnpm success as a substitute for the authoritative root v3 app's npm checks, and do not use npm installation to rewrite `pnpm-lock.yaml`:
+The repository also retains the historical `apps/web` and `packages/*` pnpm workspace. Its workspace manifest and lockfile live under `legacy-workspace/`, which deliberately has no root package importer. Validate it from that boundary; do not use pnpm success as a substitute for the authoritative root v3 app's npm checks, and do not let root npm-only dependency changes rewrite `legacy-workspace/pnpm-lock.yaml`:
 
 ```powershell
-pnpm install --frozen-lockfile
-pnpm -r typecheck
-pnpm -r lint
-pnpm -r test
-pnpm -r build
+pnpm --dir legacy-workspace install --frozen-lockfile
+pnpm --dir legacy-workspace --filter '@tackle-forger/*' typecheck
+pnpm --dir legacy-workspace --filter '@tackle-forger/*' lint
+pnpm --dir legacy-workspace --filter '@tackle-forger/*' test
+pnpm --dir legacy-workspace --filter '@tackle-forger/*' build
 ```
 
-CI runs the npm root application and pnpm historical workspace as independent jobs so one lockfile or toolchain cannot silently mask the other.
+CI runs the npm root application and pnpm historical workspace as independent jobs so one lockfile or toolchain cannot silently mask the other. Historical workspace dependency changes must update `legacy-workspace/pnpm-lock.yaml`; its frozen install is expected to reject manifest drift.
 
 On Windows, the recommended local launcher is:
 

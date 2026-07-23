@@ -11,6 +11,7 @@
 > OPEN-003运行时复核：2026-07-23，代码基线`codex/open-003-deferred-parts@cdcbd7ce6bea60548f2224039861593c453ae028`；确认迁移层会保留四类扩展部位，创建Series页面仍渲染全部`state.itemParts`，服务端尚无独立启用策略门禁。本轮只记录实现事实，由[Issue #37](https://github.com/futouyiba/tackle-forger/issues/37)跟踪代码收口。
 > OPEN-001规范同步：2026-07-23，确认当前运行时仍保留`ReductionStackingMode`双模式、旧operation和非确定累加路径；本轮只同步已确认规范与外部规则源阻断，不冒充Issue #41的运行时实现或测试证据。
 > OPEN-005契约复核：2026-07-23 07:43:42 +0800，PR #30基线`52b8ab6fbfc84cde1e6530724a75aad23f6872d8`；当前代码仍使用`fishWeightGradeId`、`component_min_ratio`、`same_part_compare`、三种Series基准策略和旧`PUBLISHED`种子定义。本轮只同步正式目标契约并纠正实现状态，没有修改运行时代码或冒充新测试证据。
+> OPEN-003运行时收口：2026-07-23 07:05:00 +0800，代码基线`codex/issue-37-enabled-parts@2eec6d70755d1f72cffe6f2302d63a35ac09f241`；取代上述OPEN-003运行时复核。在尚无可校验已发布`enabledItemPartPolicy`时统一fail-closed，只允许竿、轮、线进入产品入口、Series/SKU、候选生成、发布、Snapshot与配置导出。钩、漂、真饵、拟饵继续保留稳定ID、历史Payload、未知字段和引用，但不再进入产品主流程；由[Issue #37](https://github.com/futouyiba/tackle-forger/issues/37)跟踪评审交付，且不据此宣称OPEN-003已有已发布策略或已RESOLVED。
 > OPEN-007契约复核基线：`3cb6609c237c0c23d108bf305124e24f18980fa8`（2026-07-23 00:43:07 +0800）；本轮只修订文档，不把2026-07-23已决目标语义冒充为当前运行时能力。
 > 本轮完整验证时间：2026-07-23 01:57:07 +0800；在上述OPEN-007代码基线上运行`npm run typecheck`、`npm run lint`与`npm test`。
 > PR #11最新main重整复核：2026-07-23 07:30:24 +0800，基线`origin/main@18f99e136320f1989bdeb7f61312b5ea4493bae7`；根应用`npm run typecheck`、`npm run lint`、`npm test`通过（208项主测试与1项生产构建/渲染测试），历史workspace的`pnpm -r typecheck/lint/test/build`通过；根Lint为0 error、保留main已有1条warning。
@@ -54,7 +55,7 @@
 | 工作区revision归档与裁剪 | 缺失 | SQLite/D1当前不删除完整revision，符合一期全量保留和所有裁剪关闭的安全边界；Blob最多100条仍只是非权威评审例外 | 尚无归档包、恢复入口、tombstone、retention run、裁剪migration或自动裁剪；按v3 `OPEN-011`和父Issue #1保持阻断，本矩阵不构成实现或删除授权 |
 | 09_甘特图作为产品实体 | 因 v3 冲突而不采纳 | 09 只属于开发排期；产品甘特图来自本地 Series/SKU/Model | 不从 09 反向生成领域对象 |
 | 11/12/14–17 反向覆盖产品真相 | 因 v3 冲突而不采纳 | 仅作为历史样例、映射参考或暂存输出 | 不反向覆盖 Snapshot |
-| 扩展部位主流程 | 部分实现 | 注册表和迁移层会保留钩、漂、真饵、拟饵并标记`activeInGeneration=false`；但创建Series页面仍直接渲染全部`state.itemParts`，写接口也未独立校验启用部位策略 | OPEN-003已确认当前完全延期；按[Issue #37](https://github.com/futouyiba/tackle-forger/issues/37)移除产品入口并增加服务端门禁，同时保留稳定ID、历史Payload和引用。修复完成前不得声称运行时已经禁用 |
+| 扩展部位主流程 | 已实现 | `enabled-item-parts`在OPEN-003未发布策略时统一fail-closed，且不信任注册表的`activeInGeneration`；产品创建/只读入口、Series/SKU、结构匹配、候选生成与物化、Model发布、Snapshot批次、文件系统和浏览器配置导出均只允许竿、轮、线。被延期部位返回稳定`ITEM_PART_NOT_ENABLED`且在幂等记录、备份或文件写入前失败；迁移测试证明稳定ID、历史Payload、未知字段和引用保持不变，冻结Snapshot/hash不被重算 | 等待独立评审与GitHub Actions；OPEN-003仍没有可校验的已发布策略，因此继续保持fail-closed，不标记OPEN-003为RESOLVED |
 
 ## 2. 产品反馈归并
 
@@ -81,9 +82,10 @@
 
 ## 4. 当前验证证据
 
-- 本轮完整`npm test`为237项主测试通过，另有2项生产构建/渲染测试通过，覆盖领域、API、迁移、权限、冲突、恢复、SQLite持久化、冻结与生产产物预算。
-- `tests/feishu-writeback.test.ts`的5项测试已包含在默认主套件中并通过，不再需要单独补跑。
-- `npm run typecheck`与`npm run lint`通过。
+- Issue #37当前分支：完整`npm test`为221项主测试通过，另有1项渲染测试通过；`npm run typecheck`通过；`npm run lint`为0错误，仅保留仓库既有`vitest.workspace.config.ts`匿名默认导出警告。新增回归覆盖迁移/重启保留未知Payload、产品入口隐藏、服务端稳定拒绝与无副作用、候选生成/物化、Series/SKU/Snapshot部位链、混合批次、历史Series兼容、发布/Snapshot冻结，以及文件系统和浏览器导出在写入前拒绝。
+- 远端复审完整`npm test`为190项主测试通过，另有1项渲染测试通过，覆盖领域、API、迁移、权限、冲突、恢复、SQLite持久化和冻结。
+- OPEN-007/OPEN-011文档复核轮次曾记录完整`npm test`为237项主测试及2项生产构建/渲染测试通过；该记录属于当时基线，不替代上方Issue #37当前分支的准确门禁结果。
+- `tests/feishu-writeback.test.ts`已包含在当前默认主套件中并通过，不再需要单独补跑。
 - 生产构建与渲染验收覆盖飞书规则源、离散 Series 创建和 Patch 台账入口。
 - PatchLedger单测覆盖独立schema v4、Workspace schema v15、幂等、仅ACTIVE生效、操作顺序、稳定ID、Rebase新revision、ORPHANED、规则草稿权限、镜像失败、显式拉取与Snapshot冻结。
 - 最新评审构建已部署到`https://tackle-forger-workbench.vercel.app`；首页HTTP 200，会话端点503/`AUTH-CONFIG-001`，浏览器因缺少飞书OAuth环境变量停在明确登录配置错误页。

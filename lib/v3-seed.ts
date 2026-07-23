@@ -724,6 +724,7 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
     model: publishTarget.model,
     sku: sku15,
     series,
+    seriesSkus: [sku15, sku18],
     projection: baseProjection,
     finalPanelValues: publishTarget.values,
     componentSelections: publishTarget.model.componentSelections,

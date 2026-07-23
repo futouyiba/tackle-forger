@@ -18,6 +18,10 @@ import type {
   ValidationIssue,
 } from "./types";
 import { deterministicHash } from "./rule-kernel";
+import {
+  isProductItemPartEnabled,
+  seriesItemPartId,
+} from "./enabled-item-parts";
 
 export interface SeriesGanttQuery {
   text?: string;
@@ -194,23 +198,33 @@ export function querySeriesGantt(input: {
   itemTypes: ItemTypeProfile[];
   upgrades: UpgradeCandidate[];
 }): QueriedGanttSeriesBlock[] {
+  const productSeries = input.series.filter((series) =>
+    isProductItemPartEnabled(seriesItemPartId(series, input.skus)));
+  const productSkus = input.skus.filter((sku) =>
+    isProductItemPartEnabled(sku.projectionMatch.itemPartId)
+    && productSeries.some((series) =>
+      series.id === sku.seriesId
+      && seriesItemPartId(series, input.skus) === sku.projectionMatch.itemPartId));
+  const productSkuIds = new Set(productSkus.map((sku) => sku.id));
+  const productModels = input.models.filter((model) => productSkuIds.has(model.skuId));
+  const productModelIds = new Set(productModels.map((model) => model.id));
+  const productUpgrades = input.upgrades.filter((upgrade) => productModelIds.has(upgrade.modelId));
   const projectionById = new Map(
     buildSeriesGanttProjection({
-      series: input.series,
-      skus: input.skus,
-      models: input.models,
+      series: productSeries,
+      skus: productSkus,
+      models: productModels,
     }).map((block) => [block.seriesId, block]),
   );
-  const typeById = new Map(input.itemTypes.map((type) => [type.id, type]));
 
-  const result = input.series.flatMap((series): QueriedGanttSeriesBlock[] => {
+  const result = productSeries.flatMap((series): QueriedGanttSeriesBlock[] => {
     const block = projectionById.get(series.id);
     if (!block) return [];
     const context = collectSeriesContext({
       series,
-      skus: input.skus,
-      models: input.models,
-      upgrades: input.upgrades,
+      skus: productSkus,
+      models: productModels,
+      upgrades: productUpgrades,
     });
     const matched = matchingModelsForQuery({
       query: input.query,
@@ -220,9 +234,9 @@ export function querySeriesGantt(input: {
       upgrades: context.pendingUpgrades,
     });
     const issueCodes = [...new Set(context.issues.map((issue) => issue.code))].sort();
-    const typePartIds = series.itemPartId
-      ? [series.itemPartId]
-      : typeById.get(series.typeId)?.itemPartIds ?? [];
+    const typePartIds = [seriesItemPartId(series, input.skus)].filter(
+      (itemPartId): itemPartId is string => Boolean(itemPartId),
+    );
     if (!matched.textMatches) return [];
     if (!intersects(input.query.collectionIds, series.collectionId ? [series.collectionId] : [])) return [];
     if (!intersects(input.query.methodIds, [series.fishingMethodId])) return [];

@@ -726,6 +726,7 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
     publicationMode: "new_formal",
     model,
     sku,
+    seriesSkus: state.skuDrawers.filter((entry) => entry.seriesId === series.id),
     series,
     projection,
     finalPanelValues: oldSnapshot.finalPanelValues,

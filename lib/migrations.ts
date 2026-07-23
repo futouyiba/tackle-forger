@@ -156,7 +156,7 @@ function buildItemParts(parameters: ParameterDefinition[]): ItemPartDefinition[]
       .map((parameter) => parameter.key),
     notes: definition.activeInGeneration
       ? "v3 首版生成流程启用。"
-      : "v3 注册表预留；尚未决定开放到当前生成界面。",
+      : "OPEN-003 当前完全延期；仅保留稳定 ID、历史 Payload、未知字段与引用，不进入产品流程。",
   }));
 }
 

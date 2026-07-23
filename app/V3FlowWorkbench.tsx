@@ -20,6 +20,7 @@ import {
 import { useMemo, useState } from "react";
 import { hydrateV3Seed } from "@/lib/v3-seed";
 import { projectionPatchViewFromLedger } from "@/lib/patch-ledger";
+import { isProductSkuChainEnabled } from "@/lib/enabled-item-parts";
 import type {
   ConfigurationSnapshot,
   ProjectionPatchRuleSource,
@@ -119,12 +120,20 @@ function PatchStack({ patches }: { patches: ProjectionPatchRuleSource[] }) {
 export function V3FlowWorkbench({ state, mutate, notify, initialSeriesId }: V3FlowWorkbenchProps) {
   const [stage, setStage] = useState<FlowStage>("projection");
   const [sourceView, setSourceView] = useState<SourceView>("rules");
+  const productSkus = useMemo(
+    () => state.skuDrawers.filter((sku) => isProductSkuChainEnabled(
+      state.seriesDefinitions.find((series) => series.id === sku.seriesId),
+      sku,
+      state.skuDrawers,
+    )),
+    [state.seriesDefinitions, state.skuDrawers],
+  );
   const [selectedSkuId, setSelectedSkuId] = useState(
-    state.skuDrawers.find((sku) => sku.seriesId === initialSeriesId)?.id
-      ?? state.skuDrawers[0]?.id
+    productSkus.find((sku) => sku.seriesId === initialSeriesId)?.id
+      ?? productSkus[0]?.id
       ?? "",
   );
-  const selectedSku = state.skuDrawers.find((item) => item.id === selectedSkuId) ?? state.skuDrawers[0];
+  const selectedSku = productSkus.find((item) => item.id === selectedSkuId) ?? productSkus[0];
   const [selectedModelId, setSelectedModelId] = useState(selectedSku?.defaultModelId ?? selectedSku?.modelIds[0] ?? "");
 
   const effectiveModelId = selectedSku?.modelIds.includes(selectedModelId) ? selectedModelId : selectedSku?.defaultModelId ?? selectedSku?.modelIds[0] ?? "";
@@ -137,8 +146,8 @@ export function V3FlowWorkbench({ state, mutate, notify, initialSeriesId }: V3Fl
   const pendingUpgrade = state.upgradeCandidates.find((item) => item.modelId === selectedModel?.id && item.status === "pending");
 
   const seriesSkus = selectedSeries
-    ? state.skuDrawers.filter((item) => item.seriesId === selectedSeries.id).sort((left, right) => left.targetWeightKg - right.targetWeightKg)
-    : state.skuDrawers;
+    ? productSkus.filter((item) => item.seriesId === selectedSeries.id).sort((left, right) => left.targetWeightKg - right.targetWeightKg)
+    : productSkus;
   const seriesModels = selectedSku
     ? state.purchasableModels.filter((item) => selectedSku.modelIds.includes(item.id))
     : [];

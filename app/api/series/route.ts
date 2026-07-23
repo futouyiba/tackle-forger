@@ -20,6 +20,7 @@ import { loadWorkspaceState, saveWorkspaceState } from "@/lib/storage";
 import type { SeriesDefinition } from "@/lib/types";
 import { ensureWorkflowFields } from "@/lib/workflow";
 import { parseDiscretePulls } from "@/lib/series-create-contract";
+import { recoverSeriesCreateAfterSaveConflict } from "@/lib/series-create-idempotency";
 import { stableAuditActor } from "@/lib/api-command-boundaries";
 import {
   ItemPartNotEnabledError,
@@ -377,20 +378,18 @@ export async function POST(request: NextRequest) {
     message: `创建 Series ${materialized.series.name}（${materialized.createdSkuIds.length} 个 SKU 抽屉）`,
   });
   if (result.conflict) {
-    const latest = await loadWorkspaceState();
-    const recoveredCommand = latest.state.commandIdempotencyRecords.find(
-      (entry) => entry.key === idempotencyKey,
-    );
-    const recoveredSeries = recoveredCommand
-      && acceptedInputHashes.has(recoveredCommand.inputHash)
-      ? latest.state.seriesDefinitions.find((entry) => entry.id === recoveredCommand.resultRef)
-      : undefined;
-    if (recoveredSeries) {
+    const recovered = await recoverSeriesCreateAfterSaveConflict({
+      saveResult: result,
+      loadLatest: loadWorkspaceState,
+      idempotencyKey,
+      acceptedInputHashes,
+    });
+    if (recovered) {
       return NextResponse.json({
-        state: latest.state,
-        series: recoveredSeries,
-        createdSkuIds: recoveredSeries.skuIds,
-        revision: latest.revision,
+        state: recovered.latest.state,
+        series: recovered.series,
+        createdSkuIds: recovered.series.skuIds,
+        revision: recovered.latest.revision,
         idempotent: true,
         user,
       });

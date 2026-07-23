@@ -110,6 +110,17 @@ function parseEncryptionKey(value: string | undefined): Uint8Array | undefined {
   return decoded.byteLength === 32 ? decoded : undefined;
 }
 
+function pathsOverlap(left: string, right: string): boolean {
+  const contains = (parent: string, candidate: string) => {
+    const relative = path.relative(parent, candidate);
+    return relative === ""
+      || (!relative.startsWith(`..${path.sep}`)
+        && relative !== ".."
+        && !path.isAbsolute(relative));
+  };
+  return contains(left, right) || contains(right, left);
+}
+
 export function aiRuntimeStoreConfigFromEnvironment(): AIRuntimeStoreConfig | undefined {
   const dataDir = process.env.AI_RETENTION_DATA_DIR?.trim();
   const encryptionKey = parseEncryptionKey(process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64);
@@ -120,17 +131,11 @@ export function aiRuntimeStoreConfigFromEnvironment(): AIRuntimeStoreConfig | un
     process.env.AI_RETENTION_TOMBSTONE_DIR?.trim()
       || `${resolvedDataDir}-deletion-tombstones`,
   );
-  const relativeToData = path.relative(resolvedDataDir, tombstoneDir);
-  if (!relativeToData || (!relativeToData.startsWith("..") && !path.isAbsolute(relativeToData))) {
-    return undefined;
-  }
+  if (pathsOverlap(resolvedDataDir, tombstoneDir)) return undefined;
   const backupDir = process.env.WORKSPACE_BACKUP_DIR?.trim();
   if (backupDir) {
     const resolvedBackupDir = path.resolve(backupDir);
-    const relativeToBackup = path.relative(resolvedBackupDir, tombstoneDir);
-    if (!relativeToBackup || (!relativeToBackup.startsWith("..") && !path.isAbsolute(relativeToBackup))) {
-      return undefined;
-    }
+    if (pathsOverlap(resolvedBackupDir, tombstoneDir)) return undefined;
   }
   return { dataDir: resolvedDataDir, tombstoneDir, encryptionKey, encryptionKeyVersion };
 }

@@ -16,7 +16,10 @@ import {
   evaluateAIAssessmentFreshness,
   type AIAssessmentRetentionRecord,
 } from "../lib/ai-retention";
-import { createAIRuntimeStoreFromEnvironment } from "../lib/ai-runtime-store";
+import {
+  aiRuntimeStoreConfigFromEnvironment,
+  createAIRuntimeStoreFromEnvironment,
+} from "../lib/ai-runtime-store";
 import { loadWorkspaceState } from "../lib/storage";
 
 function record(input: { assessmentId: string; actorStableId: string; createdAt: string }): AIAssessmentRetentionRecord {
@@ -211,6 +214,48 @@ test("独立删除墓碑阻止删除前 ai-retention 备份恢复后重新暴露
     else process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64 = previous.key;
     if (previous.keyVersion === undefined) delete process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION;
     else process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION = previous.keyVersion;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("删除墓碑目录与 AI 主存储或备份目录任一方向重叠都 fail-closed", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "tackle-forger-ai-retention-paths-"));
+  const previous = new Map([
+    "AI_RETENTION_DATA_DIR",
+    "AI_RETENTION_TOMBSTONE_DIR",
+    "AI_RETENTION_ENCRYPTION_KEY_BASE64",
+    "AI_RETENTION_ENCRYPTION_KEY_VERSION",
+    "WORKSPACE_BACKUP_DIR",
+  ].map((name) => [name, process.env[name]]));
+  const dataDir = path.join(root, "primary", "ai-retention");
+  const backupDir = path.join(root, "backup-domain", "backups");
+  process.env.AI_RETENTION_DATA_DIR = dataDir;
+  process.env.WORKSPACE_BACKUP_DIR = backupDir;
+  process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64 = randomBytes(32).toString("base64");
+  process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION = "key-v1";
+  try {
+    for (const tombstoneDir of [
+      dataDir,
+      path.join(dataDir, "tombstones"),
+      path.dirname(dataDir),
+      backupDir,
+      path.join(backupDir, "tombstones"),
+      path.dirname(backupDir),
+    ]) {
+      process.env.AI_RETENTION_TOMBSTONE_DIR = tombstoneDir;
+      assert.equal(
+        aiRuntimeStoreConfigFromEnvironment(),
+        undefined,
+        `overlap should fail closed: ${tombstoneDir}`,
+      );
+    }
+    process.env.AI_RETENTION_TOMBSTONE_DIR = path.join(root, "independent", "tombstones");
+    assert.ok(aiRuntimeStoreConfigFromEnvironment());
+  } finally {
+    for (const [name, value] of previous) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
     await rm(root, { recursive: true, force: true });
   }
 });

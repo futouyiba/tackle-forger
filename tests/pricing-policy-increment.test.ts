@@ -11,13 +11,23 @@ import {
   type QualityId,
 } from "../lib/pricing-policy";
 import { publishConfigurationSnapshot, verifySnapshotIntegrity } from "../lib/publishing";
+import {
+  hashAffixRuntimeEvidence,
+  numberToBinary64Hex,
+} from "../lib/reduction-stacking-policy";
 import { deterministicHash } from "../lib/rule-kernel";
 import {
   adaptRuleTraceToCanonical,
+  createCalculationTraceEntry,
   createCalculationTraceArchive,
 } from "../lib/calculation-trace";
-import { createPerformanceSummaryDefinition } from "../lib/performance-summary";
 import { createSeedState } from "../lib/seed";
+import {
+  formalAffixRuntimeEvidence,
+  formalProjection,
+  testReductionPolicy,
+} from "./helpers/reduction-policy";
+import { createPerformanceSummaryDefinition } from "../lib/performance-summary";
 import type { ProjectionTraceStep } from "../lib/types";
 
 const REVISION = "2922";
@@ -236,6 +246,12 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     ...projection.values,
     [changedParameterKey]: changedBefore + 1,
   };
+  const reductionStackingPolicy = testReductionPolicy();
+  const publishProjection = formalProjection(
+    projection,
+    reductionStackingPolicy,
+    finalPanelValues,
+  );
   const settlementTrace = finalSettlementTrace(finalPanelValues);
   const publishInput = {
     publicationMode: "new_formal",
@@ -244,7 +260,13 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     sku,
     series,
     seriesSkus: state.skuDrawers,
-    projection,
+    projection: publishProjection,
+    reductionStackingPolicy,
+    affixRuntimeEvidence: formalAffixRuntimeEvidence(
+      publishProjection,
+      reductionStackingPolicy,
+      finalPanelValues,
+    ),
     finalPanelValues,
     componentSelections: oldSnapshot.componentSelections,
     patches: [],
@@ -258,7 +280,7 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     passiveAffixPayloads: oldSnapshot.passiveAffixPayloads,
     compatibilityReport: oldSnapshot.compatibilityReport,
     affinityReport: oldSnapshot.affinityReport,
-    qualityReport: oldSnapshot.qualityReport,
+    qualityReport: { ...oldSnapshot.qualityReport, blockingIssues: [] },
     qualityValueAssessment,
     pricingPolicyVersion: version.id,
     automaticPricing,
@@ -268,6 +290,154 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     publishedAt: "2026-07-22T00:00:00.000Z",
     snapshotId: "snapshot:new-formal",
   } satisfies Parameters<typeof publishConfigurationSnapshot>[0];
+  assert.throws(() => publishConfigurationSnapshot({
+    ...publishInput,
+    qualityReport: {
+      ...publishInput.qualityReport,
+      blockingIssues: [
+        "[REDUCTION_POLICY_SOURCE_MISSING] 词条聚合证据仍缺策略源。",
+      ],
+    },
+  }), /REDUCTION_POLICY_SOURCE_MISSING/);
+  const detachedEvidence = structuredClone(publishInput.affixRuntimeEvidence);
+  const detachedKey = Object.keys(detachedEvidence.values)[0];
+  detachedEvidence.values[detachedKey] = "detached";
+  detachedEvidence.traceHash = hashAffixRuntimeEvidence({
+    reductionStackingPolicyVersion: detachedEvidence.reductionStackingPolicyVersion,
+    values: detachedEvidence.values,
+    postReviewValues: detachedEvidence.postReviewValues,
+    finalValues: detachedEvidence.finalValues,
+    trace: detachedEvidence.trace,
+    issues: detachedEvidence.issues,
+  });
+  assert.throws(() => publishConfigurationSnapshot({
+    ...publishInput,
+    affixRuntimeEvidence: detachedEvidence,
+  }), /AFFIX_RUNTIME_TRACE_INVALID/);
+  const forgedEvidence = structuredClone(publishInput.affixRuntimeEvidence);
+  forgedEvidence.values = structuredClone(forgedEvidence.finalValues);
+  forgedEvidence.postReviewValues = structuredClone(forgedEvidence.finalValues);
+  const forgedKey = Object.keys(forgedEvidence.finalValues)[0];
+  const forgedValue = forgedEvidence.finalValues[forgedKey];
+  forgedEvidence.trace = [{
+    sequence: 1,
+    ruleId: "forged:replacement-trace",
+    sourceId: "forged:replacement-trace",
+    sourceName: "伪造替换 Trace",
+    parameterKey: forgedKey,
+    operation: "set",
+    before: forgedValue,
+    operand: forgedValue,
+    after: forgedValue,
+  }];
+  forgedEvidence.traceHash = hashAffixRuntimeEvidence({
+    reductionStackingPolicyVersion: forgedEvidence.reductionStackingPolicyVersion,
+    values: forgedEvidence.values,
+    postReviewValues: forgedEvidence.postReviewValues,
+    finalValues: forgedEvidence.finalValues,
+    trace: forgedEvidence.trace,
+    issues: forgedEvidence.issues,
+  });
+  assert.throws(() => publishConfigurationSnapshot({
+    ...publishInput,
+    affixRuntimeEvidence: forgedEvidence,
+  }), /AFFIX_RUNTIME_TRACE_INVALID/);
+  const stagedEvidence = structuredClone(publishInput.affixRuntimeEvidence);
+  const stagedKey = Object.keys(stagedEvidence.finalValues).find(
+    (key) => typeof stagedEvidence.finalValues[key] === "number",
+  )!;
+  const stagedFinal = stagedEvidence.finalValues[stagedKey] as number;
+  stagedEvidence.values[stagedKey] = stagedFinal - 2;
+  stagedEvidence.postReviewValues[stagedKey] = stagedFinal - 1;
+  stagedEvidence.trace.push(
+    {
+      sequence: 10_000,
+      ruleId: "affix-runtime:no-effect:test",
+      sourceId: "affix-runtime:no-effect:test",
+      sourceName: "无效词条审计",
+      parameterKey: stagedKey,
+      operation: "add",
+      before: stagedFinal - 2,
+      operand: 0,
+      after: stagedFinal - 2,
+      numericEvidence: {
+        stage: "attribute_affix",
+        beforeBinary64: numberToBinary64Hex(stagedFinal - 2),
+        operandBinary64: numberToBinary64Hex(0),
+        afterBinary64: numberToBinary64Hex(stagedFinal - 2),
+        anomaly: "no_effect",
+      },
+    },
+    {
+      sequence: 10_001,
+      ruleId: "final-review:test",
+      sourceId: "patch:final-review:test",
+      sourceName: "最终复核",
+      parameterKey: stagedKey,
+      operation: "set",
+      before: stagedFinal - 2,
+      operand: stagedFinal - 1,
+      after: stagedFinal - 1,
+      numericEvidence: {
+        stage: "final_review_patch",
+        beforeBinary64: numberToBinary64Hex(stagedFinal - 2),
+        operandBinary64: numberToBinary64Hex(stagedFinal - 1),
+        afterBinary64: numberToBinary64Hex(stagedFinal - 1),
+        anomaly: "none",
+      },
+    },
+    {
+      sequence: 10_002,
+      ruleId: `parameter-definition:${stagedKey}`,
+      sourceId: `parameter-definition:${stagedKey}`,
+      sourceName: stagedKey,
+      parameterKey: stagedKey,
+      operation: "set",
+      before: stagedFinal - 1,
+      operand: 0,
+      after: stagedFinal,
+      numericEvidence: {
+        stage: "parameter_definition",
+        beforeBinary64: numberToBinary64Hex(stagedFinal - 1),
+        operandBinary64: numberToBinary64Hex(0),
+        afterBinary64: numberToBinary64Hex(stagedFinal),
+        anomaly: "none",
+      },
+    },
+  );
+  stagedEvidence.traceHash = hashAffixRuntimeEvidence({
+    reductionStackingPolicyVersion: stagedEvidence.reductionStackingPolicyVersion,
+    values: stagedEvidence.values,
+    postReviewValues: stagedEvidence.postReviewValues,
+    finalValues: stagedEvidence.finalValues,
+    trace: stagedEvidence.trace,
+    issues: stagedEvidence.issues,
+  });
+  const stagedProjection = {
+    ...publishInput.projection,
+    trace: [...publishInput.projection.trace, {
+      layer: "final_review_patch" as const,
+      sourceIds: ["patch:final-review:test", `parameter-definition:${stagedKey}`, "affix-runtime:no-effect:test"],
+      contributions: structuredClone(stagedEvidence.trace.slice(-3)),
+    }],
+    affixRuntimeEvidence: structuredClone(stagedEvidence),
+  };
+  const snapshot = publishConfigurationSnapshot({
+    ...publishInput,
+    projection: stagedProjection,
+    affixRuntimeEvidence: stagedEvidence,
+  });
+  assert.equal(snapshot.pricingPolicyVersion, version.id);
+  assert.equal(snapshot.automaticPricing?.formal, true);
+  assert.equal(snapshot.qualityValueAssessment?.formal, true);
+  assert.ok(snapshot.validationReport.every((issue) =>
+    "subjectRef" in issue
+    && "issueId" in issue
+    && issue.subjectRef.workspaceId === publishInput.workspaceId
+    && issue.subjectRef.entityId === model.id
+    && issue.subjectRef.revisionId === String(model.revision)
+    && issue.issueId === `validation-issue:${issue.fingerprint}`,
+  ));
   assert.throws(
     () => publishConfigurationSnapshot({
       ...publishInput,
@@ -278,14 +448,10 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     }),
     /同一 definitionId \+ definitionVersion 存在内容冲突/,
   );
-  const snapshot = publishConfigurationSnapshot(publishInput);
-  assert.equal(snapshot.pricingPolicyVersion, version.id);
-  assert.equal(snapshot.automaticPricing?.formal, true);
-  assert.equal(snapshot.qualityValueAssessment?.formal, true);
   assert.equal(snapshot.calculationTrace?.schemaVersion, "calculation-trace/v1");
   assert.ok(snapshot.calculationTrace?.entries.length);
   const expectedPanelTrace = adaptRuleTraceToCanonical({
-    projection: { ...projection, trace: settlementTrace },
+    projection: { ...publishProjection, trace: settlementTrace },
     subjectRef,
   });
   assert.deepEqual(
@@ -326,6 +492,213 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     Object.fromEntries(Object.entries(panelTampered).filter(([key]) => key !== "contentHash")),
   );
   assert.equal(verifySnapshotIntegrity(panelTampered), false);
+  const affixEntriesRemoved = structuredClone(snapshot);
+  affixEntriesRemoved.calculationTrace!.entries = affixEntriesRemoved.calculationTrace!.entries.filter(
+    (entry) => entry.evidence?.adapter !== "affix_runtime/v1",
+  ).map((entry, index) => {
+    const recreated: Partial<typeof entry> = structuredClone(entry);
+    delete recreated.traceEntryId;
+    delete recreated.inputHash;
+    delete recreated.outputHash;
+    return createCalculationTraceEntry({
+      ...recreated,
+      sequence: index + 1,
+    } as Parameters<typeof createCalculationTraceEntry>[0]);
+  });
+  affixEntriesRemoved.calculationTrace = createCalculationTraceArchive(
+    affixEntriesRemoved.calculationTrace!.entries,
+  );
+  affixEntriesRemoved.contentHash = deterministicHash(
+    Object.fromEntries(Object.entries(affixEntriesRemoved).filter(([key]) => key !== "contentHash")),
+  );
+  assert.equal(verifySnapshotIntegrity(affixEntriesRemoved), false);
+
+  const rehashedSnapshot = (candidate: typeof snapshot) => {
+    candidate.calculationTrace = createCalculationTraceArchive(
+      candidate.calculationTrace!.entries.map((entry, index) => {
+        const recreated: Partial<typeof entry> = structuredClone(entry);
+        delete recreated.traceEntryId;
+        delete recreated.inputHash;
+        delete recreated.outputHash;
+        return createCalculationTraceEntry({
+          ...recreated,
+          sequence: index + 1,
+        } as Parameters<typeof createCalculationTraceEntry>[0]);
+      }),
+    );
+    candidate.contentHash = deterministicHash(
+      Object.fromEntries(Object.entries(candidate).filter(([key]) => key !== "contentHash")),
+    );
+  };
+  const rehashedSnapshotWithConsistentBindings = (candidate: typeof snapshot) => {
+    rehashedSnapshot(candidate);
+    const mirrors = candidate.calculationTrace!.entries.filter((entry) =>
+      entry.evidence?.adapter === "projection_authority/v1",
+    );
+    for (const runtime of candidate.calculationTrace!.entries.filter((entry) =>
+      entry.evidence?.adapter === "affix_runtime/v1" && entry.parameterKey !== "__affix_runtime_summary__",
+    )) {
+      const runtimeEvidence = runtime.evidence as Record<string, unknown>;
+      const contribution = runtimeEvidence.contribution;
+      const mirror = mirrors.find((entry) =>
+        deterministicHash(entry.evidence?.contribution) === deterministicHash(contribution),
+      );
+      assert.ok(mirror);
+      runtimeEvidence.authorityRef = {
+        traceEntryId: mirror.traceEntryId,
+        sequence: mirror.sequence,
+        bindingKey: deterministicHash(contribution),
+      };
+    }
+    rehashedSnapshot(candidate);
+  };
+  const rewriteRuntimeSummary = (candidate: typeof snapshot) => {
+    const summary = candidate.calculationTrace!.entries.find((entry) =>
+      entry.parameterKey === "__affix_runtime_summary__",
+    )!;
+    const summaryEvidence = summary.evidence as Record<string, unknown>;
+    const trace = candidate.calculationTrace!.entries
+      .filter((entry) => entry.evidence?.adapter === "affix_runtime/v1")
+      .filter((entry) => entry.parameterKey !== "__affix_runtime_summary__")
+      .map((entry) => (entry.evidence as Record<string, unknown>).contribution) as typeof stagedEvidence.trace;
+    summaryEvidence.contributionCount = trace.length;
+    summaryEvidence.traceHash = hashAffixRuntimeEvidence({
+      reductionStackingPolicyVersion: summaryEvidence.reductionStackingPolicyVersion as string,
+      values: summaryEvidence.affixOutputValues as typeof stagedEvidence.values,
+      postReviewValues: summaryEvidence.postReviewValues as typeof stagedEvidence.postReviewValues,
+      finalValues: summaryEvidence.finalValues as typeof stagedEvidence.finalValues,
+      trace,
+      issues: summaryEvidence.issues as typeof stagedEvidence.issues,
+    });
+  };
+  const middleRuntimeRemoved = structuredClone(snapshot);
+  const runtimeEntries = middleRuntimeRemoved.calculationTrace!.entries.filter((entry) =>
+    entry.evidence?.adapter === "affix_runtime/v1" && entry.parameterKey !== "__affix_runtime_summary__",
+  );
+  const middleEntry = runtimeEntries[Math.floor(runtimeEntries.length / 2)];
+  middleRuntimeRemoved.calculationTrace!.entries = middleRuntimeRemoved.calculationTrace!.entries.filter(
+    (entry) => entry !== middleEntry,
+  );
+  rewriteRuntimeSummary(middleRuntimeRemoved);
+  rehashedSnapshot(middleRuntimeRemoved);
+  assert.equal(verifySnapshotIntegrity(middleRuntimeRemoved), false);
+
+  const zeroEffectRemoved = structuredClone(snapshot);
+  const zeroEffectEntry = zeroEffectRemoved.calculationTrace!.entries.find((entry) =>
+    entry.evidence?.adapter === "affix_runtime/v1"
+    && (entry.evidence as Record<string, unknown>).contribution
+      && ((entry.evidence as Record<string, unknown>).contribution as { numericEvidence?: { anomaly?: string } })
+        .numericEvidence?.anomaly === "no_effect",
+  )!;
+  assert.ok(zeroEffectEntry);
+  zeroEffectRemoved.calculationTrace!.entries = zeroEffectRemoved.calculationTrace!.entries.filter(
+    (entry) => entry !== zeroEffectEntry,
+  );
+  rewriteRuntimeSummary(zeroEffectRemoved);
+  rehashedSnapshot(zeroEffectRemoved);
+  assert.equal(verifySnapshotIntegrity(zeroEffectRemoved), false);
+
+  const extraRuntime = structuredClone(snapshot);
+  const extraSource = extraRuntime.calculationTrace!.entries.find((entry) =>
+    entry.evidence?.adapter === "affix_runtime/v1" && entry.parameterKey !== "__affix_runtime_summary__",
+  )!;
+  extraRuntime.calculationTrace!.entries.push(structuredClone(extraSource));
+  rewriteRuntimeSummary(extraRuntime);
+  rehashedSnapshot(extraRuntime);
+  assert.equal(verifySnapshotIntegrity(extraRuntime), false);
+
+  const duplicateSummary = structuredClone(snapshot);
+  const summarySource = duplicateSummary.calculationTrace!.entries.find((entry) =>
+    entry.parameterKey === "__affix_runtime_summary__",
+  )!;
+  duplicateSummary.calculationTrace!.entries.push(structuredClone(summarySource));
+  rewriteRuntimeSummary(duplicateSummary);
+  rehashedSnapshot(duplicateSummary);
+  assert.equal(verifySnapshotIntegrity(duplicateSummary), false);
+
+  const bindingTampered = structuredClone(snapshot);
+  const boundRuntime = bindingTampered.calculationTrace!.entries.find((entry) =>
+    entry.evidence?.adapter === "affix_runtime/v1" && entry.parameterKey !== "__affix_runtime_summary__",
+  )!;
+  ((boundRuntime.evidence as Record<string, unknown>).authorityRef as Record<string, unknown>).traceEntryId = "forged:authority";
+  rehashedSnapshot(bindingTampered);
+  assert.equal(verifySnapshotIntegrity(bindingTampered), false);
+
+  const authorityTampered = structuredClone(snapshot);
+  const authorityRuntime = authorityTampered.calculationTrace!.entries.find((entry) =>
+    entry.evidence?.adapter === "affix_runtime/v1" && entry.parameterKey !== "__affix_runtime_summary__",
+  )!;
+  const authorityRef = (authorityRuntime.evidence as Record<string, unknown>).authorityRef as Record<string, unknown>;
+  const authorityEntry = authorityTampered.calculationTrace!.entries.find((entry) =>
+    entry.traceEntryId === authorityRef.traceEntryId,
+  )!;
+  ((authorityEntry.evidence as Record<string, unknown>).contribution as { sourceName: string }).sourceName = "forged authority";
+  rehashedSnapshot(authorityTampered);
+  assert.equal(verifySnapshotIntegrity(authorityTampered), false);
+
+  const pairedRuntimeMirrorDeletion = structuredClone(snapshot);
+  const pairedRuntime = pairedRuntimeMirrorDeletion.calculationTrace!.entries.find((entry) =>
+    entry.evidence?.adapter === "affix_runtime/v1" && entry.parameterKey !== "__affix_runtime_summary__",
+  )!;
+  const pairedRef = (pairedRuntime.evidence as Record<string, unknown>).authorityRef as Record<string, unknown>;
+  pairedRuntimeMirrorDeletion.calculationTrace!.entries = pairedRuntimeMirrorDeletion.calculationTrace!.entries.filter(
+    (entry) => entry !== pairedRuntime && entry.traceEntryId !== pairedRef.traceEntryId,
+  );
+  rewriteRuntimeSummary(pairedRuntimeMirrorDeletion);
+  rehashedSnapshotWithConsistentBindings(pairedRuntimeMirrorDeletion);
+  assert.equal(verifySnapshotIntegrity(pairedRuntimeMirrorDeletion), false);
+
+  const pairedRuntimeMirrorTamper = structuredClone(snapshot);
+  const pairedTamperedRuntime = pairedRuntimeMirrorTamper.calculationTrace!.entries.find((entry) =>
+    entry.evidence?.adapter === "affix_runtime/v1" && entry.parameterKey !== "__affix_runtime_summary__",
+  )!;
+  const pairedTamperedRef = (pairedTamperedRuntime.evidence as Record<string, unknown>).authorityRef as Record<string, unknown>;
+  const pairedTamperedMirror = pairedRuntimeMirrorTamper.calculationTrace!.entries.find((entry) =>
+    entry.traceEntryId === pairedTamperedRef.traceEntryId,
+  )!;
+  ((pairedTamperedRuntime.evidence as Record<string, unknown>).contribution as { sourceName: string }).sourceName = "paired forged";
+  ((pairedTamperedMirror.evidence as Record<string, unknown>).contribution as { sourceName: string }).sourceName = "paired forged";
+  rewriteRuntimeSummary(pairedRuntimeMirrorTamper);
+  rehashedSnapshotWithConsistentBindings(pairedRuntimeMirrorTamper);
+  assert.equal(verifySnapshotIntegrity(pairedRuntimeMirrorTamper), false);
+
+  const affixEvidenceTampered = structuredClone(snapshot);
+  const runtimeSummary = affixEvidenceTampered.calculationTrace!.entries.find((entry) =>
+    entry.parameterKey === "__affix_runtime_summary__",
+  )!;
+  const runtimeContribution = affixEvidenceTampered.calculationTrace!.entries.find((entry) =>
+    entry.evidence?.adapter === "affix_runtime/v1"
+    && entry.parameterKey !== "__affix_runtime_summary__",
+  )!;
+  assert.ok(runtimeSummary.evidence && runtimeContribution.evidence);
+  const summaryEvidence = runtimeSummary.evidence as Record<string, unknown>;
+  const contributionEvidence = runtimeContribution.evidence as Record<string, unknown>;
+  summaryEvidence.reductionStackingPolicyVersion = "reduction-policy:replaced";
+  const contribution = contributionEvidence.contribution as {
+    numericEvidence?: { beforeBinary64?: string; anomaly?: string };
+  };
+  assert.ok(contribution.numericEvidence);
+  contribution.numericEvidence!.beforeBinary64 = "0000000000000000";
+  contribution.numericEvidence!.anomaly = "overflow";
+  const runtimeTrace = affixEvidenceTampered.calculationTrace!.entries
+    .filter((entry) => entry.evidence?.adapter === "affix_runtime/v1")
+    .filter((entry) => entry.parameterKey !== "__affix_runtime_summary__")
+    .map((entry) => (entry.evidence as Record<string, unknown>).contribution) as typeof stagedEvidence.trace;
+  summaryEvidence.traceHash = hashAffixRuntimeEvidence({
+    reductionStackingPolicyVersion: summaryEvidence.reductionStackingPolicyVersion as string,
+    values: summaryEvidence.affixOutputValues as typeof stagedEvidence.values,
+    postReviewValues: summaryEvidence.postReviewValues as typeof stagedEvidence.postReviewValues,
+    finalValues: summaryEvidence.finalValues as typeof stagedEvidence.finalValues,
+    trace: runtimeTrace,
+    issues: summaryEvidence.issues as typeof stagedEvidence.issues,
+  });
+  affixEvidenceTampered.calculationTrace = createCalculationTraceArchive(
+    affixEvidenceTampered.calculationTrace!.entries,
+  );
+  affixEvidenceTampered.contentHash = deterministicHash(
+    Object.fromEntries(Object.entries(affixEvidenceTampered).filter(([key]) => key !== "contentHash")),
+  );
+  assert.equal(verifySnapshotIntegrity(affixEvidenceTampered), false);
   const ghostSettlementTrace = structuredClone(settlementTrace);
   ghostSettlementTrace[0].contributions.push({
     sequence: ghostSettlementTrace[0].contributions.length + 1,

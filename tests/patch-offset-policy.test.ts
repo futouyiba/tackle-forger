@@ -35,6 +35,11 @@ import {
   type AuthoritativePatchObject,
 } from "../lib/patch-authority";
 import { deterministicHash } from "../lib/rule-kernel";
+import {
+  formalAffixRuntimeEvidence,
+  formalProjection,
+  testReductionPolicy,
+} from "./helpers/reduction-policy";
 import { createSeedState } from "../lib/seed";
 import type {
   PatchOffsetPolicyVersion,
@@ -827,8 +832,13 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
   const model = state.purchasableModels.find((entry) => entry.id === oldSnapshot.modelId)!;
   const sku = state.skuDrawers.find((entry) => entry.id === model.skuId)!;
   const series = state.seriesDefinitions.find((entry) => entry.id === sku.seriesId)!;
-  const projection = state.derivedProjections.find((entry) => entry.id === oldSnapshot.projectionId)!;
-  const numericEntry = Object.entries(projection.values)
+  const reductionStackingPolicy = testReductionPolicy();
+  const projection = formalProjection(
+    state.derivedProjections.find((entry) => entry.id === oldSnapshot.projectionId)!,
+    reductionStackingPolicy,
+    oldSnapshot.finalPanelValues,
+  );
+  const numericEntry = Object.entries(oldSnapshot.finalPanelValues)
     .find((entry): entry is [string, number] => typeof entry[1] === "number")!;
   const governedRevision = buildPatchRevision({
     patchId: "patch:open004:publish",
@@ -875,7 +885,7 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
       contextId: `${model.id}:${sku.id}:${projection.id}`,
       itemPartId: sku.projectionMatch.itemPartId,
       projection,
-      finalPanelValues: projection.values,
+      finalPanelValues: oldSnapshot.finalPanelValues,
       weightBandId: sku.projectionMatch.weightTemplateId,
       skuRef: sku.id,
       targetPullKg: sku.projectionMatch.targetPullKg,
@@ -935,7 +945,13 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
     seriesSkus: state.skuDrawers.filter((entry) => entry.seriesId === series.id),
     series,
     projection,
-    finalPanelValues: projection.values,
+    reductionStackingPolicy,
+    affixRuntimeEvidence: formalAffixRuntimeEvidence(
+      projection,
+      reductionStackingPolicy,
+      oldSnapshot.finalPanelValues,
+    ),
+    finalPanelValues: oldSnapshot.finalPanelValues,
     componentSelections: oldSnapshot.componentSelections,
     patches: [],
     patchRevisions,
@@ -951,11 +967,11 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
     passiveAffixIds: oldSnapshot.passiveAffixIds,
     technologyIds: oldSnapshot.technologyIds,
     technologyDefinitions: state.technologies,
-    finalSettlementTrace: finalSettlementTrace(projection.values),
+    finalSettlementTrace: finalSettlementTrace(oldSnapshot.finalPanelValues),
     passiveAffixPayloads: oldSnapshot.passiveAffixPayloads,
     compatibilityReport: oldSnapshot.compatibilityReport,
     affinityReport: oldSnapshot.affinityReport,
-    qualityReport: oldSnapshot.qualityReport,
+    qualityReport: { ...oldSnapshot.qualityReport, blockingIssues: [] },
     qualityValueAssessment: {
       modelRevisionId: `${model.id}@${model.revision}`,
       selectedQualityId: series.qualityId,
@@ -1062,7 +1078,9 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
     generatorVersion: "1",
     mapping: { mappingId: "mapping:open004", version: "1", logicalTables: {}, rows: [], enumReferenceField: "name" },
     profile: { profileId: "profile:online:1001", label: "online/1001", executorKind: "local_companion", projectRoot: "/configs", relativeWorkbookRoot: "xlsx", configTomlPath: "config.toml", enabled: true },
+    workspaceId: "workspace:test",
     snapshot,
+    availableReductionPolicies: [reductionStackingPolicy],
     environmentId: "online",
     channelKey: "1001",
     patchOffsetGovernance: {

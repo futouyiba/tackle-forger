@@ -4,12 +4,52 @@ import { createSeedState } from "../lib/seed";
 import {
   assertExplicitPullDidNotPublish,
   createRuleSetDraftFromPull,
+  publishReductionStackingPolicyFromPull,
   publishRuleSetVersion,
   recordFeishuSourceRevision,
   recordQualityValuePolicyDraft,
+  recordReductionStackingPolicyDraft,
 } from "../lib/workbook-governance";
 import { CANONICAL_FEISHU_SHEET_REGISTRY } from "../lib/feishu-workbook";
+import { importReductionStackingPolicyDraft } from "../lib/reduction-stacking-policy";
 import type { QualityValuePolicyDraft } from "../lib/quality-value-policy";
+
+const reductionPolicyMachineRules = [{
+  ruleId: "OPEN-001:bidirectional-ratio",
+  parameterKey: "*",
+  strategy: "bidirectional_ratio" as const,
+  numericContract: "ieee754-binary64-v1" as const,
+  operationOrder: [
+    "set",
+    "percent_adjust",
+    "flat_adjust",
+    "clamp_add",
+    "final_review_patch",
+    "parameter_definition",
+  ],
+}];
+
+function publishReductionPolicy(
+  state: ReturnType<typeof createSeedState>,
+  sourceRevisionId: string,
+) {
+  const draft = state.reductionStackingPolicyVersions.find(
+    (policy) => policy.status === "draft"
+      && (
+        policy.source?.sourceRevisionId === sourceRevisionId
+        || policy.issues.some((issue) =>
+          issue.evidence?.sourceRevision === sourceRevisionId
+        )
+      ),
+  ) ?? state.reductionStackingPolicyVersions.find((policy) => policy.status === "draft");
+  assert.ok(draft);
+  return publishReductionStackingPolicyFromPull({
+    state,
+    policyDraftId: draft.id,
+    publishedAt: "2026-07-22T02:01:30.000Z",
+    publishedBy: "policy-reviewer",
+  }).state;
+}
 
 test("显式拉取只登记 FeishuSourceRevision，创建草稿也不会发布 RuleSetVersion", () => {
   const initial = createSeedState();
@@ -100,6 +140,48 @@ test("相同源修订重复创建 RuleSet 草稿保持幂等", () => {
   assert.equal(second.state.ruleSetVersions.filter((item) => item.id === first.ruleSetDraft.id).length, 1);
 });
 
+test("同源 RuleSet 草稿不会将已发布 reduction policy 降级为 draft", () => {
+  const revision = {
+    id: "feishu-revision:policy-history",
+    workbookRefId: "feishu-workbook:tackle-design",
+    sourceRevision: "policy-history",
+    spreadsheetToken: "spreadsheet:policy-history",
+    pulledAt: "2026-07-23T10:00:00.000Z",
+    pulledBy: "tester",
+    syncScope: "workbook" as const,
+    registryHash: "registry:policy-history",
+    sheets: [{ sheetId: "zrVOxd", name: "04_词条" }],
+    reductionPolicyMachineRules,
+    issues: [],
+    state: "PULLED" as const,
+  };
+  const pulled = recordFeishuSourceRevision(createSeedState(), revision);
+  const policyDraft = importReductionStackingPolicyDraft({
+    sourceRevision: revision,
+    machineRules: reductionPolicyMachineRules,
+    createdAt: "2026-07-23T10:01:00.000Z",
+  });
+  const withPolicyDraft = recordReductionStackingPolicyDraft(pulled, policyDraft);
+  const published = publishReductionStackingPolicyFromPull({
+    state: withPolicyDraft,
+    policyDraftId: policyDraft.id,
+    publishedAt: "2026-07-23T10:02:00.000Z",
+    publishedBy: "reviewer",
+  }).state;
+
+  const drafted = createRuleSetDraftFromPull({
+    state: published,
+    sourceRevisionId: revision.id,
+    createdAt: "2026-07-23T10:03:00.000Z",
+    createdBy: "author",
+  });
+  const preserved = drafted.state.reductionStackingPolicyVersions.find(
+    (entry) => entry.id === policyDraft.id,
+  );
+  assert.equal(preserved?.status, "published");
+  assert.equal(preserved?.version, policyDraft.version);
+});
+
 test("RuleSetVersion 只能经独立发布动作生效，重复发布幂等且 Snapshot 冻结", () => {
   const initial = createSeedState();
   const frozenSnapshots = structuredClone(initial.configurationSnapshots);
@@ -112,15 +194,17 @@ test("RuleSetVersion 只能经独立发布动作生效，重复发布幂等且 S
     pulledBy: "tester",
     syncScope: "workbook" as const,
     registryHash: "registry:publish",
-    sheets: [],
+    sheets: [{ sheetId: "zrVOxd", name: "04_词条" }],
+    reductionPolicyMachineRules,
     issues: [],
     state: "PULLED" as const,
   };
   const pulled = recordFeishuSourceRevision(initial, revision);
   const drafted = createRuleSetDraftFromPull({ state: pulled, sourceRevisionId: revision.id, createdAt: "2026-07-22T02:01:00.000Z", createdBy: "author" });
   assert.equal(drafted.ruleSetDraft.status, "draft");
+  const withPolicy = publishReductionPolicy(drafted.state, revision.id);
   const published = publishRuleSetVersion({
-    state: drafted.state,
+    state: withPolicy,
     ruleSetDraftId: drafted.ruleSetDraft.id,
     publishedAt: "2026-07-22T02:02:00.000Z",
     publishedBy: "reviewer",
@@ -153,7 +237,8 @@ test("RuleSet 发布阻断源 error，并要求逐项确认 warning", () => {
       pulledBy: "tester",
       syncScope: "workbook" as const,
       registryHash: `registry:${severity}`,
-      sheets: [],
+      sheets: [{ sheetId: "zrVOxd", name: "04_词条" }],
+      reductionPolicyMachineRules,
       issues: [{ code: "SHEET_RENAMED" as const, severity, sheetId: "d6e928", message: "工作表改名" }],
       state: "PULLED" as const,
     };
@@ -164,14 +249,18 @@ test("RuleSet 发布阻断源 error，并要求逐项确认 warning", () => {
   };
 
   const warned = makeDraft("warning");
+  const warnedWithPolicy = publishReductionPolicy(
+    warned.state,
+    warned.ruleSetDraft.sourceRevisionIds[0],
+  );
   assert.throws(() => publishRuleSetVersion({
-    state: warned.state,
+    state: warnedWithPolicy,
     ruleSetDraftId: warned.ruleSetDraft.id,
     publishedAt: "2026-07-22T02:02:00.000Z",
     publishedBy: "reviewer",
   }), /逐项确认 warning/);
   const acknowledged = publishRuleSetVersion({
-    state: warned.state,
+    state: warnedWithPolicy,
     ruleSetDraftId: warned.ruleSetDraft.id,
     publishedAt: "2026-07-22T02:02:00.000Z",
     publishedBy: "reviewer",

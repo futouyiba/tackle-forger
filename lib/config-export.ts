@@ -45,6 +45,7 @@ import {
   type FormalConfigExportEvidenceVerifier,
   type VerifiedFormalConfigExportEvidence,
 } from "./config-export-stage";
+import type { ReductionStackingPolicyVersion } from "./types";
 export type { ConfigExportMapping } from "./config-export-mapping";
 
 
@@ -87,7 +88,10 @@ export function createExportManifest(input: {
   generatorVersion: string;
   mapping: ConfigExportMapping;
   profile: ExportTargetProfile;
+  /** 导出审计与冻结 ValidationIssue 的真实工作区主体。 */
+  workspaceId: string;
   snapshot: ConfigurationSnapshot;
+  availableReductionPolicies: ReductionStackingPolicyVersion[];
   originalFileHashes: Record<string, string>;
   entries: ExportManifestEntry[];
   createdAt: string;
@@ -122,6 +126,10 @@ export function createExportManifest(input: {
   if (includesStore && (!input.snapshot.pricingPolicyVersion || !input.snapshot.automaticPricing?.formal)) {
     throw new Error("PricingPolicy 尚未形成可执行的已发布版本：请查看策略 Trace 中的精确缺参或执行语义问题；正式 Store 导出已阻断。");
   }
+  assertConfigExportSnapshotReplayable(
+    input.snapshot,
+    input.availableReductionPolicies,
+  );
   let frozenPatchGovernance: Pick<ExportManifest,
     "patchOffsetPolicyVersion" | "patchValidationIssueFingerprints" | "patchValidationWaiverRefs" | "patchValidationWaiverDecisionRefs"> = {};
   if (input.snapshot.patchOffsetPolicyVersion) {
@@ -218,7 +226,7 @@ export function createExportManifest(input: {
     input.snapshot.validationReport,
     {
       subjectRef: {
-        workspaceId: "workspace:legacy",
+        workspaceId: input.workspaceId,
         entityType: "model",
         entityId: input.snapshot.modelId,
         revisionId: String(input.snapshot.modelRevision),
@@ -489,6 +497,7 @@ export async function commitExportPackage(input: {
   profileId: string;
   packageId: string;
   snapshots: ConfigurationSnapshot[];
+  availableReductionPolicies: ReductionStackingPolicyVersion[];
   idempotencyKey: string;
   operations: ExportFileOperation[];
   adapter: ExportCommitAdapter;
@@ -518,7 +527,7 @@ export async function commitExportPackage(input: {
   assertFormalConfigExportStageEnabled();
   if (!input.snapshots.length) throw new Error("导出提交缺少冻结 ConfigurationSnapshot。");
   for (const snapshot of input.snapshots) {
-    assertConfigExportSnapshotReplayable(snapshot);
+    assertConfigExportSnapshotReplayable(snapshot, input.availableReductionPolicies);
   }
   const previous = await input.adapter.findCommittedResult(input.idempotencyKey);
   if (previous) {

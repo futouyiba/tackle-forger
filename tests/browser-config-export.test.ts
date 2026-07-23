@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import * as XLSX from "xlsx";
 import {
-  commitBrowserExportFromHandle,
-  previewBrowserExportFromHandles,
+  commitBrowserExportFromHandle as commitBrowserExportFromHandleWithPolicies,
+  previewBrowserExportFromHandles as previewBrowserExportFromHandlesWithPolicies,
   type BrowserDirectoryHandle,
   type BrowserFileHandle,
   type LocalExportTargetBinding,
@@ -15,6 +15,25 @@ import {
   ConfigExportStageError,
   type FormalConfigExportAuthorization,
 } from "../lib/config-export-stage";
+import { testReductionPolicy } from "./helpers/reduction-policy";
+
+const AVAILABLE_REDUCTION_POLICIES = [testReductionPolicy()];
+function commitBrowserExportFromHandle(
+  input: Omit<Parameters<typeof commitBrowserExportFromHandleWithPolicies>[0], "availableReductionPolicies">,
+) {
+  return commitBrowserExportFromHandleWithPolicies({
+    ...input,
+    availableReductionPolicies: AVAILABLE_REDUCTION_POLICIES,
+  });
+}
+function previewBrowserExportFromHandles(
+  input: Omit<Parameters<typeof previewBrowserExportFromHandlesWithPolicies>[0], "availableReductionPolicies">,
+) {
+  return previewBrowserExportFromHandlesWithPolicies({
+    ...input,
+    availableReductionPolicies: AVAILABLE_REDUCTION_POLICIES,
+  });
+}
 
 process.env.TACKLE_FORGER_PRODUCT_DELIVERY_STAGE = "PHASE_ONE_POINT_FIVE";
 process.env.TACKLE_FORGER_FORMAL_CONFIG_EXPORT_RUNTIME_ENABLED = "true";

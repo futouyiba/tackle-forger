@@ -1,14 +1,21 @@
 import { deterministicHash } from "./rule-kernel";
+import {
+  hashAffixRuntimeEvidence,
+  numberToBinary64Hex,
+} from "./reduction-stacking-policy";
 import type { EntityRef } from "./interaction-contracts";
 import type {
   CalculationTraceItem,
   DerivedProjection,
+  AffixRuntimeEvidence,
   FiveAxisTraceEntry,
   ModelFiveAxisPreview,
   ParameterDefinition,
   PatchApplicationTraceItem,
   ProjectionLayer,
+  ProjectionTraceContribution,
   ProjectionWarning,
+  ValidationIssue,
 } from "./types";
 import type { PricingTraceEntry, PricingTrialResult } from "./pricing-policy";
 
@@ -779,6 +786,9 @@ export function adaptRuleTraceToCanonical(input: {
           sourceName: contribution.sourceName,
           legacyOperation: contribution.operation,
           legacyOperand: structuredClone(contribution.operand),
+          ...(contribution.numericEvidence
+            ? { legacyNumericEvidence: structuredClone(contribution.numericEvidence) }
+            : {}),
           ...(contribution.operation === "formula" ? {
             formula: {
               formulaId: contribution.ruleId,
@@ -794,6 +804,379 @@ export function adaptRuleTraceToCanonical(input: {
 }
 
 export const adaptProjectionTraceToCanonical = adaptRuleTraceToCanonical;
+
+/**
+ * Projection 的原始 contribution 以不可执行的镜像保存在同一 canonical archive。
+ * 它只为 affix runtime 提供冻结的身份锚点：no_effect 且 before/after 均为 null，
+ * 因此不会参与或改变 archive 的 replay 状态，更不是可选择的第二规则模型。
+ */
+export function adaptProjectionAuthorityMirrorToCanonical(input: {
+  projection: DerivedProjection;
+  subjectRef: EntityRef;
+  runtimeContributions: ProjectionTraceContribution[];
+  sequenceStart?: number;
+}): CalculationTraceEntry[] {
+  let sequence = input.sequenceStart ?? 1;
+  return input.projection.trace.flatMap((step) =>
+    [...step.contributions]
+      .sort((left, right) => left.sequence - right.sequence || left.ruleId.localeCompare(right.ruleId))
+      .map((contribution) => createCalculationTraceEntry({
+        subjectRef: input.subjectRef,
+        parameterKey: `__projection_authority__:${contribution.parameterKey}:${contribution.sequence}`,
+        sequence: sequence++,
+        layer: canonicalLayer(step.layer),
+        sourceRef: { sourceType: "projection_authority", sourceId: contribution.sourceId },
+        sourceVersion: input.projection.ruleSetVersion,
+        ruleSetVersion: input.projection.ruleSetVersion,
+        before: null,
+        operation: "no_effect",
+        operand: null,
+        after: null,
+        effect: "neutral",
+        warningIssueIds: [],
+        actions: [],
+        evidence: {
+          adapter: "projection_authority/v1",
+          contribution: structuredClone(contribution),
+        },
+      })),
+  );
+}
+
+/**
+ * 冻结 runtime 必须覆盖的 Projection contribution 集合。它与 mirror/runtime
+ * 分离，且本身不可执行；因此 mirror 与 runtime 不能通过一同缩减来伪造完整性。
+ */
+export function adaptProjectionAuthorityManifestToCanonical(input: {
+  runtimeContributions: ProjectionTraceContribution[];
+  subjectRef: EntityRef;
+  ruleSetVersion: string;
+  sequence: number;
+}): CalculationTraceEntry {
+  const expected = [...input.runtimeContributions]
+    .map((contribution) => ({
+      bindingKey: deterministicHash(contribution),
+      contribution: structuredClone(contribution),
+    }))
+    .sort((left, right) => left.bindingKey.localeCompare(right.bindingKey));
+  if (new Set(expected.map((entry) => entry.bindingKey)).size !== expected.length) {
+    throw new CalculationTraceReplayError("Projection authority manifest 含重复 contribution 身份。");
+  }
+  return createCalculationTraceEntry({
+    subjectRef: input.subjectRef,
+    parameterKey: "__projection_authority_manifest__",
+    sequence: input.sequence,
+    layer: "attribute_affix",
+    sourceRef: { sourceType: "projection_authority", sourceId: "runtime-manifest" },
+    sourceVersion: input.ruleSetVersion,
+    ruleSetVersion: input.ruleSetVersion,
+    before: null,
+    operation: "no_effect",
+    operand: null,
+    after: null,
+    effect: "neutral",
+    warningIssueIds: [],
+    actions: [],
+    evidence: {
+      adapter: "projection_authority_manifest/v1",
+      expected,
+      expectedCount: expected.length,
+      expectedHash: deterministicHash(expected),
+    },
+  });
+}
+
+/**
+ * 将 #41 的 binary64 affix 结算证据封装进同一份 canonical archive。
+ * 这些记录是审计证据而非第二套可执行状态：最终面板值仍由结算 Trace
+ * 的可重放条目唯一裁决，避免把旧 runtime hash/trace 再次作为发布权威。
+ */
+export function adaptAffixRuntimeEvidenceToCanonical(input: {
+  evidence: AffixRuntimeEvidence;
+  subjectRef: EntityRef;
+  ruleSetVersion: string;
+  authorityEntries: CalculationTraceEntry[];
+  sequenceStart?: number;
+}): CalculationTraceEntry[] {
+  let sequence = input.sequenceStart ?? 1;
+  const issueManifest = input.evidence.issues.map((issue) => ({
+    code: issue.code,
+    severity: issue.severity,
+    gate: issue.gate,
+    fingerprint: issue.fingerprint,
+  }));
+  const summary = createCalculationTraceEntry({
+    subjectRef: input.subjectRef,
+    parameterKey: "__affix_runtime_summary__",
+    sequence: sequence++,
+    layer: "attribute_affix",
+    sourceRef: { sourceType: "affix_runtime", sourceId: "runtime-summary" },
+    sourceVersion: input.evidence.reductionStackingPolicyVersion ?? "non-formal",
+    ruleSetVersion: input.ruleSetVersion,
+    before: null,
+    operation: "no_effect",
+    operand: null,
+    after: null,
+    effect: "neutral",
+    warningIssueIds: issueManifest.map((issue) =>
+      `affix-runtime-issue-${deterministicHash(issue)}`).sort(),
+    actions: [],
+    evidence: {
+      adapter: "affix_runtime/v1",
+      kind: "summary",
+      reductionStackingPolicyVersion: input.evidence.reductionStackingPolicyVersion,
+      formalStatus: input.evidence.formalStatus,
+      traceHash: input.evidence.traceHash,
+      affixOutputValues: structuredClone(input.evidence.values),
+      postReviewValues: structuredClone(input.evidence.postReviewValues),
+      finalValues: structuredClone(input.evidence.finalValues),
+      issues: structuredClone(input.evidence.issues),
+      contributionCount: input.evidence.trace.length,
+    },
+  });
+  return [summary, ...[...input.evidence.trace]
+    .sort((left, right) => left.sequence - right.sequence || left.ruleId.localeCompare(right.ruleId))
+    .map((contribution) => {
+      const bindingKey = deterministicHash(contribution);
+      const matches = input.authorityEntries.filter((entry) =>
+        entry.evidence?.adapter === "projection_authority/v1"
+        && calculationTraceValuesEqual(entry.evidence.contribution, contribution),
+      );
+      if (matches.length !== 1) {
+        throw new CalculationTraceReplayError("affix runtime 未唯一绑定 Projection authority contribution。");
+      }
+      const authority = matches[0];
+      return createCalculationTraceEntry({
+      subjectRef: input.subjectRef,
+      parameterKey: `__affix_runtime__:${contribution.parameterKey}:${contribution.sequence}`,
+      sequence: sequence++,
+      layer: contribution.numericEvidence?.stage === "final_review_patch"
+        ? "final_review_patch"
+        : "attribute_affix",
+      sourceRef: { sourceType: "affix_runtime", sourceId: contribution.sourceId },
+      sourceVersion: input.evidence.reductionStackingPolicyVersion ?? "non-formal",
+      ruleSetVersion: input.ruleSetVersion,
+      before: null,
+      operation: "no_effect",
+      operand: null,
+      after: null,
+      effect: "neutral",
+      warningIssueIds: input.evidence.issues.map((issue) =>
+        `affix-runtime-issue-${deterministicHash(issue)}`).sort(),
+      actions: [],
+      evidence: {
+        adapter: "affix_runtime/v1",
+        reductionStackingPolicyVersion: input.evidence.reductionStackingPolicyVersion,
+        formalStatus: input.evidence.formalStatus,
+        contribution: structuredClone(contribution),
+        authorityRef: {
+          traceEntryId: authority.traceEntryId,
+          sequence: authority.sequence,
+          bindingKey,
+        },
+      },
+      });
+    })];
+}
+
+function affixEvidenceRecord(entry: CalculationTraceEntry): Record<string, unknown> | undefined {
+  return entry.evidence?.adapter === "affix_runtime/v1"
+    ? entry.evidence
+    : undefined;
+}
+
+/**
+ * 新正式 Snapshot 的 affix evidence 只能作为 canonical archive 的子契约
+ * 存在。这里重放其后置阶段并把它与结算 Trace、冻结策略和最终面板交叉验证。
+ */
+export function assertCalculationTraceMatchesAffixRuntime(input: {
+  archive: CalculationTraceArchive;
+  subjectRef: EntityRef;
+  reductionStackingPolicyVersion: string;
+  finalPanelValues: Record<string, number | string>;
+}): void {
+  const runtimeEntries = input.archive.entries.filter((entry) =>
+    sameEntityRef(entry.subjectRef, input.subjectRef)
+    && affixEvidenceRecord(entry),
+  );
+  const summary = runtimeEntries.find((entry) =>
+    entry.parameterKey === "__affix_runtime_summary__"
+    && affixEvidenceRecord(entry)?.kind === "summary",
+  );
+  if (!summary) {
+    throw new CalculationTraceReplayError("新正式 Snapshot 缺少 canonical affix runtime 摘要。",
+      runtimeEntries[0]);
+  }
+  const evidence = affixEvidenceRecord(summary)!;
+  const policyVersion = evidence.reductionStackingPolicyVersion;
+  if (policyVersion !== input.reductionStackingPolicyVersion || evidence.formalStatus !== "FORMAL") {
+    throw new CalculationTraceReplayError("canonical affix runtime 策略版本或正式状态不一致。", summary);
+  }
+  const values = evidence.affixOutputValues;
+  const postReviewValues = evidence.postReviewValues;
+  const finalValues = evidence.finalValues;
+  const issues = evidence.issues;
+  if (
+    !values || typeof values !== "object" || Array.isArray(values)
+    || !postReviewValues || typeof postReviewValues !== "object" || Array.isArray(postReviewValues)
+    || !finalValues || typeof finalValues !== "object" || Array.isArray(finalValues)
+    || !Array.isArray(issues)
+  ) {
+    throw new CalculationTraceReplayError("canonical affix runtime 摘要不完整。", summary);
+  }
+  const contributionEntries = runtimeEntries.filter((entry) => entry !== summary);
+  if (contributionEntries.some((entry) => !affixEvidenceRecord(entry)?.contribution)) {
+    throw new CalculationTraceReplayError("canonical affix runtime 含未知或不完整条目。", summary);
+  }
+  const contributions = contributionEntries.map((entry) => affixEvidenceRecord(entry)!.contribution);
+  const expectedCount = evidence.contributionCount;
+  if (
+    typeof expectedCount !== "number"
+    || !Number.isSafeInteger(expectedCount)
+    || expectedCount < 0
+    || contributions.length !== expectedCount
+  ) {
+    throw new CalculationTraceReplayError("canonical affix runtime Trace 缺失或重复条目。", summary);
+  }
+  const typedContributions = contributions as ProjectionTraceContribution[];
+  const authorityEntries = input.archive.entries.filter((entry) =>
+    sameEntityRef(entry.subjectRef, input.subjectRef)
+    && entry.evidence?.adapter === "projection_authority/v1",
+  );
+  const manifests = input.archive.entries.filter((entry) =>
+    sameEntityRef(entry.subjectRef, input.subjectRef)
+    && entry.evidence?.adapter === "projection_authority_manifest/v1",
+  );
+  if (manifests.length !== 1) {
+    throw new CalculationTraceReplayError("canonical affix runtime 缺少或重复 Projection authority manifest。", summary);
+  }
+  const manifestEvidence = manifests[0].evidence!;
+  const expected = manifestEvidence.expected;
+  if (
+    !Array.isArray(expected)
+    || !Number.isSafeInteger(manifestEvidence.expectedCount)
+    || manifestEvidence.expectedCount !== expected.length
+    || manifestEvidence.expectedHash !== deterministicHash(expected)
+  ) {
+    throw new CalculationTraceReplayError("Projection authority manifest 不完整或已篡改。", manifests[0]);
+  }
+  const expectedByKey = new Map<string, ProjectionTraceContribution>();
+  for (const entry of expected) {
+    if (
+      !entry || typeof entry !== "object"
+      || typeof (entry as Record<string, unknown>).bindingKey !== "string"
+      || !(entry as Record<string, unknown>).contribution
+    ) {
+      throw new CalculationTraceReplayError("Projection authority manifest 条目非法。", manifests[0]);
+    }
+    const bindingKey = (entry as Record<string, unknown>).bindingKey as string;
+    const contribution = (entry as Record<string, unknown>).contribution as ProjectionTraceContribution;
+    if (bindingKey !== deterministicHash(contribution) || expectedByKey.has(bindingKey)) {
+      throw new CalculationTraceReplayError("Projection authority manifest 身份不唯一。", manifests[0]);
+    }
+    expectedByKey.set(bindingKey, contribution);
+  }
+  if (expectedByKey.size !== typedContributions.length || authorityEntries.length < expectedByKey.size) {
+    throw new CalculationTraceReplayError("canonical affix runtime 与 authority manifest 基数不一致。", summary);
+  }
+  const boundAuthorityIds = new Set<string>();
+  const boundKeys = new Set<string>();
+  let previousContributionSequence = -1;
+  for (let index = 0; index < typedContributions.length; index += 1) {
+    const contribution = typedContributions[index];
+    if (contribution.sequence <= previousContributionSequence) {
+      throw new CalculationTraceReplayError("canonical affix runtime contribution 顺序不完整。", summary);
+    }
+    previousContributionSequence = contribution.sequence;
+    const numeric = contribution.numericEvidence;
+    if (!numeric) continue;
+    if (
+      (typeof contribution.before === "number" && numeric.beforeBinary64 !== numberToBinary64Hex(contribution.before))
+      || (typeof contribution.operand === "number" && numeric.operandBinary64 !== numberToBinary64Hex(contribution.operand))
+      || (typeof contribution.after === "number" && numeric.afterBinary64 !== numberToBinary64Hex(contribution.after))
+      || (numeric.anomaly !== "none" && numeric.anomaly !== "no_effect")
+    ) {
+      throw new CalculationTraceReplayError("canonical affix runtime binary64 或数值异常证据无效。", summary);
+    }
+    const runtimeEvidence = affixEvidenceRecord(contributionEntries[index])!;
+    const authorityRef = runtimeEvidence.authorityRef as Record<string, unknown> | undefined;
+    const bindingKey = authorityRef?.bindingKey;
+    const expectedContribution = typeof bindingKey === "string"
+      ? expectedByKey.get(bindingKey)
+      : undefined;
+    const authoritative = authorityEntries.filter((entry) =>
+      entry.traceEntryId === authorityRef?.traceEntryId
+      && entry.sequence === authorityRef?.sequence
+      && bindingKey === deterministicHash(contribution)
+      && calculationTraceValuesEqual(expectedContribution, contribution)
+      && calculationTraceValuesEqual(entry.evidence?.contribution, contribution),
+    );
+    if (
+      authoritative.length !== 1
+      || !expectedContribution
+      || boundAuthorityIds.has(authoritative[0].traceEntryId)
+      || boundKeys.has(bindingKey as string)
+    ) {
+      throw new CalculationTraceReplayError("canonical affix runtime 未唯一绑定权威 Projection contribution。", summary);
+    }
+    boundAuthorityIds.add(authoritative[0].traceEntryId);
+    boundKeys.add(bindingKey as string);
+  }
+  if (boundKeys.size !== expectedByKey.size) {
+    throw new CalculationTraceReplayError("canonical affix runtime Trace 缺失、重复或含额外条目。", summary);
+  }
+  const recomputedHash = hashAffixRuntimeEvidence({
+    reductionStackingPolicyVersion: policyVersion as string,
+    values: values as Record<string, number | string>,
+    postReviewValues: postReviewValues as Record<string, number | string>,
+    finalValues: finalValues as Record<string, number | string>,
+    trace: typedContributions,
+    issues: issues as ValidationIssue[],
+  });
+  if (evidence.traceHash !== recomputedHash) {
+    throw new CalculationTraceReplayError("canonical affix runtime traceHash 不一致。", summary);
+  }
+  if ((issues as ValidationIssue[]).some((issue) => issue.severity === "ERROR" || issue.severity === "BLOCKER")) {
+    throw new CalculationTraceReplayError("canonical affix runtime 含未解决阻断问题。", summary);
+  }
+  const replay = (
+    start: Record<string, number | string>,
+    stage: "final_review_patch" | "parameter_definition",
+  ) => {
+    const replayed = structuredClone(start);
+    for (const contribution of typedContributions.filter(
+      (entry) => entry.numericEvidence?.stage === stage,
+    )) {
+      if (!calculationTraceValuesEqual(replayed[contribution.parameterKey], contribution.before)) {
+        throw new CalculationTraceReplayError(`canonical affix runtime ${stage} before 不连续。`, summary);
+      }
+      if (typeof contribution.after !== "number" && typeof contribution.after !== "string") {
+        throw new CalculationTraceReplayError(`canonical affix runtime ${stage} after 非法。`, summary);
+      }
+      replayed[contribution.parameterKey] = contribution.after;
+    }
+    return replayed;
+  };
+  const replayedPostReview = replay(values as Record<string, number | string>, "final_review_patch");
+  const replayedFinal = replay(replayedPostReview, "parameter_definition");
+  if (
+    !calculationTraceValuesEqual(replayedPostReview, postReviewValues)
+    || !calculationTraceValuesEqual(replayedFinal, finalValues)
+    || !calculationTraceValuesEqual(finalValues, input.finalPanelValues)
+  ) {
+    throw new CalculationTraceReplayError("canonical affix runtime 阶段值与最终面板不一致。", summary);
+  }
+  for (const [parameterKey, value] of Object.entries(input.finalPanelValues)) {
+    const settlement = input.archive.entries.filter((entry) =>
+      sameEntityRef(entry.subjectRef, input.subjectRef)
+      && entry.parameterKey === parameterKey
+      && entry.evidence?.adapter === "projection_trace/v1",
+    ).at(-1);
+    if (!settlement || !calculationTraceValuesEqual(settlement.after, value)) {
+      throw new CalculationTraceReplayError(`canonical affix runtime 未绑定最终结算：${parameterKey}。`, summary);
+    }
+  }
+}
 
 function pricingLayer(entry: PricingTraceEntry): CalculationTraceLayer {
   if (/quality|score|factor/i.test(entry.formulaStep)) return "quality";

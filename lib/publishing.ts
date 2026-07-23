@@ -14,6 +14,7 @@ import type { PatchRangeEvaluation } from "./patch-offset-policy";
 import type {
   AffinityScoreResult,
   AffixQualityEvaluation,
+  AffixRuntimeEvidence,
   ConfigurationSnapshot,
   DerivedProjection,
   GovernanceAuditLogEntry,
@@ -33,6 +34,7 @@ import type {
   PurchasableModel,
   RuleChangeProposal,
   RuleSetVersion,
+  ReductionStackingPolicyVersion,
   SeriesDefinition,
   SkuDrawer,
   Technology,
@@ -68,6 +70,10 @@ import {
 } from "./enabled-item-parts";
 import {
   adaptFiveAxisTraceToCanonical,
+  adaptAffixRuntimeEvidenceToCanonical,
+  adaptProjectionAuthorityManifestToCanonical,
+  adaptProjectionAuthorityMirrorToCanonical,
+  assertCalculationTraceMatchesAffixRuntime,
   adaptPricingTraceToCanonical,
   adaptRuleTraceToCanonical,
   assertCalculationTraceMatchesFiveAxis,
@@ -77,6 +83,10 @@ import {
   createCalculationTraceArchive,
   verifyCalculationTraceArchive,
 } from "./calculation-trace";
+import {
+  hasCanonicalReductionPolicyIdentity,
+  numberToBinary64Hex,
+} from "./reduction-stacking-policy";
 
 function entityRefIdentity(ref: {
   workspaceId: string;
@@ -117,6 +127,73 @@ function warnings(issues: ValidationIssue[]): ValidationIssue[] {
   return issues.filter((issue) => validationIssueSeverity(issue) === "WARNING");
 }
 
+function hasValidReductionPolicyBinding(input: PublishModelInput): boolean {
+  const policy = input.reductionStackingPolicy;
+  return Boolean(
+    policy
+    && policy.status === "published"
+    && hasCanonicalReductionPolicyIdentity(policy)
+    && policy.source
+    && policy.source.workbookRefId === "feishu-workbook:tackle-design"
+    && policy.source.sheetId === "zrVOxd"
+    && policy.source.sourceRevision !== "17173"
+    && input.projection.reductionStackingPolicyVersion === policy.version
+    && input.projection.formalStatus === "FORMAL",
+  );
+}
+
+function affixEvidenceStagesAreClosed(evidence: AffixRuntimeEvidence): boolean {
+  const sameValue = (left: unknown, right: unknown): boolean =>
+    deterministicHash(left) === deterministicHash(right);
+  const replay = (
+    start: Record<string, number | string>,
+    stage: "final_review_patch" | "parameter_definition",
+  ): Record<string, number | string> | undefined => {
+    const values = structuredClone(start);
+    const contributions = evidence.trace.filter(
+      (entry) => entry.numericEvidence?.stage === stage,
+    );
+    for (const contribution of contributions) {
+      const numeric = contribution.numericEvidence;
+      if (
+        (typeof contribution.before === "number"
+          && numeric?.beforeBinary64 !== numberToBinary64Hex(contribution.before))
+        || (typeof contribution.operand === "number"
+          && numeric?.operandBinary64 !== numberToBinary64Hex(contribution.operand))
+        || (typeof contribution.after === "number"
+          && numeric?.afterBinary64 !== numberToBinary64Hex(contribution.after))
+      ) {
+        return undefined;
+      }
+      const before = values[contribution.parameterKey];
+      if (!sameValue(before, contribution.before)) return undefined;
+      if (
+        typeof contribution.after !== "number"
+        && typeof contribution.after !== "string"
+      ) {
+        return undefined;
+      }
+      values[contribution.parameterKey] = contribution.after;
+    }
+    return values;
+  };
+
+  let previousSequence = -Infinity;
+  let parameterDefinitionStarted = false;
+  for (const contribution of evidence.trace) {
+    if (contribution.sequence <= previousSequence) return false;
+    previousSequence = contribution.sequence;
+    const stage = contribution.numericEvidence?.stage;
+    if (stage === "parameter_definition") parameterDefinitionStarted = true;
+    if (stage === "final_review_patch" && parameterDefinitionStarted) return false;
+  }
+
+  const postReview = replay(evidence.values, "final_review_patch");
+  if (!postReview || !sameValue(postReview, evidence.postReviewValues)) return false;
+  const finalValues = replay(postReview, "parameter_definition");
+  return Boolean(finalValues && sameValue(finalValues, evidence.finalValues));
+}
+
 export interface PublishModelInput {
   publicationMode: "new_formal" | "historical_import";
   /** 新正式 Snapshot 的稳定工作区身份和 canonical Trace 主体；历史导入不得据此补写。 */
@@ -126,6 +203,8 @@ export interface PublishModelInput {
   seriesSkus: SkuDrawer[];
   series: SeriesDefinition;
   projection: DerivedProjection;
+  reductionStackingPolicy?: ReductionStackingPolicyVersion;
+  affixRuntimeEvidence?: AffixRuntimeEvidence;
   finalPanelValues: Record<string, number | string>;
   componentSelections: ModelComponentSelection[];
   patches: ProjectionPatchRuleSource[];
@@ -276,7 +355,7 @@ export function publishConfigurationSnapshot(
       combinedValidationReport,
     {
       subjectRef: {
-        workspaceId: "workspace:legacy",
+        workspaceId: input.workspaceId!,
         entityType: "model",
         entityId: input.model.id,
         revisionId: String(input.model.revision),
@@ -294,6 +373,21 @@ export function publishConfigurationSnapshot(
       },
     )
     : [];
+  if (input.publicationMode === "new_formal") {
+    const validationSubject = {
+      workspaceId: input.workspaceId!,
+      entityType: "model" as const,
+      entityId: input.model.id,
+      revisionId: String(input.model.revision),
+    };
+    if (canonicalValidationReport.some((issue) =>
+      entityRefIdentity(issue.subjectRef) !== entityRefIdentity(validationSubject)
+      || issue.issueId !== `validation-issue:${issue.fingerprint}`
+      || !issue.fingerprint.trim(),
+    )) {
+      throw new Error("新正式 Snapshot 的 ValidationIssue 必须冻结真实 workspace subject 与当前 input fingerprint。");
+    }
+  }
   const canonicalPublishValidationReport = input.publicationMode === "new_formal"
     ? canonicalValidationReport.filter(
       (issue) => issue.gate === "REVIEW" || issue.gate === "PUBLISH",
@@ -302,7 +396,7 @@ export function publishConfigurationSnapshot(
       publishValidationReport,
       {
         subjectRef: {
-          workspaceId: "workspace:legacy",
+          workspaceId: input.workspaceId!,
           entityType: "model",
           entityId: input.model.id,
           revisionId: String(input.model.revision),
@@ -358,9 +452,17 @@ export function publishConfigurationSnapshot(
       message: "硬兼容失败，禁止发布。",
     });
   }
-  if (input.qualityReport.blockingIssues.length) {
+  const qualityBlockingIssues = input.publicationMode === "historical_import"
+    ? input.qualityReport.blockingIssues.filter(
+        (message) =>
+          !message.includes("REDUCTION_POLICY_SOURCE_MISSING")
+          && !message.includes("AFFIX_DIRECTION_CONFLICT")
+          && !message.includes("AFFIX_MAGNITUDE_RANGE_MISSING"),
+      )
+    : input.qualityReport.blockingIssues;
+  if (qualityBlockingIssues.length) {
     blocking.push(
-      ...input.qualityReport.blockingIssues.map((message) => ({
+      ...qualityBlockingIssues.map((message) => ({
         level: "error" as const,
         code: "QUALITY_BLOCKED",
         message,
@@ -546,6 +648,32 @@ export function publishConfigurationSnapshot(
       throw new Error("五轴预览的定义、规则或顶点版本链不一致，禁止创建正式 Snapshot。");
     }
   }
+  if (input.publicationMode === "new_formal") {
+    if (!hasValidReductionPolicyBinding(input)) {
+      throw new Error(
+        "配置快照发布被阻止：[REDUCTION_POLICY_SOURCE_MISSING] 新正式 Snapshot 必须冻结来自权威主工作簿的已发布 ReductionStackingPolicyVersion。",
+      );
+    }
+    const evidence = input.projection.affixRuntimeEvidence;
+    if (
+      !evidence
+      || !input.affixRuntimeEvidence
+      || deterministicHash(input.affixRuntimeEvidence)
+        !== deterministicHash(evidence)
+      || evidence.reductionStackingPolicyVersion !== input.reductionStackingPolicy?.version
+      || evidence.formalStatus !== "FORMAL"
+      || evidence.issues.some((entry) =>
+        entry.severity === "ERROR" || entry.severity === "BLOCKER"
+      )
+      || !affixEvidenceStagesAreClosed(evidence)
+      || deterministicHash(evidence.finalValues)
+        !== deterministicHash(input.finalPanelValues)
+    ) {
+      throw new Error(
+        "配置快照发布被阻止：[AFFIX_RUNTIME_TRACE_INVALID] 新正式 Snapshot 必须冻结与投影及已发布 ReductionStackingPolicyVersion 一致的实际 affix Trace。",
+      );
+    }
+  }
 
   const calculationTrace = input.publicationMode === "new_formal"
     ? (() => {
@@ -556,13 +684,33 @@ export function publishConfigurationSnapshot(
           revisionId: String(input.model.revision),
         };
         const entries = adaptRuleTraceToCanonical({
-          projection: {
-            ...input.projection,
-            trace: input.finalSettlementTrace!,
-          },
+          projection: { ...input.projection, trace: input.finalSettlementTrace! },
           subjectRef,
           parameterDefinitions: input.patchOffsetGovernance?.parameterDefinitions,
         });
+        if (input.projection.affixRuntimeEvidence) {
+          const authorityManifest = adaptProjectionAuthorityManifestToCanonical({
+            runtimeContributions: input.projection.affixRuntimeEvidence.trace,
+            subjectRef,
+            ruleSetVersion: input.projection.ruleSetVersion,
+            sequence: entries.length + 1,
+          });
+          entries.push(authorityManifest);
+          const authorityEntries = adaptProjectionAuthorityMirrorToCanonical({
+            projection: input.projection,
+            subjectRef,
+            runtimeContributions: input.projection.affixRuntimeEvidence.trace,
+            sequenceStart: entries.length + 1,
+          });
+          entries.push(...authorityEntries);
+          entries.push(...adaptAffixRuntimeEvidenceToCanonical({
+            evidence: input.projection.affixRuntimeEvidence,
+            subjectRef,
+            ruleSetVersion: input.projection.ruleSetVersion,
+            authorityEntries,
+            sequenceStart: entries.length + 1,
+          }));
+        }
         if (input.automaticPricing) {
           entries.push(...adaptPricingTraceToCanonical({
             pricing: input.automaticPricing,
@@ -588,6 +736,12 @@ export function publishConfigurationSnapshot(
         assertCalculationTraceMatchesFinalPanel({
           archive,
           subjectRef,
+          finalPanelValues: input.finalPanelValues,
+        });
+        assertCalculationTraceMatchesAffixRuntime({
+          archive,
+          subjectRef,
+          reductionStackingPolicyVersion: input.reductionStackingPolicy!.version,
           finalPanelValues: input.finalPanelValues,
         });
         assertCalculationTraceMatchesPricing({
@@ -629,7 +783,12 @@ export function publishConfigurationSnapshot(
     seriesRevision: input.series.revision,
     ruleSetVersion: input.projection.ruleSetVersion,
     projectionId: input.projection.id,
-    reductionStackingMode: input.projection.reductionStackingMode,
+    ...(input.projection.reductionStackingMode
+      ? { reductionStackingMode: input.projection.reductionStackingMode }
+      : {}),
+    ...(input.publicationMode === "new_formal" && input.reductionStackingPolicy
+      ? { reductionStackingPolicyVersion: input.reductionStackingPolicy.version }
+      : {}),
     patchSetHash,
     ...(frozenPatches?.patchSetHashContractVersion
       ? {patchSetHashContractVersion:frozenPatches.patchSetHashContractVersion}
@@ -734,6 +893,14 @@ export function verifySnapshotIntegrity(
         subjectRef: [...uniqueSubjects.values()][0],
         finalPanelValues: snapshot.finalPanelValues,
       });
+      if (snapshot.reductionStackingPolicyVersion) {
+        assertCalculationTraceMatchesAffixRuntime({
+          archive: snapshot.calculationTrace,
+          subjectRef: [...uniqueSubjects.values()][0],
+          reductionStackingPolicyVersion: snapshot.reductionStackingPolicyVersion,
+          finalPanelValues: snapshot.finalPanelValues,
+        });
+      }
       assertCalculationTraceMatchesPricing({
         archive: snapshot.calculationTrace,
         subjectRef: [...uniqueSubjects.values()][0],
@@ -817,6 +984,12 @@ export function createUpgradeCandidate(
     fromSnapshotId: input.currentSnapshot.id,
     proposedProjectionId: input.proposedProjection.id,
     proposedRuleSetVersion: input.proposedProjection.ruleSetVersion,
+    ...(input.proposedProjection.reductionStackingPolicyVersion
+      ? {
+          proposedReductionStackingPolicyVersion:
+            input.proposedProjection.reductionStackingPolicyVersion,
+        }
+      : {}),
     proposedValues: structuredClone(input.proposedValues),
     differences: valueDifferences(
       input.currentSnapshot.finalPanelValues,

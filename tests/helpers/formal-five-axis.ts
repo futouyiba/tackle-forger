@@ -2,6 +2,7 @@ import {
   calculateFormalFiveAxisComponentSeries,
   createFormalFiveAxisVertexSet,
   createFormalModelFiveAxisPreview,
+  hashFormalComponentValues,
   hashFormalFinalPanelValues,
 } from "../../lib/five-axis-formal";
 import { hashCandidateSemanticInput } from "../../lib/five-axis-hash";
@@ -36,6 +37,32 @@ const DIRECT_VALUES: Record<string, Record<string, string>> = {
   },
 };
 
+export function buildFormalComponentSelectionsFixture(
+  componentSelections: ModelComponentSelection[],
+): ModelComponentSelection[] {
+  const parameterKeysByAxisId: Record<string, string> = {
+    pull: "drag",
+    durability: "durability",
+    cast: "max_cast_distance",
+    sensitivity: "sensitivity",
+    control: "energy_cost_factor",
+  };
+  return componentSelections.map((component) => ({
+    ...structuredClone(component),
+    values: {
+      ...structuredClone(component.values),
+      ...Object.fromEntries(
+        Object.entries(DIRECT_VALUES[component.itemPartId] ?? {}).map(
+          ([axisId, rawValue]) => [
+            parameterKeysByAxisId[axisId],
+            Number(rawValue),
+          ],
+        ),
+      ),
+    },
+  }));
+}
+
 export function buildFormalPreviewFixture(input: {
   definition: FiveAxisViewDefinition;
   snapshotId: string;
@@ -53,18 +80,19 @@ export function buildFormalPreviewFixture(input: {
   const finalPanelHash = hashFormalFinalPanelValues(input.finalPanelValues);
   const candidateSources: FiveAxisVertexCandidateSource[] =
     input.componentSelections.map((component) => {
-      const values = DIRECT_VALUES[component.itemPartId];
-      if (!values) throw new Error(`测试夹具不支持部位 ${component.itemPartId}。`);
-      const directInputs = input.definition.axes.flatMap((axis, index) => {
-        const rawValue = values[axis.axisId];
-        return rawValue === undefined
+      const componentInputHash = hashFormalComponentValues(component);
+      const directInputs = input.definition.axes.flatMap((axis) => {
+        if (!axis.applicablePartIds.includes(component.itemPartId)) return [];
+        const parameterKey = axis.sourceParameterKeys[0];
+        const rawValue = component.values[parameterKey];
+        return typeof rawValue !== "number" && typeof rawValue !== "string"
           ? []
           : [{
               axisId: axis.axisId,
-              parameterKey: axis.sourceParameterKeys[0],
-              rawValue,
+              parameterKey,
+              rawValue: String(rawValue),
               unit: "unit",
-              inputHash: String(index + 1).repeat(64),
+              inputHash: componentInputHash,
               axisOrder: axis.order,
             }];
       });
@@ -112,10 +140,11 @@ export function buildFormalPreviewFixture(input: {
     fishWeightGradeId: weightBandId,
     values: Object.fromEntries(
       input.definition.axes.flatMap((axis) => {
-        const rawValue = DIRECT_VALUES[component.itemPartId]?.[axis.axisId];
-        return rawValue === undefined
+        const parameterKey = axis.sourceParameterKeys[0];
+        const rawValue = component.values[parameterKey];
+        return typeof rawValue !== "number"
           ? []
-          : [[axis.sourceParameterKeys[0], Number(rawValue)]];
+          : [[parameterKey, rawValue]];
       }),
     ),
   }));
@@ -141,6 +170,7 @@ export function buildFormalPreviewFixture(input: {
     modelRevisionId: `${input.modelId}@${input.modelRevision}`,
     modelFinalPullKg: input.modelFinalPullKg,
     finalPanelHash,
+    componentSelections: input.componentSelections,
     componentSeries,
     projectionReferenceAnchor: {
       baselineSnapshotId: input.snapshotId,

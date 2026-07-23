@@ -53,7 +53,7 @@ export type ActionCode =
   | "write_patch_mirror" | "pull_patch_mirror" | "inspect_patch_mirror"
   | "repair_patch_mirror" | "rebuild_patch_mirror_from_local"
   | "fix_patch_mirror_schema" | "migrate_patch_subject"
-  | "run_ai_assessment" | "create_ai_patch_draft" | "create_ai_feishu_draft" | "manage_ai_provider_policy"
+  | "run_ai_assessment" | "create_ai_patch_draft" | "create_ai_rule_source_change_draft" | "create_ai_feishu_draft" | "manage_ai_provider_policy"
   | "submit_feishu_proposal" | "review_feishu_proposal" | "apply_feishu_proposal"
   | "inspect_feishu_workbook" | "pull_feishu_workbook" | "create_ruleset_draft" | "publish_ruleset" | "write_feishu_identity"
   | "confirm_feishu_write" | "pull_feishu_source"
@@ -79,7 +79,7 @@ export const ACTION_CODES = [
   "write_patch_mirror", "pull_patch_mirror", "inspect_patch_mirror",
   "repair_patch_mirror", "rebuild_patch_mirror_from_local",
   "fix_patch_mirror_schema", "migrate_patch_subject",
-  "run_ai_assessment", "create_ai_patch_draft", "create_ai_feishu_draft", "manage_ai_provider_policy",
+  "run_ai_assessment", "create_ai_patch_draft", "create_ai_rule_source_change_draft", "create_ai_feishu_draft", "manage_ai_provider_policy",
   "submit_feishu_proposal", "review_feishu_proposal", "apply_feishu_proposal",
   "inspect_feishu_workbook", "pull_feishu_workbook", "create_ruleset_draft", "publish_ruleset", "write_feishu_identity",
   "confirm_feishu_write", "pull_feishu_source",
@@ -647,7 +647,8 @@ const ACTION_CAPABILITIES = {
   migrate_patch_subject: ["patch.subject.migrate"],
   run_ai_assessment: ["ai.evaluate"],
   create_ai_patch_draft: ["ai.patch_draft.create"],
-  create_ai_feishu_draft: ["ai.rule_source_change_draft.create"],
+  create_ai_rule_source_change_draft: ["ai.rule_source_change_draft.create"],
+  create_ai_feishu_draft: ["ai.feishu_proposal_draft.create"],
   manage_ai_provider_policy: ["ai.provider_policy.manage"],
   submit_feishu_proposal: ["feishu.proposal.submit"],
   review_feishu_proposal: ["feishu.proposal.review"],
@@ -1028,11 +1029,17 @@ export interface AIServicePolicy {
   model?: string;
   allowedFieldPaths: string[];
   externalDataEgressConfirmed: boolean;
+  connectorType?: "fancy_hub";
+  providerPolicyVersion?: "ai-provider/open006-v1";
+  requestSchemaVersion?: "ai-request/v1";
+  connectorConfigured?: boolean;
+  hardLimitsConfigured?: boolean;
 }
 
 export interface AIServiceAvailability {
   enabled: boolean;
-  reasonCode?: "AI_DISABLED" | "AI_PROVIDER_UNCONFIRMED" | "AI_FIELD_ALLOWLIST_EMPTY";
+  reasonCode?: "AI_DISABLED" | "AI_PROVIDER_UNCONFIRMED" | "AI_FIELD_ALLOWLIST_EMPTY"
+    | "AI_CONNECTOR_NOT_CONFIGURED" | "AI_HARD_LIMIT_POLICY_MISSING";
   reasonText?: string;
 }
 
@@ -1051,6 +1058,28 @@ export function aiServiceAvailability(
       enabled: false,
       reasonCode: "AI_PROVIDER_UNCONFIRMED",
       reasonText: "AI 供应方、模型或数据出网策略尚未确认。",
+    };
+  }
+  if (
+    policy.connectorType !== undefined
+    && (
+      policy.connectorType !== "fancy_hub"
+      || policy.providerPolicyVersion !== "ai-provider/open006-v1"
+      || policy.requestSchemaVersion !== "ai-request/v1"
+      || !policy.connectorConfigured
+    )
+  ) {
+    return {
+      enabled: false,
+      reasonCode: "AI_CONNECTOR_NOT_CONFIGURED",
+      reasonText: "Fancy Hub 连接器未完成独立安全配置，真实数据保持禁用。",
+    };
+  }
+  if (policy.connectorType === "fancy_hub" && !policy.hardLimitsConfigured) {
+    return {
+      enabled: false,
+      reasonCode: "AI_HARD_LIMIT_POLICY_MISSING",
+      reasonText: "Fancy Hub provider 或租户硬限额缺失。",
     };
   }
   if (!policy.allowedFieldPaths.length) {

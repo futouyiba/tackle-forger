@@ -455,16 +455,23 @@ export function deriveProjection(
     setRules,
   );
 
-  const intensityRules = input.functionProfile.intensityRules.find(
-    (entry) => entry.intensity === input.functionIntensity,
+  const itemPartId = input.weightTemplate.itemPartId;
+  const exactIntensityRules = itemPartId
+    ? input.functionProfile.intensityRules.find(
+      (entry) => entry.intensity === input.functionIntensity && entry.itemPartId === itemPartId,
+    )
+    : undefined;
+  const legacyCandidates = input.functionProfile.sourceRevisionId ? [] : input.functionProfile.intensityRules.filter(
+    (entry) => entry.intensity === input.functionIntensity && entry.legacyItemPartAgnostic && !entry.itemPartId,
   );
+  const intensityRules = exactIntensityRules ?? (legacyCandidates.length === 1 ? legacyCandidates[0] : undefined);
   if (!intensityRules) {
     addWarning(warnings, {
-      level: "warning",
-      code: "FUNCTION_INTENSITY_RULES_MISSING",
+      level: "error",
+      code: itemPartId ? "FUNCTION_PART_INTENSITY_RULES_MISSING" : "FUNCTION_ITEM_PART_MISSING",
       message:
-        "功能 " + input.functionProfile.name + " 没有强度 " +
-        input.functionIntensity + " 的专用规则，仅应用基础规则。",
+        "功能 " + input.functionProfile.name + " 没有部件 " +
+        (itemPartId ?? "(缺失)") + "、强度 " + input.functionIntensity + " 的精确规则，已阻断该层贡献。",
       layer: "function",
       sourceId: input.functionProfile.id,
     });

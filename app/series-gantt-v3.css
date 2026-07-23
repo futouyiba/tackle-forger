@@ -880,6 +880,418 @@
   color: #fff;
 }
 
+.gantt-ai-disabled {
+  display: grid;
+  gap: 14px;
+}
+
+.gantt-ai-disabled > h3,
+.gantt-ai-disabled > p,
+.gantt-ai-selection h4,
+.gantt-ai-evidence h4,
+.gantt-ai-preview h4 {
+  margin: 0;
+}
+
+.gantt-ai-disabled > p,
+.gantt-ai-result > small,
+.gantt-ai-selection header > small,
+.gantt-ai-preview header > small {
+  color: var(--muted);
+}
+
+.gantt-ai-disabled > dl {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+}
+
+.gantt-ai-disabled > dl div {
+  background: var(--surface-subtle);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+}
+
+.gantt-ai-disabled > dl dt {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.gantt-ai-disabled > dl dd {
+  font-size: 12px;
+  font-weight: 700;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.gantt-ai-result {
+  display: grid;
+  gap: 8px;
+}
+
+.gantt-series-ai-panel {
+  background: color-mix(in srgb, var(--accent) 2%, var(--surface));
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.gantt-series-ai-panel > header {
+  align-items: start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.gantt-series-ai-panel > header h4,
+.gantt-series-ai-panel > header small {
+  margin: 0;
+}
+
+.gantt-series-ai-panel > header small,
+.gantt-series-ai-readonly span {
+  color: var(--muted);
+}
+
+.gantt-series-ai-readonly {
+  align-items: start;
+  background: var(--surface-subtle);
+  border-radius: 10px;
+  display: flex;
+  gap: 9px;
+  padding: 11px 12px;
+}
+
+.gantt-series-ai-readonly > div {
+  display: grid;
+  gap: 3px;
+}
+
+.gantt-series-ai-evidence-index {
+  background: var(--surface-subtle);
+  border-radius: 9px;
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+}
+
+.gantt-series-ai-evidence-index ul,
+.gantt-series-ai-evidence-index p {
+  color: var(--muted);
+  margin: 0;
+}
+
+.gantt-series-ai-evidence-index small {
+  overflow-wrap: anywhere;
+}
+
+.gantt-ai-result > p {
+  margin: 0;
+}
+
+.gantt-ai-result > p small {
+  color: var(--muted);
+}
+
+.gantt-ai-recommendations {
+  display: grid;
+  gap: 8px;
+}
+
+.gantt-ai-recommendations button {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--text);
+  display: grid;
+  gap: 5px;
+  padding: 11px 12px;
+  text-align: left;
+}
+
+.gantt-ai-recommendations button.selected {
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+  border-color: var(--accent);
+}
+
+.gantt-ai-recommendations button span,
+.gantt-ai-recommendations button small {
+  color: var(--muted);
+}
+
+.gantt-ai-selection,
+.gantt-ai-evidence,
+.gantt-ai-preview,
+.gantt-ai-delete-confirmation {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.gantt-ai-selection > header,
+.gantt-ai-evidence > header,
+.gantt-ai-preview > header,
+.gantt-ai-delete-confirmation > header {
+  align-items: start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.gantt-ai-selection fieldset {
+  border: 0;
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+}
+
+.gantt-ai-selection legend {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 7px;
+}
+
+.gantt-ai-selection fieldset label {
+  align-items: start;
+  background: var(--surface-subtle);
+  border-radius: 8px;
+  display: flex;
+  gap: 9px;
+  padding: 9px 10px;
+}
+
+.gantt-ai-selection fieldset label span {
+  display: grid;
+  gap: 3px;
+}
+
+.gantt-ai-selection fieldset label small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.gantt-ai-rule-target {
+  background: var(--surface-subtle);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  display: grid;
+  gap: 8px;
+  padding: 11px;
+}
+
+.gantt-ai-rule-target > small,
+.gantt-ai-rule-target label > span {
+  color: var(--muted);
+}
+
+.gantt-ai-rule-target > div {
+  display: grid;
+  gap: 9px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.gantt-ai-rule-target label {
+  display: grid;
+  gap: 5px;
+}
+
+.gantt-ai-rule-target label > span {
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.gantt-ai-rule-target select,
+.gantt-ai-rule-target input {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  min-height: 38px;
+  min-width: 0;
+  padding: 8px 9px;
+}
+
+.gantt-ai-evidence > div {
+  display: grid;
+  gap: 5px;
+}
+
+.gantt-ai-evidence ul,
+.gantt-ai-evidence p {
+  color: var(--muted);
+  margin: 0;
+  padding-left: 20px;
+}
+
+.gantt-ai-evidence p {
+  padding-left: 0;
+}
+
+.gantt-ai-preview-scope {
+  display: grid;
+  gap: 4px;
+}
+
+.gantt-ai-preview-scope span {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.gantt-ai-change-table {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  overflow-x: auto;
+}
+
+.gantt-ai-change-table > div {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(90px, 1.2fr) repeat(4, minmax(72px, 1fr));
+  min-width: 510px;
+  padding: 9px 10px;
+}
+
+.gantt-ai-change-table > div:first-child {
+  background: var(--surface-subtle);
+  border-bottom: 1px solid var(--line);
+}
+
+.gantt-ai-change-table > div + div {
+  border-top: 1px solid var(--line);
+}
+
+.gantt-ai-change-table span,
+.gantt-ai-change-table strong {
+  overflow-wrap: anywhere;
+}
+
+.gantt-ai-diff-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.gantt-ai-diff-grid article {
+  background: var(--surface-subtle);
+  border-radius: 9px;
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+}
+
+.gantt-ai-diff-grid article > span,
+.gantt-ai-diff-grid article > small {
+  color: var(--muted);
+}
+
+.gantt-ai-reason {
+  display: grid;
+  gap: 6px;
+}
+
+.gantt-ai-reason > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.gantt-ai-reason textarea {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  min-height: 76px;
+  padding: 9px 10px;
+  resize: vertical;
+}
+
+.gantt-ai-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.gantt-ai-actions button {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 9px 12px;
+}
+
+.gantt-ai-actions button.v3-primary-action {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.gantt-ai-delete-confirmation {
+  border-color: color-mix(in srgb, #b93f3f 40%, var(--line));
+}
+
+.gantt-ai-delete-confirmation h4,
+.gantt-ai-delete-confirmation p {
+  margin: 0;
+}
+
+.gantt-ai-delete-confirmation > p,
+.gantt-ai-delete-confirmation > label span {
+  color: var(--muted);
+}
+
+.gantt-ai-delete-confirmation > strong {
+  color: #8f2929;
+}
+
+.gantt-ai-delete-confirmation > label {
+  align-items: start;
+  background: color-mix(in srgb, #b93f3f 5%, var(--surface-subtle));
+  border-radius: 8px;
+  display: flex;
+  gap: 9px;
+  padding: 10px;
+}
+
+.gantt-ai-delete-confirmation > label input {
+  margin-top: 2px;
+}
+
+.gantt-ai-delete-confirmation > small {
+  color: #a22f2f;
+}
+
+.gantt-ai-delete-confirmation > footer {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.gantt-ai-delete-confirmation button,
+.gantt-ai-actions button.danger {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 9px 12px;
+}
+
+.gantt-ai-delete-confirmation button.danger,
+.gantt-ai-actions button.danger {
+  border-color: color-mix(in srgb, #b93f3f 55%, var(--line));
+  color: #9b2f2f;
+}
+
 @media (max-width: 1024px) {
   .gantt-model-drawer-v3 {
     width: min(580px, calc(100vw - 24px));
@@ -892,5 +1304,10 @@
   }
   .gantt-create-grid .span-2 {
     grid-column: auto;
+  }
+  .gantt-ai-disabled > dl,
+  .gantt-ai-diff-grid,
+  .gantt-ai-rule-target > div {
+    grid-template-columns: 1fr;
   }
 }

@@ -82,10 +82,13 @@ export const CANONICAL_FEISHU_WORKBOOK: FeishuWorkbookRef = {
 };
 
 export const CANONICAL_FEISHU_SHEET_REGISTRY: FeishuSheetRegistryEntry[] = [
+  ["mLpTLK", "04.0_FunctionProfile常量", "rule_source", true, true],
   ["d6e928", "01_重量模板", "rule_source", true, true],
   ["4IfBoX", "00_使用说明", "historical_reference", false, false],
-  ["fATowU", "02_类型材质", "rule_source", true, true],
-  ["vviXo0", "03_功能定位", "rule_source", true, true],
+  ["rgFPUu", "02_钓法类型", "rule_source", true, true],
+  ["m3eQCg", "02.5_钓法模板", "historical_reference", false, false],
+  ["fATowU", "03_类型材质", "rule_source", true, true],
+  ["vviXo0", "04_功能定位", "rule_source", true, true],
   ["zrVOxd", "04_词条", "rule_source", true, true],
   ["RdZv0J", "05_技术", "rule_source", true, true],
   ["9nE3Rx", "06_系列", "rule_source", true, true],

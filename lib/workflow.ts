@@ -412,6 +412,7 @@ function validateRow(state: WorkspaceState, row: GraphBatchRow) {
   if (
     candidate &&
     template &&
+    template.rangeSemantics !== "target_pull" &&
     (candidate.fishMinKg > template.nominalFishKg || candidate.fishMaxKg < template.nominalFishKg)
   ) issues.push("目标重量段未覆盖模板标称鱼重");
   if (!issues.length) {

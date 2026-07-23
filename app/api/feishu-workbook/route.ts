@@ -17,6 +17,7 @@ import {
 import { loadWorkspaceState, saveWorkspaceState } from "@/lib/storage";
 import {
   assertExplicitPullDidNotPublish,
+  applyCanonicalRuleSourceDraft,
   createRuleSetDraftFromPull,
   publishRuleSetVersion,
   recordFeishuSourceRevision,
@@ -112,7 +113,23 @@ async function executeWorkbookBusinessRequest(request: NextRequest) {
           { status: 409 },
         );
       }
+      const unresolvedIdentity = inspection.identityReport.items.filter(
+        (item) => item.state === "NEW_SOURCE_ROW" || item.state === "CONFLICT" || item.requiresHumanConfirmation,
+      );
+      if (inspection.identityReport.blockingIssueCodes.length || unresolvedIdentity.length) {
+        return NextResponse.json(
+          {
+            error: `飞书稳定身份未完成确认，已保留当前可用规则：${[
+              ...inspection.identityReport.blockingIssueCodes,
+              ...unresolvedIdentity.map((item) => item.state),
+            ].join("、")}`,
+            inspection,
+          },
+          { status: 422 },
+        );
+      }
       let next = recordFeishuSourceRevision(current.state, inspection.sourceRevision);
+      next = applyCanonicalRuleSourceDraft(next, inspection.canonicalRuleDraft);
       next = recordSourceIdentityMigrationReport(next, inspection.identityReport);
       next = recordQualityValuePolicyDraft(next, inspection.qualityDraft);
       next = recordPricingPolicyDraft(next, inspection.pricingDraft);

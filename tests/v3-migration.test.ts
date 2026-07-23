@@ -40,6 +40,13 @@ function legacyV17ForPartConstraintMigration(): Record<string, unknown> {
   return legacy;
 }
 
+test("legacy migration 不猜测 workspaceId，正式身份绑定留给存储/部署层", () => {
+  const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
+  delete legacy.workspaceId;
+  const migrated = migrateWorkspaceState(legacy);
+  assert.equal(migrated.workspaceId, undefined);
+});
+
 test("v16 隔离旧独立偏移阈值、发布规范策略且不改写历史 Snapshot", () => {
   const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
   legacy.schemaVersion = 15;
@@ -1007,14 +1014,39 @@ test("脱敏生产 schema v17 形态可直接读取，未知字段与已发布 S
   assert.deepEqual(migrateWorkspaceState(migrated), migrated);
 });
 
-test("schema v18 只新增不可变 PerformanceSummary 定义注册表且不改写历史 Snapshot", () => {
+test("schema v18 补齐 AI 草稿、永久来源同步与 PerformanceSummary 定义注册表", () => {
   const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
   legacy.schemaVersion = 17;
+  delete legacy.aiRuleSourceChangeDrafts;
+  delete legacy.aiArtifactProvenanceSyncRecords;
   delete legacy.performanceSummaryDefinitions;
   const snapshotsBefore = structuredClone(legacy.configurationSnapshots);
+
   const migrated = migrateWorkspaceState(legacy);
-  assert.equal(migrated.schemaVersion, 18);
+  assert.equal(migrated.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
+  assert.deepEqual(migrated.aiRuleSourceChangeDrafts, []);
+  assert.deepEqual(migrated.aiArtifactProvenanceSyncRecords, []);
   assert.deepEqual(migrated.performanceSummaryDefinitions, []);
   assert.deepEqual(migrated.configurationSnapshots, snapshotsBefore);
   assert.deepEqual(migrateWorkspaceState(migrated), migrated);
+});
+
+test("已标记 schema v18 的分支形态会互补缺失集合且保持 Snapshot 冻结", () => {
+  const withoutPerformance = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
+  withoutPerformance.schemaVersion = CURRENT_WORKSPACE_SCHEMA_VERSION;
+  delete withoutPerformance.performanceSummaryDefinitions;
+  const withoutAI = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
+  withoutAI.schemaVersion = CURRENT_WORKSPACE_SCHEMA_VERSION;
+  delete withoutAI.aiRuleSourceChangeDrafts;
+  delete withoutAI.aiArtifactProvenanceSyncRecords;
+  const snapshotsBefore = structuredClone(withoutAI.configurationSnapshots);
+
+  const performanceMigrated = migrateWorkspaceState(withoutPerformance);
+  const aiMigrated = migrateWorkspaceState(withoutAI);
+  assert.deepEqual(performanceMigrated.performanceSummaryDefinitions, []);
+  assert.deepEqual(aiMigrated.aiRuleSourceChangeDrafts, []);
+  assert.deepEqual(aiMigrated.aiArtifactProvenanceSyncRecords, []);
+  assert.deepEqual(aiMigrated.configurationSnapshots, snapshotsBefore);
+  assert.deepEqual(migrateWorkspaceState(performanceMigrated), performanceMigrated);
+  assert.deepEqual(migrateWorkspaceState(aiMigrated), aiMigrated);
 });

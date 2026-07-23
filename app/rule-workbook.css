@@ -1,4 +1,4 @@
-.rule-workbook-stack { display: flex; flex-direction: column; gap: 14px; }
+.rule-workbook-stack { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 .rule-workbook-hero { align-items: center; background: radial-gradient(circle at 94% 10%, rgba(104,69,228,.15), transparent 30%), linear-gradient(135deg,#f7fbff,#fff); display: flex; justify-content: space-between; min-height: 150px; padding: 24px; }
 .rule-workbook-hero h2 { font-size: 25px; margin: 5px 0 8px; }
 .rule-workbook-hero p { color: var(--muted); line-height: 1.65; margin: 0; max-width: 760px; }
@@ -9,27 +9,27 @@
 .rule-workbook-error { align-items: center; background: #fff5f4; border-color: #f3cbc6; color: #a7352c; display: flex; gap: 10px; }
 .rule-workbook-error div { display: flex; flex-direction: column; gap: 3px; }
 .rule-workbook-error span { font-size: 10px; }
-.rule-workbook-flow { align-items: stretch; display: grid; grid-template-columns: 1fr 22px 1fr 22px 1fr; }
+.rule-workbook-flow { align-items: stretch; display: grid; grid-template-columns: minmax(0,1fr) 22px minmax(0,1fr) 22px minmax(0,1fr) 22px minmax(0,1fr); }
 .rule-workbook-flow > svg { align-self: center; color: #98a3af; justify-self: center; }
-.rule-workbook-flow > .card { display: flex; flex-direction: column; gap: 7px; min-height: 145px; }
+.rule-workbook-flow > .card { display: flex; flex-direction: column; gap: 7px; min-height: 145px; min-width: 0; }
 .rule-workbook-flow .rule-step { color: var(--accent); font-size: 9px; font-weight: 800; letter-spacing: .08em; }
 .rule-workbook-flow strong { font-size: 14px; }
-.rule-workbook-flow small { color: var(--muted); flex: 1; font-size: 10px; line-height: 1.55; }
+.rule-workbook-flow small { color: var(--muted); flex: 1; font-size: 10px; line-height: 1.55; overflow-wrap: anywhere; }
 .rule-workbook-flow em { color: var(--muted); font-size: 9px; font-style: normal; font-weight: 750; }
 .rule-workbook-flow em.is-ok { color: #177653; }
 .rule-workbook-flow .button { align-self: flex-start; }
 .rule-workbook-grid { display: grid; gap: 14px; grid-template-columns: minmax(0,1.08fr) minmax(0,.92fr); }
-.rule-status-card { display: flex; flex-direction: column; gap: 13px; }
+.rule-status-card { display: flex; flex-direction: column; gap: 13px; min-width: 0; }
 .rule-badge { border: 1px solid; font-size: 9px; font-weight: 800; padding: 5px 7px; white-space: nowrap; }
 .rule-badge.success { background: #effaf4; border-color: #ccebd9; color: #177653; }
 .rule-badge.warning { background: #fff8e8; border-color: #efd99d; color: #8a6100; }
 .rule-badge.danger { background: #fff2f2; border-color: #efc4c0; color: #b42318; }
 .rule-metrics { display: grid; gap: 8px; grid-template-columns: repeat(3,1fr); }
-.rule-metrics > div { background: #f7f9fb; border: 1px solid var(--line); display: flex; flex-direction: column; gap: 3px; padding: 10px 12px; }
+.rule-metrics > div { background: #f7f9fb; border: 1px solid var(--line); display: flex; flex-direction: column; gap: 3px; min-width: 0; padding: 10px 12px; }
 .rule-metrics span { color: var(--muted); font-size: 9px; }
 .rule-metrics strong { font-size: 19px; }
-.rule-status-card > p { color: var(--muted); font-size: 10px; line-height: 1.55; margin: 0; }
-.rule-inline-ok,.rule-inline-error { align-items: center; display: flex; font-size: 10px; font-weight: 750; gap: 7px; padding: 9px 10px; }
+.rule-status-card > p { color: var(--muted); font-size: 10px; line-height: 1.55; margin: 0; overflow-wrap: anywhere; }
+.rule-inline-ok,.rule-inline-error { align-items: center; display: flex; font-size: 10px; font-weight: 750; gap: 7px; overflow-wrap: anywhere; padding: 9px 10px; }
 .rule-inline-ok { background: #effaf4; border: 1px solid #ccebd9; color: #177653; }
 .rule-inline-error { background: #fff2f2; border: 1px solid #efc4c0; color: #b42318; }
 .rule-pending-list { border: 1px solid var(--line); max-height: 180px; overflow: auto; }
@@ -52,4 +52,4 @@
 .spin { animation: rule-spin .8s linear infinite; }
 @keyframes rule-spin { to { transform: rotate(360deg); } }
 @media (max-width: 980px) { .rule-workbook-grid { grid-template-columns: 1fr; } .rule-workbook-flow { gap: 8px; grid-template-columns: 1fr; } .rule-workbook-flow > svg { display: none; } }
-@media (max-width: 720px) { .rule-workbook-hero { align-items: flex-start; flex-direction: column; gap: 14px; } .rule-workbook-live { align-items: flex-start; } .quality-basket-map { grid-template-columns: 1fr; } .rule-boundary-card { align-items: flex-start; grid-template-columns: 22px 1fr; } .rule-boundary-card > .rule-badge { grid-column: 2; } }
+@media (max-width: 720px) { .rule-workbook-hero { align-items: flex-start; flex-direction: column; gap: 14px; min-width: 0; width: 100%; } .rule-workbook-live { align-items: flex-start; min-width: 0; width: 100%; } .rule-metrics { grid-template-columns: 1fr; } .quality-basket-map { grid-template-columns: 1fr; } .rule-boundary-card { align-items: flex-start; grid-template-columns: 22px minmax(0,1fr); } .rule-boundary-card > .rule-badge { grid-column: 2; } }

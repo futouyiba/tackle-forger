@@ -246,6 +246,7 @@ function buildFunctionProfiles(state: MutableWorkspace): FunctionProfile[] {
     intensityRules: modifiers
       .map((modifier) => ({
         intensity: asFunctionIntensity(modifier.level),
+        legacyItemPartAgnostic: true,
         rules: structuredClone(modifier.rules),
       }))
       .sort((left, right) => left.intensity - right.intensity),
@@ -756,6 +757,7 @@ function migrateV15ToV16(state: MutableWorkspace): MutableWorkspace {
     patchReviewBatches: arrayOf<WorkspaceState["patchReviewBatches"][number]>(state.patchReviewBatches),
     patchValidationWaivers: arrayOf<WorkspaceState["patchValidationWaivers"][number]>(state.patchValidationWaivers),
     patchValidationWaiverDecisions: arrayOf<WorkspaceState["patchValidationWaiverDecisions"][number]>(state.patchValidationWaiverDecisions),
+    canonicalRuleSourceDrafts: arrayOf<WorkspaceState["canonicalRuleSourceDrafts"][number]>(state.canonicalRuleSourceDrafts),
   };
 }
 
@@ -1512,6 +1514,12 @@ function migrateV17ToV18(input: MutableWorkspace): MutableWorkspace {
   return {
     ...state,
     schemaVersion: 18,
+    aiRuleSourceChangeDrafts: arrayOf<
+      WorkspaceState["aiRuleSourceChangeDrafts"][number]
+    >(state.aiRuleSourceChangeDrafts),
+    aiArtifactProvenanceSyncRecords: arrayOf<
+      WorkspaceState["aiArtifactProvenanceSyncRecords"][number]
+    >(state.aiArtifactProvenanceSyncRecords),
     partConstraintSets: constraintSets,
     candidateSearchRecipes,
     seriesDefinitions,
@@ -1579,6 +1587,15 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
 
   state = {
     ...state,
+    aiRuleSourceChangeDrafts: arrayOf<
+      WorkspaceState["aiRuleSourceChangeDrafts"][number]
+    >(state.aiRuleSourceChangeDrafts),
+    aiArtifactProvenanceSyncRecords: arrayOf<
+      WorkspaceState["aiArtifactProvenanceSyncRecords"][number]
+    >(state.aiArtifactProvenanceSyncRecords),
+    performanceSummaryDefinitions: arrayOf<
+      WorkspaceState["performanceSummaryDefinitions"][number]
+    >(state.performanceSummaryDefinitions),
     patchLedger: state.patchLedger && typeof state.patchLedger === "object"
       ? migratePatchLedger(state.patchLedger as WorkspaceState["patchLedger"],patchLedgerMigrationContext(state))
       : emptyPatchLedger(),

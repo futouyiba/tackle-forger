@@ -112,6 +112,37 @@ Trace、ID 唯一性、前缀与实体类型；写后必须回读恢复，不能
 评分插值、竿/轮/线零整比、金额单位、舍入、最低价格和溢出上限未发布前，只允许非正式
 试算与单元格级 Trace，正式 Store 导出继续阻断且没有手填价格兜底。
 
+## Fancy Hub AI 连接器
+
+真实 AI 连接器默认关闭（`FANCY_HUB_ENABLED=false`），关闭、超时、限流或不可用均不影响
+派生、校验、Patch、发布和历史复现。它只允许连接部署配置中的单一 Fancy Hub HTTPS origin，
+只发送严格递归白名单的 `ai-request/v1`；真实 ID、自由文本、Evidence 正文、ActionLink、密钥
+和未知字段会在网络请求前被拒绝。
+
+启用前必须完成以下证据并由部署管理员保留：Fancy Hub 动态模型列表及不可变修订标识、
+主模型与有序降级列表、provider 与租户硬 token/并发/速率/超时/费用上限、全部本地门禁、
+独立评审和回滚演练。完成后才配置 `.env.example` 中的全部 `FANCY_HUB_*` 估算/限额项、
+持久化 `AI_RETENTION_DATA_DIR`、32 字节留存加密密钥及版本，并显式改为
+`FANCY_HUB_ENABLED=true`。缺少任一项时产品入口保持关闭。只有 `AI_PROVIDER_ADMIN_OPEN_IDS` 中的飞书用户拥有
+`ai.provider_policy.manage`；其他已登录公司用户只在功能启用时获得评估、查看和创建草稿能力。
+部署期 provider 硬限额是首次模型发现请求的启动上限；运行时模型列表只能进一步收紧本次调用，
+不能用首次出网后的发现结果补偿缺失的启动配置。
+
+回滚时首先把 `FANCY_HUB_ENABLED` 恢复为 `false` 并重启服务，然后撤销 Fancy Hub token；
+连接器不会自动批准 Patch、写回飞书、发布 RuleSet/Snapshot 或改写历史快照。AI 原始内容、
+语义内容、操作元数据与采纳来源分别执行 180 天、1 年、3 年和随产物永久保留策略；用户删除
+会立即隐藏，24 小时内清除主存储内容并以墓碑阻止备份恢复，备份清除期限为 30 天。备份清理
+必须由存储适配器实际删除并回读确认；失败保持待重试状态，不能只记录“已清除”。生产调用在
+出网前确认留存目录可写，使用持久化锁实现跨请求/进程并发与速率协调，并按 canonical Envelope 的 UTF-8 字节
+上界、最大输出 token 与批准费率计算硬准入估算；成功后同步写入审计事件和加密留存记录。Fancy Hub
+响应同样使用严格的 `ai-response/v1`，未知字段、超限内容和请求外别名在生成建议前拒绝，成功
+结果记录规范化 `outputHash`。工作台的 AI 按钮只消费服务端启用状态，并通过认证接口运行。
+生产备份会把 `AI_RETENTION_DATA_DIR` 纳入独立 `ai-retention` 目录；不可回退的删除墓碑写入
+其外部的 `AI_RETENTION_TOMBSTONE_DIR`，工作区备份和恢复不得覆盖该目录。每小时 systemd timer 运行
+`npm run ai-retention:sweep`，完成主存储期限清理，并在备份期限到达后按 assessmentId 删除所有备份副本、
+回读确认后才把墓碑标记为已清除。`GET/DELETE /api/ai/assessments/:assessmentId` 只允许已登录所有者读取或删除；
+删除幂等并立即从读取路径隐藏。
+
 ## 配置表交付
 
 一期只提供服务端生成的 `ConfigPreviewPackage`：固定

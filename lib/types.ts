@@ -56,11 +56,25 @@ export interface WeightTemplate {
   fishMinKg: number;
   fishMaxKg: number;
   nominalFishKg: number;
+  /** Canonical 01 source uses pull (kgf), not fish weight. Legacy fields remain readable. */
+  rangeSemantics?: "fish_weight" | "target_pull";
+  targetPullMinKgf?: number;
+  targetPullMaxKgf?: number;
+  nominalTargetPullKgf?: number;
   /** 数值越大优先级越高；仅在结构拉力比例距离相同时参与确定性决胜。 */
   templatePriority?: number;
   tier: string;
   values: Record<string, number | string>;
   notes: string;
+  /** Canonical Feishu 01 source metadata. Older imported templates may omit it. */
+  methodId?: string;
+  /** v3 FunctionIntensityRuleSet 的精确部位匹配键。 */
+  itemPartId?: string;
+  sourceRevisionId?: string;
+  sourceSheetId?: string;
+  sourceRow?: number;
+  /** 飞书 01 的独立“鱼重等级”显示值；不与结构拉力区间混为同一量纲。 */
+  fishWeightLevel?: number | string;
 }
 
 export type ReductionStackingMode =
@@ -107,6 +121,8 @@ export interface RuleSetVersion {
   status: RuleSetStatus;
   settings: WorkspaceRuleSettings;
   sourceRevisionIds: string[];
+  canonicalRuleSourceDraftId?: string;
+  sourceContentHash?: string;
   createdAt: string;
   publishedAt?: string;
   publishedBy?: string;
@@ -212,14 +228,22 @@ export interface ItemTypeProfile {
 
 export interface FunctionIntensityRuleSet {
   intensity: FunctionIntensity;
+  /** v3 后置专精贡献必须精确绑定到竿/轮/线；不得从参数名推断。 */
+  itemPartId?: string;
+  /** 仅历史迁移审计重放：旧源未表达分部件时，且同一强度恰有一条记录才可使用。 */
+  legacyItemPartAgnostic?: boolean;
   rules: AdjustmentRule[];
-  /** 飞书 03_功能定位中的稳定源行 ID（func_*）；只用于溯源，不作为聚合 FunctionProfile 的 ID。 */
+  /** 飞书 03_功能定位中的稳定源行 ID（func_*）；只用于溯源，不作为聚合 FunctionProfile 的 ID。没有独立父级绑定时不得生成 FunctionProfile。 */
   sourceRowId?: string;
 }
 
 export interface FunctionProfile {
   id: string;
   name: string;
+  /** 来自 04.0 常量表的不可变父级状态。 */
+  status?: string;
+  /** 来自 04.0 常量表；成员矩阵不得自行推断可用强度。 */
+  supportedIntensities?: FunctionIntensity[];
   rules: AdjustmentRule[];
   intensityRules: FunctionIntensityRuleSet[];
   enabled: boolean;
@@ -1663,6 +1687,33 @@ export interface AdjustmentRule {
   value: number | string;
   condition?: string;
   notes?: string;
+  sourceRevisionId?: string;
+  sourceSheetId?: string;
+  sourceCell?: string;
+}
+
+export interface CanonicalRuleSourceIssue {
+  level: "error" | "warning";
+  code: string;
+  message: string;
+  sheetId?: string;
+  row?: number;
+}
+
+export interface CanonicalRuleSourceDraft {
+  id: string;
+  sourceRevisionId: string;
+  sourceRevision: string;
+  contentHash: string;
+  importedAt: string;
+  parameters: ParameterDefinition[];
+  templates: WeightTemplate[];
+  methodProfiles: MethodProfile[];
+  itemTypeProfiles: ItemTypeProfile[];
+  functionProfiles: FunctionProfile[];
+  modifiers: ModifierOption[];
+  layers: RuleLayer[];
+  issues: CanonicalRuleSourceIssue[];
 }
 
 export interface ModifierOption {
@@ -1671,6 +1722,8 @@ export interface ModifierOption {
   name: string;
   level: number | string;
   itemKinds: ItemKind[];
+  /** Empty means no Method restriction; populated values are a hard compatibility rule. */
+  methodIds?: string[];
   rules: AdjustmentRule[];
   notes: string;
   enabled: boolean;
@@ -2274,6 +2327,96 @@ export interface AIAssessmentRecord {
   generatedAt: string;
 }
 
+export interface AIDraftEntityRef {
+  workspaceId: string;
+  entityType: "series" | "sku_drawer" | "model" | "rule_source_change_draft";
+  entityId: string;
+  revisionId: string;
+}
+
+export interface AIDraftEvidenceRef {
+  evidenceType: "trace" | "validation_issue" | "hard_compatibility" | "affinity_axis"
+    | "series_invariant" | "five_axis" | "rule" | "snapshot";
+  refId: string;
+  revisionId?: string;
+  contentHash: string;
+}
+
+export interface AIRuleSourceChangeDraft {
+  changeDraftId: string;
+  originAssessmentId: string;
+  originRecommendationId: string;
+  sourceObjectRefs: AIDraftEntityRef[];
+  targetRuleRef: {
+    spreadsheetToken: string;
+    sheetId: string;
+    stableRuleId: string;
+    parameterKey: string;
+    sourceRevision: string;
+  };
+  proposedChange: {
+    changeId: string;
+    parameterKey: string;
+    operation: "set" | "add" | "multiply" | "clear";
+    operand: unknown;
+    expectedBefore: unknown;
+  };
+  evidenceRefs: AIDraftEvidenceRef[];
+  impactPreview: {
+    evaluatedRuleSetVersion: string;
+    affectedSeries: number;
+    affectedSkus: number;
+    affectedModels: number;
+    newErrors: number;
+    resolvedErrors: number;
+    sampleDiffRefs: string[];
+    publishedSnapshotsChanged: 0;
+    upgradeCandidatesExpected: number;
+    coverage: {
+      evaluatedModels: number;
+      totalModels: number;
+      complete: boolean;
+      unavailableModelIds: string[];
+    };
+  };
+  state: "LOCAL_DRAFT" | "IMPACT_PREVIEW_READY" | "NEEDS_REBASE"
+    | "CONFIRMED" | "WRITING" | "WRITE_VERIFIED" | "WRITE_FAILED"
+    | "REMOTE_CHANGES_AVAILABLE" | "PULLED" | "ABSORBED"
+    | "PARTIALLY_ABSORBED" | "SUPERSEDED";
+  humanReview?: {
+    confirmedBy: string;
+    confirmedAt: string;
+    reviewedCommandHash: string;
+    reviewedSourceRevision: string;
+  };
+  idempotencyKey: string;
+  commandHash: string;
+  createdBy: string;
+  createdAt: string;
+  provenance: {
+    assessmentInputHash: string;
+    modelDescriptor: import("./ai-outbound").AIModelDescriptorV1;
+    selectedRecommendation: unknown;
+    evidenceContentHashes: string[];
+    humanDiff: unknown;
+  };
+}
+
+export interface AIArtifactProvenanceSyncRecord {
+  syncRecordId: string;
+  assessmentId: string;
+  actorStableId: string;
+  artifactStableRefs: string[];
+  acceptedArtifactProvenance: import("./ai-retention").AIAcceptedArtifactProvenance;
+  idempotencyKey: string;
+  commandHash: string;
+  state: "PENDING" | "SYNCED" | "FAILED";
+  attempts: number;
+  createdAt: string;
+  updatedAt: string;
+  lastErrorCode?: string;
+}
+
 export interface WorkspaceExportTargetProfile {
   profileId: string;
   label: string;
@@ -2308,6 +2451,8 @@ export interface IdentityAuditRecord {
 
 
 export interface WorkspaceState {
+  /** 新正式 Patch/发布链的权威工作区身份；历史 Snapshot 仍可保留无此字段的 legacy 证据。 */
+  workspaceId?: string;
   schemaVersion: number;
   /**
    * OPEN-008 使用独立子 schema，避免把配置身份治理与工作区 revision
@@ -2343,6 +2488,7 @@ export interface WorkspaceState {
   configurationSnapshots: ConfigurationSnapshot[];
   feishuWorkbooks: FeishuWorkbookRef[];
   feishuSourceRevisions: FeishuSourceRevision[];
+  canonicalRuleSourceDrafts: CanonicalRuleSourceDraft[];
   sourceIdentityMigrationReports: SourceIdentityMigrationReport[];
   qualityValuePolicyDrafts: QualityValuePolicyDraft[];
   pricingPolicyDrafts: PricingPolicyDraft[];
@@ -2355,6 +2501,8 @@ export interface WorkspaceState {
   patchValidationWaivers: PatchValidationWaiver[];
   patchValidationWaiverDecisions: PatchValidationWaiverDecision[];
   aiAssessments: AIAssessmentRecord[];
+  aiRuleSourceChangeDrafts: AIRuleSourceChangeDraft[];
+  aiArtifactProvenanceSyncRecords: AIArtifactProvenanceSyncRecord[];
   exportTargetProfiles: WorkspaceExportTargetProfile[];
   configEnvironmentProfiles: ConfigEnvironmentProfile[];
   configExportMappings: ConfigExportMapping[];

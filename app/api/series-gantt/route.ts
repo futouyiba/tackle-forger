@@ -73,10 +73,7 @@ export async function GET(request: NextRequest) {
       actionAvailability("open_sku", capabilities),
       actionAvailability("preview_model", capabilities),
       actionAvailability("generate_candidates", capabilities),
-      actionAvailability("run_ai_assessment", capabilities, {
-        code: "AI_DISABLED",
-        text: "OPEN-006 尚未确认，AI 服务一期保持禁用。",
-      }),
+      user.actionAvailability.run_ai_assessment,
     ],
   });
 }

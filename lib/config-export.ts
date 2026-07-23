@@ -28,9 +28,9 @@ import {
   assertSnapshotItemPartEnabled,
 } from "./enabled-item-parts";
 import {
+  canonicalizeValidationIssues,
   assertFrozenValidationIssuesMatch,
   assertValidationGateCanProceed,
-  isCanonicalValidationIssue,
 } from "./validation-issues";
 export type { ConfigExportMapping } from "./config-export-mapping";
 
@@ -195,10 +195,27 @@ export function createExportManifest(input: {
   let frozenValidationGovernance: Pick<ExportManifest,
     "validationIssueFingerprints" | "validationAcknowledgementRefs"
     | "validationWaiverRefs" | "validationWaiverDecisionRefs"> = {};
-  const frozenSnapshotExportIssues = input.snapshot.validationReport.filter(
+  const frozenSnapshotValidationIssues = canonicalizeValidationIssues(
+    input.snapshot.validationReport,
+    {
+      subjectRef: {
+        workspaceId: "workspace:legacy",
+        entityType: "model",
+        entityId: input.snapshot.modelId,
+        revisionId: String(input.snapshot.modelRevision),
+      },
+      inputHash: input.snapshot.contentHash,
+      ruleRefs: [input.snapshot.ruleSetVersion],
+      gate: "NONE",
+      source: "import",
+      environmentId: input.environmentId,
+      channelKey: input.channelKey,
+      mode: "active_gate",
+    },
+  );
+  const frozenSnapshotExportIssues = frozenSnapshotValidationIssues.filter(
     (issue): issue is CanonicalValidationIssue =>
-      isCanonicalValidationIssue(issue)
-      && issue.gate === "EXPORT"
+      issue.gate === "EXPORT"
       && issue.environmentId === input.environmentId
       && issue.channelKey === input.channelKey,
   );

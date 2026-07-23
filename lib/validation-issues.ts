@@ -420,7 +420,7 @@ export function verifyValidationAcknowledgement(
     : recordHashVersion === undefined
       && deterministicHash({ ...content, state: "FRESH" }) === recordHash;
   const stateValid = stateHashVersion === undefined && stateHash === undefined
-    ? recordHashVersion === undefined
+    ? recordHashVersion === undefined && state === "FRESH"
     : stateHashVersion === VALIDATION_EVIDENCE_STATE_HASH_VERSION
       && deterministicHash({
       stateHashVersion,
@@ -484,6 +484,12 @@ export function acknowledgeValidationWarning(input: {
       throw new ValidationIssueContractError(
         "VALIDATION_RETRY_EVIDENCE_INVALID",
         "幂等重试引用的原始 WARNING 确认证据完整性校验失败。",
+      );
+    }
+    if (previous.state !== "FRESH") {
+      throw new ValidationIssueContractError(
+        "VALIDATION_RETRY_EVIDENCE_STALE",
+        "幂等重试不能复用已失效的 WARNING 确认证据。",
       );
     }
     if (previous.payloadHash !== payloadHash) {
@@ -592,7 +598,7 @@ export function verifyValidationWaiver(waiver: ValidationWaiver): boolean {
     : recordHashVersion === undefined
       && deterministicHash({ ...content, state: "FRESH" }) === recordHash;
   const stateValid = stateHashVersion === undefined && stateHash === undefined
-    ? recordHashVersion === undefined
+    ? recordHashVersion === undefined && state === "FRESH"
     : stateHashVersion === VALIDATION_EVIDENCE_STATE_HASH_VERSION
       && deterministicHash({
       stateHashVersion,
@@ -745,6 +751,12 @@ export function approveValidationWaiverDecision(input: {
       throw new ValidationIssueContractError(
         "VALIDATION_RETRY_EVIDENCE_INVALID",
         "幂等重试引用的原始 Waiver 证据完整性校验失败。",
+      );
+    }
+    if (waivers.some((entry) => entry.state !== "FRESH")) {
+      throw new ValidationIssueContractError(
+        "VALIDATION_RETRY_EVIDENCE_STALE",
+        "幂等重试不能复用已失效的 Waiver 证据。",
       );
     }
     return {

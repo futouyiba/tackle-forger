@@ -63,11 +63,15 @@ export function modelFinalPullKgForSnapshot(
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function errors(issues: ValidationIssue[]): ValidationIssue[] {
+function publishErrors(issues: ValidationIssue[]): ValidationIssue[] {
   return issues.filter((issue) => {
     const severity = validationIssueSeverity(issue);
     return (severity === "ERROR" || severity === "BLOCKER")
-      && (!isCanonicalValidationIssue(issue) || issue.state === "OPEN");
+      && (!isCanonicalValidationIssue(issue)
+        || (
+          issue.state === "OPEN"
+          && (issue.gate === "REVIEW" || issue.gate === "PUBLISH")
+        ));
   });
 }
 
@@ -228,7 +232,7 @@ export function publishConfigurationSnapshot(
       mode: "active_gate",
     },
   );
-  const blocking = errors(combinedValidationReport);
+  const blocking = publishErrors(canonicalValidationReport);
   if (!input.compatibilityReport.allowed) {
     blocking.push({
       level: "error",

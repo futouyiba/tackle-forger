@@ -40,6 +40,35 @@ test("SeriesGanttQuery 同字段 OR、不同字段 AND，并保留真实离散 S
   );
 });
 
+test("SeriesGanttQuery 当前覆盖与聚合排除明确 DEPRECATED 的历史 SKU", () => {
+  const workspace = state();
+  const deprecated = workspace.skuDrawers[0]!;
+  deprecated.status = "superseded";
+  const blocks = querySeriesGantt({
+    query: { sort: "quality_type" },
+    series: workspace.seriesDefinitions,
+    skus: workspace.skuDrawers,
+    models: workspace.purchasableModels,
+    itemTypes: workspace.itemTypeProfiles,
+    upgrades: workspace.upgradeCandidates,
+  });
+  const block = blocks.find(
+    (entry) => entry.seriesId === deprecated.seriesId,
+  )!;
+
+  assert.equal(
+    block.skuNodes.some((entry) => entry.skuId === deprecated.id),
+    false,
+  );
+  assert.equal(block.aggregate.skuCount, block.skuNodes.length);
+  assert.equal(
+    block.aggregate.modelCountTotal,
+    workspace.purchasableModels.filter(
+      (model) => model.skuId !== deprecated.id,
+    ).length,
+  );
+});
+
 test("SeriesGanttQuery 聚合阻断、warning、升级候选和主状态且不吞副状态", () => {
   const workspace = state();
   const upgrade = workspace.upgradeCandidates.find((entry) => entry.status === "pending");

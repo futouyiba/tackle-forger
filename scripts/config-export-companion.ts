@@ -12,6 +12,7 @@ import {
   type CompanionPreviewRequest,
   type CompanionStatusRequest,
 } from "../lib/config-export-companion";
+import { ConfigExportStageError } from "../lib/config-export-stage";
 
 interface CompanionServerOptions {
   registryPath: string;
@@ -145,7 +146,10 @@ export async function startConfigExportCompanion(options: CompanionServerOptions
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const status = /令牌|配对/.test(message) ? 401 : 400;
-      sendJson(response, status, { error: message }, origin);
+      sendJson(response, status, {
+        error: message,
+        ...(error instanceof ConfigExportStageError ? { code: error.code } : {}),
+      }, origin);
     }
   });
 

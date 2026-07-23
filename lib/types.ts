@@ -14,6 +14,15 @@ import type {
   QualityValuePolicyDraft,
 } from "./quality-value-policy";
 import type { ConfigIdGovernanceState } from "./config-id-governance";
+import type { CalculationTraceArchive } from "./calculation-trace";
+export type {
+  CalculationTraceArchive,
+  CalculationTraceEntry,
+} from "./calculation-trace";
+import type {
+  PerformanceSummaryDefinition,
+  PerformanceSummarySnapshot,
+} from "./performance-summary";
 
 export type ItemKind = "rod" | "reel" | "line";
 export type RuleOperation = "add" | "multiply" | "set" | "min" | "max" | "formula";
@@ -802,7 +811,9 @@ export interface SeriesDefinition {
   functionIntensityPolicy:
     | { mode: "fixed"; intensity: FunctionIntensity }
     | { mode: "weight_curve"; values: Record<string, FunctionIntensity> };
+  /** @deprecated 旧 Series 只读证据；新 revision 不得写入或消费。 */
   performanceProfileId?: string;
+  /** @deprecated 与旧性能定位一同只读保留。 */
   performanceIntensityPolicy?: {
     mode: "legacy_label";
     label: string;
@@ -1025,6 +1036,7 @@ export interface CandidateSearchRecipe {
   methodIds: string[];
   typeIds: string[];
   functionIds: string[];
+  /** @deprecated 旧搜索配方证据；新候选运行时忽略且不得写入。 */
   performanceIds: string[];
   qualityIds: QualityProfileId[];
   targetPullRangeKg: { min: number; max: number };
@@ -1221,6 +1233,8 @@ export interface ConfigurationSnapshot {
   attributeAffixIds: string[];
   passiveAffixIds: string[];
   attributeTrace: ProjectionTraceStep[];
+  /** 新正式 Snapshot 冻结 canonical Trace；历史 Snapshot 不补写，避免改变 contentHash。 */
+  calculationTrace?: CalculationTraceArchive;
   passiveAffixPayloads: PassiveSkillPayload[];
   projectionMatch: ProjectionMatch;
   compatibilityReport: HardCompatibilityResult;
@@ -1229,6 +1243,8 @@ export interface ConfigurationSnapshot {
   affinityReport: AffinityScoreResult;
   qualityReport: AffixQualityEvaluation;
   qualityValueAssessment?: ModelAffixValueAssessment;
+  /** 历史 Snapshot 可缺失；新正式 Snapshot 必须冻结 AVAILABLE 或 definition_missing。 */
+  performanceSummary?: PerformanceSummarySnapshot;
   validationReport: ValidationIssue[];
   fiveAxisPreview?: ModelFiveAxisPreview;
   publishedBy: string;
@@ -1278,7 +1294,8 @@ export interface GovernanceAuditLogEntry {
     | "create_upgrade"
     | "review_upgrade"
     | "submit_rule_proposal"
-    | "publish_rule_proposal";
+    | "publish_rule_proposal"
+    | "change_sku_target_pull";
   entityType: string;
   entityId: string;
   actor: string;
@@ -1835,6 +1852,7 @@ export interface WorkspaceState {
   itemTypeProfiles: ItemTypeProfile[];
   functionProfiles: FunctionProfile[];
   performanceProfiles: PerformanceProfile[];
+  performanceSummaryDefinitions: PerformanceSummaryDefinition[];
   qualityProfiles: QualityProfile[];
   projectionPatches: ProjectionPatchRuleSource[];
   patchLedger: PatchLedger;
@@ -1870,7 +1888,14 @@ export interface WorkspaceState {
   configEnvironmentProfiles: ConfigEnvironmentProfile[];
   configExportMappings: ConfigExportMapping[];
   identityAuditLog: IdentityAuditRecord[];
-  commandIdempotencyRecords: Array<{ key: string; inputHash: string; resultRef: string }>;
+  commandIdempotencyRecords: Array<{
+    key: string;
+    inputHash: string;
+    resultRef: string;
+    /** 命令可选的冻结响应；旧记录缺失时保持只读兼容。 */
+    resultPayload?: Record<string, unknown>;
+    resultPayloadHash?: string;
+  }>;
   upgradeCandidates: UpgradeCandidate[];
   ruleChangeProposals: RuleChangeProposal[];
   governanceAuditLog: GovernanceAuditLogEntry[];

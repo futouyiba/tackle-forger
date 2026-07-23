@@ -33,7 +33,7 @@ test("生产构建包含完整工作台客户端与 Worker", async () => {
   assert.match(script, /Series 基准策略/);
   assert.match(script, /草稿定义 · OPEN-005/);
   assert.match(script, /规划拉力范围（可选）· 不参与 SKU 生成/);
-  assert.match(script, /SeriesRecipe 已转为只读历史/);
+  assert.match(script, /旧系列配方已停止生产/);
   assert.match(script, /旧 Candidate 结果仅供迁移审计/);
   assert.match(script, /OfficialSku 已转为只读历史/);
   assert.match(script, /DetailOverride 已转为只读历史/);

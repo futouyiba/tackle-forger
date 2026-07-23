@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  createFormalFiveAxisVertexSet,
+  createFormalFiveAxisViewDefinition,
+} from "../lib/five-axis-formal";
+import {
   buildSamePartComparison,
+  fiveAxisComparisonPlotRatio,
   fiveAxisPlotRatio,
   buildTackleFitComparison,
   calculateModelFiveAxisPreview,
@@ -15,6 +20,13 @@ test("五维绘图缺失值保持缺失，不会落到零点", () => {
   assert.equal(fiveAxisPlotRatio(0), 0);
   assert.equal(fiveAxisPlotRatio(120), 1);
   assert.equal(fiveAxisPlotRatio(75, 150), 0.5);
+});
+
+test("正式比较固定 100 外环，并按真实比例保留超顶点分数", () => {
+  assert.equal(fiveAxisComparisonPlotRatio(null), null);
+  assert.equal(fiveAxisComparisonPlotRatio(100), 1);
+  assert.equal(fiveAxisComparisonPlotRatio(140), 1.4);
+  assert.equal(fiveAxisComparisonPlotRatio(-20), 0);
 });
 import { deterministicHash } from "../lib/rule-kernel";
 import {
@@ -637,4 +649,50 @@ test("历史五维预览缺少定义修订哈希时保持原 Snapshot hash，不
   assert.equal(migrated.configurationSnapshots[0].fiveAxisPreview?.fiveAxisDefinitionRevision, undefined);
   assert.equal(migrated.configurationSnapshots[0].fiveAxisPreview?.fiveAxisDefinitionHash, undefined);
   assert.equal(verifySnapshotIntegrity(migrated.configurationSnapshots[0]), true);
+});
+
+test("缺失顶点组状态的旧工作区从当前正式 Snapshot 确定性回填且二次迁移无变化", () => {
+  const state = hydrateV3Seed(createSeedState());
+  const definition = createFormalFiveAxisViewDefinition();
+  const model = state.purchasableModels.find((entry) =>
+    entry.configurationSnapshotId)!;
+  const snapshot = state.configurationSnapshots.find((entry) =>
+    entry.id === model.configurationSnapshotId)!;
+  const componentSelections = buildFormalComponentSelectionsFixture(
+    snapshot.componentSelections,
+  );
+  const preview = buildFormalPreviewFixture({
+    definition,
+    snapshotId: snapshot.id,
+    modelId: model.id,
+    modelRevision: model.revision,
+    seriesId: state.skuDrawers.find((entry) => entry.id === model.skuId)!.seriesId,
+    skuId: model.skuId,
+    skuRevision: snapshot.skuRevision,
+    modelFinalPullKg: snapshot.modelFinalPullKg!,
+    finalPanelValues: snapshot.finalPanelValues,
+    componentSelections,
+  });
+  const vertexSet = createFormalFiveAxisVertexSet({
+    definition,
+    groupKey: {
+      weightBandId: preview.weightBandId!,
+      weightBandPolicyVersion: preview.weightBandPolicyVersion!,
+      fiveAxisDefinitionId: preview.fiveAxisDefinitionId,
+      fiveAxisDefinitionVersion: preview.fiveAxisDefinitionVersion,
+      fiveAxisRuleVersion: preview.fiveAxisRuleVersion,
+    },
+    candidateSources: preview.candidateSources!,
+  });
+  state.fiveAxisVertexSets = [vertexSet];
+  snapshot.fiveAxisPreview = preview;
+  delete (state as unknown as Record<string, unknown>).fiveAxisVertexGroupStates;
+
+  const migrated = migrateWorkspaceState(state);
+  assert.equal(migrated.fiveAxisVertexGroupStates.length, 1);
+  assert.equal(
+    migrated.fiveAxisVertexGroupStates[0].currentVertexSetHash,
+    vertexSet.vertexSetHash,
+  );
+  assert.deepEqual(migrateWorkspaceState(migrated), migrated);
 });

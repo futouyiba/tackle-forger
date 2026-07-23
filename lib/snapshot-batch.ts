@@ -10,11 +10,14 @@ import {
 } from "./enabled-item-parts";
 import type {
   ConfigurationSnapshot,
+  FiveAxisCandidateDelta,
+  FiveAxisTransactionPlan,
   PurchasableModel,
   SeriesDefinition,
   SkuDrawer,
   ValidationIssue,
 } from "./types";
+import { planFiveAxisTransactions } from "./five-axis-transactions";
 
 export type SnapshotBatchDecision = "reuse" | "create" | "skip";
 
@@ -35,17 +38,14 @@ export interface SnapshotBatchPlan {
   inputHash: string;
 }
 
-function latestSnapshot(
+function currentSnapshot(
   model: PurchasableModel,
   snapshots: ConfigurationSnapshot[],
 ): ConfigurationSnapshot | undefined {
-  return snapshots
-    .filter((snapshot) => snapshot.modelId === model.id)
-    .sort((left, right) =>
-      right.modelRevision - left.modelRevision ||
-      right.version - left.version ||
-      right.id.localeCompare(left.id),
-    )[0];
+  if (!model.configurationSnapshotId) return undefined;
+  return snapshots.find((snapshot) =>
+    snapshot.id === model.configurationSnapshotId
+    && snapshot.modelId === model.id);
 }
 
 function issuesForModel(model: PurchasableModel, skus: SkuDrawer[]): ValidationIssue[] {
@@ -104,7 +104,7 @@ export function planSnapshotBatch(input: {
     const series = sku
       ? input.series.find((entry) => entry.id === sku.seriesId)
       : undefined;
-    const latest = latestSnapshot(model, input.snapshots);
+    const latest = currentSnapshot(model, input.snapshots);
     try {
       if (!series || !sku) {
         throw new ItemPartNotEnabledError(undefined, "snapshot");
@@ -139,6 +139,19 @@ export function planSnapshotBatch(input: {
           message: error instanceof Error
             ? error.message
             : `部位未启用：${sku?.projectionMatch.itemPartId ?? "unknown"} 当前不能进入 ConfigurationSnapshot 流程。`,
+        }],
+      };
+    }
+    if (model.configurationSnapshotId && !latest) {
+      return {
+        modelId,
+        modelRevision: model.revision,
+        decision: "skip",
+        reasons: ["CURRENT_SNAPSHOT_POINTER_BROKEN"],
+        validationIssues: [{
+          level: "error",
+          code: "CURRENT_SNAPSHOT_POINTER_BROKEN",
+          message: `Model ${model.id} 指向的 ConfigurationSnapshot ${model.configurationSnapshotId} 不存在或不属于该 Model。`,
         }],
       };
     }
@@ -187,10 +200,16 @@ export function planSnapshotBatch(input: {
   const createdAt = input.now ?? new Date().toISOString();
   const content = { selectedModelIds: selectedIds, items };
   const inputHash = deterministicHash(content);
+  const stableItems = items.map((item) => item.decision === "create"
+    ? {
+        ...item,
+        snapshotId: `snapshot:${item.modelId}:batch:${inputHash}`,
+      }
+    : item);
   return {
     batchId: `snapshot-batch:${inputHash}`,
     selectedModelIds: selectedIds,
-    items,
+    items: stableItems,
     createdAt,
     inputHash,
   };
@@ -205,5 +224,39 @@ export function assertSnapshotBatchCanConfirm(plan: SnapshotBatchPlan): void {
     if (item.decision === "reuse" && !item.snapshotId) {
       throw new Error(`Model ${item.modelId} 的复用项缺少 snapshotId。`);
     }
+    if (item.decision === "create" && !item.snapshotId) {
+      throw new Error(`Model ${item.modelId} 的创建项缺少预分配 snapshotId。`);
+    }
   }
+}
+
+export function planSnapshotBatchFiveAxisTransactions(input: {
+  batchPlan: SnapshotBatchPlan;
+  deltas: FiveAxisCandidateDelta[];
+}): FiveAxisTransactionPlan {
+  assertSnapshotBatchCanConfirm(input.batchPlan);
+  const createItems = new Map(input.batchPlan.items
+    .filter((item) => item.decision === "create")
+    .map((item) => [item.modelId, item]));
+  for (const [modelId, createItem] of createItems) {
+    const createDeltas = input.deltas.filter((delta) =>
+      delta.modelId === modelId
+      && (delta.operation === "ADD" || delta.operation === "REPLACE")
+      && delta.after);
+    if (createDeltas.length !== 1) {
+      throw new Error(
+        `FIVE_AXIS_SNAPSHOT_DELTA_MISSING：Model ${modelId} 的 create 项必须恰好对应一个 ADD/REPLACE delta。`,
+      );
+    }
+    if (createDeltas[0].after!.candidateSources.some((source) =>
+      source.snapshotId !== createItem.snapshotId)) {
+      throw new Error(
+        `FIVE_AXIS_SNAPSHOT_ID_CONFLICT：Model ${modelId} 候选未使用批次预分配 snapshotId。`,
+      );
+    }
+  }
+  return planFiveAxisTransactions({
+    deltas: input.deltas,
+    snapshotBuildModelIds: [...createItems.keys()],
+  });
 }

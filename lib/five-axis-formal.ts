@@ -9,8 +9,10 @@ import {
   hashVertexSet,
 } from "./five-axis-hash";
 import type {
+  ConfigurationSnapshot,
   FiveAxisDefinitionDisposition,
   FiveAxisDefinitionDispositionCatalogRevision,
+  FiveAxisComparisonView,
   FiveAxisEntityInput,
   FiveAxisProjectionReferenceAnchor,
   FiveAxisProjectionReferenceEvidence,
@@ -48,6 +50,30 @@ export function resolveFormalFiveAxisWeightBand(input: {
   const upperBounds = [2, 4, 6, 10, 15];
   const index = upperBounds.findIndex((upper) => input.modelFinalPullKg <= upper);
   return `W${index < 0 ? 6 : index + 1}`;
+}
+
+export function buildFormalFiveAxisEntityFromSnapshot(input: {
+  snapshot: ConfigurationSnapshot;
+  itemPartId: string;
+  weightBandId: string;
+  modelName: string;
+}): FiveAxisEntityInput | undefined {
+  const component = input.snapshot.componentSelections.find((entry) =>
+    entry.itemPartId === input.itemPartId);
+  if (!component) return undefined;
+  return {
+    entityId:
+      `${input.snapshot.modelId}:snapshot:${input.snapshot.id}`
+      + `@v${input.snapshot.version}:${component.componentId}`,
+    itemPartId: input.itemPartId,
+    label: `${input.modelName} · ${component.name}`,
+    fishWeightGradeId: input.weightBandId,
+    revision: input.snapshot.modelRevision,
+    values: Object.fromEntries(
+      Object.entries(component.values).map(([key, value]) =>
+        [key, typeof value === "number" ? value : null]),
+    ),
+  };
 }
 
 const FORMAL_AXIS_CONTRACT = [
@@ -1344,4 +1370,117 @@ export function createFormalModelFiveAxisPreview(input: {
     expectedModelFinalPullKg: input.modelFinalPullKg,
   });
   return preview;
+}
+
+export function buildFormalEquipmentComparison(input: {
+  definition: FiveAxisViewDefinition;
+  vertexSet: FiveAxisVertexSet;
+  entities: Array<{
+    entity: FiveAxisEntityInput;
+    modelFinalPullKg: number;
+    weightBandId: string;
+    comparisonOrder: number;
+  }>;
+}): FiveAxisComparisonView {
+  assertFormalFiveAxisViewDefinition(input.definition);
+  if (
+    input.entities.length < input.definition.comparisonPolicy.minimumItems
+    || input.entities.length > input.definition.comparisonPolicy.maximumItems
+  ) {
+    throw new Error(
+      `FIVE_AXIS_COMPARISON_SIZE_INVALID：比较组必须为 ${input.definition.comparisonPolicy.minimumItems}–${input.definition.comparisonPolicy.maximumItems} 件。`,
+    );
+  }
+  const orders = new Set<number>();
+  const entities = [...input.entities].sort((left, right) =>
+    left.comparisonOrder - right.comparisonOrder
+    || left.entity.entityId.localeCompare(right.entity.entityId));
+  for (const entry of entities) {
+    if (!Number.isInteger(entry.comparisonOrder) || entry.comparisonOrder < 0) {
+      throw new Error("FIVE_AXIS_COMPARISON_ORDER_INVALID：comparisonOrder 必须是非负整数。");
+    }
+    if (orders.has(entry.comparisonOrder)) {
+      throw new Error("FIVE_AXIS_COMPARISON_ORDER_INVALID：comparisonOrder 不得重复。");
+    }
+    orders.add(entry.comparisonOrder);
+    if (entry.weightBandId !== input.vertexSet.weightBandId) {
+      throw new Error("FIVE_AXIS_COMPARISON_WEIGHT_BAND_CONFLICT：全部装备必须使用共同 W 段。");
+    }
+  }
+  const referenceRodInput = entities.find((entry) =>
+    entry.entity.itemPartId === "part:rod");
+  const referenceRodSeries = referenceRodInput
+    ? calculateFormalFiveAxisComponentSeries({
+        definition: input.definition,
+        vertexSet: input.vertexSet,
+        entity: referenceRodInput.entity,
+      })
+    : undefined;
+  const series = entities.map((entry) => {
+    const calculated = entry === referenceRodInput
+      ? referenceRodSeries!
+      : calculateFormalFiveAxisComponentSeries({
+          definition: input.definition,
+          vertexSet: input.vertexSet,
+          entity: entry.entity,
+          referenceRodSeries,
+        });
+    return {
+      ...calculated,
+      modelFinalPullKg: entry.modelFinalPullKg,
+      weightBandId: entry.weightBandId,
+      comparisonOrder: entry.comparisonOrder,
+    };
+  });
+  const axisSummaries = input.definition.axes.map((axis) => {
+    const ranked = series.flatMap((entry) => {
+      const point = entry.points.find((candidate) =>
+        candidate.axisId === axis.axisId);
+      return point?.source === "direct" && point.comparisonScore !== null
+        ? [{ entityId: entry.entityId, score: point.comparisonScore }]
+        : [];
+    });
+    if (ranked.length < 2) {
+      return {
+        axisId: axis.axisId,
+        strongestEntityIds: ranked.map((entry) => entry.entityId),
+        weakestEntityIds: ranked.map((entry) => entry.entityId),
+        spread: null,
+      };
+    }
+    const strongest = Math.max(...ranked.map((entry) => entry.score));
+    const weakest = Math.min(...ranked.map((entry) => entry.score));
+    return {
+      axisId: axis.axisId,
+      strongestEntityIds: ranked.filter((entry) =>
+        entry.score === strongest).map((entry) => entry.entityId),
+      weakestEntityIds: ranked.filter((entry) =>
+        entry.score === weakest).map((entry) => entry.entityId),
+      spread: (strongest - weakest) / 100,
+    };
+  });
+  return {
+    mode: "equipment_compare",
+    referenceFishWeightGradeId: input.vertexSet.weightBandId,
+    weightBandPolicyVersion: input.vertexSet.weightBandPolicyVersion,
+    fiveAxisDefinitionId: input.definition.definitionId,
+    fiveAxisDefinitionVersion: input.definition.version,
+    fiveAxisRuleVersion: input.definition.fiveAxisRuleVersion,
+    vertexSetHash: input.vertexSet.vertexSetHash,
+    scaleMode: "comparison_expanded",
+    referenceRodEntityId: referenceRodSeries?.entityId ?? null,
+    projectionReferenceAnchor: null,
+    projectionReferenceSetHash: null,
+    projectionReferences: ["part:rod", "part:reel", "part:line"].map((itemPartId) => ({
+      itemPartId,
+      state: "not_selected" as const,
+      projectionMatchId: null,
+      projectionMatchRevisionId: null,
+      projectionId: null,
+      projectionRevisionId: null,
+    })),
+    series,
+    axisSummaries,
+    validationIssues: [],
+  };
 }

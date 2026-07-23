@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { planSnapshotBatch, assertSnapshotBatchCanConfirm } from "../lib/snapshot-batch";
+import {
+  SKU_NOT_CURRENT_SERIES_SPECIFICATION_CODE,
+} from "../lib/enabled-item-parts";
+import {
+  planSnapshotBatch,
+  assertSnapshotBatchCanConfirm,
+  snapshotBatchEligibleModels,
+} from "../lib/snapshot-batch";
 import { createSeedState } from "../lib/seed";
 import { hydrateV3Seed } from "../lib/v3-seed";
 
@@ -68,4 +75,74 @@ test("SnapshotBatch 输入排序稳定且全跳过时拒绝确认", () => {
   });
   assert.equal(left.inputHash, right.inputHash);
   assert.throws(() => assertSnapshotBatchCanConfirm(left), /没有可复用或可创建/);
+});
+
+test("SnapshotBatch 与导出候选拒绝 DEPRECATED 或非当前规格 SKU 的历史 Model", () => {
+  const state = hydrateV3Seed(createSeedState());
+  const published = state.purchasableModels.find(
+    (model) => model.configurationSnapshotId,
+  );
+  assert.ok(published);
+  const sku = state.skuDrawers.find((entry) => entry.id === published.skuId);
+  assert.ok(sku);
+  const series = state.seriesDefinitions.find(
+    (entry) => entry.id === sku.seriesId,
+  );
+  assert.ok(series);
+
+  const supersededSku = {
+    ...structuredClone(sku),
+    status: "superseded" as const,
+  };
+  const supersededPlan = planSnapshotBatch({
+    models: state.purchasableModels,
+    series: state.seriesDefinitions,
+    skus: state.skuDrawers.map((entry) =>
+      entry.id === supersededSku.id ? supersededSku : entry),
+    snapshots: state.configurationSnapshots,
+    selectedModelIds: [published.id],
+    now: "2026-07-21T00:00:00.000Z",
+  });
+  assert.equal(supersededPlan.items[0]?.decision, "skip");
+  assert.deepEqual(supersededPlan.items[0]?.reasons, [
+    SKU_NOT_CURRENT_SERIES_SPECIFICATION_CODE,
+  ]);
+
+  const seriesWithoutSku = {
+    ...structuredClone(series),
+    targetPullSpecifications: series.targetPullSpecifications.filter(
+      (entry) => entry.skuId !== sku.id,
+    ),
+  };
+  const nonCurrentPlan = planSnapshotBatch({
+    models: state.purchasableModels,
+    series: state.seriesDefinitions.map((entry) =>
+      entry.id === series.id ? seriesWithoutSku : entry),
+    skus: state.skuDrawers,
+    snapshots: state.configurationSnapshots,
+    selectedModelIds: [published.id],
+    now: "2026-07-21T00:00:00.000Z",
+  });
+  assert.equal(nonCurrentPlan.items[0]?.decision, "skip");
+  assert.deepEqual(nonCurrentPlan.items[0]?.reasons, [
+    SKU_NOT_CURRENT_SERIES_SPECIFICATION_CODE,
+  ]);
+  assert.equal(
+    snapshotBatchEligibleModels({
+      models: state.purchasableModels,
+      series: state.seriesDefinitions,
+      skus: state.skuDrawers.map((entry) =>
+        entry.id === supersededSku.id ? supersededSku : entry),
+    }).some((model) => model.id === published.id),
+    false,
+  );
+  assert.equal(
+    snapshotBatchEligibleModels({
+      models: state.purchasableModels,
+      series: state.seriesDefinitions.map((entry) =>
+        entry.id === series.id ? seriesWithoutSku : entry),
+      skus: state.skuDrawers,
+    }).some((model) => model.id === published.id),
+    false,
+  );
 });

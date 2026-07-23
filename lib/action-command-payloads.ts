@@ -4,6 +4,7 @@ import {
   buildActionLink,
   isStateChangingActionCode,
   type ActionCode,
+  type ActionCommandLeaseRef,
   type ActionCommandPayloadRef,
   type ActionLink,
   type CapabilityCode,
@@ -45,6 +46,7 @@ export class ActionCommandPayloadError extends Error {
       | "ACTION_COMMAND_MANIFEST_HASH_MISMATCH"
       | "ACTION_COMMAND_ACTOR_MISMATCH"
       | "ACTION_COMMAND_CAPABILITY_CHANGED"
+      | "ACTION_COMMAND_LEASE_REQUIRED"
       | "ACTION_COMMAND_FENCING_TOKEN_REQUIRED"
       | "STALE_FENCING_TOKEN"
       | "IDEMPOTENCY_KEY_REUSED",
@@ -124,6 +126,44 @@ function assertFencingToken(value: string | undefined, required: boolean) {
   }
 }
 
+function assertLeaseRef(
+  value: ActionCommandLeaseRef | undefined,
+  expected: { workspaceId: string; action: ActionCode },
+): asserts value is ActionCommandLeaseRef {
+  if (!value) {
+    throw new ActionCommandPayloadError(
+      "ACTION_COMMAND_LEASE_REQUIRED",
+      "该状态写动作必须绑定工作区租约。",
+    );
+  }
+  if (
+    typeof value.workspaceId !== "string"
+    || !value.workspaceId.trim()
+    || value.workspaceId !== value.workspaceId.trim()
+    || typeof value.leaseId !== "string"
+    || !value.leaseId.trim()
+    || value.leaseId !== value.leaseId.trim()
+    || value.workspaceId !== expected.workspaceId
+    || value.action !== expected.action
+  ) {
+    throw new ActionCommandPayloadError(
+      "ACTION_COMMAND_PAYLOAD_INVALID",
+      "工作区租约必须绑定同一 workspace、action 和稳定 leaseId。",
+    );
+  }
+  assertFencingToken(value.fencingToken, true);
+}
+
+function sameLeaseRef(
+  left: ActionCommandLeaseRef,
+  right: ActionCommandLeaseRef,
+): boolean {
+  return left.workspaceId === right.workspaceId
+    && left.leaseId === right.leaseId
+    && left.action === right.action
+    && left.fencingToken === right.fencingToken;
+}
+
 function parseExpiresAt(value: string | undefined): number | undefined {
   if (value === undefined) return undefined;
   const timestamp = Date.parse(value);
@@ -152,7 +192,7 @@ export interface ActionCommandPayloadRecord {
   expectedRevisionId: string;
   inputHash: string;
   manifestHash?: string;
-  fencingToken?: string;
+  leaseRef: ActionCommandLeaseRef;
   idempotencyKey: string;
   payload: JsonObject;
   commandHash: string;
@@ -170,8 +210,12 @@ export interface ActionCommandExecution<T> {
 export interface ActionCommandPayloadStore {
   /**
    * 生产实现必须把签发记录与执行结果持久化，并以唯一约束或事务保证
-   * idempotencyKey 与 payloadRefId 的原子性，并返回唯一约束选出的规范记录。
-   * 内存实现仅供单进程测试。
+   * idempotencyKey 与 payloadRefId 的原子性，并返回唯一约束选出的规范记录；
+   * 首次执行还必须在同一事务的实际业务写入点，从权威 WorkspaceActionLease
+   * 原子读取并匹配 record.leaseRef 的 workspaceId + action + leaseId +
+   * fencingToken。调用方不得把“当前 token”作为可信输入直接传进来。
+   * 已落库的成功结果可以直接重放，因为重放不产生新的状态写。
+   * 内存实现仅供单进程契约测试。
    */
   findByPayloadRefId(payloadRefId: string): Promise<ActionCommandPayloadRecord | undefined>;
   findIssuedByIdempotencyKey(input: {
@@ -191,6 +235,48 @@ export class InMemoryActionCommandPayloadStore implements ActionCommandPayloadSt
   private readonly issuedKeys = new Map<string, string>();
   private readonly executionResults = new Map<string, unknown>();
   private readonly pendingExecutions = new Map<string, Promise<unknown>>();
+  private readonly currentLeases = new Map<string, ActionCommandLeaseRef>();
+  private readonly activeLeaseWrites = new Map<string, number>();
+
+  constructor(currentLeases: Iterable<ActionCommandLeaseRef> = []) {
+    for (const leaseRef of currentLeases) this.setCurrentLease(leaseRef);
+  }
+
+  private leaseKey(input: Pick<ActionCommandLeaseRef, "workspaceId" | "action">) {
+    return actionCommandHash({
+      workspaceId: input.workspaceId,
+      action: input.action,
+    });
+  }
+
+  setCurrentLease(leaseRef: ActionCommandLeaseRef): void {
+    assertLeaseRef(leaseRef, leaseRef);
+    const key = this.leaseKey(leaseRef);
+    this.assertLeaseMutable(key);
+    this.currentLeases.set(key, structuredClone(leaseRef));
+  }
+
+  clearCurrentLease(input: Pick<ActionCommandLeaseRef, "workspaceId" | "action">): void {
+    const key = this.leaseKey(input);
+    this.assertLeaseMutable(key);
+    this.currentLeases.delete(key);
+  }
+
+  private assertLeaseMutable(key: string): void {
+    if ((this.activeLeaseWrites.get(key) ?? 0) > 0) {
+      throw new Error("权威租约正被状态写事务锁定，请在事务完成后重试租约变更。");
+    }
+  }
+
+  private beginLeaseWrite(key: string): void {
+    this.activeLeaseWrites.set(key, (this.activeLeaseWrites.get(key) ?? 0) + 1);
+  }
+
+  private endLeaseWrite(key: string): void {
+    const remaining = (this.activeLeaseWrites.get(key) ?? 1) - 1;
+    if (remaining > 0) this.activeLeaseWrites.set(key, remaining);
+    else this.activeLeaseWrites.delete(key);
+  }
 
   private issuedKey(input: { actorId: string; action: ActionCode; idempotencyKey: string }) {
     return actionCommandHash({
@@ -254,7 +340,16 @@ export class InMemoryActionCommandPayloadStore implements ActionCommandPayloadSt
         replayed: true,
       };
     }
-    const execution = input.execute();
+    const leaseKey = this.leaseKey(input.record.leaseRef);
+    const currentLease = this.currentLeases.get(leaseKey);
+    if (!currentLease || !sameLeaseRef(input.record.leaseRef, currentLease)) {
+      throw new ActionCommandPayloadError(
+        "STALE_FENCING_TOKEN",
+        "工作区租约或 fencing token 已过期，不能执行新的状态写。",
+      );
+    }
+    this.beginLeaseWrite(leaseKey);
+    const execution = (async () => input.execute())();
     this.pendingExecutions.set(key, execution);
     try {
       const result = await execution;
@@ -262,6 +357,7 @@ export class InMemoryActionCommandPayloadStore implements ActionCommandPayloadSt
       return { result: structuredClone(result), replayed: false };
     } finally {
       this.pendingExecutions.delete(key);
+      this.endLeaseWrite(leaseKey);
     }
   }
 }
@@ -274,7 +370,7 @@ function commandHashInput(input: {
   expectedRevisionId: string;
   inputHash: string;
   manifestHash?: string;
-  fencingToken?: string;
+  leaseRef: ActionCommandLeaseRef;
   idempotencyKey: string;
   payload: JsonObject;
   issuedForActorId: string;
@@ -288,7 +384,7 @@ function commandHashInput(input: {
     expectedRevisionId: input.expectedRevisionId,
     inputHash: input.inputHash,
     manifestHash: input.manifestHash ?? null,
-    fencingToken: input.fencingToken ?? null,
+    leaseRef: input.leaseRef,
     idempotencyKey: input.idempotencyKey,
     payload: input.payload,
     issuedForActorId: input.issuedForActorId,
@@ -317,6 +413,17 @@ function assertRecordIntegrity(record: ActionCommandPayloadRecord) {
       "命令载荷 schemaVersion 未知或已被改写。",
     );
   }
+  try {
+    assertLeaseRef(record.leaseRef, {
+      workspaceId: record.subjectRef.workspaceId,
+      action: record.action,
+    });
+  } catch {
+    throw new ActionCommandPayloadError(
+      "ACTION_COMMAND_PAYLOAD_TAMPERED",
+      "命令载荷的工作区租约身份缺失或已被改写。",
+    );
+  }
   const expectedCommandHash = actionCommandHash(commandHashInput({
     schemaVersion: record.schemaVersion,
     actionId: record.actionId,
@@ -325,7 +432,7 @@ function assertRecordIntegrity(record: ActionCommandPayloadRecord) {
     expectedRevisionId: record.expectedRevisionId,
     inputHash: record.inputHash,
     manifestHash: record.manifestHash,
-    fencingToken: record.fencingToken,
+    leaseRef: record.leaseRef,
     idempotencyKey: record.idempotencyKey,
     payload: record.payload,
     issuedForActorId: record.issuedForActorId,
@@ -358,7 +465,7 @@ function toPayloadRef(record: ActionCommandPayloadRecord): ActionCommandPayloadR
     payloadHash: record.payloadHash,
     idempotencyKey: record.idempotencyKey,
     ...(record.manifestHash ? { manifestHash: record.manifestHash } : {}),
-    ...(record.fencingToken ? { fencingToken: record.fencingToken } : {}),
+    leaseRef: structuredClone(record.leaseRef),
     ...(record.expiresAt ? { expiresAt: record.expiresAt } : {}),
   };
 }
@@ -371,7 +478,7 @@ export async function issueActionCommandPayload(input: {
   expectedRevisionId: string;
   inputHash: string;
   manifestHash?: string;
-  fencingToken?: string;
+  leaseRef?: ActionCommandLeaseRef;
   idempotencyKey: string;
   payload: JsonObject;
   actorId: string;
@@ -414,9 +521,12 @@ export async function issueActionCommandPayload(input: {
     }
   }
   if (input.manifestHash) assertSha256(input.manifestHash, "manifestHash");
-  // v3 §20.2.7 要求所有服务端共享状态写在实际写入点使用单调 token；
-  // 状态写注册表是唯一权威，不能再维护容易漏项的 fencing allowlist。
-  assertFencingToken(input.fencingToken, true);
+  // v3 §20.2.7 要求所有服务端共享状态写绑定完整租约身份；实际写入点
+  // 由 store 从权威 WorkspaceActionLease 原子重验，不能信任调用方自报当前值。
+  assertLeaseRef(input.leaseRef, {
+    workspaceId: input.subjectRef.workspaceId,
+    action: input.action,
+  });
   const now = input.now ?? new Date();
   const expiresAt = parseExpiresAt(input.expiresAt);
   if (expiresAt !== undefined && expiresAt <= now.getTime()) {
@@ -434,7 +544,7 @@ export async function issueActionCommandPayload(input: {
     expectedRevisionId: input.expectedRevisionId,
     inputHash: input.inputHash,
     manifestHash: input.manifestHash,
-    fencingToken: input.fencingToken,
+    leaseRef: input.leaseRef,
     idempotencyKey: input.idempotencyKey,
     payload,
     issuedForActorId: input.actorId,
@@ -478,7 +588,7 @@ export async function issueActionCommandPayload(input: {
     issuedForActorId: input.actorId,
     issuedAt,
     ...(input.manifestHash ? { manifestHash: input.manifestHash } : {}),
-    ...(input.fencingToken ? { fencingToken: input.fencingToken } : {}),
+    leaseRef: structuredClone(input.leaseRef),
     ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
   };
   const saved = await input.store.saveIssued(record);
@@ -529,7 +639,6 @@ export async function executeActionCommandPayload<T>(input: {
   currentSubjectRef: EntityRef;
   currentInputHash: string;
   currentManifestHash?: string;
-  currentFencingToken?: string;
   now?: Date;
   execute: (record: Readonly<ActionCommandPayloadRecord>) => Promise<T>;
 }): Promise<ActionCommandExecution<T>> {
@@ -608,12 +717,6 @@ export async function executeActionCommandPayload<T>(input: {
           "Manifest 已变化，请重新获取动作。",
         );
       }
-      if (!record.fencingToken || record.fencingToken !== input.currentFencingToken) {
-        throw new ActionCommandPayloadError(
-          "STALE_FENCING_TOKEN",
-          "fencing token 已过期或不再是当前值。",
-        );
-      }
       return input.execute(Object.freeze(structuredClone(record)));
     },
   });
@@ -651,7 +754,7 @@ export interface TrustedLegacyActionEvidence {
   expectedRevisionId?: string;
   inputHash?: string;
   manifestHash?: string;
-  fencingToken?: string;
+  leaseRef?: ActionCommandLeaseRef;
   idempotencyKey?: string;
   payload?: JsonObject;
 }
@@ -801,7 +904,10 @@ export async function migrateLegacyActionRecord(input: {
       return unresolvable(record);
     }
     if (evidence.manifestHash) assertSha256(evidence.manifestHash, "manifestHash");
-    assertFencingToken(evidence.fencingToken, true);
+    assertLeaseRef(evidence.leaseRef, {
+      workspaceId: evidence.subjectRef.workspaceId,
+      action: targetAction,
+    });
     normalizeJson(evidence.payload);
 
     const availability = actionAvailability(targetAction, input.capabilities);
@@ -826,7 +932,7 @@ export async function migrateLegacyActionRecord(input: {
       expectedRevisionId: evidence.expectedRevisionId,
       inputHash: evidence.inputHash,
       manifestHash: evidence.manifestHash,
-      fencingToken: evidence.fencingToken,
+      leaseRef: evidence.leaseRef,
       idempotencyKey: evidence.idempotencyKey,
       payload: evidence.payload,
       actorId: input.actorId,

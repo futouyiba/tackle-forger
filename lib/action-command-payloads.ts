@@ -21,31 +21,6 @@ const SHA256_HEX = /^[a-f0-9]{64}$/;
 const FENCING_TOKEN = /^[1-9][0-9]*$/;
 const MAX_FENCING_TOKEN = BigInt("9223372036854775807");
 
-/**
- * 这些动作必须绑定工作区或配置目标治理租约签发的单调 fencing token。
- * 策略发布只复验 Manifest，不在这里错误地扩大到治理租约范围。
- */
-export const FENCED_ACTION_CODES = [
-  "publish",
-  "write_patch_mirror",
-  "pull_patch_mirror",
-  "repair_patch_mirror",
-  "rebuild_patch_mirror_from_local",
-  "fix_patch_mirror_schema",
-  "migrate_patch_subject",
-  "confirm_feishu_write",
-  "pull_feishu_source",
-  "pull_feishu_workbook",
-  "publish_ruleset",
-  "write_feishu_identity",
-  "publish_data_source",
-  "commit_data_source_writeback",
-  "reserve_config_id_bundle",
-  "import_legacy_config_id",
-  "commit_config_export",
-  "publish_five_axis_definition",
-] as const satisfies readonly ActionCode[];
-
 export const MANIFEST_BOUND_ACTION_CODES = [
   "reserve_config_id_bundle",
   "publish_config_id_policy",
@@ -53,7 +28,6 @@ export const MANIFEST_BOUND_ACTION_CODES = [
   "commit_config_export",
 ] as const satisfies readonly ActionCode[];
 
-const FENCED_ACTION_SET = new Set<ActionCode>(FENCED_ACTION_CODES);
 const MANIFEST_BOUND_ACTION_SET = new Set<ActionCode>(MANIFEST_BOUND_ACTION_CODES);
 
 export class ActionCommandPayloadError extends Error {
@@ -148,6 +122,18 @@ function assertFencingToken(value: string | undefined, required: boolean) {
       "fencing token 必须是无前导零的正数 BIGINT 十进制字符串。",
     );
   }
+}
+
+function parseExpiresAt(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) {
+    throw new ActionCommandPayloadError(
+      "ACTION_COMMAND_PAYLOAD_INVALID",
+      "expiresAt 必须是可解析的有限时间值。",
+    );
+  }
+  return timestamp;
 }
 
 function sameRef(left: EntityRef, right: EntityRef): boolean {
@@ -428,9 +414,12 @@ export async function issueActionCommandPayload(input: {
     }
   }
   if (input.manifestHash) assertSha256(input.manifestHash, "manifestHash");
-  assertFencingToken(input.fencingToken, FENCED_ACTION_SET.has(input.action));
+  // v3 §20.2.7 要求所有服务端共享状态写在实际写入点使用单调 token；
+  // 状态写注册表是唯一权威，不能再维护容易漏项的 fencing allowlist。
+  assertFencingToken(input.fencingToken, true);
   const now = input.now ?? new Date();
-  if (input.expiresAt && Date.parse(input.expiresAt) <= now.getTime()) {
+  const expiresAt = parseExpiresAt(input.expiresAt);
+  if (expiresAt !== undefined && expiresAt <= now.getTime()) {
     throw new ActionCommandPayloadError(
       "ACTION_COMMAND_PAYLOAD_INVALID",
       "不能签发已经过期的命令载荷。",
@@ -565,10 +554,13 @@ export async function executeActionCommandPayload<T>(input: {
       "命令载荷不属于当前操作者。",
     );
   }
+  // 结构非法的时间值必须在进入 executeOnce 前拒绝；已成功命令的正常过期
+  // 仍由 executeOnce 内部判断，以保留响应丢失后的幂等结果恢复。
+  const expiresAt = parseExpiresAt(record.expiresAt);
   return input.store.executeOnce({
     record,
     execute: async () => {
-      if (record.expiresAt && Date.parse(record.expiresAt) <= (input.now ?? new Date()).getTime()) {
+      if (expiresAt !== undefined && expiresAt <= (input.now ?? new Date()).getTime()) {
         throw new ActionCommandPayloadError(
           "ACTION_COMMAND_PAYLOAD_EXPIRED",
           "命令载荷已经过期，请重新获取动作。",
@@ -616,10 +608,7 @@ export async function executeActionCommandPayload<T>(input: {
           "Manifest 已变化，请重新获取动作。",
         );
       }
-      if (
-        FENCED_ACTION_SET.has(record.action)
-        && (!record.fencingToken || record.fencingToken !== input.currentFencingToken)
-      ) {
+      if (!record.fencingToken || record.fencingToken !== input.currentFencingToken) {
         throw new ActionCommandPayloadError(
           "STALE_FENCING_TOKEN",
           "fencing token 已过期或不再是当前值。",
@@ -703,6 +692,21 @@ function nonEmptyString(value: JsonValue | undefined): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function hasCompleteRuleTargetRef(
+  value: JsonValue | undefined,
+  sourceRevision: JsonValue | undefined,
+): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const target = value as JsonObject;
+  return nonEmptyString(target.spreadsheetToken)
+    && nonEmptyString(target.sheetId)
+    && nonEmptyString(target.stableRuleId)
+    && nonEmptyString(target.parameterKey)
+    && nonEmptyString(target.sourceRevision)
+    && nonEmptyString(sourceRevision)
+    && target.sourceRevision === sourceRevision;
+}
+
 function hasTypedLegacyPayload(action: ActionCode, payload: JsonObject): boolean {
   if (action === "acknowledge_validation_warning") {
     return nonEmptyString(payload.issueFingerprint)
@@ -727,13 +731,7 @@ function hasTypedLegacyPayload(action: ActionCode, payload: JsonObject): boolean
     return nonEmptyString(payload.ruleVersionId);
   }
   if (action === "create_rule_source_change_draft") {
-    return (
-      nonEmptyString(payload.targetRuleRef)
-      || (payload.targetRuleRef !== null
-        && typeof payload.targetRuleRef === "object"
-        && !Array.isArray(payload.targetRuleRef))
-    )
-      && nonEmptyString(payload.sourceRevision)
+    return hasCompleteRuleTargetRef(payload.targetRuleRef, payload.sourceRevision)
       && nonEmptyString(payload.evidenceHash)
       && SHA256_HEX.test(payload.evidenceHash);
   }
@@ -803,7 +801,7 @@ export async function migrateLegacyActionRecord(input: {
       return unresolvable(record);
     }
     if (evidence.manifestHash) assertSha256(evidence.manifestHash, "manifestHash");
-    assertFencingToken(evidence.fencingToken, FENCED_ACTION_SET.has(targetAction));
+    assertFencingToken(evidence.fencingToken, true);
     normalizeJson(evidence.payload);
 
     const availability = actionAvailability(targetAction, input.capabilities);

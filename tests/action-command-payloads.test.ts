@@ -18,6 +18,7 @@ import {
   buildActionLink,
   buildActionAvailabilityMap,
   isStateChangingActionCode,
+  requiredCapabilitiesForAction,
   type EntityRef,
 } from "../lib/interaction-contracts";
 import { createSeedState } from "../lib/seed";
@@ -46,6 +47,7 @@ async function issueCreatePatch(
     subjectRef,
     expectedRevisionId: subjectRef.revisionId,
     inputHash,
+    fencingToken: "41",
     idempotencyKey: "create-patch:1",
     payload: {
       patchId: "patch:1",
@@ -68,6 +70,76 @@ test("统一 ActionCode 注册表移除 open_rebase，并把现行 Rebase 写命
     buildActionAvailabilityMap(["patch.rebase"]).rebase_patch.requiredCapabilities,
     ["patch.rebase"],
   );
+});
+
+test("所有状态写 ActionCode 都必须绑定 fencing token，并在实际执行前重验最新值", async () => {
+  for (const action of ACTION_CODES.filter(isStateChangingActionCode)) {
+    await assert.rejects(
+      issueActionCommandPayload({
+        store: new InMemoryActionCommandPayloadStore(),
+        actionId: `action:fencing-required:${action}`,
+        action,
+        subjectRef,
+        expectedRevisionId: subjectRef.revisionId,
+        inputHash,
+        manifestHash,
+        idempotencyKey: `fencing-required:${action}`,
+        payload: {},
+        actorId: "feishu:tenant:user-1",
+        capabilities: requiredCapabilitiesForAction(action),
+      }),
+      errorCode("ACTION_COMMAND_FENCING_TOKEN_REQUIRED"),
+      `${action} 不得绕过工作区 fencing token`,
+    );
+  }
+
+  const store = new InMemoryActionCommandPayloadStore();
+  const payloadRef = await issueCreatePatch(store);
+  let writes = 0;
+  await assert.rejects(
+    executeActionCommandPayload({
+      store,
+      invocation: {
+        actionId: "issue-action:create-patch",
+        payloadRefId: payloadRef.payloadRefId,
+      },
+      actorId: "feishu:tenant:user-1",
+      capabilities: ["model.patch.create"],
+      currentSubjectRef: subjectRef,
+      currentInputHash: inputHash,
+      currentFencingToken: "42",
+      execute: async () => {
+        writes += 1;
+        return { resultingPatchRevision: 8 };
+      },
+    }),
+    errorCode("STALE_FENCING_TOKEN"),
+  );
+  assert.equal(writes, 0);
+
+  assert.deepEqual(
+    await executeActionCommandPayload({
+      store,
+      invocation: {
+        actionId: "issue-action:create-patch",
+        payloadRefId: payloadRef.payloadRefId,
+      },
+      actorId: "feishu:tenant:user-1",
+      capabilities: ["model.patch.create"],
+      currentSubjectRef: subjectRef,
+      currentInputHash: inputHash,
+      currentFencingToken: "41",
+      execute: async () => {
+        writes += 1;
+        return { resultingPatchRevision: 8 };
+      },
+    }),
+    {
+      result: { resultingPatchRevision: 8 },
+      replayed: false,
+    },
+  );
+  assert.equal(writes, 1);
 });
 
 test("状态写 ActionLink 必须携带匹配的服务端命令载荷；禁用动作与导航不得携带载荷", async () => {
@@ -171,6 +243,7 @@ test("执行时重新鉴权并重验 subject、revision 与 input hash", async (
     capabilities: ["model.patch.create"] as const,
     currentSubjectRef: subjectRef,
     currentInputHash: inputHash,
+    currentFencingToken: "41",
     execute: async (record) => ({
       patchId: record.subjectRef.entityId,
       appliedInputHash: record.inputHash,
@@ -244,6 +317,7 @@ test("响应丢失后使用同一引用重试只恢复原结果，不重复执�
     capabilities: ["model.patch.create"],
     currentSubjectRef: subjectRef,
     currentInputHash: inputHash,
+    currentFencingToken: "41",
     execute: async () => {
       executions += 1;
       return { resultingPatchRevision: 8 };
@@ -335,6 +409,7 @@ test("payloadHash 绑定 payloadRefId 与 schemaVersion，复制记录不能获�
       capabilities: ["model.patch.create"],
       currentSubjectRef: subjectRef,
       currentInputHash: inputHash,
+      currentFencingToken: "41",
       execute: async () => {
         executions += 1;
         return { resultingPatchRevision: 8 };
@@ -488,6 +563,82 @@ test("过期载荷与幂等键复用不同输入均被拒绝", async () => {
   );
 });
 
+test("非法 expiresAt 在签发和执行边界都 fail-closed", async () => {
+  const store = new InMemoryActionCommandPayloadStore();
+  await assert.rejects(
+    issueCreatePatch(store, {
+      expiresAt: "not-a-date",
+    }),
+    errorCode("ACTION_COMMAND_PAYLOAD_INVALID"),
+  );
+
+  const validRef = await issueCreatePatch(store, {
+    idempotencyKey: "create-patch:invalid-stored-expiry",
+    expiresAt: "2030-01-01T00:00:00.000Z",
+  });
+  const validRecord = await store.findByPayloadRefId(validRef.payloadRefId);
+  assert.ok(validRecord);
+  const expiresAt = "still-not-a-date";
+  const commandHash = actionCommandHash({
+    schemaVersion: validRecord.schemaVersion,
+    actionId: validRecord.actionId,
+    action: validRecord.action,
+    subjectRef: validRecord.subjectRef,
+    expectedRevisionId: validRecord.expectedRevisionId,
+    inputHash: validRecord.inputHash,
+    manifestHash: validRecord.manifestHash ?? null,
+    fencingToken: validRecord.fencingToken ?? null,
+    idempotencyKey: validRecord.idempotencyKey,
+    payload: validRecord.payload,
+    issuedForActorId: validRecord.issuedForActorId,
+    expiresAt,
+  });
+  const invalidStoredRecord: ActionCommandPayloadRecord = {
+    ...validRecord,
+    expiresAt,
+    commandHash,
+    payloadHash: actionCommandHash({
+      schemaVersion: validRecord.schemaVersion,
+      payloadRefId: validRecord.payloadRefId,
+      commandHash,
+      issuedAt: validRecord.issuedAt,
+    }),
+  };
+  let executeOnceCalls = 0;
+  const invalidStoredRecordStore: ActionCommandPayloadStore = {
+    findByPayloadRefId: async () => structuredClone(invalidStoredRecord),
+    findIssuedByIdempotencyKey: (input) => store.findIssuedByIdempotencyKey(input),
+    saveIssued: (record) => store.saveIssued(record),
+    executeOnce: (input) => {
+      executeOnceCalls += 1;
+      return store.executeOnce(input);
+    },
+  };
+  let writes = 0;
+  await assert.rejects(
+    executeActionCommandPayload({
+      store: invalidStoredRecordStore,
+      invocation: {
+        actionId: invalidStoredRecord.actionId,
+        payloadRefId: invalidStoredRecord.payloadRefId,
+      },
+      actorId: invalidStoredRecord.issuedForActorId,
+      capabilities: ["model.patch.create"],
+      currentSubjectRef: subjectRef,
+      currentInputHash: inputHash,
+      currentFencingToken: "41",
+      now: new Date("2029-01-01T00:00:00.000Z"),
+      execute: async () => {
+        writes += 1;
+        return { impossible: true };
+      },
+    }),
+    errorCode("ACTION_COMMAND_PAYLOAD_INVALID"),
+  );
+  assert.equal(executeOnceCalls, 0);
+  assert.equal(writes, 0);
+});
+
 test("旧状态写别名只有可信历史可完整重建时迁移，否则统一禁用", async () => {
   const store = new InMemoryActionCommandPayloadStore();
   const complete = await migrateLegacyActionRecord({
@@ -501,6 +652,7 @@ test("旧状态写别名只有可信历史可完整重建时迁移，否则统�
         subjectRef,
         expectedRevisionId: subjectRef.revisionId,
         inputHash,
+        fencingToken: "41",
         idempotencyKey: "legacy-waiver:1",
         payload: {
           issueFingerprint: "fingerprint:1",
@@ -531,6 +683,7 @@ test("旧状态写别名只有可信历史可完整重建时迁移，否则统�
         subjectRef,
         expectedRevisionId: subjectRef.revisionId,
         inputHash,
+        fencingToken: "41",
         idempotencyKey: "legacy-waiver:disabled",
         payload: {
           issueFingerprint: "fingerprint:2",
@@ -653,6 +806,77 @@ test("旧状态写别名只有可信历史可完整重建时迁移，否则统�
     legacyAction: "retry",
     enabled: false,
   });
+
+  const incompleteRuleTarget = await migrateLegacyActionRecord({
+    record: {
+      actionId: "legacy:rule-source-empty-target",
+      action: "create_rule_source_change",
+      label: "创建规则源变更草稿",
+      evidence: {
+        source: "server_command_record",
+        executionKind: "state_write",
+        subjectRef,
+        expectedRevisionId: subjectRef.revisionId,
+        inputHash,
+        fencingToken: "42",
+        idempotencyKey: "legacy:rule-source-empty-target",
+        payload: {
+          targetRuleRef: {},
+          sourceRevision: "revision:3259",
+          evidenceHash: actionCommandHash({ source: "legacy:rule-source-empty-target" }),
+        },
+      },
+    },
+    store,
+    actorId: "feishu:tenant:user-1",
+    capabilities: ["rules.source_change_draft.create"],
+  });
+  assert.deepEqual(incompleteRuleTarget, {
+    status: "UNRESOLVABLE",
+    code: LEGACY_ACTION_ALIAS_UNRESOLVABLE,
+    actionId: "legacy:rule-source-empty-target",
+    legacyAction: "create_rule_source_change",
+    enabled: false,
+  });
+
+  const completeRuleTarget = await migrateLegacyActionRecord({
+    record: {
+      actionId: "legacy:rule-source-complete-target",
+      action: "create_rule_source_change",
+      label: "创建规则源变更草稿",
+      evidence: {
+        source: "server_command_record",
+        executionKind: "state_write",
+        subjectRef,
+        expectedRevisionId: subjectRef.revisionId,
+        inputHash,
+        fencingToken: "42",
+        idempotencyKey: "legacy:rule-source-complete-target",
+        payload: {
+          targetRuleRef: {
+            spreadsheetToken: "spreadsheet:rules",
+            sheetId: "sheet:rules",
+            stableRuleId: "rule:drag",
+            parameterKey: "drag",
+            sourceRevision: "revision:3259",
+          },
+          sourceRevision: "revision:3259",
+          evidenceHash: actionCommandHash({ source: "legacy:rule-source-complete-target" }),
+        },
+      },
+    },
+    store,
+    actorId: "feishu:tenant:user-1",
+    capabilities: ["rules.source_change_draft.create"],
+  });
+  assert.equal(completeRuleTarget.status, "MIGRATED");
+  if (completeRuleTarget.status === "MIGRATED") {
+    assert.equal(completeRuleTarget.targetAction, "create_rule_source_change_draft");
+    assert.equal(
+      completeRuleTarget.actionLink.commandPayloadRef?.fencingToken,
+      "42",
+    );
+  }
 });
 
 test("旧动作迁移不会把持久化故障伪装成历史不可解析", async () => {
@@ -677,6 +901,7 @@ test("旧动作迁移不会把持久化故障伪装成历史不可解析", async
           subjectRef,
           expectedRevisionId: subjectRef.revisionId,
           inputHash,
+          fencingToken: "41",
           idempotencyKey: "legacy:persistence-failure",
           payload: {
             issueFingerprint: "fingerprint:persistence-failure",

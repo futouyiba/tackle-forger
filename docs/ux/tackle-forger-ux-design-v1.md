@@ -12,9 +12,9 @@
 
 Tackle Forger 应从“实体表格集合”重组为一条可解释、可局部修订、可冻结发布的配置生产链：
 
-重量基础模板 → 钓法规则 → 类型规则 → 功能定位 → 最近结构标杆匹配 → functionIntensity → 可选性能定位、材料、Patch与词条结算 → Series → SKU 抽屉 → Model → ConfigurationSnapshot。
+重量基础模板 → 钓法规则 → 类型规则 → 功能定位 → 最近结构标杆匹配 → functionIntensity → 材料、Patch与词条/Technology结算 → Series → SKU 抽屉 → Model → PerformanceSummary只读派生 → ConfigurationSnapshot。
 
-性能定位是商品层后置贡献，不进入结构标杆维度，也不参与最近模板搜索。
+性能定位是配置完成后根据Technology、词条与最终属性统计得到的只读结果，例如“抛投+、重量-、竿度+”。它不是配置输入、独立属性贡献层或价值分乘数，不进入候选搜索、结构标杆、兼容、Affinity或定价。
 
 第一阶段的核心设计结论：
 
@@ -25,7 +25,7 @@ Tackle Forger 应从“实体表格集合”重组为一条可解释、可局部
 5. 硬兼容与 Affinity 是两套界面语义：前者决定能否生成或发布，后者只做软适配、排序与解释。
 6. 发布页不是确认弹窗，而是完整证据包：版本、公式、Patch 链、兼容、系列不变量、差异、确认项和冻结结果。
 7. 上游变化只产生 UpgradeCandidate；历史 Snapshot 永远保持只读、可复现、不可被静默替换。
-8. 性能强度、Patch 阈值及降低型公式保持配置化或待确认；扩展部位已确认当前完全延期，UX 不提供钩、漂、真饵或拟饵入口、“未启用”占位或启用开关。
+8. 降低型公式保持配置化；Patch按已决的最终范围与整体复核策略执行，不再引入独立偏移阈值；性能摘要只消费版本化统计定义，不在UX中恢复为可编辑输入；扩展部位已确认当前完全延期，UX不提供钩、漂、真饵或拟饵入口、“未启用”占位或启用开关。
 
 ---
 
@@ -235,7 +235,7 @@ Tackle Forger 应从“实体表格集合”重组为一条可解释、可局部
    - 审计记录
    - 参数与工作区设置
 
-不为 Method、Type、Function、Performance 分别创建孤立一级页面；它们在规则实验室中按独立规则层维护。
+不为Method、Type、Function分别创建孤立一级页面；它们在规则实验室中按独立规则层维护。`PerformanceSummaryDefinition`只维护派生摘要的统计与展示定义，不提供Performance配置层或商品输入页。
 
 ### 3.2 全局对象上下文
 
@@ -256,12 +256,10 @@ flowchart LR
     RS --> M["MethodProfile"]
     RS --> T["TypeProfile"]
     RS --> F["FunctionProfile + functionIntensity"]
-    RS --> P["PerformanceProfile（可选）"]
     WT --> DP["DerivedProjection（只读）"]
     M --> DP
     T --> DP
     F --> DP
-    P --> DP
     DP --> PM["ProjectionMatch（不插值）"]
     C["Collection"] --> S["Series"]
     S --> SKU["SKU Drawer（离散重量）"]
@@ -270,6 +268,7 @@ flowchart LR
     AX["Affix"] --> TECH["Technology（组合包）"]
     AX --> MD
     TECH --> MD
+    MD --> PS["PerformanceSummary（只读派生）"]
     SP["Series Patch"] --> MD
     KP["SKU Patch"] --> MD
     MP["Model Patch"] --> MD
@@ -340,7 +339,7 @@ flowchart LR
 
 - 入口：系列设计器 / 新建 Series。
 - 用户目标：建立共享概念、类型、品质、核心功能与词条/技术身份。
-- 主路径：先选择Quality → 选择Collection并填写概念 → 固定Method、Type、Function、Performance → 定义必需/可选/禁用词条家族而非具体词条 → 设方向签名和拉力曲线 → 预览校验 → 保存。
+- 主路径：先选择Quality → 选择Collection并填写概念 → 固定Method、Type、Function → 定义必需/可选/禁用词条家族而非具体词条 → 设方向签名和拉力曲线 → 预览校验 → 保存。性能摘要在词条、Technology和最终属性结算后只读派生，不在此处选择。
 - 关键决策：固定强度还是 weight_curve；偏移等级如何映射到可配置阈值。
 - 错误与恢复：缺失硬不变量或规则冲突时指出来源；支持返回规则实验室、修改 Series 或保存未完成草稿。
 - 成功反馈：生成 SeriesSignature 与“6/6 不变量通过”摘要。
@@ -443,7 +442,7 @@ flowchart LR
 | --- | --- | --- | --- |
 | 今日工作 | 汇总阻断、待复核、rebase、待发布、升级候选 | 跨对象任务 | 直接编辑复杂规则 |
 | 全局对象搜索 | 搜索并跳转任意对象、版本、规则、参数 | 全部 | 替代工作区导航 |
-| 规则实验室 | 建立/导入模板，编辑规则层，试算与发布 RuleSetVersion | Template、Method、Type、Function、Performance | Series 商品身份 |
+| 规则实验室 | 建立/导入模板，编辑规则层，试算与发布 RuleSetVersion | Template、Method、Type、Function、PerformanceSummaryDefinition | Series 商品身份；把Performance恢复为配置输入 |
 | 派生模板浏览器 | 输入重量、查看最近匹配、备选与完整来源 | DerivedProjection、ProjectionMatch | 直接修改派生缓存 |
 | 兼容矩阵 | 编辑硬规则与 Affinity 轴，测试组合 | CompatibilityRule、AffinityRule | 用总分覆盖 deny |
 | 系列设计器 | 定义 Series 身份、不变量、方向签名、重量 SKU 轨道 | Collection、Series、SKU | 候选搜索配方 |
@@ -497,13 +496,14 @@ flowchart LR
 2. 钓法贡献
 3. 类型贡献
 4. 功能定位贡献
-5. 性能定位贡献
-6. 词条/技术贡献
-7. Series Patch
-8. SKU Patch
-9. Model Patch
+5. 词条/技术贡献
+6. Series Patch
+7. SKU Patch
+8. Model Patch
 
 每一层必须包含：来源名称、规则/对象版本、before、operation、operand、after、优势/代价、状态、查看规则、在此层创建Patch或RuleSourceChangeDraft。
+
+性能定位单独显示为“派生性能摘要”，列出抛投+/重量-/竿度+等标签、定义版本、Technology/Affix/最终属性证据和inputHash；不得混入属性贡献层，也不得提供“在此层创建Patch”。
 
 ### 7.2 作用域选择器与影响预览
 
@@ -755,12 +755,10 @@ flowchart LR
 
 ### 10.1 必须保留为配置或待确认
 
-1. 性能定位强度的最终命名与曲线：UI 暂称“性能定位（可选）”；若显示强度，来自配置，不假定与 functionIntensity 同构。
-2. Patch 偏移 warning / error 阈值：设置页读取配置；原型只展示机制，不给出永久数值。
-3. 钩、漂、真饵、拟饵当前完全延期：产品界面不得展示注册表只读入口、“未启用”占位、创建或启用开关；历史Payload只由注册表、迁移和审计层保留。未来任一部位必须先建立独立产品设计Issue。
-4. 已发布 Snapshot 冻结语义：不得以“自动升级”“保持最新”等交互改变。
-5. 无法无损迁移的现有数据：必须保留原值、标记待审核，不能用 UX 流程掩盖删除或覆盖。
-6. 降低型词条公式：只展示全局`bidirectional_ratio`的`ReductionStackingPolicyVersion`、主工作簿规则来源和当前是否为非正式预览；不得提供参数、部位或词条族级公式选择器。主工作簿机器规则缺失时显示`REDUCTION_POLICY_SOURCE_MISSING`并禁用策略、Model、Snapshot发布和正式导出。
+1. 钩、漂、真饵、拟饵当前完全延期：产品界面不得展示注册表只读入口、“未启用”占位、创建或启用开关；历史Payload只由注册表、迁移和审计层保留。未来任一部位必须先建立独立产品设计Issue。
+2. 已发布 Snapshot 冻结语义：不得以“自动升级”“保持最新”等交互改变。
+3. 无法无损迁移的现有数据：必须保留原值、标记待审核，不能用 UX 流程掩盖删除或覆盖。
+4. 降低型词条公式：只展示全局`bidirectional_ratio`的`ReductionStackingPolicyVersion`、主工作簿规则来源和当前是否为非正式预览；不得提供参数、部位或词条族级公式选择器。主工作簿机器规则缺失时显示`REDUCTION_POLICY_SOURCE_MISSING`并禁用策略、Model、Snapshot发布和正式导出。
 
 ### 10.2 权限治理结论与剩余产品确认
 
@@ -1069,7 +1067,7 @@ UX 设计完成，无需再等待视觉方向或核心交互决策。开发 Agen
 1. 以 v3 为唯一权威领域规范。
 2. 使用本文第 13.6 节 Given / When / Then 作为逐页面验收基础。
 3. 先建立对象身份、TraceContribution、ValidationIssue、分层 Patch、ConfigurationSnapshot 和 UpgradeCandidate 契约，再实现高密度页面。
-4. 将未来Performance扩展、Patch阈值、五维轴配置和PricingPolicy保持为配置或待确认项；OPEN-001公式决策已经确认，界面只展示全局`bidirectional_ratio`策略版本、主工作簿来源和非正式预览/阻断状态，不提供公式模式配置。扩展部位按OPEN-003保持`DEFERRED_UI_DISABLED`，不在现有UX中预留产品入口。
+4. 五维轴配置继续版本化；OPEN-001公式决策已经确认，界面只展示全局`bidirectional_ratio`策略版本、主工作簿来源和非正式预览/阻断状态，不提供公式模式配置。Patch按OPEN-004已决策略实现，PricingPolicy按v3第20.1节已决契约实现。扩展部位按OPEN-003保持`DEFERRED_UI_DISABLED`，不在现有UX中预留产品入口。未来只允许扩展`PerformanceSummaryDefinition`的统计与展示，若要恢复可编辑Performance输入必须重新提出产品变更并修订v3。
 5. 不迁移或覆盖用户现有数据；不能无损迁移的记录必须保留原值并进入人工复核。
 6. 已发布 Snapshot 必须在后端保证不可变，不能只依赖前端只读样式。
 7. AI只能生成建议、Model Patch草稿或RuleSourceChangeDraft，不能成为规则裁决、飞书写回、拉取或发布执行者。

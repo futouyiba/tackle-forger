@@ -774,12 +774,19 @@ function pricingLayer(entry: PricingTraceEntry): CalculationTraceLayer {
   return "boundary";
 }
 
-export function adaptPricingTraceToCanonical(input: {
+interface AdaptPricingTraceInput {
   pricing: PricingTrialResult;
   subjectRef: EntityRef;
   ruleSetVersion: string;
   sequenceStart?: number;
-}): CalculationTraceEntry[] {
+}
+
+type PricingTraceAdapterVersion = "pricing_trace/v1" | "pricing_trace/v2";
+
+function adaptPricingTraceWithVersion(
+  input: AdaptPricingTraceInput,
+  adapter: PricingTraceAdapterVersion,
+): CalculationTraceEntry[] {
   const pricingTrace = [...input.pricing.trace]
     .sort((left, right) => left.sequence - right.sequence || left.formulaStep.localeCompare(right.formulaStep));
   if (input.pricing.formal && pricingTrace.length === 0) {
@@ -822,7 +829,9 @@ export function adaptPricingTraceToCanonical(input: {
       );
       return createCalculationTraceEntry({
         subjectRef: input.subjectRef,
-        parameterKey: "pricing:purchase_price",
+        parameterKey: adapter === "pricing_trace/v2"
+          ? "pricing:purchase_price"
+          : `pricing:${entry.formulaStep}:${entry.sequence}`,
         sequence: sequence++,
         layer: pricingLayer(entry),
         sourceRef: {
@@ -841,9 +850,15 @@ export function adaptPricingTraceToCanonical(input: {
           .map((issue) => `pricing-issue-${deterministicHash(issue)}`)
           .sort(),
         actions: [],
-        evidence: { adapter: "pricing_trace/v2", ...entry },
+        evidence: { adapter, ...entry },
       });
     });
+}
+
+export function adaptPricingTraceToCanonical(
+  input: AdaptPricingTraceInput,
+): CalculationTraceEntry[] {
+  return adaptPricingTraceWithVersion(input, "pricing_trace/v2");
 }
 
 export function assertCalculationTraceMatchesPricing(input: {
@@ -881,16 +896,19 @@ export function assertCalculationTraceMatchesPricing(input: {
   if (adapters.size !== 1) {
     throw new CalculationTraceReplayError("pricing Trace 混用了不同 adapter 版本。");
   }
-  const expected = adaptPricingTraceToCanonical({
-    pricing: input.pricing,
-    subjectRef: input.subjectRef,
-    ruleSetVersion: input.ruleSetVersion,
-    sequenceStart: pricingEntries[0].sequence,
-  });
-  if (adapters.has("pricing_trace/v1")) {
-    // v1 每步使用独立 parameterKey，无法证明步骤链；仅保持已发布历史归档可读。
-    return;
+  const adapter = [...adapters][0];
+  if (adapter !== "pricing_trace/v1" && adapter !== "pricing_trace/v2") {
+    throw new CalculationTraceReplayError("pricing Trace adapter 版本不受支持。");
   }
+  const expected = adaptPricingTraceWithVersion(
+    {
+      pricing: input.pricing,
+      subjectRef: input.subjectRef,
+      ruleSetVersion: input.ruleSetVersion,
+      sequenceStart: pricingEntries[0].sequence,
+    },
+    adapter,
+  );
   if (!sameValue(pricingEntries, expected)) {
     throw new CalculationTraceReplayError(
       "canonical pricing Trace 与冻结的 automaticPricing 不一致。",

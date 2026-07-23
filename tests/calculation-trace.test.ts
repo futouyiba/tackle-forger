@@ -8,11 +8,13 @@ import {
   CALCULATION_TRACE_ABSENT_VALUE,
   CalculationTraceReplayError,
   assertCalculationTraceMatchesFinalPanel,
+  assertCalculationTraceMatchesPricing,
   createCalculationTraceArchive,
   createCalculationTraceEntry,
   replayCalculationTrace,
   tryReplayCalculationTrace,
   verifyCalculationTraceArchive,
+  type CreateCalculationTraceEntryInput,
   type CalculationTraceEntry,
 } from "../lib/calculation-trace";
 import type { EntityRef } from "../lib/interaction-contracts";
@@ -514,6 +516,37 @@ test("pricing Trace 必须逐步连续且最终值等于 purchasePrice", () => {
     "pricing:purchase_price",
   ]);
   assert.equal(verifyCalculationTraceArchive(createCalculationTraceArchive(entries)), true);
+  const historicalV1Entries = entries.map((item, index) => {
+    const generatedKeys = new Set(["schemaVersion", "traceEntryId", "inputHash", "outputHash"]);
+    const entryInput = Object.fromEntries(
+      Object.entries(item).filter(([key]) => !generatedKeys.has(key)),
+    ) as unknown as CreateCalculationTraceEntryInput;
+    const sourceEntry = pricing.trace[index];
+    return createCalculationTraceEntry({
+      ...entryInput,
+      parameterKey: `pricing:${sourceEntry.formulaStep}:${sourceEntry.sequence}`,
+      evidence: { ...item.evidence, adapter: "pricing_trace/v1" },
+    });
+  });
+  assert.doesNotThrow(() => assertCalculationTraceMatchesPricing({
+    archive: createCalculationTraceArchive(historicalV1Entries),
+    subjectRef,
+    pricing,
+    ruleSetVersion: "rules:1",
+  }));
+  const versionDowngrade = structuredClone(entries);
+  for (const item of versionDowngrade) {
+    item.evidence!.adapter = "pricing_trace/v1";
+  }
+  assert.throws(
+    () => assertCalculationTraceMatchesPricing({
+      archive: createCalculationTraceArchive(versionDowngrade),
+      subjectRef,
+      pricing,
+      ruleSetVersion: "rules:1",
+    }),
+    /canonical pricing Trace 与冻结的 automaticPricing 不一致/,
+  );
   assert.throws(
     () => adaptPricingTraceToCanonical({
       pricing: {

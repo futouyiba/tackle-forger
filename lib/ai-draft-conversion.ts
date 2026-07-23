@@ -39,12 +39,15 @@ export type AIDraftConversionErrorCode =
   | "AI_DRAFT_COMMAND_INVALID"
   | "AI_DRAFT_EVIDENCE_INVALID"
   | "AI_DRAFT_IDEMPOTENCY_CONFLICT"
+  | "AI_DRAFT_PERMISSION_DENIED"
   | "AI_DRAFT_RECOMMENDATION_INVALID"
   | "AI_DRAFT_TARGET_FROZEN"
   | "AI_DRAFT_TARGET_REVISION_CHANGED"
   | "AI_PATCH_CONFLICT_REQUIRES_REBASE"
   | "AI_PATCH_HARD_VALIDATION_CONFLICT"
   | "AI_RULE_IMPACT_PREVIEW_INCOMPLETE"
+  | "AI_RULE_DRAFT_NOT_FOUND"
+  | "AI_RULE_DRAFT_STATE_INVALID"
   | "AI_RULE_SOURCE_REVISION_CHANGED"
   | "AI_RULE_TARGET_INVALID";
 
@@ -1191,4 +1194,48 @@ export function assertAIDraftArtifactProvenanceCompatible(
       "该评估已经绑定不同的采纳产物来源，不能创建第二个草稿。",
     );
   }
+}
+
+export function confirmAIRuleSourceChangeDraft(input: {
+  state: WorkspaceState;
+  changeDraftId: string;
+  actorStableId: string;
+  confirmedAt: string;
+  capabilities: Iterable<string>;
+}): WorkspaceState {
+  if (!new Set(input.capabilities).has("ai.rule_source_change_draft.create")) {
+    throw new AIDraftConversionError("AI_DRAFT_PERMISSION_DENIED", "缺少 AI 规则草稿复核权限。");
+  }
+  const draft = input.state.aiRuleSourceChangeDrafts.find((entry) =>
+    entry.changeDraftId === input.changeDraftId);
+  if (!draft) {
+    throw new AIDraftConversionError("AI_RULE_DRAFT_NOT_FOUND", "AI 规则草稿不存在。");
+  }
+  if (draft.state === "CONFIRMED") return input.state;
+  if (draft.state !== "LOCAL_DRAFT" && draft.state !== "IMPACT_PREVIEW_READY") {
+    throw new AIDraftConversionError("AI_RULE_DRAFT_STATE_INVALID", "当前状态不能执行人工确认。");
+  }
+  const latestSource = [...input.state.feishuSourceRevisions]
+    .filter((entry) => entry.spreadsheetToken === draft.targetRuleRef.spreadsheetToken)
+    .sort((left, right) =>
+      right.pulledAt.localeCompare(left.pulledAt) || right.id.localeCompare(left.id))[0];
+  if (!latestSource
+    || latestSource.sourceRevision !== draft.targetRuleRef.sourceRevision
+    || !latestSource.sheets.some((entry) => entry.sheetId === draft.targetRuleRef.sheetId)) {
+    throw new AIDraftConversionError(
+      "AI_RULE_SOURCE_REVISION_CHANGED",
+      "飞书规则源已变化；草稿必须先重新预览，不能确认旧 revision。",
+    );
+  }
+  const next = structuredClone(input.state);
+  const mutable = next.aiRuleSourceChangeDrafts.find((entry) =>
+    entry.changeDraftId === input.changeDraftId)!;
+  mutable.state = "CONFIRMED";
+  mutable.humanReview = {
+    confirmedBy: input.actorStableId,
+    confirmedAt: input.confirmedAt,
+    reviewedCommandHash: mutable.commandHash,
+    reviewedSourceRevision: mutable.targetRuleRef.sourceRevision,
+  };
+  return next;
 }

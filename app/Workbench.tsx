@@ -3173,7 +3173,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     if (page === "validation") return renderValidation();
     if (page === "versions") return renderVersions();
     if (page === "rulesource") return renderRuleSource();
-    if (page === "patchledger") return <PatchLedgerWorkbench state={state} capabilities={user.capabilities} actorName={user.name} mutate={mutate} notify={notify} />;
+    if (page === "patchledger") return <PatchLedgerWorkbench state={state} capabilities={user.capabilities} actorStableId={user.openId??user.email} actorName={user.name} mutate={mutate} notify={notify} />;
     return renderExchange();
   };
 

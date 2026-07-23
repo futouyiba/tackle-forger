@@ -1834,7 +1834,16 @@ export interface AIRuleSourceChangeDraft {
       unavailableModelIds: string[];
     };
   };
-  state: "LOCAL_DRAFT";
+  state: "LOCAL_DRAFT" | "IMPACT_PREVIEW_READY" | "NEEDS_REBASE"
+    | "CONFIRMED" | "WRITING" | "WRITE_VERIFIED" | "WRITE_FAILED"
+    | "REMOTE_CHANGES_AVAILABLE" | "PULLED" | "ABSORBED"
+    | "PARTIALLY_ABSORBED" | "SUPERSEDED";
+  humanReview?: {
+    confirmedBy: string;
+    confirmedAt: string;
+    reviewedCommandHash: string;
+    reviewedSourceRevision: string;
+  };
   idempotencyKey: string;
   commandHash: string;
   createdBy: string;

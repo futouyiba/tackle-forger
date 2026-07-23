@@ -6,6 +6,7 @@ import {
 import {
   applyAIDraftArtifactPlan,
   AIDraftConversionError,
+  confirmAIRuleSourceChangeDraft,
   planAIDraftConversion,
   type AIDraftConversionCommand,
 } from "../lib/ai-draft-conversion";
@@ -375,5 +376,47 @@ test("RuleSourceChangeDraft 使用全工作区沙盒影响预览并只保存 LOC
   assert.equal(
     applied.state.ruleSetVersions.filter((entry) => entry.status === "published").length,
     value.state.ruleSetVersions.filter((entry) => entry.status === "published").length,
+  );
+  const reloaded = structuredClone(applied.state);
+  const discoverable = reloaded.aiRuleSourceChangeDrafts.find((entry) =>
+    entry.changeDraftId === result.ruleDraft.changeDraftId);
+  assert.ok(discoverable, "persisted AI rule draft must remain discoverable after reload");
+  assert.equal(discoverable.state, "LOCAL_DRAFT");
+
+  const confirmed = confirmAIRuleSourceChangeDraft({
+    state: reloaded,
+    changeDraftId: discoverable.changeDraftId,
+    actorStableId,
+    confirmedAt: "2026-07-23T00:01:00.000Z",
+    capabilities: ["ai.rule_source_change_draft.create"],
+  });
+  const reviewed = confirmed.aiRuleSourceChangeDrafts.find((entry) =>
+    entry.changeDraftId === discoverable.changeDraftId)!;
+  assert.equal(reviewed.state, "CONFIRMED");
+  assert.deepEqual(reviewed.humanReview, {
+    confirmedBy: actorStableId,
+    confirmedAt: "2026-07-23T00:01:00.000Z",
+    reviewedCommandHash: reviewed.commandHash,
+    reviewedSourceRevision: "source-revision-1",
+  });
+  assert.equal(applied.state.aiRuleSourceChangeDrafts.at(-1)?.state, "LOCAL_DRAFT");
+
+  const changedSource = structuredClone(reloaded);
+  changedSource.feishuSourceRevisions.push({
+    ...structuredClone(changedSource.feishuSourceRevisions[0]!),
+    id: "feishu-revision:rule-preview-newer",
+    sourceRevision: "source-revision-2",
+    pulledAt: "2026-07-23T00:02:00.000Z",
+  });
+  assert.throws(
+    () => confirmAIRuleSourceChangeDraft({
+      state: changedSource,
+      changeDraftId: discoverable.changeDraftId,
+      actorStableId,
+      confirmedAt: "2026-07-23T00:03:00.000Z",
+      capabilities: ["ai.rule_source_change_draft.create"],
+    }),
+    (error: unknown) => error instanceof AIDraftConversionError
+      && error.code === "AI_RULE_SOURCE_REVISION_CHANGED",
   );
 });

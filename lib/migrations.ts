@@ -20,6 +20,7 @@ import type {
   ModifierOption,
   ParameterDefinition,
   PerformanceProfile,
+  PartConstraintFieldName,
   PartConstraintSet,
   PartConstraintSetRef,
   PartConstraintSlot,
@@ -42,6 +43,8 @@ import {
 } from "./patch-offset-policy";
 import {
   createNeedsReviewPartConstraintSet,
+  PART_CONSTRAINT_SOURCE_HASH_PROJECTION,
+  partConstraintSourceContentHash,
   partConstraintSetRef,
   resolvePartConstraintSetRef,
 } from "./part-constraints";
@@ -1034,17 +1037,52 @@ function stableConstraintSetId(sourceType: string, sourceId: string): string {
 
 function legacyRecipePartPayloads(
   source: Record<string, unknown>,
-): Partial<Record<PartConstraintSlot, unknown>> {
+): {
+  partPayloads: Partial<Record<PartConstraintSlot, unknown>>;
+  fieldEvidence: Partial<Record<
+    PartConstraintSlot,
+    Partial<Record<PartConstraintFieldName, {
+      sourcePath: string;
+      rawPayload: unknown;
+      transformationCodes: string[];
+    }>>
+  >>;
+} {
   const partConstraints = source.partConstraints
     && typeof source.partConstraints === "object"
     && !Array.isArray(source.partConstraints)
     ? source.partConstraints as Record<string, unknown>
     : undefined;
   if (partConstraints) {
-    return {
+    const partPayloads = {
       rod: structuredClone(partConstraints.rod),
       reel: structuredClone(partConstraints.reel),
       line: structuredClone(partConstraints.line),
+    };
+    return {
+      partPayloads,
+      fieldEvidence: Object.fromEntries(
+        (["rod", "reel", "line"] as PartConstraintSlot[]).map((slot) => {
+          const part = partConstraints[slot]
+            && typeof partConstraints[slot] === "object"
+            && !Array.isArray(partConstraints[slot])
+            ? partConstraints[slot] as Record<string, unknown>
+            : {};
+          return [slot, Object.fromEntries(
+            ([
+              "templateIds",
+              "materialIds",
+              "requiredAffixIds",
+              "optionalAffixPoolIds",
+              "typeIds",
+            ] as PartConstraintFieldName[]).map((field) => [field, {
+              sourcePath: `$.partConstraints.${slot}.${field}`,
+              rawPayload: structuredClone(part[field]),
+              transformationCodes: [],
+            }]),
+          )];
+        }),
+      ),
     };
   }
   const legacyCarrier = {
@@ -1054,10 +1092,50 @@ function legacyRecipePartPayloads(
     requiredAffixIds: structuredClone(source.requiredAffixIds),
     optionalAffixPoolIds: structuredClone(source.optionalAffixPoolIds),
   };
+  const fieldSources: Record<
+    PartConstraintFieldName,
+    { sourcePath: string; rawPayload: unknown; transformationCodes: string[] }
+  > = {
+    templateIds: {
+      sourcePath: "$.templateIds",
+      rawPayload: structuredClone(source.templateIds),
+      transformationCodes: ["COPY_LEGACY_FLAT_FIELD_TO_PART"],
+    },
+    materialIds: {
+      sourcePath: "$",
+      rawPayload: undefined,
+      transformationCodes: ["SYNTHESIZE_EMPTY_MATERIAL_IDS"],
+    },
+    requiredAffixIds: {
+      sourcePath: "$.requiredAffixIds",
+      rawPayload: structuredClone(source.requiredAffixIds),
+      transformationCodes: ["COPY_LEGACY_FLAT_FIELD_TO_PART"],
+    },
+    optionalAffixPoolIds: {
+      sourcePath: "$.optionalAffixPoolIds",
+      rawPayload: structuredClone(source.optionalAffixPoolIds),
+      transformationCodes: ["COPY_LEGACY_FLAT_FIELD_TO_PART"],
+    },
+    typeIds: {
+      sourcePath: "$.structureIds",
+      rawPayload: structuredClone(source.structureIds),
+      transformationCodes: [
+        "COPY_LEGACY_FLAT_FIELD_TO_PART",
+        "RENAME_STRUCTURE_IDS_TO_TYPE_IDS",
+      ],
+    },
+  };
   return {
-    rod: structuredClone(legacyCarrier),
-    reel: structuredClone(legacyCarrier),
-    line: structuredClone(legacyCarrier),
+    partPayloads: {
+      rod: structuredClone(legacyCarrier),
+      reel: structuredClone(legacyCarrier),
+      line: structuredClone(legacyCarrier),
+    },
+    fieldEvidence: {
+      rod: structuredClone(fieldSources),
+      reel: structuredClone(fieldSources),
+      line: structuredClone(fieldSources),
+    },
   };
 }
 
@@ -1073,12 +1151,22 @@ function migrateV17ToV18(input: MutableWorkspace): MutableWorkspace {
     .map((entry) => structuredClone(entry));
 
   const addConstraintSet = (candidate: PartConstraintSet): PartConstraintSet => {
-    const existing = constraintSets.find(
+    const matches = constraintSets.filter(
       (entry) =>
         entry.constraintSetId === candidate.constraintSetId
         && entry.revision === candidate.revision,
     );
+    if (matches.length > 1) {
+      throw new Error(
+        `PART_CONSTRAINT_SET_REVISION_DUPLICATE：${candidate.constraintSetId}@${candidate.revision} 存在重复记录。`,
+      );
+    }
+    const existing = matches[0];
     if (existing) {
+      resolvePartConstraintSetRef(
+        constraintSets,
+        partConstraintSetRef(existing),
+      );
       if (existing.contentHash !== candidate.contentHash) {
         throw new Error(
           `PART_CONSTRAINT_SET_REVISION_CONFLICT：${candidate.constraintSetId}@${candidate.revision} 已存在不同内容。`,
@@ -1095,8 +1183,7 @@ function migrateV17ToV18(input: MutableWorkspace): MutableWorkspace {
     sourceType: MigrationReviewItem["sourceType"],
   ) => {
     const id = `${constraintSet.constraintSetId}:r${constraintSet.revision}:review`;
-    if (reviewItems.some((entry) => entry.id === id)) return;
-    reviewItems.push({
+    const candidate: MigrationReviewItem = {
       id,
       sourceType,
       sourceId: constraintSet.sourceRef.sourceId,
@@ -1108,7 +1195,22 @@ function migrateV17ToV18(input: MutableWorkspace): MutableWorkspace {
         diagnosticCodes: [...constraintSet.migrationEvidence.diagnosticCodes],
       },
       status: "pending",
-    });
+    };
+    const matches = reviewItems.filter((entry) => entry.id === id);
+    if (matches.length > 1) {
+      throw new Error(
+        `PART_CONSTRAINT_REVIEW_ITEM_DUPLICATE：${id} 存在重复复核项。`,
+      );
+    }
+    if (matches.length === 1) {
+      if (deterministicHash(matches[0]) !== deterministicHash(candidate)) {
+        throw new Error(
+          `PART_CONSTRAINT_REVIEW_ITEM_CONFLICT：${id} 与预期复核证据不一致。`,
+        );
+      }
+      return;
+    }
+    reviewItems.push(candidate);
   };
 
   const migratedLegacyRefs = new Map<string, PartConstraintSetRef>();
@@ -1118,7 +1220,8 @@ function migrateV17ToV18(input: MutableWorkspace): MutableWorkspace {
       sourceType: "legacy_series_recipe" as const,
       sourceId,
       revisionId: sourceRevisionId(recipe),
-      contentHash: deterministicHash(recipe),
+      hashProjectionVersion: PART_CONSTRAINT_SOURCE_HASH_PROJECTION,
+      contentHash: partConstraintSourceContentHash(recipe),
     };
     const diagnostics = new Set<string>([
       "LEGACY_V14_CARRIER_REQUIRES_REVIEW",
@@ -1140,13 +1243,15 @@ function migrateV17ToV18(input: MutableWorkspace): MutableWorkspace {
     ) {
       diagnostics.add("UNKNOWN_PART_SLOT_PRESERVED_RAW");
     }
+    const legacyParts = legacyRecipePartPayloads(recipe);
     const candidate = createNeedsReviewPartConstraintSet({
       constraintSetId: stableConstraintSetId("legacy-series-recipe", sourceId),
       sourceRef,
       rawPayload: recipe,
       sourceSchemaVersion: 17,
       migratedAt,
-      partPayloads: legacyRecipePartPayloads(recipe),
+      partPayloads: legacyParts.partPayloads,
+      fieldEvidence: legacyParts.fieldEvidence,
       diagnosticCodes: [...diagnostics],
     });
     const constraintSet = addConstraintSet(candidate);
@@ -1181,7 +1286,8 @@ function migrateV17ToV18(input: MutableWorkspace): MutableWorkspace {
       sourceType: "candidate_search_recipe" as const,
       sourceId,
       revisionId: sourceRevisionId(recipe),
-      contentHash: deterministicHash(recipe),
+      hashProjectionVersion: PART_CONSTRAINT_SOURCE_HASH_PROJECTION,
+      contentHash: partConstraintSourceContentHash(recipe),
     };
     const constraintSet = addConstraintSet(createNeedsReviewPartConstraintSet({
       constraintSetId: stableConstraintSetId("candidate-search-recipe", sourceId),
@@ -1214,7 +1320,8 @@ function migrateV17ToV18(input: MutableWorkspace): MutableWorkspace {
       sourceType: "series_definition" as const,
       sourceId,
       revisionId: sourceRevisionId(series),
-      contentHash: deterministicHash(series),
+      hashProjectionVersion: PART_CONSTRAINT_SOURCE_HASH_PROJECTION,
+      contentHash: partConstraintSourceContentHash(series),
     };
     const constraintSet = addConstraintSet(createNeedsReviewPartConstraintSet({
       constraintSetId: stableConstraintSetId("series-definition", sourceId),

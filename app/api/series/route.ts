@@ -14,9 +14,10 @@ import {
 } from "@/lib/projection-matcher";
 import {
   createNeedsReviewPartConstraintSet,
+  PART_CONSTRAINT_SOURCE_HASH_PROJECTION,
+  partConstraintSourceContentHash,
   partConstraintSetRef,
 } from "@/lib/part-constraints";
-import { deterministicHash } from "@/lib/rule-kernel";
 import {
   createSeriesPullPlanningProposal,
   materializeConfirmedPullSpecifications,
@@ -343,7 +344,8 @@ export async function POST(request: NextRequest) {
       sourceType: "series_definition",
       sourceId: materialized.series.id,
       revisionId: String(materialized.series.revision),
-      contentHash: deterministicHash(materialized.series),
+      hashProjectionVersion: PART_CONSTRAINT_SOURCE_HASH_PROJECTION,
+      contentHash: partConstraintSourceContentHash(materialized.series),
     },
     rawPayload: materialized.series,
     sourceSchemaVersion: state.schemaVersion,

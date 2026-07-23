@@ -810,6 +810,10 @@ export interface PartConstraintSourceRevisionRef {
   sourceId: string;
   /** 旧载体没有 revision 时必须保持 null，不得伪造。 */
   revisionId: string | null;
+  /**
+   * 排除 partConstraintSetRef 的无环来源投影；持久化来源可据此重新计算并验证。
+   */
+  hashProjectionVersion: "WITHOUT_PART_CONSTRAINT_SET_REF_V1";
   contentHash: string;
 }
 
@@ -819,6 +823,8 @@ export interface PartConstraintFieldTrace {
   field: PartConstraintFieldName;
   sourceRef: PartConstraintSourceRevisionRef;
   sourcePath: string;
+  /** 记录复制、改名或合成等迁移转换，保证 Trace 可重放。 */
+  transformationCodes: string[];
   reviewStatus: PartConstraintReviewStatus;
   diagnosticCodes: string[];
   /** 保留该字段的迁移输入，包括无法解释的值。 */

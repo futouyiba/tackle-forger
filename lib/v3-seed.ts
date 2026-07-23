@@ -14,6 +14,8 @@ import { applyLayeredPatches } from "./patch-engine";
 import { importLegacyPatchesToLedger } from "./patch-ledger";
 import {
   createNeedsReviewPartConstraintSet,
+  PART_CONSTRAINT_SOURCE_HASH_PROJECTION,
+  partConstraintSourceContentHash,
   partConstraintSetRef,
 } from "./part-constraints";
 import {
@@ -837,7 +839,8 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
       sourceType: "candidate_search_recipe",
       sourceId: candidateRecipe.id,
       revisionId: String(candidateRecipe.revision),
-      contentHash: deterministicHash(candidateRecipe),
+      hashProjectionVersion: PART_CONSTRAINT_SOURCE_HASH_PROJECTION,
+      contentHash: partConstraintSourceContentHash(candidateRecipe),
     },
     rawPayload: candidateRecipe,
     sourceSchemaVersion: state.schemaVersion,

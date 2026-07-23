@@ -11,6 +11,8 @@ import type {
 } from "./types";
 
 export const PART_CONSTRAINT_MIGRATOR_VERSION = "part-constraint-set/v1";
+export const PART_CONSTRAINT_SOURCE_HASH_PROJECTION =
+  "WITHOUT_PART_CONSTRAINT_SET_REF_V1" as const;
 
 export const PART_CONSTRAINT_SLOTS: readonly PartConstraintSlot[] = [
   "rod",
@@ -40,8 +42,18 @@ interface MigratedConstraintSource {
   constraintSetId: string;
   revision?: number;
   partPayloads?: Partial<Record<PartConstraintSlot, unknown>>;
+  fieldEvidence?: Partial<Record<
+    PartConstraintSlot,
+    Partial<Record<PartConstraintFieldName, PartConstraintFieldSourceEvidence>>
+  >>;
   diagnosticCodes?: string[];
   createdBy?: string;
+}
+
+export interface PartConstraintFieldSourceEvidence {
+  sourcePath: string;
+  rawPayload: unknown;
+  transformationCodes: string[];
 }
 
 function recordOf(value: unknown): Record<string, unknown> {
@@ -98,6 +110,7 @@ export function createNeedsReviewPartConstraintSet(
 
     for (const field of PART_CONSTRAINT_FIELDS) {
       const fieldDiagnostics = new Set<string>();
+      const evidence = input.fieldEvidence?.[slot]?.[field];
       values[field] = migratedIds(part[field], fieldDiagnostics);
       if (values[field].length) fieldDiagnostics.add("UNVERIFIED_LEGACY_IDS");
       if (field === "typeIds" && values[field].length) {
@@ -113,12 +126,15 @@ export function createNeedsReviewPartConstraintSet(
         itemPartId,
         field,
         sourceRef: structuredClone(input.sourceRef),
-        sourcePath: input.partPayloads?.[slot] === undefined
-          ? "$"
-          : `$.partConstraints.${slot}.${field}`,
+        sourcePath: evidence?.sourcePath ?? (
+          input.partPayloads?.[slot] === undefined
+            ? "$"
+            : `$.partConstraints.${slot}.${field}`
+        ),
+        transformationCodes: [...(evidence?.transformationCodes ?? [])],
         reviewStatus: "NEEDS_REVIEW",
         diagnosticCodes: [...fieldDiagnostics].sort(),
-        rawPayload: structuredClone(part[field]),
+        rawPayload: structuredClone(evidence ? evidence.rawPayload : part[field]),
       });
       for (const code of fieldDiagnostics) setDiagnostics.add(code);
     }
@@ -163,8 +179,65 @@ export function createNeedsReviewPartConstraintSet(
   };
   return {
     ...withoutHash,
-    contentHash: deterministicHash(withoutHash),
+    contentHash: partConstraintSetContentHash(withoutHash),
   };
+}
+
+export function partConstraintSourceContentHash(
+  source: object,
+): string {
+  const {
+    partConstraintSetRef: _partConstraintSetRef,
+    ...projected
+  } = source as Record<string, unknown>;
+  void _partConstraintSetRef;
+  return deterministicHash(projected);
+}
+
+export function partConstraintSetContentHash(
+  constraintSet: Omit<PartConstraintSet, "contentHash"> | PartConstraintSet,
+): string {
+  const {
+    contentHash: _contentHash,
+    ...content
+  } = constraintSet as PartConstraintSet;
+  void _contentHash;
+  return deterministicHash(content);
+}
+
+export function resolvePartConstraintSourceRevision<T extends object>(
+  sources: readonly T[],
+  ref: PartConstraintSourceRevisionRef,
+): T {
+  if (ref.hashProjectionVersion !== PART_CONSTRAINT_SOURCE_HASH_PROJECTION) {
+    throw new Error(
+      `PART_CONSTRAINT_SOURCE_HASH_PROJECTION_UNSUPPORTED：${ref.hashProjectionVersion} 不受支持。`,
+    );
+  }
+  const matches = sources.filter((source) => {
+    const record = source as Record<string, unknown>;
+    if (record.id !== ref.sourceId) return false;
+    const revision = record.revisionId ?? record.revision;
+    return ref.revisionId === null
+      ? revision === undefined || revision === null || revision === ""
+      : String(revision) === ref.revisionId;
+  });
+  if (!matches.length) {
+    throw new Error(
+      `PART_CONSTRAINT_SOURCE_REF_NOT_FOUND：${ref.sourceId}@${ref.revisionId ?? "missing"} 不存在。`,
+    );
+  }
+  if (matches.length !== 1) {
+    throw new Error(
+      `PART_CONSTRAINT_SOURCE_REVISION_DUPLICATE：${ref.sourceId}@${ref.revisionId ?? "missing"} 必须唯一。`,
+    );
+  }
+  if (partConstraintSourceContentHash(matches[0]) !== ref.contentHash) {
+    throw new Error(
+      `PART_CONSTRAINT_SOURCE_HASH_MISMATCH：${ref.sourceId}@${ref.revisionId ?? "missing"} 内容哈希不一致。`,
+    );
+  }
+  return matches[0];
 }
 
 export function partConstraintSetRef(
@@ -185,22 +258,76 @@ export function resolvePartConstraintSetRef(
   constraintSets: readonly PartConstraintSet[],
   ref: PartConstraintSetRef,
 ): PartConstraintSet {
-  const revision = constraintSets.find(
+  const revisions = constraintSets.filter(
     (entry) =>
       entry.constraintSetId === ref.constraintSetId
       && entry.revision === ref.revision,
   );
-  if (!revision) {
+  if (!revisions.length) {
     throw new Error(
       `PART_CONSTRAINT_SET_REF_NOT_FOUND：${ref.constraintSetId}@${ref.revision} 不存在。`,
     );
   }
-  if (revision.contentHash !== ref.contentHash) {
+  if (revisions.length !== 1) {
+    throw new Error(
+      `PART_CONSTRAINT_SET_REVISION_DUPLICATE：${ref.constraintSetId}@${ref.revision} 必须唯一。`,
+    );
+  }
+  const revision = revisions[0];
+  const computedHash = partConstraintSetContentHash(revision);
+  if (revision.contentHash !== computedHash) {
+    throw new Error(
+      `PART_CONSTRAINT_SET_CONTENT_TAMPERED：${ref.constraintSetId}@${ref.revision} 存储内容与哈希不一致。`,
+    );
+  }
+  if (computedHash !== ref.contentHash) {
     throw new Error(
       `PART_CONSTRAINT_SET_HASH_MISMATCH：${ref.constraintSetId}@${ref.revision} 内容哈希不一致。`,
     );
   }
   return revision;
+}
+
+export function createPartConstraintSetRevision(input: {
+  current: PartConstraintSet;
+  expectedCurrentRef: PartConstraintSetRef;
+  parts: PartConstraintSet["parts"];
+  traces: PartConstraintSet["traces"];
+  sourceRef: PartConstraintSourceRevisionRef;
+  createdBy: string;
+  createdAt: string;
+}): PartConstraintSet {
+  resolvePartConstraintSetRef([input.current], input.expectedCurrentRef);
+  const traceIds = new Set(input.traces.map((trace) => trace.traceId));
+  for (const part of Object.values(input.parts)) {
+    for (const traceRef of Object.values(part.fieldTraceRefs)) {
+      if (!traceIds.has(traceRef)) {
+        throw new Error(
+          `PART_CONSTRAINT_TRACE_REF_NOT_FOUND：${traceRef} 不存在于新 revision Trace。`,
+        );
+      }
+    }
+  }
+  const reviewStatus = Object.values(input.parts).every(
+    (part) => part.reviewStatus === "CONFIRMED",
+  )
+    ? "CONFIRMED" as const
+    : "NEEDS_REVIEW" as const;
+  const withoutHash: Omit<PartConstraintSet, "contentHash"> = {
+    constraintSetId: input.current.constraintSetId,
+    revision: input.current.revision + 1,
+    reviewStatus,
+    parts: structuredClone(input.parts),
+    sourceRef: structuredClone(input.sourceRef),
+    traces: structuredClone(input.traces),
+    migrationEvidence: structuredClone(input.current.migrationEvidence),
+    createdBy: input.createdBy,
+    createdAt: input.createdAt,
+  };
+  return {
+    ...withoutHash,
+    contentHash: partConstraintSetContentHash(withoutHash),
+  };
 }
 
 export function partConstraintSetBlockingTraceRefs(

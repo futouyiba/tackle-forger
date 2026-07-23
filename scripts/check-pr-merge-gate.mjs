@@ -10,6 +10,8 @@ export const REQUIRED_CURRENT_HEAD_CHECKS = [
   "Windows line-ending policy",
 ];
 
+export const AGENT_REVIEW_PASS_MARKER = "Agent-Review: PASS";
+
 const DECISIVE_REVIEW_STATES = new Set([
   "APPROVED",
   "CHANGES_REQUESTED",
@@ -58,6 +60,12 @@ function latestRun(runs) {
   return [...runs].sort(compareIds).at(-1);
 }
 
+function hasAgentReviewPassMarker(body) {
+  return String(body ?? "")
+    .split(/\r?\n/u)
+    .some((line) => line === AGENT_REVIEW_PASS_MARKER);
+}
+
 function currentHeadReviewState({ reviews, headSha }) {
   const latestDecisionByReviewer = new Map();
   const orderedReviews = Array.isArray(reviews)
@@ -89,7 +97,8 @@ function currentHeadReviewState({ reviews, headSha }) {
     if (
       !reviewerKey ||
       review.commitSha !== headSha ||
-      (state !== "APPROVED" && state !== "COMMENTED")
+      (state !== "APPROVED" &&
+        !(state === "COMMENTED" && hasAgentReviewPassMarker(review.body)))
     ) {
       return false;
     }
@@ -106,6 +115,7 @@ function currentHeadReviewState({ reviews, headSha }) {
 export function evaluatePullRequestMergeGate(snapshot) {
   const pullRequest = snapshot?.pullRequest ?? {};
   const headSha = pullRequest.headSha;
+  const baseSha = pullRequest.baseSha;
   const riskLevel = snapshot?.riskLevel;
   const blockers = [];
   const evidence = [];
@@ -114,6 +124,13 @@ export function evaluatePullRequestMergeGate(snapshot) {
     blockers.push({
       code: "CURRENT_HEAD_UNAVAILABLE",
       message: "Pull request current head SHA is unavailable",
+    });
+  }
+
+  if (!/^[a-f0-9]{40}$/i.test(baseSha ?? "")) {
+    blockers.push({
+      code: "CURRENT_BASE_UNAVAILABLE",
+      message: "Pull request current base SHA is unavailable",
     });
   }
 
@@ -158,7 +175,34 @@ export function evaluatePullRequestMergeGate(snapshot) {
       continue;
     }
 
-    const run = latestRun(currentHeadRuns);
+    const pullRequestRuns = currentHeadRuns.filter(
+      (check) =>
+        check.event === "pull_request" &&
+        check.pullNumber === pullRequest.number,
+    );
+    if (pullRequestRuns.length === 0) {
+      blockers.push({
+        code: "CI_NOT_PULL_REQUEST",
+        check: checkName,
+        message: `${checkName} has no evidence from this pull request's workflow run`,
+      });
+      continue;
+    }
+
+    const currentBaseRuns = pullRequestRuns.filter(
+      (check) => check.baseSha === baseSha,
+    );
+    if (currentBaseRuns.length === 0) {
+      const staleRun = latestRun(pullRequestRuns);
+      blockers.push({
+        code: "CI_BASE_STALE",
+        check: checkName,
+        message: `${checkName} only has pull request evidence for base ${staleRun.baseSha ?? "unknown"}`,
+      });
+      continue;
+    }
+
+    const run = latestRun(currentBaseRuns);
     if (String(run.status).toLowerCase() !== "completed") {
       blockers.push({
         code: "CI_PENDING",
@@ -181,7 +225,9 @@ export function evaluatePullRequestMergeGate(snapshot) {
       type: "ci",
       check: checkName,
       headSha,
+      baseSha,
       runId: run.id,
+      workflowRunId: run.workflowRunId,
       url: run.url,
     });
   }
@@ -211,7 +257,7 @@ export function evaluatePullRequestMergeGate(snapshot) {
       blockers.push({
         code: "CURRENT_HEAD_REVIEW_SIGNAL_REQUIRED",
         message:
-          "High-risk changes require a current-head COMMENTED or APPROVED review signal",
+          `High-risk changes require current-head APPROVED or COMMENTED with exact ${AGENT_REVIEW_PASS_MARKER} marker`,
       });
     } else {
       evidence.push({
@@ -221,6 +267,10 @@ export function evaluatePullRequestMergeGate(snapshot) {
         reviewer: reviewState.signal.author.login,
         state: String(reviewState.signal.state).toUpperCase(),
         submittedAt: reviewState.signal.submittedAt,
+        signalKind:
+          String(reviewState.signal.state).toUpperCase() === "APPROVED"
+            ? "github-approved"
+            : "agent-review-pass",
       });
     }
   }
@@ -287,12 +337,21 @@ function createGithubClient(token) {
     return payload;
   }
 
-  async function paginate(path) {
+  async function paginate(path, collectionKey) {
     const items = [];
     for (let page = 1; ; page += 1) {
       const separator = path.includes("?") ? "&" : "?";
       const payload = await request(`${path}${separator}per_page=100&page=${page}`);
-      const pageItems = Array.isArray(payload) ? payload : payload.check_runs;
+      const pageItems = Array.isArray(payload)
+        ? payload
+        : collectionKey
+          ? payload?.[collectionKey]
+          : null;
+      if (!Array.isArray(pageItems)) {
+        throw new Error(
+          `GitHub API pagination payload is missing ${collectionKey ?? "an item array"}`,
+        );
+      }
       items.push(...pageItems);
       if (pageItems.length < 100) {
         return items;
@@ -369,6 +428,8 @@ function normalizePullRequest(payload) {
     isDraft: payload.draft === true,
     state: payload.state,
     headSha: payload.head?.sha,
+    baseSha: payload.base?.sha,
+    baseRef: payload.base?.ref,
     updatedAt: payload.updated_at,
     author: {
       login: payload.user?.login,
@@ -393,6 +454,10 @@ export function mergeGateEvidenceFingerprint(evidence) {
         id: check.id ?? null,
         name: check.name ?? null,
         headSha: check.headSha ?? null,
+        baseSha: check.baseSha ?? null,
+        event: check.event ?? null,
+        pullNumber: check.pullNumber ?? null,
+        workflowRunId: check.workflowRunId ?? null,
         status: check.status ?? null,
         conclusion: check.conclusion ?? null,
         appSlug: check.appSlug ?? null,
@@ -406,6 +471,7 @@ export function mergeGateEvidenceFingerprint(evidence) {
         state: review.state ?? null,
         commitSha: review.commitSha ?? null,
         submittedAt: review.submittedAt ?? null,
+        body: review.body ?? null,
         authorLogin: review.author?.login ?? null,
         authorType: review.author?.type ?? null,
       }))
@@ -429,8 +495,8 @@ export async function readStableMergeGateSnapshot({
 }) {
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const before = await readPullRequest();
-    const firstEvidence = await readEvidence(before.headSha);
-    const secondEvidence = await readEvidence(before.headSha);
+    const firstEvidence = await readEvidence(before.headSha, before);
+    const secondEvidence = await readEvidence(before.headSha, before);
     const after = await readPullRequest();
 
     const pullRequestStable = JSON.stringify(before) === JSON.stringify(after);
@@ -452,6 +518,51 @@ export async function readStableMergeGateSnapshot({
   );
 }
 
+async function readPullRequestWorkflowChecks(client, prefix, pullRequest) {
+  const workflowRuns = await client.paginate(
+    `${prefix}/actions/runs?event=pull_request&head_sha=${encodeURIComponent(pullRequest.headSha)}`,
+    "workflow_runs",
+  );
+  const matchingRuns = workflowRuns.flatMap((run) => {
+    if (run.event !== "pull_request" || run.head_sha !== pullRequest.headSha) {
+      return [];
+    }
+    const pull = (run.pull_requests ?? []).find(
+      (candidate) => candidate?.number === pullRequest.number,
+    );
+    return pull ? [{ run, pull }] : [];
+  });
+
+  const jobsByRun = await Promise.all(
+    matchingRuns.map(async ({ run, pull }) => ({
+      run,
+      pull,
+      jobs: await client.paginate(
+        `${prefix}/actions/runs/${run.id}/jobs?filter=all`,
+        "jobs",
+      ),
+    })),
+  );
+
+  return jobsByRun.flatMap(({ run, pull, jobs }) =>
+    jobs.map((job) => ({
+      id: job.id,
+      name: job.name,
+      headSha: job.head_sha ?? run.head_sha,
+      baseSha: pull.base?.sha,
+      event: run.event,
+      pullNumber: pull.number,
+      workflowRunId: run.id,
+      status: job.status,
+      conclusion: job.conclusion,
+      appSlug: "github-actions",
+      startedAt: job.started_at,
+      completedAt: job.completed_at,
+      url: job.html_url,
+    })),
+  );
+}
+
 async function readLiveSnapshot({ repository, pullNumber, riskLevel }) {
   const client = createGithubClient(readToken());
   const prefix = `/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}`;
@@ -460,10 +571,10 @@ async function readLiveSnapshot({ repository, pullNumber, riskLevel }) {
     normalizePullRequest(
       await client.request(`${prefix}/pulls/${pullNumber}`),
     );
-  const readEvidence = async (headSha) => {
-    const [reviewPayloads, checkPayloads, reviewThreads] = await Promise.all([
+  const readEvidence = async (_headSha, pullRequest) => {
+    const [reviewPayloads, checks, reviewThreads] = await Promise.all([
       client.paginate(`${prefix}/pulls/${pullNumber}/reviews`),
-      client.paginate(`${prefix}/commits/${headSha}/check-runs?filter=all`),
+      readPullRequestWorkflowChecks(client, prefix, pullRequest),
       readReviewThreads(client, repository, pullNumber),
     ]);
     return {
@@ -472,23 +583,14 @@ async function readLiveSnapshot({ repository, pullNumber, riskLevel }) {
         state: review.state,
         commitSha: review.commit_id,
         submittedAt: review.submitted_at,
+        body: review.body,
         author: {
           login: review.user?.login,
           type: review.user?.type,
         },
       })),
       reviewThreads,
-      checks: checkPayloads.map((check) => ({
-        id: check.id,
-        name: check.name,
-        headSha: check.head_sha,
-        status: check.status,
-        conclusion: check.conclusion,
-        appSlug: check.app?.slug,
-        startedAt: check.started_at,
-        completedAt: check.completed_at,
-        url: check.html_url,
-      })),
+      checks,
     };
   };
 
@@ -526,7 +628,7 @@ function formatResult(result) {
     if (item.type === "ci") {
       lines.push(`PASS ${item.check} (${item.headSha.slice(0, 12)})`);
     } else if (item.type === "review") {
-      lines.push(`PASS current-head ${item.state} review signal by ${item.reviewer} (${item.headSha.slice(0, 12)})`);
+      lines.push(`PASS current-head ${item.state} review signal by ${item.reviewer} [${item.signalKind}] (${item.headSha.slice(0, 12)})`);
     }
   }
   for (const blocker of result.blockers) {

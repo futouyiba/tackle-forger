@@ -6,11 +6,12 @@
     "isDraft": true,
     "state": "open",
     "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "baseSha": "dddddddddddddddddddddddddddddddddddddddd",
     "author": { "login": "author", "type": "User" }
   },
   "checks": [
-    { "id": 1, "name": "Root v3 app (npm)", "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "status": "completed", "conclusion": "failure", "appSlug": "github-actions" },
-    { "id": 2, "name": "Historical workspace (pnpm)", "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "status": "in_progress", "conclusion": null, "appSlug": "github-actions" }
+    { "id": 1, "name": "Root v3 app (npm)", "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "baseSha": "dddddddddddddddddddddddddddddddddddddddd", "event": "pull_request", "pullNumber": 104, "status": "completed", "conclusion": "failure", "appSlug": "github-actions" },
+    { "id": 2, "name": "Historical workspace (pnpm)", "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "baseSha": "dddddddddddddddddddddddddddddddddddddddd", "event": "pull_request", "pullNumber": 104, "status": "in_progress", "conclusion": null, "appSlug": "github-actions" }
   ],
   "reviews": [],
   "reviewThreads": [

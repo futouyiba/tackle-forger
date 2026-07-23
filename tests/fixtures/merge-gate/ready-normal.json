@@ -7,12 +7,13 @@
     "isDraft": false,
     "state": "open",
     "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "baseSha": "dddddddddddddddddddddddddddddddddddddddd",
     "author": { "login": "author", "type": "User" }
   },
   "checks": [
-    { "id": 1, "name": "Root v3 app (npm)", "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "status": "completed", "conclusion": "success", "appSlug": "github-actions" },
-    { "id": 2, "name": "Historical workspace (pnpm)", "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "status": "completed", "conclusion": "success", "appSlug": "github-actions" },
-    { "id": 3, "name": "Windows line-ending policy", "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "status": "completed", "conclusion": "success", "appSlug": "github-actions" }
+    { "id": 1, "name": "Root v3 app (npm)", "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "baseSha": "dddddddddddddddddddddddddddddddddddddddd", "event": "pull_request", "pullNumber": 100, "status": "completed", "conclusion": "success", "appSlug": "github-actions" },
+    { "id": 2, "name": "Historical workspace (pnpm)", "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "baseSha": "dddddddddddddddddddddddddddddddddddddddd", "event": "pull_request", "pullNumber": 100, "status": "completed", "conclusion": "success", "appSlug": "github-actions" },
+    { "id": 3, "name": "Windows line-ending policy", "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "baseSha": "dddddddddddddddddddddddddddddddddddddddd", "event": "pull_request", "pullNumber": 100, "status": "completed", "conclusion": "success", "appSlug": "github-actions" }
   ],
   "reviews": [],
   "reviewThreads": []

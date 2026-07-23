@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   evaluatePullRequestMergeGate,
   graphqlNextPageCursor,
+  AGENT_REVIEW_PASS_MARKER,
   readStableMergeGateSnapshot,
 } from "../scripts/check-pr-merge-gate.mjs";
 
@@ -30,6 +31,46 @@ test("successful checks from an old head do not count", async () => {
   );
 });
 
+test("successful push jobs cannot replace this pull request's CI", async () => {
+  const snapshot = await fixture("ready-normal");
+  for (const check of snapshot.checks) {
+    check.event = "push";
+    check.pullNumber = null;
+  }
+  const result = evaluatePullRequestMergeGate(snapshot);
+
+  assert.equal(result.ready, false);
+  assert.deepEqual(
+    result.blockers.map((blocker) => blocker.code),
+    ["CI_NOT_PULL_REQUEST", "CI_NOT_PULL_REQUEST", "CI_NOT_PULL_REQUEST"],
+  );
+});
+
+test("CI collected before the pull request base changed is stale", async () => {
+  const snapshot = await fixture("ready-normal");
+  snapshot.pullRequest.baseSha = "c".repeat(40);
+  const result = evaluatePullRequestMergeGate(snapshot);
+
+  assert.equal(result.ready, false);
+  assert.deepEqual(
+    result.blockers.map((blocker) => blocker.code),
+    ["CI_BASE_STALE", "CI_BASE_STALE", "CI_BASE_STALE"],
+  );
+});
+
+test("an unavailable current base fails closed", async () => {
+  const snapshot = await fixture("ready-normal");
+  delete snapshot.pullRequest.baseSha;
+  const result = evaluatePullRequestMergeGate(snapshot);
+
+  assert.equal(result.ready, false);
+  assert.ok(
+    result.blockers.some(
+      (blocker) => blocker.code === "CURRENT_BASE_UNAVAILABLE",
+    ),
+  );
+});
+
 test("a current-head COMMENTED Agent review satisfies high-risk review", async () => {
   const result = evaluatePullRequestMergeGate(
     await fixture("ready-high-risk-agent-commented"),
@@ -45,8 +86,38 @@ test("a current-head COMMENTED Agent review satisfies high-risk review", async (
       reviewer: "reviewer",
       state: "COMMENTED",
       submittedAt: "2026-07-23T07:05:00Z",
+      signalKind: "agent-review-pass",
     },
   );
+});
+
+test("an arbitrary COMMENTED review without the explicit PASS marker does not count", async () => {
+  const snapshot = await fixture("ready-high-risk-agent-commented");
+  snapshot.reviews[0].body = "Found no blocking thread, but this is not a pass signal.";
+  const result = evaluatePullRequestMergeGate(snapshot);
+
+  assert.equal(result.ready, false);
+  assert.ok(
+    result.blockers.some(
+      (blocker) => blocker.code === "CURRENT_HEAD_REVIEW_SIGNAL_REQUIRED",
+    ),
+  );
+  assert.equal(AGENT_REVIEW_PASS_MARKER, "Agent-Review: PASS");
+});
+
+test("the Agent PASS marker rejects leading or trailing whitespace", async () => {
+  const snapshot = await fixture("ready-high-risk-agent-commented");
+
+  for (const marker of [" Agent-Review: PASS", "Agent-Review: PASS "]) {
+    snapshot.reviews[0].body = `Automated review complete.\n\n${marker}`;
+    const result = evaluatePullRequestMergeGate(snapshot);
+    assert.equal(result.ready, false);
+    assert.ok(
+      result.blockers.some(
+        (blocker) => blocker.code === "CURRENT_HEAD_REVIEW_SIGNAL_REQUIRED",
+      ),
+    );
+  }
 });
 
 test("a current-head APPROVED review also satisfies high-risk review", async () => {
@@ -289,6 +360,39 @@ test("continuously changing review or thread evidence fails closed", async () =>
           reviewThreads: [
             { id: "thread", isResolved: evidenceReads % 2 === 0 },
           ],
+        };
+      },
+    }),
+    /evidence changed repeatedly/,
+  );
+
+  assert.equal(evidenceReads, 6);
+});
+
+test("changing only the review body during collection also fails closed", async () => {
+  const base = await fixture("ready-high-risk-agent-commented");
+  let evidenceReads = 0;
+
+  await assert.rejects(
+    readStableMergeGateSnapshot({
+      riskLevel: "high",
+      maxAttempts: 3,
+      readPullRequest: async () => ({
+        ...base.pullRequest,
+        updatedAt: "2026-07-23T08:00:00Z",
+      }),
+      readEvidence: async () => {
+        evidenceReads += 1;
+        return {
+          checks: base.checks,
+          reviews: base.reviews.map((review) => ({
+            ...review,
+            body:
+              evidenceReads % 2 === 0
+                ? review.body
+                : `${review.body}\nobservation-${evidenceReads}`,
+          })),
+          reviewThreads: base.reviewThreads,
         };
       },
     }),

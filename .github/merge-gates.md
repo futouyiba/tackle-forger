@@ -39,12 +39,20 @@ implementer solely to change Draft or Issue status.
 
 This repository has one accountable owner coordinating several Agents. A
 current-head `COMMENTED` review, a Bot review, or a review submitted through the
-owner's GitHub identity may therefore serve as the traceable review signal.
-`COMMENTED` is not an endorsement by itself: unresolved threads and an active
-`CHANGES_REQUESTED` still block, and the supervising Agent must inspect the
-review contents and acceptance evidence. Never describe an Agent review as a
-human GitHub `APPROVED` review. Human approval is required only when GitHub
-rules or an explicit owner decision separately requires it.
+owner's GitHub identity may therefore serve as the traceable review signal. A
+`COMMENTED` review counts only when its body contains this exact standalone
+line:
+
+```text
+Agent-Review: PASS
+```
+
+An arbitrary comment or a review that only reports findings does not count.
+Unresolved threads and an active `CHANGES_REQUESTED` still block, and the
+supervising Agent must inspect the review contents and acceptance evidence
+before recording the marker. Never describe an Agent review as a human GitHub
+`APPROVED` review. Human approval is required only when GitHub rules or an
+explicit owner decision separately requires it.
 
 Before recommending or performing a merge, the supervising Agent must classify
 the change as `normal` or `high` risk and run the read-only checker against the
@@ -58,22 +66,25 @@ The command reads the pull request around two complete evidence queries. It
 compares normalized CI, review, and review-thread fingerprints and retries if
 either the PR identity or any gate evidence changes. After three unstable
 attempts it fails closed. It then evaluates only evidence bound to the reported
-current head SHA:
+current head SHA, pull request number, and current base SHA:
 
 - the PR is not Draft;
 - `Root v3 app (npm)`, `Historical workspace (pnpm)`, and
   `Windows line-ending policy` are present, explicitly owned by the
-  `github-actions` app, and successful on that head;
+  `github-actions` app, and successful in a `pull_request` workflow run for that
+  PR, head, and base;
 - no review thread remains unresolved and no active current-head
   `CHANGES_REQUESTED` review remains;
 - a high-risk change has a current-head review signal (`COMMENTED` or
-  `APPROVED`) with a GitHub actor identity. Actor type and equality with the PR
-  author do not decide validity in this single-owner, multi-Agent repository.
+  `APPROVED`) with a GitHub actor identity. `COMMENTED` additionally requires
+  the exact `Agent-Review: PASS` line. Actor type and equality with the PR author
+  do not decide validity in this single-owner, multi-Agent repository.
   A later `CHANGES_REQUESTED` or dismissed review invalidates earlier evidence
   from that reviewer until a fresh current-head signal is recorded.
 
-Missing, pending, failed, cancelled, skipped, or old-head CI blocks. The checker
-uses the monotonic GitHub check-run ID to select the latest same-name run, so a
+Missing, pending, failed, cancelled, skipped, push-only, old-head, or stale-base
+CI blocks. The checker
+uses the monotonic GitHub Actions job ID to select the latest same-name run, so a
 new queued rerun supersedes an older completed success even before the rerun has
 timestamps. It prints a stable blocker code for every unmet condition and exits
 `1`; API or authentication failures exit `2`. `--json` provides
@@ -96,7 +107,9 @@ npm run governance:check-pr -- --fixture tests/fixtures/merge-gate/ready-high-ri
 ```
 
 A real pull request drill still requires working GitHub authentication. Verify
-at least: all three current-head jobs passing, old-head success rejected,
-Draft rejected, unresolved thread and active change request rejected, old-head
-review rejected, and a current-head Agent `COMMENTED` or `APPROVED` signal
-accepted for a high-risk PR.
+at least: all three current-head/current-base PR jobs passing, old-head success
+rejected, push-only success rejected, stale-base success rejected, Draft
+rejected, unresolved thread and active change request rejected, old-head
+review rejected, arbitrary `COMMENTED` rejected, and a current-head Agent
+`COMMENTED` with `Agent-Review: PASS` or `APPROVED` signal accepted for a
+high-risk PR.

@@ -953,6 +953,23 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
     approvedBy: "publisher",
     approvedAt: NOW,
   });
+  const formalDefinition = state.fiveAxisViewDefinitions.find((definition) =>
+    "semanticContractVersion" in definition)!;
+  const formalPreview = {
+    ...structuredClone(oldSnapshot.fiveAxisPreview!),
+    fiveAxisDefinitionId: formalDefinition.definitionId,
+    fiveAxisDefinitionVersion: formalDefinition.version,
+    fiveAxisDefinitionRevision: formalDefinition.revision,
+    fiveAxisDefinitionHash: formalDefinition.definitionHash,
+    fiveAxisRuleVersion: formalDefinition.fiveAxisRuleVersion,
+    sourceRevision: formalDefinition.sourceRevision,
+    tackleFitComparison: {
+      ...structuredClone(oldSnapshot.fiveAxisPreview!.tackleFitComparison),
+      fiveAxisDefinitionId: formalDefinition.definitionId,
+      fiveAxisDefinitionVersion: formalDefinition.version,
+      fiveAxisRuleVersion: formalDefinition.fiveAxisRuleVersion,
+    },
+  };
   const snapshot = publishConfigurationSnapshot({
     publicationMode: "new_formal",
     workspaceId: "workspace:test",
@@ -1005,6 +1022,13 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
       trace: [],
       inputHash: "quality-hash",
     },
+    fiveAxisPreview: formalPreview,
+    fiveAxisDefinition: formalDefinition,
+    fiveAxisDefinitions: state.fiveAxisViewDefinitions,
+    fiveAxisDispositionCatalogRevisions:
+      state.fiveAxisDispositionCatalogRevisions,
+    currentFiveAxisDispositionCatalogRevisionId:
+      state.currentFiveAxisDispositionCatalogRevisionId,
     pricingPolicyVersion: "pricing:published-v1",
     automaticPricing: {
       formal: true,

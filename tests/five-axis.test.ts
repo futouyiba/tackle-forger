@@ -551,6 +551,14 @@ test("旧 PUBLISHED 五维定义只能用于历史重放，不能服务新正式
   const formalDefinition = state.fiveAxisViewDefinitions.find(
     (definition) => "semanticContractVersion" in definition,
   )!;
+  assert.throws(
+    () => publishConfigurationSnapshot({
+      ...common,
+      fiveAxisPreview: undefined,
+      fiveAxisDefinition: formalDefinition,
+    }),
+    /FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE/,
+  );
   const formalPreview = {
     ...preview,
     fiveAxisDefinitionId: formalDefinition.definitionId,

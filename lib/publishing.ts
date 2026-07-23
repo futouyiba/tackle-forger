@@ -629,6 +629,11 @@ export function publishConfigurationSnapshot(
   ) {
     throw new Error("五轴预览与待发布 Model 不一致。");
   }
+  if (input.publicationMode === "new_formal" && !input.fiveAxisPreview) {
+    throw new Error(
+      "FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE：新正式 Snapshot 必须冻结五维定义、目录与预览证据。",
+    );
+  }
   let fiveAxisDispositionEvidence: ConfigurationSnapshot["fiveAxisDispositionEvidence"];
   if (input.publicationMode === "new_formal" && input.fiveAxisPreview) {
     const definition = input.fiveAxisDefinition;

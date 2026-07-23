@@ -515,10 +515,12 @@ export function createFormalFiveAxisVertexSet(input: {
   });
   const vertices = input.definition.axes.map((axis) => {
     const values = sources.flatMap((source) =>
-      source.directInputs
+      axis.applicablePartIds.includes(source.candidateSemanticKey.itemPartId)
+        ? source.directInputs
         .filter((entry) => entry.axisId === axis.axisId)
         .map((entry) => canonicalDecimal(entry.rawValue))
-        .filter((value) => !value.startsWith("-") && value !== "0"));
+        .filter((value) => !value.startsWith("-") && value !== "0")
+        : []);
     if (!values.length) {
       throw new Error(`FIVE_AXIS_VERTEX_UNAVAILABLE：${axis.axisId} 没有合法 direct 候选。`);
     }
@@ -666,7 +668,7 @@ export function calculateFormalFiveAxisComponentSeries(input: {
       ? vertexValue / raw
       : raw / vertexValue;
     const comparisonScore = ratio * 100;
-    const officialDisplayScore = Math.min(100, comparisonScore);
+    const officialDisplayScore = Math.round(Math.min(100, comparisonScore));
     return {
       axisId: axis.axisId,
       axisDefinitionVersion: `${input.definition.definitionId}@${input.definition.version}`,

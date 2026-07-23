@@ -1,5 +1,5 @@
 import { deterministicHash } from "./rule-kernel";
-import { reviewPatchBatch, reviewPatchRevision, submitPatchRevision } from "./patch-ledger";
+import { markPatchRevisionRebaseRequired, reviewPatchBatch, reviewPatchRevision, submitPatchRevision } from "./patch-ledger";
 import {
   createPatchReviewBatch,
   evaluatePatchFinalRanges,
@@ -613,6 +613,26 @@ export function submitWorkspacePatchRevision(input: {
   patchRevision: number;
   capabilities: Iterable<string>;
 }): WorkspaceState {
+  const target = input.state.patchLedger.revisions.find((revision) =>
+    revision.patchId === input.patchId && revision.patchRevision === input.patchRevision);
+  if (!target) {
+    throw new PatchOffsetPolicyError("PATCH_REVISION_NOT_FOUND", "Patch revision 不存在。");
+  }
+  const currentRuleSet = currentPublishedRuleSet(input.state);
+  const currentSubject = currentPatchSubjectRef(input.state, target);
+  const ruleSetCurrent = target.baseRuleSetVersion === currentRuleSet.id
+    || target.baseRuleSetVersion === String(currentRuleSet.version);
+  if (!ruleSetCurrent || target.baseObjectRevision !== currentSubject.revision) {
+    return {
+      ...input.state,
+      patchLedger: markPatchRevisionRebaseRequired({
+        ledger: input.state.patchLedger,
+        patchId: input.patchId,
+        patchRevision: input.patchRevision,
+        capabilities: input.capabilities,
+      }),
+    };
+  }
   return {
     ...input.state,
     patchLedger: submitPatchRevision({

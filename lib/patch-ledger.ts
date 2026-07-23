@@ -164,6 +164,22 @@ export function submitPatchRevision(input:{ledger:PatchLedger;patchId:string;pat
   const next=buildPatchRevision({...target,state:"PENDING_REVIEW",operations:target.operations});
   return {...input.ledger,revisions:input.ledger.revisions.map((r)=>r===target?next:r)};
 }
+export function markPatchRevisionRebaseRequired(input:{ledger:PatchLedger;patchId:string;patchRevision:number;capabilities:Iterable<string>}):PatchLedger{
+  requireCapability(input.capabilities,"patch.create");
+  const target=input.ledger.revisions.find((r)=>r.patchId===input.patchId&&r.patchRevision===input.patchRevision);
+  if(!target) throw new PatchLedgerError("PATCH_REVISION_NOT_FOUND","Revision not found");
+  if(target.snapshotRefs.length) throw new PatchLedgerError("PATCH_REVISION_IMMUTABLE","Snapshot-referenced revision is immutable");
+  try {
+    transitionPatchState(target.state, "REBASE_REQUIRED");
+  } catch (error) {
+    throw new PatchLedgerError(
+      "PATCH_STATE_TRANSITION_INVALID",
+      error instanceof Error ? error.message : "Invalid Patch state transition",
+    );
+  }
+  const next=buildPatchRevision({...target,state:"REBASE_REQUIRED",operations:target.operations});
+  return {...input.ledger,revisions:input.ledger.revisions.map((r)=>r===target?next:r)};
+}
 export function reviewPatchRevision(input:{ledger:PatchLedger;patchId:string;patchRevision:number;nextState:"APPROVED"|"ACTIVE"|"WITHDRAWN";reviewer:string;reviewedAt:string;capabilities:Iterable<string>;approvalEvidence?:{policy?:WorkspacePolicyRecord|PatchOffsetPolicyVersion;reviewBatch?:PatchReviewBatch;waivers?:PatchValidationWaiver[];subjectRef:PatchReviewSubjectRef;objectInputHash:string;patchSetHash:string}}):PatchLedger{
   requireCapability(input.capabilities,"patch.review");
   const target=input.ledger.revisions.find((r)=>r.patchId===input.patchId&&r.patchRevision===input.patchRevision);

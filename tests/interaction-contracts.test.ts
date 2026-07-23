@@ -9,12 +9,14 @@ import {
   buildSeriesGanttProjection,
   createExportPreviewTarget,
   derivePrimaryDisplayState,
+  legacyEntityState,
   normalizeEntityState,
   refreshAIRecommendationState,
   resolveProductDeepLink,
   sanitizeAIInput,
   validateExportCommit,
 } from "../lib/interaction-contracts";
+import { validationIssuePresentation } from "../lib/validation-issues";
 import { createSeedState } from "../lib/seed";
 
 test("R1 甘特图只返回真实离散 SKU，不补齐连续重量", () => {
@@ -45,6 +47,43 @@ test("R1 无 SKU 草稿 Series 不绘制虚假跨度", () => {
   assert.equal(block.minDisplayWeightKg, null);
   assert.equal(block.maxDisplayWeightKg, null);
   assert.deepEqual(block.skuNodes, []);
+});
+
+test("R2 甘特状态不把已治理的规范 ERROR/WARNING 重新显示为活动问题", () => {
+  const state = createSeedState();
+  const canonical = {
+    issueId: "issue:resolved",
+    source: "patch" as const,
+    code: "PATCH_FINAL_VALUE_OUT_OF_RANGE",
+    severity: "ERROR" as const,
+    gate: "PUBLISH" as const,
+    state: "WAIVED" as const,
+    subjectRef: { workspaceId: "workspace:test", entityType: "model" as const, entityId: "model:1", revisionId: "1" },
+    affectedRefs: [],
+    parameterKeys: [],
+    title: "范围已获批准",
+    message: "该范围错误已由当前关口的 Waiver 处理。",
+    inputHash: "input:1",
+    evidenceRefs: [],
+    ruleRefs: ["ruleset:test"],
+    issueRevision: "revision:1",
+    fingerprint: "fingerprint:1",
+    fingerprintVersion: "validation-issue-fingerprint/v1" as const,
+    actions: [],
+  };
+  for (const issue of [
+    canonical,
+    { ...canonical, state: "RESOLVED" as const },
+    { ...canonical, state: "STALE" as const },
+    { ...canonical, severity: "WARNING" as const, state: "ACKNOWLEDGED" as const },
+  ]) {
+    const entity = legacyEntityState({ status: state.purchasableModels[0]!.status, issues: [issue] });
+    assert.equal(entity.validation, "PASSED");
+    assert.notEqual(entity.primary, "HARD_CONFLICT");
+  }
+  assert.deepEqual(validationIssuePresentation(canonical), { tone: "info", label: "保留意见通过" });
+  assert.deepEqual(validationIssuePresentation({ ...canonical, state: "RESOLVED" }), { tone: "info", label: "已解决" });
+  assert.deepEqual(validationIssuePresentation({ ...canonical, severity: "WARNING", state: "ACKNOWLEDGED" }), { tone: "info", label: "已确认" });
 });
 
 test("R2 前端动作由 Capability 与服务端禁用原因共同决定", () => {

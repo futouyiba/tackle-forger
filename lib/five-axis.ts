@@ -1,4 +1,5 @@
 import { deterministicHash } from "./rule-kernel";
+import { validationIssueLevel } from "./validation-issues";
 import type {
   FiveAxisAxisDefinition,
   FiveAxisAxisSummary,
@@ -280,7 +281,7 @@ function readAxisValue(
 
 function assertUsableDefinition(definition: FiveAxisViewDefinition): void {
   const errors = validateFiveAxisDefinition(definition).filter(
-    (issue) => issue.level === "error",
+    (issue) => validationIssueLevel(issue) === "error",
   );
   if (errors.length) {
     throw new Error(errors.map((issue) => issue.message).join("；"));

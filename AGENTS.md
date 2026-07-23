@@ -43,8 +43,9 @@
   futouyiba/tackle-forger --pr <number> --risk <normal|high>`；任何相关远端状态变化后必须重跑。
 - 只接受属于该Pull Request、同一个当前head SHA和当前base SHA的`pull_request`工作流中的根npm CI、
   历史pnpm CI和Windows行尾检查；缺失、未完成、失败、跳过、取消、仅push、旧head或旧base结果均阻断。
-  PR编号、head和base必须来自CI运行时固化的结构化run name，不得把workflow run API中会随PR漂移的嵌套
-  PR字段当作历史证据。#21仅是历史事故，其事后CI不得冒充当前通过。
+  PR编号、head和base必须来自CI运行时固化的结构化run name，且run必须来自规范workflow路径；不得把
+  workflow run API中会随PR漂移的嵌套PR字段当作历史证据。只读取最新规范run的当前attempt，三个必需job
+  各须恰好出现一次；缺失、重名或跨run/attempt拼接均阻断。#21仅是历史事故，其事后CI不得冒充当前通过。
 - Draft、当前头存在有效`CHANGES_REQUESTED`或存在未解决review thread时阻断。高风险变更还必须在
   当前head留下可追溯的审查信号；本仓库由单一负责人管理多个Agent，因此`COMMENTED`、Bot或同一GitHub
   账号提交的审查均可承载Agent复核证据。`COMMENTED`必须在review正文中包含独立一行

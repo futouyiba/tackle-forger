@@ -6,8 +6,11 @@ import {
   evaluatePullRequestMergeGate,
   graphqlNextPageCursor,
   AGENT_REVIEW_PASS_MARKER,
+  currentWorkflowRunAttemptJobs,
   parsePullRequestRunName,
+  pullRequestRunProvenance,
   readStableMergeGateSnapshot,
+  selectLatestPullRequestWorkflowRun,
 } from "../scripts/check-pr-merge-gate.mjs";
 
 async function fixture(name) {
@@ -277,20 +280,36 @@ test("PR author identity does not control the repository review signal", async (
 
 test("a newer pending rerun on the same head supersedes older success", async () => {
   const snapshot = await fixture("ready-normal");
-  snapshot.checks[0].startedAt = "2026-07-23T08:00:00Z";
-  snapshot.checks[0].completedAt = "2026-07-23T08:05:00Z";
-  snapshot.checks.push({
+  snapshot.checks[0] = {
     ...snapshot.checks[0],
     id: 100,
     status: "queued",
     conclusion: null,
     startedAt: null,
     completedAt: null,
-  });
+  };
   const result = evaluatePullRequestMergeGate(snapshot);
 
   assert.equal(result.ready, false);
   assert.ok(result.blockers.some((blocker) => blocker.code === "CI_PENDING"));
+});
+
+test("duplicate required jobs in one trusted attempt fail closed", async () => {
+  const snapshot = await fixture("ready-normal");
+  snapshot.checks.push({
+    ...snapshot.checks[0],
+    id: 100,
+  });
+
+  const result = evaluatePullRequestMergeGate(snapshot);
+  assert.equal(result.ready, false);
+  assert.ok(
+    result.blockers.some(
+      (blocker) =>
+        blocker.code === "CI_AMBIGUOUS" &&
+        blocker.check === "Root v3 app (npm)",
+    ),
+  );
 });
 
 test("required CI only accepts checks explicitly owned by GitHub Actions", async () => {
@@ -364,6 +383,69 @@ test("pull request run names carry immutable PR, head, and base provenance", () 
       `gate-context event=pull_request pr=63 head=${"a".repeat(39)} base=${"d".repeat(40)}`,
     ),
     null,
+  );
+});
+
+test("trusted workflow runs use the canonical path even when run-name replaces name", () => {
+  const pullRequest = {
+    number: 63,
+    headSha: "a".repeat(40),
+  };
+  const displayTitle =
+    `gate-context event=pull_request pr=63 head=${"a".repeat(40)} base=${"d".repeat(40)}`;
+  const run = {
+    name: displayTitle,
+    display_title: displayTitle,
+    event: "pull_request",
+    path: ".github/workflows/ci.yml",
+    head_sha: "a".repeat(40),
+  };
+
+  assert.equal(pullRequestRunProvenance(run, pullRequest)?.baseSha, "d".repeat(40));
+  assert.equal(
+    pullRequestRunProvenance(
+      { ...run, path: ".github/workflows/duplicate-ci.yml" },
+      pullRequest,
+    ),
+    null,
+  );
+});
+
+test("workflow collection never falls back from the latest run or attempt", () => {
+  const pullRequest = { number: 63, headSha: "a".repeat(40) };
+  const validTitle =
+    `gate-context event=pull_request pr=63 head=${"a".repeat(40)} base=${"d".repeat(40)}`;
+  const oldValid = {
+    id: 1,
+    display_title: validTitle,
+    event: "pull_request",
+    path: ".github/workflows/ci.yml",
+    head_sha: pullRequest.headSha,
+    run_attempt: 1,
+  };
+  const newerMalformed = {
+    ...oldValid,
+    id: 2,
+    display_title: "malformed",
+  };
+
+  assert.equal(
+    selectLatestPullRequestWorkflowRun(
+      [oldValid, newerMalformed],
+      pullRequest,
+    ),
+    null,
+  );
+  assert.deepEqual(
+    currentWorkflowRunAttemptJobs(
+      [
+        { id: 10, run_id: 2, run_attempt: 1 },
+        { id: 11, run_id: 2, run_attempt: 2 },
+        { id: 12, run_id: 1, run_attempt: 2 },
+      ],
+      { id: 2, run_attempt: 2 },
+    ).map((job) => job.id),
+    [11],
   );
 });
 

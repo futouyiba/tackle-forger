@@ -86,11 +86,12 @@ Missing, pending, failed, cancelled, skipped, push-only, old-head, or stale-base
 CI blocks. The workflow's structured `run-name` records the event-time PR
 number, head, and base; do not use the workflow-run API's nested current PR
 object as historical evidence because those fields can drift with the PR. Runs
-without the exact provenance format, workflow name, and workflow path fail
-closed. The checker
-uses the monotonic GitHub Actions job ID to select the latest same-name run, so a
-new queued rerun supersedes an older completed success even before the rerun has
-timestamps. It prints a stable blocker code for every unmet condition and exits
+without the exact provenance format and canonical workflow path fail
+closed. The checker selects only the newest canonical workflow run and that
+run's current attempt; it never combines jobs from an older run or attempt.
+Each required job name must appear exactly once in that attempt, so a missing or
+duplicate same-name job blocks instead of falling back or masking a failure. It
+prints a stable blocker code for every unmet condition and exits
 `1`; API or authentication failures exit `2`. `--json` provides
 machine-readable output. Malformed pagination evidence also fails closed as an
 API error; a connection that declares another page must supply a non-empty

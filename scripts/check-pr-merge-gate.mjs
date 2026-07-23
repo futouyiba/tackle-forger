@@ -12,7 +12,6 @@ export const REQUIRED_CURRENT_HEAD_CHECKS = [
 
 export const AGENT_REVIEW_PASS_MARKER = "Agent-Review: PASS";
 
-const CI_WORKFLOW_NAME = "CI";
 const CI_WORKFLOW_PATH = ".github/workflows/ci.yml";
 const PR_RUN_NAME_PATTERN =
   /^gate-context event=pull_request pr=([1-9]\d*) head=([a-f0-9]{40}) base=([a-f0-9]{40})$/i;
@@ -211,7 +210,16 @@ export function evaluatePullRequestMergeGate(snapshot) {
       continue;
     }
 
-    const run = latestRun(currentBaseRuns);
+    if (currentBaseRuns.length !== 1) {
+      blockers.push({
+        code: "CI_AMBIGUOUS",
+        check: checkName,
+        message: `${checkName} appears ${currentBaseRuns.length} times in the trusted workflow attempt`,
+      });
+      continue;
+    }
+
+    const [run] = currentBaseRuns;
     if (String(run.status).toLowerCase() !== "completed") {
       blockers.push({
         code: "CI_PENDING",
@@ -442,6 +450,44 @@ export function parsePullRequestRunName(displayTitle) {
   };
 }
 
+export function pullRequestRunProvenance(run, pullRequest) {
+  const provenance = parsePullRequestRunName(run?.display_title);
+  if (
+    run?.event !== "pull_request" ||
+    run?.path !== CI_WORKFLOW_PATH ||
+    run?.head_sha !== pullRequest?.headSha ||
+    provenance?.pullNumber !== pullRequest?.number ||
+    provenance?.headSha !== pullRequest?.headSha
+  ) {
+    return null;
+  }
+  return provenance;
+}
+
+export function selectLatestPullRequestWorkflowRun(workflowRuns, pullRequest) {
+  const latest = latestRun(
+    (workflowRuns ?? []).filter(
+      (run) =>
+        run?.event === "pull_request" &&
+        run?.path === CI_WORKFLOW_PATH &&
+        run?.head_sha === pullRequest?.headSha,
+    ),
+  );
+  if (!latest) {
+    return null;
+  }
+  const provenance = pullRequestRunProvenance(latest, pullRequest);
+  return provenance ? { run: latest, provenance } : null;
+}
+
+export function currentWorkflowRunAttemptJobs(jobs, workflowRun) {
+  return (jobs ?? []).filter(
+    (job) =>
+      job?.run_id === workflowRun?.id &&
+      job?.run_attempt === workflowRun?.run_attempt,
+  );
+}
+
 function normalizePullRequest(payload) {
   return {
     number: payload.number,
@@ -479,6 +525,8 @@ export function mergeGateEvidenceFingerprint(evidence) {
         event: check.event ?? null,
         pullNumber: check.pullNumber ?? null,
         workflowRunId: check.workflowRunId ?? null,
+        workflowRunAttempt: check.workflowRunAttempt ?? null,
+        jobRunAttempt: check.jobRunAttempt ?? null,
         status: check.status ?? null,
         conclusion: check.conclusion ?? null,
         appSlug: check.appSlug ?? null,
@@ -544,49 +592,36 @@ async function readPullRequestWorkflowChecks(client, prefix, pullRequest) {
     `${prefix}/actions/runs?event=pull_request&head_sha=${encodeURIComponent(pullRequest.headSha)}`,
     "workflow_runs",
   );
-  const matchingRuns = workflowRuns.flatMap((run) => {
-    const provenance = parsePullRequestRunName(run.display_title);
-    if (
-      run.event !== "pull_request" ||
-      run.name !== CI_WORKFLOW_NAME ||
-      run.path !== CI_WORKFLOW_PATH ||
-      run.head_sha !== pullRequest.headSha ||
-      provenance?.pullNumber !== pullRequest.number ||
-      provenance?.headSha !== pullRequest.headSha
-    ) {
-      return [];
-    }
-    return [{ run, provenance }];
-  });
-
-  const jobsByRun = await Promise.all(
-    matchingRuns.map(async ({ run, provenance }) => ({
-      run,
-      provenance,
-      jobs: await client.paginate(
-        `${prefix}/actions/runs/${run.id}/jobs?filter=all`,
-        "jobs",
-      ),
-    })),
+  const selected = selectLatestPullRequestWorkflowRun(
+    workflowRuns,
+    pullRequest,
   );
+  if (!selected) {
+    return [];
+  }
 
-  return jobsByRun.flatMap(({ run, provenance, jobs }) =>
-    jobs.map((job) => ({
-      id: job.id,
-      name: job.name,
-      headSha: job.head_sha ?? run.head_sha,
-      baseSha: provenance.baseSha,
-      event: run.event,
-      pullNumber: provenance.pullNumber,
-      workflowRunId: run.id,
-      status: job.status,
-      conclusion: job.conclusion,
-      appSlug: "github-actions",
-      startedAt: job.started_at,
-      completedAt: job.completed_at,
-      url: job.html_url,
-    })),
+  const { run, provenance } = selected;
+  const jobs = await client.paginate(
+    `${prefix}/actions/runs/${run.id}/jobs?filter=all`,
+    "jobs",
   );
+  return currentWorkflowRunAttemptJobs(jobs, run).map((job) => ({
+    id: job.id,
+    name: job.name,
+    headSha: job.head_sha ?? run.head_sha,
+    baseSha: provenance.baseSha,
+    event: run.event,
+    pullNumber: provenance.pullNumber,
+    workflowRunId: run.id,
+    workflowRunAttempt: run.run_attempt,
+    jobRunAttempt: job.run_attempt,
+    status: job.status,
+    conclusion: job.conclusion,
+    appSlug: "github-actions",
+    startedAt: job.started_at,
+    completedAt: job.completed_at,
+    url: job.html_url,
+  }));
 }
 
 async function readLiveSnapshot({ repository, pullNumber, riskLevel }) {

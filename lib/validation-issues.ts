@@ -35,12 +35,17 @@ export class ValidationIssueContractError extends Error {
 export function isCanonicalValidationIssue(
   issue: ValidationIssue,
 ): issue is CanonicalValidationIssue {
+  const hasEnvironment = Boolean(issue.environmentId?.trim());
+  const hasChannel = Boolean(issue.channelKey?.trim());
   return "issueId" in issue
     && "subjectRef" in issue
     && issue.fingerprintVersion === VALIDATION_ISSUE_FINGERPRINT_VERSION
     && normalizeValidationSeverity(issue.severity) === issue.severity
     && normalizeValidationGate(issue.gate) === issue.gate
-    && normalizeValidationState(issue.state) === issue.state;
+    && normalizeValidationState(issue.state) === issue.state
+    && (issue.gate === "EXPORT"
+      ? hasEnvironment && hasChannel
+      : !hasEnvironment && !hasChannel);
 }
 
 export function validationIssueSeverity(issue: ValidationIssue): ValidationIssueSeverity {
@@ -374,10 +379,19 @@ export function canonicalizeValidationIssues(
   issues: ValidationIssue[],
   context: AdaptLegacyValidationIssueContext,
 ): CanonicalValidationIssue[] {
-  return issues.map((issue) =>
-    isCanonicalValidationIssue(issue)
-      ? structuredClone(issue)
-      : adaptLegacyValidationIssue(issue, context));
+  return issues.map((issue) => {
+    if (isCanonicalValidationIssue(issue)) return structuredClone(issue);
+    if (
+      (issue as { fingerprintVersion?: unknown }).fingerprintVersion
+      === VALIDATION_ISSUE_FINGERPRINT_VERSION
+    ) {
+      throw new ValidationIssueContractError(
+        "VALIDATION_CANONICAL_ISSUE_INVALID",
+        `Canonical ValidationIssue ${(issue as ValidationIssue).code} 的枚举或 EXPORT 目标不完整。`,
+      );
+    }
+    return adaptLegacyValidationIssue(issue, context);
+  });
 }
 
 function assertCapability(capabilities: Iterable<string>, required: string): void {
@@ -652,6 +666,40 @@ export function verifyValidationWaiverDecision(
     && deterministicHash({ ...content, waiverIds: decision.waiverIds }) === decision.decisionHash;
 }
 
+export function assertValidationWaiverDecisionCoverage(input: {
+  waivers?: ValidationWaiver[];
+  decisions?: ValidationWaiverDecision[];
+}): void {
+  if ((input.decisions ?? []).some((decision) => !verifyValidationWaiverDecision(decision))) {
+    throw new ValidationIssueContractError(
+      "VALIDATION_WAIVER_DECISION_INVALID",
+      "ValidationWaiverDecision 完整性校验失败。",
+    );
+  }
+  for (const waiver of input.waivers ?? []) {
+    const decisions = (input.decisions ?? []).filter(
+      (decision) => decision.waiverDecisionId === waiver.waiverDecisionId,
+    );
+    if (
+      !verifyValidationWaiver(waiver)
+      || decisions.length !== 1
+      || !decisions[0].waiverIds.includes(waiver.waiverId)
+      || decisions[0].policyVersion !== waiver.policyVersion
+      || decisions[0].policyHash !== waiver.policyHash
+      || !decisions[0].requestedWaivers.some((request) =>
+        request.issueFingerprint === waiver.issueFingerprint
+        && request.gate === waiver.gate
+        && request.environmentId === waiver.environmentId
+        && request.channelKey === waiver.channelKey)
+    ) {
+      throw new ValidationIssueContractError(
+        "VALIDATION_WAIVER_DECISION_MISSING_OR_INVALID",
+        `Waiver ${waiver.waiverId} 缺少完整且匹配的 ValidationWaiverDecision 证据。`,
+      );
+    }
+  }
+}
+
 function policyAllows(
   policy: WaiverPolicyVersion,
   issue: CanonicalValidationIssue,
@@ -909,9 +957,11 @@ export function invalidateValidationEvidence(input: {
   const issuesByFingerprint = new Map(input.issues.map((issue) => [issue.fingerprint, issue]));
   return {
     issues: input.issues.map((issue) =>
-      active.has(issue.fingerprint) ? structuredClone(issue) : replaceIssueState(issue, "STALE")),
+      active.has(issue.fingerprint) || issue.state === "STALE"
+        ? structuredClone(issue)
+        : replaceIssueState(issue, "STALE")),
     acknowledgements: (input.acknowledgements ?? []).map((entry) =>
-      active.has(entry.issueFingerprint)
+      active.has(entry.issueFingerprint) || entry.state === "STALE"
         ? structuredClone(entry)
         : transitionAcknowledgementToStale(entry)),
     waivers: (input.waivers ?? []).map((entry) => {
@@ -923,7 +973,8 @@ export function invalidateValidationEvidence(input: {
         && verifyWaiverPolicyVersion(policy));
       const policyStillAllows = !input.activeWaiverPolicies
         || Boolean(issue && activePolicy && policyAllows(activePolicy, issue, input.at!));
-      return active.has(entry.issueFingerprint) && policyStillAllows
+      return entry.state === "STALE"
+        || active.has(entry.issueFingerprint) && policyStillAllows
         ? structuredClone(entry)
         : transitionWaiverToStale(entry);
     }),
@@ -943,6 +994,7 @@ export function assertFrozenValidationIssuesMatch(input: {
   currentIssues: CanonicalValidationIssue[];
   acknowledgements?: ValidationAcknowledgement[];
   waivers?: ValidationWaiver[];
+  decisions?: ValidationWaiverDecision[];
 }): void {
   for (const frozen of input.frozenIssues) {
     const candidates = input.currentIssues.filter((issue) => issue.fingerprint === frozen.fingerprint);
@@ -1001,10 +1053,15 @@ export function assertValidationGateCanProceed(input: {
   channelKey?: string;
   acknowledgements?: ValidationAcknowledgement[];
   waivers?: ValidationWaiver[];
+  decisions?: ValidationWaiverDecision[];
   activeWaiverPolicies?: WaiverPolicyVersion[];
   at?: string;
 }): void {
   assertExportTarget(input);
+  assertValidationWaiverDecisionCoverage({
+    waivers: input.waivers,
+    decisions: input.decisions,
+  });
   const relevantGates = input.gate === "PUBLISH"
     ? new Set<ValidationIssueGate>(["REVIEW", "PUBLISH"])
     : new Set<ValidationIssueGate>([input.gate]);

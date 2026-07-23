@@ -43,6 +43,7 @@ import type {
 } from "./types";
 import {
   assertValidationGateCanProceed,
+  assertValidationWaiverDecisionCoverage,
   canonicalizeValidationIssues,
   isCanonicalValidationIssue,
   validationIssueGate,
@@ -216,8 +217,9 @@ export function publishConfigurationSnapshot(
     const gate = validationIssueGate(issue);
     return gate === undefined || gate === "REVIEW" || gate === "PUBLISH";
   });
-  const canonicalValidationReport = canonicalizeValidationIssues(
-    publishValidationReport,
+  const canonicalValidationReport = input.publicationMode === "new_formal"
+    ? canonicalizeValidationIssues(
+      combinedValidationReport,
     {
       subjectRef: {
         workspaceId: "workspace:legacy",
@@ -229,15 +231,19 @@ export function publishConfigurationSnapshot(
         modelId: input.model.id,
         modelRevision: input.model.revision,
         projectionId: input.projection.id,
-        validationReport: publishValidationReport,
+        validationReport: combinedValidationReport,
       }),
       ruleRefs: [input.projection.ruleSetVersion],
       gate: "PUBLISH",
       source: "publish",
       mode: "active_gate",
-    },
+      },
+    )
+    : [];
+  const canonicalPublishValidationReport = canonicalValidationReport.filter(
+    (issue) => issue.gate === "REVIEW" || issue.gate === "PUBLISH",
   );
-  const blocking = publishErrors(canonicalValidationReport);
+  const blocking = publishErrors(canonicalPublishValidationReport);
   if (!input.compatibilityReport.allowed) {
     blocking.push({
       level: "error",
@@ -275,7 +281,7 @@ export function publishConfigurationSnapshot(
     }
   }
   const unconfirmedWarnings = input.publicationMode === "historical_import"
-    ? warnings(combinedValidationReport).filter(
+    ? warnings(publishValidationReport).filter(
       (warning) => !input.warningConfirmations[warning.code]?.trim(),
     )
     : [];
@@ -297,10 +303,11 @@ export function publishConfigurationSnapshot(
   if (input.publicationMode === "new_formal") {
     try {
       assertValidationGateCanProceed({
-        issues: canonicalValidationReport,
+        issues: canonicalPublishValidationReport,
         gate: "PUBLISH",
         acknowledgements: input.validationAcknowledgements,
         waivers: input.validationWaivers,
+        decisions: input.validationWaiverDecisions,
         activeWaiverPolicies: input.activeValidationWaiverPolicies,
         at: input.publishedAt,
       });
@@ -348,6 +355,12 @@ export function publishConfigurationSnapshot(
   }
 
   const governance = input.patchOffsetGovernance;
+  if (input.publicationMode === "new_formal") {
+    assertValidationWaiverDecisionCoverage({
+      waivers: input.validationWaivers,
+      decisions: input.validationWaiverDecisions,
+    });
+  }
   const modelFinalPullKg = modelFinalPullKgForSnapshot(
     input.sku.projectionMatch.itemPartId,
     input.finalPanelValues,

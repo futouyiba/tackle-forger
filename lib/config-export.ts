@@ -31,6 +31,7 @@ import {
   canonicalizeValidationIssues,
   assertFrozenValidationIssuesMatch,
   assertValidationGateCanProceed,
+  assertValidationWaiverDecisionCoverage,
 } from "./validation-issues";
 export type { ConfigExportMapping } from "./config-export-mapping";
 
@@ -221,6 +222,10 @@ export function createExportManifest(input: {
     throw new Error("Snapshot 含当前导出目标的统一 Issue，但导出命令缺少对应确认证据。");
   }
   if (input.validationGovernance) {
+    assertValidationWaiverDecisionCoverage({
+      waivers: input.validationGovernance.waivers,
+      decisions: input.validationGovernance.decisions,
+    });
     if (!input.environmentId?.trim() || !input.channelKey?.trim()) {
       throw new Error("统一 EXPORT 校验证据必须精确绑定 environmentId 与 channelKey。");
     }
@@ -229,6 +234,7 @@ export function createExportManifest(input: {
       currentIssues: input.validationGovernance.issues,
       acknowledgements: input.validationGovernance.acknowledgements,
       waivers: input.validationGovernance.waivers,
+      decisions: input.validationGovernance.decisions,
     });
     assertValidationGateCanProceed({
       issues: input.validationGovernance.issues,
@@ -237,6 +243,7 @@ export function createExportManifest(input: {
       channelKey: input.channelKey,
       acknowledgements: input.validationGovernance.acknowledgements,
       waivers: input.validationGovernance.waivers,
+      decisions: input.validationGovernance.decisions,
       activeWaiverPolicies: input.validationGovernance.activeWaiverPolicies,
       at: input.createdAt,
     });
@@ -260,7 +267,12 @@ export function createExportManifest(input: {
         .map((entry) => entry.acknowledgementId)
         .sort(),
       validationWaiverRefs: waivers.map((entry) => entry.waiverId).sort(),
-      validationWaiverDecisionRefs: [...new Set(waivers.map((entry) => entry.waiverDecisionId))].sort(),
+      validationWaiverDecisionRefs: (input.validationGovernance.decisions ?? [])
+        .filter((decision) => waivers.some((waiver) =>
+          waiver.waiverDecisionId === decision.waiverDecisionId
+          && decision.waiverIds.includes(waiver.waiverId)))
+        .map((decision) => decision.waiverDecisionId)
+        .sort(),
     };
   }
   const content = {

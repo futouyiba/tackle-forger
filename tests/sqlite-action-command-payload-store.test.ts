@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { access, mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -41,6 +42,43 @@ async function withDatabase(
     await closeSqliteStorage(databasePath);
     await rm(directory, { recursive: true, force: true });
   }
+}
+
+async function issueInSeparateNodeProcess(input: {
+  databasePath: string;
+  idempotencyKey: string;
+  delayMilliseconds?: number;
+}) {
+  return new Promise<{ payloadRefId: string }>((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "tests/fixtures/sqlite-action-command-issuer.ts",
+        input.databasePath,
+        input.idempotencyKey,
+        String(input.delayMilliseconds ?? 0),
+      ],
+      { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] },
+    );
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+    child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+    child.once("error", reject);
+    child.once("close", (code) => {
+      if (code !== 0) {
+        reject(new Error(`独立签发进程失败 (${code}): ${stderr}`));
+        return;
+      }
+      try {
+        resolve(JSON.parse(stdout) as { payloadRefId: string });
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
 }
 
 async function issue(input: {
@@ -309,6 +347,109 @@ test("payload 保存失败只留下永久 token 空洞，下一租约严格增�
   });
 });
 
+test("同一幂等键 owner 保存失败会释放 SQLite claim，重试可恢复唯一 winner", async () => {
+  await withDatabase(async (databasePath) => {
+    const store = new FailOnceSaveStore(databasePath);
+    const current = await loadSqliteWorkspace(databasePath);
+    const idempotencyKey = "sqlite:claim-save-failure-recovery";
+    await assert.rejects(
+      issue({
+        store,
+        action: "save_workspace",
+        capability: "workspace.save",
+        revision: current.revision,
+        idempotencyKey,
+      }),
+      /simulated payload persistence failure/,
+    );
+    const retry = await issue({
+      store,
+      action: "save_workspace",
+      capability: "workspace.save",
+      revision: current.revision,
+      idempotencyKey,
+    });
+    assert.ok(await store.findByPayloadRefId(retry.payloadRefId));
+    const db = await openSqliteDatabase(databasePath);
+    const claim = db.prepare(`
+      SELECT claim_id FROM action_command_issuance_claims
+      WHERE actor_id = ? AND action = ? AND idempotency_key = ?
+    `).get(actorId, "save_workspace", idempotencyKey);
+    assert.equal(claim, undefined);
+  });
+});
+
+test("同一幂等键 owner 签发回调失败不会遗留 claim", async () => {
+  await withDatabase(async (databasePath) => {
+    const store = new SqliteActionCommandPayloadStore(databasePath);
+    const current = await loadSqliteWorkspace(databasePath);
+    const subjectRef = workspaceCommandSubject(current.revision);
+    const idempotencyKey = "sqlite:claim-signing-failure-recovery";
+    await assert.rejects(
+      store.issueWithWorkspaceLease(
+        async () => { throw new Error("simulated signing failure"); },
+        {
+          workspaceId: subjectRef.workspaceId,
+          action: "save_workspace",
+          actorId,
+          idempotencyKey,
+        },
+      ),
+      /simulated signing failure/,
+    );
+    const retry = await issue({
+      store,
+      action: "save_workspace",
+      capability: "workspace.save",
+      revision: current.revision,
+      idempotencyKey,
+    });
+    assert.ok(await store.findByPayloadRefId(retry.payloadRefId));
+  });
+});
+
+test("遗留未完成 claim 的恢复会换发更高 token，并保留旧 token 空洞", async () => {
+  await withDatabase(async (databasePath) => {
+    const store = new SqliteActionCommandPayloadStore(databasePath);
+    const current = await loadSqliteWorkspace(databasePath);
+    const previousLease = await store.acquireWorkspaceLease({
+      workspaceId: "workspace:main",
+      action: "save_workspace",
+      holderId: actorId,
+    });
+    const idempotencyKey = "sqlite:stale-claim-recovery";
+    const db = await openSqliteDatabase(databasePath);
+    db.prepare(`
+      INSERT INTO action_command_issuance_claims (
+        actor_id, action, idempotency_key, claim_id,
+        workspace_id, lease_id, fencing_token, claimed_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      actorId,
+      "save_workspace",
+      idempotencyKey,
+      "issuance:interrupted-owner",
+      previousLease.workspaceId,
+      previousLease.leaseId,
+      previousLease.fencingToken,
+      new Date(Date.now() - 60_000).toISOString(),
+    );
+    const recovered = await issue({
+      store,
+      action: "save_workspace",
+      capability: "workspace.save",
+      revision: current.revision,
+      idempotencyKey,
+    });
+    const recoveredRecord = await store.findByPayloadRefId(recovered.payloadRefId);
+    assert.ok(recoveredRecord);
+    assert.ok(
+      BigInt(recoveredRecord.leaseRef.fencingToken)
+        > BigInt(previousLease.fencingToken),
+    );
+  });
+});
+
 test("v2 当前租约迁移为 v3 高水位，关闭重开后继续严格递增", async () => {
   await withDatabase(async (databasePath) => {
     const db = await openSqliteDatabase(databasePath);
@@ -342,6 +483,11 @@ test("v2 当前租约迁移为 v3 高水位，关闭重开后继续严格递增"
       holderId: actorId,
     });
     assert.equal(migratedLease.fencingToken, "42");
+    const migratedDb = await openSqliteDatabase(databasePath);
+    const migrationCount = migratedDb.prepare(`
+      SELECT COUNT(*) AS count FROM storage_migrations WHERE version = 4
+    `).get() as { count: number };
+    assert.equal(migrationCount.count, 1);
 
     await closeSqliteStorage(databasePath);
     const recoveredStore = new SqliteActionCommandPayloadStore(databasePath);
@@ -351,6 +497,11 @@ test("v2 当前租约迁移为 v3 高水位，关闭重开后继续严格递增"
       holderId: actorId,
     });
     assert.equal(recoveredLease.fencingToken, "43");
+    const recoveredDb = await openSqliteDatabase(databasePath);
+    const repeatedMigrationCount = recoveredDb.prepare(`
+      SELECT COUNT(*) AS count FROM storage_migrations WHERE version = 4
+    `).get() as { count: number };
+    assert.equal(repeatedMigrationCount.count, 1);
   });
 });
 
@@ -377,6 +528,26 @@ test("并发相同幂等键只返回一个已落库引用，烧号空洞不影�
     ]);
     assert.equal(first.payloadRefId, second.payloadRefId);
     assert.ok(await firstStore.findByPayloadRefId(first.payloadRefId));
+  });
+});
+
+test("真正独立 Node 进程并发签发同幂等键时都恢复 SQLite winner", async () => {
+  await withDatabase(async (databasePath) => {
+    const idempotencyKey = "sqlite:cross-process-canonical-winner";
+    // 初始化本身不属于命令签发协议；先建立工作区，避免测试把两个首次启动
+    // 的 seed 写入竞争误判为 issuance claim 的并发失败。
+    await loadSqliteWorkspace(databasePath);
+    const [first, second] = await Promise.all([
+      issueInSeparateNodeProcess({
+        databasePath,
+        idempotencyKey,
+        delayMilliseconds: 120,
+      }),
+      issueInSeparateNodeProcess({ databasePath, idempotencyKey }),
+    ]);
+    assert.equal(first.payloadRefId, second.payloadRefId);
+    const store = new SqliteActionCommandPayloadStore(databasePath);
+    assert.ok(await store.findByPayloadRefId(first.payloadRefId));
   });
 });
 

@@ -19,7 +19,13 @@ import {
 } from "./sqlite-storage";
 
 const MAX_FENCING_TOKEN = BigInt("9223372036854775807");
+const ISSUANCE_CLAIM_STALE_AFTER_MS = 30_000;
 const issuanceTails = new Map<string, Promise<void>>();
+
+type IssuanceClaim =
+  | { kind: "winner"; record: ActionCommandPayloadRecord }
+  | { kind: "owner"; claimId: string; leaseRef: ActionCommandLeaseRef }
+  | { kind: "pending" };
 
 async function serializeIssuance<T>(
   databasePath: string,
@@ -106,6 +112,17 @@ export class SqliteActionCommandPayloadStore implements ActionCommandPayloadStor
         issued_at TEXT NOT NULL,
         UNIQUE(actor_id, action, idempotency_key)
       );
+      CREATE TABLE IF NOT EXISTS action_command_issuance_claims (
+        actor_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        idempotency_key TEXT NOT NULL,
+        claim_id TEXT NOT NULL UNIQUE,
+        workspace_id TEXT NOT NULL,
+        lease_id TEXT NOT NULL,
+        fencing_token TEXT NOT NULL,
+        claimed_at TEXT NOT NULL,
+        PRIMARY KEY(actor_id, action, idempotency_key)
+      );
       CREATE TABLE IF NOT EXISTS action_command_executions (
         command_hash TEXT PRIMARY KEY,
         payload_ref_id TEXT NOT NULL UNIQUE,
@@ -160,6 +177,9 @@ export class SqliteActionCommandPayloadStore implements ActionCommandPayloadStor
     db.prepare(
       "INSERT OR IGNORE INTO storage_migrations (version, applied_at) VALUES (?, ?)",
     ).run(3, new Date().toISOString());
+    db.prepare(
+      "INSERT OR IGNORE INTO storage_migrations (version, applied_at) VALUES (?, ?)",
+    ).run(4, new Date().toISOString());
   }
 
   private async database() {
@@ -279,6 +299,142 @@ export class SqliteActionCommandPayloadStore implements ActionCommandPayloadStor
     return this.withImmediateTransaction(execute);
   }
 
+  private async claimIssuance(input: {
+    workspaceId: string;
+    action: ActionCode;
+    actorId: string;
+    idempotencyKey: string;
+    now?: Date;
+  }): Promise<IssuanceClaim> {
+    this.assertLeaseInput({
+      workspaceId: input.workspaceId,
+      action: input.action,
+      holderId: input.actorId,
+      now: input.now,
+    });
+    return this.withImmediateTransaction(async (db) => {
+      const winner = db.prepare(`
+        SELECT record_json
+        FROM action_command_payloads
+        WHERE actor_id = ? AND action = ? AND idempotency_key = ?
+      `).get(input.actorId, input.action, input.idempotencyKey) as
+        | { record_json: string }
+        | undefined;
+      if (winner) return { kind: "winner", record: parseRecord(winner.record_json) };
+
+      const pending = db.prepare(`
+        SELECT claim_id, claimed_at
+        FROM action_command_issuance_claims
+        WHERE actor_id = ? AND action = ? AND idempotency_key = ?
+      `).get(input.actorId, input.action, input.idempotencyKey) as
+        | { claim_id: string; claimed_at: string }
+        | undefined;
+      if (pending) {
+        const claimedAt = Date.parse(pending.claimed_at);
+        if (
+          Number.isFinite(claimedAt)
+          && Date.now() - claimedAt > ISSUANCE_CLAIM_STALE_AFTER_MS
+        ) {
+          // 崩溃恢复只能移除无人完成的 claim；先前 token 已永久烧号。
+          db.prepare(`
+            DELETE FROM action_command_issuance_claims
+            WHERE actor_id = ? AND action = ? AND idempotency_key = ? AND claim_id = ?
+          `).run(
+            input.actorId,
+            input.action,
+            input.idempotencyKey,
+            pending.claim_id,
+          );
+        } else {
+          return { kind: "pending" };
+        }
+      }
+
+      const current = db.prepare(`
+        SELECT fencing_token
+        FROM workspace_fencing_high_watermarks
+        WHERE workspace_id = ?
+      `).get(input.workspaceId) as { fencing_token: string } | undefined;
+      const highWatermark = current
+        ? parseFencingToken(
+          current.fencing_token,
+          `工作区 ${input.workspaceId} 的高水位`,
+        )
+        : BigInt(0);
+      const fencingToken = highWatermark + BigInt(1);
+      if (fencingToken > MAX_FENCING_TOKEN) {
+        throw new ActionCommandPayloadError(
+          "ACTION_COMMAND_PAYLOAD_INVALID",
+          "工作区 fencing token 已耗尽，必须人工恢复后再写入。",
+        );
+      }
+      const leaseRef: ActionCommandLeaseRef = {
+        workspaceId: input.workspaceId,
+        action: input.action,
+        leaseId: `lease:${randomUUID()}`,
+        fencingToken: fencingToken.toString(),
+      };
+      const acquiredAt = (input.now ?? new Date()).toISOString();
+      const claimId = `issuance:${randomUUID()}`;
+      db.prepare(`
+        INSERT INTO workspace_fencing_high_watermarks (
+          workspace_id, fencing_token, updated_at
+        ) VALUES (?, ?, ?)
+        ON CONFLICT(workspace_id) DO UPDATE SET
+          fencing_token = excluded.fencing_token,
+          updated_at = excluded.updated_at
+      `).run(input.workspaceId, leaseRef.fencingToken, acquiredAt);
+      db.prepare(`
+        INSERT INTO workspace_action_leases (
+          workspace_id, action, lease_id, fencing_token, holder_id, acquired_at
+        ) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(workspace_id) DO UPDATE SET
+          action = excluded.action,
+          lease_id = excluded.lease_id,
+          fencing_token = excluded.fencing_token,
+          holder_id = excluded.holder_id,
+          acquired_at = excluded.acquired_at
+      `).run(
+        leaseRef.workspaceId,
+        leaseRef.action,
+        leaseRef.leaseId,
+        leaseRef.fencingToken,
+        input.actorId,
+        acquiredAt,
+      );
+      db.prepare(`
+        INSERT INTO action_command_issuance_claims (
+          actor_id, action, idempotency_key, claim_id,
+          workspace_id, lease_id, fencing_token, claimed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        input.actorId,
+        input.action,
+        input.idempotencyKey,
+        claimId,
+        leaseRef.workspaceId,
+        leaseRef.leaseId,
+        leaseRef.fencingToken,
+        new Date().toISOString(),
+      );
+      return { kind: "owner", claimId, leaseRef };
+    });
+  }
+
+  private async releaseIssuanceClaim(input: {
+    actorId: string;
+    action: ActionCode;
+    idempotencyKey: string;
+    claimId: string;
+  }) {
+    await this.withImmediateTransaction(async (db) => {
+      db.prepare(`
+        DELETE FROM action_command_issuance_claims
+        WHERE actor_id = ? AND action = ? AND idempotency_key = ? AND claim_id = ?
+      `).run(input.actorId, input.action, input.idempotencyKey, input.claimId);
+    });
+  }
+
   async issueWithWorkspaceLease<T>(
     execute: (
       leaseRef: ActionCommandLeaseRef,
@@ -298,49 +454,69 @@ export class SqliteActionCommandPayloadStore implements ActionCommandPayloadStor
         action: input.action,
         idempotencyKey: input.idempotencyKey,
       };
-      const prior = await this.findIssuedByIdempotencyKey(idempotencyLookup);
-      if (prior) return execute(prior.leaseRef, prior);
-
-      const leaseRef = await this.grantWorkspaceLeasePermanently({
-        workspaceId: input.workspaceId,
-        action: input.action,
-        holderId: input.actorId,
-        now: input.now,
-      });
-      return this.inDatabaseTransaction(async (db) => {
-        const winningRow = db.prepare(`
-          SELECT record_json
-          FROM action_command_payloads
-          WHERE actor_id = ? AND action = ? AND idempotency_key = ?
-        `).get(
-          idempotencyLookup.actorId,
-          idempotencyLookup.action,
-          idempotencyLookup.idempotencyKey,
-        ) as { record_json: string } | undefined;
-        const winning = winningRow
-          ? parseRecord(winningRow.record_json)
-          : undefined;
-        if (winning) return execute(winning.leaseRef, winning);
-        const currentLease = db.prepare(`
-          SELECT action, lease_id, fencing_token
-          FROM workspace_action_leases
-          WHERE workspace_id = ?
-        `).get(leaseRef.workspaceId) as
-          | { action: string; lease_id: string; fencing_token: string }
-          | undefined;
-        if (
-          !currentLease
-          || currentLease.action !== leaseRef.action
-          || currentLease.lease_id !== leaseRef.leaseId
-          || currentLease.fencing_token !== leaseRef.fencingToken
-        ) {
-          throw new ActionCommandPayloadError(
-            "STALE_FENCING_TOKEN",
-            "payload 保存前工作区租约已轮换；已烧 token 不会回退或复用。",
-          );
+      while (true) {
+        const claim = await this.claimIssuance(input);
+        if (claim.kind === "winner") {
+          return execute(claim.record.leaseRef, claim.record);
         }
-        return execute(leaseRef);
-      });
+        if (claim.kind === "pending") {
+          await new Promise<void>((resolve) => setTimeout(resolve, 10));
+          continue;
+        }
+        try {
+          return await this.inDatabaseTransaction(async (db) => {
+            const winningRow = db.prepare(`
+              SELECT record_json
+              FROM action_command_payloads
+              WHERE actor_id = ? AND action = ? AND idempotency_key = ?
+            `).get(
+              idempotencyLookup.actorId,
+              idempotencyLookup.action,
+              idempotencyLookup.idempotencyKey,
+            ) as { record_json: string } | undefined;
+            if (winningRow) {
+              const winner = parseRecord(winningRow.record_json);
+              return execute(winner.leaseRef, winner);
+            }
+            const currentLease = db.prepare(`
+              SELECT action, lease_id, fencing_token
+              FROM workspace_action_leases
+              WHERE workspace_id = ?
+            `).get(claim.leaseRef.workspaceId) as
+              | { action: string; lease_id: string; fencing_token: string }
+              | undefined;
+            if (
+              !currentLease
+              || currentLease.action !== claim.leaseRef.action
+              || currentLease.lease_id !== claim.leaseRef.leaseId
+              || currentLease.fencing_token !== claim.leaseRef.fencingToken
+            ) {
+              throw new ActionCommandPayloadError(
+                "STALE_FENCING_TOKEN",
+                "payload 保存前工作区租约已轮换；已烧 token 不会回退或复用。",
+              );
+            }
+            return execute(claim.leaseRef);
+          });
+        } catch (error) {
+          const winner = await this.findIssuedByIdempotencyKey(idempotencyLookup);
+          if (winner) return execute(winner.leaseRef, winner);
+          // 失联 owner 的 claim 被恢复者接管时，旧 owner 只能观察到 stale。
+          // 对同一幂等键不能把它暴露给调用方；释放自己的 claim 后回读新 owner。
+          if (
+            error instanceof ActionCommandPayloadError
+            && error.code === "STALE_FENCING_TOKEN"
+          ) {
+            continue;
+          }
+          throw error;
+        } finally {
+          await this.releaseIssuanceClaim({
+            ...idempotencyLookup,
+            claimId: claim.claimId,
+          });
+        }
+      }
     });
   }
 
@@ -374,6 +550,24 @@ export class SqliteActionCommandPayloadStore implements ActionCommandPayloadStor
     db: DatabaseSync,
     record: ActionCommandPayloadRecord,
   ): ActionCommandPayloadRecord {
+    const currentLease = db.prepare(`
+      SELECT action, lease_id, fencing_token
+      FROM workspace_action_leases
+      WHERE workspace_id = ?
+    `).get(record.leaseRef.workspaceId) as
+      | { action: string; lease_id: string; fencing_token: string }
+      | undefined;
+    if (
+      !currentLease
+      || currentLease.action !== record.leaseRef.action
+      || currentLease.lease_id !== record.leaseRef.leaseId
+      || currentLease.fencing_token !== record.leaseRef.fencingToken
+    ) {
+      throw new ActionCommandPayloadError(
+        "STALE_FENCING_TOKEN",
+        "payload 保存时工作区租约已轮换，不能写入过期命令。",
+      );
+    }
     const existing = db.prepare(`
       SELECT record_json
       FROM action_command_payloads

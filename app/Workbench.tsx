@@ -1,5 +1,7 @@
 "use client";
 
+import { issueClientActionCommand } from "@/lib/client-action-command";
+
 import {
   AlertTriangle,
   Anvil,
@@ -644,10 +646,16 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     }
     setSyncState("saving");
     try {
+      const idempotencyKey = `save-workspace:${revision}:${crypto.randomUUID()}`;
+      const invocation = await issueClientActionCommand({
+        action: "save_workspace",
+        idempotencyKey,
+        payload: { state, baseRevision: revision, message },
+      });
       const response = await fetch("/api/state", {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ state, baseRevision: revision, message }),
+        body: JSON.stringify(invocation),
       });
       const payload = (await response.json()) as { revision?: number; error?: string };
       if (!response.ok) throw new Error(payload.error || "保存失败");
@@ -791,16 +799,23 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     }
     setSourceAction("publish");
     try {
+      const businessPayload = {
+        action: "publish",
+        source,
+        baseRevision: revision,
+        checksum: sourcePreview.checksum,
+        sourceFingerprint: sourcePreview.sourceFingerprint,
+      };
+      const invocation = await issueClientActionCommand({
+        action: "publish_data_source",
+        idempotencyKey:
+          `publish-data-source:${source.id}:${revision}:${sourcePreview.checksum}`,
+        payload: businessPayload,
+      });
       const response = await fetch("/api/data-sources", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          action: "publish",
-          source,
-          baseRevision: revision,
-          checksum: sourcePreview.checksum,
-          sourceFingerprint: sourcePreview.sourceFingerprint,
-        }),
+        body: JSON.stringify(invocation),
       });
       const payload = (await response.json()) as {
         state?: WorkspaceState;
@@ -877,16 +892,24 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     }
     setSourceAction("writeback");
     try {
+      const businessPayload = {
+        action: "writeback",
+        source,
+        baseRevision: revision,
+        checksum: writebackPreview.checksum,
+        sourceFingerprint: writebackPreview.sourceFingerprint,
+      };
+      const invocation = await issueClientActionCommand({
+        action: "commit_data_source_writeback",
+        idempotencyKey:
+          `commit-data-source-writeback:${source.id}:${revision}:` +
+          writebackPreview.checksum,
+        payload: businessPayload,
+      });
       const response = await fetch("/api/data-sources", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          action: "writeback",
-          source,
-          baseRevision: revision,
-          checksum: writebackPreview.checksum,
-          sourceFingerprint: writebackPreview.sourceFingerprint,
-        }),
+        body: JSON.stringify(invocation),
       });
       const payload = (await response.json()) as {
         state?: WorkspaceState;
@@ -1279,8 +1302,24 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     try {
       const availability = user.actionAvailability.import_excel;
       if (!availability.enabled) throw new Error(availability.disabledReasonText ?? "当前账号不能导入 Excel。");
+      const contentHash = Array.from(
+        new Uint8Array(await crypto.subtle.digest("SHA-256", await file.arrayBuffer())),
+        (byte) => byte.toString(16).padStart(2, "0"),
+      ).join("");
+      const invocation = await issueClientActionCommand({
+        action: "import_excel",
+        idempotencyKey: `import-excel:${contentHash}`,
+        payload: {
+          fileName: file.name,
+          contentType: file.type || "application/octet-stream",
+          size: file.size,
+          contentHash,
+        },
+      });
       const form = new FormData();
       form.append("file", file);
+      form.append("actionId", invocation.actionId);
+      form.append("payloadRefId", invocation.payloadRefId);
       const upload = await fetch("/api/import-file", { method: "POST", body: form });
       const uploadPayload = (await upload.json()) as { error?: string };
       if (!upload.ok) throw new Error(uploadPayload.error ?? "Excel 文件登记失败。");
@@ -3111,7 +3150,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           onClick={() => setExchangeMode("config")}
         >
           <PackageCheck size={18} />
-          <span><strong>配置表交付</strong><small>SnapshotBatch、多目标预览与恢复型提交</small></span>
+          <span><strong>配置关系预览</strong><small>一期仅 CONFIG_PREVIEW / NON_FORMAL</small></span>
         </button>
       </div>
       {exchangeMode === "excel" ? renderExcel() : (
@@ -3127,6 +3166,10 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       )}
     </div>
   );
+  // Keep the legacy renderers compiled for historical payload compatibility, but do not expose
+  // either writable production surface in routing.
+  void renderRecipes;
+  void renderCandidates;
   const renderPage = () => {
     if (page === "v3flow") return <V3FlowWorkbench state={state} mutate={mutate} notify={notify} initialSeriesId={v3SeriesId} />;
     if (page === "overview") return renderOverview();
@@ -3136,7 +3179,17 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     if (page === "rulegraph") return <RuleGraphStudio state={state} mutate={mutate} notify={notify} userName={user.name} selectedCandidateIds={Array.from(selectedCandidates)} />;
     if (page === "affixes") return renderAffixes();
     if (page === "quality") return renderQuality();
-    if (page === "recipes") return renderRecipes();
+    if (page === "recipes") return (
+      <Card>
+        <div className="panel-title">
+          <div>
+            <span className="eyebrow">历史数据 · 只读</span>
+            <h3>旧系列配方已停止生产</h3>
+            <p>旧配方及 Performance 选择仅保留用于历史审计；请在“钓具系列甘特图”创建正式 Series、SKU 与 Model。</p>
+          </div>
+        </div>
+      </Card>
+    );
     if (page === "showcase") return renderSeriesShowcase();
     if (page === "candidates") return (
       <>

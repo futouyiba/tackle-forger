@@ -1,6 +1,7 @@
-import { evaluateAffinity, evaluateHardCompatibility } from "./compatibility";
+import { evaluateCanonicalAffinity, evaluateCanonicalHardCompatibility } from "./compatibility";
 import { deterministicHash } from "./rule-kernel";
 import {
+  assertCurrentSeriesSkuSpecifications,
   assertSeriesItemPartChainEnabled,
 } from "./enabled-item-parts";
 import type {
@@ -43,7 +44,6 @@ function recipeAccepts(recipe: CandidateSearchRecipe, series: SeriesDefinition, 
     && recipe.typeIds.includes(series.typeId)
     && recipe.functionIds.includes(series.coreFunctionId)
     && recipe.qualityIds.includes(series.qualityId)
-    && (!series.performanceProfileId || recipe.performanceIds.includes(series.performanceProfileId))
     && sku.targetPullKg >= recipe.targetPullRangeKg.min
     && sku.targetPullKg <= recipe.targetPullRangeKg.max;
 }
@@ -58,7 +58,6 @@ function contextFor(series: SeriesDefinition, sku: SkuDrawer, variant: ModelVari
     targetPullKg: sku.targetPullKg,
     functionId: series.coreFunctionId,
     functionIntensity: intensity,
-    performanceId: series.performanceProfileId,
     qualityId: series.qualityId,
     componentIds: variant.componentSelections.map((entry) => entry.componentId),
     tags: variant.tags,
@@ -85,12 +84,17 @@ export function generateModelCandidateRun(input: {
   if (selectedSkus.some((sku) => sku.seriesId !== series.id)) {
     throw new Error("CandidateGenerationRequest 的 SKU 不属于请求的 Series。");
   }
+  assertCurrentSeriesSkuSpecifications(
+    series,
+    selectedSkus,
+    "candidate_generation",
+  );
   assertSeriesItemPartChainEnabled(
     series,
     selectedSkus,
     "candidate_generation",
     [],
-    input.state.skuDrawers,
+    input.state.skuDrawers.filter((sku) => sku.status !== "superseded"),
   );
   const ruleSetVersion = input.state.ruleSetVersions.find((entry) => entry.status === "published")?.id ?? "";
   const options = {
@@ -129,9 +133,13 @@ export function generateModelCandidateRun(input: {
       enumerationTotal += 1;
       if (!recipeAccepts(recipe, series, sku)) { bump(excludedByCode, "RECIPE_SCOPE_MISMATCH"); continue; }
       const context = contextFor(series, sku, variant);
-      const hard = evaluateHardCompatibility(context, input.state.compatibilityRules);
+      const hard = evaluateCanonicalHardCompatibility(context, input.state.compatibilityRules);
       if (!hard.allowed) { bump(excludedByCode, "HARD_COMPATIBILITY_DENIED"); continue; }
-      const affinity = evaluateAffinity(context, input.state.affinityRules, input.state.affinityAxisWeights);
+      const affinity = evaluateCanonicalAffinity(
+        context,
+        input.state.affinityRules,
+        input.state.affinityAxisWeights,
+      );
       if (input.request.minimumAffinity !== undefined && affinity.score < input.request.minimumAffinity) {
         bump(excludedByCode, "AFFINITY_BELOW_MINIMUM"); continue;
       }
@@ -238,12 +246,17 @@ export function materializeCandidateRun(input: {
     }
     return sku;
   });
+  assertCurrentSeriesSkuSpecifications(
+    requestSeries,
+    requestSkus,
+    "candidate_materialization",
+  );
   assertSeriesItemPartChainEnabled(
     requestSeries,
     requestSkus,
     "candidate_materialization",
     [],
-    input.state.skuDrawers,
+    input.state.skuDrawers.filter((sku) => sku.status !== "superseded"),
   );
   const requestedSkuIds = new Set(requestSkus.map((sku) => sku.id));
   for (const candidate of input.run.candidates) {
@@ -255,12 +268,17 @@ export function materializeCandidateRun(input: {
       ? input.state.seriesDefinitions.find((entry) => entry.id === sku.seriesId)
       : undefined;
     if (!series || !sku) throw new Error(`Candidate ${candidate.candidateId} 的 SKU/Series 父链不存在。`);
+    assertCurrentSeriesSkuSpecifications(
+      series,
+      [sku],
+      "candidate_materialization",
+    );
     assertSeriesItemPartChainEnabled(
       series,
       [sku],
       "candidate_materialization",
       [],
-      input.state.skuDrawers,
+      input.state.skuDrawers.filter((entry) => entry.status !== "superseded"),
     );
   }
   const models = structuredClone(input.state.purchasableModels);

@@ -80,8 +80,14 @@ export function validateSeriesInvariants(
     projection.typeId === input.series.typeId && projection.structuralValues)) {
     issue(issues, "warning", "SERIES_STRUCTURAL_SOURCE_MISSING", "Series 部位已指定，但当前投影缺少可追踪的结构标杆基础值。");
   }
+  const specifications = seriesTargetPullSpecifications(input.series);
+  // 只豁免明确 DEPRECATED 的历史抽屉。仍处于活动生命周期但意外
+  // 掉出规格表的 SKU 必须继续进入校验并报告 SERIES_WEIGHT_UNDECLARED。
   const skus = input.skus
-    .filter((sku) => sku.seriesId === input.series.id)
+    .filter(
+      (sku) =>
+        sku.seriesId === input.series.id && sku.status !== "superseded",
+    )
     .sort((left, right) => left.targetPullKg - right.targetPullKg);
   const models = input.models.filter((model) =>
     skus.some((sku) => sku.id === model.skuId),
@@ -90,7 +96,6 @@ export function validateSeriesInvariants(
   if (!skus.length) {
     issue(issues, "error", "SERIES_SKU_MISSING", "Series 至少需要一个 SKU 抽屉。");
   }
-  const specifications = seriesTargetPullSpecifications(input.series);
   if (!specifications.length) {
     issue(issues, "error", "SERIES_PULL_SPECIFICATION_MISSING", "Series 至少需要一个已确认的离散目标拉力规格。");
   }
@@ -162,17 +167,8 @@ export function validateSeriesInvariants(
     if (projection.qualityId !== input.series.qualityId) {
       issue(issues, "error", "SERIES_QUALITY_MISMATCH", "SKU 的品质偏离 Series。");
     }
-    if (
-      input.series.performanceProfileId &&
-      projection.performanceId !== input.series.performanceProfileId
-    ) {
-      issue(
-        issues,
-        "error",
-        "SERIES_PERFORMANCE_MISMATCH",
-        "SKU 的性能方向偏离 Series。",
-      );
-    }
+    // performanceProfileId is historical evidence only. Canonical projections intentionally
+    // omit Performance, so this legacy field must never become a new hard invariant.
     if (input.series.functionIntensityPolicy.mode === "fixed") {
       if (
         projection.functionIntensity !==

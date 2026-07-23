@@ -1,7 +1,10 @@
 import { deterministicHash } from "./rule-kernel";
 import {
+  assertCurrentSeriesSkuSpecifications,
   assertProductItemPartChainEnabled,
   assertSeriesItemPartChainEnabled,
+  isCurrentSeriesSkuSpecification,
+  isProductItemPartEnabled,
   ITEM_PART_NOT_ENABLED_CODE,
   ItemPartNotEnabledError,
 } from "./enabled-item-parts";
@@ -50,6 +53,27 @@ function issuesForModel(model: PurchasableModel, skus: SkuDrawer[]): ValidationI
   return structuredClone(sku?.validationSummary ?? []);
 }
 
+export function snapshotBatchEligibleModels(input: {
+  models: PurchasableModel[];
+  series: SeriesDefinition[];
+  skus: SkuDrawer[];
+}): PurchasableModel[] {
+  const skuById = new Map(input.skus.map((sku) => [sku.id, sku]));
+  const seriesById = new Map(
+    input.series.map((series) => [series.id, series]),
+  );
+  return input.models.filter((model) => {
+    const sku = skuById.get(model.skuId);
+    const series = sku ? seriesById.get(sku.seriesId) : undefined;
+    return Boolean(
+      sku &&
+      series &&
+      isCurrentSeriesSkuSpecification(series, sku) &&
+      isProductItemPartEnabled(sku.projectionMatch.itemPartId),
+    );
+  });
+}
+
 export function planSnapshotBatch(input: {
   models: PurchasableModel[];
   series: SeriesDefinition[];
@@ -85,12 +109,13 @@ export function planSnapshotBatch(input: {
       if (!series || !sku) {
         throw new ItemPartNotEnabledError(undefined, "snapshot");
       }
+      assertCurrentSeriesSkuSpecifications(series, [sku], "snapshot");
       const seriesItemPartId = assertSeriesItemPartChainEnabled(
         series,
         [sku],
         "snapshot",
         [],
-        input.skus,
+        input.skus.filter((entry) => entry.status !== "superseded"),
       );
       if (latest) {
         assertProductItemPartChainEnabled([

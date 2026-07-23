@@ -4,6 +4,7 @@ import {
   ITEM_PART_CHAIN_INCONSISTENT_CODE,
   ITEM_PART_NOT_ENABLED_CODE,
   ItemPartNotEnabledError,
+  SkuNotCurrentSeriesSpecificationError,
   candidateGenerationEligibleSkus,
   enabledProductItemParts,
   isProductItemPartEnabled,
@@ -386,7 +387,10 @@ test("选中的启用 SKU 不被历史延期兄弟节点阻断，显式选择延
     variants: current.variants,
     startedAt: "2026-07-23T00:02:00.000Z",
     completedAt: "2026-07-23T00:02:00.001Z",
-  }), (error) => error instanceof ItemPartNotEnabledError && error.itemPartId === "part:hook");
+  }), (error) =>
+    error instanceof SkuNotCurrentSeriesSpecificationError &&
+    error.action === "candidate_generation" &&
+    error.skuIds.includes(retainedHookSku.id));
 });
 
 test("写路径拒绝同 Series 的其他启用部位冲突", () => {

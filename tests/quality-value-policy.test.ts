@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { resolveAffixConfiguration } from "../lib/affix-engine";
 import {
+  assessLegacyModelAffixValue,
   assessModelAffixValue,
   importQualityValuePolicyDraft,
   type AffixAliasBinding,
@@ -84,7 +85,29 @@ test("品质评分：15 词条分 + 3 组合分，再乘功能系数 1.03 得到
   assert.equal(result.combinationScore, 3);
   assert.equal(result.finalValueScore, 18.54);
   assert.equal(result.inSelectedQualityRange, true);
-  assert.equal(result.performanceScoreFactor, 1);
+  assert.equal(result.performanceScoreFactor, undefined);
+  assert.equal(result.trace.some((entry) => entry.step === "performance_factor"), false);
+  assert.deepEqual(draft.legacyPerformanceScoringEvidence, {
+    enabled: false,
+    source: source("FqD4j7", "B2"),
+  });
+});
+
+test("旧 Performance 评分只可通过显式历史重放入口恢复", () => {
+  const a = affix("affix_rod_legacy", "旧词条", 10);
+  const draft = policy();
+  const result = assessLegacyModelAffixValue({
+    policy: draft,
+    modelRevisionId: "legacy:model@1",
+    selectedQualityId: "quality_c_green",
+    configuration: resolveAffixConfiguration([a], [], [a.id], []),
+    functionScoreFactor: { value: 1, status: "SOURCE", source: source("vviXo0", "G3") },
+    performanceScoreFactor: { value: 1.5, status: "SOURCE", source: source("legacy", "P1") },
+    scoringPolicyVersion: "legacy-scoring-v1",
+  });
+  assert.equal(result.finalValueScore, 15);
+  assert.equal(result.performanceScoreFactor, 1.5);
+  assert.equal(result.trace.at(-2)?.step, "performance_factor");
 });
 
 test("直接词条与 Technology 成员重复时只计一次", () => {

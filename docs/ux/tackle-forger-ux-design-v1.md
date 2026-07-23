@@ -396,8 +396,8 @@ flowchart LR
 - 用户目标：在新基底上重放 Patch，不丢失原意。
 - 主路径：查看旧基础、新基础、现有Patch、预计结果 → 识别set/多set/已删参数冲突 → 选择保留目标值、保留相对偏移、转RuleSourceChangeDraft或放弃 → 再校验。
 - 关键决策：Patch 原意；新基底是否已吸收修改；是否晋升通用规则。
-- 错误与恢复：任何未解决冲突保持“Patch 需要 rebase”；保留旧版本草稿，可撤销单个解决决定。
-- 成功反馈：生成已解决的 Patch 修订和新的可重放 Trace。
+- 错误与恢复：任何未解决冲突保持“Patch 需要 rebase”；`rebasing`只显示动作进度，不作为业务状态。保存前若Patch head或基线变化，返回冲突并保留旧revision、当前选择与表单，不产生半revision；可撤销单个解决决定。
+- 成功反馈：原子生成新的`PENDING_REVIEW` Patch revision和可重放Trace；原revision、已发布Snapshot及其hash保持不变。
 - 动作与证据：持有已启用动作的用户可解决Patch rebase；转通用规则后，确认写回、显式拉取和RuleSet发布分别鉴权并记录，不绑定固定对象责任角色。
 - 最终落点：升级候选或对象修订。
 
@@ -975,7 +975,7 @@ flowchart LR
 
 - Given 上游基线变化，When Patch 需要 rebase，Then 同屏显示旧基础、新基础、现有 Patch、预计结果和冲突原因。
 - Given set冲突未解决，When用户尝试发布，Then发布被阻断并提供保留目标值、转相对偏移、转RuleSourceChangeDraft或放弃等恢复动作。
-- Given 用户完成 rebase，When 保存，Then 生成新候选版本，已发布 Snapshot 保持不变。
+- Given 用户完成 rebase，When 保存且Patch head与基线仍匹配，Then 原子生成新的`PENDING_REVIEW` Patch revision，已发布 Snapshot 与旧revision/hash保持不变；When 保存前基线再次变化或任一步失败，Then 不生成半revision并要求基于最新基线重新预览。
 
 #### 发布与升级中心
 

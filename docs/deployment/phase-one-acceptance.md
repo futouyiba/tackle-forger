@@ -23,6 +23,9 @@ mock、Vercel 评审入口和无业务写入预检都只能作为准备证据，
 | #72 / PR #76 | 一期 Capability、UI、直接 API 和下载物都只允许固定 `NON_FORMAL` 预览 | 不部署到真实用户可访问环境 |
 | 其他一期领域阻断 | #43 当前清单中标记为一期门槛的子项已经完成或被明确延期，理由与 v3 一致 | 只做部署准备，不创建通过结论 |
 
+截至 2026-07-23，PR #71 和 PR #76 已合入且对应头 CI 通过；PR #71 仍有未解决 review
+threads，PR #67 仍开放。因此依赖门禁仍为 `BLOCKED`，不得开始真实环境验收。
+
 任何一项未满足都记录为 `DEPENDENCY_BLOCKED`。此状态不是代码缺陷的笼统描述，也不能用
 单元测试、手工临时开关或运维承诺消除。
 
@@ -81,9 +84,12 @@ npm run acceptance:phase-one -- preflight \
 Issue/PR 映射、GitHub reviewed head、唯一 merge commit、review threads 已清零、必需
 CI 已通过和已合入状态。预检从安全的仓库外 `0600` 环境文件读取专用
 `GITHUB_ACCEPTANCE_TOKEN`（最小只读权限；只读仓库元数据与 GraphQL，绝不输出），在线核对
-PR head/merge commit、reviewed head 对应的唯一预期 check-runs 均为 `completed/success`，并以
-GitHub GraphQL 核对全部 review threads 的 `isResolved=true`。token 缺失、认证/网络错误、响应
-分页或结构不完整、CI 失败/重复或任何未解决线程均保持 BLOCKED；清单中的布尔值只是辅助证据，
+PR head/merge commit、规范 CI workflow 的不可变内容、结构化 PR/head/base provenance、
+最新 run attempt 的唯一预期 check-runs 均为 `completed/success`，并核对全部 review
+threads 的 `isResolved=true` 以及 reviewed head 上仍有效的 `Agent-Review: PASS` 或
+`APPROVED` 信号。token 缺失、认证/网络错误、响应分页或结构不完整、CI 失败/重复、旧 base、
+非规范 workflow、任何未解决线程、有效 `CHANGES_REQUESTED` 或缺当前头通过信号均保持
+BLOCKED；清单中的布尔值只是辅助证据，
 不得自行证明通过。不得用环境变量、伪造标题或重复填写当前 HEAD 代替依赖证据。
 持久路径会在规范化后检查重复/
 越界，并核对数据库为普通文件、其余路径为目录、必要父目录与各路径均归服务账号所有且
@@ -147,7 +153,7 @@ npm run acceptance:phase-one -- authenticated-read-only \
 脚本不会保存 Cookie、环境值、工作簿 token、飞书用户 ID、工作区 Payload 或 Trace 正文。
 发出首个携带 Cookie 的请求前，脚本会要求目标 origin 与 `FEISHU_REDIRECT_URI` 精确一致，
 并要求环境提供预期 tenant key 和权威工作簿 token。已登录 PASS 还要求 tenant 精确匹配、
-会话未过期、Capability 精确匹配一期允许集合、workspace schema 精确为 17，以及必需的
+会话未过期、Capability 精确匹配一期允许集合、workspace schema 精确为当前版本 18，以及必需的
 01–08、10 稳定 sheet_id/名称完整无重复、工作簿身份/token 匹配、所有稳定 ID 已确认且
 无重复/冲突，以及品质和定价草稿没有阻断 issue 或残缺状态。
 

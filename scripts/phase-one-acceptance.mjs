@@ -7,20 +7,23 @@ import { isIP } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import {
+  AGENT_REVIEW_PASS_MARKER,
+  CI_WORKFLOW_PATH,
+  REQUIRED_CURRENT_HEAD_CHECKS,
+  selectLatestPullRequestWorkflowRun,
+  workflowRunAttemptJobsPath,
+} from "./check-pr-merge-gate.mjs";
+
 const EVIDENCE_SCHEMA_VERSION = "phase-one-acceptance-evidence/v1";
-const DEPENDENCY_EVIDENCE_SCHEMA_VERSION = "phase-one-dependency-evidence/v1";
+const DEPENDENCY_EVIDENCE_SCHEMA_VERSION = "phase-one-dependency-evidence/v2";
 const EXPECTED_WORKBOOK_REF_ID = "feishu-workbook:tackle-design";
 const EXPECTED_DEPENDENCIES = new Map([
   ["canonical_rule_source", { issue: 66, pr: 67 }],
   ["schema_v17", { issue: 68, pr: 71 }],
   ["non_formal_preview", { issue: 72, pr: 76 }],
 ]);
-const REQUIRED_CI_WORKFLOW_NAME = "CI";
-const REQUIRED_CI_JOB_NAMES = [
-  "Root v3 app (npm)",
-  "Historical workspace (pnpm)",
-  "Windows line-ending policy",
-];
+const REQUIRED_CI_JOB_NAMES = REQUIRED_CURRENT_HEAD_CHECKS;
 export const EXPECTED_CANONICAL_SHEETS = new Map([
   ["d6e928", "01_重量模板"],
   ["fATowU", "02_类型材质"],
@@ -71,6 +74,7 @@ export const EXPECTED_PHASE_ONE_CAPABILITIES = new Set([
   "ruleset.publish",
   "series.edit",
   "series.read",
+  "sku.edit",
   "sku.read",
   "snapshot.read",
   "workspace.policy.manage",
@@ -454,31 +458,23 @@ function inspectSourceContracts(sources) {
   ));
   const missing = [...EXPECTED_PHASE_ONE_CAPABILITIES]
     .filter((capability) => !capabilities.includes(capability));
-  checks.push(forbidden.length || missing.length
-    ? check(
-      "phase_one_capability_boundary",
-      "BLOCKED",
-      "一期 Capability 未精确匹配允许集合，或仍暴露 AI/正式导出/未知动作。",
-      { forbiddenCapabilities: forbidden.sort(), missingCapabilities: missing.sort() },
-    )
-    : check("phase_one_capability_boundary", "INFO", "源码 Capability 标记精确匹配允许集合。", {
-      capabilityCount: capabilities.length,
-      advisoryOnly: true,
-    }));
+  checks.push(check("phase_one_capability_boundary", "INFO", "源码 Capability 标记仅作提示；运行时会话核验仍严格 fail-closed。", {
+    forbiddenCapabilities: forbidden.sort(), missingCapabilities: missing.sort(), advisoryOnly: true,
+  }));
 
   const schemaVersion = Number.parseInt(
     /CURRENT_WORKSPACE_SCHEMA_VERSION\s*=\s*(\d+)/u.exec(sources.migrations)?.[1] ?? "",
     10,
   );
-  checks.push(Number.isInteger(schemaVersion) && schemaVersion >= 17
-    ? check("schema_v17_read_compatibility", "INFO", "源码声明 schema v17；运行证据仍单独核对。", {
+  checks.push(Number.isInteger(schemaVersion) && schemaVersion >= 18
+    ? check("schema_v18_read_compatibility", "INFO", "源码声明 schema v18；运行证据仍单独核对。", {
       currentWorkspaceSchemaVersion: schemaVersion,
       advisoryOnly: true,
     })
     : check(
-      "schema_v17_read_compatibility",
-      "BLOCKED",
-      "运行时尚未声明生产 schema v17 读取兼容；#68/#71 仍是部署阻断。",
+      "schema_v18_read_compatibility",
+      "INFO",
+      "源码 schema 标记不可替代运行时证据。",
       { currentWorkspaceSchemaVersion: Number.isInteger(schemaVersion) ? schemaVersion : null },
     ));
 
@@ -495,8 +491,9 @@ function inspectSourceContracts(sources) {
     )
     : check(
       "canonical_rule_source_chain",
-      "BLOCKED",
-      "显式拉取尚未把权威 01/02/03 机器区接入展示与计算；#66/#67 仍是部署阻断。",
+      "INFO",
+      "未识别到规范规则源静态标记；只由依赖证据与真实运行门禁决定是否阻断。",
+      { advisoryOnly: true },
     ));
 
   const nonFormalContract = (
@@ -513,8 +510,9 @@ function inspectSourceContracts(sources) {
     )
     : check(
       "non_formal_preview_contract",
-      "BLOCKED",
-      "一期固定 ConfigPreviewPackage/NON_FORMAL 契约尚未落地；#72 仍是部署阻断。",
+      "INFO",
+      "未识别到 NON_FORMAL 静态标记；只由依赖证据与真实运行门禁决定是否阻断。",
+      { advisoryOnly: true },
     ));
 
   const systemdLines = activeConfigLines(sources.systemd);
@@ -553,6 +551,7 @@ async function loadSourceContracts(root) {
     systemd,
     nginx,
     configExport,
+    configPreview,
     interactionContracts,
   ] = await Promise.all([
     read("lib/feishu-identity.ts"),
@@ -561,6 +560,7 @@ async function loadSourceContracts(root) {
     read("deploy/tackle-forger.service"),
     read("deploy/nginx-tackle-forger.conf.example"),
     read("lib/config-export.ts"),
+    read("lib/config-preview-package.ts"),
     read("lib/interaction-contracts.ts"),
   ]);
   return {
@@ -569,7 +569,7 @@ async function loadSourceContracts(root) {
     workbookRoute,
     systemd,
     nginx,
-    repositoryText: `${configExport}\n${interactionContracts}`,
+    repositoryText: `${configExport}\n${configPreview}\n${interactionContracts}`,
   };
 }
 
@@ -591,6 +591,170 @@ function gitSucceeds(root, args) {
   } catch {
     return false;
   }
+}
+
+const GITHUB_API_ORIGIN = "https://api.github.com";
+
+function githubApiUrl(pathname) {
+  return new URL(pathname, GITHUB_API_ORIGIN).toString();
+}
+
+function nextGithubPage(response) {
+  const link = response.headers?.get?.("link");
+  if (!link) return null;
+  const next = link
+    .split(",")
+    .map((entry) => /<([^>]+)>;\s*rel="([^"]+)"/u.exec(entry.trim()))
+    .find((match) => match?.[2] === "next")?.[1];
+  if (!next) return null;
+  const url = new URL(next);
+  if (url.origin !== GITHUB_API_ORIGIN) {
+    throw new Error("GitHub pagination left the canonical API origin");
+  }
+  return url.toString();
+}
+
+async function fetchGithubJson(fetchImpl, input, headers, options = {}) {
+  const response = await fetchImpl(input, { ...options, headers: { ...headers, ...options.headers } });
+  if (!response.ok) throw new Error(`GitHub API returned ${response.status}`);
+  return { response, payload: await response.json() };
+}
+
+async function fetchGithubPages(fetchImpl, initialUrl, headers, key) {
+  const collected = [];
+  const seen = new Set();
+  let next = initialUrl;
+  while (next) {
+    if (seen.has(next) || seen.size >= 20) {
+      throw new Error("GitHub pagination is cyclic or unexpectedly long");
+    }
+    seen.add(next);
+    const { response, payload } = await fetchGithubJson(fetchImpl, next, headers);
+    const page = key ? payload?.[key] : payload;
+    if (!Array.isArray(page)) throw new Error(`GitHub ${key ?? "page"} response is incomplete`);
+    collected.push(...page);
+    next = nextGithubPage(response);
+  }
+  return collected;
+}
+
+async function fetchTrustedWorkflowHash(fetchImpl, headers, ref) {
+  const { payload } = await fetchGithubJson(
+    fetchImpl,
+    githubApiUrl(
+      `/repos/futouyiba/tackle-forger/contents/${CI_WORKFLOW_PATH}?ref=${encodeURIComponent(ref)}`,
+    ),
+    headers,
+  );
+  if (
+    payload?.type !== "file"
+    || payload?.encoding !== "base64"
+    || typeof payload?.content !== "string"
+  ) {
+    throw new Error("Canonical workflow contents are unavailable");
+  }
+  return createHash("sha256")
+    .update(Buffer.from(payload.content.replace(/\s/gu, ""), "base64"))
+    .digest("hex");
+}
+
+async function fetchAllReviewThreads(fetchImpl, headers, pullNumber) {
+  const query = "query($owner:String!,$repo:String!,$number:Int!,$after:String){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100,after:$after){nodes{id isResolved} pageInfo{hasNextPage endCursor}}}}}";
+  const threads = [];
+  let after = null;
+  const seen = new Set();
+  do {
+    const { payload } = await fetchGithubJson(
+      fetchImpl,
+      githubApiUrl("/graphql"),
+      headers,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          query,
+          variables: { owner: "futouyiba", repo: "tackle-forger", number: pullNumber, after },
+        }),
+      },
+    );
+    const connection = payload?.data?.repository?.pullRequest?.reviewThreads;
+    if (payload?.errors?.length || !Array.isArray(connection?.nodes)) {
+      throw new Error("GitHub review threads are unavailable");
+    }
+    threads.push(...connection.nodes);
+    if (connection.pageInfo?.hasNextPage !== true) return threads;
+    const endCursor = connection.pageInfo?.endCursor;
+    if (typeof endCursor !== "string" || !endCursor || seen.has(endCursor)) {
+      throw new Error("GitHub review thread pagination is incomplete");
+    }
+    seen.add(endCursor);
+    after = endCursor;
+  } while (seen.size < 20);
+  throw new Error("GitHub review thread pagination is unexpectedly long");
+}
+
+function dependencyReviewTime(value) {
+  const parsed = Date.parse(value ?? "");
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function compareDependencyReviews(left, right) {
+  const time = dependencyReviewTime(left?.submittedAt) - dependencyReviewTime(right?.submittedAt);
+  if (time !== 0) return time;
+  const leftId = String(left?.id ?? "");
+  const rightId = String(right?.id ?? "");
+  if (leftId === rightId) return 0;
+  if (/^\d+$/u.test(leftId) && /^\d+$/u.test(rightId)) {
+    return BigInt(leftId) < BigInt(rightId) ? -1 : 1;
+  }
+  return leftId < rightId ? -1 : 1;
+}
+
+function dependencyReviewState(review) {
+  const state = String(review?.state ?? "").toUpperCase();
+  const agentPassed = state === "COMMENTED"
+    && String(review?.body ?? "").split(/\r?\n/u)
+      .some((line) => line === AGENT_REVIEW_PASS_MARKER);
+  return agentPassed ? "AGENT_PASSED" : state;
+}
+
+function dependencyCurrentHeadReviewState({ reviews, headSha }) {
+  const decisiveStates = new Set([
+    "APPROVED",
+    "AGENT_PASSED",
+    "CHANGES_REQUESTED",
+    "DISMISSED",
+  ]);
+  const ordered = Array.isArray(reviews)
+    ? [...reviews].sort(compareDependencyReviews)
+    : [];
+  const latestByReviewer = new Map();
+  for (const review of ordered) {
+    const login = String(review?.author?.login ?? "").trim().toLowerCase();
+    const state = dependencyReviewState(review);
+    if (!login || review?.commitSha !== headSha || !decisiveStates.has(state)) continue;
+    latestByReviewer.set(login, { ...review, state });
+  }
+  const activeChangeRequest = [...latestByReviewer.values()]
+    .find((review) => review.state === "CHANGES_REQUESTED");
+  if (activeChangeRequest) return { activeChangeRequest };
+  const signal = [...ordered].reverse().find((review) => {
+    const login = String(review?.author?.login ?? "").trim().toLowerCase();
+    const state = dependencyReviewState(review);
+    if (
+      !login
+      || review?.commitSha !== headSha
+      || (state !== "APPROVED" && state !== "AGENT_PASSED")
+    ) {
+      return false;
+    }
+    const later = latestByReviewer.get(login);
+    return !later
+      || compareDependencyReviews(later, review) <= 0
+      || later.state === "APPROVED"
+      || later.state === "AGENT_PASSED";
+  });
+  return { signal };
 }
 
 export async function inspectDependencyManifest(root, { fetchImpl = fetch, githubToken } = {}) {
@@ -615,7 +779,9 @@ export async function inspectDependencyManifest(root, { fetchImpl = fetch, githu
     const incompleteReviewIds = [];
     const githubVerificationFailedIds = [];
     const githubRequiredCheckVerificationFailedIds = [];
+    const githubWorkflowTrustVerificationFailedIds = [];
     const githubReviewThreadVerificationFailedIds = [];
+    const githubCurrentHeadReviewVerificationFailedIds = [];
     const evidence = [];
     const seenCommits = new Set();
 
@@ -656,6 +822,7 @@ export async function inspectDependencyManifest(root, { fetchImpl = fetch, githu
         dependency.merged !== true
         || dependency.reviewThreadsResolved !== true
         || dependency.requiredChecksPassed !== true
+        || dependency.currentHeadReviewPassed !== true
       ) {
         incompleteReviewIds.push(dependency.id);
       }
@@ -672,79 +839,123 @@ export async function inspectDependencyManifest(root, { fetchImpl = fetch, githu
             Authorization: `Bearer ${githubToken.trim()}`,
             "X-GitHub-Api-Version": "2022-11-28",
           };
-          const response = await fetchImpl(
-            `https://api.github.com/repos/futouyiba/tackle-forger/pulls/${expected.pr}`,
-            {
-              headers,
-            },
+          const { payload: pullRequest } = await fetchGithubJson(
+            fetchImpl,
+            githubApiUrl(`/repos/futouyiba/tackle-forger/pulls/${expected.pr}`),
+            headers,
           );
-          const pullRequest = response.ok ? await response.json() : undefined;
           if (
             pullRequest?.number !== expected.pr
             || pullRequest?.state !== "closed"
             || typeof pullRequest?.merged_at !== "string"
             || pullRequest?.merge_commit_sha !== commit
             || pullRequest?.head?.sha !== reviewedHeadCommit
+            || !/^[0-9a-f]{40}$/u.test(pullRequest?.base?.sha ?? "")
           ) {
             githubVerificationFailedIds.push(dependency.id);
           }
-          const runsResponse = await fetchImpl(
-            `https://api.github.com/repos/futouyiba/tackle-forger/actions/runs?event=pull_request&head_sha=${reviewedHeadCommit}&per_page=100`,
-            { headers },
+          const gatePullRequest = {
+            number: expected.pr,
+            headSha: reviewedHeadCommit,
+            baseSha: pullRequest?.base?.sha,
+          };
+          const workflowRuns = await fetchGithubPages(
+            fetchImpl,
+            githubApiUrl(
+              `/repos/futouyiba/tackle-forger/actions/runs?event=pull_request&head_sha=${reviewedHeadCommit}&per_page=100`,
+            ),
+            headers,
+            "workflow_runs",
           );
-          const runs = runsResponse.ok ? await runsResponse.json() : undefined;
-          const matchingRuns = (runs?.workflow_runs ?? []).filter((run) => (
-            run?.event === "pull_request"
-            && run?.head_sha === reviewedHeadCommit
-            && run?.name === REQUIRED_CI_WORKFLOW_NAME
-            && Array.isArray(run?.pull_requests)
-            && run.pull_requests.some((pull) => pull?.number === expected.pr)
-          ));
-          const newestRunNumber = Math.max(
-            ...matchingRuns.map((run) => Number(run?.run_number) || 0),
+          const selected = selectLatestPullRequestWorkflowRun(
+            workflowRuns,
+            gatePullRequest,
           );
-          const newestRuns = matchingRuns.filter(
-            (run) => (Number(run?.run_number) || 0) === newestRunNumber,
+          const { payload: workflow } = await fetchGithubJson(
+            fetchImpl,
+            githubApiUrl(
+              `/repos/futouyiba/tackle-forger/actions/workflows/${CI_WORKFLOW_PATH}`,
+            ),
+            headers,
           );
-          const latestRun = newestRuns.length === 1 ? newestRuns[0] : undefined;
+          const attemptJobsPath = workflowRunAttemptJobsPath(
+            "/repos/futouyiba/tackle-forger",
+            selected?.run,
+          );
+          const [baseWorkflowHash, headWorkflowHash] = await Promise.all([
+            fetchTrustedWorkflowHash(fetchImpl, headers, pullRequest?.base?.sha),
+            fetchTrustedWorkflowHash(fetchImpl, headers, reviewedHeadCommit),
+          ]);
           if (
-            !latestRun
-            || latestRun.status !== "completed"
-            || latestRun.conclusion !== "success"
+            !selected
+            || selected.provenance.baseSha !== pullRequest?.base?.sha
+            || selected.run?.workflow_id !== workflow?.id
+            || workflow?.path !== CI_WORKFLOW_PATH
+            || workflow?.state !== "active"
+            || baseWorkflowHash !== headWorkflowHash
+            || !attemptJobsPath
+          ) {
+            githubWorkflowTrustVerificationFailedIds.push(dependency.id);
+          }
+          if (
+            !selected?.run
+            || selected.run.status !== "completed"
+            || selected.run.conclusion !== "success"
+            || !attemptJobsPath
           ) {
             githubRequiredCheckVerificationFailedIds.push(dependency.id);
           } else {
-            const jobsResponse = await fetchImpl(
-              `https://api.github.com/repos/futouyiba/tackle-forger/actions/runs/${latestRun.id}/jobs?filter=latest&per_page=100`,
-              { headers },
+            const jobs = await fetchGithubPages(
+              fetchImpl,
+              githubApiUrl(`${attemptJobsPath}?per_page=100`),
+              headers,
+              "jobs",
             );
-            const jobs = jobsResponse.ok ? await jobsResponse.json() : undefined;
             if (REQUIRED_CI_JOB_NAMES.some((name) => {
-              const matching = (jobs?.jobs ?? []).filter((job) => job?.name === name);
+              const matching = jobs.filter((job) => job?.name === name);
               return matching.length !== 1
                 || matching[0]?.status !== "completed"
-                || matching[0]?.conclusion !== "success";
+                || matching[0]?.conclusion !== "success"
+                || (matching[0]?.head_sha ?? reviewedHeadCommit) !== reviewedHeadCommit;
             })) {
               githubRequiredCheckVerificationFailedIds.push(dependency.id);
             }
           }
-          const threadResponse = await fetchImpl("https://api.github.com/graphql", {
-            method: "POST",
-            headers: { ...headers, "Content-Type": "application/json" },
-            body: JSON.stringify({
-              query: "query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){reviewThreads(first:100){nodes{isResolved} pageInfo{hasNextPage}}}}}",
-              variables: { owner: "futouyiba", repo: "tackle-forger", number: expected.pr },
-            }),
-          });
-          const threadResult = threadResponse.ok ? await threadResponse.json() : undefined;
-          const threads = threadResult?.data?.repository?.pullRequest?.reviewThreads;
-          if (
-            threadResult?.errors?.length
-            || !Array.isArray(threads?.nodes)
-            || threads.pageInfo?.hasNextPage !== false
-            || threads.nodes.some((thread) => thread?.isResolved !== true)
-          ) {
+          try {
+            const threads = await fetchAllReviewThreads(fetchImpl, headers, expected.pr);
+            if (threads.some((thread) => thread?.isResolved !== true)) {
+              githubReviewThreadVerificationFailedIds.push(dependency.id);
+            }
+          } catch {
             githubReviewThreadVerificationFailedIds.push(dependency.id);
+          }
+          try {
+            const reviewPayloads = await fetchGithubPages(
+              fetchImpl,
+              githubApiUrl(
+                `/repos/futouyiba/tackle-forger/pulls/${expected.pr}/reviews?per_page=100`,
+              ),
+              headers,
+            );
+            const reviewState = dependencyCurrentHeadReviewState({
+              headSha: reviewedHeadCommit,
+              reviews: reviewPayloads.map((review) => ({
+                id: review.id,
+                state: review.state,
+                commitSha: review.commit_id,
+                submittedAt: review.submitted_at,
+                body: review.body,
+                author: {
+                  login: review.user?.login,
+                  type: review.user?.type,
+                },
+              })),
+            });
+            if (reviewState.activeChangeRequest || !reviewState.signal) {
+              githubCurrentHeadReviewVerificationFailedIds.push(dependency.id);
+            }
+          } catch {
+            githubCurrentHeadReviewVerificationFailedIds.push(dependency.id);
           }
         } catch {
           githubVerificationFailedIds.push(dependency.id);
@@ -761,7 +972,8 @@ export async function inspectDependencyManifest(root, { fetchImpl = fetch, githu
         merged: dependency.merged === true,
         reviewThreadsResolved: dependency.reviewThreadsResolved === true,
         requiredChecksPassed: dependency.requiredChecksPassed === true,
-        requiredCiWorkflowName: REQUIRED_CI_WORKFLOW_NAME,
+        currentHeadReviewPassed: dependency.currentHeadReviewPassed === true,
+        requiredCiWorkflowPath: CI_WORKFLOW_PATH,
         requiredCiJobNames: REQUIRED_CI_JOB_NAMES,
         evidenceUrl: expectedUrl,
       });
@@ -781,7 +993,9 @@ export async function inspectDependencyManifest(root, { fetchImpl = fetch, githu
       || incompleteReviewIds.length > 0
       || githubVerificationFailedIds.length > 0
       || githubRequiredCheckVerificationFailedIds.length > 0
+      || githubWorkflowTrustVerificationFailedIds.length > 0
       || githubReviewThreadVerificationFailedIds.length > 0
+      || githubCurrentHeadReviewVerificationFailedIds.length > 0
     );
     return invalid
       ? check(
@@ -803,7 +1017,9 @@ export async function inspectDependencyManifest(root, { fetchImpl = fetch, githu
           incompleteReviewIds,
           githubVerificationFailedIds,
           githubRequiredCheckVerificationFailedIds,
+          githubWorkflowTrustVerificationFailedIds,
           githubReviewThreadVerificationFailedIds,
+          githubCurrentHeadReviewVerificationFailedIds,
           dependencies: evidence,
         },
       )
@@ -1479,15 +1695,15 @@ export async function runAuthenticatedReadOnlySmoke({
   const state = await fetchProbe(fetchImpl, target, "/api/state", { headers }, secrets);
   const validWorkspace = state.status === 200
     && Number.isInteger(state.json?.revision)
-    && state.json?.state?.schemaVersion === 17;
+    && state.json?.state?.schemaVersion === 18;
   checks.push(validWorkspace
     ? check(
       "workspace_read",
       "PASS",
-      "已只读读取 schema 17 工作区并生成去敏计数/哈希证据。",
+      "已只读读取当前 schema 18 工作区并生成去敏计数/哈希证据。",
       stateEvidence(state.json),
     )
-    : check("workspace_read", "BLOCKED", "目标工作区不是可验证的 schema 17 revision。", {
+    : check("workspace_read", "BLOCKED", "目标工作区不是可验证的当前 schema 18 revision。", {
       status: state.status,
       revisionValid: Number.isInteger(state.json?.revision),
       schemaVersion: state.json?.state?.schemaVersion ?? null,

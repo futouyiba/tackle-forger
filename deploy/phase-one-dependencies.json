@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "phase-one-dependency-evidence/v1",
+  "schemaVersion": "phase-one-dependency-evidence/v2",
   "dependencies": [
     {
       "id": "canonical_rule_source",
@@ -10,28 +10,31 @@
       "merged": false,
       "reviewThreadsResolved": false,
       "requiredChecksPassed": false,
+      "currentHeadReviewPassed": false,
       "evidenceUrl": "https://github.com/futouyiba/tackle-forger/pull/67"
     },
     {
       "id": "schema_v17",
       "issue": 68,
       "pr": 71,
-      "commit": null,
-      "reviewedHeadCommit": null,
-      "merged": false,
+      "commit": "55ce2dd5ba0e2d3e9855d613b09c687d8585537a",
+      "reviewedHeadCommit": "b0eed77e4210739f0e87eb43ad677219231aafac",
+      "merged": true,
       "reviewThreadsResolved": false,
-      "requiredChecksPassed": false,
+      "requiredChecksPassed": true,
+      "currentHeadReviewPassed": false,
       "evidenceUrl": "https://github.com/futouyiba/tackle-forger/pull/71"
     },
     {
       "id": "non_formal_preview",
       "issue": 72,
       "pr": 76,
-      "commit": null,
-      "reviewedHeadCommit": null,
-      "merged": false,
-      "reviewThreadsResolved": false,
-      "requiredChecksPassed": false,
+      "commit": "9b2c80b649b4a310b9aec067dd13de5b83c06163",
+      "reviewedHeadCommit": "6e9cb45f1e0e2d69413b74a6ff30b8a76c22d446",
+      "merged": true,
+      "reviewThreadsResolved": true,
+      "requiredChecksPassed": true,
+      "currentHeadReviewPassed": false,
       "evidenceUrl": "https://github.com/futouyiba/tackle-forger/pull/76"
     }
   ]

@@ -654,28 +654,28 @@ linear_subtraction 和 diminishing_division 两种配置，本轮不需要决定
 - 正式目标集合来自配置治理负责人发布的`ConfigTargetCatalogVersion`；每个必需环境×渠道必须有获批`ConfigTargetScanManifest`。用户绑定只提供本机访问授权，不能创建、启用或豁免正式目标。
 - 其他渠道只使用用户明确选择的具体目录；不从本机目录或`config_system.toml`发现/治理渠道，也不解析或修正`config_system.toml`。
 - 多个“环境×渠道”可同时选择，默认让合格目标继续；确认页允许“任一失败则全部不写”。
-- 一期只能下载带无效符号身份且不含生产文件名的`NON_FORMAL`预览包。1.5期已有正式Bundle、权威目标与获批Manifest且通过`config.export.commit`时，File System Access API不可用才允许下载正式人工搬运包，并审计为“已下载、未落盘”。
+- 一期只能下载带无效符号身份且不含生产文件名的`NON_FORMAL`预览包。1.5期已有正式Bundle、权威目标、新鲜获批Manifest且通过`config.export.commit`时，仍须在生成/下载前取得`ConfigTargetGovernanceLease`并确认全部authoritative ref可执行受保护expected-old-OID CAS；File System Access API不可用才允许下载正式人工搬运包，并审计为`FORMAL_PACKAGE_DOWNLOADED_NOT_APPLIED`。返回`CONFIG_TARGET_SERIALIZATION_UNAVAILABLE`时不得生成或下载正式包，只能保留`NON_FORMAL`预览。
 
 ### 19.3 配置生成与校验
 
 实现顺序：
 
-1. 定义`ConfigEnvironmentProfile`、`LocalExportTargetBinding`、`ConfigExportMapping`、稳定`rangeId`、`ConfigTargetCatalogVersion`、`ConfigTargetScanManifest`、`ConfigIdBundle`和reservation ledger。
+1. 定义`ConfigEnvironmentProfile`、`LocalExportTargetBinding`、`ConfigExportMapping`、稳定`rangeId`、`ConfigTargetCatalogVersion`、`ConfigTargetScanManifest`、`ConfigTargetGovernanceLease`、`ConfigIdBundle`和reservation ledger。
 2. 一期实现`ConfigPreviewPackage(publicationState=NON_FORMAL)`：数字ID/正式name为空，只用非法生产schema的符号引用做结构检查，不生成`tackle.xlsx/item.xlsx/store.xlsx`生产文件名。
-3. 1.5期实现`reserve_config_id_bundle`：携带expectedModelRevisionId/key与idempotencyKey，锁Model head并在同一事务冻结后继Model revision、名称、Bundle、ledger和rangeId游标。
+3. 1.5期先接入配置目标治理协调器和受保护ref写入协议：按去重后的物理`repositoryId + authoritativeRef`取得租约，同一ref的所有逻辑别名必须具有相同expected OID；租约冻结Manifest集合与expected old OID，单调fencing token在业务提交点和ref CAS两端强制校验；无法防止绕过写入时fail-closed。再实现`reserve_config_id_bundle`：携带expectedModelRevisionId/key、expectedManifestSetHash与idempotencyKey，锁Model head并在同一事务冻结后继Model revision、名称、Bundle、ledger、租约证据和rangeId游标。
 4. 实现“准备发布与导出”批次：复用未变化Snapshot、批量冻结合格revision、跳过并报告阻断项，不要求逐个Model确认。
 5. 从SnapshotBatch和正式Bundle构建`ExportPackage/Manifest`，冻结策略版本、目标目录版本和获批扫描Manifest。
 6. 在暂存区upsert tackle/item/store，保留未知sheet、列、样式、公式和四行表头。
 7. 解析该环境根`config.toml`的`tables.*`与`enums`，复用现有编译器的name-key→数字ID语义。
 8. 强制生成部位tackle、item、GoodsBasic和StoreBuy；在所有渠道的StoreBuy schema、配置编译器类型/解析、迁移、导出器和校验器中新增BOOL列`enabled`。新行默认false，更新普通属性时保留各目标现值。
 9. 先校验本次变更及其引用闭包；全库关系扫描作为用户主动触发的独立功能。
-10. 每次策略发布、预留和正式导出都重新比较authoritative ref、commit、`config.toml`和workbook hashes与获批Manifest；正式导出还验证本地HEAD和文件基线。漂移时阻断并要求重新扫描、复核和发布策略。
+10. 策略发布、每次预留、历史导入和正式导出都重新比较authoritative ref、commit、`config.toml`和workbook hashes与获批Manifest；策略发布只执行Manifest复验，不取得治理租约。每次预留、历史导入和正式导出才取得治理租约；正式导出还验证本地HEAD和文件基线。数据库提交前把租约CAS为`COMMITTING`，在实际提交点重验最新token；漂移或串行化不可用时阻断上述三类正式动作并要求恢复或重新扫描、复核和发布策略。
 11. 记录基线hash、生成备份和恢复Manifest，逐文件写入并回读；浏览器跨文件不宣称原子提交。
 12. 每目标返回独立结果、hash、备份与审计；不执行任何Git命令。
 
 upsert必须使用稳定`ID + configNameKey`：同名不同ID、同ID不同名或分裂命中均阻止；不得按行号关联、整行覆盖、删除旧行或自动排序。OPEN-008的数字区间、命名和生命周期已经确认，但正式ID仍只能由引用新鲜目标Manifest的已发布`ConfigIdPolicyVersion`和reservation ledger分配；策略/Manifest/ledger实现完成前只能做`NON_FORMAL`预览和冲突检查，不得用最大值+1或示例ID正式提交。
 
-配置治理动作必须进入第24节统一`CapabilityCode`、`ActionCode`、`ActionAvailability`和`ActionLink.action`。写动作启用时返回绑定action、subject、expected revision和hash的不可篡改payload引用；缺权限、职责分离不允许、revision过期或Manifest stale时返回禁用原因且不返回payload，命令端仍须重新鉴权。
+配置治理动作必须进入第24节统一`CapabilityCode`、`ActionCode`、`ActionAvailability`和`ActionLink.action`。所有状态写动作（含warning确认、waiver申请/批准、重算、规则源变更草稿和`rebase_patch`）启用时返回绑定action、subject、expected revision和hash的不可篡改payload引用；问题处置联合只保留导航、查看证据和帮助。旧`approve_waiver/request_waiver/retry`不得成为绕过路径：迁移必须从可信历史完整重建并校验目标动作所需的fingerprint、revision、reason、Gate、必要的环境×渠道及幂等payload，缺任一字段均以`LEGACY_ACTION_ALIAS_UNRESOLVABLE`禁用。`open_rebase`只在可信历史证明从未执行Rebase且可恢复明确路由时转为`navigate`；任何写语义、歧义或证据不足都以`LEGACY_ACTION_ALIAS_UNRESOLVABLE`拒绝，不得转为`rebase_patch`。缺权限、revision过期、Manifest stale或治理租约不可用时返回禁用原因且不返回payload，命令端仍须重新鉴权。
 
 OPEN-007的产品语义已经确定：S包含100且大于100报错；Performance不参与价值分；维修价和购买价使用未舍入中间值并分别在最终输出舍入；购买价使用未舍入维修价；最低价100在购买价舍入后应用；`purchasePriceRaw`超过300M产生PUBLISH WARNING，二次确认后保留真实价格和标记继续。实现必须以新的`PricingExecutionPolicy`和fingerprint确认记录表达，不能继续用单个`roundingStage/minimumPriceScope/overflowMode`冒充完整契约。当前飞书机器源与runtime更新完成前，旧实现仍只可提供`NON_FORMAL`试算；不得手填价格、静默把旧`error/clamp`迁成新确认，或改写旧PricingPolicyVersion/Snapshot。
 
@@ -686,7 +686,13 @@ OPEN-007的产品语义已经确定：S包含100且大于100报错；Performance
 - 预览后Excel外部修改触发hash冲突。
 - 同一幂等包重试不重复插行。
 - Manifest获批后authoritative ref推进或hash变化时，预留和正式导出都阻断且不消耗ID；正式写入改变hash后旧策略不能继续下一批。
+- 最后一次ref读取后并发writer推进同一ref时，受保护CAS拒绝writer或业务事务在ledger提交前回滚；配置仓库存在绕过协调器的写入路径时，正式预留、历史导入和正式导出fail-closed，策略发布仍只执行Manifest/ref/hash复验。
+- File System Access API不可用且其他正式包输入均有效，但治理协调器、token连续性或受保护expected-old-OID CAS任一不可用时，生成/下载正式人工搬运包返回`CONFIG_TARGET_SERIALIZATION_UNAVAILABLE`；不得产生包文件或`FORMAL_PACKAGE_DOWNLOADED_NOT_APPLIED`记录，只保留`NON_FORMAL`预览。
+- 两个不同`targetEntryId`指向同一`repositoryId + authoritativeRef`时只取得一个物理ref锁并互斥；别名expected OID不一致时返回`CONFIG_TARGET_REF_ALIAS_CONFLICT`且不发放token。
+- 历史导入绑定finding/review revision、Manifest set、源行hash和幂等键；并发复核只允许一个决定成功，stale或响应丢失重试不产生错误/重复`EXTERNAL_OCCUPIED`。
+- 旧状态写别名缺fingerprint、revision、reason、Gate、必要环境×渠道或原幂等键时禁用且API拒绝；完整可信历史才允许重建类型化payload。纯路由`open_rebase`不能执行Rebase，实际写入只接受`rebase_patch`。
 - 同一Model并发修改stableModelKey与预留时，以expectedModelRevisionId和Model head行锁保证只允许一个顺序结果，不出现Model/Bundle身份分裂。
+- ActionLink旧waiver/retry别名迁移后不能执行无payload写入；确认warning、waiver、重算和规则草稿都由统一ActionCode携带不可篡改payload。
 - 缺`config.id.reserve`时，ValidationIssue中的`ActionLink.action=reserve_config_id_bundle`为禁用、说明Capability且无命令payload；权限恢复后payload仍受expected revision/hash约束。
 - 断链报告精确到文件/sheet/行/字段/值/目标逻辑表。
 - 未声明sheet只warning且不被删除。

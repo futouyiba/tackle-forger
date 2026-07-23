@@ -47,6 +47,7 @@ import type {
   FiveAxisEntityInput,
   ModelFiveAxisPreview,
   FiveAxisViewDefinition,
+  ProjectionMatch,
   PurchasableModel,
   SeriesDefinition,
   SkuDrawer,
@@ -1573,6 +1574,7 @@ export function SeriesGanttWorkbenchV3({
     () => enabledProductItemParts(state.itemParts),
     [state.itemParts],
   );
+  const [skuPullChangePending, setSkuPullChangePending] = useState(false);
 
   const blocks = useMemo(() => querySeriesGantt({
     query,
@@ -1596,9 +1598,12 @@ export function SeriesGanttWorkbenchV3({
     ?? state.seriesDefinitions.find((series) => series.id === blocks[0]?.seriesId);
   const selectedBlock = blocks.find((block) => block.seriesId === selectedSeries?.id);
   const seriesSkus = selectedSeries
-    ? state.skuDrawers.filter((sku) =>
-      sku.seriesId === selectedSeries.id
-      && isProductSkuChainEnabled(selectedSeries, sku, state.skuDrawers))
+    ? state.skuDrawers.filter(
+      (sku) =>
+        sku.seriesId === selectedSeries.id
+        && sku.status !== "superseded"
+        && isProductSkuChainEnabled(selectedSeries, sku, state.skuDrawers),
+    )
       .sort((left, right) => left.targetPullKg - right.targetPullKg || left.id.localeCompare(right.id))
     : [];
   const selectedSku = seriesSkus.find((sku) => sku.id === selectedSkuId) ?? seriesSkus[0];
@@ -1722,6 +1727,8 @@ export function SeriesGanttWorkbenchV3({
     assessmentRestoreScopeId,
     assessmentRestoreScopeType,
   ]);
+  const changeSkuTargetPullAvailability =
+    actionAvailabilities.change_sku_target_pull;
   const contextBreadcrumbView = buildProductBreadcrumbView({
     workspaceId,
     collection: drawerSeries?.collectionId
@@ -1900,6 +1907,118 @@ export function SeriesGanttWorkbenchV3({
     }
   };
 
+  const changeSelectedSkuTargetPull = async () => {
+    if (
+      !selectedSku ||
+      !changeSkuTargetPullAvailability.enabled ||
+      skuPullChangePending
+    ) {
+      return;
+    }
+    const rawTarget = window.prompt(
+      `输入新的目标拉力（kgf）。当前为 ${selectedSku.targetPullKg} kgf；提交前会先展示新的结构标杆匹配。`,
+      String(selectedSku.targetPullKg),
+    );
+    if (rawTarget === null) return;
+    const targetPullKg = Number(rawTarget.trim());
+    if (!Number.isFinite(targetPullKg) || targetPullKg <= 0) {
+      notify("目标拉力必须是大于 0 的有限 kgf 数值。");
+      return;
+    }
+    if (targetPullKg === selectedSku.targetPullKg) {
+      notify("新目标拉力与当前值相同。");
+      return;
+    }
+    setSkuPullChangePending(true);
+    try {
+      const previewResponse = await fetch(
+        "/api/skus/target-pull/preview",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            skuId: selectedSku.id,
+            expectedRevision: selectedSku.revision,
+            targetPullKg,
+          }),
+        },
+      );
+      const previewPayload = (await previewResponse.json().catch(() => null)) as
+        | {
+          projectionMatch?: ProjectionMatch;
+          mode?: "SAME_SKU_NEW_REVISION" | "REPLACEMENT_SKU";
+          publishedDescendantFingerprint?: string;
+          error?: string;
+        }
+        | null;
+      if (
+        !previewResponse.ok ||
+        !previewPayload?.projectionMatch ||
+        !previewPayload.mode ||
+        !previewPayload.publishedDescendantFingerprint
+      ) {
+        notify(previewPayload?.error ?? "无法预览新的结构标杆匹配。");
+        return;
+      }
+      const match = previewPayload.projectionMatch;
+      const confirmed = window.confirm(
+        [
+          `确认把 ${selectedSku.id} 从 ${selectedSku.targetPullKg} kgf 改为 ${targetPullKg} kgf？`,
+          `显式匹配：${match.projectionId}（结构拉力 ${match.matchedStructuralPullKg} kgf，规则 ${match.ruleSetVersion}）。`,
+          previewPayload.mode === "REPLACEMENT_SKU"
+            ? "检测到已发布后代：系统会创建新 SKU，并将旧 SKU 标记为 DEPRECATED；旧快照不会改写。"
+            : "未检测到已发布后代：系统会保留 skuId 并创建新 revision。",
+        ].join("\n\n"),
+      );
+      if (!confirmed) return;
+
+      const replacementSkuId = `sku:${crypto.randomUUID()}`;
+      const response = await fetch("/api/skus/target-pull", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          skuId: selectedSku.id,
+          expectedRevision: selectedSku.revision,
+          targetPullKg,
+          projectionMatch: match,
+          expectedMode: previewPayload.mode,
+          publishedDescendantFingerprint:
+            previewPayload.publishedDescendantFingerprint,
+          replacementSkuId,
+          deprecateOriginal: true,
+          idempotencyKey:
+            `change-sku-target-pull:${selectedSku.id}:` +
+            `${selectedSku.revision}:${crypto.randomUUID()}`,
+        }),
+      });
+      const payload = (await response.json().catch(() => null)) as
+        | {
+          state?: WorkspaceState;
+          sku?: SkuDrawer;
+          mode?: "SAME_SKU_NEW_REVISION" | "REPLACEMENT_SKU";
+          revision?: number;
+          error?: string;
+        }
+        | null;
+      if (!response.ok || !payload?.state || !payload.sku) {
+        notify(payload?.error ?? "SKU 目标拉力变更失败。");
+        return;
+      }
+      onWorkspaceApplied(
+        payload.state,
+        payload.revision ?? 0,
+        payload.mode === "REPLACEMENT_SKU"
+          ? `已创建新 SKU ${payload.sku.id}；旧 SKU 与已发布快照保持冻结。`
+          : `已将 ${payload.sku.id} 更新到 revision ${payload.sku.revision}。`,
+      );
+      setSelectedSkuId(payload.sku.id);
+    } catch (caught) {
+      notify(caught instanceof Error ? caught.message : "SKU 目标拉力变更失败。");
+    } finally {
+      setSkuPullChangePending(false);
+    }
+  };
+
   const columnCount = Math.max(1, QUALITY_ORDER.length * Math.max(1, typeIds.length));
   return (
     <div className="series-gantt-page series-gantt-page-v3">
@@ -2019,7 +2138,28 @@ export function SeriesGanttWorkbenchV3({
           </div>
           {selectedSku ? (
             <div className="gantt-model-list">
-              <div className="gantt-model-list-head"><span>Model · 实际购买对象</span><span>配置</span><span>生命周期</span><span /></div>
+              <div className="gantt-model-list-head">
+                <span>Model · 实际购买对象</span>
+                <span>配置</span>
+                <span>生命周期</span>
+                <button
+                  type="button"
+                  disabled={
+                    skuPullChangePending ||
+                    !changeSkuTargetPullAvailability.enabled ||
+                    selectedSku.status === "superseded"
+                  }
+                  title={
+                    selectedSku.status === "superseded"
+                      ? "DEPRECATED SKU 只保留历史追溯，不能再次修改目标拉力。"
+                      : changeSkuTargetPullAvailability.disabledReasonText
+                  }
+                  onClick={() => void changeSelectedSkuTargetPull()}
+                >
+                  <Scale size={14} />
+                  {skuPullChangePending ? "处理中…" : "修改目标拉力"}
+                </button>
+              </div>
               {visibleModels.map((model) => (
                 <button type="button" key={model.id} disabled={!previewModelAvailability.enabled} title={previewModelAvailability.disabledReasonText} onClick={() => { setDrawerModelId(model.id); setDrawerSnapshotId(""); }}>
                   <span><Boxes size={15} /><div><strong>{model.name}</strong><small>{model.id} · revision {model.revision}</small></div></span>

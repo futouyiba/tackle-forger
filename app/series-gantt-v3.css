@@ -443,6 +443,34 @@
   gap: 14px;
 }
 
+.series-gantt-page-v3 .gantt-model-list-head {
+  grid-template-columns:
+    minmax(220px, 1.4fr)
+    minmax(180px, 1fr)
+    100px
+    minmax(142px, auto);
+}
+
+.series-gantt-page-v3 .gantt-model-list-head > button {
+  align-items: center;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: #2d5e50;
+  display: inline-flex;
+  font: inherit;
+  gap: 6px;
+  justify-content: center;
+  padding: 6px 9px;
+  text-transform: none;
+}
+
+.series-gantt-page-v3 .gantt-model-list-head > button:disabled {
+  color: var(--muted);
+  cursor: not-allowed;
+  opacity: .65;
+}
+
 .rebase-version-chain {
   align-items: center;
   background: #f4f8f6;

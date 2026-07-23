@@ -25,7 +25,10 @@ function canonicalDraftContent(draft: CanonicalRuleSourceDraft) {
 }
 
 function assertCanonicalDraftIntegrity(draft: CanonicalRuleSourceDraft) {
-  const errors = draft.issues.filter((issue) => issue.level === "error");
+  // 01 template row errors are preserved in WeightTemplatePolicyDraft and
+  // block only its explicit activation at RuleSet publish; they must not make
+  // pull discard the traceable draft evidence.
+  const errors = draft.issues.filter((issue) => issue.level === "error" && !issue.code.startsWith("WEIGHT_TEMPLATE_"));
   if (errors.length) throw new Error(`飞书 01/02/03 规则数据存在阻断错误，已保留当前可用规则：${errors.map((issue) => issue.code).join("、")}`);
   if (draft.contentHash !== deterministicHash(canonicalDraftContent(draft))) {
     throw new Error("CanonicalRuleSourceDraft 内容哈希不一致，已保留当前可用规则。");

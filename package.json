@@ -13,6 +13,7 @@
     "config-export:companion": "tsx scripts/config-export-companion.ts",
     "storage:migrate:blob-to-sqlite": "tsx scripts/migrate-blob-to-sqlite.ts",
     "storage:backup": "tsx scripts/backup-workspace.ts",
+    "governance:check-pr": "node scripts/check-pr-merge-gate.mjs",
     "test": "npm run build && tsx --test tests/*.test.ts && node --test tests/*.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern .vercel --ignore-pattern apps/web --ignore-pattern packages",
     "db:generate": "drizzle-kit generate",

@@ -1,7 +1,7 @@
 import { aggregateAffixPanel, resolveAffixConfiguration } from "./affix-engine";
 import {
   defaultAffinityAxisWeights,
-  evaluateCanonicalAffinity,
+  evaluateAffinity,
   evaluateHardCompatibility,
   evaluateStructuralHardCompatibility,
   structuralCompatibilityContext,
@@ -13,6 +13,14 @@ import {
 import { applyLayeredPatches } from "./patch-engine";
 import { importLegacyPatchesToLedger } from "./patch-ledger";
 import {
+  createNeedsReviewPartConstraintSet,
+  PART_CONSTRAINT_SOURCE_HASH_PROJECTION,
+  partConstraintSourceContentHash,
+  partConstraintSourceRevisionId,
+  partConstraintSourceStableId,
+  partConstraintSetRef,
+} from "./part-constraints";
+import {
   matchNearestProjection,
   structuralPullFromProjection,
 } from "./projection-matcher";
@@ -23,7 +31,6 @@ import {
   publishConfigurationSnapshot,
 } from "./publishing";
 import { deriveProjection, deterministicHash } from "./rule-kernel";
-import { validationIssueLevel } from "./validation-issues";
 import type {
   AffinityRule,
   CandidateSearchRecipe,
@@ -195,7 +202,7 @@ function sampleAffinityRules(ruleSetVersion: string): AffinityRule[] {
     },
     {
       id: "affinity-obstacle-high-strength",
-      axis: "type_function",
+      axis: "function_performance",
       selector: {
         functionId: "function:障碍强攻",
       },
@@ -283,6 +290,9 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
   const fn = state.functionProfiles.find(
     (profile) => profile.id === "function:障碍强攻",
   );
+  const performance =
+    state.performanceProfiles.find((profile) => profile.name.includes("高强")) ??
+    state.performanceProfiles[0];
   const quality = state.qualityProfiles.find(
     (profile) => profile.id === "quality_a_purple",
   );
@@ -305,6 +315,7 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
       itemTypeProfile: type,
       functionProfile: fn,
       functionIntensity: 2,
+      performanceProfile: performance,
       qualityProfile: quality,
       ruleSet,
       reductionStackingPolicy: state.reductionStackingPolicyVersions.find(
@@ -317,7 +328,10 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
   );
   const candidatesFor = (targetPullKg: number) =>
     projections.map((projection) => {
-      const context = baseContext(targetPullKg);
+      const context = {
+        ...baseContext(targetPullKg),
+        performanceId: performance?.id,
+      };
       return {
         projection,
         weightTemplate: templates.find(
@@ -329,7 +343,7 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
             (template) => template.id === projection.weightTemplateId,
           ) as (typeof templates)[number]).nominalFishKg,
         compatibility: evaluateStructuralHardCompatibility(structuralCompatibilityContext({ methodId: method.id, typeId: type.id, functionId: fn.id, itemPartId: "part:rod" }), compatibilityRules),
-        affinity: evaluateCanonicalAffinity(
+        affinity: evaluateAffinity(
           context,
           affinityRules,
           defaultAffinityAxisWeights,
@@ -344,6 +358,7 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
       typeId: type.id,
       functionId: fn.id,
       functionIntensity: 2,
+      performanceId: performance?.id,
       qualityId: quality.id,
     },
     candidatesFor(1.5),
@@ -357,6 +372,7 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
       typeId: type.id,
       functionId: fn.id,
       functionIntensity: 2,
+      performanceId: performance?.id,
       qualityId: quality.id,
     },
     candidatesFor(1.8),
@@ -384,6 +400,10 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
     qualityId: "quality_a_purple",
     coreFunctionId: fn.id,
     functionIntensityPolicy: { mode: "fixed", intensity: 2 },
+    performanceProfileId: performance?.id,
+    performanceIntensityPolicy: performance?.legacyIntensityLabel
+      ? { mode: "legacy_label", label: performance.legacyIntensityLabel }
+      : undefined,
     coreAffixIds: ["v3:affix-impact"],
     secondaryAffixPoolIds: [
       "v3:affix-core",
@@ -596,6 +616,7 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
           ...baseContext(
             model.skuId === sku15Id ? sku15.targetPullKg : sku18.targetPullKg,
           ),
+          performanceId: performance?.id,
           componentIds: model.componentSelections.map(
             (component) => component.componentId,
           ),
@@ -703,9 +724,10 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
     ),
   );
   const publishCompatibility = compatibilityByModelId[publishTarget.model.id];
-  const publishAffinity = evaluateCanonicalAffinity(
+  const publishAffinity = evaluateAffinity(
     {
       ...baseContext(1.5),
+      performanceId: performance?.id,
       componentIds: publishTarget.model.componentSelections.map(
         (component) => component.componentId,
       ),
@@ -715,7 +737,7 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
     defaultAffinityAxisWeights,
   );
   const publishIssues: ValidationIssue[] = seriesIssues.filter(
-    (entry) => validationIssueLevel(entry) !== "error",
+    (entry) => entry.level !== "error",
   );
   const snapshotPatchIds = new Set([...series.patchIds, ...sku15.patchIds, ...publishTarget.model.patchIds]);
   const snapshot = publishConfigurationSnapshot({
@@ -742,7 +764,7 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
     validationReport: publishIssues,
     warningConfirmations: Object.fromEntries(
       publishIssues
-        .filter((entry) => validationIssueLevel(entry) === "warning")
+        .filter((entry) => entry.level === "warning")
         .map((entry) => [entry.code, "种子数据已由策划确认。"]),
     ),
     fiveAxisPreview,
@@ -814,6 +836,59 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
     createdBy: "seed-designer",
     createdAt: CREATED_AT,
   });
+  const candidateRecipe: CandidateSearchRecipe = {
+    id: "candidate-recipe:qinglu-obstacle",
+    revision: 1,
+    name: "青芦障碍 Model 路线",
+    methodIds: [method.id],
+    typeIds: [type.id],
+    functionIds: [fn.id],
+    performanceIds: performance ? [performance.id] : [],
+    qualityIds: [quality.id as CandidateSearchRecipe["qualityIds"][number]],
+    targetPullRangeKg: { min: 1.5, max: 1.8 },
+    maxCandidates: 16,
+    notes: "V3 示例链的确定性候选搜索配方，仅用于演示与验收。",
+  };
+  const seriesConstraintSet = createNeedsReviewPartConstraintSet({
+    constraintSetId: `part-constraint-set:series-definition:${encodeURIComponent(series.id)}`,
+    sourceRef: {
+      sourceType: "series_definition",
+      sourceId: partConstraintSourceStableId(series, "series_definition"),
+      revisionId: partConstraintSourceRevisionId(series),
+      hashProjectionVersion: PART_CONSTRAINT_SOURCE_HASH_PROJECTION,
+      contentHash: partConstraintSourceContentHash(series),
+    },
+    rawPayload: series,
+    sourceSchemaVersion: state.schemaVersion,
+    migratedAt: CREATED_AT,
+    diagnosticCodes: ["SEED_CONSTRAINTS_NOT_CONFIGURED"],
+    createdBy: "seed-designer",
+  });
+  const candidateConstraintSet = createNeedsReviewPartConstraintSet({
+    constraintSetId: `part-constraint-set:candidate-search-recipe:${encodeURIComponent(candidateRecipe.id)}`,
+    sourceRef: {
+      sourceType: "candidate_search_recipe",
+      sourceId: partConstraintSourceStableId(candidateRecipe, "candidate_search_recipe"),
+      revisionId: partConstraintSourceRevisionId(candidateRecipe),
+      hashProjectionVersion: PART_CONSTRAINT_SOURCE_HASH_PROJECTION,
+      contentHash: partConstraintSourceContentHash(candidateRecipe),
+    },
+    rawPayload: candidateRecipe,
+    sourceSchemaVersion: state.schemaVersion,
+    migratedAt: CREATED_AT,
+    diagnosticCodes: ["SEED_CONSTRAINTS_NOT_CONFIGURED"],
+    createdBy: "seed-designer",
+  });
+  const seriesConstraintRef = partConstraintSetRef(seriesConstraintSet);
+  const candidateConstraintRef = partConstraintSetRef(candidateConstraintSet);
+  const seriesWithConstraintRef: SeriesDefinition = {
+    ...series,
+    partConstraintSetRef: seriesConstraintRef,
+  };
+  const candidateRecipeWithConstraintRef: CandidateSearchRecipe = {
+    ...candidateRecipe,
+    partConstraintSetRef: candidateConstraintRef,
+  };
 
   return {
     ...state,
@@ -835,7 +910,14 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
         updatedAt: CREATED_AT,
       },
     ],
-    seriesDefinitions: [series],
+    seriesDefinitions: [seriesWithConstraintRef],
+    partConstraintSets: [seriesConstraintSet, candidateConstraintSet].reduce(
+      (entries, candidate) => entries.some((entry) =>
+        entry.constraintSetId === candidate.constraintSetId
+        && entry.revision === candidate.revision,
+      ) ? entries : [...entries, candidate],
+      state.partConstraintSets,
+    ),
     skuDrawers: [sku15, sku18],
     purchasableModels: publishedModels,
     candidateSearchRecipes: state.candidateSearchRecipes.some(
@@ -844,19 +926,7 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
       ? state.candidateSearchRecipes
       : [
           ...state.candidateSearchRecipes,
-          {
-            id: "candidate-recipe:qinglu-obstacle",
-            revision: 1,
-            name: "青芦障碍 Model 路线",
-            methodIds: [method.id],
-            typeIds: [type.id],
-            functionIds: [fn.id],
-            performanceIds: [],
-            qualityIds: [quality.id as CandidateSearchRecipe["qualityIds"][number]],
-            targetPullRangeKg: { min: 1.5, max: 1.8 },
-            maxCandidates: 16,
-            notes: "V3 示例链的确定性候选搜索配方，仅用于演示与验收。",
-          },
+          candidateRecipeWithConstraintRef,
         ],
     configurationSnapshots: [snapshot],
     fiveAxisViewDefinitions: state.fiveAxisViewDefinitions.some(

@@ -1,0 +1,11 @@
+[Unit]
+Description=Hourly Tackle Forger AI assessment retention sweep
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=10m
+Persistent=true
+Unit=tackle-forger-ai-retention.service
+
+[Install]
+WantedBy=timers.target

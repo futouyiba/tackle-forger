@@ -513,6 +513,16 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   const [authMessage, setAuthMessage] = useState("");
   const [authErrorCode, setAuthErrorCode] = useState("");
   const [dirty, setDirty] = useState(false);
+  const workspaceFreshnessRef = useRef({ dirty: false, revision: 1 });
+  const markWorkspaceDirty = () => {
+    workspaceFreshnessRef.current = { ...workspaceFreshnessRef.current, dirty: true };
+    setDirty(true);
+  };
+  const applyWorkspaceRevision = (nextRevision: number) => {
+    workspaceFreshnessRef.current = { dirty: false, revision: nextRevision };
+    setRevision(nextRevision);
+    setDirty(false);
+  };
   const [syncState, setSyncState] = useState<"ready" | "saving" | "saved" | "error">("ready");
   const [toast, setToast] = useState("");
   const [search, setSearch] = useState("");
@@ -565,7 +575,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       producer(draft);
       return preserveReadOnlyLegacyProductHistory(current, draft);
     });
-    setDirty(true);
+    markWorkspaceDirty();
     setSyncState("ready");
   };
 
@@ -617,8 +627,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         if (!stateResponse.ok) throw new Error("state-service");
         const payload = await stateResponse.json() as ApiStatePayload;
         setState(ensureWorkflowFields(payload.state));
-        setDirty(false);
-        setRevision(payload.revision);
+        applyWorkspaceRevision(payload.revision);
         setUser(payload.user);
         setAuthStatus("authenticated"); setAuthMessage(""); setAuthErrorCode("");
         void fetch("/api/revisions", { cache: "no-store" })
@@ -660,8 +669,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       });
       const payload = (await response.json()) as { revision?: number; error?: string };
       if (!response.ok) throw new Error(payload.error || "保存失败");
-      setRevision(payload.revision ?? revision + 1);
-      setDirty(false);
+      applyWorkspaceRevision(payload.revision ?? revision + 1);
       setSyncState("saved");
       notify("已保存为版本 v" + (payload.revision ?? revision + 1));
       void loadVersions();
@@ -828,8 +836,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         throw new Error(payload.error || "发布失败");
       }
       setState(ensureWorkflowFields(payload.state));
-      setRevision(payload.revision);
-      setDirty(false);
+      applyWorkspaceRevision(payload.revision);
       setSyncState("saved");
       setSourcePreview(null);
       notify("数据源已发布为正式版本 v" + payload.revision);
@@ -921,8 +928,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         throw new Error(payload.error || "回写失败");
       }
       setState(ensureWorkflowFields(payload.state));
-      setRevision(payload.revision);
-      setDirty(false);
+      applyWorkspaceRevision(payload.revision);
       setSyncState("saved");
       setWritebackPreview(null);
       notify("已安全回写飞书，并保存审计版本 v" + payload.revision);
@@ -1378,7 +1384,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         });
       }
 
-      setDirty(true);
+      markWorkspaceDirty();
       notify("Excel 已导入；当前配置已载入，只读历史数据保持原样。保存后形成团队版本。");
     } catch (error) {
       notify(error instanceof Error ? error.message : "Excel 导入失败");
@@ -3049,8 +3055,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       notify={notify}
       onWorkspaceApplied={(nextState, nextRevision, message) => {
         setState(ensureWorkflowFields(nextState));
-        setRevision(nextRevision);
-        setDirty(false);
+        applyWorkspaceRevision(nextRevision);
         setSyncState("saved");
         notify(message);
         void loadVersions();
@@ -3078,7 +3083,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
                 current,
                 ensureWorkflowFields(payload.state),
               ));
-              setDirty(true);
+              markWorkspaceDirty();
               notify("已载入 v" + version.revision + "，保存后会成为新版本。");
             }}>载入副本</Button></td>
           </tr>
@@ -3159,7 +3164,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           state={state}
           actionAvailabilities={user.actionAvailability}
           identity={{
-            workspaceId: user.tenantKey ?? "",
+            workspaceId: state.workspaceId ?? "",
             userId: user.openId ?? "",
           }}
           notify={notify}
@@ -3197,15 +3202,15 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         <SeriesGanttWorkbench
           key={`series-gantt:${routeNonce}`}
           state={state}
-          workspaceId={user.tenantKey || "workspace"}
+          workspaceId={state.workspaceId ?? ""}
           actionAvailabilities={user.actionAvailability}
           actor={user.name}
           mutate={mutate}
+          workspaceFreshness={() => workspaceFreshnessRef.current}
           notify={notify}
           onWorkspaceApplied={(nextState, nextRevision, message) => {
             setState(ensureWorkflowFields(nextState));
-            setRevision(nextRevision);
-            setDirty(false);
+            applyWorkspaceRevision(nextRevision);
             setSyncState("saved");
             notify(message);
             void loadVersions();
@@ -3227,7 +3232,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     if (page === "validation") return renderValidation();
     if (page === "versions") return renderVersions();
     if (page === "rulesource") return renderRuleSource();
-    if (page === "patchledger") return <PatchLedgerWorkbench state={state} capabilities={user.capabilities} actorName={user.name} mutate={mutate} notify={notify} />;
+    if (page === "patchledger") return <PatchLedgerWorkbench state={state} revision={revision} dirty={dirty} getWorkspaceFreshness={()=>workspaceFreshnessRef.current} capabilities={user.capabilities} actorName={user.name} mutate={mutate} notify={notify} replaceWorkspace={(next,nextRevision)=>{setState(ensureWorkflowFields(next));applyWorkspaceRevision(nextRevision);setSyncState("saved");}} />;
     return renderExchange();
   };
 
@@ -3243,7 +3248,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   ) ? requestedV3Series : undefined;
   const topBreadcrumbs = page === "v3flow" && v3Series
     ? buildProductBreadcrumbs({
-      workspaceId: user.tenantKey || "workspace",
+      workspaceId: state.workspaceId ?? "",
       collection: v3Series.collectionId
         ? state.collections.find((entry) => entry.id === v3Series.collectionId)
         : undefined,

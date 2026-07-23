@@ -13,6 +13,7 @@
     "config-export:companion": "tsx scripts/config-export-companion.ts",
     "storage:migrate:blob-to-sqlite": "tsx scripts/migrate-blob-to-sqlite.ts",
     "storage:backup": "tsx scripts/backup-workspace.ts",
+    "ai-retention:sweep": "tsx scripts/sweep-ai-retention.ts",
     "acceptance:phase-one": "node scripts/phase-one-acceptance.mjs",
     "governance:check-pr": "node scripts/check-pr-merge-gate.mjs",
     "test": "npm run build && tsx --test tests/*.test.ts && node --test tests/*.test.mjs",

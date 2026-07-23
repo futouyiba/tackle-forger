@@ -1,0 +1,14 @@
+[Unit]
+Description=Sweep Tackle Forger AI assessment retention and verified backup deletion
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=tackleforger
+Group=tackleforger
+WorkingDirectory=/opt/tackle-forger/current
+EnvironmentFile=/opt/tackle-forger/.env.local
+ExecStart=/usr/local/bin/npm run ai-retention:sweep
+
+[Install]
+WantedBy=multi-user.target

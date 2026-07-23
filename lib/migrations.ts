@@ -1512,6 +1512,12 @@ function migrateV17ToV18(input: MutableWorkspace): MutableWorkspace {
   return {
     ...state,
     schemaVersion: 18,
+    aiRuleSourceChangeDrafts: arrayOf<
+      WorkspaceState["aiRuleSourceChangeDrafts"][number]
+    >(state.aiRuleSourceChangeDrafts),
+    aiArtifactProvenanceSyncRecords: arrayOf<
+      WorkspaceState["aiArtifactProvenanceSyncRecords"][number]
+    >(state.aiArtifactProvenanceSyncRecords),
     partConstraintSets: constraintSets,
     candidateSearchRecipes,
     seriesDefinitions,
@@ -1579,6 +1585,15 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
 
   state = {
     ...state,
+    aiRuleSourceChangeDrafts: arrayOf<
+      WorkspaceState["aiRuleSourceChangeDrafts"][number]
+    >(state.aiRuleSourceChangeDrafts),
+    aiArtifactProvenanceSyncRecords: arrayOf<
+      WorkspaceState["aiArtifactProvenanceSyncRecords"][number]
+    >(state.aiArtifactProvenanceSyncRecords),
+    performanceSummaryDefinitions: arrayOf<
+      WorkspaceState["performanceSummaryDefinitions"][number]
+    >(state.performanceSummaryDefinitions),
     patchLedger: state.patchLedger && typeof state.patchLedger === "object"
       ? migratePatchLedger(state.patchLedger as WorkspaceState["patchLedger"],patchLedgerMigrationContext(state))
       : emptyPatchLedger(),

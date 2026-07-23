@@ -27,6 +27,7 @@ export type ProductItemPartAction =
   | "projection_match"
   | "candidate_generation"
   | "candidate_materialization"
+  | "ai_assessment"
   | "model_publish"
   | "snapshot"
   | "config_export";
@@ -38,6 +39,7 @@ const ACTION_LABELS: Record<ProductItemPartAction, string> = {
   projection_match: "结构标杆匹配",
   candidate_generation: "Model 候选生成",
   candidate_materialization: "Model 候选物化",
+  ai_assessment: "AI 评估与建议草稿",
   model_publish: "Model 发布",
   snapshot: "ConfigurationSnapshot 流程",
   config_export: "配置导出",

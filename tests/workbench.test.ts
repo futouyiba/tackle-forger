@@ -76,10 +76,22 @@ test("受约束配方生成并发布规范 ID", () => {
   const generated = generateCandidatesForRecipe(state, recipe);
   assert.ok(generated.length > 0);
   assert.ok(generated.length <= 3);
+  assert.equal(generated.every((candidate) => candidate.selections.performanceId === undefined), true);
   const sku = publishCandidate(state, generated[0]);
   assert.equal(sku.rodId, sku.comboId + "_R");
   assert.equal(sku.reelId, sku.comboId + "_W");
   assert.equal(sku.lineId, sku.comboId + "_L");
+
+  const legacy = generateCandidatesForRecipe(
+    state,
+    recipe,
+    { executionMode: "legacy_performance_replay" },
+  ).find((candidate) => candidate.selections.performanceId);
+  assert.ok(legacy);
+  assert.throws(
+    () => publishCandidate(state, legacy!),
+    /只读历史证据/,
+  );
 });
 
 test("规则图是无环 DAG，条件分支按行路由并在人工关卡暂停", () => {

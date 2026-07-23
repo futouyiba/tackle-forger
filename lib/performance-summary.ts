@@ -44,6 +44,7 @@ export interface PerformanceSummary {
   subjectRevisionId: string;
   definitionId: string;
   definitionVersion: string;
+  definitionHash: string;
   labels: Array<{
     key: string;
     label: string;
@@ -61,6 +62,7 @@ export type PerformanceSummarySnapshot =
       definitionRef: {
         definitionId: string;
         definitionVersion: string;
+        definitionHash: string;
       };
     }
   | {
@@ -81,8 +83,12 @@ function compareUtf8(left: string, right: string): number {
 function definitionContent(
   definition: PerformanceSummaryDefinition,
 ): Omit<PerformanceSummaryDefinition, "definitionHash"> {
-  const { definitionHash: _definitionHash, ...content } = definition;
-  return content;
+  return {
+    definitionId: definition.definitionId,
+    definitionVersion: definition.definitionVersion,
+    publicationState: definition.publicationState,
+    rules: structuredClone(definition.rules),
+  };
 }
 
 export function createPerformanceSummaryDefinition(
@@ -249,6 +255,7 @@ export function derivePerformanceSummary(input: {
     subjectRevisionId: input.subjectRevisionId,
     definitionId: input.definition.definitionId,
     definitionVersion: input.definition.definitionVersion,
+    definitionHash: input.definition.definitionHash,
     labels,
     inputHash: deterministicHash(hashInput),
   };
@@ -258,6 +265,7 @@ export function derivePerformanceSummary(input: {
     definitionRef: {
       definitionId: input.definition.definitionId,
       definitionVersion: input.definition.definitionVersion,
+      definitionHash: input.definition.definitionHash,
     },
   };
 }

@@ -233,6 +233,16 @@ export function publishConfigurationSnapshot(
       });
     }
     if (
+      input.qualityValueAssessment?.performanceScoreFactor !== undefined
+      || input.qualityValueAssessment?.trace.some((entry) => entry.step === "performance_factor")
+    ) {
+      blocking.push({
+        level: "error",
+        code: "LEGACY_PERFORMANCE_SCORE_NOT_ALLOWED",
+        message: "新正式 Snapshot 不得冻结或定价包含旧 Performance 因子的品质评分结果。",
+      });
+    }
+    if (
       !input.pricingPolicyVersion
       || !input.automaticPricing?.formal
       || input.automaticPricing.pricingPolicyRef !== input.pricingPolicyVersion
@@ -241,6 +251,17 @@ export function publishConfigurationSnapshot(
         level: "error",
         code: "PRICING_POLICY_NOT_FORMAL",
         message: "新 Snapshot 必须绑定同一已发布 PricingPolicyVersion 的正式自动价格。",
+      });
+    }
+    if (
+      input.qualityValueAssessment?.formal
+      && input.automaticPricing?.formal
+      && input.automaticPricing.valueScore !== input.qualityValueAssessment.finalValueScore
+    ) {
+      blocking.push({
+        level: "error",
+        code: "PRICING_QUALITY_SCORE_MISMATCH",
+        message: "正式自动价格消费的 valueScore 与规范品质评分结果不一致。",
       });
     }
   }

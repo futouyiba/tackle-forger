@@ -90,7 +90,34 @@ test("PerformanceSummary 按定义稳定派生 Technology、Affix、最终属性
     "trace:attribute_affix:7:affix:light:affix:light:weight",
   ]);
   assert.equal(first.summary.labels[2].magnitude, 5);
+  assert.equal(first.summary.definitionHash, currentDefinition.definitionHash);
+  assert.equal(first.definitionRef.definitionHash, currentDefinition.definitionHash);
   assert.equal(verifyPerformanceSummaryDefinition(currentDefinition), true);
+});
+
+test("相同 definitionId 与 version 的不同内容由 definitionHash 唯一寻址", () => {
+  const firstDefinition = definition();
+  const secondDefinition = createPerformanceSummaryDefinition({
+    ...firstDefinition,
+    rules: firstDefinition.rules.map((rule) =>
+      rule.key === "cast_plus" ? { ...rule, label: "抛投++" } : rule),
+  });
+  assert.notEqual(firstDefinition.definitionHash, secondDefinition.definitionHash);
+  const base = {
+    subjectId: "model:1",
+    subjectRevisionId: "3",
+    technologyIds: ["tech:cast"],
+    affixIds: [],
+    finalPanelValues: {},
+    attributeTrace: [],
+  };
+  const first = derivePerformanceSummary({ ...base, definition: firstDefinition });
+  const second = derivePerformanceSummary({ ...base, definition: secondDefinition });
+  assert.equal(first.status, "AVAILABLE");
+  assert.equal(second.status, "AVAILABLE");
+  if (first.status !== "AVAILABLE" || second.status !== "AVAILABLE") return;
+  assert.notEqual(first.definitionRef.definitionHash, second.definitionRef.definitionHash);
+  assert.notEqual(first.summary.inputHash, second.summary.inputHash);
 });
 
 test("PerformanceSummary 输入变化更新 hash 与标签，但不会回写输入", () => {

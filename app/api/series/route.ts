@@ -40,6 +40,8 @@ interface SeriesCreateRequest {
   typeId: string;
   functionId: string;
   qualityId: SeriesDefinition["qualityId"];
+  /** 旧命令恢复专用；新创建禁止使用。 */
+  performanceId?: string;
   functionIntensity: 1 | 2 | 3;
   planningMinKgf?: string;
   planningMaxKgf?: string;
@@ -75,25 +77,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "请求体无效。" }, { status: 400 });
   }
   if (
-    "performanceId" in body
-    && typeof (body as Record<string, unknown>).performanceId !== "string"
+    body.performanceId !== undefined
+    && typeof body.performanceId !== "string"
   ) {
     return NextResponse.json(
       { error: "字段 performanceId 必须是字符串。", field: "performanceId" },
       { status: 400 },
     );
   }
-  if (
-    "performanceId" in body
-    && String((body as Record<string, unknown>).performanceId).trim()
-  ) {
-    return NextResponse.json({
-      error: "Performance 已改为配置完成后的只读派生摘要，不能作为 Series 创建输入。",
-      code: "PERFORMANCE_INPUT_NOT_ALLOWED",
-      field: "performanceId",
-    }, { status: 422 });
-  }
-
   const requiredStringFields = [
     "idempotencyKey", "seriesId", "name", "concept", "itemPartId", "methodId",
     "typeId", "functionId", "qualityId", "discretePulls",
@@ -166,7 +157,7 @@ export async function POST(request: NextRequest) {
     }, { status: 422 });
   }
 
-  const inputHash = createHash("sha256").update(JSON.stringify({
+  const canonicalInput = {
     seriesId: body.seriesId,
     name,
     concept,
@@ -180,10 +171,29 @@ export async function POST(request: NextRequest) {
     planningMinKgf: minKgf ?? null,
     planningMaxKgf: maxKgf ?? null,
     pulls,
+  };
+  const inputHash = createHash("sha256")
+    .update(JSON.stringify(canonicalInput))
+    .digest("hex");
+  const legacyInputHash = createHash("sha256").update(JSON.stringify({
+    seriesId: body.seriesId,
+    name,
+    concept,
+    collectionId: body.collectionId || null,
+    itemPartId: body.itemPartId,
+    methodId: body.methodId,
+    typeId: body.typeId,
+    functionId: body.functionId,
+    qualityId: body.qualityId,
+    performanceId: body.performanceId || null,
+    functionIntensity: body.functionIntensity,
+    planningMinKgf: minKgf ?? null,
+    planningMaxKgf: maxKgf ?? null,
+    pulls,
   })).digest("hex");
   const priorCommand = state.commandIdempotencyRecords.find((entry) => entry.key === idempotencyKey);
   if (priorCommand) {
-    if (priorCommand.inputHash !== inputHash) {
+    if (![inputHash, legacyInputHash].includes(priorCommand.inputHash)) {
       return NextResponse.json({ error: "同一幂等键不能用于不同的创建输入。" }, { status: 409 });
     }
     const priorSeries = state.seriesDefinitions.find((entry) => entry.id === priorCommand.resultRef);
@@ -198,6 +208,13 @@ export async function POST(request: NextRequest) {
       idempotent: true,
       user,
     });
+  }
+  if (body.performanceId?.trim()) {
+    return NextResponse.json({
+      error: "Performance 已改为配置完成后的只读派生摘要，不能作为 Series 创建输入。",
+      code: "PERFORMANCE_INPUT_NOT_ALLOWED",
+      field: "performanceId",
+    }, { status: 422 });
   }
 
   if (!body.seriesId || state.seriesDefinitions.some((entry) => entry.id === body.seriesId)) {

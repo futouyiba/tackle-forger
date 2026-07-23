@@ -162,11 +162,10 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
   const qualityValueAssessment = {
     modelRevisionId: `${model.id}@${model.revision}`,
     selectedQualityId: oldSnapshot.qualityReport.qualityId,
-    baseAffixScore: oldSnapshot.qualityReport.totalScore,
+    baseAffixScore: 30,
     combinationScore: 0,
     functionScoreFactor: 1,
-    performanceScoreFactor: 1,
-    finalValueScore: oldSnapshot.qualityReport.totalScore,
+    finalValueScore: 30,
     affixBreakdown: [],
     combinationBreakdown: [],
     qualityRangePolicyVersion: "quality-policy:v1",
@@ -212,4 +211,70 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
   });
   assert.equal(verifySnapshotIntegrity(snapshot), true);
   assert.equal(verifySnapshotIntegrity(oldSnapshot), true);
+});
+
+test("新正式 Snapshot 拒绝旧 Performance 评分及不匹配的定价分数", () => {
+  const draft = importPricingPolicyDraft(completeInput());
+  const version = publishPricingPolicyDraft({
+    draft,
+    version: "pricing-policy:guard-v1",
+    publishedAt: "2026-07-22T00:00:00.000Z",
+    publishedBy: "tester",
+  });
+  const state = createSeedState();
+  const existing = state.configurationSnapshots[0]!;
+  const model = state.purchasableModels.find((entry) => entry.id === existing.modelId)!;
+  const sku = state.skuDrawers.find((entry) => entry.id === model.skuId)!;
+  const series = state.seriesDefinitions.find((entry) => entry.id === sku.seriesId)!;
+  const projection = state.derivedProjections.find((entry) => entry.id === existing.projectionId)!;
+  const assessment = {
+    modelRevisionId: `${model.id}@${model.revision}`,
+    selectedQualityId: existing.qualityReport.qualityId,
+    baseAffixScore: 30,
+    combinationScore: 0,
+    functionScoreFactor: 1,
+    performanceScoreFactor: 1.1,
+    finalValueScore: 33,
+    affixBreakdown: [],
+    combinationBreakdown: [],
+    qualityRangePolicyVersion: "quality-policy:v1",
+    scoringPolicyVersion: "quality-scoring:v1",
+    inSelectedQualityRange: true,
+    formal: true,
+    issues: [],
+    trace: [],
+    inputHash: "legacy-quality-assessment",
+  };
+  const base = {
+    publicationMode: "new_formal" as const,
+    model, sku, series, seriesSkus: state.skuDrawers, projection,
+    finalPanelValues: existing.finalPanelValues,
+    componentSelections: existing.componentSelections,
+    patches: [],
+    attributeAffixIds: existing.attributeAffixIds,
+    passiveAffixIds: existing.passiveAffixIds,
+    technologyIds: existing.technologyIds,
+    passiveAffixPayloads: existing.passiveAffixPayloads,
+    compatibilityReport: existing.compatibilityReport,
+    affinityReport: existing.affinityReport,
+    qualityReport: existing.qualityReport,
+    qualityValueAssessment: assessment,
+    pricingPolicyVersion: version.id,
+    automaticPricing: trial(version, "quality_b_blue", assessment.finalValueScore),
+    validationReport: [],
+    warningConfirmations: {},
+    publishedBy: "tester",
+    publishedAt: "2026-07-22T00:00:00.000Z",
+  };
+  assert.throws(
+    () => publishConfigurationSnapshot(base),
+    /不得冻结或定价包含旧 Performance 因子/,
+  );
+  assert.throws(
+    () => publishConfigurationSnapshot({
+      ...base,
+      qualityValueAssessment: { ...assessment, performanceScoreFactor: undefined, finalValueScore: 30 },
+    }),
+    /valueScore 与规范品质评分结果不一致/,
+  );
 });

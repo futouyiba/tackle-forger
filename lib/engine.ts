@@ -335,7 +335,12 @@ function validateEquipment(
   return { issues, safeWorkingForce };
 }
 
-export function calculateCandidate(state: WorkspaceState, candidate: Candidate): Candidate {
+export function calculateCandidate(
+  state: WorkspaceState,
+  candidate: Candidate,
+  options?: { executionMode?: "legacy_performance_replay" },
+): Candidate {
+  const legacyPerformanceReplay = options?.executionMode === "legacy_performance_replay";
   const template = state.templates.find((item) => item.id === candidate.templateId);
   if (!template) {
     return {
@@ -385,6 +390,7 @@ export function calculateCandidate(state: WorkspaceState, candidate: Candidate):
       continue;
     }
 
+    if (layer.dimension === "performance" && !legacyPerformanceReplay) continue;
     for (const optionId of selectedOptionIds(candidate, layer)) {
       const option = modifierById.get(optionId);
       if (!option) continue;
@@ -398,7 +404,7 @@ export function calculateCandidate(state: WorkspaceState, candidate: Candidate):
   const band = state.qualityBands.find((item) => item.id === quality.qualityId);
   const specialization =
     Number(Boolean(candidate.selections.functionId)) +
-    Number(Boolean(candidate.selections.performanceId)) +
+    Number(legacyPerformanceReplay && Boolean(candidate.selections.performanceId)) +
     candidate.selections.technologyIds.length;
   const priceIndex = round((band?.priceIndex ?? 1) * (1 + specialization * 0.04), 2);
 
@@ -428,11 +434,14 @@ function pickOptionalAffixes(recipe: SeriesRecipe, index: number): string[] {
 export function generateCandidatesForRecipe(
   state: WorkspaceState,
   recipe: SeriesRecipe,
+  options?: { executionMode?: "legacy_performance_replay" },
 ): Candidate[] {
   const templates = recipe.templateIds.length ? recipe.templateIds : state.templates.map((item) => item.id);
   const structures = recipe.structureIds.length ? recipe.structureIds : [undefined];
   const functions = recipe.functionIds.length ? recipe.functionIds : [undefined];
-  const performances = recipe.performanceIds.length ? recipe.performanceIds : [undefined];
+  const performances = options?.executionMode === "legacy_performance_replay" && recipe.performanceIds.length
+    ? recipe.performanceIds
+    : [undefined];
   const now = new Date().toISOString();
   const generated: Candidate[] = [];
   let sequence = 0;
@@ -506,6 +515,9 @@ function modifierName(state: WorkspaceState, id?: string): string {
 }
 
 export function publishCandidate(state: WorkspaceState, candidate: Candidate): OfficialSku {
+  if (candidate.selections.performanceId) {
+    throw new Error("Performance 是只读历史证据；旧候选只能重放，不能发布新的 OfficialSku。");
+  }
   const calculated = calculateCandidate(state, candidate);
   const values = calculated.calculated.values;
   const tone =
@@ -558,7 +570,11 @@ export function publishCandidate(state: WorkspaceState, candidate: Candidate): O
 export function recalculateWorkspace(state: WorkspaceState): WorkspaceState {
   return {
     ...state,
-    candidates: state.candidates.map((candidate) => calculateCandidate(state, candidate)),
+    candidates: state.candidates.map((candidate) => calculateCandidate(
+      state,
+      candidate,
+      { executionMode: "legacy_performance_replay" },
+    )),
   };
 }
 

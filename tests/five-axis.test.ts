@@ -475,7 +475,7 @@ test("正式快照拒绝未发布、篡改或版本链过期的五维定义", ()
     qualityValueAssessment: {
       modelRevisionId: `${model.id}@${model.revision}`, selectedQualityId: series.qualityId,
       baseAffixScore: 1, combinationScore: 0, functionScoreFactor: 1,
-      performanceScoreFactor: 1, finalValueScore: 1, affixBreakdown: [],
+      finalValueScore: 1, affixBreakdown: [],
       combinationBreakdown: [], qualityRangePolicyVersion: "q:1",
       scoringPolicyVersion: "s:1", inSelectedQualityRange: true, formal: true,
       issues: [], trace: [], inputHash: "quality-hash",
@@ -483,6 +483,7 @@ test("正式快照拒绝未发布、篡改或版本链过期的五维定义", ()
     pricingPolicyVersion: "pricing:1",
     automaticPricing: {
       formal: true, pricingPolicyRef: "pricing:1", pricingWeightBandId: "band:1",
+      valueScore: 1,
       pricingBasketId: "basket:1", repairPriceUnrounded: 100,
       purchasePriceUnrounded: 100, purchasePrice: 100, trace: [], issues: [],
       warnings: [], inputHash: "pricing-hash",

@@ -753,7 +753,6 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
       baseAffixScore: 1,
       combinationScore: 0,
       functionScoreFactor: 1,
-      performanceScoreFactor: 1,
       finalValueScore: 1,
       affixBreakdown: [],
       combinationBreakdown: [],
@@ -769,6 +768,7 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
     automaticPricing: {
       formal: true,
       pricingPolicyRef: "pricing:published-v1",
+      valueScore: 1,
       pricingWeightBandId: "band:1",
       pricingBasketId: "basket:1",
       repairPriceUnrounded: 100,

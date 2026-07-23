@@ -124,6 +124,103 @@ test("Series 使用真实不变量证据，已发布 Model 绑定实际 Configur
   );
 });
 
+test("冻结 Model 的 Envelope 只读取 Snapshot，未冻结 Model 响应当前 Patch 变化", () => {
+  const state = createSeedState();
+  state.parameters.find((entry) => entry.key === "杆最大拉力kgf")!.targetRange = {
+    min: 0,
+    max: 1_000,
+  };
+  const frozenModel = state.purchasableModels.find((entry) =>
+    Boolean(entry.configurationSnapshotId))!;
+  const snapshot = state.configurationSnapshots.find((entry) =>
+    entry.id === frozenModel.configurationSnapshotId)!;
+  const mutableModel = state.purchasableModels.find((entry) =>
+    !entry.configurationSnapshotId
+    && entry.skuId === frozenModel.skuId)!;
+  const frozenAssessmentId = "assessment:frozen-envelope";
+  const mutableAssessmentId = "assessment:mutable-envelope";
+
+  const frozenBefore = buildWorkspaceAssessmentRequestProjection({
+    state,
+    scope: { scopeType: "model", scopeId: frozenModel.id },
+    assessmentId: frozenAssessmentId,
+    model: providerModel,
+  });
+  const mutableBefore = buildWorkspaceAssessmentRequestProjection({
+    state,
+    scope: { scopeType: "model", scopeId: mutableModel.id },
+    assessmentId: mutableAssessmentId,
+    model: providerModel,
+  });
+  const pullParameter = frozenBefore.parameterKeyMapping.find((entry) =>
+    entry.parameterKey === "杆最大拉力kgf")!;
+  const frozenPullBefore = frozenBefore.envelope.panelValues.find((entry) =>
+    entry.parameterKey === pullParameter.alias);
+  assert.deepEqual(frozenPullBefore?.value, {
+    kind: "number",
+    value: snapshot.finalPanelValues["杆最大拉力kgf"],
+  });
+
+  const changed = structuredClone(state);
+  const seriesPatch = changed.patchLedger.revisions.find((entry) =>
+    entry.patchId === "patch:series-qinglu-force")!;
+  const pullOperation = seriesPatch.operations.find((entry) =>
+    entry.parameterKey === "杆最大拉力kgf")!;
+  pullOperation.operand = 41;
+
+  const frozenAfter = buildWorkspaceAssessmentRequestProjection({
+    state: changed,
+    scope: { scopeType: "model", scopeId: frozenModel.id },
+    assessmentId: frozenAssessmentId,
+    model: providerModel,
+  });
+  const mutableAfter = buildWorkspaceAssessmentRequestProjection({
+    state: changed,
+    scope: { scopeType: "model", scopeId: mutableModel.id },
+    assessmentId: mutableAssessmentId,
+    model: providerModel,
+  });
+  const preparedFrozenBefore = prepareAIRequest({ envelope: frozenBefore.envelope });
+  const preparedFrozenAfter = prepareAIRequest({ envelope: frozenAfter.envelope });
+  const preparedMutableBefore = prepareAIRequest({ envelope: mutableBefore.envelope });
+  const preparedMutableAfter = prepareAIRequest({ envelope: mutableAfter.envelope });
+
+  assert.deepEqual(preparedFrozenAfter.canonicalBytes, preparedFrozenBefore.canonicalBytes);
+  assert.equal(preparedFrozenAfter.inputHash, preparedFrozenBefore.inputHash);
+  assert.notDeepEqual(preparedMutableAfter.canonicalBytes, preparedMutableBefore.canonicalBytes);
+  assert.notEqual(preparedMutableAfter.inputHash, preparedMutableBefore.inputHash);
+
+  const definitionChanged = structuredClone(state);
+  definitionChanged.parameters.find((entry) =>
+    entry.key === "杆最大拉力kgf")!.allowedOperations = [];
+  const frozenAfterDefinitionChange = prepareAIRequest({
+    envelope: buildWorkspaceAssessmentEnvelope({
+      state: definitionChanged,
+      scope: { scopeType: "model", scopeId: frozenModel.id },
+      assessmentId: frozenAssessmentId,
+      model: providerModel,
+    }),
+  });
+  const mutableAfterDefinitionChange = prepareAIRequest({
+    envelope: buildWorkspaceAssessmentEnvelope({
+      state: definitionChanged,
+      scope: { scopeType: "model", scopeId: mutableModel.id },
+      assessmentId: mutableAssessmentId,
+      model: providerModel,
+    }),
+  });
+  assert.deepEqual(
+    frozenAfterDefinitionChange.canonicalBytes,
+    preparedFrozenBefore.canonicalBytes,
+  );
+  assert.equal(frozenAfterDefinitionChange.inputHash, preparedFrozenBefore.inputHash);
+  assert.notDeepEqual(
+    mutableAfterDefinitionChange.canonicalBytes,
+    preparedMutableBefore.canonicalBytes,
+  );
+  assert.notEqual(mutableAfterDefinitionChange.inputHash, preparedMutableBefore.inputHash);
+});
+
 test("不存在的 Series/Model scope 在构造出站请求前 fail-closed", () => {
   const state = createSeedState();
   for (const scope of [

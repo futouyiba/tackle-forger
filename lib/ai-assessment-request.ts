@@ -251,14 +251,17 @@ export function buildWorkspaceAssessmentRequestProjection(input: {
         price: model.price,
         targetPullKg: sku?.targetPullKg ?? null,
       }));
-  const finalPanelValues = currentPatchPanelValuesFromWorkspace({
-    state: input.state,
-    scopeType: "model",
-    subjectEntityId: model.id,
-  });
+  const finalPanelValues = snapshot
+    ? snapshot.finalPanelValues
+    : currentPatchPanelValuesFromWorkspace({
+        state: input.state,
+        scopeType: "model",
+        subjectEntityId: model.id,
+      });
   const parameterKeys = Object.keys(finalPanelValues)
     .filter((key) => {
       if (typeof finalPanelValues[key] !== "number" || !Number.isFinite(finalPanelValues[key])) return false;
+      if (snapshot) return true;
       const definition = input.state.parameters.find((entry) => entry.key === key);
       const range = definition?.targetRange;
       return Boolean(

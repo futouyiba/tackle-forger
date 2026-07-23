@@ -552,29 +552,29 @@ function ModelDrawer({
     .sort((left, right) => left.sequence - right.sequence) ?? [];
   const inComparison = comparisonSelections.some((selection) =>
     selection.modelId === model.id && selection.itemPartId === comparisonPartId);
-  const formalComparisonLimit = state.fiveAxisViewDefinitions.find(
+  const catalogHead = state.fiveAxisDispositionCatalogRevisions.find((revision) =>
+    revision.catalogRevisionId
+      === state.currentFiveAxisDispositionCatalogRevisionId);
+  const formalDisposition = catalogHead?.entries.find((entry) =>
+    entry.effectiveUse === "FORMAL_CURRENT");
+  const formalComparisonDefinition = state.fiveAxisViewDefinitions.filter(
     isFormalFiveAxisDefinition,
-  )?.comparisonPolicy.maximumItems;
+  ).find((entry) =>
+    entry.definitionId === formalDisposition?.definitionId
+    && entry.version === formalDisposition.definitionVersion);
+  const formalComparisonLimit =
+    formalComparisonDefinition?.comparisonPolicy.maximumItems;
   const pendingUpgrade = state.upgradeCandidates.find((entry) => entry.modelId === model.id && entry.status === "pending");
   const comparisonResult = useMemo(() => {
     if (comparisonSelections.length < 2 || !activeFiveAxisPreview) return {};
     if (!activeFiveAxisPreview.weightBandId) {
       return { error: "当前 Snapshot 只有 legacy 鱼重档位，没有冻结 OPEN-005 W 段证据。" };
     }
-    const catalogHead = state.fiveAxisDispositionCatalogRevisions.find((revision) =>
-      revision.catalogRevisionId === state.currentFiveAxisDispositionCatalogRevisionId);
-    const formalDisposition = catalogHead?.entries.find((entry) =>
-      entry.effectiveUse === "FORMAL_CURRENT");
-    const formalDefinition = state.fiveAxisViewDefinitions.filter(
-      isFormalFiveAxisDefinition,
-    ).find((entry) =>
-      entry.definitionId === formalDisposition?.definitionId
-      && entry.version === formalDisposition.definitionVersion);
-    if (!formalDefinition) {
+    if (!formalComparisonDefinition) {
       return { error: "当前没有唯一可用的 FORMAL_CURRENT 五维定义。" };
     }
     const vertexSet = selectCurrentFiveAxisVertexSet({
-      definition: formalDefinition,
+      definition: formalComparisonDefinition,
       weightBandId: activeFiveAxisPreview.weightBandId,
       groupStates: state.fiveAxisVertexGroupStates,
       vertexSets: state.fiveAxisVertexSets.filter(isFormalFiveAxisVertexSet),
@@ -592,9 +592,30 @@ function ModelDrawer({
       const frozenSnapshot = candidateSnapshot?.modelId === selection.modelId
         ? candidateSnapshot
         : undefined;
-      const finalPull = frozenSnapshot?.modelFinalPullKg
-        ?? frozenSnapshot?.finalPanelValues["杆最大拉力kgf"];
-      const entity = candidate && frozenSnapshot
+      const frozenPreview = frozenSnapshot?.fiveAxisPreview;
+      const finalPull = frozenSnapshot?.modelFinalPullKg;
+      const hasMatchingFormalEvidence = Boolean(
+        frozenPreview
+        && frozenPreview.modelFinalPullKg === finalPull
+        && frozenPreview.weightBandId === vertexSet.weightBandId
+        && frozenPreview.weightBandPolicyVersion
+          === vertexSet.weightBandPolicyVersion
+        && frozenPreview.hashInputSchemaVersion
+          === vertexSet.hashInputSchemaVersion
+        && frozenPreview.fiveAxisDefinitionId
+          === formalComparisonDefinition.definitionId
+        && frozenPreview.fiveAxisDefinitionVersion
+          === formalComparisonDefinition.version
+        && frozenPreview.fiveAxisRuleVersion
+          === formalComparisonDefinition.fiveAxisRuleVersion
+        && frozenPreview.vertexSetHash === vertexSet.vertexSetHash
+        && frozenPreview.candidateSources?.length
+        && frozenPreview.candidateSetHash
+        && frozenPreview.candidateEvidenceHash
+        && frozenPreview.componentSeries?.length
+        && frozenPreview.inputHash,
+      );
+      const entity = candidate && frozenSnapshot && hasMatchingFormalEvidence
         ? buildFormalFiveAxisEntityFromSnapshot({
             snapshot: frozenSnapshot,
             itemPartId: selection.itemPartId,
@@ -616,18 +637,23 @@ function ModelDrawer({
     }
     try {
       const view = buildFormalEquipmentComparison({
-        definition: formalDefinition,
+        definition: formalComparisonDefinition,
         vertexSet,
         entities,
       });
       return {
         view,
-        definition: formalDefinition,
+        definition: formalComparisonDefinition,
       };
     } catch (caught) {
       return { error: caught instanceof Error ? caught.message : "混合部位比较失败。" };
     }
-  }, [activeFiveAxisPreview, comparisonSelections, state]);
+  }, [
+    activeFiveAxisPreview,
+    comparisonSelections,
+    formalComparisonDefinition,
+    state,
+  ]);
   return (
     <aside
       ref={drawerRef}

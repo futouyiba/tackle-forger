@@ -6,12 +6,14 @@ import {
   evaluatePullRequestMergeGate,
   graphqlNextPageCursor,
   AGENT_REVIEW_PASS_MARKER,
+  GITHUB_DOTCOM_API_BASE,
   parsePullRequestRunName,
   pullRequestRunProvenance,
   readPullRequestWorkflowChecks,
   readPullRequestWithCurrentBase,
   readStableMergeGateSnapshot,
   readTrustedContentEvidence,
+  resolveGithubApiBase,
   selectLatestPullRequestWorkflowRun,
   workflowRunAttemptJobsPath,
 } from "../scripts/check-pr-merge-gate.mjs";
@@ -20,6 +22,18 @@ async function fixture(name) {
   const path = new URL(`./fixtures/merge-gate/${name}.json`, import.meta.url);
   return JSON.parse(await readFile(path, "utf8"));
 }
+
+test("github.com merge-gate checks use the canonical official API host", () => {
+  assert.equal(resolveGithubApiBase(undefined), GITHUB_DOTCOM_API_BASE);
+  assert.equal(resolveGithubApiBase("https://api.github.com"), GITHUB_DOTCOM_API_BASE);
+});
+
+test("github.com merge-gate checks fail closed for a redirected API host", () => {
+  assert.throws(
+    () => resolveGithubApiBase("https://github-api-attacker.invalid"),
+    /GITHUB_API_URL must be exactly https:\/\/api\.github\.com/,
+  );
+});
 
 test("normal-risk current-head CI is merge-ready", async () => {
   const result = evaluatePullRequestMergeGate(await fixture("ready-normal"));

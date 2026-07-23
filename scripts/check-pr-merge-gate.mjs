@@ -15,6 +15,7 @@ export const AGENT_REVIEW_PASS_MARKER = "Agent-Review: PASS";
 
 export const CI_WORKFLOW_PATH = ".github/workflows/ci.yml";
 export const MERGE_GATE_PROGRAM_PATH = "scripts/check-pr-merge-gate.mjs";
+export const GITHUB_DOTCOM_API_BASE = "https://api.github.com";
 const PR_RUN_NAME_PATTERN =
   /^gate-context event=pull_request pr=([1-9]\d*) head=([a-f0-9]{40}) base=([a-f0-9]{40})$/i;
 
@@ -415,8 +416,20 @@ function readToken() {
   }
 }
 
+export function resolveGithubApiBase(configuredBase = process.env.GITHUB_API_URL) {
+  if (configuredBase === undefined) {
+    return GITHUB_DOTCOM_API_BASE;
+  }
+  if (configuredBase !== GITHUB_DOTCOM_API_BASE) {
+    throw new Error(
+      "GITHUB_API_URL must be exactly https://api.github.com for a github.com merge-gate check",
+    );
+  }
+  return GITHUB_DOTCOM_API_BASE;
+}
+
 function createGithubClient(token) {
-  const apiBase = process.env.GITHUB_API_URL ?? "https://api.github.com";
+  const apiBase = resolveGithubApiBase();
   const headers = {
     accept: "application/vnd.github+json",
     authorization: `Bearer ${token}`,

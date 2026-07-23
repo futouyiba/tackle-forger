@@ -16,7 +16,7 @@ import {
 } from "./check-pr-merge-gate.mjs";
 
 const EVIDENCE_SCHEMA_VERSION = "phase-one-acceptance-evidence/v1";
-const DEPENDENCY_EVIDENCE_SCHEMA_VERSION = "phase-one-dependency-evidence/v2";
+const DEPENDENCY_EVIDENCE_SCHEMA_VERSION = "phase-one-dependency-evidence/v3";
 const EXPECTED_WORKBOOK_REF_ID = "feishu-workbook:tackle-design";
 const EXPECTED_DEPENDENCIES = new Map([
   ["canonical_rule_source", { issue: 66, pr: 67 }],
@@ -757,6 +757,102 @@ function dependencyCurrentHeadReviewState({ reviews, headSha }) {
   return { signal };
 }
 
+async function hasTrustedPullRequestReviewEvidence({ fetchImpl, headers, pullNumber, headSha }) {
+  const threads = await fetchAllReviewThreads(fetchImpl, headers, pullNumber);
+  if (threads.some((thread) => thread?.isResolved !== true)) return false;
+  const reviewPayloads = await fetchGithubPages(
+    fetchImpl,
+    githubApiUrl(`/repos/futouyiba/tackle-forger/pulls/${pullNumber}/reviews?per_page=100`),
+    headers,
+  );
+  const reviewState = dependencyCurrentHeadReviewState({
+    headSha,
+    reviews: reviewPayloads.map((review) => ({
+      id: review.id,
+      state: review.state,
+      commitSha: review.commit_id,
+      submittedAt: review.submitted_at,
+      body: review.body,
+      author: { login: review.user?.login, type: review.user?.type },
+    })),
+  });
+  return !reviewState.activeChangeRequest && Boolean(reviewState.signal);
+}
+
+function isCommitSha(value) {
+  return typeof value === "string" && /^[0-9a-f]{40}$/u.test(value);
+}
+
+function isLegacyUnnamedCiRun(run) {
+  return run?.event === "pull_request"
+    && run?.name === "CI"
+    && typeof run?.display_title !== "string";
+}
+
+async function verifyTrustedPullRequestCi({ fetchImpl, headers, pullRequest }) {
+  const headSha = pullRequest?.head?.sha;
+  const baseSha = pullRequest?.base?.sha;
+  const number = pullRequest?.number;
+  if (!Number.isInteger(number) || !isCommitSha(headSha) || !isCommitSha(baseSha)) {
+    return { workflowTrusted: false, checksPassed: false, legacyOnly: false };
+  }
+  const runs = await fetchGithubPages(
+    fetchImpl,
+    githubApiUrl(`/repos/futouyiba/tackle-forger/actions/runs?event=pull_request&head_sha=${headSha}&per_page=100`),
+    headers,
+    "workflow_runs",
+  );
+  const selected = selectLatestPullRequestWorkflowRun(runs, { number, headSha, baseSha });
+  const { payload: workflow } = await fetchGithubJson(
+    fetchImpl,
+    githubApiUrl(`/repos/futouyiba/tackle-forger/actions/workflows/${CI_WORKFLOW_PATH}`),
+    headers,
+  );
+  const attemptJobsPath = workflowRunAttemptJobsPath(
+    "/repos/futouyiba/tackle-forger",
+    selected?.run,
+  );
+  const [baseWorkflowHash, headWorkflowHash] = await Promise.all([
+    fetchTrustedWorkflowHash(fetchImpl, headers, baseSha),
+    fetchTrustedWorkflowHash(fetchImpl, headers, headSha),
+  ]);
+  const workflowTrusted = Boolean(
+    selected
+    && selected.provenance.baseSha === baseSha
+    && selected.run?.workflow_id === workflow?.id
+    && workflow?.path === CI_WORKFLOW_PATH
+    && workflow?.state === "active"
+    && baseWorkflowHash === headWorkflowHash
+    && attemptJobsPath,
+  );
+  let checksPassed = Boolean(
+    selected?.run
+    && selected.run.status === "completed"
+    && selected.run.conclusion === "success"
+    && attemptJobsPath,
+  );
+  if (checksPassed) {
+    const jobs = await fetchGithubPages(
+      fetchImpl,
+      githubApiUrl(`${attemptJobsPath}?per_page=100`),
+      headers,
+      "jobs",
+    );
+    checksPassed = !REQUIRED_CI_JOB_NAMES.some((name) => {
+      const matching = jobs.filter((job) => job?.name === name);
+      return matching.length !== 1
+        || matching[0]?.status !== "completed"
+        || matching[0]?.conclusion !== "success"
+        || (matching[0]?.head_sha ?? headSha) !== headSha;
+    });
+  }
+  return {
+    workflowTrusted,
+    checksPassed,
+    legacyOnly: runs.length > 0 && runs.every(isLegacyUnnamedCiRun),
+  };
+}
+
 export async function inspectDependencyManifest(root, { fetchImpl = fetch, githubToken } = {}) {
   const manifestPath = path.join(root, "deploy/phase-one-dependencies.json");
   try {
@@ -782,6 +878,7 @@ export async function inspectDependencyManifest(root, { fetchImpl = fetch, githu
     const githubWorkflowTrustVerificationFailedIds = [];
     const githubReviewThreadVerificationFailedIds = [];
     const githubCurrentHeadReviewVerificationFailedIds = [];
+    const githubSuccessorAttestationVerificationFailedIds = [];
     const evidence = [];
     const seenCommits = new Set();
 
@@ -854,73 +951,47 @@ export async function inspectDependencyManifest(root, { fetchImpl = fetch, githu
           ) {
             githubVerificationFailedIds.push(dependency.id);
           }
-          const gatePullRequest = {
-            number: expected.pr,
-            headSha: reviewedHeadCommit,
-            baseSha: pullRequest?.base?.sha,
-          };
-          const workflowRuns = await fetchGithubPages(
-            fetchImpl,
-            githubApiUrl(
-              `/repos/futouyiba/tackle-forger/actions/runs?event=pull_request&head_sha=${reviewedHeadCommit}&per_page=100`,
-            ),
-            headers,
-            "workflow_runs",
-          );
-          const selected = selectLatestPullRequestWorkflowRun(
-            workflowRuns,
-            gatePullRequest,
-          );
-          const { payload: workflow } = await fetchGithubJson(
-            fetchImpl,
-            githubApiUrl(
-              `/repos/futouyiba/tackle-forger/actions/workflows/${CI_WORKFLOW_PATH}`,
-            ),
-            headers,
-          );
-          const attemptJobsPath = workflowRunAttemptJobsPath(
-            "/repos/futouyiba/tackle-forger",
-            selected?.run,
-          );
-          const [baseWorkflowHash, headWorkflowHash] = await Promise.all([
-            fetchTrustedWorkflowHash(fetchImpl, headers, pullRequest?.base?.sha),
-            fetchTrustedWorkflowHash(fetchImpl, headers, reviewedHeadCommit),
-          ]);
-          if (
-            !selected
-            || selected.provenance.baseSha !== pullRequest?.base?.sha
-            || selected.run?.workflow_id !== workflow?.id
-            || workflow?.path !== CI_WORKFLOW_PATH
-            || workflow?.state !== "active"
-            || baseWorkflowHash !== headWorkflowHash
-            || !attemptJobsPath
-          ) {
-            githubWorkflowTrustVerificationFailedIds.push(dependency.id);
-          }
-          if (
-            !selected?.run
-            || selected.run.status !== "completed"
-            || selected.run.conclusion !== "success"
-            || !attemptJobsPath
-          ) {
-            githubRequiredCheckVerificationFailedIds.push(dependency.id);
-          } else {
-            const jobs = await fetchGithubPages(
-              fetchImpl,
-              githubApiUrl(`${attemptJobsPath}?per_page=100`),
-              headers,
-              "jobs",
-            );
-            if (REQUIRED_CI_JOB_NAMES.some((name) => {
-              const matching = jobs.filter((job) => job?.name === name);
-              return matching.length !== 1
-                || matching[0]?.status !== "completed"
-                || matching[0]?.conclusion !== "success"
-                || (matching[0]?.head_sha ?? reviewedHeadCommit) !== reviewedHeadCommit;
-            })) {
-              githubRequiredCheckVerificationFailedIds.push(dependency.id);
+          let ciVerification = await verifyTrustedPullRequestCi({ fetchImpl, headers, pullRequest });
+          if ((!ciVerification.workflowTrusted || !ciVerification.checksPassed) && ciVerification.legacyOnly) {
+            const attestation = dependency?.successorAttestation;
+            const validShape = Number.isInteger(attestation?.pr)
+              && attestation.pr > expected.pr
+              && isCommitSha(attestation?.headCommit)
+              && isCommitSha(attestation?.baseCommit)
+              && isCommitSha(attestation?.mergeCommit);
+            if (!validShape
+              || !gitSucceeds(root, ["merge-base", "--is-ancestor", commit, attestation.mergeCommit])
+              || !gitSucceeds(root, ["merge-base", "--is-ancestor", attestation.mergeCommit, "HEAD"])) {
+              githubSuccessorAttestationVerificationFailedIds.push(dependency.id);
+            } else {
+              const { payload: successor } = await fetchGithubJson(
+                fetchImpl,
+                githubApiUrl(`/repos/futouyiba/tackle-forger/pulls/${attestation.pr}`),
+                headers,
+              );
+              if (successor?.number !== attestation.pr
+                || successor?.state !== "closed"
+                || typeof successor?.merged_at !== "string"
+                || successor?.head?.sha !== attestation.headCommit
+                || successor?.base?.sha !== attestation.baseCommit
+                || successor?.merge_commit_sha !== attestation.mergeCommit) {
+                githubSuccessorAttestationVerificationFailedIds.push(dependency.id);
+              } else {
+                ciVerification = await verifyTrustedPullRequestCi({ fetchImpl, headers, pullRequest: successor });
+                const successorReviewsTrusted = await hasTrustedPullRequestReviewEvidence({
+                  fetchImpl,
+                  headers,
+                  pullNumber: attestation.pr,
+                  headSha: attestation.headCommit,
+                });
+                if (!ciVerification.workflowTrusted || !ciVerification.checksPassed || !successorReviewsTrusted) {
+                  githubSuccessorAttestationVerificationFailedIds.push(dependency.id);
+                }
+              }
             }
           }
+          if (!ciVerification.workflowTrusted) githubWorkflowTrustVerificationFailedIds.push(dependency.id);
+          if (!ciVerification.checksPassed) githubRequiredCheckVerificationFailedIds.push(dependency.id);
           try {
             const threads = await fetchAllReviewThreads(fetchImpl, headers, expected.pr);
             if (threads.some((thread) => thread?.isResolved !== true)) {
@@ -996,6 +1067,7 @@ export async function inspectDependencyManifest(root, { fetchImpl = fetch, githu
       || githubWorkflowTrustVerificationFailedIds.length > 0
       || githubReviewThreadVerificationFailedIds.length > 0
       || githubCurrentHeadReviewVerificationFailedIds.length > 0
+      || githubSuccessorAttestationVerificationFailedIds.length > 0
     );
     return invalid
       ? check(
@@ -1020,6 +1092,7 @@ export async function inspectDependencyManifest(root, { fetchImpl = fetch, githu
           githubWorkflowTrustVerificationFailedIds,
           githubReviewThreadVerificationFailedIds,
           githubCurrentHeadReviewVerificationFailedIds,
+          githubSuccessorAttestationVerificationFailedIds,
           dependencies: evidence,
         },
       )

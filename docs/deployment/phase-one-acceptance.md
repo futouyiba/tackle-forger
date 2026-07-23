@@ -91,6 +91,12 @@ threads 的 `isResolved=true` 以及 reviewed head 上仍有效的 `Agent-Review
 非规范 workflow、任何未解决线程、有效 `CHANGES_REQUESTED` 或缺当前头通过信号均保持
 BLOCKED；清单中的布尔值只是辅助证据，
 不得自行证明通过。不得用环境变量、伪造标题或重复填写当前 HEAD 代替依赖证据。
+
+若历史依赖只留下旧式、无 `gate-context` 的 `CI` run，预检不会把它当作规范 CI。清单 v3
+仅允许记录一个已合入、且 merge commit 已包含于当前待部署 HEAD 的**后继 PR 证明**：它必须
+精确固定后继 PR number、head/base/merge commit，并由当前规范 workflow 的不可变内容、
+结构化 PR/head/base provenance 与本次 run attempt 的必需 job 重新核对。该路径不是人工
+豁免，不能接受旧 run，也不能用于跳过原依赖的 PR、线程或 current-head review 核验。
 持久路径会在规范化后检查重复/
 越界，并核对数据库为普通文件、其余路径为目录、必要父目录与各路径均归服务账号所有且
 不向组或其他用户开放读写/访问权限。

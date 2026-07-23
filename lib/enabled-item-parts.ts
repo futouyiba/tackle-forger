@@ -92,13 +92,18 @@ export function seriesItemPartId(
   series: SeriesDefinition,
   skus: readonly SkuDrawer[] = [],
 ): string | undefined {
-  if (series.itemPartId?.trim()) return series.itemPartId.trim();
+  const declaredItemPartId = series.itemPartId?.trim();
   const descendantItemPartIds = [...new Set(
     skus
       .filter((sku) => sku.seriesId === series.id)
       .map((sku) => sku.projectionMatch.itemPartId?.trim())
       .filter((itemPartId): itemPartId is string => isProductItemPartEnabled(itemPartId)),
   )];
+  if (declaredItemPartId) {
+    return descendantItemPartIds.every((itemPartId) => itemPartId === declaredItemPartId)
+      ? declaredItemPartId
+      : undefined;
+  }
   return descendantItemPartIds.length === 1 ? descendantItemPartIds[0] : undefined;
 }
 

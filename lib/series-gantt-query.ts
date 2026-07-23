@@ -175,7 +175,6 @@ export function querySeriesGantt(input: {
       models: visibleModels,
     }).map((block) => [block.seriesId, block]),
   );
-  const typeById = new Map(input.itemTypes.map((type) => [type.id, type]));
   const text = input.query.text?.trim().toLocaleLowerCase("zh-CN");
 
   const result = visibleSeries.flatMap((series): QueriedGanttSeriesBlock[] => {
@@ -191,9 +190,9 @@ export function querySeriesGantt(input: {
         : undefined,
     });
     const issueCodes = [...new Set(context.issues.map((issue) => issue.code))].sort();
-    const typePartIds = series.itemPartId
-      ? [series.itemPartId]
-      : typeById.get(series.typeId)?.itemPartIds ?? [];
+    const typePartIds = [seriesItemPartId(series, input.skus)].filter(
+      (itemPartId): itemPartId is string => Boolean(itemPartId),
+    );
     if (text && ![series.id, series.name, series.concept]
       .join(" ")
       .toLocaleLowerCase("zh-CN")

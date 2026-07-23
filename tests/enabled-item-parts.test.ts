@@ -208,6 +208,56 @@ test("缺少声明部位的历史 Series 从启用后代推导，延期 sibling 
   assert.ok(block);
   assert.ok(block.skuNodes.some((node) => node.skuId === enabledSku.id));
   assert.equal(block.skuNodes.some((node) => node.skuId === retainedHookSku.id), false);
+
+  const matchingPartBlocks = querySeriesGantt({
+    query: { itemPartIds: [enabledSku.projectionMatch.itemPartId] },
+    series,
+    skus,
+    models: state.purchasableModels,
+    itemTypes: state.itemTypeProfiles,
+    upgrades: state.upgradeCandidates,
+  });
+  const otherEnabledPartId = enabledSku.projectionMatch.itemPartId === "part:reel"
+    ? "part:rod"
+    : "part:reel";
+  const mismatchedPartBlocks = querySeriesGantt({
+    query: { itemPartIds: [otherEnabledPartId] },
+    series,
+    skus,
+    models: state.purchasableModels,
+    itemTypes: state.itemTypeProfiles,
+    upgrades: state.upgradeCandidates,
+  });
+  assert.ok(matchingPartBlocks.some((entry) => entry.seriesId === legacySeries.id));
+  assert.equal(mismatchedPartBlocks.some((entry) => entry.seriesId === legacySeries.id), false);
+});
+
+test("声明部位与启用后代冲突时产品读取 fail-closed", () => {
+  const state = createSeedState();
+  const sourceSeries = state.seriesDefinitions[0]!;
+  const sourceSku = state.skuDrawers.find((sku) => sku.seriesId === sourceSeries.id)!;
+  const conflictingPartId = sourceSeries.itemPartId === "part:reel" ? "part:rod" : "part:reel";
+  const conflictingSku = {
+    ...structuredClone(sourceSku),
+    id: "sku:enabled-part-conflict",
+    projectionMatch: {
+      ...structuredClone(sourceSku.projectionMatch),
+      itemPartId: conflictingPartId,
+    },
+    modelIds: [],
+  };
+  const skus = [...state.skuDrawers, conflictingSku];
+
+  assert.equal(seriesItemPartId(sourceSeries, skus), undefined);
+  const blocks = querySeriesGantt({
+    query: {},
+    series: state.seriesDefinitions,
+    skus,
+    models: state.purchasableModels,
+    itemTypes: state.itemTypeProfiles,
+    upgrades: state.upgradeCandidates,
+  });
+  assert.equal(blocks.some((entry) => entry.seriesId === sourceSeries.id), false);
 });
 
 test("扩展部位候选生成和物化在任何模型写入前拒绝且状态不变", () => {

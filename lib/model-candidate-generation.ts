@@ -1,5 +1,6 @@
 import { evaluateAffinity, evaluateHardCompatibility } from "./compatibility";
 import { deterministicHash } from "./rule-kernel";
+import { validationIssueLevel } from "./validation-issues";
 import {
   assertSeriesItemPartChainEnabled,
 } from "./enabled-item-parts";
@@ -136,7 +137,7 @@ export function generateModelCandidateRun(input: {
         bump(excludedByCode, "AFFINITY_BELOW_MINIMUM"); continue;
       }
       const invariantIssues = structuredClone(sku.validationSummary);
-      const warningCount = invariantIssues.filter((issue) => issue.level === "warning").length + affinity.warnings.length;
+      const warningCount = invariantIssues.filter((issue) => validationIssueLevel(issue) === "warning").length + affinity.warnings.length;
       if (!input.request.acceptWarnings && warningCount) { bump(excludedByCode, "WARNING_NOT_ACCEPTED"); continue; }
       const proposedConfiguration = {
         projectionId: sku.projectionMatch.projectionId,

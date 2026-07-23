@@ -1,4 +1,5 @@
 import { deterministicHash } from "./rule-kernel";
+import { validationIssueLevel } from "./validation-issues";
 import type {
   Collection,
   ConfigurationSnapshot,
@@ -720,9 +721,9 @@ export function legacyEntityState(input: {
   hasPublishedSnapshot?: boolean;
 }): CanonicalEntityState {
   const issues = input.issues ?? [];
-  const validation: ValidationState = issues.some((issue) => issue.level === "error")
+  const validation: ValidationState = issues.some((issue) => validationIssueLevel(issue) === "error")
     ? "BLOCKED"
-    : issues.some((issue) => issue.level === "warning")
+    : issues.some((issue) => validationIssueLevel(issue) === "warning")
       ? "WARNING"
       : issues.length ? "PASSED" : "NOT_EVALUATED";
   const mapping = {
@@ -973,7 +974,7 @@ export function createExportPreviewTarget(input: {
     sourceSnapshotId: input.sourceSnapshotId,
     sourceSnapshotHash: input.sourceSnapshotHash,
     sourceFileHashes: structuredClone(input.sourceFileHashes),
-    status: issues.some((issue) => issue.level === "error") ? "blocked" : "ready",
+    status: issues.some((issue) => validationIssueLevel(issue) === "error") ? "blocked" : "ready",
     issues,
   };
 }

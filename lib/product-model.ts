@@ -5,6 +5,7 @@ import type {
   PurchasableModel,
   SeriesDefinition,
   SkuDrawer,
+  LegacyValidationIssue,
   ValidationIssue,
 } from "./types";
 
@@ -51,7 +52,7 @@ const MONOTONIC_PARAMETER_KEYS = [
 
 function issue(
   issues: ValidationIssue[],
-  level: ValidationIssue["level"],
+  level: LegacyValidationIssue["level"],
   code: string,
   message: string,
   parameterKey?: string,

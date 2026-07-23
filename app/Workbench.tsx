@@ -57,6 +57,7 @@ import {
   templateTensionRange,
 } from "@/lib/showcase";
 import { ensureWorkflowFields } from "@/lib/workflow";
+import { validationIssueLevel } from "@/lib/validation-issues";
 import { migrateWorkspaceState } from "@/lib/migrations";
 import {
   isProductItemPartEnabled,
@@ -1338,8 +1339,8 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   };
 
   const renderOverview = () => {
-    const errorCount = validationRows.filter((row) => row.issue.level === "error").length;
-    const warningCount = validationRows.filter((row) => row.issue.level === "warning").length;
+    const errorCount = validationRows.filter((row) => validationIssueLevel(row.issue) === "error").length;
+    const warningCount = validationRows.filter((row) => validationIssueLevel(row.issue) === "warning").length;
     return (
       <div className="page-stack">
         <div className="metric-grid">
@@ -1422,7 +1423,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
               <Button size="sm" tone="ghost" onClick={() => setPage("validation")}>全部校验</Button>
             </div>
             <div className="issue-list">
-              {validationRows.filter((row) => row.issue.level !== "info").slice(0, 5).map(({ candidate, issue }, index) => (
+              {validationRows.filter((row) => validationIssueLevel(row.issue) !== "info").slice(0, 5).map(({ candidate, issue }, index) => (
                 <button
                   type="button"
                   key={candidate.id + issue.code + index}
@@ -1431,11 +1432,11 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
                     setPage("candidates");
                   }}
                 >
-                  {issue.level === "error" ? <XCircle size={16} /> : <AlertTriangle size={16} />}
+                  {validationIssueLevel(issue) === "error" ? <XCircle size={16} /> : <AlertTriangle size={16} />}
                   <span><strong>{candidate.comboId}</strong>{issue.message}</span>
                 </button>
               ))}
-              {!validationRows.some((row) => row.issue.level !== "info") ? (
+              {!validationRows.some((row) => validationIssueLevel(row.issue) !== "info") ? (
                 <div className="all-clear"><CheckCircle2 size={22} />当前候选全部通过关键校验</div>
               ) : null}
             </div>
@@ -2459,8 +2460,8 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
                 <th>比较</th><th className="sticky-col">组合ID</th><th>状态</th><th>系列 / 平台</th><th>模板</th><th>目标kg</th><th>结构</th><th>功能</th><th>性能</th><th>词条</th><th>品质</th><th>分数</th><th>杆/轮/线拉力</th><th>安全拉力</th><th>价格</th><th>校验</th>
               </tr></thead>
               <tbody>{filteredCandidates.map((candidate) => {
-                const errors = candidate.calculated.issues.filter((issue) => issue.level === "error").length;
-                const warnings = candidate.calculated.issues.filter((issue) => issue.level === "warning").length;
+                const errors = candidate.calculated.issues.filter((issue) => validationIssueLevel(issue) === "error").length;
+                const warnings = candidate.calculated.issues.filter((issue) => validationIssueLevel(issue) === "warning").length;
                 return (
                   <tr key={candidate.id} className={selectedCandidateId === candidate.id ? "selected-row" : ""} onDoubleClick={() => setSelectedCandidateId(candidate.id)}>
                     <td><input type="checkbox" checked={selectedCandidates.has(candidate.id)} onChange={() => {
@@ -2551,18 +2552,18 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     return (
       <div className="page-stack">
         <div className="metric-grid compact-metrics">
-          <Card className="metric-card metric-red"><span>错误</span><strong>{validationRows.filter((row) => row.issue.level === "error").length}</strong><small>阻止直接通过</small></Card>
-          <Card className="metric-card metric-amber"><span>警告</span><strong>{validationRows.filter((row) => row.issue.level === "warning").length}</strong><small>建议人工复核</small></Card>
-          <Card className="metric-card metric-teal"><span>通过</span><strong>{state.candidates.filter((candidate) => candidate.calculated.issues.every((issue) => issue.level === "info")).length}</strong><small>结构与覆盖正常</small></Card>
+          <Card className="metric-card metric-red"><span>错误</span><strong>{validationRows.filter((row) => validationIssueLevel(row.issue) === "error").length}</strong><small>阻止直接通过</small></Card>
+          <Card className="metric-card metric-amber"><span>警告</span><strong>{validationRows.filter((row) => validationIssueLevel(row.issue) === "warning").length}</strong><small>建议人工复核</small></Card>
+          <Card className="metric-card metric-teal"><span>通过</span><strong>{state.candidates.filter((candidate) => candidate.calculated.issues.every((issue) => validationIssueLevel(issue) === "info")).length}</strong><small>结构与覆盖正常</small></Card>
           <Card className="metric-card metric-blue"><span>规则建议</span><strong>{suggestions.length}</strong><small>来自重复精调</small></Card>
         </div>
         <div className="two-column validation-layout">
           <Card className="flush-card">
             <div className="panel-title padded"><div><h3>验算问题</h3><p>安全工作拉力 = MIN(杆×0.9, 轮, 线×0.35)</p></div></div>
             <SheetTable><thead><tr><th>级别</th><th>组合ID</th><th>规则</th><th>说明</th></tr></thead><tbody>
-              {validationRows.filter((row) => row.issue.level !== "info").map(({ candidate, issue }, index) => (
+              {validationRows.filter((row) => validationIssueLevel(row.issue) !== "info").map(({ candidate, issue }, index) => (
                 <tr key={candidate.id + issue.code + index} onClick={() => { setSelectedCandidateId(candidate.id); setPage("candidates"); }}>
-                  <td>{issue.level === "error" ? <Pill tone="danger">错误</Pill> : <Pill tone="warning">警告</Pill>}</td><td><strong>{candidate.comboId}</strong></td><td><code>{issue.code}</code></td><td>{issue.message}</td>
+                  <td>{validationIssueLevel(issue) === "error" ? <Pill tone="danger">错误</Pill> : <Pill tone="warning">警告</Pill>}</td><td><strong>{candidate.comboId}</strong></td><td><code>{issue.code}</code></td><td>{issue.message}</td>
                 </tr>
               ))}
             </tbody></SheetTable>

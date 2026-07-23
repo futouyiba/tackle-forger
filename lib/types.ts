@@ -1226,6 +1226,10 @@ export interface ConfigurationSnapshot {
   qualityReport: AffixQualityEvaluation;
   qualityValueAssessment?: ModelAffixValueAssessment;
   validationReport: ValidationIssue[];
+  /** 历史 Snapshot 可缺失；新正式 Snapshot 冻结统一校验确认与 Waiver 证据。 */
+  validationAcknowledgements?: ValidationAcknowledgement[];
+  validationWaivers?: ValidationWaiver[];
+  validationWaiverDecisions?: ValidationWaiverDecision[];
   fiveAxisPreview?: ModelFiveAxisPreview;
   publishedBy: string;
   publishedAt: string;
@@ -1537,13 +1541,95 @@ export interface QualityResult {
   penalties: string[];
 }
 
-export interface ValidationIssue {
+export type ValidationIssueSeverity = "INFO" | "WARNING" | "ERROR" | "BLOCKER";
+export type ValidationIssueGate = "NONE" | "REVIEW" | "PUBLISH" | "EXPORT";
+export type ValidationIssueState = "OPEN" | "ACKNOWLEDGED" | "RESOLVED" | "WAIVED" | "STALE";
+export type ValidationIssueSource =
+  | "hard_compatibility" | "affinity" | "series_invariant" | "patch"
+  | "publish" | "data_integrity" | "import" | "five_axis" | "ai_guardrail"
+  | "config_identity" | "config_relationship" | "quality" | "pricing";
+
+export interface ValidationEntityRef {
+  workspaceId: string;
+  entityType: string;
+  entityId: string;
+  revisionId: string;
+}
+
+export interface ValidationEvidenceRef {
+  evidenceType:
+    | "trace" | "validation_issue" | "hard_compatibility" | "affinity_axis"
+    | "series_invariant" | "five_axis" | "rule" | "snapshot" | "user_note";
+  refId: string;
+  revisionId?: string;
+  anchor?: string;
+  contentHash: string;
+  excerpt?: string;
+}
+
+/**
+ * ActionCode 的封闭集合与不可变 commandPayloadRef 由 #48 负责。
+ * 本接口只冻结 R9 共用壳，避免在 #47 复制另一套动作注册表。
+ */
+export interface ValidationActionLink {
+  actionId: string;
+  action: string;
+  label: string;
+  targetRef?: ValidationEntityRef;
+  targetRoute?: string;
+  enabled: boolean;
+  requiredCapabilities: string[];
+  disabledReasonCode?: string;
+  disabledReasonText?: string;
+  commandPayloadRef?: {
+    payloadRefId: string;
+    action: string;
+    subjectRef: ValidationEntityRef;
+    expectedRevisionId?: string;
+    inputHash: string;
+    payloadHash: string;
+    idempotencyKey: string;
+    expiresAt?: string;
+  };
+}
+
+export interface CanonicalValidationIssue {
+  issueId: string;
+  issueRevision: string;
+  fingerprint: string;
+  fingerprintVersion: "validation-issue-fingerprint/v1";
+  inputHash: string;
+  code: string;
+  source: ValidationIssueSource;
+  severity: ValidationIssueSeverity;
+  gate: ValidationIssueGate;
+  subjectRef: ValidationEntityRef;
+  affectedRefs: ValidationEntityRef[];
+  parameterKeys: string[];
+  title: string;
+  message: string;
+  evidenceRefs: ValidationEvidenceRef[];
+  ruleRefs: string[];
+  state: ValidationIssueState;
+  waiverRef?: string;
+  environmentId?: string;
+  channelKey?: string;
+  actions: ValidationActionLink[];
+  /** @deprecated 只供尚未迁移的展示代码读取；新记录不写入，领域判断必须使用 severity。 */
+  level?: "error" | "warning" | "info";
+  /** @deprecated 旧内联证据兼容视图；新记录只冻结 evidenceRefs。 */
+  evidence?: Record<string, unknown>;
+  /** @deprecated 旧单参数兼容视图；新记录使用 parameterKeys。 */
+  parameterKey?: string;
+}
+
+/** 旧工作区和历史 Snapshot 的只读输入形状；写入新证据前必须安全适配。 */
+export interface LegacyValidationIssue {
   level: "error" | "warning" | "info";
-  /** 规范严重度；旧记录缺失时由 level 确定性映射。 */
-  severity?: "INFO" | "WARNING" | "ERROR" | "BLOCKER";
-  source?: "patch" | "data_integrity" | "publish" | "series_invariant" | "hard_compatibility" | "quality" | "pricing" | "five_axis" | "import";
-  gate?: "NONE" | "REVIEW" | "PUBLISH" | "EXPORT";
-  state?: "OPEN" | "ACKNOWLEDGED" | "RESOLVED" | "WAIVED" | "STALE";
+  severity?: ValidationIssueSeverity;
+  source?: ValidationIssueSource;
+  gate?: ValidationIssueGate;
+  state?: ValidationIssueState;
   fingerprint?: string;
   code: string;
   message: string;
@@ -1551,6 +1637,87 @@ export interface ValidationIssue {
   environmentId?: string;
   channelKey?: string;
   evidence?: Record<string, unknown>;
+}
+
+/** 读取边界兼容旧记录；新领域代码必须创建 CanonicalValidationIssue。 */
+export type ValidationIssue = CanonicalValidationIssue | LegacyValidationIssue;
+
+export interface ValidationAcknowledgement {
+  acknowledgementId: string;
+  issueId: string;
+  issueFingerprint: string;
+  issueRevision: string;
+  inputHash: string;
+  gate: ValidationIssueGate;
+  reason: string;
+  acknowledgedBy: string;
+  acknowledgedAt: string;
+  idempotencyKey: string;
+  payloadHash: string;
+  state: "FRESH" | "STALE";
+  evidenceRefs: ValidationEvidenceRef[];
+  recordHash: string;
+}
+
+export interface ValidationWaiver {
+  waiverId: string;
+  waiverDecisionId: string;
+  issueId: string;
+  issueFingerprint: string;
+  issueRevision: string;
+  inputHash: string;
+  policyVersion: string;
+  policyHash: string;
+  gate: Exclude<ValidationIssueGate, "NONE">;
+  environmentId?: string;
+  channelKey?: string;
+  scopeRef: ValidationEntityRef;
+  reason: string;
+  approvedBy: string;
+  approvedAt: string;
+  expiresAt?: string;
+  state: "FRESH" | "STALE";
+  evidenceRefs: ValidationEvidenceRef[];
+  recordHash: string;
+}
+
+export interface ValidationWaiverDecision {
+  waiverDecisionId: string;
+  scopeRef: ValidationEntityRef;
+  reason: string;
+  requestedWaivers: Array<{
+    issueFingerprint: string;
+    gate: Exclude<ValidationIssueGate, "NONE">;
+    environmentId?: string;
+    channelKey?: string;
+  }>;
+  approvedBy: string;
+  approvedAt: string;
+  waiverIds: string[];
+  policyVersion: string;
+  policyHash: string;
+  idempotencyKey: string;
+  payloadHash: string;
+  decisionHash: string;
+}
+
+export interface WaiverPolicyRule {
+  source: ValidationIssueSource;
+  code: string;
+  gates: Array<Exclude<ValidationIssueGate, "NONE">>;
+  scopeEntityTypes?: string[];
+  scopeRefs?: ValidationEntityRef[];
+  validFrom?: string;
+  validUntil?: string;
+}
+
+export interface WaiverPolicyVersion {
+  policyId: string;
+  version: string;
+  status: "DRAFT" | "PUBLISHED" | "RETIRED";
+  rules: WaiverPolicyRule[];
+  publishedAt?: string;
+  policyHash: string;
 }
 
 export interface CalculatedEquipment {

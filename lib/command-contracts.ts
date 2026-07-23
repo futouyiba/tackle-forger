@@ -1,14 +1,16 @@
 import { deterministicHash } from "./rule-kernel";
 import type {
   AffinityScoreResult,
+  CanonicalValidationIssue,
   HardCompatibilityResult,
+  ValidationActionLink,
 } from "./types";
 import type {
-  ActionAvailability,
   CapabilityCode,
   EntityRef,
 } from "./interaction-contracts";
 import { actionAvailability } from "./interaction-contracts";
+import { createValidationIssue } from "./validation-issues";
 
 export interface CandidateGenerationRequest {
   requestId: string;
@@ -206,81 +208,45 @@ export function replayUnifiedTrace(input: {
   return { values, replayHash: deterministicHash({ values, entries }) };
 }
 
-export type IssueSource =
-  | "hard_compatibility" | "affinity" | "series_invariant" | "patch"
-  | "publish" | "data_integrity" | "import" | "five_axis" | "ai_guardrail";
-
-export interface IssueAction {
-  actionId: string;
-  action:
-    | "navigate" | "edit_rule" | "edit_patch" | "open_rebase"
-    | "satisfy_requirement" | "acknowledge_warning" | "request_permission"
-    | "retry" | "recompute" | "create_proposal";
-  label: string;
-  availability: ActionAvailability;
-}
-
-export interface UnifiedValidationIssue {
-  issueId: string;
-  fingerprint: string;
-  code: string;
-  source: IssueSource;
-  severity: "error" | "warning" | "info";
-  blocking: boolean;
-  gate: "generate" | "series_approve" | "model_review" | "publish" | "export";
-  subjectRef: EntityRef;
-  affectedRefs: EntityRef[];
-  parameterKeys: string[];
-  title: string;
-  message: string;
-  state: "open" | "acknowledged" | "resolved" | "waived" | "superseded";
-  deny: boolean;
-  actions: IssueAction[];
-}
+/** @deprecated 使用 CanonicalValidationIssue；保留导出名避免旧调用方复制第三套结构。 */
+export type UnifiedValidationIssue = CanonicalValidationIssue;
+export type IssueAction = ValidationActionLink;
 
 export function createUnifiedIssue(input: Omit<
-  UnifiedValidationIssue,
-  "issueId" | "fingerprint" | "blocking" | "actions"
+  Parameters<typeof createValidationIssue>[0],
+  "actions"
 > & {
   actionSpecs: Array<{
     actionId: string;
-    action: IssueAction["action"];
+    action: ValidationActionLink["action"];
     label: string;
     command: Parameters<typeof actionAvailability>[0];
     capabilities: CapabilityCode[];
     heldCapabilities: CapabilityCode[];
   }>;
 }): UnifiedValidationIssue {
-  const blocking = input.severity === "error" || input.deny;
-  if (input.deny && input.state === "waived") {
-    throw new Error("硬 deny 不允许 waive。");
-  }
-  const fingerprint = deterministicHash({
-    code: input.code,
-    source: input.source,
-    subjectRef: input.subjectRef,
-    affectedRefs: input.affectedRefs,
-    parameterKeys: input.parameterKeys,
-  });
   const { actionSpecs, ...issue } = input;
-  return {
-    ...structuredClone(issue),
-    blocking,
-    issueId: "issue-" + fingerprint,
-    fingerprint,
-    actions: actionSpecs.map((spec) => ({
-      actionId: spec.actionId,
-      action: spec.action,
-      label: spec.label,
-      availability: actionAvailability(
+  return createValidationIssue({
+    ...issue,
+    actions: actionSpecs.map((spec) => {
+      const availability = actionAvailability(
         spec.command,
         spec.heldCapabilities,
         spec.capabilities.some((capability) => !spec.heldCapabilities.includes(capability))
           ? { code: "ISSUE_ACTION_FORBIDDEN", text: "无权执行此修复动作。" }
           : undefined,
-      ),
-    })),
-  };
+      );
+      return {
+      actionId: spec.actionId,
+      action: spec.action,
+      label: spec.label,
+        enabled: availability.enabled,
+        requiredCapabilities: availability.requiredCapabilities,
+        disabledReasonCode: availability.disabledReasonCode,
+        disabledReasonText: availability.disabledReasonText,
+      };
+    }),
+  });
 }
 
 export type PatchWorkflowState =
@@ -360,4 +326,3 @@ export function assertSnapshotMutationForbidden(action:
 ): never {
   throw new Error(`ConfigurationSnapshot 已冻结，禁止 ${action}；请创建新修订或 UpgradeCandidate。`);
 }
-

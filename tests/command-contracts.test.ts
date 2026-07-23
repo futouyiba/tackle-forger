@@ -166,19 +166,20 @@ test("R4 Trace按sequence重放并验证before/inputHash/outputHash", () => {
   );
 });
 
-test("R9 error必阻断、deny不可waive、修复动作由Capability决定", () => {
+test("R9 Severity与Gate分离、BLOCKER不可waive、修复动作由Capability决定", () => {
   const issue = createUnifiedIssue({
     code: "HARD_DENY",
     source: "hard_compatibility",
-    severity: "error",
-    gate: "publish",
+    severity: "BLOCKER",
+    gate: "PUBLISH",
     subjectRef: ref("model", "model:1"),
     affectedRefs: [],
     parameterKeys: ["typeId"],
     title: "硬冲突",
     message: "类型不兼容",
-    state: "open",
-    deny: true,
+    state: "OPEN",
+    inputHash: "input:1",
+    ruleRefs: ["compatibility:v1"],
     actionSpecs: [{
       actionId: "action:1",
       action: "edit_patch",
@@ -188,15 +189,29 @@ test("R9 error必阻断、deny不可waive、修复动作由Capability决定", ()
       heldCapabilities: ["model.read"],
     }],
   });
-  assert.equal(issue.blocking, true);
-  assert.equal(issue.actions[0].availability.enabled, false);
+  assert.equal(issue.severity, "BLOCKER");
+  assert.equal(issue.gate, "PUBLISH");
+  assert.equal("blocking" in issue, false);
+  assert.equal(issue.actions[0].enabled, false);
   assert.throws(
     () => createUnifiedIssue({
-      ...issue,
-      state: "waived",
+      code: issue.code,
+      source: issue.source,
+      severity: issue.severity,
+      gate: issue.gate,
+      subjectRef: issue.subjectRef,
+      affectedRefs: issue.affectedRefs,
+      parameterKeys: issue.parameterKeys,
+      title: issue.title,
+      message: issue.message,
+      evidenceRefs: issue.evidenceRefs,
+      ruleRefs: issue.ruleRefs,
+      inputHash: issue.inputHash,
+      state: "WAIVED",
+      waiverRef: "waiver:forbidden",
       actionSpecs: [],
     }),
-    /不允许 waive/,
+    /BLOCKER 永远不可 waive/,
   );
 });
 
@@ -228,4 +243,3 @@ test("R12 开放策略必须明确命中已发布版本，不用页面默认", (
     /配置不完整/,
   );
 });
-

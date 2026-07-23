@@ -34,9 +34,18 @@ import type {
   SkuDrawer,
   UpgradeCandidate,
   ValidationIssue,
+  ValidationAcknowledgement,
+  ValidationWaiver,
+  ValidationWaiverDecision,
   PassiveSkillPayload,
   WorkspacePolicyRecord,
 } from "./types";
+import {
+  assertValidationGateCanProceed,
+  canonicalizeValidationIssues,
+  isCanonicalValidationIssue,
+  validationIssueSeverity,
+} from "./validation-issues";
 import type { ModelAffixValueAssessment } from "./quality-value-policy";
 import type { PricingTrialResult } from "./pricing-policy";
 import {
@@ -44,11 +53,15 @@ import {
 } from "./enabled-item-parts";
 
 function errors(issues: ValidationIssue[]): ValidationIssue[] {
-  return issues.filter((issue) => issue.level === "error");
+  return issues.filter((issue) => {
+    const severity = validationIssueSeverity(issue);
+    return (severity === "ERROR" || severity === "BLOCKER")
+      && (!isCanonicalValidationIssue(issue) || issue.state === "OPEN");
+  });
 }
 
 function warnings(issues: ValidationIssue[]): ValidationIssue[] {
-  return issues.filter((issue) => issue.level === "warning");
+  return issues.filter((issue) => validationIssueSeverity(issue) === "WARNING");
 }
 
 export interface PublishModelInput {
@@ -80,8 +93,12 @@ export interface PublishModelInput {
   pricingPolicyVersion?: string;
   automaticPricing?: PricingTrialResult;
   validationReport: ValidationIssue[];
+  validationAcknowledgements?: ValidationAcknowledgement[];
+  validationWaivers?: ValidationWaiver[];
+  validationWaiverDecisions?: ValidationWaiverDecision[];
   fiveAxisPreview?: ModelFiveAxisPreview;
   fiveAxisDefinition?: FiveAxisViewDefinition;
+  /** @deprecated 仅 historical_import 可读取；新正式发布必须提供指纹绑定的确认记录。 */
   warningConfirmations: Record<string, string>;
   publishedBy: string;
   publishedAt: string;
@@ -178,6 +195,27 @@ export function publishConfigurationSnapshot(
     ...input.validationReport,
     ...(input.fiveAxisPreview?.tackleFitComparison.validationIssues ?? []),
   ];
+  const canonicalValidationReport = canonicalizeValidationIssues(
+    combinedValidationReport,
+    {
+      subjectRef: {
+        workspaceId: "workspace:legacy",
+        entityType: "model",
+        entityId: input.model.id,
+        revisionId: String(input.model.revision),
+      },
+      inputHash: deterministicHash({
+        modelId: input.model.id,
+        modelRevision: input.model.revision,
+        projectionId: input.projection.id,
+        validationReport: combinedValidationReport,
+      }),
+      ruleRefs: [input.projection.ruleSetVersion],
+      gate: "PUBLISH",
+      source: "publish",
+      mode: "active_gate",
+    },
+  );
   const blocking = errors(combinedValidationReport);
   if (!input.compatibilityReport.allowed) {
     blocking.push({
@@ -215,9 +253,11 @@ export function publishConfigurationSnapshot(
       });
     }
   }
-  const unconfirmedWarnings = warnings(combinedValidationReport).filter(
-    (warning) => !input.warningConfirmations[warning.code]?.trim(),
-  );
+  const unconfirmedWarnings = input.publicationMode === "historical_import"
+    ? warnings(combinedValidationReport).filter(
+      (warning) => !input.warningConfirmations[warning.code]?.trim(),
+    )
+    : [];
   if (unconfirmedWarnings.length) {
     blocking.push({
       level: "error",
@@ -232,6 +272,21 @@ export function publishConfigurationSnapshot(
       "配置快照发布被阻止：" +
         blocking.map((issue) => issue.message).join("；"),
     );
+  }
+  if (input.publicationMode === "new_formal") {
+    try {
+      assertValidationGateCanProceed({
+        issues: canonicalValidationReport,
+        gate: "PUBLISH",
+        acknowledgements: input.validationAcknowledgements,
+        waivers: input.validationWaivers,
+        at: input.publishedAt,
+      });
+    } catch (error) {
+      throw new Error(
+        "配置快照发布被阻止：" + (error instanceof Error ? error.message : String(error)),
+      );
+    }
   }
   if (input.model.skuId !== input.sku.id || input.sku.seriesId !== input.series.id) {
     throw new Error("Model、SKU 与 Series 版本链不完整。");
@@ -313,14 +368,21 @@ export function publishConfigurationSnapshot(
     ...(input.automaticPricing
       ? { automaticPricing: structuredClone(input.automaticPricing) }
       : {}),
-    validationReport: [
-      ...structuredClone(combinedValidationReport),
-      ...Object.entries(input.warningConfirmations).map(([code, reason]) => ({
-        level: "info" as const,
-        code: "WARNING_CONFIRMED_" + code,
-        message: reason,
-      })),
-    ],
+    validationReport: input.publicationMode === "new_formal"
+      ? structuredClone(canonicalValidationReport)
+      : [
+          ...structuredClone(combinedValidationReport),
+          ...Object.entries(input.warningConfirmations).map(([code, reason]) => ({
+            level: "info" as const,
+            code: "WARNING_CONFIRMED_" + code,
+            message: reason,
+          })),
+        ],
+    ...(input.publicationMode === "new_formal" ? {
+      validationAcknowledgements: structuredClone(input.validationAcknowledgements ?? []),
+      validationWaivers: structuredClone(input.validationWaivers ?? []),
+      validationWaiverDecisions: structuredClone(input.validationWaiverDecisions ?? []),
+    } : {}),
     publishedBy: input.publishedBy,
     ...(input.fiveAxisPreview
       ? { fiveAxisPreview: structuredClone(input.fiveAxisPreview) }

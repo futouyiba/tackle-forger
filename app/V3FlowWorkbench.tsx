@@ -21,6 +21,7 @@ import { useMemo, useState } from "react";
 import { hydrateV3Seed } from "@/lib/v3-seed";
 import { projectionPatchViewFromLedger } from "@/lib/patch-ledger";
 import { isProductSkuChainEnabled } from "@/lib/enabled-item-parts";
+import { validationIssueLevel } from "@/lib/validation-issues";
 import type {
   ConfigurationSnapshot,
   ProjectionPatchRuleSource,
@@ -154,8 +155,8 @@ export function V3FlowWorkbench({ state, mutate, notify, initialSeriesId }: V3Fl
 
   const ruleSetVersion = selectedSku?.projectionMatch.ruleSetVersion ?? state.ruleSetVersions[0]?.id ?? "—";
   const quality = selectedSeries ? qualityMeta[selectedSeries.qualityId] : qualityMeta.quality_c_green;
-  const blockingCount = selectedSku?.validationSummary.filter((issue) => issue.level === "error").length ?? 0;
-  const warningCount = selectedSku?.validationSummary.filter((issue) => issue.level === "warning").length ?? 0;
+  const blockingCount = selectedSku?.validationSummary.filter((issue) => validationIssueLevel(issue) === "error").length ?? 0;
+  const warningCount = selectedSku?.validationSummary.filter((issue) => validationIssueLevel(issue) === "warning").length ?? 0;
 
   const approveUpgrade = () => {
     if (!pendingUpgrade) return;
@@ -313,7 +314,7 @@ export function V3FlowWorkbench({ state, mutate, notify, initialSeriesId }: V3Fl
                   ["重量曲线", selectedSeries.targetWeightsKg.map((weight) => `${weight}kg`).join(" → "), "保持单调"],
                 ].map(([title, value, hint]) => <div key={title}><span className="v3-invariant-check"><CheckCircle2 size={16} /></span><div><strong>{title}</strong><small>{hint}</small></div><b>{value}</b></div>)}
               </div>
-              {selectedSku.validationSummary.length ? <div className="v3-validation-box"><strong>当前 SKU 校验</strong>{selectedSku.validationSummary.map((issue, index) => <div key={issue.code + index} className={issue.level}><span>{issue.level === "error" ? "阻断" : issue.level === "warning" ? "警告" : "信息"}</span><p>{issue.message}</p></div>)}</div> : null}
+              {selectedSku.validationSummary.length ? <div className="v3-validation-box"><strong>当前 SKU 校验</strong>{selectedSku.validationSummary.map((issue, index) => <div key={issue.code + index} className={validationIssueLevel(issue)}><span>{validationIssueLevel(issue) === "error" ? "阻断" : validationIssueLevel(issue) === "warning" ? "警告" : "信息"}</span><p>{issue.message}</p></div>)}</div> : null}
             </>
           ) : null}
 

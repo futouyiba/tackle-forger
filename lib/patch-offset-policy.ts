@@ -1,4 +1,5 @@
 import { deterministicHash } from "./rule-kernel";
+import { createValidationIssue } from "./validation-issues";
 import type {
   PatchOffsetPolicyVersion,
   PatchRangeResultEvidence,
@@ -346,31 +347,6 @@ export function assertPatchRevisionDeterministicallyReplayable(revision: PatchRe
   });
 }
 
-function issueFingerprint(input: {
-  code: string;
-  gate: PatchRangeEvaluation["gate"];
-  context?: PatchFinalRangeContext;
-  policyVersion?: string;
-  environmentId?: string;
-  channelKey?: string;
-}): string {
-  return deterministicHash({
-    source: "patch",
-    code: input.code,
-    gate: input.gate,
-    policyVersion: input.policyVersion,
-    subjectRef: input.context?.subjectRef,
-    objectInputHash: input.context?.objectInputHash,
-    contextId: input.context?.contextId,
-    parameterKey: input.context?.parameterKey,
-    constraintRuleVersion: input.context?.constraintRuleVersion,
-    patchSetHash: input.context?.patchSetHash,
-    ...(input.gate === "EXPORT"
-      ? { environmentId: input.environmentId, channelKey: input.channelKey }
-      : {}),
-  });
-}
-
 function policyIssue(input: {
   code: string;
   message: string;
@@ -382,30 +358,53 @@ function policyIssue(input: {
   channelKey?: string;
   evidence?: Record<string, unknown>;
 }): ValidationIssue {
-  return {
-    level: "error",
-    severity: input.severity,
-    source: input.severity === "BLOCKER" ? "data_integrity" : "patch",
-    gate: input.gate,
-    state: "OPEN",
+  const legacyEvidence = {
+    ...(input.context ? {
+      contextId: input.context.contextId,
+      subjectRef: input.context.subjectRef,
+      objectInputHash: input.context.objectInputHash,
+      patchSetHash: input.context.patchSetHash,
+      traceHash: input.context.traceHash,
+    } : {}),
+    ...input.evidence,
+  };
+  const issue = createValidationIssue({
     code: input.code,
+    source: input.severity === "BLOCKER" ? "data_integrity" : "patch",
+    severity: input.severity,
+    gate: input.gate,
+    subjectRef: {
+      workspaceId: "workspace:patch-authority",
+      entityType: input.context?.subjectRef.scopeType ?? "patch_policy",
+      entityId: input.context?.subjectRef.entityId ?? input.policyVersion ?? "missing",
+      revisionId: String(input.context?.subjectRef.revision ?? input.policyVersion ?? "missing"),
+    },
+    affectedRefs: [],
+    parameterKeys: input.context?.parameterKey ? [input.context.parameterKey] : [],
+    title: input.code,
     message: input.message,
-    parameterKey: input.context?.parameterKey,
-    fingerprint: issueFingerprint(input),
+    evidenceRefs: [{
+      evidenceType: "trace",
+      refId: input.context?.contextId ?? `patch-policy:${input.policyVersion ?? "missing"}`,
+      revisionId: input.context?.constraintRuleVersion,
+      contentHash: deterministicHash(legacyEvidence),
+    }],
+    ruleRefs: [
+      input.policyVersion ?? "patch-offset-policy:missing",
+      ...(input.context?.constraintRuleVersion ? [input.context.constraintRuleVersion] : []),
+    ],
+    inputHash: input.context?.objectInputHash ?? deterministicHash(legacyEvidence),
+    fingerprintInputs: {
+      contextId: input.context?.contextId,
+      patchSetHash: input.context?.patchSetHash,
+      constraintRuleVersion: input.context?.constraintRuleVersion,
+    },
     ...(input.gate === "EXPORT"
       ? { environmentId: input.environmentId, channelKey: input.channelKey }
       : {}),
-    evidence: {
-      ...(input.context ? {
-        contextId: input.context.contextId,
-        subjectRef: input.context.subjectRef,
-        objectInputHash: input.context.objectInputHash,
-        patchSetHash: input.context.patchSetHash,
-        traceHash: input.context.traceHash,
-      } : {}),
-      ...input.evidence,
-    },
-  };
+  });
+  // 旧 PatchOffsetPolicy 读取路径在迁移完成前仍从内联 evidence 取上下文。
+  return { ...issue, evidence: legacyEvidence };
 }
 
 function validateExportTarget(input: {

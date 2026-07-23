@@ -1,4 +1,5 @@
 import { deterministicHash } from "./rule-kernel";
+import { validationIssueLevel } from "./validation-issues";
 import {
   assertProductItemPartChainEnabled,
   assertSeriesItemPartChainEnabled,
@@ -117,7 +118,7 @@ export function planSnapshotBatch(input: {
         }],
       };
     }
-    const blocking = validationIssues.filter((issue) => issue.level === "error");
+    const blocking = validationIssues.filter((issue) => validationIssueLevel(issue) === "error");
     if (
       latest &&
       latest.modelRevision === model.revision &&

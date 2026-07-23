@@ -8,12 +8,17 @@ import {
 } from "./patch-offset-policy";
 import type {
   ConfigurationSnapshot,
+  CanonicalValidationIssue,
+  LegacyValidationIssue,
   PatchOffsetPolicyVersion,
   ParameterDefinition,
   PatchRevisionRecord,
   PatchValidationWaiver,
   RuleSetVersion,
+  ValidationAcknowledgement,
   ValidationIssue,
+  ValidationWaiver,
+  ValidationWaiverDecision,
   WorkspacePolicyRecord,
 } from "./types";
 import type { ExportTargetProfile } from "./interaction-contracts";
@@ -21,6 +26,10 @@ import type { ConfigExportMapping } from "./config-export-mapping";
 import {
   assertSnapshotItemPartEnabled,
 } from "./enabled-item-parts";
+import {
+  assertValidationGateCanProceed,
+  isCanonicalValidationIssue,
+} from "./validation-issues";
 export type { ConfigExportMapping } from "./config-export-mapping";
 
 
@@ -50,6 +59,10 @@ export interface ExportManifest {
   patchValidationIssueFingerprints?: string[];
   patchValidationWaiverRefs?: string[];
   patchValidationWaiverDecisionRefs?: string[];
+  validationIssueFingerprints?: string[];
+  validationAcknowledgementRefs?: string[];
+  validationWaiverRefs?: string[];
+  validationWaiverDecisionRefs?: string[];
   createdAt: string;
   manifestHash: string;
 }
@@ -71,6 +84,12 @@ export function createExportManifest(input: {
     parameterDefinitions: ParameterDefinition[];
     patchRevisions: PatchRevisionRecord[];
     waivers?: PatchValidationWaiver[];
+  };
+  validationGovernance?: {
+    issues: CanonicalValidationIssue[];
+    acknowledgements?: ValidationAcknowledgement[];
+    waivers?: ValidationWaiver[];
+    decisions?: ValidationWaiverDecision[];
   };
 }): ExportManifest {
   assertSnapshotItemPartEnabled(input.snapshot, "config_export");
@@ -170,6 +189,61 @@ export function createExportManifest(input: {
       )].sort(),
     };
   }
+  let frozenValidationGovernance: Pick<ExportManifest,
+    "validationIssueFingerprints" | "validationAcknowledgementRefs"
+    | "validationWaiverRefs" | "validationWaiverDecisionRefs"> = {};
+  const frozenSnapshotExportIssues = input.snapshot.validationReport.filter(
+    (issue): issue is CanonicalValidationIssue =>
+      isCanonicalValidationIssue(issue)
+      && issue.gate === "EXPORT"
+      && issue.environmentId === input.environmentId
+      && issue.channelKey === input.channelKey,
+  );
+  if (frozenSnapshotExportIssues.length && !input.validationGovernance) {
+    throw new Error("Snapshot 含当前导出目标的统一 Issue，但导出命令缺少对应确认证据。");
+  }
+  if (input.validationGovernance) {
+    if (!input.environmentId?.trim() || !input.channelKey?.trim()) {
+      throw new Error("统一 EXPORT 校验证据必须精确绑定 environmentId 与 channelKey。");
+    }
+    assertValidationGateCanProceed({
+      issues: input.validationGovernance.issues,
+      gate: "EXPORT",
+      environmentId: input.environmentId,
+      channelKey: input.channelKey,
+      acknowledgements: input.validationGovernance.acknowledgements,
+      waivers: input.validationGovernance.waivers,
+      at: input.createdAt,
+    });
+    const relevantFingerprints = new Set(
+      input.validationGovernance.issues
+        .filter((issue) =>
+          issue.gate === "EXPORT"
+          && issue.environmentId === input.environmentId
+          && issue.channelKey === input.channelKey)
+        .map((issue) => issue.fingerprint),
+    );
+    const missingFrozenIssue = frozenSnapshotExportIssues.find(
+      (issue) => !relevantFingerprints.has(issue.fingerprint),
+    );
+    if (missingFrozenIssue) {
+      throw new Error(`导出命令未携带 Snapshot 冻结的 Issue ${missingFrozenIssue.fingerprint}。`);
+    }
+    const waivers = (input.validationGovernance.waivers ?? [])
+      .filter((waiver) =>
+        relevantFingerprints.has(waiver.issueFingerprint)
+        && waiver.environmentId === input.environmentId
+        && waiver.channelKey === input.channelKey);
+    frozenValidationGovernance = {
+      validationIssueFingerprints: [...relevantFingerprints].sort(),
+      validationAcknowledgementRefs: (input.validationGovernance.acknowledgements ?? [])
+        .filter((entry) => relevantFingerprints.has(entry.issueFingerprint))
+        .map((entry) => entry.acknowledgementId)
+        .sort(),
+      validationWaiverRefs: waivers.map((entry) => entry.waiverId).sort(),
+      validationWaiverDecisionRefs: [...new Set(waivers.map((entry) => entry.waiverDecisionId))].sort(),
+    };
+  }
   const content = {
     packageId: input.packageId,
     generatorVersion: input.generatorVersion,
@@ -183,6 +257,7 @@ export function createExportManifest(input: {
     originalFileHashes: structuredClone(input.originalFileHashes),
     entries: structuredClone(input.entries),
     ...frozenPatchGovernance,
+    ...frozenValidationGovernance,
     createdAt: input.createdAt,
   };
   return { ...content, manifestHash: deterministicHash(content) };
@@ -207,13 +282,13 @@ export interface EnumRelationDefinition {
   allowCommaSeparatedTargets: boolean;
 }
 
-export interface ExportRelationIssue extends ValidationIssue {
+export type ExportRelationIssue = LegacyValidationIssue & {
   workbook?: string;
   sheet?: string;
   excelRow?: number;
   rawValue?: unknown;
   targetLogicalTables?: string[];
-}
+};
 
 export function validateLogicalTableRelations(input: {
   tables: LogicalTableData[];

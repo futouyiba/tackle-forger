@@ -18,6 +18,7 @@ import type {
   ValidationIssue,
 } from "./types";
 import { deterministicHash } from "./rule-kernel";
+import { validationIssueLevel } from "./validation-issues";
 import {
   isProductItemPartEnabled,
   seriesItemPartId,
@@ -270,8 +271,8 @@ export function querySeriesGantt(input: {
         modelCountTotal: context.models.length,
         modelCountMatched: matched.models.length,
         descendantStateCounts: context.descendantStateCounts,
-        hardBlockingCount: context.issues.filter((issue) => issue.level === "error").length,
-        warningCount: context.issues.filter((issue) => issue.level === "warning").length,
+        hardBlockingCount: context.issues.filter((issue) => validationIssueLevel(issue) === "error").length,
+        warningCount: context.issues.filter((issue) => validationIssueLevel(issue) === "warning").length,
         pendingUpgradeCount: context.pendingUpgrades.length,
         issueCodes,
         ruleSetVersions: context.ruleSetVersions,

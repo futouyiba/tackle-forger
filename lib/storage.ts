@@ -39,10 +39,12 @@ function hasVercelBlob() {
   return typeof process !== "undefined" && Boolean(process.env.BLOB_READ_WRITE_TOKEN);
 }
 
-function sqliteDatabasePath() {
+export function workspaceSqliteDatabasePath() {
   if (typeof process === "undefined" || process.env.VERCEL) return undefined;
   return process.env.WORKSPACE_DATABASE_PATH?.trim() || ".data/workspace.sqlite";
 }
+
+const sqliteDatabasePath = workspaceSqliteDatabasePath;
 
 function sqliteFileDataDir(databasePath: string) {
   return process.env.WORKSPACE_FILE_DATA_DIR?.trim()

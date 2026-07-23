@@ -6,10 +6,17 @@ import type {
   ValidationActionLink,
 } from "./types";
 import type {
+  ActionCode,
+  ActionCommandPayloadRef,
   CapabilityCode,
   EntityRef,
+  IssuePresentationActionCode,
 } from "./interaction-contracts";
-import { actionAvailability } from "./interaction-contracts";
+import {
+  actionAvailability,
+  buildActionLink,
+  ISSUE_PRESENTATION_ACTION_CODES,
+} from "./interaction-contracts";
 import { createValidationIssue } from "./validation-issues";
 import {
   adaptLegacyUnifiedTraceToCanonical,
@@ -279,37 +286,39 @@ export function createUnifiedIssue(input: Omit<
 > & {
   actionSpecs: Array<{
     actionId: string;
-    action: ValidationActionLink["action"];
+    action: ActionCode | IssuePresentationActionCode;
     label: string;
-    command: Parameters<typeof actionAvailability>[0];
-    capabilities: CapabilityCode[];
     heldCapabilities: CapabilityCode[];
-    commandPayloadRef?: NonNullable<ValidationActionLink["commandPayloadRef"]>;
+    targetRef?: EntityRef;
+    targetRoute?: string;
+    commandPayloadRef?: ActionCommandPayloadRef;
+    domainBlock?: { code: string; text: string };
   }>;
 }): UnifiedValidationIssue {
   const { actionSpecs, ...issue } = input;
   return createValidationIssue({
     ...issue,
     actions: actionSpecs.map((spec) => {
-      const availability = actionAvailability(
-        spec.command,
-        spec.heldCapabilities,
-        spec.capabilities.some((capability) => !spec.heldCapabilities.includes(capability))
-          ? { code: "ISSUE_ACTION_FORBIDDEN", text: "无权执行此修复动作。" }
-          : undefined,
-      );
-      return {
-      actionId: spec.actionId,
-      action: spec.action,
-      label: spec.label,
-        enabled: availability.enabled,
-        requiredCapabilities: availability.requiredCapabilities,
-        disabledReasonCode: availability.disabledReasonCode,
-        disabledReasonText: availability.disabledReasonText,
-        ...(availability.enabled && spec.commandPayloadRef
-          ? { commandPayloadRef: structuredClone(spec.commandPayloadRef) }
+      const presentation = (ISSUE_PRESENTATION_ACTION_CODES as readonly string[])
+        .includes(spec.action);
+      const availability = presentation
+        ? undefined
+        : actionAvailability(
+            spec.action as ActionCode,
+            spec.heldCapabilities,
+            spec.domainBlock,
+          );
+      return buildActionLink({
+        actionId: spec.actionId,
+        action: spec.action,
+        label: spec.label,
+        targetRef: spec.targetRef ?? input.subjectRef as EntityRef,
+        targetRoute: spec.targetRoute,
+        ...(availability ? { availability } : {}),
+        ...(availability?.enabled && spec.commandPayloadRef
+          ? { commandPayloadRef: spec.commandPayloadRef }
           : {}),
-      };
+      });
     }),
   });
 }

@@ -112,7 +112,9 @@ Trace、ID 唯一性、前缀与实体类型；写后必须回读恢复，不能
 启用、正式 Bundle、策略/目录/新鲜 Manifest、治理租约与受保护 expected-old-OID CAS 门禁；
 这些证据还必须由服务端验证器回读确认，调用方自报字符串无效；任一条件缺失均 fail-closed。
 验证请求绑定 package、Profile、环境×渠道、映射版本、Snapshot id/hash 与每个暂存操作，验证后的
-上下文 hash、Manifest 集合 hash 和验证时间冻结进提交结果，不能换目标或内容重放。
+上下文 hash、Manifest 集合 hash、验证时间、ConfigId/目录版本、lease、fencing token 与
+expected-old-OID 冻结进提交结果，不能换目标、内容或授权证据重放。已提交的同上下文、同授权
+幂等重试可从冻结结果恢复，不要求已消费的原租约再次在线验证，也不会重新写文件。
 正式 ConfigId 与导出治理分别由 GitHub #55、#56 实现并独立启用。缺少可重放正式品质或定价
 策略引用，或仍有未解决 EXPORT ERROR/BLOCKER 的历史 Snapshot，只能下载原样审计归档，
 不能进入配置预览或提交链。

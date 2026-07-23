@@ -199,6 +199,9 @@ test("三表替换到第二张失败时回滚第一张且不替换第三张", as
     result.formalEvidence.contextHash,
     formalConfigExportContextHash(formalContext(snapshot, "package:1")),
   );
+  assert.equal(result.formalEvidence.governanceLeaseId, "lease:test");
+  assert.equal(result.formalEvidence.fencingToken, "1");
+  assert.equal(result.formalEvidence.expectedOldOid, "a".repeat(40));
   assert.deepEqual(io.replaced, ["tackle.xlsx"]);
   assert.deepEqual(io.restored, ["tackle.xlsx"]);
   assert.deepEqual(result.rolledBackWorkbooks, ["tackle.xlsx"]);
@@ -226,11 +229,28 @@ test("导出提交使用幂等键，相同提交不重复插入或替换", async
     operations,
     adapter: io,
     formalAuthorization: FORMAL_AUTHORIZATION,
-    formalAuthorizationVerifier: FORMAL_VERIFIER,
+    formalAuthorizationVerifier: undefined,
     formalTargetContext: formalTargetContext(),
   });
   assert.equal(first.status, "committed");
   assert.deepEqual(second, first);
+  await assert.rejects(
+    () => commitExportPackage({
+      profileId: "dev",
+      packageId: "package:1",
+      snapshots: [snapshot],
+      idempotencyKey: "key:same",
+      operations,
+      adapter: io,
+      formalAuthorization: {
+        ...FORMAL_AUTHORIZATION,
+        governanceLeaseId: "lease:other",
+      },
+      formalAuthorizationVerifier: undefined,
+      formalTargetContext: formalTargetContext(),
+    }),
+    /不同正式导出上下文或授权证据/,
+  );
   assert.deepEqual(io.replaced, ["tackle.xlsx", "item.xlsx", "store.xlsx"]);
 });
 
@@ -262,10 +282,10 @@ test("幂等恢复冻结正式上下文 hash，不允许换目标重放治理证
       operations,
       adapter: io,
       formalAuthorization: FORMAL_AUTHORIZATION,
-      formalAuthorizationVerifier: FORMAL_VERIFIER,
+      formalAuthorizationVerifier: undefined,
       formalTargetContext: formalTargetContext("2001"),
     }),
-    /相同幂等键绑定了不同正式导出上下文/,
+    /相同幂等键绑定了不同正式导出上下文或授权证据/,
   );
   assert.deepEqual(io.replaced, ["tackle.xlsx", "item.xlsx", "store.xlsx"]);
 });

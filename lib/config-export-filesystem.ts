@@ -37,7 +37,9 @@ import {
 } from "./enabled-item-parts";
 import {
   assertFormalConfigExportAllowed,
+  assertFormalConfigExportStageEnabled,
   assertProductionShapeConfigExportEnabled,
+  recoverVerifiedFormalConfigExportEvidence,
   type FormalConfigExportAuthorization,
   type FormalConfigExportContext,
   type FormalConfigExportEvidenceVerifier,
@@ -394,11 +396,7 @@ export async function commitFilesystemExport(input: {
       stagedHash: operation.stagedHash,
     })),
   };
-  await assertFormalConfigExportAllowed(
-    input.formalAuthorization,
-    input.formalAuthorizationVerifier,
-    formalExportContext,
-  );
+  assertFormalConfigExportStageEnabled();
   assertSnapshotItemPartEnabled(input.snapshot, "config_export");
   if (!verifySnapshotIntegrity(input.snapshot)) {
     throw new Error("冻结 ConfigurationSnapshot 的内容哈希校验失败。");
@@ -459,6 +457,35 @@ export async function commitFilesystemExport(input: {
   const lockRoot = path.join(controlRoot, "locks");
   const backupRoot = expectedBackupRoot;
   const commitRoot = path.join(controlRoot, "commits");
+  const recordPath = path.join(
+    commitRoot,
+    `${createHash("sha256").update(input.idempotencyKey).digest("hex")}.json`,
+  );
+  try {
+    const previous = JSON.parse(
+      await readFile(recordPath, "utf8"),
+    ) as ExportCommitResult;
+    if (
+      previous.status !== "committed"
+      || previous.packageId !== input.preview.packageId
+      || previous.profileId !== input.preview.profileId
+    ) {
+      throw new Error("幂等记录不是当前包与 Profile 的已提交结果，拒绝恢复。");
+    }
+    recoverVerifiedFormalConfigExportEvidence({
+      authorization: input.formalAuthorization,
+      context: formalExportContext,
+      evidence: previous.formalEvidence,
+    });
+    return structuredClone(previous);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  await assertFormalConfigExportAllowed(
+    input.formalAuthorization,
+    input.formalAuthorizationVerifier,
+    formalExportContext,
+  );
   await mkdir(lockRoot, { recursive: true });
   await mkdir(backupRoot, { recursive: true });
   await mkdir(commitRoot, { recursive: true });
@@ -472,10 +499,6 @@ export async function commitFilesystemExport(input: {
     createdAt: new Date().toISOString(),
   }));
 
-  const recordPath = path.join(
-    commitRoot,
-    `${createHash("sha256").update(input.idempotencyKey).digest("hex")}.json`,
-  );
   const backupByTarget = new Map<string, string>();
   const adapter: ExportCommitAdapter = {
     getCurrentHash: hashFile,

@@ -62,6 +62,13 @@ export interface VerifiedFormalConfigExportEvidence {
   contextHash: string;
   manifestSetHash: string;
   verifiedAt: string;
+  configIdBundleId: string;
+  configIdPolicyVersionId: string;
+  configTargetCatalogVersionId: string;
+  approvedFreshManifestId: string;
+  governanceLeaseId: string;
+  fencingToken: string;
+  expectedOldOid: string;
 }
 
 export function formalConfigExportContextHash(
@@ -130,12 +137,9 @@ export function formalConfigExportActionBlock(
   return undefined;
 }
 
-export async function assertFormalConfigExportAllowed(
-  authorization: FormalConfigExportAuthorization | undefined,
-  verifier: FormalConfigExportEvidenceVerifier | undefined,
-  context: FormalConfigExportContext | undefined,
+export function assertFormalConfigExportStageEnabled(
   policy = readConfigExportRuntimePolicy(),
-): Promise<VerifiedFormalConfigExportEvidence> {
+): void {
   const actionBlock = formalConfigExportActionBlock(policy);
   if (actionBlock) {
     throw new ConfigExportStageError(
@@ -143,6 +147,11 @@ export async function assertFormalConfigExportAllowed(
       actionBlock.text,
     );
   }
+}
+
+function assertFormalConfigExportAuthorization(
+  authorization: FormalConfigExportAuthorization | undefined,
+): asserts authorization is FormalConfigExportAuthorization {
   if (
     !authorization
     || authorization.packageKind !== "EXPORT_PACKAGE"
@@ -181,12 +190,11 @@ export async function assertFormalConfigExportAllowed(
       "受保护 expected-old-OID CAS 不可用，禁止生成或提交正式配置。",
     );
   }
-  if (!verifier) {
-    throw new ConfigExportStageError(
-      "CONFIG_EXPORT_GOVERNANCE_VERIFIER_UNAVAILABLE",
-      "服务端尚未安装 ConfigId、目录 Manifest、治理租约与 protected CAS 验证器，禁止正式配置提交。",
-    );
-  }
+}
+
+function assertFormalConfigExportContext(
+  context: FormalConfigExportContext | undefined,
+): asserts context is FormalConfigExportContext {
   if (
     !context
     || !context.packageId.trim()
@@ -210,6 +218,67 @@ export async function assertFormalConfigExportAllowed(
       "正式配置提交缺少包、目标、环境×渠道、Snapshot 或暂存操作上下文。",
     );
   }
+}
+
+function authorizationEvidence(
+  authorization: FormalConfigExportAuthorization,
+) {
+  return {
+    configIdBundleId: authorization.configIdBundleId,
+    configIdPolicyVersionId: authorization.configIdPolicyVersionId,
+    configTargetCatalogVersionId: authorization.configTargetCatalogVersionId,
+    approvedFreshManifestId: authorization.approvedFreshManifestId,
+    governanceLeaseId: authorization.governanceLeaseId,
+    fencingToken: authorization.fencingToken,
+    expectedOldOid: authorization.expectedOldOid,
+  };
+}
+
+export function recoverVerifiedFormalConfigExportEvidence(input: {
+  authorization: FormalConfigExportAuthorization | undefined;
+  context: FormalConfigExportContext | undefined;
+  evidence: VerifiedFormalConfigExportEvidence | undefined;
+  policy?: ConfigExportRuntimePolicy;
+}): VerifiedFormalConfigExportEvidence {
+  assertFormalConfigExportStageEnabled(input.policy);
+  assertFormalConfigExportAuthorization(input.authorization);
+  assertFormalConfigExportContext(input.context);
+  const expected = {
+    contextHash: formalConfigExportContextHash(input.context),
+    ...authorizationEvidence(input.authorization),
+  };
+  if (
+    !input.evidence
+    || !input.evidence.manifestSetHash.trim()
+    || !input.evidence.verifiedAt.trim()
+    || Object.entries(expected).some(
+      ([key, value]) =>
+        input.evidence?.[key as keyof typeof expected] !== value,
+    )
+  ) {
+    throw new ConfigExportStageError(
+      "CONFIG_EXPORT_GOVERNANCE_EVIDENCE_UNVERIFIED",
+      "相同幂等键绑定了不同正式导出上下文或授权证据，拒绝恢复旧提交结果。",
+    );
+  }
+  return structuredClone(input.evidence);
+}
+
+export async function assertFormalConfigExportAllowed(
+  authorization: FormalConfigExportAuthorization | undefined,
+  verifier: FormalConfigExportEvidenceVerifier | undefined,
+  context: FormalConfigExportContext | undefined,
+  policy = readConfigExportRuntimePolicy(),
+): Promise<VerifiedFormalConfigExportEvidence> {
+  assertFormalConfigExportStageEnabled(policy);
+  assertFormalConfigExportAuthorization(authorization);
+  if (!verifier) {
+    throw new ConfigExportStageError(
+      "CONFIG_EXPORT_GOVERNANCE_VERIFIER_UNAVAILABLE",
+      "服务端尚未安装 ConfigId、目录 Manifest、治理租约与 protected CAS 验证器，禁止正式配置提交。",
+    );
+  }
+  assertFormalConfigExportContext(context);
   const expectedContextHash = formalConfigExportContextHash(context);
   const verification = await verifier.verify(authorization, context);
   if (
@@ -229,6 +298,7 @@ export async function assertFormalConfigExportAllowed(
     contextHash: verification.contextHash,
     manifestSetHash: verification.manifestSetHash,
     verifiedAt: verification.verifiedAt,
+    ...authorizationEvidence(authorization),
   };
 }
 

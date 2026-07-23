@@ -23,6 +23,8 @@ import {
 } from "./enabled-item-parts";
 import {
   assertFormalConfigExportAllowed,
+  assertFormalConfigExportStageEnabled,
+  recoverVerifiedFormalConfigExportEvidence,
   type FormalConfigExportAuthorization,
   type FormalConfigExportContext,
   type FormalConfigExportEvidenceVerifier,
@@ -397,11 +399,7 @@ export async function commitExportPackage(input: {
       stagedHash: operation.stagedHash,
     })),
   };
-  const formalEvidence = await assertFormalConfigExportAllowed(
-    input.formalAuthorization,
-    input.formalAuthorizationVerifier,
-    formalExportContext,
-  );
+  assertFormalConfigExportStageEnabled();
   if (!input.snapshots.length) throw new Error("导出提交缺少冻结 ConfigurationSnapshot。");
   for (const snapshot of input.snapshots) {
     assertSnapshotItemPartEnabled(snapshot, "config_export");
@@ -411,11 +409,25 @@ export async function commitExportPackage(input: {
   }
   const previous = await input.adapter.findCommittedResult(input.idempotencyKey);
   if (previous) {
-    if (previous.formalEvidence.contextHash !== formalEvidence.contextHash) {
-      throw new Error("相同幂等键绑定了不同正式导出上下文，拒绝恢复旧提交结果。");
+    if (
+      previous.status !== "committed"
+      || previous.packageId !== input.packageId
+      || previous.profileId !== input.profileId
+    ) {
+      throw new Error("幂等记录不是当前包与 Profile 的已提交结果，拒绝恢复。");
     }
+    recoverVerifiedFormalConfigExportEvidence({
+      authorization: input.formalAuthorization,
+      context: formalExportContext,
+      evidence: previous.formalEvidence,
+    });
     return structuredClone(previous);
   }
+  const formalEvidence = await assertFormalConfigExportAllowed(
+    input.formalAuthorization,
+    input.formalAuthorizationVerifier,
+    formalExportContext,
+  );
 
   const conflictIssues: ValidationIssue[] = [];
   for (const operation of input.operations) {

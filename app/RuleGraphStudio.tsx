@@ -37,7 +37,6 @@ import {
   advanceAutomaticNodes,
   approveReviewSnapshot,
   canConnectRuleNodes,
-  commitRuleRunToCandidates,
   createRuleGraphRun,
   executeRuleGraphNode,
   markRuleNodeRunning,
@@ -427,15 +426,6 @@ export function RuleGraphStudio({
     notify("中间表已通过审阅，数据继续流向下游。");
   };
 
-  const commitRun = () => {
-    if (!run || run.status !== "completed") return;
-    mutate((draft) => {
-      const targetRun = draft.ruleRuns.find((item) => item.id === run.id);
-      if (targetRun) commitRuleRunToCandidates(draft, targetRun);
-    }, true);
-    notify("本次规则图结果已下发候选池，并触发完整重算。");
-  };
-
   const designView = (
     <div className="graph-studio-layout">
       <section className="graph-main-panel">
@@ -622,7 +612,7 @@ export function RuleGraphStudio({
         {run ? <span className={"run-status run-status-" + run.status}>{run.status === "waiting_review" ? "等待人工审阅" : run.status === "paused" ? "等待手动节点" : run.status === "completed" ? "执行完成" : run.status === "failed" ? "执行失败" : "执行中"}</span> : null}
         <div className="graph-toolbar-spacer" />
         {readyNodes.map((node) => <GraphButton key={node.id} icon={Play} tone="primary" onClick={() => executeNode(node.id)}>启动：{node.name}</GraphButton>)}
-        {run?.status === "completed" ? <GraphButton icon={Save} tone="primary" disabled={Boolean(run.committedAt)} onClick={commitRun}>{run.committedAt ? "已下发候选池" : "应用到候选池"}</GraphButton> : null}
+        {run?.status === "completed" ? <GraphButton icon={Save} tone="primary" disabled title="旧 Candidate 已转为只读历史；规则图结果只能用于迁移诊断。">{run.committedAt ? "历史记录：已下发" : "历史候选只读"}</GraphButton> : null}
       </div>
 
       {!run || !runGraph ? (
@@ -697,8 +687,8 @@ export function RuleGraphStudio({
 
           {run.status === "completed" ? (
             <section className="run-output-card">
-              <div><CheckCircle2 size={26} /><span><strong>本批次已执行完成</strong><small>{run.workingRows.length} 行数据到达输出节点；{run.workingRows.reduce((sum, row) => sum + row.touchedKeys.length, 0)} 个字段将写回候选池。</small></span></div>
-              <GraphButton icon={Save} tone="primary" disabled={Boolean(run.committedAt)} onClick={commitRun}>{run.committedAt ? "已下发" : "确认下发候选池"}</GraphButton>
+              <div><CheckCircle2 size={26} /><span><strong>本批次已执行完成</strong><small>{run.workingRows.length} 行数据到达输出节点；结果保留作迁移诊断，不改写历史 Candidate。</small></span></div>
+              <GraphButton icon={Save} tone="primary" disabled title="旧 Candidate 已转为只读历史；规则图结果只能用于迁移诊断。">{run.committedAt ? "历史记录：已下发" : "历史候选只读"}</GraphButton>
             </section>
           ) : null}
         </>

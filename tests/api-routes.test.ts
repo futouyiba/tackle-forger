@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import { NextRequest } from "next/server";
 import { PUT as putState } from "../app/api/state/route";
+import { POST as accessDataSources } from "../app/api/data-sources/route";
 import { POST as createSeries } from "../app/api/series/route";
 import { POST as assessWithAI } from "../app/api/ai/assessments/route";
 import { loadWorkspaceState, saveWorkspaceState } from "../lib/storage";
@@ -64,6 +65,148 @@ test("已认证整包 PUT 不能绕过 Series 领域命令", { concurrency: fals
   const payload = await response.json() as { code?: string; governedChanges?: string[] };
   assert.equal(payload.code, "DOMAIN_COMMAND_REQUIRED");
   assert.deepEqual(payload.governedChanges, ["seriesDefinitions"]);
+});
+
+test("整包 PUT 拒绝修改只读历史并保留 payload 与 Trace", { concurrency: false }, async () => {
+  withTrustedProxy();
+  const current = await loadWorkspaceState();
+  const before = structuredClone({
+    recipes: current.state.recipes,
+    candidates: current.state.candidates,
+    officialSkus: current.state.officialSkus,
+    detailOverrides: current.state.detailOverrides,
+  });
+  const state = structuredClone(current.state);
+  state.recipes[0] = { ...state.recipes[0]!, name: "越权修改旧配方" };
+  state.candidates[0]!.calculated.trace.push({ source: "越权改写 Trace" } as never);
+
+  const response = await putState(new NextRequest("http://localhost/api/state", {
+    method: "PUT",
+    headers: authHeaders,
+    body: JSON.stringify({ state, baseRevision: current.revision }),
+  }));
+  assert.equal(response.status, 422);
+  const payload = await response.json() as {
+    code?: string;
+    governedChanges?: string[];
+    legacyHistoryChanges?: string[];
+  };
+  assert.equal(payload.code, "LEGACY_HISTORY_READ_ONLY");
+  assert.deepEqual(payload.governedChanges, ["recipes", "candidates"]);
+  assert.deepEqual(payload.legacyHistoryChanges, ["recipes", "candidates"]);
+
+  const after = await loadWorkspaceState();
+  assert.deepEqual({
+    recipes: after.state.recipes,
+    candidates: after.state.candidates,
+    officialSkus: after.state.officialSkus,
+    detailOverrides: after.state.detailOverrides,
+  }, before);
+});
+
+test("数据源发布更新规则但不重算或改写四组历史产品数据", { concurrency: false }, async () => {
+  withTrustedProxy();
+  const originalFeishuAppId = process.env.FEISHU_APP_ID;
+  const originalFeishuAppSecret = process.env.FEISHU_APP_SECRET;
+  process.env.FEISHU_APP_ID = "route-test-app";
+  process.env.FEISHU_APP_SECRET = "route-test-secret";
+  const originalFetch = globalThis.fetch;
+  let restore: { state: Awaited<ReturnType<typeof loadWorkspaceState>>["state"]; baseRevision: number } | undefined;
+  globalThis.fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("tenant_access_token")) {
+      return new Response(JSON.stringify({
+        code: 0,
+        msg: "ok",
+        tenant_access_token: "route-test-token",
+        expire: 7200,
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (url.includes("/records?")) {
+      return new Response(JSON.stringify({
+        code: 0,
+        msg: "ok",
+        data: {
+          items: [{
+            record_id: "route-template-1",
+            fields: {
+              模板ID: "T01",
+              名称: "数据源路由只读历史验证",
+              鱼重下限kg: 0.5,
+              鱼重上限kg: 2,
+              标称鱼重kg: 1,
+              档位: "轻量",
+            },
+          }],
+          has_more: false,
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    throw new Error(`unexpected test fetch: ${url}`);
+  };
+
+  try {
+    const current = await loadWorkspaceState();
+    const historyBefore = structuredClone({
+      recipes: current.state.recipes,
+      candidates: current.state.candidates,
+      officialSkus: current.state.officialSkus,
+      detailOverrides: current.state.detailOverrides,
+    });
+    const source = {
+      ...current.state.dataSources[0]!,
+      appToken: "route-test-app-token",
+      tableId: "route-test-table",
+      viewId: "",
+      shareUrl: "https://example.feishu.cn/base/route-test-app-token",
+      enabled: true,
+    };
+    const previewResponse = await accessDataSources(new NextRequest("http://localhost/api/data-sources", {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({ action: "preview", source }),
+    }));
+    assert.equal(previewResponse.status, 200);
+    const previewPayload = await previewResponse.json() as {
+      preview: { checksum: string; sourceFingerprint: string };
+    };
+
+    const publishResponse = await accessDataSources(new NextRequest("http://localhost/api/data-sources", {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({
+        action: "publish",
+        source,
+        baseRevision: current.revision,
+        checksum: previewPayload.preview.checksum,
+        sourceFingerprint: previewPayload.preview.sourceFingerprint,
+      }),
+    }));
+    assert.equal(publishResponse.status, 200);
+    const after = await loadWorkspaceState();
+    restore = { state: current.state, baseRevision: after.revision };
+    assert.equal(after.state.templates[0]?.name, "数据源路由只读历史验证");
+    assert.deepEqual({
+      recipes: after.state.recipes,
+      candidates: after.state.candidates,
+      officialSkus: after.state.officialSkus,
+      detailOverrides: after.state.detailOverrides,
+    }, historyBefore);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalFeishuAppId === undefined) delete process.env.FEISHU_APP_ID;
+    else process.env.FEISHU_APP_ID = originalFeishuAppId;
+    if (originalFeishuAppSecret === undefined) delete process.env.FEISHU_APP_SECRET;
+    else process.env.FEISHU_APP_SECRET = originalFeishuAppSecret;
+    if (restore) {
+      await saveWorkspaceState({
+        state: restore.state,
+        baseRevision: restore.baseRevision,
+        author: "route-test-cleanup",
+        message: "恢复数据源路由测试基线",
+      });
+    }
+  }
 });
 
 test("整包 PUT 的畸形 JSON 返回400", { concurrency: false }, async () => {

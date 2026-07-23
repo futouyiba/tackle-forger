@@ -168,7 +168,6 @@ function deriveFormalCandidatePoolFromAuthority(input: {
     const snapshot = matchingSnapshots[0];
     if (
       snapshot.modelId !== model.id
-      || snapshot.modelRevision !== model.revision
       || !verifySnapshotIntegrity(snapshot)
     ) {
       throw new Error(
@@ -195,7 +194,7 @@ function deriveFormalCandidatePoolFromAuthority(input: {
       snapshotSources.length !== 3
       || snapshotSources.some((source) =>
         source.snapshotId !== snapshot.id
-        || source.modelRevisionId !== `${model.id}@${model.revision}`)
+        || source.modelRevisionId !== `${model.id}@${snapshot.modelRevision}`)
     ) {
       throw new Error(
         `FIVE_AXIS_CANDIDATE_AUTHORITY_INVALID：Model ${model.id} 的冻结候选证据不完整。`,

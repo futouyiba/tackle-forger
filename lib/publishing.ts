@@ -21,7 +21,8 @@ import type {
   HardCompatibilityResult,
   ModelComponentSelection,
   ModelFiveAxisPreview,
-  FiveAxisViewDefinition,
+  FiveAxisDefinitionDispositionCatalogRevision,
+  StoredFiveAxisViewDefinition,
   PatchRebaseDifference,
   PatchOffsetPolicyVersion,
   ParameterDefinition,
@@ -102,6 +103,7 @@ function entityRefIdentity(ref: {
     ref.revisionId,
   ]);
 }
+import { resolveFormalFiveAxisDefinition } from "./five-axis-formal";
 
 export function modelFinalPullKgForSnapshot(
   itemPartId: string | undefined,
@@ -239,8 +241,10 @@ export interface PublishModelInput {
   validationWaiverDecisions?: ValidationWaiverDecision[];
   activeValidationWaiverPolicies?: WaiverPolicyVersion[];
   fiveAxisPreview?: ModelFiveAxisPreview;
-  fiveAxisDefinition?: FiveAxisViewDefinition;
-  /** @deprecated 仅 historical_import 可读取；新正式发布必须提供指纹绑定的确认记录。 */
+  fiveAxisDefinition?: StoredFiveAxisViewDefinition;
+  fiveAxisDefinitions?: StoredFiveAxisViewDefinition[];
+  fiveAxisDispositionCatalogRevisions?: FiveAxisDefinitionDispositionCatalogRevision[];
+  currentFiveAxisDispositionCatalogRevisionId?: string | null;
   warningConfirmations: Record<string, string>;
   publishedBy: string;
   publishedAt: string;
@@ -625,25 +629,37 @@ export function publishConfigurationSnapshot(
   ) {
     throw new Error("五轴预览与待发布 Model 不一致。");
   }
+  let fiveAxisDispositionEvidence: ConfigurationSnapshot["fiveAxisDispositionEvidence"];
   if (input.publicationMode === "new_formal" && input.fiveAxisPreview) {
     const definition = input.fiveAxisDefinition;
-    if (!definition || definition.publicationState !== "PUBLISHED") {
-      throw new Error("五轴预览使用的 FiveAxisViewDefinition 尚未发布，禁止创建正式 Snapshot。");
-    }
-    const { definitionHash, ...definitionContent } = definition;
-    if (deterministicHash(definitionContent) !== definitionHash) {
-      throw new Error("FiveAxisViewDefinition 完整性校验失败，禁止创建正式 Snapshot。");
-    }
+    const resolved = resolveFormalFiveAxisDefinition({
+      definitions: input.fiveAxisDefinitions ?? (definition ? [definition] : []),
+      revisions: input.fiveAxisDispositionCatalogRevisions ?? [],
+      currentRevisionId: input.currentFiveAxisDispositionCatalogRevisionId ?? null,
+    });
     if (
-      input.fiveAxisPreview.fiveAxisDefinitionId !== definition.definitionId
-      || input.fiveAxisPreview.fiveAxisDefinitionVersion !== definition.version
-      || input.fiveAxisPreview.fiveAxisDefinitionRevision !== definition.revision
-      || input.fiveAxisPreview.fiveAxisDefinitionHash !== definition.definitionHash
-      || input.fiveAxisPreview.fiveAxisRuleVersion !== definition.fiveAxisRuleVersion
-      || input.fiveAxisPreview.sourceRevision !== definition.sourceRevision
-      || input.fiveAxisPreview.tackleFitComparison.fiveAxisDefinitionId !== definition.definitionId
-      || input.fiveAxisPreview.tackleFitComparison.fiveAxisDefinitionVersion !== definition.version
-      || input.fiveAxisPreview.tackleFitComparison.fiveAxisRuleVersion !== definition.fiveAxisRuleVersion
+      !definition
+      || definition.definitionId !== resolved.definition.definitionId
+      || definition.version !== resolved.definition.version
+      || definition.definitionHash !== resolved.definition.definitionHash
+    ) {
+      throw new Error("FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE：传入定义不是目录中的唯一 FORMAL_CURRENT。");
+    }
+    fiveAxisDispositionEvidence = {
+      catalogRevisionId: resolved.catalogRevision.catalogRevisionId,
+      catalogHash: resolved.catalogRevision.catalogHash,
+      disposition: structuredClone(resolved.disposition),
+    };
+    if (
+      input.fiveAxisPreview.fiveAxisDefinitionId !== resolved.definition.definitionId
+      || input.fiveAxisPreview.fiveAxisDefinitionVersion !== resolved.definition.version
+      || input.fiveAxisPreview.fiveAxisDefinitionRevision !== resolved.definition.revision
+      || input.fiveAxisPreview.fiveAxisDefinitionHash !== resolved.definition.definitionHash
+      || input.fiveAxisPreview.fiveAxisRuleVersion !== resolved.definition.fiveAxisRuleVersion
+      || input.fiveAxisPreview.sourceRevision !== resolved.definition.sourceRevision
+      || input.fiveAxisPreview.tackleFitComparison.fiveAxisDefinitionId !== resolved.definition.definitionId
+      || input.fiveAxisPreview.tackleFitComparison.fiveAxisDefinitionVersion !== resolved.definition.version
+      || input.fiveAxisPreview.tackleFitComparison.fiveAxisRuleVersion !== resolved.definition.fiveAxisRuleVersion
       || input.fiveAxisPreview.tackleFitComparison.vertexSetHash !== input.fiveAxisPreview.vertexSetHash
     ) {
       throw new Error("五轴预览的定义、规则或顶点版本链不一致，禁止创建正式 Snapshot。");
@@ -857,6 +873,9 @@ export function publishConfigurationSnapshot(
     publishedBy: input.publishedBy,
     ...(input.fiveAxisPreview
       ? { fiveAxisPreview: structuredClone(input.fiveAxisPreview) }
+      : {}),
+    ...(fiveAxisDispositionEvidence
+      ? { fiveAxisDispositionEvidence }
       : {}),
     publishedAt: input.publishedAt,
   };

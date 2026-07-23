@@ -1146,7 +1146,7 @@ export type FiveAxisPointSource =
   | "missing"
   | "error";
 
-export interface FiveAxisAxisDefinition {
+export interface LegacyFiveAxisAxisDefinition {
   axisId: string;
   label: string;
   order: number;
@@ -1160,7 +1160,7 @@ export interface FiveAxisAxisDefinition {
   missingPolicy: "error" | "unavailable" | "ignore_not_applicable";
 }
 
-export interface FiveAxisViewDefinition {
+export interface LegacyFiveAxisViewDefinition {
   definitionId: string;
   version: string;
   revision: number;
@@ -1169,11 +1169,11 @@ export interface FiveAxisViewDefinition {
   fiveAxisRuleVersion: string;
   sourceRevision: string;
   axes: [
-    FiveAxisAxisDefinition,
-    FiveAxisAxisDefinition,
-    FiveAxisAxisDefinition,
-    FiveAxisAxisDefinition,
-    FiveAxisAxisDefinition,
+    LegacyFiveAxisAxisDefinition,
+    LegacyFiveAxisAxisDefinition,
+    LegacyFiveAxisAxisDefinition,
+    LegacyFiveAxisAxisDefinition,
+    LegacyFiveAxisAxisDefinition,
   ];
   displayBandConfigId?: string;
   seriesBaselinePolicy:
@@ -1191,7 +1191,7 @@ export interface FiveAxisEntityInput {
   values: Record<string, number | null | undefined>;
 }
 
-export interface FiveAxisVertexSet {
+export interface LegacyFiveAxisVertexSet {
   fishWeightGradeId: string;
   fiveAxisRuleVersion: string;
   definitionId: string;
@@ -1199,6 +1199,143 @@ export interface FiveAxisVertexSet {
   values: Record<string, number>;
   vertexSetHash: string;
 }
+
+export type FiveAxisSemanticContractVersion =
+  "five-axis/open005-2026-07-23/v1";
+export type FiveAxisHashInputSchemaVersion = "five-axis-hash-input/v1";
+export type FiveAxisProjectionReferenceSelectorVersion =
+  "projection-reference/current-sku-frozen-match/v1";
+
+export interface FiveAxisAxisDefinition {
+  axisId: string;
+  label: string;
+  order: number;
+  sourceParameterKeys: string[];
+  applicablePartIds: string[];
+  direction: "higher_better" | "lower_better" | "target_range" | "contextual";
+  transformId: string;
+  vertexSelectorId: string;
+  vertexSelectorVersion: string;
+  componentAggregationId: "per_component_no_aggregate";
+  missingPolicy: "error" | "unavailable" | "ignore_not_applicable";
+}
+
+export interface FiveAxisViewDefinition {
+  definitionId: string;
+  version: string;
+  revision: number;
+  publicationState: "UNPUBLISHED" | "PUBLISHED" | "SUPERSEDED";
+  definitionHash: string;
+  fiveAxisRuleVersion: string;
+  sourceRevision: string;
+  semanticContractVersion: FiveAxisSemanticContractVersion;
+  hashInputSchemaVersion: FiveAxisHashInputSchemaVersion;
+  projectionReferenceSelectorVersion: FiveAxisProjectionReferenceSelectorVersion;
+  axes: [
+    FiveAxisAxisDefinition,
+    FiveAxisAxisDefinition,
+    FiveAxisAxisDefinition,
+    FiveAxisAxisDefinition,
+    FiveAxisAxisDefinition,
+  ];
+  weightBandPolicyVersion: string;
+  displayBandConfigId: string;
+  seriesBaselinePolicy: {
+    mode: "projection_reference";
+    selectorVersion: FiveAxisProjectionReferenceSelectorVersion;
+  };
+  comparisonPolicy: {
+    minimumItems: 2;
+    maximumItems: number;
+    mixedItemPartsAllowed: true;
+    referenceRodMode: "first_rod_by_comparison_order";
+    outerRingScore: 100;
+    visualOverflowCap: null;
+  };
+}
+
+export type StoredFiveAxisViewDefinition =
+  | LegacyFiveAxisViewDefinition
+  | FiveAxisViewDefinition;
+
+export interface FiveAxisDefinitionDisposition {
+  definitionId: string;
+  definitionVersion: string;
+  definitionHash: string;
+  effectiveUse: "LEGACY_SNAPSHOT_ONLY" | "FORMAL_CURRENT" | "SUPERSEDED";
+  semanticContractVersion: FiveAxisSemanticContractVersion | null;
+  supersededByDefinitionId: string | null;
+  supersededByDefinitionVersion: string | null;
+  reasonCode: string;
+}
+
+export interface FiveAxisDefinitionDispositionCatalogRevision {
+  catalogRevisionId: string;
+  previousCatalogRevisionId: string | null;
+  previousCatalogHash: string | null;
+  schemaVersion: "five-axis-definition-disposition-catalog/v1";
+  entries: FiveAxisDefinitionDisposition[];
+  catalogHash: string;
+  decidedAt: string;
+}
+
+export interface FiveAxisVertexGroupKey {
+  weightBandId: string;
+  weightBandPolicyVersion: string;
+  fiveAxisDefinitionId: string;
+  fiveAxisDefinitionVersion: string;
+  fiveAxisRuleVersion: string;
+}
+
+export interface FiveAxisVertexCandidateSemanticKey {
+  modelId: string;
+  componentEntityId: string;
+  itemPartId: string;
+}
+
+export interface FiveAxisVertexDirectInput {
+  axisId: string;
+  parameterKey: string;
+  rawValue: string;
+  unit: string;
+  inputHash: string;
+}
+
+export interface FiveAxisVertexCandidateSource {
+  candidateSemanticKey: FiveAxisVertexCandidateSemanticKey;
+  snapshotId: string;
+  modelRevisionId: string;
+  finalPanelHash: string;
+  modelFinalPullKg: string;
+  directInputs: FiveAxisVertexDirectInput[];
+  semanticInputHash: string;
+}
+
+export interface FiveAxisVertex {
+  axisId: string;
+  vertexRawValue: string;
+  vertexSelectorId: string;
+  vertexSelectorVersion: string;
+}
+
+export interface FiveAxisVertexSet {
+  vertexSetId: string;
+  weightBandId: string;
+  weightBandPolicyVersion: string;
+  fiveAxisDefinitionId: string;
+  fiveAxisDefinitionVersion: string;
+  fiveAxisRuleVersion: string;
+  hashInputSchemaVersion: FiveAxisHashInputSchemaVersion;
+  candidateSources: FiveAxisVertexCandidateSource[];
+  candidateSetHash: string;
+  candidateEvidenceHash: string;
+  vertices: FiveAxisVertex[];
+  vertexSetHash: string;
+}
+
+export type StoredFiveAxisVertexSet =
+  | LegacyFiveAxisVertexSet
+  | FiveAxisVertexSet;
 
 export interface FiveAxisTraceEntry {
   step: string;
@@ -1563,6 +1700,11 @@ export interface ConfigurationSnapshot {
   validationWaivers?: ValidationWaiver[];
   validationWaiverDecisions?: ValidationWaiverDecision[];
   fiveAxisPreview?: ModelFiveAxisPreview;
+  fiveAxisDispositionEvidence?: {
+    catalogRevisionId: string;
+    catalogHash: string;
+    disposition: FiveAxisDefinitionDisposition;
+  };
   publishedBy: string;
   publishedAt: string;
   contentHash: string;
@@ -2521,8 +2663,10 @@ export interface WorkspaceState {
   pricingPolicyDrafts: PricingPolicyDraft[];
   pricingPolicyVersions: PricingPolicyVersion[];
   reductionStackingPolicyVersions: ReductionStackingPolicyVersion[];
-  fiveAxisViewDefinitions: FiveAxisViewDefinition[];
-  fiveAxisVertexSets: FiveAxisVertexSet[];
+  fiveAxisViewDefinitions: StoredFiveAxisViewDefinition[];
+  fiveAxisVertexSets: StoredFiveAxisVertexSet[];
+  fiveAxisDispositionCatalogRevisions: FiveAxisDefinitionDispositionCatalogRevision[];
+  currentFiveAxisDispositionCatalogRevisionId: string | null;
   workspacePolicies: WorkspacePolicyRecord[];
   patchReviewBatches: PatchReviewBatch[];
   patchValidationWaivers: PatchValidationWaiver[];

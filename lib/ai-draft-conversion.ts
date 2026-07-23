@@ -33,6 +33,7 @@ import type { FancyHubRecommendationV1, FancyHubSuggestedChangeV1 } from "./fanc
 
 export type AIDraftConversionErrorCode =
   | "AI_ASSESSMENT_NOT_ACTIONABLE"
+  | "AI_ASSESSMENT_ARTIFACT_PROVENANCE_CONFLICT"
   | "AI_ASSESSMENT_OWNER_MISMATCH"
   | "AI_CAPABILITY_MISSING"
   | "AI_DRAFT_COMMAND_INVALID"
@@ -1148,6 +1149,16 @@ export function applyAIDraftArtifactPlan(
     }
     return { state, idempotent: true };
   }
+  const conflictingAssessmentReservation = state.aiArtifactProvenanceSyncRecords.find((entry) =>
+    entry.assessmentId === plan.provenanceSyncRecord.assessmentId
+    && deterministicHash(entry.acceptedArtifactProvenance)
+      !== deterministicHash(plan.provenanceSyncRecord.acceptedArtifactProvenance));
+  if (conflictingAssessmentReservation) {
+    throw new AIDraftConversionError(
+      "AI_ASSESSMENT_ARTIFACT_PROVENANCE_CONFLICT",
+      "该评估已经为不同的采纳产物来源保留 Workspace 写入。",
+    );
+  }
   const next = structuredClone(state);
   if (plan.kind === "model_patch") {
     const duplicate = next.patchLedger.revisions.find((entry) =>
@@ -1165,4 +1176,19 @@ export function applyAIDraftArtifactPlan(
   }
   next.aiArtifactProvenanceSyncRecords.push(structuredClone(plan.provenanceSyncRecord));
   return { state: next, idempotent: false };
+}
+
+export function assertAIDraftArtifactProvenanceCompatible(
+  record: AIAssessmentRetentionRecord,
+  plan: AIDraftArtifactPlan,
+): void {
+  const accepted = record.acceptedArtifactProvenance;
+  if (accepted
+    && deterministicHash(accepted)
+      !== deterministicHash(plan.provenanceSyncRecord.acceptedArtifactProvenance)) {
+    throw new AIDraftConversionError(
+      "AI_ASSESSMENT_ARTIFACT_PROVENANCE_CONFLICT",
+      "该评估已经绑定不同的采纳产物来源，不能创建第二个草稿。",
+    );
+  }
 }

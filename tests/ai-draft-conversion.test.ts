@@ -242,6 +242,39 @@ test("相同幂等命令产生相同 plan hash，不同幂等键只改变 artifa
   assert.notEqual(first.artifactRef.artifactId, changed.artifactRef.artifactId);
 });
 
+test("assessment 级 Workspace reservation 使陈旧并发计划只能提交一个草稿", () => {
+  const firstInput = fixture();
+  firstInput.command.mode = "create";
+  firstInput.command.userReason = "first concurrent artifact";
+  firstInput.command.idempotencyKey = "idempotency.concurrent.1";
+  const secondInput = structuredClone(firstInput);
+  secondInput.command.userReason = "second concurrent artifact";
+  secondInput.command.idempotencyKey = "idempotency.concurrent.2";
+
+  const firstPlan = plan(firstInput);
+  const staleSecondPlan = plan(secondInput);
+  const winner = applyAIDraftArtifactPlan(firstInput.state, firstPlan);
+  assert.equal(winner.idempotent, false);
+  assert.equal(winner.state.aiArtifactProvenanceSyncRecords.length, 1);
+  assert.equal(winner.state.aiArtifactProvenanceSyncRecords[0]?.state, "PENDING");
+  assert.equal(winner.state.patchLedger.revisions.filter((entry) =>
+    entry.patchId === firstPlan.artifactRef.artifactId).length, 1);
+
+  assertCode("AI_ASSESSMENT_ARTIFACT_PROVENANCE_CONFLICT", () =>
+    applyAIDraftArtifactPlan(winner.state, staleSecondPlan));
+  assert.equal(winner.state.aiArtifactProvenanceSyncRecords.length, 1);
+  assert.equal(winner.state.aiArtifactProvenanceSyncRecords.some((entry) =>
+    entry.idempotencyKey === secondInput.command.idempotencyKey), false);
+  assert.equal(winner.state.patchLedger.revisions.some((entry) =>
+    entry.patchId === staleSecondPlan.artifactRef.artifactId), false);
+
+  const replay = applyAIDraftArtifactPlan(winner.state, firstPlan);
+  assert.equal(replay.idempotent, true);
+  assert.equal(replay.state.aiArtifactProvenanceSyncRecords.length, 1);
+  assert.equal(replay.state.patchLedger.revisions.filter((entry) =>
+    entry.patchId === firstPlan.artifactRef.artifactId).length, 1);
+});
+
 test("RuleSourceChangeDraft 使用全工作区沙盒影响预览并只保存 LOCAL_DRAFT", () => {
   const value = fixture();
   const model = value.state.purchasableModels.find((entry) =>

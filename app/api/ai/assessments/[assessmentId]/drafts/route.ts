@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import {
   AIDraftConversionError,
   applyAIDraftArtifactPlan,
+  assertAIDraftArtifactProvenanceCompatible,
   planAIDraftConversion,
   type AIDraftArtifactPlan,
   type AIDraftConversionCommand,
@@ -88,6 +89,7 @@ function conversionStatus(error: AIDraftConversionError): number {
   if (error.code === "AI_CAPABILITY_MISSING") return 403;
   if ([
     "AI_ASSESSMENT_NOT_ACTIONABLE",
+    "AI_ASSESSMENT_ARTIFACT_PROVENANCE_CONFLICT",
     "AI_DRAFT_TARGET_FROZEN",
     "AI_DRAFT_TARGET_REVISION_CHANGED",
     "AI_PATCH_CONFLICT_REQUIRES_REBASE",
@@ -238,6 +240,17 @@ export async function POST(
     if (command.mode === "preview") {
       return NextResponse.json(plan.preview);
     }
+    // Dry-run the Workspace write first so an existing idempotency binding keeps
+    // its authoritative conflict semantics without creating any revision.
+    applyAIDraftArtifactPlan(current.state, plan);
+    const latestRecord = await store.readAssessmentForActor({ assessmentId, actorStableId });
+    if (!latestRecord) {
+      throw new AIDraftConversionError(
+        "AI_ASSESSMENT_OWNER_MISMATCH",
+        "评估不存在或不属于当前用户。",
+      );
+    }
+    assertAIDraftArtifactProvenanceCompatible(latestRecord, plan);
     const persisted = await persistArtifact({
       state: current.state,
       revision: current.revision,

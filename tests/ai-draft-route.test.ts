@@ -7,6 +7,10 @@ import { NextRequest } from "next/server";
 import { POST as convertAssessmentDraft } from "../app/api/ai/assessments/[assessmentId]/drafts/route";
 import { POST as dismissAssessmentRecommendation } from "../app/api/ai/assessments/[assessmentId]/feedback/route";
 import { buildWorkspaceAssessmentRequestProjection } from "../lib/ai-assessment-request";
+import {
+  applyAIDraftArtifactPlan,
+  planAIDraftConversion,
+} from "../lib/ai-draft-conversion";
 import { AI_RETENTION_POLICY_VERSION, type AIAssessmentRetentionRecord } from "../lib/ai-retention";
 import { createAIRuntimeStoreFromEnvironment } from "../lib/ai-runtime-store";
 import { describeFancyHubModels, prepareAIRequest } from "../lib/ai-outbound";
@@ -103,6 +107,12 @@ test("AI 草稿路由先预览、只建 DRAFT，并以同幂等键恢复永久�
         operation: "add" as const,
         operand: { kind: "number" as const, value: 0 },
         expectedBefore: structuredClone(panel.value),
+      }, {
+        changeId: "change.route.add-one",
+        parameterKey: parameterMapping.alias,
+        operation: "add" as const,
+        operand: { kind: "number" as const, value: 1 },
+        expectedBefore: structuredClone(panel.value),
       }],
     };
     const now = "2026-07-23T00:00:00.000Z";
@@ -192,7 +202,35 @@ test("AI 草稿路由先预览、只建 DRAFT，并以同幂等键恢复永久�
       mode: "create",
       userReason: "route idempotency test",
       idempotencyKey: "draft-route.create.1",
-    };
+    } as const;
+    const beforeInitialPartial = await loadWorkspaceState();
+    const initialPartialPlan = planAIDraftConversion({
+      state: beforeInitialPartial.state,
+      record,
+      assessmentId,
+      actorStableId: "draft-route-tester",
+      actorDisplayName: "draft-route-tester",
+      capabilities: ["ai.patch_draft.create"],
+      command: createBody,
+      now,
+    });
+    const initialPartial = applyAIDraftArtifactPlan(
+      beforeInitialPartial.state,
+      initialPartialPlan,
+    );
+    assert.equal(initialPartial.idempotent, false);
+    const initialPartialSaved = await saveWorkspaceState({
+      state: initialPartial.state,
+      baseRevision: beforeInitialPartial.revision,
+      author: "draft-route-test",
+      message: "simulate Workspace commit before provenance acceptance",
+    });
+    assert.equal(initialPartialSaved.conflict, undefined);
+    assert.equal((await store.readAssessmentForActor({
+      assessmentId,
+      actorStableId: "draft-route-tester",
+    }))?.acceptedArtifactProvenance, undefined);
+
     const firstResponse = await send(createBody);
     assert.equal(firstResponse.status, 200, JSON.stringify(await firstResponse.clone().json()));
     const first = await firstResponse.json() as {
@@ -207,7 +245,7 @@ test("AI 草稿路由先预览、只建 DRAFT，并以同幂等键恢复永久�
     };
     assert.equal(first.artifactRef.state, "DRAFT");
     assert.equal(first.provenanceSyncState, "SYNCED");
-    assert.equal(first.idempotent, false);
+    assert.equal(first.idempotent, true);
     assert.equal(first.state.patchLedger.revisions.filter(
       (entry) => entry.patchId === first.artifactRef.artifactId && entry.state === "DRAFT",
     ).length, 1);
@@ -227,6 +265,41 @@ test("AI 草稿路由先预览、只建 DRAFT，并以同幂等键恢复永久�
       (entry) => entry.patchId === first.artifactRef.artifactId,
     ).length, 1);
 
+    const beforePartialRecovery = await loadWorkspaceState();
+    const partialState = structuredClone(beforePartialRecovery.state);
+    const partialSync = partialState.aiArtifactProvenanceSyncRecords.find(
+      (entry) => entry.idempotencyKey === createBody.idempotencyKey,
+    )!;
+    partialSync.state = "PENDING";
+    partialSync.updatedAt = "2026-07-23T00:01:00.000Z";
+    const partialSaved = await saveWorkspaceState({
+      state: partialState,
+      baseRevision: beforePartialRecovery.revision,
+      author: "draft-route-test",
+      message: "simulate provenance sync partial commit",
+    });
+    assert.equal(partialSaved.conflict, undefined);
+    const recoveredResponse = await send(createBody);
+    assert.equal(recoveredResponse.status, 200, JSON.stringify(await recoveredResponse.clone().json()));
+    const recovered = await recoveredResponse.json() as {
+      artifactRef: { artifactId: string };
+      idempotent: boolean;
+      provenanceSyncState: string;
+      state: {
+        patchLedger: { revisions: Array<{ patchId: string }> };
+        aiArtifactProvenanceSyncRecords: Array<{ idempotencyKey: string; state: string }>;
+      };
+    };
+    assert.equal(recovered.idempotent, true);
+    assert.equal(recovered.provenanceSyncState, "SYNCED");
+    assert.equal(recovered.artifactRef.artifactId, first.artifactRef.artifactId);
+    assert.equal(recovered.state.patchLedger.revisions.filter(
+      (entry) => entry.patchId === first.artifactRef.artifactId,
+    ).length, 1);
+    assert.equal(recovered.state.aiArtifactProvenanceSyncRecords.find(
+      (entry) => entry.idempotencyKey === createBody.idempotencyKey,
+    )?.state, "SYNCED");
+
     const retained = await store.readAssessmentForActor({
       assessmentId,
       actorStableId: "draft-route-tester",
@@ -235,6 +308,57 @@ test("AI 草稿路由先预览、只建 DRAFT，并以同幂等键恢复永久�
     assert.deepEqual(retained?.acceptedArtifactProvenance?.artifactStableRefs, [
       first.artifactRef.artifactId,
     ]);
+
+    const beforeDifferentDraft = await loadWorkspaceState();
+    const differentDraftBody = {
+      ...createBody,
+      selectedChangeIds: [recommendation.suggestedChanges[1]!.changeId],
+      userReason: "different accepted artifact",
+      idempotencyKey: "draft-route.create.2",
+    };
+    const differentDraftResponse = await send(differentDraftBody);
+    assert.equal(
+      differentDraftResponse.status,
+      409,
+      JSON.stringify(await differentDraftResponse.clone().json()),
+    );
+    assert.equal(
+      ((await differentDraftResponse.json()) as { code?: string }).code,
+      "AI_ASSESSMENT_ARTIFACT_PROVENANCE_CONFLICT",
+    );
+    const afterDifferentDraft = await loadWorkspaceState();
+    assert.equal(afterDifferentDraft.revision, beforeDifferentDraft.revision);
+    assert.equal(
+      afterDifferentDraft.state.patchLedger.revisions.length,
+      beforeDifferentDraft.state.patchLedger.revisions.length,
+    );
+    assert.equal(
+      afterDifferentDraft.state.aiArtifactProvenanceSyncRecords.length,
+      beforeDifferentDraft.state.aiArtifactProvenanceSyncRecords.length,
+    );
+    assert.equal(afterDifferentDraft.state.aiArtifactProvenanceSyncRecords.some(
+      (entry) => entry.idempotencyKey === "draft-route.create.2",
+    ), false);
+    const differentDraftRetryResponse = await send(differentDraftBody);
+    assert.equal(
+      differentDraftRetryResponse.status,
+      409,
+      JSON.stringify(await differentDraftRetryResponse.clone().json()),
+    );
+    assert.equal(
+      ((await differentDraftRetryResponse.json()) as { code?: string }).code,
+      "AI_ASSESSMENT_ARTIFACT_PROVENANCE_CONFLICT",
+    );
+    const afterDifferentDraftRetry = await loadWorkspaceState();
+    assert.equal(afterDifferentDraftRetry.revision, beforeDifferentDraft.revision);
+    assert.equal(
+      afterDifferentDraftRetry.state.patchLedger.revisions.length,
+      beforeDifferentDraft.state.patchLedger.revisions.length,
+    );
+    assert.equal(
+      afterDifferentDraftRetry.state.aiArtifactProvenanceSyncRecords.length,
+      beforeDifferentDraft.state.aiArtifactProvenanceSyncRecords.length,
+    );
 
     const dismissResponse = await dismissAssessmentRecommendation(
       new NextRequest(`http://localhost/api/ai/assessments/${assessmentId}/feedback`, {

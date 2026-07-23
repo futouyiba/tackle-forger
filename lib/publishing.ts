@@ -57,6 +57,7 @@ import {
 import {
   adaptFiveAxisTraceToCanonical,
   adaptAffixRuntimeEvidenceToCanonical,
+  assertCalculationTraceMatchesAffixRuntime,
   adaptPricingTraceToCanonical,
   adaptRuleTraceToCanonical,
   assertCalculationTraceMatchesFiveAxis,
@@ -599,6 +600,12 @@ export function publishConfigurationSnapshot(
           subjectRef,
           finalPanelValues: input.finalPanelValues,
         });
+        assertCalculationTraceMatchesAffixRuntime({
+          archive,
+          subjectRef,
+          reductionStackingPolicyVersion: input.reductionStackingPolicy!.version,
+          finalPanelValues: input.finalPanelValues,
+        });
         assertCalculationTraceMatchesPricing({
           archive,
           subjectRef,
@@ -728,6 +735,14 @@ export function verifySnapshotIntegrity(
         subjectRef: [...uniqueSubjects.values()][0],
         finalPanelValues: snapshot.finalPanelValues,
       });
+      if (snapshot.reductionStackingPolicyVersion) {
+        assertCalculationTraceMatchesAffixRuntime({
+          archive: snapshot.calculationTrace,
+          subjectRef: [...uniqueSubjects.values()][0],
+          reductionStackingPolicyVersion: snapshot.reductionStackingPolicyVersion,
+          finalPanelValues: snapshot.finalPanelValues,
+        });
+      }
       assertCalculationTraceMatchesPricing({
         archive: snapshot.calculationTrace,
         subjectRef: [...uniqueSubjects.values()][0],

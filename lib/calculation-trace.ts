@@ -1,4 +1,8 @@
 import { deterministicHash } from "./rule-kernel";
+import {
+  hashAffixRuntimeEvidence,
+  numberToBinary64Hex,
+} from "./reduction-stacking-policy";
 import type { EntityRef } from "./interaction-contracts";
 import type {
   CalculationTraceItem,
@@ -9,7 +13,9 @@ import type {
   ParameterDefinition,
   PatchApplicationTraceItem,
   ProjectionLayer,
+  ProjectionTraceContribution,
   ProjectionWarning,
+  ValidationIssue,
 } from "./types";
 import type { PricingTraceEntry, PricingTrialResult } from "./pricing-policy";
 
@@ -808,7 +814,42 @@ export function adaptAffixRuntimeEvidenceToCanonical(input: {
   sequenceStart?: number;
 }): CalculationTraceEntry[] {
   let sequence = input.sequenceStart ?? 1;
-  return [...input.evidence.trace]
+  const issueManifest = input.evidence.issues.map((issue) => ({
+    code: issue.code,
+    severity: issue.severity,
+    gate: issue.gate,
+    fingerprint: issue.fingerprint,
+  }));
+  const summary = createCalculationTraceEntry({
+    subjectRef: input.subjectRef,
+    parameterKey: "__affix_runtime_summary__",
+    sequence: sequence++,
+    layer: "attribute_affix",
+    sourceRef: { sourceType: "affix_runtime", sourceId: "runtime-summary" },
+    sourceVersion: input.evidence.reductionStackingPolicyVersion ?? "non-formal",
+    ruleSetVersion: input.ruleSetVersion,
+    before: null,
+    operation: "no_effect",
+    operand: null,
+    after: null,
+    effect: "neutral",
+    warningIssueIds: issueManifest.map((issue) =>
+      `affix-runtime-issue-${deterministicHash(issue)}`).sort(),
+    actions: [],
+    evidence: {
+      adapter: "affix_runtime/v1",
+      kind: "summary",
+      reductionStackingPolicyVersion: input.evidence.reductionStackingPolicyVersion,
+      formalStatus: input.evidence.formalStatus,
+      traceHash: input.evidence.traceHash,
+      affixOutputValues: structuredClone(input.evidence.values),
+      postReviewValues: structuredClone(input.evidence.postReviewValues),
+      finalValues: structuredClone(input.evidence.finalValues),
+      issues: structuredClone(input.evidence.issues),
+      contributionCount: input.evidence.trace.length,
+    },
+  });
+  return [summary, ...[...input.evidence.trace]
     .sort((left, right) => left.sequence - right.sequence || left.ruleId.localeCompare(right.ruleId))
     .map((contribution) => createCalculationTraceEntry({
       subjectRef: input.subjectRef,
@@ -834,7 +875,136 @@ export function adaptAffixRuntimeEvidenceToCanonical(input: {
         formalStatus: input.evidence.formalStatus,
         contribution: structuredClone(contribution),
       },
-    }));
+    }))];
+}
+
+function affixEvidenceRecord(entry: CalculationTraceEntry): Record<string, unknown> | undefined {
+  return entry.evidence?.adapter === "affix_runtime/v1"
+    ? entry.evidence
+    : undefined;
+}
+
+/**
+ * 新正式 Snapshot 的 affix evidence 只能作为 canonical archive 的子契约
+ * 存在。这里重放其后置阶段并把它与结算 Trace、冻结策略和最终面板交叉验证。
+ */
+export function assertCalculationTraceMatchesAffixRuntime(input: {
+  archive: CalculationTraceArchive;
+  subjectRef: EntityRef;
+  reductionStackingPolicyVersion: string;
+  finalPanelValues: Record<string, number | string>;
+}): void {
+  const runtimeEntries = input.archive.entries.filter((entry) =>
+    sameEntityRef(entry.subjectRef, input.subjectRef)
+    && affixEvidenceRecord(entry),
+  );
+  const summary = runtimeEntries.find((entry) =>
+    entry.parameterKey === "__affix_runtime_summary__"
+    && affixEvidenceRecord(entry)?.kind === "summary",
+  );
+  if (!summary) {
+    throw new CalculationTraceReplayError("新正式 Snapshot 缺少 canonical affix runtime 摘要。",
+      runtimeEntries[0]);
+  }
+  const evidence = affixEvidenceRecord(summary)!;
+  const policyVersion = evidence.reductionStackingPolicyVersion;
+  if (policyVersion !== input.reductionStackingPolicyVersion || evidence.formalStatus !== "FORMAL") {
+    throw new CalculationTraceReplayError("canonical affix runtime 策略版本或正式状态不一致。", summary);
+  }
+  const values = evidence.affixOutputValues;
+  const postReviewValues = evidence.postReviewValues;
+  const finalValues = evidence.finalValues;
+  const issues = evidence.issues;
+  if (
+    !values || typeof values !== "object" || Array.isArray(values)
+    || !postReviewValues || typeof postReviewValues !== "object" || Array.isArray(postReviewValues)
+    || !finalValues || typeof finalValues !== "object" || Array.isArray(finalValues)
+    || !Array.isArray(issues)
+  ) {
+    throw new CalculationTraceReplayError("canonical affix runtime 摘要不完整。", summary);
+  }
+  const contributions = runtimeEntries
+    .filter((entry) => entry !== summary)
+    .map((entry) => affixEvidenceRecord(entry)?.contribution)
+    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+  const expectedCount = evidence.contributionCount;
+  if (
+    typeof expectedCount !== "number"
+    || !Number.isSafeInteger(expectedCount)
+    || expectedCount < 0
+    || contributions.length !== expectedCount
+  ) {
+    throw new CalculationTraceReplayError("canonical affix runtime Trace 缺失或重复条目。", summary);
+  }
+  const typedContributions = contributions as ProjectionTraceContribution[];
+  let previousContributionSequence = -1;
+  for (const contribution of typedContributions) {
+    if (contribution.sequence <= previousContributionSequence) {
+      throw new CalculationTraceReplayError("canonical affix runtime contribution 顺序不完整。", summary);
+    }
+    previousContributionSequence = contribution.sequence;
+    const numeric = contribution.numericEvidence;
+    if (!numeric) continue;
+    if (
+      (typeof contribution.before === "number" && numeric.beforeBinary64 !== numberToBinary64Hex(contribution.before))
+      || (typeof contribution.operand === "number" && numeric.operandBinary64 !== numberToBinary64Hex(contribution.operand))
+      || (typeof contribution.after === "number" && numeric.afterBinary64 !== numberToBinary64Hex(contribution.after))
+      || (numeric.anomaly !== "none" && numeric.anomaly !== "no_effect")
+    ) {
+      throw new CalculationTraceReplayError("canonical affix runtime binary64 或数值异常证据无效。", summary);
+    }
+  }
+  const recomputedHash = hashAffixRuntimeEvidence({
+    reductionStackingPolicyVersion: policyVersion as string,
+    values: values as Record<string, number | string>,
+    postReviewValues: postReviewValues as Record<string, number | string>,
+    finalValues: finalValues as Record<string, number | string>,
+    trace: typedContributions,
+    issues: issues as ValidationIssue[],
+  });
+  if (evidence.traceHash !== recomputedHash) {
+    throw new CalculationTraceReplayError("canonical affix runtime traceHash 不一致。", summary);
+  }
+  if ((issues as ValidationIssue[]).some((issue) => issue.severity === "ERROR" || issue.severity === "BLOCKER")) {
+    throw new CalculationTraceReplayError("canonical affix runtime 含未解决阻断问题。", summary);
+  }
+  const replay = (
+    start: Record<string, number | string>,
+    stage: "final_review_patch" | "parameter_definition",
+  ) => {
+    const replayed = structuredClone(start);
+    for (const contribution of typedContributions.filter(
+      (entry) => entry.numericEvidence?.stage === stage,
+    )) {
+      if (!calculationTraceValuesEqual(replayed[contribution.parameterKey], contribution.before)) {
+        throw new CalculationTraceReplayError(`canonical affix runtime ${stage} before 不连续。`, summary);
+      }
+      if (typeof contribution.after !== "number" && typeof contribution.after !== "string") {
+        throw new CalculationTraceReplayError(`canonical affix runtime ${stage} after 非法。`, summary);
+      }
+      replayed[contribution.parameterKey] = contribution.after;
+    }
+    return replayed;
+  };
+  const replayedPostReview = replay(values as Record<string, number | string>, "final_review_patch");
+  const replayedFinal = replay(replayedPostReview, "parameter_definition");
+  if (
+    !calculationTraceValuesEqual(replayedPostReview, postReviewValues)
+    || !calculationTraceValuesEqual(replayedFinal, finalValues)
+    || !calculationTraceValuesEqual(finalValues, input.finalPanelValues)
+  ) {
+    throw new CalculationTraceReplayError("canonical affix runtime 阶段值与最终面板不一致。", summary);
+  }
+  for (const [parameterKey, value] of Object.entries(input.finalPanelValues)) {
+    const settlement = input.archive.entries.filter((entry) =>
+      sameEntityRef(entry.subjectRef, input.subjectRef)
+      && entry.parameterKey === parameterKey
+      && entry.evidence?.adapter === "projection_trace/v1",
+    ).at(-1);
+    if (!settlement || !calculationTraceValuesEqual(settlement.after, value)) {
+      throw new CalculationTraceReplayError(`canonical affix runtime 未绑定最终结算：${parameterKey}。`, summary);
+    }
+  }
 }
 
 function pricingLayer(entry: PricingTraceEntry): CalculationTraceLayer {

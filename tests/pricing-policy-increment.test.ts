@@ -18,6 +18,7 @@ import {
 import { deterministicHash } from "../lib/rule-kernel";
 import {
   adaptRuleTraceToCanonical,
+  createCalculationTraceEntry,
   createCalculationTraceArchive,
 } from "../lib/calculation-trace";
 import { createSeedState } from "../lib/seed";
@@ -460,6 +461,57 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     Object.fromEntries(Object.entries(panelTampered).filter(([key]) => key !== "contentHash")),
   );
   assert.equal(verifySnapshotIntegrity(panelTampered), false);
+  const affixEntriesRemoved = structuredClone(snapshot);
+  affixEntriesRemoved.calculationTrace!.entries = affixEntriesRemoved.calculationTrace!.entries.filter(
+    (entry) => entry.evidence?.adapter !== "affix_runtime/v1",
+  ).map(({ traceEntryId: _traceEntryId, inputHash: _inputHash, outputHash: _outputHash, ...entry }, index) =>
+    createCalculationTraceEntry({ ...entry, sequence: index + 1 }),
+  );
+  affixEntriesRemoved.calculationTrace = createCalculationTraceArchive(
+    affixEntriesRemoved.calculationTrace!.entries,
+  );
+  affixEntriesRemoved.contentHash = deterministicHash(
+    Object.fromEntries(Object.entries(affixEntriesRemoved).filter(([key]) => key !== "contentHash")),
+  );
+  assert.equal(verifySnapshotIntegrity(affixEntriesRemoved), false);
+
+  const affixEvidenceTampered = structuredClone(snapshot);
+  const runtimeSummary = affixEvidenceTampered.calculationTrace!.entries.find((entry) =>
+    entry.parameterKey === "__affix_runtime_summary__",
+  )!;
+  const runtimeContribution = affixEvidenceTampered.calculationTrace!.entries.find((entry) =>
+    entry.evidence?.adapter === "affix_runtime/v1"
+    && entry.parameterKey !== "__affix_runtime_summary__",
+  )!;
+  assert.ok(runtimeSummary.evidence && runtimeContribution.evidence);
+  const summaryEvidence = runtimeSummary.evidence as Record<string, unknown>;
+  const contributionEvidence = runtimeContribution.evidence as Record<string, unknown>;
+  summaryEvidence.reductionStackingPolicyVersion = "reduction-policy:replaced";
+  const contribution = contributionEvidence.contribution as {
+    numericEvidence?: { beforeBinary64?: string; anomaly?: string };
+  };
+  assert.ok(contribution.numericEvidence);
+  contribution.numericEvidence!.beforeBinary64 = "0000000000000000";
+  contribution.numericEvidence!.anomaly = "overflow";
+  const runtimeTrace = affixEvidenceTampered.calculationTrace!.entries
+    .filter((entry) => entry.evidence?.adapter === "affix_runtime/v1")
+    .filter((entry) => entry.parameterKey !== "__affix_runtime_summary__")
+    .map((entry) => (entry.evidence as Record<string, unknown>).contribution) as typeof stagedEvidence.trace;
+  summaryEvidence.traceHash = hashAffixRuntimeEvidence({
+    reductionStackingPolicyVersion: summaryEvidence.reductionStackingPolicyVersion as string,
+    values: summaryEvidence.affixOutputValues as typeof stagedEvidence.values,
+    postReviewValues: summaryEvidence.postReviewValues as typeof stagedEvidence.postReviewValues,
+    finalValues: summaryEvidence.finalValues as typeof stagedEvidence.finalValues,
+    trace: runtimeTrace,
+    issues: summaryEvidence.issues as typeof stagedEvidence.issues,
+  });
+  affixEvidenceTampered.calculationTrace = createCalculationTraceArchive(
+    affixEvidenceTampered.calculationTrace!.entries,
+  );
+  affixEvidenceTampered.contentHash = deterministicHash(
+    Object.fromEntries(Object.entries(affixEvidenceTampered).filter(([key]) => key !== "contentHash")),
+  );
+  assert.equal(verifySnapshotIntegrity(affixEvidenceTampered), false);
   const ghostSettlementTrace = structuredClone(settlementTrace);
   ghostSettlementTrace[0].contributions.push({
     sequence: ghostSettlementTrace[0].contributions.length + 1,

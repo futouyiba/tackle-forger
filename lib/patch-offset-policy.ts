@@ -408,6 +408,39 @@ function policyIssue(input: {
   return { ...issue, evidence: legacyEvidence };
 }
 
+/**
+ * R9 之前的 PatchValidationWaiver 只保存了旧版 patch 专用 fingerprint。
+ * 不能改写已发布记录，因此仅用冻结的现有 Issue 上下文重建旧 fingerprint
+ * 作兼容比对；Gate、目标及输入/PatchSetHash 仍由 waiverCoversIssue 校验。
+ */
+function legacyPatchIssueFingerprint(issue: ValidationIssue): string | undefined {
+  if (issue.code !== "PATCH_FINAL_VALUE_OUT_OF_RANGE" || issue.source !== "patch") return undefined;
+  if (!("ruleRefs" in issue) || !("parameterKeys" in issue)) return undefined;
+  const evidence = issue.evidence;
+  const contextId = typeof evidence?.contextId === "string" ? evidence.contextId : undefined;
+  const subjectRef = evidence?.subjectRef;
+  const objectInputHash = typeof evidence?.objectInputHash === "string"
+    ? evidence.objectInputHash
+    : undefined;
+  const patchSetHash = typeof evidence?.patchSetHash === "string" ? evidence.patchSetHash : undefined;
+  if (!contextId || !subjectRef || !objectInputHash || !patchSetHash) return undefined;
+  return deterministicHash({
+    source: "patch",
+    code: issue.code,
+    gate: issue.gate,
+    policyVersion: issue.ruleRefs[0],
+    subjectRef,
+    objectInputHash,
+    contextId,
+    parameterKey: issue.parameterKeys[0],
+    constraintRuleVersion: issue.ruleRefs[1],
+    patchSetHash,
+    ...(issue.gate === "EXPORT"
+      ? { environmentId: issue.environmentId, channelKey: issue.channelKey }
+      : {}),
+  });
+}
+
 function validateExportTarget(input: {
   gate: PatchRangeEvaluation["gate"];
   environmentId?: string;
@@ -1034,7 +1067,8 @@ export function waiverCoversIssue(
 ): boolean {
   return issue.code === "PATCH_FINAL_VALUE_OUT_OF_RANGE"
     && issue.severity === "ERROR"
-    && issue.fingerprint === waiver.issueFingerprint
+    && (issue.fingerprint === waiver.issueFingerprint
+      || legacyPatchIssueFingerprint(issue) === waiver.issueFingerprint)
     && issue.gate === waiver.gate
     && issue.environmentId === waiver.environmentId
     && issue.channelKey === waiver.channelKey

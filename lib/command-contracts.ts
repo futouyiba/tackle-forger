@@ -245,7 +245,7 @@ export function createUnifiedIssue(input: Omit<
         requiredCapabilities: availability.requiredCapabilities,
         disabledReasonCode: availability.disabledReasonCode,
         disabledReasonText: availability.disabledReasonText,
-        ...(spec.commandPayloadRef
+        ...(availability.enabled && spec.commandPayloadRef
           ? { commandPayloadRef: structuredClone(spec.commandPayloadRef) }
           : {}),
       };

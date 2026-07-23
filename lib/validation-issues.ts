@@ -682,13 +682,22 @@ export function assertValidationWaiverDecisionCoverage(input: {
     );
   }
   for (const decision of decisions) {
-    const coveredWaiverIds = waivers
-      .filter((waiver) => waiver.waiverDecisionId === decision.waiverDecisionId)
-      .map((waiver) => waiver.waiverId);
+    const requestedTargetKey = (request: ValidationWaiverDecision["requestedWaivers"][number]) =>
+      `${request.issueFingerprint}\u0000${request.gate}\u0000${request.environmentId ?? ""}\u0000${request.channelKey ?? ""}`;
+    const requestedTargetKeys = decision.requestedWaivers.map(requestedTargetKey);
+    const coveredWaivers = waivers
+      .filter((waiver) => waiver.waiverDecisionId === decision.waiverDecisionId);
+    const coveredWaiverIds = coveredWaivers.map((waiver) => waiver.waiverId);
+    const coveredTargetKeys = coveredWaivers.map((waiver) =>
+      `${waiver.issueFingerprint}\u0000${waiver.gate}\u0000${waiver.environmentId ?? ""}\u0000${waiver.channelKey ?? ""}`);
     if (
-      coveredWaiverIds.length !== decision.waiverIds.length
+      new Set(requestedTargetKeys).size !== requestedTargetKeys.length
+      || decision.requestedWaivers.length !== decision.waiverIds.length
+      || coveredWaiverIds.length !== decision.waiverIds.length
       || new Set(coveredWaiverIds).size !== coveredWaiverIds.length
       || coveredWaiverIds.some((waiverId) => !decision.waiverIds.includes(waiverId))
+      || new Set(coveredTargetKeys).size !== coveredTargetKeys.length
+      || coveredTargetKeys.some((targetKey) => !requestedTargetKeys.includes(targetKey))
     ) {
       throw new ValidationIssueContractError(
         "VALIDATION_WAIVER_DECISION_COVERAGE_INCOMPLETE",
@@ -706,11 +715,11 @@ export function assertValidationWaiverDecisionCoverage(input: {
       || !matchingDecisions[0].waiverIds.includes(waiver.waiverId)
       || matchingDecisions[0].policyVersion !== waiver.policyVersion
       || matchingDecisions[0].policyHash !== waiver.policyHash
-      || !matchingDecisions[0].requestedWaivers.some((request) =>
+      || matchingDecisions[0].requestedWaivers.filter((request) =>
         request.issueFingerprint === waiver.issueFingerprint
         && request.gate === waiver.gate
         && request.environmentId === waiver.environmentId
-        && request.channelKey === waiver.channelKey)
+        && request.channelKey === waiver.channelKey).length !== 1
     ) {
       throw new ValidationIssueContractError(
         "VALIDATION_WAIVER_DECISION_MISSING_OR_INVALID",
@@ -785,6 +794,14 @@ export function approveValidationWaiverDecision(input: {
     || left.gate.localeCompare(right.gate)
     || (left.environmentId ?? "").localeCompare(right.environmentId ?? "")
     || (left.channelKey ?? "").localeCompare(right.channelKey ?? ""));
+  const requestedTargetKeys = requestedWaivers.map((request) =>
+    `${request.issueFingerprint}\u0000${request.gate}\u0000${request.environmentId ?? ""}\u0000${request.channelKey ?? ""}`);
+  if (new Set(requestedTargetKeys).size !== requestedTargetKeys.length) {
+    throw new ValidationIssueContractError(
+      "VALIDATION_WAIVER_TARGET_DUPLICATE",
+      "同一 Issue/Gate/导出目标只能在一个 Waiver 决定中请求一次。",
+    );
+  }
   const payload = {
     action: "approve_validation_waiver",
     policyVersion: input.policy.version,

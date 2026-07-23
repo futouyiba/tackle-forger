@@ -581,7 +581,7 @@ export const importedCandidates: Candidate[] = skuRows
   });
 
 export function createSeedState(): WorkspaceState {
-  return { ...hydrateV3Seed(migrateWorkspaceState({
+  return hydrateV3Seed(migrateWorkspaceState({
     schemaVersion: 1,
     parameters: parameterDefinitions,
     templates: weightTemplates,
@@ -618,5 +618,5 @@ export function createSeedState(): WorkspaceState {
     ],
     notes: "以《淡水路亚杆轮线装备设计》为权威主表，旧版母表仅用于参数与验算迁移参考。",
     importedAt,
-  })), workspaceId: "workspace:seed" };
+  }));
 }

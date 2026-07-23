@@ -44,6 +44,28 @@ test("SQLite 保存可跨读取、冲突受保护且历史版本冻结", async (
   assert.equal(conflict.revision, saved.revision);
 });
 
+test("空数据库首次持久化绑定部署身份、重载稳定且后续错配 fail-closed", async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "tackle-forger-storage-identity-"));
+  const previousDatabase = process.env.WORKSPACE_DATABASE_PATH;
+  const previousIdentity = process.env.TACKLE_FORGER_WORKSPACE_ID;
+  process.env.WORKSPACE_DATABASE_PATH = path.join(directory, "workspace.sqlite");
+  process.env.TACKLE_FORGER_WORKSPACE_ID = "workspace:bootstrap-a";
+  const databasePath = process.env.WORKSPACE_DATABASE_PATH;
+  t.after(async () => {
+    await closeSqliteStorage(databasePath);
+    if (previousDatabase === undefined) delete process.env.WORKSPACE_DATABASE_PATH; else process.env.WORKSPACE_DATABASE_PATH = previousDatabase;
+    if (previousIdentity === undefined) delete process.env.TACKLE_FORGER_WORKSPACE_ID; else process.env.TACKLE_FORGER_WORKSPACE_ID = previousIdentity;
+    await rm(directory, { recursive: true, force: true });
+  });
+  const initial = await loadWorkspaceState();
+  assert.equal(initial.state.workspaceId, "workspace:bootstrap-a");
+  const saved = await saveWorkspaceState({ state: initial.state, baseRevision: initial.revision, author: "test", message: "persist identity" });
+  assert.equal((await loadWorkspaceState()).state.workspaceId, "workspace:bootstrap-a");
+  process.env.TACKLE_FORGER_WORKSPACE_ID = "workspace:bootstrap-b";
+  await assert.rejects(loadWorkspaceState(), /WORKSPACE_IDENTITY_MISMATCH/);
+  assert.equal(saved.revision, initial.revision + 1);
+});
+
 test("生产环境没有持久化后端时拒绝进程内临时存储", async (t) => {
   const env = process.env as Record<string, string | undefined>;
   const previous = {

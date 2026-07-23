@@ -169,7 +169,10 @@ export async function loadWorkspaceState(): Promise<{
   revision: number;
 }> {
   const sqlitePath = sqliteDatabasePath();
-  if (sqlitePath) return loadSqliteWorkspace(sqlitePath);
+  if (sqlitePath) {
+    const loaded = await loadSqliteWorkspace(sqlitePath);
+    return { ...loaded, state: bindDeploymentWorkspaceIdentity(loaded.state) };
+  }
 
   if (hasVercelBlob()) {
     const current = await ensureBlobDocument();

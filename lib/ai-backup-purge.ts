@@ -11,9 +11,11 @@ function assertAssessmentId(value: string): void {
 
 async function assessmentBackupFiles(backupRoot: string, assessmentId: string): Promise<string[]> {
   assertAssessmentId(assessmentId);
-  const entries = await readdir(backupRoot, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
-    if (error.code === "ENOENT") return [];
-    throw error;
+  const entries = await readdir(backupRoot, { withFileTypes: true }).catch(() => {
+    throw new AIRuntimeStoreError(
+      "AI_RETENTION_STORE_UNAVAILABLE",
+      "AI_BACKUP_ROOT_UNAVAILABLE",
+    );
   });
   return entries
     .filter((entry) => entry.isDirectory())

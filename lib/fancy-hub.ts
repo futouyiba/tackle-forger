@@ -696,8 +696,8 @@ export class FancyHubConnector {
       const { providerLimits, tenantLimits, batchLimits, estimatePolicy } = this.assertEnabled();
       const batchStartedAtMs = input.batch?.startedAtMs ?? Date.now();
       const batchDeadlineMs = batchStartedAtMs + batchLimits.batchHardTimeoutMs;
-      const discoveryRemainingMs = batchDeadlineMs - Date.now();
-      if (discoveryRemainingMs <= 0) throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "批次已经达到 10 分钟硬期限。" );
+      const initialDiscoveryRemainingMs = batchDeadlineMs - Date.now();
+      if (initialDiscoveryRemainingMs <= 0) throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "批次已经达到 10 分钟硬期限。" );
       const assessmentCount = input.batch?.assessmentCount ?? 1;
       const cachedProviderLimitsValue = await this.admissionCoordinator.readProviderHardLimits();
       const cachedProviderLimits = cachedProviderLimitsValue
@@ -715,10 +715,18 @@ export class FancyHubConnector {
       });
       const attemptedModelIds: string[] = [];
       try {
+        const preRateLimitRemainingMs = batchDeadlineMs - Date.now();
+        if (preRateLimitRemainingMs <= 0) {
+          throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "批次在模型发现前已经达到 10 分钟硬期限。" );
+        }
         await lease.consumeAssessmentRequest({
           nowMs: Date.now(),
           maxRequestsPerMinute: preDiscoveryLimits.maxRequestsPerMinute,
         });
+        const discoveryRemainingMs = batchDeadlineMs - Date.now();
+        if (discoveryRemainingMs <= 0) {
+          throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "批次在模型发现前已经达到 10 分钟硬期限。" );
+        }
         const discovery = await this.listAvailableModels(Math.min(preDiscoveryLimits.requestTimeoutMs, discoveryRemainingMs));
         await this.admissionCoordinator.writeProviderHardLimits(discovery.providerHardLimits);
         const limits = effectiveLimits(

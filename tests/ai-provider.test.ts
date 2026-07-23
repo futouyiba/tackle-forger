@@ -28,6 +28,7 @@ import {
   fancyHubEnablement,
   evaluateAIBatchAdmission,
   type AIProviderHardLimits,
+  type FancyHubAdmissionCoordinator,
   type FancyHubAssessmentResponse,
   type FancyHubConnectorConfig,
   type FancyHubTransport,
@@ -460,6 +461,111 @@ test("批次绝对期限在每次降级前重验，并按剩余时间收紧单�
     );
     assert.equal(assessCalls, 1);
     assert.ok(timeouts.every((timeout) => timeout <= 30_000));
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test("模型发现等待后按绝对期限重新准入，过期时零出网且新剩余时间收紧 timeout", async () => {
+  const originalNow = Date.now;
+  let now = 1_000;
+  Date.now = () => now;
+  let rateLimitConsumptions = 0;
+  const transport = new MockTransport(discoveryModels(), []);
+  const expiredWhileWaiting: FancyHubAdmissionCoordinator = {
+    async readProviderHardLimits() { return undefined; },
+    async writeProviderHardLimits() {},
+    async acquire() {
+      now = 601_000;
+      return {
+        inFlightForWorkspaceBefore: 0,
+        inFlightTotalBefore: 0,
+        async consumeAssessmentRequest() { rateLimitConsumptions += 1; },
+        async release() {},
+      };
+    },
+  };
+  try {
+    await assert.rejects(
+      new FancyHubConnector(connectorConfig(), transport, undefined, expiredWhileWaiting).assess({
+        workspaceId: "w1",
+        actorStableId: "ou-test",
+        buildEnvelope: envelope,
+        batch: { assessmentCount: 1, inFlightForUser: 0, startedAtMs: 1_000 },
+      }),
+      (error) => error instanceof FancyHubError && error.code === "AI_HARD_LIMIT_EXCEEDED",
+    );
+    assert.equal(rateLimitConsumptions, 0);
+    assert.deepEqual(transport.calls, []);
+
+    now = 1_000;
+    const postRateLimitTransport = new MockTransport(discoveryModels(), []);
+    const expiredAfterRateLimit: FancyHubAdmissionCoordinator = {
+      async readProviderHardLimits() { return undefined; },
+      async writeProviderHardLimits() {},
+      async acquire() {
+        return {
+          inFlightForWorkspaceBefore: 0,
+          inFlightTotalBefore: 0,
+          async consumeAssessmentRequest() {
+            rateLimitConsumptions += 1;
+            now = 601_000;
+          },
+          async release() {},
+        };
+      },
+    };
+    await assert.rejects(
+      new FancyHubConnector(connectorConfig(), postRateLimitTransport, undefined, expiredAfterRateLimit).assess({
+        workspaceId: "w1",
+        actorStableId: "ou-test",
+        buildEnvelope: envelope,
+        batch: { assessmentCount: 1, inFlightForUser: 0, startedAtMs: 1_000 },
+      }),
+      (error) => error instanceof FancyHubError && error.code === "AI_HARD_LIMIT_EXCEEDED",
+    );
+    assert.equal(rateLimitConsumptions, 1);
+    assert.deepEqual(postRateLimitTransport.calls, []);
+
+    now = 1_000;
+    const discoveryTimeouts: number[] = [];
+    const waitedButAlive: FancyHubAdmissionCoordinator = {
+      async readProviderHardLimits() { return undefined; },
+      async writeProviderHardLimits() {},
+      async acquire() {
+        now = 591_000;
+        return {
+          inFlightForWorkspaceBefore: 0,
+          inFlightTotalBefore: 0,
+          async consumeAssessmentRequest() { rateLimitConsumptions += 1; },
+          async release() {},
+        };
+      },
+    };
+    const timeoutTransport: FancyHubTransport = {
+      async listModels(input) {
+        discoveryTimeouts.push(input.timeoutMs);
+        return discoveryModels();
+      },
+      async assess() {
+        throw new FancyHubError("AI_PROVIDER_TEMPORARILY_UNAVAILABLE", "temporary");
+      },
+    };
+    await assert.rejects(
+      new FancyHubConnector(
+        connectorConfig({ fallbackModelIds: [] }),
+        timeoutTransport,
+        undefined,
+        waitedButAlive,
+      ).assess({
+        workspaceId: "w1",
+        actorStableId: "ou-test",
+        buildEnvelope: envelope,
+        batch: { assessmentCount: 1, inFlightForUser: 0, startedAtMs: 1_000 },
+      }),
+      (error) => error instanceof FancyHubError,
+    );
+    assert.deepEqual(discoveryTimeouts, [10_000]);
   } finally {
     Date.now = originalNow;
   }

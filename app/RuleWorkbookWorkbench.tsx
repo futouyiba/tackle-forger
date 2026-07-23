@@ -382,7 +382,10 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
             dirty={props.dirty}
             notify={props.notify}
           />
-          <QualityValuePolicyPanel draft={inspection.qualityDraft} />
+          <QualityValuePolicyPanel
+            draft={inspection.qualityDraft}
+            affixSheetRowCount={inspection.sourceRevision.sheets.find((sheet) => sheet.sheetId === "zrVOxd")?.rowCount}
+          />
           <PricingPolicyDraftPanel draft={inspection.pricingDraft} />
         </>
       ) : null}

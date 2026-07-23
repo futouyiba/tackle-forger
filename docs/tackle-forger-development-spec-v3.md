@@ -927,7 +927,7 @@ Snapshot的“下载审计归档”与“正式导出”是两种不同动作：
 
 当前工作簿关键稳定工作表标识为：`01_重量模板/d6e928`、`02_类型材质/fATowU`、`03_功能定位/vviXo0`、`04_词条/zrVOxd`、`05_技术/RdZv0J`、`06_系列/9nE3Rx`、`07_品质评分/FqD4j7`、`08_价格计算/u87sRh`、`10_校验规则/KZv4o2`、`11_组合SKU/eXV1dI`、`13_上传发布/M17p0j`、`14_Rods/hekdpO`、`15_Reels/oUp48w`、`16_Lines/YTYwgS`、`17_Item/VFxDxt`、`Patch台账/edyFx9`。`Patch台账`于2026-07-23创建并在工作簿revision `3259`回读确认；该revision只证明工作表身份，不替代规则源revision。工作表名称是人类文案，接入器以`sheet_id`识别并校验期望名称；改名产生warning，不把同名新表静默当成原表。
 
-规则工作表必须使用不可变`ruleId/entityId`和稳定`parameterKey`，机器区域不得依赖行号、名称或合并单元格。revision `2869`的当前规则源拓扑已将词条和技术调整为`04_词条`、`05_技术`，且不再包含独立“性能定位”工作表。接入器必须按最新显式拉取的workbook revision核对sheet_id与机器ID，保留既有ID；任何缺ID新行进入`NEW_SOURCE_ROW`等待人工确认。历史revision中的性能定位ID不得擅自迁移、删除、复用或继续作为新Series/Model输入；名称只用于历史显示、搜索和迁移候选，不用于长期对象关联。新的`PerformanceSummary`从已结算配置派生，不接管或复用这些历史ID。
+规则工作表必须使用不可变`ruleId/entityId`和稳定`parameterKey`，机器区域不得依赖行号、名称或合并单元格。revision `2869`的当前规则源拓扑已将词条和技术调整为`04_词条`、`05_技术`，且不再包含独立“性能定位”工作表。`04_词条/zrVOxd`的稳定ID扫描与组合矩阵别名绑定必须以同一`FeishuSourceRevision.sheets`中经验证的`grid rowCount`作为读取上界（分别读取`B1:C<rowCount>`与`B2:F<rowCount>`）；不得固定末行。缺失、非安全整数、过小行数或不足六列的grid元数据必须fail-closed，不能截断为旧范围或猜测别名。接入器必须按最新显式拉取的workbook revision核对sheet_id与机器ID，保留既有ID；任何缺ID新行进入`NEW_SOURCE_ROW`等待人工确认。历史revision中的性能定位ID不得擅自迁移、删除、复用或继续作为新Series/Model输入；名称只用于历史显示、搜索和迁移候选，不用于长期对象关联。新的`PerformanceSummary`从已结算配置派生，不接管或复用这些历史ID。
 
 `09_甘特图/wxORcd`按工作簿使用说明是开发计划表，不是产品界面的“钓具系列甘特图”数据源，也不新增领域实体。`11_组合SKU`、`12_打包竿组`和`14_Rods`至`17_Item`当前作为历史样例、映射参考或飞书侧暂存输出，不能反向覆盖Tackle Forger中的Series、SKU、Model与Snapshot真相。飞书工作簿当前也没有完整GoodsBasic/StoreBuy目标页；因此本节的飞书数据进出不替代第25节的本机配置Git仓库导出。正式发布仍从冻结Snapshot写入本地tackle/item/store工作簿，并强制生成GoodsBasic和StoreBuy。
 

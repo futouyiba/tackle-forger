@@ -23,6 +23,7 @@ import {
 import {
   reserveConfigIdBundlePersisted,
   type ConfigIdWorkspaceRepository,
+  type ConfigTargetSerializationVerifier,
 } from "../lib/config-id-reservation-service";
 import { PHASE_ONE_CAPABILITIES } from "../lib/feishu-identity";
 import { sha256Hex } from "../lib/deterministic-sha256";
@@ -31,6 +32,42 @@ import { createSeedState } from "../lib/seed";
 import type { WorkspaceState } from "../lib/types";
 
 const NOW = "2026-07-23T01:02:03.000Z";
+
+function hash(value: string) {
+  return sha256Hex(value);
+}
+
+function managedWorkbooks(logicalDirectory: string) {
+  return [
+    {
+      logicalName: "item",
+      workbookPath: `${logicalDirectory}/item.xlsx`,
+      sheetNames: ["Item"],
+    },
+    {
+      logicalName: "store",
+      workbookPath: `${logicalDirectory}/store.xlsx`,
+      sheetNames: ["GoodsBasic", "StoreBuy"],
+    },
+    {
+      logicalName: "tackle",
+      workbookPath: `${logicalDirectory}/tackle.xlsx`,
+      sheetNames: ["TackleItem"],
+    },
+  ];
+}
+
+function scannedWorkbooks(logicalDirectory: string) {
+  return managedWorkbooks(logicalDirectory).map((workbook) => ({
+    logicalName: workbook.logicalName,
+    workbookPath: workbook.workbookPath,
+    sheets: workbook.sheetNames.map((sheetName) => ({
+      sheetName,
+      sheetHash: hash(`${logicalDirectory}:${workbook.logicalName}:${sheetName}`),
+    })),
+    workbookHash: hash(`${logicalDirectory}:${workbook.logicalName}`),
+  }));
+}
 
 function errorCode(error: unknown) {
   return error instanceof ConfigIdGovernanceError ? error.code : undefined;
@@ -52,6 +89,7 @@ function buildGovernanceFixture() {
         authoritativeRef: "refs/heads/config",
         logicalDirectory: "dev",
         configTomlPath: "dev/config.toml",
+        managedWorkbooks: managedWorkbooks("dev"),
         requiredForFormal: true,
       },
       {
@@ -62,6 +100,7 @@ function buildGovernanceFixture() {
         authoritativeRef: "refs/heads/config",
         logicalDirectory: "test",
         configTomlPath: "test/config.toml",
+        managedWorkbooks: managedWorkbooks("test"),
         requiredForFormal: true,
       },
     ],
@@ -83,13 +122,8 @@ function buildGovernanceFixture() {
       authoritativeRef: "refs/heads/config",
       resolvedCommitOid: "a".repeat(40),
       logicalDirectory,
-      configTomlHash: `config-${logicalDirectory}-hash`,
-      workbooks: [{
-        logicalName: "tackle",
-        workbookPath: `${logicalDirectory}/tackle.xlsx`,
-        sheetNames: ["TackleItem", "GoodsBasic", "StoreBuy"],
-        workbookHash: `workbook-${logicalDirectory}-hash`,
-      }],
+      configTomlHash: hash(`${logicalDirectory}:config.toml`),
+      workbooks: scannedWorkbooks(logicalDirectory),
       scannerVersion: "scanner:v1",
       ruleVersion: "open-008:v1",
       verifiedRangeIds: CANONICAL_CONFIG_ID_RANGES.map((range) => range.rangeId),
@@ -133,8 +167,6 @@ function buildGovernanceFixture() {
       workbookSetHash: manifest.workbookSetHash,
     })).sort((left, right) => left.targetEntryId.localeCompare(right.targetEntryId)),
     expiresAt: "2026-07-24T01:02:03.000Z",
-    protectedRefCasAvailable: true,
-    latestFencingTokenVerified: true,
   };
   return { state, governance, observations, checkpoint };
 }
@@ -147,7 +179,7 @@ function observationsFor(governance: ConfigIdGovernanceState): ConfigTargetObser
     resolvedCommitOid: manifest.resolvedCommitOid,
     logicalDirectory: manifest.logicalDirectory,
     configTomlHash: manifest.configTomlHash,
-    workbookSetHash: manifest.workbookSetHash,
+    workbooks: structuredClone(manifest.workbooks),
   }));
 }
 
@@ -167,6 +199,7 @@ function reservationInput(
     expectedNormalizedStableModelKey: key,
     policyVersionId: policy.policyVersionId,
     expectedManifestSetHash: policy.manifestSetHash,
+    operationId: idempotencyKey.replace(/^idem:/, "operation:"),
     idempotencyKey,
   };
   return command;
@@ -226,6 +259,121 @@ test("Manifest 必须无问题且逐项验证策略声明的 rangeId", () => {
       observedTargets: fixture.observations,
     }),
     (error) => errorCode(error) === "CONFIG_TARGET_SCAN_MANIFEST_RANGE_MISMATCH",
+  );
+});
+
+test("Manifest 必须逐 workbook/sheet/hash 恰好覆盖目录声明的闭集", () => {
+  const fixture = buildGovernanceFixture();
+  const prior = fixture.governance.scanManifests[0]!;
+  const catalogEntry = fixture.governance.catalogs[0]!.entries[0]!;
+  assert.throws(
+    () => publishConfigTargetCatalogVersion(fixture.governance, {
+      catalogVersionId: "catalog:empty-workbooks",
+      entries: [{
+        ...structuredClone(catalogEntry),
+        targetEntryId: "target:empty-workbooks",
+        environmentId: "empty-workbooks",
+        managedWorkbooks: [],
+      }],
+      approvedBy: "reviewer",
+      approvedAt: NOW,
+    }),
+    (error) => errorCode(error) === "CONFIG_TARGET_CATALOG_WORKBOOKS_EMPTY",
+  );
+  const baseInput = {
+    manifestId: prior.manifestId,
+    catalogVersionId: prior.catalogVersionId,
+    targetEntryId: prior.targetEntryId,
+    environmentId: prior.environmentId,
+    channelKey: prior.channelKey,
+    repositoryId: prior.repositoryId,
+    authoritativeRef: prior.authoritativeRef,
+    resolvedCommitOid: prior.resolvedCommitOid,
+    logicalDirectory: prior.logicalDirectory,
+    configTomlHash: prior.configTomlHash,
+    workbooks: structuredClone(prior.workbooks),
+    scannerVersion: prior.scannerVersion,
+    ruleVersion: prior.ruleVersion,
+    verifiedRangeIds: [...prior.verifiedRangeIds],
+    issueCodes: [...prior.issueCodes],
+    scannedBy: prior.scannedBy,
+    scannedAt: prior.scannedAt,
+    approvedBy: prior.approvedBy,
+    approvedAt: prior.approvedAt,
+  };
+  assert.throws(
+    () => approveConfigTargetScanManifest(fixture.governance, {
+      ...baseInput,
+      manifestId: "manifest:empty",
+      workbooks: [],
+    }),
+    (error) => errorCode(error) === "CONFIG_TARGET_SCAN_WORKBOOKS_EMPTY",
+  );
+  assert.throws(
+    () => approveConfigTargetScanManifest(fixture.governance, {
+      ...baseInput,
+      manifestId: "manifest:missing-workbook",
+      workbooks: prior.workbooks.slice(1),
+    }),
+    (error) => errorCode(error) === "CONFIG_TARGET_SCAN_MANIFEST_COVERAGE_INCOMPLETE",
+  );
+  const missingSheet = structuredClone(prior.workbooks);
+  missingSheet.find((workbook) => workbook.logicalName === "store")!.sheets.pop();
+  assert.throws(
+    () => approveConfigTargetScanManifest(fixture.governance, {
+      ...baseInput,
+      manifestId: "manifest:missing-sheet",
+      workbooks: missingSheet,
+    }),
+    (error) => errorCode(error) === "CONFIG_TARGET_SCAN_MANIFEST_COVERAGE_INCOMPLETE",
+  );
+  const emptySheets = structuredClone(prior.workbooks);
+  emptySheets[0]!.sheets = [];
+  assert.throws(
+    () => approveConfigTargetScanManifest(fixture.governance, {
+      ...baseInput,
+      manifestId: "manifest:empty-sheets",
+      workbooks: emptySheets,
+    }),
+    (error) => errorCode(error) === "CONFIG_TARGET_SCAN_SHEETS_EMPTY",
+  );
+  const duplicateSheet = structuredClone(prior.workbooks);
+  duplicateSheet[0]!.sheets.push(structuredClone(duplicateSheet[0]!.sheets[0]!));
+  assert.throws(
+    () => approveConfigTargetScanManifest(fixture.governance, {
+      ...baseInput,
+      manifestId: "manifest:duplicate-sheet",
+      workbooks: duplicateSheet,
+    }),
+    (error) => errorCode(error) === "CONFIG_TARGET_SCAN_SHEET_DUPLICATE",
+  );
+  const invalidHash = structuredClone(prior.workbooks);
+  invalidHash[0]!.sheets[0]!.sheetHash = "not-a-sha256";
+  assert.throws(
+    () => approveConfigTargetScanManifest(fixture.governance, {
+      ...baseInput,
+      manifestId: "manifest:invalid-sheet-hash",
+      workbooks: invalidHash,
+    }),
+    (error) => errorCode(error) === "CONFIG_TARGET_SCAN_HASH_INVALID",
+  );
+});
+
+test("Manifest freshness 逐 sheet 复验，聚合值不能由调用方伪造", () => {
+  const fixture = buildGovernanceFixture();
+  const stale = structuredClone(fixture.observations);
+  stale[0]!.workbooks[0]!.sheets[0]!.sheetHash = hash("changed-sheet");
+  assert.throws(
+    () => publishConfigIdPolicyVersion(fixture.governance, {
+      policyVersionId: "policy:stale-sheet",
+      catalogVersionId: "catalog:v1",
+      manifestIds: ["manifest:dev:v1", "manifest:test:v1"],
+      ranges: CANONICAL_CONFIG_ID_RANGES.map((range) => ({ ...range })),
+      publishedBy: "reviewer",
+      publishedAt: NOW,
+      observedTargets: stale,
+    }),
+    (error) => errorCode(error) === "CONFIG_TARGET_SCAN_MANIFEST_STALE",
   );
 });
 
@@ -435,7 +583,7 @@ test("扩容追加新 rangeId，不重置或回收旧 rangeId 游标", () => {
     resolvedCommitOid: manifest.resolvedCommitOid,
     logicalDirectory: manifest.logicalDirectory,
     configTomlHash: manifest.configTomlHash,
-    workbookSetHash: manifest.workbookSetHash,
+    workbooks: structuredClone(manifest.workbooks),
   }));
   governance = publishConfigIdPolicyVersion(governance, {
     policyVersionId: "policy:expanded",
@@ -477,6 +625,7 @@ test("扩容追加新 rangeId，不重置或回收旧 rangeId 游标", () => {
   const command = reservationInput(state);
   command.policyVersionId = policy.policyVersionId;
   command.expectedManifestSetHash = policy.manifestSetHash;
+  command.operationId = checkpoint.operationId;
   const reserved = reserveConfigIdBundle(
     state,
     command,
@@ -536,20 +685,46 @@ test("冻结 Model 身份、ledger 身份和已发布 Snapshot 不允许被改�
   );
 });
 
-function inMemoryRepository(initial: WorkspaceState): ConfigIdWorkspaceRepository & {
+function inMemoryRepository(
+  initial: WorkspaceState,
+  options: {
+    forcedConflicts?: number;
+    afterForcedConflict?(): void;
+  } = {},
+): ConfigIdWorkspaceRepository & {
   current(): { state: WorkspaceState; revision: number };
 } {
   let state = structuredClone(initial);
   let revision = 1;
+  let forcedConflicts = options.forcedConflicts ?? 0;
+  let criticalSection = Promise.resolve();
   return {
     async load() {
       return { state: structuredClone(state), revision };
     },
-    async save(input) {
-      if (input.baseRevision !== revision) return { revision, conflict: true };
-      state = structuredClone(input.state);
-      revision += 1;
-      return { revision };
+    async commitReservation(input) {
+      let release!: () => void;
+      const previous = criticalSection;
+      criticalSection = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await previous;
+      try {
+        if (input.baseRevision !== revision) return { revision, conflict: true };
+        const verification = await input.verifySerializationAtCommit();
+        const nextState = input.prepareState(verification);
+        if (forcedConflicts > 0) {
+          forcedConflicts -= 1;
+          revision += 1;
+          options.afterForcedConflict?.();
+          return { revision, conflict: true };
+        }
+        state = structuredClone(nextState);
+        revision += 1;
+        return { revision };
+      } finally {
+        release();
+      }
     },
     current() {
       return { state: structuredClone(state), revision };
@@ -557,62 +732,129 @@ function inMemoryRepository(initial: WorkspaceState): ConfigIdWorkspaceRepositor
   };
 }
 
-test("同一游标并发预留经工作区 CAS 重试后得到两个不同 Bundle", async () => {
+function authoritativeVerifier(
+  current: () => ConfigTargetSerializationCheckpoint | undefined,
+  calls: { count: number },
+): ConfigTargetSerializationVerifier {
+  return {
+    async verifyCommittingAtCommit(expected) {
+      calls.count += 1;
+      const checkpoint = current();
+      if (
+        !checkpoint
+        || checkpoint.state !== "COMMITTING"
+        || checkpoint.leaseId !== expected.leaseId
+        || checkpoint.fencingToken !== expected.fencingToken
+        || checkpoint.operationId !== expected.operationId
+      ) {
+        throw new ConfigIdGovernanceError(
+          "CONFIG_TARGET_SERIALIZATION_UNAVAILABLE",
+          "lease 已过期、被更高 token 取代或不处于 COMMITTING。",
+        );
+      }
+      return { checkpoint: structuredClone(checkpoint), verifiedAt: NOW };
+    },
+  };
+}
+
+test("CAS 冲突后的每次实际提交尝试都重新读取权威 fencing token", async () => {
   const fixture = buildGovernanceFixture();
-  fixture.state.purchasableModels[1]!.stableModelKey = "beta";
-  const repository = inMemoryRepository(fixture.state);
-  const [first, second] = await Promise.all([
-    reserveConfigIdBundlePersisted(
-      reservationInput(fixture.state, 0, "alpha", "idem:a"),
-      contextFor(fixture.observations, fixture.checkpoint),
+  const calls = { count: 0 };
+  const repository = inMemoryRepository(fixture.state, { forcedConflicts: 1 });
+  const reserved = await reserveConfigIdBundlePersisted(
+    reservationInput(fixture.state),
+    contextFor(fixture.observations, fixture.checkpoint),
+    {
       repository,
-    ),
-    reserveConfigIdBundlePersisted(
-      reservationInput(fixture.state, 1, "beta", "idem:b"),
-      contextFor(fixture.observations, {
-        ...fixture.checkpoint,
-        leaseId: "lease:2",
-        fencingToken: "2",
-        operationId: "operation:2",
-      }),
-      repository,
-    ),
-  ]);
-  assert.notEqual(
-    first.result.bundle.tackleItem.configNumericId,
-    second.result.bundle.tackleItem.configNumericId,
+      serializationVerifier: authoritativeVerifier(() => fixture.checkpoint, calls),
+    },
   );
-  assert.equal(repository.current().state.configIdGovernance.reservationLedger.length, 2);
+  assert.equal(calls.count, 2);
+  assert.equal(reserved.workspaceRevision, 3);
+  assert.equal(repository.current().state.configIdGovernance.reservationLedger.length, 1);
 });
 
-test("同一 part + stableModelKey 并发预留只能有一个永久占用成功", async () => {
+test("CAS 重试期间更高 token 取代旧证明时 fail closed 且不写 ledger", async () => {
+  const fixture = buildGovernanceFixture();
+  const calls = { count: 0 };
+  let authoritative = structuredClone(fixture.checkpoint);
+  const repository = inMemoryRepository(fixture.state, {
+    forcedConflicts: 1,
+    afterForcedConflict() {
+      authoritative = {
+        ...authoritative,
+        leaseId: "lease:2",
+        fencingToken: "2",
+        operationId: "operation:2",
+      };
+    },
+  });
+  await assert.rejects(
+    reserveConfigIdBundlePersisted(
+      reservationInput(fixture.state),
+      contextFor(fixture.observations, fixture.checkpoint),
+      {
+        repository,
+        serializationVerifier: authoritativeVerifier(() => authoritative, calls),
+      },
+    ),
+    (error) => errorCode(error) === "CONFIG_TARGET_SERIALIZATION_UNAVAILABLE",
+  );
+  assert.equal(calls.count, 2);
+  assert.equal(repository.current().state.configIdGovernance.reservationLedger.length, 0);
+});
+
+test("伪造 checkpoint 或缺少 #56 verifier 时持久化预留 fail closed", async () => {
+  const fixture = buildGovernanceFixture();
+  const repository = inMemoryRepository(fixture.state);
+  const forged = {
+    ...fixture.checkpoint,
+    leaseId: "lease:forged",
+    fencingToken: "999",
+  };
+  await assert.rejects(
+    reserveConfigIdBundlePersisted(
+      reservationInput(fixture.state),
+      contextFor(fixture.observations, forged),
+      {
+        repository,
+        serializationVerifier: authoritativeVerifier(() => fixture.checkpoint, { count: 0 }),
+      },
+    ),
+    (error) => errorCode(error) === "CONFIG_TARGET_SERIALIZATION_UNAVAILABLE",
+  );
+  await assert.rejects(
+    reserveConfigIdBundlePersisted(
+      reservationInput(fixture.state),
+      contextFor(fixture.observations, fixture.checkpoint),
+      { repository },
+    ),
+    (error) => errorCode(error) === "CONFIG_TARGET_SERIALIZATION_UNAVAILABLE",
+  );
+  assert.equal(repository.current().state.configIdGovernance.reservationLedger.length, 0);
+});
+
+test("同一 part + stableModelKey 仍由 ledger 永久唯一约束阻断", () => {
   const fixture = buildGovernanceFixture();
   fixture.state.purchasableModels[1]!.stableModelKey = "alpha";
-  const repository = inMemoryRepository(fixture.state);
-  const settled = await Promise.allSettled([
-    reserveConfigIdBundlePersisted(
-      reservationInput(fixture.state, 0, "alpha", "idem:a"),
-      contextFor(fixture.observations, fixture.checkpoint),
-      repository,
-    ),
-    reserveConfigIdBundlePersisted(
-      reservationInput(fixture.state, 1, "alpha", "idem:b"),
+  const first = reserveConfigIdBundle(
+    fixture.state,
+    reservationInput(fixture.state),
+    contextFor(fixture.observations, fixture.checkpoint),
+  );
+  assert.throws(
+    () => reserveConfigIdBundle(
+      first.state,
+      reservationInput(fixture.state, 1, "alpha", "idem:2"),
       contextFor(fixture.observations, {
         ...fixture.checkpoint,
         leaseId: "lease:2",
         fencingToken: "2",
         operationId: "operation:2",
       }),
-      repository,
     ),
-  ]);
-  assert.equal(settled.filter((entry) => entry.status === "fulfilled").length, 1);
-  const rejected = settled.find((entry) => entry.status === "rejected");
-  assert.equal(rejected?.status, "rejected");
-  if (rejected?.status === "rejected") {
-    assert.equal(errorCode(rejected.reason), "CONFIG_NAME_KEY_CONFLICT");
-  }
-  assert.equal(repository.current().state.configIdGovernance.reservationLedger.length, 1);
+    (error) => errorCode(error) === "CONFIG_NAME_KEY_CONFLICT",
+  );
 });
 
 test("一期默认能力不启用正式 ConfigId 治理动作", () => {

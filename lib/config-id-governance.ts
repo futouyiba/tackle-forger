@@ -29,7 +29,14 @@ export interface ConfigTargetCatalogEntry {
   authoritativeRef: string;
   logicalDirectory: string;
   configTomlPath: string;
+  managedWorkbooks: ConfigTargetManagedWorkbook[];
   requiredForFormal: boolean;
+}
+
+export interface ConfigTargetManagedWorkbook {
+  logicalName: string;
+  workbookPath: string;
+  sheetNames: string[];
 }
 
 export interface ConfigTargetCatalogVersion {
@@ -44,7 +51,10 @@ export interface ConfigTargetCatalogVersion {
 export interface ConfigTargetWorkbookHash {
   logicalName: string;
   workbookPath: string;
-  sheetNames: string[];
+  sheets: Array<{
+    sheetName: string;
+    sheetHash: string;
+  }>;
   workbookHash: string;
 }
 
@@ -80,7 +90,7 @@ export interface ConfigTargetObservedState {
   resolvedCommitOid: string;
   logicalDirectory: string;
   configTomlHash: string;
-  workbookSetHash: string;
+  workbooks: ConfigTargetWorkbookHash[];
 }
 
 export interface ConfigTargetPhysicalRefGroup {
@@ -123,8 +133,6 @@ export interface ConfigTargetSerializationCheckpoint {
     workbookSetHash: string;
   }>;
   expiresAt: string;
-  protectedRefCasAvailable: true;
-  latestFencingTokenVerified: true;
 }
 
 export interface ConfigIdBundle {
@@ -224,6 +232,7 @@ export interface ReserveConfigIdBundleCommand {
   expectedNormalizedStableModelKey: string;
   policyVersionId: string;
   expectedManifestSetHash: string;
+  operationId: string;
   idempotencyKey: string;
 }
 
@@ -300,6 +309,158 @@ function uniqueBy<T>(values: T[], key: (value: T) => string, code: string): T[] 
     seen.add(id);
   }
   return values;
+}
+
+function assertSha256(value: string, field: string) {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) {
+    throw new ConfigIdGovernanceError(
+      "CONFIG_TARGET_SCAN_HASH_INVALID",
+      `${field} 必须是小写 SHA-256 十六进制字符串。`,
+    );
+  }
+}
+
+function assertRepositoryRelativePath(value: string, field: string) {
+  if (
+    typeof value !== "string"
+    || !value
+    || value.startsWith("/")
+    || value.includes("\\")
+    || value.split("/").some((segment) => !segment || segment === "." || segment === "..")
+  ) {
+    throw new ConfigIdGovernanceError(
+      "CONFIG_TARGET_CATALOG_ENTRY_INVALID",
+      `${field} 必须是规范化的仓库内相对路径。`,
+    );
+  }
+}
+
+function normalizeManagedWorkbooks(
+  workbooks: ConfigTargetManagedWorkbook[],
+  targetEntryId: string,
+): ConfigTargetManagedWorkbook[] {
+  if (!Array.isArray(workbooks) || !workbooks.length) {
+    throw new ConfigIdGovernanceError(
+      "CONFIG_TARGET_CATALOG_WORKBOOKS_EMPTY",
+      `${targetEntryId} 必须声明至少一个受管 workbook。`,
+    );
+  }
+  const normalized = uniqueBy(
+    structuredClone(workbooks),
+    (entry) => entry.logicalName,
+    "CONFIG_TARGET_CATALOG_WORKBOOK_DUPLICATE",
+  );
+  uniqueBy(
+    normalized,
+    (entry) => entry.workbookPath,
+    "CONFIG_TARGET_CATALOG_WORKBOOK_PATH_DUPLICATE",
+  );
+  for (const workbook of normalized) {
+    if (typeof workbook.logicalName !== "string" || !workbook.logicalName) {
+      throw new ConfigIdGovernanceError(
+        "CONFIG_TARGET_CATALOG_ENTRY_INVALID",
+        `${targetEntryId} 包含空 workbook 逻辑名。`,
+      );
+    }
+    assertRepositoryRelativePath(
+      workbook.workbookPath,
+      `${targetEntryId}.${workbook.logicalName}.workbookPath`,
+    );
+    if (
+      !Array.isArray(workbook.sheetNames)
+      || !workbook.sheetNames.length
+      || workbook.sheetNames.some((sheetName) => typeof sheetName !== "string" || !sheetName)
+    ) {
+      throw new ConfigIdGovernanceError(
+        "CONFIG_TARGET_CATALOG_SHEETS_EMPTY",
+        `${targetEntryId}/${workbook.logicalName} 必须声明非空 sheet 集合。`,
+      );
+    }
+    workbook.sheetNames = uniqueBy(
+      [...workbook.sheetNames],
+      (sheetName) => sheetName,
+      "CONFIG_TARGET_CATALOG_SHEET_DUPLICATE",
+    ).sort(compareText);
+  }
+  return normalized.sort((left, right) => compareText(left.logicalName, right.logicalName));
+}
+
+function normalizeWorkbookHashes(
+  workbooks: ConfigTargetWorkbookHash[],
+  expected: ConfigTargetManagedWorkbook[],
+  targetEntryId: string,
+): ConfigTargetWorkbookHash[] {
+  if (!Array.isArray(workbooks) || !workbooks.length) {
+    throw new ConfigIdGovernanceError(
+      "CONFIG_TARGET_SCAN_WORKBOOKS_EMPTY",
+      `${targetEntryId} 的扫描结果未包含任何受管 workbook。`,
+    );
+  }
+  const normalized = uniqueBy(
+    structuredClone(workbooks),
+    (entry) => entry.logicalName,
+    "CONFIG_TARGET_SCAN_WORKBOOK_DUPLICATE",
+  );
+  uniqueBy(
+    normalized,
+    (entry) => entry.workbookPath,
+    "CONFIG_TARGET_SCAN_WORKBOOK_PATH_DUPLICATE",
+  );
+  for (const workbook of normalized) {
+    if (typeof workbook.logicalName !== "string" || !workbook.logicalName) {
+      throw new ConfigIdGovernanceError(
+        "CONFIG_TARGET_SCAN_MANIFEST_INVALID",
+        `${targetEntryId} 包含空 workbook 逻辑名。`,
+      );
+    }
+    assertRepositoryRelativePath(
+      workbook.workbookPath,
+      `${targetEntryId}.${workbook.logicalName}.workbookPath`,
+    );
+    assertSha256(workbook.workbookHash, `${targetEntryId}.${workbook.logicalName}.workbookHash`);
+    if (!Array.isArray(workbook.sheets) || !workbook.sheets.length) {
+      throw new ConfigIdGovernanceError(
+        "CONFIG_TARGET_SCAN_SHEETS_EMPTY",
+        `${targetEntryId}/${workbook.logicalName} 的扫描结果未包含任何 sheet。`,
+      );
+    }
+    workbook.sheets = uniqueBy(
+      workbook.sheets,
+      (sheet) => sheet.sheetName,
+      "CONFIG_TARGET_SCAN_SHEET_DUPLICATE",
+    ).sort((left, right) => compareText(left.sheetName, right.sheetName));
+    for (const sheet of workbook.sheets) {
+      if (typeof sheet.sheetName !== "string" || !sheet.sheetName) {
+        throw new ConfigIdGovernanceError(
+          "CONFIG_TARGET_SCAN_MANIFEST_INVALID",
+          `${targetEntryId}/${workbook.logicalName} 包含空 sheet 名。`,
+        );
+      }
+      assertSha256(
+        sheet.sheetHash,
+        `${targetEntryId}.${workbook.logicalName}.${sheet.sheetName}.sheetHash`,
+      );
+    }
+  }
+  normalized.sort((left, right) => compareText(left.logicalName, right.logicalName));
+  const expectedIdentity = expected.map((workbook) => ({
+    logicalName: workbook.logicalName,
+    workbookPath: workbook.workbookPath,
+    sheetNames: workbook.sheetNames,
+  }));
+  const actualIdentity = normalized.map((workbook) => ({
+    logicalName: workbook.logicalName,
+    workbookPath: workbook.workbookPath,
+    sheetNames: workbook.sheets.map((sheet) => sheet.sheetName),
+  }));
+  if (stableStringify(actualIdentity) !== stableStringify(expectedIdentity)) {
+    throw new ConfigIdGovernanceError(
+      "CONFIG_TARGET_SCAN_MANIFEST_COVERAGE_INCOMPLETE",
+      `${targetEntryId} 的扫描结果未恰好覆盖目录声明的 workbook/sheet 闭集。`,
+      { expected: expectedIdentity, actual: actualIdentity },
+    );
+  }
+  return normalized;
 }
 
 function assertDecimalId(value: string, field: string): bigint {
@@ -506,6 +667,9 @@ export function publishConfigTargetCatalogVersion(
     if (!entry.repositoryId || !entry.authoritativeRef || !entry.logicalDirectory || !entry.configTomlPath) {
       throw new ConfigIdGovernanceError("CONFIG_TARGET_CATALOG_ENTRY_INVALID", `${entry.targetEntryId} 缺少权威目标字段。`);
     }
+    assertRepositoryRelativePath(entry.logicalDirectory, `${entry.targetEntryId}.logicalDirectory`);
+    assertRepositoryRelativePath(entry.configTomlPath, `${entry.targetEntryId}.configTomlPath`);
+    entry.managedWorkbooks = normalizeManagedWorkbooks(entry.managedWorkbooks, entry.targetEntryId);
   }
   const version: ConfigTargetCatalogVersion = {
     ...structuredClone(input),
@@ -552,7 +716,6 @@ export function approveConfigTargetScanManifest(
   }
   if (
     !/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(input.resolvedCommitOid)
-    || !input.configTomlHash
     || !input.scannerVersion
     || !input.ruleVersion
   ) {
@@ -561,11 +724,12 @@ export function approveConfigTargetScanManifest(
       "Manifest 缺少可验证 commit、配置 hash 或扫描规则版本。",
     );
   }
-  const workbooks = uniqueBy(
-    structuredClone(input.workbooks),
-    (entry) => entry.logicalName,
-    "CONFIG_TARGET_SCAN_WORKBOOK_DUPLICATE",
-  ).sort((left, right) => compareText(left.logicalName, right.logicalName));
+  assertSha256(input.configTomlHash, `${input.targetEntryId}.configTomlHash`);
+  const workbooks = normalizeWorkbookHashes(
+    input.workbooks,
+    target.managedWorkbooks,
+    input.targetEntryId,
+  );
   const workbookSetHash = sha256(workbooks);
   const manifest: ConfigTargetScanManifest = {
     ...structuredClone(input),
@@ -671,14 +835,21 @@ export function verifyConfigTargetManifestFreshness(
   uniqueBy(observations, (entry) => entry.targetEntryId, "CONFIG_TARGET_OBSERVATION_DUPLICATE");
   for (const manifest of manifests) {
     const observed = observations.find((entry) => entry.targetEntryId === manifest.targetEntryId);
+    const target = catalog.entries.find((entry) => entry.targetEntryId === manifest.targetEntryId);
+    const observedWorkbooks = observed && target
+      ? normalizeWorkbookHashes(observed.workbooks, target.managedWorkbooks, observed.targetEntryId)
+      : undefined;
+    const observedWorkbookSetHash = observedWorkbooks ? sha256(observedWorkbooks) : undefined;
     if (
       !observed
+      || !target
       || observed.repositoryId !== manifest.repositoryId
       || observed.authoritativeRef !== manifest.authoritativeRef
       || observed.resolvedCommitOid !== manifest.resolvedCommitOid
       || observed.logicalDirectory !== manifest.logicalDirectory
       || observed.configTomlHash !== manifest.configTomlHash
-      || observed.workbookSetHash !== manifest.workbookSetHash
+      || observedWorkbookSetHash !== manifest.workbookSetHash
+      || stableStringify(observedWorkbooks) !== stableStringify(manifest.workbooks)
     ) {
       throw new ConfigIdGovernanceError(
         "CONFIG_TARGET_SCAN_MANIFEST_STALE",
@@ -819,6 +990,7 @@ function bundleFor(baseId: string, part: ConfigIdPart, stableModelKey: string, m
 
 function assertSerializationCheckpoint(
   checkpoint: ConfigTargetSerializationCheckpoint | undefined,
+  operationId: string,
   policy: ConfigIdPolicyVersion,
   expectedGroups: ConfigTargetPhysicalRefGroup[],
   expectedTargets: ConfigTargetSerializationCheckpoint["targets"],
@@ -829,10 +1001,9 @@ function assertSerializationCheckpoint(
   if (
     !checkpoint
     || checkpoint.state !== "COMMITTING"
+    || checkpoint.operationId !== operationId
     || checkpoint.catalogVersionId !== policy.catalogVersionId
     || checkpoint.manifestSetHash !== policy.manifestSetHash
-    || checkpoint.protectedRefCasAvailable !== true
-    || checkpoint.latestFencingTokenVerified !== true
     || !/^[1-9][0-9]*$/.test(checkpoint.fencingToken)
     || stableStringify(checkpoint.physicalRefs) !== stableStringify(expectedGroups)
     || stableStringify(checkpoint.targets) !== stableStringify(expectedTargets)
@@ -855,6 +1026,7 @@ function commandHash(command: ReserveConfigIdBundleCommand) {
     expectedNormalizedStableModelKey: command.expectedNormalizedStableModelKey,
     policyVersionId: command.policyVersionId,
     expectedManifestSetHash: command.expectedManifestSetHash,
+    operationId: command.operationId,
     idempotencyKey: command.idempotencyKey,
   });
 }
@@ -1020,6 +1192,7 @@ export function reserveConfigIdBundle(
   })).sort((left, right) => compareText(left.targetEntryId, right.targetEntryId));
   assertSerializationCheckpoint(
     context.serializationCheckpoint,
+    command.operationId,
     policy,
     physicalGroups,
     expectedTargets,

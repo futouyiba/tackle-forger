@@ -4,6 +4,8 @@ import { NextRequest } from "next/server";
 import { PUT as putState } from "../app/api/state/route";
 import { POST as accessDataSources } from "../app/api/data-sources/route";
 import { POST as createSeries } from "../app/api/series/route";
+import { POST as changeSkuTargetPull } from "../app/api/skus/target-pull/route";
+import { POST as previewSkuTargetPull } from "../app/api/skus/target-pull/preview/route";
 import {
   resolvePartConstraintSourceRevision,
   resolvePartConstraintSetRef,
@@ -373,4 +375,62 @@ test("Series 创建相同幂等键恢复原结果，不同输入冲突", { concu
   const recovered = await send(concurrentBody);
   assert.equal(recovered.status, 200);
   assert.equal(((await recovered.json()) as { idempotent?: boolean }).idempotent, true);
+});
+
+test("SKU 拉力提交拒绝与预览不一致的冻结分支并返回409", { concurrency: false }, async () => {
+  withTrustedProxy();
+  const { state } = await loadWorkspaceState();
+  const sku = state.skuDrawers.find(
+    (entry) =>
+      entry.status !== "superseded" &&
+      !state.configurationSnapshots.some((snapshot) =>
+        state.purchasableModels.some(
+          (model) =>
+            model.id === snapshot.modelId && model.skuId === entry.id,
+        )),
+  )!;
+  assert.ok(sku);
+  const targetPullKg = sku.targetPullKg + 0.37;
+  const previewResponse = await previewSkuTargetPull(new NextRequest(
+    "http://localhost/api/skus/target-pull/preview",
+    {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({
+        skuId: sku.id,
+        expectedRevision: sku.revision,
+        targetPullKg,
+      }),
+    },
+  ));
+  assert.equal(previewResponse.status, 200);
+  const preview = await previewResponse.json() as {
+    projectionMatch: unknown;
+    mode: "SAME_SKU_NEW_REVISION" | "REPLACEMENT_SKU";
+    publishedDescendantFingerprint: string;
+  };
+  const response = await changeSkuTargetPull(new NextRequest(
+    "http://localhost/api/skus/target-pull",
+    {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({
+        skuId: sku.id,
+        expectedRevision: sku.revision,
+        targetPullKg,
+        projectionMatch: preview.projectionMatch,
+        expectedMode: preview.mode === "SAME_SKU_NEW_REVISION"
+          ? "REPLACEMENT_SKU"
+          : "SAME_SKU_NEW_REVISION",
+        publishedDescendantFingerprint:
+          preview.publishedDescendantFingerprint,
+        replacementSkuId: "sku:must-not-be-created",
+        deprecateOriginal: true,
+        idempotencyKey: "route:sku-preview-drift",
+      }),
+    },
+  ));
+  assert.equal(response.status, 409);
+  const payload = await response.json() as { code?: string };
+  assert.equal(payload.code, "PREVIEW_STALE");
 });

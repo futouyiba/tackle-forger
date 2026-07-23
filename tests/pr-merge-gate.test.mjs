@@ -9,6 +9,7 @@ import {
   currentWorkflowRunAttemptJobs,
   parsePullRequestRunName,
   pullRequestRunProvenance,
+  readPullRequestWithCurrentBase,
   readStableMergeGateSnapshot,
   selectLatestPullRequestWorkflowRun,
 } from "../scripts/check-pr-merge-gate.mjs";
@@ -73,6 +74,113 @@ test("an unavailable current base fails closed", async () => {
       (blocker) => blocker.code === "CURRENT_BASE_UNAVAILABLE",
     ),
   );
+});
+
+test("live pull request snapshots use the repository ref tip instead of stale PR base metadata", async () => {
+  const staleBaseSha = "d".repeat(40);
+  const currentBaseSha = "e".repeat(40);
+  const requestedPaths = [];
+  const client = {
+    request: async (path) => {
+      requestedPaths.push(path);
+      if (path.endsWith("/pulls/63")) {
+        return {
+          number: 63,
+          html_url: "https://example.test/pull/63",
+          draft: false,
+          state: "open",
+          head: { sha: "a".repeat(40) },
+          base: { ref: "main", sha: staleBaseSha },
+          updated_at: "2026-07-23T08:00:00Z",
+          user: { login: "author", type: "User" },
+        };
+      }
+      if (path.endsWith("/git/ref/heads/main")) {
+        return { object: { sha: currentBaseSha } };
+      }
+      throw new Error(`Unexpected path: ${path}`);
+    },
+  };
+
+  const pullRequest = await readPullRequestWithCurrentBase({
+    client,
+    prefix: "/repos/owner/repo",
+    pullNumber: 63,
+  });
+  const snapshot = await fixture("ready-normal");
+  snapshot.pullRequest = pullRequest;
+  for (const check of snapshot.checks) {
+    check.pullNumber = 63;
+  }
+  const result = evaluatePullRequestMergeGate(snapshot);
+
+  assert.equal(pullRequest.baseSnapshotSha, staleBaseSha);
+  assert.equal(pullRequest.baseSha, currentBaseSha);
+  assert.deepEqual(requestedPaths, [
+    "/repos/owner/repo/pulls/63",
+    "/repos/owner/repo/git/ref/heads/main",
+  ]);
+  assert.deepEqual(
+    result.blockers.map((blocker) => blocker.code),
+    ["CI_BASE_STALE", "CI_BASE_STALE", "CI_BASE_STALE"],
+  );
+});
+
+test("the live target ref tip participates in pull request stability sampling", async () => {
+  const snapshotTemplate = await fixture("ready-normal");
+  const staleBaseSha = "d".repeat(40);
+  const currentBaseSha = "e".repeat(40);
+  const sampledTips = [
+    staleBaseSha,
+    currentBaseSha,
+    currentBaseSha,
+    currentBaseSha,
+  ];
+  let refReads = 0;
+  const client = {
+    request: async (path) => {
+      if (path.endsWith("/pulls/63")) {
+        return {
+          number: 63,
+          html_url: "https://example.test/pull/63",
+          draft: false,
+          state: "open",
+          head: { sha: "a".repeat(40) },
+          base: { ref: "main", sha: staleBaseSha },
+          updated_at: "2026-07-23T08:00:00Z",
+          user: { login: "author", type: "User" },
+        };
+      }
+      if (path.endsWith("/git/ref/heads/main")) {
+        const sha = sampledTips[refReads];
+        refReads += 1;
+        return { object: { sha } };
+      }
+      throw new Error(`Unexpected path: ${path}`);
+    },
+  };
+  const readPullRequest = () =>
+    readPullRequestWithCurrentBase({
+      client,
+      prefix: "/repos/owner/repo",
+      pullNumber: 63,
+    });
+  const readEvidence = async () => ({
+    checks: snapshotTemplate.checks,
+    reviews: snapshotTemplate.reviews,
+    reviewThreads: snapshotTemplate.reviewThreads,
+  });
+
+  const snapshot = await readStableMergeGateSnapshot({
+    readPullRequest,
+    readEvidence,
+    riskLevel: "normal",
+    maxAttempts: 2,
+  });
+
+  assert.equal(refReads, 4);
+  assert.equal(snapshot.pullRequest.baseSnapshotSha, staleBaseSha);
+  assert.equal(snapshot.pullRequest.baseSha, currentBaseSha);
 });
 
 test("a current-head COMMENTED Agent review satisfies high-risk review", async () => {

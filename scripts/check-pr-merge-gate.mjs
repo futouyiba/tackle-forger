@@ -497,14 +497,15 @@ export function currentWorkflowRunAttemptJobs(jobs, workflowRun) {
   );
 }
 
-function normalizePullRequest(payload) {
+function normalizePullRequest(payload, currentBaseSha) {
   return {
     number: payload.number,
     url: payload.html_url,
     isDraft: payload.draft === true,
     state: payload.state,
     headSha: payload.head?.sha,
-    baseSha: payload.base?.sha,
+    baseSha: currentBaseSha,
+    baseSnapshotSha: payload.base?.sha,
     baseRef: payload.base?.ref,
     updatedAt: payload.updated_at,
     author: {
@@ -512,6 +513,28 @@ function normalizePullRequest(payload) {
       type: payload.user?.type,
     },
   };
+}
+
+export async function readPullRequestWithCurrentBase({
+  client,
+  prefix,
+  pullNumber,
+}) {
+  const payload = await client.request(`${prefix}/pulls/${pullNumber}`);
+  const baseRef = payload.base?.ref;
+  let currentBaseSha;
+
+  if (typeof baseRef === "string" && baseRef.trim() !== "") {
+    const qualifiedRef = `heads/${baseRef}`;
+    const encodedRef = qualifiedRef
+      .split("/")
+      .map((segment) => encodeURIComponent(segment))
+      .join("/");
+    const refPayload = await client.request(`${prefix}/git/ref/${encodedRef}`);
+    currentBaseSha = refPayload.object?.sha;
+  }
+
+  return normalizePullRequest(payload, currentBaseSha);
 }
 
 function compareCanonicalElements(left, right) {
@@ -638,9 +661,7 @@ async function readLiveSnapshot({ repository, pullNumber, riskLevel }) {
   const prefix = `/repos/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repo)}`;
 
   const readPullRequest = async () =>
-    normalizePullRequest(
-      await client.request(`${prefix}/pulls/${pullNumber}`),
-    );
+    readPullRequestWithCurrentBase({ client, prefix, pullNumber });
   const readEvidence = async (_headSha, pullRequest) => {
     const [reviewPayloads, checks, reviewThreads] = await Promise.all([
       client.paginate(`${prefix}/pulls/${pullNumber}/reviews`),

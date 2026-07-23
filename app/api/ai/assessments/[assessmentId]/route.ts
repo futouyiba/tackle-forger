@@ -1,6 +1,13 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { requestUser } from "@/lib/auth";
+import {
+  buildWorkspaceAssessmentRequestProjection,
+  workspaceAssessmentScopeExists,
+} from "@/lib/ai-assessment-request";
+import { prepareAIRequest } from "@/lib/ai-outbound";
+import { evaluateAIAssessmentFreshness } from "@/lib/ai-retention";
 import { AIRuntimeStoreError, createAIRuntimeStoreFromEnvironment } from "@/lib/ai-runtime-store";
+import { loadWorkspaceState } from "@/lib/storage";
 
 export const dynamic = "force-dynamic";
 
@@ -29,8 +36,39 @@ export async function GET(
     await store.initialize();
     const record = await store.readAssessmentForActor({ assessmentId, actorStableId });
     if (!record) return NextResponse.json({ error: "AI 评估不存在。", code: "AI_ASSESSMENT_NOT_FOUND" }, { status: 404 });
+    let currentInput;
+    const metadata = record.metadata;
+    if (metadata?.scope
+      && (metadata.scope.scopeType === "series" || metadata.scope.scopeType === "model")) {
+      const scope = { scopeType: metadata.scope.scopeType, scopeId: metadata.scope.scopeId };
+      const current = await loadWorkspaceState();
+      if (workspaceAssessmentScopeExists(current.state, scope)) {
+        const projection = buildWorkspaceAssessmentRequestProjection({
+          state: current.state,
+          scope,
+          assessmentId,
+          model: metadata.modelDescriptor,
+        });
+        currentInput = {
+          scopeType: projection.operationMetadataContext.scopeType,
+          scopeId: projection.operationMetadataContext.scopeId,
+          inputRevision: projection.operationMetadataContext.scopeRevision,
+          ruleSetVersion: projection.operationMetadataContext.ruleSetVersion,
+          fiveAxisRuleVersion: projection.operationMetadataContext.fiveAxisRuleVersion,
+          inputHash: prepareAIRequest({ envelope: projection.envelope }).inputHash,
+        };
+      }
+    }
+    const freshness = metadata
+      ? evaluateAIAssessmentFreshness(
+        metadata,
+        currentInput,
+        { semanticContentAvailable: Boolean(record.semanticContent) },
+      )
+      : { state: "stale" as const, canCreateDraft: false, staleReasonCodes: ["AI_OPERATION_METADATA_INCOMPLETE"] as const };
     return NextResponse.json({
-      metadata: record.metadata,
+      metadata,
+      freshness,
       semanticContent: record.semanticContent,
       acceptedArtifactProvenance: record.acceptedArtifactProvenance,
       visibility: record.visibility,

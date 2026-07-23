@@ -24,6 +24,29 @@ export interface AIOperationMetadataRecord {
   assessmentId: string;
   actorStableId: string;
   scopeStableRef: string;
+  /**
+   * v2 fields are optional only so pre-v2 retained records remain readable.
+   * Every new successful or failed provider call must write the full ledger.
+   */
+  metadataSchemaVersion?: "ai-operation-metadata/v2";
+  scope?: {
+    scopeType: "series" | "sku" | "model" | "candidate_set";
+    scopeId: string;
+    inputRevision: string;
+  };
+  ruleSetVersion?: string;
+  fiveAxisRuleVersion?: string;
+  attempts?: Array<{
+    attemptNumber: number;
+    attemptKind: "INITIAL" | "RETRY" | "FALLBACK";
+    modelDescriptor: AIModelDescriptorV1;
+    requestedAt: string;
+    completedAt: string;
+    inputHash: Sha256Hex;
+    resultCode: string;
+  }>;
+  retryCount?: number;
+  cancellationStatus?: "NOT_REQUESTED" | "REQUESTED" | "CANCELLED" | "CANCELLATION_FAILED";
   modelDescriptor: AIModelDescriptorV1;
   promptTemplateVersion: string;
   promptTemplateHash: Sha256Hex;
@@ -39,6 +62,31 @@ export interface AIOperationMetadataRecord {
   costMicroUsd?: number;
   resultCode: string;
   state: "ACTIVE" | "USER_DELETED" | "EXPIRED";
+}
+
+export interface AIAssessmentCurrentInput {
+  scopeType: "series" | "sku" | "model" | "candidate_set";
+  scopeId: string;
+  inputRevision: string;
+  ruleSetVersion: string;
+  fiveAxisRuleVersion: string;
+  inputHash: Sha256Hex;
+}
+
+export interface AIAssessmentFreshness {
+  state: "fresh" | "stale";
+  canCreateDraft: boolean;
+  staleReasonCodes: Array<
+    | "AI_OPERATION_METADATA_INCOMPLETE"
+    | "AI_SCOPE_NOT_FOUND"
+    | "AI_SCOPE_CHANGED"
+    | "AI_INPUT_REVISION_CHANGED"
+    | "AI_INPUT_HASH_CHANGED"
+    | "AI_RULESET_VERSION_CHANGED"
+    | "AI_FIVE_AXIS_RULE_VERSION_CHANGED"
+    | "AI_ASSESSMENT_NOT_SUCCESSFUL"
+    | "AI_SEMANTIC_CONTENT_UNAVAILABLE"
+  >;
 }
 
 export interface AIUnacceptedSemanticContent {
@@ -113,6 +161,54 @@ function assessmentId(record: AIAssessmentRetentionRecord): string {
   const value = record.metadata?.assessmentId ?? record.acceptedArtifactProvenance?.assessmentId;
   if (!value) throw new Error("AI 评估保留记录缺少 assessmentId，不能建立删除墓碑。" );
   return value;
+}
+
+export function evaluateAIAssessmentFreshness(
+  metadata: AIOperationMetadataRecord,
+  current: AIAssessmentCurrentInput | undefined,
+  options: { semanticContentAvailable?: boolean } = {},
+): AIAssessmentFreshness {
+  const reasons: AIAssessmentFreshness["staleReasonCodes"] = [];
+  if (metadata.metadataSchemaVersion !== "ai-operation-metadata/v2"
+    || !metadata.scope
+    || !metadata.ruleSetVersion
+    || !metadata.fiveAxisRuleVersion
+    || !metadata.attempts
+    || metadata.retryCount === undefined
+    || !metadata.cancellationStatus) {
+    reasons.push("AI_OPERATION_METADATA_INCOMPLETE");
+  }
+  if (metadata.resultCode !== "SUCCESS") {
+    reasons.push("AI_ASSESSMENT_NOT_SUCCESSFUL");
+  }
+  if (options.semanticContentAvailable === false) {
+    reasons.push("AI_SEMANTIC_CONTENT_UNAVAILABLE");
+  }
+  if (!current) {
+    reasons.push("AI_SCOPE_NOT_FOUND");
+  } else if (metadata.scope) {
+    if (metadata.scope.scopeType !== current.scopeType || metadata.scope.scopeId !== current.scopeId) {
+      reasons.push("AI_SCOPE_CHANGED");
+    }
+    if (metadata.scope.inputRevision !== current.inputRevision) {
+      reasons.push("AI_INPUT_REVISION_CHANGED");
+    }
+    if (metadata.inputHash !== current.inputHash) {
+      reasons.push("AI_INPUT_HASH_CHANGED");
+    }
+    if (metadata.ruleSetVersion !== current.ruleSetVersion) {
+      reasons.push("AI_RULESET_VERSION_CHANGED");
+    }
+    if (metadata.fiveAxisRuleVersion !== current.fiveAxisRuleVersion) {
+      reasons.push("AI_FIVE_AXIS_RULE_VERSION_CHANGED");
+    }
+  }
+  const staleReasonCodes = [...new Set(reasons)];
+  return {
+    state: staleReasonCodes.length ? "stale" : "fresh",
+    canCreateDraft: staleReasonCodes.length === 0,
+    staleReasonCodes,
+  };
 }
 
 export function encryptAIRawContent(input: {

@@ -95,6 +95,11 @@ interface AIAssessmentUiState {
   error?: string;
   assessmentId?: string;
   outputHash?: string;
+  freshness?: {
+    state: "fresh" | "stale";
+    canCreateDraft: boolean;
+    staleReasonCodes: string[];
+  };
   result?: {
     findings: Array<{ findingCode: string; summary: string; evidenceAliases: string[] }>;
     recommendations: Array<{ recommendationCode: string; title: string; summary: string; suggestedAction: string; evidenceAliases: string[] }>;
@@ -767,6 +772,9 @@ function ModelDrawer({
               <div><dt>草稿能力</dt><dd>仅建议；草稿仍需独立确定性预览</dd></div>
             </dl>
             {aiAssessment?.status === "error" ? <div className="gantt-unavailable"><AlertTriangle size={18} /><div><strong>评估未完成</strong><span>{aiAssessment.error}</span></div></div> : null}
+            {aiAssessment?.status === "success" && aiAssessment.freshness?.state === "stale" ? (
+              <div className="gantt-unavailable"><AlertTriangle size={18} /><div><strong>历史评估已过期</strong><span>当前输入已经变化；旧结果只读，必须重新评估后才能转草稿。</span></div></div>
+            ) : null}
             {aiAssessment?.status === "success" && aiAssessment.result ? (
               <div className="gantt-ai-result">
                 <strong>{aiAssessment.result.findings.length} 条发现 · {aiAssessment.result.recommendations.length} 条建议</strong>
@@ -905,6 +913,49 @@ export function SeriesGanttWorkbenchV3({
       notify(message);
     }
   };
+  const assessmentRestoreScopeType = drawerModel ? "model" as const : "series" as const;
+  const assessmentRestoreScopeId = drawerModel?.id ?? selectedSeries?.id ?? "";
+  useEffect(() => {
+    if (!assessmentRestoreScopeId) return;
+    const scopeKey = `${assessmentRestoreScopeType}:${assessmentRestoreScopeId}`;
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const response = await fetch(
+          `/api/ai/assessments?scopeType=${assessmentRestoreScopeType}&scopeId=${encodeURIComponent(assessmentRestoreScopeId)}`,
+          { method: "GET", signal: controller.signal },
+        );
+        if (response.status === 404) {
+          setAiAssessment((currentAssessment) =>
+            currentAssessment?.scopeKey === scopeKey && currentAssessment.status === "running"
+              ? currentAssessment
+              : undefined);
+          return;
+        }
+        const payload = await response.json().catch(() => null) as (AIAssessmentUiState & { error?: string }) | null;
+        if (!response.ok || !payload?.assessmentId) {
+          throw new Error(payload?.error ?? "无法恢复最近一次 AI 评估。");
+        }
+        setAiAssessment((currentAssessment) =>
+          currentAssessment?.scopeKey === scopeKey && currentAssessment.status === "running"
+            ? currentAssessment
+            : payload.result
+              ? { ...payload, scopeKey, status: "success" }
+              : { ...payload, scopeKey, status: "error", error: "最近一次 AI 评估未成功生成可用建议。" });
+      } catch (caught) {
+        if (controller.signal.aborted) return;
+        const message = caught instanceof Error ? caught.message : "无法恢复最近一次 AI 评估。";
+        setAiAssessment((currentAssessment) =>
+          currentAssessment?.scopeKey === scopeKey && currentAssessment.status === "running"
+            ? currentAssessment
+            : { scopeKey, status: "error", error: message });
+      }
+    })();
+    return () => controller.abort();
+  }, [
+    assessmentRestoreScopeId,
+    assessmentRestoreScopeType,
+  ]);
   const contextBreadcrumbs = buildProductBreadcrumbs({
     workspaceId,
     collection: drawerSeries?.collectionId

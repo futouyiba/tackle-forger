@@ -16,7 +16,8 @@ import {
   FancyHubError,
   type FancyHubRawAssessmentAttempt,
 } from "@/lib/fancy-hub";
-import { AIOutboundError } from "@/lib/ai-outbound";
+import { AIOutboundError, prepareAIRequest } from "@/lib/ai-outbound";
+import { evaluateAIAssessmentFreshness } from "@/lib/ai-retention";
 import { loadWorkspaceState } from "@/lib/storage";
 
 export const dynamic = "force-dynamic";
@@ -28,6 +29,78 @@ function assessmentRequest(value: unknown): { scopeType: "series" | "model"; sco
   if (record.scopeType !== "series" && record.scopeType !== "model") return undefined;
   if (typeof record.scopeId !== "string" || !/^[A-Za-z0-9_.:-]{1,128}$/.test(record.scopeId)) return undefined;
   return { scopeType: record.scopeType, scopeId: record.scopeId };
+}
+
+function assessmentScopeFromQuery(request: NextRequest): { scopeType: "series" | "model"; scopeId: string } | undefined {
+  const scopeType = request.nextUrl.searchParams.get("scopeType");
+  const scopeId = request.nextUrl.searchParams.get("scopeId");
+  if ((scopeType !== "series" && scopeType !== "model")
+    || !scopeId
+    || !/^[A-Za-z0-9_.:-]{1,128}$/.test(scopeId)) {
+    return undefined;
+  }
+  return { scopeType, scopeId };
+}
+
+export async function GET(request: NextRequest) {
+  const user = await requestUser(request);
+  if (!user.authenticated) return NextResponse.json({ error: "请使用公司飞书账号登录。" }, { status: 401 });
+  const scope = assessmentScopeFromQuery(request);
+  if (!scope) {
+    return NextResponse.json(
+      { error: "AI 评估索引请求格式无效。", code: "AI_ASSESSMENT_INDEX_REQUEST_INVALID" },
+      { status: 400 },
+    );
+  }
+  const current = await loadWorkspaceState();
+  if (!workspaceAssessmentScopeExists(current.state, scope)) {
+    return NextResponse.json({ error: "评估对象不存在或已经变化。", code: "AI_SCOPE_NOT_FOUND" }, { status: 404 });
+  }
+  try {
+    const store = createAIRuntimeStoreFromEnvironment();
+    await store.initialize();
+    const [record] = await store.listAssessmentsForActorScope({
+      actorStableId: user.openId ?? user.email,
+      ...scope,
+    });
+    if (!record?.metadata) {
+      return NextResponse.json({ error: "AI 评估不存在。", code: "AI_ASSESSMENT_NOT_FOUND" }, { status: 404 });
+    }
+    const projection = buildWorkspaceAssessmentRequestProjection({
+      state: current.state,
+      scope,
+      assessmentId: record.metadata.assessmentId,
+      model: record.metadata.modelDescriptor,
+    });
+    const freshness = evaluateAIAssessmentFreshness(
+      record.metadata,
+      {
+        scopeType: projection.operationMetadataContext.scopeType,
+        scopeId: projection.operationMetadataContext.scopeId,
+        inputRevision: projection.operationMetadataContext.scopeRevision,
+        ruleSetVersion: projection.operationMetadataContext.ruleSetVersion,
+        fiveAxisRuleVersion: projection.operationMetadataContext.fiveAxisRuleVersion,
+        inputHash: prepareAIRequest({ envelope: projection.envelope }).inputHash,
+      },
+      { semanticContentAvailable: Boolean(record.semanticContent) },
+    );
+    return NextResponse.json({
+      assessmentId: record.metadata.assessmentId,
+      inputHash: record.metadata.inputHash,
+      outputHash: record.metadata.outputHash,
+      modelDescriptor: record.metadata.modelDescriptor,
+      metadata: record.metadata,
+      freshness,
+      result: record.semanticContent,
+      acceptedArtifactProvenance: record.acceptedArtifactProvenance,
+      visibility: record.visibility,
+    });
+  } catch (error) {
+    if (error instanceof AIRuntimeStoreError) {
+      return NextResponse.json({ error: "AI 留存服务暂时不可用。", code: error.code }, { status: 503 });
+    }
+    return NextResponse.json({ error: "AI 留存服务暂时不可用。", code: "AI_RETENTION_UNKNOWN_FAILURE" }, { status: 503 });
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -80,7 +153,7 @@ export async function POST(request: NextRequest) {
     await store.saveAssessment(store.successfulAssessmentRecord({
       assessmentId,
       actorStableId,
-      scopeStableRef: `${body.scopeType}:${body.scopeId}`,
+      operationMetadataContext: requestProjection.operationMetadataContext,
       requestedAt,
       completedAt,
       requestEnvelope: result.requestEnvelope,
@@ -111,7 +184,7 @@ export async function POST(request: NextRequest) {
         await runtimeStore.saveAssessment(runtimeStore.failedAssessmentRecord({
           assessmentId,
           actorStableId,
-          scopeStableRef: `${body.scopeType}:${body.scopeId}`,
+          operationMetadataContext: requestProjection.operationMetadataContext,
           requestedAt,
           completedAt,
           resultCode,

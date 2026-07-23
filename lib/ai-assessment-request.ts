@@ -26,6 +26,13 @@ type AssessmentScope = { scopeType: "series" | "model"; scopeId: string };
 export interface WorkspaceAssessmentRequestProjection {
   envelope: AIRequestEnvelopeV1;
   prompt: string;
+  operationMetadataContext: {
+    scopeType: AssessmentScope["scopeType"];
+    scopeId: string;
+    scopeRevision: string;
+    ruleSetVersion: string;
+    fiveAxisRuleVersion: string;
+  };
   requestAliasMapping: Array<{
     alias: RequestAlias;
     reference: LocalAliasReferenceV1;
@@ -51,12 +58,32 @@ function requestAliasMapping(
     .sort((left, right) => left.alias < right.alias ? -1 : left.alias > right.alias ? 1 : 0);
 }
 
+function currentPublishedRuleSetVersion(state: WorkspaceState): string {
+  const current = state.ruleSetVersions
+    .filter((entry) => entry.status === "published")
+    .sort((left, right) => right.version - left.version
+      || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))[0];
+  if (!current) throw new Error("AI_RULESET_VERSION_NOT_FOUND");
+  return current.id;
+}
+
+function currentFiveAxisRuleVersion(state: WorkspaceState): string {
+  const current = state.fiveAxisViewDefinitions
+    .filter((entry) => entry.publicationState === "PUBLISHED")
+    .sort((left, right) => right.revision - left.revision
+      || (left.definitionId < right.definitionId ? -1 : left.definitionId > right.definitionId ? 1 : 0))[0];
+  if (!current) throw new Error("AI_FIVE_AXIS_RULE_VERSION_NOT_FOUND");
+  return current.fiveAxisRuleVersion;
+}
+
 export function buildWorkspaceAssessmentRequestProjection(input: {
   state: WorkspaceState;
   scope: AssessmentScope;
   assessmentId: string;
   model: AIModelDescriptorV1;
 }): WorkspaceAssessmentRequestProjection {
+  const ruleSetVersion = currentPublishedRuleSetVersion(input.state);
+  const fiveAxisRuleVersion = currentFiveAxisRuleVersion(input.state);
   const assessmentRef = reference("assessment", input.assessmentId);
   if (input.scope.scopeType === "series") {
     const series = input.state.seriesDefinitions.find((entry) => entry.id === input.scope.scopeId);
@@ -70,11 +97,20 @@ export function buildWorkspaceAssessmentRequestProjection(input: {
       scopeType: "series",
       id: series.id,
       revision: series.revision,
+      ruleSetVersion,
+      fiveAxisRuleVersion,
       functionIntensityPolicy: series.functionIntensityPolicy,
       targetPullSpecifications: series.targetPullSpecifications,
     }));
     return {
       prompt: AI_ASSESSMENT_PROMPT,
+      operationMetadataContext: {
+        scopeType: "series",
+        scopeId: series.id,
+        scopeRevision: String(series.revision),
+        ruleSetVersion,
+        fiveAxisRuleVersion,
+      },
       requestAliasMapping: requestAliasMapping(aliases, [assessmentRef, seriesRef, revisionRef, evidenceRef]),
       envelope: {
       schemaVersion: AI_REQUEST_SCHEMA_VERSION,
@@ -113,6 +149,8 @@ export function buildWorkspaceAssessmentRequestProjection(input: {
     scopeType: "model",
     id: model.id,
     revision: model.revision,
+    ruleSetVersion,
+    fiveAxisRuleVersion,
     skuId: model.skuId,
     lengthM: model.lengthM,
     price: model.price,
@@ -120,6 +158,13 @@ export function buildWorkspaceAssessmentRequestProjection(input: {
   }));
   return {
     prompt: AI_ASSESSMENT_PROMPT,
+    operationMetadataContext: {
+      scopeType: "model",
+      scopeId: model.id,
+      scopeRevision: String(model.revision),
+      ruleSetVersion,
+      fiveAxisRuleVersion,
+    },
     requestAliasMapping: requestAliasMapping(aliases, [assessmentRef, modelRef, revisionRef, evidenceRef]),
     envelope: {
     schemaVersion: AI_REQUEST_SCHEMA_VERSION,

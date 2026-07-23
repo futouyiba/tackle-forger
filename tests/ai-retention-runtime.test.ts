@@ -6,14 +6,18 @@ import path from "node:path";
 import test from "node:test";
 import { NextRequest } from "next/server";
 import { DELETE as deleteAssessment, GET as getAssessment } from "../app/api/ai/assessments/[assessmentId]/route";
+import { GET as getAssessmentIndex } from "../app/api/ai/assessments/route";
+import { buildWorkspaceAssessmentRequestProjection } from "../lib/ai-assessment-request";
 import { createFileAIBackupPurgeAdapter } from "../lib/ai-backup-purge";
-import { describeFancyHubModels } from "../lib/ai-outbound";
+import { describeFancyHubModels, prepareAIRequest } from "../lib/ai-outbound";
 import {
   AI_RETENTION_POLICY_VERSION,
   encryptAIRawContent,
+  evaluateAIAssessmentFreshness,
   type AIAssessmentRetentionRecord,
 } from "../lib/ai-retention";
 import { createAIRuntimeStoreFromEnvironment } from "../lib/ai-runtime-store";
+import { loadWorkspaceState } from "../lib/storage";
 
 function record(input: { assessmentId: string; actorStableId: string; createdAt: string }): AIAssessmentRetentionRecord {
   return {
@@ -53,6 +57,46 @@ function record(input: { assessmentId: string; actorStableId: string; createdAt:
     operationLogCreatedAt: input.createdAt,
     operationLog: { action: "AI_FANCY_HUB_ASSESSMENT", resultCode: "SUCCESS" },
   };
+}
+
+function indexedRecord(input: {
+  assessmentId: string;
+  actorStableId: string;
+  createdAt: string;
+  scopeType?: "series" | "model";
+  scopeId?: string;
+  scopeRevision?: string;
+  inputHash?: string;
+  ruleSetVersion?: string;
+  fiveAxisRuleVersion?: string;
+  resultCode?: string;
+}): AIAssessmentRetentionRecord {
+  const result = record(input);
+  const metadata = result.metadata!;
+  const scopeType = input.scopeType ?? "model";
+  const scopeId = input.scopeId ?? "model-1";
+  const scopeRevision = input.scopeRevision ?? "1";
+  const inputHash = input.inputHash ?? "b".repeat(64);
+  metadata.metadataSchemaVersion = "ai-operation-metadata/v2";
+  metadata.scopeStableRef = `${scopeType}:${scopeId}`;
+  metadata.scope = { scopeType, scopeId, inputRevision: scopeRevision };
+  metadata.ruleSetVersion = input.ruleSetVersion ?? "rules-v1";
+  metadata.fiveAxisRuleVersion = input.fiveAxisRuleVersion ?? "five-axis-v1";
+  metadata.inputHash = inputHash;
+  metadata.attempts = [{
+    attemptNumber: 1,
+    attemptKind: "INITIAL",
+    modelDescriptor: structuredClone(metadata.modelDescriptor),
+    requestedAt: input.createdAt,
+    completedAt: input.createdAt,
+    inputHash,
+    resultCode: input.resultCode ?? "SUCCESS",
+  }];
+  metadata.retryCount = 0;
+  metadata.cancellationStatus = "NOT_REQUESTED";
+  metadata.resultCode = input.resultCode ?? "SUCCESS";
+  if (metadata.resultCode !== "SUCCESS") delete result.semanticContent;
+  return result;
 }
 
 test("文件留存只允许所有者读取和删除，删除幂等且立即隐藏", async () => {
@@ -393,6 +437,263 @@ test("备份清除审计中断后重试只补账，不重复执行物理删除",
     else process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64 = previous.key;
     if (previous.keyVersion === undefined) delete process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION;
     else process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION = previous.keyVersion;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("评估新鲜度冻结完整输入账本，失败或语义到期时始终禁止转草稿", () => {
+  const successful = indexedRecord({
+    assessmentId: "assessment-freshness-success",
+    actorStableId: "owner-freshness",
+    createdAt: "2026-07-23T00:00:00.000Z",
+  }).metadata!;
+  const current = {
+    scopeType: "model" as const,
+    scopeId: "model-1",
+    inputRevision: "1",
+    ruleSetVersion: "rules-v1",
+    fiveAxisRuleVersion: "five-axis-v1",
+    inputHash: "b".repeat(64),
+  };
+  assert.deepEqual(
+    evaluateAIAssessmentFreshness(successful, current, { semanticContentAvailable: true }),
+    { state: "fresh", canCreateDraft: true, staleReasonCodes: [] },
+  );
+
+  const changed = evaluateAIAssessmentFreshness(successful, {
+    ...current,
+    inputRevision: "2",
+    ruleSetVersion: "rules-v2",
+    fiveAxisRuleVersion: "five-axis-v2",
+    inputHash: "c".repeat(64),
+  }, { semanticContentAvailable: true });
+  assert.equal(changed.state, "stale");
+  assert.equal(changed.canCreateDraft, false);
+  assert.deepEqual(changed.staleReasonCodes, [
+    "AI_INPUT_REVISION_CHANGED",
+    "AI_INPUT_HASH_CHANGED",
+    "AI_RULESET_VERSION_CHANGED",
+    "AI_FIVE_AXIS_RULE_VERSION_CHANGED",
+  ]);
+
+  const failed = indexedRecord({
+    assessmentId: "assessment-freshness-failed",
+    actorStableId: "owner-freshness",
+    createdAt: "2026-07-23T00:00:00.000Z",
+    resultCode: "AI_MODEL_REVISION_MISMATCH",
+  }).metadata!;
+  const failedFreshness = evaluateAIAssessmentFreshness(
+    failed,
+    current,
+    { semanticContentAvailable: false },
+  );
+  assert.equal(failedFreshness.canCreateDraft, false);
+  assert.deepEqual(failedFreshness.staleReasonCodes, [
+    "AI_ASSESSMENT_NOT_SUCCESSFUL",
+    "AI_SEMANTIC_CONTENT_UNAVAILABLE",
+  ]);
+});
+
+test("180 天 raw 到期后完整操作元数据继续保留，权威索引并发保存不覆盖", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "tackle-forger-ai-operation-index-"));
+  const previous = {
+    dataDir: process.env.AI_RETENTION_DATA_DIR,
+    key: process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64,
+    keyVersion: process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION,
+  };
+  process.env.AI_RETENTION_DATA_DIR = path.join(root, "primary");
+  process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64 = randomBytes(32).toString("base64");
+  process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION = "key-v1";
+  try {
+    const store = createAIRuntimeStoreFromEnvironment();
+    await store.initialize();
+    const earlier = indexedRecord({
+      assessmentId: "assessment-index-earlier",
+      actorStableId: "owner-index",
+      createdAt: "2026-07-23T00:00:00.000Z",
+    });
+    const latest = indexedRecord({
+      assessmentId: "assessment-index-latest",
+      actorStableId: "owner-index",
+      createdAt: "2026-07-23T00:00:01.000Z",
+    });
+    await Promise.all([
+      store.saveAssessment(earlier),
+      store.saveAssessment(latest),
+      store.saveAssessment(indexedRecord({
+        assessmentId: "assessment-index-other-owner",
+        actorStableId: "other-owner",
+        createdAt: "2026-07-23T00:00:02.000Z",
+      })),
+    ]);
+
+    const indexed = await store.listAssessmentsForActorScope({
+      actorStableId: "owner-index",
+      scopeType: "model",
+      scopeId: "model-1",
+    });
+    assert.deepEqual(
+      indexed.map((entry) => entry.metadata?.assessmentId),
+      ["assessment-index-latest", "assessment-index-earlier"],
+    );
+
+    await store.sweepRetention({
+      now: new Date("2027-01-21T00:00:02.000Z"),
+      backupAdapter: {
+        async purgeAssessmentBackups() {},
+        async verifyAssessmentBackupsAbsent() { return true; },
+      },
+    });
+    const retained = await store.readAssessmentForActor({
+      assessmentId: "assessment-index-latest",
+      actorStableId: "owner-index",
+    });
+    assert.equal(retained?.encryptedRawContent, undefined);
+    assert.ok(retained?.semanticContent);
+    assert.equal(retained?.metadata?.state, "ACTIVE");
+    assert.deepEqual(retained?.metadata?.scope, {
+      scopeType: "model",
+      scopeId: "model-1",
+      inputRevision: "1",
+    });
+    assert.equal(retained?.metadata?.ruleSetVersion, "rules-v1");
+    assert.equal(retained?.metadata?.fiveAxisRuleVersion, "five-axis-v1");
+    assert.equal(retained?.metadata?.attempts?.[0]?.attemptKind, "INITIAL");
+    assert.equal(retained?.metadata?.retryCount, 0);
+    assert.equal(retained?.metadata?.cancellationStatus, "NOT_REQUESTED");
+    assert.equal(retained?.metadata?.resultCode, "SUCCESS");
+  } finally {
+    if (previous.dataDir === undefined) delete process.env.AI_RETENTION_DATA_DIR;
+    else process.env.AI_RETENTION_DATA_DIR = previous.dataDir;
+    if (previous.key === undefined) delete process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64;
+    else process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64 = previous.key;
+    if (previous.keyVersion === undefined) delete process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION;
+    else process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION = previous.keyVersion;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("GET 评估索引按 owner 和 scope 恢复最新记录，并按当前输入计算 freshness", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "tackle-forger-ai-index-route-"));
+  const names = [
+    "AI_RETENTION_DATA_DIR",
+    "AI_RETENTION_ENCRYPTION_KEY_BASE64",
+    "AI_RETENTION_ENCRYPTION_KEY_VERSION",
+    "FEISHU_TRUST_PROXY_HEADERS",
+    "FEISHU_PROXY_SHARED_SECRET",
+    "FEISHU_TENANT_KEY",
+  ] as const;
+  const previous = new Map(names.map((name) => [name, process.env[name]]));
+  process.env.AI_RETENTION_DATA_DIR = path.join(root, "primary");
+  process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64 = randomBytes(32).toString("base64");
+  process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION = "key-v1";
+  process.env.FEISHU_TRUST_PROXY_HEADERS = "true";
+  process.env.FEISHU_PROXY_SHARED_SECRET = "retention-index-secret";
+  process.env.FEISHU_TENANT_KEY = "tenant";
+  const request = (openId: string, scopeType: string, scopeId: string) =>
+    new NextRequest(`http://localhost/api/ai/assessments?scopeType=${scopeType}&scopeId=${encodeURIComponent(scopeId)}`, {
+      method: "GET",
+      headers: {
+        "x-feishu-tenant-key": "tenant",
+        "x-feishu-open-id": openId,
+        "x-feishu-display-name": openId,
+        "x-tf-proxy-secret": "retention-index-secret",
+      },
+    });
+  try {
+    const current = await loadWorkspaceState();
+    const model = current.state.purchasableModels[0]!;
+    const assessmentId = "assessment-index-route";
+    const modelDescriptor = record({
+      assessmentId,
+      actorStableId: "route-index-owner",
+      createdAt: "2026-07-23T00:00:00.000Z",
+    }).metadata!.modelDescriptor;
+    const projection = buildWorkspaceAssessmentRequestProjection({
+      state: current.state,
+      scope: { scopeType: "model", scopeId: model.id },
+      assessmentId,
+      model: modelDescriptor,
+    });
+    const inputHash = prepareAIRequest({ envelope: projection.envelope }).inputHash;
+    const stored = indexedRecord({
+      assessmentId,
+      actorStableId: "route-index-owner",
+      createdAt: "2026-07-23T00:00:00.000Z",
+      scopeType: "model",
+      scopeId: model.id,
+      scopeRevision: projection.operationMetadataContext.scopeRevision,
+      inputHash,
+      ruleSetVersion: projection.operationMetadataContext.ruleSetVersion,
+      fiveAxisRuleVersion: projection.operationMetadataContext.fiveAxisRuleVersion,
+    });
+    stored.metadata!.modelDescriptor = modelDescriptor;
+    stored.metadata!.attempts![0]!.modelDescriptor = modelDescriptor;
+    const store = createAIRuntimeStoreFromEnvironment();
+    await store.initialize();
+    await store.saveAssessment(stored);
+
+    const restored = await getAssessmentIndex(request("route-index-owner", "model", model.id));
+    assert.equal(restored.status, 200);
+    const payload = await restored.json() as {
+      assessmentId: string;
+      freshness: { state: string; canCreateDraft: boolean };
+      result?: { findings: unknown[] };
+    };
+    assert.equal(payload.assessmentId, assessmentId);
+    assert.deepEqual(payload.freshness, { state: "fresh", canCreateDraft: true, staleReasonCodes: [] });
+    assert.ok(payload.result);
+    assert.equal((await getAssessmentIndex(request("other-user", "model", model.id))).status, 404);
+    assert.equal((await getAssessmentIndex(request("route-index-owner", "model", "model:missing"))).status, 404);
+
+    await store.requestAssessmentDeletion({
+      assessmentId,
+      actorStableId: "route-index-owner",
+      now: new Date("2026-07-23T01:00:00.000Z"),
+    });
+    assert.equal((await getAssessmentIndex(request("route-index-owner", "model", model.id))).status, 404);
+
+    const failedAssessmentId = "assessment-index-route-failed";
+    const failedProjection = buildWorkspaceAssessmentRequestProjection({
+      state: current.state,
+      scope: { scopeType: "model", scopeId: model.id },
+      assessmentId: failedAssessmentId,
+      model: modelDescriptor,
+    });
+    const failed = indexedRecord({
+      assessmentId: failedAssessmentId,
+      actorStableId: "route-index-owner",
+      createdAt: "2026-07-23T02:00:00.000Z",
+      scopeType: "model",
+      scopeId: model.id,
+      scopeRevision: failedProjection.operationMetadataContext.scopeRevision,
+      inputHash: prepareAIRequest({ envelope: failedProjection.envelope }).inputHash,
+      ruleSetVersion: failedProjection.operationMetadataContext.ruleSetVersion,
+      fiveAxisRuleVersion: failedProjection.operationMetadataContext.fiveAxisRuleVersion,
+      resultCode: "AI_MODEL_REVISION_MISMATCH",
+    });
+    failed.metadata!.modelDescriptor = modelDescriptor;
+    failed.metadata!.attempts![0]!.modelDescriptor = modelDescriptor;
+    await store.saveAssessment(failed);
+    const failedResponse = await getAssessmentIndex(request("route-index-owner", "model", model.id));
+    assert.equal(failedResponse.status, 200);
+    const failedPayload = await failedResponse.json() as {
+      assessmentId: string;
+      freshness: { canCreateDraft: boolean; staleReasonCodes: string[] };
+      result?: unknown;
+    };
+    assert.equal(failedPayload.assessmentId, failedAssessmentId);
+    assert.equal(failedPayload.freshness.canCreateDraft, false);
+    assert.deepEqual(failedPayload.freshness.staleReasonCodes, [
+      "AI_ASSESSMENT_NOT_SUCCESSFUL",
+      "AI_SEMANTIC_CONTENT_UNAVAILABLE",
+    ]);
+    assert.equal(failedPayload.result, undefined);
+  } finally {
+    for (const [name, value] of previous) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
     await rm(root, { recursive: true, force: true });
   }
 });

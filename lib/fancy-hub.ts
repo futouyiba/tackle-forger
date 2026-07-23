@@ -75,6 +75,7 @@ export interface AIAssessmentEstimatePolicyV1 {
 export type FancyHubErrorCode =
   | "AI_BATCH_LIMIT_POLICY_MISSING_OR_INVALID"
   | "AI_CONNECTOR_DISABLED"
+  | "AI_FANCY_HUB_RESPONSE_LIMIT_EXCEEDED"
   | "AI_FANCY_HUB_RESPONSE_INVALID"
   | "AI_HARD_LIMIT_EXCEEDED"
   | "AI_HARD_LIMIT_POLICY_MISSING"
@@ -159,6 +160,21 @@ export interface FancyHubRawAssessmentAttempt {
   inputHash: string;
   rawResponse?: unknown;
   resultCode: string;
+}
+
+export const FANCY_HUB_RESPONSE_BYTE_LIMITS = Object.freeze({
+  modelList: 1_048_576,
+  assessment: 262_144,
+});
+
+export interface FancyHubTruncatedRawResponseV1 {
+  schemaVersion: "fancy-hub-truncated-response/v1";
+  endpoint: "model_list" | "assessment";
+  status: number;
+  byteLimit: number;
+  capturedBytes: number;
+  prefixBase64: string;
+  truncated: true;
 }
 
 export interface FancyHubAuditEvent {
@@ -300,7 +316,20 @@ export class FetchFancyHubTransport implements FancyHubTransport {
     } catch {
       throw new FancyHubError("AI_PROVIDER_TEMPORARILY_UNAVAILABLE", "Fancy Hub 网络请求失败。", true);
     }
-    const rawResponseText = await response.text().catch(() => "");
+    const byteLimit = path === "v1/models"
+      ? FANCY_HUB_RESPONSE_BYTE_LIMITS.modelList
+      : FANCY_HUB_RESPONSE_BYTE_LIMITS.assessment;
+    const endpoint = path === "v1/models" ? "model_list" : "assessment";
+    const rawResponse = await readBoundedFancyHubResponse(response, { byteLimit, endpoint });
+    if (typeof rawResponse !== "string") {
+      throw new FancyHubError(
+        "AI_FANCY_HUB_RESPONSE_LIMIT_EXCEEDED",
+        `Fancy Hub ${endpoint} 响应超过 ${byteLimit} 字节硬上限。`,
+        false,
+        rawResponse,
+      );
+    }
+    const rawResponseText = rawResponse;
     if (!response.ok) {
       throw new FancyHubError(
         response.status === 429 || response.status >= 500 ? "AI_PROVIDER_TEMPORARILY_UNAVAILABLE" : "AI_FANCY_HUB_RESPONSE_INVALID",
@@ -341,6 +370,52 @@ export class FetchFancyHubTransport implements FancyHubTransport {
     });
     return new FancyHubDecodedTransportResponse(response.value, response.rawResponseText);
   }
+}
+
+async function readBoundedFancyHubResponse(
+  response: Response,
+  input: { byteLimit: number; endpoint: FancyHubTruncatedRawResponseV1["endpoint"] },
+): Promise<string | FancyHubTruncatedRawResponseV1> {
+  if (!response.body) return "";
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let capturedBytes = 0;
+  try {
+    while (true) {
+      const current = await reader.read();
+      if (current.done) break;
+      if (!(current.value instanceof Uint8Array)) {
+        await reader.cancel().catch(() => undefined);
+        throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", "Fancy Hub 响应流不是 UTF-8 字节流。");
+      }
+      const remaining = input.byteLimit - capturedBytes;
+      if (current.value.byteLength > remaining) {
+        if (remaining > 0) {
+          chunks.push(current.value.slice(0, remaining));
+          capturedBytes += remaining;
+        }
+        await reader.cancel().catch(() => undefined);
+        return {
+          schemaVersion: "fancy-hub-truncated-response/v1",
+          endpoint: input.endpoint,
+          status: response.status,
+          byteLimit: input.byteLimit,
+          capturedBytes,
+          prefixBase64: Buffer.concat(chunks, capturedBytes).toString("base64"),
+          truncated: true,
+        };
+      }
+      chunks.push(current.value);
+      capturedBytes += current.value.byteLength;
+    }
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    if (error instanceof FancyHubError) throw error;
+    throw new FancyHubError("AI_PROVIDER_TEMPORARILY_UNAVAILABLE", "Fancy Hub 响应流读取失败。", true);
+  } finally {
+    reader.releaseLock();
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks, capturedBytes));
 }
 
 class FancyHubDecodedTransportResponse {
@@ -794,12 +869,19 @@ export class FancyHubConnector {
           };
           try {
             await lease.consumeAssessmentRequest({ nowMs: Date.now(), maxRequestsPerMinute: limits.maxRequestsPerMinute });
+            const transportRemainingMs = batchDeadlineMs - Date.now();
+            if (transportRemainingMs <= 0) {
+              throw new FancyHubError(
+                "AI_HARD_LIMIT_EXCEEDED",
+                "批次在评估请求准入等待后已经达到 10 分钟硬期限。",
+              );
+            }
             const transportResponse = await this.transport.assess({
               canonicalJson: prepared.canonicalJson,
               inputHash: prepared.inputHash,
               model,
               maxOutputTokens: Math.min(modelEstimate.outputTokens, limits.maxOutputTokens),
-              timeoutMs: Math.min(limits.requestTimeoutMs, remainingMs),
+              timeoutMs: Math.min(limits.requestTimeoutMs, transportRemainingMs),
             });
             rawResponse = transportResponse instanceof FancyHubDecodedTransportResponse
               ? transportResponse.rawResponseText

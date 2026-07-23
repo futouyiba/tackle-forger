@@ -11,6 +11,7 @@ import {
   type AIBackupPurgeAdapter,
   type AIRetentionSweepResult,
   type AIAssessmentRetentionRecord,
+  type AIOperationMetadataRecord,
 } from "./ai-retention";
 import {
   AI_PROVIDER_POLICY_VERSION,
@@ -419,6 +420,39 @@ export class FileAIRuntimeStore {
     return this.publicAssessmentRecord(record);
   }
 
+  async listAssessmentsForActorScope(input: {
+    actorStableId: string;
+    scopeType: "series" | "sku" | "model" | "candidate_set";
+    scopeId: string;
+  }): Promise<AIAssessmentRetentionRecord[]> {
+    await mkdir(this.assessmentsDir, { recursive: true, mode: 0o700 });
+    const assessmentIds = (await readdir(this.assessmentsDir, { withFileTypes: true }))
+      .filter((entry) => entry.isFile() && /^[A-Za-z0-9-]{1,128}\.json$/.test(entry.name))
+      .map((entry) => entry.name.slice(0, -5))
+      .sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
+    const records: AIAssessmentRetentionRecord[] = [];
+    for (const id of assessmentIds) {
+      const record = await this.readAssessmentFile(this.assessmentTarget(id));
+      if (!record
+        || record.visibility !== "VISIBLE"
+        || record.metadata?.actorStableId !== input.actorStableId
+        || record.metadata.scope?.scopeType !== input.scopeType
+        || record.metadata.scope.scopeId !== input.scopeId) {
+        continue;
+      }
+      records.push(this.publicAssessmentRecord(record));
+    }
+    return records
+      .sort((left, right) => {
+        const leftRequestedAt = left.metadata?.requestedAt ?? "";
+        const rightRequestedAt = right.metadata?.requestedAt ?? "";
+        if (leftRequestedAt !== rightRequestedAt) return leftRequestedAt > rightRequestedAt ? -1 : 1;
+        const leftId = left.metadata?.assessmentId ?? "";
+        const rightId = right.metadata?.assessmentId ?? "";
+        return leftId > rightId ? -1 : leftId < rightId ? 1 : 0;
+      });
+  }
+
   async requestAssessmentDeletion(input: {
     assessmentId: string;
     actorStableId: string;
@@ -496,7 +530,13 @@ export class FileAIRuntimeStore {
   successfulAssessmentRecord(input: {
     assessmentId: string;
     actorStableId: string;
-    scopeStableRef: string;
+    operationMetadataContext: {
+      scopeType: "series" | "sku" | "model" | "candidate_set";
+      scopeId: string;
+      scopeRevision: string;
+      ruleSetVersion: string;
+      fiveAxisRuleVersion: string;
+    };
     requestedAt: string;
     completedAt: string;
     requestEnvelope: AIRequestEnvelopeV1;
@@ -523,7 +563,10 @@ export class FileAIRuntimeStore {
       metadata: {
         assessmentId: input.assessmentId,
         actorStableId: input.actorStableId,
-        scopeStableRef: input.scopeStableRef,
+        ...this.operationMetadataLedger({
+          context: input.operationMetadataContext,
+          rawAttempts: input.rawAttempts,
+        }),
         modelDescriptor: structuredClone(input.response.model),
         promptTemplateVersion: input.requestEnvelope.promptTemplateVersion,
         promptTemplateHash: input.requestEnvelope.promptTemplateHash,
@@ -564,7 +607,13 @@ export class FileAIRuntimeStore {
   failedAssessmentRecord(input: {
     assessmentId: string;
     actorStableId: string;
-    scopeStableRef: string;
+    operationMetadataContext: {
+      scopeType: "series" | "sku" | "model" | "candidate_set";
+      scopeId: string;
+      scopeRevision: string;
+      ruleSetVersion: string;
+      fiveAxisRuleVersion: string;
+    };
     requestedAt: string;
     completedAt: string;
     resultCode: string;
@@ -595,7 +644,10 @@ export class FileAIRuntimeStore {
       metadata: {
         assessmentId: input.assessmentId,
         actorStableId: input.actorStableId,
-        scopeStableRef: input.scopeStableRef,
+        ...this.operationMetadataLedger({
+          context: input.operationMetadataContext,
+          rawAttempts: input.rawAttempts,
+        }),
         modelDescriptor: structuredClone(lastAttempt.modelDescriptor),
         promptTemplateVersion: lastAttempt.requestEnvelope.promptTemplateVersion,
         promptTemplateHash: lastAttempt.requestEnvelope.promptTemplateHash,
@@ -621,6 +673,50 @@ export class FileAIRuntimeStore {
         resultCode: input.resultCode,
       },
       visibility: "VISIBLE",
+    };
+  }
+
+  private operationMetadataLedger(input: {
+    context: {
+      scopeType: "series" | "sku" | "model" | "candidate_set";
+      scopeId: string;
+      scopeRevision: string;
+      ruleSetVersion: string;
+      fiveAxisRuleVersion: string;
+    };
+    rawAttempts: readonly FancyHubRawAssessmentAttempt[];
+  }): Pick<
+    AIOperationMetadataRecord,
+    "scopeStableRef" | "metadataSchemaVersion" | "scope" | "ruleSetVersion"
+      | "fiveAxisRuleVersion" | "attempts" | "retryCount" | "cancellationStatus"
+  > {
+    const seenModelIds = new Set<string>();
+    const attempts = input.rawAttempts.map((attempt, index) => {
+      const alreadyAttempted = seenModelIds.has(attempt.modelDescriptor.modelId);
+      seenModelIds.add(attempt.modelDescriptor.modelId);
+      return {
+        attemptNumber: index + 1,
+        attemptKind: index === 0 ? "INITIAL" as const : alreadyAttempted ? "RETRY" as const : "FALLBACK" as const,
+        modelDescriptor: structuredClone(attempt.modelDescriptor),
+        requestedAt: attempt.requestedAt,
+        completedAt: attempt.completedAt,
+        inputHash: attempt.inputHash,
+        resultCode: attempt.resultCode,
+      };
+    });
+    return {
+      scopeStableRef: `${input.context.scopeType}:${input.context.scopeId}`,
+      metadataSchemaVersion: "ai-operation-metadata/v2",
+      scope: {
+        scopeType: input.context.scopeType,
+        scopeId: input.context.scopeId,
+        inputRevision: input.context.scopeRevision,
+      },
+      ruleSetVersion: input.context.ruleSetVersion,
+      fiveAxisRuleVersion: input.context.fiveAxisRuleVersion,
+      attempts,
+      retryCount: attempts.filter((attempt) => attempt.attemptKind === "RETRY").length,
+      cancellationStatus: "NOT_REQUESTED",
     };
   }
 

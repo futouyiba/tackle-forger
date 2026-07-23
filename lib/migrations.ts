@@ -1036,6 +1036,50 @@ function stableConstraintSetId(sourceType: string, sourceId: string): string {
   return `part-constraint-set:${sourceType}:${encodeURIComponent(sourceId)}`;
 }
 
+function v17NormalizationRequired(identity: string): never {
+  throw new Error(
+    `PART_CONSTRAINT_SET_V17_NORMALIZATION_REQUIRED：${identity} 是旧 schema v17 形态，不能直接提升为 schema v18。`,
+  );
+}
+
+/**
+ * Existing v17 constraint sets are already hash-addressed, so validate their
+ * whole persisted normalization envelope before calculating or dereferencing
+ * anything inside it.  `rawPayload` intentionally permits null; its presence
+ * (rather than truthiness) is the audit contract.
+ */
+function assertV17ConstraintSetNormalization(
+  value: unknown,
+): asserts value is PartConstraintSet {
+  const constraintSet = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+  const identity = constraintSet
+    ? `${String(constraintSet.constraintSetId)}@${String(constraintSet.revision)}`
+    : "unknown";
+  if (!constraintSet) v17NormalizationRequired(identity);
+
+  const evidence = constraintSet.migrationEvidence;
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) {
+    v17NormalizationRequired(identity);
+  }
+  const record = evidence as Record<string, unknown>;
+  if (
+    typeof record.migratorVersion !== "string"
+    || !record.migratorVersion.trim()
+    || !Number.isSafeInteger(record.sourceSchemaVersion)
+    || (record.sourceSchemaVersion as number) < 1
+    || typeof record.migratedAt !== "string"
+    || !record.migratedAt.trim()
+    || !Number.isFinite(Date.parse(record.migratedAt))
+    || !Array.isArray(record.diagnosticCodes)
+    || record.diagnosticCodes.some((code) => typeof code !== "string")
+    || !Object.hasOwn(record, "rawPayload")
+  ) {
+    v17NormalizationRequired(identity);
+  }
+}
+
 function legacyRecipePartPayloads(
   source: Record<string, unknown>,
 ): {
@@ -1153,6 +1197,7 @@ function migrateV17ToV18(input: MutableWorkspace): MutableWorkspace {
 
   const constraintSetIdentities = new Set<string>();
   for (const constraintSet of constraintSets) {
+    assertV17ConstraintSetNormalization(constraintSet);
     const identity = `${constraintSet.constraintSetId}@${constraintSet.revision}`;
     if (constraintSetIdentities.has(identity)) {
       throw new Error(
@@ -1175,9 +1220,7 @@ function migrateV17ToV18(input: MutableWorkspace): MutableWorkspace {
         ),
       )
     ) {
-      throw new Error(
-        `PART_CONSTRAINT_SET_V17_NORMALIZATION_REQUIRED：${identity} 是旧 00ff558 形态，不能直接提升为 schema v18。`,
-      );
+      v17NormalizationRequired(identity);
     }
     resolvePartConstraintSetRef(
       constraintSets,

@@ -8,6 +8,7 @@ import { deterministicHash } from "../lib/rule-kernel";
 import { validateSeriesInvariants } from "../lib/product-model";
 import {
   createPartConstraintSetRevision,
+  createNeedsReviewPartConstraintSet,
   partConstraintSourceContentHash,
   partConstraintSourceRevisionId,
   partConstraintSourceStableId,
@@ -355,6 +356,140 @@ test("schema v18 对 00ff558 部分规范化约束集显式 fail-closed", () => 
     /PART_CONSTRAINT_SET_V17_NORMALIZATION_REQUIRED.*00ff558/,
   );
   assert.deepEqual(legacy, before);
+});
+
+test("schema v18 对既有 hash 一致约束集的 migrationEvidence 完整校验且不改写输入", () => {
+  const cases: Array<{
+    name: string;
+    status: "CONFIRMED" | "NEEDS_REVIEW";
+    referenced: boolean;
+    mutate: (constraintSet: Record<string, unknown>) => void;
+  }> = [
+    {
+      name: "confirmed unreferenced missing evidence",
+      status: "CONFIRMED",
+      referenced: false,
+      mutate: (constraintSet) => {
+        (constraintSet.migrationEvidence as Record<string, unknown>).migratorVersion = "";
+      },
+    },
+    {
+      name: "referenced needs-review invalid evidence",
+      status: "NEEDS_REVIEW",
+      referenced: true,
+      mutate: (constraintSet) => {
+        (constraintSet.migrationEvidence as Record<string, unknown>).sourceSchemaVersion = 0;
+      },
+    },
+    {
+      name: "non-integer source schema version",
+      status: "NEEDS_REVIEW",
+      referenced: true,
+      mutate: (constraintSet) => {
+        (constraintSet.migrationEvidence as Record<string, unknown>).sourceSchemaVersion = 17.5;
+      },
+    },
+    {
+      name: "blank migrated-at",
+      status: "NEEDS_REVIEW",
+      referenced: true,
+      mutate: (constraintSet) => {
+        (constraintSet.migrationEvidence as Record<string, unknown>).migratedAt = " ";
+      },
+    },
+    {
+      name: "unparseable migrated-at",
+      status: "NEEDS_REVIEW",
+      referenced: true,
+      mutate: (constraintSet) => {
+        (constraintSet.migrationEvidence as Record<string, unknown>).migratedAt = "not-a-date";
+      },
+    },
+    {
+      name: "missing raw payload field",
+      status: "NEEDS_REVIEW",
+      referenced: true,
+      mutate: (constraintSet) => {
+        delete (constraintSet.migrationEvidence as Record<string, unknown>).rawPayload;
+      },
+    },
+    {
+      name: "invalid diagnostics container",
+      status: "NEEDS_REVIEW",
+      referenced: true,
+      mutate: (constraintSet) => {
+        (constraintSet.migrationEvidence as Record<string, unknown>).diagnosticCodes = ["ok", 7];
+      },
+    },
+    {
+      name: "missing evidence object cannot throw a TypeError",
+      status: "NEEDS_REVIEW",
+      referenced: true,
+      mutate: (constraintSet) => { constraintSet.migrationEvidence = null; },
+    },
+  ];
+
+  for (const entry of cases) {
+    const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
+    legacy.schemaVersion = 17;
+    const constraintSet = (legacy.partConstraintSets as Array<Record<string, unknown>>)[0]!;
+    constraintSet.reviewStatus = entry.status;
+    const parts = constraintSet.parts as Record<string, Record<string, unknown>>;
+    const traces = constraintSet.traces as Array<Record<string, unknown>>;
+    for (const part of Object.values(parts)) part.reviewStatus = entry.status;
+    for (const trace of traces) trace.reviewStatus = entry.status;
+    if (!entry.referenced) {
+      for (const consumer of [
+        ...(legacy.candidateSearchRecipes as Array<Record<string, unknown>>),
+        ...(legacy.seriesDefinitions as Array<Record<string, unknown>>),
+      ]) {
+        delete consumer.partConstraintSetRef;
+      }
+    }
+    entry.mutate(constraintSet);
+    constraintSet.contentHash = partConstraintSetContentHash(constraintSet as never);
+    const before = structuredClone(legacy);
+
+    assert.throws(
+      () => migrateWorkspaceState(legacy),
+      /PART_CONSTRAINT_SET_V17_NORMALIZATION_REQUIRED/,
+      entry.name,
+    );
+    assert.deepEqual(legacy, before, entry.name);
+  }
+});
+
+test("schema v18 允许 migrationEvidence.rawPayload 为 null，只要求字段存在", () => {
+  const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
+  legacy.schemaVersion = 17;
+  const series = (legacy.seriesDefinitions as Array<Record<string, unknown>>)[0]!;
+  const sourceRef = {
+    sourceType: "series_definition" as const,
+    sourceId: partConstraintSourceStableId(series, "series_definition"),
+    revisionId: partConstraintSourceRevisionId(series),
+    hashProjectionVersion: "WITHOUT_PART_CONSTRAINT_SET_REF_V1" as const,
+    contentHash: partConstraintSourceContentHash(series),
+  };
+  const constraintSet = createNeedsReviewPartConstraintSet({
+    constraintSetId: "part-constraint-set:null-raw-payload",
+    sourceRef,
+    rawPayload: null,
+    sourceSchemaVersion: 17,
+    migratedAt: "2026-07-23T00:00:00.000Z",
+  });
+  legacy.partConstraintSets = [constraintSet];
+  series.partConstraintSetRef = partConstraintSetRef(constraintSet);
+  for (const recipe of legacy.candidateSearchRecipes as Array<Record<string, unknown>>) {
+    delete recipe.partConstraintSetRef;
+  }
+  const migrated = migrateWorkspaceState(legacy);
+  assert.equal(migrated.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
+  assert.equal(
+    migrated.partConstraintSets.find((entry) =>
+      entry.constraintSetId === constraintSet.constraintSetId,
+    )?.migrationEvidence.rawPayload,
+    null,
+  );
 });
 
 test("PartConstraintSet 稳定 ref 对缺失、重复、篡改或 hash 不符均 fail-closed", () => {

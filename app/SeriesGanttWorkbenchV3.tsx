@@ -52,7 +52,6 @@ import type {
   FiveAxisComparisonView,
   FiveAxisEntityInput,
   ModelFiveAxisPreview,
-  FiveAxisViewDefinition,
   ProjectionMatch,
   LegacyFiveAxisVertexSet,
   LegacyFiveAxisViewDefinition,

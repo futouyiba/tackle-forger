@@ -597,7 +597,19 @@ export function createFormalFiveAxisVertexSet(input: {
       }
     }
     return structuredClone(source);
-  });
+  }).sort((left, right) =>
+    compareUnsignedUtf8(
+      left.candidateSemanticKey.modelId,
+      right.candidateSemanticKey.modelId,
+    )
+    || compareUnsignedUtf8(
+      left.candidateSemanticKey.componentEntityId,
+      right.candidateSemanticKey.componentEntityId,
+    )
+    || compareUnsignedUtf8(
+      left.candidateSemanticKey.itemPartId,
+      right.candidateSemanticKey.itemPartId,
+    ));
   const candidateSetHash = hashCandidateSet({
     vertexGroupKey: input.groupKey,
     candidates: sources.map((source) => ({
@@ -971,6 +983,7 @@ export function assertFormalModelFiveAxisPreview(input: {
   expectedSeriesId: string;
   expectedSkuId: string;
   expectedSkuRevisionId: string;
+  expectedProjectionReferences: FiveAxisProjectionReferenceEvidence[];
   expectedFinalPanelHash: string;
   expectedComponentSelections: Array<
     Pick<ModelComponentSelection, "itemPartId" | "componentId" | "values">
@@ -1123,6 +1136,7 @@ export function assertFormalModelFiveAxisPreview(input: {
   const comparison = preview.tackleFitComparison;
   const anchor = comparison.projectionReferenceAnchor;
   const references = comparison.projectionReferences;
+  const expectedReferenceParts = ["part:rod", "part:reel", "part:line"];
   if (
     comparison.mode !== "tackle_fit"
     || comparison.referenceFishWeightGradeId !== preview.weightBandId
@@ -1141,6 +1155,14 @@ export function assertFormalModelFiveAxisPreview(input: {
     || anchor.skuRevisionId !== input.expectedSkuRevisionId
     || anchor.selectorVersion !== FIVE_AXIS_PROJECTION_REFERENCE_SELECTOR_VERSION
     || !references
+    || references.length !== expectedReferenceParts.length
+    || input.expectedProjectionReferences.length !== expectedReferenceParts.length
+    || references.some((reference, index) =>
+      reference.itemPartId !== expectedReferenceParts[index])
+    || input.expectedProjectionReferences.some((reference, index) =>
+      reference.itemPartId !== expectedReferenceParts[index])
+    || JSON.stringify(references)
+      !== JSON.stringify(input.expectedProjectionReferences)
     || references.some((reference) =>
       reference.state === "error" || reference.state === "not_selected")
   ) {
@@ -1285,6 +1307,7 @@ export function createFormalModelFiveAxisPreview(input: {
     expectedSeriesId: input.projectionReferenceAnchor.seriesId,
     expectedSkuId: input.projectionReferenceAnchor.skuId,
     expectedSkuRevisionId: input.projectionReferenceAnchor.skuRevisionId,
+    expectedProjectionReferences: input.projectionReferences,
     expectedFinalPanelHash: input.finalPanelHash,
     expectedComponentSelections: input.componentSelections,
     expectedModelFinalPullKg: input.modelFinalPullKg,

@@ -581,9 +581,18 @@ test("旧 PUBLISHED 五维定义只能用于历史重放，不能服务新正式
   });
   const formalSnapshot = publishConfigurationSnapshot({
     ...common,
+    sku: {
+      ...sku,
+      fiveAxisProjectionReferences: structuredClone(
+        formalPreview.tackleFitComparison.projectionReferences!,
+      ),
+    },
     componentSelections: formalComponentSelections,
     fiveAxisPreview: formalPreview,
-    fiveAxisAuthoritativeCandidateSources: formalPreview.candidateSources,
+    fiveAxisAuthorityState: {
+      purchasableModels: state.purchasableModels,
+      configurationSnapshots: state.configurationSnapshots,
+    },
     fiveAxisDefinition: formalDefinition,
   });
   assert.equal(

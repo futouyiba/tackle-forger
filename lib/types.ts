@@ -1122,6 +1122,11 @@ export interface SkuDrawer {
   seriesId: string;
   targetPullKg: number;
   projectionMatch: ProjectionMatch;
+  /**
+   * OPEN-005 正式五维发布使用的当前 SKU revision 逐部位冻结投影引用。
+   * 历史 SKU 可缺失；新正式 Snapshot 必须显式提供完整的竿、轮、线状态。
+   */
+  fiveAxisProjectionReferences?: FiveAxisProjectionReferenceEvidence[];
   patchIds: string[];
   modelIds: string[];
   defaultModelId?: string;

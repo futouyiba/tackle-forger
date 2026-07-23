@@ -38,7 +38,7 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RuleGraphStudio } from "./RuleGraphStudio";
 import { V3FlowWorkbench } from "./V3FlowWorkbench";
 import { BrowserConfigExportWorkbench as ConfigExportWorkbench } from "./BrowserConfigExportWorkbench";
@@ -526,22 +526,24 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   const [authMessage, setAuthMessage] = useState("");
   const [authErrorCode, setAuthErrorCode] = useState("");
   const [dirty, setDirty] = useState(false);
+  const [syncState, setSyncState] = useState<"ready" | "saving" | "saved" | "error">("ready");
+  const [saveFeedback, setSaveFeedback] = useState<SaveFeedback | null>(null);
   const workspaceFreshnessRef = useRef({ dirty: false, revision: 1 });
-  const markWorkspaceDirty = () => {
+  const markWorkspaceDirty = useCallback(() => {
     workspaceFreshnessRef.current = { ...workspaceFreshnessRef.current, dirty: true };
     setDirty(true);
-  };
-  const applyWorkspaceRevision = (nextRevision: number) => {
+  }, []);
+  const applyWorkspaceRevision = useCallback((nextRevision: number) => {
     workspaceFreshnessRef.current = { dirty: false, revision: nextRevision };
     setRevision(nextRevision);
     setDirty(false);
-  };
+  }, []);
   /**
    * Domain commands return the new authoritative workspace, not a local draft.
    * Keep every conflict/revision baseline in lockstep so a later 409 compares
    * against the command result rather than a state from before that command.
    */
-  const replaceAuthoritativeWorkspace = (nextState: WorkspaceState, nextRevision: number) => {
+  const replaceAuthoritativeWorkspace = useCallback((nextState: WorkspaceState, nextRevision: number) => {
     const normalized = ensureWorkflowFields(nextState);
     setState(normalized);
     baselineStateRef.current = copyState(normalized);
@@ -550,9 +552,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     applyWorkspaceRevision(nextRevision);
     setSaveFeedback(null);
     setSyncState("saved");
-  };
-  const [syncState, setSyncState] = useState<"ready" | "saving" | "saved" | "error">("ready");
-  const [saveFeedback, setSaveFeedback] = useState<SaveFeedback | null>(null);
+  }, [applyWorkspaceRevision]);
   const [toast, setToast] = useState("");
   const [search, setSearch] = useState("");
   const [itemKind, setItemKind] = useState<ItemKind>("rod");
@@ -675,7 +675,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     return () => {
       active = false;
     };
-  }, []);
+  }, [replaceAuthoritativeWorkspace]);
 
   const save = async (message = "保存配置修改") => {
     const saveAvailability = user.actionAvailability.save_workspace;

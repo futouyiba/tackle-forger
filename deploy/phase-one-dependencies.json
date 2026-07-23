@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "phase-one-dependency-evidence/v1",
+  "dependencies": [
+    {
+      "id": "canonical_rule_source",
+      "issue": 66,
+      "pr": 67,
+      "commit": null,
+      "merged": false,
+      "reviewThreadsResolved": false,
+      "requiredChecksPassed": false,
+      "evidenceUrl": "https://github.com/futouyiba/tackle-forger/pull/67"
+    },
+    {
+      "id": "schema_v17",
+      "issue": 68,
+      "pr": 71,
+      "commit": null,
+      "merged": false,
+      "reviewThreadsResolved": false,
+      "requiredChecksPassed": false,
+      "evidenceUrl": "https://github.com/futouyiba/tackle-forger/pull/71"
+    },
+    {
+      "id": "non_formal_preview",
+      "issue": 72,
+      "pr": 76,
+      "commit": null,
+      "merged": false,
+      "reviewThreadsResolved": false,
+      "requiredChecksPassed": false,
+      "evidenceUrl": "https://github.com/futouyiba/tackle-forger/pull/76"
+    }
+  ]
+}

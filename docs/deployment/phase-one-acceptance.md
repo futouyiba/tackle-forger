@@ -9,7 +9,7 @@
 `docs/tackle-forger-development-spec-v3.md` 的领域与分期语义。
 
 一期验收必须使用真实目标环境、真实公司飞书用户和权威《钓具设计工作簿》。本地测试、
-mock、Vercel 评审入口和只读预检都只能作为准备证据，不能替代真实环境结论。
+mock、Vercel 评审入口和无业务写入预检都只能作为准备证据，不能替代真实环境结论。
 
 ## 1. 当前启动门禁
 
@@ -20,7 +20,7 @@ mock、Vercel 评审入口和只读预检都只能作为准备证据，不能替
 | --- | --- | --- |
 | #66 / PR #67 | 权威 01/02/03 机器区的拉取、展示和计算使用同一规范草稿；稳定身份、Method×Type、单位和旧引用迁移问题均解决 | 不执行真实工作簿拉取或主流程验收 |
 | #68 / PR #71 | schema v17 生产形态可读取；迁移保留未知字段、离散 Series 拉力规格和冻结 Snapshot | 不把生产 SQLite 交给新代码启动 |
-| #72 | 一期 Capability、UI、直接 API 和下载物都只允许固定 `NON_FORMAL` 预览 | 不部署到真实用户可访问环境 |
+| #72 / PR #76 | 一期 Capability、UI、直接 API 和下载物都只允许固定 `NON_FORMAL` 预览 | 不部署到真实用户可访问环境 |
 | 其他一期领域阻断 | #43 当前清单中标记为一期门槛的子项已经完成或被明确延期，理由与 v3 一致 | 只做部署准备，不创建通过结论 |
 
 任何一项未满足都记录为 `DEPENDENCY_BLOCKED`。此状态不是代码缺陷的笼统描述，也不能用
@@ -32,16 +32,18 @@ Issue #73 使用三层证据，禁止互相替代：
 
 1. `preflight`：检查构建 commit、Node 版本、部署模板、一期依赖 commit、源码提示和可选的
    目标环境文件。源码字符串只记 `INFO`；缺失会阻断，但存在不计作通过证据。
-2. `public-smoke`：仅以未登录身份 GET 内网入口、登录起点和受保护 API。
+2. `public-smoke`：以未登录身份 GET 内网入口、登录起点和受保护 API；两次登录起点会各自
+   创建一条最长 600 秒的临时 pending login 记录。
 3. `authenticated-read-only`：使用已经由真实用户登录得到的临时会话，只读检查会话、
    Capability、工作区、revision 和权威工作簿。
 4. 人工端到端验收：由已登录用户执行显式拉取、创建 RuleSet 草稿、显式发布、创建
    Series/SKU/Model/Snapshot、错误路径、备份和回滚演练。
 
-前三层都不会执行拉取、发布、工作区写入、退出登录、部署、备份、恢复或 revision 裁剪。
+前三层都不会执行拉取、发布、业务工作区写入、退出登录、部署、备份、恢复或 revision
+裁剪；第 2 层会创建上述自动过期的 OAuth pending 状态，不是零副作用探测。
 只有第 4 层能关闭 #73 的业务验收项。
 
-## 3. 只读脚本
+## 3. 无业务写入验收脚本
 
 ### 3.1 仓库与部署配置预检
 
@@ -54,14 +56,16 @@ npm run acceptance:phase-one -- preflight \
 ```
 
 `--env-file` 可以暂时省略以只检查仓库，但结果会保持 `BLOCKED`，不能作为环境通过证据。
-脚本只输出已配置的键名，不输出值；环境文件必须是 `0600` 或更严格。`--output` 使用
-“仅新建、不覆盖”语义并创建 `0600` 文件，推荐写入受限证据目录，不要写入仓库。
+脚本只输出已配置的键名，不输出值；环境文件必须使用仓库外绝对路径，归服务账号所有，
+是非符号链接普通文件且权限为 `0600` 或更严格。`--output` 使用“仅新建、不覆盖”语义并
+创建 `0600` 文件，推荐写入受限证据目录，不要写入仓库。
 
 预检会显式阻断：
 
 - Node 低于 22.16.0、工作树不干净或 commit 不可解析；
-- 环境未记录 #67、#71、#72 已通过审查和 CI 后的完整合入 commit，或任一 commit
-  不是待部署 HEAD 的祖先；源码字符串标记只作辅助提示，不能替代这项门禁；
+- 受版本控制的 `deploy/phase-one-dependencies.json` 未把 #66/PR #67、#68/PR #71、
+  #72/PR #76 分别绑定到唯一的已合入 commit，或其 review threads、必需 CI、PR 映射和
+  HEAD 祖先关系不满足；源码字符串标记只作辅助提示，不能替代这项门禁；
 - #66 数据链未落地；
 - #68 schema v17 读取契约未落地；
 - #72 `NON_FORMAL` 契约缺失，或一期仍授予 `snapshot.export`、`config.export.commit`、
@@ -72,12 +76,14 @@ npm run acceptance:phase-one -- preflight \
 - 环境启用 AI、revision 裁剪或可信代理身份模式；
 - systemd 未限制回环监听/写目录，或 Nginx 未清除客户端身份头。
 
-环境还需填写 `PHASE_ONE_CANONICAL_PULL_COMMIT`、`PHASE_ONE_SCHEMA_V17_COMMIT` 和
-`PHASE_ONE_NON_FORMAL_COMMIT` 三个完整 40 位 commit SHA。只有对应 PR 已完成实质审查、
-CI 并合入后才能填写；脚本会验证它们都是待部署 HEAD 的祖先。持久路径会在规范化后检查
-重复/越界，并核对真实路径存在、归当前服务账号所有且不可由组或其他用户写入。
+依赖满足后，在单独评审的提交中更新 `deploy/phase-one-dependencies.json`：记录固定
+Issue/PR 映射、唯一完整 commit、review threads 已清零、必需 CI 已通过和已合入状态。
+脚本会把实际 SHA 作为非敏感审计证据，并核对 commit 标题的 PR 来源及其为待部署 HEAD
+祖先。不得用环境变量或重复填写当前 HEAD 代替依赖证据。持久路径会在规范化后检查重复/
+越界，并核对数据库为普通文件、其余路径为目录、必要父目录与各路径均归服务账号所有且
+不向组或其他用户开放读写/访问权限。
 
-### 3.2 未登录只读 smoke
+### 3.2 未登录 smoke（会创建短期 OAuth pending 状态）
 
 部署完成且 Nginx/证书已生效后运行：
 
@@ -93,7 +99,8 @@ npm run acceptance:phase-one -- public-smoke \
 - 根页面可达；
 - `/api/auth/session` 未登录返回 `401 / AUTH-SESSION-001`；
 - 连续两次登录起点都返回配置的飞书授权来源和精确登记回调，state 非空且互不相同，
-  pending Cookie 与各自 state 一致，并含 `HttpOnly + SameSite=Lax + Secure`；
+  每次响应只含一个对应 pending Cookie，值与各自 state 一致，并精确含
+  `Path=/ + HttpOnly + SameSite=Lax + Secure + Max-Age=600`；
 - `/api/state`、`/api/revisions`、`/api/feishu-workbook` 未登录均返回 401；
 - 响应未回显环境文件中的密钥值。
 
@@ -135,7 +142,8 @@ npm run acceptance:phase-one -- authenticated-read-only \
 发出首个携带 Cookie 的请求前，脚本会要求目标 origin 与 `FEISHU_REDIRECT_URI` 精确一致，
 并要求环境提供预期 tenant key 和权威工作簿 token。已登录 PASS 还要求 tenant 精确匹配、
 会话未过期、Capability 精确匹配一期允许集合、workspace schema 精确为 17，以及必需的
-01–08、10 稳定 sheet_id/名称完整无重复、工作簿身份/token 匹配且没有 error inspection issue。
+01–08、10 稳定 sheet_id/名称完整无重复、工作簿身份/token 匹配、所有稳定 ID 已确认且
+无重复/冲突，以及品质和定价草稿没有阻断 issue 或残缺状态。
 
 ## 4. 真实部署记录
 

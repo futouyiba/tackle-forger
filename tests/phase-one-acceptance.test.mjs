@@ -9,12 +9,16 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
   EXPECTED_CANONICAL_SHEETS,
   EXPECTED_PHASE_ONE_CAPABILITIES,
+  inspectDependencyManifest,
+  inspectRuntimePathFilesystem,
+  readSecureEnvironmentFile,
   readSessionCookieFile,
   runAuthenticatedReadOnlySmoke,
   runPreflight,
@@ -51,6 +55,62 @@ function canonicalSheets() {
   return [...EXPECTED_CANONICAL_SHEETS].map(([sheetId, name]) => ({ sheetId, name }));
 }
 
+function canonicalInspection(overrides = {}) {
+  const sourceRevision = {
+    id: "feishu-source-revision:4000",
+    workbookRefId: "feishu-workbook:tackle-design",
+    spreadsheetToken: "workbook-token-secret",
+    sourceRevision: "revision-4000",
+    registryHash: "registry-hash",
+    sheets: canonicalSheets(),
+    issues: [],
+    ...(overrides.sourceRevision ?? {}),
+  };
+  const identityRows = overrides.identityRows ?? [
+    { sheetId: "d6e928", rowKey: "4", stableId: "weight_template:1" },
+    { sheetId: "fATowU", rowKey: "2", stableId: "type:1" },
+  ];
+  return {
+    sourceRevision,
+    identityRows,
+    identityReport: {
+      workbookRefId: "feishu-workbook:tackle-design",
+      sourceRevision: sourceRevision.sourceRevision,
+      items: identityRows.map((row, index) => ({
+        itemId: `identity:${index}`,
+        state: "ALREADY_IDENTIFIED",
+        requiresHumanConfirmation: false,
+      })),
+      blockingIssueCodes: [],
+      ...(overrides.identityReport ?? {}),
+    },
+    qualityDraft: {
+      sourceRevisionId: sourceRevision.id,
+      sourceRevision: sourceRevision.sourceRevision,
+      formalStatus: "READY_TO_PUBLISH",
+      issues: [],
+      ...(overrides.qualityDraft ?? {}),
+    },
+    pricingDraft: {
+      sourceRevisionId: sourceRevision.id,
+      sourceRevision: sourceRevision.sourceRevision,
+      formalStatus: "TRIAL_READY",
+      issues: [],
+      ...(overrides.pricingDraft ?? {}),
+    },
+    pricingWeightBandPolicy: "MATCHED_STRUCTURAL_SOURCE_BAND",
+    ...Object.fromEntries(
+      Object.entries(overrides).filter(([key]) => ![
+        "sourceRevision",
+        "identityRows",
+        "identityReport",
+        "qualityDraft",
+        "pricingDraft",
+      ].includes(key)),
+    ),
+  };
+}
+
 function publicRoutes() {
   let stateSequence = 0;
   return {
@@ -70,7 +130,7 @@ function publicRoutes() {
         status: 307,
         headers: {
           location: redirect.toString(),
-          "set-cookie": `tf_feishu_pending=${state}; Path=/; HttpOnly; Secure; SameSite=Lax`,
+          "set-cookie": `tf_feishu_pending=${state}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`,
         },
       });
     },
@@ -122,7 +182,7 @@ test("OAuth 起点拒绝重复 state、错误授权来源和错误登记回调",
       status: 307,
       headers: {
         location: redirect.toString(),
-        "set-cookie": "tf_feishu_pending=fixed-state-00000000; Path=/; HttpOnly; Secure; SameSite=Lax",
+        "set-cookie": "tf_feishu_pending=fixed-state-00000000; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600",
       },
     });
   };
@@ -135,6 +195,35 @@ test("OAuth 起点拒绝重复 state、错误授权来源和错误登记回调",
   assert.equal(oauth?.status, "FAIL");
   assert.equal(oauth?.evidence?.statesDistinct, false);
   assert.equal(JSON.stringify(evidence).includes("fixed-state-00000000"), false);
+});
+
+test("OAuth pending Cookie 必须唯一并精确包含安全属性与 600 秒过期", async () => {
+  const routes = publicRoutes();
+  let sequence = 0;
+  routes["/api/auth/feishu/start"] = () => {
+    sequence += 1;
+    const state = `cookie-state-${sequence.toString().padStart(8, "0")}`;
+    const redirect = new URL("https://accounts.feishu.cn/open-apis/authen/v1/authorize");
+    redirect.searchParams.set("client_id", "cli_public");
+    redirect.searchParams.set("redirect_uri", "https://tackle.internal/api/auth/feishu/callback");
+    redirect.searchParams.set("state", state);
+    const headers = new Headers({ location: redirect.toString() });
+    headers.append(
+      "set-cookie",
+      `tf_feishu_pending=${state}; Path=/evil; HttpOnlyX; Max-Age=3600`,
+    );
+    headers.append("set-cookie", "helper=1; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600");
+    return new Response(null, { status: 307, headers });
+  };
+  const evidence = await runPublicSmoke({
+    baseUrl: "https://tackle.internal",
+    env: smokeEnv(),
+    fetchImpl: mockFetch(routes),
+  });
+  assert.equal(
+    evidence.checks.find((item) => item.id === "oauth_start")?.status,
+    "FAIL",
+  );
 });
 
 test("公网 HTTP 与带凭据 base URL 在出网前拒绝", async () => {
@@ -209,7 +298,7 @@ test("公网 HTTP 与带凭据 base URL 在出网前拒绝", async () => {
           status: 307,
           headers: {
             location: redirect.toString(),
-            "set-cookie": `tf_feishu_pending=${state}; Path=/; HttpOnly; SameSite=Lax`,
+            "set-cookie": `tf_feishu_pending=${state}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`,
           },
         });
       },
@@ -242,16 +331,7 @@ test("已登录只读 smoke 只保存身份与工作簿 token 哈希、计数和
     }),
     "/api/revisions": json({ revisions: [{ revision: 42 }] }),
     "/api/feishu-workbook": json({
-      inspection: {
-        sourceRevision: {
-          workbookRefId: "feishu-workbook:tackle-design",
-          spreadsheetToken: "workbook-token-secret",
-          sourceRevision: "revision-4000",
-          registryHash: "registry-hash",
-          sheets: canonicalSheets(),
-          issues: [],
-        },
-      },
+      inspection: canonicalInspection(),
     }),
   });
   const evidence = await runAuthenticatedReadOnlySmoke({
@@ -294,7 +374,7 @@ test("错误租户、过期会话、schema 16 与残缺工作簿全部保持 BLO
     }),
     "/api/revisions": json({ revisions: [] }),
     "/api/feishu-workbook": json({
-      inspection: {
+      inspection: canonicalInspection({
         sourceRevision: {
           workbookRefId: "feishu-workbook:other",
           spreadsheetToken: "wrong-token",
@@ -307,7 +387,7 @@ test("错误租户、过期会话、schema 16 与残缺工作簿全部保持 BLO
           ],
           issues: [{ code: "SHEET_MISSING", severity: "error" }],
         },
-      },
+      }),
     }),
   });
   const evidence = await runAuthenticatedReadOnlySmoke({
@@ -331,6 +411,65 @@ test("错误租户、过期会话、schema 16 与残缺工作簿全部保持 BLO
   assert.deepEqual(workbook?.evidence?.duplicateSheetIds, ["9nE3Rx"]);
   assert.ok(workbook?.evidence?.missingSheets.length > 0);
   assert.equal(workbook?.evidence?.spreadsheetTokenMatched, false);
+});
+
+test("稳定身份待确认或品质/定价草稿阻断时权威工作簿保持 BLOCKED", async () => {
+  const inspection = canonicalInspection({
+    identityReport: {
+      items: [
+        {
+          itemId: "identity:0",
+          state: "CONFLICT",
+          requiresHumanConfirmation: true,
+        },
+        {
+          itemId: "identity:1",
+          state: "ALREADY_IDENTIFIED",
+          requiresHumanConfirmation: false,
+        },
+      ],
+      blockingIssueCodes: ["SOURCE_STABLE_ID_DUPLICATE"],
+    },
+    qualityDraft: {
+      formalStatus: "NON_FORMAL",
+      issues: [{ code: "QUALITY_RANGE_MISSING", severity: "ERROR" }],
+    },
+    pricingDraft: {
+      formalStatus: "INCOMPLETE_DRAFT",
+      issues: [{ code: "PRICING_VALUE_INVALID", severity: "error" }],
+    },
+  });
+  const fetchImpl = mockFetch({
+    "/api/auth/session": json({
+      authenticated: true,
+      user: {
+        tenantKey: "tenant-secret-id",
+        openId: "user",
+        sessionExpiresAt: "2026-07-24T00:00:00.000Z",
+        capabilities: [...EXPECTED_PHASE_ONE_CAPABILITIES],
+      },
+    }),
+    "/api/state": json({ revision: 17, state: { schemaVersion: 17 } }),
+    "/api/revisions": json({ revisions: [{ revision: 17 }] }),
+    "/api/feishu-workbook": json({ inspection }),
+  });
+  const evidence = await runAuthenticatedReadOnlySmoke({
+    baseUrl: "https://tackle.internal",
+    cookieHeader: "tf_session=opaque",
+    env: smokeEnv(),
+    fetchImpl,
+    now: new Date("2026-07-23T00:00:00.000Z"),
+  });
+  const workbook = evidence.checks.find((item) => item.id === "authoritative_workbook_read");
+  assert.equal(workbook?.status, "BLOCKED");
+  assert.equal(workbook?.evidence?.identityReportMatched, false);
+  assert.equal(workbook?.evidence?.pendingIdentityCount, 1);
+  assert.deepEqual(
+    workbook?.evidence?.identityBlockingIssueCodes,
+    ["SOURCE_STABLE_ID_DUPLICATE"],
+  );
+  assert.deepEqual(workbook?.evidence?.qualityBlockingIssueCodes, ["QUALITY_RANGE_MISSING"]);
+  assert.deepEqual(workbook?.evidence?.pricingBlockingIssueCodes, ["PRICING_VALUE_INVALID"]);
 });
 
 test("响应恶意回显 Cookie 时证据 FAIL 且不会再次序列化该 Cookie", async () => {
@@ -357,16 +496,7 @@ test("响应恶意回显 Cookie 时证据 FAIL 且不会再次序列化该 Cooki
     }),
     "/api/revisions": json({ revisions: [] }),
     "/api/feishu-workbook": json({
-      inspection: {
-        sourceRevision: {
-          workbookRefId: "feishu-workbook:tackle-design",
-          spreadsheetToken: "workbook-token-secret",
-          sourceRevision: "revision",
-          registryHash: "registry-hash",
-          sheets: canonicalSheets(),
-          issues: [],
-        },
-      },
+      inspection: canonicalInspection(),
     }),
   });
   const evidence = await runAuthenticatedReadOnlySmoke({
@@ -404,16 +534,7 @@ test("真实会话暴露正式提交或 AI Capability 时验收保持 BLOCKED", 
     "/api/state": json({ revision: 1, state: { schemaVersion: 17 } }),
     "/api/revisions": json({ revisions: [] }),
     "/api/feishu-workbook": json({
-      inspection: {
-        sourceRevision: {
-          workbookRefId: "feishu-workbook:tackle-design",
-          spreadsheetToken: "workbook-token-secret",
-          sourceRevision: "revision",
-          registryHash: "registry-hash",
-          sheets: canonicalSheets(),
-          issues: [],
-        },
-      },
+      inspection: canonicalInspection(),
     }),
   });
   const evidence = await runAuthenticatedReadOnlySmoke({
@@ -438,7 +559,8 @@ test("真实会话暴露正式提交或 AI Capability 时验收保持 BLOCKED", 
 
 test("preflight 对安全 env、源契约和 0600 权限给出可重复证据", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "tf-phase-one-root-"));
-  const envFile = path.join(root, ".env.local");
+  const envDirectory = await mkdtemp(path.join(os.tmpdir(), "tf-phase-one-safe-env-"));
+  const envFile = path.join(envDirectory, ".env.local");
   await mkdir(path.join(root, "lib"), { recursive: true });
   await mkdir(path.join(root, "app/api/feishu-workbook"), { recursive: true });
   await mkdir(path.join(root, "deploy"), { recursive: true });
@@ -501,35 +623,132 @@ test("preflight 对安全 env、源契约和 0600 权限给出可重复证据", 
   );
   assert.equal(JSON.stringify(evidence).includes("s".repeat(32)), false);
   await rm(root, { recursive: true, force: true });
+  await rm(envDirectory, { recursive: true, force: true });
 });
 
-test("preflight 不会把宽权限环境文件或生产目录混用判为通过", async () => {
+test("三种模式共用的环境 loader 拒绝仓库内、相对、symlink 与宽权限文件", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "tf-phase-one-env-"));
-  const envFile = path.join(root, ".env.local");
-  await writeFile(envFile, [
-    "FEISHU_APP_ID=cli_test",
-    "FEISHU_APP_SECRET=secret",
-    "FEISHU_CANONICAL_SPREADSHEET_TOKEN=spreadsheet-token",
-    "FEISHU_TENANT_KEY=tenant",
-    "FEISHU_REDIRECT_URI=http://public.example/api/auth/feishu/callback",
-    "FEISHU_SESSION_SECRET=short",
-    "FEISHU_SESSION_DATA_DIR=/opt/tackle-forger/current/auth",
-    "WORKSPACE_DATABASE_PATH=/opt/tackle-forger/data/../current/workspace.sqlite",
-    "WORKSPACE_FILE_DATA_DIR=/opt/tackle-forger/data/files/../shared",
-    "WORKSPACE_BACKUP_DIR=/opt/tackle-forger/data/shared",
-    "FANCY_HUB_ENABLED=true",
-    "WORKSPACE_AUTO_PRUNE=true",
-    "FEISHU_TRUST_PROXY_HEADERS=true",
-  ].join("\n"), { mode: 0o644 });
-  const evidence = await runPreflight({ root, envFile });
-  assert.equal(evidence.summary.overall, "FAIL");
-  const statuses = new Map(evidence.checks.map((item) => [item.id, item.status]));
-  assert.equal(statuses.get("environment_file_permissions"), "BLOCKED");
-  assert.equal(statuses.get("oauth_redirect"), "BLOCKED");
-  assert.equal(statuses.get("persistent_paths"), "BLOCKED");
-  assert.equal(statuses.get("phase_one_feature_flags"), "BLOCKED");
-  assert.equal(statuses.get("direct_oauth_topology"), "BLOCKED");
+  const outside = await mkdtemp(path.join(os.tmpdir(), "tf-phase-one-env-outside-"));
+  const insideFile = path.join(root, ".env.local");
+  const outsideFile = path.join(outside, ".env.local");
+  const symlinkFile = path.join(outside, ".env-link");
+  await writeFile(insideFile, "FEISHU_APP_ID=inside\n", { mode: 0o600 });
+  await writeFile(outsideFile, "FEISHU_APP_ID=outside\n", { mode: 0o600 });
+  await symlink(outsideFile, symlinkFile);
+  await assert.rejects(
+    readSecureEnvironmentFile({ envFile: insideFile, root }),
+    /工作树之外/u,
+  );
+  await assert.rejects(
+    readSecureEnvironmentFile({ envFile: ".env.local", root }),
+    /绝对路径/u,
+  );
+  await assert.rejects(
+    readSecureEnvironmentFile({ envFile: symlinkFile, root }),
+    /符号链接/u,
+  );
+  await chmod(outsideFile, 0o644);
+  await assert.rejects(
+    readSecureEnvironmentFile({ envFile: outsideFile, root }),
+    /0600/u,
+  );
+  await chmod(outsideFile, 0o600);
+  assert.equal(
+    (await readSecureEnvironmentFile({ envFile: outsideFile, root })).env.FEISHU_APP_ID,
+    "outside",
+  );
+
+  const evidence = await runPreflight({ root, envFile: insideFile });
+  assert.equal(
+    evidence.checks.find((item) => item.id === "production_environment_file")?.status,
+    "BLOCKED",
+  );
   await rm(root, { recursive: true, force: true });
+  await rm(outside, { recursive: true, force: true });
+});
+
+test("依赖门禁绑定受版本控制的 Issue/PR 映射、唯一 commit 与审核状态", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "tf-phase-one-dependencies-"));
+  await mkdir(path.join(root, "deploy"), { recursive: true });
+  execFileSync("git", ["init"], { cwd: root });
+  execFileSync("git", ["config", "user.email", "acceptance@example.invalid"], { cwd: root });
+  execFileSync("git", ["config", "user.name", "Acceptance Fixture"], { cwd: root });
+  const commits = [];
+  for (const [index, pr] of [67, 71, 76].entries()) {
+    await writeFile(path.join(root, `dependency-${pr}.txt`), `${pr}\n`);
+    execFileSync("git", ["add", `dependency-${pr}.txt`], { cwd: root });
+    execFileSync("git", ["commit", "-m", `fixture dependency ${index + 1} (#${pr})`], {
+      cwd: root,
+    });
+    commits.push(execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim());
+  }
+  const manifest = (dependencyCommits) => ({
+    schemaVersion: "phase-one-dependency-evidence/v1",
+    dependencies: [
+      ["canonical_rule_source", 66, 67, dependencyCommits[0]],
+      ["schema_v17", 68, 71, dependencyCommits[1]],
+      ["non_formal_preview", 72, 76, dependencyCommits[2]],
+    ].map(([id, issue, pr, commit]) => ({
+      id,
+      issue,
+      pr,
+      commit,
+      merged: true,
+      reviewThreadsResolved: true,
+      requiredChecksPassed: true,
+      evidenceUrl: `https://github.com/futouyiba/tackle-forger/pull/${pr}`,
+    })),
+  });
+  await writeFile(
+    path.join(root, "deploy/phase-one-dependencies.json"),
+    `${JSON.stringify(manifest([commits[0], commits[0], commits[0]]), null, 2)}\n`,
+  );
+  const spoofed = await inspectDependencyManifest(root);
+  assert.equal(spoofed.status, "BLOCKED");
+  assert.deepEqual(spoofed.evidence.duplicateCommits, [
+    "schema_v17",
+    "non_formal_preview",
+  ]);
+
+  await writeFile(
+    path.join(root, "deploy/phase-one-dependencies.json"),
+    `${JSON.stringify(manifest(commits), null, 2)}\n`,
+  );
+  assert.equal((await inspectDependencyManifest(root)).status, "PASS");
+  await rm(root, { recursive: true, force: true });
+});
+
+test("持久数据根检查要求正确类型、仅服务账号权限与安全父目录", async () => {
+  const dataRoot = await mkdtemp(path.join(os.tmpdir(), "tf-phase-one-data-"));
+  const databasePath = path.join(dataRoot, "workspace.sqlite");
+  const fileDataDir = path.join(dataRoot, "files");
+  const backupDir = path.join(dataRoot, "backups");
+  const sessionDir = path.join(dataRoot, "auth");
+  await writeFile(databasePath, "", { mode: 0o600 });
+  await mkdir(fileDataDir, { mode: 0o700 });
+  await mkdir(backupDir, { mode: 0o700 });
+  await mkdir(sessionDir, { mode: 0o700 });
+  const env = {
+    WORKSPACE_DATABASE_PATH: databasePath,
+    WORKSPACE_FILE_DATA_DIR: fileDataDir,
+    WORKSPACE_BACKUP_DIR: backupDir,
+    FEISHU_SESSION_DATA_DIR: sessionDir,
+  };
+  assert.equal(
+    (await inspectRuntimePathFilesystem(env, { dataRoot })).status,
+    "PASS",
+  );
+  await chmod(databasePath, 0o644);
+  const exposed = await inspectRuntimePathFilesystem(env, { dataRoot });
+  assert.equal(exposed.status, "BLOCKED");
+  assert.deepEqual(exposed.evidence.exposedPermissionKeys, ["WORKSPACE_DATABASE_PATH"]);
+  await chmod(databasePath, 0o600);
+  await rm(fileDataDir, { recursive: true });
+  await writeFile(fileDataDir, "", { mode: 0o600 });
+  const wrongType = await inspectRuntimePathFilesystem(env, { dataRoot });
+  assert.equal(wrongType.status, "BLOCKED");
+  assert.deepEqual(wrongType.evidence.wrongTypeKeys, ["WORKSPACE_FILE_DATA_DIR"]);
+  await rm(dataRoot, { recursive: true, force: true });
 });
 
 test("会话 Cookie 文件必须是仓库外绝对路径、0600 普通文件且不能是 symlink", async () => {

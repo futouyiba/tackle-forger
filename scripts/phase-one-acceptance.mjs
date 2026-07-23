@@ -8,7 +8,13 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 const EVIDENCE_SCHEMA_VERSION = "phase-one-acceptance-evidence/v1";
+const DEPENDENCY_EVIDENCE_SCHEMA_VERSION = "phase-one-dependency-evidence/v1";
 const EXPECTED_WORKBOOK_REF_ID = "feishu-workbook:tackle-design";
+const EXPECTED_DEPENDENCIES = new Map([
+  ["canonical_rule_source", { issue: 66, pr: 67 }],
+  ["schema_v17", { issue: 68, pr: 71 }],
+  ["non_formal_preview", { issue: 72, pr: 76 }],
+]);
 export const EXPECTED_CANONICAL_SHEETS = new Map([
   ["d6e928", "01_重量模板"],
   ["fATowU", "02_类型材质"],
@@ -75,14 +81,6 @@ const REQUIRED_ENV_KEYS = [
   "WORKSPACE_DATABASE_PATH",
   "WORKSPACE_FILE_DATA_DIR",
   "WORKSPACE_BACKUP_DIR",
-  "PHASE_ONE_CANONICAL_PULL_COMMIT",
-  "PHASE_ONE_SCHEMA_V17_COMMIT",
-  "PHASE_ONE_NON_FORMAL_COMMIT",
-];
-const DEPENDENCY_COMMIT_KEYS = [
-  "PHASE_ONE_CANONICAL_PULL_COMMIT",
-  "PHASE_ONE_SCHEMA_V17_COMMIT",
-  "PHASE_ONE_NON_FORMAL_COMMIT",
 ];
 const SECRET_ENV_KEYS = [
   "FEISHU_APP_SECRET",
@@ -129,6 +127,41 @@ function parseEnv(text) {
     values[match[1]] = value;
   }
   return values;
+}
+
+export async function readSecureEnvironmentFile({
+  envFile,
+  root = process.cwd(),
+}) {
+  if (!path.isAbsolute(envFile)) {
+    throw new Error("环境文件必须使用仓库外绝对路径。");
+  }
+  const info = await lstat(envFile);
+  if (!info.isFile() || info.isSymbolicLink()) {
+    throw new Error("环境文件必须是普通文件，不能是目录或符号链接。");
+  }
+  if ((info.mode & 0o077) !== 0) {
+    throw new Error("环境文件必须为 0600 或更严格。");
+  }
+  if (typeof process.getuid === "function" && info.uid !== process.getuid()) {
+    throw new Error("环境文件必须归当前服务账号所有。");
+  }
+  const [canonicalEnvFile, canonicalRoot] = await Promise.all([
+    realpath(envFile),
+    realpath(root),
+  ]);
+  const relativeToRoot = path.relative(canonicalRoot, canonicalEnvFile);
+  if (
+    relativeToRoot === ""
+    || (!relativeToRoot.startsWith("..") && !path.isAbsolute(relativeToRoot))
+  ) {
+    throw new Error("环境文件必须位于仓库工作树之外。");
+  }
+  const text = await readFile(canonicalEnvFile, "utf8");
+  return {
+    env: parseEnv(text),
+    mode: info.mode & 0o777,
+  };
 }
 
 function isRfc1918Ipv4Hostname(hostname) {
@@ -203,30 +236,47 @@ function inspectRuntimePaths(env) {
   });
 }
 
-async function inspectRuntimePathFilesystem(env) {
+export async function inspectRuntimePathFilesystem(
+  env,
+  { dataRoot = "/opt/tackle-forger/data" } = {},
+) {
   const entries = [
-    ["WORKSPACE_DATABASE_PATH", env.WORKSPACE_DATABASE_PATH],
-    ["WORKSPACE_FILE_DATA_DIR", env.WORKSPACE_FILE_DATA_DIR],
-    ["WORKSPACE_BACKUP_DIR", env.WORKSPACE_BACKUP_DIR],
-    ["FEISHU_SESSION_DATA_DIR", env.FEISHU_SESSION_DATA_DIR],
+    ["WORKSPACE_DATABASE_PATH", env.WORKSPACE_DATABASE_PATH, "file"],
+    ["WORKSPACE_FILE_DATA_DIR", env.WORKSPACE_FILE_DATA_DIR, "directory"],
+    ["WORKSPACE_BACKUP_DIR", env.WORKSPACE_BACKUP_DIR, "directory"],
+    ["FEISHU_SESSION_DATA_DIR", env.FEISHU_SESSION_DATA_DIR, "directory"],
   ];
   const missingKeys = [];
   const outsideRootKeys = [];
   const ownerMismatchKeys = [];
-  const writableByOthersKeys = [];
+  const exposedPermissionKeys = [];
+  const wrongTypeKeys = [];
+  const symbolicLinkKeys = [];
+  const parentBoundaryKeys = new Set();
   const canonicalPaths = [];
   let canonicalRoot;
   try {
-    canonicalRoot = await realpath("/opt/tackle-forger/data");
+    canonicalRoot = await realpath(dataRoot);
+    const rootInfo = await stat(canonicalRoot);
+    if (
+      !rootInfo.isDirectory()
+      || (typeof process.getuid === "function" && rootInfo.uid !== process.getuid())
+      || (rootInfo.mode & 0o077) !== 0
+      || (rootInfo.mode & 0o700) !== 0o700
+    ) {
+      parentBoundaryKeys.add(dataRoot);
+    }
   } catch {
     return check(
       "persistent_path_filesystem",
       "BLOCKED",
-      "目标服务器尚无可解析的 /opt/tackle-forger/data 持久根。",
+      "目标服务器尚无可解析的持久数据根。",
     );
   }
-  for (const [key, value] of entries) {
+  for (const [key, value, expectedType] of entries) {
     try {
+      const originalInfo = await lstat(value);
+      if (originalInfo.isSymbolicLink()) symbolicLinkKeys.push(key);
       const canonical = await realpath(value);
       const info = await stat(canonical);
       canonicalPaths.push(canonical);
@@ -241,7 +291,33 @@ async function inspectRuntimePathFilesystem(env) {
       if (typeof process.getuid === "function" && info.uid !== process.getuid()) {
         ownerMismatchKeys.push(key);
       }
-      if ((info.mode & 0o022) !== 0) writableByOthersKeys.push(key);
+      const typeMatched = expectedType === "file" ? info.isFile() : info.isDirectory();
+      if (!typeMatched) wrongTypeKeys.push(key);
+      const requiredOwnerMode = expectedType === "file" ? 0o600 : 0o700;
+      if (
+        (info.mode & 0o077) !== 0
+        || (info.mode & requiredOwnerMode) !== requiredOwnerMode
+      ) {
+        exposedPermissionKeys.push(key);
+      }
+      let parent = path.dirname(canonical);
+      while (
+        parent === canonicalRoot
+        || (!path.relative(canonicalRoot, parent).startsWith("..")
+          && !path.isAbsolute(path.relative(canonicalRoot, parent)))
+      ) {
+        const parentInfo = await stat(parent);
+        if (
+          !parentInfo.isDirectory()
+          || (typeof process.getuid === "function" && parentInfo.uid !== process.getuid())
+          || (parentInfo.mode & 0o077) !== 0
+          || (parentInfo.mode & 0o700) !== 0o700
+        ) {
+          parentBoundaryKeys.add(key);
+        }
+        if (parent === canonicalRoot) break;
+        parent = path.dirname(parent);
+      }
     } catch {
       missingKeys.push(key);
     }
@@ -252,18 +328,24 @@ async function inspectRuntimePathFilesystem(env) {
     missingKeys.length
     || outsideRootKeys.length
     || ownerMismatchKeys.length
-    || writableByOthersKeys.length
+    || exposedPermissionKeys.length
+    || wrongTypeKeys.length
+    || symbolicLinkKeys.length
+    || parentBoundaryKeys.size
     || duplicateCanonicalPaths
   ) {
     return check(
       "persistent_path_filesystem",
       "BLOCKED",
-      "持久路径必须真实存在、解析后位于数据根内、归当前服务账号所有且不可由组/其他用户写入。",
+      "持久路径及父目录必须真实存在、类型正确、位于数据根内、归服务账号所有且仅该账号可访问。",
       {
         missingKeys,
         outsideRootKeys,
         ownerMismatchKeys,
-        writableByOthersKeys,
+        exposedPermissionKeys,
+        wrongTypeKeys,
+        symbolicLinkKeys,
+        parentBoundaryKeys: [...parentBoundaryKeys].sort(),
         duplicateCanonicalPaths,
       },
     );
@@ -271,7 +353,7 @@ async function inspectRuntimePathFilesystem(env) {
   return check(
     "persistent_path_filesystem",
     "PASS",
-    "持久路径的真实位置、所有者和写权限边界符合部署要求。",
+    "持久路径的真实位置、文件类型、所有者和仅服务账号访问边界符合部署要求。",
     { keys: entries.map(([key]) => key) },
   );
 }
@@ -503,32 +585,124 @@ function gitSucceeds(root, args) {
   }
 }
 
-function inspectDependencyCommits(root, env) {
-  const invalidKeys = [];
-  const nonAncestorKeys = [];
-  for (const key of DEPENDENCY_COMMIT_KEYS) {
-    const commit = env[key]?.trim() ?? "";
-    if (!/^[0-9a-f]{40}$/u.test(commit)) {
-      invalidKeys.push(key);
-      continue;
+export async function inspectDependencyManifest(root) {
+  const manifestPath = path.join(root, "deploy/phase-one-dependencies.json");
+  try {
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    const dependencies = Array.isArray(manifest?.dependencies) ? manifest.dependencies : [];
+    const duplicateIds = dependencies.length !== new Set(
+      dependencies.map((dependency) => dependency?.id),
+    ).size;
+    const observedIds = new Set(dependencies.map((dependency) => dependency?.id));
+    const missingIds = [...EXPECTED_DEPENDENCIES.keys()]
+      .filter((id) => !observedIds.has(id));
+    const unexpectedIds = [...observedIds]
+      .filter((id) => !EXPECTED_DEPENDENCIES.has(id));
+    const invalidMappings = [];
+    const invalidCommits = [];
+    const duplicateCommits = [];
+    const nonAncestorIds = [];
+    const commitMessageMismatchIds = [];
+    const incompleteReviewIds = [];
+    const evidence = [];
+    const seenCommits = new Set();
+
+    for (const dependency of dependencies) {
+      const expected = EXPECTED_DEPENDENCIES.get(dependency?.id);
+      if (!expected) continue;
+      const expectedUrl = `https://github.com/futouyiba/tackle-forger/pull/${expected.pr}`;
+      if (
+        dependency.issue !== expected.issue
+        || dependency.pr !== expected.pr
+        || dependency.evidenceUrl !== expectedUrl
+      ) {
+        invalidMappings.push(dependency.id);
+      }
+      const commit = typeof dependency.commit === "string"
+        ? dependency.commit.trim()
+        : "";
+      if (!/^[0-9a-f]{40}$/u.test(commit)) {
+        invalidCommits.push(dependency.id);
+      } else {
+        if (seenCommits.has(commit)) duplicateCommits.push(dependency.id);
+        seenCommits.add(commit);
+        if (!gitSucceeds(root, ["merge-base", "--is-ancestor", commit, "HEAD"])) {
+          nonAncestorIds.push(dependency.id);
+        }
+        const subject = safeGit(root, ["show", "-s", "--format=%s", commit]);
+        if (!new RegExp(`(?:#${expected.pr}\\b|\\(#${expected.pr}\\))`, "u").test(subject)) {
+          commitMessageMismatchIds.push(dependency.id);
+        }
+      }
+      if (
+        dependency.merged !== true
+        || dependency.reviewThreadsResolved !== true
+        || dependency.requiredChecksPassed !== true
+      ) {
+        incompleteReviewIds.push(dependency.id);
+      }
+      evidence.push({
+        id: dependency.id,
+        issue: expected.issue,
+        pr: expected.pr,
+        commit: commit || null,
+        merged: dependency.merged === true,
+        reviewThreadsResolved: dependency.reviewThreadsResolved === true,
+        requiredChecksPassed: dependency.requiredChecksPassed === true,
+        evidenceUrl: expectedUrl,
+      });
     }
-    if (!gitSucceeds(root, ["merge-base", "--is-ancestor", commit, "HEAD"])) {
-      nonAncestorKeys.push(key);
-    }
-  }
-  return invalidKeys.length || nonAncestorKeys.length
-    ? check(
+
+    const invalid = (
+      manifest?.schemaVersion !== DEPENDENCY_EVIDENCE_SCHEMA_VERSION
+      || duplicateIds
+      || missingIds.length > 0
+      || unexpectedIds.length > 0
+      || invalidMappings.length > 0
+      || invalidCommits.length > 0
+      || duplicateCommits.length > 0
+      || nonAncestorIds.length > 0
+      || commitMessageMismatchIds.length > 0
+      || incompleteReviewIds.length > 0
+    );
+    return invalid
+      ? check(
+        "merged_dependency_commits",
+        "BLOCKED",
+        "受版本控制的依赖证据尚未证明 #67、#71、#76 已审核、CI 通过并合入待部署 HEAD。",
+        {
+          manifestSchemaMatched:
+            manifest?.schemaVersion === DEPENDENCY_EVIDENCE_SCHEMA_VERSION,
+          duplicateIds,
+          missingIds,
+          unexpectedIds,
+          invalidMappings,
+          invalidCommits,
+          duplicateCommits,
+          nonAncestorIds,
+          commitMessageMismatchIds,
+          incompleteReviewIds,
+          dependencies: evidence,
+        },
+      )
+      : check(
+        "merged_dependency_commits",
+        "PASS",
+        "受版本控制的依赖证据与 #67、#71、#76 映射一致，commit 唯一且均包含于待部署 HEAD。",
+        { dependencies: evidence },
+      );
+  } catch (error) {
+    return check(
       "merged_dependency_commits",
       "BLOCKED",
-      "未证明 #67、#71、#72 的已审核实现 commit 均包含在待部署 HEAD 中。",
-      { invalidKeys, nonAncestorKeys },
-    )
-    : check(
-      "merged_dependency_commits",
-      "PASS",
-      "三项依赖 commit 均为待部署 HEAD 的祖先；GitHub review/CI 仍需人工核对。",
-      { keys: [...DEPENDENCY_COMMIT_KEYS] },
+      "无法读取受版本控制的一期依赖证据清单。",
+      {
+        errorCode: error && typeof error === "object" && "code" in error
+          ? String(error.code)
+          : "INVALID_MANIFEST",
+      },
     );
+  }
 }
 
 function safeNodeVersion() {
@@ -539,7 +713,7 @@ function safeNodeVersion() {
   };
 }
 
-async function environmentFileChecks(envFile) {
+async function environmentFileChecks(envFile, root = process.cwd()) {
   if (!envFile) {
     return {
       env: {},
@@ -553,23 +727,19 @@ async function environmentFileChecks(envFile) {
     };
   }
   try {
-    const [text, info] = await Promise.all([readFile(envFile, "utf8"), stat(envFile)]);
-    const mode = info.mode & 0o777;
-    const permissionCheck = (mode & 0o077) === 0
-      ? check("environment_file_permissions", "PASS", "环境文件没有组/其他用户权限。", {
-        mode: mode.toString(8).padStart(3, "0"),
-      })
-      : check("environment_file_permissions", "BLOCKED", "环境文件权限必须收敛到 0600 或更严格。", {
-        mode: mode.toString(8).padStart(3, "0"),
-      });
-    const env = parseEnv(text);
+    const { env, mode } = await readSecureEnvironmentFile({
+      envFile,
+      root,
+    });
     return {
       env,
       checks: [
-        check("production_environment_file", "PASS", "已读取目标环境文件；证据不包含配置值。", {
+        check("production_environment_file", "PASS", "已安全读取仓库外目标环境文件；证据不包含配置值。", {
           configuredKeys: Object.keys(env).sort(),
         }),
-        permissionCheck,
+        check("environment_file_permissions", "PASS", "环境文件为当前账号所有的 0600 或更严格普通文件。", {
+          mode: mode.toString(8).padStart(3, "0"),
+        }),
         ...inspectEnvironmentValues(env),
         await inspectRuntimePathFilesystem(env),
       ],
@@ -607,9 +777,9 @@ export async function runPreflight({ root = process.cwd(), envFile } = {}) {
   } catch {
     checks.push(check("repository_contracts", "FAIL", "无法读取一期部署契约文件。"));
   }
-  const environment = await environmentFileChecks(envFile);
+  const environment = await environmentFileChecks(envFile, root);
   checks.push(...environment.checks);
-  checks.push(inspectDependencyCommits(root, environment.env));
+  checks.push(await inspectDependencyManifest(root));
   return {
     schemaVersion: EVIDENCE_SCHEMA_VERSION,
     mode: "preflight",
@@ -635,6 +805,12 @@ async function responseEvidence(response, secrets) {
   const headers = [...response.headers.entries()]
     .filter(([key]) => key.toLowerCase() !== "set-cookie")
     .sort(([left], [right]) => left.localeCompare(right));
+  const setCookies = typeof response.headers.getSetCookie === "function"
+    ? response.headers.getSetCookie()
+    : (response.headers.get("set-cookie") ?? "")
+      .split(/,(?=\s*[^;,=\s]+=[^;,]*)/u)
+      .map((value) => value.trim())
+      .filter(Boolean);
   return {
     status: response.status,
     bodyHash: sha256(body),
@@ -648,7 +824,30 @@ async function responseEvidence(response, secrets) {
       }
     })(),
     location: response.headers.get("location"),
-    setCookie: response.headers.get("set-cookie"),
+    setCookies,
+  };
+}
+
+function parseSetCookie(value) {
+  const [nameValue, ...rawAttributes] = value.split(";").map((part) => part.trim());
+  const separator = nameValue.indexOf("=");
+  if (separator <= 0) return undefined;
+  const attributes = new Map();
+  for (const rawAttribute of rawAttributes) {
+    const attributeSeparator = rawAttribute.indexOf("=");
+    const name = (
+      attributeSeparator >= 0 ? rawAttribute.slice(0, attributeSeparator) : rawAttribute
+    ).trim().toLowerCase();
+    if (!name || attributes.has(name)) return undefined;
+    attributes.set(
+      name,
+      attributeSeparator >= 0 ? rawAttribute.slice(attributeSeparator + 1).trim() : null,
+    );
+  }
+  return {
+    name: nameValue.slice(0, separator).trim(),
+    value: nameValue.slice(separator + 1).trim(),
+    attributes,
   };
 }
 
@@ -796,14 +995,19 @@ export async function runPublicSmoke({
     );
   }) && states[0] !== states[1];
   const cookieValid = starts.every((start, index) => {
-    const cookie = start.setCookie ?? "";
-    const pendingState = /(?:^|;\s*)tf_feishu_pending=([^;]+)/iu.exec(cookie)?.[1] ?? "";
+    const pendingCookies = (start.setCookies ?? [])
+      .map(parseSetCookie)
+      .filter((cookie) => cookie?.name === "tf_feishu_pending");
+    if (pendingCookies.length !== 1) return false;
+    const cookie = pendingCookies[0];
+    const attributes = cookie.attributes;
     return (
-      pendingState === states[index]
-      && /HttpOnly/iu.test(cookie)
-      && /SameSite=Lax/iu.test(cookie)
-      && /Path=\//iu.test(cookie)
-      && (target.protocol === "http:" || /Secure/iu.test(cookie))
+      cookie.value === states[index]
+      && attributes.get("httponly") === null
+      && attributes.get("samesite")?.toLowerCase() === "lax"
+      && attributes.get("path") === "/"
+      && attributes.get("max-age") === "600"
+      && (target.protocol === "http:" || attributes.get("secure") === null)
     );
   });
   const leakedConfiguredSecret = starts.some((start) => start.leakedConfiguredSecret);
@@ -831,6 +1035,12 @@ export async function runPublicSmoke({
         leakedConfiguredSecret,
       },
     ));
+  checks.push(check(
+    "oauth_pending_state_side_effect",
+    "INFO",
+    "OAuth 起点会创建两条最长 600 秒的临时 pending login 记录；不写业务工作区。",
+    { attemptedPendingRecords: 2, maxAgeSeconds: 600 },
+  ));
 
   for (const [id, pathname] of [
     ["anonymous_state", "/api/state"],
@@ -883,12 +1093,42 @@ function capabilityBoundary(capabilities) {
 function workbookEvidence(inspection) {
   const source = inspection?.sourceRevision;
   const sheets = Array.isArray(source?.sheets) ? source.sheets : [];
+  const identityItems = Array.isArray(inspection?.identityReport?.items)
+    ? inspection.identityReport.items
+    : [];
+  const identityRows = Array.isArray(inspection?.identityRows) ? inspection.identityRows : [];
+  const qualityIssues = Array.isArray(inspection?.qualityDraft?.issues)
+    ? inspection.qualityDraft.issues
+    : [];
+  const pricingIssues = Array.isArray(inspection?.pricingDraft?.issues)
+    ? inspection.pricingDraft.issues
+    : [];
   return {
     sourceRevision: source?.sourceRevision ?? null,
     spreadsheetTokenHash: hashIdentity(source?.spreadsheetToken),
     sheets: sheets
       .map((sheet) => ({ sheetId: sheet.sheetId, name: sheet.name ?? null }))
       .sort((left, right) => String(left.sheetId).localeCompare(String(right.sheetId))),
+    identityRowCount: identityRows.length,
+    identityItemCount: identityItems.length,
+    pendingIdentityCount: identityItems.filter((item) => (
+      item?.requiresHumanConfirmation === true || item?.state !== "ALREADY_IDENTIFIED"
+    )).length,
+    identityBlockingIssueCodes: (
+      Array.isArray(inspection?.identityReport?.blockingIssueCodes)
+        ? inspection.identityReport.blockingIssueCodes
+        : []
+    ).map(String).sort(),
+    qualityDraftStatus: inspection?.qualityDraft?.formalStatus ?? null,
+    qualityBlockingIssueCodes: qualityIssues
+      .filter((issue) => issue?.severity === "ERROR" || issue?.severity === "BLOCKER")
+      .map((issue) => String(issue.code ?? "UNKNOWN"))
+      .sort(),
+    pricingDraftStatus: inspection?.pricingDraft?.formalStatus ?? null,
+    pricingBlockingIssueCodes: pricingIssues
+      .filter((issue) => issue?.severity === "error")
+      .map((issue) => String(issue.code ?? "UNKNOWN"))
+      .sort(),
   };
 }
 
@@ -914,8 +1154,61 @@ function validateCanonicalWorkbook(inspection, expectedSpreadsheetToken) {
     .filter((issue) => issue?.severity === "error")
     .map((issue) => String(issue.code ?? "UNKNOWN"))
     .sort();
+  const identityRows = Array.isArray(inspection?.identityRows) ? inspection.identityRows : [];
+  const stableIds = identityRows.map((row) => (
+    typeof row?.stableId === "string" ? row.stableId.trim() : ""
+  ));
+  const missingStableIdentityCount = stableIds.filter((stableId) => !stableId).length;
+  const duplicateStableIdentityCount = stableIds.length - new Set(stableIds).size;
+  const identityReport = inspection?.identityReport;
+  const identityItems = Array.isArray(identityReport?.items) ? identityReport.items : [];
+  const identityBlockingIssueCodes = Array.isArray(identityReport?.blockingIssueCodes)
+    ? identityReport.blockingIssueCodes.map(String).sort()
+    : ["IDENTITY_REPORT_MISSING"];
+  const pendingIdentityCount = identityItems.filter((item) => (
+    item?.requiresHumanConfirmation === true || item?.state !== "ALREADY_IDENTIFIED"
+  )).length;
+  const identityReportMatched = (
+    identityReport?.workbookRefId === EXPECTED_WORKBOOK_REF_ID
+    && identityReport?.sourceRevision === source?.sourceRevision
+    && identityRows.length > 0
+    && identityItems.length === identityRows.length
+    && missingStableIdentityCount === 0
+    && duplicateStableIdentityCount === 0
+    && identityBlockingIssueCodes.length === 0
+    && pendingIdentityCount === 0
+  );
+  const qualityDraft = inspection?.qualityDraft;
+  const qualityBlockingIssueCodes = (
+    Array.isArray(qualityDraft?.issues) ? qualityDraft.issues : []
+  )
+    .filter((issue) => issue?.severity === "ERROR" || issue?.severity === "BLOCKER")
+    .map((issue) => String(issue.code ?? "UNKNOWN"))
+    .sort();
+  const qualityDraftMatched = (
+    qualityDraft?.sourceRevisionId === source?.id
+    && qualityDraft?.sourceRevision === source?.sourceRevision
+    && qualityDraft?.formalStatus === "READY_TO_PUBLISH"
+    && qualityBlockingIssueCodes.length === 0
+  );
+  const pricingDraft = inspection?.pricingDraft;
+  const pricingBlockingIssueCodes = (
+    Array.isArray(pricingDraft?.issues) ? pricingDraft.issues : []
+  )
+    .filter((issue) => issue?.severity === "error")
+    .map((issue) => String(issue.code ?? "UNKNOWN"))
+    .sort();
+  const pricingDraftMatched = (
+    pricingDraft?.sourceRevisionId === source?.id
+    && pricingDraft?.sourceRevision === source?.sourceRevision
+    && ["TRIAL_READY", "READY_TO_PUBLISH"].includes(pricingDraft?.formalStatus)
+    && pricingBlockingIssueCodes.length === 0
+    && inspection?.pricingWeightBandPolicy === "MATCHED_STRUCTURAL_SOURCE_BAND"
+  );
   const valid = (
     source?.workbookRefId === EXPECTED_WORKBOOK_REF_ID
+    && typeof source?.id === "string"
+    && source.id.trim().length > 0
     && typeof source?.sourceRevision === "string"
     && source.sourceRevision.trim().length > 0
     && typeof source?.registryHash === "string"
@@ -926,6 +1219,9 @@ function validateCanonicalWorkbook(inspection, expectedSpreadsheetToken) {
     && missingSheets.length === 0
     && renamedSheets.length === 0
     && blockingIssueCodes.length === 0
+    && identityReportMatched
+    && qualityDraftMatched
+    && pricingDraftMatched
   );
   return {
     valid,
@@ -937,6 +1233,17 @@ function validateCanonicalWorkbook(inspection, expectedSpreadsheetToken) {
       missingSheets,
       renamedSheets,
       blockingIssueCodes,
+      identityReportMatched,
+      missingStableIdentityCount,
+      duplicateStableIdentityCount,
+      pendingIdentityCount,
+      identityBlockingIssueCodes,
+      qualityDraftMatched,
+      qualityDraftStatus: qualityDraft?.formalStatus ?? null,
+      qualityBlockingIssueCodes,
+      pricingDraftMatched,
+      pricingDraftStatus: pricingDraft?.formalStatus ?? null,
+      pricingBlockingIssueCodes,
     },
   };
 }
@@ -1075,13 +1382,13 @@ export async function runAuthenticatedReadOnlySmoke({
     ? check(
       "authoritative_workbook_read",
       "PASS",
-      "已只读核对规范工作簿身份、完整稳定表集合和阻断 issue；token 只保留哈希。",
+      "已核对规范工作簿、完整稳定表、稳定身份及品质/定价草稿阻断；token 只保留哈希。",
       canonicalWorkbookEvidence,
     )
     : check(
       "authoritative_workbook_read",
       "BLOCKED",
-      "工作簿身份、token、稳定表集合或 inspection issue 不满足权威契约。",
+      "工作簿身份、token、稳定表、稳定身份或品质/定价草稿不满足权威契约。",
       { status: workbook.status, ...canonicalWorkbookEvidence },
     ),
   );
@@ -1126,12 +1433,15 @@ function usage() {
     "  npm run acceptance:phase-one -- public-smoke --base-url https://tackle.internal [--env-file /opt/tackle-forger/.env.local] [--output ...]",
     "  npm run acceptance:phase-one -- authenticated-read-only --base-url https://tackle.internal --cookie-file /run/user/.../cookie --env-file /opt/tackle-forger/.env.local [--output ...]",
     "",
-    "脚本只执行读取和 HTTP GET；不会拉取、发布、写入工作区、退出会话、部署或裁剪 revision。",
+    "脚本不写业务工作区，不会拉取、发布、退出会话、部署或裁剪 revision。",
+    "public-smoke 会调用两次 OAuth start，并创建两条最长 600 秒的临时 pending login 记录。",
   ].join("\n");
 }
 
 async function readOptionalEnv(envFile) {
-  return envFile ? parseEnv(await readFile(envFile, "utf8")) : {};
+  return envFile
+    ? (await readSecureEnvironmentFile({ envFile, root: process.cwd() })).env
+    : {};
 }
 
 export async function readSessionCookieFile({ cookieFile, root = process.cwd() }) {

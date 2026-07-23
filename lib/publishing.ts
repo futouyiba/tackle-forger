@@ -1,9 +1,9 @@
 import { deterministicHash } from "./rule-kernel";
 import { previewPatchRebase } from "./patch-engine";
 import { orderedPatchReferences } from "./patch-ledger";
+import { authoritativeObjectIdentity, evaluateAuthoritativePatchFinalRanges, type AuthoritativePatchObject } from "./patch-authority";
 import {
   assertPatchGateCanProceed,
-  assertPatchRangeEvaluationIntegrity,
   assertPatchReviewCoverage,
   assertPublishedPatchOffsetPolicy,
   assertRangeEvaluationMatchesPatchRevisions,
@@ -22,12 +22,14 @@ import type {
   FiveAxisViewDefinition,
   PatchRebaseDifference,
   PatchOffsetPolicyVersion,
+  ParameterDefinition,
   PatchReviewBatch,
   PatchRevisionRecord,
   PatchValidationWaiver,
   ProjectionPatchRuleSource,
   PurchasableModel,
   RuleChangeProposal,
+  RuleSetVersion,
   SeriesDefinition,
   SkuDrawer,
   UpgradeCandidate,
@@ -58,10 +60,10 @@ export interface PublishModelInput {
   patchRevisions?: PatchRevisionRecord[];
   patchOffsetGovernance?: {
     policy?: WorkspacePolicyRecord | PatchOffsetPolicyVersion;
-    rangeEvaluation: PatchRangeEvaluation;
+    ruleSet: RuleSetVersion;
+    parameterDefinitions: ParameterDefinition[];
     reviewBatch?: PatchReviewBatch;
     waivers?: PatchValidationWaiver[];
-    objectInputHash: string;
   };
   attributeAffixIds: string[];
   passiveAffixIds: string[];
@@ -103,6 +105,7 @@ export function publishConfigurationSnapshot(
   );
   const patchSetHash = frozenPatches?.patchSetHash ?? legacyPatchSetHash;
   const hasPatchDependency = Boolean(input.patchRevisions?.length || input.patches.length);
+  let patchRangeEvaluation: PatchRangeEvaluation | undefined;
   if (input.publicationMode === "new_formal" && hasPatchDependency) {
     try {
       const governance = input.patchOffsetGovernance;
@@ -114,36 +117,43 @@ export function publishConfigurationSnapshot(
       }
       const policy = governance.policy;
       assertPublishedPatchOffsetPolicy(policy);
-      if (
-        governance.rangeEvaluation.policyVersion !== policy.version
-        || governance.rangeEvaluation.gate !== "PUBLISH"
-      ) {
-        throw new PatchOffsetPolicyError(
-          "PATCH_RANGE_EVALUATION_GATE_MISMATCH",
-          "正式 Snapshot 必须使用当前策略在 PUBLISH 关口生成的范围校验。",
-        );
-      }
-      assertPatchRangeEvaluationIntegrity({
-        evaluation: governance.rangeEvaluation,
+      const authority: AuthoritativePatchObject = {
+        subjectRef: { scopeType: "model", entityId: input.model.id, revision: input.model.revision },
+        ruleSet: governance.ruleSet,
+        parameterDefinitions: governance.parameterDefinitions,
+        patchRevisions: input.patchRevisions ?? [],
+        contexts: [{
+          contextId: `${input.model.id}:${input.sku.id}:${input.projection.id}`,
+          itemPartId: input.sku.projectionMatch.itemPartId,
+          projection: input.projection,
+          finalPanelValues: input.finalPanelValues,
+          weightBandId: input.sku.projectionMatch.weightTemplateId,
+          skuRef: input.sku.id,
+          targetPullKg: input.sku.projectionMatch.targetPullKg,
+        }],
+      };
+      patchRangeEvaluation = evaluateAuthoritativePatchFinalRanges({
         policy,
-        expectedSubjectRef: { scopeType: "model", entityId: input.model.id, revision: input.model.revision },
-        expectedPatchSetHash: patchSetHash,
-        expectedPatchReferences: frozenPatches?.references ?? [],
-        expectedObjectInputHash: governance.objectInputHash,
+        gate: "PUBLISH",
+        objects: [authority],
       });
+      const identity = authoritativeObjectIdentity(authority);
+      if (identity.patchSetHash !== patchSetHash) {
+        throw new PatchOffsetPolicyError("PATCH_SET_HASH_MISMATCH", "发布命令派生的 PatchSetHash 与待冻结引用不一致。");
+      }
       assertPatchReviewCoverage({
         batch: governance.reviewBatch,
         policyVersion: policy.version,
         subjectRef: { scopeType: "model", entityId: input.model.id, revision: input.model.revision },
-        objectInputHash: governance.objectInputHash,
+        objectInputHash: identity.objectInputHash,
         patchSetHash,
       });
       assertRangeEvaluationMatchesPatchRevisions({
-        evaluation: governance.rangeEvaluation,
+        evaluation: patchRangeEvaluation,
         revisions: input.patchRevisions ?? [],
       });
       assertPatchGateCanProceed({
-        evaluation: governance.rangeEvaluation,
+        evaluation: patchRangeEvaluation,
         waivers: governance.waivers,
       });
     } catch (error) {
@@ -267,7 +277,7 @@ export function publishConfigurationSnapshot(
     ...(input.publicationMode === "new_formal" && hasPatchDependency && governance ? {
       patchOffsetPolicyVersion: governance.policy?.version,
       patchReviewBatchRef: governance.reviewBatch?.batchId,
-      patchValidationIssueFingerprints: governance.rangeEvaluation.issues
+      patchValidationIssueFingerprints: (patchRangeEvaluation?.issues ?? [])
         .flatMap((issue) => issue.fingerprint ? [issue.fingerprint] : [])
         .sort(),
       patchValidationWaiverRefs: (governance.waivers ?? []).map((waiver) => waiver.waiverId).sort(),

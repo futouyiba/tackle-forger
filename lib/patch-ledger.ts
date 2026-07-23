@@ -1,5 +1,5 @@
 import { deterministicHash } from "./rule-kernel";
-import { assertPatchReviewCoverage, assertPatchRevisionDeterministicallyReplayable, assertPublishedPatchOffsetPolicy, PatchOffsetPolicyError } from "./patch-offset-policy";
+import { assertPatchReviewCoverage, assertPatchRevisionDeterministicallyReplayable, assertPublishedPatchOffsetPolicy, invalidatePatchReviewBatch, PatchOffsetPolicyError } from "./patch-offset-policy";
 import type { PatchAbsorptionAssessment, PatchAbsorptionOperationEvidence, PatchLedger, PatchMirrorOperationResult, PatchMirrorPullAudit, PatchMirrorRemoteRow, PatchMirrorSyncCommand, PatchMirrorValidationIssue, PatchOffsetPolicyVersion, PatchOperationRecord, PatchPatternSummary, PatchReviewBatch, PatchReviewSubjectRef, PatchRevisionRecord, PatchSnapshotReference, PatchValidationWaiver, ProjectionPatchRuleSource, RuleSourceChangeDraft, WorkspacePolicyRecord } from "./types";
 
 export const CURRENT_PATCH_LEDGER_SCHEMA_VERSION = 4;
@@ -156,6 +156,15 @@ export function reviewPatchRevision(input:{ledger:PatchLedger;patchId:string;pat
     try{
       assertPublishedPatchOffsetPolicy(input.approvalEvidence?.policy);
       if(!input.approvalEvidence) throw new PatchOffsetPolicyError("PATCH_REVIEW_EVIDENCE_MISSING","批准 Patch 前必须完成整体人工复核。");
+      const expectedScope=target.scopeType==="derivation"?"model":target.scopeType;
+      if(input.approvalEvidence.subjectRef.scopeType!==expectedScope
+        || input.approvalEvidence.subjectRef.entityId!==target.subjectEntityId
+        || input.approvalEvidence.subjectRef.revision!==target.baseObjectRevision){
+        throw new PatchOffsetPolicyError(
+          "PATCH_REVIEW_EVIDENCE_STALE",
+          "Patch 基底对象 revision 已变化，旧整体复核证据不能批准当前 revision。",
+        );
+      }
       assertPatchRevisionDeterministicallyReplayable(target);
       const evidence=assertPatchReviewCoverage({
         batch:input.approvalEvidence.reviewBatch,
@@ -177,12 +186,18 @@ export function reviewPatchRevision(input:{ledger:PatchLedger;patchId:string;pat
   const next=buildPatchRevision({...target,state:input.nextState,reviewedBy:input.reviewer,reviewedAt:input.reviewedAt,operations:target.operations});
   return {...input.ledger,revisions:input.ledger.revisions.map((r)=>r===target?next:r)};
 }
-export function reviewPatchBatch(input:{ledger:PatchLedger;reviewBatch:PatchReviewBatch;policy?:WorkspacePolicyRecord|PatchOffsetPolicyVersion;waivers?:PatchValidationWaiver[];nextState:"APPROVED"|"ACTIVE";reviewer:string;reviewedAt:string;capabilities:Iterable<string>}):PatchLedger{
+export function reviewPatchBatch(input:{ledger:PatchLedger;reviewBatch:PatchReviewBatch;policy?:WorkspacePolicyRecord|PatchOffsetPolicyVersion;waivers?:PatchValidationWaiver[];currentObjects:Array<{subjectRef:PatchReviewSubjectRef;objectInputHash:string;patchSetHash:string}>;nextState:"APPROVED"|"ACTIVE";reviewer:string;reviewedAt:string;capabilities:Iterable<string>}):PatchLedger{
   requireCapability(input.capabilities,"patch.review");
   if(input.reviewBatch.gate!=="REVIEW") throw new PatchLedgerError("PATCH_RANGE_EVALUATION_GATE_MISMATCH","批量 Patch 批准只接受 REVIEW 关口证据");
+  const currentHashes=Object.fromEntries(input.currentObjects.map((current)=>[`${current.subjectRef.scopeType}:${current.subjectRef.entityId}@${current.subjectRef.revision}`,current.objectInputHash]));
+  const reviewBatch=invalidatePatchReviewBatch({batch:input.reviewBatch,currentObjectInputHashes:currentHashes});
   let ledger=input.ledger;
-  const objects=[...input.reviewBatch.objectEvidence].sort((left,right)=>left.subjectRef.entityId.localeCompare(right.subjectRef.entityId)||left.subjectRef.revision-right.subjectRef.revision);
+  const objects=[...reviewBatch.objectEvidence].sort((left,right)=>left.subjectRef.entityId.localeCompare(right.subjectRef.entityId)||left.subjectRef.revision-right.subjectRef.revision);
   for(const evidence of objects){
+    const current=input.currentObjects.find((entry)=>entry.subjectRef.scopeType===evidence.subjectRef.scopeType&&entry.subjectRef.entityId===evidence.subjectRef.entityId);
+    if(!current||evidence.state!=="FRESH"||current.objectInputHash!==evidence.objectInputHash||current.patchSetHash!==evidence.patchSetHash){
+      throw new PatchLedgerError("PATCH_REVIEW_EVIDENCE_STALE",`对象 ${evidence.subjectRef.entityId} 的当前 revision、RuleSet、输入或 PatchSet 已变化`);
+    }
     for(const reference of evidence.patchReferences){
       const target=ledger.revisions.find((revision)=>revision.patchId===reference.patchId&&revision.patchRevision===reference.patchRevision);
       if(!target) throw new PatchLedgerError("PATCH_REVISION_NOT_FOUND",`批量复核引用的 ${reference.patchId}@${reference.patchRevision} 不存在`);
@@ -190,7 +205,7 @@ export function reviewPatchBatch(input:{ledger:PatchLedger;reviewBatch:PatchRevi
       ledger=reviewPatchRevision({
         ledger,patchId:reference.patchId,patchRevision:reference.patchRevision,nextState:input.nextState,
         reviewer:input.reviewer,reviewedAt:input.reviewedAt,capabilities:input.capabilities,
-        approvalEvidence:{policy:input.policy,reviewBatch:input.reviewBatch,waivers:input.waivers,subjectRef:evidence.subjectRef,objectInputHash:evidence.objectInputHash,patchSetHash:evidence.patchSetHash},
+        approvalEvidence:{policy:input.policy,reviewBatch,waivers:input.waivers,subjectRef:current.subjectRef,objectInputHash:current.objectInputHash,patchSetHash:current.patchSetHash},
       });
     }
   }

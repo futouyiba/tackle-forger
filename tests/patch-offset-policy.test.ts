@@ -18,9 +18,20 @@ import {
   PatchOffsetPolicyError,
   type PatchFinalRangeContext,
 } from "../lib/patch-offset-policy";
-import { buildPatchRevision, emptyPatchLedger, orderedPatchReferences, reviewPatchBatch } from "../lib/patch-ledger";
+import { buildPatchRevision, emptyPatchLedger, orderedPatchReferences, PatchLedgerError, reviewPatchBatch } from "../lib/patch-ledger";
 import { publishConfigurationSnapshot, verifySnapshotIntegrity } from "../lib/publishing";
 import { createExportManifest } from "../lib/config-export";
+import {
+  assertPatchEvaluationMatchesAuthority,
+  authoritativeObjectIdentity,
+  createAuthoritativePatchObjectFromWorkspace,
+  createWorkspacePatchReview,
+  deriveAuthoritativePatchContexts,
+  evaluateAuthoritativePatchFinalRanges,
+  preparePatchOperationFromWorkspace,
+  reviewWorkspacePatchRevision,
+  type AuthoritativePatchObject,
+} from "../lib/patch-authority";
 import { deterministicHash } from "../lib/rule-kernel";
 import { createSeedState } from "../lib/seed";
 import type {
@@ -411,10 +422,29 @@ test("一次批量复核可以原子批准多个对象的完整 Patch 集合", (
   });
   const batch = createPatchReviewBatch({ evaluation, reviewedBy: "reviewer", reviewedAt: NOW });
   const ledger = { ...emptyPatchLedger(), revisions: [first, second] };
+  assert.throws(() => reviewPatchBatch({
+    ledger,
+    reviewBatch: batch,
+    policy: policy(),
+    currentObjects: batch.objectEvidence.map((evidence, index) => ({
+      subjectRef: index === 0 ? { ...evidence.subjectRef, revision: evidence.subjectRef.revision + 1 } : evidence.subjectRef,
+      objectInputHash: evidence.objectInputHash,
+      patchSetHash: evidence.patchSetHash,
+    })),
+    nextState: "APPROVED",
+    reviewer: "reviewer",
+    reviewedAt: NOW,
+    capabilities: ["patch.review"],
+  }), (error: unknown) => error instanceof PatchLedgerError && error.code === "PATCH_REVIEW_EVIDENCE_STALE");
   const approved = reviewPatchBatch({
     ledger,
     reviewBatch: batch,
     policy: policy(),
+    currentObjects: batch.objectEvidence.map((evidence) => ({
+      subjectRef: evidence.subjectRef,
+      objectInputHash: evidence.objectInputHash,
+      patchSetHash: evidence.patchSetHash,
+    })),
     nextState: "APPROVED",
     reviewer: "reviewer",
     reviewedAt: NOW,
@@ -449,6 +479,161 @@ test("基底变化按 add/multiply、set、clear 与 FinalReview 语义进入复
     parameterTypeAndUnitCompatible: true,
     clearStillMeansInheritedOverride: true,
   }), "PENDING_REVIEW");
+});
+
+test("实际工作区命令计算 Trace、包含端点，并在伪造或当前版本变化时 fail-closed", () => {
+  const state = createSeedState();
+  const model = state.purchasableModels[0];
+  const sku = state.skuDrawers.find((entry) => entry.id === model.skuId)!;
+  const series = state.seriesDefinitions.find((entry) => entry.id === sku.seriesId)!;
+  const projection = state.derivedProjections.find((entry) => entry.id === sku.projectionMatch.projectionId)!;
+  const numeric = Object.entries(projection.values)
+    .find((entry): entry is [string, number] => typeof entry[1] === "number")!;
+  series.patchIds = [];
+  sku.patchIds = [];
+  model.patchIds = [];
+  state.parameters = state.parameters.map((parameter) => parameter.key === numeric[0]
+    ? { ...parameter, targetRange: { min: numeric[1], max: numeric[1] } }
+    : parameter);
+  const prepared = preparePatchOperationFromWorkspace({
+    state,
+    scopeType: "model",
+    subjectEntityId: model.id,
+    parameterKey: numeric[0],
+    operation: "add",
+    operand: 0,
+  });
+  assert.equal(prepared.before, numeric[1]);
+  assert.equal(prepared.after, numeric[1]);
+  const ruleSet = [...state.ruleSetVersions].filter((entry) => entry.status === "published")
+    .sort((left, right) => right.version - left.version)[0];
+  const revision = buildPatchRevision({
+    patchId: "patch:model:ui-command",
+    patchRevision: 1,
+    scopeType: "model",
+    layerType: "model",
+    subjectEntityId: model.id,
+    subjectName: model.name,
+    baseRuleSetVersion: ruleSet.id,
+    baseObjectRevision: model.revision,
+    state: "PENDING_REVIEW",
+    mirrorSyncState: "NOT_SYNCED",
+    attentionStates: [],
+    reason: "actual UI command chain",
+    evidence: [prepared.traceHash],
+    createdBy: "designer",
+    createdAt: NOW,
+    snapshotRefs: [],
+    operations: [{
+      operationId: "patch:model:ui-command:op:1",
+      operationIndex: 0,
+      parameterKey: numeric[0],
+      operation: "add",
+      operand: 0,
+      before: prepared.before,
+      after: prepared.after,
+    }],
+  });
+  state.patchLedger.revisions.push(revision);
+  model.patchIds.push(revision.patchId);
+  const authority = createAuthoritativePatchObjectFromWorkspace(state, revision);
+  const forgedEvaluation = evaluatePatchFinalRanges({
+    policy: findPublishedPatchOffsetPolicy(state.workspacePolicies),
+    gate: "REVIEW",
+    contexts: deriveAuthoritativePatchContexts(authority).map((entry) => ({
+      ...entry,
+      finalValue: entry.finalValue + 100,
+      validRange: { min: entry.finalValue + 99, max: entry.finalValue + 101, unit: entry.validRange.unit },
+    })),
+  });
+  assert.throws(
+    () => assertPatchEvaluationMatchesAuthority({
+      evaluation: forgedEvaluation,
+      policy: findPublishedPatchOffsetPolicy(state.workspacePolicies),
+      objects: [authority],
+    }),
+    (error: unknown) => error instanceof PatchOffsetPolicyError
+      && error.code === "PATCH_RANGE_EVALUATION_AUTHORITY_MISMATCH",
+  );
+  const forgedBatch = createPatchReviewBatch({
+    evaluation: forgedEvaluation,
+    reviewedBy: "reviewer",
+    reviewedAt: NOW,
+  });
+  state.patchReviewBatches.push(forgedBatch);
+  assert.throws(
+    () => reviewWorkspacePatchRevision({
+      state,
+      patchId: revision.patchId,
+      patchRevision: revision.patchRevision,
+      nextState: "APPROVED",
+      reviewer: "reviewer",
+      reviewedAt: NOW,
+      capabilities: ["patch.review"],
+    }),
+    (error: unknown) => error instanceof PatchOffsetPolicyError && error.code === "PATCH_REVIEW_EVIDENCE_STALE",
+  );
+  state.patchReviewBatches = [];
+  const review = createWorkspacePatchReview({ state, target: revision, reviewedBy: "reviewer", reviewedAt: NOW });
+  assert.equal(review.evaluation.results[0].valid, true);
+  assert.equal(review.evaluation.results[0].min, numeric[1]);
+  assert.equal(review.evaluation.results[0].max, numeric[1]);
+  state.patchReviewBatches.push(review.batch);
+  const approved = reviewWorkspacePatchRevision({
+    state,
+    patchId: revision.patchId,
+    patchRevision: revision.patchRevision,
+    nextState: "APPROVED",
+    reviewer: "reviewer",
+    reviewedAt: NOW,
+    capabilities: ["patch.review"],
+  });
+  assert.equal(approved.patchLedger.revisions.find((entry) => entry.patchId === revision.patchId)?.state, "APPROVED");
+  const active = reviewWorkspacePatchRevision({
+    state: approved,
+    patchId: revision.patchId,
+    patchRevision: revision.patchRevision,
+    nextState: "ACTIVE",
+    reviewer: "reviewer",
+    reviewedAt: NOW,
+    capabilities: ["patch.review"],
+  });
+  assert.equal(active.patchLedger.revisions.find((entry) => entry.patchId === revision.patchId)?.state, "ACTIVE");
+
+  model.revision += 1;
+  assert.throws(
+    () => reviewWorkspacePatchRevision({
+      state,
+      patchId: revision.patchId,
+      patchRevision: revision.patchRevision,
+      nextState: "APPROVED",
+      reviewer: "reviewer",
+      reviewedAt: NOW,
+      capabilities: ["patch.review"],
+    }),
+    (error: unknown) => error instanceof PatchOffsetPolicyError && error.code === "PATCH_REVIEW_EVIDENCE_STALE",
+  );
+  model.revision -= 1;
+  ruleSet.status = "superseded";
+  state.ruleSetVersions.push({
+    ...ruleSet,
+    id: `${ruleSet.id}:next`,
+    version: ruleSet.version + 1,
+    status: "published",
+    publishedAt: NOW,
+  });
+  assert.throws(
+    () => reviewWorkspacePatchRevision({
+      state,
+      patchId: revision.patchId,
+      patchRevision: revision.patchRevision,
+      nextState: "APPROVED",
+      reviewer: "reviewer",
+      reviewedAt: NOW,
+      capabilities: ["patch.review"],
+    }),
+    (error: unknown) => error instanceof PatchOffsetPolicyError && error.code === "PATCH_REVIEW_EVIDENCE_STALE",
+  );
 });
 
 test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证据且旧快照不变", () => {
@@ -494,48 +679,48 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
   });
   const patchRevisions = [governedRevision];
   const frozen = orderedPatchReferences(patchRevisions);
-  const operationTrace = governedRevision.operations.map((operation) => ({
-    operationId: operation.operationId,
-    parameterKey: operation.parameterKey,
-    operation: operation.operation,
-    before: operation.before,
-    operand: operation.operand,
-    after: operation.after,
-  }));
-  const objectInputHash = deterministicHash({
-    modelRevision: model.revision,
-    finalPanelValues: oldSnapshot.finalPanelValues,
-    patchSetHash: frozen.patchSetHash,
-  });
-  const publishContext = context({
-    contextId: `${model.id}/${numericEntry[0]}`,
-    parameterKey: numericEntry[0],
-    standardUnit: "ratio",
+  const ruleSet = state.ruleSetVersions.find((entry) =>
+    entry.id === projection.ruleSetVersion || String(entry.version) === projection.ruleSetVersion)!;
+  const parameterDefinitions = state.parameters.map((parameter) =>
+    parameter.key === numericEntry[0]
+      ? { ...parameter, targetRange: { min: numericEntry[1] - 2, max: numericEntry[1] - 1 } }
+      : parameter);
+  const publishAuthority: AuthoritativePatchObject = {
     subjectRef: { scopeType: "model", entityId: model.id, revision: model.revision },
-    objectInputHash,
-    skuRef: sku.id,
-    targetPullKg: sku.targetWeightKg,
-    projectionId: projection.id,
-    weightBandId: projection.weightTemplateId,
-    constraintRuleRef: `range:${numericEntry[0]}`,
-    constraintRuleVersion: projection.ruleSetVersion,
-    finalValue: numericEntry[1],
-    finalValueUnit: "ratio",
-    validRange: { min: numericEntry[1] - 1, max: numericEntry[1] + 1, unit: "ratio" },
-    patchReferences: frozen.references,
-    patchSetHash: frozen.patchSetHash,
-    operationTrace,
-    traceHash: deterministicHash(operationTrace),
-  });
-  const rangeEvaluation = evaluatePatchFinalRanges({
+    ruleSet,
+    parameterDefinitions,
+    patchRevisions,
+    contexts: [{
+      contextId: `${model.id}:${sku.id}:${projection.id}`,
+      itemPartId: sku.projectionMatch.itemPartId,
+      projection,
+      finalPanelValues: oldSnapshot.finalPanelValues,
+      weightBandId: sku.projectionMatch.weightTemplateId,
+      skuRef: sku.id,
+      targetPullKg: sku.projectionMatch.targetPullKg,
+    }],
+  };
+  const publishIdentity = authoritativeObjectIdentity(publishAuthority);
+  const rangeEvaluation = evaluateAuthoritativePatchFinalRanges({
     policy: publishedPolicy,
     gate: "PUBLISH",
-    contexts: [publishContext],
+    objects: [publishAuthority],
   });
   const reviewBatch = createPatchReviewBatch({
     evaluation: rangeEvaluation,
     reviewedBy: "publisher",
     reviewedAt: NOW,
+  });
+  const publishWaiver = createPatchValidationWaiverDecision({
+    issues: rangeEvaluation.issues,
+    requested: [{ issueFingerprint: rangeEvaluation.issues[0].fingerprint!, gate: "PUBLISH" }],
+    policyVersion: publishedPolicy.version,
+    scopeRef: publishAuthority.subjectRef,
+    objectInputHash: publishIdentity.objectInputHash,
+    patchSetHash: publishIdentity.patchSetHash,
+    reason: "发布保留意见通过",
+    approvedBy: "publisher",
+    approvedAt: NOW,
   });
   const snapshot = publishConfigurationSnapshot({
     publicationMode: "new_formal",
@@ -549,9 +734,10 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
     patchRevisions,
     patchOffsetGovernance: {
       policy: publishedPolicy,
-      rangeEvaluation,
+      ruleSet,
+      parameterDefinitions,
       reviewBatch,
-      objectInputHash,
+      waivers: publishWaiver.waivers,
     },
     attributeAffixIds: oldSnapshot.attributeAffixIds,
     passiveAffixIds: oldSnapshot.passiveAffixIds,
@@ -606,15 +792,32 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
   assert.equal(JSON.stringify(oldSnapshot), oldSnapshotBytes);
   assert.equal(verifySnapshotIntegrity(oldSnapshot), true);
 
-  const exportEvaluation = evaluatePatchFinalRanges({
+  const exportAuthority: AuthoritativePatchObject = {
+    subjectRef: { scopeType: "model", entityId: snapshot.modelId, revision: snapshot.modelRevision },
+    ruleSet,
+    parameterDefinitions,
+    patchRevisions,
+    contexts: [{
+      contextId: `${snapshot.modelId}:${snapshot.projectionId}:snapshot`,
+      itemPartId: snapshot.projectionMatch.itemPartId,
+      projection: {
+        id: snapshot.projectionId,
+        ruleSetVersion: snapshot.ruleSetVersion,
+        sourceHash: snapshot.contentHash,
+        values: snapshot.finalPanelValues,
+      },
+      finalPanelValues: snapshot.finalPanelValues,
+      weightBandId: snapshot.projectionMatch.weightTemplateId,
+      targetPullKg: snapshot.projectionMatch.targetPullKg,
+    }],
+  };
+  const exportIdentity = authoritativeObjectIdentity(exportAuthority);
+  const exportEvaluation = evaluateAuthoritativePatchFinalRanges({
     policy: publishedPolicy,
     gate: "EXPORT",
     environmentId: "online",
     channelKey: "1001",
-    contexts: [{
-      ...publishContext,
-      finalValue: numericEntry[1] + 2,
-    }],
+    objects: [exportAuthority],
   });
   const exportWaiver = createPatchValidationWaiverDecision({
     issues: exportEvaluation.issues,
@@ -625,9 +828,9 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
       channelKey: "1001",
     }],
     policyVersion: publishedPolicy.version,
-    scopeRef: publishContext.subjectRef,
-    objectInputHash,
-    patchSetHash: frozen.patchSetHash,
+    scopeRef: exportAuthority.subjectRef,
+    objectInputHash: exportIdentity.objectInputHash,
+    patchSetHash: exportIdentity.patchSetHash,
     reason: "仅对 online/1001 保留意见通过",
     approvedBy: "publisher",
     approvedAt: NOW,
@@ -642,7 +845,9 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
     channelKey: "1001",
     patchOffsetGovernance: {
       policy: publishedPolicy,
-      rangeEvaluation: exportEvaluation,
+      ruleSet,
+      parameterDefinitions,
+      patchRevisions,
       waivers: exportWaiver.waivers,
     },
     originalFileHashes: {},

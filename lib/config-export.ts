@@ -1,16 +1,18 @@
 import { deterministicHash } from "./rule-kernel";
 import { verifySnapshotIntegrity } from "./publishing";
+import { authoritativeObjectIdentity, evaluateAuthoritativePatchFinalRanges, type AuthoritativePatchObject } from "./patch-authority";
 import {
   assertPatchGateCanProceed,
-  assertPatchRangeEvaluationIntegrity,
   assertPublishedPatchOffsetPolicy,
   PatchOffsetPolicyError,
 } from "./patch-offset-policy";
-import type { PatchRangeEvaluation } from "./patch-offset-policy";
 import type {
   ConfigurationSnapshot,
   PatchOffsetPolicyVersion,
+  ParameterDefinition,
+  PatchRevisionRecord,
   PatchValidationWaiver,
+  RuleSetVersion,
   ValidationIssue,
   WorkspacePolicyRecord,
 } from "./types";
@@ -62,7 +64,9 @@ export function createExportManifest(input: {
   channelKey?: string;
   patchOffsetGovernance?: {
     policy?: WorkspacePolicyRecord | PatchOffsetPolicyVersion;
-    rangeEvaluation: PatchRangeEvaluation;
+    ruleSet: RuleSetVersion;
+    parameterDefinitions: ParameterDefinition[];
+    patchRevisions: PatchRevisionRecord[];
     waivers?: PatchValidationWaiver[];
   };
 }): ExportManifest {
@@ -82,14 +86,11 @@ export function createExportManifest(input: {
     "patchOffsetPolicyVersion" | "patchValidationIssueFingerprints" | "patchValidationWaiverRefs" | "patchValidationWaiverDecisionRefs"> = {};
   if (input.snapshot.patchOffsetPolicyVersion) {
     const governance = input.patchOffsetGovernance;
+    let rangeEvaluation: ReturnType<typeof evaluateAuthoritativePatchFinalRanges>;
     if (
       !input.environmentId?.trim()
       || !input.channelKey?.trim()
       || !governance
-      || governance.rangeEvaluation.gate !== "EXPORT"
-      || governance.rangeEvaluation.policyVersion !== input.snapshot.patchOffsetPolicyVersion
-      || governance.rangeEvaluation.environmentId !== input.environmentId
-      || governance.rangeEvaluation.channelKey !== input.channelKey
     ) {
       throw new Error("正式导出缺少与 Snapshot 策略及目标环境×渠道精确匹配的 Patch 范围校验。");
     }
@@ -107,19 +108,45 @@ export function createExportManifest(input: {
           "正式导出的 Snapshot 缺少冻结的有序 Patch revision 引用。",
         );
       }
-      assertPatchRangeEvaluationIntegrity({
-        evaluation: governance.rangeEvaluation,
-        policy: governance.policy,
-        expectedSubjectRef: {
+      const authority: AuthoritativePatchObject = {
+        subjectRef: {
           scopeType: "model",
           entityId: input.snapshot.modelId,
           revision: input.snapshot.modelRevision,
         },
-        expectedPatchSetHash: input.snapshot.patchSetHash,
-        expectedPatchReferences: input.snapshot.patchReferences,
+        ruleSet: governance.ruleSet,
+        parameterDefinitions: governance.parameterDefinitions,
+        patchRevisions: governance.patchRevisions,
+        contexts: [{
+          contextId: `${input.snapshot.modelId}:${input.snapshot.projectionId}:snapshot`,
+          itemPartId: input.snapshot.projectionMatch.itemPartId,
+          projection: {
+            id: input.snapshot.projectionId,
+            ruleSetVersion: input.snapshot.ruleSetVersion,
+            sourceHash: input.snapshot.contentHash,
+            values: input.snapshot.finalPanelValues,
+          },
+          finalPanelValues: input.snapshot.finalPanelValues,
+          weightBandId: input.snapshot.projectionMatch.weightTemplateId,
+          targetPullKg: input.snapshot.projectionMatch.targetPullKg,
+        }],
+      };
+      rangeEvaluation = evaluateAuthoritativePatchFinalRanges({
+        policy: governance.policy,
+        gate: "EXPORT",
+        environmentId: input.environmentId,
+        channelKey: input.channelKey,
+        objects: [authority],
       });
+      const identity = authoritativeObjectIdentity(authority);
+      if (
+        identity.patchSetHash !== input.snapshot.patchSetHash
+        || deterministicHash(identity.patchReferences) !== deterministicHash(input.snapshot.patchReferences)
+      ) {
+        throw new PatchOffsetPolicyError("PATCH_SET_HASH_MISMATCH", "导出命令派生的 Patch revision 引用与冻结 Snapshot 不一致。");
+      }
       assertPatchGateCanProceed({
-        evaluation: governance.rangeEvaluation,
+        evaluation: rangeEvaluation,
         waivers: governance.waivers,
       });
     } catch (error) {
@@ -130,7 +157,7 @@ export function createExportManifest(input: {
     }
     frozenPatchGovernance = {
       patchOffsetPolicyVersion: input.snapshot.patchOffsetPolicyVersion,
-      patchValidationIssueFingerprints: governance.rangeEvaluation.issues
+      patchValidationIssueFingerprints: rangeEvaluation.issues
         .flatMap((issue) => issue.fingerprint ? [issue.fingerprint] : [])
         .sort(),
       patchValidationWaiverRefs: (governance.waivers ?? []).map((waiver) => waiver.waiverId).sort(),

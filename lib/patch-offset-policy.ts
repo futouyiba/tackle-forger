@@ -209,6 +209,7 @@ function normalizeValue(
   if (!Number.isFinite(value)) {
     throw new PatchOffsetPolicyError("PATCH_NON_FINITE_VALUE", "范围校验只接受有限数值。");
   }
+  if (unit === expectedStandardUnit) return value;
   const conversion = conversions.find(
     (entry) => entry.unit === unit && entry.standardUnit === expectedStandardUnit,
   );

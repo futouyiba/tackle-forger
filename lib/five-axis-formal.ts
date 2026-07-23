@@ -32,6 +32,24 @@ export const FIVE_AXIS_PROJECTION_REFERENCE_SELECTOR_VERSION =
 export const FIVE_AXIS_DISPOSITION_CATALOG_SCHEMA_VERSION =
   "five-axis-definition-disposition-catalog/v1" as const;
 
+/** The currently published OPEN-005 W policy.  New policy versions must add
+ * their own resolver rather than letting a caller choose a self-consistent W. */
+export function resolveFormalFiveAxisWeightBand(input: {
+  policyVersion: string;
+  modelFinalPullKg: number;
+}): string {
+  if (
+    input.policyVersion !== "weight-band:w6-open005-v1"
+    || !Number.isFinite(input.modelFinalPullKg)
+    || input.modelFinalPullKg <= 0
+  ) {
+    throw new Error("FIVE_AXIS_WEIGHT_BAND_POLICY_UNAVAILABLE：无法按已发布 W 段策略解析最终拉力。");
+  }
+  const upperBounds = [2, 4, 6, 10, 15];
+  const index = upperBounds.findIndex((upper) => input.modelFinalPullKg <= upper);
+  return `W${index < 0 ? 6 : index + 1}`;
+}
+
 const FORMAL_AXIS_CONTRACT = [
   {
     axisId: "pull",
@@ -1000,12 +1018,17 @@ export function assertFormalModelFiveAxisPreview(input: {
 }): FiveAxisVertexSet {
   assertFormalFiveAxisViewDefinition(input.definition);
   const preview = input.preview;
+  const resolvedWeightBandId = resolveFormalFiveAxisWeightBand({
+    policyVersion: input.definition.weightBandPolicyVersion,
+    modelFinalPullKg: input.expectedModelFinalPullKg,
+  });
   if (
     preview.modelId !== input.expectedModelId
     || preview.modelFinalPullKg !== input.expectedModelFinalPullKg
     || preview.weightBandPolicyVersion !== input.definition.weightBandPolicyVersion
     || preview.hashInputSchemaVersion !== input.definition.hashInputSchemaVersion
     || !preview.weightBandId
+    || preview.weightBandId !== resolvedWeightBandId
     || preview.fiveAxisDefinitionId !== input.definition.definitionId
     || preview.fiveAxisDefinitionVersion !== input.definition.version
     || preview.fiveAxisDefinitionRevision !== input.definition.revision

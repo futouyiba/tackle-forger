@@ -58,6 +58,11 @@ function definition(): FiveAxisViewDefinition {
     version: "1.0.0",
     revision: 1,
     publicationState: "PUBLISHED",
+    semanticContractVersion: "five-axis/open005-2026-07-23/v1",
+    hashInputSchemaVersion: "five-axis-hash-input/v1",
+    projectionReferenceSelectorVersion: "projection-reference/current-sku-frozen-match/v1",
+    weightBandPolicyVersion: "weight-band:w6-open005-v1",
+    displayBandConfigId: "five-axis:display-band-open005-v1",
     fiveAxisRuleVersion: "feishu-3563-test",
     sourceRevision: "3563",
     axes: [
@@ -70,7 +75,8 @@ function definition(): FiveAxisViewDefinition {
         direction: "higher_better",
         transformId: "identity",
         vertexSelectorId: "max",
-        componentAggregationId: "component_min_ratio",
+        vertexSelectorVersion: "legacy-test",
+        componentAggregationId: "per_component_no_aggregate",
         missingPolicy: "error",
       },
       {
@@ -82,7 +88,8 @@ function definition(): FiveAxisViewDefinition {
         direction: "higher_better",
         transformId: "identity",
         vertexSelectorId: "max",
-        componentAggregationId: "component_min_ratio",
+        vertexSelectorVersion: "legacy-test",
+        componentAggregationId: "per_component_no_aggregate",
         missingPolicy: "error",
       },
       {
@@ -94,8 +101,8 @@ function definition(): FiveAxisViewDefinition {
         direction: "higher_better",
         transformId: "identity",
         vertexSelectorId: "max",
-        componentAggregationId: "component_min_ratio",
-        contextInheritanceId: "single_applicable_source",
+        vertexSelectorVersion: "legacy-test",
+        componentAggregationId: "per_component_no_aggregate",
         missingPolicy: "ignore_not_applicable",
       },
       {
@@ -107,7 +114,8 @@ function definition(): FiveAxisViewDefinition {
         direction: "lower_better",
         transformId: "sum",
         vertexSelectorId: "min",
-        componentAggregationId: "component_min_ratio",
+        vertexSelectorVersion: "legacy-test",
+        componentAggregationId: "per_component_no_aggregate",
         missingPolicy: "error",
       },
       {
@@ -119,11 +127,20 @@ function definition(): FiveAxisViewDefinition {
         direction: "lower_better",
         transformId: "identity",
         vertexSelectorId: "min",
-        componentAggregationId: "component_min_ratio",
+        vertexSelectorVersion: "legacy-test",
+        componentAggregationId: "per_component_no_aggregate",
         missingPolicy: "error",
       },
     ],
-    seriesBaselinePolicy: { mode: "explicit_model", required: true },
+    seriesBaselinePolicy: { mode: "projection_reference", selectorVersion: "projection-reference/current-sku-frozen-match/v1" },
+    comparisonPolicy: {
+      minimumItems: 2,
+      maximumItems: 5,
+      mixedItemPartsAllowed: true,
+      referenceRodMode: "first_rod_by_comparison_order",
+      outerRingScore: 100,
+      visualOverflowCap: null,
+    },
   };
   return { ...content, definitionHash: deterministicHash(content) };
 }

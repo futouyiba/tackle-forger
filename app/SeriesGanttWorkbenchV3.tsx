@@ -488,19 +488,17 @@ function FiveAxisComparisonPanel({
   definition?: StoredFiveAxisViewDefinition;
 }) {
   const axes = definition?.axes ?? [];
-  const numericScores = view.series.flatMap((entry) => entry.points.flatMap((point) =>
-    point.comparisonScore === null ? [] : [point.comparisonScore]));
-  const maxScore = view.scaleMode === "comparison_expanded"
-    ? Math.max(100, ...numericScores)
+  const outerRingScore = definition && "comparisonPolicy" in definition
+    ? definition.comparisonPolicy.outerRingScore
     : 100;
   const center = 110;
   const radius = 80;
   const pointFor = (score: number, index: number) => {
     const angle = -Math.PI / 2 + (index * Math.PI * 2) / Math.max(axes.length, 1);
-    const ratio = fiveAxisPlotRatio(score, maxScore) ?? 0;
+    const ratio = Math.max(0, score / outerRingScore);
     return `${center + Math.cos(angle) * radius * ratio},${center + Math.sin(angle) * radius * ratio}`;
   };
-  const outer = axes.map((_axis, index) => pointFor(maxScore, index)).join(" ");
+  const outer = axes.map((_axis, index) => pointFor(outerRingScore, index)).join(" ");
   return (
     <div className="same-part-comparison-result">
       <div className="same-part-comparison-chart">

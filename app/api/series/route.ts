@@ -13,6 +13,12 @@ import {
   type ProjectionMatchCandidate,
 } from "@/lib/projection-matcher";
 import {
+  createNeedsReviewPartConstraintSet,
+  PART_CONSTRAINT_SOURCE_HASH_PROJECTION,
+  partConstraintSourceContentHash,
+  partConstraintSetRef,
+} from "@/lib/part-constraints";
+import {
   createSeriesPullPlanningProposal,
   materializeConfirmedPullSpecifications,
 } from "@/lib/series-pull-planning";
@@ -367,7 +373,31 @@ async function executeSeriesBusinessRequest(request: NextRequest) {
   }
 
   const next = structuredClone(state);
+  const constraintSet = createNeedsReviewPartConstraintSet({
+    constraintSetId:
+      `part-constraint-set:series-definition:${encodeURIComponent(materialized.series.id)}`,
+    sourceRef: {
+      sourceType: "series_definition",
+      sourceId: materialized.series.id,
+      revisionId: String(materialized.series.revision),
+      hashProjectionVersion: PART_CONSTRAINT_SOURCE_HASH_PROJECTION,
+      contentHash: partConstraintSourceContentHash(materialized.series),
+    },
+    rawPayload: materialized.series,
+    sourceSchemaVersion: state.schemaVersion,
+    migratedAt: now,
+    diagnosticCodes: ["NO_SERIES_PART_CONSTRAINT_SOURCE"],
+    createdBy: stableAuditActor(user),
+  });
+  materialized = {
+    ...materialized,
+    series: {
+      ...materialized.series,
+      partConstraintSetRef: partConstraintSetRef(constraintSet),
+    },
+  };
   next.seriesDefinitions = [...next.seriesDefinitions, materialized.series];
+  next.partConstraintSets = [...next.partConstraintSets, constraintSet];
   next.skuDrawers = materialized.skus;
   next.commandIdempotencyRecords = [...next.commandIdempotencyRecords, {
     key: idempotencyKey,

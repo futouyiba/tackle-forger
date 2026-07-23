@@ -842,6 +842,10 @@ export function approveValidationWaiverDecision(input: {
         "幂等重试引用的原始 Waiver 证据完整性校验失败。",
       );
     }
+    assertValidationWaiverDecisionCoverage({
+      waivers,
+      decisions: [previous],
+    });
     if (waivers.some((entry) => entry.state !== "FRESH")) {
       throw new ValidationIssueContractError(
         "VALIDATION_RETRY_EVIDENCE_STALE",

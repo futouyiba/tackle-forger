@@ -1,5 +1,5 @@
 import { deterministicHash } from "./rule-kernel";
-import { validationIssueLevel } from "./validation-issues";
+import { isCanonicalValidationIssue, validationIssueLevel } from "./validation-issues";
 import {
   assertCurrentSeriesSkuSpecifications,
   assertProductItemPartChainEnabled,
@@ -143,7 +143,11 @@ export function planSnapshotBatch(input: {
         }],
       };
     }
-    const blocking = validationIssues.filter((issue) => validationIssueLevel(issue) === "error");
+    // 旧格式 error 没有可验证的治理状态，继续 fail-closed；规范 Issue 则只让
+    // 仍处于 OPEN 的记录阻断，不能把已 WAIVED/RESOLVED/STALE 的历史证据重新激活。
+    const blocking = validationIssues.filter((issue) =>
+      validationIssueLevel(issue) === "error"
+      && (!isCanonicalValidationIssue(issue) || issue.state === "OPEN"));
     if (
       latest &&
       latest.modelRevision === model.revision &&

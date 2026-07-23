@@ -30,6 +30,7 @@ import { createExportManifest } from "../lib/config-export";
 import { createSeedState } from "../lib/seed";
 import { formalExportSnapshot } from "./helpers/formal-export-snapshot";
 import { testReductionPolicy } from "./helpers/reduction-policy";
+import { CANONICAL_RULE_RANGES } from "../lib/canonical-rule-source";
 
 const observedSheets = CANONICAL_FEISHU_SHEET_REGISTRY.map((entry) => ({
   sheetId: entry.sheetId,
@@ -57,6 +58,14 @@ test("04_词条的身份与别名读取共同跟随同 revision grid 上界，�
   const requests = canonicalRuleWorkbookRangeRequests(sourceRevision);
   assert.equal(requests.find((entry) => entry.sheetId === "zrVOxd" && entry.range === "B1:C86")?.range, "B1:C86");
   assert.equal(requests.find((entry) => entry.sheetId === "zrVOxd" && entry.range === "B2:F86")?.range, "B2:F86");
+  assert.equal(requests.find((entry) => entry.sheetId === "fATowU" && entry.range === "B2:AD20")?.range, "B2:AD20");
+  for (const range of Object.values(CANONICAL_RULE_RANGES)) {
+    assert.equal(requests.find((entry) => entry.sheetId === range.sheetId && entry.range === range.range)?.range, range.range);
+  }
+  const identities = identityRowsFromRanges([{
+    sheetId: "zrVOxd", range: "B1:C86", valueRange: { values: [["机器ID（勿改）", "实体类型"], ...Array.from({ length: 84 }, () => []), ["affix_rod_high", "RodAffix"]] },
+  }]);
+  assert.ok(identities.some((entry) => entry.stableId === "affix_rod_high"));
 });
 
 test("04_词条 grid 元数据不完整时 fail-closed，不以旧行号截断", () => {

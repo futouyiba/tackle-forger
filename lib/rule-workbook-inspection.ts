@@ -88,7 +88,7 @@ export function canonicalAffixSheetRanges(sourceRevision: FeishuSourceRevision):
 
 export function canonicalRuleWorkbookRangeRequests(sourceRevision: FeishuSourceRevision) {
   const affixRanges = canonicalAffixSheetRanges(sourceRevision);
-  return [
+  const requests = [
     ...CANONICAL_IDENTITY_SHEET_SPECS.map(({ sheetId, range }) => ({
       sheetId,
       range: sheetId === AFFIX_SHEET_ID ? affixRanges.identityRange : range,
@@ -96,9 +96,16 @@ export function canonicalRuleWorkbookRangeRequests(sourceRevision: FeishuSourceR
     { sheetId: "FqD4j7", range: "B4:N50" },
     { sheetId: AFFIX_SHEET_ID, range: affixRanges.aliasRange },
     { sheetId: "u87sRh", range: "B10:R70" },
-    { sheetId: "fATowU", range: "B2:V10" },
+    { sheetId: "fATowU", range: "B2:AD20" },
     { sheetId: "u87sRh", range: "B179:E179" },
+    CANONICAL_RULE_RANGES.weight,
+    CANONICAL_RULE_RANGES.type,
+    CANONICAL_RULE_RANGES.function,
+    CANONICAL_RULE_RANGES.functionProfiles,
+    CANONICAL_RULE_RANGES.method,
+    CANONICAL_RULE_RANGES.methodTemplateReview,
   ];
+  return [...new Map(requests.map((request) => [`${request.sheetId}:${request.range}`, request])).values()];
 }
 
 function text(value: unknown) {
@@ -113,7 +120,9 @@ export function identityRowsFromRanges(
   const rangeByIdentitySpec = new Map(ranges.filter((entry) => entry.range).map((entry) => [`${entry.sheetId}:${entry.range}`, entry.valueRange.values]));
   const legacyRangeBySheet = new Map(ranges.map((entry) => [entry.sheetId, entry.valueRange.values]));
   return specs.flatMap((spec) => (
-    rangeByIdentitySpec.get(`${spec.sheetId}:${spec.range}`)
+    (spec.sheetId === AFFIX_SHEET_ID && spec.range === "B1:C38"
+      ? ranges.find((entry) => entry.sheetId === AFFIX_SHEET_ID && /^B1:C\d+$/.test(entry.range ?? ""))?.valueRange.values
+      : rangeByIdentitySpec.get(`${spec.sheetId}:${spec.range}`))
     ?? (hasExplicitRanges ? [] : legacyRangeBySheet.get(spec.sheetId) ?? [])
   ).flatMap((values, index) => {
     if (spec.fixedEntityType === "FunctionPartGroup") {

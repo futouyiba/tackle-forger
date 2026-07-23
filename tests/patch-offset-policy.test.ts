@@ -784,7 +784,12 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
     publicationMode: "new_formal",
     workspaceId: "workspace:test",
     model,
-    sku,
+    sku: {
+      ...sku,
+      fiveAxisProjectionReferences: structuredClone(
+        formalPreview.tackleFitComparison.projectionReferences!,
+      ),
+    },
     seriesSkus: state.skuDrawers.filter((entry) => entry.seriesId === series.id),
     series,
     projection,
@@ -826,7 +831,10 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
       inputHash: "quality-hash",
     },
     fiveAxisPreview: formalPreview,
-    fiveAxisAuthoritativeCandidateSources: formalPreview.candidateSources,
+    fiveAxisAuthorityState: {
+      purchasableModels: state.purchasableModels,
+      configurationSnapshots: state.configurationSnapshots,
+    },
     fiveAxisDefinition: formalDefinition,
     fiveAxisDefinitions: state.fiveAxisViewDefinitions,
     fiveAxisDispositionCatalogRevisions:

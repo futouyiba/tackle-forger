@@ -724,6 +724,7 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
     model: publishTarget.model,
     sku: sku15,
     series,
+    seriesSkus: [sku15, sku18],
     projection: baseProjection,
     finalPanelValues: publishTarget.values,
     componentSelections: publishTarget.model.componentSelections,
@@ -914,9 +915,12 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
             enabled: false,
           },
         ],
-    workspacePolicies: state.workspacePolicies.length
+    workspacePolicies: state.workspacePolicies.some(
+      (policy) => policy.policyType === "aiServicePolicy",
+    )
       ? state.workspacePolicies
       : [
+          ...state.workspacePolicies,
           {
             policyId: "policy:ai-service-disabled",
             policyType: "aiServicePolicy",

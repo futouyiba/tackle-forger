@@ -41,13 +41,13 @@
 
 每个 Model 的映射至少需要：
 
-1. 已发布`ConfigIdPolicyVersion`（v3 OPEN-008）从永久`rangeId`分配的Tackle/Item共享数值型`INT64 id`与稳定`name`。OPEN-008的区间和命名已经确认，但策略版本、ledger或新鲜Manifest门禁未完成时仍只能生成`NON_FORMAL`预览；禁止用当前最大值+1或示例ID正式提交。
+1. 已发布`ConfigIdPolicyVersion`（v3 OPEN-008）从永久`rangeId`分配的Tackle/Item共享数值型`INT64 id`与稳定`name`。OPEN-008的区间和命名已经确认，但策略版本、ledger、新鲜Manifest或治理租约/CAS门禁未完成时仍只能生成`NON_FORMAL`预览；禁止用当前最大值+1或示例ID正式提交。
 2. 由同一Bundle确定性派生的GoodsBasic、StoreBuy数值型`INT64 id`与稳定`name`。
 3. `brand`、`series`、`sub_type`、`item_type`、`quality` 等枚举展示值。
 4. 每个目标字段的 Snapshot 来源、常量、倍率、偏移、精度和空值哨兵。
 5. 是否生成 `tackle_set`、`store_recommend`、`store_room`、`pond_store_group`、`pond_store` 等可选行。
 6. mappingId、version、Profile、schema hash 与审批记录。
-7. 当前`ConfigIdPolicyVersion`引用的`ConfigTargetCatalogVersion`条目和获批`ConfigTargetScanManifest`；Manifest必须覆盖authoritative ref、不可变commit、`config.toml`及受管workbook hashes。
+7. 当前`ConfigIdPolicyVersion`引用的`ConfigTargetCatalogVersion`条目和获批`ConfigTargetScanManifest`；Manifest必须覆盖authoritative ref、不可变commit、`config.toml`及受管workbook hashes。正式动作还必须取得`ConfigTargetGovernanceLease`：先按物理`repositoryId + authoritativeRef`去重并锁定，同一ref的所有逻辑目标别名必须具有相同expected OID，再冻结Manifest set hash、expected old OID、`leaseId`与单调`fencingToken`。
 
 缺任一必填输入时，生成器必须产生`ValidationIssue(gate="EXPORT")`并阻止当前“环境×渠道”目标提交；不得面向正式文件静默跳过行或生成半套tackle/item/store记录。其他已通过预检的目标默认可继续，失败目标保留预览包、Issue和恢复Manifest。
 
@@ -101,9 +101,9 @@
 
 写入期间租约失效或出现更高token时，旧页面不得报告成功。任一配置导出租约没有已验证终态便过期、断线或取消时，服务端必须把对应逻辑目标置为`recoveryState=RECOVERY_REQUIRED`并记录`reason=EXTERNAL_FILE_CONFLICT`，不能因页面未回报而假定文件未变。当前持锁者必须确认目录授权，必要时重新绑定或重新请求授权，回读全部目标文件并按Manifest恢复或前向协调，在记录新hash并关闭恢复状态前不得再次正式写入该目标。
 
-策略发布、每次正式预留和每次正式导出都重新解析权威目标的authoritative ref，并比较当前commit、`config.toml`和受管workbook hashes与获批Manifest。正式导出还要求本地worktree HEAD和文件基线完全一致；任何漂移都返回`CONFIG_TARGET_SCAN_MANIFEST_STALE`，必须重新扫描、复核并发布引用新Manifest的策略版本。正式写入改变workbook hash后，旧策略不得继续下一批，需等待外部系统形成新commit并完成新一轮Manifest流程。
+策略发布、每次正式预留、历史ID正式导入和每次正式导出都重新解析权威目标的authoritative ref，比较当前commit、`config.toml`和受管workbook hashes与获批Manifest；策略发布只执行该Manifest/ref/hash复验，不取得配置目标治理租约。每次正式预留、历史ID正式导入和每次正式导出才必须取得治理租约。租约必须按去重后的物理`repositoryId + authoritativeRef`互斥，而不是按环境×渠道的`targetEntryId`分别互斥；同一ref的别名expected OID冲突时返回`CONFIG_TARGET_REF_ALIAS_CONFLICT`且不发放token。配置仓库写入必须携带当前fencing token并以expected old OID执行受保护CAS；数据库提交点重验同一token。两次读取ref、分支命名或客户端约定都不能替代该串行化；无法强制执行时返回`CONFIG_TARGET_SERIALIZATION_UNAVAILABLE`。正式导出还要求本地worktree HEAD和文件基线完全一致；任何漂移都返回`CONFIG_TARGET_SCAN_MANIFEST_STALE`，必须重新扫描、复核并发布引用新Manifest的策略版本。正式写入改变workbook hash后，旧策略不得继续下一批，需等待外部系统形成新commit并完成新一轮Manifest流程。
 
-当File System Access API不可用、目录句柄失效或用户未授权时，一期仍只能下载`NON_FORMAL`预览。1.5期只有在正式Bundle、目标目录/Manifest门禁和`config.export.commit`全部通过后才能下载正式人工搬运包；结果标记`FORMAL_PACKAGE_DOWNLOADED_NOT_APPLIED`，不得声称已写入本机Git工作区。
+当File System Access API不可用、目录句柄失效或用户未授权时，一期仍只能下载`NON_FORMAL`预览。1.5期只有在正式Bundle、目标目录/Manifest/治理租约门禁和`config.export.commit`全部通过后才能下载正式人工搬运包；结果标记`FORMAL_PACKAGE_DOWNLOADED_NOT_APPLIED`并冻结expected old OID。下载不长期持有租约，也不得声称已写入本机Git工作区；下游实际推进ref时重新取得租约并执行CAS。
 
 ## 遗留兼容：本地伴随服务（非1.5期规范路径）
 

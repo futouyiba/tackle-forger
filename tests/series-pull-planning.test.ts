@@ -7,6 +7,10 @@ import {
   updateSeriesPlanningRange,
 } from "../lib/series-pull-planning";
 import { validateSeriesInvariants } from "../lib/product-model";
+import {
+  ITEM_PART_CHAIN_INCONSISTENT_CODE,
+  ITEM_PART_NOT_ENABLED_CODE,
+} from "../lib/enabled-item-parts";
 
 test("规划范围变化只更新规划元数据，不增删离散 SKU 或改写 Snapshot", () => {
   const state = createSeedState();
@@ -119,4 +123,61 @@ test("没有规划范围时，明确离散规格仍可形成可物化建议", ()
   });
   assert.equal(proposal.planningPullRange, undefined);
   assert.deepEqual(proposal.suggestedPullsKgf, [1.5, 3.8, 8.2]);
+});
+
+test("混合部位批次在任何 SKU 构造前整体拒绝，不能留下半批结果", () => {
+  const state = createSeedState();
+  const series = state.seriesDefinitions[0]!;
+  const proposal = createSeriesPullPlanningProposal({
+    series,
+    candidatePullsKgf: [3.8, 5.4],
+    source: "explicit_user_input",
+    createdAt: "2026-07-23T03:00:00.000Z",
+  });
+  const before = JSON.stringify(state.skuDrawers);
+  assert.throws(() => materializeConfirmedPullSpecifications({
+    series,
+    existingSkus: state.skuDrawers,
+    proposal,
+    confirmedPullsKgf: [3.8, 5.4],
+    skuIdByPull: { "3.8": "sku:mixed-rod", "5.4": "sku:mixed-hook" },
+    projectionMatchByPull: {
+      "3.8": { ...state.skuDrawers[0]!.projectionMatch, targetWeightKg: 3.8 },
+      "5.4": { ...state.skuDrawers[0]!.projectionMatch, targetWeightKg: 5.4, itemPartId: "part:hook" },
+    },
+    createdAt: "2026-07-23T03:01:00.000Z",
+  }), (error) => (
+    error instanceof Error
+    && "code" in error
+    && (error.code === ITEM_PART_NOT_ENABLED_CODE || error.code === ITEM_PART_CHAIN_INCONSISTENT_CODE)
+  ));
+  assert.equal(JSON.stringify(state.skuDrawers), before);
+});
+
+test("历史启用 Series 缺 itemPartId 时从稳定 SKU 绑定派生，后代不一致则 fail-closed", () => {
+  const state = createSeedState();
+  const series = structuredClone(state.seriesDefinitions[0]!);
+  delete series.itemPartId;
+  const seriesSkus = state.skuDrawers.filter((sku) => sku.seriesId === series.id);
+  assert.doesNotThrow(() => createSeriesPullPlanningProposal({
+    series,
+    existingSkus: seriesSkus,
+    candidatePullsKgf: [3.8],
+    source: "explicit_user_input",
+    createdAt: "2026-07-23T03:10:00.000Z",
+  }));
+
+  const inconsistentSkus = structuredClone(seriesSkus);
+  inconsistentSkus[0]!.projectionMatch.itemPartId = "part:reel";
+  assert.throws(() => createSeriesPullPlanningProposal({
+    series,
+    existingSkus: inconsistentSkus,
+    candidatePullsKgf: [3.8],
+    source: "explicit_user_input",
+    createdAt: "2026-07-23T03:11:00.000Z",
+  }), (error) => (
+    error instanceof Error
+    && "code" in error
+    && error.code === ITEM_PART_CHAIN_INCONSISTENT_CODE
+  ));
 });

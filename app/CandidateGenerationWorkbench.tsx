@@ -3,6 +3,7 @@
 import { AlertTriangle, CheckCircle2, Plus, ShieldCheck, Sparkles, Trash2, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { ActionAvailabilityMap } from "@/lib/interaction-contracts";
+import { isProductItemPartEnabled, seriesItemPartId } from "@/lib/enabled-item-parts";
 import {
   candidateGenerationInputHash,
   generateModelCandidateRun,
@@ -39,8 +40,11 @@ function blankVariant(index: number): ModelVariantInput {
 }
 
 export function CandidateGenerationWorkbench({ state, series, initialSkuId, actionAvailabilities, actor, mutate, notify, onClose }: Props) {
-  const seriesSkus = useMemo(() => state.skuDrawers.filter((sku) => sku.seriesId === series.id)
-    .sort((left, right) => left.targetWeightKg - right.targetWeightKg), [series.id, state.skuDrawers]);
+  const seriesSkus = useMemo(() => state.skuDrawers.filter((sku) =>
+    sku.seriesId === series.id
+    && isProductItemPartEnabled(sku.projectionMatch.itemPartId)
+    && sku.projectionMatch.itemPartId === seriesItemPartId(series, state.skuDrawers))
+    .sort((left, right) => left.targetWeightKg - right.targetWeightKg), [series, state.skuDrawers]);
   const matchingRecipes = state.candidateSearchRecipes.filter((recipe) =>
     recipe.methodIds.includes(series.fishingMethodId)
     && recipe.typeIds.includes(series.typeId)

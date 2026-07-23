@@ -26,6 +26,8 @@ import {
   FeishuOAuthError,
   fetchFeishuIdentity,
 } from "../lib/feishu-oauth";
+import { PHASE_ONE_CAPABILITIES } from "../lib/feishu-identity";
+import { actionAvailability } from "../lib/interaction-contracts";
 
 const authDataDir = await mkdtemp(path.join(os.tmpdir(), "tackle-forger-auth-"));
 process.env.FEISHU_SESSION_DATA_DIR = authDataDir;
@@ -212,6 +214,18 @@ test("伪造飞书身份头默认无效，可信代理必须同时匹配共享�
     assert.equal(user.authenticated, true);
     assert.equal(user.openId, "user");
   });
+});
+
+test("统一业务 Capability 不会向普通公司用户开放部署管理员 AI 安全配置", () => {
+  assert.equal(new Set<string>(PHASE_ONE_CAPABILITIES).has("ai.provider_policy.manage"), false);
+  const ordinary = actionAvailability("manage_ai_provider_policy", PHASE_ONE_CAPABILITIES);
+  assert.equal(ordinary.enabled, false);
+  assert.equal(ordinary.disabledReasonCode, "CAPABILITY_MISSING");
+  assert.deepEqual(ordinary.requiredCapabilities, ["ai.provider_policy.manage"]);
+  assert.equal(
+    actionAvailability("manage_ai_provider_policy", ["ai.provider_policy.manage"]).enabled,
+    true,
+  );
 });
 
 test("OAuth 起点设置安全的短期 HttpOnly Cookie", async () => {

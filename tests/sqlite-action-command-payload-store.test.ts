@@ -21,6 +21,7 @@ import { SqliteActionCommandPayloadStore } from "../lib/sqlite-action-command-pa
 import {
   closeSqliteStorage,
   loadSqliteWorkspace,
+  openSqliteDatabase,
   saveSqliteImportedFile,
   saveSqliteWorkspace,
 } from "../lib/sqlite-storage";
@@ -49,22 +50,27 @@ async function issue(input: {
   revision: number;
   idempotencyKey: string;
   payload?: JsonObject;
+  capabilities?: CapabilityCode[];
+  onLease?: (fencingToken: string) => void;
 }) {
   const subjectRef = workspaceCommandSubject(input.revision);
   return input.store.issueWithWorkspaceLease(
-    (leaseRef, prior) => issueActionCommandPayload({
-      store: input.store,
-      actionId: prior?.actionId ?? `action:${input.action}:${input.idempotencyKey}`,
-      action: input.action,
-      subjectRef: prior?.subjectRef ?? subjectRef,
-      expectedRevisionId: prior?.expectedRevisionId ?? subjectRef.revisionId,
-      inputHash: prior?.inputHash ?? workspaceCommandInputHash(input.revision),
-      leaseRef,
-      idempotencyKey: input.idempotencyKey,
-      payload: input.payload ?? { test: input.idempotencyKey },
-      actorId,
-      capabilities: [input.capability],
-    }),
+    (leaseRef, prior) => {
+      input.onLease?.(leaseRef.fencingToken);
+      return issueActionCommandPayload({
+        store: input.store,
+        actionId: prior?.actionId ?? `action:${input.action}:${input.idempotencyKey}`,
+        action: input.action,
+        subjectRef: prior?.subjectRef ?? subjectRef,
+        expectedRevisionId: prior?.expectedRevisionId ?? subjectRef.revisionId,
+        inputHash: prior?.inputHash ?? workspaceCommandInputHash(input.revision),
+        leaseRef,
+        idempotencyKey: input.idempotencyKey,
+        payload: input.payload ?? { test: input.idempotencyKey },
+        actorId,
+        capabilities: input.capabilities ?? [input.capability],
+      });
+    },
     {
       workspaceId: subjectRef.workspaceId,
       action: input.action,
@@ -72,6 +78,20 @@ async function issue(input: {
       idempotencyKey: input.idempotencyKey,
     },
   );
+}
+
+class FailOnceSaveStore extends SqliteActionCommandPayloadStore {
+  failNextSave = true;
+
+  override async saveIssued(
+    record: Parameters<SqliteActionCommandPayloadStore["saveIssued"]>[0],
+  ) {
+    if (this.failNextSave) {
+      this.failNextSave = false;
+      throw new Error("simulated payload persistence failure");
+    }
+    return super.saveIssued(record);
+  }
 }
 
 test("SQLite 命令记录和执行结果跨 store 实例持久化，首次业务写与结果原子提交", async () => {
@@ -188,6 +208,175 @@ test("SQLite 当前租约只按 workspace 分槽，跨动作签发会废止旧�
         && error.code === "STALE_FENCING_TOKEN",
     );
     assert.equal(writes, 0);
+  });
+});
+
+test("签发校验失败会永久烧号，重启恢复后不得复用失败 token", async () => {
+  await withDatabase(async (databasePath) => {
+    const store = new SqliteActionCommandPayloadStore(databasePath);
+    const current = await loadSqliteWorkspace(databasePath);
+    let failedToken = "";
+    await assert.rejects(
+      issue({
+        store,
+        action: "save_workspace",
+        capability: "workspace.save",
+        capabilities: [],
+        revision: current.revision,
+        idempotencyKey: "sqlite:burn-validation-failure",
+        onLease: (token) => {
+          failedToken = token;
+        },
+      }),
+      (error) =>
+        error instanceof ActionCommandPayloadError
+        && error.code === "ACTION_COMMAND_CAPABILITY_CHANGED",
+    );
+    assert.ok(failedToken);
+    const failedGrantDb = await openSqliteDatabase(databasePath);
+    const failedHighWatermark = failedGrantDb.prepare(`
+      SELECT fencing_token
+      FROM workspace_fencing_high_watermarks
+      WHERE workspace_id = ?
+    `).get("workspace:main") as { fencing_token: string } | undefined;
+    const failedCurrentLease = failedGrantDb.prepare(`
+      SELECT fencing_token
+      FROM workspace_action_leases
+      WHERE workspace_id = ?
+    `).get("workspace:main") as { fencing_token: string } | undefined;
+    assert.equal(failedHighWatermark?.fencing_token, failedToken);
+    assert.equal(failedCurrentLease?.fencing_token, failedToken);
+
+    await closeSqliteStorage(databasePath);
+    const recoveredStore = new SqliteActionCommandPayloadStore(databasePath);
+    const recoveredRef = await issue({
+      store: recoveredStore,
+      action: "save_workspace",
+      capability: "workspace.save",
+      revision: current.revision,
+      idempotencyKey: "sqlite:after-validation-failure",
+    });
+    const recoveredRecord = await recoveredStore.findByPayloadRefId(
+      recoveredRef.payloadRefId,
+    );
+    assert.ok(recoveredRecord);
+    assert.ok(
+      BigInt(recoveredRecord.leaseRef.fencingToken) > BigInt(failedToken),
+    );
+  });
+});
+
+test("payload 保存失败只留下永久 token 空洞，下一租约严格增大", async () => {
+  await withDatabase(async (databasePath) => {
+    const store = new FailOnceSaveStore(databasePath);
+    const current = await loadSqliteWorkspace(databasePath);
+    let failedToken = "";
+    await assert.rejects(
+      issue({
+        store,
+        action: "save_workspace",
+        capability: "workspace.save",
+        revision: current.revision,
+        idempotencyKey: "sqlite:burn-save-failure",
+        onLease: (token) => {
+          failedToken = token;
+        },
+      }),
+      /simulated payload persistence failure/,
+    );
+    assert.ok(failedToken);
+    assert.equal(
+      await store.findIssuedByIdempotencyKey({
+        actorId,
+        action: "save_workspace",
+        idempotencyKey: "sqlite:burn-save-failure",
+      }),
+      undefined,
+    );
+
+    const nextRef = await issue({
+      store,
+      action: "save_workspace",
+      capability: "workspace.save",
+      revision: current.revision,
+      idempotencyKey: "sqlite:after-save-failure",
+    });
+    const nextRecord = await store.findByPayloadRefId(nextRef.payloadRefId);
+    assert.ok(nextRecord);
+    assert.ok(
+      BigInt(nextRecord.leaseRef.fencingToken) > BigInt(failedToken),
+    );
+  });
+});
+
+test("v2 当前租约迁移为 v3 高水位，关闭重开后继续严格递增", async () => {
+  await withDatabase(async (databasePath) => {
+    const db = await openSqliteDatabase(databasePath);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS workspace_action_leases (
+        workspace_id TEXT PRIMARY KEY,
+        action TEXT NOT NULL,
+        lease_id TEXT NOT NULL,
+        fencing_token TEXT NOT NULL,
+        holder_id TEXT NOT NULL,
+        acquired_at TEXT NOT NULL
+      );
+    `);
+    db.prepare(`
+      INSERT INTO workspace_action_leases (
+        workspace_id, action, lease_id, fencing_token, holder_id, acquired_at
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `).run(
+      "workspace:main",
+      "save_workspace",
+      "lease:legacy-v2",
+      "41",
+      actorId,
+      new Date().toISOString(),
+    );
+
+    const migratedStore = new SqliteActionCommandPayloadStore(databasePath);
+    const migratedLease = await migratedStore.acquireWorkspaceLease({
+      workspaceId: "workspace:main",
+      action: "create_series",
+      holderId: actorId,
+    });
+    assert.equal(migratedLease.fencingToken, "42");
+
+    await closeSqliteStorage(databasePath);
+    const recoveredStore = new SqliteActionCommandPayloadStore(databasePath);
+    const recoveredLease = await recoveredStore.acquireWorkspaceLease({
+      workspaceId: "workspace:main",
+      action: "save_workspace",
+      holderId: actorId,
+    });
+    assert.equal(recoveredLease.fencingToken, "43");
+  });
+});
+
+test("并发相同幂等键只返回一个已落库引用，烧号空洞不影响 winner", async () => {
+  await withDatabase(async (databasePath) => {
+    const firstStore = new SqliteActionCommandPayloadStore(databasePath);
+    const secondStore = new SqliteActionCommandPayloadStore(databasePath);
+    const current = await loadSqliteWorkspace(databasePath);
+    const [first, second] = await Promise.all([
+      issue({
+        store: firstStore,
+        action: "save_workspace",
+        capability: "workspace.save",
+        revision: current.revision,
+        idempotencyKey: "sqlite:concurrent-canonical-ref",
+      }),
+      issue({
+        store: secondStore,
+        action: "save_workspace",
+        capability: "workspace.save",
+        revision: current.revision,
+        idempotencyKey: "sqlite:concurrent-canonical-ref",
+      }),
+    ]);
+    assert.equal(first.payloadRefId, second.payloadRefId);
+    assert.ok(await firstStore.findByPayloadRefId(first.payloadRefId));
   });
 });
 

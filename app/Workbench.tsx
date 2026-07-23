@@ -3187,7 +3187,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     if (page === "validation") return renderValidation();
     if (page === "versions") return renderVersions();
     if (page === "rulesource") return renderRuleSource();
-    if (page === "patchledger") return <PatchLedgerWorkbench state={state} revision={revision} capabilities={user.capabilities} actorName={user.name} mutate={mutate} notify={notify} replaceWorkspace={(next,nextRevision)=>{setState(ensureWorkflowFields(next));setRevision(nextRevision);setDirty(false);setSyncState("saved");}} />;
+    if (page === "patchledger") return <PatchLedgerWorkbench state={state} revision={revision} dirty={dirty} capabilities={user.capabilities} actorName={user.name} mutate={mutate} notify={notify} replaceWorkspace={(next,nextRevision)=>{setState(ensureWorkflowFields(next));setRevision(nextRevision);setDirty(false);setSyncState("saved");}} />;
     return renderExchange();
   };
 

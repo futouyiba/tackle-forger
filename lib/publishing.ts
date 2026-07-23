@@ -367,9 +367,12 @@ export function publishConfigurationSnapshot(
         "配置快照发布被阻止：[REDUCTION_POLICY_SOURCE_MISSING] 新正式 Snapshot 必须冻结来自权威主工作簿的已发布 ReductionStackingPolicyVersion。",
       );
     }
-    const evidence = input.affixRuntimeEvidence;
+    const evidence = input.projection.affixRuntimeEvidence;
     if (
       !evidence
+      || !input.affixRuntimeEvidence
+      || deterministicHash(input.affixRuntimeEvidence)
+        !== deterministicHash(evidence)
       || evidence.reductionStackingPolicyVersion !== input.reductionStackingPolicy?.version
       || evidence.formalStatus !== "FORMAL"
       || evidence.issues.some((entry) =>
@@ -434,13 +437,13 @@ export function publishConfigurationSnapshot(
     attributeAffixIds: structuredClone(input.attributeAffixIds),
     passiveAffixIds: structuredClone(input.passiveAffixIds),
     attributeTrace: structuredClone(input.projection.trace),
-    ...(input.publicationMode === "new_formal" && input.affixRuntimeEvidence
+    ...(input.publicationMode === "new_formal" && input.projection.affixRuntimeEvidence
       ? {
-          attributeAffixRuntimeTrace: structuredClone(input.affixRuntimeEvidence.trace),
-          attributeAffixTraceHash: input.affixRuntimeEvidence.traceHash,
-          attributeAffixOutputValues: structuredClone(input.affixRuntimeEvidence.values),
+          attributeAffixRuntimeTrace: structuredClone(input.projection.affixRuntimeEvidence.trace),
+          attributeAffixTraceHash: input.projection.affixRuntimeEvidence.traceHash,
+          attributeAffixOutputValues: structuredClone(input.projection.affixRuntimeEvidence.values),
           attributePostReviewValues: structuredClone(
-            input.affixRuntimeEvidence.postReviewValues,
+            input.projection.affixRuntimeEvidence.postReviewValues,
           ),
         }
       : {}),

@@ -456,6 +456,7 @@ test("正式快照拒绝未发布、篡改或版本链过期的五维定义", ()
   const projection = formalProjection(
     state.derivedProjections.find((entry) => entry.id === existing.projectionId)!,
     reductionStackingPolicy,
+    existing.finalPanelValues,
   );
   const { def, vertexSet } = setup();
   const preview = calculateModelFiveAxisPreview({

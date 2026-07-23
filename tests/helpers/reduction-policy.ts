@@ -39,11 +39,16 @@ export function testReductionPolicy(): ReductionStackingPolicyVersion {
 export function formalProjection(
   projection: DerivedProjection,
   policy = testReductionPolicy(),
+  finalValues: Record<string, number | string> = projection.values,
 ): DerivedProjection {
+  const cloned = structuredClone(projection);
+  delete cloned.affixRuntimeEvidence;
+  const evidence = formalAffixRuntimeEvidence(cloned, policy, finalValues);
   return {
-    ...structuredClone(projection),
+    ...cloned,
     reductionStackingPolicyVersion: policy.version,
     formalStatus: "FORMAL",
+    affixRuntimeEvidence: evidence,
   };
 }
 

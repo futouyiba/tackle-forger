@@ -476,6 +476,12 @@ test("历史 Snapshot 保持完整、允许查看/审计归档，但缺策略时
   assert.doesNotThrow(() =>
     assertFormalSnapshotHasReplayPolicy(replayableSnapshot, [policy])
   );
+  assert.doesNotThrow(() =>
+    assertFormalSnapshotHasReplayPolicy(replayableSnapshot, [{
+      ...policy,
+      status: "superseded",
+    }])
+  );
   assert.throws(() =>
     assertFormalSnapshotHasReplayPolicy(replayableSnapshot, [{
       ...policy,
@@ -501,4 +507,33 @@ test("历史 Snapshot 保持完整、允许查看/审计归档，但缺策略时
   assert.equal(upgrade.fromSnapshotId, snapshot.id);
   assert.equal(upgrade.proposedReductionStackingPolicyVersion, policy.version);
   assert.equal(verifySnapshotIntegrity(snapshot), true);
+});
+
+test("clamp_add 缺少任一有限端点时隔离参数并保持非正式", () => {
+  const policy = publishedPolicy();
+  for (const fields of [
+    { clampMax: 100 },
+    { clampMin: 0 },
+    { clampMin: Number.NEGATIVE_INFINITY, clampMax: 100 },
+    { clampMin: 0, clampMax: Number.POSITIVE_INFINITY },
+  ]) {
+    const result = evaluateBidirectionalRatio({
+      baseValues: { force: 50 },
+      operations: [
+        operation("clamp:invalid", 0, "clamp_add", {
+          direction: "increase",
+          magnitude: 10,
+          ...fields,
+        }),
+      ],
+      policy,
+    });
+    assert.equal(result.values.force, 50);
+    assert.equal(result.formalStatus, "NON_FORMAL");
+    assert.ok(result.issues.some((entry) =>
+      entry.code === "AFFIX_MAGNITUDE_INVALID"
+      && entry.severity === "ERROR"
+      && entry.gate === "REVIEW"
+    ));
+  }
 });

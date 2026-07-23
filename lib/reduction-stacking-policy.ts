@@ -891,11 +891,11 @@ export function evaluateBidirectionalRatio(input: {
         || !Number.isFinite(magnitude)
         || magnitude < 0
         || operation.direction === undefined
-        || (
-          operation.clampMin !== undefined
-          && operation.clampMax !== undefined
-          && operation.clampMin > operation.clampMax
-        )
+        || operation.clampMin === undefined
+        || operation.clampMax === undefined
+        || !Number.isFinite(operation.clampMin)
+        || !Number.isFinite(operation.clampMax)
+        || operation.clampMin > operation.clampMax
       ) {
         addRuntimeIssue(issues, "AFFIX_MAGNITUDE_INVALID", "clamp_add 参数无效，已隔离该参数。", parameterKey, { operationId: operation.operationId }, "ERROR");
         clampValid = false;
@@ -1014,7 +1014,7 @@ export function assertSnapshotReplayPolicyAvailable(input: {
   const available = input.reductionStackingPolicyVersion
     && input.availablePolicies.some((policy) =>
       policy.version === input.reductionStackingPolicyVersion
-      && policy.status === "published"
+      && (policy.status === "published" || policy.status === "superseded")
       && policy.strategy === "bidirectional_ratio"
       && policy.numericContract === "ieee754-binary64-v1"
       && stableJson(policy.operationOrder)

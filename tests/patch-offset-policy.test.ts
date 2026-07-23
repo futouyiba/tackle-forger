@@ -687,6 +687,7 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
   const projection = formalProjection(
     state.derivedProjections.find((entry) => entry.id === oldSnapshot.projectionId)!,
     reductionStackingPolicy,
+    oldSnapshot.finalPanelValues,
   );
   const numericEntry = Object.entries(oldSnapshot.finalPanelValues)
     .find((entry): entry is [string, number] => typeof entry[1] === "number")!;

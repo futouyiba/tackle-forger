@@ -187,7 +187,11 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     inputHash: "quality-assessment-hash",
   };
   const reductionStackingPolicy = testReductionPolicy();
-  const publishProjection = formalProjection(projection, reductionStackingPolicy);
+  const publishProjection = formalProjection(
+    projection,
+    reductionStackingPolicy,
+    oldSnapshot.finalPanelValues,
+  );
   const publishInput = {
     publicationMode: "new_formal" as const,
     model,
@@ -244,6 +248,34 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     ...publishInput,
     affixRuntimeEvidence: detachedEvidence,
   }), /AFFIX_RUNTIME_TRACE_INVALID/);
+  const forgedEvidence = structuredClone(publishInput.affixRuntimeEvidence);
+  forgedEvidence.values = structuredClone(forgedEvidence.finalValues);
+  forgedEvidence.postReviewValues = structuredClone(forgedEvidence.finalValues);
+  const forgedKey = Object.keys(forgedEvidence.finalValues)[0];
+  const forgedValue = forgedEvidence.finalValues[forgedKey];
+  forgedEvidence.trace = [{
+    sequence: 1,
+    ruleId: "forged:replacement-trace",
+    sourceId: "forged:replacement-trace",
+    sourceName: "伪造替换 Trace",
+    parameterKey: forgedKey,
+    operation: "set",
+    before: forgedValue,
+    operand: forgedValue,
+    after: forgedValue,
+  }];
+  forgedEvidence.traceHash = hashAffixRuntimeEvidence({
+    reductionStackingPolicyVersion: forgedEvidence.reductionStackingPolicyVersion,
+    values: forgedEvidence.values,
+    postReviewValues: forgedEvidence.postReviewValues,
+    finalValues: forgedEvidence.finalValues,
+    trace: forgedEvidence.trace,
+    issues: forgedEvidence.issues,
+  });
+  assert.throws(() => publishConfigurationSnapshot({
+    ...publishInput,
+    affixRuntimeEvidence: forgedEvidence,
+  }), /AFFIX_RUNTIME_TRACE_INVALID/);
   const stagedEvidence = structuredClone(publishInput.affixRuntimeEvidence);
   const stagedKey = Object.keys(stagedEvidence.finalValues).find(
     (key) => typeof stagedEvidence.finalValues[key] === "number",
@@ -297,8 +329,13 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     trace: stagedEvidence.trace,
     issues: stagedEvidence.issues,
   });
+  const stagedProjection = {
+    ...publishInput.projection,
+    affixRuntimeEvidence: structuredClone(stagedEvidence),
+  };
   const snapshot = publishConfigurationSnapshot({
     ...publishInput,
+    projection: stagedProjection,
     affixRuntimeEvidence: stagedEvidence,
   });
   assert.equal(snapshot.pricingPolicyVersion, version.id);

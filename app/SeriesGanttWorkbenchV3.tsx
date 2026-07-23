@@ -86,7 +86,6 @@ interface SeriesCreateDraft {
   typeId: string;
   functionId: string;
   qualityId: SeriesDefinition["qualityId"];
-  performanceId: string;
   functionIntensity: 1 | 2 | 3;
   planningMinKgf: string;
   planningMaxKgf: string;
@@ -685,7 +684,8 @@ function ModelDrawer({
               <div><span>所选品质</span><strong>{snapshot?.qualityValueAssessment?.selectedQualityId ?? snapshot?.qualityReport.qualityId ?? "待选择"}</strong><small>系统不会按分数自动改品质</small></div>
               <div><span>基础词条分</span><strong>{snapshot?.qualityValueAssessment?.baseAffixScore ?? snapshot?.qualityReport.totalScore ?? "—"}</strong><small>Technology 成员按 affixId 去重</small></div>
               <div><span>组合分</span><strong>{snapshot?.qualityValueAssessment?.combinationScore ?? "未冻结"}</strong><small>仅同部位无序词条对</small></div>
-              <div><span>功能 / 性能系数</span><strong>{snapshot?.qualityValueAssessment ? `${snapshot.qualityValueAssessment.functionScoreFactor} / ${snapshot.qualityValueAssessment.performanceScoreFactor ?? "缺失"}` : "未冻结"}</strong><small>缺性能来源不默认为 1</small></div>
+              <div><span>功能评分系数</span><strong>{snapshot?.qualityValueAssessment?.functionScoreFactor ?? "未冻结"}</strong><small>Performance 不参与计分或定价</small></div>
+              <div><span>派生性能摘要</span><strong>{snapshot?.performanceSummary?.status === "AVAILABLE" ? snapshot.performanceSummary.summary.labels.map((entry) => entry.label).join("、") || "无命中标签" : "不可用"}</strong><small>{snapshot?.performanceSummary?.status === "UNAVAILABLE" ? "definition_missing · 发布不阻断" : snapshot?.performanceSummary ? "只读派生，不反向修改配置" : "历史 Snapshot 未冻结该字段"}</small></div>
               <div><span>最终分 / 品质命中</span><strong>{snapshot?.qualityValueAssessment?.finalValueScore ?? snapshot?.qualityReport.totalScore ?? "—"}</strong><small>{snapshot?.qualityValueAssessment ? (snapshot.qualityValueAssessment.inSelectedQualityRange ? "命中所选区间" : "未命中 · 发布阻断") : "旧快照未绑定版本化区间"}</small></div>
               <div><span>价格试算</span><strong>{snapshot?.automaticPricing?.purchasePrice ?? "不可用"}</strong><small>{snapshot?.automaticPricing?.formal ? snapshot.automaticPricing.moneyUnit : "NON_FORMAL · 不写 Store"}</small></div>
             </div>
@@ -989,7 +989,6 @@ export function SeriesGanttWorkbenchV3({
       typeId: type?.id ?? "",
       functionId: fn?.id ?? "",
       qualityId: "quality_c_green",
-      performanceId: "",
       functionIntensity: 2,
       planningMinKgf: "",
       planningMaxKgf: "",
@@ -1030,7 +1029,6 @@ export function SeriesGanttWorkbenchV3({
           typeId: draft.typeId,
           functionId: draft.functionId,
           qualityId: draft.qualityId,
-          performanceId: draft.performanceId || undefined,
           functionIntensity: draft.functionIntensity,
           planningMinKgf: draft.planningMinKgf,
           planningMaxKgf: draft.planningMaxKgf,
@@ -1356,7 +1354,6 @@ export function SeriesGanttWorkbenchV3({
               <label><span>功能定位</span><select value={seriesCreateDraft.functionId} onChange={(event) => setSeriesCreateDraft({ ...seriesCreateDraft, functionId: event.target.value })}>{state.functionProfiles.filter((entry) => entry.enabled).map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label>
               <label><span>品质（人工选择）</span><select value={seriesCreateDraft.qualityId} onChange={(event) => setSeriesCreateDraft({ ...seriesCreateDraft, qualityId: event.target.value as SeriesDefinition["qualityId"] })}>{QUALITY_ORDER.map((entry) => <option key={entry.id} value={entry.id}>{entry.letter} / {entry.name}</option>)}</select></label>
               <label><span>功能专精强度</span><select value={seriesCreateDraft.functionIntensity} onChange={(event) => setSeriesCreateDraft({ ...seriesCreateDraft, functionIntensity: Number(event.target.value) as 1 | 2 | 3 })}><option value={1}>1 · 轻度</option><option value={2}>2 · 标准</option><option value={3}>3 · 极致</option></select></label>
-              <label><span>性能定位（可选）</span><select value={seriesCreateDraft.performanceId} onChange={(event) => setSeriesCreateDraft({ ...seriesCreateDraft, performanceId: event.target.value })}><option value="">暂不指定</option>{state.performanceProfiles.filter((entry) => entry.enabled).map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label>
               <label className="span-2 gantt-discrete-pulls"><span>目标拉力规格 · 明确离散列表</span><input value={seriesCreateDraft.discretePulls} onChange={(event) => setSeriesCreateDraft({ ...seriesCreateDraft, discretePulls: event.target.value })} placeholder="例如 1.5, 3.8, 5.4, 8.2" /><small>当前将物化：{parseDiscretePulls(seriesCreateDraft.discretePulls).map((pull) => `${pull} kgf`).join("、") || "尚未输入"}。一个数值只生成一个 SKU 抽屉，不补中间值。</small></label>
               <fieldset className="span-2 gantt-planning-range"><legend>规划拉力范围（可选）· 不参与 SKU 生成</legend><label><span>最小 kgf</span><input type="number" min="0.01" step="0.1" value={seriesCreateDraft.planningMinKgf} onChange={(event) => setSeriesCreateDraft({ ...seriesCreateDraft, planningMinKgf: event.target.value })} placeholder="可留空" /></label><label><span>最大 kgf</span><input type="number" min="0.01" step="0.1" value={seriesCreateDraft.planningMaxKgf} onChange={(event) => setSeriesCreateDraft({ ...seriesCreateDraft, planningMaxKgf: event.target.value })} placeholder="可留空" /></label></fieldset>
             </div>

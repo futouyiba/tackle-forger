@@ -38,9 +38,21 @@ import type {
   PatchOffsetPolicyVersion,
   PatchReviewSubjectRef,
   PatchRevisionRecord,
+  ProjectionTraceStep,
 } from "../lib/types";
 
 const NOW = "2026-07-23T08:00:00.000Z";
+
+function finalSettlementTrace(values: Record<string, number | string>): ProjectionTraceStep[] {
+  return [{
+    layer: "final_review_patch",
+    sourceIds: ["test:final-settlement"],
+    contributions: Object.entries(values).map(([parameterKey, value], index) => ({
+      sequence: index + 1, ruleId: `test:${parameterKey}`, sourceId: "test:final-settlement",
+      sourceName: "最终结算", parameterKey, operation: "base", before: null, operand: value, after: value,
+    })),
+  }];
+}
 
 function policy(): PatchOffsetPolicyVersion {
   return createCanonicalPatchOffsetPolicyVersion({
@@ -775,6 +787,8 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
     attributeAffixIds: oldSnapshot.attributeAffixIds,
     passiveAffixIds: oldSnapshot.passiveAffixIds,
     technologyIds: oldSnapshot.technologyIds,
+    technologyDefinitions: state.technologies,
+    finalSettlementTrace: finalSettlementTrace(projection.values),
     passiveAffixPayloads: oldSnapshot.passiveAffixPayloads,
     compatibilityReport: oldSnapshot.compatibilityReport,
     affinityReport: oldSnapshot.affinityReport,
@@ -785,7 +799,6 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
       baseAffixScore: 1,
       combinationScore: 0,
       functionScoreFactor: 1,
-      performanceScoreFactor: 1,
       finalValueScore: 1,
       affixBreakdown: [],
       combinationBreakdown: [],
@@ -801,6 +814,7 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
     automaticPricing: {
       formal: true,
       pricingPolicyRef: "pricing:published-v1",
+      valueScore: 1,
       pricingWeightBandId: "band:1",
       pricingBasketId: "basket:1",
       repairPriceUnrounded: 100,

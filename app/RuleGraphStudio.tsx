@@ -499,7 +499,7 @@ export function RuleGraphStudio({
               <div className="graph-inspector-section">
                 <div className="graph-section-title"><strong>应用维度</strong></div>
                 <div className="graph-check-grid">
-                  {(Object.keys(dimensionLabels) as DimensionKey[]).map((key) => (
+                  {(Object.keys(dimensionLabels) as DimensionKey[]).filter((key) => key !== "performance").map((key) => (
                     <label key={key}><input type="checkbox" checked={selectedNode.dimensions.includes(key)} onChange={() => updateNode((node) => {
                       node.dimensions = node.dimensions.includes(key) ? node.dimensions.filter((item) => item !== key) : [...node.dimensions, key];
                     })} />{dimensionLabels[key]}</label>

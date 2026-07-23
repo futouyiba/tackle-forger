@@ -13,6 +13,7 @@ import {
 } from "./ai-outbound";
 
 export const AI_BATCH_LIMIT_POLICY_VERSION = "ai-batch-limits/open009-v1" as const;
+const AI_TEMPORARY_ERROR_RETRY_COUNT = 1;
 
 export interface AIBatchLimitPolicyV1 {
   policyVersion: typeof AI_BATCH_LIMIT_POLICY_VERSION;
@@ -778,6 +779,7 @@ export function estimateAIAssessmentRequest(canonicalJson: string, policyValue: 
 }
 
 export interface FancyHubAdmissionLease {
+  readonly inFlightForUserBefore: number;
   readonly inFlightForWorkspaceBefore: number;
   readonly inFlightTotalBefore: number;
   consumeAssessmentRequest(input: { nowMs: number; maxRequestsPerMinute: number }): Promise<void>;
@@ -789,6 +791,7 @@ export interface FancyHubAdmissionCoordinator {
   writeProviderHardLimits(limits: AIProviderHardLimits): Promise<void>;
   acquire(input: {
     workspaceId: string;
+    actorStableId: string;
     maxConcurrentForWorkspace: number;
     maxConcurrentTotal: number;
     leaseExpiresAtMs: number;
@@ -796,6 +799,7 @@ export interface FancyHubAdmissionCoordinator {
 }
 
 export class InMemoryFancyHubAdmissionCoordinator implements FancyHubAdmissionCoordinator {
+  private readonly inFlightByUser = new Map<string, number>();
   private readonly inFlightByWorkspace = new Map<string, number>();
   private inFlightTotal = 0;
   private readonly assessmentRequestTimes: number[] = [];
@@ -811,6 +815,7 @@ export class InMemoryFancyHubAdmissionCoordinator implements FancyHubAdmissionCo
 
   async acquire(input: {
     workspaceId: string;
+    actorStableId: string;
     maxConcurrentForWorkspace: number;
     maxConcurrentTotal: number;
     leaseExpiresAtMs: number;
@@ -823,10 +828,13 @@ export class InMemoryFancyHubAdmissionCoordinator implements FancyHubAdmissionCo
       throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "provider 或租户全局并发硬上限已满。");
     }
     this.inFlightByWorkspace.set(input.workspaceId, current + 1);
+    const inFlightForUserBefore = this.inFlightByUser.get(input.actorStableId) ?? 0;
+    this.inFlightByUser.set(input.actorStableId, inFlightForUserBefore + 1);
     const inFlightTotalBefore = this.inFlightTotal;
     this.inFlightTotal += 1;
     let released = false;
     return {
+      inFlightForUserBefore,
       inFlightForWorkspaceBefore: current,
       inFlightTotalBefore,
       consumeAssessmentRequest: async ({ nowMs, maxRequestsPerMinute }) => {
@@ -844,6 +852,9 @@ export class InMemoryFancyHubAdmissionCoordinator implements FancyHubAdmissionCo
         const remaining = (this.inFlightByWorkspace.get(input.workspaceId) ?? 1) - 1;
         if (remaining > 0) this.inFlightByWorkspace.set(input.workspaceId, remaining);
         else this.inFlightByWorkspace.delete(input.workspaceId);
+        const remainingForUser = (this.inFlightByUser.get(input.actorStableId) ?? 1) - 1;
+        if (remainingForUser > 0) this.inFlightByUser.set(input.actorStableId, remainingForUser);
+        else this.inFlightByUser.delete(input.actorStableId);
         this.inFlightTotal -= 1;
       },
     };
@@ -898,6 +909,7 @@ export class FancyHubConnector {
     response: FancyHubAssessmentResponse;
     inputHash: string;
     attemptedModelIds: string[];
+    softWarnings: Array<"AI_USER_SOFT_CONCURRENCY" | "AI_WORKSPACE_SOFT_CONCURRENCY" | "AI_ASSESSMENT_MAY_BE_SLOW">;
     requestEnvelope: AIRequestEnvelopeV1;
     canonicalRequestJson: string;
   }> {
@@ -920,6 +932,7 @@ export class FancyHubConnector {
       );
       const lease = await this.admissionCoordinator.acquire({
         workspaceId: input.workspaceId,
+        actorStableId: input.actorStableId,
         maxConcurrentForWorkspace: Math.min(batchLimits.maxConcurrentAssessmentsPerWorkspace, preDiscoveryLimits.maxConcurrentRequests),
         maxConcurrentTotal: preDiscoveryLimits.maxConcurrentRequests,
         leaseExpiresAtMs: batchDeadlineMs,
@@ -975,106 +988,113 @@ export class FancyHubConnector {
           || estimate.costMicroUsd > limits.maxCostMicroUsdPerRequest)) {
           throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "按实际出站 Envelope 计算的 token 或费用估算超过 provider/租户硬上限。" );
         }
-        const fallbackWorstCaseEstimate = preparedModels.reduce<AIAssessmentEstimate>((current, entry) => ({
-          inputTokens: current.inputTokens + entry.estimate.inputTokens,
-          outputTokens: current.outputTokens + entry.estimate.outputTokens,
-          costMicroUsd: current.costMicroUsd + entry.estimate.costMicroUsd,
+        const retryAndFallbackWorstCaseEstimate = preparedModels.reduce<AIAssessmentEstimate>((current, entry) => ({
+          inputTokens: current.inputTokens + entry.estimate.inputTokens * (1 + AI_TEMPORARY_ERROR_RETRY_COUNT),
+          outputTokens: current.outputTokens + entry.estimate.outputTokens * (1 + AI_TEMPORARY_ERROR_RETRY_COUNT),
+          costMicroUsd: current.costMicroUsd + entry.estimate.costMicroUsd * (1 + AI_TEMPORARY_ERROR_RETRY_COUNT),
         }), { inputTokens: 0, outputTokens: 0, costMicroUsd: 0 });
-        evaluateAIBatchAdmission({
+        const admission = evaluateAIBatchAdmission({
           assessmentCount,
-          inFlightForUser: input.batch?.inFlightForUser ?? 0,
+          inFlightForUser: Math.max(input.batch?.inFlightForUser ?? 0, lease.inFlightForUserBefore),
           inFlightForWorkspace: lease.inFlightForWorkspaceBefore,
-          estimatedInputTokens: fallbackWorstCaseEstimate.inputTokens * assessmentCount,
-          estimatedOutputTokens: fallbackWorstCaseEstimate.outputTokens * assessmentCount,
-          estimatedCostMicroUsd: fallbackWorstCaseEstimate.costMicroUsd * assessmentCount,
+          estimatedInputTokens: retryAndFallbackWorstCaseEstimate.inputTokens * assessmentCount,
+          estimatedOutputTokens: retryAndFallbackWorstCaseEstimate.outputTokens * assessmentCount,
+          estimatedCostMicroUsd: retryAndFallbackWorstCaseEstimate.costMicroUsd * assessmentCount,
           startedAtMs: batchStartedAtMs,
           nowMs: Date.now(),
         }, batchLimits);
         let lastRetryable: FancyHubError | undefined;
         for (const { model, prepared, estimate: modelEstimate } of preparedModels) {
-          const remainingMs = batchDeadlineMs - Date.now();
-          if (remainingMs <= 0) throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "批次已经达到 10 分钟硬期限，不再启动降级调用。" );
-          attemptedModelIds.push(model.modelId);
-          auditAttemptedModelIds.push(model.modelId);
-          const attemptRequestedAt = new Date().toISOString();
-          let rawResponse: unknown;
-          let rawAttemptEmitted = false;
-          const emitRawAttempt = async (resultCode: string) => {
-            if (rawAttemptEmitted || !input.rawAttemptSink) return;
-            rawAttemptEmitted = true;
-            await input.rawAttemptSink({
-              requestedAt: attemptRequestedAt,
-              completedAt: new Date().toISOString(),
-              modelDescriptor: structuredClone(model),
-              requestEnvelope: structuredClone(prepared.envelope),
-              canonicalRequestJson: prepared.canonicalJson,
-              inputHash: prepared.inputHash,
-              ...(rawResponse === undefined ? {} : { rawResponse }),
-              resultCode,
-            });
-          };
-          try {
-            await lease.consumeAssessmentRequest({ nowMs: Date.now(), maxRequestsPerMinute: limits.maxRequestsPerMinute });
-            const transportRemainingMs = batchDeadlineMs - Date.now();
-            if (transportRemainingMs <= 0) {
-              throw new FancyHubError(
-                "AI_HARD_LIMIT_EXCEEDED",
-                "批次在评估请求准入等待后已经达到 10 分钟硬期限。",
-              );
-            }
-            const transportResponse = await this.transport.assess({
-              canonicalJson: prepared.canonicalJson,
-              inputHash: prepared.inputHash,
-              model,
-              maxOutputTokens: Math.min(modelEstimate.outputTokens, limits.maxOutputTokens),
-              timeoutMs: Math.min(limits.requestTimeoutMs, transportRemainingMs),
-            });
-            rawResponse = transportResponse instanceof FancyHubDecodedTransportResponse
-              ? transportResponse.rawResponseText
-              : transportResponse;
-            const response = parseAssessmentResponse(
-              transportResponse instanceof FancyHubDecodedTransportResponse
-                ? transportResponse.value
-                : transportResponse,
-              authorizedResponseAliases(prepared.envelope),
-            );
-            if (!sameModelDescriptor(response.model, model)) throw new FancyHubError("AI_MODEL_REVISION_MISMATCH", "Fancy Hub 响应模型描述与请求不一致。" );
-            if (response.usage.inputTokens > limits.maxInputTokens || response.usage.outputTokens > limits.maxOutputTokens || response.usage.costMicroUsd > limits.maxCostMicroUsdPerRequest) {
-              throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "Fancy Hub 响应用量超过硬上限。" );
-            }
-            await emitRawAttempt("SUCCESS");
-            await this.auditSink({
-              action: "AI_FANCY_HUB_ASSESSMENT",
-              workspaceId: input.workspaceId,
-              actorStableId: input.actorStableId,
-              requestedAt: auditStartedAt.toISOString(),
-              completedAt: new Date().toISOString(),
-              durationMs: Date.now() - auditStartedAt.getTime(),
-              resultCode: "SUCCESS",
-              attemptedModelIds: [...attemptedModelIds],
-              modelDescriptor: response.model,
-              inputHash: prepared.inputHash,
-              outputHash: response.outputHash,
-              usage: structuredClone(response.usage),
-            });
-            return {
-              response,
-              inputHash: prepared.inputHash,
-              attemptedModelIds,
-              requestEnvelope: prepared.envelope,
-              canonicalRequestJson: prepared.canonicalJson,
+          for (let modelAttempt = 0; modelAttempt <= AI_TEMPORARY_ERROR_RETRY_COUNT; modelAttempt += 1) {
+            const remainingMs = batchDeadlineMs - Date.now();
+            if (remainingMs <= 0) throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "批次已经达到 10 分钟硬期限，不再启动重试或降级调用。" );
+            attemptedModelIds.push(model.modelId);
+            auditAttemptedModelIds.push(model.modelId);
+            const attemptRequestedAt = new Date().toISOString();
+            let rawResponse: unknown;
+            let rawAttemptEmitted = false;
+            const emitRawAttempt = async (resultCode: string) => {
+              if (rawAttemptEmitted || !input.rawAttemptSink) return;
+              rawAttemptEmitted = true;
+              await input.rawAttemptSink({
+                requestedAt: attemptRequestedAt,
+                completedAt: new Date().toISOString(),
+                modelDescriptor: structuredClone(model),
+                requestEnvelope: structuredClone(prepared.envelope),
+                canonicalRequestJson: prepared.canonicalJson,
+                inputHash: prepared.inputHash,
+                ...(rawResponse === undefined ? {} : { rawResponse }),
+                resultCode,
+              });
             };
-          } catch (error) {
-            if (rawResponse === undefined && error instanceof FancyHubError && error.rawResponse !== undefined) {
-              rawResponse = error.rawResponse;
+            try {
+              await lease.consumeAssessmentRequest({ nowMs: Date.now(), maxRequestsPerMinute: limits.maxRequestsPerMinute });
+              const transportRemainingMs = batchDeadlineMs - Date.now();
+              if (transportRemainingMs <= 0) {
+                throw new FancyHubError(
+                  "AI_HARD_LIMIT_EXCEEDED",
+                  "批次在评估请求准入等待后已经达到 10 分钟硬期限。",
+                );
+              }
+              const transportResponse = await this.transport.assess({
+                canonicalJson: prepared.canonicalJson,
+                inputHash: prepared.inputHash,
+                model,
+                maxOutputTokens: Math.min(modelEstimate.outputTokens, limits.maxOutputTokens),
+                timeoutMs: Math.min(limits.requestTimeoutMs, transportRemainingMs),
+              });
+              rawResponse = transportResponse instanceof FancyHubDecodedTransportResponse
+                ? transportResponse.rawResponseText
+                : transportResponse;
+              const response = parseAssessmentResponse(
+                transportResponse instanceof FancyHubDecodedTransportResponse
+                  ? transportResponse.value
+                  : transportResponse,
+                authorizedResponseAliases(prepared.envelope),
+              );
+              if (!sameModelDescriptor(response.model, model)) throw new FancyHubError("AI_MODEL_REVISION_MISMATCH", "Fancy Hub 响应模型描述与请求不一致." );
+              if (response.usage.inputTokens > limits.maxInputTokens || response.usage.outputTokens > limits.maxOutputTokens || response.usage.costMicroUsd > limits.maxCostMicroUsdPerRequest) {
+                throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "Fancy Hub 响应用量超过硬上限." );
+              }
+              await emitRawAttempt("SUCCESS");
+              await this.auditSink({
+                action: "AI_FANCY_HUB_ASSESSMENT",
+                workspaceId: input.workspaceId,
+                actorStableId: input.actorStableId,
+                requestedAt: auditStartedAt.toISOString(),
+                completedAt: new Date().toISOString(),
+                durationMs: Date.now() - auditStartedAt.getTime(),
+                resultCode: "SUCCESS",
+                attemptedModelIds: [...attemptedModelIds],
+                modelDescriptor: response.model,
+                inputHash: prepared.inputHash,
+                outputHash: response.outputHash,
+                usage: structuredClone(response.usage),
+              });
+              return {
+                response,
+                inputHash: prepared.inputHash,
+                attemptedModelIds,
+                softWarnings: admission.softWarnings,
+                requestEnvelope: prepared.envelope,
+                canonicalRequestJson: prepared.canonicalJson,
+              };
+            } catch (error) {
+              if (rawResponse === undefined && error instanceof FancyHubError && error.rawResponse !== undefined) {
+                rawResponse = error.rawResponse;
+              }
+              await emitRawAttempt(
+                error instanceof FancyHubError || error instanceof AIOutboundError
+                  ? error.code
+                  : "AI_UNKNOWN_FAILURE",
+              );
+              if (error instanceof FancyHubError && error.retryable) {
+                lastRetryable = error;
+                if (modelAttempt === 0) continue;
+                break;
+              }
+              throw error;
             }
-            await emitRawAttempt(
-              error instanceof FancyHubError || error instanceof AIOutboundError
-                ? error.code
-                : "AI_UNKNOWN_FAILURE",
-            );
-            if (error instanceof FancyHubError && error.retryable) { lastRetryable = error; continue; }
-            throw error;
           }
         }
         throw lastRetryable ?? new FancyHubError("AI_NO_CONFIGURED_MODEL_AVAILABLE", "模型降级列表耗尽。" );

@@ -941,7 +941,8 @@
 
 .gantt-ai-selection,
 .gantt-ai-evidence,
-.gantt-ai-preview {
+.gantt-ai-preview,
+.gantt-ai-delete-confirmation {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 12px;
@@ -952,7 +953,8 @@
 
 .gantt-ai-selection > header,
 .gantt-ai-evidence > header,
-.gantt-ai-preview > header {
+.gantt-ai-preview > header,
+.gantt-ai-delete-confirmation > header {
   align-items: start;
   display: flex;
   gap: 12px;
@@ -1146,6 +1148,62 @@
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
+}
+
+.gantt-ai-delete-confirmation {
+  border-color: color-mix(in srgb, #b93f3f 40%, var(--line));
+}
+
+.gantt-ai-delete-confirmation h4,
+.gantt-ai-delete-confirmation p {
+  margin: 0;
+}
+
+.gantt-ai-delete-confirmation > p,
+.gantt-ai-delete-confirmation > label span {
+  color: var(--muted);
+}
+
+.gantt-ai-delete-confirmation > strong {
+  color: #8f2929;
+}
+
+.gantt-ai-delete-confirmation > label {
+  align-items: start;
+  background: color-mix(in srgb, #b93f3f 5%, var(--surface-subtle));
+  border-radius: 8px;
+  display: flex;
+  gap: 9px;
+  padding: 10px;
+}
+
+.gantt-ai-delete-confirmation > label input {
+  margin-top: 2px;
+}
+
+.gantt-ai-delete-confirmation > small {
+  color: #a22f2f;
+}
+
+.gantt-ai-delete-confirmation > footer {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.gantt-ai-delete-confirmation button,
+.gantt-ai-actions button.danger {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  padding: 9px 12px;
+}
+
+.gantt-ai-delete-confirmation button.danger,
+.gantt-ai-actions button.danger {
+  border-color: color-mix(in srgb, #b93f3f 55%, var(--line));
+  color: #9b2f2f;
 }
 
 @media (max-width: 1024px) {

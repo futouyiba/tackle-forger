@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { appendFile, mkdir, open, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { appendFile, link, mkdir, open, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   AI_RETENTION_POLICY_VERSION,
@@ -10,6 +10,7 @@ import {
   sweepAIAssessmentRetention,
   type AIBackupPurgeAdapter,
   type AIAcceptedArtifactProvenance,
+  type AIDeletionTombstone,
   type AIRetentionSweepResult,
   type AIAssessmentRetentionRecord,
   type AIOperationMetadataRecord,
@@ -45,6 +46,7 @@ export class AIRuntimeStoreError extends Error {
 
 interface AIRuntimeStoreConfig {
   dataDir: string;
+  tombstoneDir: string;
   encryptionKey: Uint8Array;
   encryptionKeyVersion: string;
 }
@@ -60,7 +62,7 @@ export interface AIRuntimeStoreFaultHooks {
 
 interface AIAdmissionDocument {
   version: 1;
-  leases: Record<string, { workspaceId: string; expiresAtMs: number }>;
+  leases: Record<string, { workspaceId: string; actorStableId?: string; expiresAtMs: number }>;
   assessmentRequestTimesMs: number[];
   providerHardLimits?: AIProviderHardLimits;
 }
@@ -90,6 +92,11 @@ type StoredAIAssessmentRetentionRecord = AIAssessmentRetentionRecord & {
   runtimeAuditOutbox?: StoredAIRetentionAuditEvent[];
 };
 
+interface StoredAIDeletionTombstone {
+  version: 1;
+  tombstone: AIDeletionTombstone;
+}
+
 const EMPTY_ADMISSION_DOCUMENT: AIAdmissionDocument = {
   version: 1,
   leases: {},
@@ -108,7 +115,24 @@ export function aiRuntimeStoreConfigFromEnvironment(): AIRuntimeStoreConfig | un
   const encryptionKey = parseEncryptionKey(process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64);
   const encryptionKeyVersion = process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION?.trim();
   if (!dataDir || !encryptionKey || !encryptionKeyVersion) return undefined;
-  return { dataDir: path.resolve(dataDir), encryptionKey, encryptionKeyVersion };
+  const resolvedDataDir = path.resolve(dataDir);
+  const tombstoneDir = path.resolve(
+    process.env.AI_RETENTION_TOMBSTONE_DIR?.trim()
+      || `${resolvedDataDir}-deletion-tombstones`,
+  );
+  const relativeToData = path.relative(resolvedDataDir, tombstoneDir);
+  if (!relativeToData || (!relativeToData.startsWith("..") && !path.isAbsolute(relativeToData))) {
+    return undefined;
+  }
+  const backupDir = process.env.WORKSPACE_BACKUP_DIR?.trim();
+  if (backupDir) {
+    const resolvedBackupDir = path.resolve(backupDir);
+    const relativeToBackup = path.relative(resolvedBackupDir, tombstoneDir);
+    if (!relativeToBackup || (!relativeToBackup.startsWith("..") && !path.isAbsolute(relativeToBackup))) {
+      return undefined;
+    }
+  }
+  return { dataDir: resolvedDataDir, tombstoneDir, encryptionKey, encryptionKeyVersion };
 }
 
 export function aiRuntimeStoreEnablement(): { enabled: boolean; code?: AIRuntimeStoreErrorCode } {
@@ -139,6 +163,7 @@ async function acquireLock(file: string) {
 
 export class FileAIRuntimeStore {
   private readonly assessmentsDir: string;
+  private readonly tombstonesDir: string;
   private readonly auditFile: string;
   private readonly admissionFile: string;
 
@@ -147,6 +172,7 @@ export class FileAIRuntimeStore {
     private readonly faultHooks: AIRuntimeStoreFaultHooks = {},
   ) {
     this.assessmentsDir = path.join(config.dataDir, "assessments");
+    this.tombstonesDir = config.tombstoneDir;
     this.auditFile = path.join(config.dataDir, "audit.jsonl");
     this.admissionFile = path.join(config.dataDir, "admission.json");
   }
@@ -156,6 +182,98 @@ export class FileAIRuntimeStore {
       throw new AIRuntimeStoreError("AI_RETENTION_STORE_UNAVAILABLE", "AI 留存记录 ID 格式无效。");
     }
     return path.join(this.assessmentsDir, `${assessmentId}.json`);
+  }
+
+  private tombstoneTarget(assessmentId: string): string {
+    this.assessmentTarget(assessmentId);
+    return path.join(this.tombstonesDir, `${assessmentId}.json`);
+  }
+
+  private async readDeletionTombstone(assessmentId: string): Promise<AIDeletionTombstone | undefined> {
+    try {
+      const parsed = JSON.parse(
+        await readFile(this.tombstoneTarget(assessmentId), "utf8"),
+      ) as StoredAIDeletionTombstone;
+      const tombstone = parsed?.tombstone;
+      if (parsed?.version !== 1
+        || !tombstone
+        || tombstone.assessmentId !== assessmentId
+        || typeof tombstone.requestedAt !== "string"
+        || typeof tombstone.requestedBy !== "string"
+        || typeof tombstone.primaryPurgeDueAt !== "string"
+        || typeof tombstone.backupPurgeDueAt !== "string") {
+        throw new AIRuntimeStoreError("AI_RETENTION_STORE_UNAVAILABLE", "AI 删除墓碑索引格式无效。");
+      }
+      return structuredClone(tombstone);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      if (error instanceof AIRuntimeStoreError) throw error;
+      throw new AIRuntimeStoreError("AI_RETENTION_STORE_UNAVAILABLE", "AI 删除墓碑索引无法读取。");
+    }
+  }
+
+  private async writeDeletionTombstone(tombstone: AIDeletionTombstone): Promise<void> {
+    await mkdir(this.tombstonesDir, { recursive: true, mode: 0o700 });
+    const target = this.tombstoneTarget(tombstone.assessmentId);
+    const existing = await this.readDeletionTombstone(tombstone.assessmentId);
+    if (existing) {
+      if (existing.requestedAt !== tombstone.requestedAt
+        || existing.requestedBy !== tombstone.requestedBy
+        || existing.primaryPurgeDueAt !== tombstone.primaryPurgeDueAt
+        || existing.backupPurgeDueAt !== tombstone.backupPurgeDueAt) {
+        throw new AIRuntimeStoreError(
+          "AI_RETENTION_STORE_UNAVAILABLE",
+          "AI 删除墓碑已存在且身份不一致。",
+        );
+      }
+      return;
+    }
+    const temporary = `${target}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+    await writeFile(temporary, `${JSON.stringify({ version: 1, tombstone } satisfies StoredAIDeletionTombstone)}\n`, {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    try {
+      await link(temporary, target);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const raced = await this.readDeletionTombstone(tombstone.assessmentId);
+      if (!raced
+        || raced.requestedAt !== tombstone.requestedAt
+        || raced.requestedBy !== tombstone.requestedBy) {
+        throw new AIRuntimeStoreError(
+          "AI_RETENTION_STORE_UNAVAILABLE",
+          "AI 删除墓碑并发写入不一致。",
+        );
+      }
+    } finally {
+      await unlink(temporary).catch(() => undefined);
+    }
+  }
+
+  private async applyIndexedTombstone(
+    assessmentId: string,
+    record: StoredAIAssessmentRetentionRecord | undefined,
+  ): Promise<StoredAIAssessmentRetentionRecord | undefined> {
+    let tombstone = await this.readDeletionTombstone(assessmentId);
+    if (!record) return record;
+    if (!tombstone && record.deletionTombstone) {
+      await this.writeDeletionTombstone(record.deletionTombstone);
+      tombstone = structuredClone(record.deletionTombstone);
+    }
+    if (!tombstone) return record;
+    record.visibility = "HIDDEN";
+    if (record.metadata) record.metadata.state = "USER_DELETED";
+    record.deletionTombstone = {
+      ...structuredClone(tombstone),
+      ...(record.deletionTombstone ? structuredClone(record.deletionTombstone) : {}),
+      assessmentId: tombstone.assessmentId,
+      requestedAt: tombstone.requestedAt,
+      requestedBy: tombstone.requestedBy,
+      primaryPurgeDueAt: tombstone.primaryPurgeDueAt,
+      backupPurgeDueAt: tombstone.backupPurgeDueAt,
+    };
+    return record;
   }
 
   private async readAssessmentFile(target: string): Promise<StoredAIAssessmentRetentionRecord | undefined> {
@@ -191,7 +309,10 @@ export class FileAIRuntimeStore {
     const target = this.assessmentTarget(assessmentId);
     const release = await acquireLock(target);
     try {
-      const current = await this.readAssessmentFile(target);
+      const current = await this.applyIndexedTombstone(
+        assessmentId,
+        await this.readAssessmentFile(target),
+      );
       const next = await operation(current ? structuredClone(current) : undefined);
       if (next.record) await this.writeAssessmentFile(target, next.record);
       return next.result;
@@ -253,7 +374,10 @@ export class FileAIRuntimeStore {
 
   private async mutateAssessmentWithAudit<T>(
     assessmentId: string,
-    operation: (record: StoredAIAssessmentRetentionRecord | undefined) => Promise<{
+    operation: (
+      record: StoredAIAssessmentRetentionRecord | undefined,
+      context: { hadStoredDeletionTombstone: boolean },
+    ) => Promise<{
       record?: StoredAIAssessmentRetentionRecord;
       result: T;
       auditEvents?: AIRetentionAuditEvent[];
@@ -267,11 +391,18 @@ export class FileAIRuntimeStore {
     const target = this.assessmentTarget(assessmentId);
     const release = await acquireLock(target);
     try {
-      let current = await this.readAssessmentFile(target);
+      const storedCurrent = await this.readAssessmentFile(target);
+      let current = await this.applyIndexedTombstone(
+        assessmentId,
+        storedCurrent,
+      );
       let auditEventsWritten = current
         ? await this.flushAssessmentAuditOutbox(target, current)
         : 0;
-      const next = await operation(current ? structuredClone(current) : undefined);
+      const next = await operation(
+        current ? structuredClone(current) : undefined,
+        { hadStoredDeletionTombstone: Boolean(storedCurrent?.deletionTombstone) },
+      );
       if (next.record) {
         current = next.record;
         await this.faultHooks.beforeAssessmentMutationCommitted?.({
@@ -337,14 +468,20 @@ export class FileAIRuntimeStore {
           }
           const leases = Object.values(document.leases);
           const workspaceCount = leases.filter((lease) => lease.workspaceId === input.workspaceId).length;
+          const userCount = leases.filter((lease) => lease.actorStableId === input.actorStableId).length;
           if (workspaceCount >= input.maxConcurrentForWorkspace || leases.length >= input.maxConcurrentTotal) {
             throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "工作区、provider 或租户并发硬上限已满。");
           }
           document.leases[leaseId] = {
             workspaceId: input.workspaceId,
+            actorStableId: input.actorStableId,
             expiresAtMs: input.leaseExpiresAtMs,
           };
-          return { inFlightForWorkspaceBefore: workspaceCount, inFlightTotalBefore: leases.length };
+          return {
+            inFlightForUserBefore: userCount,
+            inFlightForWorkspaceBefore: workspaceCount,
+            inFlightTotalBefore: leases.length,
+          };
         });
         let released = false;
         return {
@@ -373,7 +510,10 @@ export class FileAIRuntimeStore {
   }
 
   async initialize(): Promise<void> {
-    await mkdir(this.assessmentsDir, { recursive: true, mode: 0o700 });
+    await Promise.all([
+      mkdir(this.assessmentsDir, { recursive: true, mode: 0o700 }),
+      mkdir(this.tombstonesDir, { recursive: true, mode: 0o700 }),
+    ]);
     const probe = path.join(this.config.dataDir, `.write-probe-${process.pid}-${randomBytes(8).toString("hex")}`);
     try {
       const handle = await open(probe, "wx", 0o600);
@@ -399,6 +539,12 @@ export class FileAIRuntimeStore {
     if (!assessmentId) {
       throw new AIRuntimeStoreError("AI_RETENTION_STORE_UNAVAILABLE", "AI 留存记录缺少安全 assessmentId。");
     }
+    if (await this.readDeletionTombstone(assessmentId)) {
+      throw new AIRuntimeStoreError(
+        "AI_RETENTION_STORE_UNAVAILABLE",
+        "该 assessmentId 已被永久删除墓碑占用，不能恢复或复用。",
+      );
+    }
     await this.mutateAssessment(assessmentId, (current) => {
       if (current) {
         throw new AIRuntimeStoreError("AI_RETENTION_STORE_UNAVAILABLE", "AI 留存记录 ID 重复。");
@@ -412,7 +558,10 @@ export class FileAIRuntimeStore {
     actorStableId: string;
     includeHidden?: boolean;
   }): Promise<AIAssessmentRetentionRecord | undefined> {
-    const record = await this.readAssessmentFile(this.assessmentTarget(input.assessmentId));
+    const record = await this.applyIndexedTombstone(
+      input.assessmentId,
+      await this.readAssessmentFile(this.assessmentTarget(input.assessmentId)),
+    );
     if (!record || record.metadata?.actorStableId !== input.actorStableId) return undefined;
     if (!input.includeHidden) {
       try {
@@ -553,7 +702,10 @@ export class FileAIRuntimeStore {
       .sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
     const records: AIAssessmentRetentionRecord[] = [];
     for (const id of assessmentIds) {
-      const record = await this.readAssessmentFile(this.assessmentTarget(id));
+      const record = await this.applyIndexedTombstone(
+        id,
+        await this.readAssessmentFile(this.assessmentTarget(id)),
+      );
       if (!record
         || record.visibility !== "VISIBLE"
         || record.metadata?.actorStableId !== input.actorStableId
@@ -580,14 +732,29 @@ export class FileAIRuntimeStore {
     now?: Date;
   }): Promise<AIAssessmentRetentionRecord | undefined> {
     const now = input.now ?? new Date();
-    const transaction = await this.mutateAssessmentWithAudit(input.assessmentId, (record) => {
+    const transaction = await this.mutateAssessmentWithAudit(input.assessmentId, async (record, context) => {
       if (!record || record.metadata?.actorStableId !== input.actorStableId) {
         return { result: undefined };
       }
       if (record.deletionTombstone) {
-        return { record, result: this.publicAssessmentRecord(record) };
+        return {
+          record,
+          result: this.publicAssessmentRecord(record),
+          ...(context.hadStoredDeletionTombstone
+            ? {}
+            : {
+                auditEvents: [{
+                  action: "AI_ASSESSMENT_HIDDEN" as const,
+                  assessmentId: input.assessmentId,
+                  actorStableId: input.actorStableId,
+                  occurredAt: record.deletionTombstone.requestedAt,
+                  resultCode: "SUCCESS" as const,
+                }],
+              }),
+        };
       }
       const deleted = requestAIAssessmentDeletion({ record, requestedBy: input.actorStableId, now });
+      await this.writeDeletionTombstone(deleted.record.deletionTombstone!);
       return {
         record: deleted.record,
         result: this.publicAssessmentRecord(deleted.record),
@@ -672,6 +839,25 @@ export class FileAIRuntimeStore {
     parameterKeyMapping?: Array<{ alias: string; parameterKey: string }>;
     rawAttempts: readonly FancyHubRawAssessmentAttempt[];
   }): AIAssessmentRetentionRecord {
+    const referencesByAlias = new Map(
+      input.requestAliasMapping.map((entry) => [entry.alias, entry.reference] as const),
+    );
+    const resolvedEvidenceRefs = input.requestEnvelope.evidenceRefs.map((evidence) => {
+      const reference = referencesByAlias.get(evidence.evidenceAlias);
+      if (!reference || reference.referenceKindCode !== "evidence") {
+        throw new AIRuntimeStoreError(
+          "AI_RETENTION_STORE_UNAVAILABLE",
+          "EvidenceRef 缺少可持久解析的本地稳定引用。",
+        );
+      }
+      return {
+        evidenceType: evidence.evidenceType,
+        evidenceAlias: evidence.evidenceAlias,
+        refId: reference.stableLocalId,
+        ...(reference.stableRevisionId ? { revisionId: reference.stableRevisionId } : {}),
+        contentHash: evidence.contentHash,
+      };
+    });
     const rawContent = this.rawAssessmentContent({
       assessmentId: input.assessmentId,
       prompt: input.prompt,
@@ -718,6 +904,7 @@ export class FileAIRuntimeStore {
         assumptions: structuredClone(input.response.result.assumptions),
         uncoveredInformation: structuredClone(input.response.result.uncoveredInformation),
         evidenceRefs: structuredClone(input.requestEnvelope.evidenceRefs),
+        resolvedEvidenceRefs: structuredClone(resolvedEvidenceRefs),
       },
       rawContentCreatedAt: input.completedAt,
       semanticContentCreatedAt: input.completedAt,

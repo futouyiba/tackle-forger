@@ -7,7 +7,13 @@ import {
   buildWorkspaceAssessmentRequestProjection,
   workspaceAssessmentScopeExists,
 } from "../lib/ai-assessment-request";
-import { describeFancyHubModels, prepareAIRequest, promptTemplateHash } from "../lib/ai-outbound";
+import {
+  describeFancyHubModels,
+  jcsCanonicalize,
+  prepareAIRequest,
+  promptTemplateHash,
+  sha256Hex,
+} from "../lib/ai-outbound";
 import { createSeedState } from "../lib/seed";
 
 const providerModel = describeFancyHubModels([{
@@ -17,15 +23,31 @@ const providerModel = describeFancyHubModels([{
   modelArtifactDigest: "sha256:abc",
 }]).models[0]!;
 
-test("Series 与 Model 评估请求绑定真实且随源投影变化的 snapshot EvidenceRef", () => {
+test("Series 使用真实不变量证据，已发布 Model 绑定实际 ConfigurationSnapshot", () => {
   const state = createSeedState();
   const series = state.seriesDefinitions[0]!;
   const model = state.purchasableModels[0]!;
+  const snapshot = state.configurationSnapshots.find((entry) =>
+    entry.id === model.configurationSnapshotId)!;
 
-  for (const scope of [
-    { scopeType: "series" as const, scopeId: series.id },
-    { scopeType: "model" as const, scopeId: model.id },
-  ]) {
+  for (const [scope, expected] of [
+    [
+      { scopeType: "series" as const, scopeId: series.id },
+      {
+        evidenceType: "series_invariant",
+        refId: `${series.id}:series-invariant`,
+        revisionId: String(series.revision),
+      },
+    ],
+    [
+      { scopeType: "model" as const, scopeId: model.id },
+      {
+        evidenceType: "snapshot",
+        refId: snapshot.id,
+        revisionId: String(snapshot.version),
+      },
+    ],
+  ] as const) {
     assert.equal(workspaceAssessmentScopeExists(state, scope), true);
     const envelope = buildWorkspaceAssessmentEnvelope({
       state,
@@ -36,7 +58,7 @@ test("Series 与 Model 评估请求绑定真实且随源投影变化的 snapshot
     assert.equal(envelope.promptTemplateVersion, AI_ASSESSMENT_PROMPT_VERSION);
     assert.match(AI_ASSESSMENT_PROMPT, /uncoveredInformation/);
     assert.equal(envelope.evidenceRefs.length, 1);
-    assert.equal(envelope.evidenceRefs[0]?.evidenceType, "snapshot");
+    assert.equal(envelope.evidenceRefs[0]?.evidenceType, expected.evidenceType);
     assert.match(envelope.evidenceRefs[0]?.contentHash ?? "", /^[a-f0-9]{64}$/);
     assert.notEqual(envelope.evidenceRefs[0]?.evidenceAlias, envelope.scope.scopeAlias);
     assert.doesNotThrow(() => prepareAIRequest({ envelope }));
@@ -57,22 +79,42 @@ test("Series 与 Model 评估请求绑定真实且随源投影变化的 snapshot
       [...retainedProjection.requestAliasMapping.map((entry) => entry.alias)].sort(),
     );
     assert.equal(retainedProjection.requestAliasMapping.length, 4);
-    assert.ok(retainedProjection.requestAliasMapping.some(
-      (entry) => entry.reference.stableLocalId === scope.scopeId,
-    ));
+    const evidenceReference = retainedProjection.requestAliasMapping.find((entry) =>
+      entry.alias === retainedProjection.envelope.evidenceRefs[0]?.evidenceAlias)?.reference;
+    assert.equal(evidenceReference?.referenceKindCode, "evidence");
+    assert.equal(evidenceReference?.stableLocalId, expected.refId);
+    assert.equal(evidenceReference?.stableRevisionId, expected.revisionId);
   }
+  assert.equal(
+    buildWorkspaceAssessmentEnvelope({
+      state,
+      scope: { scopeType: "model", scopeId: model.id },
+      assessmentId: "assessment:model:snapshot-hash",
+      model: providerModel,
+    }).evidenceRefs[0]?.contentHash,
+    sha256Hex(jcsCanonicalize({
+      evidenceType: "configuration_snapshot",
+      snapshotId: snapshot.id,
+      snapshotVersion: snapshot.version,
+      snapshotContentHash: snapshot.contentHash,
+      modelId: snapshot.modelId,
+      modelRevision: snapshot.modelRevision,
+    })),
+  );
 
+  const mutableModel = state.purchasableModels.find((entry) => !entry.configurationSnapshotId)!;
   const originalModelEnvelope = buildWorkspaceAssessmentEnvelope({
     state,
-    scope: { scopeType: "model", scopeId: model.id },
+    scope: { scopeType: "model", scopeId: mutableModel.id },
     assessmentId: "assessment:model:original",
     model: providerModel,
   });
+  assert.equal(originalModelEnvelope.evidenceRefs[0]?.evidenceType, "trace");
   const changed = structuredClone(state);
-  changed.purchasableModels.find((entry) => entry.id === model.id)!.price += 1;
+  changed.purchasableModels.find((entry) => entry.id === mutableModel.id)!.price += 1;
   const changedModelEnvelope = buildWorkspaceAssessmentEnvelope({
     state: changed,
-    scope: { scopeType: "model", scopeId: model.id },
+    scope: { scopeType: "model", scopeId: mutableModel.id },
     assessmentId: "assessment:model:changed",
     model: providerModel,
   });

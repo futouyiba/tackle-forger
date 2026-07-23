@@ -142,6 +142,79 @@ test("文件留存只允许所有者读取和删除，删除幂等且立即隐�
   }
 });
 
+test("独立删除墓碑阻止删除前 ai-retention 备份恢复后重新暴露内容", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "tackle-forger-ai-retention-restore-"));
+  const previous = {
+    dataDir: process.env.AI_RETENTION_DATA_DIR,
+    tombstoneDir: process.env.AI_RETENTION_TOMBSTONE_DIR,
+    key: process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64,
+    keyVersion: process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION,
+  };
+  const primary = path.join(root, "ai-retention");
+  const tombstones = path.join(root, "ai-deletion-tombstones");
+  process.env.AI_RETENTION_DATA_DIR = primary;
+  process.env.AI_RETENTION_TOMBSTONE_DIR = tombstones;
+  process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64 = randomBytes(32).toString("base64");
+  process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION = "key-v1";
+  try {
+    const store = createAIRuntimeStoreFromEnvironment();
+    await store.initialize();
+    const source = record({
+      assessmentId: "assessment-restore-blocked",
+      actorStableId: "owner-restore",
+      createdAt: "2026-07-23T00:00:00.000Z",
+    });
+    await store.saveAssessment(source);
+    const assessmentFile = path.join(
+      primary,
+      "assessments",
+      "assessment-restore-blocked.json",
+    );
+    const deletionPredecessor = await readFile(assessmentFile, "utf8");
+    await store.requestAssessmentDeletion({
+      assessmentId: "assessment-restore-blocked",
+      actorStableId: "owner-restore",
+      now: new Date("2026-07-23T01:00:00.000Z"),
+    });
+
+    // Simulate restoring the whole backed-up ai-retention directory while the
+    // independent, non-backup tombstone directory remains authoritative.
+    await writeFile(assessmentFile, deletionPredecessor, "utf8");
+    const restoredStore = createAIRuntimeStoreFromEnvironment();
+    await restoredStore.initialize();
+    assert.equal(await restoredStore.readAssessmentForActor({
+      assessmentId: "assessment-restore-blocked",
+      actorStableId: "owner-restore",
+    }), undefined);
+    const hidden = await restoredStore.readAssessmentForActor({
+      assessmentId: "assessment-restore-blocked",
+      actorStableId: "owner-restore",
+      includeHidden: true,
+    });
+    assert.equal(hidden?.visibility, "HIDDEN");
+    assert.equal(hidden?.deletionTombstone?.requestedAt, "2026-07-23T01:00:00.000Z");
+    assert.deepEqual(await restoredStore.listAssessmentsForActorScope({
+      actorStableId: "owner-restore",
+      scopeType: "model",
+      scopeId: "model-1",
+    }), []);
+    await assert.rejects(
+      restoredStore.saveAssessment(source),
+      /永久删除墓碑占用/,
+    );
+  } finally {
+    if (previous.dataDir === undefined) delete process.env.AI_RETENTION_DATA_DIR;
+    else process.env.AI_RETENTION_DATA_DIR = previous.dataDir;
+    if (previous.tombstoneDir === undefined) delete process.env.AI_RETENTION_TOMBSTONE_DIR;
+    else process.env.AI_RETENTION_TOMBSTONE_DIR = previous.tombstoneDir;
+    if (previous.key === undefined) delete process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64;
+    else process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64 = previous.key;
+    if (previous.keyVersion === undefined) delete process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION;
+    else process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION = previous.keyVersion;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("删除状态提交后审计进程中断，重试补写且不产生重复事件", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "tackle-forger-ai-retention-outbox-"));
   const previous = {

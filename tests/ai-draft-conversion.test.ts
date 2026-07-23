@@ -57,6 +57,8 @@ function fixture(): {
     entry.reference.referenceKindCode === "model"
     && entry.reference.stableLocalId === model.id)!.alias;
   const evidence = projection.envelope.evidenceRefs[0]!;
+  const evidenceReference = projection.requestAliasMapping.find((entry) =>
+    entry.alias === evidence.evidenceAlias)!.reference;
   const recommendation = {
     recommendationCode: "recommendation.model.patch",
     title: "保持数值不变的草稿验证",
@@ -106,6 +108,15 @@ function fixture(): {
       assumptions: [],
       uncoveredInformation: [],
       evidenceRefs: [structuredClone(evidence)],
+      resolvedEvidenceRefs: [{
+        evidenceType: evidence.evidenceType,
+        evidenceAlias: evidence.evidenceAlias,
+        refId: evidenceReference.stableLocalId,
+        ...(evidenceReference.stableRevisionId
+          ? { revisionId: evidenceReference.stableRevisionId }
+          : {}),
+        contentHash: evidence.contentHash,
+      }],
     },
     visibility: "VISIBLE",
   };
@@ -172,6 +183,16 @@ test("stale state 或 assessmentInputHash 不一致时 fail-closed", () => {
     entry.id === stale.command.targetModelRef!.entityId)!;
   model.price += 1;
   assertCode("AI_ASSESSMENT_NOT_ACTIONABLE", () => plan(stale));
+});
+
+test("留存 EvidenceRef 的稳定引用被篡改时 fail-closed", () => {
+  const changedRef = fixture();
+  changedRef.record.semanticContent!.resolvedEvidenceRefs![0]!.refId = "trace:other";
+  assertCode("AI_DRAFT_EVIDENCE_INVALID", () => plan(changedRef));
+
+  const changedHash = fixture();
+  changedHash.record.semanticContent!.resolvedEvidenceRefs![0]!.contentHash = "f".repeat(64);
+  assertCode("AI_DRAFT_EVIDENCE_INVALID", () => plan(changedHash));
 });
 
 test("目标 revision 与冻结状态均在计划阶段阻断", () => {

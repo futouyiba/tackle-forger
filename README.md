@@ -131,7 +131,8 @@ Trace、ID 唯一性、前缀与实体类型；写后必须回读恢复，不能
 上界、最大输出 token 与批准费率计算硬准入估算；成功后同步写入审计事件和加密留存记录。Fancy Hub
 响应同样使用严格的 `ai-response/v1`，未知字段、超限内容和请求外别名在生成建议前拒绝，成功
 结果记录规范化 `outputHash`。工作台的 AI 按钮只消费服务端启用状态，并通过认证接口运行。
-生产备份会把 `AI_RETENTION_DATA_DIR` 纳入独立 `ai-retention` 目录；每小时 systemd timer 运行
+生产备份会把 `AI_RETENTION_DATA_DIR` 纳入独立 `ai-retention` 目录；不可回退的删除墓碑写入
+其外部的 `AI_RETENTION_TOMBSTONE_DIR`，工作区备份和恢复不得覆盖该目录。每小时 systemd timer 运行
 `npm run ai-retention:sweep`，完成主存储期限清理，并在备份期限到达后按 assessmentId 删除所有备份副本、
 回读确认后才把墓碑标记为已清除。`GET/DELETE /api/ai/assessments/:assessmentId` 只允许已登录所有者读取或删除；
 删除幂等并立即从读取路径隐藏。

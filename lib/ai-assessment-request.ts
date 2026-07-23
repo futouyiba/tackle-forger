@@ -94,7 +94,10 @@ export function assertWorkspaceAssessmentScopeEligible(
   const snapshot = model.configurationSnapshotId
     ? state.configurationSnapshots.find((entry) => entry.id === model.configurationSnapshotId)
     : undefined;
-  if (snapshot && snapshot.modelId !== model.id) {
+  if (model.configurationSnapshotId && !snapshot) {
+    throw new Error("AI_SCOPE_NOT_FOUND");
+  }
+  if (snapshot && (snapshot.modelId !== model.id || snapshot.modelRevision !== model.revision)) {
     throw new Error("AI_SCOPE_NOT_FOUND");
   }
   assertSeriesItemPartChainEnabled(
@@ -159,7 +162,7 @@ export function buildWorkspaceAssessmentRequestProjection(input: {
       eligibleSkuIds.has(entry.skuId));
     const seriesRef = reference("series", series.id, String(series.revision));
     const revisionRef = reference("revision", `${series.id}:revision`, String(series.revision));
-    const evidenceRef = reference("evidence", `${series.id}:assessment-snapshot`, String(series.revision));
+    const evidenceRef = reference("evidence", `${series.id}:series-invariant`, String(series.revision));
     const aliases = createRequestAliasMap([assessmentRef, seriesRef, revisionRef, evidenceRef]);
     const subjectAlias = requestAliasFor(aliases, seriesRef);
     const evidenceHash = sha256Hex(jcsCanonicalize({
@@ -203,29 +206,51 @@ export function buildWorkspaceAssessmentRequestProjection(input: {
         })),
       ],
       traces: [], patches: [], compatibility: [], affinity: [], invariants: [], fiveAxis: [],
-      evidenceRefs: [{ evidenceType: "snapshot", evidenceAlias: requestAliasFor(aliases, evidenceRef), contentHash: evidenceHash }],
+      evidenceRefs: [{
+        evidenceType: "series_invariant",
+        evidenceAlias: requestAliasFor(aliases, evidenceRef),
+        contentHash: evidenceHash,
+      }],
       },
     };
   }
   const model = input.state.purchasableModels.find((entry) => entry.id === input.scope.scopeId);
   if (!model) throw new Error("AI_SCOPE_NOT_FOUND");
   const sku = input.state.skuDrawers.find((entry) => entry.id === model.skuId);
+  const snapshot = model.configurationSnapshotId
+    ? input.state.configurationSnapshots.find((entry) =>
+      entry.id === model.configurationSnapshotId
+      && entry.modelId === model.id
+      && entry.modelRevision === model.revision)
+    : undefined;
+  if (model.configurationSnapshotId && !snapshot) throw new Error("AI_SCOPE_NOT_FOUND");
   const modelRef = reference("model", model.id, String(model.revision));
   const revisionRef = reference("revision", `${model.id}:revision`, String(model.revision));
-  const evidenceRef = reference("evidence", `${model.id}:assessment-snapshot`, String(model.revision));
+  const evidenceRef = snapshot
+    ? reference("evidence", snapshot.id, String(snapshot.version))
+    : reference("evidence", `${model.id}:projection-trace`, String(model.revision));
   const aliases = createRequestAliasMap([assessmentRef, modelRef, revisionRef, evidenceRef]);
   const subjectAlias = requestAliasFor(aliases, modelRef);
-  const evidenceHash = sha256Hex(jcsCanonicalize({
-    scopeType: "model",
-    id: model.id,
-    revision: model.revision,
-    ruleSetVersion,
-    fiveAxisRuleVersion,
-    skuId: model.skuId,
-    lengthM: model.lengthM,
-    price: model.price,
-    targetPullKg: sku?.targetPullKg ?? null,
-  }));
+  const evidenceHash = sha256Hex(jcsCanonicalize(snapshot
+    ? {
+        evidenceType: "configuration_snapshot",
+        snapshotId: snapshot.id,
+        snapshotVersion: snapshot.version,
+        snapshotContentHash: snapshot.contentHash,
+        modelId: snapshot.modelId,
+        modelRevision: snapshot.modelRevision,
+      }
+    : {
+        traceType: "workspace_model_projection",
+        modelId: model.id,
+        modelRevision: model.revision,
+        ruleSetVersion,
+        fiveAxisRuleVersion,
+        skuId: model.skuId,
+        lengthM: model.lengthM,
+        price: model.price,
+        targetPullKg: sku?.targetPullKg ?? null,
+      }));
   const finalPanelValues = currentPatchPanelValuesFromWorkspace({
     state: input.state,
     scopeType: "model",
@@ -278,7 +303,11 @@ export function buildWorkspaceAssessmentRequestProjection(input: {
       value: { kind: "number" as const, value: finalPanelValues[entry.parameterKey] as number },
     })),
     traces: [], patches: [], compatibility: [], affinity: [], invariants: [], fiveAxis: [],
-    evidenceRefs: [{ evidenceType: "snapshot", evidenceAlias: requestAliasFor(aliases, evidenceRef), contentHash: evidenceHash }],
+    evidenceRefs: [{
+      evidenceType: snapshot ? "snapshot" : "trace",
+      evidenceAlias: requestAliasFor(aliases, evidenceRef),
+      contentHash: evidenceHash,
+    }],
     },
   };
 }

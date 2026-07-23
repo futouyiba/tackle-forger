@@ -14,6 +14,7 @@ import {
   Scale,
   ShieldCheck,
   Sparkles,
+  Trash2,
   X,
 } from "lucide-react";
 import {
@@ -127,6 +128,13 @@ interface AIAssessmentUiState {
     }>;
     assumptions: string[];
     uncoveredInformation: string[];
+    resolvedEvidenceRefs?: Array<{
+      evidenceType: string;
+      evidenceAlias: string;
+      refId: string;
+      revisionId?: string;
+      contentHash: string;
+    }>;
     feedback?: {
       recommendations?: Array<{
         recommendationId: string;
@@ -594,6 +602,7 @@ function ModelDrawer({
   aiRuleDraftAvailability,
   aiAssessment,
   onRunAssessment,
+  onAssessmentDeleted,
   onWorkspaceApplied,
   notify,
   onOpenRebase,
@@ -616,6 +625,7 @@ function ModelDrawer({
   aiRuleDraftAvailability: ActionAvailabilityMap["create_ai_rule_source_change_draft"];
   aiAssessment?: AIAssessmentUiState;
   onRunAssessment: () => void;
+  onAssessmentDeleted: (assessmentId: string) => void;
   onWorkspaceApplied: SeriesGanttWorkbenchV3Props["onWorkspaceApplied"];
   notify: SeriesGanttWorkbenchV3Props["notify"];
   onOpenRebase: () => void;
@@ -635,6 +645,10 @@ function ModelDrawer({
   const [draftIdempotencyKey, setDraftIdempotencyKey] = useState("");
   const [dismissedRecommendationCodes, setDismissedRecommendationCodes] = useState<string[]>([]);
   const [dismissRunning, setDismissRunning] = useState(false);
+  const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
+  const [deletePermanentlyRetainedAcknowledged, setDeletePermanentlyRetainedAcknowledged] = useState(false);
+  const [deleteRunning, setDeleteRunning] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
   const [ruleTargetForm, setRuleTargetForm] = useState<AIRuleTargetForm>({
     sourceRevisionId: "",
     sheetId: "",
@@ -1037,6 +1051,41 @@ function ModelDrawer({
       setDismissRunning(false);
     }
   };
+
+  const closeDeleteConfirmation = () => {
+    if (deleteRunning) return;
+    setDeleteConfirmationOpen(false);
+    setDeletePermanentlyRetainedAcknowledged(false);
+    setDeleteError("");
+  };
+
+  const deleteAssessment = async () => {
+    if (
+      !aiAssessment?.assessmentId
+      || !deletePermanentlyRetainedAcknowledged
+      || deleteRunning
+    ) return;
+    const assessmentId = aiAssessment.assessmentId;
+    setDeleteRunning(true);
+    setDeleteError("");
+    try {
+      const response = await fetch(
+        `/api/ai/assessments/${encodeURIComponent(assessmentId)}`,
+        { method: "DELETE" },
+      );
+      const payload = await response.json().catch(() => null) as { error?: string } | null;
+      if (!response.ok) throw new Error(payload?.error ?? "无法删除这次 AI 评估。");
+      onAssessmentDeleted(assessmentId);
+      notify("这次 AI 评估已从工作台移除；已采纳产物的来源记录仍会永久保留。");
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "无法删除这次 AI 评估。";
+      setDeleteError(message);
+      notify(message);
+    } finally {
+      setDeleteRunning(false);
+    }
+  };
+
   return (
     <aside
       ref={drawerRef}
@@ -1383,9 +1432,30 @@ function ModelDrawer({
               <section className="gantt-ai-evidence">
                 <header><span className="eyebrow">EVIDENCE & UNCERTAINTY</span><h4>依据、假设与未覆盖信息</h4></header>
                 <div>
-                  <strong>依据别名</strong>
+                  <strong>可追溯依据</strong>
                   {selectedRecommendation.evidenceAliases.length
-                    ? <ul>{selectedRecommendation.evidenceAliases.map((alias) => <li key={alias}>{alias}</li>)}</ul>
+                    ? (
+                      <ul>
+                        {selectedRecommendation.evidenceAliases.map((alias) => {
+                          const evidence = aiAssessment.result?.resolvedEvidenceRefs?.find((entry) =>
+                            entry.evidenceAlias === alias);
+                          return (
+                            <li key={alias}>
+                              {evidence
+                                ? (
+                                  <>
+                                    <b>{evidence.evidenceType}</b>
+                                    {" · "}{evidence.refId}
+                                    {evidence.revisionId ? ` @ ${evidence.revisionId}` : ""}
+                                    <small> · hash {evidence.contentHash}</small>
+                                  </>
+                                )
+                                : <><b>{alias}</b> · 本地稳定引用不可用</>}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )
                     : <p>没有依据引用；该建议不能转换为草稿。</p>}
                 </div>
                 <div>
@@ -1432,6 +1502,40 @@ function ModelDrawer({
                 </div>
               </section>
             ) : null}
+            {deleteConfirmationOpen && aiAssessment?.assessmentId ? (
+              <section className="gantt-ai-delete-confirmation" aria-label="删除这次 AI 评估">
+                <header>
+                  <div>
+                    <span className="eyebrow">DELETE ASSESSMENT</span>
+                    <h4>删除这次 AI 评估？</h4>
+                  </div>
+                  <Trash2 size={18} aria-hidden="true" />
+                </header>
+                <p>删除后，这次评估会立即从工作台隐藏，并进入主存储和备份的清理流程。</p>
+                <strong>已采纳产物的来源记录会永久保留，不会随这次评估删除。</strong>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={deletePermanentlyRetainedAcknowledged}
+                    disabled={deleteRunning}
+                    onChange={(event) => setDeletePermanentlyRetainedAcknowledged(event.target.checked)}
+                  />
+                  <span>我已了解：已采纳的 Patch 或规则草稿仍会保留这次评估的来源记录。</span>
+                </label>
+                {deleteError ? <small role="alert">{deleteError}</small> : null}
+                <footer>
+                  <button type="button" disabled={deleteRunning} onClick={closeDeleteConfirmation}>取消</button>
+                  <button
+                    type="button"
+                    className="danger"
+                    disabled={!deletePermanentlyRetainedAcknowledged || deleteRunning}
+                    onClick={() => void deleteAssessment()}
+                  >
+                    {deleteRunning ? "删除中…" : "确认删除评估"}
+                  </button>
+                </footer>
+              </section>
+            ) : null}
             <div className="gantt-ai-actions">
               <button type="button" disabled={!selectedRecommendation} title={!selectedRecommendation ? "请先选择一条建议。" : undefined} onClick={() => setEvidenceOpen((current) => !current)}>{evidenceOpen ? "收起依据" : "查看依据"}</button>
               <button
@@ -1465,6 +1569,18 @@ function ModelDrawer({
               </button>
               <button type="button" disabled={!selectedRecommendation || dismissRunning} onClick={() => void dismissRecommendation()}>{dismissRunning ? "保存中…" : "忽略"}</button>
               <button type="button" disabled={!aiAvailability.enabled || aiAssessment?.status === "running"} title={aiAvailability.disabledReasonText} onClick={onRunAssessment}>{aiAssessment?.status === "running" ? "评估中…" : "重新评估"}</button>
+              <button
+                type="button"
+                className="danger"
+                disabled={!aiAssessment?.assessmentId || deleteRunning}
+                onClick={() => {
+                  setDeleteConfirmationOpen(true);
+                  setDeletePermanentlyRetainedAcknowledged(false);
+                  setDeleteError("");
+                }}
+              >
+                删除这次评估
+              </button>
             </div>
           </div>
         </div>
@@ -1999,7 +2115,7 @@ export function SeriesGanttWorkbenchV3({
       {drawerModel ? (
         <>
           <button className="gantt-drawer-backdrop" type="button" aria-label="关闭预览" onClick={() => { setDrawerModelId(""); setDrawerSnapshotId(""); }} />
-          <ModelDrawer key={`${drawerModel.id}:${drawerModel.revision}:${aiAssessment?.assessmentId ?? "none"}`} state={state} workspaceId={workspaceId} model={drawerModel} sku={drawerSku} series={drawerSeries} snapshot={drawerSnapshot} currentEntityType={drawerSnapshotId ? "configuration_snapshot" : "model"} comparisonModelIds={comparisonModelIds} rebaseEnabled={Boolean(drawerSeries) && rebaseAvailability.enabled} rebaseDisabledReason={drawerSeries ? rebaseAvailability.disabledReasonText : "父级 Series 不可见，不能进入 Rebase。"} aiAvailability={aiAvailability} aiPatchDraftAvailability={aiPatchDraftAvailability} aiRuleDraftAvailability={aiRuleDraftAvailability} aiAssessment={aiAssessment?.scopeKey === `model:${drawerModel.id}` ? aiAssessment : undefined} onRunAssessment={() => void runAiAssessment("model", drawerModel.id)} onWorkspaceApplied={onWorkspaceApplied} notify={notify} onToggleCompare={toggleCompare} onOpenSnapshot={setDrawerSnapshotId} onOpenRebase={() => { setDrawerModelId(""); setDrawerSnapshotId(""); if (drawerSeries) onOpenSeries(drawerSeries.id); }} onClose={() => { setDrawerModelId(""); setDrawerSnapshotId(""); }} />
+          <ModelDrawer key={`${drawerModel.id}:${drawerModel.revision}:${aiAssessment?.assessmentId ?? "none"}`} state={state} workspaceId={workspaceId} model={drawerModel} sku={drawerSku} series={drawerSeries} snapshot={drawerSnapshot} currentEntityType={drawerSnapshotId ? "configuration_snapshot" : "model"} comparisonModelIds={comparisonModelIds} rebaseEnabled={Boolean(drawerSeries) && rebaseAvailability.enabled} rebaseDisabledReason={drawerSeries ? rebaseAvailability.disabledReasonText : "父级 Series 不可见，不能进入 Rebase。"} aiAvailability={aiAvailability} aiPatchDraftAvailability={aiPatchDraftAvailability} aiRuleDraftAvailability={aiRuleDraftAvailability} aiAssessment={aiAssessment?.scopeKey === `model:${drawerModel.id}` ? aiAssessment : undefined} onRunAssessment={() => void runAiAssessment("model", drawerModel.id)} onAssessmentDeleted={(assessmentId) => setAiAssessment((currentAssessment) => currentAssessment?.assessmentId === assessmentId ? undefined : currentAssessment)} onWorkspaceApplied={onWorkspaceApplied} notify={notify} onToggleCompare={toggleCompare} onOpenSnapshot={setDrawerSnapshotId} onOpenRebase={() => { setDrawerModelId(""); setDrawerSnapshotId(""); if (drawerSeries) onOpenSeries(drawerSeries.id); }} onClose={() => { setDrawerModelId(""); setDrawerSnapshotId(""); }} />
         </>
       ) : null}
       {candidateOpen && selectedSeries ? (

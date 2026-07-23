@@ -148,6 +148,13 @@ type ParsedSemanticContent = {
     evidenceAlias: string;
     contentHash: string;
   }>;
+  resolvedEvidenceRefs: Array<{
+    evidenceType: AIDraftEvidenceRef["evidenceType"];
+    evidenceAlias: string;
+    refId: string;
+    revisionId?: string;
+    contentHash: string;
+  }>;
 };
 
 function invalid(message: string): never {
@@ -180,7 +187,10 @@ function plainObject(value: unknown): value is Record<string, unknown> {
 }
 
 function parseSemanticContent(value: unknown): ParsedSemanticContent {
-  if (!plainObject(value) || !Array.isArray(value.recommendations) || !Array.isArray(value.evidenceRefs)) {
+  if (!plainObject(value)
+    || !Array.isArray(value.recommendations)
+    || !Array.isArray(value.evidenceRefs)
+    || !Array.isArray(value.resolvedEvidenceRefs)) {
     throw new AIDraftConversionError("AI_ASSESSMENT_NOT_ACTIONABLE", "AI 语义结果不存在或格式无效。");
   }
   return value as unknown as ParsedSemanticContent;
@@ -224,21 +234,27 @@ function resolveEvidence(
   }
   const currentByAlias = new Map(projection.envelope.evidenceRefs.map((entry) => [entry.evidenceAlias, entry]));
   const semanticByAlias = new Map(semantic.evidenceRefs.map((entry) => [entry.evidenceAlias, entry]));
+  const resolvedByAlias = new Map(semantic.resolvedEvidenceRefs.map((entry) => [entry.evidenceAlias, entry]));
   const referencesByAlias = new Map(projection.requestAliasMapping.map((entry) => [entry.alias, entry.reference]));
   return recommendation.evidenceAliases.map((alias) => {
     const current = currentByAlias.get(alias);
     const retained = semanticByAlias.get(alias);
+    const resolved = resolvedByAlias.get(alias);
     const reference = referencesByAlias.get(alias);
-    if (!current || !retained || !reference || reference.referenceKindCode !== "evidence"
+    if (!current || !retained || !resolved || !reference || reference.referenceKindCode !== "evidence"
       || retained.evidenceType !== current.evidenceType
-      || retained.contentHash !== current.contentHash) {
+      || retained.contentHash !== current.contentHash
+      || resolved.evidenceType !== current.evidenceType
+      || resolved.contentHash !== current.contentHash
+      || resolved.refId !== reference.stableLocalId
+      || (resolved.revisionId ?? "") !== (reference.stableRevisionId ?? "")) {
       throw new AIDraftConversionError("AI_DRAFT_EVIDENCE_INVALID", "EvidenceRef 已变化或无法解析。");
     }
     return {
-      evidenceType: current.evidenceType,
-      refId: reference.stableLocalId,
-      ...(reference.stableRevisionId ? { revisionId: reference.stableRevisionId } : {}),
-      contentHash: current.contentHash,
+      evidenceType: resolved.evidenceType,
+      refId: resolved.refId,
+      ...(resolved.revisionId ? { revisionId: resolved.revisionId } : {}),
+      contentHash: resolved.contentHash,
     };
   });
 }
@@ -437,6 +453,21 @@ export function planAIDraftConversion(input: {
   if (!scope) {
     throw new AIDraftConversionError("AI_ASSESSMENT_NOT_ACTIONABLE", "评估缺少可重建的作用域。");
   }
+  const recommendation = semantic.recommendations.find((entry) =>
+    entry.recommendationCode === command.recommendationId);
+  if (!recommendation) {
+    throw new AIDraftConversionError("AI_DRAFT_RECOMMENDATION_INVALID", "recommendationId 不存在。");
+  }
+  if (scope.scopeType === "model"
+    && recommendation.suggestedAction === "create_model_patch_draft") {
+    const currentModel = input.state.purchasableModels.find((entry) => entry.id === scope.scopeId);
+    if (currentModel?.configurationSnapshotId || currentModel?.status === "published") {
+      throw new AIDraftConversionError(
+        "AI_DRAFT_TARGET_FROZEN",
+        "冻结 Model / Snapshot 不允许创建 Model Patch 草稿。",
+      );
+    }
+  }
   const { projection, inputHash } = currentInput(input.state, input.record);
   const freshness = evaluateAIAssessmentFreshness(metadata, {
     scopeType: projection.operationMetadataContext.scopeType,
@@ -448,10 +479,6 @@ export function planAIDraftConversion(input: {
   }, { semanticContentAvailable: true });
   if (!freshness.canCreateDraft || command.assessmentInputHash !== metadata.inputHash || inputHash !== metadata.inputHash) {
     throw new AIDraftConversionError("AI_ASSESSMENT_NOT_ACTIONABLE", "评估已 stale，必须重新评估。");
-  }
-  const recommendation = semantic.recommendations.find((entry) => entry.recommendationCode === command.recommendationId);
-  if (!recommendation) {
-    throw new AIDraftConversionError("AI_DRAFT_RECOMMENDATION_INVALID", "recommendationId 不存在。");
   }
   const modelScopeAlias = projection.requestAliasMapping.find((entry) =>
     entry.reference.referenceKindCode === scope.scopeType

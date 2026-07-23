@@ -209,6 +209,7 @@ export async function POST(request: NextRequest) {
       result: result.response.result,
       usage: result.response.usage,
       attemptedModelIds: result.attemptedModelIds,
+      softWarnings: result.softWarnings,
     });
   } catch (caughtError) {
     let error = caughtError;

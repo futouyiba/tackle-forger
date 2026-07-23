@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import type { AIModelDescriptorV1, Sha256Hex } from "./ai-outbound";
+import type { AIModelDescriptorV1, AIRequestEnvelopeV1, Sha256Hex } from "./ai-outbound";
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 export const AI_RETENTION_POLICY_VERSION = "ai-model-record/open009-v1" as const;
@@ -95,6 +95,18 @@ export interface AIUnacceptedSemanticContent {
   assumptions: unknown[];
   uncoveredInformation: unknown[];
   evidenceRefs: unknown[];
+  /**
+   * Provider-facing evidenceRefs intentionally contain request aliases only.
+   * This local-only projection keeps the dereferenceable identity after the
+   * encrypted raw alias map reaches its shorter retention deadline.
+   */
+  resolvedEvidenceRefs?: Array<{
+    evidenceType: AIRequestEnvelopeV1["evidenceRefs"][number]["evidenceType"];
+    evidenceAlias: string;
+    refId: string;
+    revisionId?: string;
+    contentHash: Sha256Hex;
+  }>;
   feedback?: {
     recommendations: Array<{
       recommendationId: string;
@@ -119,6 +131,19 @@ export interface AIAcceptedArtifactProvenance {
   retainedWithArtifact: true;
 }
 
+export interface AIDeletionTombstone {
+  assessmentId: string;
+  requestedAt: string;
+  requestedBy: string;
+  primaryPurgeDueAt: string;
+  backupPurgeDueAt: string;
+  primaryPurgedAt?: string;
+  backupPurgedAt?: string;
+  backupPurgeState?: "PENDING" | "FAILED" | "PURGED";
+  backupPurgeAttempts?: number;
+  backupPurgeLastErrorCode?: string;
+}
+
 export interface AIAssessmentRetentionRecord {
   policyVersion: typeof AI_RETENTION_POLICY_VERSION;
   metadata?: AIOperationMetadataRecord;
@@ -130,18 +155,7 @@ export interface AIAssessmentRetentionRecord {
   operationLogCreatedAt?: string;
   operationLog?: { action: string; objectHash?: Sha256Hex; resultCode: string };
   visibility: "VISIBLE" | "HIDDEN";
-  deletionTombstone?: {
-    assessmentId: string;
-    requestedAt: string;
-    requestedBy: string;
-    primaryPurgeDueAt: string;
-    backupPurgeDueAt: string;
-    primaryPurgedAt?: string;
-    backupPurgedAt?: string;
-    backupPurgeState?: "PENDING" | "FAILED" | "PURGED";
-    backupPurgeAttempts?: number;
-    backupPurgeLastErrorCode?: string;
-  };
+  deletionTombstone?: AIDeletionTombstone;
 }
 
 export interface AIBackupPurgeAdapter {

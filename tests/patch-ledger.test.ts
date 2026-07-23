@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { analyzePatchPatterns, assessPatchAbsorption, appendPatchRevision, beginPatchMirrorSync, buildPatchRevision, createRuleSourceChangeDraft, emptyPatchLedger, migratePatchLedger, orderedPatchReferences, PatchLedgerError, projectionPatchViewFromLedger, reconcilePatchMirrorPull, recordPatchMirrorResult, rebasePatchRevision, replayPatchRevision, resolvePatchRevision, reviewPatchRevision, updatePatchMirrorSuggestion } from "../lib/patch-ledger";
+import { analyzePatchPatterns, assessPatchAbsorption, appendPatchRevision, beginPatchMirrorSync, buildPatchRevision, createRuleSourceChangeDraft, emptyPatchLedger, importLegacyPatchesToLedger, migratePatchLedger, orderedPatchReferences, PatchLedgerError, projectionPatchViewFromLedger, reconcilePatchMirrorPull, recordPatchMirrorResult, rebasePatchRevision, replayPatchRevision, resolvePatchRevision, reviewPatchRevision, submitPatchRevision, updatePatchMirrorSuggestion } from "../lib/patch-ledger";
 import { CURRENT_WORKSPACE_SCHEMA_VERSION, migrateWorkspaceState } from "../lib/migrations";
 import { createSeedState } from "../lib/seed";
 
@@ -82,6 +82,31 @@ test("PatchLedger 只允许 DRAFT 或 PENDING_REVIEW 撤回", () => {
     });
     assert.equal(result.revisions[0].state, "WITHDRAWN");
   }
+});
+test("迁移 DRAFT 可由创建方提交复核，非法或冻结提交不会改写 revision", () => {
+  const legacy = {
+    id: "patch:legacy:draft", scope: "model" as const, scopeId: "model:rod:1", reason: "legacy", author: "legacy",
+    baseProjectionId: "projection:rod:1", baseRuleSetVersion: "ruleset:1", status: "draft" as const, order: 0, rules: [],
+    operations: [{ op: "set" as const, path: "power", value: 4 }],
+  };
+  const ledger = importLegacyPatchesToLedger(emptyPatchLedger(), [legacy]);
+  const draft = ledger.revisions[0];
+  assert.equal(draft.state, "DRAFT");
+  const submitted = submitPatchRevision({ledger,patchId:draft.patchId,patchRevision:draft.patchRevision,capabilities:["patch.create"]});
+  assert.equal(submitted.revisions[0].state, "PENDING_REVIEW");
+  assert.equal(submitted.revisions[0].createdBy, draft.createdBy);
+  assert.equal(submitted.revisions[0].createdAt, draft.createdAt);
+  const before = structuredClone(ledger);
+  assert.throws(() => submitPatchRevision({ledger,patchId:draft.patchId,patchRevision:draft.patchRevision,capabilities:[]}), (error:unknown) => error instanceof PatchLedgerError && error.code === "PATCH_PERMISSION_DENIED");
+  assert.deepEqual(ledger, before);
+  const frozen = {...ledger,revisions:[{...draft,snapshotRefs:["snapshot:legacy"]}]};
+  const frozenBefore = structuredClone(frozen);
+  assert.throws(() => submitPatchRevision({ledger:frozen,patchId:draft.patchId,patchRevision:draft.patchRevision,capabilities:["patch.create"]}), (error:unknown) => error instanceof PatchLedgerError && error.code === "PATCH_REVISION_IMMUTABLE");
+  assert.deepEqual(frozen, frozenBefore);
+  const submittedBefore = structuredClone(submitted);
+  assert.throws(() => submitPatchRevision({ledger:submitted,patchId:draft.patchId,patchRevision:draft.patchRevision,capabilities:["patch.create"]}), (error:unknown) => error instanceof PatchLedgerError && error.code === "PATCH_STATE_TRANSITION_INVALID");
+  assert.deepEqual(submitted, submittedBefore);
+  assert.equal(submitted.revisions[0].revisionHash, submittedBefore.revisions[0].revisionHash);
 });
 test("unavailable or partial mirror never reports SYNCED and retry is idempotent", () => {
   const ledger: ReturnType<typeof emptyPatchLedger>={...emptyPatchLedger(),revisions:[makeRevision()]};

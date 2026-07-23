@@ -1,0 +1,10 @@
+.motion-core-demo { display: grid; min-height: 100vh; padding: 32px; place-items: center; }
+.motion-core-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); max-width: 760px; padding: 28px; width: 100%; }
+.motion-kicker { color: var(--accent-dark); font: 700 11px Consolas, monospace; letter-spacing: .12em; margin: 0 0 8px; }
+.motion-core-card h1 { font-size: 25px; margin: 0; }.motion-subtitle { color: var(--muted); line-height: 1.6; }
+.motion-controls { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; margin: 20px 0; }.motion-controls button { background: var(--nav); border: 0; border-radius: 5px; color: white; padding: 8px 11px; }.motion-controls label { margin-left: 5px; }
+.motion-status { background: var(--panel-soft); border-left: 3px solid var(--accent); padding: 10px; }.motion-steps { display: grid; gap: 8px; list-style: none; margin: 18px 0; padding: 0; }
+.motion-step { animation: motion-step-in 220ms var(--motion-ease, ease-out); border: 1px solid var(--line); border-left: 4px solid var(--blue); display: grid; gap: 3px; padding: 11px; }.motion-step.cost { border-left-color: var(--amber); }.motion-step small { color: var(--muted); }
+@keyframes motion-step-in { from { opacity: .25; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .motion-step { animation: none; } }
+@media (max-width: 600px) { .motion-core-demo { padding: 14px; }.motion-core-card { padding: 18px; } }

@@ -44,8 +44,10 @@
 - 只接受属于该Pull Request、同一个当前head SHA和当前base SHA的`pull_request`工作流中的根npm CI、
   历史pnpm CI和Windows行尾检查；缺失、未完成、失败、跳过、取消、仅push、旧head或旧base结果均阻断。
   PR编号、head和base必须来自CI运行时固化的结构化run name，且run必须来自规范workflow路径；不得把
-  workflow run API中会随PR漂移的嵌套PR字段当作历史证据。只读取最新规范run的当前attempt，三个必需job
-  各须恰好出现一次；缺失、重名或跨run/attempt拼接均阻断。#21仅是历史事故，其事后CI不得冒充当前通过。
+  workflow run API中会随PR漂移的嵌套PR字段当作历史证据。先按结构化provenance筛选属于目标PR和head的
+  规范run，再从该集合选择最新run；同head的其他PR不得遮蔽目标PR证据。当前attempt的jobs必须从GitHub
+  attempt-specific端点读取，不依赖`job.run_attempt`字段。三个必需job各须恰好出现一次；缺失、重名或
+  跨run/attempt拼接均阻断。#21仅是历史事故，其事后CI不得冒充当前通过。
 - 门禁必须从干净、同步到实时base tip的目标分支工作树执行；门禁脚本内容必须与实时base上的
   `scripts/check-pr-merge-gate.mjs`一致。规范`.github/workflows/ci.yml`在PR head与实时base之间必须
   内容完全一致；PR修改该workflow时即使Actions成功也必须fail closed，转入独立workflow治理变更流程，

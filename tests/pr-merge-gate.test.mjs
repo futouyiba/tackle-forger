@@ -6,13 +6,14 @@ import {
   evaluatePullRequestMergeGate,
   graphqlNextPageCursor,
   AGENT_REVIEW_PASS_MARKER,
-  currentWorkflowRunAttemptJobs,
   parsePullRequestRunName,
   pullRequestRunProvenance,
+  readPullRequestWorkflowChecks,
   readPullRequestWithCurrentBase,
   readStableMergeGateSnapshot,
   readTrustedContentEvidence,
   selectLatestPullRequestWorkflowRun,
+  workflowRunAttemptJobsPath,
 } from "../scripts/check-pr-merge-gate.mjs";
 
 async function fixture(name) {
@@ -669,41 +670,107 @@ test("trusted workflow runs use the canonical path even when run-name replaces n
   );
 });
 
-test("workflow collection never falls back from the latest run or attempt", () => {
+test("workflow selection filters target PR provenance before choosing latest", () => {
   const pullRequest = { number: 63, headSha: "a".repeat(40) };
-  const validTitle =
+  const oldTargetTitle =
     `gate-context event=pull_request pr=63 head=${"a".repeat(40)} base=${"d".repeat(40)}`;
-  const oldValid = {
+  const newTargetTitle =
+    `gate-context event=pull_request pr=63 head=${"a".repeat(40)} base=${"e".repeat(40)}`;
+  const otherPullTitle =
+    `gate-context event=pull_request pr=64 head=${"a".repeat(40)} base=${"f".repeat(40)}`;
+  const oldTarget = {
     id: 1,
-    display_title: validTitle,
+    display_title: oldTargetTitle,
     event: "pull_request",
     path: ".github/workflows/ci.yml",
     head_sha: pullRequest.headSha,
     run_attempt: 1,
   };
-  const newerMalformed = {
-    ...oldValid,
+  const newTarget = {
+    ...oldTarget,
     id: 2,
-    display_title: "malformed",
+    display_title: newTargetTitle,
+  };
+  const newerOtherPull = {
+    ...oldTarget,
+    id: 3,
+    display_title: otherPullTitle,
   };
 
-  assert.equal(
+  assert.deepEqual(
     selectLatestPullRequestWorkflowRun(
-      [oldValid, newerMalformed],
+      [oldTarget, newTarget, newerOtherPull],
       pullRequest,
     ),
-    null,
+    {
+      run: newTarget,
+      provenance: {
+        pullNumber: 63,
+        headSha: "a".repeat(40),
+        baseSha: "e".repeat(40),
+      },
+    },
   );
+});
+
+test("workflow jobs use the selected attempt endpoint without job run_attempt", async () => {
+  const headSha = "a".repeat(40);
+  const baseSha = "d".repeat(40);
+  const pullRequest = { number: 63, headSha };
+  const run = {
+    id: 101,
+    display_title:
+      `gate-context event=pull_request pr=63 head=${headSha} base=${baseSha}`,
+    event: "pull_request",
+    path: ".github/workflows/ci.yml",
+    head_sha: headSha,
+    run_attempt: 2,
+  };
+  const currentAttemptJob = {
+    id: 201,
+    run_id: run.id,
+    name: "Root v3 app (npm)",
+    head_sha: headSha,
+    status: "completed",
+    conclusion: "success",
+  };
+  const requestedPaths = [];
+  const client = {
+    paginate: async (path, collectionName) => {
+      requestedPaths.push(path);
+      if (collectionName === "workflow_runs") {
+        return [run];
+      }
+      assert.equal(collectionName, "jobs");
+      return [currentAttemptJob];
+    },
+  };
+
+  const checks = await readPullRequestWorkflowChecks(
+    client,
+    "/repos/owner/repo",
+    pullRequest,
+  );
+
+  assert.deepEqual(requestedPaths, [
+    `/repos/owner/repo/actions/runs?event=pull_request&head_sha=${headSha}`,
+    "/repos/owner/repo/actions/runs/101/attempts/2/jobs",
+  ]);
   assert.deepEqual(
-    currentWorkflowRunAttemptJobs(
-      [
-        { id: 10, run_id: 2, run_attempt: 1 },
-        { id: 11, run_id: 2, run_attempt: 2 },
-        { id: 12, run_id: 1, run_attempt: 2 },
-      ],
-      { id: 2, run_attempt: 2 },
-    ).map((job) => job.id),
-    [11],
+    checks.map((check) => ({
+      id: check.id,
+      workflowRunId: check.workflowRunId,
+      workflowRunAttempt: check.workflowRunAttempt,
+    })),
+    [{ id: 201, workflowRunId: 101, workflowRunAttempt: 2 }],
+  );
+  assert.equal("jobRunAttempt" in checks[0], false);
+  assert.equal(
+    workflowRunAttemptJobsPath("/repos/owner/repo", {
+      id: 101,
+      run_attempt: null,
+    }),
+    null,
   );
 });
 

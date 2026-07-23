@@ -99,9 +99,13 @@ Missing, pending, failed, cancelled, skipped, push-only, old-head, or stale-base
 CI blocks. The workflow's structured `run-name` records the event-time PR
 number, head, and base; do not use the workflow-run API's nested current PR
 object as historical evidence because those fields can drift with the PR. Runs
-without the exact provenance format and canonical workflow path fail
-closed. The checker selects only the newest canonical workflow run and that
-run's current attempt; it never combines jobs from an older run or attempt.
+without the exact provenance format and canonical workflow path are not
+eligible evidence. The checker first filters runs to the target PR and head,
+then selects the newest eligible run for that PR; a newer run for another PR
+using the same head cannot shadow it. The selected run's jobs are read from
+GitHub's attempt-specific jobs endpoint, so the checker does not depend on an
+undocumented `job.run_attempt` field and never combines jobs from an older run
+or attempt.
 Each required job name must appear exactly once in that attempt, so a missing or
 duplicate same-name job blocks instead of falling back or masking a failure. It
 prints a stable blocker code for every unmet condition and exits

@@ -61,7 +61,7 @@ function compareByTimeAndId(left, right, timeField) {
 }
 
 function latestRun(runs) {
-  // GitHub Actions job IDs are monotonic. A rerun can be queued before it has
+  // GitHub Actions run IDs are monotonic. A rerun can be queued before it has
   // started_at/completed_at, so timestamps must never make an older completed
   // run override the newer pending run.
   return [...runs].sort(compareIds).at(-1);
@@ -552,26 +552,33 @@ export function pullRequestRunProvenance(run, pullRequest) {
 }
 
 export function selectLatestPullRequestWorkflowRun(workflowRuns, pullRequest) {
-  const latest = latestRun(
-    (workflowRuns ?? []).filter(
-      (run) =>
-        run?.event === "pull_request" &&
-        run?.path === CI_WORKFLOW_PATH &&
-        run?.head_sha === pullRequest?.headSha,
-    ),
-  );
+  const candidates = (workflowRuns ?? [])
+    .map((run) => ({
+      run,
+      provenance: pullRequestRunProvenance(run, pullRequest),
+    }))
+    .filter((candidate) => candidate.provenance !== null);
+  const latest = latestRun(candidates.map((candidate) => candidate.run));
   if (!latest) {
     return null;
   }
-  const provenance = pullRequestRunProvenance(latest, pullRequest);
-  return provenance ? { run: latest, provenance } : null;
+  return candidates.find((candidate) => candidate.run === latest) ?? null;
 }
 
-export function currentWorkflowRunAttemptJobs(jobs, workflowRun) {
-  return (jobs ?? []).filter(
-    (job) =>
-      job?.run_id === workflowRun?.id &&
-      job?.run_attempt === workflowRun?.run_attempt,
+function isPositiveSafeInteger(value) {
+  return Number.isSafeInteger(value) && value > 0;
+}
+
+export function workflowRunAttemptJobsPath(prefix, workflowRun) {
+  if (
+    !isPositiveSafeInteger(workflowRun?.id) ||
+    !isPositiveSafeInteger(workflowRun?.run_attempt)
+  ) {
+    return null;
+  }
+  return (
+    `${prefix}/actions/runs/${workflowRun.id}` +
+    `/attempts/${workflowRun.run_attempt}/jobs`
   );
 }
 
@@ -775,7 +782,6 @@ export function mergeGateEvidenceFingerprint(evidence) {
         pullNumber: check.pullNumber ?? null,
         workflowRunId: check.workflowRunId ?? null,
         workflowRunAttempt: check.workflowRunAttempt ?? null,
-        jobRunAttempt: check.jobRunAttempt ?? null,
         status: check.status ?? null,
         conclusion: check.conclusion ?? null,
         appSlug: check.appSlug ?? null,
@@ -836,7 +842,11 @@ export async function readStableMergeGateSnapshot({
   );
 }
 
-async function readPullRequestWorkflowChecks(client, prefix, pullRequest) {
+export async function readPullRequestWorkflowChecks(
+  client,
+  prefix,
+  pullRequest,
+) {
   const workflowRuns = await client.paginate(
     `${prefix}/actions/runs?event=pull_request&head_sha=${encodeURIComponent(pullRequest.headSha)}`,
     "workflow_runs",
@@ -850,11 +860,15 @@ async function readPullRequestWorkflowChecks(client, prefix, pullRequest) {
   }
 
   const { run, provenance } = selected;
+  const attemptJobsPath = workflowRunAttemptJobsPath(prefix, run);
+  if (!attemptJobsPath) {
+    return [];
+  }
   const jobs = await client.paginate(
-    `${prefix}/actions/runs/${run.id}/jobs?filter=all`,
+    attemptJobsPath,
     "jobs",
   );
-  return currentWorkflowRunAttemptJobs(jobs, run).map((job) => ({
+  return jobs.map((job) => ({
     id: job.id,
     name: job.name,
     headSha: job.head_sha ?? run.head_sha,
@@ -863,7 +877,6 @@ async function readPullRequestWorkflowChecks(client, prefix, pullRequest) {
     pullNumber: provenance.pullNumber,
     workflowRunId: run.id,
     workflowRunAttempt: run.run_attempt,
-    jobRunAttempt: job.run_attempt,
     status: job.status,
     conclusion: job.conclusion,
     appSlug: "github-actions",

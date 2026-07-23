@@ -193,7 +193,7 @@ export type ProjectionPatchOperation =
   | { op: "set"; path: string; value: unknown }
   | { op: "add"; path: string; value: number }
   | { op: "multiply"; path: string; value: number }
-  | { op: "remove"; path: string };
+  | { op: "clear"; path: string };
 export interface ProjectionPatchRuleSource {
   id: string;
   scope: "series" | "sku" | "model" | "final_review";
@@ -230,9 +230,13 @@ export interface PatchOperationRecord {
   operand: unknown;
   before: unknown;
   after: unknown;
+  /** 仅迁移产生；保留旧 remove/min/max 与未知字段，不参与规范执行。 */
+  rawIntent?: unknown;
 }
 
 export interface PatchSnapshotReference {
+  /** 历史 Snapshot 可缺失；新正式 Snapshot 必须提供。 */
+  workspaceId?: string;
   patchId: string;
   patchRevision: number;
   orderedOperationIds: string[];
@@ -367,8 +371,12 @@ export interface PatchMirrorOperationResult {
 
 export interface PatchMirrorSyncCommand {
   idempotencyKey: string;
+  /** 历史命令可缺失；新命令必须提供。 */
+  workspaceId?: string;
   patchId: string;
   patchRevision: number;
+  payloadHash: string;
+  payload: PatchMirrorPayloadRow[];
   expectedRemoteRevision?: string;
   state: "PENDING" | "WRITING" | "READBACK_REQUIRED" | "COMPLETED" | "FAILED";
   operationResults: PatchMirrorOperationResult[];
@@ -388,6 +396,7 @@ export interface PatchMirrorCollaborationEntry {
 
 export interface PatchMirrorRemoteRow {
   remoteRowId: string;
+  workspaceId: string;
   patchId: string;
   patchRevision: number;
   operationId: string;
@@ -407,9 +416,30 @@ export interface PatchMirrorRemoteRow {
   sharedRuleSuggestion?: { value: boolean; revision: string };
 }
 
+export type PatchMirrorPayloadRow = Omit<
+  PatchMirrorRemoteRow,
+  "remoteRowId" | "collaborationEntries" | "sharedRuleSuggestion"
+>;
+
 export interface PatchMirrorValidationIssue {
   source: "patch";
-  code: "PATCH_MIRROR_ROW_MISSING" | "PATCH_MIRROR_UNKNOWN_KEY" | "PATCH_MIRROR_DUPLICATE_KEY" | "PATCH_MIRROR_AUDIT_FIELD_TAMPERED" | "PATCH_MIRROR_GROUP_INCOMPLETE" | "PATCH_MIRROR_COLLABORATION_INVALID" | "PATCH_MIRROR_EXPECTED_REVISION_CONFLICT";
+  code:
+    | "PATCH_MIRROR_ROW_MISSING"
+    | "PATCH_MIRROR_UNKNOWN_KEY"
+    | "PATCH_MIRROR_DUPLICATE_KEY"
+    | "PATCH_MIRROR_AUDIT_FIELD_TAMPERED"
+    | "PATCH_MIRROR_GROUP_INCOMPLETE"
+    | "PATCH_MIRROR_COLLABORATION_INVALID"
+    | "PATCH_MIRROR_EXPECTED_REVISION_CONFLICT"
+    | "PATCH_MIRROR_SCHEMA_MISMATCH"
+    | "PATCH_MIRROR_HASH_MISMATCH"
+    | "PATCH_OPERATION_UNSUPPORTED"
+    | "PATCH_PARAMETER_KEY_REQUIRED"
+    | "PATCH_CLEAR_OPERAND_INVALID"
+    | "PATCH_NUMERIC_REQUIRED"
+    | "LEGACY_PATCH_MIN_MAX_REVIEW_REQUIRED"
+    | "LEGACY_PATCH_FROZEN_BASE_MISMATCH"
+    | "LEGACY_PATCH_FROZEN_RESULT_MISMATCH";
   severity: "ERROR" | "WARNING";
   key: string;
   patchId?: string;
@@ -739,8 +769,11 @@ export interface PatchApplicationIssue {
   code:
     | "PATCH_PATH_INVALID"
     | "PATCH_NUMERIC_REQUIRED"
+    | "PATCH_CANONICAL_OPERATIONS_REQUIRED"
+    | "PATCH_OPERATION_UNSUPPORTED"
     | "PATCH_SET_CONFLICT"
-    | "PATCH_REMOVE_MISSING"
+    | "PATCH_SET_CLEAR_CONFLICT"
+    | "PATCH_CLEAR_INHERITANCE_MISSING"
     | "PATCH_BASE_MISMATCH"
     | "PATCH_SKIPPED";
   patchId: string;
@@ -1304,6 +1337,8 @@ export interface AffixQualityEvaluation {
 }
 
 export interface ConfigurationSnapshot {
+  /** 历史 Snapshot 可缺失；新正式 Snapshot 必须提供。 */
+  workspaceId?: string;
   id: string;
   version: number;
   modelId: string;
@@ -1314,6 +1349,7 @@ export interface ConfigurationSnapshot {
   projectionId: string;
   reductionStackingMode: ReductionStackingMode;
   patchSetHash: string;
+  patchSetHashContractVersion?: string;
   patchReferences?: PatchSnapshotReference[];
   /** 历史 Snapshot 可缺失；新正式 Snapshot 必须冻结以下 OPEN-004 证据。 */
   patchOffsetPolicyVersion?: string;

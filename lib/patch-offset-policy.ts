@@ -1,4 +1,5 @@
 import { deterministicHash } from "./rule-kernel";
+import { PATCH_SET_HASH_CONTRACT_VERSION, patchSetHashForReferences } from "./patch-contract";
 import { createValidationIssue } from "./validation-issues";
 import { isCurrentSeriesSkuSpecification } from "./enabled-item-parts";
 import type {
@@ -196,10 +197,20 @@ function subjectKey(ref: PatchReviewSubjectRef): string {
 
 function normalizedPatchReferences(references: PatchSnapshotReference[]): PatchSnapshotReference[] {
   return references.map((reference) => ({
+    ...(reference.workspaceId!==undefined?{workspaceId:reference.workspaceId}:{}),
     patchId: reference.patchId,
     patchRevision: reference.patchRevision,
     orderedOperationIds: [...reference.orderedOperationIds],
   }));
+}
+
+function frozenPatchSetHash(references:PatchSnapshotReference[]):string{
+  return patchSetHashForReferences(
+    normalizedPatchReferences(references),
+    references.some((reference)=>reference.workspaceId!==undefined)
+      ? PATCH_SET_HASH_CONTRACT_VERSION
+      : undefined,
+  );
 }
 
 function normalizeValue(
@@ -525,7 +536,9 @@ export function evaluatePatchFinalRanges(input: {
       }));
       continue;
     }
-    if (deterministicHash(normalizedPatchReferences(context.patchReferences)) !== context.patchSetHash) {
+    let patchSetHashMatches=false;
+    try{patchSetHashMatches=frozenPatchSetHash(context.patchReferences)===context.patchSetHash;}catch{patchSetHashMatches=false;}
+    if (!patchSetHashMatches) {
       issues.push(policyIssue({
         code: "PATCH_SET_HASH_MISMATCH",
         message: `上下文 ${context.contextId} 的 PatchSetHash 与有序 Patch 引用不一致。`,

@@ -64,6 +64,31 @@ import {
 import {
   assertSeriesItemPartChainEnabled,
 } from "./enabled-item-parts";
+import {
+  adaptFiveAxisTraceToCanonical,
+  adaptPricingTraceToCanonical,
+  adaptRuleTraceToCanonical,
+  assertCalculationTraceMatchesFiveAxis,
+  assertCalculationTraceMatchesFinalPanel,
+  assertCalculationTraceMatchesPricing,
+  assertCalculationTraceUsesRuleSetVersion,
+  createCalculationTraceArchive,
+  verifyCalculationTraceArchive,
+} from "./calculation-trace";
+
+function entityRefIdentity(ref: {
+  workspaceId: string;
+  entityType: string;
+  entityId: string;
+  revisionId: string;
+}): string {
+  return JSON.stringify([
+    ref.workspaceId,
+    ref.entityType,
+    ref.entityId,
+    ref.revisionId,
+  ]);
+}
 
 export function modelFinalPullKgForSnapshot(
   itemPartId: string | undefined,
@@ -92,6 +117,8 @@ function warnings(issues: ValidationIssue[]): ValidationIssue[] {
 
 export interface PublishModelInput {
   publicationMode: "new_formal" | "historical_import";
+  /** 新正式 Snapshot 的 canonical Trace 主体工作区；历史导入不得据此补写 Trace。 */
+  workspaceId?: string;
   model: PurchasableModel;
   sku: SkuDrawer;
   seriesSkus: SkuDrawer[];
@@ -328,6 +355,13 @@ export function publishConfigurationSnapshot(
     );
   }
   if (input.publicationMode === "new_formal") {
+    if (!input.workspaceId?.trim()) {
+      blocking.push({
+        level: "error",
+        code: "CALCULATION_TRACE_SUBJECT_MISSING",
+        message: "新 Snapshot 必须提供 workspaceId，以冻结 canonical CalculationTrace 的 subjectRef。",
+      });
+    }
     if (!input.finalSettlementTrace) {
       blocking.push({
         level: "error",
@@ -500,6 +534,65 @@ export function publishConfigurationSnapshot(
     }
   }
 
+  const calculationTrace = input.publicationMode === "new_formal"
+    ? (() => {
+        const subjectRef = {
+          workspaceId: input.workspaceId!,
+          entityType: "model" as const,
+          entityId: input.model.id,
+          revisionId: String(input.model.revision),
+        };
+        const entries = adaptRuleTraceToCanonical({
+          projection: {
+            ...input.projection,
+            trace: input.finalSettlementTrace!,
+          },
+          subjectRef,
+          parameterDefinitions: input.patchOffsetGovernance?.parameterDefinitions,
+        });
+        if (input.automaticPricing) {
+          entries.push(...adaptPricingTraceToCanonical({
+            pricing: input.automaticPricing,
+            subjectRef,
+            ruleSetVersion: input.projection.ruleSetVersion,
+            sequenceStart: entries.length + 1,
+          }));
+        }
+        if (input.fiveAxisPreview) {
+          entries.push(...adaptFiveAxisTraceToCanonical({
+            preview: input.fiveAxisPreview,
+            subjectRef,
+            ruleSetVersion: input.projection.ruleSetVersion,
+            sequenceStart: entries.length + 1,
+          }));
+        }
+        const archive = createCalculationTraceArchive(entries);
+        assertCalculationTraceUsesRuleSetVersion({
+          archive,
+          subjectRef,
+          ruleSetVersion: input.projection.ruleSetVersion,
+        });
+        assertCalculationTraceMatchesFinalPanel({
+          archive,
+          subjectRef,
+          finalPanelValues: input.finalPanelValues,
+        });
+        assertCalculationTraceMatchesPricing({
+          archive,
+          subjectRef,
+          pricing: input.automaticPricing,
+          ruleSetVersion: input.projection.ruleSetVersion,
+        });
+        assertCalculationTraceMatchesFiveAxis({
+          archive,
+          subjectRef,
+          preview: input.fiveAxisPreview,
+          ruleSetVersion: input.projection.ruleSetVersion,
+        });
+        return archive;
+      })()
+    : undefined;
+
   const governance = input.patchOffsetGovernance;
   if (input.publicationMode === "new_formal") {
     assertValidationWaiverDecisionCoverage({
@@ -542,6 +635,7 @@ export function publishConfigurationSnapshot(
     attributeAffixIds: structuredClone(input.attributeAffixIds),
     passiveAffixIds: structuredClone(input.passiveAffixIds),
     attributeTrace: structuredClone(finalSettlementTrace ?? input.projection.trace),
+    ...(calculationTrace ? { calculationTrace } : {}),
     passiveAffixPayloads: structuredClone(input.passiveAffixPayloads),
     projectionMatch: structuredClone(input.sku.projectionMatch),
     compatibilityReport: structuredClone(input.compatibilityReport),
@@ -593,6 +687,49 @@ export function publishConfigurationSnapshot(
 export function verifySnapshotIntegrity(
   snapshot: ConfigurationSnapshot,
 ): boolean {
+  if (
+    snapshot.calculationTrace
+    && !verifyCalculationTraceArchive(snapshot.calculationTrace)
+  ) return false;
+  if (snapshot.calculationTrace) {
+    const matchingSubjects = snapshot.calculationTrace.entries
+      .map((entry) => entry.subjectRef)
+      .filter((subjectRef) =>
+        subjectRef.entityType === "model"
+        && subjectRef.entityId === snapshot.modelId
+        && subjectRef.revisionId === String(snapshot.modelRevision),
+      );
+    const uniqueSubjects = new Map(
+      matchingSubjects.map((subjectRef) => [entityRefIdentity(subjectRef), subjectRef]),
+    );
+    if (uniqueSubjects.size !== 1) return false;
+    try {
+      assertCalculationTraceUsesRuleSetVersion({
+        archive: snapshot.calculationTrace,
+        subjectRef: [...uniqueSubjects.values()][0],
+        ruleSetVersion: snapshot.ruleSetVersion,
+      });
+      assertCalculationTraceMatchesFinalPanel({
+        archive: snapshot.calculationTrace,
+        subjectRef: [...uniqueSubjects.values()][0],
+        finalPanelValues: snapshot.finalPanelValues,
+      });
+      assertCalculationTraceMatchesPricing({
+        archive: snapshot.calculationTrace,
+        subjectRef: [...uniqueSubjects.values()][0],
+        pricing: snapshot.automaticPricing,
+        ruleSetVersion: snapshot.ruleSetVersion,
+      });
+      assertCalculationTraceMatchesFiveAxis({
+        archive: snapshot.calculationTrace,
+        subjectRef: [...uniqueSubjects.values()][0],
+        preview: snapshot.fiveAxisPreview,
+        ruleSetVersion: snapshot.ruleSetVersion,
+      });
+    } catch {
+      return false;
+    }
+  }
   const { contentHash, ...content } = snapshot;
   return deterministicHash(content) === contentHash;
 }

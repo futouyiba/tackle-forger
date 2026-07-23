@@ -710,7 +710,7 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
   const sku = state.skuDrawers.find((entry) => entry.id === model.skuId)!;
   const series = state.seriesDefinitions.find((entry) => entry.id === sku.seriesId)!;
   const projection = state.derivedProjections.find((entry) => entry.id === oldSnapshot.projectionId)!;
-  const numericEntry = Object.entries(oldSnapshot.finalPanelValues)
+  const numericEntry = Object.entries(projection.values)
     .find((entry): entry is [string, number] => typeof entry[1] === "number")!;
   const governedRevision = buildPatchRevision({
     patchId: "patch:open004:publish",
@@ -756,7 +756,7 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
       contextId: `${model.id}:${sku.id}:${projection.id}`,
       itemPartId: sku.projectionMatch.itemPartId,
       projection,
-      finalPanelValues: oldSnapshot.finalPanelValues,
+      finalPanelValues: projection.values,
       weightBandId: sku.projectionMatch.weightTemplateId,
       skuRef: sku.id,
       targetPullKg: sku.projectionMatch.targetPullKg,
@@ -786,12 +786,13 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
   });
   const snapshot = publishConfigurationSnapshot({
     publicationMode: "new_formal",
+    workspaceId: "workspace:test",
     model,
     sku,
     seriesSkus: state.skuDrawers.filter((entry) => entry.seriesId === series.id),
     series,
     projection,
-    finalPanelValues: oldSnapshot.finalPanelValues,
+    finalPanelValues: projection.values,
     componentSelections: oldSnapshot.componentSelections,
     patches: [],
     patchRevisions,
@@ -806,7 +807,7 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
     passiveAffixIds: oldSnapshot.passiveAffixIds,
     technologyIds: oldSnapshot.technologyIds,
     technologyDefinitions: state.technologies,
-    finalSettlementTrace: finalSettlementTrace(oldSnapshot.finalPanelValues),
+    finalSettlementTrace: finalSettlementTrace(projection.values),
     passiveAffixPayloads: oldSnapshot.passiveAffixPayloads,
     compatibilityReport: oldSnapshot.compatibilityReport,
     affinityReport: oldSnapshot.affinityReport,
@@ -838,7 +839,17 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
       repairPriceUnrounded: 100,
       purchasePriceUnrounded: 100,
       purchasePrice: 100,
-      trace: [],
+      trace: [{
+        sequence: 1,
+        formulaStep: "purchasePrice",
+        sourceRevision: "pricing:test",
+        source: { sheetId: "pricing:test", cell: "A1" },
+        before: 100,
+        operation: "multiply",
+        operand: 1,
+        after: 100,
+        inputStatus: "CONFIRMED",
+      }],
       issues: [],
       warnings: [],
       inputHash: "pricing-hash",

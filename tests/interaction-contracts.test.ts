@@ -16,6 +16,7 @@ import {
   sanitizeAIInput,
   validateExportCommit,
 } from "../lib/interaction-contracts";
+import { validationIssuePresentation } from "../lib/validation-issues";
 import { createSeedState } from "../lib/seed";
 
 test("R1 甘特图只返回真实离散 SKU，不补齐连续重量", () => {
@@ -80,6 +81,9 @@ test("R2 甘特状态不把已治理的规范 ERROR/WARNING 重新显示为活�
     assert.equal(entity.validation, "PASSED");
     assert.notEqual(entity.primary, "HARD_CONFLICT");
   }
+  assert.deepEqual(validationIssuePresentation(canonical), { tone: "info", label: "保留意见通过" });
+  assert.deepEqual(validationIssuePresentation({ ...canonical, state: "RESOLVED" }), { tone: "info", label: "已解决" });
+  assert.deepEqual(validationIssuePresentation({ ...canonical, severity: "WARNING", state: "ACKNOWLEDGED" }), { tone: "info", label: "已确认" });
 });
 
 test("R2 前端动作由 Capability 与服务端禁用原因共同决定", () => {

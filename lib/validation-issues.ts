@@ -53,6 +53,24 @@ export function isActiveValidationIssue(issue: ValidationIssue): boolean {
   return !isCanonicalValidationIssue(issue) || issue.state === "OPEN";
 }
 
+/** 统一展示状态，避免已冻结的治理证据被 UI 重新渲染成活动阻断。 */
+export function validationIssuePresentation(issue: ValidationIssue): {
+  tone: "error" | "warning" | "info";
+  label: string;
+} {
+  if (isActiveValidationIssue(issue)) {
+    const tone = validationIssueLevel(issue);
+    return { tone, label: tone === "error" ? "阻断" : tone === "warning" ? "警告" : "信息" };
+  }
+  switch (issue.state) {
+    case "WAIVED": return { tone: "info", label: "保留意见通过" };
+    case "ACKNOWLEDGED": return { tone: "info", label: "已确认" };
+    case "RESOLVED": return { tone: "info", label: "已解决" };
+    case "STALE": return { tone: "info", label: "历史失效" };
+    default: return { tone: "info", label: "历史记录" };
+  }
+}
+
 export function validationIssueSeverity(issue: ValidationIssue): ValidationIssueSeverity {
   const severity = "severity" in issue ? normalizeValidationSeverity(issue.severity) : undefined;
   if (severity) return severity;

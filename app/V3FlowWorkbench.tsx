@@ -20,7 +20,7 @@ import {
 import { useMemo, useState } from "react";
 import { hydrateV3Seed } from "@/lib/v3-seed";
 import { projectionPatchViewFromLedger } from "@/lib/patch-ledger";
-import { isActiveValidationIssue, validationIssueLevel } from "@/lib/validation-issues";
+import { isActiveValidationIssue, validationIssueLevel, validationIssuePresentation } from "@/lib/validation-issues";
 import type {
   ConfigurationSnapshot,
   ProjectionPatchRuleSource,
@@ -305,7 +305,7 @@ export function V3FlowWorkbench({ state, mutate, notify, initialSeriesId }: V3Fl
                   ["拉力曲线", selectedSeries.targetPullSpecifications.map((entry) => `${entry.targetPullKgf}kgf`).join(" → "), "保持单调"],
                 ].map(([title, value, hint]) => <div key={title}><span className="v3-invariant-check"><CheckCircle2 size={16} /></span><div><strong>{title}</strong><small>{hint}</small></div><b>{value}</b></div>)}
               </div>
-              {selectedSku.validationSummary.length ? <div className="v3-validation-box"><strong>当前 SKU 校验</strong>{selectedSku.validationSummary.map((issue, index) => <div key={issue.code + index} className={validationIssueLevel(issue)}><span>{validationIssueLevel(issue) === "error" ? "阻断" : validationIssueLevel(issue) === "warning" ? "警告" : "信息"}</span><p>{issue.message}</p></div>)}</div> : null}
+              {selectedSku.validationSummary.length ? <div className="v3-validation-box"><strong>当前 SKU 校验</strong>{selectedSku.validationSummary.map((issue, index) => { const presentation = validationIssuePresentation(issue); return <div key={issue.code + index} className={presentation.tone}><span>{presentation.label}</span><p>{issue.message}</p></div>; })}</div> : null}
             </>
           ) : null}
 

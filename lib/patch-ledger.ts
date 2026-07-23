@@ -1,5 +1,6 @@
 import { deterministicHash } from "./rule-kernel";
 import { assertPatchReviewCoverage, assertPatchRevisionDeterministicallyReplayable, assertPublishedPatchOffsetPolicy, invalidatePatchReviewBatch, PatchOffsetPolicyError } from "./patch-offset-policy";
+import { transitionPatchState } from "./patch-state";
 import type { PatchAbsorptionAssessment, PatchAbsorptionOperationEvidence, PatchLedger, PatchMirrorOperationResult, PatchMirrorPullAudit, PatchMirrorRemoteRow, PatchMirrorSyncCommand, PatchMirrorValidationIssue, PatchOffsetPolicyVersion, PatchOperationRecord, PatchPatternSummary, PatchReviewBatch, PatchReviewSubjectRef, PatchRevisionRecord, PatchSnapshotReference, PatchValidationWaiver, ProjectionPatchRuleSource, RuleSourceChangeDraft, WorkspacePolicyRecord } from "./types";
 
 export const CURRENT_PATCH_LEDGER_SCHEMA_VERSION = 4;
@@ -152,6 +153,14 @@ export function reviewPatchRevision(input:{ledger:PatchLedger;patchId:string;pat
   const target=input.ledger.revisions.find((r)=>r.patchId===input.patchId&&r.patchRevision===input.patchRevision);
   if(!target) throw new PatchLedgerError("PATCH_REVISION_NOT_FOUND","Revision not found");
   if(target.snapshotRefs.length) throw new PatchLedgerError("PATCH_REVISION_IMMUTABLE","Snapshot-referenced revision is immutable");
+  try {
+    transitionPatchState(target.state, input.nextState);
+  } catch (error) {
+    throw new PatchLedgerError(
+      "PATCH_STATE_TRANSITION_INVALID",
+      error instanceof Error ? error.message : "Invalid Patch state transition",
+    );
+  }
   if(input.nextState==="APPROVED"||input.nextState==="ACTIVE"){
     try{
       assertPublishedPatchOffsetPolicy(input.approvalEvidence?.policy);

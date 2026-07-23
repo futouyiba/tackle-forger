@@ -974,6 +974,13 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
     version = nextVersion;
   }
 
+  // Some production databases were marked v17 before every persisted payload had
+  // been normalized. Keep this normalizer idempotent so current-version states
+  // are readable on startup without changing frozen snapshots.
+  if (version === 17) {
+    state = migrateV16ToV17(state);
+  }
+
   state = {
     ...state,
     patchLedger: state.patchLedger && typeof state.patchLedger === "object"

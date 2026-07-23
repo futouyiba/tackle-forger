@@ -207,7 +207,7 @@ export function assertCalculationTraceJsonSafe(
   visit(value, path);
 }
 
-function sameValue(left: unknown, right: unknown): boolean {
+export function calculationTraceValuesEqual(left: unknown, right: unknown): boolean {
   if (Object.is(left, right)) return true;
   if (
     left === null
@@ -220,7 +220,10 @@ function sameValue(left: unknown, right: unknown): boolean {
       return false;
     }
     for (let index = 0; index < left.length; index += 1) {
-      if ((index in left) !== (index in right) || !sameValue(left[index], right[index])) {
+      if (
+        (index in left) !== (index in right)
+        || !calculationTraceValuesEqual(left[index], right[index])
+      ) {
         return false;
       }
     }
@@ -233,7 +236,7 @@ function sameValue(left: unknown, right: unknown): boolean {
     || leftKeys.some((key, index) => key !== rightKeys[index])
   ) return false;
   return leftKeys.every((key) =>
-    sameValue(
+    calculationTraceValuesEqual(
       (left as Record<string, unknown>)[key],
       (right as Record<string, unknown>)[key],
     ),
@@ -317,7 +320,7 @@ export function createCalculationTraceEntry(
       error instanceof Error ? error.message : "Trace operation 无法执行。",
     );
   }
-  if (!sameValue(calculatedAfter, input.after)) {
+  if (!calculationTraceValuesEqual(calculatedAfter, input.after)) {
     throw new CalculationTraceReplayError("创建 Trace 时 before、operation、operand 与 after 不一致。");
   }
   const identity = {
@@ -392,7 +395,7 @@ export function replayCalculationTrace(input: {
     }
     const currentValue = current ? current.value : absentValue();
     if (
-      !sameValue(currentValue, entry.before)
+      !calculationTraceValuesEqual(currentValue, entry.before)
       || valueHash(entry.subjectRef, entry.parameterKey, currentValue) !== entry.inputHash
     ) {
       throw new CalculationTraceReplayError(`before 或 inputHash 不一致：${entry.parameterKey}。`, entry);
@@ -407,7 +410,7 @@ export function replayCalculationTrace(input: {
       );
     }
     if (
-      !sameValue(after, entry.after)
+      !calculationTraceValuesEqual(after, entry.after)
       || valueHash(entry.subjectRef, entry.parameterKey, after) !== entry.outputHash
     ) {
       throw new CalculationTraceReplayError(`after 或 outputHash 不一致：${entry.parameterKey}。`, entry);
@@ -512,9 +515,9 @@ export function verifyCalculationTraceArchive(archive: CalculationTraceArchive):
     return (
       recreated.traceHash === archive.traceHash
       && recreated.replayHash === archive.replayHash
-      && sameValue(recreated.entryRefs, archive.entryRefs)
-      && sameValue(recreated.initialState, archive.initialState)
-      && sameValue(recreated.finalState, archive.finalState)
+      && calculationTraceValuesEqual(recreated.entryRefs, archive.entryRefs)
+      && calculationTraceValuesEqual(recreated.initialState, archive.initialState)
+      && calculationTraceValuesEqual(recreated.finalState, archive.finalState)
     );
   } catch {
     return false;
@@ -580,7 +583,10 @@ export function assertCalculationTraceMatchesFinalPanel(input: {
     }
     if (
       panelHasValue
-      && !sameValue(finalValues.get(parameterKey), input.finalPanelValues[parameterKey])
+      && !calculationTraceValuesEqual(
+        finalValues.get(parameterKey),
+        input.finalPanelValues[parameterKey],
+      )
     ) {
       throw new CalculationTraceReplayError(
         `canonical Trace 终态与 finalPanelValues 不一致：${parameterKey}。`,
@@ -616,7 +622,7 @@ function effectFor(
   before: unknown,
   after: unknown,
 ): CalculationTraceEffect {
-  if (sameValue(before, after)) return "neutral";
+  if (calculationTraceValuesEqual(before, after)) return "neutral";
   if (!definition || definition.benefitMode === "contextual" || definition.benefitMode === "target_range") {
     return "contextual";
   }
@@ -645,7 +651,7 @@ function executableOperation(
   const operation = normalizedOperation(originalOperation);
   const candidateOperand = operation === "clear" ? null : operand;
   try {
-    if (sameValue(applyOperation(before, operation, candidateOperand), after)) {
+    if (calculationTraceValuesEqual(applyOperation(before, operation, candidateOperand), after)) {
       return { operation, operand: candidateOperand };
     }
   } catch {
@@ -803,7 +809,7 @@ function adaptPricingTraceWithVersion(
         `pricing Trace sequence 不连续：${previous.sequence} → ${current.sequence}。`,
       );
     }
-    if (!sameValue(previous.after, current.before)) {
+    if (!calculationTraceValuesEqual(previous.after, current.before)) {
       throw new CalculationTraceReplayError(
         `pricing Trace 步骤不连续：${previous.formulaStep}.after 与 ${current.formulaStep}.before 不一致。`,
       );
@@ -812,7 +818,10 @@ function adaptPricingTraceWithVersion(
   if (
     input.pricing.purchasePrice !== null
     && pricingTrace.length > 0
-    && !sameValue(pricingTrace[pricingTrace.length - 1].after, input.pricing.purchasePrice)
+    && !calculationTraceValuesEqual(
+      pricingTrace[pricingTrace.length - 1].after,
+      input.pricing.purchasePrice,
+    )
   ) {
     throw new CalculationTraceReplayError(
       "pricing Trace 最终值与 purchasePrice 不一致。",
@@ -909,7 +918,7 @@ export function assertCalculationTraceMatchesPricing(input: {
     },
     adapter,
   );
-  if (!sameValue(pricingEntries, expected)) {
+  if (!calculationTraceValuesEqual(pricingEntries, expected)) {
     throw new CalculationTraceReplayError(
       "canonical pricing Trace 与冻结的 automaticPricing 不一致。",
     );
@@ -972,6 +981,40 @@ export function adaptFiveAxisTraceToCanonical(input: {
       evidence: { adapter: "five_axis_trace/v1", ...entry.trace },
     });
   });
+}
+
+export function assertCalculationTraceMatchesFiveAxis(input: {
+  archive: CalculationTraceArchive;
+  subjectRef: EntityRef;
+  preview?: ModelFiveAxisPreview;
+  ruleSetVersion: string;
+}): void {
+  const fiveAxisEntries = input.archive.entries.filter((entry) =>
+    sameEntityRef(entry.subjectRef, input.subjectRef)
+    && entry.parameterKey.startsWith("five_axis:")
+    && "sourceType" in entry.sourceRef
+    && entry.sourceRef.sourceType === "five_axis_definition"
+    && entry.evidence?.adapter === "five_axis_trace/v1",
+  );
+  if (!input.preview) {
+    if (fiveAxisEntries.length > 0) {
+      throw new CalculationTraceReplayError(
+        "Snapshot 未冻结 fiveAxisPreview，但 canonical Trace 含五轴条目。",
+      );
+    }
+    return;
+  }
+  const expected = adaptFiveAxisTraceToCanonical({
+    preview: input.preview,
+    subjectRef: input.subjectRef,
+    ruleSetVersion: input.ruleSetVersion,
+    sequenceStart: fiveAxisEntries[0]?.sequence ?? 1,
+  });
+  if (!calculationTraceValuesEqual(fiveAxisEntries, expected)) {
+    throw new CalculationTraceReplayError(
+      "canonical five-axis Trace 与冻结的 fiveAxisPreview 不一致。",
+    );
+  }
 }
 
 export function adaptPatchTraceToCanonical(input: {
@@ -1102,7 +1145,7 @@ export function adaptLegacyUnifiedTraceToCanonical(
       operation: entry.operation,
       operand: entry.operand,
       after: entry.after,
-      effect: sameValue(entry.before, entry.after) ? "neutral" : "contextual",
+      effect: calculationTraceValuesEqual(entry.before, entry.after) ? "neutral" : "contextual",
       warningIssueIds: [],
       actions: [],
       evidence: {

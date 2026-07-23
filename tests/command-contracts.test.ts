@@ -194,6 +194,41 @@ test("R4 legacy UnifiedTrace扁平结果遇到多subject同名参数分歧时fai
   );
 });
 
+test("R4 legacy UnifiedTrace 的 32 位 hash 碰撞不能伪装为相同终态", () => {
+  const left = "4x47h135er6o";
+  const right = "a4f3v0xp2x1k";
+  assert.equal(deterministicHash(left), deterministicHash(right));
+  const collisionEntry = (
+    sequence: number,
+    modelId: string,
+    after: string,
+  ): UnifiedTraceEntry => ({
+    traceEntryId: `trace:collision:${sequence}`,
+    subjectRef: ref("model", modelId),
+    parameterKey: "collision",
+    sequence,
+    layer: "model_patch",
+    sourceVersion: "1",
+    ruleSetVersion: "rules:1",
+    before: null,
+    operation: "set",
+    operand: after,
+    after,
+    inputHash: deterministicHash({ parameterKey: "collision", value: null }),
+    outputHash: deterministicHash({ parameterKey: "collision", value: after }),
+  });
+  assert.throws(
+    () => replayUnifiedTrace({
+      initialValues: { collision: null },
+      entries: [
+        collisionEntry(1, "model:1", left),
+        collisionEntry(2, "model:2", right),
+      ],
+    }),
+    /TRACE_REPLAY_MISMATCH.*无法表示多个 subject 的不同终态/,
+  );
+});
+
 test("R9 error必阻断、deny不可waive、修复动作由Capability决定", () => {
   const issue = createUnifiedIssue({
     code: "HARD_DENY",

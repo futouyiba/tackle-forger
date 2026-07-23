@@ -11,6 +11,7 @@ import type {
 import { actionAvailability } from "./interaction-contracts";
 import {
   adaptLegacyUnifiedTraceToCanonical,
+  calculationTraceValuesEqual,
   CalculationTraceReplayError,
   replayCalculationTrace,
   type CalculationTraceStateValue,
@@ -30,6 +31,7 @@ export {
   adaptRuleTraceToCanonical,
   assertCalculationTraceJsonSafe,
   assertCalculationTraceMatchesFinalPanel,
+  calculationTraceValuesEqual,
   createCalculationTraceArchive,
   createCalculationTraceEntry,
   isCalculationTraceAbsentValue,
@@ -254,7 +256,7 @@ export function replayUnifiedTrace(input: {
   for (const entry of replay.finalState) {
     if (
       Object.prototype.hasOwnProperty.call(values, entry.parameterKey)
-      && deterministicHash(values[entry.parameterKey]) !== deterministicHash(entry.value)
+      && !calculationTraceValuesEqual(values[entry.parameterKey], entry.value)
     ) {
       throw new CalculationTraceReplayError(
         `旧 UnifiedTraceEntry 无法表示多个 subject 的不同终态：${entry.parameterKey}。`,

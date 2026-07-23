@@ -47,6 +47,7 @@ import {
   adaptFiveAxisTraceToCanonical,
   adaptPricingTraceToCanonical,
   adaptRuleTraceToCanonical,
+  assertCalculationTraceMatchesFiveAxis,
   assertCalculationTraceMatchesFinalPanel,
   assertCalculationTraceMatchesPricing,
   createCalculationTraceArchive,
@@ -367,6 +368,12 @@ export function publishConfigurationSnapshot(
           pricing: input.automaticPricing,
           ruleSetVersion: input.projection.ruleSetVersion,
         });
+        assertCalculationTraceMatchesFiveAxis({
+          archive,
+          subjectRef,
+          preview: input.fiveAxisPreview,
+          ruleSetVersion: input.projection.ruleSetVersion,
+        });
         return archive;
       })()
     : undefined;
@@ -471,6 +478,12 @@ export function verifySnapshotIntegrity(
         archive: snapshot.calculationTrace,
         subjectRef: [...uniqueSubjects.values()][0],
         pricing: snapshot.automaticPricing,
+        ruleSetVersion: snapshot.ruleSetVersion,
+      });
+      assertCalculationTraceMatchesFiveAxis({
+        archive: snapshot.calculationTrace,
+        subjectRef: [...uniqueSubjects.values()][0],
+        preview: snapshot.fiveAxisPreview,
         ruleSetVersion: snapshot.ruleSetVersion,
       });
     } catch {

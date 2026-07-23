@@ -540,6 +540,17 @@ test("正式快照拒绝未发布、篡改或版本链过期的五维定义", ()
   assert.equal(verifySnapshotIntegrity(snapshot), true);
   assert.ok(snapshot.calculationTrace?.entries.some((entry) =>
     entry.evidence?.adapter === "five_axis_trace/v1"));
+  const traceTampered = structuredClone(snapshot);
+  const frozenFiveAxisTrace = traceTampered.fiveAxisPreview!.metrics
+    .flatMap((metric) => metric.trace)[0];
+  assert.ok(frozenFiveAxisTrace);
+  frozenFiveAxisTrace.value = typeof frozenFiveAxisTrace.value === "number"
+    ? frozenFiveAxisTrace.value + 1
+    : "tampered";
+  traceTampered.contentHash = deterministicHash(
+    Object.fromEntries(Object.entries(traceTampered).filter(([key]) => key !== "contentHash")),
+  );
+  assert.equal(verifySnapshotIntegrity(traceTampered), false);
   const frozen = structuredClone(snapshot);
   def.axes[0].label = "changed after publish";
   assert.deepEqual(snapshot, frozen);

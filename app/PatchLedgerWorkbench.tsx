@@ -3,6 +3,7 @@
 import { AlertTriangle, CheckCircle2, DatabaseZap, FileClock, Link2, Plus, Search, ShieldCheck, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
+  canApplyConfirmedWorkspace,
   DIRTY_WORKSPACE_CONFIRMATION_MESSAGE,
   runCleanWorkspaceConfirmation,
 } from "@/lib/clean-workspace-confirmation";
@@ -14,6 +15,7 @@ interface PatchLedgerWorkbenchProps {
   state: WorkspaceState;
   revision: number;
   dirty: boolean;
+  getWorkspaceFreshness: () => { dirty: boolean; revision: number };
   capabilities: string[];
   actorName: string;
   mutate: (producer: (draft: WorkspaceState) => void, recalculate?: boolean) => void;
@@ -51,7 +53,7 @@ function analysisContexts(state: WorkspaceState) {
   }
   return contexts;
 }
-export function PatchLedgerWorkbench({ state, revision, dirty, capabilities, actorName, mutate, notify, replaceWorkspace }: PatchLedgerWorkbenchProps) {
+export function PatchLedgerWorkbench({ state, revision, dirty, getWorkspaceFreshness, capabilities, actorName, mutate, notify, replaceWorkspace }: PatchLedgerWorkbenchProps) {
   const [query,setQuery]=useState("");
   const [selectedKey,setSelectedKey]=useState("");
   const [draft,setDraft]=useState<PatchDraft|null>(null);
@@ -140,6 +142,8 @@ export function PatchLedgerWorkbench({ state, revision, dirty, capabilities, act
       const response=attempt.value;
       const payload=await response.json() as {state?:WorkspaceState;revision?:number;error?:string};
       if(!response.ok||!payload.state||typeof payload.revision!=="number")throw new Error(payload.error??"AI 规则草稿确认失败");
+      const applyCheck=canApplyConfirmedWorkspace({...getWorkspaceFreshness(),expectedRevision:revision});
+      if(!applyCheck.allowed){notify(applyCheck.reason);return;}
       replaceWorkspace(payload.state,payload.revision);
       notify("AI 规则草稿已人工确认；尚未写入飞书、拉取或发布 RuleSet。");
     }catch(error){notify(error instanceof Error?error.message:"AI 规则草稿确认失败");}

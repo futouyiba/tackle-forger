@@ -500,6 +500,12 @@ function assertRangeDefinitions(
   ranges: ConfigIdRangeDefinition[],
 ) {
   uniqueBy(ranges, (range) => range.rangeId, "CONFIG_ID_RANGE_DUPLICATE");
+  if (!ranges.length) {
+    throw new ConfigIdGovernanceError(
+      "CONFIG_ID_RANGE_SET_EMPTY",
+      "正式 ConfigId 策略必须声明至少一个 ID 范围。",
+    );
+  }
   const publishedRangeIds = governance.policies
     .filter((policy) => policy.status === "PUBLISHED")
     .flatMap((policy) => policy.ranges.map((range) => range.rangeId))

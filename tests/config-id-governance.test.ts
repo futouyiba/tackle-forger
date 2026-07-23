@@ -639,6 +639,23 @@ test("替代正式策略必须携带当前已发布策略的所有稳定 rangeId
   );
 });
 
+test("首个正式策略也不得发布空 ID 范围集", () => {
+  const fixture = buildGovernanceFixture();
+  const initialGovernance = { ...fixture.governance, policies: [] };
+  assert.throws(
+    () => publishConfigIdPolicyVersion(initialGovernance, {
+      policyVersionId: "policy:empty-ranges",
+      catalogVersionId: "catalog:v1",
+      manifestIds: ["manifest:dev:v1", "manifest:test:v1"],
+      ranges: [],
+      publishedBy: "reviewer",
+      publishedAt: NOW,
+      observedTargets: fixture.observations,
+    }),
+    (error) => errorCode(error) === "CONFIG_ID_RANGE_SET_EMPTY",
+  );
+});
+
 test("扩容追加新 rangeId，不重置或回收旧 rangeId 游标", () => {
   const fixture = buildGovernanceFixture();
   const expansion = {

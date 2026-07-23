@@ -13,6 +13,7 @@ import {
   isProductItemPartEnabled,
   seriesItemPartId,
 } from "./enabled-item-parts";
+import { formalConfigExportActionBlock } from "./config-export-stage";
 
 export type CapabilityCode =
   | "series.read" | "series.edit" | "series.approve"
@@ -565,6 +566,18 @@ export function actionAvailability(
 ): ActionAvailability {
   const held = new Set(capabilities);
   const requiredCapabilities = ACTION_CAPABILITIES[action] ?? [];
+  const stageBlock = action === "commit_config_export" || action === "export_snapshot"
+    ? formalConfigExportActionBlock()
+    : undefined;
+  if (stageBlock) {
+    return {
+      action,
+      enabled: false,
+      requiredCapabilities,
+      disabledReasonCode: stageBlock.code,
+      disabledReasonText: stageBlock.text,
+    };
+  }
   const missing = requiredCapabilities.filter((capability) => !held.has(capability));
   if (missing.length) {
     return {
@@ -925,6 +938,8 @@ export interface ExportTargetProfile {
   expectedSchemaHash?: string;
   mappingId?: string;
   mappingVersion?: string;
+  environmentId?: string;
+  channelKey?: string;
 }
 
 export interface ExportPreviewTarget {

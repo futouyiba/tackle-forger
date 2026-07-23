@@ -103,7 +103,11 @@ function entityRefIdentity(ref: {
     ref.revisionId,
   ]);
 }
-import { resolveFormalFiveAxisDefinition } from "./five-axis-formal";
+import {
+  assertFormalModelFiveAxisPreview,
+  hashFormalFinalPanelValues,
+  resolveFormalFiveAxisDefinition,
+} from "./five-axis-formal";
 
 export function modelFinalPullKgForSnapshot(
   itemPartId: string | undefined,
@@ -475,13 +479,6 @@ export function publishConfigurationSnapshot(
     );
   }
   if (input.publicationMode === "new_formal") {
-    if (!input.workspaceId?.trim()) {
-      blocking.push({
-        level: "error",
-        code: "CALCULATION_TRACE_SUBJECT_MISSING",
-        message: "新 Snapshot 必须提供 workspaceId，以冻结 canonical CalculationTrace 的 subjectRef。",
-      });
-    }
     if (!input.finalSettlementTrace) {
       blocking.push({
         level: "error",
@@ -623,6 +620,13 @@ export function publishConfigurationSnapshot(
   if (input.sku.projectionMatch.projectionId !== input.projection.id) {
     throw new Error("SKU 的 ProjectionMatch 与发布投影不一致。");
   }
+  const snapshotId =
+    input.snapshotId ??
+    "snapshot-" + input.model.id + "-v" + (input.version ?? 1);
+  const modelFinalPullKg = modelFinalPullKgForSnapshot(
+    input.sku.projectionMatch.itemPartId,
+    input.finalPanelValues,
+  );
   if (
     input.fiveAxisPreview &&
     input.fiveAxisPreview.modelId !== input.model.id
@@ -655,20 +659,25 @@ export function publishConfigurationSnapshot(
       catalogHash: resolved.catalogRevision.catalogHash,
       disposition: structuredClone(resolved.disposition),
     };
-    if (
-      input.fiveAxisPreview.fiveAxisDefinitionId !== resolved.definition.definitionId
-      || input.fiveAxisPreview.fiveAxisDefinitionVersion !== resolved.definition.version
-      || input.fiveAxisPreview.fiveAxisDefinitionRevision !== resolved.definition.revision
-      || input.fiveAxisPreview.fiveAxisDefinitionHash !== resolved.definition.definitionHash
-      || input.fiveAxisPreview.fiveAxisRuleVersion !== resolved.definition.fiveAxisRuleVersion
-      || input.fiveAxisPreview.sourceRevision !== resolved.definition.sourceRevision
-      || input.fiveAxisPreview.tackleFitComparison.fiveAxisDefinitionId !== resolved.definition.definitionId
-      || input.fiveAxisPreview.tackleFitComparison.fiveAxisDefinitionVersion !== resolved.definition.version
-      || input.fiveAxisPreview.tackleFitComparison.fiveAxisRuleVersion !== resolved.definition.fiveAxisRuleVersion
-      || input.fiveAxisPreview.tackleFitComparison.vertexSetHash !== input.fiveAxisPreview.vertexSetHash
-    ) {
-      throw new Error("五轴预览的定义、规则或顶点版本链不一致，禁止创建正式 Snapshot。");
+    if (modelFinalPullKg === undefined || modelFinalPullKg <= 0) {
+      throw new Error("FIVE_AXIS_FORMAL_PREVIEW_INVALID：正式 Snapshot 缺少合法最终拉力。");
     }
+    assertFormalModelFiveAxisPreview({
+      definition: resolved.definition,
+      preview: input.fiveAxisPreview,
+      expectedModelId: input.model.id,
+      expectedModelRevisionId: `${input.model.id}@${input.model.revision}`,
+      expectedSnapshotId: snapshotId,
+      expectedSeriesId: input.series.id,
+      expectedSkuId: input.sku.id,
+      expectedSkuRevisionId: `${input.sku.id}@${input.sku.revision}`,
+      expectedFinalPanelHash: hashFormalFinalPanelValues(input.finalPanelValues),
+      expectedComponentSelections: input.componentSelections.map((component) => ({
+        itemPartId: component.itemPartId,
+        componentId: component.componentId,
+      })),
+      expectedModelFinalPullKg: modelFinalPullKg,
+    });
   }
   if (input.publicationMode === "new_formal") {
     if (!hasValidReductionPolicyBinding(input)) {
@@ -797,9 +806,7 @@ export function publishConfigurationSnapshot(
   );
   const snapshotWithoutHash: Omit<ConfigurationSnapshot, "contentHash"> = {
     ...(input.publicationMode==="new_formal"?{workspaceId:input.workspaceId}:{}),
-    id:
-      input.snapshotId ??
-      "snapshot-" + input.model.id + "-v" + (input.version ?? 1),
+    id: snapshotId,
     version: input.version ?? 1,
     modelId: input.model.id,
     modelRevision: input.model.revision,
@@ -838,7 +845,6 @@ export function publishConfigurationSnapshot(
     attributeAffixIds: structuredClone(input.attributeAffixIds),
     passiveAffixIds: structuredClone(input.passiveAffixIds),
     attributeTrace: structuredClone(finalSettlementTrace ?? input.projection.trace),
-    ...(calculationTrace ? { calculationTrace } : {}),
     passiveAffixPayloads: structuredClone(input.passiveAffixPayloads),
     projectionMatch: structuredClone(input.sku.projectionMatch),
     compatibilityReport: structuredClone(input.compatibilityReport),

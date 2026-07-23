@@ -21,6 +21,7 @@ import {
 } from "../lib/patch-offset-policy";
 import { buildPatchRevision, emptyPatchLedger, orderedPatchReferences, PatchLedgerError, reviewPatchBatch } from "../lib/patch-ledger";
 import { publishConfigurationSnapshot, verifySnapshotIntegrity } from "../lib/publishing";
+import { buildFormalPreviewFixture } from "./helpers/formal-five-axis";
 import { createExportManifest } from "../lib/config-export";
 import {
   assertPatchEvaluationMatchesAuthority,
@@ -955,21 +956,18 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
   });
   const formalDefinition = state.fiveAxisViewDefinitions.find((definition) =>
     "semanticContractVersion" in definition)!;
-  const formalPreview = {
-    ...structuredClone(oldSnapshot.fiveAxisPreview!),
-    fiveAxisDefinitionId: formalDefinition.definitionId,
-    fiveAxisDefinitionVersion: formalDefinition.version,
-    fiveAxisDefinitionRevision: formalDefinition.revision,
-    fiveAxisDefinitionHash: formalDefinition.definitionHash,
-    fiveAxisRuleVersion: formalDefinition.fiveAxisRuleVersion,
-    sourceRevision: formalDefinition.sourceRevision,
-    tackleFitComparison: {
-      ...structuredClone(oldSnapshot.fiveAxisPreview!.tackleFitComparison),
-      fiveAxisDefinitionId: formalDefinition.definitionId,
-      fiveAxisDefinitionVersion: formalDefinition.version,
-      fiveAxisRuleVersion: formalDefinition.fiveAxisRuleVersion,
-    },
-  };
+  const formalPreview = buildFormalPreviewFixture({
+    definition: formalDefinition,
+    snapshotId: "snapshot:open004-v1",
+    modelId: model.id,
+    modelRevision: model.revision,
+    seriesId: series.id,
+    skuId: sku.id,
+    skuRevision: sku.revision,
+    modelFinalPullKg: oldSnapshot.modelFinalPullKg!,
+    finalPanelValues: oldSnapshot.finalPanelValues,
+    componentSelections: oldSnapshot.componentSelections,
+  });
   const snapshot = publishConfigurationSnapshot({
     publicationMode: "new_formal",
     workspaceId: "workspace:test",

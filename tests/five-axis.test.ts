@@ -29,6 +29,7 @@ import {
   formalProjection,
   testReductionPolicy,
 } from "./helpers/reduction-policy";
+import { buildFormalPreviewFixture } from "./helpers/formal-five-axis";
 import type {
   FiveAxisEntityInput,
   FiveAxisViewDefinition,
@@ -538,6 +539,7 @@ test("旧 PUBLISHED 五维定义只能用于历史重放，不能服务新正式
     },
     validationReport: [], fiveAxisPreview: preview, warningConfirmations: {},
     publishedBy: "tester", publishedAt: "2026-07-22T00:00:00.000Z",
+    snapshotId: "snapshot:formal-gate",
     fiveAxisDefinitions: state.fiveAxisViewDefinitions,
     fiveAxisDispositionCatalogRevisions:
       state.fiveAxisDispositionCatalogRevisions,
@@ -559,21 +561,18 @@ test("旧 PUBLISHED 五维定义只能用于历史重放，不能服务新正式
     }),
     /FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE/,
   );
-  const formalPreview = {
-    ...preview,
-    fiveAxisDefinitionId: formalDefinition.definitionId,
-    fiveAxisDefinitionVersion: formalDefinition.version,
-    fiveAxisDefinitionRevision: formalDefinition.revision,
-    fiveAxisDefinitionHash: formalDefinition.definitionHash,
-    fiveAxisRuleVersion: formalDefinition.fiveAxisRuleVersion,
-    sourceRevision: formalDefinition.sourceRevision,
-    tackleFitComparison: {
-      ...preview.tackleFitComparison,
-      fiveAxisDefinitionId: formalDefinition.definitionId,
-      fiveAxisDefinitionVersion: formalDefinition.version,
-      fiveAxisRuleVersion: formalDefinition.fiveAxisRuleVersion,
-    },
-  };
+  const formalPreview = buildFormalPreviewFixture({
+    definition: formalDefinition,
+    snapshotId: common.snapshotId,
+    modelId: model.id,
+    modelRevision: model.revision,
+    seriesId: series.id,
+    skuId: sku.id,
+    skuRevision: sku.revision,
+    modelFinalPullKg: existing.modelFinalPullKg!,
+    finalPanelValues: existing.finalPanelValues,
+    componentSelections: existing.componentSelections,
+  });
   const formalSnapshot = publishConfigurationSnapshot({
     ...common,
     fiveAxisPreview: formalPreview,

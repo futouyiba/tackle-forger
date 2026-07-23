@@ -405,3 +405,69 @@ export function hashVertexSet(input: {
     })),
   });
 }
+
+export function hashProjectionReferenceSet(input: {
+  selectorVersion: "projection-reference/current-sku-frozen-match/v1";
+  anchor: {
+    baselineSnapshotId: string;
+    seriesId: string;
+    skuId: string;
+    skuRevisionId: string;
+  };
+  references: Array<{
+    itemPartId: string;
+    state: "available" | "missing" | "error";
+    projectionMatchId: string | null;
+    projectionMatchRevisionId: string | null;
+    projectionId: string | null;
+    projectionRevisionId: string | null;
+  }>;
+}): string {
+  assertExactKeys(input, ["selectorVersion", "anchor", "references"], "projection_reference_set");
+  assertExactKeys(
+    input.anchor,
+    ["baselineSnapshotId", "seriesId", "skuId", "skuRevisionId"],
+    "projection_reference_set.anchor",
+  );
+  const expectedParts = ["part:rod", "part:reel", "part:line"];
+  if (
+    input.references.length !== expectedParts.length
+    || input.references.some((reference, index) =>
+      reference.itemPartId !== expectedParts[index])
+  ) {
+    throw new Error("projection_reference_set.references 必须按竿、轮、线恰好三项排列。");
+  }
+  for (const reference of input.references) {
+    assertExactKeys(
+      reference,
+      [
+        "itemPartId",
+        "state",
+        "projectionMatchId",
+        "projectionMatchRevisionId",
+        "projectionId",
+        "projectionRevisionId",
+      ],
+      "projection_reference_set.references[]",
+    );
+    const identifiers = [
+      reference.projectionMatchId,
+      reference.projectionMatchRevisionId,
+      reference.projectionId,
+      reference.projectionRevisionId,
+    ];
+    if (reference.state === "available" && identifiers.some((value) => value === null)) {
+      throw new Error("available 投影引用的四个身份字段不得为 null。");
+    }
+    if (reference.state !== "available" && identifiers.some((value) => value !== null)) {
+      throw new Error("missing/error 投影引用的四个身份字段必须显式为 null。");
+    }
+  }
+  return hashCanonicalJson({
+    schemaVersion: FIVE_AXIS_HASH_INPUT_SCHEMA_VERSION,
+    kind: "projection_reference_set",
+    selectorVersion: input.selectorVersion,
+    anchor: input.anchor,
+    references: input.references,
+  } as never);
+}

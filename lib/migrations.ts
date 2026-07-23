@@ -1585,9 +1585,6 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
 
   state = {
     ...state,
-    workspaceId: typeof state.workspaceId === "string" && state.workspaceId.trim()
-      ? state.workspaceId
-      : "default",
     aiRuleSourceChangeDrafts: arrayOf<
       WorkspaceState["aiRuleSourceChangeDrafts"][number]
     >(state.aiRuleSourceChangeDrafts),

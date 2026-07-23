@@ -40,6 +40,13 @@ function legacyV17ForPartConstraintMigration(): Record<string, unknown> {
   return legacy;
 }
 
+test("legacy migration 不猜测 workspaceId，正式身份绑定留给存储/部署层", () => {
+  const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
+  delete legacy.workspaceId;
+  const migrated = migrateWorkspaceState(legacy);
+  assert.equal(migrated.workspaceId, undefined);
+});
+
 test("v16 隔离旧独立偏移阈值、发布规范策略且不改写历史 Snapshot", () => {
   const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
   legacy.schemaVersion = 15;

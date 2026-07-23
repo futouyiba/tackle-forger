@@ -3164,7 +3164,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           state={state}
           actionAvailabilities={user.actionAvailability}
           identity={{
-            workspaceId: user.tenantKey ?? "",
+            workspaceId: state.workspaceId ?? "",
             userId: user.openId ?? "",
           }}
           notify={notify}
@@ -3202,7 +3202,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         <SeriesGanttWorkbench
           key={`series-gantt:${routeNonce}`}
           state={state}
-          workspaceId={user.tenantKey || "workspace"}
+          workspaceId={state.workspaceId ?? ""}
           actionAvailabilities={user.actionAvailability}
           actor={user.name}
           mutate={mutate}
@@ -3248,7 +3248,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   ) ? requestedV3Series : undefined;
   const topBreadcrumbs = page === "v3flow" && v3Series
     ? buildProductBreadcrumbs({
-      workspaceId: user.tenantKey || "workspace",
+      workspaceId: state.workspaceId ?? "",
       collection: v3Series.collectionId
         ? state.collections.find((entry) => entry.id === v3Series.collectionId)
         : undefined,

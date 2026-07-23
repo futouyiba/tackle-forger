@@ -167,7 +167,7 @@ export async function POST(request: NextRequest) {
       admissionCoordinator: store.admissionCoordinator(),
     });
     const result = await connector.assess({
-      workspaceId: "default",
+      workspaceId: current.state.workspaceId ?? "",
       actorStableId,
       buildEnvelope: (model) => {
         requestProjection = buildWorkspaceAssessmentRequestProjection({

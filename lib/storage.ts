@@ -35,6 +35,23 @@ type LoadedBlobDocument = {
 const WORKSPACE_BLOB_PATH = "workspace/main.json";
 let runtimePromise: Promise<StorageEnv> | null = null;
 
+/** Deployment-owned identity; never infer it from a mutable workspace payload. */
+export function deploymentWorkspaceId(): string | undefined {
+  const explicit = process.env.TACKLE_FORGER_WORKSPACE_ID?.trim();
+  if (explicit) return explicit;
+  const tenantKey = process.env.FEISHU_TENANT_KEY?.trim();
+  return tenantKey ? `workspace:feishu:${tenantKey}` : undefined;
+}
+
+export function bindDeploymentWorkspaceIdentity(state: WorkspaceState): WorkspaceState {
+  const deploymentId = deploymentWorkspaceId();
+  if (!deploymentId) return state;
+  if (state.workspaceId && state.workspaceId !== deploymentId) {
+    throw new Error("WORKSPACE_IDENTITY_MISMATCH：持久化工作区身份与部署/租户身份不一致。");
+  }
+  return state.workspaceId === deploymentId ? state : { ...state, workspaceId: deploymentId };
+}
+
 function hasVercelBlob() {
   return typeof process !== "undefined" && Boolean(process.env.BLOB_READ_WRITE_TOKEN);
 }
@@ -105,7 +122,7 @@ async function readBlobDocument(): Promise<LoadedBlobDocument | null> {
   if (!result || result.statusCode !== 200 || !result.stream) return null;
   const text = await new Response(result.stream).text();
   const document = JSON.parse(text) as BlobWorkspaceDocument;
-  document.state = ensureWorkflowFields(document.state);
+  document.state = bindDeploymentWorkspaceIdentity(ensureWorkflowFields(document.state));
   document.revisions = (document.revisions ?? []).map((entry) => ({
     ...entry,
     state: ensureWorkflowFields(entry.state),
@@ -157,7 +174,7 @@ export async function loadWorkspaceState(): Promise<{
   if (hasVercelBlob()) {
     const current = await ensureBlobDocument();
     return {
-      state: ensureWorkflowFields(current.document.state),
+    state: bindDeploymentWorkspaceIdentity(ensureWorkflowFields(current.document.state)),
       revision: current.document.revision,
     };
   }
@@ -168,7 +185,7 @@ export async function loadWorkspaceState(): Promise<{
     assertEphemeralStorageAllowed("读取");
     const document = ensureLocalWorkspaceDocument();
     return {
-      state: ensureWorkflowFields(structuredClone(document.state)),
+      state: bindDeploymentWorkspaceIdentity(ensureWorkflowFields(structuredClone(document.state))),
       revision: document.revision,
     };
   }
@@ -180,12 +197,12 @@ export async function loadWorkspaceState(): Promise<{
 
   if (row) {
     return {
-      state: ensureWorkflowFields(JSON.parse(row.state_json) as WorkspaceState),
+      state: bindDeploymentWorkspaceIdentity(ensureWorkflowFields(JSON.parse(row.state_json) as WorkspaceState)),
       revision: row.revision,
     };
   }
 
-  const state = createSeedState();
+  const state = bindDeploymentWorkspaceIdentity(createSeedState());
   const now = new Date().toISOString();
   const json = JSON.stringify(state);
   await db.batch([
@@ -226,7 +243,7 @@ export async function saveWorkspaceState(input: {
       message: input.message,
       createdAt,
     };
-    const savedState = ensureWorkflowFields(structuredClone(input.state));
+    const savedState = bindDeploymentWorkspaceIdentity(ensureWorkflowFields(structuredClone(input.state)));
     savedState.revisions = [
       info,
       ...(savedState.revisions ?? []).filter((entry) => entry.revision !== revision),
@@ -278,7 +295,7 @@ export async function saveWorkspaceState(input: {
       message: input.message,
       createdAt,
     };
-    const savedState = ensureWorkflowFields(structuredClone(input.state));
+    const savedState = bindDeploymentWorkspaceIdentity(ensureWorkflowFields(structuredClone(input.state)));
     savedState.revisions = [
       info,
       ...(savedState.revisions ?? []).filter((entry) => entry.revision !== revision),
@@ -305,7 +322,7 @@ export async function saveWorkspaceState(input: {
 
   const revision = input.baseRevision + 1;
   const now = new Date().toISOString();
-  const savedState = ensureWorkflowFields(structuredClone(input.state));
+  const savedState = bindDeploymentWorkspaceIdentity(ensureWorkflowFields(structuredClone(input.state)));
   const json = JSON.stringify(savedState);
   const updated = await db
     .prepare(

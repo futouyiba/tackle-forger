@@ -3,7 +3,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { listRevisions, loadRevision, loadWorkspaceState, saveWorkspaceState } from "../lib/storage";
+import { bindDeploymentWorkspaceIdentity, listRevisions, loadRevision, loadWorkspaceState, saveWorkspaceState } from "../lib/storage";
+import { createSeedState } from "../lib/seed";
 import { closeSqliteStorage } from "../lib/sqlite-storage";
 
 test("SQLite 保存可跨读取、冲突受保护且历史版本冻结", async (t) => {
@@ -66,6 +67,24 @@ test("生产环境没有持久化后端时拒绝进程内临时存储", async (t
     loadWorkspaceState(),
     /生产环境未配置持久化存储/,
   );
+});
+
+test("两个 legacy 工作区只可由各自部署身份绑定，缺失身份不猜测且错配 fail-closed", () => {
+  const prior = process.env.TACKLE_FORGER_WORKSPACE_ID;
+  const legacyA = createSeedState(); delete legacyA.workspaceId;
+  const legacyB = createSeedState(); delete legacyB.workspaceId;
+  delete process.env.TACKLE_FORGER_WORKSPACE_ID;
+  assert.equal(bindDeploymentWorkspaceIdentity(legacyA).workspaceId, undefined);
+  process.env.TACKLE_FORGER_WORKSPACE_ID = "workspace:tenant-a";
+  const boundA = bindDeploymentWorkspaceIdentity(legacyA);
+  process.env.TACKLE_FORGER_WORKSPACE_ID = "workspace:tenant-b";
+  const boundB = bindDeploymentWorkspaceIdentity(legacyB);
+  assert.equal(boundA.workspaceId, "workspace:tenant-a");
+  assert.equal(boundB.workspaceId, "workspace:tenant-b");
+  assert.notEqual(boundA.workspaceId, boundB.workspaceId);
+  assert.throws(() => bindDeploymentWorkspaceIdentity(boundA), /WORKSPACE_IDENTITY_MISMATCH/);
+  if (prior === undefined) delete process.env.TACKLE_FORGER_WORKSPACE_ID;
+  else process.env.TACKLE_FORGER_WORKSPACE_ID = prior;
 });
 
 test("SQLite 并发写入同一基线 revision 时只有一个成功，其余进入冲突", async (t) => {

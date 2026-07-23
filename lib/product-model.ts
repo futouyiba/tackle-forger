@@ -81,13 +81,12 @@ export function validateSeriesInvariants(
     issue(issues, "warning", "SERIES_STRUCTURAL_SOURCE_MISSING", "Series 部位已指定，但当前投影缺少可追踪的结构标杆基础值。");
   }
   const specifications = seriesTargetPullSpecifications(input.series);
-  const activeSkuIds = new Set(specifications.map((entry) => entry.skuId));
-  // 历史或已 DEPRECATED 的 SKU 仍保留给旧 Model / Snapshot 追溯，
-  // 但不再参与当前 Series 离散规格的唯一性与完整性校验。
+  // 只豁免明确 DEPRECATED 的历史抽屉。仍处于活动生命周期但意外
+  // 掉出规格表的 SKU 必须继续进入校验并报告 SERIES_WEIGHT_UNDECLARED。
   const skus = input.skus
     .filter(
       (sku) =>
-        sku.seriesId === input.series.id && activeSkuIds.has(sku.id),
+        sku.seriesId === input.series.id && sku.status !== "superseded",
     )
     .sort((left, right) => left.targetPullKg - right.targetPullKg);
   const models = input.models.filter((model) =>

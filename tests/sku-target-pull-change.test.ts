@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { buildSeriesGanttProjection } from "../lib/interaction-contracts";
 import { validateSeriesInvariants } from "../lib/product-model";
 import { deterministicHash } from "../lib/rule-kernel";
 import { createSeedState } from "../lib/seed";
 import {
   changeSkuTargetPull,
+  previewSkuTargetPullChange,
   previewSkuTargetPullProjectionMatch,
   SkuTargetPullChangeError,
 } from "../lib/sku-target-pull-change";
@@ -20,16 +22,20 @@ function commandFor(input: {
   deprecateOriginal?: boolean;
 }) {
   const sku = input.state.skuDrawers.find((entry) => entry.id === input.skuId)!;
+  const preview = previewSkuTargetPullChange({
+    state: input.state,
+    skuId: sku.id,
+    expectedRevision: sku.revision,
+    targetPullKg: input.targetPullKg,
+  });
   return {
     skuId: sku.id,
     expectedRevision: sku.revision,
     targetPullKg: input.targetPullKg,
-    projectionMatch: previewSkuTargetPullProjectionMatch({
-      state: input.state,
-      skuId: sku.id,
-      expectedRevision: sku.revision,
-      targetPullKg: input.targetPullKg,
-    }),
+    projectionMatch: preview.projectionMatch,
+    expectedMode: preview.mode,
+    publishedDescendantFingerprint:
+      preview.publishedDescendantFingerprint,
     replacementSkuId: input.replacementSkuId,
     deprecateOriginal: input.deprecateOriginal,
     idempotencyKey: input.idempotencyKey,
@@ -102,6 +108,7 @@ test("存在已发布后代时创建新 SKU、可 DEPRECATED 旧 SKU 且冻结�
   assert.equal(result.originalSku.id, sku.id);
   assert.equal(result.originalSku.revision, sku.revision + 1);
   assert.equal(result.originalSku.status, "superseded");
+  assert.equal(result.originalSku.seriesId, sku.seriesId);
   assert.deepEqual(result.originalSku.projectionMatch, originalMatch);
   assert.equal(JSON.stringify(result.state.configurationSnapshots), snapshotBytes);
   assert.equal(deterministicHash(result.state.configurationSnapshots), snapshotHash);
@@ -138,6 +145,19 @@ test("存在已发布后代时创建新 SKU、可 DEPRECATED 旧 SKU 且冻结�
     ),
     false,
   );
+  const gantt = buildSeriesGanttProjection({
+    series: result.state.seriesDefinitions,
+    skus: result.state.skuDrawers,
+    models: result.state.purchasableModels,
+  }).find((entry) => entry.seriesId === sku.seriesId)!;
+  assert.equal(
+    gantt.skuNodes.some((entry) => entry.skuId === sku.id),
+    false,
+  );
+  assert.equal(
+    gantt.skuNodes.some((entry) => entry.skuId === result.sku.id),
+    true,
+  );
 });
 
 test("已发布后代分支可保留旧 SKU 生命周期状态，但仍不会重绑历史对象", () => {
@@ -166,12 +186,19 @@ test("幂等重试恢复同一结果，复用幂等键的不同输入被拒绝",
   const command = commandFor({
     state,
     skuId: "sku:qinglu-obstacle-1.8",
-    targetPullKg: 2.2,
+    targetPullKg: 2.1,
     idempotencyKey: "change:idempotent",
   });
   const first = changeSkuTargetPull(state, command);
-  const auditCount = first.state.governanceAuditLog.length;
-  const retried = changeSkuTargetPull(first.state, {
+  const laterCommand = commandFor({
+    state: first.state,
+    skuId: first.sku.id,
+    targetPullKg: 2.2,
+    idempotencyKey: "change:later",
+  });
+  const later = changeSkuTargetPull(first.state, laterCommand);
+  const auditCount = later.state.governanceAuditLog.length;
+  const retried = changeSkuTargetPull(later.state, {
     ...command,
     occurredAt: "2026-07-23T05:00:00.000Z",
   });
@@ -179,15 +206,102 @@ test("幂等重试恢复同一结果，复用幂等键的不同输入被拒绝",
   assert.equal(retried.idempotent, true);
   assert.equal(retried.sku.id, first.sku.id);
   assert.equal(retried.sku.revision, first.sku.revision);
+  assert.equal(retried.sku.targetPullKg, first.sku.targetPullKg);
+  assert.equal(retried.series.revision, first.series.revision);
+  assert.deepEqual(retried.sku, first.sku);
+  assert.deepEqual(retried.series, first.series);
   assert.equal(retried.state.governanceAuditLog.length, auditCount);
   assert.throws(
-    () => changeSkuTargetPull(first.state, {
+    () => changeSkuTargetPull(later.state, {
       ...command,
       targetPullKg: 2.3,
     }),
     (error) =>
       error instanceof SkuTargetPullChangeError &&
       error.code === "IDEMPOTENCY_CONFLICT",
+  );
+});
+
+test("预览后已发布后代集合变化时拒绝静默切换冻结分支", () => {
+  const state = createSeedState();
+  const sku = state.skuDrawers.find(
+    (entry) => entry.id === "sku:qinglu-obstacle-1.8",
+  )!;
+  const command = commandFor({
+    state,
+    skuId: sku.id,
+    targetPullKg: 2.3,
+    idempotencyKey: "change:preview-drift",
+    replacementSkuId: "sku:qinglu-obstacle-2.3",
+    deprecateOriginal: true,
+  });
+  assert.equal(command.expectedMode, "SAME_SKU_NEW_REVISION");
+
+  const drifted = structuredClone(state);
+  drifted.configurationSnapshots.push({
+    ...structuredClone(state.configurationSnapshots[0]),
+    id: "snapshot:concurrent-sku18",
+    modelId: sku.modelIds[0],
+    skuRevision: sku.revision,
+    contentHash: "concurrent-snapshot-content",
+  });
+
+  assert.throws(
+    () => changeSkuTargetPull(drifted, command),
+    (error) =>
+      error instanceof SkuTargetPullChangeError &&
+      error.code === "PREVIEW_STALE",
+  );
+  assert.equal(
+    drifted.skuDrawers.find((entry) => entry.id === sku.id)?.status,
+    sku.status,
+  );
+  assert.equal(
+    drifted.skuDrawers.some(
+      (entry) => entry.id === "sku:qinglu-obstacle-2.3",
+    ),
+    false,
+  );
+});
+
+test("Series 校验忽略明确 DEPRECATED 历史 SKU，但报告活动未声明 SKU", () => {
+  const state = createSeedState();
+  const series = state.seriesDefinitions[0];
+  const source = state.skuDrawers[0];
+  const activeUndeclared = {
+    ...structuredClone(source),
+    id: "sku:active-undeclared",
+    targetPullKg: 9.9,
+    modelIds: [],
+    defaultModelId: undefined,
+    status: "draft" as const,
+  };
+  const deprecatedHistory = {
+    ...structuredClone(source),
+    id: "sku:deprecated-history",
+    targetPullKg: 10.1,
+    modelIds: [],
+    defaultModelId: undefined,
+    status: "superseded" as const,
+  };
+  const issues = validateSeriesInvariants({
+    series,
+    skus: [...state.skuDrawers, activeUndeclared, deprecatedHistory],
+    models: state.purchasableModels,
+    projections: state.derivedProjections,
+  });
+
+  assert.equal(
+    issues.some(
+      (issue) =>
+        issue.code === "SERIES_WEIGHT_UNDECLARED" &&
+        issue.message.includes(activeUndeclared.id),
+    ),
+    true,
+  );
+  assert.equal(
+    issues.some((issue) => issue.message.includes(deprecatedHistory.id)),
+    false,
   );
 });
 

@@ -34,6 +34,7 @@ export type SkuTargetPullChangeErrorCode =
   | "SERIES_SPECIFICATION_MISSING"
   | "PROJECTION_MATCH_REQUIRED"
   | "PROJECTION_MATCH_STALE"
+  | "PREVIEW_STALE"
   | "REPLACEMENT_SKU_ID_REQUIRED"
   | "REPLACEMENT_SKU_ID_CONFLICT";
 
@@ -52,6 +53,8 @@ export interface ChangeSkuTargetPullCommand {
   expectedRevision: number;
   targetPullKg: number;
   projectionMatch: ProjectionMatch;
+  expectedMode: SkuTargetPullChangeMode;
+  publishedDescendantFingerprint: string;
   replacementSkuId?: string;
   deprecateOriginal?: boolean;
   idempotencyKey: string;
@@ -69,20 +72,46 @@ export interface ChangeSkuTargetPullResult {
   idempotent: boolean;
 }
 
-function publishedDescendantSnapshotIds(
+export interface SkuTargetPullChangePreview {
+  projectionMatch: ProjectionMatch;
+  mode: SkuTargetPullChangeMode;
+  publishedSnapshotIds: string[];
+  publishedDescendantFingerprint: string;
+}
+
+interface PublishedDescendantEvidence {
+  snapshotIds: string[];
+  fingerprint: string;
+}
+
+function sha256Stable(value: unknown): string {
+  return createHash("sha256").update(stableStringify(value)).digest("hex");
+}
+
+function publishedDescendantEvidence(
   state: WorkspaceState,
   sku: SkuDrawer,
-): string[] {
+): PublishedDescendantEvidence {
   const modelIds = new Set([
     ...sku.modelIds,
     ...state.purchasableModels
       .filter((model) => model.skuId === sku.id)
       .map((model) => model.id),
   ]);
-  return state.configurationSnapshots
+  const snapshots = state.configurationSnapshots
     .filter((snapshot) => modelIds.has(snapshot.modelId))
-    .map((snapshot) => snapshot.id)
-    .sort();
+    .map((snapshot) => ({
+      id: snapshot.id,
+      modelId: snapshot.modelId,
+      modelRevision: snapshot.modelRevision,
+      skuRevision: snapshot.skuRevision,
+      contentHash: snapshot.contentHash,
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id));
+  return {
+    snapshotIds: snapshots.map((snapshot) => snapshot.id),
+    fingerprint: sha256Stable(snapshots),
+  };
 }
 
 function intensityFor(
@@ -203,53 +232,103 @@ export function previewSkuTargetPullProjectionMatch(input: {
   }
 }
 
+/**
+ * 返回需要被用户确认的完整冻结分支证据。写命令必须原样带回 mode 与
+ * publishedDescendantFingerprint；期间后代集合变化时 fail closed。
+ */
+export function previewSkuTargetPullChange(input: {
+  state: WorkspaceState;
+  skuId: string;
+  expectedRevision: number;
+  targetPullKg: number;
+}): SkuTargetPullChangePreview {
+  const sku = input.state.skuDrawers.find((entry) => entry.id === input.skuId);
+  if (!sku) {
+    throw new SkuTargetPullChangeError("SKU_NOT_FOUND", "指定 SKU 不存在。");
+  }
+  const evidence = publishedDescendantEvidence(input.state, sku);
+  return {
+    projectionMatch: previewSkuTargetPullProjectionMatch(input),
+    mode: evidence.snapshotIds.length
+      ? "REPLACEMENT_SKU"
+      : "SAME_SKU_NEW_REVISION",
+    publishedSnapshotIds: evidence.snapshotIds,
+    publishedDescendantFingerprint: evidence.fingerprint,
+  };
+}
+
 function commandInputHash(command: ChangeSkuTargetPullCommand): string {
-  return createHash("sha256").update(stableStringify({
+  return sha256Stable({
     skuId: command.skuId,
     expectedRevision: command.expectedRevision,
     targetPullKg: command.targetPullKg,
     projectionMatch: command.projectionMatch,
+    expectedMode: command.expectedMode,
+    publishedDescendantFingerprint:
+      command.publishedDescendantFingerprint,
     replacementSkuId: command.replacementSkuId?.trim() || null,
     deprecateOriginal: Boolean(command.deprecateOriginal),
-  })).digest("hex");
+  });
+}
+
+interface FrozenSkuTargetPullChangeResult {
+  kind: "sku-target-pull-change-result/v1";
+  sku: SkuDrawer;
+  originalSku: SkuDrawer;
+  series: SeriesDefinition;
+  mode: SkuTargetPullChangeMode;
+  publishedSnapshotIds: string[];
+}
+
+function frozenResultFrom(
+  record: WorkspaceState["commandIdempotencyRecords"][number],
+): FrozenSkuTargetPullChangeResult | undefined {
+  const payload = record.resultPayload;
+  if (
+    !payload ||
+    payload.kind !== "sku-target-pull-change-result/v1" ||
+    !record.resultPayloadHash ||
+    sha256Stable(payload) !== record.resultPayloadHash ||
+    !payload.sku ||
+    typeof payload.sku !== "object" ||
+    !payload.originalSku ||
+    typeof payload.originalSku !== "object" ||
+    !payload.series ||
+    typeof payload.series !== "object" ||
+    (payload.mode !== "SAME_SKU_NEW_REVISION" &&
+      payload.mode !== "REPLACEMENT_SKU") ||
+    !Array.isArray(payload.publishedSnapshotIds)
+  ) {
+    return undefined;
+  }
+  const frozen = payload as unknown as FrozenSkuTargetPullChangeResult;
+  if (
+    frozen.sku.id !== record.resultRef ||
+    frozen.publishedSnapshotIds.some((entry) => typeof entry !== "string")
+  ) {
+    return undefined;
+  }
+  return structuredClone(frozen);
 }
 
 function recoverIdempotentResult(
   state: WorkspaceState,
-  command: ChangeSkuTargetPullCommand,
-  resultRef: string,
+  record: WorkspaceState["commandIdempotencyRecords"][number],
 ): ChangeSkuTargetPullResult {
-  const sku = state.skuDrawers.find((entry) => entry.id === resultRef);
-  const originalSku = state.skuDrawers.find(
-    (entry) => entry.id === command.skuId,
-  );
-  if (!sku || !originalSku) {
+  const frozen = frozenResultFrom(record);
+  if (!frozen) {
     throw new SkuTargetPullChangeError(
       "IDEMPOTENCY_RESULT_MISSING",
-      "幂等记录存在，但原变更结果不可恢复。",
-    );
-  }
-  const series = state.seriesDefinitions.find(
-    (entry) => entry.id === sku.seriesId,
-  );
-  if (!series) {
-    throw new SkuTargetPullChangeError(
-      "IDEMPOTENCY_RESULT_MISSING",
-      "幂等记录存在，但结果所属 Series 不可恢复。",
+      "幂等记录存在，但首次成功响应缺失或已损坏，不能读取当前 revision 代替。",
     );
   }
   return {
     state,
-    sku,
-    originalSku,
-    series,
-    mode: resultRef === command.skuId
-      ? "SAME_SKU_NEW_REVISION"
-      : "REPLACEMENT_SKU",
-    publishedSnapshotIds: publishedDescendantSnapshotIds(
-      state,
-      originalSku,
-    ),
+    sku: frozen.sku,
+    originalSku: frozen.originalSku,
+    series: frozen.series,
+    mode: frozen.mode,
+    publishedSnapshotIds: frozen.publishedSnapshotIds,
     idempotent: true,
   };
 }
@@ -292,7 +371,7 @@ export function changeSkuTargetPull(
         "同一幂等键不能用于不同的 SKU 拉力变更输入。",
       );
     }
-    return recoverIdempotentResult(state, command, prior.resultRef);
+    return recoverIdempotentResult(state, prior);
   }
 
   const original = state.skuDrawers.find(
@@ -373,10 +452,21 @@ export function changeSkuTargetPull(
   }
 
   const snapshotsBefore = deterministicHash(state.configurationSnapshots);
-  const publishedSnapshotIds = publishedDescendantSnapshotIds(state, original);
+  const descendantEvidence = publishedDescendantEvidence(state, original);
+  const publishedSnapshotIds = descendantEvidence.snapshotIds;
   const mode: SkuTargetPullChangeMode = publishedSnapshotIds.length
     ? "REPLACEMENT_SKU"
     : "SAME_SKU_NEW_REVISION";
+  if (
+    command.expectedMode !== mode ||
+    command.publishedDescendantFingerprint !==
+      descendantEvidence.fingerprint
+  ) {
+    throw new SkuTargetPullChangeError(
+      "PREVIEW_STALE",
+      "已发布后代集合在预览后发生变化，不能静默切换冻结分支；请重新预览并确认。",
+    );
+  }
   const next = structuredClone(state);
   const specifications = orderSpecifications(
     series.targetPullSpecifications.map((entry) =>
@@ -482,10 +572,20 @@ export function changeSkuTargetPull(
   ) {
     next.projectionMatches.push(structuredClone(command.projectionMatch));
   }
+  const frozenResultPayload: Record<string, unknown> = {
+    kind: "sku-target-pull-change-result/v1",
+    sku: structuredClone(resultSku),
+    originalSku: structuredClone(resultingOriginal),
+    series: structuredClone(nextSeries),
+    mode,
+    publishedSnapshotIds: [...publishedSnapshotIds],
+  };
   next.commandIdempotencyRecords.push({
     key: idempotencyKey,
     inputHash,
     resultRef: resultSku.id,
+    resultPayload: frozenResultPayload,
+    resultPayloadHash: sha256Stable(frozenResultPayload),
   });
   next.governanceAuditLog.push({
     id: `audit:sku-target-pull:${deterministicHash({

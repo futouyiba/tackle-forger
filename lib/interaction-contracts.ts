@@ -769,6 +769,7 @@ export function buildSeriesGanttProjection(input: {
       const skuNodes = input.skus
         .filter((sku) =>
           sku.seriesId === series.id
+          && sku.status !== "superseded"
           && isProductItemPartEnabled(sku.projectionMatch.itemPartId)
           && sku.projectionMatch.itemPartId === itemPartId)
         .sort((left, right) => left.targetPullKg - right.targetPullKg || left.id.localeCompare(right.id))

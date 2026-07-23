@@ -809,7 +809,10 @@ export function SeriesGanttWorkbenchV3({
     ?? state.seriesDefinitions.find((series) => series.id === blocks[0]?.seriesId);
   const selectedBlock = blocks.find((block) => block.seriesId === selectedSeries?.id);
   const seriesSkus = selectedSeries
-    ? state.skuDrawers.filter((sku) => sku.seriesId === selectedSeries.id)
+    ? state.skuDrawers.filter(
+      (sku) =>
+        sku.seriesId === selectedSeries.id && sku.status !== "superseded",
+    )
       .sort((left, right) => left.targetPullKg - right.targetPullKg || left.id.localeCompare(right.id))
     : [];
   const selectedSku = seriesSkus.find((sku) => sku.id === selectedSkuId) ?? seriesSkus[0];
@@ -1079,26 +1082,28 @@ export function SeriesGanttWorkbenchV3({
         },
       );
       const previewPayload = (await previewResponse.json().catch(() => null)) as
-        | { projectionMatch?: ProjectionMatch; error?: string }
+        | {
+          projectionMatch?: ProjectionMatch;
+          mode?: "SAME_SKU_NEW_REVISION" | "REPLACEMENT_SKU";
+          publishedDescendantFingerprint?: string;
+          error?: string;
+        }
         | null;
-      if (!previewResponse.ok || !previewPayload?.projectionMatch) {
+      if (
+        !previewResponse.ok ||
+        !previewPayload?.projectionMatch ||
+        !previewPayload.mode ||
+        !previewPayload.publishedDescendantFingerprint
+      ) {
         notify(previewPayload?.error ?? "无法预览新的结构标杆匹配。");
         return;
       }
       const match = previewPayload.projectionMatch;
-      const hasPublishedDescendant = state.configurationSnapshots.some(
-        (snapshot) =>
-          state.purchasableModels.some(
-            (model) =>
-              model.id === snapshot.modelId &&
-              model.skuId === selectedSku.id,
-          ),
-      );
       const confirmed = window.confirm(
         [
           `确认把 ${selectedSku.id} 从 ${selectedSku.targetPullKg} kgf 改为 ${targetPullKg} kgf？`,
           `显式匹配：${match.projectionId}（结构拉力 ${match.matchedStructuralPullKg} kgf，规则 ${match.ruleSetVersion}）。`,
-          hasPublishedDescendant
+          previewPayload.mode === "REPLACEMENT_SKU"
             ? "检测到已发布后代：系统会创建新 SKU，并将旧 SKU 标记为 DEPRECATED；旧快照不会改写。"
             : "未检测到已发布后代：系统会保留 skuId 并创建新 revision。",
         ].join("\n\n"),
@@ -1114,6 +1119,9 @@ export function SeriesGanttWorkbenchV3({
           expectedRevision: selectedSku.revision,
           targetPullKg,
           projectionMatch: match,
+          expectedMode: previewPayload.mode,
+          publishedDescendantFingerprint:
+            previewPayload.publishedDescendantFingerprint,
           replacementSkuId,
           deprecateOriginal: true,
           idempotencyKey:

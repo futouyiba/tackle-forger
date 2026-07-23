@@ -16,6 +16,8 @@ interface ChangeRequest {
   expectedRevision?: unknown;
   targetPullKg?: unknown;
   projectionMatch?: unknown;
+  expectedMode?: unknown;
+  publishedDescendantFingerprint?: unknown;
   replacementSkuId?: unknown;
   deprecateOriginal?: unknown;
   idempotencyKey?: unknown;
@@ -27,6 +29,7 @@ function errorStatus(error: SkuTargetPullChangeError): number {
     error.code === "REVISION_CONFLICT" ||
     error.code === "IDEMPOTENCY_CONFLICT" ||
     error.code === "IDEMPOTENCY_RESULT_MISSING" ||
+    error.code === "PREVIEW_STALE" ||
     error.code === "TARGET_PULL_DUPLICATE" ||
     error.code === "REPLACEMENT_SKU_ID_CONFLICT"
   ) {
@@ -65,6 +68,9 @@ export async function POST(request: NextRequest) {
     typeof body.targetPullKg !== "number" ||
     !body.projectionMatch ||
     typeof body.projectionMatch !== "object" ||
+    (body.expectedMode !== "SAME_SKU_NEW_REVISION" &&
+      body.expectedMode !== "REPLACEMENT_SKU") ||
+    typeof body.publishedDescendantFingerprint !== "string" ||
     typeof body.idempotencyKey !== "string" ||
     (body.replacementSkuId !== undefined &&
       typeof body.replacementSkuId !== "string") ||
@@ -74,7 +80,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(
       {
         error:
-          "skuId、expectedRevision、targetPullKg、projectionMatch 或 idempotencyKey 字段无效。",
+          "skuId、expectedRevision、targetPullKg、projectionMatch、expectedMode、publishedDescendantFingerprint 或 idempotencyKey 字段无效。",
       },
       { status: 400 },
     );
@@ -88,6 +94,9 @@ export async function POST(request: NextRequest) {
       expectedRevision: body.expectedRevision,
       targetPullKg: body.targetPullKg,
       projectionMatch: body.projectionMatch as ProjectionMatch,
+      expectedMode: body.expectedMode,
+      publishedDescendantFingerprint:
+        body.publishedDescendantFingerprint,
       replacementSkuId: body.replacementSkuId,
       deprecateOriginal: body.deprecateOriginal,
       idempotencyKey: body.idempotencyKey,
@@ -118,6 +127,9 @@ export async function POST(request: NextRequest) {
         expectedRevision: body.expectedRevision,
         targetPullKg: body.targetPullKg,
         projectionMatch: body.projectionMatch as ProjectionMatch,
+        expectedMode: body.expectedMode,
+        publishedDescendantFingerprint:
+          body.publishedDescendantFingerprint,
         replacementSkuId: body.replacementSkuId,
         deprecateOriginal: body.deprecateOriginal,
         idempotencyKey: body.idempotencyKey,

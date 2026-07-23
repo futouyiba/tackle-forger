@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { stableAuditActor } from "@/lib/api-command-boundaries";
 import { requestUser } from "@/lib/auth";
 import {
-  previewSkuTargetPullProjectionMatch,
+  previewSkuTargetPullChange,
   SkuTargetPullChangeError,
 } from "@/lib/sku-target-pull-change";
 import { loadWorkspaceState } from "@/lib/storage";
@@ -57,14 +57,14 @@ export async function POST(request: NextRequest) {
   }
   const current = await loadWorkspaceState();
   try {
-    const projectionMatch = previewSkuTargetPullProjectionMatch({
+    const preview = previewSkuTargetPullChange({
       state: current.state,
       skuId: body.skuId,
       expectedRevision: body.expectedRevision,
       targetPullKg: body.targetPullKg,
     });
     return NextResponse.json({
-      projectionMatch,
+      ...preview,
       revision: current.revision,
       actor: stableAuditActor(user),
     });

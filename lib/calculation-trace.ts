@@ -14,7 +14,10 @@ import type { PricingTraceEntry, PricingTrialResult } from "./pricing-policy";
 
 export const CALCULATION_TRACE_SCHEMA_VERSION = "calculation-trace/v1" as const;
 export const CALCULATION_TRACE_HASH_CONTRACT_VERSION = "json-lossless-fnv1a/v2" as const;
-export const CALCULATION_TRACE_REPLAY_CONTRACT_VERSION = "strict-contiguous/v1" as const;
+export const CALCULATION_TRACE_REPLAY_CONTRACT_VERSION = "strict-contiguous/v2" as const;
+export const CALCULATION_TRACE_ABSENT_VALUE = {
+  $calculationTraceValue: "absent/v1",
+} as const;
 
 export type CalculationTraceLayer =
   | "weight_template"
@@ -208,6 +211,20 @@ function sameValue(left: unknown, right: unknown): boolean {
   return deterministicHash(left) === deterministicHash(right);
 }
 
+export function isCalculationTraceAbsentValue(value: unknown): boolean {
+  return (
+    typeof value === "object"
+    && value !== null
+    && !Array.isArray(value)
+    && Object.keys(value).length === 1
+    && (value as Record<string, unknown>).$calculationTraceValue === "absent/v1"
+  );
+}
+
+function absentValue(): typeof CALCULATION_TRACE_ABSENT_VALUE {
+  return { ...CALCULATION_TRACE_ABSENT_VALUE };
+}
+
 function entityKey(ref: EntityRef): string {
   return [ref.workspaceId, ref.entityType, ref.entityId, ref.revisionId].join("\u001f");
 }
@@ -232,7 +249,7 @@ function applyOperation(
 ): unknown {
   if (operation === "no_effect") return before;
   if (operation === "base" || operation === "set") return operand;
-  if (operation === "clear") return null;
+  if (operation === "clear") return absentValue();
   if (typeof before !== "number" || typeof operand !== "number") {
     throw new Error(`${operation} 只接受数字。`);
   }
@@ -341,18 +358,19 @@ export function replayCalculationTrace(input: {
     }
     const key = stateKey(entry.subjectRef, entry.parameterKey);
     const current = values.get(key);
-    if (!current) {
+    if (!current && !isCalculationTraceAbsentValue(entry.before)) {
       throw new CalculationTraceReplayError(`初始状态缺失：${entry.parameterKey}。`, entry);
     }
+    const currentValue = current ? current.value : absentValue();
     if (
-      !sameValue(current.value, entry.before)
-      || valueHash(entry.subjectRef, entry.parameterKey, current.value) !== entry.inputHash
+      !sameValue(currentValue, entry.before)
+      || valueHash(entry.subjectRef, entry.parameterKey, currentValue) !== entry.inputHash
     ) {
       throw new CalculationTraceReplayError(`before 或 inputHash 不一致：${entry.parameterKey}。`, entry);
     }
     let after: unknown;
     try {
-      after = applyOperation(current.value, entry.operation, entry.operand);
+      after = applyOperation(currentValue, entry.operation, entry.operand);
     } catch (error) {
       throw new CalculationTraceReplayError(
         error instanceof Error ? error.message : `operation 无法重放：${entry.parameterKey}。`,
@@ -365,11 +383,15 @@ export function replayCalculationTrace(input: {
     ) {
       throw new CalculationTraceReplayError(`after 或 outputHash 不一致：${entry.parameterKey}。`, entry);
     }
-    values.set(key, {
-      subjectRef: structuredClone(entry.subjectRef),
-      parameterKey: entry.parameterKey,
-      value: structuredClone(after),
-    });
+    if (isCalculationTraceAbsentValue(after)) {
+      values.delete(key);
+    } else {
+      values.set(key, {
+        subjectRef: structuredClone(entry.subjectRef),
+        parameterKey: entry.parameterKey,
+        value: structuredClone(after),
+      });
+    }
   });
   const finalState = stateArray(values);
   return {
@@ -408,6 +430,7 @@ function inferInitialState(entries: CalculationTraceEntry[]): CalculationTraceSt
     const key = stateKey(entry.subjectRef, entry.parameterKey);
     if (seen.has(key)) continue;
     seen.add(key);
+    if (isCalculationTraceAbsentValue(entry.before)) continue;
     initial.set(key, {
       subjectRef: structuredClone(entry.subjectRef),
       parameterKey: entry.parameterKey,
@@ -510,17 +533,23 @@ export function assertCalculationTraceMatchesFinalPanel(input: {
       .map((entry) => [entry.parameterKey, entry.value]),
   );
   for (const parameterKey of [...expectedKeys].sort()) {
-    if (!Object.hasOwn(input.finalPanelValues, parameterKey)) {
+    const panelHasValue = Object.hasOwn(input.finalPanelValues, parameterKey);
+    const traceHasValue = finalValues.has(parameterKey)
+      && !isCalculationTraceAbsentValue(finalValues.get(parameterKey));
+    if (!panelHasValue && traceHasValue) {
       throw new CalculationTraceReplayError(
         `finalPanelValues 缺少 Trace 面板参数：${parameterKey}。`,
       );
     }
-    if (!finalValues.has(parameterKey)) {
+    if (panelHasValue && !traceHasValue) {
       throw new CalculationTraceReplayError(
         `canonical Trace 未覆盖最终面板参数：${parameterKey}。`,
       );
     }
-    if (!sameValue(finalValues.get(parameterKey), input.finalPanelValues[parameterKey])) {
+    if (
+      panelHasValue
+      && !sameValue(finalValues.get(parameterKey), input.finalPanelValues[parameterKey])
+    ) {
       throw new CalculationTraceReplayError(
         `canonical Trace 终态与 finalPanelValues 不一致：${parameterKey}。`,
       );
@@ -826,11 +855,11 @@ export function adaptPatchTraceToCanonical(input: {
   return input.trace.map((entry) => {
     const parameterKey = entry.path.replace(/^values\./, "");
     const definition = definitions.get(parameterKey);
-    const removedValue = entry.operation === "remove" && entry.after === undefined;
-    const canonicalAfter = removedValue ? null : entry.after;
+    const canonicalBefore = entry.before === undefined ? absentValue() : entry.before;
+    const canonicalAfter = entry.after === undefined ? absentValue() : entry.after;
     const executable = executableOperation(
       entry.operation,
-      entry.before,
+      canonicalBefore,
       entry.operand,
       canonicalAfter,
     );
@@ -844,12 +873,12 @@ export function adaptPatchTraceToCanonical(input: {
       sourceRef: { sourceType: "adjustment_patch", sourceId: entry.patchId },
       sourceVersion: input.sourceVersion,
       ruleSetVersion: input.ruleSetVersion,
-      before: entry.before,
+      before: canonicalBefore,
       operation: executable.operation,
       operand: executable.operand,
       after: canonicalAfter,
       ...(definition?.unit ? { unit: definition.unit } : {}),
-      effect: effectFor(definition, entry.before, canonicalAfter),
+      effect: effectFor(definition, canonicalBefore, canonicalAfter),
       warningIssueIds: [],
       actions: [],
       evidence: {

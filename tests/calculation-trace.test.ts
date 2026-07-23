@@ -5,6 +5,7 @@ import {
   adaptPatchTraceToCanonical,
   adaptPricingTraceToCanonical,
   adaptRuleTraceToCanonical,
+  CALCULATION_TRACE_ABSENT_VALUE,
   CalculationTraceReplayError,
   assertCalculationTraceMatchesFinalPanel,
   createCalculationTraceArchive,
@@ -288,6 +289,27 @@ test("canonical Trace 终态必须完整重放 finalPanelValues", () => {
     }),
     /finalPanelValues 缺少 Trace 面板参数：ghost_panel_key/,
   );
+  const removeEntry = createCalculationTraceEntry({
+    subjectRef,
+    parameterKey: "drag",
+    sequence: archive.entries.length + 1,
+    layer: "final_review_patch",
+    sourceRef: { sourceType: "final_review_patch", sourceId: "review:remove" },
+    sourceVersion: "review:2",
+    ruleSetVersion: projection.ruleSetVersion,
+    before: 12,
+    operation: "clear",
+    operand: null,
+    after: CALCULATION_TRACE_ABSENT_VALUE,
+    effect: "contextual",
+    warningIssueIds: [],
+    actions: [],
+  });
+  assert.doesNotThrow(() => assertCalculationTraceMatchesFinalPanel({
+    archive: createCalculationTraceArchive([...archive.entries, removeEntry]),
+    subjectRef,
+    finalPanelValues: {},
+  }));
 });
 
 test("pricing、patch 与 legacy 只读适配器幂等并保留原始 evidence", () => {
@@ -356,14 +378,43 @@ test("pricing、patch 与 legacy 只读适配器幂等并保留原始 evidence",
   });
   assert.equal(removeEntries[0].operation, "clear");
   assert.equal(removeEntries[0].operand, null);
-  assert.equal(removeEntries[0].after, null);
+  assert.deepEqual(removeEntries[0].after, CALCULATION_TRACE_ABSENT_VALUE);
   assert.deepEqual(
     removeEntries[0].evidence?.legacyUndefinedFields,
     ["operand", "after"],
   );
   const removeArchive = createCalculationTraceArchive(removeEntries);
+  assert.equal(
+    removeArchive.finalState.some((state) => state.parameterKey === "drag"),
+    false,
+  );
   assert.deepEqual(JSON.parse(JSON.stringify(removeArchive)), removeArchive);
   assert.equal(verifyCalculationTraceArchive(removeArchive), true);
+  const removeThenSetEntries = adaptPatchTraceToCanonical({
+    ...patchInput,
+    trace: [
+      {
+        ...patchInput.trace[0],
+        operation: "remove" as const,
+        before: 12,
+        operand: undefined,
+        after: undefined,
+      },
+      {
+        ...patchInput.trace[0],
+        patchId: "patch:2",
+        operation: "set" as const,
+        before: undefined,
+        operand: 15,
+        after: 15,
+      },
+    ],
+  });
+  assert.deepEqual(removeThenSetEntries[1].before, CALCULATION_TRACE_ABSENT_VALUE);
+  assert.equal(
+    verifyCalculationTraceArchive(createCalculationTraceArchive(removeThenSetEntries)),
+    true,
+  );
 
   const legacyInput = {
     trace: [{

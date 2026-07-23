@@ -17,6 +17,7 @@ import {
 } from "./calculation-trace";
 
 export {
+  CALCULATION_TRACE_ABSENT_VALUE,
   CALCULATION_TRACE_HASH_CONTRACT_VERSION,
   CALCULATION_TRACE_REPLAY_CONTRACT_VERSION,
   CALCULATION_TRACE_SCHEMA_VERSION,
@@ -31,6 +32,7 @@ export {
   assertCalculationTraceMatchesFinalPanel,
   createCalculationTraceArchive,
   createCalculationTraceEntry,
+  isCalculationTraceAbsentValue,
   replayCalculationTrace,
   tryReplayCalculationTrace,
   verifyCalculationTraceArchive,

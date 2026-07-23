@@ -49,6 +49,7 @@ import {
   assertCalculationTraceMatchesFinalPanel,
   CalculationTraceReplayError,
   createCalculationTraceArchive,
+  isCalculationTraceAbsentValue,
   verifyCalculationTraceArchive,
   type CalculationTraceEntry,
 } from "./calculation-trace";
@@ -312,9 +313,13 @@ export function publishConfigurationSnapshot(
             ) {
               throw new Error("finalPanelTraceEntries 的 subjectRef 或 ruleSetVersion 与发布对象不一致。");
             }
-            if (!Object.hasOwn(input.finalPanelValues, entry.parameterKey)) {
+            const panelHasValue = Object.hasOwn(input.finalPanelValues, entry.parameterKey);
+            const traceHasValue = !isCalculationTraceAbsentValue(entry.after);
+            if (panelHasValue !== traceHasValue) {
               throw new CalculationTraceReplayError(
-                `finalPanelValues 缺少 Trace 面板参数：${entry.parameterKey}。`,
+                panelHasValue
+                  ? `canonical Trace 未覆盖最终面板参数：${entry.parameterKey}。`
+                  : `finalPanelValues 缺少 Trace 面板参数：${entry.parameterKey}。`,
                 entry,
               );
             }

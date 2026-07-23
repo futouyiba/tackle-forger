@@ -89,6 +89,20 @@ interface SeriesCreateDraft {
   discretePulls: string;
 }
 
+interface AIAssessmentUiState {
+  scopeKey: string;
+  status: "running" | "success" | "error";
+  error?: string;
+  assessmentId?: string;
+  outputHash?: string;
+  result?: {
+    findings: Array<{ findingCode: string; summary: string; evidenceAliases: string[] }>;
+    recommendations: Array<{ recommendationCode: string; title: string; summary: string; suggestedAction: string; evidenceAliases: string[] }>;
+    assumptions: string[];
+    uncoveredInformation: string[];
+  };
+}
+
 function parseDiscretePulls(value: string): number[] {
   return [...new Set(value.split(/[,，;；\s]+/)
     .map((entry) => Number(entry.trim()))
@@ -390,6 +404,9 @@ function ModelDrawer({
   currentEntityType,
   rebaseEnabled,
   rebaseDisabledReason,
+  aiAvailability,
+  aiAssessment,
+  onRunAssessment,
   onOpenRebase,
   onToggleCompare,
   onOpenSnapshot,
@@ -405,6 +422,9 @@ function ModelDrawer({
   currentEntityType: "model" | "configuration_snapshot";
   rebaseEnabled: boolean;
   rebaseDisabledReason?: string;
+  aiAvailability: ActionAvailabilityMap["run_ai_assessment"];
+  aiAssessment?: AIAssessmentUiState;
+  onRunAssessment: () => void;
   onOpenRebase: () => void;
   onToggleCompare: (modelId: string) => void;
   onOpenSnapshot: (snapshotId: string) => void;
@@ -739,18 +759,27 @@ function ModelDrawer({
           <div className="gantt-ai-guardrail"><ShieldCheck size={18} /><strong>辅助建议 · 不影响系统校验</strong></div>
           <div className="gantt-ai-disabled">
             <Bot size={28} />
-            <h3>AI 服务尚未启用</h3>
-            <p>Fancy Hub 真实连接器默认关闭；完成独立安全配置与启用准入前不会发送数据。当前不展示 mock 建议，也不会创建或应用 Patch。</p>
+            <h3>{aiAvailability.enabled ? "Fancy Hub 已通过启用准入" : "AI 服务尚未启用"}</h3>
+            <p>{aiAvailability.enabled ? "评估请求由服务端按严格白名单构造；结果只提供辅助解释，不会创建、批准或应用 Patch。" : aiAvailability.disabledReasonText}</p>
             <dl>
-              <div><dt>服务状态</dt><dd>一期禁用</dd></div>
-              <div><dt>允许出网字段</dt><dd>未确认</dd></div>
-              <div><dt>草稿能力</dt><dd>契约已就绪，运行连接器未启用</dd></div>
+              <div><dt>服务状态</dt><dd>{aiAssessment?.status === "running" ? "评估中" : aiAvailability.enabled ? "可用" : "关闭"}</dd></div>
+              <div><dt>允许出网字段</dt><dd>ai-request/v1 严格安全投影</dd></div>
+              <div><dt>草稿能力</dt><dd>仅建议；草稿仍需独立确定性预览</dd></div>
             </dl>
+            {aiAssessment?.status === "error" ? <div className="gantt-unavailable"><AlertTriangle size={18} /><div><strong>评估未完成</strong><span>{aiAssessment.error}</span></div></div> : null}
+            {aiAssessment?.status === "success" && aiAssessment.result ? (
+              <div className="gantt-ai-result">
+                <strong>{aiAssessment.result.findings.length} 条发现 · {aiAssessment.result.recommendations.length} 条建议</strong>
+                {aiAssessment.result.findings.map((finding) => <p key={finding.findingCode}><b>{finding.findingCode}</b> · {finding.summary}{finding.evidenceAliases.length > 0 ? <small> · 依据 {finding.evidenceAliases.join("、")}</small> : null}</p>)}
+                {aiAssessment.result.recommendations.map((recommendation) => <p key={recommendation.recommendationCode}><b>{recommendation.title}</b> · {recommendation.summary}{recommendation.evidenceAliases.length > 0 ? <small> · 依据 {recommendation.evidenceAliases.join("、")}</small> : null}</p>)}
+                <small>output {aiAssessment.outputHash?.slice(0, 12)}</small>
+              </div>
+            ) : null}
             <div className="gantt-ai-actions">
-              <button type="button" disabled title="Fancy Hub 连接器尚未启用">查看依据</button>
-              <button type="button" disabled title="Fancy Hub 连接器尚未启用">预览变化</button>
-              <button type="button" disabled title="Fancy Hub 连接器尚未启用">创建 Model Patch 草稿</button>
-              <button type="button" disabled title="Fancy Hub 连接器尚未启用">重新评估</button>
+              <button type="button" disabled title="依据别名已随每条发现和建议展开">查看依据</button>
+              <button type="button" disabled title="建议转草稿前需独立确定性差异预览">预览变化</button>
+              <button type="button" disabled title="当前连接器只返回建议，不直接创建草稿">创建 Model Patch 草稿</button>
+              <button type="button" disabled={!aiAvailability.enabled || aiAssessment?.status === "running"} title={aiAvailability.disabledReasonText} onClick={onRunAssessment}>{aiAssessment?.status === "running" ? "评估中…" : "重新评估"}</button>
             </div>
           </div>
         </div>
@@ -779,6 +808,7 @@ export function SeriesGanttWorkbenchV3({
   const [comparisonModelIds, setComparisonModelIds] = useState<string[]>([]);
   const [candidateOpen, setCandidateOpen] = useState(false);
   const [seriesCreateDraft, setSeriesCreateDraft] = useState<SeriesCreateDraft | null>(null);
+  const [aiAssessment, setAiAssessment] = useState<AIAssessmentUiState>();
 
   const blocks = useMemo(() => querySeriesGantt({
     query,
@@ -855,6 +885,26 @@ export function SeriesGanttWorkbenchV3({
   const previewModelAvailability = actionAvailabilities.preview_model;
   const rebaseAvailability = actionAvailabilities.open_rebase;
   const createSeriesAvailability = actionAvailabilities.create_series;
+  const aiAvailability = actionAvailabilities.run_ai_assessment;
+  const runAiAssessment = async (scopeType: "series" | "model", scopeId: string) => {
+    const scopeKey = `${scopeType}:${scopeId}`;
+    setAiAssessment({ scopeKey, status: "running" });
+    try {
+      const response = await fetch("/api/ai/assessments", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ scopeType, scopeId }),
+      });
+      const payload = await response.json().catch(() => null) as (AIAssessmentUiState & { error?: string }) | null;
+      if (!response.ok || !payload?.result) throw new Error(payload?.error ?? "AI 评估未完成。");
+      setAiAssessment({ ...payload, scopeKey, status: "success" });
+      notify(`AI 评估完成：${payload.result.findings.length} 条发现，${payload.result.recommendations.length} 条建议。`);
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "AI 评估未完成。";
+      setAiAssessment({ scopeKey, status: "error", error: message });
+      notify(message);
+    }
+  };
   const contextBreadcrumbs = buildProductBreadcrumbs({
     workspaceId,
     collection: drawerSeries?.collectionId
@@ -1049,7 +1099,7 @@ export function SeriesGanttWorkbenchV3({
           <button type="button" disabled={!generateAvailability.enabled || !selectedSeries} title={generateAvailability.disabledReasonText} onClick={() => setCandidateOpen(true)}>
             <Sparkles size={14} />生成 Model 候选
           </button>
-          <button type="button" disabled title="Fancy Hub 连接器尚未启用">AI 评估</button>
+          <button type="button" disabled={!aiAvailability.enabled || !selectedSeries || aiAssessment?.status === "running"} title={aiAvailability.disabledReasonText} onClick={() => selectedSeries && void runAiAssessment("series", selectedSeries.id)}>{aiAssessment?.status === "running" && aiAssessment.scopeKey.startsWith("series:") ? "AI 评估中…" : "AI 评估"}</button>
         </div>
       </section>
 
@@ -1205,7 +1255,7 @@ export function SeriesGanttWorkbenchV3({
       {drawerModel ? (
         <>
           <button className="gantt-drawer-backdrop" type="button" aria-label="关闭预览" onClick={() => { setDrawerModelId(""); setDrawerSnapshotId(""); }} />
-          <ModelDrawer state={state} workspaceId={workspaceId} model={drawerModel} sku={drawerSku} series={drawerSeries} snapshot={drawerSnapshot} currentEntityType={drawerSnapshotId ? "configuration_snapshot" : "model"} comparisonModelIds={comparisonModelIds} rebaseEnabled={Boolean(drawerSeries) && rebaseAvailability.enabled} rebaseDisabledReason={drawerSeries ? rebaseAvailability.disabledReasonText : "父级 Series 不可见，不能进入 Rebase。"} onToggleCompare={toggleCompare} onOpenSnapshot={setDrawerSnapshotId} onOpenRebase={() => { setDrawerModelId(""); setDrawerSnapshotId(""); if (drawerSeries) onOpenSeries(drawerSeries.id); }} onClose={() => { setDrawerModelId(""); setDrawerSnapshotId(""); }} />
+          <ModelDrawer state={state} workspaceId={workspaceId} model={drawerModel} sku={drawerSku} series={drawerSeries} snapshot={drawerSnapshot} currentEntityType={drawerSnapshotId ? "configuration_snapshot" : "model"} comparisonModelIds={comparisonModelIds} rebaseEnabled={Boolean(drawerSeries) && rebaseAvailability.enabled} rebaseDisabledReason={drawerSeries ? rebaseAvailability.disabledReasonText : "父级 Series 不可见，不能进入 Rebase。"} aiAvailability={aiAvailability} aiAssessment={aiAssessment?.scopeKey === `model:${drawerModel.id}` ? aiAssessment : undefined} onRunAssessment={() => void runAiAssessment("model", drawerModel.id)} onToggleCompare={toggleCompare} onOpenSnapshot={setDrawerSnapshotId} onOpenRebase={() => { setDrawerModelId(""); setDrawerSnapshotId(""); if (drawerSeries) onOpenSeries(drawerSeries.id); }} onClose={() => { setDrawerModelId(""); setDrawerSnapshotId(""); }} />
         </>
       ) : null}
       {candidateOpen && selectedSeries ? (

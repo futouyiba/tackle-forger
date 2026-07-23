@@ -3,7 +3,9 @@ import type { NextRequest } from "next/server";
 import { feishuRuntimeConfig } from "./auth-config";
 import { findSession } from "./auth-store";
 import { feishuCapabilities } from "./feishu-identity";
+import { fancyHubConfigFromEnvironment, fancyHubEnablement } from "./fancy-hub";
 import {
+  actionAvailability,
   buildActionAvailabilityMap,
   type CapabilityCode,
 } from "./interaction-contracts";
@@ -22,9 +24,19 @@ export interface RequestIdentity {
 }
 
 function withActions<T extends RequestIdentity>(identity: T) {
+  const actionAvailabilityMap = buildActionAvailabilityMap(identity.capabilities);
+  const connector = fancyHubEnablement(fancyHubConfigFromEnvironment());
+  actionAvailabilityMap.run_ai_assessment = actionAvailability(
+    "run_ai_assessment",
+    identity.capabilities,
+    connector.enabled ? undefined : {
+      code: connector.code ?? "AI_CONNECTOR_DISABLED",
+      text: "Fancy Hub 连接器未通过服务端启用准入。",
+    },
+  );
   return {
     ...identity,
-    actionAvailability: buildActionAvailabilityMap(identity.capabilities),
+    actionAvailability: actionAvailabilityMap,
   };
 }
 

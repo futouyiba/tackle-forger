@@ -72,19 +72,29 @@ export interface AIAssessmentRetentionRecord {
   operationLog?: { action: string; objectHash?: Sha256Hex; resultCode: string };
   visibility: "VISIBLE" | "HIDDEN";
   deletionTombstone?: {
+    assessmentId: string;
     requestedAt: string;
     requestedBy: string;
     primaryPurgeDueAt: string;
     backupPurgeDueAt: string;
     primaryPurgedAt?: string;
     backupPurgedAt?: string;
+    backupPurgeState?: "PENDING" | "FAILED" | "PURGED";
+    backupPurgeAttempts?: number;
+    backupPurgeLastErrorCode?: string;
   };
+}
+
+export interface AIBackupPurgeAdapter {
+  purgeAssessmentBackups(input: { assessmentId: string; tombstoneRequestedAt: string }): Promise<void>;
+  verifyAssessmentBackupsAbsent(input: { assessmentId: string; tombstoneRequestedAt: string }): Promise<boolean>;
 }
 
 export interface AIRetentionSweepResult {
   record: AIAssessmentRetentionRecord;
   auditEvents: Array<{
     action: "AI_ASSESSMENT_HIDDEN" | "AI_PRIMARY_CONTENT_PURGED" | "AI_BACKUP_PURGE_DUE"
+      | "AI_BACKUP_PURGED" | "AI_BACKUP_PURGE_FAILED"
       | "AI_RAW_CONTENT_EXPIRED" | "AI_SEMANTIC_CONTENT_EXPIRED" | "AI_METADATA_EXPIRED"
       | "AI_OPERATION_LOG_EXPIRED";
     occurredAt: string;
@@ -98,6 +108,12 @@ function date(value: string, label: string): number {
 }
 
 function iso(value: number): string { return new Date(value).toISOString(); }
+
+function assessmentId(record: AIAssessmentRetentionRecord): string {
+  const value = record.metadata?.assessmentId ?? record.acceptedArtifactProvenance?.assessmentId;
+  if (!value) throw new Error("AI 评估保留记录缺少 assessmentId，不能建立删除墓碑。" );
+  return value;
+}
 
 export function encryptAIRawContent(input: {
   assessmentId: string;
@@ -145,6 +161,7 @@ export function requestAIAssessmentDeletion(input: {
   record.visibility = "HIDDEN";
   if (record.metadata) record.metadata.state = "USER_DELETED";
   record.deletionTombstone ??= {
+    assessmentId: assessmentId(record),
     requestedAt: input.now.toISOString(),
     requestedBy: input.requestedBy,
     primaryPurgeDueAt: iso(nowMs + AI_RETENTION_DURATIONS.userDeletionPrimaryPurgeMs),
@@ -169,7 +186,7 @@ export function sweepAIAssessmentRetention(input: {
     auditEvents.push({ action: "AI_PRIMARY_CONTENT_PURGED", occurredAt });
   }
   if (tombstone && now >= date(tombstone.backupPurgeDueAt, "backupPurgeDueAt") && !tombstone.backupPurgedAt) {
-    tombstone.backupPurgedAt = occurredAt;
+    tombstone.backupPurgeState = tombstone.backupPurgeState === "FAILED" ? "FAILED" : "PENDING";
     auditEvents.push({ action: "AI_BACKUP_PURGE_DUE", occurredAt });
   }
   if (record.encryptedRawContent && record.rawContentCreatedAt
@@ -193,6 +210,36 @@ export function sweepAIAssessmentRetention(input: {
   }
   // acceptedArtifactProvenance intentionally has no expiry and survives user deletion.
   return { record, auditEvents };
+}
+
+export async function purgeAIAssessmentBackups(input: {
+  record: AIAssessmentRetentionRecord;
+  now: Date;
+  adapter: AIBackupPurgeAdapter;
+}): Promise<AIRetentionSweepResult> {
+  const record = structuredClone(input.record);
+  const tombstone = record.deletionTombstone;
+  const occurredAt = input.now.toISOString();
+  if (!tombstone || input.now.getTime() < date(tombstone.backupPurgeDueAt, "backupPurgeDueAt") || tombstone.backupPurgedAt) {
+    return { record, auditEvents: [] };
+  }
+  tombstone.backupPurgeAttempts = (tombstone.backupPurgeAttempts ?? 0) + 1;
+  tombstone.backupPurgeState = "PENDING";
+  delete tombstone.backupPurgeLastErrorCode;
+  try {
+    await input.adapter.purgeAssessmentBackups({ assessmentId: tombstone.assessmentId, tombstoneRequestedAt: tombstone.requestedAt });
+    const absent = await input.adapter.verifyAssessmentBackupsAbsent({ assessmentId: tombstone.assessmentId, tombstoneRequestedAt: tombstone.requestedAt });
+    if (!absent) throw new Error("AI_BACKUP_PURGE_VERIFICATION_FAILED");
+    tombstone.backupPurgeState = "PURGED";
+    tombstone.backupPurgedAt = occurredAt;
+    return { record, auditEvents: [{ action: "AI_BACKUP_PURGED", occurredAt }] };
+  } catch (error) {
+    tombstone.backupPurgeState = "FAILED";
+    tombstone.backupPurgeLastErrorCode = error instanceof Error && error.message
+      ? error.message.slice(0, 128)
+      : "AI_BACKUP_PURGE_FAILED";
+    return { record, auditEvents: [{ action: "AI_BACKUP_PURGE_FAILED", occurredAt }] };
+  }
 }
 
 export function assertAIAssessmentVisible(record: AIAssessmentRetentionRecord): void {

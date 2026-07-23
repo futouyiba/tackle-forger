@@ -7,6 +7,8 @@ import {
   jcsCanonicalize,
   prepareAIRequest,
   sameModelDescriptor,
+  sha256Hex,
+  type RequestAlias,
 } from "./ai-outbound";
 
 export const AI_BATCH_LIMIT_POLICY_VERSION = "ai-batch-limits/open009-v1" as const;
@@ -67,6 +69,7 @@ export type FancyHubErrorCode =
   | "AI_MODEL_REVISION_MISMATCH"
   | "AI_NO_CONFIGURED_MODEL_AVAILABLE"
   | "AI_OUTBOUND_TARGET_REJECTED"
+  | "AI_RESPONSE_ALIAS_UNKNOWN"
   | "AI_PROVIDER_TEMPORARILY_UNAVAILABLE";
 
 export class FancyHubError extends Error {
@@ -81,18 +84,44 @@ interface FancyHubModelListResponse {
   hardLimits: AIProviderHardLimits;
 }
 
+export interface FancyHubFindingV1 {
+  findingCode: string;
+  summary: string;
+  subjectAliases: RequestAlias[];
+  evidenceAliases: RequestAlias[];
+}
+
+export interface FancyHubRecommendationV1 {
+  recommendationCode: string;
+  title: string;
+  summary: string;
+  subjectAliases: RequestAlias[];
+  evidenceAliases: RequestAlias[];
+  suggestedAction: "preview_only" | "create_model_patch_draft" | "create_rule_source_change_draft";
+}
+
+export interface FancyHubAssessmentResultV1 {
+  schemaVersion: "ai-response/v1";
+  assessmentAlias: RequestAlias;
+  findings: FancyHubFindingV1[];
+  recommendations: FancyHubRecommendationV1[];
+  assumptions: string[];
+  uncoveredInformation: string[];
+}
+
 export interface FancyHubAssessmentResponse {
   model: AIModelDescriptorV1;
-  result: unknown;
+  result: FancyHubAssessmentResultV1;
   usage: {
     inputTokens: number;
     outputTokens: number;
     costMicroUsd: number;
   };
+  outputHash: string;
 }
 
 export interface FancyHubTransport {
-  listModels(): Promise<unknown>;
+  listModels(input: { timeoutMs: number }): Promise<unknown>;
   assess(input: {
     canonicalJson: string;
     inputHash: string;
@@ -113,6 +142,7 @@ export interface FancyHubAuditEvent {
   modelDescriptor?: AIModelDescriptorV1;
   inputHash?: string;
   usage?: FancyHubAssessmentResponse["usage"];
+  outputHash?: string;
 }
 
 function plainObject(value: unknown): value is Record<string, unknown> {
@@ -227,8 +257,8 @@ export class FetchFancyHubTransport implements FancyHubTransport {
     try { return await response.json(); } catch { throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", "Fancy Hub 返回的 JSON 无效。" ); }
   }
 
-  listModels(): Promise<unknown> {
-    return this.request("v1/models", { method: "GET" });
+  listModels(input: { timeoutMs: number }): Promise<unknown> {
+    return this.request("v1/models", { method: "GET", signal: AbortSignal.timeout(input.timeoutMs) });
   }
 
   assess(input: { canonicalJson: string; inputHash: string; model: AIModelDescriptorV1; maxOutputTokens: number; timeoutMs: number }): Promise<unknown> {
@@ -252,7 +282,90 @@ function parseModelListResponse(value: unknown): FancyHubModelListResponse {
   return { models: value.models, hardLimits: parseHardLimits(value.hardLimits, "providerHardLimits") };
 }
 
-function parseAssessmentResponse(value: unknown): FancyHubAssessmentResponse {
+const RESPONSE_ALIAS = /^[a-z][0-9]{3,7}$/;
+const RESPONSE_SAFE_CODE = /^[A-Za-z0-9_.:-]{1,128}$/;
+const RESPONSE_MAX_BYTES = 131_072;
+
+function responseString(value: unknown, label: string, maxBytes: number): string {
+  if (typeof value !== "string" || Buffer.byteLength(value, "utf8") > maxBytes) {
+    throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", `${label} 必须是 ${maxBytes} 字节以内的字符串。`);
+  }
+  // JCS performs the canonical Unicode validation used by the outbound contract.
+  jcsCanonicalize(value);
+  return value;
+}
+
+function responseCode(value: unknown, label: string): string {
+  const code = responseString(value, label, 128);
+  if (!RESPONSE_SAFE_CODE.test(code)) throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", `${label} 不是 SafeCode。`);
+  return code;
+}
+
+function responseAlias(value: unknown, label: string, authorizedAliases: ReadonlySet<string>): RequestAlias {
+  const alias = responseString(value, label, 16);
+  if (!RESPONSE_ALIAS.test(alias)) throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", `${label} 不是请求级别名。`);
+  if (!authorizedAliases.has(alias)) throw new FancyHubError("AI_RESPONSE_ALIAS_UNKNOWN", `${label} 不属于本次请求。`);
+  return alias;
+}
+
+function responseAliasArray(value: unknown, label: string, authorizedAliases: ReadonlySet<string>): RequestAlias[] {
+  if (!Array.isArray(value) || value.length > 32) throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", `${label} 必须是最多 32 项的数组。`);
+  const aliases = value.map((entry, index) => responseAlias(entry, `${label}[${index}]`, authorizedAliases));
+  if (new Set(aliases).size !== aliases.length) throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", `${label} 不能包含重复别名。`);
+  return aliases;
+}
+
+function responseTextArray(value: unknown, label: string): string[] {
+  if (!Array.isArray(value) || value.length > 32) throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", `${label} 必须是最多 32 项的数组。`);
+  return value.map((entry, index) => responseString(entry, `${label}[${index}]`, 1_024));
+}
+
+function parseAssessmentResult(value: unknown, authorizedAliases: ReadonlySet<string>): FancyHubAssessmentResultV1 {
+  if (!plainObject(value)) throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", "Fancy Hub result 无效。" );
+  exactKeys(value, ["schemaVersion", "assessmentAlias", "findings", "recommendations", "assumptions", "uncoveredInformation"], "assessment result");
+  if (value.schemaVersion !== "ai-response/v1") throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", "Fancy Hub result Schema 版本无效。" );
+  if (!Array.isArray(value.findings) || value.findings.length > 128) throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", "findings 必须是最多 128 项的数组。" );
+  if (!Array.isArray(value.recommendations) || value.recommendations.length > 64) throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", "recommendations 必须是最多 64 项的数组。" );
+  const findings = value.findings.map((entry, index): FancyHubFindingV1 => {
+    if (!plainObject(entry)) throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", `findings[${index}] 无效。`);
+    exactKeys(entry, ["findingCode", "summary", "subjectAliases", "evidenceAliases"], `findings[${index}]`);
+    return {
+      findingCode: responseCode(entry.findingCode, `findings[${index}].findingCode`),
+      summary: responseString(entry.summary, `findings[${index}].summary`, 4_096),
+      subjectAliases: responseAliasArray(entry.subjectAliases, `findings[${index}].subjectAliases`, authorizedAliases),
+      evidenceAliases: responseAliasArray(entry.evidenceAliases, `findings[${index}].evidenceAliases`, authorizedAliases),
+    };
+  });
+  const recommendations = value.recommendations.map((entry, index): FancyHubRecommendationV1 => {
+    if (!plainObject(entry)) throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", `recommendations[${index}] 无效。`);
+    exactKeys(entry, ["recommendationCode", "title", "summary", "subjectAliases", "evidenceAliases", "suggestedAction"], `recommendations[${index}]`);
+    if (!["preview_only", "create_model_patch_draft", "create_rule_source_change_draft"].includes(String(entry.suggestedAction))) {
+      throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", `recommendations[${index}].suggestedAction 无效。`);
+    }
+    return {
+      recommendationCode: responseCode(entry.recommendationCode, `recommendations[${index}].recommendationCode`),
+      title: responseString(entry.title, `recommendations[${index}].title`, 512),
+      summary: responseString(entry.summary, `recommendations[${index}].summary`, 4_096),
+      subjectAliases: responseAliasArray(entry.subjectAliases, `recommendations[${index}].subjectAliases`, authorizedAliases),
+      evidenceAliases: responseAliasArray(entry.evidenceAliases, `recommendations[${index}].evidenceAliases`, authorizedAliases),
+      suggestedAction: entry.suggestedAction as FancyHubRecommendationV1["suggestedAction"],
+    };
+  });
+  const result: FancyHubAssessmentResultV1 = {
+    schemaVersion: "ai-response/v1",
+    assessmentAlias: responseAlias(value.assessmentAlias, "assessmentAlias", authorizedAliases),
+    findings,
+    recommendations,
+    assumptions: responseTextArray(value.assumptions, "assumptions"),
+    uncoveredInformation: responseTextArray(value.uncoveredInformation, "uncoveredInformation"),
+  };
+  if (Buffer.byteLength(jcsCanonicalize(result), "utf8") > RESPONSE_MAX_BYTES) {
+    throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", `Fancy Hub result 超过 ${RESPONSE_MAX_BYTES} 字节。`);
+  }
+  return result;
+}
+
+function parseAssessmentResponse(value: unknown, authorizedAliases: ReadonlySet<string>): FancyHubAssessmentResponse {
   if (!plainObject(value)) throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", "Fancy Hub 评估响应无效。" );
   exactKeys(value, ["model", "result", "usage"], "assessment response");
   if (!plainObject(value.usage)) throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", "Fancy Hub usage 无效。" );
@@ -260,7 +373,30 @@ function parseAssessmentResponse(value: unknown): FancyHubAssessmentResponse {
   for (const key of ["inputTokens", "outputTokens", "costMicroUsd"] as const) {
     if (!Number.isInteger(value.usage[key]) || (value.usage[key] as number) < 0) throw new FancyHubError("AI_FANCY_HUB_RESPONSE_INVALID", `usage.${key} 无效。`);
   }
-  return value as unknown as FancyHubAssessmentResponse;
+  const result = parseAssessmentResult(value.result, authorizedAliases);
+  const model = value.model as AIModelDescriptorV1;
+  return {
+    model,
+    result,
+    usage: value.usage as FancyHubAssessmentResponse["usage"],
+    outputHash: sha256Hex(jcsCanonicalize({ model, result })),
+  };
+}
+
+function authorizedResponseAliases(envelope: AIRequestEnvelopeV1): ReadonlySet<string> {
+  return new Set([
+    envelope.assessmentAlias,
+    envelope.scope.scopeAlias,
+    envelope.scope.revisionAlias,
+    ...envelope.panelValues.map((entry) => entry.subjectAlias),
+    ...envelope.traces.flatMap((entry) => [entry.subjectAlias, entry.sourceAlias, entry.sourceVersionAlias]),
+    ...envelope.patches.flatMap((entry) => [entry.patchAlias, entry.patchRevisionAlias, entry.subjectAlias]),
+    ...envelope.compatibility.map((entry) => entry.subjectAlias),
+    ...envelope.affinity.map((entry) => entry.subjectAlias),
+    ...envelope.invariants.map((entry) => entry.subjectAlias),
+    ...envelope.fiveAxis.flatMap((entry) => [entry.subjectAlias, ...(entry.componentAlias ? [entry.componentAlias] : [])]),
+    ...envelope.evidenceRefs.map((entry) => entry.evidenceAlias),
+  ]);
 }
 
 function effectiveLimits(provider: AIProviderHardLimits, tenant: AIProviderHardLimits): AIProviderHardLimits {
@@ -341,13 +477,15 @@ export class FancyHubConnector {
     };
   }
 
-  async listAvailableModels(): Promise<{
+  async listAvailableModels(timeoutMs?: number): Promise<{
     models: AIModelDescriptorV1[];
     providerHardLimits: AIProviderHardLimits;
     rejectedModels: Array<{ index: number; code: string }>;
   }> {
-    this.assertEnabled();
-    const response = parseModelListResponse(await this.transport.listModels());
+    const { tenantLimits } = this.assertEnabled();
+    const effectiveTimeoutMs = timeoutMs ?? tenantLimits.requestTimeoutMs;
+    if (!positiveInteger(effectiveTimeoutMs)) throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "模型发现没有剩余执行时间。" );
+    const response = parseModelListResponse(await this.transport.listModels({ timeoutMs: effectiveTimeoutMs }));
     const described = describeFancyHubModels(response.models);
     return { models: described.models, providerHardLimits: response.hardLimits, rejectedModels: described.rejected };
   }
@@ -364,7 +502,11 @@ export class FancyHubConnector {
     try {
     const { tenantLimits, batchLimits } = this.assertEnabled();
     assertEstimate(input.estimate);
-    const discovery = await this.listAvailableModels();
+    const batchStartedAtMs = input.batch?.startedAtMs ?? Date.now();
+    const batchDeadlineMs = batchStartedAtMs + batchLimits.batchHardTimeoutMs;
+    const discoveryRemainingMs = batchDeadlineMs - Date.now();
+    if (discoveryRemainingMs <= 0) throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "批次已经达到 10 分钟硬期限。" );
+    const discovery = await this.listAvailableModels(Math.min(tenantLimits.requestTimeoutMs, discoveryRemainingMs));
     const limits = effectiveLimits(discovery.providerHardLimits, tenantLimits);
     if (input.estimate.inputTokens > limits.maxInputTokens || input.estimate.outputTokens > limits.maxOutputTokens || input.estimate.costMicroUsd > limits.maxCostMicroUsdPerRequest) {
       throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "评估估算超过 provider 或租户硬上限。" );
@@ -377,8 +519,8 @@ export class FancyHubConnector {
       estimatedInputTokens: input.batch?.estimatedInputTokens ?? input.estimate.inputTokens,
       estimatedOutputTokens: input.batch?.estimatedOutputTokens ?? input.estimate.outputTokens,
       estimatedCostMicroUsd: input.batch?.estimatedCostMicroUsd ?? input.estimate.costMicroUsd,
-      startedAtMs: input.batch?.startedAtMs ?? Date.now(),
-      nowMs: input.batch?.nowMs ?? Date.now(),
+      startedAtMs: batchStartedAtMs,
+      nowMs: Date.now(),
     }, batchLimits);
     if (current >= Math.min(batchLimits.maxConcurrentAssessmentsPerWorkspace, limits.maxConcurrentRequests)) {
       throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "工作区或 provider 并发硬上限已满。" );
@@ -397,6 +539,8 @@ export class FancyHubConnector {
     try {
       let lastRetryable: FancyHubError | undefined;
       for (const model of models) {
+        const remainingMs = batchDeadlineMs - Date.now();
+        if (remainingMs <= 0) throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "批次已经达到 10 分钟硬期限，不再启动降级调用。" );
         attemptedModelIds.push(model.modelId);
         auditAttemptedModelIds.push(model.modelId);
         const prepared = prepareAIRequest({
@@ -417,8 +561,8 @@ export class FancyHubConnector {
             inputHash: prepared.inputHash,
             model,
             maxOutputTokens: Math.min(input.estimate.outputTokens, limits.maxOutputTokens),
-            timeoutMs: limits.requestTimeoutMs,
-          }));
+            timeoutMs: Math.min(limits.requestTimeoutMs, remainingMs),
+          }), authorizedResponseAliases(prepared.envelope));
           if (!sameModelDescriptor(response.model, model)) throw new FancyHubError("AI_MODEL_REVISION_MISMATCH", "Fancy Hub 响应模型描述与请求不一致。" );
           if (response.usage.inputTokens > limits.maxInputTokens || response.usage.outputTokens > limits.maxOutputTokens || response.usage.costMicroUsd > limits.maxCostMicroUsdPerRequest) {
             throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "Fancy Hub 响应用量超过硬上限。" );
@@ -433,6 +577,7 @@ export class FancyHubConnector {
             attemptedModelIds: [...attemptedModelIds],
             modelDescriptor: response.model,
             inputHash: prepared.inputHash,
+            outputHash: response.outputHash,
             usage: structuredClone(response.usage),
           });
           return { response, inputHash: prepared.inputHash, attemptedModelIds };

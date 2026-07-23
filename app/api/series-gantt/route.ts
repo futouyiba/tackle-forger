@@ -73,10 +73,7 @@ export async function GET(request: NextRequest) {
       actionAvailability("open_sku", capabilities),
       actionAvailability("preview_model", capabilities),
       actionAvailability("generate_candidates", capabilities),
-      actionAvailability("run_ai_assessment", capabilities, {
-        code: "AI_DISABLED",
-        text: "Fancy Hub 真实连接器默认关闭；完成独立部署配置与启用准入前不会发送数据。",
-      }),
+      user.actionAvailability.run_ai_assessment,
     ],
   });
 }

@@ -786,7 +786,11 @@ function isCommitSha(value) {
 function isLegacyUnnamedCiRun(run) {
   return run?.event === "pull_request"
     && run?.name === "CI"
-    && typeof run?.display_title !== "string";
+    && run?.path === CI_WORKFLOW_PATH
+    && Number.isInteger(run?.workflow_id)
+    && !/^gate-context event=pull_request pr=\d+ head=[0-9a-f]{40} base=[0-9a-f]{40}$/u.test(
+      String(run?.display_title ?? ""),
+    );
 }
 
 async function verifyTrustedPullRequestCi({ fetchImpl, headers, pullRequest }) {

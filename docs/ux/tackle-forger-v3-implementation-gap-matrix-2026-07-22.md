@@ -9,6 +9,7 @@
 > OPEN-008合并后修正：2026-07-23，补充按物理Git ref去重的跨Git/ledger治理租约与fencing/CAS、统一ActionCode写动作、旧写别名完整payload重建及历史导入并发幂等目标契约；仍只记录规范目标，不冒充运行时实现。
 > OPEN-009对象可见性复核：2026-07-23 05:41:56 +0800，代码基线`origin/main@33cb47e4d923e6675f1a1bab8b2685266117bcaf`（提交时间2026-07-23 05:18:57 +0800）；确认运行时与测试仍执行对象级裁剪、隐藏计数和脱敏父链，本轮仅修正文档状态并由[Issue #31](https://github.com/futouyiba/tackle-forger/issues/31)跟踪实现迁移。
 > OPEN-003运行时复核：2026-07-23，代码基线`codex/open-003-deferred-parts@cdcbd7ce6bea60548f2224039861593c453ae028`；确认迁移层会保留四类扩展部位，创建Series页面仍渲染全部`state.itemParts`，服务端尚无独立启用策略门禁。本轮只记录实现事实，由[Issue #37](https://github.com/futouyiba/tackle-forger/issues/37)跟踪代码收口。
+> OPEN-005契约复核：2026-07-23 07:43:42 +0800，PR #30基线`52b8ab6fbfc84cde1e6530724a75aad23f6872d8`；当前代码仍使用`fishWeightGradeId`、`component_min_ratio`、`same_part_compare`、三种Series基准策略和旧`PUBLISHED`种子定义。本轮只同步正式目标契约并纠正实现状态，没有修改运行时代码或冒充新测试证据。
 > OPEN-007契约复核基线：`3cb6609c237c0c23d108bf305124e24f18980fa8`（2026-07-23 00:43:07 +0800）；本轮只修订文档，不把2026-07-23已决目标语义冒充为当前运行时能力。
 > 本轮完整验证时间：2026-07-23 01:57:07 +0800；在上述OPEN-007代码基线上运行`npm run typecheck`、`npm run lint`与`npm test`。
 > PR #11最新main重整复核：2026-07-23 07:30:24 +0800，基线`origin/main@18f99e136320f1989bdeb7f61312b5ea4493bae7`；根应用`npm run typecheck`、`npm run lint`、`npm test`通过（208项主测试与1项生产构建/渲染测试），历史workspace的`pnpm -r typecheck/lint/test/build`通过；根Lint为0 error、保留main已有1条warning。
@@ -40,7 +41,7 @@
 | 性能定位摘要 | 缺失 | 当前Series、候选、规则内核、Affinity和UI仍把PerformanceProfile/performanceId作为显式输入或贡献 | 迁移为结算后只读PerformanceSummary；历史字段只读保留，不再参与搜索、计分、兼容、Affinity或定价 |
 | 自动定价与 NON_FORMAL | 部分实现 | 07/08 同 revision 导入、Lerp、结构源重量段、维修/购买Raw公式、Trace和旧策略发布阻断已存在 | 尚未实现维修/购买分别最终舍入、购买使用未舍入维修价、舍入后购买最低价，以及超300M的fingerprint WARNING确认；当前`error/clamp`不能代表新契约 |
 | 手填价格兜底 | 因 v3 冲突而不采纳 | 正式价格只能来自已发布 PricingPolicyVersion | 不提供绕过动作 |
-| 五维图及双模式比较 | 已实现 | 版本化 ViewDefinition/VertexSet、单装备/钓组模式、缺失值不归零、Snapshot 冻结 | 中档边界继续保持种子配置，不固化为永久常量 |
+| 五维图及双模式比较 | 部分实现 | 已有版本化ViewDefinition/VertexSet、基础逐点计算、缺失值不归零和Snapshot冻结骨架；但运行时仍是鱼重等级、`component_min_ratio`汇总、仅同部位比较、旧五轴/三种Series基准，且旧种子定义标记为`PUBLISHED`并可进入现有发布检查 | 迁移到按`modelFinalPullKg`选择W段、竿轮线逐件且无汇总线、混合部位2–5件、仅`projection_reference`唯一选择器、`five-axis-hash-input/v1`固定向量和`FORMAL_CURRENT`发布门禁；旧定义/Snapshot只读保留且hash不变。定义发布、运行时迁移、UI与自动化验收仍由Issue #13后续独立交付 |
 | AI 建议壳与草稿边界 | 已实现 | AI 默认关闭；仅草稿；不能写飞书、发布或改变裁决；证据、过期和权限契约已有测试 | OPEN-006 未确认前不得连接外部模型 |
 | AI 真实供应方 | 部分实现 | UI 明确禁用并解释原因 | 等待用户确认供应方、模型、字段白名单和数据出网策略 |
 | ValidationIssue 与 ActionLink | 部分实现 | EntityRef、ActionAvailability、部分命令契约和页面问题展示已存在；品质模块已有BLOCKER概念 | 主领域仍使用`level=error/warning/info`，命令层另有小写severity+blocking，查询层又消费四档Severity；尚未统一v3的Severity/Gate/State、BLOCKER和版本化waiver，也未把warning确认、waiver、重算、Rebase、规则草稿等全部写动作收口到统一ActionCode/不可篡改payload；旧状态写别名必须完整重建可信payload或以`LEGACY_ACTION_ALIAS_UNRESOLVABLE`拒绝，纯路由`open_rebase`不得与`rebase_patch`混用 |

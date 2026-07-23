@@ -508,36 +508,40 @@ linear_subtraction 和 diminishing_division 两种配置，本轮不需要决定
 
 任务：
 
-- 建立版本化FiveAxisViewDefinition、轴定义注册表和鱼重等级顶点集合；
-- 实现由axisId、transformId、vertexSelectorId、componentAggregationId驱动的通用纯函数内核；拉力、耐久、抛投、感度、操控仅作为可替换种子定义；
-- 实现部件占比、短板选择、0..100归一化、档位映射和完整Trace；
-- 抛投只使用竿，轮线缺失不按0；
+- 建立符合`five-axis/open005-2026-07-23/v1`的版本化FiveAxisViewDefinition、固定五轴顺序和按`modelFinalPullKg`选择的W重量段顶点集合；
+- 实现由axisId、transformId、vertexSelectorId驱动的通用纯函数内核；拉力、耐久、抛投、感度、操控分别按权威方向计算，竿、轮、线逐件绘制且`componentAggregationId=per_component_no_aggregate`；
+- 使用`five-axis-hash-input/v1`的严格Schema、CanonicalDecimal、JCS、UTF-8、SHA-256和固定测试向量实现候选/顶点哈希，禁止裸字符串拼接或扩展`vertexSetHash`字段集合；
+- 以Snapshot冻结SKU revision为锚点，按`projection-reference/current-sku-frozen-match/v1`逐部位唯一选择ProjectionMatch，冻结projection ID/revision、缺失状态与`projectionReferenceSetHash`；
+- 实现部件占比、未封顶比较分、0..100正式分、档位映射和完整Trace，不生成Model短板汇总线；
+- 抛投顶点只使用竿的direct值；轮线在比较上下文继承第一根竿，无竿时为not_applicable，均不按0；
 - 属性词条和Patch通过最终面板参数影响五维，被动词条不影响五维；
-- 将五维定义ID/版本、五维结果、顶点哈希和规则版本冻结到ConfigurationSnapshot；
+- 将五维定义/哈希/选择器版本、W段、逐件结果、顶点哈希、投影引用证据和规则版本冻结到ConfigurationSnapshot；
+- 为旧`PUBLISHED`定义建立不改payload/hash的不可变处置目录修订；用途变化通过完整后继修订和可条件更新的目录头表达，替换时原子写入旧项`SUPERSEDED`与唯一新项`FORMAL_CURRENT`。旧Snapshot只读重放，新正式Snapshot冻结目录revision/hash并在正式定义缺失或目录冲突时fail-closed；
 - 按UX Agent已确认的位置接入Model预览，并提供计算解释入口；
 - 对飞书`50..800`档位歧义产生导入warning，阈值保持配置化。
 
-验收以权威规范第21节及其必测场景为准。未经用户确认，不得把暂定`50..80`中档边界固化为永久常量。
+验收以权威规范第21节及其必测场景为准。当前正式档位为弱`[0,50)`、中`[50,80)`、强`[80,100]`，必须来自版本化定义；未来改变需发布新定义版本，不能散落为UI常量。
 
 ## 16. WP4A补充：五维双模式比较
 
 五维图必须同时支持：
 
-1. tackle_fit：同一Model的竿、轮、线叠加，并可开关Model短板汇总曲线；
-2. same_part_compare：多个同部位钓具使用共同基准叠加比较。
+1. `tackle_fit`：同一Model的竿、轮、线三条单件曲线叠加，并可显示三条`projection_reference`结构投影参考线；不生成Model汇总曲线；
+2. `equipment_compare`：2–5件竿、轮、线可混合部位叠加，使用用户可见且可切换的共同W段。
 
 开发约束：
 
 - 两种模式共用第21节五维内核，不在React图表中复制公式；
-- 钓组模式三条单件曲线共用Model鱼重等级顶点；
+- 钓组模式三条单件曲线共用Model按最终拉力命中的W段顶点；
 - 轮线抛投在钓组模式继承竿并显示继承来源，不参与匹配差值；
-- 同部位比较不允许混合部位，也不允许每件装备按自己的等级归一化；
+- 多装备比较允许混合部位，但不允许每件装备按自己的W段分别归一化；
 - 轮线独立比较时抛投为not_applicable，不能画成0；
 - 同时保留官方封顶分和未封顶比较分，使超过100的装备仍可区分；
+- Series参考线只接受显式基准Snapshot锚定的三条`projection_reference`；独立比较未选基准时不自动回退；
 - 硬兼容、Affinity和五维视觉匹配分别展示，不得互相替代；
 - 实现和测试以权威规范第22节为准。
 
-页面位置与交互采用`docs/ux/tackle-forger-product-design-completion-v3.md`第6节：Model右侧层内提供Model/Series、竿轮线匹配、同部位比较三种视图，并使用页面级比较篮。
+页面位置与交互采用`docs/ux/tackle-forger-product-design-completion-v3.md`第6节：Model右侧层内提供“钓组匹配”和“多装备比较”两个视图，并使用页面级比较篮；Series结构投影是参考线开关，不是第三种基准策略或独立聚合模式。
 
 ## 17. 增量工作包：WP6A系列甘特图与AI建议
 

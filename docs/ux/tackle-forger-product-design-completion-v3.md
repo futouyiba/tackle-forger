@@ -40,7 +40,7 @@ flowchart LR
 | 发布管理 | Model、SnapshotBuild | 发布检查、冻结、升级候选 |
 | 配置表交付 | SnapshotBatch、环境×渠道目标 | 一期NON_FORMAL预览；1.5期正式包/写入与关联校验 |
 
-采用高密度数据驾驶舱。左侧稳定一级导航；顶部面包屑与全局搜索；主区优先矩阵、表格和差异；右侧 520–640px 推入层按“1 常用概览 → 2 五维与适配 → 3 来源与版本”渐进披露，并保留独立的“Patch / Rebase”和“AI评估与建议”入口。常用概览默认展示对象身份、离散目标拉力、调性/硬度、长度、发布/冻结面、品质定价和四套独立裁决；五维层才展开三种比较模式；来源层展示完整Trace。所有写按钮消费后端 `ActionAvailability`，前端不从角色、颜色或状态猜动作。
+采用高密度数据驾驶舱。左侧稳定一级导航；顶部面包屑与全局搜索；主区优先矩阵、表格和差异；右侧 520–640px 推入层按“1 常用概览 → 2 五维与适配 → 3 来源与版本”渐进披露，并保留独立的“Patch / Rebase”和“AI评估与建议”入口。常用概览默认展示对象身份、离散目标拉力、调性/硬度、长度、发布/冻结面、品质定价和四套独立裁决；五维层才展开钓组匹配与多装备比较两个视图；来源层展示完整Trace。所有写按钮消费后端 `ActionAvailability`，前端不从角色、颜色或状态猜动作。
 
 ## 2. 钓具系列甘特图
 
@@ -88,17 +88,18 @@ SKU 显示“精确重量 + SKU 抽屉”；Model 显示型号并标明“实际
 
 ## 6. 可配置五维图
 
-前端只消费版本化 `FiveAxisViewDefinition`。恰好五轴，但 axisId、名称、顺序、输入、变换、顶点、聚合、缺值、档位都不得写死。图旁显示 definition/version、fiveAxisRuleVersion、fishWeightGradeId、vertexSetHash、刻度和“查看来源”。定义、鱼重基准或 hash 不同的曲线不得叠加。
+前端只消费符合`five-axis/open005-2026-07-23/v1`的版本化`FiveAxisViewDefinition`。正式五轴及顺序固定为拉力、耐久、抛投、感度、操控，但axisId、输入、变换、W重量段、顶点、缺值、档位和比较策略仍由发布定义提供，页面不得复制公式。图旁显示definition/version、fiveAxisRuleVersion、`modelFinalPullKg`、weightBandId/policyVersion、vertexSetHash、`projectionReferenceSelectorVersion`、`projectionReferenceSetHash`、刻度和“查看来源”。定义、W段或vertex hash不同的曲线不得叠加。
 
-右侧层提供三个视图：
+右侧层提供两个视图：
 
-1. **Model / Series**：当前 Model 与明确 Series 基准。
-2. **竿轮线匹配**：Rod/Reel/Line 同图，可开关 Model 短板汇总，共享 Model 鱼重基准。
-3. **同部位比较**：比较篮中 2–5 个同部位对象，共用一个鱼重基准；上限配置化。
+1. **钓组匹配**：当前Model的Rod/Reel/Line三条单件曲线同图，共享Model最终拉力命中的W段；不生成Model最弱环节汇总线。可开关显示竿、轮、线三条Series结构投影参考线。
+2. **多装备比较**：比较篮中2–5件竿、轮、线可混合部位，共用用户可见、可切换的一个W段；上限由当前定义实例配置且服务端强制。
 
-“加入比较”写入页面级比较篮；混入不同部位时阻止并提供“新建比较组”。轮/线无参考竿时抛投为 not_applicable；指定参考竿后为 context_inherited，不参与排名。
+“加入比较”写入页面级比较篮，不因混合部位阻止。轮/线按稳定比较顺序继承第一根竿的抛投并显示`context_inherited`提示，不参与排名；无竿时为`not_applicable`，不得补0。拉力、耐久、抛投使用直接比例，感度、操控使用反向比例；`officialDisplayScore`封顶100，`comparisonScore`不封顶并按真实比例伸出100分外圈，绘图区不得裁切。
 
-Series 基准只允许 explicit_model、approved_model_median、projection_reference 三种后端策略；必须显示 baselineRef/aggregateRef、Revision、样本数和理由。失效时不静默回退。
+Series基准只允许`projection_reference`。Model/钓组视图从当前Snapshot冻结的SKU revision按`projection-reference/current-sku-frozen-match/v1`逐部位唯一读取ProjectionMatch；必须显示基准Snapshot、SKU revision、选择器版本、projectionMatch/projection ID与revision、逐部位`available/missing/error`状态和理由。同Series其他SKU、默认SKU、查询第一项、同W段其他投影及页面上下文均不得作为回退。独立多装备比较未显式选择`baselineSnapshotId`时不显示Series参考线；选择后锚点保持稳定，共同W段变化不改锚点。
+
+旧`PUBLISHED`五维定义及其Snapshot只读展示并标记“历史定义”；新正式Snapshot只接受唯一`FORMAL_CURRENT`定义。若当前只有legacy定义，发布动作禁用并显示`FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE`，不得以旧种子预览冒充正式结果。
 
 状态：direct 实线；context_inherited 虚线/链接标；not_applicable 不画 0；missing 显示补齐动作；error 阻断且不画 0。雷达图下必须有原始值、归一化比值、正式分、comparisonScore、overflow、相对差、来源状态和 Trace 的数值表。
 

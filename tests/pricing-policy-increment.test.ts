@@ -391,6 +391,7 @@ test("新正式 Snapshot 拒绝旧 Performance 评分及不匹配的定价分数
   };
   const base = {
     publicationMode: "new_formal" as const,
+    workspaceId: "workspace:pricing-policy-guard",
     model, sku, series, seriesSkus: state.skuDrawers, projection,
     finalPanelValues: existing.finalPanelValues,
     componentSelections: existing.componentSelections,

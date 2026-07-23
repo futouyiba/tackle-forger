@@ -827,7 +827,7 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
     methodIds: [method.id],
     typeIds: [type.id],
     functionIds: [fn.id],
-    performanceIds: performance ? [performance.id] : [],
+    performanceIds: [],
     qualityIds: [quality.id as CandidateSearchRecipe["qualityIds"][number]],
     targetPullRangeKg: { min: 1.5, max: 1.8 },
     maxCandidates: 16,

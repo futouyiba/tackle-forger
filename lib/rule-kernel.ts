@@ -28,6 +28,8 @@ export interface DeriveProjectionInput {
   itemTypeProfile: ItemTypeProfile;
   functionProfile: FunctionProfile;
   functionIntensity: FunctionIntensity;
+  /** 旧已发布结果审计重放专用；canonical 不消费 PerformanceProfile。 */
+  executionMode?: "canonical" | "legacy_performance_replay";
   performanceProfile?: PerformanceProfile;
   qualityProfile?: QualityProfile;
   ruleSet: RuleSetVersion;
@@ -402,6 +404,14 @@ function validateProjection(
 export function deriveProjection(
   input: DeriveProjectionInput,
 ): DerivedProjection {
+  if (
+    input.executionMode === "legacy_performance_replay"
+    && !input.performanceProfile
+  ) {
+    throw new Error(
+      "[LEGACY_PERFORMANCE_PROFILE_MISSING] 历史 Performance 重放缺少冻结的 PerformanceProfile，禁止退化为规范计算。",
+    );
+  }
   const values: ProjectionValues = sortRecord(
     structuredClone(input.weightTemplate.values),
   );
@@ -509,13 +519,17 @@ export function deriveProjection(
     setRules,
   );
 
-  if (input.performanceProfile) {
+  const legacyPerformanceReplay =
+    input.executionMode === "legacy_performance_replay"
+      ? input.performanceProfile
+      : undefined;
+  if (legacyPerformanceReplay) {
     applyRuleSource(
       values,
       step("performance"),
-      input.performanceProfile.rules,
-      input.performanceProfile.id,
-      input.performanceProfile.name,
+      legacyPerformanceReplay.rules,
+      legacyPerformanceReplay.id,
+      legacyPerformanceReplay.name,
       warnings,
       sequence,
       setRules,
@@ -591,7 +605,9 @@ export function deriveProjection(
     itemTypeProfile: input.itemTypeProfile,
     functionProfile: input.functionProfile,
     functionIntensity: input.functionIntensity,
-    performanceProfile: input.performanceProfile ?? null,
+    ...(legacyPerformanceReplay
+      ? { legacyPerformanceProfile: legacyPerformanceReplay }
+      : {}),
     qualityProfile: input.qualityProfile ?? null,
     ruleSet: input.ruleSet,
     attributeContributions: input.attributeContributions ?? [],
@@ -609,7 +625,9 @@ export function deriveProjection(
     typeId: input.itemTypeProfile.id,
     functionId: input.functionProfile.id,
     functionIntensity: input.functionIntensity,
-    performanceId: input.performanceProfile?.id,
+    ...(legacyPerformanceReplay
+      ? { performanceId: legacyPerformanceReplay.id }
+      : {}),
     qualityId: input.qualityProfile?.id,
     ruleSetVersion: input.ruleSet.id,
     reductionStackingMode: input.ruleSet.settings.reductionStackingMode,

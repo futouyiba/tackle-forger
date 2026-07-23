@@ -43,6 +43,7 @@ import {
   CANONICAL_PATCH_OFFSET_POLICY_ID,
   createCanonicalPatchOffsetPolicyVersion,
 } from "./patch-offset-policy";
+import { migrateConfigIdGovernanceState } from "./config-id-governance";
 import {
   createNeedsReviewPartConstraintSet,
   PART_CONSTRAINT_SOURCE_HASH_PROJECTION,
@@ -1445,6 +1446,9 @@ function migrateV17ToV18(input: MutableWorkspace): MutableWorkspace {
     candidateSearchRecipes,
     seriesDefinitions,
     migrationReviewItems: reviewItems,
+    performanceSummaryDefinitions: arrayOf<
+      WorkspaceState["performanceSummaryDefinitions"][number]
+    >(state.performanceSummaryDefinitions),
     // PartConstraintSet 迁移不得补写、重算或改变任何已发布 Snapshot。
     configurationSnapshots: arrayOf<WorkspaceState["configurationSnapshots"][number]>(
       state.configurationSnapshots,
@@ -1508,6 +1512,7 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
     patchLedger: state.patchLedger && typeof state.patchLedger === "object"
       ? migratePatchLedger(state.patchLedger as WorkspaceState["patchLedger"])
       : emptyPatchLedger(),
+    configIdGovernance: migrateConfigIdGovernanceState(state.configIdGovernance),
   };
   return state as WorkspaceState;
 }

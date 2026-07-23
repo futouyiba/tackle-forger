@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requestUser } from "@/lib/auth";
 import {
   defaultAffinityAxisWeights,
-  evaluateAffinity,
+  evaluateCanonicalAffinity,
   evaluateStructuralHardCompatibility,
   structuralCompatibilityContext,
 } from "@/lib/compatibility";
@@ -26,12 +26,18 @@ import { loadWorkspaceState, saveWorkspaceState } from "@/lib/storage";
 import type { SeriesDefinition } from "@/lib/types";
 import { ensureWorkflowFields } from "@/lib/workflow";
 import { parseDiscretePulls } from "@/lib/series-create-contract";
+import { recoverSeriesCreateAfterSaveConflict } from "@/lib/series-create-idempotency";
 import { stableAuditActor } from "@/lib/api-command-boundaries";
 import {
   ItemPartNotEnabledError,
   OPEN_003_FAIL_CLOSED_POLICY,
   isProductItemPartEnabled,
 } from "@/lib/enabled-item-parts";
+import { ActionCommandPayloadError } from "@/lib/action-command-payloads";
+import {
+  executeProductionWorkspaceCommand,
+  WorkspaceCommandTransientHttpError,
+} from "@/lib/production-action-commands";
 
 export const dynamic = "force-dynamic";
 
@@ -46,6 +52,7 @@ interface SeriesCreateRequest {
   typeId: string;
   functionId: string;
   qualityId: SeriesDefinition["qualityId"];
+  /** 旧命令恢复专用；新创建禁止使用。 */
   performanceId?: string;
   functionIntensity: 1 | 2 | 3;
   planningMinKgf?: string;
@@ -58,7 +65,7 @@ interface SeriesCreateRequest {
  * 写入由服务端重新鉴权（create_series → series.edit），并在服务端完成结构标杆匹配、
  * 拉力规划与 SKU 物化后按 revision 受保护地提交，避免客户端绕过 series.edit 直接写整包。
  */
-export async function POST(request: NextRequest) {
+async function executeSeriesBusinessRequest(request: NextRequest) {
   const user = await requestUser(request);
   if (!user.authenticated) {
     return NextResponse.json(
@@ -81,13 +88,21 @@ export async function POST(request: NextRequest) {
   if (!body || typeof body !== "object") {
     return NextResponse.json({ error: "请求体无效。" }, { status: 400 });
   }
-
+  if (
+    body.performanceId !== undefined
+    && typeof body.performanceId !== "string"
+  ) {
+    return NextResponse.json(
+      { error: "字段 performanceId 必须是字符串。", field: "performanceId" },
+      { status: 400 },
+    );
+  }
   const requiredStringFields = [
     "idempotencyKey", "seriesId", "name", "concept", "itemPartId", "methodId",
     "typeId", "functionId", "qualityId", "discretePulls",
   ] as const satisfies readonly (keyof SeriesCreateRequest)[];
   const optionalStringFields = [
-    "collectionId", "performanceId", "planningMinKgf", "planningMaxKgf",
+    "collectionId", "planningMinKgf", "planningMaxKgf",
   ] as const satisfies readonly (keyof SeriesCreateRequest)[];
   const invalidField = requiredStringFields.find((field) => typeof body[field] !== "string")
     ?? optionalStringFields.find(
@@ -154,7 +169,25 @@ export async function POST(request: NextRequest) {
     }, { status: 422 });
   }
 
-  const inputHash = createHash("sha256").update(JSON.stringify({
+  const canonicalInput = {
+    seriesId: body.seriesId,
+    name,
+    concept,
+    collectionId: body.collectionId || null,
+    itemPartId: body.itemPartId,
+    methodId: body.methodId,
+    typeId: body.typeId,
+    functionId: body.functionId,
+    qualityId: body.qualityId,
+    functionIntensity: body.functionIntensity,
+    planningMinKgf: minKgf ?? null,
+    planningMaxKgf: maxKgf ?? null,
+    pulls,
+  };
+  const inputHash = createHash("sha256")
+    .update(JSON.stringify(canonicalInput))
+    .digest("hex");
+  const legacyInputHash = createHash("sha256").update(JSON.stringify({
     seriesId: body.seriesId,
     name,
     concept,
@@ -170,9 +203,10 @@ export async function POST(request: NextRequest) {
     planningMaxKgf: maxKgf ?? null,
     pulls,
   })).digest("hex");
+  const acceptedInputHashes = new Set([inputHash, legacyInputHash]);
   const priorCommand = state.commandIdempotencyRecords.find((entry) => entry.key === idempotencyKey);
   if (priorCommand) {
-    if (priorCommand.inputHash !== inputHash) {
+    if (!acceptedInputHashes.has(priorCommand.inputHash)) {
       return NextResponse.json({ error: "同一幂等键不能用于不同的创建输入。" }, { status: 409 });
     }
     const priorSeries = state.seriesDefinitions.find((entry) => entry.id === priorCommand.resultRef);
@@ -187,6 +221,13 @@ export async function POST(request: NextRequest) {
       idempotent: true,
       user,
     });
+  }
+  if (body.performanceId?.trim()) {
+    return NextResponse.json({
+      error: "Performance 已改为配置完成后的只读派生摘要，不能作为 Series 创建输入。",
+      code: "PERFORMANCE_INPUT_NOT_ALLOWED",
+      field: "performanceId",
+    }, { status: 422 });
   }
 
   if (!body.seriesId || state.seriesDefinitions.some((entry) => entry.id === body.seriesId)) {
@@ -214,9 +255,6 @@ export async function POST(request: NextRequest) {
   if (body.collectionId && !state.collections.some((entry) => entry.id === body.collectionId)) {
     return NextResponse.json({ error: "所选 Collection 不存在。" }, { status: 422 });
   }
-  if (body.performanceId && !state.performanceProfiles.some((entry) => entry.id === body.performanceId && entry.enabled)) {
-    return NextResponse.json({ error: "所选性能方向不存在或未启用。" }, { status: 422 });
-  }
   const ruleSet = [...state.ruleSetVersions]
     .filter((entry) => entry.status === "published")
     .sort((left, right) => right.version - left.version || right.id.localeCompare(left.id))[0];
@@ -237,7 +275,6 @@ export async function POST(request: NextRequest) {
     qualityId: body.qualityId,
     coreFunctionId: body.functionId,
     functionIntensityPolicy: { mode: "fixed", intensity: body.functionIntensity },
-    ...(body.performanceId ? { performanceProfileId: body.performanceId } : {}),
     coreAffixIds: [],
     secondaryAffixPoolIds: [],
     forbiddenAffixIds: [],
@@ -286,14 +323,13 @@ export async function POST(request: NextRequest) {
                 }),
                 state.compatibilityRules,
               ),
-              affinity: evaluateAffinity(
+              affinity: evaluateCanonicalAffinity(
                 {
                   methodId: body.methodId,
                   typeId: body.typeId,
                   targetPullKg: pull,
                   functionId: body.functionId,
                   functionIntensity: body.functionIntensity,
-                  performanceId: body.performanceId || undefined,
                   qualityId: body.qualityId,
                   itemPartId: body.itemPartId,
                   componentIds: [],
@@ -377,19 +413,18 @@ export async function POST(request: NextRequest) {
     message: `创建 Series ${materialized.series.name}（${materialized.createdSkuIds.length} 个 SKU 抽屉）`,
   });
   if (result.conflict) {
-    const latest = await loadWorkspaceState();
-    const recoveredCommand = latest.state.commandIdempotencyRecords.find(
-      (entry) => entry.key === idempotencyKey,
-    );
-    const recoveredSeries = recoveredCommand?.inputHash === inputHash
-      ? latest.state.seriesDefinitions.find((entry) => entry.id === recoveredCommand.resultRef)
-      : undefined;
-    if (recoveredSeries) {
+    const recovered = await recoverSeriesCreateAfterSaveConflict({
+      saveResult: result,
+      loadLatest: loadWorkspaceState,
+      idempotencyKey,
+      acceptedInputHashes,
+    });
+    if (recovered) {
       return NextResponse.json({
-        state: latest.state,
-        series: recoveredSeries,
-        createdSkuIds: recoveredSeries.skuIds,
-        revision: latest.revision,
+        state: recovered.latest.state,
+        series: recovered.series,
+        createdSkuIds: recovered.series.skuIds,
+        revision: recovered.latest.revision,
         idempotent: true,
         user,
       });
@@ -406,4 +441,73 @@ export async function POST(request: NextRequest) {
     revision: result.revision,
     user,
   });
+}
+
+function commandErrorStatus(error: ActionCommandPayloadError): number {
+  if (error.code === "ACTION_COMMAND_PAYLOAD_NOT_FOUND") return 404;
+  if (error.code === "ACTION_COMMAND_CAPABILITY_CHANGED") return 403;
+  if (
+    error.code === "ACTION_COMMAND_REVISION_CONFLICT"
+    || error.code === "ACTION_COMMAND_INPUT_HASH_MISMATCH"
+    || error.code === "STALE_FENCING_TOKEN"
+    || error.code === "IDEMPOTENCY_KEY_REUSED"
+  ) return 409;
+  return 422;
+}
+
+export async function POST(request: NextRequest) {
+  const user = await requestUser(request);
+  if (!user.authenticated) {
+    return NextResponse.json(
+      { error: "请使用公司飞书账号登录。", action: "feishu_login" },
+      { status: 401 },
+    );
+  }
+  const invocation = await request.json().catch(() => null);
+  const current = await loadWorkspaceState();
+  try {
+    const execution = await executeProductionWorkspaceCommand({
+      expectedAction: "create_series",
+      invocation,
+      user,
+      current,
+      execute: async (storedPayload) => {
+        const businessRequest = new NextRequest(request.url, {
+          method: "POST",
+          headers: request.headers,
+          body: JSON.stringify(storedPayload),
+        });
+        const response = await executeSeriesBusinessRequest(businessRequest);
+        const responseBody = await response.json() as Record<string, unknown>;
+        const durableBody = { ...responseBody };
+        delete durableBody.user;
+        return {
+          status: response.status,
+          body: durableBody,
+        };
+      },
+    });
+    return NextResponse.json(
+      {
+        ...(execution.result.body as Record<string, unknown>),
+        user,
+        replayed: execution.replayed,
+      },
+      { status: execution.result.status },
+    );
+  } catch (error) {
+    if (error instanceof WorkspaceCommandTransientHttpError) {
+      return NextResponse.json(
+        error.result.body,
+        { status: error.result.status },
+      );
+    }
+    if (error instanceof ActionCommandPayloadError) {
+      return NextResponse.json(
+        { error: error.message, code: error.code },
+        { status: commandErrorStatus(error) },
+      );
+    }
+    throw error;
+  }
 }

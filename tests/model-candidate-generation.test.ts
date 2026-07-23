@@ -102,6 +102,67 @@ test("同一冻结输入产生相同候选顺序、fingerprint 与输出 hash", 
   assert.equal(first.durationMs, 25);
 });
 
+test("旧 Performance 字段不参与配方筛选、兼容、Affinity 或候选 fingerprint", () => {
+  const baseline = fixture();
+  const expected = run(baseline);
+  const withLegacyPerformance = fixture();
+  withLegacyPerformance.series.performanceProfileId = "legacy:performance:heavy";
+  withLegacyPerformance.recipe.performanceIds = ["legacy:performance:other"];
+  withLegacyPerformance.state.compatibilityRules.push({
+    id: "legacy-performance-deny",
+    axis: "type_function",
+    effect: "deny",
+    selector: { performanceId: "legacy:performance:heavy" },
+    requirements: [],
+    priority: 999,
+    ruleSetVersion: withLegacyPerformance.state.ruleSetVersions[0].id,
+    reason: "旧 Performance 规则不得命中新候选",
+    suggestion: "",
+    enabled: true,
+  });
+  withLegacyPerformance.state.compatibilityRules.push({
+    id: "legacy-performance-requirement",
+    axis: "type_function",
+    effect: "require",
+    selector: {
+      typeId: withLegacyPerformance.series.typeId,
+      functionId: withLegacyPerformance.series.coreFunctionId,
+    },
+    requirements: [{
+      kind: "field",
+      key: "performanceId",
+      value: "legacy:performance:required",
+      message: "旧 Performance requirement 不得阻断 canonical 候选",
+    }],
+    priority: 998,
+    ruleSetVersion: withLegacyPerformance.state.ruleSetVersions[0].id,
+    reason: "旧 Performance requirement",
+    suggestion: "",
+    enabled: true,
+  });
+  withLegacyPerformance.state.affinityRules.push({
+    id: "legacy-performance-affinity",
+    axis: "function_performance",
+    selector: {},
+    score: -3,
+    priority: 999,
+    ruleSetVersion: withLegacyPerformance.state.ruleSetVersions[0].id,
+    reason: "旧轴不得进入新 Affinity",
+    enabled: true,
+  });
+  const actual = run(withLegacyPerformance);
+  assert.deepEqual(
+    actual.candidates.map((candidate) => candidate.candidateFingerprint),
+    expected.candidates.map((candidate) => candidate.candidateFingerprint),
+  );
+  assert.equal(actual.excludedByCode.HARD_COMPATIBILITY_DENIED, undefined);
+  assert.equal(
+    actual.candidates.every((candidate) =>
+      !candidate.affinity.matchedRuleIds.includes("legacy-performance-affinity")),
+    true,
+  );
+});
+
 test("高 Affinity 候选命中 deny 时只进入排除统计，合法候选仍保留", () => {
   const current = fixture();
   current.state.compatibilityRules.push({

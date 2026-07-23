@@ -24,6 +24,11 @@ import {
   recordQualityValuePolicyDraft,
   recordSourceIdentityMigrationReport,
 } from "@/lib/workbook-governance";
+import { ActionCommandPayloadError } from "@/lib/action-command-payloads";
+import {
+  executeProductionWorkspaceCommand,
+  WorkspaceCommandTransientHttpError,
+} from "@/lib/production-action-commands";
 
 export const dynamic = "force-dynamic";
 
@@ -61,7 +66,7 @@ export async function GET(request: NextRequest) {
   }
 }
 
-export async function POST(request: NextRequest) {
+async function executeWorkbookBusinessRequest(request: NextRequest) {
   const user = await requestUser(request);
   if (!user.authenticated) return unavailable();
   const body = (await request.json()) as {
@@ -275,5 +280,86 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ result, requiresExplicitPull: result.state === "WRITE_VERIFIED" });
   } catch (error) {
     return NextResponse.json({ error: safeError(error) }, { status: 422 });
+  }
+}
+
+function commandErrorStatus(error: ActionCommandPayloadError): number {
+  if (error.code === "ACTION_COMMAND_PAYLOAD_NOT_FOUND") return 404;
+  if (error.code === "ACTION_COMMAND_CAPABILITY_CHANGED") return 403;
+  if (
+    error.code === "ACTION_COMMAND_REVISION_CONFLICT"
+    || error.code === "ACTION_COMMAND_INPUT_HASH_MISMATCH"
+    || error.code === "STALE_FENCING_TOKEN"
+    || error.code === "IDEMPOTENCY_KEY_REUSED"
+  ) return 409;
+  return 422;
+}
+
+const WORKBOOK_COMMAND_ACTIONS = {
+  pull_feishu_workbook: "pull",
+  create_ruleset_draft: "create_ruleset_draft",
+  publish_ruleset: "publish_ruleset",
+  write_feishu_identity: "identity_write",
+} as const;
+
+export async function POST(request: NextRequest) {
+  const user = await requestUser(request);
+  if (!user.authenticated) return unavailable();
+  const invocation = await request.json().catch(() => null);
+  const current = await loadWorkspaceState();
+  try {
+    const execution = await executeProductionWorkspaceCommand({
+      expectedAction: [
+        "pull_feishu_workbook",
+        "create_ruleset_draft",
+        "publish_ruleset",
+        "write_feishu_identity",
+      ],
+      invocation,
+      user,
+      current,
+      execute: async (storedPayload, commandAction) => {
+        if (
+          storedPayload.action
+          !== WORKBOOK_COMMAND_ACTIONS[
+            commandAction as keyof typeof WORKBOOK_COMMAND_ACTIONS
+          ]
+        ) {
+          throw new ActionCommandPayloadError(
+            "ACTION_COMMAND_ACTION_MISMATCH",
+            "工作簿命令动作与服务端保存的业务载荷不一致。",
+          );
+        }
+        const response = await executeWorkbookBusinessRequest(
+          new NextRequest(request.url, {
+            method: "POST",
+            headers: request.headers,
+            body: JSON.stringify(storedPayload),
+          }),
+        );
+        return { status: response.status, body: await response.json() };
+      },
+    });
+    return NextResponse.json(
+      {
+        ...(execution.result.body as Record<string, unknown>),
+        replayed: execution.replayed,
+      },
+      { status: execution.result.status },
+    );
+  } catch (error) {
+    if (error instanceof WorkspaceCommandTransientHttpError) {
+      return NextResponse.json(
+        error.result.body,
+        { status: error.result.status },
+      );
+    }
+    if (error instanceof ActionCommandPayloadError) {
+      return NextResponse.json(
+        { error: error.message, code: error.code },
+        { status: commandErrorStatus(error) },
+      );
+    }
+    throw error;
   }
 }

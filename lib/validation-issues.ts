@@ -17,6 +17,8 @@ import type {
 } from "./types";
 
 export const VALIDATION_ISSUE_FINGERPRINT_VERSION = "validation-issue-fingerprint/v1" as const;
+export const VALIDATION_EVIDENCE_RECORD_HASH_VERSION = "validation-evidence-record/v2" as const;
+export const VALIDATION_EVIDENCE_STATE_HASH_VERSION = "validation-evidence-state/v1" as const;
 export const ACKNOWLEDGE_VALIDATION_WARNING_CAPABILITY = "validation.warning.acknowledge";
 export const APPROVE_VALIDATION_WAIVER_CAPABILITY = "validation.waiver.approve";
 
@@ -404,9 +406,53 @@ function replaceIssueState(
 export function verifyValidationAcknowledgement(
   acknowledgement: ValidationAcknowledgement,
 ): boolean {
-  const { acknowledgementId, recordHash, ...content } = acknowledgement;
+  const {
+    acknowledgementId,
+    recordHash,
+    recordHashVersion,
+    state,
+    stateHash,
+    stateHashVersion,
+    ...content
+  } = acknowledgement;
+  const recordValid = recordHashVersion === VALIDATION_EVIDENCE_RECORD_HASH_VERSION
+    ? deterministicHash({ recordHashVersion, ...content }) === recordHash
+    : recordHashVersion === undefined
+      && deterministicHash({ ...content, state: "FRESH" }) === recordHash;
+  const stateValid = stateHashVersion === undefined && stateHash === undefined
+    ? recordHashVersion === undefined
+    : stateHashVersion === VALIDATION_EVIDENCE_STATE_HASH_VERSION
+      && deterministicHash({
+      stateHashVersion,
+      recordHash,
+      state,
+      }) === stateHash;
   return acknowledgementId === `validation-ack:${recordHash}`
-    && deterministicHash(content) === recordHash;
+    && recordValid
+    && stateValid;
+}
+
+function transitionAcknowledgementToStale(
+  acknowledgement: ValidationAcknowledgement,
+): ValidationAcknowledgement {
+  if (!verifyValidationAcknowledgement(acknowledgement)) {
+    throw new ValidationIssueContractError(
+      "VALIDATION_EVIDENCE_INVALID",
+      "WARNING 确认证据完整性校验失败，不能生成 STALE 迁移证据。",
+    );
+  }
+  const state = "STALE" as const;
+  const stateHashVersion = VALIDATION_EVIDENCE_STATE_HASH_VERSION;
+  return {
+    ...structuredClone(acknowledgement),
+    state,
+    stateHash: deterministicHash({
+      stateHashVersion,
+      recordHash: acknowledgement.recordHash,
+      state,
+    }),
+    stateHashVersion,
+  };
 }
 
 export function acknowledgeValidationWarning(input: {
@@ -485,6 +531,7 @@ export function acknowledgeValidationWarning(input: {
     );
   }
   const content = {
+    recordHashVersion: VALIDATION_EVIDENCE_RECORD_HASH_VERSION,
     issueId: input.issue.issueId,
     issueFingerprint: input.issue.fingerprint,
     issueRevision: input.issue.issueRevision,
@@ -495,15 +542,19 @@ export function acknowledgeValidationWarning(input: {
     acknowledgedAt: input.acknowledgedAt,
     idempotencyKey: input.idempotencyKey,
     payloadHash,
-    state: "FRESH" as const,
     evidenceRefs: structuredClone(input.issue.evidenceRefs),
   };
   const recordHash = deterministicHash(content);
+  const state = "FRESH" as const;
+  const stateHashVersion = VALIDATION_EVIDENCE_STATE_HASH_VERSION;
   return {
     issue: replaceIssueState(input.issue, "ACKNOWLEDGED"),
     acknowledgement: {
       acknowledgementId: `validation-ack:${recordHash}`,
       ...content,
+      state,
+      stateHashVersion,
+      stateHash: deterministicHash({ stateHashVersion, recordHash, state }),
       recordHash,
     },
   };
@@ -528,8 +579,48 @@ export function verifyWaiverPolicyVersion(policy: WaiverPolicyVersion): boolean 
 }
 
 export function verifyValidationWaiver(waiver: ValidationWaiver): boolean {
-  const { recordHash, ...content } = waiver;
-  return deterministicHash(content) === recordHash;
+  const {
+    recordHash,
+    recordHashVersion,
+    state,
+    stateHash,
+    stateHashVersion,
+    ...content
+  } = waiver;
+  const recordValid = recordHashVersion === VALIDATION_EVIDENCE_RECORD_HASH_VERSION
+    ? deterministicHash({ recordHashVersion, ...content }) === recordHash
+    : recordHashVersion === undefined
+      && deterministicHash({ ...content, state: "FRESH" }) === recordHash;
+  const stateValid = stateHashVersion === undefined && stateHash === undefined
+    ? recordHashVersion === undefined
+    : stateHashVersion === VALIDATION_EVIDENCE_STATE_HASH_VERSION
+      && deterministicHash({
+      stateHashVersion,
+      recordHash,
+      state,
+      }) === stateHash;
+  return recordValid && stateValid;
+}
+
+function transitionWaiverToStale(waiver: ValidationWaiver): ValidationWaiver {
+  if (!verifyValidationWaiver(waiver)) {
+    throw new ValidationIssueContractError(
+      "VALIDATION_EVIDENCE_INVALID",
+      "Waiver 证据完整性校验失败，不能生成 STALE 迁移证据。",
+    );
+  }
+  const state = "STALE" as const;
+  const stateHashVersion = VALIDATION_EVIDENCE_STATE_HASH_VERSION;
+  return {
+    ...structuredClone(waiver),
+    state,
+    stateHash: deterministicHash({
+      stateHashVersion,
+      recordHash: waiver.recordHash,
+      state,
+    }),
+    stateHashVersion,
+  };
 }
 
 export function verifyValidationWaiverDecision(
@@ -731,6 +822,7 @@ export function approveValidationWaiverDecision(input: {
     const request = requestedWaivers[index];
     const content = {
       waiverId: `${waiverDecisionId}:${index + 1}`,
+      recordHashVersion: VALIDATION_EVIDENCE_RECORD_HASH_VERSION,
       waiverDecisionId,
       issueId: issue.issueId,
       issueFingerprint: issue.fingerprint,
@@ -747,10 +839,18 @@ export function approveValidationWaiverDecision(input: {
       approvedBy: input.approvedBy,
       approvedAt: input.approvedAt,
       ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
-      state: "FRESH" as const,
       evidenceRefs: structuredClone(issue.evidenceRefs),
     };
-    return { ...content, recordHash: deterministicHash(content) };
+    const recordHash = deterministicHash(content);
+    const state = "FRESH" as const;
+    const stateHashVersion = VALIDATION_EVIDENCE_STATE_HASH_VERSION;
+    return {
+      ...content,
+      state,
+      stateHashVersion,
+      stateHash: deterministicHash({ stateHashVersion, recordHash, state }),
+      recordHash,
+    };
   });
   const decision: ValidationWaiverDecision = {
     waiverDecisionId,
@@ -797,7 +897,7 @@ export function invalidateValidationEvidence(input: {
     acknowledgements: (input.acknowledgements ?? []).map((entry) =>
       active.has(entry.issueFingerprint)
         ? structuredClone(entry)
-        : { ...structuredClone(entry), state: "STALE" }),
+        : transitionAcknowledgementToStale(entry)),
     waivers: (input.waivers ?? []).map((entry) => {
       const issue = issuesByFingerprint.get(entry.issueFingerprint);
       const activePolicy = input.activeWaiverPolicies?.find((policy) =>
@@ -809,7 +909,7 @@ export function invalidateValidationEvidence(input: {
         || Boolean(issue && activePolicy && policyAllows(activePolicy, issue, input.at!));
       return active.has(entry.issueFingerprint) && policyStillAllows
         ? structuredClone(entry)
-        : { ...structuredClone(entry), state: "STALE" };
+        : transitionWaiverToStale(entry);
     }),
   };
 }

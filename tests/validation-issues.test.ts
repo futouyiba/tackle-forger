@@ -10,6 +10,8 @@ import {
   createValidationIssue,
   createWaiverPolicyVersion,
   invalidateValidationEvidence,
+  verifyValidationAcknowledgement,
+  verifyValidationWaiver,
   verifyValidationWaiverDecision,
   ValidationIssueContractError,
 } from "../lib/validation-issues";
@@ -374,6 +376,50 @@ test("ERROR 默认不可 waive，只有完整且精确命中的已发布策略�
     at: "2026-07-23T03:30:00.000Z",
   });
   assert.equal(invalidatedByPolicy.waivers.every((entry) => entry.state === "STALE"), true);
+  assert.equal(invalidatedByPolicy.waivers.every(verifyValidationWaiver), true);
+  assert.deepEqual(
+    invalidatedByPolicy.waivers.map((entry) => entry.recordHash),
+    approved.waivers.map((entry) => entry.recordHash),
+  );
+  assert.equal(
+    invalidatedByPolicy.waivers.every(
+      (entry, index) => entry.stateHash !== approved.waivers[index].stateHash,
+    ),
+    true,
+  );
+  assert.equal(
+    verifyValidationWaiver({
+      ...invalidatedByPolicy.waivers[0],
+      stateHash: "tampered",
+    }),
+    false,
+  );
+  const invalidatedByPolicyRetry = invalidateValidationEvidence({
+    issues: invalidatedByPolicy.issues,
+    waivers: invalidatedByPolicy.waivers,
+    activeFingerprints: invalidatedByPolicy.issues.map((entry) => entry.fingerprint),
+    activeWaiverPolicies: [retiredPolicy],
+    at: "2026-07-23T03:30:00.000Z",
+  });
+  assert.deepEqual(invalidatedByPolicyRetry.waivers, invalidatedByPolicy.waivers);
+  const legacyWaiverContent = structuredClone(approved.waivers[0]);
+  Reflect.deleteProperty(legacyWaiverContent, "recordHashVersion");
+  Reflect.deleteProperty(legacyWaiverContent, "stateHashVersion");
+  Reflect.deleteProperty(legacyWaiverContent, "stateHash");
+  Reflect.deleteProperty(legacyWaiverContent, "recordHash");
+  const legacyWaiver = {
+    ...legacyWaiverContent,
+    recordHash: deterministicHash(legacyWaiverContent),
+  };
+  assert.equal(verifyValidationWaiver(legacyWaiver), true);
+  const migratedLegacyWaiver = invalidateValidationEvidence({
+    issues: [approved.issues[0]],
+    waivers: [legacyWaiver],
+    activeFingerprints: [],
+  }).waivers[0];
+  assert.equal(migratedLegacyWaiver.state, "STALE");
+  assert.equal(migratedLegacyWaiver.recordHash, legacyWaiver.recordHash);
+  assert.equal(verifyValidationWaiver(migratedLegacyWaiver), true);
 
   const defaultDenyPolicy = createWaiverPolicyVersion({
     policyId: "validation-waiver-policy",
@@ -430,6 +476,52 @@ test("输入变化后旧 Issue、确认与 Waiver 一起 STALE，旧证据不被
   assert.equal(invalidated.acknowledgements[0].state, "STALE");
   assert.equal(invalidated.acknowledgements[0].reason, "已确认");
   assert.equal(invalidated.acknowledgements.length, 1);
+  assert.equal(verifyValidationAcknowledgement(invalidated.acknowledgements[0]), true);
+  assert.equal(
+    invalidated.acknowledgements[0].recordHash,
+    acknowledged.acknowledgement.recordHash,
+  );
+  assert.notEqual(
+    invalidated.acknowledgements[0].stateHash,
+    acknowledged.acknowledgement.stateHash,
+  );
+  assert.equal(
+    verifyValidationAcknowledgement({
+      ...invalidated.acknowledgements[0],
+      stateHash: "tampered",
+    }),
+    false,
+  );
+  const invalidatedRetry = invalidateValidationEvidence({
+    issues: invalidated.issues,
+    acknowledgements: invalidated.acknowledgements,
+    activeFingerprints: ["new-fingerprint"],
+  });
+  assert.deepEqual(invalidatedRetry.acknowledgements, invalidated.acknowledgements);
+  const legacyAcknowledgementContent = structuredClone(acknowledged.acknowledgement);
+  Reflect.deleteProperty(legacyAcknowledgementContent, "acknowledgementId");
+  Reflect.deleteProperty(legacyAcknowledgementContent, "recordHashVersion");
+  Reflect.deleteProperty(legacyAcknowledgementContent, "stateHashVersion");
+  Reflect.deleteProperty(legacyAcknowledgementContent, "stateHash");
+  Reflect.deleteProperty(legacyAcknowledgementContent, "recordHash");
+  const legacyAcknowledgementRecordHash = deterministicHash(legacyAcknowledgementContent);
+  const legacyAcknowledgement = {
+    ...legacyAcknowledgementContent,
+    acknowledgementId: `validation-ack:${legacyAcknowledgementRecordHash}`,
+    recordHash: legacyAcknowledgementRecordHash,
+  };
+  assert.equal(verifyValidationAcknowledgement(legacyAcknowledgement), true);
+  const migratedLegacyAcknowledgement = invalidateValidationEvidence({
+    issues: [acknowledged.issue],
+    acknowledgements: [legacyAcknowledgement],
+    activeFingerprints: [],
+  }).acknowledgements[0];
+  assert.equal(migratedLegacyAcknowledgement.state, "STALE");
+  assert.equal(
+    migratedLegacyAcknowledgement.recordHash,
+    legacyAcknowledgement.recordHash,
+  );
+  assert.equal(verifyValidationAcknowledgement(migratedLegacyAcknowledgement), true);
 });
 
 test("Gate 只接受匹配 fingerprint 的冻结确认/Waiver 证据", () => {

@@ -1669,6 +1669,8 @@ export type ValidationIssue =
 
 export interface ValidationAcknowledgement {
   acknowledgementId: string;
+  /** 缺失表示合并前 v1 历史记录；新记录固定写入 v2。 */
+  recordHashVersion?: "validation-evidence-record/v2";
   issueId: string;
   issueFingerprint: string;
   issueRevision: string;
@@ -1680,12 +1682,17 @@ export interface ValidationAcknowledgement {
   idempotencyKey: string;
   payloadHash: string;
   state: "FRESH" | "STALE";
+  /** v1 历史记录可缺失；新记录和完成失效迁移的记录必须具备。 */
+  stateHashVersion?: "validation-evidence-state/v1";
+  stateHash?: string;
   evidenceRefs: ValidationEvidenceRef[];
   recordHash: string;
 }
 
 export interface ValidationWaiver {
   waiverId: string;
+  /** 缺失表示合并前 v1 历史记录；新记录固定写入 v2。 */
+  recordHashVersion?: "validation-evidence-record/v2";
   waiverDecisionId: string;
   issueId: string;
   issueFingerprint: string;
@@ -1702,6 +1709,9 @@ export interface ValidationWaiver {
   approvedAt: string;
   expiresAt?: string;
   state: "FRESH" | "STALE";
+  /** v1 历史记录可缺失；新记录和完成失效迁移的记录必须具备。 */
+  stateHashVersion?: "validation-evidence-state/v1";
+  stateHash?: string;
   evidenceRefs: ValidationEvidenceRef[];
   recordHash: string;
 }

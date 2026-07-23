@@ -15,6 +15,7 @@ import {
   executeFiveAxisTransactionPlan,
   executeFiveAxisSnapshotBatchTransactions,
   planFiveAxisTransactions,
+  selectCurrentFiveAxisVertexSet,
 } from "../lib/five-axis-transactions";
 import {
   assertSnapshotBatchCanConfirm,
@@ -23,6 +24,7 @@ import {
 } from "../lib/snapshot-batch";
 import { createSeedState } from "../lib/seed";
 import { deterministicHash } from "../lib/rule-kernel";
+import { buildFormalPreviewFixture } from "./helpers/formal-five-axis";
 import type {
   FiveAxisCandidateMembership,
   FiveAxisEntityInput,
@@ -271,6 +273,38 @@ test("Snapshot、Model 指针与顶点在分量内共同提交或共同回滚", 
     membership(definition, "W1", models[0].id, "snapshot:w1-commit"),
     membership(definition, "W5", models[1].id, "snapshot:w5-rollback"),
   ];
+  const snapshots = models.map((model, index) => {
+    const modelFinalPullKg = 1.5;
+    const fiveAxisPreview = buildFormalPreviewFixture({
+      definition,
+      snapshotId: memberships[index].candidateSources[0].snapshotId,
+      modelId: model.id,
+      modelRevision: model.revision,
+      seriesId: `series:transaction:${index}`,
+      skuId: model.skuId,
+      skuRevision: sourceSnapshot.skuRevision,
+      modelFinalPullKg,
+      finalPanelValues: sourceSnapshot.finalPanelValues,
+      componentSelections: sourceSnapshot.componentSelections,
+      weightBandId: memberships[index].groupKey.weightBandId,
+    });
+    memberships[index].candidateSources =
+      structuredClone(fiveAxisPreview.candidateSources!);
+    const content = {
+      ...structuredClone(sourceSnapshot),
+      id: memberships[index].candidateSources[0].snapshotId,
+      modelId: model.id,
+      modelRevision: model.revision,
+      modelFinalPullKg,
+      fiveAxisPreview,
+    };
+    const withoutHash = { ...content };
+    delete (withoutHash as Partial<typeof content>).contentHash;
+    return {
+      ...withoutHash,
+      contentHash: deterministicHash(withoutHash),
+    };
+  });
   const deltas = memberships.flatMap((after, index) =>
     createFiveAxisCandidateDeltas({
       changeId: `commit:${index}`,
@@ -281,49 +315,6 @@ test("Snapshot、Model 指针与顶点在分量内共同提交或共同回滚", 
   const plan = planFiveAxisTransactions({
     deltas,
     snapshotBuildModelIds: models.map((model) => model.id),
-  });
-  const expectedVertexSets = memberships.map((entry) =>
-    createFormalFiveAxisVertexSet({
-      definition,
-      groupKey: entry.groupKey,
-      candidateSources: entry.candidateSources,
-    }));
-  const snapshots = models.map((model, index) => {
-    const content = {
-      ...structuredClone(sourceSnapshot),
-      id: memberships[index].candidateSources[0].snapshotId,
-      modelId: model.id,
-      fiveAxisPreview: {
-        ...structuredClone(sourceSnapshot.fiveAxisPreview!),
-        modelId: model.id,
-        modelFinalPullKg: 1.5,
-        weightBandId: memberships[index].groupKey.weightBandId,
-        weightBandPolicyVersion: definition.weightBandPolicyVersion,
-        hashInputSchemaVersion: definition.hashInputSchemaVersion,
-        fiveAxisDefinitionId: definition.definitionId,
-        fiveAxisDefinitionVersion: definition.version,
-        fiveAxisDefinitionRevision: definition.revision,
-        fiveAxisDefinitionHash: definition.definitionHash,
-        fiveAxisRuleVersion: definition.fiveAxisRuleVersion,
-        sourceRevision: definition.sourceRevision,
-        vertexSetHash: expectedVertexSets[index].vertexSetHash,
-        tackleFitComparison: {
-          ...structuredClone(
-            sourceSnapshot.fiveAxisPreview!.tackleFitComparison,
-          ),
-          fiveAxisDefinitionId: definition.definitionId,
-          fiveAxisDefinitionVersion: definition.version,
-          fiveAxisRuleVersion: definition.fiveAxisRuleVersion,
-          vertexSetHash: expectedVertexSets[index].vertexSetHash,
-        },
-      },
-    };
-    const withoutHash = { ...content };
-    delete (withoutHash as Partial<typeof content>).contentHash;
-    return {
-      ...withoutHash,
-      contentHash: deterministicHash(withoutHash),
-    };
   });
   const result = executeFiveAxisSnapshotBatchTransactions({
     plan,
@@ -385,6 +376,133 @@ test("Snapshot、Model 指针与顶点在分量内共同提交或共同回滚", 
   );
   assert.deepEqual(staleResult.groupStates, []);
   assert.deepEqual(staleResult.snapshots, []);
+
+  const missingCommitResult = executeFiveAxisSnapshotBatchTransactions({
+    plan,
+    definitions: [definition],
+    currentGroupStates: [],
+    currentVertexSets: [],
+    currentModels: models,
+    currentSnapshots: [],
+    snapshotCommits: [],
+    failComponentIds: [plan.components[1].componentId],
+  });
+  assert.equal(missingCommitResult.componentResults[0].state, "rolled_back");
+  assert.match(
+    missingCommitResult.componentResults[0].error!,
+    /FIVE_AXIS_SNAPSHOT_COMMIT_MISSING/,
+  );
+  assert.deepEqual(missingCommitResult.groupStates, []);
+  assert.deepEqual(missingCommitResult.snapshots, []);
+
+  const duplicateCommitResult = executeFiveAxisSnapshotBatchTransactions({
+    plan,
+    definitions: [definition],
+    currentGroupStates: [],
+    currentVertexSets: [],
+    currentModels: models,
+    currentSnapshots: [],
+    snapshotCommits: [
+      { modelId: snapshots[0].modelId, snapshot: snapshots[0] },
+      { modelId: snapshots[0].modelId, snapshot: snapshots[0] },
+    ],
+    failComponentIds: [plan.components[1].componentId],
+  });
+  assert.equal(duplicateCommitResult.componentResults[0].state, "rolled_back");
+  assert.match(
+    duplicateCommitResult.componentResults[0].error!,
+    /必须恰好提交一个 Snapshot/,
+  );
+  assert.deepEqual(duplicateCommitResult.groupStates, []);
+  assert.deepEqual(duplicateCommitResult.snapshots, []);
+
+  const missingProjectionContent = {
+    ...structuredClone(snapshots[0]),
+    fiveAxisPreview: {
+      ...structuredClone(snapshots[0].fiveAxisPreview!),
+      tackleFitComparison: {
+        ...structuredClone(snapshots[0].fiveAxisPreview!.tackleFitComparison),
+        projectionReferenceAnchor: null,
+      },
+    },
+  };
+  const missingProjectionWithoutHash = { ...missingProjectionContent };
+  delete (
+    missingProjectionWithoutHash as Partial<typeof missingProjectionContent>
+  ).contentHash;
+  const missingProjection = {
+    ...missingProjectionWithoutHash,
+    contentHash: deterministicHash(missingProjectionWithoutHash),
+  };
+  const missingProjectionResult = executeFiveAxisSnapshotBatchTransactions({
+    plan,
+    definitions: [definition],
+    currentGroupStates: [],
+    currentVertexSets: [],
+    currentModels: models,
+    currentSnapshots: [],
+    snapshotCommits: [{
+      modelId: missingProjection.modelId,
+      snapshot: missingProjection,
+    }],
+    failComponentIds: [plan.components[1].componentId],
+  });
+  assert.equal(
+    missingProjectionResult.componentResults[0].state,
+    "rolled_back",
+  );
+  assert.match(
+    missingProjectionResult.componentResults[0].error!,
+    /投影参考 anchor/,
+  );
+  assert.deepEqual(missingProjectionResult.groupStates, []);
+  assert.deepEqual(missingProjectionResult.snapshots, []);
+
+  const staleProjectionContent = {
+    ...structuredClone(snapshots[0]),
+    fiveAxisPreview: {
+      ...structuredClone(snapshots[0].fiveAxisPreview!),
+      tackleFitComparison: {
+        ...structuredClone(snapshots[0].fiveAxisPreview!.tackleFitComparison),
+        projectionReferences: snapshots[0].fiveAxisPreview!
+          .tackleFitComparison.projectionReferences!.map((reference, index) =>
+            index === 0
+              ? { ...reference, projectionId: "projection:tampered" }
+              : reference),
+      },
+    },
+  };
+  const staleProjectionWithoutHash = { ...staleProjectionContent };
+  delete (
+    staleProjectionWithoutHash as Partial<typeof staleProjectionContent>
+  ).contentHash;
+  const staleProjection = {
+    ...staleProjectionWithoutHash,
+    contentHash: deterministicHash(staleProjectionWithoutHash),
+  };
+  const staleProjectionResult = executeFiveAxisSnapshotBatchTransactions({
+    plan,
+    definitions: [definition],
+    currentGroupStates: [],
+    currentVertexSets: [],
+    currentModels: models,
+    currentSnapshots: [],
+    snapshotCommits: [{
+      modelId: staleProjection.modelId,
+      snapshot: staleProjection,
+    }],
+    failComponentIds: [plan.components[1].componentId],
+  });
+  assert.equal(
+    staleProjectionResult.componentResults[0].state,
+    "rolled_back",
+  );
+  assert.match(
+    staleProjectionResult.componentResults[0].error!,
+    /投影引用或预览 inputHash 不匹配/,
+  );
+  assert.deepEqual(staleProjectionResult.groupStates, []);
+  assert.deepEqual(staleProjectionResult.snapshots, []);
 });
 
 test("混合比较实体只读取冻结 Snapshot 的部件值与 Model revision", () => {
@@ -466,6 +584,102 @@ test("SnapshotBuild 缺必需顶点时整分量回滚；纯 Lifecycle 移除则�
   assert.equal(removed.componentResults[0].state, "committed");
   assert.equal(removed.groupStates[0].state, "UNAVAILABLE_NO_ELIGIBLE_CANDIDATE");
   assert.equal(removed.groupStates[0].currentVertexSetHash, null);
+});
+
+test("跨 W 段迁移只对目标 ADD 组执行 SnapshotBuild 顶点完整性检查", () => {
+  const definition = createFormalFiveAxisViewDefinition();
+  const before = membership(
+    definition,
+    "W1",
+    "model:migrate",
+    "snapshot:migrate:before",
+  );
+  const seeded = executeFiveAxisTransactionPlan({
+    plan: planFiveAxisTransactions({
+      deltas: createFiveAxisCandidateDeltas({
+        changeId: "seed:migrate",
+        modelId: "model:migrate",
+        before: null,
+        after: before,
+      }),
+    }),
+    definitions: [definition],
+    currentGroupStates: [],
+  });
+  const after = membership(
+    definition,
+    "W2",
+    "model:migrate",
+    "snapshot:migrate:after",
+  );
+  const migrated = executeFiveAxisTransactionPlan({
+    plan: planFiveAxisTransactions({
+      deltas: createFiveAxisCandidateDeltas({
+        changeId: "move:migrate",
+        modelId: "model:migrate",
+        before,
+        after,
+      }),
+      snapshotBuildModelIds: ["model:migrate"],
+    }),
+    definitions: [definition],
+    currentGroupStates: seeded.groupStates,
+  });
+  assert.equal(migrated.componentResults[0].state, "committed");
+  assert.equal(
+    migrated.groupStates.find((entry) =>
+      entry.groupKey.weightBandId === "W1")?.state,
+    "UNAVAILABLE_NO_ELIGIBLE_CANDIDATE",
+  );
+  assert.equal(
+    migrated.groupStates.find((entry) =>
+      entry.groupKey.weightBandId === "W2")?.state,
+    "AVAILABLE",
+  );
+});
+
+test("比较只选择组状态 currentVertexSetHash 指向的正式顶点", () => {
+  const definition = createFormalFiveAxisViewDefinition();
+  const key = groupKey(definition, "W2");
+  const historical = createFormalFiveAxisVertexSet({
+    definition,
+    groupKey: key,
+    candidateSources: [source({
+      definition,
+      modelId: "model:historical",
+      snapshotId: "snapshot:historical",
+      values: { pull: "10" },
+    })],
+  });
+  const currentSources = [source({
+    definition,
+    modelId: "model:current",
+    snapshotId: "snapshot:current",
+    values: { pull: "20" },
+  })];
+  const current = createFormalFiveAxisVertexSet({
+    definition,
+    groupKey: key,
+    candidateSources: currentSources,
+  });
+  const selected = selectCurrentFiveAxisVertexSet({
+    definition,
+    weightBandId: "W2",
+    groupStates: [{
+      groupKey: key,
+      state: "AVAILABLE",
+      candidateSources: currentSources,
+      candidateSetHash: current.candidateSetHash,
+      candidateEvidenceHash: current.candidateEvidenceHash,
+      currentVertexSetId: current.vertexSetId,
+      currentVertexSetHash: current.vertexSetHash,
+      missingAxisIds: [],
+      reasonCode: null,
+    }],
+    vertexSets: [historical, current],
+  });
+  assert.equal(selected?.vertexSetHash, current.vertexSetHash);
+  assert.notEqual(selected?.vertexSetHash, historical.vertexSetHash);
 });
 
 test("并发期望同时校验 vertex、evidence 与 Snapshot 指针集合", () => {

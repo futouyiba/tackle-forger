@@ -21,6 +21,21 @@ export function fiveAxisPlotRatio(score: number | null, maxScore = 100): number 
   return Math.max(0, Math.min(maxScore, score)) / maxScore;
 }
 
+export function fiveAxisComparisonPlotRatio(
+  score: number | null,
+  outerRingScore = 100,
+): number | null {
+  if (
+    score === null
+    || !Number.isFinite(score)
+    || !Number.isFinite(outerRingScore)
+    || outerRingScore <= 0
+  ) {
+    return null;
+  }
+  return Math.max(0, score) / outerRingScore;
+}
+
 const PRECISION = 12;
 
 function round(value: number, precision = PRECISION): number {

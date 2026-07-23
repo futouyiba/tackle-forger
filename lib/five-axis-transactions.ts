@@ -1,5 +1,7 @@
 import {
+  assertFormalModelFiveAxisPreview,
   createFormalFiveAxisVertexSet,
+  hashFormalFinalPanelValues,
 } from "./five-axis-formal";
 import {
   compareUnsignedUtf8,
@@ -42,6 +44,37 @@ function sameGroup(
   right: FiveAxisVertexGroupKey,
 ): boolean {
   return compareGroupKey(left, right) === 0;
+}
+
+export function selectCurrentFiveAxisVertexSet(input: {
+  definition: FiveAxisViewDefinition;
+  weightBandId: string;
+  groupStates: FiveAxisVertexGroupState[];
+  vertexSets: FiveAxisVertexSet[];
+}): FiveAxisVertexSet | null {
+  const groupKey: FiveAxisVertexGroupKey = {
+    weightBandId: input.weightBandId,
+    weightBandPolicyVersion: input.definition.weightBandPolicyVersion,
+    fiveAxisDefinitionId: input.definition.definitionId,
+    fiveAxisDefinitionVersion: input.definition.version,
+    fiveAxisRuleVersion: input.definition.fiveAxisRuleVersion,
+  };
+  const groupState = input.groupStates.find((entry) =>
+    sameGroup(entry.groupKey, groupKey));
+  if (
+    !groupState
+    || groupState.state !== "AVAILABLE"
+    || !groupState.currentVertexSetHash
+  ) {
+    return null;
+  }
+  return input.vertexSets.find((entry) =>
+    entry.vertexSetHash === groupState.currentVertexSetHash
+    && entry.weightBandId === groupKey.weightBandId
+    && entry.weightBandPolicyVersion === groupKey.weightBandPolicyVersion
+    && entry.fiveAxisDefinitionId === groupKey.fiveAxisDefinitionId
+    && entry.fiveAxisDefinitionVersion === groupKey.fiveAxisDefinitionVersion
+    && entry.fiveAxisRuleVersion === groupKey.fiveAxisRuleVersion) ?? null;
 }
 
 function assertMembership(
@@ -387,8 +420,11 @@ export function applyFiveAxisTransactionComponent(input: {
       throw new Error("FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE：事务组定义不存在。");
     }
     const missing = missingAxisIds(definition, targetSources);
-    const hasSnapshotBuild = input.component.snapshotBuildModelIds.some((modelId) =>
-      deltas.some((delta) => delta.modelId === modelId));
+    const hasSnapshotBuild = deltas.some((delta) =>
+      Boolean(
+        delta.after
+        && input.component.snapshotBuildModelIds.includes(delta.modelId),
+      ));
     if (missing.length) {
       if (hasSnapshotBuild) {
         throw new Error(
@@ -550,6 +586,32 @@ export function executeFiveAxisSnapshotBatchTransactions(input: {
       if (input.failComponentIds?.includes(component.componentId)) {
         throw new Error("INJECTED_COMPONENT_FAILURE");
       }
+      const componentModelIds = new Set(
+        component.deltas.map((delta) => delta.modelId),
+      );
+      const snapshotBuildModelIds = new Set(component.snapshotBuildModelIds);
+      const componentCommits = input.snapshotCommits.filter((entry) =>
+        componentModelIds.has(entry.modelId));
+      for (const modelId of snapshotBuildModelIds) {
+        const commitCount = componentCommits.filter((entry) =>
+          entry.modelId === modelId).length;
+        if (commitCount === 0) {
+          throw new Error(
+            `FIVE_AXIS_SNAPSHOT_COMMIT_MISSING：${modelId} 缺少 Snapshot commit。`,
+          );
+        }
+        if (commitCount !== 1) {
+          throw new Error(
+            `FIVE_AXIS_SNAPSHOT_COMMIT_INVALID：${modelId} 必须恰好提交一个 Snapshot。`,
+          );
+        }
+      }
+      if (componentCommits.some((entry) =>
+        !snapshotBuildModelIds.has(entry.modelId))) {
+        throw new Error(
+          "FIVE_AXIS_SNAPSHOT_COMMIT_INVALID：非 SnapshotBuild Model 不得提交 Snapshot。",
+        );
+      }
       const stagedFiveAxis = applyFiveAxisTransactionComponent({
         component,
         definitions: input.definitions,
@@ -558,11 +620,9 @@ export function executeFiveAxisSnapshotBatchTransactions(input: {
           component.groupKeys.some((groupKey) =>
             sameGroup(groupKey, expectation.groupKey))),
       });
-      const componentModels = new Set(component.deltas.map((delta) => delta.modelId));
       const stagedModels = structuredClone(models);
       const stagedSnapshots = structuredClone(snapshots);
-      for (const commit of input.snapshotCommits.filter((entry) =>
-        componentModels.has(entry.modelId))) {
+      for (const commit of componentCommits) {
         if (
           commit.snapshot.modelId !== commit.modelId
           || !verifySnapshotIntegrity(commit.snapshot)
@@ -578,15 +638,29 @@ export function executeFiveAxisSnapshotBatchTransactions(input: {
         ) {
           throw new Error("FIVE_AXIS_SNAPSHOT_COMMIT_INVALID：Snapshot 与候选差量指针不一致。");
         }
+        const modelIndex = stagedModels.findIndex((model) =>
+          model.id === commit.modelId);
+        if (
+          modelIndex < 0
+          || stagedModels[modelIndex].revision !== commit.snapshot.modelRevision
+        ) {
+          throw new Error(
+            "FIVE_AXIS_SNAPSHOT_COMMIT_INVALID：待更新 Model 不存在或 revision 不一致。",
+          );
+        }
         const stagedGroup = stagedFiveAxis.groupStates.find((group) =>
           sameGroup(group.groupKey, delta.groupKey));
         const stagedVertexSet = stagedFiveAxis.vertexSets.find((vertexSet) =>
           vertexSet.vertexSetHash === stagedGroup?.currentVertexSetHash);
+        const definition = input.definitions.find((entry) =>
+          entry.definitionId === delta.groupKey.fiveAxisDefinitionId
+          && entry.version === delta.groupKey.fiveAxisDefinitionVersion);
         const preview = commit.snapshot.fiveAxisPreview;
         if (
           !stagedGroup
           || stagedGroup.state !== "AVAILABLE"
           || !stagedVertexSet
+          || !definition
           || !preview
           || preview.modelId !== commit.modelId
           || preview.weightBandId !== delta.groupKey.weightBandId
@@ -605,11 +679,35 @@ export function executeFiveAxisSnapshotBatchTransactions(input: {
             "FIVE_AXIS_SNAPSHOT_COMMIT_INVALID：Snapshot 五维预览与事务后 W 段、定义或顶点不一致。",
           );
         }
-        const modelIndex = stagedModels.findIndex((model) =>
-          model.id === commit.modelId);
-        if (modelIndex < 0) {
-          throw new Error("FIVE_AXIS_SNAPSHOT_COMMIT_INVALID：待更新 Model 不存在。");
+        if (
+          commit.snapshot.modelFinalPullKg === undefined
+          || !preview.tackleFitComparison.projectionReferenceAnchor
+        ) {
+          throw new Error(
+            "FIVE_AXIS_SNAPSHOT_COMMIT_INVALID：正式 Snapshot 缺少最终拉力或投影参考 anchor。",
+          );
         }
+        assertFormalModelFiveAxisPreview({
+          definition,
+          preview,
+          expectedModelId: commit.modelId,
+          expectedModelRevisionId:
+            `${commit.modelId}@${stagedModels[modelIndex].revision}`,
+          expectedSnapshotId: commit.snapshot.id,
+          expectedSeriesId:
+            preview.tackleFitComparison.projectionReferenceAnchor.seriesId,
+          expectedSkuId: stagedModels[modelIndex].skuId,
+          expectedSkuRevisionId:
+            `${stagedModels[modelIndex].skuId}@${commit.snapshot.skuRevision}`,
+          expectedFinalPanelHash:
+            hashFormalFinalPanelValues(commit.snapshot.finalPanelValues),
+          expectedComponentSelections:
+            commit.snapshot.componentSelections.map((component) => ({
+              itemPartId: component.itemPartId,
+              componentId: component.componentId,
+            })),
+          expectedModelFinalPullKg: commit.snapshot.modelFinalPullKg,
+        });
         const existing = stagedSnapshots.find((snapshot) =>
           snapshot.id === commit.snapshot.id);
         if (existing && existing.contentHash !== commit.snapshot.contentHash) {

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildSamePartComparison,
+  fiveAxisComparisonPlotRatio,
   fiveAxisPlotRatio,
   buildTackleFitComparison,
   calculateModelFiveAxisPreview,
@@ -15,6 +16,13 @@ test("五维绘图缺失值保持缺失，不会落到零点", () => {
   assert.equal(fiveAxisPlotRatio(0), 0);
   assert.equal(fiveAxisPlotRatio(120), 1);
   assert.equal(fiveAxisPlotRatio(75, 150), 0.5);
+});
+
+test("正式比较固定 100 外环，并按真实比例保留超顶点分数", () => {
+  assert.equal(fiveAxisComparisonPlotRatio(null), null);
+  assert.equal(fiveAxisComparisonPlotRatio(100), 1);
+  assert.equal(fiveAxisComparisonPlotRatio(140), 1.4);
+  assert.equal(fiveAxisComparisonPlotRatio(-20), 0);
 });
 import { deterministicHash } from "../lib/rule-kernel";
 import {

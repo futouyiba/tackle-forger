@@ -93,8 +93,10 @@ test("PatchLedger v4 将 remove 和可验证 min/max 幂等规范化并保留 ra
   const min=migrated.revisions.find((revision)=>revision.patchId===minRevision.patchId)!;
   assert.equal(migrated.schemaVersion,5);
   assert.deepEqual([remove.operations[0].operation,remove.operations[0].operand],["clear",null]);
+  assert.deepEqual([remove.operations[0].patchId,remove.operations[0].patchRevision],[remove.patchId,remove.patchRevision]);
   assert.equal((remove.operations[0].rawIntent as {legacyNote:string}).legacyNote,"keep-remove");
   assert.deepEqual([min.operations[0].operation,min.operations[0].operand],["set",6]);
+  assert.deepEqual([min.operations[0].patchId,min.operations[0].patchRevision],[min.patchId,min.patchRevision]);
   assert.equal((min.operations[0].rawIntent as {legacyNote:string}).legacyNote,"keep-min");
   assert.deepEqual((migrated as unknown as {legacyAudit:unknown}).legacyAudit,{keep:true});
   assert.equal(migrated.migrationReviewItems.some((item)=>item.id==="patch-ledger-migration:semantic"),false);

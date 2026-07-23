@@ -214,13 +214,17 @@ export function migratePatchLedger(input: PatchLedger | Record<string, unknown>)
         return rawRevision;
       }
       try {
-        const operations = rawRevision.operations.map((operation) => normalizeLegacyOperation({
-          raw: operation as unknown as RawPatchOperation,
-          operationId: operation.operationId,
-          operationIndex: operation.operationIndex,
-          baseRuleSetVersion: rawRevision.baseRuleSetVersion,
-          baseObjectRevision: rawRevision.baseObjectRevision,
-        })) as PatchOperationRecord[];
+        const operations = rawRevision.operations.map((operation) => ({
+          ...normalizeLegacyOperation({
+            raw: operation as unknown as RawPatchOperation,
+            operationId: operation.operationId,
+            operationIndex: operation.operationIndex,
+            baseRuleSetVersion: rawRevision.baseRuleSetVersion,
+            baseObjectRevision: rawRevision.baseObjectRevision,
+          }),
+          patchId: rawRevision.patchId,
+          patchRevision: rawRevision.patchRevision,
+        }));
         for (const operation of operations) assertCanonicalOperation(operation);
         const normalized = { ...rawRevision, operations };
         return { ...normalized, revisionHash: patchRevisionHash(normalized) };

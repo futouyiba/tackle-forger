@@ -50,16 +50,16 @@ export function compatibilitySelectorMatches(
   if (!scalarMatches(selector.itemPartId, context.itemPartId)) return false;
   if (!scalarMatches(selector.lineMaterialId, context.lineMaterialId)) return false;
   if (
-    selector.minWeightKg !== undefined &&
-    context.targetWeightKg !== undefined &&
-    context.targetWeightKg < selector.minWeightKg
+    selector.minPullKg !== undefined &&
+    context.targetPullKg !== undefined &&
+    context.targetPullKg < selector.minPullKg
   ) {
     return false;
   }
   if (
-    selector.maxWeightKg !== undefined &&
-    context.targetWeightKg !== undefined &&
-    context.targetWeightKg >= selector.maxWeightKg
+    selector.maxPullKg !== undefined &&
+    context.targetPullKg !== undefined &&
+    context.targetPullKg >= selector.maxPullKg
   ) {
     return false;
   }
@@ -78,7 +78,7 @@ export function compatibilitySelectorMatches(
  * 结构标杆匹配专用的兼容上下文（规范 §5.1/§5.2/§18.1）。
  * 只保留结构维度（itemPart/method/type/function），刻意省略 performance、quality、
  * material、functionIntensity、重量范围、构件与标签——这些商品层与构件层维度不得
- * 参与结构标杆的最近匹配与排除。重量范围通过省略 targetWeightKg 令范围选择器不生效。
+ * 参与结构标杆的最近匹配与排除。拉力范围通过省略 targetPullKg 令范围选择器不生效。
  */
 export function structuralCompatibilityContext(input: {
   methodId: string;
@@ -95,7 +95,7 @@ export function structuralCompatibilityContext(input: {
     performanceId: undefined,
     qualityId: undefined,
     lineMaterialId: undefined,
-    targetWeightKg: undefined,
+    targetPullKg: undefined,
     componentIds: [],
     tags: [],
   };
@@ -112,8 +112,8 @@ export function isStructuralCompatibilitySelector(selector: CompatibilitySelecto
     selector.performanceId === undefined &&
     selector.qualityId === undefined &&
     selector.lineMaterialId === undefined &&
-    selector.minWeightKg === undefined &&
-    selector.maxWeightKg === undefined &&
+    selector.minPullKg === undefined &&
+    selector.maxPullKg === undefined &&
     !(selector.componentIds && selector.componentIds.length > 0) &&
     !(selector.tags && selector.tags.length > 0)
   );
@@ -146,8 +146,8 @@ export function compatibilitySpecificity(
     "qualityId",
     "itemPartId",
     "lineMaterialId",
-    "minWeightKg",
-    "maxWeightKg",
+    "minPullKg",
+    "maxPullKg",
   ];
   const scalarCount = scalarKeys.filter(
     (key) => selector[key] !== undefined,
@@ -373,4 +373,3 @@ export const defaultAffinityAxisWeights: AffinityAxisWeights = {
   model_component: 1,
   series_coherence: 1,
 };
-

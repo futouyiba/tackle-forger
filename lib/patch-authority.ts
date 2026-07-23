@@ -380,7 +380,7 @@ export function createAuthoritativePatchObjectFromWorkspace(
     ? [chain.sku]
     : state.skuDrawers
       .filter((sku) => sku.seriesId === chain.series.id)
-      .sort((left, right) => left.targetWeightKg - right.targetWeightKg || left.id.localeCompare(right.id));
+      .sort((left, right) => left.targetPullKg - right.targetPullKg || left.id.localeCompare(right.id));
   if (!skus.length) {
     throw new PatchOffsetPolicyError(
       "PATCH_SERIES_DISCRETE_CONTEXT_MISSING",
@@ -449,7 +449,7 @@ export function preparePatchOperationFromWorkspace(input: {
     ? chain.sku
     : input.state.skuDrawers
       .filter((entry) => entry.seriesId === chain.series.id)
-      .sort((left, right) => left.targetWeightKg - right.targetWeightKg || left.id.localeCompare(right.id))[0];
+      .sort((left, right) => left.targetPullKg - right.targetPullKg || left.id.localeCompare(right.id))[0];
   const projection = input.state.derivedProjections.find((entry) => entry.id === sku?.projectionMatch.projectionId);
   if (!projection) throw new PatchOffsetPolicyError("PATCH_PROJECTION_MISSING", "当前对象没有权威 Projection 基线。");
   const panel = applyRevisions(projection.values, active);

@@ -13,10 +13,7 @@ export function seriesTargetPullSpecifications(series: SeriesDefinition) {
     return [...series.targetPullSpecifications]
       .sort((left, right) => left.targetPullKgf - right.targetPullKgf || left.skuId.localeCompare(right.skuId));
   }
-  return series.skuIds.map((skuId, index) => ({
-    targetPullKgf: series.targetWeightsKg[index],
-    skuId,
-  })).filter((entry) => Number.isFinite(entry.targetPullKgf));
+  return [];
 }
 
 export interface ResolvedModelPanel {
@@ -85,7 +82,7 @@ export function validateSeriesInvariants(
   }
   const skus = input.skus
     .filter((sku) => sku.seriesId === input.series.id)
-    .sort((left, right) => left.targetWeightKg - right.targetWeightKg);
+    .sort((left, right) => left.targetPullKg - right.targetPullKg);
   const models = input.models.filter((model) =>
     skus.some((sku) => sku.id === model.skuId),
   );
@@ -115,21 +112,21 @@ export function validateSeriesInvariants(
     const sku = skus.find((entry) => entry.id === specification.skuId);
     if (!sku) {
       issue(issues, "error", "SERIES_PULL_SPECIFICATION_NOT_MATERIALIZED", "目标拉力 " + specification.targetPullKgf + "kgf 尚未物化为所属 Series 的 SKU 抽屉。");
-    } else if (sku.targetWeightKg !== specification.targetPullKgf) {
+    } else if (sku.targetPullKg !== specification.targetPullKgf) {
       issue(issues, "error", "SERIES_PULL_SPECIFICATION_MISMATCH", "SKU " + sku.id + " 的目标拉力与 Series 离散规格不一致。");
     }
   }
   const weightSet = new Set<number>();
   for (const sku of skus) {
-    if (weightSet.has(sku.targetWeightKg)) {
+    if (weightSet.has(sku.targetPullKg)) {
       issue(
         issues,
         "error",
         "SERIES_WEIGHT_DUPLICATE",
-        "Series 存在重复目标重量：" + sku.targetWeightKg + "kg。",
+        "Series 存在重复目标拉力：" + sku.targetPullKg + "kgf。",
       );
     }
-    weightSet.add(sku.targetWeightKg);
+    weightSet.add(sku.targetPullKg);
     if (!specificationSkuIds.has(sku.id)) {
       issue(
         issues,
@@ -190,13 +187,13 @@ export function validateSeriesInvariants(
       }
     } else {
       const expected =
-        input.series.functionIntensityPolicy.values[String(sku.targetWeightKg)];
+        input.series.functionIntensityPolicy.values[String(sku.targetPullKg)];
       if (expected !== undefined && projection.functionIntensity !== expected) {
         issue(
           issues,
           "error",
           "SERIES_INTENSITY_CURVE_MISMATCH",
-          "SKU 的功能专精强度不符合显式重量曲线。",
+          "SKU 的功能专精强度不符合显式目标拉力曲线。",
         );
       }
     }

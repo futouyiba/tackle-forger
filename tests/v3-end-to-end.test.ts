@@ -14,7 +14,7 @@ import { CURRENT_WORKSPACE_SCHEMA_VERSION, migrateWorkspaceState } from "../lib/
 import { applyLayeredPatches, previewPatchRebase } from "../lib/patch-engine";
 import {
   matchNearestProjection,
-  projectionWeightDistance,
+  projectionPullDistance,
   structuralPullFromProjection,
   type ProjectionMatchCandidate,
 } from "../lib/projection-matcher";
@@ -39,11 +39,11 @@ import type {
 } from "../lib/types";
 import workspaceV1 from "./fixtures/workspace-v1.json";
 
-function context(targetWeightKg: number): CompatibilityContext {
+function context(targetPullKg: number): CompatibilityContext {
   return {
     methodId: "method:lure",
     typeId: "type:structure:水滴+枪柄",
-    targetWeightKg,
+    targetPullKg,
     functionId: "function:障碍强攻",
     functionIntensity: 2,
     qualityId: "quality_a_purple",
@@ -53,7 +53,7 @@ function context(targetWeightKg: number): CompatibilityContext {
 }
 
 function matchCandidates(
-  targetWeightKg: number,
+  targetPullKg: number,
   allowed = true,
 ): ProjectionMatchCandidate[] {
   const state = createSeedState();
@@ -69,7 +69,7 @@ function matchCandidates(
         (template) => template.id === projection.weightTemplateId,
       )!.nominalFishKg,
       compatibility: allowed
-        ? evaluateHardCompatibility(context(targetWeightKg), state.compatibilityRules)
+        ? evaluateHardCompatibility(context(targetPullKg), state.compatibilityRules)
         : {
             allowed: false,
             matchedRules: [],
@@ -85,7 +85,7 @@ function matchCandidates(
             suggestions: ["更换类型"],
           },
       affinity: evaluateAffinity(
-        context(targetWeightKg),
+        context(targetPullKg),
         state.affinityRules,
         state.affinityAxisWeights,
       ),
@@ -101,7 +101,7 @@ test("M-01/M-03 最近模板精确命中，1.5kg 与 1.8kg 共享基底但 Patch
   const exact = matchNearestProjection(
     {
       itemPartId: "part:rod",
-      targetWeightKg: structuralPull,
+      targetPullKg: structuralPull,
       methodId: projection.methodId,
       typeId: projection.typeId,
       functionId: projection.functionId,
@@ -114,7 +114,7 @@ test("M-01/M-03 最近模板精确命中，1.5kg 与 1.8kg 共享基底但 Patch
   );
   assert.equal(exact.weightTemplateId, "T04");
   assert.equal(structuralPull, exact.matchedStructuralPullKg);
-  assert.equal(exact.weightDistance, 0);
+  assert.equal(exact.pullDistance, 0);
   assert.equal(state.skuDrawers[0].projectionMatch.projectionId, state.skuDrawers[1].projectionMatch.projectionId);
   assert.notDeepEqual(state.skuDrawers[0].patchIds, state.skuDrawers[1].patchIds);
 });
@@ -129,10 +129,10 @@ test("M-02 比例距离中点优先较高 derivedPullKg，不做插值且忽略�
     id,
     weightTemplateId: templateId,
   });
-  const targetWeightKg = 2;
-  const compatibility = evaluateHardCompatibility(context(targetWeightKg), []);
+  const targetPullKg = 2;
+  const compatibility = evaluateHardCompatibility(context(targetPullKg), []);
   const affinity = evaluateAffinity(
-    context(targetWeightKg),
+    context(targetPullKg),
     [],
     defaultAffinityAxisWeights,
   );
@@ -177,11 +177,11 @@ test("M-02 比例距离中点优先较高 derivedPullKg，不做插值且忽略�
       affinity: { ...affinity, score: 100 },
     },
   ];
-  assert.equal(projectionWeightDistance(2, 1), projectionWeightDistance(2, 4));
+  assert.equal(projectionPullDistance(2, 1), projectionPullDistance(2, 4));
   const match = matchNearestProjection(
     {
       itemPartId: "part:rod",
-      targetWeightKg,
+      targetPullKg,
       methodId: source.methodId,
       typeId: source.typeId,
       functionId: source.functionId,
@@ -212,7 +212,7 @@ test("M-02b 部位严格隔离，模板优先级仅在 derivedPullKg 也相同�
   });
   const match = matchNearestProjection({
     itemPartId: "part:rod",
-    targetWeightKg: 1.5,
+    targetPullKg: 1.5,
     methodId: base.projection.methodId,
     typeId: base.projection.typeId,
     functionId: base.projection.functionId,
@@ -235,7 +235,7 @@ test("M-04 人工 pin 保留选择并进入 Trace", () => {
   const match = matchNearestProjection(
     {
       itemPartId: "part:rod",
-      targetWeightKg: 1.5,
+      targetPullKg: 1.5,
       methodId: source.methodId,
       typeId: source.typeId,
       functionId: source.functionId,
@@ -419,7 +419,7 @@ test("C-01 硬 deny 不能被高 Affinity 覆盖", () => {
       matchNearestProjection(
         {
           itemPartId: "part:rod",
-          targetWeightKg: 1.5,
+          targetPullKg: 1.5,
           methodId: candidates[0].projection.methodId,
           typeId: candidates[0].projection.typeId,
           functionId: candidates[0].projection.functionId,
@@ -473,8 +473,8 @@ test("C-03 同一 Affinity 轴只采用最具体规则", () => {
         axis: "type_weight",
         selector: {
           typeId: "type:structure:水滴+枪柄",
-          minWeightKg: 1,
-          maxWeightKg: 2,
+          minPullKg: 1,
+          maxPullKg: 2,
         },
         score: 3,
         priority: 1,
@@ -709,6 +709,14 @@ test("WP8 全链路种子包含 Series→SKU→Model→Snapshot→Upgrade", () =
     new Set(["fish-weight-grade:1.5kg", "fish-weight-grade:1.8kg"]),
   );
   assert.equal(state.configurationSnapshots.length, 1);
+  assert.equal(
+    state.configurationSnapshots[0].modelFinalPullKg,
+    state.configurationSnapshots[0].finalPanelValues["杆最大拉力kgf"],
+  );
+  assert.equal(
+    Object.hasOwn(state.configurationSnapshots[0].projectionMatch as unknown as object, "targetWeightKg"),
+    false,
+  );
   assert.equal(state.fiveAxisViewDefinitions.length, 1);
   assert.equal(state.fiveAxisVertexSets.length, 1);
   assert.equal(state.configurationSnapshots[0].fiveAxisPreview?.metrics.length, 5);

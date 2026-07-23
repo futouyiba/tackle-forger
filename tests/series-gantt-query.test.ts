@@ -21,7 +21,7 @@ test("SeriesGanttQuery 同字段 OR、不同字段 AND，并保留真实离散 S
     query: {
       qualityIds: [target.qualityId, "quality_s_orange"],
       typeIds: [target.typeId],
-      exactTargetWeightKg: target.targetWeightsKg.slice(0, 1),
+      exactTargetPullKg: target.targetPullSpecifications.map((entry) => entry.targetPullKgf).slice(0, 1),
     },
     series: workspace.seriesDefinitions,
     skus: workspace.skuDrawers,
@@ -32,10 +32,10 @@ test("SeriesGanttQuery 同字段 OR、不同字段 AND，并保留真实离散 S
   assert.ok(result.some((entry) => entry.seriesId === target.id));
   const selected = result.find((entry) => entry.seriesId === target.id)!;
   assert.deepEqual(
-    selected.skuNodes.map((node) => node.targetWeightKg),
+    selected.skuNodes.map((node) => node.targetPullKg),
     workspace.skuDrawers
       .filter((sku) => sku.seriesId === target.id)
-      .map((sku) => sku.targetWeightKg)
+      .map((sku) => sku.targetPullKg)
       .sort((left, right) => left - right),
   );
 });
@@ -97,7 +97,7 @@ test("SeriesGanttQuery URL 往返保留多选、精确重量、升级筛选和�
   const source: SeriesGanttQuery = {
     text: "青芦",
     qualityIds: ["quality_c_green", "quality_a_purple"],
-    exactTargetWeightKg: [1.5, 1.8],
+    exactTargetPullKg: [1.5, 1.8],
     attentionStates: ["SOURCE_STALE", "HAS_UPGRADE_CANDIDATE"],
     issueSeverities: ["ERROR", "WARNING"],
     hasUpgradeCandidate: true,
@@ -107,7 +107,7 @@ test("SeriesGanttQuery URL 往返保留多选、精确重量、升级筛选和�
   const parsed = seriesGanttQueryFromSearchParams(params);
   assert.equal(parsed.text, source.text);
   assert.deepEqual(parsed.qualityIds, source.qualityIds);
-  assert.deepEqual(parsed.exactTargetWeightKg, source.exactTargetWeightKg);
+  assert.deepEqual(parsed.exactTargetPullKg, source.exactTargetPullKg);
   assert.deepEqual(parsed.attentionStates, [...(source.attentionStates ?? [])]);
   assert.deepEqual(parsed.issueSeverities, [...(source.issueSeverities ?? [])]);
   assert.equal(parsed.hasUpgradeCandidate, true);
@@ -133,7 +133,7 @@ test("SeriesGanttQuery 不做对象级裁剪，并分开返回 Model 总数与�
     workspace.skuDrawers.some((sku) => sku.seriesId === series.id && sku.modelIds.includes(model.id)));
   const matchedModels = totalModels.filter((model) => model.skuId === targetSku.id);
   const [entry] = querySeriesGantt({
-    query: { exactTargetWeightKg: [targetSku.targetWeightKg] },
+    query: { exactTargetPullKg: [targetSku.targetPullKg] },
     series: workspace.seriesDefinitions,
     skus: workspace.skuDrawers,
     models: workspace.purchasableModels,
@@ -163,7 +163,6 @@ test("SeriesGanttQuery 不做对象级裁剪，并分开返回 Model 总数与�
     id: "series:formerly-restricted",
     name: "统一可见业务系列",
     skuIds: [],
-    targetWeightsKg: [],
     targetPullSpecifications: [],
   };
   const unrestricted = querySeriesGantt({

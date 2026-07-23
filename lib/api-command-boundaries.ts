@@ -21,6 +21,8 @@ export interface GovernedStateField {
   reason: "domain_command" | "published_history" | "audit_or_reserved_identity" | "legacy_history";
   action: string;
   actionLabel: string;
+  /** Present only when the named action has a real HTTP entrypoint. */
+  route?: string;
 }
 
 const GOVERNED_STATE_FIELDS: readonly GovernedStateField[] = [
@@ -34,6 +36,10 @@ const GOVERNED_STATE_FIELDS: readonly GovernedStateField[] = [
   { field: "purchasableModels", reason: "domain_command", action: "Model ActionCode（edit/review/publish）", actionLabel: "使用 Model 编辑、审核或发布动作" },
   { field: "derivedProjections", reason: "domain_command", action: "规则发布后重新演绎", actionLabel: "发布规则后重新生成结构标杆" },
   { field: "projectionMatches", reason: "domain_command", action: "SKU/Model 领域命令", actionLabel: "使用 SKU 或 Model 领域动作重算匹配" },
+  // v3 §6.5 freezes both objects by stable revision/hash. The current product
+  // exposes no mutation command for an existing revision, so do not invent one.
+  { field: "partConstraintSets", reason: "published_history", action: "只读：当前没有修改既有约束 revision 的领域命令", actionLabel: "保留现有约束；创建新 Series 时由 POST /api/series 物化新 revision" },
+  { field: "candidateSearchRecipes", reason: "published_history", action: "只读：当前没有修改既有候选 Recipe revision 的领域命令", actionLabel: "保留现有 Recipe；等待专用版本化命令" },
   { field: "candidateRuns", reason: "published_history", action: "generate_candidates", actionLabel: "重新生成候选运行" },
   { field: "candidateMaterializations", reason: "published_history", action: "materialize_candidates", actionLabel: "使用候选物化动作" },
   { field: "configurationSnapshots", reason: "published_history", action: "publish / view_snapshot", actionLabel: "使用 Model 发布或查看冻结 Snapshot" },
@@ -44,7 +50,7 @@ const GOVERNED_STATE_FIELDS: readonly GovernedStateField[] = [
   { field: "fiveAxisViewDefinitions", reason: "published_history", action: "publish_five_axis_definition", actionLabel: "使用五维定义发布动作" },
   { field: "fiveAxisVertexSets", reason: "published_history", action: "五维定义发布/重算", actionLabel: "使用五维定义发布或重算动作" },
   { field: "workspacePolicies", reason: "published_history", action: "manage_workspace_policy", actionLabel: "使用工作区策略治理动作" },
-  { field: "configIdGovernance", reason: "audit_or_reserved_identity", action: "config.id.* ActionCode", actionLabel: "使用配置身份预留、导入或策略发布动作" },
+  { field: "configIdGovernance", reason: "audit_or_reserved_identity", action: "config.id.* ActionCode", actionLabel: "使用配置身份预留、导入或策略发布动作", route: "/api/action-commands" },
   { field: "feishuSourceRevisions", reason: "audit_or_reserved_identity", action: "pull_feishu_workbook / pull_feishu_source", actionLabel: "显式拉取飞书规则源" },
   { field: "feishuWorkbooks", reason: "audit_or_reserved_identity", action: "inspect_feishu_workbook", actionLabel: "使用飞书工作簿检查动作" },
   { field: "sourceIdentityMigrationReports", reason: "audit_or_reserved_identity", action: "迁移流程", actionLabel: "使用迁移流程重新生成报告" },
@@ -59,6 +65,9 @@ const GOVERNED_STATE_FIELDS: readonly GovernedStateField[] = [
   { field: "identityAuditLog", reason: "audit_or_reserved_identity", action: "服务器身份/审计动作", actionLabel: "重新执行对应身份动作" },
   { field: "commandIdempotencyRecords", reason: "audit_or_reserved_identity", action: "服务器领域命令", actionLabel: "重试原领域动作" },
   { field: "governanceAuditLog", reason: "audit_or_reserved_identity", action: "服务器领域命令", actionLabel: "重新执行对应领域动作" },
+  // Migration review items preserve lossless migration evidence. They are not a
+  // workbench form and no command currently exists to rewrite them.
+  { field: "migrationReviewItems", reason: "audit_or_reserved_identity", action: "只读：当前没有修改迁移复核证据的领域命令", actionLabel: "保留证据并通过新的迁移流程处理" },
   { field: "revisions", reason: "audit_or_reserved_identity", action: "服务器工作区保存", actionLabel: "保存普通字段以创建新 revision" },
 ];
 

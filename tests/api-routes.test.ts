@@ -315,6 +315,25 @@ test("整包 PUT 保留 revision 冲突、授权与已发布 Snapshot 冻结", {
   const frozenPayload = await frozenSave.json() as { governedFields?: Array<{ field: string; action: string }> };
   assert.equal(frozenPayload.governedFields?.[0]?.field, "configurationSnapshots");
 
+  const configGovernance = structuredClone(latest.state);
+  configGovernance.configIdGovernance = {
+    ...configGovernance.configIdGovernance,
+    auditLog: [...configGovernance.configIdGovernance.auditLog, { forged: true } as never],
+  };
+  const governanceSave = await issueAndInvoke({
+    action: "save_workspace", url: "http://localhost/api/state", method: "PUT",
+    payload: { state: configGovernance, baseRevision: latest.revision }, invoke: putState,
+  });
+  assert.equal(governanceSave.status, 422);
+  const governancePayload = await governanceSave.json() as {
+    governedFields?: Array<{ field: string; reason: string; action: string; actionLabel: string; route?: string }>;
+  };
+  assert.deepEqual(governancePayload.governedFields?.[0], {
+    field: "configIdGovernance", reason: "audit_or_reserved_identity",
+    action: "config.id.* ActionCode", actionLabel: "使用配置身份预留、导入或策略发布动作",
+    route: "/api/action-commands",
+  });
+
   const unauthenticated = await putState(new NextRequest("http://localhost/api/state", {
     method: "PUT", headers: { "content-type": "application/json" },
     body: JSON.stringify({ state: latest.state, baseRevision: latest.revision }),

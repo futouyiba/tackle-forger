@@ -500,10 +500,12 @@ type SaveFeedback = {
   message: string;
   fields?: Array<{ field: string; actionLabel?: string }>;
   revision?: number;
+  baselineRefreshed?: boolean;
 };
 
 export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   const [state, setState] = useState<WorkspaceState>(() => ensureWorkflowFields(initialState));
+  const conflictDraftRef = useRef<WorkspaceState | null>(null);
   const [page, setPage] = useState<PageKey>("overview");
   const [pageRouteReady, setPageRouteReady] = useState(false);
   const [routeNonce, setRouteNonce] = useState(0);
@@ -705,6 +707,43 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       setSyncState("error");
       notify(error instanceof Error ? error.message : "保存失败");
     }
+  };
+
+  /**
+   * A stale save cannot succeed by retrying the same payload. Keep the local
+   * draft in memory, then load an explicit fresh baseline. The user can restore
+   * the draft for a deliberate manual merge; neither action writes remotely.
+   */
+  const refreshConflictBaseline = async () => {
+    conflictDraftRef.current = copyState(state);
+    try {
+      const response = await fetch("/api/state", { cache: "no-store" });
+      if (!response.ok) throw new Error("无法读取最新团队版本。");
+      const payload = await response.json() as ApiStatePayload;
+      setState(ensureWorkflowFields(payload.state));
+      setRevision(payload.revision);
+      setUser(payload.user);
+      setDirty(false);
+      setSyncState("ready");
+      setSaveFeedback({
+        kind: "conflict", baselineRefreshed: true, revision: payload.revision,
+        message: "已载入最新团队版本。本地草稿仍保留在此页面，可恢复后手动合并；恢复不会自动保存。",
+      });
+    } catch (error) {
+      setSaveFeedback({ kind: "error", message: error instanceof Error ? error.message : "无法读取最新团队版本。" });
+    }
+  };
+
+  const restoreConflictDraft = () => {
+    const draft = conflictDraftRef.current;
+    if (!draft) return;
+    setState(draft);
+    setDirty(true);
+    setSyncState("ready");
+    setSaveFeedback({
+      kind: "conflict", baselineRefreshed: true,
+      message: "本地草稿已恢复到编辑区，尚未保存。请参照版本记录手动合并后再保存。",
+    });
   };
 
   const pageForGovernedField = (field: string): PageKey => {
@@ -3458,7 +3497,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
             <div>
               <strong>{saveFeedback.kind === "conflict" ? "保存冲突：本地输入仍未丢失" : "保存未完成"}</strong>
               <p>{saveFeedback.message}</p>
-              {saveFeedback.kind === "conflict" ? <small>请先在“版本记录”查看最新版本；当前表单输入会保留，确认合并后可再次保存。</small> : null}
+              {saveFeedback.kind === "conflict" ? <small>同一份过期请求无法靠重试成功；请先刷新基线，再按需要恢复本地草稿并手动合并。</small> : null}
             </div>
             <div className="save-feedback-actions">
               {saveFeedback.fields?.map((entry) => (
@@ -3467,7 +3506,9 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
                 </button>
               ))}
               {saveFeedback.kind === "conflict" ? <button type="button" onClick={() => setPage("versions")}>查看版本记录{saveFeedback.revision ? `（v${saveFeedback.revision}）` : ""}</button> : null}
-              <button type="button" onClick={() => void save()}>重试保存</button>
+              {saveFeedback.kind === "conflict" && !saveFeedback.baselineRefreshed ? <button type="button" onClick={() => void refreshConflictBaseline()}>刷新最新基线（保留本地草稿）</button> : null}
+              {saveFeedback.kind === "conflict" && saveFeedback.baselineRefreshed ? <button type="button" onClick={restoreConflictDraft}>恢复本地草稿以手动合并</button> : null}
+              {saveFeedback.kind !== "conflict" ? <button type="button" onClick={() => void save()}>重试保存</button> : null}
               <button type="button" aria-label="关闭保存提示" onClick={() => setSaveFeedback(null)}><X size={16} /></button>
             </div>
           </section>

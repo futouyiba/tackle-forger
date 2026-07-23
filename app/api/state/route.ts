@@ -101,12 +101,19 @@ export async function PUT(request: NextRequest) {
           assertFrozenConfigIdentityTransition(current.state, proposed);
         } catch (error) {
           if (error instanceof ConfigIdGovernanceError) {
+            const frozenField = error.code === "PUBLISHED_CONFIGURATION_SNAPSHOT_FROZEN"
+              ? "configurationSnapshots"
+              : error.code === "MODEL_CONFIG_IDENTITY_FROZEN"
+                ? "purchasableModels"
+                : "configIdGovernance";
             return {
               status: 422,
               body: {
                 error: error.message,
                 code: error.code,
                 details: error.details,
+                governedChanges: [frozenField],
+                governedFields: governedStateFieldDetails([frozenField]),
               },
             };
           }

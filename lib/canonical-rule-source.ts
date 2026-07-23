@@ -249,6 +249,7 @@ function parseMethods(input: { values: unknown[][]; sourceRevisionId: string; is
   let headers: string[] = [];
   let columns: Record<string, number> = {};
   const entries: Array<{ profile: MethodProfile; kind: ItemKind }> = [];
+  const seen = new Set<string>();
   for (let index = 0; index < input.values.length; index += 1) {
     const row = input.values[index] ?? [];
     const sourceRow = index + 1;
@@ -261,6 +262,8 @@ function parseMethods(input: { values: unknown[][]; sourceRevisionId: string; is
     if (!headers.length || !row.some((value) => asText(value))) continue;
     const id = asText(row[columns.id]);
     if (!id) { input.issues.push({ level: "error", code: "METHOD_ID_MISSING", message: `钓法类型第 ${sourceRow} 行缺少机器 ID。`, sheetId: CANONICAL_RULE_RANGES.method.sheetId, row: sourceRow }); continue; }
+    if (seen.has(id)) input.issues.push({ level: "error", code: "METHOD_ID_DUPLICATE", message: `钓法类型稳定 ID 重复：${id}`, sheetId: CANONICAL_RULE_RANGES.method.sheetId, row: sourceRow });
+    seen.add(id);
     const name = asText(row[columns.name]) || id;
     const part = asText(row[columns.part]);
     const kind: ItemKind = part.includes("轮") || id.includes("_reel_") ? "reel" : part.includes("线") || id.includes("_line_") ? "line" : "rod";
@@ -439,6 +442,10 @@ export function importCanonicalRuleSource(input: {
   const issues: CanonicalRuleSourceIssue[] = [];
   const weight = parseWeight({ values: input.weightValues, sourceRevisionId: input.sourceRevision.id, issues });
   const importedMethods = parseMethods({ values: input.methodValues ?? [], sourceRevisionId: input.sourceRevision.id, issues });
+  const enabledKinds = new Set(weight.templateKinds.values());
+  for (const kind of enabledKinds) if (!importedMethods.some((entry) => entry.kind === kind)) {
+    issues.push({ level: "error", code: "METHOD_PART_COVERAGE_MISSING", message: `02_钓法类型缺少已启用 ${kind} 部位的稳定钓法块。`, sheetId: CANONICAL_RULE_RANGES.method.sheetId });
+  }
   const templates = deriveMethodTemplates({ templates: weight.templates, templateKinds: weight.templateKinds, methods: importedMethods });
   const methods = importedMethods.length ? importedMethods.map((entry) => entry.profile) : [...new Set(templates.map((entry) => entry.methodId).filter((entry): entry is string => Boolean(entry)))].map((id): MethodProfile => ({
     id,

@@ -250,9 +250,18 @@ export function replayUnifiedTrace(input: {
     },
   );
   const replay = replayCalculationTrace({ entries, initialState });
-  const values = Object.fromEntries(
-    replay.finalState.map((entry) => [entry.parameterKey, entry.value]),
-  );
+  const values: Record<string, unknown> = {};
+  for (const entry of replay.finalState) {
+    if (
+      Object.prototype.hasOwnProperty.call(values, entry.parameterKey)
+      && deterministicHash(values[entry.parameterKey]) !== deterministicHash(entry.value)
+    ) {
+      throw new CalculationTraceReplayError(
+        `旧 UnifiedTraceEntry 无法表示多个 subject 的不同终态：${entry.parameterKey}。`,
+      );
+    }
+    values[entry.parameterKey] = structuredClone(entry.value);
+  }
   return { values, replayHash: replay.replayHash };
 }
 

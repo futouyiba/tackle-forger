@@ -179,6 +179,21 @@ test("R4 legacy UnifiedTrace跨subject共享全局sequence时按实际subject播
   assert.equal(result.values.drag, 12);
 });
 
+test("R4 legacy UnifiedTrace扁平结果遇到多subject同名参数分歧时fail-closed", () => {
+  const divergentSubjectEntry = traceEntry(2, 10, "add", 5, 15);
+  divergentSubjectEntry.subjectRef = ref("model", "model:2");
+  assert.throws(
+    () => replayUnifiedTrace({
+      initialValues: { drag: 10 },
+      entries: [
+        traceEntry(1, 10, "add", 2, 12),
+        divergentSubjectEntry,
+      ],
+    }),
+    /TRACE_REPLAY_MISMATCH.*无法表示多个 subject 的不同终态/,
+  );
+});
+
 test("R9 error必阻断、deny不可waive、修复动作由Capability决定", () => {
   const issue = createUnifiedIssue({
     code: "HARD_DENY",

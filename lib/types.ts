@@ -227,7 +227,7 @@ export interface ItemTypeProfile {
 export interface FunctionIntensityRuleSet {
   intensity: FunctionIntensity;
   rules: AdjustmentRule[];
-  /** 飞书 03_功能定位中的稳定源行 ID（func_*）；只用于溯源，不作为聚合 FunctionProfile 的 ID。 */
+  /** 飞书 03_功能定位中的稳定源行 ID（func_*）；只用于溯源，不作为聚合 FunctionProfile 的 ID。没有独立父级绑定时不得生成 FunctionProfile。 */
   sourceRowId?: string;
 }
 

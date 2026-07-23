@@ -312,7 +312,7 @@ Model是玩家实际选择和购买的具体型号，保存：
 
 ### 6.5 PartConstraintSet、CandidateSearchRecipe与组件选择
 
-`PartConstraintSet`是版本化、不可变的候选搜索约束对象。它使用稳定`constraintSetId`和单调`revision`标识；修改任一字段、来源或复核结论都创建新revision。`CandidateSearchRecipe`必须冻结并引用精确的`constraintSetId + revision + contentHash`，同时冻结本轮可枚举组件的`componentRegistryId + revision + contentHash`；不得在运行时解析为后来发布的“最新revision”。候选生成请求只提交不可变的Recipe引用，服务端必须从该Recipe revision解析约束集与组件注册表。规范请求不得再接收可由调用方任意组合的独立`partConstraintSetRef`或注册表引用。
+`PartConstraintSet`是版本化、不可变的候选搜索约束对象。它使用非空稳定`constraintSetId`和从1开始、严格单调的安全整数`revision`标识；修改任一字段、来源或复核结论都创建新revision。非法身份或revision必须在迁移、精确引用解析和新revision构造边界fail-closed。`CandidateSearchRecipe`必须冻结并引用精确的`constraintSetId + revision + contentHash`，同时冻结本轮可枚举组件的`componentRegistryId + revision + contentHash`；不得在运行时解析为后来发布的“最新revision”。候选生成请求只提交不可变的Recipe引用，服务端必须从该Recipe revision解析约束集与组件注册表。规范请求不得再接收可由调用方任意组合的独立`partConstraintSetRef`或注册表引用。
 
 `PartConstraintSet`按rod、reel、line分别保存约束。每个部位独立记录来源、来源revision、内容哈希、迁移诊断和`CONFIRMED/NEEDS_REVIEW`状态；一个部位确认不代表另外两个部位自动确认。字段语义固定为：
 

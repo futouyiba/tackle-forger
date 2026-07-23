@@ -1,5 +1,11 @@
 name: CI
 
+run-name: >-
+  gate-context event=${{ github.event_name }}
+  pr=${{ github.event.pull_request.number || 0 }}
+  head=${{ github.event.pull_request.head.sha || github.sha }}
+  base=${{ github.event.pull_request.base.sha || github.event.before }}
+
 on:
   push:
   pull_request:
@@ -34,12 +40,13 @@ jobs:
         with:
           node-version: 22.16.0
           cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm -r typecheck
-      - run: pnpm -r lint
-      - run: pnpm -r test
-      - run: pnpm -r build
+          cache-dependency-path: legacy-workspace/pnpm-lock.yaml
+      - run: node --test tests/package-manager-boundaries.test.mjs
+      - run: pnpm --dir legacy-workspace install --frozen-lockfile
+      - run: pnpm --dir legacy-workspace --filter '@tackle-forger/*' typecheck
+      - run: pnpm --dir legacy-workspace --filter '@tackle-forger/*' lint
+      - run: pnpm --dir legacy-workspace --filter '@tackle-forger/*' test
+      - run: pnpm --dir legacy-workspace --filter '@tackle-forger/*' build
 
   windows-line-endings:
     name: Windows line-ending policy

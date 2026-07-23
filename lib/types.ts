@@ -13,6 +13,16 @@ import type {
   ModelAffixValueAssessment,
   QualityValuePolicyDraft,
 } from "./quality-value-policy";
+import type { ConfigIdGovernanceState } from "./config-id-governance";
+import type { CalculationTraceArchive } from "./calculation-trace";
+export type {
+  CalculationTraceArchive,
+  CalculationTraceEntry,
+} from "./calculation-trace";
+import type {
+  PerformanceSummaryDefinition,
+  PerformanceSummarySnapshot,
+} from "./performance-summary";
 
 export type ItemKind = "rod" | "reel" | "line";
 export type RuleOperation = "add" | "multiply" | "set" | "min" | "max" | "formula";
@@ -546,7 +556,14 @@ export interface DerivedProjection {
 
 export interface MigrationReviewItem {
   id: string;
-  sourceType: "modifier" | "candidate_override" | "quality" | "unknown";
+  sourceType:
+    | "modifier"
+    | "candidate_override"
+    | "quality"
+    | "series_recipe"
+    | "series_definition"
+    | "candidate_search_recipe"
+    | "unknown";
   sourceId: string;
   message: string;
   preservedPayload: unknown;
@@ -564,7 +581,7 @@ export type CompatibilityAxis =
 export interface CompatibilityContext {
   methodId: string;
   typeId: string;
-  targetWeightKg?: number;
+  targetPullKg?: number;
   functionId?: string;
   functionIntensity?: FunctionIntensity;
   performanceId?: string;
@@ -584,8 +601,8 @@ export interface CompatibilitySelector {
   qualityId?: string;
   itemPartId?: string;
   lineMaterialId?: string;
-  minWeightKg?: number;
-  maxWeightKg?: number;
+  minPullKg?: number;
+  maxPullKg?: number;
   componentIds?: string[];
   tags?: string[];
 }
@@ -695,12 +712,9 @@ export interface ProjectionMatch {
   matchedStructuralPullKg: number;
   pullDistance: number;
   itemPartId: string;
-  targetWeightKg: number;
   projectionId: string;
   weightTemplateId: string;
   ruleSetVersion: string;
-  anchorWeightKg: number;
-  weightDistance: number;
   affinityScore: number;
   normalizedAttributeDistance: number;
   reasons: string[];
@@ -782,6 +796,90 @@ export interface Collection {
   updatedAt: string;
 }
 
+export type PartConstraintReviewStatus = "CONFIRMED" | "NEEDS_REVIEW";
+export type PartConstraintSlot = "rod" | "reel" | "line";
+export type PartConstraintItemPartId = "part:rod" | "part:reel" | "part:line";
+export type PartConstraintFieldName =
+  | "templateIds"
+  | "materialIds"
+  | "requiredAffixIds"
+  | "optionalAffixPoolIds"
+  | "typeIds";
+
+export interface PartConstraintSetRef {
+  constraintSetId: string;
+  revision: number;
+  contentHash: string;
+}
+
+export interface PartConstraintSourceRevisionRef {
+  sourceType:
+    | "legacy_series_recipe"
+    | "series_definition"
+    | "candidate_search_recipe";
+  sourceId: string;
+  /** 旧载体没有 revision 时必须保持 null，不得伪造。 */
+  revisionId: string | null;
+  /**
+   * 排除 partConstraintSetRef 的无环来源投影；持久化来源可据此重新计算并验证。
+   */
+  hashProjectionVersion: "WITHOUT_PART_CONSTRAINT_SET_REF_V1";
+  contentHash: string;
+}
+
+export interface PartConstraintFieldTrace {
+  traceId: string;
+  itemPartId: PartConstraintItemPartId;
+  field: PartConstraintFieldName;
+  sourceRef: PartConstraintSourceRevisionRef;
+  sourcePath: string;
+  /** 记录复制、改名或合成等迁移转换，保证 Trace 可重放。 */
+  transformationCodes: string[];
+  reviewStatus: PartConstraintReviewStatus;
+  diagnosticCodes: string[];
+  /** 保留该字段的迁移输入，包括无法解释的值。 */
+  rawPayload: unknown;
+}
+
+export interface PartConstraint {
+  itemPartId: PartConstraintItemPartId;
+  reviewStatus: PartConstraintReviewStatus;
+  templateIds: string[];
+  materialIds: string[];
+  requiredAffixIds: string[];
+  optionalAffixPoolIds: string[];
+  /**
+   * 只有组件注册表明确发布该部位的版本化 type 分类时才可用于权威过滤。
+   * 迁移值默认 NEEDS_REVIEW，不等于 Series Type。
+   */
+  typeIds: string[];
+  fieldTraceRefs: Record<PartConstraintFieldName, string>;
+}
+
+export interface PartConstraintMigrationEvidence {
+  migratorVersion: string;
+  sourceSchemaVersion: number;
+  migratedAt: string;
+  diagnosticCodes: string[];
+  /** 完整保留来源对象及未知字段，供人工复核与审计导出。 */
+  rawPayload: unknown;
+}
+
+export interface PartConstraintSet {
+  /** 终身稳定且不得复用的对象身份。 */
+  constraintSetId: string;
+  /** 单调递增的不可变内容修订。 */
+  revision: number;
+  contentHash: string;
+  reviewStatus: PartConstraintReviewStatus;
+  parts: Record<PartConstraintSlot, PartConstraint>;
+  sourceRef: PartConstraintSourceRevisionRef;
+  traces: PartConstraintFieldTrace[];
+  migrationEvidence: PartConstraintMigrationEvidence;
+  createdBy: string;
+  createdAt: string;
+}
+
 export interface SeriesSignatureAxis {
   parameterGroup: string;
   expectedDirection: "positive" | "negative" | "neutral" | "contextual";
@@ -804,7 +902,9 @@ export interface SeriesDefinition {
   functionIntensityPolicy:
     | { mode: "fixed"; intensity: FunctionIntensity }
     | { mode: "weight_curve"; values: Record<string, FunctionIntensity> };
+  /** @deprecated 旧 Series 只读证据；新 revision 不得写入或消费。 */
   performanceProfileId?: string;
+  /** @deprecated 与旧性能定位一同只读保留。 */
   performanceIntensityPolicy?: {
     mode: "legacy_label";
     label: string;
@@ -820,10 +920,10 @@ export interface SeriesDefinition {
     targetPullKgf: number;
     skuId: string;
   }>;
-  /** @deprecated 只用于旧工作区兼容；新逻辑消费 targetPullSpecifications。 */
-  targetWeightsKg: number[];
   signature: SeriesSignatureAxis[];
   patchIds: string[];
+  /** schema v18：精确冻结分部位搜索约束 revision；旧调用方可在迁移前缺失。 */
+  partConstraintSetRef?: PartConstraintSetRef;
   /** @deprecated 只用于旧工作区兼容；新逻辑消费 targetPullSpecifications。 */
   skuIds: string[];
   status: EntityLifecycleStatus;
@@ -835,7 +935,7 @@ export interface SkuDrawer {
   id: string;
   revision: number;
   seriesId: string;
-  targetWeightKg: number;
+  targetPullKg: number;
   projectionMatch: ProjectionMatch;
   patchIds: string[];
   modelIds: string[];
@@ -998,6 +1098,12 @@ export interface PurchasableModel {
   skuId: string;
   name: string;
   modelVariantKey?: string;
+  /**
+   * OPEN-008 显式稳定配置键。正式预留前可由普通 Model 编辑创建新 revision；
+   * 一旦 configIdBundleRef 存在，二者都必须由领域命令原样继承。
+   */
+  stableModelKey?: string;
+  configIdBundleRef?: string;
   action: string;
   hardness: string;
   lengthM: number;
@@ -1023,10 +1129,13 @@ export interface CandidateSearchRecipe {
   methodIds: string[];
   typeIds: string[];
   functionIds: string[];
+  /** @deprecated 旧搜索配方证据；新候选运行时忽略且不得写入。 */
   performanceIds: string[];
   qualityIds: QualityProfileId[];
-  targetWeightRangeKg: { min: number; max: number };
+  targetPullRangeKg: { min: number; max: number };
   maxCandidates: number;
+  /** 精确引用约束集；候选运行不得解析为“最新 revision”。 */
+  partConstraintSetRef?: PartConstraintSetRef;
   sourceLegacyRecipeId?: string;
   notes: string;
 }
@@ -1211,12 +1320,17 @@ export interface ConfigurationSnapshot {
   patchReviewBatchRef?: string;
   patchValidationIssueFingerprints?: string[];
   patchValidationWaiverRefs?: string[];
+  patchValidationWaiverDecisionRefs?: string[];
   finalPanelValues: Record<string, number | string>;
+  /** schema v16 起的新快照冻结最终拉力；历史快照缺失时不得补写或改变 contentHash。 */
+  modelFinalPullKg?: number;
   componentSelections: ModelComponentSelection[];
   technologyIds: string[];
   attributeAffixIds: string[];
   passiveAffixIds: string[];
   attributeTrace: ProjectionTraceStep[];
+  /** 新正式 Snapshot 冻结 canonical Trace；历史 Snapshot 不补写，避免改变 contentHash。 */
+  calculationTrace?: CalculationTraceArchive;
   passiveAffixPayloads: PassiveSkillPayload[];
   projectionMatch: ProjectionMatch;
   compatibilityReport: HardCompatibilityResult;
@@ -1225,7 +1339,13 @@ export interface ConfigurationSnapshot {
   affinityReport: AffinityScoreResult;
   qualityReport: AffixQualityEvaluation;
   qualityValueAssessment?: ModelAffixValueAssessment;
+  /** 历史 Snapshot 可缺失；新正式 Snapshot 必须冻结 AVAILABLE 或 definition_missing。 */
+  performanceSummary?: PerformanceSummarySnapshot;
   validationReport: ValidationIssue[];
+  /** 历史 Snapshot 可缺失；新正式 Snapshot 冻结统一校验确认与 Waiver 证据。 */
+  validationAcknowledgements?: ValidationAcknowledgement[];
+  validationWaivers?: ValidationWaiver[];
+  validationWaiverDecisions?: ValidationWaiverDecision[];
   fiveAxisPreview?: ModelFiveAxisPreview;
   publishedBy: string;
   publishedAt: string;
@@ -1274,7 +1394,8 @@ export interface GovernanceAuditLogEntry {
     | "create_upgrade"
     | "review_upgrade"
     | "submit_rule_proposal"
-    | "publish_rule_proposal";
+    | "publish_rule_proposal"
+    | "change_sku_target_pull";
   entityType: string;
   entityId: string;
   actor: string;
@@ -1537,13 +1658,95 @@ export interface QualityResult {
   penalties: string[];
 }
 
-export interface ValidationIssue {
+export type ValidationIssueSeverity = "INFO" | "WARNING" | "ERROR" | "BLOCKER";
+export type ValidationIssueGate = "NONE" | "REVIEW" | "PUBLISH" | "EXPORT";
+export type ValidationIssueState = "OPEN" | "ACKNOWLEDGED" | "RESOLVED" | "WAIVED" | "STALE";
+export type ValidationIssueSource =
+  | "hard_compatibility" | "affinity" | "series_invariant" | "patch"
+  | "publish" | "data_integrity" | "import" | "five_axis" | "ai_guardrail"
+  | "config_identity" | "config_relationship" | "quality" | "pricing";
+
+export interface ValidationEntityRef {
+  workspaceId: string;
+  entityType: string;
+  entityId: string;
+  revisionId: string;
+}
+
+export interface ValidationEvidenceRef {
+  evidenceType:
+    | "trace" | "validation_issue" | "hard_compatibility" | "affinity_axis"
+    | "series_invariant" | "five_axis" | "rule" | "snapshot" | "user_note";
+  refId: string;
+  revisionId?: string;
+  anchor?: string;
+  contentHash: string;
+  excerpt?: string;
+}
+
+/**
+ * ActionCode 的封闭集合与不可变 commandPayloadRef 由 #48 负责。
+ * 本接口只冻结 R9 共用壳，避免在 #47 复制另一套动作注册表。
+ */
+export interface ValidationActionLink {
+  actionId: string;
+  action: string;
+  label: string;
+  targetRef?: ValidationEntityRef;
+  targetRoute?: string;
+  enabled: boolean;
+  requiredCapabilities: string[];
+  disabledReasonCode?: string;
+  disabledReasonText?: string;
+  commandPayloadRef?: {
+    payloadRefId: string;
+    action: string;
+    subjectRef: ValidationEntityRef;
+    expectedRevisionId?: string;
+    inputHash: string;
+    payloadHash: string;
+    idempotencyKey: string;
+    expiresAt?: string;
+  };
+}
+
+export interface CanonicalValidationIssue {
+  issueId: string;
+  issueRevision: string;
+  fingerprint: string;
+  fingerprintVersion: "validation-issue-fingerprint/v1";
+  inputHash: string;
+  code: string;
+  source: ValidationIssueSource;
+  severity: ValidationIssueSeverity;
+  gate: ValidationIssueGate;
+  subjectRef: ValidationEntityRef;
+  affectedRefs: ValidationEntityRef[];
+  parameterKeys: string[];
+  title: string;
+  message: string;
+  evidenceRefs: ValidationEvidenceRef[];
+  ruleRefs: string[];
+  state: ValidationIssueState;
+  waiverRef?: string;
+  environmentId?: string;
+  channelKey?: string;
+  actions: ValidationActionLink[];
+  /** @deprecated 只供尚未迁移的展示代码读取；新记录不写入，领域判断必须使用 severity。 */
+  level?: "error" | "warning" | "info";
+  /** @deprecated 旧内联证据兼容视图；新记录只冻结 evidenceRefs。 */
+  evidence?: Record<string, unknown>;
+  /** @deprecated 旧单参数兼容视图；新记录使用 parameterKeys。 */
+  parameterKey?: string;
+}
+
+/** 旧工作区和历史 Snapshot 的只读输入形状；写入新证据前必须安全适配。 */
+export interface LegacyValidationIssue {
   level: "error" | "warning" | "info";
-  /** 规范严重度；旧记录缺失时由 level 确定性映射。 */
-  severity?: "INFO" | "WARNING" | "ERROR" | "BLOCKER";
-  source?: "patch" | "data_integrity" | "publish" | "series_invariant" | "hard_compatibility" | "quality" | "pricing" | "five_axis" | "import";
-  gate?: "NONE" | "REVIEW" | "PUBLISH" | "EXPORT";
-  state?: "OPEN" | "ACKNOWLEDGED" | "RESOLVED" | "WAIVED" | "STALE";
+  severity?: ValidationIssueSeverity;
+  source?: ValidationIssueSource;
+  gate?: ValidationIssueGate;
+  state?: ValidationIssueState;
   fingerprint?: string;
   code: string;
   message: string;
@@ -1551,6 +1754,125 @@ export interface ValidationIssue {
   environmentId?: string;
   channelKey?: string;
   evidence?: Record<string, unknown>;
+}
+
+/** pre-R9 UnifiedValidationIssue 的持久化形状；读取时必须规范化小写枚举。 */
+export interface LegacyUnifiedValidationIssue {
+  fingerprintVersion?: undefined;
+  issueId: string;
+  fingerprint: string;
+  code: string;
+  source: ValidationIssueSource;
+  severity: "info" | "warning" | "error";
+  blocking: boolean;
+  gate: "generate" | "series_approve" | "model_review" | "publish" | "export";
+  subjectRef: ValidationEntityRef;
+  affectedRefs: ValidationEntityRef[];
+  parameterKeys: string[];
+  title: string;
+  message: string;
+  state: "open" | "acknowledged" | "resolved" | "waived" | "superseded";
+  deny: boolean;
+  actions: unknown[];
+  level?: "error" | "warning" | "info";
+  parameterKey?: string;
+  environmentId?: string;
+  channelKey?: string;
+  evidence?: Record<string, unknown>;
+}
+
+/** 读取边界兼容旧记录；新领域代码必须创建 CanonicalValidationIssue。 */
+export type ValidationIssue =
+  | CanonicalValidationIssue
+  | LegacyValidationIssue
+  | LegacyUnifiedValidationIssue;
+
+export interface ValidationAcknowledgement {
+  acknowledgementId: string;
+  /** 缺失表示合并前 v1 历史记录；新记录固定写入 v2。 */
+  recordHashVersion?: "validation-evidence-record/v2";
+  issueId: string;
+  issueFingerprint: string;
+  issueRevision: string;
+  inputHash: string;
+  gate: ValidationIssueGate;
+  reason: string;
+  acknowledgedBy: string;
+  acknowledgedAt: string;
+  idempotencyKey: string;
+  payloadHash: string;
+  state: "FRESH" | "STALE";
+  /** v1 历史记录可缺失；新记录和完成失效迁移的记录必须具备。 */
+  stateHashVersion?: "validation-evidence-state/v1";
+  stateHash?: string;
+  evidenceRefs: ValidationEvidenceRef[];
+  recordHash: string;
+}
+
+export interface ValidationWaiver {
+  waiverId: string;
+  /** 缺失表示合并前 v1 历史记录；新记录固定写入 v2。 */
+  recordHashVersion?: "validation-evidence-record/v2";
+  waiverDecisionId: string;
+  issueId: string;
+  issueFingerprint: string;
+  issueRevision: string;
+  inputHash: string;
+  policyVersion: string;
+  policyHash: string;
+  gate: Exclude<ValidationIssueGate, "NONE">;
+  environmentId?: string;
+  channelKey?: string;
+  scopeRef: ValidationEntityRef;
+  reason: string;
+  approvedBy: string;
+  approvedAt: string;
+  expiresAt?: string;
+  state: "FRESH" | "STALE";
+  /** v1 历史记录可缺失；新记录和完成失效迁移的记录必须具备。 */
+  stateHashVersion?: "validation-evidence-state/v1";
+  stateHash?: string;
+  evidenceRefs: ValidationEvidenceRef[];
+  recordHash: string;
+}
+
+export interface ValidationWaiverDecision {
+  waiverDecisionId: string;
+  scopeRef: ValidationEntityRef;
+  reason: string;
+  requestedWaivers: Array<{
+    issueFingerprint: string;
+    gate: Exclude<ValidationIssueGate, "NONE">;
+    environmentId?: string;
+    channelKey?: string;
+  }>;
+  approvedBy: string;
+  approvedAt: string;
+  waiverIds: string[];
+  policyVersion: string;
+  policyHash: string;
+  idempotencyKey: string;
+  payloadHash: string;
+  decisionHash: string;
+}
+
+export interface WaiverPolicyRule {
+  source: ValidationIssueSource;
+  code: string;
+  gates: Array<Exclude<ValidationIssueGate, "NONE">>;
+  scopeEntityTypes?: string[];
+  scopeRefs?: ValidationEntityRef[];
+  validFrom?: string;
+  validUntil?: string;
+}
+
+export interface WaiverPolicyVersion {
+  policyId: string;
+  version: string;
+  status: "DRAFT" | "PUBLISHED" | "RETIRED";
+  rules: WaiverPolicyRule[];
+  publishedAt?: string;
+  policyHash: string;
 }
 
 export interface CalculatedEquipment {
@@ -1819,6 +2141,11 @@ export interface IdentityAuditRecord {
 
 export interface WorkspaceState {
   schemaVersion: number;
+  /**
+   * OPEN-008 使用独立子 schema，避免把配置身份治理与工作区 revision
+   * 的迁移编号耦合。旧工作区在读取时补为空状态，不改写历史 Snapshot。
+   */
+  configIdGovernance: ConfigIdGovernanceState;
   ruleSettings: WorkspaceRuleSettings;
   ruleSetVersions: RuleSetVersion[];
   itemParts: ItemPartDefinition[];
@@ -1826,6 +2153,7 @@ export interface WorkspaceState {
   itemTypeProfiles: ItemTypeProfile[];
   functionProfiles: FunctionProfile[];
   performanceProfiles: PerformanceProfile[];
+  performanceSummaryDefinitions: PerformanceSummaryDefinition[];
   qualityProfiles: QualityProfile[];
   projectionPatches: ProjectionPatchRuleSource[];
   patchLedger: PatchLedger;
@@ -1836,6 +2164,7 @@ export interface WorkspaceState {
   affinityAxisWeights: AffinityAxisWeights;
   collections: Collection[];
   seriesDefinitions: SeriesDefinition[];
+  partConstraintSets: PartConstraintSet[];
   skuDrawers: SkuDrawer[];
   purchasableModels: PurchasableModel[];
   candidateSearchRecipes: CandidateSearchRecipe[];
@@ -1861,7 +2190,14 @@ export interface WorkspaceState {
   configEnvironmentProfiles: ConfigEnvironmentProfile[];
   configExportMappings: ConfigExportMapping[];
   identityAuditLog: IdentityAuditRecord[];
-  commandIdempotencyRecords: Array<{ key: string; inputHash: string; resultRef: string }>;
+  commandIdempotencyRecords: Array<{
+    key: string;
+    inputHash: string;
+    resultRef: string;
+    /** 命令可选的冻结响应；旧记录缺失时保持只读兼容。 */
+    resultPayload?: Record<string, unknown>;
+    resultPayloadHash?: string;
+  }>;
   upgradeCandidates: UpgradeCandidate[];
   ruleChangeProposals: RuleChangeProposal[];
   governanceAuditLog: GovernanceAuditLogEntry[];

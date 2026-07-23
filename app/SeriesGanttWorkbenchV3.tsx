@@ -27,13 +27,10 @@ import {
   type ActionAvailabilityMap,
   type BreadcrumbItem,
 } from "@/lib/interaction-contracts";
+import { issueClientActionCommand } from "@/lib/client-action-command";
 import { buildSamePartComparison, calculateModelFiveAxisPreview, fiveAxisPlotRatio } from "@/lib/five-axis";
 import { deterministicHash } from "@/lib/rule-kernel";
-import {
-  enabledProductItemParts,
-  isProductItemPartEnabled,
-  seriesItemPartId,
-} from "@/lib/enabled-item-parts";
+import { isActiveValidationIssue, validationIssueLevel } from "@/lib/validation-issues";
 import {
   querySeriesGantt,
   seriesGanttQueryFromSearchParams,
@@ -46,6 +43,7 @@ import type {
   FiveAxisEntityInput,
   ModelFiveAxisPreview,
   FiveAxisViewDefinition,
+  ProjectionMatch,
   PurchasableModel,
   SeriesDefinition,
   SkuDrawer,
@@ -55,7 +53,6 @@ import "./series-gantt-v3.css";
 import { CandidateGenerationWorkbench } from "./CandidateGenerationWorkbench";
 import {
   buildProductBreadcrumbView,
-  planProductRouteRecovery,
   ProductDeepLinkUnavailableNotice,
 } from "./product-deep-link-ui";
 
@@ -91,7 +88,6 @@ interface SeriesCreateDraft {
   typeId: string;
   functionId: string;
   qualityId: SeriesDefinition["qualityId"];
-  performanceId: string;
   functionIntensity: 1 | 2 | 3;
   planningMinKgf: string;
   planningMaxKgf: string;
@@ -390,12 +386,13 @@ function componentEntityInput(model: PurchasableModel, itemPartId: string, fishW
 
 function ModelDrawer({
   state,
+  workspaceId,
   model,
   sku,
   series,
   snapshot,
-  breadcrumbs,
   comparisonModelIds,
+  currentEntityType,
   rebaseEnabled,
   rebaseDisabledReason,
   onOpenRebase,
@@ -404,12 +401,13 @@ function ModelDrawer({
   onClose,
 }: {
   state: WorkspaceState;
+  workspaceId: string;
   model: PurchasableModel;
-  sku: SkuDrawer;
-  series: SeriesDefinition;
+  sku?: SkuDrawer;
+  series?: SeriesDefinition;
   snapshot?: ConfigurationSnapshot;
-  breadcrumbs: BreadcrumbItem[];
   comparisonModelIds: string[];
+  currentEntityType: "model" | "configuration_snapshot";
   rebaseEnabled: boolean;
   rebaseDisabledReason?: string;
   onOpenRebase: () => void;
@@ -458,6 +456,19 @@ function ModelDrawer({
       entry.definitionId === activeFiveAxisPreview.fiveAxisDefinitionId &&
       entry.version === activeFiveAxisPreview.fiveAxisDefinitionVersion)
     : undefined;
+  const breadcrumbView = buildProductBreadcrumbView({
+    workspaceId,
+    collection: series?.collectionId
+      ? state.collections.find((entry) => entry.id === series.collectionId)
+      : undefined,
+    series,
+    sku,
+    model,
+    snapshot,
+    currentEntityType,
+  });
+  const breadcrumbs = breadcrumbView.breadcrumbs;
+
   useEffect(() => {
     const previouslyFocused = document.activeElement instanceof HTMLElement
       ? document.activeElement
@@ -491,12 +502,28 @@ function ModelDrawer({
     };
   }, [onClose]);
 
-  const traceItems = snapshot?.attributeTrace
-    .flatMap((step) => step.contributions.map((contribution) => ({
-      ...contribution,
-      layer: step.layer,
-    })))
-    .sort((left, right) => left.sequence - right.sequence) ?? [];
+  const traceItems = snapshot?.calculationTrace
+    ? snapshot.calculationTrace.entries.map((entry) => ({
+        sequence: entry.sequence,
+        layer: entry.layer,
+        parameterKey: entry.parameterKey,
+        sourceName: "entityType" in entry.sourceRef
+          ? entry.sourceRef.entityType
+          : entry.sourceRef.sourceType,
+        sourceId: "entityType" in entry.sourceRef
+          ? entry.sourceRef.entityId
+          : entry.sourceRef.sourceId,
+        before: entry.before,
+        operation: entry.operation,
+        operand: entry.operand,
+        after: entry.after,
+      }))
+    : snapshot?.attributeTrace
+      .flatMap((step) => step.contributions.map((contribution) => ({
+        ...contribution,
+        layer: step.layer,
+      })))
+      .sort((left, right) => left.sequence - right.sequence) ?? [];
   const inComparison = comparisonModelIds.includes(model.id);
   const pendingUpgrade = state.upgradeCandidates.find((entry) => entry.modelId === model.id && entry.status === "pending");
   const comparisonResult = useMemo(() => {
@@ -543,7 +570,7 @@ function ModelDrawer({
         <div>
           <span className="eyebrow">MODEL · 实际选择 / 购买对象</span>
           <h2>{model.name}</h2>
-          <p>{model.id} · revision {model.revision} · {sku.targetWeightKg} kgf SKU 抽屉</p>
+          <p>{model.id} · revision {model.revision}{sku ? ` · ${sku.targetPullKg} kgf SKU 抽屉` : " · 父级不可见"}</p>
         </div>
         <button ref={closeButtonRef} type="button" onClick={onClose} aria-label="关闭 Model 预览"><X size={18} /></button>
       </header>
@@ -570,6 +597,7 @@ function ModelDrawer({
           </span>
         ))}
       </nav>
+      <ProductDeepLinkUnavailableNotice unavailable={breadcrumbView.unavailable} />
       <div className="gantt-drawer-tabs">
         <button type="button" className={tab === "overview" ? "active" : ""} onClick={() => setTab("overview")}><b>1</b> 常用概览</button>
         <button type="button" className={tab === "five_axis" ? "active" : ""} onClick={() => setTab("five_axis")}><b>2</b> 五维与适配</button>
@@ -585,13 +613,13 @@ function ModelDrawer({
             <small>{tab === "overview" ? "默认只展示策划最常用的信息；完整计算在第 3 层。" : "图形用于比较，硬兼容结论仍由确定性规则单独裁决。"}</small>
           </div>
           <div className="gantt-identity-grid">
-            <div><span>Series</span><strong>{series.name}</strong><small>{series.id} · rev {series.revision}</small></div>
-            <div><span>SKU 抽屉</span><strong>{sku.targetWeightKg} kgf</strong><small>{sku.id} · rev {sku.revision}</small></div>
+            <div><span>Series</span><strong>{series?.name ?? "不可见对象"}</strong><small>{series ? `${series.id} · rev ${series.revision}` : "名称、状态和数量不披露"}</small></div>
+            <div><span>SKU 抽屉</span><strong>{sku ? `${sku.targetPullKg} kgf` : "不可见对象"}</strong><small>{sku ? `${sku.id} · rev ${sku.revision}` : `${model.skuId} · revision unavailable`}</small></div>
             <div><span>Model</span><strong>{model.id}</strong><small>rev {model.revision}</small></div>
             <div><span>ConfigurationSnapshot</span><strong>{snapshot?.id ?? "尚未发布"}</strong><small>{snapshot ? `v${snapshot.version} · ${snapshot.contentHash.slice(0, 10)}` : "没有冻结内容"}</small></div>
           </div>
           <div className={tab === "overview" ? "gantt-quick-facts" : "gantt-layer-hidden"} aria-label="Model 常用要素">
-            <div><span>目标拉力</span><strong>{sku.targetWeightKg} kgf</strong><small>离散 SKU 规格</small></div>
+            <div><span>目标拉力</span><strong>{sku ? `${sku.targetPullKg} kgf` : "不可见"}</strong><small>离散 SKU 规格</small></div>
             <div><span>调性 / 硬度</span><strong>{model.action} / {model.hardness}</strong><small>Model 专属配置</small></div>
             <div><span>长度</span><strong>{model.lengthM} m</strong><small>实际购买型号</small></div>
             <div><span>当前发布面</span><strong>{snapshot ? "已发布 · 已冻结" : "草稿 · 可调整"}</strong><small>{pendingUpgrade ? "另有升级候选" : "旧快照不会被重算"}</small></div>
@@ -658,7 +686,8 @@ function ModelDrawer({
               <div><span>所选品质</span><strong>{snapshot?.qualityValueAssessment?.selectedQualityId ?? snapshot?.qualityReport.qualityId ?? "待选择"}</strong><small>系统不会按分数自动改品质</small></div>
               <div><span>基础词条分</span><strong>{snapshot?.qualityValueAssessment?.baseAffixScore ?? snapshot?.qualityReport.totalScore ?? "—"}</strong><small>Technology 成员按 affixId 去重</small></div>
               <div><span>组合分</span><strong>{snapshot?.qualityValueAssessment?.combinationScore ?? "未冻结"}</strong><small>仅同部位无序词条对</small></div>
-              <div><span>功能 / 性能系数</span><strong>{snapshot?.qualityValueAssessment ? `${snapshot.qualityValueAssessment.functionScoreFactor} / ${snapshot.qualityValueAssessment.performanceScoreFactor ?? "缺失"}` : "未冻结"}</strong><small>缺性能来源不默认为 1</small></div>
+              <div><span>功能评分系数</span><strong>{snapshot?.qualityValueAssessment?.functionScoreFactor ?? "未冻结"}</strong><small>Performance 不参与计分或定价</small></div>
+              <div><span>派生性能摘要</span><strong>{snapshot?.performanceSummary?.status === "AVAILABLE" ? snapshot.performanceSummary.summary.labels.map((entry) => entry.label).join("、") || "无命中标签" : "不可用"}</strong><small>{snapshot?.performanceSummary?.status === "UNAVAILABLE" ? "definition_missing · 发布不阻断" : snapshot?.performanceSummary ? "只读派生，不反向修改配置" : "历史 Snapshot 未冻结该字段"}</small></div>
               <div><span>最终分 / 品质命中</span><strong>{snapshot?.qualityValueAssessment?.finalValueScore ?? snapshot?.qualityReport.totalScore ?? "—"}</strong><small>{snapshot?.qualityValueAssessment ? (snapshot.qualityValueAssessment.inSelectedQualityRange ? "命中所选区间" : "未命中 · 发布阻断") : "旧快照未绑定版本化区间"}</small></div>
               <div><span>价格试算</span><strong>{snapshot?.automaticPricing?.purchasePrice ?? "不可用"}</strong><small>{snapshot?.automaticPricing?.formal ? snapshot.automaticPricing.moneyUnit : "NON_FORMAL · 不写 Store"}</small></div>
             </div>
@@ -671,7 +700,7 @@ function ModelDrawer({
             <div className="gantt-guardrails gantt-four-semantics">
               <div><ShieldCheck size={16} /><span>硬兼容</span><strong>{snapshot?.compatibilityReport.allowed ? "通过" : snapshot ? "有阻断" : "待校验"}</strong></div>
               <div><Scale size={16} /><span>Affinity</span><strong>{snapshot ? snapshot.affinityReport.score.toFixed(1) : "—"}</strong></div>
-              <div><CircleDot size={16} /><span>Series 不变量</span><strong>{sku ? (sku.validationSummary.some((issue) => issue.level === "error") ? "有阻断" : "通过") : "不可验证"}</strong></div>
+              <div><CircleDot size={16} /><span>Series 不变量</span><strong>{sku ? (sku.validationSummary.some((issue) => isActiveValidationIssue(issue) && validationIssueLevel(issue) === "error") ? "有阻断" : "通过") : "不可验证"}</strong></div>
               <div><Bot size={16} /><span>AI 建议</span><strong>未启用</strong></div>
             </div>
           </section>
@@ -684,7 +713,7 @@ function ModelDrawer({
           <div className="model-trace-table">
             <div className="model-trace-head"><span>#</span><span>层</span><span>属性</span><span>来源</span><span>before</span><span>operation</span><span>operand</span><span>after</span></div>
             {traceItems.map((entry) => (
-              <div key={`${entry.sequence}:${entry.ruleId}:${entry.parameterKey}`}>
+              <div key={`${entry.sequence}:${entry.sourceId}:${entry.parameterKey}`}>
                 <span>{entry.sequence}</span><span>{entry.layer}</span><span>{entry.parameterKey}</span><span>{entry.sourceName}<small>{entry.sourceId}</small></span>
                 <span>{String(entry.before ?? "—")}</span><span>{entry.operation}</span><span>{String(entry.operand)}</span><span>{String(entry.after ?? "—")}</span>
               </div>
@@ -774,10 +803,7 @@ export function SeriesGanttWorkbenchV3({
   const [comparisonModelIds, setComparisonModelIds] = useState<string[]>([]);
   const [candidateOpen, setCandidateOpen] = useState(false);
   const [seriesCreateDraft, setSeriesCreateDraft] = useState<SeriesCreateDraft | null>(null);
-  const enabledItemParts = useMemo(
-    () => enabledProductItemParts(state.itemParts),
-    [state.itemParts],
-  );
+  const [skuPullChangePending, setSkuPullChangePending] = useState(false);
 
   const blocks = useMemo(() => querySeriesGantt({
     query,
@@ -801,11 +827,11 @@ export function SeriesGanttWorkbenchV3({
     ?? state.seriesDefinitions.find((series) => series.id === blocks[0]?.seriesId);
   const selectedBlock = blocks.find((block) => block.seriesId === selectedSeries?.id);
   const seriesSkus = selectedSeries
-    ? state.skuDrawers.filter((sku) =>
-      sku.seriesId === selectedSeries.id
-      && isProductItemPartEnabled(sku.projectionMatch.itemPartId)
-      && sku.projectionMatch.itemPartId === seriesItemPartId(selectedSeries, state.skuDrawers))
-      .sort((left, right) => left.targetWeightKg - right.targetWeightKg || left.id.localeCompare(right.id))
+    ? state.skuDrawers.filter(
+      (sku) =>
+        sku.seriesId === selectedSeries.id && sku.status !== "superseded",
+    )
+      .sort((left, right) => left.targetPullKg - right.targetPullKg || left.id.localeCompare(right.id))
     : [];
   const selectedSku = seriesSkus.find((sku) => sku.id === selectedSkuId) ?? seriesSkus[0];
   const models = selectedSku
@@ -840,7 +866,7 @@ export function SeriesGanttWorkbenchV3({
     [blocks],
   );
   const weights = useMemo(
-    () => [...new Set(filterCatalog.flatMap((block) => block.skuNodes.map((node) => node.targetWeightKg)))]
+    () => [...new Set(filterCatalog.flatMap((block) => block.skuNodes.map((node) => node.targetPullKg)))]
       .sort((left, right) => left - right),
     [filterCatalog],
   );
@@ -855,17 +881,21 @@ export function SeriesGanttWorkbenchV3({
   const generateAvailability = actionAvailabilities.generate_candidates;
   const openSeriesAvailability = actionAvailabilities.open_series;
   const previewModelAvailability = actionAvailabilities.preview_model;
-  const rebaseAvailability = actionAvailabilities.open_rebase;
+  // 此按钮只导航到 Series/Patch 上下文，不执行 Rebase 写命令。
+  // 真正的状态写只能使用 rebase_patch + 服务端命令载荷引用。
+  const rebaseRouteAvailability = openSeriesAvailability;
   const createSeriesAvailability = actionAvailabilities.create_series;
-  const breadcrumbSeries = drawerSeries ?? selectedSeries;
-  const breadcrumbSku = drawerModel ? drawerSku : selectedSku;
-  const breadcrumbView = buildProductBreadcrumbView({
+  const changeSkuTargetPullAvailability =
+    actionAvailabilities.change_sku_target_pull;
+  const contextBreadcrumbView = buildProductBreadcrumbView({
     workspaceId,
-    collection: breadcrumbSeries?.collectionId
-      ? state.collections.find((entry) => entry.id === breadcrumbSeries.collectionId)
-      : undefined,
-    series: breadcrumbSeries,
-    sku: breadcrumbSku,
+    collection: drawerSeries?.collectionId
+      ? state.collections.find((entry) => entry.id === drawerSeries.collectionId)
+      : selectedSeries?.collectionId
+        ? state.collections.find((entry) => entry.id === selectedSeries.collectionId)
+        : undefined,
+    series: drawerSeries ?? selectedSeries,
+    sku: drawerModel ? drawerSku : selectedSku,
     model: drawerModel,
     snapshot: drawerSnapshotId ? drawerSnapshot : undefined,
     currentEntityType: drawerSnapshotId
@@ -876,8 +906,7 @@ export function SeriesGanttWorkbenchV3({
           ? "sku_drawer"
           : "series",
   });
-  const contextBreadcrumbs = breadcrumbView.breadcrumbs;
-  const displayedDeepLinkUnavailable = deepLink.unavailable ?? breadcrumbView.unavailable;
+  const contextBreadcrumbs = contextBreadcrumbView.breadcrumbs;
   const contextBreadcrumbSignature = JSON.stringify(contextBreadcrumbs);
   const emittedBreadcrumbSignature = useRef("");
 
@@ -889,32 +918,29 @@ export function SeriesGanttWorkbenchV3({
 
   useEffect(() => {
     updateLocation(query, {
-      seriesId: drawerSeries?.id ?? selectedSeries?.id,
-      skuId: drawerSku?.id ?? selectedSku?.id,
+      seriesId: selectedSeries?.id,
+      skuId: selectedSku?.id,
       modelId: drawerModel?.id,
       snapshotId: drawerSnapshotId || undefined,
     });
-  }, [drawerModel?.id, drawerSeries?.id, drawerSku?.id, drawerSnapshotId, query, selectedSeries?.id, selectedSku?.id]);
+  }, [drawerModel?.id, drawerSnapshotId, query, selectedSeries?.id, selectedSku?.id]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
-      const recovery = planProductRouteRecovery(deepLink, {
-        seriesId: selectedSeriesId,
-        skuId: selectedSkuId,
-        modelId: drawerModelId,
-        snapshotId: drawerSnapshotId,
-      });
-      if (!recovery) return;
-      if (recovery.changed) {
-        setSelectedSeriesId(recovery.next.seriesId);
-        setSelectedSkuId(recovery.next.skuId);
-        setDrawerModelId(recovery.next.modelId);
-        setDrawerSnapshotId(recovery.next.snapshotId);
+      if (deepLink.unavailable && !deepLink.snapshot && drawerSnapshotId) {
+        setDrawerSnapshotId("");
+        notify("请求的冻结快照不可见或已不存在，已退回最近可见对象。");
+        return;
       }
-      if (recovery.announcement) notify(recovery.announcement);
+      if (deepLink.unavailable && !deepLink.model && drawerModelId) {
+        setDrawerModelId("");
+        if (deepLink.series) setSelectedSeriesId(deepLink.series.id);
+        if (deepLink.sku) setSelectedSkuId(deepLink.sku.id);
+        notify("请求的 Model 不可见或已不存在，已退回最近可见父级。");
+      }
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [deepLink, drawerModelId, drawerSnapshotId, notify, selectedSeriesId, selectedSkuId]);
+  }, [deepLink, drawerModelId, drawerSnapshotId, notify]);
 
   useEffect(() => {
     const key = "tackle-forger:series-gantt-scroll";
@@ -952,7 +978,7 @@ export function SeriesGanttWorkbenchV3({
 
   const openCreateSeries = () => {
     const method = state.methodProfiles.find((entry) => entry.enabled);
-    const itemPart = enabledItemParts[0];
+    const itemPart = state.itemParts[0];
     const type = state.itemTypeProfiles.find((entry) =>
       entry.enabled && (!method || entry.methodIds.includes(method.id)) &&
       (!itemPart || entry.itemPartIds.includes(itemPart.id)));
@@ -967,7 +993,6 @@ export function SeriesGanttWorkbenchV3({
       typeId: type?.id ?? "",
       functionId: fn?.id ?? "",
       qualityId: "quality_c_green",
-      performanceId: "",
       functionIntensity: 2,
       planningMinKgf: "",
       planningMaxKgf: "",
@@ -994,26 +1019,32 @@ export function SeriesGanttWorkbenchV3({
     // 结构标杆匹配、拉力规划与 SKU 物化都在服务端完成后按 revision 受保护地提交，
     // 客户端不能绕过 series.edit 直接写整包（规范 §24.1/§24.4/§25.1）。
     try {
+      const idempotencyKey = `create-series:${draft.seriesId}`;
+      const businessPayload = {
+        idempotencyKey,
+        seriesId: draft.seriesId,
+        name: draft.name,
+        concept: draft.concept,
+        collectionId: draft.collectionId || undefined,
+        itemPartId: draft.itemPartId,
+        methodId: draft.methodId,
+        typeId: draft.typeId,
+        functionId: draft.functionId,
+        qualityId: draft.qualityId,
+        functionIntensity: draft.functionIntensity,
+        planningMinKgf: draft.planningMinKgf,
+        planningMaxKgf: draft.planningMaxKgf,
+        discretePulls: draft.discretePulls,
+      };
+      const invocation = await issueClientActionCommand({
+        action: "create_series",
+        idempotencyKey,
+        payload: businessPayload,
+      });
       const response = await fetch("/api/series", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          idempotencyKey: `create-series:${draft.seriesId}`,
-          seriesId: draft.seriesId,
-          name: draft.name,
-          concept: draft.concept,
-          collectionId: draft.collectionId || undefined,
-          itemPartId: draft.itemPartId,
-          methodId: draft.methodId,
-          typeId: draft.typeId,
-          functionId: draft.functionId,
-          qualityId: draft.qualityId,
-          performanceId: draft.performanceId || undefined,
-          functionIntensity: draft.functionIntensity,
-          planningMinKgf: draft.planningMinKgf,
-          planningMaxKgf: draft.planningMaxKgf,
-          discretePulls: draft.discretePulls,
-        }),
+        body: JSON.stringify(invocation),
       });
       const payload = (await response.json().catch(() => null)) as {
         state?: WorkspaceState;
@@ -1039,6 +1070,125 @@ export function SeriesGanttWorkbenchV3({
     }
   };
 
+  const changeSelectedSkuTargetPull = async () => {
+    if (
+      !selectedSku ||
+      !changeSkuTargetPullAvailability.enabled ||
+      skuPullChangePending
+    ) {
+      return;
+    }
+    const rawTarget = window.prompt(
+      `输入新的目标拉力（kgf）。当前为 ${selectedSku.targetPullKg} kgf；提交前会先展示新的结构标杆匹配。`,
+      String(selectedSku.targetPullKg),
+    );
+    if (rawTarget === null) return;
+    const targetPullKg = Number(rawTarget.trim());
+    if (!Number.isFinite(targetPullKg) || targetPullKg <= 0) {
+      notify("目标拉力必须是大于 0 的有限 kgf 数值。");
+      return;
+    }
+    if (targetPullKg === selectedSku.targetPullKg) {
+      notify("新目标拉力与当前值相同。");
+      return;
+    }
+    setSkuPullChangePending(true);
+    try {
+      const previewResponse = await fetch(
+        "/api/skus/target-pull/preview",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            skuId: selectedSku.id,
+            expectedRevision: selectedSku.revision,
+            targetPullKg,
+          }),
+        },
+      );
+      const previewPayload = (await previewResponse.json().catch(() => null)) as
+        | {
+          projectionMatch?: ProjectionMatch;
+          mode?: "SAME_SKU_NEW_REVISION" | "REPLACEMENT_SKU";
+          publishedDescendantFingerprint?: string;
+          error?: string;
+        }
+        | null;
+      if (
+        !previewResponse.ok ||
+        !previewPayload?.projectionMatch ||
+        !previewPayload.mode ||
+        !previewPayload.publishedDescendantFingerprint
+      ) {
+        notify(previewPayload?.error ?? "无法预览新的结构标杆匹配。");
+        return;
+      }
+      const match = previewPayload.projectionMatch;
+      const confirmed = window.confirm(
+        [
+          `确认把 ${selectedSku.id} 从 ${selectedSku.targetPullKg} kgf 改为 ${targetPullKg} kgf？`,
+          `显式匹配：${match.projectionId}（结构拉力 ${match.matchedStructuralPullKg} kgf，规则 ${match.ruleSetVersion}）。`,
+          previewPayload.mode === "REPLACEMENT_SKU"
+            ? "检测到已发布后代：系统会创建新 SKU，并将旧 SKU 标记为 DEPRECATED；旧快照不会改写。"
+            : "未检测到已发布后代：系统会保留 skuId 并创建新 revision。",
+        ].join("\n\n"),
+      );
+      if (!confirmed) return;
+
+      const replacementSkuId = `sku:${crypto.randomUUID()}`;
+      const idempotencyKey =
+        `change-sku-target-pull:${selectedSku.id}:` +
+        `${selectedSku.revision}:${crypto.randomUUID()}`;
+      const businessPayload = {
+        skuId: selectedSku.id,
+        expectedRevision: selectedSku.revision,
+        targetPullKg,
+        projectionMatch: match,
+        expectedMode: previewPayload.mode,
+        publishedDescendantFingerprint:
+          previewPayload.publishedDescendantFingerprint,
+        replacementSkuId,
+        deprecateOriginal: true,
+        idempotencyKey,
+      };
+      const invocation = await issueClientActionCommand({
+        action: "change_sku_target_pull",
+        idempotencyKey,
+        payload: businessPayload,
+      });
+      const response = await fetch("/api/skus/target-pull", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(invocation),
+      });
+      const payload = (await response.json().catch(() => null)) as
+        | {
+          state?: WorkspaceState;
+          sku?: SkuDrawer;
+          mode?: "SAME_SKU_NEW_REVISION" | "REPLACEMENT_SKU";
+          revision?: number;
+          error?: string;
+        }
+        | null;
+      if (!response.ok || !payload?.state || !payload.sku) {
+        notify(payload?.error ?? "SKU 目标拉力变更失败。");
+        return;
+      }
+      onWorkspaceApplied(
+        payload.state,
+        payload.revision ?? 0,
+        payload.mode === "REPLACEMENT_SKU"
+          ? `已创建新 SKU ${payload.sku.id}；旧 SKU 与已发布快照保持冻结。`
+          : `已将 ${payload.sku.id} 更新到 revision ${payload.sku.revision}。`,
+      );
+      setSelectedSkuId(payload.sku.id);
+    } catch (caught) {
+      notify(caught instanceof Error ? caught.message : "SKU 目标拉力变更失败。");
+    } finally {
+      setSkuPullChangePending(false);
+    }
+  };
+
   const columnCount = Math.max(1, QUALITY_ORDER.length * Math.max(1, typeIds.length));
   return (
     <div className="series-gantt-page series-gantt-page-v3">
@@ -1059,8 +1209,7 @@ export function SeriesGanttWorkbenchV3({
           <button type="button" disabled title="OPEN-006 尚未确认">AI 评估</button>
         </div>
       </section>
-
-      <ProductDeepLinkUnavailableNotice unavailable={displayedDeepLinkUnavailable} />
+      <ProductDeepLinkUnavailableNotice unavailable={contextBreadcrumbView.unavailable} />
 
       <section className="gantt-filter-bar" aria-label="甘特图筛选">
         <span><ListFilter size={15} />筛选</span>
@@ -1069,12 +1218,12 @@ export function SeriesGanttWorkbenchV3({
         <MultiSelectFilter label="类型" values={query.typeIds} options={state.itemTypeProfiles.filter((entry) => entry.enabled).map((entry) => ({ value: entry.id, label: entry.name }))} onChange={(values) => setQuery((current) => ({ ...current, typeIds: values }))} />
         <MultiSelectFilter label="品质" values={query.qualityIds} options={QUALITY_ORDER.map((entry) => ({ value: entry.id, label: `${entry.letter} / ${entry.name}` }))} onChange={(values) => setQuery((current) => ({ ...current, qualityIds: values }))} />
         <MultiSelectFilter label="功能" values={query.functionIds} options={state.functionProfiles.filter((entry) => entry.enabled).map((entry) => ({ value: entry.id, label: entry.name }))} onChange={(values) => setQuery((current) => ({ ...current, functionIds: values }))} />
-        <MultiSelectFilter label="部位" values={query.itemPartIds} options={enabledItemParts.map((entry) => ({ value: entry.id, label: entry.name }))} onChange={(values) => setQuery((current) => ({ ...current, itemPartIds: (values ?? []).filter(isProductItemPartEnabled) }))} />
+        <MultiSelectFilter label="部位" values={query.itemPartIds} options={[...new Set(state.itemTypeProfiles.flatMap((entry) => entry.itemPartIds))].sort().map((value) => ({ value, label: value }))} onChange={(values) => setQuery((current) => ({ ...current, itemPartIds: values }))} />
         <MultiSelectFilter label="生命周期" values={query.lifecycleStates} options={[{ value: "ACTIVE" as const, label: "活跃" }, { value: "DEPRECATED" as const, label: "已废弃" }, { value: "ARCHIVED" as const, label: "已归档" }]} onChange={(values) => setQuery((current) => ({ ...current, lifecycleStates: values }))} />
         <MultiSelectFilter label="注意状态" values={query.attentionStates} options={[{ value: "HAS_UPGRADE_CANDIDATE" as const, label: "升级候选" }, { value: "REBASE_REQUIRED" as const, label: "需要 Rebase" }, { value: "SOURCE_STALE" as const, label: "规则源过期" }, { value: "IMPORT_CONFLICT" as const, label: "导入冲突" }, { value: "EXPORT_RELATION_BROKEN" as const, label: "导出关系断裂" }]} onChange={(values) => setQuery((current) => ({ ...current, attentionStates: values }))} />
         <MultiSelectFilter label="Issue 级别" values={query.issueSeverities} options={[{ value: "BLOCKER" as const, label: "阻断" }, { value: "ERROR" as const, label: "错误" }, { value: "WARNING" as const, label: "警告" }, { value: "INFO" as const, label: "信息" }]} onChange={(values) => setQuery((current) => ({ ...current, issueSeverities: values }))} />
         <MultiSelectFilter label="Issue" values={query.issueCodes} options={issueCodes.map((value) => ({ value, label: value }))} onChange={(values) => setQuery((current) => ({ ...current, issueCodes: values }))} />
-        <MultiSelectFilter label="精确目标拉力" values={query.exactTargetWeightKg} options={weights.map((value) => ({ value, label: `${value} kgf` }))} onChange={(values) => setQuery((current) => ({ ...current, exactTargetWeightKg: values }))} />
+        <MultiSelectFilter label="精确目标拉力" values={query.exactTargetPullKg} options={weights.map((value) => ({ value, label: `${value} kgf` }))} onChange={(values) => setQuery((current) => ({ ...current, exactTargetPullKg: values }))} />
         <MultiSelectFilter label="RuleSet" values={query.ruleSetVersions} options={ruleSetVersions.map((value) => ({ value, label: value }))} onChange={(values) => setQuery((current) => ({ ...current, ruleSetVersions: values }))} />
         <select aria-label="升级候选" value={query.hasUpgradeCandidate === undefined ? "" : query.hasUpgradeCandidate ? "1" : "0"} onChange={(event) => setQuery((current) => ({ ...current, hasUpgradeCandidate: event.target.value === "" ? undefined : event.target.value === "1" }))}>
           <option value="">升级候选：全部</option><option value="1">仅有升级候选</option><option value="0">仅无升级候选</option>
@@ -1106,7 +1255,7 @@ export function SeriesGanttWorkbenchV3({
             const qualityIndex = QUALITY_ORDER.findIndex((quality) => quality.id === block.qualityId);
             const typeIndex = Math.max(0, typeIds.indexOf(block.typeId));
             const column = 2 + Math.max(0, qualityIndex) * Math.max(1, typeIds.length) + typeIndex;
-            const rowIndexes = block.skuNodes.map((sku) => weights.indexOf(sku.targetWeightKg)).filter((index) => index >= 0);
+            const rowIndexes = block.skuNodes.map((sku) => weights.indexOf(sku.targetPullKg)).filter((index) => index >= 0);
             if (!rowIndexes.length) return null;
             const minRow = Math.min(...rowIndexes);
             const maxRow = Math.max(...rowIndexes);
@@ -1115,7 +1264,7 @@ export function SeriesGanttWorkbenchV3({
               <div className={`gantt-series-block ${selectedSeries?.id === block.seriesId ? "selected" : ""}`} key={block.seriesId} style={{ gridColumn: column, gridRow: `${minRow + 1} / ${maxRow + 2}`, "--series-color": color } as React.CSSProperties}>
                 <button type="button" className="gantt-series-select" onClick={() => selectSeries(block.seriesId)}>
                   <strong>{block.name}</strong>
-                  <small>{block.aggregate.skuCount} SKU · {block.aggregate.modelCountMatched}/{block.aggregate.modelCountTotal} Model（命中/总数）</small>
+                  <small>{block.aggregate.skuCount} SKU · {block.aggregate.modelCountMatched} Model</small>
                   <span className={`gantt-primary-state ${block.aggregate.primary.toLowerCase()}`}>{statusText(block.aggregate.primary)}</span>
                   <span className="gantt-secondary-counts">
                     {block.aggregate.hardBlockingCount ? <em>{block.aggregate.hardBlockingCount} 阻断</em> : null}
@@ -1125,10 +1274,10 @@ export function SeriesGanttWorkbenchV3({
                 </button>
                 {block.skuNodes.map((sku) => {
                   const denominator = Math.max(1, maxRow - minRow);
-                  const offset = ((weights.indexOf(sku.targetWeightKg) - minRow) / denominator) * 100;
+                  const offset = ((weights.indexOf(sku.targetPullKg) - minRow) / denominator) * 100;
                   return (
-                    <button type="button" className={`gantt-sku-node ${selectedSku?.id === sku.skuId ? "selected" : ""}`} key={sku.skuId} style={{ top: `calc(${offset}% - 8px)` }} title={`${sku.targetWeightKg} kgf · ${sku.modelIds.length} 个 Model · ${sku.validationIssues.length} Issue`} onClick={() => selectSku(block.seriesId, sku.skuId)}>
-                      <span />{sku.targetWeightKg}<small>{sku.modelIds.length}</small>
+                    <button type="button" className={`gantt-sku-node ${selectedSku?.id === sku.skuId ? "selected" : ""}`} key={sku.skuId} style={{ top: `calc(${offset}% - 8px)` }} title={`${sku.targetPullKg} kgf · ${sku.modelIds.length} 个可见 Model · ${sku.validationIssues.length} Issue`} onClick={() => selectSku(block.seriesId, sku.skuId)}>
+                      <span />{sku.targetPullKg}<small>{sku.modelIds.length}</small>
                     </button>
                   );
                 })}
@@ -1155,11 +1304,32 @@ export function SeriesGanttWorkbenchV3({
             {selectedBlock?.aggregate.attention.map((stateCode) => <span key={stateCode}>{statusText(stateCode)}</span>)}
           </div>
           <div className="gantt-sku-tabs">
-            {seriesSkus.map((sku) => <button type="button" key={sku.id} className={selectedSku?.id === sku.id ? "active" : ""} onClick={() => selectSku(selectedSeries.id, sku.id)}><strong>{sku.targetWeightKg} kgf</strong><span>离散规格 · SKU 抽屉 · {sku.modelIds.length} Model · rev {sku.revision}</span></button>)}
+            {seriesSkus.map((sku) => <button type="button" key={sku.id} className={selectedSku?.id === sku.id ? "active" : ""} onClick={() => selectSku(selectedSeries.id, sku.id)}><strong>{sku.targetPullKg} kgf</strong><span>离散规格 · SKU 抽屉 · {sku.modelIds.length} Model · rev {sku.revision}</span></button>)}
           </div>
           {selectedSku ? (
             <div className="gantt-model-list">
-              <div className="gantt-model-list-head"><span>Model · 实际购买对象</span><span>配置</span><span>生命周期</span><span /></div>
+              <div className="gantt-model-list-head">
+                <span>Model · 实际购买对象</span>
+                <span>配置</span>
+                <span>生命周期</span>
+                <button
+                  type="button"
+                  disabled={
+                    skuPullChangePending ||
+                    !changeSkuTargetPullAvailability.enabled ||
+                    selectedSku.status === "superseded"
+                  }
+                  title={
+                    selectedSku.status === "superseded"
+                      ? "DEPRECATED SKU 只保留历史追溯，不能再次修改目标拉力。"
+                      : changeSkuTargetPullAvailability.disabledReasonText
+                  }
+                  onClick={() => void changeSelectedSkuTargetPull()}
+                >
+                  <Scale size={14} />
+                  {skuPullChangePending ? "处理中…" : "修改目标拉力"}
+                </button>
+              </div>
               {visibleModels.map((model) => (
                 <button type="button" key={model.id} disabled={!previewModelAvailability.enabled} title={previewModelAvailability.disabledReasonText} onClick={() => { setDrawerModelId(model.id); setDrawerSnapshotId(""); }}>
                   <span><Boxes size={15} /><div><strong>{model.name}</strong><small>{model.id} · revision {model.revision}</small></div></span>
@@ -1192,7 +1362,7 @@ export function SeriesGanttWorkbenchV3({
                 const itemPartId = event.target.value;
                 const type = state.itemTypeProfiles.find((entry) => entry.enabled && entry.itemPartIds.includes(itemPartId) && entry.methodIds.includes(seriesCreateDraft.methodId));
                 setSeriesCreateDraft({ ...seriesCreateDraft, itemPartId, typeId: type?.id ?? "" });
-              }}>{enabledItemParts.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label>
+              }}>{state.itemParts.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label>
               <label><span>钓法</span><select value={seriesCreateDraft.methodId} onChange={(event) => {
                 const methodId = event.target.value;
                 const type = state.itemTypeProfiles.find((entry) => entry.enabled && entry.methodIds.includes(methodId) && entry.itemPartIds.includes(seriesCreateDraft.itemPartId));
@@ -1202,7 +1372,6 @@ export function SeriesGanttWorkbenchV3({
               <label><span>功能定位</span><select value={seriesCreateDraft.functionId} onChange={(event) => setSeriesCreateDraft({ ...seriesCreateDraft, functionId: event.target.value })}>{state.functionProfiles.filter((entry) => entry.enabled).map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label>
               <label><span>品质（人工选择）</span><select value={seriesCreateDraft.qualityId} onChange={(event) => setSeriesCreateDraft({ ...seriesCreateDraft, qualityId: event.target.value as SeriesDefinition["qualityId"] })}>{QUALITY_ORDER.map((entry) => <option key={entry.id} value={entry.id}>{entry.letter} / {entry.name}</option>)}</select></label>
               <label><span>功能专精强度</span><select value={seriesCreateDraft.functionIntensity} onChange={(event) => setSeriesCreateDraft({ ...seriesCreateDraft, functionIntensity: Number(event.target.value) as 1 | 2 | 3 })}><option value={1}>1 · 轻度</option><option value={2}>2 · 标准</option><option value={3}>3 · 极致</option></select></label>
-              <label><span>性能定位（可选）</span><select value={seriesCreateDraft.performanceId} onChange={(event) => setSeriesCreateDraft({ ...seriesCreateDraft, performanceId: event.target.value })}><option value="">暂不指定</option>{state.performanceProfiles.filter((entry) => entry.enabled).map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label>
               <label className="span-2 gantt-discrete-pulls"><span>目标拉力规格 · 明确离散列表</span><input value={seriesCreateDraft.discretePulls} onChange={(event) => setSeriesCreateDraft({ ...seriesCreateDraft, discretePulls: event.target.value })} placeholder="例如 1.5, 3.8, 5.4, 8.2" /><small>当前将物化：{parseDiscretePulls(seriesCreateDraft.discretePulls).map((pull) => `${pull} kgf`).join("、") || "尚未输入"}。一个数值只生成一个 SKU 抽屉，不补中间值。</small></label>
               <fieldset className="span-2 gantt-planning-range"><legend>规划拉力范围（可选）· 不参与 SKU 生成</legend><label><span>最小 kgf</span><input type="number" min="0.01" step="0.1" value={seriesCreateDraft.planningMinKgf} onChange={(event) => setSeriesCreateDraft({ ...seriesCreateDraft, planningMinKgf: event.target.value })} placeholder="可留空" /></label><label><span>最大 kgf</span><input type="number" min="0.01" step="0.1" value={seriesCreateDraft.planningMaxKgf} onChange={(event) => setSeriesCreateDraft({ ...seriesCreateDraft, planningMaxKgf: event.target.value })} placeholder="可留空" /></label></fieldset>
             </div>
@@ -1211,10 +1380,10 @@ export function SeriesGanttWorkbenchV3({
         </div>
       ) : null}
 
-      {drawerModel && drawerSku && drawerSeries ? (
+      {drawerModel ? (
         <>
           <button className="gantt-drawer-backdrop" type="button" aria-label="关闭预览" onClick={() => { setDrawerModelId(""); setDrawerSnapshotId(""); }} />
-          <ModelDrawer state={state} model={drawerModel} sku={drawerSku} series={drawerSeries} snapshot={drawerSnapshot} breadcrumbs={contextBreadcrumbs} comparisonModelIds={comparisonModelIds} rebaseEnabled={rebaseAvailability.enabled} rebaseDisabledReason={rebaseAvailability.disabledReasonText} onToggleCompare={toggleCompare} onOpenSnapshot={setDrawerSnapshotId} onOpenRebase={() => { setDrawerModelId(""); setDrawerSnapshotId(""); onOpenSeries(drawerSeries.id); }} onClose={() => { setDrawerModelId(""); setDrawerSnapshotId(""); }} />
+          <ModelDrawer state={state} workspaceId={workspaceId} model={drawerModel} sku={drawerSku} series={drawerSeries} snapshot={drawerSnapshot} currentEntityType={drawerSnapshotId ? "configuration_snapshot" : "model"} comparisonModelIds={comparisonModelIds} rebaseEnabled={Boolean(drawerSeries) && rebaseRouteAvailability.enabled} rebaseDisabledReason={drawerSeries ? rebaseRouteAvailability.disabledReasonText : "父级 Series 不可见，不能进入 Rebase。"} onToggleCompare={toggleCompare} onOpenSnapshot={setDrawerSnapshotId} onOpenRebase={() => { setDrawerModelId(""); setDrawerSnapshotId(""); if (drawerSeries) onOpenSeries(drawerSeries.id); }} onClose={() => { setDrawerModelId(""); setDrawerSnapshotId(""); }} />
         </>
       ) : null}
       {candidateOpen && selectedSeries ? (

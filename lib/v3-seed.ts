@@ -13,6 +13,14 @@ import {
 import { applyLayeredPatches } from "./patch-engine";
 import { importLegacyPatchesToLedger } from "./patch-ledger";
 import {
+  createNeedsReviewPartConstraintSet,
+  PART_CONSTRAINT_SOURCE_HASH_PROJECTION,
+  partConstraintSourceContentHash,
+  partConstraintSourceRevisionId,
+  partConstraintSourceStableId,
+  partConstraintSetRef,
+} from "./part-constraints";
+import {
   matchNearestProjection,
   structuralPullFromProjection,
 } from "./projection-matcher";
@@ -130,13 +138,13 @@ function sampleCompatibilityRules(ruleSetVersion: string): CompatibilityRule[] {
       effect: "deny",
       selector: {
         typeId: "type:structure:水滴+枪柄",
-        maxWeightKg: 0.5,
+        maxPullKg: 0.5,
       },
       requirements: [],
       priority: 80,
       ruleSetVersion,
       reason: "当前水滴枪柄组件库不支持 0.5kg 以下微物规格。",
-      suggestion: "改用纺车直柄，或提高目标重量。",
+      suggestion: "改用纺车直柄，或提高目标拉力。",
       enabled: true,
     },
     {
@@ -183,8 +191,8 @@ function sampleAffinityRules(ruleSetVersion: string): AffinityRule[] {
       axis: "type_weight",
       selector: {
         typeId: "type:structure:水滴+枪柄",
-        minWeightKg: 1,
-        maxWeightKg: 4,
+        minPullKg: 1,
+        maxPullKg: 4,
       },
       score: 3,
       priority: 60,
@@ -219,11 +227,11 @@ function sampleAffinityRules(ruleSetVersion: string): AffinityRule[] {
   ];
 }
 
-function baseContext(targetWeightKg: number): CompatibilityContext {
+function baseContext(targetPullKg: number): CompatibilityContext {
   return {
     methodId: "method:lure",
     typeId: "type:structure:水滴+枪柄",
-    targetWeightKg,
+    targetPullKg,
     functionId: "function:障碍强攻",
     functionIntensity: 2,
     performanceId: undefined,
@@ -312,10 +320,10 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
       ruleSet,
     }),
   );
-  const candidatesFor = (targetWeightKg: number) =>
+  const candidatesFor = (targetPullKg: number) =>
     projections.map((projection) => {
       const context = {
-        ...baseContext(targetWeightKg),
+        ...baseContext(targetPullKg),
         performanceId: performance?.id,
       };
       return {
@@ -339,7 +347,7 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
   const match15 = matchNearestProjection(
     {
       itemPartId: "part:rod",
-      targetWeightKg: 1.5,
+      targetPullKg: 1.5,
       methodId: method.id,
       typeId: type.id,
       functionId: fn.id,
@@ -353,7 +361,7 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
   const match18 = matchNearestProjection(
     {
       itemPartId: "part:rod",
-      targetWeightKg: 1.8,
+      targetPullKg: 1.8,
       methodId: method.id,
       typeId: type.id,
       functionId: fn.id,
@@ -402,7 +410,6 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
       { targetPullKgf: 1.5, skuId: sku15Id },
       { targetPullKgf: 1.8, skuId: sku18Id },
     ],
-    targetWeightsKg: [1.5, 1.8],
     signature: [
       {
         parameterGroup: "杆最大拉力kgf",
@@ -427,7 +434,7 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
     id: sku15Id,
     revision: 1,
     seriesId,
-    targetWeightKg: 1.5,
+    targetPullKg: 1.5,
     projectionMatch: match15,
     patchIds: ["patch:sku-15-force"],
     modelIds: [modelIds.fast15, modelIds.long15],
@@ -441,7 +448,7 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
   const sku18: SkuDrawer = {
     ...sku15,
     id: sku18Id,
-    targetWeightKg: 1.8,
+    targetPullKg: 1.8,
     projectionMatch: match18,
     patchIds: ["patch:sku-18-force"],
     modelIds: [modelIds.fast18, modelIds.long18],
@@ -597,7 +604,7 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
       evaluateHardCompatibility(
         {
           ...baseContext(
-            model.skuId === sku15Id ? sku15.targetWeightKg : sku18.targetWeightKg,
+            model.skuId === sku15Id ? sku15.targetPullKg : sku18.targetPullKg,
           ),
           performanceId: performance?.id,
           componentIds: model.componentSelections.map(
@@ -815,6 +822,59 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
     createdBy: "seed-designer",
     createdAt: CREATED_AT,
   });
+  const candidateRecipe: CandidateSearchRecipe = {
+    id: "candidate-recipe:qinglu-obstacle",
+    revision: 1,
+    name: "青芦障碍 Model 路线",
+    methodIds: [method.id],
+    typeIds: [type.id],
+    functionIds: [fn.id],
+    performanceIds: performance ? [performance.id] : [],
+    qualityIds: [quality.id as CandidateSearchRecipe["qualityIds"][number]],
+    targetPullRangeKg: { min: 1.5, max: 1.8 },
+    maxCandidates: 16,
+    notes: "V3 示例链的确定性候选搜索配方，仅用于演示与验收。",
+  };
+  const seriesConstraintSet = createNeedsReviewPartConstraintSet({
+    constraintSetId: `part-constraint-set:series-definition:${encodeURIComponent(series.id)}`,
+    sourceRef: {
+      sourceType: "series_definition",
+      sourceId: partConstraintSourceStableId(series, "series_definition"),
+      revisionId: partConstraintSourceRevisionId(series),
+      hashProjectionVersion: PART_CONSTRAINT_SOURCE_HASH_PROJECTION,
+      contentHash: partConstraintSourceContentHash(series),
+    },
+    rawPayload: series,
+    sourceSchemaVersion: state.schemaVersion,
+    migratedAt: CREATED_AT,
+    diagnosticCodes: ["SEED_CONSTRAINTS_NOT_CONFIGURED"],
+    createdBy: "seed-designer",
+  });
+  const candidateConstraintSet = createNeedsReviewPartConstraintSet({
+    constraintSetId: `part-constraint-set:candidate-search-recipe:${encodeURIComponent(candidateRecipe.id)}`,
+    sourceRef: {
+      sourceType: "candidate_search_recipe",
+      sourceId: partConstraintSourceStableId(candidateRecipe, "candidate_search_recipe"),
+      revisionId: partConstraintSourceRevisionId(candidateRecipe),
+      hashProjectionVersion: PART_CONSTRAINT_SOURCE_HASH_PROJECTION,
+      contentHash: partConstraintSourceContentHash(candidateRecipe),
+    },
+    rawPayload: candidateRecipe,
+    sourceSchemaVersion: state.schemaVersion,
+    migratedAt: CREATED_AT,
+    diagnosticCodes: ["SEED_CONSTRAINTS_NOT_CONFIGURED"],
+    createdBy: "seed-designer",
+  });
+  const seriesConstraintRef = partConstraintSetRef(seriesConstraintSet);
+  const candidateConstraintRef = partConstraintSetRef(candidateConstraintSet);
+  const seriesWithConstraintRef: SeriesDefinition = {
+    ...series,
+    partConstraintSetRef: seriesConstraintRef,
+  };
+  const candidateRecipeWithConstraintRef: CandidateSearchRecipe = {
+    ...candidateRecipe,
+    partConstraintSetRef: candidateConstraintRef,
+  };
 
   return {
     ...state,
@@ -836,7 +896,14 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
         updatedAt: CREATED_AT,
       },
     ],
-    seriesDefinitions: [series],
+    seriesDefinitions: [seriesWithConstraintRef],
+    partConstraintSets: [seriesConstraintSet, candidateConstraintSet].reduce(
+      (entries, candidate) => entries.some((entry) =>
+        entry.constraintSetId === candidate.constraintSetId
+        && entry.revision === candidate.revision,
+      ) ? entries : [...entries, candidate],
+      state.partConstraintSets,
+    ),
     skuDrawers: [sku15, sku18],
     purchasableModels: publishedModels,
     candidateSearchRecipes: state.candidateSearchRecipes.some(
@@ -845,19 +912,7 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
       ? state.candidateSearchRecipes
       : [
           ...state.candidateSearchRecipes,
-          {
-            id: "candidate-recipe:qinglu-obstacle",
-            revision: 1,
-            name: "青芦障碍 Model 路线",
-            methodIds: [method.id],
-            typeIds: [type.id],
-            functionIds: [fn.id],
-            performanceIds: performance ? [performance.id] : [],
-            qualityIds: [quality.id as CandidateSearchRecipe["qualityIds"][number]],
-            targetWeightRangeKg: { min: 1.5, max: 1.8 },
-            maxCandidates: 16,
-            notes: "V3 示例链的确定性候选搜索配方，仅用于演示与验收。",
-          },
+          candidateRecipeWithConstraintRef,
         ],
     configurationSnapshots: [snapshot],
     fiveAxisViewDefinitions: state.fiveAxisViewDefinitions.some(

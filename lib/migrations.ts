@@ -20,6 +20,12 @@ import type {
   ModifierOption,
   ParameterDefinition,
   PerformanceProfile,
+  PartConstraintFieldName,
+  PartConstraintFieldTrace,
+  PartConstraintSet,
+  PartConstraintSetRef,
+  PartConstraintSlot,
+  PartConstraintSourceRevisionRef,
   ProjectionPatchRuleSource,
   ProjectionPatchOperation,
   SeriesRecipe,
@@ -33,13 +39,25 @@ import { defaultAffinityAxisWeights } from "./compatibility";
 import { migrateLegacyProductIdentity } from "./legacy-product-migration";
 import { CANONICAL_FEISHU_WORKBOOK } from "./feishu-workbook";
 import { buildPatchRevision, emptyPatchLedger, migratePatchLedger } from "./patch-ledger";
-import { deterministicHash } from "./rule-kernel";
 import {
   CANONICAL_PATCH_OFFSET_POLICY_ID,
   createCanonicalPatchOffsetPolicyVersion,
 } from "./patch-offset-policy";
+import { migrateConfigIdGovernanceState } from "./config-id-governance";
+import {
+  createNeedsReviewPartConstraintSet,
+  PART_CONSTRAINT_SOURCE_HASH_PROJECTION,
+  partConstraintSourceContentHash,
+  partConstraintSourceRevisionId,
+  partConstraintSourceStableId,
+  partConstraintSetContentHash,
+  partConstraintSetRef,
+  resolvePartConstraintSourceRevision,
+  resolvePartConstraintSetRef,
+} from "./part-constraints";
+import { deterministicHash } from "./rule-kernel";
 
-export const CURRENT_WORKSPACE_SCHEMA_VERSION = 16;
+export const CURRENT_WORKSPACE_SCHEMA_VERSION = 18;
 
 const DEFAULT_RULE_SETTINGS: WorkspaceRuleSettings = {
   reductionStackingMode: "diminishing_division",
@@ -156,7 +174,7 @@ function buildItemParts(parameters: ParameterDefinition[]): ItemPartDefinition[]
       .map((parameter) => parameter.key),
     notes: definition.activeInGeneration
       ? "v3 首版生成流程启用。"
-      : "OPEN-003 当前完全延期；仅保留稳定 ID、历史 Payload、未知字段与引用，不进入产品流程。",
+      : "v3 注册表预留；尚未决定开放到当前生成界面。",
   }));
 }
 
@@ -525,7 +543,7 @@ function migrateSearchRecipes(state: MutableWorkspace): CandidateSearchRecipe[] 
     functionIds: structuredClone(recipe.functionIds),
     performanceIds: structuredClone(recipe.performanceIds),
     qualityIds: [legacyQualityId(recipe.qualityTarget)],
-    targetWeightRangeKg: {
+    targetPullRangeKg: {
       min: recipe.fishMinKg,
       max: recipe.fishMaxKg,
     },
@@ -698,11 +716,8 @@ function migrateV15ToV16(state: MutableWorkspace): MutableWorkspace {
     ? migratePatchLedger(state.patchLedger as WorkspaceState["patchLedger"])
     : emptyPatchLedger();
   const legacyLimits = state.ruleSettings?.patchOffsetLimits;
-  if (
-    legacyLimits
-    && (legacyLimits.warning !== undefined || legacyLimits.error !== undefined)
-    && !ledger.migrationReviewItems.some((entry) => entry.id === "patch-offset-policy:legacy-thresholds")
-  ) {
+  if (legacyLimits && (legacyLimits.warning !== undefined || legacyLimits.error !== undefined)
+    && !ledger.migrationReviewItems.some((entry) => entry.id === "patch-offset-policy:legacy-thresholds")) {
     ledger.migrationReviewItems.push({
       id: "patch-offset-policy:legacy-thresholds",
       patchId: "legacy-patch-offset-policy",
@@ -713,10 +728,8 @@ function migrateV15ToV16(state: MutableWorkspace): MutableWorkspace {
   }
   const policies = arrayOf<WorkspaceState["workspacePolicies"][number]>(state.workspacePolicies)
     .map((policy) => policy.policyType === "patchOffsetPolicy"
-      && policy.policyId !== CANONICAL_PATCH_OFFSET_POLICY_ID
-      && policy.status === "published"
-      ? { ...policy, status: "superseded" as const }
-      : policy);
+      && policy.policyId !== CANONICAL_PATCH_OFFSET_POLICY_ID && policy.status === "published"
+      ? { ...policy, status: "superseded" as const } : policy);
   if (!policies.some((policy) => policy.policyId === CANONICAL_PATCH_OFFSET_POLICY_ID)) {
     policies.push(createCanonicalPatchOffsetPolicyVersion({
       createdAt: "2026-07-23T00:00:00.000Z",
@@ -727,16 +740,744 @@ function migrateV15ToV16(state: MutableWorkspace): MutableWorkspace {
   return {
     ...state,
     schemaVersion: 16,
-    ruleSettings: {
-      ...(state.ruleSettings ?? DEFAULT_RULE_SETTINGS),
-      patchOffsetLimits: {},
-    },
+    ruleSettings: { ...(state.ruleSettings ?? DEFAULT_RULE_SETTINGS), patchOffsetLimits: {} },
     patchLedger: ledger,
     workspacePolicies: policies,
     patchReviewBatches: arrayOf<WorkspaceState["patchReviewBatches"][number]>(state.patchReviewBatches),
     patchValidationWaivers: arrayOf<WorkspaceState["patchValidationWaivers"][number]>(state.patchValidationWaivers),
     patchValidationWaiverDecisions: arrayOf<WorkspaceState["patchValidationWaiverDecisions"][number]>(state.patchValidationWaiverDecisions),
   };
+}
+
+type LegacyProjectionMatchV16 = Record<string, unknown> & {
+  targetPullKg?: number;
+  targetWeightKg?: number;
+  matchedStructuralPullKg?: number;
+  anchorWeightKg?: number;
+  pullDistance?: number;
+  weightDistance?: number;
+};
+
+function resolveLegacyNumber(input: {
+  canonical: unknown;
+  legacy: unknown;
+  label: string;
+  positive?: boolean;
+  nonNegative?: boolean;
+}): number {
+  if (
+    typeof input.canonical === "number"
+    && typeof input.legacy === "number"
+    && input.canonical !== input.legacy
+  ) {
+    throw new Error(`TARGET_PULL_MIGRATION_CONFLICT：${input.label} 的新旧字段不一致。`);
+  }
+  const value = typeof input.canonical === "number" ? input.canonical : input.legacy;
+  if (
+    typeof value !== "number"
+    || !Number.isFinite(value)
+    || (input.positive && value <= 0)
+    || (input.nonNegative && value < 0)
+  ) {
+    throw new Error(`TARGET_PULL_MIGRATION_INVALID：${input.label} 缺少可无损迁移的有限数值。`);
+  }
+  return value;
+}
+
+function migrateLegacyProjectionMatchV16(value: unknown): ProjectionMatch {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("历史 ProjectionMatch 必须是对象。");
+  }
+  const source = value as LegacyProjectionMatchV16;
+  const targetPullKg = resolveLegacyNumber({
+    canonical: source.targetPullKg,
+    legacy: source.targetWeightKg,
+    label: "ProjectionMatch.targetPullKg",
+    positive: true,
+  });
+  const matchedStructuralPullKg = resolveLegacyNumber({
+    canonical: source.matchedStructuralPullKg,
+    legacy: source.anchorWeightKg,
+    label: "ProjectionMatch.matchedStructuralPullKg",
+    positive: true,
+  });
+  const pullDistance = resolveLegacyNumber({
+    canonical: source.pullDistance,
+    legacy: source.weightDistance,
+    label: "ProjectionMatch.pullDistance",
+    nonNegative: true,
+  });
+  const {
+    targetWeightKg: _targetWeightKg,
+    anchorWeightKg: _anchorWeightKg,
+    weightDistance: _weightDistance,
+    ...preserved
+  } = source;
+  void _targetWeightKg;
+  void _anchorWeightKg;
+  void _weightDistance;
+  return {
+    ...preserved,
+    targetPullKg,
+    matchedStructuralPullKg,
+    pullDistance,
+  } as ProjectionMatch;
+}
+
+function migrationArchiveItem(
+  id: string,
+  sourceId: string,
+  message: string,
+  preservedPayload: unknown,
+): MigrationReviewItem {
+  return {
+    id,
+    sourceType: "unknown",
+    sourceId,
+    message,
+    preservedPayload: structuredClone(preservedPayload),
+    status: "resolved",
+  };
+}
+
+function migrateV16ToV17(state: MutableWorkspace): MutableWorkspace {
+  const migrationReviewItems = arrayOf<MigrationReviewItem>(state.migrationReviewItems)
+    .map((item) => structuredClone(item));
+  const archive = (item: MigrationReviewItem) => {
+    if (!migrationReviewItems.some((existing) => existing.id === item.id)) {
+      migrationReviewItems.push(item);
+    }
+  };
+  const skuDrawers: Array<Record<string, unknown>> = arrayOf<Record<string, unknown>>(state.skuDrawers).map((sku) => {
+    const legacyTargetPullKg = resolveLegacyNumber({
+      canonical: sku.targetPullKg,
+      legacy: sku.targetWeightKg,
+      label: "SKU " + String(sku.id ?? "unknown") + ".targetPullKg",
+      positive: true,
+    });
+    if (Object.hasOwn(sku, "targetWeightKg")) {
+      archive(migrationArchiveItem(
+        "target-pull-migration:sku:" + String(sku.id ?? "unknown"),
+        String(sku.id ?? "unknown"),
+        "AUD-024：历史 SKU 拉力 payload 已归档；活动对象仅保留 targetPullKg。",
+        sku,
+      ));
+    }
+    const legacyProjectionMatch = sku.projectionMatch;
+    if (
+      legacyProjectionMatch && typeof legacyProjectionMatch === "object" && !Array.isArray(legacyProjectionMatch)
+      && (Object.hasOwn(legacyProjectionMatch, "targetWeightKg")
+        || Object.hasOwn(legacyProjectionMatch, "anchorWeightKg")
+        || Object.hasOwn(legacyProjectionMatch, "weightDistance"))
+    ) {
+      archive(migrationArchiveItem(
+        "target-pull-migration:sku-projection-match:" + String(sku.id ?? "unknown"),
+        String(sku.id ?? "unknown"),
+        "AUD-024：SKU 内嵌历史 ProjectionMatch payload 已归档。",
+        legacyProjectionMatch,
+      ));
+    }
+    const { targetWeightKg: _targetWeightKg, ...preserved } = sku;
+    void _targetWeightKg;
+    const projectionMatch = migrateLegacyProjectionMatchV16(sku.projectionMatch);
+    if (projectionMatch.targetPullKg !== legacyTargetPullKg) {
+      throw new Error("TARGET_PULL_MIGRATION_CONFLICT：SKU 与 ProjectionMatch 目标拉力不一致。");
+    }
+    return {
+      ...preserved,
+      targetPullKg: legacyTargetPullKg,
+      projectionMatch,
+    };
+  });
+  const projectionMatches = arrayOf<unknown>(state.projectionMatches).map((match, index) => {
+    const source = match as Record<string, unknown>;
+    if (Object.hasOwn(source, "targetWeightKg")) {
+      archive(migrationArchiveItem(
+        "target-pull-migration:projection-match:" + index,
+        String(source.projectionId ?? index),
+        "AUD-024：历史 ProjectionMatch payload 已归档。",
+        source,
+      ));
+    }
+    return migrateLegacyProjectionMatchV16(source);
+  });
+  const migrateSelector = (selector: unknown, sourceId: string) => {
+    const source = selector && typeof selector === "object" && !Array.isArray(selector)
+      ? selector as Record<string, unknown>
+      : {};
+    const { minWeightKg, maxWeightKg, ...preserved } = source;
+    if (minWeightKg !== undefined || maxWeightKg !== undefined) {
+      archive(migrationArchiveItem(
+        "target-pull-migration:selector:" + sourceId,
+        sourceId,
+        "AUD-024：历史拉力范围 selector payload 已归档。",
+        source,
+      ));
+    }
+    if (typeof source.minPullKg === "number" && typeof minWeightKg === "number" && source.minPullKg !== minWeightKg) {
+      throw new Error("TARGET_PULL_MIGRATION_CONFLICT：" + sourceId + " 最小拉力新旧字段不一致。");
+    }
+    if (typeof source.maxPullKg === "number" && typeof maxWeightKg === "number" && source.maxPullKg !== maxWeightKg) {
+      throw new Error("TARGET_PULL_MIGRATION_CONFLICT：" + sourceId + " 最大拉力新旧字段不一致。");
+    }
+    return {
+      ...preserved,
+      ...(typeof source.minPullKg === "number" ? {} : typeof minWeightKg === "number" ? { minPullKg: minWeightKg } : {}),
+      ...(typeof source.maxPullKg === "number" ? {} : typeof maxWeightKg === "number" ? { maxPullKg: maxWeightKg } : {}),
+    };
+  };
+  const compatibilityRules = arrayOf<Record<string, unknown>>(state.compatibilityRules).map((rule) => ({
+    ...rule,
+    selector: migrateSelector(rule.selector, "compatibility:" + String(rule.id ?? "unknown")),
+  }));
+  const affinityRules = arrayOf<Record<string, unknown>>(state.affinityRules).map((rule) => ({
+    ...rule,
+    selector: migrateSelector(rule.selector, "affinity:" + String(rule.id ?? "unknown")),
+  }));
+  const candidateSearchRecipes = arrayOf<Record<string, unknown>>(state.candidateSearchRecipes).map((recipe) => {
+    const legacyRange = recipe.targetWeightRangeKg;
+    if (legacyRange !== undefined) {
+      archive(migrationArchiveItem(
+        "target-pull-migration:candidate-recipe:" + String(recipe.id ?? "unknown"),
+        String(recipe.id ?? "unknown"),
+        "AUD-024：历史候选搜索拉力范围 payload 已归档。",
+        recipe,
+      ));
+    }
+    if (
+      recipe.targetPullRangeKg !== undefined
+      && legacyRange !== undefined
+      && deterministicHash(recipe.targetPullRangeKg) !== deterministicHash(legacyRange)
+    ) {
+      throw new Error("TARGET_PULL_MIGRATION_CONFLICT：候选搜索配方拉力范围新旧字段不一致。");
+    }
+    const { targetWeightRangeKg: _targetWeightRangeKg, ...preserved } = recipe;
+    void _targetWeightRangeKg;
+    const targetPullRangeKg = recipe.targetPullRangeKg ?? legacyRange;
+    if (!targetPullRangeKg || typeof targetPullRangeKg !== "object" || Array.isArray(targetPullRangeKg)) {
+      throw new Error("TARGET_PULL_MIGRATION_INVALID：候选搜索配方缺少拉力范围。");
+    }
+    return {
+      ...preserved,
+      targetPullRangeKg,
+    };
+  });
+  const seriesDefinitions = arrayOf<Record<string, unknown>>(state.seriesDefinitions).map((series) => {
+    const { targetWeightsKg: _targetWeightsKg, ...preserved } = series;
+    if (_targetWeightsKg !== undefined) {
+      archive(migrationArchiveItem(
+        "target-pull-migration:series:" + String(series.id ?? "unknown"),
+        String(series.id ?? "unknown"),
+        "AUD-024：历史 Series 重量数组已归档；活动对象消费离散 targetPullSpecifications。",
+        series,
+      ));
+    }
+    const declaredSkuIds = new Set(arrayOf<string>(series.skuIds));
+    const seriesSkus = skuDrawers
+      .filter((sku) => sku.seriesId === series.id)
+      .filter((sku) => !declaredSkuIds.size || declaredSkuIds.has(String(sku.id)))
+      .sort((left, right) => {
+        const leftPull = Number(left.targetPullKg);
+        const rightPull = Number(right.targetPullKg);
+        return leftPull - rightPull || String(left.id).localeCompare(String(right.id));
+      });
+    const existingSpecifications = arrayOf<Record<string, unknown>>(series.targetPullSpecifications);
+    const targetPullSpecifications = existingSpecifications.length
+      ? structuredClone(existingSpecifications)
+      : seriesSkus.map((sku) => ({
+          targetPullKgf: Number(sku.targetPullKg),
+          skuId: String(sku.id),
+        }));
+    return {
+      ...preserved,
+      targetPullSpecifications,
+    };
+  });
+  return {
+    ...state,
+    schemaVersion: 17,
+    skuDrawers,
+    projectionMatches,
+    compatibilityRules,
+    affinityRules,
+    candidateSearchRecipes,
+    seriesDefinitions,
+    migrationReviewItems,
+    // ConfigurationSnapshot 是冻结 payload；此迁移不得补字段、重算或改变 contentHash。
+    configurationSnapshots: arrayOf<WorkspaceState["configurationSnapshots"][number]>(
+      state.configurationSnapshots,
+    ),
+  } as unknown as MutableWorkspace;
+}
+
+const LEGACY_SERIES_RECIPE_FIELDS = new Set([
+  "id",
+  "name",
+  "platformId",
+  "platformPosition",
+  "templateIds",
+  "structureIds",
+  "functionIds",
+  "performanceIds",
+  "technologyIds",
+  "requiredAffixIds",
+  "optionalAffixPoolIds",
+  "partConstraints",
+  "optionalSlots",
+  "qualityTarget",
+  "fishMinKg",
+  "fishMaxKg",
+  "useScene",
+  "maxCandidates",
+  "notes",
+  "enabled",
+]);
+
+function stableConstraintSetId(sourceType: string, sourceId: string): string {
+  return `part-constraint-set:${sourceType}:${encodeURIComponent(sourceId)}`;
+}
+
+function assertConstraintSetSourceMatchesConsumer(
+  constraintSet: PartConstraintSet,
+  consumer: Record<string, unknown>,
+  sourceType: PartConstraintSourceRevisionRef["sourceType"],
+): void {
+  const expected: PartConstraintSourceRevisionRef = {
+    sourceType,
+    sourceId: partConstraintSourceStableId(consumer, sourceType),
+    revisionId: partConstraintSourceRevisionId(consumer),
+    hashProjectionVersion: PART_CONSTRAINT_SOURCE_HASH_PROJECTION,
+    contentHash: partConstraintSourceContentHash(consumer),
+  };
+  if (deterministicHash(constraintSet.sourceRef) !== deterministicHash(expected)) {
+    throw new Error(
+      `PART_CONSTRAINT_SET_SOURCE_REF_MISMATCH：${constraintSet.constraintSetId}@${constraintSet.revision} 不属于当前 ${sourceType} 消费者。`,
+    );
+  }
+}
+
+function v17NormalizationRequired(identity: string): never {
+  throw new Error(
+    `PART_CONSTRAINT_SET_V17_NORMALIZATION_REQUIRED：${identity} 是旧 schema v17 形态，不能直接提升为 schema v18。`,
+  );
+}
+
+/**
+ * Existing v17 constraint sets are already hash-addressed, so validate their
+ * whole persisted normalization envelope before calculating or dereferencing
+ * anything inside it.  `rawPayload` intentionally permits null; its presence
+ * (rather than truthiness) is the audit contract.
+ */
+function assertV17ConstraintSetNormalization(
+  value: unknown,
+): asserts value is PartConstraintSet {
+  const constraintSet = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+  const identity = constraintSet
+    ? `${String(constraintSet.constraintSetId)}@${String(constraintSet.revision)}`
+    : "unknown";
+  if (!constraintSet) v17NormalizationRequired(identity);
+
+  const evidence = constraintSet.migrationEvidence;
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) {
+    v17NormalizationRequired(identity);
+  }
+  const record = evidence as Record<string, unknown>;
+  if (
+    typeof record.migratorVersion !== "string"
+    || !record.migratorVersion.trim()
+    || !Number.isSafeInteger(record.sourceSchemaVersion)
+    || (record.sourceSchemaVersion as number) < 1
+    || typeof record.migratedAt !== "string"
+    || !record.migratedAt.trim()
+    || !Number.isFinite(Date.parse(record.migratedAt))
+    || !Array.isArray(record.diagnosticCodes)
+    || record.diagnosticCodes.some((code) => typeof code !== "string")
+    || !Object.hasOwn(record, "rawPayload")
+  ) {
+    v17NormalizationRequired(identity);
+  }
+}
+
+function legacyRecipePartPayloads(
+  source: Record<string, unknown>,
+): {
+  partPayloads: Partial<Record<PartConstraintSlot, unknown>>;
+  fieldEvidence: Partial<Record<
+    PartConstraintSlot,
+    Partial<Record<PartConstraintFieldName, {
+      sourcePath: string;
+      rawPayload: unknown;
+      transformationCodes: string[];
+    }>>
+  >>;
+} {
+  const partConstraints = source.partConstraints
+    && typeof source.partConstraints === "object"
+    && !Array.isArray(source.partConstraints)
+    ? source.partConstraints as Record<string, unknown>
+    : undefined;
+  if (partConstraints) {
+    const partPayloads = {
+      rod: structuredClone(partConstraints.rod),
+      reel: structuredClone(partConstraints.reel),
+      line: structuredClone(partConstraints.line),
+    };
+    return {
+      partPayloads,
+      fieldEvidence: Object.fromEntries(
+        (["rod", "reel", "line"] as PartConstraintSlot[]).map((slot) => {
+          const part = partConstraints[slot]
+            && typeof partConstraints[slot] === "object"
+            && !Array.isArray(partConstraints[slot])
+            ? partConstraints[slot] as Record<string, unknown>
+            : {};
+          return [slot, Object.fromEntries(
+            ([
+              "templateIds",
+              "materialIds",
+              "requiredAffixIds",
+              "optionalAffixPoolIds",
+              "typeIds",
+            ] as PartConstraintFieldName[]).map((field) => [field, {
+              sourcePath: `$.partConstraints.${slot}.${field}`,
+              rawPayload: structuredClone(part[field]),
+              transformationCodes: [],
+            }]),
+          )];
+        }),
+      ),
+    };
+  }
+  const legacyCarrier = {
+    templateIds: structuredClone(source.templateIds),
+    typeIds: structuredClone(source.structureIds),
+    materialIds: [],
+    requiredAffixIds: structuredClone(source.requiredAffixIds),
+    optionalAffixPoolIds: structuredClone(source.optionalAffixPoolIds),
+  };
+  const fieldSources: Record<
+    PartConstraintFieldName,
+    { sourcePath: string; rawPayload: unknown; transformationCodes: string[] }
+  > = {
+    templateIds: {
+      sourcePath: "$.templateIds",
+      rawPayload: structuredClone(source.templateIds),
+      transformationCodes: ["COPY_LEGACY_FLAT_FIELD_TO_PART"],
+    },
+    materialIds: {
+      sourcePath: "$",
+      rawPayload: undefined,
+      transformationCodes: ["SYNTHESIZE_EMPTY_MATERIAL_IDS"],
+    },
+    requiredAffixIds: {
+      sourcePath: "$.requiredAffixIds",
+      rawPayload: structuredClone(source.requiredAffixIds),
+      transformationCodes: ["COPY_LEGACY_FLAT_FIELD_TO_PART"],
+    },
+    optionalAffixPoolIds: {
+      sourcePath: "$.optionalAffixPoolIds",
+      rawPayload: structuredClone(source.optionalAffixPoolIds),
+      transformationCodes: ["COPY_LEGACY_FLAT_FIELD_TO_PART"],
+    },
+    typeIds: {
+      sourcePath: "$.structureIds",
+      rawPayload: structuredClone(source.structureIds),
+      transformationCodes: [
+        "COPY_LEGACY_FLAT_FIELD_TO_PART",
+        "RENAME_STRUCTURE_IDS_TO_TYPE_IDS",
+      ],
+    },
+  };
+  return {
+    partPayloads: {
+      rod: structuredClone(legacyCarrier),
+      reel: structuredClone(legacyCarrier),
+      line: structuredClone(legacyCarrier),
+    },
+    fieldEvidence: {
+      rod: structuredClone(fieldSources),
+      reel: structuredClone(fieldSources),
+      line: structuredClone(fieldSources),
+    },
+  };
+}
+
+function migrateV17ToV18(input: MutableWorkspace): MutableWorkspace {
+  // v17 曾存在已标记但尚未完全规范化的生产 payload；先复用其幂等 normalizer。
+  const state = migrateV16ToV17(input);
+  const migratedAt = typeof state.importedAt === "string" && state.importedAt
+    ? state.importedAt
+    : "1970-01-01T00:00:00.000Z";
+  const constraintSets = arrayOf<PartConstraintSet>(state.partConstraintSets)
+    .map((entry) => structuredClone(entry));
+  const reviewItems = arrayOf<MigrationReviewItem>(state.migrationReviewItems)
+    .map((entry) => structuredClone(entry));
+
+  const constraintSetIdentities = new Set<string>();
+  for (const constraintSet of constraintSets) {
+    assertV17ConstraintSetNormalization(constraintSet);
+    const identity = `${constraintSet.constraintSetId}@${constraintSet.revision}`;
+    if (constraintSetIdentities.has(identity)) {
+      throw new Error(
+        `PART_CONSTRAINT_SET_REVISION_DUPLICATE：${identity} 存在重复记录。`,
+      );
+    }
+    constraintSetIdentities.add(identity);
+    if (partConstraintSetContentHash(constraintSet) !== constraintSet.contentHash) {
+      throw new Error(
+        `PART_CONSTRAINT_SET_CONTENT_TAMPERED：${identity} 存储内容与哈希不一致。`,
+      );
+    }
+    const sourceRef = constraintSet.sourceRef as Partial<PartConstraintSourceRevisionRef>;
+    if (
+      sourceRef.hashProjectionVersion !== PART_CONSTRAINT_SOURCE_HASH_PROJECTION
+      || !Array.isArray(constraintSet.traces)
+      || constraintSet.traces.some(
+        (trace) => !Array.isArray(
+          (trace as Partial<PartConstraintFieldTrace>).transformationCodes,
+        ),
+      )
+    ) {
+      v17NormalizationRequired(identity);
+    }
+    resolvePartConstraintSetRef(
+      constraintSets,
+      partConstraintSetRef(constraintSet),
+    );
+  }
+
+  const addConstraintSet = (candidate: PartConstraintSet): PartConstraintSet => {
+    const matches = constraintSets.filter(
+      (entry) =>
+        entry.constraintSetId === candidate.constraintSetId
+        && entry.revision === candidate.revision,
+    );
+    if (matches.length > 1) {
+      throw new Error(
+        `PART_CONSTRAINT_SET_REVISION_DUPLICATE：${candidate.constraintSetId}@${candidate.revision} 存在重复记录。`,
+      );
+    }
+    const existing = matches[0];
+    if (existing) {
+      resolvePartConstraintSetRef(
+        constraintSets,
+        partConstraintSetRef(existing),
+      );
+      if (existing.contentHash !== candidate.contentHash) {
+        throw new Error(
+          `PART_CONSTRAINT_SET_REVISION_CONFLICT：${candidate.constraintSetId}@${candidate.revision} 已存在不同内容。`,
+        );
+      }
+      return existing;
+    }
+    constraintSets.push(candidate);
+    return candidate;
+  };
+
+  const addReviewItem = (constraintSet: PartConstraintSet) => {
+    const sourceType: MigrationReviewItem["sourceType"] =
+      constraintSet.sourceRef.sourceType === "legacy_series_recipe"
+        ? "series_recipe"
+        : constraintSet.sourceRef.sourceType;
+    const id = `${constraintSet.constraintSetId}:r${constraintSet.revision}:review`;
+    const candidate: MigrationReviewItem = {
+      id,
+      sourceType,
+      sourceId: constraintSet.sourceRef.sourceId,
+      message: "AUD-026：分部位约束来源尚未人工确认；权威候选过滤与自动发布必须 fail-closed。",
+      preservedPayload: {
+        partConstraintSetRef: partConstraintSetRef(constraintSet),
+        sourceRef: structuredClone(constraintSet.sourceRef),
+        rawPayload: structuredClone(constraintSet.migrationEvidence.rawPayload),
+        diagnosticCodes: [...constraintSet.migrationEvidence.diagnosticCodes],
+      },
+      status: "pending",
+    };
+    const matches = reviewItems.filter((entry) => entry.id === id);
+    if (matches.length > 1) {
+      throw new Error(
+        `PART_CONSTRAINT_REVIEW_ITEM_DUPLICATE：${id} 存在重复复核项。`,
+      );
+    }
+    if (matches.length === 1) {
+      if (deterministicHash(matches[0]) !== deterministicHash(candidate)) {
+        throw new Error(
+          `PART_CONSTRAINT_REVIEW_ITEM_CONFLICT：${id} 与预期复核证据不一致。`,
+        );
+      }
+      return;
+    }
+    reviewItems.push(candidate);
+  };
+
+  const migratedLegacyRefs = new Map<string, PartConstraintSetRef>();
+  for (const recipe of arrayOf<Record<string, unknown>>(state.recipes)) {
+    const sourceId = partConstraintSourceStableId(recipe, "legacy_series_recipe");
+    const sourceRef = {
+      sourceType: "legacy_series_recipe" as const,
+      sourceId,
+      revisionId: partConstraintSourceRevisionId(recipe),
+      hashProjectionVersion: PART_CONSTRAINT_SOURCE_HASH_PROJECTION,
+      contentHash: partConstraintSourceContentHash(recipe),
+    };
+    const diagnostics = new Set<string>([
+      "LEGACY_V14_CARRIER_REQUIRES_REVIEW",
+    ]);
+    if (sourceRef.revisionId === null) diagnostics.add("SOURCE_REVISION_MISSING");
+    if (Object.keys(recipe).some((field) => !LEGACY_SERIES_RECIPE_FIELDS.has(field))) {
+      diagnostics.add("UNKNOWN_SOURCE_FIELDS_PRESERVED_RAW");
+    }
+    const rawPartConstraints = recipe.partConstraints
+      && typeof recipe.partConstraints === "object"
+      && !Array.isArray(recipe.partConstraints)
+      ? recipe.partConstraints as Record<string, unknown>
+      : undefined;
+    if (
+      rawPartConstraints
+      && Object.keys(rawPartConstraints).some(
+        (slot) => slot !== "rod" && slot !== "reel" && slot !== "line",
+      )
+    ) {
+      diagnostics.add("UNKNOWN_PART_SLOT_PRESERVED_RAW");
+    }
+    const legacyParts = legacyRecipePartPayloads(recipe);
+    const candidate = createNeedsReviewPartConstraintSet({
+      constraintSetId: stableConstraintSetId("legacy-series-recipe", sourceId),
+      sourceRef,
+      rawPayload: recipe,
+      sourceSchemaVersion: 17,
+      migratedAt,
+      partPayloads: legacyParts.partPayloads,
+      fieldEvidence: legacyParts.fieldEvidence,
+      diagnosticCodes: [...diagnostics],
+    });
+    const constraintSet = addConstraintSet(candidate);
+    const ref = partConstraintSetRef(constraintSet);
+    migratedLegacyRefs.set(sourceId, ref);
+    addReviewItem(constraintSet);
+  }
+
+  const candidateSearchRecipes = arrayOf<Record<string, unknown>>(
+    state.candidateSearchRecipes,
+  ).map((recipe) => {
+    const existingRef = recipe.partConstraintSetRef as PartConstraintSetRef | undefined;
+    if (existingRef) {
+      const constraintSet = resolvePartConstraintSetRef(constraintSets, existingRef);
+      assertConstraintSetSourceMatchesConsumer(
+        constraintSet,
+        recipe,
+        "candidate_search_recipe",
+      );
+      if (constraintSet.reviewStatus === "NEEDS_REVIEW") {
+        addReviewItem(constraintSet);
+      }
+      return structuredClone(recipe);
+    }
+    const legacyId = typeof recipe.sourceLegacyRecipeId === "string"
+      ? recipe.sourceLegacyRecipeId
+      : typeof recipe.id === "string" && recipe.id.startsWith("search:")
+        ? recipe.id.slice("search:".length)
+        : undefined;
+    const legacyRef = legacyId ? migratedLegacyRefs.get(legacyId) : undefined;
+
+    const sourceId = partConstraintSourceStableId(recipe, "candidate_search_recipe");
+    const sourceRef = {
+      sourceType: "candidate_search_recipe" as const,
+      sourceId,
+      revisionId: partConstraintSourceRevisionId(recipe),
+      hashProjectionVersion: PART_CONSTRAINT_SOURCE_HASH_PROJECTION,
+      contentHash: partConstraintSourceContentHash(recipe),
+    };
+    const constraintSet = addConstraintSet(createNeedsReviewPartConstraintSet({
+      constraintSetId: stableConstraintSetId("candidate-search-recipe", sourceId),
+      sourceRef,
+      rawPayload: recipe,
+      sourceSchemaVersion: 17,
+      migratedAt,
+      diagnosticCodes: [
+        "NO_RECIPE_PART_CONSTRAINT_SOURCE",
+        ...(legacyRef ? ["LEGACY_RECIPE_CONSTRAINTS_NOT_REUSED_ACROSS_CONSUMERS"] : []),
+        ...(!legacyRef && legacyId ? ["LEGACY_RECIPE_REF_UNRESOLVED"] : []),
+      ],
+    }));
+    addReviewItem(constraintSet);
+    return {
+      ...recipe,
+      partConstraintSetRef: partConstraintSetRef(constraintSet),
+    };
+  });
+
+  const seriesDefinitions = arrayOf<Record<string, unknown>>(
+    state.seriesDefinitions,
+  ).map((series) => {
+    const existingRef = series.partConstraintSetRef as PartConstraintSetRef | undefined;
+    if (existingRef) {
+      const constraintSet = resolvePartConstraintSetRef(constraintSets, existingRef);
+      assertConstraintSetSourceMatchesConsumer(
+        constraintSet,
+        series,
+        "series_definition",
+      );
+      if (constraintSet.reviewStatus === "NEEDS_REVIEW") {
+        addReviewItem(constraintSet);
+      }
+      return structuredClone(series);
+    }
+    const sourceId = partConstraintSourceStableId(series, "series_definition");
+    const sourceRef = {
+      sourceType: "series_definition" as const,
+      sourceId,
+      revisionId: partConstraintSourceRevisionId(series),
+      hashProjectionVersion: PART_CONSTRAINT_SOURCE_HASH_PROJECTION,
+      contentHash: partConstraintSourceContentHash(series),
+    };
+    const constraintSet = addConstraintSet(createNeedsReviewPartConstraintSet({
+      constraintSetId: stableConstraintSetId("series-definition", sourceId),
+      sourceRef,
+      rawPayload: series,
+      sourceSchemaVersion: 17,
+      migratedAt,
+      diagnosticCodes: ["NO_SERIES_PART_CONSTRAINT_SOURCE"],
+    }));
+    addReviewItem(constraintSet);
+    return {
+      ...series,
+      partConstraintSetRef: partConstraintSetRef(constraintSet),
+    };
+  });
+
+  const sourcesByType: Record<
+    PartConstraintSourceRevisionRef["sourceType"],
+    Record<string, unknown>[]
+  > = {
+    legacy_series_recipe: arrayOf<Record<string, unknown>>(state.recipes),
+    candidate_search_recipe: candidateSearchRecipes,
+    series_definition: seriesDefinitions,
+  };
+  for (const constraintSet of constraintSets) {
+    resolvePartConstraintSourceRevision(
+      sourcesByType[constraintSet.sourceRef.sourceType],
+      constraintSet.sourceRef,
+    );
+  }
+
+  return {
+    ...state,
+    schemaVersion: 18,
+    partConstraintSets: constraintSets,
+    candidateSearchRecipes,
+    seriesDefinitions,
+    migrationReviewItems: reviewItems,
+    performanceSummaryDefinitions: arrayOf<
+      WorkspaceState["performanceSummaryDefinitions"][number]
+    >(state.performanceSummaryDefinitions),
+    // PartConstraintSet 迁移不得补写、重算或改变任何已发布 Snapshot。
+    configurationSnapshots: arrayOf<WorkspaceState["configurationSnapshots"][number]>(
+      state.configurationSnapshots,
+    ),
+  } as unknown as MutableWorkspace;
 }
 
 const migrations: Record<number, (state: MutableWorkspace) => MutableWorkspace> = {
@@ -755,6 +1496,8 @@ const migrations: Record<number, (state: MutableWorkspace) => MutableWorkspace> 
   13: migrateV13ToV14,
   14: migrateV14ToV15,
   15: migrateV15ToV16,
+  16: migrateV16ToV17,
+  17: migrateV17ToV18,
 };
 
 export function migrateWorkspaceState(input: unknown): WorkspaceState {
@@ -793,6 +1536,7 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
     patchLedger: state.patchLedger && typeof state.patchLedger === "object"
       ? migratePatchLedger(state.patchLedger as WorkspaceState["patchLedger"])
       : emptyPatchLedger(),
+    configIdGovernance: migrateConfigIdGovernanceState(state.configIdGovernance),
   };
   return state as WorkspaceState;
 }
@@ -847,17 +1591,36 @@ function migrateV6ToV7(state: MutableWorkspace): MutableWorkspace {
 }
 
 function migrateV7ToV8(state: MutableWorkspace): MutableWorkspace {
-  const skuDrawers = arrayOf<WorkspaceState["skuDrawers"][number]>(state.skuDrawers);
+  type LegacySku = Record<string, unknown> & {
+    id: string;
+    seriesId: string;
+    targetPullKg?: number;
+    targetWeightKg?: number;
+  };
+  type LegacySeries = Record<string, unknown> & {
+    id: string;
+    planningPullRange?: { minKgf: number; maxKgf: number };
+    targetPullSpecifications?: Array<{ targetPullKgf: number; skuId: string }>;
+    targetWeightsKg?: number[];
+    skuIds?: string[];
+  };
+  const skuDrawers = arrayOf<LegacySku>(state.skuDrawers);
+  const pullForLegacySku = (sku: LegacySku) => resolveLegacyNumber({
+    canonical: sku.targetPullKg,
+    legacy: sku.targetWeightKg,
+    label: "schema v7 SKU " + sku.id,
+    positive: true,
+  });
   return {
     ...state,
     schemaVersion: 8,
-    seriesDefinitions: arrayOf<WorkspaceState["seriesDefinitions"][number]>(state.seriesDefinitions)
+    seriesDefinitions: arrayOf<LegacySeries>(state.seriesDefinitions)
       .map((series) => {
         const seriesSkus = skuDrawers
           .filter((sku) => sku.seriesId === series.id)
-          .sort((left, right) => left.targetWeightKg - right.targetWeightKg || left.id.localeCompare(right.id));
+          .sort((left, right) => pullForLegacySku(left) - pullForLegacySku(right) || left.id.localeCompare(right.id));
         const specifications = seriesSkus.map((sku) => ({
-          targetPullKgf: sku.targetWeightKg,
+          targetPullKgf: pullForLegacySku(sku),
           skuId: sku.id,
         }));
         const pulls = specifications.map((entry) => entry.targetPullKgf);
@@ -875,7 +1638,7 @@ function migrateV7ToV8(state: MutableWorkspace): MutableWorkspace {
           skuIds: series.skuIds?.length ? [...series.skuIds] : specifications.map((entry) => entry.skuId),
         };
       }),
-  };
+  } as unknown as MutableWorkspace;
 }
 
 function migrateV12ToV13(state: MutableWorkspace): MutableWorkspace {

@@ -76,10 +76,35 @@ test("受约束配方生成并发布规范 ID", () => {
   const generated = generateCandidatesForRecipe(state, recipe);
   assert.ok(generated.length > 0);
   assert.ok(generated.length <= 3);
+  assert.equal(generated.every((candidate) => candidate.selections.performanceId === undefined), true);
   const sku = publishCandidate(state, generated[0]);
   assert.equal(sku.rodId, sku.comboId + "_R");
   assert.equal(sku.reelId, sku.comboId + "_W");
   assert.equal(sku.lineId, sku.comboId + "_L");
+
+  const legacy = generateCandidatesForRecipe(
+    state,
+    recipe,
+    { executionMode: "legacy_performance_replay" },
+  ).find((candidate) => candidate.selections.performanceId);
+  assert.ok(legacy);
+  const explicitlyReplayed = calculateCandidate(
+    state,
+    legacy!,
+    { executionMode: "legacy_performance_replay" },
+  );
+  assert.equal(
+    legacy!.selections.performanceId,
+    explicitlyReplayed.selections.performanceId,
+  );
+  assert.deepEqual(legacy!.calculated.values, explicitlyReplayed.calculated.values);
+  assert.deepEqual(legacy!.calculated.trace, explicitlyReplayed.calculated.trace);
+  assert.equal(legacy!.calculated.priceIndex, explicitlyReplayed.calculated.priceIndex);
+  assert.ok(legacy!.calculated.trace.some((entry) => entry.layer === "性能定位"));
+  assert.throws(
+    () => publishCandidate(state, legacy!),
+    /只读历史证据/,
+  );
 });
 
 test("规则图是无环 DAG，条件分支按行路由并在人工关卡暂停", () => {
@@ -105,6 +130,25 @@ test("规则图是无环 DAG，条件分支按行路由并在人工关卡暂停"
   assert.equal(run.status, "waiting_review");
   assert.equal(run.snapshots.length, 1);
   assert.equal(run.snapshots[0].rows.length, state.candidates.length);
+});
+
+test("规范 RuleGraph 忽略历史 Performance 维度且默认图不再声明该维度", () => {
+  const state = createSeedState();
+  assert.equal(
+    state.ruleGraphs.flatMap((graph) => graph.nodes)
+      .some((node) => node.dimensions.includes("performance")),
+    false,
+  );
+  const canonical = structuredClone(state.ruleGraphs[0]);
+  const withLegacyDimension = structuredClone(canonical);
+  const modifier = withLegacyDimension.nodes.find((node) => node.kind === "modifier")!;
+  modifier.dimensions.push("performance");
+  const canonicalRun = createRuleGraphRun(state, canonical, [], "测试策划");
+  const legacyDeclaredRun = createRuleGraphRun(state, withLegacyDimension, [], "测试策划");
+  assert.deepEqual(
+    legacyDeclaredRun.workingRows.map((row) => row.values),
+    canonicalRun.workingRows.map((row) => row.values),
+  );
 });
 
 test("审阅中间表可修改，批准后继续执行并只下发触碰字段", () => {

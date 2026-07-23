@@ -1,0 +1,30 @@
+{
+  "checkedAt": "2026-07-23T08:00:00Z",
+  "riskLevel": "normal",
+  "pullRequest": {
+    "number": 101,
+    "isDraft": false,
+    "state": "open",
+    "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "baseSha": "dddddddddddddddddddddddddddddddddddddddd",
+    "author": { "login": "author", "type": "User" }
+  },
+  "trust": {
+    "ciWorkflow": {
+      "baseContentSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "headContentSha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "gateProgram": {
+      "baseContentSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "headContentSha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "localContentSha256": "2222222222222222222222222222222222222222222222222222222222222222"
+    }
+  },
+  "checks": [
+    { "id": 1, "name": "Root v3 app (npm)", "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "baseSha": "dddddddddddddddddddddddddddddddddddddddd", "event": "pull_request", "pullNumber": 101, "status": "completed", "conclusion": "success", "appSlug": "github-actions" },
+    { "id": 2, "name": "Historical workspace (pnpm)", "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "baseSha": "dddddddddddddddddddddddddddddddddddddddd", "event": "pull_request", "pullNumber": 101, "status": "completed", "conclusion": "success", "appSlug": "github-actions" },
+    { "id": 3, "name": "Windows line-ending policy", "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "baseSha": "dddddddddddddddddddddddddddddddddddddddd", "event": "pull_request", "pullNumber": 101, "status": "completed", "conclusion": "success", "appSlug": "github-actions" }
+  ],
+  "reviews": [],
+  "reviewThreads": []
+}

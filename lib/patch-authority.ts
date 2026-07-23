@@ -1,5 +1,5 @@
 import { deterministicHash } from "./rule-kernel";
-import { reviewPatchBatch, reviewPatchRevision } from "./patch-ledger";
+import { markPatchRevisionRebaseRequired, PatchLedgerError, reviewPatchBatch, reviewPatchRevision, submitPatchRevision } from "./patch-ledger";
 import {
   createPatchReviewBatch,
   evaluatePatchFinalRanges,
@@ -380,7 +380,7 @@ export function createAuthoritativePatchObjectFromWorkspace(
     ? [chain.sku]
     : state.skuDrawers
       .filter((sku) => sku.seriesId === chain.series.id)
-      .sort((left, right) => left.targetWeightKg - right.targetWeightKg || left.id.localeCompare(right.id));
+      .sort((left, right) => left.targetPullKg - right.targetPullKg || left.id.localeCompare(right.id));
   if (!skus.length) {
     throw new PatchOffsetPolicyError(
       "PATCH_SERIES_DISCRETE_CONTEXT_MISSING",
@@ -449,7 +449,7 @@ export function preparePatchOperationFromWorkspace(input: {
     ? chain.sku
     : input.state.skuDrawers
       .filter((entry) => entry.seriesId === chain.series.id)
-      .sort((left, right) => left.targetWeightKg - right.targetWeightKg || left.id.localeCompare(right.id))[0];
+      .sort((left, right) => left.targetPullKg - right.targetPullKg || left.id.localeCompare(right.id))[0];
   const projection = input.state.derivedProjections.find((entry) => entry.id === sku?.projectionMatch.projectionId);
   if (!projection) throw new PatchOffsetPolicyError("PATCH_PROJECTION_MISSING", "当前对象没有权威 Projection 基线。");
   const panel = applyRevisions(projection.values, active);
@@ -603,6 +603,53 @@ export function reviewWorkspacePatchRevision(input: {
       reviewedAt: input.reviewedAt,
       capabilities: input.capabilities,
       approvalEvidence,
+    }),
+  };
+}
+
+export function submitWorkspacePatchRevision(input: {
+  state: WorkspaceState;
+  patchId: string;
+  patchRevision: number;
+  capabilities: Iterable<string>;
+}): WorkspaceState {
+  const capabilities = [...input.capabilities];
+  if (!capabilities.includes("patch.create")) {
+    throw new PatchLedgerError("PATCH_PERMISSION_DENIED", "Missing patch.create");
+  }
+  const target = input.state.patchLedger.revisions.find((revision) =>
+    revision.patchId === input.patchId && revision.patchRevision === input.patchRevision);
+  if (!target) {
+    throw new PatchLedgerError("PATCH_REVISION_NOT_FOUND", "Revision not found");
+  }
+  if (target.state !== "DRAFT") {
+    throw new PatchLedgerError("PATCH_STATE_TRANSITION_INVALID", "Only DRAFT revisions can be submitted");
+  }
+  if (target.snapshotRefs.length) {
+    throw new PatchLedgerError("PATCH_REVISION_IMMUTABLE", "Snapshot-referenced revision is immutable");
+  }
+  const currentRuleSet = currentPublishedRuleSet(input.state);
+  const currentSubject = currentPatchSubjectRef(input.state, target);
+  const ruleSetCurrent = target.baseRuleSetVersion === currentRuleSet.id
+    || target.baseRuleSetVersion === String(currentRuleSet.version);
+  if (!ruleSetCurrent || target.baseObjectRevision !== currentSubject.revision) {
+    return {
+      ...input.state,
+      patchLedger: markPatchRevisionRebaseRequired({
+        ledger: input.state.patchLedger,
+        patchId: input.patchId,
+        patchRevision: input.patchRevision,
+        capabilities,
+      }),
+    };
+  }
+  return {
+    ...input.state,
+    patchLedger: submitPatchRevision({
+      ledger: input.state.patchLedger,
+      patchId: input.patchId,
+      patchRevision: input.patchRevision,
+      capabilities,
     }),
   };
 }

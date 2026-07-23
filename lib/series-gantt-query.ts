@@ -18,6 +18,7 @@ import type {
   ValidationIssue,
 } from "./types";
 import { deterministicHash } from "./rule-kernel";
+import { isActiveValidationIssue, validationIssueLevel, validationIssueSeverity } from "./validation-issues";
 import {
   isProductItemPartEnabled,
   seriesItemPartId,
@@ -38,7 +39,7 @@ export interface SeriesGanttQuery {
   issueCodes?: string[];
   issueSeverities?: Array<"INFO" | "WARNING" | "ERROR" | "BLOCKER">;
   hasUpgradeCandidate?: boolean;
-  exactTargetWeightKg?: number[];
+  exactTargetPullKg?: number[];
   minTargetPullKg?: number;
   maxTargetPullKg?: number;
   ruleSetVersions?: string[];
@@ -98,8 +99,7 @@ function matchesBoolean(filter: boolean | undefined, value: boolean): boolean {
 }
 
 function issueSeverity(issue: ValidationIssue): "INFO" | "WARNING" | "ERROR" | "BLOCKER" {
-  if (issue.severity) return issue.severity;
-  return issue.level === "error" ? "ERROR" : issue.level === "warning" ? "WARNING" : "INFO";
+  return validationIssueSeverity(issue);
 }
 
 function collectSeriesContext(input: {
@@ -108,7 +108,10 @@ function collectSeriesContext(input: {
   models: PurchasableModel[];
   upgrades: UpgradeCandidate[];
 }) {
-  const skus = input.skus.filter((sku) => sku.seriesId === input.series.id);
+  const skus = input.skus.filter(
+    (sku) =>
+      sku.seriesId === input.series.id && sku.status !== "superseded",
+  );
   const modelIds = new Set(skus.flatMap((sku) => sku.modelIds));
   const models = input.models.filter((model) => modelIds.has(model.id));
   const issues = skus.flatMap((sku) => sku.validationSummary);
@@ -142,9 +145,9 @@ function searchableText(values: Array<string | number | undefined>): string {
 }
 
 function matchesSkuQuery(sku: SkuDrawer, query: SeriesGanttQuery): boolean {
-  if (!intersects(query.exactTargetWeightKg, [sku.targetWeightKg])) return false;
-  if (query.minTargetPullKg !== undefined && sku.targetWeightKg < query.minTargetPullKg) return false;
-  if (query.maxTargetPullKg !== undefined && sku.targetWeightKg > query.maxTargetPullKg) return false;
+  if (!intersects(query.exactTargetPullKg, [sku.targetPullKg])) return false;
+  if (query.minTargetPullKg !== undefined && sku.targetPullKg < query.minTargetPullKg) return false;
+  if (query.maxTargetPullKg !== undefined && sku.targetPullKg > query.maxTargetPullKg) return false;
   if (!intersects(query.issueCodes, sku.validationSummary.map((issue) => issue.code))) return false;
   if (!intersects(query.issueSeverities, sku.validationSummary.map(issueSeverity))) return false;
   return true;
@@ -168,9 +171,9 @@ function matchingModelsForQuery(input: {
   const skuTextMatches = new Set(matchingSkus
     .filter((sku) => !text || searchableText([
       sku.id,
-      sku.targetWeightKg,
-      `${sku.targetWeightKg}kg`,
-      `${sku.targetWeightKg}kgf`,
+      sku.targetPullKg,
+      `${sku.targetPullKg}kg`,
+      `${sku.targetPullKg}kgf`,
     ]).includes(text))
     .map((sku) => sku.id));
   const pendingUpgradeModelIds = new Set(input.upgrades
@@ -250,7 +253,7 @@ export function querySeriesGantt(input: {
     if ((input.query.issueCodes?.length || input.query.issueSeverities?.length)
       && matched.matchingSkus.length === 0) return [];
     if (!matchesBoolean(input.query.hasUpgradeCandidate, context.pendingUpgrades.length > 0)) return [];
-    if ((input.query.exactTargetWeightKg?.length
+    if ((input.query.exactTargetPullKg?.length
       || input.query.minTargetPullKg !== undefined
       || input.query.maxTargetPullKg !== undefined)
       && matched.matchingSkus.length === 0) return [];
@@ -270,8 +273,8 @@ export function querySeriesGantt(input: {
         modelCountTotal: context.models.length,
         modelCountMatched: matched.models.length,
         descendantStateCounts: context.descendantStateCounts,
-        hardBlockingCount: context.issues.filter((issue) => issue.level === "error").length,
-        warningCount: context.issues.filter((issue) => issue.level === "warning").length,
+        hardBlockingCount: context.issues.filter((issue) => isActiveValidationIssue(issue) && validationIssueLevel(issue) === "error").length,
+        warningCount: context.issues.filter((issue) => isActiveValidationIssue(issue) && validationIssueLevel(issue) === "warning").length,
         pendingUpgradeCount: context.pendingUpgrades.length,
         issueCodes,
         ruleSetVersions: context.ruleSetVersions,
@@ -367,7 +370,7 @@ const ARRAY_KEYS: Array<keyof SeriesGanttQuery> = [
   "attentionStates",
   "issueCodes",
   "issueSeverities",
-  "exactTargetWeightKg",
+  "exactTargetPullKg",
   "ruleSetVersions",
 ];
 
@@ -397,8 +400,8 @@ export function seriesGanttQueryFromSearchParams(params: URLSearchParams): Serie
   for (const key of ARRAY_KEYS) {
     const values = params.getAll(String(key));
     if (!values.length) continue;
-    if (key === "exactTargetWeightKg") {
-      query.exactTargetWeightKg = values
+    if (key === "exactTargetPullKg") {
+      query.exactTargetPullKg = values
         .map(Number)
         .filter((value) => Number.isFinite(value));
     } else {

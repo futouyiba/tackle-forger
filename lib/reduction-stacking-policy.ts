@@ -8,6 +8,8 @@ import type {
   ProjectionTraceContribution,
   ReductionStackingPolicyVersion,
   ValidationIssue,
+  ValidationIssueGate,
+  ValidationIssueSeverity,
   V3Affix,
   ConfigurationSnapshot,
 } from "./types";
@@ -85,13 +87,13 @@ function issue(
   code: string,
   message: string,
   evidence: Record<string, unknown> = {},
-  severity: NonNullable<ValidationIssue["severity"]> = "BLOCKER",
-  gate: NonNullable<ValidationIssue["gate"]> = "PUBLISH",
+  severity: ValidationIssueSeverity = "BLOCKER",
+  gate: ValidationIssueGate = "PUBLISH",
 ): ValidationIssue {
   return {
     level: severity === "INFO" ? "info" : severity === "WARNING" ? "warning" : "error",
     severity,
-    source: "affix",
+    source: "data_integrity",
     gate,
     state: "OPEN",
     fingerprint: fingerprint(code, evidence),

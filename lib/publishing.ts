@@ -71,6 +71,7 @@ import {
 import {
   adaptFiveAxisTraceToCanonical,
   adaptAffixRuntimeEvidenceToCanonical,
+  adaptProjectionAuthorityMirrorToCanonical,
   assertCalculationTraceMatchesAffixRuntime,
   adaptPricingTraceToCanonical,
   adaptRuleTraceToCanonical,
@@ -661,18 +662,23 @@ export function publishConfigurationSnapshot(
           revisionId: String(input.model.revision),
         };
         const entries = adaptRuleTraceToCanonical({
-          projection: {
-            ...input.projection,
-            trace: input.finalSettlementTrace!,
-          },
+          projection: { ...input.projection, trace: input.finalSettlementTrace! },
           subjectRef,
           parameterDefinitions: input.patchOffsetGovernance?.parameterDefinitions,
         });
         if (input.projection.affixRuntimeEvidence) {
+          const authorityEntries = adaptProjectionAuthorityMirrorToCanonical({
+            projection: input.projection,
+            subjectRef,
+            runtimeContributions: input.projection.affixRuntimeEvidence.trace,
+            sequenceStart: entries.length + 1,
+          });
+          entries.push(...authorityEntries);
           entries.push(...adaptAffixRuntimeEvidenceToCanonical({
             evidence: input.projection.affixRuntimeEvidence,
             subjectRef,
             ruleSetVersion: input.projection.ruleSetVersion,
+            authorityEntries,
             sequenceStart: entries.length + 1,
           }));
         }

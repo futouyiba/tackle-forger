@@ -88,6 +88,8 @@ export function createExportManifest(input: {
   generatorVersion: string;
   mapping: ConfigExportMapping;
   profile: ExportTargetProfile;
+  /** 导出审计与冻结 ValidationIssue 的真实工作区主体。 */
+  workspaceId: string;
   snapshot: ConfigurationSnapshot;
   availableReductionPolicies: ReductionStackingPolicyVersion[];
   originalFileHashes: Record<string, string>;
@@ -223,7 +225,7 @@ export function createExportManifest(input: {
     input.snapshot.validationReport,
     {
       subjectRef: {
-        workspaceId: "workspace:legacy",
+        workspaceId: input.workspaceId,
         entityType: "model",
         entityId: input.snapshot.modelId,
         revisionId: String(input.snapshot.modelRevision),

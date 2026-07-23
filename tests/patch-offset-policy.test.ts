@@ -1051,6 +1051,7 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
     generatorVersion: "1",
     mapping: { mappingId: "mapping:open004", version: "1", logicalTables: {}, rows: [], enumReferenceField: "name" },
     profile: { profileId: "profile:online:1001", label: "online/1001", executorKind: "local_companion", projectRoot: "/configs", relativeWorkbookRoot: "xlsx", configTomlPath: "config.toml", enabled: true },
+    workspaceId: "workspace:test",
     snapshot,
     availableReductionPolicies: [reductionStackingPolicy],
     environmentId: "online",

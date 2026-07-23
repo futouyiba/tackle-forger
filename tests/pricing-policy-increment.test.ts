@@ -351,6 +351,24 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
   stagedEvidence.postReviewValues[stagedKey] = stagedFinal - 1;
   stagedEvidence.trace.push(
     {
+      sequence: 10_000,
+      ruleId: "affix-runtime:no-effect:test",
+      sourceId: "affix-runtime:no-effect:test",
+      sourceName: "无效词条审计",
+      parameterKey: stagedKey,
+      operation: "add",
+      before: stagedFinal - 2,
+      operand: 0,
+      after: stagedFinal - 2,
+      numericEvidence: {
+        stage: "attribute_affix",
+        beforeBinary64: numberToBinary64Hex(stagedFinal - 2),
+        operandBinary64: numberToBinary64Hex(0),
+        afterBinary64: numberToBinary64Hex(stagedFinal - 2),
+        anomaly: "no_effect",
+      },
+    },
+    {
       sequence: 10_001,
       ruleId: "final-review:test",
       sourceId: "patch:final-review:test",
@@ -397,6 +415,11 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
   });
   const stagedProjection = {
     ...publishInput.projection,
+    trace: [...publishInput.projection.trace, {
+      layer: "final_review_patch" as const,
+      sourceIds: ["patch:final-review:test", `parameter-definition:${stagedKey}`, "affix-runtime:no-effect:test"],
+      contributions: structuredClone(stagedEvidence.trace.slice(-3)),
+    }],
     affixRuntimeEvidence: structuredClone(stagedEvidence),
   };
   const snapshot = publishConfigurationSnapshot({
@@ -464,9 +487,16 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
   const affixEntriesRemoved = structuredClone(snapshot);
   affixEntriesRemoved.calculationTrace!.entries = affixEntriesRemoved.calculationTrace!.entries.filter(
     (entry) => entry.evidence?.adapter !== "affix_runtime/v1",
-  ).map(({ traceEntryId: _traceEntryId, inputHash: _inputHash, outputHash: _outputHash, ...entry }, index) =>
-    createCalculationTraceEntry({ ...entry, sequence: index + 1 }),
-  );
+  ).map((entry, index) => {
+    const recreated: Partial<typeof entry> = structuredClone(entry);
+    delete recreated.traceEntryId;
+    delete recreated.inputHash;
+    delete recreated.outputHash;
+    return createCalculationTraceEntry({
+      ...recreated,
+      sequence: index + 1,
+    } as Parameters<typeof createCalculationTraceEntry>[0]);
+  });
   affixEntriesRemoved.calculationTrace = createCalculationTraceArchive(
     affixEntriesRemoved.calculationTrace!.entries,
   );
@@ -474,6 +504,104 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     Object.fromEntries(Object.entries(affixEntriesRemoved).filter(([key]) => key !== "contentHash")),
   );
   assert.equal(verifySnapshotIntegrity(affixEntriesRemoved), false);
+
+  const rehashedSnapshot = (candidate: typeof snapshot) => {
+    candidate.calculationTrace = createCalculationTraceArchive(
+      candidate.calculationTrace!.entries.map((entry, index) => {
+        const recreated: Partial<typeof entry> = structuredClone(entry);
+        delete recreated.traceEntryId;
+        delete recreated.inputHash;
+        delete recreated.outputHash;
+        return createCalculationTraceEntry({
+          ...recreated,
+          sequence: index + 1,
+        } as Parameters<typeof createCalculationTraceEntry>[0]);
+      }),
+    );
+    candidate.contentHash = deterministicHash(
+      Object.fromEntries(Object.entries(candidate).filter(([key]) => key !== "contentHash")),
+    );
+  };
+  const rewriteRuntimeSummary = (candidate: typeof snapshot) => {
+    const summary = candidate.calculationTrace!.entries.find((entry) =>
+      entry.parameterKey === "__affix_runtime_summary__",
+    )!;
+    const summaryEvidence = summary.evidence as Record<string, unknown>;
+    const trace = candidate.calculationTrace!.entries
+      .filter((entry) => entry.evidence?.adapter === "affix_runtime/v1")
+      .filter((entry) => entry.parameterKey !== "__affix_runtime_summary__")
+      .map((entry) => (entry.evidence as Record<string, unknown>).contribution) as typeof stagedEvidence.trace;
+    summaryEvidence.contributionCount = trace.length;
+    summaryEvidence.traceHash = hashAffixRuntimeEvidence({
+      reductionStackingPolicyVersion: summaryEvidence.reductionStackingPolicyVersion as string,
+      values: summaryEvidence.affixOutputValues as typeof stagedEvidence.values,
+      postReviewValues: summaryEvidence.postReviewValues as typeof stagedEvidence.postReviewValues,
+      finalValues: summaryEvidence.finalValues as typeof stagedEvidence.finalValues,
+      trace,
+      issues: summaryEvidence.issues as typeof stagedEvidence.issues,
+    });
+  };
+  const middleRuntimeRemoved = structuredClone(snapshot);
+  const runtimeEntries = middleRuntimeRemoved.calculationTrace!.entries.filter((entry) =>
+    entry.evidence?.adapter === "affix_runtime/v1" && entry.parameterKey !== "__affix_runtime_summary__",
+  );
+  const middleEntry = runtimeEntries[Math.floor(runtimeEntries.length / 2)];
+  middleRuntimeRemoved.calculationTrace!.entries = middleRuntimeRemoved.calculationTrace!.entries.filter(
+    (entry) => entry !== middleEntry,
+  );
+  rewriteRuntimeSummary(middleRuntimeRemoved);
+  rehashedSnapshot(middleRuntimeRemoved);
+  assert.equal(verifySnapshotIntegrity(middleRuntimeRemoved), false);
+
+  const zeroEffectRemoved = structuredClone(snapshot);
+  const zeroEffectEntry = zeroEffectRemoved.calculationTrace!.entries.find((entry) =>
+    entry.evidence?.adapter === "affix_runtime/v1"
+    && (entry.evidence as Record<string, unknown>).contribution
+      && ((entry.evidence as Record<string, unknown>).contribution as { numericEvidence?: { anomaly?: string } })
+        .numericEvidence?.anomaly === "no_effect",
+  )!;
+  assert.ok(zeroEffectEntry);
+  zeroEffectRemoved.calculationTrace!.entries = zeroEffectRemoved.calculationTrace!.entries.filter(
+    (entry) => entry !== zeroEffectEntry,
+  );
+  rewriteRuntimeSummary(zeroEffectRemoved);
+  rehashedSnapshot(zeroEffectRemoved);
+  assert.equal(verifySnapshotIntegrity(zeroEffectRemoved), false);
+
+  const extraRuntime = structuredClone(snapshot);
+  const extraSource = extraRuntime.calculationTrace!.entries.find((entry) =>
+    entry.evidence?.adapter === "affix_runtime/v1" && entry.parameterKey !== "__affix_runtime_summary__",
+  )!;
+  extraRuntime.calculationTrace!.entries.push(structuredClone(extraSource));
+  rewriteRuntimeSummary(extraRuntime);
+  rehashedSnapshot(extraRuntime);
+  assert.equal(verifySnapshotIntegrity(extraRuntime), false);
+
+  const duplicateSummary = structuredClone(snapshot);
+  const summarySource = duplicateSummary.calculationTrace!.entries.find((entry) =>
+    entry.parameterKey === "__affix_runtime_summary__",
+  )!;
+  duplicateSummary.calculationTrace!.entries.push(structuredClone(summarySource));
+  rewriteRuntimeSummary(duplicateSummary);
+  rehashedSnapshot(duplicateSummary);
+  assert.equal(verifySnapshotIntegrity(duplicateSummary), false);
+
+  const bindingTampered = structuredClone(snapshot);
+  const boundRuntime = bindingTampered.calculationTrace!.entries.find((entry) =>
+    entry.evidence?.adapter === "affix_runtime/v1" && entry.parameterKey !== "__affix_runtime_summary__",
+  )!;
+  ((boundRuntime.evidence as Record<string, unknown>).authorityRef as Record<string, unknown>).traceEntryId = "forged:authority";
+  rehashedSnapshot(bindingTampered);
+  assert.equal(verifySnapshotIntegrity(bindingTampered), false);
+
+  const authorityTampered = structuredClone(snapshot);
+  const authorityEntry = authorityTampered.calculationTrace!.entries.find((entry) =>
+    entry.evidence?.adapter === "projection_authority/v1"
+    && entry.evidence.runtimeBindingRequired === true,
+  )!;
+  ((authorityEntry.evidence as Record<string, unknown>).contribution as { sourceName: string }).sourceName = "forged authority";
+  rehashedSnapshot(authorityTampered);
+  assert.equal(verifySnapshotIntegrity(authorityTampered), false);
 
   const affixEvidenceTampered = structuredClone(snapshot);
   const runtimeSummary = affixEvidenceTampered.calculationTrace!.entries.find((entry) =>

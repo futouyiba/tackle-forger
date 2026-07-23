@@ -27,6 +27,7 @@ import type {
   RuleSetVersion,
   ParameterDefinition,
   WeightTemplate,
+  ValidationIssue,
 } from "./types";
 
 type ProjectionValues = Record<string, number | string>;
@@ -137,6 +138,29 @@ function addWarning(
   warning: ProjectionWarning,
 ): void {
   warnings.push(warning);
+}
+
+function projectionWarningFromValidationIssue(
+  issue: ValidationIssue,
+  layer: ProjectionLayer,
+): ProjectionWarning {
+  const severity = typeof issue.severity === "string" && ["INFO", "WARNING", "ERROR", "BLOCKER"].includes(issue.severity)
+    ? issue.severity as NonNullable<ProjectionWarning["severity"]>
+    : undefined;
+  const gate = typeof issue.gate === "string" && ["NONE", "REVIEW", "PUBLISH", "EXPORT"].includes(issue.gate)
+    ? issue.gate as NonNullable<ProjectionWarning["gate"]>
+    : undefined;
+  return {
+    level: issue.level ?? (severity === "WARNING" ? "warning" : severity === "INFO" ? "info" : "error"),
+    code: issue.code,
+    message: issue.message,
+    layer,
+    ...(issue.parameterKey ? { parameterKey: issue.parameterKey } : {}),
+    ...(severity ? { severity } : {}),
+    ...(gate ? { gate } : {}),
+    ...(issue.fingerprint ? { fingerprint: issue.fingerprint } : {}),
+    ...(issue.evidence ? { evidence: issue.evidence } : {}),
+  };
 }
 
 function applyRule(
@@ -281,17 +305,7 @@ function applyAttributeContributions(
   step.contributions.push(...result.trace);
   sequence.value = result.trace.at(-1)?.sequence ?? sequence.value;
   for (const runtimeIssue of [...canonical.issues, ...result.issues]) {
-    addWarning(warnings, {
-      level: runtimeIssue.level,
-      code: runtimeIssue.code,
-      message: runtimeIssue.message,
-      layer: "attribute_affix",
-      parameterKey: runtimeIssue.parameterKey,
-      severity: runtimeIssue.severity,
-      gate: runtimeIssue.gate,
-      fingerprint: runtimeIssue.fingerprint,
-      evidence: runtimeIssue.evidence,
-    });
+    addWarning(warnings, projectionWarningFromValidationIssue(runtimeIssue, "attribute_affix"));
   }
   const evidence = {
     reductionStackingPolicyVersion: policy?.version,
@@ -568,17 +582,7 @@ export function deriveProjection(
   }
   sequence.value = parameterResult.trace.at(-1)?.sequence ?? sequence.value;
   for (const runtimeIssue of parameterResult.issues) {
-    addWarning(warnings, {
-      level: runtimeIssue.level,
-      code: runtimeIssue.code,
-      message: runtimeIssue.message,
-      layer: "parameter_definition",
-      parameterKey: runtimeIssue.parameterKey,
-      severity: runtimeIssue.severity,
-      gate: runtimeIssue.gate,
-      fingerprint: runtimeIssue.fingerprint,
-      evidence: runtimeIssue.evidence,
-    });
+    addWarning(warnings, projectionWarningFromValidationIssue(runtimeIssue, "parameter_definition"));
   }
 
   validateProjection(input, values, warnings, step("validation"));

@@ -333,6 +333,7 @@ test("未发布 PricingPolicy 时正式 Store Manifest 阻断且不再误报品�
     generatorVersion: "1",
     mapping: { mappingId: "m", version: "1", logicalTables: {}, rows: [], enumReferenceField: "name" },
     profile: { profileId: "profile:1", label: "test/1001", executorKind: "local_companion", projectRoot: "D:\\\\configs", relativeWorkbookRoot: "xlsx", configTomlPath: "config.toml", enabled: true },
+    workspaceId: "workspace:test",
     snapshot,
     availableReductionPolicies: [testReductionPolicy()],
     originalFileHashes: {},

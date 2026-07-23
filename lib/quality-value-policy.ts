@@ -51,6 +51,8 @@ export interface QualityValidationIssue {
   message: string;
   sourceRevision: string;
   sourceCell?: PricingCellRef;
+  /** Explicit matrix-part evidence; absent on historical diagnostics. */
+  itemPartId?: string;
   relatedObjectIds: string[];
   actions: QualityActionLink[];
 }
@@ -194,6 +196,7 @@ export function importQualityValuePolicyDraft(input: {
         message: `组合矩阵缩写无法解析为稳定 affixId：${cell.leftAlias} × ${cell.rightAlias}。`,
         sourceRevision: input.sourceRevision,
         sourceCell: cell.source,
+        itemPartId: cell.itemPartId,
         relatedObjectIds: [],
       }));
       continue;
@@ -206,6 +209,7 @@ export function importQualityValuePolicyDraft(input: {
         message: "词条组合只能发生在相同部位。",
         sourceRevision: input.sourceRevision,
         sourceCell: cell.source,
+        itemPartId: cell.itemPartId,
         relatedObjectIds: [left.affixId, right.affixId],
       }));
       continue;
@@ -221,6 +225,7 @@ export function importQualityValuePolicyDraft(input: {
         message: `无序词条对 ${left.affixId} × ${right.affixId} 双侧值不一致。`,
         sourceRevision: input.sourceRevision,
         sourceCell: cell.source,
+        itemPartId: cell.itemPartId,
         relatedObjectIds: [left.affixId, right.affixId],
       }));
       continue;

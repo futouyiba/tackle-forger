@@ -36,38 +36,32 @@
 4. 先记录基线，再做增量修改；不要顺手修复与当前工作包无关的问题。
 5. 新增领域行为必须有测试；不能只完成界面而缺失可验证的计算内核。
 
-## 3. 关于“词条具体公式”的结论
+## 3. 关于双向百分比词条公式的结论
 
-具体采用哪一种降低类词条公式，不影响总体架构，也不应阻塞其他模块开发。它只属于属性聚合内核中的一个可替换策略。
-
-必须实现为显式配置，而不是散落在页面或各业务函数里的硬编码：
-
-```ts
-type ReductionStackingMode =
-  | "linear_subtraction"
-  | "diminishing_division";
-```
-
-两种模式的参考语义：
+OPEN-001 已于 2026-07-23 确认：全局唯一使用版本化的 `bidirectional_ratio` 策略，不允许按参数、部位、词条族或单条词条切换模式。对同一参数先分别汇总百分比增加与百分比降低，再结算固定值：
 
 ```text
-linear_subtraction:
-  Final = Base × (1 - Σr)
-
-diminishing_division:
-  Final = Base ÷ (1 + Σr)
+B = ΣPercentIncreaseMagnitude
+R = ΣPercentReductionMagnitude
+PercentAdjusted = BaseValue × (1 + B) / (1 + R)
+FinalBeforeBoundary = PercentAdjusted + ΣFlatBonus - ΣFlatReduction
+AffixOutput = applyClampAddInStableOrder(FinalBeforeBoundary)
+PostReviewValue = applyFinalReviewPatch(AffixOutput)
+FinalValue = applyParameterDefinition(PostReviewValue)
 ```
 
 实现要求：
 
-- 配置保存在工作区级规则设置中，并纳入规则版本。
-- 种子数据可暂以 `diminishing_division` 为默认值，但默认值不代表最终策划结论。
-- 每次派生和发布快照必须记录实际使用的模式与规则版本。
-- 两种模式都要有单元测试，包括零值、单条、多条、极值和确定性重放。
-- 页面只读取配置并展示解释，不自行计算另一套公式。
-- 未来切换模式只能影响新派生结果或明确发起的升级，不得静默改变已发布快照。
+- 正式百分比与固定值效果保存 `direction: increase | decrease` 和非负有限 `magnitude`；旧operation与有符号值只在导入阶段按v3第11.3节确定性归一化，冲突时隔离，并保留原值、归一化结果与迁移证据。
+- 完整顺序固定为`set建立Base → 双向百分比 → 固定值 → clamp_add → FinalReviewPatch → ParameterDefinition`；`set`不是结算后覆盖，`clamp_add`不替代最终参数边界，ParameterDefinition不得在FinalReviewPatch之前提前执行。
+- `ReductionStackingPolicyVersion` 冻结公式、DTO/迁移、完整operation顺序、`ieee754-binary64-v1`数值域、稳定排序与左折叠累加、位型hash、异常分类、`ParameterDefinition`引用与执行点、规则源revision和公式区域证据；已发布版本不可原地修改。
+- `0%`、`BaseValue = 0`、`B ≥ 1`、`R ≥ 1`以及合法有限/次正规值允许。负 Base 使用百分比、方向冲突、幅度越界、非法数值、溢出、非有限结果和理论非零结果下溢为零，按 v3 第 11.4 节阻断。
+- 缺少权威主工作簿机器规则或已发布 `ReductionStackingPolicyVersion` 时只允许非正式草稿预览；禁止发布新 Model、`ConfigurationSnapshot`和正式导出。
+- 每次派生、`ModelRevision` 和发布快照记录策略版本与完整 Trace，包括源词条、有序operation、方向/幅度、Base、B、R、百分比结果、固定值合计、边界前结果、ParameterDefinition、binary64位型、规则源证据和输入输出hash。
+- 新策略版本只使受影响草稿进入 `DIRTY`，经显式重算创建新 revision；已发布 Snapshot 不重算、不改写，只生成 `UpgradeCandidate`。缺少策略版本的历史 Snapshot 只允许原样审计归档下载，不能正式导出。
+- 《FG数值设计v3-总表》revision `17173`只作决策证据。运行时规则必须迁入唯一权威《钓具设计工作簿》的`04_词条/zrVOxd`稳定机器区域，再经回读、显式拉取、`FeishuSourceRevision`、策略/RuleSet发布和显式重算生效。
 
-因此，后续 Agent 遇到这一开放项时应继续开发，不需要暂停询问；只有准备把其中一种模式永久删除时才必须请求确认。
+运行时、迁移、校验和回归测试由 Issue #41 在本规范 PR 合并后独立实现。本 handoff 不再保留旧双模式作为新实现入口。
 
 ## 4. 不可更改的领域结论
 
@@ -87,6 +81,7 @@ diminishing_division:
 - 所有保存过的Patch进入工具内权威`PatchLedger`，并幂等同步到飞书单一`Patch台账`页；该页是协作镜像而非唯一运行时来源。DerivationLayerPatch或多个个体Patch的稳定共性可经人工归纳生成RuleSourceChangeDraft；单个个案不得未经归纳提升为通用规则。写回后必须回读、显式拉取并发布RuleSetVersion。
 - 先确定Series的Quality，再选择具体词条；价值分校验已选Quality并作为自动定价输入，不得反向自动改品质，Quality本身不修改面板。
 - 飞书唯一规则工作簿已指定为[《钓具设计工作簿》](https://pisn3u3ony2.feishu.cn/wiki/YsEKwSUJ5i86HCkZKBVcNMw7nOh?from=from_copylink&sheet=9nE3Rx)。链接锚点虽是`06_系列/9nE3Rx`，同步对象是整个工作簿；2026-07-21首次接入基线为revision `2302`，本轮源表整改后的回读revision为`2352`。两者都不得硬编码成最新版本。
+- OPEN-001外部工作簿revision `17173`不得进入运行时生效链。主工作簿revision `3259`的`04_词条/zrVOxd`尚无对应机器规则；在稳定`sheet_id + ruleId + parameterKey`规则写入、回读和显式拉取前，发布策略必须以`REDUCTION_POLICY_SOURCE_MISSING`阻断。
 - revision `2352`的历史审计确认了176个稳定机器ID：64个重量模板、14个类型、19个功能定位、19个性能定位、36个词条和24个系列原型。这仅是历史迁移基线，不是当前工作表拓扑。revision `2869`已调整为`04_词条/zrVOxd`、`05_技术/RdZv0J`，不再有独立性能定位页。接入器必须保留历史ID且每次显式拉取后重新审计当前机器区域；缺ID新行进入`NEW_SOURCE_ROW`，经人工确认后分配并回写。长期同步不得按名称、`名称|级别`、行号或显示顺序关联。
 - 工作簿`09_甘特图`是开发计划，不是“钓具系列甘特图”；`11_组合SKU`、`12_打包竿组`及`14_Rods`至`17_Item`先按历史样例/暂存输出处理，不能反向覆盖领域对象或冻结Snapshot。飞书工作簿不替代本地tackle/item/store导出。
 
@@ -155,7 +150,7 @@ WP2 与 WP3 可以在 WP1 稳定后并行开发；其余工作包按依赖顺序
 - `FunctionProfile` 与 `functionIntensity`。
 - 结算后只读`PerformanceSummary`及其版本化统计定义；旧`PerformanceProfile/performanceId`仅作兼容迁移输入。
 - `ItemPartDefinition`：当前为竿、轮、线提供部件或子类型的约束与参数元数据；钩、漂、真饵和拟饵只允许保留注册表与迁移兼容，不接入产品流程。
-- `RuleSetVersion`、工作区规则设置和 `ReductionStackingMode`。
+- `RuleSetVersion`、工作区规则设置和不可变 `ReductionStackingPolicyVersion` 引用。
 - `DerivedProjection`、属性贡献项、规则警告和 Trace。
 
 计算管线必须固定顺序并保留每步贡献：
@@ -308,7 +303,7 @@ Affinity轴与v3固定为：
 - `attribute`：改变具体面板数值。
 - `passive`：只保存元数据、品质分和展示内容。
 
-属性词条需声明作用属性、运算类型、数值、单位、适用范围、叠加组和规则版本。建议支持固定值、百分比加成、乘法修正和降低类策略；具体降低公式由工作区配置决定。
+属性词条需声明作用属性、规范operation、方向、非负幅度、单位、适用范围、叠加组和规则版本。百分比效果必须由全局已发布的 `bidirectional_ratio` 策略结算；不得提供参数级或词条族级公式开关。旧`percent_bonus/reduction_diminishing/flat_bonus/flat_reduction`只在迁移适配器中出现。
 
 被动词条可包含触发条件、描述、标签、稀有度、价值分和未来模拟器引用键，但本工具不得执行触发逻辑，也不得声称验证了模拟效果。
 
@@ -319,7 +314,7 @@ Affinity轴与v3固定为：
 - 编辑Series时先确定Quality，再选择词条；价值分只按原子词条成员汇总，用于校验所选Quality区间并作为自动定价输入。Technology不得重复计分，Quality本身不修改面板。
 - 展开技术时必须能看到成员、来源和最终贡献。
 
-验收：Technology展开后没有双重属性或价值分；被动词条可影响价值分但不改变面板；切换降低公式模式只改变相应属性聚合结果。
+验收：Technology展开后没有双重属性或价值分；被动词条可影响价值分但不改变面板；双向百分比、固定值后置、set/clamp顺序、binary64边界、ParameterDefinition执行点、异常Gate和完整Trace均与v3第11.3、11.4节一致。
 
 ### WP6：工作台交互
 
@@ -346,7 +341,7 @@ Affinity轴与v3固定为：
 发布时创建不可变 `ConfigurationSnapshot`，至少冻结：
 
 - 最终属性和部件配置。
-- 所用模板、规则集和公式模式版本。
+- 所用模板、规则集和 `ReductionStackingPolicyVersion`。
 - 匹配结果与完整 Patch 链。
 - 兼容校验、Affinity 分解、品质计算结果。
 - 技术/词条版本与展示信息。
@@ -430,7 +425,10 @@ Affinity轴与v3固定为：
 | S-02 | Model 超过系列允许偏移 | 按可配置阈值警告或阻断 |
 | A-01 | 技术包含属性词条 | 属性只计算一次 |
 | A-02 | 被动词条参与价值分 | 面板属性不变化，所选Quality不被自动改变 |
-| A-03 | 两种降低公式 | 各自产生确定且可解释的结果 |
+| A-03 | 纯增加、纯降低、同时增加/降低及多个双向词条 | 全部只按`Base × (1+B)/(1+R)`结算，且固定值、`clamp_add`、`FinalReviewPatch`、`ParameterDefinition`阶段顺序正确 |
+| A-04 | 同一输入以不同查询/容器顺序返回 | 按稳定键排序并左折叠累加，输出位型、Trace与hash完全一致 |
+| A-05 | 旧operation、有符号值与新direction/magnitude冲突 | 产生`AFFIX_DIRECTION_CONFLICT`并隔离，不保留或恢复旧双模式开关 |
+| A-06 | 最大有限值、正规/次正规边界及理论非零结果下溢为0 | 按`ieee754-binary64-v1`固定向量得到合法位型或对应不可waive BLOCKER |
 | Q-01 | 品质阈值边界 | 精确映射 C/B/A/S 与绿/蓝/紫/橙 |
 | F-01 | 发布后修改上游规则 | 旧 Snapshot 不变，只生成升级候选 |
 | R-01 | 同输入重复计算 | 输出与 Trace 一致 |
@@ -468,7 +466,7 @@ rtk npm test
 - 要决定 Patch 偏移超过多少时警告或阻断。
 - 需要改变已发布快照的冻结语义。
 
-“降低类词条采用哪种具体公式”不属于阻塞项；按第 3 节同时支持两种模式即可继续。
+OPEN-001 的公式语义已经确认，不再询问或实现双模式开关；运行时实现必须等待本规范 PR 合并，并按第 3 节和 Issue #41 使用全局 `bidirectional_ratio` 策略。
 
 ## 13. 明确不在本轮范围内
 
@@ -492,13 +490,14 @@ docs/tackle-forger-development-spec-v3.md，以及本 handoff。
 本轮只实现 WP0 和 WP1，不提前重写大面积 UI：
 1. 记录当前工作区和测试基线，保留所有用户已有修改；
 2. 建立 WorkspaceState 的顺序迁移入口与旧状态回归 fixture；
-3. 增加 v3 规则层、规则版本、公式模式、派生投影和 Trace 的领域类型；
+3. 增加 v3 规则层、规则版本、版本化双向百分比策略、派生投影和 Trace 的领域类型；
 4. 抽出与 React 无关的确定性规则内核；
 5. 为正常路径、边界、冲突、确定性重放和迁移幂等补测试；
 6. 运行 typecheck、lint、test，并区分既有失败与新增失败。
 
-不要删除旧字段；必要时增加兼容适配层。降低类词条公式必须支持
-linear_subtraction 和 diminishing_division 两种配置，本轮不需要决定唯一公式。
+不要删除旧字段；必要时增加只读兼容和迁移适配层。新派生必须使用
+已发布的全局 bidirectional_ratio 策略；旧operation和有符号值只在导入时归一化并留证，
+历史 Snapshot 不猜测绑定当前策略，也不得被重算、改写或正式导出。
 完成后汇报数据迁移影响、领域接口、验证证据以及 WP2/WP3 的可接入点。
 ```
 
@@ -508,36 +507,40 @@ linear_subtraction 和 diminishing_division 两种配置，本轮不需要决定
 
 任务：
 
-- 建立版本化FiveAxisViewDefinition、轴定义注册表和鱼重等级顶点集合；
-- 实现由axisId、transformId、vertexSelectorId、componentAggregationId驱动的通用纯函数内核；拉力、耐久、抛投、感度、操控仅作为可替换种子定义；
-- 实现部件占比、短板选择、0..100归一化、档位映射和完整Trace；
-- 抛投只使用竿，轮线缺失不按0；
+- 建立符合`five-axis/open005-2026-07-23/v1`的版本化FiveAxisViewDefinition、固定五轴顺序和按`modelFinalPullKg`选择的W重量段顶点集合；
+- 实现由axisId、transformId、vertexSelectorId驱动的通用纯函数内核；拉力、耐久、抛投、感度、操控分别按权威方向计算，竿、轮、线逐件绘制且`componentAggregationId=per_component_no_aggregate`；
+- 使用`five-axis-hash-input/v1`的严格Schema、CanonicalDecimal、JCS、UTF-8、SHA-256和固定测试向量实现候选/顶点哈希，禁止裸字符串拼接或扩展`vertexSetHash`字段集合；
+- 以Snapshot冻结SKU revision为锚点，按`projection-reference/current-sku-frozen-match/v1`逐部位唯一选择ProjectionMatch，冻结projection ID/revision、缺失状态与`projectionReferenceSetHash`；
+- 实现部件占比、未封顶比较分、0..100正式分、档位映射和完整Trace，不生成Model短板汇总线；
+- 抛投顶点只使用竿的direct值；轮线在比较上下文继承第一根竿，无竿时为not_applicable，均不按0；
 - 属性词条和Patch通过最终面板参数影响五维，被动词条不影响五维；
-- 将五维定义ID/版本、五维结果、顶点哈希和规则版本冻结到ConfigurationSnapshot；
+- 将五维定义/哈希/选择器版本、W段、逐件结果、顶点哈希、投影引用证据和规则版本冻结到ConfigurationSnapshot；
+- 为旧`PUBLISHED`定义建立不改payload/hash的不可变处置目录修订；用途变化通过完整后继修订和可条件更新的目录头表达，替换时原子写入旧项`SUPERSEDED`与唯一新项`FORMAL_CURRENT`。旧Snapshot只读重放，新正式Snapshot冻结目录revision/hash并在正式定义缺失或目录冲突时fail-closed；
 - 按UX Agent已确认的位置接入Model预览，并提供计算解释入口；
 - 对飞书`50..800`档位歧义产生导入warning，阈值保持配置化。
 
-验收以权威规范第21节及其必测场景为准。未经用户确认，不得把暂定`50..80`中档边界固化为永久常量。
+验收以权威规范第21节及其必测场景为准。当前正式档位为弱`[0,50)`、中`[50,80)`、强`[80,100]`，必须来自版本化定义；未来改变需发布新定义版本，不能散落为UI常量。
 
 ## 16. WP4A补充：五维双模式比较
 
 五维图必须同时支持：
 
-1. tackle_fit：同一Model的竿、轮、线叠加，并可开关Model短板汇总曲线；
-2. same_part_compare：多个同部位钓具使用共同基准叠加比较。
+1. `tackle_fit`：同一Model的竿、轮、线三条单件曲线叠加，并可显示三条`projection_reference`结构投影参考线；不生成Model汇总曲线；
+2. `equipment_compare`：2–5件竿、轮、线可混合部位叠加，使用用户可见且可切换的共同W段。
 
 开发约束：
 
 - 两种模式共用第21节五维内核，不在React图表中复制公式；
-- 钓组模式三条单件曲线共用Model鱼重等级顶点；
+- 钓组模式三条单件曲线共用Model按最终拉力命中的W段顶点；
 - 轮线抛投在钓组模式继承竿并显示继承来源，不参与匹配差值；
-- 同部位比较不允许混合部位，也不允许每件装备按自己的等级归一化；
+- 多装备比较允许混合部位，但不允许每件装备按自己的W段分别归一化；
 - 轮线独立比较时抛投为not_applicable，不能画成0；
 - 同时保留官方封顶分和未封顶比较分，使超过100的装备仍可区分；
+- Series参考线只接受显式基准Snapshot锚定的三条`projection_reference`；独立比较未选基准时不自动回退；
 - 硬兼容、Affinity和五维视觉匹配分别展示，不得互相替代；
 - 实现和测试以权威规范第22节为准。
 
-页面位置与交互采用`docs/ux/tackle-forger-product-design-completion-v3.md`第6节：Model右侧层内提供Model/Series、竿轮线匹配、同部位比较三种视图，并使用页面级比较篮。
+页面位置与交互采用`docs/ux/tackle-forger-product-design-completion-v3.md`第6节：Model右侧层内提供“钓组匹配”和“多装备比较”两个视图，并使用页面级比较篮；Series结构投影是参考线开关，不是第三种基准策略或独立聚合模式。
 
 ## 17. 增量工作包：WP6A系列甘特图与AI建议
 
@@ -574,7 +577,7 @@ linear_subtraction 和 diminishing_division 两种配置，本轮不需要决定
 6. 接入变化预览；
 7. 最后接入Patch与飞书规则修改草稿；一期、1.5期、二期和当前规划三期均不接飞书审批，只允许人工确认写回、技术回读、显式拉取和RuleSet发布。
 
-验收以权威规范第23节为准。AI模型选择和数据出网属于OPEN-006，在连接外部服务前必须请求确认。
+验收以权威规范第23节为准。OPEN-006的供应方、模型发现、字段白名单和数据出网策略已经确认；真实连接器仍须由Issue #25完成实现、契约测试和启用准入，在此之前保持禁用。
 
 
 
@@ -654,28 +657,28 @@ linear_subtraction 和 diminishing_division 两种配置，本轮不需要决定
 - 正式目标集合来自配置治理负责人发布的`ConfigTargetCatalogVersion`；每个必需环境×渠道必须有获批`ConfigTargetScanManifest`。用户绑定只提供本机访问授权，不能创建、启用或豁免正式目标。
 - 其他渠道只使用用户明确选择的具体目录；不从本机目录或`config_system.toml`发现/治理渠道，也不解析或修正`config_system.toml`。
 - 多个“环境×渠道”可同时选择，默认让合格目标继续；确认页允许“任一失败则全部不写”。
-- 一期只能下载带无效符号身份且不含生产文件名的`NON_FORMAL`预览包。1.5期已有正式Bundle、权威目标与获批Manifest且通过`config.export.commit`时，File System Access API不可用才允许下载正式人工搬运包，并审计为“已下载、未落盘”。
+- 一期只能下载带无效符号身份且不含生产文件名的`NON_FORMAL`预览包。1.5期已有正式Bundle、权威目标、新鲜获批Manifest且通过`config.export.commit`时，仍须在生成/下载前取得`ConfigTargetGovernanceLease`并确认全部authoritative ref可执行受保护expected-old-OID CAS；File System Access API不可用才允许下载正式人工搬运包，并审计为`FORMAL_PACKAGE_DOWNLOADED_NOT_APPLIED`。返回`CONFIG_TARGET_SERIALIZATION_UNAVAILABLE`时不得生成或下载正式包，只能保留`NON_FORMAL`预览。
 
 ### 19.3 配置生成与校验
 
 实现顺序：
 
-1. 定义`ConfigEnvironmentProfile`、`LocalExportTargetBinding`、`ConfigExportMapping`、稳定`rangeId`、`ConfigTargetCatalogVersion`、`ConfigTargetScanManifest`、`ConfigIdBundle`和reservation ledger。
+1. 定义`ConfigEnvironmentProfile`、`LocalExportTargetBinding`、`ConfigExportMapping`、稳定`rangeId`、`ConfigTargetCatalogVersion`、`ConfigTargetScanManifest`、`ConfigTargetGovernanceLease`、`ConfigIdBundle`和reservation ledger。
 2. 一期实现`ConfigPreviewPackage(publicationState=NON_FORMAL)`：数字ID/正式name为空，只用非法生产schema的符号引用做结构检查，不生成`tackle.xlsx/item.xlsx/store.xlsx`生产文件名。
-3. 1.5期实现`reserve_config_id_bundle`：携带expectedModelRevisionId/key与idempotencyKey，锁Model head并在同一事务冻结后继Model revision、名称、Bundle、ledger和rangeId游标。
+3. 1.5期先接入配置目标治理协调器和受保护ref写入协议：按去重后的物理`repositoryId + authoritativeRef`取得租约，同一ref的所有逻辑别名必须具有相同expected OID；租约冻结Manifest集合与expected old OID，单调fencing token在业务提交点和ref CAS两端强制校验；无法防止绕过写入时fail-closed。再实现`reserve_config_id_bundle`：携带expectedModelRevisionId/key、expectedManifestSetHash与idempotencyKey，锁Model head并在同一事务冻结后继Model revision、名称、Bundle、ledger、租约证据和rangeId游标。
 4. 实现“准备发布与导出”批次：复用未变化Snapshot、批量冻结合格revision、跳过并报告阻断项，不要求逐个Model确认。
 5. 从SnapshotBatch和正式Bundle构建`ExportPackage/Manifest`，冻结策略版本、目标目录版本和获批扫描Manifest。
 6. 在暂存区upsert tackle/item/store，保留未知sheet、列、样式、公式和四行表头。
 7. 解析该环境根`config.toml`的`tables.*`与`enums`，复用现有编译器的name-key→数字ID语义。
 8. 强制生成部位tackle、item、GoodsBasic和StoreBuy；在所有渠道的StoreBuy schema、配置编译器类型/解析、迁移、导出器和校验器中新增BOOL列`enabled`。新行默认false，更新普通属性时保留各目标现值。
 9. 先校验本次变更及其引用闭包；全库关系扫描作为用户主动触发的独立功能。
-10. 每次策略发布、预留和正式导出都重新比较authoritative ref、commit、`config.toml`和workbook hashes与获批Manifest；正式导出还验证本地HEAD和文件基线。漂移时阻断并要求重新扫描、复核和发布策略。
+10. 策略发布、每次预留、历史导入和正式导出都重新比较authoritative ref、commit、`config.toml`和workbook hashes与获批Manifest；策略发布只执行Manifest复验，不取得治理租约。每次预留、历史导入和正式导出才取得治理租约；正式导出还验证本地HEAD和文件基线。数据库提交前把租约CAS为`COMMITTING`，在实际提交点重验最新token；漂移或串行化不可用时阻断上述三类正式动作并要求恢复或重新扫描、复核和发布策略。
 11. 记录基线hash、生成备份和恢复Manifest，逐文件写入并回读；浏览器跨文件不宣称原子提交。
 12. 每目标返回独立结果、hash、备份与审计；不执行任何Git命令。
 
 upsert必须使用稳定`ID + configNameKey`：同名不同ID、同ID不同名或分裂命中均阻止；不得按行号关联、整行覆盖、删除旧行或自动排序。OPEN-008的数字区间、命名和生命周期已经确认，但正式ID仍只能由引用新鲜目标Manifest的已发布`ConfigIdPolicyVersion`和reservation ledger分配；策略/Manifest/ledger实现完成前只能做`NON_FORMAL`预览和冲突检查，不得用最大值+1或示例ID正式提交。
 
-配置治理动作必须进入第24节统一`CapabilityCode`、`ActionCode`、`ActionAvailability`和`ActionLink.action`。写动作启用时返回绑定action、subject、expected revision和hash的不可篡改payload引用；缺权限、职责分离不允许、revision过期或Manifest stale时返回禁用原因且不返回payload，命令端仍须重新鉴权。
+配置治理动作必须进入第24节统一`CapabilityCode`、`ActionCode`、`ActionAvailability`和`ActionLink.action`。所有状态写动作（含warning确认、waiver申请/批准、重算、规则源变更草稿和`rebase_patch`）启用时返回绑定action、subject、expected revision和hash的不可篡改payload引用；问题处置联合只保留导航、查看证据和帮助。旧`approve_waiver/request_waiver/retry`不得成为绕过路径：迁移必须从可信历史完整重建并校验目标动作所需的fingerprint、revision、reason、Gate、必要的环境×渠道及幂等payload，缺任一字段均以`LEGACY_ACTION_ALIAS_UNRESOLVABLE`禁用。`open_rebase`只在可信历史证明从未执行Rebase且可恢复明确路由时转为`navigate`；任何写语义、歧义或证据不足都以`LEGACY_ACTION_ALIAS_UNRESOLVABLE`拒绝，不得转为`rebase_patch`。缺权限、revision过期、Manifest stale或治理租约不可用时返回禁用原因且不返回payload，命令端仍须重新鉴权。
 
 OPEN-007的产品语义已经确定：S包含100且大于100报错；Performance不参与价值分；维修价和购买价使用未舍入中间值并分别在最终输出舍入；购买价使用未舍入维修价；最低价100在购买价舍入后应用；`purchasePriceRaw`超过300M产生PUBLISH WARNING，二次确认后保留真实价格和标记继续。实现必须以新的`PricingExecutionPolicy`和fingerprint确认记录表达，不能继续用单个`roundingStage/minimumPriceScope/overflowMode`冒充完整契约。当前飞书机器源与runtime更新完成前，旧实现仍只可提供`NON_FORMAL`试算；不得手填价格、静默把旧`error/clamp`迁成新确认，或改写旧PricingPolicyVersion/Snapshot。
 
@@ -686,7 +689,13 @@ OPEN-007的产品语义已经确定：S包含100且大于100报错；Performance
 - 预览后Excel外部修改触发hash冲突。
 - 同一幂等包重试不重复插行。
 - Manifest获批后authoritative ref推进或hash变化时，预留和正式导出都阻断且不消耗ID；正式写入改变hash后旧策略不能继续下一批。
+- 最后一次ref读取后并发writer推进同一ref时，受保护CAS拒绝writer或业务事务在ledger提交前回滚；配置仓库存在绕过协调器的写入路径时，正式预留、历史导入和正式导出fail-closed，策略发布仍只执行Manifest/ref/hash复验。
+- File System Access API不可用且其他正式包输入均有效，但治理协调器、token连续性或受保护expected-old-OID CAS任一不可用时，生成/下载正式人工搬运包返回`CONFIG_TARGET_SERIALIZATION_UNAVAILABLE`；不得产生包文件或`FORMAL_PACKAGE_DOWNLOADED_NOT_APPLIED`记录，只保留`NON_FORMAL`预览。
+- 两个不同`targetEntryId`指向同一`repositoryId + authoritativeRef`时只取得一个物理ref锁并互斥；别名expected OID不一致时返回`CONFIG_TARGET_REF_ALIAS_CONFLICT`且不发放token。
+- 历史导入绑定finding/review revision、Manifest set、源行hash和幂等键；并发复核只允许一个决定成功，stale或响应丢失重试不产生错误/重复`EXTERNAL_OCCUPIED`。
+- 旧状态写别名缺fingerprint、revision、reason、Gate、必要环境×渠道或原幂等键时禁用且API拒绝；完整可信历史才允许重建类型化payload。纯路由`open_rebase`不能执行Rebase，实际写入只接受`rebase_patch`。
 - 同一Model并发修改stableModelKey与预留时，以expectedModelRevisionId和Model head行锁保证只允许一个顺序结果，不出现Model/Bundle身份分裂。
+- ActionLink旧waiver/retry别名迁移后不能执行无payload写入；确认warning、waiver、重算和规则草稿都由统一ActionCode携带不可篡改payload。
 - 缺`config.id.reserve`时，ValidationIssue中的`ActionLink.action=reserve_config_id_bundle`为禁用、说明Capability且无命令payload；权限恢复后payload仍受expected revision/hash约束。
 - 断链报告精确到文件/sheet/行/字段/值/目标逻辑表。
 - 未声明sheet只warning且不被删除。

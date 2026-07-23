@@ -231,7 +231,7 @@ DerivedProjection
   → FinalReviewPatch
 ```
 
-AdjustmentPatch作用域为Series/SKU/Model/FinalReview；共享中间层DerivationLayerPatch复用相同操作revision契约；ProjectionPin和RuleSuppressionPatch保持独立。每个Patch要保存原因、作者、时间、基于的投影/规则/对象revision，以及独立的`PatchState`和`PatchMirrorSyncState`。上游更新时生成rebase预览：旧基础、新基础、现有Patch、预计结果、冲突；不得自动吞掉冲突。
+AdjustmentPatch作用域为Series/SKU/Model/FinalReview；共享中间层DerivationLayerPatch复用相同操作revision契约；ProjectionPin和RuleSuppressionPatch保持独立。每个Patch要保存原因、作者、时间、基于的投影/规则/对象revision，以及独立的`PatchState`和`PatchMirrorSyncState`。业务状态只接受v3 §14.2的大写`PatchState`；`base_changed`是触发原因，`rebasing`只是`rebase_patch`动作进度，二者都不得持久化为Patch状态。上游更新时生成rebase预览：旧基础、新基础、现有Patch、预计结果、冲突；不得自动吞掉冲突。基线变化使原revision进入`REBASE_REQUIRED`；命令重验expected head和基线后，在单一事务中创建新的`PENDING_REVIEW` revision、完整操作组、幂等记录与审计。失败或并发基线变化不得留下半revision，原revision、Snapshot引用和hash保持不变。
 
 验收：1.5kg 和 1.8kg 可命中同一模板但拥有各自 Patch；上游变更后能看到 rebase 差异；`set` 不会让来源不可追溯。
 

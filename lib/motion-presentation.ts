@@ -6,7 +6,7 @@
  * presentation state.
  */
 
-export type MotionStatus = "idle" | "playing" | "paused" | "completed" | "cancelled" | "superseded";
+export type MotionStatus = "idle" | "playing" | "paused" | "locking" | "completed" | "cancelled" | "superseded";
 
 export interface MotionTraceLike {
   traceEntryId: string;
@@ -55,7 +55,7 @@ export interface MotionPresentationModel {
 }
 
 export const motionTokens = {
-  duration: { establishMs: 340, normalMs: 240, patchMs: 300, boundaryMs: 390, reducedMs: 0 },
+  duration: { establishMs: 340, normalMs: 240, patchMs: 300, boundaryMs: 390, finalLockMs: 250, reducedMs: 0 },
   easing: { enter: "cubic-bezier(0.2, 0.8, 0.2, 1)", emphasis: "cubic-bezier(0.16, 1, 0.3, 1)" },
   displacement: { cardPx: 16, emphasisPx: 4 },
   emphasis: { normal: 1, restrained: 0.35 },
@@ -96,7 +96,6 @@ export function buildMotionPresentationModel(input: {
   for (const [index, entry] of ordered.entries()) {
     if (seen.has(entry.sequence)) throw new Error("Motion Trace sequence must be unique.");
     seen.add(entry.sequence);
-    if (entry.inputHash !== ordered[0]?.inputHash) throw new Error("Motion Trace input hash mismatch.");
     if (index > 0 && entry.sequence <= ordered[index - 1].sequence) {
       throw new Error("Motion Trace sequence must already be in authoritative order.");
     }
@@ -136,6 +135,7 @@ export type MotionPlaybackAction =
   | { type: "pause" }
   | { type: "resume" }
   | { type: "advance" }
+  | { type: "finalLockComplete" }
   | { type: "skip" }
   | { type: "replay" }
   | { type: "cancel"; reason: MotionPlaybackState["cancellationReason"] }
@@ -162,8 +162,9 @@ export function motionPlaybackReducer(
     case "advance": {
       if (state.status !== "playing") return state;
       const stepIndex = state.stepIndex + 1;
-      return stepIndex >= stepCount ? { ...state, status: "completed", stepIndex: stepCount } : { ...state, stepIndex };
+      return stepIndex >= stepCount ? { ...state, status: "locking", stepIndex: stepCount } : { ...state, stepIndex };
     }
+    case "finalLockComplete": return state.status === "locking" ? { ...state, status: "completed" } : state;
     case "skip": return { ...state, status: "completed", stepIndex: stepCount };
     case "replay": return state.reducedMotion ? { ...state, status: "completed", stepIndex: stepCount } : { ...state, status: "playing", stepIndex: 0, cancellationReason: undefined };
     case "cancel": return { ...state, status: action.reason === "revision" ? "superseded" : "cancelled", cancellationReason: action.reason };
@@ -204,13 +205,17 @@ export function createMotionPlaybackController(
   };
   const notify = () => listeners.forEach((listener) => listener());
   const schedule = () => {
-    if (disposed || state.status !== "playing" || state.reducedMotion) return;
+    if (disposed || (state.status !== "playing" && state.status !== "locking") || state.reducedMotion) return;
     const expectedGeneration = generation;
     handle = clock.set(() => {
       if (disposed || expectedGeneration !== generation) return;
       handle = undefined;
-      dispatch({ type: "advance" });
-    }, playbackStepDuration(model.steps[state.stepIndex]));
+      dispatch({ type: state.status === "locking" ? "finalLockComplete" : "advance" });
+    }, state.status === "locking"
+      ? motionTokens.duration.finalLockMs
+      : state.stepIndex === 0
+        ? motionTokens.duration.establishMs
+        : playbackStepDuration(model.steps[state.stepIndex]));
   };
   const dispatch = (action: MotionPlaybackAction): MotionPlaybackState => {
     if (disposed) return state;

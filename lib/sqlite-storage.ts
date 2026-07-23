@@ -137,12 +137,12 @@ export async function closeSqliteStorage(databasePath: string) {
   if (db.isOpen) db.close();
   databases.delete(resolved);
 }
-export function ensureSqliteWorkspaceSeeded(db: DatabaseSync) {
+export function ensureSqliteWorkspaceSeeded(db: DatabaseSync, initialState = createSeedState()) {
   const existing = db.prepare("SELECT revision FROM workspace_state WHERE id = ?").get("main") as
     | { revision: number }
     | undefined;
   if (existing) return;
-  const state = createSeedState();
+  const state = initialState;
   const initial = state.revisions[0] ?? {
     revision: 1,
     author: "Excel 导入",
@@ -165,9 +165,9 @@ export function ensureSqliteWorkspaceSeeded(db: DatabaseSync) {
 
 const seedDatabase = ensureSqliteWorkspaceSeeded;
 
-export async function loadSqliteWorkspace(databasePath: string) {
+export async function loadSqliteWorkspace(databasePath: string, initialState?: WorkspaceState) {
   const db = await openDatabase(databasePath);
-  seedDatabase(db);
+  ensureSqliteWorkspaceSeeded(db, initialState ?? createSeedState());
   await waitForSqliteTransaction(databasePath);
   const row = db.prepare("SELECT state_json, revision FROM workspace_state WHERE id = ?").get("main") as {
     state_json: string;
@@ -186,7 +186,7 @@ export async function saveSqliteWorkspace(databasePath: string, input: {
   message: string;
 }) {
   const db = await openDatabase(databasePath);
-  seedDatabase(db);
+  ensureSqliteWorkspaceSeeded(db, input.state);
   return runSqliteImmediateTransaction(databasePath, async (transaction) => {
     const current = transaction.prepare("SELECT revision FROM workspace_state WHERE id = ?").get("main") as { revision: number };
     if (current.revision !== input.baseRevision) {

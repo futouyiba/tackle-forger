@@ -86,8 +86,8 @@ async function getRuntimeStorage(): Promise<StorageEnv> {
   return runtimePromise;
 }
 
-function createBlobDocument(): BlobWorkspaceDocument {
-  const state = createSeedState();
+export function createBlobDocument(): BlobWorkspaceDocument {
+  const state = bindDeploymentWorkspaceIdentity(createSeedState());
   const initial = state.revisions[0] ?? {
     revision: 1,
     author: "Excel 导入",
@@ -170,7 +170,7 @@ export async function loadWorkspaceState(): Promise<{
 }> {
   const sqlitePath = sqliteDatabasePath();
   if (sqlitePath) {
-    const loaded = await loadSqliteWorkspace(sqlitePath);
+    const loaded = await loadSqliteWorkspace(sqlitePath, bindDeploymentWorkspaceIdentity(createSeedState()));
     return { ...loaded, state: bindDeploymentWorkspaceIdentity(loaded.state) };
   }
 
@@ -230,7 +230,10 @@ export async function saveWorkspaceState(input: {
   message: string;
 }): Promise<{ revision: number; conflict?: boolean }> {
   const sqlitePath = sqliteDatabasePath();
-  if (sqlitePath) return saveSqliteWorkspace(sqlitePath, input);
+  if (sqlitePath) return saveSqliteWorkspace(sqlitePath, {
+    ...input,
+    state: bindDeploymentWorkspaceIdentity(input.state),
+  });
 
   if (hasVercelBlob()) {
     const current = await ensureBlobDocument();

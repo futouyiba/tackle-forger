@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { bindDeploymentWorkspaceIdentity, listRevisions, loadRevision, loadWorkspaceState, saveWorkspaceState } from "../lib/storage";
+import { bindDeploymentWorkspaceIdentity, createBlobDocument, listRevisions, loadRevision, loadWorkspaceState, saveWorkspaceState } from "../lib/storage";
 import { createSeedState } from "../lib/seed";
 import { closeSqliteStorage } from "../lib/sqlite-storage";
 
@@ -59,11 +59,20 @@ test("空数据库首次持久化绑定部署身份、重载稳定且后续错�
   });
   const initial = await loadWorkspaceState();
   assert.equal(initial.state.workspaceId, "workspace:bootstrap-a");
-  const saved = await saveWorkspaceState({ state: initial.state, baseRevision: initial.revision, author: "test", message: "persist identity" });
+  await closeSqliteStorage(databasePath);
   assert.equal((await loadWorkspaceState()).state.workspaceId, "workspace:bootstrap-a");
   process.env.TACKLE_FORGER_WORKSPACE_ID = "workspace:bootstrap-b";
   await assert.rejects(loadWorkspaceState(), /WORKSPACE_IDENTITY_MISMATCH/);
-  assert.equal(saved.revision, initial.revision + 1);
+});
+
+test("Blob 首次 put 前构造的 payload 已绑定部署身份", () => {
+  const prior = process.env.TACKLE_FORGER_WORKSPACE_ID;
+  process.env.TACKLE_FORGER_WORKSPACE_ID = "workspace:blob-bootstrap";
+  const payload = createBlobDocument();
+  assert.equal(payload.state.workspaceId, "workspace:blob-bootstrap");
+  assert.equal(payload.revisions[0]?.state.workspaceId, "workspace:blob-bootstrap");
+  if (prior === undefined) delete process.env.TACKLE_FORGER_WORKSPACE_ID;
+  else process.env.TACKLE_FORGER_WORKSPACE_ID = prior;
 });
 
 test("生产环境没有持久化后端时拒绝进程内临时存储", async (t) => {

@@ -39,14 +39,21 @@ test("重量模板草稿继承 canonical 坏行错误并冻结表头驱动单元
     ["", "机器ID（勿改）", "同步状态", "钓法", "备注", "重量段", "最小拉力", "最大拉力", "鱼重等级", "竿拉力"],
     ["", "wtpl_ok", "BOUND", "路亚", "说明", "轻", 1, 2, 3, 10],
     ["", "", "BOUND", "路亚", "坏行", "中", "", 3, 4, 12],
+    ["", "重量段", "最大拉力", "机器ID（勿改）", "最小拉力", "备注", "同步状态", "鱼重等级", "竿拉力"],
+    ["", "重", 6, "wtpl_second", 4, "第二块", "BOUND", 5, 20],
   ];
   const canonicalRuleDraft = importCanonicalRuleSource({ sourceRevision: revision, ...baseFixture(), weightValues: values, importedAt: revision.pulledAt });
   const draft = weightTemplateDraftFromCanonicalRuleDraft({ sourceRevision: revision, canonicalRuleDraft, weightValues: values, importedAt: revision.pulledAt });
   assert.equal(draft.formalStatus, "NON_FORMAL");
   assert.ok(draft.issues.some((issue) => issue.code === "WEIGHT_TEMPLATE_ID_MISSING"));
+  assert.equal(draft.issues.find((issue) => issue.code === "WEIGHT_TEMPLATE_ID_MISSING")?.sourceCell?.cell, "B3");
   assert.deepEqual(draft.templates[0]?.source.cells, {
     machineId: "B2", fishMinKg: "G2", fishMaxKg: "H2", nominalFishKg: "G2:H2", weightBand: "F2",
     "机器ID（勿改）": "B2", "同步状态": "C2", "钓法": "D2", "备注": "E2", "重量段": "F2", "最小拉力": "G2", "最大拉力": "H2", "鱼重等级": "I2", "竿拉力": "J2",
+  });
+  assert.deepEqual(draft.templates.find((template) => template.id.startsWith("wtpl_second"))?.source.cells, {
+    machineId: "D5", fishMinKg: "E5", fishMaxKg: "C5", nominalFishKg: "E5:C5", weightBand: "B5",
+    "重量段": "B5", "最大拉力": "C5", "机器ID（勿改）": "D5", "最小拉力": "E5", "备注": "F5", "同步状态": "G5", "鱼重等级": "H5", "竿拉力": "I5",
   });
 });
 

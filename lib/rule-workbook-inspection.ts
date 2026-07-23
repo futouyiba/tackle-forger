@@ -328,10 +328,12 @@ export function weightTemplateDraftFromCanonicalRuleDraft(input: { sourceRevisio
     for (let current = index + 1; current > 0; current = Math.floor((current - 1) / 26)) name = String.fromCharCode(65 + (current - 1) % 26) + name;
     return name;
   };
-  const headerRow = (input.weightValues ?? []).findIndex((row) => row.some((value) => text(value).includes("机器ID")));
-  const headers = headerRow >= 0 ? (input.weightValues?.[headerRow] ?? []).map(text) : [];
-  const headerIndex = (...labels: string[]) => headers.findIndex((header) => labels.some((label) => header === label || header.includes(label)));
+  const headerBlocks = (input.weightValues ?? []).flatMap((row, index) => row.some((value) => text(value).includes("机器ID")) ? [{ row: index + 1, headers: row.map(text) }] : []);
+  const blockFor = (sourceRow: number) => [...headerBlocks].reverse().find((block) => block.row < sourceRow);
   const sourceCellsFor = (sourceRow: number) => {
+    const block = blockFor(sourceRow);
+    const headers = block?.headers ?? [];
+    const headerIndex = (...labels: string[]) => headers.findIndex((header) => labels.some((label) => header === label || header.includes(label)));
     const cells: Record<string, string> = {};
     const bind = (key: string, ...labels: string[]) => {
       const index = headerIndex(...labels);
@@ -351,9 +353,16 @@ export function weightTemplateDraftFromCanonicalRuleDraft(input: { sourceRevisio
     });
     return cells;
   };
+  const issueSourceCell = (issue: CanonicalRuleSourceDraft["issues"][number]) => {
+    const cells = sourceCellsFor(issue.row ?? 0);
+    const cell = issue.code.includes("ID_") ? cells.machineId
+      : issue.code.includes("ROW_INVALID") ? (cells.fishMinKg ?? cells.fishMaxKg)
+      : cells.machineId ?? cells.fishMinKg ?? `A${issue.row ?? 1}`;
+    return { sheetId: "d6e928" as const, cell };
+  };
   for (const issue of input.canonicalRuleDraft.issues) {
     if (issue.sheetId !== WEIGHT_TEMPLATE_SHEET_ID || !issue.code.startsWith("WEIGHT_TEMPLATE_")) continue;
-    issues.push({ code: issue.code, severity: issue.level === "error" ? "ERROR" : "WARNING", message: issue.message, sourceCell: issue.row ? { sheetId: WEIGHT_TEMPLATE_SHEET_ID, cell: `A${issue.row}` } : undefined });
+    issues.push({ code: issue.code, severity: issue.level === "error" ? "ERROR" : "WARNING", message: issue.message, sourceCell: issueSourceCell(issue) });
   }
   for (const template of input.canonicalRuleDraft.templates) {
     const sourceRow = template.sourceRow ?? 0;
@@ -461,10 +470,18 @@ export interface CanonicalRuleWorkbookInspection {
   pricingWeightBandPolicy: "MATCHED_STRUCTURAL_SOURCE_BAND";
 }
 
+let testInspectionOverride: ((input: { observedAt: string; observedBy: string }) => Promise<CanonicalRuleWorkbookInspection>) | undefined;
+/** Test-only connector boundary: routes still execute their production command,
+ * persistence, draft and publish paths against the returned observation. */
+export function setCanonicalRuleWorkbookInspectionForTests(override?: typeof testInspectionOverride) {
+  testInspectionOverride = override;
+}
+
 export async function inspectCanonicalRuleWorkbook(input: {
   observedAt: string;
   observedBy: string;
 }): Promise<CanonicalRuleWorkbookInspection> {
+  if (testInspectionOverride) return testInspectionOverride(input);
   const sourceRevision = await pullFeishuWorkbookRevision({
     workbook: CANONICAL_FEISHU_WORKBOOK,
     registry: CANONICAL_FEISHU_SHEET_REGISTRY,

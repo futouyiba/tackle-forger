@@ -130,7 +130,18 @@ async function executeWorkbookBusinessRequest(request: NextRequest) {
         );
       }
       let next = recordFeishuSourceRevision(current.state, inspection.sourceRevision);
-      next = applyCanonicalRuleSourceDraft(next, inspection.canonicalRuleDraft, { activateTemplates: false });
+      const hasWeightTemplateErrors = inspection.canonicalRuleDraft.issues.some((issue) => issue.level === "error" && issue.code.startsWith("WEIGHT_TEMPLATE_"));
+      if (hasWeightTemplateErrors) {
+        // Preserve the complete source draft and its bad-row evidence without
+        // attempting a reference migration or replacing active templates.
+        next = {
+          ...next,
+          canonicalRuleSourceDrafts: [
+            inspection.canonicalRuleDraft,
+            ...next.canonicalRuleSourceDrafts.filter((draft) => draft.id !== inspection.canonicalRuleDraft.id),
+          ],
+        };
+      } else next = applyCanonicalRuleSourceDraft(next, inspection.canonicalRuleDraft, { activateTemplates: false });
       next = recordWeightTemplatePolicyDraft(next, inspection.weightTemplateDraft);
       next = recordSourceIdentityMigrationReport(next, inspection.identityReport);
       next = recordQualityValuePolicyDraft(next, inspection.qualityDraft);

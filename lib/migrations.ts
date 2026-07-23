@@ -15,6 +15,7 @@ import type {
   FunctionProfile,
   FiveAxisVertexGroupState,
   FiveAxisVertexSet,
+  FiveAxisViewDefinition,
   ItemPartDefinition,
   ItemTypeProfile,
   MethodProfile,
@@ -40,7 +41,10 @@ import {
   createCanonicalPatchOffsetPolicyVersion,
 } from "./patch-offset-policy";
 import { deterministicHash } from "./rule-kernel";
-import { createFiveAxisDispositionCatalogRevision } from "./five-axis-formal";
+import {
+  createFiveAxisDispositionCatalogRevision,
+  createFormalFiveAxisVertexSet,
+} from "./five-axis-formal";
 import { compareUnsignedUtf8 } from "./five-axis-hash";
 
 export const CURRENT_WORKSPACE_SCHEMA_VERSION = 18;
@@ -99,6 +103,7 @@ function bootstrapFiveAxisVertexGroupStates(input: {
   vertexSets: WorkspaceState["fiveAxisVertexSets"];
   models: WorkspaceState["purchasableModels"];
   snapshots: WorkspaceState["configurationSnapshots"];
+  definitions: WorkspaceState["fiveAxisViewDefinitions"];
 }): FiveAxisVertexGroupState[] {
   const formalSets = input.vertexSets.filter((entry): entry is FiveAxisVertexSet =>
     "hashInputSchemaVersion" in entry);
@@ -130,13 +135,40 @@ function bootstrapFiveAxisVertexGroupStates(input: {
       const referenced = sets.filter((set) =>
         currentVertexHashes.has(set.vertexSetHash));
       const selectable = referenced.length > 0 ? referenced : sets;
-      const uniqueHashes = new Set(selectable.map((set) => set.vertexSetHash));
-      if (uniqueHashes.size !== 1) {
-        throw new Error(
-          "FIVE_AXIS_VERTEX_GROUP_MIGRATION_CONFLICT：无法确定唯一当前正式顶点。",
-        );
-      }
-      const selected = selectable[0];
+      const selected = selectable.length === 1
+        ? selectable[0]
+        : (() => {
+          const exemplar = selectable[0];
+          const definition = input.definitions.find((entry): entry is FiveAxisViewDefinition =>
+            "semanticContractVersion" in entry
+            && entry.definitionId === exemplar.fiveAxisDefinitionId
+            && entry.version === exemplar.fiveAxisDefinitionVersion);
+          if (!definition) {
+            throw new Error("FIVE_AXIS_VERTEX_GROUP_MIGRATION_CONFLICT：缺少正式定义，无法重建当前顶点。");
+          }
+          const sources = [...new Map(
+            selectable.flatMap((set) => set.candidateSources).map((source) => [
+              `${source.candidateSemanticKey.modelId}:${source.candidateSemanticKey.componentEntityId}:${source.candidateSemanticKey.itemPartId}`,
+              source,
+            ]),
+          ).values()];
+          const rebuilt = createFormalFiveAxisVertexSet({
+            definition,
+            groupKey: {
+              weightBandId: exemplar.weightBandId,
+              weightBandPolicyVersion: exemplar.weightBandPolicyVersion,
+              fiveAxisDefinitionId: exemplar.fiveAxisDefinitionId,
+              fiveAxisDefinitionVersion: exemplar.fiveAxisDefinitionVersion,
+              fiveAxisRuleVersion: exemplar.fiveAxisRuleVersion,
+            },
+            candidateSources: sources,
+          });
+          if (!input.vertexSets.some((set) =>
+            "vertexSetHash" in set && set.vertexSetHash === rebuilt.vertexSetHash)) {
+            input.vertexSets.push(rebuilt);
+          }
+          return rebuilt;
+        })();
       return {
         groupKey: {
           weightBandId: selected.weightBandId,
@@ -1171,6 +1203,7 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
         snapshots: arrayOf<WorkspaceState["configurationSnapshots"][number]>(
           state.configurationSnapshots,
         ),
+        definitions: fiveAxisDefinitions,
       });
   state = {
     ...state,

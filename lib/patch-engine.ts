@@ -8,11 +8,6 @@ import type {
 } from "./types";
 import { stableStringify } from "./rule-kernel";
 
-type InternalOperation =
-  | ProjectionPatchOperation
-  | { op: "min"; path: string; value: number }
-  | { op: "max"; path: string; value: number };
-
 function compareText(left: string, right: string): number {
   if (left < right) return -1;
   if (left > right) return 1;
@@ -61,43 +56,10 @@ function setAtPath(root: Record<string, unknown>, path: string, value: unknown):
   return true;
 }
 
-function removeAtPath(root: Record<string, unknown>, path: string): boolean {
-  const parts = pathParts(path);
-  if (!parts) return false;
-  let current: Record<string, unknown> = root;
-  for (const part of parts.slice(0, -1)) {
-    const next = current[part];
-    if (!next || typeof next !== "object" || Array.isArray(next)) return false;
-    current = next as Record<string, unknown>;
-  }
-  const leaf = parts[parts.length - 1];
-  if (!Object.prototype.hasOwnProperty.call(current, leaf)) return false;
-  delete current[leaf];
-  return true;
-}
-
 function operationsForPatch(
   patch: ProjectionPatchRuleSource,
-): InternalOperation[] {
-  if (patch.operations?.length) return structuredClone(patch.operations);
-  return patch.rules.flatMap((rule): InternalOperation[] => {
-    if (
-      rule.operation === "set" ||
-      rule.operation === "add" ||
-      rule.operation === "multiply" ||
-      rule.operation === "min" ||
-      rule.operation === "max"
-    ) {
-      return [
-        {
-          op: rule.operation,
-          path: rule.parameterKey,
-          value: rule.value as never,
-        } as InternalOperation,
-      ];
-    }
-    return [];
-  });
+): ProjectionPatchOperation[] {
+  return patch.operations?.length ? structuredClone(patch.operations) : [];
 }
 
 function issue(
@@ -135,6 +97,8 @@ export function applyLayeredPatches<T extends Record<string, unknown>>(
   const issues: PatchApplicationIssue[] = [];
   const appliedPatchIds: string[] = [];
   const setByScopePath = new Map<string, string>();
+  const clearByScopePath = new Map<string, string>();
+  const inheritedByScopePath = new Map<string, unknown>();
 
   for (const patch of sortPatches(patches)) {
     const eligible =
@@ -147,6 +111,17 @@ export function applyLayeredPatches<T extends Record<string, unknown>>(
         patchId: patch.id,
         message: "Patch 状态为 " + patch.status + "，本次未应用。",
         requiresReview: false,
+      });
+      continue;
+    }
+    const operations = operationsForPatch(patch);
+    if (!operations.length) {
+      issue(issues, {
+        level: "error",
+        code: "PATCH_CANONICAL_OPERATIONS_REQUIRED",
+        patchId: patch.id,
+        message: "Patch 缺少 set/add/multiply/clear 规范操作；旧 rules 只能通过迁移适配器读取。",
+        requiresReview: true,
       });
       continue;
     }
@@ -180,7 +155,24 @@ export function applyLayeredPatches<T extends Record<string, unknown>>(
     }
 
     let applied = false;
-    for (const operation of operationsForPatch(patch)) {
+    for (const operation of operations) {
+      const operationName = (operation as unknown as { op: string }).op;
+      if (
+        operationName !== "set" &&
+        operationName !== "add" &&
+        operationName !== "multiply" &&
+        operationName !== "clear"
+      ) {
+        issue(issues, {
+          level: "error",
+          code: "PATCH_OPERATION_UNSUPPORTED",
+          patchId: patch.id,
+          path: String((operation as unknown as { path?: unknown }).path ?? ""),
+          message: "运行时只接受 set/add/multiply/clear。",
+          requiresReview: true,
+        });
+        continue;
+      }
       if (!pathParts(operation.path)) {
         issue(issues, {
           level: "error",
@@ -192,8 +184,11 @@ export function applyLayeredPatches<T extends Record<string, unknown>>(
         });
         continue;
       }
+      const conflictKey = patch.scope + ":" + patch.scopeId + ":" + operation.path;
+      if (!inheritedByScopePath.has(conflictKey)) {
+        inheritedByScopePath.set(conflictKey, structuredClone(getAtPath(value, operation.path)));
+      }
       if (operation.op === "set") {
-        const conflictKey = patch.scope + ":" + patch.scopeId + ":" + operation.path;
         const previousPatchId = setByScopePath.get(conflictKey);
         if (previousPatchId) {
           issue(issues, {
@@ -209,23 +204,49 @@ export function applyLayeredPatches<T extends Record<string, unknown>>(
         } else {
           setByScopePath.set(conflictKey, patch.id);
         }
+        const previousClearPatchId = clearByScopePath.get(conflictKey);
+        if (previousClearPatchId) {
+          issue(issues, {
+            level: "error",
+            code: "PATCH_SET_CLEAR_CONFLICT",
+            patchId: patch.id,
+            path: operation.path,
+            message: "同一 Patch 层路径的 set 与 clear 互相竞争：" + previousClearPatchId + "、" + patch.id + "。",
+            requiresReview: true,
+          });
+        }
+      } else if (operation.op === "clear") {
+        const previousSetPatchId = setByScopePath.get(conflictKey);
+        if (previousSetPatchId) {
+          issue(issues, {
+            level: "error",
+            code: "PATCH_SET_CLEAR_CONFLICT",
+            patchId: patch.id,
+            path: operation.path,
+            message: "同一 Patch 层路径的 set 与 clear 互相竞争：" + previousSetPatchId + "、" + patch.id + "。",
+            requiresReview: true,
+          });
+        }
+        clearByScopePath.set(conflictKey, patch.id);
       }
 
       const before = structuredClone(getAtPath(value, operation.path));
       let after: unknown = before;
-      if (operation.op === "remove") {
-        if (!removeAtPath(value, operation.path)) {
+      if (operation.op === "clear") {
+        const inherited = inheritedByScopePath.get(conflictKey);
+        if (inherited === undefined) {
           issue(issues, {
-            level: "warning",
-            code: "PATCH_REMOVE_MISSING",
+            level: "error",
+            code: "PATCH_CLEAR_INHERITANCE_MISSING",
             patchId: patch.id,
             path: operation.path,
-            message: "remove 目标不存在：" + operation.path,
+            message: "clear 目标没有可恢复的继承值：" + operation.path,
             requiresReview: true,
           });
           continue;
         }
-        after = undefined;
+        setAtPath(value, operation.path, structuredClone(inherited));
+        after = structuredClone(inherited);
       } else if (operation.op === "set") {
         setAtPath(value, operation.path, structuredClone(operation.value));
         after = structuredClone(operation.value);
@@ -243,8 +264,6 @@ export function applyLayeredPatches<T extends Record<string, unknown>>(
         }
         if (operation.op === "add") after = before + operation.value;
         if (operation.op === "multiply") after = before * operation.value;
-        if (operation.op === "min") after = Math.min(before, operation.value);
-        if (operation.op === "max") after = Math.max(before, operation.value);
         setAtPath(value, operation.path, after);
       }
       trace.push({
@@ -252,12 +271,9 @@ export function applyLayeredPatches<T extends Record<string, unknown>>(
         scope: patch.scope,
         scopeId: patch.scopeId,
         path: operation.path,
-        operation:
-          operation.op === "min" || operation.op === "max"
-            ? "set"
-            : operation.op,
+        operation: operation.op,
         before,
-        operand: "value" in operation ? operation.value : undefined,
+        operand: "value" in operation ? operation.value : null,
         after,
       });
       applied = true;

@@ -3,7 +3,12 @@ import { requestUser } from "@/lib/auth";
 import { loadWorkspaceState, saveWorkspaceState } from "@/lib/storage";
 import type { WorkspaceState } from "@/lib/types";
 import { CURRENT_WORKSPACE_SCHEMA_VERSION } from "@/lib/migrations";
-import { findGovernedStateChanges, stableAuditActor } from "@/lib/api-command-boundaries";
+import {
+  changesOnlyReadOnlyLegacyHistory,
+  findGovernedStateChanges,
+  findReadOnlyLegacyProductChanges,
+  stableAuditActor,
+} from "@/lib/api-command-boundaries";
 import {
   assertFrozenConfigIdentityTransition,
   ConfigIdGovernanceError,
@@ -74,11 +79,21 @@ export async function PUT(request: NextRequest) {
   }
   const governedChanges = findGovernedStateChanges(current.state, body.state);
   if (governedChanges.length) {
+    const legacyHistoryChanges = findReadOnlyLegacyProductChanges(
+      current.state,
+      body.state,
+    );
+    const legacyHistoryOnly = changesOnlyReadOnlyLegacyHistory(governedChanges);
     return NextResponse.json(
       {
-        error: "受治理的状态只能通过对应领域命令修改。",
-        code: "DOMAIN_COMMAND_REQUIRED",
+        error: legacyHistoryOnly
+          ? "旧配方、候选、OfficialSku 与明细覆盖已转为只读历史，只能查看、导出或通过迁移流程处理。"
+          : "受治理的状态只能通过对应领域命令修改。",
+        code: legacyHistoryOnly
+          ? "LEGACY_HISTORY_READ_ONLY"
+          : "DOMAIN_COMMAND_REQUIRED",
         governedChanges,
+        legacyHistoryChanges,
       },
       { status: 422 },
     );

@@ -1,4 +1,4 @@
-# AUD-005 应用权威、历史工作区与旧配方入口 ADR 草案
+# AUD-005 应用权威、历史工作区与旧配方入口 ADR
 
 > 状态：`ACCEPTED / AUD-005 IMPLEMENTED / AUD-026 DECIDED, IMPLEMENTATION OPEN`
 >
@@ -8,9 +8,9 @@
 >
 > 权威语义：[`tackle-forger-development-spec-v3.md`](../tackle-forger-development-spec-v3.md)
 
-本文件是一份供用户拍板的架构决策提案，不是已经生效的决策，也不关闭`AUD-005`。在用户明确接受某个方案前，不应据此删除入口、冻结数据写入、改变部署目标或改造领域类型。
+方案A已经被接受并完成AUD-005范围内的入口只读化与部署收敛。本ADR记录该决策及迁移边界，不另立领域规则；若与v3冲突，一律以v3为准。AUD-026的领域语义已经在GitHub Issue #3与PR #8中确认，但数据模型、迁移、候选runtime、Model物化、UI和测试仍由AUD-026独立跟踪，不属于AUD-005完成条件。
 
-## 1. 待决策问题
+## 1. 已决策范围与后续事项
 
 仓库当前同时包含三组容易被误认为同一产品主线的实现：
 
@@ -18,7 +18,7 @@
 2. `apps/web`与`packages/{domain,db,excel,ui}`组成的pnpm/Next.js历史workspace，仍可独立构建，但使用不同的数据模型、演示登录、本地浏览器状态和旧Excel拓扑；
 3. 根应用内部仍同时暴露旧`SeriesRecipe`、旧`Candidate`、`OfficialSku`和明细页，以及v3的Series/SKU/Model工作台。
 
-需要由用户决定：哪一套是唯一可写产品入口，历史实现以何种方式保留，以及旧配方中的竿/轮/线约束应迁移到哪个v3概念。
+当前决策是：根Vinext v3为唯一可写产品入口；历史workspace与旧产品集合只作只读追溯、兼容测试和迁移诊断。历史入口保留期限、最终归档形态以及Cloudflare预览适配是否长期保留，仍是后续运维事项，不恢复任何legacy写能力。
 
 ## 2. 不可突破的v3约束
 
@@ -63,7 +63,7 @@
 - 当前旧配方UI没有编辑`partConstraints`，旧候选引擎不消费它；迁移到`CandidateSearchRecipe`时也只读取旧扁平字段。
 - v3候选运行时可接收`ModelVariantInput.componentSelections`，但现有候选页面没有把旧的分部位约束转换为该输入。
 
-这使同一用户能在两个含义不同的“配方/候选/SKU”链路上写数据，是`AUD-005`尚不能关闭的主要原因。
+该双写风险是AUD-005的直接原因。当前实现已把四组legacy集合转为只读历史，并保留原payload、Trace、稳定ID、未解析引用和深链；v3 Series/SKU/Model是唯一正式写入路径。
 
 ### 3.4 部署入口也需要收敛
 
@@ -79,29 +79,29 @@
 
 | 方案 | 描述 | 优点 | 主要代价与风险 | 结论 |
 | --- | --- | --- | --- | --- |
-| A. 根v3唯一权威；历史workspace只读归档/迁移来源 | 只有根`app/lib`可以承载正式写入和部署；`apps/web/packages`保留为可验证的历史参考与数据迁移来源，不进入生产导航 | 与当前v3实现、SQLite、飞书身份、R730手册和快照冻结规则一致；迁移面最小；可逐步封存旧入口 | 需要完成旧页面降级、分部位约束语义确认、迁移工具和部署配置收敛 | **推荐，待用户确认** |
+| A. 根v3唯一权威；历史workspace只读归档/迁移来源 | 只有根`app/lib`可以承载正式写入和部署；`apps/web/packages`保留为可验证的历史参考与数据迁移来源，不进入生产导航 | 与当前v3实现、SQLite、飞书身份、R730手册和快照冻结规则一致；迁移面最小；可逐步封存旧入口 | AUD-026实现与历史workspace最终归档仍需独立完成 | **已接受并实施AUD-005范围** |
 | B. 以`apps/web/packages`取代根应用 | 将workspace发展为唯一主线，把根v3能力迁入packages与Next应用后再切换 | 长期可能得到更传统的monorepo边界；共享包理论上便于多前端复用 | 现有workspace缺少v3实体链、真实身份、持久化、治理与测试；需要几乎重写并双向迁移，当前切换会倒退 | 当前不采用；若未来重启，需另立迁移ADR和完整等价验收 |
 | C. 两套UI长期并行，共享抽取后的领域/API | 根应用与`apps/web`服务不同用户群，统一调用新抽出的canonical API/packages | 可保留不同交互体验；理论上减少一次性UI迁移 | 当前没有已确认的双产品需求；在共享层完成前存在双写、权限分叉、版本漂移和两套部署；成本最高 | 只有用户确认存在长期双入口业务需求时才评估 |
 | D. 立即删除历史workspace和旧根页面 | 一次性移除所有旧代码和入口 | 表面上最快消除歧义 | 违反历史数据保留、迁移与可追踪要求；也失去旧Excel/DB/页面语义的取证来源 | 不可接受 |
 
-## 5. 推荐决策文本（仅在用户接受后生效）
+## 5. 已接受的决策文本
 
-建议采纳方案A，并将决策写为：
+采用方案A：
 
 > Tackle Forger的唯一可写产品与领域实现为仓库根Vinext v3应用。正式生产部署、评审部署和数据写入均必须以根应用、根npm锁文件和根v3状态模型为准。`apps/web`与`packages/*`定义为历史workspace，只用于只读参考、兼容性测试和经审计的数据迁移；它们不构成第二个生产入口，也不能定义新领域语义。根应用中的旧SeriesRecipe/Candidate/OfficialSku页面在完成可逆迁移后转为只读历史入口，最终从默认导航移除，但原始记录和Trace继续保存。
 
-这一推荐不直接决定分部位约束的新领域类型。建议在实施前由用户另行确认：把它建模为一个版本化`PartConstraintSet`，由`CandidateSearchRecipe`引用并只参与候选过滤/枚举；或者把其中属于实际部件选择的部分迁入Model构建输入。无论哪种选择，`SeriesRecipe`本身都不应恢复为正式产品身份。
+分部位约束的领域语义已经确认：建立版本化、不可变的`PartConstraintSet`，由`CandidateSearchRecipe`通过稳定revision引用；搜索约束与实际`Model.componentSelections`保持分离。该结论的实现仍由AUD-026独立验收。无论后续实现进度如何，`SeriesRecipe`都不得恢复为正式产品身份。
 
 ## 6. 分阶段迁移计划
 
 ### 阶段0：决策与清点
 
-- 用户确认方案、负责人、目标时间和历史入口保留期限。
+- 记录已接受方案、负责人、目标时间和历史入口保留期限。
 - 固定根应用为唯一生产部署目标；记录当前生产revision、数据库备份和所有入口URL。
 - 统计每类旧对象数量、未发布草稿、来源revision、引用关系和孤儿ID；只读检查，不改变数据。
-- 对`partConstraints`中template/type/material/required/optional affix的含义逐项确认，特别区分“搜索约束”与“实际Model部件选择”。
+- 依据已确认的AUD-026结论，对`partConstraints`中template/type/material/required/optional affix的来源、未知引用和复核状态逐项清点，保持“搜索约束”与“实际Model部件选择”分离。
 
-退出条件：本ADR被用户明确标记为`ACCEPTED`或选择其他方案；分部位语义有书面结论。未达到前`AUD-005`保持`BLOCKED`。
+退出条件：本ADR已标记为`ACCEPTED`；分部位语义已有书面结论。AUD-026不再因领域选择而阻塞，但其实现仍保持开放。
 
 ### 阶段1：入口去歧义，不迁移数据
 
@@ -114,7 +114,7 @@
 
 ### 阶段2：建立可版本化的分部位约束
 
-- 在用户确认语义后，新增canonical、版本化的分部位约束载体。推荐由`CandidateSearchRecipe`通过稳定revision引用它，而不是复制可变对象。
+- 新增canonical、版本化且不可变的`PartConstraintSet`，由`CandidateSearchRecipe`通过稳定revision引用，而不是复制可变对象。
 - rod/reel/line分别保存template、type、material、required affix、optional affix pool；未选择与“允许全部”必须有不同表示。
 - runtime把搜索约束应用于相应部位的候选枚举；实际入选的部件必须落入`ModelVariantInput.componentSelections`并进入生成Trace。
 - UI必须分别展示和编辑竿、轮、线约束，显示命中/排除原因，不能继续只编辑扁平字段。
@@ -152,7 +152,7 @@
 
 | 旧来源 | v3目标/处理 | 必须保留 | 禁止行为 |
 | --- | --- | --- | --- |
-| `SeriesRecipe`扁平字段 | 迁移输入；生成`CandidateSearchRecipe`及待确认的分部位约束 | 原ID、原payload、来源revision、诊断 | 继续作为Series或Model身份；静默覆盖分部位字段 |
+| `SeriesRecipe`扁平字段 | 迁移输入；生成`CandidateSearchRecipe`及部位级`NEEDS_REVIEW`保留记录 | 原ID、原payload、来源revision、诊断 | 继续作为Series或Model身份；把机械复制宣称为已确认语义 |
 | `SeriesRecipe.partConstraints` | rod/reel/line逐项审核后迁入版本化约束 | 未解析ID、人工复核状态 | 将同一扁平集合无条件解释为三个部位的有效结论 |
 | 旧`Candidate` | 只读候选运行/审计记录，可建立新对象链接 | 输入、输出、排序、规则revision、Trace | 自动视为可购买Model |
 | `OfficialSku` | 现有迁移生成SKU Drawer、Model和冻结Snapshot | 稳定绑定、历史状态、hash | 把SKU当Model；重复迁移生成副本 |
@@ -206,7 +206,7 @@
 - R730预发布环境完成登录、创建Series、离散SKU物化、Model选择、Snapshot发布、备份和恢复演练。
 - Vercel/预览构建不得使用与根权威脚本不同的框架命令。
 
-`AUD-005`只有在上述决策、分部位runtime/UI消费、旧入口去歧义和部署收敛全部完成后才能从`BLOCKED`转为`RESOLVED`。
+AUD-005以旧入口只读、深链与历史证据保留、整包保存禁写、v3唯一写入口和部署收敛为完成条件。AUD-026的runtime/UI消费由独立Issue验收，不再把已确认但未实现的AUD-026错误登记为AUD-005阻塞。
 
 ## 10. 回滚边界
 
@@ -218,12 +218,10 @@
 - **部署边界：**历史`apps/web`不是根应用故障时的紧急替代品。若根应用无法发布，应回滚根artifact或停写，不得切到语义不同的workspace。
 - **不可逆点：**删除旧运行代码、停止历史workspace CI或清理历史数据，都必须在观察期结束后另获用户批准，不包含在本ADR的默认授权内。
 
-## 11. 需要用户最终确认的项目
+## 11. 后续运维决策
 
-1. 是否接受方案A：根Vinext v3为唯一可写权威，`apps/web/packages`作为只读历史workspace？
-2. 分部位约束是否采用“版本化`PartConstraintSet`，由`CandidateSearchRecipe`引用”的推荐方向；哪些字段属于搜索约束，哪些必须落到Model部件选择？
-3. 旧根入口在只读后保留多久，是否仅管理员可见，还是所有现有用户都可查看？
-4. Vercel与Cloudflare入口分别保留为评审环境、实验环境，还是只保留其中一个？
-5. 历史workspace最终是原地冻结、移动到archive目录，还是以tag/独立仓库保存？
+1. 旧根入口在只读后保留多久，是否仅管理员可见，还是所有现有用户都可查看？
+2. Cloudflare适配是否长期保留为实验环境？
+3. 历史workspace最终是原地冻结、移动到archive目录，还是以tag/独立仓库保存？
 
-在这些问题得到明确答复前，推荐只做无副作用的对象清点、迁移样本验证和部署配置差异检查，不执行入口下线、数据转换或代码删除。
+这些后续选择不得恢复legacy写能力、删除迁移证据或改写已发布Snapshot。任何入口下线、物理移动或历史数据删除均需独立授权。

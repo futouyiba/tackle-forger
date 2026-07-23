@@ -2071,7 +2071,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         <LegacyHistoryNotice
           title="SeriesRecipe 已转为只读历史"
           detail="保留旧配方 payload 供审计与迁移；此页面不再新增、编辑或生成候选。新的候选搜索使用 v3 CandidateSearchRecipe。"
-          diagnostic={`迁移诊断：历史配方 ${state.recipes.length} 条，已有来源绑定 ${migratedCount} 条。竿/轮/线分部位约束语义仍由 AUD-026 待确认，本页面不会解释或改写。`}
+          diagnostic={`迁移诊断：历史配方 ${state.recipes.length} 条，已有来源绑定 ${migratedCount} 条。AUD-026 领域语义已确认但实现仍开放；本页面不会解释、物化或改写旧分部位约束。`}
           onOpenV3={() => setPage("candidates")}
         />
         <div className="recipe-layout">

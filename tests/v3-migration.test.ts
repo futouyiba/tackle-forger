@@ -317,6 +317,42 @@ test("schema v18 为已有 NEEDS_REVIEW ref 幂等补齐 pending 复核项", () 
   assert.deepEqual(migrateWorkspaceState(migrated), migrated);
 });
 
+test("schema v18 对 00ff558 部分规范化约束集显式 fail-closed", () => {
+  const fixtureUrl = new URL(
+    "./fixtures/part-constraint-set-schema-v17-00ff558.json",
+    import.meta.url,
+  );
+  const fixture = JSON.parse(
+    readFileSync(fileURLToPath(fixtureUrl), "utf8"),
+  ) as {
+    source: Record<string, unknown>;
+    constraintSet: Record<string, unknown>;
+  };
+  const sourceRef = fixture.constraintSet.sourceRef as Record<string, unknown>;
+  sourceRef.contentHash = deterministicHash(
+    Object.fromEntries(
+      Object.entries(fixture.source).filter(
+        ([field]) => field !== "partConstraintSetRef",
+      ),
+    ),
+  );
+  for (const trace of fixture.constraintSet.traces as Array<Record<string, unknown>>) {
+    (trace.sourceRef as Record<string, unknown>).contentHash = sourceRef.contentHash;
+  }
+  const { contentHash: _contentHash, ...constraintContent } = fixture.constraintSet;
+  void _contentHash;
+  fixture.constraintSet.contentHash = deterministicHash(constraintContent);
+  const legacy = legacyV17ForPartConstraintMigration();
+  legacy.partConstraintSets = [fixture.constraintSet];
+  const before = structuredClone(legacy);
+
+  assert.throws(
+    () => migrateWorkspaceState(legacy),
+    /PART_CONSTRAINT_SET_V17_NORMALIZATION_REQUIRED.*00ff558/,
+  );
+  assert.deepEqual(legacy, before);
+});
+
 test("PartConstraintSet 稳定 ref 对缺失、重复、篡改或 hash 不符均 fail-closed", () => {
   const state = createSeedState();
   const constraintSet = state.partConstraintSets[0];
@@ -376,11 +412,66 @@ test("人工确认创建单调新 PartConstraintSet revision 且不改写旧 rev
   assert.equal(next.constraintSetId, current.constraintSetId);
   assert.equal(next.revision, current.revision + 1);
   assert.equal(next.reviewStatus, "CONFIRMED");
+  assert.equal(next.traces.length, 15);
+  assert.equal(
+    new Set(next.traces.map((trace) => `${trace.itemPartId}:${trace.field}`)).size,
+    15,
+  );
+  assert.equal(
+    next.traces.every((trace) =>
+      trace.traceId.includes(
+        `${next.constraintSetId}:r${next.revision}:trace:`,
+      )
+    ),
+    true,
+  );
+  assert.equal(
+    Object.values(next.parts).every((part) =>
+      Object.values(part.fieldTraceRefs).every((traceRef) =>
+        traceRef.includes(
+          `${next.constraintSetId}:r${next.revision}:trace:`,
+        )
+      )
+    ),
+    true,
+  );
   assert.equal(
     resolvePartConstraintSetRef([next], partConstraintSetRef(next)),
     next,
   );
   assert.deepEqual(current, original);
+});
+
+test("新 PartConstraintSet revision 拒绝 Trace 映射或复核状态矛盾", () => {
+  const current = structuredClone(createSeedState().partConstraintSets[0]);
+  const confirmedParts = structuredClone(current.parts);
+  for (const part of Object.values(confirmedParts)) {
+    part.reviewStatus = "CONFIRMED";
+  }
+  const baseInput = {
+    current,
+    expectedCurrentRef: partConstraintSetRef(current),
+    parts: confirmedParts,
+    traces: structuredClone(current.traces),
+    sourceRef: current.sourceRef,
+    createdBy: "reviewer:test",
+    createdAt: "2026-07-23T12:00:00.000Z",
+  };
+  assert.throws(
+    () => createPartConstraintSetRevision(baseInput),
+    /PART_CONSTRAINT_PART_REVIEW_STATUS_MISMATCH/,
+  );
+
+  const confirmedTraces = structuredClone(current.traces);
+  for (const trace of confirmedTraces) trace.reviewStatus = "CONFIRMED";
+  confirmedTraces[1].traceId = confirmedTraces[0].traceId;
+  assert.throws(
+    () => createPartConstraintSetRevision({
+      ...baseInput,
+      traces: confirmedTraces,
+    }),
+    /PART_CONSTRAINT_TRACE_ID_DUPLICATE/,
+  );
 });
 
 test("D-02 OfficialSku 无损迁移为抽屉、默认 Model 与冻结快照", () => {

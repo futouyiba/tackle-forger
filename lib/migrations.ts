@@ -21,9 +21,11 @@ import type {
   ParameterDefinition,
   PerformanceProfile,
   PartConstraintFieldName,
+  PartConstraintFieldTrace,
   PartConstraintSet,
   PartConstraintSetRef,
   PartConstraintSlot,
+  PartConstraintSourceRevisionRef,
   ProjectionPatchRuleSource,
   ProjectionPatchOperation,
   SeriesRecipe,
@@ -45,6 +47,7 @@ import {
   createNeedsReviewPartConstraintSet,
   PART_CONSTRAINT_SOURCE_HASH_PROJECTION,
   partConstraintSourceContentHash,
+  partConstraintSetContentHash,
   partConstraintSetRef,
   resolvePartConstraintSetRef,
 } from "./part-constraints";
@@ -1149,6 +1152,40 @@ function migrateV17ToV18(input: MutableWorkspace): MutableWorkspace {
     .map((entry) => structuredClone(entry));
   const reviewItems = arrayOf<MigrationReviewItem>(state.migrationReviewItems)
     .map((entry) => structuredClone(entry));
+
+  const constraintSetIdentities = new Set<string>();
+  for (const constraintSet of constraintSets) {
+    const identity = `${constraintSet.constraintSetId}@${constraintSet.revision}`;
+    if (constraintSetIdentities.has(identity)) {
+      throw new Error(
+        `PART_CONSTRAINT_SET_REVISION_DUPLICATE：${identity} 存在重复记录。`,
+      );
+    }
+    constraintSetIdentities.add(identity);
+    if (partConstraintSetContentHash(constraintSet) !== constraintSet.contentHash) {
+      throw new Error(
+        `PART_CONSTRAINT_SET_CONTENT_TAMPERED：${identity} 存储内容与哈希不一致。`,
+      );
+    }
+    const sourceRef = constraintSet.sourceRef as Partial<PartConstraintSourceRevisionRef>;
+    if (
+      sourceRef.hashProjectionVersion !== PART_CONSTRAINT_SOURCE_HASH_PROJECTION
+      || !Array.isArray(constraintSet.traces)
+      || constraintSet.traces.some(
+        (trace) => !Array.isArray(
+          (trace as Partial<PartConstraintFieldTrace>).transformationCodes,
+        ),
+      )
+    ) {
+      throw new Error(
+        `PART_CONSTRAINT_SET_V17_NORMALIZATION_REQUIRED：${identity} 是旧 00ff558 形态，不能直接提升为 schema v18。`,
+      );
+    }
+    resolvePartConstraintSetRef(
+      constraintSets,
+      partConstraintSetRef(constraintSet),
+    );
+  }
 
   const addConstraintSet = (candidate: PartConstraintSet): PartConstraintSet => {
     const matches = constraintSets.filter(

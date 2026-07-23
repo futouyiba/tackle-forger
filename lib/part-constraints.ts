@@ -8,6 +8,7 @@ import type {
   PartConstraintSetRef,
   PartConstraintSlot,
   PartConstraintSourceRevisionRef,
+  PartConstraintReviewStatus,
 } from "./types";
 
 export const PART_CONSTRAINT_MIGRATOR_VERSION = "part-constraint-set/v1";
@@ -84,6 +85,148 @@ function traceId(
   field: PartConstraintFieldName,
 ): string {
   return `${constraintSetId}:r${revision}:trace:${slot}:${field}`;
+}
+
+function validatePartConstraintComponents(input: {
+  constraintSetId: string;
+  revision?: number;
+  parts: PartConstraintSet["parts"];
+  traces: PartConstraintSet["traces"];
+  sourceRef: PartConstraintSourceRevisionRef;
+}): Map<string, PartConstraintFieldTrace> {
+  if (input.sourceRef.hashProjectionVersion !== PART_CONSTRAINT_SOURCE_HASH_PROJECTION) {
+    throw new Error(
+      `PART_CONSTRAINT_SOURCE_HASH_PROJECTION_UNSUPPORTED：${input.sourceRef.hashProjectionVersion} 不受支持。`,
+    );
+  }
+  if (!Array.isArray(input.traces) || input.traces.length !== 15) {
+    throw new Error(
+      `PART_CONSTRAINT_TRACE_COUNT_INVALID：${input.constraintSetId} 必须恰好包含 15 条竿轮线字段 Trace。`,
+    );
+  }
+  const tracesById = new Map<string, PartConstraintFieldTrace>();
+  for (const trace of input.traces) {
+    if (tracesById.has(trace.traceId)) {
+      throw new Error(
+        `PART_CONSTRAINT_TRACE_ID_DUPLICATE：${trace.traceId} 重复。`,
+      );
+    }
+    tracesById.set(trace.traceId, trace);
+  }
+
+  const partSlots = Object.keys(input.parts).sort();
+  if (
+    partSlots.length !== PART_CONSTRAINT_SLOTS.length
+    || PART_CONSTRAINT_SLOTS.some((slot) => !partSlots.includes(slot))
+  ) {
+    throw new Error(
+      `PART_CONSTRAINT_PART_SLOTS_INVALID：${input.constraintSetId} 必须恰好包含 rod/reel/line。`,
+    );
+  }
+
+  const usedTraceIds = new Set<string>();
+  const tracesByComponent = new Map<string, PartConstraintFieldTrace>();
+  const sourceRefHash = deterministicHash(input.sourceRef);
+  for (const slot of PART_CONSTRAINT_SLOTS) {
+    const part = input.parts[slot];
+    const expectedItemPartId = ITEM_PART_BY_SLOT[slot];
+    if (part.itemPartId !== expectedItemPartId) {
+      throw new Error(
+        `PART_CONSTRAINT_ITEM_PART_MISMATCH：${slot} 必须映射 ${expectedItemPartId}。`,
+      );
+    }
+    const traceRefFields = Object.keys(part.fieldTraceRefs).sort();
+    if (
+      traceRefFields.length !== PART_CONSTRAINT_FIELDS.length
+      || PART_CONSTRAINT_FIELDS.some((field) => !traceRefFields.includes(field))
+    ) {
+      throw new Error(
+        `PART_CONSTRAINT_FIELD_TRACE_REFS_INVALID：${slot} 必须恰好引用 5 个字段 Trace。`,
+      );
+    }
+
+    const traceStatuses: PartConstraintReviewStatus[] = [];
+    for (const field of PART_CONSTRAINT_FIELDS) {
+      const ref = part.fieldTraceRefs[field];
+      const trace = tracesById.get(ref);
+      if (!trace) {
+        throw new Error(
+          `PART_CONSTRAINT_TRACE_REF_NOT_FOUND：${ref} 不存在于 revision Trace。`,
+        );
+      }
+      if (usedTraceIds.has(ref)) {
+        throw new Error(
+          `PART_CONSTRAINT_TRACE_REF_REUSED：${ref} 被多个 slot/field 复用。`,
+        );
+      }
+      usedTraceIds.add(ref);
+      if (trace.itemPartId !== expectedItemPartId || trace.field !== field) {
+        throw new Error(
+          `PART_CONSTRAINT_TRACE_MAPPING_INVALID：${ref} 与 ${slot}.${field} 不一致。`,
+        );
+      }
+      if (
+        input.revision !== undefined
+        && ref !== traceId(input.constraintSetId, input.revision, slot, field)
+      ) {
+        throw new Error(
+          `PART_CONSTRAINT_TRACE_REVISION_MISMATCH：${ref} 不属于 ${input.constraintSetId}@${input.revision}。`,
+        );
+      }
+      if (!Array.isArray(trace.transformationCodes)) {
+        throw new Error(
+          `PART_CONSTRAINT_TRACE_TRANSFORMATION_CODES_MISSING：${ref} 缺少迁移转换证据。`,
+        );
+      }
+      if (deterministicHash(trace.sourceRef) !== sourceRefHash) {
+        throw new Error(
+          `PART_CONSTRAINT_TRACE_SOURCE_REF_MISMATCH：${ref} 与集合来源 revision 不一致。`,
+        );
+      }
+      traceStatuses.push(trace.reviewStatus);
+      tracesByComponent.set(`${slot}:${field}`, trace);
+    }
+
+    const expectedPartStatus = traceStatuses.every(
+      (status) => status === "CONFIRMED",
+    )
+      ? "CONFIRMED"
+      : "NEEDS_REVIEW";
+    if (part.reviewStatus !== expectedPartStatus) {
+      throw new Error(
+        `PART_CONSTRAINT_PART_REVIEW_STATUS_MISMATCH：${slot} 状态与字段 Trace 不一致。`,
+      );
+    }
+  }
+
+  if (usedTraceIds.size !== input.traces.length) {
+    throw new Error(
+      `PART_CONSTRAINT_TRACE_UNREFERENCED：${input.constraintSetId} 存在未被 slot/field 引用的 Trace。`,
+    );
+  }
+  return tracesByComponent;
+}
+
+export function assertPartConstraintSetRevisionStructure(
+  constraintSet: PartConstraintSet,
+): void {
+  validatePartConstraintComponents({
+    constraintSetId: constraintSet.constraintSetId,
+    revision: constraintSet.revision,
+    parts: constraintSet.parts,
+    traces: constraintSet.traces,
+    sourceRef: constraintSet.sourceRef,
+  });
+  const expectedSetStatus = Object.values(constraintSet.parts).every(
+    (part) => part.reviewStatus === "CONFIRMED",
+  )
+    ? "CONFIRMED"
+    : "NEEDS_REVIEW";
+  if (constraintSet.reviewStatus !== expectedSetStatus) {
+    throw new Error(
+      `PART_CONSTRAINT_SET_REVIEW_STATUS_MISMATCH：${constraintSet.constraintSetId}@${constraintSet.revision} 状态与部位状态不一致。`,
+    );
+  }
 }
 
 /**
@@ -285,6 +428,7 @@ export function resolvePartConstraintSetRef(
       `PART_CONSTRAINT_SET_HASH_MISMATCH：${ref.constraintSetId}@${ref.revision} 内容哈希不一致。`,
     );
   }
+  assertPartConstraintSetRevisionStructure(revision);
   return revision;
 }
 
@@ -298,16 +442,29 @@ export function createPartConstraintSetRevision(input: {
   createdAt: string;
 }): PartConstraintSet {
   resolvePartConstraintSetRef([input.current], input.expectedCurrentRef);
-  const traceIds = new Set(input.traces.map((trace) => trace.traceId));
-  for (const part of Object.values(input.parts)) {
-    for (const traceRef of Object.values(part.fieldTraceRefs)) {
-      if (!traceIds.has(traceRef)) {
-        throw new Error(
-          `PART_CONSTRAINT_TRACE_REF_NOT_FOUND：${traceRef} 不存在于新 revision Trace。`,
-        );
-      }
-    }
-  }
+  const tracesByComponent = validatePartConstraintComponents({
+    constraintSetId: input.current.constraintSetId,
+    parts: input.parts,
+    traces: input.traces,
+    sourceRef: input.sourceRef,
+  });
+  const revision = input.current.revision + 1;
+  const parts = structuredClone(input.parts);
+  const traces = PART_CONSTRAINT_SLOTS.flatMap((slot) =>
+    PART_CONSTRAINT_FIELDS.map((field) => {
+      const nextTraceId = traceId(
+        input.current.constraintSetId,
+        revision,
+        slot,
+        field,
+      );
+      parts[slot].fieldTraceRefs[field] = nextTraceId;
+      return {
+        ...structuredClone(tracesByComponent.get(`${slot}:${field}`)!),
+        traceId: nextTraceId,
+      };
+    })
+  );
   const reviewStatus = Object.values(input.parts).every(
     (part) => part.reviewStatus === "CONFIRMED",
   )
@@ -315,19 +472,21 @@ export function createPartConstraintSetRevision(input: {
     : "NEEDS_REVIEW" as const;
   const withoutHash: Omit<PartConstraintSet, "contentHash"> = {
     constraintSetId: input.current.constraintSetId,
-    revision: input.current.revision + 1,
+    revision,
     reviewStatus,
-    parts: structuredClone(input.parts),
+    parts,
     sourceRef: structuredClone(input.sourceRef),
-    traces: structuredClone(input.traces),
+    traces,
     migrationEvidence: structuredClone(input.current.migrationEvidence),
     createdBy: input.createdBy,
     createdAt: input.createdAt,
   };
-  return {
+  const next = {
     ...withoutHash,
     contentHash: partConstraintSetContentHash(withoutHash),
   };
+  assertPartConstraintSetRevisionStructure(next);
+  return next;
 }
 
 export function partConstraintSetBlockingTraceRefs(

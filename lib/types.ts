@@ -1271,7 +1271,8 @@ export interface GovernanceAuditLogEntry {
     | "create_upgrade"
     | "review_upgrade"
     | "submit_rule_proposal"
-    | "publish_rule_proposal";
+    | "publish_rule_proposal"
+    | "change_sku_target_pull";
   entityType: string;
   entityId: string;
   actor: string;

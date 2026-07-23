@@ -80,8 +80,15 @@ export function validateSeriesInvariants(
     projection.typeId === input.series.typeId && projection.structuralValues)) {
     issue(issues, "warning", "SERIES_STRUCTURAL_SOURCE_MISSING", "Series 部位已指定，但当前投影缺少可追踪的结构标杆基础值。");
   }
+  const specifications = seriesTargetPullSpecifications(input.series);
+  const activeSkuIds = new Set(specifications.map((entry) => entry.skuId));
+  // 历史或已 DEPRECATED 的 SKU 仍保留给旧 Model / Snapshot 追溯，
+  // 但不再参与当前 Series 离散规格的唯一性与完整性校验。
   const skus = input.skus
-    .filter((sku) => sku.seriesId === input.series.id)
+    .filter(
+      (sku) =>
+        sku.seriesId === input.series.id && activeSkuIds.has(sku.id),
+    )
     .sort((left, right) => left.targetPullKg - right.targetPullKg);
   const models = input.models.filter((model) =>
     skus.some((sku) => sku.id === model.skuId),
@@ -90,7 +97,6 @@ export function validateSeriesInvariants(
   if (!skus.length) {
     issue(issues, "error", "SERIES_SKU_MISSING", "Series 至少需要一个 SKU 抽屉。");
   }
-  const specifications = seriesTargetPullSpecifications(input.series);
   if (!specifications.length) {
     issue(issues, "error", "SERIES_PULL_SPECIFICATION_MISSING", "Series 至少需要一个已确认的离散目标拉力规格。");
   }

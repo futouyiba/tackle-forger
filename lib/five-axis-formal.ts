@@ -842,10 +842,16 @@ function formalSeriesHashInput(series: FiveAxisSeries): object {
       componentRatio: point.unclampedRatio === null
         ? null
         : canonicalFiniteNumber(point.unclampedRatio, `${point.axisId}.componentRatio`),
+      normalizedRatio: point.normalizedRatio === null
+        ? null
+        : canonicalFiniteNumber(point.normalizedRatio, `${point.axisId}.normalizedRatio`),
       comparisonScore: point.comparisonScore === null
         ? null
         : canonicalFiniteNumber(point.comparisonScore, `${point.axisId}.comparisonScore`),
       officialDisplayScore: point.officialDisplayScore,
+      overflow: point.overflow === null
+        ? null
+        : canonicalFiniteNumber(point.overflow, `${point.axisId}.overflow`),
     })),
   };
 }
@@ -934,8 +940,10 @@ function assertFormalSeriesPoint(input: {
       || input.point.rawValue !== referencePoint.rawValue
       || input.point.vertexValue !== referencePoint.vertexValue
       || input.point.unclampedRatio !== referencePoint.unclampedRatio
+      || input.point.normalizedRatio !== referencePoint.normalizedRatio
       || input.point.comparisonScore !== referencePoint.comparisonScore
       || input.point.officialDisplayScore !== referencePoint.officialDisplayScore
+      || input.point.overflow !== referencePoint.overflow
       || input.point.participatesInRanking
     ) {
       throw new Error("FIVE_AXIS_FORMAL_PREVIEW_INVALID：继承抛投证据与参考竿不一致。");

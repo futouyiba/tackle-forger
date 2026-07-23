@@ -191,9 +191,10 @@ export async function POST(request: NextRequest) {
     planningMaxKgf: maxKgf ?? null,
     pulls,
   })).digest("hex");
+  const acceptedInputHashes = new Set([inputHash, legacyInputHash]);
   const priorCommand = state.commandIdempotencyRecords.find((entry) => entry.key === idempotencyKey);
   if (priorCommand) {
-    if (![inputHash, legacyInputHash].includes(priorCommand.inputHash)) {
+    if (!acceptedInputHashes.has(priorCommand.inputHash)) {
       return NextResponse.json({ error: "同一幂等键不能用于不同的创建输入。" }, { status: 409 });
     }
     const priorSeries = state.seriesDefinitions.find((entry) => entry.id === priorCommand.resultRef);
@@ -380,7 +381,8 @@ export async function POST(request: NextRequest) {
     const recoveredCommand = latest.state.commandIdempotencyRecords.find(
       (entry) => entry.key === idempotencyKey,
     );
-    const recoveredSeries = recoveredCommand?.inputHash === inputHash
+    const recoveredSeries = recoveredCommand
+      && acceptedInputHashes.has(recoveredCommand.inputHash)
       ? latest.state.seriesDefinitions.find((entry) => entry.id === recoveredCommand.resultRef)
       : undefined;
     if (recoveredSeries) {

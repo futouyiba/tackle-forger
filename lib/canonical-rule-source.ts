@@ -297,17 +297,32 @@ function parseFunctions(input: { values: unknown[][]; sourceRevisionId: string; 
     });
     rows.push({ id, name, intensity: intensity as FunctionIntensity, rules, sourceRow });
   }
-  const groups = new Map<string, typeof rows>();
-  for (const row of rows) groups.set(row.name, [...(groups.get(row.name) ?? []), row]);
-  const profiles: FunctionProfile[] = [];
-  const modifiers: ModifierOption[] = [];
-  for (const [name, group] of groups) {
-    const stableRows = [...group].sort((left, right) => left.id.localeCompare(right.id));
-    const intensityRules = stableRows.slice().sort((left, right) => left.intensity - right.intensity).map((row) => ({ intensity: row.intensity, rules: structuredClone(row.rules), sourceRowId: row.id }));
-    // The profile identity is anchored to a Feishu machine ID, never its display name.
-    profiles.push({ id: stableRows[0]!.id, name, rules: [], intensityRules, enabled: true, sourceRevisionId: input.sourceRevisionId, notes: "由飞书 03_功能定位按定位名称聚合；FunctionProfile 身份锚定稳定机器 ID，功能强度与品质分离。" });
-    for (const row of group) modifiers.push({ id: row.id, dimension: "function", name, level: row.intensity, itemKinds: ["rod", "reel", "line"], rules: structuredClone(row.rules), notes: `来自飞书 03_功能定位第 ${row.sourceRow} 行。`, enabled: true });
-  }
+  // The source currently provides one immutable func_* identity per machine row,
+  // but no immutable parent/group identity. Keep every source entity independent:
+  // display names may be duplicated or renamed and must never create associations.
+  const profiles: FunctionProfile[] = rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    rules: [],
+    intensityRules: [{
+      intensity: row.intensity,
+      rules: structuredClone(row.rules),
+      sourceRowId: row.id,
+    }],
+    enabled: true,
+    sourceRevisionId: input.sourceRevisionId,
+    notes: "来自飞书 03_功能定位稳定机器实体；未提供稳定父级 ID，因此不按显示名聚合。",
+  }));
+  const modifiers: ModifierOption[] = rows.map((row) => ({
+    id: row.id,
+    dimension: "function",
+    name: row.name,
+    level: row.intensity,
+    itemKinds: ["rod", "reel", "line"],
+    rules: structuredClone(row.rules),
+    notes: `来自飞书 03_功能定位第 ${row.sourceRow} 行。`,
+    enabled: true,
+  }));
   if (!profiles.length) input.issues.push({ level: "error", code: "FUNCTION_PROFILE_EMPTY", message: "03_功能定位没有可导入记录。", sheetId: CANONICAL_RULE_RANGES.function.sheetId });
   return { profiles, modifiers };
 }

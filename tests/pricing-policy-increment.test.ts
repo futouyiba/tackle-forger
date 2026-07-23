@@ -269,4 +269,27 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     }),
     /TRACE_REPLAY_MISMATCH/,
   );
+  const ghostPanelEntry = createCalculationTraceEntry({
+    subjectRef,
+    parameterKey: "ghost_panel_key",
+    sequence: baseTraceLength + 2,
+    layer: "final_review_patch",
+    sourceRef: { sourceType: "final_review_patch", sourceId: "review:ghost" },
+    sourceVersion: "review:1",
+    ruleSetVersion: projection.ruleSetVersion,
+    before: null,
+    operation: "set",
+    operand: 99,
+    after: 99,
+    effect: "contextual",
+    warningIssueIds: [],
+    actions: [],
+  });
+  assert.throws(
+    () => publishConfigurationSnapshot({
+      ...publishInput,
+      finalPanelTraceEntries: [...finalPanelTraceEntries, ghostPanelEntry],
+    }),
+    /finalPanelValues 缺少 Trace 面板参数：ghost_panel_key/,
+  );
 });

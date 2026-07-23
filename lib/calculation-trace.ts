@@ -473,6 +473,21 @@ function sameEntityRef(left: EntityRef, right: EntityRef): boolean {
   return entityKey(left) === entityKey(right);
 }
 
+function isAuxiliaryTraceEntry(entry: CalculationTraceEntry): boolean {
+  const sourceType = "sourceType" in entry.sourceRef
+    ? entry.sourceRef.sourceType
+    : undefined;
+  return (
+    entry.evidence?.adapter === "pricing_trace/v1"
+    && entry.parameterKey.startsWith("pricing:")
+    && sourceType === "pricing_cell"
+  ) || (
+    entry.evidence?.adapter === "five_axis_trace/v1"
+    && entry.parameterKey.startsWith("five_axis:")
+    && sourceType === "five_axis_definition"
+  );
+}
+
 export function assertCalculationTraceMatchesFinalPanel(input: {
   archive: CalculationTraceArchive;
   subjectRef: EntityRef;
@@ -483,8 +498,8 @@ export function assertCalculationTraceMatchesFinalPanel(input: {
   for (const entry of input.archive.entries) {
     if (
       sameEntityRef(entry.subjectRef, input.subjectRef)
-      && entry.evidence?.adapter === "projection_trace/v1"
       && !entry.parameterKey.startsWith("__")
+      && !isAuxiliaryTraceEntry(entry)
     ) {
       expectedKeys.add(entry.parameterKey);
     }
@@ -811,12 +826,16 @@ export function adaptPatchTraceToCanonical(input: {
   return input.trace.map((entry) => {
     const parameterKey = entry.path.replace(/^values\./, "");
     const definition = definitions.get(parameterKey);
+    const removedValue = entry.operation === "remove" && entry.after === undefined;
+    const canonicalAfter = removedValue ? null : entry.after;
     const executable = executableOperation(
       entry.operation,
       entry.before,
       entry.operand,
-      entry.after,
+      canonicalAfter,
     );
+    const legacyUndefinedFields = (["before", "operand", "after"] as const)
+      .filter((field) => entry[field] === undefined);
     return createCalculationTraceEntry({
       subjectRef: input.subjectRef,
       parameterKey,
@@ -828,12 +847,23 @@ export function adaptPatchTraceToCanonical(input: {
       before: entry.before,
       operation: executable.operation,
       operand: executable.operand,
-      after: entry.after,
+      after: canonicalAfter,
       ...(definition?.unit ? { unit: definition.unit } : {}),
-      effect: effectFor(definition, entry.before, entry.after),
+      effect: effectFor(definition, entry.before, canonicalAfter),
       warningIssueIds: [],
       actions: [],
-      evidence: { adapter: "patch_trace/v1", ...entry },
+      evidence: {
+        adapter: "patch_trace/v1",
+        patchId: entry.patchId,
+        scope: entry.scope,
+        scopeId: entry.scopeId,
+        path: entry.path,
+        operation: entry.operation,
+        ...(entry.before !== undefined ? { before: structuredClone(entry.before) } : {}),
+        ...(entry.operand !== undefined ? { operand: structuredClone(entry.operand) } : {}),
+        ...(entry.after !== undefined ? { after: structuredClone(entry.after) } : {}),
+        ...(legacyUndefinedFields.length ? { legacyUndefinedFields } : {}),
+      },
     });
   });
 }

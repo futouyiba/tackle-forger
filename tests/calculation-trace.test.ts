@@ -264,6 +264,30 @@ test("canonical Trace 终态必须完整重放 finalPanelValues", () => {
     }),
     /finalPanelValues 缺少 Trace 面板参数/,
   );
+  const ghostEntry = createCalculationTraceEntry({
+    subjectRef,
+    parameterKey: "ghost_panel_key",
+    sequence: archive.entries.length + 1,
+    layer: "final_review_patch",
+    sourceRef: { sourceType: "final_review_patch", sourceId: "review:ghost" },
+    sourceVersion: "review:1",
+    ruleSetVersion: projection.ruleSetVersion,
+    before: null,
+    operation: "set",
+    operand: 99,
+    after: 99,
+    effect: "contextual",
+    warningIssueIds: [],
+    actions: [],
+  });
+  assert.throws(
+    () => assertCalculationTraceMatchesFinalPanel({
+      archive: createCalculationTraceArchive([...archive.entries, ghostEntry]),
+      subjectRef,
+      finalPanelValues: { drag: 12 },
+    }),
+    /finalPanelValues 缺少 Trace 面板参数：ghost_panel_key/,
+  );
 });
 
 test("pricing、patch 与 legacy 只读适配器幂等并保留原始 evidence", () => {
@@ -320,6 +344,26 @@ test("pricing、patch 与 legacy 只读适配器幂等并保留原始 evidence",
     adaptPatchTraceToCanonical(patchInput),
     adaptPatchTraceToCanonical(structuredClone(patchInput)),
   );
+  const removeEntries = adaptPatchTraceToCanonical({
+    ...patchInput,
+    trace: [{
+      ...patchInput.trace[0],
+      operation: "remove" as const,
+      before: 12,
+      operand: undefined,
+      after: undefined,
+    }],
+  });
+  assert.equal(removeEntries[0].operation, "clear");
+  assert.equal(removeEntries[0].operand, null);
+  assert.equal(removeEntries[0].after, null);
+  assert.deepEqual(
+    removeEntries[0].evidence?.legacyUndefinedFields,
+    ["operand", "after"],
+  );
+  const removeArchive = createCalculationTraceArchive(removeEntries);
+  assert.deepEqual(JSON.parse(JSON.stringify(removeArchive)), removeArchive);
+  assert.equal(verifyCalculationTraceArchive(removeArchive), true);
 
   const legacyInput = {
     trace: [{

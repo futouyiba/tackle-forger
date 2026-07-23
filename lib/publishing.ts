@@ -47,6 +47,7 @@ import {
   adaptPricingTraceToCanonical,
   adaptRuleTraceToCanonical,
   assertCalculationTraceMatchesFinalPanel,
+  CalculationTraceReplayError,
   createCalculationTraceArchive,
   verifyCalculationTraceArchive,
   type CalculationTraceEntry,
@@ -310,6 +311,12 @@ export function publishConfigurationSnapshot(
               || entry.ruleSetVersion !== input.projection.ruleSetVersion
             ) {
               throw new Error("finalPanelTraceEntries 的 subjectRef 或 ruleSetVersion 与发布对象不一致。");
+            }
+            if (!Object.hasOwn(input.finalPanelValues, entry.parameterKey)) {
+              throw new CalculationTraceReplayError(
+                `finalPanelValues 缺少 Trace 面板参数：${entry.parameterKey}。`,
+                entry,
+              );
             }
           }
           entries.push(...structuredClone(input.finalPanelTraceEntries));

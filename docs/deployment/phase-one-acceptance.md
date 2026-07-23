@@ -64,8 +64,9 @@ npm run acceptance:phase-one -- preflight \
 
 - Node 低于 22.16.0、工作树不干净或 commit 不可解析；
 - 受版本控制的 `deploy/phase-one-dependencies.json` 未把 #66/PR #67、#68/PR #71、
-  #72/PR #76 分别绑定到唯一的已合入 commit，或其 review threads、必需 CI、PR 映射和
-  HEAD 祖先关系不满足；源码字符串标记只作辅助提示，不能替代这项门禁；
+  #72/PR #76 分别绑定到 GitHub 返回的 reviewed head 与唯一 merge commit，或其 review
+  threads、必需 CI、PR 映射和 HEAD 祖先关系不满足；源码字符串标记只作辅助提示，不能
+  替代这项门禁；
 - #66 数据链未落地；
 - #68 schema v17 读取契约未落地；
 - #72 `NON_FORMAL` 契约缺失，或一期仍授予 `snapshot.export`、`config.export.commit`、
@@ -77,9 +78,11 @@ npm run acceptance:phase-one -- preflight \
 - systemd 未限制回环监听/写目录，或 Nginx 未清除客户端身份头。
 
 依赖满足后，在单独评审的提交中更新 `deploy/phase-one-dependencies.json`：记录固定
-Issue/PR 映射、唯一完整 commit、review threads 已清零、必需 CI 已通过和已合入状态。
-脚本会把实际 SHA 作为非敏感审计证据，并核对 commit 标题的 PR 来源及其为待部署 HEAD
-祖先。不得用环境变量或重复填写当前 HEAD 代替依赖证据。持久路径会在规范化后检查重复/
+Issue/PR 映射、GitHub reviewed head、唯一 merge commit、review threads 已清零、必需
+CI 已通过和已合入状态。脚本会在线读取公开 GitHub PR 元数据，把实际 SHA 作为非敏感
+审计证据，并核对 reviewed head、merge commit、commit 标题来源及 HEAD 祖先关系；无法
+访问或不匹配时保持 BLOCKED。不得用环境变量、伪造标题或重复填写当前 HEAD 代替依赖证据。
+持久路径会在规范化后检查重复/
 越界，并核对数据库为普通文件、其余路径为目录、必要父目录与各路径均归服务账号所有且
 不向组或其他用户开放读写/访问权限。
 

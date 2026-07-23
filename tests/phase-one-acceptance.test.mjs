@@ -18,6 +18,7 @@ import {
   EXPECTED_PHASE_ONE_CAPABILITIES,
   inspectDependencyManifest,
   inspectRuntimePathFilesystem,
+  inspectRuntimePaths,
   readSecureEnvironmentFile,
   readSessionCookieFile,
   runAuthenticatedReadOnlySmoke,
@@ -693,6 +694,7 @@ test("依赖门禁绑定受版本控制的 Issue/PR 映射、唯一 commit 与�
       issue,
       pr,
       commit,
+      reviewedHeadCommit: commit,
       merged: true,
       reviewThreadsResolved: true,
       requiredChecksPassed: true,
@@ -703,7 +705,23 @@ test("依赖门禁绑定受版本控制的 Issue/PR 映射、唯一 commit 与�
     path.join(root, "deploy/phase-one-dependencies.json"),
     `${JSON.stringify(manifest([commits[0], commits[0], commits[0]]), null, 2)}\n`,
   );
-  const spoofed = await inspectDependencyManifest(root);
+  const githubPulls = new Map([
+    [67, { merge: commits[0], head: commits[0] }],
+    [71, { merge: commits[1], head: commits[1] }],
+    [76, { merge: commits[2], head: commits[2] }],
+  ]);
+  const fetchImpl = async (input) => {
+    const pr = Number(new URL(input).pathname.split("/").at(-1));
+    const expected = githubPulls.get(pr);
+    return json({
+      number: pr,
+      state: "closed",
+      merged_at: "2026-07-23T00:00:00Z",
+      merge_commit_sha: expected?.merge,
+      head: { sha: expected?.head },
+    });
+  };
+  const spoofed = await inspectDependencyManifest(root, { fetchImpl });
   assert.equal(spoofed.status, "BLOCKED");
   assert.deepEqual(spoofed.evidence.duplicateCommits, [
     "schema_v17",
@@ -714,7 +732,7 @@ test("依赖门禁绑定受版本控制的 Issue/PR 映射、唯一 commit 与�
     path.join(root, "deploy/phase-one-dependencies.json"),
     `${JSON.stringify(manifest(commits), null, 2)}\n`,
   );
-  assert.equal((await inspectDependencyManifest(root)).status, "PASS");
+  assert.equal((await inspectDependencyManifest(root, { fetchImpl })).status, "PASS");
   await rm(root, { recursive: true, force: true });
 });
 
@@ -749,6 +767,21 @@ test("持久数据根检查要求正确类型、仅服务账号权限与安全�
   assert.equal(wrongType.status, "BLOCKED");
   assert.deepEqual(wrongType.evidence.wrongTypeKeys, ["WORKSPACE_FILE_DATA_DIR"]);
   await rm(dataRoot, { recursive: true, force: true });
+});
+
+test("持久路径词法检查拒绝相对路径、.. 越界与规范化后的别名", () => {
+  const result = inspectRuntimePaths({
+    WORKSPACE_DATABASE_PATH: "data/workspace.sqlite",
+    WORKSPACE_FILE_DATA_DIR: "/opt/tackle-forger/data/files/../shared",
+    WORKSPACE_BACKUP_DIR: "/opt/tackle-forger/data/shared",
+    FEISHU_SESSION_DATA_DIR: "/opt/tackle-forger/data/../current/auth",
+  });
+  assert.equal(result.status, "BLOCKED");
+  assert.deepEqual(result.evidence.invalidKeys, [
+    "WORKSPACE_DATABASE_PATH",
+    "FEISHU_SESSION_DATA_DIR",
+  ]);
+  assert.equal(result.evidence.duplicate, true);
 });
 
 test("会话 Cookie 文件必须是仓库外绝对路径、0600 普通文件且不能是 symlink", async () => {

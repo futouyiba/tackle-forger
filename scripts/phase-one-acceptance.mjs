@@ -202,7 +202,7 @@ function inspectRedirectUrl(env) {
   }
 }
 
-function inspectRuntimePaths(env) {
+export function inspectRuntimePaths(env) {
   const dataRoot = "/opt/tackle-forger/data";
   const entries = [
     ["WORKSPACE_DATABASE_PATH", env.WORKSPACE_DATABASE_PATH],
@@ -212,17 +212,18 @@ function inspectRuntimePaths(env) {
   ];
   const normalized = entries.map(([key, value]) => [
     key,
+    value,
     value ? path.resolve(value) : value,
   ]);
-  const invalid = normalized.filter(([, value]) => (
-    !value
-    || !path.isAbsolute(value)
-    || path.relative(dataRoot, value).startsWith("..")
-    || path.relative(dataRoot, value) === ""
-    || value.startsWith("/opt/tackle-forger/current/")
+  const invalid = normalized.filter(([, original, canonical]) => (
+    !original
+    || !path.isAbsolute(original)
+    || path.relative(dataRoot, canonical).startsWith("..")
+    || path.relative(dataRoot, canonical) === ""
+    || canonical.startsWith("/opt/tackle-forger/current/")
   ));
-  const duplicate = new Set(normalized.map(([, value]) => value).filter(Boolean)).size
-    !== normalized.filter(([, value]) => Boolean(value)).length;
+  const duplicate = new Set(normalized.map(([, , canonical]) => canonical).filter(Boolean)).size
+    !== normalized.filter(([, , canonical]) => Boolean(canonical)).length;
   if (invalid.length || duplicate) {
     return check(
       "persistent_paths",
@@ -585,7 +586,7 @@ function gitSucceeds(root, args) {
   }
 }
 
-export async function inspectDependencyManifest(root) {
+export async function inspectDependencyManifest(root, { fetchImpl = fetch } = {}) {
   const manifestPath = path.join(root, "deploy/phase-one-dependencies.json");
   try {
     const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
@@ -600,10 +601,12 @@ export async function inspectDependencyManifest(root) {
       .filter((id) => !EXPECTED_DEPENDENCIES.has(id));
     const invalidMappings = [];
     const invalidCommits = [];
+    const invalidReviewedHeadCommits = [];
     const duplicateCommits = [];
     const nonAncestorIds = [];
     const commitMessageMismatchIds = [];
     const incompleteReviewIds = [];
+    const githubVerificationFailedIds = [];
     const evidence = [];
     const seenCommits = new Set();
 
@@ -621,6 +624,9 @@ export async function inspectDependencyManifest(root) {
       const commit = typeof dependency.commit === "string"
         ? dependency.commit.trim()
         : "";
+      const reviewedHeadCommit = typeof dependency.reviewedHeadCommit === "string"
+        ? dependency.reviewedHeadCommit.trim()
+        : "";
       if (!/^[0-9a-f]{40}$/u.test(commit)) {
         invalidCommits.push(dependency.id);
       } else {
@@ -634,6 +640,9 @@ export async function inspectDependencyManifest(root) {
           commitMessageMismatchIds.push(dependency.id);
         }
       }
+      if (!/^[0-9a-f]{40}$/u.test(reviewedHeadCommit)) {
+        invalidReviewedHeadCommits.push(dependency.id);
+      }
       if (
         dependency.merged !== true
         || dependency.reviewThreadsResolved !== true
@@ -641,11 +650,41 @@ export async function inspectDependencyManifest(root) {
       ) {
         incompleteReviewIds.push(dependency.id);
       }
+      if (
+        /^[0-9a-f]{40}$/u.test(commit)
+        && /^[0-9a-f]{40}$/u.test(reviewedHeadCommit)
+        && dependency.merged === true
+      ) {
+        try {
+          const response = await fetchImpl(
+            `https://api.github.com/repos/futouyiba/tackle-forger/pulls/${expected.pr}`,
+            {
+              headers: {
+                Accept: "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+              },
+            },
+          );
+          const pullRequest = response.ok ? await response.json() : undefined;
+          if (
+            pullRequest?.number !== expected.pr
+            || pullRequest?.state !== "closed"
+            || typeof pullRequest?.merged_at !== "string"
+            || pullRequest?.merge_commit_sha !== commit
+            || pullRequest?.head?.sha !== reviewedHeadCommit
+          ) {
+            githubVerificationFailedIds.push(dependency.id);
+          }
+        } catch {
+          githubVerificationFailedIds.push(dependency.id);
+        }
+      }
       evidence.push({
         id: dependency.id,
         issue: expected.issue,
         pr: expected.pr,
         commit: commit || null,
+        reviewedHeadCommit: reviewedHeadCommit || null,
         merged: dependency.merged === true,
         reviewThreadsResolved: dependency.reviewThreadsResolved === true,
         requiredChecksPassed: dependency.requiredChecksPassed === true,
@@ -660,10 +699,12 @@ export async function inspectDependencyManifest(root) {
       || unexpectedIds.length > 0
       || invalidMappings.length > 0
       || invalidCommits.length > 0
+      || invalidReviewedHeadCommits.length > 0
       || duplicateCommits.length > 0
       || nonAncestorIds.length > 0
       || commitMessageMismatchIds.length > 0
       || incompleteReviewIds.length > 0
+      || githubVerificationFailedIds.length > 0
     );
     return invalid
       ? check(
@@ -678,17 +719,19 @@ export async function inspectDependencyManifest(root) {
           unexpectedIds,
           invalidMappings,
           invalidCommits,
+          invalidReviewedHeadCommits,
           duplicateCommits,
           nonAncestorIds,
           commitMessageMismatchIds,
           incompleteReviewIds,
+          githubVerificationFailedIds,
           dependencies: evidence,
         },
       )
       : check(
         "merged_dependency_commits",
         "PASS",
-        "受版本控制的依赖证据与 #67、#71、#76 映射一致，commit 唯一且均包含于待部署 HEAD。",
+        "依赖证据已与 GitHub PR head/merge commit 精确核对，且唯一 merge commit 均包含于待部署 HEAD。",
         { dependencies: evidence },
       );
   } catch (error) {

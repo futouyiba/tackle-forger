@@ -23,7 +23,7 @@
 3. 按 `deploy/tackle-forger.env.example` 配置公司飞书应用、tenant key、回调地址、解析后的
    权威 spreadsheet token、至少 32 字节会话密钥和持久目录，并确认文件权限为 `0600`；
    核对受版本控制的 `deploy/phase-one-dependencies.json` 已由单独评审提交记录 #67、#71、
-   #76 的唯一合入 SHA、已解决 review threads 和通过的必需 CI。
+   #76 的 GitHub reviewed head、唯一 merge commit、已解决 review threads 和通过的必需 CI。
 4. 在飞书开放平台把回调逐字登记为 `https://<内网域名>/api/auth/feishu/callback`。
 5. 若从 Vercel Blob 迁移，先在空目标数据库上运行 `npm run storage:migrate:blob-to-sqlite`；脚本拒绝覆盖已有数据库。
 

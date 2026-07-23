@@ -13,6 +13,10 @@ import {
 import { applyLayeredPatches } from "./patch-engine";
 import { importLegacyPatchesToLedger } from "./patch-ledger";
 import {
+  createNeedsReviewPartConstraintSet,
+  partConstraintSetRef,
+} from "./part-constraints";
+import {
   matchNearestProjection,
   structuralPullFromProjection,
 } from "./projection-matcher";
@@ -814,6 +818,42 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
     createdBy: "seed-designer",
     createdAt: CREATED_AT,
   });
+  const candidateRecipe: CandidateSearchRecipe = {
+    id: "candidate-recipe:qinglu-obstacle",
+    revision: 1,
+    name: "青芦障碍 Model 路线",
+    methodIds: [method.id],
+    typeIds: [type.id],
+    functionIds: [fn.id],
+    performanceIds: performance ? [performance.id] : [],
+    qualityIds: [quality.id as CandidateSearchRecipe["qualityIds"][number]],
+    targetPullRangeKg: { min: 1.5, max: 1.8 },
+    maxCandidates: 16,
+    notes: "V3 示例链的确定性候选搜索配方，仅用于演示与验收。",
+  };
+  const seedConstraintSet = createNeedsReviewPartConstraintSet({
+    constraintSetId: "part-constraint-set:candidate-search-recipe:candidate-recipe%3Aqinglu-obstacle",
+    sourceRef: {
+      sourceType: "candidate_search_recipe",
+      sourceId: candidateRecipe.id,
+      revisionId: String(candidateRecipe.revision),
+      contentHash: deterministicHash(candidateRecipe),
+    },
+    rawPayload: candidateRecipe,
+    sourceSchemaVersion: state.schemaVersion,
+    migratedAt: CREATED_AT,
+    diagnosticCodes: ["SEED_CONSTRAINTS_NOT_CONFIGURED"],
+    createdBy: "seed-designer",
+  });
+  const seedConstraintRef = partConstraintSetRef(seedConstraintSet);
+  const seriesWithConstraintRef: SeriesDefinition = {
+    ...series,
+    partConstraintSetRef: seedConstraintRef,
+  };
+  const candidateRecipeWithConstraintRef: CandidateSearchRecipe = {
+    ...candidateRecipe,
+    partConstraintSetRef: seedConstraintRef,
+  };
 
   return {
     ...state,
@@ -835,7 +875,14 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
         updatedAt: CREATED_AT,
       },
     ],
-    seriesDefinitions: [series],
+    seriesDefinitions: [seriesWithConstraintRef],
+    partConstraintSets: state.partConstraintSets.some(
+      (entry) =>
+        entry.constraintSetId === seedConstraintSet.constraintSetId
+        && entry.revision === seedConstraintSet.revision,
+    )
+      ? state.partConstraintSets
+      : [...state.partConstraintSets, seedConstraintSet],
     skuDrawers: [sku15, sku18],
     purchasableModels: publishedModels,
     candidateSearchRecipes: state.candidateSearchRecipes.some(
@@ -844,19 +891,7 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
       ? state.candidateSearchRecipes
       : [
           ...state.candidateSearchRecipes,
-          {
-            id: "candidate-recipe:qinglu-obstacle",
-            revision: 1,
-            name: "青芦障碍 Model 路线",
-            methodIds: [method.id],
-            typeIds: [type.id],
-            functionIds: [fn.id],
-            performanceIds: performance ? [performance.id] : [],
-            qualityIds: [quality.id as CandidateSearchRecipe["qualityIds"][number]],
-            targetPullRangeKg: { min: 1.5, max: 1.8 },
-            maxCandidates: 16,
-            notes: "V3 示例链的确定性候选搜索配方，仅用于演示与验收。",
-          },
+          candidateRecipeWithConstraintRef,
         ],
     configurationSnapshots: [snapshot],
     fiveAxisViewDefinitions: state.fiveAxisViewDefinitions.some(

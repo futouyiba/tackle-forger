@@ -13,6 +13,11 @@ import {
   type ProjectionMatchCandidate,
 } from "@/lib/projection-matcher";
 import {
+  createNeedsReviewPartConstraintSet,
+  partConstraintSetRef,
+} from "@/lib/part-constraints";
+import { deterministicHash } from "@/lib/rule-kernel";
+import {
   createSeriesPullPlanningProposal,
   materializeConfirmedPullSpecifications,
 } from "@/lib/series-pull-planning";
@@ -331,7 +336,30 @@ export async function POST(request: NextRequest) {
   }
 
   const next = structuredClone(state);
+  const constraintSet = createNeedsReviewPartConstraintSet({
+    constraintSetId:
+      `part-constraint-set:series-definition:${encodeURIComponent(materialized.series.id)}`,
+    sourceRef: {
+      sourceType: "series_definition",
+      sourceId: materialized.series.id,
+      revisionId: String(materialized.series.revision),
+      contentHash: deterministicHash(materialized.series),
+    },
+    rawPayload: materialized.series,
+    sourceSchemaVersion: state.schemaVersion,
+    migratedAt: now,
+    diagnosticCodes: ["NO_SERIES_PART_CONSTRAINT_SOURCE"],
+    createdBy: stableAuditActor(user),
+  });
+  materialized = {
+    ...materialized,
+    series: {
+      ...materialized.series,
+      partConstraintSetRef: partConstraintSetRef(constraintSet),
+    },
+  };
   next.seriesDefinitions = [...next.seriesDefinitions, materialized.series];
+  next.partConstraintSets = [...next.partConstraintSets, constraintSet];
   next.skuDrawers = materialized.skus;
   next.commandIdempotencyRecords = [...next.commandIdempotencyRecords, {
     key: idempotencyKey,

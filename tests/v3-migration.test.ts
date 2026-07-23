@@ -6,6 +6,10 @@ import { CURRENT_WORKSPACE_SCHEMA_VERSION, migrateWorkspaceState } from "../lib/
 import { verifySnapshotIntegrity } from "../lib/publishing";
 import { deterministicHash } from "../lib/rule-kernel";
 import { validateSeriesInvariants } from "../lib/product-model";
+import {
+  partConstraintSetBlockingTraceRefs,
+  resolvePartConstraintSetRef,
+} from "../lib/part-constraints";
 import { createSeedState } from "../lib/seed";
 import { ensureWorkflowFields } from "../lib/workflow";
 
@@ -79,6 +83,120 @@ test("v15 保留旧五维定义并明确迁移为未发布修订", () => {
   assert.equal(typeof definition.definitionHash, "string");
   assert.equal(definition.preservedUnknown, "keep-me");
   assert.deepEqual(migrateWorkspaceState(migrated), migrated);
+});
+
+test("schema v18 无损迁移旧 SeriesRecipe 为稳定 PartConstraintSet 且重复执行幂等", () => {
+  const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
+  legacy.schemaVersion = 17;
+  legacy.partConstraintSets = [];
+  const recipes = legacy.recipes as Array<Record<string, unknown>>;
+  const sourceRecipe = recipes[0];
+  sourceRecipe.unknownLegacyField = { preserve: ["verbatim", 7] };
+  const partConstraints = sourceRecipe.partConstraints as Record<string, Record<string, unknown>>;
+  partConstraints.rod.unknownPartField = { preserve: true };
+  for (const recipe of legacy.candidateSearchRecipes as Array<Record<string, unknown>>) {
+    delete recipe.partConstraintSetRef;
+  }
+  for (const series of legacy.seriesDefinitions as Array<Record<string, unknown>>) {
+    delete series.partConstraintSetRef;
+  }
+  const snapshotBefore = structuredClone(
+    (legacy.configurationSnapshots as Array<Record<string, unknown>>)[0],
+  );
+
+  const migrated = migrateWorkspaceState(legacy);
+  const constraintSetId =
+    `part-constraint-set:legacy-series-recipe:${encodeURIComponent(String(sourceRecipe.id))}`;
+  const constraintSet = migrated.partConstraintSets.find(
+    (entry) => entry.constraintSetId === constraintSetId,
+  );
+  assert.ok(constraintSet);
+  assert.equal(constraintSet.revision, 1);
+  assert.equal(constraintSet.sourceRef.revisionId, null);
+  assert.equal(constraintSet.reviewStatus, "NEEDS_REVIEW");
+  assert.deepEqual(
+    Object.values(constraintSet.parts).map((part) => part.reviewStatus),
+    ["NEEDS_REVIEW", "NEEDS_REVIEW", "NEEDS_REVIEW"],
+  );
+  assert.deepEqual(
+    (constraintSet.migrationEvidence.rawPayload as Record<string, unknown>).unknownLegacyField,
+    { preserve: ["verbatim", 7] },
+  );
+  assert.equal(
+    constraintSet.migrationEvidence.diagnosticCodes.includes(
+      "UNKNOWN_PART_FIELDS_PRESERVED_RAW",
+    ),
+    true,
+  );
+  assert.equal(partConstraintSetBlockingTraceRefs(constraintSet).length, 15);
+  for (const part of Object.values(constraintSet.parts)) {
+    for (const traceRef of Object.values(part.fieldTraceRefs)) {
+      assert.equal(
+        constraintSet.traces.some((trace) => trace.traceId === traceRef),
+        true,
+      );
+    }
+  }
+  const { contentHash, ...content } = constraintSet;
+  assert.equal(contentHash, deterministicHash(content));
+
+  const migratedRecipe = migrated.candidateSearchRecipes.find(
+    (entry) => entry.sourceLegacyRecipeId === sourceRecipe.id,
+  );
+  assert.ok(migratedRecipe?.partConstraintSetRef);
+  assert.equal(
+    resolvePartConstraintSetRef(
+      migrated.partConstraintSets,
+      migratedRecipe.partConstraintSetRef,
+    ).constraintSetId,
+    constraintSetId,
+  );
+  for (const series of migrated.seriesDefinitions) {
+    assert.ok(series.partConstraintSetRef);
+    const seriesConstraint = resolvePartConstraintSetRef(
+      migrated.partConstraintSets,
+      series.partConstraintSetRef,
+    );
+    assert.equal(seriesConstraint.sourceRef.sourceType, "series_definition");
+    assert.equal(seriesConstraint.reviewStatus, "NEEDS_REVIEW");
+  }
+  assert.equal(
+    migrated.migrationReviewItems.some(
+      (item) =>
+        item.sourceType === "series_recipe"
+        && item.sourceId === sourceRecipe.id
+        && item.status === "pending",
+    ),
+    true,
+  );
+  assert.deepEqual(migrated.configurationSnapshots[0], snapshotBefore);
+  assert.equal(
+    deterministicHash(migrated.configurationSnapshots[0]),
+    deterministicHash(snapshotBefore),
+  );
+  assert.deepEqual(migrateWorkspaceState(migrated), migrated);
+});
+
+test("PartConstraintSet 稳定 ref 不存在或 hash 不符时 fail-closed", () => {
+  const state = createSeedState();
+  const constraintSet = state.partConstraintSets[0];
+  assert.ok(constraintSet);
+  assert.throws(
+    () => resolvePartConstraintSetRef(state.partConstraintSets, {
+      constraintSetId: constraintSet.constraintSetId,
+      revision: constraintSet.revision + 1,
+      contentHash: constraintSet.contentHash,
+    }),
+    /PART_CONSTRAINT_SET_REF_NOT_FOUND/,
+  );
+  assert.throws(
+    () => resolvePartConstraintSetRef(state.partConstraintSets, {
+      constraintSetId: constraintSet.constraintSetId,
+      revision: constraintSet.revision,
+      contentHash: "sha256:not-the-content",
+    }),
+    /PART_CONSTRAINT_SET_HASH_MISMATCH/,
+  );
 });
 
 test("D-02 OfficialSku 无损迁移为抽屉、默认 Model 与冻结快照", () => {

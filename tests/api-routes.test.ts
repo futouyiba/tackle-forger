@@ -3,6 +3,7 @@ import test from "node:test";
 import { NextRequest } from "next/server";
 import { PUT as putState } from "../app/api/state/route";
 import { POST as createSeries } from "../app/api/series/route";
+import { resolvePartConstraintSetRef } from "../lib/part-constraints";
 import { loadWorkspaceState } from "../lib/storage";
 
 const authHeaders = {
@@ -163,8 +164,8 @@ test("Series 创建相同幂等键恢复原结果，不同输入冲突", { concu
   const type = state.itemTypeProfiles.find((entry) => entry.id === projection.typeId)!;
   const itemPartId = type.itemPartIds[0]!;
   const body = {
-    idempotencyKey: "route-idempotency:create-1",
-    seriesId: "series:route-idempotency-1",
+    idempotencyKey: "route-idempotency:create-v18-1",
+    seriesId: "series:route-idempotency-v18-1",
     name: "幂等创建验证",
     concept: "响应丢失后恢复原结果",
     itemPartId,
@@ -183,6 +184,17 @@ test("Series 创建相同幂等键恢复原结果，不同输入冲突", { concu
   const first = await send(body);
   assert.equal(first.status, 200, JSON.stringify(await first.clone().json()));
   const firstPayload = await first.json() as { series: { id: string }; revision: number };
+  const afterFirst = await loadWorkspaceState();
+  const createdSeries = afterFirst.state.seriesDefinitions.find(
+    (entry) => entry.id === body.seriesId,
+  );
+  assert.ok(createdSeries?.partConstraintSetRef);
+  const createdConstraintSet = resolvePartConstraintSetRef(
+    afterFirst.state.partConstraintSets,
+    createdSeries.partConstraintSetRef,
+  );
+  assert.equal(createdConstraintSet.sourceRef.sourceId, body.seriesId);
+  assert.equal(createdConstraintSet.reviewStatus, "NEEDS_REVIEW");
   const retry = await send(body);
   assert.equal(retry.status, 200);
   const retryPayload = await retry.json() as { series: { id: string }; revision: number; idempotent: boolean };
@@ -195,8 +207,8 @@ test("Series 创建相同幂等键恢复原结果，不同输入冲突", { concu
 
   const concurrentBody = {
     ...body,
-    idempotencyKey: "route-idempotency:concurrent-1",
-    seriesId: "series:route-idempotency-concurrent-1",
+    idempotencyKey: "route-idempotency:concurrent-v18-1",
+    seriesId: "series:route-idempotency-concurrent-v18-1",
     name: "并发幂等创建验证",
   };
   const concurrent = await Promise.all([send(concurrentBody), send(concurrentBody)]);

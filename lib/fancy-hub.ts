@@ -1053,8 +1053,13 @@ export class FancyHubConnector {
                 authorizedResponseAliases(prepared.envelope),
               );
               if (!sameModelDescriptor(response.model, model)) throw new FancyHubError("AI_MODEL_REVISION_MISMATCH", "Fancy Hub 响应模型描述与请求不一致." );
-              if (response.usage.inputTokens > limits.maxInputTokens || response.usage.outputTokens > limits.maxOutputTokens || response.usage.costMicroUsd > limits.maxCostMicroUsdPerRequest) {
-                throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "Fancy Hub 响应用量超过硬上限." );
+              if (response.usage.inputTokens > modelEstimate.inputTokens
+                || response.usage.outputTokens > modelEstimate.outputTokens
+                || response.usage.costMicroUsd > modelEstimate.costMicroUsd
+                || response.usage.inputTokens > limits.maxInputTokens
+                || response.usage.outputTokens > limits.maxOutputTokens
+                || response.usage.costMicroUsd > limits.maxCostMicroUsdPerRequest) {
+                throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "Fancy Hub 响应用量超过本次预留估算或硬上限." );
               }
               await emitRawAttempt("SUCCESS");
               await this.auditSink({

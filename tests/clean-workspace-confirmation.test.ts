@@ -76,3 +76,15 @@ test("Patch 台账把根工作台的权威 dirty 状态接入 AI 草稿确认按
   assert.match(workbenchSource, /markWorkspaceDirty\(\)/);
   assert.match(workbenchSource, /getWorkspaceFreshness=\{\(\)=>workspaceFreshnessRef\.current\}/);
 });
+
+test("甘特图所有服务端工作区替换在提交前阻断脏工作区，并在响应后复验 revision", async () => {
+  const [ganttSource, workbenchSource] = await Promise.all([
+    readFile(new URL("../app/SeriesGanttWorkbenchV3.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/Workbench.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(ganttSource, /DIRTY_WORKSPACE_CONFIRMATION_MESSAGE/);
+  assert.match(ganttSource, /beginWorkspaceReplacement/);
+  assert.match(ganttSource, /applyWorkspaceReplacement/);
+  assert.match(ganttSource, /canApplyConfirmedWorkspace/);
+  assert.match(workbenchSource, /workspaceFreshness=\{\(\) => workspaceFreshnessRef\.current\}/);
+});

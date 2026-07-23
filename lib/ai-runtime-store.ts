@@ -34,6 +34,8 @@ import {
 import { deterministicHash } from "./rule-kernel";
 
 const LOCK_RETRIES = 100;
+const LOCK_HEARTBEAT_MS = 1_000;
+const LOCK_STALE_MS = 30_000;
 
 export type AIRuntimeStoreErrorCode = "AI_RETENTION_CONFIG_INVALID" | "AI_RETENTION_STORE_UNAVAILABLE";
 
@@ -141,7 +143,11 @@ export function aiRuntimeStoreConfigFromEnvironment(): AIRuntimeStoreConfig | un
   const backupDir = process.env.WORKSPACE_BACKUP_DIR?.trim();
   if (backupDir) {
     const resolvedBackupDir = path.resolve(backupDir);
-    if (pathsOverlap(resolvedBackupDir, tombstoneDir)) return undefined;
+    // Backups and deletion tombstones must each survive loss or restoration of
+    // the primary retention directory.  A backup rooted in the primary data
+    // directory could otherwise reintroduce deleted raw content.
+    if (pathsOverlap(resolvedBackupDir, tombstoneDir)
+      || pathsOverlap(resolvedBackupDir, resolvedDataDir)) return undefined;
   }
   return { dataDir: resolvedDataDir, tombstoneDir, encryptionKey, encryptionKeyVersion };
 }
@@ -157,15 +163,66 @@ async function acquireLock(file: string) {
   for (let attempt = 0; attempt < LOCK_RETRIES; attempt += 1) {
     try {
       const handle = await open(lockPath, "wx", 0o600);
-      await handle.writeFile(`${process.pid}\n${Date.now()}\n`, "utf8");
+      const ownerId = randomBytes(16).toString("hex");
+      const lockDocument = JSON.stringify({ version: 1, ownerId, pid: process.pid, acquiredAtMs: Date.now() });
+      await handle.writeFile(lockDocument, "utf8");
+      const ownedStat = await handle.stat();
+      const heartbeat = setInterval(() => {
+        // Refresh the inode we opened, never whatever happens to be at the
+        // pathname after a stale-owner recovery race.
+        void handle.utimes(new Date(), new Date()).catch(() => undefined);
+      }, LOCK_HEARTBEAT_MS);
+      heartbeat.unref();
       return async () => {
+        clearInterval(heartbeat);
         await handle.close();
-        await unlink(lockPath).catch(() => undefined);
+        // Do not delete a successor's lock if our lease was recovered while a
+        // long-running holder was shutting down.
+        const [current, currentStat] = await Promise.all([
+          readFile(lockPath, "utf8").catch(() => undefined),
+          stat(lockPath).catch(() => undefined),
+        ]);
+        if (current === lockDocument && currentStat
+          && currentStat.dev === ownedStat.dev && currentStat.ino === ownedStat.ino) {
+          await unlink(lockPath).catch(() => undefined);
+        }
       };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       const lockStat = await stat(lockPath).catch(() => undefined);
-      if (lockStat && Date.now() - lockStat.mtimeMs > 30_000) await unlink(lockPath).catch(() => undefined);
+      if (lockStat && Date.now() - lockStat.mtimeMs > LOCK_STALE_MS) {
+        const raw = await readFile(lockPath, "utf8").catch(() => undefined);
+        let ownerPid: number | undefined;
+        try {
+          const parsed = raw ? JSON.parse(raw) as { version?: unknown; pid?: unknown; ownerId?: unknown } : undefined;
+          const pid = parsed?.pid;
+          if (parsed?.version === 1 && typeof pid === "number" && Number.isInteger(pid) && pid > 0
+            && typeof parsed.ownerId === "string" && /^[a-f0-9]{32}$/.test(parsed.ownerId)) ownerPid = pid;
+        } catch {
+          // An unreadable lock has no safely attributable dead owner.
+        }
+        let ownerAlive = false;
+        if (ownerPid !== undefined) {
+          try { process.kill(ownerPid, 0); ownerAlive = true; } catch (ownerError) {
+            if ((ownerError as NodeJS.ErrnoException).code !== "ESRCH") ownerAlive = true;
+          }
+        }
+        // Expiry alone is never sufficient: a live holder may be executing a
+        // slow filesystem operation.  Only a stale, attributable dead owner
+        // can be recovered.
+        if (ownerPid !== undefined && !ownerAlive) {
+          // A contender may have replaced the pathname after our first stat.
+          // Re-read both the payload and identity immediately before unlink.
+          const [current, currentStat] = await Promise.all([
+            readFile(lockPath, "utf8").catch(() => undefined),
+            stat(lockPath).catch(() => undefined),
+          ]);
+          if (current === raw && currentStat
+            && currentStat.dev === lockStat.dev && currentStat.ino === lockStat.ino) {
+            await unlink(lockPath).catch(() => undefined);
+          }
+        }
+      }
       await new Promise((resolve) => setTimeout(resolve, 10 + attempt * 2));
     }
   }

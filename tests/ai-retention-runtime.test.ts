@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -251,11 +251,51 @@ test("删除墓碑目录与 AI 主存储或备份目录任一方向重叠都 fai
     }
     process.env.AI_RETENTION_TOMBSTONE_DIR = path.join(root, "independent", "tombstones");
     assert.ok(aiRuntimeStoreConfigFromEnvironment());
+    for (const overlappingBackupDir of [
+      dataDir,
+      path.join(dataDir, "nested-backup"),
+      path.dirname(dataDir),
+    ]) {
+      process.env.WORKSPACE_BACKUP_DIR = overlappingBackupDir;
+      assert.equal(aiRuntimeStoreConfigFromEnvironment(), undefined,
+        `backup/data overlap should fail closed: ${overlappingBackupDir}`);
+    }
   } finally {
     for (const [name, value] of previous) {
       if (value === undefined) delete process.env[name];
       else process.env[name] = value;
     }
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("留存锁只回收已过期的死 owner，绝不按时间删除仍存活的长任务锁", { concurrency: false }, async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "tackle-forger-ai-retention-lock-"));
+  const previous = {
+    dataDir: process.env.AI_RETENTION_DATA_DIR,
+    key: process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64,
+    keyVersion: process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION,
+  };
+  process.env.AI_RETENTION_DATA_DIR = path.join(root, "primary");
+  process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64 = randomBytes(32).toString("base64");
+  process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION = "key-v1";
+  try {
+    const store = createAIRuntimeStoreFromEnvironment();
+    await store.initialize();
+    const lockPath = path.join(root, "primary", "audit.jsonl.lock");
+    const staleAt = new Date(Date.now() - 31_000);
+    await writeFile(lockPath, JSON.stringify({ version: 1, ownerId: "a".repeat(32), pid: 999_999_999, acquiredAtMs: staleAt.getTime() }));
+    await utimes(lockPath, staleAt, staleAt);
+    await store.appendAuditEvent({ action: "AI_FANCY_HUB_ASSESSMENT", workspaceId: "w", actorStableId: "u", requestedAt: "2026-07-23T00:00:00.000Z", completedAt: "2026-07-23T00:00:00.000Z", durationMs: 0, resultCode: "SUCCESS", attemptedModelIds: [], inputHash: "a".repeat(64) });
+
+    await writeFile(lockPath, JSON.stringify({ version: 1, ownerId: "b".repeat(32), pid: process.pid, acquiredAtMs: staleAt.getTime() }));
+    await utimes(lockPath, staleAt, staleAt);
+    await assert.rejects(store.appendAuditEvent({ action: "AI_FANCY_HUB_ASSESSMENT", workspaceId: "w", actorStableId: "u", requestedAt: "2026-07-23T00:00:00.000Z", completedAt: "2026-07-23T00:00:00.000Z", durationMs: 0, resultCode: "SUCCESS", attemptedModelIds: [], inputHash: "b".repeat(64) }));
+    assert.ok(await lstat(lockPath), "a live owner lock must remain after its stale timestamp");
+  } finally {
+    if (previous.dataDir === undefined) delete process.env.AI_RETENTION_DATA_DIR; else process.env.AI_RETENTION_DATA_DIR = previous.dataDir;
+    if (previous.key === undefined) delete process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64; else process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64 = previous.key;
+    if (previous.keyVersion === undefined) delete process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION; else process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION = previous.keyVersion;
     await rm(root, { recursive: true, force: true });
   }
 });

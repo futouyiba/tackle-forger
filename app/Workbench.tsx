@@ -3166,6 +3166,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           actionAvailabilities={user.actionAvailability}
           actor={user.name}
           mutate={mutate}
+          workspaceFreshness={() => workspaceFreshnessRef.current}
           notify={notify}
           onWorkspaceApplied={(nextState, nextRevision, message) => {
             setState(ensureWorkflowFields(nextState));

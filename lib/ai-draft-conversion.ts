@@ -511,6 +511,13 @@ export function planAIDraftConversion(input: {
     && (model.configurationSnapshotId || model.status === "published")) {
     throw new AIDraftConversionError("AI_DRAFT_TARGET_FROZEN", "冻结 Model / Snapshot 不允许创建 Model Patch 草稿。");
   }
+  const publishedModel = Boolean(model.configurationSnapshotId || model.status === "published");
+  const frozenSnapshot = model.configurationSnapshotId
+    ? input.state.configurationSnapshots.find((snapshot) => snapshot.id === model.configurationSnapshotId)
+    : undefined;
+  if (publishedModel && !frozenSnapshot) {
+    throw new AIDraftConversionError("AI_DRAFT_TARGET_REVISION_CHANGED", "冻结 Model 缺少其 ConfigurationSnapshot。" );
+  }
   const changes = suggestedChanges.map((entry): AIDeterministicChangePreview => {
     const parameterKey = parameterMapping.get(entry.parameterKey);
     if (!parameterKey) {
@@ -528,14 +535,27 @@ export function planAIDraftConversion(input: {
       || (entry.operation === "clear" && operand !== null)) {
       throw new AIDraftConversionError("AI_DRAFT_RECOMMENDATION_INVALID", "当前 Model Patch 只接受数值参数和规范 clear。");
     }
-    const calculated = preparePatchOperationFromWorkspace({
-      state: input.state,
-      scopeType: "model",
-      subjectEntityId: model.id,
-      parameterKey,
-      operation: entry.operation,
-      operand,
-    });
+    // A rule-source draft can be proposed from a published Model, but its
+    // assessment was made against that Model's immutable published panel, not
+    // the mutable derived workspace panel.  Model Patch drafts remain banned.
+    const frozenBefore = frozenSnapshot?.finalPanelValues[parameterKey];
+    const calculated = frozenSnapshot
+      ? {
+        before: frozenBefore,
+        after: entry.operation === "clear" ? undefined : frozenBefore,
+        traceHash: deterministicHash({ snapshotId: frozenSnapshot.id, parameterKey, before: frozenBefore }),
+      }
+      : preparePatchOperationFromWorkspace({
+        state: input.state,
+        scopeType: "model",
+        subjectEntityId: model.id,
+        parameterKey,
+        operation: entry.operation,
+        operand,
+      });
+    if (frozenSnapshot && frozenBefore === undefined) {
+      throw new AIDraftConversionError("AI_DRAFT_TARGET_REVISION_CHANGED", "冻结 ConfigurationSnapshot 缺少建议参数。" );
+    }
     if (deterministicHash(expectedBefore) !== deterministicHash(calculated.before)) {
       throw new AIDraftConversionError("AI_DRAFT_TARGET_REVISION_CHANGED", "建议 expectedBefore 与当前确定性基线不一致。");
     }

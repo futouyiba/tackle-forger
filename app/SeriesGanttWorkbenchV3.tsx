@@ -41,6 +41,10 @@ import {
   seriesGanttQueryToSearchParams,
   type SeriesGanttQuery,
 } from "@/lib/series-gantt-query";
+import {
+  canApplyConfirmedWorkspace,
+  DIRTY_WORKSPACE_CONFIRMATION_MESSAGE,
+} from "@/lib/clean-workspace-confirmation";
 import type {
   ConfigurationSnapshot,
   FiveAxisComparisonView,
@@ -72,6 +76,7 @@ interface SeriesGanttWorkbenchV3Props {
   notify: (message: string) => void;
   actor: string;
   mutate: (producer: (draft: WorkspaceState) => void, recalculate?: boolean) => void;
+  workspaceFreshness: () => { dirty: boolean; revision: number };
   onWorkspaceApplied: (nextState: WorkspaceState, nextRevision: number, message: string) => void;
   onOpenSeries: (seriesId: string) => void;
   onBreadcrumbsChange?: (items: BreadcrumbItem[]) => void;
@@ -563,6 +568,7 @@ function ModelDrawer({
   onRunAssessment,
   onAssessmentDeleted,
   onWorkspaceApplied,
+  workspaceFreshness,
   notify,
   onOpenRebase,
   onToggleCompare,
@@ -586,6 +592,7 @@ function ModelDrawer({
   onRunAssessment: () => void;
   onAssessmentDeleted: (assessmentId: string) => void;
   onWorkspaceApplied: SeriesGanttWorkbenchV3Props["onWorkspaceApplied"];
+  workspaceFreshness: SeriesGanttWorkbenchV3Props["workspaceFreshness"];
   notify: SeriesGanttWorkbenchV3Props["notify"];
   onOpenRebase: () => void;
   onToggleCompare: (modelId: string) => void;
@@ -898,6 +905,11 @@ function ModelDrawer({
       notify(createDisabledReason);
       return;
     }
+    const expectedWorkspaceRevision = workspaceFreshness().revision;
+    if (mode === "create" && workspaceFreshness().dirty) {
+      notify(DIRTY_WORKSPACE_CONFIRMATION_MESSAGE);
+      return;
+    }
     setPreviewState((current) => ({
       ...current,
       status: mode === "preview" ? "running" : "creating",
@@ -978,6 +990,13 @@ function ModelDrawer({
       }
       if (!Number.isInteger(nextRevision)) {
         throw new Error("草稿已创建，但响应缺少可验证的工作区 revision；请重新载入页面。");
+      }
+      const applyCheck = canApplyConfirmedWorkspace({
+        ...workspaceFreshness(), expectedRevision: expectedWorkspaceRevision,
+      });
+      if (!applyCheck.allowed) {
+        notify(applyCheck.reason);
+        return;
       }
       onWorkspaceApplied(
         nextState,
@@ -1572,6 +1591,7 @@ export function SeriesGanttWorkbenchV3({
   notify,
   actor,
   mutate,
+  workspaceFreshness,
   onWorkspaceApplied,
   onOpenSeries,
   onBreadcrumbsChange,
@@ -1586,6 +1606,23 @@ export function SeriesGanttWorkbenchV3({
   const [candidateOpen, setCandidateOpen] = useState(false);
   const [seriesCreateDraft, setSeriesCreateDraft] = useState<SeriesCreateDraft | null>(null);
   const [aiAssessment, setAiAssessment] = useState<AIAssessmentUiState>();
+  const beginWorkspaceReplacement = (): number | undefined => {
+    const freshness = workspaceFreshness();
+    if (freshness.dirty) {
+      notify(DIRTY_WORKSPACE_CONFIRMATION_MESSAGE);
+      return undefined;
+    }
+    return freshness.revision;
+  };
+  const applyWorkspaceReplacement = (expectedRevision: number, nextState: WorkspaceState, nextRevision: number, message: string): boolean => {
+    const applyCheck = canApplyConfirmedWorkspace({ ...workspaceFreshness(), expectedRevision });
+    if (!applyCheck.allowed) {
+      notify(applyCheck.reason);
+      return false;
+    }
+    onWorkspaceApplied(nextState, nextRevision, message);
+    return true;
+  };
   const enabledItemParts = useMemo(
     () => enabledProductItemParts(state.itemParts),
     [state.itemParts],
@@ -1873,6 +1910,8 @@ export function SeriesGanttWorkbenchV3({
       notify("请至少填写一个正数目标拉力规格；范围本身不能生成 SKU。");
       return;
     }
+    const expectedWorkspaceRevision = beginWorkspaceReplacement();
+    if (expectedWorkspaceRevision === undefined) return;
     // Series 创建是服务端领域命令：写入由服务端重新鉴权 series.edit（create_series），
     // 结构标杆匹配、拉力规划与 SKU 物化都在服务端完成后按 revision 受保护地提交，
     // 客户端不能绕过 series.edit 直接写整包（规范 §24.1/§24.4/§25.1）。
@@ -1908,11 +1947,11 @@ export function SeriesGanttWorkbenchV3({
         notify(payload?.error ?? "Series 创建失败。");
         return;
       }
-      onWorkspaceApplied(
+      if (!applyWorkspaceReplacement(expectedWorkspaceRevision,
         payload.state,
         payload.revision ?? 0,
         `已创建 ${payload.series.name}，并物化 ${payload.createdSkuIds?.length ?? 0} 个离散 SKU 抽屉。`,
-      );
+      )) return;
       setSelectedSeriesId(payload.series.id);
       setSelectedSkuId(payload.createdSkuIds?.[0] ?? "");
       setSeriesCreateDraft(null);
@@ -1943,6 +1982,8 @@ export function SeriesGanttWorkbenchV3({
       notify("新目标拉力与当前值相同。");
       return;
     }
+    const expectedWorkspaceRevision = beginWorkspaceReplacement();
+    if (expectedWorkspaceRevision === undefined) return;
     setSkuPullChangePending(true);
     try {
       const previewResponse = await fetch(
@@ -2018,13 +2059,13 @@ export function SeriesGanttWorkbenchV3({
         notify(payload?.error ?? "SKU 目标拉力变更失败。");
         return;
       }
-      onWorkspaceApplied(
+      if (!applyWorkspaceReplacement(expectedWorkspaceRevision,
         payload.state,
         payload.revision ?? 0,
         payload.mode === "REPLACEMENT_SKU"
           ? `已创建新 SKU ${payload.sku.id}；旧 SKU 与已发布快照保持冻结。`
           : `已将 ${payload.sku.id} 更新到 revision ${payload.sku.revision}。`,
-      );
+      )) return;
       setSelectedSkuId(payload.sku.id);
     } catch (caught) {
       notify(caught instanceof Error ? caught.message : "SKU 目标拉力变更失败。");
@@ -2237,7 +2278,7 @@ export function SeriesGanttWorkbenchV3({
       {drawerModel ? (
         <>
           <button className="gantt-drawer-backdrop" type="button" aria-label="关闭预览" onClick={() => { setDrawerModelId(""); setDrawerSnapshotId(""); }} />
-          <ModelDrawer key={`${drawerModel.id}:${drawerModel.revision}:${aiAssessment?.assessmentId ?? "none"}`} state={state} workspaceId={workspaceId} model={drawerModel} sku={drawerSku} series={drawerSeries} snapshot={drawerSnapshot} currentEntityType={drawerSnapshotId ? "configuration_snapshot" : "model"} comparisonModelIds={comparisonModelIds} rebaseEnabled={Boolean(drawerSeries) && rebaseAvailability.enabled} rebaseDisabledReason={drawerSeries ? rebaseAvailability.disabledReasonText : "父级 Series 不可见，不能进入 Rebase。"} aiAvailability={aiAvailability} aiPatchDraftAvailability={aiPatchDraftAvailability} aiRuleDraftAvailability={aiRuleDraftAvailability} aiAssessment={aiAssessment?.scopeKey === `model:${drawerModel.id}` ? aiAssessment : undefined} onRunAssessment={() => void runAiAssessment("model", drawerModel.id)} onAssessmentDeleted={(assessmentId) => setAiAssessment((currentAssessment) => currentAssessment?.assessmentId === assessmentId ? undefined : currentAssessment)} onWorkspaceApplied={onWorkspaceApplied} notify={notify} onToggleCompare={toggleCompare} onOpenSnapshot={setDrawerSnapshotId} onOpenRebase={() => { setDrawerModelId(""); setDrawerSnapshotId(""); if (drawerSeries) onOpenSeries(drawerSeries.id); }} onClose={() => { setDrawerModelId(""); setDrawerSnapshotId(""); }} />
+          <ModelDrawer key={`${drawerModel.id}:${drawerModel.revision}:${aiAssessment?.assessmentId ?? "none"}`} state={state} workspaceId={workspaceId} model={drawerModel} sku={drawerSku} series={drawerSeries} snapshot={drawerSnapshot} currentEntityType={drawerSnapshotId ? "configuration_snapshot" : "model"} comparisonModelIds={comparisonModelIds} rebaseEnabled={Boolean(drawerSeries) && rebaseAvailability.enabled} rebaseDisabledReason={drawerSeries ? rebaseAvailability.disabledReasonText : "父级 Series 不可见，不能进入 Rebase。"} aiAvailability={aiAvailability} aiPatchDraftAvailability={aiPatchDraftAvailability} aiRuleDraftAvailability={aiRuleDraftAvailability} aiAssessment={aiAssessment?.scopeKey === `model:${drawerModel.id}` ? aiAssessment : undefined} onRunAssessment={() => void runAiAssessment("model", drawerModel.id)} onAssessmentDeleted={(assessmentId) => setAiAssessment((currentAssessment) => currentAssessment?.assessmentId === assessmentId ? undefined : currentAssessment)} onWorkspaceApplied={onWorkspaceApplied} workspaceFreshness={workspaceFreshness} notify={notify} onToggleCompare={toggleCompare} onOpenSnapshot={setDrawerSnapshotId} onOpenRebase={() => { setDrawerModelId(""); setDrawerSnapshotId(""); if (drawerSeries) onOpenSeries(drawerSeries.id); }} onClose={() => { setDrawerModelId(""); setDrawerSnapshotId(""); }} />
         </>
       ) : null}
       {candidateOpen && selectedSeries ? (

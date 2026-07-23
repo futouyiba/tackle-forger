@@ -208,6 +208,48 @@ test("目标 revision 与冻结状态均在计划阶段阻断", () => {
   assertCode("AI_DRAFT_TARGET_FROZEN", () => plan(frozen));
 });
 
+test("已发布 Model 的规则源草稿以冻结快照面板为基线，缺快照字段则 fail-closed", () => {
+  const state = createSeedState();
+  const model = state.purchasableModels.find((entry) => entry.configurationSnapshotId)!;
+  const snapshot = state.configurationSnapshots.find((entry) => entry.id === model.configurationSnapshotId)!;
+  const projection = buildWorkspaceAssessmentRequestProjection({
+    state, scope: { scopeType: "model", scopeId: model.id }, assessmentId, model: providerModel,
+  });
+  const parameter = projection.parameterKeyMapping.find((entry) =>
+    state.parameters.find((definition) => definition.key === entry.parameterKey)?.allowedOperations?.includes("add"))!;
+  for (const definition of state.parameters) {
+    if (definition.allowedOperations?.some((operation) =>
+      operation === "set" || operation === "add" || operation === "multiply")) {
+      definition.targetRange = { min: -1_000_000_000, max: 1_000_000_000 };
+    }
+  }
+  const snapshotValue = snapshot.finalPanelValues[parameter.parameterKey]!;
+  const scopeAlias = projection.requestAliasMapping.find((entry) =>
+    entry.reference.referenceKindCode === "model" && entry.reference.stableLocalId === model.id)!.alias;
+  const evidence = projection.envelope.evidenceRefs[0]!;
+  const evidenceReference = projection.requestAliasMapping.find((entry) => entry.alias === evidence.evidenceAlias)!.reference;
+  const recommendation = {
+    recommendationCode: "recommendation.published.rule", title: "冻结快照规则建议", summary: "", subjectAliases: [scopeAlias], evidenceAliases: [evidence.evidenceAlias],
+    suggestedAction: "create_rule_source_change_draft" as const,
+    suggestedChanges: [{ changeId: "change.snapshot.before", parameterKey: parameter.alias, operation: "add" as const, operand: { kind: "number" as const, value: 0 }, expectedBefore: { kind: "number" as const, value: snapshotValue as number } }],
+  };
+  const prepared = prepareAIRequest({ envelope: projection.envelope });
+  const record: AIAssessmentRetentionRecord = {
+    policyVersion: AI_RETENTION_POLICY_VERSION,
+    metadata: { assessmentId, actorStableId, scopeStableRef: model.id, metadataSchemaVersion: "ai-operation-metadata/v2", scope: { scopeType: "model", scopeId: model.id, inputRevision: String(model.revision) }, ruleSetVersion: projection.operationMetadataContext.ruleSetVersion, fiveAxisRuleVersion: projection.operationMetadataContext.fiveAxisRuleVersion, attempts: [], retryCount: 0, cancellationStatus: "NOT_REQUESTED", modelDescriptor: providerModel, promptTemplateVersion: projection.envelope.promptTemplateVersion, promptTemplateHash: projection.envelope.promptTemplateHash, schemaVersion: projection.envelope.schemaVersion, allowlistPolicyVersion: projection.envelope.policyVersion, inputHash: prepared.inputHash, requestedAt: now, completedAt: now, resultCode: "SUCCESS", state: "ACTIVE" },
+    semanticContent: { findings: [], recommendations: [recommendation], assumptions: [], uncoveredInformation: [], evidenceRefs: [structuredClone(evidence)], resolvedEvidenceRefs: [{ evidenceType: evidence.evidenceType, evidenceAlias: evidence.evidenceAlias, refId: evidenceReference.stableLocalId, ...(evidenceReference.stableRevisionId ? { revisionId: evidenceReference.stableRevisionId } : {}), contentHash: evidence.contentHash }] }, visibility: "VISIBLE",
+  };
+  const command: AIDraftConversionCommand = { mode: "preview", recommendationId: recommendation.recommendationCode, assessmentInputHash: prepared.inputHash, selectedChangeIds: ["change.snapshot.before"], userReason: "", idempotencyKey: "published-snapshot-before", targetModelRef: { entityId: model.id, revisionId: String(model.revision) }, targetRuleRef: { spreadsheetToken: "invalid", sheetId: "invalid", stableRuleId: "invalid", parameterKey: parameter.parameterKey, sourceRevision: "invalid" } };
+  const sku = state.skuDrawers.find((entry) => entry.id === model.skuId)!;
+  const currentProjection = state.derivedProjections.find((entry) => entry.id === sku.projectionMatch.projectionId)!;
+  currentProjection.values[parameter.parameterKey] = (snapshotValue as number) + 999;
+  // Current derived values are irrelevant for a published model; an invalid
+  // rule target is reached only after expectedBefore matched the snapshot.
+  assertCode("AI_RULE_SOURCE_REVISION_CHANGED", () => planAIDraftConversion({ state, record, assessmentId, actorStableId, actorDisplayName: "Planner Test", capabilities: ["ai.rule_source_change_draft.create"], command, now }));
+  delete snapshot.finalPanelValues[parameter.parameterKey];
+  assertCode("AI_ASSESSMENT_NOT_ACTIONABLE", () => planAIDraftConversion({ state, record, assessmentId, actorStableId, actorDisplayName: "Planner Test", capabilities: ["ai.rule_source_change_draft.create"], command, now }));
+});
+
 test("非法 operation、before drift 与非法 selection 均阻断", () => {
   const illegalOperation = fixture();
   const definition = illegalOperation.state.parameters.find((entry) =>

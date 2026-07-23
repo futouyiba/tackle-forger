@@ -27,6 +27,7 @@ import {
   OPEN009_AI_BATCH_LIMITS,
   fancyHubConfigFromEnvironment,
   fancyHubEnablement,
+  estimateAIAssessmentRequest,
   evaluateAIBatchAdmission,
   type AIProviderHardLimits,
   type FancyHubAdmissionCoordinator,
@@ -1230,6 +1231,32 @@ test("请求估算超过 provider/租户硬 token 或费用上限时不发评估
     (error) => error instanceof FancyHubError && error.code === "AI_HARD_LIMIT_EXCEEDED",
   );
   assert.deepEqual(transport.calls, ["models"]);
+});
+
+test("成功响应也不得超过该次调用预留的估算，而不只是 provider 硬上限", async () => {
+  const discovered = describeFancyHubModels(discoveryModels().models);
+  const primary = discovered.models.find((entry) => entry.modelId === "model.alpha")!;
+  const config = connectorConfig({ fallbackModelIds: [] });
+  const estimate = estimateAIAssessmentRequest(
+    prepareAIRequest({ envelope: envelope(primary) }).canonicalJson,
+    config.assessmentEstimatePolicy,
+  );
+  const overReserved = {
+    ...response(primary),
+    usage: {
+      inputTokens: estimate.inputTokens,
+      outputTokens: estimate.outputTokens + 1,
+      costMicroUsd: estimate.costMicroUsd,
+    },
+  };
+  const transport = new MockTransport(discoveryModels(), [overReserved]);
+  await assert.rejects(
+    new FancyHubConnector(config, transport).assess({
+      workspaceId: "w1", actorStableId: "ou-test", buildEnvelope: envelope,
+    }),
+    (error) => error instanceof FancyHubError && error.code === "AI_HARD_LIMIT_EXCEEDED",
+  );
+  assert.deepEqual(transport.calls, ["models", "assess"]);
 });
 
 test("OPEN-009 批次硬值不可越过，用户1/工作区4/单项60秒只返回软提示", () => {

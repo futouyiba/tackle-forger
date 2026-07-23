@@ -127,7 +127,7 @@ export class FileAIRuntimeStore {
     return {
       acquire: async (input): Promise<FancyHubAdmissionLease> => {
         const leaseId = randomBytes(24).toString("base64url");
-        const inFlightForWorkspaceBefore = await this.mutateAdmission((document) => {
+        const admissionCounts = await this.mutateAdmission((document) => {
           const nowMs = Date.now();
           for (const [id, lease] of Object.entries(document.leases)) {
             if (lease.expiresAtMs <= nowMs) delete document.leases[id];
@@ -141,11 +141,11 @@ export class FileAIRuntimeStore {
             workspaceId: input.workspaceId,
             expiresAtMs: input.leaseExpiresAtMs,
           };
-          return workspaceCount;
+          return { inFlightForWorkspaceBefore: workspaceCount, inFlightTotalBefore: leases.length };
         });
         let released = false;
         return {
-          inFlightForWorkspaceBefore,
+          ...admissionCounts,
           consumeAssessmentRequest: async ({ nowMs, maxRequestsPerMinute }) => {
             await this.mutateAdmission((document) => {
               document.assessmentRequestTimesMs = document.assessmentRequestTimesMs

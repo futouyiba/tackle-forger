@@ -497,6 +497,7 @@ export function estimateAIAssessmentRequest(canonicalJson: string, policyValue: 
 
 export interface FancyHubAdmissionLease {
   readonly inFlightForWorkspaceBefore: number;
+  readonly inFlightTotalBefore: number;
   consumeAssessmentRequest(input: { nowMs: number; maxRequestsPerMinute: number }): Promise<void>;
   release(): Promise<void>;
 }
@@ -529,10 +530,12 @@ export class InMemoryFancyHubAdmissionCoordinator implements FancyHubAdmissionCo
       throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "provider 或租户全局并发硬上限已满。");
     }
     this.inFlightByWorkspace.set(input.workspaceId, current + 1);
+    const inFlightTotalBefore = this.inFlightTotal;
     this.inFlightTotal += 1;
     let released = false;
     return {
       inFlightForWorkspaceBefore: current,
+      inFlightTotalBefore,
       consumeAssessmentRequest: async ({ nowMs, maxRequestsPerMinute }) => {
         while (this.assessmentRequestTimes.length && this.assessmentRequestTimes[0]! <= nowMs - 60_000) {
           this.assessmentRequestTimes.shift();
@@ -576,7 +579,7 @@ export class FancyHubConnector {
     };
   }
 
-  async listAvailableModels(timeoutMs?: number): Promise<{
+  private async listAvailableModels(timeoutMs?: number): Promise<{
     models: AIModelDescriptorV1[];
     providerHardLimits: AIProviderHardLimits;
     rejectedModels: Array<{ index: number; code: string }>;
@@ -609,46 +612,54 @@ export class FancyHubConnector {
       const batchDeadlineMs = batchStartedAtMs + batchLimits.batchHardTimeoutMs;
       const discoveryRemainingMs = batchDeadlineMs - Date.now();
       if (discoveryRemainingMs <= 0) throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "批次已经达到 10 分钟硬期限。" );
-      const discovery = await this.listAvailableModels(Math.min(tenantLimits.requestTimeoutMs, discoveryRemainingMs));
-      const limits = effectiveLimits(discovery.providerHardLimits, tenantLimits);
-      const byId = new Map(discovery.models.map((model) => [model.modelId, model]));
-      const configured = [this.config.primaryModelId, ...this.config.fallbackModelIds]
-        .filter((entry): entry is string => Boolean(entry));
-      const models = configured.map((id) => byId.get(id)).filter((entry): entry is AIModelDescriptorV1 => Boolean(entry));
-      if (!models.length) throw new FancyHubError("AI_NO_CONFIGURED_MODEL_AVAILABLE", "主模型和有序降级列表当前均不可用。" );
-      const preparedModels = models.map((model) => {
-        const prepared = prepareAIRequest({
-          envelope: input.buildEnvelope(model),
-          loadedCredentialValues: [this.config.apiToken!, ...loadedProcessCredentials(), ...(input.loadedCredentialValues ?? [])],
-        });
-        return { model, prepared, estimate: estimateAIAssessmentRequest(prepared.canonicalJson, estimatePolicy) };
-      });
-      const estimate = preparedModels.reduce<AIAssessmentEstimate>((current, entry) => ({
-        inputTokens: Math.max(current.inputTokens, entry.estimate.inputTokens),
-        outputTokens: Math.max(current.outputTokens, entry.estimate.outputTokens),
-        costMicroUsd: Math.max(current.costMicroUsd, entry.estimate.costMicroUsd),
-      }), { inputTokens: 1, outputTokens: 1, costMicroUsd: 1 });
-      if (estimate.inputTokens > limits.maxInputTokens
-        || estimate.outputTokens > limits.maxOutputTokens
-        || estimate.costMicroUsd > limits.maxCostMicroUsdPerRequest) {
-        throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "按实际出站 Envelope 计算的 token 或费用估算超过 provider/租户硬上限。" );
-      }
       const assessmentCount = input.batch?.assessmentCount ?? 1;
       const lease = await this.admissionCoordinator.acquire({
         workspaceId: input.workspaceId,
-        maxConcurrentForWorkspace: Math.min(batchLimits.maxConcurrentAssessmentsPerWorkspace, limits.maxConcurrentRequests),
-        maxConcurrentTotal: limits.maxConcurrentRequests,
+        maxConcurrentForWorkspace: Math.min(batchLimits.maxConcurrentAssessmentsPerWorkspace, tenantLimits.maxConcurrentRequests),
+        maxConcurrentTotal: tenantLimits.maxConcurrentRequests,
         leaseExpiresAtMs: batchDeadlineMs,
       });
       const attemptedModelIds: string[] = [];
       try {
+        await lease.consumeAssessmentRequest({
+          nowMs: Date.now(),
+          maxRequestsPerMinute: tenantLimits.maxRequestsPerMinute,
+        });
+        const discovery = await this.listAvailableModels(Math.min(tenantLimits.requestTimeoutMs, discoveryRemainingMs));
+        const limits = effectiveLimits(discovery.providerHardLimits, tenantLimits);
+        if (lease.inFlightForWorkspaceBefore >= Math.min(batchLimits.maxConcurrentAssessmentsPerWorkspace, limits.maxConcurrentRequests)
+          || lease.inFlightTotalBefore >= limits.maxConcurrentRequests) {
+          throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "模型发现返回的 provider 并发硬上限已满。" );
+        }
+        const byId = new Map(discovery.models.map((model) => [model.modelId, model]));
+        const configured = [this.config.primaryModelId, ...this.config.fallbackModelIds]
+          .filter((entry): entry is string => Boolean(entry));
+        const models = configured.map((id) => byId.get(id)).filter((entry): entry is AIModelDescriptorV1 => Boolean(entry));
+        if (!models.length) throw new FancyHubError("AI_NO_CONFIGURED_MODEL_AVAILABLE", "主模型和有序降级列表当前均不可用。" );
+        const preparedModels = models.map((model) => {
+          const prepared = prepareAIRequest({
+            envelope: input.buildEnvelope(model),
+            loadedCredentialValues: [this.config.apiToken!, ...loadedProcessCredentials(), ...(input.loadedCredentialValues ?? [])],
+          });
+          return { model, prepared, estimate: estimateAIAssessmentRequest(prepared.canonicalJson, estimatePolicy) };
+        });
+        if (preparedModels.some(({ estimate }) => estimate.inputTokens > limits.maxInputTokens
+          || estimate.outputTokens > limits.maxOutputTokens
+          || estimate.costMicroUsd > limits.maxCostMicroUsdPerRequest)) {
+          throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "按实际出站 Envelope 计算的 token 或费用估算超过 provider/租户硬上限。" );
+        }
+        const fallbackWorstCaseEstimate = preparedModels.reduce<AIAssessmentEstimate>((current, entry) => ({
+          inputTokens: current.inputTokens + entry.estimate.inputTokens,
+          outputTokens: current.outputTokens + entry.estimate.outputTokens,
+          costMicroUsd: current.costMicroUsd + entry.estimate.costMicroUsd,
+        }), { inputTokens: 0, outputTokens: 0, costMicroUsd: 0 });
         evaluateAIBatchAdmission({
           assessmentCount,
           inFlightForUser: input.batch?.inFlightForUser ?? 0,
           inFlightForWorkspace: lease.inFlightForWorkspaceBefore,
-          estimatedInputTokens: estimate.inputTokens * assessmentCount,
-          estimatedOutputTokens: estimate.outputTokens * assessmentCount,
-          estimatedCostMicroUsd: estimate.costMicroUsd * assessmentCount,
+          estimatedInputTokens: fallbackWorstCaseEstimate.inputTokens * assessmentCount,
+          estimatedOutputTokens: fallbackWorstCaseEstimate.outputTokens * assessmentCount,
+          estimatedCostMicroUsd: fallbackWorstCaseEstimate.costMicroUsd * assessmentCount,
           startedAtMs: batchStartedAtMs,
           nowMs: Date.now(),
         }, batchLimits);

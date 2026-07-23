@@ -700,6 +700,8 @@ export function executeFiveAxisSnapshotBatchTransactions(input: {
           expectedSkuId: stagedModels[modelIndex].skuId,
           expectedSkuRevisionId:
             `${stagedModels[modelIndex].skuId}@${commit.snapshot.skuRevision}`,
+          expectedProjectionReferences:
+            preview.tackleFitComparison.projectionReferences ?? [],
           expectedFinalPanelHash:
             hashFormalFinalPanelValues(commit.snapshot.finalPanelValues),
           expectedComponentSelections:

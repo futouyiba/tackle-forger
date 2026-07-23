@@ -114,6 +114,22 @@ type FiveAxisMode = "model_series" | "tackle_fit" | "equipment_compare";
 interface FiveAxisComparisonSelection {
   modelId: string;
   itemPartId: string;
+  snapshotId: string;
+}
+
+function formalCurrentFiveAxisDefinition(
+  state: WorkspaceState,
+): FiveAxisViewDefinition | undefined {
+  const catalogHead = state.fiveAxisDispositionCatalogRevisions.find((revision) =>
+    revision.catalogRevisionId
+      === state.currentFiveAxisDispositionCatalogRevisionId);
+  const disposition = catalogHead?.entries.find((entry) =>
+    entry.effectiveUse === "FORMAL_CURRENT");
+  return state.fiveAxisViewDefinitions.filter(
+    isFormalFiveAxisDefinition,
+  ).find((definition) =>
+    definition.definitionId === disposition?.definitionId
+    && definition.version === disposition.definitionVersion);
 }
 
 interface SeriesCreateDraft {
@@ -450,7 +466,11 @@ function ModelDrawer({
   rebaseEnabled: boolean;
   rebaseDisabledReason?: string;
   onOpenRebase: () => void;
-  onToggleCompare: (modelId: string, itemPartId: string) => void;
+  onToggleCompare: (
+    modelId: string,
+    itemPartId: string,
+    snapshotId: string | undefined,
+  ) => void;
   onOpenSnapshot: (snapshotId: string) => void;
   onClose: () => void;
 }) {
@@ -551,17 +571,11 @@ function ModelDrawer({
     })))
     .sort((left, right) => left.sequence - right.sequence) ?? [];
   const inComparison = comparisonSelections.some((selection) =>
-    selection.modelId === model.id && selection.itemPartId === comparisonPartId);
-  const catalogHead = state.fiveAxisDispositionCatalogRevisions.find((revision) =>
-    revision.catalogRevisionId
-      === state.currentFiveAxisDispositionCatalogRevisionId);
-  const formalDisposition = catalogHead?.entries.find((entry) =>
-    entry.effectiveUse === "FORMAL_CURRENT");
-  const formalComparisonDefinition = state.fiveAxisViewDefinitions.filter(
-    isFormalFiveAxisDefinition,
-  ).find((entry) =>
-    entry.definitionId === formalDisposition?.definitionId
-    && entry.version === formalDisposition.definitionVersion);
+    selection.modelId === model.id
+    && selection.itemPartId === comparisonPartId
+    && selection.snapshotId
+      === (snapshot?.id ?? model.configurationSnapshotId));
+  const formalComparisonDefinition = formalCurrentFiveAxisDefinition(state);
   const formalComparisonLimit =
     formalComparisonDefinition?.comparisonPolicy.maximumItems;
   const pendingUpgrade = state.upgradeCandidates.find((entry) => entry.modelId === model.id && entry.status === "pending");
@@ -585,10 +599,8 @@ function ModelDrawer({
     const entities = comparisonSelections.flatMap((selection, comparisonOrder) => {
       const candidate = state.purchasableModels.find((entry) =>
         entry.id === selection.modelId);
-      const candidateSnapshot = candidate?.configurationSnapshotId
-        ? state.configurationSnapshots.find((entry) =>
-            entry.id === candidate.configurationSnapshotId)
-        : undefined;
+      const candidateSnapshot = state.configurationSnapshots.find((entry) =>
+        entry.id === selection.snapshotId);
       const frozenSnapshot = candidateSnapshot?.modelId === selection.modelId
         ? candidateSnapshot
         : undefined;
@@ -775,10 +787,19 @@ function ModelDrawer({
                 <div className="same-part-controls">
                   <label>加入部件<select value={comparisonPartId} onChange={(event) => setComparisonPartId(event.target.value)}><option value="part:rod">竿</option><option value="part:reel">轮</option><option value="part:line">线</option></select></label>
                 </div>
-                <button type="button" onClick={() => onToggleCompare(model.id, comparisonPartId)}>{inComparison ? "移出此部件" : "加入此部件"}</button>
+                <button
+                  type="button"
+                  onClick={() => onToggleCompare(
+                    model.id,
+                    comparisonPartId,
+                    snapshot?.id ?? model.configurationSnapshotId,
+                  )}
+                >
+                  {inComparison ? "移出此部件" : "加入此部件"}
+                </button>
                 {comparisonSelections.length < 2
                   ? <small>至少加入 2 件装备后显示比较曲线。</small>
-                  : <small>已选择：{comparisonSelections.map((selection) => `${selection.modelId}:${selection.itemPartId}`).join("、")}</small>}
+                  : <small>已选择：{comparisonSelections.map((selection) => `${selection.modelId}:${selection.itemPartId}@${selection.snapshotId}`).join("、")}</small>}
                 {comparisonResult.error ? <div className="gantt-unavailable"><AlertTriangle size={18} /><div><strong>比较不可用</strong><span>{comparisonResult.error}</span></div></div> : null}
                 {comparisonResult.view ? <FiveAxisComparisonPanel view={comparisonResult.view} definition={comparisonResult.definition} /> : null}
               </div>
@@ -1073,26 +1094,37 @@ export function SeriesGanttWorkbenchV3({
     setSelectedSeriesId(seriesId);
     setSelectedSkuId(skuId);
   };
-  const toggleCompare = (modelId: string, itemPartId: string) => {
-    const limit = state.fiveAxisViewDefinitions.find(
-      isFormalFiveAxisDefinition,
-    )?.comparisonPolicy.maximumItems;
+  const toggleCompare = (
+    modelId: string,
+    itemPartId: string,
+    snapshotId: string | undefined,
+  ) => {
+    const limit = formalCurrentFiveAxisDefinition(state)
+      ?.comparisonPolicy.maximumItems;
     if (!limit) {
       notify("当前没有可用的正式五维比较策略。");
       return;
     }
+    if (!snapshotId) {
+      notify("当前对象没有可冻结加入比较篮的 Snapshot。");
+      return;
+    }
     setComparisonSelections((current) => {
       const exists = current.some((selection) =>
-        selection.modelId === modelId && selection.itemPartId === itemPartId);
+        selection.modelId === modelId
+        && selection.itemPartId === itemPartId
+        && selection.snapshotId === snapshotId);
       if (exists) {
         return current.filter((selection) =>
-          selection.modelId !== modelId || selection.itemPartId !== itemPartId);
+          selection.modelId !== modelId
+          || selection.itemPartId !== itemPartId
+          || selection.snapshotId !== snapshotId);
       }
       if (current.length >= limit) {
         notify(`多装备比较篮上限为 ${limit} 件。`);
         return current;
       }
-      return [...current, { modelId, itemPartId }];
+      return [...current, { modelId, itemPartId, snapshotId }];
     });
   };
 

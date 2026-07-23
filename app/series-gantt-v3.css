@@ -8,6 +8,26 @@
   padding: 10px 12px;
 }
 
+.gantt-reference-unavailable {
+  align-items: flex-start;
+  background: #fff1ef;
+  border: 1px solid #e7b7b0;
+  border-radius: 10px;
+  color: #7c2f28;
+  display: grid;
+  gap: 4px;
+  padding: 11px 14px;
+}
+
+.gantt-reference-unavailable strong {
+  font-size: 11px;
+  letter-spacing: .04em;
+}
+
+.gantt-reference-unavailable small {
+  color: #8d514b;
+}
+
 .gantt-filter-bar > span {
   align-items: center;
   color: var(--muted);

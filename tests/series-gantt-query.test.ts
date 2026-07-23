@@ -125,40 +125,58 @@ test("SeriesGanttQuery 空 URL 不会把缺失拉力范围解析为 0..0", () =>
   assert.equal(whitespace.maxTargetPullKg, undefined);
 });
 
-test("SeriesGanttQuery 在聚合前裁剪不可见 Series、SKU 与 Model 且不泄露总数", () => {
+test("SeriesGanttQuery 不做对象级裁剪，并分开返回 Model 总数与当前查询命中数", () => {
   const workspace = state();
   const series = workspace.seriesDefinitions[0];
-  const visibleSku = workspace.skuDrawers.find((sku) => sku.seriesId === series.id)!;
-  const visibleModelId = visibleSku.modelIds[0];
+  const targetSku = workspace.skuDrawers.find((sku) => sku.seriesId === series.id)!;
+  const totalModels = workspace.purchasableModels.filter((model) =>
+    workspace.skuDrawers.some((sku) => sku.seriesId === series.id && sku.modelIds.includes(model.id)));
+  const matchedModels = totalModels.filter((model) => model.skuId === targetSku.id);
   const [entry] = querySeriesGantt({
-    query: {},
+    query: { exactTargetWeightKg: [targetSku.targetWeightKg] },
     series: workspace.seriesDefinitions,
     skus: workspace.skuDrawers,
     models: workspace.purchasableModels,
     itemTypes: workspace.itemTypeProfiles,
     upgrades: workspace.upgradeCandidates,
-    visibility: {
-      seriesIds: [series.id],
-      skuIds: [visibleSku.id],
-      modelIds: [visibleModelId],
-      discloseTotalModelCount: false,
-    },
   });
   assert.equal(entry.seriesId, series.id);
-  assert.equal(entry.skuNodes.length, 1);
-  assert.deepEqual(entry.skuNodes[0].modelIds, [visibleModelId]);
-  assert.equal(entry.aggregate.modelCountVisible, 1);
-  assert.equal(entry.aggregate.modelCountTotal, undefined);
-  const hiddenSeries = { ...series, id: "series:hidden", name: "权限外系列", skuIds: [] };
-  assert.equal(querySeriesGantt({
-    query: { text: hiddenSeries.name },
-    series: [...workspace.seriesDefinitions, hiddenSeries],
+  assert.equal(entry.skuNodes.length, workspace.skuDrawers.filter((sku) => sku.seriesId === series.id).length);
+  assert.equal(entry.aggregate.modelCountTotal, totalModels.length);
+  assert.equal(entry.aggregate.modelCountMatched, matchedModels.length);
+
+  const targetModel = totalModels[0];
+  const [modelMatch] = querySeriesGantt({
+    query: { text: targetModel.name },
+    series: workspace.seriesDefinitions,
     skus: workspace.skuDrawers,
     models: workspace.purchasableModels,
     itemTypes: workspace.itemTypeProfiles,
     upgrades: workspace.upgradeCandidates,
-    visibility: { seriesIds: [series.id] },
-  }).length, 0);
+  });
+  assert.equal(modelMatch.seriesId, series.id);
+  assert.equal(modelMatch.aggregate.modelCountTotal, totalModels.length);
+  assert.equal(modelMatch.aggregate.modelCountMatched, 1);
+
+  const formerlyRestricted = {
+    ...series,
+    id: "series:formerly-restricted",
+    name: "统一可见业务系列",
+    skuIds: [],
+    targetWeightsKg: [],
+    targetPullSpecifications: [],
+  };
+  const unrestricted = querySeriesGantt({
+    query: { text: formerlyRestricted.name },
+    series: [...workspace.seriesDefinitions, formerlyRestricted],
+    skus: workspace.skuDrawers,
+    models: workspace.purchasableModels,
+    itemTypes: workspace.itemTypeProfiles,
+    upgrades: workspace.upgradeCandidates,
+  });
+  assert.deepEqual(unrestricted.map((item) => item.seriesId), [formerlyRestricted.id]);
+  assert.equal(unrestricted[0].aggregate.modelCountTotal, 0);
+  assert.equal(unrestricted[0].aggregate.modelCountMatched, 0);
 });
 
 test("SeriesGanttQuery 游标绑定 workspace revision 与查询 hash，变化时拒绝拼接", () => {
@@ -172,6 +190,7 @@ test("SeriesGanttQuery 游标绑定 workspace revision 与查询 hash，变化�
     upgrades: workspace.upgradeCandidates,
   });
   const first = paginateSeriesGantt({ items, query: { pageSize: 1 }, workspaceRevision: 7 });
+  assert.equal(first.totalMatched, items.length);
   if (items.length > 1) {
     assert.ok(first.nextCursor);
     const second = paginateSeriesGantt({ items, query: { pageSize: 1, cursor: first.nextCursor }, workspaceRevision: 7 });

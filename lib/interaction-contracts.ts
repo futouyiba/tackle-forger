@@ -16,7 +16,7 @@ export type CapabilityCode =
   | "model.patch.create" | "model.patch.review" | "patch.rebase"
   | "patch.create" | "patch.review" | "patch.mirror.write" | "patch.mirror.pull" | "patch.absorption.review" | "rules.proposal.create"
   | "snapshot.read" | "snapshot.export"
-  | "ai.evaluate" | "ai.patch_draft.create" | "ai.feishu_proposal_draft.create"
+  | "ai.evaluate" | "ai.patch_draft.create" | "ai.feishu_proposal_draft.create" | "ai.provider_policy.manage"
   | "feishu.proposal.submit" | "feishu.proposal.review" | "feishu.proposal.apply"
   | "feishu.workbook.read" | "feishu.workbook.pull" | "feishu.identity.write" | "ruleset.draft.create" | "ruleset.publish"
   | "data_source.resolve" | "data_source.preview" | "data_source.publish"
@@ -31,7 +31,7 @@ export type ActionCode =
   | "select_candidate" | "dismiss_candidate_run"
   | "create_patch" | "review_patch" | "open_rebase"
   | "view_snapshot" | "export_snapshot"
-  | "run_ai_assessment" | "create_ai_patch_draft" | "create_ai_feishu_draft"
+  | "run_ai_assessment" | "create_ai_patch_draft" | "create_ai_feishu_draft" | "manage_ai_provider_policy"
   | "submit_feishu_proposal" | "review_feishu_proposal" | "apply_feishu_proposal"
   | "inspect_feishu_workbook" | "pull_feishu_workbook" | "create_ruleset_draft" | "publish_ruleset" | "write_feishu_identity"
   | "resolve_data_source" | "preview_data_source" | "publish_data_source"
@@ -44,7 +44,7 @@ export const ACTION_CODES: ActionCode[] = [
   "open_series", "create_series", "open_sku", "preview_model", "edit", "review", "publish",
   "generate_candidates", "materialize_candidates", "select_candidate", "dismiss_candidate_run",
   "create_patch", "review_patch", "open_rebase", "view_snapshot", "export_snapshot",
-  "run_ai_assessment", "create_ai_patch_draft", "create_ai_feishu_draft",
+  "run_ai_assessment", "create_ai_patch_draft", "create_ai_feishu_draft", "manage_ai_provider_policy",
   "submit_feishu_proposal", "review_feishu_proposal", "apply_feishu_proposal",
   "inspect_feishu_workbook", "pull_feishu_workbook", "create_ruleset_draft", "publish_ruleset", "write_feishu_identity",
   "resolve_data_source", "preview_data_source", "publish_data_source",
@@ -81,33 +81,47 @@ type BreadcrumbEntity = {
   snapshot?: ConfigurationSnapshot;
 };
 
-function unavailableBreadcrumb(
-  workspaceId: string,
-  entityType: EntityRef["entityType"],
-  entityId: string,
-  objectLabel: BreadcrumbItem["objectLabel"],
-): BreadcrumbItem {
-  return {
-    ref: { workspaceId, entityType, entityId, revisionId: "unavailable" },
-    label: "不可见对象",
-    objectLabel,
-    current: false,
-    navigable: false,
-    unavailableReason: "无权查看或对象已不可用。",
-  };
+export class ProductParentChainError extends Error {
+  readonly code = "PRODUCT_PARENT_CHAIN_INCOMPLETE";
+
+  constructor(message: string) {
+    super(message);
+    this.name = "ProductParentChainError";
+  }
 }
 
 /**
- * 只按稳定父链构建面包屑。缺失父级不会通过名称、顺序或相邻对象猜测，
- * 仅保留允许披露的稳定 ID 与不可导航占位。
+ * 只按稳定父链构建面包屑。当前工作区内的已解析对象必须提供完整父链；
+ * 缺失父级不会通过名称、顺序、相邻对象或脱敏占位猜测。
  */
 export function buildProductBreadcrumbs(input: BreadcrumbEntity & {
   workspaceId: string;
   currentEntityType?: EntityRef["entityType"];
 }): BreadcrumbItem[] {
+  if (input.snapshot && (!input.model || input.snapshot.modelId !== input.model.id)) {
+    throw new ProductParentChainError("ConfigurationSnapshot 缺少匹配的 Model 父级。");
+  }
+  if (input.model && (!input.sku || input.model.skuId !== input.sku.id)) {
+    throw new ProductParentChainError("Model 缺少匹配的 SKU 抽屉父级。");
+  }
+  if (input.sku && (!input.series || input.sku.seriesId !== input.series.id)) {
+    throw new ProductParentChainError("SKU 抽屉缺少匹配的 Series 父级。");
+  }
+  if (input.series?.collectionId
+    && (!input.collection || input.collection.id !== input.series.collectionId)) {
+    throw new ProductParentChainError("Series 引用了无法解析的 Collection 父级。");
+  }
   const items: BreadcrumbItem[] = [];
   const currentType = input.currentEntityType
-    ?? (input.snapshot ? "configuration_snapshot" : input.model ? "model" : input.sku ? "sku_drawer" : "series");
+    ?? (input.snapshot
+      ? "configuration_snapshot"
+      : input.model
+        ? "model"
+        : input.sku
+          ? "sku_drawer"
+          : input.series
+            ? "series"
+            : "collection");
   const push = (
     ref: EntityRef,
     label: string,
@@ -120,17 +134,12 @@ export function buildProductBreadcrumbs(input: BreadcrumbEntity & {
     navigable: ref.entityType !== currentType,
   });
 
-  const collectionId = input.series?.collectionId;
-  if (collectionId) {
-    if (input.collection?.id === collectionId) {
-      push(
-        { workspaceId: input.workspaceId, entityType: "collection", entityId: input.collection.id, revisionId: input.collection.updatedAt },
-        input.collection.name,
-        "Collection",
-      );
-    } else {
-      items.push(unavailableBreadcrumb(input.workspaceId, "collection", collectionId, "Collection"));
-    }
+  if (input.collection) {
+    push(
+      { workspaceId: input.workspaceId, entityType: "collection", entityId: input.collection.id, revisionId: input.collection.updatedAt },
+      input.collection.name,
+      "Collection",
+    );
   }
 
   if (input.series) {
@@ -139,8 +148,6 @@ export function buildProductBreadcrumbs(input: BreadcrumbEntity & {
       input.series.name,
       "Series",
     );
-  } else if (input.sku?.seriesId) {
-    items.push(unavailableBreadcrumb(input.workspaceId, "series", input.sku.seriesId, "Series"));
   }
 
   if (input.sku) {
@@ -149,8 +156,6 @@ export function buildProductBreadcrumbs(input: BreadcrumbEntity & {
       `${input.sku.targetWeightKg} kg · SKU 抽屉`,
       "SKU 抽屉",
     );
-  } else if (input.model?.skuId) {
-    items.push(unavailableBreadcrumb(input.workspaceId, "sku_drawer", input.model.skuId, "SKU 抽屉"));
   }
 
   if (input.model) {
@@ -159,8 +164,6 @@ export function buildProductBreadcrumbs(input: BreadcrumbEntity & {
       `${input.model.name} · 实际选择/购买对象`,
       "Model",
     );
-  } else if (input.snapshot?.modelId) {
-    items.push(unavailableBreadcrumb(input.workspaceId, "model", input.snapshot.modelId, "Model"));
   }
 
   if (input.snapshot) {
@@ -175,14 +178,38 @@ export function buildProductBreadcrumbs(input: BreadcrumbEntity & {
 }
 
 export interface ProductDeepLinkResolution extends BreadcrumbEntity {
-  unavailableRequestedRef?: EntityRef;
+  unavailable?: ProductDeepLinkUnavailable;
   fallbackEntityType?: EntityRef["entityType"];
   integrityIssues: LegacyValidationIssue[];
 }
 
+export type ProductDeepLinkUnavailableCode =
+  | "DEEP_LINK_CROSS_WORKSPACE"
+  | "DEEP_LINK_OBJECT_DELETED"
+  | "DEEP_LINK_ROUTE_STALE"
+  | "DEEP_LINK_REFERENCE_INVALID";
+
+export interface ProductDeepLinkUnavailable {
+  code: ProductDeepLinkUnavailableCode;
+  message: string;
+  requestedRef: EntityRef;
+  recoveryRef?: EntityRef;
+}
+
+type ProductEntityType = "collection" | "series" | "sku_drawer" | "model" | "configuration_snapshot";
+
+const PRODUCT_ENTITY_TYPES = new Set<ProductEntityType>([
+  "collection",
+  "series",
+  "sku_drawer",
+  "model",
+  "configuration_snapshot",
+]);
+
 export function resolveProductDeepLink(input: {
   workspaceId: string;
   requested: {
+    ref?: EntityRef;
     collectionId?: string;
     seriesId?: string;
     skuId?: string;
@@ -196,57 +223,219 @@ export function resolveProductDeepLink(input: {
   snapshots: ConfigurationSnapshot[];
 }): ProductDeepLinkResolution {
   const issues: LegacyValidationIssue[] = [];
-  const unavailable = (
-    entityType: EntityRef["entityType"],
-    entityId: string,
-  ): EntityRef => ({ workspaceId: input.workspaceId, entityType, entityId, revisionId: "unavailable" });
+  const requestedRef = input.requested.ref ?? (() => {
+    if (input.requested.snapshotId) {
+      return { workspaceId: input.workspaceId, entityType: "configuration_snapshot", entityId: input.requested.snapshotId, revisionId: "unversioned" } satisfies EntityRef;
+    }
+    if (input.requested.modelId) {
+      return { workspaceId: input.workspaceId, entityType: "model", entityId: input.requested.modelId, revisionId: "unversioned" } satisfies EntityRef;
+    }
+    if (input.requested.skuId) {
+      return { workspaceId: input.workspaceId, entityType: "sku_drawer", entityId: input.requested.skuId, revisionId: "unversioned" } satisfies EntityRef;
+    }
+    if (input.requested.seriesId) {
+      return { workspaceId: input.workspaceId, entityType: "series", entityId: input.requested.seriesId, revisionId: "unversioned" } satisfies EntityRef;
+    }
+    if (input.requested.collectionId) {
+      return { workspaceId: input.workspaceId, entityType: "collection", entityId: input.requested.collectionId, revisionId: "unversioned" } satisfies EntityRef;
+    }
+    return undefined;
+  })();
+  if (requestedRef?.workspaceId !== undefined && requestedRef.workspaceId !== input.workspaceId) {
+    return {
+      unavailable: {
+        code: "DEEP_LINK_CROSS_WORKSPACE",
+        message: "该引用不属于当前工作区，未解析或返回任何对象父链。",
+        requestedRef,
+      },
+      integrityIssues: [{
+        level: "error",
+        code: "DEEP_LINK_CROSS_WORKSPACE",
+        message: "跨工作区对象引用已拒绝。",
+      }],
+    };
+  }
+  if (requestedRef && !PRODUCT_ENTITY_TYPES.has(requestedRef.entityType as ProductEntityType)) {
+    return {
+      unavailable: {
+        code: "DEEP_LINK_REFERENCE_INVALID",
+        message: "该引用不是可导航的产品对象。",
+        requestedRef,
+      },
+      integrityIssues: [{
+        level: "error",
+        code: "DEEP_LINK_REFERENCE_INVALID",
+        message: "深链接包含不受支持的产品对象类型。",
+      }],
+    };
+  }
 
-  const requestedSnapshot = input.requested.snapshotId
-    ? input.snapshots.find((entry) => entry.id === input.requested.snapshotId)
+  const explicitIdForRef = requestedRef?.entityType === "collection"
+    ? input.requested.collectionId
+    : requestedRef?.entityType === "series"
+      ? input.requested.seriesId
+      : requestedRef?.entityType === "sku_drawer"
+        ? input.requested.skuId
+        : requestedRef?.entityType === "model"
+          ? input.requested.modelId
+          : requestedRef?.entityType === "configuration_snapshot"
+            ? input.requested.snapshotId
+            : undefined;
+  const requestedRefConflicts = Boolean(explicitIdForRef && requestedRef && explicitIdForRef !== requestedRef.entityId);
+  const requestedRefHasDescendant = Boolean(input.requested.ref && (
+    (requestedRef?.entityType === "collection" && (input.requested.seriesId || input.requested.skuId || input.requested.modelId || input.requested.snapshotId))
+    || (requestedRef?.entityType === "series" && (input.requested.skuId || input.requested.modelId || input.requested.snapshotId))
+    || (requestedRef?.entityType === "sku_drawer" && (input.requested.modelId || input.requested.snapshotId))
+    || (requestedRef?.entityType === "model" && input.requested.snapshotId)
+  ));
+
+  const requestedSnapshotId = requestedRef
+    ? requestedRef.entityType === "configuration_snapshot" ? requestedRef.entityId : undefined
+    : input.requested.snapshotId;
+  const requestedModelId = requestedRef
+    ? requestedRef.entityType === "model"
+      ? requestedRef.entityId
+      : requestedRef.entityType === "configuration_snapshot" ? input.requested.modelId : undefined
+    : input.requested.modelId;
+  const requestedSkuId = requestedRef
+    ? requestedRef.entityType === "sku_drawer"
+      ? requestedRef.entityId
+      : requestedRef.entityType === "model" || requestedRef.entityType === "configuration_snapshot"
+        ? input.requested.skuId
+        : undefined
+    : input.requested.skuId;
+  const requestedSeriesId = requestedRef
+    ? requestedRef.entityType === "series"
+      ? requestedRef.entityId
+      : requestedRef.entityType === "sku_drawer" || requestedRef.entityType === "model" || requestedRef.entityType === "configuration_snapshot"
+        ? input.requested.seriesId
+        : undefined
+    : input.requested.seriesId;
+  const requestedCollectionId = requestedRef
+    ? requestedRef.entityType === "collection"
+      ? requestedRef.entityId
+      : input.requested.collectionId
+    : input.requested.collectionId;
+
+  const requestedSnapshot = requestedSnapshotId
+    ? input.snapshots.find((entry) => entry.id === requestedSnapshotId)
     : undefined;
-  const modelId = requestedSnapshot?.modelId ?? input.requested.modelId;
+  const modelId = requestedSnapshot?.modelId ?? requestedModelId;
   const model = modelId ? input.models.find((entry) => entry.id === modelId) : undefined;
-  const skuId = model?.skuId ?? input.requested.skuId;
+  const skuId = model?.skuId ?? requestedSkuId;
   const sku = skuId ? input.skus.find((entry) => entry.id === skuId) : undefined;
-  const seriesId = sku?.seriesId ?? input.requested.seriesId;
+  const seriesId = sku?.seriesId ?? requestedSeriesId;
   const series = seriesId ? input.series.find((entry) => entry.id === seriesId) : undefined;
-  const collectionId = series?.collectionId ?? input.requested.collectionId;
+  const collectionId = series?.collectionId ?? requestedCollectionId;
   const collection = collectionId
     ? input.collections.find((entry) => entry.id === collectionId)
     : undefined;
 
   const mismatches = [
-    input.requested.modelId && requestedSnapshot && requestedSnapshot.modelId !== input.requested.modelId
+    requestedRefConflicts
+      ? "EntityRef 与同层路由 ID 不一致。"
+      : "",
+    requestedRefHasDescendant
+      ? "EntityRef 同时携带了更深层对象 ID，目标语义不唯一。"
+      : "",
+    requestedModelId && requestedSnapshot && requestedSnapshot.modelId !== requestedModelId
       ? "Snapshot 与请求的 Model 父链不一致；按 Snapshot 冻结引用定位。"
       : "",
-    input.requested.skuId && model && model.skuId !== input.requested.skuId
+    requestedSkuId && model && model.skuId !== requestedSkuId
       ? "Model 与请求的 SKU 父链不一致；按 Model 稳定引用定位。"
       : "",
-    input.requested.seriesId && sku && sku.seriesId !== input.requested.seriesId
+    requestedSeriesId && sku && sku.seriesId !== requestedSeriesId
       ? "SKU 与请求的 Series 父链不一致；按 SKU 稳定引用定位。"
+      : "",
+    requestedCollectionId && series?.collectionId && series.collectionId !== requestedCollectionId
+      ? "Series 与请求的 Collection 父链不一致；按 Series 稳定引用定位。"
       : "",
   ].filter(Boolean);
   mismatches.forEach((message) => issues.push({
     level: "error",
-    code: "DEEP_LINK_PARENT_MISMATCH",
+    code: "DEEP_LINK_REFERENCE_INVALID",
     message,
   }));
 
-  let unavailableRequestedRef: EntityRef | undefined;
-  if (input.requested.snapshotId && !requestedSnapshot) {
-    unavailableRequestedRef = unavailable("configuration_snapshot", input.requested.snapshotId);
-  } else if (modelId && !model) {
-    unavailableRequestedRef = unavailable("model", modelId);
-  } else if (skuId && !sku) {
-    unavailableRequestedRef = unavailable("sku_drawer", skuId);
-  } else if (seriesId && !series) {
-    unavailableRequestedRef = unavailable("series", seriesId);
-  } else if (collectionId && !collection) {
-    unavailableRequestedRef = unavailable("collection", collectionId);
+  const structuralProblems = [
+    requestedSnapshot && !model ? "Snapshot 引用的 Model 不存在。" : "",
+    model && !sku ? "Model 引用的 SKU 抽屉不存在。" : "",
+    sku && !series ? "SKU 抽屉引用的 Series 不存在。" : "",
+    series?.collectionId && !collection ? "Series 引用的 Collection 不存在。" : "",
+  ].filter(Boolean);
+  structuralProblems.forEach((message) => issues.push({
+    level: "error",
+    code: "DEEP_LINK_REFERENCE_INVALID",
+    message,
+  }));
+
+  const actualRequestedRevision = requestedRef?.entityType === "collection"
+    ? collection?.updatedAt
+    : requestedRef?.entityType === "series"
+      ? series && String(series.revision)
+      : requestedRef?.entityType === "sku_drawer"
+        ? sku && String(sku.revision)
+        : requestedRef?.entityType === "model"
+          ? model && String(model.revision)
+          : requestedRef?.entityType === "configuration_snapshot"
+            ? requestedSnapshot && String(requestedSnapshot.version)
+            : undefined;
+  const currentTargetRef = requestedRef && actualRequestedRevision
+    ? { ...requestedRef, revisionId: actualRequestedRevision }
+    : undefined;
+  const routeStale = Boolean(requestedRef
+    && requestedRef.revisionId !== "unversioned"
+    && actualRequestedRevision
+    && requestedRef.revisionId !== actualRequestedRevision);
+
+  const missingRequestedTarget = Boolean(requestedRef && !actualRequestedRevision);
+  const recoveryRef: EntityRef | undefined = currentTargetRef
+    ?? (model ? { workspaceId: input.workspaceId, entityType: "model", entityId: model.id, revisionId: String(model.revision) }
+      : sku ? { workspaceId: input.workspaceId, entityType: "sku_drawer", entityId: sku.id, revisionId: String(sku.revision) }
+        : series ? { workspaceId: input.workspaceId, entityType: "series", entityId: series.id, revisionId: String(series.revision) }
+          : collection ? { workspaceId: input.workspaceId, entityType: "collection", entityId: collection.id, revisionId: collection.updatedAt }
+            : undefined);
+
+  let unavailable: ProductDeepLinkUnavailable | undefined;
+  if (requestedRef && structuralProblems.length > 0) {
+    unavailable = {
+      code: "DEEP_LINK_REFERENCE_INVALID",
+      message: "对象父链引用无效，未返回不完整谱系。",
+      requestedRef,
+    };
+  } else if (requestedRef && mismatches.length > 0) {
+    unavailable = {
+      code: "DEEP_LINK_REFERENCE_INVALID",
+      message: "路由父链与稳定引用不一致，已按当前工作区的稳定引用恢复。",
+      requestedRef,
+      recoveryRef,
+    };
+  } else if (requestedRef && missingRequestedTarget) {
+    unavailable = {
+      code: "DEEP_LINK_OBJECT_DELETED",
+      message: "请求的对象已删除或不存在。",
+      requestedRef,
+      recoveryRef,
+    };
+  } else if (requestedRef && routeStale) {
+    unavailable = {
+      code: "DEEP_LINK_ROUTE_STALE",
+      message: "路由引用的 revision 已过期，已定位到当前 revision。",
+      requestedRef,
+      recoveryRef,
+    };
   }
-  const fallbackEntityType = unavailableRequestedRef
+  const fallbackEntityType = unavailable
     ? model ? "model" : sku ? "sku_drawer" : series ? "series" : collection ? "collection" : undefined
     : undefined;
+
+  if (structuralProblems.length > 0) {
+    return {
+      unavailable,
+      fallbackEntityType,
+      integrityIssues: issues,
+    };
+  }
 
   return {
     collection,
@@ -254,7 +443,7 @@ export function resolveProductDeepLink(input: {
     sku,
     model,
     snapshot: requestedSnapshot && model ? requestedSnapshot : undefined,
-    unavailableRequestedRef,
+    unavailable,
     fallbackEntityType,
     integrityIssues: issues,
   };
@@ -290,6 +479,7 @@ const ACTION_CAPABILITIES: Partial<Record<ActionCode, CapabilityCode[]>> = {
   run_ai_assessment: ["ai.evaluate"],
   create_ai_patch_draft: ["ai.patch_draft.create"],
   create_ai_feishu_draft: ["ai.feishu_proposal_draft.create"],
+  manage_ai_provider_policy: ["ai.provider_policy.manage"],
   submit_feishu_proposal: ["feishu.proposal.submit"],
   review_feishu_proposal: ["feishu.proposal.review"],
   apply_feishu_proposal: ["feishu.proposal.apply"],

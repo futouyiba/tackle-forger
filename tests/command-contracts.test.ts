@@ -166,6 +166,19 @@ test("R4 Trace按sequence重放并验证before/inputHash/outputHash", () => {
   );
 });
 
+test("R4 legacy UnifiedTrace跨subject共享全局sequence时按实际subject播种初始状态", () => {
+  const secondSubjectEntry = traceEntry(2, 10, "add", 2, 12);
+  secondSubjectEntry.subjectRef = ref("model", "model:2");
+  const result = replayUnifiedTrace({
+    initialValues: { drag: 10 },
+    entries: [
+      traceEntry(1, 10, "add", 2, 12),
+      secondSubjectEntry,
+    ],
+  });
+  assert.equal(result.values.drag, 12);
+});
+
 test("R9 error必阻断、deny不可waive、修复动作由Capability决定", () => {
   const issue = createUnifiedIssue({
     code: "HARD_DENY",
@@ -228,4 +241,3 @@ test("R12 开放策略必须明确命中已发布版本，不用页面默认", (
     /配置不完整/,
   );
 });
-

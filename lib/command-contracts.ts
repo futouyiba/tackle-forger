@@ -221,17 +221,33 @@ export function replayUnifiedTrace(input: {
   }
   const entries = adaptLegacyUnifiedTraceToCanonical(input.entries);
   const firstSubject = entries[0]?.subjectRef;
-  const initialState: CalculationTraceStateValue[] = Object.entries(input.initialValues).map(
-    ([parameterKey, value]) => ({
-      subjectRef: firstSubject ?? {
-        workspaceId: "legacy",
-        entityType: "model",
-        entityId: "legacy",
-        revisionId: "legacy",
-      },
-      parameterKey,
-      value,
-    }),
+  const fallbackSubject: EntityRef = firstSubject ?? {
+    workspaceId: "legacy",
+    entityType: "model",
+    entityId: "legacy",
+    revisionId: "legacy",
+  };
+  const subjectsByParameter = new Map<string, Map<string, EntityRef>>();
+  for (const entry of entries) {
+    const subjectKey = JSON.stringify([
+      entry.subjectRef.workspaceId,
+      entry.subjectRef.entityType,
+      entry.subjectRef.entityId,
+      entry.subjectRef.revisionId,
+    ]);
+    const subjects = subjectsByParameter.get(entry.parameterKey) ?? new Map<string, EntityRef>();
+    subjects.set(subjectKey, entry.subjectRef);
+    subjectsByParameter.set(entry.parameterKey, subjects);
+  }
+  const initialState: CalculationTraceStateValue[] = Object.entries(input.initialValues).flatMap(
+    ([parameterKey, value]) => {
+      const subjects = [...(subjectsByParameter.get(parameterKey)?.values() ?? [])];
+      return (subjects.length > 0 ? subjects : [fallbackSubject]).map((subjectRef) => ({
+        subjectRef,
+        parameterKey,
+        value,
+      }));
+    },
   );
   const replay = replayCalculationTrace({ entries, initialState });
   const values = Object.fromEntries(

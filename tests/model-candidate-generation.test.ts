@@ -10,6 +10,7 @@ import {
   generateModelCandidateRun,
   materializeCandidateRun,
 } from "../lib/model-candidate-generation";
+import { partConstraintSetContentHash } from "../lib/part-constraints";
 import type {
   CandidateGenerationRequest,
   CandidateSearchRecipe,
@@ -189,6 +190,64 @@ test("高 Affinity 候选命中 deny 时只进入排除统计，合法候选仍�
   const result = run(current);
   assert.equal(result.excludedByCode.HARD_COMPATIBILITY_DENIED, current.skus.length);
   assert.equal(result.candidates.every((candidate) => candidate.modelVariantKey === "slow_long"), true);
+});
+
+test("候选生成拒绝带 NEEDS_REVIEW PartConstraintSet ref 的 Recipe", () => {
+  const current = fixture();
+  current.recipe.partConstraintSetRef = structuredClone(
+    current.state.partConstraintSets[0] && {
+      constraintSetId: current.state.partConstraintSets[0].constraintSetId,
+      revision: current.state.partConstraintSets[0].revision,
+      contentHash: current.state.partConstraintSets[0].contentHash,
+    },
+  );
+  assert.throws(
+    () => run(current),
+    /PART_CONSTRAINT_SET_NEEDS_REVIEW.*candidate_generation/,
+  );
+});
+
+test("候选生成在 Issue #50 前拒绝所有 ref-backed Recipe，而不静默忽略已确认约束", () => {
+  const current = fixture();
+  const confirmed = structuredClone(current.state.partConstraintSets[0]);
+  confirmed.reviewStatus = "CONFIRMED";
+  for (const part of Object.values(confirmed.parts)) {
+    part.reviewStatus = "CONFIRMED";
+  }
+  for (const trace of confirmed.traces) {
+    trace.reviewStatus = "CONFIRMED";
+  }
+  confirmed.contentHash = partConstraintSetContentHash(confirmed);
+  current.state.partConstraintSets = [confirmed];
+  current.recipe.partConstraintSetRef = {
+    constraintSetId: confirmed.constraintSetId,
+    revision: confirmed.revision,
+    contentHash: confirmed.contentHash,
+  };
+  assert.throws(
+    () => run(current),
+    /PART_CONSTRAINT_SET_CANDIDATE_RUNTIME_UNAVAILABLE.*candidate_generation/,
+  );
+});
+
+test("Model 物化重新拒绝运行后变为 NEEDS_REVIEW ref-backed 的 Recipe", () => {
+  const current = fixture();
+  const generated = run(current);
+  const constraintSet = current.state.partConstraintSets[0];
+  current.recipe.partConstraintSetRef = {
+    constraintSetId: constraintSet.constraintSetId,
+    revision: constraintSet.revision,
+    contentHash: constraintSet.contentHash,
+  };
+  assert.throws(
+    () => materializeCandidateRun({
+      state: current.state,
+      run: generated,
+      actor: "tester",
+      occurredAt: "2026-07-21T01:00:00.000Z",
+    }),
+    /PART_CONSTRAINT_SET_NEEDS_REVIEW.*candidate_materialization/,
+  );
 });
 
 test("默认物化按 skuId + modelVariantKey 新建稳定 Model，重复执行不创建空 revision", () => {

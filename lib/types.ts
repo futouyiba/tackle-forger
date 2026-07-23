@@ -586,7 +586,14 @@ export interface DerivedProjection {
 
 export interface MigrationReviewItem {
   id: string;
-  sourceType: "modifier" | "candidate_override" | "quality" | "unknown";
+  sourceType:
+    | "modifier"
+    | "candidate_override"
+    | "quality"
+    | "series_recipe"
+    | "series_definition"
+    | "candidate_search_recipe"
+    | "unknown";
   sourceId: string;
   message: string;
   preservedPayload: unknown;
@@ -822,6 +829,90 @@ export interface Collection {
   updatedAt: string;
 }
 
+export type PartConstraintReviewStatus = "CONFIRMED" | "NEEDS_REVIEW";
+export type PartConstraintSlot = "rod" | "reel" | "line";
+export type PartConstraintItemPartId = "part:rod" | "part:reel" | "part:line";
+export type PartConstraintFieldName =
+  | "templateIds"
+  | "materialIds"
+  | "requiredAffixIds"
+  | "optionalAffixPoolIds"
+  | "typeIds";
+
+export interface PartConstraintSetRef {
+  constraintSetId: string;
+  revision: number;
+  contentHash: string;
+}
+
+export interface PartConstraintSourceRevisionRef {
+  sourceType:
+    | "legacy_series_recipe"
+    | "series_definition"
+    | "candidate_search_recipe";
+  sourceId: string;
+  /** 旧载体没有 revision 时必须保持 null，不得伪造。 */
+  revisionId: string | null;
+  /**
+   * 排除 partConstraintSetRef 的无环来源投影；持久化来源可据此重新计算并验证。
+   */
+  hashProjectionVersion: "WITHOUT_PART_CONSTRAINT_SET_REF_V1";
+  contentHash: string;
+}
+
+export interface PartConstraintFieldTrace {
+  traceId: string;
+  itemPartId: PartConstraintItemPartId;
+  field: PartConstraintFieldName;
+  sourceRef: PartConstraintSourceRevisionRef;
+  sourcePath: string;
+  /** 记录复制、改名或合成等迁移转换，保证 Trace 可重放。 */
+  transformationCodes: string[];
+  reviewStatus: PartConstraintReviewStatus;
+  diagnosticCodes: string[];
+  /** 保留该字段的迁移输入，包括无法解释的值。 */
+  rawPayload: unknown;
+}
+
+export interface PartConstraint {
+  itemPartId: PartConstraintItemPartId;
+  reviewStatus: PartConstraintReviewStatus;
+  templateIds: string[];
+  materialIds: string[];
+  requiredAffixIds: string[];
+  optionalAffixPoolIds: string[];
+  /**
+   * 只有组件注册表明确发布该部位的版本化 type 分类时才可用于权威过滤。
+   * 迁移值默认 NEEDS_REVIEW，不等于 Series Type。
+   */
+  typeIds: string[];
+  fieldTraceRefs: Record<PartConstraintFieldName, string>;
+}
+
+export interface PartConstraintMigrationEvidence {
+  migratorVersion: string;
+  sourceSchemaVersion: number;
+  migratedAt: string;
+  diagnosticCodes: string[];
+  /** 完整保留来源对象及未知字段，供人工复核与审计导出。 */
+  rawPayload: unknown;
+}
+
+export interface PartConstraintSet {
+  /** 终身稳定且不得复用的对象身份。 */
+  constraintSetId: string;
+  /** 单调递增的不可变内容修订。 */
+  revision: number;
+  contentHash: string;
+  reviewStatus: PartConstraintReviewStatus;
+  parts: Record<PartConstraintSlot, PartConstraint>;
+  sourceRef: PartConstraintSourceRevisionRef;
+  traces: PartConstraintFieldTrace[];
+  migrationEvidence: PartConstraintMigrationEvidence;
+  createdBy: string;
+  createdAt: string;
+}
+
 export interface SeriesSignatureAxis {
   parameterGroup: string;
   expectedDirection: "positive" | "negative" | "neutral" | "contextual";
@@ -864,6 +955,8 @@ export interface SeriesDefinition {
   }>;
   signature: SeriesSignatureAxis[];
   patchIds: string[];
+  /** schema v18：精确冻结分部位搜索约束 revision；旧调用方可在迁移前缺失。 */
+  partConstraintSetRef?: PartConstraintSetRef;
   /** @deprecated 只用于旧工作区兼容；新逻辑消费 targetPullSpecifications。 */
   skuIds: string[];
   status: EntityLifecycleStatus;
@@ -1074,6 +1167,8 @@ export interface CandidateSearchRecipe {
   qualityIds: QualityProfileId[];
   targetPullRangeKg: { min: number; max: number };
   maxCandidates: number;
+  /** 精确引用约束集；候选运行不得解析为“最新 revision”。 */
+  partConstraintSetRef?: PartConstraintSetRef;
   sourceLegacyRecipeId?: string;
   notes: string;
 }
@@ -2105,6 +2200,7 @@ export interface WorkspaceState {
   affinityAxisWeights: AffinityAxisWeights;
   collections: Collection[];
   seriesDefinitions: SeriesDefinition[];
+  partConstraintSets: PartConstraintSet[];
   skuDrawers: SkuDrawer[];
   purchasableModels: PurchasableModel[];
   candidateSearchRecipes: CandidateSearchRecipe[];

@@ -299,7 +299,7 @@ test("整包 PUT 默认保存多个普通字段和未来字段，并在混合治
   assert.equal(afterRejected.state.commandIdempotencyRecords.length, beforeMixed.commandIdempotencyRecords.length);
 });
 
-test("整包 PUT 拒绝嵌套约束、性能定义、遗留 Patch、数据源绑定与迁移复核证据，且混合请求无副作用", { concurrency: false }, async () => {
+test("整包 PUT 拒绝嵌套约束、版本策略、性能定义、遗留 Patch、数据源绑定与迁移复核证据，且混合请求无副作用", { concurrency: false }, async () => {
   withTrustedProxy();
   const current = await loadWorkspaceState();
   const state = structuredClone(current.state);
@@ -307,6 +307,7 @@ test("整包 PUT 拒绝嵌套约束、性能定义、遗留 Patch、数据源绑
   state.partConstraintSets = [...state.partConstraintSets, { nested: { changed: true } } as never];
   state.candidateSearchRecipes = [...state.candidateSearchRecipes, { nested: { changed: true } } as never];
   state.performanceSummaryDefinitions = [...state.performanceSummaryDefinitions, { nested: { changed: true } } as never];
+  state.reductionStackingPolicyVersions = [...state.reductionStackingPolicyVersions, { nested: { changed: true } } as never];
   state.projectionPatches = [...state.projectionPatches, { nested: { changed: true } } as never];
   state.dataSourceBindings = [...state.dataSourceBindings, { nested: { changed: true } } as never];
   state.migrationReviewItems = [...state.migrationReviewItems, { nested: { changed: true } } as never];
@@ -317,7 +318,7 @@ test("整包 PUT 拒绝嵌套约束、性能定义、遗留 Patch、数据源绑
   });
   assert.equal(rejected.status, 422);
   const body = await rejected.json() as { governedChanges?: string[]; governedFields?: Array<{ action: string }> };
-  assert.deepEqual(body.governedChanges, ["projectionPatches", "partConstraintSets", "candidateSearchRecipes", "performanceSummaryDefinitions", "dataSourceBindings", "migrationReviewItems"]);
+  assert.deepEqual(body.governedChanges, ["projectionPatches", "partConstraintSets", "candidateSearchRecipes", "reductionStackingPolicyVersions", "performanceSummaryDefinitions", "dataSourceBindings", "migrationReviewItems"]);
   assert.match(body.governedFields?.[0]?.action ?? "", /只读/);
   const after = await loadWorkspaceState();
   assert.equal(after.revision, current.revision);
@@ -325,6 +326,8 @@ test("整包 PUT 拒绝嵌套约束、性能定义、遗留 Patch、数据源绑
   assert.deepEqual(after.state.projectionPatches, before.projectionPatches);
   assert.deepEqual(after.state.dataSourceBindings, before.dataSourceBindings);
   assert.deepEqual(after.state.performanceSummaryDefinitions, before.performanceSummaryDefinitions);
+  assert.deepEqual(after.state.reductionStackingPolicyVersions, before.reductionStackingPolicyVersions);
+  assert.deepEqual(after.state.configurationSnapshots.map((snapshot) => snapshot.contentHash), before.configurationSnapshots.map((snapshot) => snapshot.contentHash));
   assert.deepEqual(after.state.migrationReviewItems, before.migrationReviewItems);
 });
 

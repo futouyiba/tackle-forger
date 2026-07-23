@@ -45,6 +45,7 @@ const GOVERNED_STATE_FIELDS: readonly GovernedStateField[] = [
   { field: "candidateMaterializations", reason: "published_history", action: "materialize_candidates", actionLabel: "使用候选物化动作" },
   { field: "configurationSnapshots", reason: "published_history", action: "publish / view_snapshot", actionLabel: "使用 Model 发布或查看冻结 Snapshot" },
   { field: "ruleSetVersions", reason: "published_history", action: "publish_ruleset", actionLabel: "使用 RuleSet 草稿与发布" },
+  { field: "reductionStackingPolicyVersions", reason: "published_history", action: "POST /api/feishu-workbook（pull_feishu_workbook / publish_ruleset）", actionLabel: "通过工作簿草稿与 RuleSet 发布流程发布策略", route: "/api/feishu-workbook" },
   { field: "performanceSummaryDefinitions", reason: "published_history", action: "只读：当前没有发布或修改 PerformanceSummaryDefinition 的领域命令", actionLabel: "保留已发布定义；等待专用版本化发布命令" },
   { field: "pricingPolicyVersions", reason: "published_history", action: "定价策略发布", actionLabel: "使用定价策略发布流程" },
   { field: "qualityValuePolicyDrafts", reason: "domain_command", action: "规则源草稿/发布动作", actionLabel: "使用品质策略草稿或发布动作" },

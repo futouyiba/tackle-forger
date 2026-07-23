@@ -47,6 +47,7 @@
 | 内网飞书登录 | 已实现 | OAuth state、会话持久化、过期、防重放、可信代理和 API 401 测试 | 部署环境需配置 HTTPS 回调或明确私网 HTTP |
 | 本地 configs 多环境/多渠道三表交付 | 部分实现 | 既有代码已有config.toml、映射版本、预览、关系校验、备份、幂等、冲突恢复、GoodsBasic+StoreBuy | v3已把一期收紧为不可提交`NON_FORMAL`预览，正式预留/人工搬运包/worktree写入移到1.5期；尚未实现稳定rangeId ledger、Model revision锁、权威目标目录/获批Manifest、按物理Git ref去重并校验别名OID的跨Git/ledger治理租约与受保护CAS、历史导入并发幂等及dev/test/online/release正式流程，现有执行器不能作为已满足新契约的证据 |
 | Snapshot 冻结与 UpgradeCandidate | 已实现 | 已发布 Snapshot 内容/hash/有序 Patch 引用不可原地变更；上游变化只产生升级候选 | 无 |
+| 工作区revision归档与裁剪 | 缺失 | SQLite/D1当前不删除完整revision，符合一期全量保留和所有裁剪关闭的安全边界；Blob最多100条仍只是非权威评审例外 | 尚无归档包、恢复入口、tombstone、retention run、裁剪migration或自动裁剪；按v3 `OPEN-011`和父Issue #1保持阻断，本矩阵不构成实现或删除授权 |
 | 09_甘特图作为产品实体 | 因 v3 冲突而不采纳 | 09 只属于开发排期；产品甘特图来自本地 Series/SKU/Model | 不从 09 反向生成领域对象 |
 | 11/12/14–17 反向覆盖产品真相 | 因 v3 冲突而不采纳 | 仅作为历史样例、映射参考或暂存输出 | 不反向覆盖 Snapshot |
 | 扩展部位主流程 | 部分实现 | 注册表和迁移层会保留钩、漂、真饵、拟饵并标记`activeInGeneration=false`；但创建Series页面仍直接渲染全部`state.itemParts`，写接口也未独立校验启用部位策略 | OPEN-003已确认当前完全延期；按[Issue #37](https://github.com/futouyiba/tackle-forger/issues/37)移除产品入口并增加服务端门禁，同时保留稳定ID、历史Payload和引用。修复完成前不得声称运行时已经禁用 |
@@ -71,6 +72,7 @@
 4. OPEN-006 尚未确认 AI 供应方、模型和数据出网策略，因此真实 AI 连接器必须继续禁用。
 5. OPEN-008的数字区间、派生关系、命名、永不复用和权限语义已经确认；但尚未发布权威`ConfigTargetCatalogVersion`、覆盖全部必需目标的获批且新鲜`ConfigTargetScanManifest`、可校验`ConfigIdPolicyVersion`及reservation ledger，也未实现Model revision锁、按物理Git ref去重并验证别名OID的跨Git/ledger治理租约与受保护ref CAS、历史导入并发幂等、统一ActionCode payload收口和旧写别名完整重建/拒绝，因此仍不能正式预留ID、导入永久占用或提交配置。
 6. 真实 configs Git 目标需由配置治理方发布环境/渠道权威目录并完成authoritative ref、commit、`config.toml`和workbook hash扫描复核；用户本机目录绑定和旧Profile不能替代该门禁，未完成时只能`NON_FORMAL`预览。
+7. OPEN-011：归档包、恢复入口、归档保留期、RTO/RPO、共享访问、维护窗口、删除授权和自动裁剪启用标准尚未形成已发布策略版本及验证证据；SQLite/D1必须继续全量保留，人工与自动裁剪均保持关闭。
 
 ## 4. 当前验证证据
 

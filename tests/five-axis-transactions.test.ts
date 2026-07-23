@@ -24,7 +24,10 @@ import {
 } from "../lib/snapshot-batch";
 import { createSeedState } from "../lib/seed";
 import { deterministicHash } from "../lib/rule-kernel";
-import { buildFormalPreviewFixture } from "./helpers/formal-five-axis";
+import {
+  buildFormalComponentSelectionsFixture,
+  buildFormalPreviewFixture,
+} from "./helpers/formal-five-axis";
 import type {
   FiveAxisCandidateMembership,
   FiveAxisEntityInput,
@@ -273,6 +276,9 @@ test("Snapshot、Model 指针与顶点在分量内共同提交或共同回滚", 
     membership(definition, "W1", models[0].id, "snapshot:w1-commit"),
     membership(definition, "W5", models[1].id, "snapshot:w5-rollback"),
   ];
+  const formalComponentSelections = buildFormalComponentSelectionsFixture(
+    sourceSnapshot.componentSelections,
+  );
   const snapshots = models.map((model, index) => {
     const modelFinalPullKg = 1.5;
     const fiveAxisPreview = buildFormalPreviewFixture({
@@ -285,7 +291,7 @@ test("Snapshot、Model 指针与顶点在分量内共同提交或共同回滚", 
       skuRevision: sourceSnapshot.skuRevision,
       modelFinalPullKg,
       finalPanelValues: sourceSnapshot.finalPanelValues,
-      componentSelections: sourceSnapshot.componentSelections,
+      componentSelections: formalComponentSelections,
       weightBandId: memberships[index].groupKey.weightBandId,
     });
     memberships[index].candidateSources =
@@ -296,6 +302,7 @@ test("Snapshot、Model 指针与顶点在分量内共同提交或共同回滚", 
       modelId: model.id,
       modelRevision: model.revision,
       modelFinalPullKg,
+      componentSelections: structuredClone(formalComponentSelections),
       fiveAxisPreview,
     };
     const withoutHash = { ...content };

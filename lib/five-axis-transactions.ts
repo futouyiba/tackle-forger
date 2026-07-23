@@ -705,6 +705,7 @@ export function executeFiveAxisSnapshotBatchTransactions(input: {
             commit.snapshot.componentSelections.map((component) => ({
               itemPartId: component.itemPartId,
               componentId: component.componentId,
+              values: component.values,
             })),
           expectedModelFinalPullKg: commit.snapshot.modelFinalPullKg,
         });

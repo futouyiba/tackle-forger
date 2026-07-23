@@ -22,6 +22,7 @@ export const CANONICAL_RULE_RANGES = {
   weight: { sheetId: "d6e928", range: "A1:AE54" },
   type: { sheetId: "fATowU", range: "A1:AE20" },
   function: { sheetId: "vviXo0", range: "A1:AG63" },
+  functionProfiles: { sheetId: "mLpTLK", range: "A1:S8" },
   method: { sheetId: "rgFPUu", range: "A1:AB12" },
   methodTemplateReview: { sheetId: "m3eQCg", range: "A1:AB83" },
 } as const;
@@ -55,6 +56,25 @@ const ESTABLISHED_PARAMETER_KEYS: Record<string, string> = {
 };
 
 const PART_SCOPED_SHARED_HEADERS = new Set(["修理系数", "购买系数", "维修系数", "购入系数"]);
+const FUNCTION_METADATA_LABELS = new Set(["机器ID（勿改）", "实体类型", "FunctionProfile ID（勿改）", "功能分组ID（勿改）", "功能定位", "定位/类型", "级别", "评分系数", "覆盖重量段", "适用竿类型", "适用轮类型", "适用线类型"]);
+const CANONICAL_FUNCTION_PROFILE_INTENSITIES: Record<string, FunctionIntensity[]> = {
+  "function:all_round": [1],
+  "function:distance_casting": [1, 2, 3],
+  "function:finesse_feedback": [1, 2, 3],
+  "function:rapid_control": [1, 2, 3],
+  "function:cover_power": [1, 2, 3],
+  "function:big_bait_power": [1, 2, 3],
+  "function:endurance": [1, 2, 3],
+};
+const CANONICAL_FUNCTION_PROFILE_PART_GROUP_IDS: Record<string, Record<"part:rod" | "part:reel" | "part:line", string>> = {
+  "function:all_round": { "part:rod": "funcgrp_rod_0001", "part:reel": "funcgrp_reel_0001", "part:line": "funcgrp_line_0001" },
+  "function:distance_casting": { "part:rod": "funcgrp_rod_0002", "part:reel": "funcgrp_reel_0002", "part:line": "funcgrp_line_0002" },
+  "function:finesse_feedback": { "part:rod": "funcgrp_rod_0003", "part:reel": "funcgrp_reel_0003", "part:line": "funcgrp_line_0003" },
+  "function:rapid_control": { "part:rod": "funcgrp_rod_0004", "part:reel": "funcgrp_reel_0004", "part:line": "funcgrp_line_0004" },
+  "function:cover_power": { "part:rod": "funcgrp_rod_0005", "part:reel": "funcgrp_reel_0005", "part:line": "funcgrp_line_0005" },
+  "function:big_bait_power": { "part:rod": "funcgrp_rod_0006", "part:reel": "funcgrp_reel_0006", "part:line": "funcgrp_line_0006" },
+  "function:endurance": { "part:rod": "funcgrp_rod_0007", "part:reel": "funcgrp_reel_0007", "part:line": "funcgrp_line_0007" },
+};
 
 function asText(value: unknown) {
   return value === null || value === undefined ? "" : String(value).trim();
@@ -135,9 +155,8 @@ function sourceParameterHeaders(input: {
     const kind: ItemKind = typeLabel.includes("轮") ? "reel" : typeLabel.includes("线") ? "line" : "rod";
     result.push(...row.slice(5).map(asText).filter(Boolean).map((label) => ({ label, kind })));
   }
-  const functionMetadata = new Set(["机器ID（勿改）", "实体类型", "FunctionProfile ID（勿改）", "功能定位", "定位/类型", "级别", "评分系数"]);
   for (const functionHeader of input.functionValues.filter((row) => row.some((value) => asText(value).includes("机器ID")))) {
-    result.push(...functionHeader.map(asText).filter((label) => label && !functionMetadata.has(label)).map((label) => ({ label })));
+    result.push(...functionHeader.map(asText).filter((label) => label && !FUNCTION_METADATA_LABELS.has(label)).map((label) => ({ label })));
   }
   return result;
 }
@@ -234,6 +253,7 @@ function parseWeight(input: {
       tier: band,
       values,
       notes: asText(row[columns.notes ?? -1]),
+      itemPartId: `part:${itemKind}`,
       sourceRevisionId: input.sourceRevisionId,
       sourceSheetId: CANONICAL_RULE_RANGES.weight.sheetId,
       sourceRow,
@@ -339,18 +359,73 @@ function parseTypes(input: { values: unknown[][]; sourceRevisionId: string; meth
   return { profiles, modifiers };
 }
 
-function parseFunctions(input: { values: unknown[][]; sourceRevisionId: string; issues: CanonicalRuleSourceIssue[] }) {
+function parseFunctionProfiles(input: { values: unknown[][]; sourceRevisionId: string; issues: CanonicalRuleSourceIssue[] }) {
+  if (!input.values.length) return new Map<string, { id: string; name: string; status: string; partGroupIds: Record<string, string>; supportedIntensities: FunctionIntensity[] }>();
+  const header = input.values[0]?.map(asText) ?? [];
+  const column = (...labels: string[]) => header.findIndex((value) => labels.includes(value));
+  const idColumn = column("functionProfileId（永久）", "FunctionProfile ID（勿改）", "FunctionProfile ID");
+  const nameColumn = column("displayName", "显示名", "展示名");
+  const statusColumn = column("status", "状态", "Status");
+  const intensityColumn = column("supportedIntensities", "支持强度", "支持的强度", "Supported Intensities");
+  const partGroupColumns = {
+    "part:rod": column("rodFunctionGroupId", "竿功能分组ID（勿改）"),
+    "part:reel": column("reelFunctionGroupId", "轮功能分组ID（勿改）"),
+    "part:line": column("lineFunctionGroupId", "线功能分组ID（勿改）"),
+  };
+  if ([idColumn, nameColumn, statusColumn, intensityColumn, ...Object.values(partGroupColumns)].some((entry) => entry < 0)) {
+    input.issues.push({ level: "error", code: "FUNCTION_PROFILE_CONSTANTS_HEADER_INVALID", message: "04.0_FunctionProfile常量必须包含父级 ID、显示名、状态、支持强度及竿/轮/线功能分组 ID。", sheetId: CANONICAL_RULE_RANGES.functionProfiles.sheetId, row: 1 });
+    return new Map<string, { id: string; name: string; status: string; partGroupIds: Record<string, string>; supportedIntensities: FunctionIntensity[] }>();
+  }
+  const result = new Map<string, { id: string; name: string; status: string; partGroupIds: Record<string, string>; supportedIntensities: FunctionIntensity[] }>();
+  for (let index = 1; index < input.values.length; index += 1) {
+    const row = input.values[index] ?? [];
+    if (!row.some((value) => asText(value))) continue;
+    const id = asText(row[idColumn]);
+    const name = asText(row[nameColumn]);
+    const status = asText(row[statusColumn]);
+    const partGroupIds = Object.fromEntries(Object.entries(partGroupColumns).map(([part, sourceColumn]) => [part, asText(row[sourceColumn])]));
+    const intensityText = asText(row[intensityColumn]);
+    const intensityMatch = intensityText.match(/^\[(1(?:,2(?:,3)?)?)\]$/);
+    const supportedIntensities = intensityMatch ? intensityMatch[1]!.split(",").map(Number) as FunctionIntensity[] : [];
+    if (!id || !name || status !== "ACTIVE" || !supportedIntensities.length || Object.values(partGroupIds).some((value) => !value)) {
+      input.issues.push({ level: "error", code: "FUNCTION_PROFILE_CONSTANT_INVALID", message: `04.0 第 ${index + 1} 行父级常量无效。`, sheetId: CANONICAL_RULE_RANGES.functionProfiles.sheetId, row: index + 1 });
+      continue;
+    }
+    if (result.has(id)) { input.issues.push({ level: "error", code: "FUNCTION_PROFILE_ID_DUPLICATE", message: `FunctionProfile 父级 ID 重复：${id}`, sheetId: CANONICAL_RULE_RANGES.functionProfiles.sheetId, row: index + 1 }); continue; }
+    const expectedPrefixes: Record<string, string> = { "part:rod": "funcgrp_rod_", "part:reel": "funcgrp_reel_", "part:line": "funcgrp_line_" };
+    if (Object.entries(partGroupIds).some(([part, groupId]) => !groupId.startsWith(expectedPrefixes[part]!)) || [...result.values()].some((profile) => Object.values(profile.partGroupIds).some((groupId) => Object.values(partGroupIds).includes(groupId)))) {
+      input.issues.push({ level: "error", code: "FUNCTION_PROFILE_GROUP_ID_INVALID", message: `04.0 第 ${index + 1} 行的竿/轮/线分组 ID 必须非空、全局唯一且与部件前缀匹配。`, sheetId: CANONICAL_RULE_RANGES.functionProfiles.sheetId, row: index + 1 });
+      continue;
+    }
+    const expectedPartGroupIds = CANONICAL_FUNCTION_PROFILE_PART_GROUP_IDS[id];
+    if (expectedPartGroupIds && Object.entries(expectedPartGroupIds).some(([part, expected]) => partGroupIds[part] !== expected)) {
+      input.issues.push({ level: "error", code: "FUNCTION_PROFILE_PART_GROUP_BINDING_MISMATCH", message: `04.0 第 ${index + 1} 行的竿/轮/线分组 ID 与固定 FunctionProfile 映射不一致。`, sheetId: CANONICAL_RULE_RANGES.functionProfiles.sheetId, row: index + 1 });
+      continue;
+    }
+    result.set(id, { id, name, status, partGroupIds, supportedIntensities: [...new Set(supportedIntensities)].sort() as FunctionIntensity[] });
+  }
+  const observedIds = [...result.keys()].sort();
+  const expectedIds = Object.keys(CANONICAL_FUNCTION_PROFILE_INTENSITIES).sort();
+  if (observedIds.length !== expectedIds.length || observedIds.some((id, index) => id !== expectedIds[index]) || [...result.values()].some((profile) => profile.supportedIntensities.join(",") !== CANONICAL_FUNCTION_PROFILE_INTENSITIES[profile.id]!.join(","))) {
+    input.issues.push({ level: "error", code: "FUNCTION_PROFILE_PARENT_SET_MISMATCH", message: "04.0_FunctionProfile常量必须精确包含规范定义的七个父级及其支持强度。", sheetId: CANONICAL_RULE_RANGES.functionProfiles.sheetId });
+  }
+  if (!result.size) input.issues.push({ level: "error", code: "FUNCTION_PROFILE_CONSTANTS_EMPTY", message: "04.0_FunctionProfile常量没有可导入父级。", sheetId: CANONICAL_RULE_RANGES.functionProfiles.sheetId });
+  return result;
+}
+
+function parseFunctions(input: { values: unknown[][]; profiles: Map<string, { id: string; name: string; status: string; partGroupIds: Record<string, string>; supportedIntensities: FunctionIntensity[] }>; sourceRevisionId: string; issues: CanonicalRuleSourceIssue[] }) {
   let headers: string[] = [];
   let columns: Record<string, number | undefined> = {};
   let headerInvalid = false;
-  const metadataLabels = new Set(["机器ID（勿改）", "实体类型", "FunctionProfile ID（勿改）", "功能定位", "定位/类型", "级别", "评分系数"]);
-  const rows: Array<{ id: string; groupId: string; name: string; intensity: FunctionIntensity; rules: AdjustmentRule[]; sourceRow: number }> = [];
+  const rows: Array<{ id: string; groupId: string; intensity: FunctionIntensity; itemPartId: string; rules: AdjustmentRule[]; sourceRow: number }> = [];
+  let block = -1;
   const seen = new Set<string>();
   for (let index = 0; index < input.values.length; index += 1) {
     const row = input.values[index] ?? [];
     const sourceRow = index + 1;
     if (row.some((value) => asText(value).includes("机器ID"))) {
       headers = row.map(asText);
+      block += 1;
       const resolve = (label: string, code: string) => {
         const matches = headers.reduce<number[]>((all, value, column) => value === label ? [...all, column] : all, []);
         if (matches.length === 1) return matches[0];
@@ -360,7 +435,7 @@ function parseFunctions(input: { values: unknown[][]; sourceRevisionId: string; 
       };
       columns = {
         id: resolve("机器ID（勿改）", "FUNCTION_ROW_ID_COLUMN_INVALID"),
-        groupId: resolve("FunctionProfile ID（勿改）", "FUNCTION_PROFILE_GROUP_BINDING_MISSING"),
+        groupId: resolve("功能分组ID（勿改）", "FUNCTION_PART_GROUP_BINDING_MISSING"),
         name: resolve("定位/类型", "FUNCTION_DISPLAY_NAME_COLUMN_INVALID"),
         intensity: resolve("级别", "FUNCTION_INTENSITY_COLUMN_INVALID"),
       };
@@ -368,9 +443,10 @@ function parseFunctions(input: { values: unknown[][]; sourceRevisionId: string; 
     }
     if (!headers.length || headerInvalid || !row.some((value) => asText(value))) continue;
     const id = asText(row[columns.id ?? -1]);
-    const groupId = asText(row[columns.groupId ?? -1]);
+    const sourceGroupId = asText(row[columns.groupId ?? -1]);
     const intensity = Number(row[columns.intensity ?? -1]);
     const name = asText(row[columns.name ?? -1]);
+    const itemPartId = (["part:rod", "part:reel", "part:line"] as const)[block];
     const isSourceRow = true;
     if (!id) {
       if (isSourceRow) input.issues.push({ level: "error", code: "FUNCTION_ROW_ID_MISSING", message: `功能定位第 ${sourceRow} 行缺少机器 ID。`, sheetId: CANONICAL_RULE_RANGES.function.sheetId, row: sourceRow });
@@ -378,54 +454,58 @@ function parseFunctions(input: { values: unknown[][]; sourceRevisionId: string; 
     }
     if (seen.has(id)) input.issues.push({ level: "error", code: "FUNCTION_ROW_ID_DUPLICATE", message: `功能行 ID 重复：${id}`, sheetId: CANONICAL_RULE_RANGES.function.sheetId, row: sourceRow });
     seen.add(id);
-    if (!groupId) {
-      input.issues.push({ level: "error", code: "FUNCTION_PROFILE_GROUP_ID_MISSING", message: `功能行 ${id} 缺少 FunctionProfile 稳定父级 ID。`, sheetId: CANONICAL_RULE_RANGES.function.sheetId, row: sourceRow });
+    const matches = [...input.profiles.values()].filter((profile) => profile.partGroupIds[itemPartId] === sourceGroupId);
+    if (matches.length !== 1) {
+      input.issues.push({ level: "error", code: matches.length ? "FUNCTION_PROFILE_PARENT_AMBIGUOUS" : "FUNCTION_PROFILE_PARENT_UNKNOWN", message: `功能行 ${id} 的分组 ${sourceGroupId || "(空)"} 无法唯一映射到 04.0 父级。`, sheetId: CANONICAL_RULE_RANGES.function.sheetId, row: sourceRow });
       continue;
     }
-    if (!name || ![1, 2, 3].includes(intensity)) {
+    const groupId = matches[0]!.id;
+    if (!itemPartId || !name || ![1, 2, 3].includes(intensity)) {
       input.issues.push({ level: "error", code: "FUNCTION_ROW_INVALID", message: `功能行 ${id} 的展示名或强度无效。`, sheetId: CANONICAL_RULE_RANGES.function.sheetId, row: sourceRow });
       continue;
     }
     const rules = headers.flatMap((header, column) => {
-      if (!header || metadataLabels.has(header)) return [];
-      const rule = sourceRule({ id: `${id}:${columnName(column)}${sourceRow}`, header, raw: row[column], sourceRevisionId: input.sourceRevisionId, sheetId: CANONICAL_RULE_RANGES.function.sheetId, row: sourceRow, column });
+      if (!header || FUNCTION_METADATA_LABELS.has(header)) return [];
+      const kind = itemPartId.slice(5) as ItemKind;
+      if (!PART_SCOPED_SHARED_HEADERS.has(header) && parameterKind(header) !== kind) {
+        input.issues.push({ level: "error", code: "FUNCTION_RULE_CROSS_PART_BINDING", message: `功能行 ${id} 的参数 ${header} 不属于 ${itemPartId}。`, sheetId: CANONICAL_RULE_RANGES.function.sheetId, row: sourceRow });
+        return [];
+      }
+      const rule = sourceRule({ id: `${id}:${columnName(column)}${sourceRow}`, header, raw: row[column], kind, sourceRevisionId: input.sourceRevisionId, sheetId: CANONICAL_RULE_RANGES.function.sheetId, row: sourceRow, column });
       return rule ? [rule] : [];
     });
-    rows.push({ id, groupId, name, intensity: intensity as FunctionIntensity, rules, sourceRow });
+    rows.push({ id, groupId, intensity: intensity as FunctionIntensity, itemPartId, rules, sourceRow });
   }
+  if (rows.length !== 57) input.issues.push({ level: "error", code: "FUNCTION_RULE_MEMBER_SET_MISMATCH", message: `04_功能定位必须精确包含 57 条成员规则，当前为 ${rows.length} 条。`, sheetId: CANONICAL_RULE_RANGES.function.sheetId });
   const grouped = new Map<string, typeof rows>();
   for (const row of rows) grouped.set(row.groupId, [...(grouped.get(row.groupId) ?? []), row]);
   const profiles: FunctionProfile[] = [];
   const modifiers: ModifierOption[] = [];
+  const groupedParentIds = new Set(grouped.keys());
+  for (const parent of input.profiles.values()) {
+    if (parent.status === "ACTIVE" && !groupedParentIds.has(parent.id)) {
+      input.issues.push({ level: "error", code: "FUNCTION_PROFILE_PARENT_MEMBERS_MISSING", message: `FunctionProfile ${parent.id} 在 04_功能定位中缺少全部成员规则。`, sheetId: CANONICAL_RULE_RANGES.function.sheetId });
+    }
+  }
   for (const [groupId, group] of grouped) {
-    const rowsByIntensity = new Map<FunctionIntensity, typeof group[number]>();
-    const displayNames = new Set(group.map((row) => row.name));
+    const parent = input.profiles.get(groupId);
+    if (!parent) { input.issues.push({ level: "error", code: "FUNCTION_PROFILE_PARENT_UNKNOWN", message: `功能行引用未知父级：${groupId}`, sheetId: CANONICAL_RULE_RANGES.function.sheetId }); continue; }
+    const rowsByPartIntensity = new Map<string, typeof group[number]>();
     let valid = true;
     for (const row of group) {
-      if (rowsByIntensity.has(row.intensity)) {
-        input.issues.push({ level: "error", code: "FUNCTION_GROUP_INTENSITY_DUPLICATE", message: `FunctionProfile ${groupId} 的强度 ${row.intensity} 重复。`, sheetId: CANONICAL_RULE_RANGES.function.sheetId, row: row.sourceRow });
+      const key = `${row.itemPartId}:${row.intensity}`;
+      if (rowsByPartIntensity.has(key)) {
+        input.issues.push({ level: "error", code: "FUNCTION_GROUP_PART_INTENSITY_DUPLICATE", message: `FunctionProfile ${groupId} 的 ${key} 重复。`, sheetId: CANONICAL_RULE_RANGES.function.sheetId, row: row.sourceRow });
         valid = false;
-      } else rowsByIntensity.set(row.intensity, row);
+      } else rowsByPartIntensity.set(key, row);
     }
-    const isGeneric = groupId.toLowerCase().includes("generic") || group.every((row) => row.name.includes("泛用"));
-    const requiredIntensities = isGeneric ? [1] as FunctionIntensity[] : [1, 2, 3] as FunctionIntensity[];
-    for (const intensity of requiredIntensities) if (!rowsByIntensity.has(intensity)) {
-      input.issues.push({ level: "error", code: "FUNCTION_GROUP_INTENSITY_MISSING", message: `FunctionProfile ${groupId} 缺少强度 ${intensity}。`, sheetId: CANONICAL_RULE_RANGES.function.sheetId });
-      valid = false;
-    }
-    if (displayNames.size !== 1) {
-      input.issues.push({ level: "error", code: "FUNCTION_GROUP_DISPLAY_NAME_CONFLICT", message: `FunctionProfile ${groupId} 的展示名不一致。`, sheetId: CANONICAL_RULE_RANGES.function.sheetId });
-      valid = false;
-    }
+    for (const intensity of parent.supportedIntensities) for (const itemPartId of ["part:rod", "part:reel", "part:line"]) if (!rowsByPartIntensity.has(`${itemPartId}:${intensity}`)) { input.issues.push({ level: "error", code: "FUNCTION_GROUP_PART_INTENSITY_MISSING", message: `FunctionProfile ${groupId} 缺少 ${itemPartId} 强度 ${intensity}。`, sheetId: CANONICAL_RULE_RANGES.function.sheetId }); valid = false; }
+    for (const row of group) if (!parent.supportedIntensities.includes(row.intensity)) { input.issues.push({ level: "error", code: "FUNCTION_INTENSITY_UNSUPPORTED", message: `FunctionProfile ${groupId} 不支持强度 ${row.intensity}。`, sheetId: CANONICAL_RULE_RANGES.function.sheetId, row: row.sourceRow }); valid = false; }
     if (!valid) continue;
-    const profileName = group[0]!.name;
-    profiles.push({ id: groupId, name: profileName, rules: [], intensityRules: requiredIntensities.map((intensity) => {
-      const row = rowsByIntensity.get(intensity)!;
-      return { intensity, rules: structuredClone(row.rules), sourceRowId: row.id };
-    }), enabled: true, sourceRevisionId: input.sourceRevisionId, notes: "来自飞书 03_功能定位显式 FunctionProfile ID；显示名仅用于展示。" });
-    for (const row of group) modifiers.push({ id: row.id, dimension: "function", name: profileName, level: row.intensity, itemKinds: ["rod", "reel", "line"], rules: structuredClone(row.rules), notes: `来自飞书 03_功能定位第 ${row.sourceRow} 行。`, enabled: true });
+    profiles.push({ id: groupId, name: parent.name, status: parent.status, supportedIntensities: parent.supportedIntensities, rules: [], intensityRules: group.map((row) => ({ intensity: row.intensity, itemPartId: row.itemPartId, rules: structuredClone(row.rules), sourceRowId: row.id })), enabled: parent.status.toUpperCase() !== "DISABLED", sourceRevisionId: input.sourceRevisionId, notes: "父级来自飞书 04.0；成员规则来自 04_功能定位。" });
+    for (const row of group) modifiers.push({ id: row.id, dimension: "function", name: parent.name, level: row.intensity, itemKinds: [row.itemPartId.slice(5) as ItemKind], rules: structuredClone(row.rules), notes: `来自飞书 04_功能定位第 ${row.sourceRow} 行；父级 ${groupId}。`, enabled: true });
   }
-  if (!rows.length && !input.issues.some((issue) => issue.code === "FUNCTION_PROFILE_GROUP_BINDING_MISSING")) input.issues.push({ level: "error", code: "FUNCTION_PROFILE_EMPTY", message: "04_功能定位没有可导入记录。", sheetId: CANONICAL_RULE_RANGES.function.sheetId });
+  if (!rows.length) input.issues.push({ level: "error", code: "FUNCTION_PROFILE_EMPTY", message: "04_功能定位没有可导入记录。", sheetId: CANONICAL_RULE_RANGES.function.sheetId });
   return { profiles, modifiers };
 }
 
@@ -434,6 +514,7 @@ export function importCanonicalRuleSource(input: {
   weightValues: unknown[][];
   typeValues: unknown[][];
   functionValues: unknown[][];
+  functionProfileValues?: unknown[][];
   /** 02_钓法类型；02.5 只保留为审核/回写证据，绝不反向作为规则输入。 */
   methodValues?: unknown[][];
   methodTemplateReviewValues?: unknown[][];
@@ -456,7 +537,8 @@ export function importCanonicalRuleSource(input: {
     notes: "来自飞书 01_重量模板的钓法列；钓法与类型保持独立规则层。",
   }));
   const types = parseTypes({ values: input.typeValues, sourceRevisionId: input.sourceRevision.id, methodProfiles: methods, issues });
-  const functions = parseFunctions({ values: input.functionValues, sourceRevisionId: input.sourceRevision.id, issues });
+  const functionProfiles = parseFunctionProfiles({ values: input.functionProfileValues ?? [], sourceRevisionId: input.sourceRevision.id, issues });
+  const functions = parseFunctions({ values: input.functionValues, profiles: functionProfiles, sourceRevisionId: input.sourceRevision.id, issues });
   const parameters = definitions(sourceParameterHeaders({
     weightHeaders: weight.attributeHeaders,
     typeValues: input.typeValues,

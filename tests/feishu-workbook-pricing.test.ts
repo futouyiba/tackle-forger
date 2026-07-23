@@ -124,9 +124,10 @@ test("同一完整高行号工作簿导入保持幂等", () => {
   assert.deepEqual(qualityDraftFromRanges(input), qualityDraftFromRanges(input));
 });
 
-test("当前整本工作簿注册表覆盖 00–17 及钓法审核表，并包含真实 sheet_id", () => {
-  assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.length, 20);
+test("当前整本工作簿注册表覆盖 00–17、FunctionProfile 常量与钓法审核表，并包含真实 sheet_id", () => {
+  assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.length, 21);
   assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "00_使用说明")?.sheetId, "4IfBoX");
+  assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "04.0_FunctionProfile常量")?.sheetId, "mLpTLK");
   assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "02.5_钓法模板")?.sheetId, "m3eQCg");
   assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "12_打包竿组")?.sheetId, "lf4wIM");
 });

@@ -68,6 +68,8 @@ export interface WeightTemplate {
   notes: string;
   /** Canonical Feishu 01 source metadata. Older imported templates may omit it. */
   methodId?: string;
+  /** v3 FunctionIntensityRuleSet 的精确部位匹配键。 */
+  itemPartId?: string;
   sourceRevisionId?: string;
   sourceSheetId?: string;
   sourceRow?: number;
@@ -226,6 +228,10 @@ export interface ItemTypeProfile {
 
 export interface FunctionIntensityRuleSet {
   intensity: FunctionIntensity;
+  /** v3 后置专精贡献必须精确绑定到竿/轮/线；不得从参数名推断。 */
+  itemPartId?: string;
+  /** 仅历史迁移审计重放：旧源未表达分部件时，且同一强度恰有一条记录才可使用。 */
+  legacyItemPartAgnostic?: boolean;
   rules: AdjustmentRule[];
   /** 飞书 03_功能定位中的稳定源行 ID（func_*）；只用于溯源，不作为聚合 FunctionProfile 的 ID。没有独立父级绑定时不得生成 FunctionProfile。 */
   sourceRowId?: string;
@@ -234,6 +240,10 @@ export interface FunctionIntensityRuleSet {
 export interface FunctionProfile {
   id: string;
   name: string;
+  /** 来自 04.0 常量表的不可变父级状态。 */
+  status?: string;
+  /** 来自 04.0 常量表；成员矩阵不得自行推断可用强度。 */
+  supportedIntensities?: FunctionIntensity[];
   rules: AdjustmentRule[];
   intensityRules: FunctionIntensityRuleSet[];
   enabled: boolean;

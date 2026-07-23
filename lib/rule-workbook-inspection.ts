@@ -45,9 +45,11 @@ export interface IdentitySheetSpec {
 }
 
 export const CANONICAL_IDENTITY_SHEET_SPECS: IdentitySheetSpec[] = [
+  { sheetId: "mLpTLK", range: "A1:S8", idColumnKey: "A", fixedEntityType: "FunctionProfile", allowedEntityTypes: ["FunctionProfile"], idPrefixesByEntityType: { FunctionProfile: ["function:"] } },
   { sheetId: "d6e928", range: "B1:C54", idColumnKey: "B", fixedEntityType: "WeightTemplate", allowedEntityTypes: ["WeightTemplate"], idPrefixesByEntityType: { WeightTemplate: ["wtpl_"] } },
   { sheetId: "fATowU", range: "B1:C20", idColumnKey: "B", allowedEntityTypes: ["RodType", "ReelType", "LineType"], idPrefixesByEntityType: { RodType: ["type_rod_"], ReelType: ["type_reel_"], LineType: ["type_line_"] } },
   { sheetId: "vviXo0", range: "B1:C63", idColumnKey: "B", fixedEntityType: "FunctionProfile", allowedEntityTypes: ["FunctionProfile"], idPrefixesByEntityType: { FunctionProfile: ["func_"] } },
+  { sheetId: "mLpTLK", range: "Q1:S8", idColumnKey: "Q:S", fixedEntityType: "FunctionPartGroup", allowedEntityTypes: ["FunctionPartGroup"], idPrefixesByEntityType: { FunctionPartGroup: ["funcgrp_rod_", "funcgrp_reel_", "funcgrp_line_"] } },
   { sheetId: "zrVOxd", range: "B1:C38", idColumnKey: "B", allowedEntityTypes: ["RodAffix", "ReelAffix", "LineAffix"], idPrefixesByEntityType: { RodAffix: ["affix_rod_"], ReelAffix: ["affix_reel_"], LineAffix: ["affix_line_"] } },
   { sheetId: "9nE3Rx", range: "B1:C10", idColumnKey: "B", fixedEntityType: "SeriesArchetype", allowedEntityTypes: ["SeriesArchetype"], idPrefixesByEntityType: { SeriesArchetype: ["series_rod_", "series_reel_", "series_line_"] } },
 ];
@@ -114,10 +116,20 @@ export function identityRowsFromRanges(
     rangeByIdentitySpec.get(`${spec.sheetId}:${spec.range}`)
     ?? (hasExplicitRanges ? [] : legacyRangeBySheet.get(spec.sheetId) ?? [])
   ).flatMap((values, index) => {
+    if (spec.fixedEntityType === "FunctionPartGroup") {
+      return (values as unknown[]).flatMap((value, columnIndex) => {
+        const stableId = text(value);
+        // Q:S 的第 1 行是 rod/reel/lineFunctionGroupId 表头；Id 的大小写不应参与身份判断。
+        if (!stableId || index === 0) return [];
+        const part = ["rod", "reel", "line"][columnIndex];
+        return [{ sheetId: spec.sheetId, rowKey: `${index + 1}:${part}`, displayName: `FunctionPartGroup · ${part} · 第 ${index + 1} 行`, entityType: "FunctionPartGroup", stableId, idColumnKey: ["Q", "R", "S"][columnIndex]! }];
+      });
+    }
+    if (spec.sheetId === "mLpTLK" && spec.range === "A1:S8" && index === 0) return [];
     const stableId = text(values[0]);
     const adjacentValue = text(values[1]);
     if (!stableId && !adjacentValue) return [];
-    if (stableId.includes("机器ID") || adjacentValue === "实体类型" || adjacentValue === "同步状态") return [];
+    if (/ID（勿改）|ID（永久）|机器ID/.test(stableId) || adjacentValue === "实体类型" || adjacentValue === "同步状态") return [];
     const entityType = spec.fixedEntityType ?? adjacentValue;
     if (!entityType) return [];
     return [{
@@ -132,11 +144,14 @@ export function identityRowsFromRanges(
 }
 
 export function canonicalIdentityPolicies(): SourceIdentityPolicy[] {
-  return CANONICAL_IDENTITY_SHEET_SPECS.map((spec) => ({
-    sheetId: spec.sheetId,
-    allowedEntityTypes: [...spec.allowedEntityTypes],
-    idPrefixesByEntityType: structuredClone(spec.idPrefixesByEntityType),
-  }));
+  const grouped = new Map<string, SourceIdentityPolicy>();
+  for (const spec of CANONICAL_IDENTITY_SHEET_SPECS) {
+    const current = grouped.get(spec.sheetId) ?? { sheetId: spec.sheetId, allowedEntityTypes: [], idPrefixesByEntityType: {} };
+    current.allowedEntityTypes = [...new Set([...current.allowedEntityTypes, ...spec.allowedEntityTypes])];
+    for (const [entityType, prefixes] of Object.entries(spec.idPrefixesByEntityType)) current.idPrefixesByEntityType[entityType] = [...new Set([...(current.idPrefixesByEntityType[entityType] ?? []), ...prefixes])];
+    grouped.set(spec.sheetId, current);
+  }
+  return [...grouped.values()];
 }
 
 const qualityIds: Record<string, QualityPricingBasketMapping["qualityId"]> = {
@@ -417,6 +432,7 @@ export async function inspectCanonicalRuleWorkbook(input: {
     weightValues: ranges.find((entry) => entry.sheetId === CANONICAL_RULE_RANGES.weight.sheetId && entry.range === CANONICAL_RULE_RANGES.weight.range)?.valueRange.values ?? [],
     typeValues: ranges.find((entry) => entry.sheetId === CANONICAL_RULE_RANGES.type.sheetId && entry.range === CANONICAL_RULE_RANGES.type.range)?.valueRange.values ?? [],
     functionValues: ranges.find((entry) => entry.sheetId === CANONICAL_RULE_RANGES.function.sheetId && entry.range === CANONICAL_RULE_RANGES.function.range)?.valueRange.values ?? [],
+    functionProfileValues: ranges.find((entry) => entry.sheetId === CANONICAL_RULE_RANGES.functionProfiles.sheetId && entry.range === CANONICAL_RULE_RANGES.functionProfiles.range)?.valueRange.values ?? [],
     methodValues: ranges.find((entry) => entry.sheetId === CANONICAL_RULE_RANGES.method.sheetId && entry.range === CANONICAL_RULE_RANGES.method.range)?.valueRange.values ?? [],
     methodTemplateReviewValues: ranges.find((entry) => entry.sheetId === CANONICAL_RULE_RANGES.methodTemplateReview.sheetId && entry.range === CANONICAL_RULE_RANGES.methodTemplateReview.range)?.valueRange.values ?? [],
     importedAt: input.observedAt,

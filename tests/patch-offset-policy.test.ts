@@ -30,6 +30,7 @@ import {
   evaluateAuthoritativePatchFinalRanges,
   preparePatchOperationFromWorkspace,
   reviewWorkspacePatchRevision,
+  submitWorkspacePatchRevision,
   type AuthoritativePatchObject,
 } from "../lib/patch-authority";
 import { deterministicHash } from "../lib/rule-kernel";
@@ -704,6 +705,19 @@ test("Workspace Patch 写入口拒绝 ACTIVE 撤回且保持账本逐字节不�
     (error: unknown) => error instanceof PatchLedgerError
       && error.code === "PATCH_STATE_TRANSITION_INVALID",
   );
+  assert.equal(JSON.stringify(state.patchLedger), before);
+});
+
+test("Workspace Patch 提交入口只允许 DRAFT 且拒绝时保持账本不变", () => {
+  const state = createSeedState();
+  const source = state.patchLedger.revisions.find((revision) => revision.state === "ACTIVE");
+  assert.ok(source);
+  const draft = buildPatchRevision({...source,snapshotRefs:[],state:"DRAFT",operations:source.operations});
+  state.patchLedger.revisions = state.patchLedger.revisions.map((revision) => revision === source ? draft : revision);
+  const submitted = submitWorkspacePatchRevision({state,patchId:draft.patchId,patchRevision:draft.patchRevision,capabilities:["patch.create"]});
+  assert.equal(submitted.patchLedger.revisions.find((revision) => revision.patchId === draft.patchId)?.state, "PENDING_REVIEW");
+  const before = JSON.stringify(state.patchLedger);
+  assert.throws(() => submitWorkspacePatchRevision({state,patchId:draft.patchId,patchRevision:draft.patchRevision,capabilities:[]}), (error:unknown) => error instanceof PatchLedgerError && error.code === "PATCH_PERMISSION_DENIED");
   assert.equal(JSON.stringify(state.patchLedger), before);
 });
 

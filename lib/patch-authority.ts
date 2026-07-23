@@ -1,5 +1,5 @@
 import { deterministicHash } from "./rule-kernel";
-import { reviewPatchBatch, reviewPatchRevision } from "./patch-ledger";
+import { reviewPatchBatch, reviewPatchRevision, submitPatchRevision } from "./patch-ledger";
 import {
   createPatchReviewBatch,
   evaluatePatchFinalRanges,
@@ -603,6 +603,23 @@ export function reviewWorkspacePatchRevision(input: {
       reviewedAt: input.reviewedAt,
       capabilities: input.capabilities,
       approvalEvidence,
+    }),
+  };
+}
+
+export function submitWorkspacePatchRevision(input: {
+  state: WorkspaceState;
+  patchId: string;
+  patchRevision: number;
+  capabilities: Iterable<string>;
+}): WorkspaceState {
+  return {
+    ...input.state,
+    patchLedger: submitPatchRevision({
+      ledger: input.state.patchLedger,
+      patchId: input.patchId,
+      patchRevision: input.patchRevision,
+      capabilities: input.capabilities,
     }),
   };
 }

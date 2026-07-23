@@ -107,6 +107,17 @@ export function seriesItemPartId(
   return descendantItemPartIds.length === 1 ? descendantItemPartIds[0] : undefined;
 }
 
+export function isProductSkuChainEnabled(
+  series: SeriesDefinition | undefined,
+  sku: SkuDrawer,
+  knownSkus: readonly SkuDrawer[],
+): boolean {
+  if (!series || sku.seriesId !== series.id || !isProductItemPartEnabled(sku.projectionMatch.itemPartId)) {
+    return false;
+  }
+  return sku.projectionMatch.itemPartId === seriesItemPartId(series, knownSkus);
+}
+
 export function assertProductItemPartChainEnabled(
   itemPartIds: readonly (string | undefined)[],
   action: ProductItemPartAction,

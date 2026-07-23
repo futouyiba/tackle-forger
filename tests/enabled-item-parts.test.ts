@@ -6,6 +6,7 @@ import {
   ItemPartNotEnabledError,
   enabledProductItemParts,
   isProductItemPartEnabled,
+  isProductSkuChainEnabled,
   seriesItemPartId,
 } from "../lib/enabled-item-parts";
 import { createSeedState } from "../lib/seed";
@@ -258,6 +259,17 @@ test("声明部位与启用后代冲突时产品读取 fail-closed", () => {
     upgrades: state.upgradeCandidates,
   });
   assert.equal(blocks.some((entry) => entry.seriesId === sourceSeries.id), false);
+  assert.equal(isProductSkuChainEnabled(sourceSeries, sourceSku, skus), false);
+  assert.equal(isProductSkuChainEnabled(sourceSeries, conflictingSku, skus), false);
+});
+
+test("V3 商品链读取拒绝声明为延期部位的 Series", () => {
+  const state = createSeedState();
+  const sourceSeries = state.seriesDefinitions[0]!;
+  const sourceSku = state.skuDrawers.find((sku) => sku.seriesId === sourceSeries.id)!;
+  const disabledSeries = { ...structuredClone(sourceSeries), itemPartId: "part:hook" };
+
+  assert.equal(isProductSkuChainEnabled(disabledSeries, sourceSku, state.skuDrawers), false);
 });
 
 test("扩展部位候选生成和物化在任何模型写入前拒绝且状态不变", () => {

@@ -20,7 +20,7 @@ import {
 import { useMemo, useState } from "react";
 import { hydrateV3Seed } from "@/lib/v3-seed";
 import { projectionPatchViewFromLedger } from "@/lib/patch-ledger";
-import { isProductItemPartEnabled } from "@/lib/enabled-item-parts";
+import { isProductSkuChainEnabled } from "@/lib/enabled-item-parts";
 import type {
   ConfigurationSnapshot,
   ProjectionPatchRuleSource,
@@ -121,8 +121,12 @@ export function V3FlowWorkbench({ state, mutate, notify, initialSeriesId }: V3Fl
   const [stage, setStage] = useState<FlowStage>("projection");
   const [sourceView, setSourceView] = useState<SourceView>("rules");
   const productSkus = useMemo(
-    () => state.skuDrawers.filter((sku) => isProductItemPartEnabled(sku.projectionMatch.itemPartId)),
-    [state.skuDrawers],
+    () => state.skuDrawers.filter((sku) => isProductSkuChainEnabled(
+      state.seriesDefinitions.find((series) => series.id === sku.seriesId),
+      sku,
+      state.skuDrawers,
+    )),
+    [state.seriesDefinitions, state.skuDrawers],
   );
   const [selectedSkuId, setSelectedSkuId] = useState(
     productSkus.find((sku) => sku.seriesId === initialSeriesId)?.id

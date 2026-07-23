@@ -4,6 +4,14 @@ import { loadWorkspaceState, saveWorkspaceState } from "@/lib/storage";
 import type { WorkspaceState } from "@/lib/types";
 import { CURRENT_WORKSPACE_SCHEMA_VERSION } from "@/lib/migrations";
 import {
+  ActionCommandPayloadError,
+  type JsonObject,
+} from "@/lib/action-command-payloads";
+import {
+  executeProductionWorkspaceCommand,
+  WorkspaceCommandTransientHttpError,
+} from "@/lib/production-action-commands";
+import {
   changesOnlyReadOnlyLegacyHistory,
   findGovernedStateChanges,
   findReadOnlyLegacyProductChanges,
@@ -15,6 +23,18 @@ import {
 } from "@/lib/config-id-governance";
 
 export const dynamic = "force-dynamic";
+
+function commandErrorStatus(error: ActionCommandPayloadError): number {
+  if (error.code === "ACTION_COMMAND_PAYLOAD_NOT_FOUND") return 404;
+  if (error.code === "ACTION_COMMAND_CAPABILITY_CHANGED") return 403;
+  if (
+    error.code === "ACTION_COMMAND_REVISION_CONFLICT"
+    || error.code === "ACTION_COMMAND_INPUT_HASH_MISMATCH"
+    || error.code === "STALE_FENCING_TOKEN"
+    || error.code === "IDEMPOTENCY_KEY_REUSED"
+  ) return 409;
+  return 422;
+}
 
 export async function GET(request: NextRequest) {
   const user = await requestUser(request);
@@ -43,73 +63,113 @@ export async function PUT(request: NextRequest) {
       { status: 403 },
     );
   }
-  const body = (await request.json().catch(() => null)) as {
-    state?: WorkspaceState;
-    baseRevision?: number;
-    message?: string;
-  } | null;
-  if (
-    !body ||
-    !body.state ||
-    !Number.isInteger(body.state.schemaVersion) ||
-    body.state.schemaVersion < 1 ||
-    body.state.schemaVersion > CURRENT_WORKSPACE_SCHEMA_VERSION ||
-    typeof body.baseRevision !== "number"
-  ) {
-    return NextResponse.json({ error: "配置数据或版本号无效。" }, { status: 400 });
-  }
-
+  const invocation = await request.json().catch(() => null);
   const current = await loadWorkspaceState();
-  if (body.baseRevision !== current.revision) {
-    return NextResponse.json(
-      { error: "其他成员已保存新版本，请刷新后再合并。", revision: current.revision },
-      { status: 409 },
-    );
-  }
   try {
-    assertFrozenConfigIdentityTransition(current.state, body.state);
+    const execution = await executeProductionWorkspaceCommand({
+      expectedAction: "save_workspace",
+      invocation,
+      user,
+      current,
+      execute: async (storedPayload) => {
+        const body = storedPayload as JsonObject & {
+          state?: unknown;
+          baseRevision?: unknown;
+          message?: unknown;
+        };
+        const proposed = body.state as WorkspaceState | undefined;
+        if (
+          !proposed
+          || !Number.isInteger(proposed.schemaVersion)
+          || proposed.schemaVersion < 1
+          || proposed.schemaVersion > CURRENT_WORKSPACE_SCHEMA_VERSION
+          || typeof body.baseRevision !== "number"
+        ) {
+          return { status: 400, body: { error: "配置数据或版本号无效。" } };
+        }
+        if (body.baseRevision !== current.revision) {
+          return {
+            status: 409,
+            body: {
+              error: "其他成员已保存新版本，请刷新后再合并。",
+              revision: current.revision,
+            },
+          };
+        }
+        try {
+          assertFrozenConfigIdentityTransition(current.state, proposed);
+        } catch (error) {
+          if (error instanceof ConfigIdGovernanceError) {
+            return {
+              status: 422,
+              body: {
+                error: error.message,
+                code: error.code,
+                details: error.details,
+              },
+            };
+          }
+          throw error;
+        }
+        const governedChanges = findGovernedStateChanges(current.state, proposed);
+        if (governedChanges.length) {
+          const legacyHistoryChanges = findReadOnlyLegacyProductChanges(
+            current.state,
+            proposed,
+          );
+          const legacyHistoryOnly = changesOnlyReadOnlyLegacyHistory(governedChanges);
+          return {
+            status: 422,
+            body: {
+              error: legacyHistoryOnly
+                ? "旧配方、候选、OfficialSku 与明细覆盖已转为只读历史，只能查看、导出或通过迁移流程处理。"
+                : "受治理的状态只能通过对应领域命令修改。",
+              code: legacyHistoryOnly
+                ? "LEGACY_HISTORY_READ_ONLY"
+                : "DOMAIN_COMMAND_REQUIRED",
+              governedChanges,
+              legacyHistoryChanges,
+            },
+          };
+        }
+        const result = await saveWorkspaceState({
+          state: proposed,
+          baseRevision: body.baseRevision,
+          author: stableAuditActor(user),
+          message: typeof body.message === "string" && body.message.trim()
+            ? body.message.trim()
+            : "保存配置修改",
+        });
+        if (result.conflict) {
+          return {
+            status: 409,
+            body: {
+              error: "其他成员已保存新版本，请刷新后再合并。",
+              revision: result.revision,
+            },
+          };
+        }
+        return { status: 200, body: { revision: result.revision } };
+      },
+    });
+    const body = execution.result.body as Record<string, unknown>;
+    return NextResponse.json(
+      { ...body, user, replayed: execution.replayed },
+      { status: execution.result.status },
+    );
   } catch (error) {
-    if (error instanceof ConfigIdGovernanceError) {
+    if (error instanceof WorkspaceCommandTransientHttpError) {
       return NextResponse.json(
-        { error: error.message, code: error.code, details: error.details },
-        { status: 422 },
+        error.result.body,
+        { status: error.result.status },
+      );
+    }
+    if (error instanceof ActionCommandPayloadError) {
+      return NextResponse.json(
+        { error: error.message, code: error.code },
+        { status: commandErrorStatus(error) },
       );
     }
     throw error;
   }
-  const governedChanges = findGovernedStateChanges(current.state, body.state);
-  if (governedChanges.length) {
-    const legacyHistoryChanges = findReadOnlyLegacyProductChanges(
-      current.state,
-      body.state,
-    );
-    const legacyHistoryOnly = changesOnlyReadOnlyLegacyHistory(governedChanges);
-    return NextResponse.json(
-      {
-        error: legacyHistoryOnly
-          ? "旧配方、候选、OfficialSku 与明细覆盖已转为只读历史，只能查看、导出或通过迁移流程处理。"
-          : "受治理的状态只能通过对应领域命令修改。",
-        code: legacyHistoryOnly
-          ? "LEGACY_HISTORY_READ_ONLY"
-          : "DOMAIN_COMMAND_REQUIRED",
-        governedChanges,
-        legacyHistoryChanges,
-      },
-      { status: 422 },
-    );
-  }
-
-  const result = await saveWorkspaceState({
-    state: body.state,
-    baseRevision: body.baseRevision,
-    author: stableAuditActor(user),
-    message: body.message?.trim() || "保存配置修改",
-  });
-  if (result.conflict) {
-    return NextResponse.json(
-      { error: "其他成员已保存新版本，请刷新后再合并。", revision: result.revision },
-      { status: 409 },
-    );
-  }
-  return NextResponse.json({ revision: result.revision, user });
 }

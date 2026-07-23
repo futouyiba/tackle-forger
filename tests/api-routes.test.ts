@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test, { after, before } from "node:test";
 import { NextRequest } from "next/server";
-import { PUT as putState } from "../app/api/state/route";
+import { PUT as putState, saveWorkspaceForbiddenResponse } from "../app/api/state/route";
 import { POST as issueActionCommand } from "../app/api/action-commands/route";
 import { POST as accessDataSources } from "../app/api/data-sources/route";
 import { POST as mutateWorkbook } from "../app/api/feishu-workbook/route";
@@ -175,6 +175,19 @@ test("已认证整包 PUT 不能绕过 Series 领域命令", { concurrency: fals
   assert.deepEqual(payload.governedChanges, ["seriesDefinitions"]);
 });
 
+test("save_workspace capability 禁用时返回403且不触发任何保存", { concurrency: false }, async () => {
+  const current = await loadWorkspaceState();
+  const forbidden = saveWorkspaceForbiddenResponse({
+    enabled: false,
+    disabledReasonText: "缺少 workspace.save Capability。",
+  });
+  assert.equal(forbidden?.status, 403);
+  assert.equal(forbidden?.body.error, "缺少 workspace.save Capability。");
+  const after = await loadWorkspaceState();
+  assert.equal(after.revision, current.revision);
+  assert.deepEqual(after.state, current.state);
+});
+
 test("整包 PUT 拒绝修改只读历史并保留 payload 与 Trace", { concurrency: false }, async () => {
   withTrustedProxy();
   const current = await loadWorkspaceState();
@@ -284,6 +297,29 @@ test("整包 PUT 默认保存多个普通字段和未来字段，并在混合治
   assert.deepEqual(afterRejected.state.notes, beforeMixed.notes, "普通字段也不得部分保存");
   assert.equal(afterRejected.state.governanceAuditLog.length, beforeMixed.governanceAuditLog.length);
   assert.equal(afterRejected.state.commandIdempotencyRecords.length, beforeMixed.commandIdempotencyRecords.length);
+});
+
+test("整包 PUT 拒绝嵌套约束、Recipe 与迁移复核证据，且混合请求无副作用", { concurrency: false }, async () => {
+  withTrustedProxy();
+  const current = await loadWorkspaceState();
+  const state = structuredClone(current.state);
+  state.templates[0]!.notes = "must not partially save";
+  state.partConstraintSets = [...state.partConstraintSets, { nested: { changed: true } } as never];
+  state.candidateSearchRecipes = [...state.candidateSearchRecipes, { nested: { changed: true } } as never];
+  state.migrationReviewItems = [...state.migrationReviewItems, { nested: { changed: true } } as never];
+  const before = structuredClone(current.state);
+  const rejected = await issueAndInvoke({
+    action: "save_workspace", url: "http://localhost/api/state", method: "PUT",
+    payload: { state, baseRevision: current.revision }, invoke: putState,
+  });
+  assert.equal(rejected.status, 422);
+  const body = await rejected.json() as { governedChanges?: string[]; governedFields?: Array<{ action: string }> };
+  assert.deepEqual(body.governedChanges, ["partConstraintSets", "candidateSearchRecipes", "migrationReviewItems"]);
+  assert.match(body.governedFields?.[0]?.action ?? "", /只读/);
+  const after = await loadWorkspaceState();
+  assert.equal(after.revision, current.revision);
+  assert.deepEqual(after.state.templates, before.templates);
+  assert.deepEqual(after.state.migrationReviewItems, before.migrationReviewItems);
 });
 
 test("整包 PUT 保留 revision 冲突、授权与已发布 Snapshot 冻结", { concurrency: false }, async () => {

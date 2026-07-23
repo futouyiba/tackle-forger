@@ -73,6 +73,10 @@ const GOVERNED_STATE_FIELDS: readonly GovernedStateField[] = [
 
 const GOVERNED_STATE_FIELD_BY_NAME = new Map(GOVERNED_STATE_FIELDS.map((entry) => [entry.field, entry]));
 
+export function isGovernedStateField(field: string): boolean {
+  return GOVERNED_STATE_FIELD_BY_NAME.has(field);
+}
+
 export function governedStateFieldDetails(fields: readonly string[]): GovernedStateField[] {
   return fields.flatMap((field) => {
     const detail = GOVERNED_STATE_FIELD_BY_NAME.get(field);

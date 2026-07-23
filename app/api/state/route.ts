@@ -25,6 +25,20 @@ import {
 
 export const dynamic = "force-dynamic";
 
+export function saveWorkspaceForbiddenResponse(saveAvailability: {
+  enabled: boolean;
+  disabledReasonText?: string;
+}) {
+  if (saveAvailability.enabled) return undefined;
+  return {
+    status: 403,
+    body: {
+      error: saveAvailability.disabledReasonText ?? "当前账号没有保存工作区的权限。",
+      actionAvailability: saveAvailability,
+    },
+  };
+}
+
 function commandErrorStatus(error: ActionCommandPayloadError): number {
   if (error.code === "ACTION_COMMAND_PAYLOAD_NOT_FOUND") return 404;
   if (error.code === "ACTION_COMMAND_CAPABILITY_CHANGED") return 403;
@@ -58,10 +72,11 @@ export async function PUT(request: NextRequest) {
     );
   }
   const saveAvailability = user.actionAvailability.save_workspace;
-  if (!saveAvailability.enabled) {
+  const forbidden = saveWorkspaceForbiddenResponse(saveAvailability);
+  if (forbidden) {
     return NextResponse.json(
-      { error: saveAvailability.disabledReasonText ?? "当前账号没有保存工作区的权限。", actionAvailability: saveAvailability },
-      { status: 403 },
+      forbidden.body,
+      { status: forbidden.status },
     );
   }
   const invocation = await request.json().catch(() => null);

@@ -190,25 +190,23 @@ function parseWeight(input: {
     if (row.some((value) => asText(value).includes("机器ID"))) {
       headers = row.map(asText);
       const find = (label: string) => headers.findIndex((value) => value === label);
-      columns = { id: find("机器ID（勿改）"), part: find("钓具大类"), method: find("钓法"), notes: find("备注"), band: find("重量段"), min: find("最小拉力"), max: find("最大拉力"), grade: find("鱼重等级") };
+      columns = { id: find("机器ID（勿改）"), part: find("钓具大类"), notes: find("备注"), band: find("重量段"), min: find("最小拉力"), max: find("最大拉力"), grade: find("鱼重等级") };
       for (const [column, header] of headers.entries()) if (header && !Object.values(columns).includes(column)) attributeHeaders.push(header);
       continue;
     }
     if (!headers.length || !row.some((value) => asText(value))) continue;
     const id = asText(row[columns.id ?? -1]);
-    const methodName = asText(row[columns.method ?? -1]);
-    const stableMethodId = methodId(methodName);
     const min = asFinite(row[columns.min ?? -1]);
     const max = asFinite(row[columns.max ?? -1]);
-    const isSourceRow = Boolean(id || methodName || min !== undefined || max !== undefined || asText(row[columns.band ?? -1]));
+    const isSourceRow = Boolean(id || min !== undefined || max !== undefined || asText(row[columns.band ?? -1]));
     if (!id) {
       if (isSourceRow) input.issues.push({ level: "error", code: "WEIGHT_TEMPLATE_ID_MISSING", message: `重量模板第 ${sourceRow} 行缺少机器 ID。`, sheetId: CANONICAL_RULE_RANGES.weight.sheetId, row: sourceRow });
       continue;
     }
     if (seen.has(id)) input.issues.push({ level: "error", code: "WEIGHT_TEMPLATE_ID_DUPLICATE", message: `重量模板 ID 重复：${id}`, sheetId: CANONICAL_RULE_RANGES.weight.sheetId, row: sourceRow });
     seen.add(id);
-    if (!methodName || !stableMethodId || min === undefined || max === undefined || min >= max) {
-      input.issues.push({ level: "error", code: "WEIGHT_TEMPLATE_ROW_INVALID", message: `重量模板 ${id} 的钓法或拉力区间无效。`, sheetId: CANONICAL_RULE_RANGES.weight.sheetId, row: sourceRow });
+    if (min === undefined || max === undefined || min >= max) {
+      input.issues.push({ level: "error", code: "WEIGHT_TEMPLATE_ROW_INVALID", message: `重量模板 ${id} 的拉力区间无效。`, sheetId: CANONICAL_RULE_RANGES.weight.sheetId, row: sourceRow });
       continue;
     }
     const values: Record<string, number | string> = {};
@@ -225,7 +223,7 @@ function parseWeight(input: {
     const itemKind: ItemKind = partName.includes("轮") ? "reel" : partName.includes("线") ? "line" : "rod";
     templates.push({
       id,
-      name: `${methodName} · ${band || id}`,
+      name: band || id,
       fishMinKg: min,
       fishMaxKg: max,
       nominalFishKg: (min + max) / 2,
@@ -236,7 +234,6 @@ function parseWeight(input: {
       tier: band,
       values,
       notes: asText(row[columns.notes ?? -1]),
-      methodId: stableMethodId,
       sourceRevisionId: input.sourceRevisionId,
       sourceSheetId: CANONICAL_RULE_RANGES.weight.sheetId,
       sourceRow,

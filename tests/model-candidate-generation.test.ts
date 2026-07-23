@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createSeedState } from "../lib/seed";
 import {
+  SKU_NOT_CURRENT_SERIES_SPECIFICATION_CODE,
+  SkuNotCurrentSeriesSpecificationError,
+} from "../lib/enabled-item-parts";
+import {
   candidateGenerationInputHash,
   generateModelCandidateRun,
   materializeCandidateRun,
@@ -26,7 +30,7 @@ function fixture() {
     functionIds: [series.coreFunctionId],
     performanceIds: series.performanceProfileId ? [series.performanceProfileId] : [],
     qualityIds: [series.qualityId],
-    targetWeightRangeKg: { min: 0, max: 1000 },
+    targetPullRangeKg: { min: 0, max: 1000 },
     maxCandidates: 20,
     notes: "test",
   };
@@ -97,6 +101,67 @@ test("同一冻结输入产生相同候选顺序、fingerprint 与输出 hash", 
   assert.equal(first.durationMs, 25);
 });
 
+test("旧 Performance 字段不参与配方筛选、兼容、Affinity 或候选 fingerprint", () => {
+  const baseline = fixture();
+  const expected = run(baseline);
+  const withLegacyPerformance = fixture();
+  withLegacyPerformance.series.performanceProfileId = "legacy:performance:heavy";
+  withLegacyPerformance.recipe.performanceIds = ["legacy:performance:other"];
+  withLegacyPerformance.state.compatibilityRules.push({
+    id: "legacy-performance-deny",
+    axis: "type_function",
+    effect: "deny",
+    selector: { performanceId: "legacy:performance:heavy" },
+    requirements: [],
+    priority: 999,
+    ruleSetVersion: withLegacyPerformance.state.ruleSetVersions[0].id,
+    reason: "旧 Performance 规则不得命中新候选",
+    suggestion: "",
+    enabled: true,
+  });
+  withLegacyPerformance.state.compatibilityRules.push({
+    id: "legacy-performance-requirement",
+    axis: "type_function",
+    effect: "require",
+    selector: {
+      typeId: withLegacyPerformance.series.typeId,
+      functionId: withLegacyPerformance.series.coreFunctionId,
+    },
+    requirements: [{
+      kind: "field",
+      key: "performanceId",
+      value: "legacy:performance:required",
+      message: "旧 Performance requirement 不得阻断 canonical 候选",
+    }],
+    priority: 998,
+    ruleSetVersion: withLegacyPerformance.state.ruleSetVersions[0].id,
+    reason: "旧 Performance requirement",
+    suggestion: "",
+    enabled: true,
+  });
+  withLegacyPerformance.state.affinityRules.push({
+    id: "legacy-performance-affinity",
+    axis: "function_performance",
+    selector: {},
+    score: -3,
+    priority: 999,
+    ruleSetVersion: withLegacyPerformance.state.ruleSetVersions[0].id,
+    reason: "旧轴不得进入新 Affinity",
+    enabled: true,
+  });
+  const actual = run(withLegacyPerformance);
+  assert.deepEqual(
+    actual.candidates.map((candidate) => candidate.candidateFingerprint),
+    expected.candidates.map((candidate) => candidate.candidateFingerprint),
+  );
+  assert.equal(actual.excludedByCode.HARD_COMPATIBILITY_DENIED, undefined);
+  assert.equal(
+    actual.candidates.every((candidate) =>
+      !candidate.affinity.matchedRuleIds.includes("legacy-performance-affinity")),
+    true,
+  );
+});
+
 test("高 Affinity 候选命中 deny 时只进入排除统计，合法候选仍保留", () => {
   const current = fixture();
   current.state.compatibilityRules.push({
@@ -151,4 +216,46 @@ test("同一 SKU + modelVariantKey 多重命中时跳过并报告，不按名称
   const nextState = { ...current.state, purchasableModels: [...first.models, duplicate], skuDrawers: first.skus };
   const result = materializeCandidateRun({ state: nextState, run: generated, actor: "tester", occurredAt: "2026-07-21T02:00:00.000Z" });
   assert.ok(result.record.issues.some((issue) => issue.code === "MODEL_VARIANT_BINDING_AMBIGUOUS"));
+});
+
+test("候选生成和物化在领域边界拒绝 DEPRECATED 或非当前规格 SKU", () => {
+  const current = fixture();
+  const allowedRun = run(current);
+  const selectedSku = current.skus[0]!;
+  const originalStatus = selectedSku.status;
+
+  selectedSku.status = "superseded";
+  assert.throws(
+    () => run(current),
+    (error) =>
+      error instanceof SkuNotCurrentSeriesSpecificationError &&
+      error.code === SKU_NOT_CURRENT_SERIES_SPECIFICATION_CODE &&
+      error.action === "candidate_generation" &&
+      error.skuIds.includes(selectedSku.id),
+  );
+  assert.throws(
+    () => materializeCandidateRun({
+      state: current.state,
+      run: allowedRun,
+      actor: "tester",
+      occurredAt: "2026-07-21T02:00:00.000Z",
+    }),
+    (error) =>
+      error instanceof SkuNotCurrentSeriesSpecificationError &&
+      error.action === "candidate_materialization" &&
+      error.skuIds.includes(selectedSku.id),
+  );
+
+  selectedSku.status = originalStatus;
+  current.series.targetPullSpecifications =
+    current.series.targetPullSpecifications.filter(
+      (entry) => entry.skuId !== selectedSku.id,
+    );
+  assert.throws(
+    () => run(current),
+    (error) =>
+      error instanceof SkuNotCurrentSeriesSpecificationError &&
+      error.action === "candidate_generation" &&
+      error.skuIds.includes(selectedSku.id),
+  );
 });

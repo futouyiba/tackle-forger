@@ -25,7 +25,7 @@ test("R1 甘特图只返回真实离散 SKU，不补齐连续重量", () => {
     models: state.purchasableModels,
   });
   const block = projection[0];
-  assert.deepEqual(block.skuNodes.map((node) => node.targetWeightKg), [1.5, 1.8]);
+  assert.deepEqual(block.skuNodes.map((node) => node.targetPullKg), [1.5, 1.8]);
   assert.equal(block.minDisplayWeightKg, 1.5);
   assert.equal(block.maxDisplayWeightKg, 1.8);
   assert.equal(
@@ -76,6 +76,17 @@ test("正式 Series 创建与查看分别授权", () => {
   assert.equal(editor.create_series.enabled, true);
   assert.deepEqual(editor.create_series.requiredCapabilities, ["series.edit"]);
   assert.equal(editor.open_series.enabled, false);
+});
+
+test("SKU 目标拉力变更由独立 sku.edit 能力授权", () => {
+  assert.equal(
+    actionAvailability("change_sku_target_pull", ["sku.read"]).enabled,
+    false,
+  );
+  assert.equal(
+    actionAvailability("change_sku_target_pull", ["sku.edit"]).enabled,
+    true,
+  );
 });
 
 test("R2 规则工作簿检查、拉取、建草稿与 ID 回写分别授权", () => {

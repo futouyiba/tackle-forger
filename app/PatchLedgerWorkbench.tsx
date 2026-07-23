@@ -62,7 +62,7 @@ export function PatchLedgerWorkbench({ state, capabilities, actorName, mutate, n
   const subjectOptions=draft?.scopeType==="series"
     ? state.seriesDefinitions.map((entry)=>({id:entry.id,name:entry.name,revision:entry.revision}))
     : draft?.scopeType==="sku"
-      ? state.skuDrawers.map((entry)=>({id:entry.id,name:entry.id+" · "+entry.targetWeightKg+" kgf",revision:entry.revision}))
+      ? state.skuDrawers.map((entry)=>({id:entry.id,name:entry.id+" · "+entry.targetPullKg+" kgf",revision:entry.revision}))
       : state.purchasableModels.map((entry)=>({id:entry.id,name:entry.name,revision:entry.revision}));
 
   const selectedApprovalEvidence=selected?currentPatchApprovalEvidence(state,selected):undefined;

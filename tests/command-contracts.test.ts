@@ -72,7 +72,7 @@ test("R3 高Affinity命中deny只进排除统计，合法低分候选仍展示",
         affinity: affinity(100),
         invariantIssueCount: 0,
         warningCount: 0,
-        weightDistance: 0,
+        pullDistance: 0,
         recipeSortValues: { recipeOrder: 0 },
         rankReasons: [],
       },
@@ -85,7 +85,7 @@ test("R3 高Affinity命中deny只进排除统计，合法低分候选仍展示",
         affinity: affinity(-2),
         invariantIssueCount: 0,
         warningCount: 1,
-        weightDistance: 0.2,
+        pullDistance: 0.2,
         recipeSortValues: { recipeOrder: 1 },
         rankReasons: [],
       },
@@ -166,6 +166,69 @@ test("R4 Trace按sequence重放并验证before/inputHash/outputHash", () => {
   );
 });
 
+test("R4 legacy UnifiedTrace跨subject共享全局sequence时按实际subject播种初始状态", () => {
+  const secondSubjectEntry = traceEntry(2, 10, "add", 2, 12);
+  secondSubjectEntry.subjectRef = ref("model", "model:2");
+  const result = replayUnifiedTrace({
+    initialValues: { drag: 10 },
+    entries: [
+      traceEntry(1, 10, "add", 2, 12),
+      secondSubjectEntry,
+    ],
+  });
+  assert.equal(result.values.drag, 12);
+});
+
+test("R4 legacy UnifiedTrace扁平结果遇到多subject同名参数分歧时fail-closed", () => {
+  const divergentSubjectEntry = traceEntry(2, 10, "add", 5, 15);
+  divergentSubjectEntry.subjectRef = ref("model", "model:2");
+  assert.throws(
+    () => replayUnifiedTrace({
+      initialValues: { drag: 10 },
+      entries: [
+        traceEntry(1, 10, "add", 2, 12),
+        divergentSubjectEntry,
+      ],
+    }),
+    /TRACE_REPLAY_MISMATCH.*无法表示多个 subject 的不同终态/,
+  );
+});
+
+test("R4 legacy UnifiedTrace 的 32 位 hash 碰撞不能伪装为相同终态", () => {
+  const left = "4x47h135er6o";
+  const right = "a4f3v0xp2x1k";
+  assert.equal(deterministicHash(left), deterministicHash(right));
+  const collisionEntry = (
+    sequence: number,
+    modelId: string,
+    after: string,
+  ): UnifiedTraceEntry => ({
+    traceEntryId: `trace:collision:${sequence}`,
+    subjectRef: ref("model", modelId),
+    parameterKey: "collision",
+    sequence,
+    layer: "model_patch",
+    sourceVersion: "1",
+    ruleSetVersion: "rules:1",
+    before: null,
+    operation: "set",
+    operand: after,
+    after,
+    inputHash: deterministicHash({ parameterKey: "collision", value: null }),
+    outputHash: deterministicHash({ parameterKey: "collision", value: after }),
+  });
+  assert.throws(
+    () => replayUnifiedTrace({
+      initialValues: { collision: null },
+      entries: [
+        collisionEntry(1, "model:1", left),
+        collisionEntry(2, "model:2", right),
+      ],
+    }),
+    /TRACE_REPLAY_MISMATCH.*无法表示多个 subject 的不同终态/,
+  );
+});
+
 test("R9 error必阻断、deny不可waive、修复动作由Capability决定", () => {
   const issue = createUnifiedIssue({
     code: "HARD_DENY",
@@ -181,15 +244,13 @@ test("R9 error必阻断、deny不可waive、修复动作由Capability决定", ()
     deny: true,
     actionSpecs: [{
       actionId: "action:1",
-      action: "edit_patch",
+      action: "create_patch",
       label: "修正Patch",
-      command: "create_patch",
-      capabilities: ["model.patch.create"],
       heldCapabilities: ["model.read"],
     }],
   });
   assert.equal(issue.blocking, true);
-  assert.equal(issue.actions[0].availability.enabled, false);
+  assert.equal(issue.actions[0].enabled, false);
   assert.throws(
     () => createUnifiedIssue({
       ...issue,
@@ -228,4 +289,3 @@ test("R12 开放策略必须明确命中已发布版本，不用页面默认", (
     /配置不完整/,
   );
 });
-

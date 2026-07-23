@@ -63,8 +63,11 @@ export interface QualityValuePolicyDraft {
   affixSheetId: "zrVOxd";
   ranges: QualityValueRange[];
   combinationRules: QualityCombinationRule[];
-  performanceScoringEnabled?: boolean;
-  performanceScoringSource?: PricingCellRef;
+  /** 旧规则源的性能计分字段仅作为迁移证据保留，正式评分不得消费。 */
+  legacyPerformanceScoringEvidence?: {
+    enabled?: boolean;
+    source?: PricingCellRef;
+  };
   issues: QualityValidationIssue[];
   formalStatus: "NON_FORMAL" | "READY_TO_PUBLISH";
   inputHash: string;
@@ -89,6 +92,7 @@ export interface ModelAffixValueAssessment {
   baseAffixScore: number;
   combinationScore: number;
   functionScoreFactor: number;
+  /** 仅旧策略重放结果可能包含；新评分不得写入。 */
   performanceScoreFactor?: number;
   finalValueScore: number;
   affixBreakdown: Array<{ sourceAffixId: string; valueScore: number; sourceRef: string }>;
@@ -233,18 +237,6 @@ export function importQualityValuePolicyDraft(input: {
     }
   }
 
-  if (input.performanceScoringEnabled === undefined) {
-    issues.push(issue({
-      code: "QUALITY_SCORE_SOURCE_MISSING",
-      severity: "ERROR",
-      gate: "PUBLISH",
-      message: "当前规则源没有独立性能定位页；必须显式禁用性能计分或提供可解析来源。",
-      sourceRevision: input.sourceRevision,
-      sourceCell: { sheetId: "FqD4j7", cell: "B2" },
-      relatedObjectIds: [],
-    }));
-  }
-
   const sRange = input.ranges.find((range) => range.qualityId === "quality_s_orange");
   const conflictingEndpoint = input.pricingScoreEndpoints?.find(
     (entry) => entry.value === sRange?.maxScore,
@@ -268,8 +260,16 @@ export function importQualityValuePolicyDraft(input: {
     affixSheetId: "zrVOxd" as const,
     ranges: structuredClone(input.ranges),
     combinationRules: [...rulesByPair.values()],
-    performanceScoringEnabled: input.performanceScoringEnabled,
-    performanceScoringSource: input.performanceScoringSource,
+    ...(
+      input.performanceScoringEnabled !== undefined || input.performanceScoringSource
+        ? {
+            legacyPerformanceScoringEvidence: {
+              enabled: input.performanceScoringEnabled,
+              source: input.performanceScoringSource,
+            },
+          }
+        : {}
+    ),
     issues,
     formalStatus: issues.some((entry) => entry.severity === "ERROR" || entry.severity === "BLOCKER")
       ? "NON_FORMAL" as const
@@ -290,9 +290,34 @@ export function assessModelAffixValue(input: {
   selectedQualityId: QualityId;
   configuration: ResolvedAffixConfiguration;
   functionScoreFactor: SourcedPricingValue<number>;
-  performanceScoreFactor?: SourcedPricingValue<number>;
   scoringPolicyVersion: string;
 }): ModelAffixValueAssessment {
+  return assessModelAffixValueInternal(input);
+}
+
+/**
+ * 只供已冻结旧策略的审计重放。新 Model、候选、Snapshot 与定价链不得调用。
+ */
+export function assessLegacyModelAffixValue(input: {
+  policy: QualityValuePolicyDraft;
+  modelRevisionId: string;
+  selectedQualityId: QualityId;
+  configuration: ResolvedAffixConfiguration;
+  functionScoreFactor: SourcedPricingValue<number>;
+  performanceScoreFactor: SourcedPricingValue<number>;
+  scoringPolicyVersion: string;
+}): ModelAffixValueAssessment {
+  return assessModelAffixValueInternal(input, input.performanceScoreFactor);
+}
+
+function assessModelAffixValueInternal(input: {
+  policy: QualityValuePolicyDraft;
+  modelRevisionId: string;
+  selectedQualityId: QualityId;
+  configuration: ResolvedAffixConfiguration;
+  functionScoreFactor: SourcedPricingValue<number>;
+  scoringPolicyVersion: string;
+}, legacyPerformanceScoreFactor?: SourcedPricingValue<number>): ModelAffixValueAssessment {
   const trace: QualityScoreTraceEntry[] = [];
   const affixBreakdown = input.configuration.affixes.map((affix) => ({
     sourceAffixId: affix.id,
@@ -361,28 +386,15 @@ export function assessModelAffixValue(input: {
   });
 
   let performanceScoreFactor: number | undefined;
-  if (input.policy.performanceScoringEnabled === false) {
-    performanceScoreFactor = 1;
-    trace.push({
-      sequence: trace.length + 1,
-      step: "performance_factor",
-      sourceRevision: input.policy.sourceRevision,
-      source: input.policy.performanceScoringSource ?? { sheetId: "FqD4j7", cell: "B2" },
-      subjectIds: [input.modelRevisionId],
-      before: finalValueScore,
-      operation: "multiply",
-      operand: 1,
-      after: finalValueScore,
-    });
-  } else if (input.performanceScoreFactor) {
-    performanceScoreFactor = input.performanceScoreFactor.value;
+  if (legacyPerformanceScoreFactor) {
+    performanceScoreFactor = legacyPerformanceScoreFactor.value;
     const before = finalValueScore;
     finalValueScore *= performanceScoreFactor;
     trace.push({
       sequence: trace.length + 1,
       step: "performance_factor",
       sourceRevision: input.policy.sourceRevision,
-      source: input.performanceScoreFactor.source,
+      source: legacyPerformanceScoreFactor.source,
       subjectIds: [input.modelRevisionId],
       before,
       operation: "multiply",
@@ -424,7 +436,7 @@ export function assessModelAffixValue(input: {
     baseAffixScore,
     combinationScore,
     functionScoreFactor: input.functionScoreFactor.value,
-    performanceScoreFactor,
+    ...(performanceScoreFactor === undefined ? {} : { performanceScoreFactor }),
     finalValueScore,
     affixBreakdown,
     combinationBreakdown,

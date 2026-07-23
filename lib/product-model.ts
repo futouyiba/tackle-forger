@@ -13,10 +13,7 @@ export function seriesTargetPullSpecifications(series: SeriesDefinition) {
     return [...series.targetPullSpecifications]
       .sort((left, right) => left.targetPullKgf - right.targetPullKgf || left.skuId.localeCompare(right.skuId));
   }
-  return series.skuIds.map((skuId, index) => ({
-    targetPullKgf: series.targetWeightsKg[index],
-    skuId,
-  })).filter((entry) => Number.isFinite(entry.targetPullKgf));
+  return [];
 }
 
 export interface ResolvedModelPanel {
@@ -83,9 +80,15 @@ export function validateSeriesInvariants(
     projection.typeId === input.series.typeId && projection.structuralValues)) {
     issue(issues, "warning", "SERIES_STRUCTURAL_SOURCE_MISSING", "Series 部位已指定，但当前投影缺少可追踪的结构标杆基础值。");
   }
+  const specifications = seriesTargetPullSpecifications(input.series);
+  // 只豁免明确 DEPRECATED 的历史抽屉。仍处于活动生命周期但意外
+  // 掉出规格表的 SKU 必须继续进入校验并报告 SERIES_WEIGHT_UNDECLARED。
   const skus = input.skus
-    .filter((sku) => sku.seriesId === input.series.id)
-    .sort((left, right) => left.targetWeightKg - right.targetWeightKg);
+    .filter(
+      (sku) =>
+        sku.seriesId === input.series.id && sku.status !== "superseded",
+    )
+    .sort((left, right) => left.targetPullKg - right.targetPullKg);
   const models = input.models.filter((model) =>
     skus.some((sku) => sku.id === model.skuId),
   );
@@ -93,7 +96,6 @@ export function validateSeriesInvariants(
   if (!skus.length) {
     issue(issues, "error", "SERIES_SKU_MISSING", "Series 至少需要一个 SKU 抽屉。");
   }
-  const specifications = seriesTargetPullSpecifications(input.series);
   if (!specifications.length) {
     issue(issues, "error", "SERIES_PULL_SPECIFICATION_MISSING", "Series 至少需要一个已确认的离散目标拉力规格。");
   }
@@ -115,21 +117,21 @@ export function validateSeriesInvariants(
     const sku = skus.find((entry) => entry.id === specification.skuId);
     if (!sku) {
       issue(issues, "error", "SERIES_PULL_SPECIFICATION_NOT_MATERIALIZED", "目标拉力 " + specification.targetPullKgf + "kgf 尚未物化为所属 Series 的 SKU 抽屉。");
-    } else if (sku.targetWeightKg !== specification.targetPullKgf) {
+    } else if (sku.targetPullKg !== specification.targetPullKgf) {
       issue(issues, "error", "SERIES_PULL_SPECIFICATION_MISMATCH", "SKU " + sku.id + " 的目标拉力与 Series 离散规格不一致。");
     }
   }
   const weightSet = new Set<number>();
   for (const sku of skus) {
-    if (weightSet.has(sku.targetWeightKg)) {
+    if (weightSet.has(sku.targetPullKg)) {
       issue(
         issues,
         "error",
         "SERIES_WEIGHT_DUPLICATE",
-        "Series 存在重复目标重量：" + sku.targetWeightKg + "kg。",
+        "Series 存在重复目标拉力：" + sku.targetPullKg + "kgf。",
       );
     }
-    weightSet.add(sku.targetWeightKg);
+    weightSet.add(sku.targetPullKg);
     if (!specificationSkuIds.has(sku.id)) {
       issue(
         issues,
@@ -165,17 +167,8 @@ export function validateSeriesInvariants(
     if (projection.qualityId !== input.series.qualityId) {
       issue(issues, "error", "SERIES_QUALITY_MISMATCH", "SKU 的品质偏离 Series。");
     }
-    if (
-      input.series.performanceProfileId &&
-      projection.performanceId !== input.series.performanceProfileId
-    ) {
-      issue(
-        issues,
-        "error",
-        "SERIES_PERFORMANCE_MISMATCH",
-        "SKU 的性能方向偏离 Series。",
-      );
-    }
+    // performanceProfileId is historical evidence only. Canonical projections intentionally
+    // omit Performance, so this legacy field must never become a new hard invariant.
     if (input.series.functionIntensityPolicy.mode === "fixed") {
       if (
         projection.functionIntensity !==
@@ -190,13 +183,13 @@ export function validateSeriesInvariants(
       }
     } else {
       const expected =
-        input.series.functionIntensityPolicy.values[String(sku.targetWeightKg)];
+        input.series.functionIntensityPolicy.values[String(sku.targetPullKg)];
       if (expected !== undefined && projection.functionIntensity !== expected) {
         issue(
           issues,
           "error",
           "SERIES_INTENSITY_CURVE_MISMATCH",
-          "SKU 的功能专精强度不符合显式重量曲线。",
+          "SKU 的功能专精强度不符合显式目标拉力曲线。",
         );
       }
     }

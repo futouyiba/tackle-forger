@@ -287,7 +287,7 @@ test("v3 内核按固定层序计算，百分比先加算、Patch 分层且可�
   const second = deriveProjection(input);
 
   assert.equal(first.structuralValues?.force, 22);
-  assert.equal(first.values.force, 76.1);
+  assert.equal(first.values.force, 69.6);
   assert.equal(first.values.friction, applyReduction(100, 0.5, "diminishing_division"));
   assert.deepEqual(
     first.trace.map((step) => step.layer),
@@ -310,6 +310,11 @@ test("v3 内核按固定层序计算，百分比先加算、Patch 分层且可�
   assert.deepEqual(input, original);
   assert.equal(first.ruleSetVersion, "ruleset-test-1");
   assert.equal(first.reductionStackingMode, "diminishing_division");
+  assert.equal(first.performanceId, undefined);
+  assert.deepEqual(
+    first.trace.find((step) => step.layer === "performance")?.sourceIds,
+    [],
+  );
   assert.equal(first.id, "projection-" + first.sourceHash);
   assert.equal(
     first.trace.find((step) => step.layer === "method")?.sourceIds[0],
@@ -320,6 +325,41 @@ test("v3 内核按固定层序计算，百分比先加算、Patch 分层且可�
     "type:spinning",
   );
   assert.ok(!Object.values(first.values).includes(999));
+});
+
+test("旧 Performance 属性贡献只在显式历史重放模式恢复", () => {
+  const input = baseInput();
+  const canonical = deriveProjection(input);
+  const legacy = deriveProjection({
+    ...input,
+    executionMode: "legacy_performance_replay",
+  });
+  assert.equal(canonical.values.force, 69.6);
+  assert.equal(legacy.values.force, 76.1);
+  assert.equal(legacy.performanceId, "performance:strong");
+  assert.deepEqual(
+    legacy.trace.find((step) => step.layer === "performance")?.sourceIds,
+    ["performance:strong"],
+  );
+  assert.notEqual(legacy.sourceHash, canonical.sourceHash);
+});
+
+test("显式历史 Performance 重放缺少旧定义时 fail closed，不产生伪 canonical hash", () => {
+  const input = {
+    ...baseInput(),
+    performanceProfile: undefined,
+  };
+  const firstCanonical = deriveProjection(input);
+  const secondCanonical = deriveProjection(structuredClone(input));
+  assert.deepEqual(firstCanonical, secondCanonical);
+  assert.equal(firstCanonical.performanceId, undefined);
+  assert.throws(
+    () => deriveProjection({
+      ...input,
+      executionMode: "legacy_performance_replay",
+    }),
+    /LEGACY_PERFORMANCE_PROFILE_MISSING/,
+  );
 });
 
 test("两种降低公式覆盖零值、单条、多条与极值", () => {
@@ -409,7 +449,7 @@ test("规则边界与同层 set 冲突会进入可追踪校验结果", () => {
 
   const projection = deriveProjection(input);
   assert.equal(projection.values.weight, 80);
-  assert.equal(projection.values.force, 37.75);
+  assert.equal(projection.values.force, 34.5);
   assert.ok(
     projection.warnings.some((warning) => warning.code === "SET_RULE_CONFLICT"),
   );
@@ -445,7 +485,7 @@ test("FinalReviewPatch 在 Affix 结算之后应用，可覆盖词条结果（�
   ];
   const projection = deriveProjection(input);
 
-  // 词条结算后 force 为 27.5 × 1.3 + 2 = 37.75；FinalReviewPatch 的 set 在其后覆盖为 42。
+  // 规范运行时不消费 Performance；词条结算后再由 FinalReviewPatch 覆盖为 42。
   assert.equal(projection.values.force, 42);
 
   const layers = projection.trace.map((step) => step.layer);

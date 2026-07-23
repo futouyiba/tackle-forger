@@ -58,6 +58,11 @@ import {
   buildProductBreadcrumbView,
   ProductDeepLinkUnavailableNotice,
 } from "./product-deep-link-ui";
+import {
+  clearMatchingAssessment,
+  SeriesAssessmentPanel,
+  type AIAssessmentUiState,
+} from "./SeriesAssessmentPanel";
 
 interface SeriesGanttWorkbenchV3Props {
   state: WorkspaceState;
@@ -96,52 +101,6 @@ interface SeriesCreateDraft {
   planningMinKgf: string;
   planningMaxKgf: string;
   discretePulls: string;
-}
-
-interface AIAssessmentUiState {
-  scopeKey: string;
-  status: "running" | "success" | "error";
-  error?: string;
-  assessmentId?: string;
-  inputHash?: string;
-  outputHash?: string;
-  freshness?: {
-    state: "fresh" | "stale";
-    canCreateDraft: boolean;
-    staleReasonCodes: string[];
-  };
-  result?: {
-    findings: Array<{ findingCode: string; summary: string; evidenceAliases: string[] }>;
-    recommendations: Array<{
-      recommendationCode: string;
-      title: string;
-      summary: string;
-      suggestedAction: "preview_only" | "create_model_patch_draft" | "create_rule_source_change_draft";
-      evidenceAliases: string[];
-      suggestedChanges?: Array<{
-        changeId: string;
-        parameterKey: string;
-        operation: "set" | "add" | "multiply" | "clear";
-        operand: unknown;
-        expectedBefore: unknown;
-      }>;
-    }>;
-    assumptions: string[];
-    uncoveredInformation: string[];
-    resolvedEvidenceRefs?: Array<{
-      evidenceType: string;
-      evidenceAlias: string;
-      refId: string;
-      revisionId?: string;
-      contentHash: string;
-    }>;
-    feedback?: {
-      recommendations?: Array<{
-        recommendationId: string;
-        state: "dismissed";
-      }>;
-    };
-  };
 }
 
 interface AIDraftPreviewChange {
@@ -2073,6 +2032,16 @@ export function SeriesGanttWorkbenchV3({
               {!models.length ? <div className="gantt-no-model">该 SKU 抽屉还没有 Model；不会自动跨层打开或创建对象。</div> : null}
             </div>
           ) : null}
+          <SeriesAssessmentPanel
+            key={`${selectedSeries.id}:${aiAssessment?.assessmentId ?? "none"}`}
+            series={selectedSeries}
+            aiAvailability={aiAvailability}
+            aiAssessment={aiAssessment?.scopeKey === `series:${selectedSeries.id}` ? aiAssessment : undefined}
+            onRunAssessment={() => void runAiAssessment("series", selectedSeries.id)}
+            onAssessmentDeleted={(assessmentId) => setAiAssessment((currentAssessment) =>
+              clearMatchingAssessment(currentAssessment, `series:${selectedSeries.id}`, assessmentId))}
+            notify={notify}
+          />
         </section>
       ) : null}
 

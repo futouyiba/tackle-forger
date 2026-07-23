@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import {
+  clearMatchingAssessment,
+  SeriesAssessmentPanel,
+  type AIAssessmentUiState,
+} from "../app/SeriesAssessmentPanel";
+import type { SeriesDefinition } from "../lib/types";
 
 test("AI 结果区删除入口明确提示永久产物来源并要求显式确认", async () => {
   const source = await readFile(
@@ -43,4 +51,85 @@ test("查看依据会展示本地稳定引用、revision 与完整内容 hash", 
   assert.match(source, /evidence\.refId/);
   assert.match(source, /evidence\.revisionId/);
   assert.match(source, /evidence\.contentHash/);
+});
+
+test("Series 成功评估实际渲染只读结果、EvidenceRef 与删除入口", () => {
+  const assessment: AIAssessmentUiState = {
+    scopeKey: "series:series-alpha",
+    status: "success",
+    assessmentId: "assessment-series-alpha",
+    outputHash: "a".repeat(64),
+    freshness: {
+      state: "fresh",
+      canCreateDraft: false,
+      staleReasonCodes: [],
+    },
+    result: {
+      findings: [{
+        findingCode: "SERIES_CURVE_WARNING",
+        summary: "重量曲线需要复核。",
+        evidenceAliases: ["series-invariant"],
+      }],
+      recommendations: [{
+        recommendationCode: "REVIEW_SERIES_CURVE",
+        title: "复核重量曲线",
+        summary: "对照确定性不变量检查各离散 SKU。",
+        suggestedAction: "preview_only",
+        evidenceAliases: ["series-invariant"],
+      }],
+      assumptions: ["仅使用当前 revision。"],
+      uncoveredInformation: [],
+      resolvedEvidenceRefs: [{
+        evidenceType: "series_invariant",
+        evidenceAlias: "series-invariant",
+        refId: "series-alpha:series-invariant",
+        revisionId: "7",
+        contentHash: "b".repeat(64),
+      }],
+    },
+  };
+  const markup = renderToStaticMarkup(createElement(SeriesAssessmentPanel, {
+    series: {
+      id: "series-alpha",
+      name: "青芦·远投",
+      revision: 7,
+    } as SeriesDefinition,
+    aiAvailability: {
+      action: "run_ai_assessment",
+      enabled: true,
+      requiredCapabilities: ["ai.evaluate"],
+    },
+    aiAssessment: assessment,
+    onRunAssessment: () => undefined,
+    onAssessmentDeleted: () => undefined,
+    notify: () => undefined,
+  }));
+
+  assert.match(markup, /Series 评估结果只读/);
+  assert.match(markup, /Series 作用域不支持转换为 Model Patch 草稿/);
+  assert.match(markup, /重量曲线需要复核/);
+  assert.match(markup, /series-alpha:series-invariant/);
+  assert.match(markup, /hash b{64}/);
+  assert.match(markup, /删除这次 Series AI 评估/);
+});
+
+test("Series 删除后的本地清理同时匹配 scope 与 assessmentId", () => {
+  const current: AIAssessmentUiState = {
+    scopeKey: "series:series-alpha",
+    status: "success",
+    assessmentId: "assessment-series-alpha",
+  };
+
+  assert.equal(
+    clearMatchingAssessment(current, "series:series-alpha", "assessment-series-alpha"),
+    undefined,
+  );
+  assert.equal(
+    clearMatchingAssessment(current, "series:series-beta", "assessment-series-alpha"),
+    current,
+  );
+  assert.equal(
+    clearMatchingAssessment(current, "series:series-alpha", "assessment-other"),
+    current,
+  );
 });

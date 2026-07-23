@@ -452,6 +452,136 @@ test("全量 sweep 清除主内容，并按 assessmentId 删除所有备份且�
   }
 });
 
+test("仅剩独立墓碑时仍可驱动备份清理，失败状态与审计在主目录恢复后可重试且幂等", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "tackle-forger-ai-retention-tombstone-only-"));
+  const primary = path.join(root, "primary");
+  const tombstones = path.join(root, "deletion-tombstones");
+  const backups = path.join(root, "backups");
+  const previous = {
+    dataDir: process.env.AI_RETENTION_DATA_DIR,
+    tombstoneDir: process.env.AI_RETENTION_TOMBSTONE_DIR,
+    key: process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64,
+    keyVersion: process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION,
+  };
+  process.env.AI_RETENTION_DATA_DIR = primary;
+  process.env.AI_RETENTION_TOMBSTONE_DIR = tombstones;
+  process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64 = randomBytes(32).toString("base64");
+  process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION = "key-v1";
+  let failPurge = true;
+  let purgeCalls = 0;
+  try {
+    const assessmentId = "assessment-tombstone-only";
+    const actorStableId = "owner-tombstone-only";
+    const deletedAt = new Date("2026-07-23T01:00:00.000Z");
+    const sweepAt = new Date(deletedAt.getTime() + 30 * 24 * 60 * 60 * 1_000);
+    const store = createAIRuntimeStoreFromEnvironment();
+    await store.initialize();
+    await store.saveAssessment(record({
+      assessmentId,
+      actorStableId,
+      createdAt: "2026-07-23T00:00:00.000Z",
+    }));
+    await store.requestAssessmentDeletion({ assessmentId, actorStableId, now: deletedAt });
+    await rm(path.join(primary, "assessments", `${assessmentId}.json`));
+
+    const backupFile = path.join(
+      backups,
+      "2026-07-24T03-30-00-000Z",
+      "ai-retention",
+      "assessments",
+      `${assessmentId}.json`,
+    );
+    await mkdir(path.dirname(backupFile), { recursive: true });
+    await writeFile(backupFile, "backup copy\n", "utf8");
+    const fileAdapter = createFileAIBackupPurgeAdapter(backups);
+    const adapter = {
+      async purgeAssessmentBackups(input: Parameters<typeof fileAdapter.purgeAssessmentBackups>[0]) {
+        purgeCalls += 1;
+        if (failPurge) throw new Error("INJECTED_BACKUP_PURGE_FAILURE");
+        await fileAdapter.purgeAssessmentBackups(input);
+      },
+      verifyAssessmentBackupsAbsent: fileAdapter.verifyAssessmentBackupsAbsent,
+    };
+
+    const failed = await store.sweepRetention({ now: sweepAt, backupAdapter: adapter });
+    assert.deepEqual(failed, {
+      recordsScanned: 1,
+      recordsChanged: 1,
+      auditEventsWritten: 2,
+      backupPurgeFailures: 1,
+    });
+    assert.equal(purgeCalls, 1);
+    const failedTombstone = JSON.parse(
+      await readFile(path.join(tombstones, `${assessmentId}.json`), "utf8"),
+    ) as {
+      tombstone: {
+        backupPurgeState?: string;
+        backupPurgeAttempts?: number;
+        backupPurgeLastErrorCode?: string;
+      };
+      cleanupAuditEvents?: Array<{ action: string }>;
+    };
+    assert.equal(failedTombstone.tombstone.backupPurgeState, "FAILED");
+    assert.equal(failedTombstone.tombstone.backupPurgeAttempts, 1);
+    assert.equal(failedTombstone.tombstone.backupPurgeLastErrorCode, "INJECTED_BACKUP_PURGE_FAILURE");
+    assert.deepEqual(
+      failedTombstone.cleanupAuditEvents?.map((event) => event.action),
+      ["AI_BACKUP_PURGE_DUE", "AI_BACKUP_PURGE_FAILED"],
+    );
+
+    // Simulate restoring the primary AI domain from a snapshot that contains
+    // neither the assessment nor its cleanup audit stream.
+    await rm(primary, { recursive: true, force: true });
+    failPurge = false;
+    const restoredStore = createAIRuntimeStoreFromEnvironment();
+    await restoredStore.initialize();
+    const retried = await restoredStore.sweepRetention({ now: sweepAt, backupAdapter: adapter });
+    assert.equal(retried.recordsScanned, 1);
+    assert.equal(retried.recordsChanged, 1);
+    assert.equal(retried.backupPurgeFailures, 0);
+    assert.equal(purgeCalls, 2);
+    assert.equal(await lstat(backupFile).then(() => true).catch(() => false), false);
+
+    const completedTombstone = JSON.parse(
+      await readFile(path.join(tombstones, `${assessmentId}.json`), "utf8"),
+    ) as {
+      tombstone: { backupPurgeState?: string; backupPurgeAttempts?: number; backupPurgedAt?: string };
+    };
+    assert.equal(completedTombstone.tombstone.backupPurgeState, "PURGED");
+    assert.equal(completedTombstone.tombstone.backupPurgeAttempts, 2);
+    assert.ok(completedTombstone.tombstone.backupPurgedAt);
+    const restoredAudits = (await readFile(path.join(primary, "audit.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { action: string });
+    assert.deepEqual(
+      restoredAudits.map((event) => event.action),
+      ["AI_BACKUP_PURGE_DUE", "AI_BACKUP_PURGE_FAILED", "AI_BACKUP_PURGED"],
+    );
+
+    const idempotent = await restoredStore.sweepRetention({ now: sweepAt, backupAdapter: adapter });
+    assert.equal(idempotent.recordsScanned, 1);
+    assert.equal(idempotent.recordsChanged, 0);
+    assert.equal(idempotent.auditEventsWritten, 0);
+    assert.equal(idempotent.backupPurgeFailures, 0);
+    assert.equal(purgeCalls, 2);
+    const idempotentAudits = (await readFile(path.join(primary, "audit.jsonl"), "utf8"))
+      .trim()
+      .split("\n");
+    assert.equal(idempotentAudits.length, 3);
+  } finally {
+    if (previous.dataDir === undefined) delete process.env.AI_RETENTION_DATA_DIR;
+    else process.env.AI_RETENTION_DATA_DIR = previous.dataDir;
+    if (previous.tombstoneDir === undefined) delete process.env.AI_RETENTION_TOMBSTONE_DIR;
+    else process.env.AI_RETENTION_TOMBSTONE_DIR = previous.tombstoneDir;
+    if (previous.key === undefined) delete process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64;
+    else process.env.AI_RETENTION_ENCRYPTION_KEY_BASE64 = previous.key;
+    if (previous.keyVersion === undefined) delete process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION;
+    else process.env.AI_RETENTION_ENCRYPTION_KEY_VERSION = previous.keyVersion;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("备份清除审计中断后重试只补账，不重复执行物理删除", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "tackle-forger-ai-retention-purge-outbox-"));
   const primary = path.join(root, "primary");

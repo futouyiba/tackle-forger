@@ -905,6 +905,64 @@
   gap: 8px;
 }
 
+.gantt-series-ai-panel {
+  background: color-mix(in srgb, var(--accent) 2%, var(--surface));
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.gantt-series-ai-panel > header {
+  align-items: start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.gantt-series-ai-panel > header h4,
+.gantt-series-ai-panel > header small {
+  margin: 0;
+}
+
+.gantt-series-ai-panel > header small,
+.gantt-series-ai-readonly span {
+  color: var(--muted);
+}
+
+.gantt-series-ai-readonly {
+  align-items: start;
+  background: var(--surface-subtle);
+  border-radius: 10px;
+  display: flex;
+  gap: 9px;
+  padding: 11px 12px;
+}
+
+.gantt-series-ai-readonly > div {
+  display: grid;
+  gap: 3px;
+}
+
+.gantt-series-ai-evidence-index {
+  background: var(--surface-subtle);
+  border-radius: 9px;
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+}
+
+.gantt-series-ai-evidence-index ul,
+.gantt-series-ai-evidence-index p {
+  color: var(--muted);
+  margin: 0;
+}
+
+.gantt-series-ai-evidence-index small {
+  overflow-wrap: anywhere;
+}
+
 .gantt-ai-result > p {
   margin: 0;
 }

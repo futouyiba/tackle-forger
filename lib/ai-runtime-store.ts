@@ -95,6 +95,12 @@ type StoredAIAssessmentRetentionRecord = AIAssessmentRetentionRecord & {
 interface StoredAIDeletionTombstone {
   version: 1;
   tombstone: AIDeletionTombstone;
+  /**
+   * Deletion cleanup audit evidence lives with the independent tombstone so a
+   * restore of the primary AI data directory can rebuild the central audit
+   * stream without repeating the physical purge.
+   */
+  cleanupAuditEvents?: StoredAIRetentionAuditEvent[];
 }
 
 const EMPTY_ADMISSION_DOCUMENT: AIAdmissionDocument = {
@@ -194,7 +200,9 @@ export class FileAIRuntimeStore {
     return path.join(this.tombstonesDir, `${assessmentId}.json`);
   }
 
-  private async readDeletionTombstone(assessmentId: string): Promise<AIDeletionTombstone | undefined> {
+  private async readDeletionTombstoneDocument(
+    assessmentId: string,
+  ): Promise<StoredAIDeletionTombstone | undefined> {
     try {
       const parsed = JSON.parse(
         await readFile(this.tombstoneTarget(assessmentId), "utf8"),
@@ -206,15 +214,34 @@ export class FileAIRuntimeStore {
         || typeof tombstone.requestedAt !== "string"
         || typeof tombstone.requestedBy !== "string"
         || typeof tombstone.primaryPurgeDueAt !== "string"
-        || typeof tombstone.backupPurgeDueAt !== "string") {
+        || typeof tombstone.backupPurgeDueAt !== "string"
+        || (parsed.cleanupAuditEvents && (!Array.isArray(parsed.cleanupAuditEvents)
+          || parsed.cleanupAuditEvents.some((event) => !event
+            || typeof event !== "object"
+            || event.assessmentId !== assessmentId
+            || typeof event.eventId !== "string"
+            || !/^[A-Za-z0-9_-]{32}$/.test(event.eventId))))) {
         throw new AIRuntimeStoreError("AI_RETENTION_STORE_UNAVAILABLE", "AI 删除墓碑索引格式无效。");
       }
-      return structuredClone(tombstone);
+      return structuredClone(parsed);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
       if (error instanceof AIRuntimeStoreError) throw error;
       throw new AIRuntimeStoreError("AI_RETENTION_STORE_UNAVAILABLE", "AI 删除墓碑索引无法读取。");
     }
+  }
+
+  private async readDeletionTombstone(assessmentId: string): Promise<AIDeletionTombstone | undefined> {
+    return (await this.readDeletionTombstoneDocument(assessmentId))?.tombstone;
+  }
+
+  private async writeDeletionTombstoneDocument(
+    target: string,
+    document: StoredAIDeletionTombstone,
+  ): Promise<void> {
+    const temporary = `${target}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+    await writeFile(temporary, `${JSON.stringify(document)}\n`, { encoding: "utf8", mode: 0o600 });
+    await rename(temporary, target);
   }
 
   private async writeDeletionTombstone(tombstone: AIDeletionTombstone): Promise<void> {
@@ -234,7 +261,11 @@ export class FileAIRuntimeStore {
       return;
     }
     const temporary = `${target}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
-    await writeFile(temporary, `${JSON.stringify({ version: 1, tombstone } satisfies StoredAIDeletionTombstone)}\n`, {
+    await writeFile(temporary, `${JSON.stringify({
+      version: 1,
+      tombstone,
+      cleanupAuditEvents: [],
+    } satisfies StoredAIDeletionTombstone)}\n`, {
       encoding: "utf8",
       mode: 0o600,
     });
@@ -270,8 +301,8 @@ export class FileAIRuntimeStore {
     record.visibility = "HIDDEN";
     if (record.metadata) record.metadata.state = "USER_DELETED";
     record.deletionTombstone = {
-      ...structuredClone(tombstone),
       ...(record.deletionTombstone ? structuredClone(record.deletionTombstone) : {}),
+      ...structuredClone(tombstone),
       assessmentId: tombstone.assessmentId,
       requestedAt: tombstone.requestedAt,
       requestedBy: tombstone.requestedBy,
@@ -358,6 +389,71 @@ export class FileAIRuntimeStore {
         await this.faultHooks.afterRetentionAuditAppended?.(structuredClone(event));
       }
       return written;
+    } finally {
+      await release();
+    }
+  }
+
+  private async mutateDeletionTombstoneWithAudit(
+    assessmentId: string,
+    operation: (
+      tombstone: AIDeletionTombstone,
+    ) => Promise<{
+      tombstone: AIDeletionTombstone;
+      auditEvents?: AIRetentionAuditEvent[];
+    }>,
+  ): Promise<{ changed: boolean; auditEventsWritten: number; backupPurgeFailures: number }> {
+    await mkdir(this.tombstonesDir, { recursive: true, mode: 0o700 });
+    const target = this.tombstoneTarget(assessmentId);
+    const release = await acquireLock(target);
+    try {
+      const document = await this.readDeletionTombstoneDocument(assessmentId);
+      if (!document) {
+        return { changed: false, auditEventsWritten: 0, backupPurgeFailures: 0 };
+      }
+      let auditEventsWritten = await this.appendRetentionAuditEventsOnce(
+        document.cleanupAuditEvents ?? [],
+      );
+      const before = JSON.stringify(document.tombstone);
+      const next = await operation(structuredClone(document.tombstone));
+      if (next.tombstone.assessmentId !== document.tombstone.assessmentId
+        || next.tombstone.requestedAt !== document.tombstone.requestedAt
+        || next.tombstone.requestedBy !== document.tombstone.requestedBy
+        || next.tombstone.primaryPurgeDueAt !== document.tombstone.primaryPurgeDueAt
+        || next.tombstone.backupPurgeDueAt !== document.tombstone.backupPurgeDueAt) {
+        throw new AIRuntimeStoreError(
+          "AI_RETENTION_STORE_UNAVAILABLE",
+          "AI 删除墓碑清理状态不能改变删除身份。",
+        );
+      }
+      await this.faultHooks.beforeAssessmentMutationCommitted?.({
+        assessmentId,
+        auditEvents: structuredClone(next.auditEvents ?? []),
+      });
+      document.tombstone = structuredClone(next.tombstone);
+      if (next.auditEvents?.length) {
+        document.cleanupAuditEvents = [
+          ...(document.cleanupAuditEvents ?? []),
+          ...next.auditEvents.map((event) => ({
+            ...event,
+            eventId: randomBytes(24).toString("base64url"),
+          })),
+        ];
+      }
+      const changed = JSON.stringify(document.tombstone) !== before;
+      if (changed || next.auditEvents?.length) {
+        await this.writeDeletionTombstoneDocument(target, document);
+      }
+      auditEventsWritten += await this.appendRetentionAuditEventsOnce(
+        document.cleanupAuditEvents ?? [],
+      );
+      return {
+        changed,
+        auditEventsWritten,
+        backupPurgeFailures: next.auditEvents?.filter(
+          (event) => event.action === "AI_BACKUP_PURGE_FAILED",
+        ).length ?? 0,
+      };
     } finally {
       await release();
     }
@@ -779,34 +875,60 @@ export class FileAIRuntimeStore {
     backupAdapter: AIBackupPurgeAdapter;
   }): Promise<AIRetentionSweepSummary> {
     const now = input.now ?? new Date();
-    await mkdir(this.assessmentsDir, { recursive: true, mode: 0o700 });
+    await Promise.all([
+      mkdir(this.assessmentsDir, { recursive: true, mode: 0o700 }),
+      mkdir(this.tombstonesDir, { recursive: true, mode: 0o700 }),
+    ]);
     const assessmentIds = (await readdir(this.assessmentsDir, { withFileTypes: true }))
       .filter((entry) => entry.isFile() && /^[A-Za-z0-9-]{1,128}\.json$/.test(entry.name))
-      .map((entry) => entry.name.slice(0, -5))
-      .sort();
+      .map((entry) => entry.name.slice(0, -5));
+    const tombstoneIds = (await readdir(this.tombstonesDir, { withFileTypes: true }))
+      .filter((entry) => entry.isFile() && /^[A-Za-z0-9-]{1,128}\.json$/.test(entry.name))
+      .map((entry) => entry.name.slice(0, -5));
+    const retentionIds = [...new Set([...assessmentIds, ...tombstoneIds])].sort();
     const summary: AIRetentionSweepSummary = {
-      recordsScanned: assessmentIds.length,
+      recordsScanned: retentionIds.length,
       recordsChanged: 0,
       auditEventsWritten: 0,
       backupPurgeFailures: 0,
     };
-    for (const id of assessmentIds) {
+    for (const id of retentionIds) {
       let actorStableId: string | undefined;
-      let backupPurgeFailures = 0;
+      let assessmentChanged = false;
       const transaction = await this.mutateAssessmentWithAudit(id, async (record) => {
         if (!record) return { result: undefined };
         actorStableId = record.metadata?.actorStableId ?? record.deletionTombstone?.requestedBy;
         const before = JSON.stringify(record);
-        let swept = sweepAIAssessmentRetention({ record, now });
-        const events = [...swept.auditEvents];
-        swept = await purgeAIAssessmentBackups({ record: swept.record, now, adapter: input.backupAdapter });
-        events.push(...swept.auditEvents);
-        if (JSON.stringify(swept.record) !== before) summary.recordsChanged += 1;
-        backupPurgeFailures = events.filter((event) => event.action === "AI_BACKUP_PURGE_FAILED").length;
+        const backupLifecycle = record.deletionTombstone
+          ? {
+              backupPurgedAt: record.deletionTombstone.backupPurgedAt,
+              backupPurgeState: record.deletionTombstone.backupPurgeState,
+              backupPurgeAttempts: record.deletionTombstone.backupPurgeAttempts,
+              backupPurgeLastErrorCode: record.deletionTombstone.backupPurgeLastErrorCode,
+            }
+          : undefined;
+        const swept = sweepAIAssessmentRetention({ record, now });
+        if (swept.record.deletionTombstone && backupLifecycle) {
+          for (const key of [
+            "backupPurgedAt",
+            "backupPurgeState",
+            "backupPurgeAttempts",
+            "backupPurgeLastErrorCode",
+          ] as const) {
+            const value = backupLifecycle[key];
+            if (value === undefined) delete swept.record.deletionTombstone[key];
+            else (swept.record.deletionTombstone as Record<typeof key, typeof value>)[key] = value;
+          }
+        }
+        assessmentChanged = JSON.stringify(swept.record) !== before;
         return {
           record: swept.record,
           result: undefined,
-          auditEvents: events.map((event) => ({
+          // Backup lifecycle is driven and durably audited by the independent
+          // tombstone domain below, including when this primary record is gone.
+          auditEvents: swept.auditEvents
+            .filter((event) => event.action !== "AI_BACKUP_PURGE_DUE")
+            .map((event) => ({
             ...event,
             assessmentId: id,
             actorStableId,
@@ -814,8 +936,49 @@ export class FileAIRuntimeStore {
           })),
         };
       });
-      summary.backupPurgeFailures += backupPurgeFailures;
       summary.auditEventsWritten += transaction.auditEventsWritten;
+
+      const tombstoneTransaction = await this.mutateDeletionTombstoneWithAudit(
+        id,
+        async (tombstone) => {
+          if (now.getTime() < Date.parse(tombstone.backupPurgeDueAt) || tombstone.backupPurgedAt) {
+            return { tombstone };
+          }
+          const dueEvent = tombstone.backupPurgeState
+            ? []
+            : [{
+                action: "AI_BACKUP_PURGE_DUE" as const,
+                assessmentId: id,
+                actorStableId: tombstone.requestedBy,
+                occurredAt: now.toISOString(),
+                resultCode: "SUCCESS" as const,
+              }];
+          const purged = await purgeAIAssessmentBackups({
+            record: {
+              policyVersion: AI_RETENTION_POLICY_VERSION,
+              visibility: "HIDDEN",
+              deletionTombstone: tombstone,
+            },
+            now,
+            adapter: input.backupAdapter,
+          });
+          return {
+            tombstone: purged.record.deletionTombstone!,
+            auditEvents: [
+              ...dueEvent,
+              ...purged.auditEvents.map((event) => ({
+                ...event,
+                assessmentId: id,
+                actorStableId: tombstone.requestedBy,
+                resultCode: event.action === "AI_BACKUP_PURGE_FAILED" ? "FAILED" as const : "SUCCESS" as const,
+              })),
+            ],
+          };
+        },
+      );
+      if (assessmentChanged || tombstoneTransaction.changed) summary.recordsChanged += 1;
+      summary.backupPurgeFailures += tombstoneTransaction.backupPurgeFailures;
+      summary.auditEventsWritten += tombstoneTransaction.auditEventsWritten;
     }
     return summary;
   }

@@ -3,6 +3,7 @@ import "./globals.css";
 import "./series-gantt.css";
 import "./config-export.css";
 import "./rule-workbook.css";
+import "./motion-core.css";
 
 export const metadata: Metadata = {
   title: {

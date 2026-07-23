@@ -2,6 +2,7 @@ import { deterministicHash } from "./rule-kernel";
 import type {
   AffinityScoreResult,
   HardCompatibilityResult,
+  PatchState,
 } from "./types";
 import type {
   ActionCode,
@@ -57,6 +58,7 @@ export type {
   CalculationTraceReplayIssue,
   CalculationTraceStateValue,
 } from "./calculation-trace";
+export { transitionPatchState } from "./patch-state";
 
 export interface CandidateGenerationRequest {
   requestId: string;
@@ -354,30 +356,7 @@ export function createUnifiedIssue(input: Omit<
   };
 }
 
-export type PatchWorkflowState =
-  | "draft" | "pending_review" | "approved" | "base_changed"
-  | "rebase_required" | "rebasing" | "withdrawn" | "superseded";
-
-const PATCH_TRANSITIONS: Record<PatchWorkflowState, PatchWorkflowState[]> = {
-  draft: ["pending_review", "withdrawn", "superseded"],
-  pending_review: ["approved", "withdrawn", "base_changed", "superseded"],
-  approved: ["base_changed", "superseded"],
-  base_changed: ["rebase_required", "superseded"],
-  rebase_required: ["rebasing", "superseded"],
-  rebasing: ["pending_review", "superseded"],
-  withdrawn: [],
-  superseded: [],
-};
-
-export function transitionPatchState(
-  current: PatchWorkflowState,
-  next: PatchWorkflowState,
-): PatchWorkflowState {
-  if (!PATCH_TRANSITIONS[current].includes(next)) {
-    throw new Error(`非法 Patch 状态迁移：${current} → ${next}。`);
-  }
-  return next;
-}
+export type PatchWorkflowState = PatchState;
 
 export type UpgradeWorkflowState =
   | "generated" | "analyzing" | "blocked" | "rebase_required"

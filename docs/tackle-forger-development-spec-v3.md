@@ -3217,9 +3217,12 @@ interface ActionLink {
 ### 24.11 R10：Rebase、UpgradeCandidate与Snapshot
 
 ```text
-Patch: draft → pending_review → approved
-base_changed → rebase_required → rebasing → pending_review
-draft/pending_review → withdrawn；任意未发布状态 → superseded
+Patch revision:
+DRAFT → PENDING_REVIEW → APPROVED → ACTIVE
+DRAFT/PENDING_REVIEW → WITHDRAWN
+任意未发布状态 → SUPERSEDED
+基线变化：当前Patch revision → REBASE_REQUIRED
+rebase成功：创建新Patch revision，状态为PENDING_REVIEW
 
 UpgradeCandidate:
 generated → analyzing → blocked | rebase_required | ready_for_review
@@ -3228,14 +3231,27 @@ generated/ready_for_review → dismissed
 任意非终态 + upstream_changed → superseded
 ```
 
-set基线变化、参数删除/重命名、边界/公式/兼容变化必须rebase。clear在目标仍是可继承覆盖时可以确定性重放；目标删除、重命名或必填性变化时必须rebase。add/multiply自动重放最多到pending_review。rebase生成新Patch revision。approved/dismissed候选不改旧Snapshot；只有发布命令新建Snapshot。SnapshotBuild可building/failed/ready；ConfigurationSnapshot创建即frozen，只允许查看、下载原样审计归档、在完整性门禁通过时正式导出、审计、复制新修订、生成升级候选，禁止原地编辑/重算/rebase/换hash/删除引用。`download_snapshot_audit_archive`只要求`snapshot.audit_archive.download`并遵守第14节的原样打包语义；`export_snapshot`要求`snapshot.export`，不可重放或缺策略引用的BLOCKER必须阻断它以及后续配置导出。
+Patch业务生命周期只使用第14.2节的规范大写`PatchState`；小写状态只允许出现在迁移适配器。`base_changed`是触发原因而不是持久化状态，`rebasing/REBASING`是动作执行进度而不是`PatchState`，不得写入Patch revision、账本、Snapshot引用或飞书镜像。
+
+set基线变化、参数删除/重命名、边界/公式/兼容变化必须rebase。clear在目标仍是可继承覆盖时可以确定性重放；目标删除、重命名或必填性变化时必须rebase。add/multiply自动重放最多创建`PENDING_REVIEW`的新revision。基线变化只使当前revision进入`REBASE_REQUIRED`；rebase必须通过`rebase_patch`动作创建严格递增的新`patchRevision`，不得把原revision从`REBASE_REQUIRED`原地改回`PENDING_REVIEW`。
+
+`rebase_patch`命令至少绑定`patchId + expectedHeadPatchRevision + expectedBaseRuleSetVersion + expectedBaseObjectRevision + targetBaseRuleSetVersion + targetBaseObjectRevision + inputHash + idempotencyKey`。服务端固定按以下事务执行：
+
+1. 重新鉴权并锁定Patch head，重验expected head、当前基线和目标基线；任一不一致返回revision或baseline冲突。
+2. 在事务内存中对完整有序操作组计算新before/after、Trace、Issue和hash；未解决冲突、非法操作或任何校验失败时不创建revision。
+3. 只有全部操作和证据有效时，原子写入一个新Patch revision、完整操作组、幂等记录和审计；新revision最多为`PENDING_REVIEW`，不得直接成为`APPROVED`或`ACTIVE`。
+4. 同一idempotencyKey和完整payload重试返回第一次已提交结果；同一key携带不同payload时拒绝。提交前基线或Patch head再次变化时整个事务回滚，调用方必须基于最新基线重新预览和执行。
+
+失败、超时后无法证明已提交、权限拒绝或并发基线变化均不得留下半revision、半操作组或执行中的持久化业务状态；原Patch revision、有序操作、历史Snapshot、Patch引用、`PatchSetHash`和内容hash保持不变。超时重试必须先按幂等键回读，不得猜测成功或重复追加。
+
+approved/dismissed候选不改旧Snapshot；只有发布命令新建Snapshot。SnapshotBuild可building/failed/ready；ConfigurationSnapshot创建即frozen，只允许查看、下载原样审计归档、在完整性门禁通过时正式导出、审计、复制新修订、生成升级候选，禁止原地编辑/重算/rebase/换hash/删除引用。`download_snapshot_audit_archive`只要求`snapshot.audit_archive.download`并遵守第14节的原样打包语义；`export_snapshot`要求`snapshot.export`，不可重放或缺策略引用的BLOCKER必须阻断它以及后续配置导出。
 
 正常路径：解决rebase并发布新Snapshot。  
 边界：语义相同也只关闭候选，不重写hash。  
-冲突：处理时基线再变则superseded。  
-恢复：复制决定到最新候选；失败Build可重试且无半快照。  
+冲突：处理时Patch head或基线再变则本次rebase事务回滚，旧revision保持`REBASE_REQUIRED`，调用方基于最新基线重新预览；UpgradeCandidate按其独立状态机进入superseded。
+恢复：rebase按幂等键回读或在最新基线上重试；复制决定到最新候选；失败Build可重试且无半快照。
 权限：rebase、审核、发布分开；冻结快照无edit。  
-验收：Given S1已发布，When 批准升级候选，Then S1/hash不变；再次发布才生成S2。
+验收：Given Patch revision 7因基线变化进入`REBASE_REQUIRED`，When `rebase_patch`重验相同head和基线并成功，Then 原子创建revision 8且状态为`PENDING_REVIEW`，revision 7及其操作/hash保持不变；Given计算、校验或写入任一步失败，Then不存在revision 8或半操作组；Given提交前基线再次变化，Then返回冲突且revision 7、历史Snapshot及`PatchSetHash`不变。Given S1已发布，When 批准升级候选，Then S1/hash不变；再次发布才生成S2。
 
 ### 24.12 R11：状态与文案
 

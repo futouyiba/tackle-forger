@@ -560,6 +560,7 @@ test("旧 PUBLISHED 五维定义只能用于历史重放，不能服务新正式
     ...common,
     componentSelections: formalComponentSelections,
     fiveAxisPreview: formalPreview,
+    fiveAxisAuthoritativeCandidateSources: formalPreview.candidateSources,
     fiveAxisDefinition: formalDefinition,
   });
   assert.equal(

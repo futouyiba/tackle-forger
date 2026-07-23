@@ -263,6 +263,7 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     pricingPolicyVersion: version.id,
     automaticPricing,
     fiveAxisPreview: formalPreview,
+    fiveAxisAuthoritativeCandidateSources: formalPreview.candidateSources,
     fiveAxisDefinition: formalDefinition,
     fiveAxisDefinitions: state.fiveAxisViewDefinitions,
     fiveAxisDispositionCatalogRevisions:

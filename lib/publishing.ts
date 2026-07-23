@@ -20,6 +20,7 @@ import type {
   ModelComponentSelection,
   ModelFiveAxisPreview,
   FiveAxisDefinitionDispositionCatalogRevision,
+  FiveAxisVertexCandidateSource,
   StoredFiveAxisViewDefinition,
   PatchRebaseDifference,
   PatchOffsetPolicyVersion,
@@ -111,6 +112,7 @@ export interface PublishModelInput {
   automaticPricing?: PricingTrialResult;
   validationReport: ValidationIssue[];
   fiveAxisPreview?: ModelFiveAxisPreview;
+  fiveAxisAuthoritativeCandidateSources?: FiveAxisVertexCandidateSource[];
   fiveAxisDefinition?: StoredFiveAxisViewDefinition;
   fiveAxisDefinitions?: StoredFiveAxisViewDefinition[];
   fiveAxisDispositionCatalogRevisions?: FiveAxisDefinitionDispositionCatalogRevision[];
@@ -427,6 +429,8 @@ export function publishConfigurationSnapshot(
     assertFormalModelFiveAxisPreview({
       definition: resolved.definition,
       preview: input.fiveAxisPreview,
+      expectedCandidateSources:
+        input.fiveAxisAuthoritativeCandidateSources ?? [],
       expectedModelId: input.model.id,
       expectedModelRevisionId: `${input.model.id}@${input.model.revision}`,
       expectedSnapshotId: snapshotId,

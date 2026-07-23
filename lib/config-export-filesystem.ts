@@ -39,6 +39,7 @@ import {
   assertFormalConfigExportAllowed,
   assertProductionShapeConfigExportEnabled,
   type FormalConfigExportAuthorization,
+  type FormalConfigExportEvidenceVerifier,
 } from "./config-export-stage";
 
 export interface FilesystemExportOperation extends ExportFileOperation {
@@ -363,9 +364,13 @@ export async function commitFilesystemExport(input: {
   idempotencyKey: string;
   canCommit: boolean;
   formalAuthorization?: FormalConfigExportAuthorization;
+  formalAuthorizationVerifier?: FormalConfigExportEvidenceVerifier;
   audit?: ExportCommitResult["audit"];
 }): Promise<ExportCommitResult> {
-  assertFormalConfigExportAllowed(input.formalAuthorization);
+  await assertFormalConfigExportAllowed(
+    input.formalAuthorization,
+    input.formalAuthorizationVerifier,
+  );
   assertSnapshotItemPartEnabled(input.snapshot, "config_export");
   if (!verifySnapshotIntegrity(input.snapshot)) {
     throw new Error("冻结 ConfigurationSnapshot 的内容哈希校验失败。");
@@ -480,6 +485,7 @@ export async function commitFilesystemExport(input: {
       operations: input.preview.operations,
       adapter,
       formalAuthorization: input.formalAuthorization,
+      formalAuthorizationVerifier: input.formalAuthorizationVerifier,
       audit: input.audit,
     });
   } finally {

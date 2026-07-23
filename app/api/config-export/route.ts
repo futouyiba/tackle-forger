@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requestUser } from "@/lib/auth";
-import { createConfigPreviewPackage } from "@/lib/config-preview-package";
+import {
+  ConfigPreviewSnapshotError,
+  createConfigPreviewPackage,
+} from "@/lib/config-preview-package";
 import {
   assertFormalConfigExportAllowed,
   ConfigExportStageError,
@@ -47,7 +50,7 @@ export async function POST(request: NextRequest) {
       );
     }
     try {
-      assertFormalConfigExportAllowed(body.formalAuthorization);
+      await assertFormalConfigExportAllowed(body.formalAuthorization, undefined);
     } catch (error) {
       if (error instanceof ConfigExportStageError) {
         return NextResponse.json(
@@ -106,7 +109,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ previewPackage });
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "生成 NON_FORMAL 预览失败。" },
+      {
+        error: error instanceof Error ? error.message : "生成 NON_FORMAL 预览失败。",
+        ...(error instanceof ConfigPreviewSnapshotError ? { code: error.code } : {}),
+      },
       { status: 422 },
     );
   }

@@ -7,6 +7,22 @@ import type { ConfigurationSnapshot } from "./types";
 
 export const CONFIG_PREVIEW_NOTICE = "不可提交、不可人工搬运到configs";
 
+export class ConfigPreviewSnapshotError extends Error {
+  readonly code:
+    | "SNAPSHOT_INTEGRITY_INVALID"
+    | "SNAPSHOT_REPLAY_POLICY_MISSING"
+    | "SNAPSHOT_EXPORT_BLOCKED";
+
+  constructor(
+    code: ConfigPreviewSnapshotError["code"],
+    message: string,
+  ) {
+    super(message);
+    this.name = "ConfigPreviewSnapshotError";
+    this.code = code;
+  }
+}
+
 export type ConfigPreviewObjectKind =
   | "tackle"
   | "item"
@@ -109,7 +125,32 @@ export function createConfigPreviewPackage(input: {
   for (const snapshot of input.snapshots) {
     assertSnapshotItemPartEnabled(snapshot, "config_export");
     if (!verifySnapshotIntegrity(snapshot)) {
-      throw new Error(`冻结 ConfigurationSnapshot ${snapshot.id} 的内容哈希校验失败。`);
+      throw new ConfigPreviewSnapshotError(
+        "SNAPSHOT_INTEGRITY_INVALID",
+        `冻结 ConfigurationSnapshot ${snapshot.id} 的内容哈希校验失败。`,
+      );
+    }
+    if (
+      !snapshot.qualityValueAssessment?.formal
+      || !snapshot.pricingPolicyVersion?.trim()
+      || !snapshot.automaticPricing?.formal
+      || snapshot.automaticPricing.pricingPolicyRef !== snapshot.pricingPolicyVersion
+    ) {
+      throw new ConfigPreviewSnapshotError(
+        "SNAPSHOT_REPLAY_POLICY_MISSING",
+        `ConfigurationSnapshot ${snapshot.id} 缺少可重放的正式品质或 PricingPolicy 引用；只能下载原样审计归档，不能进入配置预览。`,
+      );
+    }
+    const exportBlocker = snapshot.validationReport.find(
+      (issue) =>
+        issue.severity === "BLOCKER"
+        && issue.state !== "RESOLVED",
+    );
+    if (exportBlocker) {
+      throw new ConfigPreviewSnapshotError(
+        "SNAPSHOT_EXPORT_BLOCKED",
+        `ConfigurationSnapshot ${snapshot.id} 存在不可waive的导出 BLOCKER：${exportBlocker.code}。`,
+      );
     }
     if (snapshotIds.has(snapshot.id)) {
       throw new Error(`ConfigPreviewPackage 包含重复 Snapshot：${snapshot.id}。`);

@@ -8,7 +8,10 @@ import {
 } from "../lib/config-export";
 import { deterministicHash } from "../lib/rule-kernel";
 import { createSeedState } from "../lib/seed";
-import type { FormalConfigExportAuthorization } from "../lib/config-export-stage";
+import type {
+  FormalConfigExportAuthorization,
+  FormalConfigExportEvidenceVerifier,
+} from "../lib/config-export-stage";
 
 process.env.TACKLE_FORGER_PRODUCT_DELIVERY_STAGE = "PHASE_ONE_POINT_FIVE";
 process.env.TACKLE_FORGER_FORMAL_CONFIG_EXPORT_RUNTIME_ENABLED = "true";
@@ -25,6 +28,15 @@ const FORMAL_AUTHORIZATION: FormalConfigExportAuthorization = {
   fencingToken: "1",
   expectedOldOid: "a".repeat(40),
   protectedRefCasAvailable: true,
+};
+const FORMAL_VERIFIER: FormalConfigExportEvidenceVerifier = {
+  async verify() {
+    return {
+      verified: true,
+      manifestSetHash: "manifest-set:test",
+      verifiedAt: "2026-07-23T00:00:00.000Z",
+    };
+  },
 };
 
 function exportSnapshot(itemPartId = "part:rod") {
@@ -141,6 +153,7 @@ test("三表替换到第二张失败时回滚第一张且不替换第三张", as
     operations,
     adapter: io,
     formalAuthorization: FORMAL_AUTHORIZATION,
+    formalAuthorizationVerifier: FORMAL_VERIFIER,
   });
   assert.equal(result.status, "failed");
   assert.deepEqual(io.replaced, ["tackle.xlsx"]);
@@ -158,6 +171,7 @@ test("导出提交使用幂等键，相同提交不重复插入或替换", async
     operations,
     adapter: io,
     formalAuthorization: FORMAL_AUTHORIZATION,
+    formalAuthorizationVerifier: FORMAL_VERIFIER,
   });
   const second = await commitExportPackage({
     profileId: "dev",
@@ -167,6 +181,7 @@ test("导出提交使用幂等键，相同提交不重复插入或替换", async
     operations,
     adapter: io,
     formalAuthorization: FORMAL_AUTHORIZATION,
+    formalAuthorizationVerifier: FORMAL_VERIFIER,
   });
   assert.equal(first.status, "committed");
   assert.deepEqual(second, first);
@@ -183,6 +198,7 @@ test("扩展部位提交在任何备份或文件替换前返回稳定错误", as
     operations,
     adapter: io,
     formalAuthorization: FORMAL_AUTHORIZATION,
+    formalAuthorizationVerifier: FORMAL_VERIFIER,
   }), (error) => (
     error instanceof Error
     && "code" in error

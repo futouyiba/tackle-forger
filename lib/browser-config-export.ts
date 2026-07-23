@@ -493,7 +493,7 @@ export async function commitBrowserExportFromHandle(input: {
   snapshots: ConfigurationSnapshot[];
   formalAuthorization?: FormalConfigExportAuthorization;
 }): Promise<BrowserRecoveryManifest> {
-  assertFormalConfigExportAllowed(input.formalAuthorization);
+  await assertFormalConfigExportAllowed(input.formalAuthorization, undefined);
   if (!input.snapshots.length) throw new Error("导出提交缺少冻结 ConfigurationSnapshot。");
   for (const snapshot of input.snapshots) {
     assertSnapshotItemPartEnabled(snapshot, "config_export");

@@ -10,7 +10,10 @@ import {
 import type { ExportCommitResult } from "./config-export";
 import type { ExportTargetProfile } from "./interaction-contracts";
 import type { ConfigurationSnapshot } from "./types";
-import type { FormalConfigExportAuthorization } from "./config-export-stage";
+import type {
+  FormalConfigExportAuthorization,
+  FormalConfigExportEvidenceVerifier,
+} from "./config-export-stage";
 
 export type CompanionCapability = "config.export.preview" | "config.export.commit";
 export interface CompanionPairingIdentity {
@@ -157,12 +160,18 @@ export async function loadCompanionRegistry(
 export class ConfigExportCompanionController {
   readonly registry: ConfigExportCompanionRegistry;
   private readonly token: string;
+  private readonly formalAuthorizationVerifier?: FormalConfigExportEvidenceVerifier;
   private readonly previews = new Map<string, StoredPreview>();
 
-  constructor(input: { registry: ConfigExportCompanionRegistry; token: string }) {
+  constructor(input: {
+    registry: ConfigExportCompanionRegistry;
+    token: string;
+    formalAuthorizationVerifier?: FormalConfigExportEvidenceVerifier;
+  }) {
     if (input.token.length < 16) throw new Error("配对令牌至少需要 16 个字符。");
     this.registry = validateCompanionRegistry(input.registry);
     this.token = input.token;
+    this.formalAuthorizationVerifier = input.formalAuthorizationVerifier;
   }
 
   authorize(token: string | undefined, identity: CompanionPairingIdentity) {
@@ -296,6 +305,7 @@ export class ConfigExportCompanionController {
         },
         canCommit: true,
         formalAuthorization: request.formalAuthorization,
+        formalAuthorizationVerifier: this.formalAuthorizationVerifier,
       }));
     }
     return { packageId: stored.packageId, results };

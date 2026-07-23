@@ -19,6 +19,22 @@ export interface FormalConfigExportAuthorization {
   protectedRefCasAvailable: true;
 }
 
+export interface FormalConfigExportEvidenceVerifier {
+  verify(
+    authorization: FormalConfigExportAuthorization,
+  ): Promise<
+    | {
+        verified: true;
+        manifestSetHash: string;
+        verifiedAt: string;
+      }
+    | {
+        verified: false;
+        reason: string;
+      }
+  >;
+}
+
 export class ConfigExportStageError extends Error {
   constructor(
     readonly code:
@@ -27,6 +43,8 @@ export class ConfigExportStageError extends Error {
       | "CONFIG_EXPORT_NON_FORMAL_PACKAGE"
       | "CONFIG_EXPORT_FORMAL_IDENTITY_MISSING"
       | "CONFIG_EXPORT_GOVERNANCE_EVIDENCE_MISSING"
+      | "CONFIG_EXPORT_GOVERNANCE_VERIFIER_UNAVAILABLE"
+      | "CONFIG_EXPORT_GOVERNANCE_EVIDENCE_UNVERIFIED"
       | "CONFIG_TARGET_SERIALIZATION_UNAVAILABLE",
     message: string,
   ) {
@@ -70,10 +88,11 @@ export function formalConfigExportActionBlock(
   return undefined;
 }
 
-export function assertFormalConfigExportAllowed(
+export async function assertFormalConfigExportAllowed(
   authorization: FormalConfigExportAuthorization | undefined,
+  verifier: FormalConfigExportEvidenceVerifier | undefined,
   policy = readConfigExportRuntimePolicy(),
-): asserts authorization is FormalConfigExportAuthorization {
+): Promise<void> {
   const actionBlock = formalConfigExportActionBlock(policy);
   if (actionBlock) {
     throw new ConfigExportStageError(
@@ -117,6 +136,25 @@ export function assertFormalConfigExportAllowed(
     throw new ConfigExportStageError(
       "CONFIG_TARGET_SERIALIZATION_UNAVAILABLE",
       "受保护 expected-old-OID CAS 不可用，禁止生成或提交正式配置。",
+    );
+  }
+  if (!verifier) {
+    throw new ConfigExportStageError(
+      "CONFIG_EXPORT_GOVERNANCE_VERIFIER_UNAVAILABLE",
+      "服务端尚未安装 ConfigId、目录 Manifest、治理租约与 protected CAS 验证器，禁止正式配置提交。",
+    );
+  }
+  const verification = await verifier.verify(authorization);
+  if (
+    !verification.verified
+    || !verification.manifestSetHash.trim()
+    || !verification.verifiedAt.trim()
+  ) {
+    throw new ConfigExportStageError(
+      "CONFIG_EXPORT_GOVERNANCE_EVIDENCE_UNVERIFIED",
+      verification.verified
+        ? "服务端治理验证结果缺少 Manifest 集合哈希或验证时间。"
+        : `服务端拒绝正式配置治理证据：${verification.reason}`,
     );
   }
 }

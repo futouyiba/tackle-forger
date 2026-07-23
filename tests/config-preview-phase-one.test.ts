@@ -13,11 +13,14 @@ import {
   ConfigExportStageError,
   formalConfigExportActionBlock,
   type FormalConfigExportAuthorization,
+  type FormalConfigExportEvidenceVerifier,
 } from "../lib/config-export-stage";
 import { commitExportPackage, type ExportCommitAdapter } from "../lib/config-export";
 import { PHASE_ONE_CAPABILITIES } from "../lib/feishu-identity";
 import { actionAvailability } from "../lib/interaction-contracts";
+import { deterministicHash } from "../lib/rule-kernel";
 import { createSeedState } from "../lib/seed";
+import type { ConfigurationSnapshot } from "../lib/types";
 
 const FORMAL_AUTHORIZATION: FormalConfigExportAuthorization = {
   packageKind: "EXPORT_PACKAGE",
@@ -33,8 +36,36 @@ const FORMAL_AUTHORIZATION: FormalConfigExportAuthorization = {
   protectedRefCasAvailable: true,
 };
 
+const FORMAL_VERIFIER: FormalConfigExportEvidenceVerifier = {
+  async verify(authorization) {
+    return authorization === FORMAL_AUTHORIZATION
+      ? {
+          verified: true,
+          manifestSetHash: "manifest-set:test",
+          verifiedAt: "2026-07-23T00:00:00.000Z",
+        }
+      : { verified: false, reason: "unknown authorization" };
+  },
+};
+
+function replayableSnapshot(): ConfigurationSnapshot {
+  const snapshot = structuredClone(createSeedState().configurationSnapshots[0]!);
+  snapshot.qualityValueAssessment = {
+    formal: true,
+  } as NonNullable<ConfigurationSnapshot["qualityValueAssessment"]>;
+  snapshot.pricingPolicyVersion = "pricing-policy:test";
+  snapshot.automaticPricing = {
+    formal: true,
+    pricingPolicyRef: snapshot.pricingPolicyVersion,
+  } as NonNullable<ConfigurationSnapshot["automaticPricing"]>;
+  const content = structuredClone(snapshot);
+  Reflect.deleteProperty(content, "contentHash");
+  snapshot.contentHash = deterministicHash(content);
+  return snapshot;
+}
+
 test("一期生成固定 CONFIG_PREVIEW/NON_FORMAL 契约且不泄漏生产身份或文件名", () => {
-  const snapshot = createSeedState().configurationSnapshots[0]!;
+  const snapshot = replayableSnapshot();
   const frozenBefore = structuredClone(snapshot);
   const preview = createConfigPreviewPackage({
     packageId: "preview:test",
@@ -65,6 +96,22 @@ test("一期生成固定 CONFIG_PREVIEW/NON_FORMAL 契约且不泄漏生产身�
   assert.doesNotMatch(serialized, /(?:^|[/"])item\.xlsx/i);
   assert.doesNotMatch(serialized, /(?:^|[/"])store\.xlsx/i);
   assert.doesNotMatch(serialized, /rod_qinglu_15_fast|301499001/);
+  assert.deepEqual(snapshot, frozenBefore);
+});
+
+test("缺少正式策略引用的历史 Snapshot 保持冻结且不能进入配置预览", () => {
+  const snapshot = createSeedState().configurationSnapshots[0]!;
+  const frozenBefore = structuredClone(snapshot);
+  assert.throws(
+    () => createConfigPreviewPackage({
+      packageId: "preview:historical",
+      workspaceId: "workspace:test",
+      snapshots: [snapshot],
+    }),
+    (error) => error instanceof Error
+      && "code" in error
+      && error.code === "SNAPSHOT_REPLAY_POLICY_MISSING",
+  );
   assert.deepEqual(snapshot, frozenBefore);
 });
 
@@ -111,55 +158,76 @@ test("一期服务端阶段门禁优先于 Capability，PHASE_ONE 能力集不�
   }
 });
 
-test("1.5 期骨架只有阶段、运行时和完整治理证据同时具备才开放", () => {
-  assert.throws(
-    () => assertFormalConfigExportAllowed(FORMAL_AUTHORIZATION, {
+test("1.5 期骨架只有阶段、运行时和服务端验证同时具备才开放", async () => {
+  await assert.rejects(
+    () => assertFormalConfigExportAllowed(FORMAL_AUTHORIZATION, FORMAL_VERIFIER, {
       stage: "PHASE_ONE",
       formalExportRuntimeEnabled: true,
     }),
     (error) => error instanceof ConfigExportStageError
       && error.code === "CONFIG_EXPORT_PHASE_DISABLED",
   );
-  assert.throws(
-    () => assertFormalConfigExportAllowed(FORMAL_AUTHORIZATION, {
+  await assert.rejects(
+    () => assertFormalConfigExportAllowed(FORMAL_AUTHORIZATION, FORMAL_VERIFIER, {
       stage: "PHASE_ONE_POINT_FIVE",
       formalExportRuntimeEnabled: false,
     }),
     (error) => error instanceof ConfigExportStageError
       && error.code === "CONFIG_EXPORT_RUNTIME_NOT_READY",
   );
-  assert.throws(
-    () => assertFormalConfigExportAllowed(undefined, {
+  await assert.rejects(
+    () => assertFormalConfigExportAllowed(undefined, FORMAL_VERIFIER, {
       stage: "PHASE_ONE_POINT_FIVE",
       formalExportRuntimeEnabled: true,
     }),
     (error) => error instanceof ConfigExportStageError
       && error.code === "CONFIG_EXPORT_NON_FORMAL_PACKAGE",
   );
-  assert.throws(
+  await assert.rejects(
     () => assertFormalConfigExportAllowed({
       ...FORMAL_AUTHORIZATION,
       configIdBundleId: "",
-    }, {
+    }, FORMAL_VERIFIER, {
       stage: "PHASE_ONE_POINT_FIVE",
       formalExportRuntimeEnabled: true,
     }),
     (error) => error instanceof ConfigExportStageError
       && error.code === "CONFIG_EXPORT_FORMAL_IDENTITY_MISSING",
   );
-  assert.throws(
+  await assert.rejects(
     () => assertFormalConfigExportAllowed({
       ...FORMAL_AUTHORIZATION,
       governanceLeaseId: "",
-    }, {
+    }, FORMAL_VERIFIER, {
       stage: "PHASE_ONE_POINT_FIVE",
       formalExportRuntimeEnabled: true,
     }),
     (error) => error instanceof ConfigExportStageError
       && error.code === "CONFIG_EXPORT_GOVERNANCE_EVIDENCE_MISSING",
   );
-  assert.doesNotThrow(() => assertFormalConfigExportAllowed(
+  await assert.rejects(
+    () => assertFormalConfigExportAllowed(FORMAL_AUTHORIZATION, undefined, {
+      stage: "PHASE_ONE_POINT_FIVE",
+      formalExportRuntimeEnabled: true,
+    }),
+    (error) => error instanceof ConfigExportStageError
+      && error.code === "CONFIG_EXPORT_GOVERNANCE_VERIFIER_UNAVAILABLE",
+  );
+  await assert.rejects(
+    () => assertFormalConfigExportAllowed(
+      FORMAL_AUTHORIZATION,
+      { async verify() { return { verified: false, reason: "stale lease" }; } },
+      {
+        stage: "PHASE_ONE_POINT_FIVE",
+        formalExportRuntimeEnabled: true,
+      },
+    ),
+    (error) => error instanceof ConfigExportStageError
+      && error.code === "CONFIG_EXPORT_GOVERNANCE_EVIDENCE_UNVERIFIED",
+  );
+  await assert.doesNotReject(() => assertFormalConfigExportAllowed(
     FORMAL_AUTHORIZATION,
+    FORMAL_VERIFIER,
     {
       stage: "PHASE_ONE_POINT_FIVE",
       formalExportRuntimeEnabled: true,
@@ -196,6 +264,7 @@ test("直接调用底层 commit_config_export 在一期无任何文件副作用"
         }],
         adapter,
         formalAuthorization: FORMAL_AUTHORIZATION,
+        formalAuthorizationVerifier: FORMAL_VERIFIER,
       }),
       (error) => error instanceof ConfigExportStageError
         && error.code === "CONFIG_EXPORT_PHASE_DISABLED",

@@ -8,6 +8,24 @@ import {
 } from "../lib/config-export";
 import { deterministicHash } from "../lib/rule-kernel";
 import { createSeedState } from "../lib/seed";
+import type { FormalConfigExportAuthorization } from "../lib/config-export-stage";
+
+process.env.TACKLE_FORGER_PRODUCT_DELIVERY_STAGE = "PHASE_ONE_POINT_FIVE";
+process.env.TACKLE_FORGER_FORMAL_CONFIG_EXPORT_RUNTIME_ENABLED = "true";
+
+const FORMAL_AUTHORIZATION: FormalConfigExportAuthorization = {
+  packageKind: "EXPORT_PACKAGE",
+  publicationState: "FORMAL",
+  formal: true,
+  configIdBundleId: "bundle:test",
+  configIdPolicyVersionId: "config-id:test",
+  configTargetCatalogVersionId: "catalog:test",
+  approvedFreshManifestId: "manifest:test",
+  governanceLeaseId: "lease:test",
+  fencingToken: "1",
+  expectedOldOid: "a".repeat(40),
+  protectedRefCasAvailable: true,
+};
 
 function exportSnapshot(itemPartId = "part:rod") {
   const snapshot = structuredClone(createSeedState().configurationSnapshots[0]!);
@@ -122,6 +140,7 @@ test("三表替换到第二张失败时回滚第一张且不替换第三张", as
     idempotencyKey: "key:1",
     operations,
     adapter: io,
+    formalAuthorization: FORMAL_AUTHORIZATION,
   });
   assert.equal(result.status, "failed");
   assert.deepEqual(io.replaced, ["tackle.xlsx"]);
@@ -138,6 +157,7 @@ test("导出提交使用幂等键，相同提交不重复插入或替换", async
     idempotencyKey: "key:same",
     operations,
     adapter: io,
+    formalAuthorization: FORMAL_AUTHORIZATION,
   });
   const second = await commitExportPackage({
     profileId: "dev",
@@ -146,6 +166,7 @@ test("导出提交使用幂等键，相同提交不重复插入或替换", async
     idempotencyKey: "key:same",
     operations,
     adapter: io,
+    formalAuthorization: FORMAL_AUTHORIZATION,
   });
   assert.equal(first.status, "committed");
   assert.deepEqual(second, first);
@@ -161,6 +182,7 @@ test("扩展部位提交在任何备份或文件替换前返回稳定错误", as
     idempotencyKey: "key:hook",
     operations,
     adapter: io,
+    formalAuthorization: FORMAL_AUTHORIZATION,
   }), (error) => (
     error instanceof Error
     && "code" in error

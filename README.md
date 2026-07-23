@@ -101,17 +101,16 @@ Trace、ID 唯一性、前缀与实体类型；写后必须回读恢复，不能
 
 ## 配置表交付
 
-一期正式入口使用 Chromium File System Access API。用户分别为 dev/test 等环境显式选择
-configs 根目录；1001 渠道固定写入该环境的 `xlsx`，其他渠道只使用用户明确选择的目录。
-目录句柄保存在当前用户、浏览器和 origin 的 IndexedDB 中，服务端不保存本机绝对路径。
+一期只提供服务端生成的 `ConfigPreviewPackage`：固定
+`packageKind=CONFIG_PREVIEW`、`publicationState=NON_FORMAL`、`formal=false`。
+没有正式 Bundle 时，数字 ID 与正式 `configNameKey` 均为空，关系检查只使用
+`NON_FORMAL:<modelId>:<objectKind>` 符号引用。下载物是带“不可提交、不可人工搬运到configs”
+声明的预览关系报告，不使用生产工作簿文件名。
 
-导出先执行 `SnapshotBatch`，只读取冻结 Snapshot；随后按环境根 `config.toml` 的逻辑表名
-解析 tackle、item、GoodsBasic 和 StoreBuy，预览新增/修改、主键冲突、关系断链和格式变化。
-确认后采用可恢复提交：记录基线 hash、备份与 Manifest，逐文件写入并回读，失败时恢复；
-不得宣称三个工作簿具有跨文件原子性。StoreBuy 更新必须保留各目标已有 `enabled`。
-
-File System Access API 不可用时可以下载变更包人工搬运，但页面不得声称已经写入本地 Git
-工作区。仓库中的本地伴随服务仅保留为历史兼容与测试工具，不是 v3 一期正式交付路径。
+一期不提供本地目录绑定、正式人工搬运包或配置提交。浏览器、文件系统与历史伴随服务中的
+1.5 期恢复型写入骨架继续保留，但 `commit_config_export` 同时受服务端阶段开关、独立运行时
+启用、正式 Bundle、策略/目录/新鲜 Manifest、治理租约与受保护 expected-old-OID CAS 门禁；
+任一条件缺失均 fail-closed。正式 ConfigId 与导出治理分别由 GitHub #55、#56 实现并独立启用。
 
 ## 旧版工作区
 

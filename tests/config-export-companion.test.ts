@@ -10,6 +10,24 @@ import {
   type ConfigExportCompanionRegistry,
 } from "../lib/config-export-companion";
 import { startConfigExportCompanion } from "../scripts/config-export-companion";
+import type { FormalConfigExportAuthorization } from "../lib/config-export-stage";
+
+process.env.TACKLE_FORGER_PRODUCT_DELIVERY_STAGE = "PHASE_ONE_POINT_FIVE";
+process.env.TACKLE_FORGER_FORMAL_CONFIG_EXPORT_RUNTIME_ENABLED = "true";
+
+const FORMAL_AUTHORIZATION: FormalConfigExportAuthorization = {
+  packageKind: "EXPORT_PACKAGE",
+  publicationState: "FORMAL",
+  formal: true,
+  configIdBundleId: "bundle:test",
+  configIdPolicyVersionId: "config-id:test",
+  configTargetCatalogVersionId: "catalog:test",
+  approvedFreshManifestId: "manifest:test",
+  governanceLeaseId: "lease:test",
+  fencingToken: "1",
+  expectedOldOid: "a".repeat(40),
+  protectedRefCasAvailable: true,
+};
 import { createSeedState } from "../lib/seed";
 
 const identity = {
@@ -117,6 +135,7 @@ test("本地助手要求配对令牌，并以执行端登记 Profile 完成预�
     const committed = await controller.commit("0123456789abcdef", identity, {
       previewToken: preview.previewToken,
       confirmations: { "profile:test": "profile:test" },
+      formalAuthorization: FORMAL_AUTHORIZATION,
     });
     assert.equal(committed.results[0].status, "committed");
     const restored = await controller.status("0123456789abcdef", identity, {

@@ -3137,7 +3137,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           onClick={() => setExchangeMode("config")}
         >
           <PackageCheck size={18} />
-          <span><strong>配置表交付</strong><small>SnapshotBatch、多目标预览与恢复型提交</small></span>
+          <span><strong>配置关系预览</strong><small>一期仅 CONFIG_PREVIEW / NON_FORMAL</small></span>
         </button>
       </div>
       {exchangeMode === "excel" ? renderExcel() : (

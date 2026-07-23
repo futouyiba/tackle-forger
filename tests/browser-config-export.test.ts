@@ -11,6 +11,24 @@ import {
 import type { ConfigExportMapping } from "../lib/config-export-mapping";
 import { createSeedState } from "../lib/seed";
 import { deterministicHash } from "../lib/rule-kernel";
+import type { FormalConfigExportAuthorization } from "../lib/config-export-stage";
+
+process.env.TACKLE_FORGER_PRODUCT_DELIVERY_STAGE = "PHASE_ONE_POINT_FIVE";
+process.env.TACKLE_FORGER_FORMAL_CONFIG_EXPORT_RUNTIME_ENABLED = "true";
+
+const FORMAL_AUTHORIZATION: FormalConfigExportAuthorization = {
+  packageKind: "EXPORT_PACKAGE",
+  publicationState: "FORMAL",
+  formal: true,
+  configIdBundleId: "bundle:test",
+  configIdPolicyVersionId: "config-id:test",
+  configTargetCatalogVersionId: "catalog:test",
+  approvedFreshManifestId: "manifest:test",
+  governanceLeaseId: "lease:test",
+  fencingToken: "1",
+  expectedOldOid: "a".repeat(40),
+  protectedRefCasAvailable: true,
+};
 
 function toBytes(data: BufferSource | Blob | string): Promise<Uint8Array> | Uint8Array {
   if (typeof data === "string") return new TextEncoder().encode(data);
@@ -178,6 +196,7 @@ test("浏览器预览从环境根 config.toml 生成三表差异，提交后回�
     binding: current.binding,
     preview,
     snapshots: [snapshot],
+    formalAuthorization: FORMAL_AUTHORIZATION,
   });
   assert.equal(manifest.operations.every((operation) => operation.state === "verified"), true);
   const store = XLSX.read(current.xlsx.files.get("store.xlsx")!.value(), { type: "array" });
@@ -218,6 +237,7 @@ test("预览后源文件变化时恢复型提交拒绝覆盖", async () => {
     binding: current.binding,
     preview,
     snapshots: [snapshot],
+    formalAuthorization: FORMAL_AUTHORIZATION,
   }), /预览后已变化/);
 });
 
@@ -262,6 +282,7 @@ test("扩展部位预览与提交在浏览器文件写入前 fail-closed", async
     binding: current.binding,
     preview: allowedPreview,
     snapshots: [snapshot],
+    formalAuthorization: FORMAL_AUTHORIZATION,
   }), (error) => (
     error instanceof Error
     && "code" in error

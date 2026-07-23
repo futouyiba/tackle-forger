@@ -35,6 +35,11 @@ import {
   assertSnapshotItemPartEnabled,
   snapshotItemPartId,
 } from "./enabled-item-parts";
+import {
+  assertFormalConfigExportAllowed,
+  assertProductionShapeConfigExportEnabled,
+  type FormalConfigExportAuthorization,
+} from "./config-export-stage";
 
 export interface FilesystemExportOperation extends ExportFileOperation {
   sourceHash: string;
@@ -133,6 +138,7 @@ export async function previewFilesystemExport(input: {
   snapshot: ConfigurationSnapshot;
   createdAt?: string;
 }): Promise<FilesystemExportPreview> {
+  assertProductionShapeConfigExportEnabled();
   assertSnapshotItemPartEnabled(input.snapshot, "config_export");
   const itemPartId = snapshotItemPartId(input.snapshot)!;
   const createdAt = input.createdAt ?? new Date().toISOString();
@@ -356,8 +362,10 @@ export async function commitFilesystemExport(input: {
   confirmationProfileId: string;
   idempotencyKey: string;
   canCommit: boolean;
+  formalAuthorization?: FormalConfigExportAuthorization;
   audit?: ExportCommitResult["audit"];
 }): Promise<ExportCommitResult> {
+  assertFormalConfigExportAllowed(input.formalAuthorization);
   assertSnapshotItemPartEnabled(input.snapshot, "config_export");
   if (!verifySnapshotIntegrity(input.snapshot)) {
     throw new Error("冻结 ConfigurationSnapshot 的内容哈希校验失败。");
@@ -471,6 +479,7 @@ export async function commitFilesystemExport(input: {
       idempotencyKey: input.idempotencyKey,
       operations: input.preview.operations,
       adapter,
+      formalAuthorization: input.formalAuthorization,
       audit: input.audit,
     });
   } finally {

@@ -11,6 +11,24 @@ import {
   previewFilesystemExport,
 } from "../lib/config-export-filesystem";
 import type { ExportTargetProfile } from "../lib/interaction-contracts";
+import type { FormalConfigExportAuthorization } from "../lib/config-export-stage";
+
+process.env.TACKLE_FORGER_PRODUCT_DELIVERY_STAGE = "PHASE_ONE_POINT_FIVE";
+process.env.TACKLE_FORGER_FORMAL_CONFIG_EXPORT_RUNTIME_ENABLED = "true";
+
+const FORMAL_AUTHORIZATION: FormalConfigExportAuthorization = {
+  packageKind: "EXPORT_PACKAGE",
+  publicationState: "FORMAL",
+  formal: true,
+  configIdBundleId: "bundle:test",
+  configIdPolicyVersionId: "config-id:test",
+  configTargetCatalogVersionId: "catalog:test",
+  approvedFreshManifestId: "manifest:test",
+  governanceLeaseId: "lease:test",
+  fencingToken: "1",
+  expectedOldOid: "a".repeat(40),
+  protectedRefCasAvailable: true,
+};
 
 function mapping(): ConfigExportMapping {
   return {
@@ -103,6 +121,7 @@ test("文件系统执行器预览不改正式文件，确认后备份并提交�
       confirmationProfileId: current.profile.profileId,
       idempotencyKey: "commit-1",
       canCommit: true,
+      formalAuthorization: FORMAL_AUTHORIZATION,
     });
     assert.equal(committed.status, "committed");
     const workbook = XLSX.read(await readFile(target), { type: "buffer" });
@@ -115,6 +134,7 @@ test("文件系统执行器预览不改正式文件，确认后备份并提交�
       confirmationProfileId: current.profile.profileId,
       idempotencyKey: "commit-1",
       canCommit: true,
+      formalAuthorization: FORMAL_AUTHORIZATION,
     });
     assert.deepEqual(retried, committed);
   } finally {
@@ -144,6 +164,7 @@ test("预览后正式文件变化触发 hash 冲突且不覆盖外部内容", as
       confirmationProfileId: current.profile.profileId,
       idempotencyKey: "commit-2",
       canCommit: true,
+      formalAuthorization: FORMAL_AUTHORIZATION,
     });
     assert.equal(result.status, "conflict");
     assert.deepEqual(new Uint8Array(await readFile(target)), externallyChanged);
@@ -197,6 +218,7 @@ test("提交时拒绝被篡改到允许目录之外的 Manifest 路径", async (
         confirmationProfileId: current.profile.profileId,
         idempotencyKey: "commit-tampered",
         canCommit: true,
+        formalAuthorization: FORMAL_AUTHORIZATION,
       }),
       /越过允许目录/,
     );

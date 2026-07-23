@@ -10,6 +10,7 @@ import {
 import type { ExportCommitResult } from "./config-export";
 import type { ExportTargetProfile } from "./interaction-contracts";
 import type { ConfigurationSnapshot } from "./types";
+import type { FormalConfigExportAuthorization } from "./config-export-stage";
 
 export type CompanionCapability = "config.export.preview" | "config.export.commit";
 export interface CompanionPairingIdentity {
@@ -61,6 +62,7 @@ export interface CompanionPreviewResponse {
 export interface CompanionCommitRequest {
   previewToken: string;
   confirmations: Record<string, string>;
+  formalAuthorization?: FormalConfigExportAuthorization;
 }
 
 export interface CompanionCommitResponse {
@@ -293,6 +295,7 @@ export class ConfigExportCompanionController {
           requestedAt: new Date().toISOString(),
         },
         canCommit: true,
+        formalAuthorization: request.formalAuthorization,
       }));
     }
     return { packageId: stored.packageId, results };

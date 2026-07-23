@@ -21,6 +21,10 @@ import type { ConfigExportMapping } from "./config-export-mapping";
 import {
   assertSnapshotItemPartEnabled,
 } from "./enabled-item-parts";
+import {
+  assertFormalConfigExportAllowed,
+  type FormalConfigExportAuthorization,
+} from "./config-export-stage";
 export type { ConfigExportMapping } from "./config-export-mapping";
 
 
@@ -365,8 +369,10 @@ export async function commitExportPackage(input: {
   idempotencyKey: string;
   operations: ExportFileOperation[];
   adapter: ExportCommitAdapter;
+  formalAuthorization?: FormalConfigExportAuthorization;
   audit?: ExportCommitResult["audit"];
 }): Promise<ExportCommitResult> {
+  assertFormalConfigExportAllowed(input.formalAuthorization);
   if (!input.snapshots.length) throw new Error("导出提交缺少冻结 ConfigurationSnapshot。");
   for (const snapshot of input.snapshots) {
     assertSnapshotItemPartEnabled(snapshot, "config_export");

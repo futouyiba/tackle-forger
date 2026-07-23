@@ -43,6 +43,7 @@ test("review permission is separate and snapshot referenced revision is immutabl
   assert.throws(()=>reviewPatchRevision({ledger,patchId:"patch:rod:1",patchRevision:1,nextState:"APPROVED",reviewer:"x",reviewedAt:now,capabilities:[]}), (e:unknown)=>e instanceof PatchLedgerError&&e.code==="PATCH_PERMISSION_DENIED");
   const frozen={...ledger,revisions:[{...ledger.revisions[0],snapshotRefs:["snapshot:1"]}]};
   assert.throws(()=>reviewPatchRevision({ledger:frozen,patchId:"patch:rod:1",patchRevision:1,nextState:"APPROVED",reviewer:"x",reviewedAt:now,capabilities:["patch.review"]}), (e:unknown)=>e instanceof PatchLedgerError&&e.code==="PATCH_REVISION_IMMUTABLE");
+  assert.throws(()=>reviewPatchRevision({ledger,patchId:"patch:rod:1",patchRevision:1,nextState:"APPROVED",reviewer:"x",reviewedAt:now,capabilities:["patch.review"]}), (e:unknown)=>e instanceof PatchLedgerError&&e.code==="PATCH_OFFSET_POLICY_MISSING");
 });
 test("unavailable or partial mirror never reports SYNCED and retry is idempotent", () => {
   const ledger: ReturnType<typeof emptyPatchLedger>={...emptyPatchLedger(),revisions:[makeRevision()]};
@@ -94,7 +95,7 @@ test("workspace v9 migrates sequentially to current ledger schema and repeated m
   const legacy=structuredClone(createSeedState()) as unknown as Record<string,unknown>;
   legacy.schemaVersion=9; delete legacy.patchLedger;
   const once=migrateWorkspaceState(legacy), twice=migrateWorkspaceState(once);
-  assert.equal(once.schemaVersion,15); assert.deepEqual(twice.patchLedger,once.patchLedger);
+  assert.equal(once.schemaVersion,16); assert.deepEqual(twice.patchLedger,once.patchLedger);
   assert.equal(twice.projectionPatches.length,once.projectionPatches.length);
 });
 
@@ -130,7 +131,7 @@ test("already migrated v10 workspace receives the v11 snapshot audit", () => {
   const ledger=legacy.patchLedger as {migrationReviewItems:Array<{id:string}>};
   ledger.migrationReviewItems=ledger.migrationReviewItems.filter((entry)=>!entry.id.startsWith("patch-snapshot-migration:"));
   const migrated=migrateWorkspaceState(legacy);
-  assert.equal(migrated.schemaVersion,15);
+  assert.equal(migrated.schemaVersion,16);
   assert.ok(migrated.patchLedger.migrationReviewItems.some((entry)=>entry.reason==="LEGACY_SNAPSHOT_PATCH_REFERENCES_UNAVAILABLE"));
 });
 
@@ -149,7 +150,7 @@ test("v11 只把 legacy approved 迁为 ACTIVE，不误激活原生审核态", (
     makeRevision({patchId:"patch:native",state:"APPROVED",rawPayload:{source:"native"}}),
   ];
   const migrated=migrateWorkspaceState(legacy);
-  assert.equal(migrated.schemaVersion,15);
+  assert.equal(migrated.schemaVersion,16);
   assert.equal(migrated.patchLedger.revisions.find((entry)=>entry.patchId==="patch:legacy")?.state,"ACTIVE");
   assert.equal(migrated.patchLedger.revisions.find((entry)=>entry.patchId==="patch:native")?.state,"APPROVED");
 });
@@ -269,7 +270,7 @@ test("Workspace 已是 v14 时仍独立迁移 PatchLedger v2 到 v4", () => {
   const legacyLedger={...state.patchLedger,schemaVersion:2} as typeof state.patchLedger;
   delete (legacyLedger as unknown as {absorptionAssessments?:unknown}).absorptionAssessments;
   const migrated=migrateWorkspaceState({...state,patchLedger:legacyLedger});
-  assert.equal(migrated.schemaVersion,15);
+  assert.equal(migrated.schemaVersion,16);
   assert.equal(migrated.patchLedger.schemaVersion,4);
   assert.deepEqual(migrated.patchLedger.absorptionAssessments,[]);
   assert.deepEqual(migrateWorkspaceState(migrated),migrated);

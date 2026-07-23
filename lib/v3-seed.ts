@@ -1,7 +1,7 @@
 import { aggregateAffixPanel, resolveAffixConfiguration } from "./affix-engine";
 import {
   defaultAffinityAxisWeights,
-  evaluateAffinity,
+  evaluateCanonicalAffinity,
   evaluateHardCompatibility,
   evaluateStructuralHardCompatibility,
   structuralCompatibilityContext,
@@ -194,7 +194,7 @@ function sampleAffinityRules(ruleSetVersion: string): AffinityRule[] {
     },
     {
       id: "affinity-obstacle-high-strength",
-      axis: "function_performance",
+      axis: "type_function",
       selector: {
         functionId: "function:障碍强攻",
       },
@@ -282,9 +282,6 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
   const fn = state.functionProfiles.find(
     (profile) => profile.id === "function:障碍强攻",
   );
-  const performance =
-    state.performanceProfiles.find((profile) => profile.name.includes("高强")) ??
-    state.performanceProfiles[0];
   const quality = state.qualityProfiles.find(
     (profile) => profile.id === "quality_a_purple",
   );
@@ -307,17 +304,13 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
       itemTypeProfile: type,
       functionProfile: fn,
       functionIntensity: 2,
-      performanceProfile: performance,
       qualityProfile: quality,
       ruleSet,
     }),
   );
   const candidatesFor = (targetPullKg: number) =>
     projections.map((projection) => {
-      const context = {
-        ...baseContext(targetPullKg),
-        performanceId: performance?.id,
-      };
+      const context = baseContext(targetPullKg);
       return {
         projection,
         weightTemplate: templates.find(
@@ -329,7 +322,7 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
             (template) => template.id === projection.weightTemplateId,
           ) as (typeof templates)[number]).nominalFishKg,
         compatibility: evaluateStructuralHardCompatibility(structuralCompatibilityContext({ methodId: method.id, typeId: type.id, functionId: fn.id, itemPartId: "part:rod" }), compatibilityRules),
-        affinity: evaluateAffinity(
+        affinity: evaluateCanonicalAffinity(
           context,
           affinityRules,
           defaultAffinityAxisWeights,
@@ -344,7 +337,6 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
       typeId: type.id,
       functionId: fn.id,
       functionIntensity: 2,
-      performanceId: performance?.id,
       qualityId: quality.id,
     },
     candidatesFor(1.5),
@@ -358,7 +350,6 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
       typeId: type.id,
       functionId: fn.id,
       functionIntensity: 2,
-      performanceId: performance?.id,
       qualityId: quality.id,
     },
     candidatesFor(1.8),
@@ -386,10 +377,6 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
     qualityId: "quality_a_purple",
     coreFunctionId: fn.id,
     functionIntensityPolicy: { mode: "fixed", intensity: 2 },
-    performanceProfileId: performance?.id,
-    performanceIntensityPolicy: performance?.legacyIntensityLabel
-      ? { mode: "legacy_label", label: performance.legacyIntensityLabel }
-      : undefined,
     coreAffixIds: ["v3:affix-impact"],
     secondaryAffixPoolIds: [
       "v3:affix-core",
@@ -598,7 +585,6 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
           ...baseContext(
             model.skuId === sku15Id ? sku15.targetPullKg : sku18.targetPullKg,
           ),
-          performanceId: performance?.id,
           componentIds: model.componentSelections.map(
             (component) => component.componentId,
           ),
@@ -702,10 +688,9 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
     quality.id as QualityProfileId,
   );
   const publishCompatibility = compatibilityByModelId[publishTarget.model.id];
-  const publishAffinity = evaluateAffinity(
+  const publishAffinity = evaluateCanonicalAffinity(
     {
       ...baseContext(1.5),
-      performanceId: performance?.id,
       componentIds: publishTarget.model.componentSelections.map(
         (component) => component.componentId,
       ),
@@ -851,7 +836,7 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
             methodIds: [method.id],
             typeIds: [type.id],
             functionIds: [fn.id],
-            performanceIds: performance ? [performance.id] : [],
+            performanceIds: [],
             qualityIds: [quality.id as CandidateSearchRecipe["qualityIds"][number]],
             targetPullRangeKg: { min: 1.5, max: 1.8 },
             maxCandidates: 16,

@@ -3166,6 +3166,10 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       )}
     </div>
   );
+  // Keep the legacy renderers compiled for historical payload compatibility, but do not expose
+  // either writable production surface in routing.
+  void renderRecipes;
+  void renderCandidates;
   const renderPage = () => {
     if (page === "v3flow") return <V3FlowWorkbench state={state} mutate={mutate} notify={notify} initialSeriesId={v3SeriesId} />;
     if (page === "overview") return renderOverview();
@@ -3175,7 +3179,17 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     if (page === "rulegraph") return <RuleGraphStudio state={state} mutate={mutate} notify={notify} userName={user.name} selectedCandidateIds={Array.from(selectedCandidates)} />;
     if (page === "affixes") return renderAffixes();
     if (page === "quality") return renderQuality();
-    if (page === "recipes") return renderRecipes();
+    if (page === "recipes") return (
+      <Card>
+        <div className="panel-title">
+          <div>
+            <span className="eyebrow">历史数据 · 只读</span>
+            <h3>旧系列配方已停止生产</h3>
+            <p>旧配方及 Performance 选择仅保留用于历史审计；请在“钓具系列甘特图”创建正式 Series、SKU 与 Model。</p>
+          </div>
+        </div>
+      </Card>
+    );
     if (page === "showcase") return renderSeriesShowcase();
     if (page === "candidates") return (
       <>

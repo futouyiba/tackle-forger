@@ -348,7 +348,7 @@ Affinity轴与v3固定为：
 
 上游规则变化后，只创建升级候选并展示差异；必须由人工确认后生成新的快照版本。
 
-飞书回写分为“Patch台账镜像”和“通用规则变更”两条独立链路。全部Patch先进入工具内权威`PatchLedger`，再按`workspaceId + patchId + patchRevision`同步到单一`Patch台账`页；远端schema、列范围、哈希和回读以v3 §14.3为准。通用规则变更采用`RuleSourceChangeDraft`承载影响预览和人工确认，不从局部Patch静默覆盖：
+飞书回写分为“Patch台账镜像”和“通用规则变更”两条独立链路。全部Patch先进入工具内权威`PatchLedger`，再按`workspaceId + patchId + patchRevision`同步到单一`Patch台账`页；远端schema、列范围、哈希和回读以v3 §14.4为准。通用规则变更采用`RuleSourceChangeDraft`承载影响预览和人工确认，不从局部Patch静默覆盖：
 
 - 通用、稳定、跨系列复用的修改可以形成规则修改草稿。
 - 单个系列、SKU、Model 的平衡调整保存在权威Patch账本并镜像到飞书Patch台账，但不得未经归纳直接写入通用规则页。

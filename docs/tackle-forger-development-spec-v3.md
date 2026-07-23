@@ -957,7 +957,7 @@ interface PatchOperationRecord {
 
 `operationId`在Patch内稳定且不可复用，飞书镜像明细的幂等键为带类型的`tuple(workspaceId, patchId, patchRevision, operationId)`。`operationIndex`是确定性执行顺序，不得使用数据库自然顺序、飞书行号或当前排序；同一参数存在多个操作时也必须按它执行。Patch revision是组级事务边界：审核、批准、撤回、rebase、重放、吸收和Snapshot引用均针对完整revision；只有全部必需操作有效时才可重放。镜像部分写入成功不得把整组标为`SYNCED`。
 
-飞书删除、清空、隐藏、移动或过滤镜像行不构成删除Patch的命令，不得级联改变本地账本、业务状态或Snapshot。缺失行产生`PATCH_MIRROR_ROW_MISSING`，允许按幂等键补写。飞书中未知`patchId`、重复明细键、受控审计字段被改写或明细组不完整时必须隔离问题行并产生`ValidationIssue(source="patch")`；不得按名称自动认领。协作记录使用独立追加事件区：备注、复核意见、共享规则建议及其接受、拒绝、撤回和更正均创建新事件；旧事件不可修改或删除。事件并发与重试遵循第14.3节的原子compare-and-append契约。
+飞书删除、清空、隐藏、移动或过滤镜像行不构成删除Patch的命令，不得级联改变本地账本、业务状态或Snapshot。缺失行产生`PATCH_MIRROR_ROW_MISSING`，允许按幂等键补写。飞书中未知`patchId`、重复明细键、受控审计字段被改写或明细组不完整时必须隔离问题行并产生`ValidationIssue(source="patch")`；不得按名称自动认领。协作记录使用独立追加事件区：备注、复核意见、共享规则建议及其接受、拒绝、撤回和更正均创建新事件；旧事件不可修改或删除。事件并发与重试遵循第14.4节的原子compare-and-append契约。
 
 `PatchLedger`必须有独立`schemaVersion`和顺序迁移。迁移保留未知字段和原始Payload，重复执行幂等；迁移前后至少校验Patch revision数量、操作顺序、PatchSetHash、代表性最终值和Trace语义。无法无损迁移的记录保留原值并进入人工复核，不得删除。对象归档、缺失、合并或迁移后无法按稳定ID解析的Patch进入`ORPHANED`注意状态，保留原`subjectEntityId`和历史引用，禁止按名称重新绑定。
 
@@ -1157,7 +1157,7 @@ syncIdempotencyKey = sha256Hex(JCS({
 
 飞书同步不得自动rebase。基线变化只使本地Patch进入`REBASE_REQUIRED`：`add`、`multiply`及目标仍合法的`clear`可以确定性重放，但新revision最多进入`PENDING_REVIEW`；`set`必须人工复核；参数删除、重命名、类型或单位变化以及不再表示继承覆盖的`clear`必须人工rebase。rebase创建新的`patchRevision`；可对应的操作沿用`operationId`，新增操作使用新ID。rebase期间基线再次变化则本次结果作废并基于最新基线重来。原revision、有序操作、Snapshot引用和PatchSetHash永久保留。
 
-#### 14.3.5 Patch主体迁移与不可变revision
+#### 14.4.5 Patch主体迁移与不可变revision
 
 `patch.subject.migrate`固定采用“创建新Patch revision”，不建立会让旧revision改指向的可变别名或独立覆盖绑定。命令必须携带`workspaceId`、`patchId`、`sourcePatchRevision`、`expectedHeadPatchRevision`、`expectedSubjectEntityId`、`targetSubjectEntityId`、目标对象revision、理由和`idempotencyKey`。服务端只允许迁移当前head且处于`ORPHANED`注意状态的revision；目标必须属于同一工作区，并与scope、layer、对象类型、父链和参数类型/单位兼容，禁止按名称推断目标。
 

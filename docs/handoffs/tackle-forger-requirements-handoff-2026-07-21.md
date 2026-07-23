@@ -61,7 +61,7 @@
 - Patch记录operation、operand、before、after、理由、作者、时间、基线版本和Trace，不覆盖源模板。
 - 中间层修改使受影响下游进入DIRTY或待升级；已发布Snapshot不变。
 - 所有保存过的Patch进入工具内权威`PatchLedger`，并同步到主飞书工作簿的单一`Patch台账`页；重生成、改名、重启和重新拉取均不得丢失。
-- 飞书`Patch台账`是人工可见镜像和审计副本，不是通用规则表或唯一运行时来源；远端schema、列范围、哈希和回读以v3 §14.3为准。机器行与协作事件行都包含受控`workspaceId`；Patch组按`workspaceId + patchId + patchRevision`定位，逐操作镜像按`workspaceId + patchId + patchRevision + operationId`幂等同步。
+- 飞书`Patch台账`是人工可见镜像和审计副本，不是通用规则表或唯一运行时来源；远端schema、列范围、哈希和回读以v3 §14.4为准。机器行与协作事件行都包含受控`workspaceId`；Patch组按`workspaceId + patchId + patchRevision`定位，逐操作镜像按`workspaceId + patchId + patchRevision + operationId`幂等同步。
 - 通用中间层Patch及多个个体Patch呈现的稳定模式，可经汇总分析、人工归纳和影响预览转为 `RuleSourceChangeDraft`，确认后回写对应通用规则页；一期、1.5期、二期和当前规划三期均不接飞书审批。
 - Series、SKU、Model个案Patch不得未经归纳自动反推通用规则；新RuleSet发布后再判断`ABSORBED`、`PARTIALLY_ABSORBED`、继续有效或需要rebase。
 - Patch业务状态与飞书镜像同步状态必须分开；一条操作具有稳定`operationId`和`operationIndex`，明细幂等键为带类型的`tuple(workspaceId, patchId, patchRevision, operationId)`。完整Patch revision是审核、重放、rebase、吸收和Snapshot引用的事务边界，部分镜像成功不等于整组同步成功。

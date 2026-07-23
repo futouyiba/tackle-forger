@@ -1178,10 +1178,11 @@ function migrateV17ToV18(input: MutableWorkspace): MutableWorkspace {
     return candidate;
   };
 
-  const addReviewItem = (
-    constraintSet: PartConstraintSet,
-    sourceType: MigrationReviewItem["sourceType"],
-  ) => {
+  const addReviewItem = (constraintSet: PartConstraintSet) => {
+    const sourceType: MigrationReviewItem["sourceType"] =
+      constraintSet.sourceRef.sourceType === "legacy_series_recipe"
+        ? "series_recipe"
+        : constraintSet.sourceRef.sourceType;
     const id = `${constraintSet.constraintSetId}:r${constraintSet.revision}:review`;
     const candidate: MigrationReviewItem = {
       id,
@@ -1257,7 +1258,7 @@ function migrateV17ToV18(input: MutableWorkspace): MutableWorkspace {
     const constraintSet = addConstraintSet(candidate);
     const ref = partConstraintSetRef(constraintSet);
     migratedLegacyRefs.set(sourceId, ref);
-    addReviewItem(constraintSet, "series_recipe");
+    addReviewItem(constraintSet);
   }
 
   const candidateSearchRecipes = arrayOf<Record<string, unknown>>(
@@ -1265,7 +1266,10 @@ function migrateV17ToV18(input: MutableWorkspace): MutableWorkspace {
   ).map((recipe) => {
     const existingRef = recipe.partConstraintSetRef as PartConstraintSetRef | undefined;
     if (existingRef) {
-      resolvePartConstraintSetRef(constraintSets, existingRef);
+      const constraintSet = resolvePartConstraintSetRef(constraintSets, existingRef);
+      if (constraintSet.reviewStatus === "NEEDS_REVIEW") {
+        addReviewItem(constraintSet);
+      }
       return structuredClone(recipe);
     }
     const legacyId = typeof recipe.sourceLegacyRecipeId === "string"
@@ -1300,7 +1304,7 @@ function migrateV17ToV18(input: MutableWorkspace): MutableWorkspace {
         ...(legacyId ? ["LEGACY_RECIPE_REF_UNRESOLVED"] : []),
       ],
     }));
-    addReviewItem(constraintSet, "candidate_search_recipe");
+    addReviewItem(constraintSet);
     return {
       ...recipe,
       partConstraintSetRef: partConstraintSetRef(constraintSet),
@@ -1312,7 +1316,10 @@ function migrateV17ToV18(input: MutableWorkspace): MutableWorkspace {
   ).map((series) => {
     const existingRef = series.partConstraintSetRef as PartConstraintSetRef | undefined;
     if (existingRef) {
-      resolvePartConstraintSetRef(constraintSets, existingRef);
+      const constraintSet = resolvePartConstraintSetRef(constraintSets, existingRef);
+      if (constraintSet.reviewStatus === "NEEDS_REVIEW") {
+        addReviewItem(constraintSet);
+      }
       return structuredClone(series);
     }
     const sourceId = stableSourceId(series, "series-definition");
@@ -1331,7 +1338,7 @@ function migrateV17ToV18(input: MutableWorkspace): MutableWorkspace {
       migratedAt,
       diagnosticCodes: ["NO_SERIES_PART_CONSTRAINT_SOURCE"],
     }));
-    addReviewItem(constraintSet, "series_definition");
+    addReviewItem(constraintSet);
     return {
       ...series,
       partConstraintSetRef: partConstraintSetRef(constraintSet),

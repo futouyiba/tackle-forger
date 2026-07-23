@@ -276,6 +276,47 @@ test("schema v18 对复核项 ID 碰撞、错误 resolved 状态与重复记录 
   );
 });
 
+test("schema v18 为已有 NEEDS_REVIEW ref 幂等补齐 pending 复核项", () => {
+  const partial = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
+  partial.schemaVersion = 17;
+  partial.migrationReviewItems = (
+    partial.migrationReviewItems as Array<{ id: string }>
+  ).filter((item) => !item.id.startsWith("part-constraint-set:"));
+  const snapshotsBefore = structuredClone(partial.configurationSnapshots);
+
+  const migrated = migrateWorkspaceState(partial);
+  const needsReviewSets = migrated.partConstraintSets.filter(
+    (constraintSet) => constraintSet.reviewStatus === "NEEDS_REVIEW",
+  );
+  const expectedReviewIds = new Set(
+    needsReviewSets.map(
+      (constraintSet) =>
+        `${constraintSet.constraintSetId}:r${constraintSet.revision}:review`,
+    ),
+  );
+  const actualReviewItems = migrated.migrationReviewItems.filter(
+    (item) => expectedReviewIds.has(item.id),
+  );
+
+  assert.equal(actualReviewItems.length, expectedReviewIds.size);
+  assert.equal(actualReviewItems.every((item) => item.status === "pending"), true);
+  for (const constraintSet of needsReviewSets) {
+    const item = actualReviewItems.find(
+      (entry) =>
+        entry.id
+        === `${constraintSet.constraintSetId}:r${constraintSet.revision}:review`,
+    );
+    assert.ok(item);
+    assert.deepEqual(
+      (item.preservedPayload as { partConstraintSetRef: unknown })
+        .partConstraintSetRef,
+      partConstraintSetRef(constraintSet),
+    );
+  }
+  assert.deepEqual(migrated.configurationSnapshots, snapshotsBefore);
+  assert.deepEqual(migrateWorkspaceState(migrated), migrated);
+});
+
 test("PartConstraintSet 稳定 ref 对缺失、重复、篡改或 hash 不符均 fail-closed", () => {
   const state = createSeedState();
   const constraintSet = state.partConstraintSets[0];

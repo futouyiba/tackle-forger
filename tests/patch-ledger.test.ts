@@ -37,6 +37,7 @@ test("stable ID survives rename, baseline changes rebase, missing ID is orphaned
   assert.equal(resolvePatchRevision({revision:r,existingSubjectIds:["model:rod:1"],currentRuleSetVersion:"ruleset:2",currentObjectRevision:3}).state,"REBASE_REQUIRED");
   const orphan=resolvePatchRevision({revision:r,existingSubjectIds:["model:same-name"],currentRuleSetVersion:"ruleset:1",currentObjectRevision:3});
   assert.deepEqual(orphan.attentionStates,["ORPHANED"]); assert.equal(orphan.subjectEntityId,"model:rod:1");
+  assert.equal(resolvePatchRevision({revision:makeRevision({state:"DRAFT"}),existingSubjectIds:["model:rod:1"],currentRuleSetVersion:"ruleset:2",currentObjectRevision:3}).state,"REBASE_REQUIRED");
 });
 test("review permission is separate and snapshot referenced revision is immutable", () => {
   const ledger: ReturnType<typeof emptyPatchLedger>={...emptyPatchLedger(),revisions:[makeRevision({state:"PENDING_REVIEW"})]};

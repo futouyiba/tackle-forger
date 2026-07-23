@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -9,6 +9,7 @@ import {
   validateCompanionRegistry,
   type ConfigExportCompanionRegistry,
 } from "../lib/config-export-companion";
+import type { FilesystemExportPreview } from "../lib/config-export-filesystem";
 import { startConfigExportCompanion } from "../scripts/config-export-companion";
 import type {
   FormalConfigExportAuthorization,
@@ -65,6 +66,16 @@ function replayableSnapshot(): ConfigurationSnapshot {
   Reflect.deleteProperty(content, "contentHash");
   snapshot.contentHash = deterministicHash(content);
   return snapshot;
+}
+
+function withoutReplayPolicy(snapshot: ConfigurationSnapshot): ConfigurationSnapshot {
+  const blocked = structuredClone(snapshot);
+  Reflect.deleteProperty(blocked, "pricingPolicyVersion");
+  Reflect.deleteProperty(blocked, "automaticPricing");
+  const content = structuredClone(blocked);
+  Reflect.deleteProperty(content, "contentHash");
+  blocked.contentHash = deterministicHash(content);
+  return blocked;
 }
 
 function workbookBytes() {
@@ -186,6 +197,89 @@ test("本地助手要求配对令牌，并以执行端登记 Profile 完成预�
       { type: "buffer" },
     );
     assert.equal(workbook.Sheets.Rods.B5.v, "rod_qinglu_15_fast");
+  } finally {
+    assert.ok(current.root.startsWith(os.tmpdir()));
+    await rm(current.root, { recursive: true, force: true });
+  }
+});
+
+test("本地助手提交在治理 verifier 和文件系统副作用前拒绝不可重放 Snapshot", async () => {
+  const current = await fixture();
+  try {
+    let verifierCalls = 0;
+    const verifier: FormalConfigExportEvidenceVerifier = {
+      async verify(_authorization, context) {
+        verifierCalls += 1;
+        return {
+          verified: true,
+          manifestSetHash: "manifest-set:test",
+          verifiedAt: "2026-07-23T00:00:00.000Z",
+          contextHash: formalConfigExportContextHash(context),
+        };
+      },
+    };
+    const controller = new ConfigExportCompanionController({
+      registry: current.registry,
+      token: "0123456789abcdef",
+      formalAuthorizationVerifier: verifier,
+    });
+    const previewResponse = await controller.preview("0123456789abcdef", identity, {
+      packageId: "package-companion-non-replayable",
+      profileIds: ["profile:test"],
+      snapshot: replayableSnapshot(),
+      formalAuthorization: FORMAL_AUTHORIZATION,
+    });
+    const storedPreviews = (controller as unknown as {
+      previews: Map<string, {
+        snapshot: ConfigurationSnapshot;
+        previews: Map<string, FilesystemExportPreview>;
+      }>;
+    }).previews;
+    const stored = storedPreviews.get(previewResponse.previewToken)!;
+    stored.snapshot = withoutReplayPolicy(stored.snapshot);
+    const filesystemPreview = stored.previews.get("profile:test")!;
+    filesystemPreview.snapshotHash = stored.snapshot.contentHash;
+    filesystemPreview.formalEvidence = {
+      ...filesystemPreview.formalEvidence!,
+      contextHash: formalConfigExportContextHash({
+        packageId: filesystemPreview.packageId,
+        profileId: filesystemPreview.profileId,
+        environmentId: current.registry.profiles[0]!.environmentId ?? "",
+        channelKey: current.registry.profiles[0]!.channelKey ?? "",
+        mappingId: filesystemPreview.mappingId,
+        mappingVersion: filesystemPreview.mappingVersion,
+        snapshots: [{
+          snapshotId: stored.snapshot.id,
+          snapshotHash: stored.snapshot.contentHash,
+        }],
+        operations: filesystemPreview.operations.map((operation) => ({
+          workbook: operation.workbook,
+          targetRef: operation.targetRef,
+          expectedOriginalHash: operation.expectedOriginalHash,
+          stagedHash: operation.stagedHash,
+        })),
+      }),
+    };
+    verifierCalls = 0;
+
+    await assert.rejects(
+      () => controller.commit("0123456789abcdef", identity, {
+        previewToken: previewResponse.previewToken,
+        confirmations: { "profile:test": "profile:test" },
+        formalAuthorization: FORMAL_AUTHORIZATION,
+      }),
+      (error) => error instanceof Error
+        && "code" in error
+        && error.code === "SNAPSHOT_REPLAY_POLICY_MISSING",
+    );
+
+    assert.equal(verifierCalls, 0);
+    for (const directory of ["commits", "locks", "backups"]) {
+      await assert.rejects(
+        () => stat(path.join(current.root, ".tackle-forger", directory)),
+        (error) => (error as NodeJS.ErrnoException).code === "ENOENT",
+      );
+    }
   } finally {
     assert.ok(current.root.startsWith(os.tmpdir()));
     await rm(current.root, { recursive: true, force: true });

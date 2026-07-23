@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -21,6 +21,7 @@ import {
   ConfigExportStageError,
   formalConfigExportContextHash,
 } from "../lib/config-export-stage";
+import { ConfigPreviewSnapshotError } from "../lib/config-preview-package";
 
 process.env.TACKLE_FORGER_PRODUCT_DELIVERY_STAGE = "PHASE_ONE_POINT_FIVE";
 process.env.TACKLE_FORGER_FORMAL_CONFIG_EXPORT_RUNTIME_ENABLED = "true";
@@ -63,6 +64,16 @@ function replayableSnapshot(): ConfigurationSnapshot {
   Reflect.deleteProperty(content, "contentHash");
   snapshot.contentHash = deterministicHash(content);
   return snapshot;
+}
+
+function withoutReplayPolicy(snapshot: ConfigurationSnapshot): ConfigurationSnapshot {
+  const blocked = structuredClone(snapshot);
+  Reflect.deleteProperty(blocked, "pricingPolicyVersion");
+  Reflect.deleteProperty(blocked, "automaticPricing");
+  const content = structuredClone(blocked);
+  Reflect.deleteProperty(content, "contentHash");
+  blocked.contentHash = deterministicHash(content);
+  return blocked;
 }
 
 function mapping(): ConfigExportMapping {
@@ -245,6 +256,87 @@ test("文件系统执行器预览不改正式文件，确认后备份并提交�
       formalAuthorizationVerifier: undefined,
     });
     assert.deepEqual(retried, committed);
+  } finally {
+    assert.ok(current.root.startsWith(os.tmpdir()));
+    await rm(current.root, { recursive: true, force: true });
+  }
+});
+
+test("文件系统提交在幂等读取、治理验证和控制目录 I/O 前拒绝不可重放 Snapshot", async () => {
+  const current = await fixture();
+  try {
+    const snapshot = replayableSnapshot();
+    const preview = await previewFilesystemExport({
+      packageId: "package-non-replayable",
+      profile: current.profile,
+      mapping: mapping(),
+      snapshot,
+      canCommit: true,
+      formalAuthorization: FORMAL_AUTHORIZATION,
+      formalAuthorizationVerifier: FORMAL_VERIFIER,
+    });
+    const blockedSnapshot = withoutReplayPolicy(snapshot);
+    const blockedContext = {
+      packageId: preview.packageId,
+      profileId: preview.profileId,
+      environmentId: current.profile.environmentId ?? "",
+      channelKey: current.profile.channelKey ?? "",
+      mappingId: preview.mappingId,
+      mappingVersion: preview.mappingVersion,
+      snapshots: [{
+        snapshotId: blockedSnapshot.id,
+        snapshotHash: blockedSnapshot.contentHash,
+      }],
+      operations: preview.operations.map((operation) => ({
+        workbook: operation.workbook,
+        targetRef: operation.targetRef,
+        expectedOriginalHash: operation.expectedOriginalHash,
+        stagedHash: operation.stagedHash,
+      })),
+    };
+    const blockedPreview = {
+      ...preview,
+      snapshotHash: blockedSnapshot.contentHash,
+      formalEvidence: {
+        ...preview.formalEvidence!,
+        contextHash: formalConfigExportContextHash(blockedContext),
+      },
+    };
+    let verifierCalls = 0;
+    const verifier: FormalConfigExportEvidenceVerifier = {
+      async verify(_authorization, context) {
+        verifierCalls += 1;
+        return {
+          verified: true,
+          manifestSetHash: "manifest-set:test",
+          verifiedAt: "2026-07-23T00:00:00.000Z",
+          contextHash: formalConfigExportContextHash(context),
+        };
+      },
+    };
+
+    await assert.rejects(
+      () => commitFilesystemExport({
+        preview: blockedPreview,
+        snapshot: blockedSnapshot,
+        profile: current.profile,
+        confirmationProfileId: current.profile.profileId,
+        idempotencyKey: "commit-non-replayable",
+        canCommit: true,
+        formalAuthorization: FORMAL_AUTHORIZATION,
+        formalAuthorizationVerifier: verifier,
+      }),
+      (error) => error instanceof ConfigPreviewSnapshotError
+        && error.code === "SNAPSHOT_REPLAY_POLICY_MISSING",
+    );
+
+    assert.equal(verifierCalls, 0);
+    for (const directory of ["commits", "locks", "backups"]) {
+      await assert.rejects(
+        () => stat(path.join(current.root, ".tackle-forger", directory)),
+        (error) => (error as NodeJS.ErrnoException).code === "ENOENT",
+      );
+    }
   } finally {
     assert.ok(current.root.startsWith(os.tmpdir()));
     await rm(current.root, { recursive: true, force: true });

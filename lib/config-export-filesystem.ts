@@ -425,6 +425,7 @@ export async function commitFilesystemExport(input: {
   formalAuthorizationVerifier?: FormalConfigExportEvidenceVerifier;
   audit?: ExportCommitResult["audit"];
 }): Promise<ExportCommitResult> {
+  assertConfigExportSnapshotReplayable(input.snapshot);
   const formalExportContext: FormalConfigExportContext = {
     packageId: input.preview.packageId,
     profileId: input.preview.profileId,

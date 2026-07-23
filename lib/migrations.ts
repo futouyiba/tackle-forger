@@ -1037,6 +1037,25 @@ function stableConstraintSetId(sourceType: string, sourceId: string): string {
   return `part-constraint-set:${sourceType}:${encodeURIComponent(sourceId)}`;
 }
 
+function assertConstraintSetSourceMatchesConsumer(
+  constraintSet: PartConstraintSet,
+  consumer: Record<string, unknown>,
+  sourceType: PartConstraintSourceRevisionRef["sourceType"],
+): void {
+  const expected: PartConstraintSourceRevisionRef = {
+    sourceType,
+    sourceId: partConstraintSourceStableId(consumer, sourceType),
+    revisionId: partConstraintSourceRevisionId(consumer),
+    hashProjectionVersion: PART_CONSTRAINT_SOURCE_HASH_PROJECTION,
+    contentHash: partConstraintSourceContentHash(consumer),
+  };
+  if (deterministicHash(constraintSet.sourceRef) !== deterministicHash(expected)) {
+    throw new Error(
+      `PART_CONSTRAINT_SET_SOURCE_REF_MISMATCH：${constraintSet.constraintSetId}@${constraintSet.revision} 不属于当前 ${sourceType} 消费者。`,
+    );
+  }
+}
+
 function v17NormalizationRequired(identity: string): never {
   throw new Error(
     `PART_CONSTRAINT_SET_V17_NORMALIZATION_REQUIRED：${identity} 是旧 schema v17 形态，不能直接提升为 schema v18。`,
@@ -1346,6 +1365,11 @@ function migrateV17ToV18(input: MutableWorkspace): MutableWorkspace {
     const existingRef = recipe.partConstraintSetRef as PartConstraintSetRef | undefined;
     if (existingRef) {
       const constraintSet = resolvePartConstraintSetRef(constraintSets, existingRef);
+      assertConstraintSetSourceMatchesConsumer(
+        constraintSet,
+        recipe,
+        "candidate_search_recipe",
+      );
       if (constraintSet.reviewStatus === "NEEDS_REVIEW") {
         addReviewItem(constraintSet);
       }
@@ -1357,12 +1381,6 @@ function migrateV17ToV18(input: MutableWorkspace): MutableWorkspace {
         ? recipe.id.slice("search:".length)
         : undefined;
     const legacyRef = legacyId ? migratedLegacyRefs.get(legacyId) : undefined;
-    if (legacyRef) {
-      return {
-        ...recipe,
-        partConstraintSetRef: structuredClone(legacyRef),
-      };
-    }
 
     const sourceId = partConstraintSourceStableId(recipe, "candidate_search_recipe");
     const sourceRef = {
@@ -1380,7 +1398,8 @@ function migrateV17ToV18(input: MutableWorkspace): MutableWorkspace {
       migratedAt,
       diagnosticCodes: [
         "NO_RECIPE_PART_CONSTRAINT_SOURCE",
-        ...(legacyId ? ["LEGACY_RECIPE_REF_UNRESOLVED"] : []),
+        ...(legacyRef ? ["LEGACY_RECIPE_CONSTRAINTS_NOT_REUSED_ACROSS_CONSUMERS"] : []),
+        ...(!legacyRef && legacyId ? ["LEGACY_RECIPE_REF_UNRESOLVED"] : []),
       ],
     }));
     addReviewItem(constraintSet);
@@ -1396,6 +1415,11 @@ function migrateV17ToV18(input: MutableWorkspace): MutableWorkspace {
     const existingRef = series.partConstraintSetRef as PartConstraintSetRef | undefined;
     if (existingRef) {
       const constraintSet = resolvePartConstraintSetRef(constraintSets, existingRef);
+      assertConstraintSetSourceMatchesConsumer(
+        constraintSet,
+        series,
+        "series_definition",
+      );
       if (constraintSet.reviewStatus === "NEEDS_REVIEW") {
         addReviewItem(constraintSet);
       }

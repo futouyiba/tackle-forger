@@ -16,6 +16,8 @@ import {
   createNeedsReviewPartConstraintSet,
   PART_CONSTRAINT_SOURCE_HASH_PROJECTION,
   partConstraintSourceContentHash,
+  partConstraintSourceRevisionId,
+  partConstraintSourceStableId,
   partConstraintSetRef,
 } from "./part-constraints";
 import {
@@ -827,18 +829,33 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
     methodIds: [method.id],
     typeIds: [type.id],
     functionIds: [fn.id],
-    performanceIds: [],
+    performanceIds: performance ? [performance.id] : [],
     qualityIds: [quality.id as CandidateSearchRecipe["qualityIds"][number]],
     targetPullRangeKg: { min: 1.5, max: 1.8 },
     maxCandidates: 16,
     notes: "V3 示例链的确定性候选搜索配方，仅用于演示与验收。",
   };
-  const seedConstraintSet = createNeedsReviewPartConstraintSet({
-    constraintSetId: "part-constraint-set:candidate-search-recipe:candidate-recipe%3Aqinglu-obstacle",
+  const seriesConstraintSet = createNeedsReviewPartConstraintSet({
+    constraintSetId: `part-constraint-set:series-definition:${encodeURIComponent(series.id)}`,
+    sourceRef: {
+      sourceType: "series_definition",
+      sourceId: partConstraintSourceStableId(series, "series_definition"),
+      revisionId: partConstraintSourceRevisionId(series),
+      hashProjectionVersion: PART_CONSTRAINT_SOURCE_HASH_PROJECTION,
+      contentHash: partConstraintSourceContentHash(series),
+    },
+    rawPayload: series,
+    sourceSchemaVersion: state.schemaVersion,
+    migratedAt: CREATED_AT,
+    diagnosticCodes: ["SEED_CONSTRAINTS_NOT_CONFIGURED"],
+    createdBy: "seed-designer",
+  });
+  const candidateConstraintSet = createNeedsReviewPartConstraintSet({
+    constraintSetId: `part-constraint-set:candidate-search-recipe:${encodeURIComponent(candidateRecipe.id)}`,
     sourceRef: {
       sourceType: "candidate_search_recipe",
-      sourceId: candidateRecipe.id,
-      revisionId: String(candidateRecipe.revision),
+      sourceId: partConstraintSourceStableId(candidateRecipe, "candidate_search_recipe"),
+      revisionId: partConstraintSourceRevisionId(candidateRecipe),
       hashProjectionVersion: PART_CONSTRAINT_SOURCE_HASH_PROJECTION,
       contentHash: partConstraintSourceContentHash(candidateRecipe),
     },
@@ -848,14 +865,15 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
     diagnosticCodes: ["SEED_CONSTRAINTS_NOT_CONFIGURED"],
     createdBy: "seed-designer",
   });
-  const seedConstraintRef = partConstraintSetRef(seedConstraintSet);
+  const seriesConstraintRef = partConstraintSetRef(seriesConstraintSet);
+  const candidateConstraintRef = partConstraintSetRef(candidateConstraintSet);
   const seriesWithConstraintRef: SeriesDefinition = {
     ...series,
-    partConstraintSetRef: seedConstraintRef,
+    partConstraintSetRef: seriesConstraintRef,
   };
   const candidateRecipeWithConstraintRef: CandidateSearchRecipe = {
     ...candidateRecipe,
-    partConstraintSetRef: seedConstraintRef,
+    partConstraintSetRef: candidateConstraintRef,
   };
 
   return {
@@ -879,13 +897,13 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
       },
     ],
     seriesDefinitions: [seriesWithConstraintRef],
-    partConstraintSets: state.partConstraintSets.some(
-      (entry) =>
-        entry.constraintSetId === seedConstraintSet.constraintSetId
-        && entry.revision === seedConstraintSet.revision,
-    )
-      ? state.partConstraintSets
-      : [...state.partConstraintSets, seedConstraintSet],
+    partConstraintSets: [seriesConstraintSet, candidateConstraintSet].reduce(
+      (entries, candidate) => entries.some((entry) =>
+        entry.constraintSetId === candidate.constraintSetId
+        && entry.revision === candidate.revision,
+      ) ? entries : [...entries, candidate],
+      state.partConstraintSets,
+    ),
     skuDrawers: [sku15, sku18],
     purchasableModels: publishedModels,
     candidateSearchRecipes: state.candidateSearchRecipes.some(

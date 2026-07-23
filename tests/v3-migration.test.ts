@@ -164,9 +164,10 @@ test("schema v18 无损迁移旧 SeriesRecipe 为稳定 PartConstraintSet 且重
     resolvePartConstraintSetRef(
       migrated.partConstraintSets,
       migratedRecipe.partConstraintSetRef,
-    ).constraintSetId,
-    constraintSetId,
+    ).sourceRef.sourceType,
+    "candidate_search_recipe",
   );
+  assert.notEqual(migratedRecipe.partConstraintSetRef.constraintSetId, constraintSetId);
   assert.equal(
     resolvePartConstraintSourceRevision(
       migrated.recipes,
@@ -530,6 +531,31 @@ test("PartConstraintSet 稳定 ref 对缺失、重复、篡改或 hash 不符均
   );
 });
 
+test("schema v18 拒绝把已有 PartConstraintSet ref 复用于另一位 Series 或 Recipe 消费者", () => {
+  const crossRecipe = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
+  crossRecipe.schemaVersion = 17;
+  const recipes = crossRecipe.candidateSearchRecipes as Array<Record<string, unknown>>;
+  const sourceRecipe = recipes[0]!;
+  recipes.push({
+    ...structuredClone(sourceRecipe),
+    id: "candidate-recipe:other-consumer",
+  });
+  assert.throws(
+    () => migrateWorkspaceState(crossRecipe),
+    /PART_CONSTRAINT_SET_SOURCE_REF_MISMATCH/,
+  );
+
+  const crossSeries = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
+  crossSeries.schemaVersion = 17;
+  const series = (crossSeries.seriesDefinitions as Array<Record<string, unknown>>)[0]!;
+  const recipe = (crossSeries.candidateSearchRecipes as Array<Record<string, unknown>>)[0]!;
+  series.partConstraintSetRef = structuredClone(recipe.partConstraintSetRef);
+  assert.throws(
+    () => migrateWorkspaceState(crossSeries),
+    /PART_CONSTRAINT_SET_SOURCE_REF_MISMATCH/,
+  );
+});
+
 test("schema v18 拒绝字段容器或 set/part/trace 状态枚举非法的 v17 规范对象", () => {
   const cases: Array<{
     mutate: (constraintSet: Record<string, unknown>) => void;
@@ -787,6 +813,8 @@ test("D-02 OfficialSku 无损迁移为抽屉、默认 Model 与冻结快照", ()
   legacy.schemaVersion = 2;
   legacy.collections = [];
   legacy.seriesDefinitions = [];
+  legacy.partConstraintSets = [];
+  legacy.candidateSearchRecipes = [];
   legacy.skuDrawers = [];
   legacy.purchasableModels = [];
   legacy.configurationSnapshots = [];

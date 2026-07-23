@@ -115,6 +115,26 @@ test("旧 Performance 字段不参与配方筛选、兼容、Affinity 或候选 
     suggestion: "",
     enabled: true,
   });
+  withLegacyPerformance.state.compatibilityRules.push({
+    id: "legacy-performance-requirement",
+    axis: "type_function",
+    effect: "require",
+    selector: {
+      typeId: withLegacyPerformance.series.typeId,
+      functionId: withLegacyPerformance.series.coreFunctionId,
+    },
+    requirements: [{
+      kind: "field",
+      key: "performanceId",
+      value: "legacy:performance:required",
+      message: "旧 Performance requirement 不得阻断 canonical 候选",
+    }],
+    priority: 998,
+    ruleSetVersion: withLegacyPerformance.state.ruleSetVersions[0].id,
+    reason: "旧 Performance requirement",
+    suggestion: "",
+    enabled: true,
+  });
   withLegacyPerformance.state.affinityRules.push({
     id: "legacy-performance-affinity",
     axis: "function_performance",

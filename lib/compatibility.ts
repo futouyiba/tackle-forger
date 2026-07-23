@@ -134,6 +134,37 @@ export function evaluateStructuralHardCompatibility(
   );
 }
 
+function withoutLegacyPerformanceRequirements(rule: CompatibilityRule): CompatibilityRule | undefined {
+  if (rule.selector.performanceId !== undefined) return undefined;
+  const canonical = {
+    ...rule,
+    requirements: rule.requirements.filter(
+      (requirement) => !(requirement.kind === "field" && requirement.key === "performanceId"),
+    ),
+  };
+  if (rule.effect === "require" && rule.requirements.length > 0 && canonical.requirements.length === 0) {
+    return undefined;
+  }
+  return canonical;
+}
+
+/**
+ * 新运行时的硬兼容入口。旧 Performance selector 与 field requirement 都是历史证据，
+ * 不得因为 canonical context 不再携带 performanceId 而排除候选。
+ */
+export function evaluateCanonicalHardCompatibility(
+  context: CompatibilityContext,
+  rules: CompatibilityRule[],
+): HardCompatibilityResult {
+  return evaluateHardCompatibility(
+    context,
+    rules.flatMap((rule) => {
+      const canonical = withoutLegacyPerformanceRequirements(rule);
+      return canonical ? [canonical] : [];
+    }),
+  );
+}
+
 export function compatibilitySpecificity(
   selector: CompatibilitySelector,
 ): number {

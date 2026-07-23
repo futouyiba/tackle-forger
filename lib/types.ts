@@ -13,7 +13,10 @@ import type {
   ModelAffixValueAssessment,
   QualityValuePolicyDraft,
 } from "./quality-value-policy";
-import type { PerformanceSummarySnapshot } from "./performance-summary";
+import type {
+  PerformanceSummaryDefinition,
+  PerformanceSummarySnapshot,
+} from "./performance-summary";
 
 export type ItemKind = "rod" | "reel" | "line";
 export type RuleOperation = "add" | "multiply" | "set" | "min" | "max" | "formula";
@@ -1829,6 +1832,7 @@ export interface WorkspaceState {
   itemTypeProfiles: ItemTypeProfile[];
   functionProfiles: FunctionProfile[];
   performanceProfiles: PerformanceProfile[];
+  performanceSummaryDefinitions: PerformanceSummaryDefinition[];
   qualityProfiles: QualityProfile[];
   projectionPatches: ProjectionPatchRuleSource[];
   patchLedger: PatchLedger;

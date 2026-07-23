@@ -27,11 +27,13 @@ import type {
   PatchRevisionRecord,
   PatchValidationWaiver,
   ProjectionPatchRuleSource,
+  ProjectionTraceStep,
   PurchasableModel,
   RuleChangeProposal,
   RuleSetVersion,
   SeriesDefinition,
   SkuDrawer,
+  Technology,
   UpgradeCandidate,
   ValidationIssue,
   PassiveSkillPayload,
@@ -42,6 +44,7 @@ import type { ModelAffixValueAssessment } from "./quality-value-policy";
 import type { PricingTrialResult } from "./pricing-policy";
 import {
   derivePerformanceSummary,
+  resolvePerformanceSummaryDefinition,
   unavailablePerformanceSummary,
   type PerformanceSummaryDefinition,
   type PerformanceSummarySnapshot,
@@ -94,7 +97,10 @@ export interface PublishModelInput {
   qualityReport: AffixQualityEvaluation;
   qualityValueAssessment?: ModelAffixValueAssessment;
   performanceSummaryDefinition?: PerformanceSummaryDefinition;
+  performanceSummaryDefinitions?: PerformanceSummaryDefinition[];
   performanceSummary?: PerformanceSummarySnapshot;
+  technologyDefinitions?: Technology[];
+  finalSettlementTrace?: ProjectionTraceStep[];
   pricingPolicyVersion?: string;
   automaticPricing?: PricingTrialResult;
   validationReport: ValidationIssue[];
@@ -197,15 +203,35 @@ export function publishConfigurationSnapshot(
     ...(input.fiveAxisPreview?.tackleFitComparison.validationIssues ?? []),
   ];
   const blocking = errors(combinedValidationReport);
+  let registeredPerformanceSummaryDefinition = input.performanceSummaryDefinition;
+  if (input.publicationMode === "new_formal" && input.performanceSummaryDefinition) {
+    registeredPerformanceSummaryDefinition = resolvePerformanceSummaryDefinition({
+      definitions: input.performanceSummaryDefinitions ?? [],
+      definitionId: input.performanceSummaryDefinition.definitionId,
+      definitionVersion: input.performanceSummaryDefinition.definitionVersion,
+      expectedHash: input.performanceSummaryDefinition.definitionHash,
+    });
+  }
+  const technologyMemberAffixIds = input.technologyIds.flatMap((technologyId) => {
+    const technology = input.technologyDefinitions?.find((entry) => entry.id === technologyId && entry.enabled);
+    return technology?.affixIds ?? [];
+  });
+  const finalSettlementTrace = input.publicationMode === "new_formal"
+    ? input.finalSettlementTrace
+    : input.projection.trace;
   const derivedPerformanceSummary = input.publicationMode === "new_formal"
     ? derivePerformanceSummary({
         subjectId: input.model.id,
         subjectRevisionId: String(input.model.revision),
-        definition: input.performanceSummaryDefinition,
+        definition: registeredPerformanceSummaryDefinition,
         technologyIds: input.technologyIds,
-        affixIds: [...input.attributeAffixIds, ...input.passiveAffixIds],
+        affixIds: [
+          ...input.attributeAffixIds,
+          ...input.passiveAffixIds,
+          ...technologyMemberAffixIds,
+        ],
         finalPanelValues: input.finalPanelValues,
-        attributeTrace: input.projection.trace,
+        attributeTrace: finalSettlementTrace ?? [],
       })
     : input.performanceSummary;
   if (!input.compatibilityReport.allowed) {
@@ -225,6 +251,53 @@ export function publishConfigurationSnapshot(
     );
   }
   if (input.publicationMode === "new_formal") {
+    if (!input.finalSettlementTrace) {
+      blocking.push({
+        level: "error",
+        code: "FINAL_SETTLEMENT_TRACE_MISSING",
+        message: "新正式 Snapshot 必须提供产生最终面板值的结算 Trace。",
+      });
+    } else {
+      const lastByParameter = new Map<string, number | string | null>();
+      for (const step of input.finalSettlementTrace) {
+        for (const contribution of step.contributions) {
+          lastByParameter.set(contribution.parameterKey, contribution.after);
+        }
+      }
+      const missingParameters = Object.keys(input.finalPanelValues).filter(
+        (parameterKey) => !lastByParameter.has(parameterKey),
+      );
+      if (missingParameters.length) {
+        blocking.push({
+          level: "error",
+          code: "FINAL_SETTLEMENT_TRACE_INCOMPLETE",
+          message: "最终结算 Trace 未覆盖面板参数：" + missingParameters.join("、"),
+        });
+      }
+      const staleParameters = [...lastByParameter].filter(
+        ([parameterKey, after]) => !Object.is(after, input.finalPanelValues[parameterKey]),
+      );
+      if (staleParameters.length) {
+        blocking.push({
+          level: "error",
+          code: "FINAL_SETTLEMENT_TRACE_STALE",
+          message: "最终结算 Trace 与面板值不一致：" +
+            staleParameters.map(([parameterKey]) => parameterKey).join("、"),
+        });
+      }
+    }
+    if (
+      input.technologyIds.length
+      && (!input.technologyDefinitions
+        || input.technologyIds.some((technologyId) =>
+          !input.technologyDefinitions?.some((entry) => entry.id === technologyId && entry.enabled)))
+    ) {
+      blocking.push({
+        level: "error",
+        code: "TECHNOLOGY_DEFINITION_MISSING",
+        message: "新正式 Snapshot 必须用已启用 Technology 定义展开成员 Affix。",
+      });
+    }
     if (!input.qualityValueAssessment?.formal) {
       blocking.push({
         level: "error",
@@ -366,7 +439,7 @@ export function publishConfigurationSnapshot(
     technologyIds: structuredClone(input.technologyIds),
     attributeAffixIds: structuredClone(input.attributeAffixIds),
     passiveAffixIds: structuredClone(input.passiveAffixIds),
-    attributeTrace: structuredClone(input.projection.trace),
+    attributeTrace: structuredClone(finalSettlementTrace ?? input.projection.trace),
     passiveAffixPayloads: structuredClone(input.passiveAffixPayloads),
     projectionMatch: structuredClone(input.sku.projectionMatch),
     compatibilityReport: structuredClone(input.compatibilityReport),

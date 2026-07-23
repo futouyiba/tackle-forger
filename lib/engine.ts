@@ -570,11 +570,7 @@ export function publishCandidate(state: WorkspaceState, candidate: Candidate): O
 export function recalculateWorkspace(state: WorkspaceState): WorkspaceState {
   return {
     ...state,
-    candidates: state.candidates.map((candidate) => calculateCandidate(
-      state,
-      candidate,
-      { executionMode: "legacy_performance_replay" },
-    )),
+    candidates: state.candidates.map((candidate) => calculateCandidate(state, candidate)),
   };
 }
 

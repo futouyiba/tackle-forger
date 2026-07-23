@@ -63,6 +63,9 @@ export type PerformanceSummarySnapshot =
         definitionId: string;
         definitionVersion: string;
         definitionHash: string;
+        // New snapshots freeze the payload for standalone replay. Optionality
+        // preserves already-published v17 snapshots that only stored the ref.
+        definition?: PerformanceSummaryDefinition;
       };
     }
   | {
@@ -122,6 +125,37 @@ export function verifyPerformanceSummaryDefinition(
     return false;
   }
   return deterministicHash(definitionContent(definition)) === definition.definitionHash;
+}
+
+export function resolvePerformanceSummaryDefinition(input: {
+  definitions: PerformanceSummaryDefinition[];
+  definitionId: string;
+  definitionVersion: string;
+  expectedHash?: string;
+}): PerformanceSummaryDefinition {
+  const matches = input.definitions.filter(
+    (definition) =>
+      definition.definitionId === input.definitionId
+      && definition.definitionVersion === input.definitionVersion,
+  );
+  if (!matches.length) {
+    throw new Error("PerformanceSummaryDefinition 注册表缺少指定发布版本。");
+  }
+  if (matches.some((definition) => !verifyPerformanceSummaryDefinition(definition))) {
+    throw new Error("PerformanceSummaryDefinition 注册表包含完整性校验失败的定义。");
+  }
+  const hashes = new Set(matches.map((definition) => definition.definitionHash));
+  if (hashes.size !== 1) {
+    throw new Error("PerformanceSummaryDefinition 同一 definitionId + definitionVersion 存在内容冲突。");
+  }
+  const definition = matches[0];
+  if (!definition || definition.publicationState !== "PUBLISHED") {
+    throw new Error("PerformanceSummaryDefinition 注册版本不是 PUBLISHED。");
+  }
+  if (input.expectedHash && definition.definitionHash !== input.expectedHash) {
+    throw new Error("PerformanceSummaryDefinition 注册版本与期望内容哈希不一致。");
+  }
+  return structuredClone(definition);
 }
 
 function validateRules(rules: PerformanceSummaryRule[]): void {
@@ -266,6 +300,35 @@ export function derivePerformanceSummary(input: {
       definitionId: input.definition.definitionId,
       definitionVersion: input.definition.definitionVersion,
       definitionHash: input.definition.definitionHash,
+      definition: structuredClone(input.definition),
     },
   };
+}
+
+export function replayPerformanceSummary(input: {
+  snapshot: Extract<PerformanceSummarySnapshot, { status: "AVAILABLE" }>;
+  technologyIds: string[];
+  affixIds: string[];
+  finalPanelValues: Record<string, number | string>;
+  attributeTrace: ProjectionTraceStep[];
+}): PerformanceSummarySnapshot {
+  if (!input.snapshot.definitionRef.definition) {
+    throw new Error("历史 PerformanceSummary 未冻结定义 payload，无法独立重放。");
+  }
+  const replayed = derivePerformanceSummary({
+    subjectId: input.snapshot.summary.subjectId,
+    subjectRevisionId: input.snapshot.summary.subjectRevisionId,
+    definition: input.snapshot.definitionRef.definition,
+    technologyIds: input.technologyIds,
+    affixIds: input.affixIds,
+    finalPanelValues: input.finalPanelValues,
+    attributeTrace: input.attributeTrace,
+  });
+  if (
+    replayed.status !== "AVAILABLE"
+    || deterministicHash(replayed) !== deterministicHash(input.snapshot)
+  ) {
+    throw new Error("PerformanceSummary 冻结定义与输入无法重放原摘要。");
+  }
+  return replayed;
 }

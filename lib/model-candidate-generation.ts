@@ -1,4 +1,4 @@
-import { evaluateCanonicalAffinity, evaluateHardCompatibility } from "./compatibility";
+import { evaluateCanonicalAffinity, evaluateCanonicalHardCompatibility } from "./compatibility";
 import { deterministicHash } from "./rule-kernel";
 import {
   assertSeriesItemPartChainEnabled,
@@ -127,7 +127,7 @@ export function generateModelCandidateRun(input: {
       enumerationTotal += 1;
       if (!recipeAccepts(recipe, series, sku)) { bump(excludedByCode, "RECIPE_SCOPE_MISMATCH"); continue; }
       const context = contextFor(series, sku, variant);
-      const hard = evaluateHardCompatibility(context, input.state.compatibilityRules);
+      const hard = evaluateCanonicalHardCompatibility(context, input.state.compatibilityRules);
       if (!hard.allowed) { bump(excludedByCode, "HARD_COMPATIBILITY_DENIED"); continue; }
       const affinity = evaluateCanonicalAffinity(
         context,

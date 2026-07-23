@@ -119,6 +119,25 @@ test("规则图是无环 DAG，条件分支按行路由并在人工关卡暂停"
   assert.equal(run.snapshots[0].rows.length, state.candidates.length);
 });
 
+test("规范 RuleGraph 忽略历史 Performance 维度且默认图不再声明该维度", () => {
+  const state = createSeedState();
+  assert.equal(
+    state.ruleGraphs.flatMap((graph) => graph.nodes)
+      .some((node) => node.dimensions.includes("performance")),
+    false,
+  );
+  const canonical = structuredClone(state.ruleGraphs[0]);
+  const withLegacyDimension = structuredClone(canonical);
+  const modifier = withLegacyDimension.nodes.find((node) => node.kind === "modifier")!;
+  modifier.dimensions.push("performance");
+  const canonicalRun = createRuleGraphRun(state, canonical, [], "测试策划");
+  const legacyDeclaredRun = createRuleGraphRun(state, withLegacyDimension, [], "测试策划");
+  assert.deepEqual(
+    legacyDeclaredRun.workingRows.map((row) => row.values),
+    canonicalRun.workingRows.map((row) => row.values),
+  );
+});
+
 test("审阅中间表可修改，批准后继续执行并只下发触碰字段", () => {
   const state = createSeedState();
   const graph = structuredClone(state.ruleGraphs[0]);

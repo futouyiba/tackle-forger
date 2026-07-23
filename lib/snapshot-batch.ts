@@ -85,7 +85,13 @@ export function planSnapshotBatch(input: {
       if (!series || !sku) {
         throw new ItemPartNotEnabledError(undefined, "snapshot");
       }
-      const seriesItemPartId = assertSeriesItemPartChainEnabled(series, [sku], "snapshot");
+      const seriesItemPartId = assertSeriesItemPartChainEnabled(
+        series,
+        [sku],
+        "snapshot",
+        [],
+        input.skus,
+      );
       if (latest) {
         assertProductItemPartChainEnabled([
           seriesItemPartId,

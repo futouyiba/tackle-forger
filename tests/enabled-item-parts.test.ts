@@ -361,6 +361,75 @@ test("选中的启用 SKU 不被历史延期兄弟节点阻断，显式选择延
   }), (error) => error instanceof ItemPartNotEnabledError && error.itemPartId === "part:hook");
 });
 
+test("写路径拒绝同 Series 的其他启用部位冲突", () => {
+  const current = candidateFixture();
+  const selectedSku = current.skus[0]!;
+  const conflictingPartId = current.series.itemPartId === "part:reel" ? "part:rod" : "part:reel";
+  current.state.skuDrawers.push({
+    ...structuredClone(selectedSku),
+    id: "sku:enabled-sibling-conflict-write",
+    projectionMatch: {
+      ...structuredClone(selectedSku.projectionMatch),
+      itemPartId: conflictingPartId,
+    },
+    modelIds: [],
+  });
+
+  assert.throws(() => generateModelCandidateRun({
+    state: current.state,
+    request: current.request,
+    variants: current.variants,
+    startedAt: "2026-07-23T00:03:00.000Z",
+    completedAt: "2026-07-23T00:03:00.001Z",
+  }), (error) => Boolean(
+    error
+    && typeof error === "object"
+    && "code" in error
+    && error.code === ITEM_PART_CHAIN_INCONSISTENT_CODE,
+  ));
+
+  const model = current.state.purchasableModels.find((entry) => entry.skuId === selectedSku.id)!;
+  const plan = planSnapshotBatch({
+    models: current.state.purchasableModels,
+    series: current.state.seriesDefinitions,
+    skus: current.state.skuDrawers,
+    snapshots: current.state.configurationSnapshots,
+    selectedModelIds: [model.id],
+  });
+  assert.equal(plan.items[0]?.decision, "skip");
+  assert.ok(plan.items[0]?.reasons.includes(ITEM_PART_CHAIN_INCONSISTENT_CODE));
+
+  const snapshot = current.state.configurationSnapshots.find((entry) => entry.modelId === model.id)!;
+  const projection = current.state.derivedProjections.find((entry) => entry.id === snapshot.projectionId)!;
+  assert.throws(() => publishConfigurationSnapshot({
+    publicationMode: "historical_import",
+    model,
+    sku: selectedSku,
+    series: current.series,
+    seriesSkus: current.state.skuDrawers.filter((sku) => sku.seriesId === current.series.id),
+    projection,
+    finalPanelValues: snapshot.finalPanelValues,
+    componentSelections: snapshot.componentSelections,
+    patches: [],
+    attributeAffixIds: snapshot.attributeAffixIds,
+    passiveAffixIds: snapshot.passiveAffixIds,
+    technologyIds: snapshot.technologyIds,
+    passiveAffixPayloads: snapshot.passiveAffixPayloads,
+    compatibilityReport: snapshot.compatibilityReport,
+    affinityReport: snapshot.affinityReport,
+    qualityReport: snapshot.qualityReport,
+    validationReport: [],
+    warningConfirmations: {},
+    publishedBy: "tester",
+    publishedAt: "2026-07-23T00:04:00.000Z",
+  }), (error) => Boolean(
+    error
+    && typeof error === "object"
+    && "code" in error
+    && error.code === ITEM_PART_CHAIN_INCONSISTENT_CODE,
+  ));
+});
+
 test("SnapshotBatch 只校验所选 Model 的 SKU，不要求删除延期兄弟节点", () => {
   const state = createSeedState();
   const snapshot = state.configurationSnapshots[0]!;
@@ -404,6 +473,7 @@ test("扩展部位不能发布或进入 SnapshotBatch，历史 Snapshot/hash 保
     model,
     sku,
     series,
+    seriesSkus: [sku],
     projection,
     finalPanelValues: snapshot.finalPanelValues,
     componentSelections: snapshot.componentSelections,

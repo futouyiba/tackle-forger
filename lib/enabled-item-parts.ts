@@ -126,13 +126,18 @@ export function assertSeriesItemPartChainEnabled(
   selectedSkus: readonly SkuDrawer[],
   action: ProductItemPartAction,
   additionalItemPartIds: readonly (string | undefined)[] = [],
+  knownSkus: readonly SkuDrawer[] = selectedSkus,
 ): "part:rod" | "part:reel" | "part:line" {
+  const enabledDescendantItemPartIds = knownSkus
+    .filter((sku) => sku.seriesId === series.id && isProductItemPartEnabled(sku.projectionMatch.itemPartId))
+    .map((sku) => sku.projectionMatch.itemPartId);
   const selectedItemPartIds = selectedSkus
     .filter((sku) => sku.seriesId === series.id)
     .map((sku) => sku.projectionMatch.itemPartId);
   const declaredItemPartId = series.itemPartId?.trim();
   return assertProductItemPartChainEnabled([
     ...(declaredItemPartId ? [declaredItemPartId] : []),
+    ...enabledDescendantItemPartIds,
     ...selectedItemPartIds,
     ...additionalItemPartIds,
   ], action);

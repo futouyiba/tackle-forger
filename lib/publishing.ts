@@ -40,6 +40,7 @@ export interface PublishModelInput {
   publicationMode: "new_formal" | "historical_import";
   model: PurchasableModel;
   sku: SkuDrawer;
+  seriesSkus: SkuDrawer[];
   series: SeriesDefinition;
   projection: DerivedProjection;
   finalPanelValues: Record<string, number | string>;
@@ -75,7 +76,13 @@ function snapshotContent(
 export function publishConfigurationSnapshot(
   input: PublishModelInput,
 ): ConfigurationSnapshot {
-  assertSeriesItemPartChainEnabled(input.series, [input.sku], "model_publish");
+  assertSeriesItemPartChainEnabled(
+    input.series,
+    [input.sku],
+    "model_publish",
+    [],
+    input.seriesSkus,
+  );
   const combinedValidationReport = [
     ...input.validationReport,
     ...(input.fiveAxisPreview?.tackleFitComparison.validationIssues ?? []),

@@ -44,10 +44,12 @@ function json(value, status = 200, headers = undefined) {
 function smokeEnv(overrides = {}) {
   return {
     FEISHU_ACCOUNTS_BASE_URL: "https://accounts.feishu.cn",
+    FEISHU_APP_ID: "cli_public",
     FEISHU_APP_SECRET: "super-secret-value",
     FEISHU_CANONICAL_SPREADSHEET_TOKEN: "workbook-token-secret",
     FEISHU_REDIRECT_URI: "https://tackle.internal/api/auth/feishu/callback",
     FEISHU_TENANT_KEY: "tenant-secret-id",
+    FEISHU_OAUTH_SCOPES: "contact:user.base:readonly",
     ...overrides,
   };
 }
@@ -127,6 +129,7 @@ function publicRoutes() {
       redirect.searchParams.set("client_id", "cli_public");
       redirect.searchParams.set("redirect_uri", "https://tackle.internal/api/auth/feishu/callback");
       redirect.searchParams.set("state", state);
+      redirect.searchParams.set("scope", "contact:user.base:readonly");
       return new Response(null, {
         status: 307,
         headers: {
@@ -179,6 +182,7 @@ test("OAuth 起点拒绝重复 state、错误授权来源和错误登记回调",
     redirect.searchParams.set("client_id", "cli_public");
     redirect.searchParams.set("redirect_uri", "https://other.internal/api/auth/feishu/callback");
     redirect.searchParams.set("state", "fixed-state-00000000");
+    redirect.searchParams.set("scope", "contact:user.base:readonly");
     return new Response(null, {
       status: 307,
       headers: {
@@ -208,6 +212,7 @@ test("OAuth pending Cookie 必须唯一并精确包含安全属性与 600 秒过
     redirect.searchParams.set("client_id", "cli_public");
     redirect.searchParams.set("redirect_uri", "https://tackle.internal/api/auth/feishu/callback");
     redirect.searchParams.set("state", state);
+    redirect.searchParams.set("scope", "contact:user.base:readonly");
     const headers = new Headers({ location: redirect.toString() });
     headers.append(
       "set-cookie",
@@ -215,6 +220,37 @@ test("OAuth pending Cookie 必须唯一并精确包含安全属性与 600 秒过
     );
     headers.append("set-cookie", "helper=1; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600");
     return new Response(null, { status: 307, headers });
+  };
+  const evidence = await runPublicSmoke({
+    baseUrl: "https://tackle.internal",
+    env: smokeEnv(),
+    fetchImpl: mockFetch(routes),
+  });
+  assert.equal(
+    evidence.checks.find((item) => item.id === "oauth_start")?.status,
+    "FAIL",
+  );
+});
+
+test("OAuth 起点必须精确匹配配置的 app id、scope 且参数不可重复", async () => {
+  const routes = publicRoutes();
+  let sequence = 0;
+  routes["/api/auth/feishu/start"] = () => {
+    sequence += 1;
+    const state = `client-state-${sequence.toString().padStart(8, "0")}`;
+    const redirect = new URL("https://accounts.feishu.cn/open-apis/authen/v1/authorize");
+    redirect.searchParams.append("client_id", "attacker-app");
+    redirect.searchParams.append("client_id", "cli_public");
+    redirect.searchParams.set("redirect_uri", "https://tackle.internal/api/auth/feishu/callback");
+    redirect.searchParams.set("state", state);
+    redirect.searchParams.set("scope", "contact:user.base:readonly");
+    return new Response(null, {
+      status: 307,
+      headers: {
+        location: redirect.toString(),
+        "set-cookie": `tf_feishu_pending=${state}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`,
+      },
+    });
   };
   const evidence = await runPublicSmoke({
     baseUrl: "https://tackle.internal",
@@ -295,6 +331,7 @@ test("公网 HTTP 与带凭据 base URL 在出网前拒绝", async () => {
         redirect.searchParams.set("client_id", "cli_public");
         redirect.searchParams.set("redirect_uri", "http://192.168.1.157/api/auth/feishu/callback");
         redirect.searchParams.set("state", state);
+        redirect.searchParams.set("scope", "contact:user.base:readonly");
         return new Response(null, {
           status: 307,
           headers: {

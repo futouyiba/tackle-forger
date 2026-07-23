@@ -1015,12 +1015,16 @@ export async function runPublicSmoke({
   } catch {
     configuredAuthorization = undefined;
   }
-  const states = redirects.map((redirect) => redirect?.searchParams.get("state") ?? "");
+  const singleParameter = (url, name) => {
+    const values = url?.searchParams.getAll(name) ?? [];
+    return values.length === 1 ? values[0] : "";
+  };
+  const states = redirects.map((redirect) => singleParameter(redirect, "state"));
   const redirectValid = redirects.every((redirect, index) => {
     if (!redirect || !configuredRedirect || !configuredAuthorization) return false;
     let returnedCallback;
     try {
-      returnedCallback = new URL(redirect.searchParams.get("redirect_uri") ?? "");
+      returnedCallback = new URL(singleParameter(redirect, "redirect_uri"));
     } catch {
       return false;
     }
@@ -1033,7 +1037,10 @@ export async function runPublicSmoke({
       && configuredRedirect.origin === target.origin
       && configuredRedirect.pathname === "/api/auth/feishu/callback"
       && returnedCallback.toString() === configuredRedirect.toString()
-      && redirect.searchParams.has("client_id")
+      && singleParameter(redirect, "client_id") === env.FEISHU_APP_ID
+      && singleParameter(redirect, "scope") === (
+        env.FEISHU_OAUTH_SCOPES ?? "contact:user.base:readonly"
+      )
       && states[index].length >= 16
     );
   }) && states[0] !== states[1];

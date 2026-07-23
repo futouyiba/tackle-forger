@@ -13,6 +13,7 @@ import {
 import { AI_RETENTION_POLICY_VERSION, type AIAssessmentRetentionRecord } from "../lib/ai-retention";
 import { describeFancyHubModels, prepareAIRequest } from "../lib/ai-outbound";
 import { createSeedState } from "../lib/seed";
+import { currentPatchPanelValuesFromWorkspace } from "../lib/patch-authority";
 import type { WorkspaceState } from "../lib/types";
 
 const assessmentId = "assessment:model-draft";
@@ -316,6 +317,34 @@ test("assessment 级 Workspace reservation 使陈旧并发计划只能提交一�
   assert.equal(replay.state.aiArtifactProvenanceSyncRecords.length, 1);
   assert.equal(replay.state.patchLedger.revisions.filter((entry) =>
     entry.patchId === firstPlan.artifactRef.artifactId).length, 1);
+});
+
+test("AI Model Patch 首次持久化绑定目标 Model，激活后进入权威重放且重试不重复", () => {
+  const value = fixture();
+  const recommendation = value.record.semanticContent!.recommendations[0]! as {
+    suggestedChanges: Array<{ operand: { kind: "number"; value: number } }>;
+  };
+  recommendation.suggestedChanges[0]!.operand = { kind: "number", value: 1 };
+  const draft = plan(value);
+  assert.equal(draft.kind, "model_patch");
+  const baseline = currentPatchPanelValuesFromWorkspace({ state: value.state, scopeType: "model", subjectEntityId: draft.patch.subjectEntityId });
+  const persisted = applyAIDraftArtifactPlan(value.state, draft);
+  const model = persisted.state.purchasableModels.find((entry) => entry.id === draft.patch.subjectEntityId)!;
+  assert.deepEqual(model.patchIds.filter((id) => id === draft.patch.patchId), [draft.patch.patchId]);
+  const active = structuredClone(persisted.state);
+  active.patchLedger.revisions.find((entry) => entry.patchId === draft.patch.patchId)!.state = "ACTIVE";
+  const replayed = currentPatchPanelValuesFromWorkspace({ state: active, scopeType: "model", subjectEntityId: draft.patch.subjectEntityId });
+  assert.equal(replayed[draft.patch.operations[0]!.parameterKey], (baseline[draft.patch.operations[0]!.parameterKey] as number) + 1);
+  const retried = applyAIDraftArtifactPlan(persisted.state, draft);
+  assert.equal(retried.idempotent, true);
+  assert.equal(retried.state.purchasableModels.find((entry) => entry.id === draft.patch.subjectEntityId)!.patchIds.filter((id) => id === draft.patch.patchId).length, 1);
+
+  const changedRevision = structuredClone(value.state);
+  changedRevision.purchasableModels.find((entry) => entry.id === draft.patch.subjectEntityId)!.revision += 1;
+  assertCode("AI_DRAFT_TARGET_REVISION_CHANGED", () => applyAIDraftArtifactPlan(changedRevision, draft));
+  const frozen = structuredClone(value.state);
+  frozen.purchasableModels.find((entry) => entry.id === draft.patch.subjectEntityId)!.configurationSnapshotId = "snapshot:late-freeze";
+  assertCode("AI_DRAFT_TARGET_FROZEN", () => applyAIDraftArtifactPlan(frozen, draft));
 });
 
 test("RuleSourceChangeDraft 使用全工作区沙盒影响预览并只保存 LOCAL_DRAFT", () => {

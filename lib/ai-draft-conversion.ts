@@ -1162,6 +1162,18 @@ export function applyAIDraftArtifactPlan(
   state: WorkspaceState,
   plan: AIDraftArtifactPlan,
 ): { state: WorkspaceState; idempotent: boolean } {
+  const validateAndLinkModelPatch = (target: WorkspaceState): void => {
+    if (plan.kind !== "model_patch") return;
+    const model = target.purchasableModels.find((entry) => entry.id === plan.patch.subjectEntityId);
+    if (!model || plan.patch.scopeType !== "model" || plan.patch.layerType !== "model"
+      || String(model.revision) !== String(plan.patch.baseObjectRevision)) {
+      throw new AIDraftConversionError("AI_DRAFT_TARGET_REVISION_CHANGED", "AI Model Patch 草稿的目标身份或 revision 已变化。");
+    }
+    if (model.configurationSnapshotId || model.status === "published") {
+      throw new AIDraftConversionError("AI_DRAFT_TARGET_FROZEN", "冻结 Model / Snapshot 不允许持久化 Model Patch 草稿。");
+    }
+    if (!model.patchIds.includes(plan.patch.patchId)) model.patchIds.push(plan.patch.patchId);
+  };
   const existingSync = state.aiArtifactProvenanceSyncRecords.find((entry) =>
     entry.idempotencyKey === plan.provenanceSyncRecord.idempotencyKey);
   if (existingSync) {
@@ -1170,7 +1182,9 @@ export function applyAIDraftArtifactPlan(
         !== deterministicHash(plan.provenanceSyncRecord.artifactStableRefs)) {
       throw new AIDraftConversionError("AI_DRAFT_IDEMPOTENCY_CONFLICT", "idempotencyKey 已绑定不同命令。");
     }
-    return { state, idempotent: true };
+    const next = structuredClone(state);
+    validateAndLinkModelPatch(next);
+    return { state: next, idempotent: true };
   }
   const conflictingAssessmentReservation = state.aiArtifactProvenanceSyncRecords.find((entry) =>
     entry.assessmentId === plan.provenanceSyncRecord.assessmentId
@@ -1184,6 +1198,7 @@ export function applyAIDraftArtifactPlan(
   }
   const next = structuredClone(state);
   if (plan.kind === "model_patch") {
+    validateAndLinkModelPatch(next);
     const duplicate = next.patchLedger.revisions.find((entry) =>
       entry.patchId === plan.patch.patchId && entry.patchRevision === plan.patch.patchRevision);
     if (duplicate && duplicate.revisionHash !== plan.patch.revisionHash) {

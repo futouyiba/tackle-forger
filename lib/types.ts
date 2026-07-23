@@ -117,11 +117,16 @@ export interface CanonicalAttributeOperation {
   operationId: string;
   operationIndex: number;
   sourceAffixId: string;
-  sourceAffixRevision: number;
+  sourceAffixRevision: string;
   parameterKey: string;
   operation: CanonicalAffixOperationKind;
   direction?: AffixNumericDirection;
   magnitude?: number;
+  publishedMagnitudeRange?: {
+    min: number;
+    max: number;
+    ruleSetVersion: string;
+  };
   rawLexical?: string;
   clampMin?: number;
   clampMax?: number;
@@ -244,11 +249,12 @@ export interface AttributeContribution {
   parameterKey: string;
   operation: AttributeContributionOperation;
   value: number;
-  sourceAffixRevision?: number;
+  sourceAffixRevision?: string;
   operationIndex?: number;
   operationId?: string;
   direction?: AffixNumericDirection;
   magnitude?: number;
+  publishedMagnitudeRange?: CanonicalAttributeOperation["publishedMagnitudeRange"];
   rawLexical?: string;
   clampMin?: number;
   clampMax?: number;
@@ -1237,6 +1243,7 @@ export interface LegacyAttributeAffixEffect {
   parameterKey: string;
   operation: AttributeContributionOperation;
   value: number;
+  publishedMagnitudeRange?: CanonicalAttributeOperation["publishedMagnitudeRange"];
   unit: string;
   stackingGroup: string;
   ruleSetVersion: string;
@@ -1294,6 +1301,15 @@ export interface AffixQualityEvaluation {
   blockingIssues: string[];
 }
 
+export interface AffixRuntimeEvidence {
+  reductionStackingPolicyVersion?: string;
+  values: Record<string, number | string>;
+  trace: ProjectionTraceContribution[];
+  issues: ValidationIssue[];
+  formalStatus: "FORMAL" | "NON_FORMAL";
+  traceHash: string;
+}
+
 export interface ConfigurationSnapshot {
   id: string;
   version: number;
@@ -1320,6 +1336,10 @@ export interface ConfigurationSnapshot {
   attributeAffixIds: string[];
   passiveAffixIds: string[];
   attributeTrace: ProjectionTraceStep[];
+  /** 新正式 Snapshot 冻结 aggregateAffixPanel 实际执行的完整 affix Trace。 */
+  attributeAffixRuntimeTrace?: ProjectionTraceContribution[];
+  /** 新正式 Snapshot 冻结实际 affix runtime Trace 的确定性 hash；历史快照可以缺失。 */
+  attributeAffixTraceHash?: string;
   passiveAffixPayloads: PassiveSkillPayload[];
   projectionMatch: ProjectionMatch;
   compatibilityReport: HardCompatibilityResult;

@@ -20,6 +20,11 @@ import type {
 } from "../lib/types";
 
 function baseInput(): DeriveProjectionInput {
+  const publishedMagnitudeRange = {
+    min: 0,
+    max: 10,
+    ruleSetVersion: "test:affix-ranges:v1",
+  };
   const weightTemplate: WeightTemplate = {
     id: "T-TEST",
     name: "测试模板",
@@ -135,6 +140,7 @@ function baseInput(): DeriveProjectionInput {
         parameterKey: "force",
         operation: "percent_bonus",
         value: 0.1,
+        publishedMagnitudeRange,
       },
       {
         id: "affix-percent-2",
@@ -143,6 +149,7 @@ function baseInput(): DeriveProjectionInput {
         parameterKey: "force",
         operation: "percent_bonus",
         value: 0.2,
+        publishedMagnitudeRange,
       },
       {
         id: "affix-flat",
@@ -151,6 +158,7 @@ function baseInput(): DeriveProjectionInput {
         parameterKey: "force",
         operation: "flat_bonus",
         value: 2,
+        publishedMagnitudeRange,
       },
       {
         id: "affix-reduction-1",
@@ -159,6 +167,7 @@ function baseInput(): DeriveProjectionInput {
         parameterKey: "friction",
         operation: "reduction",
         value: 0.2,
+        publishedMagnitudeRange,
       },
       {
         id: "affix-reduction-2",
@@ -167,6 +176,7 @@ function baseInput(): DeriveProjectionInput {
         parameterKey: "friction",
         operation: "reduction",
         value: 0.3,
+        publishedMagnitudeRange,
       },
     ],
     patches: [
@@ -449,4 +459,21 @@ test("FinalReviewPatch 在 Affix 结算之后应用，可覆盖词条结果（�
   assert.ok(layers.indexOf("model_patch") < layers.indexOf("attribute_affix"));
   assert.ok(layers.indexOf("attribute_affix") < layers.indexOf("final_review_patch"));
   assert.ok(layers.indexOf("final_review_patch") < layers.indexOf("validation"));
+});
+
+test("contribution 规范化隔离问题进入 Projection warning，并强制 NON_FORMAL", () => {
+  const input = baseInput();
+  input.attributeContributions![0].value = -0.1;
+  const projection = deriveProjection(input);
+  const conflict = projection.warnings.find(
+    (warning) => warning.code === "AFFIX_DIRECTION_CONFLICT",
+  );
+  assert.equal(conflict?.severity, "ERROR");
+  assert.equal(conflict?.gate, "REVIEW");
+  assert.equal(projection.formalStatus, "NON_FORMAL");
+  assert.equal(
+    projection.trace.find((step) => step.layer === "attribute_affix")
+      ?.contributions.some((entry) => entry.sourceId === "affix:bundle"),
+    false,
+  );
 });

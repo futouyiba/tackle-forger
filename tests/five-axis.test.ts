@@ -25,6 +25,7 @@ import { createSeedState } from "../lib/seed";
 import { migrateWorkspaceState } from "../lib/migrations";
 import { hydrateV3Seed } from "../lib/v3-seed";
 import {
+  formalAffixRuntimeEvidence,
   formalProjection,
   testReductionPolicy,
 } from "./helpers/reduction-policy";
@@ -430,7 +431,7 @@ test("发布快照冻结五轴预览，后续输入变化不改写历史内容",
     passiveAffixPayloads: existing.passiveAffixPayloads,
     compatibilityReport: existing.compatibilityReport,
     affinityReport: existing.affinityReport,
-    qualityReport: existing.qualityReport,
+    qualityReport: { ...existing.qualityReport, blockingIssues: [] },
     validationReport: [],
     fiveAxisPreview: preview,
     warningConfirmations: {},
@@ -469,6 +470,11 @@ test("正式快照拒绝未发布、篡改或版本链过期的五维定义", ()
   const common = {
     publicationMode: "new_formal" as const,
     reductionStackingPolicy,
+    affixRuntimeEvidence: formalAffixRuntimeEvidence(
+      projection,
+      reductionStackingPolicy,
+      existing.finalPanelValues,
+    ),
     model, sku, series, projection,
     seriesSkus: state.skuDrawers,
     finalPanelValues: existing.finalPanelValues,
@@ -480,7 +486,7 @@ test("正式快照拒绝未发布、篡改或版本链过期的五维定义", ()
     passiveAffixPayloads: existing.passiveAffixPayloads,
     compatibilityReport: existing.compatibilityReport,
     affinityReport: existing.affinityReport,
-    qualityReport: existing.qualityReport,
+    qualityReport: { ...existing.qualityReport, blockingIssues: [] },
     qualityValueAssessment: {
       modelRevisionId: `${model.id}@${model.revision}`, selectedQualityId: series.qualityId,
       baseAffixScore: 1, combinationScore: 0, functionScoreFactor: 1,

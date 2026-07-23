@@ -266,16 +266,17 @@ function applyAttributeContributions(
   sequence: { value: number },
 ): void {
   for (const contribution of contributions) addSource(step, contribution.sourceId);
+  const canonical = canonicalizeContributions(contributions);
   const result = evaluateBidirectionalRatio({
     baseValues: values,
-    operations: canonicalizeContributions(contributions),
+    operations: canonical.operations,
     policy,
     sequenceStart: sequence.value,
   });
   Object.assign(values, result.values);
   step.contributions.push(...result.trace);
   sequence.value = result.trace.at(-1)?.sequence ?? sequence.value;
-  for (const runtimeIssue of result.issues) {
+  for (const runtimeIssue of [...canonical.issues, ...result.issues]) {
     addWarning(warnings, {
       level: runtimeIssue.level,
       code: runtimeIssue.code,
@@ -599,7 +600,9 @@ export function deriveProjection(
       ? { reductionStackingPolicyVersion: input.reductionStackingPolicy.version }
       : {}),
     formalStatus: warnings.some((warning) =>
-      warning.severity === "BLOCKER"
+      warning.level === "error"
+      || warning.severity === "ERROR"
+      || warning.severity === "BLOCKER"
       || warning.code === "REDUCTION_POLICY_SOURCE_MISSING"
     ) ? "NON_FORMAL" : "FORMAL",
     structuralValues,

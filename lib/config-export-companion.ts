@@ -9,7 +9,10 @@ import {
 } from "./config-export-filesystem";
 import type { ExportCommitResult } from "./config-export";
 import type { ExportTargetProfile } from "./interaction-contracts";
-import type { ConfigurationSnapshot } from "./types";
+import type {
+  ConfigurationSnapshot,
+  ReductionStackingPolicyVersion,
+} from "./types";
 
 export type CompanionCapability = "config.export.preview" | "config.export.commit";
 export interface CompanionPairingIdentity {
@@ -28,6 +31,7 @@ export interface ConfigExportCompanionRegistry {
   allowedOrigins?: string[];
   profiles: ExportTargetProfile[];
   mappings: ConfigExportMapping[];
+  reductionStackingPolicyVersions?: ReductionStackingPolicyVersion[];
 }
 
 export interface CompanionPreviewRequest {
@@ -142,6 +146,12 @@ export function validateCompanionRegistry(
       registryIssue(`Profile ${profile.profileId} 的映射未登记。`);
     }
   }
+  if (
+    registry.reductionStackingPolicyVersions !== undefined
+    && !Array.isArray(registry.reductionStackingPolicyVersions)
+  ) {
+    registryIssue("reductionStackingPolicyVersions 必须是数组。");
+  }
   return structuredClone(registry);
 }
 
@@ -217,6 +227,7 @@ export class ConfigExportCompanionController {
         profile,
         mapping,
         snapshot: request.snapshot,
+        availableReductionPolicies: this.registry.reductionStackingPolicyVersions ?? [],
       });
       stored.set(profileId, preview);
       results.push({
@@ -284,6 +295,7 @@ export class ConfigExportCompanionController {
       results.push(await commitFilesystemExport({
         preview,
         snapshot: stored.snapshot,
+        availableReductionPolicies: this.registry.reductionStackingPolicyVersions ?? [],
         profile,
         confirmationProfileId: request.confirmations[profileId],
         idempotencyKey: `commit:${stored.packageId}:${profileId}`,

@@ -2,6 +2,7 @@ import { sha256Text } from "./sha256";
 import type {
   AttributeAffixEffect,
   AttributeContribution,
+  AffixRuntimeEvidence,
   CanonicalAttributeOperation,
   ParameterDefinition,
   ProjectionTraceContribution,
@@ -285,7 +286,7 @@ function canonicalOperationSort(
   right: CanonicalAttributeOperation,
 ): number {
   return compareUtf8(left.sourceAffixId, right.sourceAffixId)
-    || left.sourceAffixRevision - right.sourceAffixRevision
+    || compareUtf8(left.sourceAffixRevision, right.sourceAffixRevision)
     || left.operationIndex - right.operationIndex
     || compareUtf8(left.operationId, right.operationId);
 }
@@ -297,7 +298,7 @@ function canonicalFromEffect(
 ): { operation?: CanonicalAttributeOperation; issue?: ValidationIssue } {
   const raw = effect as AttributeAffixEffect & Record<string, unknown>;
   const operationId = String(raw.operationId ?? raw.id ?? `${affix.id}:operation:${index}`);
-  const sourceAffixRevision = Number(raw.sourceAffixRevision ?? affix.version);
+  const sourceAffixRevision = String(raw.sourceAffixRevision ?? affix.version);
   const operationIndex = Number(raw.operationIndex ?? index);
   const legacyValue = typeof raw.value === "number" ? raw.value : undefined;
   const explicitMagnitude = typeof raw.magnitude === "number" ? raw.magnitude : undefined;
@@ -313,6 +314,25 @@ function canonicalFromEffect(
     rawLexical: typeof raw.rawLexical === "string"
       ? raw.rawLexical
       : legacyValue === undefined ? undefined : String(legacyValue),
+    ...(raw.publishedMagnitudeRange
+      && typeof raw.publishedMagnitudeRange === "object"
+      && "min" in raw.publishedMagnitudeRange
+      && "max" in raw.publishedMagnitudeRange
+      && "ruleSetVersion" in raw.publishedMagnitudeRange
+      ? {
+          publishedMagnitudeRange:
+            raw.publishedMagnitudeRange as CanonicalAttributeOperation["publishedMagnitudeRange"],
+        }
+      : typeof raw.ruleSetVersion === "string" && raw.ruleSetVersion.trim()
+        && (explicitMagnitude !== undefined || legacyValue !== undefined)
+        ? {
+            publishedMagnitudeRange: {
+              min: explicitMagnitude ?? Math.abs(legacyValue!),
+              max: explicitMagnitude ?? Math.abs(legacyValue!),
+              ruleSetVersion: raw.ruleSetVersion,
+            },
+          }
+        : {}),
   };
   if (["percent_adjust", "flat_adjust", "clamp_add"].includes(String(raw.operation))) {
     if (
@@ -385,19 +405,25 @@ function canonicalFromEffect(
   } as const;
   const mapped = legacyMapping[String(raw.operation) as keyof typeof legacyMapping];
   if (mapped && legacyValue !== undefined && Number.isFinite(legacyValue)) {
-    const direction = legacyValue < 0
-      ? (mapped[1] === "increase" ? "decrease" : "increase")
-      : mapped[1];
+    if (legacyValue < 0) {
+      return {
+        issue: issue(
+          "AFFIX_DIRECTION_CONFLICT",
+          `词条 ${affix.id} 的命名旧操作携带负值，方向语义冲突，已隔离整个修订。`,
+          { affixId: affix.id, effect: raw },
+          "ERROR",
+          "REVIEW",
+        ),
+      };
+    }
     return {
       operation: {
         ...common,
         operation: mapped[0],
-        direction,
-        magnitude: Math.abs(legacyValue),
+        direction: mapped[1],
+        magnitude: legacyValue === 0 ? 0 : legacyValue,
         migrationEvidence: {
-          sourceShape: legacyValue < 0 || Object.is(legacyValue, -0)
-            ? "legacy_signed"
-            : "legacy_named",
+          sourceShape: "legacy_named",
           originalOperation: String(raw.operation),
           originalValue: legacyValue,
           negativeZero: Object.is(legacyValue, -0),
@@ -460,12 +486,14 @@ export function canonicalizeAffixOperations(affixes: V3Affix[]): {
 
 export function canonicalizeContributions(
   contributions: AttributeContribution[],
-): CanonicalAttributeOperation[] {
+): ReturnType<typeof canonicalizeAffixOperations> {
   const syntheticAffixes = new Map<string, V3Affix>();
   for (const entry of contributions) {
-    const affix = syntheticAffixes.get(entry.sourceId) ?? {
+    const revision = entry.sourceAffixRevision ?? "1";
+    const key = `${entry.sourceId}\u0000${revision}`;
+    const affix = syntheticAffixes.get(key) ?? {
       id: entry.sourceId,
-      version: entry.sourceAffixRevision ?? 1,
+      version: 1,
       name: entry.sourceName,
       category: "attribute" as const,
       itemPartId: "",
@@ -482,11 +510,12 @@ export function canonicalizeContributions(
       operationId: entry.operationId ?? entry.id,
       operationIndex: entry.operationIndex ?? affix.attributeEffects.length,
       sourceAffixId: entry.sourceId,
-      sourceAffixRevision: entry.sourceAffixRevision ?? 1,
+      sourceAffixRevision: revision,
       parameterKey: entry.parameterKey,
       operation: entry.operation,
       direction: entry.direction,
       magnitude: entry.magnitude,
+      publishedMagnitudeRange: entry.publishedMagnitudeRange,
       rawLexical: entry.rawLexical,
       clampMin: entry.clampMin,
       clampMax: entry.clampMax,
@@ -499,9 +528,24 @@ export function canonicalizeContributions(
       stackingGroup: "",
       ruleSetVersion: "",
     } as AttributeAffixEffect);
-    syntheticAffixes.set(entry.sourceId, affix);
+    syntheticAffixes.set(key, affix);
   }
-  return canonicalizeAffixOperations([...syntheticAffixes.values()]).operations;
+  const operations: CanonicalAttributeOperation[] = [];
+  const issues: ValidationIssue[] = [];
+  const isolatedAffixRevisionIds: string[] = [];
+  for (const [key, affix] of syntheticAffixes) {
+    const converted = canonicalizeAffixOperations([affix]);
+    operations.push(...converted.operations);
+    issues.push(...converted.issues);
+    if (converted.isolatedAffixRevisionIds.length) {
+      isolatedAffixRevisionIds.push(key.replace("\u0000", "@"));
+    }
+  }
+  return {
+    operations: operations.sort(canonicalOperationSort),
+    issues,
+    isolatedAffixRevisionIds,
+  };
 }
 
 export interface BidirectionalRatioResult {
@@ -510,6 +554,22 @@ export interface BidirectionalRatioResult {
   issues: ValidationIssue[];
   formalStatus: "FORMAL" | "NON_FORMAL";
   traceHash: string;
+}
+
+export function hashAffixRuntimeEvidence(
+  evidence: Omit<AffixRuntimeEvidence, "traceHash" | "formalStatus">,
+): string {
+  return sha256Text(stableJson({
+    policyVersion: evidence.reductionStackingPolicyVersion ?? null,
+    values: evidence.values,
+    trace: evidence.trace,
+    issues: evidence.issues.map((entry) => ({
+      code: entry.code,
+      severity: entry.severity,
+      gate: entry.gate,
+      fingerprint: entry.fingerprint,
+    })),
+  }));
 }
 
 function addRuntimeIssue(
@@ -664,6 +724,48 @@ export function evaluateBidirectionalRatio(input: {
       record(sets[0], "set", before as number | string | null, current, current, "none");
     }
     let currentExact = exactNumber(current);
+    const validateMagnitude = (operation: CanonicalAttributeOperation): boolean => {
+      const range = operation.publishedMagnitudeRange;
+      if (
+        !range
+        || !Number.isFinite(range.min)
+        || !Number.isFinite(range.max)
+        || range.min < 0
+        || range.max < range.min
+        || !range.ruleSetVersion.trim()
+      ) {
+        addRuntimeIssue(
+          issues,
+          "AFFIX_MAGNITUDE_RANGE_MISSING",
+          "词条缺少可重放的已发布 magnitude 范围证据，已隔离该参数。",
+          parameterKey,
+          { operationId: operation.operationId, waivable: false },
+        );
+        return false;
+      }
+      const magnitude = operation.magnitude;
+      if (
+        magnitude === undefined
+        || magnitude < range.min
+        || magnitude > range.max
+      ) {
+        addRuntimeIssue(
+          issues,
+          "AFFIX_MAGNITUDE_OUT_OF_RANGE",
+          "词条 magnitude 超出其已发布版本声明范围，已隔离该参数。",
+          parameterKey,
+          {
+            operationId: operation.operationId,
+            magnitude,
+            publishedRange: range,
+            waivable: false,
+          },
+          "ERROR",
+        );
+        return false;
+      }
+      return true;
+    };
       const foldPool = (
       poolOperations: CanonicalAttributeOperation[],
       direction: "increase" | "decrease",
@@ -688,6 +790,9 @@ export function evaluateBidirectionalRatio(input: {
             { operationId: operation.operationId, magnitude },
             "ERROR",
           );
+          return { value: total, exact, valid: false };
+        }
+        if (!validateMagnitude(operation)) {
           return { value: total, exact, valid: false };
         }
         if (
@@ -751,7 +856,7 @@ export function evaluateBidirectionalRatio(input: {
       operationId: `ratio:${parameterKey}`,
       operationIndex: -1,
       sourceAffixId: "runtime:bidirectional_ratio",
-      sourceAffixRevision: 1,
+      sourceAffixRevision: "1",
       parameterKey,
       operation: "percent_adjust" as const,
       direction: "increase" as const,
@@ -803,6 +908,10 @@ export function evaluateBidirectionalRatio(input: {
         clampValid = false;
         break;
       }
+      if (!validateMagnitude(operation)) {
+        clampValid = false;
+        break;
+      }
       const signed = operation.direction === "increase" ? magnitude : -magnitude;
       const addedExact = addExact(currentExact, exactNumber(signed));
       const added = Number(current + signed);
@@ -820,22 +929,19 @@ export function evaluateBidirectionalRatio(input: {
     }
     if (clampValid) values[parameterKey] = current;
   }
-  const traceHash = sha256Text(stableJson({
-    policyVersion: input.policy?.version ?? null,
+  const traceHash = hashAffixRuntimeEvidence({
+    reductionStackingPolicyVersion: input.policy?.version,
     values,
     trace,
-    issues: issues.map((entry) => ({
-      code: entry.code,
-      severity: entry.severity,
-      gate: entry.gate,
-      fingerprint: entry.fingerprint,
-    })),
-  }));
+    issues,
+  });
   return {
     values,
     trace,
     issues,
-    formalStatus: policyFormal && !issues.some((entry) => entry.severity === "BLOCKER")
+    formalStatus: policyFormal && !issues.some((entry) =>
+      entry.severity === "ERROR" || entry.severity === "BLOCKER"
+    )
       ? "FORMAL"
       : "NON_FORMAL",
     traceHash,
@@ -914,6 +1020,16 @@ export function assertSnapshotReplayPolicyAvailable(input: {
     && input.availablePolicies.some((policy) =>
       policy.version === input.reductionStackingPolicyVersion
       && policy.status === "published"
+      && policy.strategy === "bidirectional_ratio"
+      && policy.numericContract === "ieee754-binary64-v1"
+      && stableJson(policy.operationOrder)
+        === stableJson(BIDIRECTIONAL_RATIO_OPERATION_ORDER)
+      && policy.source?.workbookRefId === "feishu-workbook:tackle-design"
+      && policy.source.sheetId === "zrVOxd"
+      && policy.source.sourceRevision !== "17173"
+      && policy.issues.every((entry) =>
+        entry.severity !== "ERROR" && entry.severity !== "BLOCKER"
+      )
     );
   return available ? [] : [issue(
     "SNAPSHOT_REPLAY_POLICY_MISSING",
@@ -926,10 +1042,15 @@ export function assertSnapshotReplayPolicyAvailable(input: {
 
 export function assertFormalSnapshotHasReplayPolicy(
   snapshot: ConfigurationSnapshot,
+  availablePolicies: ReductionStackingPolicyVersion[],
 ): void {
-  if (!snapshot.reductionStackingPolicyVersion) {
+  if (assertSnapshotReplayPolicyAvailable({
+    reductionStackingPolicyVersion: snapshot.reductionStackingPolicyVersion,
+    availablePolicies,
+    operation: "formal_export",
+  }).length) {
     throw new Error(
-      "[SNAPSHOT_REPLAY_POLICY_MISSING] 历史 Snapshot 可查看和生成审计归档，但缺少冻结的 ReductionStackingPolicyVersion，禁止正式导出。",
+      "[SNAPSHOT_REPLAY_POLICY_MISSING] 历史 Snapshot 可查看和生成审计归档，但冻结的 ReductionStackingPolicyVersion 不在可用的已发布策略历史中，禁止正式导出。",
     );
   }
 }

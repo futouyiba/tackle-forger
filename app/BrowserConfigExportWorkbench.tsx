@@ -338,6 +338,7 @@ export function BrowserConfigExportWorkbench({
           packageId: `${batch.batchId}:${binding.bindingId}`,
           mapping,
           snapshots: selectedSnapshots,
+          availableReductionPolicies: state.reductionStackingPolicyVersions,
         });
       }
       setPreviews(next);
@@ -367,6 +368,7 @@ export function BrowserConfigExportWorkbench({
           binding,
           preview,
           snapshots: selectedSnapshots,
+          availableReductionPolicies: state.reductionStackingPolicyVersions,
         });
       } catch (caught) {
         next[binding.bindingId] = {

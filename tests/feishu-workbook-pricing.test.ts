@@ -26,6 +26,7 @@ import {
 import { createExportManifest } from "../lib/config-export";
 import { createSeedState } from "../lib/seed";
 import { formalExportSnapshot } from "./helpers/formal-export-snapshot";
+import { testReductionPolicy } from "./helpers/reduction-policy";
 
 const observedSheets = CANONICAL_FEISHU_SHEET_REGISTRY.map((entry) => ({
   sheetId: entry.sheetId,
@@ -333,6 +334,7 @@ test("未发布 PricingPolicy 时正式 Store Manifest 阻断且不再误报品�
     mapping: { mappingId: "m", version: "1", logicalTables: {}, rows: [], enumReferenceField: "name" },
     profile: { profileId: "profile:1", label: "test/1001", executorKind: "local_companion", projectRoot: "D:\\\\configs", relativeWorkbookRoot: "xlsx", configTomlPath: "config.toml", enabled: true },
     snapshot,
+    availableReductionPolicies: [testReductionPolicy()],
     originalFileHashes: {},
     entries: [{ logicalTable: "store_buy", workbook: "store.xlsx", sheet: "StoreBuy", businessKey: "buy:1", operation: "insert" }],
     createdAt: "2026-07-21T10:00:00.000Z",

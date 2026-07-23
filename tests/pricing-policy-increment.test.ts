@@ -11,8 +11,10 @@ import {
   type QualityId,
 } from "../lib/pricing-policy";
 import { publishConfigurationSnapshot, verifySnapshotIntegrity } from "../lib/publishing";
+import { hashAffixRuntimeEvidence } from "../lib/reduction-stacking-policy";
 import { createSeedState } from "../lib/seed";
 import {
+  formalAffixRuntimeEvidence,
   formalProjection,
   testReductionPolicy,
 } from "./helpers/reduction-policy";
@@ -182,14 +184,20 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     inputHash: "quality-assessment-hash",
   };
   const reductionStackingPolicy = testReductionPolicy();
-  const snapshot = publishConfigurationSnapshot({
-    publicationMode: "new_formal",
+  const publishProjection = formalProjection(projection, reductionStackingPolicy);
+  const publishInput = {
+    publicationMode: "new_formal" as const,
     model,
     sku,
     series,
     seriesSkus: state.skuDrawers,
-    projection: formalProjection(projection, reductionStackingPolicy),
+    projection: publishProjection,
     reductionStackingPolicy,
+    affixRuntimeEvidence: formalAffixRuntimeEvidence(
+      publishProjection,
+      reductionStackingPolicy,
+      oldSnapshot.finalPanelValues,
+    ),
     finalPanelValues: oldSnapshot.finalPanelValues,
     componentSelections: oldSnapshot.componentSelections,
     patches: [],
@@ -199,7 +207,7 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     passiveAffixPayloads: oldSnapshot.passiveAffixPayloads,
     compatibilityReport: oldSnapshot.compatibilityReport,
     affinityReport: oldSnapshot.affinityReport,
-    qualityReport: oldSnapshot.qualityReport,
+    qualityReport: { ...oldSnapshot.qualityReport, blockingIssues: [] },
     qualityValueAssessment,
     pricingPolicyVersion: version.id,
     automaticPricing,
@@ -208,9 +216,42 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     publishedBy: "tester",
     publishedAt: "2026-07-22T00:00:00.000Z",
     snapshotId: "snapshot:new-formal",
+  };
+  assert.throws(() => publishConfigurationSnapshot({
+    ...publishInput,
+    qualityReport: {
+      ...publishInput.qualityReport,
+      blockingIssues: [
+        "[REDUCTION_POLICY_SOURCE_MISSING] 词条聚合证据仍缺策略源。",
+      ],
+    },
+  }), /REDUCTION_POLICY_SOURCE_MISSING/);
+  const detachedEvidence = structuredClone(publishInput.affixRuntimeEvidence);
+  const detachedKey = Object.keys(detachedEvidence.values)[0];
+  detachedEvidence.values[detachedKey] = "detached";
+  detachedEvidence.traceHash = hashAffixRuntimeEvidence({
+    reductionStackingPolicyVersion: detachedEvidence.reductionStackingPolicyVersion,
+    values: detachedEvidence.values,
+    trace: detachedEvidence.trace,
+    issues: detachedEvidence.issues,
+  });
+  assert.throws(() => publishConfigurationSnapshot({
+    ...publishInput,
+    affixRuntimeEvidence: detachedEvidence,
+  }), /AFFIX_RUNTIME_TRACE_INVALID/);
+  const snapshot = publishConfigurationSnapshot({
+    ...publishInput,
   });
   assert.equal(snapshot.pricingPolicyVersion, version.id);
   assert.equal(snapshot.automaticPricing?.formal, true);
   assert.equal(snapshot.qualityValueAssessment?.formal, true);
+  assert.equal(
+    snapshot.attributeAffixTraceHash,
+    publishInput.affixRuntimeEvidence.traceHash,
+  );
+  assert.deepEqual(
+    snapshot.attributeAffixRuntimeTrace,
+    publishInput.affixRuntimeEvidence.trace,
+  );
   assert.equal(verifySnapshotIntegrity(snapshot), true);
 });

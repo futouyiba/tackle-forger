@@ -12,6 +12,7 @@ import {
 import { startConfigExportCompanion } from "../scripts/config-export-companion";
 import { createSeedState } from "../lib/seed";
 import { formalExportSnapshot } from "./helpers/formal-export-snapshot";
+import { testReductionPolicy } from "./helpers/reduction-policy";
 
 const identity = {
   workspaceId: "tenant:test",
@@ -84,6 +85,7 @@ enums = []
         },
       }],
     }],
+    reductionStackingPolicyVersions: [testReductionPolicy()],
   };
   return { root, workbookRoot, registry };
 }
@@ -158,6 +160,7 @@ test("已启用 Profile 缺少已登记映射时拒绝启动", () => {
       mappingVersion: "1",
     }],
     mappings: [],
+    reductionStackingPolicyVersions: [testReductionPolicy()],
   };
   assert.throws(() => validateCompanionRegistry(registry), /映射未登记/);
 });

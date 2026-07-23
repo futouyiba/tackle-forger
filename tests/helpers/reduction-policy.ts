@@ -1,7 +1,9 @@
 import type {
+  AffixRuntimeEvidence,
   DerivedProjection,
   ReductionStackingPolicyVersion,
 } from "../../lib/types";
+import { hashAffixRuntimeEvidence } from "../../lib/reduction-stacking-policy";
 
 export function testReductionPolicy(): ReductionStackingPolicyVersion {
   return {
@@ -42,5 +44,25 @@ export function formalProjection(
     ...structuredClone(projection),
     reductionStackingPolicyVersion: policy.version,
     formalStatus: "FORMAL",
+  };
+}
+
+export function formalAffixRuntimeEvidence(
+  projection: DerivedProjection,
+  policy = testReductionPolicy(),
+  finalValues: Record<string, number | string> = projection.values,
+): AffixRuntimeEvidence {
+  const evidence = {
+    reductionStackingPolicyVersion: policy.version,
+    values: structuredClone(finalValues),
+    trace: structuredClone(
+      projection.trace.find((step) => step.layer === "attribute_affix")?.contributions ?? [],
+    ),
+    issues: [],
+  };
+  return {
+    ...evidence,
+    formalStatus: "FORMAL",
+    traceHash: hashAffixRuntimeEvidence(evidence),
   };
 }

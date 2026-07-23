@@ -77,9 +77,18 @@ function operation(
     operationId,
     operationIndex,
     sourceAffixId: fields.sourceAffixId ?? "affix:a",
-    sourceAffixRevision: fields.sourceAffixRevision ?? 1,
+    sourceAffixRevision: fields.sourceAffixRevision ?? "1",
     parameterKey: fields.parameterKey ?? "force",
     operation: operationType,
+    ...(["percent_adjust", "flat_adjust", "clamp_add"].includes(operationType)
+      ? {
+          publishedMagnitudeRange: fields.publishedMagnitudeRange ?? {
+            min: 0,
+            max: Number.MAX_VALUE,
+            ruleSetVersion: "test:affix-ranges:v1",
+          },
+        }
+      : {}),
     ...fields,
   };
 }
@@ -296,7 +305,7 @@ test("canonical direction+magnitude 迁移保留 -0 证据；冲突隔离整个 
       operationId: "conflict",
       operationIndex: 0,
       sourceAffixId: "affix:conflict",
-      sourceAffixRevision: 4,
+      sourceAffixRevision: "4",
       parameterKey: "force",
       operation: "percent_adjust",
       direction: "increase",
@@ -314,6 +323,88 @@ test("canonical direction+magnitude 迁移保留 -0 证据；冲突隔离整个 
     issue.code === "AFFIX_DIRECTION_CONFLICT"
     && issue.gate === "REVIEW"
   ));
+
+  const namedNegative = canonicalizeAffixOperations([{
+    ...legacy,
+    id: "affix:named-negative",
+    attributeEffects: [{
+      ...legacy.attributeEffects[0],
+      id: "named-negative",
+      value: -0.1,
+    }],
+  }]);
+  assert.equal(namedNegative.operations.length, 0);
+  assert.deepEqual(
+    namedNegative.isolatedAffixRevisionIds,
+    ["affix:named-negative@4"],
+  );
+  assert.ok(namedNegative.issues.some((entry) =>
+    entry.code === "AFFIX_DIRECTION_CONFLICT"
+    && entry.severity === "ERROR"
+  ));
+});
+
+test("sourceAffixRevision 按 unsigned UTF-8 字节序排序，不按数值大小排序", () => {
+  const result = evaluateBidirectionalRatio({
+    baseValues: { force: 1 },
+    policy: publishedPolicy(),
+    operations: [
+      operation("revision-2", 0, "percent_adjust", {
+        sourceAffixRevision: "2",
+        direction: "increase",
+        magnitude: 1,
+      }),
+      operation("revision-10", 0, "percent_adjust", {
+        sourceAffixRevision: "10",
+        direction: "increase",
+        magnitude: 2 ** 53,
+      }),
+    ],
+  });
+  assert.deepEqual(
+    result.trace
+      .filter((entry) => entry.numericEvidence?.stage === "percent_increase_pool")
+      .map((entry) => entry.ruleId),
+    ["revision-10", "revision-2"],
+  );
+});
+
+test("magnitude 必须落在已发布词条版本声明范围内，端点包含且越界不可豁免", () => {
+  const policy = publishedPolicy();
+  const endpoint = evaluateBidirectionalRatio({
+    baseValues: { force: 10 },
+    policy,
+    operations: [operation("endpoint", 0, "percent_adjust", {
+      direction: "increase",
+      magnitude: 0.5,
+      publishedMagnitudeRange: {
+        min: 0.1,
+        max: 0.5,
+        ruleSetVersion: "affix-range:v1",
+      },
+    })],
+  });
+  assert.equal(endpoint.formalStatus, "FORMAL");
+  const outside = evaluateBidirectionalRatio({
+    baseValues: { force: 10 },
+    policy,
+    operations: [operation("outside", 0, "percent_adjust", {
+      direction: "increase",
+      magnitude: 0.5000000000000001,
+      publishedMagnitudeRange: {
+        min: 0.1,
+        max: 0.5,
+        ruleSetVersion: "affix-range:v1",
+      },
+    })],
+  });
+  const issue = outside.issues.find(
+    (entry) => entry.code === "AFFIX_MAGNITUDE_OUT_OF_RANGE",
+  );
+  assert.equal(issue?.severity, "ERROR");
+  assert.equal(issue?.gate, "REVIEW");
+  assert.equal(issue?.evidence?.waivable, false);
+  assert.equal(outside.formalStatus, "NON_FORMAL");
 });
 
 test("历史 Snapshot 保持完整、允许查看/审计归档，但缺策略时禁止正式导出并用 UpgradeCandidate 升级", () => {
@@ -336,9 +427,20 @@ test("历史 Snapshot 保持完整、允许查看/审计归档，但缺策略时
     issue.code === "SNAPSHOT_REPLAY_POLICY_MISSING"
     && issue.gate === "EXPORT"
   ));
-  assert.throws(() => assertFormalSnapshotHasReplayPolicy(snapshot), /SNAPSHOT_REPLAY_POLICY_MISSING/);
+  assert.throws(() => assertFormalSnapshotHasReplayPolicy(snapshot, []), /SNAPSHOT_REPLAY_POLICY_MISSING/);
 
   const policy = publishedPolicy();
+  const replayableSnapshot = structuredClone(snapshot);
+  replayableSnapshot.reductionStackingPolicyVersion = policy.version;
+  assert.doesNotThrow(() =>
+    assertFormalSnapshotHasReplayPolicy(replayableSnapshot, [policy])
+  );
+  assert.throws(() =>
+    assertFormalSnapshotHasReplayPolicy(replayableSnapshot, [{
+      ...policy,
+      version: "different-published-policy",
+    }])
+  , /SNAPSHOT_REPLAY_POLICY_MISSING/);
   const proposedProjection = {
     ...state.derivedProjections.find((entry) => entry.id === snapshot.projectionId)!,
     id: "projection:policy-upgrade",

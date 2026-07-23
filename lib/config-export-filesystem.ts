@@ -11,7 +11,7 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import type { ExportTargetProfile } from "./interaction-contracts";
-import type { ConfigurationSnapshot } from "./types";
+import type { ConfigurationSnapshot, ReductionStackingPolicyVersion } from "./types";
 import { verifySnapshotIntegrity } from "./publishing";
 import {
   materializeConfigExport,
@@ -132,10 +132,11 @@ export async function previewFilesystemExport(input: {
   profile: ExportTargetProfile;
   mapping: ConfigExportMapping;
   snapshot: ConfigurationSnapshot;
+  availableReductionPolicies: ReductionStackingPolicyVersion[];
   createdAt?: string;
 }): Promise<FilesystemExportPreview> {
   assertSnapshotItemPartEnabled(input.snapshot, "config_export");
-  assertFormalSnapshotHasReplayPolicy(input.snapshot);
+  assertFormalSnapshotHasReplayPolicy(input.snapshot, input.availableReductionPolicies);
   const itemPartId = snapshotItemPartId(input.snapshot)!;
   const createdAt = input.createdAt ?? new Date().toISOString();
   const initialIssues: ConfigExportMappingIssue[] = [];
@@ -354,6 +355,7 @@ async function atomicReplace(sourcePath: string, targetPath: string) {
 export async function commitFilesystemExport(input: {
   preview: FilesystemExportPreview;
   snapshot: ConfigurationSnapshot;
+  availableReductionPolicies: ReductionStackingPolicyVersion[];
   profile: ExportTargetProfile;
   confirmationProfileId: string;
   idempotencyKey: string;
@@ -361,7 +363,7 @@ export async function commitFilesystemExport(input: {
   audit?: ExportCommitResult["audit"];
 }): Promise<ExportCommitResult> {
   assertSnapshotItemPartEnabled(input.snapshot, "config_export");
-  assertFormalSnapshotHasReplayPolicy(input.snapshot);
+  assertFormalSnapshotHasReplayPolicy(input.snapshot, input.availableReductionPolicies);
   if (!verifySnapshotIntegrity(input.snapshot)) {
     throw new Error("冻结 ConfigurationSnapshot 的内容哈希校验失败。");
   }
@@ -471,6 +473,7 @@ export async function commitFilesystemExport(input: {
       profileId: input.preview.profileId,
       packageId: input.preview.packageId,
       snapshots: [input.snapshot],
+      availableReductionPolicies: input.availableReductionPolicies,
       idempotencyKey: input.idempotencyKey,
       operations: input.preview.operations,
       adapter,

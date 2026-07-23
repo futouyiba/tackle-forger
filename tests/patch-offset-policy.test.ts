@@ -34,6 +34,7 @@ import {
 } from "../lib/patch-authority";
 import { deterministicHash } from "../lib/rule-kernel";
 import {
+  formalAffixRuntimeEvidence,
   formalProjection,
   testReductionPolicy,
 } from "./helpers/reduction-policy";
@@ -738,6 +739,11 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
     series,
     projection,
     reductionStackingPolicy,
+    affixRuntimeEvidence: formalAffixRuntimeEvidence(
+      projection,
+      reductionStackingPolicy,
+      oldSnapshot.finalPanelValues,
+    ),
     finalPanelValues: oldSnapshot.finalPanelValues,
     componentSelections: oldSnapshot.componentSelections,
     patches: [],
@@ -755,7 +761,7 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
     passiveAffixPayloads: oldSnapshot.passiveAffixPayloads,
     compatibilityReport: oldSnapshot.compatibilityReport,
     affinityReport: oldSnapshot.affinityReport,
-    qualityReport: oldSnapshot.qualityReport,
+    qualityReport: { ...oldSnapshot.qualityReport, blockingIssues: [] },
     qualityValueAssessment: {
       modelRevisionId: `${model.id}@${model.revision}`,
       selectedQualityId: series.qualityId,
@@ -851,6 +857,7 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
     mapping: { mappingId: "mapping:open004", version: "1", logicalTables: {}, rows: [], enumReferenceField: "name" },
     profile: { profileId: "profile:online:1001", label: "online/1001", executorKind: "local_companion", projectRoot: "/configs", relativeWorkbookRoot: "xlsx", configTomlPath: "config.toml", enabled: true },
     snapshot,
+    availableReductionPolicies: [reductionStackingPolicy],
     environmentId: "online",
     channelKey: "1001",
     patchOffsetGovernance: {

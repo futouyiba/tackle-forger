@@ -300,11 +300,12 @@ export async function previewBrowserExportFromHandles(input: {
   packageId: string;
   mapping: ConfigExportMapping;
   snapshots: ConfigurationSnapshot[];
+  availableReductionPolicies: ReductionStackingPolicyVersion[];
   createdAt?: string;
 }): Promise<BrowserExportPreview> {
   for (const snapshot of input.snapshots) {
     assertSnapshotItemPartEnabled(snapshot, "config_export");
-    assertFormalSnapshotHasReplayPolicy(snapshot);
+    assertFormalSnapshotHasReplayPolicy(snapshot, input.availableReductionPolicies);
   }
   const itemPartIds = [...new Set(
     input.snapshots.map((snapshot) => snapshotItemPartId(snapshot)!),
@@ -462,6 +463,7 @@ export async function previewBrowserExport(input: {
   packageId: string;
   mapping: ConfigExportMapping;
   snapshots: ConfigurationSnapshot[];
+  availableReductionPolicies: ReductionStackingPolicyVersion[];
   createdAt?: string;
 }): Promise<BrowserExportPreview> {
   const targetRoot = await loadDirectoryHandle(input.binding.directoryHandleStorageKey);
@@ -491,11 +493,12 @@ export async function commitBrowserExportFromHandle(input: {
   binding: LocalExportTargetBinding;
   preview: BrowserExportPreview;
   snapshots: ConfigurationSnapshot[];
+  availableReductionPolicies: ReductionStackingPolicyVersion[];
 }): Promise<BrowserRecoveryManifest> {
   if (!input.snapshots.length) throw new Error("导出提交缺少冻结 ConfigurationSnapshot。");
   for (const snapshot of input.snapshots) {
     assertSnapshotItemPartEnabled(snapshot, "config_export");
-    assertFormalSnapshotHasReplayPolicy(snapshot);
+    assertFormalSnapshotHasReplayPolicy(snapshot, input.availableReductionPolicies);
     if (!verifySnapshotIntegrity(snapshot)) {
       throw new Error(`冻结 ConfigurationSnapshot ${snapshot.id} 的内容哈希校验失败。`);
     }
@@ -597,6 +600,7 @@ export async function commitBrowserExport(input: {
   binding: LocalExportTargetBinding;
   preview: BrowserExportPreview;
   snapshots: ConfigurationSnapshot[];
+  availableReductionPolicies: ReductionStackingPolicyVersion[];
 }): Promise<BrowserRecoveryManifest> {
   const root = await loadDirectoryHandle(input.binding.directoryHandleStorageKey);
   if (!root) throw new Error("导出目录尚未绑定。");
@@ -616,7 +620,7 @@ import {
 } from "./config-export-workbook";
 import { validateLogicalTableRelations } from "./config-export";
 import { verifySnapshotIntegrity } from "./publishing";
-import type { ConfigurationSnapshot } from "./types";
+import type { ConfigurationSnapshot, ReductionStackingPolicyVersion } from "./types";
 import {
   assertSnapshotItemPartEnabled,
   snapshotItemPartId,

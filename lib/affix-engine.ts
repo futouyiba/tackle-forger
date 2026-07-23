@@ -4,6 +4,7 @@ import {
 } from "./reduction-stacking-policy";
 import type {
   AffixQualityEvaluation,
+  AffixRuntimeEvidence,
   AttributeContribution,
   CanonicalAttributeOperation,
   PassiveSkillPayload,
@@ -111,6 +112,7 @@ export function resolveAffixConfiguration(
     operationId: operation.operationId,
     direction: operation.direction,
     magnitude: operation.magnitude,
+    publishedMagnitudeRange: operation.publishedMagnitudeRange,
     rawLexical: operation.rawLexical,
     clampMin: operation.clampMin,
     clampMax: operation.clampMax,
@@ -183,6 +185,7 @@ export interface AggregatedAffixPanel {
   validationIssues: ValidationIssue[];
   formalStatus: "FORMAL" | "NON_FORMAL";
   traceHash: string;
+  runtimeEvidence: AffixRuntimeEvidence;
 }
 
 export function aggregateAffixPanel(
@@ -217,6 +220,14 @@ export function aggregateAffixPanel(
     ],
     formalStatus: runtime.formalStatus,
     traceHash: runtime.traceHash,
+    runtimeEvidence: {
+      reductionStackingPolicyVersion: policy?.version,
+      values: structuredClone(runtime.values),
+      trace: structuredClone(runtime.trace),
+      issues: structuredClone(runtime.issues),
+      formalStatus: runtime.formalStatus,
+      traceHash: runtime.traceHash,
+    },
   };
 }
 

@@ -8,6 +8,7 @@ import {
 } from "../lib/config-export";
 import { createSeedState } from "../lib/seed";
 import { formalExportSnapshot } from "./helpers/formal-export-snapshot";
+import { testReductionPolicy } from "./helpers/reduction-policy";
 
 function exportSnapshot(itemPartId = "part:rod") {
   return formalExportSnapshot(
@@ -111,12 +112,27 @@ const operations = ["tackle.xlsx", "item.xlsx", "store.xlsx"].map((workbook) => 
   expectedOriginalHash: "before",
 }));
 
+test("正式导出要求 Snapshot 引用的已发布 ReductionStackingPolicyVersion 仍在策略历史中", async () => {
+  const io = adapter();
+  await assert.rejects(() => commitExportPackage({
+    profileId: "dev",
+    packageId: "package:missing-policy-history",
+    snapshots: [exportSnapshot()],
+    availableReductionPolicies: [],
+    idempotencyKey: "key:missing-policy-history",
+    operations,
+    adapter: io,
+  }), /SNAPSHOT_REPLAY_POLICY_MISSING/);
+  assert.deepEqual(io.replaced, []);
+});
+
 test("三表替换到第二张失败时回滚第一张且不替换第三张", async () => {
   const io = adapter("item.xlsx");
   const result = await commitExportPackage({
     profileId: "dev",
     packageId: "package:1",
     snapshots: [exportSnapshot()],
+    availableReductionPolicies: [testReductionPolicy()],
     idempotencyKey: "key:1",
     operations,
     adapter: io,
@@ -133,6 +149,7 @@ test("导出提交使用幂等键，相同提交不重复插入或替换", async
     profileId: "dev",
     packageId: "package:1",
     snapshots: [exportSnapshot()],
+    availableReductionPolicies: [testReductionPolicy()],
     idempotencyKey: "key:same",
     operations,
     adapter: io,
@@ -141,6 +158,7 @@ test("导出提交使用幂等键，相同提交不重复插入或替换", async
     profileId: "dev",
     packageId: "package:1",
     snapshots: [exportSnapshot()],
+    availableReductionPolicies: [testReductionPolicy()],
     idempotencyKey: "key:same",
     operations,
     adapter: io,
@@ -156,6 +174,7 @@ test("扩展部位提交在任何备份或文件替换前返回稳定错误", as
     profileId: "dev",
     packageId: "package:hook",
     snapshots: [exportSnapshot("part:hook")],
+    availableReductionPolicies: [testReductionPolicy()],
     idempotencyKey: "key:hook",
     operations,
     adapter: io,

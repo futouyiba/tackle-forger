@@ -13,6 +13,7 @@ import type { PatchRangeEvaluation } from "./patch-offset-policy";
 import type {
   AffinityScoreResult,
   AffixQualityEvaluation,
+  AffixRuntimeEvidence,
   ConfigurationSnapshot,
   DerivedProjection,
   GovernanceAuditLogEntry,
@@ -43,6 +44,7 @@ import type { PricingTrialResult } from "./pricing-policy";
 import {
   assertSeriesItemPartChainEnabled,
 } from "./enabled-item-parts";
+import { hashAffixRuntimeEvidence } from "./reduction-stacking-policy";
 
 function errors(issues: ValidationIssue[]): ValidationIssue[] {
   return issues.filter((issue) => issue.level === "error");
@@ -74,6 +76,7 @@ export interface PublishModelInput {
   series: SeriesDefinition;
   projection: DerivedProjection;
   reductionStackingPolicy?: ReductionStackingPolicyVersion;
+  affixRuntimeEvidence?: AffixRuntimeEvidence;
   finalPanelValues: Record<string, number | string>;
   componentSelections: ModelComponentSelection[];
   patches: ProjectionPatchRuleSource[];
@@ -202,12 +205,11 @@ export function publishConfigurationSnapshot(
       message: "硬兼容失败，禁止发布。",
     });
   }
-  const qualityBlockingIssues = (
-    input.publicationMode === "historical_import"
-    || hasValidReductionPolicyBinding(input)
-  )
+  const qualityBlockingIssues = input.publicationMode === "historical_import"
     ? input.qualityReport.blockingIssues.filter(
-        (message) => !message.includes("REDUCTION_POLICY_SOURCE_MISSING"),
+        (message) =>
+          !message.includes("REDUCTION_POLICY_SOURCE_MISSING")
+          && !message.includes("AFFIX_DIRECTION_CONFLICT"),
       )
     : input.qualityReport.blockingIssues;
   if (qualityBlockingIssues.length) {
@@ -299,6 +301,27 @@ export function publishConfigurationSnapshot(
         "配置快照发布被阻止：[REDUCTION_POLICY_SOURCE_MISSING] 新正式 Snapshot 必须冻结来自权威主工作簿的已发布 ReductionStackingPolicyVersion。",
       );
     }
+    const evidence = input.affixRuntimeEvidence;
+    if (
+      !evidence
+      || evidence.reductionStackingPolicyVersion !== input.reductionStackingPolicy?.version
+      || evidence.formalStatus !== "FORMAL"
+      || evidence.issues.some((entry) =>
+        entry.severity === "ERROR" || entry.severity === "BLOCKER"
+      )
+      || hashAffixRuntimeEvidence({
+        reductionStackingPolicyVersion: evidence.reductionStackingPolicyVersion,
+        values: evidence.values,
+        trace: evidence.trace,
+        issues: evidence.issues,
+      }) !== evidence.traceHash
+      || deterministicHash(evidence.values)
+        !== deterministicHash(input.finalPanelValues)
+    ) {
+      throw new Error(
+        "配置快照发布被阻止：[AFFIX_RUNTIME_TRACE_INVALID] 新正式 Snapshot 必须冻结与投影及已发布 ReductionStackingPolicyVersion 一致的实际 affix Trace。",
+      );
+    }
   }
 
   const governance = input.patchOffsetGovernance;
@@ -335,6 +358,12 @@ export function publishConfigurationSnapshot(
     attributeAffixIds: structuredClone(input.attributeAffixIds),
     passiveAffixIds: structuredClone(input.passiveAffixIds),
     attributeTrace: structuredClone(input.projection.trace),
+    ...(input.publicationMode === "new_formal" && input.affixRuntimeEvidence
+      ? {
+          attributeAffixRuntimeTrace: structuredClone(input.affixRuntimeEvidence.trace),
+          attributeAffixTraceHash: input.affixRuntimeEvidence.traceHash,
+        }
+      : {}),
     passiveAffixPayloads: structuredClone(input.passiveAffixPayloads),
     projectionMatch: structuredClone(input.sku.projectionMatch),
     compatibilityReport: structuredClone(input.compatibilityReport),

@@ -3248,8 +3248,8 @@ approved/dismissed候选不改旧Snapshot；只有发布命令新建Snapshot。S
 
 正常路径：解决rebase并发布新Snapshot。  
 边界：语义相同也只关闭候选，不重写hash。  
-冲突：处理时Patch head或基线再变则本次rebase事务回滚，旧revision保持`REBASE_REQUIRED`，调用方基于最新基线重新预览；UpgradeCandidate按其独立状态机进入superseded。  
-恢复：rebase按幂等键回读或在最新基线上重试；复制决定到最新候选；失败Build可重试且无半快照。  
+冲突：处理时Patch head或基线再变则本次rebase事务回滚，旧revision保持`REBASE_REQUIRED`，调用方基于最新基线重新预览；UpgradeCandidate按其独立状态机进入superseded。
+恢复：rebase按幂等键回读或在最新基线上重试；复制决定到最新候选；失败Build可重试且无半快照。
 权限：rebase、审核、发布分开；冻结快照无edit。  
 验收：Given Patch revision 7因基线变化进入`REBASE_REQUIRED`，When `rebase_patch`重验相同head和基线并成功，Then 原子创建revision 8且状态为`PENDING_REVIEW`，revision 7及其操作/hash保持不变；Given计算、校验或写入任一步失败，Then不存在revision 8或半操作组；Given提交前基线再次变化，Then返回冲突且revision 7、历史Snapshot及`PatchSetHash`不变。Given S1已发布，When 批准升级候选，Then S1/hash不变；再次发布才生成S2。
 

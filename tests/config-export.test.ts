@@ -141,6 +141,7 @@ function adapter(failWorkbook?: string): ExportCommitAdapter & {
 
 const operations = ["tackle.xlsx", "item.xlsx", "store.xlsx"].map((workbook) => ({
   workbook,
+  targetRef: workbook,
   stagedPath: "staged/" + workbook,
   targetPath: "target/" + workbook,
   expectedOriginalHash: "before",
@@ -164,7 +165,7 @@ function formalContext(
     }],
     operations: operations.map((operation) => ({
       workbook: operation.workbook,
-      targetRef: operation.targetPath,
+      targetRef: operation.targetRef,
       expectedOriginalHash: operation.expectedOriginalHash,
       stagedHash: operation.stagedHash,
     })),

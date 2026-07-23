@@ -338,6 +338,7 @@ export function validateLogicalTableRelations(input: {
 
 export interface ExportFileOperation {
   workbook: string;
+  targetRef: string;
   stagedPath: string;
   targetPath: string;
   expectedOriginalHash: string;
@@ -394,7 +395,7 @@ export async function commitExportPackage(input: {
     })),
     operations: input.operations.map((operation) => ({
       workbook: operation.workbook,
-      targetRef: operation.targetPath,
+      targetRef: operation.targetRef,
       expectedOriginalHash: operation.expectedOriginalHash,
       stagedHash: operation.stagedHash,
     })),

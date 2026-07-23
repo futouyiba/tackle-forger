@@ -241,6 +241,7 @@ export async function previewFilesystemExport(input: {
       staged.set(workbook, result.output);
       pendingOperations.push({
         workbook,
+        targetRef: workbook.replaceAll("\\", "/"),
         stagedPath: "",
         targetPath,
         expectedOriginalHash: hashBytes(source),
@@ -391,7 +392,7 @@ export async function commitFilesystemExport(input: {
     }],
     operations: input.preview.operations.map((operation) => ({
       workbook: operation.workbook,
-      targetRef: operation.targetPath,
+      targetRef: operation.targetRef,
       expectedOriginalHash: operation.expectedOriginalHash,
       stagedHash: operation.stagedHash,
     })),

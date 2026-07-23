@@ -301,6 +301,7 @@ test("直接调用底层 commit_config_export 在一期无任何文件副作用"
         idempotencyKey: "phase-one",
         operations: [{
           workbook: "production.xlsx",
+          targetRef: "production.xlsx",
           stagedPath: "staged",
           targetPath: "target",
           expectedOriginalHash: "before",

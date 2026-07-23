@@ -5,8 +5,12 @@ import {
   buildFormalFiveAxisEntityFromSnapshot,
   createFormalFiveAxisVertexSet,
   createFormalFiveAxisViewDefinition,
+  hashFormalFiveAxisPreviewInput,
 } from "../lib/five-axis-formal";
-import { hashCandidateSemanticInput } from "../lib/five-axis-hash";
+import {
+  hashCandidateSemanticInput,
+  hashProjectionReferenceSet,
+} from "../lib/five-axis-hash";
 import {
   applyFiveAxisTransactionComponent,
   buildEligibleFiveAxisCandidateMembership,
@@ -267,9 +271,10 @@ test("Snapshot、Model 指针与顶点在分量内共同提交或共同回滚", 
     model.configurationSnapshotId)!;
   const sourceSnapshot = state.configurationSnapshots.find((snapshot) =>
     snapshot.id === sourceModel.configurationSnapshotId)!;
-  const models = ["model:w1-commit", "model:w5-rollback"].map((modelId) => ({
+  const models = ["model:w1-commit", "model:w5-rollback"].map((modelId, index) => ({
     ...structuredClone(sourceModel),
     id: modelId,
+    skuId: `${sourceModel.skuId}:transaction:${index}`,
     configurationSnapshotId: undefined,
   }));
   const memberships = [
@@ -312,6 +317,24 @@ test("Snapshot、Model 指针与顶点在分量内共同提交或共同回滚", 
       contentHash: deterministicHash(withoutHash),
     };
   });
+  const sourceSku = state.skuDrawers.find((sku) =>
+    sku.id === sourceModel.skuId)!;
+  const sourceSeries = state.seriesDefinitions.find((series) =>
+    series.id === sourceSku.seriesId)!;
+  const currentSkus = snapshots.map((snapshot, index) => ({
+    ...structuredClone(sourceSku),
+    id: models[index].skuId,
+    revision: snapshot.skuRevision,
+    seriesId: `series:transaction:${index}`,
+    fiveAxisProjectionReferences: structuredClone(
+      snapshot.fiveAxisPreview!.tackleFitComparison.projectionReferences!,
+    ),
+  }));
+  const currentSeries = snapshots.map((snapshot, index) => ({
+    ...structuredClone(sourceSeries),
+    id: `series:transaction:${index}`,
+    revision: snapshot.seriesRevision,
+  }));
   const deltas = memberships.flatMap((after, index) =>
     createFiveAxisCandidateDeltas({
       changeId: `commit:${index}`,
@@ -330,6 +353,8 @@ test("Snapshot、Model 指针与顶点在分量内共同提交或共同回滚", 
     currentVertexSets: [],
     currentModels: models,
     currentSnapshots: [],
+    currentSkus,
+    currentSeries,
     snapshotCommits: snapshots.map((snapshot) => ({
       modelId: snapshot.modelId,
       snapshot,
@@ -373,6 +398,8 @@ test("Snapshot、Model 指针与顶点在分量内共同提交或共同回滚", 
     currentVertexSets: [],
     currentModels: models,
     currentSnapshots: [],
+    currentSkus,
+    currentSeries,
     snapshotCommits: [{ modelId: stale.modelId, snapshot: stale }],
     failComponentIds: [plan.components[1].componentId],
   });
@@ -391,6 +418,8 @@ test("Snapshot、Model 指针与顶点在分量内共同提交或共同回滚", 
     currentVertexSets: [],
     currentModels: models,
     currentSnapshots: [],
+    currentSkus,
+    currentSeries,
     snapshotCommits: [],
     failComponentIds: [plan.components[1].componentId],
   });
@@ -409,6 +438,8 @@ test("Snapshot、Model 指针与顶点在分量内共同提交或共同回滚", 
     currentVertexSets: [],
     currentModels: models,
     currentSnapshots: [],
+    currentSkus,
+    currentSeries,
     snapshotCommits: [
       { modelId: snapshots[0].modelId, snapshot: snapshots[0] },
       { modelId: snapshots[0].modelId, snapshot: snapshots[0] },
@@ -448,6 +479,8 @@ test("Snapshot、Model 指针与顶点在分量内共同提交或共同回滚", 
     currentVertexSets: [],
     currentModels: models,
     currentSnapshots: [],
+    currentSkus,
+    currentSeries,
     snapshotCommits: [{
       modelId: missingProjection.modelId,
       snapshot: missingProjection,
@@ -479,6 +512,26 @@ test("Snapshot、Model 指针与顶点在分量内共同提交或共同回滚", 
       },
     },
   };
+  const staleComparison = staleProjectionContent.fiveAxisPreview!
+    .tackleFitComparison;
+  const staleAnchor = staleComparison.projectionReferenceAnchor!;
+  staleComparison.projectionReferenceSetHash = hashProjectionReferenceSet({
+    selectorVersion: staleAnchor.selectorVersion,
+    anchor: {
+      baselineSnapshotId: staleAnchor.baselineSnapshotId,
+      seriesId: staleAnchor.seriesId,
+      skuId: staleAnchor.skuId,
+      skuRevisionId: staleAnchor.skuRevisionId,
+    },
+    references: staleComparison.projectionReferences!.map((reference) => {
+      if (reference.state === "not_selected") {
+        throw new Error("正式 Fixture 不应包含 not_selected 投影引用。");
+      }
+      return { ...reference, state: reference.state };
+    }),
+  });
+  staleProjectionContent.fiveAxisPreview!.inputHash =
+    hashFormalFiveAxisPreviewInput(staleProjectionContent.fiveAxisPreview!);
   const staleProjectionWithoutHash = { ...staleProjectionContent };
   delete (
     staleProjectionWithoutHash as Partial<typeof staleProjectionContent>
@@ -494,6 +547,8 @@ test("Snapshot、Model 指针与顶点在分量内共同提交或共同回滚", 
     currentVertexSets: [],
     currentModels: models,
     currentSnapshots: [],
+    currentSkus,
+    currentSeries,
     snapshotCommits: [{
       modelId: staleProjection.modelId,
       snapshot: staleProjection,
@@ -506,7 +561,7 @@ test("Snapshot、Model 指针与顶点在分量内共同提交或共同回滚", 
   );
   assert.match(
     staleProjectionResult.componentResults[0].error!,
-    /投影引用或预览 inputHash 不匹配/,
+    /钓组或投影引用证据不完整/,
   );
   assert.deepEqual(staleProjectionResult.groupStates, []);
   assert.deepEqual(staleProjectionResult.snapshots, []);
@@ -531,6 +586,13 @@ test("混合比较实体只读取冻结 Snapshot 的部件值与 Model revision"
   assert.equal(entity.revision, snapshot.modelRevision);
   assert.equal(entity.values.drag, component.values.drag);
   assert.notEqual(entity.values.drag, draft.componentSelections[0].values.drag);
+  const historicalEntity = buildFormalFiveAxisEntityFromSnapshot({
+    snapshot: { ...snapshot, id: `${snapshot.id}:historical`, version: snapshot.version + 1 },
+    itemPartId: component.itemPartId,
+    weightBandId: "W1",
+    modelName: draft.name,
+  })!;
+  assert.notEqual(entity.entityId, historicalEntity.entityId);
 });
 
 test("SnapshotBuild 缺必需顶点时整分量回滚；纯 Lifecycle 移除则原子进入不可用", () => {

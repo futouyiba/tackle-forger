@@ -13,6 +13,8 @@ import type {
   Candidate,
   FunctionIntensity,
   FunctionProfile,
+  FiveAxisVertexGroupState,
+  FiveAxisVertexSet,
   ItemPartDefinition,
   ItemTypeProfile,
   MethodProfile,
@@ -39,6 +41,7 @@ import {
 } from "./patch-offset-policy";
 import { deterministicHash } from "./rule-kernel";
 import { createFiveAxisDispositionCatalogRevision } from "./five-axis-formal";
+import { compareUnsignedUtf8 } from "./five-axis-hash";
 
 export const CURRENT_WORKSPACE_SCHEMA_VERSION = 18;
 
@@ -90,6 +93,73 @@ type MutableWorkspace = Record<string, unknown> & Partial<WorkspaceState>;
 
 function arrayOf<T>(value: unknown): T[] {
   return Array.isArray(value) ? value as T[] : [];
+}
+
+function bootstrapFiveAxisVertexGroupStates(input: {
+  vertexSets: WorkspaceState["fiveAxisVertexSets"];
+  models: WorkspaceState["purchasableModels"];
+  snapshots: WorkspaceState["configurationSnapshots"];
+}): FiveAxisVertexGroupState[] {
+  const formalSets = input.vertexSets.filter((entry): entry is FiveAxisVertexSet =>
+    "hashInputSchemaVersion" in entry);
+  const currentSnapshotIds = new Set(
+    input.models.flatMap((model) =>
+      model.configurationSnapshotId ? [model.configurationSnapshotId] : []),
+  );
+  const currentVertexHashes = new Set(
+    input.snapshots
+      .filter((snapshot) => currentSnapshotIds.has(snapshot.id))
+      .flatMap((snapshot) =>
+        snapshot.fiveAxisPreview?.vertexSetHash
+          ? [snapshot.fiveAxisPreview.vertexSetHash]
+          : []),
+  );
+  const byGroup = new Map<string, FiveAxisVertexSet[]>();
+  for (const vertexSet of formalSets) {
+    const key = JSON.stringify([
+      vertexSet.weightBandId,
+      vertexSet.weightBandPolicyVersion,
+      vertexSet.fiveAxisDefinitionId,
+      vertexSet.fiveAxisDefinitionVersion,
+      vertexSet.fiveAxisRuleVersion,
+    ]);
+    byGroup.set(key, [...(byGroup.get(key) ?? []), vertexSet]);
+  }
+  return [...byGroup.values()]
+    .map((sets) => {
+      const referenced = sets.filter((set) =>
+        currentVertexHashes.has(set.vertexSetHash));
+      const selectable = referenced.length > 0 ? referenced : sets;
+      const uniqueHashes = new Set(selectable.map((set) => set.vertexSetHash));
+      if (uniqueHashes.size !== 1) {
+        throw new Error(
+          "FIVE_AXIS_VERTEX_GROUP_MIGRATION_CONFLICT：无法确定唯一当前正式顶点。",
+        );
+      }
+      const selected = selectable[0];
+      return {
+        groupKey: {
+          weightBandId: selected.weightBandId,
+          weightBandPolicyVersion: selected.weightBandPolicyVersion,
+          fiveAxisDefinitionId: selected.fiveAxisDefinitionId,
+          fiveAxisDefinitionVersion: selected.fiveAxisDefinitionVersion,
+          fiveAxisRuleVersion: selected.fiveAxisRuleVersion,
+        },
+        state: "AVAILABLE" as const,
+        candidateSources: structuredClone(selected.candidateSources),
+        candidateSetHash: selected.candidateSetHash,
+        candidateEvidenceHash: selected.candidateEvidenceHash,
+        currentVertexSetId: selected.vertexSetId,
+        currentVertexSetHash: selected.vertexSetHash,
+        missingAxisIds: [],
+        reasonCode: null,
+      };
+    })
+    .sort((left, right) =>
+      compareUnsignedUtf8(
+        JSON.stringify(left.groupKey),
+        JSON.stringify(right.groupKey),
+      ));
 }
 
 function itemPartIdForParameter(parameter: ParameterDefinition): string {
@@ -1085,15 +1155,28 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
         : null,
     decidedAt: "2026-07-23T00:00:00.000Z",
   });
+  const fiveAxisVertexSets = arrayOf<WorkspaceState["fiveAxisVertexSets"][number]>(
+    state.fiveAxisVertexSets,
+  );
+  const fiveAxisVertexGroupStates =
+    Array.isArray(state.fiveAxisVertexGroupStates)
+      ? arrayOf<WorkspaceState["fiveAxisVertexGroupStates"][number]>(
+        state.fiveAxisVertexGroupStates,
+      )
+      : bootstrapFiveAxisVertexGroupStates({
+        vertexSets: fiveAxisVertexSets,
+        models: arrayOf<WorkspaceState["purchasableModels"][number]>(
+          state.purchasableModels,
+        ),
+        snapshots: arrayOf<WorkspaceState["configurationSnapshots"][number]>(
+          state.configurationSnapshots,
+        ),
+      });
   state = {
     ...state,
     fiveAxisViewDefinitions: fiveAxisDefinitions,
-    fiveAxisVertexSets: arrayOf<WorkspaceState["fiveAxisVertexSets"][number]>(
-      state.fiveAxisVertexSets,
-    ),
-    fiveAxisVertexGroupStates: arrayOf<WorkspaceState["fiveAxisVertexGroupStates"][number]>(
-      state.fiveAxisVertexGroupStates,
-    ),
+    fiveAxisVertexSets,
+    fiveAxisVertexGroupStates,
     fiveAxisDispositionCatalogRevisions: dispositionMigration.revisions,
     currentFiveAxisDispositionCatalogRevisionId:
       dispositionMigration.currentRevisionId,

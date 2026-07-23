@@ -62,7 +62,9 @@ export function buildFormalFiveAxisEntityFromSnapshot(input: {
     entry.itemPartId === input.itemPartId);
   if (!component) return undefined;
   return {
-    entityId: `${input.snapshot.modelId}:snapshot:${input.snapshot.id}@v${input.snapshot.version}:${component.componentId}`,
+    entityId:
+      `${input.snapshot.modelId}:snapshot:${input.snapshot.id}`
+      + `@v${input.snapshot.version}:${component.componentId}`,
     itemPartId: input.itemPartId,
     label: `${input.modelName} · ${component.name}`,
     fishWeightGradeId: input.weightBandId,

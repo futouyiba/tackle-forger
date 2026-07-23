@@ -21,6 +21,8 @@ import type {
   FiveAxisViewDefinition,
   ConfigurationSnapshot,
   PurchasableModel,
+  SeriesDefinition,
+  SkuDrawer,
 } from "./types";
 import { verifySnapshotIntegrity } from "./publishing";
 
@@ -555,6 +557,8 @@ export function executeFiveAxisSnapshotBatchTransactions(input: {
   currentVertexSets: FiveAxisVertexSet[];
   currentModels: PurchasableModel[];
   currentSnapshots: ConfigurationSnapshot[];
+  currentSkus: SkuDrawer[];
+  currentSeries: SeriesDefinition[];
   snapshotCommits: Array<{
     modelId: string;
     snapshot: ConfigurationSnapshot;
@@ -687,6 +691,23 @@ export function executeFiveAxisSnapshotBatchTransactions(input: {
             "FIVE_AXIS_SNAPSHOT_COMMIT_INVALID：正式 Snapshot 缺少最终拉力或投影参考 anchor。",
           );
         }
+        const authoritativeSkus = input.currentSkus.filter((sku) =>
+          sku.id === stagedModels[modelIndex].skuId
+          && sku.revision === commit.snapshot.skuRevision);
+        if (authoritativeSkus.length !== 1) {
+          throw new Error(
+            "FIVE_AXIS_SNAPSHOT_COMMIT_INVALID：无法唯一回读权威 SKU revision。",
+          );
+        }
+        const authoritativeSku = authoritativeSkus[0];
+        const authoritativeSeries = input.currentSeries.filter((series) =>
+          series.id === authoritativeSku.seriesId
+          && series.revision === commit.snapshot.seriesRevision);
+        if (authoritativeSeries.length !== 1) {
+          throw new Error(
+            "FIVE_AXIS_SNAPSHOT_COMMIT_INVALID：无法唯一回读权威 Series revision。",
+          );
+        }
         assertFormalModelFiveAxisPreview({
           definition,
           preview,
@@ -695,13 +716,12 @@ export function executeFiveAxisSnapshotBatchTransactions(input: {
           expectedModelRevisionId:
             `${commit.modelId}@${stagedModels[modelIndex].revision}`,
           expectedSnapshotId: commit.snapshot.id,
-          expectedSeriesId:
-            preview.tackleFitComparison.projectionReferenceAnchor.seriesId,
-          expectedSkuId: stagedModels[modelIndex].skuId,
+          expectedSeriesId: authoritativeSeries[0].id,
+          expectedSkuId: authoritativeSku.id,
           expectedSkuRevisionId:
-            `${stagedModels[modelIndex].skuId}@${commit.snapshot.skuRevision}`,
+            `${authoritativeSku.id}@${authoritativeSku.revision}`,
           expectedProjectionReferences:
-            preview.tackleFitComparison.projectionReferences ?? [],
+            authoritativeSku.fiveAxisProjectionReferences ?? [],
           expectedFinalPanelHash:
             hashFormalFinalPanelValues(commit.snapshot.finalPanelValues),
           expectedComponentSelections:

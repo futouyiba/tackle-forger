@@ -252,17 +252,17 @@ export function evaluatePullRequestMergeGate(snapshot) {
     });
   }
 
-  if (riskLevel === "high") {
-    const reviewState = currentHeadReviewState({
-      reviews: snapshot?.reviews,
-      headSha,
+  const reviewState = currentHeadReviewState({
+    reviews: snapshot?.reviews,
+    headSha,
+  });
+  if (reviewState.activeChangeRequest) {
+    blockers.push({
+      code: "REVIEW_CHANGES_REQUESTED",
+      message: "A current-head review still requests changes",
     });
-    if (reviewState.activeChangeRequest) {
-      blockers.push({
-        code: "REVIEW_CHANGES_REQUESTED",
-        message: "A current-head review still requests changes",
-      });
-    } else if (!reviewState.signal) {
+  } else if (riskLevel === "high") {
+    if (!reviewState.signal) {
       blockers.push({
         code: "CURRENT_HEAD_REVIEW_SIGNAL_REQUIRED",
         message:

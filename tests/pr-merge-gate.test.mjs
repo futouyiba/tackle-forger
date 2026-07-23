@@ -224,6 +224,25 @@ test("a later old-head decision cannot clear a current-head change request", asy
   );
 });
 
+test("a current-head change request also blocks normal-risk changes", async () => {
+  const snapshot = await fixture("ready-normal");
+  snapshot.reviews.push({
+    id: 10,
+    state: "CHANGES_REQUESTED",
+    commitSha: snapshot.pullRequest.headSha,
+    submittedAt: "2026-07-23T07:00:00Z",
+    author: { login: "reviewer", type: "User" },
+  });
+
+  const result = evaluatePullRequestMergeGate(snapshot);
+  assert.equal(result.ready, false);
+  assert.ok(
+    result.blockers.some(
+      (blocker) => blocker.code === "REVIEW_CHANGES_REQUESTED",
+    ),
+  );
+});
+
 test("high-risk review fails closed when no current-head review signal exists", async () => {
   const snapshot = await fixture("ready-high-risk");
   snapshot.reviews = [];

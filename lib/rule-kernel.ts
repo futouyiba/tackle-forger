@@ -404,6 +404,14 @@ function validateProjection(
 export function deriveProjection(
   input: DeriveProjectionInput,
 ): DerivedProjection {
+  if (
+    input.executionMode === "legacy_performance_replay"
+    && !input.performanceProfile
+  ) {
+    throw new Error(
+      "[LEGACY_PERFORMANCE_PROFILE_MISSING] 历史 Performance 重放缺少冻结的 PerformanceProfile，禁止退化为规范计算。",
+    );
+  }
   const values: ProjectionValues = sortRecord(
     structuredClone(input.weightTemplate.values),
   );
@@ -512,7 +520,9 @@ export function deriveProjection(
   );
 
   const legacyPerformanceReplay =
-    input.executionMode === "legacy_performance_replay" && input.performanceProfile;
+    input.executionMode === "legacy_performance_replay"
+      ? input.performanceProfile
+      : undefined;
   if (legacyPerformanceReplay) {
     applyRuleSource(
       values,

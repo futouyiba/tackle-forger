@@ -341,6 +341,25 @@ test("旧 Performance 属性贡献只在显式历史重放模式恢复", () => {
     legacy.trace.find((step) => step.layer === "performance")?.sourceIds,
     ["performance:strong"],
   );
+  assert.notEqual(legacy.sourceHash, canonical.sourceHash);
+});
+
+test("显式历史 Performance 重放缺少旧定义时 fail closed，不产生伪 canonical hash", () => {
+  const input = {
+    ...baseInput(),
+    performanceProfile: undefined,
+  };
+  const firstCanonical = deriveProjection(input);
+  const secondCanonical = deriveProjection(structuredClone(input));
+  assert.deepEqual(firstCanonical, secondCanonical);
+  assert.equal(firstCanonical.performanceId, undefined);
+  assert.throws(
+    () => deriveProjection({
+      ...input,
+      executionMode: "legacy_performance_replay",
+    }),
+    /LEGACY_PERFORMANCE_PROFILE_MISSING/,
+  );
 });
 
 test("两种降低公式覆盖零值、单条、多条与极值", () => {

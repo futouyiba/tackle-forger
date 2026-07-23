@@ -108,15 +108,18 @@ Trace、ID 唯一性、前缀与实体类型；写后必须回读恢复，不能
 
 启用前必须完成以下证据并由部署管理员保留：Fancy Hub 动态模型列表及不可变修订标识、
 主模型与有序降级列表、provider 与租户硬 token/并发/速率/超时/费用上限、全部本地门禁、
-独立评审和回滚演练。完成后才配置 `.env.example` 中的全部 `FANCY_HUB_*` 项并显式改为
-`FANCY_HUB_ENABLED=true`。只有 `AI_PROVIDER_ADMIN_OPEN_IDS` 中的飞书用户拥有
+独立评审和回滚演练。完成后才配置 `.env.example` 中的全部 `FANCY_HUB_*` 估算/限额项、
+持久化 `AI_RETENTION_DATA_DIR`、32 字节留存加密密钥及版本，并显式改为
+`FANCY_HUB_ENABLED=true`。缺少任一项时产品入口保持关闭。只有 `AI_PROVIDER_ADMIN_OPEN_IDS` 中的飞书用户拥有
 `ai.provider_policy.manage`；其他已登录公司用户只在功能启用时获得评估、查看和创建草稿能力。
 
 回滚时首先把 `FANCY_HUB_ENABLED` 恢复为 `false` 并重启服务，然后撤销 Fancy Hub token；
 连接器不会自动批准 Patch、写回飞书、发布 RuleSet/Snapshot 或改写历史快照。AI 原始内容、
 语义内容、操作元数据与采纳来源分别执行 180 天、1 年、3 年和随产物永久保留策略；用户删除
 会立即隐藏，24 小时内清除主存储内容并以墓碑阻止备份恢复，备份清除期限为 30 天。备份清理
-必须由存储适配器实际删除并回读确认；失败保持待重试状态，不能只记录“已清除”。Fancy Hub
+必须由存储适配器实际删除并回读确认；失败保持待重试状态，不能只记录“已清除”。生产调用在
+出网前确认留存目录可写，使用持久化锁实现跨请求/进程并发与速率协调，并按 canonical Envelope 的 UTF-8 字节
+上界、最大输出 token 与批准费率计算硬准入估算；成功后同步写入审计事件和加密留存记录。Fancy Hub
 响应同样使用严格的 `ai-response/v1`，未知字段、超限内容和请求外别名在生成建议前拒绝，成功
 结果记录规范化 `outputHash`。工作台的 AI 按钮只消费服务端启用状态，并通过认证接口运行。
 

@@ -57,6 +57,13 @@ export interface FancyHubConnectorConfig {
   fallbackModelIds: string[];
   tenantHardLimits?: AIProviderHardLimits;
   batchLimits?: AIBatchLimitPolicyV1;
+  assessmentEstimatePolicy?: AIAssessmentEstimatePolicyV1;
+}
+
+export interface AIAssessmentEstimatePolicyV1 {
+  maxOutputTokens: number;
+  maxInputCostMicroUsdPer1KTokens: number;
+  maxOutputCostMicroUsdPer1KTokens: number;
 }
 
 export type FancyHubErrorCode =
@@ -70,6 +77,7 @@ export type FancyHubErrorCode =
   | "AI_NO_CONFIGURED_MODEL_AVAILABLE"
   | "AI_OUTBOUND_TARGET_REJECTED"
   | "AI_RESPONSE_ALIAS_UNKNOWN"
+  | "AI_RUNTIME_COORDINATOR_UNAVAILABLE"
   | "AI_PROVIDER_TEMPORARILY_UNAVAILABLE";
 
 export class FancyHubError extends Error {
@@ -171,6 +179,23 @@ function parseHardLimits(value: unknown, label: string): AIProviderHardLimits {
   return value as unknown as AIProviderHardLimits;
 }
 
+function parseAssessmentEstimatePolicy(value: unknown): AIAssessmentEstimatePolicyV1 {
+  if (!plainObject(value)) {
+    throw new FancyHubError("AI_HARD_LIMIT_POLICY_MISSING", "AI 评估 token 与费用估算策略缺失。");
+  }
+  exactKeys(value, [
+    "maxOutputTokens",
+    "maxInputCostMicroUsdPer1KTokens",
+    "maxOutputCostMicroUsdPer1KTokens",
+  ], "assessmentEstimatePolicy");
+  for (const key of Object.keys(value) as Array<keyof AIAssessmentEstimatePolicyV1>) {
+    if (!positiveInteger(value[key])) {
+      throw new FancyHubError("AI_HARD_LIMIT_POLICY_MISSING", `assessmentEstimatePolicy.${key} 必须是正整数。`);
+    }
+  }
+  return value as unknown as AIAssessmentEstimatePolicyV1;
+}
+
 export function validateBatchLimitPolicy(value: unknown): AIBatchLimitPolicyV1 {
   if (!plainObject(value)) throw new FancyHubError("AI_BATCH_LIMIT_POLICY_MISSING_OR_INVALID", "批量 AI 限额策略缺失。" );
   const keys = Object.keys(OPEN009_AI_BATCH_LIMITS) as Array<keyof AIBatchLimitPolicyV1>;
@@ -207,6 +232,7 @@ export function fancyHubEnablement(config: FancyHubConnectorConfig): { enabled: 
     assertConfiguredTarget(config);
     parseHardLimits(config.tenantHardLimits, "tenantHardLimits");
     validateBatchLimitPolicy(config.batchLimits);
+    parseAssessmentEstimatePolicy(config.assessmentEstimatePolicy);
     return { enabled: true };
   } catch (error) {
     return { enabled: false, code: error instanceof FancyHubError ? error.code : "AI_CONNECTOR_DISABLED" };
@@ -452,28 +478,101 @@ export function evaluateAIBatchAdmission(
   return { softWarnings };
 }
 
-function assertEstimate(estimate: AIAssessmentEstimate): void {
+export function estimateAIAssessmentRequest(canonicalJson: string, policyValue: unknown): AIAssessmentEstimate {
+  const policy = parseAssessmentEstimatePolicy(policyValue);
+  // One tokenizer token cannot represent less than one UTF-8 byte. Counting bytes
+  // therefore gives a deterministic, conservative upper bound before transport.
+  const inputTokens = Buffer.byteLength(canonicalJson, "utf8");
+  const outputTokens = policy.maxOutputTokens;
+  const costMicroUsd = Math.ceil((
+    inputTokens * policy.maxInputCostMicroUsdPer1KTokens
+    + outputTokens * policy.maxOutputCostMicroUsdPer1KTokens
+  ) / 1_000);
+  const estimate = { inputTokens, outputTokens, costMicroUsd };
   for (const [key, value] of Object.entries(estimate)) {
     if (!positiveInteger(value)) throw new FancyHubError("AI_HARD_LIMIT_POLICY_MISSING", `${key} 无法确定性估算。`);
+  }
+  return estimate;
+}
+
+export interface FancyHubAdmissionLease {
+  readonly inFlightForWorkspaceBefore: number;
+  consumeAssessmentRequest(input: { nowMs: number; maxRequestsPerMinute: number }): Promise<void>;
+  release(): Promise<void>;
+}
+
+export interface FancyHubAdmissionCoordinator {
+  acquire(input: {
+    workspaceId: string;
+    maxConcurrentForWorkspace: number;
+    maxConcurrentTotal: number;
+    leaseExpiresAtMs: number;
+  }): Promise<FancyHubAdmissionLease>;
+}
+
+export class InMemoryFancyHubAdmissionCoordinator implements FancyHubAdmissionCoordinator {
+  private readonly inFlightByWorkspace = new Map<string, number>();
+  private inFlightTotal = 0;
+  private readonly assessmentRequestTimes: number[] = [];
+
+  async acquire(input: {
+    workspaceId: string;
+    maxConcurrentForWorkspace: number;
+    maxConcurrentTotal: number;
+    leaseExpiresAtMs: number;
+  }): Promise<FancyHubAdmissionLease> {
+    const current = this.inFlightByWorkspace.get(input.workspaceId) ?? 0;
+    if (current >= input.maxConcurrentForWorkspace) {
+      throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "工作区或 provider 并发硬上限已满。");
+    }
+    if (this.inFlightTotal >= input.maxConcurrentTotal) {
+      throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "provider 或租户全局并发硬上限已满。");
+    }
+    this.inFlightByWorkspace.set(input.workspaceId, current + 1);
+    this.inFlightTotal += 1;
+    let released = false;
+    return {
+      inFlightForWorkspaceBefore: current,
+      consumeAssessmentRequest: async ({ nowMs, maxRequestsPerMinute }) => {
+        while (this.assessmentRequestTimes.length && this.assessmentRequestTimes[0]! <= nowMs - 60_000) {
+          this.assessmentRequestTimes.shift();
+        }
+        if (this.assessmentRequestTimes.length >= maxRequestsPerMinute) {
+          throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "provider 或租户速率硬上限已满。");
+        }
+        this.assessmentRequestTimes.push(nowMs);
+      },
+      release: async () => {
+        if (released) return;
+        released = true;
+        const remaining = (this.inFlightByWorkspace.get(input.workspaceId) ?? 1) - 1;
+        if (remaining > 0) this.inFlightByWorkspace.set(input.workspaceId, remaining);
+        else this.inFlightByWorkspace.delete(input.workspaceId);
+        this.inFlightTotal -= 1;
+      },
+    };
   }
 }
 
 export class FancyHubConnector {
-  private readonly inFlightByWorkspace = new Map<string, number>();
-  private inFlightTotal = 0;
-  private readonly assessmentRequestTimes: number[] = [];
   constructor(
     private readonly config: FancyHubConnectorConfig,
     private readonly transport: FancyHubTransport,
     private readonly auditSink: (event: FancyHubAuditEvent) => void | Promise<void> = () => undefined,
+    private readonly admissionCoordinator: FancyHubAdmissionCoordinator = new InMemoryFancyHubAdmissionCoordinator(),
   ) {}
 
-  private assertEnabled(): { tenantLimits: AIProviderHardLimits; batchLimits: AIBatchLimitPolicyV1 } {
-    if (!this.config.enabled || this.config.policyVersion !== AI_PROVIDER_POLICY_VERSION) throw new FancyHubError("AI_CONNECTOR_DISABLED", "Fancy Hub 真实连接器默认关闭。" );
+  private assertEnabled(): {
+    tenantLimits: AIProviderHardLimits;
+    batchLimits: AIBatchLimitPolicyV1;
+    estimatePolicy: AIAssessmentEstimatePolicyV1;
+  } {
+    if (!this.config.enabled || this.config.policyVersion !== AI_PROVIDER_POLICY_VERSION) throw new FancyHubError("AI_CONNECTOR_DISABLED", "Fancy Hub 真实连接器默认关闭." );
     assertConfiguredTarget(this.config);
     return {
       tenantLimits: parseHardLimits(this.config.tenantHardLimits, "tenantHardLimits"),
       batchLimits: validateBatchLimitPolicy(this.config.batchLimits),
+      estimatePolicy: parseAssessmentEstimatePolicy(this.config.assessmentEstimatePolicy),
     };
   }
 
@@ -492,110 +591,115 @@ export class FancyHubConnector {
 
   async assess(input: {
     workspaceId: string;
-    estimate: AIAssessmentEstimate;
     loadedCredentialValues?: readonly string[];
     buildEnvelope: (model: AIModelDescriptorV1) => AIRequestEnvelopeV1;
-    batch?: Omit<AIBatchAdmissionInput, "inFlightForWorkspace">;
-  }): Promise<{ response: FancyHubAssessmentResponse; inputHash: string; attemptedModelIds: string[] }> {
+    batch?: Pick<AIBatchAdmissionInput, "assessmentCount" | "inFlightForUser" | "startedAtMs">;
+  }): Promise<{
+    response: FancyHubAssessmentResponse;
+    inputHash: string;
+    attemptedModelIds: string[];
+    requestEnvelope: AIRequestEnvelopeV1;
+    canonicalRequestJson: string;
+  }> {
     const auditStartedAt = new Date();
     const auditAttemptedModelIds: string[] = [];
     try {
-    const { tenantLimits, batchLimits } = this.assertEnabled();
-    assertEstimate(input.estimate);
-    const batchStartedAtMs = input.batch?.startedAtMs ?? Date.now();
-    const batchDeadlineMs = batchStartedAtMs + batchLimits.batchHardTimeoutMs;
-    const discoveryRemainingMs = batchDeadlineMs - Date.now();
-    if (discoveryRemainingMs <= 0) throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "批次已经达到 10 分钟硬期限。" );
-    const discovery = await this.listAvailableModels(Math.min(tenantLimits.requestTimeoutMs, discoveryRemainingMs));
-    const limits = effectiveLimits(discovery.providerHardLimits, tenantLimits);
-    if (input.estimate.inputTokens > limits.maxInputTokens || input.estimate.outputTokens > limits.maxOutputTokens || input.estimate.costMicroUsd > limits.maxCostMicroUsdPerRequest) {
-      throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "评估估算超过 provider 或租户硬上限。" );
-    }
-    const current = this.inFlightByWorkspace.get(input.workspaceId) ?? 0;
-    evaluateAIBatchAdmission({
-      assessmentCount: input.batch?.assessmentCount ?? 1,
-      inFlightForUser: input.batch?.inFlightForUser ?? 0,
-      inFlightForWorkspace: current,
-      estimatedInputTokens: input.batch?.estimatedInputTokens ?? input.estimate.inputTokens,
-      estimatedOutputTokens: input.batch?.estimatedOutputTokens ?? input.estimate.outputTokens,
-      estimatedCostMicroUsd: input.batch?.estimatedCostMicroUsd ?? input.estimate.costMicroUsd,
-      startedAtMs: batchStartedAtMs,
-      nowMs: Date.now(),
-    }, batchLimits);
-    if (current >= Math.min(batchLimits.maxConcurrentAssessmentsPerWorkspace, limits.maxConcurrentRequests)) {
-      throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "工作区或 provider 并发硬上限已满。" );
-    }
-    if (this.inFlightTotal >= limits.maxConcurrentRequests) {
-      throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "provider 或租户全局并发硬上限已满。" );
-    }
-    const byId = new Map(discovery.models.map((model) => [model.modelId, model]));
-    const configured = [this.config.primaryModelId, ...this.config.fallbackModelIds]
-      .filter((entry): entry is string => Boolean(entry));
-    const models = configured.map((id) => byId.get(id)).filter((entry): entry is AIModelDescriptorV1 => Boolean(entry));
-    if (!models.length) throw new FancyHubError("AI_NO_CONFIGURED_MODEL_AVAILABLE", "主模型和有序降级列表当前均不可用。" );
-    const attemptedModelIds: string[] = [];
-    this.inFlightByWorkspace.set(input.workspaceId, current + 1);
-    this.inFlightTotal += 1;
-    try {
-      let lastRetryable: FancyHubError | undefined;
-      for (const model of models) {
-        const remainingMs = batchDeadlineMs - Date.now();
-        if (remainingMs <= 0) throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "批次已经达到 10 分钟硬期限，不再启动降级调用。" );
-        attemptedModelIds.push(model.modelId);
-        auditAttemptedModelIds.push(model.modelId);
+      const { tenantLimits, batchLimits, estimatePolicy } = this.assertEnabled();
+      const batchStartedAtMs = input.batch?.startedAtMs ?? Date.now();
+      const batchDeadlineMs = batchStartedAtMs + batchLimits.batchHardTimeoutMs;
+      const discoveryRemainingMs = batchDeadlineMs - Date.now();
+      if (discoveryRemainingMs <= 0) throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "批次已经达到 10 分钟硬期限。" );
+      const discovery = await this.listAvailableModels(Math.min(tenantLimits.requestTimeoutMs, discoveryRemainingMs));
+      const limits = effectiveLimits(discovery.providerHardLimits, tenantLimits);
+      const byId = new Map(discovery.models.map((model) => [model.modelId, model]));
+      const configured = [this.config.primaryModelId, ...this.config.fallbackModelIds]
+        .filter((entry): entry is string => Boolean(entry));
+      const models = configured.map((id) => byId.get(id)).filter((entry): entry is AIModelDescriptorV1 => Boolean(entry));
+      if (!models.length) throw new FancyHubError("AI_NO_CONFIGURED_MODEL_AVAILABLE", "主模型和有序降级列表当前均不可用。" );
+      const preparedModels = models.map((model) => {
         const prepared = prepareAIRequest({
           envelope: input.buildEnvelope(model),
-          loadedCredentialValues: [
-            this.config.apiToken!,
-            ...loadedProcessCredentials(),
-            ...(input.loadedCredentialValues ?? []),
-          ],
+          loadedCredentialValues: [this.config.apiToken!, ...loadedProcessCredentials(), ...(input.loadedCredentialValues ?? [])],
         });
-        try {
-          const now = Date.now();
-          while (this.assessmentRequestTimes.length && this.assessmentRequestTimes[0]! <= now - 60_000) this.assessmentRequestTimes.shift();
-          if (this.assessmentRequestTimes.length >= limits.maxRequestsPerMinute) throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "provider 或租户速率硬上限已满。" );
-          this.assessmentRequestTimes.push(now);
-          const response = parseAssessmentResponse(await this.transport.assess({
-            canonicalJson: prepared.canonicalJson,
-            inputHash: prepared.inputHash,
-            model,
-            maxOutputTokens: Math.min(input.estimate.outputTokens, limits.maxOutputTokens),
-            timeoutMs: Math.min(limits.requestTimeoutMs, remainingMs),
-          }), authorizedResponseAliases(prepared.envelope));
-          if (!sameModelDescriptor(response.model, model)) throw new FancyHubError("AI_MODEL_REVISION_MISMATCH", "Fancy Hub 响应模型描述与请求不一致。" );
-          if (response.usage.inputTokens > limits.maxInputTokens || response.usage.outputTokens > limits.maxOutputTokens || response.usage.costMicroUsd > limits.maxCostMicroUsdPerRequest) {
-            throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "Fancy Hub 响应用量超过硬上限。" );
-          }
-          await this.auditSink({
-            action: "AI_FANCY_HUB_ASSESSMENT",
-            workspaceId: input.workspaceId,
-            requestedAt: auditStartedAt.toISOString(),
-            completedAt: new Date().toISOString(),
-            durationMs: Date.now() - auditStartedAt.getTime(),
-            resultCode: "SUCCESS",
-            attemptedModelIds: [...attemptedModelIds],
-            modelDescriptor: response.model,
-            inputHash: prepared.inputHash,
-            outputHash: response.outputHash,
-            usage: structuredClone(response.usage),
-          });
-          return { response, inputHash: prepared.inputHash, attemptedModelIds };
-        } catch (error) {
-          if (error instanceof FancyHubError && error.retryable) { lastRetryable = error; continue; }
-          throw error;
-        }
+        return { model, prepared, estimate: estimateAIAssessmentRequest(prepared.canonicalJson, estimatePolicy) };
+      });
+      const estimate = preparedModels.reduce<AIAssessmentEstimate>((current, entry) => ({
+        inputTokens: Math.max(current.inputTokens, entry.estimate.inputTokens),
+        outputTokens: Math.max(current.outputTokens, entry.estimate.outputTokens),
+        costMicroUsd: Math.max(current.costMicroUsd, entry.estimate.costMicroUsd),
+      }), { inputTokens: 1, outputTokens: 1, costMicroUsd: 1 });
+      if (estimate.inputTokens > limits.maxInputTokens
+        || estimate.outputTokens > limits.maxOutputTokens
+        || estimate.costMicroUsd > limits.maxCostMicroUsdPerRequest) {
+        throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "按实际出站 Envelope 计算的 token 或费用估算超过 provider/租户硬上限。" );
       }
-      throw lastRetryable ?? new FancyHubError("AI_NO_CONFIGURED_MODEL_AVAILABLE", "模型降级列表耗尽。" );
-    } catch (error) {
-      if (error instanceof AIOutboundError) throw error;
-      throw error;
-    } finally {
-      const remaining = (this.inFlightByWorkspace.get(input.workspaceId) ?? 1) - 1;
-      if (remaining > 0) this.inFlightByWorkspace.set(input.workspaceId, remaining);
-      else this.inFlightByWorkspace.delete(input.workspaceId);
-      this.inFlightTotal -= 1;
-    }
+      const assessmentCount = input.batch?.assessmentCount ?? 1;
+      const lease = await this.admissionCoordinator.acquire({
+        workspaceId: input.workspaceId,
+        maxConcurrentForWorkspace: Math.min(batchLimits.maxConcurrentAssessmentsPerWorkspace, limits.maxConcurrentRequests),
+        maxConcurrentTotal: limits.maxConcurrentRequests,
+        leaseExpiresAtMs: batchDeadlineMs,
+      });
+      const attemptedModelIds: string[] = [];
+      try {
+        evaluateAIBatchAdmission({
+          assessmentCount,
+          inFlightForUser: input.batch?.inFlightForUser ?? 0,
+          inFlightForWorkspace: lease.inFlightForWorkspaceBefore,
+          estimatedInputTokens: estimate.inputTokens * assessmentCount,
+          estimatedOutputTokens: estimate.outputTokens * assessmentCount,
+          estimatedCostMicroUsd: estimate.costMicroUsd * assessmentCount,
+          startedAtMs: batchStartedAtMs,
+          nowMs: Date.now(),
+        }, batchLimits);
+        let lastRetryable: FancyHubError | undefined;
+        for (const { model, prepared, estimate: modelEstimate } of preparedModels) {
+          const remainingMs = batchDeadlineMs - Date.now();
+          if (remainingMs <= 0) throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "批次已经达到 10 分钟硬期限，不再启动降级调用。" );
+          attemptedModelIds.push(model.modelId);
+          auditAttemptedModelIds.push(model.modelId);
+          try {
+            await lease.consumeAssessmentRequest({ nowMs: Date.now(), maxRequestsPerMinute: limits.maxRequestsPerMinute });
+            const response = parseAssessmentResponse(await this.transport.assess({
+              canonicalJson: prepared.canonicalJson,
+              inputHash: prepared.inputHash,
+              model,
+              maxOutputTokens: Math.min(modelEstimate.outputTokens, limits.maxOutputTokens),
+              timeoutMs: Math.min(limits.requestTimeoutMs, remainingMs),
+            }), authorizedResponseAliases(prepared.envelope));
+            if (!sameModelDescriptor(response.model, model)) throw new FancyHubError("AI_MODEL_REVISION_MISMATCH", "Fancy Hub 响应模型描述与请求不一致。" );
+            if (response.usage.inputTokens > limits.maxInputTokens || response.usage.outputTokens > limits.maxOutputTokens || response.usage.costMicroUsd > limits.maxCostMicroUsdPerRequest) {
+              throw new FancyHubError("AI_HARD_LIMIT_EXCEEDED", "Fancy Hub 响应用量超过硬上限。" );
+            }
+            await this.auditSink({
+              action: "AI_FANCY_HUB_ASSESSMENT",
+              workspaceId: input.workspaceId,
+              requestedAt: auditStartedAt.toISOString(),
+              completedAt: new Date().toISOString(),
+              durationMs: Date.now() - auditStartedAt.getTime(),
+              resultCode: "SUCCESS",
+              attemptedModelIds: [...attemptedModelIds],
+              modelDescriptor: response.model,
+              inputHash: prepared.inputHash,
+              outputHash: response.outputHash,
+              usage: structuredClone(response.usage),
+            });
+            return {
+              response,
+              inputHash: prepared.inputHash,
+              attemptedModelIds,
+              requestEnvelope: prepared.envelope,
+              canonicalRequestJson: prepared.canonicalJson,
+            };
+          } catch (error) {
+            if (error instanceof FancyHubError && error.retryable) { lastRetryable = error; continue; }
+            throw error;
+          }
+        }
+        throw lastRetryable ?? new FancyHubError("AI_NO_CONFIGURED_MODEL_AVAILABLE", "模型降级列表耗尽。" );
+      } finally {
+        await lease.release();
+      }
     } catch (error) {
       await this.auditSink({
         action: "AI_FANCY_HUB_ASSESSMENT",
@@ -637,6 +741,14 @@ export function fancyHubConfigFromEnvironment(): FancyHubConnectorConfig {
   const tenantHardLimits = Object.values(tenantValues).every((entry) => entry !== undefined)
     ? tenantValues as AIProviderHardLimits
     : undefined;
+  const estimateValues = {
+    maxOutputTokens: envPositiveInteger("FANCY_HUB_ASSESSMENT_MAX_OUTPUT_TOKENS"),
+    maxInputCostMicroUsdPer1KTokens: envPositiveInteger("FANCY_HUB_MAX_INPUT_COST_MICRO_USD_PER_1K_TOKENS"),
+    maxOutputCostMicroUsdPer1KTokens: envPositiveInteger("FANCY_HUB_MAX_OUTPUT_COST_MICRO_USD_PER_1K_TOKENS"),
+  };
+  const assessmentEstimatePolicy = Object.values(estimateValues).every((entry) => entry !== undefined)
+    ? estimateValues as AIAssessmentEstimatePolicyV1
+    : undefined;
   return {
     enabled: process.env.FANCY_HUB_ENABLED?.trim().toLowerCase() === "true",
     policyVersion: AI_PROVIDER_POLICY_VERSION,
@@ -646,15 +758,20 @@ export function fancyHubConfigFromEnvironment(): FancyHubConnectorConfig {
     fallbackModelIds: (process.env.FANCY_HUB_FALLBACK_MODEL_IDS ?? "").split(",").map((entry) => entry.trim()).filter(Boolean),
     tenantHardLimits,
     batchLimits: OPEN009_AI_BATCH_LIMITS,
+    assessmentEstimatePolicy,
   };
 }
 
 export function createFancyHubConnectorFromEnvironment(input: {
   fetchImpl?: typeof fetch;
   auditSink?: (event: FancyHubAuditEvent) => void | Promise<void>;
+  admissionCoordinator?: FancyHubAdmissionCoordinator;
 } = {}): FancyHubConnector {
   const config = fancyHubConfigFromEnvironment();
   const target = assertConfiguredTarget(config);
+  if (!input.admissionCoordinator) {
+    throw new FancyHubError("AI_RUNTIME_COORDINATOR_UNAVAILABLE", "真实 Fancy Hub 调用缺少跨进程原子准入协调器。");
+  }
   const transport = new FetchFancyHubTransport(target.toString(), config.apiToken!, input.fetchImpl);
-  return new FancyHubConnector(config, transport, input.auditSink);
+  return new FancyHubConnector(config, transport, input.auditSink, input.admissionCoordinator);
 }

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { requestUser } from "@/lib/auth";
 import { buildWorkspaceAssessmentEnvelope } from "@/lib/ai-assessment-request";
+import { AIRuntimeStoreError, createAIRuntimeStoreFromEnvironment } from "@/lib/ai-runtime-store";
 import { createFancyHubConnectorFromEnvironment, FancyHubError } from "@/lib/fancy-hub";
 import { AIOutboundError } from "@/lib/ai-outbound";
 import { loadWorkspaceState } from "@/lib/storage";
@@ -29,12 +30,29 @@ export async function POST(request: NextRequest) {
   const current = await loadWorkspaceState();
   const assessmentId = randomUUID();
   try {
-    const connector = createFancyHubConnectorFromEnvironment();
+    const runtimeStore = createAIRuntimeStoreFromEnvironment();
+    await runtimeStore.initialize();
+    const requestedAt = new Date().toISOString();
+    const connector = createFancyHubConnectorFromEnvironment({
+      auditSink: (event) => runtimeStore.appendAuditEvent(event),
+      admissionCoordinator: runtimeStore.admissionCoordinator(),
+    });
     const result = await connector.assess({
       workspaceId: "default",
-      estimate: { inputTokens: 4_000, outputTokens: 1_000, costMicroUsd: 50_000 },
       buildEnvelope: (model) => buildWorkspaceAssessmentEnvelope({ state: current.state, scope: body, assessmentId, model }),
     });
+    const completedAt = new Date().toISOString();
+    await runtimeStore.saveAssessment(runtimeStore.successfulAssessmentRecord({
+      assessmentId,
+      actorStableId: user.openId ?? user.email,
+      scopeStableRef: `${body.scopeType}:${body.scopeId}`,
+      requestedAt,
+      completedAt,
+      requestEnvelope: result.requestEnvelope,
+      canonicalRequestJson: result.canonicalRequestJson,
+      inputHash: result.inputHash,
+      response: result.response,
+    }));
     return NextResponse.json({
       assessmentId,
       inputHash: result.inputHash,
@@ -48,7 +66,7 @@ export async function POST(request: NextRequest) {
     if (error instanceof Error && error.message === "AI_SCOPE_NOT_FOUND") {
       return NextResponse.json({ error: "评估对象不存在或已经变化。", code: "AI_SCOPE_NOT_FOUND" }, { status: 404 });
     }
-    if (error instanceof FancyHubError || error instanceof AIOutboundError) {
+    if (error instanceof FancyHubError || error instanceof AIOutboundError || error instanceof AIRuntimeStoreError) {
       return NextResponse.json({ error: "AI 评估未完成，核心工作流不受影响。", code: error.code }, { status: error instanceof FancyHubError && error.retryable ? 503 : 422 });
     }
     return NextResponse.json({ error: "AI 服务暂时不可用，核心工作流不受影响。", code: "AI_UNKNOWN_FAILURE" }, { status: 503 });

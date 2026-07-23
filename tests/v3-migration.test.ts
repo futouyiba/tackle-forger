@@ -5,6 +5,7 @@ import test from "node:test";
 import { CURRENT_WORKSPACE_SCHEMA_VERSION, migrateWorkspaceState } from "../lib/migrations";
 import { deterministicHash } from "../lib/rule-kernel";
 import { verifySnapshotIntegrity } from "../lib/publishing";
+import { validateSeriesInvariants } from "../lib/product-model";
 import { createSeedState } from "../lib/seed";
 import { ensureWorkflowFields } from "../lib/workflow";
 
@@ -99,6 +100,19 @@ test("脱敏生产 schema v17 形态可直接读取，未知字段与已发布 S
   assert.equal(Object.hasOwn(sku, "targetWeightKg"), false);
   assert.equal(projectionMatch.targetPullKg, 3.6);
   assert.equal(Object.hasOwn(projectionMatch, "targetWeightKg"), false);
+  assert.deepEqual(migrated.seriesDefinitions[0].targetPullSpecifications, [{
+    targetPullKgf: 3.6,
+    skuId: "sku:production-redacted",
+  }]);
+  assert.equal(
+    validateSeriesInvariants({
+      series: migrated.seriesDefinitions[0],
+      skus: migrated.skuDrawers,
+      models: [],
+      projections: [],
+    }).some((issue) => issue.code === "SERIES_PULL_SPECIFICATION_MISSING"),
+    false,
+  );
   assert.deepEqual((migrated as unknown as Record<string, unknown>).legacyImportedField, {
     source: "production-redacted",
     preserve: true,

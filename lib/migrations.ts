@@ -795,7 +795,7 @@ function migrateV16ToV17(state: MutableWorkspace): MutableWorkspace {
       migrationReviewItems.push(item);
     }
   };
-  const skuDrawers = arrayOf<Record<string, unknown>>(state.skuDrawers).map((sku) => {
+  const skuDrawers: Array<Record<string, unknown>> = arrayOf<Record<string, unknown>>(state.skuDrawers).map((sku) => {
     const legacyTargetPullKg = resolveLegacyNumber({
       canonical: sku.targetPullKg,
       legacy: sku.targetWeightKg,
@@ -905,7 +905,26 @@ function migrateV16ToV17(state: MutableWorkspace): MutableWorkspace {
         series,
       ));
     }
-    return preserved;
+    const declaredSkuIds = new Set(arrayOf<string>(series.skuIds));
+    const seriesSkus = skuDrawers
+      .filter((sku) => sku.seriesId === series.id)
+      .filter((sku) => !declaredSkuIds.size || declaredSkuIds.has(String(sku.id)))
+      .sort((left, right) => {
+        const leftPull = Number(left.targetPullKg);
+        const rightPull = Number(right.targetPullKg);
+        return leftPull - rightPull || String(left.id).localeCompare(String(right.id));
+      });
+    const existingSpecifications = arrayOf<Record<string, unknown>>(series.targetPullSpecifications);
+    const targetPullSpecifications = existingSpecifications.length
+      ? structuredClone(existingSpecifications)
+      : seriesSkus.map((sku) => ({
+          targetPullKgf: Number(sku.targetPullKg),
+          skuId: String(sku.id),
+        }));
+    return {
+      ...preserved,
+      targetPullSpecifications,
+    };
   });
   return {
     ...state,

@@ -66,6 +66,8 @@
   "seriesDefinitions": [
     {
       "id": "series:production-redacted",
+      "skuIds": ["sku:production-redacted"],
+      "signature": [],
       "targetWeightsKg": [3.6]
     }
   ],

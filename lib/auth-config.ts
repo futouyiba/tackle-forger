@@ -1,3 +1,5 @@
+import { isIP } from "node:net";
+
 export interface FeishuRuntimeConfig {
   appId: string;
   appSecret: string;
@@ -25,14 +27,10 @@ function httpsBaseUrl(name: string, fallback: string) {
   return parsed.toString().replace(/\/$/, "");
 }
 
-function isPrivateHostname(hostname: string) {
-  const normalized = hostname.toLowerCase();
-  if (normalized === "localhost" || normalized === "::1") return true;
-  const octets = normalized.split(".").map(Number);
-  if (octets.length !== 4 || octets.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) {
-    return normalized.startsWith("fc") || normalized.startsWith("fd");
-  }
-  return octets[0] === 10 || octets[0] === 127
+function isRfc1918Ipv4Hostname(hostname: string) {
+  if (isIP(hostname) !== 4) return false;
+  const octets = hostname.split(".").map(Number);
+  return octets[0] === 10
     || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31)
     || (octets[0] === 192 && octets[1] === 168);
 }
@@ -58,9 +56,11 @@ export function feishuRuntimeConfig(): FeishuRuntimeConfig {
   const redirect = new URL(required("FEISHU_REDIRECT_URI"));
   const privateHttp = redirect.protocol === "http:"
     && process.env.FEISHU_ALLOW_INSECURE_HTTP?.trim().toLowerCase() === "true"
-    && isPrivateHostname(redirect.hostname);
+    && isRfc1918Ipv4Hostname(redirect.hostname);
   if (redirect.protocol !== "https:" && !privateHttp) {
-    throw new Error("FEISHU_REDIRECT_URI 必须使用 HTTPS；仅显式启用时允许私网 HTTP。");
+    throw new Error(
+      "FEISHU_REDIRECT_URI 必须使用 HTTPS；仅显式启用时允许 RFC 1918 数值 IPv4 HTTP。",
+    );
   }
   const sessionSecret = required("FEISHU_SESSION_SECRET");
   if (Buffer.byteLength(sessionSecret, "utf8") < 32) {

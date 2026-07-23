@@ -13,6 +13,12 @@ import type {
   ModelAffixValueAssessment,
   QualityValuePolicyDraft,
 } from "./quality-value-policy";
+import type { ConfigIdGovernanceState } from "./config-id-governance";
+import type { CalculationTraceArchive } from "./calculation-trace";
+export type {
+  CalculationTraceArchive,
+  CalculationTraceEntry,
+} from "./calculation-trace";
 import type {
   PerformanceSummaryDefinition,
   PerformanceSummarySnapshot,
@@ -245,6 +251,8 @@ export type AttributeContributionOperation =
   | "percent_bonus"
   | "flat_bonus"
   | "reduction"
+  | "reduction_diminishing"
+  | "flat_reduction"
   | CanonicalAffixOperationKind;
 
 export interface AttributeContribution {
@@ -1099,6 +1107,12 @@ export interface PurchasableModel {
   skuId: string;
   name: string;
   modelVariantKey?: string;
+  /**
+   * OPEN-008 显式稳定配置键。正式预留前可由普通 Model 编辑创建新 revision；
+   * 一旦 configIdBundleRef 存在，二者都必须由领域命令原样继承。
+   */
+  stableModelKey?: string;
+  configIdBundleRef?: string;
   action: string;
   hardness: string;
   lengthM: number;
@@ -1349,14 +1363,8 @@ export interface ConfigurationSnapshot {
   attributeAffixIds: string[];
   passiveAffixIds: string[];
   attributeTrace: ProjectionTraceStep[];
-  /** 新正式 Snapshot 冻结 aggregateAffixPanel 实际执行的完整 affix Trace。 */
-  attributeAffixRuntimeTrace?: ProjectionTraceContribution[];
-  /** 新正式 Snapshot 冻结 AffixOutput；历史快照可以缺失。 */
-  attributeAffixOutputValues?: Record<string, number | string>;
-  /** 新正式 Snapshot 冻结 PostReviewValue；历史快照可以缺失。 */
-  attributePostReviewValues?: Record<string, number | string>;
-  /** 新正式 Snapshot 冻结实际 affix runtime Trace 的确定性 hash；历史快照可以缺失。 */
-  attributeAffixTraceHash?: string;
+  /** 新正式 Snapshot 冻结 canonical Trace；历史 Snapshot 不补写，避免改变 contentHash。 */
+  calculationTrace?: CalculationTraceArchive;
   passiveAffixPayloads: PassiveSkillPayload[];
   projectionMatch: ProjectionMatch;
   compatibilityReport: HardCompatibilityResult;
@@ -1963,6 +1971,11 @@ export interface IdentityAuditRecord {
 
 export interface WorkspaceState {
   schemaVersion: number;
+  /**
+   * OPEN-008 使用独立子 schema，避免把配置身份治理与工作区 revision
+   * 的迁移编号耦合。旧工作区在读取时补为空状态，不改写历史 Snapshot。
+   */
+  configIdGovernance: ConfigIdGovernanceState;
   ruleSettings: WorkspaceRuleSettings;
   ruleSetVersions: RuleSetVersion[];
   itemParts: ItemPartDefinition[];

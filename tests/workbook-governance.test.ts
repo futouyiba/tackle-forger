@@ -8,8 +8,10 @@ import {
   publishRuleSetVersion,
   recordFeishuSourceRevision,
   recordQualityValuePolicyDraft,
+  recordReductionStackingPolicyDraft,
 } from "../lib/workbook-governance";
 import { CANONICAL_FEISHU_SHEET_REGISTRY } from "../lib/feishu-workbook";
+import { importReductionStackingPolicyDraft } from "../lib/reduction-stacking-policy";
 import type { QualityValuePolicyDraft } from "../lib/quality-value-policy";
 
 const reductionPolicyMachineRules = [{
@@ -136,6 +138,48 @@ test("相同源修订重复创建 RuleSet 草稿保持幂等", () => {
   const second = createRuleSetDraftFromPull({ state: first.state, sourceRevisionId: revision.id, createdAt: "2026-07-21T10:02:00.000Z", createdBy: "tester" });
   assert.equal(second.ruleSetDraft.id, first.ruleSetDraft.id);
   assert.equal(second.state.ruleSetVersions.filter((item) => item.id === first.ruleSetDraft.id).length, 1);
+});
+
+test("同源 RuleSet 草稿不会将已发布 reduction policy 降级为 draft", () => {
+  const revision = {
+    id: "feishu-revision:policy-history",
+    workbookRefId: "feishu-workbook:tackle-design",
+    sourceRevision: "policy-history",
+    spreadsheetToken: "spreadsheet:policy-history",
+    pulledAt: "2026-07-23T10:00:00.000Z",
+    pulledBy: "tester",
+    syncScope: "workbook" as const,
+    registryHash: "registry:policy-history",
+    sheets: [{ sheetId: "zrVOxd", name: "04_词条" }],
+    reductionPolicyMachineRules,
+    issues: [],
+    state: "PULLED" as const,
+  };
+  const pulled = recordFeishuSourceRevision(createSeedState(), revision);
+  const policyDraft = importReductionStackingPolicyDraft({
+    sourceRevision: revision,
+    machineRules: reductionPolicyMachineRules,
+    createdAt: "2026-07-23T10:01:00.000Z",
+  });
+  const withPolicyDraft = recordReductionStackingPolicyDraft(pulled, policyDraft);
+  const published = publishReductionStackingPolicyFromPull({
+    state: withPolicyDraft,
+    policyDraftId: policyDraft.id,
+    publishedAt: "2026-07-23T10:02:00.000Z",
+    publishedBy: "reviewer",
+  }).state;
+
+  const drafted = createRuleSetDraftFromPull({
+    state: published,
+    sourceRevisionId: revision.id,
+    createdAt: "2026-07-23T10:03:00.000Z",
+    createdBy: "author",
+  });
+  const preserved = drafted.state.reductionStackingPolicyVersions.find(
+    (entry) => entry.id === policyDraft.id,
+  );
+  assert.equal(preserved?.status, "published");
+  assert.equal(preserved?.version, policyDraft.version);
 });
 
 test("RuleSetVersion 只能经独立发布动作生效，重复发布幂等且 Snapshot 冻结", () => {

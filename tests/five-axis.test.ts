@@ -478,7 +478,7 @@ test("正式快照拒绝未发布、篡改或版本链过期的五维定义", ()
     definition: def,
     vertexSet,
     components: modelComponents(),
-    finalPanelHash: deterministicHash(existing.finalPanelValues),
+    finalPanelHash: deterministicHash(projection.values),
   });
   const common = {
     publicationMode: "new_formal" as const,
@@ -488,6 +488,7 @@ test("正式快照拒绝未发布、篡改或版本链过期的五维定义", ()
       reductionStackingPolicy,
       existing.finalPanelValues,
     ),
+    workspaceId: "workspace:test",
     model, sku, series, projection,
     seriesSkus: state.skuDrawers,
     finalPanelValues: existing.finalPanelValues,
@@ -515,7 +516,17 @@ test("正式快照拒绝未发布、篡改或版本链过期的五维定义", ()
       formal: true, pricingPolicyRef: "pricing:1", pricingWeightBandId: "band:1",
       valueScore: 1,
       pricingBasketId: "basket:1", repairPriceUnrounded: 100,
-      purchasePriceUnrounded: 100, purchasePrice: 100, trace: [], issues: [],
+      purchasePriceUnrounded: 100, purchasePrice: 100, trace: [{
+        sequence: 1,
+        formulaStep: "purchasePrice",
+        sourceRevision: "pricing:test",
+        source: { sheetId: "pricing:test", cell: "A1" },
+        before: 100,
+        operation: "multiply" as const,
+        operand: 1,
+        after: 100,
+        inputStatus: "CONFIRMED" as const,
+      }], issues: [],
       warnings: [], inputHash: "pricing-hash",
     },
     validationReport: [], fiveAxisPreview: preview, warningConfirmations: {},
@@ -558,6 +569,19 @@ test("正式快照拒绝未发布、篡改或版本链过期的五维定义", ()
   );
   const snapshot = publishConfigurationSnapshot({ ...common, fiveAxisDefinition: def });
   assert.equal(verifySnapshotIntegrity(snapshot), true);
+  assert.ok(snapshot.calculationTrace?.entries.some((entry) =>
+    entry.evidence?.adapter === "five_axis_trace/v1"));
+  const traceTampered = structuredClone(snapshot);
+  const frozenFiveAxisTrace = traceTampered.fiveAxisPreview!.metrics
+    .flatMap((metric) => metric.trace)[0];
+  assert.ok(frozenFiveAxisTrace);
+  frozenFiveAxisTrace.value = typeof frozenFiveAxisTrace.value === "number"
+    ? frozenFiveAxisTrace.value + 1
+    : "tampered";
+  traceTampered.contentHash = deterministicHash(
+    Object.fromEntries(Object.entries(traceTampered).filter(([key]) => key !== "contentHash")),
+  );
+  assert.equal(verifySnapshotIntegrity(traceTampered), false);
   const frozen = structuredClone(snapshot);
   def.axes[0].label = "changed after publish";
   assert.deepEqual(snapshot, frozen);
@@ -574,6 +598,7 @@ test("历史五维预览缺少定义修订哈希时保持原 Snapshot hash，不
     Object.entries(existing).filter(([key]) => key !== "contentHash"),
   );
   existing.contentHash = deterministicHash(legacyContent);
+  assert.equal(existing.calculationTrace, undefined);
   const legacyHash = existing.contentHash;
   state.configurationSnapshots = [existing];
   const migrated = migrateWorkspaceState(state);

@@ -4,6 +4,7 @@ import {
   assertFormalSnapshotHasReplayPolicy,
   assertSnapshotReplayPolicyAvailable,
   applyParameterDefinitions,
+  canonicalizeContributions,
   canonicalizeAffixOperations,
   createSnapshotAuditReplayManifest,
   evaluateBidirectionalRatio,
@@ -169,6 +170,50 @@ test("运行时拒绝被原地篡改的已发布策略形成正式证据", () =>
     entry.code === "REDUCTION_POLICY_SOURCE_MISSING"
     && entry.severity === "BLOCKER"
   ));
+});
+
+test("策略身份必须冻结规范 operationOrder，错误顺序不能形成正式结果", () => {
+  const policy = publishedPolicy();
+  const result = evaluateBidirectionalRatio({
+    baseValues: { force: 100 },
+    operations: [],
+    policy: {
+      ...policy,
+      operationOrder: ["set", "flat_adjust"] as unknown as ReductionStackingPolicyVersion["operationOrder"],
+    },
+  });
+  assert.equal(result.formalStatus, "NON_FORMAL");
+  assert.ok(result.issues.some((entry) => entry.code === "REDUCTION_POLICY_SOURCE_MISSING"));
+});
+
+test("混用 numeric 与 enum_add 使用规范 AFFIX_OPERATION_TYPE_CONFLICT", () => {
+  const result = evaluateBidirectionalRatio({
+    baseValues: { force: 100 },
+    policy: publishedPolicy(),
+    operations: [
+      operation("flat", 0, "flat_adjust", { direction: "increase", magnitude: 1 }),
+      operation("enum", 1, "enum_add", { value: "fast" }),
+    ],
+  });
+  assert.ok(result.issues.some((entry) => entry.code === "AFFIX_OPERATION_TYPE_CONFLICT"));
+});
+
+test("legacy flat_reduction 与 reduction_diminishing 保留数值并规范化为降低", () => {
+  const converted = canonicalizeContributions([
+    {
+      id: "legacy-flat", sourceId: "affix:flat", sourceName: "flat",
+      parameterKey: "force", operation: "flat_reduction", value: 3,
+    },
+    {
+      id: "legacy-percent", sourceId: "affix:percent", sourceName: "percent",
+      parameterKey: "force", operation: "reduction_diminishing", value: 0.2,
+    },
+  ]);
+  assert.equal(converted.issues.length, 0);
+  assert.deepEqual(
+    converted.operations.map((entry) => [entry.operation, entry.direction, entry.magnitude]),
+    [["flat_adjust", "decrease", 3], ["percent_adjust", "decrease", 0.2]],
+  );
 });
 
 test("bidirectional_ratio 是唯一公式，固定顺序与 binary64 Trace/hash 对输入排列不敏感", () => {

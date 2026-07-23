@@ -500,12 +500,28 @@ function ModelDrawer({
     };
   }, [onClose]);
 
-  const traceItems = snapshot?.attributeTrace
-    .flatMap((step) => step.contributions.map((contribution) => ({
-      ...contribution,
-      layer: step.layer,
-    })))
-    .sort((left, right) => left.sequence - right.sequence) ?? [];
+  const traceItems = snapshot?.calculationTrace
+    ? snapshot.calculationTrace.entries.map((entry) => ({
+        sequence: entry.sequence,
+        layer: entry.layer,
+        parameterKey: entry.parameterKey,
+        sourceName: "entityType" in entry.sourceRef
+          ? entry.sourceRef.entityType
+          : entry.sourceRef.sourceType,
+        sourceId: "entityType" in entry.sourceRef
+          ? entry.sourceRef.entityId
+          : entry.sourceRef.sourceId,
+        before: entry.before,
+        operation: entry.operation,
+        operand: entry.operand,
+        after: entry.after,
+      }))
+    : snapshot?.attributeTrace
+      .flatMap((step) => step.contributions.map((contribution) => ({
+        ...contribution,
+        layer: step.layer,
+      })))
+      .sort((left, right) => left.sequence - right.sequence) ?? [];
   const inComparison = comparisonModelIds.includes(model.id);
   const pendingUpgrade = state.upgradeCandidates.find((entry) => entry.modelId === model.id && entry.status === "pending");
   const comparisonResult = useMemo(() => {
@@ -695,7 +711,7 @@ function ModelDrawer({
           <div className="model-trace-table">
             <div className="model-trace-head"><span>#</span><span>层</span><span>属性</span><span>来源</span><span>before</span><span>operation</span><span>operand</span><span>after</span></div>
             {traceItems.map((entry) => (
-              <div key={`${entry.sequence}:${entry.ruleId}:${entry.parameterKey}`}>
+              <div key={`${entry.sequence}:${entry.sourceId}:${entry.parameterKey}`}>
                 <span>{entry.sequence}</span><span>{entry.layer}</span><span>{entry.parameterKey}</span><span>{entry.sourceName}<small>{entry.sourceId}</small></span>
                 <span>{String(entry.before ?? "—")}</span><span>{entry.operation}</span><span>{String(entry.operand)}</span><span>{String(entry.after ?? "—")}</span>
               </div>

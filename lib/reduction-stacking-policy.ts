@@ -1,4 +1,4 @@
-import { sha256Text } from "./sha256";
+import { sha256Hex as sha256Text } from "./deterministic-sha256";
 import type {
   AttributeAffixEffect,
   AttributeContribution,
@@ -73,7 +73,8 @@ export function hasCanonicalReductionPolicyIdentity(
   return policy.contentHash === contentHash
     && policy.inputHash === contentHash
     && policy.version === contentHash
-    && policy.id === `${BIDIRECTIONAL_RATIO_POLICY_ID}:${contentHash.slice(0, 16)}`;
+    && policy.id === `${BIDIRECTIONAL_RATIO_POLICY_ID}:${contentHash.slice(0, 16)}`
+    && stableJson(policy.operationOrder) === stableJson(BIDIRECTIONAL_RATIO_OPERATION_ORDER);
 }
 
 function fingerprint(code: string, evidence: Record<string, unknown>): string {
@@ -541,7 +542,13 @@ export function canonicalizeContributions(
       clampMax: entry.clampMax,
       ...(entry.operation === "set" || entry.operation === "enum_add"
         ? { value: entry.setValue ?? entry.value }
-        : ["percent_bonus", "flat_bonus", "reduction"].includes(entry.operation)
+        : [
+            "percent_bonus",
+            "flat_bonus",
+            "flat_reduction",
+            "reduction",
+            "reduction_diminishing",
+          ].includes(entry.operation)
           ? { value: entry.value }
           : {}),
       unit: "",
@@ -681,7 +688,7 @@ export function evaluateBidirectionalRatio(input: {
     if (numeric.length && enums.length) {
       addRuntimeIssue(
         issues,
-        "AFFIX_PARAMETER_TYPE_CONFLICT",
+        "AFFIX_OPERATION_TYPE_CONFLICT",
         "同一参数混用了数值与枚举操作，已隔离该参数。",
         parameterKey,
         { operationIds: operations.map((entry) => entry.operationId) },

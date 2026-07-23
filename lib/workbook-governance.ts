@@ -139,7 +139,12 @@ export function createRuleSetDraftFromPull(input: {
     (entry) => entry.id === reductionDraft.id,
   );
   if (existingPolicyIndex >= 0) {
-    next.reductionStackingPolicyVersions[existingPolicyIndex] = reductionDraft;
+    const existingPolicy = next.reductionStackingPolicyVersions[existingPolicyIndex];
+    // 同一权威源的重新拉取只能更新草稿；已发布/已替代版本是冻结
+    // Snapshot 的重放依赖，不能被确定性 draft identity 降级覆盖。
+    if (existingPolicy.status === "draft") {
+      next.reductionStackingPolicyVersions[existingPolicyIndex] = reductionDraft;
+    }
   } else {
     next.reductionStackingPolicyVersions.unshift(reductionDraft);
   }

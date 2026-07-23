@@ -6,7 +6,7 @@ import {
   hashAffixRuntimeEvidence,
   numberToBinary64Hex,
 } from "./reduction-stacking-policy";
-import { sha256Text } from "./sha256";
+import { sha256Hex as sha256Text } from "./deterministic-sha256";
 import type {
   AdjustmentRule,
   AffixRuntimeEvidence,

@@ -201,6 +201,45 @@ test("later CHANGES_REQUESTED blocks and DISMISSED invalidates earlier evidence"
   );
 });
 
+test("a later same-head Agent PASS replaces the same reviewer's change request", async () => {
+  const snapshot = await fixture("ready-high-risk-agent-commented");
+  snapshot.reviews.unshift({
+    id: 10,
+    state: "CHANGES_REQUESTED",
+    commitSha: snapshot.pullRequest.headSha,
+    submittedAt: "2026-07-23T07:00:00Z",
+    author: snapshot.reviews[0].author,
+  });
+
+  const result = evaluatePullRequestMergeGate(snapshot);
+  assert.equal(result.ready, true);
+  assert.ok(
+    !result.blockers.some(
+      (blocker) => blocker.code === "REVIEW_CHANGES_REQUESTED",
+    ),
+  );
+});
+
+test("a later arbitrary comment does not replace the same reviewer's change request", async () => {
+  const snapshot = await fixture("ready-high-risk-agent-commented");
+  snapshot.reviews[0].body = "Looks good after the update.";
+  snapshot.reviews.unshift({
+    id: 10,
+    state: "CHANGES_REQUESTED",
+    commitSha: snapshot.pullRequest.headSha,
+    submittedAt: "2026-07-23T07:00:00Z",
+    author: snapshot.reviews[0].author,
+  });
+
+  const result = evaluatePullRequestMergeGate(snapshot);
+  assert.equal(result.ready, false);
+  assert.ok(
+    result.blockers.some(
+      (blocker) => blocker.code === "REVIEW_CHANGES_REQUESTED",
+    ),
+  );
+});
+
 test("a later old-head decision cannot clear a current-head change request", async () => {
   const snapshot = await fixture("ready-high-risk-agent-commented");
   snapshot.reviews.unshift({

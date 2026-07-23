@@ -80,7 +80,9 @@ current head SHA, pull request number, and current base SHA:
   the exact `Agent-Review: PASS` line. Actor type and equality with the PR author
   do not decide validity in this single-owner, multi-Agent repository.
   A later `CHANGES_REQUESTED` or dismissed review invalidates earlier evidence
-  from that reviewer until a fresh current-head signal is recorded.
+  from that reviewer until a fresh current-head signal is recorded. On the same
+  current head, a later exact `Agent-Review: PASS` from that reviewer replaces
+  their earlier `CHANGES_REQUESTED`; an arbitrary `COMMENTED` review does not.
 
 Missing, pending, failed, cancelled, skipped, push-only, old-head, or stale-base
 CI blocks. The workflow's structured `run-name` records the event-time PR
@@ -121,4 +123,5 @@ high-risk PR.
 
 Review decisions are scoped to the current head. A later decision submitted on
 an older commit cannot clear a current-head `CHANGES_REQUESTED`; only a later
-current-head decision from the same reviewer can replace it.
+current-head `APPROVED`, exact `Agent-Review: PASS`, or dismissed decision from
+the same reviewer can replace it.

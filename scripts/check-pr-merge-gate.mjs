@@ -18,6 +18,7 @@ const PR_RUN_NAME_PATTERN =
 
 const DECISIVE_REVIEW_STATES = new Set([
   "APPROVED",
+  "AGENT_PASSED",
   "CHANGES_REQUESTED",
   "DISMISSED",
 ]);
@@ -70,6 +71,14 @@ function hasAgentReviewPassMarker(body) {
     .some((line) => line === AGENT_REVIEW_PASS_MARKER);
 }
 
+function decisiveReviewState(review) {
+  const state = String(review?.state ?? "").toUpperCase();
+  if (state === "COMMENTED" && hasAgentReviewPassMarker(review?.body)) {
+    return "AGENT_PASSED";
+  }
+  return state;
+}
+
 function currentHeadReviewState({ reviews, headSha }) {
   const latestDecisionByReviewer = new Map();
   const orderedReviews = Array.isArray(reviews)
@@ -79,7 +88,7 @@ function currentHeadReviewState({ reviews, headSha }) {
     : [];
 
   for (const review of orderedReviews) {
-    const state = String(review?.state ?? "").toUpperCase();
+    const state = decisiveReviewState(review);
     const reviewerKey = userKey(review?.author);
     if (
       !reviewerKey ||
@@ -100,13 +109,12 @@ function currentHeadReviewState({ reviews, headSha }) {
   }
 
   const signal = [...orderedReviews].reverse().find((review) => {
-    const state = String(review?.state ?? "").toUpperCase();
+    const state = decisiveReviewState(review);
     const reviewerKey = userKey(review?.author);
     if (
       !reviewerKey ||
       review.commitSha !== headSha ||
-      (state !== "APPROVED" &&
-        !(state === "COMMENTED" && hasAgentReviewPassMarker(review.body)))
+      (state !== "APPROVED" && state !== "AGENT_PASSED")
     ) {
       return false;
     }
@@ -114,7 +122,8 @@ function currentHeadReviewState({ reviews, headSha }) {
     const laterDecision = latestDecisionByReviewer.get(reviewerKey);
     return !laterDecision ||
       compareByTimeAndId(laterDecision, review, "submittedAt") <= 0 ||
-      laterDecision.state === "APPROVED";
+      laterDecision.state === "APPROVED" ||
+      laterDecision.state === "AGENT_PASSED";
   });
 
   return { signal };

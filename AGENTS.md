@@ -50,7 +50,8 @@
   当前head留下可追溯的审查信号；本仓库由单一负责人管理多个Agent，因此`COMMENTED`、Bot或同一GitHub
   账号提交的审查均可承载Agent复核证据。`COMMENTED`必须在review正文中包含独立一行
   `Agent-Review: PASS`，普通评论或仅描述发现的review不计入。该信号只证明复核已发生，不冒充GitHub
-  真人`APPROVED`；旧head上的较晚决定不得清除当前head的`CHANGES_REQUESTED`。只有平台规则或负责人
-  另行明确要求时，才增加真人批准门槛。
+  真人`APPROVED`；旧head上的较晚决定不得清除当前head的`CHANGES_REQUESTED`。同一评审者在同一当前
+  head上较晚提交的精确`Agent-Review: PASS`可取代其较早的`CHANGES_REQUESTED`，普通`COMMENTED`不可。
+  只有平台规则或负责人另行明确要求时，才增加真人批准门槛。
 - 检查通过只是可合并证据，不授予合并权限；合并仍需本轮用户明确授权。完整契约见
   `.github/merge-gates.md`。

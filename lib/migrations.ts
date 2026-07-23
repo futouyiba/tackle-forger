@@ -21,7 +21,6 @@ import type {
   ParameterDefinition,
   PerformanceProfile,
   ProjectionPatchRuleSource,
-  ProjectionPatchOperation,
   SeriesRecipe,
   QualityProfileId,
   QualityProfile,
@@ -32,7 +31,12 @@ import type {
 import { defaultAffinityAxisWeights } from "./compatibility";
 import { migrateLegacyProductIdentity } from "./legacy-product-migration";
 import { CANONICAL_FEISHU_WORKBOOK } from "./feishu-workbook";
-import { buildPatchRevision, emptyPatchLedger, migratePatchLedger } from "./patch-ledger";
+import {
+  buildPatchRevision,
+  emptyPatchLedger,
+  importLegacyPatchesToLedger,
+  migratePatchLedger,
+} from "./patch-ledger";
 import {
   CANONICAL_PATCH_OFFSET_POLICY_ID,
   createCanonicalPatchOffsetPolicyVersion,
@@ -545,32 +549,28 @@ function migrateV2ToV3(input: MutableWorkspace): MutableWorkspace {
   const existingTechnologies = arrayOf<Technology>(state.technologies);
   const migratedPatches = arrayOf<ProjectionPatchRuleSource>(
     state.projectionPatches,
-  ).map((patch) => ({
-    ...patch,
-    createdAt:
-      patch.createdAt ??
-      (typeof state.importedAt === "string"
-        ? state.importedAt
-        : "1970-01-01T00:00:00.000Z"),
-    operations:
-      patch.operations ??
-      patch.rules.flatMap((rule): ProjectionPatchOperation[] => {
-        if (rule.operation === "set") {
-          return [{ op: "set", path: rule.parameterKey, value: rule.value }];
-        }
-        if (
-          (rule.operation === "add" || rule.operation === "multiply") &&
-          typeof rule.value === "number"
-        ) {
-          return [
-            rule.operation === "add"
-              ? { op: "add", path: rule.parameterKey, value: rule.value }
-              : { op: "multiply", path: rule.parameterKey, value: rule.value },
-          ];
-        }
-        return [];
-      }),
-  }));
+  ).map((patch) => {
+    const hasOnlyCanonicalRules = patch.rules.every((rule) =>
+      rule.operation === "set"
+      || ((rule.operation === "add" || rule.operation === "multiply") && typeof rule.value === "number"));
+    const canonicalOperations = hasOnlyCanonicalRules
+      ? patch.rules.map((rule) =>
+          rule.operation === "set"
+            ? { op: "set" as const, path: rule.parameterKey, value: rule.value }
+            : rule.operation === "add"
+              ? { op: "add" as const, path: rule.parameterKey, value: rule.value as number }
+              : { op: "multiply" as const, path: rule.parameterKey, value: rule.value as number })
+      : undefined;
+    return {
+      ...patch,
+      createdAt:
+        patch.createdAt ??
+        (typeof state.importedAt === "string"
+          ? state.importedAt
+          : "1970-01-01T00:00:00.000Z"),
+      operations: patch.operations ?? canonicalOperations,
+    };
+  });
   const v3Affixes = existingAffixes.length
     ? existingAffixes
     : [...migrateLegacyAffixes(state, ruleSetVersion), ...migratedTechnology.affixes];
@@ -1218,58 +1218,10 @@ function migrateV9ToV10(state: MutableWorkspace): MutableWorkspace {
   if (existing.revisions.length || !arrayOf<ProjectionPatchRuleSource>(state.projectionPatches).length) {
     return { ...state, schemaVersion: 10, patchLedger: withSnapshotMigrationReviews(existing) };
   }
-  const ledger = emptyPatchLedger();
-  for (const patch of arrayOf<ProjectionPatchRuleSource>(state.projectionPatches)) {
-    const sourceOperations = patch.operations ?? [];
-    if (!sourceOperations.length) {
-      ledger.migrationReviewItems.push({
-        id: "patch-migration:" + patch.id,
-        patchId: patch.id,
-        patchRevision: 1,
-        reason: "LEGACY_PATCH_OPERATION_MISSING",
-        preservedPayload: structuredClone(patch),
-      });
-      continue;
-    }
-    try {
-      ledger.revisions.push(buildPatchRevision({
-        patchId: patch.id,
-        patchRevision: 1,
-        scopeType: patch.scope,
-        layerType: patch.scope,
-        subjectEntityId: patch.scopeId,
-        subjectName: patch.scopeId,
-        baseRuleSetVersion: patch.baseRuleSetVersion,
-        baseObjectRevision: 1,
-        state: patch.status === "approved" ? "ACTIVE" : patch.status === "superseded" ? "SUPERSEDED" : "DRAFT",
-        mirrorSyncState: "NOT_SYNCED",
-        attentionStates: [],
-        reason: patch.reason,
-        evidence: [],
-        createdBy: patch.author,
-        createdAt: patch.createdAt ?? "1970-01-01T00:00:00.000Z",
-        snapshotRefs: [],
-        rawPayload: structuredClone(patch),
-        operations: sourceOperations.map((operation, index) => ({
-          operationId: patch.id + ":op:" + String(index + 1),
-          operationIndex: index,
-          parameterKey: operation.path,
-          operation: operation.op === "remove" ? "clear" : operation.op,
-          operand: "value" in operation ? operation.value : null,
-          before: undefined,
-          after: undefined,
-        })),
-      }));
-    } catch {
-      ledger.migrationReviewItems.push({
-        id: "patch-migration:" + patch.id,
-        patchId: patch.id,
-        patchRevision: 1,
-        reason: "LEGACY_PATCH_REQUIRES_REVIEW",
-        preservedPayload: structuredClone(patch),
-      });
-    }
-  }
+  const ledger = importLegacyPatchesToLedger(
+    emptyPatchLedger(),
+    arrayOf<ProjectionPatchRuleSource>(state.projectionPatches),
+  );
   return { ...state, schemaVersion: 10, patchLedger: withSnapshotMigrationReviews(ledger) };
 }
 

@@ -324,6 +324,23 @@ test("P-01b 不同实体 scopeId 的同路径 set 不会误报冲突", () => {
   assert.equal(sameScope.issues.some((issue) => issue.code === "PATCH_SET_CONFLICT"), true);
 });
 
+test("P-01c clear 恢复同层继承值并与 set 冲突，运行时拒绝旧操作", () => {
+  const common={
+    scope:"model" as const,scopeId:"model:a",reason:"test",author:"test",
+    baseProjectionId:"p",baseRuleSetVersion:"r",status:"approved" as const,rules:[],
+  };
+  const result=applyLayeredPatches({force:10},[
+    {...common,id:"patch:add",order:0,operations:[{op:"add" as const,path:"force",value:5}]},
+    {...common,id:"patch:clear",order:1,operations:[{op:"clear" as const,path:"force"}]},
+    {...common,id:"patch:set",order:2,operations:[{op:"set" as const,path:"force",value:20}]},
+    {...common,id:"patch:legacy",order:3,operations:[{op:"remove",path:"force"}]},
+  ] as never);
+  assert.equal(result.value.force,20);
+  assert.ok(result.trace.some((entry)=>entry.patchId==="patch:clear"&&entry.after===10));
+  assert.ok(result.issues.some((issue)=>issue.code==="PATCH_SET_CLEAR_CONFLICT"));
+  assert.ok(result.issues.some((issue)=>issue.patchId==="patch:legacy"&&issue.code==="PATCH_OPERATION_UNSUPPORTED"));
+});
+
 test("P-02/P-03 上游更新生成 rebase 差异，set 基础变化要求复核", () => {
   const patches: ProjectionPatchRuleSource[] = [
     {

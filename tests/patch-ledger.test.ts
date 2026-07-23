@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { analyzePatchPatterns, assessPatchAbsorption, appendPatchRevision, beginPatchMirrorSync, buildPatchRevision, createRuleSourceChangeDraft, emptyPatchLedger, migratePatchLedger, orderedPatchReferences, PatchLedgerError, projectionPatchViewFromLedger, reconcilePatchMirrorPull, recordPatchMirrorResult, rebasePatchRevision, replayPatchRevision, resolvePatchRevision, reviewPatchRevision, updatePatchMirrorSuggestion } from "../lib/patch-ledger";
+import { analyzePatchPatterns, assessPatchAbsorption, appendPatchRevision, beginPatchMirrorSync, buildPatchRevision, createRuleSourceChangeDraft, emptyPatchLedger, importLegacyPatchesToLedger, migratePatchLedger, orderedPatchReferences, PatchLedgerError, projectionPatchViewFromLedger, reconcilePatchMirrorPull, recordPatchMirrorResult, rebasePatchRevision, replayPatchRevision, resolvePatchRevision, reviewPatchRevision, updatePatchMirrorSuggestion } from "../lib/patch-ledger";
 import { CURRENT_WORKSPACE_SCHEMA_VERSION, migrateWorkspaceState } from "../lib/migrations";
 import { createSeedState } from "../lib/seed";
 
@@ -31,6 +31,121 @@ test("set add multiply replay strictly by operationIndex", () => {
   assert.deepEqual(result.trace.map((x)=>x.operationId),["op:set","op:add","op:multiply"]);
   assert.deepEqual(replayPatchRevision({power:2},makeRevision()),result);
 });
+test("新 Patch 只接受规范操作，clear 重放、视图与 rebase 均恢复继承值", () => {
+  for(const operation of ["remove","min","max"]){
+    const legacy=structuredClone(makeRevision()) as unknown as Record<string,unknown>;
+    ((legacy.operations as Array<Record<string,unknown>>)[0]).operation=operation;
+    assert.throws(()=>buildPatchRevision(legacy as never),(error:unknown)=>
+      error instanceof PatchLedgerError&&error.code==="PATCH_OPERATION_UNSUPPORTED");
+  }
+  const clear=makeRevision({
+    patchId:"patch:clear",
+    operations:[
+      {operationId:"op:add",operationIndex:0,parameterKey:"power",operation:"add",operand:2,before:8,after:10},
+      {operationId:"op:clear",operationIndex:1,parameterKey:"power",operation:"clear",operand:null,before:10,after:8},
+    ],
+  });
+  const replayed=replayPatchRevision({power:8},clear);
+  assert.equal(replayed.value.power,8);
+  assert.deepEqual(replayed.trace.map((entry)=>entry.after),[10,8]);
+  const view=projectionPatchViewFromLedger({...emptyPatchLedger(),revisions:[clear]});
+  assert.deepEqual(view[0].operations,[{op:"add",path:"power",value:2},{op:"clear",path:"power"}]);
+
+  const source={...clear,state:"REBASE_REQUIRED" as const};
+  const rebased=rebasePatchRevision({
+    ledger:{...emptyPatchLedger(),revisions:[source]},
+    patchId:source.patchId,sourcePatchRevision:1,newBaseRuleSetVersion:"ruleset:2",
+    newBaseObjectRevision:4,newBaseValues:{power:12},actor:"reviewer",rebasedAt:now,
+    capabilities:["patch.rebase"],
+  });
+  assert.deepEqual(rebased.revision.operations.map((operation)=>[operation.before,operation.after]),[[12,14],[14,12]]);
+  assert.equal(rebased.revision.state,"PENDING_REVIEW");
+});
+test("同一 revision 的 set/clear 冲突以及缺失继承值使用稳定错误码阻断", () => {
+  assert.throws(()=>makeRevision({operations:[
+    {operationId:"op:set",operationIndex:0,parameterKey:"power",operation:"set",operand:4,before:2,after:4},
+    {operationId:"op:clear",operationIndex:1,parameterKey:"power",operation:"clear",operand:null,before:4,after:2},
+  ]}),(error:unknown)=>error instanceof PatchLedgerError&&error.code==="PATCH_SET_CLEAR_CONFLICT");
+  const clear=makeRevision({patchId:"patch:clear:missing",operations:[
+    {operationId:"op:clear",operationIndex:0,parameterKey:"power",operation:"clear",operand:null,before:undefined,after:undefined},
+  ]});
+  assert.throws(()=>replayPatchRevision({},clear),(error:unknown)=>
+    error instanceof PatchLedgerError&&error.code==="PATCH_CLEAR_INHERITANCE_MISSING");
+});
+test("PatchLedger v4 将 remove 和可验证 min/max 幂等规范化并保留 raw intent", () => {
+  const removeRevision=makeRevision({
+    patchId:"patch:legacy:remove",
+    operations:[{operationId:"op:remove",operationIndex:0,parameterKey:"power",operation:"clear",operand:null,before:10,after:8}],
+  });
+  Object.assign(removeRevision.operations[0] as unknown as Record<string,unknown>,{
+    operation:"remove",legacyNote:"keep-remove",
+  });
+  const minRevision=makeRevision({
+    patchId:"patch:legacy:min",
+    operations:[{operationId:"op:min",operationIndex:0,parameterKey:"power",operation:"set",operand:6,before:10,after:6}],
+  });
+  Object.assign(minRevision.operations[0] as unknown as Record<string,unknown>,{
+    operation:"min",legacyNote:"keep-min",
+  });
+  const legacy={...emptyPatchLedger(),schemaVersion:4,revisions:[removeRevision,minRevision],legacyAudit:{keep:true}};
+  const migrated=migratePatchLedger(legacy as never);
+  const remove=migrated.revisions.find((revision)=>revision.patchId===removeRevision.patchId)!;
+  const min=migrated.revisions.find((revision)=>revision.patchId===minRevision.patchId)!;
+  assert.equal(migrated.schemaVersion,5);
+  assert.deepEqual([remove.operations[0].operation,remove.operations[0].operand],["clear",null]);
+  assert.equal((remove.operations[0].rawIntent as {legacyNote:string}).legacyNote,"keep-remove");
+  assert.deepEqual([min.operations[0].operation,min.operations[0].operand],["set",6]);
+  assert.equal((min.operations[0].rawIntent as {legacyNote:string}).legacyNote,"keep-min");
+  assert.deepEqual((migrated as unknown as {legacyAudit:unknown}).legacyAudit,{keep:true});
+  assert.equal(migrated.migrationReviewItems.some((item)=>item.id==="patch-ledger-migration:semantic"),false);
+  assert.deepEqual(migratePatchLedger(migrated),migrated);
+});
+test("不可验证 min/max 进入复核，Snapshot 引用 revision 保持原始操作和 hash", () => {
+  const invalid=makeRevision({
+    patchId:"patch:legacy:min:invalid",
+    operations:[{operationId:"op:min",operationIndex:0,parameterKey:"power",operation:"set",operand:6,before:10,after:7}],
+  });
+  (invalid.operations[0] as unknown as {operation:string}).operation="min";
+  const frozen=makeRevision({
+    patchId:"patch:legacy:frozen",snapshotRefs:["snapshot:frozen"],
+    operations:[{operationId:"op:remove",operationIndex:0,parameterKey:"power",operation:"clear",operand:null,before:10,after:8}],
+  });
+  (frozen.operations[0] as unknown as {operation:string}).operation="remove";
+  const frozenHash=frozen.revisionHash;
+  const migrated=migratePatchLedger({...emptyPatchLedger(),schemaVersion:4,revisions:[invalid,frozen]} as never);
+  assert.equal((migrated.revisions[0].operations[0] as unknown as {operation:string}).operation,"min");
+  assert.ok(migrated.migrationReviewItems.some((item)=>
+    item.patchId===invalid.patchId&&item.reason==="LEGACY_PATCH_FROZEN_RESULT_MISMATCH"));
+  const migratedFrozen=migrated.revisions.find((revision)=>revision.patchId===frozen.patchId)!;
+  assert.equal((migratedFrozen.operations[0] as unknown as {operation:string}).operation,"remove");
+  assert.equal(migratedFrozen.revisionHash,frozenHash);
+  assert.ok(migrated.migrationReviewItems.some((item)=>
+    item.patchId===frozen.patchId&&item.reason==="LEGACY_SNAPSHOT_PATCH_OPERATION_FROZEN"));
+  assert.throws(()=>orderedPatchReferences([migratedFrozen]),(error:unknown)=>
+    error instanceof PatchLedgerError&&error.code==="PATCH_SNAPSHOT_OPERATION_NON_CANONICAL");
+  assert.deepEqual(migratePatchLedger(migrated),migrated);
+});
+test("旧 Projection Patch 的 min/max 仅在冻结 before/after 可验证时导入", () => {
+  const common={
+    scope:"model",scopeId:"model:legacy",reason:"legacy",author:"migration",
+    baseProjectionId:"projection:legacy",baseRuleSetVersion:"ruleset:1",
+    baseObjectRevision:3,status:"approved",order:0,rules:[],
+  };
+  const imported=importLegacyPatchesToLedger(emptyPatchLedger(),[
+    {...common,id:"patch:legacy:valid",operations:[
+      {op:"max",path:"power",value:8,before:5,after:8,legacyField:"keep"},
+    ]},
+    {...common,id:"patch:legacy:review",operations:[
+      {op:"min",path:"power",value:4},
+    ]},
+  ] as never);
+  const valid=imported.revisions.find((revision)=>revision.patchId==="patch:legacy:valid")!;
+  assert.deepEqual([valid.operations[0].operation,valid.operations[0].operand],["set",8]);
+  assert.equal((valid.operations[0].rawIntent as {legacyField:string}).legacyField,"keep");
+  assert.equal(imported.revisions.some((revision)=>revision.patchId==="patch:legacy:review"),false);
+  assert.ok(imported.migrationReviewItems.some((item)=>
+    item.patchId==="patch:legacy:review"&&item.reason==="LEGACY_PATCH_MIN_MAX_REVIEW_REQUIRED"));
+});
 test("stable ID survives rename, baseline changes rebase, missing ID is orphaned", () => {
   const r=makeRevision();
   assert.equal(resolvePatchRevision({revision:r,existingSubjectIds:["model:rod:1"],currentRuleSetVersion:"ruleset:1",currentObjectRevision:3}).state,"ACTIVE");
@@ -53,6 +168,54 @@ test("unavailable or partial mirror never reports SYNCED and retry is idempotent
   assert.notEqual(partial.revisions[0].mirrorSyncState,"SYNCED");
   const failed=recordPatchMirrorResult({ledger:started.ledger,idempotencyKey:"sync:1",connectorAvailable:false,now,operationResults:[],readbackEvidence:{connector:"unsupported"}});
   assert.equal(failed.revisions[0].mirrorSyncState,"WRITE_FAILED"); assert.equal(failed.mirrorCommands[0].state,"FAILED");
+});
+test("镜像命令只生成规范 payload，幂等键不能绑定不同内容", () => {
+  const revision=makeRevision({
+    patchId:"patch:mirror:clear",
+    operations:[{operationId:"op:clear",operationIndex:0,parameterKey:"power",operation:"clear",operand:null,before:10,after:8}],
+  });
+  const ledger={...emptyPatchLedger(),revisions:[revision]};
+  const started=beginPatchMirrorSync({
+    ledger,patchId:revision.patchId,patchRevision:1,idempotencyKey:"sync:canonical",
+    now,capabilities:["patch.mirror.write"],
+  });
+  assert.equal(started.command.payloadHash.length>0,true);
+  assert.deepEqual(
+    [started.command.payload[0].operation,started.command.payload[0].operand],
+    ["clear",null],
+  );
+  const changed=structuredClone(started.ledger);
+  changed.revisions[0].operations[0].after=9;
+  assert.throws(()=>beginPatchMirrorSync({
+    ledger:changed,patchId:revision.patchId,patchRevision:1,idempotencyKey:"sync:canonical",
+    now,capabilities:["patch.mirror.write"],
+  }),(error:unknown)=>error instanceof PatchLedgerError&&error.code==="PATCH_MIRROR_IDEMPOTENCY_CONFLICT");
+});
+test("镜像拉取沿用 remove/min/max 迁移语义并隔离不可验证行", () => {
+  const revision=makeRevision({
+    patchId:"patch:mirror:legacy",
+    operations:[{operationId:"op:set",operationIndex:0,parameterKey:"power",operation:"set",operand:6,before:10,after:6}],
+  });
+  const started=beginPatchMirrorSync({
+    ledger:{...emptyPatchLedger(),revisions:[revision]},
+    patchId:revision.patchId,patchRevision:1,idempotencyKey:"sync:legacy",
+    now,capabilities:["patch.mirror.write"],
+  });
+  const canonical=started.command.payload[0];
+  const valid=reconcilePatchMirrorPull({
+    ledger:started.ledger,capabilities:["patch.mirror.pull"],remoteRows:[{
+      ...canonical,remoteRowId:"row:valid",operation:"min",operand:6,
+    } as never],
+  });
+  assert.deepEqual(valid.issues,[]);
+  const invalid=reconcilePatchMirrorPull({
+    ledger:started.ledger,capabilities:["patch.mirror.pull"],remoteRows:[{
+      ...canonical,remoteRowId:"row:invalid",operation:"max",operand:20,after:6,
+    } as never],
+  });
+  assert.ok(invalid.issues.some((issue)=>issue.code==="LEGACY_PATCH_FROZEN_RESULT_MISMATCH"));
+  assert.ok(invalid.quarantinedRemoteRowIds.includes("row:invalid"));
+  assert.deepEqual(invalid.ledger.revisions,started.ledger.revisions);
 });
 test("explicit mirror pull reports missing unknown duplicate rows without deleting local ledger", () => {
   const ledger: ReturnType<typeof emptyPatchLedger>={...emptyPatchLedger(),revisions:[makeRevision()]}; const before=structuredClone(ledger);
@@ -154,11 +317,11 @@ test("v11 只把 legacy approved 迁为 ACTIVE，不误激活原生审核态", (
   assert.equal(migrated.patchLedger.revisions.find((entry)=>entry.patchId==="patch:legacy")?.state,"ACTIVE");
   assert.equal(migrated.patchLedger.revisions.find((entry)=>entry.patchId==="patch:native")?.state,"APPROVED");
 });
-test("PatchLedger v1 顺序迁移到 v4，保留未知字段并补齐新增集合", () => {
+test("PatchLedger v1 顺序迁移到 v5，保留未知字段并补齐新增集合", () => {
   const legacy={...emptyPatchLedger(),schemaVersion:1,unknownAuditField:{kept:true}} as unknown as Parameters<typeof migratePatchLedger>[0];
   delete (legacy as unknown as {ruleSourceChangeDrafts?:unknown}).ruleSourceChangeDrafts;
   const migrated=migratePatchLedger(legacy);
-  assert.equal(migrated.schemaVersion,4);
+  assert.equal(migrated.schemaVersion,5);
   assert.deepEqual(migrated.ruleSourceChangeDrafts,[]);
   assert.deepEqual(migrated.absorptionAssessments,[]);
   assert.deepEqual(migrated.mirrorPullAudits,[]);
@@ -265,13 +428,13 @@ test("Patch 吸收要求独立权限、完整 Trace、匹配规则提案和显�
   assert.throws(()=>assessPatchAbsorption({...base,operationEvidence:[{operationId:"op:one",outcome:"NOT_COVERED",oldPatchedValue:4,newRuleValue:2,newRulePlusPatchValue:4,traceHash:"trace"}],capabilities:["patch.absorption.review"]}),(error:unknown)=>error instanceof PatchLedgerError&&error.code==="PATCH_ABSORPTION_RESIDUAL_REQUIRED");
   assert.throws(()=>assessPatchAbsorption({...base,operationEvidence:[{operationId:"op:one",outcome:"FULLY_COVERED",oldPatchedValue:4,newRuleValue:4,newRulePlusPatchValue:4,traceHash:"trace"}],capabilities:[]}),(error:unknown)=>error instanceof PatchLedgerError&&error.code==="PATCH_PERMISSION_DENIED");
 });
-test("Workspace 已是 v14 时仍独立迁移 PatchLedger v2 到 v4", () => {
+test("Workspace 已是 v14 时仍独立迁移 PatchLedger v2 到 v5", () => {
   const state=createSeedState();
   const legacyLedger={...state.patchLedger,schemaVersion:2} as typeof state.patchLedger;
   delete (legacyLedger as unknown as {absorptionAssessments?:unknown}).absorptionAssessments;
   const migrated=migrateWorkspaceState({...state,patchLedger:legacyLedger});
   assert.equal(migrated.schemaVersion,CURRENT_WORKSPACE_SCHEMA_VERSION);
-  assert.equal(migrated.patchLedger.schemaVersion,4);
+  assert.equal(migrated.patchLedger.schemaVersion,5);
   assert.deepEqual(migrated.patchLedger.absorptionAssessments,[]);
   assert.deepEqual(migrateWorkspaceState(migrated),migrated);
 });

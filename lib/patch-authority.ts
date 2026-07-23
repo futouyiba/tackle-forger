@@ -1,5 +1,5 @@
 import { deterministicHash } from "./rule-kernel";
-import { reviewPatchBatch, reviewPatchRevision } from "./patch-ledger";
+import { orderedPatchReferences, reviewPatchBatch, reviewPatchRevision } from "./patch-ledger";
 import {
   createPatchReviewBatch,
   evaluatePatchFinalRanges,
@@ -64,12 +64,7 @@ function orderedOperations(revision: PatchRevisionRecord) {
 export function authoritativePatchReferences(
   revisions: PatchRevisionRecord[],
 ): { references: PatchSnapshotReference[]; patchSetHash: string } {
-  const references = orderedRevisions(revisions).map((revision) => ({
-    patchId: revision.patchId,
-    patchRevision: revision.patchRevision,
-    orderedOperationIds: orderedOperations(revision).map((operation) => operation.operationId),
-  }));
-  return { references, patchSetHash: deterministicHash(references) };
+  return orderedPatchReferences(revisions);
 }
 
 function assertAuthorityVersions(object: AuthoritativePatchObject): void {
@@ -304,11 +299,22 @@ function applyRevisions(
   revisions: PatchRevisionRecord[],
 ): Record<string, number | string> {
   const values: Record<string, number | string> = structuredClone(base);
+  const inheritedByLayerParameter = new Map<string, number | string>();
   for (const revision of orderedRevisions(revisions)) {
     for (const operation of orderedOperations(revision)) {
       const before = values[operation.parameterKey];
+      const layerParameter = `${revision.layerType}:${revision.subjectEntityId}:${operation.parameterKey}`;
+      if (!inheritedByLayerParameter.has(layerParameter) && before !== undefined) {
+        inheritedByLayerParameter.set(layerParameter, structuredClone(before));
+      }
       if (operation.operation === "clear") {
-        delete values[operation.parameterKey];
+        if (!inheritedByLayerParameter.has(layerParameter)) {
+          throw new PatchOffsetPolicyError(
+            "PATCH_CLEAR_INHERITANCE_MISSING",
+            `操作 ${operation.operationId} 没有可恢复的继承值。`,
+          );
+        }
+        values[operation.parameterKey] = structuredClone(inheritedByLayerParameter.get(layerParameter)!);
       } else if (operation.operation === "set") {
         if (typeof operation.operand !== "number" && typeof operation.operand !== "string") {
           throw new PatchOffsetPolicyError("PATCH_OPERATION_INVALID", `操作 ${operation.operationId} 的 set 值无效。`);

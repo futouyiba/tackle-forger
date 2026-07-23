@@ -23,7 +23,6 @@ import {
   useState,
 } from "react";
 import {
-  buildProductBreadcrumbs,
   resolveProductDeepLink,
   type ActionAvailabilityMap,
   type BreadcrumbItem,
@@ -49,6 +48,11 @@ import type {
 } from "@/lib/types";
 import "./series-gantt-v3.css";
 import { CandidateGenerationWorkbench } from "./CandidateGenerationWorkbench";
+import {
+  buildProductBreadcrumbView,
+  planProductRouteRecovery,
+  ProductDeepLinkUnavailableNotice,
+} from "./product-deep-link-ui";
 
 interface SeriesGanttWorkbenchV3Props {
   state: WorkspaceState;
@@ -381,13 +385,12 @@ function componentEntityInput(model: PurchasableModel, itemPartId: string, fishW
 
 function ModelDrawer({
   state,
-  workspaceId,
   model,
   sku,
   series,
   snapshot,
+  breadcrumbs,
   comparisonModelIds,
-  currentEntityType,
   rebaseEnabled,
   rebaseDisabledReason,
   onOpenRebase,
@@ -396,13 +399,12 @@ function ModelDrawer({
   onClose,
 }: {
   state: WorkspaceState;
-  workspaceId: string;
   model: PurchasableModel;
   sku: SkuDrawer;
   series: SeriesDefinition;
   snapshot?: ConfigurationSnapshot;
+  breadcrumbs: BreadcrumbItem[];
   comparisonModelIds: string[];
-  currentEntityType: "model" | "configuration_snapshot";
   rebaseEnabled: boolean;
   rebaseDisabledReason?: string;
   onOpenRebase: () => void;
@@ -451,18 +453,6 @@ function ModelDrawer({
       entry.definitionId === activeFiveAxisPreview.fiveAxisDefinitionId &&
       entry.version === activeFiveAxisPreview.fiveAxisDefinitionVersion)
     : undefined;
-  const breadcrumbs = buildProductBreadcrumbs({
-    workspaceId,
-    collection: series.collectionId
-      ? state.collections.find((entry) => entry.id === series.collectionId)
-      : undefined,
-    series,
-    sku,
-    model,
-    snapshot,
-    currentEntityType,
-  });
-
   useEffect(() => {
     const previouslyFocused = document.activeElement instanceof HTMLElement
       ? document.activeElement
@@ -855,15 +845,15 @@ export function SeriesGanttWorkbenchV3({
   const previewModelAvailability = actionAvailabilities.preview_model;
   const rebaseAvailability = actionAvailabilities.open_rebase;
   const createSeriesAvailability = actionAvailabilities.create_series;
-  const contextBreadcrumbs = buildProductBreadcrumbs({
+  const breadcrumbSeries = drawerSeries ?? selectedSeries;
+  const breadcrumbSku = drawerModel ? drawerSku : selectedSku;
+  const breadcrumbView = buildProductBreadcrumbView({
     workspaceId,
-    collection: drawerSeries?.collectionId
-      ? state.collections.find((entry) => entry.id === drawerSeries.collectionId)
-      : selectedSeries?.collectionId
-        ? state.collections.find((entry) => entry.id === selectedSeries.collectionId)
-        : undefined,
-    series: drawerSeries ?? selectedSeries,
-    sku: drawerModel ? drawerSku : selectedSku,
+    collection: breadcrumbSeries?.collectionId
+      ? state.collections.find((entry) => entry.id === breadcrumbSeries.collectionId)
+      : undefined,
+    series: breadcrumbSeries,
+    sku: breadcrumbSku,
     model: drawerModel,
     snapshot: drawerSnapshotId ? drawerSnapshot : undefined,
     currentEntityType: drawerSnapshotId
@@ -874,6 +864,8 @@ export function SeriesGanttWorkbenchV3({
           ? "sku_drawer"
           : "series",
   });
+  const contextBreadcrumbs = breadcrumbView.breadcrumbs;
+  const displayedDeepLinkUnavailable = deepLink.unavailable ?? breadcrumbView.unavailable;
   const contextBreadcrumbSignature = JSON.stringify(contextBreadcrumbs);
   const emittedBreadcrumbSignature = useRef("");
 
@@ -885,40 +877,32 @@ export function SeriesGanttWorkbenchV3({
 
   useEffect(() => {
     updateLocation(query, {
-      seriesId: selectedSeries?.id,
-      skuId: selectedSku?.id,
+      seriesId: drawerSeries?.id ?? selectedSeries?.id,
+      skuId: drawerSku?.id ?? selectedSku?.id,
       modelId: drawerModel?.id,
       snapshotId: drawerSnapshotId || undefined,
     });
-  }, [drawerModel?.id, drawerSnapshotId, query, selectedSeries?.id, selectedSku?.id]);
+  }, [drawerModel?.id, drawerSeries?.id, drawerSku?.id, drawerSnapshotId, query, selectedSeries?.id, selectedSku?.id]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
-      if (!deepLink.unavailable) return;
-      if (deepLink.unavailable.code === "DEEP_LINK_CROSS_WORKSPACE") {
-        setSelectedSeriesId("");
-        setSelectedSkuId("");
-        setDrawerModelId("");
-        setDrawerSnapshotId("");
-        notify(deepLink.unavailable.message);
-        return;
+      const recovery = planProductRouteRecovery(deepLink, {
+        seriesId: selectedSeriesId,
+        skuId: selectedSkuId,
+        modelId: drawerModelId,
+        snapshotId: drawerSnapshotId,
+      });
+      if (!recovery) return;
+      if (recovery.changed) {
+        setSelectedSeriesId(recovery.next.seriesId);
+        setSelectedSkuId(recovery.next.skuId);
+        setDrawerModelId(recovery.next.modelId);
+        setDrawerSnapshotId(recovery.next.snapshotId);
       }
-      if (deepLink.unavailable.requestedRef.entityType === "configuration_snapshot") {
-        setDrawerSnapshotId("");
-        notify(deepLink.unavailable.message);
-        return;
-      }
-      if (deepLink.unavailable.requestedRef.entityType === "model") {
-        setDrawerModelId("");
-        if (deepLink.series) setSelectedSeriesId(deepLink.series.id);
-        if (deepLink.sku) setSelectedSkuId(deepLink.sku.id);
-        notify(deepLink.unavailable.message);
-        return;
-      }
-      notify(deepLink.unavailable.message);
+      if (recovery.announcement) notify(recovery.announcement);
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [deepLink, notify]);
+  }, [deepLink, drawerModelId, drawerSnapshotId, notify, selectedSeriesId, selectedSkuId]);
 
   useEffect(() => {
     const key = "tackle-forger:series-gantt-scroll";
@@ -1063,6 +1047,8 @@ export function SeriesGanttWorkbenchV3({
           <button type="button" disabled title="OPEN-006 尚未确认">AI 评估</button>
         </div>
       </section>
+
+      <ProductDeepLinkUnavailableNotice unavailable={displayedDeepLinkUnavailable} />
 
       <section className="gantt-filter-bar" aria-label="甘特图筛选">
         <span><ListFilter size={15} />筛选</span>
@@ -1216,7 +1202,7 @@ export function SeriesGanttWorkbenchV3({
       {drawerModel && drawerSku && drawerSeries ? (
         <>
           <button className="gantt-drawer-backdrop" type="button" aria-label="关闭预览" onClick={() => { setDrawerModelId(""); setDrawerSnapshotId(""); }} />
-          <ModelDrawer state={state} workspaceId={workspaceId} model={drawerModel} sku={drawerSku} series={drawerSeries} snapshot={drawerSnapshot} currentEntityType={drawerSnapshotId ? "configuration_snapshot" : "model"} comparisonModelIds={comparisonModelIds} rebaseEnabled={rebaseAvailability.enabled} rebaseDisabledReason={rebaseAvailability.disabledReasonText} onToggleCompare={toggleCompare} onOpenSnapshot={setDrawerSnapshotId} onOpenRebase={() => { setDrawerModelId(""); setDrawerSnapshotId(""); onOpenSeries(drawerSeries.id); }} onClose={() => { setDrawerModelId(""); setDrawerSnapshotId(""); }} />
+          <ModelDrawer state={state} model={drawerModel} sku={drawerSku} series={drawerSeries} snapshot={drawerSnapshot} breadcrumbs={contextBreadcrumbs} comparisonModelIds={comparisonModelIds} rebaseEnabled={rebaseAvailability.enabled} rebaseDisabledReason={rebaseAvailability.disabledReasonText} onToggleCompare={toggleCompare} onOpenSnapshot={setDrawerSnapshotId} onOpenRebase={() => { setDrawerModelId(""); setDrawerSnapshotId(""); onOpenSeries(drawerSeries.id); }} onClose={() => { setDrawerModelId(""); setDrawerSnapshotId(""); }} />
         </>
       ) : null}
       {candidateOpen && selectedSeries ? (

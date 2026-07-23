@@ -63,19 +63,13 @@ export async function GET(
           inputHash: prepareAIRequest({ envelope: projection.envelope }).inputHash,
         };
       } catch (error) {
-        if (error instanceof ItemPartNotEnabledError || error instanceof ItemPartChainInconsistentError) {
-          return NextResponse.json(
-            { error: "AI 评估不存在。", code: "AI_ASSESSMENT_NOT_FOUND" },
-            { status: 404 },
-          );
-        }
-        if (error instanceof Error && error.message === "AI_SCOPE_NOT_FOUND") {
-          return NextResponse.json(
-            { error: "AI 评估不存在。", code: "AI_ASSESSMENT_NOT_FOUND" },
-            { status: 404 },
-          );
-        }
-        throw error;
+        if (!(error instanceof ItemPartNotEnabledError)
+          && !(error instanceof ItemPartChainInconsistentError)
+          && !(error instanceof Error && error.message === "AI_SCOPE_NOT_FOUND")) throw error;
+        // 所有者仍可查看自己已留存的历史评估。当前作用域被删除时不再构造 currentInput，
+        // 或部位链已不再合格时，由统一 freshness 逻辑标记 AI_SCOPE_NOT_FOUND，
+        // 并禁止把历史结果转换为草稿。
+        currentInput = undefined;
       }
     }
     const freshness = metadata

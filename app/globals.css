@@ -29,6 +29,46 @@
   box-sizing: border-box;
 }
 
+/*
+ * Shared accessibility baseline. Feature-level playback controls own their
+ * product preference and state, while this layer always honours the platform
+ * reduced-motion preference for every existing and future workbench surface.
+ */
+:focus-visible {
+  box-shadow: 0 0 0 6px #0b5fff;
+  outline: 3px solid #ffffff;
+  outline-offset: 2px;
+}
+
+.skip-link {
+  background: #ffffff;
+  border: 2px solid #125fc4;
+  color: #12345a;
+  font-weight: 700;
+  left: 12px;
+  padding: 9px 12px;
+  position: fixed;
+  top: 12px;
+  transform: translateY(-160%);
+  transition: transform 120ms ease;
+  z-index: 100;
+}
+
+.skip-link:focus-visible {
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 html,
 body {
   min-height: 100%;

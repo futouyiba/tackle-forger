@@ -286,12 +286,16 @@ test("compressed source counts keep every focus gate inside the §6.3 windows an
   }
 });
 
-test("beyond the serial-feasible bound the compressor clamps focus gates to their floor and never below", () => {
+test("beyond the serial-feasible bound the controller switches to §6.3 representative high-speed playback under the 2.5s cap", () => {
   // 16 sources: the focus floors alone (16 * 190 = 3040ms) exceed the 2280ms
-  // step budget, so serial playback cannot meet the 2.5s cap. §6.3 routes this
-  // to grouped settlement (threshold configured separately); until then the
-  // compressor degrades gracefully — focus gates stay at the §6.3 floor, never
-  // below it — and the complete evidence is retained.
+  // step budget, so serial playback cannot meet the 2.5s cap. 规范 §6.3 requires
+  // "代表性高速播放并保留完整证据" in this case: every phase is scaled by one
+  // uniform `representativeScale` against the full serial total, the stable
+  // 5-phase order still walks every source, and the frozen Trace evidence is
+  // retained in full. The focus gates drop BELOW their §6.3 floor here on
+  // purpose — that is the only way to fit too many sources under the hard cap
+  // without dropping evidence; the floor is still enforced for every feasible
+  // pass by the cases above.
   const trace16 = makeTraceEntries(Array.from({ length: 16 }, (_, index) => ({
     layer: index === 0 ? "weight_template" : "method",
     effect: (index % 3 === 0 ? "cost" : "benefit") as MotionTraceLike["effect"],
@@ -301,18 +305,35 @@ test("beyond the serial-feasible bound the compressor clamps focus gates to thei
   assert.equal(budget.feasible, false, "16 sources exceed the serial-feasible bound");
   assert.equal(budget.focusScale, 0);
   assert.equal(budget.handoffScale, 0);
+  assert.ok(typeof budget.representativeScale === "number" && budget.representativeScale > 0 && budget.representativeScale < 1,
+    `representativeScale must be in (0, 1) for an infeasible pass, got ${budget.representativeScale}`);
+  // The uniform scale must bring the FULL serial total (floors included) down to
+  // the step budget so the final-lock window still fits under the 2.5s hard cap.
+  let serialTotal = 0;
+  for (const [index, step] of model16.steps.entries()) {
+    serialTotal += playbackStepTotalMs(playbackTimingProfile(step, index));
+  }
+  const stepBudget = MOTION_PRESENTATION_HARD_TOTAL_MS - motionTokens.duration.finalLockMs;
+  const scaledTotal = Math.floor(serialTotal * budget.representativeScale * 1e6) / 1e6;
+  assert.ok(scaledTotal <= stepBudget,
+    `representative total ${scaledTotal}ms (serial ${serialTotal}ms × scale ${budget.representativeScale}) must fit the ${stepBudget}ms step budget`);
+
   const clock = new FakeClock(); const controller = createMotionPlaybackController(model16, { clock });
   controller.dispatch({ type: "play" });
+  // 16 steps × 5 phases + 1 final lock = 81 scheduled callbacks, in stable order.
   for (let handle = 1; handle <= 16 * 5; handle += 1) clock.fire(handle);
+  assert.equal(controller.getState().status, "locking", "every source's five phases must still play in stable order");
   clock.fire(16 * 5 + 1);
   assert.equal(controller.getState().status, "completed");
-  for (let step = 0; step < 16; step += 1) {
-    const impact = clock.delays[step * 5 + 1]!;
-    const main = clock.delays[step * 5 + 2]!;
-    assert.ok(impact >= 90 && impact <= 120, `step ${step} impact ${impact} outside 90–120`);
-    assert.ok(main >= 100 && main <= 140, `step ${step} main ${main} outside 100–140`);
-  }
-  assert.equal(model16.evidence.traceEntryIds.length, 16, "evidence must stay complete even past the feasible bound");
+
+  // Behavioral check on the ACTUAL scheduled delays: total wall-clock, including
+  // the final lock, must respect the §6.3 2.5s hard cap. This is the regression
+  // that fails when the controller ignores `feasible === false`.
+  const total = clock.delays.reduce((sum, delay) => sum + delay, 0);
+  assert.ok(total <= MOTION_PRESENTATION_HARD_TOTAL_MS,
+    `16-source representative total ${total}ms exceeded the ${MOTION_PRESENTATION_HARD_TOTAL_MS}ms hard cap`);
+  assert.equal(clock.delays.at(-1), motionTokens.duration.finalLockMs, "final lock keeps its own window");
+  assert.equal(model16.evidence.traceEntryIds.length, 16, "complete Trace evidence is retained past the feasible bound");
 });
 
 test("effectivePlaybackPhaseDuration scales focus headroom and handoff phases independently", () => {

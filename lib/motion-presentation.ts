@@ -347,16 +347,28 @@ export function playbackStepTotalMs(profile: MotionTimingProfile): number {
  * The final lock is excluded from the compressed budget so it always lands in
  * its own 220–280ms window; only the serial Trace gates are scaled. When even
  * the focus floors exceed the step budget (`feasible === false`) the pass is
- * over the serial cap; §6.3 routes that case to grouped settlement (threshold
- * configured separately), and this function still keeps every gate at its floor.
+ * over the serial cap; 规范 §6.3 routes that case to "代表性高速播放并保留完整
+ * 证据" (representative high-speed playback with full evidence retained). The
+ * controller switches every phase (including the focus floors) to a single
+ * `representativeScale` so the serial total fits the step budget while the
+ * stable order, the per-step phase sequence, and the frozen Trace evidence
+ * are all preserved.
  */
 export interface MotionTimingBudget {
   /** Multiplier for handoff phases (source/explanation/evidence), in [0, 1]. */
   readonly handoffScale: number;
   /** Multiplier for focus-gate headroom above the floor, in [0, 1]; the floor itself is never scaled. */
   readonly focusScale: number;
-  /** False only when the focus floors alone exceed the step budget (needs the grouped-settlement path). */
+  /** False only when the focus floors alone exceed the step budget (needs the representative-playback path). */
   readonly feasible: boolean;
+  /**
+   * Present only when `feasible === false`. Uniform multiplier (in (0, 1))
+   * applied to EVERY phase — including the §6.3 focus floors — so the serial
+   * total stays under the 2.5s hard cap. This is the §6.3 "代表性高速播放"
+   * path: stable order and complete evidence are preserved by the model; only
+   * the per-phase durations shrink. Undefined when `feasible === true`.
+   */
+  readonly representativeScale?: number;
 }
 
 const clampTimingRatio = (value: number): number => {
@@ -385,14 +397,29 @@ export function computeMotionTimingBudget(steps: readonly MotionPresentationStep
     const focusHeadroom = focusToken - focusFloor;
     return { handoffScale: 0, focusScale: clampTimingRatio((budget - focusFloor) / focusHeadroom), feasible: true };
   }
-  // 3. Too many sources for serial playback: clamp everything to the floor.
-  return { handoffScale: 0, focusScale: 0, feasible: false };
+  // 3. Too many sources for serial playback: 规范 §6.3 "代表性高速播放并保留完整
+  //    证据". Serial focus floors alone exceed the step budget, so we can no longer
+  //    keep every gate on its §6.3 floor and still fit the 2.5s cap. Instead, scale
+  //    every phase (floors included) by one uniform ratio computed against the
+  //    FULL serial total. The controller still walks the stable 5-phase order and
+  //    the model still retains the complete frozen Trace evidence; only the
+  //    per-phase durations shrink, so the pass plays back as a representative
+  //    high-speed sweep instead of an over-budget serial run.
+  const serialTotal = focusToken + handoff;
+  return { handoffScale: 0, focusScale: 0, feasible: false, representativeScale: clampTimingRatio(budget / serialTotal) };
 }
 
 /**
- * Post-compression duration of one presentation phase. Focus gates return
- * `floor + headroom * focusScale` so they stay inside [90,120] / [100,140];
- * handoff phases return `token * handoffScale`.
+ * Post-compression duration of one presentation phase.
+ *
+ * When `budget.feasible === true` the focus gates return
+ * `floor + headroom * focusScale` so they stay inside [90,120] / [100,140],
+ * and handoff phases return `token * handoffScale`.
+ *
+ * When `budget.feasible === false` (§6.3 "代表性高速播放") every phase — floors
+ * included — is scaled by `representativeScale` so the serial total fits the
+ * 2.5s cap. Stable order and the per-step phase sequence are preserved by the
+ * controller; only the per-phase durations shrink.
  */
 export function effectivePlaybackPhaseDuration(
   step: MotionPresentationStep | undefined,
@@ -401,6 +428,17 @@ export function effectivePlaybackPhaseDuration(
   budget: MotionTimingBudget,
 ): number {
   const timing = motionTokens.phaseDelay[playbackTimingProfile(step, stepIndex)];
+  // §6.3 representative high-speed playback: too many sources to keep every focus
+  // gate on its floor inside the 2.5s cap, so all phases are scaled uniformly.
+  if (!budget.feasible) {
+    const representativeScale = budget.representativeScale ?? 0;
+    const token = phase === "source" ? timing.sourceToImpactMs
+      : phase === "impact" ? timing.impactToMainMs
+      : phase === "main_number" ? timing.mainToExplanationMs
+      : phase === "explanation" ? timing.explanationToEvidenceMs
+      : timing.evidenceToNextMs;
+    return token * representativeScale;
+  }
   if (phase === "impact") {
     return motionTokens.phaseFloor.impactToMainMs + (timing.impactToMainMs - motionTokens.phaseFloor.impactToMainMs) * budget.focusScale;
   }

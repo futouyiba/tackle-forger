@@ -127,8 +127,9 @@ npm run acceptance:phase-one -- public-smoke \
 
 只有在已批准的 RFC 1918 数值 IPv4 降级中才能追加 `--allow-private-http`。该模式必须与
 `FEISHU_ALLOW_INSECURE_HTTP=true` 和飞书登记回调 origin 一致；域名、localhost、回环地址、
-IPv6 ULA 与公网 HTTP 永远拒绝。降级时还需明确记录 File System Access API 等安全上下文
-能力不可用。
+IPv6 ULA 与公网 HTTP 永远拒绝。此生产验收脚本不接受 v3 §25.2 的开发专用`127.0.0.1`例外；
+该例外仅能在`NODE_ENV=development`的本机浏览器验收中使用，不能作为部署或一期生产验收证据。
+降级时还需明确记录 File System Access API 等安全上下文能力不可用。
 
 ### 3.3 已登录只读核对
 

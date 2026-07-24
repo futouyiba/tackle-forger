@@ -89,7 +89,7 @@ test("登录回跳只允许本站相对路径", () => {
   assert.equal(safeReturnTo("/\\evil.example"), "/");
 });
 
-test("HTTP 降级只接受显式启用的 RFC 1918 数值 IPv4", async () => {
+test("HTTP 降级只接受显式启用的 RFC 1918 数值 IPv4，或开发环境的 127.0.0.1", async () => {
   const baseEnvironment = {
     FEISHU_ALLOW_INSECURE_HTTP: "true",
     FEISHU_APP_ID: oauthConfig.appId,
@@ -106,15 +106,43 @@ test("HTTP 降级只接受显式启用的 RFC 1918 数值 IPv4", async () => {
       "http://10.20.30.40/api/auth/feishu/callback",
     );
   });
-  for (const hostname of ["127.0.0.1", "localhost", "fdattacker.example", "fc00::1"]) {
+  await withEnvironment({
+    ...baseEnvironment,
+    NODE_ENV: "development",
+    FEISHU_REDIRECT_URI: "http://127.0.0.1:43198/api/auth/feishu/callback",
+  }, async () => {
+    assert.equal(
+      feishuRuntimeConfig().redirectUri,
+      "http://127.0.0.1:43198/api/auth/feishu/callback",
+    );
+  });
+  for (const nodeEnv of [undefined, "production"]) {
+    await withEnvironment({
+      ...baseEnvironment,
+      NODE_ENV: nodeEnv,
+      FEISHU_REDIRECT_URI: "http://127.0.0.1/api/auth/feishu/callback",
+    }, async () => {
+      assert.throws(() => feishuRuntimeConfig(), /HTTPS|RFC 1918|127\.0\.0\.1/u);
+    });
+  }
+  for (const hostname of ["localhost", "127.0.0.2", "fdattacker.example", "fc00::1"]) {
     const literal = hostname.includes(":") ? `[${hostname}]` : hostname;
     await withEnvironment({
       ...baseEnvironment,
+      NODE_ENV: "development",
       FEISHU_REDIRECT_URI: `http://${literal}/api/auth/feishu/callback`,
     }, async () => {
-      assert.throws(() => feishuRuntimeConfig(), /HTTPS|RFC 1918/u);
+      assert.throws(() => feishuRuntimeConfig(), /HTTPS|RFC 1918|127\.0\.0\.1/u);
     });
   }
+  await withEnvironment({
+    ...baseEnvironment,
+    NODE_ENV: "development",
+    FEISHU_ALLOW_INSECURE_HTTP: "false",
+    FEISHU_REDIRECT_URI: "http://127.0.0.1/api/auth/feishu/callback",
+  }, async () => {
+    assert.throws(() => feishuRuntimeConfig(), /HTTPS|RFC 1918|127\.0\.0\.1/u);
+  });
 });
 
 test("OAuth state 支持正常消费、过期和防重放", async () => {

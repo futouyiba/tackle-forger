@@ -30,7 +30,7 @@ export type CapabilityCode =
   | "ai.feishu_proposal_draft.create" | "ai.provider_policy.manage"
   | "feishu.proposal.submit" | "feishu.proposal.review" | "feishu.proposal.apply"
   | "feishu.workbook.read" | "feishu.workbook.pull" | "feishu.identity.write"
-  | "feishu.rule_change.confirm_write" | "feishu.source.pull"
+  | "feishu.rule_change.confirm_write" | "feishu.source.pull" | "feishu.sheet.export.write"
   | "ruleset.draft.create" | "ruleset.publish"
   | "data_source.resolve" | "data_source.preview" | "data_source.publish"
   | "data_source.writeback.preview" | "data_source.writeback.commit"
@@ -57,6 +57,7 @@ export type ActionCode =
   | "submit_feishu_proposal" | "review_feishu_proposal" | "apply_feishu_proposal"
   | "inspect_feishu_workbook" | "pull_feishu_workbook" | "create_ruleset_draft" | "publish_ruleset" | "write_feishu_identity"
   | "confirm_feishu_write" | "pull_feishu_source"
+  | "download_feishu_source" | "export_to_feishu_sheet"
   | "resolve_data_source" | "preview_data_source" | "publish_data_source"
   | "preview_data_source_writeback" | "commit_data_source_writeback"
   | "import_excel" | "view_revisions"
@@ -83,6 +84,7 @@ export const ACTION_CODES = [
   "submit_feishu_proposal", "review_feishu_proposal", "apply_feishu_proposal",
   "inspect_feishu_workbook", "pull_feishu_workbook", "create_ruleset_draft", "publish_ruleset", "write_feishu_identity",
   "confirm_feishu_write", "pull_feishu_source",
+  "download_feishu_source", "export_to_feishu_sheet",
   "resolve_data_source", "preview_data_source", "publish_data_source",
   "preview_data_source_writeback", "commit_data_source_writeback", "import_excel", "view_revisions",
   "reserve_config_id_bundle", "publish_config_id_policy",
@@ -116,6 +118,7 @@ export const READ_ONLY_ACTION_CODES = [
   "download_snapshot_audit_archive",
   "inspect_patch_mirror",
   "inspect_feishu_workbook",
+  "download_feishu_source",
   "resolve_data_source",
   "preview_data_source",
   "preview_data_source_writeback",
@@ -660,6 +663,8 @@ const ACTION_CAPABILITIES = {
   write_feishu_identity: ["feishu.identity.write"],
   confirm_feishu_write: ["feishu.rule_change.confirm_write"],
   pull_feishu_source: ["feishu.source.pull"],
+  download_feishu_source: ["feishu.workbook.read"],
+  export_to_feishu_sheet: ["feishu.sheet.export.write"],
   resolve_data_source: ["data_source.resolve"],
   preview_data_source: ["data_source.preview"],
   publish_data_source: ["data_source.publish"],

@@ -1,0 +1,53 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+import { motionKeyboardCommand, motionLiveAnnouncement, motionStepState, resolveReducedMotion } from "../lib/motion-accessibility";
+
+test("产品动态偏好明确覆盖或跟随系统偏好", () => {
+  assert.equal(resolveReducedMotion("system", true), true);
+  assert.equal(resolveReducedMotion("system", false), false);
+  assert.equal(resolveReducedMotion("reduce", false), true);
+  assert.equal(resolveReducedMotion("full", true), false);
+});
+
+test("键盘约定覆盖播放、跳过、重播和 Trace/Issue 入口，输入时不劫持", () => {
+  assert.equal(motionKeyboardCommand("p"), "playPause");
+  assert.equal(motionKeyboardCommand(" "), "playPause");
+  assert.equal(motionKeyboardCommand("s"), "skip");
+  assert.equal(motionKeyboardCommand("r"), "replay");
+  assert.equal(motionKeyboardCommand("t"), "trace");
+  assert.equal(motionKeyboardCommand("i"), "issues");
+  assert.equal(motionKeyboardCommand("p", { editableTarget: true }), undefined);
+  assert.equal(motionKeyboardCommand("p", { ctrlKey: true }), undefined);
+  assert.equal(motionKeyboardCommand("p", { metaKey: true }), undefined);
+  assert.equal(motionKeyboardCommand("p", { altKey: true }), undefined);
+});
+
+test("live region 只汇报阶段或最终结果，绝不携带逐项数值", () => {
+  assert.equal(motionLiveAnnouncement(undefined, "completed"), "");
+  assert.equal(motionLiveAnnouncement("idle", "playing"), "已开始播放 Trace。");
+  assert.equal(motionLiveAnnouncement("playing", "completed"), "Trace 已完成；最终结果和完整证据已显示。");
+  assert.equal(motionLiveAnnouncement("playing", "playing"), "");
+});
+
+test("步骤状态在灰阶下仍有文本与形状语义", () => {
+  assert.deepEqual(motionStepState({ effect: "benefit", layer: "method", warningIssueIds: [] }), { label: "正向", tone: "benefit", modifiers: ["benefit"] });
+  assert.deepEqual(motionStepState({ effect: "cost", layer: "model_patch", warningIssueIds: [] }), { label: "Patch · 代价", tone: "patch", modifiers: ["patch", "cost"] });
+  assert.deepEqual(motionStepState({ effect: "neutral", layer: "boundary", warningIssueIds: ["issue-1"] }), { label: "检查 · 中性", tone: "check", modifiers: ["check", "neutral"] });
+});
+
+test("参考消费方保留稳定 Trace/Issue 焦点目标、节制 live region 与缩放重排", async () => {
+  const root = new URL("../", import.meta.url);
+  const [component, styles] = await Promise.all([
+    readFile(fileURLToPath(new URL("app/MotionCoreDemo.tsx", root)), "utf8"),
+    readFile(fileURLToPath(new URL("app/motion-core.css", root)), "utf8"),
+  ]);
+  assert.match(component, /aria-live="polite" aria-atomic="true"/);
+  assert.match(component, /id="motion-core-trace"[\s\S]*tabIndex=\{-1\}/);
+  assert.match(component, /id="motion-core-issues"[\s\S]*tabIndex=\{-1\}/);
+  assert.match(component, /直接显示最终结果和完整证据；可手动逐项查看/);
+  assert.match(styles, /@media \(max-width: 720px\)/);
+  assert.match(styles, /motion-step\.patch .motion-step-kind::before/);
+  assert.match(styles, /motion-step\.check .motion-step-kind::before/);
+});

@@ -1,10 +1,12 @@
 "use client";
 
 import { AlertTriangle, BadgeCheck, Pause, Play, RotateCcw, SkipForward } from "lucide-react";
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore, type CSSProperties } from "react";
 import {
   buildMotionPresentationModel,
   createMotionPlaybackController,
+  motionTokens,
+  playbackPhaseDuration,
   reducedMotionQuery,
   systemPrefersReducedMotion,
   type MotionTraceLike,
@@ -18,8 +20,9 @@ interface TraceSettlementPanelProps {
   passiveAffixCount: number;
 }
 
-function formatTraceValue(value: unknown) {
-  if (value === undefined || value === null) return "—";
+export function formatTraceValue(value: unknown) {
+  if (value === undefined) return "undefined";
+  if (value === null) return "null";
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
 }
@@ -52,7 +55,10 @@ function CanonicalTraceEvidence({ entries }: { entries: readonly CalculationTrac
         <header><strong>#{entry.sequence} · {entry.parameterKey}</strong><span>{entry.layer} · {entry.effect}</span></header>
         <dl>
           <div><dt>来源 / 版本</dt><dd>{traceSourceLabel(entry.sourceRef)} · source {entry.sourceVersion} · rules {entry.ruleSetVersion}</dd></div>
+          <div><dt>Trace 身份</dt><dd>traceEntryId <code>{entry.traceEntryId}</code> · inputHash <code>{entry.inputHash}</code> · outputHash <code>{entry.outputHash}</code></dd></div>
+          <div><dt>冻结主体</dt><dd><code>workspaceId={entry.subjectRef.workspaceId} · entityType={entry.subjectRef.entityType} · entityId={entry.subjectRef.entityId} · revisionId={entry.subjectRef.revisionId}</code></dd></div>
           <div><dt>结算</dt><dd>before {formatTraceValue(entry.before)} · {entry.operation} · operand {formatTraceValue(entry.operand)} · after {formatTraceValue(entry.after)}{entry.unit ? ` ${entry.unit}` : ""}</dd></div>
+          <div><dt>原始 evidence</dt><dd><code>{formatTraceValue(entry.evidence)}</code></dd></div>
           <div><dt>Issue</dt><dd>{entry.warningIssueIds.length ? entry.warningIssueIds.join("、") : "无"}</dd></div>
           <div><dt>动作入口</dt><dd>{entry.actions.length ? entry.actions.map((action) => <CanonicalTraceActionLink action={action} key={action.actionId} />) : "无"}</dd></div>
         </dl>
@@ -95,6 +101,8 @@ function TraceSettlementPlayback({ model, archive, passiveAffixCount }: {
   const state = useSyncExternalStore(controller.subscribe, controller.getState, controller.getState);
   const visibleCount = state.status === "completed" || state.status === "locking" ? model.steps.length : Math.max(0, state.stepIndex + 1);
   const activeStep = state.stepIndex >= 0 ? model.steps[Math.min(state.stepIndex, model.steps.length - 1)] : undefined;
+  const complete = state.status === "completed";
+  const locking = state.status === "locking";
   useEffect(() => () => controller.dispose(), [controller]);
   useEffect(() => {
     const media = window.matchMedia(reducedMotionQuery);
@@ -103,18 +111,23 @@ function TraceSettlementPlayback({ model, archive, passiveAffixCount }: {
     return () => media.removeEventListener("change", listener);
   }, [controller]);
   const visibleSteps = model.steps.slice(0, visibleCount);
-  const recentSources = visibleSteps.slice(-2);
-  const complete = state.status === "completed";
-  const locking = state.status === "locking";
-  const displayedValue = traceSettlementMainValue(model, state.status, state.stepIndex);
+  const phaseIndex = ["source", "impact", "main_number", "explanation", "evidence"].indexOf(state.phase);
+  const isPhaseVisible = (phase: "source" | "impact" | "main_number" | "explanation" | "evidence") => complete || locking || phaseIndex >= ["source", "impact", "main_number", "explanation", "evidence"].indexOf(phase);
+  const recentSources = isPhaseVisible("source") ? visibleSteps.slice(-2) : [];
+  const displayedValue = traceSettlementMainValue(model, state.status, state.stepIndex, state.phase);
   const delta = activeStep ? displayOnlyTraceDelta(activeStep.before, activeStep.after, activeStep.operation) : undefined;
-  return <section className={`trace-settlement ${complete ? "is-complete" : ""}`} aria-label="属性 Trace 高速结算">
+  const motionStyle = {
+    "--trace-source-fly-ms": `${motionTokens.duration.sourceFlyMs}ms`,
+    "--trace-impact-ms": `${playbackPhaseDuration(activeStep, state.stepIndex, "impact")}ms`,
+    "--trace-card-offset-px": `${motionTokens.displacement.cardPx}px`,
+  } as CSSProperties;
+  return <section className={`trace-settlement ${complete ? "is-complete" : ""} ${state.status === "paused" ? "is-paused" : ""} phase-${state.phase}`} data-motion-phase={state.phase} style={motionStyle} aria-label="属性 Trace 高速结算">
     <header className="trace-settlement-head"><div><span className="eyebrow">FROZEN CALCULATION TRACE</span><h3>属性高速结算</h3><p>来源 → 飞卡 → delta → 主数字 → 解释与证据</p></div><span className="trace-chain-count">{complete ? "结算完成" : locking ? "结果锁定中" : `链路 ${visibleCount}/${model.steps.length}`}</span></header>
     <div className="trace-settlement-controls" aria-label="Trace 结算控制"><button type="button" onClick={() => controller.dispatch({ type: "play" })} disabled={state.status === "playing" || state.status === "paused" || locking}><Play size={14} />播放</button><button type="button" onClick={() => controller.dispatch({ type: "pause" })} disabled={state.status !== "playing"}><Pause size={14} />暂停</button>{state.status === "paused" ? <button type="button" onClick={() => controller.dispatch({ type: "resume" })}><Play size={14} />继续</button> : null}<button type="button" onClick={() => controller.dispatch({ type: "skip" })}><SkipForward size={14} />直接看结果</button><button type="button" onClick={() => controller.dispatch({ type: "replay" })} disabled={locking}><RotateCcw size={14} />重播</button></div>
     <div className="trace-settlement-stage">
-      <div className="trace-source-lane" aria-label="当前来源卡">{recentSources.map((step) => { const kind = traceSettlementKind(step); return <article key={step.id} className={`trace-source-card ${kind.key}`}><span>#{step.sequence} · {kind.label}</span><strong>{step.sourceId}</strong><small>{step.layer === "technology_affix" ? "Technology 成员 Affix（不重复结算）" : step.layer}</small></article>; })}{!recentSources.length ? <span className="trace-source-empty">等待播放；Trace 不会被页面补写。</span> : null}</div>
-      <div className="trace-main-number" aria-live="polite"><span>主数字</span><strong>{formatTraceValue(displayedValue)}{activeStep?.unit ? <small>{activeStep.unit}</small> : null}</strong><em>{formatDisplayOnlyDelta(delta, activeStep?.unit) ?? `${activeStep ? `${activeStep.operation} ${formatTraceValue(activeStep.operand)}` : "初始值（冻结 Trace）"}`}</em></div>
-      <aside className="trace-evidence-panel"><span>解释 / 证据</span>{activeStep ? <><strong>{traceSettlementKind(activeStep).label}</strong><p>before {formatTraceValue(activeStep.before)} · {activeStep.operation} · operand {formatTraceValue(activeStep.operand)} · after {formatTraceValue(activeStep.after)}</p><small>sequence {activeStep.sequence} · source version {activeStep.sourceVersion}</small>{activeStep.warningIssueIds.length ? <b>检查：{activeStep.warningIssueIds.join("、")}</b> : <b>无附加 Issue</b>}</> : <p>完整 Trace 与冻结哈希会在播放时原样展示。</p>}</aside>
+      <div className="trace-source-lane" aria-label="当前来源卡">{recentSources.map((step) => { const kind = traceSettlementKind(step); return <article key={step.id} className={`trace-source-card ${kind.key} ${state.status === "playing" || state.status === "paused" ? "is-flying" : ""}`}><span>#{step.sequence} · {kind.label}</span><strong>{step.sourceId}</strong><small>{step.layer === "technology_affix" ? "Technology 成员 Affix（不重复结算）" : step.layer}</small></article>; })}{!recentSources.length ? <span className="trace-source-empty">等待播放；Trace 不会被页面补写。</span> : null}</div>
+      <div className="trace-main-number" aria-live="polite"><span>主数字</span><strong>{formatTraceValue(displayedValue)}{activeStep?.unit ? <small>{activeStep.unit}</small> : null}</strong>{isPhaseVisible("impact") ? <em>{formatDisplayOnlyDelta(delta, activeStep?.unit) ?? `${activeStep ? `${activeStep.operation} ${formatTraceValue(activeStep.operand)}` : "初始值（冻结 Trace）"}`}</em> : <em>等待影响结算</em>}</div>
+      <aside className="trace-evidence-panel"><span>解释 / 证据</span>{activeStep && isPhaseVisible("explanation") ? <><strong>{traceSettlementKind(activeStep).label}</strong><p>before {formatTraceValue(activeStep.before)} · {activeStep.operation} · operand {formatTraceValue(activeStep.operand)} · after {formatTraceValue(activeStep.after)}</p>{isPhaseVisible("evidence") ? <><small>sequence {activeStep.sequence} · source version {activeStep.sourceVersion}</small>{activeStep.warningIssueIds.length ? <b>检查：{activeStep.warningIssueIds.join("、")}</b> : <b>无附加 Issue</b>}</> : <small>等待冻结证据</small>}</> : <p>{activeStep ? "等待解释" : "完整 Trace 与冻结哈希会在播放时原样展示。"}</p>}</aside>
     </div>
     <div className="trace-settlement-evidence"><span>冻结 Trace hash</span><code>{archive.traceHash}</code><span>replay hash</span><code>{archive.replayHash}</code><small>仅在 before / after 都是有限数时显示临时 delta；它不写入领域结果、hash、重放或 Snapshot。非数值、set / clear / min / max / no_effect 均呈现原操作语义。</small></div>
     <CanonicalTraceEvidence entries={canonicalTraceEvidenceEntries(archive.entries)} />

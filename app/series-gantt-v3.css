@@ -1316,3 +1316,31 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Playback timing comes from TraceSettlementPanel's shared motion tokens. */
+.trace-source-card.is-flying {
+  animation: trace-source-flight var(--trace-source-fly-ms) cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+.trace-settlement.phase-impact .trace-main-number em {
+  animation: trace-impact-flash var(--trace-impact-ms) cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.trace-settlement.is-paused .trace-source-card.is-flying,
+.trace-settlement.is-paused.phase-impact .trace-main-number em { animation-play-state: paused; }
+
+@keyframes trace-source-flight {
+  from { opacity: .28; transform: translateX(calc(var(--trace-card-offset-px) * -1)) scale(.96); }
+  55% { opacity: 1; transform: translateX(0) scale(1.025); }
+  to { opacity: 1; transform: translateX(0) scale(1); }
+}
+
+@keyframes trace-impact-flash {
+  from { opacity: .25; transform: scale(.92); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trace-source-card.is-flying,
+  .trace-settlement.phase-impact .trace-main-number em { animation: none; }
+}

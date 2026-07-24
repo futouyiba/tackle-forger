@@ -63,7 +63,7 @@ import {
 } from "./part-constraints";
 import { deterministicHash } from "./rule-kernel";
 
-export const CURRENT_WORKSPACE_SCHEMA_VERSION = 18;
+export const CURRENT_WORKSPACE_SCHEMA_VERSION = 19;
 
 const DEFAULT_RULE_SETTINGS: WorkspaceRuleSettings = {
   reductionStackingMode: "diminishing_division",
@@ -1534,6 +1534,18 @@ function migrateV17ToV18(input: MutableWorkspace): MutableWorkspace {
   } as unknown as MutableWorkspace;
 }
 
+function migrateV18ToV19(input: MutableWorkspace): MutableWorkspace {
+  const state = migrateV17ToV18(input);
+  return {
+    ...state,
+    schemaVersion: 19,
+    weightTemplatePolicyDrafts: arrayOf<WorkspaceState["weightTemplatePolicyDrafts"][number]>(state.weightTemplatePolicyDrafts),
+    // Historical snapshots are opaque frozen publications; never derive them
+    // from newly introduced source evidence.
+    configurationSnapshots: arrayOf<WorkspaceState["configurationSnapshots"][number]>(state.configurationSnapshots),
+  } as MutableWorkspace;
+}
+
 const migrations: Record<number, (state: MutableWorkspace) => MutableWorkspace> = {
   1: migrateV1ToV2,
   2: migrateV2ToV3,
@@ -1552,6 +1564,7 @@ const migrations: Record<number, (state: MutableWorkspace) => MutableWorkspace> 
   15: migrateV15ToV16,
   16: migrateV16ToV17,
   17: migrateV17ToV18,
+  18: migrateV18ToV19,
 };
 
 export function migrateWorkspaceState(input: unknown): WorkspaceState {

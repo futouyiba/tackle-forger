@@ -33,7 +33,8 @@ import {
   CANONICAL_RULE_RANGES,
   importCanonicalRuleSource,
 } from "./canonical-rule-source";
-import type { CanonicalRuleSourceDraft } from "./types";
+import type { CanonicalRuleSourceDraft, WeightTemplatePolicyDraft } from "./types";
+import { deterministicHash } from "./rule-kernel";
 
 export interface IdentitySheetSpec {
   sheetId: string;
@@ -55,6 +56,7 @@ export const CANONICAL_IDENTITY_SHEET_SPECS: IdentitySheetSpec[] = [
 ];
 
 const AFFIX_SHEET_ID = "zrVOxd";
+const WEIGHT_TEMPLATE_SHEET_ID = "d6e928";
 /** The header occupies row 2; a smaller grid cannot hold an affix machine row. */
 const MINIMUM_AFFIX_MACHINE_ROW_COUNT = 3;
 
@@ -88,17 +90,21 @@ export function canonicalAffixSheetRanges(sourceRevision: FeishuSourceRevision):
 
 export function canonicalRuleWorkbookRangeRequests(sourceRevision: FeishuSourceRevision) {
   const affixRanges = canonicalAffixSheetRanges(sourceRevision);
+  const weightSheet = sourceRevision.sheets.find((sheet) => sheet.sheetId === WEIGHT_TEMPLATE_SHEET_ID);
+  if (!Number.isSafeInteger(weightSheet?.rowCount) || !Number.isSafeInteger(weightSheet?.columnCount) || weightSheet!.rowCount! < 4 || weightSheet!.columnCount! < 60) {
+    throw new Error("01_重量模板/d6e928 缺少可验证的完整 grid 元数据；已停止读取，避免截断机器 ID 或模板字段。");
+  }
   const requests = [
     ...CANONICAL_IDENTITY_SHEET_SPECS.map(({ sheetId, range }) => ({
       sheetId,
-      range: sheetId === AFFIX_SHEET_ID ? affixRanges.identityRange : range,
+      range: sheetId === AFFIX_SHEET_ID ? affixRanges.identityRange : sheetId === WEIGHT_TEMPLATE_SHEET_ID ? `BG1:BH${weightSheet!.rowCount!}` : range,
     })),
     { sheetId: "FqD4j7", range: "B4:N50" },
     { sheetId: AFFIX_SHEET_ID, range: affixRanges.aliasRange },
     { sheetId: "u87sRh", range: "B10:R70" },
     { sheetId: "fATowU", range: "B2:AD20" },
     { sheetId: "u87sRh", range: "B179:E179" },
-    CANONICAL_RULE_RANGES.weight,
+    { sheetId: WEIGHT_TEMPLATE_SHEET_ID, range: `A1:BH${weightSheet!.rowCount!}` },
     CANONICAL_RULE_RANGES.type,
     CANONICAL_RULE_RANGES.function,
     CANONICAL_RULE_RANGES.functionProfiles,
@@ -122,6 +128,8 @@ export function identityRowsFromRanges(
   return specs.flatMap((spec) => (
     (spec.sheetId === AFFIX_SHEET_ID && spec.range === "B1:C38"
       ? ranges.find((entry) => entry.sheetId === AFFIX_SHEET_ID && /^B1:C\d+$/.test(entry.range ?? ""))?.valueRange.values
+      : spec.sheetId === WEIGHT_TEMPLATE_SHEET_ID
+        ? ranges.find((entry) => entry.sheetId === WEIGHT_TEMPLATE_SHEET_ID && /^BG1:BH\d+$/.test(entry.range ?? ""))?.valueRange.values
       : rangeByIdentitySpec.get(`${spec.sheetId}:${spec.range}`))
     ?? (hasExplicitRanges ? [] : legacyRangeBySheet.get(spec.sheetId) ?? [])
   ).flatMap((values, index) => {
@@ -302,6 +310,95 @@ export function pricingDraftFromRanges(input: {
 
 const partIds: Record<string, string> = { "竿": "part:rod", "轮": "part:reel", "线": "part:line" };
 
+export function weightTemplateDraftCanonicalContent(draft: WeightTemplatePolicyDraft) {
+  return { sourceRevisionId: draft.sourceRevisionId, sourceRevision: draft.sourceRevision, sheetId: draft.sheetId, templates: draft.templates, issues: draft.issues, formalStatus: draft.formalStatus, importedAt: draft.importedAt };
+}
+
+export function assertCanonicalWeightTemplatePolicyDraft(draft: WeightTemplatePolicyDraft) {
+  const inputHash = deterministicHash(weightTemplateDraftCanonicalContent(draft));
+  if (draft.inputHash !== inputHash || draft.id !== `weight-template-draft:${inputHash}`) throw new Error("重量模板草稿的冻结内容、inputHash 或 ID 不一致，不能信任或发布。");
+}
+
+export function weightTemplateDraftFromCanonicalRuleDraft(input: { sourceRevision: FeishuSourceRevision; canonicalRuleDraft: CanonicalRuleSourceDraft; weightValues?: unknown[][]; importedAt: string }): WeightTemplatePolicyDraft {
+  const issues: WeightTemplatePolicyDraft["issues"] = [];
+  const templates: WeightTemplatePolicyDraft["templates"] = [];
+  const seen = new Set<string>();
+  const columnName = (index: number) => {
+    let name = "";
+    for (let current = index + 1; current > 0; current = Math.floor((current - 1) / 26)) name = String.fromCharCode(65 + (current - 1) % 26) + name;
+    return name;
+  };
+  const headerBlocks = (input.weightValues ?? []).flatMap((row, index) => row.some((value) => text(value).includes("机器ID")) ? [{ row: index + 1, headers: row.map(text) }] : []);
+  const blockFor = (sourceRow: number) => [...headerBlocks].reverse().find((block) => block.row < sourceRow);
+  const sourceCellsFor = (sourceRow: number) => {
+    const block = blockFor(sourceRow);
+    const headers = block?.headers ?? [];
+    const headerIndex = (...labels: string[]) => headers.findIndex((header) => labels.some((label) => header === label || header.includes(label)));
+    const cells: Record<string, string> = {};
+    const bind = (key: string, ...labels: string[]) => {
+      const index = headerIndex(...labels);
+      if (index >= 0) cells[key] = `${columnName(index)}${sourceRow}`;
+    };
+    bind("machineId", "机器ID");
+    bind("fishMinKg", "最小拉力", "鱼重下限kg");
+    bind("fishMaxKg", "最大拉力", "鱼重上限kg");
+    bind("nominalFishKg", "标称鱼重kg", "标称拉力");
+    bind("weightBand", "重量段", "档位");
+    // Canonical 01 normally derives its nominal value from min/max; freeze the
+    // two actual source cells rather than inventing a nonexistent column.
+    if (!cells.nominalFishKg && cells.fishMinKg && cells.fishMaxKg) cells.nominalFishKg = `${cells.fishMinKg}:${cells.fishMaxKg}`;
+    const row = sourceRow > 0 ? input.weightValues?.[sourceRow - 1] ?? [] : [];
+    headers.forEach((header, index) => {
+      if (header && row[index] !== null && row[index] !== undefined && text(row[index]) !== "") cells[header] = `${columnName(index)}${sourceRow}`;
+    });
+    return cells;
+  };
+  const issueSourceCell = (issue: CanonicalRuleSourceDraft["issues"][number]) => {
+    const sourceRow = issue.row ?? 0;
+    const cells = sourceCellsFor(sourceRow);
+    const block = blockFor(sourceRow);
+    const row = sourceRow > 0 ? input.weightValues?.[sourceRow - 1] ?? [] : [];
+    const valueFor = (...labels: string[]) => {
+      const index = block?.headers.findIndex((header) => labels.some((label) => header === label || header.includes(label))) ?? -1;
+      return index >= 0 ? row[index] : undefined;
+    };
+    const finite = (value: unknown) => {
+      if (value === null || value === undefined || text(value) === "") return undefined;
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : undefined;
+    };
+    const min = finite(valueFor("最小拉力", "鱼重下限kg"));
+    const max = finite(valueFor("最大拉力", "鱼重上限kg"));
+    const invalidRangeCell = min === undefined
+      ? cells.fishMinKg
+      : max === undefined
+        ? cells.fishMaxKg
+        : `${cells.fishMinKg}:${cells.fishMaxKg}`;
+    const cell = issue.code.includes("ID_") ? cells.machineId
+      : issue.code.includes("ROW_INVALID") ? invalidRangeCell
+      : cells.machineId ?? cells.fishMinKg ?? `A${issue.row ?? 1}`;
+    return { sheetId: "d6e928" as const, cell: cell ?? `A${sourceRow || 1}` };
+  };
+  for (const issue of input.canonicalRuleDraft.issues) {
+    if (issue.sheetId !== WEIGHT_TEMPLATE_SHEET_ID || !issue.code.startsWith("WEIGHT_TEMPLATE_")) continue;
+    issues.push({ code: issue.code, severity: issue.level === "error" ? "ERROR" : "WARNING", message: issue.message, sourceCell: issueSourceCell(issue) });
+  }
+  for (const template of input.canonicalRuleDraft.templates) {
+    const sourceRow = template.sourceRow ?? 0;
+    const cells = sourceCellsFor(sourceRow);
+    const sourceCell = { sheetId: "d6e928" as const, cell: cells.machineId ?? `BG${sourceRow || 1}` };
+    if (!template.id.startsWith("wtpl_")) { issues.push({ code: "WEIGHT_TEMPLATE_STABLE_ID_PREFIX_INVALID", severity: "ERROR", message: `重量模板机器ID必须以 wtpl_ 开头：${template.id}。`, sourceCell }); continue; }
+    if (seen.has(template.id)) { issues.push({ code: "WEIGHT_TEMPLATE_STABLE_ID_DUPLICATE", severity: "ERROR", message: `重量模板机器ID重复：${template.id}。`, sourceCell }); continue; }
+    seen.add(template.id);
+    if (!Number.isFinite(template.fishMinKg) || !Number.isFinite(template.fishMaxKg) || !Number.isFinite(template.nominalFishKg) || template.fishMinKg >= template.fishMaxKg || template.nominalFishKg < template.fishMinKg || template.nominalFishKg > template.fishMaxKg) { issues.push({ code: "WEIGHT_TEMPLATE_RANGE_INVALID", severity: "ERROR", message: `重量模板 ${template.id} 的重量范围无效。`, sourceCell }); continue; }
+    templates.push({ ...template, source: { sheetId: WEIGHT_TEMPLATE_SHEET_ID, rowKey: String(sourceRow), cells } });
+  }
+  if (!templates.length && !issues.length) issues.push({ code: "WEIGHT_TEMPLATE_EMPTY", severity: "ERROR", message: "01_重量模板没有可导入模板，已拒绝空覆盖。" });
+  const content = { sourceRevisionId: input.sourceRevision.id, sourceRevision: input.sourceRevision.sourceRevision, sheetId: "d6e928" as const, templates, issues, formalStatus: issues.some((issue) => issue.severity === "ERROR") ? "NON_FORMAL" as const : "READY_TO_PUBLISH" as const, importedAt: input.importedAt };
+  const inputHash = deterministicHash(content);
+  return { id: `weight-template-draft:${inputHash}`, ...content, inputHash };
+}
+
 export function qualityDraftFromRanges(input: {
   sourceRevision: FeishuSourceRevision;
   qualityValues: unknown[][];
@@ -388,13 +485,22 @@ export interface CanonicalRuleWorkbookInspection {
   pricingDraft: PricingPolicyDraft;
   qualityDraft: QualityValuePolicyDraft;
   canonicalRuleDraft: CanonicalRuleSourceDraft;
+  weightTemplateDraft: WeightTemplatePolicyDraft;
   pricingWeightBandPolicy: "MATCHED_STRUCTURAL_SOURCE_BAND";
+}
+
+let testInspectionOverride: ((input: { observedAt: string; observedBy: string }) => Promise<CanonicalRuleWorkbookInspection>) | undefined;
+/** Test-only connector boundary: routes still execute their production command,
+ * persistence, draft and publish paths against the returned observation. */
+export function setCanonicalRuleWorkbookInspectionForTests(override?: typeof testInspectionOverride) {
+  testInspectionOverride = override;
 }
 
 export async function inspectCanonicalRuleWorkbook(input: {
   observedAt: string;
   observedBy: string;
 }): Promise<CanonicalRuleWorkbookInspection> {
+  if (testInspectionOverride) return testInspectionOverride(input);
   const sourceRevision = await pullFeishuWorkbookRevision({
     workbook: CANONICAL_FEISHU_WORKBOOK,
     registry: CANONICAL_FEISHU_SHEET_REGISTRY,
@@ -438,7 +544,7 @@ export async function inspectCanonicalRuleWorkbook(input: {
   });
   const canonicalRuleDraft = importCanonicalRuleSource({
     sourceRevision,
-    weightValues: ranges.find((entry) => entry.sheetId === CANONICAL_RULE_RANGES.weight.sheetId && entry.range === CANONICAL_RULE_RANGES.weight.range)?.valueRange.values ?? [],
+    weightValues: ranges.find((entry) => entry.sheetId === WEIGHT_TEMPLATE_SHEET_ID && /^A1:BH\d+$/.test(entry.range))?.valueRange.values ?? [],
     typeValues: ranges.find((entry) => entry.sheetId === CANONICAL_RULE_RANGES.type.sheetId && entry.range === CANONICAL_RULE_RANGES.type.range)?.valueRange.values ?? [],
     functionValues: ranges.find((entry) => entry.sheetId === CANONICAL_RULE_RANGES.function.sheetId && entry.range === CANONICAL_RULE_RANGES.function.range)?.valueRange.values ?? [],
     functionProfileValues: ranges.find((entry) => entry.sheetId === CANONICAL_RULE_RANGES.functionProfiles.sheetId && entry.range === CANONICAL_RULE_RANGES.functionProfiles.range)?.valueRange.values ?? [],
@@ -446,6 +552,7 @@ export async function inspectCanonicalRuleWorkbook(input: {
     methodTemplateReviewValues: ranges.find((entry) => entry.sheetId === CANONICAL_RULE_RANGES.methodTemplateReview.sheetId && entry.range === CANONICAL_RULE_RANGES.methodTemplateReview.range)?.valueRange.values ?? [],
     importedAt: input.observedAt,
   });
+  const weightTemplateDraft = weightTemplateDraftFromCanonicalRuleDraft({ sourceRevision, canonicalRuleDraft, weightValues: ranges.find((entry) => entry.sheetId === WEIGHT_TEMPLATE_SHEET_ID && /^A1:BH\d+$/.test(entry.range))?.valueRange.values ?? [], importedAt: input.observedAt });
   return {
     observedAt: input.observedAt,
     sourceRevision,
@@ -454,6 +561,7 @@ export async function inspectCanonicalRuleWorkbook(input: {
     pricingDraft,
     qualityDraft,
     canonicalRuleDraft,
+    weightTemplateDraft,
     pricingWeightBandPolicy: "MATCHED_STRUCTURAL_SOURCE_BAND",
   };
 }

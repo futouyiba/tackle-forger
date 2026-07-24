@@ -20,6 +20,9 @@ import {
 } from "../lib/part-constraints";
 import { loadWorkspaceState, saveWorkspaceState } from "../lib/storage";
 import { closeSqliteStorage } from "../lib/sqlite-storage";
+import { CANONICAL_FEISHU_SHEET_REGISTRY, CANONICAL_FEISHU_WORKBOOK } from "../lib/feishu-workbook";
+import { setCanonicalRuleWorkbookInspectionForTests, weightTemplateDraftFromCanonicalRuleDraft } from "../lib/rule-workbook-inspection";
+import { deterministicHash } from "../lib/rule-kernel";
 
 const authHeaders = {
   "content-type": "application/json",
@@ -79,13 +82,44 @@ function routeAIConfiguration(dataDir: string) {
   } as const;
 }
 
+test("action-command 路由保留坏行重量草稿，并在发布路由明确阻断", { concurrency: false }, async () => {
+  withTrustedProxy();
+  const beforeState = await loadWorkspaceState();
+  const sourceRevision = {
+    id: "feishu-revision:route-bad-weight", workbookRefId: CANONICAL_FEISHU_WORKBOOK.id, sourceRevision: "route-bad-weight", spreadsheetToken: "route-sheet", pulledAt: "2026-07-24T00:00:00.000Z", pulledBy: "route-tester", syncScope: "workbook" as const, registryHash: "route", sheets: CANONICAL_FEISHU_SHEET_REGISTRY.map((sheet) => ({ sheetId: sheet.sheetId, name: sheet.expectedName, rowCount: sheet.sheetId === "d6e928" ? 66 : 100, columnCount: sheet.sheetId === "d6e928" ? 60 : 60 })), issues: [], state: "PULLED" as const,
+  };
+  const content = { parameters: beforeState.state.parameters, templates: [...beforeState.state.templates, { ...beforeState.state.templates[0]!, id: "wtpl_route_valid", sourceRow: 2 }], methodProfiles: beforeState.state.methodProfiles, itemTypeProfiles: beforeState.state.itemTypeProfiles, functionProfiles: beforeState.state.functionProfiles, modifiers: beforeState.state.modifiers, layers: beforeState.state.layers };
+  const canonicalRuleDraft = { id: "canonical-route-bad-weight", sourceRevisionId: sourceRevision.id, sourceRevision: sourceRevision.sourceRevision, contentHash: deterministicHash(content), importedAt: sourceRevision.pulledAt, ...content, issues: [{ level: "error" as const, code: "WEIGHT_TEMPLATE_ID_MISSING", message: "缺少机器 ID", sheetId: "d6e928", row: 3 }] };
+  const weightValues = [["机器ID（勿改）", "重量段", "最小拉力", "最大拉力"], ["wtpl_route_valid", "轻", 1, 2], ["", "中", "", 3]];
+  const weightTemplateDraft = weightTemplateDraftFromCanonicalRuleDraft({ sourceRevision, canonicalRuleDraft, weightValues, importedAt: sourceRevision.pulledAt });
+  setCanonicalRuleWorkbookInspectionForTests(async () => ({ observedAt: sourceRevision.pulledAt, sourceRevision, identityRows: [], identityReport: { reportId: "identity-route-bad-weight", workbookRefId: sourceRevision.workbookRefId, sourceRevision: sourceRevision.sourceRevision, mode: "CONTINUOUS_SYNC", generatedAt: sourceRevision.pulledAt, items: [], blockingIssueCodes: [], inputHash: "identity" }, canonicalRuleDraft, weightTemplateDraft, qualityDraft: { id: "quality-route", sourceRevisionId: sourceRevision.id, sourceRevision: sourceRevision.sourceRevision, qualitySheetId: "FqD4j7", affixSheetId: "zrVOxd", ranges: [], combinationRules: [], issues: [], formalStatus: "NON_FORMAL", inputHash: "quality", importedAt: sourceRevision.pulledAt }, pricingDraft: { id: "pricing-route", sourceRevisionId: sourceRevision.id, sourceRevision: sourceRevision.sourceRevision, pricingSheetId: "u87sRh", qualitySheetId: "FqD4j7", typeMaterialSheetId: "fATowU", pricingBaskets: [], maintenanceConsumptionRates: [], partAllocationRatios: [], repairCoefficients: [], totalLossTimes: [], purchaseCoefficients: [], partsToWholeRatios: [], qualityMappings: [], qualityPriceFactorRanges: [], issues: [], formalStatus: "NON_FORMAL", inputHash: "pricing", importedAt: sourceRevision.pulledAt }, pricingWeightBandPolicy: "MATCHED_STRUCTURAL_SOURCE_BAND" } as never));
+  try {
+    const pull = await issueAndInvoke({ action: "pull_feishu_workbook", url: "http://localhost/api/feishu-workbook", method: "POST", invoke: mutateWorkbook, payload: { action: "pull", baseRevision: beforeState.revision } });
+    assert.equal(pull.status, 200);
+    const pulled = await pull.json() as { state: typeof beforeState.state; revision: number };
+    assert.equal(pulled.state.weightTemplatePolicyDrafts[0]?.formalStatus, "NON_FORMAL");
+    assert.ok(pulled.state.weightTemplatePolicyDrafts[0]?.issues.some((issue) => issue.code === "WEIGHT_TEMPLATE_ID_MISSING"));
+    const draft = await issueAndInvoke({ action: "create_ruleset_draft", url: "http://localhost/api/feishu-workbook", method: "POST", invoke: mutateWorkbook, payload: { action: "create_ruleset_draft", baseRevision: pulled.revision, sourceRevisionId: sourceRevision.id } });
+    assert.equal(draft.status, 200);
+    const drafted = await draft.json() as { revision: number; ruleSetDraft: { id: string } };
+    const publish = await issueAndInvoke({ action: "publish_ruleset", url: "http://localhost/api/feishu-workbook", method: "POST", invoke: mutateWorkbook, payload: { action: "publish_ruleset", baseRevision: drafted.revision, ruleSetDraftId: drafted.ruleSetDraft.id } });
+    assert.equal(publish.status, 422);
+    assert.match((await publish.json() as { error: string }).error, /重量模板源草稿存在阻断错误/);
+  } finally {
+    setCanonicalRuleWorkbookInspectionForTests();
+  }
+});
+
 async function issueAndInvoke(input: {
   action:
     | "save_workspace"
     | "create_series"
     | "change_sku_target_pull"
     | "publish_data_source"
-    | "commit_data_source_writeback";
+    | "commit_data_source_writeback"
+    | "pull_feishu_workbook"
+    | "create_ruleset_draft"
+    | "publish_ruleset";
   url: string;
   method: "POST" | "PUT";
   payload: Record<string, unknown>;

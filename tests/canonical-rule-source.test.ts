@@ -3,7 +3,7 @@ import test from "node:test";
 import { importCanonicalRuleSource } from "../lib/canonical-rule-source";
 import { calculateCandidate } from "../lib/engine";
 import { migrateWorkspaceState } from "../lib/migrations";
-import { identityRowsFromRanges } from "../lib/rule-workbook-inspection";
+import { identityRowsFromRanges, weightTemplateDraftFromCanonicalRuleDraft } from "../lib/rule-workbook-inspection";
 import { createSeedState } from "../lib/seed";
 import {
   applyCanonicalRuleSourceDraft,
@@ -33,6 +33,34 @@ const revision: FeishuSourceRevision = {
   issues: [],
   state: "PULLED",
 };
+
+test("重量模板草稿继承 canonical 坏行错误并冻结表头驱动单元格来源", () => {
+  const values = [
+    ["", "机器ID（勿改）", "同步状态", "钓法", "备注", "重量段", "最小拉力", "最大拉力", "鱼重等级", "竿拉力"],
+    ["", "wtpl_ok", "BOUND", "路亚", "说明", "轻", 1, 2, 3, 10],
+    ["", "", "BOUND", "路亚", "坏行", "中", "", 3, 4, 12],
+    ["", "重量段", "最大拉力", "机器ID（勿改）", "最小拉力", "备注", "同步状态", "鱼重等级", "竿拉力"],
+    ["", "重", 6, "wtpl_second", 4, "第二块", "BOUND", 5, 20],
+    ["", "重", "", "wtpl_blank_max", 4, "空最大值", "BOUND", 5, 20],
+    ["", "重", 3, "wtpl_inverted", 4, "倒置区间", "BOUND", 5, 20],
+  ];
+  const canonicalRuleDraft = importCanonicalRuleSource({ sourceRevision: revision, ...baseFixture(), weightValues: values, importedAt: revision.pulledAt });
+  const draft = weightTemplateDraftFromCanonicalRuleDraft({ sourceRevision: revision, canonicalRuleDraft, weightValues: values, importedAt: revision.pulledAt });
+  assert.equal(draft.formalStatus, "NON_FORMAL");
+  assert.ok(draft.issues.some((issue) => issue.code === "WEIGHT_TEMPLATE_ID_MISSING"));
+  assert.equal(draft.issues.find((issue) => issue.code === "WEIGHT_TEMPLATE_ID_MISSING")?.sourceCell?.cell, "B3");
+  const invalidCells = draft.issues.filter((issue) => issue.code === "WEIGHT_TEMPLATE_ROW_INVALID").map((issue) => issue.sourceCell?.cell);
+  assert.ok(invalidCells.includes("C6"));
+  assert.ok(invalidCells.includes("E7:C7"));
+  assert.deepEqual(draft.templates[0]?.source.cells, {
+    machineId: "B2", fishMinKg: "G2", fishMaxKg: "H2", nominalFishKg: "G2:H2", weightBand: "F2",
+    "机器ID（勿改）": "B2", "同步状态": "C2", "钓法": "D2", "备注": "E2", "重量段": "F2", "最小拉力": "G2", "最大拉力": "H2", "鱼重等级": "I2", "竿拉力": "J2",
+  });
+  assert.deepEqual(draft.templates.find((template) => template.id.startsWith("wtpl_second"))?.source.cells, {
+    machineId: "D5", fishMinKg: "E5", fishMaxKg: "C5", nominalFishKg: "E5:C5", weightBand: "B5",
+    "重量段": "B5", "最大拉力": "C5", "机器ID（勿改）": "D5", "最小拉力": "E5", "备注": "F5", "同步状态": "G5", "鱼重等级": "H5", "竿拉力": "I5",
+  });
+});
 
 function baseFixture() {
   const weightHeader = row({ 1: "机器ID（勿改）", 2: "同步状态", 3: "钓法", 4: "备注", 5: "重量段", 6: "最小拉力", 7: "最大拉力", 8: "鱼重等级", 9: "竿拉力", 10: "轮拉力", 11: "线拉力", 12: "竿调性" });
@@ -248,15 +276,16 @@ test("schema v15 顺序迁移保留历史状态并补 canonical 草稿集合", (
   const v15 = { ...structuredClone(current), schemaVersion: 15 } as unknown as Record<string, unknown>;
   delete v15.canonicalRuleSourceDrafts;
   const migrated = migrateWorkspaceState(v15);
-  assert.equal(migrated.schemaVersion, 18);
+  assert.equal(migrated.schemaVersion, 19);
   assert.deepEqual(migrated.canonicalRuleSourceDrafts, []);
+  assert.deepEqual(migrated.weightTemplatePolicyDrafts, []);
   assert.deepEqual(migrated.configurationSnapshots, current.configurationSnapshots);
 });
 
-test("稳定身份只读取精确 B:C 区间，不被同表 canonical A1 全表覆盖", () => {
+test("重量模板稳定身份只读取精确 BG:BH 区间，不被同表完整值区覆盖", () => {
   const rows = identityRowsFromRanges([
-    { sheetId: "d6e928", range: "B1:C54", valueRange: { values: [["机器ID", "同步状态"], ["wtpl_0001", "BOUND"]] } },
-    { sheetId: "d6e928", range: "A1:BJ66", valueRange: { values: [["展示名", "机器ID"], ["路亚", "wtpl_0001"]] } },
+    { sheetId: "d6e928", range: "BG1:BH66", valueRange: { values: [["机器ID", "同步状态"], ["wtpl_0001", "BOUND"]] } },
+    { sheetId: "d6e928", range: "A1:BH66", valueRange: { values: [["展示名", "机器ID"], ["路亚", "wtpl_0001"]] } },
   ]);
   assert.equal(rows.length, 1);
   assert.equal(rows[0]?.stableId, "wtpl_0001");

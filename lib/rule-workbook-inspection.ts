@@ -21,6 +21,7 @@ import {
   type AffixAliasBinding,
   type QualityCombinationSourceCell,
   type QualityValuePolicyDraft,
+  type QualityTableDescriptor,
   type QualityValueRange,
 } from "./quality-value-policy";
 import {
@@ -355,35 +356,12 @@ export function pricingDraftFromRanges(input: {
 
 export function pricingQualitySourceRowsFromDraft(
   qualityDraft: QualityValuePolicyDraft,
-  qualityValues: unknown[][],
+  _legacyQualityValues?: unknown[][],
 ) {
-  const columnIndex = (column: string) => [...column].reduce(
-    (sum, char) => sum * 26 + char.charCodeAt(0) - 64,
-    0,
-  ) - 1;
-  return qualityDraft.ranges.flatMap((range) => {
-    const match = /^([A-Z]+)(\d+):([A-Z]+)\d+$/.exec(range.source.cell);
-    if (!match) return [];
-    const rowIndex = Number(match[2]) - 1;
-    const minColumn = columnIndex(match[1]!);
-    const maxColumn = columnIndex(match[3]!);
-    const row = qualityValues[rowIndex] ?? [];
-    const codeColumn = minColumn - 2;
-    const basketColumn = codeColumn + 1;
-    const minFactorColumn = maxColumn + 1;
-    const maxFactorColumn = maxColumn + 2;
-    return [{
-      code: text(row[codeColumn]),
-      basketAlias: text(row[basketColumn]),
-      minScore: range.minScore,
-      maxScore: range.maxScore,
-      minFactor: Number(row[minFactorColumn]),
-      maxFactor: Number(row[maxFactorColumn]),
-      mappingCell: `${spreadsheetColumnName(basketColumn)}${rowIndex + 1}`,
-      factorCell: `${spreadsheetColumnName(minFactorColumn)}${rowIndex + 1}:${spreadsheetColumnName(maxFactorColumn)}${rowIndex + 1}`,
-      rowKey: String(rowIndex + 1),
-    }];
-  });
+  return (qualityDraft.qualityTableDescriptor?.rows ?? []).map((row) => ({
+    code: row.code, basketAlias: row.basketAlias, minScore: row.minScore, maxScore: row.maxScore, minFactor: row.minFactor, maxFactor: row.maxFactor,
+    mappingCell: row.mappingSource.cell, factorCell: row.factorSource.cell, rowKey: row.mappingSource.rowKey ?? "",
+  }));
 }
 
 const partIds: Record<string, string> = { "竿": "part:rod", "轮": "part:reel", "线": "part:line" };
@@ -514,35 +492,40 @@ export function qualityDraftFromRanges(input: {
     qualityTableHeaders[0]?.rowIndex ?? 0, qualityTableHeaders[0]?.columnIndex ?? 0,
   );
   const qualityTable = qualityTableHeaders[0];
-  const qualityFieldLabels = ["品质", "代码", "≥最小评分", "<最大评分"] as const;
+  const qualityFieldLabels = ["品质", "代码", "PricingBasket", "≥最小评分", "<最大评分", "最小价格系数", "最大价格系数"] as const;
   const qualityFieldHeaders = qualityTable ? input.qualityValues
     .slice(qualityTable.rowIndex + 1)
     .flatMap((row, offset) => {
-      const indices = qualityFieldLabels.map((label) => row.findIndex((value) => text(value) === label));
-      return indices.every((index) => index >= 0) && new Set(indices).size === indices.length
+      const matches = qualityFieldLabels.map((label) => row.flatMap((value, index) => text(value) === label ? [index] : []));
+      const indices = matches.map(([index]) => index ?? -1);
+      return matches.every((fieldMatches) => fieldMatches.length === 1)
         ? [{ rowIndex: qualityTable.rowIndex + 1 + offset, indices }] : [];
     }) : [];
   if (qualityTable && qualityFieldHeaders.length !== 1) structureIssue(
     qualityFieldHeaders.length ? "QUALITY_RANGE_TABLE_HEADER_DUPLICATE" : "QUALITY_RANGE_TABLE_HEADER_MISSING",
-    "品质区间必须在 marker 后且只能有一个包含“品质、代码、≥最小评分、<最大评分”的字段表头。",
+    "品质区间必须在 marker 后且只能有一个包含全部定价字段的字段表头。",
     qualityFieldHeaders[0]?.rowIndex ?? qualityTable.rowIndex, qualityTable.columnIndex,
   );
   const qualityFieldHeader = qualityFieldHeaders[0];
   const expectedQualityRows = [["C/绿", "C"], ["B/蓝", "B"], ["A/紫", "A"], ["S/橙", "S"]] as const;
+  const descriptorRows: QualityTableDescriptor["rows"] = [];
   const ranges: QualityValueRange[] = qualityTable && qualityFieldHeader ? expectedQualityRows.flatMap(([label, code], offset) => {
     const rowIndex = qualityFieldHeader.rowIndex + 1 + offset;
     const row = input.qualityValues[rowIndex] ?? [];
-    const [labelIndex, codeIndex, minIndex, maxIndex] = qualityFieldHeader.indices;
+    const [labelIndex, codeIndex, basketIndex, minIndex, maxIndex, minFactorIndex, maxFactorIndex] = qualityFieldHeader.indices;
     if (text(row[labelIndex]) !== label || text(row[codeIndex]) !== code) {
       structureIssue("QUALITY_RANGE_TABLE_ROW_INVALID", `品质区间必须按规范行保留 ${label} / ${code}。`, rowIndex, labelIndex);
       return [];
     }
     const minScore = Number(row[minIndex]);
     const maxScore = Number(row[maxIndex]);
-    if (!Number.isFinite(minScore) || !Number.isFinite(maxScore)) {
+    const minFactor = Number(row[minFactorIndex]); const maxFactor = Number(row[maxFactorIndex]);
+    if (!Number.isFinite(minScore) || !Number.isFinite(maxScore) || !Number.isFinite(minFactor) || !Number.isFinite(maxFactor) || !text(row[basketIndex])) {
       structureIssue("QUALITY_RANGE_TABLE_ENDPOINT_INVALID", `${label} 缺少两个有限评分端点。`, rowIndex, codeIndex);
       return [];
     }
+    const mappingSource = sourceCell(rowIndex, basketIndex); const factorSource = { sheetId: QUALITY_SHEET_ID, cell: `${sourceColumn(minFactorIndex)}${sourceRow(rowIndex)}:${sourceColumn(maxFactorIndex)}${sourceRow(rowIndex)}`, rowKey: String(sourceRow(rowIndex)) };
+    descriptorRows.push({ qualityId: qualityIds[code]!, code, basketAlias: text(row[basketIndex]), minScore, maxScore, minFactor, maxFactor, mappingSource, factorSource });
     return [{ qualityId: qualityIds[code]!, minScore, maxScore, maxInclusive: false, status: "SOURCE" as const,
       source: { sheetId: QUALITY_SHEET_ID, cell: `${sourceColumn(minIndex)}${sourceRow(rowIndex)}:${sourceColumn(maxIndex)}${sourceRow(rowIndex)}`, rowKey: String(sourceRow(rowIndex)) },
     }];
@@ -611,6 +594,7 @@ export function qualityDraftFromRanges(input: {
     ranges,
     aliases,
     matrixCells,
+    qualityTableDescriptor: qualityFieldHeader ? { headerSource: sourceCell(qualityFieldHeader.rowIndex, qualityTable!.columnIndex), columns: Object.fromEntries(qualityFieldLabels.map((label, index) => [label, qualityFieldHeader.indices[index]!])) as QualityTableDescriptor["columns"], rows: descriptorRows } : undefined,
     sourceIssues,
     pricingScoreEndpoints,
     performanceScoringEnabled: undefined,
@@ -679,10 +663,7 @@ export async function inspectCanonicalRuleWorkbook(input: {
     pricingEndpointValues: pricingEndpointRange?.valueRange.values ?? [],
     importedAt: input.observedAt,
   });
-  const pricingQualityRows = pricingQualitySourceRowsFromDraft(
-    qualityDraft,
-    qualityRange?.valueRange.values ?? [],
-  );
+  const pricingQualityRows = pricingQualitySourceRowsFromDraft(qualityDraft);
   const pricingDraft = pricingDraftFromRanges({
     sourceRevision,
     qualityValues: [], qualitySourceRows: pricingQualityRows,

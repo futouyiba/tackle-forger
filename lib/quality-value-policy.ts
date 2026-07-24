@@ -64,6 +64,7 @@ export interface QualityValuePolicyDraft {
   qualitySheetId: "FqD4j7";
   affixSheetId: "zrVOxd";
   ranges: QualityValueRange[];
+  qualityTableDescriptor?: QualityTableDescriptor;
   combinationRules: QualityCombinationRule[];
   /** 旧规则源的性能计分字段仅作为迁移证据保留，正式评分不得消费。 */
   legacyPerformanceScoringEvidence?: {
@@ -74,6 +75,12 @@ export interface QualityValuePolicyDraft {
   formalStatus: "NON_FORMAL" | "READY_TO_PUBLISH";
   inputHash: string;
   importedAt: string;
+}
+
+export interface QualityTableDescriptor {
+  headerSource: PricingCellRef;
+  columns: Record<"品质" | "代码" | "PricingBasket" | "≥最小评分" | "<最大评分" | "最小价格系数" | "最大价格系数", number>;
+  rows: Array<{ qualityId: QualityId; code: string; basketAlias: string; minScore: number; maxScore: number; minFactor: number; maxFactor: number; mappingSource: PricingCellRef; factorSource: PricingCellRef }>;
 }
 
 export interface QualityScoreTraceEntry {
@@ -151,6 +158,7 @@ export function importQualityValuePolicyDraft(input: {
   performanceScoringSource?: PricingCellRef;
   /** Source-shape diagnostics retained with the draft; all are publish gates. */
   sourceIssues?: QualityValidationIssue[];
+  qualityTableDescriptor?: QualityTableDescriptor;
   importedAt: string;
 }): QualityValuePolicyDraft {
   const issues: QualityValidationIssue[] = [...(input.sourceIssues ?? [])];
@@ -266,6 +274,7 @@ export function importQualityValuePolicyDraft(input: {
     qualitySheetId: "FqD4j7" as const,
     affixSheetId: "zrVOxd" as const,
     ranges: structuredClone(input.ranges),
+    ...(input.qualityTableDescriptor ? { qualityTableDescriptor: structuredClone(input.qualityTableDescriptor) } : {}),
     combinationRules: [...rulesByPair.values()],
     ...(
       input.performanceScoringEnabled !== undefined || input.performanceScoringSource

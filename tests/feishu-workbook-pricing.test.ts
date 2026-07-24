@@ -25,6 +25,7 @@ import {
   canonicalRuleWorkbookRangeRequests,
   identityRowsFromRanges,
   pricingDraftFromRanges,
+  pricingQualitySourceRowsFromDraft,
   qualityDraftFromRanges,
 } from "../lib/rule-workbook-inspection";
 import { createExportManifest } from "../lib/config-export";
@@ -106,7 +107,7 @@ test("生产同形品质矩阵按显式块头解析扩展列、移动块、空�
   const qualityValues = Array.from({ length: 60 }, () => Array.from({ length: 19 }, () => "") as unknown[]);
   qualityValues[2]![0] = "品质区间";
   qualityValues[3]![1] = "品质"; qualityValues[3]![2] = "代码"; qualityValues[3]![4] = "≥最小评分"; qualityValues[3]![5] = "<最大评分";
-  for (const [row, label, code, min, max] of [[5, "C/绿", "C", 0, 20], [6, "B/蓝", "B", 20, 40], [7, "A/紫", "A", 40, 65], [8, "S/橙", "S", 65, 100]] as const) qualityValues[row - 1] = ["", label, code, "", min, max];
+  for (const [row, label, code, min, max] of [[5, "C/绿", "C", 0, 20], [6, "B/蓝", "B", 20, 40], [7, "A/紫", "A", 40, 65], [8, "S/橙", "S", 65, 100]] as const) qualityValues[row - 1] = ["", label, code, "跑刀", min, max, .5, 1.1];
   const addBlock = (headerRow: number, heading: string, aliases: string[]) => {
     qualityValues[headerRow - 1]![0] = heading;
     aliases.forEach((alias, index) => { qualityValues[headerRow - 1]![index + 1] = alias; });
@@ -133,6 +134,17 @@ test("生产同形品质矩阵按显式块头解析扩展列、移动块、空�
   assert.equal(valid.combinationRules.length, 3);
   assert.equal(valid.combinationRules.find((rule) => rule.itemPartId === "part:reel")?.source.cell, "C28");
   assert.deepEqual(valid.ranges.map((range) => [range.minScore, range.maxScore]), [[0, 20], [20, 40], [40, 65], [65, 100]]);
+  const pricingQualityRows = pricingQualitySourceRowsFromDraft(valid, qualityValues);
+  const pricing = pricingDraftFromRanges({
+    sourceRevision,
+    qualityValues: [],
+    qualitySourceRows: pricingQualityRows,
+    importedAt: "2026-07-24T00:00:00.000Z",
+  });
+  assert.equal(pricing.qualityMappings.length, 4);
+  assert.equal(pricing.qualityPriceFactorRanges?.length, 4);
+  assert.deepEqual(pricing.qualityMappings.map((mapping) => mapping.source.cell), ["D5", "D6", "D7", "D8"]);
+  assert.deepEqual(pricing.qualityPriceFactorRanges?.map((range) => range.source.cell), ["G5:H5", "G6:H6", "G7:H7", "G8:H8"]);
 
   qualityValues[9]![2] = "不存在";
   const unknown = qualityDraftFromRanges({ sourceRevision, qualityValues, qualityRange: "A1:S60", affixValues, pricingEndpointValues: [[100]], importedAt: "2026-07-24T00:00:00.000Z" });
@@ -148,7 +160,7 @@ test("品质矩阵结构错误保留草稿并发布阻断，尾部合法缩写�
   const values = Array.from({ length: 60 }, () => Array.from({ length: 19 }, () => "") as unknown[]);
   values[2]![0] = "品质区间";
   values[3]![1] = "品质"; values[3]![2] = "代码"; values[3]![4] = "≥最小评分"; values[3]![5] = "<最大评分";
-  for (const [row, label, code, min, max] of [[5, "C/绿", "C", 0, 20], [6, "B/蓝", "B", 20, 40], [7, "A/紫", "A", 40, 65], [8, "S/橙", "S", 65, 100]] as const) values[row - 1] = ["", label, code, "", min, max];
+  for (const [row, label, code, min, max] of [[5, "C/绿", "C", 0, 20], [6, "B/蓝", "B", 20, 40], [7, "A/紫", "A", 40, 65], [8, "S/橙", "S", 65, 100]] as const) values[row - 1] = ["", label, code, "跑刀", min, max, .5, 1.1];
   for (const [row, heading, prefix] of [[10, "竿词条", "竿"], [27, "轮词条", "轮"], [46, "线词条", "线"]] as const) {
     values[row - 1]![0] = heading; values[row - 1]![1] = `${prefix}0`; values[row - 1]![2] = `${prefix}2`;
     values[row]![0] = `${prefix}0`; values[row]![1] = "—"; values[row]![2] = 1;

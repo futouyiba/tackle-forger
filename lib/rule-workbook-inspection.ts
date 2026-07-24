@@ -218,11 +218,18 @@ const basketIds: Record<string, string> = {
 export function pricingDraftFromRanges(input: {
   sourceRevision: FeishuSourceRevision;
   qualityValues: unknown[][];
+  /** Exact rows selected by the quality-table parser; avoids a second layout guess. */
+  qualitySourceRows?: Array<{ code: string; basketAlias: string; minScore: number; maxScore: number; minFactor: number; maxFactor: number; mappingCell: string; factorCell: string; rowKey: string }>;
   pricingValues?: unknown[][];
   typeValues?: unknown[][];
   importedAt: string;
 }): PricingPolicyDraft {
-  const qualityMappings = input.qualityValues.flatMap((row, index): QualityPricingBasketMapping[] => {
+  const qualityMappings = input.qualitySourceRows
+    ? input.qualitySourceRows.flatMap((row): QualityPricingBasketMapping[] => {
+      const qualityId = qualityIds[row.code]; const pricingBasketId = basketIds[row.basketAlias];
+      return qualityId && pricingBasketId ? [{ qualityId, pricingBasketId, sourceAlias: row.code, status: "SOURCE", source: { sheetId: QUALITY_SHEET_ID, cell: row.mappingCell, rowKey: row.rowKey } }] : [];
+    })
+    : input.qualityValues.flatMap((row, index): QualityPricingBasketMapping[] => {
     const code = text(row[1]);
     const basketAlias = text(row[2]);
     const qualityId = qualityIds[code];
@@ -242,7 +249,14 @@ export function pricingDraftFromRanges(input: {
     sourceAlias: Object.entries(basketIds).find(([, id]) => id === mapping.pricingBasketId)?.[0] ?? mapping.pricingBasketId,
     source: mapping.source,
   }])).values());
-  const qualityPriceFactorRanges: QualityPriceFactorRange[] = input.qualityValues.flatMap((row, index) => {
+  const qualityPriceFactorRanges: QualityPriceFactorRange[] = input.qualitySourceRows
+    ? input.qualitySourceRows.flatMap((row) => {
+      const qualityId = qualityIds[row.code];
+      return qualityId && [row.minScore, row.maxScore, row.minFactor, row.maxFactor].every(Number.isFinite)
+        ? [{ qualityId, minScore: row.minScore, maxScore: row.maxScore, maxInclusive: false, minFactor: row.minFactor, maxFactor: row.maxFactor, status: "SOURCE" as const, source: { sheetId: QUALITY_SHEET_ID, cell: row.factorCell, rowKey: row.rowKey } }]
+        : [];
+    })
+    : input.qualityValues.flatMap((row, index) => {
     const qualityId = qualityIds[text(row[1])];
     const minScore = Number(row[3]);
     const maxScore = Number(row[4]);
@@ -336,6 +350,39 @@ export function pricingDraftFromRanges(input: {
     scoreInterpolation: pricingValues.length ? { kind: "quality_range_linear", points: [], outOfRange: "error", status: "SOURCE", source: { sheetId: "u87sRh", cell: "B11:D11", rowKey: "11" } } : undefined,
     moneyPolicy,
     importedAt: input.importedAt,
+  });
+}
+
+export function pricingQualitySourceRowsFromDraft(
+  qualityDraft: QualityValuePolicyDraft,
+  qualityValues: unknown[][],
+) {
+  const columnIndex = (column: string) => [...column].reduce(
+    (sum, char) => sum * 26 + char.charCodeAt(0) - 64,
+    0,
+  ) - 1;
+  return qualityDraft.ranges.flatMap((range) => {
+    const match = /^([A-Z]+)(\d+):([A-Z]+)\d+$/.exec(range.source.cell);
+    if (!match) return [];
+    const rowIndex = Number(match[2]) - 1;
+    const minColumn = columnIndex(match[1]!);
+    const maxColumn = columnIndex(match[3]!);
+    const row = qualityValues[rowIndex] ?? [];
+    const codeColumn = minColumn - 2;
+    const basketColumn = codeColumn + 1;
+    const minFactorColumn = maxColumn + 1;
+    const maxFactorColumn = maxColumn + 2;
+    return [{
+      code: text(row[codeColumn]),
+      basketAlias: text(row[basketColumn]),
+      minScore: range.minScore,
+      maxScore: range.maxScore,
+      minFactor: Number(row[minFactorColumn]),
+      maxFactor: Number(row[maxFactorColumn]),
+      mappingCell: `${spreadsheetColumnName(basketColumn)}${rowIndex + 1}`,
+      factorCell: `${spreadsheetColumnName(minFactorColumn)}${rowIndex + 1}:${spreadsheetColumnName(maxFactorColumn)}${rowIndex + 1}`,
+      rowKey: String(rowIndex + 1),
+    }];
   });
 }
 
@@ -624,13 +671,6 @@ export async function inspectCanonicalRuleWorkbook(input: {
   const pricingEndpointRange = ranges.find((entry) => entry.sheetId === "u87sRh" && entry.range === "B179:E179");
   const pricingRange = ranges.find((entry) => entry.sheetId === "u87sRh" && entry.range === "B10:R70");
   const typeRange = ranges.find((entry) => entry.sheetId === "fATowU" && entry.range === "B2:AD20");
-  const pricingDraft = pricingDraftFromRanges({
-    sourceRevision,
-    qualityValues: (qualityRange?.valueRange.values ?? []).slice(1, 5),
-    pricingValues: pricingRange?.valueRange.values ?? [],
-    typeValues: typeRange?.valueRange.values ?? [],
-    importedAt: input.observedAt,
-  });
   const qualityDraft = qualityDraftFromRanges({
     sourceRevision,
     qualityValues: qualityRange?.valueRange.values ?? [],
@@ -638,6 +678,15 @@ export async function inspectCanonicalRuleWorkbook(input: {
     affixValues: affixRange?.valueRange.values ?? [],
     pricingEndpointValues: pricingEndpointRange?.valueRange.values ?? [],
     importedAt: input.observedAt,
+  });
+  const pricingQualityRows = pricingQualitySourceRowsFromDraft(
+    qualityDraft,
+    qualityRange?.valueRange.values ?? [],
+  );
+  const pricingDraft = pricingDraftFromRanges({
+    sourceRevision,
+    qualityValues: [], qualitySourceRows: pricingQualityRows,
+    pricingValues: pricingRange?.valueRange.values ?? [], typeValues: typeRange?.valueRange.values ?? [], importedAt: input.observedAt,
   });
   const canonicalRuleDraft = importCanonicalRuleSource({
     sourceRevision,

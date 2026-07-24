@@ -9,10 +9,11 @@ import {
   symlink,
   writeFile,
 } from "node:fs/promises";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   EXPECTED_CANONICAL_SHEETS,
   EXPECTED_PHASE_ONE_CAPABILITIES,
@@ -760,6 +761,29 @@ test("三种模式共用的环境 loader 拒绝仓库内、相对、symlink 与�
   );
   await rm(root, { recursive: true, force: true });
   await rm(outside, { recursive: true, force: true });
+});
+
+test("npm 验收命令将缺失 env-file 交给脚本并返回去敏 BLOCKED 证据", () => {
+  const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const missingEnvFile = path.join(
+    os.tmpdir(),
+    `tackle-forger-phase-one-missing-${process.pid}-${Date.now()}.env`,
+  );
+  const result = spawnSync(
+    "npm",
+    ["run", "acceptance:phase-one", "--", "preflight", "--env-file", missingEnvFile],
+    { cwd: repositoryRoot, encoding: "utf8" },
+  );
+
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 2);
+  assert.doesNotMatch(result.stderr, /phase-one acceptance failed/u);
+  const evidence = JSON.parse(result.stdout.slice(result.stdout.indexOf("{")));
+  assert.equal(evidence.summary.overall, "BLOCKED");
+  assert.equal(
+    evidence.checks.find((item) => item.id === "production_environment_file")?.status,
+    "BLOCKED",
+  );
 });
 
 test("依赖门禁绑定受版本控制的 Issue/PR 映射、唯一 commit 与审核状态", async () => {

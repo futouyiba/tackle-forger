@@ -33,6 +33,7 @@ import type {
   RuleSetVersion,
   WorkspaceRuleSettings,
   WorkspaceState,
+  FeishuShareLinkHistoryEntry,
 } from "./types";
 import { defaultAffinityAxisWeights } from "./compatibility";
 import { migrateLegacyProductIdentity } from "./legacy-product-migration";
@@ -62,6 +63,7 @@ import {
   resolvePartConstraintSetRef,
 } from "./part-constraints";
 import { deterministicHash } from "./rule-kernel";
+import { projectShareLinkHistoryEntry } from "./data-sources";
 
 export const CURRENT_WORKSPACE_SCHEMA_VERSION = 20;
 
@@ -1566,21 +1568,20 @@ function migrateV19ToV20(input: MutableWorkspace): MutableWorkspace {
   const rawHistory = arrayOf<WorkspaceState["feishuShareLinkHistory"][number]>(
     state.feishuShareLinkHistory,
   );
-  // Only keep non-sensitive, structurally valid entries. The history records
-  // user-pasted Feishu Bitable share links for import convenience; it must
-  // never carry credentials, tokens or personal identity.
+  // Whitelist-project each entry into { id, shareUrl, label, dataset, lastUsedAt }
+  // and drop every other key (appToken/secret/credential/nonce/session/apikey/
+  // PII/unknown). The history records user-pasted Feishu Bitable share links for
+  // import convenience; it must never carry credentials, tokens or personal
+  // identity. Dedup by shareUrl, keeping the first occurrence.
   const seen = new Set<string>();
-  const feishuShareLinkHistory = rawHistory.filter((entry) => {
-    if (!entry || typeof entry !== "object") return false;
-    if (typeof entry.id !== "string" || !entry.id) return false;
-    if (typeof entry.shareUrl !== "string" || !entry.shareUrl) return false;
-    if (typeof entry.label !== "string") return false;
-    if (entry.dataset !== "weight_templates" && entry.dataset !== "modifiers") return false;
-    if (typeof entry.lastUsedAt !== "string") return false;
-    if (seen.has(entry.shareUrl)) return false;
-    seen.add(entry.shareUrl);
-    return true;
-  });
+  const feishuShareLinkHistory: FeishuShareLinkHistoryEntry[] = [];
+  for (const raw of rawHistory) {
+    const projected = projectShareLinkHistoryEntry(raw);
+    if (!projected) continue;
+    if (seen.has(projected.shareUrl)) continue;
+    seen.add(projected.shareUrl);
+    feishuShareLinkHistory.push(projected);
+  }
   return {
     ...state,
     schemaVersion: 20,
@@ -1657,7 +1658,11 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
     >(state.performanceSummaryDefinitions),
     feishuShareLinkHistory: arrayOf<
       WorkspaceState["feishuShareLinkHistory"][number]
-    >(state.feishuShareLinkHistory),
+    >(state.feishuShareLinkHistory)
+      // 保存边界同样按白名单投影：当前 schema（v20）输入会跳过顺序迁移，
+      // 必须在此剥离客户端载荷可能夹带的 appToken/secret/PII 等额外字段。
+      .map(projectShareLinkHistoryEntry)
+      .filter((entry): entry is FeishuShareLinkHistoryEntry => entry !== null),
     patchLedger: state.patchLedger && typeof state.patchLedger === "object"
       ? migratePatchLedger(state.patchLedger as WorkspaceState["patchLedger"],patchLedgerMigrationContext(state))
       : emptyPatchLedger(),

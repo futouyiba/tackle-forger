@@ -77,7 +77,11 @@ export function recordShareLinkHistory(
   const shareUrl = entry.shareUrl.trim();
   if (!shareUrl) return [...history];
   const lastUsedAt = entry.lastUsedAt ?? new Date().toISOString();
-  const preserved = history.filter((item) => item.shareUrl !== shareUrl);
+  // 保留既有条目前先按白名单投影，剥离任何可能夹带的凭据/PII 字段。
+  const preserved = history
+    .map(projectShareLinkHistoryEntry)
+    .filter((item): item is FeishuShareLinkHistoryEntry => item !== null)
+    .filter((item) => item.shareUrl !== shareUrl);
   const next: FeishuShareLinkHistoryEntry = {
     id: shareUrl,
     shareUrl,
@@ -99,6 +103,37 @@ export function removeShareLinkHistory(
   if (shareUrl === null) return [];
   const target = shareUrl.trim();
   return history.filter((item) => item.shareUrl !== target);
+}
+
+/**
+ * 将单条飞书分享链接历史条目按白名单显式重建为
+ * `{ id, shareUrl, label, dataset, lastUsedAt }`，丢弃 appToken、secret、
+ * password、credential、nonce、session、apikey、个人身份及任何未知键。
+ * 结构或类型非法时返回 null（由调用方过滤）。
+ *
+ * 这是一道硬边界：不论来源是 v19 历史、v20 客户端保存载荷，还是运行时
+ * 传入的数组，写入 `feishuShareLinkHistory` 前都必须经过此投影，确保
+ * 历史绝不持久化凭据或个人身份信息。白名单以 `lib/types.ts` 的
+ * `FeishuShareLinkHistoryEntry` 定义为准。
+ */
+export function projectShareLinkHistoryEntry(
+  entry: unknown,
+): FeishuShareLinkHistoryEntry | null {
+  if (!entry || typeof entry !== "object") return null;
+  const raw = entry as Record<string, unknown>;
+  if (typeof raw.id !== "string" || !raw.id) return null;
+  if (typeof raw.shareUrl !== "string" || !raw.shareUrl) return null;
+  if (typeof raw.label !== "string") return null;
+  if (raw.dataset !== "weight_templates" && raw.dataset !== "modifiers") return null;
+  if (typeof raw.lastUsedAt !== "string") return null;
+  // 显式重建：只拷贝类型允许的白名单字段，忽略 raw 上的一切其他键。
+  return {
+    id: raw.id,
+    shareUrl: raw.shareUrl,
+    label: raw.label,
+    dataset: raw.dataset,
+    lastUsedAt: raw.lastUsedAt,
+  };
 }
 
 function textValue(value: unknown): string {

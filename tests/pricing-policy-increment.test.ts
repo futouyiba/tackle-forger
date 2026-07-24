@@ -22,6 +22,7 @@ import {
   createCalculationTraceArchive,
 } from "../lib/calculation-trace";
 import { createSeedState } from "../lib/seed";
+import { formalFiveAxisPublishEvidence } from "./helpers/formal-five-axis";
 import {
   formalAffixRuntimeEvidence,
   formalProjection,
@@ -289,6 +290,11 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     publishedBy: "tester",
     publishedAt: "2026-07-22T00:00:00.000Z",
     snapshotId: "snapshot:new-formal",
+    ...formalFiveAxisPublishEvidence({
+      preview: oldSnapshot.fiveAxisPreview!, modelId: model.id, modelRevision: model.revision,
+      seriesId: series.id, skuId: sku.id, skuRevision: sku.revision,
+      snapshotId: "snapshot:new-formal", finalPanelValues,
+    }),
   } satisfies Parameters<typeof publishConfigurationSnapshot>[0];
   assert.throws(() => publishConfigurationSnapshot({
     ...publishInput,

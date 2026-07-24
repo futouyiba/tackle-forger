@@ -1156,7 +1156,7 @@ export interface FiveAxisAxisDefinition {
   direction: "higher_better" | "lower_better" | "target_range" | "contextual";
   transformId: string;
   vertexSelectorId: string;
-  componentAggregationId: string;
+  componentAggregationId: "component_min_ratio" | "per_component_no_aggregate";
   missingPolicy: "error" | "unavailable" | "ignore_not_applicable";
 }
 
@@ -1167,6 +1167,9 @@ export interface FiveAxisViewDefinition {
   publicationState: "UNPUBLISHED" | "PUBLISHED" | "SUPERSEDED";
   definitionHash: string;
   fiveAxisRuleVersion: string;
+  semanticContractVersion?: "five-axis/open005-2026-07-23/v1";
+  hashInputSchemaVersion?: "five-axis-hash-input/v1";
+  projectionReferenceSelectorVersion?: "projection-reference/current-sku-frozen-match/v1";
   sourceRevision: string;
   axes: [
     FiveAxisAxisDefinition,
@@ -1176,10 +1179,42 @@ export interface FiveAxisViewDefinition {
     FiveAxisAxisDefinition,
   ];
   displayBandConfigId?: string;
+  weightBandPolicyVersion?: string;
   seriesBaselinePolicy:
     | { mode: "explicit_model"; required: true }
     | { mode: "approved_model_median"; minimumModels: number }
-    | { mode: "projection_reference" };
+    | { mode: "projection_reference"; selectorVersion?: "projection-reference/current-sku-frozen-match/v1" };
+  comparisonPolicy?: {
+    minimumItems: number;
+    maximumItems: number;
+    mixedItemPartsAllowed: boolean;
+    referenceRodMode: "first_rod_by_comparison_order";
+    outerRingScore: number;
+    visualOverflowCap: null;
+  };
+}
+
+export type FiveAxisDefinitionEffectiveUse = "LEGACY_SNAPSHOT_ONLY" | "FORMAL_CURRENT" | "SUPERSEDED";
+
+export interface FiveAxisDefinitionDisposition {
+  definitionId: string;
+  definitionVersion: string;
+  definitionHash: string;
+  effectiveUse: FiveAxisDefinitionEffectiveUse;
+  semanticContractVersion: "five-axis/open005-2026-07-23/v1" | null;
+  supersededByDefinitionId: string | null;
+  supersededByDefinitionVersion: string | null;
+  reasonCode: string;
+}
+
+export interface FiveAxisDefinitionDispositionCatalogRevision {
+  catalogRevisionId: string;
+  previousCatalogRevisionId: string | null;
+  previousCatalogHash: string | null;
+  schemaVersion: "five-axis-definition-disposition-catalog/v1";
+  entries: FiveAxisDefinitionDisposition[];
+  catalogHash: string;
+  decidedAt: string;
 }
 
 export interface FiveAxisEntityInput {
@@ -1262,6 +1297,10 @@ export interface FiveAxisMetric {
 
 export interface ModelFiveAxisPreview {
   modelId: string;
+  /** Formal previews freeze these input identities; historical previews may omit them. */
+  modelRevision?: number;
+  finalPanelHash?: string;
+  componentInputs?: FiveAxisEntityInput[];
   fishWeightGradeId: string;
   fiveAxisDefinitionId: string;
   fiveAxisDefinitionVersion: string;
@@ -1271,10 +1310,28 @@ export interface ModelFiveAxisPreview {
   fiveAxisDefinitionHash?: string;
   fiveAxisRuleVersion: string;
   vertexSetHash: string;
+  /** 新正式预览冻结可重放的顶点证据；历史预览不得补写。 */
+  formalVertexSet?: FiveAxisVertexSet;
   sourceRevision: string;
   metrics: FiveAxisMetric[];
   tackleFitComparison: FiveAxisComparisonView;
   inputHash: string;
+  projectionReferenceAnchor?: {
+    baselineSnapshotId: string | null;
+    seriesId: string;
+    skuId: string;
+    skuRevisionId: string;
+    selectorVersion: "projection-reference/current-sku-frozen-match/v1";
+  };
+  projectionReferenceSetHash?: string;
+  projectionReferences?: Array<{
+    itemPartId: "part:rod" | "part:reel" | "part:line";
+    state: "available" | "missing" | "error";
+    projectionMatchId: string | null;
+    projectionMatchRevisionId: string | null;
+    projectionId: string | null;
+    projectionRevisionId: string | null;
+  }>;
 }
 
 export interface PurchasableModel {
@@ -1563,6 +1620,9 @@ export interface ConfigurationSnapshot {
   validationWaivers?: ValidationWaiver[];
   validationWaiverDecisions?: ValidationWaiverDecision[];
   fiveAxisPreview?: ModelFiveAxisPreview;
+  fiveAxisDispositionCatalogRevisionId?: string;
+  fiveAxisDispositionCatalogHash?: string;
+  fiveAxisDefinitionDisposition?: FiveAxisDefinitionDisposition;
   publishedBy: string;
   publishedAt: string;
   contentHash: string;
@@ -2522,6 +2582,8 @@ export interface WorkspaceState {
   pricingPolicyVersions: PricingPolicyVersion[];
   reductionStackingPolicyVersions: ReductionStackingPolicyVersion[];
   fiveAxisViewDefinitions: FiveAxisViewDefinition[];
+  fiveAxisDispositionCatalogRevisions: FiveAxisDefinitionDispositionCatalogRevision[];
+  currentFiveAxisDispositionCatalogRevisionId?: string;
   fiveAxisVertexSets: FiveAxisVertexSet[];
   workspacePolicies: WorkspacePolicyRecord[];
   patchReviewBatches: PatchReviewBatch[];

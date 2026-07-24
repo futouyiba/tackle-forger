@@ -22,6 +22,8 @@ import type {
   ModelComponentSelection,
   ModelFiveAxisPreview,
   FiveAxisViewDefinition,
+  FiveAxisVertexSet,
+  FiveAxisDefinitionDispositionCatalogRevision,
   PatchRebaseDifference,
   PatchOffsetPolicyVersion,
   ParameterDefinition,
@@ -47,6 +49,7 @@ import type {
   PassiveSkillPayload,
   WorkspacePolicyRecord,
 } from "./types";
+import { calculateModelFiveAxisPreview, formalFiveAxisPreviewInputHash, formalProjectionReferenceSetHash, resolveFormalFiveAxisDefinition, type ResolvedFormalFiveAxisDefinition } from "./five-axis";
 import {
   assertValidationGateCanProceed,
   assertValidationWaiverDecisionCoverage,
@@ -240,6 +243,10 @@ export interface PublishModelInput {
   activeValidationWaiverPolicies?: WaiverPolicyVersion[];
   fiveAxisPreview?: ModelFiveAxisPreview;
   fiveAxisDefinition?: FiveAxisViewDefinition;
+  formalFiveAxisVertexSet?: FiveAxisVertexSet;
+  fiveAxisDefinitions?: FiveAxisViewDefinition[];
+  fiveAxisDispositionCatalogRevisions?: FiveAxisDefinitionDispositionCatalogRevision[];
+  currentFiveAxisDispositionCatalogRevisionId?: string;
   /** @deprecated 仅 historical_import 可读取；新正式发布必须提供指纹绑定的确认记录。 */
   warningConfirmations: Record<string, string>;
   publishedBy: string;
@@ -254,9 +261,21 @@ function snapshotContent(
   return snapshot;
 }
 
+function hasFormalProjectionReferenceShape(reference: NonNullable<ModelFiveAxisPreview["projectionReferences"]>[number]): boolean {
+  if (reference.state === "available") {
+    return Boolean(reference.projectionMatchId && reference.projectionMatchRevisionId && reference.projectionId && reference.projectionRevisionId);
+  }
+  if (reference.state === "missing") {
+    return reference.projectionMatchId === null && reference.projectionMatchRevisionId === null
+      && reference.projectionId === null && reference.projectionRevisionId === null;
+  }
+  return false;
+}
+
 export function publishConfigurationSnapshot(
   input: PublishModelInput,
 ): ConfigurationSnapshot {
+  let formalFiveAxis: ResolvedFormalFiveAxisDefinition | undefined;
   if(input.publicationMode==="new_formal"&&!input.workspaceId?.trim()){
     throw new Error("新正式 Snapshot 必须提供稳定 workspaceId。");
   }
@@ -625,6 +644,9 @@ export function publishConfigurationSnapshot(
   ) {
     throw new Error("五轴预览与待发布 Model 不一致。");
   }
+  if (input.publicationMode === "new_formal" && !input.fiveAxisPreview) {
+    throw new Error("FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE");
+  }
   if (input.publicationMode === "new_formal" && input.fiveAxisPreview) {
     const definition = input.fiveAxisDefinition;
     if (!definition || definition.publicationState !== "PUBLISHED") {
@@ -647,6 +669,59 @@ export function publishConfigurationSnapshot(
       || input.fiveAxisPreview.tackleFitComparison.vertexSetHash !== input.fiveAxisPreview.vertexSetHash
     ) {
       throw new Error("五轴预览的定义、规则或顶点版本链不一致，禁止创建正式 Snapshot。");
+    }
+    const references = input.fiveAxisPreview.projectionReferences;
+    // The frozen preview is the sole authority for formal vertex evidence; do
+    // not replay from a parallel caller-supplied object that could diverge.
+    const vertexSet = input.fiveAxisPreview.formalVertexSet;
+    const expectedSnapshotId = input.snapshotId ?? "snapshot-" + input.model.id + "-v" + (input.version ?? 1);
+    if (!input.fiveAxisPreview.projectionReferenceAnchor
+      || !Number.isInteger(input.fiveAxisPreview.modelRevision)
+      || input.fiveAxisPreview.modelRevision !== input.model.revision
+      || !input.fiveAxisPreview.finalPanelHash
+      || input.fiveAxisPreview.finalPanelHash !== deterministicHash(input.finalPanelValues)
+      || !input.fiveAxisPreview.componentInputs
+      || !vertexSet
+      || !input.fiveAxisPreview.projectionReferenceSetHash
+      || input.fiveAxisPreview.projectionReferenceAnchor.selectorVersion !== "projection-reference/current-sku-frozen-match/v1"
+      || input.fiveAxisPreview.projectionReferenceAnchor.baselineSnapshotId !== expectedSnapshotId
+      || input.fiveAxisPreview.projectionReferenceAnchor.seriesId !== input.series.id
+      || input.fiveAxisPreview.projectionReferenceAnchor.skuId !== input.sku.id
+      || input.fiveAxisPreview.projectionReferenceAnchor.skuRevisionId !== String(input.sku.revision)
+      || !references || references.length !== 3
+      || ["part:rod", "part:reel", "part:line"].some((itemPartId, index) => references[index]?.itemPartId !== itemPartId)
+      || references.some((reference) => !hasFormalProjectionReferenceShape(reference))
+      || input.fiveAxisPreview.projectionReferenceSetHash !== formalProjectionReferenceSetHash({ anchor: input.fiveAxisPreview.projectionReferenceAnchor, references })
+      || input.fiveAxisPreview.inputHash !== formalFiveAxisPreviewInputHash(input.fiveAxisPreview)) {
+      throw new Error("FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE");
+    }
+    try {
+      formalFiveAxis = resolveFormalFiveAxisDefinition({
+        definitions: input.fiveAxisDefinitions ?? [definition],
+        catalogRevisions: input.fiveAxisDispositionCatalogRevisions ?? [],
+        currentCatalogRevisionId: input.currentFiveAxisDispositionCatalogRevisionId,
+        definitionId: definition.definitionId,
+        definitionVersion: definition.version,
+      });
+    } catch {
+      throw new Error("FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE");
+    }
+    try {
+      const replayed = calculateModelFiveAxisPreview({
+        modelId: input.model.id,
+        modelRevision: input.model.revision,
+        referenceFishWeightGradeId: input.fiveAxisPreview.fishWeightGradeId,
+        definition: formalFiveAxis.definition,
+        vertexSet,
+        components: input.fiveAxisPreview.componentInputs,
+        finalPanelHash: input.fiveAxisPreview.finalPanelHash,
+      });
+      if (deterministicHash(replayed.metrics) !== deterministicHash(input.fiveAxisPreview.metrics)
+        || deterministicHash(replayed.tackleFitComparison) !== deterministicHash(input.fiveAxisPreview.tackleFitComparison)) {
+        throw new Error("mismatch");
+      }
+    } catch {
+      throw new Error("FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE");
     }
   }
   if (input.publicationMode === "new_formal") {
@@ -858,6 +933,11 @@ export function publishConfigurationSnapshot(
     ...(input.fiveAxisPreview
       ? { fiveAxisPreview: structuredClone(input.fiveAxisPreview) }
       : {}),
+    ...(formalFiveAxis ? {
+      fiveAxisDispositionCatalogRevisionId: formalFiveAxis.catalog.catalogRevisionId,
+      fiveAxisDispositionCatalogHash: formalFiveAxis.catalog.catalogHash,
+      fiveAxisDefinitionDisposition: structuredClone(formalFiveAxis.disposition),
+    } : {}),
     publishedAt: input.publishedAt,
   };
   return {

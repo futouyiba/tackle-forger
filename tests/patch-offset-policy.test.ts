@@ -42,6 +42,7 @@ import {
   testReductionPolicy,
 } from "./helpers/reduction-policy";
 import { createSeedState } from "../lib/seed";
+import { formalFiveAxisPublishEvidence } from "./helpers/formal-five-axis";
 import type {
   PatchOffsetPolicyVersion,
   PatchReviewSubjectRef,
@@ -1036,6 +1037,11 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
     publishedAt: NOW,
     snapshotId: "snapshot:open004-v1",
     version: oldSnapshot.version + 1,
+    ...formalFiveAxisPublishEvidence({
+      preview: oldSnapshot.fiveAxisPreview!, modelId: model.id, modelRevision: model.revision,
+      seriesId: series.id, skuId: sku.id, skuRevision: sku.revision,
+      snapshotId: "snapshot:open004-v1", finalPanelValues: oldSnapshot.finalPanelValues,
+    }),
   });
   assert.deepEqual(snapshot.patchValidationWaiverDecisionRefs, [publishWaiver.decision.waiverDecisionId]);
   assert.equal(snapshot.patchOffsetPolicyVersion, publishedPolicy.version);

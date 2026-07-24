@@ -27,6 +27,8 @@ import {
 } from "../lib/publishing";
 import { createExportManifest } from "../lib/config-export";
 import { deterministicHash } from "../lib/rule-kernel";
+import { fiveAxisDispositionCatalogHash, formalFiveAxisPreviewInputHash, formalProjectionReferenceSetHash } from "../lib/five-axis";
+import { formalFiveAxisPublishEvidence } from "./helpers/formal-five-axis";
 import {
   formalAffixRuntimeEvidence,
   formalProjection,
@@ -707,6 +709,40 @@ test("新正式 Snapshot 只接受并冻结指纹绑定的确认记录，旧 cod
     idempotencyKey: "ack:snapshot",
     capabilities: [ACKNOWLEDGE_VALIDATION_WARNING_CAPABILITY],
   });
+  const axis = (axisId: string, parameterKey: string, order: number, applicablePartIds: string[], direction: "higher_better" | "lower_better", vertexSelectorId: "max" | "min", missingPolicy: "error" | "ignore_not_applicable", inherited = false) => ({
+    axisId, label: axisId, order, sourceParameterKeys: [parameterKey], applicablePartIds, direction,
+    transformId: "identity", vertexSelectorId, componentAggregationId: "per_component_no_aggregate" as const,
+    ...(inherited ? { contextInheritanceId: "single_applicable_source" as const } : {}), missingPolicy,
+  });
+  const formalDefinitionContent = {
+    definitionId: "five-axis:validation-formal", version: "1", revision: 1, publicationState: "PUBLISHED" as const,
+    semanticContractVersion: "five-axis/open005-2026-07-23/v1" as const, hashInputSchemaVersion: "five-axis-hash-input/v1" as const,
+    projectionReferenceSelectorVersion: "projection-reference/current-sku-frozen-match/v1" as const,
+    fiveAxisRuleVersion: "rule:validation", sourceRevision: "source:validation", weightBandPolicyVersion: "wb:validation", displayBandConfigId: "display:validation",
+    axes: [axis("pull", "drag", 1, ["part:rod", "part:reel", "part:line"], "higher_better", "max", "error"), axis("durability", "durability", 2, ["part:rod", "part:reel", "part:line"], "higher_better", "max", "error"), axis("cast", "max_cast_distance", 3, ["part:rod"], "higher_better", "max", "ignore_not_applicable", true), axis("sensitivity", "sensitivity", 4, ["part:rod", "part:reel", "part:line"], "lower_better", "min", "error"), axis("control", "energy_cost_factor", 5, ["part:rod", "part:reel", "part:line"], "lower_better", "min", "error")] as any,
+    seriesBaselinePolicy: { mode: "projection_reference" as const, selectorVersion: "projection-reference/current-sku-frozen-match/v1" as const },
+    comparisonPolicy: { minimumItems: 2, maximumItems: 5, mixedItemPartsAllowed: true, referenceRodMode: "first_rod_by_comparison_order" as const, outerRingScore: 100, visualOverflowCap: null },
+  };
+  const formalDefinition = { ...formalDefinitionContent, definitionHash: deterministicHash(formalDefinitionContent) };
+  const disposition = { definitionId: formalDefinition.definitionId, definitionVersion: formalDefinition.version, definitionHash: formalDefinition.definitionHash, effectiveUse: "FORMAL_CURRENT" as const, semanticContractVersion: "five-axis/open005-2026-07-23/v1" as const, supersededByDefinitionId: null, supersededByDefinitionVersion: null, reasonCode: "TEST" };
+  const catalog = { catalogRevisionId: "catalog:validation", previousCatalogRevisionId: null, previousCatalogHash: null, schemaVersion: "five-axis-definition-disposition-catalog/v1" as const, entries: [disposition], decidedAt: "2026-07-24T00:00:00.000Z", catalogHash: "" };
+  catalog.catalogHash = fiveAxisDispositionCatalogHash(catalog);
+  const anchor = { baselineSnapshotId: "snapshot:validation-evidence", seriesId: series.id, skuId: sku.id, skuRevisionId: String(sku.revision), selectorVersion: "projection-reference/current-sku-frozen-match/v1" as const };
+  const references = (["part:rod", "part:reel", "part:line"] as const).map((itemPartId) => ({ itemPartId, state: "missing" as const, projectionMatchId: null, projectionMatchRevisionId: null, projectionId: null, projectionRevisionId: null }));
+  const fiveAxisPreview = { ...existing.fiveAxisPreview!, modelId: model.id, modelRevision: model.revision, finalPanelHash: deterministicHash(existing.finalPanelValues), componentInputs: [], fiveAxisDefinitionId: formalDefinition.definitionId, fiveAxisDefinitionVersion: formalDefinition.version, fiveAxisDefinitionRevision: formalDefinition.revision, fiveAxisDefinitionHash: formalDefinition.definitionHash, fiveAxisRuleVersion: formalDefinition.fiveAxisRuleVersion, sourceRevision: formalDefinition.sourceRevision, tackleFitComparison: { ...existing.fiveAxisPreview!.tackleFitComparison, fiveAxisDefinitionId: formalDefinition.definitionId, fiveAxisDefinitionVersion: formalDefinition.version, fiveAxisRuleVersion: formalDefinition.fiveAxisRuleVersion }, projectionReferenceAnchor: anchor, projectionReferences: references, projectionReferenceSetHash: formalProjectionReferenceSetHash({ anchor, references }), inputHash: "" };
+  fiveAxisPreview.inputHash = formalFiveAxisPreviewInputHash(fiveAxisPreview);
+  const formalEvidence = formalFiveAxisPublishEvidence({
+    preview: existing.fiveAxisPreview!, modelId: model.id, modelRevision: model.revision,
+    seriesId: series.id, skuId: sku.id, skuRevision: sku.revision,
+    snapshotId: "snapshot:validation-evidence", finalPanelValues: existing.finalPanelValues,
+  });
+  const previewForSnapshot = (snapshotId: string) => {
+    const preview = structuredClone(formalEvidence.fiveAxisPreview);
+    preview.projectionReferenceAnchor!.baselineSnapshotId = snapshotId;
+    preview.projectionReferenceSetHash = formalProjectionReferenceSetHash({ anchor: preview.projectionReferenceAnchor!, references: preview.projectionReferences! });
+    preview.inputHash = formalFiveAxisPreviewInputHash(preview);
+    return preview;
+  };
   const common = {
     publicationMode: "new_formal" as const,
     model,
@@ -782,6 +818,7 @@ test("新正式 Snapshot 只接受并冻结指纹绑定的确认记录，旧 cod
     publishedBy: "publisher:1",
     publishedAt: "2026-07-23T04:00:00.000Z",
     snapshotId: "snapshot:validation-evidence",
+    ...formalEvidence,
   };
   assert.throws(
     () => publishConfigurationSnapshot(common),
@@ -844,6 +881,7 @@ test("新正式 Snapshot 只接受并冻结指纹绑定的确认记录，旧 cod
     () => publishConfigurationSnapshot({
       ...common,
       snapshotId: "snapshot:waiver-without-decision",
+      fiveAxisPreview: previewForSnapshot("snapshot:waiver-without-decision"),
       validationReport: publishWaiver.issues,
       validationWaivers: publishWaiver.waivers,
       activeValidationWaiverPolicies: [publishPolicy],
@@ -853,6 +891,7 @@ test("新正式 Snapshot 只接受并冻结指纹绑定的确认记录，旧 cod
   const snapshotWithDecision = publishConfigurationSnapshot({
     ...common,
     snapshotId: "snapshot:waiver-with-decision",
+    fiveAxisPreview: previewForSnapshot("snapshot:waiver-with-decision"),
     validationReport: publishWaiver.issues,
     validationWaivers: publishWaiver.waivers,
     validationWaiverDecisions: [publishWaiver.decision],
@@ -899,6 +938,7 @@ test("新正式 Snapshot 只接受并冻结指纹绑定的确认记录，旧 cod
     () => publishConfigurationSnapshot({
       ...common,
       snapshotId: "snapshot:partial-dual-decision",
+      fiveAxisPreview: previewForSnapshot("snapshot:partial-dual-decision"),
       validationReport: dualWaiver.issues,
       validationWaivers: [dualWaiver.waivers[0]],
       validationWaiverDecisions: [dualWaiver.decision],
@@ -926,6 +966,7 @@ test("新正式 Snapshot 只接受并冻结指纹绑定的确认记录，旧 cod
   const snapshotWithExportOnly = publishConfigurationSnapshot({
     ...common,
     snapshotId: "snapshot:export-only-frozen",
+    fiveAxisPreview: previewForSnapshot("snapshot:export-only-frozen"),
     validationReport: [exportOnly],
   });
   assert.deepEqual(snapshotWithExportOnly.validationReport, [exportOnly]);

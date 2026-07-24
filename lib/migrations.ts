@@ -62,8 +62,14 @@ import {
   resolvePartConstraintSetRef,
 } from "./part-constraints";
 import { deterministicHash } from "./rule-kernel";
+import {
+  fiveAxisDispositionCatalogHash,
+  isOpen005FormalDefinition,
+  orderedFiveAxisDispositionEntries,
+  validateFiveAxisDispositionCatalogChain,
+} from "./five-axis";
 
-export const CURRENT_WORKSPACE_SCHEMA_VERSION = 19;
+export const CURRENT_WORKSPACE_SCHEMA_VERSION = 20;
 
 const DEFAULT_RULE_SETTINGS: WorkspaceRuleSettings = {
   reductionStackingMode: "diminishing_division",
@@ -1561,6 +1567,82 @@ function migrateV18ToV19(input: MutableWorkspace): MutableWorkspace {
   } as MutableWorkspace;
 }
 
+function migrateV19ToV20(input: MutableWorkspace): MutableWorkspace {
+  const state = migrateV18ToV19(input);
+  const definitions = arrayOf<WorkspaceState["fiveAxisViewDefinitions"][number]>(state.fiveAxisViewDefinitions);
+  const existing = arrayOf<WorkspaceState["fiveAxisDispositionCatalogRevisions"][number]>(
+    state.fiveAxisDispositionCatalogRevisions,
+  );
+  const currentId = typeof state.currentFiveAxisDispositionCatalogRevisionId === "string"
+    ? state.currentFiveAxisDispositionCatalogRevisionId : undefined;
+  const current = existing.filter((catalog) => catalog.catalogRevisionId === currentId);
+  if (current.length > 1 || (currentId && current.length === 0)) {
+    throw new Error("FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE");
+  }
+  if (current[0]) validateFiveAxisDispositionCatalogChain({
+    definitions,
+    catalogRevisions: existing,
+    currentCatalogRevisionId: currentId,
+  });
+  if (current[0]) {
+    const identities = new Set<string>();
+    for (const entry of current[0].entries) {
+      const key = `${entry.definitionId}\u0000${entry.definitionVersion}`;
+      if (identities.has(key) || !definitions.some((definition) => definition.definitionId === entry.definitionId
+        && definition.version === entry.definitionVersion && definition.definitionHash === entry.definitionHash)) {
+        throw new Error("FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE");
+      }
+      identities.add(key);
+    }
+  }
+  const currentEntries = new Map((current[0]?.entries ?? []).map((entry) =>
+    [`${entry.definitionId}\u0000${entry.definitionVersion}`, entry]));
+  const entries = orderedFiveAxisDispositionEntries(definitions.map((definition) => {
+    const existingEntry = currentEntries.get(`${definition.definitionId}\u0000${definition.version}`);
+    if (existingEntry && existingEntry.definitionHash === definition.definitionHash) return structuredClone(existingEntry);
+    return {
+      definitionId: definition.definitionId,
+      definitionVersion: definition.version,
+      definitionHash: definition.definitionHash,
+      effectiveUse: "LEGACY_SNAPSHOT_ONLY" as const,
+      semanticContractVersion: null,
+      supersededByDefinitionId: null,
+      supersededByDefinitionVersion: null,
+      reasonCode: isOpen005FormalDefinition(definition)
+        ? "MIGRATION_REQUIRES_EXPLICIT_FORMAL_PUBLICATION"
+        : "MIGRATED_LEGACY_DEFINITION",
+    };
+  }));
+  const sameEntries = (catalog: WorkspaceState["fiveAxisDispositionCatalogRevisions"][number]) =>
+    JSON.stringify(orderedFiveAxisDispositionEntries(catalog.entries)) === JSON.stringify(entries);
+  if (current.length === 1 && sameEntries(current[0]!)) {
+    return { ...state, schemaVersion: 20, fiveAxisDispositionCatalogRevisions: existing } as MutableWorkspace;
+  }
+  const predecessor = current.length === 1 ? current[0]! : undefined;
+  const catalogRevisionId = `five-axis-disposition-catalog:migration-v20:${predecessor ? predecessor.catalogHash : "root"}`;
+  const catalog = {
+    catalogRevisionId,
+    previousCatalogRevisionId: predecessor?.catalogRevisionId ?? null,
+    previousCatalogHash: predecessor?.catalogHash ?? null,
+    schemaVersion: "five-axis-definition-disposition-catalog/v1" as const,
+    entries,
+    catalogHash: fiveAxisDispositionCatalogHash({
+      schemaVersion: "five-axis-definition-disposition-catalog/v1",
+      previousCatalogHash: predecessor?.catalogHash ?? null,
+      entries,
+    }),
+    decidedAt: "2026-07-24T00:00:00.000Z",
+  };
+  return {
+    ...state,
+    schemaVersion: 20,
+    fiveAxisDispositionCatalogRevisions: [...existing, catalog],
+    currentFiveAxisDispositionCatalogRevisionId: catalog.catalogRevisionId,
+    fiveAxisViewDefinitions: definitions,
+    configurationSnapshots: arrayOf<WorkspaceState["configurationSnapshots"][number]>(state.configurationSnapshots),
+  } as MutableWorkspace;
+}
+
 const migrations: Record<number, (state: MutableWorkspace) => MutableWorkspace> = {
   1: migrateV1ToV2,
   2: migrateV2ToV3,
@@ -1580,6 +1662,7 @@ const migrations: Record<number, (state: MutableWorkspace) => MutableWorkspace> 
   16: migrateV16ToV17,
   17: migrateV17ToV18,
   18: migrateV18ToV19,
+  19: migrateV19ToV20,
 };
 
 export function migrateWorkspaceState(input: unknown): WorkspaceState {
@@ -1625,6 +1708,9 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
     performanceSummaryDefinitions: arrayOf<
       WorkspaceState["performanceSummaryDefinitions"][number]
     >(state.performanceSummaryDefinitions),
+    fiveAxisDispositionCatalogRevisions: arrayOf<
+      WorkspaceState["fiveAxisDispositionCatalogRevisions"][number]
+    >(state.fiveAxisDispositionCatalogRevisions),
     patchLedger: state.patchLedger && typeof state.patchLedger === "object"
       ? migratePatchLedger(state.patchLedger as WorkspaceState["patchLedger"],patchLedgerMigrationContext(state))
       : emptyPatchLedger(),

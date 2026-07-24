@@ -7,6 +7,10 @@ import {
   calculateModelFiveAxisPreview,
   createFiveAxisVertexSet,
   validateFiveAxisDisplayBands,
+  fiveAxisDispositionCatalogHash,
+  resolveFormalFiveAxisDefinition,
+  formalFiveAxisPreviewInputHash,
+  formalProjectionReferenceSetHash,
 } from "../lib/five-axis";
 
 test("五维绘图缺失值保持缺失，不会落到零点", () => {
@@ -15,6 +19,49 @@ test("五维绘图缺失值保持缺失，不会落到零点", () => {
   assert.equal(fiveAxisPlotRatio(0), 0);
   assert.equal(fiveAxisPlotRatio(120), 1);
   assert.equal(fiveAxisPlotRatio(75, 150), 0.5);
+});
+
+test("OPEN-005 目录仅接受完整链、唯一 FORMAL_CURRENT 与匹配定义", () => {
+  const def = formalDefinition();
+  const catalog = formalCatalog(def);
+  const resolved = resolveFormalFiveAxisDefinition({
+    definitions: [def],
+    catalogRevisions: [catalog],
+    currentCatalogRevisionId: catalog.catalogRevisionId,
+    definitionId: def.definitionId,
+    definitionVersion: def.version,
+  });
+  assert.equal(resolved.disposition.effectiveUse, "FORMAL_CURRENT");
+  assert.throws(() => resolveFormalFiveAxisDefinition({
+    definitions: [def],
+    catalogRevisions: [{ ...catalog, previousCatalogRevisionId: "missing", previousCatalogHash: "0".repeat(64) }],
+    currentCatalogRevisionId: catalog.catalogRevisionId,
+    definitionId: def.definitionId,
+    definitionVersion: def.version,
+  }), /FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE/);
+  const duplicateCurrent = structuredClone(catalog);
+  duplicateCurrent.entries = [...duplicateCurrent.entries, { ...duplicateCurrent.entries[0]!, definitionId: "five-axis:other" }];
+  duplicateCurrent.catalogHash = fiveAxisDispositionCatalogHash(duplicateCurrent);
+  assert.throws(() => resolveFormalFiveAxisDefinition({
+    definitions: [def], catalogRevisions: [duplicateCurrent],
+    currentCatalogRevisionId: duplicateCurrent.catalogRevisionId,
+    definitionId: def.definitionId, definitionVersion: def.version,
+  }), /FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE/);
+  const spoofed = definition();
+  Object.assign(spoofed, {
+    semanticContractVersion: "five-axis/open005-2026-07-23/v1",
+    hashInputSchemaVersion: "five-axis-hash-input/v1",
+    projectionReferenceSelectorVersion: "projection-reference/current-sku-frozen-match/v1",
+  });
+  spoofed.definitionHash = deterministicHash(Object.fromEntries(Object.entries(spoofed).filter(([key]) => key !== "definitionHash")));
+  const spoofedCatalog = formalCatalog(spoofed);
+  assert.throws(() => resolveFormalFiveAxisDefinition({ definitions: [spoofed], catalogRevisions: [spoofedCatalog],
+    currentCatalogRevisionId: spoofedCatalog.catalogRevisionId, definitionId: spoofed.definitionId, definitionVersion: spoofed.version }),
+  /FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE/);
+  const extraFieldCatalog = { ...catalog, unexpected: true } as unknown as FiveAxisDefinitionDispositionCatalogRevision;
+  assert.throws(() => resolveFormalFiveAxisDefinition({ definitions: [def], catalogRevisions: [extraFieldCatalog],
+    currentCatalogRevisionId: catalog.catalogRevisionId, definitionId: def.definitionId, definitionVersion: def.version }),
+  /FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE/);
 });
 import { deterministicHash } from "../lib/rule-kernel";
 import {
@@ -30,6 +77,7 @@ import {
   testReductionPolicy,
 } from "./helpers/reduction-policy";
 import type {
+  FiveAxisDefinitionDispositionCatalogRevision,
   FiveAxisEntityInput,
   FiveAxisViewDefinition,
   ProjectionTraceStep,
@@ -122,6 +170,58 @@ function definition(): FiveAxisViewDefinition {
     seriesBaselinePolicy: { mode: "explicit_model", required: true },
   };
   return { ...content, definitionHash: deterministicHash(content) };
+}
+
+function formalDefinition(): FiveAxisViewDefinition {
+  const legacy = definition();
+  const axes = [
+    ["pull", "drag", PARTS, "higher_better", "max", "error"],
+    ["durability", "durability", PARTS, "higher_better", "max", "error"],
+    ["cast", "max_cast_distance", ["part:rod"], "higher_better", "max", "ignore_not_applicable"],
+    ["sensitivity", "sensitivity", PARTS, "lower_better", "min", "error"],
+    ["control", "energy_cost_factor", PARTS, "lower_better", "min", "error"],
+  ].map(([axisId, parameterKey, applicablePartIds, direction, vertexSelectorId, missingPolicy], index) => ({
+    axisId, label: axisId, order: index + 1, sourceParameterKeys: [parameterKey as string], applicablePartIds: applicablePartIds as string[],
+    direction: direction as "higher_better" | "lower_better", transformId: "identity", vertexSelectorId: vertexSelectorId as "max" | "min",
+    componentAggregationId: "per_component_no_aggregate" as const,
+    ...(axisId === "cast" ? { contextInheritanceId: "single_applicable_source" as const } : {}),
+    missingPolicy: missingPolicy as "error" | "ignore_not_applicable",
+  })) as FiveAxisViewDefinition["axes"];
+  const content: Omit<FiveAxisViewDefinition, "definitionHash"> = {
+    ...legacy, definitionId: "five-axis:open005-test", axes,
+    semanticContractVersion: "five-axis/open005-2026-07-23/v1", hashInputSchemaVersion: "five-axis-hash-input/v1",
+    projectionReferenceSelectorVersion: "projection-reference/current-sku-frozen-match/v1", weightBandPolicyVersion: "wb-v1", displayBandConfigId: "display-v1",
+    seriesBaselinePolicy: { mode: "projection_reference", selectorVersion: "projection-reference/current-sku-frozen-match/v1" },
+    comparisonPolicy: { minimumItems: 2, maximumItems: 5, mixedItemPartsAllowed: true, referenceRodMode: "first_rod_by_comparison_order", outerRingScore: 100, visualOverflowCap: null },
+  };
+  delete (content as Partial<FiveAxisViewDefinition>).definitionHash;
+  return { ...content, definitionHash: deterministicHash(content) };
+}
+
+function formalCatalog(definition: FiveAxisViewDefinition): FiveAxisDefinitionDispositionCatalogRevision {
+  const entries = [{
+    definitionId: definition.definitionId,
+    definitionVersion: definition.version,
+    definitionHash: definition.definitionHash,
+    effectiveUse: "FORMAL_CURRENT" as const,
+    semanticContractVersion: "five-axis/open005-2026-07-23/v1" as const,
+    supersededByDefinitionId: null,
+    supersededByDefinitionVersion: null,
+    reasonCode: "TEST_FORMAL_CURRENT",
+  }];
+  return {
+    catalogRevisionId: "catalog:test-formal",
+    previousCatalogRevisionId: null,
+    previousCatalogHash: null,
+    schemaVersion: "five-axis-definition-disposition-catalog/v1",
+    entries,
+    catalogHash: fiveAxisDispositionCatalogHash({
+      schemaVersion: "five-axis-definition-disposition-catalog/v1",
+      previousCatalogHash: null,
+      entries,
+    }),
+    decidedAt: "2026-07-24T00:00:00.000Z",
+  };
 }
 
 function component(
@@ -417,7 +517,8 @@ test("发布快照冻结五轴预览，后续输入变化不改写历史内容",
   const projection = state.derivedProjections.find(
     (entry) => entry.id === existing.projectionId,
   )!;
-  const { def, vertexSet } = setup();
+  const def = formalDefinition();
+  const vertexSet = createFiveAxisVertexSet({ definition: def, fishWeightGradeId: "grade:15", referenceComponents: references() });
   const preview = calculateModelFiveAxisPreview({
     modelId: model.id,
     modelRevision: model.revision,
@@ -477,7 +578,8 @@ test("正式快照拒绝未发布、篡改或版本链过期的五维定义", ()
     reductionStackingPolicy,
     existing.finalPanelValues,
   );
-  const { def, vertexSet } = setup();
+  const def = formalDefinition();
+  const vertexSet = createFiveAxisVertexSet({ definition: def, fishWeightGradeId: "grade:15", referenceComponents: references() });
   const preview = calculateModelFiveAxisPreview({
     modelId: model.id,
     modelRevision: model.revision,
@@ -485,8 +587,21 @@ test("正式快照拒绝未发布、篡改或版本链过期的五维定义", ()
     definition: def,
     vertexSet,
     components: modelComponents(),
-    finalPanelHash: deterministicHash(projection.values),
+    finalPanelHash: deterministicHash(existing.finalPanelValues),
   });
+  const projectionReferenceAnchor = { baselineSnapshotId: "snapshot-" + model.id + "-v1", seriesId: series.id, skuId: sku.id,
+    skuRevisionId: String(sku.revision), selectorVersion: "projection-reference/current-sku-frozen-match/v1" as const };
+  const projectionReferences = (["part:rod", "part:reel", "part:line"] as const).map((itemPartId) => ({
+    itemPartId, state: "missing" as const, projectionMatchId: null, projectionMatchRevisionId: null,
+    projectionId: null, projectionRevisionId: null,
+  }));
+  const formalPreview = {
+    ...preview,
+    formalVertexSet: vertexSet,
+    projectionReferenceAnchor, projectionReferenceSetHash: formalProjectionReferenceSetHash({ anchor: projectionReferenceAnchor, references: projectionReferences }),
+    projectionReferences,
+  };
+  formalPreview.inputHash = formalFiveAxisPreviewInputHash(formalPreview);
   const common = {
     publicationMode: "new_formal" as const,
     reductionStackingPolicy,
@@ -496,6 +611,10 @@ test("正式快照拒绝未发布、篡改或版本链过期的五维定义", ()
       existing.finalPanelValues,
     ),
     workspaceId: "workspace:test",
+    fiveAxisDefinitions: [def],
+    formalFiveAxisVertexSet: vertexSet,
+    fiveAxisDispositionCatalogRevisions: [formalCatalog(def)],
+    currentFiveAxisDispositionCatalogRevisionId: "catalog:test-formal",
     model, sku, series, projection,
     seriesSkus: state.skuDrawers,
     finalPanelValues: existing.finalPanelValues,
@@ -536,7 +655,7 @@ test("正式快照拒绝未发布、篡改或版本链过期的五维定义", ()
       }], issues: [],
       warnings: [], inputHash: "pricing-hash",
     },
-    validationReport: [], fiveAxisPreview: preview, warningConfirmations: {},
+    validationReport: [], fiveAxisPreview: formalPreview, warningConfirmations: {},
     publishedBy: "tester", publishedAt: "2026-07-22T00:00:00.000Z",
   };
   const unpublishedContent = { ...def, publicationState: "UNPUBLISHED" as const };
@@ -555,7 +674,7 @@ test("正式快照拒绝未发布、篡改或版本链过期的五维定义", ()
   assert.throws(
     () => publishConfigurationSnapshot({
       ...common,
-      fiveAxisPreview: { ...preview, fiveAxisDefinitionVersion: "stale" },
+      fiveAxisPreview: { ...formalPreview, fiveAxisDefinitionVersion: "stale" },
       fiveAxisDefinition: def,
     }),
     /版本链不一致/,
@@ -576,6 +695,8 @@ test("正式快照拒绝未发布、篡改或版本链过期的五维定义", ()
   );
   const snapshot = publishConfigurationSnapshot({ ...common, fiveAxisDefinition: def });
   assert.equal(verifySnapshotIntegrity(snapshot), true);
+  assert.equal(snapshot.fiveAxisDispositionCatalogRevisionId, "catalog:test-formal");
+  assert.equal(snapshot.fiveAxisDefinitionDisposition?.effectiveUse, "FORMAL_CURRENT");
   assert.ok(snapshot.calculationTrace?.entries.some((entry) =>
     entry.evidence?.adapter === "five_axis_trace/v1"));
   const traceTampered = structuredClone(snapshot);

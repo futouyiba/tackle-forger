@@ -1,4 +1,5 @@
 import { deterministicHash } from "./rule-kernel";
+import { jcsSha256Hex } from "./canonical-json";
 import { validationIssueLevel } from "./validation-issues";
 import type {
   FiveAxisAxisDefinition,
@@ -11,9 +12,251 @@ import type {
   FiveAxisTraceEntry,
   FiveAxisVertexSet,
   FiveAxisViewDefinition,
+  FiveAxisDefinitionDisposition,
+  FiveAxisDefinitionDispositionCatalogRevision,
   ModelFiveAxisPreview,
   ValidationIssue,
 } from "./types";
+
+const FORMAL_SEMANTIC_CONTRACT = "five-axis/open005-2026-07-23/v1" as const;
+const FORMAL_HASH_INPUT_SCHEMA = "five-axis-hash-input/v1" as const;
+const FORMAL_PROJECTION_SELECTOR = "projection-reference/current-sku-frozen-match/v1" as const;
+
+function compareUtf8(left: string, right: string): number {
+  const leftBytes = new TextEncoder().encode(left);
+  const rightBytes = new TextEncoder().encode(right);
+  for (let index = 0; index < Math.min(leftBytes.length, rightBytes.length); index += 1) {
+    if (leftBytes[index] !== rightBytes[index]) return leftBytes[index]! - rightBytes[index]!;
+  }
+  return leftBytes.length - rightBytes.length;
+}
+
+export function orderedFiveAxisDispositionEntries(entries: FiveAxisDefinitionDisposition[]): FiveAxisDefinitionDisposition[] {
+  return [...entries].sort((left, right) => compareUtf8(left.definitionId, right.definitionId)
+    || compareUtf8(left.definitionVersion, right.definitionVersion));
+}
+
+/** Revision identity and decision time are intentionally outside the closed hash input. */
+export function fiveAxisDispositionCatalogHash(input: {
+  schemaVersion: FiveAxisDefinitionDispositionCatalogRevision["schemaVersion"];
+  previousCatalogHash: string | null;
+  entries: FiveAxisDefinitionDisposition[];
+}): string {
+  return jcsSha256Hex({
+    schemaVersion: input.schemaVersion,
+    previousCatalogHash: input.previousCatalogHash,
+    entries: orderedFiveAxisDispositionEntries(input.entries).map((entry) => ({
+      definitionId: entry.definitionId, definitionVersion: entry.definitionVersion, definitionHash: entry.definitionHash,
+      effectiveUse: entry.effectiveUse, semanticContractVersion: entry.semanticContractVersion,
+      supersededByDefinitionId: entry.supersededByDefinitionId,
+      supersededByDefinitionVersion: entry.supersededByDefinitionVersion, reasonCode: entry.reasonCode,
+    })),
+  });
+}
+
+export function isOpen005FormalDefinition(definition: FiveAxisViewDefinition): boolean {
+  return definition.semanticContractVersion === FORMAL_SEMANTIC_CONTRACT
+    && definition.hashInputSchemaVersion === FORMAL_HASH_INPUT_SCHEMA
+    && definition.projectionReferenceSelectorVersion === FORMAL_PROJECTION_SELECTOR
+    && validateOpen005FormalDefinition(definition).length === 0;
+}
+
+const FORMAL_AXES = [
+  ["pull", "drag", "higher_better", "max"],
+  ["durability", "durability", "higher_better", "max"],
+  ["cast", "max_cast_distance", "higher_better", "max"],
+  ["sensitivity", "sensitivity", "lower_better", "min"],
+  ["control", "energy_cost_factor", "lower_better", "min"],
+] as const;
+const FORMAL_PARTS = ["part:rod", "part:reel", "part:line"];
+
+/** Exact OPEN-005 shape check for admission to FORMAL_CURRENT; legacy definitions remain readable. */
+export function validateOpen005FormalDefinition(definition: FiveAxisViewDefinition): string[] {
+  const errors: string[] = [];
+  if (!definition.weightBandPolicyVersion || !definition.displayBandConfigId) errors.push("weight-band/display policy missing");
+  if (definition.axes.length !== 5) errors.push("axis count");
+  for (const [index, [axisId, parameterKey, direction, selector]] of FORMAL_AXES.entries()) {
+    const axis = definition.axes[index];
+    if (!axis || axis.axisId !== axisId || axis.order !== index + 1
+      || axis.sourceParameterKeys.length !== 1 || axis.sourceParameterKeys[0] !== parameterKey
+      || axis.direction !== direction || axis.transformId !== "identity"
+      || axis.vertexSelectorId !== selector || axis.componentAggregationId !== "per_component_no_aggregate") {
+      errors.push(`axis:${axisId}`);
+      continue;
+    }
+    const expectedParts = axisId === "cast" ? ["part:rod"] : FORMAL_PARTS;
+    if (axis.applicablePartIds.length !== expectedParts.length
+      || expectedParts.some((part, partIndex) => axis.applicablePartIds[partIndex] !== part)) errors.push(`parts:${axisId}`);
+    if ((axisId === "cast" && (axis.contextInheritanceId !== "single_applicable_source" || axis.missingPolicy !== "ignore_not_applicable"))
+      || (axisId !== "cast" && axis.missingPolicy !== "error")) errors.push(`missing:${axisId}`);
+  }
+  const baseline = definition.seriesBaselinePolicy;
+  if (baseline.mode !== "projection_reference" || baseline.selectorVersion !== FORMAL_PROJECTION_SELECTOR) errors.push("baseline");
+  const comparison = definition.comparisonPolicy;
+  if (!comparison || comparison.minimumItems !== 2 || !Number.isInteger(comparison.maximumItems)
+    || comparison.maximumItems < comparison.minimumItems || !comparison.mixedItemPartsAllowed
+    || comparison.referenceRodMode !== "first_rod_by_comparison_order"
+    || comparison.outerRingScore !== 100 || comparison.visualOverflowCap !== null) errors.push("comparison");
+  return errors;
+}
+
+export interface ResolvedFormalFiveAxisDefinition {
+  definition: FiveAxisViewDefinition;
+  catalog: FiveAxisDefinitionDispositionCatalogRevision;
+  disposition: FiveAxisDefinitionDisposition;
+}
+
+export function formalProjectionReferenceSetHash(input: {
+  anchor: NonNullable<ModelFiveAxisPreview["projectionReferenceAnchor"]>;
+  references: NonNullable<ModelFiveAxisPreview["projectionReferences"]>;
+}): string {
+  return jcsSha256Hex({ schemaVersion: "five-axis-hash-input/v1", kind: "projection_reference_set",
+    selectorVersion: "projection-reference/current-sku-frozen-match/v1",
+    anchor: { baselineSnapshotId: input.anchor.baselineSnapshotId, seriesId: input.anchor.seriesId, skuId: input.anchor.skuId, skuRevisionId: input.anchor.skuRevisionId },
+    references: input.references.map((reference) => ({ itemPartId: reference.itemPartId, state: reference.state,
+      projectionMatchId: reference.projectionMatchId, projectionMatchRevisionId: reference.projectionMatchRevisionId,
+      projectionId: reference.projectionId, projectionRevisionId: reference.projectionRevisionId })), });
+}
+
+export function formalFiveAxisPreviewInputHash(preview: ModelFiveAxisPreview): string {
+  return jcsSha256Hex({ schemaVersion: "five-axis-hash-input/v1", kind: "five_axis_preview_input",
+    modelId: preview.modelId, modelRevision: preview.modelRevision, finalPanelHash: preview.finalPanelHash,
+    componentInputs: preview.componentInputs, fiveAxisDefinitionId: preview.fiveAxisDefinitionId,
+    fiveAxisDefinitionVersion: preview.fiveAxisDefinitionVersion, fiveAxisDefinitionRevision: preview.fiveAxisDefinitionRevision,
+    fiveAxisDefinitionHash: preview.fiveAxisDefinitionHash, fiveAxisRuleVersion: preview.fiveAxisRuleVersion,
+    vertexSetHash: preview.vertexSetHash, sourceRevision: preview.sourceRevision,
+    projectionReferenceSetHash: preview.projectionReferenceSetHash });
+}
+
+export function validateFiveAxisDispositionCatalogChain(input: {
+  definitions: FiveAxisViewDefinition[];
+  catalogRevisions: FiveAxisDefinitionDispositionCatalogRevision[];
+  currentCatalogRevisionId?: string;
+}): void {
+  const unavailable = (): never => { throw new Error("FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE"); };
+  if (!input.currentCatalogRevisionId) unavailable();
+  const definitionsByIdentity = new Map<string, FiveAxisViewDefinition>();
+  for (const definition of input.definitions) {
+    const key = `${definition.definitionId}\u0000${definition.version}`;
+    if (definitionsByIdentity.has(key)) unavailable();
+    definitionsByIdentity.set(key, definition);
+  }
+  const ids = new Set<string>();
+  const byId = new Map<string, FiveAxisDefinitionDispositionCatalogRevision>();
+  for (const catalog of input.catalogRevisions) {
+    if (ids.has(catalog.catalogRevisionId)) unavailable(); ids.add(catalog.catalogRevisionId); byId.set(catalog.catalogRevisionId, catalog);
+  }
+  let cursor = byId.get(input.currentCatalogRevisionId!); if (!cursor) unavailable();
+  const visited = new Set<string>();
+  while (cursor) {
+    const exactKeys = (value: object, keys: string[]) => Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
+    const nonEmpty = (value: unknown): value is string => typeof value === "string" && value.length > 0;
+    const hash = (value: unknown): value is string => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
+    const utcMillis = (value: unknown): value is string => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) && !Number.isNaN(Date.parse(value));
+    if (visited.has(cursor.catalogRevisionId) || cursor.schemaVersion !== "five-axis-definition-disposition-catalog/v1"
+      || !exactKeys(cursor, ["catalogRevisionId", "previousCatalogRevisionId", "previousCatalogHash", "schemaVersion", "entries", "catalogHash", "decidedAt"])
+      || !nonEmpty(cursor.catalogRevisionId) || !hash(cursor.catalogHash) || !utcMillis(cursor.decidedAt)
+      || !Array.isArray(cursor.entries)
+      || (cursor.previousCatalogRevisionId !== null && !nonEmpty(cursor.previousCatalogRevisionId))
+      || (cursor.previousCatalogHash !== null && !hash(cursor.previousCatalogHash))
+      || cursor.catalogHash !== fiveAxisDispositionCatalogHash(cursor)) unavailable();
+    visited.add(cursor.catalogRevisionId);
+    const sorted = orderedFiveAxisDispositionEntries(cursor.entries);
+    const entryIds = new Set<string>(); let formal = 0;
+    for (let index = 0; index < sorted.length; index += 1) {
+      const entry = sorted[index]!; if (entry !== cursor.entries[index]) unavailable();
+      if (!exactKeys(entry, ["definitionId", "definitionVersion", "definitionHash", "effectiveUse", "semanticContractVersion", "supersededByDefinitionId", "supersededByDefinitionVersion", "reasonCode"])) unavailable();
+      if (!nonEmpty(entry.definitionId) || !nonEmpty(entry.definitionVersion) || !nonEmpty(entry.definitionHash)
+        || !nonEmpty(entry.reasonCode)
+        || (entry.semanticContractVersion !== null && entry.semanticContractVersion !== FORMAL_SEMANTIC_CONTRACT)
+        || (entry.supersededByDefinitionId !== null && !nonEmpty(entry.supersededByDefinitionId))
+        || (entry.supersededByDefinitionVersion !== null && !nonEmpty(entry.supersededByDefinitionVersion))) unavailable();
+      const key = `${entry.definitionId}\u0000${entry.definitionVersion}`;
+      if (entryIds.has(key) || definitionsByIdentity.get(key)?.definitionHash !== entry.definitionHash) unavailable();
+      entryIds.add(key); if (entry.effectiveUse === "FORMAL_CURRENT") formal += 1;
+      if (!["LEGACY_SNAPSHOT_ONLY", "FORMAL_CURRENT", "SUPERSEDED"].includes(entry.effectiveUse)
+        || (entry.effectiveUse === "FORMAL_CURRENT" && entry.semanticContractVersion !== FORMAL_SEMANTIC_CONTRACT)
+        || (entry.effectiveUse === "LEGACY_SNAPSHOT_ONLY" && entry.semanticContractVersion !== null)
+        || ((entry.supersededByDefinitionId === null) !== (entry.supersededByDefinitionVersion === null))
+        || (entry.effectiveUse === "SUPERSEDED" && (entry.supersededByDefinitionId === null || entry.supersededByDefinitionVersion === null))
+        || (entry.effectiveUse !== "SUPERSEDED" && (entry.supersededByDefinitionId !== null || entry.supersededByDefinitionVersion !== null))) unavailable();
+    }
+    if (formal > 1 || (cursor.previousCatalogRevisionId === null) !== (cursor.previousCatalogHash === null)) unavailable();
+    if (!cursor.previousCatalogRevisionId) break;
+    const previous = byId.get(cursor.previousCatalogRevisionId);
+    if (!previous || previous.catalogHash !== cursor.previousCatalogHash) unavailable(); cursor = previous;
+  }
+}
+
+/** Only the explicit immutable catalog head can authorize a new formal snapshot. */
+export function resolveFormalFiveAxisDefinition(input: {
+  definitions: FiveAxisViewDefinition[];
+  catalogRevisions: FiveAxisDefinitionDispositionCatalogRevision[];
+  currentCatalogRevisionId?: string;
+  definitionId: string;
+  definitionVersion: string;
+}): ResolvedFormalFiveAxisDefinition {
+  const unavailable = (): never => { throw new Error("FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE"); };
+  if (!input.currentCatalogRevisionId) unavailable();
+  validateFiveAxisDispositionCatalogChain(input);
+  const revisionIds = new Set<string>();
+  for (const candidate of input.catalogRevisions) {
+    if (revisionIds.has(candidate.catalogRevisionId)) unavailable();
+    revisionIds.add(candidate.catalogRevisionId);
+  }
+  const catalogs = input.catalogRevisions.filter((catalog) => catalog.catalogRevisionId === input.currentCatalogRevisionId);
+  if (catalogs.length !== 1) unavailable();
+  const catalog = catalogs[0]!;
+  const byId = new Map(input.catalogRevisions.map((candidate) => [candidate.catalogRevisionId, candidate]));
+  const definitionsByIdentity = new Map<string, FiveAxisViewDefinition>();
+  for (const definition of input.definitions) {
+    const key = `${definition.definitionId}\u0000${definition.version}`;
+    if (definitionsByIdentity.has(key)) unavailable();
+    definitionsByIdentity.set(key, definition);
+  }
+  const visited = new Set<string>();
+  let cursor: FiveAxisDefinitionDispositionCatalogRevision | undefined = catalog;
+  while (cursor) {
+    if (visited.has(cursor.catalogRevisionId)
+      || cursor.schemaVersion !== "five-axis-definition-disposition-catalog/v1"
+      || cursor.catalogHash !== fiveAxisDispositionCatalogHash(cursor)) unavailable();
+    visited.add(cursor.catalogRevisionId);
+    const sorted = orderedFiveAxisDispositionEntries(cursor.entries);
+    if (sorted.some((entry, index) => entry !== cursor!.entries[index])) unavailable();
+    const entryIds = new Set<string>();
+    let formalCount = 0;
+    for (const entry of cursor.entries) {
+      const key = `${entry.definitionId}\u0000${entry.definitionVersion}`;
+      if (entryIds.has(key) || definitionsByIdentity.get(key)?.definitionHash !== entry.definitionHash) unavailable();
+      entryIds.add(key);
+      if (entry.effectiveUse === "FORMAL_CURRENT") formalCount += 1;
+    }
+    if (formalCount > 1) unavailable();
+    const hasPreviousId = cursor.previousCatalogRevisionId !== null;
+    const hasPreviousHash = cursor.previousCatalogHash !== null;
+    if (hasPreviousId !== hasPreviousHash) unavailable();
+    if (!hasPreviousId) break;
+    const previous = byId.get(cursor.previousCatalogRevisionId!);
+    if (!previous || previous.catalogHash !== cursor.previousCatalogHash) unavailable();
+    cursor = previous;
+  }
+  const identities = new Set<string>();
+  for (const entry of catalog.entries) {
+    const key = `${entry.definitionId}\u0000${entry.definitionVersion}`;
+    if (identities.has(key)) unavailable();
+    identities.add(key);
+  }
+  const formal = catalog.entries.filter((entry) => entry.effectiveUse === "FORMAL_CURRENT");
+  if (formal.length !== 1) unavailable();
+  const disposition = formal[0]!;
+  if (disposition.definitionId !== input.definitionId || disposition.definitionVersion !== input.definitionVersion
+    || disposition.semanticContractVersion !== FORMAL_SEMANTIC_CONTRACT) unavailable();
+  const definition = definitionsByIdentity.get(`${disposition.definitionId}\u0000${disposition.definitionVersion}`);
+  if (!definition) unavailable();
+  const resolvedDefinition = definition!;
+  if (resolvedDefinition.definitionHash !== disposition.definitionHash || !isOpen005FormalDefinition(resolvedDefinition)) unavailable();
+  return { definition: resolvedDefinition, catalog, disposition };
+}
 
 export function fiveAxisPlotRatio(score: number | null, maxScore = 100): number | null {
   if (score === null || !Number.isFinite(score) || !Number.isFinite(maxScore) || maxScore <= 0) {
@@ -81,7 +324,7 @@ export function validateFiveAxisDefinition(
         message: `轴 ${axis.axisId} 未配置适用部件。`,
       });
     }
-    if (axis.componentAggregationId !== "component_min_ratio") {
+    if (axis.componentAggregationId !== "component_min_ratio" && axis.componentAggregationId !== "per_component_no_aggregate") {
       issues.push({
         level: "error",
         code: "FIVE_AXIS_AGGREGATION_UNSUPPORTED",
@@ -748,6 +991,9 @@ export function calculateModelFiveAxisPreview(input: {
   });
   return {
     modelId: input.modelId,
+    modelRevision: input.modelRevision,
+    finalPanelHash: input.finalPanelHash,
+    componentInputs: structuredClone(input.components),
     fishWeightGradeId: input.referenceFishWeightGradeId,
     fiveAxisDefinitionId: input.definition.definitionId,
     fiveAxisDefinitionVersion: input.definition.version,

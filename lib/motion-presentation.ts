@@ -84,6 +84,10 @@ export const motionTokens = {
     boundary: { sourceToImpactMs: 30, impactToMainMs: 100, mainToExplanationMs: 120, explanationToEvidenceMs: 60, evidenceToNextMs: 80 },
     cost: { sourceToImpactMs: 20, impactToMainMs: 90, mainToExplanationMs: 100, explanationToEvidenceMs: 30, evidenceToNextMs: 40 },
   },
+  // §6.3 focus-window floors. The compressor scales only the headroom above
+  // these floors, never the floors themselves, so an over-budget source count
+  // can never push a focus gate below 90 / 100ms.
+  phaseFloor: { impactToMainMs: 90, mainToExplanationMs: 100 },
   easing: { enter: "cubic-bezier(0.2, 0.8, 0.2, 1)", emphasis: "cubic-bezier(0.16, 1, 0.3, 1)" },
   displacement: { cardPx: 16, emphasisPx: 4 },
   emphasis: { normal: 1, restrained: 0.35 },
@@ -239,11 +243,11 @@ export function createMotionPlaybackController(
   const clock = options.clock ?? browserMotionClock;
   const listeners = new Set<() => void>();
   let state = initialMotionPlaybackState(model, options.reducedMotion);
-  // Computed once from the authoritative model: a single pass can never exceed
-  // the 2.5s hard cap regardless of how many sources feed it. The focus gates
-  // (impactToMain/mainToExplanation) stay in-window at scale 1; only an
-  // over-budget source count shortens the gates via representative fast playback.
-  const timingScale = computeMotionTimingScale(model.steps);
+  // Computed once from the authoritative model. The focus gates
+  // (impactToMain/mainToExplanation) stay inside their §6.3 windows at every
+  // source count: the budget scales their headroom above the floor and clamps
+  // handoff phases first, so compression never drops a focus gate below 90/100ms.
+  const timingBudget = computeMotionTimingBudget(model.steps);
   let handle: unknown;
   let disposed = false;
   let generation = 0;
@@ -258,7 +262,7 @@ export function createMotionPlaybackController(
     const expectedGeneration = generation;
     const delayMs = state.status === "locking"
       ? motionTokens.duration.finalLockMs
-      : playbackPhaseDuration(model.steps[state.stepIndex], state.stepIndex, state.phase) * timingScale;
+      : effectivePlaybackPhaseDuration(model.steps[state.stepIndex], state.stepIndex, state.phase, timingBudget);
     handle = clock.set(() => {
       if (disposed || expectedGeneration !== generation) return;
       handle = undefined;
@@ -331,23 +335,80 @@ export function playbackStepTotalMs(profile: MotionTimingProfile): number {
 }
 
 /**
- * Uniform compression factor for one full presentation pass.
+ * Per-pass compression budget that keeps the §6.3 focus gates in-window.
  *
  * 规范 §6.3: "实现可以根据来源数量在已批准范围内压缩节拍，但必须保持稳定
- * 顺序和 2.5 秒上限。来源过多时不得无限延长；应显示代表性高速播放并保留
- * 完整证据". This function never drops a Trace step — it only shortens each
- * step's gates so the authoritative evidence (`traceEntryIds`) stays complete.
+ * 顺序和 2.5 秒上限". Handoff phases (source/explanation/evidence) carry the
+ * inter-step handoff and are clamped first, freely toward 0. Focus gates
+ * (impact/main) only ever surrender their headroom above the floor — the floor
+ * itself is never scaled — so impactToMainMs and mainToExplanationMs can never
+ * drop below 90 / 100ms regardless of source count.
  *
  * The final lock is excluded from the compressed budget so it always lands in
- * its own 220–280ms window; only the serial Trace gates are scaled.
+ * its own 220–280ms window; only the serial Trace gates are scaled. When even
+ * the focus floors exceed the step budget (`feasible === false`) the pass is
+ * over the serial cap; §6.3 routes that case to grouped settlement (threshold
+ * configured separately), and this function still keeps every gate at its floor.
  */
-export function computeMotionTimingScale(steps: readonly MotionPresentationStep[]): number {
-  const stepsBudget = MOTION_PRESENTATION_HARD_TOTAL_MS - motionTokens.duration.finalLockMs;
-  let uncompressed = 0;
-  for (const [index, step] of steps.entries()) {
-    uncompressed += playbackStepTotalMs(playbackTimingProfile(step, index));
-  }
-  if (uncompressed <= stepsBudget) return 1;
+export interface MotionTimingBudget {
+  /** Multiplier for handoff phases (source/explanation/evidence), in [0, 1]. */
+  readonly handoffScale: number;
+  /** Multiplier for focus-gate headroom above the floor, in [0, 1]; the floor itself is never scaled. */
+  readonly focusScale: number;
+  /** False only when the focus floors alone exceed the step budget (needs the grouped-settlement path). */
+  readonly feasible: boolean;
+}
+
+const clampTimingRatio = (value: number): number => {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  if (value >= 1) return 1;
   // Floor to 6 decimals so floating error can never push the total past the hard cap.
-  return Math.floor((stepsBudget / uncompressed) * 1e6) / 1e6;
+  return Math.floor(value * 1e6) / 1e6;
+};
+
+export function computeMotionTimingBudget(steps: readonly MotionPresentationStep[]): MotionTimingBudget {
+  const budget = MOTION_PRESENTATION_HARD_TOTAL_MS - motionTokens.duration.finalLockMs;
+  let focusToken = 0;
+  let focusFloor = 0;
+  let handoff = 0;
+  for (const [index, step] of steps.entries()) {
+    const timing = motionTokens.phaseDelay[playbackTimingProfile(step, index)];
+    focusToken += timing.impactToMainMs + timing.mainToExplanationMs;
+    focusFloor += motionTokens.phaseFloor.impactToMainMs + motionTokens.phaseFloor.mainToExplanationMs;
+    handoff += timing.sourceToImpactMs + timing.explanationToEvidenceMs + timing.evidenceToNextMs;
+  }
+  if (focusToken + handoff <= budget) return { handoffScale: 1, focusScale: 1, feasible: true };
+  // 1. Clamp handoff first; focus gates stay at their in-window tokens.
+  if (focusToken <= budget) return { handoffScale: clampTimingRatio((budget - focusToken) / handoff), focusScale: 1, feasible: true };
+  // 2. Handoff exhausted: surrender focus headroom down to (never below) the floor.
+  if (focusFloor <= budget) {
+    const focusHeadroom = focusToken - focusFloor;
+    return { handoffScale: 0, focusScale: clampTimingRatio((budget - focusFloor) / focusHeadroom), feasible: true };
+  }
+  // 3. Too many sources for serial playback: clamp everything to the floor.
+  return { handoffScale: 0, focusScale: 0, feasible: false };
+}
+
+/**
+ * Post-compression duration of one presentation phase. Focus gates return
+ * `floor + headroom * focusScale` so they stay inside [90,120] / [100,140];
+ * handoff phases return `token * handoffScale`.
+ */
+export function effectivePlaybackPhaseDuration(
+  step: MotionPresentationStep | undefined,
+  stepIndex: number,
+  phase: MotionPlaybackPhase,
+  budget: MotionTimingBudget,
+): number {
+  const timing = motionTokens.phaseDelay[playbackTimingProfile(step, stepIndex)];
+  if (phase === "impact") {
+    return motionTokens.phaseFloor.impactToMainMs + (timing.impactToMainMs - motionTokens.phaseFloor.impactToMainMs) * budget.focusScale;
+  }
+  if (phase === "main_number") {
+    return motionTokens.phaseFloor.mainToExplanationMs + (timing.mainToExplanationMs - motionTokens.phaseFloor.mainToExplanationMs) * budget.focusScale;
+  }
+  const handoffToken = phase === "source"
+    ? timing.sourceToImpactMs
+    : phase === "explanation" ? timing.explanationToEvidenceMs : timing.evidenceToNextMs;
+  return handoffToken * budget.handoffScale;
 }

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { buildMotionPresentationModel, computeMotionTimingScale, createMotionPlaybackController, initialMotionPlaybackState, isMotionDevelopmentFixtureEnabled, MOTION_PRESENTATION_HARD_TOTAL_MS, motionPlaybackReducer, motionTokens, playbackPhaseDuration, playbackStepTotalMs, playbackTimingProfile, systemPrefersReducedMotion, type MotionClock, type MotionPlaybackPhase, type MotionTimingProfile, type MotionTraceLike } from "../lib/motion-presentation";
+import { buildMotionPresentationModel, computeMotionTimingBudget, createMotionPlaybackController, effectivePlaybackPhaseDuration, initialMotionPlaybackState, isMotionDevelopmentFixtureEnabled, MOTION_PRESENTATION_HARD_TOTAL_MS, motionPlaybackReducer, motionTokens, playbackPhaseDuration, playbackStepTotalMs, playbackTimingProfile, systemPrefersReducedMotion, type MotionClock, type MotionPlaybackPhase, type MotionTimingBudget, type MotionTimingProfile, type MotionTraceLike } from "../lib/motion-presentation";
 
 const trace: MotionTraceLike[] = [
   { traceEntryId: "one", sequence: 1, layer: "method", sourceRef: { sourceType: "Method", sourceId: "lure" }, sourceVersion: "2", before: 8, operation: "add", operand: 2, after: 10, effect: "benefit", warningIssueIds: [], inputHash: "input", outputHash: "out-1" },
@@ -203,7 +203,7 @@ test("eight trailing cost/Patch sources finish at the 2.5s cap with focus gates 
   ]);
   const model8 = buildMotionPresentationModel({ businessRevision: "r8c", subjectId: "model", parameterKey: "pull", trace: trace8 });
   // 320 + 7*280 == 2280 exactly fills the step budget; no compression, so the focus gates stay at their in-window tokens.
-  assert.equal(computeMotionTimingScale(model8.steps), 1, "eight cost/Patch sources exactly fill the budget, no compression");
+  assert.deepEqual(computeMotionTimingBudget(model8.steps), { handoffScale: 1, focusScale: 1, feasible: true }, "eight cost/Patch sources exactly fill the budget, no compression");
   const clock = new FakeClock(); const controller = createMotionPlaybackController(model8, { clock });
   controller.dispatch({ type: "play" });
   for (let handle = 1; handle <= 40; handle += 1) clock.fire(handle);
@@ -237,25 +237,100 @@ test("mixed boundary/rounding and normal sources stay under the cap with roundin
   assert.equal(modelMix.evidence.traceEntryIds.length, 8);
 });
 
-test("nine or more sources trigger representative fast playback under the hard cap without dropping evidence", () => {
-  for (const count of [9, 12, 16]) {
-    const traceN = makeTraceEntries(
-      Array.from({ length: count }, (_, index) => ({
-        layer: index === 0 ? "weight_template" : "method",
-        effect: (index % 3 === 0 ? "cost" : "benefit") as MotionTraceLike["effect"],
-      })),
-    );
-    const modelN = buildMotionPresentationModel({ businessRevision: `r${count}`, subjectId: "model", parameterKey: "pull", trace: traceN });
-    const scale = computeMotionTimingScale(modelN.steps);
-    assert.ok(scale > 0 && scale <= 1, `N=${count} scale ${scale} out of (0,1]`);
+test("compressed source counts keep every focus gate inside the §6.3 windows and stay under the hard cap", () => {
+  // Each scenario triggers compression (uncompressed total > step budget). The
+  // focus gates (impact 90–120, main 100–140) must still hold AFTER compression
+  // while the serial total stays ≤ the 2.5s cap — the simultaneous §6.3
+  // guarantee a uniform `* timingScale` would silently break.
+  const scenarios: ReadonlyArray<{
+    name: string;
+    specs: ReadonlyArray<{ layer: string; effect?: MotionTraceLike["effect"]; evidence?: Record<string, unknown> }>;
+  }> = [
+    { name: "nine-mixed", specs: Array.from({ length: 9 }, (_, index) => ({ layer: index === 0 ? "weight_template" : "method", effect: (index % 3 === 0 ? "cost" : "benefit") as MotionTraceLike["effect"] })) },
+    { name: "twelve-mixed", specs: Array.from({ length: 12 }, (_, index) => ({ layer: index === 0 ? "weight_template" : "method", effect: (index % 3 === 0 ? "cost" : "benefit") as MotionTraceLike["effect"] })) },
+    { name: "nine-all-negative", specs: [{ layer: "weight_template", effect: "cost" as const }, ...Array.from({ length: 8 }, () => ({ layer: "method", effect: "cost" as const }))] },
+    { name: "ten-mixed-boundary-patch", specs: [
+      { layer: "weight_template" },
+      { layer: "model_patch", effect: "cost" as const },
+      { layer: "boundary", effect: "cost" as const, evidence: { adapter: "pricing_trace/v2", operation: "round" } },
+      { layer: "method", effect: "cost" as const },
+      { layer: "method" },
+      { layer: "method" },
+      { layer: "method", effect: "cost" as const },
+      { layer: "model_patch", effect: "cost" as const },
+      { layer: "method" },
+      { layer: "method" },
+    ] },
+  ];
+  for (const { name, specs } of scenarios) {
+    const modelN = buildMotionPresentationModel({ businessRevision: name, subjectId: "model", parameterKey: "pull", trace: makeTraceEntries(specs) });
+    const budget = computeMotionTimingBudget(modelN.steps);
+    assert.equal(budget.feasible, true, `${name}: focus floors must fit the step budget`);
     const clock = new FakeClock(); const controller = createMotionPlaybackController(modelN, { clock });
     controller.dispatch({ type: "play" });
-    for (let handle = 1; handle <= count * 5; handle += 1) clock.fire(handle);
-    clock.fire(count * 5 + 1);
-    assert.equal(controller.getState().status, "completed", `N=${count} should reach completed`);
+    for (let handle = 1; handle <= modelN.steps.length * 5; handle += 1) clock.fire(handle);
+    clock.fire(modelN.steps.length * 5 + 1);
+    assert.equal(controller.getState().status, "completed", `${name}: should reach completed`);
+    assert.equal(modelN.evidence.traceEntryIds.length, modelN.steps.length, `${name}: evidence must stay complete`);
+    // Behavioral focus-window check on the ACTUAL scheduled delays (clock.delays
+    // are in step order source/impact/main/explanation/evidence): impact and
+    // main must remain inside [90,120] / [100,140] even under compression.
+    for (let step = 0; step < modelN.steps.length; step += 1) {
+      const impact = clock.delays[step * 5 + 1]!;
+      const main = clock.delays[step * 5 + 2]!;
+      assert.ok(impact >= 90 && impact <= 120, `${name} step ${step} impact ${impact} outside 90–120`);
+      assert.ok(main >= 100 && main <= 140, `${name} step ${step} main ${main} outside 100–140`);
+    }
     const total = clock.delays.reduce((sum, delay) => sum + delay, 0);
-    assert.ok(total <= MOTION_PRESENTATION_HARD_TOTAL_MS, `N=${count} total ${total}ms exceeded the hard cap`);
-    // Representative fast playback shortens gates; it never groups or drops Trace evidence.
-    assert.equal(modelN.evidence.traceEntryIds.length, count, `N=${count} evidence must stay complete`);
+    assert.ok(total <= MOTION_PRESENTATION_HARD_TOTAL_MS, `${name} total ${total}ms exceeded the hard cap`);
   }
+});
+
+test("beyond the serial-feasible bound the compressor clamps focus gates to their floor and never below", () => {
+  // 16 sources: the focus floors alone (16 * 190 = 3040ms) exceed the 2280ms
+  // step budget, so serial playback cannot meet the 2.5s cap. §6.3 routes this
+  // to grouped settlement (threshold configured separately); until then the
+  // compressor degrades gracefully — focus gates stay at the §6.3 floor, never
+  // below it — and the complete evidence is retained.
+  const trace16 = makeTraceEntries(Array.from({ length: 16 }, (_, index) => ({
+    layer: index === 0 ? "weight_template" : "method",
+    effect: (index % 3 === 0 ? "cost" : "benefit") as MotionTraceLike["effect"],
+  })));
+  const model16 = buildMotionPresentationModel({ businessRevision: "r16", subjectId: "model", parameterKey: "pull", trace: trace16 });
+  const budget = computeMotionTimingBudget(model16.steps);
+  assert.equal(budget.feasible, false, "16 sources exceed the serial-feasible bound");
+  assert.equal(budget.focusScale, 0);
+  assert.equal(budget.handoffScale, 0);
+  const clock = new FakeClock(); const controller = createMotionPlaybackController(model16, { clock });
+  controller.dispatch({ type: "play" });
+  for (let handle = 1; handle <= 16 * 5; handle += 1) clock.fire(handle);
+  clock.fire(16 * 5 + 1);
+  assert.equal(controller.getState().status, "completed");
+  for (let step = 0; step < 16; step += 1) {
+    const impact = clock.delays[step * 5 + 1]!;
+    const main = clock.delays[step * 5 + 2]!;
+    assert.ok(impact >= 90 && impact <= 120, `step ${step} impact ${impact} outside 90–120`);
+    assert.ok(main >= 100 && main <= 140, `step ${step} main ${main} outside 100–140`);
+  }
+  assert.equal(model16.evidence.traceEntryIds.length, 16, "evidence must stay complete even past the feasible bound");
+});
+
+test("effectivePlaybackPhaseDuration scales focus headroom and handoff phases independently", () => {
+  const floor = motionTokens.phaseFloor;
+  const establish = model.steps[0]!;
+  const patchStep = model.steps[1]!;
+  // No compression: effective equals the token.
+  const idle: MotionTimingBudget = { handoffScale: 1, focusScale: 1, feasible: true };
+  assert.equal(effectivePlaybackPhaseDuration(patchStep, 1, "impact", idle), motionTokens.phaseDelay.patch.impactToMainMs);
+  assert.equal(effectivePlaybackPhaseDuration(patchStep, 1, "source", idle), motionTokens.phaseDelay.patch.sourceToImpactMs);
+  // Heavy compression: focus gates collapse to the floor (never below); handoff to 0.
+  const crushed: MotionTimingBudget = { handoffScale: 0, focusScale: 0, feasible: true };
+  assert.equal(effectivePlaybackPhaseDuration(establish, 0, "impact", crushed), floor.impactToMainMs, "impact never drops below the floor");
+  assert.equal(effectivePlaybackPhaseDuration(establish, 0, "main_number", crushed), floor.mainToExplanationMs, "main never drops below the floor");
+  assert.equal(effectivePlaybackPhaseDuration(patchStep, 1, "source", crushed), 0, "handoff is clamped to 0");
+  // Half headroom on the establish profile: impact 90 + (100-90)*0.5 = 95; main 100 + (120-100)*0.5 = 110.
+  const half: MotionTimingBudget = { handoffScale: 0.5, focusScale: 0.5, feasible: true };
+  assert.equal(effectivePlaybackPhaseDuration(establish, 0, "impact", half), 95);
+  assert.equal(effectivePlaybackPhaseDuration(establish, 0, "main_number", half), 110);
+  assert.equal(effectivePlaybackPhaseDuration(patchStep, 1, "source", half), motionTokens.phaseDelay.patch.sourceToImpactMs * 0.5);
 });

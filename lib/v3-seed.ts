@@ -284,7 +284,15 @@ function modelPatch(
   };
 }
 
-export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
+/**
+ * Demo hydration is intentionally opt-in at production call sites.  It may
+ * construct illustrative formal records for fixtures, but it is never a
+ * substitute for the capability-gated publication command.
+ */
+export function hydrateV3Seed(
+  input: WorkspaceState,
+  options: { mode?: "demo" | "production" } = {},
+): WorkspaceState {
   if (input.collections.length || input.seriesDefinitions.length) return input;
   const state = structuredClone(input);
   const method = state.methodProfiles.find((profile) => profile.id === "method:lure");
@@ -893,14 +901,17 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
     ...candidateRecipe,
     partConstraintSetRef: candidateConstraintRef,
   };
-  const formalFiveAxisDefinition = createFormalFiveAxisViewDefinition();
+  const demoMode = options.mode !== "production";
+  const formalFiveAxisDefinition = demoMode
+    ? createFormalFiveAxisViewDefinition()
+    : undefined;
   const fiveAxisDefinitions = state.fiveAxisViewDefinitions.some(
     (definition) => definition.definitionId === fiveAxisDefinition.definitionId
       && definition.version === fiveAxisDefinition.version,
   )
     ? [...state.fiveAxisViewDefinitions]
     : [...state.fiveAxisViewDefinitions, fiveAxisDefinition];
-  if (!fiveAxisDefinitions.some((definition) =>
+  if (formalFiveAxisDefinition && !fiveAxisDefinitions.some((definition) =>
     definition.definitionId === formalFiveAxisDefinition.definitionId
     && definition.version === formalFiveAxisDefinition.version)) {
     fiveAxisDefinitions.push(formalFiveAxisDefinition);
@@ -909,10 +920,10 @@ export function hydrateV3Seed(input: WorkspaceState): WorkspaceState {
     definitions: fiveAxisDefinitions,
     existingRevisions: state.fiveAxisDispositionCatalogRevisions,
     currentRevisionId: state.currentFiveAxisDispositionCatalogRevisionId,
-    formalCurrent: {
+    formalCurrent: formalFiveAxisDefinition ? {
       definitionId: formalFiveAxisDefinition.definitionId,
       definitionVersion: formalFiveAxisDefinition.version,
-    },
+    } : undefined,
     decidedAt: CREATED_AT,
   });
 

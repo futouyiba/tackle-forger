@@ -389,7 +389,17 @@ export function createFiveAxisDispositionCatalogRevision(input: {
   }
   const inheritedFormal = current?.entries.find((entry) =>
     entry.effectiveUse === "FORMAL_CURRENT");
-  const targetFormal = input.formalCurrent ?? (inheritedFormal
+  const inheritedFormalIsUsable = inheritedFormal && (() => {
+    const definition = byIdentity.get(`${inheritedFormal.definitionId}\u0000${inheritedFormal.definitionVersion}`);
+    try {
+      if (!definition || definition.definitionHash !== inheritedFormal.definitionHash) return false;
+      assertFormalFiveAxisViewDefinition(definition);
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+  const targetFormal = input.formalCurrent ?? (inheritedFormalIsUsable && inheritedFormal
     ? {
         definitionId: inheritedFormal.definitionId,
         definitionVersion: inheritedFormal.definitionVersion,
@@ -932,7 +942,11 @@ function formalSeriesHashInput(series: FiveAxisSeries): object {
         return point.trace.map((entry) => ({
           step: entry.step,
           message: entry.message,
-          value: entry.value === undefined ? null : entry.value,
+          value: entry.value === undefined || entry.value === null
+            ? null
+            : typeof entry.value === "number"
+              ? canonicalFiniteNumber(entry.value, `${point.axisId}.trace.value`)
+              : entry.value,
         }));
       })(),
     })),

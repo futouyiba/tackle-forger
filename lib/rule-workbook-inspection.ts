@@ -21,6 +21,7 @@ import {
   type AffixAliasBinding,
   type QualityCombinationSourceCell,
   type QualityValuePolicyDraft,
+  type QualityTableDescriptor,
   type QualityValueRange,
 } from "./quality-value-policy";
 import {
@@ -57,6 +58,13 @@ export const CANONICAL_IDENTITY_SHEET_SPECS: IdentitySheetSpec[] = [
 
 const AFFIX_SHEET_ID = "zrVOxd";
 const WEIGHT_TEMPLATE_SHEET_ID = "d6e928";
+const QUALITY_SHEET_ID = "FqD4j7";
+// The repository's Feishu reader already rejects sources over 10,000 rows.
+// Keep this whole-sheet read below the same row ceiling and additionally cap
+// columns/cells so corrupt grid metadata cannot request an unbounded payload.
+const MAXIMUM_FEISHU_SHEET_ROWS = 10_000;
+const MAXIMUM_QUALITY_SHEET_COLUMNS = 200;
+const MAXIMUM_QUALITY_SHEET_CELLS = 200_000;
 /** The header occupies row 2; a smaller grid cannot hold an affix machine row. */
 const MINIMUM_AFFIX_MACHINE_ROW_COUNT = 3;
 
@@ -88,6 +96,30 @@ export function canonicalAffixSheetRanges(sourceRevision: FeishuSourceRevision):
   };
 }
 
+function spreadsheetColumnName(index: number) {
+  let name = "";
+  for (let current = index + 1; current > 0; current = Math.floor((current - 1) / 26)) {
+    name = String.fromCharCode(65 + (current - 1) % 26) + name;
+  }
+  return name;
+}
+
+/**
+ * 07_品质评分的可读边界由同一 source revision 的 grid 元数据决定。
+ * 该表的矩阵块会随内容扩列、移动，故不能把旧 B4:N50 当作来源契约。
+ */
+export function canonicalQualitySheetRange(sourceRevision: FeishuSourceRevision) {
+  const sheet = sourceRevision.sheets.find((candidate) => candidate.sheetId === QUALITY_SHEET_ID);
+  const rowCount = sheet?.rowCount;
+  const columnCount = sheet?.columnCount;
+  if (!Number.isSafeInteger(rowCount) || rowCount! < 1 || rowCount! > MAXIMUM_FEISHU_SHEET_ROWS
+    || !Number.isSafeInteger(columnCount) || columnCount! < 1 || columnCount! > MAXIMUM_QUALITY_SHEET_COLUMNS
+    || rowCount! * columnCount! > MAXIMUM_QUALITY_SHEET_CELLS) {
+    throw new Error("07_品质评分/FqD4j7 缺少可验证的 grid 元数据；已停止读取，避免截断或猜测组合矩阵。");
+  }
+  return `A1:${spreadsheetColumnName(columnCount! - 1)}${rowCount}`;
+}
+
 export function canonicalRuleWorkbookRangeRequests(sourceRevision: FeishuSourceRevision) {
   const affixRanges = canonicalAffixSheetRanges(sourceRevision);
   const weightSheet = sourceRevision.sheets.find((sheet) => sheet.sheetId === WEIGHT_TEMPLATE_SHEET_ID);
@@ -99,7 +131,7 @@ export function canonicalRuleWorkbookRangeRequests(sourceRevision: FeishuSourceR
       sheetId,
       range: sheetId === AFFIX_SHEET_ID ? affixRanges.identityRange : sheetId === WEIGHT_TEMPLATE_SHEET_ID ? `BG1:BH${weightSheet!.rowCount!}` : range,
     })),
-    { sheetId: "FqD4j7", range: "B4:N50" },
+    { sheetId: QUALITY_SHEET_ID, range: canonicalQualitySheetRange(sourceRevision) },
     { sheetId: AFFIX_SHEET_ID, range: affixRanges.aliasRange },
     { sheetId: "u87sRh", range: "B10:R70" },
     { sheetId: "fATowU", range: "B2:AD20" },
@@ -187,11 +219,18 @@ const basketIds: Record<string, string> = {
 export function pricingDraftFromRanges(input: {
   sourceRevision: FeishuSourceRevision;
   qualityValues: unknown[][];
+  /** Exact rows selected by the quality-table parser; avoids a second layout guess. */
+  qualitySourceRows?: Array<{ code: string; basketAlias: string; minScore: number; maxScore: number; minFactor: number; maxFactor: number; mappingCell: string; factorCell: string; rowKey: string }>;
   pricingValues?: unknown[][];
   typeValues?: unknown[][];
   importedAt: string;
 }): PricingPolicyDraft {
-  const qualityMappings = input.qualityValues.flatMap((row, index): QualityPricingBasketMapping[] => {
+  const qualityMappings = input.qualitySourceRows
+    ? input.qualitySourceRows.flatMap((row): QualityPricingBasketMapping[] => {
+      const qualityId = qualityIds[row.code]; const pricingBasketId = basketIds[row.basketAlias];
+      return qualityId && pricingBasketId ? [{ qualityId, pricingBasketId, sourceAlias: row.code, status: "SOURCE", source: { sheetId: QUALITY_SHEET_ID, cell: row.mappingCell, rowKey: row.rowKey } }] : [];
+    })
+    : input.qualityValues.flatMap((row, index): QualityPricingBasketMapping[] => {
     const code = text(row[1]);
     const basketAlias = text(row[2]);
     const qualityId = qualityIds[code];
@@ -211,7 +250,14 @@ export function pricingDraftFromRanges(input: {
     sourceAlias: Object.entries(basketIds).find(([, id]) => id === mapping.pricingBasketId)?.[0] ?? mapping.pricingBasketId,
     source: mapping.source,
   }])).values());
-  const qualityPriceFactorRanges: QualityPriceFactorRange[] = input.qualityValues.flatMap((row, index) => {
+  const qualityPriceFactorRanges: QualityPriceFactorRange[] = input.qualitySourceRows
+    ? input.qualitySourceRows.flatMap((row) => {
+      const qualityId = qualityIds[row.code];
+      return qualityId && [row.minScore, row.maxScore, row.minFactor, row.maxFactor].every(Number.isFinite)
+        ? [{ qualityId, minScore: row.minScore, maxScore: row.maxScore, maxInclusive: false, minFactor: row.minFactor, maxFactor: row.maxFactor, status: "SOURCE" as const, source: { sheetId: QUALITY_SHEET_ID, cell: row.factorCell, rowKey: row.rowKey } }]
+        : [];
+    })
+    : input.qualityValues.flatMap((row, index) => {
     const qualityId = qualityIds[text(row[1])];
     const minScore = Number(row[3]);
     const maxScore = Number(row[4]);
@@ -308,6 +354,16 @@ export function pricingDraftFromRanges(input: {
   });
 }
 
+export function pricingQualitySourceRowsFromDraft(
+  qualityDraft: QualityValuePolicyDraft,
+  _legacyQualityValues?: unknown[][],
+) {
+  return (qualityDraft.qualityTableDescriptor?.rows ?? []).map((row) => ({
+    code: row.code, basketAlias: row.basketAlias, minScore: row.minScore, maxScore: row.maxScore, minFactor: row.minFactor, maxFactor: row.maxFactor,
+    mappingCell: row.mappingSource.cell, factorCell: row.factorSource.cell, rowKey: row.mappingSource.rowKey ?? "",
+  }));
+}
+
 const partIds: Record<string, string> = { "竿": "part:rod", "轮": "part:reel", "线": "part:line" };
 
 export function weightTemplateDraftCanonicalContent(draft: WeightTemplatePolicyDraft) {
@@ -402,25 +458,78 @@ export function weightTemplateDraftFromCanonicalRuleDraft(input: { sourceRevisio
 export function qualityDraftFromRanges(input: {
   sourceRevision: FeishuSourceRevision;
   qualityValues: unknown[][];
+  /** A1 range returned with qualityValues; retained for direct legacy callers. */
+  qualityRange?: string;
   affixValues: unknown[][];
   pricingEndpointValues: unknown[][];
   importedAt: string;
 }): QualityValuePolicyDraft {
-  const ranges: QualityValueRange[] = input.qualityValues.slice(1, 5).flatMap((row, index) => {
-    const qualityId = qualityIds[text(row[1])];
-    const minScore = Number(row[3]);
-    const maxScore = Number(row[4]);
-    if (!qualityId || !Number.isFinite(minScore) || !Number.isFinite(maxScore)) return [];
-    const sheetRow = index + 5;
-    return [{
-      qualityId,
-      minScore,
-      maxScore,
-      maxInclusive: false,
-      status: "SOURCE",
-      source: { sheetId: "FqD4j7", cell: `E${sheetRow}:F${sheetRow}`, rowKey: String(sheetRow) },
-    }];
+  const rangeStart = /^([A-Z]+)(\d+):/i.exec(input.qualityRange ?? "B4:N50");
+  const rangeStartColumn = rangeStart?.[1]
+    ? [...rangeStart[1].toUpperCase()].reduce((sum, char) => sum * 26 + char.charCodeAt(0) - 64, 0) - 1
+    : 1;
+  const rangeStartRow = rangeStart?.[2] ? Number(rangeStart[2]) : 4;
+  const sourceRow = (index: number) => rangeStartRow + index;
+  const sourceColumn = (index: number) => spreadsheetColumnName(rangeStartColumn + index);
+  const sourceCell = (rowIndex: number, columnIndex: number) => ({ sheetId: QUALITY_SHEET_ID, cell: `${sourceColumn(columnIndex)}${sourceRow(rowIndex)}`, rowKey: String(sourceRow(rowIndex)) });
+  const sourceIssues: QualityValuePolicyDraft["issues"] = [];
+  const structureIssue = (code: string, message: string, rowIndex: number, columnIndex: number, itemPartId?: string) => sourceIssues.push({
+    source: "quality", code, severity: "ERROR", gate: "PUBLISH", message,
+    sourceRevision: input.sourceRevision.sourceRevision, sourceCell: sourceCell(rowIndex, columnIndex), itemPartId,
+    relatedObjectIds: [],
+    actions: [
+      { action: "navigate", label: "查看规则源", targetRoute: "/?page=rule-workbook", enabled: true, requiredCapabilities: ["feishu.workbook.read"] },
+      { action: "retry", label: "修复后重新拉取", targetRoute: "/?page=rule-workbook", enabled: true, requiredCapabilities: ["feishu.workbook.pull"] },
+    ],
   });
+
+  // Only the explicit 品质区间 table is authoritative.  Do not scan the rest
+  // of a workbook for isolated C/B/A/S values that happen to look like scores.
+  const qualityTableHeaders = input.qualityValues.flatMap((row, rowIndex) => row.flatMap((value, columnIndex) => text(value) === "品质区间" ? [{ rowIndex, columnIndex }] : []));
+  if (qualityTableHeaders.length !== 1) structureIssue(
+    qualityTableHeaders.length ? "QUALITY_RANGE_TABLE_DUPLICATE" : "QUALITY_RANGE_TABLE_MISSING",
+    "07_品质评分必须且只能有一个精确的“品质区间”表头。",
+    qualityTableHeaders[0]?.rowIndex ?? 0, qualityTableHeaders[0]?.columnIndex ?? 0,
+  );
+  const qualityTable = qualityTableHeaders[0];
+  const qualityFieldLabels = ["品质", "代码", "PricingBasket", "≥最小评分", "<最大评分", "最小价格系数", "最大价格系数"] as const;
+  const qualityFieldHeaders = qualityTable ? input.qualityValues
+    .slice(qualityTable.rowIndex + 1)
+    .flatMap((row, offset) => {
+      const matches = qualityFieldLabels.map((label) => row.flatMap((value, index) => text(value) === label ? [index] : []));
+      const indices = matches.map(([index]) => index ?? -1);
+      return matches.every((fieldMatches) => fieldMatches.length === 1)
+        ? [{ rowIndex: qualityTable.rowIndex + 1 + offset, indices }] : [];
+    }) : [];
+  if (qualityTable && qualityFieldHeaders.length !== 1) structureIssue(
+    qualityFieldHeaders.length ? "QUALITY_RANGE_TABLE_HEADER_DUPLICATE" : "QUALITY_RANGE_TABLE_HEADER_MISSING",
+    "品质区间必须在 marker 后且只能有一个包含全部定价字段的字段表头。",
+    qualityFieldHeaders[0]?.rowIndex ?? qualityTable.rowIndex, qualityTable.columnIndex,
+  );
+  const qualityFieldHeader = qualityFieldHeaders[0];
+  const expectedQualityRows = [["C/绿", "C"], ["B/蓝", "B"], ["A/紫", "A"], ["S/橙", "S"]] as const;
+  const descriptorRows: QualityTableDescriptor["rows"] = [];
+  const ranges: QualityValueRange[] = qualityTable && qualityFieldHeader ? expectedQualityRows.flatMap(([label, code], offset) => {
+    const rowIndex = qualityFieldHeader.rowIndex + 1 + offset;
+    const row = input.qualityValues[rowIndex] ?? [];
+    const [labelIndex, codeIndex, basketIndex, minIndex, maxIndex, minFactorIndex, maxFactorIndex] = qualityFieldHeader.indices;
+    if (text(row[labelIndex]) !== label || text(row[codeIndex]) !== code) {
+      structureIssue("QUALITY_RANGE_TABLE_ROW_INVALID", `品质区间必须按规范行保留 ${label} / ${code}。`, rowIndex, labelIndex);
+      return [];
+    }
+    const minScore = Number(row[minIndex]);
+    const maxScore = Number(row[maxIndex]);
+    const minFactor = Number(row[minFactorIndex]); const maxFactor = Number(row[maxFactorIndex]);
+    if (!Number.isFinite(minScore) || !Number.isFinite(maxScore) || !Number.isFinite(minFactor) || !Number.isFinite(maxFactor) || !text(row[basketIndex])) {
+      structureIssue("QUALITY_RANGE_TABLE_ENDPOINT_INVALID", `${label} 缺少两个有限评分端点。`, rowIndex, codeIndex);
+      return [];
+    }
+    const mappingSource = sourceCell(rowIndex, basketIndex); const factorSource = { sheetId: QUALITY_SHEET_ID, cell: `${sourceColumn(minFactorIndex)}${sourceRow(rowIndex)}:${sourceColumn(maxFactorIndex)}${sourceRow(rowIndex)}`, rowKey: String(sourceRow(rowIndex)) };
+    descriptorRows.push({ qualityId: qualityIds[code]!, code, basketAlias: text(row[basketIndex]), minScore, maxScore, minFactor, maxFactor, mappingSource, factorSource });
+    return [{ qualityId: qualityIds[code]!, minScore, maxScore, maxInclusive: false, status: "SOURCE" as const,
+      source: { sheetId: QUALITY_SHEET_ID, cell: `${sourceColumn(minIndex)}${sourceRow(rowIndex)}:${sourceColumn(maxIndex)}${sourceRow(rowIndex)}`, rowKey: String(sourceRow(rowIndex)) },
+    }];
+  }) : [];
   const aliases: AffixAliasBinding[] = input.affixValues.slice(1).flatMap((row, index) => {
     const affixId = text(row[0]);
     const itemPartId = partIds[text(row[2])];
@@ -430,30 +539,45 @@ export function qualityDraftFromRanges(input: {
     return [{ itemPartId, alias, affixId, source: { sheetId: "zrVOxd", cell: `F${sheetRow}`, rowKey: String(sheetRow) } }];
   });
   const matrixCells: QualityCombinationSourceCell[] = [];
-  for (const section of [
-    { headerRow: 10, firstDataRow: 11, lastDataRow: 22, itemPartId: "part:rod" },
-    { headerRow: 24, firstDataRow: 25, lastDataRow: 36, itemPartId: "part:reel" },
-    { headerRow: 38, firstDataRow: 39, lastDataRow: 50, itemPartId: "part:line" },
-  ]) {
-    const header = input.qualityValues[section.headerRow - 4] ?? [];
-    for (let sheetRow = section.firstDataRow; sheetRow <= section.lastDataRow; sheetRow += 1) {
-      const row = input.qualityValues[sheetRow - 4] ?? [];
-      const leftAlias = text(row[0]);
-      for (let columnOffset = 1; columnOffset <= 12; columnOffset += 1) {
-        const rightAlias = text(header[columnOffset]);
-        if (!leftAlias || !rightAlias) continue;
-        const raw = row[columnOffset];
+  const matrixPartByHeader = new Map([["竿词条", "part:rod"], ["轮词条", "part:reel"], ["线词条", "part:line"]]);
+  const blocks = input.qualityValues.flatMap((row, rowIndex) => row.flatMap((value, columnIndex) => {
+    const itemPartId = matrixPartByHeader.get(text(value));
+    return itemPartId ? [{ rowIndex, columnIndex, itemPartId }] : [];
+  }));
+  for (const [heading, itemPartId] of matrixPartByHeader) {
+    const matches = blocks.filter((block) => block.itemPartId === itemPartId);
+    if (matches.length !== 1) structureIssue(matches.length ? "QUALITY_MATRIX_BLOCK_DUPLICATE" : "QUALITY_MATRIX_BLOCK_MISSING", `组合矩阵块“${heading}”必须且只能出现一次。`, matches[0]?.rowIndex ?? 0, matches[0]?.columnIndex ?? 0, itemPartId);
+  }
+  for (const [blockIndex, block] of blocks.entries()) {
+    const header = input.qualityValues[block.rowIndex] ?? [];
+    const aliases = header.flatMap((value, columnIndex) => (
+      columnIndex > block.columnIndex && text(value)
+        ? [{ alias: text(value), columnIndex }]
+        : []
+    ));
+    const aliasSet = new Set(aliases.map((entry) => entry.alias));
+    if (!aliases.length) structureIssue("QUALITY_MATRIX_HEADER_INVALID", "组合矩阵块缺少右侧缩写表头。", block.rowIndex, block.columnIndex, block.itemPartId);
+    const endRowIndex = blocks[blockIndex + 1]?.rowIndex ?? input.qualityValues.length;
+    for (let rowIndex = block.rowIndex + 1; rowIndex < endRowIndex; rowIndex += 1) {
+      const row = input.qualityValues[rowIndex] ?? [];
+      const leftAlias = text(row[block.columnIndex]);
+      if (!leftAlias) break;
+      if (!aliasSet.has(leftAlias)) {
+        structureIssue("QUALITY_MATRIX_ROW_INVALID", `组合矩阵行缩写 ${leftAlias} 不属于该块的显式表头集合。`, rowIndex, block.columnIndex, block.itemPartId);
+        break;
+      }
+      for (const { alias: rightAlias, columnIndex } of aliases) {
+        const raw = row[columnIndex];
         const value = raw === null || raw === undefined || text(raw) === ""
           ? ""
           : text(raw) === "—" ? "—" : Number(raw);
         if (typeof value === "number" && !Number.isFinite(value)) continue;
-        const column = String.fromCharCode("B".charCodeAt(0) + columnOffset);
         matrixCells.push({
-          itemPartId: section.itemPartId,
+          itemPartId: block.itemPartId,
           leftAlias,
           rightAlias,
           value,
-          source: { sheetId: "FqD4j7", cell: `${column}${sheetRow}`, rowKey: String(sheetRow) },
+          source: { sheetId: QUALITY_SHEET_ID, cell: `${sourceColumn(columnIndex)}${sourceRow(rowIndex)}`, rowKey: String(sourceRow(rowIndex)) },
         });
       }
     }
@@ -470,6 +594,8 @@ export function qualityDraftFromRanges(input: {
     ranges,
     aliases,
     matrixCells,
+    qualityTableDescriptor: qualityFieldHeader ? { headerSource: sourceCell(qualityFieldHeader.rowIndex, qualityTable!.columnIndex), columns: Object.fromEntries(qualityFieldLabels.map((label, index) => [label, qualityFieldHeader.indices[index]!])) as QualityTableDescriptor["columns"], rows: descriptorRows } : undefined,
+    sourceIssues,
     pricingScoreEndpoints,
     performanceScoringEnabled: undefined,
     performanceScoringSource: { sheetId: "FqD4j7", cell: "B2", rowKey: "2" },
@@ -523,24 +649,25 @@ export async function inspectCanonicalRuleWorkbook(input: {
     identityPolicies: canonicalIdentityPolicies(),
     generatedAt: input.observedAt,
   });
-  const qualityRange = ranges.find((entry) => entry.sheetId === "FqD4j7" && entry.range === "B4:N50");
+  const qualitySheetRange = canonicalQualitySheetRange(sourceRevision);
+  const qualityRange = ranges.find((entry) => entry.sheetId === QUALITY_SHEET_ID && entry.range === qualitySheetRange);
   const affixRange = ranges.find((entry) => entry.sheetId === AFFIX_SHEET_ID && entry.range === canonicalAffixSheetRanges(sourceRevision).aliasRange);
   const pricingEndpointRange = ranges.find((entry) => entry.sheetId === "u87sRh" && entry.range === "B179:E179");
   const pricingRange = ranges.find((entry) => entry.sheetId === "u87sRh" && entry.range === "B10:R70");
   const typeRange = ranges.find((entry) => entry.sheetId === "fATowU" && entry.range === "B2:AD20");
-  const pricingDraft = pricingDraftFromRanges({
-    sourceRevision,
-    qualityValues: (qualityRange?.valueRange.values ?? []).slice(1, 5),
-    pricingValues: pricingRange?.valueRange.values ?? [],
-    typeValues: typeRange?.valueRange.values ?? [],
-    importedAt: input.observedAt,
-  });
   const qualityDraft = qualityDraftFromRanges({
     sourceRevision,
     qualityValues: qualityRange?.valueRange.values ?? [],
+    qualityRange: qualityRange?.range ?? qualitySheetRange,
     affixValues: affixRange?.valueRange.values ?? [],
     pricingEndpointValues: pricingEndpointRange?.valueRange.values ?? [],
     importedAt: input.observedAt,
+  });
+  const pricingQualityRows = pricingQualitySourceRowsFromDraft(qualityDraft);
+  const pricingDraft = pricingDraftFromRanges({
+    sourceRevision,
+    qualityValues: [], qualitySourceRows: pricingQualityRows,
+    pricingValues: pricingRange?.valueRange.values ?? [], typeValues: typeRange?.valueRange.values ?? [], importedAt: input.observedAt,
   });
   const canonicalRuleDraft = importCanonicalRuleSource({
     sourceRevision,

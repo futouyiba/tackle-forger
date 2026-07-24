@@ -190,3 +190,38 @@ test("SnapshotBatch 与导出候选拒绝 DEPRECATED 或非当前规格 SKU 的�
     false,
   );
 });
+
+test("SnapshotBatch 只读取 Model 明确指向的当前 Snapshot，不按历史 revision 猜测", () => {
+  const state = hydrateV3Seed(createSeedState());
+  const model = state.purchasableModels.find((entry) =>
+    entry.configurationSnapshotId)!;
+  const current = state.configurationSnapshots.find((entry) =>
+    entry.id === model.configurationSnapshotId)!;
+  const unrelatedHistory = {
+    ...structuredClone(current),
+    id: "snapshot:history-with-higher-revision",
+    version: current.version + 100,
+    modelRevision: current.modelRevision + 100,
+  };
+  const plan = planSnapshotBatch({
+    models: [model],
+    series: state.seriesDefinitions,
+    skus: state.skuDrawers,
+    snapshots: [unrelatedHistory, current],
+    selectedModelIds: [model.id],
+    now: "2026-07-23T00:00:00.000Z",
+  });
+  assert.equal(plan.items[0].decision, "reuse");
+  assert.equal(plan.items[0].snapshotId, current.id);
+
+  const broken = planSnapshotBatch({
+    models: [{ ...model, configurationSnapshotId: "snapshot:missing" }],
+    series: state.seriesDefinitions,
+    skus: state.skuDrawers,
+    snapshots: [current],
+    selectedModelIds: [model.id],
+    now: "2026-07-23T00:00:00.000Z",
+  });
+  assert.equal(broken.items[0].decision, "skip");
+  assert.deepEqual(broken.items[0].reasons, ["CURRENT_SNAPSHOT_POINTER_BROKEN"]);
+});

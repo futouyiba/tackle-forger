@@ -82,7 +82,7 @@ export function buildFormalPreviewFixture(input: {
   const weightBandId = input.weightBandId ?? "W2";
   const finalPanelHash = hashFormalFinalPanelValues(input.finalPanelValues);
   const candidateSources: FiveAxisVertexCandidateSource[] =
-    componentSelections.map((component) => {
+    componentSelections.filter((component) => component.itemPartId === "part:rod").map((component) => {
       const componentInputHash = hashFormalComponentValues(component);
       const directInputs = input.definition.axes.flatMap((axis) => {
         if (!axis.applicablePartIds.includes(component.itemPartId)) return [];

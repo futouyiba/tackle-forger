@@ -17,8 +17,12 @@ import {
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { hydrateV3Seed } from "@/lib/v3-seed";
+import {
+  productSelectableSeriesSkus,
+  resolveProductSelection,
+} from "@/lib/enabled-item-parts";
 import { projectionPatchViewFromLedger } from "@/lib/patch-ledger";
 import { isActiveValidationIssue, validationIssueLevel, validationIssuePresentation } from "@/lib/validation-issues";
 import type {
@@ -120,29 +124,39 @@ function PatchStack({ patches }: { patches: ProjectionPatchRuleSource[] }) {
 export function V3FlowWorkbench({ state, mutate, notify, initialSeriesId }: V3FlowWorkbenchProps) {
   const [stage, setStage] = useState<FlowStage>("projection");
   const [sourceView, setSourceView] = useState<SourceView>("rules");
-  const [selectedSkuId, setSelectedSkuId] = useState(
-    state.skuDrawers.find((sku) => sku.seriesId === initialSeriesId)?.id
-      ?? state.skuDrawers[0]?.id
-      ?? "",
-  );
-  const selectedSku = state.skuDrawers.find((item) => item.id === selectedSkuId) ?? state.skuDrawers[0];
-  const [selectedModelId, setSelectedModelId] = useState(selectedSku?.defaultModelId ?? selectedSku?.modelIds[0] ?? "");
-
-  const effectiveModelId = selectedSku?.modelIds.includes(selectedModelId) ? selectedModelId : selectedSku?.defaultModelId ?? selectedSku?.modelIds[0] ?? "";
-  const selectedModel = state.purchasableModels.find((item) => item.id === effectiveModelId);
+  const [selectedSkuId, setSelectedSkuId] = useState(() => resolveProductSelection({
+    series: state.seriesDefinitions,
+    skus: state.skuDrawers,
+    models: state.purchasableModels,
+    requestedSeriesId: initialSeriesId,
+  }).sku?.id ?? "");
+  const [selectedModelId, setSelectedModelId] = useState(() => resolveProductSelection({
+    series: state.seriesDefinitions,
+    skus: state.skuDrawers,
+    models: state.purchasableModels,
+    requestedSeriesId: initialSeriesId,
+  }).model?.id ?? "");
+  const selection = resolveProductSelection({
+    series: state.seriesDefinitions,
+    skus: state.skuDrawers,
+    models: state.purchasableModels,
+    requestedSeriesId: initialSeriesId,
+    requestedSkuId: selectedSkuId,
+    requestedModelId: selectedModelId,
+  });
+  const selectedSku = selection.sku;
+  const selectedModel = selection.model;
   const selectedSeries = state.seriesDefinitions.find((item) => item.id === selectedSku?.seriesId);
   const selectedCollection = state.collections.find((item) => item.id === selectedSeries?.collectionId);
   const selectedProjection = state.derivedProjections.find((item) => item.id === selectedSku?.projectionMatch.projectionId);
   const selectedSnapshot = state.configurationSnapshots.find((item) => item.id === selectedModel?.configurationSnapshotId);
-  const patches = useMemo(() => orderedPatches(state, selectedSku, selectedModel), [state, selectedSku, selectedModel]);
+  const patches = orderedPatches(state, selectedSku, selectedModel);
   const pendingUpgrade = state.upgradeCandidates.find((item) => item.modelId === selectedModel?.id && item.status === "pending");
 
   const seriesSkus = selectedSeries
-    ? state.skuDrawers.filter((item) => item.seriesId === selectedSeries.id).sort((left, right) => left.targetPullKg - right.targetPullKg)
-    : state.skuDrawers;
-  const seriesModels = selectedSku
-    ? state.purchasableModels.filter((item) => selectedSku.modelIds.includes(item.id))
+    ? productSelectableSeriesSkus(selectedSeries, state.skuDrawers).sort((left, right) => left.targetPullKg - right.targetPullKg)
     : [];
+  const seriesModels = selection.models;
 
   const ruleSetVersion = selectedSku?.projectionMatch.ruleSetVersion ?? state.ruleSetVersions[0]?.id ?? "—";
   const quality = selectedSeries ? qualityMeta[selectedSeries.qualityId] : qualityMeta.quality_c_green;
@@ -182,12 +196,15 @@ export function V3FlowWorkbench({ state, mutate, notify, initialSeriesId }: V3Fl
   };
 
 
+  // This is a product-selection boundary, not a historical-data fallback.
+  // Disabled/retained SKU payloads remain in state for audit, but deliberately
+  // leave this screen without a selectable Series → SKU chain.
   if (!selectedSku || !selectedSeries) {
     return (
       <div className="v3-empty-state">
         <PackageSearch size={34} />
-        <strong>尚未形成 v3 商品链</strong>
-        <span>当前工作区只有已迁移的规则数据。可主动载入一条示例链，检查从最近模板到冻结发布的完整体验；原有数据不会被覆盖。</span>
+        <strong>当前没有可选择的 v3 商品链</strong>
+        <span>当前工作区没有通过启用 Series → SKU 选择链的商品规格；保留的历史 SKU 仍可审计，但不会作为产品界面回退项。</span>
         <button type="button" className="v3-empty-action" onClick={loadExampleChain}>
           <Sparkles size={15} />载入 v3 示例链
         </button>
@@ -235,7 +252,16 @@ export function V3FlowWorkbench({ state, mutate, notify, initialSeriesId }: V3Fl
           <div className="v3-section-head"><div><span className="eyebrow">SKU DRAWERS</span><h3>重量抽屉</h3></div><span>{seriesSkus.length}</span></div>
           <div className="v3-sku-list">
             {seriesSkus.map((sku) => (
-              <button type="button" key={sku.id} className={selectedSku.id === sku.id ? "active" : ""} onClick={() => { setSelectedSkuId(sku.id); setSelectedModelId(sku.defaultModelId ?? sku.modelIds[0] ?? ""); }}>
+              <button type="button" key={sku.id} className={selectedSku.id === sku.id ? "active" : ""} onClick={() => {
+                const next = resolveProductSelection({
+                  series: state.seriesDefinitions,
+                  skus: state.skuDrawers,
+                  models: state.purchasableModels,
+                  requestedSkuId: sku.id,
+                });
+                setSelectedSkuId(next.sku?.id ?? "");
+                setSelectedModelId(next.model?.id ?? "");
+              }}>
                 <span className="v3-weight-mark">{formatValue(sku.targetPullKg)}<small>kgf</small></span>
                 <div><strong>{sku.id}</strong><small>基底 {sku.projectionMatch.weightTemplateId}</small></div>
                 <em>{sku.modelIds.length} 型号</em>

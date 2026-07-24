@@ -929,7 +929,7 @@ Snapshot的“下载审计归档”与“正式导出”是两种不同动作：
 
 `01_重量模板`是竿、轮、线各自的重量段标杆，不能把其中“钓具大类”误作钓法。`02_钓法类型`的不可变`fishing_*`行提供钓法系数，钓法与类型仍是两个独立规则层。导入器以稳定ID和表头逻辑列定位：先对重量段标杆应用钓法系数，再叠加独立钓法层Patch，形成可审查的钓法模板；不得通过显示名、行号、块顺序或`02.5`反向猜测绑定。`02.5_钓法模板/m3eQCg`只是人工审核后可写回的结果与证据，不是当前规则的权威输入。任何缺失稳定ID、未知列语义、基准revision冲突或回读不一致都必须阻断激活并保留已有发布版本。
 
-五维图的 W 重量段策略也只从同一主工作簿的`01_重量模板/d6e928`读取。已确认的权威观察为 wiki `YsEKwSUJ5i86HCkZKBVcNMw7nOh` revision `4837` 的`A1:AE54`机器区：竿第3–18行、轮第21–36行、线第39–54行，各为16级；每个块的 B:H 必须依次提供`machineId`、`sync`、`part`、`weightBand ordinal`、`minPull`、`maxPull`、`fishWeightGrade`（表头可为对应中文机器字段）。接入器必须在一次显式拉取中读取该完整区，并验证范围读回 revision 与工作簿 revision 完全相同。三块的machineId、sync、部位、ordinal、min/max和grade均为必填；部位必须与块一致，grade只能按`微物→小鱼→中鱼→大鱼→巨物→超级巨物`连续出现一次，不得回跳、缺级或增造第七级；每个闭合上界必须为正、严格递增，最后`超级巨物`必须是开放尾段。三部位推导出的六段grade序列和前五个上界必须逐项一致，否则该revision不能产生正式五维证据。当前观测由此得出`W1..W6`的稳定ID、上界`1.5/3.8/12.6/25.9/82.5/null`；它们是此revision的派生结果，不是可由代码种子、价格重量段、校验规则或连续插值替代的永久常量。
+五维图的 W 重量段采用 Issue #13 已确认的正式策略：`W1 微物 [0,1.5)`、`W2 小型 [1.5,4)`、`W3 中型 [4,10)`、`W4 大型 [10,20)`、`W5 巨物 [20,80)`、`W6 超巨物 [80,+∞)`。边界值进入后一档。定义必须冻结完整策略 payload、版本和 hash；后续来源读取只能生成新版本，绝不改写既有定义或 Snapshot。
 
 每块 ordinal 必须恰为`1..16`，machineId 必须分别为`wtpl_rod_0001..0016`、`wtpl_reel_0001..0016`、`wtpl_line_0001..0016`且三块全局唯一，sync 固定为`BOUND`。相邻拉力区间必须无缝相接（前一max等于后一min）且`max>min`；六个grade的行数必须严格为`1/2/4/4/3/2`。任何 ordinal、机器ID、sync、部位、区间连续性或grade计数偏离均为来源结构错误并fail-closed。
 
@@ -1077,7 +1077,7 @@ revision 位于“最近 90 天”与“最新 100 个”并集之外，只表�
 
 | 受治理字段 | 原因 | 唯一写入动作/边界 |
 | --- | --- | --- |
-| `seriesDefinitions`、`skuDrawers`、`purchasableModels`、`derivedProjections`、`projectionMatches` | Series/SKU/Model身份、最近匹配和派生链 | `create_series`、`change_sku_target_pull`及Model领域ActionCode/规则重算 |
+| `seriesDefinitions`、`skuDrawers`、`purchasableModels`、`derivedProjections`、`projectionMatches` | Series/SKU/Model身份、最近匹配和派生链 | `create_series`、`update_series_core_affixes`、`change_sku_target_pull`及Model领域ActionCode/规则重算 |
 | `partConstraintSets`、`candidateSearchRecipes` | v3 §6.5 的精确revision/contentHash引用；既有revision不可变 | 当前没有修改既有revision的领域命令；只读保留，创建新Series时可由`POST /api/series`物化新约束revision，Recipe专用版本化命令尚未提供 |
 | `patchLedger`、`patchReviewBatches`、`patchValidationWaivers`、`patchValidationWaiverDecisions` | Patch revision、审核和waiver证据 | Patch create/review/rebase/mirror及waiver ActionCode |
 | `projectionPatches` | 遗留 ProjectionPatch 的迁移/审计源；不得作为现行Patch命令旁路 | 当前只读保留，迁移流程处理；不得经整包保存删除、篡改或重放 |
@@ -1273,6 +1273,8 @@ interface PatchSubjectMigrationResult {
 每一级预览固定展示：来源、before、operation、operand、after、优势/代价、兼容解释、Patch和校验状态。
 
 被动技能只显示设计字段、分值、稀有度、技术来源和玩家文案。
+
+“数据源与参数注册表”中的飞书分享链接入口服务于**数据导入**（重量段模板或流派/定位系数的拉取、预览、发布与回写），与第14节的canonical规则源工作簿互不冲突：用户在数据交换页粘贴并从历史选择的是飞书多维表格（`/base/`）分享链接，经显式“识别链接”解析后仍须按现有治理分别执行预览、冲突检查、人工确认发布与回写，绝不自动发布或绕过stable ID。历史只保存shareUrl、显示名、数据类型和最近使用时间，不保存任何应用密钥、appToken凭据或个人身份信息；该入口不得用于改写canonical规则源工作簿指向。
 
 ## 16. 部署基线
 
@@ -1964,11 +1966,11 @@ DerivedProjection
 
 | 顺序 | 维度 | 直接适用部位 | 输入 | 能力方向 | W段共享顶点 |
 | --- | --- | --- | --- | --- | --- |
-| 1 | 拉力 | 竿、轮、线 | `drag` | 越大越强 | 全部合法直接值取MAX |
-| 2 | 耐久 | 竿、轮、线 | `durability` | 越大越强 | 全部合法直接值取MAX |
-| 3 | 抛投 | 竿 | `max_cast_distance` | 越大越强 | 合法竿直接值取MAX |
-| 4 | 感度 | 竿、轮、线 | 有效`sensitivity` | 原始分母越小越强 | 全部合法直接值取MIN |
-| 5 | 操控 | 竿、轮、线 | `energy_cost_factor` | 原始系数越小越强 | 全部合法直接值取MIN |
+| 1 | 拉力 | 竿、轮、线 | `drag` | 越大越强 | 同 W 段合法竿最终值取MAX |
+| 2 | 耐久 | 竿、轮、线 | `durability` | 越大越强 | 同 W 段合法竿最终值取MAX |
+| 3 | 抛投 | 竿 | `max_cast_distance` | 越大越强 | 同 W 段合法竿最终值取MAX |
+| 4 | 感度 | 竿、轮、线 | 有效`sensitivity` | 原始分母越小越强 | 同 W 段合法竿有效值取MIN |
+| 5 | 操控 | 竿、轮、线 | `energy_cost_factor` | 原始系数越小越强 | 同 W 段合法竿系数取MIN |
 
 拉力、耐久和抛投的部件比例为：
 
@@ -1979,11 +1981,13 @@ componentRatio = componentValue / vertexValue
 感度能力：
 
 ```text
-effectiveSensitivity = defaultSensitivityValue + sensitivityConfig
+effectiveSensitivity = finalComponentPanel[itemPartId].sensitivity
 sensitivityAbility = 1 / effectiveSensitivity
 ```
 
-如果`tackle.sensitivity`已保存合并后的有效值，则直接使用`1 / sensitivity`。参数元数据必须声明数据形态，禁止重复加默认值。
+`finalComponentPanel[itemPartId].sensitivity`是竿、轮、线各自冻结的最终部件面板值，在当前
+`ConfigurationSnapshot`中由对应`componentSelections[].values.sensitivity`承载；它已经包含词条、
+Technology与全部Patch的结算结果。不得读取可变Model、顶层Model汇总值或原始配置值，也不得再次叠加默认值。
 
 操控能力：
 
@@ -2017,7 +2021,7 @@ weightBandId
 + fiveAxisRuleVersion
 ```
 
-同一完整身份、同一轴的竿轮线共用一个整体顶点，不按部位分别建立顶点。顶点不得从Model的当前可编辑状态、“最新时间”Snapshot或未指明的Revision读取。对既有数据，每个`ACTIVE` Model只读取其`configurationSnapshotId`当时明确指向的唯一当前正式ConfigurationSnapshot；即使存在多个历史Snapshot，也不得按发布时间、最大ID或Model head revision自动改选。
+同一完整身份的五轴顶点候选池只含竿；轮、线仅使用自身最终直接值绘制曲线，绝不参与顶点。顶点不得从Model的当前可编辑状态、“最新时间”Snapshot或未指明的Revision读取。对既有数据，每个`ACTIVE` Model只读取其`configurationSnapshotId`当时明确指向的唯一当前正式ConfigurationSnapshot；即使存在多个历史Snapshot，也不得按发布时间、最大ID或Model head revision自动改选。
 
 每个顶点候选来源必须冻结：
 

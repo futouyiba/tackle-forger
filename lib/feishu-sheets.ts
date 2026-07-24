@@ -59,6 +59,9 @@ export async function resolveWikiSpreadsheetToken(
   ref: FeishuWorkbookRef,
   fetcher: FetchLike = fetch,
 ) {
+  if (!ref.wikiToken) {
+    throw new Error("/wiki/ 工作簿解析需要 wikiToken；/sheets/ 直接电子表格工作簿应直接使用 spreadsheetToken。");
+  }
   const data = await openApi<{
     node?: { obj_token?: string; obj_type?: string; node_token?: string };
   }>(

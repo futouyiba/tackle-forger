@@ -81,6 +81,7 @@ import {
   recordShareLinkHistory,
   removeShareLinkHistory,
 } from "@/lib/data-sources";
+import { workspaceServiceFailure } from "@/lib/workspace-service-errors";
 import type {
   AdjustmentRule,
   Affix,
@@ -691,8 +692,17 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         if (!response.ok || !session.user) { setAuthStatus("error"); setAuthMessage(session.error || "登录服务暂不可用。"); setAuthErrorCode(session.errorCode || "AUTH-SERVICE-001"); return; }
         setUser(session.user);
         const stateResponse = await fetch("/api/state", { cache: "no-store" });
-        if (!stateResponse.ok) throw new Error("state-service");
-        const payload = await stateResponse.json() as ApiStatePayload;
+        const payload = await stateResponse.json().catch(() => ({})) as ApiStatePayload & {
+          error?: string;
+          errorCode?: string;
+        };
+        if (!stateResponse.ok || !payload.state || !Number.isInteger(payload.revision)) {
+          const fallback = workspaceServiceFailure(undefined);
+          setAuthStatus("error");
+          setAuthMessage(payload.error || fallback.error);
+          setAuthErrorCode(payload.errorCode || fallback.errorCode);
+          return;
+        }
         replaceAuthoritativeWorkspace(payload.state, payload.revision);
         setUser(payload.user);
         setAuthStatus("authenticated"); setAuthMessage(""); setAuthErrorCode("");
@@ -3632,6 +3642,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   };
 
   if (authStatus !== "authenticated") {
+    const workspaceUnavailable = authErrorCode.startsWith("WORKSPACE-");
     return (
       <div className="workbench">
         <main className="main">
@@ -3639,19 +3650,19 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
             <section className="card service-required-card">
               <LockKeyhole size={30} />
               <span className="eyebrow">FEISHU AUTHENTICATION</span>
-              <h2>{authStatus === "checking" ? "正在检查登录状态" : "请使用公司飞书账号登录"}</h2>
+              <h2>{authStatus === "checking" ? "正在检查登录状态" : workspaceUnavailable ? "工作区暂时不可用" : "请使用公司飞书账号登录"}</h2>
               <p>{authStatus === "checking" ? "正在读取安全会话，完成前不会启用编辑。" : authMessage}</p>
               {authStatus !== "checking" && authErrorCode ? (
                 <code className="service-error-code">错误编号：{authErrorCode}</code>
               ) : null}
               {authStatus !== "checking" ? (
                 <div className="service-required-actions">
-                  <a className="button button-primary button-md" href="/api/auth/feishu/start?return_to=%2F">使用飞书登录</a>
+                  {!workspaceUnavailable ? <a className="button button-primary button-md" href="/api/auth/feishu/start?return_to=%2F">使用飞书登录</a> : null}
                   <button type="button" className="button button-default button-md" onClick={() => window.location.reload()}>重新检查</button>
                   <button type="button" className="button button-default button-md" onClick={() => void copyServiceDiagnostic()}>复制诊断信息</button>
                 </div>
               ) : null}
-              <small>内网部署仍保留飞书登录，也支持受信任内网代理传递飞书身份。</small>
+              <small>{workspaceUnavailable ? "飞书登录已完成；请根据错误编号处理工作区服务或部署身份配置。" : "内网部署仍保留飞书登录，也支持受信任内网代理传递飞书身份。"}</small>
             </section>
           </div>
         </main>

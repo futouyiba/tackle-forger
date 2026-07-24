@@ -40,6 +40,12 @@ HttpOnly 与 SameSite=Lax；本机 loopback 不是生产部署拓扑。
 服务端文件只保存 ID 的 HMAC、最小用户资料和绝对过期时间。
 OAuth access/refresh token 不落盘、不返回浏览器，也不进入日志、AI 上下文或导出文件。
 
+## 工作区身份与登录后初始化
+
+通过 OAuth 取得公司身份后，服务端才读取共享工作区。新部署默认从`FEISHU_TENANT_KEY`派生工作区身份；已有工作区迁入时，部署管理员可以在私密环境文件中一次性设置`TACKLE_FORGER_WORKSPACE_ID`为该工作区**已经保存的**稳定 ID。不得修改 SQLite/Blob 中的历史 payload，也不得用另一个 tenant 值绕过身份错配。
+
+若登录成功但工作区无法读取，页面会显示`WORKSPACE-IDENTITY-001`（部署身份与历史工作区不一致）或`WORKSPACE-SERVICE-001`（工作区服务暂不可用），而不是把该状态伪装成 OAuth 失败。前者应由部署管理员核对私密环境配置和持久化工作区来源；修复后使用“重新检查”。错误响应和浏览器诊断不包含 tenant、工作区 ID、会话或凭据值。
+
 ## 可选可信代理模式
 
 默认 `FEISHU_TRUST_PROXY_HEADERS=false`，任何 `x-feishu-*` 头都不会授予身份。如确需兼容

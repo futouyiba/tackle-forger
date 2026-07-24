@@ -21,6 +21,7 @@ import {
   CANONICAL_IDENTITY_SHEET_SPECS,
   canonicalAffixSheetRanges,
   canonicalIdentityPolicies,
+  canonicalQualitySheetRange,
   canonicalRuleWorkbookRangeRequests,
   identityRowsFromRanges,
   pricingDraftFromRanges,
@@ -45,6 +46,7 @@ function sourceRevisionWithAffixGrid(rowCount = 86) {
     sheets: observedSheets.map((sheet) => sheet.sheetId === "zrVOxd"
       ? { ...sheet, rowCount, columnCount: 6 }
       : sheet.sheetId === "d6e928" ? { ...sheet, rowCount: 66, columnCount: 60 }
+      : sheet.sheetId === "FqD4j7" ? { ...sheet, rowCount: 60, columnCount: 19 }
       : sheet),
     issues: [], state: "PULLED" as const,
   };
@@ -59,6 +61,8 @@ test("04_词条的身份与别名读取共同跟随同 revision grid 上界，�
   const requests = canonicalRuleWorkbookRangeRequests(sourceRevision);
   assert.equal(requests.find((entry) => entry.sheetId === "zrVOxd" && entry.range === "B1:C86")?.range, "B1:C86");
   assert.equal(requests.find((entry) => entry.sheetId === "zrVOxd" && entry.range === "B2:F86")?.range, "B2:F86");
+  assert.equal(canonicalQualitySheetRange(sourceRevision), "A1:S60");
+  assert.equal(requests.find((entry) => entry.sheetId === "FqD4j7" && entry.range === "A1:S60")?.range, "A1:S60");
   assert.equal(requests.find((entry) => entry.sheetId === "fATowU" && entry.range === "B2:AD20")?.range, "B2:AD20");
   for (const range of Object.values(CANONICAL_RULE_RANGES).filter((range) => range.sheetId !== "d6e928")) {
     assert.equal(requests.find((entry) => entry.sheetId === range.sheetId && entry.range === range.range)?.range, range.range);
@@ -82,44 +86,51 @@ test("04_词条 grid 元数据不完整时 fail-closed，不以旧行号截断",
   }
 });
 
-test("高行号的竿轮线合法缩写均能绑定稳定 ID，真实未知缩写与跨部位错误仍阻断", () => {
+test("07_品质评分 grid 元数据无效时 fail-closed，不回退旧 B4:N50", () => {
+  const revision = sourceRevisionWithAffixGrid();
+  for (const sheets of [
+    revision.sheets.map((sheet) => sheet.sheetId === "FqD4j7" ? { ...sheet, rowCount: 0 } : sheet),
+    revision.sheets.map((sheet) => sheet.sheetId === "FqD4j7" ? { ...sheet, columnCount: Number.NaN } : sheet),
+  ]) assert.throws(() => canonicalQualitySheetRange({ ...revision, sheets }));
+});
+
+test("生产同形品质矩阵按显式块头解析扩展列、移动块、空白镜像与未知/跨部位", () => {
   const sourceRevision = sourceRevisionWithAffixGrid();
-  const qualityValues = Array.from({ length: 47 }, () => [] as unknown[]);
-  qualityValues[1] = ["C/绿", "C", "", 0, 20];
-  qualityValues[2] = ["B/蓝", "B", "", 20, 40];
-  qualityValues[3] = ["A/紫", "A", "", 40, 65];
-  qualityValues[4] = ["S/橙", "S", "", 65, 100];
-  for (const { headerRow, dataRow, alias } of [
-    { headerRow: 10, dataRow: 11, alias: "竿高行" },
-    { headerRow: 24, dataRow: 25, alias: "轮高行" },
-    { headerRow: 38, dataRow: 39, alias: "线高行" },
-  ]) {
-    qualityValues[headerRow - 4] = ["", alias];
-    qualityValues[dataRow - 4] = [alias.replace("高", "低"), 0];
-  }
+  const qualityValues = Array.from({ length: 60 }, () => Array.from({ length: 19 }, () => "") as unknown[]);
+  for (const [row, label, code, min, max] of [[5, "C/绿", "C", 0, 20], [6, "B/蓝", "B", 20, 40], [7, "A/紫", "A", 40, 65], [8, "S/橙", "S", 65, 100]] as const) qualityValues[row - 1] = ["", label, code, "", min, max];
+  const addBlock = (headerRow: number, heading: string, aliases: string[]) => {
+    qualityValues[headerRow - 1]![0] = heading;
+    aliases.forEach((alias, index) => { qualityValues[headerRow - 1]![index + 1] = alias; });
+    qualityValues[headerRow]![0] = aliases[0]!;
+    qualityValues[headerRow]![1] = "—";
+    qualityValues[headerRow]![2] = 2;
+  };
+  addBlock(10, "竿词条", Array.from({ length: 15 }, (_, index) => `竿${index}`));
+  addBlock(27, "轮词条", Array.from({ length: 17 }, (_, index) => `轮${index}`));
+  addBlock(46, "线词条", Array.from({ length: 15 }, (_, index) => `线${index}`));
   const affixValues = Array.from({ length: 85 }, () => [] as unknown[]);
   affixValues[0] = ["机器ID（勿改）", "", "部位", "", "缩写"];
-  affixValues[1] = ["affix_rod_low", "", "竿", "", "竿低行"];
-  affixValues[3] = ["affix_reel_low", "", "轮", "", "轮低行"];
-  affixValues[5] = ["affix_line_low", "", "线", "", "线低行"];
-  affixValues[80] = ["affix_rod_high", "", "竿", "", "竿高行"];
-  affixValues[82] = ["affix_reel_high", "", "轮", "", "轮高行"];
-  affixValues[84] = ["affix_line_high", "", "线", "", "线高行"];
+  let affixRow = 1;
+  for (const [part, prefix, count] of [["竿", "rod", 15], ["轮", "reel", 17], ["线", "line", 15]] as const) for (let index = 0; index < count; index += 1) affixValues[affixRow++] = [`affix_${prefix}_${index}`, "", part, "", `${part}${index}`];
   const valid = qualityDraftFromRanges({
     sourceRevision,
     qualityValues,
+    qualityRange: "A1:S60",
     affixValues,
     pricingEndpointValues: [[100]],
     importedAt: "2026-07-24T00:00:00.000Z",
   });
   assert.equal(valid.issues.some((issue) => issue.code === "QUALITY_COMBINATION_ALIAS_UNKNOWN"), false);
+  assert.equal(valid.combinationRules.length, 3);
+  assert.equal(valid.combinationRules.find((rule) => rule.itemPartId === "part:reel")?.source.cell, "C28");
+  assert.deepEqual(valid.ranges.map((range) => [range.minScore, range.maxScore]), [[0, 20], [20, 40], [40, 65], [65, 100]]);
 
-  qualityValues[11 - 4] = ["不存在", 0];
-  const unknown = qualityDraftFromRanges({ sourceRevision, qualityValues, affixValues, pricingEndpointValues: [[100]], importedAt: "2026-07-24T00:00:00.000Z" });
+  qualityValues[10]![0] = "不存在";
+  const unknown = qualityDraftFromRanges({ sourceRevision, qualityValues, qualityRange: "A1:S60", affixValues, pricingEndpointValues: [[100]], importedAt: "2026-07-24T00:00:00.000Z" });
   assert.ok(unknown.issues.some((issue) => issue.code === "QUALITY_COMBINATION_ALIAS_UNKNOWN"));
 
-  qualityValues[11 - 4] = ["轮高行", 0];
-  const crossPart = qualityDraftFromRanges({ sourceRevision, qualityValues, affixValues, pricingEndpointValues: [[100]], importedAt: "2026-07-24T00:00:00.000Z" });
+  qualityValues[10]![0] = "轮0";
+  const crossPart = qualityDraftFromRanges({ sourceRevision, qualityValues, qualityRange: "A1:S60", affixValues, pricingEndpointValues: [[100]], importedAt: "2026-07-24T00:00:00.000Z" });
   assert.ok(crossPart.issues.some((issue) => issue.code === "QUALITY_COMBINATION_ALIAS_UNKNOWN"));
 });
 

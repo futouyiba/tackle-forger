@@ -40,9 +40,12 @@ export function MotionCoreDemo({ clock = browserMotionClock }: { clock?: MotionC
   const selectEvidence = (direction: -1 | 1) => setSelectedEvidenceIndex((index) => Math.min(model.steps.length - 1, Math.max(0, index + direction)));
   const focusEvidence = (target: "trace" | "issues") => (target === "trace" ? traceRef.current : issuesRef.current)?.focus();
   const togglePlayPause = () => controller.dispatch({ type: state.status === "playing" ? "pause" : state.status === "paused" ? "resume" : "play" });
-  return <main className="motion-core-demo"><section className="motion-core-card" aria-labelledby="motion-core-title" onKeyDown={(event) => {
-    const editable = event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement || event.target instanceof HTMLTextAreaElement;
-    const command = motionKeyboardCommand(event.key, { editableTarget: editable, altKey: event.altKey, ctrlKey: event.ctrlKey, metaKey: event.metaKey });
+  return <main className="motion-core-demo"><section className="motion-core-card" data-reduced-motion={reducedMotion || undefined} aria-labelledby="motion-core-title" onKeyDown={(event) => {
+    const target = event.target instanceof Element ? event.target : null;
+    const editable = target?.matches("input, select, textarea, [contenteditable='true']") ?? false;
+    // Let the browser keep its native Space/Enter behavior for focused controls.
+    const interactive = target?.closest("button, a[href], input, select, textarea, [contenteditable='true']") !== null;
+    const command = motionKeyboardCommand(event.key, { editableTarget: editable, interactiveTarget: interactive, altKey: event.altKey, ctrlKey: event.ctrlKey, metaKey: event.metaKey });
     if (!command) return;
     event.preventDefault();
     if (command === "playPause") togglePlayPause();
@@ -52,7 +55,7 @@ export function MotionCoreDemo({ clock = browserMotionClock }: { clock?: MotionC
   }}>
     <p className="motion-kicker">Development fixture · MOTION-01</p><h1 id="motion-core-title">无副作用播放内核</h1>
     <p className="motion-subtitle">此页面仅消费冻结的 Trace 投影；控制按钮不会发起请求、写入或创建 revision。</p>
-    <div className="motion-preference"><label htmlFor="motion-preference">动态偏好</label><select id="motion-preference" value={preference} onChange={(event) => setPreference(event.target.value as MotionPreference)}><option value="system">跟随系统</option><option value="reduce">减少动态</option><option value="full">允许播放</option></select><span>{reducedMotion ? "当前直接显示最终结果和完整证据；可手动逐项查看。" : "当前可播放，也可随时直接看结果。"}</span></div>
+    <div className="motion-preference"><label htmlFor="motion-preference">动态偏好</label><select id="motion-preference" value={preference} onChange={(event) => setPreference(event.target.value as MotionPreference)}><option value="system">跟随系统</option><option value="reduce">减少动态</option><option value="full">标准动态（系统减少动态优先）</option></select><span>{reducedMotion ? "当前直接显示最终结果和完整证据；可手动逐项查看。" : "当前可播放，也可随时直接看结果。"}</span></div>
     <div className="motion-controls" aria-label="演出控制"><button type="button" onClick={togglePlayPause} aria-keyshortcuts="P Space">{state.status === "playing" ? "暂停" : state.status === "paused" ? "继续" : "播放"}</button><button type="button" onClick={() => controller.dispatch({ type: "skip" })} aria-keyshortcuts="S">直接看结果</button><button type="button" onClick={() => controller.dispatch({ type: "replay" })} aria-keyshortcuts="R">重播</button><button type="button" onClick={() => controller.dispatch({ type: "cancel", reason: "user" })}>取消</button><button type="button" onClick={() => controller.dispatch({ type: "revisionChanged", revision: `${model.businessRevision}-fixture-update` })}>模拟 revision 变化</button></div>
     <nav className="motion-evidence-links" aria-label="Trace 与 Issue 入口"><button type="button" onClick={() => focusEvidence("trace")} aria-keyshortcuts="T">查看 Trace</button><button type="button" onClick={() => focusEvidence("issues")} aria-keyshortcuts="I">查看 Issue</button></nav>
     <div className="motion-status">状态：<strong>{state.status}</strong> · 链路 {Math.min(visible.length, model.steps.length)}/{model.steps.length} · detected revision {state.revision}</div><p className="sr-only" aria-live="polite" aria-atomic="true">{announcement}</p>

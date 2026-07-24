@@ -9,5 +9,7 @@
 .motion-manual-evidence { align-items: center; border: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 8px; padding: 10px; }.motion-manual-evidence span { font-variant-numeric: tabular-nums; }.motion-issues { border: 1px solid var(--line); margin-bottom: 14px; padding: 11px; }.motion-issues strong { display: block; }.motion-issues p { color: var(--muted); margin-bottom: 0; }.motion-issues ul { margin: 8px 0 0; padding-left: 20px; }.sr-only { height: 1px; margin: -1px; overflow: hidden; position: absolute; width: 1px; clip: rect(0, 0, 0, 0); white-space: nowrap; }
 .motion-frozen-evidence { background: #fff5eb; border: 2px solid #a04700; color: #542700; font-weight: 600; line-height: 1.5; padding: 10px; }
 @keyframes motion-step-in { from { opacity: .25; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+/* The product reduction choice mirrors the OS reduced-motion guarantee. */
+.motion-core-card[data-reduced-motion="true"] .motion-step { animation: none; }
 @media (prefers-reduced-motion: reduce) { .motion-step { animation: none; } }
 @media (max-width: 720px) { .motion-core-demo { padding: 14px; }.motion-core-card { padding: 18px; }.motion-controls, .motion-evidence-links { display: grid; grid-template-columns: 1fr; }.motion-controls button, .motion-evidence-links button { width: 100%; }.motion-preference { align-items: stretch; display: grid; grid-template-columns: 1fr; }.motion-preference select { width: 100%; } }

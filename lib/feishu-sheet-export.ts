@@ -287,7 +287,11 @@ async function verifyWrittenValues(input: {
   if (!expectedRows) return { verified: true };
   const columnCount = Math.max(headerLen, ...input.rows.map((row) => row.length), 1);
   const lastCol = columnLetter(columnCount);
-  const range = `${input.sheetId}!A1:${lastCol}${expectedRows}`;
+  // range 必须是纯 A1 形式（不含 sheetId 前缀）：readFeishuSheetRange 内部会拼接
+  // `${sheetId}!${range}`。这里若再带前缀会让生产 GET 变成 `sheetId!sheetId!A1:...`，
+  // 飞书返回错误/空 → 回读全部失败。写入路径的 cellRange 是另一套约定（飞书
+  // values_batch_update 的 range 字段需要 sheetId 前缀），不要混用。
+  const range = `A1:${lastCol}${expectedRows}`;
   let values: unknown[][];
   try {
     const valueRange = await readFeishuSheetRange({

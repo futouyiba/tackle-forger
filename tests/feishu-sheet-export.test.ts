@@ -53,12 +53,16 @@ interface FetchMockOptions {
   spreadsheetUrl?: string;
 }
 
-function makeFetchMock(options: FetchMockOptions = {}): typeof fetch {
+function makeFetchMock(options: FetchMockOptions = {}): typeof fetch & { capturedVerifyRanges: string[] } {
   const token = options.spreadsheetToken ?? "TOKEN123";
   const url = options.spreadsheetUrl ?? `https://example.com/sheets/${token}`;
   // 记录每个 sheet 累积写入的行（用于回读 echo，使核对一致 → verified:true）。
   const written = new Map<string, unknown[][]>();
-  return (async (input, init) => {
+  // 精确捕获每次回读 GET 的实际请求范围字符串（URL 解码后），用于断言「单 sheetId 前缀」。
+  // 生产飞书对双前缀 sheetId!sheetId!A1:... 会返回错误/空 → 回读全部失败；旧 mock 按
+  // split('!')[0] 宽松解析掩盖了这个 bug，这里改为精确记录原始请求范围。
+  const capturedVerifyRanges: string[] = [];
+  const fetchMock = (async (input, init) => {
     const u = String(input);
     const method = init?.method ?? "GET";
     if (u.includes("tenant_access_token")) {
@@ -104,11 +108,14 @@ function makeFetchMock(options: FetchMockOptions = {}): typeof fetch {
       return jsonResponse({ code: 0, data: { totalUpdatedRows: 1, totalUpdatedCells: 1 } });
     }
     if (u.includes("/values/") && method === "GET") {
+      const match = u.match(/\/values\/([^?]+)/);
+      const rangePart = match ? decodeURIComponent(match[1]) : "";
+      // 精确记录实际发出的回读范围字符串（生产正确性关键），即便 verifyFail 也记录，
+      // 以断言失败路径的请求范围同样是单前缀。
+      capturedVerifyRanges.push(rangePart);
       if (options.verifyFail) {
         return jsonResponse({ code: 1254040, msg: "读取单元格失败" });
       }
-      const match = u.match(/\/values\/([^?]+)/);
-      const rangePart = match ? decodeURIComponent(match[1]) : "";
       const sheetId = rangePart.split("!")[0] ?? "";
       let values = written.get(sheetId) ?? [];
       if (options.verifyDrift) {
@@ -118,7 +125,9 @@ function makeFetchMock(options: FetchMockOptions = {}): typeof fetch {
       return jsonResponse({ code: 0, data: { revision: 42, valueRange: { revision: 42, values } } });
     }
     return jsonResponse({ code: 0, data: {} });
-  }) as typeof fetch;
+  }) as typeof fetch & { capturedVerifyRanges: string[] };
+  fetchMock.capturedVerifyRanges = capturedVerifyRanges;
+  return fetchMock;
 }
 
 let originalFetch: typeof fetch;
@@ -136,7 +145,8 @@ after(() => {
 });
 
 test("exportWorkspaceToFeishuSheet 成功路径：创建新表并写入多个 sheet，回读核对通过", async () => {
-  global.fetch = makeFetchMock({});
+  const fetchMock = makeFetchMock({});
+  global.fetch = fetchMock;
   const { state, revision } = await loadWorkspaceState();
   const manifest = await exportWorkspaceToFeishuSheet({ state, revision });
   // 保守默认：不单独返回 spreadsheet_token，用户通过 url 访问新表。
@@ -153,6 +163,18 @@ test("exportWorkspaceToFeishuSheet 成功路径：创建新表并写入多个 sh
   assert.ok(manifest.openQuestions.length > 0, "应在 manifest 回显开放决策");
   assert.equal(manifest.defaults.batchCellCap, 4000);
   assert.equal(manifest.defaults.overwritePolicy.includes("创建新表"), true);
+  // 回读请求范围必须是单 sheetId 前缀 `sheetId!A1:...`，不得出现双重前缀
+  // `sheetId!sheetId!A1:...`。生产飞书对双前缀会返回错误/空，导致回读全部失败
+  // （这是本次修复的 HIGH 阻断 bug；旧 mock 按 split('!')[0] 宽松解析掩盖了它）。
+  assert.ok(fetchMock.capturedVerifyRanges.length > 0, "成功路径应至少发起一次回读 GET");
+  for (const rangePart of fetchMock.capturedVerifyRanges) {
+    assert.ok(!rangePart.includes("!!"), `回读范围不得含双重 sheetId 前缀：${rangePart}`);
+    assert.equal(
+      (rangePart.match(/!/g) ?? []).length,
+      1,
+      `回读范围应恰好含一个 '!'（单 sheetId 前缀）：${rangePart}`,
+    );
+  }
 });
 
 test("exportWorkspaceToFeishuSheet 创建失败时抛 FeishuApiError 携带 code/endpoint", async () => {
@@ -283,7 +305,8 @@ test("方向 A 成功 manifest 不泄露 spreadsheet_token 与 folder_token（ur
 });
 
 test("方向 A 回读不一致时 verified=false 并记录证据，但不阻断", async () => {
-  global.fetch = makeFetchMock({ verifyDrift: true });
+  const fetchMock = makeFetchMock({ verifyDrift: true });
+  global.fetch = fetchMock;
   const { state, revision } = await loadWorkspaceState();
   const manifest = await exportWorkspaceToFeishuSheet({ state, revision });
   const written = manifest.sheetResults.filter((r) => r.result === "written");
@@ -301,10 +324,21 @@ test("方向 A 回读不一致时 verified=false 并记录证据，但不阻断"
   );
   // 写入本身成功：不阻断，failedCount 仍为 0。
   assert.equal(manifest.failedCount, 0, "回读不一致不应计入 failedCount");
+  // 即使回读不一致，请求范围也必须是单前缀（确认不是双前缀导致的行为）。
+  assert.ok(fetchMock.capturedVerifyRanges.length > 0, "应至少发起一次回读 GET");
+  for (const rangePart of fetchMock.capturedVerifyRanges) {
+    assert.ok(!rangePart.includes("!!"), `回读范围不得含双重 sheetId 前缀：${rangePart}`);
+    assert.equal(
+      (rangePart.match(/!/g) ?? []).length,
+      1,
+      `回读范围应恰好含一个 '!'（单 sheetId 前缀）：${rangePart}`,
+    );
+  }
 });
 
 test("方向 A 回读请求失败时 verified=false 并记录证据", async () => {
-  global.fetch = makeFetchMock({ verifyFail: true });
+  const fetchMock = makeFetchMock({ verifyFail: true });
+  global.fetch = fetchMock;
   const { state, revision } = await loadWorkspaceState();
   const manifest = await exportWorkspaceToFeishuSheet({ state, revision });
   const written = manifest.sheetResults.filter((r) => r.result === "written");
@@ -320,6 +354,16 @@ test("方向 A 回读请求失败时 verified=false 并记录证据", async () =
   );
   // 回读失败不阻断：写入本身成功，failedCount 仍为 0。
   assert.equal(manifest.failedCount, 0);
+  // 即便飞书返回错误，请求范围构造仍必须是单前缀（确认失败源于飞书侧而非本地构造错误）。
+  assert.ok(fetchMock.capturedVerifyRanges.length > 0, "应至少发起一次回读 GET");
+  for (const rangePart of fetchMock.capturedVerifyRanges) {
+    assert.ok(!rangePart.includes("!!"), `回读范围不得含双重 sheetId 前缀：${rangePart}`);
+    assert.equal(
+      (rangePart.match(/!/g) ?? []).length,
+      1,
+      `回读范围应恰好含一个 '!'（单 sheetId 前缀）：${rangePart}`,
+    );
+  }
 });
 
 test("路由未登录返回 401", async () => {

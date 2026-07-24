@@ -6,11 +6,13 @@
 
 1. [`tackle-forger-development-spec-v3.md`](./tackle-forger-development-spec-v3.md)：唯一权威产品与领域规范。
 2. [`ux/tackle-forger-product-design-completion-v3.md`](./ux/tackle-forger-product-design-completion-v3.md)：规范性的UI消费契约，只能表达v3，不能改变领域语义。
-3. [`handoffs/tackle-forger-v3-implementation-handoff.md`](./handoffs/tackle-forger-v3-implementation-handoff.md)：实现导航、工作包和交付证据，不另立业务规则。
-4. [`handoffs/tackle-forger-requirements-handoff-2026-07-21.md`](./handoffs/tackle-forger-requirements-handoff-2026-07-21.md)：本轮已确认需求、飞书源表整改结果和开发执行边界的集中交接；只摘录v3，不覆盖v3。
-5. [`ux/tackle-forger-ux-design-v1.md`](./ux/tackle-forger-ux-design-v1.md)与`ux/prototype-v1/*`：页面组织、视觉和交互证据。
+3. [`ux/tackle-forger-motion-experience-requirements-v1.md`](./ux/tackle-forger-motion-experience-requirements-v1.md)：从属于v3的UI/体验消费契约，规定动效、状态过渡与可访问性体验；不得新增、重解释或覆盖领域、发布和权限语义。
+4. [`handoffs/tackle-forger-v3-implementation-handoff.md`](./handoffs/tackle-forger-v3-implementation-handoff.md)：实现导航、工作包和交付证据，不另立业务规则。
+5. [`handoffs/tackle-forger-requirements-handoff-2026-07-21.md`](./handoffs/tackle-forger-requirements-handoff-2026-07-21.md)：本轮已确认需求、飞书源表整改结果和开发执行边界的集中交接；只摘录v3，不覆盖v3。
+6. [`handoffs/tackle-forger-motion-experience-backlog-v1.md`](./handoffs/tackle-forger-motion-experience-backlog-v1.md)：动效体验的工程排期、交接与验证线索；从属于v3和上述体验契约，不是产品、领域或业务验收权威。
+7. [`ux/tackle-forger-ux-design-v1.md`](./ux/tackle-forger-ux-design-v1.md)与`ux/prototype-v1/*`：页面组织、视觉和交互证据。
 
-第2至5级文档必须在文首记录最后对齐的v3日期或版本。它们若与v3冲突，冲突段立即视为过期说明，不能继续作为开发验收依据；修复时应修改消费文档，不为了迎合旧文档反向改写v3。
+第2至7级文档必须在文首记录最后对齐的v3日期或版本。它们若与v3冲突，冲突段立即视为过期说明，不能继续作为开发验收依据；修复时应修改消费文档，不为了迎合旧文档反向改写v3。
 
 若代码、旧文档、工作簿示例和权威规范发生冲突：
 
@@ -55,8 +57,11 @@
 | --- | --- | --- |
 | `tackle-forger-design-evolution.md` | 说明 | 解释设计演进，不定义当前行为 |
 | `tackle-forger-design-evolution-illustrated.md` | 说明 | 演进文档的图文版，不作为验收规范 |
+| `publishing/tackle-forger-v2-current-feishu.md` | 产品理解版源稿 | 面向产品理解和跨团队沟通的飞书 v2 发布源；重点解释设计原因，不定义领域规则 |
 | `tackle-forger-design-evolution-feishu.xml` | 发布副本 | 飞书发布格式，内容以Markdown源文档和v3为准 |
 | `tackle-forger-design-evolution-and-product-design-feishu-v2.xml` | 发布副本 | 历史飞书交付副本，不作为开发输入 |
+
+v3飞书镜像直接发布自根目录`tackle-forger-development-spec-v3.md`，不维护第二份本地副本，避免形成并行规则源。
 
 ## 工程审计与问题管理
 

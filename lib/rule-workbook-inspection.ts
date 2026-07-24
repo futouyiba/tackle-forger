@@ -3,6 +3,7 @@ import {
   CANONICAL_FEISHU_WORKBOOK,
   pullFeishuWorkbookRevision,
   type FeishuSourceRevision,
+  type FeishuWorkbookRef,
 } from "./feishu-workbook";
 import {
   createFeishuWorkbookPullAdapter,
@@ -625,10 +626,13 @@ export function setCanonicalRuleWorkbookInspectionForTests(override?: typeof tes
 export async function inspectCanonicalRuleWorkbook(input: {
   observedAt: string;
   observedBy: string;
+  /** 可选：覆盖默认权威工作簿。缺省时回退到 CANONICAL_FEISHU_WORKBOOK。 */
+  workbook?: FeishuWorkbookRef;
 }): Promise<CanonicalRuleWorkbookInspection> {
   if (testInspectionOverride) return testInspectionOverride(input);
+  const workbook = input.workbook ?? CANONICAL_FEISHU_WORKBOOK;
   const sourceRevision = await pullFeishuWorkbookRevision({
-    workbook: CANONICAL_FEISHU_WORKBOOK,
+    workbook,
     registry: CANONICAL_FEISHU_SHEET_REGISTRY,
     adapter: createFeishuWorkbookPullAdapter(),
     pulledAt: input.observedAt,
@@ -641,7 +645,7 @@ export async function inspectCanonicalRuleWorkbook(input: {
   });
   const identityRows = identityRowsFromRanges(ranges);
   const identityReport = prepareSourceIdentityMigration({
-    workbookRefId: CANONICAL_FEISHU_WORKBOOK.id,
+    workbookRefId: workbook.id,
     sourceRevision: sourceRevision.sourceRevision,
     mode: "CONTINUOUS_SYNC",
     rows: identityRows,

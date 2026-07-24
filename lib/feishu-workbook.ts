@@ -88,6 +88,40 @@ export const CANONICAL_FEISHU_WORKBOOK: FeishuWorkbookRef = {
   enabled: true,
 };
 
+/**
+ * 由飞书分享链接构造可配置的工作簿引用。支持 `/wiki/` 与 `/sheets/` 两种形式：
+ *
+ * - `/wiki/{node_token}`：填 `wikiToken`，`spreadsheetToken` 留空，由拉取层后续
+ *   调用 wiki get_node 解析得到电子表格 token。
+ * - `/sheets/{spreadsheet_token}`：直接填 `spreadsheetToken`，`wikiToken` 留空字符串，
+ *   不经过 wiki 解析。
+ *
+ * `id` 由 token 稳定派生（`feishu-workbook:<token>`），同一链接反复解析得到同一引用，
+ * 便于前端历史去重。`name` 缺省时给一个中立默认值，调用方可传入更贴切的标签。
+ */
+export function buildWorkbookRefFromShareUrl(
+  shareUrl: string,
+  name?: string,
+): FeishuWorkbookRef {
+  const parsed = parseCanonicalWorkbookLink(shareUrl);
+  const token = parsed.wikiToken ?? parsed.spreadsheetToken ?? "";
+  if (!token) {
+    throw new Error("飞书规则工作簿链接缺少可识别的 token。");
+  }
+  const trimmedName = name?.trim();
+  return {
+    id: `feishu-workbook:${token}`,
+    name: trimmedName || "自定义规则工作簿",
+    provider: "feishu_sheets",
+    shareUrl: shareUrl.trim(),
+    wikiToken: parsed.wikiToken ?? "",
+    ...(parsed.spreadsheetToken ? { spreadsheetToken: parsed.spreadsheetToken } : {}),
+    ...(parsed.anchorSheetId ? { anchorSheetId: parsed.anchorSheetId } : {}),
+    syncScope: "workbook",
+    enabled: true,
+  };
+}
+
 export const CANONICAL_FEISHU_SHEET_REGISTRY: FeishuSheetRegistryEntry[] = [
   ["mLpTLK", "04.0_FunctionProfile常量", "rule_source", true, true],
   ["d6e928", "01_重量模板", "rule_source", true, true],
@@ -232,7 +266,9 @@ export async function pullFeishuWorkbookRevision(input: {
 }): Promise<FeishuSourceRevision> {
   if (!input.workbook.enabled) throw new Error("飞书规则工作簿已停用。");
   const parsed = parseCanonicalWorkbookLink(input.workbook.shareUrl);
-  if (parsed.wikiToken !== input.workbook.wikiToken) {
+  // /wiki/ 挂载形式必须与已登记 wikiToken 一致；/sheets/ 直接形式无 wikiToken，
+  // 电子表格 token 由 ref.spreadsheetToken 直接提供，跳过该一致性校验。
+  if (parsed.wikiToken !== undefined && parsed.wikiToken !== input.workbook.wikiToken) {
     throw new Error("工作簿链接与已登记 wikiToken 不一致。");
   }
   const remote = await input.adapter.resolveWorkbook(input.workbook);

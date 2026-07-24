@@ -15,6 +15,13 @@ import { issueClientActionCommand } from "@/lib/client-action-command";
 import type { CanonicalRuleWorkbookInspection } from "@/lib/rule-workbook-inspection";
 import type { WorkspaceState } from "@/lib/types";
 import {
+  buildWorkbookRefFromShareUrl,
+  CANONICAL_FEISHU_WORKBOOK,
+  type FeishuWorkbookRef,
+} from "@/lib/feishu-workbook";
+import { maskToken } from "@/lib/feishu-api-error";
+import { useWorkbookHistory } from "@/lib/useWorkbookHistory";
+import {
   IdentityMigrationPanel,
   PricingPolicyDraftPanel,
   QualityValuePolicyPanel,
@@ -37,6 +44,17 @@ function dateTime(value?: string) {
   return new Date(value).toLocaleString("zh-CN");
 }
 
+/** canonical 工作簿无需附加参数（路由缺省即回退到 canonical）；自定义来源带 shareUrl。 */
+function workbookQueryParams(workbook: FeishuWorkbookRef): string {
+  if (workbook.id === CANONICAL_FEISHU_WORKBOOK.id) return "";
+  return `?shareUrl=${encodeURIComponent(workbook.shareUrl)}`;
+}
+
+function activeTokenLabel(workbook: FeishuWorkbookRef): string {
+  const token = workbook.spreadsheetToken ?? workbook.wikiToken;
+  return token ? maskToken(token) : "—";
+}
+
 export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
   const [inspection, setInspection] = useState<CanonicalRuleWorkbookInspection | null>(null);
   const [action, setAction] = useState<ActionState>("");
@@ -45,13 +63,31 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
   const [errorEndpoint, setErrorEndpoint] = useState<string | undefined>(undefined);
   const [warningReason, setWarningReason] = useState("");
 
+  // 可配置工作簿来源：默认权威工作簿；用户可粘贴飞书分享链接切换到自定义来源。
+  const [selectedWorkbook, setSelectedWorkbook] = useState<FeishuWorkbookRef>(CANONICAL_FEISHU_WORKBOOK);
+  const [linkInput, setLinkInput] = useState("");
+  const [parseError, setParseError] = useState("");
+  const workbookHistory = useWorkbookHistory();
+
+  const parseLink = () => {
+    setParseError("");
+    try {
+      const ref = buildWorkbookRefFromShareUrl(linkInput);
+      setSelectedWorkbook(ref);
+      workbookHistory.record(ref);
+      setLinkInput("");
+    } catch (caught) {
+      setParseError(caught instanceof Error ? caught.message : "无法解析飞书工作簿链接。");
+    }
+  };
+
   const inspect = async () => {
     setAction("inspect");
     setError("");
     setErrorCode(undefined);
     setErrorEndpoint(undefined);
     try {
-      const response = await fetch("/api/feishu-workbook", { cache: "no-store" });
+      const response = await fetch(`/api/feishu-workbook${workbookQueryParams(selectedWorkbook)}`, { cache: "no-store" });
       const payload = (await response.json()) as {
         inspection?: CanonicalRuleWorkbookInspection;
         error?: string;
@@ -134,6 +170,9 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
         action: "pull",
         baseRevision: props.revision,
         expectedSourceRevision: inspection.sourceRevision.sourceRevision,
+        ...(selectedWorkbook.id !== CANONICAL_FEISHU_WORKBOOK.id
+          ? { workbookRef: selectedWorkbook.shareUrl }
+          : {}),
       };
       const invocation = await issueClientActionCommand({
         action: "pull_feishu_workbook",
@@ -244,11 +283,51 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
       <div className="card rule-workbook-hero">
         <div>
           <span className="eyebrow">唯一通用规则源 · 整本工作簿</span>
-          <h2>钓具设计工作簿</h2>
-          <p>链接中的“06_系列”只是打开位置。读取范围始终覆盖整本工作簿，工作表按稳定 ID 识别。</p>
-          <a href="https://pisn3u3ony2.feishu.cn/wiki/YsEKwSUJ5i86HCkZKBVcNMw7nOh?from=from_copylink&sheet=9nE3Rx" target="_blank" rel="noreferrer">
+          <h2>{selectedWorkbook.name}</h2>
+          <p>链接中的锚点工作表只是打开位置；读取范围始终覆盖整本工作簿，工作表按稳定 ID 识别。当前来源 token：<code>{activeTokenLabel(selectedWorkbook)}</code></p>
+          <a href={selectedWorkbook.shareUrl} target="_blank" rel="noreferrer">
             在飞书中查看 <ArrowRight size={14} />
           </a>
+          <div className="rule-workbook-source-config">
+            <input
+              value={linkInput}
+              onChange={(event) => setLinkInput(event.target.value)}
+              placeholder="粘贴飞书 /wiki/ 或 /sheets/ 工作簿链接以切换来源"
+              aria-label="飞书规则工作簿分享链接"
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && linkInput.trim()) void parseLink();
+              }}
+            />
+            <button
+              className="button button-default button-sm"
+              type="button"
+              onClick={() => void parseLink()}
+              disabled={!linkInput.trim() || Boolean(action)}
+            >
+              解析并切换
+            </button>
+            <select
+              aria-label="历史工作簿来源"
+              value={selectedWorkbook.id}
+              onChange={(event) => {
+                const id = event.target.value;
+                if (id === CANONICAL_FEISHU_WORKBOOK.id) {
+                  setSelectedWorkbook(CANONICAL_FEISHU_WORKBOOK);
+                  return;
+                }
+                const found = workbookHistory.history.find((entry) => entry.id === id);
+                if (found) setSelectedWorkbook(found);
+              }}
+            >
+              <option value={CANONICAL_FEISHU_WORKBOOK.id}>{CANONICAL_FEISHU_WORKBOOK.name}（默认）</option>
+              {workbookHistory.history.map((entry) => (
+                <option key={entry.id} value={entry.id}>
+                  {entry.name} · {activeTokenLabel(entry)}
+                </option>
+              ))}
+            </select>
+            {parseError ? <small className="rule-workbook-parse-error">{parseError}</small> : null}
+          </div>
         </div>
         <div className="rule-workbook-live">
           <span>当前观测 revision</span>

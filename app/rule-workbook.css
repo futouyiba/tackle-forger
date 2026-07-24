@@ -3,6 +3,11 @@
 .rule-workbook-hero h2 { font-size: 25px; margin: 5px 0 8px; }
 .rule-workbook-hero p { color: var(--muted); line-height: 1.65; margin: 0; max-width: 760px; }
 .rule-workbook-hero a { align-items: center; color: var(--primary); display: inline-flex; font-size: 11px; font-weight: 750; gap: 5px; margin-top: 10px; text-decoration: none; }
+.rule-workbook-source-config { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; max-width: 760px; }
+.rule-workbook-source-config > input { flex: 1 1 320px; min-width: 0; }
+.rule-workbook-source-config > select { flex: 1 1 240px; min-width: 0; }
+.rule-workbook-parse-error { color: #a7352c; flex-basis: 100%; font-size: 10px; }
+.rule-workbook-hero p code { background: rgba(104,69,228,.08); border-radius: 3px; color: var(--primary); font-size: 10px; padding: 1px 5px; }
 .rule-workbook-live { align-items: flex-end; display: flex; flex-direction: column; gap: 5px; min-width: 170px; }
 .rule-workbook-live > span,.rule-workbook-live > small { color: var(--muted); font-size: 9px; }
 .rule-workbook-live > strong { color: var(--primary); font-size: 28px; }

@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requestUser } from "@/lib/auth";
 import {
+  buildWorkbookRefFromShareUrl,
   CANONICAL_FEISHU_WORKBOOK,
+  type FeishuWorkbookRef,
 } from "@/lib/feishu-workbook";
 import {
   readFeishuSheetRange,
@@ -16,6 +18,7 @@ import {
   type StableIdWriteAdapter,
 } from "@/lib/source-id-migration";
 import { loadWorkspaceState, saveWorkspaceState } from "@/lib/storage";
+import type { WorkspaceState } from "@/lib/types";
 import {
   assertExplicitPullDidNotPublish,
   applyCanonicalRuleSourceDraft,
@@ -53,6 +56,49 @@ function safeError(error: unknown) {
 }
 
 /**
+ * 解析本次请求要操作的飞书规则工作簿来源。优先级：
+ *  1. 显式 workbookId（canonical id 或 state.feishuWorkbooks 已登记项）；
+ *  2. 分享链接（POST body.workbookRef 或 GET ?shareUrl）：canonical 链接直返常量，
+ *     否则用 buildWorkbookRefFromShareUrl 构造可配置引用；
+ *  3. wiki token（GET ?wikiToken）：canonical token 直返常量，否则拼成 wiki 链接再构造；
+ *  4. 缺省回退 CANONICAL_FEISHU_WORKBOOK。
+ * 解析失败（格式非法/缺 token）静默回退，由后续 feishu 调用给出明确错误。
+ */
+export function resolveWorkbookRef(
+  request: NextRequest,
+  state: WorkspaceState,
+  body?: { workbookId?: string; workbookRef?: string },
+): FeishuWorkbookRef {
+  const url = new URL(request.url);
+  const workbookId = body?.workbookId ?? url.searchParams.get("workbookId") ?? undefined;
+  if (workbookId) {
+    if (workbookId === CANONICAL_FEISHU_WORKBOOK.id) return CANONICAL_FEISHU_WORKBOOK;
+    const registered = state.feishuWorkbooks.find((entry) => entry.id === workbookId);
+    if (registered) return registered;
+  }
+  const shareUrl = body?.workbookRef ?? url.searchParams.get("shareUrl") ?? undefined;
+  if (shareUrl && shareUrl.trim()) {
+    if (shareUrl.trim() === CANONICAL_FEISHU_WORKBOOK.shareUrl) return CANONICAL_FEISHU_WORKBOOK;
+    try {
+      return buildWorkbookRefFromShareUrl(shareUrl);
+    } catch {
+      // 链接格式非法，继续回退到下一优先级
+    }
+  }
+  const wikiToken = url.searchParams.get("wikiToken");
+  if (wikiToken && wikiToken.trim()) {
+    if (wikiToken.trim() === CANONICAL_FEISHU_WORKBOOK.wikiToken) return CANONICAL_FEISHU_WORKBOOK;
+    try {
+      const canonicalOrigin = new URL(CANONICAL_FEISHU_WORKBOOK.shareUrl).origin;
+      return buildWorkbookRefFromShareUrl(`${canonicalOrigin}/wiki/${wikiToken.trim()}`);
+    } catch {
+      // wiki token 无法构造链接，继续回退
+    }
+  }
+  return CANONICAL_FEISHU_WORKBOOK;
+}
+
+/**
  * 把飞书接口失败写入服务端日志（含 code/msg/endpoint/tokenContext/堆栈），
  * 让运维可以从日志定位「权限不足 / 资源不存在 / 飞书 5xx / token 问题」，
  * 并返回脱敏的 errorInfo（不含 token）供响应体使用。既往实现只把错误塞进
@@ -86,9 +132,12 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "当前账号没有读取规则工作簿的权限。" }, { status: 403 });
   }
   try {
+    const current = await loadWorkspaceState();
+    const workbook = resolveWorkbookRef(request, current.state);
     const inspection = await inspectCanonicalRuleWorkbook({
       observedAt: new Date().toISOString(),
       observedBy: user.name,
+      workbook,
     });
     return NextResponse.json({ inspection });
   } catch (error) {
@@ -109,6 +158,10 @@ async function executeWorkbookBusinessRequest(request: NextRequest) {
     warningAcknowledgements?: Array<{ issueKey: string; reason: string }>;
     reportId?: string;
     confirmations?: SourceIdentityConfirmation[];
+    /** 可选：覆盖本次拉取/回写的工作簿来源（飞书分享链接）。 */
+    workbookRef?: string;
+    /** 可选：按已登记 id 选择工作簿来源。 */
+    workbookId?: string;
   };
   if (!body.action) return NextResponse.json({ error: "缺少操作类型。" }, { status: 400 });
 
@@ -127,9 +180,11 @@ async function executeWorkbookBusinessRequest(request: NextRequest) {
           { status: 409 },
         );
       }
+      const inputWorkbook = resolveWorkbookRef(request, current.state, body);
       const inspection = await inspectCanonicalRuleWorkbook({
         observedAt: new Date().toISOString(),
         observedBy: user.name,
+        workbook: inputWorkbook,
       });
       if (
         body.expectedSourceRevision
@@ -287,9 +342,11 @@ async function executeWorkbookBusinessRequest(request: NextRequest) {
     if (!report) return NextResponse.json({ error: "找不到已登记的迁移报告，请先显式拉取。" }, { status: 404 });
     const source = current.state.feishuSourceRevisions.find((item) => item.sourceRevision === report.sourceRevision);
     if (!source) return NextResponse.json({ error: "迁移报告引用的源修订不存在。" }, { status: 409 });
+    const inputWorkbook = resolveWorkbookRef(request, current.state, body);
     const inspection = await inspectCanonicalRuleWorkbook({
       observedAt: new Date().toISOString(),
       observedBy: user.name,
+      workbook: inputWorkbook,
     });
     const commands = buildStableIdWriteCommands({
       report,
@@ -330,7 +387,7 @@ async function executeWorkbookBusinessRequest(request: NextRequest) {
       })),
     };
     const result = await executeStableIdWrite({
-      workbook: { ...CANONICAL_FEISHU_WORKBOOK, spreadsheetToken: source.spreadsheetToken },
+      workbook: { ...inputWorkbook, spreadsheetToken: source.spreadsheetToken },
       report,
       commands,
       idempotencyKey: `identity-write:${report.reportId}`,

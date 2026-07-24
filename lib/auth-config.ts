@@ -1,4 +1,5 @@
 import { isIP } from "node:net";
+import runtimeProcess from "node:process";
 
 export interface FeishuRuntimeConfig {
   appId: string;
@@ -38,7 +39,10 @@ function isRfc1918Ipv4Hostname(hostname: string) {
 function isDevelopmentLoopbackHttpRedirect(redirect: URL) {
   return redirect.protocol === "http:"
     && redirect.hostname === "127.0.0.1"
-    && process.env.NODE_ENV === "development"
+    // Vite folds process.env.NODE_ENV in a production server bundle. The
+    // development-only exception must instead inspect Node's runtime process
+    // object, otherwise a local production-shaped server can never opt in.
+    && runtimeProcess.env["NODE_ENV"] === "development"
     && process.env.FEISHU_ALLOW_INSECURE_HTTP?.trim().toLowerCase() === "true";
 }
 

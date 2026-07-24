@@ -1899,6 +1899,8 @@ Tackle Forger中的“发布”只表示发布内部RuleSetVersion、冻结Confi
 
 系统不建设超级权限、强制解锁或复杂紧急流程。飞书规则写回与恢复、显式拉取、RuleSetVersion发布、Snapshot批次确认、配置文件正式写入与恢复等会改变共享发布状态的关键操作，必须取得工作区级单写锁。
 
+工作区级单写锁是一期、1.5期、二期和三期的现行强制契约。资源级锁、依赖图推广、单节点拆锁或多节点协调只属于尚未排期的交付Phase 4规划，见[`architecture/future-concurrency-evolution-phase-4.md`](./architecture/future-concurrency-evolution-phase-4.md)。该规划不能作为提前缩小锁范围的依据；Phase 4真正启用前必须另立实现Issue，先更新本规范和策略版本，并完成入口门槛、迁移、故障注入、观察窗口与回退验证。
+
 - 锁由系统自动取得和释放，不要求用户手工管理。持锁期间其他用户仍可读取、查看差异和执行不落盘的预览或AI评估，但不能保存状态变更。
 - 前端必须显示锁持有人、正在执行的动作、开始时间和被禁用动作的原因。
 - 每次取得或重新取得锁，数据库必须在同一事务中为该工作区分配严格单调递增、永不复用的正数64位有符号`BIGINT fencingToken`，并创建含`workspaceId/leaseId/holderUserId/action/fencingToken/acquiredAt/expiresAt`的租约。API、JSON、outbox和操作记录统一把token编码为无前导零的十进制字符串，禁止经过JavaScript `number`；比较时按数据库整数值而非字符串字典序。释放、超时、失败和数据库恢复都不得回退计数器或再次发放旧token；计数器达到`9223372036854775807`或无法证明其连续性时必须fail-closed并禁止新写入。
@@ -3374,6 +3376,9 @@ type PrimaryDisplayState = "HARD_CONFLICT" | "REBASE_REQUIRED" | "REVIEW_REQUIRE
 | 1.5期 | 发布`ConfigTargetCatalogVersion`、获批扫描Manifest、`ConfigIdPolicyVersion`与reservation ledger；历史导入复核；生成正式人工搬运包或把正式配置差异写入用户选择的`dev/test/online/release`本地worktree | Git合并、远端发布、部署、替代现有发布系统 |
 | 二期 | OPEN-006关闭后实现第23、24节已设计的AI评估、证据、变化预览和草稿转换；在OPEN-011独立Issue中验证用户主动归档、恢复和只读dry-run；继续全员统一权限 | OPEN-011关闭证据和首次生产裁剪授权完成前的任何revision删除、未经独立授权的自动裁剪、自动应用、自动发布、AI裁决、细粒度RBAC、职责分离、飞书审批 |
 | 三期 | 保持统一Capability策略并完成既定业务能力；治理变化必须另立Issue和策略版本 | 预设业务角色、对象级RBAC、职责分离、飞书审批，以及改变既有ID、操作记录和Snapshot语义 |
+| 交付Phase 4（尚未排期） | 仅在入口门槛、独立策略版本和明确授权全部满足后，按[`Phase 4并发演进设计`](./architecture/future-concurrency-evolution-phase-4.md)逐步验证统一Operation、结构化资源协调、依赖图事务边界、资源级并发和多节点可行性；每一步保留工作区锁回退 | 在入口门槛未满足时取消或缩小工作区级单写锁；仅凭规划文档新增API、schema、状态或多节点运行；降低fencing、幂等、Git CAS、本地恢复、历史冻结和外部结果回读门禁 |
+
+“交付Phase 4”是本节的产品交付分期，不是第17节“当前实现迁移”的“阶段4”。本文发布时Phase 4尚未排期，且不改变一期至三期的任何实现范围或验收口径。未来即使进入Phase 4，也必须从保留工作区锁的统一记录与影子分析开始，不能直接跳到拆锁或多节点。
 
 当前飞书登录同时构成身份边界和统一权限入口：
 

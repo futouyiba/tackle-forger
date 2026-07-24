@@ -35,8 +35,9 @@
 | [`audits/aud-009-workspace-revision-retention-adr.md`](./audits/aud-009-workspace-revision-retention-adr.md) | `ACCEPTED`正式决策 | 记录工作区revision分层保留政策、方案比较、容量证据和分期边界；一期不实现归档/裁剪，二期优先验证由数值/系统策划主动保存到工作PC，文档接受不表示裁剪已获准启用 |
 | [`audits/aud-026-part-constraint-semantics-adr.md`](./audits/aud-026-part-constraint-semantics-adr.md) | `ACCEPTED`正式决策 | 记录分部位约束、候选搜索、版本化组件引用、旧数据复核与Snapshot冻结语义；实现由Issue #49及后续独立Issue跟踪 |
 | [`deployment/feishu-enterprise-login.md`](./deployment/feishu-enterprise-login.md) | 身份运行手册 | 飞书OAuth、会话和代理安全边界；不替代Capability契约 |
+| [`architecture/future-concurrency-evolution-phase-4.md`](./architecture/future-concurrency-evolution-phase-4.md) | 交付Phase 4规划，尚未排期 | 记录规模化协作与多节点并发的目标架构、入口门槛、迁移顺序和回退要求；不是当前实现契约，不能据此取消第20.2.7节的工作区级单写锁或提前新增运行时行为 |
 
-这些文档的维护顺序是：先修订v3中的产品/领域结论，再同步正式决策、UI与handoff，再更新映射/运行手册，最后用差距矩阵记录实际实现和验证证据。差距矩阵中的“已实现”必须能定位到当前代码/测试；发现并存旧契约时标记“部分实现”，不能用计划中的目标契约冒充实现事实。
+这些文档的维护顺序是：先修订v3中的产品/领域结论，再同步正式决策、UI与handoff，再更新架构规划、映射/运行手册，最后用差距矩阵记录实际实现和验证证据。未来架构规划必须写明适用交付阶段、入口门槛和当前仍生效的契约；规划内容不能直接成为实施许可。差距矩阵中的“已实现”必须能定位到当前代码/测试；发现并存旧契约时标记“部分实现”，不能用计划中的目标契约冒充实现事实。
 
 ## 原型证据治理
 

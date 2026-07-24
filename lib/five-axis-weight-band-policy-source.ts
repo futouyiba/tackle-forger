@@ -7,14 +7,15 @@ const BLOCKS = [
   { part: "reel", start: 21, end: 36 },
   { part: "line", start: 39, end: 54 },
 ] as const;
-const GRADE_NAMES = ["微物", "小鱼", "中鱼", "大鱼", "巨物", "超级巨物"] as const;
+const GRADE_NAMES = ["微物", "小型", "中型", "大型", "巨物", "超巨物"] as const;
 const GRADE_COUNTS = [1, 2, 4, 4, 3, 2] as const;
+const DECIDED_UPPER_BOUNDS = ["1.5", "4", "10", "20", "80", null] as const;
 
 function value(row: unknown[] | undefined, column: number) {
   return String(row?.[column] ?? "").trim();
 }
 function finiteDecimal(raw: string, label: string) {
-  if (!raw || !Number.isFinite(Number(raw)) || Number(raw) <= 0) throw new Error(`FIVE_AXIS_WEIGHT_BAND_POLICY_SOURCE_INVALID：${label} 必须为正有限数。`);
+  if (!raw || !Number.isFinite(Number(raw)) || Number(raw) < 0) throw new Error(`FIVE_AXIS_WEIGHT_BAND_POLICY_SOURCE_INVALID：${label} 必须为非负有限数。`);
   return canonicalDecimal(raw);
 }
 
@@ -77,12 +78,15 @@ export function parseFiveAxisWeightBandPolicyFromWeightTemplate(input: {
   });
   const baseline = perPart[0]!;
   if (perPart.slice(1).some((grades) => JSON.stringify(grades) !== JSON.stringify(baseline))) throw new Error("FIVE_AXIS_WEIGHT_BAND_POLICY_SOURCE_INVALID：竿、轮、线三方重量段策略不一致。");
+  if (baseline.some((entry, index) => entry.upper !== DECIDED_UPPER_BOUNDS[index])) {
+    throw new Error("FIVE_AXIS_WEIGHT_BAND_POLICY_SOURCE_INVALID：来源重量段与已发布 W1–W6 名称或边界不一致；原始范围仅可保留供人工复核，不得发布正式策略。");
+  }
   const content: Omit<FiveAxisWeightBandPolicy, "contentHash"> = {
     policyId: "weight-band:five-axis-d6e928",
     version: `weight-band:five-axis-d6e928@${input.sourceRevision}`,
     publicationState: "PUBLISHED",
     sourceRevision: input.sourceRevision,
-    bands: baseline.map((entry, index) => ({ weightBandId: `W${index + 1}`, upperBoundKg: entry.upper })),
+    bands: baseline.map((entry, index) => ({ weightBandId: `W${index + 1}`, label: ["微物", "小型", "中型", "大型", "巨物", "超巨物"][index]!, upperBoundKg: entry.upper })),
   };
   return { ...content, contentHash: hashFiveAxisWeightBandPolicy(content) };
 }

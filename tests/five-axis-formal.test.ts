@@ -6,7 +6,12 @@ import {
   createFormalFiveAxisVertexSet,
   createFormalFiveAxisViewDefinition,
   createFormalFiveAxisWeightBandPolicy,
+  canAddFormalEquipmentComparisonSelection,
+  hasMatchingFormalSnapshotEvidence,
   hashFiveAxisDispositionCatalog,
+  resolveFormalEquipmentComparisonDefinition,
+  resolveFormalEquipmentComparisonReadiness,
+  resolveFormalEquipmentComparisonWeightBand,
   resolveFormalFiveAxisWeightBand,
   resolveFormalFiveAxisDefinition,
   validateFiveAxisDispositionCatalog,
@@ -17,6 +22,11 @@ import {
   hashCandidateSet,
 } from "../lib/five-axis-hash";
 import { deterministicHash } from "../lib/rule-kernel";
+import { createSeedState } from "../lib/seed";
+import {
+  buildFormalComponentSelectionsFixture,
+  buildFormalPreviewFixture,
+} from "./helpers/formal-five-axis";
 import type {
   FiveAxisEntityInput,
   FiveAxisVertexCandidateSource,
@@ -25,6 +35,203 @@ import type {
 } from "../lib/types";
 
 const ZERO_HASH = "0".repeat(64);
+
+test("混合比较在缺少正式依赖时明确阻断而保留恢复路径", () => {
+  assert.deepEqual(resolveFormalEquipmentComparisonReadiness({
+    selectionCount: 1,
+    activeEvidence: "missing",
+    hasFormalCurrentDefinition: false,
+    selectedEvidence: [],
+  }), { state: "waiting_for_selection" });
+  assert.deepEqual(resolveFormalEquipmentComparisonReadiness({
+    selectionCount: 2,
+    activeEvidence: "compatible",
+    hasFormalCurrentDefinition: false,
+    selectedEvidence: ["compatible", "compatible"],
+  }), {
+    state: "unavailable",
+    message: "当前工作区没有唯一的 FORMAL_CURRENT 五维定义。请由具备五维规则发布权限的人员发布或恢复该定义；比较篮会保留，可在恢复后重试。",
+  });
+  assert.deepEqual(resolveFormalEquipmentComparisonReadiness({
+    selectionCount: 2,
+    activeEvidence: "missing",
+    hasFormalCurrentDefinition: true,
+    selectedEvidence: ["compatible", "compatible"],
+  }), {
+    state: "unavailable",
+    message: "当前 Model 缺少冻结五维预览，无法确定共同 W 段。请打开带完整五维预览的冻结 Snapshot 后重试；比较篮会保留。",
+  });
+  assert.deepEqual(resolveFormalEquipmentComparisonReadiness({
+    selectionCount: 2,
+    activeEvidence: "compatible",
+    hasFormalCurrentDefinition: true,
+    selectedEvidence: ["compatible", "compatible"],
+  }), { state: "ready" });
+  assert.equal(resolveFormalEquipmentComparisonReadiness({
+    selectionCount: 2,
+    activeEvidence: "incompatible",
+    hasFormalCurrentDefinition: true,
+    selectedEvidence: ["compatible", "compatible"],
+  }).state, "unavailable");
+  assert.equal(resolveFormalEquipmentComparisonReadiness({
+    selectionCount: 2,
+    activeEvidence: "compatible",
+    hasFormalCurrentDefinition: true,
+    selectedEvidence: ["compatible", "incompatible"],
+  }).state, "unavailable");
+});
+
+test("比较 UI 只能使用经完整目录链验证的唯一正式定义", () => {
+  const legacy = legacyDefinition();
+  const formal = createFormalFiveAxisViewDefinition();
+  const catalog = createFiveAxisDispositionCatalogRevision({
+    definitions: [legacy, formal],
+    existingRevisions: [],
+    currentRevisionId: null,
+    formalCurrent: { definitionId: formal.definitionId, definitionVersion: formal.version },
+    decidedAt: "2026-07-24T00:00:00.000Z",
+  });
+  const available = resolveFormalEquipmentComparisonDefinition({
+    definitions: [legacy, formal],
+    revisions: catalog.revisions,
+    currentRevisionId: catalog.currentRevisionId,
+  });
+  assert.equal(available.state, "available");
+  if (available.state === "available") assert.equal(available.definition.definitionHash, formal.definitionHash);
+
+  const malformed = structuredClone(catalog.revision);
+  malformed.catalogHash = ZERO_HASH;
+  const unavailable = resolveFormalEquipmentComparisonDefinition({
+    definitions: [legacy, formal],
+    revisions: [malformed],
+    currentRevisionId: malformed.catalogRevisionId,
+  });
+  assert.deepEqual(unavailable, {
+    state: "unavailable",
+    message: "当前五维正式定义目录无效或没有唯一 FORMAL_CURRENT。请恢复完整目录链并发布唯一正式定义；比较篮会保留。",
+  });
+
+  const secondFormal = createFormalFiveAxisViewDefinition({
+    definitionId: "five-axis:other-formal",
+    version: "2",
+    revision: 2,
+  });
+  const twoFormalCatalog = createFiveAxisDispositionCatalogRevision({
+    definitions: [legacy, formal, secondFormal],
+    existingRevisions: [],
+    currentRevisionId: null,
+    formalCurrent: { definitionId: formal.definitionId, definitionVersion: formal.version },
+    decidedAt: "2026-07-24T00:00:00.000Z",
+  });
+  const duplicateFormal = structuredClone(twoFormalCatalog.revision);
+  duplicateFormal.entries.find((entry) => entry.definitionId === secondFormal.definitionId)!.effectiveUse = "FORMAL_CURRENT";
+  duplicateFormal.catalogHash = hashFiveAxisDispositionCatalog({
+    previousCatalogHash: duplicateFormal.previousCatalogHash,
+    entries: duplicateFormal.entries,
+  });
+  duplicateFormal.catalogRevisionId = `five-axis-disposition:${duplicateFormal.catalogHash.slice(0, 20)}`;
+  assert.equal(resolveFormalEquipmentComparisonDefinition({
+    definitions: [legacy, formal, secondFormal],
+    revisions: [duplicateFormal],
+    currentRevisionId: duplicateFormal.catalogRevisionId,
+  }).state, "unavailable");
+});
+
+test("比较篮上限和共同 W 段均从已解析正式定义读取", () => {
+  const definition = createFormalFiveAxisViewDefinition({ maximumItems: 3 });
+  assert.deepEqual(canAddFormalEquipmentComparisonSelection({
+    selectionCount: 2,
+    definition,
+  }), { allowed: true });
+  assert.deepEqual(canAddFormalEquipmentComparisonSelection({
+    selectionCount: 3,
+    definition,
+  }), {
+    allowed: false,
+    message: "混合部位比较篮上限为 3 件。",
+  });
+  assert.equal(canAddFormalEquipmentComparisonSelection({
+    selectionCount: 0,
+    definition: undefined,
+  }).allowed, false);
+
+  assert.equal(resolveFormalEquipmentComparisonWeightBand({
+    definition,
+    selectedWeightBandId: "",
+    fallbackWeightBandId: "W1",
+  }), "W1");
+  assert.equal(resolveFormalEquipmentComparisonWeightBand({
+    definition,
+    selectedWeightBandId: "W2",
+    fallbackWeightBandId: "W1",
+  }), "W2");
+  assert.equal(resolveFormalEquipmentComparisonWeightBand({
+    definition,
+    selectedWeightBandId: "not-a-formal-band",
+    fallbackWeightBandId: "W1",
+  }), undefined);
+});
+
+test("正式比较 Snapshot 证据必须完整匹配 FORMAL_CURRENT 定义与 W 策略", () => {
+  const state = createSeedState();
+  const definition = createFormalFiveAxisViewDefinition();
+  const model = state.purchasableModels.find((entry) =>
+    entry.configurationSnapshotId)!;
+  const sourceSnapshot = state.configurationSnapshots.find((entry) =>
+    entry.id === model.configurationSnapshotId)!;
+  const componentSelections = buildFormalComponentSelectionsFixture(
+    sourceSnapshot.componentSelections,
+  );
+  const snapshotId = "snapshot:formal-comparison-evidence";
+  const modelFinalPullKg = 1;
+  const preview = buildFormalPreviewFixture({
+    definition,
+    snapshotId,
+    modelId: model.id,
+    modelRevision: model.revision,
+    seriesId: "series:formal-comparison",
+    skuId: model.skuId,
+    skuRevision: sourceSnapshot.skuRevision,
+    modelFinalPullKg,
+    finalPanelValues: sourceSnapshot.finalPanelValues,
+    componentSelections,
+    weightBandId: "W1",
+  });
+  const formalSnapshot = {
+    ...structuredClone(sourceSnapshot),
+    id: snapshotId,
+    modelId: model.id,
+    modelRevision: model.revision,
+    modelFinalPullKg,
+    componentSelections,
+    fiveAxisPreview: preview,
+  };
+  assert.equal(hasMatchingFormalSnapshotEvidence({
+    definition,
+    snapshot: formalSnapshot,
+  }), true);
+  assert.equal(hasMatchingFormalSnapshotEvidence({
+    definition,
+    snapshot: { ...formalSnapshot, fiveAxisPreview: undefined },
+  }), false);
+  assert.equal(hasMatchingFormalSnapshotEvidence({
+    definition,
+    snapshot: {
+      ...formalSnapshot,
+      fiveAxisPreview: { ...preview, fiveAxisDefinitionId: "legacy:def" },
+    },
+  }), false);
+  assert.equal(hasMatchingFormalSnapshotEvidence({
+    definition,
+    snapshot: {
+      ...formalSnapshot,
+      fiveAxisPreview: {
+        ...preview,
+        weightBandPolicyVersion: "weight-band:legacy",
+      },
+    },
+  }), false);
+});
 
 test("five-axis-hash-input/v1 通过 JCS/SHA-256 固定向量与拼接碰撞回归", () => {
   const semantic = hashCandidateSemanticInput({
@@ -85,8 +292,13 @@ test("CanonicalDecimal 无浮点舍入地归一化并拒绝非法值", () => {
 
 test("正式 W 段只从不可变已发布策略 payload 解析，篡改或同名异 hash 均拒绝", () => {
   const policy = createFormalFiveAxisWeightBandPolicy();
-  assert.equal(resolveFormalFiveAxisWeightBand({ policy, modelFinalPullKg: 1.5 }), "W1");
-  assert.equal(resolveFormalFiveAxisWeightBand({ policy, modelFinalPullKg: 1.51 }), "W2");
+  assert.equal(resolveFormalFiveAxisWeightBand({ policy, modelFinalPullKg: 0 }), "W1");
+  assert.equal(resolveFormalFiveAxisWeightBand({ policy, modelFinalPullKg: 1.4999 }), "W1");
+  assert.equal(resolveFormalFiveAxisWeightBand({ policy, modelFinalPullKg: 1.5 }), "W2");
+  assert.equal(resolveFormalFiveAxisWeightBand({ policy, modelFinalPullKg: 4 }), "W3");
+  assert.equal(resolveFormalFiveAxisWeightBand({ policy, modelFinalPullKg: 10 }), "W4");
+  assert.equal(resolveFormalFiveAxisWeightBand({ policy, modelFinalPullKg: 20 }), "W5");
+  assert.equal(resolveFormalFiveAxisWeightBand({ policy, modelFinalPullKg: 80 }), "W6");
   const tampered = structuredClone(policy);
   tampered.bands[0].upperBoundKg = "3";
   assert.throws(() => resolveFormalFiveAxisWeightBand({
@@ -444,11 +656,11 @@ test("正式内核按部件绘制、低值轴反向、官方分封顶且比较�
     entity: rodInput,
   });
   const pull = rod.points.find((point) => point.axisId === "pull")!;
-  assert.equal(pull.comparisonScore, 125);
+  assert.equal(pull.comparisonScore, 150);
   assert.equal(pull.officialDisplayScore, 100);
-  assert.equal(pull.overflow, 25);
+  assert.equal(pull.overflow, 50);
   const control = rod.points.find((point) => point.axisId === "control")!;
-  assert.ok(Math.abs(control.comparisonScore! - 120) < 1e-9);
+  assert.ok(Math.abs(control.comparisonScore! - 160) < 1e-9);
   const rounded = calculateFormalFiveAxisComponentSeries({
     definition,
     vertexSet,
@@ -459,8 +671,8 @@ test("正式内核按部件绘制、低值轴反向、官方分封顶且比较�
     },
   });
   const roundedPull = rounded.points.find((point) => point.axisId === "pull")!;
-  assert.ok(Math.abs(roundedPull.comparisonScore! - 73.4) < 1e-9);
-  assert.equal(roundedPull.officialDisplayScore, 73);
+  assert.ok(Math.abs(roundedPull.comparisonScore! - 88.08) < 1e-9);
+  assert.equal(roundedPull.officialDisplayScore, 88);
 
   const reel = calculateFormalFiveAxisComponentSeries({
     definition,

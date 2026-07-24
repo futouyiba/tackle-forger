@@ -58,7 +58,7 @@ import {
 } from "@/lib/showcase";
 import { ensureWorkflowFields } from "@/lib/workflow";
 import { validationIssueLevel } from "@/lib/validation-issues";
-import { migrateWorkspaceState } from "@/lib/migrations";
+import { createParameterId, migrateWorkspaceState } from "@/lib/migrations";
 import { mergeWorkspaceConflict } from "@/lib/workspace-conflict-merge";
 import {
   isProductItemPartEnabled,
@@ -1187,7 +1187,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     }
     mutate((draft) => {
       draft.parameters.push({
-        id: `param:${key}`,
+        id: createParameterId(),
         key,
         label: key,
         itemKind,
@@ -1491,7 +1491,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           for (const label of parameterHeaders) {
             if (!draft.parameters.some((item) => item.key === label)) {
               const kind: ItemKind = label.startsWith("轮") ? "reel" : label.startsWith("线") || label.startsWith("PE线") ? "line" : "rod";
-              draft.parameters.push({ id: `param:${label}`, key: label, label, itemKind: kind, unit: "", precision: 2, notes: "Excel 导入" });
+              draft.parameters.push({ id: createParameterId(), key: label, label, itemKind: kind, unit: "", precision: 2, notes: "Excel 导入" });
             }
           }
           draft.templates = rows.slice(headerIndex + 1).filter((row) => row[0]).map((row) => {

@@ -63,7 +63,15 @@ function resolveNewBranchBase({ pushBaseRef, defaultBranch, headSha, cwd }) {
     const baselineSha = resolveRevision(ref, cwd);
     if (!baselineSha) continue;
     const baseSha = mergeBase(baselineSha, headSha, cwd);
-    if (baseSha) return { baseSha, baselineRef: ref };
+    // Reject the empty-range degenerate case `baseSha === headSha`. When the
+    // push target is the default branch and a force-push rewrote it, the
+    // Actions checkout sees `origin/<default>` already pointing at `after`, so
+    // `merge-base(origin/<default>, after) === after === headSha`. Returning
+    // that as the baseline would narrow the check to `after..after` (an empty
+    // diff) and `git diff --check` would exit 0, silently letting through any
+    // trailing whitespace the rewrite introduced. Skip such candidates and let
+    // the caller fall through to the full-tree check (fail-closed).
+    if (baseSha && baseSha !== headSha) return { baseSha, baselineRef: ref };
   }
   return undefined;
 }

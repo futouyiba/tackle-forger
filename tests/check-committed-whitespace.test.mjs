@@ -350,3 +350,85 @@ test("常规 push 的 before-SHA 可达时不进入回退路径（无 fallback �
   assert.deepEqual(range, { baseSha: beforeSha, headSha, mode: "push_commit_range" });
   assert.equal("fallbackReason" in range, false);
 });
+
+test("force-push 到默认分支：origin/<默认分支> 已被改写到 after，不得用空范围静默放过 trailing whitespace", async (t) => {
+  // 复现高危场景：force-push 的目标就是默认分支 main。Actions checkout 后
+  // origin/main 已被改写而指向新的 after，于是
+  //   merge-base(origin/main, after) === after === headSha。
+  // 旧逻辑会把 baseSha===headSha 当成"共同基线"返回（forced_push_merge_base），
+  // 检查范围坍缩为 after..after（空 diff），git diff --check 静默退出 0，
+  // 从而绕过 fail-closed 门禁。必须拒绝该空范围回退，落到空树全树检查。
+  const cwd = await mkdtemp(path.join(tmpdir(), "tackle-forger-ci-default-force-"));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  git(cwd, "init", "--initial-branch=main");
+  git(cwd, "config", "user.name", "CI Range Test");
+  git(cwd, "config", "user.email", "ci-range@example.invalid");
+  // 干净的默认分支基线，避免全树回退被历史空白干扰，聚焦"被改写 → 空范围"路径。
+  await writeFile(path.join(cwd, "baseline.txt"), "clean baseline\n");
+  git(cwd, "add", "baseline.txt");
+  git(cwd, "commit", "-m", "clean main baseline");
+  // force-push 改写后的新 tip：本次引入 trailing whitespace。
+  await writeFile(path.join(cwd, "forced.txt"), "force-pushed trailing whitespace   \n");
+  git(cwd, "add", "forced.txt");
+  git(cwd, "commit", "-m", "force-pushed tip introduces trailing whitespace");
+  const headSha = git(cwd, "rev-parse", "HEAD");
+  // 关键：模拟 CI checkout 看到 origin/main 已经被 force-push 改写到 after。
+  git(cwd, "update-ref", "refs/remotes/origin/main", headSha);
+  git(cwd, "update-ref", "refs/heads/main", headSha);
+
+  const range = resolveCommittedWhitespaceRange({
+    EVENT_NAME: "push",
+    PUSH_BEFORE_SHA: UNREACHABLE_SHA,
+    PUSH_AFTER_SHA: headSha,
+    PUSH_BASE_REF: "refs/heads/main",
+    DEFAULT_BRANCH: "main",
+  }, { cwd });
+
+  // 不得回退到 baseSha===headSha 的空范围。
+  assert.notEqual(range.mode, "forced_push_merge_base");
+  assert.notEqual(range.baseSha, headSha);
+  // 必须落到空树全树检查，对整个 head 树跑 git diff --check。
+  assert.equal(range.mode, "forced_push_full_tree");
+  assert.equal(range.baseSha, EMPTY_TREE_SHA);
+  assert.equal(range.headSha, headSha);
+  assert.ok(range.fallbackReason);
+  assert.ok(range.fallbackReason.includes("full-tree"));
+  // 直接证明空范围会被静默放过：after..after 退出 0，正是要堵住的绕过路径。
+  assert.equal(diffCheck(cwd, headSha, headSha).status, 0);
+  // fail-closed：全树回退必须非零并定位 force-push 引入的文件。
+  const result = diffCheck(cwd, range.baseSha, range.headSha);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stdout, /forced\.txt:1: trailing whitespace/);
+});
+
+test("force-push 到默认分支且 head 树干净时全树回退不误报（无假阳性）", async (t) => {
+  // 同上的默认分支 force-push 场景，但改写后的 tip 树完全干净：全树回退必须
+  // 退出 0，证明拒绝空范围回退不会把干净 force-push 误判为失败。
+  const cwd = await mkdtemp(path.join(tmpdir(), "tackle-forger-ci-default-force-clean-"));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  git(cwd, "init", "--initial-branch=main");
+  git(cwd, "config", "user.name", "CI Range Test");
+  git(cwd, "config", "user.email", "ci-range@example.invalid");
+  await writeFile(path.join(cwd, "baseline.txt"), "clean baseline\n");
+  git(cwd, "add", "baseline.txt");
+  git(cwd, "commit", "-m", "clean main baseline");
+  await writeFile(path.join(cwd, "forced.txt"), "clean force-pushed change\n");
+  git(cwd, "add", "forced.txt");
+  git(cwd, "commit", "-m", "clean force-pushed tip");
+  const headSha = git(cwd, "rev-parse", "HEAD");
+  git(cwd, "update-ref", "refs/remotes/origin/main", headSha);
+  git(cwd, "update-ref", "refs/heads/main", headSha);
+
+  const range = resolveCommittedWhitespaceRange({
+    EVENT_NAME: "push",
+    PUSH_BEFORE_SHA: UNREACHABLE_SHA,
+    PUSH_AFTER_SHA: headSha,
+    PUSH_BASE_REF: "refs/heads/main",
+    DEFAULT_BRANCH: "main",
+  }, { cwd });
+
+  assert.equal(range.mode, "forced_push_full_tree");
+  assert.equal(range.baseSha, EMPTY_TREE_SHA);
+  assert.notEqual(range.baseSha, headSha);
+  assert.equal(diffCheck(cwd, range.baseSha, range.headSha).status, 0);
+});

@@ -483,6 +483,18 @@ function inferInitialState(entries: CalculationTraceEntry[]): CalculationTraceSt
   return stateArray(initial);
 }
 
+/**
+ * `sequence` is a single frozen archive order, not a per-subject display key.
+ * Creation canonicalizes caller input once; consumers must subsequently reject
+ * an archive whose persisted entry array no longer preserves that exact order.
+ */
+function hasStrictlyIncreasingArchiveSequence(entries: readonly CalculationTraceEntry[]) {
+  for (let index = 1; index < entries.length; index += 1) {
+    if (entries[index - 1]!.sequence >= entries[index]!.sequence) return false;
+  }
+  return true;
+}
+
 export function createCalculationTraceArchive(
   entries: CalculationTraceEntry[],
 ): CalculationTraceArchive {
@@ -490,6 +502,9 @@ export function createCalculationTraceArchive(
   const frozenEntries = structuredClone(
     [...entries].sort((left, right) => left.sequence - right.sequence),
   );
+  if (!hasStrictlyIncreasingArchiveSequence(frozenEntries)) {
+    throw new CalculationTraceReplayError("CalculationTraceArchive 全局 sequence 必须严格递增且唯一。");
+  }
   const initialState = inferInitialState(frozenEntries);
   const replay = replayCalculationTrace({ entries: frozenEntries, initialState });
   const entryRefs = frozenEntries.map((entry) => ({
@@ -522,6 +537,9 @@ export function verifyCalculationTraceArchive(archive: CalculationTraceArchive):
   ) return false;
   try {
     assertCalculationTraceJsonSafe(archive, "CalculationTraceArchive");
+    // Do not silently re-sort an untrusted frozen archive at its read boundary:
+    // evidence and presentation must retain the canonical global execution order.
+    if (!hasStrictlyIncreasingArchiveSequence(archive.entries)) return false;
     const recreated = createCalculationTraceArchive(archive.entries);
     return (
       recreated.traceHash === archive.traceHash

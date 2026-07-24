@@ -44,6 +44,27 @@ test("canonical archive verification rejects a tampered frozen Trace before pres
   assert.equal(verifyCalculationTraceArchive(tampered), false);
 });
 
+test("canonical archive rejects interleaved global sequence reordering and duplicate sequence", () => {
+  const subjectA = { workspaceId: "workspace", entityType: "model" as const, entityId: "model-a", revisionId: "1" };
+  const subjectB = { workspaceId: "workspace", entityType: "model" as const, entityId: "model-b", revisionId: "1" };
+  const common = { layer: "method" as const, sourceRef: { sourceType: "Method", sourceId: "lure" }, sourceVersion: "1", ruleSetVersion: "rules:1", effect: "benefit" as const, warningIssueIds: [], actions: [] };
+  const archive = createCalculationTraceArchive([
+    createCalculationTraceEntry({ ...common, traceEntryId: "a-1", subjectRef: subjectA, parameterKey: "pull", sequence: 1, before: 8, operation: "add", operand: 1, after: 9 }),
+    createCalculationTraceEntry({ ...common, traceEntryId: "b-2", subjectRef: subjectB, parameterKey: "pull", sequence: 2, before: 4, operation: "add", operand: 1, after: 5 }),
+    createCalculationTraceEntry({ ...common, traceEntryId: "a-3", subjectRef: subjectA, parameterKey: "pull", sequence: 3, before: 9, operation: "add", operand: 1, after: 10 }),
+  ]);
+  assert.equal(verifyCalculationTraceArchive(archive), true);
+
+  const reordered = structuredClone(archive);
+  reordered.entries = [reordered.entries[0]!, reordered.entries[2]!, reordered.entries[1]!];
+  assert.equal(verifyCalculationTraceArchive(reordered), false);
+
+  const duplicated = structuredClone(archive);
+  duplicated.entries[2]!.sequence = duplicated.entries[1]!.sequence;
+  assert.equal(verifyCalculationTraceArchive(duplicated), false);
+  assert.throws(() => createCalculationTraceArchive(duplicated.entries), /严格递增且唯一/);
+});
+
 test("multi-subject archive projection preserves global sequence gaps without reordering", () => {
   const subjectA = { workspaceId: "workspace", entityType: "model" as const, entityId: "model-a", revisionId: "1" };
   const subjectB = { workspaceId: "workspace", entityType: "model" as const, entityId: "model-b", revisionId: "1" };

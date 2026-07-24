@@ -40,6 +40,7 @@ import { calculateModelFiveAxisPreview, fiveAxisPlotRatio } from "@/lib/five-axi
 import {
   buildFormalEquipmentComparison,
   buildFormalFiveAxisEntityFromSnapshot,
+  hasMatchingFormalSnapshotEvidence,
   resolveFormalEquipmentComparisonReadiness,
 } from "@/lib/five-axis-formal";
 import { selectCurrentFiveAxisVertexSet } from "@/lib/five-axis-transactions";
@@ -767,10 +768,34 @@ function ModelDrawer({
   const formalComparisonDefinition = formalCurrentFiveAxisDefinition(state);
   const pendingUpgrade = state.upgradeCandidates.find((entry) => entry.modelId === model.id && entry.status === "pending");
   const comparisonResult = useMemo(() => {
+    const selectedSnapshots = comparisonSelections.map((selection) =>
+      state.configurationSnapshots.find((entry) =>
+        entry.id === selection.snapshotId
+        && entry.modelId === selection.modelId));
+    const activeEvidence = !snapshot?.fiveAxisPreview
+      ? "missing" as const
+      : formalComparisonDefinition
+        && hasMatchingFormalSnapshotEvidence({
+          definition: formalComparisonDefinition,
+          snapshot,
+        })
+        ? "compatible" as const
+        : "incompatible" as const;
+    const selectedEvidence = selectedSnapshots.map((entry) =>
+      !entry?.fiveAxisPreview
+        ? "missing" as const
+        : formalComparisonDefinition
+          && hasMatchingFormalSnapshotEvidence({
+            definition: formalComparisonDefinition,
+            snapshot: entry,
+          })
+          ? "compatible" as const
+          : "incompatible" as const);
     const readiness = resolveFormalEquipmentComparisonReadiness({
       selectionCount: comparisonSelections.length,
-      hasActivePreview: Boolean(activeFiveAxisPreview),
+      activeEvidence,
       hasFormalCurrentDefinition: Boolean(formalComparisonDefinition),
+      selectedEvidence,
     });
     if (readiness.state === "waiting_for_selection") return {};
     if (readiness.state === "unavailable") return { error: readiness.message };
@@ -783,7 +808,7 @@ function ModelDrawer({
     if (!vertexSet) return { error: "共同 W 段尚无正式顶点。" };
     const entities = comparisonSelections.flatMap((selection, comparisonOrder) => {
       const candidate = state.purchasableModels.find((entry) => entry.id === selection.modelId);
-      const frozenSnapshot = state.configurationSnapshots.find((entry) => entry.id === selection.snapshotId && entry.modelId === selection.modelId);
+      const frozenSnapshot = selectedSnapshots[comparisonOrder];
       const entity = candidate && frozenSnapshot ? buildFormalFiveAxisEntityFromSnapshot({ snapshot: frozenSnapshot, itemPartId: selection.itemPartId, weightBandId: vertexSet.weightBandId, modelName: candidate.name }) : undefined;
       return entity && typeof frozenSnapshot?.modelFinalPullKg === "number" ? [{ entity, modelFinalPullKg: frozenSnapshot.modelFinalPullKg, weightBandId: vertexSet.weightBandId, comparisonOrder }] : [];
     });
@@ -793,7 +818,7 @@ function ModelDrawer({
     } catch (caught) {
       return { error: caught instanceof Error ? caught.message : "混合部位比较失败。" };
     }
-  }, [activeFiveAxisPreview, comparisonSelections, formalComparisonDefinition, state]);
+  }, [activeFiveAxisPreview, comparisonSelections, formalComparisonDefinition, snapshot, state]);
   const recommendations = aiAssessment?.result?.recommendations ?? [];
   const persistedDismissedRecommendationCodes = aiAssessment?.result?.feedback?.recommendations
     ?.filter((entry) => entry.state === "dismissed")

@@ -6,6 +6,7 @@ import {
   createFormalFiveAxisVertexSet,
   createFormalFiveAxisViewDefinition,
   createFormalFiveAxisWeightBandPolicy,
+  hasMatchingFormalSnapshotEvidence,
   hashFiveAxisDispositionCatalog,
   resolveFormalEquipmentComparisonReadiness,
   resolveFormalFiveAxisWeightBand,
@@ -18,6 +19,11 @@ import {
   hashCandidateSet,
 } from "../lib/five-axis-hash";
 import { deterministicHash } from "../lib/rule-kernel";
+import { createSeedState } from "../lib/seed";
+import {
+  buildFormalComponentSelectionsFixture,
+  buildFormalPreviewFixture,
+} from "./helpers/formal-five-axis";
 import type {
   FiveAxisEntityInput,
   FiveAxisVertexCandidateSource,
@@ -30,30 +36,107 @@ const ZERO_HASH = "0".repeat(64);
 test("混合比较在缺少正式依赖时明确阻断而保留恢复路径", () => {
   assert.deepEqual(resolveFormalEquipmentComparisonReadiness({
     selectionCount: 1,
-    hasActivePreview: false,
+    activeEvidence: "missing",
     hasFormalCurrentDefinition: false,
+    selectedEvidence: [],
   }), { state: "waiting_for_selection" });
   assert.deepEqual(resolveFormalEquipmentComparisonReadiness({
     selectionCount: 2,
-    hasActivePreview: true,
+    activeEvidence: "compatible",
     hasFormalCurrentDefinition: false,
+    selectedEvidence: ["compatible", "compatible"],
   }), {
     state: "unavailable",
     message: "当前工作区没有唯一的 FORMAL_CURRENT 五维定义。请由具备五维规则发布权限的人员发布或恢复该定义；比较篮会保留，可在恢复后重试。",
   });
   assert.deepEqual(resolveFormalEquipmentComparisonReadiness({
     selectionCount: 2,
-    hasActivePreview: false,
+    activeEvidence: "missing",
     hasFormalCurrentDefinition: true,
+    selectedEvidence: ["compatible", "compatible"],
   }), {
     state: "unavailable",
     message: "当前 Model 缺少冻结五维预览，无法确定共同 W 段。请打开带完整五维预览的冻结 Snapshot 后重试；比较篮会保留。",
   });
   assert.deepEqual(resolveFormalEquipmentComparisonReadiness({
     selectionCount: 2,
-    hasActivePreview: true,
+    activeEvidence: "compatible",
     hasFormalCurrentDefinition: true,
+    selectedEvidence: ["compatible", "compatible"],
   }), { state: "ready" });
+  assert.equal(resolveFormalEquipmentComparisonReadiness({
+    selectionCount: 2,
+    activeEvidence: "incompatible",
+    hasFormalCurrentDefinition: true,
+    selectedEvidence: ["compatible", "compatible"],
+  }).state, "unavailable");
+  assert.equal(resolveFormalEquipmentComparisonReadiness({
+    selectionCount: 2,
+    activeEvidence: "compatible",
+    hasFormalCurrentDefinition: true,
+    selectedEvidence: ["compatible", "incompatible"],
+  }).state, "unavailable");
+});
+
+test("正式比较 Snapshot 证据必须完整匹配 FORMAL_CURRENT 定义与 W 策略", () => {
+  const state = createSeedState();
+  const definition = createFormalFiveAxisViewDefinition();
+  const model = state.purchasableModels.find((entry) =>
+    entry.configurationSnapshotId)!;
+  const sourceSnapshot = state.configurationSnapshots.find((entry) =>
+    entry.id === model.configurationSnapshotId)!;
+  const componentSelections = buildFormalComponentSelectionsFixture(
+    sourceSnapshot.componentSelections,
+  );
+  const snapshotId = "snapshot:formal-comparison-evidence";
+  const modelFinalPullKg = 1;
+  const preview = buildFormalPreviewFixture({
+    definition,
+    snapshotId,
+    modelId: model.id,
+    modelRevision: model.revision,
+    seriesId: "series:formal-comparison",
+    skuId: model.skuId,
+    skuRevision: sourceSnapshot.skuRevision,
+    modelFinalPullKg,
+    finalPanelValues: sourceSnapshot.finalPanelValues,
+    componentSelections,
+    weightBandId: "W1",
+  });
+  const formalSnapshot = {
+    ...structuredClone(sourceSnapshot),
+    id: snapshotId,
+    modelId: model.id,
+    modelRevision: model.revision,
+    modelFinalPullKg,
+    componentSelections,
+    fiveAxisPreview: preview,
+  };
+  assert.equal(hasMatchingFormalSnapshotEvidence({
+    definition,
+    snapshot: formalSnapshot,
+  }), true);
+  assert.equal(hasMatchingFormalSnapshotEvidence({
+    definition,
+    snapshot: { ...formalSnapshot, fiveAxisPreview: undefined },
+  }), false);
+  assert.equal(hasMatchingFormalSnapshotEvidence({
+    definition,
+    snapshot: {
+      ...formalSnapshot,
+      fiveAxisPreview: { ...preview, fiveAxisDefinitionId: "legacy:def" },
+    },
+  }), false);
+  assert.equal(hasMatchingFormalSnapshotEvidence({
+    definition,
+    snapshot: {
+      ...formalSnapshot,
+      fiveAxisPreview: {
+        ...preview,
+        weightBandPolicyVersion: "weight-band:legacy",
+      },
+    },
+  }), false);
 });
 
 test("five-axis-hash-input/v1 通过 JCS/SHA-256 固定向量与拼接碰撞回归", () => {

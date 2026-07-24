@@ -42,8 +42,9 @@ export const FIVE_AXIS_DISPOSITION_CATALOG_SCHEMA_VERSION =
  */
 export function resolveFormalEquipmentComparisonReadiness(input: {
   selectionCount: number;
-  hasActivePreview: boolean;
+  activeEvidence: "missing" | "compatible" | "incompatible";
   hasFormalCurrentDefinition: boolean;
+  selectedEvidence: Array<"missing" | "compatible" | "incompatible">;
 }):
   | { state: "waiting_for_selection" }
   | { state: "unavailable"; message: string }
@@ -55,13 +56,66 @@ export function resolveFormalEquipmentComparisonReadiness(input: {
       message: "当前工作区没有唯一的 FORMAL_CURRENT 五维定义。请由具备五维规则发布权限的人员发布或恢复该定义；比较篮会保留，可在恢复后重试。",
     };
   }
-  if (!input.hasActivePreview) {
+  if (input.activeEvidence === "missing") {
     return {
       state: "unavailable",
       message: "当前 Model 缺少冻结五维预览，无法确定共同 W 段。请打开带完整五维预览的冻结 Snapshot 后重试；比较篮会保留。",
     };
   }
+  if (input.activeEvidence === "incompatible") {
+    return {
+      state: "unavailable",
+      message: "当前冻结 Snapshot 不属于现行 FORMAL_CURRENT 五维契约。请选择由当前正式定义发布的 Snapshot；比较篮会保留。",
+    };
+  }
+  if (
+    input.selectedEvidence.length !== input.selectionCount
+    || input.selectedEvidence.some((entry) => entry !== "compatible")
+  ) {
+    return {
+      state: "unavailable",
+      message: "比较篮包含缺少正式证据或不属于现行 FORMAL_CURRENT 契约的 Snapshot。请替换对应条目后重试；比较篮会保留。",
+    };
+  }
   return { state: "ready" };
+}
+
+export function hasMatchingFormalSnapshotEvidence(input: {
+  definition: FiveAxisViewDefinition;
+  snapshot: ConfigurationSnapshot;
+}): boolean {
+  const preview = input.snapshot.fiveAxisPreview;
+  const anchor = preview?.tackleFitComparison.projectionReferenceAnchor;
+  if (
+    !preview
+    || !anchor
+    || input.snapshot.modelFinalPullKg === undefined
+  ) {
+    return false;
+  }
+  try {
+    assertFormalModelFiveAxisPreview({
+      definition: input.definition,
+      preview,
+      expectedCandidateSources: preview.candidateSources ?? [],
+      expectedModelId: input.snapshot.modelId,
+      expectedModelRevisionId:
+        `${input.snapshot.modelId}@${input.snapshot.modelRevision}`,
+      expectedSnapshotId: input.snapshot.id,
+      expectedSeriesId: anchor.seriesId,
+      expectedSkuId: anchor.skuId,
+      expectedSkuRevisionId: `${anchor.skuId}@${input.snapshot.skuRevision}`,
+      expectedProjectionReferences:
+        preview.tackleFitComparison.projectionReferences ?? [],
+      expectedFinalPanelHash:
+        hashFormalFinalPanelValues(input.snapshot.finalPanelValues),
+      expectedComponentSelections: input.snapshot.componentSelections,
+      expectedModelFinalPullKg: input.snapshot.modelFinalPullKg,
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function buildFormalFiveAxisEntityFromSnapshot(input: {

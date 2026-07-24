@@ -1,0 +1,6 @@
+interface:
+  display_name: "Agent 项目工作流"
+  short_description: "初始化仓库并用自然语言托管安全的 GitHub 交付循环"
+  default_prompt: "Use $agent-project-bootstrap to initialize this repository, operate its daily GitHub delivery flow, or configure a bounded managed supervisor."
+policy:
+  allow_implicit_invocation: true

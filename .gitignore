@@ -49,6 +49,10 @@ next-env.d.ts
 /.run/
 /.data/
 /.codex/
+!/.codex/
+/.codex/*
+!/.codex/skills/
+!/.codex/skills/**
 /.claude/
 /audit-output/
 

@@ -29,6 +29,14 @@
 - 保留并迁移现有数据，不通过删除历史状态简化实现。
 - 新增领域行为必须补测试；至少覆盖正常路径、边界、冲突和版本冻结。
 
+## 项目级 Agent Skills
+
+- 本仓库在`.codex/skills/`内提交所需工作流Skills；克隆仓库后优先使用项目级版本，不要求预先全局安装。
+- 对一个明确Issue的端到端交付，使用`$agent-issue-loop`。由同一个主Agent完成就绪检查、实现、验证、PR交接、合并回读与正常关闭，并把单个PR阶段交给`$agent-pr-loop`。
+- 对一个已经存在的PR执行评论、独立复审、修补、当前head CI与合并闭环时，使用`$agent-pr-loop`。
+- 需要初始化、迁移、普通语言任务发现或仓库级GitHub协作政策时，使用`$agent-project-bootstrap`。
+- 对本仓库中的实现、修复或重构，仍使用`$tackle-agent-workflow`编排不同的编码与只读审核Agent；仓库的合并、发布和部署门禁不因项目级Skill存在而放宽。
+
 ## 本机凭据与多 worktree
 
 - 本机开发的忽略凭据文件统一存放于`/Users/songfu/.config/tackle-forger/.env.local`；目录权限必须为`700`，文件权限必须为`600`。不得读取、回显、提交或复制其中的值到仓库、日志、Issue、PR、截图或聊天记录。

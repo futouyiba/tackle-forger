@@ -599,6 +599,8 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     "" | "resolve" | "preview" | "publish" | "writeback-preview" | "writeback"
   >("");
   const [workspaceExporting, setWorkspaceExporting] = useState(false);
+  const [feishuSourceExporting, setFeishuSourceExporting] = useState(false);
+  const [feishuSheetExporting, setFeishuSheetExporting] = useState(false);
 
   useEffect(() => {
     const requested = new URL(window.location.href).searchParams.get("page");
@@ -3273,6 +3275,69 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     }
   };
 
+  // 方向 B：只读下载应用从飞书规则源实际读到的各 sheet 原始 range/values。
+  // 仅 GET，不触发 inspect/pull/草稿/发布；未记录源修订时后端返回 409。
+  const downloadFeishuSource = async () => {
+    setFeishuSourceExporting(true);
+    try {
+      const response = await fetch("/api/export-feishu-source-xlsx", { method: "GET" });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(payload.error ?? "下载飞书源数据失败。");
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      const disposition = response.headers.get("Content-Disposition") ?? "";
+      const match = /filename\*=UTF-8''([^;]+)/i.exec(disposition);
+      link.download = match ? decodeURIComponent(match[1]) : "飞书源数据.xlsx";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "下载飞书源数据失败。");
+    } finally {
+      setFeishuSourceExporting(false);
+    }
+  };
+
+  // 方向 A：受控写入——把当前工作区数据复制写到一张新的飞书电子表格。
+  // 创建新表，不写回 canonical 源；需 FEISHU_EXPORT_TO_SHEET_ENABLED=true。
+  const exportToFeishuSheet = async () => {
+    setFeishuSheetExporting(true);
+    try {
+      const response = await fetch("/api/export-to-feishu-sheet", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{}",
+      });
+      const payload = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        url?: string;
+        title?: string;
+        totalRowsWritten?: number;
+        failedCount?: number;
+        sheetResults?: Array<{ name: string; result: string; rowsWritten: number }>;
+        openQuestions?: string[];
+      };
+      if (!response.ok) {
+        throw new Error(payload.error ?? "导出到飞书表失败。");
+      }
+      const failed = payload.failedCount ?? 0;
+      const summary = `已导出 ${payload.totalRowsWritten ?? 0} 行到新表${failed ? `（${failed} 个 sheet 失败，详见返回）` : ""}：${payload.url ?? ""}`;
+      notify(summary);
+      if (payload.url) {
+        window.open(payload.url, "_blank", "noopener");
+      }
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "导出到飞书表失败。");
+    } finally {
+      setFeishuSheetExporting(false);
+    }
+  };
+
   const renderExcel = () => (
     <div className="page-stack">
       <div className="exchange-grid">
@@ -3297,6 +3362,32 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
             onClick={() => void exportWorkspaceXlsx()}
           >
             {workspaceExporting ? "导出中…" : "导出工作区数据为 Excel"}
+          </Button>
+        </Card>
+        <Card className="exchange-card">
+          <div className="exchange-icon"><CloudDownload size={24} /></div><h3>下载飞书源数据</h3>
+          <p>把应用从飞书规则源实际读到的各 sheet 原始 range/values（带 sheet_id/revision）导出为多 sheet .xlsx，便于逐表核对源数据。只读派生，不触发检视/拉取/草稿/发布，不改正式数据；spreadsheetToken 已脱敏。</p>
+          <Button
+            tone="primary"
+            icon={CloudDownload}
+            disabled={feishuSourceExporting || !user.actionAvailability.download_feishu_source.enabled}
+            title={user.actionAvailability.download_feishu_source.disabledReasonText}
+            onClick={() => void downloadFeishuSource()}
+          >
+            {feishuSourceExporting ? "下载中…" : "下载飞书源数据"}
+          </Button>
+        </Card>
+        <Card className="exchange-card">
+          <div className="exchange-icon"><Upload size={24} /></div><h3>导出到新飞书表</h3>
+          <p>把当前工作区数据复制写到一张<strong>新的</strong>飞书电子表格（多 sheet，与 Excel 导出同构）。受控写入：只创建新表，不写回唯一规则源，不绕过 stable ID，不自动发布；需部署环境启用 FEISHU_EXPORT_TO_SHEET_ENABLED。</p>
+          <Button
+            tone="primary"
+            icon={Upload}
+            disabled={feishuSheetExporting || !user.actionAvailability.export_to_feishu_sheet.enabled}
+            title={user.actionAvailability.export_to_feishu_sheet.disabledReasonText}
+            onClick={() => void exportToFeishuSheet()}
+          >
+            {feishuSheetExporting ? "导出中…" : "导出到新飞书表"}
           </Button>
         </Card>
       </div>

@@ -70,6 +70,7 @@ import {
   SeriesAssessmentPanel,
   type AIAssessmentUiState,
 } from "./SeriesAssessmentPanel";
+import { TraceSettlementPanel } from "./TraceSettlementPanel";
 
 interface SeriesGanttWorkbenchV3Props {
   state: WorkspaceState;
@@ -1233,7 +1234,7 @@ function ModelDrawer({
 
       {tab === "trace" ? (
         <div className="gantt-drawer-body">
-          <div className="gantt-ai-guardrail"><LockKeyhole size={18} /><strong>Snapshot Trace 只读 · 按 sequence 重放</strong></div>
+          {snapshot?.calculationTrace ? <TraceSettlementPanel archive={snapshot.calculationTrace} businessRevision={`${snapshot.id}:v${snapshot.version}`} passiveAffixCount={snapshot.passiveAffixIds.length} /> : <><div className="gantt-ai-guardrail"><LockKeyhole size={18} /><strong>历史 Snapshot 未冻结 canonical Trace</strong></div>
           <div className="model-trace-table">
             <div className="model-trace-head"><span>#</span><span>层</span><span>属性</span><span>来源</span><span>before</span><span>operation</span><span>operand</span><span>after</span></div>
             {traceItems.map((entry) => (
@@ -1243,7 +1244,7 @@ function ModelDrawer({
               </div>
             ))}
             {!traceItems.length ? <div className="gantt-unavailable"><Info size={18} /><div><strong>没有冻结 Trace</strong><span>不会从页面状态伪造来源或 +0 贡献。</span></div></div> : null}
-          </div>
+          </div></>}
         </div>
       ) : null}
 

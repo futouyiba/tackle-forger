@@ -3051,6 +3051,8 @@ interface CalculationTraceEntry {
 
 Trace由内核按sequence产生/重放；`sequence`是单次确定性计算Trace中的全局且唯一的执行序号，跨subject和parameter共享同一序列，持久化和查询不得按对象分组后重新编号；作用域投影可以保留原序号并出现间隙。前端不重算。formula携带formulaId/version和结构化操作数。Technology只记录成员Affix贡献。`PerformanceSummary`拥有独立的派生证据，不伪装成修改属性的Trace层。无贡献层返回no_effect摘要，不伪造执行。警告引用Issue，动作来自服务端。Snapshot冻结Trace或内容寻址引用/hash。
 
+展示例外（MOTION-03）：当且仅当同一冻结`CalculationTraceEntry`的`before`和`after`都是有限数，前端可以临时显示`after - before`作为视觉 delta。该值不得持久化，不得进入任何领域结果、hash、重放、Snapshot、校验或动作决定，也不得用于补全或解释规则语义。非数值值以及`set/clear/min/max/no_effect`等语义操作必须原样显示`before/operation/operand/after`，不得伪造数值 delta。
+
 正常路径：逐层查看来源和四段数值。  
 边界：枚举/区间/非数值set使用类型化值；缺单位不猜。  
 冲突：重放hash不符产生`TRACE_REPLAY_MISMATCH`并阻止发布。  

@@ -22,6 +22,8 @@ test("MotionPresentationModel retains authoritative order and evidence without r
 test("normal playback pauses and resumes at the same presentation position", () => {
   let state = initialMotionPlaybackState(model); state = reduce(state, { type: "play" }); state = reduce(state, { type: "advance" }); state = reduce(state, { type: "pause" });
   assert.deepEqual([state.status, state.stepIndex], ["paused", 1]); state = reduce(state, { type: "resume" }); state = reduce(state, { type: "advance" });
+  assert.deepEqual([state.status, state.stepIndex], ["locking", 2]);
+  state = reduce(state, { type: "finalLockComplete" });
   assert.deepEqual([state.status, state.stepIndex], ["completed", 2]);
 });
 
@@ -46,8 +48,8 @@ test("superseded and cancelled models are terminal until a new model is initiali
 });
 
 class FakeClock implements MotionClock {
-  callbacks = new Map<number, () => void>(); nextHandle = 1; cleared: number[] = [];
-  set(callback: () => void): number { const handle = this.nextHandle++; this.callbacks.set(handle, callback); return handle; }
+  callbacks = new Map<number, () => void>(); nextHandle = 1; cleared: number[] = []; delays: number[] = [];
+  set(callback: () => void, delayMs: number): number { const handle = this.nextHandle++; this.callbacks.set(handle, callback); this.delays.push(delayMs); return handle; }
   clear(handle: unknown): void { this.cleared.push(handle as number); this.callbacks.delete(handle as number); }
   fire(handle: number): void { this.callbacks.get(handle)?.(); }
 }
@@ -55,7 +57,8 @@ class FakeClock implements MotionClock {
 test("injected clock drives normal playback through every authoritative step", () => {
   const clock = new FakeClock(); const controller = createMotionPlaybackController(model, { clock });
   controller.dispatch({ type: "play" }); clock.fire(1); assert.deepEqual([controller.getState().status, controller.getState().stepIndex], ["playing", 1]);
-  clock.fire(2); assert.deepEqual([controller.getState().status, controller.getState().stepIndex], ["completed", 2]);
+  clock.fire(2); assert.deepEqual([controller.getState().status, controller.getState().stepIndex], ["locking", 2]);
+  clock.fire(3); assert.deepEqual([controller.getState().status, controller.getState().stepIndex], ["completed", 2]);
 });
 
 test("injected clock pause/resume clears stale work and advances only after resume", () => {
@@ -85,6 +88,24 @@ test("system reduced-motion defaults to the complete evidence state without wait
   assert.equal(systemPrefersReducedMotion({ matchMedia: () => media }), true);
   const controller = createMotionPlaybackController(model, { clock: new FakeClock(), reducedMotion: systemPrefersReducedMotion({ matchMedia: () => media }) });
   assert.deepEqual([controller.getState().status, controller.getState().stepIndex], ["completed", model.steps.length]);
+});
+
+test("eight standard Trace entries include a separate 250ms final lock within the 2.5 second budget", () => {
+  const eight = Array.from({ length: 8 }, (_, index): MotionTraceLike => ({
+    traceEntryId: `entry-${index + 1}`, sequence: index + 1, layer: index === 0 ? "weight_template" : "method",
+    sourceRef: { sourceType: "Rule", sourceId: `rule-${index + 1}` }, sourceVersion: "1",
+    before: index, operation: "add", operand: 1, after: index + 1, effect: "benefit", warningIssueIds: [], inputHash: `input-${index}`, outputHash: `output-${index}`,
+  }));
+  const eightModel = buildMotionPresentationModel({ businessRevision: "r8", subjectId: "model", parameterKey: "pull", trace: eight });
+  const clock = new FakeClock(); const controller = createMotionPlaybackController(eightModel, { clock });
+  controller.dispatch({ type: "play" });
+  for (let handle = 1; handle <= 8; handle += 1) clock.fire(handle);
+  assert.equal(controller.getState().status, "locking");
+  clock.fire(9); assert.equal(controller.getState().status, "completed");
+  const total = clock.delays.reduce((sum, delay) => sum + delay, 0);
+  assert.equal(clock.delays.at(-1), motionTokens.duration.finalLockMs);
+  assert.ok(total >= 2250 && total <= 2450, `expected 2.25–2.45s, received ${total}ms`);
+  assert.ok(total <= 2500);
 });
 
 test("playback core has a strict no-command/network/persistence import boundary", () => {

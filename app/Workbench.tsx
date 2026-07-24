@@ -91,7 +91,6 @@ import type {
   DataSourceWritebackPreview,
   Candidate,
   DimensionKey,
-  FeishuShareLinkHistoryEntry,
   ItemKind,
   RevisionInfo,
   SeriesShowcaseEntry,
@@ -869,38 +868,6 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     }
   };
 
-  const applyShareLinkFromHistory = (index: number, entry: FeishuShareLinkHistoryEntry) => {
-    // Fill the data-source slot's shareUrl from a history entry. This only
-    // writes the local draft; the user must still click "识别链接" to resolve,
-    // then explicitly preview and publish. It never auto-publishes.
-    mutate((draft) => {
-      const target = draft.dataSources[index];
-      if (!target) return;
-      target.shareUrl = entry.shareUrl;
-      target.appToken = "";
-      target.tableId = "";
-      target.viewId = "";
-    }, false);
-    setSourceCatalogs((current) => {
-      const next = { ...current };
-      delete next[state.dataSources[index]?.id ?? ""];
-      return next;
-    });
-    setSourcePreview(null);
-    setWritebackPreview(null);
-    notify("已从历史填入分享链接，请点击“识别链接”继续。");
-  };
-
-  const clearShareLinkHistory = (shareUrl: string | null) => {
-    mutate((draft) => {
-      draft.feishuShareLinkHistory = removeShareLinkHistory(
-        draft.feishuShareLinkHistory,
-        shareUrl,
-      );
-    }, false);
-    notify(shareUrl ? "已从历史移除该地址。" : "已清空用过的地址历史。");
-  };
-
   const resolveDataSource = async (
     source: DataSourceProfile,
     index: number,
@@ -949,19 +916,9 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         target.appToken = payload.resolved!.appToken;
         target.tableId = payload.resolved!.tableId;
         target.viewId = payload.resolved!.viewId;
-        // Record the successfully resolved share link into history. History
-        // stores only the non-sensitive shareUrl/label/dataset — never tokens
-        // or credentials. Dedup + cap happen inside recordShareLinkHistory.
-        const resolvedTable = payload.resolved!.tableId
-          ? payload.resolved!.tables.find((table) => table.id === payload.resolved!.tableId)
-          : undefined;
-        const label = resolvedTable?.name
-          ? `${target.name} · ${resolvedTable.name}`
-          : target.name;
-        draft.feishuShareLinkHistory = recordShareLinkHistory(
-          draft.feishuShareLinkHistory,
-          { shareUrl: target.shareUrl, label, dataset: target.dataset },
-        );
+        // Issue #157: 飞书分享链接历史已迁到「飞书规则园」combobox（renderRuleSource）。
+        // 数据交换页的 bitable 数据源识别不再写 feishuShareLinkHistory；历史由规则园
+        // combobox 通过 onRecordShareLinkHistory 写入（按 /wiki/|/sheets/ 过滤规则源类）。
       }, false);
       if (!payload.resolved.tableId) {
         notify("链接已识别，读取到 " + payload.resolved.tables.length + " 张数据表，请选择一张。");
@@ -2863,53 +2820,6 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           </div>
         </Card>
 
-        {state.feishuShareLinkHistory.length ? (
-          <Card className="source-history-card">
-            <div className="panel-title">
-              <div>
-                <span className="eyebrow">数据导入 · 地址历史</span>
-                <h3>用过的飞书分享链接</h3>
-                <p>
-                  仅保留成功识别过的多维表格分享链接，不含应用密钥或令牌；选择某条会填入对应数据源，仍需手动识别、预览并发布。
-                </p>
-              </div>
-              <Button
-                icon={Trash2}
-                disabled={!user.actionAvailability.resolve_data_source.enabled}
-                title={user.actionAvailability.resolve_data_source.disabledReasonText}
-                onClick={() => clearShareLinkHistory(null)}
-              >
-                清空历史
-              </Button>
-            </div>
-            <div className="source-history-list">
-              {state.feishuShareLinkHistory.map((entry) => (
-                <div className="source-history-item" key={entry.id}>
-                  <History size={16} aria-hidden="true" />
-                  <div className="source-history-item-body">
-                    <strong>{entry.label}</strong>
-                    <code>{entry.shareUrl}</code>
-                    <small>
-                      {entry.dataset === "weight_templates" ? "重量模板" : "系数"} ·
-                      最近使用 {new Date(entry.lastUsedAt).toLocaleString("zh-CN")}
-                    </small>
-                  </div>
-                  <button
-                    type="button"
-                    className="source-history-remove"
-                    aria-label={"移除 " + entry.label}
-                    title="从历史移除"
-                    disabled={!user.actionAvailability.resolve_data_source.enabled}
-                    onClick={() => clearShareLinkHistory(entry.shareUrl)}
-                  >
-                    <X size={14} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          </Card>
-        ) : null}
-
         <div className="data-source-grid">
           {state.dataSources.map((source, index) => (
             <Card className="data-source-card" key={source.id}>
@@ -2963,31 +2873,6 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
                   <small>
                     链接包含数据表时会直接选中；只包含工作簿时，识别后从下拉列表选择。
                   </small>
-                  {state.feishuShareLinkHistory.length ? (
-                    <div className="source-link-history">
-                      <span className="source-link-history-label">
-                        <History size={14} aria-hidden="true" />
-                        用过的地址
-                      </span>
-                      <SelectInput
-                        value=""
-                        ariaLabel="从用过的地址选择分享链接"
-                        onChange={(value) => {
-                          const entry = state.feishuShareLinkHistory.find(
-                            (item) => item.shareUrl === value,
-                          );
-                          if (entry) applyShareLinkFromHistory(index, entry);
-                        }}
-                      >
-                        <option value="">从历史选择…</option>
-                        {state.feishuShareLinkHistory.map((entry) => (
-                          <option value={entry.shareUrl} key={entry.id}>
-                            {entry.label}（{entry.dataset === "weight_templates" ? "重量模板" : "系数"}）
-                          </option>
-                        ))}
-                      </SelectInput>
-                    </div>
-                  ) : null}
                 </label>
                 <label>
                   <span>使用哪张数据表</span>
@@ -3357,6 +3242,29 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         replaceAuthoritativeWorkspace(nextState, nextRevision);
         notify(message);
         void loadVersions();
+      }}
+      onRecordShareLinkHistory={(shareUrl, label) => {
+        // Issue #157: 飞书表来源 combobox 识别成功后写入 feishuShareLinkHistory。
+        // 本地草稿（mutate 第二参数 false），不立即保存到服务端；用户须显式保存。
+        // 规则源工作簿链接（/wiki/ 或 /sheets/）没有 bitable dataset 概念，这里填
+        // weight_templates 仅满足 recordShareLinkHistory 的类型要求；combobox 按
+        // shareUrl 路径（/wiki/|/sheets/）过滤显示规则源类，与 dataset 值无关。
+        mutate((draft) => {
+          draft.feishuShareLinkHistory = recordShareLinkHistory(draft.feishuShareLinkHistory, {
+            shareUrl,
+            label,
+            dataset: "weight_templates",
+          });
+        }, false);
+      }}
+      onClearShareLinkHistory={(shareUrl) => {
+        mutate((draft) => {
+          draft.feishuShareLinkHistory = removeShareLinkHistory(
+            draft.feishuShareLinkHistory,
+            shareUrl,
+          );
+        }, false);
+        notify(shareUrl ? "已从历史移除该地址。" : "已清空用过的地址历史。");
       }}
     />
   );

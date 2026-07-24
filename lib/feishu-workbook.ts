@@ -59,6 +59,8 @@ export interface FeishuSourceRevision {
   issues: FeishuSheetRegistryIssue[];
   /** 仅由权威 04_词条/zrVOxd 机器规则区解析；外部工作簿不得填充为运行时规则。 */
   reductionPolicyMachineRules?: ReductionPolicyMachineRule[];
+  /** Hash of the immutable W-band policy payload read from this exact workbook revision. */
+  fiveAxisWeightBandPolicyContentHash?: string;
   state: "PULLED" | "RULESET_DRAFT" | "PUBLISHED";
 }
 

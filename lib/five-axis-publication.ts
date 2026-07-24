@@ -11,7 +11,12 @@ export class FiveAxisPublicationError extends Error {}
 export function publishFormalFiveAxisDefinition(input: {
   state: WorkspaceState;
   definition: FiveAxisViewDefinition;
-  sourceEvidence: { sourceRevisionId: string; sourceRevision: string; registryHash: string };
+  sourceEvidence: {
+    sourceRevisionId: string;
+    sourceRevision: string;
+    registryHash: string;
+    weightBandPolicyContentHash: string;
+  };
   expectedCatalogRevisionId: string | null;
   idempotencyKey: string;
   actor: string;
@@ -30,7 +35,16 @@ export function publishFormalFiveAxisDefinition(input: {
     && entry.sourceRevision === input.sourceEvidence.sourceRevision
     && entry.registryHash === input.sourceEvidence.registryHash,
   );
-  if (!source || source.state !== "PUBLISHED" || input.definition.sourceRevision !== source.sourceRevision) {
+  if (
+    !source
+    || source.state !== "PUBLISHED"
+    || input.definition.sourceRevision !== source.sourceRevision
+    || input.definition.weightBandPolicy.sourceRevision !== source.sourceRevision
+    || input.definition.weightBandPolicy.contentHash
+      !== input.sourceEvidence.weightBandPolicyContentHash
+    || source.fiveAxisWeightBandPolicyContentHash
+      !== input.sourceEvidence.weightBandPolicyContentHash
+  ) {
     throw new FiveAxisPublicationError("FIVE_AXIS_PUBLICATION_SOURCE_EVIDENCE_INVALID");
   }
   const commandHash = deterministicHash({

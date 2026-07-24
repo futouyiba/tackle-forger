@@ -11,6 +11,7 @@ function productionState() {
     sourceRevision: "feishu-revision-3563", spreadsheetToken: "redacted",
     pulledAt: "2026-07-24T00:00:00.000Z", pulledBy: "tester", syncScope: "workbook",
     registryHash: "a".repeat(64), sheets: [], issues: [], state: "PUBLISHED",
+    fiveAxisWeightBandPolicyContentHash: createFormalFiveAxisViewDefinition().weightBandPolicy.contentHash,
   }];
   return state;
 }
@@ -23,11 +24,36 @@ test("生产 seed 不自动创建 FORMAL_CURRENT，正式发布要求来源、�
   const definition = createFormalFiveAxisViewDefinition();
   const input = {
     state, definition,
-    sourceEvidence: { sourceRevisionId: "source:five-axis", sourceRevision: "feishu-revision-3563", registryHash: "a".repeat(64) },
+    sourceEvidence: {
+      sourceRevisionId: "source:five-axis", sourceRevision: "feishu-revision-3563",
+      registryHash: "a".repeat(64), weightBandPolicyContentHash: definition.weightBandPolicy.contentHash,
+    },
     expectedCatalogRevisionId: state.currentFiveAxisDispositionCatalogRevisionId,
     idempotencyKey: "five-axis:publish:1", actor: "tester", publishedAt: "2026-07-24T00:00:00.000Z",
   };
   assert.throws(() => publishFormalFiveAxisDefinition({ ...input, capabilities: [] }), FiveAxisPublicationError);
+  assert.throws(() => publishFormalFiveAxisDefinition({
+    ...input,
+    definition: {
+      ...definition,
+      weightBandPolicy: {
+        ...definition.weightBandPolicy,
+        sourceRevision: "forged-source-revision",
+      },
+    },
+    capabilities: ["rules.five_axis.publish"],
+  }), /(?:SOURCE_EVIDENCE_INVALID|FIVE_AXIS_WEIGHT_BAND_POLICY_UNAVAILABLE)/);
+  const selfConsistentForgery = structuredClone(definition);
+  selfConsistentForgery.weightBandPolicy.bands[0].upperBoundKg = "3";
+  selfConsistentForgery.weightBandPolicy.contentHash = input.sourceEvidence.weightBandPolicyContentHash;
+  assert.throws(() => publishFormalFiveAxisDefinition({
+    ...input, definition: selfConsistentForgery, capabilities: ["rules.five_axis.publish"],
+  }), /FIVE_AXIS_WEIGHT_BAND_POLICY_UNAVAILABLE/);
+  assert.throws(() => publishFormalFiveAxisDefinition({
+    ...input,
+    sourceEvidence: { ...input.sourceEvidence, weightBandPolicyContentHash: "b".repeat(64) },
+    capabilities: ["rules.five_axis.publish"],
+  }), /SOURCE_EVIDENCE_INVALID/);
   assert.throws(() => publishFormalFiveAxisDefinition({ ...input, expectedCatalogRevisionId: "stale", capabilities: ["rules.five_axis.publish"] }), /CATALOG_HEAD_CONFLICT/);
   const published = publishFormalFiveAxisDefinition({ ...input, capabilities: ["rules.five_axis.publish"] });
   assert.equal(published.idempotent, false);

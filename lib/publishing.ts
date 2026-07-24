@@ -21,7 +21,9 @@ import type {
   HardCompatibilityResult,
   ModelComponentSelection,
   ModelFiveAxisPreview,
-  FiveAxisViewDefinition,
+  FiveAxisDefinitionDispositionCatalogRevision,
+  FiveAxisVertexCandidateSource,
+  StoredFiveAxisViewDefinition,
   PatchRebaseDifference,
   PatchOffsetPolicyVersion,
   ParameterDefinition,
@@ -46,6 +48,7 @@ import type {
   WaiverPolicyVersion,
   PassiveSkillPayload,
   WorkspacePolicyRecord,
+  WorkspaceState,
 } from "./types";
 import {
   assertValidationGateCanProceed,
@@ -102,6 +105,12 @@ function entityRefIdentity(ref: {
     ref.revisionId,
   ]);
 }
+import {
+  assertFormalModelFiveAxisPreview,
+  hashFormalFiveAxisPreviewInput,
+  hashFormalFinalPanelValues,
+  resolveFormalFiveAxisDefinition,
+} from "./five-axis-formal";
 
 export function modelFinalPullKgForSnapshot(
   itemPartId: string | undefined,
@@ -239,8 +248,14 @@ export interface PublishModelInput {
   validationWaiverDecisions?: ValidationWaiverDecision[];
   activeValidationWaiverPolicies?: WaiverPolicyVersion[];
   fiveAxisPreview?: ModelFiveAxisPreview;
-  fiveAxisDefinition?: FiveAxisViewDefinition;
-  /** @deprecated 仅 historical_import 可读取；新正式发布必须提供指纹绑定的确认记录。 */
+  fiveAxisAuthorityState?: Pick<
+    WorkspaceState,
+    "purchasableModels" | "configurationSnapshots"
+  >;
+  fiveAxisDefinition?: StoredFiveAxisViewDefinition;
+  fiveAxisDefinitions?: StoredFiveAxisViewDefinition[];
+  fiveAxisDispositionCatalogRevisions?: FiveAxisDefinitionDispositionCatalogRevision[];
+  currentFiveAxisDispositionCatalogRevisionId?: string | null;
   warningConfirmations: Record<string, string>;
   publishedBy: string;
   publishedAt: string;
@@ -252,6 +267,76 @@ function snapshotContent(
   snapshot: Omit<ConfigurationSnapshot, "contentHash">,
 ): Omit<ConfigurationSnapshot, "contentHash"> {
   return snapshot;
+}
+
+function deriveFormalCandidatePoolFromAuthority(input: {
+  authority: PublishModelInput["fiveAxisAuthorityState"];
+  preview: ModelFiveAxisPreview;
+  publishingModelId: string;
+}): FiveAxisVertexCandidateSource[] {
+  if (!input.authority) {
+    throw new Error(
+      "FIVE_AXIS_CANDIDATE_AUTHORITY_UNAVAILABLE：正式发布必须回读权威 Model 指针与冻结 Snapshot。",
+    );
+  }
+  const currentSources = input.preview.candidateSources?.filter((source) =>
+    source.candidateSemanticKey.modelId === input.publishingModelId) ?? [];
+  const sources = [...currentSources];
+  for (const model of input.authority.purchasableModels) {
+    if (model.id === input.publishingModelId || model.status !== "published") {
+      continue;
+    }
+    if (!model.configurationSnapshotId) {
+      throw new Error(
+        `FIVE_AXIS_CANDIDATE_AUTHORITY_INVALID：已发布 Model ${model.id} 缺少当前 Snapshot 指针。`,
+      );
+    }
+    const matchingSnapshots = input.authority.configurationSnapshots.filter(
+      (snapshot) => snapshot.id === model.configurationSnapshotId,
+    );
+    if (matchingSnapshots.length !== 1) {
+      throw new Error(
+        `FIVE_AXIS_CANDIDATE_AUTHORITY_INVALID：Model ${model.id} 的当前 Snapshot 不唯一或不存在。`,
+      );
+    }
+    const snapshot = matchingSnapshots[0];
+    if (
+      snapshot.modelId !== model.id
+      || !verifySnapshotIntegrity(snapshot)
+    ) {
+      throw new Error(
+        `FIVE_AXIS_CANDIDATE_AUTHORITY_INVALID：Model ${model.id} 的当前 Snapshot 身份或 hash 无效。`,
+      );
+    }
+    const preview = snapshot.fiveAxisPreview;
+    if (
+      !preview?.weightBandId
+      || preview.weightBandId !== input.preview.weightBandId
+      || preview.weightBandPolicyVersion
+        !== input.preview.weightBandPolicyVersion
+      || preview.fiveAxisDefinitionId
+        !== input.preview.fiveAxisDefinitionId
+      || preview.fiveAxisDefinitionVersion
+        !== input.preview.fiveAxisDefinitionVersion
+      || preview.fiveAxisRuleVersion !== input.preview.fiveAxisRuleVersion
+    ) {
+      continue;
+    }
+    const snapshotSources = preview.candidateSources?.filter((source) =>
+      source.candidateSemanticKey.modelId === model.id) ?? [];
+    if (
+      snapshotSources.length !== 3
+      || snapshotSources.some((source) =>
+        source.snapshotId !== snapshot.id
+        || source.modelRevisionId !== `${model.id}@${snapshot.modelRevision}`)
+    ) {
+      throw new Error(
+        `FIVE_AXIS_CANDIDATE_AUTHORITY_INVALID：Model ${model.id} 的冻结候选证据不完整。`,
+      );
+    }
+    sources.push(...snapshotSources);
+  }
+  return sources;
 }
 
 export function publishConfigurationSnapshot(
@@ -471,13 +556,6 @@ export function publishConfigurationSnapshot(
     );
   }
   if (input.publicationMode === "new_formal") {
-    if (!input.workspaceId?.trim()) {
-      blocking.push({
-        level: "error",
-        code: "CALCULATION_TRACE_SUBJECT_MISSING",
-        message: "新 Snapshot 必须提供 workspaceId，以冻结 canonical CalculationTrace 的 subjectRef。",
-      });
-    }
     if (!input.finalSettlementTrace) {
       blocking.push({
         level: "error",
@@ -619,35 +697,81 @@ export function publishConfigurationSnapshot(
   if (input.sku.projectionMatch.projectionId !== input.projection.id) {
     throw new Error("SKU 的 ProjectionMatch 与发布投影不一致。");
   }
+  const snapshotId =
+    input.snapshotId ??
+    "snapshot-" + input.model.id + "-v" + (input.version ?? 1);
+  const modelFinalPullKg = modelFinalPullKgForSnapshot(
+    input.sku.projectionMatch.itemPartId,
+    input.finalPanelValues,
+  );
   if (
     input.fiveAxisPreview &&
     input.fiveAxisPreview.modelId !== input.model.id
   ) {
     throw new Error("五轴预览与待发布 Model 不一致。");
   }
+  if (input.publicationMode === "new_formal" && !input.fiveAxisPreview) {
+    throw new Error(
+      "FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE：新正式 Snapshot 必须冻结五维定义、目录与预览证据。",
+    );
+  }
+  let fiveAxisDispositionEvidence: ConfigurationSnapshot["fiveAxisDispositionEvidence"];
+  let frozenFiveAxisPreview = input.fiveAxisPreview
+    ? structuredClone(input.fiveAxisPreview)
+    : undefined;
   if (input.publicationMode === "new_formal" && input.fiveAxisPreview) {
     const definition = input.fiveAxisDefinition;
-    if (!definition || definition.publicationState !== "PUBLISHED") {
-      throw new Error("五轴预览使用的 FiveAxisViewDefinition 尚未发布，禁止创建正式 Snapshot。");
-    }
-    const { definitionHash, ...definitionContent } = definition;
-    if (deterministicHash(definitionContent) !== definitionHash) {
-      throw new Error("FiveAxisViewDefinition 完整性校验失败，禁止创建正式 Snapshot。");
-    }
+    const resolved = resolveFormalFiveAxisDefinition({
+      definitions: input.fiveAxisDefinitions ?? (definition ? [definition] : []),
+      revisions: input.fiveAxisDispositionCatalogRevisions ?? [],
+      currentRevisionId: input.currentFiveAxisDispositionCatalogRevisionId ?? null,
+    });
     if (
-      input.fiveAxisPreview.fiveAxisDefinitionId !== definition.definitionId
-      || input.fiveAxisPreview.fiveAxisDefinitionVersion !== definition.version
-      || input.fiveAxisPreview.fiveAxisDefinitionRevision !== definition.revision
-      || input.fiveAxisPreview.fiveAxisDefinitionHash !== definition.definitionHash
-      || input.fiveAxisPreview.fiveAxisRuleVersion !== definition.fiveAxisRuleVersion
-      || input.fiveAxisPreview.sourceRevision !== definition.sourceRevision
-      || input.fiveAxisPreview.tackleFitComparison.fiveAxisDefinitionId !== definition.definitionId
-      || input.fiveAxisPreview.tackleFitComparison.fiveAxisDefinitionVersion !== definition.version
-      || input.fiveAxisPreview.tackleFitComparison.fiveAxisRuleVersion !== definition.fiveAxisRuleVersion
-      || input.fiveAxisPreview.tackleFitComparison.vertexSetHash !== input.fiveAxisPreview.vertexSetHash
+      !definition
+      || definition.definitionId !== resolved.definition.definitionId
+      || definition.version !== resolved.definition.version
+      || definition.definitionHash !== resolved.definition.definitionHash
     ) {
-      throw new Error("五轴预览的定义、规则或顶点版本链不一致，禁止创建正式 Snapshot。");
+      throw new Error("FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE：传入定义不是目录中的唯一 FORMAL_CURRENT。");
     }
+    fiveAxisDispositionEvidence = {
+      catalogRevisionId: resolved.catalogRevision.catalogRevisionId,
+      catalogHash: resolved.catalogRevision.catalogHash,
+      disposition: structuredClone(resolved.disposition),
+    };
+    if (modelFinalPullKg === undefined || modelFinalPullKg <= 0) {
+      throw new Error("FIVE_AXIS_FORMAL_PREVIEW_INVALID：正式 Snapshot 缺少合法最终拉力。");
+    }
+    const authoritativeVertexSet = assertFormalModelFiveAxisPreview({
+      definition: resolved.definition,
+      preview: input.fiveAxisPreview,
+      expectedCandidateSources: deriveFormalCandidatePoolFromAuthority({
+        authority: input.fiveAxisAuthorityState,
+        preview: input.fiveAxisPreview,
+        publishingModelId: input.model.id,
+      }),
+      expectedModelId: input.model.id,
+      expectedModelRevisionId: `${input.model.id}@${input.model.revision}`,
+      expectedSnapshotId: snapshotId,
+      expectedSeriesId: input.series.id,
+      expectedSkuId: input.sku.id,
+      expectedSkuRevisionId: `${input.sku.id}@${input.sku.revision}`,
+      expectedProjectionReferences:
+        input.sku.fiveAxisProjectionReferences ?? [],
+      expectedFinalPanelHash: hashFormalFinalPanelValues(input.finalPanelValues),
+      expectedComponentSelections: input.componentSelections.map((component) => ({
+        itemPartId: component.itemPartId,
+        componentId: component.componentId,
+        values: component.values,
+      })),
+      expectedModelFinalPullKg: modelFinalPullKg,
+    });
+    frozenFiveAxisPreview = structuredClone(input.fiveAxisPreview);
+    frozenFiveAxisPreview.candidateSources = structuredClone(
+      authoritativeVertexSet.candidateSources,
+    );
+    frozenFiveAxisPreview.inputHash =
+      hashFormalFiveAxisPreviewInput(frozenFiveAxisPreview);
   }
   if (input.publicationMode === "new_formal") {
     if (!hasValidReductionPolicyBinding(input)) {
@@ -770,15 +894,9 @@ export function publishConfigurationSnapshot(
       decisions: input.validationWaiverDecisions,
     });
   }
-  const modelFinalPullKg = modelFinalPullKgForSnapshot(
-    input.sku.projectionMatch.itemPartId,
-    input.finalPanelValues,
-  );
   const snapshotWithoutHash: Omit<ConfigurationSnapshot, "contentHash"> = {
     ...(input.publicationMode==="new_formal"?{workspaceId:input.workspaceId}:{}),
-    id:
-      input.snapshotId ??
-      "snapshot-" + input.model.id + "-v" + (input.version ?? 1),
+    id: snapshotId,
     version: input.version ?? 1,
     modelId: input.model.id,
     modelRevision: input.model.revision,
@@ -817,7 +935,9 @@ export function publishConfigurationSnapshot(
     attributeAffixIds: structuredClone(input.attributeAffixIds),
     passiveAffixIds: structuredClone(input.passiveAffixIds),
     attributeTrace: structuredClone(finalSettlementTrace ?? input.projection.trace),
-    ...(calculationTrace ? { calculationTrace } : {}),
+    ...(calculationTrace
+      ? { calculationTrace: structuredClone(calculationTrace) }
+      : {}),
     passiveAffixPayloads: structuredClone(input.passiveAffixPayloads),
     projectionMatch: structuredClone(input.sku.projectionMatch),
     compatibilityReport: structuredClone(input.compatibilityReport),
@@ -855,8 +975,11 @@ export function publishConfigurationSnapshot(
       validationWaiverDecisions: structuredClone(input.validationWaiverDecisions ?? []),
     } : {}),
     publishedBy: input.publishedBy,
-    ...(input.fiveAxisPreview
-      ? { fiveAxisPreview: structuredClone(input.fiveAxisPreview) }
+    ...(frozenFiveAxisPreview
+      ? { fiveAxisPreview: frozenFiveAxisPreview }
+      : {}),
+    ...(fiveAxisDispositionEvidence
+      ? { fiveAxisDispositionEvidence }
       : {}),
     publishedAt: input.publishedAt,
   };

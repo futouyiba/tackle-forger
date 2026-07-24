@@ -21,6 +21,10 @@ import {
 } from "../lib/patch-offset-policy";
 import { buildPatchRevision, emptyPatchLedger, orderedPatchReferences, PatchLedgerError, reviewPatchBatch } from "../lib/patch-ledger";
 import { publishConfigurationSnapshot, verifySnapshotIntegrity } from "../lib/publishing";
+import {
+  buildFormalComponentSelectionsFixture,
+  buildFormalPreviewFixture,
+} from "./helpers/formal-five-axis";
 import { createExportManifest } from "../lib/config-export";
 import {
   assertPatchEvaluationMatchesAuthority,
@@ -953,11 +957,33 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
     approvedBy: "publisher",
     approvedAt: NOW,
   });
+  const formalDefinition = state.fiveAxisViewDefinitions.find((definition) =>
+    "semanticContractVersion" in definition)!;
+  const formalPreview = buildFormalPreviewFixture({
+    definition: formalDefinition,
+    snapshotId: "snapshot:open004-v1",
+    modelId: model.id,
+    modelRevision: model.revision,
+    seriesId: series.id,
+    skuId: sku.id,
+    skuRevision: sku.revision,
+    modelFinalPullKg: oldSnapshot.modelFinalPullKg!,
+    finalPanelValues: oldSnapshot.finalPanelValues,
+    componentSelections: oldSnapshot.componentSelections,
+  });
+  const formalComponentSelections = buildFormalComponentSelectionsFixture(
+    oldSnapshot.componentSelections,
+  );
   const snapshot = publishConfigurationSnapshot({
     publicationMode: "new_formal",
     workspaceId: "workspace:test",
     model,
-    sku,
+    sku: {
+      ...sku,
+      fiveAxisProjectionReferences: structuredClone(
+        formalPreview.tackleFitComparison.projectionReferences!,
+      ),
+    },
     seriesSkus: state.skuDrawers.filter((entry) => entry.seriesId === series.id),
     series,
     projection,
@@ -968,7 +994,7 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
       oldSnapshot.finalPanelValues,
     ),
     finalPanelValues: oldSnapshot.finalPanelValues,
-    componentSelections: oldSnapshot.componentSelections,
+    componentSelections: formalComponentSelections,
     patches: [],
     patchRevisions,
     patchOffsetGovernance: {
@@ -1005,6 +1031,17 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
       trace: [],
       inputHash: "quality-hash",
     },
+    fiveAxisPreview: formalPreview,
+    fiveAxisAuthorityState: {
+      purchasableModels: state.purchasableModels,
+      configurationSnapshots: state.configurationSnapshots,
+    },
+    fiveAxisDefinition: formalDefinition,
+    fiveAxisDefinitions: state.fiveAxisViewDefinitions,
+    fiveAxisDispositionCatalogRevisions:
+      state.fiveAxisDispositionCatalogRevisions,
+    currentFiveAxisDispositionCatalogRevisionId:
+      state.currentFiveAxisDispositionCatalogRevisionId,
     pricingPolicyVersion: "pricing:published-v1",
     automaticPricing: {
       formal: true,

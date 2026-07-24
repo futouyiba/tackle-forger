@@ -170,7 +170,7 @@ export function V3FlowWorkbench({ state, mutate, notify, initialSeriesId }: V3Fl
     notify("升级候选已批准；旧快照仍保持冻结。");
   };
   const loadExampleChain = () => {
-    const hydrated = hydrateV3Seed(state);
+    const hydrated = hydrateV3Seed(state, { mode: "production" });
     if (!hydrated.skuDrawers.length || !hydrated.purchasableModels.length) {
       notify("当前规则资料不足，或已存在未完成的商品身份；请先补齐后再载入示例链。");
       return;

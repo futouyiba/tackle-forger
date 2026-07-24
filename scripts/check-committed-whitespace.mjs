@@ -39,6 +39,20 @@ function mergeBase(leftSha, rightSha, cwd) {
   return COMMIT_SHA.test(sha) ? sha.toLowerCase() : undefined;
 }
 
+function commitExists(sha, cwd) {
+  const result = runGit(["cat-file", "-e", `${sha}^{commit}`], { cwd });
+  return result.status === 0;
+}
+
+function resolveHeadFirstParent(headSha, cwd) {
+  const result = runGit(["rev-list", "--parents", "-n", "1", headSha], { cwd });
+  if (result.status !== 0) return undefined;
+  const parts = result.stdout.trim().split(/\s+/).filter(Boolean);
+  if (parts.length < 2) return undefined;
+  const parent = parts[1].toLowerCase();
+  return COMMIT_SHA.test(parent) ? parent : undefined;
+}
+
 function candidateBaselineRefs(pushBaseRef, defaultBranch) {
   const candidates = [];
   if (pushBaseRef) {
@@ -75,25 +89,65 @@ export function resolveCommittedWhitespaceRange(environment, { cwd = process.cwd
   if (eventName === "push") {
     const beforeSha = requireCommitSha(environment.PUSH_BEFORE_SHA, "PUSH_BEFORE_SHA", { allowZero: true });
     const headSha = requireCommitSha(environment.PUSH_AFTER_SHA, "PUSH_AFTER_SHA");
-    if (!ZERO_SHA.test(beforeSha)) {
+    const pushBaseRef = String(environment.PUSH_BASE_REF ?? "").trim();
+    const defaultBranch = String(environment.DEFAULT_BRANCH ?? "").trim();
+
+    if (ZERO_SHA.test(beforeSha)) {
+      const newBranchBase = resolveNewBranchBase({
+        pushBaseRef,
+        defaultBranch,
+        headSha,
+        cwd,
+      });
+      if (newBranchBase) {
+        return {
+          baseSha: newBranchBase.baseSha,
+          headSha,
+          mode: "new_branch_merge_base",
+          baselineRef: newBranchBase.baselineRef,
+        };
+      }
+      return { baseSha: EMPTY_TREE_SHA, headSha, mode: "new_branch_full_tree" };
+    }
+
+    if (commitExists(beforeSha, cwd)) {
       return { baseSha: beforeSha, headSha, mode: "push_commit_range" };
     }
 
-    const newBranchBase = resolveNewBranchBase({
-      pushBaseRef: String(environment.PUSH_BASE_REF ?? "").trim(),
-      defaultBranch: String(environment.DEFAULT_BRANCH ?? "").trim(),
+    const fallbackReason = `before SHA ${beforeSha} is unreachable in this checkout (likely force-push or rebase rewrote history)`;
+
+    const forcedMergeBase = resolveNewBranchBase({
+      pushBaseRef,
+      defaultBranch,
       headSha,
       cwd,
     });
-    if (newBranchBase) {
+    if (forcedMergeBase) {
       return {
-        baseSha: newBranchBase.baseSha,
+        baseSha: forcedMergeBase.baseSha,
         headSha,
-        mode: "new_branch_merge_base",
-        baselineRef: newBranchBase.baselineRef,
+        mode: "forced_push_merge_base",
+        baselineRef: forcedMergeBase.baselineRef,
+        fallbackReason,
       };
     }
-    return { baseSha: EMPTY_TREE_SHA, headSha, mode: "new_branch_full_tree" };
+
+    const parentSha = resolveHeadFirstParent(headSha, cwd);
+    if (parentSha) {
+      return {
+        baseSha: parentSha,
+        headSha,
+        mode: "forced_push_head_parent",
+        fallbackReason: `${fallbackReason}; fell back to head parent..head range`,
+      };
+    }
+
+    return {
+      baseSha: EMPTY_TREE_SHA,
+      headSha,
+      mode: "forced_push_full_tree",
+      fallbackReason: `${fallbackReason}; head has no reachable parent; fell back to full-tree check`,
+    };
   }
 
   throw new Error(`Unsupported event: ${eventName || "<empty>"}`);
@@ -102,7 +156,8 @@ export function resolveCommittedWhitespaceRange(environment, { cwd = process.cwd
 export function checkCommittedWhitespace(environment, { cwd = process.cwd() } = {}) {
   const range = resolveCommittedWhitespaceRange(environment, { cwd });
   const baseline = range.baselineRef ? ` via ${range.baselineRef}` : "";
-  console.log(`Checking committed whitespace (${range.mode}${baseline}): ${range.baseSha}..${range.headSha}`);
+  const fallback = range.fallbackReason ? ` [fallback: ${range.fallbackReason}]` : "";
+  console.log(`Checking committed whitespace (${range.mode}${baseline})${fallback}: ${range.baseSha}..${range.headSha}`);
   const result = runGit(["diff", "--check", range.baseSha, range.headSha], { cwd, inherit: true });
   if (result.error) throw result.error;
   if (result.status !== 0) {

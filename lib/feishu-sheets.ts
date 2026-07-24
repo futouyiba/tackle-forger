@@ -139,6 +139,10 @@ export async function readFeishuWorkbook(input: {
 export function createFeishuWorkbookPullAdapter(fetcher?: FetchLike): FeishuWorkbookPullAdapter {
   return {
     resolveWorkbook: (ref) => readFeishuWorkbook({ ref, fetcher }),
+    readRanges: async ({ spreadsheetToken, requests }) => Promise.all(requests.map(async (request) => {
+      const valueRange = await readFeishuSheetRange({ spreadsheetToken, ...request, fetcher });
+      return { ...request, revision: valueRange.revision, values: valueRange.values };
+    })),
   };
 }
 

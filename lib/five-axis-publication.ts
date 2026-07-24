@@ -44,6 +44,11 @@ export function publishFormalFiveAxisDefinition(input: {
       !== input.sourceEvidence.weightBandPolicyContentHash
     || source.fiveAxisWeightBandPolicyContentHash
       !== input.sourceEvidence.weightBandPolicyContentHash
+    || !source.fiveAxisWeightBandPolicy
+    || source.fiveAxisWeightBandPolicy.contentHash
+      !== input.sourceEvidence.weightBandPolicyContentHash
+    || source.fiveAxisWeightBandPolicy.sourceRevision
+      !== input.sourceEvidence.sourceRevision
   ) {
     throw new FiveAxisPublicationError("FIVE_AXIS_PUBLICATION_SOURCE_EVIDENCE_INVALID");
   }

@@ -57,9 +57,9 @@ export function createFormalFiveAxisWeightBandPolicy(input?: {
     publicationState: "PUBLISHED",
     sourceRevision: input?.sourceRevision ?? "feishu-revision-3563",
     bands: input?.bands ?? [
-      { weightBandId: "W1", upperBoundKg: "2" }, { weightBandId: "W2", upperBoundKg: "4" },
-      { weightBandId: "W3", upperBoundKg: "6" }, { weightBandId: "W4", upperBoundKg: "10" },
-      { weightBandId: "W5", upperBoundKg: "15" }, { weightBandId: "W6", upperBoundKg: null },
+      { weightBandId: "W1", upperBoundKg: "1.5" }, { weightBandId: "W2", upperBoundKg: "3.8" },
+      { weightBandId: "W3", upperBoundKg: "12.6" }, { weightBandId: "W4", upperBoundKg: "25.9" },
+      { weightBandId: "W5", upperBoundKg: "82.5" }, { weightBandId: "W6", upperBoundKg: null },
     ],
   };
   return { ...content, contentHash: hashFiveAxisWeightBandPolicy(content) };

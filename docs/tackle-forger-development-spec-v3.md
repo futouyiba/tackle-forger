@@ -929,6 +929,10 @@ Snapshot的“下载审计归档”与“正式导出”是两种不同动作：
 
 `01_重量模板`是竿、轮、线各自的重量段标杆，不能把其中“钓具大类”误作钓法。`02_钓法类型`的不可变`fishing_*`行提供钓法系数，钓法与类型仍是两个独立规则层。导入器以稳定ID和表头逻辑列定位：先对重量段标杆应用钓法系数，再叠加独立钓法层Patch，形成可审查的钓法模板；不得通过显示名、行号、块顺序或`02.5`反向猜测绑定。`02.5_钓法模板/m3eQCg`只是人工审核后可写回的结果与证据，不是当前规则的权威输入。任何缺失稳定ID、未知列语义、基准revision冲突或回读不一致都必须阻断激活并保留已有发布版本。
 
+五维图的 W 重量段策略也只从同一主工作簿的`01_重量模板/d6e928`读取。已确认的权威观察为 wiki `YsEKwSUJ5i86HCkZKBVcNMw7nOh` revision `4837` 的`A1:AE54`机器区：竿第3–18行、轮第21–36行、线第39–54行，各为16级；每个块的 B:H 必须依次提供`machineId`、`sync`、`part`、`weightBand ordinal`、`minPull`、`maxPull`、`fishWeightGrade`（表头可为对应中文机器字段）。接入器必须在一次显式拉取中读取该完整区，并验证范围读回 revision 与工作簿 revision 完全相同。三块的machineId、sync、部位、ordinal、min/max和grade均为必填；部位必须与块一致，grade只能按`微物→小鱼→中鱼→大鱼→巨物→超级巨物`连续出现一次，不得回跳、缺级或增造第七级；每个闭合上界必须为正、严格递增，最后`超级巨物`必须是开放尾段。三部位推导出的六段grade序列和前五个上界必须逐项一致，否则该revision不能产生正式五维证据。当前观测由此得出`W1..W6`的稳定ID、上界`1.5/3.8/12.6/25.9/82.5/null`；它们是此revision的派生结果，不是可由代码种子、价格重量段、校验规则或连续插值替代的永久常量。
+
+规范化 W policy 固定为`policyId="weight-band:five-axis-d6e928"`、`version="weight-band:five-axis-d6e928@<sourceRevision>"`、六个稳定`W1..W6`和上述按源推导的上界，使用严格 schema、JCS、UTF-8 SHA-256计算`contentHash`。拉取必须把完整规范化payload和hash冻结进该准确`FeishuSourceRevision`；缺范围、表头/行/机器字段、部位、ordinal、区间、grade连续性、开放尾段、三方一致性或revision/hash任一不一致均fail-closed，不能发布新正式五维定义。正式定义必须同时引用同一`sourceRevision`和该hash，正式发布命令必须从冻结的`FeishuSourceRevision`复核二者；不得由调用方手填hash或以代码示例策略冒充飞书证据。新revision只能形成新定义、目录修订和后续Snapshot；旧定义、目录、VertexSet和ConfigurationSnapshot永久保留，既有历史Snapshot不得因重新拉取而重算或补写。
+
 `04_功能定位/vviXo0`每个功能行必须有不可变`FunctionProfile ID（勿改）`。它是FunctionProfile父级身份；`func_*`仅是强度行身份。相同父ID的显示名必须一致，非泛用组必须恰好各有一次强度1、2、3；泛用组允许仅有强度1，保留源数据而不得补造强度。缺父ID、重复强度或不完整非泛用组必须fail-closed，绝不由名称、`名称|级别`、行号或排序归组。revision 4226 的机器区域含竿/轮/线三块、空隔行与重复表头（`d6e928 A1:AE54`、`rgFPUu A1:AB12`、`m3eQCg A1:AB83`、`fATowU A1:AE20`、`vviXo0 A1:AG63`）；每块都必须独立按表头解析。
 
 对`02.5`的可选写回最终必须使用准备、写入、回读验证、激活四阶段：prepare冻结输入内容哈希、源revision baseline和幂等键；write只写经人工审核的拟写单元格；readback验证稳定ID、值与revision；activation仅在完整回读后标记`REMOTE_CHANGES_AVAILABLE`。部分失败必须保留准备证据并要求重新拉取，不能声称已激活或自动覆盖历史Snapshot。当前版本尚未提供可从应用调用并跨重启恢复的`02.5`专用写回命令；本轮对飞书revision `4226→4227`的人工写入与技术回读仅是迁移证据，不得被界面或实现宣称为该持久化工作流已经上线。

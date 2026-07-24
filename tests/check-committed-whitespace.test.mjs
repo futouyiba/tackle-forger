@@ -7,6 +7,11 @@ import test from "node:test";
 import { EMPTY_TREE_SHA, resolveCommittedWhitespaceRange } from "../scripts/check-committed-whitespace.mjs";
 
 const ZERO_SHA = "0".repeat(40);
+// A syntactically valid 40-char SHA that will not exist in any test repository
+// built here. Models `github.event.before` after a force-push/rebase that
+// rewrote history and left the previous tip unreachable in a fresh Actions
+// checkout.
+const UNREACHABLE_SHA = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
 
 function git(cwd, ...args) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -189,4 +194,241 @@ test("无共同祖先的两提交首次 push 会定位第一提交的 trailing w
   const result = diffCheck(cwd, range.baseSha, range.headSha);
   assert.notEqual(result.status, 0);
   assert.match(result.stdout, /first\.txt:1: trailing whitespace/);
+});
+
+test("force-push 后 before-SHA 不可达时回退到与默认分支的 merge-base", async (t) => {
+  const { cwd, mainSha } = await createRepository(t);
+  git(cwd, "switch", "-c", "feature");
+  await writeFile(path.join(cwd, "feature.txt"), "clean feature\n");
+  git(cwd, "add", "feature.txt");
+  git(cwd, "commit", "-m", "feature change");
+  const headSha = git(cwd, "rev-parse", "HEAD");
+
+  const range = resolveCommittedWhitespaceRange({
+    EVENT_NAME: "push",
+    PUSH_BEFORE_SHA: UNREACHABLE_SHA,
+    PUSH_AFTER_SHA: headSha,
+    DEFAULT_BRANCH: "main",
+  }, { cwd });
+
+  assert.equal(range.mode, "forced_push_merge_base");
+  assert.equal(range.baseSha, mainSha);
+  assert.equal(range.headSha, headSha);
+  assert.equal(range.baselineRef, "refs/remotes/origin/main");
+  assert.ok(range.fallbackReason, "fallback reason must be surfaced in the resolved range");
+  assert.ok(range.fallbackReason.includes(UNREACHABLE_SHA), "fallback reason must name the unreachable before SHA");
+  // 干净的 feature 提交不得误报失败
+  assert.equal(diffCheck(cwd, range.baseSha, range.headSha).status, 0);
+});
+
+test("before-SHA 不可达回退后仍检出本次引入的 trailing whitespace（不静默放过）", async (t) => {
+  const { cwd } = await createRepository(t);
+  git(cwd, "switch", "-c", "feature");
+  await writeFile(path.join(cwd, "feature.txt"), "new trailing whitespace   \n");
+  git(cwd, "add", "feature.txt");
+  git(cwd, "commit", "-m", "bad feature change");
+  const headSha = git(cwd, "rev-parse", "HEAD");
+
+  const range = resolveCommittedWhitespaceRange({
+    EVENT_NAME: "push",
+    PUSH_BEFORE_SHA: UNREACHABLE_SHA,
+    PUSH_AFTER_SHA: headSha,
+    DEFAULT_BRANCH: "main",
+  }, { cwd });
+  const result = diffCheck(cwd, range.baseSha, range.headSha);
+
+  assert.equal(range.mode, "forced_push_merge_base");
+  assert.ok(range.fallbackReason);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stdout, /feature\.txt:1: trailing whitespace/);
+});
+
+test("before-SHA 不可达且无可信共同基线时回退到空树全树检查（多提交 head）", async (t) => {
+  const { cwd } = await createRepository(t);
+  git(cwd, "switch", "-c", "feature");
+  // createRepository 在 main 上提交了带 trailing whitespace 的 historical.txt；
+  // feature 分支继承该文件，空树全树检查会被它命中，故先移除以聚焦"无基线 → 全树"路径。
+  git(cwd, "rm", "-f", "historical.txt");
+  await writeFile(path.join(cwd, "first.txt"), "first clean change\n");
+  git(cwd, "add", "first.txt");
+  git(cwd, "commit", "-m", "first commit");
+  await writeFile(path.join(cwd, "second.txt"), "second clean change\n");
+  git(cwd, "add", "second.txt");
+  git(cwd, "commit", "-m", "second commit");
+  const headSha = git(cwd, "rev-parse", "HEAD");
+
+  const range = resolveCommittedWhitespaceRange({
+    EVENT_NAME: "push",
+    PUSH_BEFORE_SHA: UNREACHABLE_SHA,
+    PUSH_AFTER_SHA: headSha,
+    // 故意不传 DEFAULT_BRANCH / PUSH_BASE_REF，逼出无共同基线 → 全树回退路径
+  }, { cwd });
+
+  assert.equal(range.mode, "forced_push_full_tree");
+  assert.equal(range.baseSha, EMPTY_TREE_SHA);
+  assert.equal(range.headSha, headSha);
+  assert.ok(range.fallbackReason);
+  assert.ok(range.fallbackReason.includes("full-tree"));
+  assert.equal(diffCheck(cwd, range.baseSha, range.headSha).status, 0);
+});
+
+test("before-SHA 不可达且无共同基线时全树检查仍检出较早提交引入的 trailing whitespace", async (t) => {
+  const { cwd } = await createRepository(t);
+  git(cwd, "switch", "-c", "feature");
+  // 倒数第二个提交写入 trailing whitespace；末提交不触碰该文件。
+  await writeFile(path.join(cwd, "early.txt"), "early commit trailing whitespace   \n");
+  git(cwd, "add", "early.txt");
+  git(cwd, "commit", "-m", "early bad commit");
+  await writeFile(path.join(cwd, "late.txt"), "clean late commit\n");
+  git(cwd, "add", "late.txt");
+  git(cwd, "commit", "-m", "late clean commit");
+  const headSha = git(cwd, "rev-parse", "HEAD");
+  const headParent = git(cwd, "rev-parse", "HEAD^");
+
+  const range = resolveCommittedWhitespaceRange({
+    EVENT_NAME: "push",
+    PUSH_BEFORE_SHA: UNREACHABLE_SHA,
+    PUSH_AFTER_SHA: headSha,
+    // 不传 DEFAULT_BRANCH / PUSH_BASE_REF：无可信共同基线
+  }, { cwd });
+
+  assert.equal(range.mode, "forced_push_full_tree");
+  assert.equal(range.baseSha, EMPTY_TREE_SHA);
+  // 旧的 head^..head 回退只会检查末提交（late.txt 干净），从而静默放过 early.txt。
+  assert.equal(diffCheck(cwd, headParent, headSha).status, 0);
+  // 全树回退必须检出较早提交引入的 trailing whitespace 并定位文件，不得静默放过。
+  const result = diffCheck(cwd, range.baseSha, range.headSha);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stdout, /early\.txt:1: trailing whitespace/);
+});
+
+test("before-SHA 不可达且 head 为孤儿根提交时回退到空树全树检查", async (t) => {
+  const { cwd } = await createRepository(t);
+  git(cwd, "switch", "--orphan", "orphan-feature");
+  // --orphan leaves the baseline historical.txt (with trailing whitespace) in
+  // the working tree but unstaged; drop it tolerantly so this commit stays
+  // clean and the test focuses on the full-tree fallback path.
+  git(cwd, "rm", "-f", "--ignore-unmatch", "historical.txt");
+  await writeFile(path.join(cwd, "orphan.txt"), "clean orphan\n");
+  git(cwd, "add", "orphan.txt");
+  git(cwd, "commit", "-m", "orphan root");
+  const headSha = git(cwd, "rev-parse", "HEAD");
+
+  const range = resolveCommittedWhitespaceRange({
+    EVENT_NAME: "push",
+    PUSH_BEFORE_SHA: UNREACHABLE_SHA,
+    PUSH_AFTER_SHA: headSha,
+  }, { cwd });
+
+  assert.equal(range.mode, "forced_push_full_tree");
+  assert.equal(range.baseSha, EMPTY_TREE_SHA);
+  assert.equal(range.headSha, headSha);
+  assert.ok(range.fallbackReason);
+  assert.ok(range.fallbackReason.includes("full-tree"));
+  assert.equal(diffCheck(cwd, range.baseSha, range.headSha).status, 0);
+});
+
+test("常规 push 的 before-SHA 可达时不进入回退路径（无 fallback 字段）", async (t) => {
+  const { cwd } = await createRepository(t);
+  git(cwd, "switch", "-c", "feature");
+  await writeFile(path.join(cwd, "first.txt"), "first clean change\n");
+  git(cwd, "add", "first.txt");
+  git(cwd, "commit", "-m", "first push");
+  const beforeSha = git(cwd, "rev-parse", "HEAD");
+  await writeFile(path.join(cwd, "second.txt"), "second clean change\n");
+  git(cwd, "add", "second.txt");
+  git(cwd, "commit", "-m", "second push");
+  const headSha = git(cwd, "rev-parse", "HEAD");
+
+  const range = resolveCommittedWhitespaceRange({
+    EVENT_NAME: "push",
+    PUSH_BEFORE_SHA: beforeSha,
+    PUSH_AFTER_SHA: headSha,
+    DEFAULT_BRANCH: "main",
+  }, { cwd });
+
+  assert.deepEqual(range, { baseSha: beforeSha, headSha, mode: "push_commit_range" });
+  assert.equal("fallbackReason" in range, false);
+});
+
+test("force-push 到默认分支：origin/<默认分支> 已被改写到 after，不得用空范围静默放过 trailing whitespace", async (t) => {
+  // 复现高危场景：force-push 的目标就是默认分支 main。Actions checkout 后
+  // origin/main 已被改写而指向新的 after，于是
+  //   merge-base(origin/main, after) === after === headSha。
+  // 旧逻辑会把 baseSha===headSha 当成"共同基线"返回（forced_push_merge_base），
+  // 检查范围坍缩为 after..after（空 diff），git diff --check 静默退出 0，
+  // 从而绕过 fail-closed 门禁。必须拒绝该空范围回退，落到空树全树检查。
+  const cwd = await mkdtemp(path.join(tmpdir(), "tackle-forger-ci-default-force-"));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  git(cwd, "init", "--initial-branch=main");
+  git(cwd, "config", "user.name", "CI Range Test");
+  git(cwd, "config", "user.email", "ci-range@example.invalid");
+  // 干净的默认分支基线，避免全树回退被历史空白干扰，聚焦"被改写 → 空范围"路径。
+  await writeFile(path.join(cwd, "baseline.txt"), "clean baseline\n");
+  git(cwd, "add", "baseline.txt");
+  git(cwd, "commit", "-m", "clean main baseline");
+  // force-push 改写后的新 tip：本次引入 trailing whitespace。
+  await writeFile(path.join(cwd, "forced.txt"), "force-pushed trailing whitespace   \n");
+  git(cwd, "add", "forced.txt");
+  git(cwd, "commit", "-m", "force-pushed tip introduces trailing whitespace");
+  const headSha = git(cwd, "rev-parse", "HEAD");
+  // 关键：模拟 CI checkout 看到 origin/main 已经被 force-push 改写到 after。
+  git(cwd, "update-ref", "refs/remotes/origin/main", headSha);
+  git(cwd, "update-ref", "refs/heads/main", headSha);
+
+  const range = resolveCommittedWhitespaceRange({
+    EVENT_NAME: "push",
+    PUSH_BEFORE_SHA: UNREACHABLE_SHA,
+    PUSH_AFTER_SHA: headSha,
+    PUSH_BASE_REF: "refs/heads/main",
+    DEFAULT_BRANCH: "main",
+  }, { cwd });
+
+  // 不得回退到 baseSha===headSha 的空范围。
+  assert.notEqual(range.mode, "forced_push_merge_base");
+  assert.notEqual(range.baseSha, headSha);
+  // 必须落到空树全树检查，对整个 head 树跑 git diff --check。
+  assert.equal(range.mode, "forced_push_full_tree");
+  assert.equal(range.baseSha, EMPTY_TREE_SHA);
+  assert.equal(range.headSha, headSha);
+  assert.ok(range.fallbackReason);
+  assert.ok(range.fallbackReason.includes("full-tree"));
+  // 直接证明空范围会被静默放过：after..after 退出 0，正是要堵住的绕过路径。
+  assert.equal(diffCheck(cwd, headSha, headSha).status, 0);
+  // fail-closed：全树回退必须非零并定位 force-push 引入的文件。
+  const result = diffCheck(cwd, range.baseSha, range.headSha);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stdout, /forced\.txt:1: trailing whitespace/);
+});
+
+test("force-push 到默认分支且 head 树干净时全树回退不误报（无假阳性）", async (t) => {
+  // 同上的默认分支 force-push 场景，但改写后的 tip 树完全干净：全树回退必须
+  // 退出 0，证明拒绝空范围回退不会把干净 force-push 误判为失败。
+  const cwd = await mkdtemp(path.join(tmpdir(), "tackle-forger-ci-default-force-clean-"));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  git(cwd, "init", "--initial-branch=main");
+  git(cwd, "config", "user.name", "CI Range Test");
+  git(cwd, "config", "user.email", "ci-range@example.invalid");
+  await writeFile(path.join(cwd, "baseline.txt"), "clean baseline\n");
+  git(cwd, "add", "baseline.txt");
+  git(cwd, "commit", "-m", "clean main baseline");
+  await writeFile(path.join(cwd, "forced.txt"), "clean force-pushed change\n");
+  git(cwd, "add", "forced.txt");
+  git(cwd, "commit", "-m", "clean force-pushed tip");
+  const headSha = git(cwd, "rev-parse", "HEAD");
+  git(cwd, "update-ref", "refs/remotes/origin/main", headSha);
+  git(cwd, "update-ref", "refs/heads/main", headSha);
+
+  const range = resolveCommittedWhitespaceRange({
+    EVENT_NAME: "push",
+    PUSH_BEFORE_SHA: UNREACHABLE_SHA,
+    PUSH_AFTER_SHA: headSha,
+    PUSH_BASE_REF: "refs/heads/main",
+    DEFAULT_BRANCH: "main",
+  }, { cwd });
+
+  assert.equal(range.mode, "forced_push_full_tree");
+  assert.equal(range.baseSha, EMPTY_TREE_SHA);
+  assert.notEqual(range.baseSha, headSha);
+  assert.equal(diffCheck(cwd, range.baseSha, range.headSha).status, 0);
 });

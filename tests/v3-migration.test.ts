@@ -1053,14 +1053,15 @@ test("已标记 schema v18 的分支形态会互补缺失集合且保持 Snapsho
   assert.deepEqual(migrateWorkspaceState(aiMigrated), aiMigrated);
 });
 
-test("schema v18 升级到 v19 时补齐重量模板草稿且不改写冻结 Snapshot", () => {
+test("schema v18 升级到最新时补齐重量模板草稿与分享链接历史且不改写冻结 Snapshot", () => {
   const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
   legacy.schemaVersion = 18;
   delete legacy.weightTemplatePolicyDrafts;
   const snapshotsBefore = structuredClone(legacy.configurationSnapshots);
   const migrated = migrateWorkspaceState(legacy);
-  assert.equal(migrated.schemaVersion, 19);
+  assert.equal(migrated.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
   assert.deepEqual(migrated.weightTemplatePolicyDrafts, []);
+  assert.deepEqual(migrated.feishuShareLinkHistory, []);
   assert.deepEqual(migrated.configurationSnapshots, snapshotsBefore);
   assert.deepEqual(migrateWorkspaceState(migrated), migrated);
 });

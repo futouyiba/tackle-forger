@@ -1838,6 +1838,20 @@ export interface DataSourceImportRecord {
   publishedBy: string;
 }
 
+/**
+ * 飞书分享链接历史条目。仅用于数据导入的地址填写便利，与第 14 节的
+ * canonical 规则源工作簿互不冲突：这里只记录用户主动粘贴并被成功识别
+ * 的飞书多维表格（/base/）分享链接，绝不保存任何应用密钥、appToken
+ * 凭据或个人身份信息。历史走 workspace state 持久化，可治理、可迁移。
+ */
+export interface FeishuShareLinkHistoryEntry {
+  id: string;
+  shareUrl: string;
+  label: string;
+  dataset: DataSourceDataset;
+  lastUsedAt: string;
+}
+
 export interface DataSourceBinding {
   sourceId: string;
   dataset: DataSourceDataset;
@@ -2758,6 +2772,7 @@ export interface WorkspaceState {
   dataSourceImports: DataSourceImportRecord[];
   dataSourceBindings: DataSourceBinding[];
   dataSourceWritebacks: DataSourceWritebackRecord[];
+  feishuShareLinkHistory: FeishuShareLinkHistoryEntry[];
   revisions: RevisionInfo[];
   notes: string;
   importedAt: string;

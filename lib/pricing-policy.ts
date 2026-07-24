@@ -252,6 +252,24 @@ function validateQualityRanges(ranges: QualityPriceFactorRange[], issues: Pricin
   }
 }
 
+function validExecutionPolicy(value: unknown): value is PricingExecutionPolicy {
+  if (!value || typeof value !== "object") return false;
+  const policy = value as Record<string, unknown>;
+  return policy.repairRoundingStage === "final_repair_output"
+    && policy.purchaseInput === "repair_price_raw"
+    && policy.purchaseRoundingStage === "final_purchase_output"
+    && policy.rounding === "significant_digits_floor"
+    && policy.significantDigits === 3
+    && policy.minimumPurchasePrice === 100
+    && policy.minimumPriceScope === "purchase_output_after_rounding"
+    && policy.upperThreshold === 300_000_000
+    && policy.upperThresholdMode === "warning_acknowledgement"
+    && (policy.status === "SOURCE" || policy.status === "PROPOSED" || policy.status === "CONFIRMED")
+    && typeof policy.source === "object" && policy.source !== null
+    && typeof (policy.source as PricingCellRef).sheetId === "string"
+    && typeof (policy.source as PricingCellRef).cell === "string";
+}
+
 export function importPricingPolicyDraft(input: Omit<PricingPolicyDraft, "id" | "issues" | "formalStatus" | "inputHash">): PricingPolicyDraft {
   const issues: PricingPolicyIssue[] = [];
   if (
@@ -310,6 +328,9 @@ export function importPricingPolicyDraft(input: Omit<PricingPolicyDraft, "id" | 
       source: input.moneyPolicy?.source,
     });
   }
+  if (input.executionPolicy && !validExecutionPolicy(input.executionPolicy)) {
+    issues.push({ code: "PRICING_EXECUTION_POLICY_INVALID", severity: "error", message: "定价执行策略必须完整匹配已确认的双价格、三位有效数字、最低价和300M确认契约。", source: (input.executionPolicy as unknown as { source?: PricingCellRef }).source });
+  }
 
   const allStatuses = [
     ...input.maintenanceConsumptionRates.map((entry) => entry.value.status),
@@ -330,7 +351,7 @@ export function importPricingPolicyDraft(input: Omit<PricingPolicyDraft, "id" | 
     && input.moneyPolicy
     && input.partsToWholeRatios.length
     && ranges.length
-    && input.executionPolicy,
+    && validExecutionPolicy(input.executionPolicy),
   );
   const formalStatus: PricingPolicyDraft["formalStatus"] = hasErrors || !requiredPresent
     ? "INCOMPLETE_DRAFT"
@@ -452,6 +473,7 @@ export function calculatePricingTrial(input: {
   const execution = policy.executionPolicy;
   if (execution) {
     repairPrice = floorToSignificantDigits(repairPriceRaw, execution.significantDigits);
+    trace.push({ sequence: trace.length + 1, formulaStep: "repairPriceRounding", sourceRevision: policy.sourceRevision, source: execution.source, before: repairPriceRaw, operation: "round", operand: execution.significantDigits, after: repairPrice, inputStatus: execution.status });
   }
   multiply("purchaseCoefficient", purchaseCoefficient.value);
   const beforeDivision = value;

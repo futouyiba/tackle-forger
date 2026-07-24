@@ -1239,7 +1239,7 @@ function adaptPricingTraceWithVersion(
   for (let index = 1; index < purchaseChain.length; index += 1) {
     const previous = purchaseChain[index - 1];
     const current = purchaseChain[index];
-    if (current.sequence !== previous.sequence + 1) {
+    if (current.sequence <= previous.sequence) {
       throw new CalculationTraceReplayError(
         `pricing Trace sequence 不连续：${previous.sequence} → ${current.sequence}。`,
       );
@@ -1263,7 +1263,7 @@ function adaptPricingTraceWithVersion(
     );
   }
   let sequence = input.sequenceStart ?? 1;
-  return pricingTrace
+  return purchaseChain
     .map((entry) => {
       const executable = executableOperation(
         entry.operation,

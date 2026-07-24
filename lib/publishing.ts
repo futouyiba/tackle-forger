@@ -555,7 +555,18 @@ export function publishConfigurationSnapshot(
     }
     if (
       input.automaticPricing?.priceUpperThresholdExceeded
-      && input.automaticPricing.priceWarning?.state !== "ACKNOWLEDGED"
+      && (
+        input.automaticPricing.priceWarning?.state !== "ACKNOWLEDGED"
+        || !input.automaticPricing.priceWarningAcknowledgement
+        || input.automaticPricing.priceWarningAcknowledgement.state !== "ACKNOWLEDGED"
+        || input.automaticPricing.priceWarningAcknowledgement.issueFingerprint !== input.automaticPricing.priceWarning.issueFingerprint
+        || input.automaticPricing.priceWarningAcknowledgement.modelRevisionId !== `${input.model.id}@${input.model.revision}`
+        || input.automaticPricing.priceWarningAcknowledgement.pricingPolicyVersion !== input.pricingPolicyVersion
+        || input.automaticPricing.priceWarningAcknowledgement.purchasePriceRaw !== input.automaticPricing.purchasePriceRaw
+        || input.automaticPricing.priceWarningAcknowledgement.purchasePriceRounded !== input.automaticPricing.purchasePriceRounded
+        || input.automaticPricing.priceWarningAcknowledgement.purchasePrice !== input.automaticPricing.purchasePrice
+        || input.automaticPricing.priceWarningAcknowledgement.threshold !== input.automaticPricing.priceWarning.threshold
+      )
     ) {
       blocking.push({
         level: "error",

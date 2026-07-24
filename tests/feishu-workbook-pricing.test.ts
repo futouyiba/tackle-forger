@@ -150,7 +150,8 @@ test("生产同形品质矩阵按显式块头解析扩展列、移动块、空�
   moved[3]![10] = "最小价格系数"; moved[3]![11] = "最大价格系数";
   for (let row = 4; row < 8; row += 1) { moved[row]![10] = moved[row]![5]; moved[row]![11] = moved[row]![6]; moved[row]![5] = moved[row]![6] = ""; }
   const movedDraft = qualityDraftFromRanges({ sourceRevision, qualityValues: moved, qualityRange: "A1:S60", affixValues, pricingEndpointValues: [], importedAt: "2026-07-24T00:00:00.000Z" });
-  assert.equal(movedDraft.formalStatus, "READY_TO_PUBLISH");
+  assert.equal(movedDraft.formalStatus, "NON_FORMAL");
+  assert.ok(movedDraft.issues.some((issue) => issue.code === "QUALITY_RANGE_SOURCE_OUTDATED"));
   assert.deepEqual(pricingQualitySourceRowsFromDraft(movedDraft).map((row) => [row.mappingCell, row.factorCell]), [["C5", "K5:L5"], ["C6", "K6:L6"], ["C7", "K7:L7"], ["C8", "K8:L8"]]);
   moved[3]![11] = "";
   assert.ok(qualityDraftFromRanges({ sourceRevision, qualityValues: moved, qualityRange: "A1:S60", affixValues, pricingEndpointValues: [], importedAt: "2026-07-24T00:00:00.000Z" }).issues.some((issue) => issue.code === "QUALITY_RANGE_TABLE_HEADER_MISSING"));

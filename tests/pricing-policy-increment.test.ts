@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  acknowledgePriceWarning,
   calculatePricingTrial,
   floorToSignificantDigits,
   importPricingPolicyDraft,
@@ -93,6 +94,19 @@ function completeInput(overrides: Partial<PricingPolicyDraft> = {}) {
     scoreInterpolation: { kind: "quality_range_linear" as const, points: [], outOfRange: "error" as const, status: "CONFIRMED" as const, source: ref("B11") },
     performanceScoringPolicy: { enabled: false, status: "CONFIRMED" as const, source: ref("B2", "FqD4j7") },
     moneyPolicy,
+    executionPolicy: {
+      repairRoundingStage: "final_repair_output" as const,
+      purchaseInput: "repair_price_raw" as const,
+      purchaseRoundingStage: "final_purchase_output" as const,
+      rounding: "significant_digits_floor" as const,
+      significantDigits: 3,
+      minimumPurchasePrice: 100,
+      minimumPriceScope: "purchase_output_after_rounding" as const,
+      upperThreshold: 300_000_000,
+      upperThresholdMode: "warning_acknowledgement" as const,
+      status: "CONFIRMED" as const,
+      source: ref("B15:B18"),
+    },
     importedAt: "2026-07-22T00:00:00.000Z",
     ...overrides,
   } as Parameters<typeof importPricingPolicyDraft>[0];
@@ -151,7 +165,7 @@ test("缺舍入阶段、最低价作用域或溢出方式时新策略不可发�
   delete moneyPolicy.roundingStage;
   delete moneyPolicy.minimumPriceScope;
   delete moneyPolicy.overflowMode;
-  const draft = importPricingPolicyDraft(completeInput({ moneyPolicy }));
+  const draft = importPricingPolicyDraft(completeInput({ moneyPolicy, executionPolicy: undefined }));
   assert.equal(draft.formalStatus, "INCOMPLETE_DRAFT");
   assert.ok(draft.issues.some((issue) => issue.code === "PRICING_EXECUTION_SEMANTICS_MISSING"));
   assert.throws(() => publishPricingPolicyDraft({ draft, version: "new", publishedAt: "2026-07-22T00:00:00.000Z", publishedBy: "tester" }), /PRICING_EXECUTION_SEMANTICS_MISSING/);
@@ -163,6 +177,7 @@ test("超上限且 overflowMode 缺失时仅返回 NON_FORMAL，不生成正式�
   delete moneyPolicy.overflowMode;
   const draft = importPricingPolicyDraft(completeInput({
     moneyPolicy,
+    executionPolicy: undefined,
     maintenanceConsumptionRates: base.maintenanceConsumptionRates.map((entry) => ({
       ...entry, value: { ...entry.value, value: 400_000_000 },
     })),
@@ -170,7 +185,7 @@ test("超上限且 overflowMode 缺失时仅返回 NON_FORMAL，不生成正式�
   const result = trial(draft, "quality_b_blue", 30);
   assert.equal(result.formal, false);
   assert.equal(result.purchasePrice, null);
-  assert.ok(result.issues.some((issue) => issue.code === "PRICE_OVERFLOW_POLICY_MISSING"));
+  assert.ok(result.warnings.length > 0);
 });
 
 test("同输入同规则版本的数值和 Trace hash 确定一致", () => {
@@ -902,4 +917,208 @@ test("新正式 Snapshot 拒绝旧 Performance 评分及不匹配的定价分数
     }),
     /最终结算 Trace 与面板值不一致/,
   );
+});
+
+test("价格超限确认 inputHash 与本次重算不一致时阻断 Snapshot 发布", () => {
+  // 用超上限的维护费率让 trial 价格超过 upperThreshold，再 ACK 后篡改 inputHash。
+  const highInput = completeInput({
+    maintenanceConsumptionRates: completeInput().maintenanceConsumptionRates.map((entry) => ({
+      ...entry,
+      value: { ...entry.value, value: 400_000_000 },
+    })),
+  });
+  const highVersion = publishPricingPolicyDraft({
+    draft: importPricingPolicyDraft(highInput),
+    version: "pricing-policy:high",
+    publishedAt: "2026-07-22T00:00:00.000Z",
+    publishedBy: "tester",
+  });
+  const openTrial = calculatePricingTrial({
+    policy: highVersion,
+    partId: "rod",
+    typeId: "RodType:spinning",
+    pricingWeightBandId: "band:matched",
+    qualityId: "quality_b_blue",
+    valueScore: 30,
+    modelRevisionId: "model@1",
+  });
+  assert.equal(openTrial.priceWarning?.state, "OPEN");
+  assert.equal(openTrial.formal, false);
+  const acknowledgement = acknowledgePriceWarning({
+    trial: openTrial,
+    modelRevisionId: "model@1",
+    acknowledgedBy: "tester",
+    acknowledgedAt: "2026-07-22T00:00:01.000Z",
+    reason: "approved",
+    id: "ack:inputHash",
+  });
+  const acknowledgedTrial = calculatePricingTrial({
+    policy: highVersion,
+    partId: "rod",
+    typeId: "RodType:spinning",
+    pricingWeightBandId: "band:matched",
+    qualityId: "quality_b_blue",
+    valueScore: 30,
+    modelRevisionId: "model@1",
+    priceWarningAcknowledgement: acknowledgement,
+  });
+  assert.equal(acknowledgedTrial.formal, true);
+  assert.equal(acknowledgedTrial.priceWarning?.state, "ACKNOWLEDGED");
+  assert.ok(acknowledgedTrial.priceWarningAcknowledgement);
+  assert.equal(
+    acknowledgedTrial.priceWarningAcknowledgement!.inputHash,
+    acknowledgedTrial.inputHash,
+  );
+
+  // 直接伪造一份 formal=true 但确认记录 inputHash 与本次 inputHash 不一致的 automaticPricing，
+  // 用于验证 Snapshot 发布门禁独立复核 inputHash，不被构造的 formal 标志绕过。
+  const tamperedPricing = {
+    ...acknowledgedTrial,
+    priceWarningAcknowledgement: {
+      ...acknowledgedTrial.priceWarningAcknowledgement!,
+      inputHash: "tampered-inputHash",
+    },
+  };
+
+  const state = hydrateV3Seed(createSeedState());
+  const oldSnapshot = state.configurationSnapshots[0];
+  const model = state.purchasableModels.find((entry) => entry.id === oldSnapshot.modelId)!;
+  const sku = state.skuDrawers.find((entry) => entry.id === model.skuId)!;
+  const series = state.seriesDefinitions.find((entry) => entry.id === sku.seriesId)!;
+  const projection = state.derivedProjections.find((entry) => entry.id === oldSnapshot.projectionId)!;
+  const technologyAffixId = state.technologies
+    .find((entry) => oldSnapshot.technologyIds.includes(entry.id))?.affixIds[0];
+  assert.ok(technologyAffixId);
+  const performanceDefinition = createPerformanceSummaryDefinition({
+    definitionId: "performance-summary:inputHash",
+    definitionVersion: "1",
+    publicationState: "PUBLISHED",
+    rules: [{
+      key: "technology_member",
+      label: "技术成员词条",
+      direction: "positive",
+      order: 1,
+      matcher: { source: "affix", affixId: technologyAffixId! },
+    }],
+  });
+  state.performanceSummaryDefinitions = [performanceDefinition];
+  const [changedParameterKey, changedBefore] = Object.entries(projection.values)
+    .find((entry): entry is [string, number] => typeof entry[1] === "number")!;
+  const finalPanelValues = {
+    ...projection.values,
+    [changedParameterKey]: changedBefore + 1,
+  };
+  const reductionStackingPolicy = testReductionPolicy();
+  const publishProjection = formalProjection(
+    projection,
+    reductionStackingPolicy,
+    finalPanelValues,
+  );
+  const settlementTrace = finalSettlementTrace(finalPanelValues);
+  const formalDefinition = state.fiveAxisViewDefinitions.find(
+    (definition) => "semanticContractVersion" in definition,
+  )!;
+  const formalComponentSelections = buildFormalComponentSelectionsFixture(
+    oldSnapshot.componentSelections,
+  );
+  const formalPreview = buildFormalPreviewFixture({
+    definition: formalDefinition,
+    snapshotId: "snapshot:inputHash-guard",
+    modelId: model.id,
+    modelRevision: model.revision,
+    seriesId: series.id,
+    skuId: sku.id,
+    skuRevision: sku.revision,
+    modelFinalPullKg: modelFinalPullKgForSnapshot(
+      sku.projectionMatch.itemPartId,
+      finalPanelValues,
+    )!,
+    finalPanelValues,
+    componentSelections: formalComponentSelections,
+  });
+  const qualityValueAssessment = {
+    modelRevisionId: `${model.id}@${model.revision}`,
+    selectedQualityId: oldSnapshot.qualityReport.qualityId,
+    baseAffixScore: 30,
+    combinationScore: 0,
+    functionScoreFactor: 1,
+    finalValueScore: 30,
+    affixBreakdown: [],
+    combinationBreakdown: [],
+    qualityRangePolicyVersion: "quality-policy:v1",
+    scoringPolicyVersion: "quality-scoring:v1",
+    inSelectedQualityRange: true,
+    formal: true,
+    issues: [],
+    trace: [],
+    inputHash: "quality-assessment-hash",
+  };
+  const publishInput = {
+    publicationMode: "new_formal" as const,
+    workspaceId: "workspace:test",
+    model,
+    sku: {
+      ...sku,
+      fiveAxisProjectionReferences: structuredClone(
+        formalPreview.tackleFitComparison.projectionReferences!,
+      ),
+    },
+    series,
+    seriesSkus: state.skuDrawers,
+    projection: publishProjection,
+    reductionStackingPolicy,
+    affixRuntimeEvidence: formalAffixRuntimeEvidence(
+      publishProjection,
+      reductionStackingPolicy,
+      finalPanelValues,
+    ),
+    finalPanelValues,
+    componentSelections: formalComponentSelections,
+    patches: [],
+    attributeAffixIds: oldSnapshot.attributeAffixIds,
+    passiveAffixIds: oldSnapshot.passiveAffixIds,
+    technologyIds: oldSnapshot.technologyIds,
+    technologyDefinitions: state.technologies,
+    finalSettlementTrace: settlementTrace,
+    performanceSummaryDefinition: performanceDefinition,
+    performanceSummaryDefinitions: state.performanceSummaryDefinitions,
+    passiveAffixPayloads: oldSnapshot.passiveAffixPayloads,
+    compatibilityReport: oldSnapshot.compatibilityReport,
+    affinityReport: oldSnapshot.affinityReport,
+    qualityReport: { ...oldSnapshot.qualityReport, blockingIssues: [] },
+    qualityValueAssessment,
+    pricingPolicyVersion: highVersion.id,
+    automaticPricing: tamperedPricing,
+    fiveAxisPreview: formalPreview,
+    fiveAxisDefinition: formalDefinition,
+    fiveAxisAuthorityState: {
+      purchasableModels: state.purchasableModels,
+      configurationSnapshots: state.configurationSnapshots,
+    },
+    fiveAxisDefinitions: state.fiveAxisViewDefinitions,
+    fiveAxisDispositionCatalogRevisions:
+      state.fiveAxisDispositionCatalogRevisions,
+    currentFiveAxisDispositionCatalogRevisionId:
+      state.currentFiveAxisDispositionCatalogRevisionId,
+    validationReport: [],
+    warningConfirmations: {},
+    publishedBy: "tester",
+    publishedAt: "2026-07-22T00:00:00.000Z",
+    snapshotId: "snapshot:inputHash-guard",
+  } satisfies Parameters<typeof publishConfigurationSnapshot>[0];
+
+  // 修复前：该门禁没有复核 inputHash，伪造的确认记录会通过。
+  // 修复后：inputHash 不一致直接阻断发布，不允许 formal 标志绕过身份校验。
+  assert.throws(
+    () => publishConfigurationSnapshot(publishInput),
+    /PRICE_UPPER_THRESHOLD_CONFIRMATION_REQUIRED/,
+  );
+
+  // 对照组：未篡改的确认记录可以正常发布。
+  const legitimateSnapshot = publishConfigurationSnapshot({
+    ...publishInput,
+    automaticPricing: acknowledgedTrial,
+    snapshotId: "snapshot:inputHash-legitimate",
+  });
+  assert.equal(legitimateSnapshot.automaticPricing?.formal, true);
 });

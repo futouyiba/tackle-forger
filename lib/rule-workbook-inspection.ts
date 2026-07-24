@@ -12,6 +12,7 @@ import {
 import {
   importPricingPolicyDraft,
   type PricingPolicyDraft,
+  type PricingExecutionPolicy,
   type PricingLookupEntry,
   type QualityPriceFactorRange,
   type QualityPricingMapping,
@@ -306,6 +307,31 @@ export function pricingDraftFromRanges(input: {
     if (Number.isFinite(purchase)) purchaseCoefficients.push({ partId, typeId, value: { value: purchase, status: "SOURCE", source: { sheetId: "fATowU", cell: `V${sheetRow}`, rowKey: String(sheetRow) } } });
   }
   const parameterValue = (sheetRow: number) => pricingValues[sheetRow - 10]?.[2];
+  const executionFields = new Map<string, { value: unknown; row: number }>();
+  for (let index = 0; index < pricingValues.length; index += 1) {
+    const row = pricingValues[index] ?? [];
+    const key = text(row[0]).trim();
+    if (key) executionFields.set(key, { value: row[2], row: index + 10 });
+  }
+  const executionValue = (key: string) => executionFields.get(key)?.value;
+  const executionRow = (key: string) => executionFields.get(key)?.row;
+  const pricingMachineKeys = ["pricing.repairRoundingStage", "pricing.purchaseInput", "pricing.purchaseRoundingStage", "pricing.rounding", "pricing.significantDigits", "pricing.minimumPurchasePrice", "pricing.minimumPriceScope", "pricing.upperThreshold", "pricing.upperThresholdMode"] as const;
+  const hasPricingExecutionFields = pricingMachineKeys.some((k) => executionFields.has(k));
+  // These stable machine keys are deliberately required: prose/formula cells
+  // never become executable policy defaults.
+  const executionPolicy = hasPricingExecutionFields ? {
+    repairRoundingStage: executionValue("pricing.repairRoundingStage"),
+    purchaseInput: executionValue("pricing.purchaseInput"),
+    purchaseRoundingStage: executionValue("pricing.purchaseRoundingStage"),
+    rounding: executionValue("pricing.rounding"),
+    significantDigits: Number(executionValue("pricing.significantDigits")),
+    minimumPurchasePrice: Number(executionValue("pricing.minimumPurchasePrice")),
+    minimumPriceScope: executionValue("pricing.minimumPriceScope"),
+    upperThreshold: Number(executionValue("pricing.upperThreshold")),
+    upperThresholdMode: executionValue("pricing.upperThresholdMode"),
+    status: "SOURCE" as const,
+    source: { sheetId: "u87sRh", cell: `B${executionRow("pricing.repairRoundingStage") ?? 0}:D${executionRow("pricing.upperThresholdMode") ?? 0}`, rowKey: "pricing.execution.machine.v1" },
+  } as PricingExecutionPolicy : undefined;
   const moneyPolicy = pricingValues.length ? {
     unit: text(parameterValue(15)),
     rounding: "significant_digits_floor" as const,
@@ -333,6 +359,7 @@ export function pricingDraftFromRanges(input: {
     qualityPriceFactorRanges,
     scoreInterpolation: pricingValues.length ? { kind: "quality_range_linear", points: [], outOfRange: "error", status: "SOURCE", source: { sheetId: "u87sRh", cell: "B11:D11", rowKey: "11" } } : undefined,
     moneyPolicy,
+    ...(executionPolicy ? { executionPolicy } : {}),
     importedAt: input.importedAt,
   });
 }

@@ -137,11 +137,11 @@ AI只允许预览、生成Model Patch草稿或飞书规则提案草稿。AI不�
 
 定价重量段沿用结构标杆命中的源重量段：`MATCHED_STRUCTURAL_SOURCE_BAND`。评分插值为品质区间内线性插值。维修价与购买价全程使用未舍入中间值，购买价使用未舍入维修价，两者只在各自最终输出阶段分别做三位有效数字向下取整。最低价100只在购买价舍入后应用。300,000,000是比较`purchasePriceRaw`的软确认阈值，不是封顶值。
 
-执行语义已经确定，当前剩余的是源表与实现落地：飞书仍写`[65,100)`时产生`QUALITY_RANGE_SOURCE_OUTDATED`并保留旧单元格；旧`PerformanceProfile/performanceScoringPolicy`、`roundingStage/minimumPriceScope/overflowMode`只读兼容；新schema必须表达两个独立输出、购买价输入基底、最低价顺序和超限确认。
+运行时执行语义已落实：飞书仍写`[65,100)`时产生`QUALITY_RANGE_SOURCE_OUTDATED`并保留旧单元格；旧`PerformanceProfile/performanceScoringPolicy`、`roundingStage/minimumPriceScope/overflowMode`只读兼容；v20新schema表达两个独立输出、购买价输入基底、最低价顺序和超限确认。
 
 `purchasePriceRaw > 300,000,000`产生`PRICE_UPPER_THRESHOLD_CONFIRMATION_REQUIRED`，为`severity=WARNING, gate=PUBLISH`。未确认时要求二次确认；确认后`ACKNOWLEDGED`并保留实际价格与超限标记继续，不ERROR、不BLOCK、不CLAMP。确认绑定fingerprint、Model revision、PricingPolicyVersion、inputHash、Raw/舍入/最终价格、阈值、确认人、时间和理由；输入变化后旧确认STALE。目标字段无法表达真实价格时另产不可确认的EXPORT BLOCKER。
 
-系统在飞书机器源、新schema与运行时尚未完成前可以保留`NON_FORMAL`旧试算，但只有按新契约校验完整并已发布的`PricingPolicyVersion`才能进入新Snapshot和Store导出。修复方式固定为：修改飞书→用户显式拉取→生成新Draft→校验→发布新策略。任何代码默认值、手填价格、旧确认沿用和对旧Snapshot的静默重算都禁止。
+飞书机器源尚未完成前可以保留`NON_FORMAL`旧试算，但只有按v20新契约校验完整并已发布的`PricingPolicyVersion`才能进入新Snapshot和Store导出。修复方式固定为：修改飞书→用户显式拉取→生成新Draft→校验→发布新策略。任何代码默认值、手填价格、旧确认沿用和对旧Snapshot的静默重算都禁止。
 
 验收至少覆盖：组合分去重与负分、Technology重复引用、品质100与大于100边界、B品质30分插值得到1.0、A/S同重量段同部位共享查表基准但使用不同系数区间、维修/购买分别最终舍入且购买使用未舍入维修价、最低价顺序、超限确认与失效、目标字段容量BLOCKER，以及旧策略和Snapshot冻结。
 

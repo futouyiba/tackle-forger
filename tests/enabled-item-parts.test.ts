@@ -9,6 +9,10 @@ import {
   enabledProductItemParts,
   isProductItemPartEnabled,
   isProductSkuChainEnabled,
+  productSelectableSeriesSkus,
+  productSelectableSkuModels,
+  productSelectableSkus,
+  resolveProductSelection,
   seriesItemPartId,
 } from "../lib/enabled-item-parts";
 import { createSeedState } from "../lib/seed";
@@ -391,6 +395,96 @@ test("选中的启用 SKU 不被历史延期兄弟节点阻断，显式选择延
     error instanceof SkuNotCurrentSeriesSpecificationError &&
     error.action === "candidate_generation" &&
     error.skuIds.includes(retainedHookSku.id));
+});
+
+test("产品 SKU 选择投影忽略保留的禁用历史 SKU，并在没有可用项时 fail-closed", () => {
+  const state = createSeedState();
+  const series = state.seriesDefinitions[0]!;
+  const enabledSku = state.skuDrawers.find((sku) => sku.seriesId === series.id)!;
+  const retainedDisabledSku = {
+    ...structuredClone(enabledSku),
+    id: "sku:retained-hook-history-for-ui",
+    projectionMatch: {
+      ...structuredClone(enabledSku.projectionMatch),
+      itemPartId: "part:hook",
+    },
+  };
+  const skus = [retainedDisabledSku, ...state.skuDrawers];
+
+  assert.deepEqual(
+    productSelectableSeriesSkus(series, skus).map((sku) => sku.id),
+    state.skuDrawers.filter((sku) => sku.seriesId === series.id && sku.status !== "superseded").map((sku) => sku.id),
+  );
+  assert.equal(productSelectableSkus(state.seriesDefinitions, skus).includes(retainedDisabledSku), false);
+
+  const disabledOnlySeries = { ...structuredClone(series), id: "series:disabled-only", itemPartId: "part:hook" };
+  const disabledOnlySku = {
+    ...structuredClone(retainedDisabledSku),
+    id: "sku:disabled-only",
+    seriesId: disabledOnlySeries.id,
+  };
+  const historicalPayload = structuredClone(disabledOnlySku);
+  assert.deepEqual(productSelectableSeriesSkus(disabledOnlySeries, [disabledOnlySku]), []);
+  assert.deepEqual(productSelectableSkus([disabledOnlySeries], [disabledOnlySku]), []);
+  const emptyProductSelection = resolveProductSelection({
+    series: [disabledOnlySeries],
+    skus: [disabledOnlySku],
+    models: [],
+  });
+  assert.equal(emptyProductSelection.sku, undefined);
+  assert.deepEqual(emptyProductSelection.models, []);
+  assert.equal(emptyProductSelection.model, undefined);
+  assert.deepEqual(disabledOnlySku, historicalPayload);
+});
+
+test("产品选择投影不会跨 SKU 选择 Model，且所有默认与失效回退均 fail-closed", () => {
+  const state = createSeedState();
+  const series = state.seriesDefinitions[0]!;
+  const [firstSku, secondSku] = state.skuDrawers.filter((sku) => sku.seriesId === series.id);
+  assert.ok(firstSku && secondSku);
+  const firstModel = state.purchasableModels.find((model) => model.skuId === firstSku.id)!;
+  const secondModel = state.purchasableModels.find((model) => model.skuId === secondSku.id)!;
+  const crossParentReference = { ...structuredClone(firstSku), modelIds: [...firstSku.modelIds, secondModel.id] };
+  const invalidDefault = { ...structuredClone(firstSku), defaultModelId: secondModel.id };
+  const foreignSkuModel = { ...structuredClone(secondModel), id: "model:foreign-sku-ref", skuId: secondSku.id };
+  const historicalModel = structuredClone(foreignSkuModel);
+
+  assert.ok(productSelectableSkuModels(crossParentReference, state.purchasableModels).every((model) => model.skuId === firstSku.id));
+  assert.equal(productSelectableSkuModels(crossParentReference, state.purchasableModels).some((model) => model.id === secondModel.id), false);
+  assert.ok(productSelectableSkuModels(invalidDefault, state.purchasableModels).every((model) => model.skuId === firstSku.id));
+  assert.deepEqual(foreignSkuModel, historicalModel);
+
+  const invalidDefaultSelection = resolveProductSelection({
+    series: state.seriesDefinitions,
+    skus: [invalidDefault, ...state.skuDrawers.filter((sku) => sku.id !== firstSku.id)],
+    models: state.purchasableModels,
+    requestedSkuId: invalidDefault.id,
+  });
+  assert.equal(invalidDefaultSelection.sku?.id, invalidDefault.id);
+  assert.equal(invalidDefaultSelection.model?.id, firstModel.id);
+
+  const disabledSku = { ...structuredClone(firstSku), projectionMatch: { ...firstSku.projectionMatch, itemPartId: "part:hook" } };
+  const disabledModelSelection = resolveProductSelection({
+    series: state.seriesDefinitions,
+    skus: [disabledSku, ...state.skuDrawers.filter((sku) => sku.id !== firstSku.id)],
+    models: state.purchasableModels,
+    requestedSkuId: disabledSku.id,
+    requestedModelId: firstModel.id,
+  });
+  assert.notEqual(disabledModelSelection.sku?.id, disabledSku.id);
+  assert.notEqual(disabledModelSelection.model?.id, firstModel.id);
+
+  const noEligibleModel = resolveProductSelection({
+    series: [series],
+    skus: [{ ...structuredClone(firstSku), modelIds: [foreignSkuModel.id], defaultModelId: foreignSkuModel.id }],
+    models: [foreignSkuModel],
+    requestedSeriesId: "series:missing",
+    requestedSkuId: "sku:missing",
+    requestedModelId: "model:missing",
+  });
+  assert.equal(noEligibleModel.sku?.id, firstSku.id);
+  assert.deepEqual(noEligibleModel.models, []);
+  assert.equal(noEligibleModel.model, undefined);
 });
 
 test("写路径拒绝同 Series 的其他启用部位冲突", () => {

@@ -76,12 +76,21 @@ export function maskToken(token: string): string {
 
 /**
  * 从完整的 open-apis URL 或相对路径中提取用于诊断的端点路径：
- * 去掉协议与 host，去掉 query string。例如
- * `https://open.feishu.cn/open-apis/wiki/v2/spaces/get_node?token=x`
- * → `/open-apis/wiki/v2/spaces/get_node`。
+ * 去掉协议与 host，去掉 query string，并**脱敏路径中的资源 token 段**。
+ * 例如 `https://open.feishu.cn/open-apis/wiki/v2/spaces/get_node?token=x`
+ * → `/open-apis/wiki/v2/spaces/get_node`；又如
+ * `/open-apis/sheets/v2/spreadsheets/<真实 token>/values_batch_update`
+ * → `/open-apis/sheets/v2/spreadsheets/<redacted>/values_batch_update`。
+ *
+ * 资源 token（spreadsheet token 等）是可识别具体资源的句柄，不得出现在 502
+ * 响应、部分失败 manifest、服务端日志或返回体中。这里统一在 `FeishuApiError`
+ * 形成前把 `/spreadsheets/{token}` 中的 token 段替换为占位符，使 endpoint 只
+ * 暴露「调用了哪个接口」，不暴露具体资源句柄。创建接口（`.../spreadsheets`，
+ * 末尾不带 token 段）不会匹配，故不受影响。
  */
 export function feishuEndpointPath(pathOrUrl: string): string {
   const withoutHost = pathOrUrl.replace(/^https?:\/\/[^/]+/i, "");
   const queryIndex = withoutHost.indexOf("?");
-  return queryIndex >= 0 ? withoutHost.slice(0, queryIndex) : withoutHost;
+  const path = queryIndex >= 0 ? withoutHost.slice(0, queryIndex) : withoutHost;
+  return path.replace(/\/spreadsheets\/[^/?]+/g, "/spreadsheets/<redacted>");
 }

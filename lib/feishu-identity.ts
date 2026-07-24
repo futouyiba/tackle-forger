@@ -38,6 +38,7 @@ export const PHASE_ONE_CAPABILITIES = [
   "feishu.workbook.pull",
   "feishu.rule_change.confirm_write",
   "feishu.identity.write",
+  "feishu.sheet.export.write",
   "ruleset.draft.create",
   "ruleset.publish",
   "data_source.resolve",

@@ -119,6 +119,9 @@ function TraceSettlementPlayback({ model, archive, passiveAffixCount }: {
   const motionStyle = {
     "--trace-source-fly-ms": `${motionTokens.duration.sourceFlyMs}ms`,
     "--trace-impact-ms": `${playbackPhaseDuration(activeStep, state.stepIndex, "impact")}ms`,
+    // Evidence settles visually 140–180ms after impact, overlapped with the
+    // impact/main focus gates (not serialized into the phase schedule).
+    "--trace-evidence-settle-ms": `${motionTokens.duration.evidenceSettleMs}ms`,
     "--trace-card-offset-px": `${motionTokens.displacement.cardPx}px`,
   } as CSSProperties;
   return <section className={`trace-settlement ${complete ? "is-complete" : ""} ${state.status === "paused" ? "is-paused" : ""} phase-${state.phase}`} data-motion-phase={state.phase} style={motionStyle} aria-label="属性 Trace 高速结算">

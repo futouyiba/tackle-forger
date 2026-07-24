@@ -60,18 +60,29 @@ export const motionTokens = {
   duration: {
     /** Visual flight overlaps phase gates; it never serially extends a Trace step. */
     sourceFlyMs: 460,
-    establishMs: 340,
-    normalMs: 240,
-    costMs: 300,
-    finalLockMs: 250,
+    /**
+     * Evidence settles visually 140–180ms after impact (规范 §6.3 "证据落位").
+     * This overlaps the impact/main focus gates — it is a visual-layer duration,
+     * NOT a serial phase delay — so the window is met without lengthening the
+     * Trace schedule. phaseDelay never sums it into a step.
+     */
+    evidenceSettleMs: 160,
+    /** Each profile's five phase delays sum to its spec window (§6.3). Lowered to the approved floor so eight cost/Patch sources still clear the 2.5s hard cap. */
+    establishMs: 320,
+    normalMs: 245,
+    costMs: 280,
+    finalLockMs: 220,
     reducedMs: 0,
   },
+  // Focus gates (impactToMainMs 90–120, mainToExplanationMs 100–140 per §6.3).
+  // sourceToImpact/evidenceToNext carry the inter-step handoff and are the first
+  // thing the budget compressor clamps; the focus intervals stay in-window.
   phaseDelay: {
-    establish: { sourceToImpactMs: 80, impactToMainMs: 60, mainToExplanationMs: 60, explanationToEvidenceMs: 60, evidenceToNextMs: 80 },
-    normal: { sourceToImpactMs: 60, impactToMainMs: 40, mainToExplanationMs: 40, explanationToEvidenceMs: 40, evidenceToNextMs: 60 },
-    patch: { sourceToImpactMs: 80, impactToMainMs: 50, mainToExplanationMs: 50, explanationToEvidenceMs: 50, evidenceToNextMs: 70 },
-    boundary: { sourceToImpactMs: 100, impactToMainMs: 70, mainToExplanationMs: 70, explanationToEvidenceMs: 70, evidenceToNextMs: 80 },
-    cost: { sourceToImpactMs: 80, impactToMainMs: 50, mainToExplanationMs: 50, explanationToEvidenceMs: 50, evidenceToNextMs: 70 },
+    establish: { sourceToImpactMs: 30, impactToMainMs: 100, mainToExplanationMs: 120, explanationToEvidenceMs: 30, evidenceToNextMs: 40 },
+    normal: { sourceToImpactMs: 15, impactToMainMs: 90, mainToExplanationMs: 100, explanationToEvidenceMs: 20, evidenceToNextMs: 20 },
+    patch: { sourceToImpactMs: 20, impactToMainMs: 90, mainToExplanationMs: 100, explanationToEvidenceMs: 30, evidenceToNextMs: 40 },
+    boundary: { sourceToImpactMs: 30, impactToMainMs: 100, mainToExplanationMs: 120, explanationToEvidenceMs: 60, evidenceToNextMs: 80 },
+    cost: { sourceToImpactMs: 20, impactToMainMs: 90, mainToExplanationMs: 100, explanationToEvidenceMs: 30, evidenceToNextMs: 40 },
   },
   easing: { enter: "cubic-bezier(0.2, 0.8, 0.2, 1)", emphasis: "cubic-bezier(0.16, 1, 0.3, 1)" },
   displacement: { cardPx: 16, emphasisPx: 4 },
@@ -228,6 +239,11 @@ export function createMotionPlaybackController(
   const clock = options.clock ?? browserMotionClock;
   const listeners = new Set<() => void>();
   let state = initialMotionPlaybackState(model, options.reducedMotion);
+  // Computed once from the authoritative model: a single pass can never exceed
+  // the 2.5s hard cap regardless of how many sources feed it. The focus gates
+  // (impactToMain/mainToExplanation) stay in-window at scale 1; only an
+  // over-budget source count shortens the gates via representative fast playback.
+  const timingScale = computeMotionTimingScale(model.steps);
   let handle: unknown;
   let disposed = false;
   let generation = 0;
@@ -240,11 +256,14 @@ export function createMotionPlaybackController(
   const schedule = () => {
     if (disposed || (state.status !== "playing" && state.status !== "locking") || state.reducedMotion) return;
     const expectedGeneration = generation;
+    const delayMs = state.status === "locking"
+      ? motionTokens.duration.finalLockMs
+      : playbackPhaseDuration(model.steps[state.stepIndex], state.stepIndex, state.phase) * timingScale;
     handle = clock.set(() => {
       if (disposed || expectedGeneration !== generation) return;
       handle = undefined;
       dispatch({ type: state.status === "locking" ? "finalLockComplete" : "phaseAdvance" });
-    }, state.status === "locking" ? motionTokens.duration.finalLockMs : playbackPhaseDuration(model.steps[state.stepIndex], state.stepIndex, state.phase));
+    }, delayMs);
   };
   const dispatch = (action: MotionPlaybackAction): MotionPlaybackState => {
     if (disposed) return state;
@@ -296,4 +315,39 @@ export function playbackTimingProfile(step: MotionPresentationStep | undefined, 
   if (step?.layer === "boundary") return "boundary";
   if (step?.effect === "cost") return "cost";
   return "normal";
+}
+
+/** Absolute wall-clock cap for one presentation pass, including the final lock (规范 §6.3). */
+export const MOTION_PRESENTATION_HARD_TOTAL_MS = 2500;
+
+/**
+ * Per-step phase-delay sum for a profile (the four handoff gates plus the three
+ * focus gates). Kept in lock-step with `motionTokens.phaseDelay` so the budget
+ * compressor and the focus-window assertions never drift apart.
+ */
+export function playbackStepTotalMs(profile: MotionTimingProfile): number {
+  const timing = motionTokens.phaseDelay[profile];
+  return timing.sourceToImpactMs + timing.impactToMainMs + timing.mainToExplanationMs + timing.explanationToEvidenceMs + timing.evidenceToNextMs;
+}
+
+/**
+ * Uniform compression factor for one full presentation pass.
+ *
+ * 规范 §6.3: "实现可以根据来源数量在已批准范围内压缩节拍，但必须保持稳定
+ * 顺序和 2.5 秒上限。来源过多时不得无限延长；应显示代表性高速播放并保留
+ * 完整证据". This function never drops a Trace step — it only shortens each
+ * step's gates so the authoritative evidence (`traceEntryIds`) stays complete.
+ *
+ * The final lock is excluded from the compressed budget so it always lands in
+ * its own 220–280ms window; only the serial Trace gates are scaled.
+ */
+export function computeMotionTimingScale(steps: readonly MotionPresentationStep[]): number {
+  const stepsBudget = MOTION_PRESENTATION_HARD_TOTAL_MS - motionTokens.duration.finalLockMs;
+  let uncompressed = 0;
+  for (const [index, step] of steps.entries()) {
+    uncompressed += playbackStepTotalMs(playbackTimingProfile(step, index));
+  }
+  if (uncompressed <= stepsBudget) return 1;
+  // Floor to 6 decimals so floating error can never push the total past the hard cap.
+  return Math.floor((stepsBudget / uncompressed) * 1e6) / 1e6;
 }

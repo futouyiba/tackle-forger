@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { buildMotionPresentationModel, createMotionPlaybackController, initialMotionPlaybackState, isMotionDevelopmentFixtureEnabled, motionPlaybackReducer, motionTokens, playbackPhaseDuration, playbackTimingProfile, systemPrefersReducedMotion, type MotionClock, type MotionPlaybackPhase, type MotionTraceLike } from "../lib/motion-presentation";
+import { buildMotionPresentationModel, computeMotionTimingScale, createMotionPlaybackController, initialMotionPlaybackState, isMotionDevelopmentFixtureEnabled, MOTION_PRESENTATION_HARD_TOTAL_MS, motionPlaybackReducer, motionTokens, playbackPhaseDuration, playbackStepTotalMs, playbackTimingProfile, systemPrefersReducedMotion, type MotionClock, type MotionPlaybackPhase, type MotionTimingProfile, type MotionTraceLike } from "../lib/motion-presentation";
 
 const trace: MotionTraceLike[] = [
   { traceEntryId: "one", sequence: 1, layer: "method", sourceRef: { sourceType: "Method", sourceId: "lure" }, sourceVersion: "2", before: 8, operation: "add", operand: 2, after: 10, effect: "benefit", warningIssueIds: [], inputHash: "input", outputHash: "out-1" },
@@ -167,4 +167,95 @@ test("playback core has a strict no-command/network/persistence import boundary"
 test("development fixture is excluded from production", () => {
   assert.equal(isMotionDevelopmentFixtureEnabled("production"), false);
   assert.equal(isMotionDevelopmentFixtureEnabled("development"), true);
+});
+
+test("every timing profile keeps its focus gates inside the §6.3 windows", () => {
+  const profiles: readonly MotionTimingProfile[] = ["establish", "normal", "patch", "boundary", "cost"];
+  for (const profile of profiles) {
+    const timing = motionTokens.phaseDelay[profile];
+    assert.ok(timing.impactToMainMs >= 90 && timing.impactToMainMs <= 120, `${profile} impactToMainMs ${timing.impactToMainMs} outside 90–120`);
+    assert.ok(timing.mainToExplanationMs >= 100 && timing.mainToExplanationMs <= 140, `${profile} mainToExplanationMs ${timing.mainToExplanationMs} outside 100–140`);
+  }
+  // impact→evidence (140–180) is a visual-layer window overlapped with the focus gates,
+  // not a serial phase sum — see motionTokens.duration.evidenceSettleMs.
+  assert.ok(motionTokens.duration.evidenceSettleMs >= 140 && motionTokens.duration.evidenceSettleMs <= 180, "evidenceSettleMs outside 140–180");
+  assert.ok(motionTokens.duration.finalLockMs >= 220 && motionTokens.duration.finalLockMs <= 280, "finalLockMs outside 220–280");
+  assert.equal(playbackStepTotalMs("establish"), motionTokens.duration.establishMs);
+  assert.equal(playbackStepTotalMs("normal"), motionTokens.duration.normalMs);
+  assert.equal(playbackStepTotalMs("patch"), motionTokens.duration.costMs);
+  assert.equal(playbackStepTotalMs("cost"), motionTokens.duration.costMs);
+  assert.ok(playbackStepTotalMs("boundary") >= 360 && playbackStepTotalMs("boundary") <= 420, "boundary step total outside 360–420");
+});
+
+const makeTraceEntries = (specs: ReadonlyArray<{ layer: string; effect?: MotionTraceLike["effect"]; evidence?: Record<string, unknown> }>): MotionTraceLike[] =>
+  specs.map((spec, index): MotionTraceLike => ({
+    traceEntryId: `entry-${index + 1}`, sequence: index + 1, layer: spec.layer,
+    sourceRef: { sourceType: "Rule", sourceId: `rule-${index + 1}` }, sourceVersion: "1",
+    before: index, operation: "add", operand: 1, after: index + 1,
+    effect: spec.effect ?? "benefit", warningIssueIds: [], inputHash: `in-${index}`, outputHash: `out-${index}`,
+    ...(spec.evidence ? { evidence: spec.evidence } : {}),
+  }));
+
+test("eight trailing cost/Patch sources finish at the 2.5s cap with focus gates untouched and evidence complete", () => {
+  const trace8 = makeTraceEntries([
+    { layer: "weight_template" },
+    ...Array.from({ length: 7 }, (_, index) => ({ layer: index % 2 ? "model_patch" : "method", effect: "cost" as const })),
+  ]);
+  const model8 = buildMotionPresentationModel({ businessRevision: "r8c", subjectId: "model", parameterKey: "pull", trace: trace8 });
+  // 320 + 7*280 == 2280 exactly fills the step budget; no compression, so the focus gates stay at their in-window tokens.
+  assert.equal(computeMotionTimingScale(model8.steps), 1, "eight cost/Patch sources exactly fill the budget, no compression");
+  const clock = new FakeClock(); const controller = createMotionPlaybackController(model8, { clock });
+  controller.dispatch({ type: "play" });
+  for (let handle = 1; handle <= 40; handle += 1) clock.fire(handle);
+  assert.equal(controller.getState().status, "locking");
+  clock.fire(41); assert.equal(controller.getState().status, "completed");
+  const total = clock.delays.reduce((sum, delay) => sum + delay, 0);
+  assert.equal(clock.delays.at(-1), motionTokens.duration.finalLockMs);
+  assert.ok(total <= MOTION_PRESENTATION_HARD_TOTAL_MS, `eight cost/Patch total ${total}ms exceeded the hard cap`);
+  assert.equal(model8.evidence.traceEntryIds.length, 8, "complete Trace evidence is retained");
+});
+
+test("mixed boundary/rounding and normal sources stay under the cap with rounding on the boundary profile", () => {
+  const traceMix = makeTraceEntries([
+    { layer: "weight_template" },
+    { layer: "method" },
+    { layer: "method" },
+    { layer: "method", effect: "cost" },
+    { layer: "model_patch", effect: "cost" },
+    { layer: "method" },
+    { layer: "boundary", effect: "cost", evidence: { adapter: "pricing_trace/v2", operation: "round" } },
+    { layer: "method" },
+  ]);
+  const modelMix = buildMotionPresentationModel({ businessRevision: "rmix", subjectId: "model", parameterKey: "pull", trace: traceMix });
+  assert.equal(playbackTimingProfile(modelMix.steps[6]!, 6), "boundary", "canonical pricing rounding uses the boundary profile");
+  const clock = new FakeClock(); const controller = createMotionPlaybackController(modelMix, { clock });
+  controller.dispatch({ type: "play" });
+  for (let handle = 1; handle <= 40; handle += 1) clock.fire(handle);
+  clock.fire(41); assert.equal(controller.getState().status, "completed");
+  const total = clock.delays.reduce((sum, delay) => sum + delay, 0);
+  assert.ok(total <= MOTION_PRESENTATION_HARD_TOTAL_MS, `mixed total ${total}ms exceeded the hard cap`);
+  assert.equal(modelMix.evidence.traceEntryIds.length, 8);
+});
+
+test("nine or more sources trigger representative fast playback under the hard cap without dropping evidence", () => {
+  for (const count of [9, 12, 16]) {
+    const traceN = makeTraceEntries(
+      Array.from({ length: count }, (_, index) => ({
+        layer: index === 0 ? "weight_template" : "method",
+        effect: (index % 3 === 0 ? "cost" : "benefit") as MotionTraceLike["effect"],
+      })),
+    );
+    const modelN = buildMotionPresentationModel({ businessRevision: `r${count}`, subjectId: "model", parameterKey: "pull", trace: traceN });
+    const scale = computeMotionTimingScale(modelN.steps);
+    assert.ok(scale > 0 && scale <= 1, `N=${count} scale ${scale} out of (0,1]`);
+    const clock = new FakeClock(); const controller = createMotionPlaybackController(modelN, { clock });
+    controller.dispatch({ type: "play" });
+    for (let handle = 1; handle <= count * 5; handle += 1) clock.fire(handle);
+    clock.fire(count * 5 + 1);
+    assert.equal(controller.getState().status, "completed", `N=${count} should reach completed`);
+    const total = clock.delays.reduce((sum, delay) => sum + delay, 0);
+    assert.ok(total <= MOTION_PRESENTATION_HARD_TOTAL_MS, `N=${count} total ${total}ms exceeded the hard cap`);
+    // Representative fast playback shortens gates; it never groups or drops Trace evidence.
+    assert.equal(modelN.evidence.traceEntryIds.length, count, `N=${count} evidence must stay complete`);
+  }
 });

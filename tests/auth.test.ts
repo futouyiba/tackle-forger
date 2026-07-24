@@ -370,9 +370,16 @@ test("resolveSessionDataDir 返回默认 .data/auth (无参数)", () => {
   assert.equal(result, path.join("/tmp/project", ".data/auth"));
 });
 
-test("resolveSessionDataDir 返回默认 .data/auth (空字符串)", () => {
-  const result = resolveSessionDataDir({ explicitEnvPath: "", _cwd: "/tmp/project" });
-  assert.equal(result, path.join("/tmp/project", ".data/auth"));
+test("resolveSessionDataDir 返回默认 .data/auth (空字符串与纯空白)", () => {
+  // Empty AND whitespace-only values must trim to "" and be treated as the
+  // default.  This is the regression anchor for start-dev.ps1's mirror of
+  // `isDefaultPath`: a whitespace-only `FEISHU_SESSION_DATA_DIR` must NOT be
+  // misread as an explicit override (which would silently disable worktree
+  // isolation).  Each variant falls through to the default ".data/auth".
+  for (const explicitEnvPath of ["", "   ", "  \t  ", "\n"]) {
+    const result = resolveSessionDataDir({ explicitEnvPath, _cwd: "/tmp/project" });
+    assert.equal(result, path.join("/tmp/project", ".data/auth"));
+  }
 });
 
 test("resolveSessionDataDir 默认路径不被视为显式覆盖", () => {
@@ -384,6 +391,25 @@ test("resolveSessionDataDir 默认路径不被视为显式覆盖", () => {
     _cwd: "/tmp/project",
   });
   assert.equal(result, path.join("/tmp/project", ".data/auth-my-feature-3001"));
+});
+
+test("resolveSessionDataDir 纯空白仍走 worktree+port 隔离 (与 start-dev.ps1 等价)", () => {
+  // A whitespace-only `FEISHU_SESSION_DATA_DIR` trims to "" and is treated as
+  // the default, so worktree+port isolation MUST still apply.  This is the
+  // exact regression for the start-dev.ps1 bug where `[string]::IsNullOrEmpty`
+  // on the untrimmed value let "   " through as a false explicit override.
+  // Covers all the ps1/TS equivalence rows: null / "" / "   " / ".data/auth"
+  // (with or without surrounding spaces) are default; absolute and custom
+  // relative paths are intentional overrides.
+  for (const explicitEnvPath of ["   ", "  .data/auth  "]) {
+    const result = resolveSessionDataDir({
+      explicitEnvPath,
+      worktreeName: "my-feature",
+      port: 3001,
+      _cwd: "/tmp/project",
+    });
+    assert.equal(result, path.join("/tmp/project", ".data/auth-my-feature-3001"));
+  }
 });
 
 test("resolveSessionDataDir 显式非默认路径覆盖所有", () => {

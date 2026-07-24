@@ -48,14 +48,25 @@ if ($listener) {
 # ---------------------------------------------------------------------------
 
 $sessionDirExplicit = [Environment]::GetEnvironmentVariable("FEISHU_SESSION_DATA_DIR", "Process")
-# Mirror `isDefaultPath` in lib/session-path.ts: empty OR equal to the
-# built-in default ".data/auth" (after trimming) is NOT an intentional override.
-if ([string]::IsNullOrEmpty($sessionDirExplicit)) {
-  $sessionDirTrimmed = ""
+# Faithful mirror of `resolveSessionDataDir` / `isDefaultPath` in
+# lib/session-path.ts:
+#     const raw = explicitEnvPath?.trim() ?? "";
+#     const isDefaultPath = raw === "" || raw === ".data/auth";
+# Null, empty, AND whitespace-only values all trim to "" and are treated as
+# the default (so worktree+port isolation still applies); only a genuine
+# non-default path is an intentional override that is left untouched.
+# `[string]::IsNullOrWhiteSpace` collapses null/empty/whitespace exactly like
+# `?.trim() ?? ""` does on the TS side — using `IsNullOrEmpty` here instead
+# would let a whitespace-only value (e.g. "   ") slip through as a false
+# "explicit override" and silently disable isolation.  This ps1 and
+# lib/session-path.ts MUST stay equivalent — update both together (and the
+# auth.test.ts coverage) when changing.
+if ([string]::IsNullOrWhiteSpace($sessionDirExplicit)) {
+  $sessionDirRaw = ""
 } else {
-  $sessionDirTrimmed = $sessionDirExplicit.Trim()
+  $sessionDirRaw = $sessionDirExplicit.Trim()
 }
-$isDefaultSessionPath = [string]::IsNullOrEmpty($sessionDirExplicit) -or ($sessionDirTrimmed -eq ".data/auth")
+$isDefaultSessionPath = ($sessionDirRaw -eq "") -or ($sessionDirRaw -eq ".data/auth")
 $gitPath = Join-Path $projectRoot ".git"
 $worktreeName = $null
 

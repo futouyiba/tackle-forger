@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test, { after, before } from "node:test";
 import { NextRequest } from "next/server";
-import { PUT as putState, saveWorkspaceForbiddenResponse } from "../app/api/state/route";
+import { GET as getState, PUT as putState, saveWorkspaceForbiddenResponse } from "../app/api/state/route";
 import { POST as issueActionCommand } from "../app/api/action-commands/route";
 import { POST as accessDataSources } from "../app/api/data-sources/route";
 import { POST as mutateWorkbook } from "../app/api/feishu-workbook/route";
@@ -81,6 +81,27 @@ function routeAIConfiguration(dataDir: string) {
     AI_RETENTION_ENCRYPTION_KEY_VERSION: "route-test-v1",
   } as const;
 }
+
+test("已认证读取在工作区身份错配时返回稳定诊断，而不是伪装成认证失败", { concurrency: false }, async (t) => {
+  withTrustedProxy();
+  const previousWorkspaceId = process.env.TACKLE_FORGER_WORKSPACE_ID;
+  const seeded = await loadWorkspaceState();
+  const currentId = seeded.state.workspaceId;
+  assert.ok(currentId);
+  process.env.TACKLE_FORGER_WORKSPACE_ID = "workspace:route-mismatch";
+  t.after(() => {
+    if (previousWorkspaceId === undefined) delete process.env.TACKLE_FORGER_WORKSPACE_ID;
+    else process.env.TACKLE_FORGER_WORKSPACE_ID = previousWorkspaceId;
+  });
+
+  const response = await getState(new NextRequest("http://localhost/api/state", { headers: authHeaders }));
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), {
+    errorCode: "WORKSPACE-IDENTITY-001",
+    error: "工作区的部署身份与已保存的数据不一致。为保护历史数据，系统未加载该工作区。请由部署管理员核对工作区身份配置后重试。",
+    action: "contact_deployment_administrator",
+  });
+});
 
 test("action-command 路由保留坏行重量草稿，并在发布路由明确阻断", { concurrency: false }, async () => {
   withTrustedProxy();

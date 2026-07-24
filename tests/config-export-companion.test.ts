@@ -18,6 +18,9 @@ import type {
 import { formalConfigExportContextHash } from "../lib/config-export-stage";
 import { deterministicHash } from "../lib/rule-kernel";
 import type { ConfigurationSnapshot } from "../lib/types";
+import { testReductionPolicy } from "./helpers/reduction-policy";
+
+const AVAILABLE_REDUCTION_POLICIES = [testReductionPolicy()];
 
 process.env.TACKLE_FORGER_PRODUCT_DELIVERY_STAGE = "PHASE_ONE_POINT_FIVE";
 process.env.TACKLE_FORGER_FORMAL_CONFIG_EXPORT_RUNTIME_ENABLED = "true";
@@ -54,6 +57,7 @@ const identity = {
 
 function replayableSnapshot(): ConfigurationSnapshot {
   const snapshot = structuredClone(createSeedState().configurationSnapshots[0]!);
+  snapshot.reductionStackingPolicyVersion = AVAILABLE_REDUCTION_POLICIES[0].version;
   snapshot.qualityValueAssessment = {
     formal: true,
   } as NonNullable<ConfigurationSnapshot["qualityValueAssessment"]>;
@@ -108,6 +112,7 @@ enums = []
       workspaceId: identity.workspaceId,
       allowedOpenIds: [identity.userId],
     },
+    reductionStackingPolicyVersions: AVAILABLE_REDUCTION_POLICIES,
     profiles: [{
       profileId: "profile:test",
       label: "测试",
@@ -326,6 +331,7 @@ test("已启用 Profile 缺少已登记映射时拒绝启动", () => {
       workspaceId: identity.workspaceId,
       allowedOpenIds: [identity.userId],
     },
+    reductionStackingPolicyVersions: AVAILABLE_REDUCTION_POLICIES,
     profiles: [{
       profileId: "profile:missing",
       label: "缺少映射",

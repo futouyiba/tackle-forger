@@ -8,5 +8,5 @@ export const metadata: Metadata = {
 };
 
 export default function Home() {
-  return <Workbench initialState={createSeedState()} />;
+  return <Workbench initialState={createSeedState({ mode: "production" })} />;
 }

@@ -18,6 +18,7 @@ import type {
   ValidationIssue,
 } from "./types";
 import { deterministicHash } from "./rule-kernel";
+import { isActiveValidationIssue, validationIssueLevel, validationIssueSeverity } from "./validation-issues";
 import {
   isProductItemPartEnabled,
   seriesItemPartId,
@@ -98,8 +99,7 @@ function matchesBoolean(filter: boolean | undefined, value: boolean): boolean {
 }
 
 function issueSeverity(issue: ValidationIssue): "INFO" | "WARNING" | "ERROR" | "BLOCKER" {
-  if (issue.severity) return issue.severity;
-  return issue.level === "error" ? "ERROR" : issue.level === "warning" ? "WARNING" : "INFO";
+  return validationIssueSeverity(issue);
 }
 
 function collectSeriesContext(input: {
@@ -273,8 +273,8 @@ export function querySeriesGantt(input: {
         modelCountTotal: context.models.length,
         modelCountMatched: matched.models.length,
         descendantStateCounts: context.descendantStateCounts,
-        hardBlockingCount: context.issues.filter((issue) => issue.level === "error").length,
-        warningCount: context.issues.filter((issue) => issue.level === "warning").length,
+        hardBlockingCount: context.issues.filter((issue) => isActiveValidationIssue(issue) && validationIssueLevel(issue) === "error").length,
+        warningCount: context.issues.filter((issue) => isActiveValidationIssue(issue) && validationIssueLevel(issue) === "warning").length,
         pendingUpgradeCount: context.pendingUpgrades.length,
         issueCodes,
         ruleSetVersions: context.ruleSetVersions,

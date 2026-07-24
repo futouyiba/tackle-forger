@@ -324,6 +324,23 @@ test("P-01b 不同实体 scopeId 的同路径 set 不会误报冲突", () => {
   assert.equal(sameScope.issues.some((issue) => issue.code === "PATCH_SET_CONFLICT"), true);
 });
 
+test("P-01c clear 恢复同层继承值并与 set 冲突，运行时拒绝旧操作", () => {
+  const common={
+    scope:"model" as const,scopeId:"model:a",reason:"test",author:"test",
+    baseProjectionId:"p",baseRuleSetVersion:"r",status:"approved" as const,rules:[],
+  };
+  const result=applyLayeredPatches({force:10},[
+    {...common,id:"patch:add",order:0,operations:[{op:"add" as const,path:"force",value:5}]},
+    {...common,id:"patch:clear",order:1,operations:[{op:"clear" as const,path:"force"}]},
+    {...common,id:"patch:set",order:2,operations:[{op:"set" as const,path:"force",value:20}]},
+    {...common,id:"patch:legacy",order:3,operations:[{op:"remove",path:"force"}]},
+  ] as never);
+  assert.equal(result.value.force,20);
+  assert.ok(result.trace.some((entry)=>entry.patchId==="patch:clear"&&entry.after===10));
+  assert.ok(result.issues.some((issue)=>issue.code==="PATCH_SET_CLEAR_CONFLICT"));
+  assert.ok(result.issues.some((issue)=>issue.patchId==="patch:legacy"&&issue.code==="PATCH_OPERATION_UNSUPPORTED"));
+});
+
 test("P-02/P-03 上游更新生成 rebase 差异，set 基础变化要求复核", () => {
   const patches: ProjectionPatchRuleSource[] = [
     {
@@ -582,8 +599,8 @@ test("A-01 Technology 成员与直接词条重复时只计算一次", () => {
   assert.ok(duplicated.warnings.some((warning) => warning.includes("去重")));
   const base = state.templates[3].values;
   assert.deepEqual(
-    aggregateAffixPanel(base, duplicated, state.ruleSettings.reductionStackingMode, "quality_a_purple").values,
-    aggregateAffixPanel(base, technologyOnly, state.ruleSettings.reductionStackingMode, "quality_a_purple").values,
+    aggregateAffixPanel(base, duplicated, "quality_a_purple").values,
+    aggregateAffixPanel(base, technologyOnly, "quality_a_purple").values,
   );
 });
 
@@ -600,12 +617,52 @@ test("A-02 被动词条参与品质评分但不改变面板", () => {
   const aggregated = aggregateAffixPanel(
     base,
     configuration,
-    state.ruleSettings.reductionStackingMode,
     "quality_a_purple",
   );
   assert.deepEqual(aggregated.values, base);
   assert.ok(aggregated.quality.passiveAffixScore > 0);
   assert.ok(aggregated.passivePayloads.length > 0);
+});
+
+test("A-03 被隔离的属性词条保留审计证据，但不参与面板或品质计分", () => {
+  const quarantined: V3Affix = {
+    id: "affix:quarantined",
+    version: 3,
+    name: "冲突词条",
+    category: "attribute",
+    itemPartId: "part:rod",
+    generationPolicy: "normal",
+    rarity: "rare",
+    valueScore: 25,
+    tags: [],
+    attributeEffects: [{
+      id: "quarantined-effect",
+      parameterKey: "force",
+      operation: "percent_bonus",
+      value: -0.2,
+      unit: "%",
+      stackingGroup: "force",
+      ruleSetVersion: "legacy",
+    }],
+    description: "",
+    enabled: true,
+  };
+  const configuration = resolveAffixConfiguration(
+    [quarantined],
+    [],
+    [quarantined.id],
+    [],
+  );
+  const quality = evaluateAffixQuality(configuration, "quality_c_green");
+
+  assert.equal(configuration.affixes.length, 1);
+  assert.equal(configuration.attributeAffixes.length, 0);
+  assert.deepEqual(configuration.isolatedAffixRevisionIds, ["affix:quarantined@3"]);
+  assert.equal(quality.attributeAffixScore, 0);
+  assert.equal(quality.totalScore, 0);
+  assert.ok(configuration.validationIssues.some(
+    (entry) => entry.code === "AFFIX_DIRECTION_CONFLICT",
+  ));
 });
 
 function syntheticAffix(id: string, score: number): V3Affix {
@@ -674,6 +731,7 @@ test("F-02 新 Snapshot 缺正式品质评估或正式定价策略时阻断，�
   assert.equal(verifySnapshotIntegrity(existing), true);
   assert.throws(() => publishConfigurationSnapshot({
     publicationMode: "new_formal",
+    workspaceId: "workspace:test",
     model,
     sku,
     series,
@@ -693,7 +751,7 @@ test("F-02 新 Snapshot 缺正式品质评估或正式定价策略时阻断，�
     warningConfirmations: {},
     publishedBy: "tester",
     publishedAt: "2026-07-22T00:00:00.000Z",
-  }), /正式品质评分结果.*已发布 PricingPolicyVersion|新 Snapshot 必须绑定/);
+  }), /REDUCTION_POLICY_SOURCE_MISSING|正式品质评分结果.*已发布 PricingPolicyVersion|新 Snapshot 必须绑定/);
   assert.equal(verifySnapshotIntegrity(existing), true);
 });
 

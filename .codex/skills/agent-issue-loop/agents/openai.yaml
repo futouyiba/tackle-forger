@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Issue Loop"
+  short_description: "用多 Agent 完成 Issue 从实现到合并与关闭的交付闭环"
+  default_prompt: "Use $agent-issue-loop to complete the selected GitHub Issue end to end."

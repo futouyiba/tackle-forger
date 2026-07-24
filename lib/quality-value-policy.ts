@@ -51,6 +51,8 @@ export interface QualityValidationIssue {
   message: string;
   sourceRevision: string;
   sourceCell?: PricingCellRef;
+  /** Explicit matrix-part evidence; absent on historical diagnostics. */
+  itemPartId?: string;
   relatedObjectIds: string[];
   actions: QualityActionLink[];
 }
@@ -62,6 +64,7 @@ export interface QualityValuePolicyDraft {
   qualitySheetId: "FqD4j7";
   affixSheetId: "zrVOxd";
   ranges: QualityValueRange[];
+  qualityTableDescriptor?: QualityTableDescriptor;
   combinationRules: QualityCombinationRule[];
   /** 旧规则源的性能计分字段仅作为迁移证据保留，正式评分不得消费。 */
   legacyPerformanceScoringEvidence?: {
@@ -72,6 +75,12 @@ export interface QualityValuePolicyDraft {
   formalStatus: "NON_FORMAL" | "READY_TO_PUBLISH";
   inputHash: string;
   importedAt: string;
+}
+
+export interface QualityTableDescriptor {
+  headerSource: PricingCellRef;
+  columns: Record<"品质" | "代码" | "PricingBasket" | "≥最小评分" | "<最大评分" | "最小价格系数" | "最大价格系数", number>;
+  rows: Array<{ qualityId: QualityId; code: string; basketAlias: string; minScore: number; maxScore: number; minFactor: number; maxFactor: number; mappingSource: PricingCellRef; factorSource: PricingCellRef }>;
 }
 
 export interface QualityScoreTraceEntry {
@@ -147,9 +156,12 @@ export function importQualityValuePolicyDraft(input: {
   pricingScoreEndpoints?: SourcedPricingValue<number>[];
   performanceScoringEnabled?: boolean;
   performanceScoringSource?: PricingCellRef;
+  /** Source-shape diagnostics retained with the draft; all are publish gates. */
+  sourceIssues?: QualityValidationIssue[];
+  qualityTableDescriptor?: QualityTableDescriptor;
   importedAt: string;
 }): QualityValuePolicyDraft {
-  const issues: QualityValidationIssue[] = [];
+  const issues: QualityValidationIssue[] = [...(input.sourceIssues ?? [])];
   const orderedRanges = [...input.ranges].sort((left, right) => left.minScore - right.minScore);
   const qualityIds: QualityId[] = ["quality_c_green", "quality_b_blue", "quality_a_purple", "quality_s_orange"];
   for (const qualityId of qualityIds) {
@@ -194,6 +206,7 @@ export function importQualityValuePolicyDraft(input: {
         message: `组合矩阵缩写无法解析为稳定 affixId：${cell.leftAlias} × ${cell.rightAlias}。`,
         sourceRevision: input.sourceRevision,
         sourceCell: cell.source,
+        itemPartId: cell.itemPartId,
         relatedObjectIds: [],
       }));
       continue;
@@ -206,6 +219,7 @@ export function importQualityValuePolicyDraft(input: {
         message: "词条组合只能发生在相同部位。",
         sourceRevision: input.sourceRevision,
         sourceCell: cell.source,
+        itemPartId: cell.itemPartId,
         relatedObjectIds: [left.affixId, right.affixId],
       }));
       continue;
@@ -221,6 +235,7 @@ export function importQualityValuePolicyDraft(input: {
         message: `无序词条对 ${left.affixId} × ${right.affixId} 双侧值不一致。`,
         sourceRevision: input.sourceRevision,
         sourceCell: cell.source,
+        itemPartId: cell.itemPartId,
         relatedObjectIds: [left.affixId, right.affixId],
       }));
       continue;
@@ -259,6 +274,7 @@ export function importQualityValuePolicyDraft(input: {
     qualitySheetId: "FqD4j7" as const,
     affixSheetId: "zrVOxd" as const,
     ranges: structuredClone(input.ranges),
+    ...(input.qualityTableDescriptor ? { qualityTableDescriptor: structuredClone(input.qualityTableDescriptor) } : {}),
     combinationRules: [...rulesByPair.values()],
     ...(
       input.performanceScoringEnabled !== undefined || input.performanceScoringSource

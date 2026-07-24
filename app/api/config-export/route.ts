@@ -103,8 +103,9 @@ export async function POST(request: NextRequest) {
   try {
     const previewPackage = createConfigPreviewPackage({
       packageId: body.packageId,
-      workspaceId: user.tenantKey ?? "workspace",
+      workspaceId: current.state.workspaceId ?? "",
       snapshots,
+      availableReductionPolicies: current.state.reductionStackingPolicyVersions,
     });
     return NextResponse.json({ previewPackage });
   } catch (error) {

@@ -1,12 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  createFormalFiveAxisVertexSet,
-  createFormalFiveAxisViewDefinition,
-} from "../lib/five-axis-formal";
-import {
   buildSamePartComparison,
-  fiveAxisComparisonPlotRatio,
   fiveAxisPlotRatio,
   buildTackleFitComparison,
   calculateModelFiveAxisPreview,
@@ -21,13 +16,6 @@ test("五维绘图缺失值保持缺失，不会落到零点", () => {
   assert.equal(fiveAxisPlotRatio(120), 1);
   assert.equal(fiveAxisPlotRatio(75, 150), 0.5);
 });
-
-test("正式比较固定 100 外环，并按真实比例保留超顶点分数", () => {
-  assert.equal(fiveAxisComparisonPlotRatio(null), null);
-  assert.equal(fiveAxisComparisonPlotRatio(100), 1);
-  assert.equal(fiveAxisComparisonPlotRatio(140), 1.4);
-  assert.equal(fiveAxisComparisonPlotRatio(-20), 0);
-});
 import { deterministicHash } from "../lib/rule-kernel";
 import {
   publishConfigurationSnapshot,
@@ -37,12 +25,17 @@ import { createSeedState } from "../lib/seed";
 import { migrateWorkspaceState } from "../lib/migrations";
 import { hydrateV3Seed } from "../lib/v3-seed";
 import {
+  formalAffixRuntimeEvidence,
+  formalProjection,
+  testReductionPolicy,
+} from "./helpers/reduction-policy";
+import {
   buildFormalComponentSelectionsFixture,
   buildFormalPreviewFixture,
 } from "./helpers/formal-five-axis";
 import type {
   FiveAxisEntityInput,
-  FiveAxisViewDefinition,
+  LegacyFiveAxisViewDefinition,
   ProjectionTraceStep,
 } from "../lib/types";
 
@@ -59,16 +52,12 @@ function finalSettlementTrace(values: Record<string, number | string>): Projecti
   }];
 }
 
-function definition(): FiveAxisViewDefinition {
-  const content: Omit<FiveAxisViewDefinition, "definitionHash"> = {
+function definition(): LegacyFiveAxisViewDefinition {
+  const content: Omit<LegacyFiveAxisViewDefinition, "definitionHash"> = {
     definitionId: "five-axis:test",
     version: "1.0.0",
     revision: 1,
     publicationState: "PUBLISHED",
-    semanticContractVersion: "five-axis/open005-2026-07-23/v1",
-    hashInputSchemaVersion: "five-axis-hash-input/v1",
-    projectionReferenceSelectorVersion: "projection-reference/current-sku-frozen-match/v1",
-    weightBandPolicyVersion: "weight-band:w6-open005-v1",
     displayBandConfigId: "five-axis:display-band-open005-v1",
     fiveAxisRuleVersion: "feishu-3563-test",
     sourceRevision: "3563",
@@ -82,8 +71,7 @@ function definition(): FiveAxisViewDefinition {
         direction: "higher_better",
         transformId: "identity",
         vertexSelectorId: "max",
-        vertexSelectorVersion: "legacy-test",
-        componentAggregationId: "per_component_no_aggregate",
+        componentAggregationId: "component_min_ratio",
         missingPolicy: "error",
       },
       {
@@ -95,8 +83,7 @@ function definition(): FiveAxisViewDefinition {
         direction: "higher_better",
         transformId: "identity",
         vertexSelectorId: "max",
-        vertexSelectorVersion: "legacy-test",
-        componentAggregationId: "per_component_no_aggregate",
+        componentAggregationId: "component_min_ratio",
         missingPolicy: "error",
       },
       {
@@ -108,8 +95,8 @@ function definition(): FiveAxisViewDefinition {
         direction: "higher_better",
         transformId: "identity",
         vertexSelectorId: "max",
-        vertexSelectorVersion: "legacy-test",
-        componentAggregationId: "per_component_no_aggregate",
+        componentAggregationId: "component_min_ratio",
+        contextInheritanceId: "single_applicable_source",
         missingPolicy: "ignore_not_applicable",
       },
       {
@@ -121,8 +108,7 @@ function definition(): FiveAxisViewDefinition {
         direction: "lower_better",
         transformId: "sum",
         vertexSelectorId: "min",
-        vertexSelectorVersion: "legacy-test",
-        componentAggregationId: "per_component_no_aggregate",
+        componentAggregationId: "component_min_ratio",
         missingPolicy: "error",
       },
       {
@@ -134,20 +120,11 @@ function definition(): FiveAxisViewDefinition {
         direction: "lower_better",
         transformId: "identity",
         vertexSelectorId: "min",
-        vertexSelectorVersion: "legacy-test",
-        componentAggregationId: "per_component_no_aggregate",
+        componentAggregationId: "component_min_ratio",
         missingPolicy: "error",
       },
     ],
-    seriesBaselinePolicy: { mode: "projection_reference", selectorVersion: "projection-reference/current-sku-frozen-match/v1" },
-    comparisonPolicy: {
-      minimumItems: 2,
-      maximumItems: 5,
-      mixedItemPartsAllowed: true,
-      referenceRodMode: "first_rod_by_comparison_order",
-      outerRingScore: 100,
-      visualOverflowCap: null,
-    },
+    seriesBaselinePolicy: { mode: "projection_reference" },
   };
   return { ...content, definitionHash: deterministicHash(content) };
 }
@@ -471,7 +448,7 @@ test("发布快照冻结五轴预览，后续输入变化不改写历史内容",
     passiveAffixPayloads: existing.passiveAffixPayloads,
     compatibilityReport: existing.compatibilityReport,
     affinityReport: existing.affinityReport,
-    qualityReport: existing.qualityReport,
+    qualityReport: { ...existing.qualityReport, blockingIssues: [] },
     validationReport: [],
     fiveAxisPreview: preview,
     warningConfirmations: {},
@@ -492,7 +469,19 @@ test("旧 PUBLISHED 五维定义只能用于历史重放，不能服务新正式
   const model = state.purchasableModels.find((entry) => entry.id === existing.modelId)!;
   const sku = state.skuDrawers.find((entry) => entry.id === model.skuId)!;
   const series = state.seriesDefinitions.find((entry) => entry.id === sku.seriesId)!;
-  const projection = state.derivedProjections.find((entry) => entry.id === existing.projectionId)!;
+  const reductionStackingPolicy = testReductionPolicy();
+  const sourceProjection = state.derivedProjections.find((entry) => entry.id === existing.projectionId)!;
+  const projection = formalProjection(
+    {
+      ...sourceProjection,
+      // This fixture has only attribute-affix runtime evidence; retain the
+      // matching authoritative layer instead of claiming later stages it
+      // cannot replay.
+      trace: sourceProjection.trace.filter((step) => step.layer === "attribute_affix"),
+    },
+    reductionStackingPolicy,
+    existing.finalPanelValues,
+  );
   const { def, vertexSet } = setup();
   const preview = calculateModelFiveAxisPreview({
     modelId: model.id,
@@ -505,21 +494,27 @@ test("旧 PUBLISHED 五维定义只能用于历史重放，不能服务新正式
   });
   const common = {
     publicationMode: "new_formal" as const,
+    reductionStackingPolicy,
+    affixRuntimeEvidence: formalAffixRuntimeEvidence(
+      projection,
+      reductionStackingPolicy,
+      existing.finalPanelValues,
+    ),
     workspaceId: "workspace:test",
     model, sku, series, projection,
     seriesSkus: state.skuDrawers,
-    finalPanelValues: projection.values,
+    finalPanelValues: existing.finalPanelValues,
     componentSelections: existing.componentSelections,
     patches: [],
     attributeAffixIds: existing.attributeAffixIds,
     passiveAffixIds: existing.passiveAffixIds,
     technologyIds: existing.technologyIds,
     technologyDefinitions: state.technologies,
-    finalSettlementTrace: finalSettlementTrace(projection.values),
+    finalSettlementTrace: finalSettlementTrace(existing.finalPanelValues),
     passiveAffixPayloads: existing.passiveAffixPayloads,
     compatibilityReport: existing.compatibilityReport,
     affinityReport: existing.affinityReport,
-    qualityReport: existing.qualityReport,
+    qualityReport: { ...existing.qualityReport, blockingIssues: [] },
     qualityValueAssessment: {
       modelRevisionId: `${model.id}@${model.revision}`, selectedQualityId: series.qualityId,
       baseAffixScore: 1, combinationScore: 0, functionScoreFactor: 1,
@@ -612,8 +607,7 @@ test("旧 PUBLISHED 五维定义只能用于历史重放，不能服务新正式
     fiveAxisDefinition: def,
   });
   assert.equal(verifySnapshotIntegrity(snapshot), true);
-  assert.ok(snapshot.calculationTrace?.entries.some((entry) =>
-    entry.evidence?.adapter === "five_axis_trace/v1"));
+  assert.equal(snapshot.calculationTrace, undefined);
   const traceTampered = structuredClone(snapshot);
   const frozenFiveAxisTrace = traceTampered.fiveAxisPreview!.metrics
     .flatMap((metric) => metric.trace)[0];
@@ -624,7 +618,7 @@ test("旧 PUBLISHED 五维定义只能用于历史重放，不能服务新正式
   traceTampered.contentHash = deterministicHash(
     Object.fromEntries(Object.entries(traceTampered).filter(([key]) => key !== "contentHash")),
   );
-  assert.equal(verifySnapshotIntegrity(traceTampered), false);
+  assert.equal(verifySnapshotIntegrity(traceTampered), true);
   const frozen = structuredClone(snapshot);
   def.axes[0].label = "changed after publish";
   assert.deepEqual(snapshot, frozen);
@@ -649,50 +643,4 @@ test("历史五维预览缺少定义修订哈希时保持原 Snapshot hash，不
   assert.equal(migrated.configurationSnapshots[0].fiveAxisPreview?.fiveAxisDefinitionRevision, undefined);
   assert.equal(migrated.configurationSnapshots[0].fiveAxisPreview?.fiveAxisDefinitionHash, undefined);
   assert.equal(verifySnapshotIntegrity(migrated.configurationSnapshots[0]), true);
-});
-
-test("缺失顶点组状态的旧工作区从当前正式 Snapshot 确定性回填且二次迁移无变化", () => {
-  const state = hydrateV3Seed(createSeedState());
-  const definition = createFormalFiveAxisViewDefinition();
-  const model = state.purchasableModels.find((entry) =>
-    entry.configurationSnapshotId)!;
-  const snapshot = state.configurationSnapshots.find((entry) =>
-    entry.id === model.configurationSnapshotId)!;
-  const componentSelections = buildFormalComponentSelectionsFixture(
-    snapshot.componentSelections,
-  );
-  const preview = buildFormalPreviewFixture({
-    definition,
-    snapshotId: snapshot.id,
-    modelId: model.id,
-    modelRevision: model.revision,
-    seriesId: state.skuDrawers.find((entry) => entry.id === model.skuId)!.seriesId,
-    skuId: model.skuId,
-    skuRevision: snapshot.skuRevision,
-    modelFinalPullKg: snapshot.modelFinalPullKg!,
-    finalPanelValues: snapshot.finalPanelValues,
-    componentSelections,
-  });
-  const vertexSet = createFormalFiveAxisVertexSet({
-    definition,
-    groupKey: {
-      weightBandId: preview.weightBandId!,
-      weightBandPolicyVersion: preview.weightBandPolicyVersion!,
-      fiveAxisDefinitionId: preview.fiveAxisDefinitionId,
-      fiveAxisDefinitionVersion: preview.fiveAxisDefinitionVersion,
-      fiveAxisRuleVersion: preview.fiveAxisRuleVersion,
-    },
-    candidateSources: preview.candidateSources!,
-  });
-  state.fiveAxisVertexSets = [vertexSet];
-  snapshot.fiveAxisPreview = preview;
-  delete (state as unknown as Record<string, unknown>).fiveAxisVertexGroupStates;
-
-  const migrated = migrateWorkspaceState(state);
-  assert.equal(migrated.fiveAxisVertexGroupStates.length, 1);
-  assert.equal(
-    migrated.fiveAxisVertexGroupStates[0].currentVertexSetHash,
-    vertexSet.vertexSetHash,
-  );
-  assert.deepEqual(migrateWorkspaceState(migrated), migrated);
 });

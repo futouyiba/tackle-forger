@@ -285,7 +285,7 @@ test("Snapshot、Model 指针与顶点在分量内共同提交或共同回滚", 
     sourceSnapshot.componentSelections,
   );
   const snapshots = models.map((model, index) => {
-    const modelFinalPullKg = 1.5;
+    const modelFinalPullKg = index === 0 ? 1.4 : 20;
     const fiveAxisPreview = buildFormalPreviewFixture({
       definition,
       snapshotId: memberships[index].candidateSources[0].snapshotId,

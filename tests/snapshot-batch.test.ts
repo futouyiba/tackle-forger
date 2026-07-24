@@ -8,6 +8,7 @@ import {
   assertSnapshotBatchCanConfirm,
   snapshotBatchEligibleModels,
 } from "../lib/snapshot-batch";
+import { createValidationIssue } from "../lib/validation-issues";
 import { createSeedState } from "../lib/seed";
 import { hydrateV3Seed } from "../lib/v3-seed";
 
@@ -75,6 +76,49 @@ test("SnapshotBatch 输入排序稳定且全跳过时拒绝确认", () => {
   });
   assert.equal(left.inputHash, right.inputHash);
   assert.throws(() => assertSnapshotBatchCanConfirm(left), /没有可复用或可创建/);
+});
+
+test("SnapshotBatch 不将已治理或失效的 canonical ERROR 重新视为活动阻断", () => {
+  const state = hydrateV3Seed(createSeedState());
+  const published = state.purchasableModels.find((model) => model.configurationSnapshotId);
+  assert.ok(published);
+  const candidate = structuredClone(published);
+  candidate.id = "model:batch-governed-error";
+  candidate.revision += 1;
+  candidate.configurationSnapshotId = undefined;
+  candidate.status = "approved";
+  const sourceSku = state.skuDrawers.find((sku) => sku.id === candidate.skuId);
+  assert.ok(sourceSku);
+  for (const stateValue of ["WAIVED", "RESOLVED", "STALE"] as const) {
+    const issue = createValidationIssue({
+      code: "GOVERNED_BATCH_ERROR",
+      source: "patch",
+      severity: "ERROR",
+      gate: "PUBLISH",
+      state: stateValue,
+      ...(stateValue === "WAIVED" ? { waiverRef: "waiver:batch" } : {}),
+      subjectRef: {
+        workspaceId: "workspace:batch",
+        entityType: "model",
+        entityId: candidate.id,
+        revisionId: String(candidate.revision),
+      },
+      affectedRefs: [],
+      parameterKeys: [],
+      title: "已治理错误",
+      message: "已治理或失效的记录不应阻断新批次规划。",
+      ruleRefs: ["batch:test"],
+      inputHash: `batch:${stateValue}`,
+    });
+    const plan = planSnapshotBatch({
+      models: [...state.purchasableModels, candidate],
+      series: state.seriesDefinitions,
+      skus: [{ ...structuredClone(sourceSku), validationSummary: [issue] }, ...state.skuDrawers.filter((sku) => sku.id !== sourceSku.id)],
+      snapshots: state.configurationSnapshots,
+      selectedModelIds: [candidate.id],
+    });
+    assert.equal(plan.items[0].decision, "create", stateValue);
+  }
 });
 
 test("SnapshotBatch 与导出候选拒绝 DEPRECATED 或非当前规格 SKU 的历史 Model", () => {

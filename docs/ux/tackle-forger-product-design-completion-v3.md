@@ -142,7 +142,7 @@ Issue 展示 code、title、message、影响对象/属性、证据、状态和 A
 
 Patch编辑器只提供`set/add/multiply/clear`；`clear`文案为“清除本层覆盖并恢复继承值”，不能写成删除对象或设null。旧remove只在迁移详情中显示“已转换为clear”；min/max只出现在模板/通用规则编辑器，旧Patch规范化为set时必须同时展示原边界意图、冻结基底和before/after。页面分别展示Patch业务状态、镜像同步状态和ORPHANED等注意状态，不用一个“状态”徽标混合表达。
 
-Rebase 同屏显示旧基础、新基础、现有Patch、预计结果、冲突原因、Issue。set基线变化、参数删除/重命名、边界/公式/兼容变化必须人工rebase；clear仅在目标仍是可继承覆盖时可重放，目标删除、重命名或必填性变化时必须rebase；add/multiply可自动重放，但最多回到pending_review。rebase生成新Patch Revision。
+Rebase 同屏显示旧基础、新基础、现有Patch、预计结果、冲突原因、Issue。set基线变化、参数删除/重命名、边界/公式/兼容变化必须人工rebase；clear仅在目标仍是可继承覆盖时可重放，目标删除、重命名或必填性变化时必须rebase；add/multiply可自动重放，但新revision最多进入`PENDING_REVIEW`。基线变化使当前revision进入`REBASE_REQUIRED`；`rebasing`只是`rebase_patch`动作进度，不是持久化`PatchState`。保存时服务端重验Patch head和基线，成功则原子创建新的`PENDING_REVIEW` Patch Revision；失败或并发变化不留下半Revision，并保持旧Revision、Snapshot和hash不变。
 
 UpgradeCandidate 只描述“升级会怎样”。批准不改变旧 Snapshot；显式发布才创建新 Snapshot。
 

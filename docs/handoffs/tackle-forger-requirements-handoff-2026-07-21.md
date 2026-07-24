@@ -64,7 +64,7 @@
 - 飞书`Patch台账`是人工可见镜像和审计副本，不是通用规则表或唯一运行时来源；远端schema、列范围、哈希和回读以v3 §14.4为准。机器行与协作事件行都包含受控`workspaceId`；Patch组按`workspaceId + patchId + patchRevision`定位，逐操作镜像按`workspaceId + patchId + patchRevision + operationId`幂等同步。
 - 通用中间层Patch及多个个体Patch呈现的稳定模式，可经汇总分析、人工归纳和影响预览转为 `RuleSourceChangeDraft`，确认后回写对应通用规则页；一期、1.5期、二期和当前规划三期均不接飞书审批。
 - Series、SKU、Model个案Patch不得未经归纳自动反推通用规则；新RuleSet发布后再判断`ABSORBED`、`PARTIALLY_ABSORBED`、继续有效或需要rebase。
-- Patch业务状态与飞书镜像同步状态必须分开；一条操作具有稳定`operationId`和`operationIndex`，明细幂等键为带类型的`tuple(workspaceId, patchId, patchRevision, operationId)`。完整Patch revision是审核、重放、rebase、吸收和Snapshot引用的事务边界，部分镜像成功不等于整组同步成功。
+- Patch业务状态与飞书镜像同步状态必须分开；业务生命周期只使用v3 §14.2的大写`PatchState`，`rebasing`只表示`rebase_patch`动作进度，不得持久化为业务状态。一条操作具有稳定`operationId`和`operationIndex`，明细幂等键为带类型的`tuple(workspaceId, patchId, patchRevision, operationId)`。完整Patch revision是审核、重放、rebase、吸收和Snapshot引用的事务边界；基线变化进入`REBASE_REQUIRED`，成功rebase在重验expected head/基线后原子创建最多为`PENDING_REVIEW`的新revision，失败或并发变化不留下半revision且不改变旧Snapshot/hash。部分镜像成功不等于整组同步成功。
 - 新建、账本、Snapshot和飞书镜像的规范操作集统一为`set/add/multiply/clear`。旧`ProjectionPatchOperation.remove`只在兼容读取时转换为`clear`；`clear`表示清除当前层覆盖而非写null。`min/max`只用于模板/通用规则；旧Patch或草稿必须在冻结基底上求值并规范化为保留原始意图证据的`set`，无法无损转换则进入复核。
 - 飞书镜像行被删除、清空、隐藏或移动不得删除本地Patch；缺失产生`PATCH_MIRROR_ROW_MISSING`并可补写。对象缺失时进入`ORPHANED`，不得按名称重绑。
 - `PatchLedger`使用版本化schema和幂等顺序迁移；新Snapshot冻结带类型的`tuple(workspaceId, patchId, patchRevision, orderedOperationIds)`集合及绑定`workspaceId`的版本化`PatchSetHash`，既有已发布Snapshot与历史hash不得回写或重算。

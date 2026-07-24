@@ -1,5 +1,8 @@
 "use client";
 
+import { issueClientActionCommand } from "@/lib/client-action-command";
+import { isComposingChangeEvent } from "@/lib/composition-input";
+
 import {
   AlertTriangle,
   Anvil,
@@ -36,7 +39,7 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RuleGraphStudio } from "./RuleGraphStudio";
 import { V3FlowWorkbench } from "./V3FlowWorkbench";
 import { BrowserConfigExportWorkbench as ConfigExportWorkbench } from "./BrowserConfigExportWorkbench";
@@ -54,7 +57,9 @@ import {
   templateTensionRange,
 } from "@/lib/showcase";
 import { ensureWorkflowFields } from "@/lib/workflow";
-import { migrateWorkspaceState } from "@/lib/migrations";
+import { validationIssueLevel } from "@/lib/validation-issues";
+import { createParameterId, migrateWorkspaceState } from "@/lib/migrations";
+import { mergeWorkspaceConflict } from "@/lib/workspace-conflict-merge";
 import {
   isProductItemPartEnabled,
   seriesItemPartId,
@@ -72,6 +77,11 @@ import {
   parseFeishuSourceLink,
   type ResolvedFeishuSource,
 } from "@/lib/feishu-links";
+import {
+  recordShareLinkHistory,
+  removeShareLinkHistory,
+} from "@/lib/data-sources";
+import { workspaceServiceFailure } from "@/lib/workspace-service-errors";
 import type {
   AdjustmentRule,
   Affix,
@@ -81,6 +91,7 @@ import type {
   DataSourceWritebackPreview,
   Candidate,
   DimensionKey,
+  FeishuShareLinkHistoryEntry,
   ItemKind,
   RevisionInfo,
   SeriesShowcaseEntry,
@@ -273,6 +284,8 @@ function TextInput({
   min,
   step,
   readOnly = false,
+  disabled = false,
+  title,
 }: {
   value: string | number | undefined;
   onChange?: (value: string) => void;
@@ -282,7 +295,13 @@ function TextInput({
   min?: number;
   step?: number;
   readOnly?: boolean;
+  disabled?: boolean;
+  title?: string;
 }) {
+  // IME 组字期间不把半成品写进会触发重算/重挂载的 state：避免中文输入时
+  // 行被卸载、组字上下文与焦点丢失。稳定 React key（parameter.id）才是治本，
+  // 此守卫为纵深防御，防止半成品 label 被提交为 domain key。
+  const composingRef = useRef(false);
   return (
     <input
       className={cx("text-input", className)}
@@ -293,7 +312,26 @@ function TextInput({
       placeholder={placeholder}
       readOnly={readOnly}
       aria-readonly={readOnly}
-      onChange={(event) => onChange?.(event.target.value)}
+      disabled={disabled}
+      title={title}
+      onCompositionStart={() => {
+        composingRef.current = true;
+      }}
+      onCompositionEnd={(event) => {
+        composingRef.current = false;
+        // 部分浏览器在 compositionEnd 后不再补发 change，主动提交最终值；
+        // 随后若 onChange 再次提交相同值，受控 state 写入幂等、无害。
+        onChange?.(event.currentTarget.value);
+      }}
+      onChange={(event) => {
+        const nativeIsComposing = (
+          event.nativeEvent as { isComposing?: boolean }
+        ).isComposing;
+        if (isComposingChangeEvent(composingRef.current, nativeIsComposing)) {
+          return;
+        }
+        onChange?.(event.target.value);
+      }}
     />
   );
 }
@@ -303,16 +341,19 @@ function SelectInput({
   onChange,
   children,
   className,
+  ariaLabel,
 }: {
   value: string | number | undefined;
   onChange: (value: string) => void;
   children: React.ReactNode;
   className?: string;
+  ariaLabel?: string;
 }) {
   return (
     <select
       className={cx("select-input", className)}
       value={value ?? ""}
+      aria-label={ariaLabel}
       onChange={(event) => onChange(event.target.value)}
     >
       {children}
@@ -492,8 +533,20 @@ function copyState<T>(value: T): T {
   return structuredClone(value);
 }
 
+type SaveFeedback = {
+  kind: "governed" | "conflict" | "error";
+  message: string;
+  fields?: Array<{ field: string; actionLabel?: string }>;
+  revision?: number;
+  baselineRefreshed?: boolean;
+  conflictFields?: string[];
+};
+
 export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   const [state, setState] = useState<WorkspaceState>(() => ensureWorkflowFields(initialState));
+  const conflictDraftRef = useRef<WorkspaceState | null>(null);
+  const conflictLatestRef = useRef<WorkspaceState | null>(null);
+  const baselineStateRef = useRef<WorkspaceState>(ensureWorkflowFields(initialState));
   const [page, setPage] = useState<PageKey>("overview");
   const [pageRouteReady, setPageRouteReady] = useState(false);
   const [routeNonce, setRouteNonce] = useState(0);
@@ -511,6 +564,32 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   const [authErrorCode, setAuthErrorCode] = useState("");
   const [dirty, setDirty] = useState(false);
   const [syncState, setSyncState] = useState<"ready" | "saving" | "saved" | "error">("ready");
+  const [saveFeedback, setSaveFeedback] = useState<SaveFeedback | null>(null);
+  const workspaceFreshnessRef = useRef({ dirty: false, revision: 1 });
+  const markWorkspaceDirty = useCallback(() => {
+    workspaceFreshnessRef.current = { ...workspaceFreshnessRef.current, dirty: true };
+    setDirty(true);
+  }, []);
+  const applyWorkspaceRevision = useCallback((nextRevision: number) => {
+    workspaceFreshnessRef.current = { dirty: false, revision: nextRevision };
+    setRevision(nextRevision);
+    setDirty(false);
+  }, []);
+  /**
+   * Domain commands return the new authoritative workspace, not a local draft.
+   * Keep every conflict/revision baseline in lockstep so a later 409 compares
+   * against the command result rather than a state from before that command.
+   */
+  const replaceAuthoritativeWorkspace = useCallback((nextState: WorkspaceState, nextRevision: number) => {
+    const normalized = ensureWorkflowFields(nextState);
+    setState(normalized);
+    baselineStateRef.current = copyState(normalized);
+    conflictDraftRef.current = null;
+    conflictLatestRef.current = null;
+    applyWorkspaceRevision(nextRevision);
+    setSaveFeedback(null);
+    setSyncState("saved");
+  }, [applyWorkspaceRevision]);
   const [toast, setToast] = useState("");
   const [search, setSearch] = useState("");
   const [itemKind, setItemKind] = useState<ItemKind>("rod");
@@ -527,13 +606,14 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   const [detailKind, setDetailKind] = useState<ItemKind>("rod");
   const [versions, setVersions] = useState<RevisionInfo[]>(initialState.revisions);
   const fileInput = useRef<HTMLInputElement>(null);
-  const [exchangeMode, setExchangeMode] = useState<"excel" | "config">("excel");
+  const [exchangeMode, setExchangeMode] = useState<"excel" | "feishu" | "config">("excel");
   const [sourceCatalogs, setSourceCatalogs] = useState<Record<string, ResolvedFeishuSource>>({});
   const [sourcePreview, setSourcePreview] = useState<DataSourcePreview | null>(null);
   const [writebackPreview, setWritebackPreview] = useState<DataSourceWritebackPreview | null>(null);
   const [sourceAction, setSourceAction] = useState<
     "" | "resolve" | "preview" | "publish" | "writeback-preview" | "writeback"
   >("");
+  const [workspaceExporting, setWorkspaceExporting] = useState(false);
 
   useEffect(() => {
     const requested = new URL(window.location.href).searchParams.get("page");
@@ -562,8 +642,9 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       producer(draft);
       return preserveReadOnlyLegacyProductHistory(current, draft);
     });
-    setDirty(true);
+    markWorkspaceDirty();
     setSyncState("ready");
+    setSaveFeedback(null);
   };
 
   const notify = (message: string) => {
@@ -611,11 +692,18 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         if (!response.ok || !session.user) { setAuthStatus("error"); setAuthMessage(session.error || "登录服务暂不可用。"); setAuthErrorCode(session.errorCode || "AUTH-SERVICE-001"); return; }
         setUser(session.user);
         const stateResponse = await fetch("/api/state", { cache: "no-store" });
-        if (!stateResponse.ok) throw new Error("state-service");
-        const payload = await stateResponse.json() as ApiStatePayload;
-        setState(ensureWorkflowFields(payload.state));
-        setDirty(false);
-        setRevision(payload.revision);
+        const payload = await stateResponse.json().catch(() => ({})) as ApiStatePayload & {
+          error?: string;
+          errorCode?: string;
+        };
+        if (!stateResponse.ok || !payload.state || !Number.isInteger(payload.revision)) {
+          const fallback = workspaceServiceFailure(undefined);
+          setAuthStatus("error");
+          setAuthMessage(payload.error || fallback.error);
+          setAuthErrorCode(payload.errorCode || fallback.errorCode);
+          return;
+        }
+        replaceAuthoritativeWorkspace(payload.state, payload.revision);
         setUser(payload.user);
         setAuthStatus("authenticated"); setAuthMessage(""); setAuthErrorCode("");
         void fetch("/api/revisions", { cache: "no-store" })
@@ -634,7 +722,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     return () => {
       active = false;
     };
-  }, []);
+  }, [replaceAuthoritativeWorkspace]);
 
   const save = async (message = "保存配置修改") => {
     const saveAvailability = user.actionAvailability.save_workspace;
@@ -643,23 +731,111 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       return;
     }
     setSyncState("saving");
+    setSaveFeedback(null);
     try {
+      const idempotencyKey = `save-workspace:${revision}:${crypto.randomUUID()}`;
+      const invocation = await issueClientActionCommand({
+        action: "save_workspace",
+        idempotencyKey,
+        payload: { state, baseRevision: revision, message },
+      });
       const response = await fetch("/api/state", {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ state, baseRevision: revision, message }),
+        body: JSON.stringify(invocation),
       });
-      const payload = (await response.json()) as { revision?: number; error?: string };
-      if (!response.ok) throw new Error(payload.error || "保存失败");
-      setRevision(payload.revision ?? revision + 1);
-      setDirty(false);
+      const payload = (await response.json()) as {
+        revision?: number; error?: string; code?: string; governedFields?: Array<{ field: string; actionLabel?: string }>;
+      };
+      if (!response.ok) {
+        if (response.status === 409) {
+          setSaveFeedback({
+            kind: "conflict", message: payload.error || "其他成员已保存新版本。",
+            revision: payload.revision,
+          });
+        } else if (response.status === 422 && payload.governedFields?.length) {
+          setSaveFeedback({
+            kind: "governed", message: payload.error || "这些字段必须通过领域动作修改。",
+            fields: payload.governedFields,
+          });
+        } else {
+          setSaveFeedback({ kind: "error", message: payload.error || "保存失败" });
+        }
+        throw new Error(payload.error || "保存失败");
+      }
+      baselineStateRef.current = copyState(state);
+      applyWorkspaceRevision(payload.revision ?? revision + 1);
       setSyncState("saved");
+      setSaveFeedback(null);
       notify("已保存为版本 v" + (payload.revision ?? revision + 1));
       void loadVersions();
     } catch (error) {
       setSyncState("error");
       notify(error instanceof Error ? error.message : "保存失败");
     }
+  };
+
+  /**
+   * A stale save cannot succeed by retrying the same payload. Compare the
+   * retained baseline, local draft and fresh server state; only local-only
+   * ordinary fields replay automatically. Same-field edits need a choice.
+   */
+  const refreshConflictBaseline = async () => {
+    conflictDraftRef.current = copyState(state);
+    try {
+      const response = await fetch("/api/state", { cache: "no-store" });
+      if (!response.ok) throw new Error("无法读取最新团队版本。");
+      const payload = await response.json() as ApiStatePayload;
+      const latest = ensureWorkflowFields(payload.state);
+      const draft = conflictDraftRef.current;
+      if (!draft) throw new Error("本地草稿已不可用，请重新检查冲突。");
+      const merged = mergeWorkspaceConflict({
+        baseline: baselineStateRef.current,
+        draft,
+        latest,
+      });
+      conflictLatestRef.current = latest;
+      setState(merged.state);
+      baselineStateRef.current = latest;
+      applyWorkspaceRevision(payload.revision);
+      setUser(payload.user);
+      if (merged.replayedLocalFields.length > 0) markWorkspaceDirty();
+      setSyncState("ready");
+      setSaveFeedback({
+        kind: "conflict", baselineRefreshed: true, revision: payload.revision,
+        conflictFields: merged.conflicts,
+        message: merged.conflicts.length
+          ? "已合并仅本地字段；同字段远端更改保留服务器版本，请逐项选择是否采用本地值。"
+          : "已合并仅本地字段并载入最新团队版本；尚未自动保存。",
+      });
+    } catch (error) {
+      setSaveFeedback({ kind: "error", message: error instanceof Error ? error.message : "无法读取最新团队版本。" });
+    }
+  };
+
+  const applyLocalConflictField = (field: string) => {
+    const draft = conflictDraftRef.current;
+    if (!draft || !conflictLatestRef.current) return;
+    setState((current) => ({
+      ...current,
+      [field]: structuredClone((draft as unknown as Record<string, unknown>)[field]),
+    }) as WorkspaceState);
+    markWorkspaceDirty();
+    setSyncState("ready");
+    setSaveFeedback((current) => current && current.kind === "conflict" ? {
+      ...current,
+      conflictFields: current.conflictFields?.filter((item) => item !== field),
+      message: "已采用所选本地字段，尚未保存。其余远端值仍保持最新版本。",
+    } : current);
+  };
+
+  const pageForGovernedField = (field: string): PageKey => {
+    if (field === "seriesDefinitions" || field === "skuDrawers" || field === "purchasableModels") return "candidates";
+    if (field === "patchLedger" || field.startsWith("patch")) return "patchledger";
+    if (field === "configurationSnapshots" || field === "derivedProjections" || field === "projectionMatches") return "v3flow";
+    if (field.includes("Source") || field.includes("Policy") || field === "ruleSetVersions") return "rulesource";
+    if (["recipes", "candidates", "officialSkus", "detailOverrides"].includes(field)) return field === "officialSkus" ? "skus" : field as PageKey;
+    return "versions";
   };
 
   const updateDataSource = (
@@ -689,6 +865,38 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         return next;
       });
     }
+  };
+
+  const applyShareLinkFromHistory = (index: number, entry: FeishuShareLinkHistoryEntry) => {
+    // Fill the data-source slot's shareUrl from a history entry. This only
+    // writes the local draft; the user must still click "识别链接" to resolve,
+    // then explicitly preview and publish. It never auto-publishes.
+    mutate((draft) => {
+      const target = draft.dataSources[index];
+      if (!target) return;
+      target.shareUrl = entry.shareUrl;
+      target.appToken = "";
+      target.tableId = "";
+      target.viewId = "";
+    }, false);
+    setSourceCatalogs((current) => {
+      const next = { ...current };
+      delete next[state.dataSources[index]?.id ?? ""];
+      return next;
+    });
+    setSourcePreview(null);
+    setWritebackPreview(null);
+    notify("已从历史填入分享链接，请点击“识别链接”继续。");
+  };
+
+  const clearShareLinkHistory = (shareUrl: string | null) => {
+    mutate((draft) => {
+      draft.feishuShareLinkHistory = removeShareLinkHistory(
+        draft.feishuShareLinkHistory,
+        shareUrl,
+      );
+    }, false);
+    notify(shareUrl ? "已从历史移除该地址。" : "已清空用过的地址历史。");
   };
 
   const resolveDataSource = async (
@@ -739,6 +947,19 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         target.appToken = payload.resolved!.appToken;
         target.tableId = payload.resolved!.tableId;
         target.viewId = payload.resolved!.viewId;
+        // Record the successfully resolved share link into history. History
+        // stores only the non-sensitive shareUrl/label/dataset — never tokens
+        // or credentials. Dedup + cap happen inside recordShareLinkHistory.
+        const resolvedTable = payload.resolved!.tableId
+          ? payload.resolved!.tables.find((table) => table.id === payload.resolved!.tableId)
+          : undefined;
+        const label = resolvedTable?.name
+          ? `${target.name} · ${resolvedTable.name}`
+          : target.name;
+        draft.feishuShareLinkHistory = recordShareLinkHistory(
+          draft.feishuShareLinkHistory,
+          { shareUrl: target.shareUrl, label, dataset: target.dataset },
+        );
       }, false);
       if (!payload.resolved.tableId) {
         notify("链接已识别，读取到 " + payload.resolved.tables.length + " 张数据表，请选择一张。");
@@ -791,16 +1012,23 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     }
     setSourceAction("publish");
     try {
+      const businessPayload = {
+        action: "publish",
+        source,
+        baseRevision: revision,
+        checksum: sourcePreview.checksum,
+        sourceFingerprint: sourcePreview.sourceFingerprint,
+      };
+      const invocation = await issueClientActionCommand({
+        action: "publish_data_source",
+        idempotencyKey:
+          `publish-data-source:${source.id}:${revision}:${sourcePreview.checksum}`,
+        payload: businessPayload,
+      });
       const response = await fetch("/api/data-sources", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          action: "publish",
-          source,
-          baseRevision: revision,
-          checksum: sourcePreview.checksum,
-          sourceFingerprint: sourcePreview.sourceFingerprint,
-        }),
+        body: JSON.stringify(invocation),
       });
       const payload = (await response.json()) as {
         state?: WorkspaceState;
@@ -811,10 +1039,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       if (!response.ok || !payload.state || !payload.revision) {
         throw new Error(payload.error || "发布失败");
       }
-      setState(ensureWorkflowFields(payload.state));
-      setRevision(payload.revision);
-      setDirty(false);
-      setSyncState("saved");
+      replaceAuthoritativeWorkspace(payload.state, payload.revision);
       setSourcePreview(null);
       notify("数据源已发布为正式版本 v" + payload.revision);
       void loadVersions();
@@ -877,16 +1102,24 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     }
     setSourceAction("writeback");
     try {
+      const businessPayload = {
+        action: "writeback",
+        source,
+        baseRevision: revision,
+        checksum: writebackPreview.checksum,
+        sourceFingerprint: writebackPreview.sourceFingerprint,
+      };
+      const invocation = await issueClientActionCommand({
+        action: "commit_data_source_writeback",
+        idempotencyKey:
+          `commit-data-source-writeback:${source.id}:${revision}:` +
+          writebackPreview.checksum,
+        payload: businessPayload,
+      });
       const response = await fetch("/api/data-sources", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          action: "writeback",
-          source,
-          baseRevision: revision,
-          checksum: writebackPreview.checksum,
-          sourceFingerprint: writebackPreview.sourceFingerprint,
-        }),
+        body: JSON.stringify(invocation),
       });
       const payload = (await response.json()) as {
         state?: WorkspaceState;
@@ -896,10 +1129,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       if (!response.ok || !payload.state || !payload.revision) {
         throw new Error(payload.error || "回写失败");
       }
-      setState(ensureWorkflowFields(payload.state));
-      setRevision(payload.revision);
-      setDirty(false);
-      setSyncState("saved");
+      replaceAuthoritativeWorkspace(payload.state, payload.revision);
       setWritebackPreview(null);
       notify("已安全回写飞书，并保存审计版本 v" + payload.revision);
       void loadVersions();
@@ -1027,6 +1257,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     }
     mutate((draft) => {
       draft.parameters.push({
+        id: createParameterId(),
         key,
         label: key,
         itemKind,
@@ -1279,8 +1510,24 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     try {
       const availability = user.actionAvailability.import_excel;
       if (!availability.enabled) throw new Error(availability.disabledReasonText ?? "当前账号不能导入 Excel。");
+      const contentHash = Array.from(
+        new Uint8Array(await crypto.subtle.digest("SHA-256", await file.arrayBuffer())),
+        (byte) => byte.toString(16).padStart(2, "0"),
+      ).join("");
+      const invocation = await issueClientActionCommand({
+        action: "import_excel",
+        idempotencyKey: `import-excel:${contentHash}`,
+        payload: {
+          fileName: file.name,
+          contentType: file.type || "application/octet-stream",
+          size: file.size,
+          contentHash,
+        },
+      });
       const form = new FormData();
       form.append("file", file);
+      form.append("actionId", invocation.actionId);
+      form.append("payloadRefId", invocation.payloadRefId);
       const upload = await fetch("/api/import-file", { method: "POST", body: form });
       const uploadPayload = (await upload.json()) as { error?: string };
       if (!upload.ok) throw new Error(uploadPayload.error ?? "Excel 文件登记失败。");
@@ -1314,7 +1561,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           for (const label of parameterHeaders) {
             if (!draft.parameters.some((item) => item.key === label)) {
               const kind: ItemKind = label.startsWith("轮") ? "reel" : label.startsWith("线") || label.startsWith("PE线") ? "line" : "rod";
-              draft.parameters.push({ key: label, label, itemKind: kind, unit: "", precision: 2, notes: "Excel 导入" });
+              draft.parameters.push({ id: createParameterId(), key: label, label, itemKind: kind, unit: "", precision: 2, notes: "Excel 导入" });
             }
           }
           draft.templates = rows.slice(headerIndex + 1).filter((row) => row[0]).map((row) => {
@@ -1338,7 +1585,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         });
       }
 
-      setDirty(true);
+      markWorkspaceDirty();
       notify("Excel 已导入；当前配置已载入，只读历史数据保持原样。保存后形成团队版本。");
     } catch (error) {
       notify(error instanceof Error ? error.message : "Excel 导入失败");
@@ -1348,8 +1595,8 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   };
 
   const renderOverview = () => {
-    const errorCount = validationRows.filter((row) => row.issue.level === "error").length;
-    const warningCount = validationRows.filter((row) => row.issue.level === "warning").length;
+    const errorCount = validationRows.filter((row) => validationIssueLevel(row.issue) === "error").length;
+    const warningCount = validationRows.filter((row) => validationIssueLevel(row.issue) === "warning").length;
     return (
       <div className="page-stack">
         <div className="metric-grid">
@@ -1432,7 +1679,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
               <Button size="sm" tone="ghost" onClick={() => setPage("validation")}>全部校验</Button>
             </div>
             <div className="issue-list">
-              {validationRows.filter((row) => row.issue.level !== "info").slice(0, 5).map(({ candidate, issue }, index) => (
+              {validationRows.filter((row) => validationIssueLevel(row.issue) !== "info").slice(0, 5).map(({ candidate, issue }, index) => (
                 <button
                   type="button"
                   key={candidate.id + issue.code + index}
@@ -1441,11 +1688,11 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
                     setPage("candidates");
                   }}
                 >
-                  {issue.level === "error" ? <XCircle size={16} /> : <AlertTriangle size={16} />}
+                  {validationIssueLevel(issue) === "error" ? <XCircle size={16} /> : <AlertTriangle size={16} />}
                   <span><strong>{candidate.comboId}</strong>{issue.message}</span>
                 </button>
               ))}
-              {!validationRows.some((row) => row.issue.level !== "info") ? (
+              {!validationRows.some((row) => validationIssueLevel(row.issue) !== "info") ? (
                 <div className="all-clear"><CheckCircle2 size={22} />当前候选全部通过关键校验</div>
               ) : null}
             </div>
@@ -1468,7 +1715,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         <thead><tr><th>参数名</th><th>道具</th><th>单位</th><th>精度</th><th>备注</th><th /></tr></thead>
         <tbody>
           {parametersForKind.map((parameter) => (
-            <tr key={parameter.key}>
+            <tr key={parameter.id ?? parameter.key}>
               <td><TextInput value={parameter.label} onChange={(value) => renameParameter(parameter.key, value)} /></td>
               <td>
                 <SelectInput
@@ -1537,11 +1784,12 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           <thead>
             <tr>
               <th className="sticky-col">模板ID</th>
+              <th>钓法</th>
               <th>档位</th>
-              <th>鱼重下限kg</th>
-              <th>鱼重上限kg</th>
-              <th>标称鱼重kg</th>
-              {parametersForKind.map((parameter) => <th key={parameter.key}>{parameter.label}<small>{parameter.unit}</small></th>)}
+              <th>最小拉力kgf</th>
+              <th>最大拉力kgf</th>
+              <th>鱼重等级</th>
+              {parametersForKind.map((parameter) => <th key={parameter.id ?? parameter.key}>{parameter.label}<small>{parameter.unit}</small></th>)}
               <th className="wide-col">备注</th>
               <th />
             </tr>
@@ -1550,12 +1798,34 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
             {state.templates.map((template, index) => (
               <tr key={template.id}>
                 <td className="sticky-col"><TextInput value={template.id} onChange={(value) => mutate((draft) => { draft.templates[index].id = value; })} /></td>
+                <td>{state.methodProfiles.find((profile) => profile.id === template.methodId)?.name ?? "—"}</td>
                 <td><TextInput value={template.tier} onChange={(value) => mutate((draft) => { draft.templates[index].tier = value; draft.templates[index].name = value; })} /></td>
-                {(["fishMinKg", "fishMaxKg", "nominalFishKg"] as const).map((key) => (
-                  <td key={key}><TextInput type="number" value={template[key]} step={0.01} onChange={(value) => mutate((draft) => { draft.templates[index][key] = Number(value); })} /></td>
-                ))}
+                {(["min", "max"] as const).map((edge) => {
+                  const targetPull = template.rangeSemantics === "target_pull";
+                  const key = edge === "min" ? "targetPullMinKgf" : "targetPullMaxKgf";
+                  const legacyKey = edge === "min" ? "fishMinKg" : "fishMaxKg";
+                  return (
+                    <td key={edge}><TextInput type="number" value={targetPull ? template[key] ?? 0 : template[legacyKey]} step={0.01} onChange={(value) => mutate((draft) => {
+                      const numeric = Number(value);
+                      const current = draft.templates[index];
+                      if (current.rangeSemantics === "target_pull") {
+                        current[key] = numeric;
+                        const min = current.targetPullMinKgf ?? 0;
+                        const max = current.targetPullMaxKgf ?? 0;
+                        current.nominalTargetPullKgf = (min + max) / 2;
+                      } else {
+                        current[legacyKey] = numeric;
+                        current.nominalFishKg = (current.fishMinKg + current.fishMaxKg) / 2;
+                      }
+                    })} /></td>
+                  );
+                })}
+                <td><TextInput value={template.fishWeightLevel ?? template.nominalFishKg} onChange={(value) => mutate((draft) => {
+                  const numeric = Number(value);
+                  draft.templates[index].fishWeightLevel = value !== "" && Number.isFinite(numeric) ? numeric : value;
+                })} /></td>
                 {parametersForKind.map((parameter) => (
-                  <td key={parameter.key}>
+                  <td key={parameter.id ?? parameter.key}>
                     <TextInput
                       type={typeof template.values[parameter.key] === "number" ? "number" : "text"}
                       step={10 ** -parameter.precision}
@@ -1619,7 +1889,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
               <tr>
                 <th className="sticky-col">启用 / 名称</th>
                 <th>级别</th>
-                {parametersForKind.map((parameter) => <th key={parameter.key}>{parameter.label}</th>)}
+                {parametersForKind.map((parameter) => <th key={parameter.id ?? parameter.key}>{parameter.label}</th>)}
                 <th className="wide-col">备注</th>
                 <th />
               </tr>
@@ -1644,7 +1914,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
                   {parametersForKind.map((parameter) => {
                     const rule = option.rules.find((item) => item.parameterKey === parameter.key);
                     return (
-                      <td key={parameter.key} className={rule ? "rule-active" : ""}>
+                      <td key={parameter.id ?? parameter.key} className={rule ? "rule-active" : ""}>
                         <TextInput
                           value={ruleCell(rule)}
                           placeholder="—"
@@ -1749,7 +2019,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
                       const current = target?.rules.find((item) => item.id === rule.id);
                       if (current) current.parameterKey = value;
                     })}>
-                      {state.parameters.map((parameter) => <option key={parameter.key} value={parameter.key}>{parameter.label}</option>)}
+                      {state.parameters.map((parameter) => <option key={parameter.id ?? parameter.key} value={parameter.key}>{parameter.label}</option>)}
                     </SelectInput>
                     <SelectInput value={rule.operation} onChange={(value) => mutate((draft) => {
                       const target = draft.layers.find((item) => item.id === selectedLayer.id);
@@ -1810,7 +2080,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           <thead>
             <tr>
               <th className="sticky-col">启用 / 词条</th><th>类型</th><th>分值</th><th>稀有度</th><th>标签</th>
-              {parametersForKind.map((parameter) => <th key={parameter.key}>{parameter.label}</th>)}
+              {parametersForKind.map((parameter) => <th key={parameter.id ?? parameter.key}>{parameter.label}</th>)}
               <th className="wide-col">机制说明</th><th />
             </tr>
           </thead>
@@ -1846,7 +2116,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
                 {parametersForKind.map((parameter) => {
                   const rule = affix.rules.find((item) => item.parameterKey === parameter.key);
                   return (
-                    <td key={parameter.key} className={rule ? "rule-active" : ""}>
+                    <td key={parameter.id ?? parameter.key} className={rule ? "rule-active" : ""}>
                       <TextInput value={ruleCell(rule)} placeholder="—" onChange={(value) => mutate((draft) => {
                         const target = draft.affixes.find((item) => item.id === affix.id);
                         if (!target) return;
@@ -2419,8 +2689,8 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
                 <th>比较</th><th className="sticky-col">组合ID</th><th>状态</th><th>系列 / 平台</th><th>模板</th><th>目标kg</th><th>结构</th><th>功能</th><th>性能</th><th>词条</th><th>品质</th><th>分数</th><th>杆/轮/线拉力</th><th>安全拉力</th><th>价格</th><th>校验</th>
               </tr></thead>
               <tbody>{filteredCandidates.map((candidate) => {
-                const errors = candidate.calculated.issues.filter((issue) => issue.level === "error").length;
-                const warnings = candidate.calculated.issues.filter((issue) => issue.level === "warning").length;
+                const errors = candidate.calculated.issues.filter((issue) => validationIssueLevel(issue) === "error").length;
+                const warnings = candidate.calculated.issues.filter((issue) => validationIssueLevel(issue) === "warning").length;
                 return (
                   <tr key={candidate.id} className={selectedCandidateId === candidate.id ? "selected-row" : ""} onDoubleClick={() => setSelectedCandidateId(candidate.id)}>
                     <td><input type="checkbox" checked={selectedCandidates.has(candidate.id)} onChange={() => {
@@ -2522,18 +2792,18 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     return (
       <div className="page-stack">
         <div className="metric-grid compact-metrics">
-          <Card className="metric-card metric-red"><span>错误</span><strong>{validationRows.filter((row) => row.issue.level === "error").length}</strong><small>阻止直接通过</small></Card>
-          <Card className="metric-card metric-amber"><span>警告</span><strong>{validationRows.filter((row) => row.issue.level === "warning").length}</strong><small>建议人工复核</small></Card>
-          <Card className="metric-card metric-teal"><span>通过</span><strong>{state.candidates.filter((candidate) => candidate.calculated.issues.every((issue) => issue.level === "info")).length}</strong><small>结构与覆盖正常</small></Card>
+          <Card className="metric-card metric-red"><span>错误</span><strong>{validationRows.filter((row) => validationIssueLevel(row.issue) === "error").length}</strong><small>阻止直接通过</small></Card>
+          <Card className="metric-card metric-amber"><span>警告</span><strong>{validationRows.filter((row) => validationIssueLevel(row.issue) === "warning").length}</strong><small>建议人工复核</small></Card>
+          <Card className="metric-card metric-teal"><span>通过</span><strong>{state.candidates.filter((candidate) => candidate.calculated.issues.every((issue) => validationIssueLevel(issue) === "info")).length}</strong><small>结构与覆盖正常</small></Card>
           <Card className="metric-card metric-blue"><span>规则建议</span><strong>{suggestions.length}</strong><small>来自重复精调</small></Card>
         </div>
         <div className="two-column validation-layout">
           <Card className="flush-card">
             <div className="panel-title padded"><div><h3>验算问题</h3><p>安全工作拉力 = MIN(杆×0.9, 轮, 线×0.35)</p></div></div>
             <SheetTable><thead><tr><th>级别</th><th>组合ID</th><th>规则</th><th>说明</th></tr></thead><tbody>
-              {validationRows.filter((row) => row.issue.level !== "info").map(({ candidate, issue }, index) => (
+              {validationRows.filter((row) => validationIssueLevel(row.issue) !== "info").map(({ candidate, issue }, index) => (
                 <tr key={candidate.id + issue.code + index} onClick={() => { setSelectedCandidateId(candidate.id); setPage("candidates"); }}>
-                  <td>{issue.level === "error" ? <Pill tone="danger">错误</Pill> : <Pill tone="warning">警告</Pill>}</td><td><strong>{candidate.comboId}</strong></td><td><code>{issue.code}</code></td><td>{issue.message}</td>
+                  <td>{validationIssueLevel(issue) === "error" ? <Pill tone="danger">错误</Pill> : <Pill tone="warning">警告</Pill>}</td><td><strong>{candidate.comboId}</strong></td><td><code>{issue.code}</code></td><td>{issue.message}</td>
                 </tr>
               ))}
             </tbody></SheetTable>
@@ -2591,6 +2861,53 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           </div>
         </Card>
 
+        {state.feishuShareLinkHistory.length ? (
+          <Card className="source-history-card">
+            <div className="panel-title">
+              <div>
+                <span className="eyebrow">数据导入 · 地址历史</span>
+                <h3>用过的飞书分享链接</h3>
+                <p>
+                  仅保留成功识别过的多维表格分享链接，不含应用密钥或令牌；选择某条会填入对应数据源，仍需手动识别、预览并发布。
+                </p>
+              </div>
+              <Button
+                icon={Trash2}
+                disabled={!user.actionAvailability.resolve_data_source.enabled}
+                title={user.actionAvailability.resolve_data_source.disabledReasonText}
+                onClick={() => clearShareLinkHistory(null)}
+              >
+                清空历史
+              </Button>
+            </div>
+            <div className="source-history-list">
+              {state.feishuShareLinkHistory.map((entry) => (
+                <div className="source-history-item" key={entry.id}>
+                  <History size={16} aria-hidden="true" />
+                  <div className="source-history-item-body">
+                    <strong>{entry.label}</strong>
+                    <code>{entry.shareUrl}</code>
+                    <small>
+                      {entry.dataset === "weight_templates" ? "重量模板" : "系数"} ·
+                      最近使用 {new Date(entry.lastUsedAt).toLocaleString("zh-CN")}
+                    </small>
+                  </div>
+                  <button
+                    type="button"
+                    className="source-history-remove"
+                    aria-label={"移除 " + entry.label}
+                    title="从历史移除"
+                    disabled={!user.actionAvailability.resolve_data_source.enabled}
+                    onClick={() => clearShareLinkHistory(entry.shareUrl)}
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </Card>
+        ) : null}
+
         <div className="data-source-grid">
           {state.dataSources.map((source, index) => (
             <Card className="data-source-card" key={source.id}>
@@ -2627,6 +2944,8 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
                     <TextInput
                       value={source.shareUrl}
                       placeholder="粘贴 https://你的团队.feishu.cn/base/..."
+                      disabled={!user.actionAvailability.resolve_data_source.enabled}
+                      title={user.actionAvailability.resolve_data_source.disabledReasonText ?? undefined}
                       onChange={(value) => updateDataSource(index, "shareUrl", value)}
                     />
                     <Button
@@ -2642,6 +2961,31 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
                   <small>
                     链接包含数据表时会直接选中；只包含工作簿时，识别后从下拉列表选择。
                   </small>
+                  {state.feishuShareLinkHistory.length ? (
+                    <div className="source-link-history">
+                      <span className="source-link-history-label">
+                        <History size={14} aria-hidden="true" />
+                        用过的地址
+                      </span>
+                      <SelectInput
+                        value=""
+                        ariaLabel="从用过的地址选择分享链接"
+                        onChange={(value) => {
+                          const entry = state.feishuShareLinkHistory.find(
+                            (item) => item.shareUrl === value,
+                          );
+                          if (entry) applyShareLinkFromHistory(index, entry);
+                        }}
+                      >
+                        <option value="">从历史选择…</option>
+                        {state.feishuShareLinkHistory.map((entry) => (
+                          <option value={entry.shareUrl} key={entry.id}>
+                            {entry.label}（{entry.dataset === "weight_templates" ? "重量模板" : "系数"}）
+                          </option>
+                        ))}
+                      </SelectInput>
+                    </div>
+                  ) : null}
                 </label>
                 <label>
                   <span>使用哪张数据表</span>
@@ -3008,10 +3352,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       actorName={user.name}
       notify={notify}
       onWorkspaceApplied={(nextState, nextRevision, message) => {
-        setState(ensureWorkflowFields(nextState));
-        setRevision(nextRevision);
-        setDirty(false);
-        setSyncState("saved");
+        replaceAuthoritativeWorkspace(nextState, nextRevision);
         notify(message);
         void loadVersions();
       }}
@@ -3038,7 +3379,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
                 current,
                 ensureWorkflowFields(payload.state),
               ));
-              setDirty(true);
+              markWorkspaceDirty();
               notify("已载入 v" + version.revision + "，保存后会成为新版本。");
             }}>载入副本</Button></td>
           </tr>
@@ -3046,6 +3387,34 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       </Card>
     </div>
   );
+
+  // 只读下载当前工作区数据为 .xlsx（多 sheet，对照飞书源排查结构不一致）。
+  // 不触发任何写操作；权限与可见性由 view_revisions（revision.read）约束。
+  const exportWorkspaceXlsx = async () => {
+    setWorkspaceExporting(true);
+    try {
+      const response = await fetch("/api/export-workspace-xlsx", { method: "GET" });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(payload.error ?? "导出失败。");
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      const disposition = response.headers.get("Content-Disposition") ?? "";
+      const match = /filename\*=UTF-8''([^;]+)/i.exec(disposition);
+      link.download = match ? decodeURIComponent(match[1]) : "工作区数据导出.xlsx";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "导出失败。");
+    } finally {
+      setWorkspaceExporting(false);
+    }
+  };
 
   const renderExcel = () => (
     <div className="page-stack">
@@ -3059,6 +3428,19 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           <div className="exchange-icon"><Download size={24} /></div><h3>导出 Excel</h3>
           <p>生成 01–10 可读工作表，并附带隐藏状态页，保证参数、规则、词条、候选与版本可完整往返。</p>
           <Button tone="primary" icon={Download} onClick={() => void exportExcel()}>导出当前版本</Button>
+        </Card>
+        <Card className="exchange-card">
+          <div className="exchange-icon"><FileSpreadsheet size={24} /></div><h3>导出当前数据（诊断用）</h3>
+          <p>把当前工作区的飞书源修订、参数/模板/部位、钓法/类型/功能/性能/品质、词条/技术、系列/SKU/Model/快照、定价与品质策略草稿等导出为多 sheet .xlsx，便于与飞书源逐表对照、排查数据结构不一致。只读派生，不改正式数据；敏感字段已脱敏。</p>
+          <Button
+            tone="primary"
+            icon={FileSpreadsheet}
+            disabled={workspaceExporting || !user.actionAvailability.view_revisions.enabled}
+            title={user.actionAvailability.view_revisions.disabledReasonText}
+            onClick={() => void exportWorkspaceXlsx()}
+          >
+            {workspaceExporting ? "导出中…" : "导出工作区数据为 Excel"}
+          </Button>
         </Card>
       </div>
       <Card>
@@ -3087,8 +3469,6 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     </div>
   );
 
-  void renderSources;
-
   const renderExchange = () => (
     <div className="page-stack">
       <div className="exchange-mode-tabs" role="tablist" aria-label="数据交换方式">
@@ -3106,6 +3486,16 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         <button
           type="button"
           role="tab"
+          aria-selected={exchangeMode === "feishu"}
+          className={exchangeMode === "feishu" ? "active" : ""}
+          onClick={() => setExchangeMode("feishu")}
+        >
+          <Database size={18} />
+          <span><strong>飞书数据表</strong><small>粘贴分享链接导入</small></span>
+        </button>
+        <button
+          type="button"
+          role="tab"
           aria-selected={exchangeMode === "config"}
           className={exchangeMode === "config" ? "active" : ""}
           onClick={() => setExchangeMode("config")}
@@ -3114,12 +3504,12 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           <span><strong>配置关系预览</strong><small>一期仅 CONFIG_PREVIEW / NON_FORMAL</small></span>
         </button>
       </div>
-      {exchangeMode === "excel" ? renderExcel() : (
+      {exchangeMode === "excel" ? renderExcel() : exchangeMode === "feishu" ? renderSources() : (
         <ConfigExportWorkbench
           state={state}
           actionAvailabilities={user.actionAvailability}
           identity={{
-            workspaceId: user.tenantKey ?? "",
+            workspaceId: state.workspaceId ?? "",
             userId: user.openId ?? "",
           }}
           notify={notify}
@@ -3157,16 +3547,14 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         <SeriesGanttWorkbench
           key={`series-gantt:${routeNonce}`}
           state={state}
-          workspaceId={user.tenantKey || "workspace"}
+          workspaceId={state.workspaceId ?? ""}
           actionAvailabilities={user.actionAvailability}
           actor={user.name}
           mutate={mutate}
+          workspaceFreshness={() => workspaceFreshnessRef.current}
           notify={notify}
           onWorkspaceApplied={(nextState, nextRevision, message) => {
-            setState(ensureWorkflowFields(nextState));
-            setRevision(nextRevision);
-            setDirty(false);
-            setSyncState("saved");
+            replaceAuthoritativeWorkspace(nextState, nextRevision);
             notify(message);
             void loadVersions();
           }}
@@ -3187,7 +3575,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     if (page === "validation") return renderValidation();
     if (page === "versions") return renderVersions();
     if (page === "rulesource") return renderRuleSource();
-    if (page === "patchledger") return <PatchLedgerWorkbench state={state} capabilities={user.capabilities} actorName={user.name} mutate={mutate} notify={notify} />;
+    if (page === "patchledger") return <PatchLedgerWorkbench state={state} revision={revision} dirty={dirty} getWorkspaceFreshness={()=>workspaceFreshnessRef.current} capabilities={user.capabilities} actorName={user.name} mutate={mutate} notify={notify} replaceWorkspace={replaceAuthoritativeWorkspace} />;
     return renderExchange();
   };
 
@@ -3203,7 +3591,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   ) ? requestedV3Series : undefined;
   const topBreadcrumbs = page === "v3flow" && v3Series
     ? buildProductBreadcrumbs({
-      workspaceId: user.tenantKey || "workspace",
+      workspaceId: state.workspaceId ?? "",
       collection: v3Series.collectionId
         ? state.collections.find((entry) => entry.id === v3Series.collectionId)
         : undefined,
@@ -3254,26 +3642,28 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   };
 
   if (authStatus !== "authenticated") {
+    const workspaceUnavailable = authErrorCode.startsWith("WORKSPACE-");
     return (
       <div className="workbench">
-        <main className="main">
+        <a className="skip-link" href="#main-content">跳至主内容</a>
+        <main className="main" id="main-content" tabIndex={-1}>
           <div className="content">
             <section className="card service-required-card">
               <LockKeyhole size={30} />
               <span className="eyebrow">FEISHU AUTHENTICATION</span>
-              <h2>{authStatus === "checking" ? "正在检查登录状态" : "请使用公司飞书账号登录"}</h2>
+              <h2>{authStatus === "checking" ? "正在检查登录状态" : workspaceUnavailable ? "工作区暂时不可用" : "请使用公司飞书账号登录"}</h2>
               <p>{authStatus === "checking" ? "正在读取安全会话，完成前不会启用编辑。" : authMessage}</p>
               {authStatus !== "checking" && authErrorCode ? (
                 <code className="service-error-code">错误编号：{authErrorCode}</code>
               ) : null}
               {authStatus !== "checking" ? (
                 <div className="service-required-actions">
-                  <a className="button button-primary button-md" href="/api/auth/feishu/start?return_to=%2F">使用飞书登录</a>
+                  {!workspaceUnavailable ? <a className="button button-primary button-md" href="/api/auth/feishu/start?return_to=%2F">使用飞书登录</a> : null}
                   <button type="button" className="button button-default button-md" onClick={() => window.location.reload()}>重新检查</button>
                   <button type="button" className="button button-default button-md" onClick={() => void copyServiceDiagnostic()}>复制诊断信息</button>
                 </div>
               ) : null}
-              <small>内网部署仍保留飞书登录，也支持受信任内网代理传递飞书身份。</small>
+              <small>{workspaceUnavailable ? "飞书登录已完成；请根据错误编号处理工作区服务或部署身份配置。" : "内网部署仍保留飞书登录，也支持受信任内网代理传递飞书身份。"}</small>
             </section>
           </div>
         </main>
@@ -3283,6 +3673,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
 
   return (
     <div className="workbench">
+      <a className="skip-link" href="#main-content">跳至主内容</a>
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark"><Anvil size={20} /></div>
@@ -3321,7 +3712,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         </div>
       </aside>
 
-      <main className="main">
+      <main className="main" id="main-content" tabIndex={-1}>
         <header className="topbar">
           <div className="topbar-context">
             <nav className="topbar-breadcrumbs" aria-label="当前位置">
@@ -3348,6 +3739,27 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
             </Button>
           </div>
         </header>
+        {saveFeedback ? (
+          <section className={cx("save-feedback", saveFeedback.kind)} role="alert" aria-live="assertive">
+            <div>
+              <strong>{saveFeedback.kind === "conflict" ? "保存冲突：本地输入仍未丢失" : "保存未完成"}</strong>
+              <p>{saveFeedback.message}</p>
+              {saveFeedback.kind === "conflict" ? <small>同一份过期请求无法靠重试成功；刷新后只会自动重放仅本地更改，双方同改字段须逐项选择。</small> : null}
+            </div>
+            <div className="save-feedback-actions">
+              {saveFeedback.fields?.map((entry) => (
+                <button type="button" key={entry.field} onClick={() => setPage(pageForGovernedField(entry.field))}>
+                  {entry.field}：{entry.actionLabel ?? "查看领域动作"}
+                </button>
+              ))}
+              {saveFeedback.kind === "conflict" ? <button type="button" onClick={() => setPage("versions")}>查看版本记录{saveFeedback.revision ? `（v${saveFeedback.revision}）` : ""}</button> : null}
+              {saveFeedback.kind === "conflict" && !saveFeedback.baselineRefreshed ? <button type="button" onClick={() => void refreshConflictBaseline()}>刷新最新基线（保留本地草稿）</button> : null}
+              {saveFeedback.kind === "conflict" && saveFeedback.baselineRefreshed ? saveFeedback.conflictFields?.map((field) => <button type="button" key={field} onClick={() => applyLocalConflictField(field)}>采用本地 {field}</button>) : null}
+              {saveFeedback.kind !== "conflict" ? <button type="button" onClick={() => void save()}>重试保存</button> : null}
+              <button type="button" aria-label="关闭保存提示" onClick={() => setSaveFeedback(null)}><X size={16} /></button>
+            </div>
+          </section>
+        ) : null}
         <div className="content">
           {renderPage()}
         </div>

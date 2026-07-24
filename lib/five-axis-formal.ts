@@ -10,9 +10,9 @@ import {
 } from "./five-axis-hash";
 import type {
   ConfigurationSnapshot,
+  FiveAxisComparisonView,
   FiveAxisDefinitionDisposition,
   FiveAxisDefinitionDispositionCatalogRevision,
-  FiveAxisComparisonView,
   FiveAxisEntityInput,
   FiveAxisProjectionReferenceAnchor,
   FiveAxisProjectionReferenceEvidence,
@@ -22,6 +22,7 @@ import type {
   FiveAxisVertexGroupKey,
   FiveAxisVertexSet,
   FiveAxisViewDefinition,
+  FiveAxisWeightBandPolicy,
   ModelComponentSelection,
   ModelFiveAxisPreview,
   StoredFiveAxisViewDefinition,
@@ -34,46 +35,83 @@ export const FIVE_AXIS_PROJECTION_REFERENCE_SELECTOR_VERSION =
 export const FIVE_AXIS_DISPOSITION_CATALOG_SCHEMA_VERSION =
   "five-axis-definition-disposition-catalog/v1" as const;
 
-/** The currently published OPEN-005 W policy.  New policy versions must add
- * their own resolver rather than letting a caller choose a self-consistent W. */
-export function resolveFormalFiveAxisWeightBand(input: {
-  policyVersion: string;
-  modelFinalPullKg: number;
-}): string {
-  if (
-    input.policyVersion !== "weight-band:w6-open005-v1"
-    || !Number.isFinite(input.modelFinalPullKg)
-    || input.modelFinalPullKg <= 0
-  ) {
-    throw new Error("FIVE_AXIS_WEIGHT_BAND_POLICY_UNAVAILABLE：无法按已发布 W 段策略解析最终拉力。");
-  }
-  const upperBounds = [2, 4, 6, 10, 15];
-  const index = upperBounds.findIndex((upper) => input.modelFinalPullKg <= upper);
-  return `W${index < 0 ? 6 : index + 1}`;
-}
-
 export function buildFormalFiveAxisEntityFromSnapshot(input: {
   snapshot: ConfigurationSnapshot;
   itemPartId: string;
   weightBandId: string;
   modelName: string;
 }): FiveAxisEntityInput | undefined {
-  const component = input.snapshot.componentSelections.find((entry) =>
-    entry.itemPartId === input.itemPartId);
+  const component = input.snapshot.componentSelections.find((entry) => entry.itemPartId === input.itemPartId);
   if (!component) return undefined;
   return {
-    entityId:
-      `${input.snapshot.modelId}:snapshot:${input.snapshot.id}`
-      + `@v${input.snapshot.version}:${component.componentId}`,
+    entityId: `${input.snapshot.modelId}:snapshot:${input.snapshot.id}@v${input.snapshot.version}:${component.componentId}`,
     itemPartId: input.itemPartId,
     label: `${input.modelName} · ${component.name}`,
     fishWeightGradeId: input.weightBandId,
     revision: input.snapshot.modelRevision,
-    values: Object.fromEntries(
-      Object.entries(component.values).map(([key, value]) =>
-        [key, typeof value === "number" ? value : null]),
-    ),
+    values: Object.fromEntries(Object.entries(component.values).map(([key, value]) => [key, typeof value === "number" ? value : null])),
   };
+}
+
+function weightBandPolicyContent(
+  policy: Omit<FiveAxisWeightBandPolicy, "contentHash"> | FiveAxisWeightBandPolicy,
+): Omit<FiveAxisWeightBandPolicy, "contentHash"> {
+  const content = { ...policy } as Partial<FiveAxisWeightBandPolicy>;
+  delete content.contentHash;
+  return content as Omit<FiveAxisWeightBandPolicy, "contentHash">;
+}
+
+export function hashFiveAxisWeightBandPolicy(
+  policy: Omit<FiveAxisWeightBandPolicy, "contentHash"> | FiveAxisWeightBandPolicy,
+): string {
+  return hashCanonicalJson(weightBandPolicyContent(policy) as never);
+}
+
+export function createFormalFiveAxisWeightBandPolicy(input?: {
+  policyId?: string; version?: string; sourceRevision?: string;
+  bands?: Array<{ weightBandId: string; label: string; upperBoundKg: string | null }>;
+}): FiveAxisWeightBandPolicy {
+  const content: Omit<FiveAxisWeightBandPolicy, "contentHash"> = {
+    policyId: input?.policyId ?? "weight-band:w6-open005",
+    version: input?.version ?? "weight-band:w6-open005-v1",
+    publicationState: "PUBLISHED",
+    sourceRevision: input?.sourceRevision ?? "feishu-revision-3563",
+    // Issue #13 formal decision: boundaries are lower-inclusive and upper-exclusive.
+    // The resolver below uses `< upper`, so an exact boundary belongs to the next W.
+    bands: input?.bands ?? [
+      { weightBandId: "W1", label: "微物", upperBoundKg: "1.5" }, { weightBandId: "W2", label: "小型", upperBoundKg: "4" },
+      { weightBandId: "W3", label: "中型", upperBoundKg: "10" }, { weightBandId: "W4", label: "大型", upperBoundKg: "20" },
+      { weightBandId: "W5", label: "巨物", upperBoundKg: "80" }, { weightBandId: "W6", label: "超巨物", upperBoundKg: null },
+    ],
+  };
+  return { ...content, contentHash: hashFiveAxisWeightBandPolicy(content) };
+}
+
+/** Only a published, content-hash-bound policy may select an OPEN-005 W band. */
+export function resolveFormalFiveAxisWeightBand(input: {
+  policy: FiveAxisWeightBandPolicy;
+  modelFinalPullKg: number;
+}): string {
+  const policy = input.policy;
+  if (policy.publicationState !== "PUBLISHED"
+    || policy.contentHash !== hashFiveAxisWeightBandPolicy(policy)
+    || !Number.isFinite(input.modelFinalPullKg) || input.modelFinalPullKg < 0) {
+    throw new Error("FIVE_AXIS_WEIGHT_BAND_POLICY_UNAVAILABLE：无法按已发布 W 段策略解析最终拉力。");
+  }
+  let previous = 0;
+  for (const band of policy.bands) {
+    if (!band.weightBandId || !band.label || band.upperBoundKg === "" || band.upperBoundKg === undefined) {
+      throw new Error("FIVE_AXIS_WEIGHT_BAND_POLICY_UNAVAILABLE：W 段策略结构不完整。");
+    }
+    if (band.upperBoundKg === null) return band.weightBandId;
+    const upper = Number(band.upperBoundKg);
+    if (!Number.isFinite(upper) || upper <= previous) {
+      throw new Error("FIVE_AXIS_WEIGHT_BAND_POLICY_UNAVAILABLE：W 段边界非法或不单调。");
+    }
+    if (input.modelFinalPullKg < upper) return band.weightBandId;
+    previous = upper;
+  }
+  throw new Error("FIVE_AXIS_WEIGHT_BAND_POLICY_UNAVAILABLE：W 段策略缺少开放尾段。");
 }
 
 const FORMAL_AXIS_CONTRACT = [
@@ -181,11 +219,16 @@ export function createFormalFiveAxisViewDefinition(input?: {
   revision?: number;
   publicationState?: FiveAxisViewDefinition["publicationState"];
   weightBandPolicyVersion?: string;
+  weightBandPolicy?: FiveAxisWeightBandPolicy;
   displayBandConfigId?: string;
   fiveAxisRuleVersion?: string;
   sourceRevision?: string;
   maximumItems?: number;
 }): FiveAxisViewDefinition {
+  const weightBandPolicy = input?.weightBandPolicy ?? createFormalFiveAxisWeightBandPolicy({
+    version: input?.weightBandPolicyVersion,
+    sourceRevision: input?.sourceRevision,
+  });
   const content: Omit<FiveAxisViewDefinition, "definitionHash"> = {
     definitionId: input?.definitionId ?? "five-axis:open005-v1",
     version: input?.version ?? "1",
@@ -206,8 +249,8 @@ export function createFormalFiveAxisViewDefinition(input?: {
       componentAggregationId: "per_component_no_aggregate",
       missingPolicy: "error",
     })) as FiveAxisViewDefinition["axes"],
-    weightBandPolicyVersion:
-      input?.weightBandPolicyVersion ?? "weight-band:w6-open005-v1",
+    weightBandPolicyVersion: weightBandPolicy.version,
+    weightBandPolicy,
     displayBandConfigId:
       input?.displayBandConfigId ?? "five-axis:display-band-open005-v1",
     seriesBaselinePolicy: {
@@ -253,6 +296,14 @@ export function assertFormalFiveAxisViewDefinition(
   }
   if (definition.publicationState !== "PUBLISHED") {
     throw new Error("FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE：定义尚未发布。");
+  }
+  if (
+    definition.weightBandPolicyVersion !== definition.weightBandPolicy?.version
+    || definition.weightBandPolicy?.publicationState !== "PUBLISHED"
+    || definition.weightBandPolicy?.contentHash
+      !== hashFiveAxisWeightBandPolicy(definition.weightBandPolicy)
+  ) {
+    throw new Error("FIVE_AXIS_WEIGHT_BAND_POLICY_UNAVAILABLE：正式定义缺少可验证的已发布 W 段策略。");
   }
   if (definition.axes.length !== FORMAL_AXIS_CONTRACT.length) {
     throw new Error("FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE：正式定义必须恰好五轴。");
@@ -360,7 +411,17 @@ export function createFiveAxisDispositionCatalogRevision(input: {
   }
   const inheritedFormal = current?.entries.find((entry) =>
     entry.effectiveUse === "FORMAL_CURRENT");
-  const targetFormal = input.formalCurrent ?? (inheritedFormal
+  const inheritedFormalIsUsable = inheritedFormal && (() => {
+    const definition = byIdentity.get(`${inheritedFormal.definitionId}\u0000${inheritedFormal.definitionVersion}`);
+    try {
+      if (!definition || definition.definitionHash !== inheritedFormal.definitionHash) return false;
+      assertFormalFiveAxisViewDefinition(definition);
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+  const targetFormal = input.formalCurrent ?? (inheritedFormalIsUsable && inheritedFormal
     ? {
         definitionId: inheritedFormal.definitionId,
         definitionVersion: inheritedFormal.definitionVersion,
@@ -604,7 +665,10 @@ export function createFormalFiveAxisVertexSet(input: {
   if (!input.candidateSources.length) {
     throw new Error("FIVE_AXIS_VERTEX_UNAVAILABLE：候选池为空。");
   }
-  const sources = input.candidateSources.map((source) => {
+  // Vertices are deliberately rod-only.  Reel and line remain direct display
+  // curves, but never establish a W band's outer ring.
+  const sources = input.candidateSources.filter((source) =>
+    source.candidateSemanticKey.itemPartId === "part:rod").map((source) => {
     const calculated = hashCandidateSemanticInput({
       finalPanelHash: source.finalPanelHash,
       modelFinalPullKg: source.modelFinalPullKg,
@@ -618,9 +682,6 @@ export function createFormalFiveAxisVertexSet(input: {
       throw new Error("FIVE_AXIS_CANDIDATE_INTEGRITY_ERROR：semanticInputHash 不匹配。");
     }
     for (const axis of input.definition.axes) {
-      if (!axis.applicablePartIds.includes(source.candidateSemanticKey.itemPartId)) {
-        continue;
-      }
       const directInputs = source.directInputs.filter((entry) =>
         entry.axisId === axis.axisId);
       if (
@@ -672,7 +733,7 @@ export function createFormalFiveAxisVertexSet(input: {
   });
   const vertices = input.definition.axes.map((axis) => {
     const values = sources.flatMap((source) =>
-      axis.applicablePartIds.includes(source.candidateSemanticKey.itemPartId)
+      source.candidateSemanticKey.itemPartId === "part:rod"
         ? source.directInputs
         .filter((entry) => entry.axisId === axis.axisId)
         .map((entry) => canonicalDecimal(entry.rawValue))
@@ -896,6 +957,20 @@ function formalSeriesHashInput(series: FiveAxisSeries): object {
       overflow: point.overflow === null
         ? null
         : canonicalFiniteNumber(point.overflow, `${point.axisId}.overflow`),
+      trace: (() => {
+        if (!Array.isArray(point.trace) || point.trace.length === 0) {
+          throw new Error("FIVE_AXIS_FORMAL_PREVIEW_INVALID：正式点必须冻结非空计算 Trace。");
+        }
+        return point.trace.map((entry) => ({
+          step: entry.step,
+          message: entry.message,
+          value: entry.value === undefined || entry.value === null
+            ? null
+            : typeof entry.value === "number"
+              ? canonicalFiniteNumber(entry.value, `${point.axisId}.trace.value`)
+              : entry.value,
+        }));
+      })(),
     })),
   };
 }
@@ -992,6 +1067,17 @@ function assertFormalSeriesPoint(input: {
     ) {
       throw new Error("FIVE_AXIS_FORMAL_PREVIEW_INVALID：继承抛投证据与参考竿不一致。");
     }
+    const expectedTrace = [
+      ...referencePoint.trace,
+      {
+        step: "context_inherited",
+        message: "此抛投值继承自比较顺序中的第一根竿，仅用于完整展示。",
+        value: input.referenceRod.entityId,
+      },
+    ];
+    if (JSON.stringify(input.point.trace) !== JSON.stringify(expectedTrace)) {
+      throw new Error("FIVE_AXIS_FORMAL_PREVIEW_INVALID：继承抛投的 Trace 链不可重放。");
+    }
     return;
   }
   const vertex = input.vertexSet.vertices[input.axisIndex];
@@ -1023,6 +1109,18 @@ function assertFormalSeriesPoint(input: {
   ) {
     throw new Error("FIVE_AXIS_FORMAL_PREVIEW_INVALID：正式点的比例或分值证据不可重放。");
   }
+  const parameterKey = axis.sourceParameterKeys[0];
+  const expectedTrace = [
+    { step: "direct_input", message: `读取 ${parameterKey}。`, value: rawValue },
+    {
+      step: axis.direction === "lower_better" ? "vertex_over_raw" : "raw_over_vertex",
+      message: "按已发布定义计算未封顶比例。",
+      value: ratio,
+    },
+  ];
+  if (JSON.stringify(input.point.trace) !== JSON.stringify(expectedTrace)) {
+    throw new Error("FIVE_AXIS_FORMAL_PREVIEW_INVALID：正式 direct 点的 Trace 不可重放。");
+  }
 }
 
 export function assertFormalModelFiveAxisPreview(input: {
@@ -1045,7 +1143,7 @@ export function assertFormalModelFiveAxisPreview(input: {
   assertFormalFiveAxisViewDefinition(input.definition);
   const preview = input.preview;
   const resolvedWeightBandId = resolveFormalFiveAxisWeightBand({
-    policyVersion: input.definition.weightBandPolicyVersion,
+    policy: input.definition.weightBandPolicy,
     modelFinalPullKg: input.expectedModelFinalPullKg,
   });
   if (
@@ -1140,7 +1238,8 @@ export function assertFormalModelFiveAxisPreview(input: {
   const currentSources = preview.candidateSources.filter((source) =>
     source.candidateSemanticKey.modelId === input.expectedModelId);
   if (
-    currentSources.length !== expectedParts.length
+    currentSources.length !== 1
+    || currentSources[0]?.candidateSemanticKey.itemPartId !== "part:rod"
     || currentSources.some((source) => {
       const series = preview.componentSeries!.find((entry) =>
         entry.entityId === source.candidateSemanticKey.componentEntityId
@@ -1375,112 +1474,33 @@ export function createFormalModelFiveAxisPreview(input: {
 export function buildFormalEquipmentComparison(input: {
   definition: FiveAxisViewDefinition;
   vertexSet: FiveAxisVertexSet;
-  entities: Array<{
-    entity: FiveAxisEntityInput;
-    modelFinalPullKg: number;
-    weightBandId: string;
-    comparisonOrder: number;
-  }>;
+  entities: Array<{ entity: FiveAxisEntityInput; modelFinalPullKg: number; weightBandId: string; comparisonOrder: number }>;
 }): FiveAxisComparisonView {
   assertFormalFiveAxisViewDefinition(input.definition);
-  if (
-    input.entities.length < input.definition.comparisonPolicy.minimumItems
-    || input.entities.length > input.definition.comparisonPolicy.maximumItems
-  ) {
-    throw new Error(
-      `FIVE_AXIS_COMPARISON_SIZE_INVALID：比较组必须为 ${input.definition.comparisonPolicy.minimumItems}–${input.definition.comparisonPolicy.maximumItems} 件。`,
-    );
+  if (input.entities.length < input.definition.comparisonPolicy.minimumItems || input.entities.length > input.definition.comparisonPolicy.maximumItems) {
+    throw new Error(`FIVE_AXIS_COMPARISON_SIZE_INVALID：比较组必须为 ${input.definition.comparisonPolicy.minimumItems}–${input.definition.comparisonPolicy.maximumItems} 件。`);
   }
-  const orders = new Set<number>();
-  const entities = [...input.entities].sort((left, right) =>
-    left.comparisonOrder - right.comparisonOrder
-    || left.entity.entityId.localeCompare(right.entity.entityId));
-  for (const entry of entities) {
-    if (!Number.isInteger(entry.comparisonOrder) || entry.comparisonOrder < 0) {
-      throw new Error("FIVE_AXIS_COMPARISON_ORDER_INVALID：comparisonOrder 必须是非负整数。");
-    }
-    if (orders.has(entry.comparisonOrder)) {
-      throw new Error("FIVE_AXIS_COMPARISON_ORDER_INVALID：comparisonOrder 不得重复。");
-    }
-    orders.add(entry.comparisonOrder);
-    if (entry.weightBandId !== input.vertexSet.weightBandId) {
-      throw new Error("FIVE_AXIS_COMPARISON_WEIGHT_BAND_CONFLICT：全部装备必须使用共同 W 段。");
-    }
+  const entities = [...input.entities].sort((a, b) => a.comparisonOrder - b.comparisonOrder || a.entity.entityId.localeCompare(b.entity.entityId));
+  if (entities.some((entry, index) => !Number.isInteger(entry.comparisonOrder) || entry.comparisonOrder < 0 || entry.weightBandId !== input.vertexSet.weightBandId || (index > 0 && entry.comparisonOrder === entities[index - 1].comparisonOrder))) {
+    throw new Error("FIVE_AXIS_COMPARISON_CONTEXT_INVALID：比较对象必须使用共同 W 段及唯一稳定顺序。");
   }
-  const referenceRodInput = entities.find((entry) =>
-    entry.entity.itemPartId === "part:rod");
-  const referenceRodSeries = referenceRodInput
-    ? calculateFormalFiveAxisComponentSeries({
-        definition: input.definition,
-        vertexSet: input.vertexSet,
-        entity: referenceRodInput.entity,
-      })
-    : undefined;
-  const series = entities.map((entry) => {
-    const calculated = entry === referenceRodInput
-      ? referenceRodSeries!
-      : calculateFormalFiveAxisComponentSeries({
-          definition: input.definition,
-          vertexSet: input.vertexSet,
-          entity: entry.entity,
-          referenceRodSeries,
-        });
-    return {
-      ...calculated,
-      modelFinalPullKg: entry.modelFinalPullKg,
-      weightBandId: entry.weightBandId,
-      comparisonOrder: entry.comparisonOrder,
-    };
-  });
+  const rod = entities.find((entry) => entry.entity.itemPartId === "part:rod");
+  const rodSeries = rod ? calculateFormalFiveAxisComponentSeries({ definition: input.definition, vertexSet: input.vertexSet, entity: rod.entity }) : undefined;
+  const series = entities.map((entry) => ({
+    ...(entry === rod ? rodSeries! : calculateFormalFiveAxisComponentSeries({ definition: input.definition, vertexSet: input.vertexSet, entity: entry.entity, referenceRodSeries: rodSeries })),
+    modelFinalPullKg: entry.modelFinalPullKg,
+    weightBandId: entry.weightBandId,
+    comparisonOrder: entry.comparisonOrder,
+  }));
   const axisSummaries = input.definition.axes.map((axis) => {
     const ranked = series.flatMap((entry) => {
-      const point = entry.points.find((candidate) =>
-        candidate.axisId === axis.axisId);
-      return point?.source === "direct" && point.comparisonScore !== null
-        ? [{ entityId: entry.entityId, score: point.comparisonScore }]
-        : [];
+      const point = entry.points.find((candidate) => candidate.axisId === axis.axisId);
+      return point?.source === "direct" && point.comparisonScore !== null ? [{ entityId: entry.entityId, score: point.comparisonScore }] : [];
     });
-    if (ranked.length < 2) {
-      return {
-        axisId: axis.axisId,
-        strongestEntityIds: ranked.map((entry) => entry.entityId),
-        weakestEntityIds: ranked.map((entry) => entry.entityId),
-        spread: null,
-      };
-    }
-    const strongest = Math.max(...ranked.map((entry) => entry.score));
-    const weakest = Math.min(...ranked.map((entry) => entry.score));
-    return {
-      axisId: axis.axisId,
-      strongestEntityIds: ranked.filter((entry) =>
-        entry.score === strongest).map((entry) => entry.entityId),
-      weakestEntityIds: ranked.filter((entry) =>
-        entry.score === weakest).map((entry) => entry.entityId),
-      spread: (strongest - weakest) / 100,
-    };
+    const scores = ranked.map((entry) => entry.score);
+    const strongest = scores.length ? Math.max(...scores) : null;
+    const weakest = scores.length ? Math.min(...scores) : null;
+    return { axisId: axis.axisId, strongestEntityIds: strongest === null ? [] : ranked.filter((entry) => entry.score === strongest).map((entry) => entry.entityId), weakestEntityIds: weakest === null ? [] : ranked.filter((entry) => entry.score === weakest).map((entry) => entry.entityId), spread: scores.length < 2 || strongest === null || weakest === null ? null : (strongest - weakest) / 100 };
   });
-  return {
-    mode: "equipment_compare",
-    referenceFishWeightGradeId: input.vertexSet.weightBandId,
-    weightBandPolicyVersion: input.vertexSet.weightBandPolicyVersion,
-    fiveAxisDefinitionId: input.definition.definitionId,
-    fiveAxisDefinitionVersion: input.definition.version,
-    fiveAxisRuleVersion: input.definition.fiveAxisRuleVersion,
-    vertexSetHash: input.vertexSet.vertexSetHash,
-    scaleMode: "comparison_expanded",
-    referenceRodEntityId: referenceRodSeries?.entityId ?? null,
-    projectionReferenceAnchor: null,
-    projectionReferenceSetHash: null,
-    projectionReferences: ["part:rod", "part:reel", "part:line"].map((itemPartId) => ({
-      itemPartId,
-      state: "not_selected" as const,
-      projectionMatchId: null,
-      projectionMatchRevisionId: null,
-      projectionId: null,
-      projectionRevisionId: null,
-    })),
-    series,
-    axisSummaries,
-    validationIssues: [],
-  };
+  return { mode: "equipment_compare", referenceFishWeightGradeId: input.vertexSet.weightBandId, weightBandPolicyVersion: input.vertexSet.weightBandPolicyVersion, fiveAxisDefinitionId: input.definition.definitionId, fiveAxisDefinitionVersion: input.definition.version, fiveAxisRuleVersion: input.definition.fiveAxisRuleVersion, vertexSetHash: input.vertexSet.vertexSetHash, scaleMode: "comparison_expanded", referenceRodEntityId: rodSeries?.entityId ?? null, projectionReferenceAnchor: null, projectionReferenceSetHash: null, projectionReferences: ["part:rod", "part:reel", "part:line"].map((itemPartId) => ({ itemPartId, state: "not_selected" as const, projectionMatchId: null, projectionMatchRevisionId: null, projectionId: null, projectionRevisionId: null })), series, axisSummaries, validationIssues: [] };
 }

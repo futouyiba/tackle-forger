@@ -9,7 +9,10 @@ import {
 } from "./config-export-filesystem";
 import type { ExportCommitResult } from "./config-export";
 import type { ExportTargetProfile } from "./interaction-contracts";
-import type { ConfigurationSnapshot } from "./types";
+import type {
+  ConfigurationSnapshot,
+  ReductionStackingPolicyVersion,
+} from "./types";
 import type {
   FormalConfigExportAuthorization,
   FormalConfigExportEvidenceVerifier,
@@ -33,6 +36,7 @@ export interface ConfigExportCompanionRegistry {
   allowedOrigins?: string[];
   profiles: ExportTargetProfile[];
   mappings: ConfigExportMapping[];
+  reductionStackingPolicyVersions: ReductionStackingPolicyVersion[];
 }
 
 export interface CompanionPreviewRequest {
@@ -110,6 +114,9 @@ export function validateCompanionRegistry(
 ): ConfigExportCompanionRegistry {
   if (registry.version !== 1) registryIssue("version 必须为 1。");
   if (!Array.isArray(registry.capabilities)) registryIssue("capabilities 必须是数组。");
+  if (!Array.isArray(registry.reductionStackingPolicyVersions)) {
+    registryIssue("reductionStackingPolicyVersions 必须是数组。");
+  }
   const permitted = new Set<CompanionCapability>([
     "config.export.preview",
     "config.export.commit",
@@ -236,6 +243,7 @@ export class ConfigExportCompanionController {
         profile,
         mapping,
         snapshot: request.snapshot,
+        availableReductionPolicies: this.registry.reductionStackingPolicyVersions,
         canCommit: true,
         formalAuthorization: request.formalAuthorization,
         formalAuthorizationVerifier: this.formalAuthorizationVerifier,
@@ -306,6 +314,7 @@ export class ConfigExportCompanionController {
       results.push(await commitFilesystemExport({
         preview,
         snapshot: stored.snapshot,
+        availableReductionPolicies: this.registry.reductionStackingPolicyVersions,
         profile,
         confirmationProfileId: request.confirmations[profileId],
         idempotencyKey: `commit:${stored.packageId}:${profileId}`,

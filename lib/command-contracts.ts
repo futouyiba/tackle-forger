@@ -1,14 +1,24 @@
 import { deterministicHash } from "./rule-kernel";
 import type {
   AffinityScoreResult,
+  CanonicalValidationIssue,
   HardCompatibilityResult,
+  PatchState,
+  ValidationActionLink,
 } from "./types";
 import type {
-  ActionAvailability,
+  ActionCode,
+  ActionCommandPayloadRef,
   CapabilityCode,
   EntityRef,
+  IssuePresentationActionCode,
 } from "./interaction-contracts";
-import { actionAvailability } from "./interaction-contracts";
+import {
+  actionAvailability,
+  buildActionLink,
+  ISSUE_PRESENTATION_ACTION_CODES,
+} from "./interaction-contracts";
+import { createValidationIssue } from "./validation-issues";
 import {
   adaptLegacyUnifiedTraceToCanonical,
   calculationTraceValuesEqual,
@@ -50,6 +60,7 @@ export type {
   CalculationTraceReplayIssue,
   CalculationTraceStateValue,
 } from "./calculation-trace";
+export { transitionPatchState } from "./patch-state";
 
 export interface CandidateGenerationRequest {
   requestId: string;
@@ -267,107 +278,54 @@ export function replayUnifiedTrace(input: {
   return { values, replayHash: replay.replayHash };
 }
 
-export type IssueSource =
-  | "hard_compatibility" | "affinity" | "series_invariant" | "patch"
-  | "publish" | "data_integrity" | "import" | "five_axis" | "ai_guardrail";
-
-export interface IssueAction {
-  actionId: string;
-  action:
-    | "navigate" | "edit_rule" | "edit_patch" | "open_rebase"
-    | "satisfy_requirement" | "acknowledge_warning" | "request_permission"
-    | "retry" | "recompute" | "create_proposal";
-  label: string;
-  availability: ActionAvailability;
-}
-
-export interface UnifiedValidationIssue {
-  issueId: string;
-  fingerprint: string;
-  code: string;
-  source: IssueSource;
-  severity: "error" | "warning" | "info";
-  blocking: boolean;
-  gate: "generate" | "series_approve" | "model_review" | "publish" | "export";
-  subjectRef: EntityRef;
-  affectedRefs: EntityRef[];
-  parameterKeys: string[];
-  title: string;
-  message: string;
-  state: "open" | "acknowledged" | "resolved" | "waived" | "superseded";
-  deny: boolean;
-  actions: IssueAction[];
-}
+/** @deprecated 使用 CanonicalValidationIssue；保留导出名避免旧调用方复制第三套结构。 */
+export type UnifiedValidationIssue = CanonicalValidationIssue;
+export type IssueAction = ValidationActionLink;
 
 export function createUnifiedIssue(input: Omit<
-  UnifiedValidationIssue,
-  "issueId" | "fingerprint" | "blocking" | "actions"
+  Parameters<typeof createValidationIssue>[0],
+  "actions"
 > & {
   actionSpecs: Array<{
     actionId: string;
-    action: IssueAction["action"];
+    action: ActionCode | IssuePresentationActionCode;
     label: string;
-    command: Parameters<typeof actionAvailability>[0];
-    capabilities: CapabilityCode[];
     heldCapabilities: CapabilityCode[];
+    targetRef?: EntityRef;
+    targetRoute?: string;
+    commandPayloadRef?: ActionCommandPayloadRef;
+    domainBlock?: { code: string; text: string };
   }>;
 }): UnifiedValidationIssue {
-  const blocking = input.severity === "error" || input.deny;
-  if (input.deny && input.state === "waived") {
-    throw new Error("硬 deny 不允许 waive。");
-  }
-  const fingerprint = deterministicHash({
-    code: input.code,
-    source: input.source,
-    subjectRef: input.subjectRef,
-    affectedRefs: input.affectedRefs,
-    parameterKeys: input.parameterKeys,
-  });
   const { actionSpecs, ...issue } = input;
-  return {
-    ...structuredClone(issue),
-    blocking,
-    issueId: "issue-" + fingerprint,
-    fingerprint,
-    actions: actionSpecs.map((spec) => ({
-      actionId: spec.actionId,
-      action: spec.action,
-      label: spec.label,
-      availability: actionAvailability(
-        spec.command,
-        spec.heldCapabilities,
-        spec.capabilities.some((capability) => !spec.heldCapabilities.includes(capability))
-          ? { code: "ISSUE_ACTION_FORBIDDEN", text: "无权执行此修复动作。" }
-          : undefined,
-      ),
-    })),
-  };
+  return createValidationIssue({
+    ...issue,
+    actions: actionSpecs.map((spec) => {
+      const presentation = (ISSUE_PRESENTATION_ACTION_CODES as readonly string[])
+        .includes(spec.action);
+      const availability = presentation
+        ? undefined
+        : actionAvailability(
+            spec.action as ActionCode,
+            spec.heldCapabilities,
+            spec.domainBlock,
+          );
+      return buildActionLink({
+        actionId: spec.actionId,
+        action: spec.action,
+        label: spec.label,
+        targetRef: spec.targetRef ?? input.subjectRef as EntityRef,
+        targetRoute: spec.targetRoute,
+        ...(availability ? { availability } : {}),
+        ...(availability?.enabled && spec.commandPayloadRef
+          ? { commandPayloadRef: spec.commandPayloadRef }
+          : {}),
+      });
+    }),
+  });
 }
 
-export type PatchWorkflowState =
-  | "draft" | "pending_review" | "approved" | "base_changed"
-  | "rebase_required" | "rebasing" | "withdrawn" | "superseded";
-
-const PATCH_TRANSITIONS: Record<PatchWorkflowState, PatchWorkflowState[]> = {
-  draft: ["pending_review", "withdrawn", "superseded"],
-  pending_review: ["approved", "withdrawn", "base_changed", "superseded"],
-  approved: ["base_changed", "superseded"],
-  base_changed: ["rebase_required", "superseded"],
-  rebase_required: ["rebasing", "superseded"],
-  rebasing: ["pending_review", "superseded"],
-  withdrawn: [],
-  superseded: [],
-};
-
-export function transitionPatchState(
-  current: PatchWorkflowState,
-  next: PatchWorkflowState,
-): PatchWorkflowState {
-  if (!PATCH_TRANSITIONS[current].includes(next)) {
-    throw new Error(`非法 Patch 状态迁移：${current} → ${next}。`);
-  }
-  return next;
-}
+export type PatchWorkflowState = PatchState;
 
 export type UpgradeWorkflowState =
   | "generated" | "analyzing" | "blocked" | "rebase_required"

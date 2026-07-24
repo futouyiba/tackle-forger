@@ -5,7 +5,7 @@ import { NextRequest } from "next/server";
 import { POST as configExportApi } from "../app/api/config-export/route";
 import {
   CONFIG_PREVIEW_NOTICE,
-  createConfigPreviewPackage,
+  createConfigPreviewPackage as createConfigPreviewPackageWithPolicies,
 } from "../lib/config-preview-package";
 import {
   assertFormalConfigExportAllowed,
@@ -17,12 +17,34 @@ import {
   type FormalConfigExportContext,
   type FormalConfigExportEvidenceVerifier,
 } from "../lib/config-export-stage";
-import { commitExportPackage, type ExportCommitAdapter } from "../lib/config-export";
+import {
+  commitExportPackage as commitExportPackageWithPolicies,
+  type ExportCommitAdapter,
+} from "../lib/config-export";
 import { PHASE_ONE_CAPABILITIES } from "../lib/feishu-identity";
 import { actionAvailability } from "../lib/interaction-contracts";
 import { deterministicHash } from "../lib/rule-kernel";
 import { createSeedState } from "../lib/seed";
 import type { ConfigurationSnapshot } from "../lib/types";
+import { testReductionPolicy } from "./helpers/reduction-policy";
+
+const AVAILABLE_REDUCTION_POLICIES = [testReductionPolicy()];
+function createConfigPreviewPackage(
+  input: Omit<Parameters<typeof createConfigPreviewPackageWithPolicies>[0], "availableReductionPolicies">,
+) {
+  return createConfigPreviewPackageWithPolicies({
+    ...input,
+    availableReductionPolicies: AVAILABLE_REDUCTION_POLICIES,
+  });
+}
+function commitExportPackage(
+  input: Omit<Parameters<typeof commitExportPackageWithPolicies>[0], "availableReductionPolicies">,
+) {
+  return commitExportPackageWithPolicies({
+    ...input,
+    availableReductionPolicies: AVAILABLE_REDUCTION_POLICIES,
+  });
+}
 
 const FORMAL_AUTHORIZATION: FormalConfigExportAuthorization = {
   packageKind: "EXPORT_PACKAGE",
@@ -69,6 +91,7 @@ const FORMAL_CONTEXT: FormalConfigExportContext = {
 
 function replayableSnapshot(): ConfigurationSnapshot {
   const snapshot = structuredClone(createSeedState().configurationSnapshots[0]!);
+  snapshot.reductionStackingPolicyVersion = AVAILABLE_REDUCTION_POLICIES[0].version;
   snapshot.qualityValueAssessment = {
     formal: true,
   } as NonNullable<ConfigurationSnapshot["qualityValueAssessment"]>;

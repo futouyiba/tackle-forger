@@ -31,8 +31,12 @@ export const PHASE_ONE_CAPABILITIES = [
   "patch.mirror.pull",
   "rules.proposal.create",
   "snapshot.read",
+  "ai.evaluate",
+  "ai.patch_draft.create",
+  "ai.rule_source_change_draft.create",
   "feishu.workbook.read",
   "feishu.workbook.pull",
+  "feishu.rule_change.confirm_write",
   "feishu.identity.write",
   "ruleset.draft.create",
   "ruleset.publish",
@@ -48,3 +52,9 @@ export const PHASE_ONE_CAPABILITIES = [
   "workspace.policy.manage",
   "workspace.save",
 ] as const satisfies readonly CapabilityCode[];
+
+export function feishuCapabilities(openId: string, providerAdminOpenIds: readonly string[] = []): CapabilityCode[] {
+  const capabilities: CapabilityCode[] = [...PHASE_ONE_CAPABILITIES];
+  if (providerAdminOpenIds.includes(openId)) capabilities.push("ai.provider_policy.manage");
+  return capabilities;
+}

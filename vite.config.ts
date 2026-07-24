@@ -57,6 +57,9 @@ export default defineConfig(async () => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
+    // Cloudflare exposes console.createTask but documents it as throwing in
+    // production. Compile React's feature check to its existing fallback.
+    define: { "console.createTask": "undefined" },
     server: isCodexSeatbeltSandbox
       ? { watch: { useFsEvents: false, usePolling: true } }
       : undefined,

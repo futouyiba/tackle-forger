@@ -20,6 +20,7 @@ import {
   savePendingLogin,
 } from "../lib/auth-store";
 import {
+  feishuRuntimeConfig,
   safeReturnTo,
   type FeishuRuntimeConfig,
 } from "../lib/auth-config";
@@ -86,6 +87,62 @@ test("登录回跳只允许本站相对路径", () => {
   assert.equal(safeReturnTo("//evil.example"), "/");
   assert.equal(safeReturnTo("https://evil.example"), "/");
   assert.equal(safeReturnTo("/\\evil.example"), "/");
+});
+
+test("HTTP 降级只接受显式启用的 RFC 1918 数值 IPv4，或开发环境的 127.0.0.1", async () => {
+  const baseEnvironment = {
+    FEISHU_ALLOW_INSECURE_HTTP: "true",
+    FEISHU_APP_ID: oauthConfig.appId,
+    FEISHU_APP_SECRET: oauthConfig.appSecret,
+    FEISHU_TENANT_KEY: oauthConfig.tenantKey,
+    FEISHU_SESSION_SECRET: oauthConfig.sessionSecret,
+  };
+  await withEnvironment({
+    ...baseEnvironment,
+    FEISHU_REDIRECT_URI: "http://10.20.30.40/api/auth/feishu/callback",
+  }, async () => {
+    assert.equal(
+      feishuRuntimeConfig().redirectUri,
+      "http://10.20.30.40/api/auth/feishu/callback",
+    );
+  });
+  await withEnvironment({
+    ...baseEnvironment,
+    NODE_ENV: "development",
+    FEISHU_REDIRECT_URI: "http://127.0.0.1:43198/api/auth/feishu/callback",
+  }, async () => {
+    assert.equal(
+      feishuRuntimeConfig().redirectUri,
+      "http://127.0.0.1:43198/api/auth/feishu/callback",
+    );
+  });
+  for (const nodeEnv of [undefined, "production"]) {
+    await withEnvironment({
+      ...baseEnvironment,
+      NODE_ENV: nodeEnv,
+      FEISHU_REDIRECT_URI: "http://127.0.0.1/api/auth/feishu/callback",
+    }, async () => {
+      assert.throws(() => feishuRuntimeConfig(), /HTTPS|RFC 1918|127\.0\.0\.1/u);
+    });
+  }
+  for (const hostname of ["localhost", "127.0.0.2", "fdattacker.example", "fc00::1"]) {
+    const literal = hostname.includes(":") ? `[${hostname}]` : hostname;
+    await withEnvironment({
+      ...baseEnvironment,
+      NODE_ENV: "development",
+      FEISHU_REDIRECT_URI: `http://${literal}/api/auth/feishu/callback`,
+    }, async () => {
+      assert.throws(() => feishuRuntimeConfig(), /HTTPS|RFC 1918|127\.0\.0\.1/u);
+    });
+  }
+  await withEnvironment({
+    ...baseEnvironment,
+    NODE_ENV: "development",
+    FEISHU_ALLOW_INSECURE_HTTP: "false",
+    FEISHU_REDIRECT_URI: "http://127.0.0.1/api/auth/feishu/callback",
+  }, async () => {
+    assert.throws(() => feishuRuntimeConfig(), /HTTPS|RFC 1918|127\.0\.0\.1/u);
+  });
 });
 
 test("OAuth state 支持正常消费、过期和防重放", async () => {
@@ -214,6 +271,39 @@ test("伪造飞书身份头默认无效，可信代理必须同时匹配共享�
     const user = await requestUser(new NextRequest("http://localhost", { headers }));
     assert.equal(user.authenticated, true);
     assert.equal(user.openId, "user");
+    assert.equal(user.actionAvailability.run_ai_assessment.enabled, false);
+    assert.equal(user.actionAvailability.run_ai_assessment.disabledReasonCode, "AI_CONNECTOR_DISABLED");
+    for (const action of [
+      "create_ai_patch_draft",
+      "create_ai_rule_source_change_draft",
+    ] as const) {
+      assert.equal(user.actionAvailability[action].enabled, false);
+      assert.equal(user.actionAvailability[action].disabledReasonCode, "AI_RETENTION_CONFIG_INVALID");
+    }
+  });
+});
+
+test("Fancy Hub 暂停时仍可从可用留存创建草稿，只有新评估被阻断", async () => {
+  const headers = {
+    "x-feishu-tenant-key": "tenant",
+    "x-feishu-open-id": "user",
+    "x-feishu-display-name": "planner",
+    "x-tf-proxy-secret": "proxy-secret",
+  };
+  await withEnvironment({
+    FEISHU_TRUST_PROXY_HEADERS: "true",
+    FEISHU_PROXY_SHARED_SECRET: "proxy-secret",
+    FEISHU_TENANT_KEY: "tenant",
+    FANCY_HUB_ENABLED: undefined,
+    AI_RETENTION_DATA_DIR: "/tmp/tackle-forger-auth-retention",
+    AI_RETENTION_ENCRYPTION_KEY_BASE64: Buffer.alloc(32, 19).toString("base64"),
+    AI_RETENTION_ENCRYPTION_KEY_VERSION: "auth-test-v1",
+  }, async () => {
+    const user = await requestUser(new NextRequest("http://localhost", { headers }));
+    assert.equal(user.actionAvailability.run_ai_assessment.enabled, false);
+    assert.equal(user.actionAvailability.run_ai_assessment.disabledReasonCode, "AI_CONNECTOR_DISABLED");
+    assert.equal(user.actionAvailability.create_ai_patch_draft.enabled, true);
+    assert.equal(user.actionAvailability.create_ai_rule_source_change_draft.enabled, true);
   });
 });
 

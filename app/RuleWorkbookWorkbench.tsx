@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { ActionAvailabilityMap } from "@/lib/interaction-contracts";
+import { issueClientActionCommand } from "@/lib/client-action-command";
 import type { CanonicalRuleWorkbookInspection } from "@/lib/rule-workbook-inspection";
 import type { WorkspaceState } from "@/lib/types";
 import {
@@ -40,18 +41,27 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
   const [inspection, setInspection] = useState<CanonicalRuleWorkbookInspection | null>(null);
   const [action, setAction] = useState<ActionState>("");
   const [error, setError] = useState("");
+  const [errorCode, setErrorCode] = useState<number | undefined>(undefined);
+  const [errorEndpoint, setErrorEndpoint] = useState<string | undefined>(undefined);
   const [warningReason, setWarningReason] = useState("");
 
   const inspect = async () => {
     setAction("inspect");
     setError("");
+    setErrorCode(undefined);
+    setErrorEndpoint(undefined);
     try {
       const response = await fetch("/api/feishu-workbook", { cache: "no-store" });
       const payload = (await response.json()) as {
         inspection?: CanonicalRuleWorkbookInspection;
         error?: string;
+        errorInfo?: { code?: number; endpoint?: string };
       };
-      if (!response.ok || !payload.inspection) throw new Error(payload.error || "读取规则工作簿失败");
+      if (!response.ok || !payload.inspection) {
+        setErrorCode(payload.errorInfo?.code);
+        setErrorEndpoint(payload.errorInfo?.endpoint);
+        throw new Error(payload.error || "读取规则工作簿失败");
+      }
       setInspection(payload.inspection);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "读取规则工作簿失败");
@@ -67,8 +77,13 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
         const payload = (await response.json()) as {
           inspection?: CanonicalRuleWorkbookInspection;
           error?: string;
+          errorInfo?: { code?: number; endpoint?: string };
         };
-        if (!response.ok || !payload.inspection) throw new Error(payload.error || "读取规则工作簿失败");
+        if (!response.ok || !payload.inspection) {
+          setErrorCode(payload.errorInfo?.code);
+          setErrorEndpoint(payload.errorInfo?.endpoint);
+          throw new Error(payload.error || "读取规则工作簿失败");
+        }
         setInspection(payload.inspection);
       })
       .catch((caught: unknown) => {
@@ -100,6 +115,7 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
     : false;
   const registryErrors = inspection?.sourceRevision.issues.filter((issue) => issue.severity === "error") ?? [];
   const registryWarnings = inspection?.sourceRevision.issues.filter((issue) => issue.severity === "warning") ?? [];
+  const canonicalRuleErrors = inspection?.canonicalRuleDraft.issues.filter((issue) => issue.level === "error") ?? [];
   const qualityMappingIssue = inspection?.pricingDraft.issues.some((issue) =>
     issue.code.startsWith("QUALITY_PRICING_MAPPING_"));
   const missingPricing = inspection?.pricingDraft.issues.filter((issue) =>
@@ -114,14 +130,22 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
     if (!inspection) return;
     setAction("pull");
     try {
+      const businessPayload = {
+        action: "pull",
+        baseRevision: props.revision,
+        expectedSourceRevision: inspection.sourceRevision.sourceRevision,
+      };
+      const invocation = await issueClientActionCommand({
+        action: "pull_feishu_workbook",
+        idempotencyKey:
+          `pull-feishu-workbook:${props.revision}:` +
+          inspection.sourceRevision.sourceRevision,
+        payload: businessPayload,
+      });
       const response = await fetch("/api/feishu-workbook", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          action: "pull",
-          baseRevision: props.revision,
-          expectedSourceRevision: inspection.sourceRevision.sourceRevision,
-        }),
+        body: JSON.stringify(invocation),
       });
       const payload = (await response.json()) as {
         state?: WorkspaceState;
@@ -134,7 +158,12 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
         throw new Error(payload.error || "显式拉取失败");
       }
       if (payload.inspection) setInspection(payload.inspection);
-      props.onWorkspaceApplied(payload.state, payload.revision, `已登记飞书 revision ${payload.inspection?.sourceRevision.sourceRevision ?? ""}`);
+      const rules = payload.inspection?.canonicalRuleDraft;
+      props.onWorkspaceApplied(
+        payload.state,
+        payload.revision,
+        `已拉取飞书 revision ${payload.inspection?.sourceRevision.sourceRevision ?? ""}：已生成 ${rules?.templates.length ?? 0} 个重量模板草稿、${rules?.itemTypeProfiles.length ?? 0} 个类型、${rules?.functionProfiles.length ?? 0} 个功能；重量模板将在正式发布时激活。`,
+      );
     } catch (caught) {
       props.notify(caught instanceof Error ? caught.message : "显式拉取失败");
     } finally {
@@ -146,14 +175,21 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
     if (!savedSource) return;
     setAction("draft");
     try {
+      const businessPayload = {
+        action: "create_ruleset_draft",
+        baseRevision: props.revision,
+        sourceRevisionId: savedSource.id,
+      };
+      const invocation = await issueClientActionCommand({
+        action: "create_ruleset_draft",
+        idempotencyKey:
+          `create-ruleset-draft:${props.revision}:${savedSource.id}`,
+        payload: businessPayload,
+      });
       const response = await fetch("/api/feishu-workbook", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          action: "create_ruleset_draft",
-          baseRevision: props.revision,
-          sourceRevisionId: savedSource.id,
-        }),
+        body: JSON.stringify(invocation),
       });
       const payload = (await response.json()) as { state?: WorkspaceState; revision?: number; error?: string };
       if (!response.ok || !payload.state || !payload.revision) throw new Error(payload.error || "创建规则草稿失败");
@@ -173,18 +209,26 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
     }
     setAction("publish");
     try {
+      const businessPayload = {
+        action: "publish_ruleset",
+        baseRevision: props.revision,
+        ruleSetDraftId: ruleSetDraft.id,
+        warningAcknowledgements: sourceWarnings.map((issue) => ({
+          issueKey: `${issue.code}:${issue.sheetId}`,
+          reason: warningReason.trim(),
+        })),
+      };
+      const invocation = await issueClientActionCommand({
+        action: "publish_ruleset",
+        idempotencyKey:
+          `publish-ruleset:${props.revision}:${ruleSetDraft.id}:` +
+          crypto.randomUUID(),
+        payload: businessPayload,
+      });
       const response = await fetch("/api/feishu-workbook", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          action: "publish_ruleset",
-          baseRevision: props.revision,
-          ruleSetDraftId: ruleSetDraft.id,
-          warningAcknowledgements: sourceWarnings.map((issue) => ({
-            issueKey: `${issue.code}:${issue.sheetId}`,
-            reason: warningReason.trim(),
-          })),
-        }),
+        body: JSON.stringify(invocation),
       });
       const payload = (await response.json()) as { state?: WorkspaceState; revision?: number; error?: string };
       if (!response.ok || !payload.state || !payload.revision) throw new Error(payload.error || "发布 RuleSetVersion 失败");
@@ -219,7 +263,17 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
       {error ? (
         <div className="card rule-workbook-error">
           <AlertTriangle size={20} />
-          <div><strong>暂时无法读取飞书工作簿</strong><span>{error}</span></div>
+          <div>
+            <strong>暂时无法读取飞书工作簿</strong>
+            <span>{error}</span>
+            {errorCode !== undefined || errorEndpoint ? (
+              <small className="rule-workbook-error-info">
+                {errorCode !== undefined ? `飞书 code ${errorCode}` : ""}
+                {errorCode !== undefined && errorEndpoint ? " · " : ""}
+                {errorEndpoint ?? ""}
+              </small>
+            ) : null}
+          </div>
         </div>
       ) : null}
 
@@ -227,18 +281,18 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
         <div className="card">
           <span className="rule-step">01 · 检查</span>
           <strong>回读工作簿</strong>
-          <small>只读取结构、revision、机器 ID 与定价契约，不修改任何规则。</small>
+          <small>读取 revision、机器 ID、01/02/03 完整规则矩阵与定价契约，不修改飞书。</small>
           <em className={inspection ? "is-ok" : ""}>{inspection ? "本次观测完成" : "等待连接"}</em>
         </div>
         <ArrowRight size={18} />
         <div className="card">
           <span className="rule-step">02 · 显式动作</span>
-          <strong>登记源修订</strong>
-          <small>生成 FeishuSourceRevision、ID 报告与 PricingPolicyDraft；不发布规则。</small>
+          <strong>拉取并切换工作台数据</strong>
+          <small>生成 FeishuSourceRevision、规则草稿与重量模板草稿；不激活重量模板或发布规则。</small>
           <button
             className="button button-primary button-sm"
             type="button"
-            disabled={Boolean(action) || props.dirty || !inspection || Boolean(registryErrors.length) || !pullAvailability.enabled}
+            disabled={Boolean(action) || props.dirty || !inspection || Boolean(registryErrors.length) || Boolean(canonicalRuleErrors.length) || !pullAvailability.enabled}
             title={pullAvailability.disabledReasonText}
             onClick={() => void pull()}
           >
@@ -250,7 +304,7 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
         <div className="card">
           <span className="rule-step">03 · 独立动作</span>
           <strong>创建 RuleSet 草稿</strong>
-          <small>草稿仍不生效。正式发布必须在规则审查流程中单独完成。</small>
+          <small>冻结本次拉取的内容哈希与重量模板草稿供审查；正式生产仍未发布。</small>
           <button
             className="button button-default button-sm"
             type="button"
@@ -358,7 +412,10 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
             dirty={props.dirty}
             notify={props.notify}
           />
-          <QualityValuePolicyPanel draft={inspection.qualityDraft} />
+          <QualityValuePolicyPanel
+            draft={inspection.qualityDraft}
+            affixSheetRowCount={inspection.sourceRevision.sheets.find((sheet) => sheet.sheetId === "zrVOxd")?.rowCount}
+          />
           <PricingPolicyDraftPanel draft={inspection.pricingDraft} />
         </>
       ) : null}
@@ -369,8 +426,8 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
           <strong>边界已锁定</strong>
           <span>09_甘特图只作开发排期；11、12、14–17 不反向覆盖领域真相；正式配置仍由冻结 Snapshot 输出到本地 Git 配置仓库。</span>
         </div>
-        <span className={!inspection || registryErrors.length || registryWarnings.length ? "rule-badge warning" : "rule-badge success"}>
-          {!inspection ? "等待 sheet_id 校验" : registryErrors.length ? `${registryErrors.length} 个注册表错误` : registryWarnings.length ? `${registryWarnings.length} 个名称告警` : "18 张表已按 ID 校验"}
+        <span className={!inspection || registryErrors.length || canonicalRuleErrors.length || registryWarnings.length ? "rule-badge warning" : "rule-badge success"}>
+          {!inspection ? "等待 sheet_id 校验" : registryErrors.length ? `${registryErrors.length} 个注册表错误` : canonicalRuleErrors.length ? `${canonicalRuleErrors.length} 个规则数据错误` : registryWarnings.length ? `${registryWarnings.length} 个名称告警` : "18 张表已按 ID 校验"}
         </span>
       </div>
     </section>

@@ -29,6 +29,46 @@
   box-sizing: border-box;
 }
 
+/*
+ * Shared accessibility baseline. Feature-level playback controls own their
+ * product preference and state, while this layer always honours the platform
+ * reduced-motion preference for every existing and future workbench surface.
+ */
+:focus-visible {
+  box-shadow: 0 0 0 6px #0b5fff;
+  outline: 3px solid #ffffff;
+  outline-offset: 2px;
+}
+
+.skip-link {
+  background: #ffffff;
+  border: 2px solid #125fc4;
+  color: #12345a;
+  font-weight: 700;
+  left: 12px;
+  padding: 9px 12px;
+  position: fixed;
+  top: 12px;
+  transform: translateY(-160%);
+  transition: transform 120ms ease;
+  z-index: 100;
+}
+
+.skip-link:focus-visible {
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 html,
 body {
   min-height: 100%;
@@ -1892,6 +1932,25 @@ kbd {
   z-index: 100;
 }
 
+.save-feedback {
+  align-items: flex-start;
+  border-bottom: 1px solid #e2b954;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  padding: 12px 24px;
+}
+
+.save-feedback.governed { background: #fff8e7; color: #624a15; }
+.save-feedback.conflict { background: #fff0ed; border-color: #e6a394; color: #7a2f22; }
+.save-feedback.error { background: #fff4f4; border-color: #e4aaaa; color: #7a2f22; }
+.save-feedback strong { display: block; font-size: 13px; }
+.save-feedback p { margin: 3px 0; }
+.save-feedback small { color: inherit; opacity: .85; }
+.save-feedback-actions { align-items: center; display: flex; flex-wrap: wrap; gap: 7px; justify-content: flex-end; }
+.save-feedback-actions button { background: rgba(255,255,255,.66); border: 1px solid currentColor; border-radius: 6px; color: inherit; cursor: pointer; font: inherit; font-size: 12px; padding: 6px 8px; }
+.save-feedback-actions button:last-child { align-items: center; display: inline-flex; padding: 5px; }
+
 @media (max-width: 1180px) {
   .metric-grid,
   .quality-summary-grid {
@@ -1921,8 +1980,14 @@ kbd {
   }
 }
 
+@media (max-width: 720px) {
+  .save-feedback { align-items: stretch; flex-direction: column; padding: 12px 16px; }
+  .save-feedback-actions { justify-content: flex-start; }
+}
+
 @media (max-width: 820px) {
   .sidebar {
+    max-height: 44vh;
     position: static;
     width: 100%;
   }
@@ -4384,6 +4449,94 @@ kbd {
   color: var(--muted);
   font-size: 10px;
   line-height: 1.5;
+}
+
+.source-link-history {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.source-link-history-label {
+  align-items: center;
+  color: var(--muted);
+  display: inline-flex;
+  font-size: 11px;
+  gap: 4px;
+}
+
+.source-link-history .select-input {
+  flex: 1;
+  min-width: 180px;
+}
+
+.source-history-card {
+  padding: 16px 20px;
+}
+
+.source-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.source-history-item {
+  align-items: flex-start;
+  display: flex;
+  gap: 10px;
+  padding: 8px 10px;
+  background: #f7f9fb;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.source-history-item > svg {
+  color: var(--muted);
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.source-history-item-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.source-history-item-body code {
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.source-history-item-body small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.source-history-remove {
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  padding: 4px;
+}
+
+.source-history-remove:hover:not(:disabled) {
+  border-color: var(--danger, #d92d20);
+  color: var(--danger, #d92d20);
+}
+
+.source-history-remove:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .source-technical {

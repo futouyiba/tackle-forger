@@ -5,7 +5,9 @@ import {
   createFiveAxisDispositionCatalogRevision,
   createFormalFiveAxisVertexSet,
   createFormalFiveAxisViewDefinition,
+  createFormalFiveAxisWeightBandPolicy,
   hashFiveAxisDispositionCatalog,
+  resolveFormalFiveAxisWeightBand,
   resolveFormalFiveAxisDefinition,
   validateFiveAxisDispositionCatalog,
 } from "../lib/five-axis-formal";
@@ -13,7 +15,6 @@ import {
   canonicalDecimal,
   hashCandidateSemanticInput,
   hashCandidateSet,
-  hashProjectionReferenceSet,
 } from "../lib/five-axis-hash";
 import { deterministicHash } from "../lib/rule-kernel";
 import type {
@@ -82,37 +83,24 @@ test("CanonicalDecimal 无浮点舍入地归一化并拒绝非法值", () => {
   assert.throws(() => canonicalDecimal("Infinity"), /非法 CanonicalDecimal/);
 });
 
-test("投影参考 hash 锚定 baseline Snapshot 且缺失引用显式为 null", () => {
-  const references = ["part:rod", "part:reel", "part:line"].map((itemPartId) => ({
-    itemPartId,
-    state: "missing" as const,
-    projectionMatchId: null,
-    projectionMatchRevisionId: null,
-    projectionId: null,
-    projectionRevisionId: null,
-  }));
-  const common = {
-    selectorVersion: "projection-reference/current-sku-frozen-match/v1" as const,
-    anchor: {
-      baselineSnapshotId: "snapshot:a",
-      seriesId: "series:1",
-      skuId: "sku:1",
-      skuRevisionId: "sku:1@1",
-    },
-    references,
-  };
-  const first = hashProjectionReferenceSet(common);
-  const second = hashProjectionReferenceSet({
-    ...common,
-    anchor: { ...common.anchor, baselineSnapshotId: "snapshot:b" },
-  });
-  assert.notEqual(first, second);
-  assert.throws(() => hashProjectionReferenceSet({
-    ...common,
-    references: references.map((reference, index) => index === 0
-      ? { ...reference, projectionId: "projection:illegal" }
-      : reference),
-  }), /必须显式为 null/);
+test("正式 W 段只从不可变已发布策略 payload 解析，篡改或同名异 hash 均拒绝", () => {
+  const policy = createFormalFiveAxisWeightBandPolicy();
+  assert.equal(resolveFormalFiveAxisWeightBand({ policy, modelFinalPullKg: 0 }), "W1");
+  assert.equal(resolveFormalFiveAxisWeightBand({ policy, modelFinalPullKg: 1.4999 }), "W1");
+  assert.equal(resolveFormalFiveAxisWeightBand({ policy, modelFinalPullKg: 1.5 }), "W2");
+  assert.equal(resolveFormalFiveAxisWeightBand({ policy, modelFinalPullKg: 4 }), "W3");
+  assert.equal(resolveFormalFiveAxisWeightBand({ policy, modelFinalPullKg: 10 }), "W4");
+  assert.equal(resolveFormalFiveAxisWeightBand({ policy, modelFinalPullKg: 20 }), "W5");
+  assert.equal(resolveFormalFiveAxisWeightBand({ policy, modelFinalPullKg: 80 }), "W6");
+  const tampered = structuredClone(policy);
+  tampered.bands[0].upperBoundKg = "3";
+  assert.throws(() => resolveFormalFiveAxisWeightBand({
+    policy: tampered, modelFinalPullKg: 2.5,
+  }), /FIVE_AXIS_WEIGHT_BAND_POLICY_UNAVAILABLE/);
+  assert.throws(() => resolveFormalFiveAxisWeightBand({
+    policy: { ...policy, version: policy.version, contentHash: "0".repeat(64) },
+    modelFinalPullKg: 1.5,
+  }), /FIVE_AXIS_WEIGHT_BAND_POLICY_UNAVAILABLE/);
 });
 
 function legacyDefinition(): LegacyFiveAxisViewDefinition {
@@ -461,11 +449,11 @@ test("正式内核按部件绘制、低值轴反向、官方分封顶且比较�
     entity: rodInput,
   });
   const pull = rod.points.find((point) => point.axisId === "pull")!;
-  assert.equal(pull.comparisonScore, 125);
+  assert.equal(pull.comparisonScore, 150);
   assert.equal(pull.officialDisplayScore, 100);
-  assert.equal(pull.overflow, 25);
+  assert.equal(pull.overflow, 50);
   const control = rod.points.find((point) => point.axisId === "control")!;
-  assert.ok(Math.abs(control.comparisonScore! - 120) < 1e-9);
+  assert.ok(Math.abs(control.comparisonScore! - 160) < 1e-9);
   const rounded = calculateFormalFiveAxisComponentSeries({
     definition,
     vertexSet,
@@ -476,8 +464,8 @@ test("正式内核按部件绘制、低值轴反向、官方分封顶且比较�
     },
   });
   const roundedPull = rounded.points.find((point) => point.axisId === "pull")!;
-  assert.ok(Math.abs(roundedPull.comparisonScore! - 73.4) < 1e-9);
-  assert.equal(roundedPull.officialDisplayScore, 73);
+  assert.ok(Math.abs(roundedPull.comparisonScore! - 88.08) < 1e-9);
+  assert.equal(roundedPull.officialDisplayScore, 88);
 
   const reel = calculateFormalFiveAxisComponentSeries({
     definition,

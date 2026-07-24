@@ -1,9 +1,10 @@
 import { deterministicHash } from "./rule-kernel";
 import { previewPatchRebase } from "./patch-engine";
-import { orderedPatchReferences } from "./patch-ledger";
+import { orderedPatchReferences, verifyPatchSetHash } from "./patch-ledger";
 import { authoritativeObjectIdentity, evaluateAuthoritativePatchFinalRanges, type AuthoritativePatchObject } from "./patch-authority";
 import {
   assertPatchGateCanProceed,
+  assertPatchValidationWaiverDecisionCoverage,
   assertPatchReviewCoverage,
   assertPublishedPatchOffsetPolicy,
   assertRangeEvaluationMatchesPatchRevisions,
@@ -13,6 +14,7 @@ import type { PatchRangeEvaluation } from "./patch-offset-policy";
 import type {
   AffinityScoreResult,
   AffixQualityEvaluation,
+  AffixRuntimeEvidence,
   ConfigurationSnapshot,
   DerivedProjection,
   GovernanceAuditLogEntry,
@@ -28,20 +30,34 @@ import type {
   PatchReviewBatch,
   PatchRevisionRecord,
   PatchValidationWaiver,
+  PatchValidationWaiverDecision,
   ProjectionPatchRuleSource,
   ProjectionTraceStep,
   PurchasableModel,
   RuleChangeProposal,
   RuleSetVersion,
+  ReductionStackingPolicyVersion,
   SeriesDefinition,
   SkuDrawer,
   Technology,
   UpgradeCandidate,
   ValidationIssue,
+  ValidationAcknowledgement,
+  ValidationWaiver,
+  ValidationWaiverDecision,
+  WaiverPolicyVersion,
   PassiveSkillPayload,
   WorkspacePolicyRecord,
   WorkspaceState,
 } from "./types";
+import {
+  assertValidationGateCanProceed,
+  assertValidationWaiverDecisionCoverage,
+  canonicalizeValidationIssues,
+  isCanonicalValidationIssue,
+  validationIssueGate,
+  validationIssueSeverity,
+} from "./validation-issues";
 import { structuralPullParameterKey } from "./projection-matcher";
 import type { ModelAffixValueAssessment } from "./quality-value-policy";
 import type { PricingTrialResult } from "./pricing-policy";
@@ -55,6 +71,40 @@ import {
 import {
   assertSeriesItemPartChainEnabled,
 } from "./enabled-item-parts";
+import {
+  adaptFiveAxisTraceToCanonical,
+  adaptAffixRuntimeEvidenceToCanonical,
+  adaptProjectionAuthorityManifestToCanonical,
+  adaptProjectionAuthorityMirrorToCanonical,
+  projectionAffixAuthorityContributions,
+  assertCalculationTraceMatchesAffixRuntime,
+  adaptPricingTraceToCanonical,
+  adaptRuleTraceToCanonical,
+  assertCalculationTraceMatchesFiveAxis,
+  assertCalculationTraceMatchesFinalPanel,
+  assertCalculationTraceMatchesPricing,
+  assertCalculationTraceUsesRuleSetVersion,
+  createCalculationTraceArchive,
+  verifyCalculationTraceArchive,
+} from "./calculation-trace";
+import {
+  hasCanonicalReductionPolicyIdentity,
+  numberToBinary64Hex,
+} from "./reduction-stacking-policy";
+
+function entityRefIdentity(ref: {
+  workspaceId: string;
+  entityType: string;
+  entityId: string;
+  revisionId: string;
+}): string {
+  return JSON.stringify([
+    ref.workspaceId,
+    ref.entityType,
+    ref.entityId,
+    ref.revisionId,
+  ]);
+}
 import {
   assertFormalModelFiveAxisPreview,
   hashFormalFiveAxisPreviewInput,
@@ -71,21 +121,100 @@ export function modelFinalPullKgForSnapshot(
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function errors(issues: ValidationIssue[]): ValidationIssue[] {
-  return issues.filter((issue) => issue.level === "error");
+function publishErrors(issues: ValidationIssue[]): ValidationIssue[] {
+  return issues.filter((issue) => {
+    const severity = validationIssueSeverity(issue);
+    return (severity === "ERROR" || severity === "BLOCKER")
+      && (!isCanonicalValidationIssue(issue)
+        || (
+          issue.state === "OPEN"
+          && (issue.gate === "REVIEW" || issue.gate === "PUBLISH")
+        ));
+  });
 }
 
 function warnings(issues: ValidationIssue[]): ValidationIssue[] {
-  return issues.filter((issue) => issue.level === "warning");
+  return issues.filter((issue) => validationIssueSeverity(issue) === "WARNING");
+}
+
+function hasValidReductionPolicyBinding(input: PublishModelInput): boolean {
+  const policy = input.reductionStackingPolicy;
+  return Boolean(
+    policy
+    && policy.status === "published"
+    && hasCanonicalReductionPolicyIdentity(policy)
+    && policy.source
+    && policy.source.workbookRefId === "feishu-workbook:tackle-design"
+    && policy.source.sheetId === "zrVOxd"
+    && policy.source.sourceRevision !== "17173"
+    && input.projection.reductionStackingPolicyVersion === policy.version
+    && input.projection.formalStatus === "FORMAL",
+  );
+}
+
+function affixEvidenceStagesAreClosed(evidence: AffixRuntimeEvidence): boolean {
+  const sameValue = (left: unknown, right: unknown): boolean =>
+    deterministicHash(left) === deterministicHash(right);
+  const replay = (
+    start: Record<string, number | string>,
+    stage: "final_review_patch" | "parameter_definition",
+  ): Record<string, number | string> | undefined => {
+    const values = structuredClone(start);
+    const contributions = evidence.trace.filter(
+      (entry) => entry.numericEvidence?.stage === stage,
+    );
+    for (const contribution of contributions) {
+      const numeric = contribution.numericEvidence;
+      if (
+        (typeof contribution.before === "number"
+          && numeric?.beforeBinary64 !== numberToBinary64Hex(contribution.before))
+        || (typeof contribution.operand === "number"
+          && numeric?.operandBinary64 !== numberToBinary64Hex(contribution.operand))
+        || (typeof contribution.after === "number"
+          && numeric?.afterBinary64 !== numberToBinary64Hex(contribution.after))
+      ) {
+        return undefined;
+      }
+      const before = values[contribution.parameterKey];
+      if (!sameValue(before, contribution.before)) return undefined;
+      if (
+        typeof contribution.after !== "number"
+        && typeof contribution.after !== "string"
+      ) {
+        return undefined;
+      }
+      values[contribution.parameterKey] = contribution.after;
+    }
+    return values;
+  };
+
+  let previousSequence = -Infinity;
+  let parameterDefinitionStarted = false;
+  for (const contribution of evidence.trace) {
+    if (contribution.sequence <= previousSequence) return false;
+    previousSequence = contribution.sequence;
+    const stage = contribution.numericEvidence?.stage;
+    if (stage === "parameter_definition") parameterDefinitionStarted = true;
+    if (stage === "final_review_patch" && parameterDefinitionStarted) return false;
+  }
+
+  const postReview = replay(evidence.values, "final_review_patch");
+  if (!postReview || !sameValue(postReview, evidence.postReviewValues)) return false;
+  const finalValues = replay(postReview, "parameter_definition");
+  return Boolean(finalValues && sameValue(finalValues, evidence.finalValues));
 }
 
 export interface PublishModelInput {
   publicationMode: "new_formal" | "historical_import";
+  /** 新正式 Snapshot 的稳定工作区身份和 canonical Trace 主体；历史导入不得据此补写。 */
+  workspaceId?: string;
   model: PurchasableModel;
   sku: SkuDrawer;
   seriesSkus: SkuDrawer[];
   series: SeriesDefinition;
   projection: DerivedProjection;
+  reductionStackingPolicy?: ReductionStackingPolicyVersion;
+  affixRuntimeEvidence?: AffixRuntimeEvidence;
   finalPanelValues: Record<string, number | string>;
   componentSelections: ModelComponentSelection[];
   patches: ProjectionPatchRuleSource[];
@@ -96,6 +225,7 @@ export interface PublishModelInput {
     parameterDefinitions: ParameterDefinition[];
     reviewBatch?: PatchReviewBatch;
     waivers?: PatchValidationWaiver[];
+    decisions?: PatchValidationWaiverDecision[];
   };
   attributeAffixIds: string[];
   passiveAffixIds: string[];
@@ -113,6 +243,10 @@ export interface PublishModelInput {
   pricingPolicyVersion?: string;
   automaticPricing?: PricingTrialResult;
   validationReport: ValidationIssue[];
+  validationAcknowledgements?: ValidationAcknowledgement[];
+  validationWaivers?: ValidationWaiver[];
+  validationWaiverDecisions?: ValidationWaiverDecision[];
+  activeValidationWaiverPolicies?: WaiverPolicyVersion[];
   fiveAxisPreview?: ModelFiveAxisPreview;
   fiveAxisAuthorityState?: Pick<
     WorkspaceState,
@@ -146,7 +280,8 @@ function deriveFormalCandidatePoolFromAuthority(input: {
     );
   }
   const currentSources = input.preview.candidateSources?.filter((source) =>
-    source.candidateSemanticKey.modelId === input.publishingModelId) ?? [];
+    source.candidateSemanticKey.modelId === input.publishingModelId
+    && source.candidateSemanticKey.itemPartId === "part:rod") ?? [];
   const sources = [...currentSources];
   for (const model of input.authority.purchasableModels) {
     if (model.id === input.publishingModelId || model.status !== "published") {
@@ -189,9 +324,10 @@ function deriveFormalCandidatePoolFromAuthority(input: {
       continue;
     }
     const snapshotSources = preview.candidateSources?.filter((source) =>
-      source.candidateSemanticKey.modelId === model.id) ?? [];
+      source.candidateSemanticKey.modelId === model.id
+      && source.candidateSemanticKey.itemPartId === "part:rod") ?? [];
     if (
-      snapshotSources.length !== 3
+      snapshotSources.length !== 1
       || snapshotSources.some((source) =>
         source.snapshotId !== snapshot.id
         || source.modelRevisionId !== `${model.id}@${snapshot.modelRevision}`)
@@ -208,12 +344,17 @@ function deriveFormalCandidatePoolFromAuthority(input: {
 export function publishConfigurationSnapshot(
   input: PublishModelInput,
 ): ConfigurationSnapshot {
+  if(input.publicationMode==="new_formal"&&!input.workspaceId?.trim()){
+    throw new Error("新正式 Snapshot 必须提供稳定 workspaceId。");
+  }
   if (input.publicationMode === "new_formal" && input.patches.length && !input.patchRevisions?.length) {
     throw new Error("正式 Snapshot 必须使用可冻结 operation 顺序的 Patch revision，不能只引用旧 Patch 视图。");
   }
-  const frozenPatches = input.patchRevisions
-    ? orderedPatchReferences(input.patchRevisions)
-    : undefined;
+  const frozenPatches = input.publicationMode==="new_formal"
+    ? orderedPatchReferences(input.patchRevisions??[],input.workspaceId!)
+    : input.patchRevisions
+      ? orderedPatchReferences(input.patchRevisions)
+      : undefined;
   const legacyPatchSetHash = deterministicHash(
     [...input.patches].sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
   );
@@ -232,6 +373,7 @@ export function publishConfigurationSnapshot(
       const policy = governance.policy;
       assertPublishedPatchOffsetPolicy(policy);
       const authority: AuthoritativePatchObject = {
+        workspaceId:input.workspaceId,
         subjectRef: { scopeType: "model", entityId: input.model.id, revision: input.model.revision },
         ruleSet: governance.ruleSet,
         parameterDefinitions: governance.parameterDefinitions,
@@ -270,6 +412,10 @@ export function publishConfigurationSnapshot(
         evaluation: patchRangeEvaluation,
         waivers: governance.waivers,
       });
+      assertPatchValidationWaiverDecisionCoverage({
+        waivers: governance.waivers,
+        decisions: governance.decisions,
+      });
     } catch (error) {
       if (error instanceof PatchOffsetPolicyError) {
         throw new Error(`配置快照发布被阻止：[${error.code}] ${error.message}`);
@@ -288,7 +434,74 @@ export function publishConfigurationSnapshot(
     ...input.validationReport,
     ...(input.fiveAxisPreview?.tackleFitComparison.validationIssues ?? []),
   ];
-  const blocking = errors(combinedValidationReport);
+  const publishValidationReport = combinedValidationReport.filter((issue) => {
+    const gate = validationIssueGate(issue);
+    return gate === undefined || gate === "REVIEW" || gate === "PUBLISH";
+  });
+  const canonicalValidationReport = input.publicationMode === "new_formal"
+    ? canonicalizeValidationIssues(
+      combinedValidationReport,
+    {
+      subjectRef: {
+        workspaceId: input.workspaceId!,
+        entityType: "model",
+        entityId: input.model.id,
+        revisionId: String(input.model.revision),
+      },
+      inputHash: deterministicHash({
+        modelId: input.model.id,
+        modelRevision: input.model.revision,
+        projectionId: input.projection.id,
+        validationReport: combinedValidationReport,
+      }),
+      ruleRefs: [input.projection.ruleSetVersion],
+      gate: "PUBLISH",
+      source: "publish",
+      mode: "active_gate",
+      },
+    )
+    : [];
+  if (input.publicationMode === "new_formal") {
+    const validationSubject = {
+      workspaceId: input.workspaceId!,
+      entityType: "model" as const,
+      entityId: input.model.id,
+      revisionId: String(input.model.revision),
+    };
+    if (canonicalValidationReport.some((issue) =>
+      entityRefIdentity(issue.subjectRef) !== entityRefIdentity(validationSubject)
+      || issue.issueId !== `validation-issue:${issue.fingerprint}`
+      || !issue.fingerprint.trim(),
+    )) {
+      throw new Error("新正式 Snapshot 的 ValidationIssue 必须冻结真实 workspace subject 与当前 input fingerprint。");
+    }
+  }
+  const canonicalPublishValidationReport = input.publicationMode === "new_formal"
+    ? canonicalValidationReport.filter(
+      (issue) => issue.gate === "REVIEW" || issue.gate === "PUBLISH",
+    )
+    : canonicalizeValidationIssues(
+      publishValidationReport,
+      {
+        subjectRef: {
+          workspaceId: input.workspaceId!,
+          entityType: "model",
+          entityId: input.model.id,
+          revisionId: String(input.model.revision),
+        },
+        inputHash: deterministicHash({
+          modelId: input.model.id,
+          modelRevision: input.model.revision,
+          projectionId: input.projection.id,
+          validationReport: publishValidationReport,
+        }),
+        ruleRefs: [input.projection.ruleSetVersion],
+        gate: "PUBLISH",
+        source: "publish",
+        mode: "active_gate",
+      },
+    );
+  const blocking = publishErrors(canonicalPublishValidationReport);
   let registeredPerformanceSummaryDefinition = input.performanceSummaryDefinition;
   if (input.publicationMode === "new_formal" && input.performanceSummaryDefinition) {
     registeredPerformanceSummaryDefinition = resolvePerformanceSummaryDefinition({
@@ -318,7 +531,7 @@ export function publishConfigurationSnapshot(
         ],
         finalPanelValues: input.finalPanelValues,
         attributeTrace: finalSettlementTrace ?? [],
-      })
+       })
     : input.performanceSummary;
   if (!input.compatibilityReport.allowed) {
     blocking.push({
@@ -327,9 +540,17 @@ export function publishConfigurationSnapshot(
       message: "硬兼容失败，禁止发布。",
     });
   }
-  if (input.qualityReport.blockingIssues.length) {
+  const qualityBlockingIssues = input.publicationMode === "historical_import"
+    ? input.qualityReport.blockingIssues.filter(
+        (message) =>
+          !message.includes("REDUCTION_POLICY_SOURCE_MISSING")
+          && !message.includes("AFFIX_DIRECTION_CONFLICT")
+          && !message.includes("AFFIX_MAGNITUDE_RANGE_MISSING"),
+      )
+    : input.qualityReport.blockingIssues;
+  if (qualityBlockingIssues.length) {
     blocking.push(
-      ...input.qualityReport.blockingIssues.map((message) => ({
+      ...qualityBlockingIssues.map((message) => ({
         level: "error" as const,
         code: "QUALITY_BLOCKED",
         message,
@@ -435,9 +656,11 @@ export function publishConfigurationSnapshot(
       message: "调用方提供的派生性能摘要与服务端按 Model revision、定义和冻结输入重算的结果不一致。",
     });
   }
-  const unconfirmedWarnings = warnings(combinedValidationReport).filter(
-    (warning) => !input.warningConfirmations[warning.code]?.trim(),
-  );
+  const unconfirmedWarnings = input.publicationMode === "historical_import"
+    ? warnings(publishValidationReport).filter(
+      (warning) => !input.warningConfirmations[warning.code]?.trim(),
+    )
+    : [];
   if (unconfirmedWarnings.length) {
     blocking.push({
       level: "error",
@@ -452,6 +675,23 @@ export function publishConfigurationSnapshot(
       "配置快照发布被阻止：" +
         blocking.map((issue) => issue.message).join("；"),
     );
+  }
+  if (input.publicationMode === "new_formal") {
+    try {
+      assertValidationGateCanProceed({
+        issues: canonicalPublishValidationReport,
+        gate: "PUBLISH",
+        acknowledgements: input.validationAcknowledgements,
+        waivers: input.validationWaivers,
+        decisions: input.validationWaiverDecisions,
+        activeWaiverPolicies: input.activeValidationWaiverPolicies,
+        at: input.publishedAt,
+      });
+    } catch (error) {
+      throw new Error(
+        "配置快照发布被阻止：" + (error instanceof Error ? error.message : String(error)),
+      );
+    }
   }
   if (input.model.skuId !== input.sku.id || input.sku.seriesId !== input.series.id) {
     throw new Error("Model、SKU 与 Series 版本链不完整。");
@@ -535,9 +775,129 @@ export function publishConfigurationSnapshot(
     frozenFiveAxisPreview.inputHash =
       hashFormalFiveAxisPreviewInput(frozenFiveAxisPreview);
   }
+  if (input.publicationMode === "new_formal") {
+    if (!hasValidReductionPolicyBinding(input)) {
+      throw new Error(
+        "配置快照发布被阻止：[REDUCTION_POLICY_SOURCE_MISSING] 新正式 Snapshot 必须冻结来自权威主工作簿的已发布 ReductionStackingPolicyVersion。",
+      );
+    }
+    const evidence = input.projection.affixRuntimeEvidence;
+    const affixRuntimeInvalid = (
+      !evidence
+      || !input.affixRuntimeEvidence
+      || deterministicHash(input.affixRuntimeEvidence)
+        !== deterministicHash(evidence)
+      || evidence.reductionStackingPolicyVersion !== input.reductionStackingPolicy?.version
+      || evidence.formalStatus !== "FORMAL"
+      || evidence.issues.some((entry) =>
+        entry.severity === "ERROR" || entry.severity === "BLOCKER"
+      )
+      || !affixEvidenceStagesAreClosed(evidence)
+      || deterministicHash(evidence.finalValues)
+        !== deterministicHash(input.finalPanelValues)
+    );
+    if (affixRuntimeInvalid) {
+      throw new Error(
+        "配置快照发布被阻止：[AFFIX_RUNTIME_TRACE_INVALID] 新正式 Snapshot 必须冻结与投影及已发布 ReductionStackingPolicyVersion 一致的实际 affix Trace。",
+      );
+    }
+  }
+
+  const calculationTrace = input.publicationMode === "new_formal"
+    ? (() => {
+        const subjectRef = {
+          workspaceId: input.workspaceId!,
+          entityType: "model" as const,
+          entityId: input.model.id,
+          revisionId: String(input.model.revision),
+        };
+        const entries = adaptRuleTraceToCanonical({
+          projection: { ...input.projection, trace: input.finalSettlementTrace! },
+          subjectRef,
+          parameterDefinitions: input.patchOffsetGovernance?.parameterDefinitions,
+        });
+        if (input.projection.affixRuntimeEvidence) {
+          const authorityContributions = projectionAffixAuthorityContributions(input.projection);
+          const authorityManifest = adaptProjectionAuthorityManifestToCanonical({
+            runtimeContributions: authorityContributions.map((entry) => entry.contribution),
+            subjectRef,
+            ruleSetVersion: input.projection.ruleSetVersion,
+            sequence: entries.length + 1,
+          });
+          entries.push(authorityManifest);
+          const authorityEntries = adaptProjectionAuthorityMirrorToCanonical({
+            subjectRef,
+            authorityContributions,
+            ruleSetVersion: input.projection.ruleSetVersion,
+            sequenceStart: entries.length + 1,
+          });
+          entries.push(...authorityEntries);
+          entries.push(...adaptAffixRuntimeEvidenceToCanonical({
+            evidence: input.projection.affixRuntimeEvidence,
+            subjectRef,
+            ruleSetVersion: input.projection.ruleSetVersion,
+            authorityEntries,
+            sequenceStart: entries.length + 1,
+          }));
+        }
+        if (input.automaticPricing) {
+          entries.push(...adaptPricingTraceToCanonical({
+            pricing: input.automaticPricing,
+            subjectRef,
+            ruleSetVersion: input.projection.ruleSetVersion,
+            sequenceStart: entries.length + 1,
+          }));
+        }
+        if (input.fiveAxisPreview) {
+          entries.push(...adaptFiveAxisTraceToCanonical({
+            preview: input.fiveAxisPreview,
+            subjectRef,
+            ruleSetVersion: input.projection.ruleSetVersion,
+            sequenceStart: entries.length + 1,
+          }));
+        }
+        const archive = createCalculationTraceArchive(entries);
+        assertCalculationTraceUsesRuleSetVersion({
+          archive,
+          subjectRef,
+          ruleSetVersion: input.projection.ruleSetVersion,
+        });
+        assertCalculationTraceMatchesFinalPanel({
+          archive,
+          subjectRef,
+          finalPanelValues: input.finalPanelValues,
+        });
+        assertCalculationTraceMatchesAffixRuntime({
+          archive,
+          subjectRef,
+          reductionStackingPolicyVersion: input.reductionStackingPolicy!.version,
+          finalPanelValues: input.finalPanelValues,
+        });
+        assertCalculationTraceMatchesPricing({
+          archive,
+          subjectRef,
+          pricing: input.automaticPricing,
+          ruleSetVersion: input.projection.ruleSetVersion,
+        });
+        assertCalculationTraceMatchesFiveAxis({
+          archive,
+          subjectRef,
+          preview: input.fiveAxisPreview,
+          ruleSetVersion: input.projection.ruleSetVersion,
+        });
+        return archive;
+      })()
+    : undefined;
 
   const governance = input.patchOffsetGovernance;
+  if (input.publicationMode === "new_formal") {
+    assertValidationWaiverDecisionCoverage({
+      waivers: input.validationWaivers,
+      decisions: input.validationWaiverDecisions,
+    });
+  }
   const snapshotWithoutHash: Omit<ConfigurationSnapshot, "contentHash"> = {
+    ...(input.publicationMode==="new_formal"?{workspaceId:input.workspaceId}:{}),
     id: snapshotId,
     version: input.version ?? 1,
     modelId: input.model.id,
@@ -546,8 +906,16 @@ export function publishConfigurationSnapshot(
     seriesRevision: input.series.revision,
     ruleSetVersion: input.projection.ruleSetVersion,
     projectionId: input.projection.id,
-    reductionStackingMode: input.projection.reductionStackingMode,
+    ...(input.projection.reductionStackingMode
+      ? { reductionStackingMode: input.projection.reductionStackingMode }
+      : {}),
+    ...(input.publicationMode === "new_formal" && input.reductionStackingPolicy
+      ? { reductionStackingPolicyVersion: input.reductionStackingPolicy.version }
+      : {}),
     patchSetHash,
+    ...(frozenPatches?.patchSetHashContractVersion
+      ? {patchSetHashContractVersion:frozenPatches.patchSetHashContractVersion}
+      : {}),
     ...(frozenPatches ? { patchReferences: frozenPatches.references } : {}),
     ...(input.publicationMode === "new_formal" && hasPatchDependency && governance ? {
       patchOffsetPolicyVersion: governance.policy?.version,
@@ -556,6 +924,9 @@ export function publishConfigurationSnapshot(
         .flatMap((issue) => issue.fingerprint ? [issue.fingerprint] : [])
         .sort(),
       patchValidationWaiverRefs: (governance.waivers ?? []).map((waiver) => waiver.waiverId).sort(),
+      patchValidationWaiverDecisionRefs: (governance.decisions ?? [])
+        .map((decision) => decision.waiverDecisionId)
+        .sort(),
     } : {}),
     finalPanelValues: structuredClone(input.finalPanelValues),
     ...(modelFinalPullKg !== undefined
@@ -566,6 +937,9 @@ export function publishConfigurationSnapshot(
     attributeAffixIds: structuredClone(input.attributeAffixIds),
     passiveAffixIds: structuredClone(input.passiveAffixIds),
     attributeTrace: structuredClone(finalSettlementTrace ?? input.projection.trace),
+    ...(calculationTrace
+      ? { calculationTrace: structuredClone(calculationTrace) }
+      : {}),
     passiveAffixPayloads: structuredClone(input.passiveAffixPayloads),
     projectionMatch: structuredClone(input.sku.projectionMatch),
     compatibilityReport: structuredClone(input.compatibilityReport),
@@ -587,14 +961,21 @@ export function publishConfigurationSnapshot(
     ...(input.automaticPricing
       ? { automaticPricing: structuredClone(input.automaticPricing) }
       : {}),
-    validationReport: [
-      ...structuredClone(combinedValidationReport),
-      ...Object.entries(input.warningConfirmations).map(([code, reason]) => ({
-        level: "info" as const,
-        code: "WARNING_CONFIRMED_" + code,
-        message: reason,
-      })),
-    ],
+    validationReport: input.publicationMode === "new_formal"
+      ? structuredClone(canonicalValidationReport)
+      : [
+          ...structuredClone(combinedValidationReport),
+          ...Object.entries(input.warningConfirmations).map(([code, reason]) => ({
+            level: "info" as const,
+            code: "WARNING_CONFIRMED_" + code,
+            message: reason,
+          })),
+        ],
+    ...(input.publicationMode === "new_formal" ? {
+      validationAcknowledgements: structuredClone(input.validationAcknowledgements ?? []),
+      validationWaivers: structuredClone(input.validationWaivers ?? []),
+      validationWaiverDecisions: structuredClone(input.validationWaiverDecisions ?? []),
+    } : {}),
     publishedBy: input.publishedBy,
     ...(frozenFiveAxisPreview
       ? { fiveAxisPreview: frozenFiveAxisPreview }
@@ -613,8 +994,65 @@ export function publishConfigurationSnapshot(
 export function verifySnapshotIntegrity(
   snapshot: ConfigurationSnapshot,
 ): boolean {
+  if (
+    snapshot.calculationTrace
+    && !verifyCalculationTraceArchive(snapshot.calculationTrace)
+  ) return false;
+  if (snapshot.calculationTrace) {
+    const matchingSubjects = snapshot.calculationTrace.entries
+      .map((entry) => entry.subjectRef)
+      .filter((subjectRef) =>
+        subjectRef.entityType === "model"
+        && subjectRef.entityId === snapshot.modelId
+        && subjectRef.revisionId === String(snapshot.modelRevision),
+      );
+    const uniqueSubjects = new Map(
+      matchingSubjects.map((subjectRef) => [entityRefIdentity(subjectRef), subjectRef]),
+    );
+    if (uniqueSubjects.size !== 1) return false;
+    try {
+      assertCalculationTraceUsesRuleSetVersion({
+        archive: snapshot.calculationTrace,
+        subjectRef: [...uniqueSubjects.values()][0],
+        ruleSetVersion: snapshot.ruleSetVersion,
+      });
+      assertCalculationTraceMatchesFinalPanel({
+        archive: snapshot.calculationTrace,
+        subjectRef: [...uniqueSubjects.values()][0],
+        finalPanelValues: snapshot.finalPanelValues,
+      });
+      if (snapshot.reductionStackingPolicyVersion) {
+        assertCalculationTraceMatchesAffixRuntime({
+          archive: snapshot.calculationTrace,
+          subjectRef: [...uniqueSubjects.values()][0],
+          reductionStackingPolicyVersion: snapshot.reductionStackingPolicyVersion,
+          finalPanelValues: snapshot.finalPanelValues,
+        });
+      }
+      assertCalculationTraceMatchesPricing({
+        archive: snapshot.calculationTrace,
+        subjectRef: [...uniqueSubjects.values()][0],
+        pricing: snapshot.automaticPricing,
+        ruleSetVersion: snapshot.ruleSetVersion,
+      });
+      assertCalculationTraceMatchesFiveAxis({
+        archive: snapshot.calculationTrace,
+        subjectRef: [...uniqueSubjects.values()][0],
+        preview: snapshot.fiveAxisPreview,
+        ruleSetVersion: snapshot.ruleSetVersion,
+      });
+    } catch {
+      return false;
+    }
+  }
   const { contentHash, ...content } = snapshot;
-  return deterministicHash(content) === contentHash;
+  if(deterministicHash(content)!==contentHash) return false;
+  if(snapshot.patchSetHashContractVersion){
+    if(!snapshot.workspaceId?.trim()) return false;
+    if(!(snapshot.patchReferences??[]).every((reference)=>reference.workspaceId===snapshot.workspaceId)) return false;
+    if(!verifyPatchSetHash(snapshot.patchReferences??[],snapshot.patchSetHash,snapshot.patchSetHashContractVersion)) return false;
+  }
+  return true;
 }
 
 export interface CreateUpgradeCandidateInput {
@@ -674,6 +1112,12 @@ export function createUpgradeCandidate(
     fromSnapshotId: input.currentSnapshot.id,
     proposedProjectionId: input.proposedProjection.id,
     proposedRuleSetVersion: input.proposedProjection.ruleSetVersion,
+    ...(input.proposedProjection.reductionStackingPolicyVersion
+      ? {
+          proposedReductionStackingPolicyVersion:
+            input.proposedProjection.reductionStackingPolicyVersion,
+        }
+      : {}),
     proposedValues: structuredClone(input.proposedValues),
     differences: valueDifferences(
       input.currentSnapshot.finalPanelValues,

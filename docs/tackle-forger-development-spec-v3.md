@@ -2,7 +2,7 @@
 
 > 状态：**唯一权威规范 / Canonical**  
 >首次定稿：2026-07-21  
-> 最后修订：2026-07-23  
+> 最后修订：2026-07-24
 > 适用对象：产品设计、领域建模、前后端开发、数据迁移、测试与代码审查  
 > 源数据参考：《淡水路亚杆轮线装备设计.xlsx》
 
@@ -310,7 +310,36 @@ Model是玩家实际选择和购买的具体型号，保存：
 
 领域内Model是实际选择和购买对象。当前配置表没有Snapshot版本字段，因此不得宣称游戏侧购买记录已经支持`modelId + snapshotId`；Snapshot仅在Tackle Forger内部保证发布和导出的可追溯性。
 
-### 6.5 稳定身份、再生成对应与重量变更
+### 6.5 PartConstraintSet、CandidateSearchRecipe与组件选择
+
+`PartConstraintSet`是版本化、不可变的候选搜索约束对象。它使用非空稳定`constraintSetId`和从1开始、严格单调的安全整数`revision`标识；修改任一字段、来源或复核结论都创建新revision。非法身份或revision必须在迁移、精确引用解析和新revision构造边界fail-closed。`CandidateSearchRecipe`必须冻结并引用精确的`constraintSetId + revision + contentHash`，同时冻结本轮可枚举组件的`componentRegistryId + revision + contentHash`；不得在运行时解析为后来发布的“最新revision”。候选生成请求只提交不可变的Recipe引用，服务端必须从该Recipe revision解析约束集与组件注册表。规范请求不得再接收可由调用方任意组合的独立`partConstraintSetRef`或注册表引用。
+
+`PartConstraintSet`按rod、reel、line分别保存约束。每个部位独立记录来源、来源revision、内容哈希、迁移诊断和`CONFIRMED/NEEDS_REVIEW`状态；一个部位确认不代表另外两个部位自动确认。字段语义固定为：
+
+| 字段 | 权威语义 |
+| --- | --- |
+| `templateIds` | 该部位候选组件的模板搜索约束；按稳定模板ID匹配，不是具体组件选择 |
+| `materialIds` | 该部位候选组件的材质搜索约束；缺少版本化注册表元数据时不得按名称猜测 |
+| `requiredAffixIds` | 候选必须满足的该部位词条条件；未知或无法验证时fail-closed |
+| `optionalAffixPoolIds` | 候选扩展或版本化排序使用的该部位词条池；不等于必需词条或已选词条 |
+| `typeIds` | 默认不是通用分部位字段；只有组件注册表明确提供该部位的版本化type分类时才可生效 |
+| `componentSelections` | 候选结果与Model中的具体组件引用，不属于`PartConstraintSet`或`CandidateSearchRecipe` |
+
+Series的`typeId/TypeProfile`继续表达系列级Method × Type结构语义。不得把Series Type复制为分部位type分类，也不得由本规范擅自定义当前不存在的组件type。组件注册表没有明确分类时，遗留`typeIds`只能保留、展示并进入`NEEDS_REVIEW`，不得参与权威过滤、自动批准或自动发布。
+
+`CandidateSearchRecipe`只拥有搜索范围、阈值、检查点、排序定义和`PartConstraintSet` revision引用。它按部位枚举、过滤和排序组件，但不拥有具体组件选择。每项过滤和排序必须记录部位、约束字段、约束revision、组件注册表revision及命中/排除原因；未知ID、跨部位引用、缺失分类或required冲突不得静默放宽为“允许全部”。
+
+新候选结果保存本轮实际选中的`componentSelections`，但CandidateRun仍是不可变审计产物，不是商品身份。新Candidate、新建或更新的Model revision和新ConfigurationSnapshot只能写入`referenceKind="VERSIONED_COMPONENT_REF"`的版本化分支；每个具体组件选择必须冻结：部位、稳定`componentId`、不可变`componentRevisionId`、组件内容哈希、精确的组件注册表revision及其内容哈希、来源revision，以及当时用于计算和展示的名称/值快照。组件revision必须确实属于冻结的注册表revision，部位、ID、revision和hash任一不一致、缺失或无法解析时fail-closed。
+
+`componentContentHash`覆盖该组件revision的规范注册表记录；`selectionContentHash`覆盖完整组件引用与`nameSnapshot/valuesSnapshot`。Candidate fingerprint、CandidateRun输入/输出hash、Model revision内容hash和ConfigurationSnapshot content hash都必须覆盖完整`componentSelections`，不能只覆盖组件ID。组件注册表发布新revision只能产生新候选、Model revision或UpgradeCandidate，不得让既有Candidate、Model revision或Snapshot改指“最新组件”。
+
+只有显式物化命令重新鉴权、重验Recipe内冻结的约束集/注册表引用、逐项组件引用与硬兼容后，候选才创建或更新Model草稿revision；未物化、过期、丢弃或superseded的候选不得改变Model。搜索约束不得被机械转换为`componentSelections`。
+
+历史`ModelComponentSelection`若只有`itemPartId/componentId/name/values`，读取/迁移适配器必须将其表达为`referenceKind="LEGACY_UNVERSIONED_COMPONENT_REF"`的判别联合分支，并在`rawPayload`中原样保留旧对象及未知字段；不得按名称或当前注册表补写revision/hash。该判别包装是运行时读模型与迁移诊断，不得回写或改变已发布Snapshot的原始payload/content hash。旧分支只允许历史读取、展示、导出原始证据和人工解析；任何Candidate生成、物化、新Model revision、批准或新Snapshot构建遇到旧分支都必须返回`LEGACY_COMPONENT_REF_NOT_MATERIALIZABLE`并fail-closed。人工解析到精确组件revision后创建使用版本化分支的新Model revision，原记录与旧Snapshot保持不变。
+
+完整决策、旧数据复核与Snapshot冻结规则见[`AUD-026 PartConstraintSet语义ADR`](./audits/aud-026-part-constraint-semantics-adr.md)。
+
+### 6.6 稳定身份、再生成对应与重量变更
 
 - `entityId`终身稳定；revision不可变；displayName可修改且不得作为唯一关联键。
 - 再生成对应顺序固定为：显式目标ID→持久GenerationBinding→外部稳定ID→业务身份键→name/特征仅作为人工提示。
@@ -896,9 +925,21 @@ Snapshot的“下载审计归档”与“正式导出”是两种不同动作：
 
 飞书电子表格是唯一通用规则源。当前指定主工作簿为[《钓具设计工作簿》](https://pisn3u3ony2.feishu.cn/wiki/YsEKwSUJ5i86HCkZKBVcNMw7nOh?from=from_copylink&sheet=9nE3Rx)；`?sheet=9nE3Rx`只表示打开时定位到`06_系列`，同步边界是链接解析后的整个工作簿，不是单个工作表。2026-07-21首次接入读取基线为revision `2302`；完成本轮稳定ID、品质和定价契约整改后的回读revision为`2352`。两者都只是可审计的历史观测值，不是永久版本常量；每次显式拉取必须重新取得revision并形成新的`FeishuSourceRevision`。
 
-当前工作簿关键稳定工作表标识为：`01_重量模板/d6e928`、`02_类型材质/fATowU`、`03_功能定位/vviXo0`、`04_词条/zrVOxd`、`05_技术/RdZv0J`、`06_系列/9nE3Rx`、`07_品质评分/FqD4j7`、`08_价格计算/u87sRh`、`10_校验规则/KZv4o2`、`11_组合SKU/eXV1dI`、`13_上传发布/M17p0j`、`14_Rods/hekdpO`、`15_Reels/oUp48w`、`16_Lines/YTYwgS`、`17_Item/VFxDxt`、`Patch台账/edyFx9`。`Patch台账`于2026-07-23创建并在工作簿revision `3259`回读确认；该revision只证明工作表身份，不替代规则源revision。工作表名称是人类文案，接入器以`sheet_id`识别并校验期望名称；改名产生warning，不把同名新表静默当成原表。
+当前工作簿关键稳定工作表标识为：`01_重量模板/d6e928`、`02_钓法类型/rgFPUu`、`02.5_钓法模板/m3eQCg`、`03_类型材质/fATowU`、`04_功能定位/vviXo0`、`04_词条/zrVOxd`、`05_技术/RdZv0J`、`06_系列/9nE3Rx`、`07_品质评分/FqD4j7`、`08_价格计算/u87sRh`、`10_校验规则/KZv4o2`、`11_组合SKU/eXV1dI`、`13_上传发布/M17p0j`、`14_Rods/hekdpO`、`15_Reels/oUp48w`、`16_Lines/YTYwgS`、`17_Item/VFxDxt`、`Patch台账/edyFx9`。这是 revision `4226` 的已观测拓扑；工作表名称是人类文案，接入器以`sheet_id`识别并校验期望名称，改名产生warning，不把同名新表静默当成原表。
 
-规则工作表必须使用不可变`ruleId/entityId`和稳定`parameterKey`，机器区域不得依赖行号、名称或合并单元格。revision `2869`的当前规则源拓扑已将词条和技术调整为`04_词条`、`05_技术`，且不再包含独立“性能定位”工作表。接入器必须按最新显式拉取的workbook revision核对sheet_id与机器ID，保留既有ID；任何缺ID新行进入`NEW_SOURCE_ROW`等待人工确认。历史revision中的性能定位ID不得擅自迁移、删除、复用或继续作为新Series/Model输入；名称只用于历史显示、搜索和迁移候选，不用于长期对象关联。新的`PerformanceSummary`从已结算配置派生，不接管或复用这些历史ID。
+`01_重量模板`是竿、轮、线各自的重量段标杆，不能把其中“钓具大类”误作钓法。`02_钓法类型`的不可变`fishing_*`行提供钓法系数，钓法与类型仍是两个独立规则层。导入器以稳定ID和表头逻辑列定位：先对重量段标杆应用钓法系数，再叠加独立钓法层Patch，形成可审查的钓法模板；不得通过显示名、行号、块顺序或`02.5`反向猜测绑定。`02.5_钓法模板/m3eQCg`只是人工审核后可写回的结果与证据，不是当前规则的权威输入。任何缺失稳定ID、未知列语义、基准revision冲突或回读不一致都必须阻断激活并保留已有发布版本。
+
+五维图的 W 重量段采用 Issue #13 已确认的正式策略：`W1 微物 [0,1.5)`、`W2 小型 [1.5,4)`、`W3 中型 [4,10)`、`W4 大型 [10,20)`、`W5 巨物 [20,80)`、`W6 超巨物 [80,+∞)`。边界值进入后一档。定义必须冻结完整策略 payload、版本和 hash；后续来源读取只能生成新版本，绝不改写既有定义或 Snapshot。
+
+每块 ordinal 必须恰为`1..16`，machineId 必须分别为`wtpl_rod_0001..0016`、`wtpl_reel_0001..0016`、`wtpl_line_0001..0016`且三块全局唯一，sync 固定为`BOUND`。相邻拉力区间必须无缝相接（前一max等于后一min）且`max>min`；六个grade的行数必须严格为`1/2/4/4/3/2`。任何 ordinal、机器ID、sync、部位、区间连续性或grade计数偏离均为来源结构错误并fail-closed。
+
+规范化 W policy 固定为`policyId="weight-band:five-axis-d6e928"`、`version="weight-band:five-axis-d6e928@<sourceRevision>"`、六个稳定`W1..W6`和上述按源推导的上界，使用严格 schema、JCS、UTF-8 SHA-256计算`contentHash`。拉取必须把完整规范化payload和hash冻结进该准确`FeishuSourceRevision`；缺范围、表头/行/机器字段、部位、ordinal、区间、grade连续性、开放尾段、三方一致性或revision/hash任一不一致均fail-closed，不能发布新正式五维定义。正式定义必须同时引用同一`sourceRevision`和该hash，正式发布命令必须从冻结的`FeishuSourceRevision`复核二者；不得由调用方手填hash或以代码示例策略冒充飞书证据。新revision只能形成新定义、目录修订和后续Snapshot；旧定义、目录、VertexSet和ConfigurationSnapshot永久保留，既有历史Snapshot不得因重新拉取而重算或补写。
+
+`04_功能定位/vviXo0`每个功能行必须有不可变`FunctionProfile ID（勿改）`。它是FunctionProfile父级身份；`func_*`仅是强度行身份。相同父ID的显示名必须一致，非泛用组必须恰好各有一次强度1、2、3；泛用组允许仅有强度1，保留源数据而不得补造强度。缺父ID、重复强度或不完整非泛用组必须fail-closed，绝不由名称、`名称|级别`、行号或排序归组。revision 4226 的机器区域含竿/轮/线三块、空隔行与重复表头（`d6e928 A1:AE54`、`rgFPUu A1:AB12`、`m3eQCg A1:AB83`、`fATowU A1:AE20`、`vviXo0 A1:AG63`）；每块都必须独立按表头解析。
+
+对`02.5`的可选写回最终必须使用准备、写入、回读验证、激活四阶段：prepare冻结输入内容哈希、源revision baseline和幂等键；write只写经人工审核的拟写单元格；readback验证稳定ID、值与revision；activation仅在完整回读后标记`REMOTE_CHANGES_AVAILABLE`。部分失败必须保留准备证据并要求重新拉取，不能声称已激活或自动覆盖历史Snapshot。当前版本尚未提供可从应用调用并跨重启恢复的`02.5`专用写回命令；本轮对飞书revision `4226→4227`的人工写入与技术回读仅是迁移证据，不得被界面或实现宣称为该持久化工作流已经上线。
+
+规则工作表必须使用不可变`ruleId/entityId`和稳定`parameterKey`，机器区域不得依赖行号、名称或合并单元格。revision `2869`的当前规则源拓扑已将词条和技术调整为`04_词条`、`05_技术`，且不再包含独立“性能定位”工作表。`04_词条/zrVOxd`的稳定ID扫描与组合矩阵别名绑定必须以同一`FeishuSourceRevision.sheets`中经验证的`grid rowCount`作为读取上界（分别读取`B1:C<rowCount>`与`B2:F<rowCount>`）；不得固定末行。缺失、非安全整数、过小行数或不足六列的grid元数据必须fail-closed，不能截断为旧范围或猜测别名。接入器必须按最新显式拉取的workbook revision核对sheet_id与机器ID，保留既有ID；任何缺ID新行进入`NEW_SOURCE_ROW`等待人工确认。历史revision中的性能定位ID不得擅自迁移、删除、复用或继续作为新Series/Model输入；名称只用于历史显示、搜索和迁移候选，不用于长期对象关联。新的`PerformanceSummary`从已结算配置派生，不接管或复用这些历史ID。
 
 `09_甘特图/wxORcd`按工作簿使用说明是开发计划表，不是产品界面的“钓具系列甘特图”数据源，也不新增领域实体。`11_组合SKU`、`12_打包竿组`和`14_Rods`至`17_Item`当前作为历史样例、映射参考或飞书侧暂存输出，不能反向覆盖Tackle Forger中的Series、SKU、Model与Snapshot真相。飞书工作簿当前也没有完整GoodsBasic/StoreBuy目标页；因此本节的飞书数据进出不替代第25节的本机配置Git仓库导出。正式发布仍从冻结Snapshot写入本地tackle/item/store工作簿，并强制生成GoodsBasic和StoreBuy。
 
@@ -1028,6 +1069,30 @@ revision 位于“最近 90 天”与“最新 100 个”并集之外，只表�
 #### 14.3.6 备份、归档与恢复边界
 
 每日整库备份是灾难恢复点，不自动等于长期 revision 归档。在线保留期、备份保留期和归档保留期是三个独立策略，不能互相替代。恢复必须停服，把已验证副本恢复到新文件并保留原数据库作审计副本；不得为查看单条历史而覆盖生产数据库。包含飞书会话的整包备份不得直接延长为长期审计归档；二期本地归档包必须排除凭据并与会话副本隔离，压缩/加密、共享和访问方式由二期实现 Issue 评估，不阻塞一期。
+### 14.3.7 工作区整包保存边界（Issue #96）
+
+`PUT /api/state`是带`baseRevision`、授权和幂等命令包装的**普通工作区编辑**入口，采用默认允许：`templates`、`notes`、规则编辑器输入以及未来新增的普通顶层工作区字段都可以整包保存。服务端必须保留未知普通字段；不得因未把新字段加入 allowlist 返回422。`WorkspaceState.schemaVersion`、`revisions`和`importedAt`分别是迁移版本、保存事务恢复摘要和数据源发布回读元数据，不是客户端可编辑聚合：服务端在比较和持久化前必须以当前权威值投影它，避免第二标签页携带陈旧摘要阻断普通保存，同时绝不接受客户端降级schema、伪造历史或伪造导入时间。保存中的`baseRevision`失配仍返回409，且不写入部分状态、revision、审计或幂等结果。
+
+默认允许不等于可绕过领域命令。以下现有权威聚合只能由括号中的命令或动作写入，嵌套修改也算修改；一个请求同时包含普通字段和任一受治理字段时必须**整体422**，不得部分保存：
+
+| 受治理字段 | 原因 | 唯一写入动作/边界 |
+| --- | --- | --- |
+| `seriesDefinitions`、`skuDrawers`、`purchasableModels`、`derivedProjections`、`projectionMatches` | Series/SKU/Model身份、最近匹配和派生链 | `create_series`、`change_sku_target_pull`及Model领域ActionCode/规则重算 |
+| `partConstraintSets`、`candidateSearchRecipes` | v3 §6.5 的精确revision/contentHash引用；既有revision不可变 | 当前没有修改既有revision的领域命令；只读保留，创建新Series时可由`POST /api/series`物化新约束revision，Recipe专用版本化命令尚未提供 |
+| `patchLedger`、`patchReviewBatches`、`patchValidationWaivers`、`patchValidationWaiverDecisions` | Patch revision、审核和waiver证据 | Patch create/review/rebase/mirror及waiver ActionCode |
+| `projectionPatches` | 遗留 ProjectionPatch 的迁移/审计源；不得作为现行Patch命令旁路 | 当前只读保留，迁移流程处理；不得经整包保存删除、篡改或重放 |
+| `configurationSnapshots`、`ruleSetVersions`、`reductionStackingPolicyVersions`、`performanceSummaryDefinitions`、`pricingPolicyVersions`、`fiveAxisViewDefinitions`、`fiveAxisVertexSets`、`workspacePolicies`、`candidateRuns`、`candidateMaterializations` | 已发布或不可变的版本、候选和冻结历史 | 相应发布、候选生成或物化命令；Snapshot只读/发布边界。ReductionStackingPolicyVersion必须由`POST /api/feishu-workbook`的显式工作簿拉取/RuleSet发布流产生；PerformanceSummaryDefinition当前只读，专用版本化发布命令尚未提供 |
+| `canonicalRuleSourceDrafts`、`weightTemplatePolicyDrafts` | 显式拉取生成的内容哈希、行级来源和重量模板证据；RuleSet 草稿与发布必须精确引用它们 | `POST /api/feishu-workbook`的`pull`，随后`create_ruleset_draft` / `publish_ruleset`；不得伪造、覆盖或绕过拉取证据 |
+| `configIdGovernance` | 永不复用的ID reservation ledger与策略/审计 | `config.id.*` ActionCode |
+| `feishuWorkbooks`、`feishuSourceRevisions`、`sourceIdentityMigrationReports`、`dataSourceImports`、`dataSourceBindings`、`dataSourceWritebacks`、`importedAt` | 外部源回读、迁移和回写证据、远端record/field映射、写回基线与导入时间 | 显式检查/拉取、发布或回写动作；Binding和`importedAt`只能由`publish_data_source`或`commit_data_source_writeback`的回读重建 |
+| `aiRuleSourceChangeDrafts`、`aiArtifactProvenanceSyncRecords` | AI草稿的命令哈希、人工确认、永久来源同步和幂等恢复证据 | `POST /api/ai/assessments/:assessmentId/drafts`创建/恢复草稿与来源同步；AI规则源草稿只能再经`POST /api/ai/rule-source-change-drafts/confirm`人工确认 |
+| `qualityValuePolicyDrafts`、`pricingPolicyDrafts`、`upgradeCandidates`、`ruleChangeProposals`、`aiAssessments`、`identityAuditLog`、`commandIdempotencyRecords`、`governanceAuditLog`、`migrationReviewItems`、`revisions` | 服务器生成的规则草稿、升级、审计、幂等、迁移复核和工作区恢复证据 | 对应领域动作或成功的服务器保存事务；迁移复核证据当前只读，只能通过新的迁移流程处理 |
+| `recipes`、`candidates`、`officialSkus`、`detailOverrides` | 只读旧产品历史及其Trace | 查看、导出或显式迁移；不可由整包保存覆盖 |
+
+422必须为每个字段返回稳定字段名、原因类别、所需动作及其路由/ActionCode，UI必须保留未保存输入、将用户定位到对应动作，并提供重试；409必须显示最新revision和不丢失本地输入的恢复路径。该表是`WorkspaceState`整包写入的权威 denylist；新增普通字段不需要修订本表，新增权威聚合或领域命令则必须先同步修订本表、实现和回归。
+
+验收至少覆盖：新增/编辑模板、备注和多个普通字段及未来未知普通字段保存并刷新后仍在；每类表中字段的顶层和嵌套改动拒绝；普通+受治理混合原子拒绝且revision/审计/幂等不变；过期revision、未授权、旧历史和已发布Snapshot冻结；成功、治理拒绝和冲突在真实界面均有可见、可操作反馈。
+
 ### 14.4 Patch台账远端schema、哈希、协作、回读与补偿契约
 
 主工作簿中的唯一`Patch台账`使用稳定`sheet_id=edyFx9`。同一工作表包含两个行号互不关联的区域：`A:AK`是“一条Patch操作一行”的机器区，`AL`为空白分隔列，`AM:BA`是“一条协作事件一行”的追加事件区。工作表当前仍为空表；在以下表头、保护边界和联调完成前，真实镜像写入/拉取保持禁用，不得伪造`SYNCED`。
@@ -1208,6 +1273,8 @@ interface PatchSubjectMigrationResult {
 每一级预览固定展示：来源、before、operation、operand、after、优势/代价、兼容解释、Patch和校验状态。
 
 被动技能只显示设计字段、分值、稀有度、技术来源和玩家文案。
+
+“数据源与参数注册表”中的飞书分享链接入口服务于**数据导入**（重量段模板或流派/定位系数的拉取、预览、发布与回写），与第14节的canonical规则源工作簿互不冲突：用户在数据交换页粘贴并从历史选择的是飞书多维表格（`/base/`）分享链接，经显式“识别链接”解析后仍须按现有治理分别执行预览、冲突检查、人工确认发布与回写，绝不自动发布或绕过stable ID。历史只保存shareUrl、显示名、数据类型和最近使用时间，不保存任何应用密钥、appToken凭据或个人身份信息；该入口不得用于改写canonical规则源工作簿指向。
 
 ## 16. 部署基线
 
@@ -1899,11 +1966,11 @@ DerivedProjection
 
 | 顺序 | 维度 | 直接适用部位 | 输入 | 能力方向 | W段共享顶点 |
 | --- | --- | --- | --- | --- | --- |
-| 1 | 拉力 | 竿、轮、线 | `drag` | 越大越强 | 全部合法直接值取MAX |
-| 2 | 耐久 | 竿、轮、线 | `durability` | 越大越强 | 全部合法直接值取MAX |
-| 3 | 抛投 | 竿 | `max_cast_distance` | 越大越强 | 合法竿直接值取MAX |
-| 4 | 感度 | 竿、轮、线 | 有效`sensitivity` | 原始分母越小越强 | 全部合法直接值取MIN |
-| 5 | 操控 | 竿、轮、线 | `energy_cost_factor` | 原始系数越小越强 | 全部合法直接值取MIN |
+| 1 | 拉力 | 竿、轮、线 | `drag` | 越大越强 | 同 W 段合法竿最终值取MAX |
+| 2 | 耐久 | 竿、轮、线 | `durability` | 越大越强 | 同 W 段合法竿最终值取MAX |
+| 3 | 抛投 | 竿 | `max_cast_distance` | 越大越强 | 同 W 段合法竿最终值取MAX |
+| 4 | 感度 | 竿、轮、线 | 有效`sensitivity` | 原始分母越小越强 | 同 W 段合法竿有效值取MIN |
+| 5 | 操控 | 竿、轮、线 | `energy_cost_factor` | 原始系数越小越强 | 同 W 段合法竿系数取MIN |
 
 拉力、耐久和抛投的部件比例为：
 
@@ -1914,11 +1981,11 @@ componentRatio = componentValue / vertexValue
 感度能力：
 
 ```text
-effectiveSensitivity = defaultSensitivityValue + sensitivityConfig
+effectiveSensitivity = finalPanel.sensitivity
 sensitivityAbility = 1 / effectiveSensitivity
 ```
 
-如果`tackle.sensitivity`已保存合并后的有效值，则直接使用`1 / sensitivity`。参数元数据必须声明数据形态，禁止重复加默认值。
+`finalPanel.sensitivity`已经包含词条、Technology 与全部 Patch 的结算结果；不得重复叠加默认值或配置值。
 
 操控能力：
 
@@ -1952,7 +2019,7 @@ weightBandId
 + fiveAxisRuleVersion
 ```
 
-同一完整身份、同一轴的竿轮线共用一个整体顶点，不按部位分别建立顶点。顶点不得从Model的当前可编辑状态、“最新时间”Snapshot或未指明的Revision读取。对既有数据，每个`ACTIVE` Model只读取其`configurationSnapshotId`当时明确指向的唯一当前正式ConfigurationSnapshot；即使存在多个历史Snapshot，也不得按发布时间、最大ID或Model head revision自动改选。
+同一完整身份的五轴顶点候选池只含竿；轮、线仅使用自身最终直接值绘制曲线，绝不参与顶点。顶点不得从Model的当前可编辑状态、“最新时间”Snapshot或未指明的Revision读取。对既有数据，每个`ACTIVE` Model只读取其`configurationSnapshotId`当时明确指向的唯一当前正式ConfigurationSnapshot；即使存在多个历史Snapshot，也不得按发布时间、最大ID或Model head revision自动改选。
 
 每个顶点候选来源必须冻结：
 
@@ -2877,7 +2944,7 @@ type ActionCode =
 
 读接口必须按当前对象、策略版本和操作者返回这些`ActionAvailability`；命令端再次校验Capability和`separationOfDutiesPolicy`。发布策略还必须校验其目标目录/Manifest覆盖，浏览器目录授权不能替代任何服务端权限。
 
-Series、SKU、Model的ID终身稳定且不复用；改名和更换默认Model不改ID。SKU修改`targetPullKg`必须遵守第6.5节：没有任何已发布后代Snapshot时保留skuId并创建新revision；已有已发布后代时原SKU的重量身份冻结，新重量创建新SKU，旧SKU可`DEPRECATED`。Revision只增不改；已批准/已发布revision不可原地改写。Snapshot ID与payload/hash永久绑定。前端不得从角色名、状态或颜色猜动作；读接口返回`ActionAvailability[]`，写接口再次鉴权。按第20.2节，所有已登录公司用户统一获得全部当前已启用业务Capability，`separationOfDutiesPolicy`使用`disabled_in_tackle_forger`；按第23.6节，`ai.provider_policy.manage`只授予部署管理员。服务端仍必须独立鉴权，功能开关关闭或未授予的Capability不得通过直接API调用。
+Series、SKU、Model的ID终身稳定且不复用；改名和更换默认Model不改ID。SKU修改`targetPullKg`必须遵守第6.6节：没有任何已发布后代Snapshot时保留skuId并创建新revision；已有已发布后代时原SKU的重量身份冻结，新重量创建新SKU，旧SKU可`DEPRECATED`。Revision只增不改；已批准/已发布revision不可原地改写。Snapshot ID与payload/hash永久绑定。前端不得从角色名、状态或颜色猜动作；读接口返回`ActionAvailability[]`，写接口再次鉴权。按第20.2节，所有已登录公司用户统一获得全部当前已启用业务Capability，`separationOfDutiesPolicy`使用`disabled_in_tackle_forger`；按第23.6节，`ai.provider_policy.manage`只授予部署管理员。服务端仍必须独立鉴权，功能开关关闭或未授予的Capability不得通过直接API调用。
 
 ### 24.2 R1：钓具系列甘特图
 
@@ -3217,9 +3284,12 @@ interface ActionLink {
 ### 24.11 R10：Rebase、UpgradeCandidate与Snapshot
 
 ```text
-Patch: draft → pending_review → approved
-base_changed → rebase_required → rebasing → pending_review
-draft/pending_review → withdrawn；任意未发布状态 → superseded
+Patch revision:
+DRAFT → PENDING_REVIEW → APPROVED → ACTIVE
+DRAFT/PENDING_REVIEW → WITHDRAWN
+任意未发布状态 → SUPERSEDED
+基线变化：当前Patch revision → REBASE_REQUIRED
+rebase成功：创建新Patch revision，状态为PENDING_REVIEW
 
 UpgradeCandidate:
 generated → analyzing → blocked | rebase_required | ready_for_review
@@ -3228,14 +3298,27 @@ generated/ready_for_review → dismissed
 任意非终态 + upstream_changed → superseded
 ```
 
-set基线变化、参数删除/重命名、边界/公式/兼容变化必须rebase。clear在目标仍是可继承覆盖时可以确定性重放；目标删除、重命名或必填性变化时必须rebase。add/multiply自动重放最多到pending_review。rebase生成新Patch revision。approved/dismissed候选不改旧Snapshot；只有发布命令新建Snapshot。SnapshotBuild可building/failed/ready；ConfigurationSnapshot创建即frozen，只允许查看、下载原样审计归档、在完整性门禁通过时正式导出、审计、复制新修订、生成升级候选，禁止原地编辑/重算/rebase/换hash/删除引用。`download_snapshot_audit_archive`只要求`snapshot.audit_archive.download`并遵守第14节的原样打包语义；`export_snapshot`要求`snapshot.export`，不可重放或缺策略引用的BLOCKER必须阻断它以及后续配置导出。
+Patch业务生命周期只使用第14.2节的规范大写`PatchState`；小写状态只允许出现在迁移适配器。`base_changed`是触发原因而不是持久化状态，`rebasing/REBASING`是动作执行进度而不是`PatchState`，不得写入Patch revision、账本、Snapshot引用或飞书镜像。
+
+set基线变化、参数删除/重命名、边界/公式/兼容变化必须rebase。clear在目标仍是可继承覆盖时可以确定性重放；目标删除、重命名或必填性变化时必须rebase。add/multiply自动重放最多创建`PENDING_REVIEW`的新revision。基线变化只使当前revision进入`REBASE_REQUIRED`；rebase必须通过`rebase_patch`动作创建严格递增的新`patchRevision`，不得把原revision从`REBASE_REQUIRED`原地改回`PENDING_REVIEW`。
+
+`rebase_patch`命令至少绑定`patchId + expectedHeadPatchRevision + expectedBaseRuleSetVersion + expectedBaseObjectRevision + targetBaseRuleSetVersion + targetBaseObjectRevision + inputHash + idempotencyKey`。服务端固定按以下事务执行：
+
+1. 重新鉴权并锁定Patch head，重验expected head、当前基线和目标基线；任一不一致返回revision或baseline冲突。
+2. 在事务内存中对完整有序操作组计算新before/after、Trace、Issue和hash；未解决冲突、非法操作或任何校验失败时不创建revision。
+3. 只有全部操作和证据有效时，原子写入一个新Patch revision、完整操作组、幂等记录和审计；新revision最多为`PENDING_REVIEW`，不得直接成为`APPROVED`或`ACTIVE`。
+4. 同一idempotencyKey和完整payload重试返回第一次已提交结果；同一key携带不同payload时拒绝。提交前基线或Patch head再次变化时整个事务回滚，调用方必须基于最新基线重新预览和执行。
+
+失败、超时后无法证明已提交、权限拒绝或并发基线变化均不得留下半revision、半操作组或执行中的持久化业务状态；原Patch revision、有序操作、历史Snapshot、Patch引用、`PatchSetHash`和内容hash保持不变。超时重试必须先按幂等键回读，不得猜测成功或重复追加。
+
+approved/dismissed候选不改旧Snapshot；只有发布命令新建Snapshot。SnapshotBuild可building/failed/ready；ConfigurationSnapshot创建即frozen，只允许查看、下载原样审计归档、在完整性门禁通过时正式导出、审计、复制新修订、生成升级候选，禁止原地编辑/重算/rebase/换hash/删除引用。`download_snapshot_audit_archive`只要求`snapshot.audit_archive.download`并遵守第14节的原样打包语义；`export_snapshot`要求`snapshot.export`，不可重放或缺策略引用的BLOCKER必须阻断它以及后续配置导出。
 
 正常路径：解决rebase并发布新Snapshot。  
 边界：语义相同也只关闭候选，不重写hash。  
-冲突：处理时基线再变则superseded。  
-恢复：复制决定到最新候选；失败Build可重试且无半快照。  
+冲突：处理时Patch head或基线再变则本次rebase事务回滚，旧revision保持`REBASE_REQUIRED`，调用方基于最新基线重新预览；UpgradeCandidate按其独立状态机进入superseded。
+恢复：rebase按幂等键回读或在最新基线上重试；复制决定到最新候选；失败Build可重试且无半快照。
 权限：rebase、审核、发布分开；冻结快照无edit。  
-验收：Given S1已发布，When 批准升级候选，Then S1/hash不变；再次发布才生成S2。
+验收：Given Patch revision 7因基线变化进入`REBASE_REQUIRED`，When `rebase_patch`重验相同head和基线并成功，Then 原子创建revision 8且状态为`PENDING_REVIEW`，revision 7及其操作/hash保持不变；Given计算、校验或写入任一步失败，Then不存在revision 8或半操作组；Given提交前基线再次变化，Then返回冲突且revision 7、历史Snapshot及`PatchSetHash`不变。Given S1已发布，When 批准升级候选，Then S1/hash不变；再次发布才生成S2。
 
 ### 24.12 R11：状态与文案
 
@@ -3311,7 +3394,7 @@ type PrimaryDisplayState = "HARD_CONFLICT" | "REBASE_REQUIRED" | "REVIEW_REQUIRE
 
 ### 25.2 本机配置目录与环境/渠道边界
 
-一期可以完成并下载不可提交的`NON_FORMAL`预览；1.5期才允许生成正式人工搬运包或通过支持File System Access API的Chromium内核浏览器正式写入本地，默认通过HTTPS提供内网页面。无内网DNS且明确接受降级时，可通过默认关闭的显式配置，仅对RFC 1918私网IP开放HTTP；此时会话Cookie不设置Secure，且浏览器依赖安全上下文的能力（包括File System Access API）可能不可用。用户通过目录选择器显式授权本地配置worktree；不要求安装本地伴随程序，也不让服务器访问设计人员电脑。
+一期可以完成并下载不可提交的`NON_FORMAL`预览；1.5期才允许生成正式人工搬运包或通过支持File System Access API的Chromium内核浏览器正式写入本地，默认通过HTTPS提供内网页面。无内网DNS且明确接受降级时，可通过默认关闭的`FEISHU_ALLOW_INSECURE_HTTP=true`配置，仅对RFC 1918私网IP开放HTTP；此时会话Cookie不设置Secure，且浏览器依赖安全上下文的能力（包括File System Access API）可能不可用。另有严格的本机开发例外：仅当`NODE_ENV=development`且同一显式开关开启时，飞书登记回调可使用数值 IPv4 `http://127.0.0.1[:port]/api/auth/feishu/callback`。该例外不得接受`localhost`、其他`127/8`地址、IPv6 loopback/ULA、域名或公网 HTTP，生产、测试和部署环境一律拒绝；它不改变一期生产验收或部署降级边界。用户通过目录选择器显式授权本地配置worktree；不要求安装本地伴随程序，也不让服务器访问设计人员电脑。
 
 ```ts
 interface ConfigEnvironmentProfile {

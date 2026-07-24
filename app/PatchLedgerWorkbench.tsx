@@ -2,16 +2,25 @@
 
 import { AlertTriangle, CheckCircle2, DatabaseZap, FileClock, Link2, Plus, Search, ShieldCheck, X } from "lucide-react";
 import { useMemo, useState } from "react";
+import {
+  canApplyConfirmedWorkspace,
+  DIRTY_WORKSPACE_CONFIRMATION_MESSAGE,
+  runCleanWorkspaceConfirmation,
+} from "@/lib/clean-workspace-confirmation";
 import { analyzePatchPatterns, appendPatchRevision, buildPatchRevision, createRuleSourceChangeDraft } from "@/lib/patch-ledger";
-import { createWorkspacePatchReview, currentPatchApprovalEvidence, preparePatchOperationFromWorkspace, reviewWorkspacePatchRevision } from "@/lib/patch-authority";
+import { createWorkspacePatchReview, currentPatchApprovalEvidence, preparePatchOperationFromWorkspace, reviewWorkspacePatchRevision, submitWorkspacePatchRevision } from "@/lib/patch-authority";
 import type { PatchPatternSummary, PatchRevisionRecord, WorkspaceState } from "@/lib/types";
 
 interface PatchLedgerWorkbenchProps {
   state: WorkspaceState;
+  revision: number;
+  dirty: boolean;
+  getWorkspaceFreshness: () => { dirty: boolean; revision: number };
   capabilities: string[];
   actorName: string;
   mutate: (producer: (draft: WorkspaceState) => void, recalculate?: boolean) => void;
   notify: (message: string) => void;
+  replaceWorkspace: (state: WorkspaceState, revision: number) => void;
 }
 interface PatchDraft {
   scopeType: "series" | "sku" | "model";
@@ -44,7 +53,7 @@ function analysisContexts(state: WorkspaceState) {
   }
   return contexts;
 }
-export function PatchLedgerWorkbench({ state, capabilities, actorName, mutate, notify }: PatchLedgerWorkbenchProps) {
+export function PatchLedgerWorkbench({ state, revision, dirty, getWorkspaceFreshness, capabilities, actorName, mutate, notify, replaceWorkspace }: PatchLedgerWorkbenchProps) {
   const [query,setQuery]=useState("");
   const [selectedKey,setSelectedKey]=useState("");
   const [draft,setDraft]=useState<PatchDraft|null>(null);
@@ -55,6 +64,8 @@ export function PatchLedgerWorkbench({ state, capabilities, actorName, mutate, n
   const selected=revisions.find((entry)=>selectedKey===entry.patchId+"@"+entry.patchRevision)??filtered[0];
   const canCreate=capabilities.includes("patch.create"),canReview=capabilities.includes("patch.review");
   const canPropose=capabilities.includes("rules.proposal.create");
+  const canReviewAIRuleDraft=capabilities.includes("feishu.rule_change.confirm_write");
+  const aiRuleDraftConfirmationBlockedReason=dirty?DIRTY_WORKSPACE_CONFIRMATION_MESSAGE:undefined;
   const patterns=useMemo(()=>analyzePatchPatterns({ledger:state.patchLedger,contexts:analysisContexts(state)}),[state]);
   const canWriteMirror=capabilities.includes("patch.mirror.write"),canPullMirror=capabilities.includes("patch.mirror.pull");
   const connectorAvailable=false;
@@ -113,6 +124,13 @@ export function PatchLedgerWorkbench({ state, capabilities, actorName, mutate, n
       notify(nextState==="APPROVED"?"Patch 已批准，仍需显式启用。":nextState==="ACTIVE"?"Patch 已进入生效状态。":"Patch 已撤回。");
     }catch(error){notify(error instanceof Error?error.message:"Patch 状态更新失败");}
   };
+  const submitForReview=()=>{
+    if(!selected||!canCreate)return;
+    try{
+      mutate((workspace)=>{workspace.patchLedger=submitWorkspacePatchRevision({state:workspace,patchId:selected.patchId,patchRevision:selected.patchRevision,capabilities}).patchLedger;},false);
+      notify("Patch 已提交复核，等待整体结果审核。");
+    }catch(error){notify(error instanceof Error?error.message:"提交复核失败");}
+  };
 
   const createRuleProposal=()=>{
     if(!proposalPattern||!canPropose)return;
@@ -120,6 +138,22 @@ export function PatchLedgerWorkbench({ state, capabilities, actorName, mutate, n
       mutate((workspace)=>{workspace.patchLedger=createRuleSourceChangeDraft({ledger:workspace.patchLedger,pattern:proposalPattern,rationale:proposalRationale,createdBy:actorName,createdAt:new Date().toISOString(),capabilities}).ledger;},false);
       setProposalPattern(null);setProposalRationale("");notify("已创建共享规则变更草稿；尚未写飞书、发布 RuleSet 或改变任何 Patch 状态。");
     }catch(error){notify(error instanceof Error?error.message:"规则变更草稿创建失败");}
+  };
+  const confirmAIRuleDraft=async(changeDraftId:string,expectedCommandHash:string)=>{
+    try{
+      const attempt=await runCleanWorkspaceConfirmation({
+        dirty,
+        submit:()=>fetch("/api/ai/rule-source-change-drafts/confirm",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({baseRevision:revision,changeDraftId,expectedCommandHash,idempotencyKey:`confirm-ai-rule-draft:${changeDraftId}:${expectedCommandHash}`})}),
+      });
+      if(attempt.disposition==="blocked"){notify(attempt.reason);return;}
+      const response=attempt.value;
+      const payload=await response.json() as {state?:WorkspaceState;revision?:number;error?:string};
+      if(!response.ok||!payload.state||typeof payload.revision!=="number")throw new Error(payload.error??"AI 规则草稿确认失败");
+      const applyCheck=canApplyConfirmedWorkspace({...getWorkspaceFreshness(),expectedRevision:revision});
+      if(!applyCheck.allowed){notify(applyCheck.reason);return;}
+      replaceWorkspace(payload.state,payload.revision);
+      notify("AI 规则草稿已人工确认；尚未写入飞书、拉取或发布 RuleSet。");
+    }catch(error){notify(error instanceof Error?error.message:"AI 规则草稿确认失败");}
   };
   return <div className="page-stack patch-ledger-page">
     <section className="patch-ledger-hero">
@@ -152,12 +186,13 @@ export function PatchLedgerWorkbench({ state, capabilities, actorName, mutate, n
       {!patterns.length?<p className="patch-ledger-empty">尚无可归纳的 ACTIVE / PARTIALLY_ABSORBED 个体 Patch。</p>:null}
       {proposalPattern?<div className="patch-pattern-proposal"><div><strong>共享规则变更草稿</strong><code>{proposalPattern.patternId}</code></div><textarea value={proposalRationale} onChange={(event)=>setProposalRationale(event.target.value)} placeholder="说明稳定模式、适用范围、优势与代价，以及跨对象影响预览结论"/><div><button type="button" onClick={()=>setProposalPattern(null)}>取消</button><button type="button" disabled={!proposalRationale.trim()} onClick={createRuleProposal}>仅创建本地草稿</button></div></div>:null}
       {state.patchLedger.ruleSourceChangeDrafts.length?<div className="patch-rule-drafts"><h4>共享规则草稿</h4>{state.patchLedger.ruleSourceChangeDrafts.map((draft)=><article key={draft.id}><strong>{draft.parameterKey} · {draft.proposedOperation}</strong><span>{draft.status} · {draft.sourcePatchRevisionRefs.length} 个来源 revision · 影响 {draft.impactSubjectEntityIds.length} 个对象</span><code>{draft.id}</code></article>)}</div>:null}
+      {state.aiRuleSourceChangeDrafts.length?<div className="patch-rule-drafts"><h4>AI 规则源变更草稿</h4>{state.aiRuleSourceChangeDrafts.map((draft)=><article key={draft.changeDraftId}><strong>{draft.targetRuleRef.parameterKey} · {draft.proposedChange.operation} {String(draft.proposedChange.operand??"")}</strong><span>{draft.state} · 影响 {draft.impactPreview.affectedSeries} Series / {draft.impactPreview.affectedSkus} SKU / {draft.impactPreview.affectedModels} Model · 新增 {draft.impactPreview.newErrors} 个错误</span><code>{draft.changeDraftId}</code><small>规则 {draft.targetRuleRef.stableRuleId} · source {draft.targetRuleRef.sourceRevision}</small>{draft.state==="LOCAL_DRAFT"||draft.state==="IMPACT_PREVIEW_READY"?<button type="button" disabled={!canReviewAIRuleDraft||!draft.impactPreview.coverage.complete||Boolean(aiRuleDraftConfirmationBlockedReason)} title={!canReviewAIRuleDraft?"缺少规则写回确认权限":!draft.impactPreview.coverage.complete?"影响预览覆盖不完整，不能确认":aiRuleDraftConfirmationBlockedReason??"确认当前影响预览；不会自动写入飞书"} onClick={()=>void confirmAIRuleDraft(draft.changeDraftId,draft.commandHash)}><ShieldCheck size={15}/>人工确认草稿</button>:draft.humanReview?<small>已由 {draft.humanReview.confirmedBy} 于 {draft.humanReview.confirmedAt} 确认</small>:null}</article>)}</div>:null}
     </section>
     {state.patchLedger.absorptionAssessments.length?<section className="patch-rule-drafts"><h4>RuleSet 发布后吸收评估</h4>{state.patchLedger.absorptionAssessments.map((assessment)=><article key={assessment.assessmentId}><strong>{assessment.patchId} · revision {assessment.sourcePatchRevision} → {assessment.resultPatchRevision}</strong><span>{assessment.resultState} · {assessment.publishedRuleSetVersion} · {assessment.operationEvidence.length} 条重算证据</span><code>{assessment.assessmentId}</code></article>)}</section>:null}
     <section className="patch-ledger-layout">
       <div className="patch-ledger-list"><label className="patch-ledger-search"><Search size={15}/><input value={query} onChange={(event)=>setQuery(event.target.value)} placeholder="按稳定 ID、状态或原因搜索"/></label><div className="patch-ledger-list-scroll">{filtered.map((entry)=>{const key=entry.patchId+"@"+entry.patchRevision;return <button type="button" className={selected===entry?"active":""} key={key} onClick={()=>setSelectedKey(key)}><span><strong>{entry.patchId}</strong><small>revision {entry.patchRevision} · {entry.layerType}</small></span><em>{stateLabels[entry.state]}</em></button>;})}{!filtered.length?<p className="patch-ledger-empty">没有符合条件的 Patch revision。</p>:null}</div></div>
       <div className="patch-ledger-detail">{selected?<><header><div><span className="eyebrow">STABLE SUBJECT</span><h3>{selected.subjectName||selected.subjectEntityId}</h3><code>{selected.subjectEntityId}</code></div><div className="patch-ledger-badges"><span>{stateLabels[selected.state]}</span><span>{mirrorLabels[selected.mirrorSyncState]}</span>{selected.attentionStates.map((attention)=><span className="warning" key={attention}>{attention}</span>)}</div></header>
-        <div className="patch-ledger-review-actions">{["DRAFT","PENDING_REVIEW","APPROVED"].includes(selected.state)?<button type="button" disabled={!canReview||selected.snapshotRefs.length>0} onClick={reviewCurrentObject}><ShieldCheck size={15}/>复核当前整体结果</button>:null}{selected.state==="DRAFT"||selected.state==="PENDING_REVIEW"?<button type="button" disabled={!canReview||selected.snapshotRefs.length>0||!selectedApprovalEvidence} title={selectedApprovalEvidence?"使用当前对象的整体复核证据批准":"请先完成当前对象最终范围与完整 Patch 集合复核"} onClick={()=>transition("APPROVED")}><CheckCircle2 size={15}/>批准 revision</button>:null}{selected.state==="APPROVED"?<button type="button" disabled={!canReview||selected.snapshotRefs.length>0||!selectedApprovalEvidence} title={selectedApprovalEvidence?"使用当前对象的整体复核证据启用":"整体复核证据缺失或已失效"} onClick={()=>transition("ACTIVE")}><ShieldCheck size={15}/>启用 Patch</button>:null}{["DRAFT","PENDING_REVIEW","APPROVED"].includes(selected.state)?<button type="button" disabled={!canReview||selected.snapshotRefs.length>0} onClick={()=>transition("WITHDRAWN")}>撤回</button>:null}</div>
+        <div className="patch-ledger-review-actions">{["DRAFT","PENDING_REVIEW","APPROVED"].includes(selected.state)?<button type="button" disabled={!canReview||selected.snapshotRefs.length>0} onClick={reviewCurrentObject}><ShieldCheck size={15}/>复核当前整体结果</button>:null}{selected.state==="DRAFT"?<button type="button" disabled={!canCreate||selected.snapshotRefs.length>0} title={canCreate?"提交此草稿进入待复核状态":"缺少 Patch 创建权限"} onClick={submitForReview}><CheckCircle2 size={15}/>提交复核</button>:null}{selected.state==="PENDING_REVIEW"?<button type="button" disabled={!canReview||selected.snapshotRefs.length>0||!selectedApprovalEvidence} title={selectedApprovalEvidence?"使用当前对象的整体复核证据批准":"请先完成当前对象最终范围与完整 Patch 集合复核"} onClick={()=>transition("APPROVED")}><CheckCircle2 size={15}/>批准 revision</button>:null}{selected.state==="APPROVED"?<button type="button" disabled={!canReview||selected.snapshotRefs.length>0||!selectedApprovalEvidence} title={selectedApprovalEvidence?"使用当前对象的整体复核证据启用":"整体复核证据缺失或已失效"} onClick={()=>transition("ACTIVE")}><ShieldCheck size={15}/>启用 Patch</button>:null}{selected.state==="DRAFT"||selected.state==="PENDING_REVIEW"?<button type="button" disabled={!canReview||selected.snapshotRefs.length>0} onClick={()=>transition("WITHDRAWN")}>撤回</button>:null}</div>
         {!selectedApprovalEvidence&&["DRAFT","PENDING_REVIEW","APPROVED"].includes(selected.state)?<p className="patch-ledger-empty">批准与启用已关闭：请先在 Series / SKU / Model 整体结果页完成最终范围校验和批量人工复核；Patch 无需逐条单独审批。</p>:null}
         <dl><div><dt>Patch</dt><dd>{selected.patchId} / revision {selected.patchRevision}</dd></div><div><dt>作用层</dt><dd>{selected.scopeType} · {selected.layerType}</dd></div><div><dt>基线</dt><dd>{selected.baseRuleSetVersion} · object revision {selected.baseObjectRevision}</dd></div><div><dt>创建</dt><dd>{selected.createdBy} · {selected.createdAt}</dd></div><div><dt>原因</dt><dd>{selected.reason||"未填写"}</dd></div></dl>
         <div className="patch-ledger-operations"><h4><ShieldCheck size={16}/>确定性操作顺序</h4>{[...selected.operations].sort((a,b)=>a.operationIndex-b.operationIndex).map((operation)=><div key={operation.operationId}><b>{operation.operationIndex+1}</b><code>{operation.parameterKey}</code><span>{operation.operation}</span><strong>{String(operation.operand??"—")}</strong><small>{operation.operationId}</small></div>)}</div>

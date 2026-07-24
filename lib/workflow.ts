@@ -249,6 +249,9 @@ export function ensureWorkflowFields(input: WorkspaceState): WorkspaceState {
     dataSourceImports: Array.isArray(state.dataSourceImports) ? state.dataSourceImports : [],
     dataSourceBindings: Array.isArray(state.dataSourceBindings) ? state.dataSourceBindings : [],
     dataSourceWritebacks: Array.isArray(state.dataSourceWritebacks) ? state.dataSourceWritebacks : [],
+    feishuShareLinkHistory: Array.isArray(state.feishuShareLinkHistory)
+      ? state.feishuShareLinkHistory
+      : [],
     ruleGraphs:
       Array.isArray(state.ruleGraphs) && state.ruleGraphs.length
         ? state.ruleGraphs
@@ -412,6 +415,7 @@ function validateRow(state: WorkspaceState, row: GraphBatchRow) {
   if (
     candidate &&
     template &&
+    template.rangeSemantics !== "target_pull" &&
     (candidate.fishMinKg > template.nominalFishKg || candidate.fishMaxKg < template.nominalFishKg)
   ) issues.push("目标重量段未覆盖模板标称鱼重");
   if (!issues.length) {

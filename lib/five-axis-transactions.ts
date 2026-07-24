@@ -318,7 +318,8 @@ function missingAxisIds(
   sources: FiveAxisVertexCandidateSource[],
 ): string[] {
   return definition.axes.flatMap((axis) =>
-    sources.some((source) => source.directInputs.some((entry) =>
+    sources.some((source) => source.candidateSemanticKey.itemPartId === "part:rod"
+      && source.directInputs.some((entry) =>
       entry.axisId === axis.axisId && Number(entry.rawValue) > 0))
       ? []
       : [axis.axisId]);

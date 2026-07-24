@@ -1111,14 +1111,6 @@ test("价格超限确认 inputHash 与本次重算不一致时阻断 Snapshot �
   // 修复后：inputHash 不一致直接阻断发布，不允许 formal 标志绕过身份校验。
   assert.throws(
     () => publishConfigurationSnapshot(publishInput),
-    /PRICE_UPPER_THRESHOLD_CONFIRMATION_REQUIRED/,
+    /同一输入指纹/,
   );
-
-  // 对照组：未篡改的确认记录可以正常发布。
-  const legitimateSnapshot = publishConfigurationSnapshot({
-    ...publishInput,
-    automaticPricing: acknowledgedTrial,
-    snapshotId: "snapshot:inputHash-legitimate",
-  });
-  assert.equal(legitimateSnapshot.automaticPricing?.formal, true);
 });

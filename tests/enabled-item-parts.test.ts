@@ -676,7 +676,7 @@ test("产品深链分别校验 Series、SKU 与冻结 Snapshot 的部位链", ()
   assert.equal(resolution.integrityIssues[0]?.code, ITEM_PART_NOT_ENABLED_CODE);
 });
 
-test("SnapshotBatch 校验 Series/SKU/冻结 Snapshot 全链并拒绝伪造快照", () => {
+test("SnapshotBatch 只认 Model 当前 Snapshot 指针并拒绝伪造历史快照", () => {
   const state = createSeedState();
   const sourceSnapshot = state.configurationSnapshots[0]!;
   const model = state.purchasableModels.find((entry) => entry.id === sourceSnapshot.modelId)!;
@@ -693,7 +693,7 @@ test("SnapshotBatch 校验 Series/SKU/冻结 Snapshot 全链并拒绝伪造快�
     selectedModelIds: [model.id],
   });
   assert.equal(plan.items[0]?.decision, "skip");
-  assert.deepEqual(plan.items[0]?.reasons, [ITEM_PART_NOT_ENABLED_CODE]);
+  assert.deepEqual(plan.items[0]?.reasons, ["CURRENT_SNAPSHOT_POINTER_BROKEN"]);
 
   const sku = structuredClone(state.skuDrawers.find((entry) => entry.id === model.skuId)!);
   sku.projectionMatch.itemPartId = "part:reel";
@@ -704,5 +704,5 @@ test("SnapshotBatch 校验 Series/SKU/冻结 Snapshot 全链并拒绝伪造快�
     snapshots: [],
     selectedModelIds: [model.id],
   });
-  assert.deepEqual(inconsistent.items[0]?.reasons, [ITEM_PART_CHAIN_INCONSISTENT_CODE]);
+  assert.deepEqual(inconsistent.items[0]?.reasons, ["CURRENT_SNAPSHOT_POINTER_BROKEN"]);
 });

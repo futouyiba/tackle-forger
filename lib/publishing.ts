@@ -280,7 +280,8 @@ function deriveFormalCandidatePoolFromAuthority(input: {
     );
   }
   const currentSources = input.preview.candidateSources?.filter((source) =>
-    source.candidateSemanticKey.modelId === input.publishingModelId) ?? [];
+    source.candidateSemanticKey.modelId === input.publishingModelId
+    && source.candidateSemanticKey.itemPartId === "part:rod") ?? [];
   const sources = [...currentSources];
   for (const model of input.authority.purchasableModels) {
     if (model.id === input.publishingModelId || model.status !== "published") {
@@ -323,9 +324,10 @@ function deriveFormalCandidatePoolFromAuthority(input: {
       continue;
     }
     const snapshotSources = preview.candidateSources?.filter((source) =>
-      source.candidateSemanticKey.modelId === model.id) ?? [];
+      source.candidateSemanticKey.modelId === model.id
+      && source.candidateSemanticKey.itemPartId === "part:rod") ?? [];
     if (
-      snapshotSources.length !== 3
+      snapshotSources.length !== 1
       || snapshotSources.some((source) =>
         source.snapshotId !== snapshot.id
         || source.modelRevisionId !== `${model.id}@${snapshot.modelRevision}`)

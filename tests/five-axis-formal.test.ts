@@ -6,9 +6,12 @@ import {
   createFormalFiveAxisVertexSet,
   createFormalFiveAxisViewDefinition,
   createFormalFiveAxisWeightBandPolicy,
+  canAddFormalEquipmentComparisonSelection,
   hasMatchingFormalSnapshotEvidence,
   hashFiveAxisDispositionCatalog,
+  resolveFormalEquipmentComparisonDefinition,
   resolveFormalEquipmentComparisonReadiness,
+  resolveFormalEquipmentComparisonWeightBand,
   resolveFormalFiveAxisWeightBand,
   resolveFormalFiveAxisDefinition,
   validateFiveAxisDispositionCatalog,
@@ -76,6 +79,97 @@ test("混合比较在缺少正式依赖时明确阻断而保留恢复路径", ()
     hasFormalCurrentDefinition: true,
     selectedEvidence: ["compatible", "incompatible"],
   }).state, "unavailable");
+});
+
+test("比较 UI 只能使用经完整目录链验证的唯一正式定义", () => {
+  const legacy = legacyDefinition();
+  const formal = createFormalFiveAxisViewDefinition();
+  const catalog = createFiveAxisDispositionCatalogRevision({
+    definitions: [legacy, formal],
+    existingRevisions: [],
+    currentRevisionId: null,
+    formalCurrent: { definitionId: formal.definitionId, definitionVersion: formal.version },
+    decidedAt: "2026-07-24T00:00:00.000Z",
+  });
+  const available = resolveFormalEquipmentComparisonDefinition({
+    definitions: [legacy, formal],
+    revisions: catalog.revisions,
+    currentRevisionId: catalog.currentRevisionId,
+  });
+  assert.equal(available.state, "available");
+  if (available.state === "available") assert.equal(available.definition.definitionHash, formal.definitionHash);
+
+  const malformed = structuredClone(catalog.revision);
+  malformed.catalogHash = ZERO_HASH;
+  const unavailable = resolveFormalEquipmentComparisonDefinition({
+    definitions: [legacy, formal],
+    revisions: [malformed],
+    currentRevisionId: malformed.catalogRevisionId,
+  });
+  assert.deepEqual(unavailable, {
+    state: "unavailable",
+    message: "当前五维正式定义目录无效或没有唯一 FORMAL_CURRENT。请恢复完整目录链并发布唯一正式定义；比较篮会保留。",
+  });
+
+  const secondFormal = createFormalFiveAxisViewDefinition({
+    definitionId: "five-axis:other-formal",
+    version: "2",
+    revision: 2,
+  });
+  const twoFormalCatalog = createFiveAxisDispositionCatalogRevision({
+    definitions: [legacy, formal, secondFormal],
+    existingRevisions: [],
+    currentRevisionId: null,
+    formalCurrent: { definitionId: formal.definitionId, definitionVersion: formal.version },
+    decidedAt: "2026-07-24T00:00:00.000Z",
+  });
+  const duplicateFormal = structuredClone(twoFormalCatalog.revision);
+  duplicateFormal.entries.find((entry) => entry.definitionId === secondFormal.definitionId)!.effectiveUse = "FORMAL_CURRENT";
+  duplicateFormal.catalogHash = hashFiveAxisDispositionCatalog({
+    previousCatalogHash: duplicateFormal.previousCatalogHash,
+    entries: duplicateFormal.entries,
+  });
+  duplicateFormal.catalogRevisionId = `five-axis-disposition:${duplicateFormal.catalogHash.slice(0, 20)}`;
+  assert.equal(resolveFormalEquipmentComparisonDefinition({
+    definitions: [legacy, formal, secondFormal],
+    revisions: [duplicateFormal],
+    currentRevisionId: duplicateFormal.catalogRevisionId,
+  }).state, "unavailable");
+});
+
+test("比较篮上限和共同 W 段均从已解析正式定义读取", () => {
+  const definition = createFormalFiveAxisViewDefinition({ maximumItems: 3 });
+  assert.deepEqual(canAddFormalEquipmentComparisonSelection({
+    selectionCount: 2,
+    definition,
+  }), { allowed: true });
+  assert.deepEqual(canAddFormalEquipmentComparisonSelection({
+    selectionCount: 3,
+    definition,
+  }), {
+    allowed: false,
+    message: "混合部位比较篮上限为 3 件。",
+  });
+  assert.equal(canAddFormalEquipmentComparisonSelection({
+    selectionCount: 0,
+    definition: undefined,
+  }).allowed, false);
+
+  assert.equal(resolveFormalEquipmentComparisonWeightBand({
+    definition,
+    selectedWeightBandId: "",
+    fallbackWeightBandId: "W1",
+  }), "W1");
+  assert.equal(resolveFormalEquipmentComparisonWeightBand({
+    definition,
+    selectedWeightBandId: "W2",
+    fallbackWeightBandId: "W1",
+  }), "W2");
+  assert.equal(resolveFormalEquipmentComparisonWeightBand({
+    definition,
+    selectedWeightBandId: "not-a-formal-band",
+    fallbackWeightBandId: "W1",
+  }), undefined);
 });
 
 test("正式比较 Snapshot 证据必须完整匹配 FORMAL_CURRENT 定义与 W 策略", () => {

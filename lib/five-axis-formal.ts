@@ -80,6 +80,74 @@ export function resolveFormalEquipmentComparisonReadiness(input: {
   return { state: "ready" };
 }
 
+/**
+ * The comparison UI consumes the same catalog resolver as publication.  It
+ * must not select a plausible entry from a malformed current catalog.
+ */
+export function resolveFormalEquipmentComparisonDefinition(input: {
+  definitions: StoredFiveAxisViewDefinition[];
+  revisions: FiveAxisDefinitionDispositionCatalogRevision[];
+  currentRevisionId: string | null;
+}):
+  | {
+      state: "available";
+      definition: FiveAxisViewDefinition;
+      catalogRevision: FiveAxisDefinitionDispositionCatalogRevision;
+      disposition: FiveAxisDefinitionDisposition;
+    }
+  | { state: "unavailable"; message: string } {
+  try {
+    const resolved = resolveFormalFiveAxisDefinition(input);
+    return { state: "available", ...resolved };
+  } catch {
+    return {
+      state: "unavailable",
+      message: "当前五维正式定义目录无效或没有唯一 FORMAL_CURRENT。请恢复完整目录链并发布唯一正式定义；比较篮会保留。",
+    };
+  }
+}
+
+/**
+ * The comparison's W coordinate is explicit user intent.  Falling back to
+ * the active Snapshot only establishes the initial selection; it must remain
+ * a band declared by the resolved formal definition.
+ */
+export function resolveFormalEquipmentComparisonWeightBand(input: {
+  definition: FiveAxisViewDefinition;
+  selectedWeightBandId: string;
+  fallbackWeightBandId: string | undefined;
+}): string | undefined {
+  const weightBandId = input.selectedWeightBandId || input.fallbackWeightBandId;
+  return weightBandId && input.definition.weightBandPolicy.bands.some((band) =>
+    band.weightBandId === weightBandId)
+    ? weightBandId
+    : undefined;
+}
+
+/**
+ * Keep admission policy adjacent to the formal definition contract.  A
+ * caller may always remove an existing basket item; additions require a
+ * resolved formal definition and its declared, versioned maximum.
+ */
+export function canAddFormalEquipmentComparisonSelection(input: {
+  selectionCount: number;
+  definition: FiveAxisViewDefinition | undefined;
+}): { allowed: true } | { allowed: false; message: string } {
+  if (!input.definition) {
+    return {
+      allowed: false,
+      message: "当前五维正式定义目录不可用，不能加入比较。请恢复唯一 FORMAL_CURRENT 后重试；已选比较篮会保留，可继续移除条目。",
+    };
+  }
+  if (input.selectionCount >= input.definition.comparisonPolicy.maximumItems) {
+    return {
+      allowed: false,
+      message: `混合部位比较篮上限为 ${input.definition.comparisonPolicy.maximumItems} 件。`,
+    };
+  }
+  return { allowed: true };
+}
+
 export function hasMatchingFormalSnapshotEvidence(input: {
   definition: FiveAxisViewDefinition;
   snapshot: ConfigurationSnapshot;

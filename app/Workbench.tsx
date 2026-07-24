@@ -1,6 +1,7 @@
 "use client";
 
 import { issueClientActionCommand } from "@/lib/client-action-command";
+import { isComposingChangeEvent } from "@/lib/composition-input";
 
 import {
   AlertTriangle,
@@ -57,7 +58,7 @@ import {
 } from "@/lib/showcase";
 import { ensureWorkflowFields } from "@/lib/workflow";
 import { validationIssueLevel } from "@/lib/validation-issues";
-import { migrateWorkspaceState } from "@/lib/migrations";
+import { createParameterId, migrateWorkspaceState } from "@/lib/migrations";
 import { mergeWorkspaceConflict } from "@/lib/workspace-conflict-merge";
 import {
   isProductItemPartEnabled,
@@ -287,6 +288,10 @@ function TextInput({
   step?: number;
   readOnly?: boolean;
 }) {
+  // IME 组字期间不把半成品写进会触发重算/重挂载的 state：避免中文输入时
+  // 行被卸载、组字上下文与焦点丢失。稳定 React key（parameter.id）才是治本，
+  // 此守卫为纵深防御，防止半成品 label 被提交为 domain key。
+  const composingRef = useRef(false);
   return (
     <input
       className={cx("text-input", className)}
@@ -297,7 +302,24 @@ function TextInput({
       placeholder={placeholder}
       readOnly={readOnly}
       aria-readonly={readOnly}
-      onChange={(event) => onChange?.(event.target.value)}
+      onCompositionStart={() => {
+        composingRef.current = true;
+      }}
+      onCompositionEnd={(event) => {
+        composingRef.current = false;
+        // 部分浏览器在 compositionEnd 后不再补发 change，主动提交最终值；
+        // 随后若 onChange 再次提交相同值，受控 state 写入幂等、无害。
+        onChange?.(event.currentTarget.value);
+      }}
+      onChange={(event) => {
+        const nativeIsComposing = (
+          event.nativeEvent as { isComposing?: boolean }
+        ).isComposing;
+        if (isComposingChangeEvent(composingRef.current, nativeIsComposing)) {
+          return;
+        }
+        onChange?.(event.target.value);
+      }}
     />
   );
 }
@@ -1165,6 +1187,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     }
     mutate((draft) => {
       draft.parameters.push({
+        id: createParameterId(),
         key,
         label: key,
         itemKind,
@@ -1468,7 +1491,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           for (const label of parameterHeaders) {
             if (!draft.parameters.some((item) => item.key === label)) {
               const kind: ItemKind = label.startsWith("轮") ? "reel" : label.startsWith("线") || label.startsWith("PE线") ? "line" : "rod";
-              draft.parameters.push({ key: label, label, itemKind: kind, unit: "", precision: 2, notes: "Excel 导入" });
+              draft.parameters.push({ id: createParameterId(), key: label, label, itemKind: kind, unit: "", precision: 2, notes: "Excel 导入" });
             }
           }
           draft.templates = rows.slice(headerIndex + 1).filter((row) => row[0]).map((row) => {
@@ -1622,7 +1645,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         <thead><tr><th>参数名</th><th>道具</th><th>单位</th><th>精度</th><th>备注</th><th /></tr></thead>
         <tbody>
           {parametersForKind.map((parameter) => (
-            <tr key={parameter.key}>
+            <tr key={parameter.id ?? parameter.key}>
               <td><TextInput value={parameter.label} onChange={(value) => renameParameter(parameter.key, value)} /></td>
               <td>
                 <SelectInput
@@ -1696,7 +1719,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
               <th>最小拉力kgf</th>
               <th>最大拉力kgf</th>
               <th>鱼重等级</th>
-              {parametersForKind.map((parameter) => <th key={parameter.key}>{parameter.label}<small>{parameter.unit}</small></th>)}
+              {parametersForKind.map((parameter) => <th key={parameter.id ?? parameter.key}>{parameter.label}<small>{parameter.unit}</small></th>)}
               <th className="wide-col">备注</th>
               <th />
             </tr>
@@ -1732,7 +1755,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
                   draft.templates[index].fishWeightLevel = value !== "" && Number.isFinite(numeric) ? numeric : value;
                 })} /></td>
                 {parametersForKind.map((parameter) => (
-                  <td key={parameter.key}>
+                  <td key={parameter.id ?? parameter.key}>
                     <TextInput
                       type={typeof template.values[parameter.key] === "number" ? "number" : "text"}
                       step={10 ** -parameter.precision}
@@ -1796,7 +1819,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
               <tr>
                 <th className="sticky-col">启用 / 名称</th>
                 <th>级别</th>
-                {parametersForKind.map((parameter) => <th key={parameter.key}>{parameter.label}</th>)}
+                {parametersForKind.map((parameter) => <th key={parameter.id ?? parameter.key}>{parameter.label}</th>)}
                 <th className="wide-col">备注</th>
                 <th />
               </tr>
@@ -1821,7 +1844,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
                   {parametersForKind.map((parameter) => {
                     const rule = option.rules.find((item) => item.parameterKey === parameter.key);
                     return (
-                      <td key={parameter.key} className={rule ? "rule-active" : ""}>
+                      <td key={parameter.id ?? parameter.key} className={rule ? "rule-active" : ""}>
                         <TextInput
                           value={ruleCell(rule)}
                           placeholder="—"
@@ -1926,7 +1949,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
                       const current = target?.rules.find((item) => item.id === rule.id);
                       if (current) current.parameterKey = value;
                     })}>
-                      {state.parameters.map((parameter) => <option key={parameter.key} value={parameter.key}>{parameter.label}</option>)}
+                      {state.parameters.map((parameter) => <option key={parameter.id ?? parameter.key} value={parameter.key}>{parameter.label}</option>)}
                     </SelectInput>
                     <SelectInput value={rule.operation} onChange={(value) => mutate((draft) => {
                       const target = draft.layers.find((item) => item.id === selectedLayer.id);
@@ -1987,7 +2010,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           <thead>
             <tr>
               <th className="sticky-col">启用 / 词条</th><th>类型</th><th>分值</th><th>稀有度</th><th>标签</th>
-              {parametersForKind.map((parameter) => <th key={parameter.key}>{parameter.label}</th>)}
+              {parametersForKind.map((parameter) => <th key={parameter.id ?? parameter.key}>{parameter.label}</th>)}
               <th className="wide-col">机制说明</th><th />
             </tr>
           </thead>
@@ -2023,7 +2046,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
                 {parametersForKind.map((parameter) => {
                   const rule = affix.rules.find((item) => item.parameterKey === parameter.key);
                   return (
-                    <td key={parameter.key} className={rule ? "rule-active" : ""}>
+                    <td key={parameter.id ?? parameter.key} className={rule ? "rule-active" : ""}>
                       <TextInput value={ruleCell(rule)} placeholder="—" onChange={(value) => mutate((draft) => {
                         const target = draft.affixes.find((item) => item.id === affix.id);
                         if (!target) return;

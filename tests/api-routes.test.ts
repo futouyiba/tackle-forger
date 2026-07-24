@@ -849,6 +849,29 @@ test("Series 创建拒绝未知或 technology_only 的直接词条", { concurren
   }
 });
 
+test("Series 创建拒绝跨部位的直接词条", { concurrency: false }, async () => {
+  withTrustedProxy();
+  const { state } = await loadWorkspaceState();
+  const projection = state.derivedProjections[0]!;
+  const type = state.itemTypeProfiles.find((entry) => entry.id === projection.typeId)!;
+  const itemPartId = type.itemPartIds[0]!;
+  const crossPart = state.v3Affixes.find((entry) =>
+    entry.enabled && entry.generationPolicy !== "technology_only" && entry.itemPartId !== itemPartId,
+  )!;
+  const response = await issueAndInvoke({
+    action: "create_series", url: "http://localhost/api/series", method: "POST", invoke: createSeries,
+    payload: {
+      idempotencyKey: "route-create-cross-part-affix", seriesId: "series:route-create-cross-part-affix",
+      name: "跨部位词条", concept: "创建路径也必须拒绝不属于当前部位的核心词条。",
+      itemPartId, methodId: projection.methodId, typeId: projection.typeId, functionId: projection.functionId,
+      qualityId: projection.qualityId, functionIntensity: projection.functionIntensity,
+      directAffixIds: [crossPart.id], discretePulls: "1.5",
+    },
+  });
+  assert.equal(response.status, 422);
+  assert.equal(((await response.json()) as { field?: string }).field, "directAffixIds");
+});
+
 test("Series 核心词条更新以 Series revision CAS 保存，并保留历史未知引用", { concurrency: false }, async () => {
   withTrustedProxy();
   const initial = await loadWorkspaceState();

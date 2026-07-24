@@ -277,10 +277,10 @@ async function executeSeriesBusinessRequest(request: NextRequest) {
   }
   const directAffixError = directAffixIds.find((id) => {
     const affix = state.v3Affixes.find((entry) => entry.id === id);
-    return !affix || !affix.enabled || affix.generationPolicy === "technology_only";
+    return !affix || !affix.enabled || affix.generationPolicy === "technology_only" || affix.itemPartId !== body.itemPartId;
   });
   if (directAffixError) {
-    return NextResponse.json({ error: "直接词条不存在、已禁用或仅能由 Technology 提供。", field: "directAffixIds", id: directAffixError }, { status: 422 });
+    return NextResponse.json({ error: "直接词条不存在、已禁用、仅能由 Technology 提供，或不属于该 Series 部位。", field: "directAffixIds", id: directAffixError }, { status: 422 });
   }
   const ruleSet = [...state.ruleSetVersions]
     .filter((entry) => entry.status === "published")

@@ -23,6 +23,36 @@ export function motionLiveAnnouncement(previous: MotionStatus | undefined, next:
 export type MotionKeyboardCommand = "playPause" | "skip" | "replay" | "trace" | "issues";
 type MotionStateTone = "benefit" | "cost" | "patch" | "check" | "neutral";
 
+/**
+ * A stopped or invalidated presentation must not make already-authoritative
+ * evidence disappear. This remains a display decision: it never resumes or
+ * recalculates a stale sequence.
+ */
+export function visibleMotionEvidence<T>(
+  status: MotionStatus,
+  steps: readonly T[],
+  stepIndex: number,
+): readonly T[] {
+  if (status === "completed" || status === "cancelled" || status === "superseded") return steps;
+  return steps.slice(0, Math.max(0, stepIndex + 1));
+}
+
+/** Labels retained evidence without implying that it belongs to a newer revision. */
+export function motionFrozenEvidenceNotice(
+  status: MotionStatus,
+  sourceRevision: string,
+  detectedRevision: string,
+  outputHash: string,
+): string | undefined {
+  if (status === "superseded") {
+    return `已阻断：检测到 revision ${detectedRevision}。以下为来源 revision ${sourceRevision} 的冻结 Trace 证据（output hash：${outputHash}），不是新 revision 的结果。`;
+  }
+  if (status === "cancelled") {
+    return `播放已停止：以下为来源 revision ${sourceRevision} 的冻结 Trace 证据（output hash：${outputHash}）；未继续结算或改写结果。`;
+  }
+  return undefined;
+}
+
 /** Keyboard shortcuts are ignored while typing in a native editable control. */
 export function motionKeyboardCommand(
   key: string,

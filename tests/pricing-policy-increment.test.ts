@@ -44,7 +44,6 @@ const ref = (cell: string, sheetId = "u87sRh") => ({ sheetId, cell });
 const sourced = (value: number, cell: string) => ({ value, status: "CONFIRMED" as const, source: ref(cell) });
 
 function completeInput(overrides: Partial<PricingPolicyDraft> = {}) {
-  const baskets = ["run", "steady", "attack"];
   const moneyPolicy: PricingMoneyPolicyDraft = {
     unit: "金币",
     rounding: "significant_digits_floor",
@@ -65,20 +64,18 @@ function completeInput(overrides: Partial<PricingPolicyDraft> = {}) {
     qualitySheetId: "FqD4j7" as const,
     typeMaterialSheetId: "fATowU" as const,
     businessFormulaCells: [ref("B2"), ref("B8")],
-    pricingBaskets: baskets.map((id, index) => ({ id: `pricing_basket:${id}`, sourceAlias: ["跑刀", "稳健", "猛攻"][index], source: ref(`C${5 + index}`) })),
-    maintenanceConsumptionRates: baskets.map((id, index) => ({ pricingWeightBandId: "band:matched", pricingBasketId: `pricing_basket:${id}`, value: sourced(12_345_678, `D${23 + index}`) })),
+    maintenanceConsumptionRates: [{ pricingWeightBandId: "band:matched", value: sourced(12_345_678, "D23") }],
     partAllocationRatios: [{ pricingWeightBandId: "band:matched", partId: "rod", value: sourced(1, "G23") }],
     repairCoefficients: [{ partId: "rod", typeId: "RodType:spinning", value: { ...sourced(1, "U3"), source: ref("U3", "fATowU") } }],
-    totalLossTimes: baskets.map((id, index) => ({ pricingWeightBandId: "band:matched", pricingBasketId: `pricing_basket:${id}`, partId: "rod", value: sourced(1, `M${23 + index}`) })),
+    totalLossTimes: [{ pricingWeightBandId: "band:matched", partId: "rod", value: sourced(1, "M23") }],
     purchaseCoefficients: [{ partId: "rod", typeId: "RodType:spinning", value: { ...sourced(1, "V3"), source: ref("V3", "fATowU") } }],
-    partsToWholeRatios: baskets.map((id, index) => ({ pricingWeightBandId: "band:matched", pricingBasketId: `pricing_basket:${id}`, partId: "rod", value: sourced(1, `P${23 + index}`) })),
+    partsToWholeRatios: [{ pricingWeightBandId: "band:matched", partId: "rod", value: sourced(1, "P23") }],
     qualityMappings: [
-      ["quality_c_green", "run"], ["quality_b_blue", "steady"],
-      ["quality_a_purple", "attack"], ["quality_s_orange", "attack"],
-    ].map(([qualityId, basket], index) => ({
+      ["quality_c_green", "C"], ["quality_b_blue", "B"],
+      ["quality_a_purple", "A"], ["quality_s_orange", "S"],
+    ].map(([qualityId, code], index) => ({
       qualityId: qualityId as QualityId,
-      pricingBasketId: `pricing_basket:${basket}`,
-      sourceAlias: basket,
+      sourceAlias: code,
       status: "CONFIRMED" as const,
       source: ref(`D${5 + index}`, "FqD4j7"),
     })),
@@ -133,15 +130,12 @@ function finalSettlementTrace(values: Record<string, number | string>): Projecti
 test("B score=30 在 0.8~1.2 区间线性插值得到 1.0", () => {
   const result = trial(importPricingPolicyDraft(completeInput()), "quality_b_blue", 30);
   assert.equal(result.trace.find((entry) => entry.formulaStep === "scoreInterpolationFactor")?.operand, 1);
-  assert.equal(result.pricingBasketId, "pricing_basket:steady");
 });
 
-test("A/S 共用猛攻篮子但分别使用自己的品质价格系数", () => {
+test("A/S 使用各自品质的价格系数区间，共享同一组查表基准", () => {
   const draft = importPricingPolicyDraft(completeInput());
   const a = trial(draft, "quality_a_purple", 52.5);
   const s = trial(draft, "quality_s_orange", 82.5);
-  assert.equal(a.pricingBasketId, "pricing_basket:attack");
-  assert.equal(s.pricingBasketId, "pricing_basket:attack");
   assert.equal(a.trace.find((entry) => entry.formulaStep === "scoreInterpolationFactor")?.operand, 1);
   assert.equal(s.trace.find((entry) => entry.formulaStep === "scoreInterpolationFactor")?.operand, 2.5);
 });

@@ -289,12 +289,12 @@ export function QualityValuePolicyPanel({
 
 function sourceRows(draft: PricingPolicyDraft) {
   return [
-    ...draft.maintenanceConsumptionRates.map((entry) => ({ step: "maintenanceConsumptionRate", key: `${entry.pricingWeightBandId} × ${entry.pricingBasketId}`, value: entry.value })),
+    ...draft.maintenanceConsumptionRates.map((entry) => ({ step: "maintenanceConsumptionRate", key: `${entry.pricingWeightBandId}`, value: entry.value })),
     ...draft.partAllocationRatios.map((entry) => ({ step: "partAllocationRatio", key: `${entry.partId} × ${entry.pricingWeightBandId}`, value: entry.value })),
     ...draft.repairCoefficients.map((entry) => ({ step: "repairCoefficient", key: `${entry.partId} × ${entry.typeId}`, value: entry.value })),
-    ...draft.totalLossTimes.map((entry) => ({ step: "totalLossTime", key: `${entry.partId} × ${entry.pricingWeightBandId} × ${entry.pricingBasketId}`, value: entry.value })),
+    ...draft.totalLossTimes.map((entry) => ({ step: "totalLossTime", key: `${entry.partId} × ${entry.pricingWeightBandId}`, value: entry.value })),
     ...draft.purchaseCoefficients.map((entry) => ({ step: "purchaseCoefficient", key: `${entry.partId} × ${entry.typeId}`, value: entry.value })),
-    ...draft.partsToWholeRatios.map((entry) => ({ step: "partsToWholeRatio", key: entry.partId, value: entry.value })),
+    ...draft.partsToWholeRatios.map((entry) => ({ step: "partsToWholeRatio", key: `${entry.partId} × ${entry.pricingWeightBandId}`, value: entry.value })),
   ];
 }
 
@@ -350,7 +350,7 @@ export function PricingPolicyDraftPanel({
         <button className="button button-default button-sm" type="button" onClick={calculate}>试算</button>
       </div>
       <div className="quality-basket-map pricing-map">
-        {draft.qualityMappings.map((mapping) => <div key={mapping.qualityId}><strong>{mapping.qualityId}</strong><ArrowRight size={13} /><span>{mapping.pricingBasketId}</span><small>{sourceLabel(mapping.source)}</small></div>)}
+        {draft.qualityMappings.map((mapping) => <div key={mapping.qualityId}><strong>{mapping.qualityId}</strong><ArrowRight size={13} /><span>{mapping.sourceAlias}</span><small>{sourceLabel(mapping.source)}</small></div>)}
       </div>
       {error ? <div className="rule-inline-error"><AlertTriangle size={16} />{error}</div> : null}
       {trial ? (

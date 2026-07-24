@@ -21,15 +21,13 @@ export interface SourcedPricingValue<T> {
 
 export interface PricingLookupEntry {
   pricingWeightBandId?: string;
-  pricingBasketId?: string;
   partId?: string;
   typeId?: string;
   value: SourcedPricingValue<number>;
 }
 
-export interface QualityPricingBasketMapping {
+export interface QualityPricingMapping {
   qualityId: QualityId;
-  pricingBasketId: string;
   sourceAlias: string;
   status: PricingInputStatus;
   source: PricingCellRef;
@@ -89,14 +87,13 @@ export interface PricingPolicyDraft {
   qualitySheetId?: "FqD4j7";
   typeMaterialSheetId: "fATowU";
   businessFormulaCells: PricingCellRef[];
-  pricingBaskets: Array<{ id: string; sourceAlias: string; source: PricingCellRef }>;
   maintenanceConsumptionRates: PricingLookupEntry[];
   partAllocationRatios: PricingLookupEntry[];
   repairCoefficients: PricingLookupEntry[];
   totalLossTimes: PricingLookupEntry[];
   purchaseCoefficients: PricingLookupEntry[];
   partsToWholeRatios: PricingLookupEntry[];
-  qualityMappings: QualityPricingBasketMapping[];
+  qualityMappings: QualityPricingMapping[];
   qualityPriceFactorRanges?: QualityPriceFactorRange[];
   scoreInterpolation?: ScoreInterpolationPolicyDraft;
   performanceScoringPolicy?: PerformanceScoringPolicyDraft;
@@ -132,7 +129,6 @@ export interface PricingTrialResult {
   /** 绑定本次价格试算实际消费的规范品质价值分。 */
   valueScore: number;
   pricingWeightBandId: string;
-  pricingBasketId: string;
   repairPriceUnrounded: number;
   purchasePriceUnrounded: number;
   purchasePrice: number | null;
@@ -230,14 +226,8 @@ export function importPricingPolicyDraft(input: Omit<PricingPolicyDraft, "id" | 
       issues.push({
         code: mappings.length ? "QUALITY_PRICING_MAPPING_DUPLICATE" : "QUALITY_PRICING_MAPPING_MISSING",
         severity: "error",
-        message: `${qualityId} 到 PricingBasket 的映射必须且只能有一条。`,
+        message: `${qualityId} 的品质定价映射必须且只能有一条。`,
       });
-    }
-  }
-  const basketIds = new Set(input.pricingBaskets.map((basket) => basket.id));
-  for (const mapping of input.qualityMappings) {
-    if (!basketIds.has(mapping.pricingBasketId)) {
-      issues.push({ code: "QUALITY_PRICING_MAPPING_UNKNOWN", severity: "error", message: `${mapping.qualityId} 指向未知 PricingBasket ${mapping.pricingBasketId}。`, source: mapping.source });
     }
   }
 
@@ -249,7 +239,7 @@ export function importPricingPolicyDraft(input: Omit<PricingPolicyDraft, "id" | 
     issues.push({ code: "PRICING_INTERPOLATION_MISSING", severity: "warning", message: "评分插值策略尚未导入；正式定价不可发布。" });
   }
   if (!input.partsToWholeRatios.length) {
-    issues.push({ code: "PARTS_TO_WHOLE_RATIO_MISSING", severity: "warning", message: "重量段×PricingBasket×部位零整比尚未导入；正式定价不可发布。" });
+    issues.push({ code: "PARTS_TO_WHOLE_RATIO_MISSING", severity: "warning", message: "重量段×部位的零整比尚未导入；正式定价不可发布。" });
   }
   if (!input.moneyPolicy) {
     issues.push({ code: "PRICING_MONEY_POLICY_MISSING", severity: "warning", message: "金额单位、舍入和价格边界尚未导入；正式定价不可发布。" });
@@ -364,12 +354,11 @@ function roundMoney(value: number, policy: PricingMoneyPolicyDraft) {
 
 function lookupRatio(
   entries: PricingLookupEntry[],
-  input: { partId: string; pricingWeightBandId: string; pricingBasketId: string },
+  input: { partId: string; pricingWeightBandId: string },
 ) {
   return exactlyOne(entries.filter((entry) =>
     entry.partId === input.partId
     && (entry.pricingWeightBandId === input.pricingWeightBandId || entry.pricingWeightBandId === "" || entry.pricingWeightBandId === undefined)
-    && (entry.pricingBasketId === input.pricingBasketId || entry.pricingBasketId === undefined)
   ), "零整比");
 }
 
@@ -382,17 +371,16 @@ export function calculatePricingTrial(input: {
   qualityId: QualityId;
 }): PricingTrialResult {
   const policy = input.policy;
-  const mapping = exactlyOne(policy.qualityMappings.filter((entry) => entry.qualityId === input.qualityId), "品质定价映射");
-  const basketId = mapping.pricingBasketId;
-  const consumption = exactlyOne(policy.maintenanceConsumptionRates.filter((entry) => entry.pricingWeightBandId === input.pricingWeightBandId && entry.pricingBasketId === basketId), "维修消耗速度");
+  // 品质定价映射必须存在且唯一；试算不再消费映射内容，仅保留发布前的存在性校验。
+  exactlyOne(policy.qualityMappings.filter((entry) => entry.qualityId === input.qualityId), "品质定价映射");
+  const consumption = exactlyOne(policy.maintenanceConsumptionRates.filter((entry) => entry.pricingWeightBandId === input.pricingWeightBandId), "维修消耗速度");
   const allocation = exactlyOne(policy.partAllocationRatios.filter((entry) => entry.pricingWeightBandId === input.pricingWeightBandId && entry.partId === input.partId), "部位占比");
   const repairCoefficient = exactlyOne(policy.repairCoefficients.filter((entry) => entry.partId === input.partId && entry.typeId === input.typeId), "维修系数");
-  const lossTime = exactlyOne(policy.totalLossTimes.filter((entry) => entry.pricingWeightBandId === input.pricingWeightBandId && entry.pricingBasketId === basketId && entry.partId === input.partId), "全损时间");
+  const lossTime = exactlyOne(policy.totalLossTimes.filter((entry) => entry.pricingWeightBandId === input.pricingWeightBandId && entry.partId === input.partId), "全损时间");
   const purchaseCoefficient = exactlyOne(policy.purchaseCoefficients.filter((entry) => entry.partId === input.partId && entry.typeId === input.typeId), "购买系数");
   const partsToWhole = lookupRatio(policy.partsToWholeRatios, {
     partId: input.partId,
     pricingWeightBandId: input.pricingWeightBandId,
-    pricingBasketId: basketId,
   });
   if (!policy.scoreInterpolation) throw new Error("定价草稿缺少评分插值策略，无法试算。");
   const factor = interpolationFactor(
@@ -477,7 +465,6 @@ export function calculatePricingTrial(input: {
     pricingPolicyRef: policy.id,
     valueScore: input.valueScore,
     pricingWeightBandId: input.pricingWeightBandId,
-    pricingBasketId: basketId,
     repairPriceUnrounded,
     purchasePriceUnrounded,
     purchasePrice,

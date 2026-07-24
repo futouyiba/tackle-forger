@@ -72,7 +72,7 @@ purchasePrice = max(purchasePriceRounded, 100)
 → 组合分
 → FunctionProfile.scoreFactor
 → 品质区间校验
-→ 结构源重量段与PricingBasket查表
+→ 结构源重量段与部位查表
 → repairPriceRaw
 → purchasePriceRaw
 → 检查超限确认阈值

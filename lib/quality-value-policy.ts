@@ -79,8 +79,8 @@ export interface QualityValuePolicyDraft {
 
 export interface QualityTableDescriptor {
   headerSource: PricingCellRef;
-  columns: Record<"品质" | "代码" | "PricingBasket" | "≥最小评分" | "<最大评分" | "最小价格系数" | "最大价格系数", number>;
-  rows: Array<{ qualityId: QualityId; code: string; basketAlias: string; minScore: number; maxScore: number; minFactor: number; maxFactor: number; mappingSource: PricingCellRef; factorSource: PricingCellRef }>;
+  columns: Record<"品质" | "代码" | "≥最小评分" | "<最大评分" | "最小价格系数" | "最大价格系数", number>;
+  rows: Array<{ qualityId: QualityId; code: string; minScore: number; maxScore: number; minFactor: number; maxFactor: number; mappingSource: PricingCellRef; factorSource: PricingCellRef }>;
 }
 
 export interface QualityScoreTraceEntry {

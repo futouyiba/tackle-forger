@@ -1110,4 +1110,20 @@ test("旧正式五维状态只从 published Model 的当前 Snapshot 指针确�
   assert.equal(blocked?.state, "UNAVAILABLE_NO_ELIGIBLE_CANDIDATE");
   assert.equal(blocked?.reasonCode, "FIVE_AXIS_MIGRATION_VERTEX_SET_UNRESOLVED");
   assert.equal(blocked?.currentVertexSetId, null);
+
+  const duplicateDefinition = {
+    ...structuredClone(definition),
+    definitionHash: "f".repeat(64),
+  };
+  for (const definitions of [
+    [definition, duplicateDefinition],
+    [duplicateDefinition, definition],
+  ]) {
+    const ambiguousDefinition = structuredClone(legacy);
+    ambiguousDefinition.fiveAxisViewDefinitions = definitions;
+    assert.throws(
+      () => migrateWorkspaceState(ambiguousDefinition),
+      /FIVE_AXIS_MIGRATION_DEFINITION_UNRESOLVED/,
+    );
+  }
 });

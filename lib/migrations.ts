@@ -1673,8 +1673,9 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
         grouped.set(identity, group);
       }
       return [...grouped.values()].map<import("./types").FiveAxisVertexGroupState>((group) => {
-        const definition = fiveAxisDefinitions.find((entry) => "semanticContractVersion" in entry && entry.definitionId === group.key.fiveAxisDefinitionId && entry.version === group.key.fiveAxisDefinitionVersion);
-        if (!definition) throw new Error("FIVE_AXIS_MIGRATION_DEFINITION_UNRESOLVED：当前 Snapshot 的正式五维定义无法唯一回读。");
+        const matchingDefinitions = fiveAxisDefinitions.filter((entry) => "semanticContractVersion" in entry && entry.definitionId === group.key.fiveAxisDefinitionId && entry.version === group.key.fiveAxisDefinitionVersion);
+        if (matchingDefinitions.length !== 1) throw new Error("FIVE_AXIS_MIGRATION_DEFINITION_UNRESOLVED：当前 Snapshot 的正式五维定义无法唯一回读。");
+        const definition = matchingDefinitions[0];
         let rebuilt: import("./types").FiveAxisVertexSet;
         try {
           rebuilt = createFormalFiveAxisVertexSet({ definition: definition as import("./types").FiveAxisViewDefinition, groupKey: group.key, candidateSources: group.sources });

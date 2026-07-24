@@ -35,6 +35,14 @@ export function projectTraceSettlementEntries(entries: readonly CalculationTrace
   );
 }
 
+/**
+ * The settlement animation is only a scoped presentation. Its playback state
+ * must never hide, filter, or replace the canonical frozen archive evidence.
+ */
+export function canonicalTraceEvidenceEntries(entries: readonly CalculationTraceEntry[]) {
+  return entries;
+}
+
 /** Idle always presents the first frozen before value; final values appear only after settlement advances. */
 export function traceSettlementMainValue(model: MotionPresentationModel, status: MotionStatus, stepIndex: number) {
   if (stepIndex < 0) return model.steps[0]?.before;

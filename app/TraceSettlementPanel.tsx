@@ -9,8 +9,8 @@ import {
   systemPrefersReducedMotion,
   type MotionTraceLike,
 } from "@/lib/motion-presentation";
-import { displayOnlyTraceDelta, formatDisplayOnlyDelta, projectTraceSettlementEntries, traceSettlementKind, traceSettlementMainValue, traceSettlementTargets } from "@/lib/trace-settlement-presentation";
-import { verifyCalculationTraceArchive, type CalculationTraceArchive } from "@/lib/calculation-trace";
+import { canonicalTraceEvidenceEntries, displayOnlyTraceDelta, formatDisplayOnlyDelta, projectTraceSettlementEntries, traceSettlementKind, traceSettlementMainValue, traceSettlementTargets } from "@/lib/trace-settlement-presentation";
+import { verifyCalculationTraceArchive, type CalculationTraceArchive, type CalculationTraceEntry } from "@/lib/calculation-trace";
 
 interface TraceSettlementPanelProps {
   archive: CalculationTraceArchive;
@@ -22,6 +22,30 @@ function formatTraceValue(value: unknown) {
   if (value === undefined || value === null) return "—";
   if (typeof value === "object") return JSON.stringify(value);
   return String(value);
+}
+
+function traceSourceLabel(sourceRef: CalculationTraceEntry["sourceRef"]) {
+  return "entityType" in sourceRef
+    ? `${sourceRef.entityType}:${sourceRef.entityId}`
+    : `${sourceRef.sourceType}:${sourceRef.sourceId}`;
+}
+
+function CanonicalTraceEvidence({ entries }: { entries: readonly CalculationTraceEntry[] }) {
+  return <details className="trace-canonical-evidence" open>
+    <summary>完整冻结 Trace 证据（{entries.length} 条，播放状态不筛选）</summary>
+    <p>全局 sequence、来源和版本、原始操作及服务端 ActionLink 保持只读；动效只是一种范围投影。</p>
+    <div className="trace-canonical-evidence-list">
+      {entries.map((entry) => <article key={entry.traceEntryId}>
+        <header><strong>#{entry.sequence} · {entry.parameterKey}</strong><span>{entry.layer} · {entry.effect}</span></header>
+        <dl>
+          <div><dt>来源 / 版本</dt><dd>{traceSourceLabel(entry.sourceRef)} · source {entry.sourceVersion} · rules {entry.ruleSetVersion}</dd></div>
+          <div><dt>结算</dt><dd>before {formatTraceValue(entry.before)} · {entry.operation} · operand {formatTraceValue(entry.operand)} · after {formatTraceValue(entry.after)}{entry.unit ? ` ${entry.unit}` : ""}</dd></div>
+          <div><dt>Issue</dt><dd>{entry.warningIssueIds.length ? entry.warningIssueIds.join("、") : "无"}</dd></div>
+          <div><dt>动作入口</dt><dd>{entry.actions.length ? entry.actions.map((action) => <span className="trace-action-link" key={action.actionId}>{action.label}（{action.action} · {action.enabled ? "可用" : "不可用"}）</span>) : "无"}</dd></div>
+        </dl>
+      </article>)}
+    </div>
+  </details>;
 }
 
 /** Consumes a frozen CalculationTraceArchive; it has no command or persistence path. */
@@ -80,6 +104,7 @@ function TraceSettlementPlayback({ model, archive, passiveAffixCount }: {
       <aside className="trace-evidence-panel"><span>解释 / 证据</span>{activeStep ? <><strong>{traceSettlementKind(activeStep).label}</strong><p>before {formatTraceValue(activeStep.before)} · {activeStep.operation} · operand {formatTraceValue(activeStep.operand)} · after {formatTraceValue(activeStep.after)}</p><small>sequence {activeStep.sequence} · source version {activeStep.sourceVersion}</small>{activeStep.warningIssueIds.length ? <b>检查：{activeStep.warningIssueIds.join("、")}</b> : <b>无附加 Issue</b>}</> : <p>完整 Trace 与冻结哈希会在播放时原样展示。</p>}</aside>
     </div>
     <div className="trace-settlement-evidence"><span>冻结 Trace hash</span><code>{archive.traceHash}</code><span>replay hash</span><code>{archive.replayHash}</code><small>仅在 before / after 都是有限数时显示临时 delta；它不写入领域结果、hash、重放或 Snapshot。非数值、set / clear / min / max / no_effect 均呈现原操作语义。</small></div>
+    <CanonicalTraceEvidence entries={canonicalTraceEvidenceEntries(archive.entries)} />
     {passiveAffixCount ? <div className="trace-passive-note"><BadgeCheck size={15} />{passiveAffixCount} 个被动词条只保存、计分和展示；不改变主数字。</div> : null}
     {locking ? <div className="trace-final-lock"><BadgeCheck size={16} />最终结果锁定中 · 冻结证据保持只读</div> : null}{complete ? <div className="trace-final-lock"><BadgeCheck size={16} />最终结果已锁定 · 冻结证据保持只读</div> : null}
   </section>;

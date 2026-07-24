@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createCalculationTraceArchive, createCalculationTraceEntry, verifyCalculationTraceArchive } from "../lib/calculation-trace";
-import { buildMotionPresentationModel, type MotionPresentationStep } from "../lib/motion-presentation";
-import { displayOnlyTraceDelta, formatDisplayOnlyDelta, projectTraceSettlementEntries, traceSettlementKind, traceSettlementMainValue, traceSettlementTargets } from "../lib/trace-settlement-presentation";
+import { buildMotionPresentationModel, initialMotionPlaybackState, motionPlaybackReducer, type MotionPresentationStep } from "../lib/motion-presentation";
+import { canonicalTraceEvidenceEntries, displayOnlyTraceDelta, formatDisplayOnlyDelta, projectTraceSettlementEntries, traceSettlementKind, traceSettlementMainValue, traceSettlementTargets } from "../lib/trace-settlement-presentation";
 
 const baseStep: Pick<MotionPresentationStep, "layer" | "operation" | "effect"> = {
   layer: "method", operation: "add", effect: "benefit",
@@ -69,4 +69,34 @@ test("idle settlement presents the first frozen before value, not the final resu
   assert.equal(traceSettlementMainValue(model, "idle", -1), 8);
   assert.equal(traceSettlementMainValue(model, "playing", 0), 9);
   assert.equal(traceSettlementMainValue(model, "completed", 2), 10);
+});
+
+test("skip and completion retain every canonical frozen Trace evidence entry", () => {
+  const subjectRef = { workspaceId: "workspace", entityType: "model" as const, entityId: "model", revisionId: "1" };
+  const common = { subjectRef, parameterKey: "pull", layer: "method" as const, sourceRef: { sourceType: "Method", sourceId: "lure" }, sourceVersion: "source:7", ruleSetVersion: "rules:9", effect: "benefit" as const };
+  const archive = createCalculationTraceArchive([
+    createCalculationTraceEntry({ ...common, traceEntryId: "one", sequence: 1, before: 8, operation: "add", operand: 1, after: 9, warningIssueIds: ["warn-1"], actions: [{ actionId: "review", action: "review_source", label: "查看来源", enabled: true }] }),
+    createCalculationTraceEntry({ ...common, traceEntryId: "two", sequence: 2, before: 9, operation: "no_effect", operand: null, after: 9, warningIssueIds: [], actions: [{ actionId: "retry", action: "retry", label: "重试", enabled: false }] }),
+  ]);
+  const model = buildMotionPresentationModel({ businessRevision: "snapshot:1", subjectId: "model", parameterKey: "pull", trace: archive.entries });
+  const skipped = motionPlaybackReducer(initialMotionPlaybackState(model), { type: "skip" }, model.steps.length);
+  let completed = motionPlaybackReducer(initialMotionPlaybackState(model), { type: "play" }, model.steps.length);
+  completed = motionPlaybackReducer(completed, { type: "advance" }, model.steps.length);
+  completed = motionPlaybackReducer(completed, { type: "advance" }, model.steps.length);
+  completed = motionPlaybackReducer(completed, { type: "finalLockComplete" }, model.steps.length);
+  assert.equal(skipped.status, "completed");
+  assert.equal(completed.status, "completed");
+  for (const playback of [skipped, completed]) {
+    assert.equal(playback.status, "completed");
+    assert.deepEqual(canonicalTraceEvidenceEntries(archive.entries), archive.entries);
+  }
+  assert.deepEqual(canonicalTraceEvidenceEntries(archive.entries).map((entry) => ({
+    sequence: entry.sequence, sourceRef: entry.sourceRef, sourceVersion: entry.sourceVersion, ruleSetVersion: entry.ruleSetVersion,
+    before: entry.before, operation: entry.operation, operand: entry.operand, after: entry.after,
+    warningIssueIds: entry.warningIssueIds, actions: entry.actions,
+  })), archive.entries.map((entry) => ({
+    sequence: entry.sequence, sourceRef: entry.sourceRef, sourceVersion: entry.sourceVersion, ruleSetVersion: entry.ruleSetVersion,
+    before: entry.before, operation: entry.operation, operand: entry.operand, after: entry.after,
+    warningIssueIds: entry.warningIssueIds, actions: entry.actions,
+  })));
 });

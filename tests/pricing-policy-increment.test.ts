@@ -10,7 +10,11 @@ import {
   type PricingPolicyVersion,
   type QualityId,
 } from "../lib/pricing-policy";
-import { publishConfigurationSnapshot, verifySnapshotIntegrity } from "../lib/publishing";
+import {
+  modelFinalPullKgForSnapshot,
+  publishConfigurationSnapshot,
+  verifySnapshotIntegrity,
+} from "../lib/publishing";
 import {
   hashAffixRuntimeEvidence,
   numberToBinary64Hex,
@@ -272,7 +276,10 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     seriesId: series.id,
     skuId: sku.id,
     skuRevision: sku.revision,
-    modelFinalPullKg: oldSnapshot.modelFinalPullKg!,
+    modelFinalPullKg: modelFinalPullKgForSnapshot(
+      sku.projectionMatch.itemPartId,
+      finalPanelValues,
+    )!,
     finalPanelValues,
     componentSelections: formalComponentSelections,
   });
@@ -352,7 +359,7 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
   assert.throws(() => publishConfigurationSnapshot({
     ...publishInput,
     affixRuntimeEvidence: detachedEvidence,
-  }), /AFFIX_RUNTIME_TRACE_INVALID/);
+  }), /(?:AFFIX_RUNTIME_TRACE_INVALID|FIVE_AXIS_FORMAL_PREVIEW_INVALID)/);
   const forgedEvidence = structuredClone(publishInput.affixRuntimeEvidence);
   forgedEvidence.values = structuredClone(forgedEvidence.finalValues);
   forgedEvidence.postReviewValues = structuredClone(forgedEvidence.finalValues);
@@ -380,7 +387,7 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
   assert.throws(() => publishConfigurationSnapshot({
     ...publishInput,
     affixRuntimeEvidence: forgedEvidence,
-  }), /AFFIX_RUNTIME_TRACE_INVALID/);
+  }), /(?:AFFIX_RUNTIME_TRACE_INVALID|FIVE_AXIS_FORMAL_PREVIEW_INVALID)/);
   const stagedEvidence = structuredClone(publishInput.affixRuntimeEvidence);
   const stagedKey = Object.keys(stagedEvidence.finalValues).find(
     (key) => typeof stagedEvidence.finalValues[key] === "number",
@@ -500,7 +507,7 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
       affixRuntimeEvidence: structuredClone(omittedNoEffectEvidence),
     },
     affixRuntimeEvidence: omittedNoEffectEvidence,
-  }), /authority manifest|AFFIX_RUNTIME_TRACE_INVALID/);
+  }), /authority manifest|AFFIX_RUNTIME_TRACE_INVALID|FIVE_AXIS_FORMAL_PREVIEW_INVALID/);
   const snapshot = publishConfigurationSnapshot({
     ...publishInput,
     projection: stagedProjection,

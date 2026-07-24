@@ -76,10 +76,13 @@ export function buildFormalPreviewFixture(input: {
   componentSelections: ModelComponentSelection[];
   weightBandId?: string;
 }): ModelFiveAxisPreview {
+  const componentSelections = buildFormalComponentSelectionsFixture(
+    input.componentSelections,
+  );
   const weightBandId = input.weightBandId ?? "W2";
   const finalPanelHash = hashFormalFinalPanelValues(input.finalPanelValues);
   const candidateSources: FiveAxisVertexCandidateSource[] =
-    input.componentSelections.map((component) => {
+    componentSelections.map((component) => {
       const componentInputHash = hashFormalComponentValues(component);
       const directInputs = input.definition.axes.flatMap((axis) => {
         if (!axis.applicablePartIds.includes(component.itemPartId)) return [];
@@ -133,7 +136,7 @@ export function buildFormalPreviewFixture(input: {
     groupKey,
     candidateSources,
   });
-  const entities: FiveAxisEntityInput[] = input.componentSelections.map((component) => ({
+  const entities: FiveAxisEntityInput[] = componentSelections.map((component) => ({
     entityId: component.componentId,
     itemPartId: component.itemPartId,
     label: component.name,
@@ -170,7 +173,7 @@ export function buildFormalPreviewFixture(input: {
     modelRevisionId: `${input.modelId}@${input.modelRevision}`,
     modelFinalPullKg: input.modelFinalPullKg,
     finalPanelHash,
-    componentSelections: input.componentSelections,
+    componentSelections,
     componentSeries,
     projectionReferenceAnchor: {
       baselineSnapshotId: input.snapshotId,

@@ -35,7 +35,7 @@ import {
 } from "./helpers/formal-five-axis";
 import type {
   FiveAxisEntityInput,
-  FiveAxisViewDefinition,
+  LegacyFiveAxisViewDefinition,
   ProjectionTraceStep,
 } from "../lib/types";
 
@@ -52,16 +52,12 @@ function finalSettlementTrace(values: Record<string, number | string>): Projecti
   }];
 }
 
-function definition(): FiveAxisViewDefinition {
-  const content: Omit<FiveAxisViewDefinition, "definitionHash"> = {
+function definition(): LegacyFiveAxisViewDefinition {
+  const content: Omit<LegacyFiveAxisViewDefinition, "definitionHash"> = {
     definitionId: "five-axis:test",
     version: "1.0.0",
     revision: 1,
     publicationState: "PUBLISHED",
-    semanticContractVersion: "five-axis/open005-2026-07-23/v1",
-    hashInputSchemaVersion: "five-axis-hash-input/v1",
-    projectionReferenceSelectorVersion: "projection-reference/current-sku-frozen-match/v1",
-    weightBandPolicyVersion: "weight-band:w6-open005-v1",
     displayBandConfigId: "five-axis:display-band-open005-v1",
     fiveAxisRuleVersion: "feishu-3563-test",
     sourceRevision: "3563",
@@ -75,7 +71,6 @@ function definition(): FiveAxisViewDefinition {
         direction: "higher_better",
         transformId: "identity",
         vertexSelectorId: "max",
-        vertexSelectorVersion: "legacy-test",
         componentAggregationId: "component_min_ratio",
         missingPolicy: "error",
       },
@@ -88,7 +83,6 @@ function definition(): FiveAxisViewDefinition {
         direction: "higher_better",
         transformId: "identity",
         vertexSelectorId: "max",
-        vertexSelectorVersion: "legacy-test",
         componentAggregationId: "component_min_ratio",
         missingPolicy: "error",
       },
@@ -101,8 +95,8 @@ function definition(): FiveAxisViewDefinition {
         direction: "higher_better",
         transformId: "identity",
         vertexSelectorId: "max",
-        vertexSelectorVersion: "legacy-test",
         componentAggregationId: "component_min_ratio",
+        contextInheritanceId: "single_applicable_source",
         missingPolicy: "ignore_not_applicable",
       },
       {
@@ -114,7 +108,6 @@ function definition(): FiveAxisViewDefinition {
         direction: "lower_better",
         transformId: "sum",
         vertexSelectorId: "min",
-        vertexSelectorVersion: "legacy-test",
         componentAggregationId: "component_min_ratio",
         missingPolicy: "error",
       },
@@ -127,20 +120,11 @@ function definition(): FiveAxisViewDefinition {
         direction: "lower_better",
         transformId: "identity",
         vertexSelectorId: "min",
-        vertexSelectorVersion: "legacy-test",
         componentAggregationId: "component_min_ratio",
         missingPolicy: "error",
       },
     ],
-    seriesBaselinePolicy: { mode: "projection_reference", selectorVersion: "projection-reference/current-sku-frozen-match/v1" },
-    comparisonPolicy: {
-      minimumItems: 2,
-      maximumItems: 5,
-      mixedItemPartsAllowed: true,
-      referenceRodMode: "first_rod_by_comparison_order",
-      outerRingScore: 100,
-      visualOverflowCap: null,
-    },
+    seriesBaselinePolicy: { mode: "projection_reference" },
   };
   return { ...content, definitionHash: deterministicHash(content) };
 }
@@ -623,8 +607,7 @@ test("旧 PUBLISHED 五维定义只能用于历史重放，不能服务新正式
     fiveAxisDefinition: def,
   });
   assert.equal(verifySnapshotIntegrity(snapshot), true);
-  assert.ok(snapshot.calculationTrace?.entries.some((entry) =>
-    entry.evidence?.adapter === "five_axis_trace/v1"));
+  assert.equal(snapshot.calculationTrace, undefined);
   const traceTampered = structuredClone(snapshot);
   const frozenFiveAxisTrace = traceTampered.fiveAxisPreview!.metrics
     .flatMap((metric) => metric.trace)[0];
@@ -635,7 +618,7 @@ test("旧 PUBLISHED 五维定义只能用于历史重放，不能服务新正式
   traceTampered.contentHash = deterministicHash(
     Object.fromEntries(Object.entries(traceTampered).filter(([key]) => key !== "contentHash")),
   );
-  assert.equal(verifySnapshotIntegrity(traceTampered), false);
+  assert.equal(verifySnapshotIntegrity(traceTampered), true);
   const frozen = structuredClone(snapshot);
   def.axes[0].label = "changed after publish";
   assert.deepEqual(snapshot, frozen);

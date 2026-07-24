@@ -935,6 +935,9 @@ export function publishConfigurationSnapshot(
     attributeAffixIds: structuredClone(input.attributeAffixIds),
     passiveAffixIds: structuredClone(input.passiveAffixIds),
     attributeTrace: structuredClone(finalSettlementTrace ?? input.projection.trace),
+    ...(calculationTrace
+      ? { calculationTrace: structuredClone(calculationTrace) }
+      : {}),
     passiveAffixPayloads: structuredClone(input.passiveAffixPayloads),
     projectionMatch: structuredClone(input.sku.projectionMatch),
     compatibilityReport: structuredClone(input.compatibilityReport),

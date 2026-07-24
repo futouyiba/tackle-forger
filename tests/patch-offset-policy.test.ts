@@ -21,7 +21,10 @@ import {
 } from "../lib/patch-offset-policy";
 import { buildPatchRevision, emptyPatchLedger, orderedPatchReferences, PatchLedgerError, reviewPatchBatch } from "../lib/patch-ledger";
 import { publishConfigurationSnapshot, verifySnapshotIntegrity } from "../lib/publishing";
-import { buildFormalPreviewFixture } from "./helpers/formal-five-axis";
+import {
+  buildFormalComponentSelectionsFixture,
+  buildFormalPreviewFixture,
+} from "./helpers/formal-five-axis";
 import { createExportManifest } from "../lib/config-export";
 import {
   assertPatchEvaluationMatchesAuthority,
@@ -968,6 +971,9 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
     finalPanelValues: oldSnapshot.finalPanelValues,
     componentSelections: oldSnapshot.componentSelections,
   });
+  const formalComponentSelections = buildFormalComponentSelectionsFixture(
+    oldSnapshot.componentSelections,
+  );
   const snapshot = publishConfigurationSnapshot({
     publicationMode: "new_formal",
     workspaceId: "workspace:test",
@@ -988,7 +994,7 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
       oldSnapshot.finalPanelValues,
     ),
     finalPanelValues: oldSnapshot.finalPanelValues,
-    componentSelections: oldSnapshot.componentSelections,
+    componentSelections: formalComponentSelections,
     patches: [],
     patchRevisions,
     patchOffsetGovernance: {

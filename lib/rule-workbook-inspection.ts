@@ -285,9 +285,11 @@ export function pricingDraftFromRanges(input: {
   }
   const executionValue = (key: string) => executionFields.get(key)?.value;
   const executionRow = (key: string) => executionFields.get(key)?.row;
+  const pricingMachineKeys = ["pricing.repairRoundingStage", "pricing.purchaseInput", "pricing.purchaseRoundingStage", "pricing.rounding", "pricing.significantDigits", "pricing.minimumPurchasePrice", "pricing.minimumPriceScope", "pricing.upperThreshold", "pricing.upperThresholdMode"] as const;
+  const hasPricingExecutionFields = pricingMachineKeys.some((k) => executionFields.has(k));
   // These stable machine keys are deliberately required: prose/formula cells
   // never become executable policy defaults.
-  const executionPolicy = executionFields.size ? {
+  const executionPolicy = hasPricingExecutionFields ? {
     repairRoundingStage: executionValue("pricing.repairRoundingStage"),
     purchaseInput: executionValue("pricing.purchaseInput"),
     purchaseRoundingStage: executionValue("pricing.purchaseRoundingStage"),

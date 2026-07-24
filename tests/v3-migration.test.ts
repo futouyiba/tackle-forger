@@ -49,9 +49,9 @@ test("legacy migration 不猜测 workspaceId，正式身份绑定留给存储/�
   assert.equal(migrated.workspaceId, undefined);
 });
 
-test("v20 定价迁移保留旧执行 payload、未知字段与历史 Snapshot，重复执行无变化", () => {
+test("v21 定价迁移保留旧执行 payload、未知字段与历史 Snapshot，重复执行无变化", () => {
   const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
-  legacy.schemaVersion = 19;
+  legacy.schemaVersion = 20;
   legacy.pricingPolicyDrafts = [{
     id: "legacy-pricing", moneyPolicy: {
       roundingStage: "part_purchase_price", minimumPriceScope: "part_purchase_price", overflowMode: "clamp",
@@ -59,7 +59,7 @@ test("v20 定价迁移保留旧执行 payload、未知字段与历史 Snapshot�
   }];
   const snapshots = structuredClone(legacy.configurationSnapshots);
   const migrated = migrateWorkspaceState(legacy);
-  assert.equal(migrated.schemaVersion, 20);
+  assert.equal(migrated.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
   const policy = migrated.pricingPolicyDrafts[0] as unknown as Record<string, unknown>;
   assert.deepEqual(policy.legacyExecutionPayload, {
     roundingStage: "part_purchase_price", minimumPriceScope: "part_purchase_price", overflowMode: "clamp",

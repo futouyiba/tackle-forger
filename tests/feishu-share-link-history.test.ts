@@ -55,7 +55,7 @@ test("schema v19 升级到 v20 时补齐飞书分享链接历史且不改写冻�
   delete legacy.feishuShareLinkHistory;
   const snapshotsBefore = structuredClone(legacy.configurationSnapshots);
   const migrated = migrateWorkspaceState(legacy);
-  assert.equal(migrated.schemaVersion, 20);
+  assert.equal(migrated.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
   assert.deepEqual(migrated.feishuShareLinkHistory, []);
   assert.deepEqual(migrated.configurationSnapshots, snapshotsBefore);
   // 重复迁移幂等
@@ -72,7 +72,7 @@ test("schema v20 保留已有的飞书分享链接历史并过滤非法条目", 
   legacy.feishuShareLinkHistory = [valid, dup, badDataset, noUrl];
   const snapshotsBefore = structuredClone(legacy.configurationSnapshots);
   const migrated = migrateWorkspaceState(legacy);
-  assert.equal(migrated.schemaVersion, 20);
+  assert.equal(migrated.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
   // 去重保留首个合法条目；非法 dataset 与空 URL 被丢弃
   assert.equal(migrated.feishuShareLinkHistory.length, 1);
   assert.equal(migrated.feishuShareLinkHistory[0].shareUrl, SAMPLE_URL_A);
@@ -156,7 +156,7 @@ test("schema v19 迁移剥离历史条目上的 appToken/secret/PII 等额外字
   legacy.schemaVersion = 19;
   legacy.feishuShareLinkHistory = [maliciousEntry(SAMPLE_URL_A)];
   const migrated = migrateWorkspaceState(legacy);
-  assert.equal(migrated.schemaVersion, 20);
+  assert.equal(migrated.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
   assert.equal(migrated.feishuShareLinkHistory.length, 1);
   const projected = migrated.feishuShareLinkHistory[0] as unknown as Record<string, unknown>;
   assert.deepEqual(Object.keys(projected).sort(), ALLOWED_KEYS);
@@ -174,7 +174,7 @@ test("schema v20 直接保存载荷在归一时剥离历史条目上的凭据/PI
   seeded.schemaVersion = 20;
   seeded.feishuShareLinkHistory = [maliciousEntry(SAMPLE_URL_A)];
   const normalized = migrateWorkspaceState(seeded);
-  assert.equal(normalized.schemaVersion, 20);
+  assert.equal(normalized.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
   assert.equal(normalized.feishuShareLinkHistory.length, 1);
   const projected = normalized.feishuShareLinkHistory[0] as unknown as Record<string, unknown>;
   assert.deepEqual(Object.keys(projected).sort(), ALLOWED_KEYS);

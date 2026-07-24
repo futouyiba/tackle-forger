@@ -1,11 +1,11 @@
 # Tackle Forger 动态表现产品需求 v1
 
-> 状态：产品需求已拆解，待建立 GitHub Backlog  
-> 领域权威：`docs/tackle-forger-development-spec-v3.md`  
-> UI 消费契约：`docs/ux/tackle-forger-product-design-completion-v3.md`  
-> 视觉方向：`docs/ux/tackle-forger-ux-design-v1.md`  
-> 原型证据：2026-07-23 动态原型与独立审计  
-> 最后对齐 v3：2026-07-23  
+> 状态：产品需求已拆解，待建立 GitHub Backlog
+> 领域权威：`docs/tackle-forger-development-spec-v3.md`
+> UI 消费契约：`docs/ux/tackle-forger-product-design-completion-v3.md`
+> 视觉方向：`docs/ux/tackle-forger-ux-design-v1.md`
+> 原型证据：2026-07-23 动态原型与独立审计
+> 最后对齐 v3：2026-07-23
 > 本文性质：动效与反馈的 UI 消费契约；不得改变、补全或覆盖 v3 领域语义
 
 ## 1. 背景与产品判断

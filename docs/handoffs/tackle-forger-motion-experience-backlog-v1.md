@@ -1,8 +1,8 @@
 # Tackle Forger 动态表现 Backlog v1
 
-> 对应需求：`docs/ux/tackle-forger-motion-experience-requirements-v1.md`  
-> 最后对齐 v3：2026-07-23  
-> 状态来源：GitHub Issues 与关联 Project；本文只定义初始拆分，不维护活动状态  
+> 对应需求：`docs/ux/tackle-forger-motion-experience-requirements-v1.md`
+> 最后对齐 v3：2026-07-23
+> 状态来源：GitHub Issues 与关联 Project；本文只定义初始拆分，不维护活动状态
 > 基线 commit：`2ebd35915e495ee4acb1874392996833e0e41f05`
 
 ## 1. 拆分原则

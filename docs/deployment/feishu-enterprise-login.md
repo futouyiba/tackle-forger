@@ -5,6 +5,50 @@
 
 Tackle Forger 直接使用飞书网页 OAuth，不依赖 `FEISHU_LOGIN_URL` 或浏览器提交的身份头。
 
+## 三种鉴权路径
+
+| 场景 | 身份方式 | 会话存储 | 说明 |
+| --- | --- | --- | --- |
+| **自动化测试** | 受密钥保护的 trusted-proxy fixture（`x-tf-proxy-secret` + `x-feishu-*`） | 临时目录（`mkdtemp`），测试后自动清理 | 不访问真实飞书网络、不要求真人 OAuth；通过 `FEISHU_TRUST_PROXY_HEADERS=true` 和共享密钥启用，仅在测试中可运行 |
+| **人工 worktree 开发验收** | 真实飞书 OAuth 重定向 | 按 worktree+端口隔离的 `.data/auth-<worktreeName>-<port>`，由 `scripts/start-dev.ps1` 自动推导 | 每个 worktree 有独立会话文件，不互相污染 |
+| **R730 正式生产** | 真实飞书 OAuth 重定向、HTTPS 代理 | 持久磁盘显式路径（`/opt/tackle-forger/data/auth`），由 systemd `EnvironmentFile` 设置 | 包含在 `npm run storage:backup` 的 auth 目录中；不可被开发脚本改写 |
+
+## 自动化测试专用 fixture
+
+测试使用 `tests/auth-test-helpers.ts` 中封装的 trusted-proxy 模式验证
+鉴权逻辑：
+
+- `useTemporaryAuthDir()` —— 创建临时会话目录并设置 `FEISHU_SESSION_DATA_DIR`；
+- `trustedProxyHeaders()` / `createMockAuthRequest()` —— 构造携带模拟身份头的请求；
+- `withTrustedProxyEnvironment()` —— 设置 `FEISHU_TRUST_PROXY_HEADERS=true` 等环境变量。
+
+测试不访问真实飞书网络，不依赖预先完成的浏览器 OAuth，且 `FEISHU_TRUST_PROXY_HEADERS`
+在生产部署中默认关闭，确保 fail-closed。
+
+## worktree 开发隔离
+
+多个 `git worktree` 并行开发时，`scripts/start-dev.ps1` 检测当前目录是否为
+linked worktree（`.git` 是文件而非目录），提取 worktree 名称，并为每个
+`worktree + 端口` 生成独立的会话目录：
+
+```
+.data/auth-<worktreeName>-<port>/
+```
+
+- 该路径已包含在 `.gitignore` 的 `.data/` 规则中。
+- 若终端环境已显式设置 `FEISHU_SESSION_DATA_DIR`，脚本不做改写。
+- 生产部署路径（如 `/opt/tackle-forger/data/auth`）不会被脚本触及。
+
+关于真实 OAuth 回调的端口限制：
+
+> 飞书开放平台登记的 `FEISHU_REDIRECT_URI` 必须与回调 URL 逐字相等。
+> 每个 worktree 开发服务器运行在不同端口，因此回调 URL 中的端口也必须匹配。
+> 例如 worktree A 使用 `http://127.0.0.1:3000/api/auth/feishu/callback`，
+> worktree B 使用 `http://127.0.0.1:3001/api/auth/feishu/callback`。
+> 每个开发者需在飞书开放平台为自己的开发环境登记对应的回调地址（或使用单独的应用）。
+> 本机开发使用 `127.0.0.1` loopback 例外需要 `NODE_ENV=development` 且
+> `FEISHU_ALLOW_INSECURE_HTTP=true`；公网 HTTP 始终拒绝。
+
 ## 飞书开放平台
 
 1. 创建或选择公司租户内的企业自建应用，并启用网页应用能力。

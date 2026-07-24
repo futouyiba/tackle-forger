@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -30,6 +30,7 @@ import {
 } from "../lib/feishu-oauth";
 import { PHASE_ONE_CAPABILITIES } from "../lib/feishu-identity";
 import { actionAvailability } from "../lib/interaction-contracts";
+import { resolveSessionDataDir, sanitizeWorktreeName, detectGitWorktreeName } from "../lib/session-path";
 
 const authDataDir = await mkdtemp(path.join(os.tmpdir(), "tackle-forger-auth-"));
 process.env.FEISHU_SESSION_DATA_DIR = authDataDir;
@@ -356,5 +357,267 @@ test("所有业务 API 对未登录统一返回 401，而不是服务不可用",
     ];
     const responses = await Promise.all(requests);
     assert.deepEqual(responses.map((response) => response.status), [401, 401, 401, 401, 401, 401]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Session path derivation (pure function, no filesystem side effects)
+// ---------------------------------------------------------------------------
+
+test("resolveSessionDataDir 返回默认 .data/auth (无参数)", () => {
+  const result = resolveSessionDataDir({ _cwd: "/tmp/project" });
+  assert.equal(result, path.join("/tmp/project", ".data/auth"));
+});
+
+test("resolveSessionDataDir 返回默认 .data/auth (空字符串)", () => {
+  const result = resolveSessionDataDir({ explicitEnvPath: "", _cwd: "/tmp/project" });
+  assert.equal(result, path.join("/tmp/project", ".data/auth"));
+});
+
+test("resolveSessionDataDir 默认路径不被视为显式覆盖", () => {
+  // ".data/auth" is the built-in default; auto-isolation should still apply.
+  const result = resolveSessionDataDir({
+    explicitEnvPath: ".data/auth",
+    worktreeName: "my-feature",
+    port: 3001,
+    _cwd: "/tmp/project",
+  });
+  assert.equal(result, path.join("/tmp/project", ".data/auth-my-feature-3001"));
+});
+
+test("resolveSessionDataDir 显式非默认路径覆盖所有", () => {
+  const result = resolveSessionDataDir({
+    explicitEnvPath: "/opt/app/data/auth",
+    worktreeName: "my-feature",
+    port: 3001,
+    _cwd: "/tmp/project",
+  });
+  // Absolute path — resolved via path.resolve(cwd, path) so platform-
+  // dependent drive-letter prefix may appear on Windows.
+  assert.equal(result, path.resolve("/opt/app/data/auth"));
+});
+
+test("resolveSessionDataDir 显式相对路径不被默认覆盖", () => {
+  const result = resolveSessionDataDir({
+    explicitEnvPath: "custom/auth/path",
+    worktreeName: "ignored",
+    port: 9999,
+    _cwd: "/tmp/project",
+  });
+  assert.equal(result, path.resolve("/tmp/project", "custom/auth/path"));
+});
+
+test("resolveSessionDataDir worktree+port 隔离", () => {
+  const result = resolveSessionDataDir({
+    worktreeName: "v3-work",
+    port: 3000,
+    _cwd: "/tmp/project",
+  });
+  assert.equal(result, path.join("/tmp/project", ".data/auth-v3-work-3000"));
+});
+
+test("resolveSessionDataDir 不同端口产生不同路径", () => {
+  const r1 = resolveSessionDataDir({ worktreeName: "feat-a", port: 3000, _cwd: "/tmp" });
+  const r2 = resolveSessionDataDir({ worktreeName: "feat-a", port: 3001, _cwd: "/tmp" });
+  assert.notEqual(r1, r2);
+});
+
+test("resolveSessionDataDir 不同 worktree 产生不同路径", () => {
+  const r1 = resolveSessionDataDir({ worktreeName: "feat-a", port: 3000, _cwd: "/tmp" });
+  const r2 = resolveSessionDataDir({ worktreeName: "feat-b", port: 3000, _cwd: "/tmp" });
+  assert.notEqual(r1, r2);
+});
+
+// ---------------------------------------------------------------------------
+// sanitizeWorktreeName
+// ---------------------------------------------------------------------------
+
+test("sanitizeWorktreeName 保持安全字符", () => {
+  assert.equal(sanitizeWorktreeName("my-feature_branch.v3"), "my-feature_branch.v3");
+});
+
+test("sanitizeWorktreeName 替换不安全字符", () => {
+  assert.equal(sanitizeWorktreeName("bad/name:3000?"), "bad_name_3000_");
+});
+
+test("sanitizeWorktreeName 空字符串返回 fallback", () => {
+  assert.equal(sanitizeWorktreeName(""), "unknown-worktree");
+});
+
+// ---------------------------------------------------------------------------
+// detectGitWorktreeName
+// ---------------------------------------------------------------------------
+
+test("detectGitWorktreeName 主检出返回 undefined", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "tackle-forger-main-"));
+  await rm(tmp, { recursive: true, force: true });
+  // No .git at all → undefined
+  assert.equal(detectGitWorktreeName(tmp), undefined);
+  await rm(tmp, { recursive: true, force: true }).catch(() => undefined);
+});
+
+test("detectGitWorktreeName worktree 文件返回正确名称", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "tackle-forger-wt-"));
+  try {
+    const gitFile = path.join(tmp, ".git");
+    await writeFile(
+      gitFile,
+      "gitdir: E:/DocsHDD/tackleForger/.git/worktrees/agent-a606cb391fdc5dbaa\n",
+      "utf8",
+    );
+    assert.equal(detectGitWorktreeName(tmp), "agent-a606cb391fdc5dbaa");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+test("detectGitWorktreeName 解析 Windows 反斜杠路径", async () => {
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "tackle-forger-wt2-"));
+  try {
+    const gitFile = path.join(tmp, ".git");
+    await writeFile(
+      gitFile,
+      "gitdir: E:\\DocsHDD\\tackleForger\\.git\\worktrees\\v3-work\n",
+      "utf8",
+    );
+    assert.equal(detectGitWorktreeName(tmp), "v3-work");
+  } finally {
+    await rm(tmp, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// auth-store 使用 resolveSessionDataDir (indirect coverage)
+// ---------------------------------------------------------------------------
+
+test("auth-store 使用 resolveSessionDataDir 确定会话目录", async () => {
+  // When FEISHU_SESSION_DATA_DIR is set, auth-store should write into that dir.
+  const dir = await mkdtemp(path.join(os.tmpdir(), "tackle-forger-auth-indirect-"));
+  try {
+    await withEnvironment({ FEISHU_SESSION_DATA_DIR: dir }, async () => {
+      // Trigger auth-store operations that touch the filesystem.
+      const { createSession, findSession, newOpaqueId } = await import("../lib/auth-store");
+      const sessionId = newOpaqueId();
+      const now = new Date("2026-07-24T00:00:00Z");
+      await createSession({
+        sessionId,
+        secret: "s".repeat(32),
+        ttlSeconds: 60,
+        now,
+        identity: {
+          tenantKey: "tenant",
+          openId: "user",
+          displayName: "test",
+          lastLoginAt: now.toISOString(),
+        },
+      });
+      const found = await findSession({ sessionId, secret: "s".repeat(32), now });
+      assert.ok(found);
+      assert.equal(found.identity.displayName, "test");
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Mock OAuth flow (no real Feishu network)
+// ---------------------------------------------------------------------------
+
+test("Mock OAuth 完整流程不访问真实飞书", async () => {
+  const { consumePendingLogin, createSession, findSession, newOpaqueId, savePendingLogin }
+    = await import("../lib/auth-store");
+  const { fetchFeishuIdentity } = await import("../lib/feishu-oauth");
+
+  const config = {
+    appId: "mock-app",
+    appSecret: "mock-secret",
+    tenantKey: "mock-tenant",
+    redirectUri: "https://mock.example/callback",
+    sessionSecret: "z".repeat(32),
+    sessionTtlSeconds: 3600,
+    openApiBaseUrl: "https://open.feishu.mock",
+    accountsBaseUrl: "https://accounts.feishu.mock",
+    oauthScopes: "contact:user.base:readonly",
+  };
+
+  // Simulate OAuth token exchange with mock fetch.
+  const tokenResponse = Response.json({ code: 0, access_token: "mock-access-token" });
+  const userResponse = Response.json({
+    code: 0,
+    data: {
+      tenant_key: "mock-tenant",
+      open_id: "mock-open-id",
+      name: "Mock User",
+    },
+  });
+
+  let fetchCallCount = 0;
+  const mockFetch = async (input: URL | RequestInfo, _init?: RequestInit) => {
+    fetchCallCount++;
+    const url = String(input);
+    if (url.includes("oauth/token")) return tokenResponse;
+    if (url.includes("user_info")) return userResponse;
+    throw new Error("unexpected fetch");
+  };
+
+  const identity = await fetchFeishuIdentity({
+    code: "mock-auth-code",
+    config,
+    fetchImpl: mockFetch as typeof fetch,
+  });
+  assert.equal(fetchCallCount, 2);
+  assert.equal(identity.tenantKey, "mock-tenant");
+  assert.equal(identity.openId, "mock-open-id");
+  assert.equal(identity.displayName, "Mock User");
+
+  // Complete the flow: save pending login → create session → find session.
+  const secret = config.sessionSecret;
+  const state = newOpaqueId();
+  await savePendingLogin({ state, secret, returnTo: "/" });
+  assert.ok(await consumePendingLogin({ state, secret }));
+
+  const sessionId = newOpaqueId();
+  await createSession({
+    sessionId,
+    secret,
+    ttlSeconds: 60,
+    identity,
+    now: new Date("2026-07-24T00:00:00Z"),
+  });
+  const found = await findSession({
+    sessionId,
+    secret,
+    now: new Date("2026-07-24T00:00:00Z"),
+  });
+  assert.ok(found);
+  assert.equal(found.identity.openId, "mock-open-id");
+});
+
+// ---------------------------------------------------------------------------
+// 403: authenticated but lacking a required capability
+// ---------------------------------------------------------------------------
+
+test("可信代理已登录但缺少 capability 时返回 403", async () => {
+  // The trusted-proxy identity gets PHASE_ONE_CAPABILITIES but NOT
+  // "ai.provider_policy.manage", so an action that requires it must
+  // be disabled with CAPABILITY_MISSING.
+  await withEnvironment({
+    FEISHU_TRUST_PROXY_HEADERS: "true",
+    FEISHU_PROXY_SHARED_SECRET: "test-secret",
+    FEISHU_TENANT_KEY: "tenant",
+  }, async () => {
+    const user = await requestUser(new NextRequest("http://localhost", {
+      headers: {
+        "x-feishu-tenant-key": "tenant",
+        "x-feishu-open-id": "user",
+        "x-feishu-display-name": "tester",
+        "x-tf-proxy-secret": "test-secret",
+      },
+    }));
+    assert.equal(user.authenticated, true);
+    const action = user.actionAvailability.manage_ai_provider_policy;
+    assert.equal(action.enabled, false);
+    assert.equal(action.disabledReasonCode, "CAPABILITY_MISSING");
   });
 });

@@ -19,6 +19,53 @@ if ($listener) {
   exit 1
 }
 
+# ---- Worktree-aware session data directory --------------------------------
+#
+# Multiple git worktrees running dev servers on different ports must NOT
+# share the same `sessions.json` file.  We detect whether this checkout is
+# a linked worktree by inspecting the `.git` entry:
+#
+#   Main checkout:  .git is a DIRECTORY
+#   Linked worktree: .git is a FILE  containing "gitdir: .../worktrees/<name>"
+#
+# If we are in a worktree AND `FEISHU_SESSION_DATA_DIR` has not been set
+# explicitly in the shell environment, we derive an isolated path:
+#
+#   .data/auth-<worktreeName>-<port>
+#
+# This path is gitignored (`.data/` is in `.gitignore`), does NOT conflict
+# with other worktrees, and does NOT overwrite an explicit production path.
+#
+# Next.js/Vinext do NOT overwrite existing process.env values when they
+# load `.env.local`, so setting the variable here takes priority.
+# ---------------------------------------------------------------------------
+
+$sessionDirExplicit = [Environment]::GetEnvironmentVariable("FEISHU_SESSION_DATA_DIR", "Process")
+$gitPath = Join-Path $projectRoot ".git"
+$worktreeName = $null
+
+if (Test-Path $gitPath -PathType Leaf) {
+  $gitContent = Get-Content $gitPath -TotalCount 1 -Encoding Utf8
+  if ($gitContent -match 'gitdir:\s*(.+)') {
+    $gitdir = $matches[1].Trim()
+    # Extract worktree name from path; accept both \ and / separators.
+    if ($gitdir -match '[\\/]worktrees[\\/]([^\\/]+)$') {
+      $worktreeName = $matches[1]
+    }
+  }
+}
+
+if ([string]::IsNullOrEmpty($sessionDirExplicit) -and $worktreeName) {
+  $isolatedDir = ".data/auth-$worktreeName-$Port"
+  $env:FEISHU_SESSION_DATA_DIR = $isolatedDir
+  Write-Host "[auth] Session data: $isolatedDir (worktree-isolated for '$worktreeName')"
+} elseif ($worktreeName) {
+  Write-Host "[auth] Session data: $sessionDirExplicit (explicit, not auto-isolated)"
+} else {
+  # Main checkout or non-git directory; use whatever .env.local provides.
+  Write-Host "[auth] Not a linked worktree; session data from environment."
+}
+
 $env:PORT = [string]$Port
 if ($Foreground) {
   Push-Location $projectRoot

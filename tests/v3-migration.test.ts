@@ -100,6 +100,8 @@ test("v14 将旧系列配方迁移为竿轮线约束且保留扁平字段", () =
 test("v15 保留旧五维定义并明确迁移为未发布修订", () => {
   const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
   legacy.schemaVersion = 14;
+  delete legacy.fiveAxisDispositionCatalogRevisions;
+  delete legacy.currentFiveAxisDispositionCatalogRevisionId;
   legacy.fiveAxisViewDefinitions = [{
     definitionId: "five-axis:legacy",
     version: "legacy-v1",

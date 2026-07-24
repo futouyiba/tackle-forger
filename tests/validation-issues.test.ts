@@ -21,6 +21,7 @@ import type {
   ValidationEntityRef,
 } from "../lib/types";
 import { createSeedState } from "../lib/seed";
+import { hydrateV3Seed } from "../lib/v3-seed";
 import {
   publishConfigurationSnapshot,
   verifySnapshotIntegrity,
@@ -32,6 +33,10 @@ import {
   formalProjection,
   testReductionPolicy,
 } from "./helpers/reduction-policy";
+import {
+  buildFormalComponentSelectionsFixture,
+  buildFormalPreviewFixture,
+} from "./helpers/formal-five-axis";
 
 const subject: ValidationEntityRef = {
   workspaceId: "workspace:1",
@@ -662,7 +667,7 @@ test("未处理的 REVIEW Issue 继续约束 PUBLISH，状态写动作缺少 #48
 });
 
 test("新正式 Snapshot 只接受并冻结指纹绑定的确认记录，旧 code 理由字典不能替代证据", () => {
-  const state = createSeedState();
+  const state = hydrateV3Seed(createSeedState());
   const existing = state.configurationSnapshots[0];
   const model = state.purchasableModels.find((entry) => entry.id === existing.modelId)!;
   const sku = state.skuDrawers.find((entry) => entry.id === model.skuId)!;
@@ -707,10 +712,34 @@ test("新正式 Snapshot 只接受并冻结指纹绑定的确认记录，旧 cod
     idempotencyKey: "ack:snapshot",
     capabilities: [ACKNOWLEDGE_VALIDATION_WARNING_CAPABILITY],
   });
+  const formalDefinition = state.fiveAxisViewDefinitions.find(
+    (definition) => "semanticContractVersion" in definition,
+  )!;
+  const formalComponentSelections = buildFormalComponentSelectionsFixture(
+    existing.componentSelections,
+  );
+  const formalPreviewForSnapshot = (snapshotId: string) => buildFormalPreviewFixture({
+    definition: formalDefinition,
+    snapshotId,
+    modelId: model.id,
+    modelRevision: model.revision,
+    seriesId: series.id,
+    skuId: sku.id,
+    skuRevision: sku.revision,
+    modelFinalPullKg: existing.modelFinalPullKg!,
+    finalPanelValues: existing.finalPanelValues,
+    componentSelections: formalComponentSelections,
+  });
+  const formalPreview = formalPreviewForSnapshot("snapshot:validation-evidence");
   const common = {
     publicationMode: "new_formal" as const,
     model,
-    sku,
+    sku: {
+      ...sku,
+      fiveAxisProjectionReferences: structuredClone(
+        formalPreview.tackleFitComparison.projectionReferences!,
+      ),
+    },
     series,
     seriesSkus: state.skuDrawers,
     projection: formalizedProjection,
@@ -721,7 +750,16 @@ test("新正式 Snapshot 只接受并冻结指纹绑定的确认记录，旧 cod
       existing.finalPanelValues,
     ),
     finalPanelValues: existing.finalPanelValues,
-    componentSelections: existing.componentSelections,
+    componentSelections: formalComponentSelections,
+    fiveAxisPreview: formalPreview,
+    fiveAxisDefinition: formalDefinition,
+    fiveAxisDefinitions: state.fiveAxisViewDefinitions,
+    fiveAxisDispositionCatalogRevisions: state.fiveAxisDispositionCatalogRevisions,
+    currentFiveAxisDispositionCatalogRevisionId: state.currentFiveAxisDispositionCatalogRevisionId,
+    fiveAxisAuthorityState: {
+      purchasableModels: state.purchasableModels,
+      configurationSnapshots: state.configurationSnapshots,
+    },
     patches: [],
     attributeAffixIds: existing.attributeAffixIds,
     passiveAffixIds: existing.passiveAffixIds,
@@ -853,6 +891,7 @@ test("新正式 Snapshot 只接受并冻结指纹绑定的确认记录，旧 cod
   const snapshotWithDecision = publishConfigurationSnapshot({
     ...common,
     snapshotId: "snapshot:waiver-with-decision",
+    fiveAxisPreview: formalPreviewForSnapshot("snapshot:waiver-with-decision"),
     validationReport: publishWaiver.issues,
     validationWaivers: publishWaiver.waivers,
     validationWaiverDecisions: [publishWaiver.decision],
@@ -926,6 +965,7 @@ test("新正式 Snapshot 只接受并冻结指纹绑定的确认记录，旧 cod
   const snapshotWithExportOnly = publishConfigurationSnapshot({
     ...common,
     snapshotId: "snapshot:export-only-frozen",
+    fiveAxisPreview: formalPreviewForSnapshot("snapshot:export-only-frozen"),
     validationReport: [exportOnly],
   });
   assert.deepEqual(snapshotWithExportOnly.validationReport, [exportOnly]);

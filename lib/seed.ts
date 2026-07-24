@@ -580,7 +580,7 @@ export const importedCandidates: Candidate[] = skuRows
     };
   });
 
-export function createSeedState(): WorkspaceState {
+export function createSeedState(options: { mode?: "demo" | "production" } = {}): WorkspaceState {
   return hydrateV3Seed(migrateWorkspaceState({
     schemaVersion: 1,
     parameters: parameterDefinitions,
@@ -619,5 +619,5 @@ export function createSeedState(): WorkspaceState {
     ],
     notes: "以《淡水路亚杆轮线装备设计》为权威主表，旧版母表仅用于参数与验算迁移参考。",
     importedAt,
-  }));
+  }), { mode: options.mode ?? "demo" });
 }

@@ -10,7 +10,11 @@ import {
   type PricingPolicyVersion,
   type QualityId,
 } from "../lib/pricing-policy";
-import { publishConfigurationSnapshot, verifySnapshotIntegrity } from "../lib/publishing";
+import {
+  modelFinalPullKgForSnapshot,
+  publishConfigurationSnapshot,
+  verifySnapshotIntegrity,
+} from "../lib/publishing";
 import {
   hashAffixRuntimeEvidence,
   numberToBinary64Hex,
@@ -22,11 +26,16 @@ import {
   createCalculationTraceArchive,
 } from "../lib/calculation-trace";
 import { createSeedState } from "../lib/seed";
+import { hydrateV3Seed } from "../lib/v3-seed";
 import {
   formalAffixRuntimeEvidence,
   formalProjection,
   testReductionPolicy,
 } from "./helpers/reduction-policy";
+import {
+  buildFormalComponentSelectionsFixture,
+  buildFormalPreviewFixture,
+} from "./helpers/formal-five-axis";
 import { createPerformanceSummaryDefinition } from "../lib/performance-summary";
 import type { ProjectionTraceStep } from "../lib/types";
 
@@ -188,7 +197,7 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
   });
   const automaticPricing = trial(version, "quality_b_blue", 30);
   assert.equal(automaticPricing.formal, true);
-  const state = createSeedState();
+  const state = hydrateV3Seed(createSeedState());
   const oldSnapshot = state.configurationSnapshots[0];
   const model = state.purchasableModels.find((entry) => entry.id === oldSnapshot.modelId)!;
   const sku = state.skuDrawers.find((entry) => entry.id === model.skuId)!;
@@ -253,11 +262,37 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     finalPanelValues,
   );
   const settlementTrace = finalSettlementTrace(finalPanelValues);
+  const formalDefinition = state.fiveAxisViewDefinitions.find(
+    (definition) => "semanticContractVersion" in definition,
+  )!;
+  const formalComponentSelections = buildFormalComponentSelectionsFixture(
+    oldSnapshot.componentSelections,
+  );
+  const formalPreview = buildFormalPreviewFixture({
+    definition: formalDefinition,
+    snapshotId: "snapshot:new-formal",
+    modelId: model.id,
+    modelRevision: model.revision,
+    seriesId: series.id,
+    skuId: sku.id,
+    skuRevision: sku.revision,
+    modelFinalPullKg: modelFinalPullKgForSnapshot(
+      sku.projectionMatch.itemPartId,
+      finalPanelValues,
+    )!,
+    finalPanelValues,
+    componentSelections: formalComponentSelections,
+  });
   const publishInput = {
     publicationMode: "new_formal",
     workspaceId: "workspace:test",
     model,
-    sku,
+    sku: {
+      ...sku,
+      fiveAxisProjectionReferences: structuredClone(
+        formalPreview.tackleFitComparison.projectionReferences!,
+      ),
+    },
     series,
     seriesSkus: state.skuDrawers,
     projection: publishProjection,
@@ -268,7 +303,7 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
       finalPanelValues,
     ),
     finalPanelValues,
-    componentSelections: oldSnapshot.componentSelections,
+    componentSelections: formalComponentSelections,
     patches: [],
     attributeAffixIds: oldSnapshot.attributeAffixIds,
     passiveAffixIds: oldSnapshot.passiveAffixIds,
@@ -284,6 +319,17 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
     qualityValueAssessment,
     pricingPolicyVersion: version.id,
     automaticPricing,
+    fiveAxisPreview: formalPreview,
+    fiveAxisDefinition: formalDefinition,
+    fiveAxisAuthorityState: {
+      purchasableModels: state.purchasableModels,
+      configurationSnapshots: state.configurationSnapshots,
+    },
+    fiveAxisDefinitions: state.fiveAxisViewDefinitions,
+    fiveAxisDispositionCatalogRevisions:
+      state.fiveAxisDispositionCatalogRevisions,
+    currentFiveAxisDispositionCatalogRevisionId:
+      state.currentFiveAxisDispositionCatalogRevisionId,
     validationReport: [],
     warningConfirmations: {},
     publishedBy: "tester",
@@ -313,7 +359,7 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
   assert.throws(() => publishConfigurationSnapshot({
     ...publishInput,
     affixRuntimeEvidence: detachedEvidence,
-  }), /AFFIX_RUNTIME_TRACE_INVALID/);
+  }), /(?:AFFIX_RUNTIME_TRACE_INVALID|FIVE_AXIS_FORMAL_PREVIEW_INVALID)/);
   const forgedEvidence = structuredClone(publishInput.affixRuntimeEvidence);
   forgedEvidence.values = structuredClone(forgedEvidence.finalValues);
   forgedEvidence.postReviewValues = structuredClone(forgedEvidence.finalValues);
@@ -341,7 +387,7 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
   assert.throws(() => publishConfigurationSnapshot({
     ...publishInput,
     affixRuntimeEvidence: forgedEvidence,
-  }), /AFFIX_RUNTIME_TRACE_INVALID/);
+  }), /(?:AFFIX_RUNTIME_TRACE_INVALID|FIVE_AXIS_FORMAL_PREVIEW_INVALID)/);
   const stagedEvidence = structuredClone(publishInput.affixRuntimeEvidence);
   const stagedKey = Object.keys(stagedEvidence.finalValues).find(
     (key) => typeof stagedEvidence.finalValues[key] === "number",
@@ -461,7 +507,7 @@ test("完整已发布品质结果与 PricingPolicyVersion 可冻结进新 Snapsh
       affixRuntimeEvidence: structuredClone(omittedNoEffectEvidence),
     },
     affixRuntimeEvidence: omittedNoEffectEvidence,
-  }), /authority manifest|AFFIX_RUNTIME_TRACE_INVALID/);
+  }), /authority manifest|AFFIX_RUNTIME_TRACE_INVALID|FIVE_AXIS_FORMAL_PREVIEW_INVALID/);
   const snapshot = publishConfigurationSnapshot({
     ...publishInput,
     projection: stagedProjection,

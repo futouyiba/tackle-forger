@@ -137,7 +137,7 @@ export async function closeSqliteStorage(databasePath: string) {
   if (db.isOpen) db.close();
   databases.delete(resolved);
 }
-export function ensureSqliteWorkspaceSeeded(db: DatabaseSync, initialState = createSeedState()) {
+export function ensureSqliteWorkspaceSeeded(db: DatabaseSync, initialState = createSeedState({ mode: "production" })) {
   const existing = db.prepare("SELECT revision FROM workspace_state WHERE id = ?").get("main") as
     | { revision: number }
     | undefined;
@@ -167,7 +167,7 @@ const seedDatabase = ensureSqliteWorkspaceSeeded;
 
 export async function loadSqliteWorkspace(databasePath: string, initialState?: WorkspaceState) {
   const db = await openDatabase(databasePath);
-  ensureSqliteWorkspaceSeeded(db, initialState ?? createSeedState());
+  ensureSqliteWorkspaceSeeded(db, initialState ?? createSeedState({ mode: "production" }));
   await waitForSqliteTransaction(databasePath);
   const row = db.prepare("SELECT state_json, revision FROM workspace_state WHERE id = ?").get("main") as {
     state_json: string;

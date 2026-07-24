@@ -52,11 +52,13 @@ import type {
   FiveAxisComparisonView,
   FiveAxisEntityInput,
   ModelFiveAxisPreview,
-  FiveAxisViewDefinition,
   ProjectionMatch,
+  LegacyFiveAxisVertexSet,
+  LegacyFiveAxisViewDefinition,
   PurchasableModel,
   SeriesDefinition,
   SkuDrawer,
+  StoredFiveAxisViewDefinition,
   WorkspaceState,
 } from "@/lib/types";
 import "./series-gantt-v3.css";
@@ -70,6 +72,18 @@ import {
   SeriesAssessmentPanel,
   type AIAssessmentUiState,
 } from "./SeriesAssessmentPanel";
+
+function isLegacyFiveAxisDefinition(
+  definition: WorkspaceState["fiveAxisViewDefinitions"][number],
+): definition is LegacyFiveAxisViewDefinition {
+  return !("semanticContractVersion" in definition);
+}
+
+function isLegacyFiveAxisVertexSet(
+  vertexSet: WorkspaceState["fiveAxisVertexSets"][number],
+): vertexSet is LegacyFiveAxisVertexSet {
+  return "fishWeightGradeId" in vertexSet;
+}
 
 interface SeriesGanttWorkbenchV3Props {
   state: WorkspaceState;
@@ -374,7 +388,7 @@ function FiveAxisRadar({
   definition,
 }: {
   preview?: ModelFiveAxisPreview;
-  definition?: FiveAxisViewDefinition;
+  definition?: StoredFiveAxisViewDefinition;
 }) {
   if (!preview) {
     return (
@@ -401,13 +415,22 @@ function FiveAxisRadar({
     };
   });
   const completePolygon = points.every((entry) => entry.x !== null && entry.y !== null);
+  const maxRatio = Math.max(
+    1,
+    ...metrics.flatMap((metric) => {
+      const ratio = fiveAxisPlotRatio(metric.displayScore);
+      return ratio === null ? [] : [ratio];
+    }),
+  );
+  const canvasExtent = radius * maxRatio + 30;
+  const viewBox = `${center - canvasExtent} ${center - canvasExtent} ${canvasExtent * 2} ${canvasExtent * 2}`;
   const outer = metrics.map((_metric, index) => {
     const angle = -Math.PI / 2 + (index * Math.PI * 2) / metrics.length;
     return `${center + Math.cos(angle) * radius},${center + Math.sin(angle) * radius}`;
   }).join(" ");
   return (
     <div className="gantt-radar-layout">
-      <svg className="gantt-radar" viewBox="0 0 220 220" role="img" aria-label="Model 五维正式分">
+      <svg className="gantt-radar" viewBox={viewBox} role="img" aria-label="Model 五维正式分">
         <polygon points={outer} className="radar-grid" />
         {[0.25, 0.5, 0.75].map((scale) => (
           <polygon
@@ -471,26 +494,31 @@ function FiveAxisComparisonPanel({
   definition,
 }: {
   view: FiveAxisComparisonView;
-  definition?: FiveAxisViewDefinition;
+  definition?: StoredFiveAxisViewDefinition;
 }) {
   const axes = definition?.axes ?? [];
-  const numericScores = view.series.flatMap((entry) => entry.points.flatMap((point) =>
-    point.comparisonScore === null ? [] : [point.comparisonScore]));
-  const maxScore = view.scaleMode === "comparison_expanded"
-    ? Math.max(100, ...numericScores)
+  const outerRingScore = definition && "comparisonPolicy" in definition
+    ? definition.comparisonPolicy.outerRingScore
     : 100;
   const center = 110;
   const radius = 80;
   const pointFor = (score: number, index: number) => {
     const angle = -Math.PI / 2 + (index * Math.PI * 2) / Math.max(axes.length, 1);
-    const ratio = fiveAxisPlotRatio(score, maxScore) ?? 0;
+    const ratio = Math.max(0, score / outerRingScore);
     return `${center + Math.cos(angle) * radius * ratio},${center + Math.sin(angle) * radius * ratio}`;
   };
-  const outer = axes.map((_axis, index) => pointFor(maxScore, index)).join(" ");
+  const outer = axes.map((_axis, index) => pointFor(outerRingScore, index)).join(" ");
+  const maxRatio = Math.max(
+    1,
+    ...view.series.flatMap((series) => series.points.flatMap((point) =>
+      point.comparisonScore === null ? [] : [Math.max(0, point.comparisonScore / outerRingScore)])),
+  );
+  const canvasExtent = radius * maxRatio + 30;
+  const viewBox = `${center - canvasExtent} ${center - canvasExtent} ${canvasExtent * 2} ${canvasExtent * 2}`;
   return (
     <div className="same-part-comparison-result">
       <div className="same-part-comparison-chart">
-        <svg viewBox="0 0 220 220" role="img" aria-label="同部位五维叠加比较">
+        <svg viewBox={viewBox} role="img" aria-label="同部位五维叠加比较">
           <polygon points={outer} className="radar-grid" />
           {view.series.map((entry, seriesIndex) => {
             const color = COMPARISON_COLORS[seriesIndex % COMPARISON_COLORS.length];
@@ -627,9 +655,13 @@ function ModelDrawer({
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const draftFiveAxisPreview = useMemo(() => {
     if (snapshot?.fiveAxisPreview || !model.fishWeightGradeId) return undefined;
-    const draftDefinition = state.fiveAxisViewDefinitions[0];
+    const draftDefinition = state.fiveAxisViewDefinitions.find(
+      isLegacyFiveAxisDefinition,
+    );
     if (!draftDefinition) return undefined;
-    const vertexSet = state.fiveAxisVertexSets.find((entry) =>
+    const vertexSet = state.fiveAxisVertexSets.filter(
+      isLegacyFiveAxisVertexSet,
+    ).find((entry) =>
       entry.fishWeightGradeId === model.fishWeightGradeId &&
       entry.definitionId === draftDefinition.definitionId &&
       entry.definitionVersion === draftDefinition.version);
@@ -731,8 +763,13 @@ function ModelDrawer({
   const inComparison = comparisonModelIds.includes(model.id);
   const pendingUpgrade = state.upgradeCandidates.find((entry) => entry.modelId === model.id && entry.status === "pending");
   const comparisonResult = useMemo(() => {
-    if (comparisonModelIds.length < 2 || !definition || !activeFiveAxisPreview) return {};
-    const vertexSet = state.fiveAxisVertexSets.find((entry) =>
+    if (
+      comparisonModelIds.length < 2
+      || !definition
+      || !isLegacyFiveAxisDefinition(definition)
+      || !activeFiveAxisPreview
+    ) return {};
+    const vertexSet = state.fiveAxisVertexSets.filter(isLegacyFiveAxisVertexSet).find((entry) =>
       entry.vertexSetHash === activeFiveAxisPreview.vertexSetHash &&
       entry.definitionId === definition.definitionId &&
       entry.definitionVersion === definition.version);
@@ -1171,7 +1208,19 @@ function ModelDrawer({
             ) : null}
             {mode === "model_series" && activeFiveAxisPreview ? (
               <>
-                <FiveAxisRadar preview={activeFiveAxisPreview} definition={definition} />
+                {activeFiveAxisPreview.componentSeries?.length
+                  ? (
+                      <FiveAxisComparisonPanel
+                        view={activeFiveAxisPreview.tackleFitComparison}
+                        definition={definition}
+                      />
+                    )
+                  : (
+                      <FiveAxisRadar
+                        preview={activeFiveAxisPreview}
+                        definition={definition}
+                      />
+                    )}
                 <div className="gantt-baseline-note"><Info size={16} /><span><strong>Series 基准策略：{definition?.seriesBaselinePolicy.mode ?? "未发布"}</strong>当前原型未返回可用 baselineRef，因此只绘制 Model，不会静默换用默认 Model。</span></div>
               </>
             ) : null}

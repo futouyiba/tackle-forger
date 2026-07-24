@@ -64,6 +64,7 @@ import {
 } from "./part-constraints";
 import { deterministicHash } from "./rule-kernel";
 import { projectShareLinkHistoryEntry } from "./data-sources";
+import { createFiveAxisDispositionCatalogRevision } from "./five-axis-formal";
 
 export const CURRENT_WORKSPACE_SCHEMA_VERSION = 20;
 
@@ -1667,6 +1668,30 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
       ? migratePatchLedger(state.patchLedger as WorkspaceState["patchLedger"],patchLedgerMigrationContext(state))
       : emptyPatchLedger(),
     configIdGovernance: migrateConfigIdGovernanceState(state.configIdGovernance),
+  };
+  const fiveAxisDefinitions = arrayOf<WorkspaceState["fiveAxisViewDefinitions"][number]>(
+    state.fiveAxisViewDefinitions,
+  );
+  const dispositionMigration = createFiveAxisDispositionCatalogRevision({
+    definitions: fiveAxisDefinitions,
+    existingRevisions: arrayOf<WorkspaceState["fiveAxisDispositionCatalogRevisions"][number]>(
+      state.fiveAxisDispositionCatalogRevisions,
+    ),
+    currentRevisionId:
+      typeof state.currentFiveAxisDispositionCatalogRevisionId === "string"
+        ? state.currentFiveAxisDispositionCatalogRevisionId
+        : null,
+    decidedAt: "2026-07-23T00:00:00.000Z",
+  });
+  state = {
+    ...state,
+    fiveAxisViewDefinitions: fiveAxisDefinitions,
+    fiveAxisVertexSets: arrayOf<WorkspaceState["fiveAxisVertexSets"][number]>(
+      state.fiveAxisVertexSets,
+    ),
+    fiveAxisDispositionCatalogRevisions: dispositionMigration.revisions,
+    currentFiveAxisDispositionCatalogRevisionId:
+      dispositionMigration.currentRevisionId,
   };
   return state as WorkspaceState;
 }

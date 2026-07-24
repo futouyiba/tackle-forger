@@ -7,6 +7,7 @@ import {
   NEW_CANONICAL_FEISHU_WORKBOOK,
   parseCanonicalWorkbookLink,
   validateFeishuWorkbookConfiguration,
+  type FeishuSheetRole,
   type FeishuWorkbookRef,
 } from "../lib/feishu-workbook";
 
@@ -110,4 +111,100 @@ test("validateFeishuWorkbookConfiguration：/sheets/ workbook 不强求 wikiToke
   assert.doesNotThrow(() =>
     validateFeishuWorkbookConfiguration(withoutWiki, NEW_CANONICAL_FEISHU_SHEET_REGISTRY),
   );
+});
+
+test("validateFeishuWorkbookConfiguration：/sheets/ workbook 缺失 spreadsheetToken 抛错（冻结稳定身份）", () => {
+  // 缺失 token 不得静默通过，否则运行时会回退 wiki 解析失败且工作簿没有冻结稳定身份。
+  const missing: FeishuWorkbookRef = { ...NEW_CANONICAL_FEISHU_WORKBOOK, spreadsheetToken: undefined };
+  assert.throws(
+    () => validateFeishuWorkbookConfiguration(missing, NEW_CANONICAL_FEISHU_SHEET_REGISTRY),
+    /缺少 spreadsheetToken/,
+  );
+});
+
+test("validateFeishuWorkbookConfiguration：/sheets/ workbook 空白 spreadsheetToken 抛错", () => {
+  for (const blank of ["", "   ", "\t"]) {
+    const blanked: FeishuWorkbookRef = { ...NEW_CANONICAL_FEISHU_WORKBOOK, spreadsheetToken: blank };
+    assert.throws(
+      () => validateFeishuWorkbookConfiguration(blanked, NEW_CANONICAL_FEISHU_SHEET_REGISTRY),
+      /缺少 spreadsheetToken/,
+      `空白 token ${JSON.stringify(blank)} 必须抛错`,
+    );
+  }
+});
+
+test("NEW_CANONICAL_FEISHU_SHEET_REGISTRY：逐 sheet 角色断言（派生镜像只读，不得登记为可导入规则源）", () => {
+  // 锁定每张分表的角色：StructuralBenchmark/DerivedProjection 派生审核镜像
+  // （02.5 钓法模板 / 03.5 类型模板 / 04.5 功能模板）一律 historical_reference 只读，
+  // 切 registry 后 UI/AI 消费者不得把它们当作可导入、可提案的规则源。
+  const expectedRoles: Record<string, FeishuSheetRole> = {
+    "0iGCcx": "historical_reference",
+    "1cAihB": "rule_source",
+    "2KCCHR": "rule_source",
+    "3FYijT": "rule_source",
+    "4zXYpP": "rule_source",
+    "5oZXTO": "rule_source",
+    "6FwSyV": "rule_source",
+    "7ygxLI": "historical_reference",
+    "8pvTQG": "historical_reference",
+    "9gvEsP": "historical_reference",
+    "10TyFp": "rule_source",
+    "11CfXW": "rule_source",
+    "12VetE": "rule_source",
+    "13awql": "historical_reference",
+    "14rhyG": "historical_reference",
+    "15nsqs": "historical_reference",
+    "16qYVn": "rule_source",
+    "17jqiE": "rule_source",
+    "18pjcZ": "rule_source",
+    "19XKzU": "rule_source",
+    "20OOnC": "historical_reference",
+    "21kEvM": "historical_reference",
+    "22RAak": "historical_reference",
+    "23CsXE": "rule_source",
+    "24YDSO": "rule_source",
+    "25UnTC": "rule_source",
+    "26gpIF": "rule_source",
+    "27hboC": "rule_source",
+    "28fQhg": "rule_source",
+    "31RxeB": "rule_source",
+    "32BmZs": "rule_source",
+    "33IGHy": "rule_source",
+    "34KaIv": "staging_output",
+    "35bCfX": "staging_output",
+    "36GGVk": "development_plan",
+    "37YLZE": "rule_source",
+    "38LXDQ": "rule_source",
+    "39IhAP": "rule_source",
+    "40RwxO": "rule_source",
+    "41CgUB": "rule_source",
+    "42ACks": "historical_reference",
+    "43dYFE": "historical_reference",
+    "44YIZT": "historical_reference",
+    "45qauz": "historical_reference",
+    "46ogtj": "publish_control",
+    "47PfUw": "staging_output",
+    "48IxFG": "staging_output",
+    "49kgpf": "staging_output",
+    "50Yure": "staging_output",
+    "51FogM": "staging_output",
+  };
+  assert.equal(
+    Object.keys(expectedRoles).length,
+    NEW_CANONICAL_FEISHU_SHEET_REGISTRY.length,
+    "期望角色表必须覆盖全部 50 张分表",
+  );
+  for (const entry of NEW_CANONICAL_FEISHU_SHEET_REGISTRY) {
+    const expected = expectedRoles[entry.sheetId];
+    assert.ok(expected, `缺少 ${entry.sheetId} 的期望角色`);
+    assert.equal(
+      entry.role,
+      expected,
+      `${entry.expectedName}/${entry.sheetId} 角色应为 ${expected}，实为 ${entry.role}`,
+    );
+    if (entry.role !== "rule_source") {
+      assert.equal(entry.required, false, `${entry.sheetId} 非规则源不得 required`);
+      assert.equal(entry.importsRules, false, `${entry.sheetId} 非规则源不得 importsRules`);
+    }
+  }
 });

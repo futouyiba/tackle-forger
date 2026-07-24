@@ -143,9 +143,10 @@ export const NEW_CANONICAL_FEISHU_WORKBOOK: FeishuWorkbookRef = {
  *
  * role 按对照表实现状态与语义映射：
  * - `rule_source`（对照表 ✅，required=true/importsRules=true）：竿/轮/线分表的重量模板、
- *   钓法类型、类型材质、功能定位、FunctionProfile 常量与功能模板、词条、技术、系列、品质评分、
+ *   钓法类型、类型材质、功能定位、FunctionProfile 常量、词条、技术、系列、品质评分、
  *   价格计算（公式/参数释义/维修消耗速度）、校验规则（枚举/竿组/竿/轮/线）；
- * - `historical_reference`：00_系统接入、02.5/03.5 派生模板镜像、12.x 组合SKU 样例、13 打包竿组；
+ * - `historical_reference`：00_系统接入、02.5/03.5/04.5 派生模板镜像（StructuralBenchmark/
+ *   DerivedProjection 派生审核镜像，只读，不得作为可导入/可提案规则源）、12.x 组合SKU 样例、13 打包竿组；
  * - `staging_output`：09.3/09.4 空定价表、15-18 配置表 schema、19_Patch台账空镜像（均源数据待补/暂存）；
  * - `development_plan`：10 钓具甘特图示意；`publish_control`：14 上传发布。
  *
@@ -172,9 +173,9 @@ export const NEW_CANONICAL_FEISHU_SHEET_REGISTRY: FeishuSheetRegistryEntry[] = [
   ["17jqiE", "04.1_功能定位-轮", "rule_source", true, true],
   ["18pjcZ", "04.2_功能定位-线", "rule_source", true, true],
   ["19XKzU", "04.00_FunctionProfile常量", "rule_source", true, true],
-  ["20OOnC", "04.5.0_功能模板-竿", "rule_source", true, true],
-  ["21kEvM", "04.5.1_功能模板-轮", "rule_source", true, true],
-  ["22RAak", "04.5.2_功能模板-线", "rule_source", true, true],
+  ["20OOnC", "04.5.0_功能模板-竿", "historical_reference", false, false],
+  ["21kEvM", "04.5.1_功能模板-轮", "historical_reference", false, false],
+  ["22RAak", "04.5.2_功能模板-线", "historical_reference", false, false],
   ["23CsXE", "05_词条", "rule_source", true, true],
   ["24YDSO", "06_技术", "rule_source", true, true],
   ["25UnTC", "07_系列", "rule_source", true, true],
@@ -285,8 +286,12 @@ export function validateFeishuWorkbookConfiguration(
       throw new Error("工作簿链接与已登记 wikiToken 不一致。");
     }
   } else if (parsed.spreadsheetToken) {
-    // /sheets/ 直接电子表格形式：按 spreadsheetToken 校验，不强求也不比对 wikiToken。
-    if (workbook.spreadsheetToken && parsed.spreadsheetToken !== workbook.spreadsheetToken) {
+    // /sheets/ 直接电子表格形式：登记的 spreadsheetToken 必须非空且与 URL token 严格相等。
+    // 若容忍缺失/空白 token，登记会错误通过校验，运行时将回退 wiki 解析失败，且工作簿没有冻结稳定身份。
+    if (!workbook.spreadsheetToken?.trim()) {
+      throw new Error("飞书规则工作簿登记缺少 spreadsheetToken（/sheets/ 形式必须登记非空电子表格 token）。");
+    }
+    if (parsed.spreadsheetToken !== workbook.spreadsheetToken) {
       throw new Error("工作簿链接与已登记 spreadsheetToken 不一致。");
     }
   } else {

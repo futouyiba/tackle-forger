@@ -1072,12 +1072,13 @@ test("旧正式五维状态只从 published Model 的当前 Snapshot 指针确�
   legacy.schemaVersion = 3;
   const definition = createFormalFiveAxisViewDefinition();
   const model = (legacy.purchasableModels as Array<Record<string, unknown>>)[0]!;
+  const modelRevision = Number(model.revision);
   model.status = "published";
   model.configurationSnapshotId = "snapshot:formal-current";
   const groupKey = { weightBandId: "W1", weightBandPolicyVersion: definition.weightBandPolicyVersion, fiveAxisDefinitionId: definition.definitionId, fiveAxisDefinitionVersion: definition.version, fiveAxisRuleVersion: definition.fiveAxisRuleVersion };
-  const source = { candidateSemanticKey: { modelId: String(model.id), componentEntityId: "rod:current", itemPartId: "part:rod" }, snapshotId: "snapshot:formal-current", modelRevisionId: `${model.id}@${model.revision}`, finalPanelHash: "a".repeat(64), modelFinalPullKg: "1", directInputs: [], semanticInputHash: "b".repeat(64) };
+  const source = { candidateSemanticKey: { modelId: String(model.id), componentEntityId: "rod:current", itemPartId: "part:rod" }, snapshotId: "snapshot:formal-current", modelRevisionId: `${model.id}@${modelRevision}`, finalPanelHash: "a".repeat(64), modelFinalPullKg: "1", directInputs: [], semanticInputHash: "b".repeat(64) };
   const retiredModel = { ...structuredClone(model), id: "model:retired-history", status: "superseded", configurationSnapshotId: "snapshot:retired-history" };
-  const retiredSource = { ...source, candidateSemanticKey: { ...source.candidateSemanticKey, modelId: retiredModel.id, componentEntityId: "rod:retired" }, snapshotId: retiredModel.configurationSnapshotId, modelRevisionId: `${retiredModel.id}@${retiredModel.revision}` };
+  const retiredSource = { ...source, candidateSemanticKey: { ...source.candidateSemanticKey, modelId: retiredModel.id, componentEntityId: "rod:retired" }, snapshotId: retiredModel.configurationSnapshotId, modelRevisionId: `${retiredModel.id}@${modelRevision}` };
   const preview = { modelId: model.id, weightBandId: "W1", weightBandPolicyVersion: definition.weightBandPolicyVersion, fiveAxisDefinitionId: definition.definitionId, fiveAxisDefinitionVersion: definition.version, fiveAxisRuleVersion: definition.fiveAxisRuleVersion, candidateSources: [source] };
   (legacy.purchasableModels as Array<Record<string, unknown>>).push(retiredModel);
   legacy.configurationSnapshots = [
@@ -1096,7 +1097,10 @@ test("旧正式五维状态只从 published Model 的当前 Snapshot 指针确�
   assert.equal(migrated.fiveAxisVertexGroupStates?.[0]?.currentVertexSetId, "vertex:current");
   assert.deepEqual(migrated.fiveAxisVertexGroupStates?.[0]?.candidateSources, [source]);
   assert.deepEqual(migrateWorkspaceState(migrated), migrated);
-  const reversed = structuredClone(legacy); reversed.configurationSnapshots.reverse(); reversed.purchasableModels.reverse(); reversed.fiveAxisVertexSets.reverse();
+  const reversed = structuredClone(legacy);
+  (reversed.configurationSnapshots as unknown[]).reverse();
+  (reversed.purchasableModels as unknown[]).reverse();
+  (reversed.fiveAxisVertexSets as unknown[]).reverse();
   assert.deepEqual(migrateWorkspaceState(reversed).fiveAxisVertexGroupStates, migrated.fiveAxisVertexGroupStates);
   const ambiguous = structuredClone(legacy); (ambiguous.fiveAxisVertexSets as unknown[]).push({ ...vertex, vertexSetId: "vertex:ambiguous" });
   assert.deepEqual(migrateWorkspaceState(ambiguous).fiveAxisVertexGroupStates, []);

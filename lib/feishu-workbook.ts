@@ -15,7 +15,8 @@ export interface FeishuWorkbookRef {
   name: string;
   provider: "feishu_sheets";
   shareUrl: string;
-  wikiToken: string;
+  /** /wiki/ 挂载形式的 wiki 节点 token；/sheets/ 直接电子表格形式时缺省。 */
+  wikiToken?: string;
   spreadsheetToken?: string;
   anchorSheetId?: string;
   syncScope: "workbook";
@@ -120,6 +121,100 @@ export const CANONICAL_FEISHU_SHEET_REGISTRY: FeishuSheetRegistryEntry[] = [
 }));
 
 /**
+ * v3 §14（2026-07-25 权威表迁移）指定的新表权威规则源身份（WQ8w，`/sheets/` 直接电子表格形式）。
+ *
+ * PR2a 地基：本 PR 仅登记新表身份与 50 张分表 registry，与既有 `CANONICAL_FEISHU_WORKBOOK`
+ * （YsEKw `/wiki/`）并存；读取层、`CANONICAL_FEISHU_WORKBOOK` 与 `CANONICAL_FEISHU_SHEET_REGISTRY`
+ * 全部保持不动，切流由后续 PR 跟踪（#143）。`wikiToken` 留空：`/sheets/` 直接形式不经 wiki 解析。
+ */
+export const NEW_CANONICAL_FEISHU_WORKBOOK: FeishuWorkbookRef = {
+  id: "feishu-workbook:tackle-design-new",
+  name: "钓具设计工作簿（新表·设计稿镜像）",
+  provider: "feishu_sheets",
+  shareUrl: "https://pisn3u3ony2.feishu.cn/sheets/WQ8wstS4ch29E2tAKnVcoh5KnJg?sheet=0iGCcx",
+  spreadsheetToken: "WQ8wstS4ch29E2tAKnVcoh5KnJg",
+  anchorSheetId: "0iGCcx",
+  syncScope: "workbook",
+  enabled: true,
+};
+
+/**
+ * 新表（WQ8w）50 张分表注册表，按 `docs/audits/feishu-source-to-v3-mapping.md` 50 行登记。
+ *
+ * role 按对照表实现状态与语义映射：
+ * - `rule_source`（对照表 ✅，required=true/importsRules=true）：竿/轮/线分表的重量模板、
+ *   钓法类型、类型材质、功能定位、FunctionProfile 常量、词条、技术、系列、品质评分、
+ *   价格计算（公式/参数释义/维修消耗速度）、校验规则（枚举/竿组/竿/轮/线）；
+ * - `historical_reference`：00_系统接入、02.5/03.5/04.5 派生模板镜像（StructuralBenchmark/
+ *   DerivedProjection 派生审核镜像，只读，不得作为可导入/可提案规则源）、13 打包竿组；
+ * - `staging_output`：09.3/09.4 空定价表、12.x 组合SKU 输出表（#143 结构化评估：竿ID/型号/
+ *   评分/品质/拉力，第一列非「机器ID（勿改）」，是输出而非规则/历史参考）、15-18 配置表 schema、
+ *   19_Patch台账空镜像（均输出/源数据待补，不得作为可导入规则源或历史参考消费）；
+ * - `development_plan`：10 钓具甘特图示意；`publish_control`：14 上传发布。
+ *
+ * 全部 `canOverwriteDomainTruth=false`；`sheetId` 全局唯一（由 `validateFeishuWorkbookConfiguration` 校验）。
+ */
+export const NEW_CANONICAL_FEISHU_SHEET_REGISTRY: FeishuSheetRegistryEntry[] = [
+  ["0iGCcx", "00_系统接入", "historical_reference", false, false],
+  ["1cAihB", "01.0_重量模板-竿", "rule_source", true, true],
+  ["2KCCHR", "01.1_重量模板-轮", "rule_source", true, true],
+  ["3FYijT", "01.2_重量模板-线", "rule_source", true, true],
+  ["4zXYpP", "02.0_钓法类型-竿", "rule_source", true, true],
+  ["5oZXTO", "02.1_钓法类型-轮", "rule_source", true, true],
+  ["6FwSyV", "02.2_钓法类型-线", "rule_source", true, true],
+  ["7ygxLI", "02.5.0_钓法模板-竿", "historical_reference", false, false],
+  ["8pvTQG", "02.5.1_钓法模板-轮", "historical_reference", false, false],
+  ["9gvEsP", "02.5.2_钓法模板-线", "historical_reference", false, false],
+  ["10TyFp", "03.0_类型材质-竿", "rule_source", true, true],
+  ["11CfXW", "03.1_类型材质-轮", "rule_source", true, true],
+  ["12VetE", "03.2_类型材质-线", "rule_source", true, true],
+  ["13awql", "03.5.0_类型模板-竿", "historical_reference", false, false],
+  ["14rhyG", "03.5.1_类型模板-轮", "historical_reference", false, false],
+  ["15nsqs", "03.5.2_类型模板-线", "historical_reference", false, false],
+  ["16qYVn", "04.0_功能定位-竿", "rule_source", true, true],
+  ["17jqiE", "04.1_功能定位-轮", "rule_source", true, true],
+  ["18pjcZ", "04.2_功能定位-线", "rule_source", true, true],
+  ["19XKzU", "04.00_FunctionProfile常量", "rule_source", true, true],
+  ["20OOnC", "04.5.0_功能模板-竿", "historical_reference", false, false],
+  ["21kEvM", "04.5.1_功能模板-轮", "historical_reference", false, false],
+  ["22RAak", "04.5.2_功能模板-线", "historical_reference", false, false],
+  ["23CsXE", "05_词条", "rule_source", true, true],
+  ["24YDSO", "06_技术", "rule_source", true, true],
+  ["25UnTC", "07_系列", "rule_source", true, true],
+  ["26gpIF", "08.0_品质评分-公式", "rule_source", true, true],
+  ["27hboC", "08.1_品质评分-品质定义", "rule_source", true, true],
+  ["28fQhg", "08.2_品质评分-词条组合", "rule_source", true, true],
+  ["31RxeB", "09.0_价格计算-公式", "rule_source", true, true],
+  ["32BmZs", "09.1_价格计算-参数释义", "rule_source", true, true],
+  ["33IGHy", "09.2_价格计算-维修消耗速度", "rule_source", true, true],
+  ["34KaIv", "09.3_价格计算-部件占比", "staging_output", false, false],
+  ["35bCfX", "09.4_价格计算-各部位全损时间-零整比", "staging_output", false, false],
+  ["36GGVk", "10_钓具甘特图示意", "development_plan", false, false],
+  ["37YLZE", "11.0_校验规则-枚举", "rule_source", true, true],
+  ["38LXDQ", "11.1_校验规则-竿组", "rule_source", true, true],
+  ["39IhAP", "11.2_校验规则-竿", "rule_source", true, true],
+  ["40RwxO", "11.3_校验规则-轮", "rule_source", true, true],
+  ["41CgUB", "11.4_校验规则-线", "rule_source", true, true],
+  ["42ACks", "12.0_组合SKU-竿", "staging_output", false, false],
+  ["43dYFE", "12.1_组合SKU-轮", "staging_output", false, false],
+  ["44YIZT", "12.2_组合SKU-线", "staging_output", false, false],
+  ["45qauz", "13_打包竿组", "historical_reference", false, false],
+  ["46ogtj", "14_上传发布", "publish_control", false, false],
+  ["47PfUw", "15_Rods", "staging_output", false, false],
+  ["48IxFG", "16_Reels", "staging_output", false, false],
+  ["49kgpf", "17_Lines", "staging_output", false, false],
+  ["50Yure", "18_Item", "staging_output", false, false],
+  ["51FogM", "19_Patch台账", "staging_output", false, false],
+].map(([sheetId, expectedName, role, required, importsRules]) => ({
+  sheetId: String(sheetId),
+  expectedName: String(expectedName),
+  role: role as FeishuSheetRole,
+  required: Boolean(required),
+  importsRules: Boolean(importsRules),
+  canOverwriteDomainTruth: false,
+}));
+
+/**
  * 解析权威规则源工作簿链接。
  *
  * - `/wiki/{node_token}`：知识库挂载形式，提取 wikiToken；电子表格 token 由读取层
@@ -163,6 +258,60 @@ export function parseCanonicalWorkbookLink(input: string): ParsedCanonicalWorkbo
     };
   }
   throw new Error("唯一规则源必须使用飞书知识库工作簿链接。");
+}
+
+/**
+ * 校验权威规则源工作簿登记与工作表注册表的自洽性。
+ *
+ * 链接形式按 `parseCanonicalWorkbookLink` 的解析结果分支：
+ * - `/wiki/`（wikiToken 存在）：wikiToken 必须与登记完全一致——`/wiki/` 旧行为完全不变；
+ * - `/sheets/`（spreadsheetToken 存在、wikiToken 缺省）：按 spreadsheetToken 校验，
+ *   不强求 wikiToken，也不与 `workbook.wikiToken` 比对。
+ *
+ * PR2a 地基：当前 `pullFeishuWorkbookRevision` 仍走既有内联校验，本函数供新表登记自检与
+ * 后续切流 PR 复用；本 PR 不切 canonical、不动读取层。
+ */
+export function validateFeishuWorkbookConfiguration(
+  workbook: FeishuWorkbookRef,
+  registry: FeishuSheetRegistryEntry[],
+): void {
+  if (!workbook.id.trim() || !workbook.name.trim() || workbook.provider !== "feishu_sheets") {
+    throw new Error("飞书规则工作簿登记缺少稳定身份或 provider 无效。");
+  }
+  if (workbook.syncScope !== "workbook") {
+    throw new Error("飞书唯一规则源的同步范围必须是整本工作簿。");
+  }
+  const parsed = parseCanonicalWorkbookLink(workbook.shareUrl);
+  if (parsed.wikiToken) {
+    // /wiki/ 挂载形式：保持既有契约，wikiToken 必须与登记一致。
+    if (parsed.wikiToken !== workbook.wikiToken) {
+      throw new Error("工作簿链接与已登记 wikiToken 不一致。");
+    }
+  } else if (parsed.spreadsheetToken) {
+    // /sheets/ 直接电子表格形式：登记的 spreadsheetToken 必须非空且与 URL token 严格相等。
+    // 若容忍缺失/空白 token，登记会错误通过校验，运行时将回退 wiki 解析失败，且工作簿没有冻结稳定身份。
+    if (!workbook.spreadsheetToken?.trim()) {
+      throw new Error("飞书规则工作簿登记缺少 spreadsheetToken（/sheets/ 形式必须登记非空电子表格 token）。");
+    }
+    if (parsed.spreadsheetToken !== workbook.spreadsheetToken) {
+      throw new Error("工作簿链接与已登记 spreadsheetToken 不一致。");
+    }
+  } else {
+    throw new Error("唯一规则源必须使用飞书知识库工作簿链接。");
+  }
+  if (workbook.anchorSheetId && parsed.anchorSheetId !== workbook.anchorSheetId) {
+    throw new Error("工作簿链接的定位 sheet 与已登记 anchorSheetId 不一致。");
+  }
+  const seen = new Set<string>();
+  for (const entry of registry) {
+    if (!entry.sheetId.trim() || !entry.expectedName.trim()) {
+      throw new Error("飞书工作表注册表存在空 sheet_id 或名称。");
+    }
+    if (seen.has(entry.sheetId)) {
+      throw new Error(`飞书工作表注册表存在重复 sheet_id ${entry.sheetId}。`);
+    }
+    seen.add(entry.sheetId);
+  }
 }
 
 export function validateSheetRegistry(

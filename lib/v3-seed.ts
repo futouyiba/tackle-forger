@@ -975,6 +975,7 @@ export function hydrateV3Seed(
     fiveAxisDispositionCatalogRevisions: fiveAxisDisposition.revisions,
     currentFiveAxisDispositionCatalogRevisionId:
       fiveAxisDisposition.currentRevisionId,
+    fiveAxisVertexGroupStates: [],
     upgradeCandidates: [upgrade],
     ruleChangeProposals: [proposal],
     governanceAuditLog: [

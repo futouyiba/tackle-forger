@@ -64,7 +64,7 @@ import {
 } from "./part-constraints";
 import { deterministicHash } from "./rule-kernel";
 import { projectShareLinkHistoryEntry } from "./data-sources";
-import { createFiveAxisDispositionCatalogRevision } from "./five-axis-formal";
+import { createFiveAxisDispositionCatalogRevision, createFormalFiveAxisVertexSet } from "./five-axis-formal";
 
 export const CURRENT_WORKSPACE_SCHEMA_VERSION = 20;
 
@@ -1645,6 +1645,61 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
     version = nextVersion;
   }
 
+  const fiveAxisDefinitions = arrayOf<WorkspaceState["fiveAxisViewDefinitions"][number]>(
+    state.fiveAxisViewDefinitions,
+  );
+  const existingFiveAxisGroupStates = arrayOf<NonNullable<WorkspaceState["fiveAxisVertexGroupStates"]>[number]>(
+    state.fiveAxisVertexGroupStates,
+  );
+  // Old workspaces had immutable formal VertexSets but no mutable current-group
+  // pointer.  Bootstrap only from each published Model's explicit current
+  // Snapshot; historical arrays/order never select a candidate.
+  const bootstrappedFiveAxisGroupStates = existingFiveAxisGroupStates.length
+    ? existingFiveAxisGroupStates
+    : (() => {
+      const grouped = new Map<string, { key: import("./types").FiveAxisVertexGroupKey; sources: import("./types").FiveAxisVertexCandidateSource[] }>();
+      const snapshots = arrayOf<WorkspaceState["configurationSnapshots"][number]>(state.configurationSnapshots);
+      for (const model of arrayOf<WorkspaceState["purchasableModels"][number]>(state.purchasableModels)) {
+        if (model.status !== "published" || !model.configurationSnapshotId) continue;
+        const matches = snapshots.filter((snapshot) => snapshot.id === model.configurationSnapshotId && snapshot.modelId === model.id);
+        if (matches.length !== 1) continue; // broken legacy pointer remains unavailable, never guessed
+        const preview = matches[0].fiveAxisPreview;
+        if (!preview?.weightBandId || !preview.weightBandPolicyVersion || !preview.candidateSources) continue;
+        const key = { weightBandId: preview.weightBandId, weightBandPolicyVersion: preview.weightBandPolicyVersion, fiveAxisDefinitionId: preview.fiveAxisDefinitionId, fiveAxisDefinitionVersion: preview.fiveAxisDefinitionVersion, fiveAxisRuleVersion: preview.fiveAxisRuleVersion };
+        const identity = JSON.stringify(key);
+        const group = grouped.get(identity) ?? { key, sources: [] };
+        const sources = preview.candidateSources.filter((source) => source.candidateSemanticKey.modelId === model.id && source.snapshotId === matches[0].id && source.candidateSemanticKey.itemPartId === "part:rod");
+        if (sources.length === 1) group.sources.push(...structuredClone(sources));
+        grouped.set(identity, group);
+      }
+      return [...grouped.values()].map<import("./types").FiveAxisVertexGroupState>((group) => {
+        const matchingDefinitions = fiveAxisDefinitions.filter((entry) => "semanticContractVersion" in entry && entry.definitionId === group.key.fiveAxisDefinitionId && entry.version === group.key.fiveAxisDefinitionVersion);
+        if (matchingDefinitions.length !== 1) throw new Error("FIVE_AXIS_MIGRATION_DEFINITION_UNRESOLVED：当前 Snapshot 的正式五维定义无法唯一回读。");
+        const definition = matchingDefinitions[0];
+        let rebuilt: import("./types").FiveAxisVertexSet;
+        try {
+          rebuilt = createFormalFiveAxisVertexSet({ definition: definition as import("./types").FiveAxisViewDefinition, groupKey: group.key, candidateSources: group.sources });
+        } catch {
+          throw new Error("FIVE_AXIS_MIGRATION_CANDIDATE_INVALID：当前 Snapshot 候选无法重放正式顶点。");
+        }
+        const sets = arrayOf<WorkspaceState["fiveAxisVertexSets"][number]>(state.fiveAxisVertexSets).filter((entry) => "weightBandId" in entry && entry.vertexSetHash === rebuilt.vertexSetHash && entry.candidateSetHash === rebuilt.candidateSetHash && entry.candidateEvidenceHash === rebuilt.candidateEvidenceHash);
+        if (sets.length !== 1) {
+          return {
+            groupKey: group.key,
+            state: "UNAVAILABLE_NO_ELIGIBLE_CANDIDATE" as const,
+            candidateSources: group.sources,
+            candidateSetHash: rebuilt.candidateSetHash,
+            candidateEvidenceHash: rebuilt.candidateEvidenceHash,
+            currentVertexSetId: null,
+            currentVertexSetHash: null,
+            missingAxisIds: [],
+            reasonCode: "FIVE_AXIS_MIGRATION_VERTEX_SET_UNRESOLVED",
+          };
+        }
+        const set = sets[0] as import("./types").FiveAxisVertexSet;
+        return { groupKey: group.key, state: "AVAILABLE" as const, candidateSources: group.sources, candidateSetHash: set.candidateSetHash, candidateEvidenceHash: set.candidateEvidenceHash, currentVertexSetId: set.vertexSetId, currentVertexSetHash: set.vertexSetHash, missingAxisIds: [], reasonCode: null };
+      });
+    })();
   state = {
     ...state,
     parameters: enrichParameters(arrayOf<ParameterDefinition>(state.parameters)),
@@ -1669,9 +1724,6 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
       : emptyPatchLedger(),
     configIdGovernance: migrateConfigIdGovernanceState(state.configIdGovernance),
   };
-  const fiveAxisDefinitions = arrayOf<WorkspaceState["fiveAxisViewDefinitions"][number]>(
-    state.fiveAxisViewDefinitions,
-  );
   const dispositionMigration = createFiveAxisDispositionCatalogRevision({
     definitions: fiveAxisDefinitions,
     existingRevisions: arrayOf<WorkspaceState["fiveAxisDispositionCatalogRevisions"][number]>(
@@ -1689,6 +1741,7 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
     fiveAxisVertexSets: arrayOf<WorkspaceState["fiveAxisVertexSets"][number]>(
       state.fiveAxisVertexSets,
     ),
+    fiveAxisVertexGroupStates: bootstrappedFiveAxisGroupStates,
     fiveAxisDispositionCatalogRevisions: dispositionMigration.revisions,
     currentFiveAxisDispositionCatalogRevisionId:
       dispositionMigration.currentRevisionId,

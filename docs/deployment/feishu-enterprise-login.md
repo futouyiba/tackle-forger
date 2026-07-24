@@ -9,7 +9,7 @@ Tackle Forger 直接使用飞书网页 OAuth，不依赖 `FEISHU_LOGIN_URL` 或�
 
 | 场景 | 身份方式 | 会话存储 | 说明 |
 | --- | --- | --- | --- |
-| **自动化测试** | 受密钥保护的 trusted-proxy fixture（`x-tf-proxy-secret` + `x-feishu-*`） | 临时目录（`mkdtemp`），测试后自动清理 | 不访问真实飞书网络、不要求真人 OAuth；通过 `FEISHU_TRUST_PROXY_HEADERS=true` 和共享密钥启用，仅在测试中可运行 |
+| **自动化测试** | 受密钥保护的 trusted-proxy fixture（`x-tf-proxy-secret` + `x-feishu-*`） | 临时目录（`mkdtemp`），测试后自动清理 | 不访问真实飞书网络、不要求真人 OAuth；通过 `FEISHU_TRUST_PROXY_HEADERS=true` 和共享密钥启用。该通道默认关闭、**非测试专用**——显式配置共享密钥的受控内网代理部署同样使用它（见「可选可信代理模式」），只是测试用 fixture 复用了同一路径 |
 | **人工 worktree 开发验收** | 真实飞书 OAuth 重定向 | 按 worktree+端口隔离的 `.data/auth-<worktreeName>-<port>`，由 `scripts/start-dev.ps1` 自动推导 | 每个 worktree 有独立会话文件，不互相污染 |
 | **R730 正式生产** | 真实飞书 OAuth 重定向、HTTPS 代理 | 持久磁盘显式路径（`/opt/tackle-forger/data/auth`），由 systemd `EnvironmentFile` 设置 | 包含在 `npm run storage:backup` 的 auth 目录中；不可被开发脚本改写 |
 

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -10,6 +10,7 @@ import { POST as importFile } from "../app/api/import-file/route";
 import { POST as accessDataSources } from "../app/api/data-sources/route";
 import { GET as inspectWorkbook } from "../app/api/feishu-workbook/route";
 import { POST as configExport } from "../app/api/config-export/route";
+import { POST as postAssessment } from "../app/api/ai/assessments/route";
 import { GET as startLogin } from "../app/api/auth/feishu/start/route";
 import { requestUser } from "../lib/auth";
 import {
@@ -620,4 +621,48 @@ test("可信代理已登录但缺少 capability 时返回 403", async () => {
     assert.equal(action.enabled, false);
     assert.equal(action.disabledReasonCode, "CAPABILITY_MISSING");
   });
+});
+
+test("已登录身份调用受保护写路由被拦截：真实 HTTP 403 且无写副作用", async () => {
+  // The trusted-proxy identity is authenticated, but `run_ai_assessment` is
+  // disabled (AI connector not enabled in this environment).  POSTing to the
+  // protected assessment write route must return a REAL HTTP 403 from the
+  // route handler, BEFORE any assessment is persisted — i.e. no write side
+  // effects.  This complements the ActionAvailability-only assertion above
+  // with an end-to-end gate check.
+  const retentionDir = await mkdtemp(path.join(os.tmpdir(), "tackle-forger-403-retention-"));
+  try {
+    await withEnvironment({
+      FEISHU_TRUST_PROXY_HEADERS: "true",
+      FEISHU_PROXY_SHARED_SECRET: "test-secret",
+      FEISHU_TENANT_KEY: "tenant",
+      // Fancy Hub / AI runtime intentionally NOT enabled → run_ai_assessment
+      // disabled → the route must 403.  AI_RETENTION_DATA_DIR is pointed at a
+      // temp dir so we can prove the 403 gate prevented any assessment write.
+      FANCY_HUB_ENABLED: undefined,
+      AI_RETENTION_DATA_DIR: retentionDir,
+    }, async () => {
+      const request = new NextRequest("http://localhost/api/ai/assessments", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-feishu-tenant-key": "tenant",
+          "x-feishu-open-id": "user",
+          "x-feishu-display-name": "tester",
+          "x-tf-proxy-secret": "test-secret",
+        },
+        body: JSON.stringify({ scopeType: "series", scopeId: "series-test" }),
+      });
+      const response = await postAssessment(request);
+      assert.equal(response.status, 403);
+      const body = (await response.json()) as { actionAvailability?: { enabled?: boolean } };
+      assert.equal(body.actionAvailability?.enabled, false);
+      // The 403 must fire before the assessment is stored: no records may be
+      // written to the retention directory.
+      const entries = await readdir(retentionDir);
+      assert.deepEqual(entries, [], "受 403 拦截的评估请求不得写入留存目录");
+    });
+  } finally {
+    await rm(retentionDir, { recursive: true, force: true });
+  }
 });

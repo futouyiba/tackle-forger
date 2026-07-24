@@ -28,10 +28,17 @@ if ($listener) {
 #   Main checkout:  .git is a DIRECTORY
 #   Linked worktree: .git is a FILE  containing "gitdir: .../worktrees/<name>"
 #
-# If we are in a worktree AND `FEISHU_SESSION_DATA_DIR` has not been set
-# explicitly in the shell environment, we derive an isolated path:
+# If we are in a worktree AND `FEISHU_SESSION_DATA_DIR` has not been set to a
+# *non-default* explicit value in the shell environment, we derive an isolated
+# path:
 #
 #   .data/auth-<worktreeName>-<port>
+#
+# "Non-default" here matches `lib/session-path.ts`'s `resolveSessionDataDir`:
+# the built-in default `.data/auth` (trimmed) is treated as "not intentional"
+# so that a value inherited from `.env` / the shell does not silently disable
+# isolation.  Only a genuine override (e.g. `/opt/tackle-forger/data/auth` or
+# any other non-default path) is respected and left untouched.
 #
 # This path is gitignored (`.data/` is in `.gitignore`), does NOT conflict
 # with other worktrees, and does NOT overwrite an explicit production path.
@@ -41,6 +48,14 @@ if ($listener) {
 # ---------------------------------------------------------------------------
 
 $sessionDirExplicit = [Environment]::GetEnvironmentVariable("FEISHU_SESSION_DATA_DIR", "Process")
+# Mirror `isDefaultPath` in lib/session-path.ts: empty OR equal to the
+# built-in default ".data/auth" (after trimming) is NOT an intentional override.
+if ([string]::IsNullOrEmpty($sessionDirExplicit)) {
+  $sessionDirTrimmed = ""
+} else {
+  $sessionDirTrimmed = $sessionDirExplicit.Trim()
+}
+$isDefaultSessionPath = [string]::IsNullOrEmpty($sessionDirExplicit) -or ($sessionDirTrimmed -eq ".data/auth")
 $gitPath = Join-Path $projectRoot ".git"
 $worktreeName = $null
 
@@ -55,12 +70,12 @@ if (Test-Path $gitPath -PathType Leaf) {
   }
 }
 
-if ([string]::IsNullOrEmpty($sessionDirExplicit) -and $worktreeName) {
+if ($isDefaultSessionPath -and $worktreeName) {
   $isolatedDir = ".data/auth-$worktreeName-$Port"
   $env:FEISHU_SESSION_DATA_DIR = $isolatedDir
   Write-Host "[auth] Session data: $isolatedDir (worktree-isolated for '$worktreeName')"
 } elseif ($worktreeName) {
-  Write-Host "[auth] Session data: $sessionDirExplicit (explicit, not auto-isolated)"
+  Write-Host "[auth] Session data: $sessionDirExplicit (explicit non-default, not auto-isolated)"
 } else {
   # Main checkout or non-git directory; use whatever .env.local provides.
   Write-Host "[auth] Not a linked worktree; session data from environment."

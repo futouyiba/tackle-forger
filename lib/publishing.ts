@@ -894,10 +894,6 @@ export function publishConfigurationSnapshot(
       decisions: input.validationWaiverDecisions,
     });
   }
-  const modelFinalPullKg = modelFinalPullKgForSnapshot(
-    input.sku.projectionMatch.itemPartId,
-    input.finalPanelValues,
-  );
   const snapshotWithoutHash: Omit<ConfigurationSnapshot, "contentHash"> = {
     ...(input.publicationMode==="new_formal"?{workspaceId:input.workspaceId}:{}),
     id: snapshotId,

@@ -76,7 +76,7 @@ function definition(): FiveAxisViewDefinition {
         transformId: "identity",
         vertexSelectorId: "max",
         vertexSelectorVersion: "legacy-test",
-        componentAggregationId: "per_component_no_aggregate",
+        componentAggregationId: "component_min_ratio",
         missingPolicy: "error",
       },
       {
@@ -89,7 +89,7 @@ function definition(): FiveAxisViewDefinition {
         transformId: "identity",
         vertexSelectorId: "max",
         vertexSelectorVersion: "legacy-test",
-        componentAggregationId: "per_component_no_aggregate",
+        componentAggregationId: "component_min_ratio",
         missingPolicy: "error",
       },
       {
@@ -102,7 +102,7 @@ function definition(): FiveAxisViewDefinition {
         transformId: "identity",
         vertexSelectorId: "max",
         vertexSelectorVersion: "legacy-test",
-        componentAggregationId: "per_component_no_aggregate",
+        componentAggregationId: "component_min_ratio",
         missingPolicy: "ignore_not_applicable",
       },
       {
@@ -115,7 +115,7 @@ function definition(): FiveAxisViewDefinition {
         transformId: "sum",
         vertexSelectorId: "min",
         vertexSelectorVersion: "legacy-test",
-        componentAggregationId: "per_component_no_aggregate",
+        componentAggregationId: "component_min_ratio",
         missingPolicy: "error",
       },
       {
@@ -128,7 +128,7 @@ function definition(): FiveAxisViewDefinition {
         transformId: "identity",
         vertexSelectorId: "min",
         vertexSelectorVersion: "legacy-test",
-        componentAggregationId: "per_component_no_aggregate",
+        componentAggregationId: "component_min_ratio",
         missingPolicy: "error",
       },
     ],

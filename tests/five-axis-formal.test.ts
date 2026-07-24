@@ -7,6 +7,7 @@ import {
   createFormalFiveAxisViewDefinition,
   createFormalFiveAxisWeightBandPolicy,
   hashFiveAxisDispositionCatalog,
+  resolveFormalEquipmentComparisonReadiness,
   resolveFormalFiveAxisWeightBand,
   resolveFormalFiveAxisDefinition,
   validateFiveAxisDispositionCatalog,
@@ -25,6 +26,35 @@ import type {
 } from "../lib/types";
 
 const ZERO_HASH = "0".repeat(64);
+
+test("混合比较在缺少正式依赖时明确阻断而保留恢复路径", () => {
+  assert.deepEqual(resolveFormalEquipmentComparisonReadiness({
+    selectionCount: 1,
+    hasActivePreview: false,
+    hasFormalCurrentDefinition: false,
+  }), { state: "waiting_for_selection" });
+  assert.deepEqual(resolveFormalEquipmentComparisonReadiness({
+    selectionCount: 2,
+    hasActivePreview: true,
+    hasFormalCurrentDefinition: false,
+  }), {
+    state: "unavailable",
+    message: "当前工作区没有唯一的 FORMAL_CURRENT 五维定义。请由具备五维规则发布权限的人员发布或恢复该定义；比较篮会保留，可在恢复后重试。",
+  });
+  assert.deepEqual(resolveFormalEquipmentComparisonReadiness({
+    selectionCount: 2,
+    hasActivePreview: false,
+    hasFormalCurrentDefinition: true,
+  }), {
+    state: "unavailable",
+    message: "当前 Model 缺少冻结五维预览，无法确定共同 W 段。请打开带完整五维预览的冻结 Snapshot 后重试；比较篮会保留。",
+  });
+  assert.deepEqual(resolveFormalEquipmentComparisonReadiness({
+    selectionCount: 2,
+    hasActivePreview: true,
+    hasFormalCurrentDefinition: true,
+  }), { state: "ready" });
+});
 
 test("five-axis-hash-input/v1 通过 JCS/SHA-256 固定向量与拼接碰撞回归", () => {
   const semantic = hashCandidateSemanticInput({

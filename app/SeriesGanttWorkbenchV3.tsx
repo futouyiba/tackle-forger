@@ -37,7 +37,11 @@ import {
 import { CANONICAL_FEISHU_SHEET_REGISTRY } from "@/lib/feishu-workbook";
 import { issueClientActionCommand } from "@/lib/client-action-command";
 import { calculateModelFiveAxisPreview, fiveAxisPlotRatio } from "@/lib/five-axis";
-import { buildFormalEquipmentComparison, buildFormalFiveAxisEntityFromSnapshot } from "@/lib/five-axis-formal";
+import {
+  buildFormalEquipmentComparison,
+  buildFormalFiveAxisEntityFromSnapshot,
+  resolveFormalEquipmentComparisonReadiness,
+} from "@/lib/five-axis-formal";
 import { selectCurrentFiveAxisVertexSet } from "@/lib/five-axis-transactions";
 import { deterministicHash } from "@/lib/rule-kernel";
 import { isActiveValidationIssue, validationIssueLevel } from "@/lib/validation-issues";
@@ -763,9 +767,18 @@ function ModelDrawer({
   const formalComparisonDefinition = formalCurrentFiveAxisDefinition(state);
   const pendingUpgrade = state.upgradeCandidates.find((entry) => entry.modelId === model.id && entry.status === "pending");
   const comparisonResult = useMemo(() => {
-    if (
-      comparisonSelections.length < 2 || !activeFiveAxisPreview || !formalComparisonDefinition
-    ) return {};
+    const readiness = resolveFormalEquipmentComparisonReadiness({
+      selectionCount: comparisonSelections.length,
+      hasActivePreview: Boolean(activeFiveAxisPreview),
+      hasFormalCurrentDefinition: Boolean(formalComparisonDefinition),
+    });
+    if (readiness.state === "waiting_for_selection") return {};
+    if (readiness.state === "unavailable") return { error: readiness.message };
+    // `readiness` is the user-facing branch; retain an explicit guard so the
+    // calculation boundary cannot receive a guessed or absent formal source.
+    if (!formalComparisonDefinition || !activeFiveAxisPreview) {
+      return { error: "五维比较依赖已变化。请恢复正式定义和冻结预览后重试；比较篮会保留。" };
+    }
     const vertexSet = selectCurrentFiveAxisVertexSet({ definition: formalComparisonDefinition, weightBandId: activeFiveAxisPreview.weightBandId ?? "", groupStates: state.fiveAxisVertexGroupStates ?? [], vertexSets: state.fiveAxisVertexSets.filter(isFormalFiveAxisVertexSet) });
     if (!vertexSet) return { error: "共同 W 段尚无正式顶点。" };
     const entities = comparisonSelections.flatMap((selection, comparisonOrder) => {

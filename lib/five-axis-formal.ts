@@ -35,6 +35,35 @@ export const FIVE_AXIS_PROJECTION_REFERENCE_SELECTOR_VERSION =
 export const FIVE_AXIS_DISPOSITION_CATALOG_SCHEMA_VERSION =
   "five-axis-definition-disposition-catalog/v1" as const;
 
+/**
+ * Keep the comparison basket recoverable when a formal dependency is absent.
+ * This is deliberately a readiness result, not a fallback definition: OPEN-005
+ * comparisons must never derive scores from a draft, legacy, or guessed source.
+ */
+export function resolveFormalEquipmentComparisonReadiness(input: {
+  selectionCount: number;
+  hasActivePreview: boolean;
+  hasFormalCurrentDefinition: boolean;
+}):
+  | { state: "waiting_for_selection" }
+  | { state: "unavailable"; message: string }
+  | { state: "ready" } {
+  if (input.selectionCount < 2) return { state: "waiting_for_selection" };
+  if (!input.hasFormalCurrentDefinition) {
+    return {
+      state: "unavailable",
+      message: "当前工作区没有唯一的 FORMAL_CURRENT 五维定义。请由具备五维规则发布权限的人员发布或恢复该定义；比较篮会保留，可在恢复后重试。",
+    };
+  }
+  if (!input.hasActivePreview) {
+    return {
+      state: "unavailable",
+      message: "当前 Model 缺少冻结五维预览，无法确定共同 W 段。请打开带完整五维预览的冻结 Snapshot 后重试；比较篮会保留。",
+    };
+  }
+  return { state: "ready" };
+}
+
 export function buildFormalFiveAxisEntityFromSnapshot(input: {
   snapshot: ConfigurationSnapshot;
   itemPartId: string;

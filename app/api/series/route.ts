@@ -55,6 +55,7 @@ interface SeriesCreateRequest {
   /** 旧命令恢复专用；新创建禁止使用。 */
   performanceId?: string;
   functionIntensity: 1 | 2 | 3;
+  directAffixIds?: string[];
   planningMinKgf?: string;
   planningMaxKgf?: string;
   discretePulls?: string;
@@ -104,6 +105,7 @@ async function executeSeriesBusinessRequest(request: NextRequest) {
   const optionalStringFields = [
     "collectionId", "planningMinKgf", "planningMaxKgf",
   ] as const satisfies readonly (keyof SeriesCreateRequest)[];
+  const selectionFields = ["directAffixIds"] as const;
   const invalidField = requiredStringFields.find((field) => typeof body[field] !== "string")
     ?? optionalStringFields.find(
       (field) => body[field] !== undefined && typeof body[field] !== "string",
@@ -114,6 +116,15 @@ async function executeSeriesBusinessRequest(request: NextRequest) {
       { status: 400 },
     );
   }
+  const invalidSelectionField = selectionFields.find((field) =>
+    body[field] !== undefined && (!Array.isArray(body[field]) || body[field].some((id) => typeof id !== "string")));
+  if (invalidSelectionField) {
+    return NextResponse.json({ error: `字段 ${invalidSelectionField} 必须是字符串数组。`, field: invalidSelectionField }, { status: 400 });
+  }
+  const normalizedIds = (ids: string[] | undefined) => Array.from(new Set(
+    (ids ?? []).map((id) => id.trim()).filter(Boolean),
+  ));
+  const directAffixIds = normalizedIds(body.directAffixIds);
 
   const name = body.name.trim();
   const concept = body.concept.trim();
@@ -183,6 +194,7 @@ async function executeSeriesBusinessRequest(request: NextRequest) {
     planningMinKgf: minKgf ?? null,
     planningMaxKgf: maxKgf ?? null,
     pulls,
+    directAffixIds,
   };
   const inputHash = createHash("sha256")
     .update(JSON.stringify(canonicalInput))
@@ -255,6 +267,13 @@ async function executeSeriesBusinessRequest(request: NextRequest) {
   if (body.collectionId && !state.collections.some((entry) => entry.id === body.collectionId)) {
     return NextResponse.json({ error: "所选 Collection 不存在。" }, { status: 422 });
   }
+  const directAffixError = directAffixIds.find((id) => {
+    const affix = state.v3Affixes.find((entry) => entry.id === id);
+    return !affix || !affix.enabled || affix.generationPolicy === "technology_only";
+  });
+  if (directAffixError) {
+    return NextResponse.json({ error: "直接词条不存在、已禁用或仅能由 Technology 提供。", field: "directAffixIds", id: directAffixError }, { status: 422 });
+  }
   const ruleSet = [...state.ruleSetVersions]
     .filter((entry) => entry.status === "published")
     .sort((left, right) => right.version - left.version || right.id.localeCompare(left.id))[0];
@@ -275,7 +294,7 @@ async function executeSeriesBusinessRequest(request: NextRequest) {
     qualityId: body.qualityId,
     coreFunctionId: body.functionId,
     functionIntensityPolicy: { mode: "fixed", intensity: body.functionIntensity },
-    coreAffixIds: [],
+    coreAffixIds: directAffixIds,
     secondaryAffixPoolIds: [],
     forbiddenAffixIds: [],
     ...(minKgf !== undefined && maxKgf !== undefined ? { planningPullRange: { minKgf, maxKgf } } : {}),

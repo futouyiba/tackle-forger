@@ -4,9 +4,10 @@ import type { MotionPresentationStep, MotionStatus } from "./motion-presentation
 export type MotionPreference = "system" | "reduce" | "full";
 
 export function resolveReducedMotion(preference: MotionPreference, systemReducedMotion: boolean): boolean {
-  if (preference === "reduce") return true;
-  if (preference === "full") return false;
-  return systemReducedMotion;
+  // The product preference can request less motion, never more than the OS allows.
+  // Keep "full" as a backwards-compatible stored value meaning that the product
+  // itself does not request reduction; an OS reduce preference still wins.
+  return systemReducedMotion || preference === "reduce";
 }
 
 /** Only stage changes are announced. Per-step values intentionally never enter a live region. */
@@ -56,9 +57,9 @@ export function motionFrozenEvidenceNotice(
 /** Keyboard shortcuts are ignored while typing in a native editable control. */
 export function motionKeyboardCommand(
   key: string,
-  options: { editableTarget?: boolean; altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean } = {},
+  options: { editableTarget?: boolean; interactiveTarget?: boolean; altKey?: boolean; ctrlKey?: boolean; metaKey?: boolean } = {},
 ): MotionKeyboardCommand | undefined {
-  if (options.editableTarget || options.altKey || options.ctrlKey || options.metaKey) return undefined;
+  if (options.editableTarget || options.interactiveTarget || options.altKey || options.ctrlKey || options.metaKey) return undefined;
   if (key === " " || key.toLowerCase() === "p") return "playPause";
   if (key.toLowerCase() === "s") return "skip";
   if (key.toLowerCase() === "r") return "replay";

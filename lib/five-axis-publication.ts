@@ -2,6 +2,7 @@ import { deterministicHash } from "./rule-kernel";
 import {
   assertFormalFiveAxisViewDefinition,
   createFiveAxisDispositionCatalogRevision,
+  hashFiveAxisWeightBandPolicy,
 } from "./five-axis-formal";
 import type { CapabilityCode } from "./interaction-contracts";
 import type { FiveAxisViewDefinition, WorkspaceState } from "./types";
@@ -47,6 +48,10 @@ export function publishFormalFiveAxisDefinition(input: {
     || !source.fiveAxisWeightBandPolicy
     || source.fiveAxisWeightBandPolicy.contentHash
       !== input.sourceEvidence.weightBandPolicyContentHash
+    || hashFiveAxisWeightBandPolicy(source.fiveAxisWeightBandPolicy)
+      !== input.sourceEvidence.weightBandPolicyContentHash
+    || input.definition.weightBandPolicy.contentHash
+      !== source.fiveAxisWeightBandPolicy.contentHash
     || source.fiveAxisWeightBandPolicy.sourceRevision
       !== input.sourceEvidence.sourceRevision
   ) {

@@ -4,21 +4,7 @@ import { createFormalFiveAxisViewDefinition } from "../lib/five-axis-formal";
 import { FiveAxisPublicationError, publishFormalFiveAxisDefinition } from "../lib/five-axis-publication";
 import { CANONICAL_FEISHU_WORKBOOK, pullFeishuWorkbookRevision } from "../lib/feishu-workbook";
 import { createSeedState } from "../lib/seed";
-
-function weightFixture() {
-  const rows = Array.from({ length: 54 }, () => [] as unknown[]);
-  const mins = ["0.1", "1.5", "2.5", "3.8", "5.4", "7.5", "10.2", "12.6", "15", "17.8", "21.2", "25.9", "36.9", "55", "82.5", "145"];
-  const maxes = ["1.5", "2.5", "3.8", "5.4", "7.5", "10.2", "12.6", "15", "17.8", "21.2", "25.9", "36.9", "55", "82.5", "145", "235"];
-  const grades = ["微物", "小鱼", "小鱼", "中鱼", "中鱼", "中鱼", "中鱼", "大鱼", "大鱼", "大鱼", "大鱼", "巨物", "巨物", "巨物", "超级巨物", "超级巨物"];
-  for (const [part, headerRow, start] of [["竿", 2, 3], ["轮", 20, 21], ["线", 38, 39]] as const) {
-    rows[headerRow - 1] = ["", "机器ID", "同步状态", "部位", "重量段序号", "最小拉力", "最大拉力", "鱼重量等级"];
-    for (let index = 0; index < 16; index += 1) {
-      const idPart = part === "竿" ? "rod" : part === "轮" ? "reel" : "line";
-      rows[start + index - 1] = ["", `wtpl_${idPart}_${String(index + 1).padStart(4, "0")}`, "BOUND", part, String(index + 1), mins[index], maxes[index], grades[index]];
-    }
-  }
-  return rows;
-}
+import { weightTemplate4837A1Ae54 as weightFixture } from "./fixtures/five-axis-weight-template-4837";
 
 async function productionState() {
   const state = createSeedState({ mode: "production" });
@@ -41,7 +27,7 @@ test("真实拉取夹具从 d6e928 冻结 W policy，并对三方 grade 篡改 f
   assert.equal(weightFixture()[17]![6], "235");
   assert.equal(policy.bands[5]!.upperBoundKg, null);
   const changedEverywhere = weightFixture();
-  for (const row of [4, 22, 40]) changedEverywhere[row]![6] = "3.9";
+  for (const row of [4, 22, 40]) { changedEverywhere[row]![6] = "3.9"; changedEverywhere[row + 1]![5] = "3.9"; }
   const changed = await pullFeishuWorkbookRevision({ workbook: CANONICAL_FEISHU_WORKBOOK, pulledAt: "2026-07-24T00:00:00.000Z", pulledBy: "tester", adapter: {
     resolveWorkbook: async () => ({ spreadsheetToken: "redacted", sourceRevision: "4837", sheets: [{ sheetId: "d6e928", name: "01_重量模板", rowCount: 54, columnCount: 31 }] }),
     readRanges: async () => [{ sheetId: "d6e928", range: "A1:AE54", revision: "4837", values: changedEverywhere }],
@@ -95,6 +81,9 @@ test("生产 seed 不自动创建 FORMAL_CURRENT，正式发布要求来源、�
     capabilities: ["rules.five_axis.publish"],
   }), /SOURCE_EVIDENCE_INVALID/);
   assert.throws(() => publishFormalFiveAxisDefinition({ ...input, expectedCatalogRevisionId: "stale", capabilities: ["rules.five_axis.publish"] }), /CATALOG_HEAD_CONFLICT/);
+  const sourcePayloadTamper = structuredClone(state);
+  sourcePayloadTamper.feishuSourceRevisions[0]!.fiveAxisWeightBandPolicy!.bands[0]!.upperBoundKg = "999";
+  assert.throws(() => publishFormalFiveAxisDefinition({ ...input, state: sourcePayloadTamper, capabilities: ["rules.five_axis.publish"] }), /SOURCE_EVIDENCE_INVALID/);
   const published = publishFormalFiveAxisDefinition({ ...input, capabilities: ["rules.five_axis.publish"] });
   assert.equal(published.idempotent, false);
   assert.equal(published.state.currentFiveAxisDispositionCatalogRevisionId, published.catalogRevisionId);

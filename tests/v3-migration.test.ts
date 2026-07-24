@@ -23,6 +23,8 @@ import {
 } from "../lib/part-constraints";
 import { createSeedState } from "../lib/seed";
 import { ensureWorkflowFields } from "../lib/workflow";
+import { createFormalFiveAxisVertexSet, createFormalFiveAxisViewDefinition } from "../lib/five-axis-formal";
+import { hashCandidateSemanticInput } from "../lib/five-axis-hash";
 
 function legacyV17ForPartConstraintMigration(): Record<string, unknown> {
   const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
@@ -120,6 +122,8 @@ test("v14 将旧系列配方迁移为竿轮线约束且保留扁平字段", () =
 test("v15 保留旧五维定义并明确迁移为未发布修订", () => {
   const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
   legacy.schemaVersion = 14;
+  delete legacy.fiveAxisDispositionCatalogRevisions;
+  delete legacy.currentFiveAxisDispositionCatalogRevisionId;
   legacy.fiveAxisViewDefinitions = [{
     definitionId: "five-axis:legacy",
     version: "legacy-v1",
@@ -1071,7 +1075,7 @@ test("已标记 schema v18 的分支形态会互补缺失集合且保持 Snapsho
   assert.deepEqual(migrateWorkspaceState(aiMigrated), aiMigrated);
 });
 
-test("schema v18 升级后补齐重量模板草稿且不改写冻结 Snapshot", () => {
+test("schema v18 升级到最新时补齐重量模板草稿与分享链接历史且不改写冻结 Snapshot", () => {
   const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
   legacy.schemaVersion = 18;
   delete legacy.weightTemplatePolicyDrafts;
@@ -1079,6 +1083,67 @@ test("schema v18 升级后补齐重量模板草稿且不改写冻结 Snapshot", 
   const migrated = migrateWorkspaceState(legacy);
   assert.equal(migrated.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
   assert.deepEqual(migrated.weightTemplatePolicyDrafts, []);
+  assert.deepEqual(migrated.feishuShareLinkHistory, []);
   assert.deepEqual(migrated.configurationSnapshots, snapshotsBefore);
   assert.deepEqual(migrateWorkspaceState(migrated), migrated);
+});
+
+test("旧正式五维状态只从 published Model 的当前 Snapshot 指针确定性 bootstrap，倒序与二次迁移不变", () => {
+  const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
+  legacy.schemaVersion = 3;
+  const definition = createFormalFiveAxisViewDefinition();
+  const model = (legacy.purchasableModels as Array<Record<string, unknown>>)[0]!;
+  const modelRevision = Number(model.revision);
+  model.status = "published";
+  model.configurationSnapshotId = "snapshot:formal-current";
+  const groupKey = { weightBandId: "W1", weightBandPolicyVersion: definition.weightBandPolicyVersion, fiveAxisDefinitionId: definition.definitionId, fiveAxisDefinitionVersion: definition.version, fiveAxisRuleVersion: definition.fiveAxisRuleVersion };
+  const directInputs = definition.axes.map((axis) => ({ axisId: axis.axisId, parameterKey: axis.sourceParameterKeys[0]!, rawValue: "1", unit: "unit", inputHash: "b".repeat(64) }));
+  const semantic = hashCandidateSemanticInput({ finalPanelHash: "a".repeat(64), modelFinalPullKg: "1", directInputs: directInputs.map((entry, axisOrder) => ({ ...entry, axisOrder })) });
+  const source = { candidateSemanticKey: { modelId: String(model.id), componentEntityId: "rod:current", itemPartId: "part:rod" }, snapshotId: "snapshot:formal-current", modelRevisionId: `${model.id}@${modelRevision}`, finalPanelHash: "a".repeat(64), modelFinalPullKg: "1", directInputs, semanticInputHash: semantic.hash };
+  const retiredModel = { ...structuredClone(model), id: "model:retired-history", status: "superseded", configurationSnapshotId: "snapshot:retired-history" };
+  const retiredSource = { ...source, candidateSemanticKey: { ...source.candidateSemanticKey, modelId: retiredModel.id, componentEntityId: "rod:retired" }, snapshotId: retiredModel.configurationSnapshotId, modelRevisionId: `${retiredModel.id}@${modelRevision}` };
+  const preview = { modelId: model.id, weightBandId: "W1", weightBandPolicyVersion: definition.weightBandPolicyVersion, fiveAxisDefinitionId: definition.definitionId, fiveAxisDefinitionVersion: definition.version, fiveAxisRuleVersion: definition.fiveAxisRuleVersion, candidateSources: [source] };
+  (legacy.purchasableModels as Array<Record<string, unknown>>).push(retiredModel);
+  legacy.configurationSnapshots = [
+    { id: "snapshot:history", modelId: model.id, fiveAxisPreview: { ...preview, candidateSources: [{ ...source, snapshotId: "snapshot:history" }] } },
+    { id: retiredModel.configurationSnapshotId, modelId: retiredModel.id, fiveAxisPreview: { ...preview, modelId: retiredModel.id, candidateSources: [retiredSource] } },
+    { id: "snapshot:formal-current", modelId: model.id, fiveAxisPreview: preview },
+  ];
+  legacy.fiveAxisViewDefinitions = [definition];
+  legacy.fiveAxisDispositionCatalogRevisions = [];
+  legacy.currentFiveAxisDispositionCatalogRevisionId = null;
+  const vertex = { ...createFormalFiveAxisVertexSet({ definition, groupKey, candidateSources: [source] }), vertexSetId: "vertex:current" };
+  legacy.fiveAxisVertexSets = [vertex];
+  delete legacy.fiveAxisVertexGroupStates;
+  const migrated = migrateWorkspaceState(legacy);
+  assert.equal(migrated.fiveAxisVertexGroupStates?.length, 1);
+  assert.equal(migrated.fiveAxisVertexGroupStates?.[0]?.currentVertexSetId, "vertex:current");
+  assert.deepEqual(migrated.fiveAxisVertexGroupStates?.[0]?.candidateSources, [source]);
+  assert.deepEqual(migrateWorkspaceState(migrated), migrated);
+  const reversed = structuredClone(legacy);
+  (reversed.configurationSnapshots as unknown[]).reverse();
+  (reversed.purchasableModels as unknown[]).reverse();
+  (reversed.fiveAxisVertexSets as unknown[]).reverse();
+  assert.deepEqual(migrateWorkspaceState(reversed).fiveAxisVertexGroupStates, migrated.fiveAxisVertexGroupStates);
+  const ambiguous = structuredClone(legacy); (ambiguous.fiveAxisVertexSets as unknown[]).push({ ...vertex, vertexSetId: "vertex:ambiguous" });
+  const blocked = migrateWorkspaceState(ambiguous).fiveAxisVertexGroupStates?.[0];
+  assert.equal(blocked?.state, "UNAVAILABLE_NO_ELIGIBLE_CANDIDATE");
+  assert.equal(blocked?.reasonCode, "FIVE_AXIS_MIGRATION_VERTEX_SET_UNRESOLVED");
+  assert.equal(blocked?.currentVertexSetId, null);
+
+  const duplicateDefinition = {
+    ...structuredClone(definition),
+    definitionHash: "f".repeat(64),
+  };
+  for (const definitions of [
+    [definition, duplicateDefinition],
+    [duplicateDefinition, definition],
+  ]) {
+    const ambiguousDefinition = structuredClone(legacy);
+    ambiguousDefinition.fiveAxisViewDefinitions = definitions;
+    assert.throws(
+      () => migrateWorkspaceState(ambiguousDefinition),
+      /FIVE_AXIS_MIGRATION_DEFINITION_UNRESOLVED/,
+    );
+  }
 });

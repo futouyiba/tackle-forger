@@ -23,6 +23,7 @@ import {
   assertFrozenConfigIdentityTransition,
   ConfigIdGovernanceError,
 } from "@/lib/config-id-governance";
+import { workspaceServiceFailure } from "@/lib/workspace-service-errors";
 
 export const dynamic = "force-dynamic";
 
@@ -60,8 +61,16 @@ export async function GET(request: NextRequest) {
       { status: 401 },
     );
   }
-  const current = await loadWorkspaceState();
-  return NextResponse.json({ ...current, user });
+  try {
+    const current = await loadWorkspaceState();
+    return NextResponse.json({ ...current, user });
+  } catch (error) {
+    const failure = workspaceServiceFailure(error);
+    // Keep server-side evidence useful without logging workspace payloads,
+    // deployment identities, cookies, or credential material.
+    console.error("workspace state bootstrap failed", { errorCode: failure.errorCode });
+    return NextResponse.json(failure, { status: 503 });
+  }
 }
 
 export async function PUT(request: NextRequest) {

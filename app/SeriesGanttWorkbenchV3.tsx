@@ -30,11 +30,23 @@ import {
 } from "@/lib/interaction-contracts";
 import {
   enabledProductItemParts,
-  isProductSkuChainEnabled,
+  productSelectableSeriesSkus,
+  productSelectableSkuModels,
+  resolveProductSelection,
 } from "@/lib/enabled-item-parts";
 import { CANONICAL_FEISHU_SHEET_REGISTRY } from "@/lib/feishu-workbook";
 import { issueClientActionCommand } from "@/lib/client-action-command";
-import { buildSamePartComparison, calculateModelFiveAxisPreview, fiveAxisPlotRatio } from "@/lib/five-axis";
+import { calculateModelFiveAxisPreview, fiveAxisPlotRatio } from "@/lib/five-axis";
+import {
+  buildFormalEquipmentComparison,
+  buildFormalFiveAxisEntityFromSnapshot,
+  canAddFormalEquipmentComparisonSelection,
+  hasMatchingFormalSnapshotEvidence,
+  resolveFormalEquipmentComparisonDefinition,
+  resolveFormalEquipmentComparisonReadiness,
+  resolveFormalEquipmentComparisonWeightBand,
+} from "@/lib/five-axis-formal";
+import { selectCurrentFiveAxisVertexSet } from "@/lib/five-axis-transactions";
 import { deterministicHash } from "@/lib/rule-kernel";
 import { isActiveValidationIssue, validationIssueLevel } from "@/lib/validation-issues";
 import {
@@ -50,13 +62,15 @@ import {
 import type {
   ConfigurationSnapshot,
   FiveAxisComparisonView,
-  FiveAxisEntityInput,
+  FiveAxisVertexSet,
   ModelFiveAxisPreview,
-  FiveAxisViewDefinition,
   ProjectionMatch,
+  LegacyFiveAxisVertexSet,
+  LegacyFiveAxisViewDefinition,
   PurchasableModel,
   SeriesDefinition,
   SkuDrawer,
+  StoredFiveAxisViewDefinition,
   WorkspaceState,
 } from "@/lib/types";
 import "./series-gantt-v3.css";
@@ -70,6 +84,19 @@ import {
   SeriesAssessmentPanel,
   type AIAssessmentUiState,
 } from "./SeriesAssessmentPanel";
+
+function isLegacyFiveAxisDefinition(
+  definition: WorkspaceState["fiveAxisViewDefinitions"][number],
+): definition is LegacyFiveAxisViewDefinition {
+  return !("semanticContractVersion" in definition);
+}
+
+function isLegacyFiveAxisVertexSet(
+  vertexSet: WorkspaceState["fiveAxisVertexSets"][number],
+): vertexSet is LegacyFiveAxisVertexSet {
+  return "fishWeightGradeId" in vertexSet;
+}
+function isFormalFiveAxisVertexSet(vertexSet: WorkspaceState["fiveAxisVertexSets"][number]): vertexSet is FiveAxisVertexSet { return "weightBandId" in vertexSet; }
 
 interface SeriesGanttWorkbenchV3Props {
   state: WorkspaceState;
@@ -92,7 +119,15 @@ const QUALITY_ORDER = [
 ] as const;
 
 type DrawerTab = "overview" | "five_axis" | "trace" | "rebase" | "ai";
-type FiveAxisMode = "model_series" | "tackle_fit" | "same_part";
+type FiveAxisMode = "model_series" | "tackle_fit" | "equipment_compare";
+interface FiveAxisComparisonSelection { modelId: string; itemPartId: string; snapshotId: string; }
+function formalCurrentFiveAxisDefinition(state: WorkspaceState) {
+  return resolveFormalEquipmentComparisonDefinition({
+    definitions: state.fiveAxisViewDefinitions,
+    revisions: state.fiveAxisDispositionCatalogRevisions,
+    currentRevisionId: state.currentFiveAxisDispositionCatalogRevisionId,
+  });
+}
 
 interface SeriesCreateDraft {
   seriesId: string;
@@ -105,9 +140,17 @@ interface SeriesCreateDraft {
   functionId: string;
   qualityId: SeriesDefinition["qualityId"];
   functionIntensity: 1 | 2 | 3;
+  directAffixIds: string[];
   planningMinKgf: string;
   planningMaxKgf: string;
   discretePulls: string;
+}
+
+interface SeriesAffixEditDraft {
+  seriesId: string;
+  expectedSeriesRevision: number;
+  itemPartId?: string;
+  directAffixIds: string[];
 }
 
 interface AIDraftPreviewChange {
@@ -374,7 +417,7 @@ function FiveAxisRadar({
   definition,
 }: {
   preview?: ModelFiveAxisPreview;
-  definition?: FiveAxisViewDefinition;
+  definition?: StoredFiveAxisViewDefinition;
 }) {
   if (!preview) {
     return (
@@ -401,13 +444,22 @@ function FiveAxisRadar({
     };
   });
   const completePolygon = points.every((entry) => entry.x !== null && entry.y !== null);
+  const maxRatio = Math.max(
+    1,
+    ...metrics.flatMap((metric) => {
+      const ratio = fiveAxisPlotRatio(metric.displayScore);
+      return ratio === null ? [] : [ratio];
+    }),
+  );
+  const canvasExtent = radius * maxRatio + 30;
+  const viewBox = `${center - canvasExtent} ${center - canvasExtent} ${canvasExtent * 2} ${canvasExtent * 2}`;
   const outer = metrics.map((_metric, index) => {
     const angle = -Math.PI / 2 + (index * Math.PI * 2) / metrics.length;
     return `${center + Math.cos(angle) * radius},${center + Math.sin(angle) * radius}`;
   }).join(" ");
   return (
     <div className="gantt-radar-layout">
-      <svg className="gantt-radar" viewBox="0 0 220 220" role="img" aria-label="Model 五维正式分">
+      <svg className="gantt-radar" viewBox={viewBox} role="img" aria-label="Model 五维正式分">
         <polygon points={outer} className="radar-grid" />
         {[0.25, 0.5, 0.75].map((scale) => (
           <polygon
@@ -471,26 +523,31 @@ function FiveAxisComparisonPanel({
   definition,
 }: {
   view: FiveAxisComparisonView;
-  definition?: FiveAxisViewDefinition;
+  definition?: StoredFiveAxisViewDefinition;
 }) {
   const axes = definition?.axes ?? [];
-  const numericScores = view.series.flatMap((entry) => entry.points.flatMap((point) =>
-    point.comparisonScore === null ? [] : [point.comparisonScore]));
-  const maxScore = view.scaleMode === "comparison_expanded"
-    ? Math.max(100, ...numericScores)
+  const outerRingScore = definition && "comparisonPolicy" in definition
+    ? definition.comparisonPolicy.outerRingScore
     : 100;
   const center = 110;
   const radius = 80;
   const pointFor = (score: number, index: number) => {
     const angle = -Math.PI / 2 + (index * Math.PI * 2) / Math.max(axes.length, 1);
-    const ratio = fiveAxisPlotRatio(score, maxScore) ?? 0;
+    const ratio = Math.max(0, score / outerRingScore);
     return `${center + Math.cos(angle) * radius * ratio},${center + Math.sin(angle) * radius * ratio}`;
   };
-  const outer = axes.map((_axis, index) => pointFor(maxScore, index)).join(" ");
+  const outer = axes.map((_axis, index) => pointFor(outerRingScore, index)).join(" ");
+  const maxRatio = Math.max(
+    1,
+    ...view.series.flatMap((series) => series.points.flatMap((point) =>
+      point.comparisonScore === null ? [] : [Math.max(0, point.comparisonScore / outerRingScore)])),
+  );
+  const canvasExtent = radius * maxRatio + 30;
+  const viewBox = `${center - canvasExtent} ${center - canvasExtent} ${canvasExtent * 2} ${canvasExtent * 2}`;
   return (
     <div className="same-part-comparison-result">
       <div className="same-part-comparison-chart">
-        <svg viewBox="0 0 220 220" role="img" aria-label="同部位五维叠加比较">
+        <svg viewBox={viewBox} role="img" aria-label="同部位五维叠加比较">
           <polygon points={outer} className="radar-grid" />
           {view.series.map((entry, seriesIndex) => {
             const color = COMPARISON_COLORS[seriesIndex % COMPARISON_COLORS.length];
@@ -539,19 +596,6 @@ function FiveAxisComparisonPanel({
   );
 }
 
-function componentEntityInput(model: PurchasableModel, itemPartId: string, fishWeightGradeId: string): FiveAxisEntityInput | undefined {
-  const component = model.componentSelections.find((entry) => entry.itemPartId === itemPartId);
-  if (!component) return undefined;
-  return {
-    entityId: `${model.id}:${component.componentId}`,
-    itemPartId,
-    label: `${model.name} · ${component.name}`,
-    fishWeightGradeId,
-    revision: model.revision,
-    values: Object.fromEntries(Object.entries(component.values).map(([key, value]) => [key, typeof value === "number" ? value : null])),
-  };
-}
-
 function ModelDrawer({
   state,
   workspaceId,
@@ -559,7 +603,8 @@ function ModelDrawer({
   sku,
   series,
   snapshot,
-  comparisonModelIds,
+  comparisonSelections,
+  comparisonWeightBandId,
   currentEntityType,
   rebaseEnabled,
   rebaseDisabledReason,
@@ -574,6 +619,7 @@ function ModelDrawer({
   notify,
   onOpenRebase,
   onToggleCompare,
+  onComparisonWeightBandChange,
   onOpenSnapshot,
   onClose,
 }: {
@@ -583,7 +629,8 @@ function ModelDrawer({
   sku?: SkuDrawer;
   series?: SeriesDefinition;
   snapshot?: ConfigurationSnapshot;
-  comparisonModelIds: string[];
+  comparisonSelections: FiveAxisComparisonSelection[];
+  comparisonWeightBandId: string;
   currentEntityType: "model" | "configuration_snapshot";
   rebaseEnabled: boolean;
   rebaseDisabledReason?: string;
@@ -597,14 +644,14 @@ function ModelDrawer({
   workspaceFreshness: SeriesGanttWorkbenchV3Props["workspaceFreshness"];
   notify: SeriesGanttWorkbenchV3Props["notify"];
   onOpenRebase: () => void;
-  onToggleCompare: (modelId: string) => void;
+  onToggleCompare: (modelId: string, itemPartId: string, snapshotId: string | undefined) => void;
+  onComparisonWeightBandChange: (weightBandId: string) => void;
   onOpenSnapshot: (snapshotId: string) => void;
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<DrawerTab>("overview");
   const [mode, setMode] = useState<FiveAxisMode>("model_series");
   const [comparisonPartId, setComparisonPartId] = useState("part:rod");
-  const [comparisonScaleMode, setComparisonScaleMode] = useState<FiveAxisComparisonView["scaleMode"]>("official_locked");
   const [selectedRecommendationCode, setSelectedRecommendationCode] = useState("");
   const [selectedChangeIds, setSelectedChangeIds] = useState<string[]>([]);
   const [evidenceOpen, setEvidenceOpen] = useState(false);
@@ -627,9 +674,13 @@ function ModelDrawer({
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const draftFiveAxisPreview = useMemo(() => {
     if (snapshot?.fiveAxisPreview || !model.fishWeightGradeId) return undefined;
-    const draftDefinition = state.fiveAxisViewDefinitions[0];
+    const draftDefinition = state.fiveAxisViewDefinitions.find(
+      isLegacyFiveAxisDefinition,
+    );
     if (!draftDefinition) return undefined;
-    const vertexSet = state.fiveAxisVertexSets.find((entry) =>
+    const vertexSet = state.fiveAxisVertexSets.filter(
+      isLegacyFiveAxisVertexSet,
+    ).find((entry) =>
       entry.fishWeightGradeId === model.fishWeightGradeId &&
       entry.definitionId === draftDefinition.definitionId &&
       entry.definitionVersion === draftDefinition.version);
@@ -728,40 +779,74 @@ function ModelDrawer({
         layer: step.layer,
       })))
       .sort((left, right) => left.sequence - right.sequence) ?? [];
-  const inComparison = comparisonModelIds.includes(model.id);
+  const inComparison = comparisonSelections.some((entry) => entry.modelId === model.id && entry.itemPartId === comparisonPartId && entry.snapshotId === (snapshot?.id ?? model.configurationSnapshotId));
+  const formalComparison = formalCurrentFiveAxisDefinition(state);
+  const formalComparisonDefinition = formalComparison.state === "available"
+    ? formalComparison.definition
+    : undefined;
+  const comparisonWeightBand = formalComparisonDefinition
+    ? resolveFormalEquipmentComparisonWeightBand({
+      definition: formalComparisonDefinition,
+      selectedWeightBandId: comparisonWeightBandId,
+      fallbackWeightBandId: activeFiveAxisPreview?.weightBandId,
+    })
+    : undefined;
   const pendingUpgrade = state.upgradeCandidates.find((entry) => entry.modelId === model.id && entry.status === "pending");
   const comparisonResult = useMemo(() => {
-    if (comparisonModelIds.length < 2 || !definition || !activeFiveAxisPreview) return {};
-    const vertexSet = state.fiveAxisVertexSets.find((entry) =>
-      entry.vertexSetHash === activeFiveAxisPreview.vertexSetHash &&
-      entry.definitionId === definition.definitionId &&
-      entry.definitionVersion === definition.version);
-    if (!vertexSet) return { error: "当前比较缺少与冻结预览一致的顶点集合。" };
-    const entities = comparisonModelIds.flatMap((modelId) => {
-      const candidate = state.purchasableModels.find((entry) => entry.id === modelId);
-      const entity = candidate
-        ? componentEntityInput(candidate, comparisonPartId, activeFiveAxisPreview.fishWeightGradeId)
-        : undefined;
-      return entity ? [entity] : [];
-    });
-    if (entities.length !== comparisonModelIds.length) return { error: "比较组中有 Model 缺少所选部位；不会以 0 补齐。" };
-    const referenceContext = comparisonPartId === "part:rod"
-      ? undefined
-      : componentEntityInput(model, "part:rod", activeFiveAxisPreview.fishWeightGradeId);
-    try {
-      return { view: buildSamePartComparison({
-        referenceFishWeightGradeId: activeFiveAxisPreview.fishWeightGradeId,
-        definition,
-        vertexSet,
-        entities,
-        referenceContext,
-        comparisonLimit: 5,
-        scaleMode: comparisonScaleMode,
-      }) };
-    } catch (caught) {
-      return { error: caught instanceof Error ? caught.message : "同部位比较失败。" };
+    const selectedSnapshots = comparisonSelections.map((selection) =>
+      state.configurationSnapshots.find((entry) =>
+        entry.id === selection.snapshotId
+        && entry.modelId === selection.modelId));
+    const activeEvidence = !snapshot?.fiveAxisPreview
+      ? "missing" as const
+      : formalComparisonDefinition
+        && hasMatchingFormalSnapshotEvidence({
+          definition: formalComparisonDefinition,
+          snapshot,
+        })
+        ? "compatible" as const
+        : "incompatible" as const;
+    const selectedEvidence = selectedSnapshots.map((entry) =>
+      !entry?.fiveAxisPreview
+        ? "missing" as const
+        : formalComparisonDefinition
+          && hasMatchingFormalSnapshotEvidence({
+            definition: formalComparisonDefinition,
+            snapshot: entry,
+          })
+          ? "compatible" as const
+          : "incompatible" as const);
+    if (comparisonSelections.length >= 2 && formalComparison.state === "unavailable") {
+      return { error: formalComparison.message };
     }
-  }, [activeFiveAxisPreview, comparisonModelIds, comparisonPartId, comparisonScaleMode, definition, model, state.fiveAxisVertexSets, state.purchasableModels]);
+    const readiness = resolveFormalEquipmentComparisonReadiness({
+      selectionCount: comparisonSelections.length,
+      activeEvidence,
+      hasFormalCurrentDefinition: Boolean(formalComparisonDefinition),
+      selectedEvidence,
+    });
+    if (readiness.state === "waiting_for_selection") return {};
+    if (readiness.state === "unavailable") return { error: readiness.message };
+    // `readiness` is the user-facing branch; retain an explicit guard so the
+    // calculation boundary cannot receive a guessed or absent formal source.
+    if (!formalComparisonDefinition || !activeFiveAxisPreview || !comparisonWeightBand) {
+      return { error: "五维比较依赖已变化。请恢复正式定义和冻结预览后重试；比较篮会保留。" };
+    }
+    const vertexSet = selectCurrentFiveAxisVertexSet({ definition: formalComparisonDefinition, weightBandId: comparisonWeightBand, groupStates: state.fiveAxisVertexGroupStates ?? [], vertexSets: state.fiveAxisVertexSets.filter(isFormalFiveAxisVertexSet) });
+    if (!vertexSet) return { error: "共同 W 段尚无正式顶点。" };
+    const entities = comparisonSelections.flatMap((selection, comparisonOrder) => {
+      const candidate = state.purchasableModels.find((entry) => entry.id === selection.modelId);
+      const frozenSnapshot = selectedSnapshots[comparisonOrder];
+      const entity = candidate && frozenSnapshot ? buildFormalFiveAxisEntityFromSnapshot({ snapshot: frozenSnapshot, itemPartId: selection.itemPartId, weightBandId: vertexSet.weightBandId, modelName: candidate.name }) : undefined;
+      return entity && typeof frozenSnapshot?.modelFinalPullKg === "number" ? [{ entity, modelFinalPullKg: frozenSnapshot.modelFinalPullKg, weightBandId: vertexSet.weightBandId, comparisonOrder }] : [];
+    });
+    if (entities.length !== comparisonSelections.length) return { error: "比较对象缺少冻结 Snapshot 或部件。" };
+    try {
+      return { view: buildFormalEquipmentComparison({ definition: formalComparisonDefinition, vertexSet, entities }), definition: formalComparisonDefinition };
+    } catch (caught) {
+      return { error: caught instanceof Error ? caught.message : "混合部位比较失败。" };
+    }
+  }, [activeFiveAxisPreview, comparisonSelections, comparisonWeightBand, formalComparison, formalComparisonDefinition, snapshot, state]);
   const recommendations = aiAssessment?.result?.recommendations ?? [];
   const persistedDismissedRecommendationCodes = aiAssessment?.result?.feedback?.recommendations
     ?.filter((entry) => entry.state === "dismissed")
@@ -1159,7 +1244,7 @@ function ModelDrawer({
             <div className="five-axis-mode-tabs">
               <button type="button" className={mode === "model_series" ? "active" : ""} onClick={() => setMode("model_series")}>Model / Series</button>
               <button type="button" className={mode === "tackle_fit" ? "active" : ""} onClick={() => setMode("tackle_fit")}>竿轮线匹配</button>
-              <button type="button" className={mode === "same_part" ? "active" : ""} onClick={() => setMode("same_part")}>同部位比较</button>
+              <button type="button" className={mode === "equipment_compare" ? "active" : ""} onClick={() => setMode("equipment_compare")}>混合部位比较</button>
             </div>
             {activeFiveAxisPreview ? (
               <div className="five-axis-metadata">
@@ -1171,7 +1256,19 @@ function ModelDrawer({
             ) : null}
             {mode === "model_series" && activeFiveAxisPreview ? (
               <>
-                <FiveAxisRadar preview={activeFiveAxisPreview} definition={definition} />
+                {activeFiveAxisPreview.componentSeries?.length
+                  ? (
+                      <FiveAxisComparisonPanel
+                        view={activeFiveAxisPreview.tackleFitComparison}
+                        definition={definition}
+                      />
+                    )
+                  : (
+                      <FiveAxisRadar
+                        preview={activeFiveAxisPreview}
+                        definition={definition}
+                      />
+                    )}
                 <div className="gantt-baseline-note"><Info size={16} /><span><strong>Series 基准策略：{definition?.seriesBaselinePolicy.mode ?? "未发布"}</strong>当前原型未返回可用 baselineRef，因此只绘制 Model，不会静默换用默认 Model。</span></div>
               </>
             ) : null}
@@ -1181,21 +1278,22 @@ function ModelDrawer({
                 ? <FiveAxisComparisonPanel view={activeFiveAxisPreview.tackleFitComparison} definition={definition} />
                 : <div className="gantt-unavailable"><Info size={18} /><div><strong>无匹配比较数据</strong><span>缺失、继承与不适用不会绘制为 0。</span></div></div>
             ) : null}
-            {mode === "same_part" ? (
+            {mode === "equipment_compare" ? (
               <div className="same-part-basket">
-                <div><strong>同部位比较篮</strong><span>{comparisonModelIds.length} / 5</span></div>
+                <div><strong>竿 / 轮 / 线比较篮</strong><span>{comparisonSelections.length} / {formalComparisonDefinition?.comparisonPolicy.maximumItems ?? "—"}</span></div>
                 <p>
-                  所有对象使用当前 Model 的共同鱼重等级、定义和 vertex；不同部位不会混入同一比较组。
+                  仅使用精确冻结 Snapshot；所有对象须处于共同 W 段。首根竿提供轮线的抛投继承，未选择竿时抛投不适用。
                   {snapshot ? "冻结快照保持不可变。" : "草稿结果仅供试算，发布后才会冻结。"}
                 </p>
                 <div className="same-part-controls">
-                  <label>比较部位<select value={comparisonPartId} onChange={(event) => setComparisonPartId(event.target.value)}><option value="part:rod">竿</option><option value="part:reel">轮</option><option value="part:line">线</option></select></label>
-                  <label>绘图刻度<select value={comparisonScaleMode} onChange={(event) => setComparisonScaleMode(event.target.value as FiveAxisComparisonView["scaleMode"])}><option value="official_locked">正式 0–100</option><option value="comparison_expanded">展开超顶点</option></select></label>
+                  <label>加入部位<select value={comparisonPartId} onChange={(event) => setComparisonPartId(event.target.value)}><option value="part:rod">竿</option><option value="part:reel">轮</option><option value="part:line">线</option></select></label>
+                  <label>共同 W 段<select value={comparisonWeightBand ?? ""} onChange={(event) => onComparisonWeightBandChange(event.target.value)} disabled={!formalComparisonDefinition}><option value="">选择共同 W 段</option>{formalComparisonDefinition?.weightBandPolicy.bands.map((band) => <option key={band.weightBandId} value={band.weightBandId}>{band.label}</option>)}</select></label>
+                  <small>外圈固定 100；超顶点曲线保留真实伸出比例。</small>
                 </div>
-                <button type="button" onClick={() => onToggleCompare(model.id)}>{inComparison ? "移出比较" : "加入比较"}</button>
-                {comparisonModelIds.length < 2 ? <small>至少加入 2 个同部位 Model 后显示比较曲线。</small> : <small>已选择：{comparisonModelIds.join("、")}</small>}
+                <button type="button" onClick={() => onToggleCompare(model.id, comparisonPartId, snapshot?.id ?? model.configurationSnapshotId)} disabled={!snapshot?.id && !model.configurationSnapshotId}>{inComparison ? "移出比较" : "加入比较"}</button>
+                {comparisonSelections.length < 2 ? <small>至少选择 2 件冻结装备。</small> : <small>已选择：{comparisonSelections.map((entry) => `${entry.modelId}/${entry.itemPartId}`).join("、")}</small>}
                 {comparisonResult.error ? <div className="gantt-unavailable"><AlertTriangle size={18} /><div><strong>比较不可用</strong><span>{comparisonResult.error}</span></div></div> : null}
-                {comparisonResult.view ? <FiveAxisComparisonPanel view={comparisonResult.view} definition={definition} /> : null}
+                {comparisonResult.view ? <FiveAxisComparisonPanel view={comparisonResult.view} definition={comparisonResult.definition ?? formalComparisonDefinition} /> : null}
               </div>
             ) : null}
           </section>
@@ -1604,9 +1702,11 @@ export function SeriesGanttWorkbenchV3({
   const [drawerModelId, setDrawerModelId] = useState(() => initialSelection("model"));
   const [drawerSnapshotId, setDrawerSnapshotId] = useState(() => initialSelection("snapshot"));
   const [modelCursor, setModelCursor] = useState(12);
-  const [comparisonModelIds, setComparisonModelIds] = useState<string[]>([]);
+  const [comparisonSelections, setComparisonSelections] = useState<FiveAxisComparisonSelection[]>([]);
+  const [comparisonWeightBandId, setComparisonWeightBandId] = useState("");
   const [candidateOpen, setCandidateOpen] = useState(false);
   const [seriesCreateDraft, setSeriesCreateDraft] = useState<SeriesCreateDraft | null>(null);
+  const [seriesAffixEditDraft, setSeriesAffixEditDraft] = useState<SeriesAffixEditDraft | null>(null);
   const [aiAssessment, setAiAssessment] = useState<AIAssessmentUiState>();
   const beginWorkspaceReplacement = (): number | undefined => {
     const freshness = workspaceFreshness();
@@ -1653,19 +1753,18 @@ export function SeriesGanttWorkbenchV3({
     ?? state.seriesDefinitions.find((series) => series.id === blocks[0]?.seriesId);
   const selectedBlock = blocks.find((block) => block.seriesId === selectedSeries?.id);
   const seriesSkus = selectedSeries
-    ? state.skuDrawers.filter(
-      (sku) =>
-        sku.seriesId === selectedSeries.id
-        && sku.status !== "superseded"
-        && isProductSkuChainEnabled(selectedSeries, sku, state.skuDrawers),
-    )
+    ? productSelectableSeriesSkus(selectedSeries, state.skuDrawers)
       .sort((left, right) => left.targetPullKg - right.targetPullKg || left.id.localeCompare(right.id))
     : [];
-  const selectedSku = seriesSkus.find((sku) => sku.id === selectedSkuId) ?? seriesSkus[0];
-  const models = selectedSku
-    ? state.purchasableModels.filter((model) => selectedSku.modelIds.includes(model.id))
+  const selection = resolveProductSelection({
+    series: selectedSeries ? [selectedSeries] : [],
+    skus: state.skuDrawers,
+    models: state.purchasableModels,
+    requestedSkuId: selectedSkuId,
+  });
+  const selectedSku = selection.sku;
+  const models = productSelectableSkuModels(selectedSku, state.purchasableModels)
       .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id))
-    : [];
   const visibleModels = models.slice(0, modelCursor);
   const deepLink = useMemo(() => resolveProductDeepLink({
     workspaceId,
@@ -1713,6 +1812,7 @@ export function SeriesGanttWorkbenchV3({
   // 真正的状态写只能使用 rebase_patch + 服务端命令载荷引用。
   const rebaseRouteAvailability = openSeriesAvailability;
   const createSeriesAvailability = actionAvailabilities.create_series;
+  const updateSeriesAffixAvailability = actionAvailabilities.update_series_core_affixes;
   const aiAvailability = actionAvailabilities.run_ai_assessment;
   const aiPatchDraftAvailability = actionAvailabilities.create_ai_patch_draft;
   const aiRuleDraftAvailability = actionAvailabilities.create_ai_rule_source_change_draft;
@@ -1864,14 +1964,20 @@ export function SeriesGanttWorkbenchV3({
     setSelectedSeriesId(seriesId);
     setSelectedSkuId(skuId);
   };
-  const toggleCompare = (modelId: string) => {
-    setComparisonModelIds((current) => {
-      if (current.includes(modelId)) return current.filter((id) => id !== modelId);
-      if (current.length >= 5) {
-        notify("同部位比较篮上限为 5 个 Model。");
+  const toggleCompare = (modelId: string, itemPartId: string, snapshotId: string | undefined) => {
+    if (!snapshotId) { notify("比较必须选择冻结 Snapshot。"); return; }
+    setComparisonSelections((current) => {
+      if (current.some((entry) => entry.modelId === modelId && entry.itemPartId === itemPartId && entry.snapshotId === snapshotId)) return current.filter((entry) => !(entry.modelId === modelId && entry.itemPartId === itemPartId && entry.snapshotId === snapshotId));
+      const resolved = formalCurrentFiveAxisDefinition(state);
+      const addDecision = canAddFormalEquipmentComparisonSelection({
+        selectionCount: current.length,
+        definition: resolved.state === "available" ? resolved.definition : undefined,
+      });
+      if (!addDecision.allowed) {
+        notify(resolved.state === "unavailable" ? resolved.message : addDecision.message);
         return current;
       }
-      return [...current, modelId];
+      return [...current, { modelId, itemPartId, snapshotId }];
     });
   };
 
@@ -1893,6 +1999,7 @@ export function SeriesGanttWorkbenchV3({
       functionId: fn?.id ?? "",
       qualityId: "quality_c_green",
       functionIntensity: 2,
+      directAffixIds: [],
       planningMinKgf: "",
       planningMaxKgf: "",
       discretePulls: "1.5, 3.8, 8.2",
@@ -1933,6 +2040,7 @@ export function SeriesGanttWorkbenchV3({
         functionId: draft.functionId,
         qualityId: draft.qualityId,
         functionIntensity: draft.functionIntensity,
+        directAffixIds: draft.directAffixIds,
         planningMinKgf: draft.planningMinKgf,
         planningMaxKgf: draft.planningMaxKgf,
         discretePulls: draft.discretePulls,
@@ -1969,6 +2077,23 @@ export function SeriesGanttWorkbenchV3({
     } catch (caught) {
       notify(caught instanceof Error ? caught.message : "Series 创建失败。");
     }
+  };
+
+  const updateSeriesCoreAffixes = async () => {
+    const draft = seriesAffixEditDraft;
+    if (!draft || !updateSeriesAffixAvailability.enabled) return;
+    const expectedWorkspaceRevision = beginWorkspaceReplacement();
+    if (expectedWorkspaceRevision === undefined) return;
+    try {
+      const idempotencyKey = `update-series-core-affixes:${draft.seriesId}:${draft.expectedSeriesRevision}`;
+      const businessPayload = { idempotencyKey, seriesId: draft.seriesId, expectedSeriesRevision: draft.expectedSeriesRevision, directAffixIds: draft.directAffixIds };
+      const invocation = await issueClientActionCommand({ action: "update_series_core_affixes", idempotencyKey, payload: businessPayload });
+      const response = await fetch("/api/series", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(invocation) });
+      const payload = (await response.json().catch(() => null)) as { state?: WorkspaceState; series?: { id: string; name: string }; revision?: number; error?: string } | null;
+      if (!response.ok || !payload?.state || !payload.series) { notify(payload?.error ?? "Series 核心词条保存失败。"); return; }
+      if (!applyWorkspaceReplacement(expectedWorkspaceRevision, payload.state, payload.revision ?? 0, `已保存 ${payload.series.name} 的系列核心词条。`)) return;
+      setSeriesAffixEditDraft(null);
+    } catch (caught) { notify(caught instanceof Error ? caught.message : "Series 核心词条保存失败。"); }
   };
 
   const changeSelectedSkuTargetPull = async () => {
@@ -2196,7 +2321,7 @@ export function SeriesGanttWorkbenchV3({
         <section className="gantt-summary">
           <header>
             <div><span className="eyebrow">SERIES SUMMARY</span><h3>{selectedSeries.name}</h3><small>{selectedSeries.id} · revision {selectedSeries.revision}</small></div>
-            <button type="button" disabled={!openSeriesAvailability.enabled || selectedBlock?.aggregate.readOnly} title={selectedBlock?.aggregate.readOnly ? "未知状态已触发只读降级，请先修复数据。" : openSeriesAvailability.disabledReasonText} onClick={() => onOpenSeries(selectedSeries.id)}>打开 Series <ChevronRight size={15} /></button>
+            <div><button type="button" disabled={!updateSeriesAffixAvailability.enabled || selectedBlock?.aggregate.readOnly} title={selectedBlock?.aggregate.readOnly ? "未知状态已触发只读降级，请先修复数据。" : updateSeriesAffixAvailability.disabledReasonText} onClick={() => setSeriesAffixEditDraft({ seriesId: selectedSeries.id, expectedSeriesRevision: selectedSeries.revision, itemPartId: selectedSeries.itemPartId, directAffixIds: [...selectedSeries.coreAffixIds] })}>编辑核心词条</button><button type="button" disabled={!openSeriesAvailability.enabled || selectedBlock?.aggregate.readOnly} title={selectedBlock?.aggregate.readOnly ? "未知状态已触发只读降级，请先修复数据。" : openSeriesAvailability.disabledReasonText} onClick={() => onOpenSeries(selectedSeries.id)}>打开 Series <ChevronRight size={15} /></button></div>
           </header>
           <div className="gantt-summary-meta">
             <span><CircleDot size={13} />{statusText(selectedBlock?.aggregate.primary ?? selectedSeries.status)}</span>
@@ -2206,6 +2331,7 @@ export function SeriesGanttWorkbenchV3({
             {selectedBlock ? <span>{statusText(selectedBlock.aggregate.lifecycle)} · {statusText(selectedBlock.aggregate.revisionState)} · {statusText(selectedBlock.aggregate.validationState)} · {statusText(selectedBlock.aggregate.publicationState)}</span> : null}
             {selectedBlock?.aggregate.attention.map((stateCode) => <span key={stateCode}>{statusText(stateCode)}</span>)}
           </div>
+          <div className="gantt-series-affix-summary" aria-label="系列核心词条"><strong>系列核心词条</strong><span>{selectedSeries.coreAffixIds.map((id) => state.v3Affixes.find((affix) => affix.id === id)?.name ?? `未知词条：${id}`).join("、") || "未选择"}</span></div>
           <div className="gantt-sku-tabs">
             {seriesSkus.map((sku) => <button type="button" key={sku.id} className={selectedSku?.id === sku.id ? "active" : ""} onClick={() => selectSku(selectedSeries.id, sku.id)}><strong>{sku.targetPullKg} kgf</strong><span>离散规格 · SKU 抽屉 · {sku.modelIds.length} Model · rev {sku.revision}</span></button>)}
           </div>
@@ -2274,7 +2400,7 @@ export function SeriesGanttWorkbenchV3({
               <label><span>部位</span><select value={seriesCreateDraft.itemPartId} onChange={(event) => {
                 const itemPartId = event.target.value;
                 const type = state.itemTypeProfiles.find((entry) => entry.enabled && entry.itemPartIds.includes(itemPartId) && entry.methodIds.includes(seriesCreateDraft.methodId));
-                setSeriesCreateDraft({ ...seriesCreateDraft, itemPartId, typeId: type?.id ?? "" });
+                setSeriesCreateDraft({ ...seriesCreateDraft, itemPartId, typeId: type?.id ?? "", directAffixIds: seriesCreateDraft.directAffixIds.filter((id) => state.v3Affixes.find((affix) => affix.id === id)?.itemPartId === itemPartId) });
               }}>{enabledItemParts.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label>
               <label><span>钓法</span><select value={seriesCreateDraft.methodId} onChange={(event) => {
                 const methodId = event.target.value;
@@ -2285,6 +2411,7 @@ export function SeriesGanttWorkbenchV3({
               <label><span>功能定位</span><select value={seriesCreateDraft.functionId} onChange={(event) => setSeriesCreateDraft({ ...seriesCreateDraft, functionId: event.target.value })}>{state.functionProfiles.filter((entry) => entry.enabled).map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label>
               <label><span>品质（人工选择）</span><select value={seriesCreateDraft.qualityId} onChange={(event) => setSeriesCreateDraft({ ...seriesCreateDraft, qualityId: event.target.value as SeriesDefinition["qualityId"] })}>{QUALITY_ORDER.map((entry) => <option key={entry.id} value={entry.id}>{entry.letter} / {entry.name}</option>)}</select></label>
               <label><span>功能专精强度</span><select value={seriesCreateDraft.functionIntensity} onChange={(event) => setSeriesCreateDraft({ ...seriesCreateDraft, functionIntensity: Number(event.target.value) as 1 | 2 | 3 })}><option value={1}>1 · 轻度</option><option value={2}>2 · 标准</option><option value={3}>3 · 极致</option></select></label>
+              <fieldset className="span-2 gantt-affix-picker"><legend>系列核心词条</legend><p>仅显示当前部位的属性词条与被动技能；切换部位会移除尚未保存的不兼容选择。被动技能只保存、计分和展示，不在本工具执行。Technology 属于 Model 配置，不能在 Series 中选择。</p><div className="gantt-affix-options">{state.v3Affixes.filter((affix) => affix.enabled && affix.itemPartId === seriesCreateDraft.itemPartId).map((affix) => { const technologyOnly = affix.generationPolicy === "technology_only"; return <label key={affix.id} title={technologyOnly ? "该词条只能通过 Model 的 Technology 选择" : affix.description}><input type="checkbox" disabled={technologyOnly} checked={seriesCreateDraft.directAffixIds.includes(affix.id)} onChange={() => setSeriesCreateDraft((draft) => draft ? { ...draft, directAffixIds: draft.directAffixIds.includes(affix.id) ? draft.directAffixIds.filter((id) => id !== affix.id) : [...draft.directAffixIds, affix.id] } : draft)} /><span><b>{affix.name}</b><small>{affix.category === "attribute" ? "属性" : "被动"} · {affix.itemPartId} · {affix.valueScore} 分{technologyOnly ? " · 仅 Technology" : ""}</small></span></label>; }) || <small>当前部位没有可选词条。</small>}</div></fieldset>
               <label className="span-2 gantt-discrete-pulls"><span>目标拉力规格 · 明确离散列表</span><input value={seriesCreateDraft.discretePulls} onChange={(event) => setSeriesCreateDraft({ ...seriesCreateDraft, discretePulls: event.target.value })} placeholder="例如 1.5, 3.8, 5.4, 8.2" /><small>当前将物化：{parseDiscretePulls(seriesCreateDraft.discretePulls).map((pull) => `${pull} kgf`).join("、") || "尚未输入"}。一个数值只生成一个 SKU 抽屉，不补中间值。</small></label>
               <fieldset className="span-2 gantt-planning-range"><legend>规划拉力范围（可选）· 不参与 SKU 生成</legend><label><span>最小 kgf</span><input type="number" min="0.01" step="0.1" value={seriesCreateDraft.planningMinKgf} onChange={(event) => setSeriesCreateDraft({ ...seriesCreateDraft, planningMinKgf: event.target.value })} placeholder="可留空" /></label><label><span>最大 kgf</span><input type="number" min="0.01" step="0.1" value={seriesCreateDraft.planningMaxKgf} onChange={(event) => setSeriesCreateDraft({ ...seriesCreateDraft, planningMaxKgf: event.target.value })} placeholder="可留空" /></label></fieldset>
             </div>
@@ -2293,10 +2420,16 @@ export function SeriesGanttWorkbenchV3({
         </div>
       ) : null}
 
+      {seriesAffixEditDraft ? (
+        <div className="gantt-create-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) setSeriesAffixEditDraft(null); }}>
+          <section className="gantt-create-dialog" role="dialog" aria-modal="true" aria-labelledby="gantt-affix-edit-title"><header><div><span className="eyebrow">SERIES · CORE AFFIXES</span><h2 id="gantt-affix-edit-title">编辑系列核心词条</h2><p>历史未知、禁用或跨部位引用会保留并标记；只有取消勾选才会明确移除。Technology 仍由 Model 编辑。</p></div><button type="button" aria-label="关闭" onClick={() => setSeriesAffixEditDraft(null)}><X size={18} /></button></header><div className="gantt-create-grid"><fieldset className="span-2 gantt-affix-picker"><legend>核心词条</legend><div className="gantt-affix-options">{Array.from(new Set([...seriesAffixEditDraft.directAffixIds, ...state.v3Affixes.filter((affix) => affix.enabled && affix.generationPolicy !== "technology_only" && affix.itemPartId === seriesAffixEditDraft.itemPartId).map((affix) => affix.id)])).map((id) => { const affix = state.v3Affixes.find((entry) => entry.id === id); const preservedOnly = !affix || !affix.enabled || affix.generationPolicy === "technology_only" || affix.itemPartId !== seriesAffixEditDraft.itemPartId; return <label key={id} title={preservedOnly ? "历史引用仅可保留或明确移除，不能新增。" : affix.description}><input type="checkbox" checked={seriesAffixEditDraft.directAffixIds.includes(id)} disabled={preservedOnly && !seriesAffixEditDraft.directAffixIds.includes(id)} onChange={() => setSeriesAffixEditDraft((draft) => draft ? { ...draft, directAffixIds: draft.directAffixIds.includes(id) ? draft.directAffixIds.filter((entry) => entry !== id) : [...draft.directAffixIds, id] } : draft)} /><span><b>{affix?.name ?? `未知词条：${id}`}</b><small>{preservedOnly ? "历史引用 · 保留或移除" : `${affix.category === "attribute" ? "属性" : "被动"} · ${affix.itemPartId} · ${affix.valueScore} 分`}</small></span></label>; })}</div></fieldset></div><footer><span>Series revision：{seriesAffixEditDraft.expectedSeriesRevision}</span><div><button type="button" onClick={() => setSeriesAffixEditDraft(null)}>取消</button><button type="button" className="primary" onClick={() => void updateSeriesCoreAffixes()}>保存核心词条</button></div></footer></section>
+        </div>
+      ) : null}
+
       {drawerModel ? (
         <>
           <button className="gantt-drawer-backdrop" type="button" aria-label="关闭预览" onClick={() => { setDrawerModelId(""); setDrawerSnapshotId(""); }} />
-          <ModelDrawer key={`${drawerModel.id}:${drawerModel.revision}:${aiAssessment?.assessmentId ?? "none"}`} state={state} workspaceId={workspaceId} model={drawerModel} sku={drawerSku} series={drawerSeries} snapshot={drawerSnapshot} currentEntityType={drawerSnapshotId ? "configuration_snapshot" : "model"} comparisonModelIds={comparisonModelIds} rebaseEnabled={Boolean(drawerSeries) && rebaseRouteAvailability.enabled} rebaseDisabledReason={drawerSeries ? rebaseRouteAvailability.disabledReasonText : "父级 Series 不可见，不能进入 Rebase。"} aiAvailability={aiAvailability} aiPatchDraftAvailability={aiPatchDraftAvailability} aiRuleDraftAvailability={aiRuleDraftAvailability} aiAssessment={aiAssessment?.scopeKey === `model:${drawerModel.id}` ? aiAssessment : undefined} onRunAssessment={() => void runAiAssessment("model", drawerModel.id)} onAssessmentDeleted={(assessmentId) => setAiAssessment((currentAssessment) => currentAssessment?.assessmentId === assessmentId ? undefined : currentAssessment)} onWorkspaceApplied={onWorkspaceApplied} workspaceFreshness={workspaceFreshness} notify={notify} onToggleCompare={toggleCompare} onOpenSnapshot={setDrawerSnapshotId} onOpenRebase={() => { setDrawerModelId(""); setDrawerSnapshotId(""); if (drawerSeries) onOpenSeries(drawerSeries.id); }} onClose={() => { setDrawerModelId(""); setDrawerSnapshotId(""); }} />
+          <ModelDrawer key={`${drawerModel.id}:${drawerModel.revision}:${aiAssessment?.assessmentId ?? "none"}`} state={state} workspaceId={workspaceId} model={drawerModel} sku={drawerSku} series={drawerSeries} snapshot={drawerSnapshot} currentEntityType={drawerSnapshotId ? "configuration_snapshot" : "model"} comparisonSelections={comparisonSelections} comparisonWeightBandId={comparisonWeightBandId} rebaseEnabled={Boolean(drawerSeries) && rebaseRouteAvailability.enabled} rebaseDisabledReason={drawerSeries ? rebaseRouteAvailability.disabledReasonText : "父级 Series 不可见，不能进入 Rebase。"} aiAvailability={aiAvailability} aiPatchDraftAvailability={aiPatchDraftAvailability} aiRuleDraftAvailability={aiRuleDraftAvailability} aiAssessment={aiAssessment?.scopeKey === `model:${drawerModel.id}` ? aiAssessment : undefined} onRunAssessment={() => void runAiAssessment("model", drawerModel.id)} onAssessmentDeleted={(assessmentId) => setAiAssessment((currentAssessment) => currentAssessment?.assessmentId === assessmentId ? undefined : currentAssessment)} onWorkspaceApplied={onWorkspaceApplied} workspaceFreshness={workspaceFreshness} notify={notify} onToggleCompare={toggleCompare} onComparisonWeightBandChange={setComparisonWeightBandId} onOpenSnapshot={setDrawerSnapshotId} onOpenRebase={() => { setDrawerModelId(""); setDrawerSnapshotId(""); if (drawerSeries) onOpenSeries(drawerSeries.id); }} onClose={() => { setDrawerModelId(""); setDrawerSnapshotId(""); }} />
         </>
       ) : null}
       {candidateOpen && selectedSeries ? (

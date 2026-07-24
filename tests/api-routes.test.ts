@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test, { after, before } from "node:test";
 import { NextRequest } from "next/server";
-import { PUT as putState, saveWorkspaceForbiddenResponse } from "../app/api/state/route";
+import { GET as getState, PUT as putState, saveWorkspaceForbiddenResponse } from "../app/api/state/route";
 import { POST as issueActionCommand } from "../app/api/action-commands/route";
 import { POST as accessDataSources } from "../app/api/data-sources/route";
 import { POST as mutateWorkbook } from "../app/api/feishu-workbook/route";
@@ -82,6 +82,27 @@ function routeAIConfiguration(dataDir: string) {
   } as const;
 }
 
+test("已认证读取在工作区身份错配时返回稳定诊断，而不是伪装成认证失败", { concurrency: false }, async (t) => {
+  withTrustedProxy();
+  const previousWorkspaceId = process.env.TACKLE_FORGER_WORKSPACE_ID;
+  const seeded = await loadWorkspaceState();
+  const currentId = seeded.state.workspaceId;
+  assert.ok(currentId);
+  process.env.TACKLE_FORGER_WORKSPACE_ID = "workspace:route-mismatch";
+  t.after(() => {
+    if (previousWorkspaceId === undefined) delete process.env.TACKLE_FORGER_WORKSPACE_ID;
+    else process.env.TACKLE_FORGER_WORKSPACE_ID = previousWorkspaceId;
+  });
+
+  const response = await getState(new NextRequest("http://localhost/api/state", { headers: authHeaders }));
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), {
+    errorCode: "WORKSPACE-IDENTITY-001",
+    error: "工作区的部署身份与已保存的数据不一致。为保护历史数据，系统未加载该工作区。请由部署管理员核对工作区身份配置后重试。",
+    action: "contact_deployment_administrator",
+  });
+});
+
 test("action-command 路由保留坏行重量草稿，并在发布路由明确阻断", { concurrency: false }, async () => {
   withTrustedProxy();
   const beforeState = await loadWorkspaceState();
@@ -114,6 +135,7 @@ async function issueAndInvoke(input: {
   action:
     | "save_workspace"
     | "create_series"
+    | "update_series_core_affixes"
     | "change_sku_target_pull"
     | "publish_data_source"
     | "commit_data_source_writeback"
@@ -756,6 +778,131 @@ test("Series 路由拒绝非法强度、品质引用和拉力 token", { concurre
     const errorPayload = await response.json() as { error: string };
     assert.match(errorPayload.error, new RegExp(expectedField));
   }
+});
+
+test("Series 创建保存系列核心词条，保留属性与被动的选择边界", { concurrency: false }, async () => {
+  withTrustedProxy();
+  const before = await loadWorkspaceState();
+  const projection = before.state.derivedProjections[0]!;
+  const type = before.state.itemTypeProfiles.find((entry) => entry.id === projection.typeId)!;
+  const directAffixIds = ["attribute", "passive"].flatMap((category) =>
+    before.state.v3Affixes
+      .filter((entry) => entry.enabled && entry.generationPolicy !== "technology_only" && entry.category === category)[0]
+      ?.id ?? [],
+  );
+  assert.equal(directAffixIds.length, 2);
+  const response = await issueAndInvoke({
+    action: "create_series",
+    url: "http://localhost/api/series",
+    method: "POST",
+    invoke: createSeries,
+    payload: {
+      idempotencyKey: "route-series-core-affixes",
+      seriesId: "series:route-core-affixes",
+      name: "核心词条保存验证",
+      concept: "验证系列编辑时选择的属性与被动词条写入核心词条约束。",
+      itemPartId: type.itemPartIds[0]!,
+      methodId: projection.methodId,
+      typeId: projection.typeId,
+      functionId: projection.functionId,
+      qualityId: projection.qualityId,
+      functionIntensity: projection.functionIntensity,
+      directAffixIds: [...directAffixIds, directAffixIds[0]!],
+      discretePulls: "1.5",
+    },
+  });
+  assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
+  const saved = (await loadWorkspaceState()).state.seriesDefinitions.find(
+    (entry) => entry.id === "series:route-core-affixes",
+  );
+  assert.deepEqual(saved?.coreAffixIds, directAffixIds);
+  assert.deepEqual(saved?.secondaryAffixPoolIds, []);
+});
+
+test("Series 创建拒绝未知或 technology_only 的直接词条", { concurrency: false }, async () => {
+  withTrustedProxy();
+  const { state } = await loadWorkspaceState();
+  const projection = state.derivedProjections[0]!;
+  const type = state.itemTypeProfiles.find((entry) => entry.id === projection.typeId)!;
+  for (const directAffixIds of [
+    ["affix:missing"],
+    state.v3Affixes.filter((entry) => entry.generationPolicy === "technology_only").slice(0, 1).map((entry) => entry.id),
+  ]) {
+    if (!directAffixIds.length) continue;
+    const response = await issueAndInvoke({
+      action: "create_series",
+      url: "http://localhost/api/series",
+      method: "POST",
+      invoke: createSeries,
+      payload: {
+        idempotencyKey: `route-series-invalid-affix:${directAffixIds[0]}`,
+        seriesId: `series:route-invalid-affix:${directAffixIds[0]}`,
+        name: "非法核心词条",
+        concept: "直接选择必须经过系列词条边界校验。",
+        itemPartId: type.itemPartIds[0]!, methodId: projection.methodId, typeId: projection.typeId,
+        functionId: projection.functionId, qualityId: projection.qualityId,
+        functionIntensity: projection.functionIntensity, directAffixIds, discretePulls: "1.5",
+      },
+    });
+    assert.equal(response.status, 422);
+    assert.equal(((await response.json()) as { field?: string }).field, "directAffixIds");
+  }
+});
+
+test("Series 创建拒绝跨部位的直接词条", { concurrency: false }, async () => {
+  withTrustedProxy();
+  const { state } = await loadWorkspaceState();
+  const projection = state.derivedProjections[0]!;
+  const type = state.itemTypeProfiles.find((entry) => entry.id === projection.typeId)!;
+  const itemPartId = type.itemPartIds[0]!;
+  const crossPart = state.v3Affixes.find((entry) =>
+    entry.enabled && entry.generationPolicy !== "technology_only" && entry.itemPartId !== itemPartId,
+  )!;
+  const response = await issueAndInvoke({
+    action: "create_series", url: "http://localhost/api/series", method: "POST", invoke: createSeries,
+    payload: {
+      idempotencyKey: "route-create-cross-part-affix", seriesId: "series:route-create-cross-part-affix",
+      name: "跨部位词条", concept: "创建路径也必须拒绝不属于当前部位的核心词条。",
+      itemPartId, methodId: projection.methodId, typeId: projection.typeId, functionId: projection.functionId,
+      qualityId: projection.qualityId, functionIntensity: projection.functionIntensity,
+      directAffixIds: [crossPart.id], discretePulls: "1.5",
+    },
+  });
+  assert.equal(response.status, 422);
+  assert.equal(((await response.json()) as { field?: string }).field, "directAffixIds");
+});
+
+test("Series 核心词条更新以 Series revision CAS 保存，并保留历史未知引用", { concurrency: false }, async () => {
+  withTrustedProxy();
+  const initial = await loadWorkspaceState();
+  const prepared = structuredClone(initial.state);
+  const series = prepared.seriesDefinitions[0]!;
+  const allowed = prepared.v3Affixes.find((entry) => entry.enabled && entry.generationPolicy !== "technology_only" && entry.itemPartId === series.itemPartId)!;
+  series.coreAffixIds = ["affix:historical-unknown", allowed.id];
+  const preparedSave = await saveWorkspaceState({ state: prepared, baseRevision: initial.revision, author: "route-test", message: "prepare historical affix reference" });
+  assert.equal(preparedSave.conflict, undefined);
+  const current = await loadWorkspaceState();
+  const currentSeries = current.state.seriesDefinitions.find((entry) => entry.id === series.id)!;
+  const response = await issueAndInvoke({
+    action: "update_series_core_affixes", url: "http://localhost/api/series", method: "POST", invoke: createSeries,
+    payload: { idempotencyKey: "route-update-core-affixes", seriesId: currentSeries.id, expectedSeriesRevision: currentSeries.revision, directAffixIds: [...currentSeries.coreAffixIds] },
+  });
+  assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
+  const saved = (await loadWorkspaceState()).state.seriesDefinitions.find((entry) => entry.id === series.id)!;
+  assert.equal(saved.revision, currentSeries.revision + 1);
+  assert.deepEqual(saved.coreAffixIds, ["affix:historical-unknown", allowed.id]);
+  const stale = await issueAndInvoke({
+    action: "update_series_core_affixes", url: "http://localhost/api/series", method: "POST", invoke: createSeries,
+    payload: { idempotencyKey: "route-update-core-affixes-stale", seriesId: saved.id, expectedSeriesRevision: currentSeries.revision, directAffixIds: [] },
+  });
+  assert.equal(stale.status, 409);
+  const crossPart = (await loadWorkspaceState()).state.v3Affixes.find((entry) => entry.enabled && entry.generationPolicy !== "technology_only" && entry.itemPartId !== saved.itemPartId)!;
+  const rejected = await issueAndInvoke({
+    action: "update_series_core_affixes", url: "http://localhost/api/series", method: "POST", invoke: createSeries,
+    payload: { idempotencyKey: "route-update-core-affixes-cross-part", seriesId: saved.id, expectedSeriesRevision: saved.revision, directAffixIds: [crossPart.id] },
+  });
+  assert.equal(rejected.status, 422);
+  assert.equal(((await rejected.json()) as { field?: string }).field, "directAffixIds");
 });
 
 test("Series 路由对恶意JSON字段类型稳定返回400", { concurrency: false }, async () => {

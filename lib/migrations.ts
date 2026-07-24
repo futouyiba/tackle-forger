@@ -33,6 +33,7 @@ import type {
   RuleSetVersion,
   WorkspaceRuleSettings,
   WorkspaceState,
+  FeishuShareLinkHistoryEntry,
 } from "./types";
 import { defaultAffinityAxisWeights } from "./compatibility";
 import { migrateLegacyProductIdentity } from "./legacy-product-migration";
@@ -62,8 +63,10 @@ import {
   resolvePartConstraintSetRef,
 } from "./part-constraints";
 import { deterministicHash } from "./rule-kernel";
+import { projectShareLinkHistoryEntry } from "./data-sources";
+import { createFiveAxisDispositionCatalogRevision, createFormalFiveAxisVertexSet } from "./five-axis-formal";
 
-export const CURRENT_WORKSPACE_SCHEMA_VERSION = 20;
+export const CURRENT_WORKSPACE_SCHEMA_VERSION = 21;
 
 const DEFAULT_RULE_SETTINGS: WorkspaceRuleSettings = {
   reductionStackingMode: "diminishing_division",
@@ -147,9 +150,24 @@ function benefitModeForParameter(
   return "higher_better";
 }
 
+/**
+ * 为新建参数生成不可复用的稳定 id。新增路径（addParameter、Excel 导入）必须用它，
+ * 不得用 `param:${key}`：rename 后旧 id 被保留、旧 key 被释放，以后再用该 key 新建
+ * 参数会生成相同 id → 两行 React key 撞车（节点复用/状态串扰/重挂载，即 review 发现）。
+ *
+ * 注意：与 enrichParameters 的 `param:${key}` 回填分工——后者只用于历史无 id 数据的
+ * best-effort 回填（存量数据、碰撞风险低且不能臆造身份），新增路径绝不能用它。
+ *
+ * 使用全局 Web Crypto（浏览器与 Node 22.16+ 均原生可用，与 lib/workflow、lib/storage 一致）。
+ */
+export function createParameterId(): string {
+  return `param:${crypto.randomUUID()}`;
+}
+
 function enrichParameters(parameters: ParameterDefinition[]): ParameterDefinition[] {
   return parameters.map((parameter) => ({
     ...parameter,
+    id: parameter.id ?? `param:${parameter.key}`,
     itemPartId: itemPartIdForParameter(parameter),
     benefitMode: benefitModeForParameter(parameter),
     balanceWeight: parameter.balanceWeight ?? 1,
@@ -1546,12 +1564,34 @@ function migrateV18ToV19(input: MutableWorkspace): MutableWorkspace {
   } as MutableWorkspace;
 }
 
+
+function migrateV19ToV20(input: MutableWorkspace): MutableWorkspace {
+  const state = migrateV18ToV19(input);
+  const rawHistory = arrayOf<WorkspaceState["feishuShareLinkHistory"][number]>(
+    state.feishuShareLinkHistory,
+  );
+  const seen = new Set<string>();
+  const feishuShareLinkHistory: FeishuShareLinkHistoryEntry[] = [];
+  for (const raw of rawHistory) {
+    const projected = projectShareLinkHistoryEntry(raw);
+    if (!projected) continue;
+    if (seen.has(projected.shareUrl)) continue;
+    seen.add(projected.shareUrl);
+    feishuShareLinkHistory.push(projected);
+  }
+  return {
+    ...state,
+    schemaVersion: 20,
+    feishuShareLinkHistory,
+  } as MutableWorkspace;
+}
+
 /**
  * Pricing v2 is intentionally additive: old execution switches remain opaque
  * evidence for historical replay and no published Snapshot is recalculated.
  */
-function migrateV19ToV20(input: MutableWorkspace): MutableWorkspace {
-  const state = migrateV18ToV19(input);
+function migrateV20ToV21(input: MutableWorkspace): MutableWorkspace {
+  const state = migrateV19ToV20(input);
   const preserveLegacyExecution = (value: unknown) => {
     if (!value || typeof value !== "object" || Array.isArray(value)) return value;
     const policy = structuredClone(value) as Record<string, unknown>;
@@ -1567,7 +1607,7 @@ function migrateV19ToV20(input: MutableWorkspace): MutableWorkspace {
   };
   return {
     ...state,
-    schemaVersion: 20,
+    schemaVersion: 21,
     pricingPolicyDrafts: arrayOf<WorkspaceState["pricingPolicyDrafts"][number]>(state.pricingPolicyDrafts)
       .map(preserveLegacyExecution) as WorkspaceState["pricingPolicyDrafts"],
     pricingPolicyVersions: arrayOf<WorkspaceState["pricingPolicyVersions"][number]>(state.pricingPolicyVersions)
@@ -1596,6 +1636,7 @@ const migrations: Record<number, (state: MutableWorkspace) => MutableWorkspace> 
   17: migrateV17ToV18,
   18: migrateV18ToV19,
   19: migrateV19ToV20,
+  20: migrateV20ToV21,
 };
 
 export function migrateWorkspaceState(input: unknown): WorkspaceState {
@@ -1629,8 +1670,64 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
     version = nextVersion;
   }
 
+  const fiveAxisDefinitions = arrayOf<WorkspaceState["fiveAxisViewDefinitions"][number]>(
+    state.fiveAxisViewDefinitions,
+  );
+  const existingFiveAxisGroupStates = arrayOf<NonNullable<WorkspaceState["fiveAxisVertexGroupStates"]>[number]>(
+    state.fiveAxisVertexGroupStates,
+  );
+  // Old workspaces had immutable formal VertexSets but no mutable current-group
+  // pointer.  Bootstrap only from each published Model's explicit current
+  // Snapshot; historical arrays/order never select a candidate.
+  const bootstrappedFiveAxisGroupStates = existingFiveAxisGroupStates.length
+    ? existingFiveAxisGroupStates
+    : (() => {
+      const grouped = new Map<string, { key: import("./types").FiveAxisVertexGroupKey; sources: import("./types").FiveAxisVertexCandidateSource[] }>();
+      const snapshots = arrayOf<WorkspaceState["configurationSnapshots"][number]>(state.configurationSnapshots);
+      for (const model of arrayOf<WorkspaceState["purchasableModels"][number]>(state.purchasableModels)) {
+        if (model.status !== "published" || !model.configurationSnapshotId) continue;
+        const matches = snapshots.filter((snapshot) => snapshot.id === model.configurationSnapshotId && snapshot.modelId === model.id);
+        if (matches.length !== 1) continue; // broken legacy pointer remains unavailable, never guessed
+        const preview = matches[0].fiveAxisPreview;
+        if (!preview?.weightBandId || !preview.weightBandPolicyVersion || !preview.candidateSources) continue;
+        const key = { weightBandId: preview.weightBandId, weightBandPolicyVersion: preview.weightBandPolicyVersion, fiveAxisDefinitionId: preview.fiveAxisDefinitionId, fiveAxisDefinitionVersion: preview.fiveAxisDefinitionVersion, fiveAxisRuleVersion: preview.fiveAxisRuleVersion };
+        const identity = JSON.stringify(key);
+        const group = grouped.get(identity) ?? { key, sources: [] };
+        const sources = preview.candidateSources.filter((source) => source.candidateSemanticKey.modelId === model.id && source.snapshotId === matches[0].id && source.candidateSemanticKey.itemPartId === "part:rod");
+        if (sources.length === 1) group.sources.push(...structuredClone(sources));
+        grouped.set(identity, group);
+      }
+      return [...grouped.values()].map<import("./types").FiveAxisVertexGroupState>((group) => {
+        const matchingDefinitions = fiveAxisDefinitions.filter((entry) => "semanticContractVersion" in entry && entry.definitionId === group.key.fiveAxisDefinitionId && entry.version === group.key.fiveAxisDefinitionVersion);
+        if (matchingDefinitions.length !== 1) throw new Error("FIVE_AXIS_MIGRATION_DEFINITION_UNRESOLVED：当前 Snapshot 的正式五维定义无法唯一回读。");
+        const definition = matchingDefinitions[0];
+        let rebuilt: import("./types").FiveAxisVertexSet;
+        try {
+          rebuilt = createFormalFiveAxisVertexSet({ definition: definition as import("./types").FiveAxisViewDefinition, groupKey: group.key, candidateSources: group.sources });
+        } catch {
+          throw new Error("FIVE_AXIS_MIGRATION_CANDIDATE_INVALID：当前 Snapshot 候选无法重放正式顶点。");
+        }
+        const sets = arrayOf<WorkspaceState["fiveAxisVertexSets"][number]>(state.fiveAxisVertexSets).filter((entry) => "weightBandId" in entry && entry.vertexSetHash === rebuilt.vertexSetHash && entry.candidateSetHash === rebuilt.candidateSetHash && entry.candidateEvidenceHash === rebuilt.candidateEvidenceHash);
+        if (sets.length !== 1) {
+          return {
+            groupKey: group.key,
+            state: "UNAVAILABLE_NO_ELIGIBLE_CANDIDATE" as const,
+            candidateSources: group.sources,
+            candidateSetHash: rebuilt.candidateSetHash,
+            candidateEvidenceHash: rebuilt.candidateEvidenceHash,
+            currentVertexSetId: null,
+            currentVertexSetHash: null,
+            missingAxisIds: [],
+            reasonCode: "FIVE_AXIS_MIGRATION_VERTEX_SET_UNRESOLVED",
+          };
+        }
+        const set = sets[0] as import("./types").FiveAxisVertexSet;
+        return { groupKey: group.key, state: "AVAILABLE" as const, candidateSources: group.sources, candidateSetHash: set.candidateSetHash, candidateEvidenceHash: set.candidateEvidenceHash, currentVertexSetId: set.vertexSetId, currentVertexSetHash: set.vertexSetHash, missingAxisIds: [], reasonCode: null };
+      });
+    })();
   state = {
     ...state,
+    parameters: enrichParameters(arrayOf<ParameterDefinition>(state.parameters)),
     aiRuleSourceChangeDrafts: arrayOf<
       WorkspaceState["aiRuleSourceChangeDrafts"][number]
     >(state.aiRuleSourceChangeDrafts),
@@ -1640,10 +1737,39 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
     performanceSummaryDefinitions: arrayOf<
       WorkspaceState["performanceSummaryDefinitions"][number]
     >(state.performanceSummaryDefinitions),
+    feishuShareLinkHistory: arrayOf<
+      WorkspaceState["feishuShareLinkHistory"][number]
+    >(state.feishuShareLinkHistory)
+      // 保存边界同样按白名单投影：当前 schema（v20）输入会跳过顺序迁移，
+      // 必须在此剥离客户端载荷可能夹带的 appToken/secret/PII 等额外字段。
+      .map(projectShareLinkHistoryEntry)
+      .filter((entry): entry is FeishuShareLinkHistoryEntry => entry !== null),
     patchLedger: state.patchLedger && typeof state.patchLedger === "object"
       ? migratePatchLedger(state.patchLedger as WorkspaceState["patchLedger"],patchLedgerMigrationContext(state))
       : emptyPatchLedger(),
     configIdGovernance: migrateConfigIdGovernanceState(state.configIdGovernance),
+  };
+  const dispositionMigration = createFiveAxisDispositionCatalogRevision({
+    definitions: fiveAxisDefinitions,
+    existingRevisions: arrayOf<WorkspaceState["fiveAxisDispositionCatalogRevisions"][number]>(
+      state.fiveAxisDispositionCatalogRevisions,
+    ),
+    currentRevisionId:
+      typeof state.currentFiveAxisDispositionCatalogRevisionId === "string"
+        ? state.currentFiveAxisDispositionCatalogRevisionId
+        : null,
+    decidedAt: "2026-07-23T00:00:00.000Z",
+  });
+  state = {
+    ...state,
+    fiveAxisViewDefinitions: fiveAxisDefinitions,
+    fiveAxisVertexSets: arrayOf<WorkspaceState["fiveAxisVertexSets"][number]>(
+      state.fiveAxisVertexSets,
+    ),
+    fiveAxisVertexGroupStates: bootstrappedFiveAxisGroupStates,
+    fiveAxisDispositionCatalogRevisions: dispositionMigration.revisions,
+    currentFiveAxisDispositionCatalogRevisionId:
+      dispositionMigration.currentRevisionId,
   };
   return state as WorkspaceState;
 }

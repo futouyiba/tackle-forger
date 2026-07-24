@@ -7,6 +7,7 @@ import {
   readFeishuSheetRange,
   writeFeishuSheetRanges,
 } from "@/lib/feishu-sheets";
+import { FeishuApiError, type FeishuApiErrorInfo } from "@/lib/feishu-api-error";
 import { inspectCanonicalRuleWorkbook } from "@/lib/rule-workbook-inspection";
 import {
   buildStableIdWriteCommands,
@@ -51,6 +52,33 @@ function safeError(error: unknown) {
   return error instanceof Error ? error.message : "飞书规则工作簿操作失败。";
 }
 
+/**
+ * 把飞书接口失败写入服务端日志（含 code/msg/endpoint/tokenContext/堆栈），
+ * 让运维可以从日志定位「权限不足 / 资源不存在 / 飞书 5xx / token 问题」，
+ * 并返回脱敏的 errorInfo（不含 token）供响应体使用。既往实现只把错误塞进
+ * 502 响应体、不写 server 日志，根因无法定位。
+ */
+function logWorkbookError(error: unknown, context: string): FeishuApiErrorInfo | undefined {
+  if (error instanceof FeishuApiError) {
+    console.error(`[feishu-workbook] ${context} FeishuApiError`, {
+      message: error.message,
+      code: error.code,
+      msg: error.feishuMsg,
+      httpStatus: error.httpStatus,
+      endpoint: error.endpoint,
+      tokenContext: error.tokenContext,
+      stack: error.stack,
+    });
+    return error.toErrorInfo();
+  }
+  if (error instanceof Error) {
+    console.error(`[feishu-workbook] ${context} ${error.name}: ${error.message}`, error.stack);
+  } else {
+    console.error(`[feishu-workbook] ${context} 非 Error 抛出`, error);
+  }
+  return undefined;
+}
+
 export async function GET(request: NextRequest) {
   const user = await requestUser(request);
   if (!user.authenticated) return unavailable();
@@ -64,7 +92,8 @@ export async function GET(request: NextRequest) {
     });
     return NextResponse.json({ inspection });
   } catch (error) {
-    return NextResponse.json({ error: safeError(error) }, { status: 502 });
+    const errorInfo = logWorkbookError(error, "GET /api/feishu-workbook");
+    return NextResponse.json({ error: safeError(error), errorInfo }, { status: 502 });
   }
 }
 
@@ -309,7 +338,8 @@ async function executeWorkbookBusinessRequest(request: NextRequest) {
     });
     return NextResponse.json({ result, requiresExplicitPull: result.state === "WRITE_VERIFIED" });
   } catch (error) {
-    return NextResponse.json({ error: safeError(error) }, { status: 422 });
+    const errorInfo = logWorkbookError(error, "POST /api/feishu-workbook 业务请求");
+    return NextResponse.json({ error: safeError(error), errorInfo }, { status: 422 });
   }
 }
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tackle Agent Workflow"
+  short_description: "Implement, inspect rendered UI, and independently review"
+  default_prompt: "Use $tackle-agent-workflow to implement this change, inspect rendered UI when applicable, and run an independent review loop."

@@ -249,6 +249,9 @@ export function ensureWorkflowFields(input: WorkspaceState): WorkspaceState {
     dataSourceImports: Array.isArray(state.dataSourceImports) ? state.dataSourceImports : [],
     dataSourceBindings: Array.isArray(state.dataSourceBindings) ? state.dataSourceBindings : [],
     dataSourceWritebacks: Array.isArray(state.dataSourceWritebacks) ? state.dataSourceWritebacks : [],
+    feishuShareLinkHistory: Array.isArray(state.feishuShareLinkHistory)
+      ? state.feishuShareLinkHistory
+      : [],
     ruleGraphs:
       Array.isArray(state.ruleGraphs) && state.ruleGraphs.length
         ? state.ruleGraphs

@@ -923,11 +923,19 @@ Snapshot的“下载审计归档”与“正式导出”是两种不同动作：
 
 历史Snapshot缺少策略引用时产生`SNAPSHOT_REPLAY_POLICY_MISSING`（不可waive的`BLOCKER / EXPORT`）；它不阻止`view_snapshot`或`download_snapshot_audit_archive`，因为二者不是正式导出Gate。冻结payload自身hash已损坏时另按Snapshot完整性BLOCKER处理，审计归档也不得伪造成功。
 
-飞书电子表格是唯一通用规则源。当前指定主工作簿为[《钓具设计工作簿》](https://pisn3u3ony2.feishu.cn/wiki/YsEKwSUJ5i86HCkZKBVcNMw7nOh?from=from_copylink&sheet=9nE3Rx)；`?sheet=9nE3Rx`只表示打开时定位到`06_系列`，同步边界是链接解析后的整个工作簿，不是单个工作表。2026-07-21首次接入读取基线为revision `2302`；完成本轮稳定ID、品质和定价契约整改后的回读revision为`2352`。两者都只是可审计的历史观测值，不是永久版本常量；每次显式拉取必须重新取得revision并形成新的`FeishuSourceRevision`。
+> **2026-07-25 权威表迁移（#149 / 读取协议 #143）**：权威规则源工作簿已从 `YsEKw…`（wiki，18 张合并表）迁移到 `WQ8wstS4ch29E2tAKnVcoh5KnJg`（sheets，48 张分表，竿/轮/线独立子表）——主工作簿 URL 已于本节更新为 WQ8w。两套拓扑不同（合并表 vs 分表），概念 ↔ sheet_id 映射见 `docs/audits/feishu-source-to-v3-mapping.md`。下方 sheet_id 清单（`d6e928`/`vviXo0`/`FqD4j7`/`edyFx9`…）与详细接入契约（五维块布局 竿3–18/轮21–36/线39–54、revision 观测 `2302`/`2352`/`4226`…）仍基于 **YsEKw 历史快照**，保留作审计证据；WQ8w 分表接入契约的重写由 #143 跟踪。**目标：工作簿来源可配置**（UI 飞书导入区支持输入链接 + 历史下拉，不硬编码单一表），由独立 issue 跟踪。
+
+飞书电子表格是唯一通用规则源。当前指定主工作簿为[《钓具设计工作簿》](https://pisn3u3ony2.feishu.cn/sheets/WQ8wstS4ch29E2tAKnVcoh5KnJg?from=from_copylink)（WQ8w，48 张分表）；`?sheet=` 只表示打开时定位，同步边界是链接解析后的整个工作簿，不是单个工作表。2026-07-25 迁移后首次接入基线为 revision `338`；迁移前主工作簿为 YsEKw（wiki），历史 revision `2302`/`2352` 仅作审计证据保留于本节下方。两者都只是可审计的历史观测值，不是永久版本常量；每次显式拉取必须重新取得revision并形成新的`FeishuSourceRevision`。
 
 当前工作簿关键稳定工作表标识为：`01_重量模板/d6e928`、`02_钓法类型/rgFPUu`、`02.5_钓法模板/m3eQCg`、`03_类型材质/fATowU`、`04_功能定位/vviXo0`、`04_词条/zrVOxd`、`05_技术/RdZv0J`、`06_系列/9nE3Rx`、`07_品质评分/FqD4j7`、`08_价格计算/u87sRh`、`10_校验规则/KZv4o2`、`11_组合SKU/eXV1dI`、`13_上传发布/M17p0j`、`14_Rods/hekdpO`、`15_Reels/oUp48w`、`16_Lines/YTYwgS`、`17_Item/VFxDxt`、`Patch台账/edyFx9`。这是 revision `4226` 的已观测拓扑；工作表名称是人类文案，接入器以`sheet_id`识别并校验期望名称，改名产生warning，不把同名新表静默当成原表。
 
 `01_重量模板`是竿、轮、线各自的重量段标杆，不能把其中“钓具大类”误作钓法。`02_钓法类型`的不可变`fishing_*`行提供钓法系数，钓法与类型仍是两个独立规则层。导入器以稳定ID和表头逻辑列定位：先对重量段标杆应用钓法系数，再叠加独立钓法层Patch，形成可审查的钓法模板；不得通过显示名、行号、块顺序或`02.5`反向猜测绑定。`02.5_钓法模板/m3eQCg`只是人工审核后可写回的结果与证据，不是当前规则的权威输入。任何缺失稳定ID、未知列语义、基准revision冲突或回读不一致都必须阻断激活并保留已有发布版本。
+
+五维图的 W 重量段采用 Issue #13 已确认的正式策略：`W1 微物 [0,1.5)`、`W2 小型 [1.5,4)`、`W3 中型 [4,10)`、`W4 大型 [10,20)`、`W5 巨物 [20,80)`、`W6 超巨物 [80,+∞)`。边界值进入后一档。定义必须冻结完整策略 payload、版本和 hash；后续来源读取只能生成新版本，绝不改写既有定义或 Snapshot。
+
+每块 ordinal 必须恰为`1..16`，machineId 必须分别为`wtpl_rod_0001..0016`、`wtpl_reel_0001..0016`、`wtpl_line_0001..0016`且三块全局唯一，sync 固定为`BOUND`。相邻拉力区间必须无缝相接（前一max等于后一min）且`max>min`；六个grade的行数必须严格为`1/2/4/4/3/2`。任何 ordinal、机器ID、sync、部位、区间连续性或grade计数偏离均为来源结构错误并fail-closed。
+
+规范化 W policy 固定为`policyId="weight-band:five-axis-d6e928"`、`version="weight-band:five-axis-d6e928@<sourceRevision>"`、六个稳定`W1..W6`和上述按源推导的上界，使用严格 schema、JCS、UTF-8 SHA-256计算`contentHash`。拉取必须把完整规范化payload和hash冻结进该准确`FeishuSourceRevision`；缺范围、表头/行/机器字段、部位、ordinal、区间、grade连续性、开放尾段、三方一致性或revision/hash任一不一致均fail-closed，不能发布新正式五维定义。正式定义必须同时引用同一`sourceRevision`和该hash，正式发布命令必须从冻结的`FeishuSourceRevision`复核二者；不得由调用方手填hash或以代码示例策略冒充飞书证据。新revision只能形成新定义、目录修订和后续Snapshot；旧定义、目录、VertexSet和ConfigurationSnapshot永久保留，既有历史Snapshot不得因重新拉取而重算或补写。
 
 `04_功能定位/vviXo0`每个功能行必须有不可变`FunctionProfile ID（勿改）`。它是FunctionProfile父级身份；`func_*`仅是强度行身份。相同父ID的显示名必须一致，非泛用组必须恰好各有一次强度1、2、3；泛用组允许仅有强度1，保留源数据而不得补造强度。缺父ID、重复强度或不完整非泛用组必须fail-closed，绝不由名称、`名称|级别`、行号或排序归组。revision 4226 的机器区域含竿/轮/线三块、空隔行与重复表头（`d6e928 A1:AE54`、`rgFPUu A1:AB12`、`m3eQCg A1:AB83`、`fATowU A1:AE20`、`vviXo0 A1:AG63`）；每块都必须独立按表头解析。
 
@@ -1071,7 +1079,7 @@ revision 位于“最近 90 天”与“最新 100 个”并集之外，只表�
 
 | 受治理字段 | 原因 | 唯一写入动作/边界 |
 | --- | --- | --- |
-| `seriesDefinitions`、`skuDrawers`、`purchasableModels`、`derivedProjections`、`projectionMatches` | Series/SKU/Model身份、最近匹配和派生链 | `create_series`、`change_sku_target_pull`及Model领域ActionCode/规则重算 |
+| `seriesDefinitions`、`skuDrawers`、`purchasableModels`、`derivedProjections`、`projectionMatches` | Series/SKU/Model身份、最近匹配和派生链 | `create_series`、`update_series_core_affixes`、`change_sku_target_pull`及Model领域ActionCode/规则重算 |
 | `partConstraintSets`、`candidateSearchRecipes` | v3 §6.5 的精确revision/contentHash引用；既有revision不可变 | 当前没有修改既有revision的领域命令；只读保留，创建新Series时可由`POST /api/series`物化新约束revision，Recipe专用版本化命令尚未提供 |
 | `patchLedger`、`patchReviewBatches`、`patchValidationWaivers`、`patchValidationWaiverDecisions` | Patch revision、审核和waiver证据 | Patch create/review/rebase/mirror及waiver ActionCode |
 | `projectionPatches` | 遗留 ProjectionPatch 的迁移/审计源；不得作为现行Patch命令旁路 | 当前只读保留，迁移流程处理；不得经整包保存删除、篡改或重放 |
@@ -1267,6 +1275,8 @@ interface PatchSubjectMigrationResult {
 每一级预览固定展示：来源、before、operation、operand、after、优势/代价、兼容解释、Patch和校验状态。
 
 被动技能只显示设计字段、分值、稀有度、技术来源和玩家文案。
+
+“数据源与参数注册表”中的飞书分享链接入口服务于**数据导入**（重量段模板或流派/定位系数的拉取、预览、发布与回写），与第14节的canonical规则源工作簿互不冲突：用户在数据交换页粘贴并从历史选择的是飞书多维表格（`/base/`）分享链接，经显式“识别链接”解析后仍须按现有治理分别执行预览、冲突检查、人工确认发布与回写，绝不自动发布或绕过stable ID。历史只保存shareUrl、显示名、数据类型和最近使用时间，不保存任何应用密钥、appToken凭据或个人身份信息；该入口不得用于改写canonical规则源工作簿指向。
 
 ## 16. 部署基线
 
@@ -1899,6 +1909,8 @@ Tackle Forger中的“发布”只表示发布内部RuleSetVersion、冻结Confi
 
 系统不建设超级权限、强制解锁或复杂紧急流程。飞书规则写回与恢复、显式拉取、RuleSetVersion发布、Snapshot批次确认、配置文件正式写入与恢复等会改变共享发布状态的关键操作，必须取得工作区级单写锁。
 
+工作区级单写锁是一期、1.5期、二期和三期的现行强制契约。资源级锁、依赖图推广、单节点拆锁或多节点协调只属于尚未排期的交付Phase 4规划，见[`architecture/future-concurrency-evolution-phase-4.md`](./architecture/future-concurrency-evolution-phase-4.md)。该规划不能作为提前缩小锁范围的依据；Phase 4真正启用前必须另立实现Issue，先更新本规范和策略版本，并完成入口门槛、迁移、故障注入、观察窗口与回退验证。
+
 - 锁由系统自动取得和释放，不要求用户手工管理。持锁期间其他用户仍可读取、查看差异和执行不落盘的预览或AI评估，但不能保存状态变更。
 - 前端必须显示锁持有人、正在执行的动作、开始时间和被禁用动作的原因。
 - 每次取得或重新取得锁，数据库必须在同一事务中为该工作区分配严格单调递增、永不复用的正数64位有符号`BIGINT fencingToken`，并创建含`workspaceId/leaseId/holderUserId/action/fencingToken/acquiredAt/expiresAt`的租约。API、JSON、outbox和操作记录统一把token编码为无前导零的十进制字符串，禁止经过JavaScript `number`；比较时按数据库整数值而非字符串字典序。释放、超时、失败和数据库恢复都不得回退计数器或再次发放旧token；计数器达到`9223372036854775807`或无法证明其连续性时必须fail-closed并禁止新写入。
@@ -1958,11 +1970,11 @@ DerivedProjection
 
 | 顺序 | 维度 | 直接适用部位 | 输入 | 能力方向 | W段共享顶点 |
 | --- | --- | --- | --- | --- | --- |
-| 1 | 拉力 | 竿、轮、线 | `drag` | 越大越强 | 全部合法直接值取MAX |
-| 2 | 耐久 | 竿、轮、线 | `durability` | 越大越强 | 全部合法直接值取MAX |
-| 3 | 抛投 | 竿 | `max_cast_distance` | 越大越强 | 合法竿直接值取MAX |
-| 4 | 感度 | 竿、轮、线 | 有效`sensitivity` | 原始分母越小越强 | 全部合法直接值取MIN |
-| 5 | 操控 | 竿、轮、线 | `energy_cost_factor` | 原始系数越小越强 | 全部合法直接值取MIN |
+| 1 | 拉力 | 竿、轮、线 | `drag` | 越大越强 | 同 W 段合法竿最终值取MAX |
+| 2 | 耐久 | 竿、轮、线 | `durability` | 越大越强 | 同 W 段合法竿最终值取MAX |
+| 3 | 抛投 | 竿 | `max_cast_distance` | 越大越强 | 同 W 段合法竿最终值取MAX |
+| 4 | 感度 | 竿、轮、线 | 有效`sensitivity` | 原始分母越小越强 | 同 W 段合法竿有效值取MIN |
+| 5 | 操控 | 竿、轮、线 | `energy_cost_factor` | 原始系数越小越强 | 同 W 段合法竿系数取MIN |
 
 拉力、耐久和抛投的部件比例为：
 
@@ -1973,11 +1985,13 @@ componentRatio = componentValue / vertexValue
 感度能力：
 
 ```text
-effectiveSensitivity = defaultSensitivityValue + sensitivityConfig
+effectiveSensitivity = finalComponentPanel[itemPartId].sensitivity
 sensitivityAbility = 1 / effectiveSensitivity
 ```
 
-如果`tackle.sensitivity`已保存合并后的有效值，则直接使用`1 / sensitivity`。参数元数据必须声明数据形态，禁止重复加默认值。
+`finalComponentPanel[itemPartId].sensitivity`是竿、轮、线各自冻结的最终部件面板值，在当前
+`ConfigurationSnapshot`中由对应`componentSelections[].values.sensitivity`承载；它已经包含词条、
+Technology与全部Patch的结算结果。不得读取可变Model、顶层Model汇总值或原始配置值，也不得再次叠加默认值。
 
 操控能力：
 
@@ -2011,7 +2025,7 @@ weightBandId
 + fiveAxisRuleVersion
 ```
 
-同一完整身份、同一轴的竿轮线共用一个整体顶点，不按部位分别建立顶点。顶点不得从Model的当前可编辑状态、“最新时间”Snapshot或未指明的Revision读取。对既有数据，每个`ACTIVE` Model只读取其`configurationSnapshotId`当时明确指向的唯一当前正式ConfigurationSnapshot；即使存在多个历史Snapshot，也不得按发布时间、最大ID或Model head revision自动改选。
+同一完整身份的五轴顶点候选池只含竿；轮、线仅使用自身最终直接值绘制曲线，绝不参与顶点。顶点不得从Model的当前可编辑状态、“最新时间”Snapshot或未指明的Revision读取。对既有数据，每个`ACTIVE` Model只读取其`configurationSnapshotId`当时明确指向的唯一当前正式ConfigurationSnapshot；即使存在多个历史Snapshot，也不得按发布时间、最大ID或Model head revision自动改选。
 
 每个顶点候选来源必须冻结：
 
@@ -3374,6 +3388,9 @@ type PrimaryDisplayState = "HARD_CONFLICT" | "REBASE_REQUIRED" | "REVIEW_REQUIRE
 | 1.5期 | 发布`ConfigTargetCatalogVersion`、获批扫描Manifest、`ConfigIdPolicyVersion`与reservation ledger；历史导入复核；生成正式人工搬运包或把正式配置差异写入用户选择的`dev/test/online/release`本地worktree | Git合并、远端发布、部署、替代现有发布系统 |
 | 二期 | OPEN-006关闭后实现第23、24节已设计的AI评估、证据、变化预览和草稿转换；在OPEN-011独立Issue中验证用户主动归档、恢复和只读dry-run；继续全员统一权限 | OPEN-011关闭证据和首次生产裁剪授权完成前的任何revision删除、未经独立授权的自动裁剪、自动应用、自动发布、AI裁决、细粒度RBAC、职责分离、飞书审批 |
 | 三期 | 保持统一Capability策略并完成既定业务能力；治理变化必须另立Issue和策略版本 | 预设业务角色、对象级RBAC、职责分离、飞书审批，以及改变既有ID、操作记录和Snapshot语义 |
+| 交付Phase 4（尚未排期） | 仅在入口门槛、独立策略版本和明确授权全部满足后，按[`Phase 4并发演进设计`](./architecture/future-concurrency-evolution-phase-4.md)逐步验证统一Operation、结构化资源协调、依赖图事务边界、资源级并发和多节点可行性；每一步保留工作区锁回退 | 在入口门槛未满足时取消或缩小工作区级单写锁；仅凭规划文档新增API、schema、状态或多节点运行；降低fencing、幂等、Git CAS、本地恢复、历史冻结和外部结果回读门禁 |
+
+“交付Phase 4”是本节的产品交付分期，不是第17节“当前实现迁移”的“阶段4”。本文发布时Phase 4尚未排期，且不改变一期至三期的任何实现范围或验收口径。未来即使进入Phase 4，也必须从保留工作区锁的统一记录与影子分析开始，不能直接跳到拆锁或多节点。
 
 当前飞书登录同时构成身份边界和统一权限入口：
 

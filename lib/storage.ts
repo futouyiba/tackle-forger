@@ -87,7 +87,7 @@ async function getRuntimeStorage(): Promise<StorageEnv> {
 }
 
 export function createBlobDocument(): BlobWorkspaceDocument {
-  const state = bindDeploymentWorkspaceIdentity(createSeedState());
+  const state = bindDeploymentWorkspaceIdentity(createSeedState({ mode: "production" }));
   const initial = state.revisions[0] ?? {
     revision: 1,
     author: "Excel 导入",
@@ -170,7 +170,7 @@ export async function loadWorkspaceState(): Promise<{
 }> {
   const sqlitePath = sqliteDatabasePath();
   if (sqlitePath) {
-    const loaded = await loadSqliteWorkspace(sqlitePath, bindDeploymentWorkspaceIdentity(createSeedState()));
+    const loaded = await loadSqliteWorkspace(sqlitePath, bindDeploymentWorkspaceIdentity(createSeedState({ mode: "production" })));
     return { ...loaded, state: bindDeploymentWorkspaceIdentity(loaded.state) };
   }
 
@@ -205,7 +205,7 @@ export async function loadWorkspaceState(): Promise<{
     };
   }
 
-  const state = bindDeploymentWorkspaceIdentity(createSeedState());
+  const state = bindDeploymentWorkspaceIdentity(createSeedState({ mode: "production" }));
   const now = new Date().toISOString();
   const json = JSON.stringify(state);
   await db.batch([

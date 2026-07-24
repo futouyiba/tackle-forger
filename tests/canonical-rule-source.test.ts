@@ -279,6 +279,7 @@ test("schema v15 顺序迁移保留历史状态并补 canonical 草稿集合", (
   assert.equal(migrated.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
   assert.deepEqual(migrated.canonicalRuleSourceDrafts, []);
   assert.deepEqual(migrated.weightTemplatePolicyDrafts, []);
+  assert.deepEqual(migrated.feishuShareLinkHistory, []);
   assert.deepEqual(migrated.configurationSnapshots, current.configurationSnapshots);
 });
 

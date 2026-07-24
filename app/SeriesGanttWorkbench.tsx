@@ -235,7 +235,7 @@ export function SeriesGanttWorkbench({ state, mutate, notify }: SeriesGanttWorkb
     : undefined;
 
   const loadExample = () => {
-    const next = hydrateV3Seed(state);
+    const next = hydrateV3Seed(state, { mode: "production" });
     mutate((draft) => Object.assign(draft, next), false);
     notify("已载入 v3 示例商品链；原有历史数据未被删除。");
   };

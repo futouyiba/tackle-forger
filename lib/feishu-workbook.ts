@@ -119,20 +119,50 @@ export const CANONICAL_FEISHU_SHEET_REGISTRY: FeishuSheetRegistryEntry[] = [
   canOverwriteDomainTruth: false,
 }));
 
-export function parseCanonicalWorkbookLink(input: string): Pick<FeishuWorkbookRef, "wikiToken" | "anchorSheetId" | "syncScope"> {
+/**
+ * 解析权威规则源工作簿链接。
+ *
+ * - `/wiki/{node_token}`：知识库挂载形式，提取 wikiToken；电子表格 token 由读取层
+ *   后续调用 wiki get_node 解析得到（`resolveWikiSpreadsheetToken`）。
+ * - `/sheets/{spreadsheet_token}`：未挂载知识库的直接电子表格形式，直接把 path 段
+ *   当作 spreadsheetToken，不经过 wiki 解析。
+ *
+ * 两种形式都剥离 `sheet=`/`from=` 等 query 参数：`sheet` 仅用于定位初始可见工作表，
+ * 同步边界始终是链接解析后的整个工作簿。
+ */
+export type ParsedCanonicalWorkbookLink = {
+  /** `/wiki/` 形式解析得到的 wiki 节点 token；`/sheets/` 直接形式时缺省。 */
+  wikiToken?: string;
+  /** `/sheets/` 直接形式解析得到的电子表格 token；`/wiki/` 形式时缺省。 */
+  spreadsheetToken?: string;
+  anchorSheetId?: string;
+  syncScope: "workbook";
+};
+
+export function parseCanonicalWorkbookLink(input: string): ParsedCanonicalWorkbookLink {
   let url: URL;
   try {
     url = new URL(input.trim());
   } catch {
     throw new Error("飞书规则工作簿链接格式不正确。");
   }
-  const match = url.pathname.match(/\/wiki\/([^/?#]+)/i);
-  if (!match) throw new Error("唯一规则源必须使用飞书知识库工作簿链接。");
-  return {
-    wikiToken: decodeURIComponent(match[1]),
-    anchorSheetId: url.searchParams.get("sheet") ?? undefined,
-    syncScope: "workbook",
-  };
+  const wikiMatch = url.pathname.match(/\/wiki\/([^/?#]+)/i);
+  if (wikiMatch) {
+    return {
+      wikiToken: decodeURIComponent(wikiMatch[1]),
+      anchorSheetId: url.searchParams.get("sheet") ?? undefined,
+      syncScope: "workbook",
+    };
+  }
+  const sheetsMatch = url.pathname.match(/\/sheets\/([^/?#]+)/i);
+  if (sheetsMatch) {
+    return {
+      spreadsheetToken: decodeURIComponent(sheetsMatch[1]),
+      anchorSheetId: url.searchParams.get("sheet") ?? undefined,
+      syncScope: "workbook",
+    };
+  }
+  throw new Error("唯一规则源必须使用飞书知识库工作簿链接。");
 }
 
 export function validateSheetRegistry(

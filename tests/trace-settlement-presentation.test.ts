@@ -22,7 +22,9 @@ test("display-only delta is available only for finite numeric before and after",
 test("semantic Trace operations retain their operation presentation instead of a fabricated delta", () => {
   assert.deepEqual(traceSettlementKind({ ...baseStep, operation: "no_effect" }), { key: "no-effect", label: "本层无贡献" });
   assert.deepEqual(traceSettlementKind({ ...baseStep, layer: "model_patch", effect: "cost" }), { key: "patch", label: "Patch" });
-  assert.deepEqual(traceSettlementKind({ ...baseStep, layer: "boundary", operation: "max" }), { key: "boundary", label: "边界 / 舍入" });
+  assert.deepEqual(traceSettlementKind({ ...baseStep, layer: "boundary", operation: "max" }), { key: "boundary", label: "边界校验" });
+  assert.deepEqual(traceSettlementKind({ ...baseStep, layer: "boundary", operation: "set", evidence: { roundingMode: "half_even" } }), { key: "boundary", label: "边界校验" });
+  assert.deepEqual(traceSettlementKind({ ...baseStep, layer: "boundary", operation: "set", evidence: { adapter: "pricing_trace/v2", operation: "round" } }), { key: "rounding", label: "舍入" });
   for (const operation of ["set", "clear", "min", "max", "no_effect"] as const) {
     assert.equal(displayOnlyTraceDelta(8, 9, operation), undefined);
   }
@@ -58,6 +60,37 @@ test("multi-subject archive projection preserves global sequence gaps without re
   const model = buildMotionPresentationModel({ businessRevision: "snapshot:1", subjectId: subjectA.entityId, parameterKey: "pull", trace: projected });
   assert.deepEqual(model.steps.map((entry) => entry.sequence), [1, 3]);
   assert.equal(model.steps[0].before, 8);
+});
+
+test("target identities with delimiter-bearing fields do not collide or mix their Trace entries", () => {
+  const subjectA = {
+    workspaceId: "workspace",
+    entityType: "model" as const,
+    entityId: "entity|sku_drawer|other-workspace",
+    revisionId: "revision",
+  };
+  const subjectB = {
+    workspaceId: "workspace|model|entity",
+    entityType: "sku_drawer" as const,
+    entityId: "other-workspace",
+    revisionId: "revision",
+  };
+  const common = { layer: "method" as const, sourceRef: { sourceType: "Method", sourceId: "lure" }, sourceVersion: "1", ruleSetVersion: "rules:1", effect: "benefit" as const, warningIssueIds: [], actions: [] };
+  const archive = createCalculationTraceArchive([
+    createCalculationTraceEntry({ ...common, traceEntryId: "a-1", subjectRef: subjectA, parameterKey: "pull|kg", sequence: 1, before: 8, operation: "add", operand: 1, after: 9 }),
+    createCalculationTraceEntry({ ...common, traceEntryId: "b-2", subjectRef: subjectB, parameterKey: "pull|kg", sequence: 2, before: 4, operation: "add", operand: 1, after: 5 }),
+  ]);
+
+  const targets = traceSettlementTargets(archive.entries);
+  assert.equal(targets.length, 2);
+  assert.notEqual(targets[0]?.key, targets[1]?.key);
+  assert.match(targets[0]?.key ?? "", /^\[/);
+  const targetA = targets.find((target) => target.subjectRef.entityType === "model");
+  const targetB = targets.find((target) => target.subjectRef.entityType === "sku_drawer");
+  assert.ok(targetA);
+  assert.ok(targetB);
+  assert.deepEqual(projectTraceSettlementEntries(archive.entries, targetA).map((entry) => entry.traceEntryId), ["a-1"]);
+  assert.deepEqual(projectTraceSettlementEntries(archive.entries, targetB).map((entry) => entry.traceEntryId), ["b-2"]);
 });
 
 test("idle settlement presents the first frozen before value, not the final result", () => {

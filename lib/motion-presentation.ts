@@ -23,6 +23,7 @@ export interface MotionTraceLike {
   inputHash: string;
   outputHash: string;
   unit?: string;
+  evidence?: Record<string, unknown>;
 }
 
 export interface MotionPresentationStep {
@@ -40,6 +41,7 @@ export interface MotionPresentationStep {
   inputHash: string;
   outputHash: string;
   unit?: string;
+  evidence?: Readonly<Record<string, unknown>>;
 }
 
 /** A read-only projection. It must be rebuilt when the authoritative revision changes. */
@@ -55,7 +57,22 @@ export interface MotionPresentationModel {
 }
 
 export const motionTokens = {
-  duration: { establishMs: 340, normalMs: 240, patchMs: 300, boundaryMs: 390, finalLockMs: 250, reducedMs: 0 },
+  duration: {
+    /** Visual flight overlaps phase gates; it never serially extends a Trace step. */
+    sourceFlyMs: 460,
+    establishMs: 340,
+    normalMs: 240,
+    costMs: 300,
+    finalLockMs: 250,
+    reducedMs: 0,
+  },
+  phaseDelay: {
+    establish: { sourceToImpactMs: 80, impactToMainMs: 60, mainToExplanationMs: 60, explanationToEvidenceMs: 60, evidenceToNextMs: 80 },
+    normal: { sourceToImpactMs: 60, impactToMainMs: 40, mainToExplanationMs: 40, explanationToEvidenceMs: 40, evidenceToNextMs: 60 },
+    patch: { sourceToImpactMs: 80, impactToMainMs: 50, mainToExplanationMs: 50, explanationToEvidenceMs: 50, evidenceToNextMs: 70 },
+    boundary: { sourceToImpactMs: 100, impactToMainMs: 70, mainToExplanationMs: 70, explanationToEvidenceMs: 70, evidenceToNextMs: 80 },
+    cost: { sourceToImpactMs: 80, impactToMainMs: 50, mainToExplanationMs: 50, explanationToEvidenceMs: 50, evidenceToNextMs: 70 },
+  },
   easing: { enter: "cubic-bezier(0.2, 0.8, 0.2, 1)", emphasis: "cubic-bezier(0.16, 1, 0.3, 1)" },
   displacement: { cardPx: 16, emphasisPx: 4 },
   emphasis: { normal: 1, restrained: 0.35 },
@@ -113,6 +130,7 @@ export function buildMotionPresentationModel(input: {
       before: frozenPresentationValue(entry.before), operation: entry.operation, operand: frozenPresentationValue(entry.operand),
       after: frozenPresentationValue(entry.after), effect: entry.effect, warningIssueIds: Object.freeze([...entry.warningIssueIds]),
       inputHash: entry.inputHash, outputHash: entry.outputHash, unit: entry.unit,
+      evidence: entry.evidence ? frozenPresentationValue(entry.evidence) as Readonly<Record<string, unknown>> : undefined,
     }))),
     finalValue: frozenPresentationValue(last?.after),
     evidence: Object.freeze({
@@ -126,15 +144,22 @@ export interface MotionPlaybackState {
   status: MotionStatus;
   revision: string;
   stepIndex: number;
+  phase: MotionPlaybackPhase;
   reducedMotion: boolean;
   cancellationReason?: "unmount" | "route" | "revision" | "user";
 }
+
+/** Each frozen Trace step is presented in this fixed focus order. */
+export type MotionPlaybackPhase = "source" | "impact" | "main_number" | "explanation" | "evidence";
+const motionPlaybackPhases: readonly MotionPlaybackPhase[] = ["source", "impact", "main_number", "explanation", "evidence"];
+export type MotionTimingProfile = "establish" | "patch" | "boundary" | "cost" | "normal";
 
 export type MotionPlaybackAction =
   | { type: "play" }
   | { type: "pause" }
   | { type: "resume" }
   | { type: "advance" }
+  | { type: "phaseAdvance" }
   | { type: "finalLockComplete" }
   | { type: "skip" }
   | { type: "replay" }
@@ -143,7 +168,7 @@ export type MotionPlaybackAction =
   | { type: "reducedMotionChanged"; reducedMotion: boolean };
 
 export function initialMotionPlaybackState(model: MotionPresentationModel, reducedMotion = false): MotionPlaybackState {
-  return { status: reducedMotion ? "completed" : "idle", revision: model.businessRevision, stepIndex: reducedMotion ? model.steps.length : -1, reducedMotion };
+  return { status: reducedMotion ? "completed" : "idle", revision: model.businessRevision, stepIndex: reducedMotion ? model.steps.length : -1, phase: "source", reducedMotion };
 }
 
 /** Pure reducer: it never calls a command, writes persistence, or derives business facts. */
@@ -156,20 +181,28 @@ export function motionPlaybackReducer(
   // model is allowed to begin playback after a revision/cancellation boundary.
   if (state.status === "cancelled" || state.status === "superseded") return state;
   switch (action.type) {
-    case "play": return state.reducedMotion ? { ...state, status: "completed", stepIndex: stepCount } : { ...state, status: "playing", stepIndex: Math.max(0, state.stepIndex) };
+    case "play": return state.reducedMotion ? { ...state, status: "completed", stepIndex: stepCount } : { ...state, status: "playing", stepIndex: Math.max(0, state.stepIndex), phase: state.stepIndex < 0 ? "source" : state.phase };
     case "pause": return state.status === "playing" ? { ...state, status: "paused" } : state;
     case "resume": return state.status === "paused" ? { ...state, status: "playing" } : state;
+    case "phaseAdvance": {
+      if (state.status !== "playing") return state;
+      const phaseIndex = motionPlaybackPhases.indexOf(state.phase);
+      if (phaseIndex < motionPlaybackPhases.length - 1) return { ...state, phase: motionPlaybackPhases[phaseIndex + 1]! };
+      const stepIndex = state.stepIndex + 1;
+      return stepIndex >= stepCount ? { ...state, status: "locking", stepIndex: stepCount } : { ...state, stepIndex, phase: "source" };
+    }
+    // Kept for direct deterministic callers; the controller always advances one presentation phase at a time.
     case "advance": {
       if (state.status !== "playing") return state;
       const stepIndex = state.stepIndex + 1;
-      return stepIndex >= stepCount ? { ...state, status: "locking", stepIndex: stepCount } : { ...state, stepIndex };
+      return stepIndex >= stepCount ? { ...state, status: "locking", stepIndex: stepCount, phase: "evidence" } : { ...state, stepIndex, phase: "source" };
     }
     case "finalLockComplete": return state.status === "locking" ? { ...state, status: "completed" } : state;
     case "skip": return { ...state, status: "completed", stepIndex: stepCount };
-    case "replay": return state.reducedMotion ? { ...state, status: "completed", stepIndex: stepCount } : { ...state, status: "playing", stepIndex: 0, cancellationReason: undefined };
+    case "replay": return state.reducedMotion ? { ...state, status: "completed", stepIndex: stepCount } : { ...state, status: "playing", stepIndex: 0, phase: "source", cancellationReason: undefined };
     case "cancel": return { ...state, status: action.reason === "revision" ? "superseded" : "cancelled", cancellationReason: action.reason };
     case "revisionChanged": return action.revision === state.revision ? state : { ...state, revision: action.revision, status: "superseded", cancellationReason: "revision" };
-    case "reducedMotionChanged": return action.reducedMotion ? { ...state, reducedMotion: true, status: "completed", stepIndex: stepCount } : { ...state, reducedMotion: false };
+    case "reducedMotionChanged": return action.reducedMotion ? { ...state, reducedMotion: true, status: "completed", stepIndex: stepCount, phase: "evidence" } : { ...state, reducedMotion: false };
   }
 }
 
@@ -210,12 +243,8 @@ export function createMotionPlaybackController(
     handle = clock.set(() => {
       if (disposed || expectedGeneration !== generation) return;
       handle = undefined;
-      dispatch({ type: state.status === "locking" ? "finalLockComplete" : "advance" });
-    }, state.status === "locking"
-      ? motionTokens.duration.finalLockMs
-      : state.stepIndex === 0
-        ? motionTokens.duration.establishMs
-        : playbackStepDuration(model.steps[state.stepIndex]));
+      dispatch({ type: state.status === "locking" ? "finalLockComplete" : "phaseAdvance" });
+    }, state.status === "locking" ? motionTokens.duration.finalLockMs : playbackPhaseDuration(model.steps[state.stepIndex], state.stepIndex, state.phase));
   };
   const dispatch = (action: MotionPlaybackAction): MotionPlaybackState => {
     if (disposed) return state;
@@ -247,9 +276,24 @@ export function systemPrefersReducedMotion(environment: MotionMediaEnvironment |
   return environment?.matchMedia(reducedMotionQuery).matches ?? false;
 }
 
-export function playbackStepDuration(step: MotionPresentationStep | undefined): number {
-  if (!step) return motionTokens.duration.normalMs;
-  if (step.layer.includes("patch")) return motionTokens.duration.patchMs;
-  if (step.layer === "boundary") return motionTokens.duration.boundaryMs;
-  return motionTokens.duration.normalMs;
+export function playbackPhaseDuration(step: MotionPresentationStep | undefined, stepIndex: number, phase: MotionPlaybackPhase): number {
+  const timing = motionTokens.phaseDelay[playbackTimingProfile(step, stepIndex)];
+  if (phase === "source") return timing.sourceToImpactMs;
+  if (phase === "impact") return timing.impactToMainMs;
+  if (phase === "main_number") return timing.mainToExplanationMs;
+  if (phase === "explanation") return timing.explanationToEvidenceMs;
+  return timing.evidenceToNextMs;
+}
+
+/**
+ * Timing precedence is fixed: the opening establish window wins first; later
+ * Patch steps win over boundary and cost; boundary (including canonical pricing
+ * rounding evidence) wins over cost; then ordinary cost and normal steps.
+ */
+export function playbackTimingProfile(step: MotionPresentationStep | undefined, stepIndex: number): MotionTimingProfile {
+  if (stepIndex === 0) return "establish";
+  if (step?.layer.includes("patch")) return "patch";
+  if (step?.layer === "boundary") return "boundary";
+  if (step?.effect === "cost") return "cost";
+  return "normal";
 }

@@ -19,6 +19,15 @@ import {
   serializeFeishuSourceExport,
   type FeishuSourceRangeRead,
 } from "../lib/feishu-source-xlsx-export";
+import { FeishuApiError, feishuEndpointPath } from "../lib/feishu-api-error";
+import { readFeishuSheetRange } from "../lib/feishu-sheets";
+
+function jsonResponse(obj: unknown, status = 200): Response {
+  return new Response(JSON.stringify(obj), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
 
 const authHeaders = {
   "x-feishu-tenant-key": "tenant",
@@ -249,4 +258,60 @@ test("路由不触碰 canonical 规则源常量", async () => {
   await GET(new NextRequest("http://localhost/api/export-feishu-source-xlsx", { headers: authHeaders })).catch(() => {});
   assert.equal(JSON.stringify(CANONICAL_FEISHU_WORKBOOK), workbookBefore, "CANONICAL_FEISHU_WORKBOOK 被修改");
   assert.equal(JSON.stringify(CANONICAL_FEISHU_SHEET_REGISTRY), registryBefore, "CANONICAL_FEISHU_SHEET_REGISTRY 被修改");
+});
+
+test("feishuEndpointPath 脱敏 spreadsheets 路径中的资源 token，保留接口语义", () => {
+  // v2 写入/回读路径
+  const p1 = feishuEndpointPath(
+    "https://open.feishu.cn/open-apis/sheets/v2/spreadsheets/REAL_SRC_TOKEN_ABC123/values_batch_update",
+  );
+  assert.equal(p1, "/open-apis/sheets/v2/spreadsheets/<redacted>/values_batch_update");
+  assert.ok(!p1.includes("REAL_SRC_TOKEN_ABC123"), "endpoint 不得含 raw spreadsheet token");
+  // v3 查询路径
+  const p2 = feishuEndpointPath("/open-apis/sheets/v3/spreadsheets/REAL_SRC_TOKEN_ABC123/sheets/query");
+  assert.equal(p2, "/open-apis/sheets/v3/spreadsheets/<redacted>/sheets/query");
+  // 创建接口（末尾无 token 段）不误伤
+  const p3 = feishuEndpointPath("/open-apis/sheets/v3/spreadsheets");
+  assert.equal(p3, "/open-apis/sheets/v3/spreadsheets");
+  // query string 仍被剥离
+  const p4 = feishuEndpointPath("/open-apis/wiki/v2/spaces/get_node?token=SECRET");
+  assert.equal(p4, "/open-apis/wiki/v2/spaces/get_node");
+});
+
+test("方向 B readFeishuSheetRange 失败时 errorInfo.endpoint 不含 raw spreadsheet token", async () => {
+  process.env.FEISHU_APP_ID = "src-export-test-app";
+  process.env.FEISHU_APP_SECRET = "src-export-test-secret";
+  const originalFetch = global.fetch;
+  global.fetch = (async (url) => {
+    const u = String(url);
+    if (u.includes("tenant_access_token")) {
+      return jsonResponse({ code: 0, tenant_access_token: "t-src-export", expire: 7200 });
+    }
+    if (u.includes("/values/")) {
+      return jsonResponse({ code: 1254030, msg: "无权限读取该电子表格" }, 200);
+    }
+    return jsonResponse({ code: 0 });
+  }) as typeof fetch;
+  try {
+    await assert.rejects(
+      readFeishuSheetRange({
+        spreadsheetToken: "SRC_RAW_TOKEN_MARKER",
+        sheetId: "sh",
+        range: "A1:A1",
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof FeishuApiError, "应抛 FeishuApiError");
+        const apiError = error as FeishuApiError;
+        const info = apiError.toErrorInfo();
+        assert.ok(!info.endpoint.includes("SRC_RAW_TOKEN_MARKER"), "endpoint 不得含 raw spreadsheet token");
+        assert.ok(info.endpoint.includes("<redacted>"), "endpoint 应脱敏为 <redacted>");
+        assert.ok(!JSON.stringify(info).includes("SRC_RAW_TOKEN_MARKER"), "errorInfo 不得含 raw spreadsheet token");
+        return true;
+      },
+    );
+  } finally {
+    global.fetch = originalFetch;
+    delete process.env.FEISHU_APP_ID;
+    delete process.env.FEISHU_APP_SECRET;
+  }
 });

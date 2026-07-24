@@ -44,6 +44,10 @@ function jsonResponse(obj: unknown, status = 200): Response {
 interface FetchMockOptions {
   createFail?: boolean;
   valuesFail?: boolean;
+  /** 回读（GET /values）失败，使 verified:false。 */
+  verifyFail?: boolean;
+  /** 回读返回行数不足（写入不一致），使 verified:false。 */
+  verifyDrift?: boolean;
   /** 创建接口返回的 token/url，用于断言。 */
   spreadsheetToken?: string;
   spreadsheetUrl?: string;
@@ -52,6 +56,8 @@ interface FetchMockOptions {
 function makeFetchMock(options: FetchMockOptions = {}): typeof fetch {
   const token = options.spreadsheetToken ?? "TOKEN123";
   const url = options.spreadsheetUrl ?? `https://example.com/sheets/${token}`;
+  // 记录每个 sheet 累积写入的行（用于回读 echo，使核对一致 → verified:true）。
+  const written = new Map<string, unknown[][]>();
   return (async (input, init) => {
     const u = String(input);
     const method = init?.method ?? "GET";
@@ -88,7 +94,28 @@ function makeFetchMock(options: FetchMockOptions = {}): typeof fetch {
       if (options.valuesFail) {
         return jsonResponse({ code: 99999, msg: "写入单元格失败" });
       }
+      const body = JSON.parse(String(init?.body)) as { valueRanges?: Array<{ range?: string; values?: unknown[][] }> };
+      for (const vr of body.valueRanges ?? []) {
+        const sheetId = String(vr.range ?? "").split("!")[0] ?? "";
+        const existing = written.get(sheetId) ?? [];
+        for (const row of vr.values ?? []) existing.push(row);
+        written.set(sheetId, existing);
+      }
       return jsonResponse({ code: 0, data: { totalUpdatedRows: 1, totalUpdatedCells: 1 } });
+    }
+    if (u.includes("/values/") && method === "GET") {
+      if (options.verifyFail) {
+        return jsonResponse({ code: 1254040, msg: "读取单元格失败" });
+      }
+      const match = u.match(/\/values\/([^?]+)/);
+      const rangePart = match ? decodeURIComponent(match[1]) : "";
+      const sheetId = rangePart.split("!")[0] ?? "";
+      let values = written.get(sheetId) ?? [];
+      if (options.verifyDrift) {
+        // 回读不一致：只返回首行，无论写入多少，触发行数核对失败。
+        values = values.slice(0, 1);
+      }
+      return jsonResponse({ code: 0, data: { revision: 42, valueRange: { revision: 42, values } } });
     }
     return jsonResponse({ code: 0, data: {} });
   }) as typeof fetch;
@@ -108,16 +135,21 @@ after(() => {
   disableTrustedProxy();
 });
 
-test("exportWorkspaceToFeishuSheet 成功路径：创建新表并写入多个 sheet", async () => {
+test("exportWorkspaceToFeishuSheet 成功路径：创建新表并写入多个 sheet，回读核对通过", async () => {
   global.fetch = makeFetchMock({});
   const { state, revision } = await loadWorkspaceState();
   const manifest = await exportWorkspaceToFeishuSheet({ state, revision });
-  assert.equal(manifest.spreadsheetToken, "TOKEN123");
+  // 保守默认：不单独返回 spreadsheet_token，用户通过 url 访问新表。
+  assert.equal("spreadsheetToken" in manifest, false, "不应单独返回 spreadsheet_token 字段");
   assert.equal(manifest.url, "https://example.com/sheets/TOKEN123");
   assert.equal(manifest.failedCount, 0);
   assert.ok(manifest.sheetResults.length > 10, "应写入与 Excel 导出同构的多个 sheet");
   assert.ok(manifest.totalRowsWritten > 0, "应写入数据行");
   assert.ok(manifest.sheetResults.every((r) => r.result === "written" || r.result === "skipped_empty"));
+  // 写入后回读核对：每个 written sheet 应 verified=true（echo mock 回放写入数据）。
+  const written = manifest.sheetResults.filter((r) => r.result === "written");
+  assert.ok(written.length > 0);
+  assert.ok(written.every((r) => r.verified === true), "written sheet 回读核对应通过");
   assert.ok(manifest.openQuestions.length > 0, "应在 manifest 回显开放决策");
   assert.equal(manifest.defaults.batchCellCap, 4000);
   assert.equal(manifest.defaults.overwritePolicy.includes("创建新表"), true);
@@ -144,6 +176,15 @@ test("exportWorkspaceToFeishuSheet 单元格写入失败时各 sheet 标记 fail
   assert.equal(manifest.failedCount, manifest.sheetResults.length);
   assert.ok(manifest.sheetResults.every((r) => r.result === "failed"));
   assert.ok(manifest.sheetResults.every((r) => r.error && r.error.endpoint.includes("values_batch_update")));
+  // errorInfo.endpoint 不得含 raw spreadsheet token，应脱敏为 <redacted>。
+  assert.ok(
+    manifest.sheetResults.every((r) => !JSON.stringify(r.error ?? {}).includes("TOKEN123")),
+    "errorInfo 不得含 raw spreadsheet token",
+  );
+  assert.ok(
+    manifest.sheetResults.every((r) => r.error?.endpoint.includes("<redacted>")),
+    "endpoint 应脱敏为 <redacted>",
+  );
 });
 
 test("exportWorkspaceToFeishuSheet 写入 payload 正确：标题与 sheet 名确定性", async () => {
@@ -176,6 +217,10 @@ test("exportWorkspaceToFeishuSheet 写入 payload 正确：标题与 sheet 名�
     if (u.includes("/values_batch_update")) {
       return jsonResponse({ code: 0, data: { totalUpdatedRows: 1 } });
     }
+    if (u.includes("/values/") && method === "GET") {
+      // 回读核对：返回空 values（本用例只校验写入 payload，不关心核对结论）。
+      return jsonResponse({ code: 0, data: { revision: 42, valueRange: { revision: 42, values: [] } } });
+    }
     return jsonResponse({ code: 0, data: {} });
   }) as typeof fetch;
   const { state, revision } = await loadWorkspaceState();
@@ -184,7 +229,8 @@ test("exportWorkspaceToFeishuSheet 写入 payload 正确：标题与 sheet 名�
   assert.ok(capturedCreate?.name?.includes(`r${revision}`), "创建标题应包含 revision");
   // 第一个数据 sheet 复用默认 sheet（updateSheet），其余 addSheet。
   assert.ok(capturedBatchTitles.length > 10);
-  assert.equal(manifest.spreadsheetToken, "PAYLOAD");
+  assert.equal(manifest.url, "https://example.com/sheets/PAYLOAD");
+  assert.equal("spreadsheetToken" in manifest, false, "不应单独返回 spreadsheet_token");
 });
 
 test("exportWorkspaceToFeishuSheet 不触碰 canonical 规则源常量", async () => {
@@ -208,6 +254,72 @@ test("manifest 不泄露 FEISHU_APP_SECRET", async () => {
   } finally {
     process.env.FEISHU_APP_SECRET = "sheet-export-test-secret";
   }
+});
+
+test("方向 A 成功 manifest 不泄露 spreadsheet_token 与 folder_token（url 除外）", async () => {
+  const rawSheetToken = "RAW_NEW_SHEET_TOKEN_9999";
+  const rawFolderToken = "RAW_FOLDER_TOKEN_8888";
+  global.fetch = makeFetchMock({
+    spreadsheetToken: rawSheetToken,
+    spreadsheetUrl: `https://example.com/sheets/${rawSheetToken}`,
+  });
+  const { state, revision } = await loadWorkspaceState();
+  const manifest = await exportWorkspaceToFeishuSheet({ state, revision, folderToken: rawFolderToken });
+  // spreadsheet_token 不作为独立字段暴露（保守默认：仅返回 url）。
+  assert.equal("spreadsheetToken" in manifest, false, "不应单独返回 spreadsheet_token 字段");
+  // url 允许含资源句柄（用户跳转用）。
+  assert.equal(manifest.url, `https://example.com/sheets/${rawSheetToken}`);
+  // raw folder_token 不得出现在 manifest 任何位置（含 defaults）。
+  const serialized = JSON.stringify(manifest);
+  assert.ok(!serialized.includes(rawFolderToken), "raw folder_token 不得进入 manifest");
+  // defaults.folderToken 必须脱敏（maskToken 形式），非 raw。
+  assert.notEqual(manifest.defaults.folderToken, rawFolderToken);
+  assert.ok(manifest.defaults.folderToken.length > 0, "defaults.folderToken 应脱敏回显");
+  assert.ok(manifest.defaults.folderToken.includes("…"), "defaults.folderToken 应为 maskToken 脱敏形式");
+  // sheet error 不得含 raw spreadsheet token。
+  for (const r of manifest.sheetResults) {
+    assert.ok(!JSON.stringify(r.error ?? {}).includes(rawSheetToken), "sheet error 不得含 raw spreadsheet token");
+  }
+});
+
+test("方向 A 回读不一致时 verified=false 并记录证据，但不阻断", async () => {
+  global.fetch = makeFetchMock({ verifyDrift: true });
+  const { state, revision } = await loadWorkspaceState();
+  const manifest = await exportWorkspaceToFeishuSheet({ state, revision });
+  const written = manifest.sheetResults.filter((r) => r.result === "written");
+  assert.ok(written.length > 0, "应至少有一个 written sheet");
+  // 多行 sheet 的回读被裁剪到 1 行 → 行数不足 → verified:false。
+  const mismatched = written.filter((r) => r.verified === false);
+  assert.ok(mismatched.length > 0, "回读不一致应使受影响 sheet verified:false");
+  assert.ok(
+    mismatched.every((r) => typeof r.verifyEvidence === "string" && r.verifyEvidence.length > 0),
+    "应提供核对证据",
+  );
+  assert.ok(
+    mismatched.every((r) => !(r.verifyEvidence ?? "").includes("TOKEN123")),
+    "核对证据不得含 raw spreadsheet token",
+  );
+  // 写入本身成功：不阻断，failedCount 仍为 0。
+  assert.equal(manifest.failedCount, 0, "回读不一致不应计入 failedCount");
+});
+
+test("方向 A 回读请求失败时 verified=false 并记录证据", async () => {
+  global.fetch = makeFetchMock({ verifyFail: true });
+  const { state, revision } = await loadWorkspaceState();
+  const manifest = await exportWorkspaceToFeishuSheet({ state, revision });
+  const written = manifest.sheetResults.filter((r) => r.result === "written");
+  assert.ok(written.length > 0);
+  assert.ok(written.every((r) => r.verified === false), "回读失败应标记 verified:false");
+  assert.ok(
+    written.every((r) => (r.verifyEvidence ?? "").includes("回读失败")),
+    "证据应说明回读失败",
+  );
+  assert.ok(
+    written.every((r) => !(r.verifyEvidence ?? "").includes("TOKEN123")),
+    "核对证据不得含 raw spreadsheet token",
+  );
+  // 回读失败不阻断：写入本身成功，failedCount 仍为 0。
+  assert.equal(manifest.failedCount, 0);
 });
 
 test("路由未登录返回 401", async () => {

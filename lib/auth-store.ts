@@ -2,6 +2,7 @@ import { createHmac, randomBytes } from "node:crypto";
 import { mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { FeishuIdentity } from "./feishu-identity";
+import { resolveSessionDataDir } from "./session-path";
 
 interface StoredSession { identity: FeishuIdentity; createdAt: string; expiresAt: string }
 interface PendingLogin { returnTo: string; createdAt: string; expiresAt: string }
@@ -15,8 +16,11 @@ const EMPTY_DOCUMENT: AuthDocument = { version: 1, sessions: {}, pendingLogins: 
 const LOCK_RETRIES = 100;
 
 function authPath() {
-  const configured = process.env.FEISHU_SESSION_DATA_DIR?.trim() || ".data/auth";
-  return path.join(path.resolve(configured), "sessions.json");
+  // FEISHU_SESSION_DATA_DIR is resolved through the shared pure function,
+  // keeping path derivation testable without writing to the filesystem.
+  const configured = process.env.FEISHU_SESSION_DATA_DIR?.trim();
+  const dir = resolveSessionDataDir({ explicitEnvPath: configured });
+  return path.join(dir, "sessions.json");
 }
 
 function digest(value: string, secret: string) {

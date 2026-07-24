@@ -141,9 +141,7 @@ test("生产同形品质矩阵按显式块头解析扩展列、移动块、空�
     qualitySourceRows: pricingQualityRows,
     importedAt: "2026-07-24T00:00:00.000Z",
   });
-  assert.equal(pricing.qualityMappings.length, 4);
   assert.equal(pricing.qualityPriceFactorRanges?.length, 4);
-  assert.deepEqual(pricing.qualityMappings.map((mapping) => mapping.source.cell), ["D5", "D6", "D7", "D8"]);
   assert.deepEqual(pricing.qualityPriceFactorRanges?.map((range) => range.source.cell), ["G5:H5", "G6:H6", "G7:H7", "G8:H8"]);
   const moved = structuredClone(qualityValues);
   moved[3]![3] = ""; moved[3]![6] = ""; moved[3]![7] = "";
@@ -259,7 +257,7 @@ test("历史已绑定机器 ID 在当前工作表拓扑下仍通过唯一性、�
   assert.deepEqual(report.blockingIssueCodes, []);
 });
 
-test("仅导入品质映射时准确列出尚未导入的定价输入", () => {
+test("仅导入品质区间时准确列出尚未导入的定价输入", () => {
   const sourceRevision = {
     id: "feishu-revision:observed-2352", workbookRefId: CANONICAL_FEISHU_WORKBOOK.id,
     sourceRevision: "2352", spreadsheetToken: "spreadsheet:observed", pulledAt: "2026-07-21T11:00:00.000Z",
@@ -276,10 +274,9 @@ test("仅导入品质映射时准确列出尚未导入的定价输入", () => {
     ],
     importedAt: "2026-07-21T11:00:00.000Z",
   });
-  assert.equal(draft.qualityMappings.length, 4);
   assert.equal(draft.issues.some((issue) => issue.code.startsWith("QUALITY_PRICING_MAPPING_")), false);
   assert.deepEqual(draft.issues.map((issue) => issue.code).sort(), [
-    "PARTS_TO_WHOLE_RATIO_MISSING", "PRICING_INTERPOLATION_MISSING", "PRICING_MONEY_POLICY_MISSING", "QUALITY_PRICE_FACTOR_MISSING",
+    "BASE_REPAIR_PRICE_MISSING", "PARTS_TO_WHOLE_RATIO_MISSING", "PRICING_INTERPOLATION_MISSING", "PRICING_MONEY_POLICY_MISSING", "QUALITY_PRICE_FACTOR_MISSING",
   ]);
 });
 
@@ -296,7 +293,9 @@ test("07/08/02 同 revision 导入查表与金额事实，但不猜测三项执�
   pricingValues[6] = ["rounding_mode", "已显式定义", "向下取整；3位有效数字"];
   pricingValues[7] = ["minimum_price", "已显式定义", 100];
   pricingValues[8] = ["overflow_maximum", "已显式定义", 300000000];
-  pricingValues[13] = [1, "跑刀", 100, "", 1, .54, .4, .06, "", 1, "跑刀", 2, 3, 1, 1, 1, 1];
+  // WQ8w 09.2 新布局：[重量段, 品质代码, 基础维修价(竿/轮/线), 零整比(竿/轮/线)]，
+  // 已移除 PricingBasket 分组与消耗/占比/全损列。
+  pricingValues[13] = [1, "A", 100, 200, 300, .54, .4, .06];
   const draft = pricingDraftFromRanges({
     sourceRevision,
     qualityValues: [
@@ -315,7 +314,11 @@ test("07/08/02 同 revision 导入查表与金额事实，但不猜测三项执�
   assert.equal(draft.sourceRevision, "2922");
   assert.equal(draft.scoreInterpolation?.kind, "quality_range_linear");
   assert.equal(draft.moneyPolicy?.unit, "金币");
+  assert.equal(draft.baseRepairPrices.length, 3);
+  assert.deepEqual(draft.baseRepairPrices.map((entry) => entry.partId), ["rod", "reel", "line"]);
+  assert.equal(draft.baseRepairPrices[0]?.value.source.cell, "D23");
   assert.equal(draft.partsToWholeRatios.length, 3);
+  assert.equal(draft.partsToWholeRatios[0]?.qualityId, "quality_a_purple");
   assert.equal(draft.repairCoefficients[0]?.value.source.cell, "U3");
   assert.equal(draft.issues.some((issue) => issue.code === "PRICING_INTERPOLATION_MISSING"), false);
   assert.equal(draft.issues.some((issue) => issue.code === "PARTS_TO_WHOLE_RATIO_MISSING"), false);
@@ -456,23 +459,10 @@ function pricingInput(overrides: Partial<PricingPolicyDraft> = {}) {
     pricingSheetId: "u87sRh" as const,
     typeMaterialSheetId: "fATowU" as const,
     businessFormulaCells: ["B2", "B3", "B4", "B5", "B6", "B7"].map((cell) => ({ sheetId: "u87sRh", cell })),
-    pricingBaskets: [
-      { id: "pricing_basket:run", sourceAlias: "跑刀", source: { sheetId: "u87sRh", cell: "B10" } },
-      { id: "pricing_basket:steady", sourceAlias: "稳健", source: { sheetId: "u87sRh", cell: "B11" } },
-      { id: "pricing_basket:attack", sourceAlias: "猛攻", source: { sheetId: "u87sRh", cell: "B12" } },
-    ],
-    maintenanceConsumptionRates: [{ pricingWeightBandId: "band:matched", pricingBasketId: "pricing_basket:attack", value: sourced(10, "C20") }],
-    partAllocationRatios: [{ pricingWeightBandId: "band:matched", partId: "rod", value: sourced(0.2, "D20") }],
-    repairCoefficients: [{ pricingWeightBandId: "band:matched", partId: "rod", typeId: "RodType:spinning", value: sourced(1, "AC5") }],
-    totalLossTimes: [{ pricingWeightBandId: "band:matched", pricingBasketId: "pricing_basket:attack", partId: "rod", value: sourced(5, "E20") }],
-    purchaseCoefficients: [{ pricingWeightBandId: "band:matched", partId: "rod", typeId: "RodType:spinning", value: sourced(1, "AC6") }],
+    baseRepairPrices: [{ partId: "rod", value: sourced(10, "C20") }],
+    repairCoefficients: [{ partId: "rod", typeId: "RodType:spinning", value: sourced(1, "AC5") }],
+    purchaseCoefficients: [{ partId: "rod", typeId: "RodType:spinning", value: sourced(1, "AC6") }],
     partsToWholeRatios: [],
-    qualityMappings: [
-      ["quality_c_green", "pricing_basket:run", "C/绿→跑刀", "Q9"],
-      ["quality_b_blue", "pricing_basket:steady", "B/蓝→稳健", "Q10"],
-      ["quality_a_purple", "pricing_basket:attack", "A/紫→猛攻", "Q11"],
-      ["quality_s_orange", "pricing_basket:attack", "S/橙→猛攻", "Q12"],
-    ].map(([qualityId, pricingBasketId, sourceAlias, cell]) => ({ qualityId, pricingBasketId, sourceAlias, status: "SOURCE" as const, source: { sheetId: "u87sRh", cell } })),
     importedAt: "2026-07-21T10:00:00.000Z",
     ...overrides,
   } as Parameters<typeof importPricingPolicyDraft>[0];
@@ -494,7 +484,6 @@ test("价格试算使用最近结构标杆源重量段，系数为 1 仍进入�
     moneyPolicy: { unit: "未确认币种", rounding: "half_up", precision: 0, minimumPrice: 1, maximumPrice: 999999, roundingStage: "part_purchase_price", minimumPriceScope: "part_purchase_price", overflowMode: "error", status: "PROPOSED", source: { sheetId: "u87sRh", cell: "Q8:T12" } },
   }));
   const result = calculatePricingTrial({ policy: draft, partId: "rod", typeId: "RodType:spinning", pricingWeightBandId: "band:matched", valueScore: 24, qualityId: "quality_a_purple" });
-  assert.equal(result.pricingBasketId, "pricing_basket:attack");
   assert.equal(result.pricingWeightBandId, "band:matched");
   assert.equal(result.repairPriceUnrounded, 20);
   assert.equal(result.purchasePrice, 40);

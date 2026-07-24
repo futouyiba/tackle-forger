@@ -527,7 +527,7 @@ test("旧 PUBLISHED 五维定义只能用于历史重放，不能服务新正式
     automaticPricing: {
       formal: true, pricingPolicyRef: "pricing:1", pricingWeightBandId: "band:1",
       valueScore: 1,
-      pricingBasketId: "basket:1", repairPriceUnrounded: 100,
+      repairPriceUnrounded: 100,
       purchasePriceUnrounded: 100, purchasePrice: 100, trace: [{
         sequence: 1,
         formulaStep: "purchasePrice",

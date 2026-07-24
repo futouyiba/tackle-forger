@@ -1,5 +1,15 @@
 import { deterministicHash } from "./rule-kernel";
 
+/**
+ * 定价试算模型版本号。本版本对应 WQ8w 09.0 的三因子简化公式：
+ *   维修价 = 基础维修价(部位, 重量段, 品质) × 维修系数 × 评分插值系数
+ *   购买价 = 维修价 × 购买系数 ÷ 零整比(部位, 重量段, 品质)
+ *   竿组价 = 竿 + 轮 + 线 购买价之和
+ * 历史 Snapshot 冻结的 automaticPricing 可能仍带 legacy pricingBasket 字段或缺失本字段；
+ * 反序列化路径按历史冻结惯例忽略 legacy 字段，不据此重算或拒绝旧 Snapshot。
+ */
+export const PRICING_MODEL_VERSION = "pricing-trial/v2";
+
 export type PricingInputStatus = "SOURCE" | "PROPOSED" | "CONFIRMED";
 export type QualityId =
   | "quality_c_green"
@@ -21,18 +31,14 @@ export interface SourcedPricingValue<T> {
 
 export interface PricingLookupEntry {
   pricingWeightBandId?: string;
-  pricingBasketId?: string;
+  /**
+   * 零整比、基础维修价等按品质索引的查表项使用 qualityId；
+   * 历史数据可能仍带 legacy pricingBasketId，反序列化时忽略。
+   */
+  qualityId?: QualityId;
   partId?: string;
   typeId?: string;
   value: SourcedPricingValue<number>;
-}
-
-export interface QualityPricingBasketMapping {
-  qualityId: QualityId;
-  pricingBasketId: string;
-  sourceAlias: string;
-  status: PricingInputStatus;
-  source: PricingCellRef;
 }
 
 export interface QualityPriceFactorRange {
@@ -89,14 +95,12 @@ export interface PricingPolicyDraft {
   qualitySheetId?: "FqD4j7";
   typeMaterialSheetId: "fATowU";
   businessFormulaCells: PricingCellRef[];
-  pricingBaskets: Array<{ id: string; sourceAlias: string; source: PricingCellRef }>;
-  maintenanceConsumptionRates: PricingLookupEntry[];
-  partAllocationRatios: PricingLookupEntry[];
+  /** 09.2 直接给定的基础维修价，按 (部位, 重量段, 品质) 索引。 */
+  baseRepairPrices: PricingLookupEntry[];
   repairCoefficients: PricingLookupEntry[];
-  totalLossTimes: PricingLookupEntry[];
   purchaseCoefficients: PricingLookupEntry[];
+  /** 零整比，按 (部位, 重量段, 品质) 索引；取代旧 pricingBasketId 键。 */
   partsToWholeRatios: PricingLookupEntry[];
-  qualityMappings: QualityPricingBasketMapping[];
   qualityPriceFactorRanges?: QualityPriceFactorRange[];
   scoreInterpolation?: ScoreInterpolationPolicyDraft;
   performanceScoringPolicy?: PerformanceScoringPolicyDraft;
@@ -126,15 +130,35 @@ export interface PricingTraceEntry {
   inputStatus: PricingInputStatus;
 }
 
+/**
+ * 单次试算中一个部位的价格拆项。
+ * 完整竿组价由调用方对 竿+轮+线 三部位分别试算后汇总。
+ */
+export interface PricingTrialPart {
+  partId: string;
+  repairPriceUnrounded: number;
+  purchasePriceUnrounded: number;
+}
+
 export interface PricingTrialResult {
   formal: boolean;
   pricingPolicyRef: string;
+  /** 冻结本次价格试算使用的定价模型版本；历史 Snapshot 可能缺失。 */
+  pricingModelVersion?: string;
   /** 绑定本次价格试算实际消费的规范品质价值分。 */
   valueScore: number;
+  /** 本次试算使用的品质 ID。 */
+  qualityId?: QualityId;
   pricingWeightBandId: string;
-  pricingBasketId: string;
   repairPriceUnrounded: number;
   purchasePriceUnrounded: number;
+  /**
+   * 未舍入竿组价。单部位试算即该部位的未舍入购买价；
+   * 竿+轮+线 的完整竿组价由调用方汇总三部位结果得到。
+   */
+  rodGroupPriceUnrounded?: number;
+  /** 本次试算作用域内的部位价格拆项；完整竿组需调用方汇总。 */
+  parts?: PricingTrialPart[];
   purchasePrice: number | null;
   moneyUnit?: string;
   trace: PricingTraceEntry[];
@@ -214,31 +238,12 @@ export function importPricingPolicyDraft(input: Omit<PricingPolicyDraft, "id" | 
     issues.push({ code: "PRICING_SHEET_ID_MISMATCH", severity: "error", message: "定价草稿必须按稳定 sheet_id 联合读取 07_品质评分、08_价格计算与 02_类型材质。" });
   }
   for (const [name, entries] of [
-    ["维修消耗速度", input.maintenanceConsumptionRates],
-    ["部位占比", input.partAllocationRatios],
+    ["基础维修价", input.baseRepairPrices],
     ["维修系数", input.repairCoefficients],
-    ["全损时间", input.totalLossTimes],
     ["购买系数", input.purchaseCoefficients],
     ["零整比", input.partsToWholeRatios],
   ] as const) {
     for (const entry of entries) validPositive(entry, name, issues);
-  }
-
-  for (const qualityId of QUALITY_ORDER) {
-    const mappings = input.qualityMappings.filter((mapping) => mapping.qualityId === qualityId);
-    if (mappings.length !== 1) {
-      issues.push({
-        code: mappings.length ? "QUALITY_PRICING_MAPPING_DUPLICATE" : "QUALITY_PRICING_MAPPING_MISSING",
-        severity: "error",
-        message: `${qualityId} 到 PricingBasket 的映射必须且只能有一条。`,
-      });
-    }
-  }
-  const basketIds = new Set(input.pricingBaskets.map((basket) => basket.id));
-  for (const mapping of input.qualityMappings) {
-    if (!basketIds.has(mapping.pricingBasketId)) {
-      issues.push({ code: "QUALITY_PRICING_MAPPING_UNKNOWN", severity: "error", message: `${mapping.qualityId} 指向未知 PricingBasket ${mapping.pricingBasketId}。`, source: mapping.source });
-    }
   }
 
   const ranges = input.qualityPriceFactorRanges ?? [];
@@ -249,7 +254,10 @@ export function importPricingPolicyDraft(input: Omit<PricingPolicyDraft, "id" | 
     issues.push({ code: "PRICING_INTERPOLATION_MISSING", severity: "warning", message: "评分插值策略尚未导入；正式定价不可发布。" });
   }
   if (!input.partsToWholeRatios.length) {
-    issues.push({ code: "PARTS_TO_WHOLE_RATIO_MISSING", severity: "warning", message: "重量段×PricingBasket×部位零整比尚未导入；正式定价不可发布。" });
+    issues.push({ code: "PARTS_TO_WHOLE_RATIO_MISSING", severity: "warning", message: "重量段×品质×部位零整比尚未导入；正式定价不可发布。" });
+  }
+  if (!input.baseRepairPrices.length) {
+    issues.push({ code: "BASE_REPAIR_PRICE_MISSING", severity: "warning", message: "重量段×品质×部位基础维修价尚未导入；正式定价不可发布。" });
   }
   if (!input.moneyPolicy) {
     issues.push({ code: "PRICING_MONEY_POLICY_MISSING", severity: "warning", message: "金额单位、舍入和价格边界尚未导入；正式定价不可发布。" });
@@ -268,13 +276,10 @@ export function importPricingPolicyDraft(input: Omit<PricingPolicyDraft, "id" | 
   }
 
   const allStatuses = [
-    ...input.maintenanceConsumptionRates.map((entry) => entry.value.status),
-    ...input.partAllocationRatios.map((entry) => entry.value.status),
+    ...input.baseRepairPrices.map((entry) => entry.value.status),
     ...input.repairCoefficients.map((entry) => entry.value.status),
-    ...input.totalLossTimes.map((entry) => entry.value.status),
     ...input.purchaseCoefficients.map((entry) => entry.value.status),
     ...input.partsToWholeRatios.map((entry) => entry.value.status),
-    ...input.qualityMappings.map((entry) => entry.status),
     ...ranges.map((entry) => entry.status),
     ...(input.scoreInterpolation ? [input.scoreInterpolation.status] : []),
     ...(input.moneyPolicy ? [input.moneyPolicy.status] : []),
@@ -284,6 +289,7 @@ export function importPricingPolicyDraft(input: Omit<PricingPolicyDraft, "id" | 
     input.scoreInterpolation
     && input.moneyPolicy
     && input.partsToWholeRatios.length
+    && input.baseRepairPrices.length
     && ranges.length
     && input.moneyPolicy.roundingStage
     && input.moneyPolicy.minimumPriceScope
@@ -362,15 +368,16 @@ function roundMoney(value: number, policy: PricingMoneyPolicyDraft) {
   return rounded / multiplier;
 }
 
-function lookupRatio(
+function lookupByQuality(
   entries: PricingLookupEntry[],
-  input: { partId: string; pricingWeightBandId: string; pricingBasketId: string },
+  input: { partId: string; pricingWeightBandId: string; qualityId: QualityId },
+  description: string,
 ) {
   return exactlyOne(entries.filter((entry) =>
     entry.partId === input.partId
     && (entry.pricingWeightBandId === input.pricingWeightBandId || entry.pricingWeightBandId === "" || entry.pricingWeightBandId === undefined)
-    && (entry.pricingBasketId === input.pricingBasketId || entry.pricingBasketId === undefined)
-  ), "零整比");
+    && (entry.qualityId === input.qualityId || entry.qualityId === undefined)
+  ), description);
 }
 
 export function calculatePricingTrial(input: {
@@ -382,18 +389,10 @@ export function calculatePricingTrial(input: {
   qualityId: QualityId;
 }): PricingTrialResult {
   const policy = input.policy;
-  const mapping = exactlyOne(policy.qualityMappings.filter((entry) => entry.qualityId === input.qualityId), "品质定价映射");
-  const basketId = mapping.pricingBasketId;
-  const consumption = exactlyOne(policy.maintenanceConsumptionRates.filter((entry) => entry.pricingWeightBandId === input.pricingWeightBandId && entry.pricingBasketId === basketId), "维修消耗速度");
-  const allocation = exactlyOne(policy.partAllocationRatios.filter((entry) => entry.pricingWeightBandId === input.pricingWeightBandId && entry.partId === input.partId), "部位占比");
+  const baseRepairPrice = lookupByQuality(policy.baseRepairPrices, input, "基础维修价");
   const repairCoefficient = exactlyOne(policy.repairCoefficients.filter((entry) => entry.partId === input.partId && entry.typeId === input.typeId), "维修系数");
-  const lossTime = exactlyOne(policy.totalLossTimes.filter((entry) => entry.pricingWeightBandId === input.pricingWeightBandId && entry.pricingBasketId === basketId && entry.partId === input.partId), "全损时间");
   const purchaseCoefficient = exactlyOne(policy.purchaseCoefficients.filter((entry) => entry.partId === input.partId && entry.typeId === input.typeId), "购买系数");
-  const partsToWhole = lookupRatio(policy.partsToWholeRatios, {
-    partId: input.partId,
-    pricingWeightBandId: input.pricingWeightBandId,
-    pricingBasketId: basketId,
-  });
+  const partsToWhole = lookupByQuality(policy.partsToWholeRatios, input, "零整比");
   if (!policy.scoreInterpolation) throw new Error("定价草稿缺少评分插值策略，无法试算。");
   const factor = interpolationFactor(
     policy.scoreInterpolation,
@@ -410,10 +409,8 @@ export function calculatePricingTrial(input: {
     value *= item.value;
     trace.push({ sequence: trace.length + 1, formulaStep, sourceRevision: policy.sourceRevision, source: item.source, before, operation: "multiply", operand: item.value, after: value, inputStatus: item.status });
   };
-  multiply("maintenanceConsumptionRate", consumption.value);
-  multiply("partAllocationRatio", allocation.value);
+  multiply("baseRepairPrice", baseRepairPrice.value);
   multiply("repairCoefficient", repairCoefficient.value);
-  multiply("totalLossTime", lossTime.value);
   multiply("scoreInterpolationFactor", { value: factor, status: policy.scoreInterpolation.status, source: policy.scoreInterpolation.source });
   const repairPriceUnrounded = value;
   multiply("purchaseCoefficient", purchaseCoefficient.value);
@@ -475,11 +472,14 @@ export function calculatePricingTrial(input: {
   const result = {
     formal,
     pricingPolicyRef: policy.id,
+    pricingModelVersion: PRICING_MODEL_VERSION,
     valueScore: input.valueScore,
+    qualityId: input.qualityId,
     pricingWeightBandId: input.pricingWeightBandId,
-    pricingBasketId: basketId,
     repairPriceUnrounded,
     purchasePriceUnrounded,
+    rodGroupPriceUnrounded: purchasePriceUnrounded,
+    parts: [{ partId: input.partId, repairPriceUnrounded, purchasePriceUnrounded }],
     purchasePrice,
     moneyUnit: policy.moneyPolicy?.unit,
     trace,

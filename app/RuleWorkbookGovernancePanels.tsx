@@ -289,12 +289,10 @@ export function QualityValuePolicyPanel({
 
 function sourceRows(draft: PricingPolicyDraft) {
   return [
-    ...draft.maintenanceConsumptionRates.map((entry) => ({ step: "maintenanceConsumptionRate", key: `${entry.pricingWeightBandId} × ${entry.pricingBasketId}`, value: entry.value })),
-    ...draft.partAllocationRatios.map((entry) => ({ step: "partAllocationRatio", key: `${entry.partId} × ${entry.pricingWeightBandId}`, value: entry.value })),
+    ...draft.baseRepairPrices.map((entry) => ({ step: "baseRepairPrice", key: `${entry.partId} × ${entry.pricingWeightBandId} × ${entry.qualityId}`, value: entry.value })),
     ...draft.repairCoefficients.map((entry) => ({ step: "repairCoefficient", key: `${entry.partId} × ${entry.typeId}`, value: entry.value })),
-    ...draft.totalLossTimes.map((entry) => ({ step: "totalLossTime", key: `${entry.partId} × ${entry.pricingWeightBandId} × ${entry.pricingBasketId}`, value: entry.value })),
     ...draft.purchaseCoefficients.map((entry) => ({ step: "purchaseCoefficient", key: `${entry.partId} × ${entry.typeId}`, value: entry.value })),
-    ...draft.partsToWholeRatios.map((entry) => ({ step: "partsToWholeRatio", key: entry.partId, value: entry.value })),
+    ...draft.partsToWholeRatios.map((entry) => ({ step: "partsToWholeRatio", key: `${entry.partId} × ${entry.pricingWeightBandId} × ${entry.qualityId}`, value: entry.value })),
   ];
 }
 
@@ -304,11 +302,11 @@ export function PricingPolicyDraftPanel({
   draft: PricingPolicyDraft;
 }) {
   const parts = [...new Set([
-    ...draft.partAllocationRatios.map((entry) => entry.partId),
+    ...draft.baseRepairPrices.map((entry) => entry.partId),
     ...draft.repairCoefficients.map((entry) => entry.partId),
   ])];
   const types = [...new Set(draft.repairCoefficients.map((entry) => entry.typeId))];
-  const bands = [...new Set(draft.maintenanceConsumptionRates.map((entry) => entry.pricingWeightBandId))];
+  const bands = [...new Set(draft.baseRepairPrices.map((entry) => entry.pricingWeightBandId))];
   const [partId, setPartId] = useState(parts[0] ?? "");
   const [typeId, setTypeId] = useState(types[0] ?? "");
   const [bandId, setBandId] = useState(bands[0] ?? "");
@@ -350,13 +348,14 @@ export function PricingPolicyDraftPanel({
         <button className="button button-default button-sm" type="button" onClick={calculate}>试算</button>
       </div>
       <div className="quality-basket-map pricing-map">
-        {draft.qualityMappings.map((mapping) => <div key={mapping.qualityId}><strong>{mapping.qualityId}</strong><ArrowRight size={13} /><span>{mapping.pricingBasketId}</span><small>{sourceLabel(mapping.source)}</small></div>)}
+        {(draft.qualityPriceFactorRanges ?? []).map((range) => <div key={range.qualityId}><strong>{range.qualityId}</strong><ArrowRight size={13} /><span>[{range.minScore},{range.maxScore}) 系数 [{range.minFactor},{range.maxFactor}]</span><small>{sourceLabel(range.source)}</small></div>)}
       </div>
       {error ? <div className="rule-inline-error"><AlertTriangle size={16} />{error}</div> : null}
       {trial ? (
         <div className="pricing-trial-result">
           <div><span>repairPrice</span><strong>{trial.repairPriceUnrounded}</strong></div>
           <div><span>purchasePrice（未舍入）</span><strong>{trial.purchasePriceUnrounded}</strong></div>
+          <div><span>竿组价（未舍入，单部位即该部位）</span><strong>{trial.rodGroupPriceUnrounded ?? trial.purchasePriceUnrounded}</strong></div>
           <div><span>正式价格</span><strong>{trial.purchasePrice ?? "不可用"}</strong><small>{trial.moneyUnit ?? "金额单位未发布"}</small></div>
           <span className="rule-badge warning">非正式 · 不得用于 Store</span>
           <div className="pricing-trace-table">

@@ -13,8 +13,8 @@ import {
   importPricingPolicyDraft,
   type PricingPolicyDraft,
   type PricingLookupEntry,
+  type QualityId,
   type QualityPriceFactorRange,
-  type QualityPricingBasketMapping,
 } from "./pricing-policy";
 import {
   importQualityValuePolicyDraft,
@@ -203,53 +203,22 @@ export function canonicalIdentityPolicies(): SourceIdentityPolicy[] {
   return [...grouped.values()];
 }
 
-const qualityIds: Record<string, QualityPricingBasketMapping["qualityId"]> = {
+const qualityIds: Record<string, QualityId> = {
   C: "quality_c_green",
   B: "quality_b_blue",
   A: "quality_a_purple",
   S: "quality_s_orange",
 };
 
-const basketIds: Record<string, string> = {
-  跑刀: "pricing_basket_fast",
-  稳健: "pricing_basket_steady",
-  猛攻: "pricing_basket_aggressive",
-};
-
 export function pricingDraftFromRanges(input: {
   sourceRevision: FeishuSourceRevision;
   qualityValues: unknown[][];
   /** Exact rows selected by the quality-table parser; avoids a second layout guess. */
-  qualitySourceRows?: Array<{ code: string; basketAlias: string; minScore: number; maxScore: number; minFactor: number; maxFactor: number; mappingCell: string; factorCell: string; rowKey: string }>;
+  qualitySourceRows?: Array<{ code: string; minScore: number; maxScore: number; minFactor: number; maxFactor: number; factorCell: string; rowKey: string }>;
   pricingValues?: unknown[][];
   typeValues?: unknown[][];
   importedAt: string;
 }): PricingPolicyDraft {
-  const qualityMappings = input.qualitySourceRows
-    ? input.qualitySourceRows.flatMap((row): QualityPricingBasketMapping[] => {
-      const qualityId = qualityIds[row.code]; const pricingBasketId = basketIds[row.basketAlias];
-      return qualityId && pricingBasketId ? [{ qualityId, pricingBasketId, sourceAlias: row.code, status: "SOURCE", source: { sheetId: QUALITY_SHEET_ID, cell: row.mappingCell, rowKey: row.rowKey } }] : [];
-    })
-    : input.qualityValues.flatMap((row, index): QualityPricingBasketMapping[] => {
-    const code = text(row[1]);
-    const basketAlias = text(row[2]);
-    const qualityId = qualityIds[code];
-    const pricingBasketId = basketIds[basketAlias];
-    if (!qualityId || !pricingBasketId) return [];
-    const sheetRow = index + 5;
-    return [{
-      qualityId,
-      pricingBasketId,
-      sourceAlias: text(row[5]) || code,
-      status: "SOURCE",
-      source: { sheetId: "FqD4j7", cell: `D${sheetRow}`, rowKey: String(sheetRow) },
-    }];
-  });
-  const pricingBaskets = Array.from(new Map(qualityMappings.map((mapping) => [mapping.pricingBasketId, {
-    id: mapping.pricingBasketId,
-    sourceAlias: Object.entries(basketIds).find(([, id]) => id === mapping.pricingBasketId)?.[0] ?? mapping.pricingBasketId,
-    source: mapping.source,
-  }])).values());
   const qualityPriceFactorRanges: QualityPriceFactorRange[] = input.qualitySourceRows
     ? input.qualitySourceRows.flatMap((row) => {
       const qualityId = qualityIds[row.code];
@@ -268,42 +237,30 @@ export function pricingDraftFromRanges(input: {
     return [{ qualityId, minScore, maxScore, maxInclusive: false, minFactor, maxFactor, status: "SOURCE", source: { sheetId: "FqD4j7", cell: `E${sheetRow}:H${sheetRow}`, rowKey: String(sheetRow) } }];
   });
   const pricingValues = input.pricingValues ?? [];
-  const maintenanceConsumptionRates: PricingLookupEntry[] = [];
-  const partAllocationRatios: PricingLookupEntry[] = [];
-  const totalLossTimes: PricingLookupEntry[] = [];
+  // WQ8w 09.2 直接给定「基础维修价」与「零整比」，按 (部位, 重量段, 品质) 索引；
+  // 旧 09.3 部件占比 / 09.4 全损时间 / PricingBasket 分组已移除，不再读取。
+  const baseRepairPrices: PricingLookupEntry[] = [];
   const partsToWholeRatios: PricingLookupEntry[] = [];
   for (let index = 13; index < pricingValues.length; index += 1) {
     const row = pricingValues[index] ?? [];
     const sheetRow = index + 10;
     const sourceValue = (value: number, cell: string) => ({ value, status: "SOURCE" as const, source: { sheetId: "u87sRh", cell, rowKey: String(sheetRow) } });
-    const maintenanceBand = text(row[0]);
-    const maintenanceBasket = basketIds[text(row[1])];
-    const maintenance = Number(row[2]);
-    if (maintenanceBand && maintenanceBasket && Number.isFinite(maintenance)) {
-      maintenanceConsumptionRates.push({ pricingWeightBandId: `weight_band:${maintenanceBand}`, pricingBasketId: maintenanceBasket, value: sourceValue(maintenance, `D${sheetRow}`) });
+    const band = text(row[0]);
+    const qualityId = qualityIds[text(row[1])];
+    if (!band || !qualityId) continue;
+    const pricingWeightBandId = `weight_band:${band}`;
+    for (const [offset, partId] of [[2, "rod"], [3, "reel"], [4, "line"]] as const) {
+      const value = Number(row[offset]);
+      if (Number.isFinite(value)) {
+        const column = String.fromCharCode("B".charCodeAt(0) + offset);
+        baseRepairPrices.push({ pricingWeightBandId, qualityId, partId, value: sourceValue(value, `${column}${sheetRow}`) });
+      }
     }
-    const allocationBand = text(row[4]);
     for (const [offset, partId] of [[5, "rod"], [6, "reel"], [7, "line"]] as const) {
       const value = Number(row[offset]);
-      if (allocationBand && Number.isFinite(value)) {
+      if (Number.isFinite(value)) {
         const column = String.fromCharCode("B".charCodeAt(0) + offset);
-        partAllocationRatios.push({ pricingWeightBandId: `weight_band:${allocationBand}`, partId, value: sourceValue(value, `${column}${sheetRow}`) });
-      }
-    }
-    const lossBand = text(row[9]);
-    const lossBasket = basketIds[text(row[10])];
-    for (const [offset, partId] of [[11, "rod"], [12, "reel"], [13, "line"]] as const) {
-      const value = Number(row[offset]);
-      if (lossBand && lossBasket && Number.isFinite(value)) {
-        const column = String.fromCharCode("B".charCodeAt(0) + offset);
-        totalLossTimes.push({ pricingWeightBandId: `weight_band:${lossBand}`, pricingBasketId: lossBasket, partId, value: sourceValue(value, `${column}${sheetRow}`) });
-      }
-    }
-    for (const [offset, partId] of [[14, "rod"], [15, "reel"], [16, "line"]] as const) {
-      const value = Number(row[offset]);
-      if (lossBand && lossBasket && Number.isFinite(value)) {
-        const column = String.fromCharCode("B".charCodeAt(0) + offset);
-        partsToWholeRatios.push({ pricingWeightBandId: `weight_band:${lossBand}`, pricingBasketId: lossBasket, partId, value: sourceValue(value, `${column}${sheetRow}`) });
+        partsToWholeRatios.push({ pricingWeightBandId, qualityId, partId, value: sourceValue(value, `${column}${sheetRow}`) });
       }
     }
   }
@@ -339,14 +296,10 @@ export function pricingDraftFromRanges(input: {
     qualitySheetId: "FqD4j7",
     typeMaterialSheetId: "fATowU",
     businessFormulaCells: [2, 3, 4, 5, 6, 7].map((row) => ({ sheetId: "u87sRh", cell: `B${row}` })),
-    pricingBaskets,
-    maintenanceConsumptionRates,
-    partAllocationRatios,
+    baseRepairPrices,
     repairCoefficients,
-    totalLossTimes,
     purchaseCoefficients,
     partsToWholeRatios,
-    qualityMappings,
     qualityPriceFactorRanges,
     scoreInterpolation: pricingValues.length ? { kind: "quality_range_linear", points: [], outOfRange: "error", status: "SOURCE", source: { sheetId: "u87sRh", cell: "B11:D11", rowKey: "11" } } : undefined,
     moneyPolicy,

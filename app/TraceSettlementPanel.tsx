@@ -31,32 +31,15 @@ function traceSourceLabel(sourceRef: CalculationTraceEntry["sourceRef"]) {
 }
 
 function actionTargetLabel(targetRef: NonNullable<CalculationTraceEntry["actions"][number]["targetRef"]>) {
-  return `${targetRef.entityType}:${targetRef.entityId} · revision ${targetRef.revisionId}`;
-}
-
-/**
- * ActionLink execution remains server-owned. This is only the existing product
- * deep-link shape, so following it can inspect the target but cannot run a command.
- */
-function readOnlyActionTargetRoute(targetRef: NonNullable<CalculationTraceEntry["actions"][number]["targetRef"]>) {
-  const params = new URLSearchParams({ page: "candidates" });
-  if (targetRef.entityType === "collection") params.append("collectionIds", targetRef.entityId);
-  else if (targetRef.entityType === "series") params.set("series", targetRef.entityId);
-  else if (targetRef.entityType === "sku_drawer") params.set("sku", targetRef.entityId);
-  else if (targetRef.entityType === "model") params.set("model", targetRef.entityId);
-  else if (targetRef.entityType === "configuration_snapshot") params.set("snapshot", targetRef.entityId);
-  else return undefined;
-  return `/?${params.toString()}`;
+  return `workspaceId=${targetRef.workspaceId} · entityType=${targetRef.entityType} · entityId=${targetRef.entityId} · revisionId=${targetRef.revisionId}`;
 }
 
 function CanonicalTraceActionLink({ action }: { action: CalculationTraceEntry["actions"][number] }) {
-  const targetRoute = action.targetRef ? readOnlyActionTargetRoute(action.targetRef) : undefined;
   return <span className="trace-action-link">
     <strong>{action.label}</strong>
     <span>动作：{action.action} · {action.enabled ? "可用" : "不可用"}</span>
     {action.targetRef ? <span>目标：<code>{actionTargetLabel(action.targetRef)}</code></span> : <span>目标：未提供</span>}
-    {action.enabled && targetRoute ? <a href={targetRoute}>查看目标（只读）</a> : null}
-    {action.enabled && action.targetRef && !targetRoute ? <span>该目标没有已注册的安全只读路由；已保留完整稳定引用。</span> : null}
+    {action.enabled && action.targetRef ? <span>精确版本只读路由尚不可用：当前没有经过服务端验证且能保留完整稳定引用的入口，因此不会导航到可能改变历史语义的当前对象。</span> : null}
   </span>;
 }
 

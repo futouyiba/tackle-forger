@@ -1981,11 +1981,13 @@ componentRatio = componentValue / vertexValue
 感度能力：
 
 ```text
-effectiveSensitivity = finalPanel.sensitivity
+effectiveSensitivity = finalComponentPanel[itemPartId].sensitivity
 sensitivityAbility = 1 / effectiveSensitivity
 ```
 
-`finalPanel.sensitivity`已经包含词条、Technology 与全部 Patch 的结算结果；不得重复叠加默认值或配置值。
+`finalComponentPanel[itemPartId].sensitivity`是竿、轮、线各自冻结的最终部件面板值，在当前
+`ConfigurationSnapshot`中由对应`componentSelections[].values.sensitivity`承载；它已经包含词条、
+Technology与全部Patch的结算结果。不得读取可变Model、顶层Model汇总值或原始配置值，也不得再次叠加默认值。
 
 操控能力：
 

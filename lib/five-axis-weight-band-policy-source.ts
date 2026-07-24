@@ -15,7 +15,7 @@ function value(row: unknown[] | undefined, column: number) {
   return String(row?.[column] ?? "").trim();
 }
 function finiteDecimal(raw: string, label: string) {
-  if (!raw || !Number.isFinite(Number(raw)) || Number(raw) <= 0) throw new Error(`FIVE_AXIS_WEIGHT_BAND_POLICY_SOURCE_INVALID：${label} 必须为正有限数。`);
+  if (!raw || !Number.isFinite(Number(raw)) || Number(raw) < 0) throw new Error(`FIVE_AXIS_WEIGHT_BAND_POLICY_SOURCE_INVALID：${label} 必须为非负有限数。`);
   return canonicalDecimal(raw);
 }
 

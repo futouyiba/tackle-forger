@@ -9,7 +9,7 @@ import { weightTemplate4837A1Ae54 as weightFixture } from "./fixtures/five-axis-
 function decidedWeightFixture() {
   const values = weightFixture();
   const ranges = [
-    ["0.1", "1.5", "微物"], ["1.5", "2.5", "小型"], ["2.5", "4", "小型"],
+    ["0", "1.5", "微物"], ["1.5", "2.5", "小型"], ["2.5", "4", "小型"],
     ["4", "5", "中型"], ["5", "6", "中型"], ["6", "7", "中型"], ["7", "10", "中型"],
     ["10", "12", "大型"], ["12", "15", "大型"], ["15", "18", "大型"], ["18", "20", "大型"],
     ["20", "30", "巨物"], ["30", "50", "巨物"], ["50", "80", "巨物"],
@@ -44,6 +44,7 @@ test("精确六段来源冻结名称/边界，并对篡改 fail-closed", async (
     { weightBandId: "W5", label: "巨物", upperBoundKg: "80" }, { weightBandId: "W6", label: "超巨物", upperBoundKg: null },
   ]);
   assert.equal(weightFixture()[17]![6], "235");
+  assert.equal(decidedWeightFixture()[2]![5], "0");
   assert.equal(policy.bands[5]!.upperBoundKg, null);
   const changedEverywhere = decidedWeightFixture();
   for (const row of [4, 22, 40]) { changedEverywhere[row]![6] = "3.9"; changedEverywhere[row + 1]![5] = "3.9"; }

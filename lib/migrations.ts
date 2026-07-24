@@ -64,7 +64,7 @@ import {
 } from "./part-constraints";
 import { deterministicHash } from "./rule-kernel";
 import { projectShareLinkHistoryEntry } from "./data-sources";
-import { createFiveAxisDispositionCatalogRevision } from "./five-axis-formal";
+import { createFiveAxisDispositionCatalogRevision, createFormalFiveAxisVertexSet } from "./five-axis-formal";
 
 export const CURRENT_WORKSPACE_SCHEMA_VERSION = 20;
 
@@ -1645,6 +1645,9 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
     version = nextVersion;
   }
 
+  const fiveAxisDefinitions = arrayOf<WorkspaceState["fiveAxisViewDefinitions"][number]>(
+    state.fiveAxisViewDefinitions,
+  );
   const existingFiveAxisGroupStates = arrayOf<NonNullable<WorkspaceState["fiveAxisVertexGroupStates"]>[number]>(
     state.fiveAxisVertexGroupStates,
   );
@@ -1669,11 +1672,31 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
         if (sources.length === 1) group.sources.push(...structuredClone(sources));
         grouped.set(identity, group);
       }
-      return [...grouped.values()].flatMap((group) => {
-        const sets = arrayOf<WorkspaceState["fiveAxisVertexSets"][number]>(state.fiveAxisVertexSets).filter((entry) => "weightBandId" in entry && entry.weightBandId === group.key.weightBandId && entry.weightBandPolicyVersion === group.key.weightBandPolicyVersion && entry.fiveAxisDefinitionId === group.key.fiveAxisDefinitionId && entry.fiveAxisDefinitionVersion === group.key.fiveAxisDefinitionVersion && entry.fiveAxisRuleVersion === group.key.fiveAxisRuleVersion);
-        if (sets.length !== 1) return [];
+      return [...grouped.values()].map<import("./types").FiveAxisVertexGroupState>((group) => {
+        const definition = fiveAxisDefinitions.find((entry) => "semanticContractVersion" in entry && entry.definitionId === group.key.fiveAxisDefinitionId && entry.version === group.key.fiveAxisDefinitionVersion);
+        if (!definition) throw new Error("FIVE_AXIS_MIGRATION_DEFINITION_UNRESOLVED：当前 Snapshot 的正式五维定义无法唯一回读。");
+        let rebuilt: import("./types").FiveAxisVertexSet;
+        try {
+          rebuilt = createFormalFiveAxisVertexSet({ definition: definition as import("./types").FiveAxisViewDefinition, groupKey: group.key, candidateSources: group.sources });
+        } catch {
+          throw new Error("FIVE_AXIS_MIGRATION_CANDIDATE_INVALID：当前 Snapshot 候选无法重放正式顶点。");
+        }
+        const sets = arrayOf<WorkspaceState["fiveAxisVertexSets"][number]>(state.fiveAxisVertexSets).filter((entry) => "weightBandId" in entry && entry.vertexSetHash === rebuilt.vertexSetHash && entry.candidateSetHash === rebuilt.candidateSetHash && entry.candidateEvidenceHash === rebuilt.candidateEvidenceHash);
+        if (sets.length !== 1) {
+          return {
+            groupKey: group.key,
+            state: "UNAVAILABLE_NO_ELIGIBLE_CANDIDATE" as const,
+            candidateSources: group.sources,
+            candidateSetHash: rebuilt.candidateSetHash,
+            candidateEvidenceHash: rebuilt.candidateEvidenceHash,
+            currentVertexSetId: null,
+            currentVertexSetHash: null,
+            missingAxisIds: [],
+            reasonCode: "FIVE_AXIS_MIGRATION_VERTEX_SET_UNRESOLVED",
+          };
+        }
         const set = sets[0] as import("./types").FiveAxisVertexSet;
-        return [{ groupKey: group.key, state: "AVAILABLE" as const, candidateSources: group.sources, candidateSetHash: set.candidateSetHash, candidateEvidenceHash: set.candidateEvidenceHash, currentVertexSetId: set.vertexSetId, currentVertexSetHash: set.vertexSetHash, missingAxisIds: [], reasonCode: null }];
+        return { groupKey: group.key, state: "AVAILABLE" as const, candidateSources: group.sources, candidateSetHash: set.candidateSetHash, candidateEvidenceHash: set.candidateEvidenceHash, currentVertexSetId: set.vertexSetId, currentVertexSetHash: set.vertexSetHash, missingAxisIds: [], reasonCode: null };
       });
     })();
   state = {
@@ -1700,9 +1723,6 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
       : emptyPatchLedger(),
     configIdGovernance: migrateConfigIdGovernanceState(state.configIdGovernance),
   };
-  const fiveAxisDefinitions = arrayOf<WorkspaceState["fiveAxisViewDefinitions"][number]>(
-    state.fiveAxisViewDefinitions,
-  );
   const dispositionMigration = createFiveAxisDispositionCatalogRevision({
     definitions: fiveAxisDefinitions,
     existingRevisions: arrayOf<WorkspaceState["fiveAxisDispositionCatalogRevisions"][number]>(

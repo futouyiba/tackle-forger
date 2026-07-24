@@ -23,7 +23,8 @@ import {
 } from "../lib/part-constraints";
 import { createSeedState } from "../lib/seed";
 import { ensureWorkflowFields } from "../lib/workflow";
-import { createFormalFiveAxisViewDefinition } from "../lib/five-axis-formal";
+import { createFormalFiveAxisVertexSet, createFormalFiveAxisViewDefinition } from "../lib/five-axis-formal";
+import { hashCandidateSemanticInput } from "../lib/five-axis-hash";
 
 function legacyV17ForPartConstraintMigration(): Record<string, unknown> {
   const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
@@ -1076,7 +1077,9 @@ test("旧正式五维状态只从 published Model 的当前 Snapshot 指针确�
   model.status = "published";
   model.configurationSnapshotId = "snapshot:formal-current";
   const groupKey = { weightBandId: "W1", weightBandPolicyVersion: definition.weightBandPolicyVersion, fiveAxisDefinitionId: definition.definitionId, fiveAxisDefinitionVersion: definition.version, fiveAxisRuleVersion: definition.fiveAxisRuleVersion };
-  const source = { candidateSemanticKey: { modelId: String(model.id), componentEntityId: "rod:current", itemPartId: "part:rod" }, snapshotId: "snapshot:formal-current", modelRevisionId: `${model.id}@${modelRevision}`, finalPanelHash: "a".repeat(64), modelFinalPullKg: "1", directInputs: [], semanticInputHash: "b".repeat(64) };
+  const directInputs = definition.axes.map((axis) => ({ axisId: axis.axisId, parameterKey: axis.sourceParameterKeys[0]!, rawValue: "1", unit: "unit", inputHash: "b".repeat(64) }));
+  const semantic = hashCandidateSemanticInput({ finalPanelHash: "a".repeat(64), modelFinalPullKg: "1", directInputs: directInputs.map((entry, axisOrder) => ({ ...entry, axisOrder })) });
+  const source = { candidateSemanticKey: { modelId: String(model.id), componentEntityId: "rod:current", itemPartId: "part:rod" }, snapshotId: "snapshot:formal-current", modelRevisionId: `${model.id}@${modelRevision}`, finalPanelHash: "a".repeat(64), modelFinalPullKg: "1", directInputs, semanticInputHash: semantic.hash };
   const retiredModel = { ...structuredClone(model), id: "model:retired-history", status: "superseded", configurationSnapshotId: "snapshot:retired-history" };
   const retiredSource = { ...source, candidateSemanticKey: { ...source.candidateSemanticKey, modelId: retiredModel.id, componentEntityId: "rod:retired" }, snapshotId: retiredModel.configurationSnapshotId, modelRevisionId: `${retiredModel.id}@${modelRevision}` };
   const preview = { modelId: model.id, weightBandId: "W1", weightBandPolicyVersion: definition.weightBandPolicyVersion, fiveAxisDefinitionId: definition.definitionId, fiveAxisDefinitionVersion: definition.version, fiveAxisRuleVersion: definition.fiveAxisRuleVersion, candidateSources: [source] };
@@ -1089,7 +1092,7 @@ test("旧正式五维状态只从 published Model 的当前 Snapshot 指针确�
   legacy.fiveAxisViewDefinitions = [definition];
   legacy.fiveAxisDispositionCatalogRevisions = [];
   legacy.currentFiveAxisDispositionCatalogRevisionId = null;
-  const vertex = { vertexSetId: "vertex:current", ...groupKey, hashInputSchemaVersion: "five-axis-hash-input/v1", candidateSources: [source], candidateSetHash: "c".repeat(64), candidateEvidenceHash: "d".repeat(64), vertices: [], vertexSetHash: "e".repeat(64) };
+  const vertex = { ...createFormalFiveAxisVertexSet({ definition, groupKey, candidateSources: [source] }), vertexSetId: "vertex:current" };
   legacy.fiveAxisVertexSets = [vertex];
   delete legacy.fiveAxisVertexGroupStates;
   const migrated = migrateWorkspaceState(legacy);
@@ -1103,5 +1106,8 @@ test("旧正式五维状态只从 published Model 的当前 Snapshot 指针确�
   (reversed.fiveAxisVertexSets as unknown[]).reverse();
   assert.deepEqual(migrateWorkspaceState(reversed).fiveAxisVertexGroupStates, migrated.fiveAxisVertexGroupStates);
   const ambiguous = structuredClone(legacy); (ambiguous.fiveAxisVertexSets as unknown[]).push({ ...vertex, vertexSetId: "vertex:ambiguous" });
-  assert.deepEqual(migrateWorkspaceState(ambiguous).fiveAxisVertexGroupStates, []);
+  const blocked = migrateWorkspaceState(ambiguous).fiveAxisVertexGroupStates?.[0];
+  assert.equal(blocked?.state, "UNAVAILABLE_NO_ELIGIBLE_CANDIDATE");
+  assert.equal(blocked?.reasonCode, "FIVE_AXIS_MIGRATION_VERTEX_SET_UNRESOLVED");
+  assert.equal(blocked?.currentVertexSetId, null);
 });

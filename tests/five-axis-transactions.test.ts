@@ -577,6 +577,7 @@ test("混合比较实体只读取冻结 Snapshot 的部件值与 Model revision"
   const draft = structuredClone(model);
   draft.revision += 1;
   draft.componentSelections[0].values.drag = 999;
+  draft.componentSelections[0].values.sensitivity = 99;
   const entity = buildFormalFiveAxisEntityFromSnapshot({
     snapshot,
     itemPartId: component.itemPartId,
@@ -593,6 +594,21 @@ test("混合比较实体只读取冻结 Snapshot 的部件值与 Model revision"
     modelName: draft.name,
   })!;
   assert.notEqual(entity.entityId, historicalEntity.entityId);
+
+  const effectiveSensitivityEntity = buildFormalFiveAxisEntityFromSnapshot({
+    snapshot: {
+      ...snapshot,
+      componentSelections: snapshot.componentSelections.map((entry) =>
+        entry.itemPartId === component.itemPartId
+          ? { ...entry, values: { ...entry.values, sensitivity: 0.75 } }
+          : entry),
+    },
+    itemPartId: component.itemPartId,
+    weightBandId: "W1",
+    modelName: draft.name,
+  })!;
+  assert.equal(effectiveSensitivityEntity.values.sensitivity, 0.75);
+  assert.notEqual(effectiveSensitivityEntity.values.sensitivity, 99);
 });
 
 test("SnapshotBuild 缺必需顶点时整分量回滚；纯 Lifecycle 移除则原子进入不可用", () => {

@@ -35,6 +35,7 @@
 - 每个需要本机飞书认证的 worktree 使用其根目录的`.env.local`软链接指向该共享文件。新 worktree 尚不存在`.env.local`时，执行：`ln -s /Users/songfu/.config/tackle-forger/.env.local /path/to/worktree/.env.local`。
 - 如果目标 worktree 已有常规文件或其他软链接，先只读检查目标与来源，再由用户明确授权迁移、替换或保留；不得以链接命令覆盖现有凭据文件。
 - 共享凭据只用于本机验收，不构成部署配置。飞书`FEISHU_REDIRECT_URI`必须与开放平台登记值逐字一致，并遵循`docs/deployment/feishu-enterprise-login.md`的HTTPS/私网HTTP边界。
+- 需要真实本机 Chrome 验收时，先确认本 worktree 的`.env.local`软链接存在，再从该 worktree 根目录以`NODE_ENV=development node --env-file=.env.local node_modules/vinext/dist/cli.js start --hostname 127.0.0.1 --port <已登记端口>`启动；浏览器只访问同一数值 loopback origin。不得把凭据复制到命令、日志或另一个`.env.local`文件。完整流程、端口冲突和`AUTH-*`诊断见`docs/development/local-authenticated-worktree.md`。
 
 ## GitHub合并门禁
 

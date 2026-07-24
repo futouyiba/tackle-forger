@@ -45,7 +45,7 @@ export type CapabilityCode =
   | "rules.five_axis.publish" | "workspace.policy.manage" | "workspace.save";
 
 export type ActionCode =
-  | "open_series" | "create_series" | "open_sku" | "change_sku_target_pull" | "preview_model"
+  | "open_series" | "create_series" | "update_series_core_affixes" | "open_sku" | "change_sku_target_pull" | "preview_model"
   | "edit" | "review" | "publish" | "generate_candidates" | "materialize_candidates"
   | "override_candidate_selection" | "select_candidate" | "dismiss_candidate_run"
   | "create_patch" | "review_patch" | "rebase_patch"
@@ -70,7 +70,7 @@ export type ActionCode =
   | "publish_five_axis_definition" | "manage_workspace_policy" | "save_workspace";
 
 export const ACTION_CODES = [
-  "open_series", "create_series", "open_sku", "change_sku_target_pull", "preview_model",
+  "open_series", "create_series", "update_series_core_affixes", "open_sku", "change_sku_target_pull", "preview_model",
   "edit", "review", "publish",
   "generate_candidates", "materialize_candidates", "override_candidate_selection",
   "select_candidate", "dismiss_candidate_run",
@@ -621,6 +621,7 @@ export type ActionAvailabilityMap = Record<ActionCode, ActionAvailability>;
 const ACTION_CAPABILITIES = {
   open_series: ["series.read"],
   create_series: ["series.edit"],
+  update_series_core_affixes: ["series.edit"],
   open_sku: ["sku.read"],
   change_sku_target_pull: ["sku.edit"],
   preview_model: ["model.read"],

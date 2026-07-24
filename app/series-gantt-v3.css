@@ -857,6 +857,25 @@
   padding: 12px;
 }
 
+.gantt-affix-picker {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+}
+
+.gantt-affix-picker legend { color: var(--muted); font-size: 12px; font-weight: 700; padding: 0 6px; }
+.gantt-affix-picker > p { color: var(--muted); font-size: 12px; margin: 0; }
+.gantt-affix-options { display: grid; gap: 5px; grid-template-columns: repeat(2, minmax(0, 1fr)); max-height: 220px; overflow: auto; }
+.gantt-affix-options label { align-items: flex-start; border: 1px solid var(--line); border-radius: 7px; cursor: pointer; display: flex; gap: 7px; padding: 7px; }
+.gantt-affix-options label:has(input:disabled) { cursor: not-allowed; opacity: .62; }
+.gantt-affix-options span { display: grid; gap: 2px; min-width: 0; }
+.gantt-affix-options b { font-size: 12px; overflow-wrap: anywhere; }
+.gantt-affix-options small { color: var(--muted); font-size: 11px; }
+.gantt-series-affix-summary { align-items: baseline; background: var(--surface-subtle); border: 1px solid var(--line); border-radius: 8px; display: flex; flex-wrap: wrap; gap: 8px 14px; margin-top: 12px; padding: 9px 11px; }
+.gantt-series-affix-summary span { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+
 .gantt-create-dialog > footer {
   align-items: center;
   border-top: 1px solid var(--line);
@@ -1305,6 +1324,7 @@
   .gantt-create-grid .span-2 {
     grid-column: auto;
   }
+  .gantt-affix-options { grid-template-columns: 1fr; }
   .gantt-ai-disabled > dl,
   .gantt-ai-diff-grid,
   .gantt-ai-rule-target > div {

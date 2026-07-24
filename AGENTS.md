@@ -29,6 +29,13 @@
 - 保留并迁移现有数据，不通过删除历史状态简化实现。
 - 新增领域行为必须补测试；至少覆盖正常路径、边界、冲突和版本冻结。
 
+## 本机凭据与多 worktree
+
+- 本机开发的忽略凭据文件统一存放于`/Users/songfu/.config/tackle-forger/.env.local`；目录权限必须为`700`，文件权限必须为`600`。不得读取、回显、提交或复制其中的值到仓库、日志、Issue、PR、截图或聊天记录。
+- 每个需要本机飞书认证的 worktree 使用其根目录的`.env.local`软链接指向该共享文件。新 worktree 尚不存在`.env.local`时，执行：`ln -s /Users/songfu/.config/tackle-forger/.env.local /path/to/worktree/.env.local`。
+- 如果目标 worktree 已有常规文件或其他软链接，先只读检查目标与来源，再由用户明确授权迁移、替换或保留；不得以链接命令覆盖现有凭据文件。
+- 共享凭据只用于本机验收，不构成部署配置。飞书`FEISHU_REDIRECT_URI`必须与开放平台登记值逐字一致，并遵循`docs/deployment/feishu-enterprise-login.md`的HTTPS/私网HTTP边界。
+
 ## GitHub合并门禁
 
 - 当前不配置GitHub Ruleset、分支保护、required check或额外status context；合并门禁由首个有权限的

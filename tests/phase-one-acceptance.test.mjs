@@ -322,6 +322,7 @@ test("公网 HTTP 与带凭据 base URL 在出网前拒绝", async () => {
       baseUrl: "http://127.0.0.1",
       allowPrivateHttp: true,
       env: smokeEnv({
+        NODE_ENV: "development",
         FEISHU_ALLOW_INSECURE_HTTP: "true",
         FEISHU_REDIRECT_URI: "http://127.0.0.1/api/auth/feishu/callback",
       }),

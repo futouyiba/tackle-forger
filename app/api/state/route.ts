@@ -15,6 +15,8 @@ import {
   changesOnlyReadOnlyLegacyHistory,
   findGovernedStateChanges,
   findReadOnlyLegacyProductChanges,
+  governedStateFieldDetails,
+  preserveServerManagedWorkspaceMetadata,
   stableAuditActor,
 } from "@/lib/api-command-boundaries";
 import {
@@ -23,6 +25,20 @@ import {
 } from "@/lib/config-id-governance";
 
 export const dynamic = "force-dynamic";
+
+export function saveWorkspaceForbiddenResponse(saveAvailability: {
+  enabled: boolean;
+  disabledReasonText?: string;
+}) {
+  if (saveAvailability.enabled) return undefined;
+  return {
+    status: 403,
+    body: {
+      error: saveAvailability.disabledReasonText ?? "当前账号没有保存工作区的权限。",
+      actionAvailability: saveAvailability,
+    },
+  };
+}
 
 function commandErrorStatus(error: ActionCommandPayloadError): number {
   if (error.code === "ACTION_COMMAND_PAYLOAD_NOT_FOUND") return 404;
@@ -57,10 +73,11 @@ export async function PUT(request: NextRequest) {
     );
   }
   const saveAvailability = user.actionAvailability.save_workspace;
-  if (!saveAvailability.enabled) {
+  const forbidden = saveWorkspaceForbiddenResponse(saveAvailability);
+  if (forbidden) {
     return NextResponse.json(
-      { error: saveAvailability.disabledReasonText ?? "当前账号没有保存工作区的权限。", actionAvailability: saveAvailability },
-      { status: 403 },
+      forbidden.body,
+      { status: forbidden.status },
     );
   }
   const invocation = await request.json().catch(() => null);
@@ -96,28 +113,43 @@ export async function PUT(request: NextRequest) {
             },
           };
         }
+        // `revisions` is server-maintained response metadata. Project it from
+        // the authoritative current state so a second tab cannot be rejected
+        // merely for carrying an older list, nor forge workspace history.
+        const proposedWithServerMetadata = preserveServerManagedWorkspaceMetadata(
+          current.state,
+          proposed,
+        );
         try {
-          assertFrozenConfigIdentityTransition(current.state, proposed);
+          assertFrozenConfigIdentityTransition(current.state, proposedWithServerMetadata);
         } catch (error) {
           if (error instanceof ConfigIdGovernanceError) {
+            const frozenField = error.code === "PUBLISHED_CONFIGURATION_SNAPSHOT_FROZEN"
+              ? "configurationSnapshots"
+              : error.code === "MODEL_CONFIG_IDENTITY_FROZEN"
+                ? "purchasableModels"
+                : "configIdGovernance";
             return {
               status: 422,
               body: {
                 error: error.message,
                 code: error.code,
                 details: error.details,
+                governedChanges: [frozenField],
+                governedFields: governedStateFieldDetails([frozenField]),
               },
             };
           }
           throw error;
         }
-        const governedChanges = findGovernedStateChanges(current.state, proposed);
+        const governedChanges = findGovernedStateChanges(current.state, proposedWithServerMetadata);
         if (governedChanges.length) {
           const legacyHistoryChanges = findReadOnlyLegacyProductChanges(
             current.state,
-            proposed,
+            proposedWithServerMetadata,
           );
           const legacyHistoryOnly = changesOnlyReadOnlyLegacyHistory(governedChanges);
+          const governedFields = governedStateFieldDetails(governedChanges);
           return {
             status: 422,
             body: {
@@ -128,12 +160,13 @@ export async function PUT(request: NextRequest) {
                 ? "LEGACY_HISTORY_READ_ONLY"
                 : "DOMAIN_COMMAND_REQUIRED",
               governedChanges,
+              governedFields,
               legacyHistoryChanges,
             },
           };
         }
         const result = await saveWorkspaceState({
-          state: proposed,
+          state: proposedWithServerMetadata,
           baseRevision: body.baseRevision,
           author: stableAuditActor(user),
           message: typeof body.message === "string" && body.message.trim()

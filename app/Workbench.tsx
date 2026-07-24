@@ -38,7 +38,7 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RuleGraphStudio } from "./RuleGraphStudio";
 import { V3FlowWorkbench } from "./V3FlowWorkbench";
 import { BrowserConfigExportWorkbench as ConfigExportWorkbench } from "./BrowserConfigExportWorkbench";
@@ -58,6 +58,7 @@ import {
 import { ensureWorkflowFields } from "@/lib/workflow";
 import { validationIssueLevel } from "@/lib/validation-issues";
 import { migrateWorkspaceState } from "@/lib/migrations";
+import { mergeWorkspaceConflict } from "@/lib/workspace-conflict-merge";
 import {
   isProductItemPartEnabled,
   seriesItemPartId,
@@ -495,8 +496,20 @@ function copyState<T>(value: T): T {
   return structuredClone(value);
 }
 
+type SaveFeedback = {
+  kind: "governed" | "conflict" | "error";
+  message: string;
+  fields?: Array<{ field: string; actionLabel?: string }>;
+  revision?: number;
+  baselineRefreshed?: boolean;
+  conflictFields?: string[];
+};
+
 export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   const [state, setState] = useState<WorkspaceState>(() => ensureWorkflowFields(initialState));
+  const conflictDraftRef = useRef<WorkspaceState | null>(null);
+  const conflictLatestRef = useRef<WorkspaceState | null>(null);
+  const baselineStateRef = useRef<WorkspaceState>(ensureWorkflowFields(initialState));
   const [page, setPage] = useState<PageKey>("overview");
   const [pageRouteReady, setPageRouteReady] = useState(false);
   const [routeNonce, setRouteNonce] = useState(0);
@@ -513,17 +526,33 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   const [authMessage, setAuthMessage] = useState("");
   const [authErrorCode, setAuthErrorCode] = useState("");
   const [dirty, setDirty] = useState(false);
+  const [syncState, setSyncState] = useState<"ready" | "saving" | "saved" | "error">("ready");
+  const [saveFeedback, setSaveFeedback] = useState<SaveFeedback | null>(null);
   const workspaceFreshnessRef = useRef({ dirty: false, revision: 1 });
-  const markWorkspaceDirty = () => {
+  const markWorkspaceDirty = useCallback(() => {
     workspaceFreshnessRef.current = { ...workspaceFreshnessRef.current, dirty: true };
     setDirty(true);
-  };
-  const applyWorkspaceRevision = (nextRevision: number) => {
+  }, []);
+  const applyWorkspaceRevision = useCallback((nextRevision: number) => {
     workspaceFreshnessRef.current = { dirty: false, revision: nextRevision };
     setRevision(nextRevision);
     setDirty(false);
-  };
-  const [syncState, setSyncState] = useState<"ready" | "saving" | "saved" | "error">("ready");
+  }, []);
+  /**
+   * Domain commands return the new authoritative workspace, not a local draft.
+   * Keep every conflict/revision baseline in lockstep so a later 409 compares
+   * against the command result rather than a state from before that command.
+   */
+  const replaceAuthoritativeWorkspace = useCallback((nextState: WorkspaceState, nextRevision: number) => {
+    const normalized = ensureWorkflowFields(nextState);
+    setState(normalized);
+    baselineStateRef.current = copyState(normalized);
+    conflictDraftRef.current = null;
+    conflictLatestRef.current = null;
+    applyWorkspaceRevision(nextRevision);
+    setSaveFeedback(null);
+    setSyncState("saved");
+  }, [applyWorkspaceRevision]);
   const [toast, setToast] = useState("");
   const [search, setSearch] = useState("");
   const [itemKind, setItemKind] = useState<ItemKind>("rod");
@@ -577,6 +606,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     });
     markWorkspaceDirty();
     setSyncState("ready");
+    setSaveFeedback(null);
   };
 
   const notify = (message: string) => {
@@ -626,8 +656,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         const stateResponse = await fetch("/api/state", { cache: "no-store" });
         if (!stateResponse.ok) throw new Error("state-service");
         const payload = await stateResponse.json() as ApiStatePayload;
-        setState(ensureWorkflowFields(payload.state));
-        applyWorkspaceRevision(payload.revision);
+        replaceAuthoritativeWorkspace(payload.state, payload.revision);
         setUser(payload.user);
         setAuthStatus("authenticated"); setAuthMessage(""); setAuthErrorCode("");
         void fetch("/api/revisions", { cache: "no-store" })
@@ -646,7 +675,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     return () => {
       active = false;
     };
-  }, []);
+  }, [replaceAuthoritativeWorkspace]);
 
   const save = async (message = "保存配置修改") => {
     const saveAvailability = user.actionAvailability.save_workspace;
@@ -655,6 +684,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       return;
     }
     setSyncState("saving");
+    setSaveFeedback(null);
     try {
       const idempotencyKey = `save-workspace:${revision}:${crypto.randomUUID()}`;
       const invocation = await issueClientActionCommand({
@@ -667,16 +697,98 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify(invocation),
       });
-      const payload = (await response.json()) as { revision?: number; error?: string };
-      if (!response.ok) throw new Error(payload.error || "保存失败");
+      const payload = (await response.json()) as {
+        revision?: number; error?: string; code?: string; governedFields?: Array<{ field: string; actionLabel?: string }>;
+      };
+      if (!response.ok) {
+        if (response.status === 409) {
+          setSaveFeedback({
+            kind: "conflict", message: payload.error || "其他成员已保存新版本。",
+            revision: payload.revision,
+          });
+        } else if (response.status === 422 && payload.governedFields?.length) {
+          setSaveFeedback({
+            kind: "governed", message: payload.error || "这些字段必须通过领域动作修改。",
+            fields: payload.governedFields,
+          });
+        } else {
+          setSaveFeedback({ kind: "error", message: payload.error || "保存失败" });
+        }
+        throw new Error(payload.error || "保存失败");
+      }
+      baselineStateRef.current = copyState(state);
       applyWorkspaceRevision(payload.revision ?? revision + 1);
       setSyncState("saved");
+      setSaveFeedback(null);
       notify("已保存为版本 v" + (payload.revision ?? revision + 1));
       void loadVersions();
     } catch (error) {
       setSyncState("error");
       notify(error instanceof Error ? error.message : "保存失败");
     }
+  };
+
+  /**
+   * A stale save cannot succeed by retrying the same payload. Compare the
+   * retained baseline, local draft and fresh server state; only local-only
+   * ordinary fields replay automatically. Same-field edits need a choice.
+   */
+  const refreshConflictBaseline = async () => {
+    conflictDraftRef.current = copyState(state);
+    try {
+      const response = await fetch("/api/state", { cache: "no-store" });
+      if (!response.ok) throw new Error("无法读取最新团队版本。");
+      const payload = await response.json() as ApiStatePayload;
+      const latest = ensureWorkflowFields(payload.state);
+      const draft = conflictDraftRef.current;
+      if (!draft) throw new Error("本地草稿已不可用，请重新检查冲突。");
+      const merged = mergeWorkspaceConflict({
+        baseline: baselineStateRef.current,
+        draft,
+        latest,
+      });
+      conflictLatestRef.current = latest;
+      setState(merged.state);
+      baselineStateRef.current = latest;
+      applyWorkspaceRevision(payload.revision);
+      setUser(payload.user);
+      if (merged.replayedLocalFields.length > 0) markWorkspaceDirty();
+      setSyncState("ready");
+      setSaveFeedback({
+        kind: "conflict", baselineRefreshed: true, revision: payload.revision,
+        conflictFields: merged.conflicts,
+        message: merged.conflicts.length
+          ? "已合并仅本地字段；同字段远端更改保留服务器版本，请逐项选择是否采用本地值。"
+          : "已合并仅本地字段并载入最新团队版本；尚未自动保存。",
+      });
+    } catch (error) {
+      setSaveFeedback({ kind: "error", message: error instanceof Error ? error.message : "无法读取最新团队版本。" });
+    }
+  };
+
+  const applyLocalConflictField = (field: string) => {
+    const draft = conflictDraftRef.current;
+    if (!draft || !conflictLatestRef.current) return;
+    setState((current) => ({
+      ...current,
+      [field]: structuredClone((draft as unknown as Record<string, unknown>)[field]),
+    }) as WorkspaceState);
+    markWorkspaceDirty();
+    setSyncState("ready");
+    setSaveFeedback((current) => current && current.kind === "conflict" ? {
+      ...current,
+      conflictFields: current.conflictFields?.filter((item) => item !== field),
+      message: "已采用所选本地字段，尚未保存。其余远端值仍保持最新版本。",
+    } : current);
+  };
+
+  const pageForGovernedField = (field: string): PageKey => {
+    if (field === "seriesDefinitions" || field === "skuDrawers" || field === "purchasableModels") return "candidates";
+    if (field === "patchLedger" || field.startsWith("patch")) return "patchledger";
+    if (field === "configurationSnapshots" || field === "derivedProjections" || field === "projectionMatches") return "v3flow";
+    if (field.includes("Source") || field.includes("Policy") || field === "ruleSetVersions") return "rulesource";
+    if (["recipes", "candidates", "officialSkus", "detailOverrides"].includes(field)) return field === "officialSkus" ? "skus" : field as PageKey;
+    return "versions";
   };
 
   const updateDataSource = (
@@ -835,9 +947,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       if (!response.ok || !payload.state || !payload.revision) {
         throw new Error(payload.error || "发布失败");
       }
-      setState(ensureWorkflowFields(payload.state));
-      applyWorkspaceRevision(payload.revision);
-      setSyncState("saved");
+      replaceAuthoritativeWorkspace(payload.state, payload.revision);
       setSourcePreview(null);
       notify("数据源已发布为正式版本 v" + payload.revision);
       void loadVersions();
@@ -927,9 +1037,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       if (!response.ok || !payload.state || !payload.revision) {
         throw new Error(payload.error || "回写失败");
       }
-      setState(ensureWorkflowFields(payload.state));
-      applyWorkspaceRevision(payload.revision);
-      setSyncState("saved");
+      replaceAuthoritativeWorkspace(payload.state, payload.revision);
       setWritebackPreview(null);
       notify("已安全回写飞书，并保存审计版本 v" + payload.revision);
       void loadVersions();
@@ -3077,9 +3185,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       actorName={user.name}
       notify={notify}
       onWorkspaceApplied={(nextState, nextRevision, message) => {
-        setState(ensureWorkflowFields(nextState));
-        applyWorkspaceRevision(nextRevision);
-        setSyncState("saved");
+        replaceAuthoritativeWorkspace(nextState, nextRevision);
         notify(message);
         void loadVersions();
       }}
@@ -3232,9 +3338,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           workspaceFreshness={() => workspaceFreshnessRef.current}
           notify={notify}
           onWorkspaceApplied={(nextState, nextRevision, message) => {
-            setState(ensureWorkflowFields(nextState));
-            applyWorkspaceRevision(nextRevision);
-            setSyncState("saved");
+            replaceAuthoritativeWorkspace(nextState, nextRevision);
             notify(message);
             void loadVersions();
           }}
@@ -3255,7 +3359,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     if (page === "validation") return renderValidation();
     if (page === "versions") return renderVersions();
     if (page === "rulesource") return renderRuleSource();
-    if (page === "patchledger") return <PatchLedgerWorkbench state={state} revision={revision} dirty={dirty} getWorkspaceFreshness={()=>workspaceFreshnessRef.current} capabilities={user.capabilities} actorName={user.name} mutate={mutate} notify={notify} replaceWorkspace={(next,nextRevision)=>{setState(ensureWorkflowFields(next));applyWorkspaceRevision(nextRevision);setSyncState("saved");}} />;
+    if (page === "patchledger") return <PatchLedgerWorkbench state={state} revision={revision} dirty={dirty} getWorkspaceFreshness={()=>workspaceFreshnessRef.current} capabilities={user.capabilities} actorName={user.name} mutate={mutate} notify={notify} replaceWorkspace={replaceAuthoritativeWorkspace} />;
     return renderExchange();
   };
 
@@ -3416,6 +3520,27 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
             </Button>
           </div>
         </header>
+        {saveFeedback ? (
+          <section className={cx("save-feedback", saveFeedback.kind)} role="alert" aria-live="assertive">
+            <div>
+              <strong>{saveFeedback.kind === "conflict" ? "保存冲突：本地输入仍未丢失" : "保存未完成"}</strong>
+              <p>{saveFeedback.message}</p>
+              {saveFeedback.kind === "conflict" ? <small>同一份过期请求无法靠重试成功；刷新后只会自动重放仅本地更改，双方同改字段须逐项选择。</small> : null}
+            </div>
+            <div className="save-feedback-actions">
+              {saveFeedback.fields?.map((entry) => (
+                <button type="button" key={entry.field} onClick={() => setPage(pageForGovernedField(entry.field))}>
+                  {entry.field}：{entry.actionLabel ?? "查看领域动作"}
+                </button>
+              ))}
+              {saveFeedback.kind === "conflict" ? <button type="button" onClick={() => setPage("versions")}>查看版本记录{saveFeedback.revision ? `（v${saveFeedback.revision}）` : ""}</button> : null}
+              {saveFeedback.kind === "conflict" && !saveFeedback.baselineRefreshed ? <button type="button" onClick={() => void refreshConflictBaseline()}>刷新最新基线（保留本地草稿）</button> : null}
+              {saveFeedback.kind === "conflict" && saveFeedback.baselineRefreshed ? saveFeedback.conflictFields?.map((field) => <button type="button" key={field} onClick={() => applyLocalConflictField(field)}>采用本地 {field}</button>) : null}
+              {saveFeedback.kind !== "conflict" ? <button type="button" onClick={() => void save()}>重试保存</button> : null}
+              <button type="button" aria-label="关闭保存提示" onClick={() => setSaveFeedback(null)}><X size={16} /></button>
+            </div>
+          </section>
+        ) : null}
         <div className="content">
           {renderPage()}
         </div>

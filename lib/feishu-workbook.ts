@@ -146,8 +146,10 @@ export const NEW_CANONICAL_FEISHU_WORKBOOK: FeishuWorkbookRef = {
  *   钓法类型、类型材质、功能定位、FunctionProfile 常量、词条、技术、系列、品质评分、
  *   价格计算（公式/参数释义/维修消耗速度）、校验规则（枚举/竿组/竿/轮/线）；
  * - `historical_reference`：00_系统接入、02.5/03.5/04.5 派生模板镜像（StructuralBenchmark/
- *   DerivedProjection 派生审核镜像，只读，不得作为可导入/可提案规则源）、12.x 组合SKU 样例、13 打包竿组；
- * - `staging_output`：09.3/09.4 空定价表、15-18 配置表 schema、19_Patch台账空镜像（均源数据待补/暂存）；
+ *   DerivedProjection 派生审核镜像，只读，不得作为可导入/可提案规则源）、13 打包竿组；
+ * - `staging_output`：09.3/09.4 空定价表、12.x 组合SKU 输出表（#143 结构化评估：竿ID/型号/
+ *   评分/品质/拉力，第一列非「机器ID（勿改）」，是输出而非规则/历史参考）、15-18 配置表 schema、
+ *   19_Patch台账空镜像（均输出/源数据待补，不得作为可导入规则源或历史参考消费）；
  * - `development_plan`：10 钓具甘特图示意；`publish_control`：14 上传发布。
  *
  * 全部 `canOverwriteDomainTruth=false`；`sheetId` 全局唯一（由 `validateFeishuWorkbookConfiguration` 校验）。
@@ -193,9 +195,9 @@ export const NEW_CANONICAL_FEISHU_SHEET_REGISTRY: FeishuSheetRegistryEntry[] = [
   ["39IhAP", "11.2_校验规则-竿", "rule_source", true, true],
   ["40RwxO", "11.3_校验规则-轮", "rule_source", true, true],
   ["41CgUB", "11.4_校验规则-线", "rule_source", true, true],
-  ["42ACks", "12.0_组合SKU-竿", "historical_reference", false, false],
-  ["43dYFE", "12.1_组合SKU-轮", "historical_reference", false, false],
-  ["44YIZT", "12.2_组合SKU-线", "historical_reference", false, false],
+  ["42ACks", "12.0_组合SKU-竿", "staging_output", false, false],
+  ["43dYFE", "12.1_组合SKU-轮", "staging_output", false, false],
+  ["44YIZT", "12.2_组合SKU-线", "staging_output", false, false],
   ["45qauz", "13_打包竿组", "historical_reference", false, false],
   ["46ogtj", "14_上传发布", "publish_control", false, false],
   ["47PfUw", "15_Rods", "staging_output", false, false],

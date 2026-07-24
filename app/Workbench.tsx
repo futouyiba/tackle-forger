@@ -576,6 +576,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   const [sourceAction, setSourceAction] = useState<
     "" | "resolve" | "preview" | "publish" | "writeback-preview" | "writeback"
   >("");
+  const [workspaceExporting, setWorkspaceExporting] = useState(false);
 
   useEffect(() => {
     const requested = new URL(window.location.href).searchParams.get("page");
@@ -3221,6 +3222,34 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     </div>
   );
 
+  // 只读下载当前工作区数据为 .xlsx（多 sheet，对照飞书源排查结构不一致）。
+  // 不触发任何写操作；权限与可见性由 view_revisions（revision.read）约束。
+  const exportWorkspaceXlsx = async () => {
+    setWorkspaceExporting(true);
+    try {
+      const response = await fetch("/api/export-workspace-xlsx", { method: "GET" });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(payload.error ?? "导出失败。");
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      const disposition = response.headers.get("Content-Disposition") ?? "";
+      const match = /filename\*=UTF-8''([^;]+)/i.exec(disposition);
+      link.download = match ? decodeURIComponent(match[1]) : "工作区数据导出.xlsx";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "导出失败。");
+    } finally {
+      setWorkspaceExporting(false);
+    }
+  };
+
   const renderExcel = () => (
     <div className="page-stack">
       <div className="exchange-grid">
@@ -3233,6 +3262,19 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           <div className="exchange-icon"><Download size={24} /></div><h3>导出 Excel</h3>
           <p>生成 01–10 可读工作表，并附带隐藏状态页，保证参数、规则、词条、候选与版本可完整往返。</p>
           <Button tone="primary" icon={Download} onClick={() => void exportExcel()}>导出当前版本</Button>
+        </Card>
+        <Card className="exchange-card">
+          <div className="exchange-icon"><FileSpreadsheet size={24} /></div><h3>导出当前数据（诊断用）</h3>
+          <p>把当前工作区的飞书源修订、参数/模板/部位、钓法/类型/功能/性能/品质、词条/技术、系列/SKU/Model/快照、定价与品质策略草稿等导出为多 sheet .xlsx，便于与飞书源逐表对照、排查数据结构不一致。只读派生，不改正式数据；敏感字段已脱敏。</p>
+          <Button
+            tone="primary"
+            icon={FileSpreadsheet}
+            disabled={workspaceExporting || !user.actionAvailability.view_revisions.enabled}
+            title={user.actionAvailability.view_revisions.disabledReasonText}
+            onClick={() => void exportWorkspaceXlsx()}
+          >
+            {workspaceExporting ? "导出中…" : "导出工作区数据为 Excel"}
+          </Button>
         </Card>
       </div>
       <Card>

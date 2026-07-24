@@ -1,4 +1,9 @@
-import type { ConfigurationSnapshot, SeriesDefinition, SkuDrawer } from "./types";
+import type {
+  ConfigurationSnapshot,
+  PurchasableModel,
+  SeriesDefinition,
+  SkuDrawer,
+} from "./types";
 
 export const ITEM_PART_NOT_ENABLED_CODE = "ITEM_PART_NOT_ENABLED";
 export const ITEM_PART_CHAIN_INCONSISTENT_CODE = "ITEM_PART_CHAIN_INCONSISTENT";
@@ -213,6 +218,77 @@ export function enabledSeriesSkus(
   return skus.filter((sku) =>
     sku.seriesId === series.id
     && isProductItemPartEnabled(sku.projectionMatch.itemPartId));
+}
+
+/**
+ * Product UI selection is deliberately narrower than historical reading.
+ * Retained disabled SKU payloads remain available to audit/history callers,
+ * but cannot become a Series → SKU → Model selection candidate or fallback.
+ */
+export function productSelectableSeriesSkus(
+  series: SeriesDefinition,
+  skus: readonly SkuDrawer[],
+): SkuDrawer[] {
+  return skus.filter((sku) =>
+    sku.seriesId === series.id
+    && sku.status !== "superseded"
+    && isProductSkuChainEnabled(series, sku, skus));
+}
+
+/** Returns the complete fail-closed SKU projection used by product selectors. */
+export function productSelectableSkus(
+  series: readonly SeriesDefinition[],
+  skus: readonly SkuDrawer[],
+): SkuDrawer[] {
+  const seriesById = new Map(series.map((entry) => [entry.id, entry]));
+  return skus.filter((sku) => {
+    const parentSeries = seriesById.get(sku.seriesId);
+    return Boolean(parentSeries && productSelectableSeriesSkus(parentSeries, skus).includes(sku));
+  });
+}
+
+/**
+ * A Model is selectable only through its owning, selectable SKU. This keeps
+ * retained or cross-parent historical references readable without allowing
+ * them to leak into the product selection chain.
+ */
+export function productSelectableSkuModels(
+  sku: SkuDrawer | undefined,
+  models: readonly PurchasableModel[],
+): PurchasableModel[] {
+  if (!sku) return [];
+  return models.filter((model) =>
+    model.skuId === sku.id && sku.modelIds.includes(model.id));
+}
+
+export interface ProductSelection {
+  sku?: SkuDrawer;
+  models: PurchasableModel[];
+  model?: PurchasableModel;
+}
+
+/**
+ * Resolves initial and stale selections without writing state during render.
+ * Requested selections are preferred only while they remain in the current
+ * enabled Series → SKU → Model projection; every fallback stays in that chain.
+ */
+export function resolveProductSelection(input: {
+  series: readonly SeriesDefinition[];
+  skus: readonly SkuDrawer[];
+  models: readonly PurchasableModel[];
+  requestedSeriesId?: string;
+  requestedSkuId?: string;
+  requestedModelId?: string;
+}): ProductSelection {
+  const selectableSkus = productSelectableSkus(input.series, input.skus);
+  const sku = selectableSkus.find((entry) => entry.id === input.requestedSkuId)
+    ?? selectableSkus.find((entry) => entry.seriesId === input.requestedSeriesId)
+    ?? selectableSkus[0];
+  const models = productSelectableSkuModels(sku, input.models);
+  const model = models.find((entry) => entry.id === input.requestedModelId)
+    ?? models.find((entry) => entry.id === sku?.defaultModelId)
+    ?? models[0];
+  return { sku, models, model };
 }
 
 /** Candidate generation must never preselect retained, disabled sibling SKUs. */

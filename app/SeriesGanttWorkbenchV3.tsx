@@ -30,7 +30,9 @@ import {
 } from "@/lib/interaction-contracts";
 import {
   enabledProductItemParts,
-  isProductSkuChainEnabled,
+  productSelectableSeriesSkus,
+  productSelectableSkuModels,
+  resolveProductSelection,
 } from "@/lib/enabled-item-parts";
 import { CANONICAL_FEISHU_SHEET_REGISTRY } from "@/lib/feishu-workbook";
 import { issueClientActionCommand } from "@/lib/client-action-command";
@@ -1702,19 +1704,18 @@ export function SeriesGanttWorkbenchV3({
     ?? state.seriesDefinitions.find((series) => series.id === blocks[0]?.seriesId);
   const selectedBlock = blocks.find((block) => block.seriesId === selectedSeries?.id);
   const seriesSkus = selectedSeries
-    ? state.skuDrawers.filter(
-      (sku) =>
-        sku.seriesId === selectedSeries.id
-        && sku.status !== "superseded"
-        && isProductSkuChainEnabled(selectedSeries, sku, state.skuDrawers),
-    )
+    ? productSelectableSeriesSkus(selectedSeries, state.skuDrawers)
       .sort((left, right) => left.targetPullKg - right.targetPullKg || left.id.localeCompare(right.id))
     : [];
-  const selectedSku = seriesSkus.find((sku) => sku.id === selectedSkuId) ?? seriesSkus[0];
-  const models = selectedSku
-    ? state.purchasableModels.filter((model) => selectedSku.modelIds.includes(model.id))
+  const selection = resolveProductSelection({
+    series: selectedSeries ? [selectedSeries] : [],
+    skus: state.skuDrawers,
+    models: state.purchasableModels,
+    requestedSkuId: selectedSkuId,
+  });
+  const selectedSku = selection.sku;
+  const models = productSelectableSkuModels(selectedSku, state.purchasableModels)
       .sort((left, right) => left.name.localeCompare(right.name) || left.id.localeCompare(right.id))
-    : [];
   const visibleModels = models.slice(0, modelCursor);
   const deepLink = useMemo(() => resolveProductDeepLink({
     workspaceId,

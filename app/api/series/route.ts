@@ -61,6 +61,17 @@ interface SeriesCreateRequest {
   discretePulls?: string;
 }
 
+interface SeriesCoreAffixUpdateRequest {
+  idempotencyKey?: unknown;
+  seriesId?: unknown;
+  expectedSeriesRevision?: unknown;
+  directAffixIds?: unknown;
+}
+
+function normalizedAffixIds(ids: string[] | undefined) {
+  return Array.from(new Set((ids ?? []).map((id) => id.trim()).filter(Boolean)));
+}
+
 /**
  * Series 创建的服务端领域命令（规范 §24.1 / §24.4 / §25.1）。
  * 写入由服务端重新鉴权（create_series → series.edit），并在服务端完成结构标杆匹配、
@@ -121,10 +132,7 @@ async function executeSeriesBusinessRequest(request: NextRequest) {
   if (invalidSelectionField) {
     return NextResponse.json({ error: `字段 ${invalidSelectionField} 必须是字符串数组。`, field: invalidSelectionField }, { status: 400 });
   }
-  const normalizedIds = (ids: string[] | undefined) => Array.from(new Set(
-    (ids ?? []).map((id) => id.trim()).filter(Boolean),
-  ));
-  const directAffixIds = normalizedIds(body.directAffixIds);
+  const directAffixIds = normalizedAffixIds(body.directAffixIds as string[]);
 
   const name = body.name.trim();
   const concept = body.concept.trim();
@@ -462,6 +470,53 @@ async function executeSeriesBusinessRequest(request: NextRequest) {
   });
 }
 
+async function executeSeriesCoreAffixUpdate(
+  body: SeriesCoreAffixUpdateRequest,
+  user: Awaited<ReturnType<typeof requestUser>>,
+  current: Awaited<ReturnType<typeof loadWorkspaceState>>,
+) {
+  const availability = user.actionAvailability.update_series_core_affixes;
+  if (!availability?.enabled) {
+    return { status: 403, body: { error: availability?.disabledReasonText ?? "当前账号没有编辑 Series 的权限。", actionAvailability: availability } };
+  }
+  if (
+    typeof body.idempotencyKey !== "string" || !body.idempotencyKey.trim()
+    || typeof body.seriesId !== "string" || !body.seriesId.trim()
+    || !Number.isSafeInteger(body.expectedSeriesRevision) || (body.expectedSeriesRevision as number) < 1
+    || !Array.isArray(body.directAffixIds) || body.directAffixIds.some((id) => typeof id !== "string")
+  ) {
+    return { status: 400, body: { error: "idempotencyKey、seriesId、expectedSeriesRevision 与 directAffixIds 字段无效。" } };
+  }
+  const series = current.state.seriesDefinitions.find((entry) => entry.id === body.seriesId);
+  if (!series) return { status: 404, body: { error: "Series 不存在。" } };
+  const expectedSeriesRevision = body.expectedSeriesRevision as number;
+  if (series.revision !== expectedSeriesRevision) {
+    return { status: 409, body: { error: "Series 已被其他成员更新，请刷新后重新编辑。", revision: series.revision } };
+  }
+  const directAffixIds = normalizedAffixIds(body.directAffixIds);
+  const priorIds = new Set(series.coreAffixIds);
+  for (const id of directAffixIds) {
+    const affix = current.state.v3Affixes.find((entry) => entry.id === id);
+    const validForSeries = Boolean(
+      affix && affix.enabled && affix.generationPolicy !== "technology_only" && affix.itemPartId === series.itemPartId,
+    );
+    // 历史未知/禁用/跨部位引用只读保留；只有明确移除才会消失，绝不借一次编辑静默清理。
+    if (!validForSeries && !priorIds.has(id)) {
+      return { status: 422, body: { error: "直接词条不存在、已禁用、仅能由 Technology 提供，或不属于该 Series 部位。", field: "directAffixIds", id } };
+    }
+  }
+  const now = new Date().toISOString();
+  const next = structuredClone(current.state);
+  const updated = { ...series, revision: series.revision + 1, coreAffixIds: directAffixIds, updatedAt: now };
+  next.seriesDefinitions = next.seriesDefinitions.map((entry) => entry.id === series.id ? updated : entry);
+  const saved = await saveWorkspaceState({
+    state: ensureWorkflowFields(next), baseRevision: current.revision,
+    author: stableAuditActor(user), message: `更新 Series ${series.name} 核心词条（revision ${updated.revision}）`,
+  });
+  if (saved.conflict) return { status: 409, body: { error: "其他成员已保存新版本，请刷新后重试。", revision: saved.revision } };
+  return { status: 200, body: { state: next, series: updated, revision: saved.revision } };
+}
+
 function commandErrorStatus(error: ActionCommandPayloadError): number {
   if (error.code === "ACTION_COMMAND_PAYLOAD_NOT_FOUND") return 404;
   if (error.code === "ACTION_COMMAND_CAPABILITY_CHANGED") return 403;
@@ -486,11 +541,14 @@ export async function POST(request: NextRequest) {
   const current = await loadWorkspaceState();
   try {
     const execution = await executeProductionWorkspaceCommand({
-      expectedAction: "create_series",
+      expectedAction: ["create_series", "update_series_core_affixes"],
       invocation,
       user,
       current,
-      execute: async (storedPayload) => {
+      execute: async (storedPayload, action) => {
+        if (action === "update_series_core_affixes") {
+          return executeSeriesCoreAffixUpdate(storedPayload as SeriesCoreAffixUpdateRequest, user, current);
+        }
         const businessRequest = new NextRequest(request.url, {
           method: "POST",
           headers: request.headers,

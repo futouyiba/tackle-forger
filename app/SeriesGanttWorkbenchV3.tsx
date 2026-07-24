@@ -127,6 +127,13 @@ interface SeriesCreateDraft {
   discretePulls: string;
 }
 
+interface SeriesAffixEditDraft {
+  seriesId: string;
+  expectedSeriesRevision: number;
+  itemPartId?: string;
+  directAffixIds: string[];
+}
+
 interface AIDraftPreviewChange {
   changeId?: string;
   parameterKey: string;
@@ -1659,6 +1666,7 @@ export function SeriesGanttWorkbenchV3({
   const [comparisonModelIds, setComparisonModelIds] = useState<string[]>([]);
   const [candidateOpen, setCandidateOpen] = useState(false);
   const [seriesCreateDraft, setSeriesCreateDraft] = useState<SeriesCreateDraft | null>(null);
+  const [seriesAffixEditDraft, setSeriesAffixEditDraft] = useState<SeriesAffixEditDraft | null>(null);
   const [aiAssessment, setAiAssessment] = useState<AIAssessmentUiState>();
   const beginWorkspaceReplacement = (): number | undefined => {
     const freshness = workspaceFreshness();
@@ -1764,6 +1772,7 @@ export function SeriesGanttWorkbenchV3({
   // 真正的状态写只能使用 rebase_patch + 服务端命令载荷引用。
   const rebaseRouteAvailability = openSeriesAvailability;
   const createSeriesAvailability = actionAvailabilities.create_series;
+  const updateSeriesAffixAvailability = actionAvailabilities.update_series_core_affixes;
   const aiAvailability = actionAvailabilities.run_ai_assessment;
   const aiPatchDraftAvailability = actionAvailabilities.create_ai_patch_draft;
   const aiRuleDraftAvailability = actionAvailabilities.create_ai_rule_source_change_draft;
@@ -2024,6 +2033,23 @@ export function SeriesGanttWorkbenchV3({
     }
   };
 
+  const updateSeriesCoreAffixes = async () => {
+    const draft = seriesAffixEditDraft;
+    if (!draft || !updateSeriesAffixAvailability.enabled) return;
+    const expectedWorkspaceRevision = beginWorkspaceReplacement();
+    if (expectedWorkspaceRevision === undefined) return;
+    try {
+      const idempotencyKey = `update-series-core-affixes:${draft.seriesId}:${draft.expectedSeriesRevision}`;
+      const businessPayload = { idempotencyKey, seriesId: draft.seriesId, expectedSeriesRevision: draft.expectedSeriesRevision, directAffixIds: draft.directAffixIds };
+      const invocation = await issueClientActionCommand({ action: "update_series_core_affixes", idempotencyKey, payload: businessPayload });
+      const response = await fetch("/api/series", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(invocation) });
+      const payload = (await response.json().catch(() => null)) as { state?: WorkspaceState; series?: { id: string; name: string }; revision?: number; error?: string } | null;
+      if (!response.ok || !payload?.state || !payload.series) { notify(payload?.error ?? "Series 核心词条保存失败。"); return; }
+      if (!applyWorkspaceReplacement(expectedWorkspaceRevision, payload.state, payload.revision ?? 0, `已保存 ${payload.series.name} 的系列核心词条。`)) return;
+      setSeriesAffixEditDraft(null);
+    } catch (caught) { notify(caught instanceof Error ? caught.message : "Series 核心词条保存失败。"); }
+  };
+
   const changeSelectedSkuTargetPull = async () => {
     if (
       !selectedSku ||
@@ -2249,7 +2275,7 @@ export function SeriesGanttWorkbenchV3({
         <section className="gantt-summary">
           <header>
             <div><span className="eyebrow">SERIES SUMMARY</span><h3>{selectedSeries.name}</h3><small>{selectedSeries.id} · revision {selectedSeries.revision}</small></div>
-            <button type="button" disabled={!openSeriesAvailability.enabled || selectedBlock?.aggregate.readOnly} title={selectedBlock?.aggregate.readOnly ? "未知状态已触发只读降级，请先修复数据。" : openSeriesAvailability.disabledReasonText} onClick={() => onOpenSeries(selectedSeries.id)}>打开 Series <ChevronRight size={15} /></button>
+            <div><button type="button" disabled={!updateSeriesAffixAvailability.enabled || selectedBlock?.aggregate.readOnly} title={selectedBlock?.aggregate.readOnly ? "未知状态已触发只读降级，请先修复数据。" : updateSeriesAffixAvailability.disabledReasonText} onClick={() => setSeriesAffixEditDraft({ seriesId: selectedSeries.id, expectedSeriesRevision: selectedSeries.revision, itemPartId: selectedSeries.itemPartId, directAffixIds: [...selectedSeries.coreAffixIds] })}>编辑核心词条</button><button type="button" disabled={!openSeriesAvailability.enabled || selectedBlock?.aggregate.readOnly} title={selectedBlock?.aggregate.readOnly ? "未知状态已触发只读降级，请先修复数据。" : openSeriesAvailability.disabledReasonText} onClick={() => onOpenSeries(selectedSeries.id)}>打开 Series <ChevronRight size={15} /></button></div>
           </header>
           <div className="gantt-summary-meta">
             <span><CircleDot size={13} />{statusText(selectedBlock?.aggregate.primary ?? selectedSeries.status)}</span>
@@ -2345,6 +2371,12 @@ export function SeriesGanttWorkbenchV3({
             </div>
             <footer><span>稳定 ID：{seriesCreateDraft.seriesId}</span><div><button type="button" onClick={() => setSeriesCreateDraft(null)}>取消</button><button type="button" className="primary" onClick={createSeries}><Plus size={14} />确认离散规格并创建</button></div></footer>
           </section>
+        </div>
+      ) : null}
+
+      {seriesAffixEditDraft ? (
+        <div className="gantt-create-backdrop" role="presentation" onMouseDown={(event) => { if (event.currentTarget === event.target) setSeriesAffixEditDraft(null); }}>
+          <section className="gantt-create-dialog" role="dialog" aria-modal="true" aria-labelledby="gantt-affix-edit-title"><header><div><span className="eyebrow">SERIES · CORE AFFIXES</span><h2 id="gantt-affix-edit-title">编辑系列核心词条</h2><p>历史未知、禁用或跨部位引用会保留并标记；只有取消勾选才会明确移除。Technology 仍由 Model 编辑。</p></div><button type="button" aria-label="关闭" onClick={() => setSeriesAffixEditDraft(null)}><X size={18} /></button></header><div className="gantt-create-grid"><fieldset className="span-2 gantt-affix-picker"><legend>核心词条</legend><div className="gantt-affix-options">{Array.from(new Set([...seriesAffixEditDraft.directAffixIds, ...state.v3Affixes.filter((affix) => affix.enabled && affix.generationPolicy !== "technology_only" && affix.itemPartId === seriesAffixEditDraft.itemPartId).map((affix) => affix.id)])).map((id) => { const affix = state.v3Affixes.find((entry) => entry.id === id); const preservedOnly = !affix || !affix.enabled || affix.generationPolicy === "technology_only" || affix.itemPartId !== seriesAffixEditDraft.itemPartId; return <label key={id} title={preservedOnly ? "历史引用仅可保留或明确移除，不能新增。" : affix.description}><input type="checkbox" checked={seriesAffixEditDraft.directAffixIds.includes(id)} disabled={preservedOnly && !seriesAffixEditDraft.directAffixIds.includes(id)} onChange={() => setSeriesAffixEditDraft((draft) => draft ? { ...draft, directAffixIds: draft.directAffixIds.includes(id) ? draft.directAffixIds.filter((entry) => entry !== id) : [...draft.directAffixIds, id] } : draft)} /><span><b>{affix?.name ?? `未知词条：${id}`}</b><small>{preservedOnly ? "历史引用 · 保留或移除" : `${affix.category === "attribute" ? "属性" : "被动"} · ${affix.itemPartId} · ${affix.valueScore} 分`}</small></span></label>; })}</div></fieldset></div><footer><span>Series revision：{seriesAffixEditDraft.expectedSeriesRevision}</span><div><button type="button" onClick={() => setSeriesAffixEditDraft(null)}>取消</button><button type="button" className="primary" onClick={() => void updateSeriesCoreAffixes()}>保存核心词条</button></div></footer></section>
         </div>
       ) : null}
 

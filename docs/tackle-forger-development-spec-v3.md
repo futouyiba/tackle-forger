@@ -1077,7 +1077,7 @@ revision 位于“最近 90 天”与“最新 100 个”并集之外，只表�
 
 | 受治理字段 | 原因 | 唯一写入动作/边界 |
 | --- | --- | --- |
-| `seriesDefinitions`、`skuDrawers`、`purchasableModels`、`derivedProjections`、`projectionMatches` | Series/SKU/Model身份、最近匹配和派生链 | `create_series`、`change_sku_target_pull`及Model领域ActionCode/规则重算 |
+| `seriesDefinitions`、`skuDrawers`、`purchasableModels`、`derivedProjections`、`projectionMatches` | Series/SKU/Model身份、最近匹配和派生链 | `create_series`、`update_series_core_affixes`、`change_sku_target_pull`及Model领域ActionCode/规则重算 |
 | `partConstraintSets`、`candidateSearchRecipes` | v3 §6.5 的精确revision/contentHash引用；既有revision不可变 | 当前没有修改既有revision的领域命令；只读保留，创建新Series时可由`POST /api/series`物化新约束revision，Recipe专用版本化命令尚未提供 |
 | `patchLedger`、`patchReviewBatches`、`patchValidationWaivers`、`patchValidationWaiverDecisions` | Patch revision、审核和waiver证据 | Patch create/review/rebase/mirror及waiver ActionCode |
 | `projectionPatches` | 遗留 ProjectionPatch 的迁移/审计源；不得作为现行Patch命令旁路 | 当前只读保留，迁移流程处理；不得经整包保存删除、篡改或重放 |

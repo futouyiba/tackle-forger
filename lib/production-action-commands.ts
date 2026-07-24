@@ -20,6 +20,7 @@ import type { WorkspaceState } from "./types";
 export const PRODUCTION_WORKSPACE_ID = "workspace:main";
 export const ROUTED_WORKSPACE_ACTIONS = [
   "create_series",
+  "update_series_core_affixes",
   "change_sku_target_pull",
   "save_workspace",
   "publish_data_source",

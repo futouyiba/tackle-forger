@@ -150,6 +150,7 @@ function benefitModeForParameter(
 function enrichParameters(parameters: ParameterDefinition[]): ParameterDefinition[] {
   return parameters.map((parameter) => ({
     ...parameter,
+    id: parameter.id ?? `param:${parameter.key}`,
     itemPartId: itemPartIdForParameter(parameter),
     benefitMode: benefitModeForParameter(parameter),
     balanceWeight: parameter.balanceWeight ?? 1,
@@ -1600,6 +1601,7 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
 
   state = {
     ...state,
+    parameters: enrichParameters(arrayOf<ParameterDefinition>(state.parameters)),
     aiRuleSourceChangeDrafts: arrayOf<
       WorkspaceState["aiRuleSourceChangeDrafts"][number]
     >(state.aiRuleSourceChangeDrafts),

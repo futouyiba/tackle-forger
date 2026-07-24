@@ -35,6 +35,12 @@ export type DimensionKey =
   | "series";
 
 export interface ParameterDefinition {
+  /**
+   * 稳定的 UI 标识，用作参数管理表行等处的 React key。
+   * 由 normalize 用 `param:${key}` 回填，rename 时绝不重算，
+   * 因此正在编辑的 label/key 变化不会让行重挂载、丢失 IME 组字上下文与焦点。
+   */
+  id?: string;
   key: string;
   label: string;
   itemKind: ItemKind;

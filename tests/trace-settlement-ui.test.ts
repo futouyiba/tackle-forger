@@ -123,3 +123,22 @@ test("source flight and impact flash are phase-gated DOM/CSS effects driven by s
   assert.match(css, /trace-impact-flash var\(--trace-impact-ms\)/);
   assert.doesNotMatch(css, /460ms|100ms|300ms/);
 });
+
+test("evidence settle is a phase-gated CSS animation that consumes the shared evidence-settle token", () => {
+  // 规范 §6.3 "证据落位 140–180ms": the panel exposes --trace-evidence-settle-ms
+  // and the CSS must actually consume it via a phase-gated animation on the
+  // evidence panel — not just leave an unused CSS variable. This is the
+  // regression that fails when the token is declared but no animation uses it.
+  const panelSource = readFileSync(fileURLToPath(new URL("../app/TraceSettlementPanel.tsx", import.meta.url)), "utf8");
+  const css = readFileSync(fileURLToPath(new URL("../app/series-gantt-v3.css", import.meta.url)), "utf8");
+  // Panel wires the shared token into the inline style so CSS can consume it.
+  assert.match(panelSource, /--trace-evidence-settle-ms/);
+  assert.match(panelSource, /motionTokens\.duration\.evidenceSettleMs/);
+  // CSS consumes the token on a phase-gated evidence panel rule.
+  assert.match(css, /\.trace-settlement\.phase-impact \.trace-evidence-panel/);
+  assert.match(css, /trace-evidence-settle var\(--trace-evidence-settle-ms\)/);
+  assert.match(css, /@keyframes trace-evidence-settle/);
+  // Paused and reduced-motion states must also cover the evidence animation.
+  assert.match(css, /\.trace-settlement\.is-paused\.phase-impact \.trace-evidence-panel/);
+  assert.match(css, /prefers-reduced-motion: reduce/);
+});

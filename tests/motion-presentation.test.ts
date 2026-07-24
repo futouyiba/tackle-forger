@@ -336,6 +336,45 @@ test("beyond the serial-feasible bound the controller switches to §6.3 represen
   assert.equal(model16.evidence.traceEntryIds.length, 16, "complete Trace evidence is retained past the feasible bound");
 });
 
+test("at and beyond the serial-feasible bound (13/16/20/32 sources) the representative path keeps the schedule under the 2.5s cap", () => {
+  // 13 sources is the inflection point where the §6.3 focus floors alone first
+  // exceed the 2280ms step budget (13 * 190 == 2470 > 2280); 16/20/32 push
+  // further past it. For each, 规范 §6.3 "代表性高速播放并保留完整证据" must scale
+  // the pass so the ACTUAL scheduled serial total (including the final lock)
+  // stays under the 2.5s hard cap, the stable 5-phase order still walks every
+  // source, and the complete frozen Trace evidence is retained in full.
+  for (const sourceCount of [13, 16, 20, 32]) {
+    const traceN = makeTraceEntries(Array.from({ length: sourceCount }, (_, index) => ({
+      layer: index === 0 ? "weight_template" : "method",
+      effect: (index % 3 === 0 ? "cost" : "benefit") as MotionTraceLike["effect"],
+    })));
+    const modelN = buildMotionPresentationModel({ businessRevision: `r-${sourceCount}`, subjectId: "model", parameterKey: "pull", trace: traceN });
+    const budget = computeMotionTimingBudget(modelN.steps);
+    assert.equal(budget.feasible, false, `${sourceCount} sources must exceed the serial-feasible bound`);
+    assert.ok(typeof budget.representativeScale === "number" && budget.representativeScale > 0 && budget.representativeScale < 1,
+      `${sourceCount} sources: representativeScale must be in (0, 1), got ${budget.representativeScale}`);
+
+    const clock = new FakeClock(); const controller = createMotionPlaybackController(modelN, { clock });
+    controller.dispatch({ type: "play" });
+    // sourceCount × 5 phases + 1 final lock, in stable order.
+    for (let handle = 1; handle <= sourceCount * 5; handle += 1) clock.fire(handle);
+    assert.equal(controller.getState().status, "locking",
+      `${sourceCount} sources: every five-phase step must still play in stable order`);
+    clock.fire(sourceCount * 5 + 1);
+    assert.equal(controller.getState().status, "completed", `${sourceCount} sources: pass must reach completed`);
+
+    // Behavioral check on the ACTUAL scheduled delays: total wall-clock
+    // (including the final lock) must respect the §6.3 2.5s hard cap. This is
+    // the regression that fails when the controller ignores `feasible === false`.
+    const total = clock.delays.reduce((sum, delay) => sum + delay, 0);
+    assert.ok(total <= MOTION_PRESENTATION_HARD_TOTAL_MS,
+      `${sourceCount} sources: representative total ${total}ms exceeded the ${MOTION_PRESENTATION_HARD_TOTAL_MS}ms hard cap`);
+    assert.equal(clock.delays.at(-1), motionTokens.duration.finalLockMs, `${sourceCount} sources: final lock keeps its own window`);
+    assert.equal(clock.delays.length, sourceCount * 5 + 1, `${sourceCount} sources: every phase scheduled exactly once`);
+    assert.equal(modelN.evidence.traceEntryIds.length, sourceCount, `${sourceCount} sources: complete Trace evidence must be retained`);
+  }
+});
+
 test("effectivePlaybackPhaseDuration scales focus headroom and handoff phases independently", () => {
   const floor = motionTokens.phaseFloor;
   const establish = model.steps[0]!;

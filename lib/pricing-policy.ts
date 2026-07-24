@@ -74,6 +74,37 @@ export interface PricingMoneyPolicyDraft {
   source: PricingCellRef;
 }
 
+/** The complete, versioned execution contract required for new formal policies. */
+export interface PricingExecutionPolicy {
+  repairRoundingStage: "final_repair_output";
+  purchaseInput: "repair_price_raw";
+  purchaseRoundingStage: "final_purchase_output";
+  rounding: "significant_digits_floor";
+  significantDigits: 3;
+  minimumPurchasePrice: 100;
+  minimumPriceScope: "purchase_output_after_rounding";
+  upperThreshold: 300_000_000;
+  upperThresholdMode: "warning_acknowledgement";
+  status: PricingInputStatus;
+  source: PricingCellRef;
+}
+
+export interface PricingWarningAcknowledgement {
+  id: string;
+  issueFingerprint: string;
+  modelRevisionId: string;
+  pricingPolicyVersion: string;
+  inputHash: string;
+  purchasePriceRaw: number;
+  purchasePriceRounded: number;
+  purchasePrice: number;
+  threshold: number;
+  acknowledgedBy: string;
+  acknowledgedAt: string;
+  reason: string;
+  state: "ACKNOWLEDGED" | "STALE";
+}
+
 export interface PricingPolicyIssue {
   code: string;
   severity: "warning" | "error";
@@ -101,6 +132,10 @@ export interface PricingPolicyDraft {
   scoreInterpolation?: ScoreInterpolationPolicyDraft;
   performanceScoringPolicy?: PerformanceScoringPolicyDraft;
   moneyPolicy?: PricingMoneyPolicyDraft;
+  /** Required for any newly published policy.  Legacy fields remain read-only evidence. */
+  executionPolicy?: PricingExecutionPolicy;
+  /** Original legacy execution fields retained verbatim by migration. */
+  legacyExecutionPayload?: Record<string, unknown>;
   issues: PricingPolicyIssue[];
   formalStatus: "INCOMPLETE_DRAFT" | "TRIAL_READY" | "READY_TO_PUBLISH";
   inputHash: string;
@@ -109,7 +144,7 @@ export interface PricingPolicyDraft {
 
 export interface PricingPolicyVersion extends Omit<PricingPolicyDraft, "formalStatus"> {
   version: string;
-  formalStatus: "PUBLISHED";
+  formalStatus: "PUBLISHED" | "LEGACY_PUBLISHED";
   publishedAt: string;
   publishedBy: string;
 }
@@ -133,9 +168,22 @@ export interface PricingTrialResult {
   valueScore: number;
   pricingWeightBandId: string;
   pricingBasketId: string;
+  /** Legacy aliases retained for historical consumers. */
   repairPriceUnrounded: number;
   purchasePriceUnrounded: number;
+  repairPriceRaw?: number;
+  repairPrice?: number | null;
+  purchasePriceRaw?: number;
+  purchasePriceRounded?: number | null;
   purchasePrice: number | null;
+  priceUpperThresholdExceeded?: boolean;
+  priceWarning?: {
+    code: "PRICE_UPPER_THRESHOLD_CONFIRMATION_REQUIRED";
+    issueFingerprint: string;
+    threshold: number;
+    state: "OPEN" | "ACKNOWLEDGED";
+  };
+  priceWarningAcknowledgement?: PricingWarningAcknowledgement;
   moneyUnit?: string;
   trace: PricingTraceEntry[];
   issues: PricingPolicyIssue[];
@@ -254,16 +302,12 @@ export function importPricingPolicyDraft(input: Omit<PricingPolicyDraft, "id" | 
   if (!input.moneyPolicy) {
     issues.push({ code: "PRICING_MONEY_POLICY_MISSING", severity: "warning", message: "金额单位、舍入和价格边界尚未导入；正式定价不可发布。" });
   }
-  if (input.moneyPolicy && (
-    !input.moneyPolicy.roundingStage
-    || !input.moneyPolicy.minimumPriceScope
-    || !input.moneyPolicy.overflowMode
-  )) {
+  if (input.moneyPolicy && !input.executionPolicy) {
     issues.push({
       code: "PRICING_EXECUTION_SEMANTICS_MISSING",
       severity: "error",
-      message: "定价源尚未明确舍入阶段、最低价作用域或溢出处理方式；新策略只能用于非正式试算。",
-      source: input.moneyPolicy.source,
+      message: "定价源尚未提供完整的维修/购买双输出、最低价与超限确认执行契约；新策略只能用于非正式试算。",
+      source: input.moneyPolicy?.source,
     });
   }
 
@@ -278,6 +322,7 @@ export function importPricingPolicyDraft(input: Omit<PricingPolicyDraft, "id" | 
     ...ranges.map((entry) => entry.status),
     ...(input.scoreInterpolation ? [input.scoreInterpolation.status] : []),
     ...(input.moneyPolicy ? [input.moneyPolicy.status] : []),
+    ...(input.executionPolicy ? [input.executionPolicy.status] : []),
   ];
   const hasErrors = issues.some((issue) => issue.severity === "error");
   const requiredPresent = Boolean(
@@ -285,9 +330,7 @@ export function importPricingPolicyDraft(input: Omit<PricingPolicyDraft, "id" | 
     && input.moneyPolicy
     && input.partsToWholeRatios.length
     && ranges.length
-    && input.moneyPolicy.roundingStage
-    && input.moneyPolicy.minimumPriceScope
-    && input.moneyPolicy.overflowMode,
+    && input.executionPolicy,
   );
   const formalStatus: PricingPolicyDraft["formalStatus"] = hasErrors || !requiredPresent
     ? "INCOMPLETE_DRAFT"
@@ -349,19 +392,6 @@ export function floorToSignificantDigits(value: number, digits: number) {
   return Math.floor(value / step) * step;
 }
 
-function roundMoney(value: number, policy: PricingMoneyPolicyDraft) {
-  if (policy.rounding === "significant_digits_floor") {
-    return floorToSignificantDigits(value, policy.significantDigits ?? policy.precision);
-  }
-  const multiplier = 10 ** policy.precision;
-  const scaled = value * multiplier;
-  const rounded = policy.rounding === "floor" ? Math.floor(scaled)
-    : policy.rounding === "ceil" ? Math.ceil(scaled)
-      : policy.rounding === "half_up" ? Math.floor(scaled + 0.5)
-        : scaled;
-  return rounded / multiplier;
-}
-
 function lookupRatio(
   entries: PricingLookupEntry[],
   input: { partId: string; pricingWeightBandId: string; pricingBasketId: string },
@@ -380,6 +410,8 @@ export function calculatePricingTrial(input: {
   pricingWeightBandId: string;
   valueScore: number;
   qualityId: QualityId;
+  modelRevisionId?: string;
+  priceWarningAcknowledgement?: PricingWarningAcknowledgement;
 }): PricingTrialResult {
   const policy = input.policy;
   const mapping = exactlyOne(policy.qualityMappings.filter((entry) => entry.qualityId === input.qualityId), "品质定价映射");
@@ -415,59 +447,58 @@ export function calculatePricingTrial(input: {
   multiply("repairCoefficient", repairCoefficient.value);
   multiply("totalLossTime", lossTime.value);
   multiply("scoreInterpolationFactor", { value: factor, status: policy.scoreInterpolation.status, source: policy.scoreInterpolation.source });
-  const repairPriceUnrounded = value;
+  const repairPriceRaw = value;
+  let repairPrice: number | null = null;
+  const execution = policy.executionPolicy;
+  if (execution) {
+    repairPrice = floorToSignificantDigits(repairPriceRaw, execution.significantDigits);
+  }
   multiply("purchaseCoefficient", purchaseCoefficient.value);
   const beforeDivision = value;
   value /= partsToWhole.value.value;
   trace.push({ sequence: trace.length + 1, formulaStep: "partsToWholeRatio", sourceRevision: policy.sourceRevision, source: partsToWhole.value.source, before: beforeDivision, operation: "divide", operand: partsToWhole.value.value, after: value, inputStatus: partsToWhole.value.status });
-  const purchasePriceUnrounded = value;
+  const purchasePriceRaw = value;
   let purchasePrice: number | null = null;
+  let purchasePriceRounded: number | null = null;
   const issues: PricingPolicyIssue[] = [];
-  if (policy.moneyPolicy?.roundingStage === "part_purchase_price") {
-    const rounded = roundMoney(value, policy.moneyPolicy);
-    trace.push({ sequence: trace.length + 1, formulaStep: "moneyRounding", sourceRevision: policy.sourceRevision, source: policy.moneyPolicy.source, before: value, operation: "round", operand: policy.moneyPolicy.significantDigits ?? policy.moneyPolicy.precision, after: rounded, inputStatus: policy.moneyPolicy.status });
-    purchasePrice = rounded;
-    if (
-      policy.moneyPolicy.minimumPriceScope === "part_purchase_price"
-      && policy.moneyPolicy.minimumPrice !== undefined
-      && purchasePrice < policy.moneyPolicy.minimumPrice
-    ) {
-      const before = purchasePrice;
-      purchasePrice = policy.moneyPolicy.minimumPrice;
-      trace.push({ sequence: trace.length + 1, formulaStep: "minimumPrice", sourceRevision: policy.sourceRevision, source: policy.moneyPolicy.source, before, operation: "clamp", operand: policy.moneyPolicy.minimumPrice, after: purchasePrice, inputStatus: policy.moneyPolicy.status });
+  if (execution) {
+    purchasePriceRounded = floorToSignificantDigits(purchasePriceRaw, execution.significantDigits);
+    trace.push({ sequence: trace.length + 1, formulaStep: "purchasePriceRounding", sourceRevision: policy.sourceRevision, source: execution.source, before: purchasePriceRaw, operation: "round", operand: execution.significantDigits, after: purchasePriceRounded, inputStatus: execution.status });
+    purchasePrice = Math.max(purchasePriceRounded, execution.minimumPurchasePrice);
+    if (purchasePrice !== purchasePriceRounded) trace.push({ sequence: trace.length + 1, formulaStep: "minimumPurchasePrice", sourceRevision: policy.sourceRevision, source: execution.source, before: purchasePriceRounded, operation: "clamp", operand: execution.minimumPurchasePrice, after: purchasePrice, inputStatus: execution.status });
+  } else if (policy.moneyPolicy) {
+    // Old policies remain calculable for read-only preview/replay.  They never
+    // become formal because import/publish require executionPolicy.
+    purchasePriceRounded = roundLegacyMoney(purchasePriceRaw, policy.moneyPolicy);
+    purchasePrice = purchasePriceRounded;
+    if (policy.moneyPolicy.minimumPriceScope === "part_purchase_price" && policy.moneyPolicy.minimumPrice !== undefined) {
+      purchasePrice = Math.max(purchasePrice, policy.moneyPolicy.minimumPrice);
     }
-    if (policy.moneyPolicy.maximumPrice !== undefined && value > policy.moneyPolicy.maximumPrice) {
-      if (!policy.moneyPolicy.overflowMode) {
-        issues.push({
-          code: "PRICE_OVERFLOW_POLICY_MISSING",
-          severity: "error",
-          message: `未舍入价格 ${value} 超过上限 ${policy.moneyPolicy.maximumPrice}，但规则源没有指定溢出处理方式。`,
-          source: policy.moneyPolicy.source,
-        });
+    if (policy.moneyPolicy.maximumPrice !== undefined && purchasePriceRaw > policy.moneyPolicy.maximumPrice) {
+      if (policy.moneyPolicy.overflowMode === "clamp") purchasePrice = policy.moneyPolicy.maximumPrice;
+      else {
         purchasePrice = null;
-      } else if (policy.moneyPolicy.overflowMode === "clamp") {
-        const before = purchasePrice;
-        purchasePrice = policy.moneyPolicy.maximumPrice;
-        trace.push({ sequence: trace.length + 1, formulaStep: "maximumPrice", sourceRevision: policy.sourceRevision, source: policy.moneyPolicy.source, before, operation: "clamp", operand: policy.moneyPolicy.maximumPrice, after: purchasePrice, inputStatus: policy.moneyPolicy.status });
-      } else {
-        issues.push({
-          code: "PRICE_OVERFLOW",
-          severity: "error",
-          message: `未舍入价格 ${value} 超过上限 ${policy.moneyPolicy.maximumPrice}，策略要求阻断。`,
-          source: policy.moneyPolicy.source,
-        });
-        purchasePrice = null;
+        issues.push({ code: "PRICE_OVERFLOW_POLICY_MISSING", severity: "error", message: "旧定价策略的上限处理不能作为新确认语义。", source: policy.moneyPolicy.source });
       }
     }
-  } else if (policy.moneyPolicy) {
-    issues.push({
-      code: "PRICING_EXECUTION_SEMANTICS_MISSING",
-      severity: "error",
-      message: "当前价格只能保留未舍入试算；规则源尚未指定适用于部件购买价的舍入阶段。",
-      source: policy.moneyPolicy.source,
-    });
   }
-  const formal = policy.formalStatus === "PUBLISHED" && issues.every((issue) => issue.severity !== "error");
+  const priceUpperThresholdExceeded = Boolean(execution && purchasePriceRaw > execution.upperThreshold);
+  const provisional = { policy: policy.id, modelRevisionId: input.modelRevisionId ?? "UNSPECIFIED", input: { partId: input.partId, typeId: input.typeId, pricingWeightBandId: input.pricingWeightBandId, valueScore: input.valueScore, qualityId: input.qualityId }, repairPriceRaw, repairPrice, purchasePriceRaw, purchasePriceRounded, purchasePrice, trace };
+  const resultInputHash = deterministicHash(provisional);
+  const acknowledgement = input.priceWarningAcknowledgement;
+  const acknowledgementMatches = Boolean(priceUpperThresholdExceeded && acknowledgement
+    && acknowledgement.state === "ACKNOWLEDGED"
+    && acknowledgement.issueFingerprint === deterministicHash({ code: "PRICE_UPPER_THRESHOLD_CONFIRMATION_REQUIRED", modelRevisionId: input.modelRevisionId ?? "UNSPECIFIED", pricingPolicyVersion: policy.id, inputHash: resultInputHash, purchasePriceRaw, purchasePriceRounded, purchasePrice, threshold: execution!.upperThreshold })
+    && acknowledgement.modelRevisionId === (input.modelRevisionId ?? "UNSPECIFIED")
+    && acknowledgement.pricingPolicyVersion === policy.id
+    && acknowledgement.inputHash === resultInputHash
+    && acknowledgement.purchasePriceRaw === purchasePriceRaw
+    && acknowledgement.purchasePriceRounded === purchasePriceRounded
+    && acknowledgement.purchasePrice === purchasePrice);
+  const priceWarning = priceUpperThresholdExceeded && purchasePriceRounded !== null && purchasePrice !== null
+    ? { code: "PRICE_UPPER_THRESHOLD_CONFIRMATION_REQUIRED" as const, issueFingerprint: deterministicHash({ code: "PRICE_UPPER_THRESHOLD_CONFIRMATION_REQUIRED", modelRevisionId: input.modelRevisionId ?? "UNSPECIFIED", pricingPolicyVersion: policy.id, inputHash: resultInputHash, purchasePriceRaw, purchasePriceRounded, purchasePrice, threshold: execution!.upperThreshold }), threshold: execution!.upperThreshold, state: acknowledgementMatches ? "ACKNOWLEDGED" as const : "OPEN" as const }
+    : undefined;
+  const formal = policy.formalStatus === "PUBLISHED" && Boolean(execution) && issues.every((issue) => issue.severity !== "error") && (!priceWarning || priceWarning.state === "ACKNOWLEDGED");
   const warnings = formal ? [] : [
     ...(policy.formalStatus === "PUBLISHED" ? [] : ["非正式价格试算：未发布 PricingPolicyVersion，不得用于正式 Store 导出。"]),
     ...issues.map((issue) => `${issue.code}：${issue.message}`),
@@ -478,15 +509,62 @@ export function calculatePricingTrial(input: {
     valueScore: input.valueScore,
     pricingWeightBandId: input.pricingWeightBandId,
     pricingBasketId: basketId,
-    repairPriceUnrounded,
-    purchasePriceUnrounded,
+    repairPriceUnrounded: repairPriceRaw,
+    purchasePriceUnrounded: purchasePriceRaw,
+    repairPriceRaw,
+    repairPrice,
+    purchasePriceRaw,
+    purchasePriceRounded,
     purchasePrice,
+    priceUpperThresholdExceeded,
+    ...(priceWarning ? { priceWarning } : {}),
+    ...(acknowledgementMatches && acknowledgement ? { priceWarningAcknowledgement: acknowledgement } : {}),
     moneyUnit: policy.moneyPolicy?.unit,
     trace,
     issues,
     warnings,
   };
-  return { ...result, inputHash: deterministicHash({ input, result }) };
+  return { ...result, inputHash: resultInputHash };
+}
+
+function roundLegacyMoney(value: number, policy: PricingMoneyPolicyDraft) {
+  if (policy.rounding === "significant_digits_floor") return floorToSignificantDigits(value, policy.significantDigits ?? policy.precision);
+  const multiplier = 10 ** policy.precision;
+  const scaled = value * multiplier;
+  return (policy.rounding === "floor" ? Math.floor(scaled)
+    : policy.rounding === "ceil" ? Math.ceil(scaled)
+      : policy.rounding === "half_up" ? Math.floor(scaled + 0.5) : scaled) / multiplier;
+}
+
+/** Creates immutable acknowledgement evidence; callers persist it separately from the policy and Snapshot. */
+export function acknowledgePriceWarning(input: {
+  trial: PricingTrialResult;
+  modelRevisionId: string;
+  acknowledgedBy: string;
+  acknowledgedAt: string;
+  reason: string;
+  id: string;
+}): PricingWarningAcknowledgement {
+  const warning = input.trial.priceWarning;
+  if (!warning || !input.trial.priceUpperThresholdExceeded || input.trial.purchasePriceRounded === null || input.trial.purchasePrice === null) {
+    throw new Error("当前价格没有可确认的超限 WARNING。");
+  }
+  if (!input.acknowledgedBy.trim() || !input.reason.trim()) throw new Error("价格超限确认必须记录确认人和理由。");
+  return {
+    id: input.id,
+    issueFingerprint: warning.issueFingerprint,
+    modelRevisionId: input.modelRevisionId,
+    pricingPolicyVersion: input.trial.pricingPolicyRef,
+    inputHash: input.trial.inputHash,
+    purchasePriceRaw: input.trial.purchasePriceRaw!,
+    purchasePriceRounded: input.trial.purchasePriceRounded!,
+    purchasePrice: input.trial.purchasePrice,
+    threshold: warning.threshold,
+    acknowledgedBy: input.acknowledgedBy,
+    acknowledgedAt: input.acknowledgedAt,
+    reason: input.reason,
+    state: "ACKNOWLEDGED",
+  };
 }
 
 export function publishPricingPolicyDraft(input: {

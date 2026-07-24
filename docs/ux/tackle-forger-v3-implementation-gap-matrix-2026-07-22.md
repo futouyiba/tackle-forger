@@ -65,7 +65,7 @@
 | --- | --- | --- | --- |
 | 【品质评分】未计算【功能定位】提供的品质分 | v3正式公式使用`FunctionProfile.scoreFactor`，当前品质内核已经乘入该系数并记录Trace。 | v3 §12.1；本矩阵“品质评分” | 不新增问题；若当前页面仍出现错误结果，附Model、规则revision和Trace另建回归Bug。 |
 | 【系列配方】未拆分竿轮线 | v14已为旧配方增加竿/轮/线独立约束迁移载体，但目前仅类型、迁移和测试使用；正式运行时及页面仍未消费，且旧`SeriesRecipe`和v3流程继续并存。 | `AUD-005`；迁移子项`AUD-R010` | 迁移结构子项已解决；用户可操作的分部位配方仍保持在`AUD-005`，不重复登记产品问题。 |
-| 缺少钓具价格计算公式 | 维修价、购买价、评分插值和逐步Trace已经实现；2026-07-23已确定正式执行语义，缺的是源表与运行时落地。 | v3 `OPEN-007`；Issue #9/#10 | 删除“公式缺失”表述；在新schema、确认记录和飞书机器源完成前，旧实现仍只允许准确标记的`NON_FORMAL`试算。 |
+| 缺少钓具价格计算公式 | 运行时已提供维修/购买双Raw与独立最终舍入、购买最低价及300M精确确认记录；旧策略字段经v20迁移仅作只读证据。 | v3 §20.1；Issue #9 | 当前仍缺飞书机器源修订与显式拉取/发布，故没有可发布的正式策略；不得手填价格或复用旧确认。 |
 | 缺少最终配置表格的字段映射和同步 | 既有`ConfigExportMapping`、三表差异预览、关系校验、恢复写入和测试存在，但只证明旧执行器；正式提交仍需要真实Profile/映射、已发布定价，以及OPEN-008的目录/Manifest、策略、ledger和revision锁。 | v3 `OPEN-007`、`OPEN-008`；`config-export-mapping-guide.md` | 不重复登记“完全缺失”；按1.5期目标契约改造后再做真实仓库联调，完成前不得把旧下载/写入能力视为正式路径。 |
 | 单元格编辑、规则设定不够便捷 | 属于两个可验收的持续体验问题，不与工程安全问题混记。 | `ux-design-v1`的`UX-001/UX-002` | 保持OPEN，后续实现与Design QA按对应验收条件关闭。 |
 
@@ -74,7 +74,7 @@
 1. OPEN-001：`FG数值设计v3-总表/oJO4Gi` revision `17173`只作决策证据；唯一权威主工作簿revision `3259`的`04_词条/zrVOxd`尚无稳定`ruleId + parameterKey`机器规则。完成迁入、回读、显式拉取和策略/RuleSet发布前，运行时只能非正式预览，Model/Snapshot发布与正式导出必须阻断。
 2. OPEN-010：已确认飞书主工作簿`Patch台账/edyFx9`、`A:AK`机器区与`AM:BA`协作事件区；远端表头尚未物化，机器区/协作区保护边界和连接器写入、回读、缺行、篡改、hash及并发冲突联调尚未完成，因此真实镜像写入/拉取仍不可启用。
 3. Vercel评审项目当前只配置`BLOB_READ_WRITE_TOKEN`，缺少`FEISHU_APP_ID`、`FEISHU_APP_SECRET`、`FEISHU_TENANT_KEY`、`FEISHU_REDIRECT_URI`和`FEISHU_SESSION_SECRET`；首页HTTP 200，但会话端点返回503/`AUTH-CONFIG-001`，需部署方提供公司应用凭据并在飞书开放平台登记回调。
-4. OPEN-007产品语义已于2026-07-23确定；当前阻断是飞书机器源仍需修订，且运行时尚未实现S=100、无Performance乘数、双输出舍入、购买最低价和超300M WARNING确认。完成前不得把旧Draft发布为符合新契约的PricingPolicyVersion。
+4. OPEN-007产品语义与运行时契约已落地：S=100、无Performance乘数、双输出舍入、购买最低价和超300M WARNING确认均已实现。当前阻断仅为飞书机器源尚未修订并显式拉取/发布；旧Draft不得冒充正式策略。
 5. OPEN-006产品策略已经确认；真实AI连接器仍须由[Issue #25](https://github.com/futouyiba/tackle-forger/issues/25)完成实现、测试和显式启用，在此之前保持禁用且不得发送真实数据。
 6. OPEN-008的数字区间、派生关系、命名、永不复用和权限语义已经确认；但尚未发布权威`ConfigTargetCatalogVersion`、覆盖全部必需目标的获批且新鲜`ConfigTargetScanManifest`、可校验`ConfigIdPolicyVersion`及reservation ledger，也未实现Model revision锁、按物理Git ref去重并验证别名OID的跨Git/ledger治理租约与受保护ref CAS、历史导入并发幂等、统一ActionCode payload收口和旧写别名完整重建/拒绝，因此仍不能正式预留ID、导入永久占用或提交配置。
 7. 真实 configs Git 目标需由配置治理方发布环境/渠道权威目录并完成authoritative ref、commit、`config.toml`和workbook hash扫描复核；用户本机目录绑定和旧Profile不能替代该门禁，未完成时只能`NON_FORMAL`预览。

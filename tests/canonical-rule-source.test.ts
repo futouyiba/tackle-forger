@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { importCanonicalRuleSource } from "../lib/canonical-rule-source";
 import { calculateCandidate } from "../lib/engine";
-import { migrateWorkspaceState } from "../lib/migrations";
+import { CURRENT_WORKSPACE_SCHEMA_VERSION, migrateWorkspaceState } from "../lib/migrations";
 import { identityRowsFromRanges, weightTemplateDraftFromCanonicalRuleDraft } from "../lib/rule-workbook-inspection";
 import { createSeedState } from "../lib/seed";
 import {
@@ -276,7 +276,7 @@ test("schema v15 顺序迁移保留历史状态并补 canonical 草稿集合", (
   const v15 = { ...structuredClone(current), schemaVersion: 15 } as unknown as Record<string, unknown>;
   delete v15.canonicalRuleSourceDrafts;
   const migrated = migrateWorkspaceState(v15);
-  assert.equal(migrated.schemaVersion, 19);
+  assert.equal(migrated.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
   assert.deepEqual(migrated.canonicalRuleSourceDrafts, []);
   assert.deepEqual(migrated.weightTemplatePolicyDrafts, []);
   assert.deepEqual(migrated.configurationSnapshots, current.configurationSnapshots);

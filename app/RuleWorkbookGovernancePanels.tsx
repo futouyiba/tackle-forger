@@ -355,9 +355,10 @@ export function PricingPolicyDraftPanel({
       {error ? <div className="rule-inline-error"><AlertTriangle size={16} />{error}</div> : null}
       {trial ? (
         <div className="pricing-trial-result">
-          <div><span>repairPrice</span><strong>{trial.repairPriceUnrounded}</strong></div>
-          <div><span>purchasePrice（未舍入）</span><strong>{trial.purchasePriceUnrounded}</strong></div>
-          <div><span>正式价格</span><strong>{trial.purchasePrice ?? "不可用"}</strong><small>{trial.moneyUnit ?? "金额单位未发布"}</small></div>
+          <div><span>维修价（Raw / 最终）</span><strong>{trial.repairPriceRaw ?? trial.repairPriceUnrounded} / {trial.repairPrice ?? "不可用"}</strong></div>
+          <div><span>购买价（Raw / 舍入）</span><strong>{trial.purchasePriceRaw ?? trial.purchasePriceUnrounded} / {trial.purchasePriceRounded ?? "不可用"}</strong></div>
+          <div><span>最终购买价</span><strong>{trial.purchasePrice ?? "不可用"}</strong><small>{trial.moneyUnit ?? "金额单位未发布"}</small></div>
+          {trial.priceWarning ? <div className="rule-inline-error"><AlertTriangle size={16} />{trial.priceWarning.code} · {trial.priceWarning.state === "ACKNOWLEDGED" ? "已确认" : "发布前必须确认"}</div> : null}
           <span className="rule-badge warning">非正式 · 不得用于 Store</span>
           <div className="pricing-trace-table">
             {trial.trace.map((entry) => <div key={entry.sequence}><span>{entry.sequence}</span><strong>{entry.formulaStep}</strong><span>{entry.before}</span><span>{entry.operation}</span><span>{entry.operand}</span><span>{entry.after}</span><small>{sourceLabel(entry.source)} · {entry.inputStatus}</small></div>)}

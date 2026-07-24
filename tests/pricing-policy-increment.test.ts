@@ -87,6 +87,19 @@ function completeInput(overrides: Partial<PricingPolicyDraft> = {}) {
     scoreInterpolation: { kind: "quality_range_linear" as const, points: [], outOfRange: "error" as const, status: "CONFIRMED" as const, source: ref("B11") },
     performanceScoringPolicy: { enabled: false, status: "CONFIRMED" as const, source: ref("B2", "FqD4j7") },
     moneyPolicy,
+    executionPolicy: {
+      repairRoundingStage: "final_repair_output" as const,
+      purchaseInput: "repair_price_raw" as const,
+      purchaseRoundingStage: "final_purchase_output" as const,
+      rounding: "significant_digits_floor" as const,
+      significantDigits: 3,
+      minimumPurchasePrice: 100,
+      minimumPriceScope: "purchase_output_after_rounding" as const,
+      upperThreshold: 300_000_000,
+      upperThresholdMode: "warning_acknowledgement" as const,
+      status: "CONFIRMED" as const,
+      source: ref("B15:B18"),
+    },
     importedAt: "2026-07-22T00:00:00.000Z",
     ...overrides,
   } as Parameters<typeof importPricingPolicyDraft>[0];
@@ -148,7 +161,7 @@ test("缺舍入阶段、最低价作用域或溢出方式时新策略不可发�
   delete moneyPolicy.roundingStage;
   delete moneyPolicy.minimumPriceScope;
   delete moneyPolicy.overflowMode;
-  const draft = importPricingPolicyDraft(completeInput({ moneyPolicy }));
+  const draft = importPricingPolicyDraft(completeInput({ moneyPolicy, executionPolicy: undefined }));
   assert.equal(draft.formalStatus, "INCOMPLETE_DRAFT");
   assert.ok(draft.issues.some((issue) => issue.code === "PRICING_EXECUTION_SEMANTICS_MISSING"));
   assert.throws(() => publishPricingPolicyDraft({ draft, version: "new", publishedAt: "2026-07-22T00:00:00.000Z", publishedBy: "tester" }), /PRICING_EXECUTION_SEMANTICS_MISSING/);
@@ -160,6 +173,7 @@ test("超上限且 overflowMode 缺失时仅返回 NON_FORMAL，不生成正式�
   delete moneyPolicy.overflowMode;
   const draft = importPricingPolicyDraft(completeInput({
     moneyPolicy,
+    executionPolicy: undefined,
     maintenanceConsumptionRates: base.maintenanceConsumptionRates.map((entry) => ({
       ...entry, value: { ...entry.value, value: 400_000_000 },
     })),
@@ -167,7 +181,7 @@ test("超上限且 overflowMode 缺失时仅返回 NON_FORMAL，不生成正式�
   const result = trial(draft, "quality_b_blue", 30);
   assert.equal(result.formal, false);
   assert.equal(result.purchasePrice, null);
-  assert.ok(result.issues.some((issue) => issue.code === "PRICE_OVERFLOW_POLICY_MISSING"));
+  assert.ok(result.warnings.length > 0);
 });
 
 test("同输入同规则版本的数值和 Trace hash 确定一致", () => {

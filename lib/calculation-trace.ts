@@ -1232,9 +1232,13 @@ function adaptPricingTraceWithVersion(
   if (input.pricing.formal && input.pricing.purchasePrice === null) {
     throw new CalculationTraceReplayError("正式价格缺少最终 purchasePrice。");
   }
-  for (let index = 1; index < pricingTrace.length; index += 1) {
-    const previous = pricingTrace[index - 1];
-    const current = pricingTrace[index];
+  // Repair output is a sibling finalization of repairPriceRaw, not an input to
+  // purchase calculation.  It remains traceable but is excluded from the
+  // linear purchase-value chain.
+  const purchaseChain = pricingTrace.filter((entry) => entry.formulaStep !== "repairPriceRounding");
+  for (let index = 1; index < purchaseChain.length; index += 1) {
+    const previous = purchaseChain[index - 1];
+    const current = purchaseChain[index];
     if (current.sequence !== previous.sequence + 1) {
       throw new CalculationTraceReplayError(
         `pricing Trace sequence 不连续：${previous.sequence} → ${current.sequence}。`,
@@ -1248,9 +1252,9 @@ function adaptPricingTraceWithVersion(
   }
   if (
     input.pricing.purchasePrice !== null
-    && pricingTrace.length > 0
+    && purchaseChain.length > 0
     && !calculationTraceValuesEqual(
-      pricingTrace[pricingTrace.length - 1].after,
+      purchaseChain[purchaseChain.length - 1].after,
       input.pricing.purchasePrice,
     )
   ) {

@@ -243,6 +243,17 @@ export function importQualityValuePolicyDraft(input: {
   }
 
   const sRange = input.ranges.find((range) => range.qualityId === "quality_s_orange");
+  if (sRange && (sRange.maxScore !== 100 || !sRange.maxInclusive)) {
+    issues.push(issue({
+      code: "QUALITY_RANGE_SOURCE_OUTDATED",
+      severity: "ERROR",
+      gate: "PUBLISH",
+      message: "正式 S 品质区间必须为 [65,100]；旧 [65,100) 源单元格只能保留为迁移证据，不能发布。",
+      sourceRevision: input.sourceRevision,
+      sourceCell: sRange.source,
+      relatedObjectIds: ["quality_s_orange"],
+    }));
+  }
   const conflictingEndpoint = input.pricingScoreEndpoints?.find(
     (entry) => entry.value === sRange?.maxScore,
   );

@@ -63,7 +63,7 @@ import {
 } from "./part-constraints";
 import { deterministicHash } from "./rule-kernel";
 
-export const CURRENT_WORKSPACE_SCHEMA_VERSION = 19;
+export const CURRENT_WORKSPACE_SCHEMA_VERSION = 20;
 
 const DEFAULT_RULE_SETTINGS: WorkspaceRuleSettings = {
   reductionStackingMode: "diminishing_division",
@@ -1546,6 +1546,36 @@ function migrateV18ToV19(input: MutableWorkspace): MutableWorkspace {
   } as MutableWorkspace;
 }
 
+/**
+ * Pricing v2 is intentionally additive: old execution switches remain opaque
+ * evidence for historical replay and no published Snapshot is recalculated.
+ */
+function migrateV19ToV20(input: MutableWorkspace): MutableWorkspace {
+  const state = migrateV18ToV19(input);
+  const preserveLegacyExecution = (value: unknown) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+    const policy = structuredClone(value) as Record<string, unknown>;
+    if (!policy.executionPolicy && policy.moneyPolicy && typeof policy.moneyPolicy === "object") {
+      const money = policy.moneyPolicy as Record<string, unknown>;
+      policy.legacyExecutionPayload = {
+        roundingStage: money.roundingStage,
+        minimumPriceScope: money.minimumPriceScope,
+        overflowMode: money.overflowMode,
+      };
+    }
+    return policy;
+  };
+  return {
+    ...state,
+    schemaVersion: 20,
+    pricingPolicyDrafts: arrayOf<WorkspaceState["pricingPolicyDrafts"][number]>(state.pricingPolicyDrafts)
+      .map(preserveLegacyExecution) as WorkspaceState["pricingPolicyDrafts"],
+    pricingPolicyVersions: arrayOf<WorkspaceState["pricingPolicyVersions"][number]>(state.pricingPolicyVersions)
+      .map(preserveLegacyExecution) as WorkspaceState["pricingPolicyVersions"],
+    configurationSnapshots: arrayOf<WorkspaceState["configurationSnapshots"][number]>(state.configurationSnapshots),
+  } as MutableWorkspace;
+}
+
 const migrations: Record<number, (state: MutableWorkspace) => MutableWorkspace> = {
   1: migrateV1ToV2,
   2: migrateV2ToV3,
@@ -1565,6 +1595,7 @@ const migrations: Record<number, (state: MutableWorkspace) => MutableWorkspace> 
   16: migrateV16ToV17,
   17: migrateV17ToV18,
   18: migrateV18ToV19,
+  19: migrateV19ToV20,
 };
 
 export function migrateWorkspaceState(input: unknown): WorkspaceState {

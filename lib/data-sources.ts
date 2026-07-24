@@ -1,11 +1,13 @@
 import type {
   AdjustmentRule,
   DataSourceBinding,
+  DataSourceDataset,
   DataSourceIssue,
   DataSourcePreview,
   DataSourceProfile,
   DataSourceWritebackPreview,
   DimensionKey,
+  FeishuShareLinkHistoryEntry,
   ItemKind,
   ModifierOption,
   ParameterDefinition,
@@ -51,6 +53,52 @@ export function defaultDataSourceProfiles(): DataSourceProfile[] {
       notes: "默认用于流派与定位系数；可切换数据类型。",
     },
   ];
+}
+
+/** 飞书分享链接历史的最大保留条数。仅作导入便利，不保存凭据。 */
+export const FEISHU_SHARE_LINK_HISTORY_LIMIT = 20;
+
+/**
+ * 记录一条已成功识别的飞书分享链接到历史。按 shareUrl 去重并刷新
+ * lastUsedAt；超过上限时丢弃最旧条目。返回新数组，不修改入参。
+ *
+ * 历史只存 shareUrl/label/dataset/lastUsedAt，绝不包含 appToken、密钥
+ * 或任何凭据。dataset 与数据源配置保持一致，便于按用途回填。
+ */
+export function recordShareLinkHistory(
+  history: readonly FeishuShareLinkHistoryEntry[],
+  entry: {
+    shareUrl: string;
+    label: string;
+    dataset: DataSourceDataset;
+    lastUsedAt?: string;
+  },
+): FeishuShareLinkHistoryEntry[] {
+  const shareUrl = entry.shareUrl.trim();
+  if (!shareUrl) return [...history];
+  const lastUsedAt = entry.lastUsedAt ?? new Date().toISOString();
+  const preserved = history.filter((item) => item.shareUrl !== shareUrl);
+  const next: FeishuShareLinkHistoryEntry = {
+    id: shareUrl,
+    shareUrl,
+    label: entry.label.trim() || shareUrl,
+    dataset: entry.dataset,
+    lastUsedAt,
+  };
+  const updated = [next, ...preserved];
+  return updated.slice(0, FEISHU_SHARE_LINK_HISTORY_LIMIT);
+}
+
+/**
+ * 从历史中移除指定 shareUrl（或全部）。返回新数组，不修改入参。
+ */
+export function removeShareLinkHistory(
+  history: readonly FeishuShareLinkHistoryEntry[],
+  shareUrl: string | null,
+): FeishuShareLinkHistoryEntry[] {
+  if (shareUrl === null) return [];
+  const target = shareUrl.trim();
+  return history.filter((item) => item.shareUrl !== target);
 }
 
 function textValue(value: unknown): string {

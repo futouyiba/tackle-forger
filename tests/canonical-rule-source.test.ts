@@ -276,9 +276,10 @@ test("schema v15 顺序迁移保留历史状态并补 canonical 草稿集合", (
   const v15 = { ...structuredClone(current), schemaVersion: 15 } as unknown as Record<string, unknown>;
   delete v15.canonicalRuleSourceDrafts;
   const migrated = migrateWorkspaceState(v15);
-  assert.equal(migrated.schemaVersion, 19);
+  assert.equal(migrated.schemaVersion, 20);
   assert.deepEqual(migrated.canonicalRuleSourceDrafts, []);
   assert.deepEqual(migrated.weightTemplatePolicyDrafts, []);
+  assert.deepEqual(migrated.feishuShareLinkHistory, []);
   assert.deepEqual(migrated.configurationSnapshots, current.configurationSnapshots);
 });
 

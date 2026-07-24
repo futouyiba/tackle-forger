@@ -608,6 +608,7 @@ export function createSeedState(): WorkspaceState {
     dataSourceImports: [],
     dataSourceBindings: [],
     dataSourceWritebacks: [],
+    feishuShareLinkHistory: [],
     revisions: [
       {
         revision: 1,

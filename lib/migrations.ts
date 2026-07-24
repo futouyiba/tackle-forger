@@ -63,7 +63,7 @@ import {
 } from "./part-constraints";
 import { deterministicHash } from "./rule-kernel";
 
-export const CURRENT_WORKSPACE_SCHEMA_VERSION = 19;
+export const CURRENT_WORKSPACE_SCHEMA_VERSION = 20;
 
 const DEFAULT_RULE_SETTINGS: WorkspaceRuleSettings = {
   reductionStackingMode: "diminishing_division",
@@ -1546,6 +1546,35 @@ function migrateV18ToV19(input: MutableWorkspace): MutableWorkspace {
   } as MutableWorkspace;
 }
 
+function migrateV19ToV20(input: MutableWorkspace): MutableWorkspace {
+  const state = migrateV18ToV19(input);
+  const rawHistory = arrayOf<WorkspaceState["feishuShareLinkHistory"][number]>(
+    state.feishuShareLinkHistory,
+  );
+  // Only keep non-sensitive, structurally valid entries. The history records
+  // user-pasted Feishu Bitable share links for import convenience; it must
+  // never carry credentials, tokens or personal identity.
+  const seen = new Set<string>();
+  const feishuShareLinkHistory = rawHistory.filter((entry) => {
+    if (!entry || typeof entry !== "object") return false;
+    if (typeof entry.id !== "string" || !entry.id) return false;
+    if (typeof entry.shareUrl !== "string" || !entry.shareUrl) return false;
+    if (typeof entry.label !== "string") return false;
+    if (entry.dataset !== "weight_templates" && entry.dataset !== "modifiers") return false;
+    if (typeof entry.lastUsedAt !== "string") return false;
+    if (seen.has(entry.shareUrl)) return false;
+    seen.add(entry.shareUrl);
+    return true;
+  });
+  return {
+    ...state,
+    schemaVersion: 20,
+    feishuShareLinkHistory,
+    // Schema migration must never rewrite a frozen snapshot payload or hash.
+    configurationSnapshots: arrayOf<WorkspaceState["configurationSnapshots"][number]>(state.configurationSnapshots),
+  } as MutableWorkspace;
+}
+
 const migrations: Record<number, (state: MutableWorkspace) => MutableWorkspace> = {
   1: migrateV1ToV2,
   2: migrateV2ToV3,
@@ -1565,6 +1594,7 @@ const migrations: Record<number, (state: MutableWorkspace) => MutableWorkspace> 
   16: migrateV16ToV17,
   17: migrateV17ToV18,
   18: migrateV18ToV19,
+  19: migrateV19ToV20,
 };
 
 export function migrateWorkspaceState(input: unknown): WorkspaceState {
@@ -1609,6 +1639,9 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
     performanceSummaryDefinitions: arrayOf<
       WorkspaceState["performanceSummaryDefinitions"][number]
     >(state.performanceSummaryDefinitions),
+    feishuShareLinkHistory: arrayOf<
+      WorkspaceState["feishuShareLinkHistory"][number]
+    >(state.feishuShareLinkHistory),
     patchLedger: state.patchLedger && typeof state.patchLedger === "object"
       ? migratePatchLedger(state.patchLedger as WorkspaceState["patchLedger"],patchLedgerMigrationContext(state))
       : emptyPatchLedger(),

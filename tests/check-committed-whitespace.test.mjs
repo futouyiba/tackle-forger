@@ -243,13 +243,15 @@ test("before-SHA 不可达回退后仍检出本次引入的 trailing whitespace�
   assert.match(result.stdout, /feature\.txt:1: trailing whitespace/);
 });
 
-test("before-SHA 不可达且无默认分支共同祖先时回退到 head 父提交范围", async (t) => {
+test("before-SHA 不可达且无可信共同基线时回退到空树全树检查（多提交 head）", async (t) => {
   const { cwd } = await createRepository(t);
   git(cwd, "switch", "-c", "feature");
+  // createRepository 在 main 上提交了带 trailing whitespace 的 historical.txt；
+  // feature 分支继承该文件，空树全树检查会被它命中，故先移除以聚焦"无基线 → 全树"路径。
+  git(cwd, "rm", "-f", "historical.txt");
   await writeFile(path.join(cwd, "first.txt"), "first clean change\n");
   git(cwd, "add", "first.txt");
   git(cwd, "commit", "-m", "first commit");
-  const parentSha = git(cwd, "rev-parse", "HEAD");
   await writeFile(path.join(cwd, "second.txt"), "second clean change\n");
   git(cwd, "add", "second.txt");
   git(cwd, "commit", "-m", "second commit");
@@ -259,15 +261,45 @@ test("before-SHA 不可达且无默认分支共同祖先时回退到 head 父提
     EVENT_NAME: "push",
     PUSH_BEFORE_SHA: UNREACHABLE_SHA,
     PUSH_AFTER_SHA: headSha,
-    // 故意不传 DEFAULT_BRANCH / PUSH_BASE_REF，逼出 head parent 回退路径
+    // 故意不传 DEFAULT_BRANCH / PUSH_BASE_REF，逼出无共同基线 → 全树回退路径
   }, { cwd });
 
-  assert.equal(range.mode, "forced_push_head_parent");
-  assert.equal(range.baseSha, parentSha);
+  assert.equal(range.mode, "forced_push_full_tree");
+  assert.equal(range.baseSha, EMPTY_TREE_SHA);
   assert.equal(range.headSha, headSha);
   assert.ok(range.fallbackReason);
-  assert.ok(range.fallbackReason.includes("head parent..head"));
+  assert.ok(range.fallbackReason.includes("full-tree"));
   assert.equal(diffCheck(cwd, range.baseSha, range.headSha).status, 0);
+});
+
+test("before-SHA 不可达且无共同基线时全树检查仍检出较早提交引入的 trailing whitespace", async (t) => {
+  const { cwd } = await createRepository(t);
+  git(cwd, "switch", "-c", "feature");
+  // 倒数第二个提交写入 trailing whitespace；末提交不触碰该文件。
+  await writeFile(path.join(cwd, "early.txt"), "early commit trailing whitespace   \n");
+  git(cwd, "add", "early.txt");
+  git(cwd, "commit", "-m", "early bad commit");
+  await writeFile(path.join(cwd, "late.txt"), "clean late commit\n");
+  git(cwd, "add", "late.txt");
+  git(cwd, "commit", "-m", "late clean commit");
+  const headSha = git(cwd, "rev-parse", "HEAD");
+  const headParent = git(cwd, "rev-parse", "HEAD^");
+
+  const range = resolveCommittedWhitespaceRange({
+    EVENT_NAME: "push",
+    PUSH_BEFORE_SHA: UNREACHABLE_SHA,
+    PUSH_AFTER_SHA: headSha,
+    // 不传 DEFAULT_BRANCH / PUSH_BASE_REF：无可信共同基线
+  }, { cwd });
+
+  assert.equal(range.mode, "forced_push_full_tree");
+  assert.equal(range.baseSha, EMPTY_TREE_SHA);
+  // 旧的 head^..head 回退只会检查末提交（late.txt 干净），从而静默放过 early.txt。
+  assert.equal(diffCheck(cwd, headParent, headSha).status, 0);
+  // 全树回退必须检出较早提交引入的 trailing whitespace 并定位文件，不得静默放过。
+  const result = diffCheck(cwd, range.baseSha, range.headSha);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stdout, /early\.txt:1: trailing whitespace/);
 });
 
 test("before-SHA 不可达且 head 为孤儿根提交时回退到空树全树检查", async (t) => {

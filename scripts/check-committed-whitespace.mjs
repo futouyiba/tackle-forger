@@ -44,15 +44,6 @@ function commitExists(sha, cwd) {
   return result.status === 0;
 }
 
-function resolveHeadFirstParent(headSha, cwd) {
-  const result = runGit(["rev-list", "--parents", "-n", "1", headSha], { cwd });
-  if (result.status !== 0) return undefined;
-  const parts = result.stdout.trim().split(/\s+/).filter(Boolean);
-  if (parts.length < 2) return undefined;
-  const parent = parts[1].toLowerCase();
-  return COMMIT_SHA.test(parent) ? parent : undefined;
-}
-
 function candidateBaselineRefs(pushBaseRef, defaultBranch) {
   const candidates = [];
   if (pushBaseRef) {
@@ -132,21 +123,17 @@ export function resolveCommittedWhitespaceRange(environment, { cwd = process.cwd
       };
     }
 
-    const parentSha = resolveHeadFirstParent(headSha, cwd);
-    if (parentSha) {
-      return {
-        baseSha: parentSha,
-        headSha,
-        mode: "forced_push_head_parent",
-        fallbackReason: `${fallbackReason}; fell back to head parent..head range`,
-      };
-    }
-
+    // No trusted common baseline (default branch / base_ref unreachable, or no
+    // shared ancestor with head). Do NOT narrow this to head's first parent: a
+    // rewritten push can introduce whitespace errors in earlier commits that the
+    // final commit never touches, and `head^..head` would silently miss them,
+    // violating the fail-closed gate. Diff the entire head tree against the
+    // empty tree so any whitespace error in the pushed tip is caught.
     return {
       baseSha: EMPTY_TREE_SHA,
       headSha,
       mode: "forced_push_full_tree",
-      fallbackReason: `${fallbackReason}; head has no reachable parent; fell back to full-tree check`,
+      fallbackReason: `${fallbackReason}; no trusted common baseline available; fell back to full-tree check`,
     };
   }
 

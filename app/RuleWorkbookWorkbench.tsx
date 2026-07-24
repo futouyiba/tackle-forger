@@ -41,18 +41,27 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
   const [inspection, setInspection] = useState<CanonicalRuleWorkbookInspection | null>(null);
   const [action, setAction] = useState<ActionState>("");
   const [error, setError] = useState("");
+  const [errorCode, setErrorCode] = useState<number | undefined>(undefined);
+  const [errorEndpoint, setErrorEndpoint] = useState<string | undefined>(undefined);
   const [warningReason, setWarningReason] = useState("");
 
   const inspect = async () => {
     setAction("inspect");
     setError("");
+    setErrorCode(undefined);
+    setErrorEndpoint(undefined);
     try {
       const response = await fetch("/api/feishu-workbook", { cache: "no-store" });
       const payload = (await response.json()) as {
         inspection?: CanonicalRuleWorkbookInspection;
         error?: string;
+        errorInfo?: { code?: number; endpoint?: string };
       };
-      if (!response.ok || !payload.inspection) throw new Error(payload.error || "读取规则工作簿失败");
+      if (!response.ok || !payload.inspection) {
+        setErrorCode(payload.errorInfo?.code);
+        setErrorEndpoint(payload.errorInfo?.endpoint);
+        throw new Error(payload.error || "读取规则工作簿失败");
+      }
       setInspection(payload.inspection);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "读取规则工作簿失败");
@@ -68,8 +77,13 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
         const payload = (await response.json()) as {
           inspection?: CanonicalRuleWorkbookInspection;
           error?: string;
+          errorInfo?: { code?: number; endpoint?: string };
         };
-        if (!response.ok || !payload.inspection) throw new Error(payload.error || "读取规则工作簿失败");
+        if (!response.ok || !payload.inspection) {
+          setErrorCode(payload.errorInfo?.code);
+          setErrorEndpoint(payload.errorInfo?.endpoint);
+          throw new Error(payload.error || "读取规则工作簿失败");
+        }
         setInspection(payload.inspection);
       })
       .catch((caught: unknown) => {
@@ -249,7 +263,17 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
       {error ? (
         <div className="card rule-workbook-error">
           <AlertTriangle size={20} />
-          <div><strong>暂时无法读取飞书工作簿</strong><span>{error}</span></div>
+          <div>
+            <strong>暂时无法读取飞书工作簿</strong>
+            <span>{error}</span>
+            {errorCode !== undefined || errorEndpoint ? (
+              <small className="rule-workbook-error-info">
+                {errorCode !== undefined ? `飞书 code ${errorCode}` : ""}
+                {errorCode !== undefined && errorEndpoint ? " · " : ""}
+                {errorEndpoint ?? ""}
+              </small>
+            ) : null}
+          </div>
         </div>
       ) : null}
 

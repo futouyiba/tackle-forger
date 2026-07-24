@@ -5,6 +5,7 @@ import {
   type FeishuViewOption,
   type ResolvedFeishuSource,
 } from "./feishu-links";
+import { FeishuApiError, feishuEndpointPath, maskToken } from "./feishu-api-error";
 import type { DataSourceProfile, DataSourceWritebackRow, WorkspaceState } from "./types";
 
 interface FeishuResponse<T> {
@@ -39,7 +40,13 @@ export async function feishuTenantAccessToken() {
     expire?: number;
   };
   if (!response.ok || payload.code !== 0 || !payload.tenant_access_token) {
-    throw new Error("飞书身份认证失败：" + (payload.msg || response.statusText));
+    throw new FeishuApiError({
+      reason: "飞书身份认证失败",
+      code: payload.code,
+      msg: payload.msg,
+      httpStatus: response.status,
+      endpoint: feishuEndpointPath("/open-apis/auth/v3/tenant_access_token/internal"),
+    });
   }
   cachedToken = {
     value: payload.tenant_access_token,
@@ -65,21 +72,27 @@ export async function resolveFeishuSourceLink(
   do {
     const query = new URLSearchParams({ page_size: "100" });
     if (pageToken) query.set("page_token", pageToken);
-    const response = await fetch(
+    const tablesUrl =
       feishuApiBase() +
-        "/open-apis/bitable/v1/apps/" +
-        encodeURIComponent(parsed.appToken) +
-        "/tables?" +
-        query,
-      { headers, cache: "no-store" },
-    );
+      "/open-apis/bitable/v1/apps/" +
+      encodeURIComponent(parsed.appToken) +
+      "/tables?" +
+      query;
+    const response = await fetch(tablesUrl, { headers, cache: "no-store" });
     const payload = (await response.json()) as FeishuResponse<{
       items?: Array<{ table_id?: string; name?: string }>;
       has_more?: boolean;
       page_token?: string;
     }>;
     if (!response.ok || payload.code !== 0) {
-      throw new Error("读取飞书数据表列表失败：" + (payload.msg || response.statusText));
+      throw new FeishuApiError({
+        reason: "读取飞书数据表列表失败",
+        code: payload.code,
+        msg: payload.msg,
+        httpStatus: response.status,
+        endpoint: feishuEndpointPath(tablesUrl),
+        tokenContext: `bitable app:${maskToken(parsed.appToken)}`,
+      });
     }
     for (const item of payload.data?.items ?? []) {
       if (item.table_id) tables.push({ id: item.table_id, name: item.name || item.table_id });
@@ -99,23 +112,29 @@ export async function resolveFeishuSourceLink(
     do {
       const query = new URLSearchParams({ page_size: "100" });
       if (viewPageToken) query.set("page_token", viewPageToken);
-      const response = await fetch(
+      const viewsUrl =
         feishuApiBase() +
-          "/open-apis/bitable/v1/apps/" +
-          encodeURIComponent(parsed.appToken) +
-          "/tables/" +
-          encodeURIComponent(tableId) +
-          "/views?" +
-          query,
-        { headers, cache: "no-store" },
-      );
+        "/open-apis/bitable/v1/apps/" +
+        encodeURIComponent(parsed.appToken) +
+        "/tables/" +
+        encodeURIComponent(tableId) +
+        "/views?" +
+        query;
+      const response = await fetch(viewsUrl, { headers, cache: "no-store" });
       const payload = (await response.json()) as FeishuResponse<{
         items?: Array<{ view_id?: string; view_name?: string; view_type?: string }>;
         has_more?: boolean;
         page_token?: string;
       }>;
       if (!response.ok || payload.code !== 0) {
-        throw new Error("读取飞书视图列表失败：" + (payload.msg || response.statusText));
+        throw new FeishuApiError({
+          reason: "读取飞书视图列表失败",
+          code: payload.code,
+          msg: payload.msg,
+          httpStatus: response.status,
+          endpoint: feishuEndpointPath(viewsUrl),
+          tokenContext: `bitable app:${maskToken(parsed.appToken)}`,
+        });
       }
       for (const item of payload.data?.items ?? []) {
         if (item.view_id) {
@@ -180,7 +199,14 @@ export async function fetchFeishuRecords(source: DataSourceProfile): Promise<Fei
       page_token?: string;
     }>;
     if (!response.ok || payload.code !== 0) {
-      throw new Error("读取飞书表失败：" + (payload.msg || response.statusText));
+      throw new FeishuApiError({
+        reason: "读取飞书表失败",
+        code: payload.code,
+        msg: payload.msg,
+        httpStatus: response.status,
+        endpoint: feishuEndpointPath(url),
+        tokenContext: `bitable app:${maskToken(source.appToken)}`,
+      });
     }
     records.push(...(payload.data?.items ?? []));
     if (records.length > 10_000) {
@@ -219,7 +245,14 @@ export async function updateFeishuRecords(
     });
     const payload = (await response.json()) as FeishuResponse<unknown>;
     if (!response.ok || payload.code !== 0) {
-      throw new Error("回写飞书表失败：" + (payload.msg || response.statusText));
+      throw new FeishuApiError({
+        reason: "回写飞书表失败",
+        code: payload.code,
+        msg: payload.msg,
+        httpStatus: response.status,
+        endpoint: feishuEndpointPath(url),
+        tokenContext: `bitable app:${maskToken(source.appToken)}`,
+      });
     }
   }
 }

@@ -35,6 +35,15 @@ export type DimensionKey =
   | "series";
 
 export interface ParameterDefinition {
+  /**
+   * 稳定的 UI 标识，用作参数管理表行等处的 React key。rename 时绝不重算，
+   * 因此正在编辑的 label/key 变化不会让行重挂载、丢失 IME 组字上下文与焦点。
+   * 新建参数（addParameter、Excel 导入）必须用 createParameterId() 生成不可复用
+   * 的 id（UUID），不得用 `param:${key}`——否则改名释放旧 key 后再用该 key 新建
+   * 会得到相同 id，两行 React key 撞车。历史无 id 数据仍由 normalize 用
+   * `param:${key}` best-effort 回填（存量数据，不臆造身份）。
+   */
+  id?: string;
   key: string;
   label: string;
   itemKind: ItemKind;

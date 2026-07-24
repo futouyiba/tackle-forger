@@ -2,8 +2,11 @@ import { timingSafeEqual } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { feishuRuntimeConfig } from "./auth-config";
 import { findSession } from "./auth-store";
-import { PHASE_ONE_CAPABILITIES } from "./feishu-identity";
+import { feishuCapabilities } from "./feishu-identity";
+import { fancyHubConfigFromEnvironment, fancyHubEnablement } from "./fancy-hub";
+import { aiRuntimeStoreEnablement } from "./ai-runtime-store";
 import {
+  actionAvailability,
   buildActionAvailabilityMap,
   type CapabilityCode,
 } from "./interaction-contracts";
@@ -22,9 +25,47 @@ export interface RequestIdentity {
 }
 
 function withActions<T extends RequestIdentity>(identity: T) {
+  const actionAvailabilityMap = buildActionAvailabilityMap(identity.capabilities);
+  const connector = fancyHubEnablement(fancyHubConfigFromEnvironment());
+  const runtimeStore = aiRuntimeStoreEnablement();
+  const assessmentDomainBlock = connector.enabled && runtimeStore.enabled ? undefined : {
+      code: connector.code ?? runtimeStore.code ?? "AI_CONNECTOR_DISABLED",
+      text: "Fancy Hub 连接器未通过服务端启用准入。",
+    };
+  actionAvailabilityMap.run_ai_assessment = actionAvailability(
+    "run_ai_assessment",
+    identity.capabilities,
+    assessmentDomainBlock,
+  );
+  const draftDomainBlock = runtimeStore.enabled ? undefined : {
+    code: runtimeStore.code ?? "AI_RETENTION_STORE_DISABLED",
+    text: "AI 留存服务未通过服务端启用准入，不能验证评估来源。",
+  };
+  for (const action of [
+    "create_ai_patch_draft",
+    "create_ai_rule_source_change_draft",
+  ] as const) {
+    actionAvailabilityMap[action] = actionAvailability(action, identity.capabilities, draftDomainBlock);
+  }
+  // 方向 A「导出到新飞书表」是受控写入（创建外部飞书电子表格），默认关闭：
+  // 即便登录用户持有 feishu.sheet.export.write 能力，也必须在部署环境中显式设置
+  // FEISHU_EXPORT_TO_SHEET_ENABLED=true 才启用。路由层独立复核同一开关，不信 UI。
+  const feishuSheetExportEnabled =
+    process.env.FEISHU_EXPORT_TO_SHEET_ENABLED?.trim().toLowerCase() === "true";
+  const feishuSheetExportBlock = feishuSheetExportEnabled
+    ? undefined
+    : {
+        code: "FEISHU_EXPORT_TO_SHEET_DISABLED",
+        text: "导出到飞书表默认关闭；需在部署环境中设置 FEISHU_EXPORT_TO_SHEET_ENABLED=true 启用。",
+      };
+  actionAvailabilityMap.export_to_feishu_sheet = actionAvailability(
+    "export_to_feishu_sheet",
+    identity.capabilities,
+    feishuSheetExportBlock,
+  );
   return {
     ...identity,
-    actionAvailability: buildActionAvailabilityMap(identity.capabilities),
+    actionAvailability: actionAvailabilityMap,
   };
 }
 
@@ -59,16 +100,24 @@ function trustedProxyIdentity(request: NextRequest) {
   const tenantKey = request.headers.get("x-feishu-tenant-key")?.trim();
   const openId = request.headers.get("x-feishu-open-id")?.trim();
   if (!configuredTenant || tenantKey !== configuredTenant || !openId) return undefined;
+  const capabilities = feishuCapabilities(openId, aiProviderAdminOpenIds());
   return withActions({
     email: "",
     name: request.headers.get("x-feishu-display-name")?.trim() || openId,
-    role: "editor" as const,
+    role: capabilities.includes("ai.provider_policy.manage") ? "admin" as const : "editor" as const,
     authenticated: true,
     provider: "feishu" as const,
     tenantKey,
     openId,
-    capabilities: [...PHASE_ONE_CAPABILITIES],
+    capabilities,
   });
+}
+
+function aiProviderAdminOpenIds(): string[] {
+  return (process.env.AI_PROVIDER_ADMIN_OPEN_IDS ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
 }
 
 export async function requestUser(request: NextRequest) {
@@ -78,16 +127,17 @@ export async function requestUser(request: NextRequest) {
       const config = feishuRuntimeConfig();
       const session = await findSession({ sessionId, secret: config.sessionSecret });
       if (session && session.identity.tenantKey === config.tenantKey) {
+        const capabilities = feishuCapabilities(session.identity.openId, aiProviderAdminOpenIds());
         return withActions({
           email: "",
           name: session.identity.displayName,
           avatarUrl: session.identity.avatarUrl,
-          role: "editor" as const,
+          role: capabilities.includes("ai.provider_policy.manage") ? "admin" as const : "editor" as const,
           authenticated: true,
           provider: "feishu" as const,
           tenantKey: session.identity.tenantKey,
           openId: session.identity.openId,
-          capabilities: [...PHASE_ONE_CAPABILITIES],
+          capabilities,
           sessionExpiresAt: session.expiresAt,
         });
       }

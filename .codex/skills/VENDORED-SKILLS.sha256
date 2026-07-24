@@ -1,0 +1,44 @@
+# Vendored workflow Skills integrity manifest.
+#
+# Canonical upstream URL: https://github.com/futouyiba/agent-project-bootstrap.git
+# Source base revision: d5189ee6f1c9c764787e07b6a56badf4b891d1ba
+# This is a working-tree snapshot above that base revision. The upstream
+# agent-issue-loop and agent-pr-loop additions were not yet committed at that
+# revision, so no upstream commit is claimed to contain this exact snapshot.
+# Upstream paths (repository-relative):
+#   skill/ -> .codex/skills/agent-project-bootstrap/
+#   skills/agent-issue-loop/ -> .codex/skills/agent-issue-loop/
+#   skills/agent-pr-loop/ -> .codex/skills/agent-pr-loop/
+#
+# Verify from the Tackle Forger repository root:
+#   shasum -a 256 -c .codex/skills/VENDORED-SKILLS.sha256
+#
+# All checked paths are repository-relative so validation is offline and portable.
+# To synchronize deterministically: copy the three paths above from one chosen
+# upstream working-tree snapshot, regenerate this manifest's sorted per-file
+# SHA-256 entries, then run the hash check and diff each copied directory
+# against that same chosen source snapshot before accepting the update.
+# The entries below are the authoritative content identities for this snapshot.
+d73164a9b40482d7e50195c8c2dfdfd857644edafac4f319acc58a490aabfb3c  .codex/skills/agent-issue-loop/SKILL.md
+3dc274d5cf1a7fb81cb6345650a0ef4e93d10c1cff0511fe3f6bf078269f625c  .codex/skills/agent-issue-loop/agents/openai.yaml
+bdebd05b42b65b6599cf74f0f58bf64ecba5e4d3060c713ec19e8433105b5469  .codex/skills/agent-pr-loop/SKILL.md
+4b2a5001715cc03b97382bee655e3895894b7db6c99ddece023afee3f87a2fbe  .codex/skills/agent-pr-loop/agents/openai.yaml
+91a79b19699b0f6d02fb1a0c8efa5b017bea65a8a2d1292e8e28b4fd99f566d7  .codex/skills/agent-project-bootstrap/SKILL.md
+626fe408bd2e275ba0a3d4e86e4675cec70ead23a1ba951f5f4b6933d60edb6e  .codex/skills/agent-project-bootstrap/agents/openai.yaml
+b3fa308a6aeea4d58a8b55cc35c7795c9fa280fc2f0ffaaa8da19e1370074e1a  .codex/skills/agent-project-bootstrap/assets/codex-managed-supervisor.md
+37f26abe0819c6f18b52a74cb1ff3b4cad81ab0d33b731fdd9fe33bcab62a5ff  .codex/skills/agent-project-bootstrap/assets/github-agentic-workflows/README.md
+7386153631ca960f7610406456f28d806ff27dcd7ca63f271b7ab7ba051bcf1a  .codex/skills/agent-project-bootstrap/assets/github-agentic-workflows/agent-implement.md
+1257acc24865eaa93ce62e203fd8f25cea2a2feaeb36a8ff4bbc8f97fae1d6e0  .codex/skills/agent-project-bootstrap/assets/github-agentic-workflows/agent-integrate.md
+11bd78faa9a8e60bb17f89362447051a76e28196e7c310a279d31dde8a511bd3  .codex/skills/agent-project-bootstrap/assets/github-agentic-workflows/agent-review.md
+bcb7e73e50e0c4a586c2d97d1e755c17c82ece86ec7fc83732139621722a248a  .codex/skills/agent-project-bootstrap/assets/github-agentic-workflows/agent-supervisor.md
+2334ea3a981e5ccf7f312285cbfb720cd6f1a6d3b24a034fd66327577c7cea2c  .codex/skills/agent-project-bootstrap/references/adopting-existing-project.md
+6700bc8dd354c4318df453f1515d0173321e638359baa04b05338543dc39d2e0  .codex/skills/agent-project-bootstrap/references/ci-and-protection.md
+e058bfa3f764ed4e79b68a58db815296ed18cacbff6576540943f10b46cbb0ea  .codex/skills/agent-project-bootstrap/references/daily-project-flow.md
+85892267803b62ac9435518a6b47b5eaee11f4c10a8e93bfaaad342702c91eb9  .codex/skills/agent-project-bootstrap/references/github-agentic-workflows.md
+90d1daaa995df238dead7756d73e0497441bd5fb62284ead4943d210cd6f4c63  .codex/skills/agent-project-bootstrap/references/github-coordination.md
+d3621976c9e06cfe0b1ea764fca4791a155b193e2127310c7a7b35088fb43007  .codex/skills/agent-project-bootstrap/references/github-project-automation.md
+fa9aa944d2b923465289ca48d1f5c5f51b7ee7351435eaf4546cad40ed8879bf  .codex/skills/agent-project-bootstrap/references/managed-autopilot.md
+0f9eaa81f15813e30043acdac9f9ffcf10d19c53faefc2d2c19f46060cb9fb7f  .codex/skills/agent-project-bootstrap/references/worktree-environment.md
+c809a0caa7b33bacc9c1a864c6b5f9c20ee0de8f60b5c110c7d0f89d567a0295  .codex/skills/agent-project-bootstrap/scripts/audit_project.py
+41799e614c94eade2f2620b8847bbed7133177cb38e74d1bc0a05b979d94780a  .codex/skills/agent-project-bootstrap/scripts/configure_agentic_workflows.py
+a74fa8a8be54f7023e010df86d1d08922685aa70aacb90934f617a78d850b32c  .codex/skills/agent-project-bootstrap/scripts/snapshot_github.py

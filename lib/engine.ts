@@ -312,8 +312,9 @@ function validateEquipment(
     });
   }
   if (
+    template.rangeSemantics !== "target_pull" &&
     candidate.fishMinKg > template.nominalFishKg ||
-    candidate.fishMaxKg < template.nominalFishKg
+    template.rangeSemantics !== "target_pull" && candidate.fishMaxKg < template.nominalFishKg
   ) {
     issues.push({
       level: "error",
@@ -394,6 +395,10 @@ export function calculateCandidate(
     for (const optionId of selectedOptionIds(candidate, layer)) {
       const option = modifierById.get(optionId);
       if (!option) continue;
+      if (option.methodIds?.length && (!template.methodId || !option.methodIds.includes(template.methodId))) {
+        trace.push({ layer: layer.name, source: option.name, parameterKey: "methodId", operation: "set", before: template.methodId ?? null, operand: option.methodIds.join(","), after: template.methodId ?? null });
+        continue;
+      }
       option.rules.forEach((rule) => applyRule(values, rule, layer.name, option.name, trace));
     }
     layer.rules.forEach((rule) => applyRule(values, rule, layer.name, layer.name, trace));
@@ -401,6 +406,14 @@ export function calculateCandidate(
 
   const quality = scoreAffixes(state, candidate.affixIds);
   const validation = validateEquipment(template, candidate, values);
+  for (const layer of layers) {
+    for (const optionId of selectedOptionIds(candidate, layer)) {
+      const option = modifierById.get(optionId);
+      if (option?.methodIds?.length && (!template.methodId || !option.methodIds.includes(template.methodId))) {
+        validation.issues.push({ level: "error", code: "METHOD_TYPE_INCOMPATIBLE", message: `类型 ${option.name} 不兼容钓法 ${template.methodId ?? "未知"}。` });
+      }
+    }
+  }
   const band = state.qualityBands.find((item) => item.id === quality.qualityId);
   const specialization =
     Number(Boolean(candidate.selections.functionId)) +

@@ -5,6 +5,9 @@ import { backup, DatabaseSync } from "node:sqlite";
 const databasePath = path.resolve(process.env.WORKSPACE_DATABASE_PATH?.trim() || ".data/workspace.sqlite");
 const dataDir = path.resolve(process.env.WORKSPACE_FILE_DATA_DIR?.trim() || path.join(path.dirname(databasePath), "files"));
 const sessionDataDir = path.resolve(process.env.FEISHU_SESSION_DATA_DIR?.trim() || ".data/auth");
+const aiRetentionDataDir = process.env.AI_RETENTION_DATA_DIR?.trim()
+  ? path.resolve(process.env.AI_RETENTION_DATA_DIR.trim())
+  : undefined;
 const backupRoot = path.resolve(process.env.WORKSPACE_BACKUP_DIR?.trim() || path.join(path.dirname(databasePath), "backups"));
 const retentionDays = Number(process.env.WORKSPACE_BACKUP_RETENTION_DAYS || "30");
 const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -29,8 +32,17 @@ if (sessionDataIncluded) {
   await cp(sessionDataDir, sessionBackupDir, { recursive: true, preserveTimestamps: true });
   await chmod(sessionBackupDir, 0o700);
 }
+const aiRetentionDataIncluded = aiRetentionDataDir
+  ? await stat(aiRetentionDataDir).then((entry) => entry.isDirectory()).catch(() => false)
+  : false;
+if (aiRetentionDataIncluded && aiRetentionDataDir) {
+  const aiRetentionBackupDir = path.join(targetDir, "ai-retention");
+  await cp(aiRetentionDataDir, aiRetentionBackupDir, { recursive: true, preserveTimestamps: true });
+  await chmod(aiRetentionBackupDir, 0o700);
+}
 await writeFile(path.join(targetDir, "manifest.json"), `${JSON.stringify({
   createdAt: new Date().toISOString(), databasePath, dataDir, sessionDataDir, sessionDataIncluded,
+  aiRetentionDataDir, aiRetentionDataIncluded,
 }, null, 2)}\n`, { mode: 0o600 });
 
 if (Number.isFinite(retentionDays) && retentionDays > 0) {

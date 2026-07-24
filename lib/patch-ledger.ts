@@ -1,30 +1,238 @@
 import { deterministicHash } from "./rule-kernel";
+import { jcsSha256Hex } from "./canonical-json";
+import { PATCH_SET_HASH_CONTRACT_VERSION, patchMirrorDetailKey, patchMirrorGroupKey, patchSetHashForReferences } from "./patch-contract";
 import { assertPatchReviewCoverage, assertPatchRevisionDeterministicallyReplayable, assertPublishedPatchOffsetPolicy, invalidatePatchReviewBatch, PatchOffsetPolicyError } from "./patch-offset-policy";
 import { transitionPatchState } from "./patch-state";
-import type { PatchAbsorptionAssessment, PatchAbsorptionOperationEvidence, PatchLedger, PatchMirrorOperationResult, PatchMirrorPullAudit, PatchMirrorRemoteRow, PatchMirrorSyncCommand, PatchMirrorValidationIssue, PatchOffsetPolicyVersion, PatchOperationRecord, PatchPatternSummary, PatchReviewBatch, PatchReviewSubjectRef, PatchRevisionRecord, PatchSnapshotReference, PatchValidationWaiver, ProjectionPatchRuleSource, RuleSourceChangeDraft, WorkspacePolicyRecord } from "./types";
+import type { PatchAbsorptionAssessment, PatchAbsorptionOperationEvidence, PatchLedger, PatchMirrorOperationResult, PatchMirrorPayloadRow, PatchMirrorPullAudit, PatchMirrorRemoteRow, PatchMirrorSyncCommand, PatchMirrorValidationIssue, PatchOffsetPolicyVersion, PatchOperationRecord, PatchPatternSummary, PatchReviewBatch, PatchReviewSubjectRef, PatchRevisionRecord, PatchSnapshotReference, PatchValidationWaiver, ProjectionPatchRuleSource, RuleSourceChangeDraft, WorkspacePolicyRecord } from "./types";
 
-export const CURRENT_PATCH_LEDGER_SCHEMA_VERSION = 4;
+export const CURRENT_PATCH_LEDGER_SCHEMA_VERSION = 5;
 export type PatchLedgerCapability = "patch.create" | "patch.review" | "patch.mirror.write" | "patch.mirror.pull" | "patch.rebase" | "patch.absorption.review" | "rules.proposal.create";
 export class PatchLedgerError extends Error {
   constructor(public readonly code: string, message: string) { super(message); }
 }
+
+type RawPatchOperation = Record<string, unknown>;
+const CANONICAL_PATCH_OPERATIONS = new Set(["set", "add", "multiply", "clear"]);
+
+export interface FrozenPatchBaseLookup {
+  found: boolean;
+  value?: unknown;
+  evidenceRef?: string;
+}
+
+export interface FrozenPatchBaseRequest {
+  patchId: string;
+  patchRevision: number;
+  subjectEntityId: string;
+  baseRuleSetVersion: string;
+  baseObjectRevision: number;
+  parameterKey: string;
+}
+
+export interface PatchLedgerMigrationContext {
+  workspaceId?: string;
+  frozenPatchRevisionKeys?: Iterable<string>;
+  resolveFrozenBaseValue?: (request: FrozenPatchBaseRequest) => FrozenPatchBaseLookup;
+}
+
+export function patchRevisionIdentityKey(patchId:string,patchRevision:number):string{
+  return JSON.stringify({patchId,patchRevision});
+}
+
+function own(record: RawPatchOperation, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+function rawOperationName(operation: RawPatchOperation): unknown {
+  return operation.operation ?? operation.op;
+}
+
+function normalizeLegacyOperation(input: {
+  raw: RawPatchOperation;
+  operationId: string;
+  operationIndex: number;
+  baseRuleSetVersion: string;
+  baseObjectRevision: number;
+  frozenBase?: FrozenPatchBaseLookup;
+}): Omit<PatchOperationRecord, "patchId" | "patchRevision"> {
+  const name = rawOperationName(input.raw);
+  const parameterKey = input.raw.parameterKey ?? input.raw.path;
+  if (typeof parameterKey !== "string" || !parameterKey.trim()) {
+    throw new PatchLedgerError("PATCH_PARAMETER_KEY_REQUIRED", "Patch operation parameterKey is required");
+  }
+  const operand = own(input.raw, "operand") ? input.raw.operand
+    : own(input.raw, "value") ? input.raw.value
+    : null;
+  const before = input.raw.before;
+  const after = input.raw.after;
+  if (name === "remove" || name === "clear") {
+    return {
+      operationId: input.operationId,
+      operationIndex: input.operationIndex,
+      parameterKey,
+      operation: "clear",
+      operand: null,
+      before,
+      after,
+      ...(name === "remove" || operand !== null
+        ? { rawIntent: structuredClone(input.raw) }
+        : {}),
+    };
+  }
+  if (name === "min" || name === "max") {
+    if (
+      !input.baseRuleSetVersion.trim()
+      || !Number.isSafeInteger(input.baseObjectRevision)
+      || input.baseObjectRevision < 1
+      || !input.frozenBase?.found
+      || typeof before !== "number"
+      || typeof operand !== "number"
+      || typeof after !== "number"
+      || !Number.isFinite(before)
+      || !Number.isFinite(operand)
+      || !Number.isFinite(after)
+    ) {
+      throw new PatchLedgerError(
+        "LEGACY_PATCH_MIN_MAX_REVIEW_REQUIRED",
+        "旧 min/max 缺少可验证的冻结基底、before 或 after",
+      );
+    }
+    if (typeof input.frozenBase.value !== "number" || !Object.is(input.frozenBase.value,before)) {
+      throw new PatchLedgerError(
+        "LEGACY_PATCH_FROZEN_BASE_MISMATCH",
+        "旧 min/max 的 before 与冻结版本对象真实参数值不一致",
+      );
+    }
+    const expected = name === "min" ? Math.min(before, operand) : Math.max(before, operand);
+    if (!Object.is(expected, after)) {
+      throw new PatchLedgerError(
+        "LEGACY_PATCH_FROZEN_RESULT_MISMATCH",
+        "旧 min/max 的 after 与冻结基底求值结果不一致",
+      );
+    }
+    return {
+      operationId: input.operationId,
+      operationIndex: input.operationIndex,
+      parameterKey,
+      operation: "set",
+      operand: after,
+      before,
+      after,
+      rawIntent: structuredClone(input.raw),
+    };
+  }
+  if (!CANONICAL_PATCH_OPERATIONS.has(String(name))) {
+    throw new PatchLedgerError("PATCH_OPERATION_UNSUPPORTED", "Patch operation must be set/add/multiply/clear");
+  }
+  return {
+    operationId: input.operationId,
+    operationIndex: input.operationIndex,
+    parameterKey,
+    operation: name as "set" | "add" | "multiply",
+    operand,
+    before,
+    after,
+  };
+}
+
+function assertCanonicalOperation(operation: PatchOperationRecord | Omit<PatchOperationRecord, "patchId" | "patchRevision">): void {
+  if (!CANONICAL_PATCH_OPERATIONS.has(String(operation.operation))) {
+    throw new PatchLedgerError("PATCH_OPERATION_UNSUPPORTED", "New Patch records only accept set/add/multiply/clear");
+  }
+  if (!operation.parameterKey.trim()) {
+    throw new PatchLedgerError("PATCH_PARAMETER_KEY_REQUIRED", "Patch operation parameterKey is required");
+  }
+  if (operation.operation === "clear" && operation.operand !== null) {
+    throw new PatchLedgerError("PATCH_CLEAR_OPERAND_INVALID", "clear operand must be null");
+  }
+  if (
+    (operation.operation === "add" || operation.operation === "multiply")
+    && (typeof operation.operand !== "number" || !Number.isFinite(operation.operand))
+  ) {
+    throw new PatchLedgerError("PATCH_NUMERIC_REQUIRED", "add/multiply require a finite numeric operand");
+  }
+}
+
+function mirrorPayloadForRevision(revision: PatchRevisionRecord,workspaceId:string): PatchMirrorPayloadRow[] {
+  if(!workspaceId.trim()) throw new PatchLedgerError("PATCH_MIRROR_SCHEMA_MISMATCH","Patch 镜像 workspaceId 不能为空");
+  return sortedOperations(revision.operations).map((operation) => {
+    assertCanonicalOperation(operation);
+    return {
+      workspaceId,
+      patchId: revision.patchId,
+      patchRevision: revision.patchRevision,
+      operationId: operation.operationId,
+      operationIndex: operation.operationIndex,
+      scopeType: revision.scopeType,
+      layerType: revision.layerType,
+      subjectEntityId: revision.subjectEntityId,
+      baseRuleSetVersion: revision.baseRuleSetVersion,
+      baseObjectRevision: revision.baseObjectRevision,
+      parameterKey: operation.parameterKey,
+      operation: operation.operation,
+      operand: operation.operation === "clear" ? null : structuredClone(operation.operand),
+      before: structuredClone(operation.before),
+      after: structuredClone(operation.after),
+      snapshotRefs: structuredClone(revision.snapshotRefs),
+    };
+  });
+}
 export function emptyPatchLedger(): PatchLedger {
   return { schemaVersion: CURRENT_PATCH_LEDGER_SCHEMA_VERSION, revisions: [], mirrorCommands: [], ruleSourceChangeDrafts: [], absorptionAssessments: [], mirrorPullAudits: [], migrationReviewItems: [] };
 }
-function migrationSemanticFingerprint(revisions: PatchRevisionRecord[]): string {
+function resolvedFrozenBase(
+  context:PatchLedgerMigrationContext|undefined,
+  revision:Pick<PatchRevisionRecord,"patchId"|"patchRevision"|"subjectEntityId"|"baseRuleSetVersion"|"baseObjectRevision">,
+  parameterKey:string,
+):FrozenPatchBaseLookup|undefined{
+  return context?.resolveFrozenBaseValue?.({
+    patchId:revision.patchId,
+    patchRevision:revision.patchRevision,
+    subjectEntityId:revision.subjectEntityId,
+    baseRuleSetVersion:revision.baseRuleSetVersion,
+    baseObjectRevision:revision.baseObjectRevision,
+    parameterKey,
+  });
+}
+
+function migrationSemanticFingerprint(revisions: PatchRevisionRecord[],context?:PatchLedgerMigrationContext): string {
   return deterministicHash(revisions.map((revision)=>({
-    patchId:revision.patchId,patchRevision:revision.patchRevision,revisionHash:revision.revisionHash,
-    orderedOperations:[...revision.operations].sort((a,b)=>a.operationIndex-b.operationIndex||a.operationId.localeCompare(b.operationId)).map((operation)=>({
-      operationId:operation.operationId,operationIndex:operation.operationIndex,parameterKey:operation.parameterKey,operation:operation.operation,
-      operand:operation.operand,before:operation.before,after:operation.after,
-    })),
+    patchId:revision.patchId,patchRevision:revision.patchRevision,
+    orderedOperations:[...revision.operations].sort((a,b)=>a.operationIndex-b.operationIndex||a.operationId.localeCompare(b.operationId)).map((operation)=>{
+      try {
+        const rawIntent = operation.rawIntent as RawPatchOperation | undefined;
+        const raw = rawIntent && ["remove","min","max"].includes(String(rawOperationName(rawIntent)))
+          ? rawIntent
+          : operation as unknown as RawPatchOperation;
+        const parameterKey = raw.parameterKey ?? raw.path ?? operation.parameterKey;
+        const normalized = normalizeLegacyOperation({
+          raw,
+          operationId: operation.operationId,
+          operationIndex: operation.operationIndex,
+          baseRuleSetVersion: revision.baseRuleSetVersion,
+          baseObjectRevision: revision.baseObjectRevision,
+          frozenBase: typeof parameterKey === "string"
+            ? resolvedFrozenBase(context,revision,parameterKey)
+            : undefined,
+        });
+        return {
+          operationId:normalized.operationId,operationIndex:normalized.operationIndex,parameterKey:normalized.parameterKey,operation:normalized.operation,
+          operand:normalized.operand,before:normalized.before,after:normalized.after,
+        };
+      } catch {
+        return {
+          operationId:operation.operationId,operationIndex:operation.operationIndex,parameterKey:operation.parameterKey,operation:operation.operation,
+          operand:operation.operand,before:operation.before,after:operation.after,
+        };
+      }
+    }),
   })).sort((a,b)=>a.patchId.localeCompare(b.patchId)||a.patchRevision-b.patchRevision));
 }
-export function verifyPatchLedgerMigrationSemantics(before:PatchRevisionRecord[], after:PatchRevisionRecord[]):{valid:boolean;beforeHash:string;afterHash:string}{
-  const beforeHash=migrationSemanticFingerprint(before), afterHash=migrationSemanticFingerprint(after);
+export function verifyPatchLedgerMigrationSemantics(before:PatchRevisionRecord[], after:PatchRevisionRecord[],context?:PatchLedgerMigrationContext):{valid:boolean;beforeHash:string;afterHash:string}{
+  const beforeHash=migrationSemanticFingerprint(before,context), afterHash=migrationSemanticFingerprint(after,context);
   return {valid:before.length===after.length&&beforeHash===afterHash,beforeHash,afterHash};
 }
-export function migratePatchLedger(input: PatchLedger | Record<string, unknown>): PatchLedger {
+export function migratePatchLedger(input: PatchLedger | Record<string, unknown>,context:PatchLedgerMigrationContext={}): PatchLedger {
   const source = structuredClone(input) as PatchLedger & Record<string, unknown>;
   const version = typeof source.schemaVersion === "number" ? source.schemaVersion : 1;
   if (version > CURRENT_PATCH_LEDGER_SCHEMA_VERSION || version < 1) {
@@ -35,6 +243,108 @@ export function migratePatchLedger(input: PatchLedger | Record<string, unknown>)
   if (version === 1) migrated = { ...migrated, schemaVersion: 2, ruleSourceChangeDrafts: [] } as PatchLedger & Record<string, unknown>;
   if (migrated.schemaVersion === 2) migrated = { ...migrated, schemaVersion: 3, absorptionAssessments: [] } as PatchLedger & Record<string, unknown>;
   if (migrated.schemaVersion === 3) migrated = { ...migrated, schemaVersion: 4, mirrorPullAudits: [] } as PatchLedger & Record<string, unknown>;
+  if (migrated.schemaVersion === 4) {
+    const frozenRevisionKeys = new Set(context.frozenPatchRevisionKeys ?? []);
+    const migrationReviewItems = Array.isArray(migrated.migrationReviewItems)
+      ? structuredClone(migrated.migrationReviewItems)
+      : [];
+    const revisions = (Array.isArray(migrated.revisions) ? migrated.revisions : []).map((revision) => {
+      const rawRevision = revision as PatchRevisionRecord;
+      const requiresNormalization = rawRevision.operations.some((operation) => {
+        if (!CANONICAL_PATCH_OPERATIONS.has(String((operation as unknown as RawPatchOperation).operation))) {
+          return true;
+        }
+        try {
+          assertCanonicalOperation(operation);
+          return false;
+        } catch {
+          return true;
+        }
+      });
+      if (!requiresNormalization) return rawRevision;
+      const reviewId = `patch-operation-migration:${rawRevision.patchId}@${rawRevision.patchRevision}`;
+      if (rawRevision.snapshotRefs.length || frozenRevisionKeys.has(patchRevisionIdentityKey(rawRevision.patchId,rawRevision.patchRevision))) {
+        if (!migrationReviewItems.some((item) => item.id === reviewId)) {
+          migrationReviewItems.push({
+            id: reviewId,
+            patchId: rawRevision.patchId,
+            patchRevision: rawRevision.patchRevision,
+            reason: "LEGACY_SNAPSHOT_PATCH_OPERATION_FROZEN",
+            preservedPayload: structuredClone(rawRevision),
+          });
+        }
+        return rawRevision;
+      }
+      try {
+        const operations = rawRevision.operations.map((operation) => ({
+          ...normalizeLegacyOperation({
+            raw: operation as unknown as RawPatchOperation,
+            operationId: operation.operationId,
+            operationIndex: operation.operationIndex,
+            baseRuleSetVersion: rawRevision.baseRuleSetVersion,
+            baseObjectRevision: rawRevision.baseObjectRevision,
+            frozenBase: resolvedFrozenBase(context,rawRevision,operation.parameterKey),
+          }),
+          patchId: rawRevision.patchId,
+          patchRevision: rawRevision.patchRevision,
+        }));
+        for (const operation of operations) assertCanonicalOperation(operation);
+        const normalized = { ...rawRevision, operations };
+        delete (normalized as { revisionHash?: unknown }).revisionHash;
+        return { ...normalized, revisionHash: patchRevisionHash(normalized) };
+      } catch (error) {
+        if (!migrationReviewItems.some((item) => item.id === reviewId)) {
+          migrationReviewItems.push({
+            id: reviewId,
+            patchId: rawRevision.patchId,
+            patchRevision: rawRevision.patchRevision,
+            reason: error instanceof PatchLedgerError ? error.code : "LEGACY_PATCH_REQUIRES_REVIEW",
+            preservedPayload: structuredClone(rawRevision),
+          });
+        }
+        return rawRevision;
+      }
+    });
+    const mirrorCommands = (Array.isArray(migrated.mirrorCommands) ? migrated.mirrorCommands : []).map((command) => {
+      const legacyCommand = command as PatchMirrorSyncCommand & Record<string, unknown>;
+      const existingWorkspaceId = typeof legacyCommand.workspaceId === "string"
+        ? legacyCommand.workspaceId
+        : "";
+      if (
+        existingWorkspaceId.trim()
+        && typeof legacyCommand.payloadHash === "string"
+        && Array.isArray(legacyCommand.payload)
+        && legacyCommand.payload.every((row) => row.workspaceId === existingWorkspaceId)
+        && legacyCommand.payloadHash === jcsSha256Hex(legacyCommand.payload)
+      ) {
+        return legacyCommand;
+      }
+      const revision = revisions.find((entry) =>
+        entry.patchId === legacyCommand.patchId && entry.patchRevision === legacyCommand.patchRevision);
+      try {
+        if (!revision) throw new PatchLedgerError("PATCH_REVISION_NOT_FOUND", "Mirror command revision not found");
+        const workspaceId = typeof legacyCommand.workspaceId === "string" && legacyCommand.workspaceId.trim()
+          ? legacyCommand.workspaceId
+          : context.workspaceId;
+        if(!workspaceId) throw new PatchLedgerError("PATCH_MIRROR_SCHEMA_MISMATCH","旧镜像命令缺少 workspaceId");
+        const payload = mirrorPayloadForRevision(revision,workspaceId);
+        return { ...legacyCommand, workspaceId, payload, payloadHash: jcsSha256Hex(payload) };
+      } catch (error) {
+        const reviewId = `patch-mirror-command-migration:${legacyCommand.idempotencyKey}`;
+        if (!migrationReviewItems.some((item) => item.id === reviewId)) {
+          migrationReviewItems.push({
+            id: reviewId,
+            patchId: legacyCommand.patchId,
+            patchRevision: legacyCommand.patchRevision,
+            reason: error instanceof PatchLedgerError ? error.code : "LEGACY_PATCH_MIRROR_PAYLOAD_REVIEW_REQUIRED",
+            preservedPayload: structuredClone(legacyCommand),
+          });
+        }
+        return legacyCommand;
+      }
+    });
+    migrated = { ...migrated, schemaVersion: 5, revisions, mirrorCommands, migrationReviewItems } as PatchLedger & Record<string, unknown>;
+  }
   const result={
     ...migrated,
     revisions: Array.isArray(migrated.revisions) ? migrated.revisions : [],
@@ -44,7 +354,7 @@ export function migratePatchLedger(input: PatchLedger | Record<string, unknown>)
     mirrorPullAudits: Array.isArray(migrated.mirrorPullAudits) ? migrated.mirrorPullAudits : [],
     migrationReviewItems: Array.isArray(migrated.migrationReviewItems) ? migrated.migrationReviewItems : [],
   } as PatchLedger;
-  const verification=verifyPatchLedgerMigrationSemantics(beforeRevisions,result.revisions);
+  const verification=verifyPatchLedgerMigrationSemantics(beforeRevisions,result.revisions,context);
   if(!verification.valid&&!result.migrationReviewItems.some((item)=>item.id==="patch-ledger-migration:semantic")) result.migrationReviewItems.push({
     id:"patch-ledger-migration:semantic",patchId:"PATCH_LEDGER",patchRevision:version,reason:"PATCH_LEDGER_MIGRATION_SEMANTIC_MISMATCH",
     preservedPayload:{beforeHash:verification.beforeHash,afterHash:verification.afterHash,source:structuredClone(input)},
@@ -67,40 +377,92 @@ export function buildPatchRevision(input: Omit<PatchRevisionRecord, "revisionHas
   if (!Number.isSafeInteger(input.patchRevision) || input.patchRevision < 1) throw new PatchLedgerError("PATCH_REVISION_INVALID", "Invalid revision");
   if (!input.operations.length) throw new PatchLedgerError("PATCH_OPERATION_REQUIRED", "Operations required");
   const ids = new Set<string>(), indexes = new Set<number>();
+  const setParameters = new Set<string>(), clearParameters = new Set<string>();
   const operations = input.operations.map((op) => {
     if (!op.operationId.trim() || ids.has(op.operationId)) throw new PatchLedgerError("PATCH_OPERATION_ID_CONFLICT", "Duplicate operation ID");
     if (!Number.isSafeInteger(op.operationIndex) || op.operationIndex < 0 || indexes.has(op.operationIndex)) throw new PatchLedgerError("PATCH_OPERATION_ORDER_CONFLICT", "Duplicate operation order");
+    assertCanonicalOperation(op);
+    if (op.operation === "set") {
+      if (setParameters.has(op.parameterKey)) throw new PatchLedgerError("PATCH_SET_CONFLICT", "Multiple set operations target the same parameter");
+      if (clearParameters.has(op.parameterKey)) throw new PatchLedgerError("PATCH_SET_CLEAR_CONFLICT", "set and clear compete in the same Patch revision");
+      setParameters.add(op.parameterKey);
+    }
+    if (op.operation === "clear") {
+      if (setParameters.has(op.parameterKey)) throw new PatchLedgerError("PATCH_SET_CLEAR_CONFLICT", "set and clear compete in the same Patch revision");
+      clearParameters.add(op.parameterKey);
+    }
     ids.add(op.operationId); indexes.add(op.operationIndex);
     return { ...op, patchId: input.patchId, patchRevision: input.patchRevision };
   }) as PatchOperationRecord[];
   const record = { ...input, operations: sortedOperations(operations) };
   return { ...record, revisionHash: patchRevisionHash(record) };
 }
-export function importLegacyPatchesToLedger(ledger: PatchLedger, patches: ProjectionPatchRuleSource[]): PatchLedger {
+export function importLegacyPatchesToLedger(
+  ledger: PatchLedger,
+  patches: ProjectionPatchRuleSource[],
+  context:PatchLedgerMigrationContext={},
+): PatchLedger {
   const next = structuredClone(ledger);
   for (const patch of patches) {
     if (next.revisions.some((entry) => entry.patchId === patch.id)) continue;
-    if (!patch.operations?.length) {
+    const rawPatch = patch as unknown as Record<string, unknown>;
+    const rawOperations: RawPatchOperation[] = Array.isArray(rawPatch.operations) && rawPatch.operations.length
+      ? rawPatch.operations as RawPatchOperation[]
+      : Array.isArray(rawPatch.rules)
+        ? (rawPatch.rules as RawPatchOperation[]).map((rule): RawPatchOperation => ({
+            operation: rule.operation,
+            parameterKey: rule.parameterKey,
+            operand: rule.value,
+            before: rule.before,
+            after: rule.after,
+            rawRule: structuredClone(rule),
+          }))
+        : [];
+    if (!rawOperations.length) {
       next.migrationReviewItems.push({ id: "patch-import:" + patch.id, patchId: patch.id, patchRevision: 1, reason: "LEGACY_PATCH_OPERATION_MISSING", preservedPayload: structuredClone(patch) });
       continue;
     }
     try {
+      const baseObjectRevision = Number.isSafeInteger(rawPatch.baseObjectRevision)
+        ? Number(rawPatch.baseObjectRevision)
+        : 1;
       next.revisions.push(buildPatchRevision({
         patchId: patch.id, patchRevision: 1, scopeType: patch.scope, layerType: patch.scope,
         subjectEntityId: patch.scopeId, subjectName: patch.scopeId,
-        baseRuleSetVersion: patch.baseRuleSetVersion, baseObjectRevision: 1,
+        baseRuleSetVersion: patch.baseRuleSetVersion, baseObjectRevision,
         state: patch.status === "approved" ? "ACTIVE" : patch.status === "superseded" ? "SUPERSEDED" : "DRAFT",
         mirrorSyncState: "NOT_SYNCED", attentionStates: [], reason: patch.reason, evidence: [],
         createdBy: patch.author, createdAt: patch.createdAt ?? "1970-01-01T00:00:00.000Z",
         snapshotRefs: [], rawPayload: structuredClone(patch),
-        operations: patch.operations.map((operation, operationIndex) => ({
-          operationId: patch.id + ":op:" + String(operationIndex + 1), operationIndex,
-          parameterKey: operation.path, operation: operation.op === "remove" ? "clear" : operation.op,
-          operand: "value" in operation ? operation.value : null, before: undefined, after: undefined,
+        operations: rawOperations.map((operation, operationIndex) => normalizeLegacyOperation({
+          raw: operation,
+          operationId: typeof operation.operationId === "string"
+            ? operation.operationId
+            : patch.id + ":op:" + String(operationIndex + 1),
+          operationIndex: Number.isSafeInteger(operation.operationIndex)
+            ? Number(operation.operationIndex)
+            : operationIndex,
+          baseRuleSetVersion: patch.baseRuleSetVersion,
+          baseObjectRevision,
+          frozenBase: resolvedFrozenBase(context,{
+            patchId:patch.id,
+            patchRevision:1,
+            subjectEntityId:patch.scopeId,
+            baseRuleSetVersion:patch.baseRuleSetVersion,
+            baseObjectRevision,
+          },typeof (operation.parameterKey ?? operation.path)==="string"
+            ? String(operation.parameterKey ?? operation.path)
+            : ""),
         })),
       }));
-    } catch {
-      next.migrationReviewItems.push({ id: "patch-import:" + patch.id, patchId: patch.id, patchRevision: 1, reason: "LEGACY_PATCH_REQUIRES_REVIEW", preservedPayload: structuredClone(patch) });
+    } catch (error) {
+      next.migrationReviewItems.push({
+        id: "patch-import:" + patch.id,
+        patchId: patch.id,
+        patchRevision: 1,
+        reason: error instanceof PatchLedgerError ? error.code : "LEGACY_PATCH_REQUIRES_REVIEW",
+        preservedPayload: structuredClone(patch),
+      });
     }
   }
   return next;
@@ -128,10 +490,12 @@ export function projectionPatchViewFromLedger(ledger: PatchLedger): ProjectionPa
         status: "approved" as const,
         order: revision.operations[0]?.operationIndex ?? 0,
         rules: [],
-        operations: sortedOperations(revision.operations).map((operation) =>
-          operation.operation === "clear"
-            ? { op: "remove" as const, path: operation.parameterKey }
-            : { op: operation.operation, path: operation.parameterKey, value: operation.operand as number }),
+        operations: sortedOperations(revision.operations).map((operation) => {
+          assertCanonicalOperation(operation);
+          return operation.operation === "clear"
+            ? { op: "clear" as const, path: operation.parameterKey }
+            : { op: operation.operation, path: operation.parameterKey, value: operation.operand as number };
+        }),
       };
     });
 }
@@ -253,28 +617,96 @@ export function reviewPatchBatch(input:{ledger:PatchLedger;reviewBatch:PatchRevi
   return ledger;
 }
 export type PatchMirrorPullIssue = PatchMirrorValidationIssue;
-const mirrorKey = (patchId:string, patchRevision:number, operationId:string) => patchId+"@"+patchRevision+"@"+operationId;
 function mirrorIssue(code:PatchMirrorValidationIssue["code"], key:string, message:string, extra:Partial<PatchMirrorValidationIssue>={}):PatchMirrorValidationIssue {
   return {source:"patch",code,severity:"ERROR",key,message,...extra};
 }
-export function reconcilePatchMirrorPull(input:{ledger:PatchLedger;remoteDetailKeys?:string[];remoteRows?:PatchMirrorRemoteRow[];remoteRevision?:string;pulledAt?:string;capabilities:Iterable<string>}):{ledger:PatchLedger;issues:PatchMirrorPullIssue[];quarantinedRemoteRowIds:string[];refillDetailKeys:string[]}{
+export function reconcilePatchMirrorPull(input:{
+  workspaceId:string;
+  ledger:PatchLedger;
+  remoteDetailKeys?:string[];
+  remoteRows?:PatchMirrorRemoteRow[];
+  remoteRevision?:string;
+  pulledAt?:string;
+  capabilities:Iterable<string>;
+  resolveFrozenBaseValue?:PatchLedgerMigrationContext["resolveFrozenBaseValue"];
+}):{ledger:PatchLedger;issues:PatchMirrorPullIssue[];quarantinedRemoteRowIds:string[];refillDetailKeys:string[]}{
   requireCapability(input.capabilities,"patch.mirror.pull");
-  const localByKey=new Map(input.ledger.revisions.flatMap((r)=>r.operations.map((o)=>[mirrorKey(r.patchId,r.patchRevision,o.operationId),{revision:r,operation:o}] as const)));
-  const rows=input.remoteRows??(input.remoteDetailKeys??[]).map((key,index)=>({remoteRowId:"legacy:"+index,key}));
-  const counts=new Map<string,number>();
-  for(const row of rows){const key="key" in row?row.key:mirrorKey(row.patchId,row.patchRevision,row.operationId);counts.set(key,(counts.get(key)??0)+1);}
+  if(!input.workspaceId.trim()) throw new PatchLedgerError("PATCH_MIRROR_SCHEMA_MISMATCH","Patch 镜像 workspaceId 不能为空");
+  const localByKey=new Map(input.ledger.revisions.flatMap((r)=>r.operations.map((o)=>[
+    patchMirrorDetailKey({workspaceId:input.workspaceId,patchId:r.patchId,patchRevision:r.patchRevision,operationId:o.operationId}),
+    {revision:r,operation:o},
+  ] as const)));
   const issues:PatchMirrorPullIssue[]=[];
   const quarantined=new Set<string>();
+  const normalizedRemoteRows=(input.remoteRows??[]).flatMap((row) => {
+    const rawWorkspaceId=(row as unknown as {workspaceId?:unknown}).workspaceId;
+    if(typeof rawWorkspaceId!=="string"||!rawWorkspaceId.trim()){
+      issues.push(mirrorIssue("PATCH_MIRROR_SCHEMA_MISMATCH",row.remoteRowId,"远端 Patch 行缺少合法 workspaceId",{remoteRowId:row.remoteRowId}));
+      quarantined.add(row.remoteRowId);
+      return [];
+    }
+    if(rawWorkspaceId!==input.workspaceId) return [];
+    try {
+      // Canonical clear is a remote integrity boundary.  Do not let the legacy
+      // adapter erase a malformed operand before it is recorded as tampering.
+      if (rawOperationName(row as unknown as RawPatchOperation) === "clear"
+        && own(row as unknown as RawPatchOperation, "operand")
+        && row.operand !== null) {
+        throw new PatchLedgerError(
+          "PATCH_CLEAR_OPERAND_INVALID",
+          "远端 canonical clear 的 operand 必须为 null",
+        );
+      }
+      const normalized = normalizeLegacyOperation({
+        raw: row as unknown as RawPatchOperation,
+        operationId: row.operationId,
+        operationIndex: row.operationIndex,
+        baseRuleSetVersion: row.baseRuleSetVersion,
+        baseObjectRevision: row.baseObjectRevision,
+        frozenBase: input.resolveFrozenBaseValue?.({
+          patchId:row.patchId,
+          patchRevision:row.patchRevision,
+          subjectEntityId:row.subjectEntityId,
+          baseRuleSetVersion:row.baseRuleSetVersion,
+          baseObjectRevision:row.baseObjectRevision,
+          parameterKey:row.parameterKey,
+        }),
+      });
+      assertCanonicalOperation(normalized);
+      return [{
+        ...row,
+        operation: normalized.operation,
+        operand: normalized.operand,
+        before: normalized.before,
+        after: normalized.after,
+      } as PatchMirrorRemoteRow];
+    } catch (error) {
+      const code = error instanceof PatchLedgerError
+        ? error.code as PatchMirrorValidationIssue["code"]
+        : "PATCH_OPERATION_UNSUPPORTED";
+      issues.push(mirrorIssue(
+        code,
+        patchMirrorDetailKey({workspaceId:input.workspaceId,patchId:row.patchId,patchRevision:row.patchRevision,operationId:row.operationId}),
+        "远端旧 Patch 操作无法无损规范化，已隔离等待复核",
+        {patchId:row.patchId,patchRevision:row.patchRevision,operationId:row.operationId,remoteRowId:row.remoteRowId},
+      ));
+      quarantined.add(row.remoteRowId);
+      return [];
+    }
+  });
+  const rows=normalizedRemoteRows.length?normalizedRemoteRows:(input.remoteDetailKeys??[]).map((key,index)=>({remoteRowId:"legacy:"+index,key}));
+  const counts=new Map<string,number>();
+  for(const row of rows){const key="key" in row?row.key:patchMirrorDetailKey({workspaceId:row.workspaceId,patchId:row.patchId,patchRevision:row.patchRevision,operationId:row.operationId});counts.set(key,(counts.get(key)??0)+1);}
   for(const key of localByKey.keys()) if(!counts.has(key)) issues.push(mirrorIssue("PATCH_MIRROR_ROW_MISSING",key,"飞书镜像缺少本地权威操作行"));
   for(const [key,count] of counts) {
     if(!localByKey.has(key)) issues.push(mirrorIssue("PATCH_MIRROR_UNKNOWN_KEY",key,"飞书镜像包含未知稳定ID"));
     if(count>1) issues.push(mirrorIssue("PATCH_MIRROR_DUPLICATE_KEY",key,"飞书镜像明细幂等键重复"));
   }
-  for(const row of input.remoteRows??[]){
-    const key=mirrorKey(row.patchId,row.patchRevision,row.operationId), local=localByKey.get(key);
+  for(const row of normalizedRemoteRows){
+    const key=patchMirrorDetailKey({workspaceId:row.workspaceId,patchId:row.patchId,patchRevision:row.patchRevision,operationId:row.operationId}), local=localByKey.get(key);
     if(!local||counts.get(key)!==1){quarantined.add(row.remoteRowId);continue;}
     const controlled: Array<[string,unknown,unknown]>=[
-      ["operationIndex",row.operationIndex,local.operation.operationIndex],["scopeType",row.scopeType,local.revision.scopeType],
+      ["workspaceId",row.workspaceId,input.workspaceId],["operationIndex",row.operationIndex,local.operation.operationIndex],["scopeType",row.scopeType,local.revision.scopeType],
       ["layerType",row.layerType,local.revision.layerType],["subjectEntityId",row.subjectEntityId,local.revision.subjectEntityId],
       ["baseRuleSetVersion",row.baseRuleSetVersion,local.revision.baseRuleSetVersion],["baseObjectRevision",row.baseObjectRevision,local.revision.baseObjectRevision],
       ["parameterKey",row.parameterKey,local.operation.parameterKey],["operation",row.operation,local.operation.operation],
@@ -289,21 +721,22 @@ export function reconcilePatchMirrorPull(input:{ledger:PatchLedger;remoteDetailK
     }
   }
   for(const revision of input.ledger.revisions){
-    const keys=revision.operations.map((op)=>mirrorKey(revision.patchId,revision.patchRevision,op.operationId));
+    const keys=revision.operations.map((op)=>patchMirrorDetailKey({workspaceId:input.workspaceId,patchId:revision.patchId,patchRevision:revision.patchRevision,operationId:op.operationId}));
     const present=keys.filter((key)=>counts.get(key)===1).length;
-    if(present>0&&present<keys.length) issues.push(mirrorIssue("PATCH_MIRROR_GROUP_INCOMPLETE",revision.patchId+"@"+revision.patchRevision,"飞书镜像中的Patch revision明细组不完整",{patchId:revision.patchId,patchRevision:revision.patchRevision}));
+    if(present>0&&present<keys.length) issues.push(mirrorIssue("PATCH_MIRROR_GROUP_INCOMPLETE",patchMirrorGroupKey({workspaceId:input.workspaceId,patchId:revision.patchId,patchRevision:revision.patchRevision}),"飞书镜像中的Patch revision明细组不完整",{patchId:revision.patchId,patchRevision:revision.patchRevision}));
   }
   const refillDetailKeys=issues.filter((issue)=>issue.code==="PATCH_MIRROR_ROW_MISSING").map((issue)=>issue.key).sort();
   const audit:PatchMirrorPullAudit={pulledAt:input.pulledAt??new Date(0).toISOString(),remoteRevision:input.remoteRevision??"UNKNOWN",issues,quarantinedRemoteRowIds:[...quarantined].sort(),refillDetailKeys};
   return {ledger:{...input.ledger,mirrorPullAudits:[...input.ledger.mirrorPullAudits,audit]},issues,quarantinedRemoteRowIds:audit.quarantinedRemoteRowIds,refillDetailKeys};
 }
 
-export function updatePatchMirrorSuggestion(input:{ledger:PatchLedger;patchId:string;patchRevision:number;expectedRemoteRevision:string;actualRemoteRevision:string;value:boolean;now:string;capabilities:Iterable<string>}):PatchLedger{
+export function updatePatchMirrorSuggestion(input:{workspaceId:string;ledger:PatchLedger;patchId:string;patchRevision:number;expectedRemoteRevision:string;actualRemoteRevision:string;value:boolean;now:string;capabilities:Iterable<string>}):PatchLedger{
   requireCapability(input.capabilities,"patch.mirror.write");
+  if(!input.workspaceId.trim()) throw new PatchLedgerError("PATCH_MIRROR_SCHEMA_MISMATCH","Patch 镜像 workspaceId 不能为空");
   const revision=input.ledger.revisions.find((r)=>r.patchId===input.patchId&&r.patchRevision===input.patchRevision);
   if(!revision) throw new PatchLedgerError("PATCH_REVISION_NOT_FOUND","Revision not found");
   if(input.expectedRemoteRevision!==input.actualRemoteRevision){
-    const issue=mirrorIssue("PATCH_MIRROR_EXPECTED_REVISION_CONFLICT",input.patchId+"@"+input.patchRevision,"协作状态远端revision已变化，禁止覆盖",{patchId:input.patchId,patchRevision:input.patchRevision});
+    const issue=mirrorIssue("PATCH_MIRROR_EXPECTED_REVISION_CONFLICT",patchMirrorGroupKey({workspaceId:input.workspaceId,patchId:input.patchId,patchRevision:input.patchRevision}),"协作状态远端revision已变化，禁止覆盖",{patchId:input.patchId,patchRevision:input.patchRevision});
     const audit:PatchMirrorPullAudit={pulledAt:input.now,remoteRevision:input.actualRemoteRevision,issues:[issue],quarantinedRemoteRowIds:[],refillDetailKeys:[]};
     return {...input.ledger,revisions:input.ledger.revisions.map((r)=>r===revision?{...r,mirrorSyncState:"CONFLICT" as const}:r),mirrorPullAudits:[...input.ledger.mirrorPullAudits,audit]};
   }
@@ -316,11 +749,18 @@ export function resolvePatchRevision(input: { revision: PatchRevisionRecord; exi
 }
 export function replayPatchRevision(base: Record<string, unknown>, revision: PatchRevisionRecord) {
   if (revision.state !== "ACTIVE") throw new PatchLedgerError("PATCH_NOT_REPLAYABLE", "Only ACTIVE revisions are replayable");
+  const inherited = structuredClone(base);
   const value = structuredClone(base), trace: Array<{operationId:string;before:unknown;after:unknown}> = [];
   for (const op of sortedOperations(revision.operations)) {
+    assertCanonicalOperation(op);
     const before = value[op.parameterKey];
     if (op.operation === "set") value[op.parameterKey] = op.operand;
-    else if (op.operation === "clear") delete value[op.parameterKey];
+    else if (op.operation === "clear") {
+      if (!Object.prototype.hasOwnProperty.call(inherited, op.parameterKey)) {
+        throw new PatchLedgerError("PATCH_CLEAR_INHERITANCE_MISSING", "clear target no longer has an inherited value");
+      }
+      value[op.parameterKey] = structuredClone(inherited[op.parameterKey]);
+    }
     else {
       if (typeof before !== "number" || typeof op.operand !== "number") throw new PatchLedgerError("PATCH_NUMERIC_REQUIRED", "Numeric operation required");
       value[op.parameterKey] = op.operation === "add" ? before + op.operand : before * op.operand;
@@ -329,7 +769,11 @@ export function replayPatchRevision(base: Record<string, unknown>, revision: Pat
   }
   return { value, trace };
 }
-export function orderedPatchReferences(revisions: PatchRevisionRecord[]): { references: PatchSnapshotReference[]; patchSetHash: string } {
+export function orderedPatchReferences(
+  revisions:PatchRevisionRecord[],
+  workspaceId?:string,
+):{references:PatchSnapshotReference[];patchSetHash:string;patchSetHashContractVersion?:string}{
+  if(workspaceId!==undefined&&!workspaceId.trim()) throw new PatchLedgerError("PATCH_WORKSPACE_ID_REQUIRED","新 PatchSet 的 workspaceId 不能为空");
   const layerOrder: Record<PatchRevisionRecord["layerType"], number> = {
     derivation: 0,
     series: 1,
@@ -338,22 +782,45 @@ export function orderedPatchReferences(revisions: PatchRevisionRecord[]): { refe
     final_review: 4,
     projection_pin: 5,
   };
+  for (const revision of revisions) {
+    for (const operation of revision.operations) {
+      try {
+        assertCanonicalOperation(operation);
+      } catch {
+        throw new PatchLedgerError(
+          "PATCH_SNAPSHOT_OPERATION_NON_CANONICAL",
+          "Snapshot references may only freeze set/add/multiply/clear Patch revisions",
+        );
+      }
+    }
+  }
   const references = [...revisions].sort((a,b)=>
     layerOrder[a.layerType]-layerOrder[b.layerType]
     || a.subjectEntityId.localeCompare(b.subjectEntityId)
     || a.patchId.localeCompare(b.patchId)
     || a.patchRevision-b.patchRevision).map((r)=>({
+    ...(workspaceId?{workspaceId}:{}),
     patchId:r.patchId, patchRevision:r.patchRevision, orderedOperationIds:sortedOperations(r.operations).map((op)=>op.operationId),
   }));
-  return { references, patchSetHash: deterministicHash(references) };
+  return workspaceId
+    ? {references,patchSetHash:patchSetHashForReferences(references,PATCH_SET_HASH_CONTRACT_VERSION),patchSetHashContractVersion:PATCH_SET_HASH_CONTRACT_VERSION}
+    : {references,patchSetHash:patchSetHashForReferences(references)};
 }
-export function beginPatchMirrorSync(input: { ledger: PatchLedger; patchId:string; patchRevision:number; idempotencyKey:string; expectedRemoteRevision?:string; now:string; capabilities:Iterable<string> }) {
+export function beginPatchMirrorSync(input: { workspaceId:string; ledger: PatchLedger; patchId:string; patchRevision:number; idempotencyKey:string; expectedRemoteRevision?:string; now:string; capabilities:Iterable<string> }) {
   requireCapability(input.capabilities, "patch.mirror.write");
-  const old = input.ledger.mirrorCommands.find((c)=>c.idempotencyKey===input.idempotencyKey);
-  if (old) return { ledger:input.ledger, command:old, idempotent:true };
+  if(!input.workspaceId.trim()) throw new PatchLedgerError("PATCH_MIRROR_SCHEMA_MISMATCH","Patch 镜像 workspaceId 不能为空");
   const revision=input.ledger.revisions.find((r)=>r.patchId===input.patchId&&r.patchRevision===input.patchRevision);
   if(!revision) throw new PatchLedgerError("PATCH_REVISION_NOT_FOUND","Revision not found");
-  const command:PatchMirrorSyncCommand={idempotencyKey:input.idempotencyKey,patchId:input.patchId,patchRevision:input.patchRevision,expectedRemoteRevision:input.expectedRemoteRevision,state:"PENDING",operationResults:revision.operations.map((op)=>({operationId:op.operationId,status:"PENDING"})),createdAt:input.now,updatedAt:input.now};
+  const payload = mirrorPayloadForRevision(revision,input.workspaceId);
+  const payloadHash = jcsSha256Hex(payload);
+  const old = input.ledger.mirrorCommands.find((c)=>c.idempotencyKey===input.idempotencyKey);
+  if (old) {
+    if (old.workspaceId !== input.workspaceId || old.patchId !== input.patchId || old.patchRevision !== input.patchRevision || old.payloadHash !== payloadHash || old.expectedRemoteRevision !== input.expectedRemoteRevision) {
+      throw new PatchLedgerError("PATCH_MIRROR_IDEMPOTENCY_CONFLICT", "Mirror idempotency key is already bound to a different canonical payload or CAS baseline");
+    }
+    return { ledger:input.ledger, command:old, idempotent:true };
+  }
+  const command:PatchMirrorSyncCommand={idempotencyKey:input.idempotencyKey,workspaceId:input.workspaceId,patchId:input.patchId,patchRevision:input.patchRevision,payloadHash,payload,expectedRemoteRevision:input.expectedRemoteRevision,state:"PENDING",operationResults:revision.operations.map((op)=>({operationId:op.operationId,status:"PENDING"})),createdAt:input.now,updatedAt:input.now};
   return {ledger:{...input.ledger,revisions:input.ledger.revisions.map((r)=>r===revision?{...r,mirrorSyncState:"PENDING" as const}:r),mirrorCommands:[...input.ledger.mirrorCommands,command]},command,idempotent:false};
 }
 export function recordPatchMirrorResult(input:{ledger:PatchLedger;idempotencyKey:string;operationResults:PatchMirrorOperationResult[];readbackEvidence?:unknown;connectorAvailable:boolean;now:string}):PatchLedger{
@@ -366,7 +833,9 @@ export function recordPatchMirrorResult(input:{ledger:PatchLedger;idempotencyKey
   const mirrorState: PatchRevisionRecord["mirrorSyncState"]=synced?"SYNCED":failed?"WRITE_FAILED":"WRITING";
   return {...input.ledger,revisions:input.ledger.revisions.map((r)=>r.patchId===command.patchId&&r.patchRevision===command.patchRevision?{...r,mirrorSyncState:mirrorState}:r),mirrorCommands:input.ledger.mirrorCommands.map((c)=>c===command?{...c,state:synced?"COMPLETED":failed?"FAILED":"READBACK_REQUIRED",operationResults:results,readbackEvidence:input.readbackEvidence,updatedAt:input.now}:c)};
 }
-export function verifyPatchSetHash(references: PatchSnapshotReference[], expectedHash:string){return deterministicHash(references)===expectedHash;}
+export function verifyPatchSetHash(references:PatchSnapshotReference[],expectedHash:string,contractVersion?:string){
+  try{return patchSetHashForReferences(references,contractVersion)===expectedHash;}catch{return false;}
+}
 
 export interface PatchAnalysisContext {
   subjectEntityId: string;
@@ -567,17 +1036,24 @@ export function rebasePatchRevision(input: {
   if (!input.newBaseRuleSetVersion.trim() || !Number.isSafeInteger(input.newBaseObjectRevision) || input.newBaseObjectRevision < 1) {
     throw new PatchLedgerError("PATCH_REBASE_BASE_INVALID", "New baseline is invalid");
   }
+  const inherited = structuredClone(input.newBaseValues);
   const values = structuredClone(input.newBaseValues);
   const operations = sortedOperations(source.operations).map((operation) => {
+    assertCanonicalOperation(operation);
     const before = values[operation.parameterKey];
     let after: unknown;
     if (operation.operation === "set") after = operation.operand;
-    else if (operation.operation === "clear") after = undefined;
+    else if (operation.operation === "clear") {
+      if (!Object.prototype.hasOwnProperty.call(inherited, operation.parameterKey)) {
+        throw new PatchLedgerError("PATCH_CLEAR_INHERITANCE_MISSING", "clear target no longer represents an inheritable value");
+      }
+      after = structuredClone(inherited[operation.parameterKey]);
+    }
     else {
       if (typeof before !== "number" || typeof operation.operand !== "number") throw new PatchLedgerError("PATCH_NUMERIC_REQUIRED", "Numeric operation requires a numeric new baseline");
       after = operation.operation === "add" ? before + operation.operand : before * operation.operand;
     }
-    if (operation.operation === "clear") delete values[operation.parameterKey]; else values[operation.parameterKey] = after;
+    values[operation.parameterKey] = after;
     return { ...operation, operationId: input.patchId + ":op:" + String(source.patchRevision + 1) + ":" + String(operation.operationIndex + 1), before, after };
   });
   const revision = buildPatchRevision({

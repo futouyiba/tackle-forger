@@ -30,7 +30,7 @@ export type CapabilityCode =
   | "ai.feishu_proposal_draft.create" | "ai.provider_policy.manage"
   | "feishu.proposal.submit" | "feishu.proposal.review" | "feishu.proposal.apply"
   | "feishu.workbook.read" | "feishu.workbook.pull" | "feishu.identity.write"
-  | "feishu.rule_change.confirm_write" | "feishu.source.pull"
+  | "feishu.rule_change.confirm_write" | "feishu.source.pull" | "feishu.sheet.export.write"
   | "ruleset.draft.create" | "ruleset.publish"
   | "data_source.resolve" | "data_source.preview" | "data_source.publish"
   | "data_source.writeback.preview" | "data_source.writeback.commit"
@@ -45,7 +45,7 @@ export type CapabilityCode =
   | "rules.five_axis.publish" | "workspace.policy.manage" | "workspace.save";
 
 export type ActionCode =
-  | "open_series" | "create_series" | "open_sku" | "change_sku_target_pull" | "preview_model"
+  | "open_series" | "create_series" | "update_series_core_affixes" | "open_sku" | "change_sku_target_pull" | "preview_model"
   | "edit" | "review" | "publish" | "generate_candidates" | "materialize_candidates"
   | "override_candidate_selection" | "select_candidate" | "dismiss_candidate_run"
   | "create_patch" | "review_patch" | "rebase_patch"
@@ -53,10 +53,11 @@ export type ActionCode =
   | "write_patch_mirror" | "pull_patch_mirror" | "inspect_patch_mirror"
   | "repair_patch_mirror" | "rebuild_patch_mirror_from_local"
   | "fix_patch_mirror_schema" | "migrate_patch_subject"
-  | "run_ai_assessment" | "create_ai_patch_draft" | "create_ai_feishu_draft" | "manage_ai_provider_policy"
+  | "run_ai_assessment" | "create_ai_patch_draft" | "create_ai_rule_source_change_draft" | "create_ai_feishu_draft" | "manage_ai_provider_policy"
   | "submit_feishu_proposal" | "review_feishu_proposal" | "apply_feishu_proposal"
   | "inspect_feishu_workbook" | "pull_feishu_workbook" | "create_ruleset_draft" | "publish_ruleset" | "write_feishu_identity"
   | "confirm_feishu_write" | "pull_feishu_source"
+  | "download_feishu_source" | "export_to_feishu_sheet"
   | "resolve_data_source" | "preview_data_source" | "publish_data_source"
   | "preview_data_source_writeback" | "commit_data_source_writeback"
   | "import_excel" | "view_revisions"
@@ -70,7 +71,7 @@ export type ActionCode =
   | "publish_five_axis_definition" | "manage_workspace_policy" | "save_workspace";
 
 export const ACTION_CODES = [
-  "open_series", "create_series", "open_sku", "change_sku_target_pull", "preview_model",
+  "open_series", "create_series", "update_series_core_affixes", "open_sku", "change_sku_target_pull", "preview_model",
   "edit", "review", "publish",
   "generate_candidates", "materialize_candidates", "override_candidate_selection",
   "select_candidate", "dismiss_candidate_run",
@@ -79,10 +80,11 @@ export const ACTION_CODES = [
   "write_patch_mirror", "pull_patch_mirror", "inspect_patch_mirror",
   "repair_patch_mirror", "rebuild_patch_mirror_from_local",
   "fix_patch_mirror_schema", "migrate_patch_subject",
-  "run_ai_assessment", "create_ai_patch_draft", "create_ai_feishu_draft", "manage_ai_provider_policy",
+  "run_ai_assessment", "create_ai_patch_draft", "create_ai_rule_source_change_draft", "create_ai_feishu_draft", "manage_ai_provider_policy",
   "submit_feishu_proposal", "review_feishu_proposal", "apply_feishu_proposal",
   "inspect_feishu_workbook", "pull_feishu_workbook", "create_ruleset_draft", "publish_ruleset", "write_feishu_identity",
   "confirm_feishu_write", "pull_feishu_source",
+  "download_feishu_source", "export_to_feishu_sheet",
   "resolve_data_source", "preview_data_source", "publish_data_source",
   "preview_data_source_writeback", "commit_data_source_writeback", "import_excel", "view_revisions",
   "reserve_config_id_bundle", "publish_config_id_policy",
@@ -116,6 +118,7 @@ export const READ_ONLY_ACTION_CODES = [
   "download_snapshot_audit_archive",
   "inspect_patch_mirror",
   "inspect_feishu_workbook",
+  "download_feishu_source",
   "resolve_data_source",
   "preview_data_source",
   "preview_data_source_writeback",
@@ -621,6 +624,7 @@ export type ActionAvailabilityMap = Record<ActionCode, ActionAvailability>;
 const ACTION_CAPABILITIES = {
   open_series: ["series.read"],
   create_series: ["series.edit"],
+  update_series_core_affixes: ["series.edit"],
   open_sku: ["sku.read"],
   change_sku_target_pull: ["sku.edit"],
   preview_model: ["model.read"],
@@ -647,7 +651,8 @@ const ACTION_CAPABILITIES = {
   migrate_patch_subject: ["patch.subject.migrate"],
   run_ai_assessment: ["ai.evaluate"],
   create_ai_patch_draft: ["ai.patch_draft.create"],
-  create_ai_feishu_draft: ["ai.rule_source_change_draft.create"],
+  create_ai_rule_source_change_draft: ["ai.rule_source_change_draft.create"],
+  create_ai_feishu_draft: ["ai.feishu_proposal_draft.create"],
   manage_ai_provider_policy: ["ai.provider_policy.manage"],
   submit_feishu_proposal: ["feishu.proposal.submit"],
   review_feishu_proposal: ["feishu.proposal.review"],
@@ -659,6 +664,8 @@ const ACTION_CAPABILITIES = {
   write_feishu_identity: ["feishu.identity.write"],
   confirm_feishu_write: ["feishu.rule_change.confirm_write"],
   pull_feishu_source: ["feishu.source.pull"],
+  download_feishu_source: ["feishu.workbook.read"],
+  export_to_feishu_sheet: ["feishu.sheet.export.write"],
   resolve_data_source: ["data_source.resolve"],
   preview_data_source: ["data_source.preview"],
   publish_data_source: ["data_source.publish"],
@@ -1028,11 +1035,17 @@ export interface AIServicePolicy {
   model?: string;
   allowedFieldPaths: string[];
   externalDataEgressConfirmed: boolean;
+  connectorType?: "fancy_hub";
+  providerPolicyVersion?: "ai-provider/open006-v1";
+  requestSchemaVersion?: "ai-request/v1";
+  connectorConfigured?: boolean;
+  hardLimitsConfigured?: boolean;
 }
 
 export interface AIServiceAvailability {
   enabled: boolean;
-  reasonCode?: "AI_DISABLED" | "AI_PROVIDER_UNCONFIRMED" | "AI_FIELD_ALLOWLIST_EMPTY";
+  reasonCode?: "AI_DISABLED" | "AI_PROVIDER_UNCONFIRMED" | "AI_FIELD_ALLOWLIST_EMPTY"
+    | "AI_CONNECTOR_NOT_CONFIGURED" | "AI_HARD_LIMIT_POLICY_MISSING";
   reasonText?: string;
 }
 
@@ -1051,6 +1064,28 @@ export function aiServiceAvailability(
       enabled: false,
       reasonCode: "AI_PROVIDER_UNCONFIRMED",
       reasonText: "AI 供应方、模型或数据出网策略尚未确认。",
+    };
+  }
+  if (
+    policy.connectorType !== undefined
+    && (
+      policy.connectorType !== "fancy_hub"
+      || policy.providerPolicyVersion !== "ai-provider/open006-v1"
+      || policy.requestSchemaVersion !== "ai-request/v1"
+      || !policy.connectorConfigured
+    )
+  ) {
+    return {
+      enabled: false,
+      reasonCode: "AI_CONNECTOR_NOT_CONFIGURED",
+      reasonText: "Fancy Hub 连接器未完成独立安全配置，真实数据保持禁用。",
+    };
+  }
+  if (policy.connectorType === "fancy_hub" && !policy.hardLimitsConfigured) {
+    return {
+      enabled: false,
+      reasonCode: "AI_HARD_LIMIT_POLICY_MISSING",
+      reasonText: "Fancy Hub provider 或租户硬限额缺失。",
     };
   }
   if (!policy.allowedFieldPaths.length) {

@@ -1,0 +1,113 @@
+{
+  "inspection": {
+    "observedAt": "2026-07-24T08:00:00.000Z",
+    "sourceRevision": {
+      "id": "feishu-revision:quality-alias-ui-fixture",
+      "workbookRefId": "feishu-workbook:tackle-design",
+      "sourceRevision": "quality-alias-ui-fixture",
+      "spreadsheetToken": "redacted-fixture",
+      "pulledAt": "2026-07-24T08:00:00.000Z",
+      "pulledBy": "UI fixture",
+      "syncScope": "workbook",
+      "registryHash": "fixture",
+      "sheets": [
+        { "sheetId": "zrVOxd", "name": "04_词条", "rowCount": 86, "columnCount": 6 },
+        { "sheetId": "FqD4j7", "name": "07_品质评分", "rowCount": 50, "columnCount": 14 }
+      ],
+      "issues": [],
+      "state": "PULLED"
+    },
+    "identityRows": [],
+    "identityReport": {
+      "reportId": "identity-report:quality-alias-ui-fixture",
+      "workbookRefId": "feishu-workbook:tackle-design",
+      "sourceRevision": "quality-alias-ui-fixture",
+      "mode": "CONTINUOUS_SYNC",
+      "items": [],
+      "blockingIssueCodes": [],
+      "generatedAt": "2026-07-24T08:00:00.000Z"
+    },
+    "pricingDraft": {
+      "id": "pricing-policy-draft:quality-alias-ui-fixture",
+      "sourceRevisionId": "feishu-revision:quality-alias-ui-fixture",
+      "sourceRevision": "quality-alias-ui-fixture",
+      "pricingSheetId": "u87sRh",
+      "qualitySheetId": "FqD4j7",
+      "typeMaterialSheetId": "fATowU",
+      "businessFormulaCells": [],
+      "pricingBaskets": [],
+      "maintenanceConsumptionRates": [],
+      "partAllocationRatios": [],
+      "repairCoefficients": [],
+      "totalLossTimes": [],
+      "purchaseCoefficients": [],
+      "partsToWholeRatios": [],
+      "qualityMappings": [],
+      "qualityPriceFactorRanges": [],
+      "issues": [],
+      "formalStatus": "NON_FORMAL",
+      "inputHash": "fixture",
+      "importedAt": "2026-07-24T08:00:00.000Z"
+    },
+    "qualityDraft": {
+      "id": "quality-policy-draft:quality-alias-ui-fixture",
+      "sourceRevisionId": "feishu-revision:quality-alias-ui-fixture",
+      "sourceRevision": "quality-alias-ui-fixture",
+      "qualitySheetId": "FqD4j7",
+      "affixSheetId": "zrVOxd",
+      "ranges": [
+        { "qualityId": "quality_c_green", "minScore": 0, "maxScore": 20, "maxInclusive": false, "status": "SOURCE", "source": { "sheetId": "FqD4j7", "cell": "E5:F5" } },
+        { "qualityId": "quality_b_blue", "minScore": 20, "maxScore": 40, "maxInclusive": false, "status": "SOURCE", "source": { "sheetId": "FqD4j7", "cell": "E6:F6" } },
+        { "qualityId": "quality_a_purple", "minScore": 40, "maxScore": 65, "maxInclusive": false, "status": "SOURCE", "source": { "sheetId": "FqD4j7", "cell": "E7:F7" } },
+        { "qualityId": "quality_s_orange", "minScore": 65, "maxScore": 100, "maxInclusive": false, "status": "SOURCE", "source": { "sheetId": "FqD4j7", "cell": "E8:F8" } }
+      ],
+      "combinationRules": [
+        { "itemPartId": "part:line", "leftAffixId": "affix_line_high_stretch", "rightAffixId": "affix_line_low_stretch", "valueScore": 1, "source": { "sheetId": "FqD4j7", "cell": "D39" } },
+        { "itemPartId": "part:line", "leftAffixId": "affix_line_hidden", "rightAffixId": "affix_line_thin", "valueScore": 2, "source": { "sheetId": "FqD4j7", "cell": "E40" } },
+        { "itemPartId": "part:line", "leftAffixId": "affix_line_sea_defense", "rightAffixId": "affix_line_experience", "valueScore": 1, "source": { "sheetId": "FqD4j7", "cell": "F41" } }
+      ],
+      "issues": [
+        {
+          "source": "quality",
+          "code": "QUALITY_COMBINATION_ALIAS_UNKNOWN",
+          "severity": "ERROR",
+          "gate": "PUBLISH",
+          "message": "组合矩阵缩写无法解析为稳定 affixId：拉强 × 固拉。",
+          "sourceRevision": "quality-alias-ui-fixture",
+          "sourceCell": { "sheetId": "FqD4j7", "cell": "D11" },
+          "itemPartId": "part:rod",
+          "relatedObjectIds": [],
+          "actions": []
+        },
+        {
+          "source": "quality",
+          "code": "QUALITY_COMBINATION_ALIAS_UNKNOWN",
+          "severity": "ERROR",
+          "gate": "PUBLISH",
+          "message": "组合矩阵缩写无法解析为稳定 affixId：摩强 × 固摩。",
+          "sourceRevision": "quality-alias-ui-fixture",
+          "sourceCell": { "sheetId": "FqD4j7", "cell": "G25" },
+          "itemPartId": "part:reel",
+          "relatedObjectIds": [],
+          "actions": []
+        },
+        {
+          "source": "quality",
+          "code": "QUALITY_COMBINATION_ALIAS_UNKNOWN",
+          "severity": "ERROR",
+          "gate": "PUBLISH",
+          "message": "组合矩阵缩写无法解析为稳定 affixId：细径 × 耐磨。",
+          "sourceRevision": "quality-alias-ui-fixture",
+          "sourceCell": { "sheetId": "FqD4j7", "cell": "J39" },
+          "itemPartId": "part:line",
+          "relatedObjectIds": [],
+          "actions": []
+        }
+      ],
+      "formalStatus": "NON_FORMAL",
+      "inputHash": "fixture",
+      "importedAt": "2026-07-24T08:00:00.000Z"
+    },
+    "pricingWeightBandPolicy": "MATCHED_STRUCTURAL_SOURCE_BAND"
+  }
+}

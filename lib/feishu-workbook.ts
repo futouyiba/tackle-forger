@@ -1,4 +1,7 @@
 import { deterministicHash } from "./rule-kernel";
+import type { ReductionPolicyMachineRule } from "./reduction-stacking-policy";
+import { parseFiveAxisWeightBandPolicyFromWeightTemplate } from "./five-axis-weight-band-policy-source";
+import type { FiveAxisWeightBandPolicy } from "./types";
 
 export type FeishuSheetRole =
   | "rule_source"
@@ -56,6 +59,12 @@ export interface FeishuSourceRevision {
   registryHash: string;
   sheets: RemoteFeishuSheet[];
   issues: FeishuSheetRegistryIssue[];
+  /** 仅由权威 04_词条/zrVOxd 机器规则区解析；外部工作簿不得填充为运行时规则。 */
+  reductionPolicyMachineRules?: ReductionPolicyMachineRule[];
+  /** Hash of the immutable W-band policy payload read from this exact workbook revision. */
+  fiveAxisWeightBandPolicyContentHash?: string;
+  /** Normalized immutable payload read from d6e928; absence is non-formal. */
+  fiveAxisWeightBandPolicy?: FiveAxisWeightBandPolicy;
   state: "PULLED" | "RULESET_DRAFT" | "PUBLISHED";
 }
 
@@ -65,6 +74,7 @@ export interface FeishuWorkbookPullAdapter {
     sourceRevision: string;
     sheets: RemoteFeishuSheet[];
   }>;
+  readRanges?(input: { spreadsheetToken: string; requests: Array<{ sheetId: string; range: string }> }): Promise<Array<{ sheetId: string; range: string; revision: string; values: unknown[][] }>>;
 }
 
 export const CANONICAL_FEISHU_WORKBOOK: FeishuWorkbookRef = {
@@ -79,10 +89,13 @@ export const CANONICAL_FEISHU_WORKBOOK: FeishuWorkbookRef = {
 };
 
 export const CANONICAL_FEISHU_SHEET_REGISTRY: FeishuSheetRegistryEntry[] = [
+  ["mLpTLK", "04.0_FunctionProfile常量", "rule_source", true, true],
   ["d6e928", "01_重量模板", "rule_source", true, true],
   ["4IfBoX", "00_使用说明", "historical_reference", false, false],
-  ["fATowU", "02_类型材质", "rule_source", true, true],
-  ["vviXo0", "03_功能定位", "rule_source", true, true],
+  ["rgFPUu", "02_钓法类型", "rule_source", true, true],
+  ["m3eQCg", "02.5_钓法模板", "historical_reference", false, false],
+  ["fATowU", "03_类型材质", "rule_source", true, true],
+  ["vviXo0", "04_功能定位", "rule_source", true, true],
   ["zrVOxd", "04_词条", "rule_source", true, true],
   ["RdZv0J", "05_技术", "rule_source", true, true],
   ["9nE3Rx", "06_系列", "rule_source", true, true],
@@ -106,20 +119,50 @@ export const CANONICAL_FEISHU_SHEET_REGISTRY: FeishuSheetRegistryEntry[] = [
   canOverwriteDomainTruth: false,
 }));
 
-export function parseCanonicalWorkbookLink(input: string): Pick<FeishuWorkbookRef, "wikiToken" | "anchorSheetId" | "syncScope"> {
+/**
+ * 解析权威规则源工作簿链接。
+ *
+ * - `/wiki/{node_token}`：知识库挂载形式，提取 wikiToken；电子表格 token 由读取层
+ *   后续调用 wiki get_node 解析得到（`resolveWikiSpreadsheetToken`）。
+ * - `/sheets/{spreadsheet_token}`：未挂载知识库的直接电子表格形式，直接把 path 段
+ *   当作 spreadsheetToken，不经过 wiki 解析。
+ *
+ * 两种形式都剥离 `sheet=`/`from=` 等 query 参数：`sheet` 仅用于定位初始可见工作表，
+ * 同步边界始终是链接解析后的整个工作簿。
+ */
+export type ParsedCanonicalWorkbookLink = {
+  /** `/wiki/` 形式解析得到的 wiki 节点 token；`/sheets/` 直接形式时缺省。 */
+  wikiToken?: string;
+  /** `/sheets/` 直接形式解析得到的电子表格 token；`/wiki/` 形式时缺省。 */
+  spreadsheetToken?: string;
+  anchorSheetId?: string;
+  syncScope: "workbook";
+};
+
+export function parseCanonicalWorkbookLink(input: string): ParsedCanonicalWorkbookLink {
   let url: URL;
   try {
     url = new URL(input.trim());
   } catch {
     throw new Error("飞书规则工作簿链接格式不正确。");
   }
-  const match = url.pathname.match(/\/wiki\/([^/?#]+)/i);
-  if (!match) throw new Error("唯一规则源必须使用飞书知识库工作簿链接。");
-  return {
-    wikiToken: decodeURIComponent(match[1]),
-    anchorSheetId: url.searchParams.get("sheet") ?? undefined,
-    syncScope: "workbook",
-  };
+  const wikiMatch = url.pathname.match(/\/wiki\/([^/?#]+)/i);
+  if (wikiMatch) {
+    return {
+      wikiToken: decodeURIComponent(wikiMatch[1]),
+      anchorSheetId: url.searchParams.get("sheet") ?? undefined,
+      syncScope: "workbook",
+    };
+  }
+  const sheetsMatch = url.pathname.match(/\/sheets\/([^/?#]+)/i);
+  if (sheetsMatch) {
+    return {
+      spreadsheetToken: decodeURIComponent(sheetsMatch[1]),
+      anchorSheetId: url.searchParams.get("sheet") ?? undefined,
+      syncScope: "workbook",
+    };
+  }
+  throw new Error("唯一规则源必须使用飞书知识库工作簿链接。");
 }
 
 export function validateSheetRegistry(
@@ -196,6 +239,14 @@ export async function pullFeishuWorkbookRevision(input: {
   if (!remote.sourceRevision.trim()) throw new Error("飞书未返回工作簿 revision。");
   const registry = input.registry ?? CANONICAL_FEISHU_SHEET_REGISTRY;
   const issues = validateSheetRegistry(registry, remote.sheets);
+  const policyRanges = input.adapter.readRanges
+    ? await input.adapter.readRanges({ spreadsheetToken: remote.spreadsheetToken, requests: [{ sheetId: "d6e928", range: "A1:AE54" }] })
+    : undefined;
+  const policyRange = policyRanges?.find((entry) => entry.sheetId === "d6e928" && entry.range === "A1:AE54");
+  if (policyRanges && (!policyRange || policyRange.revision !== remote.sourceRevision)) throw new Error("FIVE_AXIS_WEIGHT_BAND_POLICY_SOURCE_INVALID：未读取到同一 revision 的 d6e928 机器区。");
+  const fiveAxisWeightBandPolicy = policyRange
+    ? parseFiveAxisWeightBandPolicyFromWeightTemplate({ sourceRevision: remote.sourceRevision, values: policyRange.values })
+    : undefined;
   const content = {
     workbookRefId: input.workbook.id,
     sourceRevision: remote.sourceRevision,
@@ -207,6 +258,7 @@ export async function pullFeishuWorkbookRevision(input: {
     registryHash: deterministicHash(registry),
     sheets: structuredClone(remote.sheets),
     issues,
+    ...(fiveAxisWeightBandPolicy ? { fiveAxisWeightBandPolicy, fiveAxisWeightBandPolicyContentHash: fiveAxisWeightBandPolicy.contentHash } : {}),
     state: "PULLED" as const,
   };
   return { id: `feishu-revision:${deterministicHash(content)}`, ...content };

@@ -2,11 +2,24 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createSeedState } from "../lib/seed";
 import {
-  materializeConfigExport,
+  materializeConfigExport as materializeConfigExportWithPolicies,
   parseConfigTomlTables,
   validateConfigExportMapping,
   type ConfigExportMapping,
 } from "../lib/config-export-mapping";
+import { testReductionPolicy } from "./helpers/reduction-policy";
+import { formalExportSnapshot } from "./helpers/formal-export-snapshot";
+
+const AVAILABLE_REDUCTION_POLICIES = [testReductionPolicy()];
+function materializeConfigExport(
+  input: Omit<Parameters<typeof materializeConfigExportWithPolicies>[0], "availableReductionPolicies">,
+) {
+  return materializeConfigExportWithPolicies({
+    ...input,
+    snapshot: formalExportSnapshot(input.snapshot),
+    availableReductionPolicies: AVAILABLE_REDUCTION_POLICIES,
+  });
+}
 
 const configToml = `
 [tables.rods]

@@ -1,5 +1,9 @@
-import type { ConfigurationSnapshot } from "./types";
+import type {
+  ConfigurationSnapshot,
+  ReductionStackingPolicyVersion,
+} from "./types";
 import { assertSnapshotItemPartEnabled } from "./enabled-item-parts";
+import { assertFormalSnapshotHasReplayPolicy } from "./reduction-stacking-policy";
 
 export type ExportSnapshotProperty =
   | "id"
@@ -300,10 +304,15 @@ function resolveColumnValue(
 
 export function materializeConfigExport(input: {
   snapshot: ConfigurationSnapshot;
+  availableReductionPolicies: ReductionStackingPolicyVersion[];
   mapping: ConfigExportMapping;
   compilerTables: Record<string, ConfigCompilerTableDefinition>;
 }): MaterializedConfigExport {
   assertSnapshotItemPartEnabled(input.snapshot, "config_export");
+  assertFormalSnapshotHasReplayPolicy(
+    input.snapshot,
+    input.availableReductionPolicies,
+  );
   const issues = validateConfigExportMapping({
     mapping: input.mapping,
     compilerTables: input.compilerTables,

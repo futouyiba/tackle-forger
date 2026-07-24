@@ -18,11 +18,18 @@ import type {
   RuleSetVersion,
   WeightTemplate,
 } from "../lib/types";
+import { testReductionPolicy } from "./helpers/reduction-policy";
 
 function baseInput(): DeriveProjectionInput {
+  const publishedMagnitudeRange = {
+    min: 0,
+    max: 10,
+    ruleSetVersion: "test:affix-ranges:v1",
+  };
   const weightTemplate: WeightTemplate = {
     id: "T-TEST",
     name: "测试模板",
+    itemPartId: "part:rod",
     fishMinKg: 1,
     fishMaxKg: 3,
     nominalFishKg: 2,
@@ -71,6 +78,7 @@ function baseInput(): DeriveProjectionInput {
     intensityRules: [
       {
         intensity: 2,
+        itemPartId: "part:rod",
         rules: [
           {
             id: "function-force",
@@ -135,6 +143,7 @@ function baseInput(): DeriveProjectionInput {
         parameterKey: "force",
         operation: "percent_bonus",
         value: 0.1,
+        publishedMagnitudeRange,
       },
       {
         id: "affix-percent-2",
@@ -143,6 +152,7 @@ function baseInput(): DeriveProjectionInput {
         parameterKey: "force",
         operation: "percent_bonus",
         value: 0.2,
+        publishedMagnitudeRange,
       },
       {
         id: "affix-flat",
@@ -151,6 +161,7 @@ function baseInput(): DeriveProjectionInput {
         parameterKey: "force",
         operation: "flat_bonus",
         value: 2,
+        publishedMagnitudeRange,
       },
       {
         id: "affix-reduction-1",
@@ -159,6 +170,7 @@ function baseInput(): DeriveProjectionInput {
         parameterKey: "friction",
         operation: "reduction",
         value: 0.2,
+        publishedMagnitudeRange,
       },
       {
         id: "affix-reduction-2",
@@ -167,6 +179,7 @@ function baseInput(): DeriveProjectionInput {
         parameterKey: "friction",
         operation: "reduction",
         value: 0.3,
+        publishedMagnitudeRange,
       },
     ],
     patches: [
@@ -287,8 +300,8 @@ test("v3 内核按固定层序计算，百分比先加算、Patch 分层且可�
   const second = deriveProjection(input);
 
   assert.equal(first.structuralValues?.force, 22);
-  assert.equal(first.values.force, 69.6);
-  assert.equal(first.values.friction, applyReduction(100, 0.5, "diminishing_division"));
+  assert.equal(first.values.force, 69.60000000000001);
+  assert.equal(first.values.friction, applyReduction(100, 0.5));
   assert.deepEqual(
     first.trace.map((step) => step.layer),
     [
@@ -303,6 +316,7 @@ test("v3 内核按固定层序计算，百分比先加算、Patch 分层且可�
       "model_patch",
       "attribute_affix",
       "final_review_patch",
+      "parameter_definition",
       "validation",
     ],
   );
@@ -327,6 +341,14 @@ test("v3 内核按固定层序计算，百分比先加算、Patch 分层且可�
   assert.ok(!Object.values(first.values).includes(999));
 });
 
+test("FunctionProfile 后置贡献必须按部件与强度精确匹配，缺失时 fail closed", () => {
+  const input = baseInput();
+  input.functionProfile.intensityRules[0]!.itemPartId = "part:reel";
+  const result = deriveProjection(input);
+  assert.equal(result.structuralValues?.force, 22);
+  assert.equal(result.warnings.some((warning) => warning.code === "FUNCTION_PART_INTENSITY_RULES_MISSING" && warning.level === "error"), true);
+});
+
 test("旧 Performance 属性贡献只在显式历史重放模式恢复", () => {
   const input = baseInput();
   const canonical = deriveProjection(input);
@@ -334,8 +356,8 @@ test("旧 Performance 属性贡献只在显式历史重放模式恢复", () => {
     ...input,
     executionMode: "legacy_performance_replay",
   });
-  assert.equal(canonical.values.force, 69.6);
-  assert.equal(legacy.values.force, 76.1);
+  assert.equal(canonical.values.force, 69.60000000000001);
+  assert.equal(legacy.values.force, 76.10000000000001);
   assert.equal(legacy.performanceId, "performance:strong");
   assert.deepEqual(
     legacy.trace.find((step) => step.layer === "performance")?.sourceIds,
@@ -362,32 +384,27 @@ test("显式历史 Performance 重放缺少旧定义时 fail closed，不产生�
   );
 });
 
-test("两种降低公式覆盖零值、单条、多条与极值", () => {
-  assert.equal(applyReduction(100, 0, "linear_subtraction"), 100);
-  assert.equal(applyReduction(100, 0.2, "linear_subtraction"), 80);
-  assert.equal(applyReduction(100, 0.5, "linear_subtraction"), 50);
-  assert.equal(applyReduction(100, 1.2, "linear_subtraction"), -20);
-
-  assert.equal(applyReduction(100, 0, "diminishing_division"), 100);
-  assert.equal(applyReduction(100, 0.2, "diminishing_division"), 83.333333333333);
-  assert.equal(applyReduction(100, 0.5, "diminishing_division"), 66.666666666667);
-  assert.equal(applyReduction(100, 1.2, "diminishing_division"), 45.454545454545);
+test("降低公式全局唯一，旧模式字段不再改变结果", () => {
+  assert.equal(applyReduction(100, 0), 100);
+  assert.equal(applyReduction(100, 0.2), 83.33333333333334);
+  assert.equal(applyReduction(100, 0.5), 66.66666666666667);
+  assert.equal(applyReduction(100, 1.2), 45.45454545454545);
   assert.throws(
-    () => applyReduction(Number.NaN, 0.2, "linear_subtraction"),
+    () => applyReduction(Number.NaN, 0.2),
     /有限数字/,
   );
   assert.throws(
-    () => applyReduction(100, -1, "diminishing_division"),
-    /结果不是有限数字/,
+    () => applyReduction(100, -1),
+    /非负/,
   );
 
   const diminishing = deriveProjection(baseInput());
   const linearInput = baseInput();
   linearInput.ruleSet.settings.reductionStackingMode = "linear_subtraction";
   const linear = deriveProjection(linearInput);
-  assert.equal(diminishing.values.friction, applyReduction(100, 0.5, "diminishing_division"));
-  assert.equal(linear.values.friction, 50);
-  assert.notEqual(diminishing.sourceHash, linear.sourceHash);
+  assert.equal(diminishing.values.friction, applyReduction(100, 0.5));
+  assert.equal(linear.values.friction, diminishing.values.friction);
+  assert.equal(diminishing.sourceHash, linear.sourceHash);
 });
 
 test("规则边界与同层 set 冲突会进入可追踪校验结果", () => {
@@ -462,6 +479,7 @@ test("规则边界与同层 set 冲突会进入可追踪校验结果", () => {
 
 test("FinalReviewPatch 在 Affix 结算之后应用，可覆盖词条结果（规范 §8/§21.1）", () => {
   const input = baseInput();
+  input.reductionStackingPolicy = testReductionPolicy();
   input.patches = [
     {
       id: "patch-final",
@@ -478,19 +496,66 @@ test("FinalReviewPatch 在 Affix 结算之后应用，可覆盖词条结果（�
           id: "final-force",
           parameterKey: "force",
           operation: "set",
-          value: 42,
+          value: 42.4,
         },
       ],
     },
   ];
+  input.parameterDefinitions = [{
+    key: "force",
+    label: "拉力",
+    itemKind: "rod",
+    itemPartId: "part:rod",
+    unit: "kg",
+    precision: 0,
+    allowedOperations: ["add", "multiply", "set", "min", "max"],
+    targetRange: { min: 0, max: 100 },
+    notes: "",
+  }];
   const projection = deriveProjection(input);
 
   // 规范运行时不消费 Performance；词条结算后再由 FinalReviewPatch 覆盖为 42。
   assert.equal(projection.values.force, 42);
+  assert.equal(projection.affixRuntimeEvidence?.values.force, 34.5);
+  assert.equal(projection.affixRuntimeEvidence?.postReviewValues.force, 42.4);
+  assert.equal(projection.affixRuntimeEvidence?.finalValues.force, 42);
+  assert.deepEqual(
+    projection.affixRuntimeEvidence?.trace
+      .map((entry) => entry.numericEvidence?.stage)
+      .filter(Boolean)
+      .slice(-2),
+    ["final_review_patch", "parameter_definition"],
+  );
+  assert.ok(projection.affixRuntimeEvidence?.trace.some(
+    (entry) => entry.ruleId === "final-force" && entry.after === 42.4,
+  ));
+  assert.ok(projection.affixRuntimeEvidence?.trace.some(
+    (entry) =>
+      entry.ruleId === "parameter-definition:force"
+      && entry.before === 42.4
+      && entry.after === 42,
+  ));
 
   const layers = projection.trace.map((step) => step.layer);
   assert.ok(layers.indexOf("series_patch") < layers.indexOf("attribute_affix"));
   assert.ok(layers.indexOf("model_patch") < layers.indexOf("attribute_affix"));
   assert.ok(layers.indexOf("attribute_affix") < layers.indexOf("final_review_patch"));
   assert.ok(layers.indexOf("final_review_patch") < layers.indexOf("validation"));
+});
+
+test("contribution 规范化隔离问题进入 Projection warning，并强制 NON_FORMAL", () => {
+  const input = baseInput();
+  input.attributeContributions![0].value = -0.1;
+  const projection = deriveProjection(input);
+  const conflict = projection.warnings.find(
+    (warning) => warning.code === "AFFIX_DIRECTION_CONFLICT",
+  );
+  assert.equal(conflict?.severity, "ERROR");
+  assert.equal(conflict?.gate, "REVIEW");
+  assert.equal(projection.formalStatus, "NON_FORMAL");
+  assert.equal(
+    projection.trace.find((step) => step.layer === "attribute_affix")
+      ?.contributions.some((entry) => entry.sourceId === "affix:bundle"),
+    false,
+  );
 });

@@ -35,6 +35,15 @@ export type DimensionKey =
   | "series";
 
 export interface ParameterDefinition {
+  /**
+   * 稳定的 UI 标识，用作参数管理表行等处的 React key。rename 时绝不重算，
+   * 因此正在编辑的 label/key 变化不会让行重挂载、丢失 IME 组字上下文与焦点。
+   * 新建参数（addParameter、Excel 导入）必须用 createParameterId() 生成不可复用
+   * 的 id（UUID），不得用 `param:${key}`——否则改名释放旧 key 后再用该 key 新建
+   * 会得到相同 id，两行 React key 撞车。历史无 id 数据仍由 normalize 用
+   * `param:${key}` best-effort 回填（存量数据，不臆造身份）。
+   */
+  id?: string;
   key: string;
   label: string;
   itemKind: ItemKind;
@@ -56,11 +65,41 @@ export interface WeightTemplate {
   fishMinKg: number;
   fishMaxKg: number;
   nominalFishKg: number;
+  /** Canonical 01 source uses pull (kgf), not fish weight. Legacy fields remain readable. */
+  rangeSemantics?: "fish_weight" | "target_pull";
+  targetPullMinKgf?: number;
+  targetPullMaxKgf?: number;
+  nominalTargetPullKgf?: number;
   /** 数值越大优先级越高；仅在结构拉力比例距离相同时参与确定性决胜。 */
   templatePriority?: number;
   tier: string;
   values: Record<string, number | string>;
   notes: string;
+  /** Canonical Feishu 01 source metadata. Older imported templates may omit it. */
+  methodId?: string;
+  /** v3 FunctionIntensityRuleSet 的精确部位匹配键。 */
+  itemPartId?: string;
+  sourceRevisionId?: string;
+  sourceSheetId?: string;
+  sourceRow?: number;
+  /** 飞书 01 的独立“鱼重等级”显示值；不与结构拉力区间混为同一量纲。 */
+  fishWeightLevel?: number | string;
+}
+
+/** Frozen, source-traceable 01_重量模板 import. It is recorded on pull and only
+ * becomes the active template collection through explicit RuleSet publish. */
+export interface WeightTemplatePolicyDraft {
+  id: string;
+  sourceRevisionId: string;
+  sourceRevision: string;
+  sheetId: "d6e928";
+  templates: Array<WeightTemplate & {
+    source: { sheetId: "d6e928"; rowKey: string; cells: Record<string, string> };
+  }>;
+  issues: Array<{ code: string; severity: "WARNING" | "ERROR"; message: string; sourceCell?: { sheetId: "d6e928"; cell: string } }>;
+  formalStatus: "NON_FORMAL" | "READY_TO_PUBLISH";
+  inputHash: string;
+  importedAt: string;
 }
 
 export type ReductionStackingMode =
@@ -81,10 +120,16 @@ export type ProjectionLayer =
   | "model_patch"
   | "attribute_affix"
   | "final_review_patch"
+  | "parameter_definition"
   | "validation";
 
 export interface WorkspaceRuleSettings {
-  reductionStackingMode: ReductionStackingMode;
+  /**
+   * @deprecated 仅用于重放旧 RuleSet/Snapshot。新运行时固定使用
+   * ReductionStackingPolicyVersion，不得再把该字段作为公式选择器。
+   */
+  reductionStackingMode?: ReductionStackingMode;
+  reductionStackingPolicyVersion?: string;
   /**
    * @deprecated OPEN-004 已决定不使用独立偏移阈值。仅用于读取旧工作区；
    * v16 迁移会把非空值隔离到迁移复核记录并清空，运行时不得消费。
@@ -101,12 +146,81 @@ export interface RuleSetVersion {
   status: RuleSetStatus;
   settings: WorkspaceRuleSettings;
   sourceRevisionIds: string[];
+  canonicalRuleSourceDraftId?: string;
+  sourceContentHash?: string;
+  weightTemplateDraftId?: string;
   createdAt: string;
   publishedAt?: string;
   publishedBy?: string;
   warningAcknowledgements?: Array<{ issueKey: string; reason: string }>;
   publicationHash?: string;
   notes: string;
+}
+
+export type AffixNumericDirection = "increase" | "decrease";
+export type CanonicalAffixOperationKind =
+  | "percent_adjust"
+  | "flat_adjust"
+  | "clamp_add"
+  | "enum_add"
+  | "set";
+
+export interface CanonicalAttributeOperation {
+  operationId: string;
+  operationIndex: number;
+  sourceAffixId: string;
+  sourceAffixRevision: string;
+  parameterKey: string;
+  operation: CanonicalAffixOperationKind;
+  direction?: AffixNumericDirection;
+  magnitude?: number;
+  publishedMagnitudeRange?: {
+    min: number;
+    max: number;
+    ruleSetVersion: string;
+  };
+  rawLexical?: string;
+  clampMin?: number;
+  clampMax?: number;
+  value?: number | string | boolean;
+  migrationEvidence?: {
+    sourceShape: "canonical" | "legacy_named" | "legacy_signed";
+    originalOperation?: string;
+    originalValue?: number;
+    negativeZero?: boolean;
+  };
+}
+
+export interface ReductionStackingPolicySource {
+  workbookRefId: "feishu-workbook:tackle-design";
+  sheetId: "zrVOxd";
+  sourceRevisionId: string;
+  sourceRevision: string;
+  ruleId: string;
+  parameterKey: string;
+}
+
+export interface ReductionStackingPolicyVersion {
+  id: string;
+  version: string;
+  status: "draft" | "published" | "superseded";
+  strategy: "bidirectional_ratio";
+  numericContract: "ieee754-binary64-v1";
+  operationOrder: [
+    "set",
+    "percent_adjust",
+    "flat_adjust",
+    "clamp_add",
+    "final_review_patch",
+    "parameter_definition",
+  ];
+  source?: ReductionStackingPolicySource;
+  issues: ValidationIssue[];
+  contentHash: string;
+  inputHash: string;
+  createdAt: string;
+  publishedAt?: string;
+  publishedBy?: string;
 }
 
 export interface ItemPartDefinition {
@@ -140,14 +254,22 @@ export interface ItemTypeProfile {
 
 export interface FunctionIntensityRuleSet {
   intensity: FunctionIntensity;
+  /** v3 后置专精贡献必须精确绑定到竿/轮/线；不得从参数名推断。 */
+  itemPartId?: string;
+  /** 仅历史迁移审计重放：旧源未表达分部件时，且同一强度恰有一条记录才可使用。 */
+  legacyItemPartAgnostic?: boolean;
   rules: AdjustmentRule[];
-  /** 飞书 03_功能定位中的稳定源行 ID（func_*）；只用于溯源，不作为聚合 FunctionProfile 的 ID。 */
+  /** 飞书 03_功能定位中的稳定源行 ID（func_*）；只用于溯源，不作为聚合 FunctionProfile 的 ID。没有独立父级绑定时不得生成 FunctionProfile。 */
   sourceRowId?: string;
 }
 
 export interface FunctionProfile {
   id: string;
   name: string;
+  /** 来自 04.0 常量表的不可变父级状态。 */
+  status?: string;
+  /** 来自 04.0 常量表；成员矩阵不得自行推断可用强度。 */
+  supportedIntensities?: FunctionIntensity[];
   rules: AdjustmentRule[];
   intensityRules: FunctionIntensityRuleSet[];
   enabled: boolean;
@@ -178,7 +300,10 @@ export interface QualityProfile {
 export type AttributeContributionOperation =
   | "percent_bonus"
   | "flat_bonus"
-  | "reduction";
+  | "reduction"
+  | "reduction_diminishing"
+  | "flat_reduction"
+  | CanonicalAffixOperationKind;
 
 export interface AttributeContribution {
   id: string;
@@ -187,13 +312,23 @@ export interface AttributeContribution {
   parameterKey: string;
   operation: AttributeContributionOperation;
   value: number;
+  sourceAffixRevision?: string;
+  operationIndex?: number;
+  operationId?: string;
+  direction?: AffixNumericDirection;
+  magnitude?: number;
+  publishedMagnitudeRange?: CanonicalAttributeOperation["publishedMagnitudeRange"];
+  rawLexical?: string;
+  clampMin?: number;
+  clampMax?: number;
+  setValue?: number | string | boolean;
 }
 
 export type ProjectionPatchOperation =
   | { op: "set"; path: string; value: unknown }
   | { op: "add"; path: string; value: number }
   | { op: "multiply"; path: string; value: number }
-  | { op: "remove"; path: string };
+  | { op: "clear"; path: string };
 export interface ProjectionPatchRuleSource {
   id: string;
   scope: "series" | "sku" | "model" | "final_review";
@@ -230,9 +365,13 @@ export interface PatchOperationRecord {
   operand: unknown;
   before: unknown;
   after: unknown;
+  /** 仅迁移产生；保留旧 remove/min/max 与未知字段，不参与规范执行。 */
+  rawIntent?: unknown;
 }
 
 export interface PatchSnapshotReference {
+  /** 历史 Snapshot 可缺失；新正式 Snapshot 必须提供。 */
+  workspaceId?: string;
   patchId: string;
   patchRevision: number;
   orderedOperationIds: string[];
@@ -367,8 +506,12 @@ export interface PatchMirrorOperationResult {
 
 export interface PatchMirrorSyncCommand {
   idempotencyKey: string;
+  /** 历史命令可缺失；新命令必须提供。 */
+  workspaceId?: string;
   patchId: string;
   patchRevision: number;
+  payloadHash: string;
+  payload: PatchMirrorPayloadRow[];
   expectedRemoteRevision?: string;
   state: "PENDING" | "WRITING" | "READBACK_REQUIRED" | "COMPLETED" | "FAILED";
   operationResults: PatchMirrorOperationResult[];
@@ -388,6 +531,7 @@ export interface PatchMirrorCollaborationEntry {
 
 export interface PatchMirrorRemoteRow {
   remoteRowId: string;
+  workspaceId: string;
   patchId: string;
   patchRevision: number;
   operationId: string;
@@ -407,9 +551,30 @@ export interface PatchMirrorRemoteRow {
   sharedRuleSuggestion?: { value: boolean; revision: string };
 }
 
+export type PatchMirrorPayloadRow = Omit<
+  PatchMirrorRemoteRow,
+  "remoteRowId" | "collaborationEntries" | "sharedRuleSuggestion"
+>;
+
 export interface PatchMirrorValidationIssue {
   source: "patch";
-  code: "PATCH_MIRROR_ROW_MISSING" | "PATCH_MIRROR_UNKNOWN_KEY" | "PATCH_MIRROR_DUPLICATE_KEY" | "PATCH_MIRROR_AUDIT_FIELD_TAMPERED" | "PATCH_MIRROR_GROUP_INCOMPLETE" | "PATCH_MIRROR_COLLABORATION_INVALID" | "PATCH_MIRROR_EXPECTED_REVISION_CONFLICT";
+  code:
+    | "PATCH_MIRROR_ROW_MISSING"
+    | "PATCH_MIRROR_UNKNOWN_KEY"
+    | "PATCH_MIRROR_DUPLICATE_KEY"
+    | "PATCH_MIRROR_AUDIT_FIELD_TAMPERED"
+    | "PATCH_MIRROR_GROUP_INCOMPLETE"
+    | "PATCH_MIRROR_COLLABORATION_INVALID"
+    | "PATCH_MIRROR_EXPECTED_REVISION_CONFLICT"
+    | "PATCH_MIRROR_SCHEMA_MISMATCH"
+    | "PATCH_MIRROR_HASH_MISMATCH"
+    | "PATCH_OPERATION_UNSUPPORTED"
+    | "PATCH_PARAMETER_KEY_REQUIRED"
+    | "PATCH_CLEAR_OPERAND_INVALID"
+    | "PATCH_NUMERIC_REQUIRED"
+    | "LEGACY_PATCH_MIN_MAX_REVIEW_REQUIRED"
+    | "LEGACY_PATCH_FROZEN_BASE_MISMATCH"
+    | "LEGACY_PATCH_FROZEN_RESULT_MISMATCH";
   severity: "ERROR" | "WARNING";
   key: string;
   patchId?: string;
@@ -517,6 +682,14 @@ export interface ProjectionTraceContribution {
   before: number | string | null;
   operand: number | string;
   after: number | string | null;
+  numericEvidence?: {
+    stage: string;
+    rawLexical?: string;
+    operandBinary64?: string;
+    beforeBinary64?: string;
+    afterBinary64?: string;
+    anomaly: "none" | "no_effect" | "overflow" | "underflow_to_zero" | "invalid";
+  };
 }
 
 export interface ProjectionTraceStep {
@@ -532,6 +705,10 @@ export interface ProjectionWarning {
   layer: ProjectionLayer;
   parameterKey?: string;
   sourceId?: string;
+  severity?: "INFO" | "WARNING" | "ERROR" | "BLOCKER";
+  gate?: "NONE" | "REVIEW" | "PUBLISH" | "EXPORT";
+  fingerprint?: string;
+  evidence?: Record<string, unknown>;
 }
 
 export interface DerivedProjection {
@@ -544,10 +721,15 @@ export interface DerivedProjection {
   performanceId?: string;
   qualityId?: string;
   ruleSetVersion: string;
-  reductionStackingMode: ReductionStackingMode;
+  /** 旧投影重放字段；新投影不得消费它来选择公式。 */
+  reductionStackingMode?: ReductionStackingMode;
+  reductionStackingPolicyVersion?: string;
+  formalStatus?: "FORMAL" | "NON_FORMAL";
   /** 仅包含 WeightTemplate × Method × Type × FunctionProfile 基础层，早于 functionIntensity 与商品层。 */
   structuralValues?: Record<string, number | string>;
   values: Record<string, number | string>;
+  /** OPEN-001 新投影冻结从 AffixOutput 到最终 ParameterDefinition 的完整证据链。 */
+  affixRuntimeEvidence?: AffixRuntimeEvidence;
   trace: ProjectionTraceStep[];
   warnings: ProjectionWarning[];
   sourceHash: string;
@@ -556,7 +738,14 @@ export interface DerivedProjection {
 
 export interface MigrationReviewItem {
   id: string;
-  sourceType: "modifier" | "candidate_override" | "quality" | "unknown";
+  sourceType:
+    | "modifier"
+    | "candidate_override"
+    | "quality"
+    | "series_recipe"
+    | "series_definition"
+    | "candidate_search_recipe"
+    | "unknown";
   sourceId: string;
   message: string;
   preservedPayload: unknown;
@@ -732,8 +921,11 @@ export interface PatchApplicationIssue {
   code:
     | "PATCH_PATH_INVALID"
     | "PATCH_NUMERIC_REQUIRED"
+    | "PATCH_CANONICAL_OPERATIONS_REQUIRED"
+    | "PATCH_OPERATION_UNSUPPORTED"
     | "PATCH_SET_CONFLICT"
-    | "PATCH_REMOVE_MISSING"
+    | "PATCH_SET_CLEAR_CONFLICT"
+    | "PATCH_CLEAR_INHERITANCE_MISSING"
     | "PATCH_BASE_MISMATCH"
     | "PATCH_SKIPPED";
   patchId: string;
@@ -789,6 +981,90 @@ export interface Collection {
   updatedAt: string;
 }
 
+export type PartConstraintReviewStatus = "CONFIRMED" | "NEEDS_REVIEW";
+export type PartConstraintSlot = "rod" | "reel" | "line";
+export type PartConstraintItemPartId = "part:rod" | "part:reel" | "part:line";
+export type PartConstraintFieldName =
+  | "templateIds"
+  | "materialIds"
+  | "requiredAffixIds"
+  | "optionalAffixPoolIds"
+  | "typeIds";
+
+export interface PartConstraintSetRef {
+  constraintSetId: string;
+  revision: number;
+  contentHash: string;
+}
+
+export interface PartConstraintSourceRevisionRef {
+  sourceType:
+    | "legacy_series_recipe"
+    | "series_definition"
+    | "candidate_search_recipe";
+  sourceId: string;
+  /** 旧载体没有 revision 时必须保持 null，不得伪造。 */
+  revisionId: string | null;
+  /**
+   * 排除 partConstraintSetRef 的无环来源投影；持久化来源可据此重新计算并验证。
+   */
+  hashProjectionVersion: "WITHOUT_PART_CONSTRAINT_SET_REF_V1";
+  contentHash: string;
+}
+
+export interface PartConstraintFieldTrace {
+  traceId: string;
+  itemPartId: PartConstraintItemPartId;
+  field: PartConstraintFieldName;
+  sourceRef: PartConstraintSourceRevisionRef;
+  sourcePath: string;
+  /** 记录复制、改名或合成等迁移转换，保证 Trace 可重放。 */
+  transformationCodes: string[];
+  reviewStatus: PartConstraintReviewStatus;
+  diagnosticCodes: string[];
+  /** 保留该字段的迁移输入，包括无法解释的值。 */
+  rawPayload: unknown;
+}
+
+export interface PartConstraint {
+  itemPartId: PartConstraintItemPartId;
+  reviewStatus: PartConstraintReviewStatus;
+  templateIds: string[];
+  materialIds: string[];
+  requiredAffixIds: string[];
+  optionalAffixPoolIds: string[];
+  /**
+   * 只有组件注册表明确发布该部位的版本化 type 分类时才可用于权威过滤。
+   * 迁移值默认 NEEDS_REVIEW，不等于 Series Type。
+   */
+  typeIds: string[];
+  fieldTraceRefs: Record<PartConstraintFieldName, string>;
+}
+
+export interface PartConstraintMigrationEvidence {
+  migratorVersion: string;
+  sourceSchemaVersion: number;
+  migratedAt: string;
+  diagnosticCodes: string[];
+  /** 完整保留来源对象及未知字段，供人工复核与审计导出。 */
+  rawPayload: unknown;
+}
+
+export interface PartConstraintSet {
+  /** 终身稳定且不得复用的对象身份。 */
+  constraintSetId: string;
+  /** 单调递增的不可变内容修订。 */
+  revision: number;
+  contentHash: string;
+  reviewStatus: PartConstraintReviewStatus;
+  parts: Record<PartConstraintSlot, PartConstraint>;
+  sourceRef: PartConstraintSourceRevisionRef;
+  traces: PartConstraintFieldTrace[];
+  migrationEvidence: PartConstraintMigrationEvidence;
+  createdBy: string;
+  createdAt: string;
+}
+
 export interface SeriesSignatureAxis {
   parameterGroup: string;
   expectedDirection: "positive" | "negative" | "neutral" | "contextual";
@@ -831,6 +1107,8 @@ export interface SeriesDefinition {
   }>;
   signature: SeriesSignatureAxis[];
   patchIds: string[];
+  /** schema v18：精确冻结分部位搜索约束 revision；旧调用方可在迁移前缺失。 */
+  partConstraintSetRef?: PartConstraintSetRef;
   /** @deprecated 只用于旧工作区兼容；新逻辑消费 targetPullSpecifications。 */
   skuIds: string[];
   status: EntityLifecycleStatus;
@@ -844,6 +1122,11 @@ export interface SkuDrawer {
   seriesId: string;
   targetPullKg: number;
   projectionMatch: ProjectionMatch;
+  /**
+   * OPEN-005 正式五维发布使用的当前 SKU revision 逐部位冻结投影引用。
+   * 历史 SKU 可缺失；新正式 Snapshot 必须显式提供完整的竿、轮、线状态。
+   */
+  fiveAxisProjectionReferences?: FiveAxisProjectionReferenceEvidence[];
   patchIds: string[];
   modelIds: string[];
   defaultModelId?: string;
@@ -868,7 +1151,7 @@ export type FiveAxisPointSource =
   | "missing"
   | "error";
 
-export interface FiveAxisAxisDefinition {
+export interface LegacyFiveAxisAxisDefinition {
   axisId: string;
   label: string;
   order: number;
@@ -882,7 +1165,7 @@ export interface FiveAxisAxisDefinition {
   missingPolicy: "error" | "unavailable" | "ignore_not_applicable";
 }
 
-export interface FiveAxisViewDefinition {
+export interface LegacyFiveAxisViewDefinition {
   definitionId: string;
   version: string;
   revision: number;
@@ -891,11 +1174,11 @@ export interface FiveAxisViewDefinition {
   fiveAxisRuleVersion: string;
   sourceRevision: string;
   axes: [
-    FiveAxisAxisDefinition,
-    FiveAxisAxisDefinition,
-    FiveAxisAxisDefinition,
-    FiveAxisAxisDefinition,
-    FiveAxisAxisDefinition,
+    LegacyFiveAxisAxisDefinition,
+    LegacyFiveAxisAxisDefinition,
+    LegacyFiveAxisAxisDefinition,
+    LegacyFiveAxisAxisDefinition,
+    LegacyFiveAxisAxisDefinition,
   ];
   displayBandConfigId?: string;
   seriesBaselinePolicy:
@@ -913,13 +1196,198 @@ export interface FiveAxisEntityInput {
   values: Record<string, number | null | undefined>;
 }
 
-export interface FiveAxisVertexSet {
+export interface LegacyFiveAxisVertexSet {
   fishWeightGradeId: string;
   fiveAxisRuleVersion: string;
   definitionId: string;
   definitionVersion: string;
   values: Record<string, number>;
   vertexSetHash: string;
+}
+
+export type FiveAxisSemanticContractVersion =
+  "five-axis/open005-2026-07-23/v1";
+export type FiveAxisHashInputSchemaVersion = "five-axis-hash-input/v1";
+export type FiveAxisProjectionReferenceSelectorVersion =
+  "projection-reference/current-sku-frozen-match/v1";
+
+/** Immutable, published authority for five-axis W-band resolution. */
+export interface FiveAxisWeightBandPolicy {
+  policyId: string;
+  version: string;
+  publicationState: "PUBLISHED";
+  sourceRevision: string;
+  bands: Array<{ weightBandId: string; label: string; upperBoundKg: string | null }>;
+  contentHash: string;
+}
+
+export interface FiveAxisAxisDefinition {
+  axisId: string;
+  label: string;
+  order: number;
+  sourceParameterKeys: string[];
+  applicablePartIds: string[];
+  direction: "higher_better" | "lower_better" | "target_range" | "contextual";
+  transformId: string;
+  vertexSelectorId: string;
+  vertexSelectorVersion: string;
+  componentAggregationId: "per_component_no_aggregate";
+  missingPolicy: "error" | "unavailable" | "ignore_not_applicable";
+}
+
+export interface FiveAxisViewDefinition {
+  definitionId: string;
+  version: string;
+  revision: number;
+  publicationState: "UNPUBLISHED" | "PUBLISHED" | "SUPERSEDED";
+  definitionHash: string;
+  fiveAxisRuleVersion: string;
+  sourceRevision: string;
+  semanticContractVersion: FiveAxisSemanticContractVersion;
+  hashInputSchemaVersion: FiveAxisHashInputSchemaVersion;
+  projectionReferenceSelectorVersion: FiveAxisProjectionReferenceSelectorVersion;
+  axes: [
+    FiveAxisAxisDefinition,
+    FiveAxisAxisDefinition,
+    FiveAxisAxisDefinition,
+    FiveAxisAxisDefinition,
+    FiveAxisAxisDefinition,
+  ];
+  weightBandPolicyVersion: string;
+  weightBandPolicy: FiveAxisWeightBandPolicy;
+  displayBandConfigId: string;
+  seriesBaselinePolicy: {
+    mode: "projection_reference";
+    selectorVersion: FiveAxisProjectionReferenceSelectorVersion;
+  };
+  comparisonPolicy: {
+    minimumItems: 2;
+    maximumItems: number;
+    mixedItemPartsAllowed: true;
+    referenceRodMode: "first_rod_by_comparison_order";
+    outerRingScore: 100;
+    visualOverflowCap: null;
+  };
+}
+
+export type StoredFiveAxisViewDefinition =
+  | LegacyFiveAxisViewDefinition
+  | FiveAxisViewDefinition;
+
+export interface FiveAxisDefinitionDisposition {
+  definitionId: string;
+  definitionVersion: string;
+  definitionHash: string;
+  effectiveUse: "LEGACY_SNAPSHOT_ONLY" | "FORMAL_CURRENT" | "SUPERSEDED";
+  semanticContractVersion: FiveAxisSemanticContractVersion | null;
+  supersededByDefinitionId: string | null;
+  supersededByDefinitionVersion: string | null;
+  reasonCode: string;
+}
+
+export interface FiveAxisDefinitionDispositionCatalogRevision {
+  catalogRevisionId: string;
+  previousCatalogRevisionId: string | null;
+  previousCatalogHash: string | null;
+  schemaVersion: "five-axis-definition-disposition-catalog/v1";
+  entries: FiveAxisDefinitionDisposition[];
+  catalogHash: string;
+  decidedAt: string;
+}
+
+export interface FiveAxisVertexGroupKey {
+  weightBandId: string;
+  weightBandPolicyVersion: string;
+  fiveAxisDefinitionId: string;
+  fiveAxisDefinitionVersion: string;
+  fiveAxisRuleVersion: string;
+}
+
+export interface FiveAxisVertexCandidateSemanticKey {
+  modelId: string;
+  componentEntityId: string;
+  itemPartId: string;
+}
+
+export interface FiveAxisVertexDirectInput {
+  axisId: string;
+  parameterKey: string;
+  rawValue: string;
+  unit: string;
+  inputHash: string;
+}
+
+export interface FiveAxisVertexCandidateSource {
+  candidateSemanticKey: FiveAxisVertexCandidateSemanticKey;
+  snapshotId: string;
+  modelRevisionId: string;
+  finalPanelHash: string;
+  modelFinalPullKg: string;
+  directInputs: FiveAxisVertexDirectInput[];
+  semanticInputHash: string;
+}
+
+export interface FiveAxisVertex {
+  axisId: string;
+  vertexRawValue: string;
+  vertexSelectorId: string;
+  vertexSelectorVersion: string;
+}
+
+export interface FiveAxisVertexSet {
+  vertexSetId: string;
+  weightBandId: string;
+  weightBandPolicyVersion: string;
+  fiveAxisDefinitionId: string;
+  fiveAxisDefinitionVersion: string;
+  fiveAxisRuleVersion: string;
+  hashInputSchemaVersion: FiveAxisHashInputSchemaVersion;
+  candidateSources: FiveAxisVertexCandidateSource[];
+  candidateSetHash: string;
+  candidateEvidenceHash: string;
+  vertices: FiveAxisVertex[];
+  vertexSetHash: string;
+}
+
+export type StoredFiveAxisVertexSet =
+  | LegacyFiveAxisVertexSet
+  | FiveAxisVertexSet;
+
+/** Current formal-candidate membership and transaction evidence.  These are
+ * deliberately separate from immutable historical vertex sets. */
+export interface FiveAxisCandidateMembership {
+  groupKey: FiveAxisVertexGroupKey;
+  candidateSources: FiveAxisVertexCandidateSource[];
+}
+export interface FiveAxisCandidateDelta {
+  deltaId: string;
+  modelId: string;
+  operation: "ADD" | "REPLACE" | "REMOVE";
+  groupKey: FiveAxisVertexGroupKey;
+  before: FiveAxisCandidateMembership | null;
+  after: FiveAxisCandidateMembership | null;
+  migrationId: string | null;
+}
+export interface FiveAxisVertexGroupState {
+  groupKey: FiveAxisVertexGroupKey;
+  state: "AVAILABLE" | "UNAVAILABLE_NO_ELIGIBLE_CANDIDATE";
+  candidateSources: FiveAxisVertexCandidateSource[];
+  candidateSetHash: string;
+  candidateEvidenceHash: string;
+  currentVertexSetId: string | null;
+  currentVertexSetHash: string | null;
+  missingAxisIds: string[];
+  reasonCode: string | null;
+}
+export interface FiveAxisTransactionComponent {
+  componentId: string;
+  groupKeys: FiveAxisVertexGroupKey[];
+  deltas: FiveAxisCandidateDelta[];
+  snapshotBuildModelIds: string[];
+}
+export interface FiveAxisTransactionPlan {
+  components: FiveAxisTransactionComponent[];
+  inputHash: string;
 }
 
 export interface FiveAxisTraceEntry {
@@ -948,6 +1416,9 @@ export interface FiveAxisSeries {
   itemPartId: string;
   label: string;
   fishWeightGradeId: string;
+  modelFinalPullKg?: number;
+  weightBandId?: string;
+  comparisonOrder?: number;
   points: FiveAxisSeriesPoint[];
 }
 
@@ -959,16 +1430,38 @@ export interface FiveAxisAxisSummary {
 }
 
 export interface FiveAxisComparisonView {
-  mode: "tackle_fit" | "same_part_compare";
+  mode: "tackle_fit" | "same_part_compare" | "equipment_compare";
   referenceFishWeightGradeId: string;
   fiveAxisDefinitionId: string;
   fiveAxisDefinitionVersion: string;
   fiveAxisRuleVersion: string;
   vertexSetHash: string;
   scaleMode: "official_locked" | "comparison_expanded";
+  weightBandPolicyVersion?: string;
+  referenceRodEntityId?: string | null;
+  projectionReferenceAnchor?: FiveAxisProjectionReferenceAnchor | null;
+  projectionReferenceSetHash?: string | null;
+  projectionReferences?: FiveAxisProjectionReferenceEvidence[];
   series: FiveAxisSeries[];
   axisSummaries: FiveAxisAxisSummary[];
   validationIssues: ValidationIssue[];
+}
+
+export interface FiveAxisProjectionReferenceAnchor {
+  baselineSnapshotId: string;
+  seriesId: string;
+  skuId: string;
+  skuRevisionId: string;
+  selectorVersion: FiveAxisProjectionReferenceSelectorVersion;
+}
+
+export interface FiveAxisProjectionReferenceEvidence {
+  itemPartId: string;
+  state: "available" | "missing" | "error" | "not_selected";
+  projectionMatchId: string | null;
+  projectionMatchRevisionId: string | null;
+  projectionId: string | null;
+  projectionRevisionId: string | null;
 }
 
 export interface FiveAxisMetric {
@@ -984,6 +1477,11 @@ export interface FiveAxisMetric {
 
 export interface ModelFiveAxisPreview {
   modelId: string;
+  /** OPEN-005 正式预览使用；历史预览继续保留 fishWeightGradeId。 */
+  modelFinalPullKg?: number;
+  weightBandId?: string;
+  weightBandPolicyVersion?: string;
+  hashInputSchemaVersion?: FiveAxisHashInputSchemaVersion;
   fishWeightGradeId: string;
   fiveAxisDefinitionId: string;
   fiveAxisDefinitionVersion: string;
@@ -995,6 +1493,10 @@ export interface ModelFiveAxisPreview {
   vertexSetHash: string;
   sourceRevision: string;
   metrics: FiveAxisMetric[];
+  candidateSources?: FiveAxisVertexCandidateSource[];
+  candidateSetHash?: string;
+  candidateEvidenceHash?: string;
+  componentSeries?: FiveAxisSeries[];
   tackleFitComparison: FiveAxisComparisonView;
   inputHash: string;
 }
@@ -1041,6 +1543,8 @@ export interface CandidateSearchRecipe {
   qualityIds: QualityProfileId[];
   targetPullRangeKg: { min: number; max: number };
   maxCandidates: number;
+  /** 精确引用约束集；候选运行不得解析为“最新 revision”。 */
+  partConstraintSetRef?: PartConstraintSetRef;
   sourceLegacyRecipeId?: string;
   notes: string;
 }
@@ -1155,15 +1659,25 @@ export type AffixRarity =
   | "ultra_rare"
   | "epic";
 
-export interface AttributeAffixEffect {
+export interface LegacyAttributeAffixEffect {
   id: string;
   parameterKey: string;
   operation: AttributeContributionOperation;
   value: number;
+  publishedMagnitudeRange?: CanonicalAttributeOperation["publishedMagnitudeRange"];
   unit: string;
   stackingGroup: string;
   ruleSetVersion: string;
 }
+
+export type AttributeAffixEffect =
+  | LegacyAttributeAffixEffect
+  | (CanonicalAttributeOperation & {
+      id: string;
+      unit: string;
+      stackingGroup: string;
+      ruleSetVersion: string;
+    });
 
 export interface V3Affix {
   id: string;
@@ -1208,7 +1722,24 @@ export interface AffixQualityEvaluation {
   blockingIssues: string[];
 }
 
+export interface AffixRuntimeEvidence {
+  reductionStackingPolicyVersion?: string;
+  /** Affix/Technology 结算完成、FinalReviewPatch 之前的值。 */
+  values: Record<string, number | string>;
+  /** FinalReviewPatch 完成、ParameterDefinition 之前的值。 */
+  postReviewValues: Record<string, number | string>;
+  /** ParameterDefinition 完成后的正式最终值。 */
+  finalValues: Record<string, number | string>;
+  /** 按执行顺序包含 affix、FinalReviewPatch 与 ParameterDefinition 的同一条 Trace。 */
+  trace: ProjectionTraceContribution[];
+  issues: ValidationIssue[];
+  formalStatus: "FORMAL" | "NON_FORMAL";
+  traceHash: string;
+}
+
 export interface ConfigurationSnapshot {
+  /** 历史 Snapshot 可缺失；新正式 Snapshot 必须提供。 */
+  workspaceId?: string;
   id: string;
   version: number;
   modelId: string;
@@ -1217,8 +1748,12 @@ export interface ConfigurationSnapshot {
   seriesRevision: number;
   ruleSetVersion: string;
   projectionId: string;
-  reductionStackingMode: ReductionStackingMode;
+  /** 历史快照读取字段；不得作为新运行时公式选择器。 */
+  reductionStackingMode?: ReductionStackingMode;
+  /** 新正式快照必须冻结；历史快照可以缺失并继续查看/审计归档。 */
+  reductionStackingPolicyVersion?: string;
   patchSetHash: string;
+  patchSetHashContractVersion?: string;
   patchReferences?: PatchSnapshotReference[];
   /** 历史 Snapshot 可缺失；新正式 Snapshot 必须冻结以下 OPEN-004 证据。 */
   patchOffsetPolicyVersion?: string;
@@ -1252,6 +1787,11 @@ export interface ConfigurationSnapshot {
   validationWaivers?: ValidationWaiver[];
   validationWaiverDecisions?: ValidationWaiverDecision[];
   fiveAxisPreview?: ModelFiveAxisPreview;
+  fiveAxisDispositionEvidence?: {
+    catalogRevisionId: string;
+    catalogHash: string;
+    disposition: FiveAxisDefinitionDisposition;
+  };
   publishedBy: string;
   publishedAt: string;
   contentHash: string;
@@ -1263,6 +1803,7 @@ export interface UpgradeCandidate {
   fromSnapshotId: string;
   proposedProjectionId: string;
   proposedRuleSetVersion: string;
+  proposedReductionStackingPolicyVersion?: string;
   proposedValues: Record<string, number | string>;
   differences: PatchRebaseDifference[];
   patchRebasePreview: PatchRebasePreview;
@@ -1334,6 +1875,20 @@ export interface DataSourceImportRecord {
   publishedBy: string;
 }
 
+/**
+ * 飞书分享链接历史条目。仅用于数据导入的地址填写便利，与第 14 节的
+ * canonical 规则源工作簿互不冲突：这里只记录用户主动粘贴并被成功识别
+ * 的飞书多维表格（/base/）分享链接，绝不保存任何应用密钥、appToken
+ * 凭据或个人身份信息。历史走 workspace state 持久化，可治理、可迁移。
+ */
+export interface FeishuShareLinkHistoryEntry {
+  id: string;
+  shareUrl: string;
+  label: string;
+  dataset: DataSourceDataset;
+  lastUsedAt: string;
+}
+
 export interface DataSourceBinding {
   sourceId: string;
   dataset: DataSourceDataset;
@@ -1401,6 +1956,33 @@ export interface AdjustmentRule {
   value: number | string;
   condition?: string;
   notes?: string;
+  sourceRevisionId?: string;
+  sourceSheetId?: string;
+  sourceCell?: string;
+}
+
+export interface CanonicalRuleSourceIssue {
+  level: "error" | "warning";
+  code: string;
+  message: string;
+  sheetId?: string;
+  row?: number;
+}
+
+export interface CanonicalRuleSourceDraft {
+  id: string;
+  sourceRevisionId: string;
+  sourceRevision: string;
+  contentHash: string;
+  importedAt: string;
+  parameters: ParameterDefinition[];
+  templates: WeightTemplate[];
+  methodProfiles: MethodProfile[];
+  itemTypeProfiles: ItemTypeProfile[];
+  functionProfiles: FunctionProfile[];
+  modifiers: ModifierOption[];
+  layers: RuleLayer[];
+  issues: CanonicalRuleSourceIssue[];
 }
 
 export interface ModifierOption {
@@ -1409,6 +1991,8 @@ export interface ModifierOption {
   name: string;
   level: number | string;
   itemKinds: ItemKind[];
+  /** Empty means no Method restriction; populated values are a hard compatibility rule. */
+  methodIds?: string[];
   rules: AdjustmentRule[];
   notes: string;
   enabled: boolean;
@@ -1649,7 +2233,8 @@ export interface CanonicalValidationIssue {
 export interface LegacyValidationIssue {
   level: "error" | "warning" | "info";
   severity?: ValidationIssueSeverity;
-  source?: ValidationIssueSource;
+  /** `affix` 仅是 #47 迁移前的旧来源；新记录必须使用 ValidationIssueSource。 */
+  source?: ValidationIssueSource | "affix";
   gate?: ValidationIssueGate;
   state?: ValidationIssueState;
   fingerprint?: string;
@@ -2011,6 +2596,96 @@ export interface AIAssessmentRecord {
   generatedAt: string;
 }
 
+export interface AIDraftEntityRef {
+  workspaceId: string;
+  entityType: "series" | "sku_drawer" | "model" | "rule_source_change_draft";
+  entityId: string;
+  revisionId: string;
+}
+
+export interface AIDraftEvidenceRef {
+  evidenceType: "trace" | "validation_issue" | "hard_compatibility" | "affinity_axis"
+    | "series_invariant" | "five_axis" | "rule" | "snapshot";
+  refId: string;
+  revisionId?: string;
+  contentHash: string;
+}
+
+export interface AIRuleSourceChangeDraft {
+  changeDraftId: string;
+  originAssessmentId: string;
+  originRecommendationId: string;
+  sourceObjectRefs: AIDraftEntityRef[];
+  targetRuleRef: {
+    spreadsheetToken: string;
+    sheetId: string;
+    stableRuleId: string;
+    parameterKey: string;
+    sourceRevision: string;
+  };
+  proposedChange: {
+    changeId: string;
+    parameterKey: string;
+    operation: "set" | "add" | "multiply" | "clear";
+    operand: unknown;
+    expectedBefore: unknown;
+  };
+  evidenceRefs: AIDraftEvidenceRef[];
+  impactPreview: {
+    evaluatedRuleSetVersion: string;
+    affectedSeries: number;
+    affectedSkus: number;
+    affectedModels: number;
+    newErrors: number;
+    resolvedErrors: number;
+    sampleDiffRefs: string[];
+    publishedSnapshotsChanged: 0;
+    upgradeCandidatesExpected: number;
+    coverage: {
+      evaluatedModels: number;
+      totalModels: number;
+      complete: boolean;
+      unavailableModelIds: string[];
+    };
+  };
+  state: "LOCAL_DRAFT" | "IMPACT_PREVIEW_READY" | "NEEDS_REBASE"
+    | "CONFIRMED" | "WRITING" | "WRITE_VERIFIED" | "WRITE_FAILED"
+    | "REMOTE_CHANGES_AVAILABLE" | "PULLED" | "ABSORBED"
+    | "PARTIALLY_ABSORBED" | "SUPERSEDED";
+  humanReview?: {
+    confirmedBy: string;
+    confirmedAt: string;
+    reviewedCommandHash: string;
+    reviewedSourceRevision: string;
+  };
+  idempotencyKey: string;
+  commandHash: string;
+  createdBy: string;
+  createdAt: string;
+  provenance: {
+    assessmentInputHash: string;
+    modelDescriptor: import("./ai-outbound").AIModelDescriptorV1;
+    selectedRecommendation: unknown;
+    evidenceContentHashes: string[];
+    humanDiff: unknown;
+  };
+}
+
+export interface AIArtifactProvenanceSyncRecord {
+  syncRecordId: string;
+  assessmentId: string;
+  actorStableId: string;
+  artifactStableRefs: string[];
+  acceptedArtifactProvenance: import("./ai-retention").AIAcceptedArtifactProvenance;
+  idempotencyKey: string;
+  commandHash: string;
+  state: "PENDING" | "SYNCED" | "FAILED";
+  attempts: number;
+  createdAt: string;
+  updatedAt: string;
+  lastErrorCode?: string;
+}
+
 export interface WorkspaceExportTargetProfile {
   profileId: string;
   label: string;
@@ -2045,6 +2720,8 @@ export interface IdentityAuditRecord {
 
 
 export interface WorkspaceState {
+  /** 新正式 Patch/发布链的权威工作区身份；历史 Snapshot 仍可保留无此字段的 legacy 证据。 */
+  workspaceId?: string;
   schemaVersion: number;
   /**
    * OPEN-008 使用独立子 schema，避免把配置身份治理与工作区 revision
@@ -2069,6 +2746,7 @@ export interface WorkspaceState {
   affinityAxisWeights: AffinityAxisWeights;
   collections: Collection[];
   seriesDefinitions: SeriesDefinition[];
+  partConstraintSets: PartConstraintSet[];
   skuDrawers: SkuDrawer[];
   purchasableModels: PurchasableModel[];
   candidateSearchRecipes: CandidateSearchRecipe[];
@@ -2079,17 +2757,25 @@ export interface WorkspaceState {
   configurationSnapshots: ConfigurationSnapshot[];
   feishuWorkbooks: FeishuWorkbookRef[];
   feishuSourceRevisions: FeishuSourceRevision[];
+  canonicalRuleSourceDrafts: CanonicalRuleSourceDraft[];
+  weightTemplatePolicyDrafts: WeightTemplatePolicyDraft[];
   sourceIdentityMigrationReports: SourceIdentityMigrationReport[];
   qualityValuePolicyDrafts: QualityValuePolicyDraft[];
   pricingPolicyDrafts: PricingPolicyDraft[];
   pricingPolicyVersions: PricingPolicyVersion[];
-  fiveAxisViewDefinitions: FiveAxisViewDefinition[];
-  fiveAxisVertexSets: FiveAxisVertexSet[];
+  reductionStackingPolicyVersions: ReductionStackingPolicyVersion[];
+  fiveAxisViewDefinitions: StoredFiveAxisViewDefinition[];
+  fiveAxisVertexSets: StoredFiveAxisVertexSet[];
+  fiveAxisDispositionCatalogRevisions: FiveAxisDefinitionDispositionCatalogRevision[];
+  currentFiveAxisDispositionCatalogRevisionId: string | null;
+  fiveAxisVertexGroupStates?: FiveAxisVertexGroupState[];
   workspacePolicies: WorkspacePolicyRecord[];
   patchReviewBatches: PatchReviewBatch[];
   patchValidationWaivers: PatchValidationWaiver[];
   patchValidationWaiverDecisions: PatchValidationWaiverDecision[];
   aiAssessments: AIAssessmentRecord[];
+  aiRuleSourceChangeDrafts: AIRuleSourceChangeDraft[];
+  aiArtifactProvenanceSyncRecords: AIArtifactProvenanceSyncRecord[];
   exportTargetProfiles: WorkspaceExportTargetProfile[];
   configEnvironmentProfiles: ConfigEnvironmentProfile[];
   configExportMappings: ConfigExportMapping[];
@@ -2124,6 +2810,7 @@ export interface WorkspaceState {
   dataSourceImports: DataSourceImportRecord[];
   dataSourceBindings: DataSourceBinding[];
   dataSourceWritebacks: DataSourceWritebackRecord[];
+  feishuShareLinkHistory: FeishuShareLinkHistoryEntry[];
   revisions: RevisionInfo[];
   notes: string;
   importedAt: string;

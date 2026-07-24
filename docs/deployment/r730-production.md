@@ -12,7 +12,7 @@
 - 私密环境文件：`/opt/tackle-forger/.env.local`，权限 `0600`。
 - 持久数据根：`/opt/tackle-forger/data`，仅服务账号可读写。
 - 从 `deploy/tackle-forger.env.example` 创建 `/opt/tackle-forger/.env.local`，不要把通用 `.env.example` 的相对 `.data/*` 路径直接用于生产。
-- 将 `WORKSPACE_DATABASE_PATH`、`WORKSPACE_FILE_DATA_DIR`、`WORKSPACE_BACKUP_DIR` 和 `FEISHU_SESSION_DATA_DIR` 全部指向该持久数据根内的独立目录；示例已使用 `/opt/tackle-forger/data/*` 绝对路径，与 systemd 的 `ReadWritePaths` 一致。
+- 将 `WORKSPACE_DATABASE_PATH`、`WORKSPACE_FILE_DATA_DIR`、`WORKSPACE_BACKUP_DIR`、`FEISHU_SESSION_DATA_DIR`、`AI_RETENTION_DATA_DIR` 和 `AI_RETENTION_TOMBSTONE_DIR` 全部指向该持久数据根内的独立目录；删除墓碑目录不得位于 AI 留存目录或备份目录内部，也不得在恢复旧工作区备份时被覆盖。示例已使用 `/opt/tackle-forger/data/*` 绝对路径，与 systemd 的 `ReadWritePaths` 一致。
 
 不要把飞书密钥、会话文件、SQLite 数据库、导入文件或 configs 凭据放入代码发布目录。
 
@@ -20,7 +20,10 @@
 
 1. 使用 Node.js 22.16.0 或更新版本安装锁定依赖，并运行 `npm run typecheck`、`npm run lint`、`npm test`。备份脚本使用的 `node:sqlite` `backup()` 从 Node.js 22.16.0 起提供。
 2. 运行 `npm run build`，确认 `dist` 已生成。
-3. 按 `deploy/tackle-forger.env.example` 配置公司飞书应用、tenant key、回调地址、至少 32 字节会话密钥和持久目录，并确认文件权限为 `0600`。
+3. 按 `deploy/tackle-forger.env.example` 配置公司飞书应用、tenant key、回调地址、解析后的
+   权威 spreadsheet token、至少 32 字节会话密钥和持久目录，并确认文件权限为 `0600`；
+   核对受版本控制的 `deploy/phase-one-dependencies.json` 已由单独评审提交记录 #67、#71、
+   #76 的 GitHub reviewed head、唯一 merge commit、已解决 review threads 和通过的必需 CI。
 4. 在飞书开放平台把回调逐字登记为 `https://<内网域名>/api/auth/feishu/callback`。
 5. 若从 Vercel Blob 迁移，先在空目标数据库上运行 `npm run storage:migrate:blob-to-sqlite`；脚本拒绝覆盖已有数据库。
 
@@ -92,18 +95,21 @@ dry-run 不得写入 tombstone、删除 revision、执行 `VACUUM` 或改变数�
 
 ## systemd 与反向代理
 
-1. 将 `deploy/tackle-forger.service`、`deploy/tackle-forger-backup.service`、`deploy/tackle-forger-backup.timer` 安装到 `/etc/systemd/system/`。
+1. 将 `deploy/tackle-forger.service`、`deploy/tackle-forger-backup.service`、`deploy/tackle-forger-backup.timer`、`deploy/tackle-forger-ai-retention.service` 和 `deploy/tackle-forger-ai-retention.timer` 安装到 `/etc/systemd/system/`。
 2. 将 `deploy/nginx-tackle-forger.conf.example` 复制到 Nginx 配置并替换内网域名和公司证书路径。该示例采用“浏览器 → Nginx → 应用”的直接 OAuth 拓扑，会显式清除客户端提交的 `x-feishu-*` 与 `x-tf-proxy-secret`，并保持可信代理身份模式关闭。
-3. 重新加载 systemd，启用应用服务和每日备份 timer。
+3. 重新加载 systemd，启用应用服务、每日备份 timer 和每小时 AI 留存 timer。首次启用 timer 前先手工运行一次 `npm run ai-retention:sweep`；任一备份删除未通过回读确认时任务以失败状态留待下次重试，不得手工把墓碑改为已清除。
 4. 应用仅监听 `127.0.0.1:3000`；浏览器只能通过 HTTPS 反向代理访问。
 
 ## 验收与回滚
 
+- 一期端到端验收按
+  [`phase-one-acceptance.md`](./phase-one-acceptance.md)分层执行；仓库预检、未登录 smoke 和
+  已登录只读核对不能替代真实用户的拉取、RuleSet、Series/SKU/Model/Snapshot 与恢复证据。
 - 验收 `/api/auth/session` 未登录返回 401，飞书登录成功后返回当前租户身份。
 - 在“飞书规则源”执行检查与显式拉取，确认 revision、sheet_id 和 Trace；不要把拉取误当发布。
 - 创建一个测试 Series，确认离散拉力逐项物化 SKU，规划范围不参与生成。
 - 预览 configs 三表差异，但只有登记 Profile、映射和正式 PricingPolicy 后才允许提交。
-- 执行 `npm run storage:backup` 并验证 SQLite、导入文件、`auth` 会话目录和 manifest 均存在。恢复会话目录时必须停服，保持目录仅服务账号可读写；若备份创建时尚无会话目录，manifest 的 `sessionDataIncluded` 为 `false`，恢复后用户需要重新登录。
+- 执行 `npm run storage:backup` 并验证 SQLite、导入文件、`auth` 会话目录、`ai-retention` 留存目录和 manifest 均存在；确认 `AI_RETENTION_TOMBSTONE_DIR` 未被收入该可回退备份。恢复会话目录时必须停服，保持目录仅服务账号可读写；若备份创建时尚无会话目录，manifest 的 `sessionDataIncluded` 为 `false`，恢复后用户需要重新登录。用户删除 AI 评估后，主存储立即隐藏、24 小时内清除内容；独立墓碑会在旧备份恢复后继续拦截读取，`npm run ai-retention:sweep` 会在 30 天期限到达时按 assessmentId 删除所有整库备份中的对应留存文件并回读确认，失败保持 `FAILED` 以便后续重试。
 - 一期验收确认没有归档/裁剪任务且自动裁剪保持关闭；缺少归档配置不阻塞工作区主流程。
 - 二期准备裁剪时再检查 retention 配置和最近 dry-run/归档/备份恢复证据；任一证据缺失时仍可继续提供不裁剪的工作区服务，但不得启用删除任务。
 - 回滚代码时切换 `current` 到上一只读发布目录并重启服务；不得回滚或覆盖 SQLite。若业务数据必须恢复，只能停服后从已验证备份恢复到新文件，再保留原数据库作审计副本。

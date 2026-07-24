@@ -3,7 +3,11 @@ import {
 } from "./enabled-item-parts";
 import { verifySnapshotIntegrity } from "./publishing";
 import { deterministicHash } from "./rule-kernel";
-import type { ConfigurationSnapshot } from "./types";
+import type {
+  ConfigurationSnapshot,
+  ReductionStackingPolicyVersion,
+} from "./types";
+import { assertFormalSnapshotHasReplayPolicy } from "./reduction-stacking-policy";
 
 export const CONFIG_PREVIEW_NOTICE = "不可提交、不可人工搬运到configs";
 
@@ -110,8 +114,17 @@ function previewObjects(snapshot: ConfigurationSnapshot): ConfigPreviewObject[] 
 
 export function assertConfigExportSnapshotReplayable(
   snapshot: ConfigurationSnapshot,
+  availableReductionPolicies: ReductionStackingPolicyVersion[],
 ): void {
   assertSnapshotItemPartEnabled(snapshot, "config_export");
+  try {
+    assertFormalSnapshotHasReplayPolicy(snapshot, availableReductionPolicies);
+  } catch (error) {
+    throw new ConfigPreviewSnapshotError(
+      "SNAPSHOT_REPLAY_POLICY_MISSING",
+      error instanceof Error ? error.message : String(error),
+    );
+  }
   if (!verifySnapshotIntegrity(snapshot)) {
     throw new ConfigPreviewSnapshotError(
       "SNAPSHOT_INTEGRITY_INVALID",
@@ -152,6 +165,7 @@ export function createConfigPreviewPackage(input: {
   packageId: string;
   workspaceId: string;
   snapshots: ConfigurationSnapshot[];
+  availableReductionPolicies: ReductionStackingPolicyVersion[];
   createdAt?: string;
 }): ConfigPreviewPackage {
   const packageId = input.packageId.trim();
@@ -165,7 +179,7 @@ export function createConfigPreviewPackage(input: {
   const snapshotIds = new Set<string>();
   const modelIds = new Set<string>();
   for (const snapshot of input.snapshots) {
-    assertConfigExportSnapshotReplayable(snapshot);
+    assertConfigExportSnapshotReplayable(snapshot, input.availableReductionPolicies);
     if (snapshotIds.has(snapshot.id)) {
       throw new Error(`ConfigPreviewPackage 包含重复 Snapshot：${snapshot.id}。`);
     }

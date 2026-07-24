@@ -137,7 +137,13 @@ export function prepareSourceIdentityMigration(input: {
       candidates.set(candidateKey, [...(candidates.get(candidateKey) ?? []), entity.entityId]);
     }
   }
-  const policyBySheet = new Map((input.identityPolicies ?? []).map((policy) => [policy.sheetId, policy]));
+  const policyBySheet = new Map<string, SourceIdentityPolicy>();
+  for (const policy of input.identityPolicies ?? []) {
+    const current = policyBySheet.get(policy.sheetId) ?? { sheetId: policy.sheetId, allowedEntityTypes: [], idPrefixesByEntityType: {} };
+    current.allowedEntityTypes = [...new Set([...current.allowedEntityTypes, ...policy.allowedEntityTypes])];
+    for (const [entityType, prefixes] of Object.entries(policy.idPrefixesByEntityType)) current.idPrefixesByEntityType[entityType] = [...new Set([...(current.idPrefixesByEntityType[entityType] ?? []), ...prefixes])];
+    policyBySheet.set(policy.sheetId, current);
+  }
 
   const items = input.rows.map((row): SourceIdentityMigrationItem => {
     const observedStableId = row.stableId?.trim() || undefined;

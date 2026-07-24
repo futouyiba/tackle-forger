@@ -63,6 +63,19 @@
       }
     }
   ],
+  "recipes": [
+    {
+      "id": "recipe:production-redacted",
+      "name": "生产旧扁平配方",
+      "templateIds": ["template:production-redacted"],
+      "structureIds": ["structure:production-redacted"],
+      "requiredAffixIds": ["affix:required-redacted"],
+      "optionalAffixPoolIds": ["affix:optional-redacted"],
+      "legacyUnknownConstraintPayload": {
+        "preserve": true
+      }
+    }
+  ],
   "seriesDefinitions": [
     {
       "id": "series:production-redacted",

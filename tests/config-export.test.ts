@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  commitExportPackage,
+  commitExportPackage as commitExportPackageWithPolicies,
   validateLogicalTableRelations,
   type ExportCommitAdapter,
   type ExportCommitResult,
@@ -15,6 +15,17 @@ import type {
   FormalConfigExportEvidenceVerifier,
 } from "../lib/config-export-stage";
 import { formalConfigExportContextHash } from "../lib/config-export-stage";
+import { testReductionPolicy } from "./helpers/reduction-policy";
+
+const AVAILABLE_REDUCTION_POLICIES = [testReductionPolicy()];
+function commitExportPackage(
+  input: Omit<Parameters<typeof commitExportPackageWithPolicies>[0], "availableReductionPolicies">,
+) {
+  return commitExportPackageWithPolicies({
+    ...input,
+    availableReductionPolicies: AVAILABLE_REDUCTION_POLICIES,
+  });
+}
 
 process.env.TACKLE_FORGER_PRODUCT_DELIVERY_STAGE = "PHASE_ONE_POINT_FIVE";
 process.env.TACKLE_FORGER_FORMAL_CONFIG_EXPORT_RUNTIME_ENABLED = "true";
@@ -46,6 +57,7 @@ const FORMAL_VERIFIER: FormalConfigExportEvidenceVerifier = {
 function exportSnapshot(itemPartId = "part:rod") {
   const snapshot = structuredClone(createSeedState().configurationSnapshots[0]!);
   snapshot.projectionMatch.itemPartId = itemPartId;
+  snapshot.reductionStackingPolicyVersion = AVAILABLE_REDUCTION_POLICIES[0].version;
   snapshot.qualityValueAssessment = {
     formal: true,
   } as NonNullable<ConfigurationSnapshot["qualityValueAssessment"]>;

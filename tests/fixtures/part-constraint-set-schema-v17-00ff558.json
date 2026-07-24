@@ -1,0 +1,104 @@
+{
+  "source": {
+    "id": "series:partial-00ff558",
+    "revision": 4,
+    "name": "00ff558 部分规范化 Series",
+    "partConstraintSetRef": {
+      "constraintSetId": "part-constraint-set:series-definition:series%3Apartial-00ff558",
+      "revision": 1,
+      "contentHash": "__FIXTURE_CONTENT_HASH__"
+    }
+  },
+  "constraintSet": {
+    "constraintSetId": "part-constraint-set:series-definition:series%3Apartial-00ff558",
+    "revision": 1,
+    "contentHash": "__FIXTURE_CONTENT_HASH__",
+    "reviewStatus": "NEEDS_REVIEW",
+    "parts": {
+      "rod": {
+        "itemPartId": "part:rod",
+        "reviewStatus": "NEEDS_REVIEW",
+        "templateIds": [],
+        "materialIds": [],
+        "requiredAffixIds": [],
+        "optionalAffixPoolIds": [],
+        "typeIds": [],
+        "fieldTraceRefs": {
+          "templateIds": "part-constraint-set:series-definition:series%3Apartial-00ff558:r1:trace:rod:templateIds",
+          "materialIds": "part-constraint-set:series-definition:series%3Apartial-00ff558:r1:trace:rod:materialIds",
+          "requiredAffixIds": "part-constraint-set:series-definition:series%3Apartial-00ff558:r1:trace:rod:requiredAffixIds",
+          "optionalAffixPoolIds": "part-constraint-set:series-definition:series%3Apartial-00ff558:r1:trace:rod:optionalAffixPoolIds",
+          "typeIds": "part-constraint-set:series-definition:series%3Apartial-00ff558:r1:trace:rod:typeIds"
+        }
+      },
+      "reel": {
+        "itemPartId": "part:reel",
+        "reviewStatus": "NEEDS_REVIEW",
+        "templateIds": [],
+        "materialIds": [],
+        "requiredAffixIds": [],
+        "optionalAffixPoolIds": [],
+        "typeIds": [],
+        "fieldTraceRefs": {
+          "templateIds": "part-constraint-set:series-definition:series%3Apartial-00ff558:r1:trace:reel:templateIds",
+          "materialIds": "part-constraint-set:series-definition:series%3Apartial-00ff558:r1:trace:reel:materialIds",
+          "requiredAffixIds": "part-constraint-set:series-definition:series%3Apartial-00ff558:r1:trace:reel:requiredAffixIds",
+          "optionalAffixPoolIds": "part-constraint-set:series-definition:series%3Apartial-00ff558:r1:trace:reel:optionalAffixPoolIds",
+          "typeIds": "part-constraint-set:series-definition:series%3Apartial-00ff558:r1:trace:reel:typeIds"
+        }
+      },
+      "line": {
+        "itemPartId": "part:line",
+        "reviewStatus": "NEEDS_REVIEW",
+        "templateIds": [],
+        "materialIds": [],
+        "requiredAffixIds": [],
+        "optionalAffixPoolIds": [],
+        "typeIds": [],
+        "fieldTraceRefs": {
+          "templateIds": "part-constraint-set:series-definition:series%3Apartial-00ff558:r1:trace:line:templateIds",
+          "materialIds": "part-constraint-set:series-definition:series%3Apartial-00ff558:r1:trace:line:materialIds",
+          "requiredAffixIds": "part-constraint-set:series-definition:series%3Apartial-00ff558:r1:trace:line:requiredAffixIds",
+          "optionalAffixPoolIds": "part-constraint-set:series-definition:series%3Apartial-00ff558:r1:trace:line:optionalAffixPoolIds",
+          "typeIds": "part-constraint-set:series-definition:series%3Apartial-00ff558:r1:trace:line:typeIds"
+        }
+      }
+    },
+    "sourceRef": {
+      "sourceType": "series_definition",
+      "sourceId": "series:partial-00ff558",
+      "revisionId": "4",
+      "contentHash": "__FIXTURE_SOURCE_HASH__"
+    },
+    "traces": [
+      { "traceId": "part-constraint-set:series-definition:series%3Apartial-00ff558:r1:trace:rod:templateIds", "itemPartId": "part:rod", "field": "templateIds", "sourceRef": { "sourceType": "series_definition", "sourceId": "series:partial-00ff558", "revisionId": "4", "contentHash": "__FIXTURE_SOURCE_HASH__" }, "sourcePath": "$", "reviewStatus": "NEEDS_REVIEW", "diagnosticCodes": [], "rawPayload": null },
+      { "traceId": "part-constraint-set:series-definition:series%3Apartial-00ff558:r1:trace:rod:materialIds", "itemPartId": "part:rod", "field": "materialIds", "sourceRef": { "sourceType": "series_definition", "sourceId": "series:partial-00ff558", "revisionId": "4", "contentHash": "__FIXTURE_SOURCE_HASH__" }, "sourcePath": "$", "reviewStatus": "NEEDS_REVIEW", "diagnosticCodes": [], "rawPayload": null },
+      { "traceId": "part-constraint-set:series-definition:series%3Apartial-00ff558:r1:trace:rod:requiredAffixIds", "itemPartId": "part:rod", "field": "requiredAffixIds", "sourceRef": { "sourceType": "series_definition", "sourceId": "series:partial-00ff558", "revisionId": "4", "contentHash": "__FIXTURE_SOURCE_HASH__" }, "sourcePath": "$", "reviewStatus": "NEEDS_REVIEW", "diagnosticCodes": [], "rawPayload": null },
+      { "traceId": "part-constraint-set:series-definition:series%3Apartial-00ff558:r1:trace:rod:optionalAffixPoolIds", "itemPartId": "part:rod", "field": "optionalAffixPoolIds", "sourceRef": { "sourceType": "series_definition", "sourceId": "series:partial-00ff558", "revisionId": "4", "contentHash": "__FIXTURE_SOURCE_HASH__" }, "sourcePath": "$", "reviewStatus": "NEEDS_REVIEW", "diagnosticCodes": [], "rawPayload": null },
+      { "traceId": "part-constraint-set:series-definition:series%3Apartial-00ff558:r1:trace:rod:typeIds", "itemPartId": "part:rod", "field": "typeIds", "sourceRef": { "sourceType": "series_definition", "sourceId": "series:partial-00ff558", "revisionId": "4", "contentHash": "__FIXTURE_SOURCE_HASH__" }, "sourcePath": "$", "reviewStatus": "NEEDS_REVIEW", "diagnosticCodes": [], "rawPayload": null },
+      { "traceId": "part-constraint-set:series-definition:series%3Apartial-00ff558:r1:trace:reel:templateIds", "itemPartId": "part:reel", "field": "templateIds", "sourceRef": { "sourceType": "series_definition", "sourceId": "series:partial-00ff558", "revisionId": "4", "contentHash": "__FIXTURE_SOURCE_HASH__" }, "sourcePath": "$", "reviewStatus": "NEEDS_REVIEW", "diagnosticCodes": [], "rawPayload": null },
+      { "traceId": "part-constraint-set:series-definition:series%3Apartial-00ff558:r1:trace:reel:materialIds", "itemPartId": "part:reel", "field": "materialIds", "sourceRef": { "sourceType": "series_definition", "sourceId": "series:partial-00ff558", "revisionId": "4", "contentHash": "__FIXTURE_SOURCE_HASH__" }, "sourcePath": "$", "reviewStatus": "NEEDS_REVIEW", "diagnosticCodes": [], "rawPayload": null },
+      { "traceId": "part-constraint-set:series-definition:series%3Apartial-00ff558:r1:trace:reel:requiredAffixIds", "itemPartId": "part:reel", "field": "requiredAffixIds", "sourceRef": { "sourceType": "series_definition", "sourceId": "series:partial-00ff558", "revisionId": "4", "contentHash": "__FIXTURE_SOURCE_HASH__" }, "sourcePath": "$", "reviewStatus": "NEEDS_REVIEW", "diagnosticCodes": [], "rawPayload": null },
+      { "traceId": "part-constraint-set:series-definition:series%3Apartial-00ff558:r1:trace:reel:optionalAffixPoolIds", "itemPartId": "part:reel", "field": "optionalAffixPoolIds", "sourceRef": { "sourceType": "series_definition", "sourceId": "series:partial-00ff558", "revisionId": "4", "contentHash": "__FIXTURE_SOURCE_HASH__" }, "sourcePath": "$", "reviewStatus": "NEEDS_REVIEW", "diagnosticCodes": [], "rawPayload": null },
+      { "traceId": "part-constraint-set:series-definition:series%3Apartial-00ff558:r1:trace:reel:typeIds", "itemPartId": "part:reel", "field": "typeIds", "sourceRef": { "sourceType": "series_definition", "sourceId": "series:partial-00ff558", "revisionId": "4", "contentHash": "__FIXTURE_SOURCE_HASH__" }, "sourcePath": "$", "reviewStatus": "NEEDS_REVIEW", "diagnosticCodes": [], "rawPayload": null },
+      { "traceId": "part-constraint-set:series-definition:series%3Apartial-00ff558:r1:trace:line:templateIds", "itemPartId": "part:line", "field": "templateIds", "sourceRef": { "sourceType": "series_definition", "sourceId": "series:partial-00ff558", "revisionId": "4", "contentHash": "__FIXTURE_SOURCE_HASH__" }, "sourcePath": "$", "reviewStatus": "NEEDS_REVIEW", "diagnosticCodes": [], "rawPayload": null },
+      { "traceId": "part-constraint-set:series-definition:series%3Apartial-00ff558:r1:trace:line:materialIds", "itemPartId": "part:line", "field": "materialIds", "sourceRef": { "sourceType": "series_definition", "sourceId": "series:partial-00ff558", "revisionId": "4", "contentHash": "__FIXTURE_SOURCE_HASH__" }, "sourcePath": "$", "reviewStatus": "NEEDS_REVIEW", "diagnosticCodes": [], "rawPayload": null },
+      { "traceId": "part-constraint-set:series-definition:series%3Apartial-00ff558:r1:trace:line:requiredAffixIds", "itemPartId": "part:line", "field": "requiredAffixIds", "sourceRef": { "sourceType": "series_definition", "sourceId": "series:partial-00ff558", "revisionId": "4", "contentHash": "__FIXTURE_SOURCE_HASH__" }, "sourcePath": "$", "reviewStatus": "NEEDS_REVIEW", "diagnosticCodes": [], "rawPayload": null },
+      { "traceId": "part-constraint-set:series-definition:series%3Apartial-00ff558:r1:trace:line:optionalAffixPoolIds", "itemPartId": "part:line", "field": "optionalAffixPoolIds", "sourceRef": { "sourceType": "series_definition", "sourceId": "series:partial-00ff558", "revisionId": "4", "contentHash": "__FIXTURE_SOURCE_HASH__" }, "sourcePath": "$", "reviewStatus": "NEEDS_REVIEW", "diagnosticCodes": [], "rawPayload": null },
+      { "traceId": "part-constraint-set:series-definition:series%3Apartial-00ff558:r1:trace:line:typeIds", "itemPartId": "part:line", "field": "typeIds", "sourceRef": { "sourceType": "series_definition", "sourceId": "series:partial-00ff558", "revisionId": "4", "contentHash": "__FIXTURE_SOURCE_HASH__" }, "sourcePath": "$", "reviewStatus": "NEEDS_REVIEW", "diagnosticCodes": [], "rawPayload": null }
+    ],
+    "migrationEvidence": {
+      "migratorVersion": "part-constraint-set/v1",
+      "sourceSchemaVersion": 17,
+      "migratedAt": "2026-07-23T00:00:00.000Z",
+      "diagnosticCodes": ["NO_SERIES_PART_CONSTRAINT_SOURCE"],
+      "rawPayload": {
+        "id": "series:partial-00ff558",
+        "revision": 4,
+        "name": "00ff558 部分规范化 Series"
+      }
+    },
+    "createdBy": "workspace-migration",
+    "createdAt": "2026-07-23T00:00:00.000Z"
+  }
+}

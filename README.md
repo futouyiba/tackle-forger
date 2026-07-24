@@ -34,16 +34,20 @@ npm run lint
 npm test
 ```
 
-`apps/web`与`packages/*`是历史pnpm workspace，使用独立锁文件和门禁，不得用pnpm安装隐式替代根应用的npm验证：
+`apps/web`与`packages/*`是历史pnpm workspace。它的workspace声明和锁文件隔离在
+`legacy-workspace/`；必须从这个目录边界运行pnpm，不得把仓库根npm应用重新加入pnpm importer，
+也不得用pnpm安装隐式替代根应用的npm验证：
 
 ```powershell
-pnpm install --frozen-lockfile
-pnpm -r typecheck
-pnpm -r lint
-pnpm -r test
-pnpm -r build
+pnpm --dir legacy-workspace install --frozen-lockfile
+pnpm --dir legacy-workspace --filter '@tackle-forger/*' typecheck
+pnpm --dir legacy-workspace --filter '@tackle-forger/*' lint
+pnpm --dir legacy-workspace --filter '@tackle-forger/*' test
+pnpm --dir legacy-workspace --filter '@tackle-forger/*' build
 ```
 
+根`package.json`或`package-lock.json`的单独变化不应改写
+`legacy-workspace/pnpm-lock.yaml`；历史workspace依赖变化必须同步该锁文件，否则冻结安装会失败。
 GitHub Actions分别运行上述两套作业；修改任一架构时都不能以另一套门禁通过代替本套验证。
 
 ## 本地启动
@@ -59,6 +63,8 @@ Windows 推荐使用项目自带脚本，避免把重定向字符串误当成程
 生产构建由 Vinext 生成。正式目标环境是公司内网 Dell R730；Vercel 地址仅作为评审入口，
 不能替代内网持久磁盘、公司飞书凭据和真实配置仓库验收。
 完整安装、systemd、Nginx、备份与回滚步骤见 `docs/deployment/r730-production.md`。
+一期部署前预检、无业务写入 smoke、真实 OAuth/工作簿/主流程证据与回填格式见
+`docs/deployment/phase-one-acceptance.md`。预检结果不能替代真实环境端到端验收。
 
 Vercel 评审构建同样从仓库根安装 `package-lock.json`，但通过
 `npm run build:vercel` 启用 Vinext 的 Nitro 适配器。该命令生成 Vercel Build Output API
@@ -105,6 +111,37 @@ Trace、ID 唯一性、前缀与实体类型；写后必须回读恢复，不能
 `08_价格计算` 导入为 `PricingPolicyDraft`。C/B/A/S 到 PricingBasket 的显式映射已存在；
 评分插值、竿/轮/线零整比、金额单位、舍入、最低价格和溢出上限未发布前，只允许非正式
 试算与单元格级 Trace，正式 Store 导出继续阻断且没有手填价格兜底。
+
+## Fancy Hub AI 连接器
+
+真实 AI 连接器默认关闭（`FANCY_HUB_ENABLED=false`），关闭、超时、限流或不可用均不影响
+派生、校验、Patch、发布和历史复现。它只允许连接部署配置中的单一 Fancy Hub HTTPS origin，
+只发送严格递归白名单的 `ai-request/v1`；真实 ID、自由文本、Evidence 正文、ActionLink、密钥
+和未知字段会在网络请求前被拒绝。
+
+启用前必须完成以下证据并由部署管理员保留：Fancy Hub 动态模型列表及不可变修订标识、
+主模型与有序降级列表、provider 与租户硬 token/并发/速率/超时/费用上限、全部本地门禁、
+独立评审和回滚演练。完成后才配置 `.env.example` 中的全部 `FANCY_HUB_*` 估算/限额项、
+持久化 `AI_RETENTION_DATA_DIR`、32 字节留存加密密钥及版本，并显式改为
+`FANCY_HUB_ENABLED=true`。缺少任一项时产品入口保持关闭。只有 `AI_PROVIDER_ADMIN_OPEN_IDS` 中的飞书用户拥有
+`ai.provider_policy.manage`；其他已登录公司用户只在功能启用时获得评估、查看和创建草稿能力。
+部署期 provider 硬限额是首次模型发现请求的启动上限；运行时模型列表只能进一步收紧本次调用，
+不能用首次出网后的发现结果补偿缺失的启动配置。
+
+回滚时首先把 `FANCY_HUB_ENABLED` 恢复为 `false` 并重启服务，然后撤销 Fancy Hub token；
+连接器不会自动批准 Patch、写回飞书、发布 RuleSet/Snapshot 或改写历史快照。AI 原始内容、
+语义内容、操作元数据与采纳来源分别执行 180 天、1 年、3 年和随产物永久保留策略；用户删除
+会立即隐藏，24 小时内清除主存储内容并以墓碑阻止备份恢复，备份清除期限为 30 天。备份清理
+必须由存储适配器实际删除并回读确认；失败保持待重试状态，不能只记录“已清除”。生产调用在
+出网前确认留存目录可写，使用持久化锁实现跨请求/进程并发与速率协调，并按 canonical Envelope 的 UTF-8 字节
+上界、最大输出 token 与批准费率计算硬准入估算；成功后同步写入审计事件和加密留存记录。Fancy Hub
+响应同样使用严格的 `ai-response/v1`，未知字段、超限内容和请求外别名在生成建议前拒绝，成功
+结果记录规范化 `outputHash`。工作台的 AI 按钮只消费服务端启用状态，并通过认证接口运行。
+生产备份会把 `AI_RETENTION_DATA_DIR` 纳入独立 `ai-retention` 目录；不可回退的删除墓碑写入
+其外部的 `AI_RETENTION_TOMBSTONE_DIR`，工作区备份和恢复不得覆盖该目录。每小时 systemd timer 运行
+`npm run ai-retention:sweep`，完成主存储期限清理，并在备份期限到达后按 assessmentId 删除所有备份副本、
+回读确认后才把墓碑标记为已清除。`GET/DELETE /api/ai/assessments/:assessmentId` 只允许已登录所有者读取或删除；
+删除幂等并立即从读取路径隐藏。
 
 ## 配置表交付
 

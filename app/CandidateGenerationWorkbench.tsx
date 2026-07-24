@@ -15,6 +15,10 @@ import type {
   WorkspaceState,
 } from "@/lib/types";
 import { candidateGenerationEligibleSkus } from "@/lib/enabled-item-parts";
+import {
+  canPresentCandidateRunCompletion,
+  runCandidateGenerationWorkbenchAction,
+} from "@/lib/candidate-generation-workbench";
 import "./candidate-generation.css";
 
 interface Props {
@@ -73,12 +77,21 @@ export function CandidateGenerationWorkbench({ state, series, initialSkuId, acti
     }, false);
   };
 
-  const materialize = (targetRun: CandidateRun, reviewConfirmed = false) => {
+  const materialize = (targetRun: CandidateRun, reviewConfirmed = false): boolean => {
     if (!materializeAvailability.enabled) {
       setError(materializeAvailability.disabledReasonText ?? "缺少候选物化权限。");
-      return;
+      return false;
     }
-    const result = materializeCandidateRun({ state, run: targetRun, actor, occurredAt: new Date().toISOString(), reviewConfirmed });
+    const outcome = runCandidateGenerationWorkbenchAction("物化候选", () =>
+      materializeCandidateRun({ state, run: targetRun, actor, occurredAt: new Date().toISOString(), reviewConfirmed }),
+    );
+    if (!outcome.ok || !outcome.value) {
+      const message = outcome.message ?? "物化候选已被安全阻止。";
+      setError(message);
+      notify(message);
+      return false;
+    }
+    const result = outcome.value;
     mutate((draft) => {
       draft.purchasableModels = result.models;
       draft.skuDrawers = result.skus;
@@ -86,6 +99,7 @@ export function CandidateGenerationWorkbench({ state, series, initialSkuId, acti
       draft.candidateMaterializations.push(result.record);
     }, false);
     notify(`已按 skuId + modelVariantKey 物化 ${result.record.materializedModelIds.length} 个 Model；${result.record.issues.length} 项跳过。`);
+    return true;
   };
 
   const generate = () => {
@@ -118,17 +132,29 @@ export function CandidateGenerationWorkbench({ state, series, initialSkuId, acti
       requestOptions: options,
     });
     const now = new Date().toISOString();
-    const nextRun = generateModelCandidateRun({
-      state,
-      request: { requestId: `candidate-request:${inputHash.slice(0, 20)}`, ...options, inputHash, idempotencyKey: `candidate:${inputHash}` },
-      variants: cleanVariants,
-      startedAt: now,
-      completedAt: now,
-    });
+    const outcome = runCandidateGenerationWorkbenchAction("生成候选", () =>
+      generateModelCandidateRun({
+        state,
+        request: { requestId: `candidate-request:${inputHash.slice(0, 20)}`, ...options, inputHash, idempotencyKey: `candidate:${inputHash}` },
+        variants: cleanVariants,
+        startedAt: now,
+        completedAt: now,
+      }),
+    );
+    if (!outcome.ok || !outcome.value) {
+      const message = outcome.message ?? "生成候选已被安全阻止。";
+      setError(message);
+      notify(message);
+      return;
+    }
+    const nextRun = outcome.value;
     setRun(nextRun);
-    if (nextRun.status === "completed" && materializeAvailability.enabled) {
-      materialize(nextRun);
-    } else {
+    const automaticallyMaterializing = nextRun.status === "completed" && materializeAvailability.enabled;
+    const materialized = automaticallyMaterializing ? materialize(nextRun) : false;
+    if (!canPresentCandidateRunCompletion(automaticallyMaterializing, materialized)) {
+      return;
+    }
+    if (!automaticallyMaterializing) {
       persistRun(nextRun);
     }
     notify(nextRun.status === "waiting_for_review" ? "候选运行已冻结，等待人工确认后物化。" : "候选运行已完成。");

@@ -173,6 +173,23 @@ test("空白镜像半区与显式 0 可区分，双侧不一致阻断策略", ()
   assert.ok(conflict.issues.some((entry) => entry.code === "QUALITY_COMBINATION_CONFLICT"));
 });
 
+test("组合诊断保留服务端部位证据，移动矩阵单元格不会改变其部位", () => {
+  const draft = policy({
+    aliases: [],
+    matrixCells: [{
+      itemPartId: "part:line",
+      leftAlias: "未知甲",
+      rightAlias: "未知乙",
+      value: 1,
+      source: source("FqD4j7", "M12"),
+    }],
+  });
+  const issue = draft.issues.find((entry) => entry.code === "QUALITY_COMBINATION_ALIAS_UNKNOWN");
+  assert.equal(issue?.sourceCell?.cell, "M12");
+  assert.equal(issue?.itemPartId, "part:line");
+  assert.deepEqual(structuredClone(issue), issue);
+});
+
 test("同 revision 的定价端点 score=100 触发品质边界冲突且保留来源 Trace", () => {
   const draft = policy({
     pricingScoreEndpoints: [{ value: 100, status: "SOURCE", source: source("u87sRh", "B179") }],

@@ -1,6 +1,6 @@
 import { deterministicHash } from "./rule-kernel";
 import { previewPatchRebase } from "./patch-engine";
-import { orderedPatchReferences } from "./patch-ledger";
+import { orderedPatchReferences, verifyPatchSetHash } from "./patch-ledger";
 import { authoritativeObjectIdentity, evaluateAuthoritativePatchFinalRanges, type AuthoritativePatchObject } from "./patch-authority";
 import {
   assertPatchGateCanProceed,
@@ -14,13 +14,16 @@ import type { PatchRangeEvaluation } from "./patch-offset-policy";
 import type {
   AffinityScoreResult,
   AffixQualityEvaluation,
+  AffixRuntimeEvidence,
   ConfigurationSnapshot,
   DerivedProjection,
   GovernanceAuditLogEntry,
   HardCompatibilityResult,
   ModelComponentSelection,
   ModelFiveAxisPreview,
-  FiveAxisViewDefinition,
+  FiveAxisDefinitionDispositionCatalogRevision,
+  FiveAxisVertexCandidateSource,
+  StoredFiveAxisViewDefinition,
   PatchRebaseDifference,
   PatchOffsetPolicyVersion,
   ParameterDefinition,
@@ -33,6 +36,7 @@ import type {
   PurchasableModel,
   RuleChangeProposal,
   RuleSetVersion,
+  ReductionStackingPolicyVersion,
   SeriesDefinition,
   SkuDrawer,
   Technology,
@@ -44,6 +48,7 @@ import type {
   WaiverPolicyVersion,
   PassiveSkillPayload,
   WorkspacePolicyRecord,
+  WorkspaceState,
 } from "./types";
 import {
   assertValidationGateCanProceed,
@@ -68,6 +73,11 @@ import {
 } from "./enabled-item-parts";
 import {
   adaptFiveAxisTraceToCanonical,
+  adaptAffixRuntimeEvidenceToCanonical,
+  adaptProjectionAuthorityManifestToCanonical,
+  adaptProjectionAuthorityMirrorToCanonical,
+  projectionAffixAuthorityContributions,
+  assertCalculationTraceMatchesAffixRuntime,
   adaptPricingTraceToCanonical,
   adaptRuleTraceToCanonical,
   assertCalculationTraceMatchesFiveAxis,
@@ -77,6 +87,10 @@ import {
   createCalculationTraceArchive,
   verifyCalculationTraceArchive,
 } from "./calculation-trace";
+import {
+  hasCanonicalReductionPolicyIdentity,
+  numberToBinary64Hex,
+} from "./reduction-stacking-policy";
 
 function entityRefIdentity(ref: {
   workspaceId: string;
@@ -91,6 +105,12 @@ function entityRefIdentity(ref: {
     ref.revisionId,
   ]);
 }
+import {
+  assertFormalModelFiveAxisPreview,
+  hashFormalFiveAxisPreviewInput,
+  hashFormalFinalPanelValues,
+  resolveFormalFiveAxisDefinition,
+} from "./five-axis-formal";
 
 export function modelFinalPullKgForSnapshot(
   itemPartId: string | undefined,
@@ -117,15 +137,84 @@ function warnings(issues: ValidationIssue[]): ValidationIssue[] {
   return issues.filter((issue) => validationIssueSeverity(issue) === "WARNING");
 }
 
+function hasValidReductionPolicyBinding(input: PublishModelInput): boolean {
+  const policy = input.reductionStackingPolicy;
+  return Boolean(
+    policy
+    && policy.status === "published"
+    && hasCanonicalReductionPolicyIdentity(policy)
+    && policy.source
+    && policy.source.workbookRefId === "feishu-workbook:tackle-design"
+    && policy.source.sheetId === "zrVOxd"
+    && policy.source.sourceRevision !== "17173"
+    && input.projection.reductionStackingPolicyVersion === policy.version
+    && input.projection.formalStatus === "FORMAL",
+  );
+}
+
+function affixEvidenceStagesAreClosed(evidence: AffixRuntimeEvidence): boolean {
+  const sameValue = (left: unknown, right: unknown): boolean =>
+    deterministicHash(left) === deterministicHash(right);
+  const replay = (
+    start: Record<string, number | string>,
+    stage: "final_review_patch" | "parameter_definition",
+  ): Record<string, number | string> | undefined => {
+    const values = structuredClone(start);
+    const contributions = evidence.trace.filter(
+      (entry) => entry.numericEvidence?.stage === stage,
+    );
+    for (const contribution of contributions) {
+      const numeric = contribution.numericEvidence;
+      if (
+        (typeof contribution.before === "number"
+          && numeric?.beforeBinary64 !== numberToBinary64Hex(contribution.before))
+        || (typeof contribution.operand === "number"
+          && numeric?.operandBinary64 !== numberToBinary64Hex(contribution.operand))
+        || (typeof contribution.after === "number"
+          && numeric?.afterBinary64 !== numberToBinary64Hex(contribution.after))
+      ) {
+        return undefined;
+      }
+      const before = values[contribution.parameterKey];
+      if (!sameValue(before, contribution.before)) return undefined;
+      if (
+        typeof contribution.after !== "number"
+        && typeof contribution.after !== "string"
+      ) {
+        return undefined;
+      }
+      values[contribution.parameterKey] = contribution.after;
+    }
+    return values;
+  };
+
+  let previousSequence = -Infinity;
+  let parameterDefinitionStarted = false;
+  for (const contribution of evidence.trace) {
+    if (contribution.sequence <= previousSequence) return false;
+    previousSequence = contribution.sequence;
+    const stage = contribution.numericEvidence?.stage;
+    if (stage === "parameter_definition") parameterDefinitionStarted = true;
+    if (stage === "final_review_patch" && parameterDefinitionStarted) return false;
+  }
+
+  const postReview = replay(evidence.values, "final_review_patch");
+  if (!postReview || !sameValue(postReview, evidence.postReviewValues)) return false;
+  const finalValues = replay(postReview, "parameter_definition");
+  return Boolean(finalValues && sameValue(finalValues, evidence.finalValues));
+}
+
 export interface PublishModelInput {
   publicationMode: "new_formal" | "historical_import";
-  /** 新正式 Snapshot 的 canonical Trace 主体工作区；历史导入不得据此补写 Trace。 */
+  /** 新正式 Snapshot 的稳定工作区身份和 canonical Trace 主体；历史导入不得据此补写。 */
   workspaceId?: string;
   model: PurchasableModel;
   sku: SkuDrawer;
   seriesSkus: SkuDrawer[];
   series: SeriesDefinition;
   projection: DerivedProjection;
+  reductionStackingPolicy?: ReductionStackingPolicyVersion;
+  affixRuntimeEvidence?: AffixRuntimeEvidence;
   finalPanelValues: Record<string, number | string>;
   componentSelections: ModelComponentSelection[];
   patches: ProjectionPatchRuleSource[];
@@ -159,8 +248,14 @@ export interface PublishModelInput {
   validationWaiverDecisions?: ValidationWaiverDecision[];
   activeValidationWaiverPolicies?: WaiverPolicyVersion[];
   fiveAxisPreview?: ModelFiveAxisPreview;
-  fiveAxisDefinition?: FiveAxisViewDefinition;
-  /** @deprecated 仅 historical_import 可读取；新正式发布必须提供指纹绑定的确认记录。 */
+  fiveAxisAuthorityState?: Pick<
+    WorkspaceState,
+    "purchasableModels" | "configurationSnapshots"
+  >;
+  fiveAxisDefinition?: StoredFiveAxisViewDefinition;
+  fiveAxisDefinitions?: StoredFiveAxisViewDefinition[];
+  fiveAxisDispositionCatalogRevisions?: FiveAxisDefinitionDispositionCatalogRevision[];
+  currentFiveAxisDispositionCatalogRevisionId?: string | null;
   warningConfirmations: Record<string, string>;
   publishedBy: string;
   publishedAt: string;
@@ -174,15 +269,92 @@ function snapshotContent(
   return snapshot;
 }
 
+function deriveFormalCandidatePoolFromAuthority(input: {
+  authority: PublishModelInput["fiveAxisAuthorityState"];
+  preview: ModelFiveAxisPreview;
+  publishingModelId: string;
+}): FiveAxisVertexCandidateSource[] {
+  if (!input.authority) {
+    throw new Error(
+      "FIVE_AXIS_CANDIDATE_AUTHORITY_UNAVAILABLE：正式发布必须回读权威 Model 指针与冻结 Snapshot。",
+    );
+  }
+  const currentSources = input.preview.candidateSources?.filter((source) =>
+    source.candidateSemanticKey.modelId === input.publishingModelId
+    && source.candidateSemanticKey.itemPartId === "part:rod") ?? [];
+  const sources = [...currentSources];
+  for (const model of input.authority.purchasableModels) {
+    if (model.id === input.publishingModelId || model.status !== "published") {
+      continue;
+    }
+    if (!model.configurationSnapshotId) {
+      throw new Error(
+        `FIVE_AXIS_CANDIDATE_AUTHORITY_INVALID：已发布 Model ${model.id} 缺少当前 Snapshot 指针。`,
+      );
+    }
+    const matchingSnapshots = input.authority.configurationSnapshots.filter(
+      (snapshot) => snapshot.id === model.configurationSnapshotId,
+    );
+    if (matchingSnapshots.length !== 1) {
+      throw new Error(
+        `FIVE_AXIS_CANDIDATE_AUTHORITY_INVALID：Model ${model.id} 的当前 Snapshot 不唯一或不存在。`,
+      );
+    }
+    const snapshot = matchingSnapshots[0];
+    if (
+      snapshot.modelId !== model.id
+      || !verifySnapshotIntegrity(snapshot)
+    ) {
+      throw new Error(
+        `FIVE_AXIS_CANDIDATE_AUTHORITY_INVALID：Model ${model.id} 的当前 Snapshot 身份或 hash 无效。`,
+      );
+    }
+    const preview = snapshot.fiveAxisPreview;
+    if (
+      !preview?.weightBandId
+      || preview.weightBandId !== input.preview.weightBandId
+      || preview.weightBandPolicyVersion
+        !== input.preview.weightBandPolicyVersion
+      || preview.fiveAxisDefinitionId
+        !== input.preview.fiveAxisDefinitionId
+      || preview.fiveAxisDefinitionVersion
+        !== input.preview.fiveAxisDefinitionVersion
+      || preview.fiveAxisRuleVersion !== input.preview.fiveAxisRuleVersion
+    ) {
+      continue;
+    }
+    const snapshotSources = preview.candidateSources?.filter((source) =>
+      source.candidateSemanticKey.modelId === model.id
+      && source.candidateSemanticKey.itemPartId === "part:rod") ?? [];
+    if (
+      snapshotSources.length !== 1
+      || snapshotSources.some((source) =>
+        source.snapshotId !== snapshot.id
+        || source.modelRevisionId !== `${model.id}@${snapshot.modelRevision}`)
+    ) {
+      throw new Error(
+        `FIVE_AXIS_CANDIDATE_AUTHORITY_INVALID：Model ${model.id} 的冻结候选证据不完整。`,
+      );
+    }
+    sources.push(...snapshotSources);
+  }
+  return sources;
+}
+
 export function publishConfigurationSnapshot(
   input: PublishModelInput,
 ): ConfigurationSnapshot {
+  if(input.publicationMode==="new_formal"&&!input.workspaceId?.trim()){
+    throw new Error("新正式 Snapshot 必须提供稳定 workspaceId。");
+  }
   if (input.publicationMode === "new_formal" && input.patches.length && !input.patchRevisions?.length) {
     throw new Error("正式 Snapshot 必须使用可冻结 operation 顺序的 Patch revision，不能只引用旧 Patch 视图。");
   }
-  const frozenPatches = input.patchRevisions
-    ? orderedPatchReferences(input.patchRevisions)
-    : undefined;
+  const frozenPatches = input.publicationMode==="new_formal"
+    ? orderedPatchReferences(input.patchRevisions??[],input.workspaceId!)
+    : input.patchRevisions
+      ? orderedPatchReferences(input.patchRevisions)
+      : undefined;
   const legacyPatchSetHash = deterministicHash(
     [...input.patches].sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
   );
@@ -201,6 +373,7 @@ export function publishConfigurationSnapshot(
       const policy = governance.policy;
       assertPublishedPatchOffsetPolicy(policy);
       const authority: AuthoritativePatchObject = {
+        workspaceId:input.workspaceId,
         subjectRef: { scopeType: "model", entityId: input.model.id, revision: input.model.revision },
         ruleSet: governance.ruleSet,
         parameterDefinitions: governance.parameterDefinitions,
@@ -270,7 +443,7 @@ export function publishConfigurationSnapshot(
       combinedValidationReport,
     {
       subjectRef: {
-        workspaceId: "workspace:legacy",
+        workspaceId: input.workspaceId!,
         entityType: "model",
         entityId: input.model.id,
         revisionId: String(input.model.revision),
@@ -288,6 +461,21 @@ export function publishConfigurationSnapshot(
       },
     )
     : [];
+  if (input.publicationMode === "new_formal") {
+    const validationSubject = {
+      workspaceId: input.workspaceId!,
+      entityType: "model" as const,
+      entityId: input.model.id,
+      revisionId: String(input.model.revision),
+    };
+    if (canonicalValidationReport.some((issue) =>
+      entityRefIdentity(issue.subjectRef) !== entityRefIdentity(validationSubject)
+      || issue.issueId !== `validation-issue:${issue.fingerprint}`
+      || !issue.fingerprint.trim(),
+    )) {
+      throw new Error("新正式 Snapshot 的 ValidationIssue 必须冻结真实 workspace subject 与当前 input fingerprint。");
+    }
+  }
   const canonicalPublishValidationReport = input.publicationMode === "new_formal"
     ? canonicalValidationReport.filter(
       (issue) => issue.gate === "REVIEW" || issue.gate === "PUBLISH",
@@ -296,7 +484,7 @@ export function publishConfigurationSnapshot(
       publishValidationReport,
       {
         subjectRef: {
-          workspaceId: "workspace:legacy",
+          workspaceId: input.workspaceId!,
           entityType: "model",
           entityId: input.model.id,
           revisionId: String(input.model.revision),
@@ -352,9 +540,17 @@ export function publishConfigurationSnapshot(
       message: "硬兼容失败，禁止发布。",
     });
   }
-  if (input.qualityReport.blockingIssues.length) {
+  const qualityBlockingIssues = input.publicationMode === "historical_import"
+    ? input.qualityReport.blockingIssues.filter(
+        (message) =>
+          !message.includes("REDUCTION_POLICY_SOURCE_MISSING")
+          && !message.includes("AFFIX_DIRECTION_CONFLICT")
+          && !message.includes("AFFIX_MAGNITUDE_RANGE_MISSING"),
+      )
+    : input.qualityReport.blockingIssues;
+  if (qualityBlockingIssues.length) {
     blocking.push(
-      ...input.qualityReport.blockingIssues.map((message) => ({
+      ...qualityBlockingIssues.map((message) => ({
         level: "error" as const,
         code: "QUALITY_BLOCKED",
         message,
@@ -362,13 +558,6 @@ export function publishConfigurationSnapshot(
     );
   }
   if (input.publicationMode === "new_formal") {
-    if (!input.workspaceId?.trim()) {
-      blocking.push({
-        level: "error",
-        code: "CALCULATION_TRACE_SUBJECT_MISSING",
-        message: "新 Snapshot 必须提供 workspaceId，以冻结 canonical CalculationTrace 的 subjectRef。",
-      });
-    }
     if (!input.finalSettlementTrace) {
       blocking.push({
         level: "error",
@@ -510,34 +699,107 @@ export function publishConfigurationSnapshot(
   if (input.sku.projectionMatch.projectionId !== input.projection.id) {
     throw new Error("SKU 的 ProjectionMatch 与发布投影不一致。");
   }
+  const snapshotId =
+    input.snapshotId ??
+    "snapshot-" + input.model.id + "-v" + (input.version ?? 1);
+  const modelFinalPullKg = modelFinalPullKgForSnapshot(
+    input.sku.projectionMatch.itemPartId,
+    input.finalPanelValues,
+  );
   if (
     input.fiveAxisPreview &&
     input.fiveAxisPreview.modelId !== input.model.id
   ) {
     throw new Error("五轴预览与待发布 Model 不一致。");
   }
+  if (input.publicationMode === "new_formal" && !input.fiveAxisPreview) {
+    throw new Error(
+      "FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE：新正式 Snapshot 必须冻结五维定义、目录与预览证据。",
+    );
+  }
+  let fiveAxisDispositionEvidence: ConfigurationSnapshot["fiveAxisDispositionEvidence"];
+  let frozenFiveAxisPreview = input.fiveAxisPreview
+    ? structuredClone(input.fiveAxisPreview)
+    : undefined;
   if (input.publicationMode === "new_formal" && input.fiveAxisPreview) {
     const definition = input.fiveAxisDefinition;
-    if (!definition || definition.publicationState !== "PUBLISHED") {
-      throw new Error("五轴预览使用的 FiveAxisViewDefinition 尚未发布，禁止创建正式 Snapshot。");
-    }
-    const { definitionHash, ...definitionContent } = definition;
-    if (deterministicHash(definitionContent) !== definitionHash) {
-      throw new Error("FiveAxisViewDefinition 完整性校验失败，禁止创建正式 Snapshot。");
-    }
+    const resolved = resolveFormalFiveAxisDefinition({
+      definitions: input.fiveAxisDefinitions ?? (definition ? [definition] : []),
+      revisions: input.fiveAxisDispositionCatalogRevisions ?? [],
+      currentRevisionId: input.currentFiveAxisDispositionCatalogRevisionId ?? null,
+    });
     if (
-      input.fiveAxisPreview.fiveAxisDefinitionId !== definition.definitionId
-      || input.fiveAxisPreview.fiveAxisDefinitionVersion !== definition.version
-      || input.fiveAxisPreview.fiveAxisDefinitionRevision !== definition.revision
-      || input.fiveAxisPreview.fiveAxisDefinitionHash !== definition.definitionHash
-      || input.fiveAxisPreview.fiveAxisRuleVersion !== definition.fiveAxisRuleVersion
-      || input.fiveAxisPreview.sourceRevision !== definition.sourceRevision
-      || input.fiveAxisPreview.tackleFitComparison.fiveAxisDefinitionId !== definition.definitionId
-      || input.fiveAxisPreview.tackleFitComparison.fiveAxisDefinitionVersion !== definition.version
-      || input.fiveAxisPreview.tackleFitComparison.fiveAxisRuleVersion !== definition.fiveAxisRuleVersion
-      || input.fiveAxisPreview.tackleFitComparison.vertexSetHash !== input.fiveAxisPreview.vertexSetHash
+      !definition
+      || definition.definitionId !== resolved.definition.definitionId
+      || definition.version !== resolved.definition.version
+      || definition.definitionHash !== resolved.definition.definitionHash
     ) {
-      throw new Error("五轴预览的定义、规则或顶点版本链不一致，禁止创建正式 Snapshot。");
+      throw new Error("FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE：传入定义不是目录中的唯一 FORMAL_CURRENT。");
+    }
+    fiveAxisDispositionEvidence = {
+      catalogRevisionId: resolved.catalogRevision.catalogRevisionId,
+      catalogHash: resolved.catalogRevision.catalogHash,
+      disposition: structuredClone(resolved.disposition),
+    };
+    if (modelFinalPullKg === undefined || modelFinalPullKg <= 0) {
+      throw new Error("FIVE_AXIS_FORMAL_PREVIEW_INVALID：正式 Snapshot 缺少合法最终拉力。");
+    }
+    const authoritativeVertexSet = assertFormalModelFiveAxisPreview({
+      definition: resolved.definition,
+      preview: input.fiveAxisPreview,
+      expectedCandidateSources: deriveFormalCandidatePoolFromAuthority({
+        authority: input.fiveAxisAuthorityState,
+        preview: input.fiveAxisPreview,
+        publishingModelId: input.model.id,
+      }),
+      expectedModelId: input.model.id,
+      expectedModelRevisionId: `${input.model.id}@${input.model.revision}`,
+      expectedSnapshotId: snapshotId,
+      expectedSeriesId: input.series.id,
+      expectedSkuId: input.sku.id,
+      expectedSkuRevisionId: `${input.sku.id}@${input.sku.revision}`,
+      expectedProjectionReferences:
+        input.sku.fiveAxisProjectionReferences ?? [],
+      expectedFinalPanelHash: hashFormalFinalPanelValues(input.finalPanelValues),
+      expectedComponentSelections: input.componentSelections.map((component) => ({
+        itemPartId: component.itemPartId,
+        componentId: component.componentId,
+        values: component.values,
+      })),
+      expectedModelFinalPullKg: modelFinalPullKg,
+    });
+    frozenFiveAxisPreview = structuredClone(input.fiveAxisPreview);
+    frozenFiveAxisPreview.candidateSources = structuredClone(
+      authoritativeVertexSet.candidateSources,
+    );
+    frozenFiveAxisPreview.inputHash =
+      hashFormalFiveAxisPreviewInput(frozenFiveAxisPreview);
+  }
+  if (input.publicationMode === "new_formal") {
+    if (!hasValidReductionPolicyBinding(input)) {
+      throw new Error(
+        "配置快照发布被阻止：[REDUCTION_POLICY_SOURCE_MISSING] 新正式 Snapshot 必须冻结来自权威主工作簿的已发布 ReductionStackingPolicyVersion。",
+      );
+    }
+    const evidence = input.projection.affixRuntimeEvidence;
+    const affixRuntimeInvalid = (
+      !evidence
+      || !input.affixRuntimeEvidence
+      || deterministicHash(input.affixRuntimeEvidence)
+        !== deterministicHash(evidence)
+      || evidence.reductionStackingPolicyVersion !== input.reductionStackingPolicy?.version
+      || evidence.formalStatus !== "FORMAL"
+      || evidence.issues.some((entry) =>
+        entry.severity === "ERROR" || entry.severity === "BLOCKER"
+      )
+      || !affixEvidenceStagesAreClosed(evidence)
+      || deterministicHash(evidence.finalValues)
+        !== deterministicHash(input.finalPanelValues)
+    );
+    if (affixRuntimeInvalid) {
+      throw new Error(
+        "配置快照发布被阻止：[AFFIX_RUNTIME_TRACE_INVALID] 新正式 Snapshot 必须冻结与投影及已发布 ReductionStackingPolicyVersion 一致的实际 affix Trace。",
+      );
     }
   }
 
@@ -550,13 +812,34 @@ export function publishConfigurationSnapshot(
           revisionId: String(input.model.revision),
         };
         const entries = adaptRuleTraceToCanonical({
-          projection: {
-            ...input.projection,
-            trace: input.finalSettlementTrace!,
-          },
+          projection: { ...input.projection, trace: input.finalSettlementTrace! },
           subjectRef,
           parameterDefinitions: input.patchOffsetGovernance?.parameterDefinitions,
         });
+        if (input.projection.affixRuntimeEvidence) {
+          const authorityContributions = projectionAffixAuthorityContributions(input.projection);
+          const authorityManifest = adaptProjectionAuthorityManifestToCanonical({
+            runtimeContributions: authorityContributions.map((entry) => entry.contribution),
+            subjectRef,
+            ruleSetVersion: input.projection.ruleSetVersion,
+            sequence: entries.length + 1,
+          });
+          entries.push(authorityManifest);
+          const authorityEntries = adaptProjectionAuthorityMirrorToCanonical({
+            subjectRef,
+            authorityContributions,
+            ruleSetVersion: input.projection.ruleSetVersion,
+            sequenceStart: entries.length + 1,
+          });
+          entries.push(...authorityEntries);
+          entries.push(...adaptAffixRuntimeEvidenceToCanonical({
+            evidence: input.projection.affixRuntimeEvidence,
+            subjectRef,
+            ruleSetVersion: input.projection.ruleSetVersion,
+            authorityEntries,
+            sequenceStart: entries.length + 1,
+          }));
+        }
         if (input.automaticPricing) {
           entries.push(...adaptPricingTraceToCanonical({
             pricing: input.automaticPricing,
@@ -584,6 +867,12 @@ export function publishConfigurationSnapshot(
           subjectRef,
           finalPanelValues: input.finalPanelValues,
         });
+        assertCalculationTraceMatchesAffixRuntime({
+          archive,
+          subjectRef,
+          reductionStackingPolicyVersion: input.reductionStackingPolicy!.version,
+          finalPanelValues: input.finalPanelValues,
+        });
         assertCalculationTraceMatchesPricing({
           archive,
           subjectRef,
@@ -607,14 +896,9 @@ export function publishConfigurationSnapshot(
       decisions: input.validationWaiverDecisions,
     });
   }
-  const modelFinalPullKg = modelFinalPullKgForSnapshot(
-    input.sku.projectionMatch.itemPartId,
-    input.finalPanelValues,
-  );
   const snapshotWithoutHash: Omit<ConfigurationSnapshot, "contentHash"> = {
-    id:
-      input.snapshotId ??
-      "snapshot-" + input.model.id + "-v" + (input.version ?? 1),
+    ...(input.publicationMode==="new_formal"?{workspaceId:input.workspaceId}:{}),
+    id: snapshotId,
     version: input.version ?? 1,
     modelId: input.model.id,
     modelRevision: input.model.revision,
@@ -622,8 +906,16 @@ export function publishConfigurationSnapshot(
     seriesRevision: input.series.revision,
     ruleSetVersion: input.projection.ruleSetVersion,
     projectionId: input.projection.id,
-    reductionStackingMode: input.projection.reductionStackingMode,
+    ...(input.projection.reductionStackingMode
+      ? { reductionStackingMode: input.projection.reductionStackingMode }
+      : {}),
+    ...(input.publicationMode === "new_formal" && input.reductionStackingPolicy
+      ? { reductionStackingPolicyVersion: input.reductionStackingPolicy.version }
+      : {}),
     patchSetHash,
+    ...(frozenPatches?.patchSetHashContractVersion
+      ? {patchSetHashContractVersion:frozenPatches.patchSetHashContractVersion}
+      : {}),
     ...(frozenPatches ? { patchReferences: frozenPatches.references } : {}),
     ...(input.publicationMode === "new_formal" && hasPatchDependency && governance ? {
       patchOffsetPolicyVersion: governance.policy?.version,
@@ -645,7 +937,9 @@ export function publishConfigurationSnapshot(
     attributeAffixIds: structuredClone(input.attributeAffixIds),
     passiveAffixIds: structuredClone(input.passiveAffixIds),
     attributeTrace: structuredClone(finalSettlementTrace ?? input.projection.trace),
-    ...(calculationTrace ? { calculationTrace } : {}),
+    ...(calculationTrace
+      ? { calculationTrace: structuredClone(calculationTrace) }
+      : {}),
     passiveAffixPayloads: structuredClone(input.passiveAffixPayloads),
     projectionMatch: structuredClone(input.sku.projectionMatch),
     compatibilityReport: structuredClone(input.compatibilityReport),
@@ -683,8 +977,11 @@ export function publishConfigurationSnapshot(
       validationWaiverDecisions: structuredClone(input.validationWaiverDecisions ?? []),
     } : {}),
     publishedBy: input.publishedBy,
-    ...(input.fiveAxisPreview
-      ? { fiveAxisPreview: structuredClone(input.fiveAxisPreview) }
+    ...(frozenFiveAxisPreview
+      ? { fiveAxisPreview: frozenFiveAxisPreview }
+      : {}),
+    ...(fiveAxisDispositionEvidence
+      ? { fiveAxisDispositionEvidence }
       : {}),
     publishedAt: input.publishedAt,
   };
@@ -724,6 +1021,14 @@ export function verifySnapshotIntegrity(
         subjectRef: [...uniqueSubjects.values()][0],
         finalPanelValues: snapshot.finalPanelValues,
       });
+      if (snapshot.reductionStackingPolicyVersion) {
+        assertCalculationTraceMatchesAffixRuntime({
+          archive: snapshot.calculationTrace,
+          subjectRef: [...uniqueSubjects.values()][0],
+          reductionStackingPolicyVersion: snapshot.reductionStackingPolicyVersion,
+          finalPanelValues: snapshot.finalPanelValues,
+        });
+      }
       assertCalculationTraceMatchesPricing({
         archive: snapshot.calculationTrace,
         subjectRef: [...uniqueSubjects.values()][0],
@@ -741,7 +1046,13 @@ export function verifySnapshotIntegrity(
     }
   }
   const { contentHash, ...content } = snapshot;
-  return deterministicHash(content) === contentHash;
+  if(deterministicHash(content)!==contentHash) return false;
+  if(snapshot.patchSetHashContractVersion){
+    if(!snapshot.workspaceId?.trim()) return false;
+    if(!(snapshot.patchReferences??[]).every((reference)=>reference.workspaceId===snapshot.workspaceId)) return false;
+    if(!verifyPatchSetHash(snapshot.patchReferences??[],snapshot.patchSetHash,snapshot.patchSetHashContractVersion)) return false;
+  }
+  return true;
 }
 
 export interface CreateUpgradeCandidateInput {
@@ -801,6 +1112,12 @@ export function createUpgradeCandidate(
     fromSnapshotId: input.currentSnapshot.id,
     proposedProjectionId: input.proposedProjection.id,
     proposedRuleSetVersion: input.proposedProjection.ruleSetVersion,
+    ...(input.proposedProjection.reductionStackingPolicyVersion
+      ? {
+          proposedReductionStackingPolicyVersion:
+            input.proposedProjection.reductionStackingPolicyVersion,
+        }
+      : {}),
     proposedValues: structuredClone(input.proposedValues),
     differences: valueDifferences(
       input.currentSnapshot.finalPanelValues,

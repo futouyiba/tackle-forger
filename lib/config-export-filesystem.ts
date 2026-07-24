@@ -36,6 +36,7 @@ import {
   snapshotItemPartId,
 } from "./enabled-item-parts";
 import { assertConfigExportSnapshotReplayable } from "./config-preview-package";
+import type { ReductionStackingPolicyVersion } from "./types";
 import {
   assertFormalConfigExportAllowed,
   assertFormalConfigExportStageEnabled,
@@ -143,12 +144,13 @@ export async function previewFilesystemExport(input: {
   profile: ExportTargetProfile;
   mapping: ConfigExportMapping;
   snapshot: ConfigurationSnapshot;
+  availableReductionPolicies: ReductionStackingPolicyVersion[];
   canCommit: boolean;
   formalAuthorization?: FormalConfigExportAuthorization;
   formalAuthorizationVerifier?: FormalConfigExportEvidenceVerifier;
   createdAt?: string;
 }): Promise<FilesystemExportPreview> {
-  assertConfigExportSnapshotReplayable(input.snapshot);
+  assertConfigExportSnapshotReplayable(input.snapshot, input.availableReductionPolicies);
   const workbookNames = Array.from(new Set(
     Object.values(input.mapping.logicalTables).map((table) => table.workbook),
   )).sort();
@@ -233,6 +235,7 @@ export async function previewFilesystemExport(input: {
   const compilerTables = parseConfigTomlTables(toml);
   const materialized = materializeConfigExport({
     snapshot: input.snapshot,
+    availableReductionPolicies: input.availableReductionPolicies,
     mapping: input.mapping,
     compilerTables,
   });
@@ -417,6 +420,7 @@ async function atomicReplace(
 export async function commitFilesystemExport(input: {
   preview: FilesystemExportPreview;
   snapshot: ConfigurationSnapshot;
+  availableReductionPolicies: ReductionStackingPolicyVersion[];
   profile: ExportTargetProfile;
   confirmationProfileId: string;
   idempotencyKey: string;
@@ -425,7 +429,7 @@ export async function commitFilesystemExport(input: {
   formalAuthorizationVerifier?: FormalConfigExportEvidenceVerifier;
   audit?: ExportCommitResult["audit"];
 }): Promise<ExportCommitResult> {
-  assertConfigExportSnapshotReplayable(input.snapshot);
+  assertConfigExportSnapshotReplayable(input.snapshot, input.availableReductionPolicies);
   const formalExportContext: FormalConfigExportContext = {
     packageId: input.preview.packageId,
     profileId: input.preview.profileId,
@@ -593,6 +597,7 @@ export async function commitFilesystemExport(input: {
       profileId: input.preview.profileId,
       packageId: input.preview.packageId,
       snapshots: [input.snapshot],
+      availableReductionPolicies: input.availableReductionPolicies,
       idempotencyKey: input.idempotencyKey,
       operations: input.preview.operations,
       adapter,

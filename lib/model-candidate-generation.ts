@@ -5,6 +5,10 @@ import {
   assertCurrentSeriesSkuSpecifications,
   assertSeriesItemPartChainEnabled,
 } from "./enabled-item-parts";
+import {
+  partConstraintSetBlockingTraceRefs,
+  resolvePartConstraintSetRef,
+} from "./part-constraints";
 import type {
   CandidateGenerationRequest,
   CandidateMaterializationRecord,
@@ -69,6 +73,32 @@ function bump(counter: Record<string, number>, code: string) {
   counter[code] = (counter[code] ?? 0) + 1;
 }
 
+function assertRecipePartConstraintsConsumable(
+  state: WorkspaceState,
+  recipe: CandidateSearchRecipe,
+  boundary: "candidate_generation" | "candidate_materialization",
+): void {
+  if (!recipe.partConstraintSetRef) return;
+  const constraintSet = resolvePartConstraintSetRef(
+    state.partConstraintSets,
+    recipe.partConstraintSetRef,
+  );
+  const blockingTraceRefs = partConstraintSetBlockingTraceRefs(constraintSet);
+  if (
+    constraintSet.reviewStatus === "NEEDS_REVIEW"
+    || blockingTraceRefs.length > 0
+  ) {
+    throw new Error(
+      `PART_CONSTRAINT_SET_NEEDS_REVIEW：${boundary} 禁止消费 ${constraintSet.constraintSetId}@${constraintSet.revision}；${blockingTraceRefs.length} 条字段 Trace 尚未确认。`,
+    );
+  }
+  // Issue #50 才会实现按冻结约束集与组件注册表进行权威枚举。
+  // 在此之前，已挂接新 ref 的 Recipe 即使全部确认，也不能退回旧枚举器静默忽略约束。
+  throw new Error(
+    `PART_CONSTRAINT_SET_CANDIDATE_RUNTIME_UNAVAILABLE：${boundary} 尚不能权威消费 ref-backed Recipe；等待 Issue #50。`,
+  );
+}
+
 export function generateModelCandidateRun(input: {
   state: WorkspaceState;
   request: CandidateGenerationRequest;
@@ -79,6 +109,11 @@ export function generateModelCandidateRun(input: {
   const series = input.state.seriesDefinitions.find((entry) => entry.id === input.request.seriesRef.entityId);
   const recipe = input.state.candidateSearchRecipes.find((entry) => entry.id === input.request.recipeRef.entityId);
   if (!series || !recipe) throw new Error("CandidateGenerationRequest 引用的 Series 或 Recipe 不存在。");
+  assertRecipePartConstraintsConsumable(
+    input.state,
+    recipe,
+    "candidate_generation",
+  );
   const skus = input.request.skuRefs.map((ref) => input.state.skuDrawers.find((entry) => entry.id === ref.entityId));
   if (skus.some((sku) => !sku)) throw new Error("CandidateGenerationRequest 引用了不存在的 SKU。");
   const selectedSkus = skus as SkuDrawer[];
@@ -236,6 +271,20 @@ export function materializeCandidateRun(input: {
   if (String(requestSeries.revision) !== input.run.request.seriesRef.revisionId) {
     throw new Error("CandidateRun 引用的 Series revision 已变化，禁止物化旧运行结果。");
   }
+  const requestRecipe = input.state.candidateSearchRecipes.find(
+    (entry) => entry.id === input.run.request.recipeRef.entityId,
+  );
+  if (!requestRecipe) {
+    throw new Error("CandidateRun 引用的 Recipe 不存在，禁止物化旧运行结果。");
+  }
+  if (String(requestRecipe.revision) !== input.run.request.recipeRef.revisionId) {
+    throw new Error("CandidateRun 引用的 Recipe revision 已变化，禁止物化旧运行结果。");
+  }
+  assertRecipePartConstraintsConsumable(
+    input.state,
+    requestRecipe,
+    "candidate_materialization",
+  );
   const requestSkus = input.run.request.skuRefs.map((ref) => {
     const sku = input.state.skuDrawers.find((entry) => entry.id === ref.entityId);
     if (!sku) throw new Error(`CandidateRun 引用的 SKU ${ref.entityId} 不存在，禁止物化旧运行结果。`);

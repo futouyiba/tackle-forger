@@ -21,12 +21,22 @@ import type {
   ValidationEntityRef,
 } from "../lib/types";
 import { createSeedState } from "../lib/seed";
+import { hydrateV3Seed } from "../lib/v3-seed";
 import {
   publishConfigurationSnapshot,
   verifySnapshotIntegrity,
 } from "../lib/publishing";
 import { createExportManifest } from "../lib/config-export";
 import { deterministicHash } from "../lib/rule-kernel";
+import {
+  formalAffixRuntimeEvidence,
+  formalProjection,
+  testReductionPolicy,
+} from "./helpers/reduction-policy";
+import {
+  buildFormalComponentSelectionsFixture,
+  buildFormalPreviewFixture,
+} from "./helpers/formal-five-axis";
 
 const subject: ValidationEntityRef = {
   workspaceId: "workspace:1",
@@ -657,12 +667,28 @@ test("未处理的 REVIEW Issue 继续约束 PUBLISH，状态写动作缺少 #48
 });
 
 test("新正式 Snapshot 只接受并冻结指纹绑定的确认记录，旧 code 理由字典不能替代证据", () => {
-  const state = createSeedState();
+  const state = hydrateV3Seed(createSeedState());
   const existing = state.configurationSnapshots[0];
   const model = state.purchasableModels.find((entry) => entry.id === existing.modelId)!;
   const sku = state.skuDrawers.find((entry) => entry.id === model.skuId)!;
   const series = state.seriesDefinitions.find((entry) => entry.id === sku.seriesId)!;
   const projection = state.derivedProjections.find((entry) => entry.id === existing.projectionId)!;
+  const reductionStackingPolicy = testReductionPolicy();
+  const formalizedProjection = {
+    ...formalProjection(
+    {
+      ...projection,
+      trace: projection.trace.filter((step) => ![
+        "attribute_affix",
+        "final_review_patch",
+        "parameter_definition",
+      ].includes(step.layer)),
+    },
+    reductionStackingPolicy,
+    existing.finalPanelValues,
+    ),
+    warnings: [],
+  };
   const warning = issue({
     code: "PUBLISH_CONFIRM_REQUIRED",
     source: "publish",
@@ -686,15 +712,54 @@ test("新正式 Snapshot 只接受并冻结指纹绑定的确认记录，旧 cod
     idempotencyKey: "ack:snapshot",
     capabilities: [ACKNOWLEDGE_VALIDATION_WARNING_CAPABILITY],
   });
+  const formalDefinition = state.fiveAxisViewDefinitions.find(
+    (definition) => "semanticContractVersion" in definition,
+  )!;
+  const formalComponentSelections = buildFormalComponentSelectionsFixture(
+    existing.componentSelections,
+  );
+  const formalPreviewForSnapshot = (snapshotId: string) => buildFormalPreviewFixture({
+    definition: formalDefinition,
+    snapshotId,
+    modelId: model.id,
+    modelRevision: model.revision,
+    seriesId: series.id,
+    skuId: sku.id,
+    skuRevision: sku.revision,
+    modelFinalPullKg: existing.modelFinalPullKg!,
+    finalPanelValues: existing.finalPanelValues,
+    componentSelections: formalComponentSelections,
+  });
+  const formalPreview = formalPreviewForSnapshot("snapshot:validation-evidence");
   const common = {
     publicationMode: "new_formal" as const,
     model,
-    sku,
+    sku: {
+      ...sku,
+      fiveAxisProjectionReferences: structuredClone(
+        formalPreview.tackleFitComparison.projectionReferences!,
+      ),
+    },
     series,
     seriesSkus: state.skuDrawers,
-    projection,
+    projection: formalizedProjection,
+    reductionStackingPolicy,
+    affixRuntimeEvidence: formalAffixRuntimeEvidence(
+      formalizedProjection,
+      reductionStackingPolicy,
+      existing.finalPanelValues,
+    ),
     finalPanelValues: existing.finalPanelValues,
-    componentSelections: existing.componentSelections,
+    componentSelections: formalComponentSelections,
+    fiveAxisPreview: formalPreview,
+    fiveAxisDefinition: formalDefinition,
+    fiveAxisDefinitions: state.fiveAxisViewDefinitions,
+    fiveAxisDispositionCatalogRevisions: state.fiveAxisDispositionCatalogRevisions,
+    currentFiveAxisDispositionCatalogRevisionId: state.currentFiveAxisDispositionCatalogRevisionId,
+    fiveAxisAuthorityState: {
+      purchasableModels: state.purchasableModels,
+      configurationSnapshots: state.configurationSnapshots,
+    },
     patches: [],
     attributeAffixIds: existing.attributeAffixIds,
     passiveAffixIds: existing.passiveAffixIds,
@@ -704,7 +769,7 @@ test("新正式 Snapshot 只接受并冻结指纹绑定的确认记录，旧 cod
     passiveAffixPayloads: existing.passiveAffixPayloads,
     compatibilityReport: existing.compatibilityReport,
     affinityReport: existing.affinityReport,
-    qualityReport: existing.qualityReport,
+    qualityReport: { ...existing.qualityReport, blockingIssues: [] },
     qualityValueAssessment: {
       modelRevisionId: `${model.id}@${model.revision}`,
       selectedQualityId: series.qualityId,
@@ -826,6 +891,7 @@ test("新正式 Snapshot 只接受并冻结指纹绑定的确认记录，旧 cod
   const snapshotWithDecision = publishConfigurationSnapshot({
     ...common,
     snapshotId: "snapshot:waiver-with-decision",
+    fiveAxisPreview: formalPreviewForSnapshot("snapshot:waiver-with-decision"),
     validationReport: publishWaiver.issues,
     validationWaivers: publishWaiver.waivers,
     validationWaiverDecisions: [publishWaiver.decision],
@@ -899,6 +965,7 @@ test("新正式 Snapshot 只接受并冻结指纹绑定的确认记录，旧 cod
   const snapshotWithExportOnly = publishConfigurationSnapshot({
     ...common,
     snapshotId: "snapshot:export-only-frozen",
+    fiveAxisPreview: formalPreviewForSnapshot("snapshot:export-only-frozen"),
     validationReport: [exportOnly],
   });
   assert.deepEqual(snapshotWithExportOnly.validationReport, [exportOnly]);
@@ -939,7 +1006,54 @@ test("新正式 Snapshot 只接受并冻结指纹绑定的确认记录，旧 cod
 });
 
 test("ExportManifest 只冻结精确环境×渠道命中的统一 Issue 与证据引用", () => {
-  const snapshot = createSeedState().configurationSnapshots[0];
+  const replayPolicy = testReductionPolicy();
+  const snapshot = structuredClone(createSeedState().configurationSnapshots[0]);
+  snapshot.reductionStackingPolicyVersion = replayPolicy.version;
+  snapshot.qualityValueAssessment = {
+    modelRevisionId: `${snapshot.modelId}@${snapshot.modelRevision}`,
+    selectedQualityId: snapshot.qualityReport.qualityId,
+    baseAffixScore: 1,
+    combinationScore: 0,
+    functionScoreFactor: 1,
+    finalValueScore: 1,
+    affixBreakdown: [],
+    combinationBreakdown: [],
+    qualityRangePolicyVersion: "quality:v1",
+    scoringPolicyVersion: "quality-score:v1",
+    inSelectedQualityRange: true,
+    formal: true,
+    issues: [],
+    trace: [],
+    inputHash: "quality-input",
+  };
+  snapshot.pricingPolicyVersion = "pricing:v1";
+  snapshot.automaticPricing = {
+    formal: true,
+    pricingPolicyRef: "pricing:v1",
+    pricingWeightBandId: "band:1",
+    valueScore: 1,
+    pricingBasketId: "basket:1",
+    repairPriceUnrounded: 100,
+    purchasePriceUnrounded: 100,
+    purchasePrice: 100,
+    trace: [{
+      sequence: 1,
+      formulaStep: "purchasePrice",
+      sourceRevision: "pricing:test",
+      source: { sheetId: "pricing:test", cell: "A1" },
+      before: 100,
+      operation: "multiply",
+      operand: 1,
+      after: 100,
+      inputStatus: "CONFIRMED",
+    }],
+    issues: [],
+    warnings: [],
+    inputHash: "pricing-input",
+  };
+  const replayableSnapshotContent = structuredClone(snapshot);
+  Reflect.deleteProperty(replayableSnapshotContent, "contentHash");
+  snapshot.contentHash = deterministicHash(replayableSnapshotContent);
   const exportWarning = issue({
     code: "EXPORT_CONFIRM_REQUIRED",
     source: "config_relationship",
@@ -977,6 +1091,8 @@ test("ExportManifest 只冻结精确环境×渠道命中的统一 Issue 与证�
       configTomlPath: "config.toml",
       enabled: true,
     },
+    workspaceId: "workspace:1",
+    availableReductionPolicies: [replayPolicy],
     snapshot,
     originalFileHashes: {},
     entries: [{
@@ -1010,10 +1126,10 @@ test("ExportManifest 只冻结精确环境×渠道命中的统一 Issue 与证�
   const legacyTargetedContent = structuredClone(legacyTargetedSnapshot);
   Reflect.deleteProperty(legacyTargetedContent, "contentHash");
   legacyTargetedSnapshot.contentHash = deterministicHash(legacyTargetedContent);
-  assert.doesNotThrow(() => createExportManifest({
+  assert.throws(() => createExportManifest({
     ...common,
     snapshot: legacyTargetedSnapshot,
-  }));
+  }), /不可waive的导出 BLOCKER/);
 
   const legacyUntargetedSnapshot = structuredClone(legacyTargetedSnapshot);
   legacyUntargetedSnapshot.validationReport = [{
@@ -1032,7 +1148,7 @@ test("ExportManifest 只冻结精确环境×渠道命中的统一 Issue 与证�
       ...common,
       snapshot: legacyUntargetedSnapshot,
     }),
-    /缺少 environmentId\/channelKey/,
+    /不可waive的导出 BLOCKER/,
   );
 
   const malformedCanonicalSnapshot = structuredClone(snapshotWithFrozenIssue);
@@ -1105,6 +1221,7 @@ test("ExportManifest 只冻结精确环境×渠道命中的统一 Issue 与证�
       acknowledgements: [acknowledged.acknowledgement],
     },
   });
+  assert.equal(exportWarning.subjectRef.workspaceId, common.workspaceId);
   assert.deepEqual(manifest.validationIssueFingerprints, [exportWarning.fingerprint]);
   assert.deepEqual(
     manifest.validationAcknowledgementRefs,
@@ -1150,7 +1267,8 @@ test("ExportManifest 只冻结精确环境×渠道命中的统一 Issue 与证�
     capabilities: [APPROVE_VALIDATION_WAIVER_CAPABILITY],
   });
   const snapshotWithExportError = structuredClone(snapshot);
-  snapshotWithExportError.validationReport = [exportError];
+  // Snapshot 冻结的是已获准的状态；导出命令仍须携带对应的不可变 Decision。
+  snapshotWithExportError.validationReport = exportWaiver.issues;
   const snapshotWithExportErrorContent = structuredClone(snapshotWithExportError);
   Reflect.deleteProperty(snapshotWithExportErrorContent, "contentHash");
   snapshotWithExportError.contentHash = deterministicHash(snapshotWithExportErrorContent);

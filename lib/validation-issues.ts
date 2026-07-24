@@ -363,7 +363,7 @@ export function adaptLegacyValidationIssue(
   const originalPayloadHash = deterministicHash(legacy);
   const canonical = createValidationIssue({
     code: legacy.code,
-    source: legacy.source ?? context.source ?? "import",
+    source: legacy.source === "affix" ? "data_integrity" : legacy.source ?? context.source ?? "import",
     severity,
     gate,
     subjectRef: "subjectRef" in legacy ? legacy.subjectRef : context.subjectRef,

@@ -21,12 +21,17 @@ import {
 } from "../lib/patch-offset-policy";
 import { buildPatchRevision, emptyPatchLedger, orderedPatchReferences, PatchLedgerError, reviewPatchBatch } from "../lib/patch-ledger";
 import { publishConfigurationSnapshot, verifySnapshotIntegrity } from "../lib/publishing";
+import {
+  buildFormalComponentSelectionsFixture,
+  buildFormalPreviewFixture,
+} from "./helpers/formal-five-axis";
 import { createExportManifest } from "../lib/config-export";
 import {
   assertPatchEvaluationMatchesAuthority,
   authoritativeObjectIdentity,
   createAuthoritativePatchObjectFromWorkspace,
   createWorkspacePatchReview,
+  currentPatchApprovalEvidence,
   deriveAuthoritativePatchContexts,
   evaluateAuthoritativePatchFinalRanges,
   preparePatchOperationFromWorkspace,
@@ -35,6 +40,11 @@ import {
   type AuthoritativePatchObject,
 } from "../lib/patch-authority";
 import { deterministicHash } from "../lib/rule-kernel";
+import {
+  formalAffixRuntimeEvidence,
+  formalProjection,
+  testReductionPolicy,
+} from "./helpers/reduction-policy";
 import { createSeedState } from "../lib/seed";
 import type {
   PatchOffsetPolicyVersion,
@@ -190,6 +200,7 @@ test("发布门禁拒绝空范围评估、被改写结果和空 Patch revision �
   assert.throws(
     () => publishConfigurationSnapshot({
       publicationMode: "new_formal",
+      workspaceId: "workspace:test",
       patches: [{}],
       patchRevisions: [],
     } as never),
@@ -329,6 +340,7 @@ test("Waiver 单 Gate 生效，EXPORT 还必须精确匹配环境与渠道", () 
 
 test("Series 必须覆盖每个真实 SKU；没有 SKU 时覆盖每个声明拉力", () => {
   const state = createSeedState();
+  state.workspaceId = "workspace:patch-offset-test";
   const series = state.seriesDefinitions[0];
   const skus = state.skuDrawers.filter((sku) => sku.seriesId === series.id);
   const expected = expectedSeriesDiscreteRangeContexts({ series, skus });
@@ -358,6 +370,7 @@ test("Series 必须覆盖每个真实 SKU；没有 SKU 时覆盖每个声明拉�
 
 test("Series 范围上下文排除 superseded 历史 SKU，并在没有当前 SKU 时回退声明拉力", () => {
   const state = createSeedState();
+  state.workspaceId = "workspace:patch-offset-test";
   const series = structuredClone(state.seriesDefinitions[0]!);
   const historicalSku = structuredClone(state.skuDrawers.find(
     (sku) => sku.id === "sku:qinglu-obstacle-1.5",
@@ -564,6 +577,7 @@ test("基底变化按 add/multiply、set、clear 与 FinalReview 语义进入复
 
 test("实际工作区命令计算 Trace、包含端点，并在伪造或当前版本变化时 fail-closed", () => {
   const state = createSeedState();
+  state.workspaceId = "workspace:patch-offset-test";
   const model = state.purchasableModels[0];
   const sku = state.skuDrawers.find((entry) => entry.id === model.skuId)!;
   const series = state.seriesDefinitions.find((entry) => entry.id === sku.seriesId)!;
@@ -655,11 +669,14 @@ test("实际工作区命令计算 Trace、包含端点，并在伪造或当前�
     (error: unknown) => error instanceof PatchOffsetPolicyError && error.code === "PATCH_REVIEW_EVIDENCE_STALE",
   );
   state.patchReviewBatches = [];
-  const review = createWorkspacePatchReview({ state, target: revision, reviewedBy: "reviewer", reviewedAt: NOW });
+  state.workspaceId = "workspace:ai-formal";
+  const review = createWorkspacePatchReview({ state, target: revision, reviewedBy: "reviewer", reviewedAt: NOW, workspaceId: "workspace:ai-formal" });
   assert.equal(review.evaluation.results[0].valid, true);
   assert.equal(review.evaluation.results[0].min, numeric[1]);
   assert.equal(review.evaluation.results[0].max, numeric[1]);
   state.patchReviewBatches.push(review.batch);
+  assert.equal(currentPatchApprovalEvidence(state, revision, "workspace:other"), undefined);
+  assert.ok(currentPatchApprovalEvidence(state, revision, "workspace:ai-formal"));
   const approved = reviewWorkspacePatchRevision({
     state,
     patchId: revision.patchId,
@@ -668,6 +685,7 @@ test("实际工作区命令计算 Trace、包含端点，并在伪造或当前�
     reviewer: "reviewer",
     reviewedAt: NOW,
     capabilities: ["patch.review"],
+    workspaceId: "workspace:ai-formal",
   });
   assert.equal(approved.patchLedger.revisions.find((entry) => entry.patchId === revision.patchId)?.state, "APPROVED");
   const active = reviewWorkspacePatchRevision({
@@ -678,6 +696,7 @@ test("实际工作区命令计算 Trace、包含端点，并在伪造或当前�
     reviewer: "reviewer",
     reviewedAt: NOW,
     capabilities: ["patch.review"],
+    workspaceId: "workspace:ai-formal",
   });
   assert.equal(active.patchLedger.revisions.find((entry) => entry.patchId === revision.patchId)?.state, "ACTIVE");
 
@@ -719,6 +738,7 @@ test("实际工作区命令计算 Trace、包含端点，并在伪造或当前�
 
 test("Workspace Patch 写入口拒绝 ACTIVE 撤回且保持账本逐字节不变", () => {
   const state = createSeedState();
+  state.workspaceId = "workspace:patch-offset-test";
   const frozenActive = state.patchLedger.revisions.find((revision) => revision.state === "ACTIVE");
   assert.ok(frozenActive);
   const active = buildPatchRevision({
@@ -826,8 +846,19 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
   const model = state.purchasableModels.find((entry) => entry.id === oldSnapshot.modelId)!;
   const sku = state.skuDrawers.find((entry) => entry.id === model.skuId)!;
   const series = state.seriesDefinitions.find((entry) => entry.id === sku.seriesId)!;
-  const projection = state.derivedProjections.find((entry) => entry.id === oldSnapshot.projectionId)!;
-  const numericEntry = Object.entries(projection.values)
+  const reductionStackingPolicy = testReductionPolicy();
+  const sourceProjection = state.derivedProjections.find((entry) => entry.id === oldSnapshot.projectionId)!;
+  const projection = formalProjection(
+    {
+      ...sourceProjection,
+      // The fixture's formal runtime evidence covers this authoritative layer
+      // only; do not leave unmatched later-stage contributions in Projection.
+      trace: sourceProjection.trace.filter((step) => step.layer === "attribute_affix"),
+    },
+    reductionStackingPolicy,
+    oldSnapshot.finalPanelValues,
+  );
+  const numericEntry = Object.entries(oldSnapshot.finalPanelValues)
     .find((entry): entry is [string, number] => typeof entry[1] === "number")!;
   const governedRevision = buildPatchRevision({
     patchId: "patch:open004:publish",
@@ -857,7 +888,7 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
     }],
   });
   const patchRevisions = [governedRevision];
-  const frozen = orderedPatchReferences(patchRevisions);
+  const frozen = orderedPatchReferences(patchRevisions,"workspace:test");
   const ruleSet = state.ruleSetVersions.find((entry) =>
     entry.id === projection.ruleSetVersion || String(entry.version) === projection.ruleSetVersion)!;
   const parameterDefinitions = state.parameters.map((parameter) =>
@@ -865,6 +896,7 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
       ? { ...parameter, targetRange: { min: numericEntry[1] - 2, max: numericEntry[1] - 1 } }
       : parameter);
   const publishAuthority: AuthoritativePatchObject = {
+    workspaceId:"workspace:test",
     subjectRef: { scopeType: "model", entityId: model.id, revision: model.revision },
     ruleSet,
     parameterDefinitions,
@@ -873,12 +905,36 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
       contextId: `${model.id}:${sku.id}:${projection.id}`,
       itemPartId: sku.projectionMatch.itemPartId,
       projection,
-      finalPanelValues: projection.values,
+      finalPanelValues: oldSnapshot.finalPanelValues,
       weightBandId: sku.projectionMatch.weightTemplateId,
       skuRef: sku.id,
       targetPullKg: sku.projectionMatch.targetPullKg,
     }],
   };
+  const competingSet=(patchId:string,operation:"set"|"clear")=>buildPatchRevision({
+    ...governedRevision,
+    patchId,
+    operations:[{
+      operationId:`${patchId}:op:1`,
+      operationIndex:0,
+      parameterKey:numericEntry[0],
+      operation,
+      operand:operation==="clear"?null:numericEntry[1],
+      before:numericEntry[1],
+      after:numericEntry[1],
+    }],
+  });
+  const firstSet=competingSet("patch:authority:set:1","set");
+  const secondSet=competingSet("patch:authority:set:2","set");
+  const clear=competingSet("patch:authority:clear","clear");
+  assert.throws(
+    ()=>deriveAuthoritativePatchContexts({...publishAuthority,patchRevisions:[firstSet,secondSet]}),
+    (error:unknown)=>error instanceof PatchOffsetPolicyError&&error.code==="PATCH_SET_CONFLICT",
+  );
+  assert.throws(
+    ()=>deriveAuthoritativePatchContexts({...publishAuthority,patchRevisions:[firstSet,clear]}),
+    (error:unknown)=>error instanceof PatchOffsetPolicyError&&error.code==="PATCH_SET_CLEAR_CONFLICT",
+  );
   const publishIdentity = authoritativeObjectIdentity(publishAuthority);
   const rangeEvaluation = evaluateAuthoritativePatchFinalRanges({
     policy: publishedPolicy,
@@ -901,16 +957,44 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
     approvedBy: "publisher",
     approvedAt: NOW,
   });
+  const formalDefinition = state.fiveAxisViewDefinitions.find((definition) =>
+    "semanticContractVersion" in definition)!;
+  const formalPreview = buildFormalPreviewFixture({
+    definition: formalDefinition,
+    snapshotId: "snapshot:open004-v1",
+    modelId: model.id,
+    modelRevision: model.revision,
+    seriesId: series.id,
+    skuId: sku.id,
+    skuRevision: sku.revision,
+    modelFinalPullKg: oldSnapshot.modelFinalPullKg!,
+    finalPanelValues: oldSnapshot.finalPanelValues,
+    componentSelections: oldSnapshot.componentSelections,
+  });
+  const formalComponentSelections = buildFormalComponentSelectionsFixture(
+    oldSnapshot.componentSelections,
+  );
   const snapshot = publishConfigurationSnapshot({
     publicationMode: "new_formal",
     workspaceId: "workspace:test",
     model,
-    sku,
+    sku: {
+      ...sku,
+      fiveAxisProjectionReferences: structuredClone(
+        formalPreview.tackleFitComparison.projectionReferences!,
+      ),
+    },
     seriesSkus: state.skuDrawers.filter((entry) => entry.seriesId === series.id),
     series,
     projection,
-    finalPanelValues: projection.values,
-    componentSelections: oldSnapshot.componentSelections,
+    reductionStackingPolicy,
+    affixRuntimeEvidence: formalAffixRuntimeEvidence(
+      projection,
+      reductionStackingPolicy,
+      oldSnapshot.finalPanelValues,
+    ),
+    finalPanelValues: oldSnapshot.finalPanelValues,
+    componentSelections: formalComponentSelections,
     patches: [],
     patchRevisions,
     patchOffsetGovernance: {
@@ -925,11 +1009,11 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
     passiveAffixIds: oldSnapshot.passiveAffixIds,
     technologyIds: oldSnapshot.technologyIds,
     technologyDefinitions: state.technologies,
-    finalSettlementTrace: finalSettlementTrace(projection.values),
+    finalSettlementTrace: finalSettlementTrace(oldSnapshot.finalPanelValues),
     passiveAffixPayloads: oldSnapshot.passiveAffixPayloads,
     compatibilityReport: oldSnapshot.compatibilityReport,
     affinityReport: oldSnapshot.affinityReport,
-    qualityReport: oldSnapshot.qualityReport,
+    qualityReport: { ...oldSnapshot.qualityReport, blockingIssues: [] },
     qualityValueAssessment: {
       modelRevisionId: `${model.id}@${model.revision}`,
       selectedQualityId: series.qualityId,
@@ -947,6 +1031,17 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
       trace: [],
       inputHash: "quality-hash",
     },
+    fiveAxisPreview: formalPreview,
+    fiveAxisAuthorityState: {
+      purchasableModels: state.purchasableModels,
+      configurationSnapshots: state.configurationSnapshots,
+    },
+    fiveAxisDefinition: formalDefinition,
+    fiveAxisDefinitions: state.fiveAxisViewDefinitions,
+    fiveAxisDispositionCatalogRevisions:
+      state.fiveAxisDispositionCatalogRevisions,
+    currentFiveAxisDispositionCatalogRevisionId:
+      state.currentFiveAxisDispositionCatalogRevisionId,
     pricingPolicyVersion: "pricing:published-v1",
     automaticPricing: {
       formal: true,
@@ -988,6 +1083,7 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
   assert.equal(verifySnapshotIntegrity(oldSnapshot), true);
 
   const exportAuthority: AuthoritativePatchObject = {
+    workspaceId: snapshot.workspaceId,
     subjectRef: { scopeType: "model", entityId: snapshot.modelId, revision: snapshot.modelRevision },
     ruleSet,
     parameterDefinitions,
@@ -1035,7 +1131,9 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
     generatorVersion: "1",
     mapping: { mappingId: "mapping:open004", version: "1", logicalTables: {}, rows: [], enumReferenceField: "name" },
     profile: { profileId: "profile:online:1001", label: "online/1001", executorKind: "local_companion", projectRoot: "/configs", relativeWorkbookRoot: "xlsx", configTomlPath: "config.toml", enabled: true },
+    workspaceId: "workspace:test",
     snapshot,
+    availableReductionPolicies: [reductionStackingPolicy],
     environmentId: "online",
     channelKey: "1001",
     patchOffsetGovernance: {

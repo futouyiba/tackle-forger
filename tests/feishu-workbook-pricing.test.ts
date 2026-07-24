@@ -19,21 +19,201 @@ import {
 } from "../lib/pricing-policy";
 import {
   CANONICAL_IDENTITY_SHEET_SPECS,
+  canonicalAffixSheetRanges,
   canonicalIdentityPolicies,
+  canonicalQualitySheetRange,
+  canonicalRuleWorkbookRangeRequests,
   identityRowsFromRanges,
   pricingDraftFromRanges,
+  pricingQualitySourceRowsFromDraft,
+  qualityDraftFromRanges,
 } from "../lib/rule-workbook-inspection";
 import { createExportManifest } from "../lib/config-export";
 import { createSeedState } from "../lib/seed";
+import { formalExportSnapshot } from "./helpers/formal-export-snapshot";
+import { testReductionPolicy } from "./helpers/reduction-policy";
+import { CANONICAL_RULE_RANGES } from "../lib/canonical-rule-source";
 
 const observedSheets = CANONICAL_FEISHU_SHEET_REGISTRY.map((entry) => ({
   sheetId: entry.sheetId,
   name: entry.expectedName,
 }));
 
-test("当前整本工作簿注册表覆盖 00–17，并包含 12_打包竿组的真实 sheet_id", () => {
-  assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.length, 18);
+function sourceRevisionWithAffixGrid(rowCount = 86) {
+  return {
+    id: "feishu-revision:fixture", workbookRefId: CANONICAL_FEISHU_WORKBOOK.id,
+    sourceRevision: "fixture", spreadsheetToken: "spreadsheet:fixture", pulledAt: "2026-07-24T00:00:00.000Z",
+    pulledBy: "tester", syncScope: "workbook" as const, registryHash: "hash",
+    sheets: observedSheets.map((sheet) => sheet.sheetId === "zrVOxd"
+      ? { ...sheet, rowCount, columnCount: 6 }
+      : sheet.sheetId === "d6e928" ? { ...sheet, rowCount: 66, columnCount: 60 }
+      : sheet.sheetId === "FqD4j7" ? { ...sheet, rowCount: 60, columnCount: 19 }
+      : sheet),
+    issues: [], state: "PULLED" as const,
+  };
+}
+
+test("04_词条的身份与别名读取共同跟随同 revision grid 上界，不遗留固定末行", () => {
+  const sourceRevision = sourceRevisionWithAffixGrid(86);
+  assert.deepEqual(canonicalAffixSheetRanges(sourceRevision), {
+    identityRange: "B1:C86",
+    aliasRange: "B2:F86",
+  });
+  const requests = canonicalRuleWorkbookRangeRequests(sourceRevision);
+  assert.equal(requests.find((entry) => entry.sheetId === "zrVOxd" && entry.range === "B1:C86")?.range, "B1:C86");
+  assert.equal(requests.find((entry) => entry.sheetId === "zrVOxd" && entry.range === "B2:F86")?.range, "B2:F86");
+  assert.equal(canonicalQualitySheetRange(sourceRevision), "A1:S60");
+  assert.equal(requests.find((entry) => entry.sheetId === "FqD4j7" && entry.range === "A1:S60")?.range, "A1:S60");
+  assert.equal(requests.find((entry) => entry.sheetId === "fATowU" && entry.range === "B2:AD20")?.range, "B2:AD20");
+  for (const range of Object.values(CANONICAL_RULE_RANGES).filter((range) => range.sheetId !== "d6e928")) {
+    assert.equal(requests.find((entry) => entry.sheetId === range.sheetId && entry.range === range.range)?.range, range.range);
+  }
+  assert.equal(requests.find((entry) => entry.sheetId === "d6e928" && entry.range === "BG1:BH66")?.range, "BG1:BH66");
+  assert.equal(requests.find((entry) => entry.sheetId === "d6e928" && entry.range === "A1:BH66")?.range, "A1:BH66");
+  const identities = identityRowsFromRanges([{
+    sheetId: "zrVOxd", range: "B1:C86", valueRange: { values: [["机器ID（勿改）", "实体类型"], ...Array.from({ length: 84 }, () => []), ["affix_rod_high", "RodAffix"]] },
+  }]);
+  assert.ok(identities.some((entry) => entry.stableId === "affix_rod_high"));
+});
+
+test("04_词条 grid 元数据不完整时 fail-closed，不以旧行号截断", () => {
+  for (const sheets of [
+    observedSheets,
+    sourceRevisionWithAffixGrid(2).sheets,
+    sourceRevisionWithAffixGrid(86).sheets.map((sheet) => sheet.sheetId === "zrVOxd" ? { ...sheet, rowCount: Number.NaN } : sheet),
+    sourceRevisionWithAffixGrid(86).sheets.map((sheet) => sheet.sheetId === "zrVOxd" ? { ...sheet, columnCount: 5 } : sheet),
+  ]) {
+    assert.throws(() => canonicalAffixSheetRanges({ ...sourceRevisionWithAffixGrid(), sheets }));
+  }
+});
+
+test("07_品质评分 grid 元数据无效时 fail-closed，不回退旧 B4:N50", () => {
+  const revision = sourceRevisionWithAffixGrid();
+  for (const sheets of [
+    revision.sheets.map((sheet) => sheet.sheetId === "FqD4j7" ? { ...sheet, rowCount: 0 } : sheet),
+    revision.sheets.map((sheet) => sheet.sheetId === "FqD4j7" ? { ...sheet, columnCount: Number.NaN } : sheet),
+  ]) assert.throws(() => canonicalQualitySheetRange({ ...revision, sheets }));
+  const atLimit = revision.sheets.map((sheet) => sheet.sheetId === "FqD4j7" ? { ...sheet, rowCount: 10_000, columnCount: 20 } : sheet);
+  assert.equal(canonicalQualitySheetRange({ ...revision, sheets: atLimit }), "A1:T10000");
+  for (const sheets of [
+    revision.sheets.map((sheet) => sheet.sheetId === "FqD4j7" ? { ...sheet, rowCount: 10_001, columnCount: 1 } : sheet),
+    revision.sheets.map((sheet) => sheet.sheetId === "FqD4j7" ? { ...sheet, rowCount: 1, columnCount: 201 } : sheet),
+    revision.sheets.map((sheet) => sheet.sheetId === "FqD4j7" ? { ...sheet, rowCount: 10_000, columnCount: 21 } : sheet),
+  ]) assert.throws(() => canonicalQualitySheetRange({ ...revision, sheets }));
+});
+
+test("生产同形品质矩阵按显式块头解析扩展列、移动块、空白镜像与未知/跨部位", () => {
+  const sourceRevision = sourceRevisionWithAffixGrid();
+  const qualityValues = Array.from({ length: 60 }, () => Array.from({ length: 19 }, () => "") as unknown[]);
+  qualityValues[2]![0] = "品质区间";
+  qualityValues[3]![1] = "品质"; qualityValues[3]![2] = "代码"; qualityValues[3]![3] = "PricingBasket"; qualityValues[3]![4] = "≥最小评分"; qualityValues[3]![5] = "<最大评分"; qualityValues[3]![6] = "最小价格系数"; qualityValues[3]![7] = "最大价格系数";
+  for (const [row, label, code, min, max] of [[5, "C/绿", "C", 0, 20], [6, "B/蓝", "B", 20, 40], [7, "A/紫", "A", 40, 65], [8, "S/橙", "S", 65, 100]] as const) qualityValues[row - 1] = ["", label, code, "跑刀", min, max, .5, 1.1];
+  const addBlock = (headerRow: number, heading: string, aliases: string[]) => {
+    qualityValues[headerRow - 1]![0] = heading;
+    aliases.forEach((alias, index) => { qualityValues[headerRow - 1]![index + 1] = alias; });
+    qualityValues[headerRow]![0] = aliases[0]!;
+    qualityValues[headerRow]![1] = "—";
+    qualityValues[headerRow]![2] = 2;
+  };
+  addBlock(10, "竿词条", Array.from({ length: 15 }, (_, index) => `竿${index}`));
+  addBlock(27, "轮词条", Array.from({ length: 17 }, (_, index) => `轮${index}`));
+  addBlock(46, "线词条", Array.from({ length: 15 }, (_, index) => `线${index}`));
+  const affixValues = Array.from({ length: 85 }, () => [] as unknown[]);
+  affixValues[0] = ["机器ID（勿改）", "", "部位", "", "缩写"];
+  let affixRow = 1;
+  for (const [part, prefix, count] of [["竿", "rod", 15], ["轮", "reel", 17], ["线", "line", 15]] as const) for (let index = 0; index < count; index += 1) affixValues[affixRow++] = [`affix_${prefix}_${index}`, "", part, "", `${part}${index}`];
+  const valid = qualityDraftFromRanges({
+    sourceRevision,
+    qualityValues,
+    qualityRange: "A1:S60",
+    affixValues,
+    pricingEndpointValues: [[100]],
+    importedAt: "2026-07-24T00:00:00.000Z",
+  });
+  assert.equal(valid.issues.some((issue) => issue.code === "QUALITY_COMBINATION_ALIAS_UNKNOWN"), false);
+  assert.equal(valid.combinationRules.length, 3);
+  assert.equal(valid.combinationRules.find((rule) => rule.itemPartId === "part:reel")?.source.cell, "C28");
+  assert.deepEqual(valid.ranges.map((range) => [range.minScore, range.maxScore]), [[0, 20], [20, 40], [40, 65], [65, 100]]);
+  const pricingQualityRows = pricingQualitySourceRowsFromDraft(valid, qualityValues);
+  const pricing = pricingDraftFromRanges({
+    sourceRevision,
+    qualityValues: [],
+    qualitySourceRows: pricingQualityRows,
+    importedAt: "2026-07-24T00:00:00.000Z",
+  });
+  assert.equal(pricing.qualityMappings.length, 4);
+  assert.equal(pricing.qualityPriceFactorRanges?.length, 4);
+  assert.deepEqual(pricing.qualityMappings.map((mapping) => mapping.source.cell), ["D5", "D6", "D7", "D8"]);
+  assert.deepEqual(pricing.qualityPriceFactorRanges?.map((range) => range.source.cell), ["G5:H5", "G6:H6", "G7:H7", "G8:H8"]);
+  const moved = structuredClone(qualityValues);
+  moved[3]![3] = ""; moved[3]![6] = ""; moved[3]![7] = "";
+  moved[3]![10] = "PricingBasket"; moved[3]![11] = "最小价格系数"; moved[3]![12] = "最大价格系数";
+  for (let row = 4; row < 8; row += 1) { moved[row]![10] = moved[row]![3]; moved[row]![11] = moved[row]![6]; moved[row]![12] = moved[row]![7]; moved[row]![3] = moved[row]![6] = moved[row]![7] = ""; }
+  const movedDraft = qualityDraftFromRanges({ sourceRevision, qualityValues: moved, qualityRange: "A1:S60", affixValues, pricingEndpointValues: [], importedAt: "2026-07-24T00:00:00.000Z" });
+  assert.equal(movedDraft.formalStatus, "READY_TO_PUBLISH");
+  assert.deepEqual(pricingQualitySourceRowsFromDraft(movedDraft).map((row) => [row.mappingCell, row.factorCell]), [["K5", "L5:M5"], ["K6", "L6:M6"], ["K7", "L7:M7"], ["K8", "L8:M8"]]);
+  moved[3]![11] = "";
+  assert.ok(qualityDraftFromRanges({ sourceRevision, qualityValues: moved, qualityRange: "A1:S60", affixValues, pricingEndpointValues: [], importedAt: "2026-07-24T00:00:00.000Z" }).issues.some((issue) => issue.code === "QUALITY_RANGE_TABLE_HEADER_MISSING"));
+  const duplicated = structuredClone(qualityValues);
+  duplicated[3]![15] = "PricingBasket";
+  assert.ok(qualityDraftFromRanges({ sourceRevision, qualityValues: duplicated, qualityRange: "A1:S60", affixValues, pricingEndpointValues: [], importedAt: "2026-07-24T00:00:00.000Z" }).issues.some((issue) => issue.code === "QUALITY_RANGE_TABLE_HEADER_MISSING"));
+
+  qualityValues[9]![2] = "不存在";
+  const unknown = qualityDraftFromRanges({ sourceRevision, qualityValues, qualityRange: "A1:S60", affixValues, pricingEndpointValues: [[100]], importedAt: "2026-07-24T00:00:00.000Z" });
+  assert.ok(unknown.issues.some((issue) => issue.code === "QUALITY_COMBINATION_ALIAS_UNKNOWN"));
+
+  qualityValues[9]![2] = "轮0";
+  const crossPart = qualityDraftFromRanges({ sourceRevision, qualityValues, qualityRange: "A1:S60", affixValues, pricingEndpointValues: [[100]], importedAt: "2026-07-24T00:00:00.000Z" });
+  assert.ok(crossPart.issues.some((issue) => issue.code === "QUALITY_COMBINATION_ALIAS_UNKNOWN"));
+});
+
+test("品质矩阵结构错误保留草稿并发布阻断，尾部合法缩写不能被误读", () => {
+  const sourceRevision = sourceRevisionWithAffixGrid();
+  const values = Array.from({ length: 60 }, () => Array.from({ length: 19 }, () => "") as unknown[]);
+  values[2]![0] = "品质区间";
+  values[3]![1] = "品质"; values[3]![2] = "代码"; values[3]![3] = "PricingBasket"; values[3]![4] = "≥最小评分"; values[3]![5] = "<最大评分"; values[3]![6] = "最小价格系数"; values[3]![7] = "最大价格系数";
+  for (const [row, label, code, min, max] of [[5, "C/绿", "C", 0, 20], [6, "B/蓝", "B", 20, 40], [7, "A/紫", "A", 40, 65], [8, "S/橙", "S", 65, 100]] as const) values[row - 1] = ["", label, code, "跑刀", min, max, .5, 1.1];
+  for (const [row, heading, prefix] of [[10, "竿词条", "竿"], [27, "轮词条", "轮"], [46, "线词条", "线"]] as const) {
+    values[row - 1]![0] = heading; values[row - 1]![1] = `${prefix}0`; values[row - 1]![2] = `${prefix}2`;
+    values[row]![0] = `${prefix}0`; values[row]![1] = "—"; values[row]![2] = 1;
+  }
+  // This is a valid affix-looking tail row after the rod matrix; it must end
+  // the rod block and must not create a fourth matrix rule.
+  values[11]![0] = "竿1"; values[11]![1] = 9;
+  const affixValues = [["机器ID（勿改）", "", "部位", "", "缩写"], ["affix_rod_0", "", "竿", "", "竿0"], ["affix_rod_1", "", "竿", "", "竿1"], ["affix_rod_2", "", "竿", "", "竿2"], ["affix_reel_0", "", "轮", "", "轮0"], ["affix_reel_2", "", "轮", "", "轮2"], ["affix_line_0", "", "线", "", "线0"], ["affix_line_2", "", "线", "", "线2"]];
+  const blocked = qualityDraftFromRanges({ sourceRevision, qualityValues: values, qualityRange: "A1:S60", affixValues, pricingEndpointValues: [], importedAt: "2026-07-24T00:00:00.000Z" });
+  assert.equal(blocked.formalStatus, "NON_FORMAL");
+  assert.ok(blocked.issues.some((issue) => issue.code === "QUALITY_MATRIX_ROW_INVALID" && issue.sourceCell?.cell === "A12"));
+  assert.equal(blocked.combinationRules.length, 3);
+
+  values[26]![0] = "竿词条";
+  const duplicate = qualityDraftFromRanges({ sourceRevision, qualityValues: values, qualityRange: "A1:S60", affixValues, pricingEndpointValues: [], importedAt: "2026-07-24T00:00:00.000Z" });
+  assert.ok(duplicate.issues.some((issue) => issue.code === "QUALITY_MATRIX_BLOCK_DUPLICATE"));
+  assert.equal(duplicate.formalStatus, "NON_FORMAL");
+  values[26]![0] = "";
+  values[55]![10] = "C"; values[55]![11] = 0; values[55]![12] = 100;
+  const tailQuality = qualityDraftFromRanges({ sourceRevision, qualityValues: values, qualityRange: "A1:S60", affixValues, pricingEndpointValues: [], importedAt: "2026-07-24T00:00:00.000Z" });
+  assert.equal(tailQuality.ranges.length, 4);
+});
+
+test("同一完整高行号工作簿导入保持幂等", () => {
+  const sourceRevision = sourceRevisionWithAffixGrid();
+  const qualityValues = Array.from({ length: 47 }, () => [] as unknown[]);
+  qualityValues[1] = ["C/绿", "C", "", 0, 20]; qualityValues[2] = ["B/蓝", "B", "", 20, 40];
+  qualityValues[3] = ["A/紫", "A", "", 40, 65]; qualityValues[4] = ["S/橙", "S", "", 65, 100];
+  qualityValues[6] = ["", "高行词条"]; qualityValues[7] = ["高行词条", "—"];
+  const affixValues = Array.from({ length: 85 }, () => [] as unknown[]);
+  affixValues[0] = ["机器ID（勿改）", "", "部位", "", "缩写"];
+  affixValues[84] = ["affix_rod_high", "", "竿", "", "高行词条"];
+  const input = { sourceRevision, qualityValues, affixValues, pricingEndpointValues: [[100]], importedAt: "2026-07-24T00:00:00.000Z" };
+  assert.deepEqual(qualityDraftFromRanges(input), qualityDraftFromRanges(input));
+});
+
+test("当前整本工作簿注册表覆盖 00–17、FunctionProfile 常量与钓法审核表，并包含真实 sheet_id", () => {
+  assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.length, 21);
   assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "00_使用说明")?.sheetId, "4IfBoX");
+  assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "04.0_FunctionProfile常量")?.sheetId, "mLpTLK");
+  assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "02.5_钓法模板")?.sheetId, "m3eQCg");
   assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "12_打包竿组")?.sheetId, "lf4wIM");
 });
 
@@ -325,13 +505,15 @@ test("价格试算使用最近结构标杆源重量段，系数为 1 仍进入�
 });
 
 test("未发布 PricingPolicy 时正式 Store Manifest 阻断且不再误报品质映射缺失", () => {
-  const snapshot = createSeedState().configurationSnapshots[0];
+  const snapshot = formalExportSnapshot(createSeedState().configurationSnapshots[0]);
   assert.throws(() => createExportManifest({
     packageId: "pkg:1",
     generatorVersion: "1",
     mapping: { mappingId: "m", version: "1", logicalTables: {}, rows: [], enumReferenceField: "name" },
     profile: { profileId: "profile:1", label: "test/1001", executorKind: "local_companion", projectRoot: "D:\\\\configs", relativeWorkbookRoot: "xlsx", configTomlPath: "config.toml", enabled: true },
+    workspaceId: "workspace:test",
     snapshot,
+    availableReductionPolicies: [testReductionPolicy()],
     originalFileHashes: {},
     entries: [{ logicalTable: "store_buy", workbook: "store.xlsx", sheet: "StoreBuy", businessKey: "buy:1", operation: "insert" }],
     createdAt: "2026-07-21T10:00:00.000Z",

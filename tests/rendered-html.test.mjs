@@ -9,10 +9,11 @@ test("生产构建包含完整工作台客户端与 Worker", async () => {
   const styles = files.filter((name) => name.endsWith(".css"));
   assert.ok(scripts.length > 0, "应生成客户端 JavaScript");
   assert.ok(styles.length > 0, "应生成工作台样式");
-  const [scriptContents, styleContents, workerInfo] = await Promise.all([
+  const [scriptContents, styleContents, workerInfo, serverContents] = await Promise.all([
     Promise.all(scripts.map((name) => readFile(new URL(name, assetRoot), "utf8"))),
     Promise.all(styles.map((name) => readFile(new URL(name, assetRoot), "utf8"))),
     stat(new URL("../dist/server/index.js", import.meta.url)),
+    readFile(new URL("../dist/server/index.js", import.meta.url), "utf8"),
   ]);
   const script = scriptContents.join("\n");
   const css = styleContents.join("\n");
@@ -46,4 +47,9 @@ test("生产构建包含完整工作台客户端与 Worker", async () => {
   assert.match(script, /_TackleForgerState/);
   assert.match(css, /\.workbench/);
   assert.ok(workerInfo.size > 0);
+  assert.match(
+    serverContents,
+    /runtimeProcess\.env\["NODE_ENV"\] === "development"/,
+    "开发专用 loopback 回调判断必须在生产服务器产物中保留运行时环境读取，不能被折叠为 false。",
+  );
 });

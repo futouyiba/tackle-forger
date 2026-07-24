@@ -53,8 +53,14 @@ export function parseFiveAxisWeightBandPolicyFromWeightTemplate(input: {
         const upper = Number(finiteDecimal(max, `${block.part} 第 ${rowNumber} 行 maxPull`));
         if (upper <= previousUpper) throw new Error("FIVE_AXIS_WEIGHT_BAND_POLICY_SOURCE_INVALID：重量段上界必须严格递增。");
         previousUpper = upper; grades[gradeIndex]!.upper = canonicalDecimal(max);
-      } else if (max) {
-        throw new Error("FIVE_AXIS_WEIGHT_BAND_POLICY_SOURCE_INVALID：第六 W 段必须为开放尾段。");
+      } else {
+        // The source keeps the final template ceiling (currently 235kg) for
+        // its 16-level design ladder. W6 deliberately remains open-ended in
+        // the five-axis policy, so this value validates provenance but never
+        // becomes a policy upper bound.
+        const upper = Number(finiteDecimal(max, `${block.part} 第 ${rowNumber} 行 maxPull`));
+        if (upper <= previousUpper) throw new Error("FIVE_AXIS_WEIGHT_BAND_POLICY_SOURCE_INVALID：重量段上界必须严格递增。");
+        previousUpper = upper;
       }
     }
     if (grades.length !== 6 || grades.some((entry, index) => entry.grade !== GRADE_NAMES[index])) throw new Error("FIVE_AXIS_WEIGHT_BAND_POLICY_SOURCE_INVALID：必须恰好包含连续的六个权威鱼重量等级。");

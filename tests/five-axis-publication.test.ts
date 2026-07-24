@@ -7,12 +7,14 @@ import { createSeedState } from "../lib/seed";
 
 function weightFixture() {
   const rows = Array.from({ length: 54 }, () => [] as unknown[]);
-  const bounds = ["1.5", "3.8", "12.6", "25.9", "82.5", ""];
+  const mins = ["0.1", "1.5", "2.5", "3.8", "5.4", "7.5", "10.2", "12.6", "15", "17.8", "21.2", "25.9", "36.9", "55", "82.5", "145"];
+  const maxes = ["1.5", "2.5", "3.8", "5.4", "7.5", "10.2", "12.6", "15", "17.8", "21.2", "25.9", "36.9", "55", "82.5", "145", "235"];
+  const grades = ["微物", "小鱼", "小鱼", "中鱼", "中鱼", "中鱼", "中鱼", "大鱼", "大鱼", "大鱼", "大鱼", "巨物", "巨物", "巨物", "超级巨物", "超级巨物"];
   for (const [part, headerRow, start] of [["竿", 2, 3], ["轮", 20, 21], ["线", 38, 39]] as const) {
     rows[headerRow - 1] = ["", "机器ID", "同步状态", "部位", "重量段序号", "最小拉力", "最大拉力", "鱼重量等级"];
     for (let index = 0; index < 16; index += 1) {
-      const gradeIndex = Math.min(index, 5);
-      rows[start + index - 1] = ["", `wtpl_${part}_${index + 1}`, "BOUND", part, String(index + 1), String(index + 1), bounds[gradeIndex], ["微物", "小鱼", "中鱼", "大鱼", "巨物", "超级巨物"][gradeIndex]];
+      const idPart = part === "竿" ? "rod" : part === "轮" ? "reel" : "line";
+      rows[start + index - 1] = ["", `wtpl_${idPart}_${String(index + 1).padStart(4, "0")}`, "BOUND", part, String(index + 1), mins[index], maxes[index], grades[index]];
     }
   }
   return rows;
@@ -36,8 +38,18 @@ test("真实拉取夹具从 d6e928 冻结 W policy，并对三方 grade 篡改 f
     { weightBandId: "W3", upperBoundKg: "12.6" }, { weightBandId: "W4", upperBoundKg: "25.9" },
     { weightBandId: "W5", upperBoundKg: "82.5" }, { weightBandId: "W6", upperBoundKg: null },
   ]);
+  assert.equal(weightFixture()[17]![6], "235");
+  assert.equal(policy.bands[5]!.upperBoundKg, null);
+  const changedEverywhere = weightFixture();
+  for (const row of [4, 22, 40]) changedEverywhere[row]![6] = "3.9";
+  const changed = await pullFeishuWorkbookRevision({ workbook: CANONICAL_FEISHU_WORKBOOK, pulledAt: "2026-07-24T00:00:00.000Z", pulledBy: "tester", adapter: {
+    resolveWorkbook: async () => ({ spreadsheetToken: "redacted", sourceRevision: "4837", sheets: [{ sheetId: "d6e928", name: "01_重量模板", rowCount: 54, columnCount: 31 }] }),
+    readRanges: async () => [{ sheetId: "d6e928", range: "A1:AE54", revision: "4837", values: changedEverywhere }],
+  } });
+  assert.equal(changed.fiveAxisWeightBandPolicy!.bands[1]!.upperBoundKg, "3.9");
+  assert.notEqual(changed.fiveAxisWeightBandPolicyContentHash, policy.contentHash);
   const malformed = weightFixture();
-  malformed[20]![7] = "巨物";
+  malformed[20]![6] = "3.9";
   await assert.rejects(() => pullFeishuWorkbookRevision({ workbook: CANONICAL_FEISHU_WORKBOOK, pulledAt: "2026-07-24T00:00:00.000Z", pulledBy: "tester", adapter: {
     resolveWorkbook: async () => ({ spreadsheetToken: "redacted", sourceRevision: "4837", sheets: [{ sheetId: "d6e928", name: "01_重量模板", rowCount: 54, columnCount: 31 }] }),
     readRanges: async () => [{ sheetId: "d6e928", range: "A1:AE54", revision: "4837", values: malformed }],

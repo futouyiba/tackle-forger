@@ -1,4 +1,5 @@
 import { feishuApiBase, feishuTenantAccessToken } from "./feishu";
+import { FeishuApiError, feishuEndpointPath, maskToken } from "./feishu-api-error";
 import type {
   FeishuWorkbookPullAdapter,
   FeishuWorkbookRef,
@@ -28,6 +29,7 @@ async function openApi<T>(
   path: string,
   init: RequestInit = {},
   fetcher: FetchLike = fetch,
+  tokenContext?: string,
 ): Promise<T> {
   const token = await feishuTenantAccessToken();
   const response = await fetcher(feishuApiBase() + path, {
@@ -41,7 +43,14 @@ async function openApi<T>(
   });
   const payload = (await response.json()) as FeishuEnvelope<T>;
   if (!response.ok || payload.code !== 0 || payload.data === undefined) {
-    throw new Error(`飞书电子表格接口失败：${payload.msg || response.statusText}`);
+    throw new FeishuApiError({
+      reason: "飞书电子表格接口失败",
+      code: payload.code,
+      msg: payload.msg,
+      httpStatus: response.status,
+      endpoint: feishuEndpointPath(path),
+      tokenContext,
+    });
   }
   return payload.data;
 }
@@ -52,7 +61,12 @@ export async function resolveWikiSpreadsheetToken(
 ) {
   const data = await openApi<{
     node?: { obj_token?: string; obj_type?: string; node_token?: string };
-  }>(`/open-apis/wiki/v2/spaces/get_node?token=${encodeURIComponent(ref.wikiToken)}`, {}, fetcher);
+  }>(
+    `/open-apis/wiki/v2/spaces/get_node?token=${encodeURIComponent(ref.wikiToken)}`,
+    {},
+    fetcher,
+    `wiki:${maskToken(ref.wikiToken)}`,
+  );
   if (!data.node?.obj_token || data.node.obj_type !== "sheet") {
     throw new Error("唯一规则链接没有解析到飞书电子表格节点。");
   }
@@ -73,6 +87,7 @@ export async function readFeishuSheetRange(input: {
     `/open-apis/sheets/v2/spreadsheets/${encodeURIComponent(input.spreadsheetToken)}/values/${encodeURIComponent(locatedRange)}`,
     {},
     input.fetcher,
+    `spreadsheet:${maskToken(input.spreadsheetToken)}`,
   );
   const revision = data.valueRange?.revision ?? data.revision;
   if (!Number.isFinite(revision)) throw new Error("飞书未返回工作簿 revision。");
@@ -100,6 +115,7 @@ export async function readFeishuWorkbook(input: {
     `/open-apis/sheets/v3/spreadsheets/${encodeURIComponent(spreadsheetToken)}/sheets/query`,
     {},
     input.fetcher,
+    `spreadsheet:${maskToken(spreadsheetToken)}`,
   );
   const sheets: RemoteFeishuSheet[] = (data.sheets ?? []).flatMap((sheet) => {
     if (!sheet.sheet_id) return [];
@@ -160,5 +176,6 @@ export async function writeFeishuSheetRanges(input: {
       }),
     },
     input.fetcher,
+    `spreadsheet:${maskToken(input.spreadsheetToken)}`,
   );
 }

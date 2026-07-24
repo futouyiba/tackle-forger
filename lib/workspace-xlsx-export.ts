@@ -20,7 +20,7 @@ export interface WorkspaceExportInput {
   revision: number;
 }
 
-const REDACTED = "<redacted>";
+export const REDACTED = "<redacted>";
 const SENSITIVE_KEY = /token|secret|password|credential|nonce|session|apikey/i;
 
 type Cell = string | number | boolean | null;

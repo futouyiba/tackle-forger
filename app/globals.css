@@ -1947,6 +1947,7 @@ kbd {
 
 @media (max-width: 820px) {
   .sidebar {
+    max-height: 44vh;
     position: static;
     width: 100%;
   }

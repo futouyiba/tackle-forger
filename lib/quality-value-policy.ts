@@ -149,9 +149,11 @@ export function importQualityValuePolicyDraft(input: {
   pricingScoreEndpoints?: SourcedPricingValue<number>[];
   performanceScoringEnabled?: boolean;
   performanceScoringSource?: PricingCellRef;
+  /** Source-shape diagnostics retained with the draft; all are publish gates. */
+  sourceIssues?: QualityValidationIssue[];
   importedAt: string;
 }): QualityValuePolicyDraft {
-  const issues: QualityValidationIssue[] = [];
+  const issues: QualityValidationIssue[] = [...(input.sourceIssues ?? [])];
   const orderedRanges = [...input.ranges].sort((left, right) => left.minScore - right.minScore);
   const qualityIds: QualityId[] = ["quality_c_green", "quality_b_blue", "quality_a_purple", "quality_s_orange"];
   for (const qualityId of qualityIds) {

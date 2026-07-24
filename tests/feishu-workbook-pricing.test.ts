@@ -92,11 +92,20 @@ test("07_品质评分 grid 元数据无效时 fail-closed，不回退旧 B4:N50"
     revision.sheets.map((sheet) => sheet.sheetId === "FqD4j7" ? { ...sheet, rowCount: 0 } : sheet),
     revision.sheets.map((sheet) => sheet.sheetId === "FqD4j7" ? { ...sheet, columnCount: Number.NaN } : sheet),
   ]) assert.throws(() => canonicalQualitySheetRange({ ...revision, sheets }));
+  const atLimit = revision.sheets.map((sheet) => sheet.sheetId === "FqD4j7" ? { ...sheet, rowCount: 10_000, columnCount: 20 } : sheet);
+  assert.equal(canonicalQualitySheetRange({ ...revision, sheets: atLimit }), "A1:T10000");
+  for (const sheets of [
+    revision.sheets.map((sheet) => sheet.sheetId === "FqD4j7" ? { ...sheet, rowCount: 10_001, columnCount: 1 } : sheet),
+    revision.sheets.map((sheet) => sheet.sheetId === "FqD4j7" ? { ...sheet, rowCount: 1, columnCount: 201 } : sheet),
+    revision.sheets.map((sheet) => sheet.sheetId === "FqD4j7" ? { ...sheet, rowCount: 10_000, columnCount: 21 } : sheet),
+  ]) assert.throws(() => canonicalQualitySheetRange({ ...revision, sheets }));
 });
 
 test("生产同形品质矩阵按显式块头解析扩展列、移动块、空白镜像与未知/跨部位", () => {
   const sourceRevision = sourceRevisionWithAffixGrid();
   const qualityValues = Array.from({ length: 60 }, () => Array.from({ length: 19 }, () => "") as unknown[]);
+  qualityValues[2]![0] = "品质区间";
+  qualityValues[3]![1] = "品质"; qualityValues[3]![2] = "代码"; qualityValues[3]![4] = "≥最小评分"; qualityValues[3]![5] = "<最大评分";
   for (const [row, label, code, min, max] of [[5, "C/绿", "C", 0, 20], [6, "B/蓝", "B", 20, 40], [7, "A/紫", "A", 40, 65], [8, "S/橙", "S", 65, 100]] as const) qualityValues[row - 1] = ["", label, code, "", min, max];
   const addBlock = (headerRow: number, heading: string, aliases: string[]) => {
     qualityValues[headerRow - 1]![0] = heading;
@@ -125,13 +134,42 @@ test("生产同形品质矩阵按显式块头解析扩展列、移动块、空�
   assert.equal(valid.combinationRules.find((rule) => rule.itemPartId === "part:reel")?.source.cell, "C28");
   assert.deepEqual(valid.ranges.map((range) => [range.minScore, range.maxScore]), [[0, 20], [20, 40], [40, 65], [65, 100]]);
 
-  qualityValues[10]![0] = "不存在";
+  qualityValues[9]![2] = "不存在";
   const unknown = qualityDraftFromRanges({ sourceRevision, qualityValues, qualityRange: "A1:S60", affixValues, pricingEndpointValues: [[100]], importedAt: "2026-07-24T00:00:00.000Z" });
   assert.ok(unknown.issues.some((issue) => issue.code === "QUALITY_COMBINATION_ALIAS_UNKNOWN"));
 
-  qualityValues[10]![0] = "轮0";
+  qualityValues[9]![2] = "轮0";
   const crossPart = qualityDraftFromRanges({ sourceRevision, qualityValues, qualityRange: "A1:S60", affixValues, pricingEndpointValues: [[100]], importedAt: "2026-07-24T00:00:00.000Z" });
   assert.ok(crossPart.issues.some((issue) => issue.code === "QUALITY_COMBINATION_ALIAS_UNKNOWN"));
+});
+
+test("品质矩阵结构错误保留草稿并发布阻断，尾部合法缩写不能被误读", () => {
+  const sourceRevision = sourceRevisionWithAffixGrid();
+  const values = Array.from({ length: 60 }, () => Array.from({ length: 19 }, () => "") as unknown[]);
+  values[2]![0] = "品质区间";
+  values[3]![1] = "品质"; values[3]![2] = "代码"; values[3]![4] = "≥最小评分"; values[3]![5] = "<最大评分";
+  for (const [row, label, code, min, max] of [[5, "C/绿", "C", 0, 20], [6, "B/蓝", "B", 20, 40], [7, "A/紫", "A", 40, 65], [8, "S/橙", "S", 65, 100]] as const) values[row - 1] = ["", label, code, "", min, max];
+  for (const [row, heading, prefix] of [[10, "竿词条", "竿"], [27, "轮词条", "轮"], [46, "线词条", "线"]] as const) {
+    values[row - 1]![0] = heading; values[row - 1]![1] = `${prefix}0`; values[row - 1]![2] = `${prefix}2`;
+    values[row]![0] = `${prefix}0`; values[row]![1] = "—"; values[row]![2] = 1;
+  }
+  // This is a valid affix-looking tail row after the rod matrix; it must end
+  // the rod block and must not create a fourth matrix rule.
+  values[11]![0] = "竿1"; values[11]![1] = 9;
+  const affixValues = [["机器ID（勿改）", "", "部位", "", "缩写"], ["affix_rod_0", "", "竿", "", "竿0"], ["affix_rod_1", "", "竿", "", "竿1"], ["affix_rod_2", "", "竿", "", "竿2"], ["affix_reel_0", "", "轮", "", "轮0"], ["affix_reel_2", "", "轮", "", "轮2"], ["affix_line_0", "", "线", "", "线0"], ["affix_line_2", "", "线", "", "线2"]];
+  const blocked = qualityDraftFromRanges({ sourceRevision, qualityValues: values, qualityRange: "A1:S60", affixValues, pricingEndpointValues: [], importedAt: "2026-07-24T00:00:00.000Z" });
+  assert.equal(blocked.formalStatus, "NON_FORMAL");
+  assert.ok(blocked.issues.some((issue) => issue.code === "QUALITY_MATRIX_ROW_INVALID" && issue.sourceCell?.cell === "A12"));
+  assert.equal(blocked.combinationRules.length, 3);
+
+  values[26]![0] = "竿词条";
+  const duplicate = qualityDraftFromRanges({ sourceRevision, qualityValues: values, qualityRange: "A1:S60", affixValues, pricingEndpointValues: [], importedAt: "2026-07-24T00:00:00.000Z" });
+  assert.ok(duplicate.issues.some((issue) => issue.code === "QUALITY_MATRIX_BLOCK_DUPLICATE"));
+  assert.equal(duplicate.formalStatus, "NON_FORMAL");
+  values[26]![0] = "";
+  values[55]![10] = "C"; values[55]![11] = 0; values[55]![12] = 100;
+  const tailQuality = qualityDraftFromRanges({ sourceRevision, qualityValues: values, qualityRange: "A1:S60", affixValues, pricingEndpointValues: [], importedAt: "2026-07-24T00:00:00.000Z" });
+  assert.equal(tailQuality.ranges.length, 4);
 });
 
 test("同一完整高行号工作簿导入保持幂等", () => {

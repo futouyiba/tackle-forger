@@ -58,6 +58,12 @@ export const CANONICAL_IDENTITY_SHEET_SPECS: IdentitySheetSpec[] = [
 const AFFIX_SHEET_ID = "zrVOxd";
 const WEIGHT_TEMPLATE_SHEET_ID = "d6e928";
 const QUALITY_SHEET_ID = "FqD4j7";
+// The repository's Feishu reader already rejects sources over 10,000 rows.
+// Keep this whole-sheet read below the same row ceiling and additionally cap
+// columns/cells so corrupt grid metadata cannot request an unbounded payload.
+const MAXIMUM_FEISHU_SHEET_ROWS = 10_000;
+const MAXIMUM_QUALITY_SHEET_COLUMNS = 200;
+const MAXIMUM_QUALITY_SHEET_CELLS = 200_000;
 /** The header occupies row 2; a smaller grid cannot hold an affix machine row. */
 const MINIMUM_AFFIX_MACHINE_ROW_COUNT = 3;
 
@@ -105,7 +111,9 @@ export function canonicalQualitySheetRange(sourceRevision: FeishuSourceRevision)
   const sheet = sourceRevision.sheets.find((candidate) => candidate.sheetId === QUALITY_SHEET_ID);
   const rowCount = sheet?.rowCount;
   const columnCount = sheet?.columnCount;
-  if (!Number.isSafeInteger(rowCount) || rowCount! < 1 || !Number.isSafeInteger(columnCount) || columnCount! < 1) {
+  if (!Number.isSafeInteger(rowCount) || rowCount! < 1 || rowCount! > MAXIMUM_FEISHU_SHEET_ROWS
+    || !Number.isSafeInteger(columnCount) || columnCount! < 1 || columnCount! > MAXIMUM_QUALITY_SHEET_COLUMNS
+    || rowCount! * columnCount! > MAXIMUM_QUALITY_SHEET_CELLS) {
     throw new Error("07_品质评分/FqD4j7 缺少可验证的 grid 元数据；已停止读取，避免截断或猜测组合矩阵。");
   }
   return `A1:${spreadsheetColumnName(columnCount! - 1)}${rowCount}`;
@@ -438,31 +446,60 @@ export function qualityDraftFromRanges(input: {
   const rangeStartRow = rangeStart?.[2] ? Number(rangeStart[2]) : 4;
   const sourceRow = (index: number) => rangeStartRow + index;
   const sourceColumn = (index: number) => spreadsheetColumnName(rangeStartColumn + index);
+  const sourceCell = (rowIndex: number, columnIndex: number) => ({ sheetId: QUALITY_SHEET_ID, cell: `${sourceColumn(columnIndex)}${sourceRow(rowIndex)}`, rowKey: String(sourceRow(rowIndex)) });
+  const sourceIssues: QualityValuePolicyDraft["issues"] = [];
+  const structureIssue = (code: string, message: string, rowIndex: number, columnIndex: number, itemPartId?: string) => sourceIssues.push({
+    source: "quality", code, severity: "ERROR", gate: "PUBLISH", message,
+    sourceRevision: input.sourceRevision.sourceRevision, sourceCell: sourceCell(rowIndex, columnIndex), itemPartId,
+    relatedObjectIds: [],
+    actions: [
+      { action: "navigate", label: "查看规则源", targetRoute: "/?page=rule-workbook", enabled: true, requiredCapabilities: ["feishu.workbook.read"] },
+      { action: "retry", label: "修复后重新拉取", targetRoute: "/?page=rule-workbook", enabled: true, requiredCapabilities: ["feishu.workbook.pull"] },
+    ],
+  });
 
-  // The range table is identified by its canonical C/B/A/S row identity, not
-  // by a fixed row.  Its two finite score endpoints are the first two values
-  // after that row's quality code, preserving the real source cells.
-  const ranges: QualityValueRange[] = input.qualityValues.flatMap((row, rowIndex) => row.flatMap((value, codeIndex) => {
-    const qualityId = qualityIds[text(value)];
-    if (!qualityId || !text(row[codeIndex - 1]).includes(text(value))) return [];
-    const endpoints = row.slice(codeIndex + 1)
-      .flatMap((candidate, offset) => text(candidate) === "" ? [] : [{ value: Number(candidate), index: codeIndex + 1 + offset }])
-      .filter((candidate) => Number.isFinite(candidate.value))
-      .slice(0, 2);
-    if (endpoints.length !== 2) return [];
-    return [{
-      qualityId,
-      minScore: endpoints[0]!.value,
-      maxScore: endpoints[1]!.value,
-      maxInclusive: false,
-      status: "SOURCE" as const,
-      source: {
-        sheetId: QUALITY_SHEET_ID,
-        cell: `${sourceColumn(endpoints[0]!.index)}${sourceRow(rowIndex)}:${sourceColumn(endpoints[1]!.index)}${sourceRow(rowIndex)}`,
-        rowKey: String(sourceRow(rowIndex)),
-      },
+  // Only the explicit 品质区间 table is authoritative.  Do not scan the rest
+  // of a workbook for isolated C/B/A/S values that happen to look like scores.
+  const qualityTableHeaders = input.qualityValues.flatMap((row, rowIndex) => row.flatMap((value, columnIndex) => text(value) === "品质区间" ? [{ rowIndex, columnIndex }] : []));
+  if (qualityTableHeaders.length !== 1) structureIssue(
+    qualityTableHeaders.length ? "QUALITY_RANGE_TABLE_DUPLICATE" : "QUALITY_RANGE_TABLE_MISSING",
+    "07_品质评分必须且只能有一个精确的“品质区间”表头。",
+    qualityTableHeaders[0]?.rowIndex ?? 0, qualityTableHeaders[0]?.columnIndex ?? 0,
+  );
+  const qualityTable = qualityTableHeaders[0];
+  const qualityFieldLabels = ["品质", "代码", "≥最小评分", "<最大评分"] as const;
+  const qualityFieldHeaders = qualityTable ? input.qualityValues
+    .slice(qualityTable.rowIndex + 1)
+    .flatMap((row, offset) => {
+      const indices = qualityFieldLabels.map((label) => row.findIndex((value) => text(value) === label));
+      return indices.every((index) => index >= 0) && new Set(indices).size === indices.length
+        ? [{ rowIndex: qualityTable.rowIndex + 1 + offset, indices }] : [];
+    }) : [];
+  if (qualityTable && qualityFieldHeaders.length !== 1) structureIssue(
+    qualityFieldHeaders.length ? "QUALITY_RANGE_TABLE_HEADER_DUPLICATE" : "QUALITY_RANGE_TABLE_HEADER_MISSING",
+    "品质区间必须在 marker 后且只能有一个包含“品质、代码、≥最小评分、<最大评分”的字段表头。",
+    qualityFieldHeaders[0]?.rowIndex ?? qualityTable.rowIndex, qualityTable.columnIndex,
+  );
+  const qualityFieldHeader = qualityFieldHeaders[0];
+  const expectedQualityRows = [["C/绿", "C"], ["B/蓝", "B"], ["A/紫", "A"], ["S/橙", "S"]] as const;
+  const ranges: QualityValueRange[] = qualityTable && qualityFieldHeader ? expectedQualityRows.flatMap(([label, code], offset) => {
+    const rowIndex = qualityFieldHeader.rowIndex + 1 + offset;
+    const row = input.qualityValues[rowIndex] ?? [];
+    const [labelIndex, codeIndex, minIndex, maxIndex] = qualityFieldHeader.indices;
+    if (text(row[labelIndex]) !== label || text(row[codeIndex]) !== code) {
+      structureIssue("QUALITY_RANGE_TABLE_ROW_INVALID", `品质区间必须按规范行保留 ${label} / ${code}。`, rowIndex, labelIndex);
+      return [];
+    }
+    const minScore = Number(row[minIndex]);
+    const maxScore = Number(row[maxIndex]);
+    if (!Number.isFinite(minScore) || !Number.isFinite(maxScore)) {
+      structureIssue("QUALITY_RANGE_TABLE_ENDPOINT_INVALID", `${label} 缺少两个有限评分端点。`, rowIndex, codeIndex);
+      return [];
+    }
+    return [{ qualityId: qualityIds[code]!, minScore, maxScore, maxInclusive: false, status: "SOURCE" as const,
+      source: { sheetId: QUALITY_SHEET_ID, cell: `${sourceColumn(minIndex)}${sourceRow(rowIndex)}:${sourceColumn(maxIndex)}${sourceRow(rowIndex)}`, rowKey: String(sourceRow(rowIndex)) },
     }];
-  }));
+  }) : [];
   const aliases: AffixAliasBinding[] = input.affixValues.slice(1).flatMap((row, index) => {
     const affixId = text(row[0]);
     const itemPartId = partIds[text(row[2])];
@@ -477,6 +514,10 @@ export function qualityDraftFromRanges(input: {
     const itemPartId = matrixPartByHeader.get(text(value));
     return itemPartId ? [{ rowIndex, columnIndex, itemPartId }] : [];
   }));
+  for (const [heading, itemPartId] of matrixPartByHeader) {
+    const matches = blocks.filter((block) => block.itemPartId === itemPartId);
+    if (matches.length !== 1) structureIssue(matches.length ? "QUALITY_MATRIX_BLOCK_DUPLICATE" : "QUALITY_MATRIX_BLOCK_MISSING", `组合矩阵块“${heading}”必须且只能出现一次。`, matches[0]?.rowIndex ?? 0, matches[0]?.columnIndex ?? 0, itemPartId);
+  }
   for (const [blockIndex, block] of blocks.entries()) {
     const header = input.qualityValues[block.rowIndex] ?? [];
     const aliases = header.flatMap((value, columnIndex) => (
@@ -484,12 +525,18 @@ export function qualityDraftFromRanges(input: {
         ? [{ alias: text(value), columnIndex }]
         : []
     ));
+    const aliasSet = new Set(aliases.map((entry) => entry.alias));
+    if (!aliases.length) structureIssue("QUALITY_MATRIX_HEADER_INVALID", "组合矩阵块缺少右侧缩写表头。", block.rowIndex, block.columnIndex, block.itemPartId);
     const endRowIndex = blocks[blockIndex + 1]?.rowIndex ?? input.qualityValues.length;
     for (let rowIndex = block.rowIndex + 1; rowIndex < endRowIndex; rowIndex += 1) {
       const row = input.qualityValues[rowIndex] ?? [];
       const leftAlias = text(row[block.columnIndex]);
+      if (!leftAlias) break;
+      if (!aliasSet.has(leftAlias)) {
+        structureIssue("QUALITY_MATRIX_ROW_INVALID", `组合矩阵行缩写 ${leftAlias} 不属于该块的显式表头集合。`, rowIndex, block.columnIndex, block.itemPartId);
+        break;
+      }
       for (const { alias: rightAlias, columnIndex } of aliases) {
-        if (!leftAlias) continue;
         const raw = row[columnIndex];
         const value = raw === null || raw === undefined || text(raw) === ""
           ? ""
@@ -517,6 +564,7 @@ export function qualityDraftFromRanges(input: {
     ranges,
     aliases,
     matrixCells,
+    sourceIssues,
     pricingScoreEndpoints,
     performanceScoringEnabled: undefined,
     performanceScoringSource: { sheetId: "FqD4j7", cell: "B2", rowKey: "2" },

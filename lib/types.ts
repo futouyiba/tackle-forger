@@ -1211,6 +1211,16 @@ export type FiveAxisHashInputSchemaVersion = "five-axis-hash-input/v1";
 export type FiveAxisProjectionReferenceSelectorVersion =
   "projection-reference/current-sku-frozen-match/v1";
 
+/** Immutable, published authority for five-axis W-band resolution. */
+export interface FiveAxisWeightBandPolicy {
+  policyId: string;
+  version: string;
+  publicationState: "PUBLISHED";
+  sourceRevision: string;
+  bands: Array<{ weightBandId: string; upperBoundKg: string | null }>;
+  contentHash: string;
+}
+
 export interface FiveAxisAxisDefinition {
   axisId: string;
   label: string;
@@ -1244,6 +1254,7 @@ export interface FiveAxisViewDefinition {
     FiveAxisAxisDefinition,
   ];
   weightBandPolicyVersion: string;
+  weightBandPolicy: FiveAxisWeightBandPolicy;
   displayBandConfigId: string;
   seriesBaselinePolicy: {
     mode: "projection_reference";

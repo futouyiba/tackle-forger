@@ -20,6 +20,7 @@ import type {
   FiveAxisVertexGroupKey,
   FiveAxisVertexSet,
   FiveAxisViewDefinition,
+  FiveAxisWeightBandPolicy,
   ModelComponentSelection,
   ModelFiveAxisPreview,
   StoredFiveAxisViewDefinition,
@@ -32,22 +33,63 @@ export const FIVE_AXIS_PROJECTION_REFERENCE_SELECTOR_VERSION =
 export const FIVE_AXIS_DISPOSITION_CATALOG_SCHEMA_VERSION =
   "five-axis-definition-disposition-catalog/v1" as const;
 
-/** The currently published OPEN-005 W policy.  New policy versions must add
- * their own resolver rather than letting a caller choose a self-consistent W. */
+function weightBandPolicyContent(
+  policy: Omit<FiveAxisWeightBandPolicy, "contentHash"> | FiveAxisWeightBandPolicy,
+): Omit<FiveAxisWeightBandPolicy, "contentHash"> {
+  const content = { ...policy } as Partial<FiveAxisWeightBandPolicy>;
+  delete content.contentHash;
+  return content as Omit<FiveAxisWeightBandPolicy, "contentHash">;
+}
+
+export function hashFiveAxisWeightBandPolicy(
+  policy: Omit<FiveAxisWeightBandPolicy, "contentHash"> | FiveAxisWeightBandPolicy,
+): string {
+  return hashCanonicalJson(weightBandPolicyContent(policy) as never);
+}
+
+export function createFormalFiveAxisWeightBandPolicy(input?: {
+  policyId?: string; version?: string; sourceRevision?: string;
+  bands?: Array<{ weightBandId: string; upperBoundKg: string | null }>;
+}): FiveAxisWeightBandPolicy {
+  const content: Omit<FiveAxisWeightBandPolicy, "contentHash"> = {
+    policyId: input?.policyId ?? "weight-band:w6-open005",
+    version: input?.version ?? "weight-band:w6-open005-v1",
+    publicationState: "PUBLISHED",
+    sourceRevision: input?.sourceRevision ?? "feishu-revision-3563",
+    bands: input?.bands ?? [
+      { weightBandId: "W1", upperBoundKg: "2" }, { weightBandId: "W2", upperBoundKg: "4" },
+      { weightBandId: "W3", upperBoundKg: "6" }, { weightBandId: "W4", upperBoundKg: "10" },
+      { weightBandId: "W5", upperBoundKg: "15" }, { weightBandId: "W6", upperBoundKg: null },
+    ],
+  };
+  return { ...content, contentHash: hashFiveAxisWeightBandPolicy(content) };
+}
+
+/** Only a published, content-hash-bound policy may select an OPEN-005 W band. */
 export function resolveFormalFiveAxisWeightBand(input: {
-  policyVersion: string;
+  policy: FiveAxisWeightBandPolicy;
   modelFinalPullKg: number;
 }): string {
-  if (
-    input.policyVersion !== "weight-band:w6-open005-v1"
-    || !Number.isFinite(input.modelFinalPullKg)
-    || input.modelFinalPullKg <= 0
-  ) {
+  const policy = input.policy;
+  if (policy.publicationState !== "PUBLISHED"
+    || policy.contentHash !== hashFiveAxisWeightBandPolicy(policy)
+    || !Number.isFinite(input.modelFinalPullKg) || input.modelFinalPullKg <= 0) {
     throw new Error("FIVE_AXIS_WEIGHT_BAND_POLICY_UNAVAILABLE：无法按已发布 W 段策略解析最终拉力。");
   }
-  const upperBounds = [2, 4, 6, 10, 15];
-  const index = upperBounds.findIndex((upper) => input.modelFinalPullKg <= upper);
-  return `W${index < 0 ? 6 : index + 1}`;
+  let previous = 0;
+  for (const band of policy.bands) {
+    if (!band.weightBandId || band.upperBoundKg === "" || band.upperBoundKg === undefined) {
+      throw new Error("FIVE_AXIS_WEIGHT_BAND_POLICY_UNAVAILABLE：W 段策略结构不完整。");
+    }
+    if (band.upperBoundKg === null) return band.weightBandId;
+    const upper = Number(band.upperBoundKg);
+    if (!Number.isFinite(upper) || upper <= previous) {
+      throw new Error("FIVE_AXIS_WEIGHT_BAND_POLICY_UNAVAILABLE：W 段边界非法或不单调。");
+    }
+    if (input.modelFinalPullKg <= upper) return band.weightBandId;
+    previous = upper;
+  }
+  throw new Error("FIVE_AXIS_WEIGHT_BAND_POLICY_UNAVAILABLE：W 段策略缺少开放尾段。");
 }
 
 const FORMAL_AXIS_CONTRACT = [
@@ -155,11 +197,16 @@ export function createFormalFiveAxisViewDefinition(input?: {
   revision?: number;
   publicationState?: FiveAxisViewDefinition["publicationState"];
   weightBandPolicyVersion?: string;
+  weightBandPolicy?: FiveAxisWeightBandPolicy;
   displayBandConfigId?: string;
   fiveAxisRuleVersion?: string;
   sourceRevision?: string;
   maximumItems?: number;
 }): FiveAxisViewDefinition {
+  const weightBandPolicy = input?.weightBandPolicy ?? createFormalFiveAxisWeightBandPolicy({
+    version: input?.weightBandPolicyVersion,
+    sourceRevision: input?.sourceRevision,
+  });
   const content: Omit<FiveAxisViewDefinition, "definitionHash"> = {
     definitionId: input?.definitionId ?? "five-axis:open005-v1",
     version: input?.version ?? "1",
@@ -180,8 +227,8 @@ export function createFormalFiveAxisViewDefinition(input?: {
       componentAggregationId: "per_component_no_aggregate",
       missingPolicy: "error",
     })) as FiveAxisViewDefinition["axes"],
-    weightBandPolicyVersion:
-      input?.weightBandPolicyVersion ?? "weight-band:w6-open005-v1",
+    weightBandPolicyVersion: weightBandPolicy.version,
+    weightBandPolicy,
     displayBandConfigId:
       input?.displayBandConfigId ?? "five-axis:display-band-open005-v1",
     seriesBaselinePolicy: {
@@ -227,6 +274,14 @@ export function assertFormalFiveAxisViewDefinition(
   }
   if (definition.publicationState !== "PUBLISHED") {
     throw new Error("FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE：定义尚未发布。");
+  }
+  if (
+    definition.weightBandPolicyVersion !== definition.weightBandPolicy?.version
+    || definition.weightBandPolicy?.publicationState !== "PUBLISHED"
+    || definition.weightBandPolicy?.contentHash
+      !== hashFiveAxisWeightBandPolicy(definition.weightBandPolicy)
+  ) {
+    throw new Error("FIVE_AXIS_WEIGHT_BAND_POLICY_UNAVAILABLE：正式定义缺少可验证的已发布 W 段策略。");
   }
   if (definition.axes.length !== FORMAL_AXIS_CONTRACT.length) {
     throw new Error("FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE：正式定义必须恰好五轴。");
@@ -870,6 +925,16 @@ function formalSeriesHashInput(series: FiveAxisSeries): object {
       overflow: point.overflow === null
         ? null
         : canonicalFiniteNumber(point.overflow, `${point.axisId}.overflow`),
+      trace: (() => {
+        if (!Array.isArray(point.trace) || point.trace.length === 0) {
+          throw new Error("FIVE_AXIS_FORMAL_PREVIEW_INVALID：正式点必须冻结非空计算 Trace。");
+        }
+        return point.trace.map((entry) => ({
+          step: entry.step,
+          message: entry.message,
+          value: entry.value === undefined ? null : entry.value,
+        }));
+      })(),
     })),
   };
 }
@@ -966,6 +1031,17 @@ function assertFormalSeriesPoint(input: {
     ) {
       throw new Error("FIVE_AXIS_FORMAL_PREVIEW_INVALID：继承抛投证据与参考竿不一致。");
     }
+    const expectedTrace = [
+      ...referencePoint.trace,
+      {
+        step: "context_inherited",
+        message: "此抛投值继承自比较顺序中的第一根竿，仅用于完整展示。",
+        value: input.referenceRod.entityId,
+      },
+    ];
+    if (JSON.stringify(input.point.trace) !== JSON.stringify(expectedTrace)) {
+      throw new Error("FIVE_AXIS_FORMAL_PREVIEW_INVALID：继承抛投的 Trace 链不可重放。");
+    }
     return;
   }
   const vertex = input.vertexSet.vertices[input.axisIndex];
@@ -997,6 +1073,18 @@ function assertFormalSeriesPoint(input: {
   ) {
     throw new Error("FIVE_AXIS_FORMAL_PREVIEW_INVALID：正式点的比例或分值证据不可重放。");
   }
+  const parameterKey = axis.sourceParameterKeys[0];
+  const expectedTrace = [
+    { step: "direct_input", message: `读取 ${parameterKey}。`, value: rawValue },
+    {
+      step: axis.direction === "lower_better" ? "vertex_over_raw" : "raw_over_vertex",
+      message: "按已发布定义计算未封顶比例。",
+      value: ratio,
+    },
+  ];
+  if (JSON.stringify(input.point.trace) !== JSON.stringify(expectedTrace)) {
+    throw new Error("FIVE_AXIS_FORMAL_PREVIEW_INVALID：正式 direct 点的 Trace 不可重放。");
+  }
 }
 
 export function assertFormalModelFiveAxisPreview(input: {
@@ -1019,7 +1107,7 @@ export function assertFormalModelFiveAxisPreview(input: {
   assertFormalFiveAxisViewDefinition(input.definition);
   const preview = input.preview;
   const resolvedWeightBandId = resolveFormalFiveAxisWeightBand({
-    policyVersion: input.definition.weightBandPolicyVersion,
+    policy: input.definition.weightBandPolicy,
     modelFinalPullKg: input.expectedModelFinalPullKg,
   });
   if (

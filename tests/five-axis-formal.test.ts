@@ -5,7 +5,9 @@ import {
   createFiveAxisDispositionCatalogRevision,
   createFormalFiveAxisVertexSet,
   createFormalFiveAxisViewDefinition,
+  createFormalFiveAxisWeightBandPolicy,
   hashFiveAxisDispositionCatalog,
+  resolveFormalFiveAxisWeightBand,
   resolveFormalFiveAxisDefinition,
   validateFiveAxisDispositionCatalog,
 } from "../lib/five-axis-formal";
@@ -79,6 +81,21 @@ test("CanonicalDecimal 无浮点舍入地归一化并拒绝非法值", () => {
   assert.equal(canonicalDecimal("0.0000000000000000001"), "0.0000000000000000001");
   assert.throws(() => canonicalDecimal("NaN"), /非法 CanonicalDecimal/);
   assert.throws(() => canonicalDecimal("Infinity"), /非法 CanonicalDecimal/);
+});
+
+test("正式 W 段只从不可变已发布策略 payload 解析，篡改或同名异 hash 均拒绝", () => {
+  const policy = createFormalFiveAxisWeightBandPolicy();
+  assert.equal(resolveFormalFiveAxisWeightBand({ policy, modelFinalPullKg: 2 }), "W1");
+  assert.equal(resolveFormalFiveAxisWeightBand({ policy, modelFinalPullKg: 2.01 }), "W2");
+  const tampered = structuredClone(policy);
+  tampered.bands[0].upperBoundKg = "3";
+  assert.throws(() => resolveFormalFiveAxisWeightBand({
+    policy: tampered, modelFinalPullKg: 2.5,
+  }), /FIVE_AXIS_WEIGHT_BAND_POLICY_UNAVAILABLE/);
+  assert.throws(() => resolveFormalFiveAxisWeightBand({
+    policy: { ...policy, version: policy.version, contentHash: "0".repeat(64) },
+    modelFinalPullKg: 2,
+  }), /FIVE_AXIS_WEIGHT_BAND_POLICY_UNAVAILABLE/);
 });
 
 function legacyDefinition(): LegacyFiveAxisViewDefinition {

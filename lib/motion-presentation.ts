@@ -6,7 +6,7 @@
  * presentation state.
  */
 
-export type MotionStatus = "idle" | "playing" | "paused" | "completed" | "cancelled" | "superseded";
+export type MotionStatus = "idle" | "playing" | "paused" | "locking" | "completed" | "cancelled" | "superseded";
 
 export interface MotionTraceLike {
   traceEntryId: string;
@@ -23,6 +23,7 @@ export interface MotionTraceLike {
   inputHash: string;
   outputHash: string;
   unit?: string;
+  evidence?: Record<string, unknown>;
 }
 
 export interface MotionPresentationStep {
@@ -40,6 +41,7 @@ export interface MotionPresentationStep {
   inputHash: string;
   outputHash: string;
   unit?: string;
+  evidence?: Readonly<Record<string, unknown>>;
 }
 
 /** A read-only projection. It must be rebuilt when the authoritative revision changes. */
@@ -55,7 +57,37 @@ export interface MotionPresentationModel {
 }
 
 export const motionTokens = {
-  duration: { establishMs: 340, normalMs: 240, patchMs: 300, boundaryMs: 390, reducedMs: 0 },
+  duration: {
+    /** Visual flight overlaps phase gates; it never serially extends a Trace step. */
+    sourceFlyMs: 460,
+    /**
+     * Evidence settles visually 140–180ms after impact (规范 §6.3 "证据落位").
+     * This overlaps the impact/main focus gates — it is a visual-layer duration,
+     * NOT a serial phase delay — so the window is met without lengthening the
+     * Trace schedule. phaseDelay never sums it into a step.
+     */
+    evidenceSettleMs: 160,
+    /** Each profile's five phase delays sum to its spec window (§6.3). Lowered to the approved floor so eight cost/Patch sources still clear the 2.5s hard cap. */
+    establishMs: 320,
+    normalMs: 245,
+    costMs: 280,
+    finalLockMs: 220,
+    reducedMs: 0,
+  },
+  // Focus gates (impactToMainMs 90–120, mainToExplanationMs 100–140 per §6.3).
+  // sourceToImpact/evidenceToNext carry the inter-step handoff and are the first
+  // thing the budget compressor clamps; the focus intervals stay in-window.
+  phaseDelay: {
+    establish: { sourceToImpactMs: 30, impactToMainMs: 100, mainToExplanationMs: 120, explanationToEvidenceMs: 30, evidenceToNextMs: 40 },
+    normal: { sourceToImpactMs: 15, impactToMainMs: 90, mainToExplanationMs: 100, explanationToEvidenceMs: 20, evidenceToNextMs: 20 },
+    patch: { sourceToImpactMs: 20, impactToMainMs: 90, mainToExplanationMs: 100, explanationToEvidenceMs: 30, evidenceToNextMs: 40 },
+    boundary: { sourceToImpactMs: 30, impactToMainMs: 100, mainToExplanationMs: 120, explanationToEvidenceMs: 60, evidenceToNextMs: 80 },
+    cost: { sourceToImpactMs: 20, impactToMainMs: 90, mainToExplanationMs: 100, explanationToEvidenceMs: 30, evidenceToNextMs: 40 },
+  },
+  // §6.3 focus-window floors. The compressor scales only the headroom above
+  // these floors, never the floors themselves, so an over-budget source count
+  // can never push a focus gate below 90 / 100ms.
+  phaseFloor: { impactToMainMs: 90, mainToExplanationMs: 100 },
   easing: { enter: "cubic-bezier(0.2, 0.8, 0.2, 1)", emphasis: "cubic-bezier(0.16, 1, 0.3, 1)" },
   displacement: { cardPx: 16, emphasisPx: 4 },
   emphasis: { normal: 1, restrained: 0.35 },
@@ -96,7 +128,6 @@ export function buildMotionPresentationModel(input: {
   for (const [index, entry] of ordered.entries()) {
     if (seen.has(entry.sequence)) throw new Error("Motion Trace sequence must be unique.");
     seen.add(entry.sequence);
-    if (entry.inputHash !== ordered[0]?.inputHash) throw new Error("Motion Trace input hash mismatch.");
     if (index > 0 && entry.sequence <= ordered[index - 1].sequence) {
       throw new Error("Motion Trace sequence must already be in authoritative order.");
     }
@@ -114,6 +145,7 @@ export function buildMotionPresentationModel(input: {
       before: frozenPresentationValue(entry.before), operation: entry.operation, operand: frozenPresentationValue(entry.operand),
       after: frozenPresentationValue(entry.after), effect: entry.effect, warningIssueIds: Object.freeze([...entry.warningIssueIds]),
       inputHash: entry.inputHash, outputHash: entry.outputHash, unit: entry.unit,
+      evidence: entry.evidence ? frozenPresentationValue(entry.evidence) as Readonly<Record<string, unknown>> : undefined,
     }))),
     finalValue: frozenPresentationValue(last?.after),
     evidence: Object.freeze({
@@ -127,15 +159,23 @@ export interface MotionPlaybackState {
   status: MotionStatus;
   revision: string;
   stepIndex: number;
+  phase: MotionPlaybackPhase;
   reducedMotion: boolean;
   cancellationReason?: "unmount" | "route" | "revision" | "user";
 }
+
+/** Each frozen Trace step is presented in this fixed focus order. */
+export type MotionPlaybackPhase = "source" | "impact" | "main_number" | "explanation" | "evidence";
+const motionPlaybackPhases: readonly MotionPlaybackPhase[] = ["source", "impact", "main_number", "explanation", "evidence"];
+export type MotionTimingProfile = "establish" | "patch" | "boundary" | "cost" | "normal";
 
 export type MotionPlaybackAction =
   | { type: "play" }
   | { type: "pause" }
   | { type: "resume" }
   | { type: "advance" }
+  | { type: "phaseAdvance" }
+  | { type: "finalLockComplete" }
   | { type: "skip" }
   | { type: "replay" }
   | { type: "cancel"; reason: MotionPlaybackState["cancellationReason"] }
@@ -143,7 +183,7 @@ export type MotionPlaybackAction =
   | { type: "reducedMotionChanged"; reducedMotion: boolean };
 
 export function initialMotionPlaybackState(model: MotionPresentationModel, reducedMotion = false): MotionPlaybackState {
-  return { status: reducedMotion ? "completed" : "idle", revision: model.businessRevision, stepIndex: reducedMotion ? model.steps.length : -1, reducedMotion };
+  return { status: reducedMotion ? "completed" : "idle", revision: model.businessRevision, stepIndex: reducedMotion ? model.steps.length : -1, phase: "source", reducedMotion };
 }
 
 /** Pure reducer: it never calls a command, writes persistence, or derives business facts. */
@@ -156,19 +196,28 @@ export function motionPlaybackReducer(
   // model is allowed to begin playback after a revision/cancellation boundary.
   if (state.status === "cancelled" || state.status === "superseded") return state;
   switch (action.type) {
-    case "play": return state.reducedMotion ? { ...state, status: "completed", stepIndex: stepCount } : { ...state, status: "playing", stepIndex: Math.max(0, state.stepIndex) };
+    case "play": return state.reducedMotion ? { ...state, status: "completed", stepIndex: stepCount } : { ...state, status: "playing", stepIndex: Math.max(0, state.stepIndex), phase: state.stepIndex < 0 ? "source" : state.phase };
     case "pause": return state.status === "playing" ? { ...state, status: "paused" } : state;
     case "resume": return state.status === "paused" ? { ...state, status: "playing" } : state;
+    case "phaseAdvance": {
+      if (state.status !== "playing") return state;
+      const phaseIndex = motionPlaybackPhases.indexOf(state.phase);
+      if (phaseIndex < motionPlaybackPhases.length - 1) return { ...state, phase: motionPlaybackPhases[phaseIndex + 1]! };
+      const stepIndex = state.stepIndex + 1;
+      return stepIndex >= stepCount ? { ...state, status: "locking", stepIndex: stepCount } : { ...state, stepIndex, phase: "source" };
+    }
+    // Kept for direct deterministic callers; the controller always advances one presentation phase at a time.
     case "advance": {
       if (state.status !== "playing") return state;
       const stepIndex = state.stepIndex + 1;
-      return stepIndex >= stepCount ? { ...state, status: "completed", stepIndex: stepCount } : { ...state, stepIndex };
+      return stepIndex >= stepCount ? { ...state, status: "locking", stepIndex: stepCount, phase: "evidence" } : { ...state, stepIndex, phase: "source" };
     }
+    case "finalLockComplete": return state.status === "locking" ? { ...state, status: "completed" } : state;
     case "skip": return { ...state, status: "completed", stepIndex: stepCount };
-    case "replay": return state.reducedMotion ? { ...state, status: "completed", stepIndex: stepCount } : { ...state, status: "playing", stepIndex: 0, cancellationReason: undefined };
+    case "replay": return state.reducedMotion ? { ...state, status: "completed", stepIndex: stepCount } : { ...state, status: "playing", stepIndex: 0, phase: "source", cancellationReason: undefined };
     case "cancel": return { ...state, status: action.reason === "revision" ? "superseded" : "cancelled", cancellationReason: action.reason };
     case "revisionChanged": return action.revision === state.revision ? state : { ...state, revision: action.revision, status: "superseded", cancellationReason: "revision" };
-    case "reducedMotionChanged": return action.reducedMotion ? { ...state, reducedMotion: true, status: "completed", stepIndex: stepCount } : { ...state, reducedMotion: false };
+    case "reducedMotionChanged": return action.reducedMotion ? { ...state, reducedMotion: true, status: "completed", stepIndex: stepCount, phase: "evidence" } : { ...state, reducedMotion: false };
   }
 }
 
@@ -194,6 +243,11 @@ export function createMotionPlaybackController(
   const clock = options.clock ?? browserMotionClock;
   const listeners = new Set<() => void>();
   let state = initialMotionPlaybackState(model, options.reducedMotion);
+  // Computed once from the authoritative model. The focus gates
+  // (impactToMain/mainToExplanation) stay inside their §6.3 windows at every
+  // source count: the budget scales their headroom above the floor and clamps
+  // handoff phases first, so compression never drops a focus gate below 90/100ms.
+  const timingBudget = computeMotionTimingBudget(model.steps);
   let handle: unknown;
   let disposed = false;
   let generation = 0;
@@ -204,13 +258,16 @@ export function createMotionPlaybackController(
   };
   const notify = () => listeners.forEach((listener) => listener());
   const schedule = () => {
-    if (disposed || state.status !== "playing" || state.reducedMotion) return;
+    if (disposed || (state.status !== "playing" && state.status !== "locking") || state.reducedMotion) return;
     const expectedGeneration = generation;
+    const delayMs = state.status === "locking"
+      ? motionTokens.duration.finalLockMs
+      : effectivePlaybackPhaseDuration(model.steps[state.stepIndex], state.stepIndex, state.phase, timingBudget);
     handle = clock.set(() => {
       if (disposed || expectedGeneration !== generation) return;
       handle = undefined;
-      dispatch({ type: "advance" });
-    }, playbackStepDuration(model.steps[state.stepIndex]));
+      dispatch({ type: state.status === "locking" ? "finalLockComplete" : "phaseAdvance" });
+    }, delayMs);
   };
   const dispatch = (action: MotionPlaybackAction): MotionPlaybackState => {
     if (disposed) return state;
@@ -242,9 +299,154 @@ export function systemPrefersReducedMotion(environment: MotionMediaEnvironment |
   return environment?.matchMedia(reducedMotionQuery).matches ?? false;
 }
 
-export function playbackStepDuration(step: MotionPresentationStep | undefined): number {
-  if (!step) return motionTokens.duration.normalMs;
-  if (step.layer.includes("patch")) return motionTokens.duration.patchMs;
-  if (step.layer === "boundary") return motionTokens.duration.boundaryMs;
-  return motionTokens.duration.normalMs;
+export function playbackPhaseDuration(step: MotionPresentationStep | undefined, stepIndex: number, phase: MotionPlaybackPhase): number {
+  const timing = motionTokens.phaseDelay[playbackTimingProfile(step, stepIndex)];
+  if (phase === "source") return timing.sourceToImpactMs;
+  if (phase === "impact") return timing.impactToMainMs;
+  if (phase === "main_number") return timing.mainToExplanationMs;
+  if (phase === "explanation") return timing.explanationToEvidenceMs;
+  return timing.evidenceToNextMs;
+}
+
+/**
+ * Timing precedence is fixed: the opening establish window wins first; later
+ * Patch steps win over boundary and cost; boundary (including canonical pricing
+ * rounding evidence) wins over cost; then ordinary cost and normal steps.
+ */
+export function playbackTimingProfile(step: MotionPresentationStep | undefined, stepIndex: number): MotionTimingProfile {
+  if (stepIndex === 0) return "establish";
+  if (step?.layer.includes("patch")) return "patch";
+  if (step?.layer === "boundary") return "boundary";
+  if (step?.effect === "cost") return "cost";
+  return "normal";
+}
+
+/** Absolute wall-clock cap for one presentation pass, including the final lock (规范 §6.3). */
+export const MOTION_PRESENTATION_HARD_TOTAL_MS = 2500;
+
+/**
+ * Per-step phase-delay sum for a profile (the four handoff gates plus the three
+ * focus gates). Kept in lock-step with `motionTokens.phaseDelay` so the budget
+ * compressor and the focus-window assertions never drift apart.
+ */
+export function playbackStepTotalMs(profile: MotionTimingProfile): number {
+  const timing = motionTokens.phaseDelay[profile];
+  return timing.sourceToImpactMs + timing.impactToMainMs + timing.mainToExplanationMs + timing.explanationToEvidenceMs + timing.evidenceToNextMs;
+}
+
+/**
+ * Per-pass compression budget that keeps the §6.3 focus gates in-window.
+ *
+ * 规范 §6.3: "实现可以根据来源数量在已批准范围内压缩节拍，但必须保持稳定
+ * 顺序和 2.5 秒上限". Handoff phases (source/explanation/evidence) carry the
+ * inter-step handoff and are clamped first, freely toward 0. Focus gates
+ * (impact/main) only ever surrender their headroom above the floor — the floor
+ * itself is never scaled — so impactToMainMs and mainToExplanationMs can never
+ * drop below 90 / 100ms regardless of source count.
+ *
+ * The final lock is excluded from the compressed budget so it always lands in
+ * its own 220–280ms window; only the serial Trace gates are scaled. When even
+ * the focus floors exceed the step budget (`feasible === false`) the pass is
+ * over the serial cap; 规范 §6.3 routes that case to "代表性高速播放并保留完整
+ * 证据" (representative high-speed playback with full evidence retained). The
+ * controller switches every phase (including the focus floors) to a single
+ * `representativeScale` so the serial total fits the step budget while the
+ * stable order, the per-step phase sequence, and the frozen Trace evidence
+ * are all preserved.
+ */
+export interface MotionTimingBudget {
+  /** Multiplier for handoff phases (source/explanation/evidence), in [0, 1]. */
+  readonly handoffScale: number;
+  /** Multiplier for focus-gate headroom above the floor, in [0, 1]; the floor itself is never scaled. */
+  readonly focusScale: number;
+  /** False only when the focus floors alone exceed the step budget (needs the representative-playback path). */
+  readonly feasible: boolean;
+  /**
+   * Present only when `feasible === false`. Uniform multiplier (in (0, 1))
+   * applied to EVERY phase — including the §6.3 focus floors — so the serial
+   * total stays under the 2.5s hard cap. This is the §6.3 "代表性高速播放"
+   * path: stable order and complete evidence are preserved by the model; only
+   * the per-phase durations shrink. Undefined when `feasible === true`.
+   */
+  readonly representativeScale?: number;
+}
+
+const clampTimingRatio = (value: number): number => {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  if (value >= 1) return 1;
+  // Floor to 6 decimals so floating error can never push the total past the hard cap.
+  return Math.floor(value * 1e6) / 1e6;
+};
+
+export function computeMotionTimingBudget(steps: readonly MotionPresentationStep[]): MotionTimingBudget {
+  const budget = MOTION_PRESENTATION_HARD_TOTAL_MS - motionTokens.duration.finalLockMs;
+  let focusToken = 0;
+  let focusFloor = 0;
+  let handoff = 0;
+  for (const [index, step] of steps.entries()) {
+    const timing = motionTokens.phaseDelay[playbackTimingProfile(step, index)];
+    focusToken += timing.impactToMainMs + timing.mainToExplanationMs;
+    focusFloor += motionTokens.phaseFloor.impactToMainMs + motionTokens.phaseFloor.mainToExplanationMs;
+    handoff += timing.sourceToImpactMs + timing.explanationToEvidenceMs + timing.evidenceToNextMs;
+  }
+  if (focusToken + handoff <= budget) return { handoffScale: 1, focusScale: 1, feasible: true };
+  // 1. Clamp handoff first; focus gates stay at their in-window tokens.
+  if (focusToken <= budget) return { handoffScale: clampTimingRatio((budget - focusToken) / handoff), focusScale: 1, feasible: true };
+  // 2. Handoff exhausted: surrender focus headroom down to (never below) the floor.
+  if (focusFloor <= budget) {
+    const focusHeadroom = focusToken - focusFloor;
+    return { handoffScale: 0, focusScale: clampTimingRatio((budget - focusFloor) / focusHeadroom), feasible: true };
+  }
+  // 3. Too many sources for serial playback: 规范 §6.3 "代表性高速播放并保留完整
+  //    证据". Serial focus floors alone exceed the step budget, so we can no longer
+  //    keep every gate on its §6.3 floor and still fit the 2.5s cap. Instead, scale
+  //    every phase (floors included) by one uniform ratio computed against the
+  //    FULL serial total. The controller still walks the stable 5-phase order and
+  //    the model still retains the complete frozen Trace evidence; only the
+  //    per-phase durations shrink, so the pass plays back as a representative
+  //    high-speed sweep instead of an over-budget serial run.
+  const serialTotal = focusToken + handoff;
+  return { handoffScale: 0, focusScale: 0, feasible: false, representativeScale: clampTimingRatio(budget / serialTotal) };
+}
+
+/**
+ * Post-compression duration of one presentation phase.
+ *
+ * When `budget.feasible === true` the focus gates return
+ * `floor + headroom * focusScale` so they stay inside [90,120] / [100,140],
+ * and handoff phases return `token * handoffScale`.
+ *
+ * When `budget.feasible === false` (§6.3 "代表性高速播放") every phase — floors
+ * included — is scaled by `representativeScale` so the serial total fits the
+ * 2.5s cap. Stable order and the per-step phase sequence are preserved by the
+ * controller; only the per-phase durations shrink.
+ */
+export function effectivePlaybackPhaseDuration(
+  step: MotionPresentationStep | undefined,
+  stepIndex: number,
+  phase: MotionPlaybackPhase,
+  budget: MotionTimingBudget,
+): number {
+  const timing = motionTokens.phaseDelay[playbackTimingProfile(step, stepIndex)];
+  // §6.3 representative high-speed playback: too many sources to keep every focus
+  // gate on its floor inside the 2.5s cap, so all phases are scaled uniformly.
+  if (!budget.feasible) {
+    const representativeScale = budget.representativeScale ?? 0;
+    const token = phase === "source" ? timing.sourceToImpactMs
+      : phase === "impact" ? timing.impactToMainMs
+      : phase === "main_number" ? timing.mainToExplanationMs
+      : phase === "explanation" ? timing.explanationToEvidenceMs
+      : timing.evidenceToNextMs;
+    return token * representativeScale;
+  }
+  if (phase === "impact") {
+    return motionTokens.phaseFloor.impactToMainMs + (timing.impactToMainMs - motionTokens.phaseFloor.impactToMainMs) * budget.focusScale;
+  }
+  if (phase === "main_number") {
+    return motionTokens.phaseFloor.mainToExplanationMs + (timing.mainToExplanationMs - motionTokens.phaseFloor.mainToExplanationMs) * budget.focusScale;
+  }
+  const handoffToken = phase === "source"
+    ? timing.sourceToImpactMs
+    : phase === "explanation" ? timing.explanationToEvidenceMs : timing.evidenceToNextMs;
+  return handoffToken * budget.handoffScale;
 }

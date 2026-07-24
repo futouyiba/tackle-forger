@@ -21,6 +21,7 @@ import {
   createAIRuntimeStoreFromEnvironment,
 } from "../lib/ai-runtime-store";
 import { loadWorkspaceState, saveWorkspaceState } from "../lib/storage";
+import { closeSqliteStorage } from "../lib/sqlite-storage";
 
 function record(input: { assessmentId: string; actorStableId: string; createdAt: string }): AIAssessmentRetentionRecord {
   return {
@@ -1005,6 +1006,7 @@ test("GET/DELETE assessment 路由不泄露非所有者记录并保持删除幂�
   process.env.FEISHU_PROXY_SHARED_SECRET = "retention-route-secret";
   process.env.FEISHU_TENANT_KEY = "tenant";
   process.env.WORKSPACE_DATABASE_PATH = path.join(root, "workspace.sqlite");
+  const workspaceDatabasePath = process.env.WORKSPACE_DATABASE_PATH;
   const request = (
     method: "GET" | "DELETE",
     openId: string,
@@ -1145,6 +1147,9 @@ test("GET/DELETE assessment 路由不泄露非所有者记录并保持删除幂�
       if (value === undefined) delete process.env[name];
       else process.env[name] = value;
     }
+    // Release the workspace SQLite handle before removing its directory, otherwise
+    // Windows keeps the WAL file locked and rm fails with EBUSY (node:sqlite).
+    await closeSqliteStorage(workspaceDatabasePath);
     await rm(root, { recursive: true, force: true });
   }
 });

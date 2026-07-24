@@ -30,6 +30,36 @@ function traceSourceLabel(sourceRef: CalculationTraceEntry["sourceRef"]) {
     : `${sourceRef.sourceType}:${sourceRef.sourceId}`;
 }
 
+function actionTargetLabel(targetRef: NonNullable<CalculationTraceEntry["actions"][number]["targetRef"]>) {
+  return `${targetRef.entityType}:${targetRef.entityId} · revision ${targetRef.revisionId}`;
+}
+
+/**
+ * ActionLink execution remains server-owned. This is only the existing product
+ * deep-link shape, so following it can inspect the target but cannot run a command.
+ */
+function readOnlyActionTargetRoute(targetRef: NonNullable<CalculationTraceEntry["actions"][number]["targetRef"]>) {
+  const params = new URLSearchParams({ page: "candidates" });
+  if (targetRef.entityType === "collection") params.append("collectionIds", targetRef.entityId);
+  else if (targetRef.entityType === "series") params.set("series", targetRef.entityId);
+  else if (targetRef.entityType === "sku_drawer") params.set("sku", targetRef.entityId);
+  else if (targetRef.entityType === "model") params.set("model", targetRef.entityId);
+  else if (targetRef.entityType === "configuration_snapshot") params.set("snapshot", targetRef.entityId);
+  else return undefined;
+  return `/?${params.toString()}`;
+}
+
+function CanonicalTraceActionLink({ action }: { action: CalculationTraceEntry["actions"][number] }) {
+  const targetRoute = action.targetRef ? readOnlyActionTargetRoute(action.targetRef) : undefined;
+  return <span className="trace-action-link">
+    <strong>{action.label}</strong>
+    <span>动作：{action.action} · {action.enabled ? "可用" : "不可用"}</span>
+    {action.targetRef ? <span>目标：<code>{actionTargetLabel(action.targetRef)}</code></span> : <span>目标：未提供</span>}
+    {action.enabled && targetRoute ? <a href={targetRoute}>查看目标（只读）</a> : null}
+    {action.enabled && action.targetRef && !targetRoute ? <span>该目标没有已注册的安全只读路由；已保留完整稳定引用。</span> : null}
+  </span>;
+}
+
 function CanonicalTraceEvidence({ entries }: { entries: readonly CalculationTraceEntry[] }) {
   return <details className="trace-canonical-evidence" open>
     <summary>完整冻结 Trace 证据（{entries.length} 条，播放状态不筛选）</summary>
@@ -41,7 +71,7 @@ function CanonicalTraceEvidence({ entries }: { entries: readonly CalculationTrac
           <div><dt>来源 / 版本</dt><dd>{traceSourceLabel(entry.sourceRef)} · source {entry.sourceVersion} · rules {entry.ruleSetVersion}</dd></div>
           <div><dt>结算</dt><dd>before {formatTraceValue(entry.before)} · {entry.operation} · operand {formatTraceValue(entry.operand)} · after {formatTraceValue(entry.after)}{entry.unit ? ` ${entry.unit}` : ""}</dd></div>
           <div><dt>Issue</dt><dd>{entry.warningIssueIds.length ? entry.warningIssueIds.join("、") : "无"}</dd></div>
-          <div><dt>动作入口</dt><dd>{entry.actions.length ? entry.actions.map((action) => <span className="trace-action-link" key={action.actionId}>{action.label}（{action.action} · {action.enabled ? "可用" : "不可用"}）</span>) : "无"}</dd></div>
+          <div><dt>动作入口</dt><dd>{entry.actions.length ? entry.actions.map((action) => <CanonicalTraceActionLink action={action} key={action.actionId} />) : "无"}</dd></div>
         </dl>
       </article>)}
     </div>

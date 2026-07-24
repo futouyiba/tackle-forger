@@ -2,6 +2,7 @@ import {
   CANONICAL_FEISHU_SHEET_REGISTRY,
   CANONICAL_FEISHU_WORKBOOK,
   pullFeishuWorkbookRevision,
+  resolveCanonicalSheetId,
   type FeishuSourceRevision,
   type FeishuWorkbookRef,
 } from "./feishu-workbook";
@@ -82,7 +83,7 @@ export interface CanonicalAffixSheetRanges {
  * source-structure error, not permission to truncate the import.
  */
 export function canonicalAffixSheetRanges(sourceRevision: FeishuSourceRevision): CanonicalAffixSheetRanges {
-  const sheet = sourceRevision.sheets.find((candidate) => candidate.sheetId === AFFIX_SHEET_ID);
+  const sheet = sourceRevision.sheets.find((candidate) => candidate.sheetId === resolveCanonicalSheetId(sourceRevision, AFFIX_SHEET_ID));
   const rowCount = sheet?.rowCount;
   const columnCount = sheet?.columnCount;
   if (typeof rowCount !== "number" || !Number.isSafeInteger(rowCount) || rowCount < MINIMUM_AFFIX_MACHINE_ROW_COUNT) {
@@ -110,7 +111,7 @@ function spreadsheetColumnName(index: number) {
  * 该表的矩阵块会随内容扩列、移动，故不能把旧 B4:N50 当作来源契约。
  */
 export function canonicalQualitySheetRange(sourceRevision: FeishuSourceRevision) {
-  const sheet = sourceRevision.sheets.find((candidate) => candidate.sheetId === QUALITY_SHEET_ID);
+  const sheet = sourceRevision.sheets.find((candidate) => candidate.sheetId === resolveCanonicalSheetId(sourceRevision, QUALITY_SHEET_ID));
   const rowCount = sheet?.rowCount;
   const columnCount = sheet?.columnCount;
   if (!Number.isSafeInteger(rowCount) || rowCount! < 1 || rowCount! > MAXIMUM_FEISHU_SHEET_ROWS
@@ -123,26 +124,28 @@ export function canonicalQualitySheetRange(sourceRevision: FeishuSourceRevision)
 
 export function canonicalRuleWorkbookRangeRequests(sourceRevision: FeishuSourceRevision) {
   const affixRanges = canonicalAffixSheetRanges(sourceRevision);
-  const weightSheet = sourceRevision.sheets.find((sheet) => sheet.sheetId === WEIGHT_TEMPLATE_SHEET_ID);
+  const resolve = (canonicalSheetId: string) => resolveCanonicalSheetId(sourceRevision, canonicalSheetId);
+  const weightSheetId = resolve(WEIGHT_TEMPLATE_SHEET_ID);
+  const weightSheet = sourceRevision.sheets.find((sheet) => sheet.sheetId === weightSheetId);
   if (!Number.isSafeInteger(weightSheet?.rowCount) || !Number.isSafeInteger(weightSheet?.columnCount) || weightSheet!.rowCount! < 4 || weightSheet!.columnCount! < 60) {
     throw new Error("01_重量模板/d6e928 缺少可验证的完整 grid 元数据；已停止读取，避免截断机器 ID 或模板字段。");
   }
   const requests = [
     ...CANONICAL_IDENTITY_SHEET_SPECS.map(({ sheetId, range }) => ({
-      sheetId,
+      sheetId: resolve(sheetId),
       range: sheetId === AFFIX_SHEET_ID ? affixRanges.identityRange : sheetId === WEIGHT_TEMPLATE_SHEET_ID ? `BG1:BH${weightSheet!.rowCount!}` : range,
     })),
-    { sheetId: QUALITY_SHEET_ID, range: canonicalQualitySheetRange(sourceRevision) },
-    { sheetId: AFFIX_SHEET_ID, range: affixRanges.aliasRange },
-    { sheetId: "u87sRh", range: "B10:R70" },
-    { sheetId: "fATowU", range: "B2:AD20" },
-    { sheetId: "u87sRh", range: "B179:E179" },
-    { sheetId: WEIGHT_TEMPLATE_SHEET_ID, range: `A1:BH${weightSheet!.rowCount!}` },
-    CANONICAL_RULE_RANGES.type,
-    CANONICAL_RULE_RANGES.function,
-    CANONICAL_RULE_RANGES.functionProfiles,
-    CANONICAL_RULE_RANGES.method,
-    CANONICAL_RULE_RANGES.methodTemplateReview,
+    { sheetId: resolve(QUALITY_SHEET_ID), range: canonicalQualitySheetRange(sourceRevision) },
+    { sheetId: resolve(AFFIX_SHEET_ID), range: affixRanges.aliasRange },
+    { sheetId: resolve("u87sRh"), range: "B10:R70" },
+    { sheetId: resolve("fATowU"), range: "B2:AD20" },
+    { sheetId: resolve("u87sRh"), range: "B179:E179" },
+    { sheetId: weightSheetId, range: `A1:BH${weightSheet!.rowCount!}` },
+    { sheetId: resolve(CANONICAL_RULE_RANGES.type.sheetId), range: CANONICAL_RULE_RANGES.type.range },
+    { sheetId: resolve(CANONICAL_RULE_RANGES.function.sheetId), range: CANONICAL_RULE_RANGES.function.range },
+    { sheetId: resolve(CANONICAL_RULE_RANGES.functionProfiles.sheetId), range: CANONICAL_RULE_RANGES.functionProfiles.range },
+    { sheetId: resolve(CANONICAL_RULE_RANGES.method.sheetId), range: CANONICAL_RULE_RANGES.method.range },
+    { sheetId: resolve(CANONICAL_RULE_RANGES.methodTemplateReview.sheetId), range: CANONICAL_RULE_RANGES.methodTemplateReview.range },
   ];
   return [...new Map(requests.map((request) => [`${request.sheetId}:${request.range}`, request])).values()];
 }
@@ -623,6 +626,33 @@ export function setCanonicalRuleWorkbookInspectionForTests(override?: typeof tes
   testInspectionOverride = override;
 }
 
+/**
+ * 把回读 range 结果里的「实际 sheet_id」按概念映射回 canonical sheet_id。
+ *
+ * 自定义/克隆工作簿的 sheet_id 与 canonical 全部不同；range 请求按解析后的实际
+ * sheet_id 发出，回读结果也带实际 id。这里反转概念映射（actual→canonical），
+ * 让下游解析与 `ranges.find(sheetId === <canonical>)` 不依赖远端 sheet_id。
+ * 权威工作簿（恒等映射）或缺省映射时为无操作。
+ */
+function remapRangesToCanonicalSheetIds<T extends { sheetId: string }>(
+  ranges: T[],
+  sourceRevision: Pick<FeishuSourceRevision, "canonicalSheetIdMap">,
+): T[] {
+  const map = sourceRevision.canonicalSheetIdMap;
+  if (!map) return ranges;
+  const actualToCanonical = new Map<string, string>();
+  let needsRemap = false;
+  for (const [canonical, actual] of Object.entries(map)) {
+    if (!actualToCanonical.has(actual)) actualToCanonical.set(actual, canonical);
+    if (actual !== canonical) needsRemap = true;
+  }
+  if (!needsRemap) return ranges;
+  return ranges.map((entry) => {
+    const canonical = actualToCanonical.get(entry.sheetId);
+    return canonical && canonical !== entry.sheetId ? { ...entry, sheetId: canonical } : entry;
+  });
+}
+
 export async function inspectCanonicalRuleWorkbook(input: {
   observedAt: string;
   observedBy: string;
@@ -639,10 +669,15 @@ export async function inspectCanonicalRuleWorkbook(input: {
     pulledBy: input.observedBy,
   });
   const requests = canonicalRuleWorkbookRangeRequests(sourceRevision);
-  const ranges = await readFeishuSheetRanges({
+  const rawRanges = await readFeishuSheetRanges({
     spreadsheetToken: sourceRevision.spreadsheetToken,
     requests,
   });
+  // 请求按「实际 sheet_id」发出（自定义工作簿与 canonical 不同），回读结果也带
+  // 实际 sheet_id。这里按概念映射把结果统一回 canonical sheet_id，使下游所有
+  // identity / quality / pricing / canonical 导入与 ranges.find 继续按规范概念
+  // 匹配，不直接引用远端 sheet_id。回写层在边界再把 canonical 解析回实际。
+  const ranges = remapRangesToCanonicalSheetIds(rawRanges, sourceRevision);
   const identityRows = identityRowsFromRanges(ranges);
   const identityReport = prepareSourceIdentityMigration({
     workbookRefId: workbook.id,

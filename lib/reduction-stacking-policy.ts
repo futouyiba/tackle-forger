@@ -111,10 +111,13 @@ export function importReductionStackingPolicyDraft(input: {
   const { sourceRevision } = input;
   const issues: ValidationIssue[] = [];
   const rules = input.machineRules ?? [];
-  const sourceSheet = sourceRevision.sheets.find((sheet) => sheet.sheetId === "zrVOxd");
+  // 权威性按“已选择并验证的工作簿身份”判定：本次工作簿已通过名称解析出 04_词条
+  // 表（canonical 概念 zrVOxd），即视为已验证来源；不再用固定字符串
+  // feishu-workbook:tackle-design 把自定义工作簿直接判为非权威（issue #152）。
+  const affixSheetId = sourceRevision.canonicalSheetIdMap?.["zrVOxd"] ?? "zrVOxd";
+  const sourceSheet = sourceRevision.sheets.find((sheet) => sheet.sheetId === affixSheetId);
   if (
-    sourceRevision.workbookRefId !== "feishu-workbook:tackle-design"
-    || !sourceSheet
+    !sourceSheet
     || rules.length === 0
   ) {
     issues.push(issue(
@@ -128,10 +131,7 @@ export function importReductionStackingPolicyDraft(input: {
       },
     ));
   }
-  if (
-    sourceRevision.workbookRefId !== "feishu-workbook:tackle-design"
-    || sourceRevision.sourceRevision === "17173"
-  ) {
+  if (sourceRevision.sourceRevision === "17173") {
     issues.push(issue(
       "REDUCTION_POLICY_SOURCE_INVALID",
       "该修订只能作为外部证据，不能充当运行时规则源。",

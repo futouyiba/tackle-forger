@@ -69,11 +69,23 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
   const [parseError, setParseError] = useState("");
   const workbookHistory = useWorkbookHistory();
 
+  // 切换来源时清空上一来源的 inspection 与错误/告警状态：避免继续展示旧来源的
+  // revision、身份报告与规则状态，也防止“显式拉取”用旧 inspection 的 revision
+  // 对新来源发起虚假冲突校验（issue #152 MEDIUM-3）。
+  const switchWorkbook = (ref: FeishuWorkbookRef) => {
+    setSelectedWorkbook(ref);
+    setInspection(null);
+    setError("");
+    setErrorCode(undefined);
+    setErrorEndpoint(undefined);
+    setWarningReason("");
+  };
+
   const parseLink = () => {
     setParseError("");
     try {
       const ref = buildWorkbookRefFromShareUrl(linkInput);
-      setSelectedWorkbook(ref);
+      switchWorkbook(ref);
       workbookHistory.record(ref);
       setLinkInput("");
     } catch (caught) {
@@ -312,11 +324,11 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
               onChange={(event) => {
                 const id = event.target.value;
                 if (id === CANONICAL_FEISHU_WORKBOOK.id) {
-                  setSelectedWorkbook(CANONICAL_FEISHU_WORKBOOK);
+                  switchWorkbook(CANONICAL_FEISHU_WORKBOOK);
                   return;
                 }
                 const found = workbookHistory.history.find((entry) => entry.id === id);
-                if (found) setSelectedWorkbook(found);
+                if (found) switchWorkbook(found);
               }}
             >
               <option value={CANONICAL_FEISHU_WORKBOOK.id}>{CANONICAL_FEISHU_WORKBOOK.name}（默认）</option>
@@ -490,6 +502,7 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
             reportRegistered={identityReportRegistered}
             dirty={props.dirty}
             notify={props.notify}
+            selectedWorkbook={selectedWorkbook}
           />
           <QualityValuePolicyPanel
             draft={inspection.qualityDraft}

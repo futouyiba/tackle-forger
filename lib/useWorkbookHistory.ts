@@ -74,20 +74,18 @@ export function recordWorkbookHistory(
 /**
  * SSR 安全的 localStorage 历史 hook：首次渲染返回空数组（与服务器一致），
  * 在 `useEffect` 里读取真实历史后再触发一次更新，避免 hydration mismatch。
+ *
+ * 只暴露当前 UI 实际使用的 `history` 与 `record`；未接通入口的删除/清空能力
+ * 暂不暴露，避免引入没有产品效果的 state 更新（issue #152 LOW-4）。
  */
 export function useWorkbookHistory(): {
   history: WorkbookHistoryEntry[];
-  ready: boolean;
   record: (ref: FeishuWorkbookRef) => void;
-  remove: (id: string) => void;
-  clear: () => void;
 } {
   const [history, setHistory] = useState<WorkbookHistoryEntry[]>([]);
-  const [ready, setReady] = useState(false);
 
   useEffect(() => {
     setHistory(readHistory());
-    setReady(true);
   }, []);
 
   const record = useCallback((ref: FeishuWorkbookRef) => {
@@ -98,18 +96,5 @@ export function useWorkbookHistory(): {
     });
   }, []);
 
-  const remove = useCallback((id: string) => {
-    setHistory((current) => {
-      const next = current.filter((entry) => entry.id !== id);
-      writeHistory(next);
-      return next;
-    });
-  }, []);
-
-  const clear = useCallback(() => {
-    writeHistory([]);
-    setHistory([]);
-  }, []);
-
-  return { history, ready, record, remove, clear };
+  return { history, record };
 }

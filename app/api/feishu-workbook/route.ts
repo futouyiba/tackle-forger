@@ -343,6 +343,19 @@ async function executeWorkbookBusinessRequest(request: NextRequest) {
     const source = current.state.feishuSourceRevisions.find((item) => item.sourceRevision === report.sourceRevision);
     if (!source) return NextResponse.json({ error: "迁移报告引用的源修订不存在。" }, { status: 409 });
     const inputWorkbook = resolveWorkbookRef(request, current.state, body);
+    // fail-closed：回写请求的工作簿来源必须与登记报告、源修订同属一个工作簿。
+    // 任何不一致都意味着用 A 工作簿的检查结果操作 B spreadsheet token，直接拒绝
+    // （issue #152 HIGH-2）。
+    if (report.workbookRefId !== inputWorkbook.id || source.workbookRefId !== inputWorkbook.id) {
+      return NextResponse.json(
+        { error: "回写请求的工作簿来源与已登记迁移报告/源修订不一致，已拒绝。" },
+        { status: 409 },
+      );
+    }
+    // 命令里的 sheetId 是 canonical 概念 id（身份行经概念映射归一）；回写前按本次
+    // 源修订的概念映射解析回实际 sheet_id，才能命中自定义工作簿的真实工作表。
+    const resolveWriteSheetId = (canonicalSheetId: string) =>
+      source.canonicalSheetIdMap?.[canonicalSheetId] ?? canonicalSheetId;
     const inspection = await inspectCanonicalRuleWorkbook({
       observedAt: new Date().toISOString(),
       observedBy: user.name,
@@ -366,7 +379,7 @@ async function executeWorkbookBusinessRequest(request: NextRequest) {
         await writeFeishuSheetRanges({
           spreadsheetToken: source.spreadsheetToken,
           valueRanges: pending.map((command) => ({
-            sheetId: command.sheetId,
+            sheetId: resolveWriteSheetId(command.sheetId),
             cell: `${command.idColumnKey}${command.rowKey}`,
             value: command.stableId,
           })),
@@ -376,7 +389,7 @@ async function executeWorkbookBusinessRequest(request: NextRequest) {
         const cell = `${command.idColumnKey}${command.rowKey}`;
         const valueRange = await readFeishuSheetRange({
           spreadsheetToken: source.spreadsheetToken,
-          sheetId: command.sheetId,
+          sheetId: resolveWriteSheetId(command.sheetId),
           range: `${cell}:${cell}`,
         });
         return {

@@ -14,6 +14,7 @@ import {
   type PricingTrialResult,
 } from "@/lib/pricing-policy";
 import type { CanonicalRuleWorkbookInspection } from "@/lib/rule-workbook-inspection";
+import { CANONICAL_FEISHU_WORKBOOK, type FeishuWorkbookRef } from "@/lib/feishu-workbook";
 import type { QualityValuePolicyDraft } from "@/lib/quality-value-policy";
 import type {
   SourceIdentityConfirmation,
@@ -31,6 +32,10 @@ interface IdentityMigrationPanelProps {
   reportRegistered: boolean;
   dirty: boolean;
   notify: (message: string) => void;
+  /** 当前 UI 选中的工作簿来源：回写必须把它的 shareUrl 放入受签名业务载荷，
+   * 服务端据此解析并校验与登记报告/源修订同属一个工作簿，避免回退到 canonical
+   * 后误操作自定义 spreadsheet token（issue #152 HIGH-2）。 */
+  selectedWorkbook: FeishuWorkbookRef;
 }
 
 interface ConfirmationDraft {
@@ -47,6 +52,7 @@ export function IdentityMigrationPanel({
   reportRegistered,
   dirty,
   notify,
+  selectedWorkbook,
 }: IdentityMigrationPanelProps) {
   const report = inspection.identityReport;
   const pending = report.items.filter((item) => item.requiresHumanConfirmation);
@@ -89,6 +95,11 @@ export function IdentityMigrationPanel({
         baseRevision,
         reportId: report.reportId,
         confirmations,
+        // 非 canonical 来源必须把工作簿引用放进受签名载荷，服务端解析后校验与
+        // 登记 report/源修订属于同一工作簿；canonical 省略时路由回退到默认。
+        ...(selectedWorkbook.id !== CANONICAL_FEISHU_WORKBOOK.id
+          ? { workbookRef: selectedWorkbook.shareUrl }
+          : {}),
       };
       const invocation = await issueClientActionCommand({
         action: "write_feishu_identity",

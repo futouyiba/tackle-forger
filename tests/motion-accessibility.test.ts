@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { motionKeyboardCommand, motionLiveAnnouncement, motionStepState, resolveReducedMotion } from "../lib/motion-accessibility";
+import { motionFrozenEvidenceNotice, motionKeyboardCommand, motionLiveAnnouncement, motionStepState, resolveReducedMotion, visibleMotionEvidence } from "../lib/motion-accessibility";
 
 test("产品动态偏好明确覆盖或跟随系统偏好", () => {
   assert.equal(resolveReducedMotion("system", true), true);
@@ -31,6 +31,23 @@ test("live region 只汇报阶段或最终结果，绝不携带逐项数值", ()
   assert.equal(motionLiveAnnouncement("playing", "playing"), "");
 });
 
+test("取消或 revision 失效后仍保留完整冻结证据", () => {
+  const evidence = ["trace-1", "trace-2", "trace-3"];
+  assert.deepEqual(visibleMotionEvidence("playing", evidence, 0), ["trace-1"]);
+  assert.deepEqual(visibleMotionEvidence("completed", evidence, 3), evidence);
+  assert.deepEqual(visibleMotionEvidence("cancelled", evidence, 0), evidence);
+  assert.deepEqual(visibleMotionEvidence("superseded", evidence, -1), evidence);
+});
+
+test("失效或取消的证据明确标明冻结来源，绝不冒充检测到的新 revision", () => {
+  assert.equal(
+    motionFrozenEvidenceNotice("superseded", "workspace-r18", "workspace-r19", "output-01"),
+    "已阻断：检测到 revision workspace-r19。以下为来源 revision workspace-r18 的冻结 Trace 证据（output hash：output-01），不是新 revision 的结果。",
+  );
+  assert.match(motionFrozenEvidenceNotice("cancelled", "workspace-r18", "workspace-r18", "output-01") ?? "", /未继续结算或改写结果/);
+  assert.equal(motionFrozenEvidenceNotice("completed", "workspace-r18", "workspace-r18", "output-01"), undefined);
+});
+
 test("步骤状态在灰阶下仍有文本与形状语义", () => {
   assert.deepEqual(motionStepState({ effect: "benefit", layer: "method", warningIssueIds: [] }), { label: "正向", tone: "benefit", modifiers: ["benefit"] });
   assert.deepEqual(motionStepState({ effect: "cost", layer: "model_patch", warningIssueIds: [] }), { label: "Patch · 代价", tone: "patch", modifiers: ["patch", "cost"] });
@@ -47,6 +64,7 @@ test("参考消费方保留稳定 Trace/Issue 焦点目标、节制 live region 
   assert.match(component, /id="motion-core-trace"[\s\S]*tabIndex=\{-1\}/);
   assert.match(component, /id="motion-core-issues"[\s\S]*tabIndex=\{-1\}/);
   assert.match(component, /直接显示最终结果和完整证据；可手动逐项查看/);
+  assert.match(component, /motionFrozenEvidenceNotice\(state.status, model.businessRevision, state.revision, model.outputHash\)/);
   assert.match(styles, /@media \(max-width: 720px\)/);
   assert.match(styles, /motion-step\.patch .motion-step-kind::before/);
   assert.match(styles, /motion-step\.check .motion-step-kind::before/);

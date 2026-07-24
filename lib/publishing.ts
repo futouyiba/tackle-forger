@@ -646,6 +646,7 @@ export function publishConfigurationSnapshot(
         || input.automaticPricing.priceWarningAcknowledgement.purchasePriceRounded !== input.automaticPricing.purchasePriceRounded
         || input.automaticPricing.priceWarningAcknowledgement.purchasePrice !== input.automaticPricing.purchasePrice
         || input.automaticPricing.priceWarningAcknowledgement.threshold !== input.automaticPricing.priceWarning.threshold
+        || input.automaticPricing.priceWarningAcknowledgement.inputHash !== input.automaticPricing.inputHash
       )
     ) {
       blocking.push({

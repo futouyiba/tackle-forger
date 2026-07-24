@@ -69,6 +69,68 @@ test("v21 定价迁移保留旧执行 payload、未知字段与历史 Snapshot�
   assert.deepEqual(migrateWorkspaceState(migrated), migrated);
 });
 
+test("v21 迁移把缺 executionPolicy 的旧 PUBLISHED 策略封存为 LEGACY_PUBLISHED，规范策略保持不变", () => {
+  const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
+  legacy.schemaVersion = 20;
+  // 旧 PUBLISHED 版本仅有 moneyPolicy、没有 executionPolicy；v2 不能再发布它。
+  const legacyVersion = {
+    id: "pricing-policy:legacy-published",
+    version: "legacy:v1",
+    formalStatus: "PUBLISHED",
+    publishedAt: "2026-01-01T00:00:00.000Z",
+    publishedBy: "test",
+    moneyPolicy: {
+      roundingStage: "part_purchase_price",
+      minimumPriceScope: "part_purchase_price",
+      overflowMode: "clamp",
+    },
+  };
+  // 已迁移到 v2 语义的 PUBLISHED 版本，提供 executionPolicy，必须保持 PUBLISHED。
+  const formalVersion = {
+    id: "pricing-policy:formal-published",
+    version: "formal:v1",
+    formalStatus: "PUBLISHED",
+    publishedAt: "2026-07-24T00:00:00.000Z",
+    publishedBy: "test",
+    executionPolicy: {
+      repairRoundingStage: "final_repair_output",
+      purchaseInput: "repair_price_raw",
+      purchaseRoundingStage: "final_purchase_output",
+      rounding: "significant_digits_floor",
+      significantDigits: 3,
+      minimumPurchasePrice: 100,
+      minimumPriceScope: "purchase_output_after_rounding",
+      upperThreshold: 300_000_000,
+      upperThresholdMode: "warning_acknowledgement",
+    },
+  };
+  legacy.pricingPolicyVersions = [legacyVersion, formalVersion];
+  const migrated = migrateWorkspaceState(legacy);
+  assert.equal(migrated.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
+  const migratedVersions = migrated.pricingPolicyVersions;
+  assert.equal(migratedVersions.length, 2);
+
+  const migratedLegacy = migratedVersions.find(
+    (entry) => entry.id === "pricing-policy:legacy-published",
+  ) as unknown as Record<string, unknown>;
+  assert.equal(migratedLegacy.formalStatus, "LEGACY_PUBLISHED");
+  assert.deepEqual(migratedLegacy.legacyExecutionPayload, {
+    roundingStage: "part_purchase_price",
+    minimumPriceScope: "part_purchase_price",
+    overflowMode: "clamp",
+  });
+
+  const migratedFormal = migratedVersions.find(
+    (entry) => entry.id === "pricing-policy:formal-published",
+  ) as unknown as Record<string, unknown>;
+  assert.equal(migratedFormal.formalStatus, "PUBLISHED");
+  assert.equal(migratedFormal.legacyExecutionPayload, undefined);
+  assert.ok(migratedFormal.executionPolicy);
+
+  // 迁移必须保持幂等：再跑一次结果一致，封存状态不会被反复改写。
+  assert.deepEqual(migrateWorkspaceState(migrated), migrated);
+});
+
 test("v16 隔离旧独立偏移阈值、发布规范策略且不改写历史 Snapshot", () => {
   const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
   legacy.schemaVersion = 15;

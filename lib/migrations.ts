@@ -1605,13 +1605,27 @@ function migrateV20ToV21(input: MutableWorkspace): MutableWorkspace {
     }
     return policy;
   };
+  // Pricing v2 formal publication requires a valid executionPolicy.  Legacy
+  // published versions that pre-date executionPolicy cannot be re-published
+  // under v2 semantics, so they are sealed as LEGACY_PUBLISHED evidence rather
+  // than remaining indistinguishable from a currently formal policy.  Drafts
+  // never carry a PUBLISHED status and only retain legacyExecutionPayload.
+  const sealLegacyPublished = (value: unknown) => {
+    const preserved = preserveLegacyExecution(value);
+    if (!preserved || typeof preserved !== "object" || Array.isArray(preserved)) return preserved;
+    const policy = preserved as Record<string, unknown>;
+    if (!policy.executionPolicy && policy.formalStatus === "PUBLISHED") {
+      policy.formalStatus = "LEGACY_PUBLISHED";
+    }
+    return policy;
+  };
   return {
     ...state,
     schemaVersion: 21,
     pricingPolicyDrafts: arrayOf<WorkspaceState["pricingPolicyDrafts"][number]>(state.pricingPolicyDrafts)
       .map(preserveLegacyExecution) as WorkspaceState["pricingPolicyDrafts"],
     pricingPolicyVersions: arrayOf<WorkspaceState["pricingPolicyVersions"][number]>(state.pricingPolicyVersions)
-      .map(preserveLegacyExecution) as WorkspaceState["pricingPolicyVersions"],
+      .map(sealLegacyPublished) as WorkspaceState["pricingPolicyVersions"],
     configurationSnapshots: arrayOf<WorkspaceState["configurationSnapshots"][number]>(state.configurationSnapshots),
   } as MutableWorkspace;
 }

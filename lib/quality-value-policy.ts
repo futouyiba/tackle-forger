@@ -253,7 +253,7 @@ export function importQualityValuePolicyDraft(input: {
   }
 
   const sRange = input.ranges.find((range) => range.qualityId === "quality_s_orange");
-  if (sRange && (sRange.maxScore !== 100 || !sRange.maxInclusive)) {
+  if (sRange && (sRange.minScore !== 65 || sRange.maxScore !== 100 || !sRange.maxInclusive)) {
     issues.push(issue({
       code: "QUALITY_RANGE_SOURCE_OUTDATED",
       severity: "ERROR",

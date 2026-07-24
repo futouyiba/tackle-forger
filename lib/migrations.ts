@@ -147,9 +147,24 @@ function benefitModeForParameter(
   return "higher_better";
 }
 
+/**
+ * 为新建参数生成不可复用的稳定 id。新增路径（addParameter、Excel 导入）必须用它，
+ * 不得用 `param:${key}`：rename 后旧 id 被保留、旧 key 被释放，以后再用该 key 新建
+ * 参数会生成相同 id → 两行 React key 撞车（节点复用/状态串扰/重挂载，即 review 发现）。
+ *
+ * 注意：与 enrichParameters 的 `param:${key}` 回填分工——后者只用于历史无 id 数据的
+ * best-effort 回填（存量数据、碰撞风险低且不能臆造身份），新增路径绝不能用它。
+ *
+ * 使用全局 Web Crypto（浏览器与 Node 22.16+ 均原生可用，与 lib/workflow、lib/storage 一致）。
+ */
+export function createParameterId(): string {
+  return `param:${crypto.randomUUID()}`;
+}
+
 function enrichParameters(parameters: ParameterDefinition[]): ParameterDefinition[] {
   return parameters.map((parameter) => ({
     ...parameter,
+    id: parameter.id ?? `param:${parameter.key}`,
     itemPartId: itemPartIdForParameter(parameter),
     benefitMode: benefitModeForParameter(parameter),
     balanceWeight: parameter.balanceWeight ?? 1,
@@ -1600,6 +1615,7 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
 
   state = {
     ...state,
+    parameters: enrichParameters(arrayOf<ParameterDefinition>(state.parameters)),
     aiRuleSourceChangeDrafts: arrayOf<
       WorkspaceState["aiRuleSourceChangeDrafts"][number]
     >(state.aiRuleSourceChangeDrafts),

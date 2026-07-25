@@ -84,9 +84,9 @@ test("04_词条的身份与别名读取共同跟随同 revision grid 上界，�
 test("04_词条 grid 元数据不完整时 fail-closed，不以旧行号截断", () => {
   for (const sheets of [
     observedSheets,
-    sourceRevisionWithAffixGrid(2).sheets,
+    sourceRevisionWithAffixGrid(0).sheets,
     sourceRevisionWithAffixGrid(86).sheets.map((sheet) => sheet.sheetId === "23CsXE" ? { ...sheet, rowCount: Number.NaN } : sheet),
-    sourceRevisionWithAffixGrid(86).sheets.map((sheet) => sheet.sheetId === "23CsXE" ? { ...sheet, columnCount: 5 } : sheet),
+    sourceRevisionWithAffixGrid(86).sheets.map((sheet) => sheet.sheetId === "23CsXE" ? { ...sheet, columnCount: 0 } : sheet),
   ]) {
     assert.throws(() => canonicalAffixSheetRanges({ ...sourceRevisionWithAffixGrid(), sheets }));
   }

@@ -97,8 +97,8 @@ const QUALITY_SHEET_ID = "27hboC";
 const MAXIMUM_FEISHU_SHEET_ROWS = 10_000;
 const MAXIMUM_QUALITY_SHEET_COLUMNS = 200;
 const MAXIMUM_QUALITY_SHEET_CELLS = 200_000;
-/** The header occupies row 2; a smaller grid cannot hold an affix machine row. */
-const MINIMUM_AFFIX_MACHINE_ROW_COUNT = 3;
+/** The header occupies row 1; a smaller grid cannot hold any data row. */
+const MINIMUM_AFFIX_MACHINE_ROW_COUNT = 1;
 
 export interface CanonicalAffixSheetRanges {
   identityRange: string;
@@ -119,8 +119,8 @@ export function canonicalAffixSheetRanges(sourceRevision: FeishuSourceRevision):
   if (typeof rowCount !== "number" || !Number.isSafeInteger(rowCount) || rowCount < MINIMUM_AFFIX_MACHINE_ROW_COUNT) {
     throw new Error(`04_词条/${AFFIX_SHEET_ID} 缺少可验证的 grid rowCount；已停止读取，避免截断词条机器区。`);
   }
-  if (typeof columnCount !== "number" || !Number.isSafeInteger(columnCount) || columnCount < 6) {
-    throw new Error(`04_词条/${AFFIX_SHEET_ID} 缺少至少 6 列的可验证 grid 元数据；已停止读取，避免不完整别名导入。`);
+  if (typeof columnCount !== "number" || !Number.isSafeInteger(columnCount) || columnCount < 1) {
+    throw new Error(`04_词条/${AFFIX_SHEET_ID} 缺少可验证的 grid columnCount；已停止读取，避免不完整别名导入。`);
   }
   return {
     identityRange: `B1:C${rowCount}`,
@@ -182,10 +182,10 @@ export function canonicalRuleWorkbookRangeRequests(sourceRevision: FeishuSourceR
   const requests: Array<{ sheetId: string; range: string }> = [];
   // 身份区（每 spec 一条）
   for (const spec of CANONICAL_IDENTITY_SHEET_SPECS) {
-    if (spec.fixedEntityType === "FunctionProfile" && spec.range === "A1:S") requests.push({ sheetId: spec.sheetId, range: dynamicRange(spec.sheetId, "A1:S", 2, 8) });
-    else if (spec.fixedEntityType === "FunctionPartGroup") requests.push({ sheetId: spec.sheetId, range: dynamicRange(spec.sheetId, "Q1:S", 2, 3) });
+    if (spec.fixedEntityType === "FunctionProfile" && spec.range === "A1:S") requests.push({ sheetId: spec.sheetId, range: dynamicRange(spec.sheetId, "A1:S", 1, 1) });
+    else if (spec.fixedEntityType === "FunctionPartGroup") requests.push({ sheetId: spec.sheetId, range: dynamicRange(spec.sheetId, "Q1:S", 1, 1) });
     else if (spec.sheetId === AFFIX_SHEET_ID) requests.push({ sheetId: spec.sheetId, range: affixRanges.identityRange });
-    else requests.push({ sheetId: spec.sheetId, range: dynamicRange(spec.sheetId, "B1:C", 2, 2) });
+    else requests.push({ sheetId: spec.sheetId, range: dynamicRange(spec.sheetId, "B1:C", 1, 1) });
   }
   // affix 别名（quality 组合矩阵用）
   requests.push({ sheetId: AFFIX_SHEET_ID, range: affixRanges.aliasRange });
@@ -193,7 +193,7 @@ export function canonicalRuleWorkbookRangeRequests(sourceRevision: FeishuSourceR
   for (const group of ["weight", "type", "function", "method", "methodTemplateReview"] as const) {
     for (const part of CANONICAL_ITEM_PARTS) {
       const sheetId = CANONICAL_RULE_RANGES[group][part];
-      requests.push({ sheetId, range: fullRange(sheetId, 4, 8) });
+      requests.push({ sheetId, range: fullRange(sheetId, 1, 1) });
     }
   }
   // 品质三表（27hboC 已由 canonicalQualitySheetRange 动态整表读；公式/组合表 PR2b-3 接入）

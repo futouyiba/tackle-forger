@@ -1631,9 +1631,8 @@ function migrateV20ToV21(input: MutableWorkspace): MutableWorkspace {
 }
 
 function migrateV21ToV22(input: MutableWorkspace): MutableWorkspace {
-  const state = migrateV20ToV21(input);
   return {
-    ...state,
+    ...input,
     schemaVersion: 22,
     modelPricingEvaluations: [],
   } as MutableWorkspace;

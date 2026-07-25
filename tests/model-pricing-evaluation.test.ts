@@ -190,7 +190,7 @@ test("策略非 PUBLISHED → evaluation 状态为 NON_FORMAL", () => {
   assert.equal(evaluation.result.formal, false);
 });
 
-test("输入变化创建新 revision", () => {
+test("输入变化创建新 revision，旧 ACKNOWLEDGED 返回 staleLegacy", () => {
   const policy = publishedPolicy();
   const input1 = baseEvalInput({ pricingPolicyRef: policy.id });
 
@@ -198,7 +198,7 @@ test("输入变化创建新 revision", () => {
   assert.equal(eval1.revision, 1);
 
   const input2 = { ...input1, valueScore: 31 };
-  const eval2 = recomputeModelPricingEvaluation(eval1, input2, policy, {
+  const { newEval: eval2, staleLegacy } = recomputeModelPricingEvaluation(eval1, input2, policy, {
     createdAt: "2026-07-25T01:00:00.000Z",
     createdBy: "test",
   });
@@ -207,6 +207,10 @@ test("输入变化创建新 revision", () => {
   assert.equal(eval2.input.valueScore, 31);
   assert.notEqual(eval2.contentHash, eval1.contentHash);
   assert.notEqual(eval2.result.inputHash, eval1.result.inputHash);
+  // 未超限 → 直接 ACKNOWLEDGED → 旧 eval 返回 staleLegacy
+  assert.equal(eval1.status, "ACKNOWLEDGED");
+  assert.ok(staleLegacy);
+  assert.equal(staleLegacy!.status, "STALE");
 });
 
 test("ACKNOWLEDGED 评估被标记 STALE 后不可再确认", () => {
@@ -406,9 +410,13 @@ test("伪造 acknowledgement（跨 evaluation ID）被检测", () => {
   });
   const input = baseEvalInput({ pricingPolicyRef: high.id });
 
-  // 创建两个独立 evaluation（相同输入、不同 ID）
+  // 创建两个独立 evaluation（不同 valueScore → 不同 inputHash）
   const eval1 = computeModelPricingEvaluation(input, high, { ...baseOptions, id: "mpe-eval1" });
-  const eval2 = computeModelPricingEvaluation(input, high, { ...baseOptions, id: "mpe-eval2" });
+  const eval2 = computeModelPricingEvaluation(
+    { ...input, valueScore: 32 },
+    high,
+    { ...baseOptions, id: "mpe-eval2" },
+  );
   assert.equal(eval1.status, "OPEN");
   assert.equal(eval2.status, "OPEN");
 
@@ -416,15 +424,13 @@ test("伪造 acknowledgement（跨 evaluation ID）被检测", () => {
   const acked2 = acknowledgeModelPricingEvaluation(eval2, {
     acknowledgedBy: "admin", acknowledgedAt: "now", reason: "ok", acknowledgementId: "ack:for-eval2",
   });
-  assert.equal(acked2.status, "ACKNOWLEDGED");
 
-  // 把 eval2 的 acknowledgement 嫁接到 eval1
+  // 把 eval2 的 acknowledgement 嫁接到 eval1（手动篡改）
   const tampered = { ...eval1, acknowledgement: acked2.acknowledgement, status: "ACKNOWLEDGED" as const };
-  // 验证应发现 input hash 不匹配（ack 的 inputHash 属于 eval2，不是 eval1）
+  // validate 应发现：ack 的 inputHash 属于 eval2，与 eval1 不一致
   const issues = validateModelPricingEvaluation(tampered, high, "1");
-  // 重算时输入和 result 一致，但 tampered 强加了别人的 ack
-  // 核心验证：contentHash 应反映篡改
-  assert.ok(issues.length >= 0, "validate 至少执行不抛错");
+  assert.ok(issues.some((i) => i.code === "ACKNOWLEDGEMENT_INPUT_HASH_MISMATCH"),
+    "跨 evaluation 嫁接 acknowledgement 应被 inputHash 不匹配检测");
 });
 
 test("篡改 contentHash 后验证 fail-closed", () => {
@@ -478,7 +484,7 @@ test("findEvaluation 返回最新 revision（不传 revision 参数时）", () =
     policy,
     { ...baseOptions, id: "mpe-multi" },
   );
-  const e2 = recomputeModelPricingEvaluation(
+  const { newEval: e2 } = recomputeModelPricingEvaluation(
     e1,
     { ...baseEvalInput({ pricingPolicyRef: policy.id }), valueScore: 35 },
     policy,
@@ -491,7 +497,7 @@ test("findEvaluation 返回最新 revision（不传 revision 参数时）", () =
   assert.equal(found?.input.valueScore, 35);
 });
 
-test("evaluationId 生成稳定唯一 ID", () => {
+test("evaluationId 生成带模型前缀的唯一 ID", () => {
   const id1 = evaluationId("model-a");
   const id3 = evaluationId("model-b");
 

@@ -119,14 +119,15 @@ function createNonFormalEvaluation(
 // ─── 重算 ────────────────────────────────────────────────────────────
 
 /**
- * 输入变化时创建新 revision。旧 revision 的 acknowledgement（若存在）变 STALE。
+ * 输入变化时创建新 revision，同时返回应标记为 STALE 的旧 revision（若存在）。
+ * 调用方必须同时持久化 newEval 和 staleLegacy（若存在）。
  */
 export function recomputeModelPricingEvaluation(
   existing: ModelPricingEvaluation,
   newInput: ModelPricingEvaluationInput,
   policy: PricingPolicyVersion,
   options: Omit<ComputeEvaluationOptions, "id"> & { createdAt: string; createdBy: string },
-): ModelPricingEvaluation {
+): { newEval: ModelPricingEvaluation; staleLegacy?: ModelPricingEvaluation } {
   const newEval = computeModelPricingEvaluation(newInput, policy, {
     id: existing.id,
     revision: existing.revision + 1,
@@ -134,12 +135,12 @@ export function recomputeModelPricingEvaluation(
     createdBy: options.createdBy,
   });
 
-  // 如果旧 revision 有 ACKNOWLEDGED 确认，标记为 STALE
-  if (existing.status === "ACKNOWLEDGED" && existing.acknowledgement) {
-    // 旧 evaluation 不可变——返回标记由调用方处理
-  }
+  const staleLegacy =
+    existing.status === "ACKNOWLEDGED"
+      ? { ...existing, status: "STALE" as const }
+      : undefined;
 
-  return newEval;
+  return { newEval, staleLegacy };
 }
 
 /**
@@ -147,14 +148,7 @@ export function recomputeModelPricingEvaluation(
  */
 export function staleEvaluation(existing: ModelPricingEvaluation): ModelPricingEvaluation {
   if (existing.status !== "ACKNOWLEDGED") return existing;
-  return {
-    ...existing,
-    status: "STALE",
-    // acknowledgement 保留但状态失效
-    acknowledgement: existing.acknowledgement
-      ? { ...existing.acknowledgement, state: "ACKNOWLEDGED" as const }
-      : undefined,
-  };
+  return { ...existing, status: "STALE" };
 }
 
 // ─── 验证 ────────────────────────────────────────────────────────────
@@ -238,6 +232,43 @@ export function validateModelPricingEvaluation(
         code: "PRICE_MISMATCH",
         severity: "error",
         message: "评估中的价格与服务端重算结果不一致。",
+      });
+    }
+  }
+
+  // 验证 acknowledgement 归属完整性（F1：跨 evaluation 嫁接检测）
+  if (evaluation.acknowledgement) {
+    const ack = evaluation.acknowledgement;
+    if (ack.modelRevisionId !== `${evaluation.modelId}@${evaluation.modelRevision}`) {
+      issues.push({
+        code: "ACKNOWLEDGEMENT_MODEL_MISMATCH",
+        severity: "error",
+        message: "确认记录的 modelRevisionId 与评估绑定不一致。",
+      });
+    }
+    if (ack.pricingPolicyVersion !== evaluation.pricingPolicyRef) {
+      issues.push({
+        code: "ACKNOWLEDGEMENT_POLICY_MISMATCH",
+        severity: "error",
+        message: "确认记录的定价策略版本与评估绑定不一致。",
+      });
+    }
+    if (ack.inputHash !== evaluation.result.inputHash) {
+      issues.push({
+        code: "ACKNOWLEDGEMENT_INPUT_HASH_MISMATCH",
+        severity: "error",
+        message: "确认记录的 inputHash 与评估结果不一致。",
+      });
+    }
+    if (
+      ack.purchasePriceRaw !== evaluation.result.purchasePriceRaw
+      || ack.purchasePriceRounded !== evaluation.result.purchasePriceRounded
+      || ack.purchasePrice !== evaluation.result.purchasePrice
+    ) {
+      issues.push({
+        code: "ACKNOWLEDGEMENT_PRICE_MISMATCH",
+        severity: "error",
+        message: "确认记录的价格与评估结果不一致。",
       });
     }
   }

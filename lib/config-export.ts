@@ -508,6 +508,8 @@ export async function commitExportPackage(input: {
     "environmentId" | "channelKey" | "mappingId" | "mappingVersion"
   >;
   audit?: ExportCommitResult["audit"];
+  /** 所有文件写入后、记录 committed 前，对已写文件做引用完整性校验。抛错即触发回滚。 */
+  postWriteValidator?: () => Promise<ValidationIssue[]>;
 }): Promise<ExportCommitResult> {
   const formalExportContext: FormalConfigExportContext = {
     packageId: input.packageId,
@@ -599,6 +601,14 @@ export async function commitExportPackage(input: {
         operation.targetPath,
       );
       replaced.push(operation);
+    }
+    const postWriteIssues = input.postWriteValidator
+      ? await input.postWriteValidator()
+      : [];
+    if (postWriteIssues.some((entry) => entry.level === "error")) {
+      throw new Error(
+        `写入后引用完整性校验失败：${postWriteIssues.filter((entry) => entry.level === "error").map((entry) => entry.code).join("、")}`,
+      );
     }
     const result: ExportCommitResult = {
       profileId: input.profileId,

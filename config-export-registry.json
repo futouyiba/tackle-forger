@@ -1,0 +1,154 @@
+{
+  "version": 1,
+  "capabilities": [
+    "config.export.preview",
+    "config.export.commit"
+  ],
+  "pairing": {
+    "workspaceId": "workspace:feishu:local-dev",
+    "allowedOpenIds": [
+      "ou_7b5b8fd8791194a2e69a16c0ccce21fe"
+    ]
+  },
+  "allowedOrigins": [
+    "http://127.0.0.1:3000",
+    "http://localhost:3000"
+  ],
+  "profiles": [
+    {
+      "profileId": "profile:configs-design-main",
+      "label": "主配置 (configsDesign)",
+      "executorKind": "local_companion",
+      "projectRoot": "D:\\workOnSsd\\configsDesign",
+      "relativeWorkbookRoot": "xlsx",
+      "configTomlPath": "config.toml",
+      "enabled": true,
+      "mappingId": "mapping:default",
+      "mappingVersion": "1"
+    },
+    {
+      "profileId": "profile:configs-design-channel",
+      "label": "数值频道 (configsDesign channel)",
+      "executorKind": "local_companion",
+      "projectRoot": "D:\\workOnSsd\\configsDesign",
+      "relativeWorkbookRoot": "xlsx_channel\\numerical",
+      "configTomlPath": "config.toml",
+      "enabled": true,
+      "mappingId": "mapping:default",
+      "mappingVersion": "1"
+    }
+  ],
+  "mappings": [
+    {
+      "mappingId": "mapping:default",
+      "version": "1",
+      "enumReferenceField": "name",
+      "logicalTables": {
+        "rods": {
+          "workbook": "tackle.xlsx",
+          "sheet": "Rods",
+          "required": true,
+          "stableBusinessKey": "id",
+          "dataStartRow": 5
+        },
+        "reels": {
+          "workbook": "tackle.xlsx",
+          "sheet": "Reels",
+          "required": true,
+          "stableBusinessKey": "id",
+          "dataStartRow": 5
+        },
+        "lines": {
+          "workbook": "tackle.xlsx",
+          "sheet": "Lines",
+          "required": true,
+          "stableBusinessKey": "id",
+          "dataStartRow": 5
+        },
+        "item": {
+          "workbook": "item.xlsx",
+          "sheet": "Item",
+          "required": true,
+          "stableBusinessKey": "id",
+          "dataStartRow": 5
+        },
+        "goods_basic": {
+          "workbook": "store.xlsx",
+          "sheet": "GoodsBasic",
+          "required": true,
+          "stableBusinessKey": "id",
+          "dataStartRow": 5
+        },
+        "store_buy": {
+          "workbook": "store.xlsx",
+          "sheet": "StoreBuy",
+          "required": true,
+          "stableBusinessKey": "id",
+          "dataStartRow": 5
+        }
+      },
+      "rows": [
+        {
+          "rowMappingId": "rod",
+          "logicalTable": "rods",
+          "businessKeyField": "id",
+          "configNameKeyField": "name",
+          "columns": {
+            "id": { "kind": "snapshot_property", "property": "id" },
+            "name": { "kind": "snapshot_value", "key": "杆型号" },
+            "drag": {
+              "kind": "snapshot_value",
+              "key": "杆最大拉力kgf",
+              "scale": 1000,
+              "precision": 0
+            },
+            "length": {
+              "kind": "snapshot_value",
+              "key": "杆长度cm",
+              "precision": 0
+            },
+            "weight": {
+              "kind": "snapshot_value",
+              "key": "杆自重g",
+              "precision": 2
+            }
+          }
+        },
+        {
+          "rowMappingId": "item",
+          "logicalTable": "item",
+          "businessKeyField": "id",
+          "configNameKeyField": "name",
+          "columns": {
+            "id": { "kind": "snapshot_property", "property": "id" },
+            "name": { "kind": "snapshot_value", "key": "杆型号" }
+          }
+        },
+        {
+          "rowMappingId": "goods",
+          "logicalTable": "goods_basic",
+          "businessKeyField": "id",
+          "configNameKeyField": "name",
+          "columns": {
+            "id": { "kind": "snapshot_property", "property": "id" },
+            "name": { "kind": "snapshot_value", "key": "杆型号" },
+            "item_id": { "kind": "snapshot_value", "key": "杆型号" }
+          }
+        },
+        {
+          "rowMappingId": "store",
+          "logicalTable": "store_buy",
+          "businessKeyField": "id",
+          "configNameKeyField": "name",
+          "columns": {
+            "id": { "kind": "snapshot_property", "property": "id" },
+            "name": { "kind": "snapshot_value", "key": "杆型号" },
+            "goods_id": { "kind": "snapshot_value", "key": "杆型号" },
+            "enabled": { "kind": "target_existing_or_constant", "value": true }
+          }
+        }
+      ]
+    }
+  ],
+  "reductionStackingPolicyVersions": []
+}

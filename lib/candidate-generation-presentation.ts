@@ -231,9 +231,8 @@ export interface MaterializationPresentation {
  */
 export function buildMaterializationPresentation(
   record: CandidateMaterializationRecord,
-  run: CandidateRun,
+  _run: CandidateRun,
 ): MaterializationPresentation {
-  const topCandidate = run.candidates[0];
   const phase: CandidateGenerationPhase = record.issues.length > 0 ? "blocked" : "completed";
   const label = record.issues.length > 0
     ? `物化完成 · ${record.issues.length} 个 Issue`

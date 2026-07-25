@@ -12,7 +12,6 @@ const ref = (cell: string, sheetId = "u87sRh") => ({ sheetId, cell });
 const sourced = (value: number, cell: string) => ({ value, status: "CONFIRMED" as const, source: ref(cell) });
 
 function policyInput(overrides: Partial<PricingPolicyDraft> = {}) {
-  const baskets = ["run", "steady", "attack"];
   return {
     sourceRevisionId: "source:pricing-v2",
     sourceRevision: "pricing-v2",
@@ -20,14 +19,13 @@ function policyInput(overrides: Partial<PricingPolicyDraft> = {}) {
     qualitySheetId: "FqD4j7" as const,
     typeMaterialSheetId: "fATowU" as const,
     businessFormulaCells: [ref("B2")],
-    pricingBaskets: baskets.map((id) => ({ id, sourceAlias: id, source: ref(id) })),
-    maintenanceConsumptionRates: baskets.map((pricingBasketId) => ({ pricingWeightBandId: "w1", pricingBasketId, value: sourced(1234, "B3") })),
+    maintenanceConsumptionRates: [{ pricingWeightBandId: "w1", value: sourced(1234, "B3") }],
     partAllocationRatios: [{ pricingWeightBandId: "w1", partId: "rod", value: sourced(1, "B4") }],
     repairCoefficients: [{ partId: "rod", typeId: "spin", value: sourced(1, "B5") }],
-    totalLossTimes: baskets.map((pricingBasketId) => ({ pricingWeightBandId: "w1", pricingBasketId, partId: "rod", value: sourced(1, "B6") })),
+    totalLossTimes: [{ pricingWeightBandId: "w1", partId: "rod", value: sourced(1, "B6") }],
     purchaseCoefficients: [{ partId: "rod", typeId: "spin", value: sourced(1.5, "B7") }],
-    partsToWholeRatios: baskets.map((pricingBasketId) => ({ pricingWeightBandId: "w1", pricingBasketId, partId: "rod", value: sourced(1, "B8") })),
-    qualityMappings: (["quality_c_green", "quality_b_blue", "quality_a_purple", "quality_s_orange"] as const).map((qualityId, index) => ({ qualityId, pricingBasketId: baskets[index === 3 ? 2 : index], sourceAlias: baskets[index === 3 ? 2 : index], status: "CONFIRMED" as const, source: ref(`C${index}`) })),
+    partsToWholeRatios: [{ pricingWeightBandId: "w1", partId: "rod", value: sourced(1, "B8") }],
+    qualityMappings: (["quality_c_green", "quality_b_blue", "quality_a_purple", "quality_s_orange"] as const).map((qualityId, index) => ({ qualityId, sourceAlias: `basket${index}`, status: "CONFIRMED" as const, source: ref(`C${index}`) })),
     qualityPriceFactorRanges: [
       ["quality_c_green", 0, 20, .5, 1.1], ["quality_b_blue", 20, 40, .8, 1.2], ["quality_a_purple", 40, 65, .7, 1.3], ["quality_s_orange", 65, 100, 2, 3],
     ].map(([qualityId, minScore, maxScore, minFactor, maxFactor], index) => ({ qualityId: qualityId as "quality_c_green", minScore, maxScore, maxInclusive: qualityId === "quality_s_orange", minFactor, maxFactor, status: "CONFIRMED" as const, source: ref(`D${index}`) })),
@@ -54,14 +52,14 @@ test("double-output policy rounds repair and purchase independently from raw rep
 });
 
 test("minimum price applies only after rounded purchase output", () => {
-  const result = calculatePricingTrial({ policy: published({ maintenanceConsumptionRates: ["run", "steady", "attack"].map((pricingBasketId) => ({ pricingWeightBandId: "w1", pricingBasketId, value: sourced(80, "B3") })) }), partId: "rod", typeId: "spin", pricingWeightBandId: "w1", qualityId: "quality_b_blue", valueScore: 30, modelRevisionId: "model@1" });
+  const result = calculatePricingTrial({ policy: published({ maintenanceConsumptionRates: [{ pricingWeightBandId: "w1", value: sourced(80, "B3") }] }), partId: "rod", typeId: "spin", pricingWeightBandId: "w1", qualityId: "quality_b_blue", valueScore: 30, modelRevisionId: "model@1" });
   assert.equal(result.repairPrice, 80);
   assert.equal(result.purchasePriceRounded, 120);
   assert.equal(result.purchasePrice, 120);
 });
 
 test("over-threshold price is a warning that requires exact acknowledgement and goes stale on input change", () => {
-  const high = published({ maintenanceConsumptionRates: ["run", "steady", "attack"].map((pricingBasketId) => ({ pricingWeightBandId: "w1", pricingBasketId, value: sourced(400_000_000, "B3") })) });
+  const high = published({ maintenanceConsumptionRates: [{ pricingWeightBandId: "w1", value: sourced(400_000_000, "B3") }] });
   const first = calculatePricingTrial({ policy: high, partId: "rod", typeId: "spin", pricingWeightBandId: "w1", qualityId: "quality_b_blue", valueScore: 30, modelRevisionId: "model@1" });
   assert.equal(first.priceWarning?.state, "OPEN");
   assert.equal(first.formal, false);

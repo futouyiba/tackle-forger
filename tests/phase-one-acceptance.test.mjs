@@ -14,6 +14,9 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+
+const isWindows = process.platform === "win32";
+const winSkip = { skip: isWindows ? "Windows 不支持 Unix 文件权限/symlink/npm spawn 语义" : undefined };
 import {
   EXPECTED_CANONICAL_SHEETS,
   EXPECTED_PHASE_ONE_CAPABILITIES,
@@ -649,7 +652,7 @@ test("真实会话暴露正式提交或 AI Capability 时验收保持 BLOCKED", 
   );
 });
 
-test("preflight 对安全 env、源契约和 0600 权限给出可重复证据", async () => {
+test("preflight 对安全 env、源契约和 0600 权限给出可重复证据", winSkip, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "tf-phase-one-root-"));
   const envDirectory = await mkdtemp(path.join(os.tmpdir(), "tf-phase-one-safe-env-"));
   const envFile = path.join(envDirectory, ".env.local");
@@ -722,7 +725,7 @@ test("preflight 对安全 env、源契约和 0600 权限给出可重复证据", 
   await rm(envDirectory, { recursive: true, force: true });
 });
 
-test("三种模式共用的环境 loader 拒绝仓库内、相对、symlink 与宽权限文件", async () => {
+test("三种模式共用的环境 loader 拒绝仓库内、相对、symlink 与宽权限文件", winSkip, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "tf-phase-one-env-"));
   const outside = await mkdtemp(path.join(os.tmpdir(), "tf-phase-one-env-outside-"));
   const insideFile = path.join(root, ".env.local");
@@ -763,7 +766,7 @@ test("三种模式共用的环境 loader 拒绝仓库内、相对、symlink 与�
   await rm(outside, { recursive: true, force: true });
 });
 
-test("npm 验收命令将缺失 env-file 交给脚本并返回去敏 BLOCKED 证据", () => {
+test("npm 验收命令将缺失 env-file 交给脚本并返回去敏 BLOCKED 证据", winSkip, () => {
   const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const missingEnvFile = path.join(
     os.tmpdir(),
@@ -1157,7 +1160,7 @@ test("依赖门禁绑定受版本控制的 Issue/PR 映射、唯一 commit 与�
   await rm(root, { recursive: true, force: true });
 });
 
-test("持久数据根检查要求正确类型、仅服务账号权限与安全父目录", async () => {
+test("持久数据根检查要求正确类型、仅服务账号权限与安全父目录", winSkip, async () => {
   const dataRoot = await mkdtemp(path.join(os.tmpdir(), "tf-phase-one-data-"));
   const databasePath = path.join(dataRoot, "workspace.sqlite");
   const fileDataDir = path.join(dataRoot, "files");
@@ -1205,7 +1208,7 @@ test("持久路径词法检查拒绝相对路径、.. 越界与规范化后的�
   assert.equal(result.evidence.duplicate, true);
 });
 
-test("会话 Cookie 文件必须是仓库外绝对路径、0600 普通文件且不能是 symlink", async () => {
+test("会话 Cookie 文件必须是仓库外绝对路径、0600 普通文件且不能是 symlink", winSkip, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "tf-phase-one-cookie-root-"));
   const outside = await mkdtemp(path.join(os.tmpdir(), "tf-phase-one-cookie-outside-"));
   const insideCookie = path.join(root, "session.cookie");
@@ -1241,7 +1244,7 @@ test("会话 Cookie 文件必须是仓库外绝对路径、0600 普通文件且�
   await rm(outside, { recursive: true, force: true });
 });
 
-test("evidence output 可以创建为独立 0600 文件且不覆盖旧证据", async () => {
+test("evidence output 可以创建为独立 0600 文件且不覆盖旧证据", winSkip, async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "tf-phase-one-output-"));
   const output = path.join(directory, "evidence.json");
   await writeEvidenceFile(output, { schemaVersion: "test", checks: [] });

@@ -145,7 +145,7 @@ function hasValidReductionPolicyBinding(input: PublishModelInput): boolean {
     && hasCanonicalReductionPolicyIdentity(policy)
     && policy.source
     && policy.source.workbookRefId === "feishu-workbook:tackle-design"
-    && policy.source.sheetId === "zrVOxd"
+    && policy.source.sheetId === "23CsXE"
     && policy.source.sourceRevision !== "17173"
     && input.projection.reductionStackingPolicyVersion === policy.version
     && input.projection.formalStatus === "FORMAL",

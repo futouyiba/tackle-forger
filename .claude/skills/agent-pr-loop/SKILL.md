@@ -9,7 +9,7 @@ description: 主 agent 已直接实现代码后，把 PR 走完「独立审核 �
 
 主 agent 实现并 push head 后，需要独立审核时有两条路（可选其一或并行）：
 1. **输出审核清单**（见下）→ 用户粘到常驻审核 agent 窗口（省 install + 上下文重建，推荐用于敏捷迭代）；
-2. **spawn 独立审核 agent**（opus，只读，可用 isolation:worktree 从 origin/main 干净读取避免本地落后）审当前 head。
+2. **spawn 独立审核 agent**（sonnet，只读，可用 isolation:worktree 从 origin/main 干净读取避免本地落后）审当前 head。
 
 ## 审核清单格式（主 agent 实现完后输出，可粘贴）
 
@@ -17,7 +17,7 @@ description: 主 agent 已直接实现代码后，把 PR 走完「独立审核 �
 审查 PR #<N>（仓库 <owner/repo>，<head 分支> → <base>）。
 head: <完整 SHA>，base: <base 完整 SHA>。对应 Issue #<M>。
 
-你是独立 reviewer（opus），只读，不写代码/不 push/不 approve。
+你是独立 reviewer（sonnet），只读，不写代码/不 push/不 approve。
 用 gh pr diff <N> / gh pr view <N> 看改动；必要时 gh api ...?ref=<head> 取文件（勿信本地落后 checkout）。
 必读：<AGENTS.md/CLAUDE.md/docs/README.md/v3 规范 相关节> + Issue #<M>。
 重点核实：<本次重点 1–5 项>。

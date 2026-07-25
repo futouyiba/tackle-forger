@@ -174,4 +174,4 @@ New domain behavior must cover normal, boundary, conflict, recovery/version-free
 
 ## Agent 工作模式
 
-实现、修改、调查由主 agent 直接做（直接 Edit/Write、跑 typecheck/lint/test、commit、push），不 spawn 实现 agent 或 workflow 去改代码。仅在需要独立审核时 spawn 一个 reviewer（opus，只读），并在拉起的同时输出一份自包含的「审核清单」（仓库、PR 号、head 完整 SHA、base、改动摘要、重点核实项、PASS/发现格式），以便粘贴到常驻审核 agent 窗口。审核独立性靠独立 reviewer 保证，不自己审自己。配套 skill 见 `.claude/skills/agent-pr-loop/SKILL.md`。
+实现、修改、调查由主 agent 直接做（直接 Edit/Write、跑 typecheck/lint/test、commit、push），不 spawn 实现 agent 或 workflow 去改代码。仅在需要独立审核时 spawn 一个 reviewer（sonnet，只读），并在拉起的同时输出一份自包含的「审核清单」（仓库、PR 号、head 完整 SHA、base、改动摘要、重点核实项、PASS/发现格式），以便粘贴到常驻审核 agent 窗口。审核独立性靠独立 reviewer 保证，不自己审自己。配套 skill 见 `.claude/skills/agent-pr-loop/SKILL.md`。

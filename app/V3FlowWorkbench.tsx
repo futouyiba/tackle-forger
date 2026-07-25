@@ -377,4 +377,3 @@ export function V3FlowWorkbench({ state, mutate, notify, initialSeriesId }: V3Fl
     </div>
   );
 }
-

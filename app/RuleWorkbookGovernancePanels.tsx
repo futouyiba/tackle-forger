@@ -14,6 +14,7 @@ import {
   type PricingTrialResult,
 } from "@/lib/pricing-policy";
 import type { CanonicalRuleWorkbookInspection } from "@/lib/rule-workbook-inspection";
+import { randomUUID } from "@/lib/browser-utils";
 import type { QualityValuePolicyDraft } from "@/lib/quality-value-policy";
 import type {
   SourceIdentityConfirmation,
@@ -94,7 +95,7 @@ export function IdentityMigrationPanel({
         action: "write_feishu_identity",
         idempotencyKey:
           `write-feishu-identity:${baseRevision}:${report.reportId}:` +
-          crypto.randomUUID(),
+          randomUUID(),
         payload: businessPayload,
       });
       const response = await fetch("/api/feishu-workbook", {

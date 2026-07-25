@@ -1,6 +1,7 @@
 "use client";
 
 import { issueClientActionCommand } from "@/lib/client-action-command";
+import { randomUUID } from "@/lib/browser-utils";
 import { isComposingChangeEvent } from "@/lib/composition-input";
 
 import {
@@ -512,7 +513,7 @@ function parseRuleCell(
   const raw = operations[prefix] ? value.slice(1).trim() : value;
   const numeric = Number(raw);
   return {
-    id: existing?.id ?? "rule-" + crypto.randomUUID(),
+    id: existing?.id ?? "rule-" + randomUUID(),
     parameterKey,
     operation,
     value: operation === "formula" || Number.isNaN(numeric) ? raw : numeric,
@@ -720,7 +721,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     setSyncState("saving");
     setSaveFeedback(null);
     try {
-      const idempotencyKey = `save-workspace:${revision}:${crypto.randomUUID()}`;
+      const idempotencyKey = `save-workspace:${revision}:${randomUUID()}`;
       const invocation = await issueClientActionCommand({
         action: "save_workspace",
         idempotencyKey,
@@ -974,7 +975,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   };
 
   const addModifier = () => {
-    const id = dimension + ":" + crypto.randomUUID();
+    const id = dimension + ":" + randomUUID();
     mutate((draft) => {
       draft.modifiers.push({
         id,
@@ -1633,7 +1634,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           <div className="toolbar-note">拖动顺序用数字精确控制；后层对前层结果继续计算或直接覆盖。</div>
           <div className="toolbar-spacer" />
           <Button icon={Plus} tone="primary" onClick={() => {
-            const id = "layer-" + crypto.randomUUID();
+            const id = "layer-" + randomUUID();
             mutate((draft) => draft.layers.push({
               id,
               name: "新规则层",
@@ -1684,7 +1685,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
                 <Button size="sm" icon={Plus} onClick={() => mutate((draft) => {
                   const target = draft.layers.find((item) => item.id === selectedLayer.id);
                   if (target) target.rules.push({
-                    id: "layer-rule-" + crypto.randomUUID(),
+                    id: "layer-rule-" + randomUUID(),
                     parameterKey: draft.parameters[0]?.key ?? "",
                     operation: "add",
                     value: 0,
@@ -1746,7 +1747,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           ))}
         </div>
         <Button tone="primary" icon={Plus} onClick={() => mutate((draft) => draft.affixes.push({
-          id: "affix-" + crypto.randomUUID(),
+          id: "affix-" + randomUUID(),
           name: "新词条",
           category: "stat",
           itemKinds: [itemKind],
@@ -1846,7 +1847,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       <div className="two-column quality-config">
         <Card className="flush-card">
           <div className="panel-title padded"><div><h3>品质阈值</h3><p>按词条最终得分自动划定品质。</p></div><Button icon={Plus} size="sm" onClick={() => mutate((draft) => draft.qualityBands.push({
-            id: "quality-" + crypto.randomUUID(),
+            id: "quality-" + randomUUID(),
             name: "新品质",
             color: "#667085",
             minScore: 0,
@@ -2506,7 +2507,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
                       layer = { id: "layer-learned", name: "精调沉淀规则", order: 75, enabled: true, mode: "global", optionIds: [], rules: [], notes: "经人工确认后从候选精调固化。" };
                       draft.layers.push(layer);
                     }
-                    layer.rules.push({ id: "learned-" + crypto.randomUUID(), parameterKey: suggestion.parameterKey, operation: "add", value: suggestion.averageDelta, notes: suggestion.summary });
+                    layer.rules.push({ id: "learned-" + randomUUID(), parameterKey: suggestion.parameterKey, operation: "add", value: suggestion.averageDelta, notes: suggestion.summary });
                   })}>发布规则</Button>
                 </div>
               ))}

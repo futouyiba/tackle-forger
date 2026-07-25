@@ -1,3 +1,4 @@
+import { randomUUID } from "./browser-utils";
 import { evaluateFormula } from "./engine";
 import type {
   AdjustmentRule,
@@ -17,7 +18,7 @@ import { defaultDataSourceProfiles } from "./data-sources";
 import { migrateWorkspaceState } from "./migrations";
 
 const now = () => new Date().toISOString();
-const uid = (prefix: string) => prefix + "-" + crypto.randomUUID();
+const uid = (prefix: string) => prefix + "-" + randomUUID();
 
 export const defaultRuleGraphs: RuleGraph[] = [
   {

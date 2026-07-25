@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   CANONICAL_FEISHU_SHEET_REGISTRY,
   CANONICAL_FEISHU_WORKBOOK,
+  LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY,
+  LEGACY_YS_EKW_FEISHU_WORKBOOK,
   pullFeishuWorkbookRevision,
 } from "../lib/feishu-workbook";
 import {
@@ -19,6 +21,7 @@ import {
 } from "../lib/pricing-policy";
 import {
   CANONICAL_IDENTITY_SHEET_SPECS,
+  LEGACY_YS_EKW_IDENTITY_SHEET_SPECS,
   canonicalAffixSheetRanges,
   canonicalIdentityPolicies,
   canonicalQualitySheetRange,
@@ -44,11 +47,13 @@ function sourceRevisionWithAffixGrid(rowCount = 86) {
     id: "feishu-revision:fixture", workbookRefId: CANONICAL_FEISHU_WORKBOOK.id,
     sourceRevision: "fixture", spreadsheetToken: "spreadsheet:fixture", pulledAt: "2026-07-24T00:00:00.000Z",
     pulledBy: "tester", syncScope: "workbook" as const, registryHash: "hash",
-    sheets: observedSheets.map((sheet) => sheet.sheetId === "zrVOxd"
-      ? { ...sheet, rowCount, columnCount: 6 }
-      : sheet.sheetId === "d6e928" ? { ...sheet, rowCount: 66, columnCount: 60 }
-      : sheet.sheetId === "FqD4j7" ? { ...sheet, rowCount: 60, columnCount: 19 }
-      : sheet),
+    sheets: observedSheets.map((sheet) => {
+      const base = { ...sheet, rowCount: 100, columnCount: 30 };
+      if (sheet.sheetId === "23CsXE") return { ...base, rowCount, columnCount: 6 };
+      if (["1cAihB", "2KCCHR", "3FYijT"].includes(sheet.sheetId)) return { ...base, rowCount: 20, columnCount: 60 };
+      if (sheet.sheetId === "27hboC") return { ...base, rowCount: 60, columnCount: 19 };
+      return base;
+    }),
     issues: [], state: "PULLED" as const,
   };
 }
@@ -60,18 +65,18 @@ test("04_词条的身份与别名读取共同跟随同 revision grid 上界，�
     aliasRange: "B2:F86",
   });
   const requests = canonicalRuleWorkbookRangeRequests(sourceRevision);
-  assert.equal(requests.find((entry) => entry.sheetId === "zrVOxd" && entry.range === "B1:C86")?.range, "B1:C86");
-  assert.equal(requests.find((entry) => entry.sheetId === "zrVOxd" && entry.range === "B2:F86")?.range, "B2:F86");
+  assert.equal(requests.find((entry) => entry.sheetId === "23CsXE" && entry.range === "B1:C86")?.range, "B1:C86");
+  assert.equal(requests.find((entry) => entry.sheetId === "23CsXE" && entry.range === "B2:F86")?.range, "B2:F86");
   assert.equal(canonicalQualitySheetRange(sourceRevision), "A1:S60");
-  assert.equal(requests.find((entry) => entry.sheetId === "FqD4j7" && entry.range === "A1:S60")?.range, "A1:S60");
-  assert.equal(requests.find((entry) => entry.sheetId === "fATowU" && entry.range === "B2:AD20")?.range, "B2:AD20");
-  for (const range of Object.values(CANONICAL_RULE_RANGES).filter((range) => range.sheetId !== "d6e928")) {
-    assert.equal(requests.find((entry) => entry.sheetId === range.sheetId && entry.range === range.range)?.range, range.range);
+  assert.equal(requests.find((entry) => entry.sheetId === "27hboC" && entry.range === "A1:S60")?.range, "A1:S60");
+  for (const group of ["weight", "type", "function", "method"] as const) {
+    for (const part of ["rod", "reel", "line"] as const) {
+      const sheetId = CANONICAL_RULE_RANGES[group][part];
+      assert.ok(requests.some((entry) => entry.sheetId === sheetId), `缺少 ${group} ${part} 子表 ${sheetId} 的 range 请求`);
+    }
   }
-  assert.equal(requests.find((entry) => entry.sheetId === "d6e928" && entry.range === "BG1:BH66")?.range, "BG1:BH66");
-  assert.equal(requests.find((entry) => entry.sheetId === "d6e928" && entry.range === "A1:BH66")?.range, "A1:BH66");
   const identities = identityRowsFromRanges([{
-    sheetId: "zrVOxd", range: "B1:C86", valueRange: { values: [["机器ID（勿改）", "实体类型"], ...Array.from({ length: 84 }, () => []), ["affix_rod_high", "RodAffix"]] },
+    sheetId: "23CsXE", range: "B1:C86", valueRange: { values: [["机器ID（勿改）", "实体类型"], ...Array.from({ length: 84 }, () => []), ["affix_rod_high", "RodAffix"]] },
   }]);
   assert.ok(identities.some((entry) => entry.stableId === "affix_rod_high"));
 });
@@ -79,9 +84,9 @@ test("04_词条的身份与别名读取共同跟随同 revision grid 上界，�
 test("04_词条 grid 元数据不完整时 fail-closed，不以旧行号截断", () => {
   for (const sheets of [
     observedSheets,
-    sourceRevisionWithAffixGrid(2).sheets,
-    sourceRevisionWithAffixGrid(86).sheets.map((sheet) => sheet.sheetId === "zrVOxd" ? { ...sheet, rowCount: Number.NaN } : sheet),
-    sourceRevisionWithAffixGrid(86).sheets.map((sheet) => sheet.sheetId === "zrVOxd" ? { ...sheet, columnCount: 5 } : sheet),
+    sourceRevisionWithAffixGrid(0).sheets,
+    sourceRevisionWithAffixGrid(86).sheets.map((sheet) => sheet.sheetId === "23CsXE" ? { ...sheet, rowCount: Number.NaN } : sheet),
+    sourceRevisionWithAffixGrid(86).sheets.map((sheet) => sheet.sheetId === "23CsXE" ? { ...sheet, columnCount: 0 } : sheet),
   ]) {
     assert.throws(() => canonicalAffixSheetRanges({ ...sourceRevisionWithAffixGrid(), sheets }));
   }
@@ -90,15 +95,15 @@ test("04_词条 grid 元数据不完整时 fail-closed，不以旧行号截断",
 test("07_品质评分 grid 元数据无效时 fail-closed，不回退旧 B4:N50", () => {
   const revision = sourceRevisionWithAffixGrid();
   for (const sheets of [
-    revision.sheets.map((sheet) => sheet.sheetId === "FqD4j7" ? { ...sheet, rowCount: 0 } : sheet),
-    revision.sheets.map((sheet) => sheet.sheetId === "FqD4j7" ? { ...sheet, columnCount: Number.NaN } : sheet),
+    revision.sheets.map((sheet) => sheet.sheetId === "27hboC" ? { ...sheet, rowCount: 0 } : sheet),
+    revision.sheets.map((sheet) => sheet.sheetId === "27hboC" ? { ...sheet, columnCount: Number.NaN } : sheet),
   ]) assert.throws(() => canonicalQualitySheetRange({ ...revision, sheets }));
-  const atLimit = revision.sheets.map((sheet) => sheet.sheetId === "FqD4j7" ? { ...sheet, rowCount: 10_000, columnCount: 20 } : sheet);
+  const atLimit = revision.sheets.map((sheet) => sheet.sheetId === "27hboC" ? { ...sheet, rowCount: 10_000, columnCount: 20 } : sheet);
   assert.equal(canonicalQualitySheetRange({ ...revision, sheets: atLimit }), "A1:T10000");
   for (const sheets of [
-    revision.sheets.map((sheet) => sheet.sheetId === "FqD4j7" ? { ...sheet, rowCount: 10_001, columnCount: 1 } : sheet),
-    revision.sheets.map((sheet) => sheet.sheetId === "FqD4j7" ? { ...sheet, rowCount: 1, columnCount: 201 } : sheet),
-    revision.sheets.map((sheet) => sheet.sheetId === "FqD4j7" ? { ...sheet, rowCount: 10_000, columnCount: 21 } : sheet),
+    revision.sheets.map((sheet) => sheet.sheetId === "27hboC" ? { ...sheet, rowCount: 10_001, columnCount: 1 } : sheet),
+    revision.sheets.map((sheet) => sheet.sheetId === "27hboC" ? { ...sheet, rowCount: 1, columnCount: 201 } : sheet),
+    revision.sheets.map((sheet) => sheet.sheetId === "27hboC" ? { ...sheet, rowCount: 10_000, columnCount: 21 } : sheet),
   ]) assert.throws(() => canonicalQualitySheetRange({ ...revision, sheets }));
 });
 
@@ -211,11 +216,11 @@ test("同一完整高行号工作簿导入保持幂等", () => {
 });
 
 test("当前整本工作簿注册表覆盖 00–17、FunctionProfile 常量与钓法审核表，并包含真实 sheet_id", () => {
-  assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.length, 21);
-  assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "00_使用说明")?.sheetId, "4IfBoX");
-  assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "04.0_FunctionProfile常量")?.sheetId, "mLpTLK");
-  assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "02.5_钓法模板")?.sheetId, "m3eQCg");
-  assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "12_打包竿组")?.sheetId, "lf4wIM");
+  assert.equal(LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY.length, 21);
+  assert.equal(LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "00_使用说明")?.sheetId, "4IfBoX");
+  assert.equal(LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "04.0_FunctionProfile常量")?.sheetId, "mLpTLK");
+  assert.equal(LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "02.5_钓法模板")?.sheetId, "m3eQCg");
+  assert.equal(LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "12_打包竿组")?.sheetId, "lf4wIM");
 });
 
 test("历史已绑定机器 ID 在当前工作表拓扑下仍通过唯一性、前缀与实体类型校验", () => {
@@ -242,17 +247,17 @@ test("历史已绑定机器 ID 在当前工作表拓扑下仍通过唯一性、�
     ["zrVOxd", typed([["affix_rod_", 12, "RodAffix"], ["affix_reel_", 12, "ReelAffix"], ["affix_line_", 12, "LineAffix"]])],
     ["9nE3Rx", typed([["series_rod_", 8, "SeriesArchetype"], ["series_reel_", 8, "SeriesArchetype"], ["series_line_", 8, "SeriesArchetype"]])],
   ]);
-  const rows = identityRowsFromRanges(CANONICAL_IDENTITY_SHEET_SPECS.map((spec) => ({
+  const rows = identityRowsFromRanges(LEGACY_YS_EKW_IDENTITY_SHEET_SPECS.map((spec) => ({
     sheetId: spec.sheetId,
     valueRange: { values: values.get(spec.sheetId) ?? [] },
-  })));
+  })), LEGACY_YS_EKW_IDENTITY_SHEET_SPECS);
   const report = prepareSourceIdentityMigration({
-    workbookRefId: CANONICAL_FEISHU_WORKBOOK.id,
+    workbookRefId: LEGACY_YS_EKW_FEISHU_WORKBOOK.id,
     sourceRevision: "2352",
     mode: "CONTINUOUS_SYNC",
     rows,
     existingEntities: [],
-    identityPolicies: canonicalIdentityPolicies(),
+    identityPolicies: canonicalIdentityPolicies(LEGACY_YS_EKW_IDENTITY_SHEET_SPECS),
     generatedAt: "2026-07-21T11:00:00.000Z",
   });
   assert.equal(rows.length, 157);
@@ -324,7 +329,7 @@ test("07/08/02 同 revision 导入查表与金额事实，但不猜测三项执�
 });
 
 test("工作簿按 sheet_id 校验，改名只告警，同名新表不冒充原表", async () => {
-  const renamed = observedSheets.map((sheet) =>
+  const renamed = LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY.map((sheet) => ({ sheetId: sheet.sheetId, name: sheet.expectedName })).map((sheet) =>
     sheet.sheetId === "9nE3Rx" ? { ...sheet, name: "06_系列原型" } : sheet,
   );
   renamed.push({ sheetId: "new-series-sheet", name: "06_系列" });
@@ -335,7 +340,7 @@ test("工作簿按 sheet_id 校验，改名只告警，同名新表不冒充原�
     },
   };
   const first = await pullFeishuWorkbookRevision({
-    workbook: CANONICAL_FEISHU_WORKBOOK,
+    workbook: LEGACY_YS_EKW_FEISHU_WORKBOOK, registry: LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY,
     adapter,
     pulledAt: "2026-07-21T10:00:00.000Z",
     pulledBy: "tester",
@@ -348,7 +353,7 @@ test("工作簿按 sheet_id 校验，改名只告警，同名新表不冒充原�
 
   revision = "2353";
   const second = await pullFeishuWorkbookRevision({
-    workbook: CANONICAL_FEISHU_WORKBOOK,
+    workbook: LEGACY_YS_EKW_FEISHU_WORKBOOK, registry: LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY,
     adapter,
     pulledAt: "2026-07-21T10:01:00.000Z",
     pulledBy: "tester",

@@ -82,6 +82,27 @@ export const CANONICAL_FEISHU_WORKBOOK: FeishuWorkbookRef = {
   id: "feishu-workbook:tackle-design",
   name: "钓具设计工作簿",
   provider: "feishu_sheets",
+  // PR2b 切流（2026-07-25，spec §14 :926）：权威源从旧表 YsEKw（/wiki/，18 合并表）
+  // 切到新表 WQ8w（/sheets/，50 分表，竿/轮/线独立子表）。旧 YsEKw 的块布局契约
+  // （竿3-18/轮21-36/线39-54）保留作 spec §14 审计证据。wikiToken 留空：/sheets/ 直接形式不经 wiki 解析。
+  shareUrl: "https://pisn3u3ony2.feishu.cn/sheets/WQ8wstS4ch29E2tAKnVcoh5KnJg?sheet=0iGCcx",
+  spreadsheetToken: "WQ8wstS4ch29E2tAKnVcoh5KnJg",
+  anchorSheetId: "0iGCcx",
+  syncScope: "workbook",
+  enabled: true,
+};
+
+/**
+ * 旧表 YsEKw（/wiki/，18 张合并表）的历史契约（PR2b 切流后保留，spec §14 :926 审计证据）。
+ *
+ * PR2b 切流后 canonical 默认 WQ8w；LEGACY_YS_EKW_* 不被新读取链默认使用，
+ * 但支持历史 revision 的审计、迁移适配与回归测试。旧合并表块布局
+ * （竿3-18/轮21-36/线39-54）与旧 sheetId（d6e928/mLpTLK 等）只在此处保留。
+ */
+export const LEGACY_YS_EKW_FEISHU_WORKBOOK: FeishuWorkbookRef = {
+  id: "feishu-workbook:tackle-design-legacy-ysekw",
+  name: "钓具设计工作簿（旧表 YsEKw·历史审计）",
+  provider: "feishu_sheets",
   shareUrl: "https://pisn3u3ony2.feishu.cn/wiki/YsEKwSUJ5i86HCkZKBVcNMw7nOh?from=from_copylink&sheet=9nE3Rx",
   wikiToken: "YsEKwSUJ5i86HCkZKBVcNMw7nOh",
   anchorSheetId: "9nE3Rx",
@@ -89,7 +110,7 @@ export const CANONICAL_FEISHU_WORKBOOK: FeishuWorkbookRef = {
   enabled: true,
 };
 
-export const CANONICAL_FEISHU_SHEET_REGISTRY: FeishuSheetRegistryEntry[] = [
+export const LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY: FeishuSheetRegistryEntry[] = [
   ["mLpTLK", "04.0_FunctionProfile常量", "rule_source", true, true],
   ["d6e928", "01_重量模板", "rule_source", true, true],
   ["4IfBoX", "00_使用说明", "historical_reference", false, false],
@@ -154,7 +175,7 @@ export const NEW_CANONICAL_FEISHU_WORKBOOK: FeishuWorkbookRef = {
  *
  * 全部 `canOverwriteDomainTruth=false`；`sheetId` 全局唯一（由 `validateFeishuWorkbookConfiguration` 校验）。
  */
-export const NEW_CANONICAL_FEISHU_SHEET_REGISTRY: FeishuSheetRegistryEntry[] = [
+export const CANONICAL_FEISHU_SHEET_REGISTRY: FeishuSheetRegistryEntry[] = [
   ["0iGCcx", "00_系统接入", "historical_reference", false, false],
   ["1cAihB", "01.0_重量模板-竿", "rule_source", true, true],
   ["2KCCHR", "01.1_重量模板-轮", "rule_source", true, true],
@@ -213,6 +234,12 @@ export const NEW_CANONICAL_FEISHU_SHEET_REGISTRY: FeishuSheetRegistryEntry[] = [
   importsRules: Boolean(importsRules),
   canOverwriteDomainTruth: false,
 }));
+
+/**
+ * PR2b 切流后别名：NEW_CANONICAL_FEISHU_SHEET_REGISTRY 等同 CANONICAL_FEISHU_SHEET_REGISTRY（WQ8w 50 张）。
+ * 保留供 feishu-new-table-registry 测试与历史引用兼容。
+ */
+export const NEW_CANONICAL_FEISHU_SHEET_REGISTRY = CANONICAL_FEISHU_SHEET_REGISTRY;
 
 /**
  * 解析权威规则源工作簿链接。
@@ -417,15 +444,18 @@ export async function pullFeishuWorkbookRevision(input: {
   pulledBy: string;
 }): Promise<FeishuSourceRevision> {
   if (!input.workbook.enabled) throw new Error("飞书规则工作簿已停用。");
-  const parsed = parseCanonicalWorkbookLink(input.workbook.shareUrl);
-  if (parsed.wikiToken !== input.workbook.wikiToken) {
-    throw new Error("工作簿链接与已登记 wikiToken 不一致。");
-  }
+  const registry = input.registry ?? CANONICAL_FEISHU_SHEET_REGISTRY;
+  // PR2b 切流：复用 validateFeishuWorkbookConfiguration 统一校验（/wiki/ 校验 wikiToken、/sheets/ 校验 spreadsheetToken），
+  // 替代旧内联 `parsed.wikiToken !== input.workbook.wikiToken` 比较（对 /sheets/ 直接形式无效）。
+  validateFeishuWorkbookConfiguration(input.workbook, registry);
   const remote = await input.adapter.resolveWorkbook(input.workbook);
   if (!remote.sourceRevision.trim()) throw new Error("飞书未返回工作簿 revision。");
-  const registry = input.registry ?? CANONICAL_FEISHU_SHEET_REGISTRY;
   const issues = validateSheetRegistry(registry, remote.sheets);
-  const policyRanges = input.adapter.readRanges
+  // PR2b-2 待改：WQ8w 新表无 d6e928（W 段策略将切到 1cAihB+2KCCHR+3FYijT 三子表）。
+  // PR2b-1 条件保留旧 d6e928 读取：仅当远端含 d6e928（LEGACY YsEKw 拓扑）时按旧契约读取并注入
+  // fiveAxisWeightBandPolicy；WQ8w（无 d6e928）跳过，不阻断 pull。PR2b-2 实现三子表 + policyId + hash。
+  const hasLegacyWeightSheet = remote.sheets.some((sheet) => sheet.sheetId === "d6e928");
+  const policyRanges = hasLegacyWeightSheet && input.adapter.readRanges
     ? await input.adapter.readRanges({ spreadsheetToken: remote.spreadsheetToken, requests: [{ sheetId: "d6e928", range: "A1:AE54" }] })
     : undefined;
   const policyRange = policyRanges?.find((entry) => entry.sheetId === "d6e928" && entry.range === "A1:AE54");
@@ -439,7 +469,7 @@ export async function pullFeishuWorkbookRevision(input: {
     spreadsheetToken: remote.spreadsheetToken,
     pulledAt: input.pulledAt,
     pulledBy: input.pulledBy,
-    anchorSheetId: parsed.anchorSheetId,
+    anchorSheetId: input.workbook.anchorSheetId,
     syncScope: "workbook" as const,
     registryHash: deterministicHash(registry),
     sheets: structuredClone(remote.sheets),

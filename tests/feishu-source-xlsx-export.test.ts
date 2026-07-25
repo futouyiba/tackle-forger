@@ -5,8 +5,8 @@ import { NextRequest } from "next/server";
 import { GET } from "../app/api/export-feishu-source-xlsx/route";
 import { loadWorkspaceState } from "../lib/storage";
 import {
-  CANONICAL_FEISHU_SHEET_REGISTRY,
-  CANONICAL_FEISHU_WORKBOOK,
+  LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY,
+  LEGACY_YS_EKW_FEISHU_WORKBOOK,
   type FeishuSourceRevision,
 } from "../lib/feishu-workbook";
 import {
@@ -51,7 +51,7 @@ function disableTrustedProxy() {
 function makeSourceRevision(): FeishuSourceRevision {
   return {
     id: "feishu-revision:test-42",
-    workbookRefId: CANONICAL_FEISHU_WORKBOOK.id,
+    workbookRefId: LEGACY_YS_EKW_FEISHU_WORKBOOK.id,
     sourceRevision: "42",
     spreadsheetToken: "SECRET_SHEET_TOKEN_MARKER",
     pulledAt: "2026-01-01T00:00:00Z",
@@ -132,7 +132,7 @@ test("feishuSourceSheetRange 用 grid 构造整表范围，缺 grid 回退默认
 
 test("buildFeishuSourceExportRequests 仅包含存在 grid 的 rule_source sheet，顺序遵循 registry", () => {
   const rev = makeSourceRevision();
-  const requests = buildFeishuSourceExportRequests(rev, CANONICAL_FEISHU_SHEET_REGISTRY);
+  const requests = buildFeishuSourceExportRequests(rev, LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY);
   const ids = requests.map((r) => r.sheetId);
   // registry 中 rule_source 且在 rev.sheets 里存在的：d6e928, rgFPUu, 9nE3Rx
   assert.deepEqual(ids, ["d6e928", "rgFPUu", "9nE3Rx"]);
@@ -142,7 +142,7 @@ test("buildFeishuSourceExportRequests 仅包含存在 grid 的 rule_source sheet
 
 test("missingSourceSheets 列出缺席的 rule_source sheet", () => {
   const rev = makeSourceRevision();
-  const missing = missingSourceSheets(rev, CANONICAL_FEISHU_SHEET_REGISTRY);
+  const missing = missingSourceSheets(rev, LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY);
   const missingIds = missing.map((m) => m.sheetId);
   // 大量 rule_source sheet 在 rev 中缺席。
   assert.ok(missingIds.includes("fATowU"));
@@ -154,7 +154,7 @@ test("missingSourceSheets 列出缺席的 rule_source sheet", () => {
 test("导出含元信息 sheet 与每个 range 的数据 sheet（多 sheet）", () => {
   const input = {
     sourceRevision: makeSourceRevision(),
-    registry: CANONICAL_FEISHU_SHEET_REGISTRY,
+    registry: LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY,
     reads: makeReads(),
   };
   const workbook = buildFeishuSourceExportWorkbook(input);
@@ -172,7 +172,7 @@ test("导出含元信息 sheet 与每个 range 的数据 sheet（多 sheet）", 
 test("导出对 spreadsheetToken 脱敏，不泄露凭据", () => {
   const input = {
     sourceRevision: makeSourceRevision(),
-    registry: CANONICAL_FEISHU_SHEET_REGISTRY,
+    registry: LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY,
     reads: makeReads(),
   };
   const buffer = serializeFeishuSourceExport(input);
@@ -185,7 +185,7 @@ test("导出对 spreadsheetToken 脱敏，不泄露凭据", () => {
 test("导出确定性：相同输入产生二进制一致的输出", () => {
   const input = {
     sourceRevision: makeSourceRevision(),
-    registry: CANONICAL_FEISHU_SHEET_REGISTRY,
+    registry: LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY,
     reads: makeReads(),
   };
   const first = Buffer.from(serializeFeishuSourceExport(input));
@@ -197,7 +197,7 @@ test("导出确定性：相同输入产生二进制一致的输出", () => {
 test("文件名仅依赖源 revision，不含时间戳", () => {
   const name = feishuSourceExportFilename({
     sourceRevision: makeSourceRevision(),
-    registry: CANONICAL_FEISHU_SHEET_REGISTRY,
+    registry: LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY,
     reads: [],
   });
   assert.equal(name, "飞书源数据_r42.xlsx");
@@ -208,7 +208,7 @@ test("部分 sheet 读取失败时仍导出成功的 sheet，并在元信息透�
   const reads = makeReads().slice(0, 2);
   const input = {
     sourceRevision: makeSourceRevision(),
-    registry: CANONICAL_FEISHU_SHEET_REGISTRY,
+    registry: LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY,
     reads,
     failures: [
       {
@@ -252,12 +252,12 @@ test("路由在工作区未记录源修订时返回 409，且不产生新 revisi
 });
 
 test("路由不触碰 canonical 规则源常量", async () => {
-  const workbookBefore = JSON.stringify(CANONICAL_FEISHU_WORKBOOK);
-  const registryBefore = JSON.stringify(CANONICAL_FEISHU_SHEET_REGISTRY);
+  const workbookBefore = JSON.stringify(LEGACY_YS_EKW_FEISHU_WORKBOOK);
+  const registryBefore = JSON.stringify(LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY);
   withTrustedProxy();
   await GET(new NextRequest("http://localhost/api/export-feishu-source-xlsx", { headers: authHeaders })).catch(() => {});
-  assert.equal(JSON.stringify(CANONICAL_FEISHU_WORKBOOK), workbookBefore, "CANONICAL_FEISHU_WORKBOOK 被修改");
-  assert.equal(JSON.stringify(CANONICAL_FEISHU_SHEET_REGISTRY), registryBefore, "CANONICAL_FEISHU_SHEET_REGISTRY 被修改");
+  assert.equal(JSON.stringify(LEGACY_YS_EKW_FEISHU_WORKBOOK), workbookBefore, "LEGACY_YS_EKW_FEISHU_WORKBOOK 被修改");
+  assert.equal(JSON.stringify(LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY), registryBefore, "LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY 被修改");
 });
 
 test("feishuEndpointPath 脱敏 spreadsheets 路径中的资源 token，保留接口语义", () => {

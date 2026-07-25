@@ -3,7 +3,7 @@ import test from "node:test";
 import { importCanonicalRuleSource } from "../lib/canonical-rule-source";
 import { calculateCandidate } from "../lib/engine";
 import { CURRENT_WORKSPACE_SCHEMA_VERSION, migrateWorkspaceState } from "../lib/migrations";
-import { identityRowsFromRanges, weightTemplateDraftFromCanonicalRuleDraft } from "../lib/rule-workbook-inspection";
+import { identityRowsFromRanges, weightTemplateDraftFromCanonicalRuleDraft, LEGACY_YS_EKW_IDENTITY_SHEET_SPECS } from "../lib/rule-workbook-inspection";
 import { createSeedState } from "../lib/seed";
 import {
   applyCanonicalRuleSourceDraft,
@@ -37,15 +37,15 @@ const revision: FeishuSourceRevision = {
 test("重量模板草稿继承 canonical 坏行错误并冻结表头驱动单元格来源", () => {
   const values = [
     ["", "机器ID（勿改）", "同步状态", "钓法", "备注", "重量段", "最小拉力", "最大拉力", "鱼重等级", "竿拉力"],
-    ["", "wtpl_ok", "BOUND", "路亚", "说明", "轻", 1, 2, 3, 10],
+    ["", "wtpl_rod_ok", "BOUND", "路亚", "说明", "轻", 1, 2, 3, 10],
     ["", "", "BOUND", "路亚", "坏行", "中", "", 3, 4, 12],
     ["", "重量段", "最大拉力", "机器ID（勿改）", "最小拉力", "备注", "同步状态", "鱼重等级", "竿拉力"],
-    ["", "重", 6, "wtpl_second", 4, "第二块", "BOUND", 5, 20],
-    ["", "重", "", "wtpl_blank_max", 4, "空最大值", "BOUND", 5, 20],
-    ["", "重", 3, "wtpl_inverted", 4, "倒置区间", "BOUND", 5, 20],
+    ["", "重", 6, "wtpl_rod_second", 4, "第二块", "BOUND", 5, 20],
+    ["", "重", "", "wtpl_rod_blank_max", 4, "空最大值", "BOUND", 5, 20],
+    ["", "重", 3, "wtpl_rod_inverted", 4, "倒置区间", "BOUND", 5, 20],
   ];
-  const canonicalRuleDraft = importCanonicalRuleSource({ sourceRevision: revision, ...baseFixture(), weightValues: values, importedAt: revision.pulledAt });
-  const draft = weightTemplateDraftFromCanonicalRuleDraft({ sourceRevision: revision, canonicalRuleDraft, weightValues: values, importedAt: revision.pulledAt });
+  const canonicalRuleDraft = importCanonicalRuleSource({ sourceRevision: revision, ...baseFixture(), weightSources: [{ part: "rod", sheetId: "1cAihB", values }], importedAt: revision.pulledAt });
+  const draft = weightTemplateDraftFromCanonicalRuleDraft({ sourceRevision: revision, canonicalRuleDraft, weightSources: [{ part: "rod", sheetId: "1cAihB", values }], importedAt: revision.pulledAt });
   assert.equal(draft.formalStatus, "NON_FORMAL");
   assert.ok(draft.issues.some((issue) => issue.code === "WEIGHT_TEMPLATE_ID_MISSING"));
   assert.equal(draft.issues.find((issue) => issue.code === "WEIGHT_TEMPLATE_ID_MISSING")?.sourceCell?.cell, "B3");
@@ -56,7 +56,7 @@ test("重量模板草稿继承 canonical 坏行错误并冻结表头驱动单元
     machineId: "B2", fishMinKg: "G2", fishMaxKg: "H2", nominalFishKg: "G2:H2", weightBand: "F2",
     "机器ID（勿改）": "B2", "同步状态": "C2", "钓法": "D2", "备注": "E2", "重量段": "F2", "最小拉力": "G2", "最大拉力": "H2", "鱼重等级": "I2", "竿拉力": "J2",
   });
-  assert.deepEqual(draft.templates.find((template) => template.id.startsWith("wtpl_second"))?.source.cells, {
+  assert.deepEqual(draft.templates.find((template) => template.id.startsWith("wtpl_rod_second"))?.source.cells, {
     machineId: "D5", fishMinKg: "E5", fishMaxKg: "C5", nominalFishKg: "E5:C5", weightBand: "B5",
     "重量段": "B5", "最大拉力": "C5", "机器ID（勿改）": "D5", "最小拉力": "E5", "备注": "F5", "同步状态": "G5", "鱼重等级": "H5", "竿拉力": "I5",
   });
@@ -75,23 +75,30 @@ function baseFixture() {
     functionHeader(parameter),
     ...[1, 2, 3].map((intensity) => row({ 1: `func_${part}_${String(intensity).padStart(4, "0")}`, 2: "FunctionProfile", 3: `远投|${intensity}`, 4: "远投", 5: intensity, 6: intensity, 7: `funcgrp_${part}_0001`, 8: 1 + intensity / 10 })),
   ];
+  // PR2b 切流：fixture 改为 WQ8w 分表形式——每部位独立 source（带 part + 子表 sheetId + 原 sheet 行号 provenance），
+  // 替代旧 YsEKw 合并表（一张含竿/轮/线块）。旧合并表的块布局（竿3-18/轮21-36/线39-54）作 spec §14 审计证据。
+  const sheetIdFor = { weight: { rod: "1cAihB", reel: "2KCCHR", line: "3FYijT" }, type: { rod: "10TyFp", reel: "11CfXW", line: "12VetE" }, function: { rod: "16qYVn", reel: "17jqiE", line: "18pjcZ" }, method: { rod: "4zXYpP", reel: "5oZXTO", line: "6FwSyV" } } as const;
+  const parted = (part: "rod" | "reel" | "line", group: keyof typeof sheetIdFor, values: unknown[][]) => ({ part, sheetId: sheetIdFor[group][part], values });
   return {
-    weightValues: [[], weightHeader,
-      row({ 1: "wtpl_0001", 2: "BOUND", 3: "路亚", 4: "源备注", 5: "W01", 6: 0.1, 7: 1.5, 8: 1, 9: 10, 10: 8, 11: 30, 12: "快" }),
-      row({ 1: "wtpl_0002", 2: "BOUND", 3: "浮钓", 5: "W01", 6: 0.1, 7: 1.5, 8: 1, 9: 9, 10: 7, 11: 28, 12: "中" }),
-    ],
-    typeValues: [[], typeHeader,
-      row({ 1: "type_rod_0001", 2: "RodType", 3: "W01", 4: "路亚", 5: "路亚直柄竿", 6: 1.1, 7: 0.9 }),
-      [],
-      row({ 1: "机器ID（勿改）", 2: "实体类型", 3: "重量段", 4: "钓法", 5: "具体类型", 6: "线拉力" }),
-      row({ 1: "type_line_0001", 2: "LineType", 3: "W01", 4: "-", 5: "尼龙线", 6: 1.05 }),
+    weightSources: [parted("rod", "weight", [[], weightHeader,
+      row({ 1: "wtpl_rod_0001", 2: "BOUND", 3: "路亚", 4: "源备注", 5: "W01", 6: 0.1, 7: 1.5, 8: 1, 9: 10, 10: 8, 11: 30, 12: "快" }),
+      row({ 1: "wtpl_rod_0002", 2: "BOUND", 3: "浮钓", 5: "W01", 6: 0.1, 7: 1.5, 8: 1, 9: 9, 10: 7, 11: 28, 12: "中" }),
+    ]), parted("reel", "weight", [[]]), parted("line", "weight", [[]])],
+    typeSources: [
+      parted("rod", "type", [[], typeHeader, row({ 1: "type_rod_0001", 2: "RodType", 3: "W01", 4: "路亚", 5: "路亚直柄竿", 6: 1.1, 7: 0.9 })]),
+      parted("reel", "type", [[]]),
+      parted("line", "type", [[], row({ 1: "机器ID（勿改）", 2: "实体类型", 3: "重量段", 4: "钓法", 5: "具体类型", 6: "线拉力" }), row({ 1: "type_line_0001", 2: "LineType", 3: "W01", 4: "-", 5: "尼龙线", 6: 1.05 })]),
     ],
     functionProfileValues,
-    functionValues: [[], ...functionBlock("rod", "竿拉力"), [], ...functionBlock("reel", "轮拉力"), [], ...functionBlock("line", "线拉力")],
-    methodValues: [[], methodHeader,
-      row({ 1: "fishing_rod_0001", 2: "竿", 3: "路亚", 4: 1 }),
-      row({ 1: "fishing_reel_0001", 2: "轮", 3: "泛用", 4: 1 }),
-      row({ 1: "fishing_line_0001", 2: "线", 3: "泛用", 4: 1 }),
+    functionSources: [
+      parted("rod", "function", [[], ...functionBlock("rod", "竿拉力")]),
+      parted("reel", "function", [[], ...functionBlock("reel", "轮拉力")]),
+      parted("line", "function", [[], ...functionBlock("line", "线拉力")]),
+    ],
+    methodSources: [
+      parted("rod", "method", [[], methodHeader, row({ 1: "fishing_rod_0001", 2: "竿", 3: "路亚", 4: 1 })]),
+      parted("reel", "method", [[], methodHeader, row({ 1: "fishing_reel_0001", 2: "轮", 3: "泛用", 4: 1 })]),
+      parted("line", "method", [[], methodHeader, row({ 1: "fishing_line_0001", 2: "线", 3: "泛用", 4: 1 })]),
     ],
   };
 }
@@ -130,7 +137,11 @@ function productionShapeFixture() {
       }));
     })];
   };
-  source.functionValues = [[], ...block("rod", "竿拉力"), [], ...block("reel", "轮拉力"), [], ...block("line", "线拉力")];
+  source.functionSources = [
+    { part: "rod", sheetId: "16qYVn", values: [[], ...block("rod", "竿拉力")] },
+    { part: "reel", sheetId: "17jqiE", values: [[], ...block("reel", "轮拉力")] },
+    { part: "line", sheetId: "18pjcZ", values: [[], ...block("line", "线拉力")] },
+  ];
   return source;
 }
 
@@ -158,7 +169,7 @@ test("多区块表头按当前区块解析，并保留稳定 ID、显示值、�
   const draft = importCanonicalRuleSource({ sourceRevision: revision, ...fixture(), importedAt: revision.pulledAt });
   assert.deepEqual(draft.issues, []);
   assert.equal(draft.templates.length, 2);
-  assert.equal(draft.templates[0].id, "wtpl_0001:fishing_rod_0001");
+  assert.equal(draft.templates[0].id, "wtpl_rod_0001:fishing_rod_0001");
   assert.equal(draft.templates[0].methodId, "fishing_rod_0001");
   assert.equal(draft.templates[0].fishWeightLevel, 1);
   assert.equal(draft.templates[0].nominalTargetPullKgf, 0.8);
@@ -179,7 +190,7 @@ test("显式拉取只生成草稿，不发布或改写历史 Snapshot", () => {
   const registered = recordFeishuSourceRevision(withoutReplaceableRuleReferences(initial), revision);
   const sourceDraft = importCanonicalRuleSource({ sourceRevision: revision, ...fixture(), importedAt: revision.pulledAt });
   const applied = applyCanonicalRuleSourceDraft(registered, sourceDraft);
-  assert.equal(applied.templates[0]?.id, "wtpl_0001:fishing_rod_0001");
+  assert.equal(applied.templates[0]?.id, "wtpl_rod_0001:fishing_rod_0001");
   assertExplicitPullDidNotPublish(registered, applied);
   assert.deepEqual(registered.configurationSnapshots, initial.configurationSnapshots);
 });
@@ -187,31 +198,31 @@ test("显式拉取只生成草稿，不发布或改写历史 Snapshot", () => {
 test("空表或重复稳定 ID 时 fail closed，不覆盖当前正式可用数据", () => {
   const initial = recordFeishuSourceRevision(createSeedState(), revision);
   const duplicate = fixture();
-  duplicate.weightValues.push(structuredClone(duplicate.weightValues[2]));
+  duplicate.weightSources[0].values.push(structuredClone(duplicate.weightSources[0].values[2]));
   const invalid = importCanonicalRuleSource({ sourceRevision: revision, ...duplicate, importedAt: revision.pulledAt });
   assert.ok(invalid.issues.some((issue) => issue.code === "WEIGHT_TEMPLATE_ID_DUPLICATE"));
   assert.throws(() => applyCanonicalRuleSourceDraft(initial, invalid), /已保留当前可用规则/);
   assert.equal(initial.templates[0].id, "T01");
 
-  const empty = importCanonicalRuleSource({ sourceRevision: revision, weightValues: [], typeValues: [], functionValues: [], importedAt: revision.pulledAt });
-  assert.deepEqual(empty.issues.filter((issue) => issue.level === "error").map((issue) => issue.code).sort(), ["FUNCTION_PROFILE_EMPTY", "FUNCTION_RULE_MEMBER_SET_MISMATCH", "ITEM_TYPE_EMPTY", "WEIGHT_TEMPLATE_EMPTY"]);
+  const empty = importCanonicalRuleSource({ sourceRevision: revision, weightSources: [], typeSources: [], functionSources: [], importedAt: revision.pulledAt });
+  assert.deepEqual(empty.issues.filter((issue) => issue.level === "error").map((issue) => issue.code).sort(), ["FUNCTION_PART_SOURCE_MISSING", "FUNCTION_PART_SOURCE_MISSING", "FUNCTION_PART_SOURCE_MISSING", "FUNCTION_PROFILE_EMPTY", "FUNCTION_RULE_MEMBER_SET_MISMATCH", "ITEM_TYPE_EMPTY", "TYPE_PART_SOURCE_MISSING", "TYPE_PART_SOURCE_MISSING", "TYPE_PART_SOURCE_MISSING", "WEIGHT_PART_SOURCE_MISSING", "WEIGHT_PART_SOURCE_MISSING", "WEIGHT_PART_SOURCE_MISSING", "WEIGHT_TEMPLATE_EMPTY"]);
 
   const missingId = fixture();
-  missingId.weightValues.push(row({ 3: "路亚", 5: "W02", 6: 2, 7: 3 }));
+  missingId.weightSources[0].values.push(row({ 3: "路亚", 5: "W02", 6: 2, 7: 3 }));
   const missingIdDraft = importCanonicalRuleSource({ sourceRevision: revision, ...missingId, importedAt: revision.pulledAt });
   assert.ok(missingIdDraft.issues.some((issue) => issue.code === "WEIGHT_TEMPLATE_ID_MISSING"));
   assert.throws(() => applyCanonicalRuleSourceDraft(initial, missingIdDraft), /已保留当前可用规则/);
 
   const legacyMethodText = fixture();
-  legacyMethodText.weightValues[2]![3] = "未绑定钓法";
+  legacyMethodText.weightSources[0].values[2]![3] = "未绑定钓法";
   assert.deepEqual(importCanonicalRuleSource({ sourceRevision: revision, ...legacyMethodText, importedAt: revision.pulledAt }).issues, []);
 });
 
 test("缺失源机器 ID 或未绑定钓法时 fail closed", () => {
   const missing = fixture();
-  missing.weightValues.push(row({ 3: "路亚", 5: "W99", 6: 1, 7: 2 }));
-  missing.typeValues.push(row({ 2: "RodType", 3: "缺 ID 类型", 4: "路亚", 5: 1.1 }));
-  missing.functionValues.push(row({ 3: "远投|3", 4: "远投", 5: 3, 7: 1.4 }));
+  missing.weightSources[0].values.push(row({ 3: "路亚", 5: "W99", 6: 1, 7: 2 }));
+  missing.typeSources[0].values.push(row({ 2: "RodType", 3: "缺 ID 类型", 4: "路亚", 5: 1.1 }));
+  missing.functionSources[0].values.push(row({ 3: "远投|3", 4: "远投", 5: 3, 7: 1.4 }));
   const invalid = importCanonicalRuleSource({ sourceRevision: revision, ...missing, importedAt: revision.pulledAt });
   assert.deepEqual(invalid.issues.filter((issue) => issue.level === "error").map((issue) => issue.code).sort(), [
     "FUNCTION_ROW_ID_MISSING",
@@ -220,29 +231,29 @@ test("缺失源机器 ID 或未绑定钓法时 fail closed", () => {
   ]);
 
   const legacyMethodText = fixture();
-  legacyMethodText.weightValues[2]![3] = "未知钓法";
+  legacyMethodText.weightSources[0].values[2]![3] = "未知钓法";
   assert.equal(importCanonicalRuleSource({ sourceRevision: revision, ...legacyMethodText, importedAt: revision.pulledAt }).issues.some((issue) => issue.code === "WEIGHT_TEMPLATE_ROW_INVALID"), false);
 
 });
 
 test("FunctionProfile 只按两级稳定外键归组，并拒绝未知、重复或缺失的部件强度", () => {
   const unknownGroup = fixture();
-  unknownGroup.functionValues[2]![7] = "funcgrp_rod_unknown";
+  unknownGroup.functionSources[0].values[2]![7] = "funcgrp_rod_unknown";
   assert.ok(importCanonicalRuleSource({ sourceRevision: revision, ...unknownGroup, importedAt: revision.pulledAt }).issues.some((issue) => issue.code === "FUNCTION_PROFILE_PARENT_UNKNOWN"));
 
   const renamed = fixture();
-  renamed.functionValues[2]![4] = "任意改名";
+  renamed.functionSources[0].values[2]![4] = "任意改名";
   const renamedDraft = importCanonicalRuleSource({ sourceRevision: revision, ...renamed, importedAt: revision.pulledAt });
   assert.deepEqual(renamedDraft.issues, []);
   assert.equal(renamedDraft.functionProfiles[0]?.id, "function:all_round");
 
   const duplicateIntensity = fixture();
-  duplicateIntensity.functionValues[4]![5] = 1;
+  duplicateIntensity.functionSources[0].values[4]![5] = 1;
   const duplicate = importCanonicalRuleSource({ sourceRevision: revision, ...duplicateIntensity, importedAt: revision.pulledAt });
   assert.ok(duplicate.issues.some((issue) => issue.code === "FUNCTION_GROUP_PART_INTENSITY_DUPLICATE"));
 
   const missingIntensity = fixture();
-  missingIntensity.functionValues.splice(4, 1);
+  missingIntensity.functionSources[0].values.splice(4, 1);
   const missing = importCanonicalRuleSource({ sourceRevision: revision, ...missingIntensity, importedAt: revision.pulledAt });
   assert.ok(missing.issues.some((issue) => issue.code === "FUNCTION_GROUP_PART_INTENSITY_MISSING"));
 });
@@ -250,23 +261,21 @@ test("FunctionProfile 只按两级稳定外键归组，并拒绝未知、重复�
 test("02 钓法稳定行对 01 标杆生成派生模板，02.5 不反向参与计算", () => {
   const source = fixture();
   const methodHeader = row({ 1: "机器ID（勿改）", 2: "钓具大类", 3: "钓法", 4: "竿拉力" });
-  const methodValues = [[], methodHeader,
-    row({ 1: "fishing_rod_0001", 2: "竿", 3: "路亚", 4: 1.5 }),
-    [],
-    methodHeader,
-    row({ 1: "fishing_reel_0001", 2: "轮", 3: "泛用", 4: 0.5 }),
+  const methodSources = [
+    { part: "rod" as const, sheetId: "4zXYpP", values: [[], methodHeader, row({ 1: "fishing_rod_0001", 2: "竿", 3: "路亚", 4: 1.5 })] },
+    { part: "reel" as const, sheetId: "5oZXTO", values: [[], methodHeader, row({ 1: "fishing_reel_0001", 2: "轮", 3: "泛用", 4: 0.5 })] },
   ];
-  const draft = importCanonicalRuleSource({ sourceRevision: revision, ...source, methodValues, methodTemplateReviewValues: [["故意错误的审核结果"]], importedAt: revision.pulledAt });
-  assert.equal(draft.templates.find((entry) => entry.id === "wtpl_0001:fishing_rod_0001")?.values["杆最大拉力kgf"], 15);
+  const draft = importCanonicalRuleSource({ sourceRevision: revision, ...source, methodSources, methodTemplateReviewSources: [{ part: "rod", sheetId: "7ygxLI", values: [["故意错误的审核结果"]] }], importedAt: revision.pulledAt });
+  assert.equal(draft.templates.find((entry) => entry.id === "wtpl_rod_0001:fishing_rod_0001")?.values["杆最大拉力kgf"], 15);
   assert.equal(draft.templates.some((entry) => entry.id.includes("故意错误")), false);
   const once = structuredClone(draft);
-  const twice = importCanonicalRuleSource({ sourceRevision: revision, ...source, methodValues, methodTemplateReviewValues: [["不同审核结果"]], importedAt: revision.pulledAt });
+  const twice = importCanonicalRuleSource({ sourceRevision: revision, ...source, methodSources, methodTemplateReviewSources: [{ part: "rod", sheetId: "7ygxLI", values: [["不同审核结果"]] }], importedAt: revision.pulledAt });
   assert.deepEqual(twice.templates, once.templates);
 });
 
 test("02 缺少已启用部位的稳定钓法块时 fail closed", () => {
   const source = fixture();
-  source.methodValues = [];
+  source.methodSources = [];
   const draft = importCanonicalRuleSource({ sourceRevision: revision, ...source, importedAt: revision.pulledAt });
   assert.ok(draft.issues.some((issue) => issue.code === "METHOD_PART_COVERAGE_MISSING"));
 });
@@ -287,7 +296,7 @@ test("重量模板稳定身份只读取精确 BG:BH 区间，不被同表完整�
   const rows = identityRowsFromRanges([
     { sheetId: "d6e928", range: "BG1:BH66", valueRange: { values: [["机器ID", "同步状态"], ["wtpl_0001", "BOUND"]] } },
     { sheetId: "d6e928", range: "A1:BH66", valueRange: { values: [["展示名", "机器ID"], ["路亚", "wtpl_0001"]] } },
-  ]);
+  ], LEGACY_YS_EKW_IDENTITY_SHEET_SPECS);
   assert.equal(rows.length, 1);
   assert.equal(rows[0]?.stableId, "wtpl_0001");
 });
@@ -297,7 +306,7 @@ test("04.0 Q:S 的真实 Id 表头不作为 FunctionPartGroup 实体", () => {
     sheetId: "mLpTLK",
     range: "Q1:S8",
     valueRange: { values: [["rodFunctionGroupId", "reelFunctionGroupId", "lineFunctionGroupId"], ["funcgrp_rod_0001", "funcgrp_reel_0001", "funcgrp_line_0001"]] },
-  }]);
+  }], LEGACY_YS_EKW_IDENTITY_SHEET_SPECS);
   assert.deepEqual(rows.map((entry) => entry.stableId), ["funcgrp_rod_0001", "funcgrp_reel_0001", "funcgrp_line_0001"]);
   assert.ok(rows.every((entry) => entry.entityType === "FunctionPartGroup"));
 });
@@ -307,14 +316,14 @@ test("04.0 父级常量的真实 functionProfileId 表头不作为 FunctionProfi
     sheetId: "mLpTLK",
     range: "A1:S8",
     valueRange: { values: [["functionProfileId（永久）", "displayName"], ["function:all_round", "泛用"]] },
-  }]);
+  }], LEGACY_YS_EKW_IDENTITY_SHEET_SPECS);
   assert.deepEqual(rows.map((entry) => entry.stableId), ["function:all_round"]);
   assert.deepEqual(rows.map((entry) => entry.entityType), ["FunctionProfile"]);
 });
 
 test("ACTIVE FunctionProfile 整组成员缺失时 fail closed", () => {
   const source = fixture();
-  source.functionValues = [[]];
+  source.functionSources = [];
   const draft = importCanonicalRuleSource({ sourceRevision: revision, ...source, importedAt: revision.pulledAt });
   assert.ok(draft.issues.some((issue) => issue.code === "FUNCTION_PROFILE_PARENT_MEMBERS_MISSING"));
 });
@@ -335,18 +344,18 @@ test("04 生产同形的 7 父级、21 分组与 57 成员规则可确定导入"
     { sheetId: "mLpTLK", range: "A1:S8", valueRange: { values: source.functionProfileValues } },
     { sheetId: "mLpTLK", range: "Q1:S8", valueRange: { values: source.functionProfileValues.map((entry) => entry.slice(16, 19)) } },
   ];
-  const identities = identityRowsFromRanges(identityRanges);
+  const identities = identityRowsFromRanges(identityRanges, LEGACY_YS_EKW_IDENTITY_SHEET_SPECS);
   assert.equal(identities.filter((entry) => entry.entityType === "FunctionProfile").length, 7);
   assert.equal(identities.filter((entry) => entry.entityType === "FunctionPartGroup").length, 21);
-  assert.deepEqual(identityRowsFromRanges(identityRanges), identities);
+  assert.deepEqual(identityRowsFromRanges(identityRanges, LEGACY_YS_EKW_IDENTITY_SHEET_SPECS), identities);
 
   const invalid = productionShapeFixture();
-  invalid.functionValues[2]![5] = 2;
+  invalid.functionSources[0].values[2]![5] = 2;
   assert.ok(importCanonicalRuleSource({ sourceRevision: revision, ...invalid, importedAt: revision.pulledAt }).issues.some((issue) => issue.code === "FUNCTION_INTENSITY_UNSUPPORTED"));
 
   const removedParent = productionShapeFixture();
   removedParent.functionProfileValues.pop();
-  removedParent.functionValues = removedParent.functionValues.filter((entry) => entry[7] !== "funcgrp_rod_0007" && entry[7] !== "funcgrp_reel_0007" && entry[7] !== "funcgrp_line_0007");
+  removedParent.functionSources = removedParent.functionSources.map((source) => ({ ...source, values: source.values.filter((entry: unknown[]) => entry[7] !== "funcgrp_rod_0007" && entry[7] !== "funcgrp_reel_0007" && entry[7] !== "funcgrp_line_0007") }));
   assert.ok(importCanonicalRuleSource({ sourceRevision: revision, ...removedParent, importedAt: revision.pulledAt }).issues.some((issue) => issue.code === "FUNCTION_PROFILE_PARENT_SET_MISMATCH"));
 
   const swappedGroup = productionShapeFixture();
@@ -362,8 +371,8 @@ test("04 生产同形的 7 父级、21 分组与 57 成员规则可确定导入"
   assert.ok(importCanonicalRuleSource({ sourceRevision: revision, ...replacedGroup, importedAt: revision.pulledAt }).issues.some((issue) => issue.code === "FUNCTION_PROFILE_PART_GROUP_BINDING_MISMATCH"));
 
   const shared = productionShapeFixture();
-  shared.functionValues[22]![10] = "修理系数";
-  shared.functionValues[43]![10] = "购买系数";
+  shared.functionSources[1].values[1]![10] = "修理系数";
+  shared.functionSources[2].values[1]![10] = "购买系数";
   const sharedDraft = importCanonicalRuleSource({ sourceRevision: revision, ...shared, importedAt: revision.pulledAt });
   assert.deepEqual(sharedDraft.issues, []);
   assert.ok(sharedDraft.parameters.some((entry) => entry.key === "轮修理系数" && entry.itemPartId === "part:reel"));
@@ -380,7 +389,7 @@ test("钓法不兼容的类型不会套用规则，且作为硬错误返回", ()
     draft,
   );
   const candidate = structuredClone(createSeedState().candidates[0]!);
-  candidate.templateId = "wtpl_0002:fishing_rod_0001";
+  candidate.templateId = "wtpl_rod_0002:fishing_rod_0001";
   candidate.selections.structureId = "type_rod_0001";
   candidate.selections.functionId = "func_rod_0001_1";
   const result = calculateCandidate(state, candidate);

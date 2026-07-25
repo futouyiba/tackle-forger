@@ -66,7 +66,7 @@ import { deterministicHash } from "./rule-kernel";
 import { projectShareLinkHistoryEntry } from "./data-sources";
 import { createFiveAxisDispositionCatalogRevision, createFormalFiveAxisVertexSet } from "./five-axis-formal";
 
-export const CURRENT_WORKSPACE_SCHEMA_VERSION = 21;
+export const CURRENT_WORKSPACE_SCHEMA_VERSION = 22;
 
 const DEFAULT_RULE_SETTINGS: WorkspaceRuleSettings = {
   reductionStackingMode: "diminishing_division",
@@ -1630,6 +1630,14 @@ function migrateV20ToV21(input: MutableWorkspace): MutableWorkspace {
   } as MutableWorkspace;
 }
 
+function migrateV21ToV22(input: MutableWorkspace): MutableWorkspace {
+  return {
+    ...input,
+    schemaVersion: 22,
+    modelPricingEvaluations: [],
+  } as MutableWorkspace;
+}
+
 const migrations: Record<number, (state: MutableWorkspace) => MutableWorkspace> = {
   1: migrateV1ToV2,
   2: migrateV2ToV3,
@@ -1651,6 +1659,7 @@ const migrations: Record<number, (state: MutableWorkspace) => MutableWorkspace> 
   18: migrateV18ToV19,
   19: migrateV19ToV20,
   20: migrateV20ToV21,
+  21: migrateV21ToV22,
 };
 
 export function migrateWorkspaceState(input: unknown): WorkspaceState {

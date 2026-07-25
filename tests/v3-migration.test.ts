@@ -131,6 +131,19 @@ test("v21 迁移把缺 executionPolicy 的旧 PUBLISHED 策略封存为 LEGACY_P
   assert.deepEqual(migrateWorkspaceState(migrated), migrated);
 });
 
+test("v22 迁移初始化空 modelPricingEvaluations 且保留历史 Snapshot 不变", () => {
+  const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
+  legacy.schemaVersion = 21;
+  const snapshotsBefore = structuredClone(legacy.configurationSnapshots);
+  const migrated = migrateWorkspaceState(legacy);
+  assert.equal(migrated.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
+  assert.ok(Array.isArray(migrated.modelPricingEvaluations));
+  assert.equal(migrated.modelPricingEvaluations.length, 0);
+  assert.deepEqual(migrated.configurationSnapshots, snapshotsBefore);
+  // 重复迁移幂等
+  assert.deepEqual(migrateWorkspaceState(migrated), migrated);
+});
+
 test("v16 隔离旧独立偏移阈值、发布规范策略且不改写历史 Snapshot", () => {
   const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
   legacy.schemaVersion = 15;

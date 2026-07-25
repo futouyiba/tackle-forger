@@ -387,7 +387,7 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
             {!inspection
               ? "尚未回读当前 PricingPolicyDraft，不能宣称源映射校验通过"
               : qualityMappingIssue
-                ? "品质到 PricingBasket 映射异常"
+                ? "品质定价映射异常"
                 : "品质映射已显式定义，不再是阻断原因"}
           </div>
           <div className="rule-missing-pricing">

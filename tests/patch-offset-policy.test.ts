@@ -1048,7 +1048,6 @@ test("v16 发布规范策略并隔离旧阈值，正式 Snapshot 冻结治理证
       pricingPolicyRef: "pricing:published-v1",
       valueScore: 1,
       pricingWeightBandId: "band:1",
-      pricingBasketId: "basket:1",
       repairPriceUnrounded: 100,
       purchasePriceUnrounded: 100,
       purchasePrice: 100,

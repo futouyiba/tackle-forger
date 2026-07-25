@@ -12,9 +12,10 @@ import {
 import {
   importPricingPolicyDraft,
   type PricingPolicyDraft,
+  type PricingExecutionPolicy,
   type PricingLookupEntry,
   type QualityPriceFactorRange,
-  type QualityPricingBasketMapping,
+  type QualityPricingMapping,
 } from "./pricing-policy";
 import {
   importQualityValuePolicyDraft,
@@ -203,58 +204,44 @@ export function canonicalIdentityPolicies(): SourceIdentityPolicy[] {
   return [...grouped.values()];
 }
 
-const qualityIds: Record<string, QualityPricingBasketMapping["qualityId"]> = {
+const qualityIds: Record<string, QualityPricingMapping["qualityId"]> = {
   C: "quality_c_green",
   B: "quality_b_blue",
   A: "quality_a_purple",
   S: "quality_s_orange",
 };
 
-const basketIds: Record<string, string> = {
-  跑刀: "pricing_basket_fast",
-  稳健: "pricing_basket_steady",
-  猛攻: "pricing_basket_aggressive",
-};
-
 export function pricingDraftFromRanges(input: {
   sourceRevision: FeishuSourceRevision;
   qualityValues: unknown[][];
   /** Exact rows selected by the quality-table parser; avoids a second layout guess. */
-  qualitySourceRows?: Array<{ code: string; basketAlias: string; minScore: number; maxScore: number; minFactor: number; maxFactor: number; mappingCell: string; factorCell: string; rowKey: string }>;
+  qualitySourceRows?: Array<{ code: string; minScore: number; maxScore: number; minFactor: number; maxFactor: number; mappingCell: string; factorCell: string; rowKey: string }>;
   pricingValues?: unknown[][];
   typeValues?: unknown[][];
   importedAt: string;
 }): PricingPolicyDraft {
   const qualityMappings = input.qualitySourceRows
-    ? input.qualitySourceRows.flatMap((row): QualityPricingBasketMapping[] => {
-      const qualityId = qualityIds[row.code]; const pricingBasketId = basketIds[row.basketAlias];
-      return qualityId && pricingBasketId ? [{ qualityId, pricingBasketId, sourceAlias: row.code, status: "SOURCE", source: { sheetId: QUALITY_SHEET_ID, cell: row.mappingCell, rowKey: row.rowKey } }] : [];
+    ? input.qualitySourceRows.flatMap((row): QualityPricingMapping[] => {
+      const qualityId = qualityIds[row.code];
+      return qualityId ? [{ qualityId, sourceAlias: row.code, status: "SOURCE", source: { sheetId: QUALITY_SHEET_ID, cell: row.mappingCell, rowKey: row.rowKey } }] : [];
     })
-    : input.qualityValues.flatMap((row, index): QualityPricingBasketMapping[] => {
+    : input.qualityValues.flatMap((row, index): QualityPricingMapping[] => {
     const code = text(row[1]);
-    const basketAlias = text(row[2]);
     const qualityId = qualityIds[code];
-    const pricingBasketId = basketIds[basketAlias];
-    if (!qualityId || !pricingBasketId) return [];
+    if (!qualityId) return [];
     const sheetRow = index + 5;
     return [{
       qualityId,
-      pricingBasketId,
       sourceAlias: text(row[5]) || code,
       status: "SOURCE",
       source: { sheetId: "FqD4j7", cell: `D${sheetRow}`, rowKey: String(sheetRow) },
     }];
   });
-  const pricingBaskets = Array.from(new Map(qualityMappings.map((mapping) => [mapping.pricingBasketId, {
-    id: mapping.pricingBasketId,
-    sourceAlias: Object.entries(basketIds).find(([, id]) => id === mapping.pricingBasketId)?.[0] ?? mapping.pricingBasketId,
-    source: mapping.source,
-  }])).values());
   const qualityPriceFactorRanges: QualityPriceFactorRange[] = input.qualitySourceRows
     ? input.qualitySourceRows.flatMap((row) => {
       const qualityId = qualityIds[row.code];
       return qualityId && [row.minScore, row.maxScore, row.minFactor, row.maxFactor].every(Number.isFinite)
-        ? [{ qualityId, minScore: row.minScore, maxScore: row.maxScore, maxInclusive: false, minFactor: row.minFactor, maxFactor: row.maxFactor, status: "SOURCE" as const, source: { sheetId: QUALITY_SHEET_ID, cell: row.factorCell, rowKey: row.rowKey } }]
+        ? [{ qualityId, minScore: row.minScore, maxScore: row.maxScore, maxInclusive: qualityId === "quality_s_orange", minFactor: row.minFactor, maxFactor: row.maxFactor, status: "SOURCE" as const, source: { sheetId: QUALITY_SHEET_ID, cell: row.factorCell, rowKey: row.rowKey } }]
         : [];
     })
     : input.qualityValues.flatMap((row, index) => {
@@ -265,7 +252,7 @@ export function pricingDraftFromRanges(input: {
     const maxFactor = Number(row[6]);
     if (!qualityId || ![minScore, maxScore, minFactor, maxFactor].every(Number.isFinite)) return [];
     const sheetRow = index + 5;
-    return [{ qualityId, minScore, maxScore, maxInclusive: false, minFactor, maxFactor, status: "SOURCE", source: { sheetId: "FqD4j7", cell: `E${sheetRow}:H${sheetRow}`, rowKey: String(sheetRow) } }];
+    return [{ qualityId, minScore, maxScore, maxInclusive: qualityId === "quality_s_orange", minFactor, maxFactor, status: "SOURCE", source: { sheetId: "FqD4j7", cell: `E${sheetRow}:H${sheetRow}`, rowKey: String(sheetRow) } }];
   });
   const pricingValues = input.pricingValues ?? [];
   const maintenanceConsumptionRates: PricingLookupEntry[] = [];
@@ -277,10 +264,9 @@ export function pricingDraftFromRanges(input: {
     const sheetRow = index + 10;
     const sourceValue = (value: number, cell: string) => ({ value, status: "SOURCE" as const, source: { sheetId: "u87sRh", cell, rowKey: String(sheetRow) } });
     const maintenanceBand = text(row[0]);
-    const maintenanceBasket = basketIds[text(row[1])];
     const maintenance = Number(row[2]);
-    if (maintenanceBand && maintenanceBasket && Number.isFinite(maintenance)) {
-      maintenanceConsumptionRates.push({ pricingWeightBandId: `weight_band:${maintenanceBand}`, pricingBasketId: maintenanceBasket, value: sourceValue(maintenance, `D${sheetRow}`) });
+    if (maintenanceBand && Number.isFinite(maintenance)) {
+      maintenanceConsumptionRates.push({ pricingWeightBandId: `weight_band:${maintenanceBand}`, value: sourceValue(maintenance, `D${sheetRow}`) });
     }
     const allocationBand = text(row[4]);
     for (const [offset, partId] of [[5, "rod"], [6, "reel"], [7, "line"]] as const) {
@@ -291,19 +277,18 @@ export function pricingDraftFromRanges(input: {
       }
     }
     const lossBand = text(row[9]);
-    const lossBasket = basketIds[text(row[10])];
     for (const [offset, partId] of [[11, "rod"], [12, "reel"], [13, "line"]] as const) {
       const value = Number(row[offset]);
-      if (lossBand && lossBasket && Number.isFinite(value)) {
+      if (lossBand && Number.isFinite(value)) {
         const column = String.fromCharCode("B".charCodeAt(0) + offset);
-        totalLossTimes.push({ pricingWeightBandId: `weight_band:${lossBand}`, pricingBasketId: lossBasket, partId, value: sourceValue(value, `${column}${sheetRow}`) });
+        totalLossTimes.push({ pricingWeightBandId: `weight_band:${lossBand}`, partId, value: sourceValue(value, `${column}${sheetRow}`) });
       }
     }
     for (const [offset, partId] of [[14, "rod"], [15, "reel"], [16, "line"]] as const) {
       const value = Number(row[offset]);
-      if (lossBand && lossBasket && Number.isFinite(value)) {
+      if (lossBand && Number.isFinite(value)) {
         const column = String.fromCharCode("B".charCodeAt(0) + offset);
-        partsToWholeRatios.push({ pricingWeightBandId: `weight_band:${lossBand}`, pricingBasketId: lossBasket, partId, value: sourceValue(value, `${column}${sheetRow}`) });
+        partsToWholeRatios.push({ pricingWeightBandId: `weight_band:${lossBand}`, partId, value: sourceValue(value, `${column}${sheetRow}`) });
       }
     }
   }
@@ -322,6 +307,31 @@ export function pricingDraftFromRanges(input: {
     if (Number.isFinite(purchase)) purchaseCoefficients.push({ partId, typeId, value: { value: purchase, status: "SOURCE", source: { sheetId: "fATowU", cell: `V${sheetRow}`, rowKey: String(sheetRow) } } });
   }
   const parameterValue = (sheetRow: number) => pricingValues[sheetRow - 10]?.[2];
+  const executionFields = new Map<string, { value: unknown; row: number }>();
+  for (let index = 0; index < pricingValues.length; index += 1) {
+    const row = pricingValues[index] ?? [];
+    const key = text(row[0]).trim();
+    if (key) executionFields.set(key, { value: row[2], row: index + 10 });
+  }
+  const executionValue = (key: string) => executionFields.get(key)?.value;
+  const executionRow = (key: string) => executionFields.get(key)?.row;
+  const pricingMachineKeys = ["pricing.repairRoundingStage", "pricing.purchaseInput", "pricing.purchaseRoundingStage", "pricing.rounding", "pricing.significantDigits", "pricing.minimumPurchasePrice", "pricing.minimumPriceScope", "pricing.upperThreshold", "pricing.upperThresholdMode"] as const;
+  const hasPricingExecutionFields = pricingMachineKeys.some((k) => executionFields.has(k));
+  // These stable machine keys are deliberately required: prose/formula cells
+  // never become executable policy defaults.
+  const executionPolicy = hasPricingExecutionFields ? {
+    repairRoundingStage: executionValue("pricing.repairRoundingStage"),
+    purchaseInput: executionValue("pricing.purchaseInput"),
+    purchaseRoundingStage: executionValue("pricing.purchaseRoundingStage"),
+    rounding: executionValue("pricing.rounding"),
+    significantDigits: Number(executionValue("pricing.significantDigits")),
+    minimumPurchasePrice: Number(executionValue("pricing.minimumPurchasePrice")),
+    minimumPriceScope: executionValue("pricing.minimumPriceScope"),
+    upperThreshold: Number(executionValue("pricing.upperThreshold")),
+    upperThresholdMode: executionValue("pricing.upperThresholdMode"),
+    status: "SOURCE" as const,
+    source: { sheetId: "u87sRh", cell: `B${executionRow("pricing.repairRoundingStage") ?? 0}:D${executionRow("pricing.upperThresholdMode") ?? 0}`, rowKey: "pricing.execution.machine.v1" },
+  } as PricingExecutionPolicy : undefined;
   const moneyPolicy = pricingValues.length ? {
     unit: text(parameterValue(15)),
     rounding: "significant_digits_floor" as const,
@@ -339,7 +349,6 @@ export function pricingDraftFromRanges(input: {
     qualitySheetId: "FqD4j7",
     typeMaterialSheetId: "fATowU",
     businessFormulaCells: [2, 3, 4, 5, 6, 7].map((row) => ({ sheetId: "u87sRh", cell: `B${row}` })),
-    pricingBaskets,
     maintenanceConsumptionRates,
     partAllocationRatios,
     repairCoefficients,
@@ -350,6 +359,7 @@ export function pricingDraftFromRanges(input: {
     qualityPriceFactorRanges,
     scoreInterpolation: pricingValues.length ? { kind: "quality_range_linear", points: [], outOfRange: "error", status: "SOURCE", source: { sheetId: "u87sRh", cell: "B11:D11", rowKey: "11" } } : undefined,
     moneyPolicy,
+    ...(executionPolicy ? { executionPolicy } : {}),
     importedAt: input.importedAt,
   });
 }
@@ -359,7 +369,7 @@ export function pricingQualitySourceRowsFromDraft(
   _legacyQualityValues?: unknown[][],
 ) {
   return (qualityDraft.qualityTableDescriptor?.rows ?? []).map((row) => ({
-    code: row.code, basketAlias: row.basketAlias, minScore: row.minScore, maxScore: row.maxScore, minFactor: row.minFactor, maxFactor: row.maxFactor,
+    code: row.code, minScore: row.minScore, maxScore: row.maxScore, minFactor: row.minFactor, maxFactor: row.maxFactor,
     mappingCell: row.mappingSource.cell, factorCell: row.factorSource.cell, rowKey: row.mappingSource.rowKey ?? "",
   }));
 }
@@ -492,7 +502,7 @@ export function qualityDraftFromRanges(input: {
     qualityTableHeaders[0]?.rowIndex ?? 0, qualityTableHeaders[0]?.columnIndex ?? 0,
   );
   const qualityTable = qualityTableHeaders[0];
-  const qualityFieldLabels = ["品质", "代码", "PricingBasket", "≥最小评分", "<最大评分", "最小价格系数", "最大价格系数"] as const;
+  const qualityFieldLabels = ["品质", "代码", "≥最小评分", "<最大评分", "最小价格系数", "最大价格系数"] as const;
   const qualityFieldHeaders = qualityTable ? input.qualityValues
     .slice(qualityTable.rowIndex + 1)
     .flatMap((row, offset) => {
@@ -512,7 +522,7 @@ export function qualityDraftFromRanges(input: {
   const ranges: QualityValueRange[] = qualityTable && qualityFieldHeader ? expectedQualityRows.flatMap(([label, code], offset) => {
     const rowIndex = qualityFieldHeader.rowIndex + 1 + offset;
     const row = input.qualityValues[rowIndex] ?? [];
-    const [labelIndex, codeIndex, basketIndex, minIndex, maxIndex, minFactorIndex, maxFactorIndex] = qualityFieldHeader.indices;
+    const [labelIndex, codeIndex, minIndex, maxIndex, minFactorIndex, maxFactorIndex] = qualityFieldHeader.indices;
     if (text(row[labelIndex]) !== label || text(row[codeIndex]) !== code) {
       structureIssue("QUALITY_RANGE_TABLE_ROW_INVALID", `品质区间必须按规范行保留 ${label} / ${code}。`, rowIndex, labelIndex);
       return [];
@@ -520,12 +530,12 @@ export function qualityDraftFromRanges(input: {
     const minScore = Number(row[minIndex]);
     const maxScore = Number(row[maxIndex]);
     const minFactor = Number(row[minFactorIndex]); const maxFactor = Number(row[maxFactorIndex]);
-    if (!Number.isFinite(minScore) || !Number.isFinite(maxScore) || !Number.isFinite(minFactor) || !Number.isFinite(maxFactor) || !text(row[basketIndex])) {
+    if (!Number.isFinite(minScore) || !Number.isFinite(maxScore) || !Number.isFinite(minFactor) || !Number.isFinite(maxFactor)) {
       structureIssue("QUALITY_RANGE_TABLE_ENDPOINT_INVALID", `${label} 缺少两个有限评分端点。`, rowIndex, codeIndex);
       return [];
     }
-    const mappingSource = sourceCell(rowIndex, basketIndex); const factorSource = { sheetId: QUALITY_SHEET_ID, cell: `${sourceColumn(minFactorIndex)}${sourceRow(rowIndex)}:${sourceColumn(maxFactorIndex)}${sourceRow(rowIndex)}`, rowKey: String(sourceRow(rowIndex)) };
-    descriptorRows.push({ qualityId: qualityIds[code]!, code, basketAlias: text(row[basketIndex]), minScore, maxScore, minFactor, maxFactor, mappingSource, factorSource });
+    const mappingSource = sourceCell(rowIndex, codeIndex); const factorSource = { sheetId: QUALITY_SHEET_ID, cell: `${sourceColumn(minFactorIndex)}${sourceRow(rowIndex)}:${sourceColumn(maxFactorIndex)}${sourceRow(rowIndex)}`, rowKey: String(sourceRow(rowIndex)) };
+    descriptorRows.push({ qualityId: qualityIds[code]!, code, minScore, maxScore, minFactor, maxFactor, mappingSource, factorSource });
     return [{ qualityId: qualityIds[code]!, minScore, maxScore, maxInclusive: false, status: "SOURCE" as const,
       source: { sheetId: QUALITY_SHEET_ID, cell: `${sourceColumn(minIndex)}${sourceRow(rowIndex)}:${sourceColumn(maxIndex)}${sourceRow(rowIndex)}`, rowKey: String(sourceRow(rowIndex)) },
     }];

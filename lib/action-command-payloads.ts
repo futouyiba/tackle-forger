@@ -815,6 +815,17 @@ function hasTypedLegacyPayload(action: ActionCode, payload: JsonObject): boolean
       && nonEmptyString(payload.expectedIssueRevisionId)
       && nonEmptyString(payload.reason);
   }
+  if (action === "acknowledge_price_warning") {
+    return nonEmptyString(payload.issueFingerprint)
+      && nonEmptyString(payload.expectedModelRevisionId)
+      && nonEmptyString(payload.expectedPricingPolicyVersion)
+      && nonEmptyString(payload.expectedInputHash)
+      && typeof payload.purchasePriceRaw === "number"
+      && typeof payload.purchasePriceRounded === "number"
+      && typeof payload.purchasePrice === "number"
+      && typeof payload.threshold === "number"
+      && nonEmptyString(payload.reason);
+  }
   if (action === "request_validation_waiver" || action === "approve_validation_waiver") {
     if (
       !nonEmptyString(payload.issueFingerprint)

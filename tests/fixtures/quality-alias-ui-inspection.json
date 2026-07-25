@@ -35,7 +35,6 @@
       "qualitySheetId": "FqD4j7",
       "typeMaterialSheetId": "fATowU",
       "businessFormulaCells": [],
-      "pricingBaskets": [],
       "maintenanceConsumptionRates": [],
       "partAllocationRatios": [],
       "repairCoefficients": [],
@@ -59,7 +58,7 @@
         { "qualityId": "quality_c_green", "minScore": 0, "maxScore": 20, "maxInclusive": false, "status": "SOURCE", "source": { "sheetId": "FqD4j7", "cell": "E5:F5" } },
         { "qualityId": "quality_b_blue", "minScore": 20, "maxScore": 40, "maxInclusive": false, "status": "SOURCE", "source": { "sheetId": "FqD4j7", "cell": "E6:F6" } },
         { "qualityId": "quality_a_purple", "minScore": 40, "maxScore": 65, "maxInclusive": false, "status": "SOURCE", "source": { "sheetId": "FqD4j7", "cell": "E7:F7" } },
-        { "qualityId": "quality_s_orange", "minScore": 65, "maxScore": 100, "maxInclusive": false, "status": "SOURCE", "source": { "sheetId": "FqD4j7", "cell": "E8:F8" } }
+        { "qualityId": "quality_s_orange", "minScore": 65, "maxScore": 100, "maxInclusive": true, "minFactor": 2, "maxFactor": 3, "status": "SOURCE", "source": { "sheetId": "FqD4j7", "cell": "E8:F8" } }
       ],
       "combinationRules": [
         { "itemPartId": "part:line", "leftAffixId": "affix_line_high_stretch", "rightAffixId": "affix_line_low_stretch", "valueScore": 1, "source": { "sheetId": "FqD4j7", "cell": "D39" } },

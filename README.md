@@ -108,7 +108,7 @@ FEISHU_OPEN_API_BASE_URL=https://open.feishu.cn
 PricingPolicy/RuleSet 草稿不会发布正式版本。写回前重新读取源表并校验 revision、单元格
 Trace、ID 唯一性、前缀与实体类型；写后必须回读恢复，不能把写回等同于拉取或发布。
 
-`08_价格计算` 导入为 `PricingPolicyDraft`。C/B/A/S 到 PricingBasket 的显式映射已存在；
+`08_价格计算` 导入为 `PricingPolicyDraft`。C/B/A/S 的品质定价映射已存在；
 评分插值、竿/轮/线零整比、金额单位、舍入、最低价格和溢出上限未发布前，只允许非正式
 试算与单元格级 Trace，正式 Store 导出继续阻断且没有手填价格兜底。
 

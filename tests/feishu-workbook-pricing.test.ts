@@ -106,8 +106,8 @@ test("生产同形品质矩阵按显式块头解析扩展列、移动块、空�
   const sourceRevision = sourceRevisionWithAffixGrid();
   const qualityValues = Array.from({ length: 60 }, () => Array.from({ length: 19 }, () => "") as unknown[]);
   qualityValues[2]![0] = "品质区间";
-  qualityValues[3]![1] = "品质"; qualityValues[3]![2] = "代码"; qualityValues[3]![3] = "PricingBasket"; qualityValues[3]![4] = "≥最小评分"; qualityValues[3]![5] = "<最大评分"; qualityValues[3]![6] = "最小价格系数"; qualityValues[3]![7] = "最大价格系数";
-  for (const [row, label, code, min, max] of [[5, "C/绿", "C", 0, 20], [6, "B/蓝", "B", 20, 40], [7, "A/紫", "A", 40, 65], [8, "S/橙", "S", 65, 100]] as const) qualityValues[row - 1] = ["", label, code, "跑刀", min, max, .5, 1.1];
+  qualityValues[3]![1] = "品质"; qualityValues[3]![2] = "代码"; qualityValues[3]![3] = "≥最小评分"; qualityValues[3]![4] = "<最大评分"; qualityValues[3]![5] = "最小价格系数"; qualityValues[3]![6] = "最大价格系数";
+  for (const [row, label, code, min, max] of [[5, "C/绿", "C", 0, 20], [6, "B/蓝", "B", 20, 40], [7, "A/紫", "A", 40, 65], [8, "S/橙", "S", 65, 100]] as const) qualityValues[row - 1] = ["", label, code, min, max, .5, 1.1];
   const addBlock = (headerRow: number, heading: string, aliases: string[]) => {
     qualityValues[headerRow - 1]![0] = heading;
     aliases.forEach((alias, index) => { qualityValues[headerRow - 1]![index + 1] = alias; });
@@ -143,19 +143,20 @@ test("生产同形品质矩阵按显式块头解析扩展列、移动块、空�
   });
   assert.equal(pricing.qualityMappings.length, 4);
   assert.equal(pricing.qualityPriceFactorRanges?.length, 4);
-  assert.deepEqual(pricing.qualityMappings.map((mapping) => mapping.source.cell), ["D5", "D6", "D7", "D8"]);
-  assert.deepEqual(pricing.qualityPriceFactorRanges?.map((range) => range.source.cell), ["G5:H5", "G6:H6", "G7:H7", "G8:H8"]);
+  assert.deepEqual(pricing.qualityMappings.map((mapping) => mapping.source.cell), ["C5", "C6", "C7", "C8"]);
+  assert.deepEqual(pricing.qualityPriceFactorRanges?.map((range) => range.source.cell), ["F5:G5", "F6:G6", "F7:G7", "F8:G8"]);
   const moved = structuredClone(qualityValues);
-  moved[3]![3] = ""; moved[3]![6] = ""; moved[3]![7] = "";
-  moved[3]![10] = "PricingBasket"; moved[3]![11] = "最小价格系数"; moved[3]![12] = "最大价格系数";
-  for (let row = 4; row < 8; row += 1) { moved[row]![10] = moved[row]![3]; moved[row]![11] = moved[row]![6]; moved[row]![12] = moved[row]![7]; moved[row]![3] = moved[row]![6] = moved[row]![7] = ""; }
+  moved[3]![5] = ""; moved[3]![6] = "";
+  moved[3]![10] = "最小价格系数"; moved[3]![11] = "最大价格系数";
+  for (let row = 4; row < 8; row += 1) { moved[row]![10] = moved[row]![5]; moved[row]![11] = moved[row]![6]; moved[row]![5] = moved[row]![6] = ""; }
   const movedDraft = qualityDraftFromRanges({ sourceRevision, qualityValues: moved, qualityRange: "A1:S60", affixValues, pricingEndpointValues: [], importedAt: "2026-07-24T00:00:00.000Z" });
-  assert.equal(movedDraft.formalStatus, "READY_TO_PUBLISH");
-  assert.deepEqual(pricingQualitySourceRowsFromDraft(movedDraft).map((row) => [row.mappingCell, row.factorCell]), [["K5", "L5:M5"], ["K6", "L6:M6"], ["K7", "L7:M7"], ["K8", "L8:M8"]]);
+  assert.equal(movedDraft.formalStatus, "NON_FORMAL");
+  assert.ok(movedDraft.issues.some((issue) => issue.code === "QUALITY_RANGE_SOURCE_OUTDATED"));
+  assert.deepEqual(pricingQualitySourceRowsFromDraft(movedDraft).map((row) => [row.mappingCell, row.factorCell]), [["C5", "K5:L5"], ["C6", "K6:L6"], ["C7", "K7:L7"], ["C8", "K8:L8"]]);
   moved[3]![11] = "";
   assert.ok(qualityDraftFromRanges({ sourceRevision, qualityValues: moved, qualityRange: "A1:S60", affixValues, pricingEndpointValues: [], importedAt: "2026-07-24T00:00:00.000Z" }).issues.some((issue) => issue.code === "QUALITY_RANGE_TABLE_HEADER_MISSING"));
   const duplicated = structuredClone(qualityValues);
-  duplicated[3]![15] = "PricingBasket";
+  duplicated[3]![15] = "代码";
   assert.ok(qualityDraftFromRanges({ sourceRevision, qualityValues: duplicated, qualityRange: "A1:S60", affixValues, pricingEndpointValues: [], importedAt: "2026-07-24T00:00:00.000Z" }).issues.some((issue) => issue.code === "QUALITY_RANGE_TABLE_HEADER_MISSING"));
 
   qualityValues[9]![2] = "不存在";
@@ -171,8 +172,8 @@ test("品质矩阵结构错误保留草稿并发布阻断，尾部合法缩写�
   const sourceRevision = sourceRevisionWithAffixGrid();
   const values = Array.from({ length: 60 }, () => Array.from({ length: 19 }, () => "") as unknown[]);
   values[2]![0] = "品质区间";
-  values[3]![1] = "品质"; values[3]![2] = "代码"; values[3]![3] = "PricingBasket"; values[3]![4] = "≥最小评分"; values[3]![5] = "<最大评分"; values[3]![6] = "最小价格系数"; values[3]![7] = "最大价格系数";
-  for (const [row, label, code, min, max] of [[5, "C/绿", "C", 0, 20], [6, "B/蓝", "B", 20, 40], [7, "A/紫", "A", 40, 65], [8, "S/橙", "S", 65, 100]] as const) values[row - 1] = ["", label, code, "跑刀", min, max, .5, 1.1];
+  values[3]![1] = "品质"; values[3]![2] = "代码"; values[3]![3] = "≥最小评分"; values[3]![4] = "<最大评分"; values[3]![5] = "最小价格系数"; values[3]![6] = "最大价格系数";
+  for (const [row, label, code, min, max] of [[5, "C/绿", "C", 0, 20], [6, "B/蓝", "B", 20, 40], [7, "A/紫", "A", 40, 65], [8, "S/橙", "S", 65, 100]] as const) values[row - 1] = ["", label, code, min, max, .5, 1.1];
   for (const [row, heading, prefix] of [[10, "竿词条", "竿"], [27, "轮词条", "轮"], [46, "线词条", "线"]] as const) {
     values[row - 1]![0] = heading; values[row - 1]![1] = `${prefix}0`; values[row - 1]![2] = `${prefix}2`;
     values[row]![0] = `${prefix}0`; values[row]![1] = "—"; values[row]![2] = 1;
@@ -456,23 +457,18 @@ function pricingInput(overrides: Partial<PricingPolicyDraft> = {}) {
     pricingSheetId: "u87sRh" as const,
     typeMaterialSheetId: "fATowU" as const,
     businessFormulaCells: ["B2", "B3", "B4", "B5", "B6", "B7"].map((cell) => ({ sheetId: "u87sRh", cell })),
-    pricingBaskets: [
-      { id: "pricing_basket:run", sourceAlias: "跑刀", source: { sheetId: "u87sRh", cell: "B10" } },
-      { id: "pricing_basket:steady", sourceAlias: "稳健", source: { sheetId: "u87sRh", cell: "B11" } },
-      { id: "pricing_basket:attack", sourceAlias: "猛攻", source: { sheetId: "u87sRh", cell: "B12" } },
-    ],
-    maintenanceConsumptionRates: [{ pricingWeightBandId: "band:matched", pricingBasketId: "pricing_basket:attack", value: sourced(10, "C20") }],
+    maintenanceConsumptionRates: [{ pricingWeightBandId: "band:matched", value: sourced(10, "C20") }],
     partAllocationRatios: [{ pricingWeightBandId: "band:matched", partId: "rod", value: sourced(0.2, "D20") }],
     repairCoefficients: [{ pricingWeightBandId: "band:matched", partId: "rod", typeId: "RodType:spinning", value: sourced(1, "AC5") }],
-    totalLossTimes: [{ pricingWeightBandId: "band:matched", pricingBasketId: "pricing_basket:attack", partId: "rod", value: sourced(5, "E20") }],
+    totalLossTimes: [{ pricingWeightBandId: "band:matched", partId: "rod", value: sourced(5, "E20") }],
     purchaseCoefficients: [{ pricingWeightBandId: "band:matched", partId: "rod", typeId: "RodType:spinning", value: sourced(1, "AC6") }],
     partsToWholeRatios: [],
     qualityMappings: [
-      ["quality_c_green", "pricing_basket:run", "C/绿→跑刀", "Q9"],
-      ["quality_b_blue", "pricing_basket:steady", "B/蓝→稳健", "Q10"],
-      ["quality_a_purple", "pricing_basket:attack", "A/紫→猛攻", "Q11"],
-      ["quality_s_orange", "pricing_basket:attack", "S/橙→猛攻", "Q12"],
-    ].map(([qualityId, pricingBasketId, sourceAlias, cell]) => ({ qualityId, pricingBasketId, sourceAlias, status: "SOURCE" as const, source: { sheetId: "u87sRh", cell } })),
+      ["quality_c_green", "C/绿"],
+      ["quality_b_blue", "B/蓝"],
+      ["quality_a_purple", "A/紫"],
+      ["quality_s_orange", "S/橙"],
+    ].map(([qualityId, sourceAlias], index) => ({ qualityId, sourceAlias, status: "SOURCE" as const, source: { sheetId: "u87sRh", cell: `D${5 + index}` } })),
     importedAt: "2026-07-21T10:00:00.000Z",
     ...overrides,
   } as Parameters<typeof importPricingPolicyDraft>[0];
@@ -494,7 +490,6 @@ test("价格试算使用最近结构标杆源重量段，系数为 1 仍进入�
     moneyPolicy: { unit: "未确认币种", rounding: "half_up", precision: 0, minimumPrice: 1, maximumPrice: 999999, roundingStage: "part_purchase_price", minimumPriceScope: "part_purchase_price", overflowMode: "error", status: "PROPOSED", source: { sheetId: "u87sRh", cell: "Q8:T12" } },
   }));
   const result = calculatePricingTrial({ policy: draft, partId: "rod", typeId: "RodType:spinning", pricingWeightBandId: "band:matched", valueScore: 24, qualityId: "quality_a_purple" });
-  assert.equal(result.pricingBasketId, "pricing_basket:attack");
   assert.equal(result.pricingWeightBandId, "band:matched");
   assert.equal(result.repairPriceUnrounded, 20);
   assert.equal(result.purchasePrice, 40);

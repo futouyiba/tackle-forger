@@ -29,6 +29,11 @@ interface FeishuSourceComboboxProps {
   /** 清空历史（由父组件决定是否仅清规则源类）。 */
   onClearAll: () => void;
   notify: (message: string) => void;
+  /**
+   * 下拉初始是否展开（非受控，仅在挂载时取值）。默认 false。
+   * 生产使用不传；供 SSR 渲染与测试覆盖 popover 内的历史项 / 清除按钮。
+   */
+  defaultOpen?: boolean;
 }
 
 /**
@@ -47,9 +52,9 @@ interface FeishuSourceComboboxProps {
  * - 切流（真正切换 canonical 工作簿）由 #143 跟踪，本期不接通。
  */
 export function FeishuSourceCombobox(props: FeishuSourceComboboxProps) {
-  const { history, availability, onRecord, onRemove, onClearAll, notify } = props;
+  const { history, availability, onRecord, onRemove, onClearAll, notify, defaultOpen = false } = props;
   const [inputValue, setInputValue] = useState("");
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const wrapperRef = useRef<HTMLDivElement>(null);
 
   // 只展示规则源类条目（/wiki/ 或 /sheets/）；bitable /base/ 老条目不显示。

@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import {
   CANONICAL_FEISHU_WORKBOOK,
   isRuleWorkbookShareUrl,
@@ -11,6 +13,7 @@ import {
   recordShareLinkHistory,
   removeShareLinkHistory,
 } from "../lib/data-sources";
+import { FeishuSourceCombobox } from "../app/FeishuSourceCombobox";
 import type { FeishuShareLinkHistoryEntry } from "../lib/types";
 
 // Issue #157: 「飞书规则园」combobox 的纯逻辑契约测试。
@@ -166,6 +169,8 @@ test("combobox 历史：同链接去重，最近优先，上限裁剪", () => {
   assert.equal(history[0].shareUrl, SHEETS_URL);
 
   // 上限裁剪：超出 FEISHU_SHARE_LINK_HISTORY_LIMIT 后最旧的被丢弃。
+  // Issue #157 契约：上限 10 条。先守底常量值，防止被改回 20 而测试仍通过。
+  assert.equal(FEISHU_SHARE_LINK_HISTORY_LIMIT, 10);
   for (let i = 0; i < FEISHU_SHARE_LINK_HISTORY_LIMIT + 2; i += 1) {
     const url = `https://pisn3u3ony2.feishu.cn/wiki/node${i}?sheet=s${i}`;
     const r = recognizeAndRecord(history, url);
@@ -173,7 +178,13 @@ test("combobox 历史：同链接去重，最近优先，上限裁剪", () => {
     if (!r.ok) return;
     history = r.history;
   }
-  assert.equal(history.length, FEISHU_SHARE_LINK_HISTORY_LIMIT);
+  // 硬编码断言上限为 10（不依赖常量，防止常量回退后测试误绿）。
+  assert.equal(history.length, 10);
+  // 最近优先：最新写入的 node11 在最前。
+  assert.equal(
+    history[0].shareUrl,
+    "https://pisn3u3ony2.feishu.cn/wiki/node11?sheet=s11",
+  );
 });
 
 test("combobox 历史：清除单条与清空全部", () => {
@@ -188,9 +199,53 @@ test("combobox 历史：清除单条与清空全部", () => {
   const afterRemove = removeShareLinkHistory(history, WIKI_URL);
   assert.equal(afterRemove.length, 1);
   assert.equal(afterRemove[0].shareUrl, SHEETS_URL);
-  // 清空全部。
+  // 清空全部（纯函数契约：null 清空全部）。
   const afterClear = removeShareLinkHistory(history, null);
   assert.equal(afterClear.length, 0);
+});
+
+test("规则园「清除历史」只删规则源类，保留隐藏的 legacy /base/ 条目（Medium 1）", () => {
+  // 模拟 Workbench renderRuleSource 的 onClearShareLinkHistory(null) 实现：
+  // 不再调 removeShareLinkHistory(null)（会清空全部，误删隐藏的 /base/），
+  // 而是过滤掉 isRuleWorkbookShareUrl 命中的条目，保留 /base/ legacy。
+  const mixed: FeishuShareLinkHistoryEntry[] = [
+    {
+      id: WIKI_URL,
+      shareUrl: WIKI_URL,
+      label: "飞书工作簿·YsEKwSUJ5i86",
+      dataset: "weight_templates",
+      lastUsedAt: "2026-07-24T12:00:00.000Z",
+    },
+    {
+      id: SHEETS_URL,
+      shareUrl: SHEETS_URL,
+      label: "飞书工作簿·WQ8wstS4ch29",
+      dataset: "weight_templates",
+      lastUsedAt: "2026-07-23T12:00:00.000Z",
+    },
+    {
+      id: BASE_URL,
+      shareUrl: BASE_URL,
+      label: "A 表 · 重量模板",
+      dataset: "weight_templates",
+      lastUsedAt: "2026-07-22T12:00:00.000Z",
+    },
+  ];
+  // onClearShareLinkHistory(null)：只删规则源类（/wiki/|/sheets/）。
+  const afterClearAll = mixed.filter(
+    (entry) => !isRuleWorkbookShareUrl(entry.shareUrl),
+  );
+  // 规则源两条被删。
+  assert.equal(afterClearAll.length, 1);
+  // legacy /base/ 条目保留（不误删）。
+  assert.equal(afterClearAll[0].shareUrl, BASE_URL);
+
+  // 单条删除仍走 removeShareLinkHistory；combobox 列表只展示规则源类，
+  // 单条删除只会传规则源 shareUrl，不会触及隐藏的 /base/ 条目。
+  const afterRemoveOne = removeShareLinkHistory(mixed, WIKI_URL);
+  assert.equal(afterRemoveOne.length, 2);
+  assert.ok(afterRemoveOne.some((e) => e.shareUrl === BASE_URL));
+  assert.ok(!afterRemoveOne.some((e) => e.shareUrl === WIKI_URL));
 });
 
 test("combobox 历史过滤与解析器一致：parseCanonicalWorkbookLink 接受的才显示", () => {
@@ -205,15 +260,62 @@ test("combobox 历史过滤与解析器一致：parseCanonicalWorkbookLink 接�
   }
 });
 
-test("未授权（availability.enabled=false）时 combobox 不应写入历史", () => {
-  // 契约：组件层在 availability.enabled=false 时按钮 disabled，不会触发识别。
-  // 此处用纯逻辑守底：即使误触发，识别成功仍写入；因此组件层必须用 disabled 拦截。
-  // 这里验证"识别成功才会写入"的前提——授权拦截由组件 disabled 实现（typecheck 保障）。
-  // 反向：识别失败（/base/）即使授权也不写入。
-  const result = recognizeAndRecord([], BASE_URL);
-  assert.equal(result.ok, false);
-  if (result.ok) return;
-  assert.equal(result.history.length, 0);
+test("未授权（availability.enabled=false）时 combobox 所有交互 disabled", () => {
+  // Issue #157 复审：真渲染 combobox 组件 + availability.enabled=false，
+  // 断言输入框 / ▾ / 识别 / 历史项 / 历史项移除 / 清除历史 全部 disabled。
+  // 不能只测 /base/ 解析失败——那是识别层契约，不是权限禁用契约。
+  const history: FeishuShareLinkHistoryEntry[] = [
+    {
+      id: WIKI_URL,
+      shareUrl: WIKI_URL,
+      label: "飞书工作簿·YsEKwSUJ5i86",
+      dataset: "weight_templates",
+      lastUsedAt: "2026-07-24T12:00:00.000Z",
+    },
+  ];
+
+  const render = (enabled: boolean) =>
+    renderToStaticMarkup(
+      createElement(FeishuSourceCombobox, {
+        history,
+        availability: {
+          enabled,
+          disabledReasonText: enabled ? undefined : "未授权：缺少飞书规则源读取权限",
+        },
+        defaultOpen: true, // SSR 下展开 popover，覆盖历史项 / 清除按钮
+        onRecord: () => { throw new Error("不应触发 onRecord"); },
+        onRemove: () => { throw new Error("不应触发 onRemove"); },
+        onClearAll: () => { throw new Error("不应触发 onClearAll"); },
+        notify: () => { throw new Error("不应触发 notify"); },
+      }),
+    );
+
+  // —— 未授权：输入框与所有按钮（识别 / ▾ / 历史项 / 历史项移除 / 清除）均 disabled ——
+  const disabledHtml = render(false);
+  assert.match(disabledHtml, /<input[^>]*\bdisabled\b/);
+  const allButtons = disabledHtml.match(/<button\b[^>]*>/g) ?? [];
+  assert.ok(
+    allButtons.length >= 5,
+    `未授权时应至少有 5 个按钮（识别/▾/历史项/移除/清除），实际 ${allButtons.length}`,
+  );
+  for (const tag of allButtons) {
+    assert.match(tag, /\bdisabled\b/, `未授权按钮必须 disabled：${tag}`);
+  }
+
+  // —— 授权对照：输入框 / ▾ / 历史项 / 历史项移除 / 清除 均 NOT disabled ——
+  // 识别按钮因 inputValue="" 空，仍有 disabled，那是空输入契约，不是权限契约。
+  const enabledHtml = render(true);
+  assert.equal((enabledHtml.match(/<input[^>]*\bdisabled\b/g) ?? []).length, 0);
+  for (const cls of [
+    "feishu-source-combobox-caret",
+    "feishu-source-combobox-list-item-main",
+    "feishu-source-combobox-list-item-remove",
+    "feishu-source-combobox-clear",
+  ]) {
+    const tag = enabledHtml.match(new RegExp(`<button[^>]*class="${cls}"[^>]*>`));
+    assert.ok(tag, `授权渲染应包含 ${cls}`);
+    assert.doesNotMatch(tag[0], /\bdisabled\b/, `授权时 ${cls} 不应 disabled`);
+  }
 });
 
 test("迁移无损：v20 现有 bitable 历史与新规则源历史共存，combobox 只过滤显示规则源类", () => {

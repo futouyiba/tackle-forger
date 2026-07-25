@@ -105,6 +105,8 @@ test("recordShareLinkHistory 按 shareUrl 去重并刷新最近使用时间", ()
 });
 
 test("recordShareLinkHistory 新地址置顶并按上限裁剪", () => {
+  // Issue #157 契约：上限 10 条。守底常量值，防止被改回 20 而测试仍通过。
+  assert.equal(FEISHU_SHARE_LINK_HISTORY_LIMIT, 10);
   let history: FeishuShareLinkHistoryEntry[] = [];
   for (let i = 0; i < FEISHU_SHARE_LINK_HISTORY_LIMIT + 3; i += 1) {
     history = recordShareLinkHistory(history, {
@@ -113,7 +115,8 @@ test("recordShareLinkHistory 新地址置顶并按上限裁剪", () => {
       dataset: i % 2 === 0 ? "weight_templates" : "modifiers",
     });
   }
-  assert.equal(history.length, FEISHU_SHARE_LINK_HISTORY_LIMIT);
+  // 硬编码断言上限为 10（不依赖常量，防止常量回退后测试误绿）。
+  assert.equal(history.length, 10);
   // 最新的在前面，超限的最旧条目被丢弃
   assert.equal(history[0].shareUrl, `https://example.feishu.cn/base/token${FEISHU_SHARE_LINK_HISTORY_LIMIT + 2}?table=tbl${FEISHU_SHARE_LINK_HISTORY_LIMIT + 2}`);
 });

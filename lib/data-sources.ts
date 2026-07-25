@@ -55,8 +55,14 @@ export function defaultDataSourceProfiles(): DataSourceProfile[] {
   ];
 }
 
-/** 飞书分享链接历史的最大保留条数。仅作导入便利，不保存凭据。 */
-export const FEISHU_SHARE_LINK_HISTORY_LIMIT = 20;
+/**
+ * 飞书分享链接历史的最大保留条数。仅作导入便利，不保存凭据。
+ *
+ * Issue #157 契约：规则园 combobox 的「上限 10 条（最近优先）」。
+ * 历史字段同时承载规则源（/wiki/|/sheets/）与 legacy bitable（/base/）
+ * 条目，统一按此上限裁剪（最近优先，超限丢最旧）。
+ */
+export const FEISHU_SHARE_LINK_HISTORY_LIMIT = 10;
 
 /**
  * 记录一条已成功识别的飞书分享链接到历史。按 shareUrl 去重并刷新

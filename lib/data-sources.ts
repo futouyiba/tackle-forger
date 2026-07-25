@@ -14,6 +14,7 @@ import type {
   WeightTemplate,
   WorkspaceState,
 } from "./types";
+import { isRuleWorkbookShareUrl } from "./feishu-workbook";
 
 export interface FeishuRecord {
   record_id: string;
@@ -55,8 +56,14 @@ export function defaultDataSourceProfiles(): DataSourceProfile[] {
   ];
 }
 
-/** 飞书分享链接历史的最大保留条数。仅作导入便利，不保存凭据。 */
-export const FEISHU_SHARE_LINK_HISTORY_LIMIT = 20;
+/**
+ * 飞书分享链接历史的最大保留条数。仅作导入便利，不保存凭据。
+ *
+ * Issue #157 契约：规则园 combobox 的「上限 10 条（最近优先）」。
+ * 历史字段同时承载规则源（/wiki/|/sheets/）与 legacy bitable（/base/）
+ * 条目，统一按此上限裁剪（最近优先，超限丢最旧）。
+ */
+export const FEISHU_SHARE_LINK_HISTORY_LIMIT = 10;
 
 /**
  * 记录一条已成功识别的飞书分享链接到历史。按 shareUrl 去重并刷新
@@ -89,8 +96,18 @@ export function recordShareLinkHistory(
     dataset: entry.dataset,
     lastUsedAt,
   };
-  const updated = [next, ...preserved];
-  return updated.slice(0, FEISHU_SHARE_LINK_HISTORY_LIMIT);
+  // 规则源（/wiki/、/sheets/）与 legacy bitable（/base/）分离裁剪：
+  // 10 条上限只作用于规则源子集，legacy 原样保留，避免混存裁剪静默丢弃
+  // 历史（#157 数据无损契约；reviewer 复现：20 条 legacy + 新 /wiki/ 会丢 11 条）。
+  const nextIsRule = isRuleWorkbookShareUrl(next.shareUrl);
+  const ruleEntries = preserved.filter((item) => isRuleWorkbookShareUrl(item.shareUrl));
+  const legacyEntries = preserved.filter((item) => !isRuleWorkbookShareUrl(item.shareUrl));
+  const cappedRule = (nextIsRule ? [next, ...ruleEntries] : ruleEntries).slice(
+    0,
+    FEISHU_SHARE_LINK_HISTORY_LIMIT,
+  );
+  const allLegacy = nextIsRule ? legacyEntries : [next, ...legacyEntries];
+  return [...cappedRule, ...allLegacy];
 }
 
 /**

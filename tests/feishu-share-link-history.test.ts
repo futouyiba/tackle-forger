@@ -104,7 +104,9 @@ test("recordShareLinkHistory 按 shareUrl 去重并刷新最近使用时间", ()
   assert.equal(initial[0].label, "A 表");
 });
 
-test("recordShareLinkHistory 新地址置顶并按上限裁剪", () => {
+test("recordShareLinkHistory: legacy /base/ 不参与上限裁剪（数据无损，#157）", () => {
+  // Issue #157 契约：10 条上限只作用于规则源子集；legacy bitable /base/ 原样保留。
+  assert.equal(FEISHU_SHARE_LINK_HISTORY_LIMIT, 10);
   let history: FeishuShareLinkHistoryEntry[] = [];
   for (let i = 0; i < FEISHU_SHARE_LINK_HISTORY_LIMIT + 3; i += 1) {
     history = recordShareLinkHistory(history, {
@@ -113,9 +115,31 @@ test("recordShareLinkHistory 新地址置顶并按上限裁剪", () => {
       dataset: i % 2 === 0 ? "weight_templates" : "modifiers",
     });
   }
-  assert.equal(history.length, FEISHU_SHARE_LINK_HISTORY_LIMIT);
-  // 最新的在前面，超限的最旧条目被丢弃
+  // legacy /base/ 不裁剪，全部保留（最新在前）。
+  assert.equal(history.length, FEISHU_SHARE_LINK_HISTORY_LIMIT + 3);
   assert.equal(history[0].shareUrl, `https://example.feishu.cn/base/token${FEISHU_SHARE_LINK_HISTORY_LIMIT + 2}?table=tbl${FEISHU_SHARE_LINK_HISTORY_LIMIT + 2}`);
+});
+
+test("recordShareLinkHistory: 新增规则源不丢 legacy /base/（reviewer 复现的回归）", () => {
+  // PR #124 时期上限 20，旧工作区可能已写满 20 条 /base/ legacy。
+  let history: FeishuShareLinkHistoryEntry[] = [];
+  for (let i = 0; i < 20; i += 1) {
+    history = recordShareLinkHistory(history, {
+      shareUrl: `https://example.feishu.cn/base/legacy${i}?table=tbl${i}`,
+      label: `legacy ${i}`,
+      dataset: "weight_templates",
+    });
+  }
+  assert.equal(history.length, 20);
+  // 第一次识别规则源 /wiki/：不得静默丢 legacy。
+  history = recordShareLinkHistory(history, {
+    shareUrl: "https://pisn3u3ony2.feishu.cn/wiki/newrule?sheet=main",
+    label: "新规则源",
+    dataset: "weight_templates",
+  });
+  assert.equal(history.length, 21);
+  assert.equal(history.filter((e) => e.shareUrl.includes("/base/")).length, 20);
+  assert.equal(history.filter((e) => e.shareUrl.includes("/wiki/")).length, 1);
 });
 
 test("recordShareLinkHistory 忽略空 shareUrl", () => {

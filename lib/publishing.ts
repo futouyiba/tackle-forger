@@ -60,7 +60,7 @@ import {
 } from "./validation-issues";
 import { structuralPullParameterKey } from "./projection-matcher";
 import type { ModelAffixValueAssessment } from "./quality-value-policy";
-import type { PricingTrialResult } from "./pricing-policy";
+import { pricingTrialOutputHash, type PricingTrialResult } from "./pricing-policy";
 import {
   derivePerformanceSummary,
   resolvePerformanceSummaryDefinition,
@@ -647,6 +647,7 @@ export function publishConfigurationSnapshot(
         || input.automaticPricing.priceWarningAcknowledgement.purchasePrice !== input.automaticPricing.purchasePrice
         || input.automaticPricing.priceWarningAcknowledgement.threshold !== input.automaticPricing.priceWarning.threshold
         || input.automaticPricing.priceWarningAcknowledgement.inputHash !== input.automaticPricing.inputHash
+        || input.automaticPricing.priceWarningAcknowledgement.inputHash !== pricingTrialOutputHash(input.automaticPricing, `${input.model.id}@${input.model.revision}`)
       )
     ) {
       blocking.push({

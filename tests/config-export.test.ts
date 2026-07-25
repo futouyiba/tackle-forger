@@ -217,13 +217,14 @@ test("三表替换到第二张失败时回滚第一张且不替换第三张", as
     formalTargetContext: formalTargetContext(),
   });
   assert.equal(result.status, "failed");
+  assert.ok(result.formalEvidence);
   assert.equal(
-    result.formalEvidence.contextHash,
+    result.formalEvidence!.contextHash,
     formalConfigExportContextHash(formalContext(snapshot, "package:1")),
   );
-  assert.equal(result.formalEvidence.governanceLeaseId, "lease:test");
-  assert.equal(result.formalEvidence.fencingToken, "1");
-  assert.equal(result.formalEvidence.expectedOldOid, "a".repeat(40));
+  assert.equal(result.formalEvidence!.governanceLeaseId, "lease:test");
+  assert.equal(result.formalEvidence!.fencingToken, "1");
+  assert.equal(result.formalEvidence!.expectedOldOid, "a".repeat(40));
   assert.deepEqual(io.replaced, ["tackle.xlsx"]);
   assert.deepEqual(io.restored, ["tackle.xlsx"]);
   assert.deepEqual(result.rolledBackWorkbooks, ["tackle.xlsx"]);
@@ -291,8 +292,9 @@ test("幂等恢复冻结正式上下文 hash，不允许换目标重放治理证
     formalAuthorizationVerifier: FORMAL_VERIFIER,
     formalTargetContext: formalTargetContext(),
   });
+  assert.ok(first.formalEvidence);
   assert.equal(
-    first.formalEvidence.contextHash,
+    first.formalEvidence!.contextHash,
     formalConfigExportContextHash(context),
   );
   await assert.rejects(

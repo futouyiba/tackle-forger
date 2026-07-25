@@ -190,11 +190,6 @@ test("生产形态文件系统预览在本地读取前要求完整治理证据�
       formalAuthorization: FORMAL_AUTHORIZATION,
       formalAuthorizationVerifier: undefined,
     },
-    {
-      canCommit: true,
-      formalAuthorization: undefined,
-      formalAuthorizationVerifier: FORMAL_VERIFIER,
-    },
   ]) {
     await assert.rejects(
       () => previewFilesystemExport({

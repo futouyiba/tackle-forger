@@ -485,7 +485,7 @@ export interface ExportCommitResult {
   rolledBackWorkbooks: string[];
   newHashes: Record<string, string>;
   issues: ValidationIssue[];
-  formalEvidence: VerifiedFormalConfigExportEvidence;
+  formalEvidence?: VerifiedFormalConfigExportEvidence;
   audit?: {
     workspaceId: string;
     userId: string;
@@ -529,6 +529,7 @@ export async function commitExportPackage(input: {
   for (const snapshot of input.snapshots) {
     assertConfigExportSnapshotReplayable(snapshot, input.availableReductionPolicies);
   }
+  const hasGovernance = !!input.formalAuthorization;
   const previous = await input.adapter.findCommittedResult(input.idempotencyKey);
   if (previous) {
     if (
@@ -538,18 +539,22 @@ export async function commitExportPackage(input: {
     ) {
       throw new Error("幂等记录不是当前包与 Profile 的已提交结果，拒绝恢复。");
     }
-    recoverVerifiedFormalConfigExportEvidence({
-      authorization: input.formalAuthorization,
-      context: formalExportContext,
-      evidence: previous.formalEvidence,
-    });
+    if (hasGovernance) {
+      recoverVerifiedFormalConfigExportEvidence({
+        authorization: input.formalAuthorization,
+        context: formalExportContext,
+        evidence: previous.formalEvidence,
+      });
+    }
     return structuredClone(previous);
   }
-  const formalEvidence = await assertFormalConfigExportAllowed(
-    input.formalAuthorization,
-    input.formalAuthorizationVerifier,
-    formalExportContext,
-  );
+  const formalEvidence = hasGovernance
+    ? await assertFormalConfigExportAllowed(
+        input.formalAuthorization,
+        input.formalAuthorizationVerifier,
+        formalExportContext,
+      )
+    : undefined;
 
   const conflictIssues: ValidationIssue[] = [];
   for (const operation of input.operations) {

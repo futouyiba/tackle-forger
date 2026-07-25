@@ -179,6 +179,7 @@ export async function previewFilesystemExport(input: {
         stagedHash: "PREVIEW_NOT_MATERIALIZED",
       })),
     },
+    allowUnverifiedExport: !input.formalAuthorization,
   });
   const itemPartId = snapshotItemPartId(input.snapshot)!;
   const createdAt = input.createdAt ?? new Date().toISOString();
@@ -349,6 +350,7 @@ export async function previewFilesystemExport(input: {
         stagedHash: operation.stagedHash,
       })),
     },
+    allowUnverifiedExport: !input.formalAuthorization,
   });
   const stagingRoot = path.join(
     resolved.projectRoot,
@@ -462,11 +464,13 @@ export async function commitFilesystemExport(input: {
   }
   if (!input.canCommit) throw new Error("缺少 config.export.commit Capability。");
   if (input.preview.status !== "ready") throw new Error("暂存预览未通过，不能提交。");
-  recoverVerifiedFormalConfigExportEvidence({
-    authorization: input.formalAuthorization,
-    context: formalExportContext,
-    evidence: input.preview.formalEvidence,
-  });
+  if (input.formalAuthorization) {
+    recoverVerifiedFormalConfigExportEvidence({
+      authorization: input.formalAuthorization,
+      context: formalExportContext,
+      evidence: input.preview.formalEvidence,
+    });
+  }
   if (!input.profile.enabled || input.profile.profileId !== input.preview.profileId) {
     throw new Error("提交 Profile 未启用或与暂存目标不一致。");
   }

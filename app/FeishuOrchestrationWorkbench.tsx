@@ -22,6 +22,10 @@ export interface FeishuOrchestrationWorkbenchProps {
   actionAvailabilities: ActionAvailabilityMap;
   /** Current executing action for in-progress indicators */
   actionState: "" | "inspect" | "pull" | "draft" | "publish";
+  /** Whether the workspace has unsaved changes (dirty patches) */
+  dirty: boolean;
+  /** Whether a publish warning reason is required but not yet filled */
+  publishWarningBlocked: boolean;
   onInspect: () => void;
   onPull: () => void;
   onCreateDraft: () => void;
@@ -54,12 +58,14 @@ function isActionable(stageId: OrchestrationStageId, state: OrchestrationStageSt
   if (state === "INSPECTING" || state === "PULLING" || state === "DRAFTING" || state === "PUBLISHING") return false;
   if (state === "PUBLISHED") return false;
 
-  // Each stage's action is available when its precondition is met
+  // Each stage's action is available when the stage is in a pre-action state.
+  // The states here must match what derive*State functions actually produce
+  // (see lib/feishu-orchestration-presentation.ts).
   const progressOrder: Record<OrchestrationStageId, OrchestrationStageState[]> = {
-    workbook_identity: ["PENDING", "ERROR"],
-    source_pull: ["INSPECTED", "ERROR", "PULLED"],
-    ruleset_draft: ["PULLED"],
-    ruleset_publish: ["DRAFTED"],
+    workbook_identity: ["PENDING", "INSPECTED", "ERROR"],
+    source_pull: ["PENDING", "PULLED", "ERROR"],
+    ruleset_draft: ["PENDING"],
+    ruleset_publish: ["PENDING"],
   };
 
   return progressOrder[stageId].includes(state);
@@ -73,10 +79,9 @@ function actionLabel(stageId: OrchestrationStageId, state: OrchestrationStageSta
 }
 
 function stageVariant(stageId: OrchestrationStageId, state: OrchestrationStageState): "primary" | "default" {
-  // First action available is primary; subsequent ones are default
   if (stageId === "workbook_identity" && (state === "PENDING" || state === "ERROR")) return "primary";
   if (stageId === "source_pull" && state === "PULLED") return "primary";
-  if (stageId === "ruleset_publish" && state === "DRAFTED") return "primary";
+  if (stageId === "ruleset_publish" && state === "PENDING") return "primary";
   return "default";
 }
 
@@ -110,18 +115,25 @@ function StageCard({
   isCurrent,
   actionAvailabilities,
   actionState,
+  dirty,
+  publishWarningBlocked,
   onAction,
 }: {
   stage: OrchestrationStage;
   isCurrent: boolean;
   actionAvailabilities: ActionAvailabilityMap;
   actionState: string;
+  dirty: boolean;
+  publishWarningBlocked: boolean;
   onAction: () => void;
 }) {
   const actionCode = stageActionCode(stage.id);
   const availability = (actionAvailabilities as Record<string, { enabled: boolean; disabledReasonText?: string }>)[actionCode];
   const showAction = isActionable(stage.id, stage.state);
-  const disabled = Boolean(actionState) || !availability?.enabled;
+  const disabled = Boolean(actionState)
+    || dirty
+    || !availability?.enabled
+    || (stage.id === "ruleset_publish" && publishWarningBlocked);
   const variant = stageVariant(stage.id, stage.state);
   const busy = (stage.id === "workbook_identity" && actionState === "inspect")
     || (stage.id === "source_pull" && actionState === "pull")
@@ -174,6 +186,8 @@ export function FeishuOrchestrationWorkbench({
   model,
   actionAvailabilities,
   actionState,
+  dirty,
+  publishWarningBlocked,
   onInspect,
   onPull,
   onCreateDraft,
@@ -202,6 +216,8 @@ export function FeishuOrchestrationWorkbench({
             isCurrent={i === currentIndex}
             actionAvailabilities={actionAvailabilities}
             actionState={actionState}
+            dirty={dirty}
+            publishWarningBlocked={publishWarningBlocked}
             onAction={actionByStage[stage.id]}
           />
         </div>

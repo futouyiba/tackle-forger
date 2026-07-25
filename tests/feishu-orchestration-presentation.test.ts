@@ -301,6 +301,9 @@ describe("buildFeishuOrchestrationModel", () => {
     it("ruleset_publish is PUBLISHED", () => {
       assert.equal(stageState(model, "ruleset_publish"), "PUBLISHED");
     });
+    it("ruleset_draft is DRAFTED (draft phase completed before publish)", () => {
+      assert.equal(stageState(model, "ruleset_draft"), "DRAFTED");
+    });
     it("has ruleset_publish evidence with publication hash", () => {
       const stage = model.stages.find((s) => s.id === "ruleset_publish")!;
       assert.ok(stage.evidence);

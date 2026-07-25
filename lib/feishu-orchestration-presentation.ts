@@ -398,12 +398,7 @@ function deriveSourcePullState(
   if (input.hasIdentityError) return "PENDING";
   if (input.action === "pull") return "PULLING";
   if (input.inspectionShowsNewerRevision) return "SUPERSEDED";
-  if (input.savedSource) {
-    if (input.savedSource.state === "PUBLISHED" || input.savedSource.state === "RULESET_DRAFT") {
-      return "PULLED";
-    }
-    return "PULLED";
-  }
+  if (input.savedSource) return "PULLED";
   if (input.error && input.action !== "inspect") return "ERROR";
   return "PENDING";
 }
@@ -423,17 +418,9 @@ function deriveRulesetDraftState(
   if (!input.savedSource) return "PENDING";
   if (input.inspectionShowsNewerRevision) return "PENDING";
   if (input.action === "draft") return "DRAFTING";
-  if (input.publishedRuleSet) return "PUBLISHED"; // draft already published
+  // When already published, the draft stage was completed before publish.
+  if (input.publishedRuleSet) return "DRAFTED";
   if (input.ruleSetDraft) return "DRAFTED";
-  if (
-    input.savedSource.state === "RULESET_DRAFT" ||
-    input.savedSource.state === "PUBLISHED"
-  ) {
-    // RULESET_DRAFT source state means draft was created but the RuleSet might
-    // be published already; if we still have no ruleSetForSource it's unexpected.
-    return "PENDING";
-  }
-  // Source is PULLED but no draft created yet — this is the normal "ready to draft" state.
   return "PENDING";
 }
 

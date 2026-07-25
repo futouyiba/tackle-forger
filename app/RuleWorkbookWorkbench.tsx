@@ -289,6 +289,8 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
         model={orchestrationModel}
         actionAvailabilities={props.actionAvailabilities}
         actionState={action}
+        dirty={props.dirty}
+        publishWarningBlocked={Boolean(sourceWarnings.length && ruleSetDraft && !warningReason.trim())}
         onInspect={() => void inspect()}
         onPull={() => void pull()}
         onCreateDraft={() => void createDraft()}

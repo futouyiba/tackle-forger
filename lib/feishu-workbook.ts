@@ -261,6 +261,43 @@ export function parseCanonicalWorkbookLink(input: string): ParsedCanonicalWorkbo
 }
 
 /**
+ * 判断字符串是否为权威规则源工作簿链接（`/wiki/` 或 `/sheets/` 形式）。
+ *
+ * 用于「飞书规则园」combobox 在历史列表中过滤出规则源类条目，与多维表格
+ * `/base/` 数据导入链接相区分。纯客户端校验：不调 API、不切 canonical、
+ * 不改读取层。解析抛出的错误被吞掉，仅返回 boolean。
+ */
+export function isRuleWorkbookShareUrl(input: string): boolean {
+  try {
+    parseCanonicalWorkbookLink(input);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 识别一条规则源工作簿分享链接并生成历史展示用的 label。
+ *
+ * 解析失败时透传 `parseCanonicalWorkbookLink` 的错误，由调用方负责提示。
+ * 解析成功时返回 `{ shareUrl, label }`：label 取 wikiToken 或 spreadsheetToken
+ * 的前缀，作为「工作簿名」的缓存代理——真正的飞书工作簿标题需要调 API 获取，
+ * 本期只做 UI + 识别 + 历史（#157），不切工作簿、不联调，因此用 token 前缀占位。
+ *
+ * 本函数不修改 `CANONICAL_FEISHU_WORKBOOK`、不触发读取层切流（#143）。
+ */
+export function recognizeFeishuRuleWorkbookLink(input: string): {
+  shareUrl: string;
+  label: string;
+} {
+  const shareUrl = input.trim();
+  const parsed = parseCanonicalWorkbookLink(shareUrl);
+  const token = parsed.wikiToken ?? parsed.spreadsheetToken ?? "";
+  const label = token ? `飞书工作簿·${token.slice(0, 12)}` : shareUrl;
+  return { shareUrl, label };
+}
+
+/**
  * 校验权威规则源工作簿登记与工作表注册表的自洽性。
  *
  * 链接形式按 `parseCanonicalWorkbookLink` 的解析结果分支：

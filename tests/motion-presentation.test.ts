@@ -446,7 +446,7 @@ test("全状态快照覆盖 idle/playing/paused/locking/completed/cancelled/supe
   const seen = new Set<string>();
 
   // idle
-  let c = createMotionPlaybackController(model, { clock: new FakeClock() });
+  const c = createMotionPlaybackController(model, { clock: new FakeClock() });
   assert.equal(c.getState().status, "idle"); seen.add(c.getState().status);
 
   // playing

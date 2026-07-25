@@ -451,18 +451,43 @@ export async function pullFeishuWorkbookRevision(input: {
   const remote = await input.adapter.resolveWorkbook(input.workbook);
   if (!remote.sourceRevision.trim()) throw new Error("飞书未返回工作簿 revision。");
   const issues = validateSheetRegistry(registry, remote.sheets);
-  // PR2b-2 待改：WQ8w 新表无 d6e928（W 段策略将切到 1cAihB+2KCCHR+3FYijT 三子表）。
-  // PR2b-1 条件保留旧 d6e928 读取：仅当远端含 d6e928（LEGACY YsEKw 拓扑）时按旧契约读取并注入
-  // fiveAxisWeightBandPolicy；WQ8w（无 d6e928）跳过，不阻断 pull。PR2b-2 实现三子表 + policyId + hash。
-  const hasLegacyWeightSheet = remote.sheets.some((sheet) => sheet.sheetId === "d6e928");
-  const policyRanges = hasLegacyWeightSheet && input.adapter.readRanges
-    ? await input.adapter.readRanges({ spreadsheetToken: remote.spreadsheetToken, requests: [{ sheetId: "d6e928", range: "A1:AE54" }] })
+  // PR2b-2（2026-07-25）：W 段策略从旧 d6e928 切到 WQ8w 三子表。
+  // WQ8w（1cAihB+2KCCHR+3FYijT 均存在）→ 读三子表 A1:AE17；
+  // LEGACY（d6e928 存在且三子表不全）→ 回退读 d6e928 A1:AE54 并去首空列对齐；
+  // 否则跳过（无 W 段策略）。
+  const W_BAND_SHEETS = ["1cAihB", "2KCCHR", "3FYijT"] as const;
+  const hasWq8wWBand = W_BAND_SHEETS.every((sid) => remote.sheets.some((s) => s.sheetId === sid));
+  const hasLegacyD6e928 = remote.sheets.some((s) => s.sheetId === "d6e928");
+  const policyRanges = (hasWq8wWBand || hasLegacyD6e928) && input.adapter.readRanges
+    ? await input.adapter.readRanges({
+        spreadsheetToken: remote.spreadsheetToken,
+        requests: hasWq8wWBand
+          ? W_BAND_SHEETS.map((sid) => ({ sheetId: sid, range: "A1:AE17" }))
+          : [{ sheetId: "d6e928", range: "A1:AE54" }],
+      })
     : undefined;
-  const policyRange = policyRanges?.find((entry) => entry.sheetId === "d6e928" && entry.range === "A1:AE54");
-  if (policyRanges && (!policyRange || policyRange.revision !== remote.sourceRevision)) throw new Error("FIVE_AXIS_WEIGHT_BAND_POLICY_SOURCE_INVALID：未读取到同一 revision 的 d6e928 机器区。");
-  const fiveAxisWeightBandPolicy = policyRange
-    ? parseFiveAxisWeightBandPolicyFromWeightTemplate({ sourceRevision: remote.sourceRevision, values: policyRange.values })
-    : undefined;
+  const fiveAxisWeightBandPolicy: FiveAxisWeightBandPolicy | undefined = (() => {
+    if (!policyRanges) return undefined;
+    if (hasWq8wWBand) {
+      const rodRng = policyRanges.find((e) => e.sheetId === "1cAihB" && e.range === "A1:AE17");
+      const reelRng = policyRanges.find((e) => e.sheetId === "2KCCHR" && e.range === "A1:AE17");
+      const lineRng = policyRanges.find((e) => e.sheetId === "3FYijT" && e.range === "A1:AE17");
+      if (!rodRng || !reelRng || !lineRng || rodRng.revision !== remote.sourceRevision || reelRng.revision !== remote.sourceRevision || lineRng.revision !== remote.sourceRevision) {
+        throw new Error("FIVE_AXIS_WEIGHT_BAND_POLICY_SOURCE_INVALID：未读取到同 revision 的三张 W 段子表。");
+      }
+      return parseFiveAxisWeightBandPolicyFromWeightTemplate({ sourceRevision: remote.sourceRevision, rodValues: rodRng.values, reelValues: reelRng.values, lineValues: lineRng.values });
+    }
+    const d6 = policyRanges.find((e) => e.sheetId === "d6e928" && e.range === "A1:AE54");
+    if (!d6 || d6.revision !== remote.sourceRevision) throw new Error("FIVE_AXIS_WEIGHT_BAND_POLICY_SOURCE_INVALID：d6e928 机器区 revision 不一致。");
+    // d6e928 合并表 A 列为空占位（B="机器ID"）→ 去首列对齐 WQ8w
+    const t = (r: unknown[]) => r.slice(1); const v = d6.values;
+    return parseFiveAxisWeightBandPolicyFromWeightTemplate({
+      sourceRevision: remote.sourceRevision,
+      rodValues: [t(v[1]!), ...v.slice(2, 18).map(t)],
+      reelValues: [t(v[19]!), ...v.slice(20, 36).map(t)],
+      lineValues: [t(v[37]!), ...v.slice(38, 54).map(t)],
+    });
+  })();
   const content = {
     workbookRefId: input.workbook.id,
     sourceRevision: remote.sourceRevision,

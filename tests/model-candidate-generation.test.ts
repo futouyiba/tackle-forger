@@ -207,7 +207,7 @@ test("候选生成拒绝带 NEEDS_REVIEW PartConstraintSet ref 的 Recipe", () =
   );
 });
 
-test("候选生成在 Issue #50 前拒绝所有 ref-backed Recipe，而不静默忽略已确认约束", () => {
+test("CONFIRMED PartConstraintSet 允许候选生成正常消费", () => {
   const current = fixture();
   const confirmed = structuredClone(current.state.partConstraintSets[0]);
   confirmed.reviewStatus = "CONFIRMED";
@@ -224,10 +224,9 @@ test("候选生成在 Issue #50 前拒绝所有 ref-backed Recipe，而不静默
     revision: confirmed.revision,
     contentHash: confirmed.contentHash,
   };
-  assert.throws(
-    () => run(current),
-    /PART_CONSTRAINT_SET_CANDIDATE_RUNTIME_UNAVAILABLE.*candidate_generation/,
-  );
+  const result = run(current);
+  assert.equal(result.enumerationTotal, 4); // 2 SKU × 2 variants
+  assert.equal(result.legalCount, 4);
 });
 
 test("Model 物化重新拒绝运行后变为 NEEDS_REVIEW ref-backed 的 Recipe", () => {

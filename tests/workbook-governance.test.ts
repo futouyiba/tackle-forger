@@ -40,6 +40,7 @@ function withCanonicalPullDraft(state: WorkspaceState, source: FeishuSourceRevis
   };
   const templateDraft = weightTemplateDraftFromCanonicalRuleDraft({
     sourceRevision: source,
+    weightSources: [],
     canonicalRuleDraft: {
       ...canonicalRuleDraft,
       templates: [{ ...state.templates[0], id: "wtpl_fixture", sourceRow: 4 }],

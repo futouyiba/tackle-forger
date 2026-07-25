@@ -92,11 +92,12 @@ export interface WeightTemplatePolicyDraft {
   id: string;
   sourceRevisionId: string;
   sourceRevision: string;
-  sheetId: "d6e928";
+  /** PR2b 切流后竿/轮/线分表，sheetId 是实际子表（如 1cAihB/2KCCHR/3FYijT），不再固定旧合并表 "d6e928"。 */
+  sheetId: string;
   templates: Array<WeightTemplate & {
-    source: { sheetId: "d6e928"; rowKey: string; cells: Record<string, string> };
+    source: { sheetId: string; rowKey: string; cells: Record<string, string> };
   }>;
-  issues: Array<{ code: string; severity: "WARNING" | "ERROR"; message: string; sourceCell?: { sheetId: "d6e928"; cell: string } }>;
+  issues: Array<{ code: string; severity: "WARNING" | "ERROR"; message: string; sourceCell?: { sheetId: string; cell: string } }>;
   formalStatus: "NON_FORMAL" | "READY_TO_PUBLISH";
   inputHash: string;
   importedAt: string;

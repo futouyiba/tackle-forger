@@ -16,16 +16,41 @@ import type {
   WeightTemplate,
 } from "./types";
 
+export type ItemPart = "rod" | "reel" | "line";
+export const CANONICAL_ITEM_PARTS: ItemPart[] = ["rod", "reel", "line"];
+
+/**
+ * 带部位与来源 sheetId 的规则源输入。PR2b 切流后竿/轮/线各为独立子表，
+ * 每条记录必须保留原 sheetId 与原 sheet 行号（provenance），禁止把三张子表
+ * 拼成虚拟合并表后丢失来源。
+ */
+export interface PartedRuleSource {
+  part: ItemPart;
+  sheetId: string;
+  values: unknown[][];
+}
+
+/**
+ * WQ8w 分表拓扑（PR2b 切流）：竿/轮/线拆为独立子表，每张只含一个部位。
+ * range 不再写死，按 `FeishuSourceRevision.sheets` 的 grid rowCount 动态取上界
+ * （spec §14 :944 fail-closed 契约）。旧合并表（d6e928/fATowU/vviXo0/rgFPUu/
+ * mLpTLK/m3eQCg）的块布局契约（竿3-18/轮21-36/线39-54）保留作 spec §14 审计证据。
+ */
 export const CANONICAL_RULE_RANGES = {
-  // revision 4226: each source sheet has one block per rod/reel/line, with
-  // an empty separator and a repeated header for each block.
-  weight: { sheetId: "d6e928", range: "A1:AE54" },
-  type: { sheetId: "fATowU", range: "A1:AE20" },
-  function: { sheetId: "vviXo0", range: "A1:AG63" },
-  functionProfiles: { sheetId: "mLpTLK", range: "A1:S8" },
-  method: { sheetId: "rgFPUu", range: "A1:AB12" },
-  methodTemplateReview: { sheetId: "m3eQCg", range: "A1:AB83" },
+  weight: { rod: "1cAihB", reel: "2KCCHR", line: "3FYijT" },
+  type: { rod: "10TyFp", reel: "11CfXW", line: "12VetE" },
+  function: { rod: "16qYVn", reel: "17jqiE", line: "18pjcZ" },
+  functionProfiles: "19XKzU",
+  method: { rod: "4zXYpP", reel: "5oZXTO", line: "6FwSyV" },
+  /** historical_reference：02.5 派生模板审核镜像，不作规则输入（spec §14 :940）。 */
+  methodTemplateReview: { rod: "7ygxLI", reel: "8pvTQG", line: "9gvEsP" },
 } as const;
+
+/** 按概念分组取出该概念全部部位的新表 sheetId（用于 range 请求生成）。 */
+export function canonicalRuleSheetIdsForGroup(group: "weight" | "type" | "function" | "method" | "methodTemplateReview"): Array<{ part: ItemPart; sheetId: string }> {
+  const entry = CANONICAL_RULE_RANGES[group];
+  return CANONICAL_ITEM_PARTS.map((part) => ({ part, sheetId: entry[part] }));
+}
 
 const METHOD_IDS: Record<string, string> = {
   浮钓: "method:float",
@@ -145,22 +170,22 @@ function definitions(headers: Array<{ label: string; kind?: ItemKind }>): Parame
 
 function sourceParameterHeaders(input: {
   weightHeaders: string[];
-  typeValues: unknown[][];
-  functionValues: unknown[][];
+  typeSources: PartedRuleSource[];
+  functionSources: PartedRuleSource[];
 }) {
   const result: Array<{ label: string; kind?: ItemKind }> = input.weightHeaders.map((label) => ({ label }));
-  for (const row of input.typeValues) {
-    if (!asText(row[1]).includes("机器ID")) continue;
-    const typeLabel = asText(row[3]);
-    const kind: ItemKind = typeLabel.includes("轮") ? "reel" : typeLabel.includes("线") ? "line" : "rod";
-    result.push(...row.slice(5).map(asText).filter(Boolean).map((label) => ({ label, kind })));
+  for (const source of input.typeSources) {
+    for (const row of source.values) {
+      if (!asText(row[1]).includes("机器ID")) continue;
+      const kind: ItemKind = source.part;
+      result.push(...row.slice(5).map(asText).filter(Boolean).map((label) => ({ label, kind })));
+    }
   }
-  let functionBlock = -1;
-  for (const functionHeader of input.functionValues.filter((row) => row.some((value) => asText(value).includes("机器ID")))) {
-    functionBlock += 1;
-    const kind = (["rod", "reel", "line"] as const)[functionBlock];
-    if (!kind) continue;
-    result.push(...functionHeader.map(asText).filter((label) => label && !FUNCTION_METADATA_LABELS.has(label)).map((label) => ({ label, kind })));
+  for (const source of input.functionSources) {
+    for (const functionHeader of source.values.filter((row) => row.some((value) => asText(value).includes("机器ID")))) {
+      const kind: ItemKind = source.part;
+      result.push(...functionHeader.map(asText).filter((label) => label && !FUNCTION_METADATA_LABELS.has(label)).map((label) => ({ label, kind })));
+    }
   }
   return result;
 }
@@ -197,106 +222,114 @@ function sourceRule(input: {
 }
 
 function parseWeight(input: {
-  values: unknown[][];
+  sources: PartedRuleSource[];
   sourceRevisionId: string;
   issues: CanonicalRuleSourceIssue[];
 }) {
-  let headers: string[] = [];
-  let columns: Record<string, number | undefined> = {};
   const attributeHeaders: string[] = [];
   const seen = new Set<string>();
   const templates: WeightTemplate[] = [];
   const templateKinds = new Map<string, ItemKind>();
-  for (let index = 0; index < input.values.length; index += 1) {
-    const row = input.values[index] ?? [];
-    const sourceRow = index + 1;
-    if (row.some((value) => asText(value).includes("机器ID"))) {
-      headers = row.map(asText);
-      const find = (label: string) => headers.findIndex((value) => value === label);
-      columns = { id: find("机器ID（勿改）"), part: find("钓具大类"), notes: find("备注"), band: find("重量段"), min: find("最小拉力"), max: find("最大拉力"), grade: find("鱼重等级") };
-      for (const [column, header] of headers.entries()) if (header && !Object.values(columns).includes(column)) attributeHeaders.push(header);
-      continue;
+  for (const source of input.sources) {
+    let headers: string[] = [];
+    let columns: Record<string, number | undefined> = {};
+    for (let index = 0; index < source.values.length; index += 1) {
+      const row = source.values[index] ?? [];
+      const sourceRow = index + 1;
+      if (row.some((value) => asText(value).includes("机器ID"))) {
+        headers = row.map(asText);
+        const find = (label: string) => headers.findIndex((value) => value === label);
+        columns = { id: find("机器ID（勿改）"), part: find("钓具大类"), notes: find("备注"), band: find("重量段"), min: find("最小拉力"), max: find("最大拉力"), grade: find("鱼重等级") };
+        for (const [column, header] of headers.entries()) if (header && !Object.values(columns).includes(column) && !attributeHeaders.includes(header)) attributeHeaders.push(header);
+        continue;
+      }
+      if (!headers.length || !row.some((value) => asText(value))) continue;
+      const id = asText(row[columns.id ?? -1]);
+      const min = asFinite(row[columns.min ?? -1]);
+      const max = asFinite(row[columns.max ?? -1]);
+      const isSourceRow = Boolean(id || min !== undefined || max !== undefined || asText(row[columns.band ?? -1]));
+      if (!id) {
+        if (isSourceRow) input.issues.push({ level: "error", code: "WEIGHT_TEMPLATE_ID_MISSING", message: `重量模板 ${source.sheetId} 第 ${sourceRow} 行缺少机器 ID。`, sheetId: source.sheetId, row: sourceRow });
+        continue;
+      }
+      if (seen.has(id)) input.issues.push({ level: "error", code: "WEIGHT_TEMPLATE_ID_DUPLICATE", message: `重量模板 ID 重复：${id}`, sheetId: source.sheetId, row: sourceRow });
+      seen.add(id);
+      if (!id.startsWith(`wtpl_${source.part}_`)) {
+        input.issues.push({ level: "error", code: "WEIGHT_TEMPLATE_PART_PREFIX_MISMATCH", message: `重量模板 ${id} 前缀与 ${source.part} 部位（${source.sheetId}）不一致，期望 wtpl_${source.part}_。`, sheetId: source.sheetId, row: sourceRow });
+        continue;
+      }
+      if (min === undefined || max === undefined || min >= max) {
+        input.issues.push({ level: "error", code: "WEIGHT_TEMPLATE_ROW_INVALID", message: `重量模板 ${id} 的拉力区间无效。`, sheetId: source.sheetId, row: sourceRow });
+        continue;
+      }
+      const values: Record<string, number | string> = {};
+      for (let column = 0; column < headers.length; column += 1) {
+        const header = headers[column];
+        if (!header || Object.values(columns).includes(column)) continue;
+        const raw = row[column];
+        if (raw === null || raw === undefined || asText(raw) === "") continue;
+        values[parameterKey(header)] = asFinite(raw) ?? asText(raw);
+      }
+      const band = asText(row[columns.band ?? -1]);
+      const fishGrade = asFinite(row[columns.grade ?? -1]) ?? asText(row[columns.grade ?? -1]);
+      templates.push({
+        id,
+        name: band || id,
+        fishMinKg: min,
+        fishMaxKg: max,
+        nominalFishKg: (min + max) / 2,
+        rangeSemantics: "target_pull",
+        targetPullMinKgf: min,
+        targetPullMaxKgf: max,
+        nominalTargetPullKgf: (min + max) / 2,
+        tier: band,
+        values,
+        notes: asText(row[columns.notes ?? -1]),
+        itemPartId: `part:${source.part}`,
+        sourceRevisionId: input.sourceRevisionId,
+        sourceSheetId: source.sheetId,
+        sourceRow,
+        fishWeightLevel: fishGrade,
+      });
+      templateKinds.set(id, source.part);
     }
-    if (!headers.length || !row.some((value) => asText(value))) continue;
-    const id = asText(row[columns.id ?? -1]);
-    const min = asFinite(row[columns.min ?? -1]);
-    const max = asFinite(row[columns.max ?? -1]);
-    const isSourceRow = Boolean(id || min !== undefined || max !== undefined || asText(row[columns.band ?? -1]));
-    if (!id) {
-      if (isSourceRow) input.issues.push({ level: "error", code: "WEIGHT_TEMPLATE_ID_MISSING", message: `重量模板第 ${sourceRow} 行缺少机器 ID。`, sheetId: CANONICAL_RULE_RANGES.weight.sheetId, row: sourceRow });
-      continue;
-    }
-    if (seen.has(id)) input.issues.push({ level: "error", code: "WEIGHT_TEMPLATE_ID_DUPLICATE", message: `重量模板 ID 重复：${id}`, sheetId: CANONICAL_RULE_RANGES.weight.sheetId, row: sourceRow });
-    seen.add(id);
-    if (min === undefined || max === undefined || min >= max) {
-      input.issues.push({ level: "error", code: "WEIGHT_TEMPLATE_ROW_INVALID", message: `重量模板 ${id} 的拉力区间无效。`, sheetId: CANONICAL_RULE_RANGES.weight.sheetId, row: sourceRow });
-      continue;
-    }
-    const values: Record<string, number | string> = {};
-    for (let column = 0; column < headers.length; column += 1) {
-      const header = headers[column];
-      if (!header || Object.values(columns).includes(column)) continue;
-      const raw = row[column];
-      if (raw === null || raw === undefined || asText(raw) === "") continue;
-      values[parameterKey(header)] = asFinite(raw) ?? asText(raw);
-    }
-    const band = asText(row[columns.band ?? -1]);
-    const fishGrade = asFinite(row[columns.grade ?? -1]) ?? asText(row[columns.grade ?? -1]);
-    const partName = asText(row[columns.part ?? -1]);
-    const itemKind: ItemKind = partName.includes("轮") ? "reel" : partName.includes("线") ? "line" : "rod";
-    templates.push({
-      id,
-      name: band || id,
-      fishMinKg: min,
-      fishMaxKg: max,
-      nominalFishKg: (min + max) / 2,
-      rangeSemantics: "target_pull",
-      targetPullMinKgf: min,
-      targetPullMaxKgf: max,
-      nominalTargetPullKgf: (min + max) / 2,
-      tier: band,
-      values,
-      notes: asText(row[columns.notes ?? -1]),
-      itemPartId: `part:${itemKind}`,
-      sourceRevisionId: input.sourceRevisionId,
-      sourceSheetId: CANONICAL_RULE_RANGES.weight.sheetId,
-      sourceRow,
-      fishWeightLevel: fishGrade,
-    });
-    templateKinds.set(id, itemKind);
   }
-  if (!templates.length) input.issues.push({ level: "error", code: "WEIGHT_TEMPLATE_EMPTY", message: "01_重量模板没有可导入记录。", sheetId: CANONICAL_RULE_RANGES.weight.sheetId });
+  if (!templates.length) for (const source of input.sources) input.issues.push({ level: "error", code: "WEIGHT_TEMPLATE_EMPTY", message: `01_重量模板 ${source.sheetId} 没有可导入记录。`, sheetId: source.sheetId });
   return { templates, attributeHeaders, templateKinds };
 }
 
-function parseMethods(input: { values: unknown[][]; sourceRevisionId: string; issues: CanonicalRuleSourceIssue[] }) {
-  let headers: string[] = [];
-  let columns: Record<string, number> = {};
+function parseMethods(input: { sources: PartedRuleSource[]; sourceRevisionId: string; issues: CanonicalRuleSourceIssue[] }) {
   const entries: Array<{ profile: MethodProfile; kind: ItemKind }> = [];
   const seen = new Set<string>();
-  for (let index = 0; index < input.values.length; index += 1) {
-    const row = input.values[index] ?? [];
-    const sourceRow = index + 1;
-    if (row.some((value) => asText(value).includes("机器ID"))) {
-      headers = row.map(asText);
-      const findOne = (...labels: string[]) => headers.findIndex((value) => labels.includes(value));
-      columns = { id: findOne("机器ID（勿改）"), name: findOne("钓法", "钓法类型"), part: findOne("钓具大类", "部位") };
-      continue;
+  for (const source of input.sources) {
+    let headers: string[] = [];
+    let columns: Record<string, number> = {};
+    for (let index = 0; index < source.values.length; index += 1) {
+      const row = source.values[index] ?? [];
+      const sourceRow = index + 1;
+      if (row.some((value) => asText(value).includes("机器ID"))) {
+        headers = row.map(asText);
+        const findOne = (...labels: string[]) => headers.findIndex((value) => labels.includes(value));
+        columns = { id: findOne("机器ID（勿改）"), name: findOne("钓法", "钓法类型"), part: findOne("钓具大类", "部位") };
+        continue;
+      }
+      if (!headers.length || !row.some((value) => asText(value))) continue;
+      const id = asText(row[columns.id]);
+      if (!id) { input.issues.push({ level: "error", code: "METHOD_ID_MISSING", message: `钓法类型 ${source.sheetId} 第 ${sourceRow} 行缺少机器 ID。`, sheetId: source.sheetId, row: sourceRow }); continue; }
+      if (seen.has(id)) input.issues.push({ level: "error", code: "METHOD_ID_DUPLICATE", message: `钓法类型稳定 ID 重复：${id}`, sheetId: source.sheetId, row: sourceRow });
+      seen.add(id);
+      if (!id.startsWith(`fishing_${source.part}_`)) {
+        input.issues.push({ level: "error", code: "METHOD_PART_PREFIX_MISMATCH", message: `钓法 ${id} 前缀与 ${source.part} 部位（${source.sheetId}）不一致，期望 fishing_${source.part}_。`, sheetId: source.sheetId, row: sourceRow });
+      }
+      const name = asText(row[columns.name]) || id;
+      const kind: ItemKind = source.part;
+      const rules = headers.flatMap((header, column) => {
+        if (!header || Object.values(columns).includes(column)) return [];
+        const rule = sourceRule({ id: `${id}:${columnName(column)}${sourceRow}`, header, raw: row[column], kind, sourceRevisionId: input.sourceRevisionId, sheetId: source.sheetId, row: sourceRow, column });
+        return rule ? [rule] : [];
+      });
+      entries.push({ profile: { id, name, rules, enabled: true, sourceRevisionId: input.sourceRevisionId, notes: `来自飞书 02_钓法类型 ${source.sheetId} 的稳定 fishing_* 行。` }, kind });
     }
-    if (!headers.length || !row.some((value) => asText(value))) continue;
-    const id = asText(row[columns.id]);
-    if (!id) { input.issues.push({ level: "error", code: "METHOD_ID_MISSING", message: `钓法类型第 ${sourceRow} 行缺少机器 ID。`, sheetId: CANONICAL_RULE_RANGES.method.sheetId, row: sourceRow }); continue; }
-    if (seen.has(id)) input.issues.push({ level: "error", code: "METHOD_ID_DUPLICATE", message: `钓法类型稳定 ID 重复：${id}`, sheetId: CANONICAL_RULE_RANGES.method.sheetId, row: sourceRow });
-    seen.add(id);
-    const name = asText(row[columns.name]) || id;
-    const part = asText(row[columns.part]);
-    const kind: ItemKind = part.includes("轮") || id.includes("_reel_") ? "reel" : part.includes("线") || id.includes("_line_") ? "line" : "rod";
-    const rules = headers.flatMap((header, column) => {
-      if (!header || Object.values(columns).includes(column)) return [];
-      const rule = sourceRule({ id: `${id}:${columnName(column)}${sourceRow}`, header, raw: row[column], kind, sourceRevisionId: input.sourceRevisionId, sheetId: CANONICAL_RULE_RANGES.method.sheetId, row: sourceRow, column });
-      return rule ? [rule] : [];
-    });
-    entries.push({ profile: { id, name, rules, enabled: true, sourceRevisionId: input.sourceRevisionId, notes: "来自飞书 02_钓法类型的稳定 fishing_* 行。" }, kind });
   }
   return entries;
 }
@@ -315,51 +348,58 @@ function deriveMethodTemplates(input: { templates: WeightTemplate[]; templateKin
   }));
 }
 
-function parseTypes(input: { values: unknown[][]; sourceRevisionId: string; methodProfiles: MethodProfile[]; issues: CanonicalRuleSourceIssue[] }) {
-  let headers: string[] = [];
-  let columns: Record<string, number | undefined> = {};
+function parseTypes(input: { sources: PartedRuleSource[]; sourceRevisionId: string; methodProfiles: MethodProfile[]; issues: CanonicalRuleSourceIssue[] }) {
   const profiles: ItemTypeProfile[] = [];
   const modifiers: ModifierOption[] = [];
   const seen = new Set<string>();
   const allMethodIds = input.methodProfiles.map((entry) => entry.id);
-  for (let index = 0; index < input.values.length; index += 1) {
-    const row = input.values[index] ?? [];
-    if (row.some((value) => asText(value).includes("机器ID"))) {
-      headers = row.map(asText);
-      const find = (label: string) => headers.findIndex((value) => value === label);
-      columns = { id: find("机器ID（勿改）"), entityType: find("实体类型"), band: find("重量段"), method: find("钓法"), name: find("具体类型") };
-      continue;
+  for (const source of input.sources) {
+    let headers: string[] = [];
+    let columns: Record<string, number | undefined> = {};
+    for (let index = 0; index < source.values.length; index += 1) {
+      const row = source.values[index] ?? [];
+      if (row.some((value) => asText(value).includes("机器ID"))) {
+        headers = row.map(asText);
+        const find = (label: string) => headers.findIndex((value) => value === label);
+        columns = { id: find("机器ID（勿改）"), entityType: find("实体类型"), band: find("重量段"), method: find("钓法"), name: find("具体类型") };
+        continue;
+      }
+      if (!headers.length || !row.some((value) => asText(value))) continue;
+      const entityType = asText(row[columns.entityType ?? -1]);
+      const sourceRow = index + 1;
+      const id = asText(row[columns.id ?? -1]);
+      if (!/^(RodType|ReelType|LineType)$/.test(entityType)) continue;
+      if (!id) {
+        input.issues.push({ level: "error", code: "ITEM_TYPE_ID_MISSING", message: `类型材质 ${source.sheetId} 第 ${sourceRow} 行缺少机器 ID。`, sheetId: source.sheetId, row: sourceRow });
+        continue;
+      }
+      if (seen.has(id)) input.issues.push({ level: "error", code: "ITEM_TYPE_ID_DUPLICATE", message: `类型 ID 重复：${id}`, sheetId: source.sheetId, row: sourceRow });
+      seen.add(id);
+      const kind: ItemKind = source.part;
+      const expectedEntityType = kind === "rod" ? "RodType" : kind === "reel" ? "ReelType" : "LineType";
+      if (entityType !== expectedEntityType) {
+        input.issues.push({ level: "error", code: "ITEM_TYPE_PART_MISMATCH", message: `类型 ${id} 的实体类型 ${entityType} 与 ${kind} 部位子表 ${source.sheetId} 不一致（期望 ${expectedEntityType}）。`, sheetId: source.sheetId, row: sourceRow });
+        continue;
+      }
+      const rules = headers.flatMap((header, column) => {
+        if (!header || Object.values(columns).includes(column)) return [];
+        const rule = sourceRule({ id: `${id}:${columnName(column)}${sourceRow}`, header, raw: row[column], kind, sourceRevisionId: input.sourceRevisionId, sheetId: source.sheetId, row: sourceRow, column });
+        return rule ? [rule] : [];
+      });
+      const sourceMethods = asText(row[columns.method ?? -1]).split(/[、,，/|]/).map((value) => value.trim()).filter((value) => value && value !== "-");
+      const resolvedMethods = sourceMethods.length ? sourceMethods.map(methodId) : allMethodIds;
+      if (resolvedMethods.some((method) => !method)) {
+        input.issues.push({ level: "error", code: "ITEM_TYPE_METHOD_UNKNOWN", message: `类型 ${id} 引用了未绑定稳定 ID 的钓法。`, sheetId: source.sheetId, row: sourceRow });
+        continue;
+      }
+      const methods = resolvedMethods as string[];
+      const name = asText(row[columns.name ?? -1]) || id;
+      profiles.push({ id, name, methodIds: methods, itemPartIds: [`part:${kind}`], rules, enabled: true, sourceRevisionId: input.sourceRevisionId, notes: `来自飞书 02_类型材质 ${source.sheetId} 第 ${sourceRow} 行。` });
+      const dimension: DimensionKey = kind === "line" ? "material" : "structure";
+      modifiers.push({ id, dimension, name, level: 1, itemKinds: [kind], methodIds: methods, rules: structuredClone(rules), notes: `来自飞书 02_类型材质 ${source.sheetId} 第 ${sourceRow} 行。`, enabled: true });
     }
-    if (!headers.length || !row.some((value) => asText(value))) continue;
-    const entityType = asText(row[columns.entityType ?? -1]);
-    const sourceRow = index + 1;
-    const id = asText(row[columns.id ?? -1]);
-    if (!/^(RodType|ReelType|LineType)$/.test(entityType)) continue;
-    if (!id) {
-      input.issues.push({ level: "error", code: "ITEM_TYPE_ID_MISSING", message: `类型材质第 ${sourceRow} 行缺少机器 ID。`, sheetId: CANONICAL_RULE_RANGES.type.sheetId, row: sourceRow });
-      continue;
-    }
-    if (seen.has(id)) input.issues.push({ level: "error", code: "ITEM_TYPE_ID_DUPLICATE", message: `类型 ID 重复：${id}`, sheetId: CANONICAL_RULE_RANGES.type.sheetId, row: sourceRow });
-    seen.add(id);
-    const kind: ItemKind = entityType === "RodType" ? "rod" : entityType === "ReelType" ? "reel" : "line";
-    const rules = headers.flatMap((header, column) => {
-      if (!header || Object.values(columns).includes(column)) return [];
-      const rule = sourceRule({ id: `${id}:${columnName(column)}${sourceRow}`, header, raw: row[column], kind, sourceRevisionId: input.sourceRevisionId, sheetId: CANONICAL_RULE_RANGES.type.sheetId, row: sourceRow, column });
-      return rule ? [rule] : [];
-    });
-    const sourceMethods = asText(row[columns.method ?? -1]).split(/[、,，/|]/).map((value) => value.trim()).filter((value) => value && value !== "-");
-    const resolvedMethods = sourceMethods.length ? sourceMethods.map(methodId) : allMethodIds;
-    if (resolvedMethods.some((method) => !method)) {
-      input.issues.push({ level: "error", code: "ITEM_TYPE_METHOD_UNKNOWN", message: `类型 ${id} 引用了未绑定稳定 ID 的钓法。`, sheetId: CANONICAL_RULE_RANGES.type.sheetId, row: sourceRow });
-      continue;
-    }
-    const methods = resolvedMethods as string[];
-    const name = asText(row[columns.name ?? -1]) || id;
-    profiles.push({ id, name, methodIds: methods, itemPartIds: [`part:${kind}`], rules, enabled: true, sourceRevisionId: input.sourceRevisionId, notes: `来自飞书 02_类型材质第 ${sourceRow} 行。` });
-    const dimension: DimensionKey = kind === "line" ? "material" : "structure";
-    modifiers.push({ id, dimension, name, level: 1, itemKinds: [kind], methodIds: methods, rules: structuredClone(rules), notes: `来自飞书 02_类型材质第 ${sourceRow} 行。`, enabled: true });
   }
-  if (!profiles.length) input.issues.push({ level: "error", code: "ITEM_TYPE_EMPTY", message: "02_类型材质没有可导入记录。", sheetId: CANONICAL_RULE_RANGES.type.sheetId });
+  if (!profiles.length) for (const source of input.sources) input.issues.push({ level: "error", code: "ITEM_TYPE_EMPTY", message: `02_类型材质 ${source.sheetId} 没有可导入记录。`, sheetId: source.sheetId });
   return { profiles, modifiers };
 }
 
@@ -377,7 +417,7 @@ function parseFunctionProfiles(input: { values: unknown[][]; sourceRevisionId: s
     "part:line": column("lineFunctionGroupId", "线功能分组ID（勿改）"),
   };
   if ([idColumn, nameColumn, statusColumn, intensityColumn, ...Object.values(partGroupColumns)].some((entry) => entry < 0)) {
-    input.issues.push({ level: "error", code: "FUNCTION_PROFILE_CONSTANTS_HEADER_INVALID", message: "04.0_FunctionProfile常量必须包含父级 ID、显示名、状态、支持强度及竿/轮/线功能分组 ID。", sheetId: CANONICAL_RULE_RANGES.functionProfiles.sheetId, row: 1 });
+    input.issues.push({ level: "error", code: "FUNCTION_PROFILE_CONSTANTS_HEADER_INVALID", message: "04.0_FunctionProfile常量必须包含父级 ID、显示名、状态、支持强度及竿/轮/线功能分组 ID。", sheetId: CANONICAL_RULE_RANGES.functionProfiles, row: 1 });
     return new Map<string, { id: string; name: string; status: string; partGroupIds: Record<string, string>; supportedIntensities: FunctionIntensity[] }>();
   }
   const result = new Map<string, { id: string; name: string; status: string; partGroupIds: Record<string, string>; supportedIntensities: FunctionIntensity[] }>();
@@ -392,18 +432,18 @@ function parseFunctionProfiles(input: { values: unknown[][]; sourceRevisionId: s
     const intensityMatch = intensityText.match(/^\[(1(?:,2(?:,3)?)?)\]$/);
     const supportedIntensities = intensityMatch ? intensityMatch[1]!.split(",").map(Number) as FunctionIntensity[] : [];
     if (!id || !name || status !== "ACTIVE" || !supportedIntensities.length || Object.values(partGroupIds).some((value) => !value)) {
-      input.issues.push({ level: "error", code: "FUNCTION_PROFILE_CONSTANT_INVALID", message: `04.0 第 ${index + 1} 行父级常量无效。`, sheetId: CANONICAL_RULE_RANGES.functionProfiles.sheetId, row: index + 1 });
+      input.issues.push({ level: "error", code: "FUNCTION_PROFILE_CONSTANT_INVALID", message: `04.0 第 ${index + 1} 行父级常量无效。`, sheetId: CANONICAL_RULE_RANGES.functionProfiles, row: index + 1 });
       continue;
     }
-    if (result.has(id)) { input.issues.push({ level: "error", code: "FUNCTION_PROFILE_ID_DUPLICATE", message: `FunctionProfile 父级 ID 重复：${id}`, sheetId: CANONICAL_RULE_RANGES.functionProfiles.sheetId, row: index + 1 }); continue; }
+    if (result.has(id)) { input.issues.push({ level: "error", code: "FUNCTION_PROFILE_ID_DUPLICATE", message: `FunctionProfile 父级 ID 重复：${id}`, sheetId: CANONICAL_RULE_RANGES.functionProfiles, row: index + 1 }); continue; }
     const expectedPrefixes: Record<string, string> = { "part:rod": "funcgrp_rod_", "part:reel": "funcgrp_reel_", "part:line": "funcgrp_line_" };
     if (Object.entries(partGroupIds).some(([part, groupId]) => !groupId.startsWith(expectedPrefixes[part]!)) || [...result.values()].some((profile) => Object.values(profile.partGroupIds).some((groupId) => Object.values(partGroupIds).includes(groupId)))) {
-      input.issues.push({ level: "error", code: "FUNCTION_PROFILE_GROUP_ID_INVALID", message: `04.0 第 ${index + 1} 行的竿/轮/线分组 ID 必须非空、全局唯一且与部件前缀匹配。`, sheetId: CANONICAL_RULE_RANGES.functionProfiles.sheetId, row: index + 1 });
+      input.issues.push({ level: "error", code: "FUNCTION_PROFILE_GROUP_ID_INVALID", message: `04.0 第 ${index + 1} 行的竿/轮/线分组 ID 必须非空、全局唯一且与部件前缀匹配。`, sheetId: CANONICAL_RULE_RANGES.functionProfiles, row: index + 1 });
       continue;
     }
     const expectedPartGroupIds = CANONICAL_FUNCTION_PROFILE_PART_GROUP_IDS[id];
     if (expectedPartGroupIds && Object.entries(expectedPartGroupIds).some(([part, expected]) => partGroupIds[part] !== expected)) {
-      input.issues.push({ level: "error", code: "FUNCTION_PROFILE_PART_GROUP_BINDING_MISMATCH", message: `04.0 第 ${index + 1} 行的竿/轮/线分组 ID 与固定 FunctionProfile 映射不一致。`, sheetId: CANONICAL_RULE_RANGES.functionProfiles.sheetId, row: index + 1 });
+      input.issues.push({ level: "error", code: "FUNCTION_PROFILE_PART_GROUP_BINDING_MISMATCH", message: `04.0 第 ${index + 1} 行的竿/轮/线分组 ID 与固定 FunctionProfile 映射不一致。`, sheetId: CANONICAL_RULE_RANGES.functionProfiles, row: index + 1 });
       continue;
     }
     result.set(id, { id, name, status, partGroupIds, supportedIntensities: [...new Set(supportedIntensities)].sort() as FunctionIntensity[] });
@@ -411,76 +451,77 @@ function parseFunctionProfiles(input: { values: unknown[][]; sourceRevisionId: s
   const observedIds = [...result.keys()].sort();
   const expectedIds = Object.keys(CANONICAL_FUNCTION_PROFILE_INTENSITIES).sort();
   if (observedIds.length !== expectedIds.length || observedIds.some((id, index) => id !== expectedIds[index]) || [...result.values()].some((profile) => profile.supportedIntensities.join(",") !== CANONICAL_FUNCTION_PROFILE_INTENSITIES[profile.id]!.join(","))) {
-    input.issues.push({ level: "error", code: "FUNCTION_PROFILE_PARENT_SET_MISMATCH", message: "04.0_FunctionProfile常量必须精确包含规范定义的七个父级及其支持强度。", sheetId: CANONICAL_RULE_RANGES.functionProfiles.sheetId });
+    input.issues.push({ level: "error", code: "FUNCTION_PROFILE_PARENT_SET_MISMATCH", message: "04.0_FunctionProfile常量必须精确包含规范定义的七个父级及其支持强度。", sheetId: CANONICAL_RULE_RANGES.functionProfiles });
   }
-  if (!result.size) input.issues.push({ level: "error", code: "FUNCTION_PROFILE_CONSTANTS_EMPTY", message: "04.0_FunctionProfile常量没有可导入父级。", sheetId: CANONICAL_RULE_RANGES.functionProfiles.sheetId });
+  if (!result.size) input.issues.push({ level: "error", code: "FUNCTION_PROFILE_CONSTANTS_EMPTY", message: "04.0_FunctionProfile常量没有可导入父级。", sheetId: CANONICAL_RULE_RANGES.functionProfiles });
   return result;
 }
 
-function parseFunctions(input: { values: unknown[][]; profiles: Map<string, { id: string; name: string; status: string; partGroupIds: Record<string, string>; supportedIntensities: FunctionIntensity[] }>; sourceRevisionId: string; issues: CanonicalRuleSourceIssue[] }) {
-  let headers: string[] = [];
-  let columns: Record<string, number | undefined> = {};
-  let headerInvalid = false;
-  const rows: Array<{ id: string; groupId: string; intensity: FunctionIntensity; itemPartId: string; rules: AdjustmentRule[]; sourceRow: number }> = [];
-  let block = -1;
+function parseFunctions(input: { sources: PartedRuleSource[]; profiles: Map<string, { id: string; name: string; status: string; partGroupIds: Record<string, string>; supportedIntensities: FunctionIntensity[] }>; sourceRevisionId: string; issues: CanonicalRuleSourceIssue[] }) {
+  const rows: Array<{ id: string; groupId: string; intensity: FunctionIntensity; itemPartId: string; rules: AdjustmentRule[]; sourceRow: number; sourceSheetId: string }> = [];
   const seen = new Set<string>();
-  for (let index = 0; index < input.values.length; index += 1) {
-    const row = input.values[index] ?? [];
-    const sourceRow = index + 1;
-    if (row.some((value) => asText(value).includes("机器ID"))) {
-      headers = row.map(asText);
-      block += 1;
-      const resolve = (label: string, code: string) => {
-        const matches = headers.reduce<number[]>((all, value, column) => value === label ? [...all, column] : all, []);
-        if (matches.length === 1) return matches[0];
-        input.issues.push({ level: "error", code, message: `功能定位区块第 ${sourceRow} 行必须且只能包含一列 ${label}。`, sheetId: CANONICAL_RULE_RANGES.function.sheetId, row: sourceRow });
-        headerInvalid = true;
-        return undefined;
-      };
-      columns = {
-        id: resolve("机器ID（勿改）", "FUNCTION_ROW_ID_COLUMN_INVALID"),
-        groupId: resolve("功能分组ID（勿改）", "FUNCTION_PART_GROUP_BINDING_MISSING"),
-        name: resolve("定位/类型", "FUNCTION_DISPLAY_NAME_COLUMN_INVALID"),
-        intensity: resolve("级别", "FUNCTION_INTENSITY_COLUMN_INVALID"),
-      };
-      continue;
-    }
-    if (!headers.length || headerInvalid || !row.some((value) => asText(value))) continue;
-    const id = asText(row[columns.id ?? -1]);
-    const sourceGroupId = asText(row[columns.groupId ?? -1]);
-    const intensity = Number(row[columns.intensity ?? -1]);
-    const name = asText(row[columns.name ?? -1]);
-    const itemPartId = (["part:rod", "part:reel", "part:line"] as const)[block];
-    const isSourceRow = true;
-    if (!id) {
-      if (isSourceRow) input.issues.push({ level: "error", code: "FUNCTION_ROW_ID_MISSING", message: `功能定位第 ${sourceRow} 行缺少机器 ID。`, sheetId: CANONICAL_RULE_RANGES.function.sheetId, row: sourceRow });
-      continue;
-    }
-    if (seen.has(id)) input.issues.push({ level: "error", code: "FUNCTION_ROW_ID_DUPLICATE", message: `功能行 ID 重复：${id}`, sheetId: CANONICAL_RULE_RANGES.function.sheetId, row: sourceRow });
-    seen.add(id);
-    const matches = [...input.profiles.values()].filter((profile) => profile.partGroupIds[itemPartId] === sourceGroupId);
-    if (matches.length !== 1) {
-      input.issues.push({ level: "error", code: matches.length ? "FUNCTION_PROFILE_PARENT_AMBIGUOUS" : "FUNCTION_PROFILE_PARENT_UNKNOWN", message: `功能行 ${id} 的分组 ${sourceGroupId || "(空)"} 无法唯一映射到 04.0 父级。`, sheetId: CANONICAL_RULE_RANGES.function.sheetId, row: sourceRow });
-      continue;
-    }
-    const groupId = matches[0]!.id;
-    if (!itemPartId || !name || ![1, 2, 3].includes(intensity)) {
-      input.issues.push({ level: "error", code: "FUNCTION_ROW_INVALID", message: `功能行 ${id} 的展示名或强度无效。`, sheetId: CANONICAL_RULE_RANGES.function.sheetId, row: sourceRow });
-      continue;
-    }
-    const rules = headers.flatMap((header, column) => {
-      if (!header || FUNCTION_METADATA_LABELS.has(header)) return [];
-      const kind = itemPartId.slice(5) as ItemKind;
-      if (!PART_SCOPED_SHARED_HEADERS.has(header) && parameterKind(header) !== kind) {
-        input.issues.push({ level: "error", code: "FUNCTION_RULE_CROSS_PART_BINDING", message: `功能行 ${id} 的参数 ${header} 不属于 ${itemPartId}。`, sheetId: CANONICAL_RULE_RANGES.function.sheetId, row: sourceRow });
-        return [];
+  for (const source of input.sources) {
+    let headers: string[] = [];
+    let columns: Record<string, number | undefined> = {};
+    let headerInvalid = false;
+    for (let index = 0; index < source.values.length; index += 1) {
+      const row = source.values[index] ?? [];
+      const sourceRow = index + 1;
+      if (row.some((value) => asText(value).includes("机器ID"))) {
+        headers = row.map(asText);
+        const resolve = (label: string, code: string) => {
+          const matches = headers.reduce<number[]>((all, value, column) => value === label ? [...all, column] : all, []);
+          if (matches.length === 1) return matches[0];
+          input.issues.push({ level: "error", code, message: `功能定位 ${source.sheetId} 第 ${sourceRow} 行必须且只能包含一列 ${label}。`, sheetId: source.sheetId, row: sourceRow });
+          headerInvalid = true;
+          return undefined;
+        };
+        columns = {
+          id: resolve("机器ID（勿改）", "FUNCTION_ROW_ID_COLUMN_INVALID"),
+          groupId: resolve("功能分组ID（勿改）", "FUNCTION_PART_GROUP_BINDING_MISSING"),
+          name: resolve("定位/类型", "FUNCTION_DISPLAY_NAME_COLUMN_INVALID"),
+          intensity: resolve("级别", "FUNCTION_INTENSITY_COLUMN_INVALID"),
+        };
+        continue;
       }
-      const rule = sourceRule({ id: `${id}:${columnName(column)}${sourceRow}`, header, raw: row[column], kind, sourceRevisionId: input.sourceRevisionId, sheetId: CANONICAL_RULE_RANGES.function.sheetId, row: sourceRow, column });
-      return rule ? [rule] : [];
-    });
-    rows.push({ id, groupId, intensity: intensity as FunctionIntensity, itemPartId, rules, sourceRow });
+      if (!headers.length || headerInvalid || !row.some((value) => asText(value))) continue;
+      const id = asText(row[columns.id ?? -1]);
+      const sourceGroupId = asText(row[columns.groupId ?? -1]);
+      const intensity = Number(row[columns.intensity ?? -1]);
+      const name = asText(row[columns.name ?? -1]);
+      const itemPartId = `part:${source.part}`;
+      if (!id) {
+        input.issues.push({ level: "error", code: "FUNCTION_ROW_ID_MISSING", message: `功能定位 ${source.sheetId} 第 ${sourceRow} 行缺少机器 ID。`, sheetId: source.sheetId, row: sourceRow });
+        continue;
+      }
+      if (seen.has(id)) input.issues.push({ level: "error", code: "FUNCTION_ROW_ID_DUPLICATE", message: `功能行 ID 重复：${id}`, sheetId: source.sheetId, row: sourceRow });
+      seen.add(id);
+      const matches = [...input.profiles.values()].filter((profile) => profile.partGroupIds[itemPartId] === sourceGroupId);
+      if (matches.length !== 1) {
+        input.issues.push({ level: "error", code: matches.length ? "FUNCTION_PROFILE_PARENT_AMBIGUOUS" : "FUNCTION_PROFILE_PARENT_UNKNOWN", message: `功能行 ${id} 的分组 ${sourceGroupId || "(空)"} 无法唯一映射到 04.0 父级。`, sheetId: source.sheetId, row: sourceRow });
+        continue;
+      }
+      const groupId = matches[0]!.id;
+      if (!name || ![1, 2, 3].includes(intensity)) {
+        input.issues.push({ level: "error", code: "FUNCTION_ROW_INVALID", message: `功能行 ${id} 的展示名或强度无效。`, sheetId: source.sheetId, row: sourceRow });
+        continue;
+      }
+      const rules = headers.flatMap((header, column) => {
+        if (!header || FUNCTION_METADATA_LABELS.has(header)) return [];
+        const kind = source.part;
+        if (!PART_SCOPED_SHARED_HEADERS.has(header) && parameterKind(header) !== kind) {
+          input.issues.push({ level: "error", code: "FUNCTION_RULE_CROSS_PART_BINDING", message: `功能行 ${id} 的参数 ${header} 不属于 ${itemPartId}。`, sheetId: source.sheetId, row: sourceRow });
+          return [];
+        }
+        const rule = sourceRule({ id: `${id}:${columnName(column)}${sourceRow}`, header, raw: row[column], kind, sourceRevisionId: input.sourceRevisionId, sheetId: source.sheetId, row: sourceRow, column });
+        return rule ? [rule] : [];
+      });
+      rows.push({ id, groupId, intensity: intensity as FunctionIntensity, itemPartId, rules, sourceRow, sourceSheetId: source.sheetId });
+    }
   }
-  if (rows.length !== 57) input.issues.push({ level: "error", code: "FUNCTION_RULE_MEMBER_SET_MISMATCH", message: `04_功能定位必须精确包含 57 条成员规则，当前为 ${rows.length} 条。`, sheetId: CANONICAL_RULE_RANGES.function.sheetId });
+  // 04_功能定位聚合校验：跨三张子表合计必须精确 57 条成员规则。取 rod 子表作聚合 issue 的代表来源。
+  const functionAggregateSheetId = CANONICAL_RULE_RANGES.function.rod;
+  if (rows.length !== 57) input.issues.push({ level: "error", code: "FUNCTION_RULE_MEMBER_SET_MISMATCH", message: `04_功能定位必须精确包含 57 条成员规则，当前为 ${rows.length} 条。`, sheetId: functionAggregateSheetId });
   const grouped = new Map<string, typeof rows>();
   for (const row of rows) grouped.set(row.groupId, [...(grouped.get(row.groupId) ?? []), row]);
   const profiles: FunctionProfile[] = [];
@@ -488,48 +529,68 @@ function parseFunctions(input: { values: unknown[][]; profiles: Map<string, { id
   const groupedParentIds = new Set(grouped.keys());
   for (const parent of input.profiles.values()) {
     if (parent.status === "ACTIVE" && !groupedParentIds.has(parent.id)) {
-      input.issues.push({ level: "error", code: "FUNCTION_PROFILE_PARENT_MEMBERS_MISSING", message: `FunctionProfile ${parent.id} 在 04_功能定位中缺少全部成员规则。`, sheetId: CANONICAL_RULE_RANGES.function.sheetId });
+      input.issues.push({ level: "error", code: "FUNCTION_PROFILE_PARENT_MEMBERS_MISSING", message: `FunctionProfile ${parent.id} 在 04_功能定位中缺少全部成员规则。`, sheetId: functionAggregateSheetId });
     }
   }
   for (const [groupId, group] of grouped) {
     const parent = input.profiles.get(groupId);
-    if (!parent) { input.issues.push({ level: "error", code: "FUNCTION_PROFILE_PARENT_UNKNOWN", message: `功能行引用未知父级：${groupId}`, sheetId: CANONICAL_RULE_RANGES.function.sheetId }); continue; }
+    if (!parent) { input.issues.push({ level: "error", code: "FUNCTION_PROFILE_PARENT_UNKNOWN", message: `功能行引用未知父级：${groupId}`, sheetId: functionAggregateSheetId }); continue; }
     const rowsByPartIntensity = new Map<string, typeof group[number]>();
     let valid = true;
     for (const row of group) {
       const key = `${row.itemPartId}:${row.intensity}`;
       if (rowsByPartIntensity.has(key)) {
-        input.issues.push({ level: "error", code: "FUNCTION_GROUP_PART_INTENSITY_DUPLICATE", message: `FunctionProfile ${groupId} 的 ${key} 重复。`, sheetId: CANONICAL_RULE_RANGES.function.sheetId, row: row.sourceRow });
+        input.issues.push({ level: "error", code: "FUNCTION_GROUP_PART_INTENSITY_DUPLICATE", message: `FunctionProfile ${groupId} 的 ${key} 重复。`, sheetId: row.sourceSheetId, row: row.sourceRow });
         valid = false;
       } else rowsByPartIntensity.set(key, row);
     }
-    for (const intensity of parent.supportedIntensities) for (const itemPartId of ["part:rod", "part:reel", "part:line"]) if (!rowsByPartIntensity.has(`${itemPartId}:${intensity}`)) { input.issues.push({ level: "error", code: "FUNCTION_GROUP_PART_INTENSITY_MISSING", message: `FunctionProfile ${groupId} 缺少 ${itemPartId} 强度 ${intensity}。`, sheetId: CANONICAL_RULE_RANGES.function.sheetId }); valid = false; }
-    for (const row of group) if (!parent.supportedIntensities.includes(row.intensity)) { input.issues.push({ level: "error", code: "FUNCTION_INTENSITY_UNSUPPORTED", message: `FunctionProfile ${groupId} 不支持强度 ${row.intensity}。`, sheetId: CANONICAL_RULE_RANGES.function.sheetId, row: row.sourceRow }); valid = false; }
+    for (const intensity of parent.supportedIntensities) for (const itemPartId of ["part:rod", "part:reel", "part:line"]) if (!rowsByPartIntensity.has(`${itemPartId}:${intensity}`)) { input.issues.push({ level: "error", code: "FUNCTION_GROUP_PART_INTENSITY_MISSING", message: `FunctionProfile ${groupId} 缺少 ${itemPartId} 强度 ${intensity}。`, sheetId: functionAggregateSheetId }); valid = false; }
+    for (const row of group) if (!parent.supportedIntensities.includes(row.intensity)) { input.issues.push({ level: "error", code: "FUNCTION_INTENSITY_UNSUPPORTED", message: `FunctionProfile ${groupId} 不支持强度 ${row.intensity}。`, sheetId: row.sourceSheetId, row: row.sourceRow }); valid = false; }
     if (!valid) continue;
     profiles.push({ id: groupId, name: parent.name, status: parent.status, supportedIntensities: parent.supportedIntensities, rules: [], intensityRules: group.map((row) => ({ intensity: row.intensity, itemPartId: row.itemPartId, rules: structuredClone(row.rules), sourceRowId: row.id })), enabled: parent.status.toUpperCase() !== "DISABLED", sourceRevisionId: input.sourceRevisionId, notes: "父级来自飞书 04.0；成员规则来自 04_功能定位。" });
     for (const row of group) modifiers.push({ id: row.id, dimension: "function", name: parent.name, level: row.intensity, itemKinds: [row.itemPartId.slice(5) as ItemKind], rules: structuredClone(row.rules), notes: `来自飞书 04_功能定位第 ${row.sourceRow} 行；父级 ${groupId}。`, enabled: true });
   }
-  if (!rows.length) input.issues.push({ level: "error", code: "FUNCTION_PROFILE_EMPTY", message: "04_功能定位没有可导入记录。", sheetId: CANONICAL_RULE_RANGES.function.sheetId });
+  if (!rows.length) for (const source of input.sources) input.issues.push({ level: "error", code: "FUNCTION_PROFILE_EMPTY", message: `04_功能定位 ${source.sheetId} 没有可导入记录。`, sheetId: source.sheetId });
   return { profiles, modifiers };
 }
 
 export function importCanonicalRuleSource(input: {
   sourceRevision: FeishuSourceRevision;
-  weightValues: unknown[][];
-  typeValues: unknown[][];
-  functionValues: unknown[][];
+  weightSources: PartedRuleSource[];
+  typeSources: PartedRuleSource[];
+  functionSources: PartedRuleSource[];
   functionProfileValues?: unknown[][];
   /** 02_钓法类型；02.5 只保留为审核/回写证据，绝不反向作为规则输入。 */
-  methodValues?: unknown[][];
-  methodTemplateReviewValues?: unknown[][];
+  methodSources?: PartedRuleSource[];
+  methodTemplateReviewSources?: PartedRuleSource[];
   importedAt: string;
 }): CanonicalRuleSourceDraft {
   const issues: CanonicalRuleSourceIssue[] = [];
-  const weight = parseWeight({ values: input.weightValues, sourceRevisionId: input.sourceRevision.id, issues });
-  const importedMethods = parseMethods({ values: input.methodValues ?? [], sourceRevisionId: input.sourceRevision.id, issues });
+  // finding 1 修复（Opus BLOCKER）：入口校验 part↔sheetId 映射——每个概念组必须精确覆盖三 part，
+  // 且 source.sheetId 匹配 CANONICAL_RULE_RANGES[group][part]。防止调用方组装错误导致部位静默错位。
+  const validatePartedSources = (group: "weight" | "type" | "function" | "method", sources: PartedRuleSource[]) => {
+    for (const part of CANONICAL_ITEM_PARTS) {
+      const expectedSheetId = CANONICAL_RULE_RANGES[group][part];
+      const matches = sources.filter((source) => source.part === part);
+      if (matches.length === 0) {
+        issues.push({ level: "error", code: `${group.toUpperCase()}_PART_SOURCE_MISSING`, message: `${group} 缺少 ${part} 部位子表 source（期望 ${expectedSheetId}）。`, sheetId: expectedSheetId });
+      }
+      for (const source of matches) {
+        if (source.sheetId !== expectedSheetId) {
+          issues.push({ level: "error", code: "PART_SOURCE_SHEET_ID_MISMATCH", message: `${group} ${part} source 的 sheetId ${source.sheetId} 与规范 ${expectedSheetId} 不一致；已停止信任调用方 part，避免部位静默错位。`, sheetId: source.sheetId });
+        }
+      }
+    }
+  };
+  validatePartedSources("weight", input.weightSources);
+  validatePartedSources("type", input.typeSources);
+  validatePartedSources("function", input.functionSources);
+  validatePartedSources("method", input.methodSources ?? []);
+  const weight = parseWeight({ sources: input.weightSources, sourceRevisionId: input.sourceRevision.id, issues });
+  const importedMethods = parseMethods({ sources: input.methodSources ?? [], sourceRevisionId: input.sourceRevision.id, issues });
   const enabledKinds = new Set(weight.templateKinds.values());
   for (const kind of enabledKinds) if (!importedMethods.some((entry) => entry.kind === kind)) {
-    issues.push({ level: "error", code: "METHOD_PART_COVERAGE_MISSING", message: `02_钓法类型缺少已启用 ${kind} 部位的稳定钓法块。`, sheetId: CANONICAL_RULE_RANGES.method.sheetId });
+    issues.push({ level: "error", code: "METHOD_PART_COVERAGE_MISSING", message: `02_钓法类型缺少已启用 ${kind} 部位的稳定钓法块。`, sheetId: CANONICAL_RULE_RANGES.method[kind] });
   }
   const templates = deriveMethodTemplates({ templates: weight.templates, templateKinds: weight.templateKinds, methods: importedMethods });
   const methods = importedMethods.length ? importedMethods.map((entry) => entry.profile) : [...new Set(templates.map((entry) => entry.methodId).filter((entry): entry is string => Boolean(entry)))].map((id): MethodProfile => ({
@@ -540,13 +601,13 @@ export function importCanonicalRuleSource(input: {
     sourceRevisionId: input.sourceRevision.id,
     notes: "来自飞书 01_重量模板的钓法列；钓法与类型保持独立规则层。",
   }));
-  const types = parseTypes({ values: input.typeValues, sourceRevisionId: input.sourceRevision.id, methodProfiles: methods, issues });
+  const types = parseTypes({ sources: input.typeSources, sourceRevisionId: input.sourceRevision.id, methodProfiles: methods, issues });
   const functionProfiles = parseFunctionProfiles({ values: input.functionProfileValues ?? [], sourceRevisionId: input.sourceRevision.id, issues });
-  const functions = parseFunctions({ values: input.functionValues, profiles: functionProfiles, sourceRevisionId: input.sourceRevision.id, issues });
+  const functions = parseFunctions({ sources: input.functionSources, profiles: functionProfiles, sourceRevisionId: input.sourceRevision.id, issues });
   const parameters = definitions(sourceParameterHeaders({
     weightHeaders: weight.attributeHeaders,
-    typeValues: input.typeValues,
-    functionValues: input.functionValues,
+    typeSources: input.typeSources,
+    functionSources: input.functionSources,
   }));
   const layers: RuleLayer[] = [
     { id: "layer-weight-template", name: "01_重量模板", order: 10, enabled: true, mode: "global", optionIds: [], rules: [], notes: "基准值直接来自所选飞书重量模板。" },

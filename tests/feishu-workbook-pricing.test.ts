@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   CANONICAL_FEISHU_SHEET_REGISTRY,
   CANONICAL_FEISHU_WORKBOOK,
+  LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY,
+  LEGACY_YS_EKW_FEISHU_WORKBOOK,
   pullFeishuWorkbookRevision,
 } from "../lib/feishu-workbook";
 import {
@@ -19,6 +21,7 @@ import {
 } from "../lib/pricing-policy";
 import {
   CANONICAL_IDENTITY_SHEET_SPECS,
+  LEGACY_YS_EKW_IDENTITY_SHEET_SPECS,
   canonicalAffixSheetRanges,
   canonicalIdentityPolicies,
   canonicalQualitySheetRange,
@@ -65,8 +68,11 @@ test("04_词条的身份与别名读取共同跟随同 revision grid 上界，�
   assert.equal(canonicalQualitySheetRange(sourceRevision), "A1:S60");
   assert.equal(requests.find((entry) => entry.sheetId === "FqD4j7" && entry.range === "A1:S60")?.range, "A1:S60");
   assert.equal(requests.find((entry) => entry.sheetId === "fATowU" && entry.range === "B2:AD20")?.range, "B2:AD20");
-  for (const range of Object.values(CANONICAL_RULE_RANGES).filter((range) => range.sheetId !== "d6e928")) {
-    assert.equal(requests.find((entry) => entry.sheetId === range.sheetId && entry.range === range.range)?.range, range.range);
+  for (const group of ["weight", "type", "function", "method"] as const) {
+    for (const part of ["rod", "reel", "line"] as const) {
+      const sheetId = CANONICAL_RULE_RANGES[group][part];
+      assert.ok(requests.some((entry) => entry.sheetId === sheetId), `缺少 ${group} ${part} 子表 ${sheetId} 的 range 请求`);
+    }
   }
   assert.equal(requests.find((entry) => entry.sheetId === "d6e928" && entry.range === "BG1:BH66")?.range, "BG1:BH66");
   assert.equal(requests.find((entry) => entry.sheetId === "d6e928" && entry.range === "A1:BH66")?.range, "A1:BH66");
@@ -210,11 +216,11 @@ test("同一完整高行号工作簿导入保持幂等", () => {
 });
 
 test("当前整本工作簿注册表覆盖 00–17、FunctionProfile 常量与钓法审核表，并包含真实 sheet_id", () => {
-  assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.length, 21);
-  assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "00_使用说明")?.sheetId, "4IfBoX");
-  assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "04.0_FunctionProfile常量")?.sheetId, "mLpTLK");
-  assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "02.5_钓法模板")?.sheetId, "m3eQCg");
-  assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "12_打包竿组")?.sheetId, "lf4wIM");
+  assert.equal(LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY.length, 21);
+  assert.equal(LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "00_使用说明")?.sheetId, "4IfBoX");
+  assert.equal(LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "04.0_FunctionProfile常量")?.sheetId, "mLpTLK");
+  assert.equal(LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "02.5_钓法模板")?.sheetId, "m3eQCg");
+  assert.equal(LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "12_打包竿组")?.sheetId, "lf4wIM");
 });
 
 test("历史已绑定机器 ID 在当前工作表拓扑下仍通过唯一性、前缀与实体类型校验", () => {
@@ -241,17 +247,17 @@ test("历史已绑定机器 ID 在当前工作表拓扑下仍通过唯一性、�
     ["zrVOxd", typed([["affix_rod_", 12, "RodAffix"], ["affix_reel_", 12, "ReelAffix"], ["affix_line_", 12, "LineAffix"]])],
     ["9nE3Rx", typed([["series_rod_", 8, "SeriesArchetype"], ["series_reel_", 8, "SeriesArchetype"], ["series_line_", 8, "SeriesArchetype"]])],
   ]);
-  const rows = identityRowsFromRanges(CANONICAL_IDENTITY_SHEET_SPECS.map((spec) => ({
+  const rows = identityRowsFromRanges(LEGACY_YS_EKW_IDENTITY_SHEET_SPECS.map((spec) => ({
     sheetId: spec.sheetId,
     valueRange: { values: values.get(spec.sheetId) ?? [] },
-  })));
+  })), LEGACY_YS_EKW_IDENTITY_SHEET_SPECS);
   const report = prepareSourceIdentityMigration({
-    workbookRefId: CANONICAL_FEISHU_WORKBOOK.id,
+    workbookRefId: LEGACY_YS_EKW_FEISHU_WORKBOOK.id,
     sourceRevision: "2352",
     mode: "CONTINUOUS_SYNC",
     rows,
     existingEntities: [],
-    identityPolicies: canonicalIdentityPolicies(),
+    identityPolicies: canonicalIdentityPolicies(LEGACY_YS_EKW_IDENTITY_SHEET_SPECS),
     generatedAt: "2026-07-21T11:00:00.000Z",
   });
   assert.equal(rows.length, 157);

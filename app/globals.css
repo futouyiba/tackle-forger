@@ -4557,6 +4557,17 @@ kbd {
 .feishu-source-combobox-input {
   flex: 1;
   min-width: 240px;
+  background: var(--bg, #eef1f4);
+  border: 1px solid #333;
+  border-radius: 2px;
+  min-height: 30px;
+  outline: 0;
+  padding: 5px 7px;
+}
+
+.feishu-source-combobox-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(13, 139, 131, 0.12);
 }
 
 .feishu-source-combobox-caret,

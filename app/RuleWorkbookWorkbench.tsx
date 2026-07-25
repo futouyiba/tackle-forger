@@ -4,7 +4,6 @@ import {
   AlertTriangle,
   ArrowRight,
   CheckCircle2,
-  FileSpreadsheet,
   LoaderCircle,
   RefreshCw,
   ShieldCheck,
@@ -12,6 +11,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import type { ActionAvailabilityMap } from "@/lib/interaction-contracts";
 import { issueClientActionCommand } from "@/lib/client-action-command";
+import { buildFeishuOrchestrationModel } from "@/lib/feishu-orchestration-presentation";
 import type { CanonicalRuleWorkbookInspection } from "@/lib/rule-workbook-inspection";
 import type { WorkspaceState } from "@/lib/types";
 import {
@@ -19,6 +19,7 @@ import {
   PricingPolicyDraftPanel,
   QualityValuePolicyPanel,
 } from "./RuleWorkbookGovernancePanels";
+import { FeishuOrchestrationWorkbench } from "./FeishuOrchestrationWorkbench";
 import { FeishuSourceCombobox } from "./FeishuSourceCombobox";
 
 interface RuleWorkbookWorkbenchProps {
@@ -98,6 +99,17 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
     return () => controller.abort();
   }, []);
 
+  const orchestrationModel = useMemo(
+    () => buildFeishuOrchestrationModel({
+      state: props.state,
+      workspaceRevision: props.revision,
+      inspection,
+      action,
+      error,
+    }),
+    [props.state, props.revision, inspection, action, error],
+  );
+
   const savedSource = useMemo(() => {
     const sourceRevision = inspection?.sourceRevision.sourceRevision;
     return sourceRevision
@@ -109,7 +121,6 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
     ? props.state.ruleSetVersions.find((item) => item.sourceRevisionIds.includes(savedSource.id))
     : undefined;
   const ruleSetDraft = ruleSetForSource?.status === "draft" ? ruleSetForSource : undefined;
-  const publishedRuleSet = ruleSetForSource?.status === "published" ? ruleSetForSource : undefined;
   const sourceWarnings = savedSource?.issues.filter((issue) => issue.severity === "warning") ?? [];
   const identityItems = inspection?.identityReport.items ?? [];
   const identified = identityItems.filter((item) => item.state === "ALREADY_IDENTIFIED").length;
@@ -126,9 +137,6 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
   const missingPricing = inspection?.pricingDraft.issues.filter((issue) =>
     ["PRICING_INTERPOLATION_MISSING", "PARTS_TO_WHOLE_RATIO_MISSING", "PRICING_MONEY_POLICY_MISSING", "PRICING_EXECUTION_SEMANTICS_MISSING"].includes(issue.code)) ?? [];
   const inspectAvailability = props.actionAvailabilities.inspect_feishu_workbook;
-  const pullAvailability = props.actionAvailabilities.pull_feishu_workbook;
-  const draftAvailability = props.actionAvailabilities.create_ruleset_draft;
-  const publishAvailability = props.actionAvailabilities.publish_ruleset;
   const identityWriteAvailability = props.actionAvailabilities.write_feishu_identity;
 
   const pull = async () => {
@@ -303,70 +311,29 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
         </div>
       ) : null}
 
-      <div className="rule-workbook-flow">
-        <div className="card">
-          <span className="rule-step">01 · 检查</span>
-          <strong>回读工作簿</strong>
-          <small>读取 revision、机器 ID、01/02/03 完整规则矩阵与定价契约，不修改飞书。</small>
-          <em className={inspection ? "is-ok" : ""}>{inspection ? "本次观测完成" : "等待连接"}</em>
+      <FeishuOrchestrationWorkbench
+        model={orchestrationModel}
+        actionAvailabilities={props.actionAvailabilities}
+        actionState={action}
+        dirty={props.dirty}
+        publishWarningBlocked={Boolean(sourceWarnings.length && ruleSetDraft && !warningReason.trim())}
+        onInspect={() => void inspect()}
+        onPull={() => void pull()}
+        onCreateDraft={() => void createDraft()}
+        onPublish={() => void publishRuleSet()}
+      />
+
+      {sourceWarnings.length && ruleSetDraft ? (
+        <div style={{ marginTop: 8 }}>
+          <input
+            value={warningReason}
+            onChange={(event) => setWarningReason(event.target.value)}
+            placeholder={`确认 ${sourceWarnings.length} 项 warning 的理由`}
+            aria-label="RuleSet warning 确认理由"
+            style={{ width: "100%", minHeight: 36, padding: "6px 10px" }}
+          />
         </div>
-        <ArrowRight size={18} />
-        <div className="card">
-          <span className="rule-step">02 · 显式动作</span>
-          <strong>拉取并切换工作台数据</strong>
-          <small>生成 FeishuSourceRevision、规则草稿与重量模板草稿；不激活重量模板或发布规则。</small>
-          <button
-            className="button button-primary button-sm"
-            type="button"
-            disabled={Boolean(action) || props.dirty || !inspection || Boolean(registryErrors.length) || Boolean(canonicalRuleErrors.length) || !pullAvailability.enabled}
-            title={pullAvailability.disabledReasonText}
-            onClick={() => void pull()}
-          >
-            {action === "pull" ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />}
-            {savedSource ? "重新显式拉取" : "显式拉取"}
-          </button>
-        </div>
-        <ArrowRight size={18} />
-        <div className="card">
-          <span className="rule-step">03 · 独立动作</span>
-          <strong>创建 RuleSet 草稿</strong>
-          <small>冻结本次拉取的内容哈希与重量模板草稿供审查；正式生产仍未发布。</small>
-          <button
-            className="button button-default button-sm"
-            type="button"
-            disabled={Boolean(action) || props.dirty || !savedSource || Boolean(ruleSetForSource) || !draftAvailability.enabled}
-            title={draftAvailability.disabledReasonText}
-            onClick={() => void createDraft()}
-          >
-            {action === "draft" ? <LoaderCircle className="spin" size={14} /> : <FileSpreadsheet size={14} />}
-            {publishedRuleSet ? "已发布" : ruleSetDraft ? "草稿已创建" : "创建规则草稿"}
-          </button>
-        </div>
-        <ArrowRight size={18} />
-        <div className="card">
-          <span className="rule-step">04 · 人工关卡</span>
-          <strong>发布 RuleSetVersion</strong>
-          <small>独立校验并发布；不会同时发布 PricingPolicy，也不会改写历史 Snapshot。</small>
-          {sourceWarnings.length && ruleSetDraft ? (
-            <input
-              value={warningReason}
-              onChange={(event) => setWarningReason(event.target.value)}
-              placeholder={`确认 ${sourceWarnings.length} 项 warning 的理由`}
-              aria-label="RuleSet warning 确认理由"
-            />
-          ) : null}
-          <button
-            className="button button-primary button-sm"
-            type="button"
-            disabled={Boolean(action) || props.dirty || !ruleSetDraft || !publishAvailability.enabled || Boolean(sourceWarnings.length && !warningReason.trim())}
-            title={publishAvailability.disabledReasonText}
-            onClick={() => void publishRuleSet()}
-          >
-            {action === "publish" ? <LoaderCircle className="spin" size={14} /> : <ShieldCheck size={14} />}
-            {publishedRuleSet ? "已发布" : "显式发布"}
-          </button>
-        </div>
-      </div>
+      ) : null}
 
       <div className="rule-workbook-grid">
         <div className="card rule-status-card">

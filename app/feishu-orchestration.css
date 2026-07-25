@@ -1,0 +1,206 @@
+/* MOTION-02 feishu orchestration pipeline styles.
+   Follows the existing rule-workbook.css + motion-core.css token conventions. */
+
+.fo-pipeline {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(210px, 1fr) 22px minmax(210px, 1fr) 22px minmax(210px, 1fr) 22px minmax(210px, 1fr);
+}
+
+.fo-pipeline > svg {
+  align-self: center;
+  color: #98a3af;
+  justify-self: center;
+}
+
+/* ── stage card ──────────────────────────────────────────────────────────── */
+
+.fo-stage-card {
+  background: var(--panel, #fff);
+  border: 1px solid var(--line, #e5e7eb);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-height: 145px;
+  min-width: 0;
+  padding: 16px;
+  position: relative;
+  transition: border-color 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+              box-shadow 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+              opacity 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.fo-stage-index {
+  color: var(--accent, #6845e4);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.fo-stage-label {
+  font-size: 14px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.fo-stage-hint {
+  color: var(--muted, #6b7280);
+  flex: 1;
+  font-size: 10px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+/* ── status badge ────────────────────────────────────────────────────────── */
+
+.fo-stage-badge {
+  align-self: flex-start;
+  border: 1px solid;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 4px 8px;
+  white-space: nowrap;
+}
+
+.fo-stage-badge.pending   { background: #f3f4f6; border-color: #d1d5db; color: #6b7280; }
+.fo-stage-badge.active    { background: #eff6ff; border-color: #bfdbfe; color: #2563eb; }
+.fo-stage-badge.completed { background: #effaf4; border-color: #ccebd9; color: #177653; }
+.fo-stage-badge.blocked   { background: #fff2f2; border-color: #efc4c0; color: #b42318; }
+.fo-stage-badge.error     { background: #fff5f4; border-color: #f3cbc6; color: #a7352c; }
+.fo-stage-badge.superseded { background: #fff8e8; border-color: #efd99d; color: #8a6100; }
+.fo-stage-badge.terminal  { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+
+/* ── evidence node ───────────────────────────────────────────────────────── */
+
+.fo-stage-evidence {
+  border-top: 1px solid var(--line, #e5e7eb);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding-top: 8px;
+}
+
+.fo-stage-evidence dl {
+  display: contents;
+  margin: 0;
+}
+
+.fo-stage-evidence dt {
+  color: var(--muted, #6b7280);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.fo-stage-evidence dd {
+  color: var(--accent-dark, #4c1d95);
+  font-family: var(--font-mono, 'Consolas', 'Courier New', monospace);
+  font-size: 10px;
+  margin: 0;
+}
+
+/* ── action button ───────────────────────────────────────────────────────── */
+
+.fo-stage-action {
+  align-self: flex-start;
+  margin-top: 2px;
+}
+
+/* ── terminal notice ──────────────────────────────────────────────────────── */
+
+.fo-terminal-notice {
+  align-items: flex-start;
+  background: #fef2f2;
+  border: 2px solid #fecaca;
+  color: #991b1b;
+  display: flex;
+  font-size: 11px;
+  font-weight: 600;
+  gap: 10px;
+  line-height: 1.55;
+  padding: 14px 16px;
+}
+
+.fo-terminal-notice.super {
+  background: #fff8e8;
+  border-color: #efd99d;
+  color: #8a6100;
+}
+
+.fo-terminal-notice svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+/* ── issue list ───────────────────────────────────────────────────────────── */
+
+.fo-stage-issues {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.fo-stage-issue {
+  background: #fee2e2;
+  border: 1px solid #fecaca;
+  color: #991b1b;
+  font-size: 8px;
+  font-weight: 700;
+  font-family: var(--font-mono, 'Consolas', monospace);
+  padding: 2px 5px;
+}
+
+/* ── current-stage highlight ──────────────────────────────────────────────── */
+
+.fo-stage-card.is-current {
+  border-color: var(--accent, #6845e4);
+  box-shadow: 0 0 0 1px var(--accent, #6845e4);
+}
+
+.fo-stage-card.is-previous {
+  opacity: 0.72;
+}
+
+.fo-stage-card.is-future {
+  opacity: 0.45;
+}
+
+/* ── reduced motion ───────────────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .fo-stage-card {
+    transition: none;
+  }
+  .fo-stage-card.is-previous,
+  .fo-stage-card.is-future {
+    opacity: 1;
+  }
+}
+
+/* ── responsive ───────────────────────────────────────────────────────────── */
+
+@media (min-width: 1281px) {
+  .fo-pipeline {
+    grid-template-columns: minmax(210px, 1fr) 22px minmax(210px, 1fr) 22px minmax(210px, 1fr) 22px minmax(210px, 1fr);
+  }
+}
+
+@media (max-width: 1280px) {
+  .fo-pipeline {
+    grid-template-columns: repeat(2, minmax(210px, 1fr));
+  }
+  .fo-pipeline > svg {
+    display: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .fo-pipeline {
+    grid-template-columns: 1fr;
+  }
+  .fo-stage-card {
+    min-height: auto;
+  }
+}

@@ -42,6 +42,7 @@ import { RuleGraphStudio } from "./RuleGraphStudio";
 import { V3FlowWorkbench } from "./V3FlowWorkbench";
 import { BrowserConfigExportWorkbench as ConfigExportWorkbench } from "./BrowserConfigExportWorkbench";
 import { SeriesGanttWorkbenchV3 as SeriesGanttWorkbench } from "./SeriesGanttWorkbenchV3";
+import { EditableCell } from "./EditableCell";
 import { RuleWorkbookWorkbench } from "./RuleWorkbookWorkbench";
 import { PatchLedgerWorkbench } from "./PatchLedgerWorkbench";
 import {
@@ -618,12 +619,30 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
   }, [page, pageRouteReady]);
 
+  // ── undo 栈（最多 10 步） ──
+  const undoStackRef = useRef<WorkspaceState[]>([]);
+  const MAX_UNDO = 10;
+
+  const pushUndo = useCallback(() => {
+    undoStackRef.current = [...undoStackRef.current.slice(-(MAX_UNDO - 1)), copyState(state)];
+  }, [state]);
+
+  // ── beforeunload 离开保护 ──
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (dirty) { e.preventDefault(); }
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [dirty]);
+
   const mutate = (producer: (draft: WorkspaceState) => void, legacyRecalculationRequested = true) => {
     void legacyRecalculationRequested;
     if (authStatus !== "authenticated") {
       notify("请先使用公司飞书账号登录；未登录状态不允许编辑。");
       return;
     }
+    pushUndo();
     setState((current) => {
       const draft = copyState(current);
       producer(draft);
@@ -761,6 +780,29 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       notify(error instanceof Error ? error.message : "保存失败");
     }
   };
+
+  // ── 全局快捷键（Ctrl+Z 撤销 / Ctrl+S 保存） ──
+  useEffect(() => {
+    const handler = (e: globalThis.KeyboardEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return;
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (e.key === "z" || e.key === "Z") {
+        e.preventDefault();
+        const prev = undoStackRef.current.pop();
+        if (prev) {
+          setState(prev);
+          markWorkspaceDirty();
+          notify("已撤销最近一次修改");
+        }
+      } else if (e.key === "s" || e.key === "S") {
+        e.preventDefault();
+        if (dirty) void save();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [dirty]);
 
   /**
    * A stale save cannot succeed by retrying the same payload. Compare the
@@ -1402,7 +1444,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         <tbody>
           {parametersForKind.map((parameter) => (
             <tr key={parameter.id ?? parameter.key}>
-              <td><TextInput value={parameter.label} onChange={(value) => renameParameter(parameter.key, value)} /></td>
+              <EditableCell value={parameter.label} onChange={(value) => renameParameter(parameter.key, value)} />
               <td>
                 <SelectInput
                   value={parameter.itemKind}
@@ -1414,18 +1456,18 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
                   {Object.entries(kindLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
                 </SelectInput>
               </td>
-              <td><TextInput value={parameter.unit} onChange={(value) => mutate((draft) => {
+              <EditableCell value={parameter.unit} onChange={(value) => mutate((draft) => {
                 const target = draft.parameters.find((item) => item.key === parameter.key);
                 if (target) target.unit = value;
-              }, false)} /></td>
-              <td><TextInput type="number" value={parameter.precision} onChange={(value) => mutate((draft) => {
+              }, false)} />
+              <EditableCell type="number" value={parameter.precision} onChange={(value) => mutate((draft) => {
                 const target = draft.parameters.find((item) => item.key === parameter.key);
                 if (target) target.precision = Number(value);
-              }, false)} /></td>
-              <td><TextInput value={parameter.notes} onChange={(value) => mutate((draft) => {
+              }, false)} />
+              <EditableCell value={parameter.notes ?? ""} onChange={(value) => mutate((draft) => {
                 const target = draft.parameters.find((item) => item.key === parameter.key);
                 if (target) target.notes = value;
-              }, false)} /></td>
+              }, false)} />
               <td><Button icon={Trash2} size="sm" tone="ghost" title="删除参数" onClick={() => deleteParameter(parameter.key)} /></td>
             </tr>
           ))}
@@ -1483,15 +1525,15 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           <tbody>
             {state.templates.map((template, index) => (
               <tr key={template.id}>
-                <td className="sticky-col"><TextInput value={template.id} onChange={(value) => mutate((draft) => { draft.templates[index].id = value; })} /></td>
+                <EditableCell className="sticky-col" value={template.id} onChange={(value) => mutate((draft) => { draft.templates[index].id = value; })} />
                 <td>{state.methodProfiles.find((profile) => profile.id === template.methodId)?.name ?? "—"}</td>
-                <td><TextInput value={template.tier} onChange={(value) => mutate((draft) => { draft.templates[index].tier = value; draft.templates[index].name = value; })} /></td>
+                <EditableCell value={template.tier} onChange={(value) => mutate((draft) => { draft.templates[index].tier = value; draft.templates[index].name = value; })} />
                 {(["min", "max"] as const).map((edge) => {
                   const targetPull = template.rangeSemantics === "target_pull";
                   const key = edge === "min" ? "targetPullMinKgf" : "targetPullMaxKgf";
                   const legacyKey = edge === "min" ? "fishMinKg" : "fishMaxKg";
                   return (
-                    <td key={edge}><TextInput type="number" value={targetPull ? template[key] ?? 0 : template[legacyKey]} step={0.01} onChange={(value) => mutate((draft) => {
+                    <EditableCell key={edge} type="number" value={targetPull ? String(template[key] ?? 0) : String(template[legacyKey])} onChange={(value) => mutate((draft) => {
                       const numeric = Number(value);
                       const current = draft.templates[index];
                       if (current.rangeSemantics === "target_pull") {
@@ -1503,28 +1545,26 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
                         current[legacyKey] = numeric;
                         current.nominalFishKg = (current.fishMinKg + current.fishMaxKg) / 2;
                       }
-                    })} /></td>
+                    })} />
                   );
                 })}
-                <td><TextInput value={template.fishWeightLevel ?? template.nominalFishKg} onChange={(value) => mutate((draft) => {
+                <EditableCell value={String(template.fishWeightLevel ?? template.nominalFishKg ?? "")} onChange={(value) => mutate((draft) => {
                   const numeric = Number(value);
                   draft.templates[index].fishWeightLevel = value !== "" && Number.isFinite(numeric) ? numeric : value;
-                })} /></td>
+                })} />
                 {parametersForKind.map((parameter) => (
-                  <td key={parameter.id ?? parameter.key}>
-                    <TextInput
-                      type={typeof template.values[parameter.key] === "number" ? "number" : "text"}
-                      step={10 ** -parameter.precision}
-                      value={template.values[parameter.key]}
-                      onChange={(value) => mutate((draft) => {
-                        const current = draft.templates[index].values[parameter.key];
-                        draft.templates[index].values[parameter.key] =
-                          typeof current === "number" ? Number(value) : value;
-                      })}
-                    />
-                  </td>
+                  <EditableCell
+                    key={parameter.id ?? parameter.key}
+                    type={typeof template.values[parameter.key] === "number" ? "number" : "text"}
+                    value={String(template.values[parameter.key] ?? "")}
+                    onChange={(value) => mutate((draft) => {
+                      const current = draft.templates[index].values[parameter.key];
+                      draft.templates[index].values[parameter.key] =
+                        typeof current === "number" ? Number(value) : value;
+                    })}
+                  />
                 ))}
-                <td><TextInput value={template.notes} onChange={(value) => mutate((draft) => { draft.templates[index].notes = value; }, false)} /></td>
+                <EditableCell value={template.notes ?? ""} onChange={(value) => mutate((draft) => { draft.templates[index].notes = value; }, false)} />
                 <td><Button icon={Trash2} size="sm" tone="ghost" onClick={() => mutate((draft) => { draft.templates.splice(index, 1); })} /></td>
               </tr>
             ))}
@@ -1787,18 +1827,18 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
                   const target = draft.affixes.find((item) => item.id === affix.id);
                   if (target) target.category = value as Affix["category"];
                 })}><option value="stat">直接属性</option><option value="passive">被动机制</option></SelectInput></td>
-                <td><TextInput type="number" value={affix.score} onChange={(value) => mutate((draft) => {
+                <EditableCell type="number" value={affix.score} onChange={(value) => mutate((draft) => {
                   const target = draft.affixes.find((item) => item.id === affix.id);
                   if (target) target.score = Number(value);
-                })} /></td>
+                })} />
                 <td><SelectInput value={affix.rarity} onChange={(value) => mutate((draft) => {
                   const target = draft.affixes.find((item) => item.id === affix.id);
                   if (target) target.rarity = value as Affix["rarity"];
                 })}><option value="common">普通</option><option value="rare">稀有</option><option value="epic">史诗</option></SelectInput></td>
-                <td><TextInput value={affix.tags.join(",")} onChange={(value) => mutate((draft) => {
+                <EditableCell value={affix.tags.join(",")} onChange={(value) => mutate((draft) => {
                   const target = draft.affixes.find((item) => item.id === affix.id);
                   if (target) target.tags = value.split(/[,，]/).map((item) => item.trim()).filter(Boolean);
-                })} /></td>
+                })} />
                 {parametersForKind.map((parameter) => {
                   const rule = affix.rules.find((item) => item.parameterKey === parameter.key);
                   return (

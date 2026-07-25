@@ -6,6 +6,7 @@ import type {
   PricingPolicyDraft,
   PricingPolicyVersion,
   PricingTrialResult,
+  PricingWarningAcknowledgement,
 } from "./pricing-policy";
 import type { SourceIdentityMigrationReport } from "./source-id-migration";
 import type { ConfigExportMapping } from "./config-export-mapping";
@@ -1737,6 +1738,38 @@ export interface AffixRuntimeEvidence {
   traceHash: string;
 }
 
+/** 客户端提交的定价评估输入——只含引用，不含计算结果。服务端据此重算并验证。 */
+export interface ModelPricingEvaluationInput {
+  modelId: string;
+  modelRevision: string;
+  pricingPolicyRef: string;
+  pricingWeightBandId: string;
+  valueScore: number;
+  partId?: string;
+  typeId?: string;
+  qualityId?: string;
+}
+
+/** 版本化、不可变、可重算的权威定价评估。客户端不得自报价格或 fingerprint。 */
+export interface ModelPricingEvaluation {
+  id: string;
+  revision: number;
+  modelId: string;
+  modelRevision: string;
+  pricingPolicyRef: string;
+  /** 冻结输入——不是计算结果。重算时与策略联合确定性推导。 */
+  input: ModelPricingEvaluationInput;
+  /** 服务端重算的不可变试算结果。 */
+  result: PricingTrialResult;
+  /** deterministicHash(input + result)，用于跨 revision 和跨环境完整性校验。 */
+  contentHash: string;
+  /** 独立版本化的确认记录；只在 status===ACKNOWLEDGED 时存在。 */
+  acknowledgement?: PricingWarningAcknowledgement;
+  status: "OPEN" | "ACKNOWLEDGED" | "STALE" | "NON_FORMAL";
+  createdAt: string;
+  createdBy: string;
+}
+
 export interface ConfigurationSnapshot {
   /** 历史 Snapshot 可缺失；新正式 Snapshot 必须提供。 */
   workspaceId?: string;
@@ -1776,6 +1809,8 @@ export interface ConfigurationSnapshot {
   compatibilityReport: HardCompatibilityResult;
   pricingPolicyVersion?: string;
   automaticPricing?: PricingTrialResult;
+  /** 新正式 Snapshot 冻结 ModelPricingEvaluation 引用；历史 Snapshot 不补写。 */
+  pricingEvaluationRef?: string;
   affinityReport: AffinityScoreResult;
   qualityReport: AffixQualityEvaluation;
   qualityValueAssessment?: ModelAffixValueAssessment;
@@ -2763,6 +2798,7 @@ export interface WorkspaceState {
   qualityValuePolicyDrafts: QualityValuePolicyDraft[];
   pricingPolicyDrafts: PricingPolicyDraft[];
   pricingPolicyVersions: PricingPolicyVersion[];
+  modelPricingEvaluations: ModelPricingEvaluation[];
   reductionStackingPolicyVersions: ReductionStackingPolicyVersion[];
   fiveAxisViewDefinitions: StoredFiveAxisViewDefinition[];
   fiveAxisVertexSets: StoredFiveAxisVertexSet[];

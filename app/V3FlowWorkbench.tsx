@@ -11,14 +11,15 @@ import {
   GitBranch,
   Layers3,
   LockKeyhole,
-  PackageCheck,
   PackageSearch,
   Scale,
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { hydrateV3Seed } from "@/lib/v3-seed";
+import { buildSnapshotFreezeModel } from "@/lib/snapshot-freeze-presentation";
+import { SnapshotFreezePanel } from "./SnapshotFreezePanel";
 import {
   productSelectableSeriesSkus,
   resolveProductSelection,
@@ -26,7 +27,6 @@ import {
 import { projectionPatchViewFromLedger } from "@/lib/patch-ledger";
 import { isActiveValidationIssue, validationIssueLevel, validationIssuePresentation } from "@/lib/validation-issues";
 import type {
-  ConfigurationSnapshot,
   ProjectionPatchRuleSource,
   PurchasableModel,
   SkuDrawer,
@@ -152,6 +152,17 @@ export function V3FlowWorkbench({ state, mutate, notify, initialSeriesId }: V3Fl
   const selectedSnapshot = state.configurationSnapshots.find((item) => item.id === selectedModel?.configurationSnapshotId);
   const patches = orderedPatches(state, selectedSku, selectedModel);
   const pendingUpgrade = state.upgradeCandidates.find((item) => item.modelId === selectedModel?.id && item.status === "pending");
+
+  const snapshotFreezeModel = useMemo(
+    () => buildSnapshotFreezeModel({
+      snapshot: selectedSnapshot,
+      upgradeCandidate: pendingUpgrade ?? null,
+      isBuilding: false,
+      buildError: null,
+      isReplay: false,
+    }),
+    [selectedSnapshot, pendingUpgrade],
+  );
 
   const seriesSkus = selectedSeries
     ? productSelectableSeriesSkus(selectedSeries, state.skuDrawers).sort((left, right) => left.targetPullKg - right.targetPullKg)
@@ -348,9 +359,8 @@ export function V3FlowWorkbench({ state, mutate, notify, initialSeriesId }: V3Fl
           {stage === "publish" ? (
             <>
               <div className="v3-stage-title"><div><span className="eyebrow">IMMUTABLE RELEASE</span><h3>快照冻结与显式升级</h3><p>已发布配置不会被上游规则静默重算；变化只能进入升级候选。</p></div>{selectedSnapshot ? <span className="v3-decision-badge"><LockKeyhole size={16} />快照已冻结</span> : <span className="v3-decision-badge warning"><AlertTriangle size={16} />尚未发布</span>}</div>
-              {selectedSnapshot ? <SnapshotCard snapshot={selectedSnapshot} /> : <div className="v3-empty-inline large">当前 Model 仍是草稿，完成阻断校验后方可发布快照。</div>}
-              <div className="v3-governance-grid">
-                <div className="v3-governance-card"><div><span className="eyebrow">UPGRADE CANDIDATE</span><h4>{pendingUpgrade ? "检测到上游变化" : "暂无待处理升级"}</h4></div>{pendingUpgrade ? <><p>Projection {pendingUpgrade.patchRebasePreview.oldProjectionId} → {pendingUpgrade.proposedProjectionId}</p><div className="v3-diff-list">{pendingUpgrade.differences.slice(0, 5).map((diff) => <div key={diff.path}><span>{diff.path}</span><del>{formatValue(diff.oldResult)}</del><ArrowRight size={13} /><ins>{formatValue(diff.newResult)}</ins></div>)}</div><button type="button" className="v3-primary-action" onClick={approveUpgrade}><PackageCheck size={16} />批准升级候选</button></> : <p>旧快照与当前规则版本一致，暂不需要升级。</p>}</div>
+              <SnapshotFreezePanel model={snapshotFreezeModel} onApproveUpgrade={approveUpgrade} />
+              <div className="v3-governance-grid" style={{ marginTop: 12 }}>
                 <div className="v3-governance-card"><div><span className="eyebrow">RULE PROPOSALS</span><h4>Patch 沉淀为规则</h4></div><p>只有已批准 Patch 能提交规则变更提案，原始 Patch 仍保留审计来源。</p><div className="v3-proposal-list">{state.ruleChangeProposals.slice(0, 3).map((proposal) => <div key={proposal.id}><span className={`v3-status ${proposal.status}`}>{statusLabel(proposal.status)}</span><div><strong>{proposal.title}</strong><small>{proposal.impactEntityIds.length} 个受影响实体</small></div></div>)}{!state.ruleChangeProposals.length ? <div className="v3-empty-inline">暂无规则变更提案。</div> : null}</div></div>
               </div>
             </>
@@ -364,18 +374,6 @@ export function V3FlowWorkbench({ state, mutate, notify, initialSeriesId }: V3Fl
           <div className="v3-context-note"><LockKeyhole size={16} /><p><strong>发布边界</strong>购买引用只指向已发布 Model 和 ConfigurationSnapshot，不直接依赖可变规则。</p></div>
         </aside>
       </div>
-    </div>
-  );
-}
-
-function SnapshotCard({ snapshot }: { snapshot: ConfigurationSnapshot }) {
-  const quality = qualityMeta[snapshot.qualityReport.qualityId];
-  return (
-    <div className="v3-snapshot-card">
-      <div className="v3-snapshot-lock"><LockKeyhole size={23} /></div>
-      <div><span>ConfigurationSnapshot</span><strong>{snapshot.id}</strong><small>发布于 {new Date(snapshot.publishedAt).toLocaleString("zh-CN")}</small></div>
-      <dl><div><dt>内容哈希</dt><dd>{snapshot.contentHash.slice(0, 12)}…</dd></div><div><dt>Projection</dt><dd>{snapshot.projectionId}</dd></div><div><dt>品质</dt><dd style={{ color: quality.color }}>{quality.letter} / {quality.name}</dd></div><div><dt>面板字段</dt><dd>{Object.keys(snapshot.finalPanelValues).length}</dd></div></dl>
-      <span className="v3-frozen-tag">IMMUTABLE</span>
     </div>
   );
 }

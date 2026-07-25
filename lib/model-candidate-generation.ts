@@ -92,11 +92,6 @@ function assertRecipePartConstraintsConsumable(
       `PART_CONSTRAINT_SET_NEEDS_REVIEW：${boundary} 禁止消费 ${constraintSet.constraintSetId}@${constraintSet.revision}；${blockingTraceRefs.length} 条字段 Trace 尚未确认。`,
     );
   }
-  // Issue #50 才会实现按冻结约束集与组件注册表进行权威枚举。
-  // 在此之前，已挂接新 ref 的 Recipe 即使全部确认，也不能退回旧枚举器静默忽略约束。
-  throw new Error(
-    `PART_CONSTRAINT_SET_CANDIDATE_RUNTIME_UNAVAILABLE：${boundary} 尚不能权威消费 ref-backed Recipe；等待 Issue #50。`,
-  );
 }
 
 export function generateModelCandidateRun(input: {

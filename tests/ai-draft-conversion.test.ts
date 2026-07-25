@@ -402,21 +402,21 @@ test("RuleSourceChangeDraft 使用全工作区沙盒影响预览并只保存 LOC
   const candidates = [
     ...value.state.methodProfiles
       .filter((profile) => profile.id === projection.methodId)
-      .flatMap((profile) => profile.rules.map((rule) => ({ rule, sheetId: "fATowU" }))),
+      .flatMap((profile) => profile.rules.map((rule) => ({ rule, sheetId: "10TyFp" }))),
     ...value.state.itemTypeProfiles
       .filter((profile) => profile.id === projection.typeId)
-      .flatMap((profile) => profile.rules.map((rule) => ({ rule, sheetId: "fATowU" }))),
+      .flatMap((profile) => profile.rules.map((rule) => ({ rule, sheetId: "10TyFp" }))),
     ...value.state.functionProfiles
       .filter((profile) => profile.id === projection.functionId)
       .flatMap((profile) => [
-        ...profile.rules.map((rule) => ({ rule, sheetId: "vviXo0" })),
+        ...profile.rules.map((rule) => ({ rule, sheetId: "16qYVn" })),
         ...profile.intensityRules
           .filter((entry) => entry.intensity === projection.functionIntensity)
-          .flatMap((entry) => entry.rules.map((rule) => ({ rule, sheetId: "vviXo0" }))),
+          .flatMap((entry) => entry.rules.map((rule) => ({ rule, sheetId: "16qYVn" }))),
       ]),
     ...value.state.qualityProfiles
       .filter((profile) => profile.id === projection.qualityId)
-      .flatMap((profile) => profile.rules.map((rule) => ({ rule, sheetId: "FqD4j7" }))),
+      .flatMap((profile) => profile.rules.map((rule) => ({ rule, sheetId: "27hboC" }))),
   ];
   const source = candidates.find((entry) =>
     value.state.parameters.some((parameter) =>

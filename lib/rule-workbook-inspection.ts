@@ -32,24 +32,55 @@ import {
   type SourceIdentityRow,
 } from "./source-id-migration";
 import {
+  CANONICAL_ITEM_PARTS,
   CANONICAL_RULE_RANGES,
   importCanonicalRuleSource,
+  type PartedRuleSource,
 } from "./canonical-rule-source";
 import type { CanonicalRuleSourceDraft, WeightTemplatePolicyDraft } from "./types";
 import { deterministicHash } from "./rule-kernel";
 
 export interface IdentitySheetSpec {
   sheetId: string;
+  /** 身份区 range 前缀（如 `B1:C`/`A1:S`），完整 range 按 grid rowCount 动态拼接，匹配用 startsWith。 */
   range: string;
   idColumnKey: string;
+  /** 分表部位（竿/轮/线）；单表概念（functionProfiles/affix/series）缺省。 */
+  part?: "rod" | "reel" | "line";
   fixedEntityType?: string;
   allowedEntityTypes: string[];
   idPrefixesByEntityType: Record<string, string[]>;
 }
 
+/**
+ * WQ8w 分表身份规格（PR2b 切流）。竿/轮/线拆为独立子表的概念（weight/type/function）
+ * 各登记 3 个 part-indexed spec；functionProfiles/affix/series 仍是单表。
+ * 身份区统一 `B1:C`（新表分表后 machineId 回到 B 列；旧 d6e928 合并表的 BG 身份区是历史块布局）。
+ */
 export const CANONICAL_IDENTITY_SHEET_SPECS: IdentitySheetSpec[] = [
+  { sheetId: "19XKzU", range: "A1:S", idColumnKey: "A", fixedEntityType: "FunctionProfile", allowedEntityTypes: ["FunctionProfile"], idPrefixesByEntityType: { FunctionProfile: ["function:"] } },
+  { sheetId: "1cAihB", range: "B1:C", idColumnKey: "B", part: "rod", fixedEntityType: "WeightTemplate", allowedEntityTypes: ["WeightTemplate"], idPrefixesByEntityType: { WeightTemplate: ["wtpl_rod_"] } },
+  { sheetId: "2KCCHR", range: "B1:C", idColumnKey: "B", part: "reel", fixedEntityType: "WeightTemplate", allowedEntityTypes: ["WeightTemplate"], idPrefixesByEntityType: { WeightTemplate: ["wtpl_reel_"] } },
+  { sheetId: "3FYijT", range: "B1:C", idColumnKey: "B", part: "line", fixedEntityType: "WeightTemplate", allowedEntityTypes: ["WeightTemplate"], idPrefixesByEntityType: { WeightTemplate: ["wtpl_line_"] } },
+  { sheetId: "10TyFp", range: "B1:C", idColumnKey: "B", part: "rod", fixedEntityType: "RodType", allowedEntityTypes: ["RodType"], idPrefixesByEntityType: { RodType: ["type_rod_"] } },
+  { sheetId: "11CfXW", range: "B1:C", idColumnKey: "B", part: "reel", fixedEntityType: "ReelType", allowedEntityTypes: ["ReelType"], idPrefixesByEntityType: { ReelType: ["type_reel_"] } },
+  { sheetId: "12VetE", range: "B1:C", idColumnKey: "B", part: "line", fixedEntityType: "LineType", allowedEntityTypes: ["LineType"], idPrefixesByEntityType: { LineType: ["type_line_"] } },
+  { sheetId: "16qYVn", range: "B1:C", idColumnKey: "B", part: "rod", fixedEntityType: "FunctionProfile", allowedEntityTypes: ["FunctionProfile"], idPrefixesByEntityType: { FunctionProfile: ["func_rod_"] } },
+  { sheetId: "17jqiE", range: "B1:C", idColumnKey: "B", part: "reel", fixedEntityType: "FunctionProfile", allowedEntityTypes: ["FunctionProfile"], idPrefixesByEntityType: { FunctionProfile: ["func_reel_"] } },
+  { sheetId: "18pjcZ", range: "B1:C", idColumnKey: "B", part: "line", fixedEntityType: "FunctionProfile", allowedEntityTypes: ["FunctionProfile"], idPrefixesByEntityType: { FunctionProfile: ["func_line_"] } },
+  { sheetId: "19XKzU", range: "Q1:S", idColumnKey: "Q:S", fixedEntityType: "FunctionPartGroup", allowedEntityTypes: ["FunctionPartGroup"], idPrefixesByEntityType: { FunctionPartGroup: ["funcgrp_rod_", "funcgrp_reel_", "funcgrp_line_"] } },
+  { sheetId: "23CsXE", range: "B1:C", idColumnKey: "B", allowedEntityTypes: ["RodAffix", "ReelAffix", "LineAffix"], idPrefixesByEntityType: { RodAffix: ["affix_rod_"], ReelAffix: ["affix_reel_"], LineAffix: ["affix_line_"] } },
+  { sheetId: "25UnTC", range: "B1:C", idColumnKey: "B", fixedEntityType: "SeriesArchetype", allowedEntityTypes: ["SeriesArchetype"], idPrefixesByEntityType: { SeriesArchetype: ["series_rod_", "series_reel_", "series_line_"] } },
+];
+
+/**
+ * 旧表 YsEKw（合并表）的身份规格（PR2b 切流后保留，spec §14 审计证据）。
+ * 供历史 revision 审计、迁移适配与 legacy 回归测试使用；新读取链默认用上面的 WQ8w `CANONICAL_IDENTITY_SHEET_SPECS`。
+ * 旧合并表一张含竿/轮/线块（如 d6e928 B1:C54），与新表三子表拓扑不同。
+ */
+export const LEGACY_YS_EKW_IDENTITY_SHEET_SPECS: IdentitySheetSpec[] = [
   { sheetId: "mLpTLK", range: "A1:S8", idColumnKey: "A", fixedEntityType: "FunctionProfile", allowedEntityTypes: ["FunctionProfile"], idPrefixesByEntityType: { FunctionProfile: ["function:"] } },
-  { sheetId: "d6e928", range: "B1:C54", idColumnKey: "B", fixedEntityType: "WeightTemplate", allowedEntityTypes: ["WeightTemplate"], idPrefixesByEntityType: { WeightTemplate: ["wtpl_"] } },
+  { sheetId: "d6e928", range: "BG1:BH", idColumnKey: "B", fixedEntityType: "WeightTemplate", allowedEntityTypes: ["WeightTemplate"], idPrefixesByEntityType: { WeightTemplate: ["wtpl_"] } },
   { sheetId: "fATowU", range: "B1:C20", idColumnKey: "B", allowedEntityTypes: ["RodType", "ReelType", "LineType"], idPrefixesByEntityType: { RodType: ["type_rod_"], ReelType: ["type_reel_"], LineType: ["type_line_"] } },
   { sheetId: "vviXo0", range: "B1:C63", idColumnKey: "B", fixedEntityType: "FunctionProfile", allowedEntityTypes: ["FunctionProfile"], idPrefixesByEntityType: { FunctionProfile: ["func_"] } },
   { sheetId: "mLpTLK", range: "Q1:S8", idColumnKey: "Q:S", fixedEntityType: "FunctionPartGroup", allowedEntityTypes: ["FunctionPartGroup"], idPrefixesByEntityType: { FunctionPartGroup: ["funcgrp_rod_", "funcgrp_reel_", "funcgrp_line_"] } },
@@ -57,9 +88,9 @@ export const CANONICAL_IDENTITY_SHEET_SPECS: IdentitySheetSpec[] = [
   { sheetId: "9nE3Rx", range: "B1:C10", idColumnKey: "B", fixedEntityType: "SeriesArchetype", allowedEntityTypes: ["SeriesArchetype"], idPrefixesByEntityType: { SeriesArchetype: ["series_rod_", "series_reel_", "series_line_"] } },
 ];
 
-const AFFIX_SHEET_ID = "zrVOxd";
-const WEIGHT_TEMPLATE_SHEET_ID = "d6e928";
-const QUALITY_SHEET_ID = "FqD4j7";
+const AFFIX_SHEET_ID = "23CsXE";
+/** 品质定义主表（区间/价格系数）；公式 26gpIF 与组合矩阵 28fQhg 由 PR2b-3 接入。 */
+const QUALITY_SHEET_ID = "27hboC";
 // The repository's Feishu reader already rejects sources over 10,000 rows.
 // Keep this whole-sheet read below the same row ceiling and additionally cap
 // columns/cells so corrupt grid metadata cannot request an unbounded payload.
@@ -121,29 +152,58 @@ export function canonicalQualitySheetRange(sourceRevision: FeishuSourceRevision)
   return `A1:${spreadsheetColumnName(columnCount! - 1)}${rowCount}`;
 }
 
+/**
+ * WQ8w 分表 range 请求（PR2b 切流）。每张子表生成两条 range：
+ * - 身份区 `B1:C<rowCount>`（functionProfiles 父级用 `A1:S`、FunctionPartGroup 用 `Q1:S`）
+ * - 完整机器区 `A1:<末列><rowCount>`（供 parse* sources 读全部列）
+ * 同 sheetId 两条 range 按 `sheetId:range` 去重保留；rowCount/columnCount 取自同 revision 的 grid 元数据，
+ * 缺失/过小 fail-closed（spec §14 :944）。品质/定价三表整表读（公式读取 PR2b-3 重构）。
+ */
 export function canonicalRuleWorkbookRangeRequests(sourceRevision: FeishuSourceRevision) {
   const affixRanges = canonicalAffixSheetRanges(sourceRevision);
-  const weightSheet = sourceRevision.sheets.find((sheet) => sheet.sheetId === WEIGHT_TEMPLATE_SHEET_ID);
-  if (!Number.isSafeInteger(weightSheet?.rowCount) || !Number.isSafeInteger(weightSheet?.columnCount) || weightSheet!.rowCount! < 4 || weightSheet!.columnCount! < 60) {
-    throw new Error("01_重量模板/d6e928 缺少可验证的完整 grid 元数据；已停止读取，避免截断机器 ID 或模板字段。");
+  const dynamicRange = (sheetId: string, prefix: string, minRowCount: number, minColumns: number) => {
+    const sheet = sourceRevision.sheets.find((candidate) => candidate.sheetId === sheetId);
+    const rowCount = sheet?.rowCount;
+    const columnCount = sheet?.columnCount;
+    if (!Number.isSafeInteger(rowCount) || rowCount! < minRowCount || !Number.isSafeInteger(columnCount) || columnCount! < minColumns) {
+      throw new Error(`工作表 ${sheetId} 缺少可验证的 grid 元数据（需 rowCount>=${minRowCount}, columnCount>=${minColumns}）；已停止读取，避免截断。`);
+    }
+    return `${prefix}${rowCount}`;
+  };
+  const fullRange = (sheetId: string, minRowCount: number, minColumns: number) => {
+    const sheet = sourceRevision.sheets.find((candidate) => candidate.sheetId === sheetId);
+    const rowCount = sheet?.rowCount;
+    const columnCount = sheet?.columnCount;
+    if (!Number.isSafeInteger(rowCount) || rowCount! < minRowCount || !Number.isSafeInteger(columnCount) || columnCount! < minColumns) {
+      throw new Error(`工作表 ${sheetId} 缺少可验证的完整 grid 元数据（需 rowCount>=${minRowCount}, columnCount>=${minColumns}）；已停止读取，避免截断机器 ID 或模板字段。`);
+    }
+    return `A1:${spreadsheetColumnName(columnCount! - 1)}${rowCount}`;
+  };
+  const requests: Array<{ sheetId: string; range: string }> = [];
+  // 身份区（每 spec 一条）
+  for (const spec of CANONICAL_IDENTITY_SHEET_SPECS) {
+    if (spec.fixedEntityType === "FunctionProfile" && spec.range === "A1:S") requests.push({ sheetId: spec.sheetId, range: dynamicRange(spec.sheetId, "A1:S", 2, 8) });
+    else if (spec.fixedEntityType === "FunctionPartGroup") requests.push({ sheetId: spec.sheetId, range: dynamicRange(spec.sheetId, "Q1:S", 2, 3) });
+    else if (spec.sheetId === AFFIX_SHEET_ID) requests.push({ sheetId: spec.sheetId, range: affixRanges.identityRange });
+    else requests.push({ sheetId: spec.sheetId, range: dynamicRange(spec.sheetId, "B1:C", 2, 2) });
   }
-  const requests = [
-    ...CANONICAL_IDENTITY_SHEET_SPECS.map(({ sheetId, range }) => ({
-      sheetId,
-      range: sheetId === AFFIX_SHEET_ID ? affixRanges.identityRange : sheetId === WEIGHT_TEMPLATE_SHEET_ID ? `BG1:BH${weightSheet!.rowCount!}` : range,
-    })),
-    { sheetId: QUALITY_SHEET_ID, range: canonicalQualitySheetRange(sourceRevision) },
-    { sheetId: AFFIX_SHEET_ID, range: affixRanges.aliasRange },
-    { sheetId: "u87sRh", range: "B10:R70" },
-    { sheetId: "fATowU", range: "B2:AD20" },
-    { sheetId: "u87sRh", range: "B179:E179" },
-    { sheetId: WEIGHT_TEMPLATE_SHEET_ID, range: `A1:BH${weightSheet!.rowCount!}` },
-    CANONICAL_RULE_RANGES.type,
-    CANONICAL_RULE_RANGES.function,
-    CANONICAL_RULE_RANGES.functionProfiles,
-    CANONICAL_RULE_RANGES.method,
-    CANONICAL_RULE_RANGES.methodTemplateReview,
-  ];
+  // affix 别名（quality 组合矩阵用）
+  requests.push({ sheetId: AFFIX_SHEET_ID, range: affixRanges.aliasRange });
+  // 重量/类型/钓法/功能/钓法模板：三子表完整机器区（供 importCanonicalRuleSource 的 sources 读全部列）
+  for (const group of ["weight", "type", "function", "method", "methodTemplateReview"] as const) {
+    for (const part of CANONICAL_ITEM_PARTS) {
+      const sheetId = CANONICAL_RULE_RANGES[group][part];
+      requests.push({ sheetId, range: fullRange(sheetId, 4, group === "weight" ? 30 : 8) });
+    }
+  }
+  // 品质三表（27hboC 已由 canonicalQualitySheetRange 动态整表读；公式/组合表 PR2b-3 接入）
+  requests.push({ sheetId: "26gpIF", range: fullRange("26gpIF", 1, 1) });
+  requests.push({ sheetId: QUALITY_SHEET_ID, range: canonicalQualitySheetRange(sourceRevision) });
+  requests.push({ sheetId: "28fQhg", range: fullRange("28fQhg", 1, 1) });
+  // 定价三表（PR2b-1 只切 sheetId + 整表 range；公式读取 PR2b-3）
+  requests.push({ sheetId: "31RxeB", range: fullRange("31RxeB", 1, 1) });
+  requests.push({ sheetId: "32BmZs", range: fullRange("32BmZs", 1, 1) });
+  requests.push({ sheetId: "33IGHy", range: fullRange("33IGHy", 1, 1) });
   return [...new Map(requests.map((request) => [`${request.sheetId}:${request.range}`, request])).values()];
 }
 
@@ -155,47 +215,48 @@ export function identityRowsFromRanges(
   ranges: Array<{ sheetId: string; range?: string; valueRange: Pick<FeishuValueRange, "values"> }>,
   specs = CANONICAL_IDENTITY_SHEET_SPECS,
 ): SourceIdentityRow[] {
-  const hasExplicitRanges = ranges.some((entry) => entry.range !== undefined);
-  const rangeByIdentitySpec = new Map(ranges.filter((entry) => entry.range).map((entry) => [`${entry.sheetId}:${entry.range}`, entry.valueRange.values]));
-  const legacyRangeBySheet = new Map(ranges.map((entry) => [entry.sheetId, entry.valueRange.values]));
-  return specs.flatMap((spec) => (
-    (spec.sheetId === AFFIX_SHEET_ID && spec.range === "B1:C38"
-      ? ranges.find((entry) => entry.sheetId === AFFIX_SHEET_ID && /^B1:C\d+$/.test(entry.range ?? ""))?.valueRange.values
-      : spec.sheetId === WEIGHT_TEMPLATE_SHEET_ID
-        ? ranges.find((entry) => entry.sheetId === WEIGHT_TEMPLATE_SHEET_ID && /^BG1:BH\d+$/.test(entry.range ?? ""))?.valueRange.values
-      : rangeByIdentitySpec.get(`${spec.sheetId}:${spec.range}`))
-    ?? (hasExplicitRanges ? [] : legacyRangeBySheet.get(spec.sheetId) ?? [])
-  ).flatMap((values, index) => {
-    if (spec.fixedEntityType === "FunctionPartGroup") {
-      return (values as unknown[]).flatMap((value, columnIndex) => {
-        const stableId = text(value);
-        // Q:S 的第 1 行是 rod/reel/lineFunctionGroupId 表头；Id 的大小写不应参与身份判断。
-        if (!stableId || index === 0) return [];
-        const part = ["rod", "reel", "line"][columnIndex];
-        return [{ sheetId: spec.sheetId, rowKey: `${index + 1}:${part}`, displayName: `FunctionPartGroup · ${part} · 第 ${index + 1} 行`, entityType: "FunctionPartGroup", stableId, idColumnKey: ["Q", "R", "S"][columnIndex]! }];
-      });
-    }
-    if (spec.sheetId === "mLpTLK" && spec.range === "A1:S8" && index === 0) return [];
-    const stableId = text(values[0]);
-    const adjacentValue = text(values[1]);
-    if (!stableId && !adjacentValue) return [];
-    if (/ID（勿改）|ID（永久）|机器ID/.test(stableId) || adjacentValue === "实体类型" || adjacentValue === "同步状态") return [];
-    const entityType = spec.fixedEntityType ?? adjacentValue;
-    if (!entityType) return [];
-    return [{
-      sheetId: spec.sheetId,
-      rowKey: String(index + 1),
-      displayName: `${entityType} · 第 ${index + 1} 行`,
-      entityType,
-      stableId: stableId || undefined,
-      idColumnKey: spec.idColumnKey,
-    }];
-  }));
+  const hasExplicitRanges = ranges.some((candidate) => typeof candidate.range === "string");
+  return specs.flatMap((spec) => {
+    // finding 7 修复：有显式 range 时按 startsWith 匹配（新表动态 range）；无显式 range（旧 fixture/兼容调用）时按唯一 sheetId 严格回退，不静默返回空。
+    const entry = hasExplicitRanges
+      ? ranges.find((candidate) => candidate.sheetId === spec.sheetId && typeof candidate.range === "string" && candidate.range.startsWith(spec.range))
+      : ranges.find((candidate) => candidate.sheetId === spec.sheetId);
+    const rows = entry?.valueRange.values ?? [];
+    return rows.flatMap((values, index) => {
+      const sourceRow = index + 1;
+      if (spec.fixedEntityType === "FunctionPartGroup") {
+        return (values as unknown[]).flatMap((value, columnIndex) => {
+          const stableId = text(value);
+          // Q:S 的第 1 行是 rod/reel/lineFunctionGroupId 表头；Id 的大小写不应参与身份判断。
+          if (!stableId || index === 0) return [];
+          const part = ["rod", "reel", "line"][columnIndex];
+          return [{ sheetId: spec.sheetId, rowKey: `${sourceRow}:${part}`, displayName: `FunctionPartGroup · ${part} · 第 ${sourceRow} 行`, entityType: "FunctionPartGroup", stableId, idColumnKey: ["Q", "R", "S"][columnIndex]! }];
+        });
+      }
+      // 04.0 父级常量表第一行是表头，跳过（兼容新 spec A1:S 与 LEGACY A1:S8）。
+      if (spec.fixedEntityType === "FunctionProfile" && spec.range.startsWith("A1:S") && index === 0) return [];
+      const stableId = text(values[0]);
+      const adjacentValue = text(values[1]);
+      if (!stableId && !adjacentValue) return [];
+      if (/ID（勿改）|ID（永久）|机器ID/.test(stableId) || adjacentValue === "实体类型" || adjacentValue === "同步状态") return [];
+      const entityType = spec.fixedEntityType ?? adjacentValue;
+      if (!entityType) return [];
+      const partSuffix = spec.part ? ` · ${spec.part}` : "";
+      return [{
+        sheetId: spec.sheetId,
+        rowKey: String(sourceRow),
+        displayName: `${entityType}${partSuffix} · 第 ${sourceRow} 行`,
+        entityType,
+        stableId: stableId || undefined,
+        idColumnKey: spec.idColumnKey,
+      }];
+    });
+  });
 }
 
-export function canonicalIdentityPolicies(): SourceIdentityPolicy[] {
+export function canonicalIdentityPolicies(specs: IdentitySheetSpec[] = CANONICAL_IDENTITY_SHEET_SPECS): SourceIdentityPolicy[] {
   const grouped = new Map<string, SourceIdentityPolicy>();
-  for (const spec of CANONICAL_IDENTITY_SHEET_SPECS) {
+  for (const spec of specs) {
     const current = grouped.get(spec.sheetId) ?? { sheetId: spec.sheetId, allowedEntityTypes: [], idPrefixesByEntityType: {} };
     current.allowedEntityTypes = [...new Set([...current.allowedEntityTypes, ...spec.allowedEntityTypes])];
     for (const [entityType, prefixes] of Object.entries(spec.idPrefixesByEntityType)) current.idPrefixesByEntityType[entityType] = [...new Set([...(current.idPrefixesByEntityType[entityType] ?? []), ...prefixes])];
@@ -385,82 +446,67 @@ export function assertCanonicalWeightTemplatePolicyDraft(draft: WeightTemplatePo
   if (draft.inputHash !== inputHash || draft.id !== `weight-template-draft:${inputHash}`) throw new Error("重量模板草稿的冻结内容、inputHash 或 ID 不一致，不能信任或发布。");
 }
 
-export function weightTemplateDraftFromCanonicalRuleDraft(input: { sourceRevision: FeishuSourceRevision; canonicalRuleDraft: CanonicalRuleSourceDraft; weightValues?: unknown[][]; importedAt: string }): WeightTemplatePolicyDraft {
+export function weightTemplateDraftFromCanonicalRuleDraft(input: { sourceRevision: FeishuSourceRevision; canonicalRuleDraft: CanonicalRuleSourceDraft; weightSources: PartedRuleSource[]; importedAt: string }): WeightTemplatePolicyDraft {
   const issues: WeightTemplatePolicyDraft["issues"] = [];
   const templates: WeightTemplatePolicyDraft["templates"] = [];
   const seen = new Set<string>();
-  const columnName = (index: number) => {
-    let name = "";
-    for (let current = index + 1; current > 0; current = Math.floor((current - 1) / 26)) name = String.fromCharCode(65 + (current - 1) % 26) + name;
-    return name;
-  };
-  const headerBlocks = (input.weightValues ?? []).flatMap((row, index) => row.some((value) => text(value).includes("机器ID")) ? [{ row: index + 1, headers: row.map(text) }] : []);
-  const blockFor = (sourceRow: number) => [...headerBlocks].reverse().find((block) => block.row < sourceRow);
-  const sourceCellsFor = (sourceRow: number) => {
-    const block = blockFor(sourceRow);
-    const headers = block?.headers ?? [];
+  // finding 3 修复（Opus MAJOR）：恢复精确单元格 provenance。按 weightSources 的 sourceSheetId + 表头解析字段→列坐标，
+  // template.cells 冻结 machineId/min/max/band/属性列；issue 按实际错误字段选 cell（不再统一 B<row>）。
+  const columnName = (index: number) => { let name = ""; for (let current = index + 1; current > 0; current = Math.floor((current - 1) / 26)) name = String.fromCharCode(65 + (current - 1) % 26) + name; return name; };
+  // 收集每张子表的所有表头块（分表单块；旧合并表 fixture 可能多块），按 headerRow 索引。
+  const headerBlocksBySheet = new Map<string, Array<{ headerRow: number; headers: string[] }>>();
+  for (const source of input.weightSources) {
+    const blocks: Array<{ headerRow: number; headers: string[] }> = [];
+    source.values.forEach((row, index) => {
+      if (row.some((value) => text(value).includes("机器ID"))) blocks.push({ headerRow: index + 1, headers: row.map(text) });
+    });
+    headerBlocksBySheet.set(source.sheetId, blocks);
+  }
+  const cellsForRow = (sheetId: string, sourceRow: number) => {
+    // 按 sourceRow 找最近的前置表头块（旧合并表多块支持；分表单块时即唯一表头）。
+    const blocks = headerBlocksBySheet.get(sheetId) ?? [];
+    const headers = [...blocks].reverse().find((block) => block.headerRow < sourceRow)?.headers ?? blocks[0]?.headers ?? [];
     const headerIndex = (...labels: string[]) => headers.findIndex((header) => labels.some((label) => header === label || header.includes(label)));
     const cells: Record<string, string> = {};
-    const bind = (key: string, ...labels: string[]) => {
-      const index = headerIndex(...labels);
-      if (index >= 0) cells[key] = `${columnName(index)}${sourceRow}`;
-    };
+    const bind = (key: string, ...labels: string[]) => { const index = headerIndex(...labels); if (index >= 0) cells[key] = `${columnName(index)}${sourceRow}`; };
     bind("machineId", "机器ID");
     bind("fishMinKg", "最小拉力", "鱼重下限kg");
     bind("fishMaxKg", "最大拉力", "鱼重上限kg");
-    bind("nominalFishKg", "标称鱼重kg", "标称拉力");
     bind("weightBand", "重量段", "档位");
-    // Canonical 01 normally derives its nominal value from min/max; freeze the
-    // two actual source cells rather than inventing a nonexistent column.
-    if (!cells.nominalFishKg && cells.fishMinKg && cells.fishMaxKg) cells.nominalFishKg = `${cells.fishMinKg}:${cells.fishMaxKg}`;
-    const row = sourceRow > 0 ? input.weightValues?.[sourceRow - 1] ?? [] : [];
-    headers.forEach((header, index) => {
-      if (header && row[index] !== null && row[index] !== undefined && text(row[index]) !== "") cells[header] = `${columnName(index)}${sourceRow}`;
-    });
+    if (cells.fishMinKg && cells.fishMaxKg) cells.nominalFishKg = `${cells.fishMinKg}:${cells.fishMaxKg}`;
+    for (let index = 0; index < headers.length; index += 1) { const header = headers[index]; if (header && !cells[header]) cells[header] = `${columnName(index)}${sourceRow}`; }
     return cells;
   };
-  const issueSourceCell = (issue: CanonicalRuleSourceDraft["issues"][number]) => {
-    const sourceRow = issue.row ?? 0;
-    const cells = sourceCellsFor(sourceRow);
-    const block = blockFor(sourceRow);
-    const row = sourceRow > 0 ? input.weightValues?.[sourceRow - 1] ?? [] : [];
-    const valueFor = (...labels: string[]) => {
-      const index = block?.headers.findIndex((header) => labels.some((label) => header === label || header.includes(label))) ?? -1;
-      return index >= 0 ? row[index] : undefined;
-    };
-    const finite = (value: unknown) => {
-      if (value === null || value === undefined || text(value) === "") return undefined;
-      const parsed = Number(value);
-      return Number.isFinite(parsed) ? parsed : undefined;
-    };
-    const min = finite(valueFor("最小拉力", "鱼重下限kg"));
-    const max = finite(valueFor("最大拉力", "鱼重上限kg"));
-    const invalidRangeCell = min === undefined
-      ? cells.fishMinKg
-      : max === undefined
-        ? cells.fishMaxKg
-        : `${cells.fishMinKg}:${cells.fishMaxKg}`;
-    const cell = issue.code.includes("ID_") ? cells.machineId
-      : issue.code.includes("ROW_INVALID") ? invalidRangeCell
-      : cells.machineId ?? cells.fishMinKg ?? `A${issue.row ?? 1}`;
-    return { sheetId: "d6e928" as const, cell: cell ?? `A${sourceRow || 1}` };
-  };
   for (const issue of input.canonicalRuleDraft.issues) {
-    if (issue.sheetId !== WEIGHT_TEMPLATE_SHEET_ID || !issue.code.startsWith("WEIGHT_TEMPLATE_")) continue;
-    issues.push({ code: issue.code, severity: issue.level === "error" ? "ERROR" : "WARNING", message: issue.message, sourceCell: issueSourceCell(issue) });
+    if (!issue.code.startsWith("WEIGHT_TEMPLATE_")) continue;
+    const sheetId = issue.sheetId ?? "";
+    const sourceRow = issue.row ?? 0;
+    const cells = cellsForRow(sheetId, sourceRow);
+    const source = input.weightSources.find((s) => s.sheetId === sheetId);
+    const valueRow = sourceRow > 0 ? source?.values[sourceRow - 1] ?? [] : [];
+    const columnIndex = (cellRef?: string) => { if (!cellRef) return -1; const match = cellRef.match(/^[A-Z]+/); if (!match) return -1; return match[0].split("").reduce((acc, ch) => acc * 26 + (ch.charCodeAt(0) - 64), 0) - 1; };
+    const numericAt = (cellRef?: string) => { const index = columnIndex(cellRef); if (index < 0) return undefined; const raw = valueRow[index]; if (raw === "" || raw === null || raw === undefined) return undefined; const parsed = Number(raw); return Number.isFinite(parsed) ? parsed : undefined; };
+    const minVal = numericAt(cells.fishMinKg);
+    const maxVal = numericAt(cells.fishMaxKg);
+    const cell = issue.code.includes("ID_") ? cells.machineId
+      : issue.code.includes("ROW_INVALID") ? (minVal === undefined ? cells.fishMinKg : maxVal === undefined ? cells.fishMaxKg : `${cells.fishMinKg}:${cells.fishMaxKg}`)
+      : cells.machineId ?? `A${sourceRow}`;
+    issues.push({ code: issue.code, severity: issue.level === "error" ? "ERROR" : "WARNING", message: issue.message, sourceCell: { sheetId, cell: cell ?? `A${sourceRow}` } });
   }
   for (const template of input.canonicalRuleDraft.templates) {
     const sourceRow = template.sourceRow ?? 0;
-    const cells = sourceCellsFor(sourceRow);
-    const sourceCell = { sheetId: "d6e928" as const, cell: cells.machineId ?? `BG${sourceRow || 1}` };
+    const sheetId = template.sourceSheetId ?? "weight-template";
+    const cells = cellsForRow(sheetId, sourceRow);
+    const sourceCell = { sheetId, cell: cells.machineId ?? `A${sourceRow}` };
     if (!template.id.startsWith("wtpl_")) { issues.push({ code: "WEIGHT_TEMPLATE_STABLE_ID_PREFIX_INVALID", severity: "ERROR", message: `重量模板机器ID必须以 wtpl_ 开头：${template.id}。`, sourceCell }); continue; }
     if (seen.has(template.id)) { issues.push({ code: "WEIGHT_TEMPLATE_STABLE_ID_DUPLICATE", severity: "ERROR", message: `重量模板机器ID重复：${template.id}。`, sourceCell }); continue; }
     seen.add(template.id);
-    if (!Number.isFinite(template.fishMinKg) || !Number.isFinite(template.fishMaxKg) || !Number.isFinite(template.nominalFishKg) || template.fishMinKg >= template.fishMaxKg || template.nominalFishKg < template.fishMinKg || template.nominalFishKg > template.fishMaxKg) { issues.push({ code: "WEIGHT_TEMPLATE_RANGE_INVALID", severity: "ERROR", message: `重量模板 ${template.id} 的重量范围无效。`, sourceCell }); continue; }
-    templates.push({ ...template, source: { sheetId: WEIGHT_TEMPLATE_SHEET_ID, rowKey: String(sourceRow), cells } });
+    if (!Number.isFinite(template.fishMinKg) || !Number.isFinite(template.fishMaxKg) || !Number.isFinite(template.nominalFishKg) || template.fishMinKg >= template.fishMaxKg || template.nominalFishKg < template.fishMinKg || template.nominalFishKg > template.fishMaxKg) { issues.push({ code: "WEIGHT_TEMPLATE_RANGE_INVALID", severity: "ERROR", message: `重量模板 ${template.id} 的重量范围无效。`, sourceCell: { sheetId, cell: cells.fishMinKg && cells.fishMaxKg ? `${cells.fishMinKg}:${cells.fishMaxKg}` : cells.fishMinKg ?? `A${sourceRow}` } }); continue; }
+    templates.push({ ...template, source: { sheetId, rowKey: String(sourceRow), cells } });
   }
   if (!templates.length && !issues.length) issues.push({ code: "WEIGHT_TEMPLATE_EMPTY", severity: "ERROR", message: "01_重量模板没有可导入模板，已拒绝空覆盖。" });
-  const content = { sourceRevisionId: input.sourceRevision.id, sourceRevision: input.sourceRevision.sourceRevision, sheetId: "d6e928" as const, templates, issues, formalStatus: issues.some((issue) => issue.severity === "ERROR") ? "NON_FORMAL" as const : "READY_TO_PUBLISH" as const, importedAt: input.importedAt };
+  const representativeSheetId = templates[0]?.source.sheetId ?? "weight-template";
+  const content = { sourceRevisionId: input.sourceRevision.id, sourceRevision: input.sourceRevision.sourceRevision, sheetId: representativeSheetId, templates, issues, formalStatus: issues.some((issue) => issue.severity === "ERROR") ? "NON_FORMAL" as const : "READY_TO_PUBLISH" as const, importedAt: input.importedAt };
   const inputHash = deterministicHash(content);
   return { id: `weight-template-draft:${inputHash}`, ...content, inputHash };
 }
@@ -662,9 +708,12 @@ export async function inspectCanonicalRuleWorkbook(input: {
   const qualitySheetRange = canonicalQualitySheetRange(sourceRevision);
   const qualityRange = ranges.find((entry) => entry.sheetId === QUALITY_SHEET_ID && entry.range === qualitySheetRange);
   const affixRange = ranges.find((entry) => entry.sheetId === AFFIX_SHEET_ID && entry.range === canonicalAffixSheetRanges(sourceRevision).aliasRange);
-  const pricingEndpointRange = ranges.find((entry) => entry.sheetId === "u87sRh" && entry.range === "B179:E179");
-  const pricingRange = ranges.find((entry) => entry.sheetId === "u87sRh" && entry.range === "B10:R70");
-  const typeRange = ranges.find((entry) => entry.sheetId === "fATowU" && entry.range === "B2:AD20");
+  // finding 2 修复（Opus MAJOR）：pricing/type lookup 切新表 sheetId，不再查永远不存在的旧 u87sRh/fATowU range。
+  // PR2b-1 只切 lookup 一致；pricing 公式（新表 31RxeB/32BmZs/33IGHy 结构）与 type 三子表拼接的精确解析由 PR2b-3 完成，
+  // 过渡期 pricingDraft 可能 NON_FORMAL（源字段缺失/结构不匹配），符合 OPEN-007。
+  const pricingEndpointRange = ranges.find((entry) => entry.sheetId === "33IGHy");
+  const pricingRange = ranges.find((entry) => entry.sheetId === "31RxeB");
+  const typeValues = ["10TyFp", "11CfXW", "12VetE"].flatMap((sheetId) => ranges.find((entry) => entry.sheetId === sheetId)?.valueRange.values ?? []);
   const qualityDraft = qualityDraftFromRanges({
     sourceRevision,
     qualityValues: qualityRange?.valueRange.values ?? [],
@@ -677,19 +726,21 @@ export async function inspectCanonicalRuleWorkbook(input: {
   const pricingDraft = pricingDraftFromRanges({
     sourceRevision,
     qualityValues: [], qualitySourceRows: pricingQualityRows,
-    pricingValues: pricingRange?.valueRange.values ?? [], typeValues: typeRange?.valueRange.values ?? [], importedAt: input.observedAt,
+    pricingValues: pricingRange?.valueRange.values ?? [], typeValues, importedAt: input.observedAt,
   });
+  const findRangeValues = (sheetId: string, rangePrefix: string) => ranges.find((entry) => entry.sheetId === sheetId && typeof entry.range === "string" && entry.range.startsWith(rangePrefix))?.valueRange.values ?? [];
+  const partedSources = (group: "weight" | "type" | "function" | "method" | "methodTemplateReview") => CANONICAL_ITEM_PARTS.map((part) => ({ part, sheetId: CANONICAL_RULE_RANGES[group][part], values: findRangeValues(CANONICAL_RULE_RANGES[group][part], "A1:") }));
   const canonicalRuleDraft = importCanonicalRuleSource({
     sourceRevision,
-    weightValues: ranges.find((entry) => entry.sheetId === WEIGHT_TEMPLATE_SHEET_ID && /^A1:BH\d+$/.test(entry.range))?.valueRange.values ?? [],
-    typeValues: ranges.find((entry) => entry.sheetId === CANONICAL_RULE_RANGES.type.sheetId && entry.range === CANONICAL_RULE_RANGES.type.range)?.valueRange.values ?? [],
-    functionValues: ranges.find((entry) => entry.sheetId === CANONICAL_RULE_RANGES.function.sheetId && entry.range === CANONICAL_RULE_RANGES.function.range)?.valueRange.values ?? [],
-    functionProfileValues: ranges.find((entry) => entry.sheetId === CANONICAL_RULE_RANGES.functionProfiles.sheetId && entry.range === CANONICAL_RULE_RANGES.functionProfiles.range)?.valueRange.values ?? [],
-    methodValues: ranges.find((entry) => entry.sheetId === CANONICAL_RULE_RANGES.method.sheetId && entry.range === CANONICAL_RULE_RANGES.method.range)?.valueRange.values ?? [],
-    methodTemplateReviewValues: ranges.find((entry) => entry.sheetId === CANONICAL_RULE_RANGES.methodTemplateReview.sheetId && entry.range === CANONICAL_RULE_RANGES.methodTemplateReview.range)?.valueRange.values ?? [],
+    weightSources: partedSources("weight"),
+    typeSources: partedSources("type"),
+    functionSources: partedSources("function"),
+    functionProfileValues: findRangeValues(CANONICAL_RULE_RANGES.functionProfiles, "A1:S"),
+    methodSources: partedSources("method"),
+    methodTemplateReviewSources: partedSources("methodTemplateReview"),
     importedAt: input.observedAt,
   });
-  const weightTemplateDraft = weightTemplateDraftFromCanonicalRuleDraft({ sourceRevision, canonicalRuleDraft, weightValues: ranges.find((entry) => entry.sheetId === WEIGHT_TEMPLATE_SHEET_ID && /^A1:BH\d+$/.test(entry.range))?.valueRange.values ?? [], importedAt: input.observedAt });
+  const weightTemplateDraft = weightTemplateDraftFromCanonicalRuleDraft({ sourceRevision, canonicalRuleDraft, weightSources: partedSources("weight"), importedAt: input.observedAt });
   return {
     observedAt: input.observedAt,
     sourceRevision,

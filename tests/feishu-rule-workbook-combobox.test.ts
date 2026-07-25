@@ -343,12 +343,13 @@ test("迁移无损：v20 现有 bitable 历史与新规则源历史共存，comb
   assert.equal(shown[0].shareUrl, WIKI_URL);
 });
 
-test("canonical 规则源常量未被改动，仍为 YsEKw /wiki/ 形式", () => {
-  // 守底：本期只做 UI + 识别 + 历史，不切 canonical。
+test("canonical 规则源常量已切流，现为 WQ8w /sheets/ 形式（PR2b）", () => {
+  // PR2b 切流（spec §14 :926）：canonical 从旧表 YsEKw /wiki/ 切到新表 WQ8w /sheets/。
   assert.equal(CANONICAL_FEISHU_WORKBOOK.id, "feishu-workbook:tackle-design");
   assert.equal(CANONICAL_FEISHU_WORKBOOK.provider, "feishu_sheets");
-  assert.ok(CANONICAL_FEISHU_WORKBOOK.shareUrl.includes("/wiki/"));
-  assert.equal(CANONICAL_FEISHU_WORKBOOK.wikiToken, "YsEKwSUJ5i86HCkZKBVcNMw7nOh");
+  assert.ok(CANONICAL_FEISHU_WORKBOOK.shareUrl.includes("/sheets/"));
+  assert.equal(CANONICAL_FEISHU_WORKBOOK.spreadsheetToken, "WQ8wstS4ch29E2tAKnVcoh5KnJg");
+  assert.equal(CANONICAL_FEISHU_WORKBOOK.wikiToken, undefined);
   // 识别任意 /wiki//sheets/ 链接不会改写常量（recognize 是纯函数）。
   const before = { ...CANONICAL_FEISHU_WORKBOOK };
   recognizeFeishuRuleWorkbookLink(SHEETS_URL);

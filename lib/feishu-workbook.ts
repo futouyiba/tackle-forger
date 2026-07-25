@@ -83,7 +83,7 @@ export const CANONICAL_FEISHU_WORKBOOK: FeishuWorkbookRef = {
   name: "钓具设计工作簿",
   provider: "feishu_sheets",
   // PR2b 切流（2026-07-25，spec §14 :926）：权威源从旧表 YsEKw（/wiki/，18 合并表）
-  // 切到新表 WQ8w（/sheets/，48 分表，竿/轮/线独立子表）。旧 YsEKw 的块布局契约
+  // 切到新表 WQ8w（/sheets/，50 分表，竿/轮/线独立子表）。旧 YsEKw 的块布局契约
   // （竿3-18/轮21-36/线39-54）保留作 spec §14 审计证据。wikiToken 留空：/sheets/ 直接形式不经 wiki 解析。
   shareUrl: "https://pisn3u3ony2.feishu.cn/sheets/WQ8wstS4ch29E2tAKnVcoh5KnJg?sheet=0iGCcx",
   spreadsheetToken: "WQ8wstS4ch29E2tAKnVcoh5KnJg",

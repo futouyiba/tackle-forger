@@ -241,7 +241,7 @@ export function pricingDraftFromRanges(input: {
     ? input.qualitySourceRows.flatMap((row) => {
       const qualityId = qualityIds[row.code];
       return qualityId && [row.minScore, row.maxScore, row.minFactor, row.maxFactor].every(Number.isFinite)
-        ? [{ qualityId, minScore: row.minScore, maxScore: row.maxScore, maxInclusive: false, minFactor: row.minFactor, maxFactor: row.maxFactor, status: "SOURCE" as const, source: { sheetId: QUALITY_SHEET_ID, cell: row.factorCell, rowKey: row.rowKey } }]
+        ? [{ qualityId, minScore: row.minScore, maxScore: row.maxScore, maxInclusive: qualityId === "quality_s_orange", minFactor: row.minFactor, maxFactor: row.maxFactor, status: "SOURCE" as const, source: { sheetId: QUALITY_SHEET_ID, cell: row.factorCell, rowKey: row.rowKey } }]
         : [];
     })
     : input.qualityValues.flatMap((row, index) => {
@@ -252,7 +252,7 @@ export function pricingDraftFromRanges(input: {
     const maxFactor = Number(row[6]);
     if (!qualityId || ![minScore, maxScore, minFactor, maxFactor].every(Number.isFinite)) return [];
     const sheetRow = index + 5;
-    return [{ qualityId, minScore, maxScore, maxInclusive: false, minFactor, maxFactor, status: "SOURCE", source: { sheetId: "FqD4j7", cell: `E${sheetRow}:H${sheetRow}`, rowKey: String(sheetRow) } }];
+    return [{ qualityId, minScore, maxScore, maxInclusive: qualityId === "quality_s_orange", minFactor, maxFactor, status: "SOURCE", source: { sheetId: "FqD4j7", cell: `E${sheetRow}:H${sheetRow}`, rowKey: String(sheetRow) } }];
   });
   const pricingValues = input.pricingValues ?? [];
   const maintenanceConsumptionRates: PricingLookupEntry[] = [];

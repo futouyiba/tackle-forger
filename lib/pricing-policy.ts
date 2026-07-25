@@ -246,6 +246,15 @@ function validateQualityRanges(ranges: QualityPriceFactorRange[], issues: Pricin
       break;
     }
   }
+  const sRange = [...ranges].find((r) => r.qualityId === "quality_s_orange");
+  if (sRange && (sRange.minScore !== 65 || sRange.maxScore !== 100 || !sRange.maxInclusive)) {
+    issues.push({
+      code: "QUALITY_PRICE_FACTOR_INVALID",
+      severity: "error",
+      message: "S/橙 品质区间必须是 [65,100] 闭区间。",
+      source: sRange.source,
+    });
+  }
 }
 
 function validExecutionPolicy(value: unknown): value is PricingExecutionPolicy {
@@ -534,6 +543,31 @@ export function calculatePricingTrial(input: {
     warnings,
   };
   return { ...result, inputHash: resultInputHash };
+}
+
+/** Recompute canonical input hash from frozen trial fields, for publish-side verification. */
+export function pricingTrialOutputHash(trial: {
+  pricingPolicyRef: string;
+  pricingWeightBandId: string;
+  valueScore: number;
+  repairPriceRaw?: number | null;
+  repairPrice?: number | null;
+  purchasePriceRaw?: number;
+  purchasePriceRounded?: number | null;
+  purchasePrice?: number | null;
+  trace: PricingTraceEntry[];
+}): string {
+  return deterministicHash({
+    policy: trial.pricingPolicyRef,
+    pricingWeightBandId: trial.pricingWeightBandId,
+    valueScore: trial.valueScore,
+    repairPriceRaw: trial.repairPriceRaw,
+    repairPrice: trial.repairPrice,
+    purchasePriceRaw: trial.purchasePriceRaw,
+    purchasePriceRounded: trial.purchasePriceRounded,
+    purchasePrice: trial.purchasePrice,
+    trace: trial.trace,
+  });
 }
 
 function roundLegacyMoney(value: number, policy: PricingMoneyPolicyDraft) {

@@ -359,7 +359,7 @@ export function V3FlowWorkbench({ state, mutate, notify, initialSeriesId }: V3Fl
           {stage === "publish" ? (
             <>
               <div className="v3-stage-title"><div><span className="eyebrow">IMMUTABLE RELEASE</span><h3>快照冻结与显式升级</h3><p>已发布配置不会被上游规则静默重算；变化只能进入升级候选。</p></div>{selectedSnapshot ? <span className="v3-decision-badge"><LockKeyhole size={16} />快照已冻结</span> : <span className="v3-decision-badge warning"><AlertTriangle size={16} />尚未发布</span>}</div>
-              <SnapshotFreezePanel model={snapshotFreezeModel} reducedMotion={false} onApproveUpgrade={approveUpgrade} />
+              <SnapshotFreezePanel model={snapshotFreezeModel} onApproveUpgrade={approveUpgrade} />
               <div className="v3-governance-grid" style={{ marginTop: 12 }}>
                 <div className="v3-governance-card"><div><span className="eyebrow">RULE PROPOSALS</span><h4>Patch 沉淀为规则</h4></div><p>只有已批准 Patch 能提交规则变更提案，原始 Patch 仍保留审计来源。</p><div className="v3-proposal-list">{state.ruleChangeProposals.slice(0, 3).map((proposal) => <div key={proposal.id}><span className={`v3-status ${proposal.status}`}>{statusLabel(proposal.status)}</span><div><strong>{proposal.title}</strong><small>{proposal.impactEntityIds.length} 个受影响实体</small></div></div>)}{!state.ruleChangeProposals.length ? <div className="v3-empty-inline">暂无规则变更提案。</div> : null}</div></div>
               </div>

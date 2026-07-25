@@ -16,7 +16,6 @@ import {
 
 export interface SnapshotFreezePanelProps {
   model: SnapshotFreezeModel;
-  reducedMotion: boolean;
   onApproveUpgrade?: () => void;
 }
 
@@ -44,7 +43,7 @@ function BuildingState() {
   );
 }
 
-function BuildFailed({ model }: { model: SnapshotFreezeModel }) {
+function BuildFailed() {
   return (
     <div className="sf-failed">
       <AlertTriangle size={18} />
@@ -189,7 +188,7 @@ export function SnapshotFreezePanel({
     <div className="sf-panel" role="region" aria-label={snapshotFreezeStateLabel(model.state)}>
       {model.state === "NO_SNAPSHOT" ? <EmptyState /> : null}
       {model.state === "BUILDING" ? <BuildingState /> : null}
-      {model.state === "BUILD_FAILED" ? <BuildFailed model={model} /> : null}
+      {model.state === "BUILD_FAILED" ? <BuildFailed /> : null}
       {(model.state === "FROZEN" || model.state === "UPGRADE_AVAILABLE") ? (
         <>
           <FrozenEvidence model={model} />

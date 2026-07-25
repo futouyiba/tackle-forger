@@ -37,7 +37,7 @@ import {
   importCanonicalRuleSource,
   type PartedRuleSource,
 } from "./canonical-rule-source";
-import type { CanonicalRuleSourceDraft, WeightTemplatePolicyDraft } from "./types";
+import type { CanonicalRuleSourceDraft, SeriesDefinition, SeriesSignatureAxis, WeightTemplatePolicyDraft } from "./types";
 import { deterministicHash } from "./rule-kernel";
 
 export interface IdentitySheetSpec {
@@ -70,7 +70,7 @@ export const CANONICAL_IDENTITY_SHEET_SPECS: IdentitySheetSpec[] = [
   { sheetId: "18pjcZ", range: "B1:C", idColumnKey: "B", part: "line", fixedEntityType: "FunctionProfile", allowedEntityTypes: ["FunctionProfile"], idPrefixesByEntityType: { FunctionProfile: ["func_line_"] } },
   { sheetId: "19XKzU", range: "Q1:S", idColumnKey: "Q:S", fixedEntityType: "FunctionPartGroup", allowedEntityTypes: ["FunctionPartGroup"], idPrefixesByEntityType: { FunctionPartGroup: ["funcgrp_rod_", "funcgrp_reel_", "funcgrp_line_"] } },
   { sheetId: "23CsXE", range: "B1:C", idColumnKey: "B", allowedEntityTypes: ["RodAffix", "ReelAffix", "LineAffix"], idPrefixesByEntityType: { RodAffix: ["affix_rod_"], ReelAffix: ["affix_reel_"], LineAffix: ["affix_line_"] } },
-  { sheetId: "25UnTC", range: "B1:C", idColumnKey: "B", fixedEntityType: "SeriesArchetype", allowedEntityTypes: ["SeriesArchetype"], idPrefixesByEntityType: { SeriesArchetype: ["series_rod_", "series_reel_", "series_line_"] } },
+  { sheetId: "25UnTC", range: "A1:W", idColumnKey: "A", fixedEntityType: "SeriesArchetype", allowedEntityTypes: ["SeriesArchetype"], idPrefixesByEntityType: { SeriesArchetype: ["series_rod_", "series_reel_", "series_line_"] } },
 ];
 
 /**
@@ -185,7 +185,7 @@ export function canonicalRuleWorkbookRangeRequests(sourceRevision: FeishuSourceR
     if (spec.fixedEntityType === "FunctionProfile" && spec.range === "A1:S") requests.push({ sheetId: spec.sheetId, range: dynamicRange(spec.sheetId, "A1:S", 1, 1) });
     else if (spec.fixedEntityType === "FunctionPartGroup") requests.push({ sheetId: spec.sheetId, range: dynamicRange(spec.sheetId, "Q1:S", 1, 1) });
     else if (spec.sheetId === AFFIX_SHEET_ID) requests.push({ sheetId: spec.sheetId, range: affixRanges.identityRange });
-    else requests.push({ sheetId: spec.sheetId, range: dynamicRange(spec.sheetId, "B1:C", 1, 1) });
+    else requests.push({ sheetId: spec.sheetId, range: dynamicRange(spec.sheetId, spec.range, 1, 1) });
   }
   // affix 别名（quality 组合矩阵用）
   requests.push({ sheetId: AFFIX_SHEET_ID, range: affixRanges.aliasRange });
@@ -669,6 +669,9 @@ export interface CanonicalRuleWorkbookInspection {
   canonicalRuleDraft: CanonicalRuleSourceDraft;
   weightTemplateDraft: WeightTemplatePolicyDraft;
   pricingWeightBandPolicy: "MATCHED_STRUCTURAL_SOURCE_BAND";
+  /** #141：从 25UnTC A→W 富字段解析的 SeriesDefinition（覆盖 seed）。 */
+  seriesDefinitions: SeriesDefinition[];
+  seriesParseIssues: SeriesParseIssue[];
 }
 
 let testInspectionOverride: ((input: { observedAt: string; observedBy: string }) => Promise<CanonicalRuleWorkbookInspection>) | undefined;
@@ -676,6 +679,151 @@ let testInspectionOverride: ((input: { observedAt: string; observedBy: string })
  * persistence, draft and publish paths against the returned observation. */
 export function setCanonicalRuleWorkbookInspectionForTests(override?: typeof testInspectionOverride) {
   testInspectionOverride = override;
+}
+
+/**
+ * #141 Series 富字段解析（2026-07-25 实测 25UnTC A→W 22 列后新增）。
+ *
+ * 25UnTC（07_系列）含完整 SeriesDefinition 富字段（实测：竿/轮/线各 8 = 24 SeriesArchetype）。
+ * 列映射 A→W（机器ID/实体类型/钓具类型/系列/.../目标拉力/签名轴/状态）见 SERIES_COL。
+ * 类型转换 fail-closed：错格式 push issue 跳行，不崩。part 由 C 钓具类型映射（竿/轮/线）。
+ */
+export interface SeriesParseIssue {
+  level: "error" | "warning";
+  code: string;
+  message: string;
+  sheetId: string;
+  row: number;
+}
+
+const SERIES_SHEET_ID = "25UnTC";
+const SERIES_COL = {
+  id: 0, entityType: 1, tackleType: 2, name: 3,
+  concept: 7, fishingMethodId: 8, typeId: 9, qualityId: 10,
+  collectionId: 11, coreFunctionId: 12, intensityMode: 13, intensityValue: 14,
+  coreAffixIds: 15, secondaryAffixPoolIds: 16, forbiddenAffixIds: 17,
+  planningMinKgf: 18, planningMaxKgf: 19, targetPulls: 20, signature: 21, status: 22,
+} as const;
+const SERIES_PART_MAP: Record<string, string> = { 竿: "part:rod", 轮: "part:reel", 线: "part:line" };
+const SERIES_STATUS_MAP: Record<string, SeriesDefinition["status"]> = {
+  draft: "draft", approved: "approved", published: "published", superseded: "superseded",
+};
+
+export function parseSeries(input: {
+  sourceRevision: FeishuSourceRevision;
+  seriesValues: unknown[][];
+  importedAt: string;
+}): { series: SeriesDefinition[]; issues: SeriesParseIssue[] } {
+  const issues: SeriesParseIssue[] = [];
+  const series: SeriesDefinition[] = [];
+  const rows = input.seriesValues;
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index] ?? [];
+    const sourceRow = index + 1;
+    const id = text(row[SERIES_COL.id]);
+    if (/ID（勿改）|ID（永久）|机器ID/.test(id)) continue; // 表头
+    if (!id) continue; // 空行
+    const entityType = text(row[SERIES_COL.entityType]);
+    if (entityType && entityType !== "SeriesArchetype") continue; // 非 Series 行
+    const tackleType = text(row[SERIES_COL.tackleType]);
+    const itemPartId = SERIES_PART_MAP[tackleType];
+    if (!itemPartId) {
+      issues.push({ level: "error", code: "SERIES_PART_INVALID", message: `Series ${id} 钓具类型无效：${tackleType || "(空)"}（期望 竿/轮/线）。`, sheetId: SERIES_SHEET_ID, row: sourceRow });
+      continue;
+    }
+    const mode = text(row[SERIES_COL.intensityMode]);
+    const intensityRaw = text(row[SERIES_COL.intensityValue]);
+    if (mode !== "fixed") {
+      issues.push({ level: "warning", code: "SERIES_INTENSITY_MODE_UNSUPPORTED", message: `Series ${id} 功能强度模式 ${mode || "(空)"} 暂不支持（只支持 fixed）。`, sheetId: SERIES_SHEET_ID, row: sourceRow });
+      continue;
+    }
+    const intensity = Number(intensityRaw);
+    if (!Number.isFinite(intensity)) {
+      issues.push({ level: "error", code: "SERIES_INTENSITY_PARSE", message: `Series ${id} 功能强度值非有限数：${intensityRaw}。`, sheetId: SERIES_SHEET_ID, row: sourceRow });
+      continue;
+    }
+    const minKgf = Number(text(row[SERIES_COL.planningMinKgf]));
+    const maxKgf = Number(text(row[SERIES_COL.planningMaxKgf]));
+    const planningPullRange = Number.isFinite(minKgf) && Number.isFinite(maxKgf) && minKgf < maxKgf
+      ? { minKgf, maxKgf } : undefined;
+    if (!planningPullRange) {
+      issues.push({ level: "warning", code: "SERIES_NUMBER_PARSE", message: `Series ${id} 计划拉力区间无效（min=${text(row[SERIES_COL.planningMinKgf])}, max=${text(row[SERIES_COL.planningMaxKgf])}），置空。`, sheetId: SERIES_SHEET_ID, row: sourceRow });
+    }
+    const targetPullSpecifications = parseSeriesTargetPulls(text(row[SERIES_COL.targetPulls]), id, sourceRow, issues);
+    const signature = parseSeriesSignature(text(row[SERIES_COL.signature]), id, sourceRow, issues);
+    const splitList = (raw: string): string[] => raw ? raw.split(",").map((s) => s.trim()).filter(Boolean) : [];
+    const statusRaw = text(row[SERIES_COL.status]).toLowerCase();
+    series.push({
+      id,
+      collectionId: text(row[SERIES_COL.collectionId]) || undefined,
+      revision: 1,
+      name: text(row[SERIES_COL.name]) || id,
+      concept: text(row[SERIES_COL.concept]),
+      fishingMethodId: text(row[SERIES_COL.fishingMethodId]),
+      typeId: text(row[SERIES_COL.typeId]),
+      itemPartId,
+      qualityId: (text(row[SERIES_COL.qualityId]) || "quality_c_green") as SeriesDefinition["qualityId"],
+      coreFunctionId: text(row[SERIES_COL.coreFunctionId]),
+      functionIntensityPolicy: { mode: "fixed", intensity: Math.round(intensity) as 1 | 2 | 3 },
+      coreAffixIds: splitList(text(row[SERIES_COL.coreAffixIds])),
+      secondaryAffixPoolIds: splitList(text(row[SERIES_COL.secondaryAffixPoolIds])),
+      forbiddenAffixIds: splitList(text(row[SERIES_COL.forbiddenAffixIds])),
+      ...(planningPullRange ? { planningPullRange } : {}),
+      targetPullSpecifications,
+      signature,
+      patchIds: [],
+      skuIds: targetPullSpecifications.map((spec) => spec.skuId),
+      status: SERIES_STATUS_MAP[statusRaw] ?? "draft",
+      createdAt: input.importedAt,
+      updatedAt: input.importedAt,
+    });
+  }
+  return { series, issues };
+}
+
+function parseSeriesTargetPulls(raw: string, id: string, sourceRow: number, issues: SeriesParseIssue[]): SeriesDefinition["targetPullSpecifications"] {
+  if (!raw) return [];
+  const specs: Array<{ targetPullKgf: number; skuId: string }> = [];
+  for (const pair of raw.split(";")) {
+    const trimmed = pair.trim();
+    if (!trimmed) continue;
+    const colonIdx = trimmed.indexOf(":");
+    if (colonIdx < 0) {
+      issues.push({ level: "warning", code: "SERIES_TARGET_PULL_PARSE", message: `Series ${id} 目标拉力规格对无冒号：${trimmed}，跳过。`, sheetId: SERIES_SHEET_ID, row: sourceRow });
+      continue;
+    }
+    const pullKgf = Number(trimmed.slice(0, colonIdx));
+    const skuId = trimmed.slice(colonIdx + 1).trim();
+    if (!Number.isFinite(pullKgf) || !skuId) {
+      issues.push({ level: "warning", code: "SERIES_TARGET_PULL_PARSE", message: `Series ${id} 目标拉力规格对无效：${trimmed}，跳过。`, sheetId: SERIES_SHEET_ID, row: sourceRow });
+      continue;
+    }
+    specs.push({ targetPullKgf: pullKgf, skuId });
+  }
+  return specs;
+}
+
+function parseSeriesSignature(raw: string, id: string, sourceRow: number, issues: SeriesParseIssue[]): SeriesDefinition["signature"] {
+  if (!raw) return [];
+  const axes: SeriesSignatureAxis[] = [];
+  for (const seg of raw.split(";")) {
+    const trimmed = seg.trim();
+    if (!trimmed) continue;
+    const parts = trimmed.split(":");
+    if (parts.length !== 4) {
+      issues.push({ level: "warning", code: "SERIES_SIGNATURE_PARSE", message: `Series ${id} 签名轴格式无效（期望 group:dir:imp:tol）：${trimmed}，跳过。`, sheetId: SERIES_SHEET_ID, row: sourceRow });
+      continue;
+    }
+    const [parameterGroup, expectedDirection, importanceRaw, toleranceRaw] = parts as [string, string, string, string];
+    const importance = Number(importanceRaw);
+    const tolerance = Number(toleranceRaw);
+    if (!["positive", "negative", "neutral", "contextual"].includes(expectedDirection) || !Number.isFinite(importance) || !Number.isFinite(tolerance)) {
+      issues.push({ level: "warning", code: "SERIES_SIGNATURE_PARSE", message: `Series ${id} 签名轴字段无效：${trimmed}，跳过。`, sheetId: SERIES_SHEET_ID, row: sourceRow });
+      continue;
+    }
+    axes.push({ parameterGroup, expectedDirection: expectedDirection as SeriesSignatureAxis["expectedDirection"], importance, tolerance });
+  }
+  return axes;
 }
 
 export async function inspectCanonicalRuleWorkbook(input: {
@@ -741,6 +889,8 @@ export async function inspectCanonicalRuleWorkbook(input: {
     importedAt: input.observedAt,
   });
   const weightTemplateDraft = weightTemplateDraftFromCanonicalRuleDraft({ sourceRevision, canonicalRuleDraft, weightSources: partedSources("weight"), importedAt: input.observedAt });
+  const seriesValues = findRangeValues(SERIES_SHEET_ID, "A1:W");
+  const seriesParse = parseSeries({ sourceRevision, seriesValues, importedAt: input.observedAt });
   return {
     observedAt: input.observedAt,
     sourceRevision,
@@ -751,5 +901,7 @@ export async function inspectCanonicalRuleWorkbook(input: {
     canonicalRuleDraft,
     weightTemplateDraft,
     pricingWeightBandPolicy: "MATCHED_STRUCTURAL_SOURCE_BAND",
+    seriesDefinitions: seriesParse.series,
+    seriesParseIssues: seriesParse.issues,
   };
 }

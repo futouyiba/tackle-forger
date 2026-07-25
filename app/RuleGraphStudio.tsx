@@ -19,6 +19,7 @@ import {
   Workflow,
   XCircle,
 } from "lucide-react";
+import { randomUUID } from "@/lib/browser-utils";
 import { useMemo, useState } from "react";
 import type {
   AdjustmentRule,
@@ -96,7 +97,7 @@ const conditionFields = [
 ];
 
 function uid(prefix: string) {
-  return prefix + "-" + crypto.randomUUID();
+  return prefix + "-" + randomUUID();
 }
 
 function GraphButton({

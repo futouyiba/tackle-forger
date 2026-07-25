@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { ActionAvailabilityMap } from "@/lib/interaction-contracts";
+import { randomUUID } from "@/lib/browser-utils";
 import { issueClientActionCommand } from "@/lib/client-action-command";
 import { buildFeishuOrchestrationModel } from "@/lib/feishu-orchestration-presentation";
 import type { CanonicalRuleWorkbookInspection } from "@/lib/rule-workbook-inspection";
@@ -235,7 +236,7 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
         action: "publish_ruleset",
         idempotencyKey:
           `publish-ruleset:${props.revision}:${ruleSetDraft.id}:` +
-          crypto.randomUUID(),
+          randomUUID(),
         payload: businessPayload,
       });
       const response = await fetch("/api/feishu-workbook", {

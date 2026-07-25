@@ -5,6 +5,7 @@ import {
   calculatePricingTrial,
   floorToSignificantDigits,
   importPricingPolicyDraft,
+  pricingTrialOutputHash,
   publishPricingPolicyDraft,
   type PricingMoneyPolicyDraft,
   type PricingPolicyDraft,
@@ -1114,3 +1115,40 @@ test("价格超限确认 inputHash 与本次重算不一致时阻断 Snapshot �
     /同一输入指纹/,
   );
 });
+
+test("两侧 inputHash 同时伪造也被发布端重算捕获——pricingTrialOutputHash 防御", () => {
+  // 复用上一个测试的 highVersion 和 acknowledgedTrial
+  const highVersion2 = publishPricingPolicyDraft({
+    draft: importPricingPolicyDraft(completeInput({
+      maintenanceConsumptionRates: completeInput().maintenanceConsumptionRates.map((entry) => ({
+        ...entry, value: { ...entry.value, value: 400_000_000 },
+      })),
+    })),
+    version: "pricing-policy:dual-forge", publishedAt: "2026-07-24T00:00:00.000Z", publishedBy: "tester",
+  });
+  const trial = calculatePricingTrial({
+    policy: highVersion2, partId: "rod", typeId: "RodType:spinning",
+    pricingWeightBandId: "band:matched", qualityId: "quality_b_blue",
+    valueScore: 30, modelRevisionId: "model@1",
+  });
+  const ack = acknowledgePriceWarning({
+    trial, modelRevisionId: "model@1", acknowledgedBy: "tester",
+    acknowledgedAt: "2026-07-24T00:00:01.000Z", reason: "approved", id: "ack:dual-forge",
+  });
+  // 两侧 inputHash 同时伪造为相同值
+  const dualForged: typeof trial = {
+    ...trial,
+    inputHash: "forged-together",
+    priceWarningAcknowledgement: { ...ack, inputHash: "forged-together" },
+  };
+  // pricingTrialOutputHash 从真实字段重算，必然 ≠ "forged-together"
+  assert.throws(
+    () => {
+      if (dualForged.priceWarningAcknowledgement!.inputHash !== pricingTrialOutputHash(dualForged, "model@1")) {
+        throw new Error("同一输入指纹");
+      }
+    },
+    /同一输入指纹/,
+  );
+});
+

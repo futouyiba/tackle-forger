@@ -164,6 +164,10 @@ export interface PricingTrialResult {
   /** 绑定本次价格试算实际消费的规范品质价值分。 */
   valueScore: number;
   pricingWeightBandId: string;
+  /** Input context needed for publish-side hash recomputation. */
+  partId?: string;
+  typeId?: string;
+  qualityId?: QualityId;
   /** Legacy aliases retained for historical consumers. */
   repairPriceUnrounded: number;
   purchasePriceUnrounded: number;
@@ -527,6 +531,9 @@ export function calculatePricingTrial(input: {
     pricingPolicyRef: policy.id,
     valueScore: input.valueScore,
     pricingWeightBandId: input.pricingWeightBandId,
+    partId: input.partId,
+    typeId: input.typeId,
+    qualityId: input.qualityId,
     repairPriceUnrounded: repairPriceRaw,
     purchasePriceUnrounded: purchasePriceRaw,
     repairPriceRaw,
@@ -550,17 +557,26 @@ export function pricingTrialOutputHash(trial: {
   pricingPolicyRef: string;
   pricingWeightBandId: string;
   valueScore: number;
+  partId?: string;
+  typeId?: string;
+  qualityId?: string | QualityId;
   repairPriceRaw?: number | null;
   repairPrice?: number | null;
   purchasePriceRaw?: number;
   purchasePriceRounded?: number | null;
   purchasePrice?: number | null;
   trace: PricingTraceEntry[];
-}): string {
+}, modelRevisionId: string): string {
   return deterministicHash({
     policy: trial.pricingPolicyRef,
-    pricingWeightBandId: trial.pricingWeightBandId,
-    valueScore: trial.valueScore,
+    modelRevisionId,
+    input: {
+      partId: trial.partId ?? "",
+      typeId: trial.typeId ?? "",
+      pricingWeightBandId: trial.pricingWeightBandId,
+      valueScore: trial.valueScore,
+      qualityId: trial.qualityId ?? "quality_b_blue",
+    },
     repairPriceRaw: trial.repairPriceRaw,
     repairPrice: trial.repairPrice,
     purchasePriceRaw: trial.purchasePriceRaw,

@@ -802,12 +802,29 @@ function normalizeRuleTarget(
   };
 }
 
+/**
+ * PR2b 切流（spec §14 :926）：规则种类 → 可写规则源 sheetId 集合。
+ *
+ * 旧表 YsEKw 是合并表（一张 fATowU/vviXo0/FqD4j7 同时承载竿/轮/线），字面量单值即可；
+ * 新表 WQ8w 是分表（竿/轮/线独立 part，品质再分公式/定义/组合），同一规则种类落在多张
+ * part 表上。AI RuleSourceChangeDraft 的 `targetRuleRef.sheetId` 可指向该种类下的任一合法
+ * part 表，故 `matchingRuleLocator` 的校验从单字面量相等改为集合 contains——否则 AI 只能
+ * 写竿规则、轮/线规则源被锁死，违反切流目标。
+ *
+ * 集合成员均为 `CANONICAL_FEISHU_SHEET_REGISTRY` 中 `role=rule_source`/`importsRules=true`
+ * 的条目（由 `normalizeRuleTarget` 的 registry 校验先保证），与 `docs/audits/feishu-source-to-v3-mapping.md`
+ * 的竿/轮/线 ↔ 新 sheetId 映射一致。
+ */
+const TYPE_RULE_SHEET_IDS: ReadonlySet<string> = new Set(["10TyFp", "11CfXW", "12VetE"]);
+const FUNCTION_RULE_SHEET_IDS: ReadonlySet<string> = new Set(["16qYVn", "17jqiE", "18pjcZ"]);
+const QUALITY_RULE_SHEET_IDS: ReadonlySet<string> = new Set(["26gpIF", "27hboC", "28fQhg"]);
+
 type SupportedRuleLocator =
-  | { kind: "method"; profileId: string; expectedSheetId: "fATowU" }
-  | { kind: "item_type"; profileId: string; expectedSheetId: "fATowU" }
-  | { kind: "function"; profileId: string; expectedSheetId: "vviXo0" }
-  | { kind: "function_intensity"; profileId: string; intensity: 1 | 2 | 3; expectedSheetId: "vviXo0" }
-  | { kind: "quality"; profileId: string; expectedSheetId: "FqD4j7" };
+  | { kind: "method"; profileId: string; expectedSheetIds: ReadonlySet<string> }
+  | { kind: "item_type"; profileId: string; expectedSheetIds: ReadonlySet<string> }
+  | { kind: "function"; profileId: string; expectedSheetIds: ReadonlySet<string> }
+  | { kind: "function_intensity"; profileId: string; intensity: 1 | 2 | 3; expectedSheetIds: ReadonlySet<string> }
+  | { kind: "quality"; profileId: string; expectedSheetIds: ReadonlySet<string> };
 
 function matchingRuleLocator(
   state: WorkspaceState,
@@ -817,28 +834,28 @@ function matchingRuleLocator(
   const hasRule = (rules: AdjustmentRule[]) => rules.some((rule) =>
     rule.id === target.stableRuleId && rule.parameterKey === target.parameterKey);
   for (const profile of state.methodProfiles) {
-    if (hasRule(profile.rules)) matches.push({ kind: "method", profileId: profile.id, expectedSheetId: "fATowU" });
+    if (hasRule(profile.rules)) matches.push({ kind: "method", profileId: profile.id, expectedSheetIds: TYPE_RULE_SHEET_IDS });
   }
   for (const profile of state.itemTypeProfiles) {
-    if (hasRule(profile.rules)) matches.push({ kind: "item_type", profileId: profile.id, expectedSheetId: "fATowU" });
+    if (hasRule(profile.rules)) matches.push({ kind: "item_type", profileId: profile.id, expectedSheetIds: TYPE_RULE_SHEET_IDS });
   }
   for (const profile of state.functionProfiles) {
-    if (hasRule(profile.rules)) matches.push({ kind: "function", profileId: profile.id, expectedSheetId: "vviXo0" });
+    if (hasRule(profile.rules)) matches.push({ kind: "function", profileId: profile.id, expectedSheetIds: FUNCTION_RULE_SHEET_IDS });
     for (const intensity of profile.intensityRules) {
       if (hasRule(intensity.rules)) {
         matches.push({
           kind: "function_intensity",
           profileId: profile.id,
           intensity: intensity.intensity,
-          expectedSheetId: "vviXo0",
+          expectedSheetIds: FUNCTION_RULE_SHEET_IDS,
         });
       }
     }
   }
   for (const profile of state.qualityProfiles) {
-    if (hasRule(profile.rules)) matches.push({ kind: "quality", profileId: profile.id, expectedSheetId: "FqD4j7" });
+    if (hasRule(profile.rules)) matches.push({ kind: "quality", profileId: profile.id, expectedSheetIds: QUALITY_RULE_SHEET_IDS });
   }
-  if (matches.length !== 1 || matches[0]!.expectedSheetId !== target.sheetId) {
+  if (matches.length !== 1 || !matches[0]!.expectedSheetIds.has(target.sheetId)) {
     throw new AIDraftConversionError(
       "AI_RULE_TARGET_INVALID",
       "stableRuleId 必须在所选权威规则页中唯一存在，并与 parameterKey 一致。",

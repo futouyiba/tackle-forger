@@ -17,6 +17,7 @@ import {
   FileSpreadsheet,
   GitBranch,
   GitCompareArrows,
+  HardDrive,
   History,
   Layers3,
   ListChecks,
@@ -42,6 +43,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RuleGraphStudio } from "./RuleGraphStudio";
 import { V3FlowWorkbench } from "./V3FlowWorkbench";
 import { BrowserConfigExportWorkbench as ConfigExportWorkbench } from "./BrowserConfigExportWorkbench";
+import { OperationalConfigExportWorkbench } from "./OperationalConfigExportWorkbench";
 import { SeriesGanttWorkbenchV3 as SeriesGanttWorkbench } from "./SeriesGanttWorkbenchV3";
 import { EditableCell } from "./EditableCell";
 import { RuleWorkbookWorkbench } from "./RuleWorkbookWorkbench";
@@ -599,7 +601,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   const [detailKind, setDetailKind] = useState<ItemKind>("rod");
   const [versions, setVersions] = useState<RevisionInfo[]>(initialState.revisions);
   const fileInput = useRef<HTMLInputElement>(null);
-  const [exchangeMode, setExchangeMode] = useState<"excel" | "config">("excel");
+  const [exchangeMode, setExchangeMode] = useState<"excel" | "config" | "operational">("excel");
   const [workspaceExporting, setWorkspaceExporting] = useState(false);
   const [feishuSourceExporting, setFeishuSourceExporting] = useState(false);
   const [feishuSheetExporting, setFeishuSheetExporting] = useState(false);
@@ -2830,11 +2832,31 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           onClick={() => setExchangeMode("config")}
         >
           <PackageCheck size={18} />
-          <span><strong>配置关系预览</strong><small>一期仅 CONFIG_PREVIEW / NON_FORMAL</small></span>
+          <span><strong>配置关系预览</strong><small>NON_FORMAL 符号引用报告</small></span>
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={exchangeMode === "operational"}
+          className={exchangeMode === "operational" ? "active" : ""}
+          onClick={() => setExchangeMode("operational")}
+        >
+          <HardDrive size={18} />
+          <span><strong>配置提交</strong><small>companion 直写配置表</small></span>
         </button>
       </div>
-      {exchangeMode === "excel" ? renderExcel() : (
+      {exchangeMode === "excel" ? renderExcel() : exchangeMode === "config" ? (
         <ConfigExportWorkbench
+          state={state}
+          actionAvailabilities={user.actionAvailability}
+          identity={{
+            workspaceId: state.workspaceId ?? "",
+            userId: user.openId ?? "",
+          }}
+          notify={notify}
+        />
+      ) : (
+        <OperationalConfigExportWorkbench
           state={state}
           actionAvailabilities={user.actionAvailability}
           identity={{

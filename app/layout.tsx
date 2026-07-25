@@ -4,7 +4,9 @@ import "./series-gantt.css";
 import "./config-export.css";
 import "./rule-workbook.css";
 import "./feishu-orchestration.css";
+import "./snapshot-freeze.css";
 import "./motion-core.css";
+import "./v3-flow.css";
 
 export const metadata: Metadata = {
   title: {

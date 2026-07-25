@@ -60,7 +60,7 @@ import {
 } from "./validation-issues";
 import { structuralPullParameterKey } from "./projection-matcher";
 import type { ModelAffixValueAssessment } from "./quality-value-policy";
-import type { PricingTrialResult } from "./pricing-policy";
+import { pricingTrialOutputHash, type PricingTrialResult } from "./pricing-policy";
 import {
   derivePerformanceSummary,
   resolvePerformanceSummaryDefinition,
@@ -631,6 +631,29 @@ export function publishConfigurationSnapshot(
         level: "error",
         code: "PRICING_POLICY_NOT_FORMAL",
         message: "新 Snapshot 必须绑定同一已发布 PricingPolicyVersion 的正式自动价格。",
+      });
+    }
+    if (
+      input.automaticPricing?.priceUpperThresholdExceeded
+      && (
+        input.automaticPricing.priceWarning?.state !== "ACKNOWLEDGED"
+        || !input.automaticPricing.priceWarningAcknowledgement
+        || input.automaticPricing.priceWarningAcknowledgement.state !== "ACKNOWLEDGED"
+        || input.automaticPricing.priceWarningAcknowledgement.issueFingerprint !== input.automaticPricing.priceWarning.issueFingerprint
+        || input.automaticPricing.priceWarningAcknowledgement.modelRevisionId !== `${input.model.id}@${input.model.revision}`
+        || input.automaticPricing.priceWarningAcknowledgement.pricingPolicyVersion !== input.pricingPolicyVersion
+        || input.automaticPricing.priceWarningAcknowledgement.purchasePriceRaw !== input.automaticPricing.purchasePriceRaw
+        || input.automaticPricing.priceWarningAcknowledgement.purchasePriceRounded !== input.automaticPricing.purchasePriceRounded
+        || input.automaticPricing.priceWarningAcknowledgement.purchasePrice !== input.automaticPricing.purchasePrice
+        || input.automaticPricing.priceWarningAcknowledgement.threshold !== input.automaticPricing.priceWarning.threshold
+        || input.automaticPricing.priceWarningAcknowledgement.inputHash !== input.automaticPricing.inputHash
+        || input.automaticPricing.priceWarningAcknowledgement.inputHash !== pricingTrialOutputHash(input.automaticPricing, `${input.model.id}@${input.model.revision}`)
+      )
+    ) {
+      blocking.push({
+        level: "error",
+        code: "PRICE_UPPER_THRESHOLD_CONFIRMATION_REQUIRED",
+        message: "超过价格软阈值的新 Snapshot 必须冻结同一输入指纹的 ACKNOWLEDGED 确认记录。",
       });
     }
     if (

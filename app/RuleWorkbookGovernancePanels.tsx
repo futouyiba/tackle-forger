@@ -289,12 +289,12 @@ export function QualityValuePolicyPanel({
 
 function sourceRows(draft: PricingPolicyDraft) {
   return [
-    ...draft.maintenanceConsumptionRates.map((entry) => ({ step: "maintenanceConsumptionRate", key: `${entry.pricingWeightBandId} × ${entry.pricingBasketId}`, value: entry.value })),
+    ...draft.maintenanceConsumptionRates.map((entry) => ({ step: "maintenanceConsumptionRate", key: `${entry.pricingWeightBandId}`, value: entry.value })),
     ...draft.partAllocationRatios.map((entry) => ({ step: "partAllocationRatio", key: `${entry.partId} × ${entry.pricingWeightBandId}`, value: entry.value })),
     ...draft.repairCoefficients.map((entry) => ({ step: "repairCoefficient", key: `${entry.partId} × ${entry.typeId}`, value: entry.value })),
-    ...draft.totalLossTimes.map((entry) => ({ step: "totalLossTime", key: `${entry.partId} × ${entry.pricingWeightBandId} × ${entry.pricingBasketId}`, value: entry.value })),
+    ...draft.totalLossTimes.map((entry) => ({ step: "totalLossTime", key: `${entry.partId} × ${entry.pricingWeightBandId}`, value: entry.value })),
     ...draft.purchaseCoefficients.map((entry) => ({ step: "purchaseCoefficient", key: `${entry.partId} × ${entry.typeId}`, value: entry.value })),
-    ...draft.partsToWholeRatios.map((entry) => ({ step: "partsToWholeRatio", key: entry.partId, value: entry.value })),
+    ...draft.partsToWholeRatios.map((entry) => ({ step: "partsToWholeRatio", key: `${entry.partId} × ${entry.pricingWeightBandId}`, value: entry.value })),
   ];
 }
 
@@ -350,14 +350,15 @@ export function PricingPolicyDraftPanel({
         <button className="button button-default button-sm" type="button" onClick={calculate}>试算</button>
       </div>
       <div className="quality-basket-map pricing-map">
-        {draft.qualityMappings.map((mapping) => <div key={mapping.qualityId}><strong>{mapping.qualityId}</strong><ArrowRight size={13} /><span>{mapping.pricingBasketId}</span><small>{sourceLabel(mapping.source)}</small></div>)}
+        {draft.qualityMappings.map((mapping) => <div key={mapping.qualityId}><strong>{mapping.qualityId}</strong><ArrowRight size={13} /><span>{mapping.sourceAlias}</span><small>{sourceLabel(mapping.source)}</small></div>)}
       </div>
       {error ? <div className="rule-inline-error"><AlertTriangle size={16} />{error}</div> : null}
       {trial ? (
         <div className="pricing-trial-result">
-          <div><span>repairPrice</span><strong>{trial.repairPriceUnrounded}</strong></div>
-          <div><span>purchasePrice（未舍入）</span><strong>{trial.purchasePriceUnrounded}</strong></div>
-          <div><span>正式价格</span><strong>{trial.purchasePrice ?? "不可用"}</strong><small>{trial.moneyUnit ?? "金额单位未发布"}</small></div>
+          <div><span>维修价（Raw / 最终）</span><strong>{trial.repairPriceRaw ?? trial.repairPriceUnrounded} / {trial.repairPrice ?? "不可用"}</strong></div>
+          <div><span>购买价（Raw / 舍入）</span><strong>{trial.purchasePriceRaw ?? trial.purchasePriceUnrounded} / {trial.purchasePriceRounded ?? "不可用"}</strong></div>
+          <div><span>最终购买价</span><strong>{trial.purchasePrice ?? "不可用"}</strong><small>{trial.moneyUnit ?? "金额单位未发布"}</small></div>
+          {trial.priceWarning ? <div className="rule-inline-error"><AlertTriangle size={16} />{trial.priceWarning.code} · {trial.priceWarning.state === "ACKNOWLEDGED" ? "已确认" : "发布前必须确认"}</div> : null}
           <span className="rule-badge warning">非正式 · 不得用于 Store</span>
           <div className="pricing-trace-table">
             {trial.trace.map((entry) => <div key={entry.sequence}><span>{entry.sequence}</span><strong>{entry.formulaStep}</strong><span>{entry.before}</span><span>{entry.operation}</span><span>{entry.operand}</span><span>{entry.after}</span><small>{sourceLabel(entry.source)} · {entry.inputStatus}</small></div>)}

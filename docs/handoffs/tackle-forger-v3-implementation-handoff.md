@@ -360,10 +360,10 @@ Affinity轴与v3固定为：
 - 回写前显示影响范围、规则版本、冲突和预计变化。
 - 写回记录与回读结果进入审计；写回后必须由用户显式拉取、校验并发布RuleSetVersion，规则才生效。
 - 读取工作簿时先按`sheet_id`校验关键页，再以显式revision生成`FeishuSourceRevision`；`?sheet=`仅是界面锚点。
-- revision `2869`中，`07_品质评分/FqD4j7`提供品质区间、词条组合分、Quality→PricingBasket和价格系数区间；`08_价格计算/u87sRh`提供业务公式、线性插值、重量段查表、零整比、金币、舍入和价格边界。两页必须按同一revision导入为一个PricingPolicyDraft，领域内核负责确定性计算和单元格级Trace。
+- revision `2869`中，`07_品质评分/FqD4j7`提供品质区间、词条组合分和价格系数区间；`08_价格计算/u87sRh`提供业务公式、线性插值、重量段查表、零整比、金币、舍入和价格边界。两页必须按同一revision导入为一个PricingPolicyDraft，领域内核负责确定性计算和单元格级Trace。
 - 组合分按同部位无序词条对计算一次；Technology成员与直接词条先按affixId去重。价值分只再乘`FunctionProfile.scoreFactor`，不得读取Performance乘数。S包含100，两个价格分别最终舍入，购买价使用未舍入维修价，最低价100作用于舍入后的购买价，超300M使用可追踪WARNING二次确认。飞书机器源和新runtime尚未落实时必须准确标记`NON_FORMAL`，不能恢复旧的“全局缺参”判断，也不能自行改回error/clamp。
 - 超限确认必须绑定Issue fingerprint、Model revision、PricingPolicyVersion、inputHash、Raw/舍入/最终价格、阈值、确认人、时间和理由；任一绑定输入变化后旧确认STALE。Snapshot冻结确认引用。若目标字段不能表示真实价格，另产不可确认的EXPORT BLOCKER。
-- 领域品质仍是C/绿、B/蓝、A/紫、S/橙；映射为C→跑刀、B→稳健、A→猛攻、S→猛攻。PricingBasket是独立价格分组。
+- 领域品质仍是C/绿、B/蓝、A/紫、S/橙；定价查表直接按`pricingWeightBandId`与`partId`唯一定位，不再经过品质分组中间层，品质差异由各自的评分插值系数区间体现。
 
 验收：旧快照在上游规则变化后字节级或语义级保持不变；升级候选可并列对比；重生成和对象改名不会丢失Patch；飞书重复同步不追加重复行；个案Patch可在Patch台账追踪，但不会自动污染飞书通用规则。
 
@@ -680,7 +680,7 @@ upsert必须使用稳定`ID + configNameKey`：同名不同ID、同ID不同名�
 
 配置治理动作必须进入第24节统一`CapabilityCode`、`ActionCode`、`ActionAvailability`和`ActionLink.action`。所有状态写动作（含warning确认、waiver申请/批准、重算、规则源变更草稿和`rebase_patch`）启用时返回绑定action、subject、expected revision和hash的不可篡改payload引用；问题处置联合只保留导航、查看证据和帮助。旧`approve_waiver/request_waiver/retry`不得成为绕过路径：迁移必须从可信历史完整重建并校验目标动作所需的fingerprint、revision、reason、Gate、必要的环境×渠道及幂等payload，缺任一字段均以`LEGACY_ACTION_ALIAS_UNRESOLVABLE`禁用。`open_rebase`只在可信历史证明从未执行Rebase且可恢复明确路由时转为`navigate`；任何写语义、歧义或证据不足都以`LEGACY_ACTION_ALIAS_UNRESOLVABLE`拒绝，不得转为`rebase_patch`。缺权限、revision过期、Manifest stale或治理租约不可用时返回禁用原因且不返回payload，命令端仍须重新鉴权。
 
-OPEN-007的产品语义已经确定：S包含100且大于100报错；Performance不参与价值分；维修价和购买价使用未舍入中间值并分别在最终输出舍入；购买价使用未舍入维修价；最低价100在购买价舍入后应用；`purchasePriceRaw`超过300M产生PUBLISH WARNING，二次确认后保留真实价格和标记继续。实现必须以新的`PricingExecutionPolicy`和fingerprint确认记录表达，不能继续用单个`roundingStage/minimumPriceScope/overflowMode`冒充完整契约。当前飞书机器源与runtime更新完成前，旧实现仍只可提供`NON_FORMAL`试算；不得手填价格、静默把旧`error/clamp`迁成新确认，或改写旧PricingPolicyVersion/Snapshot。
+OPEN-007的产品语义已经确定：S包含100且大于100报错；Performance不参与价值分；维修价和购买价使用未舍入中间值并分别在最终输出舍入；购买价使用未舍入维修价；最低价100在购买价舍入后应用；`purchasePriceRaw`超过300M产生PUBLISH WARNING，二次确认后保留真实价格和标记继续。实现已以新的`PricingExecutionPolicy`和fingerprint确认记录表达，不能继续用单个`roundingStage/minimumPriceScope/overflowMode`冒充完整契约。飞书机器源更新完成前，旧实现仍只可提供`NON_FORMAL`试算；不得手填价格、静默把旧`error/clamp`迁成新确认，或改写旧PricingPolicyVersion/Snapshot。
 
 ### 19.4 必测
 

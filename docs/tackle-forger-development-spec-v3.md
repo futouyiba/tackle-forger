@@ -827,7 +827,7 @@ interface ModelAffixValueAssessment {
 
 Quality本身不直接修改面板。属性平衡预算判断数值是否全优，价值分判断词条价值是否符合已选品质，二者不得合并。
 
-校验使用统一`ValidationIssue(source="quality")`，品质不匹配代码为`QUALITY_SCORE_OUT_OF_RANGE`、矩阵冲突为`QUALITY_COMBINATION_CONFLICT`、旧源边界未更新为`QUALITY_RANGE_SOURCE_OUTDATED`，均至少携带Model、所选Quality、最终评分、命中区间、规则版本、源单元格和`ActionLink`。规则源结构或矩阵冲突可另产生`source="data_integrity"`的父Issue；不得把品质校验问题混入PricingBasket或价格计算问题。正常路径为选品质→选词条/Technology→组合计分→功能系数计分→品质校验→定价；边界覆盖区间端点、负分、空词条集、评分100和大于100；冲突保留草稿及Trace；源表修复后通过显式“拉取”生成新策略草稿并重算；查看、编辑词条、发布规则和发布Model分别鉴权。
+校验使用统一`ValidationIssue(source="quality")`，品质不匹配代码为`QUALITY_SCORE_OUT_OF_RANGE`、矩阵冲突为`QUALITY_COMBINATION_CONFLICT`、旧源边界未更新为`QUALITY_RANGE_SOURCE_OUTDATED`，均至少携带Model、所选Quality、最终评分、命中区间、规则版本、源单元格和`ActionLink`。规则源结构或矩阵冲突可另产生`source="data_integrity"`的父Issue；不得把品质校验问题混入价格计算问题。正常路径为选品质→选词条/Technology→组合计分→功能系数计分→品质校验→定价；边界覆盖区间端点、负分、空词条集、评分100和大于100；冲突保留草稿及Trace；源表修复后通过显式“拉取”生成新策略草稿并重算；查看、编辑词条、发布规则和发布Model分别鉴权。
 
 验收：Given C品质Model的去重词条分为15、组合分为3、功能评分系数为1.03，When 计算，Then 最终评分为18.54且Trace中没有Performance乘数；Given 轻量与增重同时存在，When 组合计分，Then `-20`只计一次；Given S品质评分为100且规则源已按本决策更新，When 校验，Then命中S；Given评分100.01，When校验，Then返回`QUALITY_SCORE_OUT_OF_RANGE`且不夹取或外推；Given飞书仍提供`[65,100)`，When导入，Then返回`QUALITY_RANGE_SOURCE_OUTDATED`并保留旧源证据。
 
@@ -1722,32 +1722,32 @@ Manifest失效后，旧`ConfigIdPolicyVersion`只保留历史审计用途，不�
 
 本节语义已经由2026-07-23用户决定，决策证据见`docs/audits/open-007-pricing-semantics-adr.md`。`OPEN-007`继续跟踪飞书机器源、schema、迁移和运行时落地，不再表示产品执行语义未决，也不得继续要求用户在阻断、封顶或性能乘数之间重复选择。
 
-定价权威来源是主工作簿`07_品质评分/FqD4j7`与`08_价格计算/u87sRh`的联合策略。revision `2869`中，07提供品质区间、Quality→PricingBasket映射和品质内最小/最大价格系数；08提供业务公式、评分插值、重量段查表、零整比、货币、舍入和价格边界。两页必须按同一`FeishuSourceRevision`导入为一个`PricingPolicyDraft`，禁止跨revision拼接。
+定价权威来源是主工作簿`07_品质评分/FqD4j7`与`08_价格计算/u87sRh`的联合策略。revision `2869`中，07提供品质区间和品质内最小/最大价格系数；08提供业务公式、评分插值、重量段查表、零整比、货币、舍入和价格边界。两页必须按同一`FeishuSourceRevision`导入为一个`PricingPolicyDraft`，禁止跨revision拼接。
 
 ```text
 维修价格(part)
-= 维修消耗速度(pricingWeightBandId, pricingBasketId)
+= 维修消耗速度(pricingWeightBandId)
 × 部位占比(part, pricingWeightBandId)
 × 维修系数(part, Type)
-× 全损时间(part, pricingWeightBandId, pricingBasketId)
+× 全损时间(part, pricingWeightBandId)
 × 评分插值系数(finalValueScore, Quality, PricingPolicyVersion)
 
 购买价格(part)
 = 维修价格(part)
 × 购买系数(part, Type)
-÷ 零整比(part, pricingWeightBandId, pricingBasketId, PricingPolicyVersion)
+÷ 零整比(part, pricingWeightBandId, PricingPolicyVersion)
 ```
 
-`维修系数`和`购买系数`来自`02_类型材质/fATowU`；当前竿、轮、线种子值均为`1`，仍须按普通版本化输入处理，不能在代码中省略。`pricingWeightBandId`默认取Model最近结构标杆所引用的源重量段ID，必须进入Trace，禁止按最终拉力重新做第二套隐式分段。表中的“跑刀/稳健/猛攻”在领域中建模为独立`PricingBasket`，不得复用Performance、Function或Quality枚举。
+`维修系数`和`购买系数`来自`02_类型材质/fATowU`；当前竿、轮、线种子值均为`1`，仍须按普通版本化输入处理，不能在代码中省略。`pricingWeightBandId`默认取Model最近结构标杆所引用的源重量段ID，必须进入Trace，禁止按最终拉力重新做第二套隐式分段。定价查表直接按`pricingWeightBandId`与`partId`唯一定位，不再经过任何品质分组中间层；品质差异完全由各自的评分插值系数区间体现。
 
-当前映射为`C/绿→跑刀`、`B/蓝→稳健`、`A/紫→猛攻`、`S/橙→猛攻`。领域品质仍固定为`C/绿、B/蓝、A/紫、S/橙`；导入器必须通过版本化`QualityPricingBasketMapping`显式映射，并对缺失、重复或未知映射阻断。PricingBasket是价格策略分组，不代表品质高低；A与S共享猛攻篮子，但通过各自的价格系数区间继续形成不同价格。
+领域品质仍固定为`C/绿、B/蓝、A/紫、S/橙`；导入器必须通过版本化`QualityPricingMapping`显式记录每个品质在`07_品质评分`中的来源单元格，并对缺失或重复映射阻断。A与S即使落在同一重量段、同一部位，也通过各自的价格系数区间继续形成不同价格。
 
 当前表中的业务公式是说明文本，查表参数是静态单元格值，不是可执行单元格公式。工具必须将其导入为`PricingPolicyDraft`后在领域内核中确定性计算，不依赖浏览器打开表格或飞书公式重算。每项定价Trace至少记录源revision、sheet_id、单元格/行键、输入值、查表命中、乘除步骤、未舍入值、舍入结果和警告。
 
 revision `2869`已经显式提供以下数值输入；其中与本节新决定冲突的说明文本只作为历史源证据，必须由后续飞书revision修订：
 
 - 评分系数在所选品质区间内线性插值：`Lerp(minPriceFactor, maxPriceFactor, (finalValueScore-minScore)/(maxScore-minScore))`；
-- 各重量段、PricingBasket、部位的维修消耗速度、部位占比、全损时间和零整比；
+- 各重量段、部位的维修消耗速度、部位占比、全损时间和零整比；
 - 货币单位为金币；数值源声明“三位有效数字向下取整”、最低价格100和价格阈值300,000,000；具体执行顺序、作用域和阈值确认动作按本节已决契约解释；
 - 定价重量段策略为`MATCHED_STRUCTURAL_SOURCE_BAND`，沿用结构标杆命中的源重量段，不做连续插值。
 
@@ -1803,11 +1803,11 @@ interface PricingWarningAcknowledgement {
 
 确认记录至少冻结Issue fingerprint、Model revision、PricingPolicyVersion、inputHash、`purchasePriceRaw/purchasePriceRounded/purchasePrice`、阈值、确认人、时间和理由。输入、Model revision、PricingPolicyVersion、任一价格或fingerprint变化后旧Issue/确认转为`STALE`，不得按相同code自动沿用。确认动作必须由服务端返回`acknowledge_price_warning`，要求`pricing.warning.acknowledge`能力，并在提交时重验Issue仍为OPEN且fingerprint一致。Snapshot冻结超限标记与确认引用；导出同一冻结Snapshot时验证引用和数值一致，不重复要求确认。若目标配置字段、Excel schema或游戏编译器无法表示实际价格，则另产生`source=config_relationship|data_integrity`、`severity=BLOCKER`、`gate=EXPORT`的不可确认问题；二次确认不能绕过数据表示能力。
 
-PricingPolicyDraft只有在以下校验全部通过后才能发布：品质区间互斥且无空洞，S包含100且大于100报错；每个Quality恰有一个PricingBasket和一组价格系数；所有启用重量段×篮子×部位均能唯一查表；分母大于0；部位占比合法；不读取Performance评分输入；`PricingExecutionPolicy`完整且来源revision可追踪。飞书机器源、schema与运行时尚未落实本节新契约时，可以继续生成带`NON_FORMAL`标记的旧实现试算，但不得将其发布为符合新契约的PricingPolicyVersion。此前已经发布且输入版本完整的旧PricingPolicyVersion仍只服务其历史Snapshot，不重算。
+PricingPolicyDraft只有在以下校验全部通过后才能发布：品质区间互斥且无空洞，S包含100且大于100报错；每个Quality恰有一条品质定价映射和一组价格系数；所有启用重量段×部位均能唯一查表；分母大于0；部位占比合法；不读取Performance评分输入；`PricingExecutionPolicy`完整且来源revision可追踪。飞书机器源、schema与运行时尚未落实本节新契约时，可以继续生成带`NON_FORMAL`标记的旧实现试算，但不得将其发布为符合新契约的PricingPolicyVersion。此前已经发布且输入版本完整的旧PricingPolicyVersion仍只服务其历史Snapshot，不重算。
 
 正常路径：同revision导入07/08→校验并发布PricingPolicyVersion→以Model最终价值分和结构源重量段计算两个Raw价格→检查软确认阈值→分别舍入→对购买价应用最低价→确认必要WARNING→写入Snapshot和Store预览。边界：S的100合法而大于100报错；零整比不得为0；最低价只作用于舍入后的购买价；阈值比较使用未舍入购买价。冲突：跨revision、重复映射、缺查表、过期源边界或执行策略缺失阻止新策略发布。恢复：修复飞书后显式拉取并生成新Draft，旧PricingPolicyVersion、确认和已发布Snapshot不变。权限：规则拉取、策略发布、价格超限确认、Model发布和配置导出分别鉴权。
 
-验收：Given B品质最终评分30、价格系数区间0.8至1.2，When插值，Then评分插值系数为1.0；Given A与S都映射猛攻，When同重量段同部位计算，Then共享篮子基础参数但分别使用自己的价格系数区间；Given`repairPriceRaw=1234`且购买换算为1.5，When计算并分别舍入，Then维修价为1230、购买价使用未舍入维修价得到1850而不是1840；Given购买价舍入结果80，When应用最低价，Then最终购买价100且维修价不变；Given`purchasePriceRaw`超过300,000,000，When未确认，Then返回可执行确认的WARNING；When确认，Then保留实际价格与超限标记继续；Given随后Model revision或inputHash变化，Then旧确认STALE；Given目标字段无法表示该价格，Then独立EXPORT BLOCKER仍阻止写入。
+验收：Given B品质最终评分30、价格系数区间0.8至1.2，When插值，Then评分插值系数为1.0；Given A与S同重量段同部位，When计算，Then共享同一组查表基准但分别使用自己的价格系数区间；Given`repairPriceRaw=1234`且购买换算为1.5，When计算并分别舍入，Then维修价为1230、购买价使用未舍入维修价得到1850而不是1840；Given购买价舍入结果80，When应用最低价，Then最终购买价100且维修价不变；Given`purchasePriceRaw`超过300,000,000，When未确认，Then返回可执行确认的WARNING；When确认，Then保留实际价格与超限标记继续；Given随后Model revision或inputHash变化，Then旧确认STALE；Given目标字段无法表示该价格，Then独立EXPORT BLOCKER仍阻止写入。
 
 ### 20.2 OPEN-009：AI与发布工作流治理策略
 

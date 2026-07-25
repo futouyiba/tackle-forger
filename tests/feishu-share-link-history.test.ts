@@ -55,7 +55,7 @@ test("schema v19 升级到 v20 时补齐飞书分享链接历史且不改写冻�
   delete legacy.feishuShareLinkHistory;
   const snapshotsBefore = structuredClone(legacy.configurationSnapshots);
   const migrated = migrateWorkspaceState(legacy);
-  assert.equal(migrated.schemaVersion, 20);
+  assert.equal(migrated.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
   assert.deepEqual(migrated.feishuShareLinkHistory, []);
   assert.deepEqual(migrated.configurationSnapshots, snapshotsBefore);
   // 重复迁移幂等
@@ -72,7 +72,7 @@ test("schema v20 保留已有的飞书分享链接历史并过滤非法条目", 
   legacy.feishuShareLinkHistory = [valid, dup, badDataset, noUrl];
   const snapshotsBefore = structuredClone(legacy.configurationSnapshots);
   const migrated = migrateWorkspaceState(legacy);
-  assert.equal(migrated.schemaVersion, 20);
+  assert.equal(migrated.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
   // 去重保留首个合法条目；非法 dataset 与空 URL 被丢弃
   assert.equal(migrated.feishuShareLinkHistory.length, 1);
   assert.equal(migrated.feishuShareLinkHistory[0].shareUrl, SAMPLE_URL_A);
@@ -104,7 +104,9 @@ test("recordShareLinkHistory 按 shareUrl 去重并刷新最近使用时间", ()
   assert.equal(initial[0].label, "A 表");
 });
 
-test("recordShareLinkHistory 新地址置顶并按上限裁剪", () => {
+test("recordShareLinkHistory: legacy /base/ 不参与上限裁剪（数据无损，#157）", () => {
+  // Issue #157 契约：10 条上限只作用于规则源子集；legacy bitable /base/ 原样保留。
+  assert.equal(FEISHU_SHARE_LINK_HISTORY_LIMIT, 10);
   let history: FeishuShareLinkHistoryEntry[] = [];
   for (let i = 0; i < FEISHU_SHARE_LINK_HISTORY_LIMIT + 3; i += 1) {
     history = recordShareLinkHistory(history, {
@@ -113,9 +115,31 @@ test("recordShareLinkHistory 新地址置顶并按上限裁剪", () => {
       dataset: i % 2 === 0 ? "weight_templates" : "modifiers",
     });
   }
-  assert.equal(history.length, FEISHU_SHARE_LINK_HISTORY_LIMIT);
-  // 最新的在前面，超限的最旧条目被丢弃
+  // legacy /base/ 不裁剪，全部保留（最新在前）。
+  assert.equal(history.length, FEISHU_SHARE_LINK_HISTORY_LIMIT + 3);
   assert.equal(history[0].shareUrl, `https://example.feishu.cn/base/token${FEISHU_SHARE_LINK_HISTORY_LIMIT + 2}?table=tbl${FEISHU_SHARE_LINK_HISTORY_LIMIT + 2}`);
+});
+
+test("recordShareLinkHistory: 新增规则源不丢 legacy /base/（reviewer 复现的回归）", () => {
+  // PR #124 时期上限 20，旧工作区可能已写满 20 条 /base/ legacy。
+  let history: FeishuShareLinkHistoryEntry[] = [];
+  for (let i = 0; i < 20; i += 1) {
+    history = recordShareLinkHistory(history, {
+      shareUrl: `https://example.feishu.cn/base/legacy${i}?table=tbl${i}`,
+      label: `legacy ${i}`,
+      dataset: "weight_templates",
+    });
+  }
+  assert.equal(history.length, 20);
+  // 第一次识别规则源 /wiki/：不得静默丢 legacy。
+  history = recordShareLinkHistory(history, {
+    shareUrl: "https://pisn3u3ony2.feishu.cn/wiki/newrule?sheet=main",
+    label: "新规则源",
+    dataset: "weight_templates",
+  });
+  assert.equal(history.length, 21);
+  assert.equal(history.filter((e) => e.shareUrl.includes("/base/")).length, 20);
+  assert.equal(history.filter((e) => e.shareUrl.includes("/wiki/")).length, 1);
 });
 
 test("recordShareLinkHistory 忽略空 shareUrl", () => {
@@ -156,7 +180,7 @@ test("schema v19 迁移剥离历史条目上的 appToken/secret/PII 等额外字
   legacy.schemaVersion = 19;
   legacy.feishuShareLinkHistory = [maliciousEntry(SAMPLE_URL_A)];
   const migrated = migrateWorkspaceState(legacy);
-  assert.equal(migrated.schemaVersion, 20);
+  assert.equal(migrated.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
   assert.equal(migrated.feishuShareLinkHistory.length, 1);
   const projected = migrated.feishuShareLinkHistory[0] as unknown as Record<string, unknown>;
   assert.deepEqual(Object.keys(projected).sort(), ALLOWED_KEYS);
@@ -174,7 +198,7 @@ test("schema v20 直接保存载荷在归一时剥离历史条目上的凭据/PI
   seeded.schemaVersion = 20;
   seeded.feishuShareLinkHistory = [maliciousEntry(SAMPLE_URL_A)];
   const normalized = migrateWorkspaceState(seeded);
-  assert.equal(normalized.schemaVersion, 20);
+  assert.equal(normalized.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
   assert.equal(normalized.feishuShareLinkHistory.length, 1);
   const projected = normalized.feishuShareLinkHistory[0] as unknown as Record<string, unknown>;
   assert.deepEqual(Object.keys(projected).sort(), ALLOWED_KEYS);

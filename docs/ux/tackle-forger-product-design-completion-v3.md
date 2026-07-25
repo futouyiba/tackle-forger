@@ -194,7 +194,7 @@ UpgradeCandidate 只描述“升级会怎样”。批准不改变旧 Snapshot；
 
 问题动作中，导航、查看证据和帮助是无副作用链接；确认warning、申请/批准waiver、重算、Rebase和创建规则源变更草稿必须使用统一`ActionCode`及不可篡改payload，Rebase写命令固定为`rebase_patch`。界面不得发送`approve_waiver`、`request_waiver`、`retry`、`open_rebase`等旧通用动作；旧状态写记录只有从可信历史完整重建fingerprint、revision、reason、Gate、必要环境×渠道和原幂等payload后才能启用，否则显示`LEGACY_ACTION_ALIAS_UNRESOLVABLE`。历史`open_rebase`仅在可信历史证明从未执行Rebase且可恢复明确路由时转为`navigate`；存在写语义、歧义或证据不足时固定显示`LEGACY_ACTION_ALIAS_UNRESOLVABLE`，不得转为`rebase_patch`。重试复用原ActionCode和幂等payload。
 
-价值分与定价执行语义已于2026-07-23确定，`OPEN-007`只继续跟踪飞书机器源和运行时落地。界面按`(去重词条分 + 无序组合分) × FunctionProfile.scoreFactor`展示价值分；不展示Performance乘数。S区间为`[65,100]`，大于100报错。维修价与购买价分别在最终输出阶段做三位有效数字向下取整，购买价使用未舍入维修价，最低价100在购买价舍入后应用。`purchasePriceRaw`超过300,000,000时显示二次确认WARNING；确认后保留实际价格与超限标记，不报ERROR、不BLOCK、不CLAMP。确认卡必须显示阈值、Raw/舍入/最终价格、Model revision、PricingPolicyVersion、理由和确认人；动作由服务端返回，仅在具备`pricing.warning.acknowledge`能力时可执行，提交时重验fingerprint。任一输入变化后旧确认STALE。目标字段无法表达价格时单独显示EXPORT BLOCKER。当前代码和飞书源尚未完成新schema时，只能准确标记为旧契约`NON_FORMAL`，不得冒充已实现，也不提供手填价格兜底。
+价值分与定价执行语义已于2026-07-23确定，`OPEN-007`只继续跟踪飞书机器源和正式策略发布。界面按`(去重词条分 + 无序组合分) × FunctionProfile.scoreFactor`展示价值分；不展示Performance乘数。S区间为`[65,100]`，大于100报错。维修价与购买价分别在最终输出阶段做三位有效数字向下取整，购买价使用未舍入维修价，最低价100在购买价舍入后应用。`purchasePriceRaw`超过300,000,000时显示二次确认WARNING；确认后保留实际价格与超限标记，不报ERROR、不BLOCK、不CLAMP。确认卡必须显示阈值、Raw/舍入/最终价格、Model revision、PricingPolicyVersion、理由和确认人；动作由服务端返回，仅在具备`pricing.warning.acknowledge`能力时可执行，提交时重验fingerprint。任一输入变化后旧确认STALE。目标字段无法表达价格时单独显示EXPORT BLOCKER。运行时已完成新schema；在飞书机器源修订、显式拉取和正式策略发布前，旧契约只能标记为`NON_FORMAL`，不提供手填价格兜底。
 
 ## 12. 六面验收矩阵
 

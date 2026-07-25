@@ -19,6 +19,7 @@ import {
   PricingPolicyDraftPanel,
   QualityValuePolicyPanel,
 } from "./RuleWorkbookGovernancePanels";
+import { FeishuSourceCombobox } from "./FeishuSourceCombobox";
 
 interface RuleWorkbookWorkbenchProps {
   state: WorkspaceState;
@@ -28,6 +29,10 @@ interface RuleWorkbookWorkbenchProps {
   actorName: string;
   onWorkspaceApplied: (state: WorkspaceState, revision: number, message: string) => void;
   notify: (message: string) => void;
+  /** 识别成功后缓存进 feishuShareLinkHistory（本地草稿，不立即保存到服务端）。 */
+  onRecordShareLinkHistory: (shareUrl: string, label: string) => void;
+  /** 从 feishuShareLinkHistory 移除单条（shareUrl）或清空全部（null）。 */
+  onClearShareLinkHistory: (shareUrl: string | null) => void;
 }
 
 type ActionState = "" | "inspect" | "pull" | "draft" | "publish";
@@ -260,6 +265,27 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
         </div>
       </div>
 
+      <div className="card rule-source-combobox-card">
+        <div className="panel-title">
+          <div>
+            <span className="eyebrow">设置 · 规则源地址</span>
+            <h3>飞书表来源</h3>
+            <p>
+              粘贴飞书分享链接（/wiki/ 或 /sheets/）或从用过的地址中选择。本期仅识别并缓存链接，
+              不切换规则源工作簿——仍读取 canonical 常量；切流由 #143 跟踪。
+            </p>
+          </div>
+        </div>
+        <FeishuSourceCombobox
+          history={props.state.feishuShareLinkHistory}
+          availability={inspectAvailability}
+          onRecord={props.onRecordShareLinkHistory}
+          onRemove={(shareUrl) => props.onClearShareLinkHistory(shareUrl)}
+          onClearAll={() => props.onClearShareLinkHistory(null)}
+          notify={props.notify}
+        />
+      </div>
+
       {error ? (
         <div className="card rule-workbook-error">
           <AlertTriangle size={20} />
@@ -387,7 +413,7 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
             {!inspection
               ? "尚未回读当前 PricingPolicyDraft，不能宣称源映射校验通过"
               : qualityMappingIssue
-                ? "品质到 PricingBasket 映射异常"
+                ? "品质定价映射异常"
                 : "品质映射已显式定义，不再是阻断原因"}
           </div>
           <div className="rule-missing-pricing">

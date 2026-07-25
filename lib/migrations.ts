@@ -66,7 +66,7 @@ import { deterministicHash } from "./rule-kernel";
 import { projectShareLinkHistoryEntry } from "./data-sources";
 import { createFiveAxisDispositionCatalogRevision, createFormalFiveAxisVertexSet } from "./five-axis-formal";
 
-export const CURRENT_WORKSPACE_SCHEMA_VERSION = 20;
+export const CURRENT_WORKSPACE_SCHEMA_VERSION = 21;
 
 const DEFAULT_RULE_SETTINGS: WorkspaceRuleSettings = {
   reductionStackingMode: "diminishing_division",
@@ -1564,16 +1564,12 @@ function migrateV18ToV19(input: MutableWorkspace): MutableWorkspace {
   } as MutableWorkspace;
 }
 
+
 function migrateV19ToV20(input: MutableWorkspace): MutableWorkspace {
   const state = migrateV18ToV19(input);
   const rawHistory = arrayOf<WorkspaceState["feishuShareLinkHistory"][number]>(
     state.feishuShareLinkHistory,
   );
-  // Whitelist-project each entry into { id, shareUrl, label, dataset, lastUsedAt }
-  // and drop every other key (appToken/secret/credential/nonce/session/apikey/
-  // PII/unknown). The history records user-pasted Feishu Bitable share links for
-  // import convenience; it must never carry credentials, tokens or personal
-  // identity. Dedup by shareUrl, keeping the first occurrence.
   const seen = new Set<string>();
   const feishuShareLinkHistory: FeishuShareLinkHistoryEntry[] = [];
   for (const raw of rawHistory) {
@@ -1587,7 +1583,49 @@ function migrateV19ToV20(input: MutableWorkspace): MutableWorkspace {
     ...state,
     schemaVersion: 20,
     feishuShareLinkHistory,
-    // Schema migration must never rewrite a frozen snapshot payload or hash.
+  } as MutableWorkspace;
+}
+
+/**
+ * Pricing v2 is intentionally additive: old execution switches remain opaque
+ * evidence for historical replay and no published Snapshot is recalculated.
+ */
+function migrateV20ToV21(input: MutableWorkspace): MutableWorkspace {
+  const state = migrateV19ToV20(input);
+  const preserveLegacyExecution = (value: unknown) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+    const policy = structuredClone(value) as Record<string, unknown>;
+    if (!policy.executionPolicy && policy.moneyPolicy && typeof policy.moneyPolicy === "object") {
+      const money = policy.moneyPolicy as Record<string, unknown>;
+      policy.legacyExecutionPayload = {
+        roundingStage: money.roundingStage,
+        minimumPriceScope: money.minimumPriceScope,
+        overflowMode: money.overflowMode,
+      };
+    }
+    return policy;
+  };
+  // Pricing v2 formal publication requires a valid executionPolicy.  Legacy
+  // published versions that pre-date executionPolicy cannot be re-published
+  // under v2 semantics, so they are sealed as LEGACY_PUBLISHED evidence rather
+  // than remaining indistinguishable from a currently formal policy.  Drafts
+  // never carry a PUBLISHED status and only retain legacyExecutionPayload.
+  const sealLegacyPublished = (value: unknown) => {
+    const preserved = preserveLegacyExecution(value);
+    if (!preserved || typeof preserved !== "object" || Array.isArray(preserved)) return preserved;
+    const policy = preserved as Record<string, unknown>;
+    if (!policy.executionPolicy && policy.formalStatus === "PUBLISHED") {
+      policy.formalStatus = "LEGACY_PUBLISHED";
+    }
+    return policy;
+  };
+  return {
+    ...state,
+    schemaVersion: 21,
+    pricingPolicyDrafts: arrayOf<WorkspaceState["pricingPolicyDrafts"][number]>(state.pricingPolicyDrafts)
+      .map(preserveLegacyExecution) as WorkspaceState["pricingPolicyDrafts"],
+    pricingPolicyVersions: arrayOf<WorkspaceState["pricingPolicyVersions"][number]>(state.pricingPolicyVersions)
+      .map(sealLegacyPublished) as WorkspaceState["pricingPolicyVersions"],
     configurationSnapshots: arrayOf<WorkspaceState["configurationSnapshots"][number]>(state.configurationSnapshots),
   } as MutableWorkspace;
 }
@@ -1612,6 +1650,7 @@ const migrations: Record<number, (state: MutableWorkspace) => MutableWorkspace> 
   17: migrateV17ToV18,
   18: migrateV18ToV19,
   19: migrateV19ToV20,
+  20: migrateV20ToV21,
 };
 
 export function migrateWorkspaceState(input: unknown): WorkspaceState {

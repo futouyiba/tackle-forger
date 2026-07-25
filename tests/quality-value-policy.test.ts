@@ -48,11 +48,12 @@ function policy(input: {
   matrixCells?: QualityCombinationSourceCell[];
   aliases?: AffixAliasBinding[];
   pricingScoreEndpoints?: Array<{ value: number; status: "SOURCE"; source: { sheetId: string; cell: string } }>;
+  ranges?: QualityValueRange[];
 } = {}) {
   return importQualityValuePolicyDraft({
     sourceRevisionId: `feishu-revision:${REVISION}`,
     sourceRevision: REVISION,
-    ranges,
+    ranges: input.ranges ?? ranges,
     aliases: input.aliases ?? [],
     matrixCells: input.matrixCells ?? [],
     pricingScoreEndpoints: input.pricingScoreEndpoints,
@@ -200,4 +201,39 @@ test("同 revision 的定价端点 score=100 触发品质边界冲突且保留�
   assert.equal(issue?.sourceCell?.sheetId, "u87sRh");
   assert.equal(issue?.sourceCell?.cell, "B179");
   assert.equal(issue?.sourceRevision, REVISION);
+});
+
+const formalRanges: QualityValueRange[] = [
+  ["quality_c_green", 0, 20, false, "E5:F5"],
+  ["quality_b_blue", 20, 40, false, "E6:F6"],
+  ["quality_a_purple", 40, 65, false, "E7:F7"],
+  ["quality_s_orange", 65, 100, true, "E8:F8"],
+].map(([qualityId, minScore, maxScore, maxInclusive, cell]) => ({
+  qualityId: qualityId as QualityValueRange["qualityId"],
+  minScore: Number(minScore),
+  maxScore: Number(maxScore),
+  maxInclusive: Boolean(maxInclusive),
+  status: "SOURCE",
+  source: source("FqD4j7", String(cell)),
+}));
+
+test("S 品质区间下界不为 65 时阻断发布并保留来源 Trace", () => {
+  const tamperedRanges = formalRanges.map((range) =>
+    range.qualityId === "quality_s_orange"
+      ? { ...range, minScore: 64 }
+      : range,
+  );
+  const draft = policy({ ranges: tamperedRanges });
+  const issue = draft.issues.find((entry) => entry.code === "QUALITY_RANGE_SOURCE_OUTDATED");
+  assert.equal(draft.formalStatus, "NON_FORMAL");
+  assert.equal(issue?.sourceCell?.sheetId, "FqD4j7");
+  assert.equal(issue?.sourceCell?.cell, "E8:F8");
+  assert.equal(issue?.sourceRevision, REVISION);
+});
+
+test("S 品质区间为 [65,100] 闭区间时通过校验且可正式发布", () => {
+  const draft = policy({ ranges: formalRanges });
+  const outdated = draft.issues.find((entry) => entry.code === "QUALITY_RANGE_SOURCE_OUTDATED");
+  assert.equal(outdated, undefined);
+  assert.equal(draft.formalStatus, "READY_TO_PUBLISH");
 });

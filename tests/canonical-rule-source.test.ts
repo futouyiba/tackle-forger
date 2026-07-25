@@ -37,12 +37,12 @@ const revision: FeishuSourceRevision = {
 test("重量模板草稿继承 canonical 坏行错误并冻结表头驱动单元格来源", () => {
   const values = [
     ["", "机器ID（勿改）", "同步状态", "钓法", "备注", "重量段", "最小拉力", "最大拉力", "鱼重等级", "竿拉力"],
-    ["", "wtpl_ok", "BOUND", "路亚", "说明", "轻", 1, 2, 3, 10],
+    ["", "wtpl_rod_ok", "BOUND", "路亚", "说明", "轻", 1, 2, 3, 10],
     ["", "", "BOUND", "路亚", "坏行", "中", "", 3, 4, 12],
     ["", "重量段", "最大拉力", "机器ID（勿改）", "最小拉力", "备注", "同步状态", "鱼重等级", "竿拉力"],
-    ["", "重", 6, "wtpl_second", 4, "第二块", "BOUND", 5, 20],
-    ["", "重", "", "wtpl_blank_max", 4, "空最大值", "BOUND", 5, 20],
-    ["", "重", 3, "wtpl_inverted", 4, "倒置区间", "BOUND", 5, 20],
+    ["", "重", 6, "wtpl_rod_second", 4, "第二块", "BOUND", 5, 20],
+    ["", "重", "", "wtpl_rod_blank_max", 4, "空最大值", "BOUND", 5, 20],
+    ["", "重", 3, "wtpl_rod_inverted", 4, "倒置区间", "BOUND", 5, 20],
   ];
   const canonicalRuleDraft = importCanonicalRuleSource({ sourceRevision: revision, ...baseFixture(), weightSources: [{ part: "rod", sheetId: "1cAihB", values }], importedAt: revision.pulledAt });
   const draft = weightTemplateDraftFromCanonicalRuleDraft({ sourceRevision: revision, canonicalRuleDraft, weightSources: [{ part: "rod", sheetId: "1cAihB", values }], importedAt: revision.pulledAt });
@@ -56,7 +56,7 @@ test("重量模板草稿继承 canonical 坏行错误并冻结表头驱动单元
     machineId: "B2", fishMinKg: "G2", fishMaxKg: "H2", nominalFishKg: "G2:H2", weightBand: "F2",
     "机器ID（勿改）": "B2", "同步状态": "C2", "钓法": "D2", "备注": "E2", "重量段": "F2", "最小拉力": "G2", "最大拉力": "H2", "鱼重等级": "I2", "竿拉力": "J2",
   });
-  assert.deepEqual(draft.templates.find((template) => template.id.startsWith("wtpl_second"))?.source.cells, {
+  assert.deepEqual(draft.templates.find((template) => template.id.startsWith("wtpl_rod_second"))?.source.cells, {
     machineId: "D5", fishMinKg: "E5", fishMaxKg: "C5", nominalFishKg: "E5:C5", weightBand: "B5",
     "重量段": "B5", "最大拉力": "C5", "机器ID（勿改）": "D5", "最小拉力": "E5", "备注": "F5", "同步状态": "G5", "鱼重等级": "H5", "竿拉力": "I5",
   });
@@ -83,9 +83,10 @@ function baseFixture() {
     weightSources: [parted("rod", "weight", [[], weightHeader,
       row({ 1: "wtpl_rod_0001", 2: "BOUND", 3: "路亚", 4: "源备注", 5: "W01", 6: 0.1, 7: 1.5, 8: 1, 9: 10, 10: 8, 11: 30, 12: "快" }),
       row({ 1: "wtpl_rod_0002", 2: "BOUND", 3: "浮钓", 5: "W01", 6: 0.1, 7: 1.5, 8: 1, 9: 9, 10: 7, 11: 28, 12: "中" }),
-    ])],
+    ]), parted("reel", "weight", [[]]), parted("line", "weight", [[]])],
     typeSources: [
       parted("rod", "type", [[], typeHeader, row({ 1: "type_rod_0001", 2: "RodType", 3: "W01", 4: "路亚", 5: "路亚直柄竿", 6: 1.1, 7: 0.9 })]),
+      parted("reel", "type", [[]]),
       parted("line", "type", [[], row({ 1: "机器ID（勿改）", 2: "实体类型", 3: "重量段", 4: "钓法", 5: "具体类型", 6: "线拉力" }), row({ 1: "type_line_0001", 2: "LineType", 3: "W01", 4: "-", 5: "尼龙线", 6: 1.05 })]),
     ],
     functionProfileValues,
@@ -204,7 +205,7 @@ test("空表或重复稳定 ID 时 fail closed，不覆盖当前正式可用数�
   assert.equal(initial.templates[0].id, "T01");
 
   const empty = importCanonicalRuleSource({ sourceRevision: revision, weightSources: [], typeSources: [], functionSources: [], importedAt: revision.pulledAt });
-  assert.deepEqual(empty.issues.filter((issue) => issue.level === "error").map((issue) => issue.code).sort(), ["FUNCTION_PROFILE_EMPTY", "FUNCTION_RULE_MEMBER_SET_MISMATCH", "ITEM_TYPE_EMPTY", "WEIGHT_TEMPLATE_EMPTY"]);
+  assert.deepEqual(empty.issues.filter((issue) => issue.level === "error").map((issue) => issue.code).sort(), ["FUNCTION_PART_SOURCE_MISSING", "FUNCTION_PART_SOURCE_MISSING", "FUNCTION_PART_SOURCE_MISSING", "FUNCTION_PROFILE_EMPTY", "FUNCTION_RULE_MEMBER_SET_MISMATCH", "ITEM_TYPE_EMPTY", "TYPE_PART_SOURCE_MISSING", "TYPE_PART_SOURCE_MISSING", "TYPE_PART_SOURCE_MISSING", "WEIGHT_PART_SOURCE_MISSING", "WEIGHT_PART_SOURCE_MISSING", "WEIGHT_PART_SOURCE_MISSING", "WEIGHT_TEMPLATE_EMPTY"]);
 
   const missingId = fixture();
   missingId.weightSources[0].values.push(row({ 3: "路亚", 5: "W02", 6: 2, 7: 3 }));

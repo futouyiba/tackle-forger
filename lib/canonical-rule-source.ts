@@ -294,7 +294,7 @@ function parseWeight(input: {
       templateKinds.set(id, source.part);
     }
   }
-  if (!templates.length) for (const source of input.sources) input.issues.push({ level: "error", code: "WEIGHT_TEMPLATE_EMPTY", message: `01_重量模板 ${source.sheetId} 没有可导入记录。`, sheetId: source.sheetId });
+  if (!templates.length) input.issues.push({ level: "error", code: "WEIGHT_TEMPLATE_EMPTY", message: "01_重量模板没有可导入记录。", sheetId: input.sources[0]?.sheetId ?? CANONICAL_RULE_RANGES.weight.rod });
   return { templates, attributeHeaders, templateKinds };
 }
 
@@ -399,7 +399,7 @@ function parseTypes(input: { sources: PartedRuleSource[]; sourceRevisionId: stri
       modifiers.push({ id, dimension, name, level: 1, itemKinds: [kind], methodIds: methods, rules: structuredClone(rules), notes: `来自飞书 02_类型材质 ${source.sheetId} 第 ${sourceRow} 行。`, enabled: true });
     }
   }
-  if (!profiles.length) for (const source of input.sources) input.issues.push({ level: "error", code: "ITEM_TYPE_EMPTY", message: `02_类型材质 ${source.sheetId} 没有可导入记录。`, sheetId: source.sheetId });
+  if (!profiles.length) input.issues.push({ level: "error", code: "ITEM_TYPE_EMPTY", message: "02_类型材质没有可导入记录。", sheetId: input.sources[0]?.sheetId ?? CANONICAL_RULE_RANGES.type.rod });
   return { profiles, modifiers };
 }
 
@@ -550,7 +550,7 @@ function parseFunctions(input: { sources: PartedRuleSource[]; profiles: Map<stri
     profiles.push({ id: groupId, name: parent.name, status: parent.status, supportedIntensities: parent.supportedIntensities, rules: [], intensityRules: group.map((row) => ({ intensity: row.intensity, itemPartId: row.itemPartId, rules: structuredClone(row.rules), sourceRowId: row.id })), enabled: parent.status.toUpperCase() !== "DISABLED", sourceRevisionId: input.sourceRevisionId, notes: "父级来自飞书 04.0；成员规则来自 04_功能定位。" });
     for (const row of group) modifiers.push({ id: row.id, dimension: "function", name: parent.name, level: row.intensity, itemKinds: [row.itemPartId.slice(5) as ItemKind], rules: structuredClone(row.rules), notes: `来自飞书 04_功能定位第 ${row.sourceRow} 行；父级 ${groupId}。`, enabled: true });
   }
-  if (!rows.length) for (const source of input.sources) input.issues.push({ level: "error", code: "FUNCTION_PROFILE_EMPTY", message: `04_功能定位 ${source.sheetId} 没有可导入记录。`, sheetId: source.sheetId });
+  if (!rows.length) input.issues.push({ level: "error", code: "FUNCTION_PROFILE_EMPTY", message: "04_功能定位没有可导入记录。", sheetId: input.sources[0]?.sheetId ?? CANONICAL_RULE_RANGES.function.rod });
   return { profiles, modifiers };
 }
 
@@ -568,10 +568,12 @@ export function importCanonicalRuleSource(input: {
   const issues: CanonicalRuleSourceIssue[] = [];
   // finding 1 修复（Opus BLOCKER）：入口校验 part↔sheetId 映射——每个概念组必须精确覆盖三 part，
   // 且 source.sheetId 匹配 CANONICAL_RULE_RANGES[group][part]。防止调用方组装错误导致部位静默错位。
-  const validatePartedSources = (group: "weight" | "type" | "function" | "method", sources: PartedRuleSource[]) => {
+  const validatePartedSources = (group: "weight" | "type" | "function" | "method", sources: PartedRuleSource[] | undefined, required = true) => {
+    if (!required && (!sources || sources.length === 0)) return;
+    const resolvedSources = sources ?? [];
     for (const part of CANONICAL_ITEM_PARTS) {
       const expectedSheetId = CANONICAL_RULE_RANGES[group][part];
-      const matches = sources.filter((source) => source.part === part);
+      const matches = resolvedSources.filter((source) => source.part === part);
       if (matches.length === 0) {
         issues.push({ level: "error", code: `${group.toUpperCase()}_PART_SOURCE_MISSING`, message: `${group} 缺少 ${part} 部位子表 source（期望 ${expectedSheetId}）。`, sheetId: expectedSheetId });
       }
@@ -585,7 +587,7 @@ export function importCanonicalRuleSource(input: {
   validatePartedSources("weight", input.weightSources);
   validatePartedSources("type", input.typeSources);
   validatePartedSources("function", input.functionSources);
-  validatePartedSources("method", input.methodSources ?? []);
+  validatePartedSources("method", input.methodSources, false);
   const weight = parseWeight({ sources: input.weightSources, sourceRevisionId: input.sourceRevision.id, issues });
   const importedMethods = parseMethods({ sources: input.methodSources ?? [], sourceRevisionId: input.sourceRevision.id, issues });
   const enabledKinds = new Set(weight.templateKinds.values());

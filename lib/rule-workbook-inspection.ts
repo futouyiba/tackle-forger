@@ -232,8 +232,8 @@ export function identityRowsFromRanges(
           return [{ sheetId: spec.sheetId, rowKey: `${sourceRow}:${part}`, displayName: `FunctionPartGroup · ${part} · 第 ${sourceRow} 行`, entityType: "FunctionPartGroup", stableId, idColumnKey: ["Q", "R", "S"][columnIndex]! }];
         });
       }
-      // 04.0 父级常量表第一行是表头，跳过。
-      if (spec.fixedEntityType === "FunctionProfile" && spec.range === "A1:S" && index === 0) return [];
+      // 04.0 父级常量表第一行是表头，跳过（兼容新 spec A1:S 与 LEGACY A1:S8）。
+      if (spec.fixedEntityType === "FunctionProfile" && spec.range.startsWith("A1:S") && index === 0) return [];
       const stableId = text(values[0]);
       const adjacentValue = text(values[1]);
       if (!stableId && !adjacentValue) return [];
@@ -443,14 +443,19 @@ export function weightTemplateDraftFromCanonicalRuleDraft(input: { sourceRevisio
   // finding 3 修复（Opus MAJOR）：恢复精确单元格 provenance。按 weightSources 的 sourceSheetId + 表头解析字段→列坐标，
   // template.cells 冻结 machineId/min/max/band/属性列；issue 按实际错误字段选 cell（不再统一 B<row>）。
   const columnName = (index: number) => { let name = ""; for (let current = index + 1; current > 0; current = Math.floor((current - 1) / 26)) name = String.fromCharCode(65 + (current - 1) % 26) + name; return name; };
-  const headersBySheet = new Map<string, string[]>();
+  // 收集每张子表的所有表头块（分表单块；旧合并表 fixture 可能多块），按 headerRow 索引。
+  const headerBlocksBySheet = new Map<string, Array<{ headerRow: number; headers: string[] }>>();
   for (const source of input.weightSources) {
-    for (const row of source.values) {
-      if (row.some((value) => text(value).includes("机器ID"))) { headersBySheet.set(source.sheetId, row.map(text)); break; }
-    }
+    const blocks: Array<{ headerRow: number; headers: string[] }> = [];
+    source.values.forEach((row, index) => {
+      if (row.some((value) => text(value).includes("机器ID"))) blocks.push({ headerRow: index + 1, headers: row.map(text) });
+    });
+    headerBlocksBySheet.set(source.sheetId, blocks);
   }
   const cellsForRow = (sheetId: string, sourceRow: number) => {
-    const headers = headersBySheet.get(sheetId) ?? [];
+    // 按 sourceRow 找最近的前置表头块（旧合并表多块支持；分表单块时即唯一表头）。
+    const blocks = headerBlocksBySheet.get(sheetId) ?? [];
+    const headers = [...blocks].reverse().find((block) => block.headerRow < sourceRow)?.headers ?? blocks[0]?.headers ?? [];
     const headerIndex = (...labels: string[]) => headers.findIndex((header) => labels.some((label) => header === label || header.includes(label)));
     const cells: Record<string, string> = {};
     const bind = (key: string, ...labels: string[]) => { const index = headerIndex(...labels); if (index >= 0) cells[key] = `${columnName(index)}${sourceRow}`; };
@@ -467,8 +472,14 @@ export function weightTemplateDraftFromCanonicalRuleDraft(input: { sourceRevisio
     const sheetId = issue.sheetId ?? "";
     const sourceRow = issue.row ?? 0;
     const cells = cellsForRow(sheetId, sourceRow);
+    const source = input.weightSources.find((s) => s.sheetId === sheetId);
+    const valueRow = sourceRow > 0 ? source?.values[sourceRow - 1] ?? [] : [];
+    const columnIndex = (cellRef?: string) => { if (!cellRef) return -1; const match = cellRef.match(/^[A-Z]+/); if (!match) return -1; return match[0].split("").reduce((acc, ch) => acc * 26 + (ch.charCodeAt(0) - 64), 0) - 1; };
+    const numericAt = (cellRef?: string) => { const index = columnIndex(cellRef); if (index < 0) return undefined; const raw = valueRow[index]; if (raw === "" || raw === null || raw === undefined) return undefined; const parsed = Number(raw); return Number.isFinite(parsed) ? parsed : undefined; };
+    const minVal = numericAt(cells.fishMinKg);
+    const maxVal = numericAt(cells.fishMaxKg);
     const cell = issue.code.includes("ID_") ? cells.machineId
-      : issue.code.includes("ROW_INVALID") ? (cells.fishMinKg && cells.fishMaxKg ? `${cells.fishMinKg}:${cells.fishMaxKg}` : cells.fishMinKg ?? cells.fishMaxKg ?? cells.machineId ?? `A${sourceRow}`)
+      : issue.code.includes("ROW_INVALID") ? (minVal === undefined ? cells.fishMinKg : maxVal === undefined ? cells.fishMaxKg : `${cells.fishMinKg}:${cells.fishMaxKg}`)
       : cells.machineId ?? `A${sourceRow}`;
     issues.push({ code: issue.code, severity: issue.level === "error" ? "ERROR" : "WARNING", message: issue.message, sourceCell: { sheetId, cell: cell ?? `A${sourceRow}` } });
   }

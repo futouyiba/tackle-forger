@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createFormalFiveAxisViewDefinition } from "../lib/five-axis-formal";
 import { FiveAxisPublicationError, publishFormalFiveAxisDefinition } from "../lib/five-axis-publication";
-import { CANONICAL_FEISHU_WORKBOOK, pullFeishuWorkbookRevision } from "../lib/feishu-workbook";
+import { LEGACY_YS_EKW_FEISHU_WORKBOOK, LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY, pullFeishuWorkbookRevision } from "../lib/feishu-workbook";
 import { createSeedState } from "../lib/seed";
 import { weightTemplate4837A1Ae54 as weightFixture } from "./fixtures/five-axis-weight-template-4837";
 
@@ -23,7 +23,7 @@ function decidedWeightFixture() {
 
 async function productionState(values = decidedWeightFixture()) {
   const state = createSeedState({ mode: "production" });
-  const source = await pullFeishuWorkbookRevision({ workbook: CANONICAL_FEISHU_WORKBOOK, pulledAt: "2026-07-24T00:00:00.000Z", pulledBy: "tester", adapter: {
+  const source = await pullFeishuWorkbookRevision({ workbook: LEGACY_YS_EKW_FEISHU_WORKBOOK, registry: LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY, pulledAt: "2026-07-24T00:00:00.000Z", pulledBy: "tester", adapter: {
     resolveWorkbook: async () => ({ spreadsheetToken: "redacted", sourceRevision: "4837", sheets: [{ sheetId: "d6e928", name: "01_重量模板", rowCount: 54, columnCount: 31 }] }),
     readRanges: async () => [{ sheetId: "d6e928", range: "A1:AE54", revision: "4837", values }],
   } });
@@ -48,13 +48,13 @@ test("精确六段来源冻结名称/边界，并对篡改 fail-closed", async (
   assert.equal(policy.bands[5]!.upperBoundKg, null);
   const changedEverywhere = decidedWeightFixture();
   for (const row of [4, 22, 40]) { changedEverywhere[row]![6] = "3.9"; changedEverywhere[row + 1]![5] = "3.9"; }
-  await assert.rejects(() => pullFeishuWorkbookRevision({ workbook: CANONICAL_FEISHU_WORKBOOK, pulledAt: "2026-07-24T00:00:00.000Z", pulledBy: "tester", adapter: {
+  await assert.rejects(() => pullFeishuWorkbookRevision({ workbook: LEGACY_YS_EKW_FEISHU_WORKBOOK, registry: LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY, pulledAt: "2026-07-24T00:00:00.000Z", pulledBy: "tester", adapter: {
     resolveWorkbook: async () => ({ spreadsheetToken: "redacted", sourceRevision: "4837", sheets: [{ sheetId: "d6e928", name: "01_重量模板", rowCount: 54, columnCount: 31 }] }),
     readRanges: async () => [{ sheetId: "d6e928", range: "A1:AE54", revision: "4837", values: changedEverywhere }],
   } }), /FIVE_AXIS_WEIGHT_BAND_POLICY_SOURCE_INVALID/);
   const malformed = decidedWeightFixture();
   malformed[20]![6] = "3.9";
-  await assert.rejects(() => pullFeishuWorkbookRevision({ workbook: CANONICAL_FEISHU_WORKBOOK, pulledAt: "2026-07-24T00:00:00.000Z", pulledBy: "tester", adapter: {
+  await assert.rejects(() => pullFeishuWorkbookRevision({ workbook: LEGACY_YS_EKW_FEISHU_WORKBOOK, registry: LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY, pulledAt: "2026-07-24T00:00:00.000Z", pulledBy: "tester", adapter: {
     resolveWorkbook: async () => ({ spreadsheetToken: "redacted", sourceRevision: "4837", sheets: [{ sheetId: "d6e928", name: "01_重量模板", rowCount: 54, columnCount: 31 }] }),
     readRanges: async () => [{ sheetId: "d6e928", range: "A1:AE54", revision: "4837", values: malformed }],
   } }), /FIVE_AXIS_WEIGHT_BAND_POLICY_SOURCE_INVALID/);

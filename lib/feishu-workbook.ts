@@ -414,9 +414,18 @@ export async function pullFeishuWorkbookRevision(input: {
   const remote = await input.adapter.resolveWorkbook(input.workbook);
   if (!remote.sourceRevision.trim()) throw new Error("飞书未返回工作簿 revision。");
   const issues = validateSheetRegistry(registry, remote.sheets);
-  // PR2b-2 待改：五轴 W 重量段策略将从旧 d6e928 单表（竿3-18/轮21-36/线39-54）切到
-  // 1cAihB+2KCCHR+3FYijT 三子表。WQ8w 新表无 d6e928，PR2b-1 临时降级为不读取 W 段策略
-  // （不阻断 pull，也不注入 fiveAxisWeightBandPolicy）；PR2b-2 实现三子表读取 + policyId + contentHash 契约。
+  // PR2b-2 待改：WQ8w 新表无 d6e928（W 段策略将切到 1cAihB+2KCCHR+3FYijT 三子表）。
+  // PR2b-1 条件保留旧 d6e928 读取：仅当远端含 d6e928（LEGACY YsEKw 拓扑）时按旧契约读取并注入
+  // fiveAxisWeightBandPolicy；WQ8w（无 d6e928）跳过，不阻断 pull。PR2b-2 实现三子表 + policyId + hash。
+  const hasLegacyWeightSheet = remote.sheets.some((sheet) => sheet.sheetId === "d6e928");
+  const policyRanges = hasLegacyWeightSheet && input.adapter.readRanges
+    ? await input.adapter.readRanges({ spreadsheetToken: remote.spreadsheetToken, requests: [{ sheetId: "d6e928", range: "A1:AE54" }] })
+    : undefined;
+  const policyRange = policyRanges?.find((entry) => entry.sheetId === "d6e928" && entry.range === "A1:AE54");
+  if (policyRanges && (!policyRange || policyRange.revision !== remote.sourceRevision)) throw new Error("FIVE_AXIS_WEIGHT_BAND_POLICY_SOURCE_INVALID：未读取到同一 revision 的 d6e928 机器区。");
+  const fiveAxisWeightBandPolicy = policyRange
+    ? parseFiveAxisWeightBandPolicyFromWeightTemplate({ sourceRevision: remote.sourceRevision, values: policyRange.values })
+    : undefined;
   const content = {
     workbookRefId: input.workbook.id,
     sourceRevision: remote.sourceRevision,
@@ -428,6 +437,7 @@ export async function pullFeishuWorkbookRevision(input: {
     registryHash: deterministicHash(registry),
     sheets: structuredClone(remote.sheets),
     issues,
+    ...(fiveAxisWeightBandPolicy ? { fiveAxisWeightBandPolicy, fiveAxisWeightBandPolicyContentHash: fiveAxisWeightBandPolicy.contentHash } : {}),
     state: "PULLED" as const,
   };
   return { id: `feishu-revision:${deterministicHash(content)}`, ...content };

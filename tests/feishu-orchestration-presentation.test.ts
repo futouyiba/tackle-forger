@@ -99,6 +99,8 @@ function makeInspection(overrides: Partial<CanonicalRuleWorkbookInspection> = {}
       formalStatus: "READY_TO_PUBLISH",
     } as unknown as CanonicalRuleWorkbookInspection["weightTemplateDraft"],
     pricingWeightBandPolicy: "MATCHED_STRUCTURAL_SOURCE_BAND" as const,
+    seriesDefinitions: [],
+    seriesParseIssues: [],
     ...overrides,
   };
 }

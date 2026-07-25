@@ -1,86 +1,88 @@
 ---
 name: tackle-agent-workflow
-description: Orchestrate Tackle Forger implementation, fixes, and refactors through a scoped coding subagent and an independent read-only review subagent, including validation evidence and bounded rework. Use for repository changes that include writing code, changing tests, fixing defects, or refactoring, and when the user asks to start implementation, use the project agent workflow, or run an independent implementation review.
+description: Prepare and route Tackle Forger implementation work through a scoped coding subagent and, only for local work, an independent read-only reviewer. Use for repository changes that include code, tests, fixes, or refactors, and when the user asks to start implementation or use the project agent workflow.
 ---
 
 # Run the Tackle Agent Workflow
 
-## Establish the task
+Use this Skill for project-specific constraints, task preparation, and a local implementation loop. `AGENTS.md` owns project validation and visual policy; v3 remains the only product and domain authority.
 
-1. Read `docs/README.md` and `docs/tackle-forger-development-spec-v3.md` completely before implementation or review.
-2. Identify the canonical specification, acceptance criteria, affected authority layer, unresolved decisions, historical-data impact, external side effects, and applicable validation.
-3. Stop for user confirmation when the specification marks required semantics as unresolved. Do not ask merely to avoid making a safe implementation assumption.
-4. Record the implementation base revision and inspect existing uncommitted changes. Preserve unrelated user work.
+<!-- workflow-contract-policy-ref: AGENTS.md/workflow-contract-policy/v1 -->
 
-## Dispatch the coding agent
+## Route before dispatch
 
-Create one concrete coding subagent with:
+Choose exactly one route before creating an agent:
 
-- model: `gpt-5.6-terra`
-- reasoning effort: `medium`
-- context inheritance: a bounded positive `fork_turns` value or `none`; never `all` when overriding the model
-- responsibility: implement the scoped change, add or update tests, run proportionate validation, and report exact files and commands
-- authority: no merge, publish, deploy, deletion, scope expansion, or unrelated cleanup
+- **Local implementation, no Issue or PR:** this Skill owns one coding agent and one independent local reviewer.
+- **Issue delivery:** `$agent-issue-loop` owns Issue, branch, PR, closure, and handoff. Supply it this Skill's TaskBrief; do not start a local independent reviewer. Once a PR exists, `$agent-pr-loop` exclusively owns review, CI, fixes, and merge gates.
+- **Existing PR:** invoke `$agent-pr-loop` directly and supply the TaskBrief. Do not create a coding or review loop here.
 
-Give the agent the task-local acceptance criteria, canonical document paths, relevant repository state, and explicit file ownership. Reuse the same coding agent for review-driven rework so it retains implementation context.
+Never add a second independent reviewer to an Issue or PR route. This Skill never authorizes merge, publication, deployment, deletion, scope expansion, or external actions.
 
-The main agent may perform read-only coordination while the coding agent runs. Do not create an idle agent or split tightly coupled changes merely to increase parallelism.
+## Establish the TaskBrief
 
-## Close the visual feedback loop when the change is user-visible
+Before implementation or review, read `docs/README.md` and `docs/tackle-forger-development-spec-v3.md` completely, check v3 section 20, record the base revision, and inspect pre-existing changes. Create one compact TaskBrief and pass its raw form to every participating agent:
 
-For a change that affects a screen, visual state, interaction, rendered document, or other user-visible output, completion requires an observed visual loop in addition to code and automated checks:
+```text
+Task-ID / workflow mode (local | issue | pull_request)
+Spec: path, content hash, relevant sections, checked OPEN decisions
+Code identity: base SHA; reviewed head SHA or WORKTREE; branch; owned paths; pre-existing changes
+Scope: acceptance criteria; explicit exclusions; permitted changes
+Risk: persisted or historical data; concurrency; authorization; external effects; user-visible impact
+Validation: required commands and scenarios; each N/A check with reason
+```
 
-1. Run or render the actual artifact in representative states and the relevant viewport sizes. Include the changed path and applicable loading, empty, error, responsive, and populated states.
-2. Capture screenshots or a recording, then have the responsible Agent actually inspect those artifacts. Do not treat their existence as proof that they were reviewed.
-3. Look for obvious layout, hierarchy, spacing, overflow, clipping/truncation, contrast, content-density, responsive, and state-transition defects against the canonical UI contract.
-4. Fix discovered defects, render again, and inspect the new evidence. Repeat until no actionable visual defect remains.
-5. Record the states, viewports, artifact locations or links, observations, fixes, and recheck result in the handoff or PR.
+Stop for user confirmation only when the authoritative specification leaves required semantics unresolved. Preserve unrelated user work and do not let it enter the owned diff.
 
-Source review, DOM assertions, snapshots, and automated tests are valuable but do not substitute for observing the rendered output. Do not introduce product semantics during visual polish: v3 remains authoritative. For a non-user-visible change, explicitly mark the visual loop not applicable. If the environment genuinely cannot render the artifact, report visual validation as incomplete and do not claim the user interface is complete.
+## Local implementation and review
 
-## Verify implementation evidence
+For the local route only, create one concrete coding subagent (`gpt-5.6-terra`, medium reasoning) and reuse it for rework. Give it bounded or no inherited context, the TaskBrief, and no authority beyond the scoped implementation and validation.
 
-After the coding agent reports completion:
+After inspecting the actual owned diff and validation evidence, create a different read-only reviewer (`gpt-5.6-sol`, low reasoning) with bounded or no inherited context. It reviews raw artifacts against the TaskBrief, v3, `AGENTS.md`, and historical, authorization, recovery, and regression constraints. Findings require severity, file/line, evidence, and remediation.
 
-1. Inspect the actual diff and repository state; do not accept a summary as evidence.
-2. Confirm the implementation still matches the canonical specification.
-3. Run or independently verify the scoped validation where risk warrants it.
-4. For user-visible changes, inspect the captured rendered evidence yourself and confirm the visual loop includes the relevant states and viewports. Code review, DOM assertions, and automated tests alone are insufficient.
-5. Capture exact commands, outcomes, intentionally unrun checks, and the current head/base relationship.
+The reviewer must return this exact local verdict record:
 
-## Dispatch the independent reviewer
+```text
+Tackle-Review-Version: v1
+Task-ID: ...
+Base-SHA: ...
+Reviewed-Head-SHA: ... | WORKTREE
+Owned-Paths: ...
+Patch-Hash: ...
+Spec-SHA256: ...
+Verdict: PASS | FINDINGS
+```
 
-Create a different review subagent with:
+`Patch-Hash` is SHA-256 lowercase hex of the UTF-8 RFC 8785 JCS bytes of this deterministic manifest:
 
-- model: `gpt-5.6-sol`
-- reasoning effort: `low`
-- context inheritance: a bounded positive `fork_turns` value or `none`; never `all` when overriding the model
-- responsibility: review the actual diff and validation evidence against the canonical specification, repository instructions, regressions, historical freeze, authorization, and recovery requirements; for user-visible changes, inspect real rendered evidence rather than reviewing source alone
-- authority: read-only by default; do not edit files, merge, publish, or deploy
+```text
+{"baseSha":"...","entries":[],"schemaVersion":"tackle-local-patch/v1"}
+```
 
-Pass raw artifacts and task-local requirements, not the main agent's intended conclusion. Require findings to include severity, file and line, evidence, and a concrete remediation. Require an explicit `PASS` when no actionable finding remains.
+`entries` are UTF-8-byte sorted by normalized repo-relative `path`. Derive each path from the canonical repository root, use forward slashes, and preserve raw Unicode without normalization. Reject absolute or empty paths, `.`, `..` or traversal segments, NUL, invalid Unicode, and paths escaping that root. Tabs and newlines are permitted raw Unicode path characters and are parsed through Git's NUL-delimited output. Each regular-file entry has `path`, `state` (`tracked_changed`, `untracked`, or `unchanged`), git `mode`, decimal-byte `length`, and lowercase-hex `contentSha256` of its raw bytes. For either current-file state, set `mode` to `100755` iff any POSIX execute bit is set, otherwise `100644`; fail closed if execute bits cannot be read. Each deletion is a tombstone with `path`, `state:"deleted"`, base-tree git `mode`, base decimal-byte `length`, and base-content `contentSha256`. Reject symlinks, non-regular files, and modes other than these regular-file modes. Read and hash every entry before review and again after review; changed paths, states, modes, lengths, content hashes, base, Task-ID, owned-path set, or spec hash invalidate `PASS` and require a new review.
 
-For user-visible changes, pass the reviewer the states, viewports, screenshots or recording, and implementer's observations. The reviewer must inspect those artifacts and call out missing visual coverage or visible defects. When the affected artifact could not be rendered, report visual validation as incomplete and withhold `PASS`; do not turn a clearly labeled evidence gap into a successful review. For a non-user-visible change, record why this requirement is not applicable.
+## Check contract automation
 
-## Resolve review
+For workflow-contract changes, run these dependency-free Node 22 commands from the repository root:
 
-Classify every reviewer item:
+```text
+node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --generate-index
+node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-index
+node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-policy
+node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --patch-hash --base <base-sha> --owned <repo-relative-path> [--owned <repo-relative-path> ...]
+node --test .codex/skills/tackle-agent-workflow/scripts/workflow-contract.test.mjs
+```
 
-- Actionable defect, unmet acceptance criterion, regression, conflict, or evidence gap: send it to the same coding agent for correction.
-- Metadata-only lag within the main agent's authority: reconcile it without returning implementation.
-- Informational, obsolete, or disproven: record the evidence and do not create churn.
-- Requires new product semantics, external authority, or scope expansion: stop and ask the user.
+`references/v3-navigation.json` is generated navigation and drift evidence only; it is not a product or domain authority and does not replace the mandatory complete v3 reading.
 
-After corrections, rerun affected validation and ask the same independent reviewer to review the new current diff. Continue until `PASS`, a user decision is required, or no safe in-scope progress remains.
+`PASS` is valid only for those artifacts. PR review evidence remains exclusively owned by `$agent-pr-loop`.
 
-## Complete the handoff
+## Bounded resolution and handoff
 
-The main agent owns the final decision and report. Include:
+Default to at most three review/fix cycles. Every rework cycle must resolve, disprove with evidence, or materially narrow findings; the same finding in two consecutive cycles requires the coordinator to re-check the TaskBrief and remediation direction. Never hide, downgrade, or rename a finding to reach `PASS`.
 
-- changed files and implemented outcome;
-- reviewer result and any resolved findings;
-- exact validation commands and results;
-- intentionally unrun checks and remaining risks;
-- base revision and whether evidence was rerun after any rebase or merge.
+At the limit: safely split a remaining in-scope defect into a new bounded task; ask the user when new product semantics, authority, or scope is needed; or report a reproducible external blocker. Do not claim completion without a current valid `PASS` for the local route.
 
-Do not treat review completion as merge authorization. Follow repository policy for GitHub, merge, publication, deployment, deletion, and other external side effects.
+For user-visible local work outside an explicitly scoped visual review, retain `视觉与交互统一检查待执行` in the handoff. A minimal render smoke confirms only basic loadability and never removes that marker or counts as full visual acceptance. Full visual evidence is required only when visual or interaction review is explicitly in scope.
+
+The handoff includes the owned files and outcome, TaskBrief identity, reviewer verdict and resolved findings, exact validation results, N/A reasons and residual risks. Review completion is not merge authorization.

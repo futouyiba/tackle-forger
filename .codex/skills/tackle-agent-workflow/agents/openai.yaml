@@ -1,4 +1,4 @@
 interface:
   display_name: "Tackle Agent Workflow"
-  short_description: "Implement, inspect rendered UI, and independently review"
-  default_prompt: "Use $tackle-agent-workflow to implement this change, inspect rendered UI when applicable, and run an independent review loop."
+  short_description: "Prepare scoped work and locally review implementation"
+  default_prompt: "Use $tackle-agent-workflow to prepare the TaskBrief, choose the correct local, Issue, or PR route, and run only the applicable workflow. Preserve the pending unified visual-review marker unless full visual work is explicitly scoped."

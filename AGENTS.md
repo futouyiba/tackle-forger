@@ -35,7 +35,18 @@
 - 对一个明确Issue的端到端交付，使用`$agent-issue-loop`。由同一个主Agent完成就绪检查、实现、验证、PR交接、合并回读与正常关闭，并把单个PR阶段交给`$agent-pr-loop`。
 - 对一个已经存在的PR执行评论、独立复审、修补、当前head CI与合并闭环时，使用`$agent-pr-loop`。
 - 需要初始化、迁移、普通语言任务发现或仓库级GitHub协作政策时，使用`$agent-project-bootstrap`。
-- 对本仓库中的实现、修复或重构，仍使用`$tackle-agent-workflow`编排不同的编码与只读审核Agent；仓库的合并、发布和部署门禁不因项目级Skill存在而放宽。
+- 对本仓库中的实现、修复或重构，`$tackle-agent-workflow`为所有路由提供项目约束与 TaskBrief；只有本地路由使用其编码与独立本地审核。Issue 与 PR 路由仍分别遵循`$agent-issue-loop`和`$agent-pr-loop`；仓库的合并、发布和部署门禁不因项目级Skill存在而放宽。
+
+## Tackle 工作流契约
+
+- `$tackle-agent-workflow`提供项目约束和 TaskBrief；仅本地路由使用其编码与独立本地审核。Issue 生命周期归`$agent-issue-loop`，PR 审核/CI/修复归`$agent-pr-loop`；已有 PR 直接使用后者。不得增加第二个独立审核者。
+- TaskBrief必须记录任务与路由、v3 hash/章节/OPEN、base/head或WORKTREE、owned与既有改动、验收/排除、风险、必跑验证和 N/A 理由。
+- 文档/工作流改动逐个分类 tracked changed、untracked、deleted 或 unchanged；tracked/deleted运行`git diff --check <base> -- <paths>`，untracked运行`git diff --no-index --check /dev/null <path>`，无空白诊断才通过。产品测试未运行时写明无产品代码改动。
+- 工作流改动运行`node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-index`、`--check-policy`和`--patch-hash --base <sha> --owned <path> ...`。
+
+<!-- workflow-contract-policy/v1
+{"issue":{"localReviewer":false,"owner":"agent-issue-loop","prReviewer":"agent-pr-loop"},"local":{"independentReviewer":true,"owner":"tackle-agent-workflow"},"pullRequest":{"owner":"agent-pr-loop","reviewer":"agent-pr-loop"},"visual":{"minimalSmokeCompletesReview":false,"pendingMarker":"视觉与交互统一检查待执行"}}
+-->
 
 ## 本机凭据与多 worktree
 

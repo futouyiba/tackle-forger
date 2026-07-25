@@ -240,7 +240,7 @@ test("数据导入的飞书分享链接入口与 canonical 规则源常量互不
   // 而 canonical 规则源是固定的飞书电子表格工作簿（wiki 链接）。
   // 用户在数据交换页填写的分享链接历史绝不改写规则源常量。
   assert.equal(CANONICAL_FEISHU_WORKBOOK.provider, "feishu_sheets");
-  assert.ok(CANONICAL_FEISHU_WORKBOOK.shareUrl.includes("/wiki/"));
+  assert.ok(CANONICAL_FEISHU_WORKBOOK.shareUrl.includes("/sheets/"));
   assert.equal(CANONICAL_FEISHU_WORKBOOK.id, "feishu-workbook:tackle-design");
   // 数据源默认使用 feishu_bitable provider，与规则源 provider 不同
   const profiles = defaultDataSourceProfiles();

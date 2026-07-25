@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  CANONICAL_FEISHU_SHEET_REGISTRY,
-  CANONICAL_FEISHU_WORKBOOK,
+  LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY,
+  LEGACY_YS_EKW_FEISHU_WORKBOOK,
   NEW_CANONICAL_FEISHU_SHEET_REGISTRY,
   NEW_CANONICAL_FEISHU_WORKBOOK,
   parseCanonicalWorkbookLink,
@@ -68,9 +68,10 @@ test("validateFeishuWorkbookConfiguration：新表（/sheets/）登记自洽通�
   );
 });
 
-test("validateFeishuWorkbookConfiguration：旧表（/wiki/）登记不回归", () => {
+test("validateFeishuWorkbookConfiguration：旧表（/wiki/ YsEKw·LEGACY）登记自洽不回归", () => {
+  // PR2b 切流后 /wiki/ 旧拓扑保留在 LEGACY_YS_EKW_*（历史审计）；CANONICAL 已切 WQ8w /sheets/。
   assert.doesNotThrow(() =>
-    validateFeishuWorkbookConfiguration(CANONICAL_FEISHU_WORKBOOK, CANONICAL_FEISHU_SHEET_REGISTRY),
+    validateFeishuWorkbookConfiguration(LEGACY_YS_EKW_FEISHU_WORKBOOK, LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY),
   );
 });
 
@@ -85,13 +86,14 @@ test("validateFeishuWorkbookConfiguration：/sheets/ workbook spreadsheetToken �
   );
 });
 
-test("validateFeishuWorkbookConfiguration：/wiki/ workbook wikiToken 不一致仍按旧契约抛错（旧行为不变）", () => {
+test("validateFeishuWorkbookConfiguration：/wiki/ workbook wikiToken 不一致仍按旧契约抛错（LEGACY 旧行为不变）", () => {
+  // PR2b 切流后 /wiki/ 旧契约保留在 LEGACY_YS_EKW_*；CANONICAL 已切 WQ8w /sheets/ 不再走 wikiToken 比对。
   const mismatched: FeishuWorkbookRef = {
-    ...CANONICAL_FEISHU_WORKBOOK,
+    ...LEGACY_YS_EKW_FEISHU_WORKBOOK,
     wikiToken: "WrongWikiTokenXXXXXXXXXXXX",
   };
   assert.throws(
-    () => validateFeishuWorkbookConfiguration(mismatched, CANONICAL_FEISHU_SHEET_REGISTRY),
+    () => validateFeishuWorkbookConfiguration(mismatched, LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY),
     /工作簿链接与已登记 wikiToken 不一致/,
   );
 });

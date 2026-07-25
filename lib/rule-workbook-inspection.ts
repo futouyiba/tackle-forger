@@ -117,10 +117,10 @@ export function canonicalAffixSheetRanges(sourceRevision: FeishuSourceRevision):
   const rowCount = sheet?.rowCount;
   const columnCount = sheet?.columnCount;
   if (typeof rowCount !== "number" || !Number.isSafeInteger(rowCount) || rowCount < MINIMUM_AFFIX_MACHINE_ROW_COUNT) {
-    throw new Error("04_词条/zrVOxd 缺少可验证的 grid rowCount；已停止读取，避免截断词条机器区。");
+    throw new Error(`04_词条/${AFFIX_SHEET_ID} 缺少可验证的 grid rowCount；已停止读取，避免截断词条机器区。`);
   }
   if (typeof columnCount !== "number" || !Number.isSafeInteger(columnCount) || columnCount < 6) {
-    throw new Error("04_词条/zrVOxd 缺少至少 6 列的可验证 grid 元数据；已停止读取，避免不完整别名导入。");
+    throw new Error(`04_词条/${AFFIX_SHEET_ID} 缺少至少 6 列的可验证 grid 元数据；已停止读取，避免不完整别名导入。`);
   }
   return {
     identityRange: `B1:C${rowCount}`,
@@ -147,7 +147,7 @@ export function canonicalQualitySheetRange(sourceRevision: FeishuSourceRevision)
   if (!Number.isSafeInteger(rowCount) || rowCount! < 1 || rowCount! > MAXIMUM_FEISHU_SHEET_ROWS
     || !Number.isSafeInteger(columnCount) || columnCount! < 1 || columnCount! > MAXIMUM_QUALITY_SHEET_COLUMNS
     || rowCount! * columnCount! > MAXIMUM_QUALITY_SHEET_CELLS) {
-    throw new Error("07_品质评分/FqD4j7 缺少可验证的 grid 元数据；已停止读取，避免截断或猜测组合矩阵。");
+    throw new Error(`07_品质评分/${QUALITY_SHEET_ID} 缺少可验证的 grid 元数据；已停止读取，避免截断或猜测组合矩阵。`);
   }
   return `A1:${spreadsheetColumnName(columnCount! - 1)}${rowCount}`;
 }
@@ -193,7 +193,7 @@ export function canonicalRuleWorkbookRangeRequests(sourceRevision: FeishuSourceR
   for (const group of ["weight", "type", "function", "method", "methodTemplateReview"] as const) {
     for (const part of CANONICAL_ITEM_PARTS) {
       const sheetId = CANONICAL_RULE_RANGES[group][part];
-      requests.push({ sheetId, range: fullRange(sheetId, 4, group === "weight" ? 30 : 8) });
+      requests.push({ sheetId, range: fullRange(sheetId, 4, 8) });
     }
   }
   // 品质三表（27hboC 已由 canonicalQualitySheetRange 动态整表读；公式/组合表 PR2b-3 接入）

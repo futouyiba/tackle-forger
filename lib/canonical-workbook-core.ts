@@ -921,7 +921,7 @@ function parseSeriesTargetPulls(raw: string, id: string, sourceRow: number, issu
       specs.push({ targetPullKgf: pullKgf, skuId });
     }
   } else {
-    // 新格式（逗号分隔纯数值），如 "1.0,4.5,8.0" — 自动生成 skuId
+    // 新格式（逗号分隔纯数值），如 "1.0,4.5,8.0" — 自动生成 skuId（含 seriesId 防冲突）
     let index = 0;
     for (const seg of raw.split(",")) {
       const trimmed = seg.trim();
@@ -932,7 +932,7 @@ function parseSeriesTargetPulls(raw: string, id: string, sourceRow: number, issu
         continue;
       }
       index += 1;
-      const skuId = `skg_${String(index).padStart(3, "0")}`;
+      const skuId = `${id}_skg_${String(index).padStart(3, "0")}`;
       specs.push({ targetPullKgf: pullKgf, skuId });
     }
   }

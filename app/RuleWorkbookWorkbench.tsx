@@ -36,7 +36,7 @@ import { FeishuSourceCombobox } from "./FeishuSourceCombobox";
 
 type WorkbenchSession =
   | { mode: "anonymous" }
-  | { mode: "local_excel"; fileName: string; fileSize: number; contentHash: string; loadedAt: string }
+  | { mode: "local_excel"; fileName: string; fileSize: number; contentHash: string; loadedAt: string; feishuAuthenticated: boolean }
   | { mode: "feishu"; authenticated: false }
   | { mode: "feishu"; authenticated: true };
 
@@ -117,6 +117,9 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
     }
   };
 
+  const feishuAuthOk = (props.session.mode === "feishu" && props.session.authenticated)
+    || (props.session.mode === "local_excel" && props.session.feishuAuthenticated);
+
   const inspect = async () => {
     setAction("inspect");
     setError("");
@@ -142,7 +145,7 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
 
   useEffect(() => {
     if (sourceMode !== "feishu") return;
-    if (props.session.mode !== "feishu" || !props.session.authenticated) return;
+    if (!feishuAuthOk) return;
     const controller = new AbortController();
     fetch("/api/feishu-workbook", { cache: "no-store", signal: controller.signal })
       .then(async (response) => {
@@ -360,7 +363,7 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
     }
   };
   const isLocalMode = sourceMode === "excel";
-  const feishuNeedsAuth = sourceMode === "feishu" && (props.session.mode !== "feishu" || !(props.session as { mode: "feishu"; authenticated: boolean }).authenticated);
+  const feishuNeedsAuth = sourceMode === "feishu" && !feishuAuthOk;
 
   return (
     <section className="rule-workbook-stack" aria-label={isLocalMode ? "规则工作簿（本地 Excel）" : "规则工作簿"}>

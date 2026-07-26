@@ -558,7 +558,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   const [authStatus, setAuthStatus] = useState<"checking"|"authenticated"|"unauthenticated"|"error">("checking");
   type WorkbenchSession =
     | { mode: "anonymous" }
-    | { mode: "local_excel"; fileName: string; fileSize: number; contentHash: string; loadedAt: string }
+    | { mode: "local_excel"; fileName: string; fileSize: number; contentHash: string; loadedAt: string; feishuAuthenticated: boolean }
     | { mode: "feishu"; authenticated: false }
     | { mode: "feishu"; authenticated: true };
   const [session, setSession] = useState<WorkbenchSession>({ mode: "anonymous" });
@@ -2616,12 +2616,14 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       notify={notify}
       onLocalExcelLoaded={(inspection, fileName, fileSize) => {
         const contentHash = inspection.sourceRevision.sourceRevision;
+        const wasFeishuAuth = session.mode === "feishu" && session.authenticated;
         setSession({
           mode: "local_excel",
           fileName,
           fileSize,
           contentHash,
           loadedAt: inspection.observedAt,
+          feishuAuthenticated: wasFeishuAuth,
         });
         const projected = projectLocalRuleWorkbookSession(inspection, state);
         setState(projected);

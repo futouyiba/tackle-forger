@@ -802,9 +802,9 @@ finalValueScore
 - 若同一无序词条对两侧都填值且不一致、矩阵词条无法按稳定ID解析、或跨部位引用，`QualityValuePolicyDraft`进入`SOURCE_CONFLICT`并阻止发布。
 - 矩阵当前以缩写展示；导入器必须先将缩写解析为稳定`affixId`并保存源单元格坐标，运行时不得按缩写或名称关联。
 
-`FunctionProfile.scoreFactor`来自`03_功能定位/vviXo0`的“评分系数”，按乘法应用。Performance不参与价值分：不得读取`performanceScoreFactor`、不得写入`performance_factor` Trace，也不得用一个“显式乘1”步骤伪装为新规则。历史源表或payload中的性能计分字段只作为迁移证据保留。Technology成员已经按Affix进入基础分与组合分；`PerformanceSummary`只是结算后的派生展示，二者均不得再次计分。
+`FunctionProfile.scoreFactor`来自`03_功能定位`（功能定位表）的“评分系数”，按乘法应用。Performance不参与价值分：不得读取`performanceScoreFactor`、不得写入`performance_factor` Trace，也不得用一个“显式乘1”步骤伪装为新规则。历史源表或payload中的性能计分字段只作为迁移证据保留。Technology成员已经按Affix进入基础分与组合分；`PerformanceSummary`只是结算后的派生展示，二者均不得再次计分。
 
-飞书revision `2869`把S写成`[65,100)`而价格页包含评分100。该冲突的产品结论已经确定为“100属于S”；在飞书机器源修订并显式拉取前，导入器应产生`QUALITY_RANGE_SOURCE_OUTDATED`，保留旧源单元格并禁止把该旧Draft发布为新正式策略。该Issue表示规则源尚未落实已决策语义，不再表示产品结论未决。
+YsEKw 历史观测 revision `2869`把S写成`[65,100)`而价格页包含评分100。该冲突的产品结论已经确定为“100属于S”；在飞书机器源修订并显式拉取前，导入器应产生`QUALITY_RANGE_SOURCE_OUTDATED`，保留旧源单元格并禁止把该旧Draft发布为新正式策略。该Issue表示规则源尚未落实已决策语义，不再表示产品结论未决。
 
 ```ts
 interface ModelAffixValueAssessment {
@@ -1097,7 +1097,7 @@ revision 位于“最近 90 天”与“最新 100 个”并集之外，只表�
 
 ### 14.4 Patch台账远端schema、哈希、协作、回读与补偿契约
 
-主工作簿中的唯一`Patch台账`使用稳定`sheet_id=edyFx9`。同一工作表包含两个行号互不关联的区域：`A:AK`是“一条Patch操作一行”的机器区，`AL`为空白分隔列，`AM:BA`是“一条协作事件一行”的追加事件区。工作表当前仍为空表；在以下表头、保护边界和联调完成前，真实镜像写入/拉取保持禁用，不得伪造`SYNCED`。
+主工作簿中的唯一`Patch台账`使用稳定 sheet_id（具体值登记在代码 `CANONICAL_FEISHU_SHEET_REGISTRY`）识别。同一工作表包含两个行号互不关联的区域：`A:AK`是“一条Patch操作一行”的机器区，`AL`为空白分隔列，`AM:BA`是“一条协作事件一行”的追加事件区。工作表当前仍为空表；在以下表头、保护边界和联调完成前，真实镜像写入/拉取保持禁用，不得伪造`SYNCED`。
 
 机器区列顺序固定为：
 
@@ -1429,7 +1429,7 @@ interface PatchSubjectMigrationResult {
 | OPEN-007 定价决策落地与源表一致性 | 已决产品结论/外部规则源落实 | `DECIDED_SOURCE_UPDATE_REQUIRED` | 旧实现可继续输出明确标记的`NON_FORMAL`试算；新契约按第20.1节执行 | 飞书机器源、新schema、迁移、确认记录和发布/导出尚未全部落实前，禁止把旧Draft发布成符合新契约的PricingPolicyVersion | 2026-07-23用户决定与`open-007-pricing-semantics-adr.md`；源表负责人更新机器源，GitHub Issue #9完成实现 |
 | OPEN-008 ConfigIdPolicy区间与命名 | 公司策略（已确认） | `DECIDED_PENDING_POLICY_VERSION` | 按本节确认规则实现策略版本、ledger、权威目标目录/扫描Manifest、历史导入、正式动作治理租约/受保护ref CAS和冲突预检 | `ConfigIdPolicyVersion`尚未发布，或其引用的`ConfigTargetCatalogVersion`中任一必需目标没有获批扫描Manifest时，不得正式预留ID、历史ID正式导入或正式导出；正式预留、历史ID正式导入和正式导出任一无法取得`ConfigTargetGovernanceLease`、无法对authoritative ref执行expected-old-OID CAS或返回`CONFIG_TARGET_SERIALIZATION_UNAVAILABLE`时必须fail-closed。策略发布只复验Manifest/ref/hash，不要求治理租约；禁止用“最大值+1”、示例ID、用户临时绑定或单一渠道扫描代替 | 配置治理负责人发布策略版本；权威目录和获批Manifest覆盖完整；reservation、历史导入、正式导出和分裂命中验收通过；治理租约的物理ref别名竞争、单调fencing token、受保护ref CAS、stale token与`CONFIG_TARGET_SERIALIZATION_UNAVAILABLE`失败验收通过 |
 | OPEN-009 工作流治理策略 | 产品/安全决策 | `RESOLVED` | 使用第20.2节发布的五类`open009-v1`策略；所有已登录公司用户拥有全部已启用业务Capability；AI一期禁用，二期连接器仍需独立实现准入 | 不接飞书审批、不在本工具实行职责分离；OPEN-006安全配置只由部署管理员修改；关键写操作使用工作区单写锁与单调fencing token，普通操作记录保留1年 | 2026-07-23用户确认；策略正文见第20.2节，迁移与验收见Issue #18 |
-| OPEN-010 飞书Patch台账远端契约 | 外部规则源阻断 | `BLOCKED_ON_SOURCE_SCHEMA` | 已确认`Patch台账/edyFx9`、`A:AK`机器区、`AM:BA`协作事件区、哈希/并发/幂等/补偿/rebase契约；权限引用`separation-of-duties/open009-v1`；不触达飞书的契约实现/测试可继续，但本地PatchLedger、协作事件流、旧版写入/拉取及未实现动作均不得标记为符合或可用 | 本地`PatchOperationRecord`、PatchLedger schema/migration及operation/revision/Snapshot哈希完成`workspaceId`与JCS契约升级前，镜像链路保持禁用；不可变协作事件存储、事务内compare-and-append、`collaborationRevision`/幂等/冲突/`supersedesEventId`校验和action availability完成前，协作写入保持禁用；远端表头、保护边界和连接器联调完成前，真实写入/拉取保持禁用；旧版写入/拉取完成远端schema、IssueCode及ActionCode/Capability升级前保持禁用；`inspect_patch_mirror`、`repair_patch_mirror`、`rebuild_patch_mirror_from_local`、`fix_patch_mirror_schema`、`migrate_patch_subject`的服务端定义、Capability门禁和测试完成前，对应动作也保持禁用；不得伪造SYNCED | 先以版本化迁移补齐本地工作区归属和新哈希，同时保持既有revision、Snapshot引用及历史哈希证据不可变；实现本地协作事件原子追加、先本地提交后镜像及重复重试/双客户端冲突回归；按第14.4节物化远端schema并完成写入、回读、缺行、篡改、hash、跨工作区隔离和并发联调；升级写入/拉取并实现、测试全部镜像/迁移ActionCode、Capability映射、二次确认和审计证据；连接器及运行时实现使用独立Issue/PR跟踪 |
+| OPEN-010 飞书Patch台账远端契约 | 外部规则源阻断 | `BLOCKED_ON_SOURCE_SCHEMA` | 已确认`Patch台账`、`A:AK`机器区、`AM:BA`协作事件区、哈希/并发/幂等/补偿/rebase契约；权限引用`separation-of-duties/open009-v1`；不触达飞书的契约实现/测试可继续，但本地PatchLedger、协作事件流、旧版写入/拉取及未实现动作均不得标记为符合或可用 | 本地`PatchOperationRecord`、PatchLedger schema/migration及operation/revision/Snapshot哈希完成`workspaceId`与JCS契约升级前，镜像链路保持禁用；不可变协作事件存储、事务内compare-and-append、`collaborationRevision`/幂等/冲突/`supersedesEventId`校验和action availability完成前，协作写入保持禁用；远端表头、保护边界和连接器联调完成前，真实写入/拉取保持禁用；旧版写入/拉取完成远端schema、IssueCode及ActionCode/Capability升级前保持禁用；`inspect_patch_mirror`、`repair_patch_mirror`、`rebuild_patch_mirror_from_local`、`fix_patch_mirror_schema`、`migrate_patch_subject`的服务端定义、Capability门禁和测试完成前，对应动作也保持禁用；不得伪造SYNCED | 先以版本化迁移补齐本地工作区归属和新哈希，同时保持既有revision、Snapshot引用及历史哈希证据不可变；实现本地协作事件原子追加、先本地提交后镜像及重复重试/双客户端冲突回归；按第14.4节物化远端schema并完成写入、回读、缺行、篡改、hash、跨工作区隔离和并发联调；升级写入/拉取并实现、测试全部镜像/迁移ActionCode、Capability映射、二次确认和审计证据；连接器及运行时实现使用独立Issue/PR跟踪 |
 | OPEN-011 工作区revision归档与裁剪启用 | 二期实施/公司策略缺口 | `BLOCKED_BEFORE_PRUNING` | 已批准“最近90天与最新100个的并集”在线保留政策；一期SQLite/D1继续全量保留，人工与自动裁剪均关闭；二期只可在独立Issue范围内实现和验证归档、恢复与只读dry-run | 归档包格式/大小/压缩/加密、恢复入口、归档保留期、RTO/RPO、团队共享与访问控制、维护窗口、删除授权或自动裁剪启用标准任一未确定或证据不可验证时，不得删除任何revision；非删除主流程不得因此被阻断 | 父Issue [#1](https://github.com/futouyiba/tackle-forger/issues/1)；发布覆盖全部实施参数的版本化`WorkspaceRevisionRetentionPolicyVersion`，完成目标浏览器归档与manifest/hash回读、隔离恢复和完整性/Snapshot hash验证，取得首次生产裁剪授权并通过回滚验收；自动裁剪另需独立启用授权 |
 
 `DECIDED_IMPLEMENTATION_PENDING`和`DECIDED_SOURCE_UPDATE_REQUIRED`表示产品选择已经完成，不得继续向用户重复提问，但运行时或外部规则源尚不能宣称完成。状态只有在决策证据进入权威规范、对应策略版本可校验且实现验收通过后才改为`RESOLVED`。代码、原型、测试种子或某次人工输入都不能单独关闭整项工作。
@@ -1487,7 +1487,7 @@ AUD-009已批准在线保留集合和一期全量保留边界，但归档、恢�
 
 ### OPEN-004：Patch属性偏移阈值
 
-2026-07-23用户确认OPEN-004采用“最终范围校验 + 整体批次人工复核”，不设置Series、SKU、Model或FinalReview作用域的独立绝对偏移、相对比例、方向性偏移或warning/review/block数值档位。Patch创建或修改后立即参与隔离的草稿试算，供设计人员查看整体属性、五维、兼容、不变量与范围校验；它不得仅因进入试算而影响已批准对象、正式配置或历史Snapshot。正式结果前，Patch必须作为对应Series/SKU/Model对象批次或发布批次整体结果的一部分被人工确认，但不要求逐Patch单独审批。2026-07-23对主飞书工作簿revision `3259`的只读核对显示，`10_校验规则/KZv4o2`当前按部位类型、重量段和参数，以米、克、线径、传动比等业务原始单位表达最终合法范围，没有Patch偏移阈值列；该revision只是决策证据，不是永久运行常量。Workspace schema v16已发布并校验`patch-offset/open004-v1`，旧阈值只保留在迁移复核证据中且不参与运行，因此本项状态为`RESOLVED`。
+2026-07-23用户确认OPEN-004采用“最终范围校验 + 整体批次人工复核”，不设置Series、SKU、Model或FinalReview作用域的独立绝对偏移、相对比例、方向性偏移或warning/review/block数值档位。Patch创建或修改后立即参与隔离的草稿试算，供设计人员查看整体属性、五维、兼容、不变量与范围校验；它不得仅因进入试算而影响已批准对象、正式配置或历史Snapshot。正式结果前，Patch必须作为对应Series/SKU/Model对象批次或发布批次整体结果的一部分被人工确认，但不要求逐Patch单独审批。2026-07-23对主飞书工作簿（YsEKw 历史观测 revision `3259`）的只读核对显示，`10_校验规则`（校验规则表）当前按部位类型、重量段和参数，以米、克、线径、传动比等业务原始单位表达最终合法范围，没有Patch偏移阈值列；该revision只是决策证据，不是永久运行常量。Workspace schema v16已发布并校验`patch-offset/open004-v1`，旧阈值只保留在迁移复核证据中且不参与运行，因此本项状态为`RESOLVED`。
 
 #### 作用域、粒度与策略版本
 
@@ -1744,7 +1744,7 @@ Manifest失效后，旧`ConfigIdPolicyVersion`只保留历史审计用途，不�
 
 当前表中的业务公式是说明文本，查表参数是静态单元格值，不是可执行单元格公式。工具必须将其导入为`PricingPolicyDraft`后在领域内核中确定性计算，不依赖浏览器打开表格或飞书公式重算。每项定价Trace至少记录源revision、sheet_id、单元格/行键、输入值、查表命中、乘除步骤、未舍入值、舍入结果和警告。
 
-revision `2869`已经显式提供以下数值输入；其中与本节新决定冲突的说明文本只作为历史源证据，必须由后续飞书revision修订：
+YsEKw 历史观测 revision `2869`已经显式提供以下数值输入；其中与本节新决定冲突的说明文本只作为历史源证据，必须由后续飞书revision修订：
 
 - 评分系数在所选品质区间内线性插值：`Lerp(minPriceFactor, maxPriceFactor, (finalValueScore-minScore)/(maxScore-minScore))`；
 - 各重量段、部位的维修消耗速度、部位占比、全损时间和零整比；

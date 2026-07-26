@@ -24,14 +24,14 @@
   - ❌ 未实现 — 代码中找不到对应。
   - 📋 仅源表 — 源表是样例/示意图/飞书侧暂存，spec 明确不作为领域实体或权威输入。
 - “代码位置”给到关键文件（多个用 `、` 分隔），未穷尽全部引用点。
-- 本工作簿与 spec §14 引用的**主工作簿**不是同一份（见下方“关键差异”第 1 条），故映射按**概念语义**对应，不按表号或 sheet_id 对应。
+- 本表（WQ8w）即 spec §14 当前的权威主工作簿；spec §14 历史引用的 YsEKw 是切流前的旧表（仅审计区保留拓扑证据）。映射按**概念语义**对应，不按表号或 sheet_id 对应。
 
 ## 映射表
 
 | # | 源表sheet | sheet_id | 装什么（列摘要/1句） | v3 spec概念(节号) | 代码位置(根lib/app) | 实现状态 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | 00_系统接入 | `0iGCcx` | 系统接入约定：唯一权威工作簿、每次拉取记录 revision | §0 文档权威 / §14 飞书治理 | `feishu-workbook.ts`、`workbook-governance.ts`、`data-sources.ts`、`feishu-sheets.ts` | ✅ | spec §14 主工作簿是另一套（wiki `YsEKw…`，sheet `d6e928` 等）；本表是原始设计稿，拓扑与 sheet_id 完全不同 |
-| 2 | 01.0_重量模板-竿 | `1cAihB` | 竿 16 级重量段基准面板：竿拉力/抛投距离/耐久/感度/长度/自重/饵重/调性/硬度 等 | §2 WeightTemplate / §5 DerivedProjection / §21.3 W 重量段 | `five-axis-weight-band-policy-source.ts`、`five-axis-formal.ts`、`five-axis.ts`、`types.ts`、`seed.ts`、`v3-seed.ts` | ✅ | 源表按竿/轮/线分 3 表；spec 主工作簿是单表 3 块（竿 3-18/轮 21-36/线 39-54）。W 段上界 `1.5/3.8/12.6/25.9/82.5/null` |
+| 1 | 00_系统接入 | `0iGCcx` | 系统接入约定：唯一权威工作簿、每次拉取记录 revision | §0 文档权威 / §14 飞书治理 | `feishu-workbook.ts`、`workbook-governance.ts`、`data-sources.ts`、`feishu-sheets.ts` | ✅ | 本表（WQ8w）即 spec §14 当前的权威主工作簿；YsEKw 是切流前的历史合并表（§14 审计区保留） |
+| 2 | 01.0_重量模板-竿 | `1cAihB` | 竿 16 级重量段基准面板：竿拉力/抛投距离/耐久/感度/长度/自重/饵重/调性/硬度 等 | §2 WeightTemplate / §5 DerivedProjection / §21.3 W 重量段 | `five-axis-weight-band-policy-source.ts`、`five-axis-formal.ts`、`five-axis.ts`、`types.ts`、`seed.ts`、`v3-seed.ts` | ✅ | WQ8w 按竿/轮/线分 3 子表（旧 YsEKw 是单表 3 块 竿3-18/轮21-36/线39-54，历史）。W 段上界 `1.5/3.8/12.6/25.9/82.5/null` |
 | 3 | 01.1_重量模板-轮 | `2KCCHR` | 轮 16 级基准：轮拉力/传动比/绕线量/线径/积热散热/摩擦截面数 等 | §2 WeightTemplate | 同上 | ✅ | 同上 |
 | 4 | 01.2_重量模板-线 | `3FYijT` | 线 16 级基准：线拉力/直径/线号/张力/摩擦/延展性 等 | §2 WeightTemplate | 同上 | ✅ | 同上 |
 | 5 | 02.0_钓法类型-竿 | `4zXYpP` | 钓法（浮钓/路亚）对竿参数的乘法系数；稳定 ID `fishing_rod_*` | §2 MethodProfile / §3.1 模板与定位层 | `canonical-rule-source.ts`、`rule-kernel.ts`、`rule-workbook-inspection.ts`、`types.ts` | ✅ | spec 称 MethodProfile；`02_钓法类型` 的 `fishing_*` 行是钓法系数权威源 |
@@ -62,8 +62,8 @@
 | 30 | 09.0_价格计算-公式 | `31RxeB` | 竿/轮/线维修价格公式（基础维修价 × 维修系数 × 评分插值） | §20.1 PricingPolicy | `pricing-policy.ts` | ✅ | spec §20.1 公式更精细：维修/购买分别舍入、购买价用未舍入维修价、最低价 100 仅作用于购买价 |
 | 31 | 09.1_价格计算-参数释义 | `32BmZs` | 定价参数键释义：`score_interpolation_policy`、`rod_parts_to_whole_ratio` 等 | §20.1 PricingExecutionPolicy | `pricing-policy.ts`、`types.ts` | ✅ | spec 把执行策略显式化为 `PricingExecutionPolicy`（3 位有效数字向下取整、阈值 3 亿软确认） |
 | 32 | 09.2_价格计算-维修消耗速度 | `33IGHy` | 维修消耗速度 × 钓具大类 × 重量段 × 品质；列含「零正比」（笔误零整比） | §20.1 维修消耗速度 / 零整比 | `pricing-policy.ts`、`rule-workbook-inspection.ts` | ✅ | 源表列名「零正比」为笔误，规范为「零整比」；PR2b-3（4e77a3e）后代码从 33IGHy 读取维修价格与零整比，行格式 `(part, weight, quality, maintenance, ratio)` |
-| 33 | 09.3_价格计算-部件占比 | `34KaIv` | 部位占比（**表头为空**，未填数据） | §20.1 部位占比 | `pricing-policy.ts` | 🟡 | 源表当前为空；spec §20.1 要求「部位占比(part, pricingWeightBandId)」入定价公式与 Trace。PR2b-3（4e77a3e）：代码已设为隐式默认值，源表补齐前不阻断 |
-| 34 | 09.4_价格计算-各部位全损时间-零整比 | `35bCfX` | 全损时间 / 零整比（**表头为空**，未填数据） | §20.1 全损时间 / 零整比 | `pricing-policy.ts` | 🟡 | 源表当前为空；spec 明确「零整比不得为 0」。PR2b-3（4e77a3e）：代码已设为隐式默认值，源表补齐前用默认 |
+| 33 | 09.3_价格计算-部件占比 | `34KaIv` | 部位占比（**表头为空**，未填数据） | §20.1 部位占比 | `pricing-policy.ts` | 🟡 | 34KaIv 当前为 `staging_output`、不参与导入；spec §20.1 要求「部位占比(part, pricingWeightBandId)」入定价公式与 Trace。PR2b-3（4e77a3e）：现行策略从 33IGHy 读取维修价/零整比，并为部位占比生成值=`1` 的显式身份默认项 |
+| 34 | 09.4_价格计算-各部位全损时间-零整比 | `35bCfX` | 全损时间 / 零整比（**表头为空**，未填数据） | §20.1 全损时间 / 零整比 | `pricing-policy.ts` | 🟡 | 35bCfX 当前为 `staging_output`、不参与导入；spec 明确「零整比不得为 0」。PR2b-3（4e77a3e）：现行策略从 33IGHy 读取零整比，并为全损时间生成值=`1` 的显式身份默认项 |
 | 35 | 10_钓具甘特图示意 | `36GGVk` | 品质 × 钓具类型 × 重量段 的系列覆盖示意（`系列 SA1…`） | §23 系列甘特图（语义不同） | `series-gantt-query.ts`、`series-pull-planning.ts`、`app/SeriesGanttWorkbenchV3.tsx`、`app/api/series-gantt/route.ts` | 📋 | spec §14（line 944）明确此类甘特表「是开发计划表/示意图，不是数据源，也不新增领域实体」。代码的系列甘特图是动态规划视图，语义不同 |
 | 36 | 11.0_校验规则-枚举 | `37YLZE` | 枚举值：鱼重等级（微物…超级巨物）、钓具大类（竿/轮/线） | §13 校验 / §10.1 ParameterDefinition / §14.3.1 枚举 | `validation-issues.ts`、`rule-kernel.ts`、`types.ts` | ✅ | |
 | 37 | 11.1_校验规则-竿组 | `38LXDQ` | 竿/轮/线 组合约束：类型、功能定位、系列匹配 | §9.1 硬兼容 Rod×Reel×Line 闭环 / §13 | `compatibility.ts`、`validation-issues.ts`、`part-constraints.ts` | ✅ | |
@@ -83,7 +83,7 @@
 
 ## 关键差异 / 缺口汇总
 
-1. **两套工作簿，拓扑完全不同**。源表（`WQ8w…`）按竿/轮/线拆成 `01.0/01.1/01.2` 等子表且含 `00_系统接入`，共 50 张；spec §14 引用的主工作簿（wiki `YsEKw…`）是合并表（`01_重量模板/d6e928`、`04_功能定位/vviXo0`、`Patch台账/edyFx9` 等，约 18 张）。本表按**概念语义**对应，不按表号或 sheet_id 对应。源表是《淡水路亚杆轮线装备设计.xlsx》的飞书镜像（spec §0 line 7），主工作簿是经整理的权威源。
+1. **WQ8w 是当前唯一权威主工作簿**（50 张分表）。spec §14 历史引用的 YsEKw（wiki，约 18 张合并表）是切流前的旧表，§14 审计区保留其拓扑作历史证据；本表（WQ8w）映射按**概念语义**对应，不按表号或 sheet_id 对应。
 
 2. **品质 S 区间源表过期**。源表 `08.1` 可能仍写 `[65,100)`；spec §12.1 已决 `S=[65,100]` 含 100（评分 100 属 S，>100 报 `QUALITY_SCORE_OUT_OF_RANGE`）。飞书机器源修订并显式拉取前，导入器产生 `QUALITY_RANGE_SOURCE_OUTDATED`，旧 Draft 禁止发布为新正式 `QualityValuePolicyVersion`。代码 `quality-value-policy.ts` 已按新契约。
 

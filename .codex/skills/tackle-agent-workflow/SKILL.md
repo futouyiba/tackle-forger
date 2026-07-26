@@ -7,7 +7,7 @@ description: Prepare and route Tackle Forger implementation work through a scope
 
 Use this Skill for project-specific constraints, task preparation, and a local implementation loop. `AGENTS.md` owns project validation and visual policy; v3 remains the only product and domain authority.
 
-<!-- workflow-contract-policy-ref: AGENTS.md/workflow-contract-policy/v1 -->
+<!-- workflow-contract-policy-ref: AGENTS.md/workflow-contract-policy/v2 -->
 
 ## Route before dispatch
 
@@ -32,7 +32,17 @@ Risk: persisted or historical data; concurrency; authorization; external effects
 Validation: required commands and scenarios; each N/A check with reason
 ```
 
+For machine-checkable handoffs, preserve the same information as `tackle-task-brief/v1`, including `phase`, scope/acceptance/exclusions/risks/validation, base/head, current-v3 relevant sections (including 20), a structured OPEN decision check, risk profile/runtime-semantics flag, unowned pre-existing changes, `specReadReceipts`, and `dirtyWorktreeDisposition`. OPEN checking binds a hash of the complete current registry, records every checked ID, and makes applicable IDs a checked subset; a non-empty registry can still honestly have no applicable item only with a non-empty reason. The TaskBrief is the only authority for receipt risk/sections, but SCOPED is additionally gated by every owned path: only `AGENTS.md`, `.codex/skills/tackle-agent-workflow/**`, explicitly named non-authoritative governance docs, and root `.github/*.md|yml|yaml` may be SCOPED candidates. `docs/README.md`, v3, other product/domain contracts, and all other paths force FULL. A `pre_dispatch` brief requires exactly one coordinator receipt; a `verdict` brief requires exactly one receipt each for coordinator, coding, and review. Issue/PR reviewed heads must equal the current clean HEAD; base may differ, but must be its exact 40-hex ancestor. Only local work may use `WORKTREE`. All versioned records are closed schemas. When an owned path was already modified, generate and embed the complete `tackle-owned-baseline/v1` manifest plus its computed hash; do not record a hash alone. Run `--check-task-brief` before dispatch and record its `taskBriefSha256` and `specReceiptHashes` in the local verdict.
+
 Stop for user confirmation only when the authoritative specification leaves required semantics unresolved. Preserve unrelated user work and do not let it enter the owned diff.
+
+## Spec receipts and worktree isolation
+
+The coordinator reads `docs/README.md` and all v3 once for each TaskBrief/spec hash. Coding and review roles use `FULL` for any product/domain/runtime behavior, persistence/history/migration, concurrency/auth, publication/export/external effects, unclear scope, or high risk. `SCOPED` is only for proven workflow/docs/metadata work with no runtime semantics; it reads README, v3 sections 0, 19, 20, and every relevant indexed section. Record immutable `tackle-spec-read/v1`: taskId, role, spec hash, profile, risk profile, required/read sections, and reason. It is an auditable declaration, not proof of reading; any task/spec/risk/role/section change invalidates it. Use `--spec-read-plan --role <coordinator|coding|review> --risk <workflow_docs_metadata|...> [--relevant <section> ...]` before recording and `--check-read-receipt --receipt <json-file>` to validate it.
+
+Issue/PR routes require a clean worktree synchronized to intended base. For local work, pre-existing owned-path changes require explicit TaskBrief scope plus a frozen pre-task owned-path baseline manifest/hash; otherwise use a clean worktree. Preserve and exclude unowned changes. If the task-owned diff cannot be isolated, do not PASS; record its disposition in TaskBrief and verdict.
+
+Findings require severity, file/line, evidence and remediation. P0 (data loss/security/immutable history break), P1 (wrong behavior, gate/evidence failure), and P2 (material regression or contract gap) are actionable and block PASS. P3 is informational and non-blocking. Never downgrade to obtain PASS. Local verdicts also include TaskBrief-SHA256, Spec-Receipt-Hashes, and Dirty-Worktree-Disposition.
 
 ## Local implementation and review
 
@@ -50,6 +60,9 @@ Reviewed-Head-SHA: ... | WORKTREE
 Owned-Paths: ...
 Patch-Hash: ...
 Spec-SHA256: ...
+TaskBrief-SHA256: ...
+Spec-Receipt-Hashes: ...
+Dirty-Worktree-Disposition: ...
 Verdict: PASS | FINDINGS
 ```
 
@@ -69,6 +82,11 @@ For workflow-contract changes, run these dependency-free Node 22 commands from t
 node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --generate-index
 node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-index
 node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-policy
+node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --spec-read-plan --role <coordinator|coding|review> --risk <risk-profile> [--relevant <section> ...]
+node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-read-receipt --receipt <receipt.json>
+node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-task-brief --brief <task-brief.json>
+node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --owned-baseline --base <sha> --owned <repo-relative-path> [--owned <path> ...]
+node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-verdict --verdict <verdict.json> --brief <task-brief.json>
 node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --patch-hash --base <base-sha> --owned <repo-relative-path> [--owned <repo-relative-path> ...]
 node --test .codex/skills/tackle-agent-workflow/scripts/workflow-contract.test.mjs
 ```

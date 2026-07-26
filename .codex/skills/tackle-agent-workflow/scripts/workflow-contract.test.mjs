@@ -4,7 +4,7 @@ import { appendFileSync, chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync,
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { buildPatchManifest, checkNavigationIndex, checkPolicy, patchHash, writeNavigationIndex } from './workflow-contract.mjs';
+import { buildNavigationIndex, buildOwnedBaselineManifest, buildPatchManifest, checkNavigationIndex, checkPolicy, checkReadReceipt, checkTaskBrief, checkVerdict, openRegistryHash, ownedBaselineHash, patchHash, receiptHash, runCli, specReadPlan, taskBriefHash, writeNavigationIndex } from './workflow-contract.mjs';
 
 function command(root, args) { return execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim(); }
 function write(root, relative, content) { const target = path.join(root, relative); mkdirSync(path.dirname(target), { recursive: true }); writeFileSync(target, content); }
@@ -21,6 +21,31 @@ function commitBase(root) {
   return command(root, ['rev-parse', 'HEAD']);
 }
 function cleanup(root) { rmSync(root, { recursive: true, force: true }); }
+function specHash(root) { return buildNavigationIndex(root).source.sha256; }
+function receipt(root, overrides = {}) {
+  const specSha256 = specHash(root);
+  return {
+    schema: 'tackle-spec-read/v1', taskId: 'task-1', role: 'coordinator', specSha256,
+    profile: 'FULL', riskProfile: 'workflow_docs_metadata', relevantSections: ['1', '20'],
+    requiredSections: ['README', 'FULL_V3'], readSections: ['README', 'FULL_V3'], reason: 'coordination', ...overrides,
+  };
+}
+function brief(root, overrides = {}) {
+  const coordinatorReceipt = receipt(root);
+  const baseSha = command(root, ['rev-parse', 'HEAD']);
+  const openIds = buildNavigationIndex(root).openRegistry.map((entry) => entry.id);
+  return {
+    schema: 'tackle-task-brief/v1', taskId: 'task-1', workflowMode: 'local', phase: 'pre_dispatch', specSha256: coordinatorReceipt.specSha256,
+    baseSha, reviewedHead: 'WORKTREE', scope: 'workflow hardening', relevantSections: ['1', '20'], openDecisionCheck: { registrySha256: openRegistryHash(root), checkedIds: openIds, applicableIds: openIds, noApplicableReason: null }, riskProfile: 'workflow_docs_metadata', scopeHasRuntimeSemantics: false, acceptanceCriteria: ['contract validates'], exclusions: ['product runtime'], risks: ['workflow regression'], validation: [{ command: 'node --test workflow-contract.test.mjs', naReason: null }],
+    specReadReceipts: [coordinatorReceipt], ownedPaths: ['AGENTS.md'], preexistingOwnedPaths: [],
+    preexistingUnownedChanges: [], dirtyWorktreeDisposition: 'clean', ...overrides,
+  };
+}
+function taskBase(root) {
+  write(root, 'docs/tackle-forger-development-spec-v3.md', '# V3\n\n## 0. Authority\n\n## 1. Scope\n\n## 19. Delivery\n\n## 20. Open\n\n| ID | Type | Status |\n| --- | --- | --- |\n| OPEN-001 Test | x | `OPEN` |\n');
+  write(root, 'AGENTS.md', 'base\n');
+  commitBase(root);
+}
 
 test('patch manifest classifies explicit owned paths and is deterministic', () => {
   const root = temporaryRepo();
@@ -82,8 +107,8 @@ test('policy checker detects required workflow markers', () => {
   const root = temporaryRepo();
   try {
     const project = '## 项目级 Agent Skills\n- 对本仓库中的实现、修复或重构，`$tackle-agent-workflow`为所有路由提供项目约束与 TaskBrief；只有本地路由使用其编码与独立本地审核。Issue 与 PR 路由仍分别遵循`$agent-issue-loop`和`$agent-pr-loop`；仓库的合并、发布和部署门禁不因项目级Skill存在而放宽。\n';
-    const agents = `${project}\n## Tackle 工作流契约\n- \`$tackle-agent-workflow\`提供项目约束和 TaskBrief；仅本地路由使用其编码与独立本地审核。Issue 生命周期归\`$agent-issue-loop\`，PR 审核/CI/修复归\`$agent-pr-loop\`；已有 PR 直接使用后者。不得增加第二个独立审核者。\n<!-- workflow-contract-policy/v1\n{"issue":{"localReviewer":false,"owner":"agent-issue-loop","prReviewer":"agent-pr-loop"},"local":{"independentReviewer":true,"owner":"tackle-agent-workflow"},"pullRequest":{"owner":"agent-pr-loop","reviewer":"agent-pr-loop"},"visual":{"minimalSmokeCompletesReview":false,"pendingMarker":"视觉与交互统一检查待执行"}}\n-->\n## 本机凭据与多 worktree\n`;
-    const skill = '<!-- workflow-contract-policy-ref: AGENTS.md/workflow-contract-policy/v1 -->\n\n## Route before dispatch\n\n- **Local implementation, no Issue or PR:** this Skill owns one coding agent and one independent local reviewer.\n- **Issue delivery:** `$agent-issue-loop` owns Issue, branch, PR, closure, and handoff. Supply it this Skill\'s TaskBrief; do not start a local independent reviewer. Once a PR exists, `$agent-pr-loop` exclusively owns review, CI, fixes, and merge gates.\n- **Existing PR:** invoke `$agent-pr-loop` directly and supply the TaskBrief. Do not create a coding or review loop here.\n\n## Establish the TaskBrief\n';
+    const agents = `${project}\n## Tackle 工作流契约\n- \`$tackle-agent-workflow\`提供项目约束和 TaskBrief；仅本地路由使用其编码与独立本地审核。Issue 生命周期归\`$agent-issue-loop\`，PR 审核/CI/修复归\`$agent-pr-loop\`；已有 PR 直接使用后者。不得增加第二个独立审核者。\n<!-- workflow-contract-policy/v2\n{"dirtyIsolation":{"issuePr":"clean_synced","localOwnedBaseline":"tackle-owned-baseline/v1"},"issue":{"localReviewer":false,"owner":"agent-issue-loop","prReviewer":"agent-pr-loop"},"local":{"independentReviewer":true,"owner":"tackle-agent-workflow"},"localVerdict":{"required":["taskBriefSha256","specReceiptHashes","dirtyWorktreeDisposition","specSha256","baseSha","reviewedHead","ownedPaths","patchHash"],"schema":"tackle-local-verdict/v1"},"pullRequest":{"owner":"agent-pr-loop","reviewer":"agent-pr-loop"},"reviewSeverity":{"passBlocking":["P0","P1","P2"],"p3":"informational"},"scopedEligibility":{"allowedPathClasses":["AGENTS.md",".codex/skills/tackle-agent-workflow/**","docs/(workflow|agent-governance)-*.md",".github/*.md|yml|yaml"],"unknownForcesFull":true},"specReceipt":{"schema":"tackle-spec-read/v1"},"taskBrief":{"closedSchema":true,"openDecisionCheck":true,"phaseReceipts":{"pre_dispatch":["coordinator"],"verdict":["coordinator","coding","review"]},"receiptRiskAuthority":true,"schema":"tackle-task-brief/v1"},"visual":{"minimalSmokeCompletesReview":false,"pendingMarker":"视觉与交互统一检查待执行"}}\n-->\n## 本机凭据与多 worktree\n`;
+    const skill = '<!-- workflow-contract-policy-ref: AGENTS.md/workflow-contract-policy/v2 -->\n\n## Route before dispatch\n\n- **Local implementation, no Issue or PR:** this Skill owns one coding agent and one independent local reviewer.\n- **Issue delivery:** `$agent-issue-loop` owns Issue, branch, PR, closure, and handoff. Supply it this Skill\'s TaskBrief; do not start a local independent reviewer. Once a PR exists, `$agent-pr-loop` exclusively owns review, CI, fixes, and merge gates.\n- **Existing PR:** invoke `$agent-pr-loop` directly and supply the TaskBrief. Do not create a coding or review loop here.\n\n## Establish the TaskBrief\n';
     const yaml = 'interface:\n  display_name: "Tackle Agent Workflow"\n  short_description: "Prepare scoped work and locally review implementation"\n  default_prompt: "Use $tackle-agent-workflow to prepare the TaskBrief, choose the correct local, Issue, or PR route, and run only the applicable workflow. Preserve the pending unified visual-review marker unless full visual work is explicitly scoped."\n';
     const template = '## Visual evidence\n\n| Unified visual and interaction review | 视觉与交互统一检查待执行 / Full visual and interaction review completed |\n| Minimal render smoke | Not run / Completed; this never changes the unified-review status |\n\n## Risks, recovery, and rollback\n';
     write(root, 'AGENTS.md', agents);
@@ -105,5 +130,119 @@ test('policy checker detects required workflow markers', () => {
     write(root, '.codex/skills/tackle-agent-workflow/agents/openai.yaml', yaml);
     appendFileSync(path.join(root, '.github/pull_request_template.md'), 'Minimal render smoke replaces the pending unified visual review.\n');
     assert.throws(() => checkPolicy(root), /Workflow policy drift/);
+  } finally { cleanup(root); }
+});
+
+test('spec-read receipts enforce full/scoped plans and canonical v3 hash', () => {
+  const root = temporaryRepo();
+  try {
+    write(root, 'docs/tackle-forger-development-spec-v3.md', '# V3\n\n## 0. Authority\n\n## 19. Risks\n\n## 20. Open\n\n## 21. Relevant\n');
+    const full = receipt(root);
+    assert.equal(checkReadReceipt({ root, receipt: full }).receiptHash, receiptHash(full));
+    const scoped = receipt(root, {
+      role: 'coding', profile: 'SCOPED', riskProfile: 'workflow_docs_metadata', relevantSections: ['21'],
+      requiredSections: ['README', '0', '19', '20', '21'], readSections: ['README', '0', '19', '20', '21'],
+    });
+    assert.equal(checkReadReceipt({ root, receipt: scoped }).requiredSections.includes('21'), true);
+    assert.equal(specReadPlan({ role: 'review', riskProfile: 'workflow_docs_metadata', relevantSections: ['21'] }).profile, 'SCOPED');
+    assert.throws(() => checkReadReceipt({ root, receipt: { ...scoped, specSha256: '0'.repeat(64) } }), /does not match/);
+    for (const missing of ['0', '19', '20', '21']) {
+      assert.throws(() => checkReadReceipt({ root, receipt: { ...scoped, readSections: scoped.readSections.filter((item) => item !== missing) } }), /missing a required/);
+      assert.throws(() => checkReadReceipt({ root, receipt: { ...scoped, requiredSections: scoped.requiredSections.filter((item) => item !== missing), readSections: scoped.readSections.filter((item) => item !== missing) } }), /requiredSections does not match/);
+    }
+    assert.throws(() => checkReadReceipt({ root, receipt: { ...scoped, riskProfile: 'runtime_behavior' } }), /profile must be FULL/);
+  } finally { cleanup(root); }
+});
+
+test('TaskBrief enforces dirty-worktree isolation and deterministic identity', () => {
+  const root = temporaryRepo();
+  try {
+    taskBase(root);
+    const clean = brief(root);
+    const first = checkTaskBrief({ root, brief: clean });
+    const second = checkTaskBrief({ root, brief: JSON.parse(JSON.stringify(clean)) });
+    assert.equal(first.taskBriefSha256, second.taskBriefSha256);
+    assert.equal(first.taskBriefSha256, taskBriefHash(clean));
+    assert.throws(() => checkTaskBrief({ root, brief: { ...clean, workflowMode: 'issue', dirtyWorktreeDisposition: 'clean_synced', preexistingOwnedPaths: ['AGENTS.md'] } }), /Issue\/PR/);
+    assert.throws(() => checkTaskBrief({ root, brief: { ...clean, workflowMode: 'pull_request', dirtyWorktreeDisposition: 'clean' } }), /Issue\/PR/);
+    assert.throws(() => checkTaskBrief({ root, brief: { ...clean, workflowMode: 'issue', reviewedHead: clean.baseSha, dirtyWorktreeDisposition: 'clean_synced', preexistingOwnedPaths: ['AGENTS.md'] } }), /clean_synced/);
+    assert.throws(() => checkTaskBrief({ root, brief: { ...clean, workflowMode: 'pull_request', reviewedHead: clean.baseSha.slice(0, 12), dirtyWorktreeDisposition: 'clean_synced' } }), /exact 40-hex/);
+    write(root, 'AGENTS.md', 'preexisting\n');
+    const baseline = buildOwnedBaselineManifest({ root, baseSha: clean.baseSha, ownedPaths: ['docs/tackle-forger-development-spec-v3.md', 'AGENTS.md'] });
+    assert.throws(() => checkTaskBrief({ root, brief: { ...clean, preexistingOwnedPaths: ['AGENTS.md'], dirtyWorktreeDisposition: 'include_with_frozen_baseline' } }), /unknown, missing, or inapplicable keys/);
+    const frozen = { ...clean, ownedPaths: ['AGENTS.md', 'docs/tackle-forger-development-spec-v3.md'], preexistingOwnedPaths: ['AGENTS.md'], riskProfile: 'runtime_product_domain', scopeHasRuntimeSemantics: true, specReadReceipts: [receipt(root, { riskProfile: 'runtime_product_domain', reason: 'authority baseline' })], dirtyWorktreeDisposition: 'include_with_frozen_baseline', preTaskOwnedBaselineManifest: baseline, preTaskOwnedBaselineHash: ownedBaselineHash(baseline) };
+    assert.equal(checkTaskBrief({ root, brief: frozen }).dirtyWorktreeDisposition, 'include_with_frozen_baseline');
+    assert.equal(ownedBaselineHash(baseline), ownedBaselineHash(JSON.parse(JSON.stringify(baseline))));
+    assert.throws(() => checkTaskBrief({ root, brief: { ...frozen, preTaskOwnedBaselineHash: '0'.repeat(64) } }), /must match its deterministic baseline manifest/);
+    assert.throws(() => checkTaskBrief({ root, brief: { ...frozen, preTaskOwnedBaselineManifest: { ...baseline, entries: baseline.entries.map((entry) => ({ ...entry, state: 'unchanged' })) } } }), /does not match preexistingOwnedPaths/);
+    assert.throws(() => checkTaskBrief({ root, brief: { ...frozen, preTaskOwnedBaselineManifest: { ...baseline, entries: [...baseline.entries].reverse() } } }), /UTF-8-sort/);
+    assert.throws(() => checkTaskBrief({ root, brief: { ...frozen, preTaskOwnedBaselineManifest: { ...baseline, entries: baseline.entries.map((entry) => ({ ...entry, extra: true })) } } }), /unknown, missing, or inapplicable keys/);
+  } finally { cleanup(root); }
+});
+
+test('TaskBrief rejects empty shells and verdict cross-checks all durable identities', () => {
+  const root = temporaryRepo();
+  try {
+    taskBase(root);
+    const preDispatch = brief(root);
+    for (const field of ['scope', 'acceptanceCriteria', 'exclusions', 'risks', 'validation', 'baseSha', 'reviewedHead', 'preexistingUnownedChanges']) {
+      const invalid = { ...preDispatch }; delete invalid[field];
+      assert.throws(() => checkTaskBrief({ root, brief: invalid }), /TaskBrief/);
+    }
+    assert.throws(() => checkTaskBrief({ root, brief: { ...preDispatch, validation: [{ command: null, naReason: '' }] } }), /requires exactly one command or naReason/);
+    const coding = receipt(root, { role: 'coding', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'implementation' });
+    const review = receipt(root, { role: 'review', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'review' });
+    const verdictBrief = { ...preDispatch, phase: 'verdict', specReadReceipts: [preDispatch.specReadReceipts[0], coding, review] };
+    const checkedBrief = checkTaskBrief({ root, brief: verdictBrief });
+    const verdict = {
+      schema: 'tackle-local-verdict/v1', taskId: verdictBrief.taskId, taskBriefSha256: checkedBrief.taskBriefSha256,
+      specReceiptHashes: checkedBrief.specReceiptHashes, dirtyWorktreeDisposition: verdictBrief.dirtyWorktreeDisposition,
+      specSha256: verdictBrief.specSha256, baseSha: verdictBrief.baseSha, reviewedHead: 'WORKTREE', ownedPaths: verdictBrief.ownedPaths,
+      patchHash: patchHash({ root, baseSha: verdictBrief.baseSha, ownedPaths: verdictBrief.ownedPaths }).patchHash, verdict: 'PASS', findings: [],
+    };
+    assert.equal(checkVerdict({ root, verdict, brief: verdictBrief }).taskBriefSha256, checkedBrief.taskBriefSha256);
+    assert.throws(() => checkTaskBrief({ root, brief: { ...preDispatch, phase: 'verdict' } }), /requires exactly one coordinator, coding, and review/);
+    assert.throws(() => checkTaskBrief({ root, brief: { ...preDispatch, specReadReceipts: [{ ...preDispatch.specReadReceipts[0], relevantSections: ['2'] }] } }), /riskProfile and relevantSections/);
+    assert.throws(() => checkTaskBrief({ root, brief: { ...preDispatch, riskProfile: 'runtime_product_domain', scopeHasRuntimeSemantics: true } }), /riskProfile and relevantSections/);
+    assert.throws(() => checkTaskBrief({ root, brief: { ...preDispatch, unexpected: true } }), /unknown, missing, or inapplicable keys/);
+    assert.throws(() => checkReadReceipt({ root, receipt: { ...preDispatch.specReadReceipts[0], unexpected: true } }), /unknown, missing, or inapplicable keys/);
+    assert.throws(() => checkVerdict({ root, verdict: { ...verdict, patchHash: '0'.repeat(64) }, brief: verdictBrief }), /recomputed current patch hash/);
+    assert.throws(() => checkVerdict({ root, verdict: { ...verdict, extra: true }, brief: verdictBrief }), /unknown, missing, or inapplicable keys/);
+    assert.throws(() => checkVerdict({ root, verdict: { ...verdict, findings: [{ severity: 'P1', file: 'AGENTS.md', line: 1, evidence: 'x', remediation: 'y' }] }, brief: verdictBrief }), /PASS verdict/);
+    assert.throws(() => runCli(['--patch-hash', '--base', verdictBrief.baseSha, '--base', verdictBrief.baseSha, '--owned', 'AGENTS.md'], root), /Usage/);
+    assert.throws(() => runCli(['--check-policy', '--unknown', 'x'], root), /Usage/);
+    assert.throws(() => runCli(['--check-verdict', '--brief', 'brief.json', '--brief', 'brief.json', '--verdict', 'verdict.json'], root), /Usage/);
+    assert.throws(() => runCli(['--owned-baseline', '--base', verdictBrief.baseSha], root), /Usage/);
+  } finally { cleanup(root); }
+});
+
+test('SCOPED eligibility, clean Issue/PR routing, sections, OPEN IDs, and receipt cardinality fail closed', () => {
+  const root = temporaryRepo();
+  try {
+    taskBase(root);
+    const local = brief(root);
+    assert.throws(() => checkTaskBrief({ root, brief: { ...local, ownedPaths: ['src/runtime.ts'] } }), /owned paths require runtime\/high-risk/);
+    assert.throws(() => checkTaskBrief({ root, brief: { ...local, ownedPaths: ['docs/tackle-forger-development-spec-v3.md'] } }), /owned paths require runtime\/high-risk/);
+    const runtimeReceipt = receipt(root, { riskProfile: 'runtime_product_domain', reason: 'runtime change' });
+    const runtimeBrief = { ...local, ownedPaths: ['src/runtime.ts'], riskProfile: 'runtime_product_domain', scopeHasRuntimeSemantics: true, specReadReceipts: [runtimeReceipt] };
+    assert.equal(checkTaskBrief({ root, brief: runtimeBrief }).phase, 'pre_dispatch');
+    assert.throws(() => checkTaskBrief({ root, brief: { ...runtimeBrief, specReadReceipts: [{ ...runtimeReceipt, profile: 'SCOPED' }] } }), /profile must be FULL/);
+    assert.throws(() => checkTaskBrief({ root, brief: { ...local, specReadReceipts: [local.specReadReceipts[0], local.specReadReceipts[0]] } }), /exactly one coordinator/);
+    assert.throws(() => checkTaskBrief({ root, brief: { ...local, relevantSections: ['1', '20', '404'] } }), /section absent/);
+    assert.throws(() => checkTaskBrief({ root, brief: { ...local, openDecisionCheck: { ...local.openDecisionCheck, checkedIds: ['OPEN-999'], applicableIds: ['OPEN-999'] } } }), /complete current v3 OPEN registry/);
+    assert.equal(checkTaskBrief({ root, brief: { ...local, openDecisionCheck: { ...local.openDecisionCheck, applicableIds: [], noApplicableReason: 'No registry item affects this workflow-only change.' } } }).phase, 'pre_dispatch');
+    const issue = { ...local, workflowMode: 'issue', reviewedHead: local.baseSha, dirtyWorktreeDisposition: 'clean_synced' };
+    assert.equal(checkTaskBrief({ root, brief: issue }).reviewedHead, local.baseSha);
+    write(root, 'untracked.txt', 'dirty\n');
+    assert.throws(() => checkTaskBrief({ root, brief: issue }), /actually clean git status/);
+    unlinkSync(path.join(root, 'untracked.txt'));
+    write(root, 'later.txt', 'later\n'); command(root, ['add', '.']); command(root, ['commit', '-qm', 'later']);
+    assert.throws(() => checkTaskBrief({ root, brief: issue }), /current HEAD|HEAD to equal baseSha/);
+    const featureIssue = { ...issue, reviewedHead: command(root, ['rev-parse', 'HEAD']) };
+    assert.equal(checkTaskBrief({ root, brief: featureIssue }).reviewedHead, featureIssue.reviewedHead);
+    const coding = receipt(root, { role: 'coding', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'implementation' });
+    const review = receipt(root, { role: 'review', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'review' });
+    const duplicate = { ...local, baseSha: command(root, ['rev-parse', 'HEAD']), reviewedHead: 'WORKTREE', phase: 'verdict', specReadReceipts: [local.specReadReceipts[0], coding, review, review] };
+    assert.throws(() => checkTaskBrief({ root, brief: duplicate }), /exactly one coordinator, coding, and review/);
   } finally { cleanup(root); }
 });

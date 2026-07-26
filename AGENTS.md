@@ -40,12 +40,14 @@
 ## Tackle 工作流契约
 
 - `$tackle-agent-workflow`提供项目约束和 TaskBrief；仅本地路由使用其编码与独立本地审核。Issue 生命周期归`$agent-issue-loop`，PR 审核/CI/修复归`$agent-pr-loop`；已有 PR 直接使用后者。不得增加第二个独立审核者。
-- TaskBrief必须记录任务与路由、v3 hash/章节/OPEN、base/head或WORKTREE、owned与既有改动、验收/排除、风险、必跑验证和 N/A 理由。
+- TaskBrief必须记录任务与路由、阶段（`pre_dispatch`或`verdict`）、v3 hash、当前v3 headings存在的relevantSections（含20）、结构化OPEN核对、base/head或WORKTREE、owned与既有改动（含unowned）、范围、验收、排除、风险档与是否含运行时语义、必跑验证或 N/A 理由。OPEN核对绑定完整当前登记表hash、检查全部实际ID，并把applicableIds表达为其子集；即使登记表非空也可诚实声明“无适用项”，但须保留非空理由。SCOPED资格由全部owned路径的保守机器分类决定：仅`AGENTS.md`、`.codex/skills/tackle-agent-workflow/**`、明确命名的非权威治理文档和根`.github/*.md|yml|yaml`可候选；`docs/README.md`、v3及其他产品/领域合同、任何其他、运行时代码、包、迁移或配置影响路径强制FULL。TaskBrief是receipt的唯一风险与章节来源：除分类合格的纯workflow/docs/metadata且无运行时语义外，coordinator/coding/review均须FULL；pre-dispatch恰好一个coordinator收据；verdict阶段恰好各一个coordinator、coding、review收据。
+- 本地既有owned改动的冻结基线为`tackle-owned-baseline/v1`确定性manifest/hash，必须绑定base、完整owned路径及既有owned路径；仅64位字符串不是有效基线。
+- 所有版本化收据、TaskBrief、冻结基线、验证项和verdict必须closed schema，拒绝未知、缺失或当前条件不适用字段；Issue/PR的reviewedHead必须是当前HEAD的精确commit、Git状态完全干净，baseSha必须是该head的精确40位已解析祖先（允许feature branch相对base有非空diff），只有local可显式使用WORKTREE。本地审核结论为`tackle-local-verdict/v1`，必须绑定`TaskBrief-SHA256`、全部`Spec-Receipt-Hashes`、`Dirty-Worktree-Disposition`、spec/base/head、owned与重算Patch-Hash；P0/P1/P2阻断PASS，P3仅信息性，不得为取得PASS降级发现。
 - 文档/工作流改动逐个分类 tracked changed、untracked、deleted 或 unchanged；tracked/deleted运行`git diff --check <base> -- <paths>`，untracked运行`git diff --no-index --check /dev/null <path>`，无空白诊断才通过。产品测试未运行时写明无产品代码改动。
 - 工作流改动运行`node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-index`、`--check-policy`和`--patch-hash --base <sha> --owned <path> ...`。
 
-<!-- workflow-contract-policy/v1
-{"issue":{"localReviewer":false,"owner":"agent-issue-loop","prReviewer":"agent-pr-loop"},"local":{"independentReviewer":true,"owner":"tackle-agent-workflow"},"pullRequest":{"owner":"agent-pr-loop","reviewer":"agent-pr-loop"},"visual":{"minimalSmokeCompletesReview":false,"pendingMarker":"视觉与交互统一检查待执行"}}
+<!-- workflow-contract-policy/v2
+{"dirtyIsolation":{"issuePr":"clean_synced","localOwnedBaseline":"tackle-owned-baseline/v1"},"issue":{"localReviewer":false,"owner":"agent-issue-loop","prReviewer":"agent-pr-loop"},"local":{"independentReviewer":true,"owner":"tackle-agent-workflow"},"localVerdict":{"required":["taskBriefSha256","specReceiptHashes","dirtyWorktreeDisposition","specSha256","baseSha","reviewedHead","ownedPaths","patchHash"],"schema":"tackle-local-verdict/v1"},"pullRequest":{"owner":"agent-pr-loop","reviewer":"agent-pr-loop"},"reviewSeverity":{"passBlocking":["P0","P1","P2"],"p3":"informational"},"scopedEligibility":{"allowedPathClasses":["AGENTS.md",".codex/skills/tackle-agent-workflow/**","docs/(workflow|agent-governance)-*.md",".github/*.md|yml|yaml"],"unknownForcesFull":true},"specReceipt":{"schema":"tackle-spec-read/v1"},"taskBrief":{"closedSchema":true,"openDecisionCheck":true,"phaseReceipts":{"pre_dispatch":["coordinator"],"verdict":["coordinator","coding","review"]},"receiptRiskAuthority":true,"schema":"tackle-task-brief/v1"},"visual":{"minimalSmokeCompletesReview":false,"pendingMarker":"视觉与交互统一检查待执行"}}
 -->
 
 ## 本机凭据与多 worktree

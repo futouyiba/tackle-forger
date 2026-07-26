@@ -171,4 +171,4 @@ New domain behavior must cover normal, boundary, conflict, recovery/version-free
 Task Card、TaskBrief、receipt、reviewTier、风险下限、验证矩阵和审核边界统一遵循
 `.codex/skills/tackle-agent-workflow/references/workflow-contract-policy.v2.json`；本文件不维护平行规则。Claude 的PR协调、审核与修复步骤见`.claude/skills/agent-pr-loop/SKILL.md`。
 
-Pull Request合并资格、CI provenance、review signal格式和workflow治理例外统一遵循`.github/merge-gates.md`。可信实时checker对精确head/base返回`READY`且未命中人工关卡时，激活qualified auto-merge standing authorization：coordinator应直接合并一个合格PR，无需本轮用户另行授权。非`READY`或命中人工关卡时必须停止；合并授权不扩张为部署、发布、删除、范围扩张或其他外部副作用。
+Pull Request合并资格、CI provenance、review signal格式和workflow治理例外统一遵循`.github/merge-gates.md`。可信实时checker对精确head/base返回`READY`且未命中人工关卡时，激活qualified auto-merge standing authorization：coordinator应直接合并一个合格PR，无需本轮用户另行授权。用户在本任务开始或进行中明确要求不合并、等待人工合并或合并前再次询问时，必须把该指令保持为任务级人工关卡；只有用户后续明确授权合并才能解除，`READY`、CI/review通过或沉默均不能解除。非`READY`或命中其他人工关卡时也必须停止；合并授权不扩张为部署、发布、删除、范围扩张或其他外部副作用。

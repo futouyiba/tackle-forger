@@ -1515,13 +1515,32 @@ test('merge gate document owns the complete review signal envelope', () => {
   const gatePolicy = readFileSync(path.join(root, '.github/merge-gates.md'), 'utf8');
   const agentPolicy = readFileSync(path.join(root, 'AGENTS.md'), 'utf8');
   const claudePolicy = readFileSync(path.join(root, 'CLAUDE.md'), 'utf8');
-  const policyConsumers = `${gatePolicy}\n${agentPolicy}\n${claudePolicy}`;
+  const codexPrLoop = readFileSync(path.join(root, '.codex/skills/agent-pr-loop/SKILL.md'), 'utf8');
+  const claudePrLoop = readFileSync(path.join(root, '.claude/skills/agent-pr-loop/SKILL.md'), 'utf8');
+  const dailyFlow = readFileSync(path.join(root, '.codex/skills/agent-project-bootstrap/references/daily-project-flow.md'), 'utf8');
+  const managedAutopilot = readFileSync(path.join(root, '.codex/skills/agent-project-bootstrap/references/managed-autopilot.md'), 'utf8');
+  const policyConsumers = [gatePolicy, agentPolicy, claudePolicy, codexPrLoop, claudePrLoop, dailyFlow, managedAutopilot].join('\n');
   assert.match(gatePolicy, /A current review signal is additionally required only\s+when the workflow machine policy, repository or platform policy, or the\s+high-risk merge gate requires one\./);
   assert.match(gatePolicy, /grants standing merge authorization/);
   assert.match(gatePolicy, /No additional per-turn user\s+instruction is required/);
   assert.match(gatePolicy, /A fresh exact-head\/base `READY` result activates the qualified automatic\s+merge authorization above/);
+  assert.match(gatePolicy, /An explicit user instruction made at the start of or during the current task[\s\S]+creates a\s+task-scoped human gate/);
+  assert.match(gatePolicy, /`READY` does not override that hold/);
+  assert.match(gatePolicy, /Only a later\s+explicit user instruction authorizing the merge clears it/);
+  assert.match(gatePolicy, /immediately disable auto-merge or remove only that pull request from the queue/);
+  assert.match(gatePolicy, /Cancellation and readback do not clear the hold/);
   assert.match(agentPolicy, /qualified auto-merge standing authorization/);
+  assert.match(agentPolicy, /只有用户后续明确授权合并才能解除/);
   assert.match(claudePolicy, /qualified auto-merge standing authorization/);
+  assert.match(claudePolicy, /只有用户后续明确授权合并才能解除/);
+  for (const consumer of [codexPrLoop, claudePrLoop, dailyFlow, managedAutopilot]) {
+    assert.match(consumer, /hold|暂停/);
+    assert.match(consumer, /READY/);
+    assert.match(consumer, /explicit|明确/);
+    assert.match(consumer, /auto-merge/);
+    assert.match(consumer, /queue|退队/);
+    assert.match(consumer, /does not clear|不解除/);
+  }
   assert.doesNotMatch(policyConsumers, /checker is evidence, not merge authorization|checker证据不自行授予合并/);
   assert.match(gatePolicy, /When a review signal is required, the canonical integrated Agent review uses/);
   for (const field of [

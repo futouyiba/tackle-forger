@@ -80,4 +80,4 @@
 
 `npm run governance:check-pr -- --repo futouyiba/tackle-forger --pr <number> --risk <normal|high>`
 
-任何相关远端状态变化后都必须刷新并重跑。不得从被审分支复制checker，也不得通过参数、评论或自身代码自行放行。实时checker对精确head/base返回`READY`，且不存在`.github/merge-gates.md`定义的人工关卡时，即激活本仓库的qualified auto-merge standing authorization：首个有权限的coordinator或单一托管主管应直接合并一个符合条件的PR，无需本轮用户另行授权，并立即回读远端合并结果。checker未返回`READY`或命中人工关卡时必须停止并请求决定。现行仓库不配置GitHub Ruleset、分支保护、required check或额外status context；不得新增重复workflow替代该门禁。合并授权不包括部署、发布、删除、范围扩张或其他外部副作用。
+任何相关远端状态变化后都必须刷新并重跑。不得从被审分支复制checker，也不得通过参数、评论或自身代码自行放行。实时checker对精确head/base返回`READY`，且不存在`.github/merge-gates.md`定义的人工关卡时，即激活本仓库的qualified auto-merge standing authorization：首个有权限的coordinator或单一托管主管应直接合并一个符合条件的PR，无需本轮用户另行授权，并立即回读远端合并结果。用户在本任务开始或进行中明确要求不合并、等待人工合并或合并前再次询问时，该指令建立任务级人工关卡；即使checker返回`READY`也必须等待，且只有用户后续明确授权合并才能解除，沉默、CI/review通过或新的`READY`均不能解除。checker未返回`READY`或命中其他人工关卡时也必须停止并请求决定。现行仓库不配置GitHub Ruleset、分支保护、required check或额外status context；不得新增重复workflow替代该门禁。合并授权不包括部署、发布、删除、范围扩张或其他外部副作用。

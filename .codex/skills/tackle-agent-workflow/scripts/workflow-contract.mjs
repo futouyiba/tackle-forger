@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, linkSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -78,6 +78,108 @@ function canonicalJson(value) {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
   if (typeof value === 'object') return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
   fail('Unsupported manifest value');
+}
+function taskBriefRunDirectory(root) {
+  let gitPath; let gitDirectory;
+  try {
+    gitPath = execFileSync('git', ['rev-parse', '--path-format=absolute', '--git-path', 'codex-runs'], { cwd: root, encoding: 'utf8' }).trim();
+    gitDirectory = execFileSync('git', ['rev-parse', '--absolute-git-dir'], { cwd: root, encoding: 'utf8' }).trim();
+  } catch { fail('Cannot resolve Git-private TaskBrief run storage'); }
+  if (!path.isAbsolute(gitPath)) fail('Git-private TaskBrief run storage path must be absolute');
+  const expectedPath = path.join(gitDirectory, 'codex-runs');
+  if (path.normalize(gitPath) !== path.normalize(expectedPath)) fail('Git-private TaskBrief run storage path escaped this worktree Git directory');
+  return expectedPath;
+}
+function verifyPrivateMode(target, expectedMode, label) {
+  if (process.platform === 'win32') return;
+  if ((lstatSync(target).mode & 0o777) !== expectedMode) fail(`Git-private TaskBrief ${label} must have mode ${expectedMode.toString(8)}`);
+}
+function verifyPrivateDirectory(directory) {
+  const stat = lstatSync(directory);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) fail('Git-private TaskBrief run storage directory is unsafe');
+  if (process.platform !== 'win32') {
+    chmodSync(directory, 0o700);
+    verifyPrivateMode(directory, 0o700, 'run storage directory');
+  }
+}
+function readPublishedTaskBrief(storagePath, bytes) {
+  const record = lstatSync(storagePath);
+  if (!record.isFile() || record.isSymbolicLink()) fail(`TaskBrief run storage record is unsafe: ${storagePath}`);
+  verifyPrivateMode(storagePath, 0o600, 'record');
+  if (readFileSync(storagePath, 'utf8') !== bytes) fail(`TaskBrief run storage collision or modified record: ${storagePath}`);
+}
+function cleanAbandonedTaskRunTemps(runDirectory, recordPrefix) {
+  const temporaryPrefix = `.${recordPrefix}.tmp-`;
+  const cutoff = Date.now() - 60_000;
+  for (const name of readdirSync(runDirectory)) {
+    if (!name.startsWith(temporaryPrefix)) continue;
+    const temporaryPath = path.join(runDirectory, name);
+    const temporary = lstatSync(temporaryPath);
+    if (!temporary.isFile() || temporary.isSymbolicLink()) fail(`TaskBrief run storage temporary record is unsafe: ${temporaryPath}`);
+    if (temporary.mtimeMs < cutoff) unlinkSync(temporaryPath);
+  }
+}
+/**
+ * Stores a canonical Task Card or TaskBrief below this worktree's private Git directory.
+ * The kind, task ID and canonical record digests form the immutable record identity.
+ */
+export function writeTaskRun({ root = repositoryRoot(), kind, record }) {
+  if (!['task-card', 'task-brief'].includes(kind)) fail('Task run storage kind is invalid');
+  if (kind === 'task-card') checkTaskCard({ root, card: record });
+  else checkTaskBrief({ root, brief: record });
+  const taskId = kind === 'task-card' ? record?.semantic?.taskId : record?.taskId;
+  if (!isPlainObject(record) || typeof taskId !== 'string' || taskId.length === 0) fail(`${kind} run storage requires a prepared record with a taskId`);
+  const runDirectory = taskBriefRunDirectory(root);
+  try {
+    mkdirSync(runDirectory, { recursive: true, mode: 0o700 });
+    verifyPrivateDirectory(runDirectory);
+    const taskDigest = sha256(Buffer.from(taskId, 'utf8'));
+    const bytes = `${canonicalJson(record)}\n`;
+    const recordDigest = sha256(Buffer.from(canonicalJson(record), 'utf8'));
+    const recordPrefix = `${kind}-${taskDigest}-${recordDigest}`;
+    const storagePath = path.join(runDirectory, `${recordPrefix}.json`);
+    cleanAbandonedTaskRunTemps(runDirectory, recordPrefix);
+    if (existsSync(storagePath)) {
+      readPublishedTaskBrief(storagePath, bytes);
+      return { storagePath, reused: true };
+    }
+    const temporaryPath = path.join(runDirectory, `.${recordPrefix}.tmp-${process.pid}-${randomBytes(16).toString('hex')}`);
+    try {
+      writeFileSync(temporaryPath, bytes, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+      if (process.platform !== 'win32') {
+        chmodSync(temporaryPath, 0o600);
+        verifyPrivateMode(temporaryPath, 0o600, 'temporary record');
+      }
+      // link(2) publishes only a fully-written file and never overwrites an existing record.
+      // It is supported on same-volume NTFS too; unsupported filesystems fail closed.
+      linkSync(temporaryPath, storagePath);
+    } catch (error) {
+      if (error?.code === 'EEXIST') {
+        readPublishedTaskBrief(storagePath, bytes);
+        return { storagePath, reused: true };
+      }
+      throw error;
+    } finally {
+      if (existsSync(temporaryPath)) {
+        const temporary = lstatSync(temporaryPath);
+        if (!temporary.isFile() || temporary.isSymbolicLink()) fail(`Task run storage temporary record is unsafe: ${temporaryPath}`);
+        unlinkSync(temporaryPath);
+      }
+    }
+    readPublishedTaskBrief(storagePath, bytes);
+    return { storagePath, reused: false };
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('Git-private TaskBrief run storage')) throw error;
+    fail(`Cannot write Git-private TaskBrief run storage: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+export function writeTaskBriefRun({ root = repositoryRoot(), brief }) {
+  if (brief?.schema !== TASK_BRIEF_SCHEMA) fail('TaskBrief run storage requires tackle-task-brief/v1');
+  return writeTaskRun({ root, kind: 'task-brief', record: brief });
+}
+export function writeTaskCardRun({ root = repositoryRoot(), card }) {
+  if (card?.schema !== TASK_CARD_SCHEMA) fail('TaskCard run storage requires tackle-task-card/v1');
+  return writeTaskRun({ root, kind: 'task-card', record: card });
 }
 function isPlainObject(value) { return value !== null && typeof value === 'object' && !Array.isArray(value); }
 function requireExactKeys(value, keys, field) {
@@ -1068,7 +1170,7 @@ export function checkPolicy(root = repositoryRoot()) {
   return true;
 }
 function usage() {
-  return `Usage:\n  node ${SCRIPT_RELATIVE} --generate-index\n  node ${SCRIPT_RELATIVE} --check-index\n  node ${SCRIPT_RELATIVE} --check-policy\n  node ${SCRIPT_RELATIVE} --prepare-task-card --input <six-field-card.json>\n  node ${SCRIPT_RELATIVE} --check-task-card --card <task-card.json>\n  node ${SCRIPT_RELATIVE} --upgrade-task-card --card <task-card.json> --boundary-input <formal-boundary.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --prepare-task-brief --input <semantic-input.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --promote-task-brief --brief <pre-dispatch-task-brief.json> --coding-receipt <receipt.json> --review-receipt <receipt.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --check-owned-whitespace --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --spec-read-plan --role <coordinator|coding|review> --risk <risk-profile> [--relevant <v3-section> ...]\n  node ${SCRIPT_RELATIVE} --check-read-receipt --receipt <receipt.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --check-full-read-session --session <session.json>\n  node ${SCRIPT_RELATIVE} --check-task-brief --brief <task-brief.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --owned-baseline --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --run-validation --brief <verdict-task-brief.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --check-verdict --verdict <verdict.json> --brief <task-brief.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --patch-hash --base <sha> --owned <repo-relative-path> [--owned <path> ...]`;
+  return `Usage:\n  node ${SCRIPT_RELATIVE} --generate-index\n  node ${SCRIPT_RELATIVE} --check-index\n  node ${SCRIPT_RELATIVE} --check-policy\n  node ${SCRIPT_RELATIVE} --prepare-task-card --input <six-field-card.json> [--store-run]\n  node ${SCRIPT_RELATIVE} --check-task-card --card <task-card.json>\n  node ${SCRIPT_RELATIVE} --upgrade-task-card --card <task-card.json> --boundary-input <formal-boundary.json> [--store-run] [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --prepare-task-brief --input <semantic-input.json> [--store-run] [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --promote-task-brief --brief <pre-dispatch-task-brief.json> --coding-receipt <receipt.json> --review-receipt <receipt.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --check-owned-whitespace --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --spec-read-plan --role <coordinator|coding|review> --risk <risk-profile> [--relevant <v3-section> ...]\n  node ${SCRIPT_RELATIVE} --check-read-receipt --receipt <receipt.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --check-full-read-session --session <session.json>\n  node ${SCRIPT_RELATIVE} --check-task-brief --brief <task-brief.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --owned-baseline --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --run-validation --brief <verdict-task-brief.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --check-verdict --verdict <verdict.json> --brief <task-brief.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --patch-hash --base <sha> --owned <repo-relative-path> [--owned <path> ...]`;
 }
 function parseActionOptions(argv, action, allowed, required = []) {
   if (argv[0] !== action) fail(usage());
@@ -1082,6 +1184,11 @@ function parseActionOptions(argv, action, allowed, required = []) {
   for (const flag of required) if (values[flag].length !== 1) fail(usage());
   return values;
 }
+function extractStoreRun(argv) {
+  const count = argv.filter((value) => value === '--store-run').length;
+  if (count > 1) fail(usage());
+  return { storeRun: count === 1, argv: count === 1 ? argv.filter((value) => value !== '--store-run') : argv };
+}
 export function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
   const action = argv[0];
   if (!['--generate-index', '--check-index', '--check-policy', '--prepare-task-card', '--check-task-card', '--upgrade-task-card', '--prepare-task-brief', '--promote-task-brief', '--check-owned-whitespace', '--spec-read-plan', '--check-read-receipt', '--check-full-read-session', '--check-task-brief', '--owned-baseline', '--run-validation', '--check-verdict', '--patch-hash'].includes(action)) fail(usage());
@@ -1094,24 +1201,32 @@ export function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
   }
   if (action === '--prepare-task-card' || action === '--check-task-card') {
     const flag = action === '--prepare-task-card' ? '--input' : '--card';
-    const values = parseActionOptions(argv, action, { [flag]: false }, [flag]);
+    const store = action === '--prepare-task-card' ? extractStoreRun(argv) : { storeRun: false, argv };
+    const values = parseActionOptions(store.argv, action, { [flag]: false }, [flag]);
     const file = path.resolve(cwd, values[flag][0]);
     const result = action === '--prepare-task-card'
       ? prepareTaskCard({ root, input: readJsonFile(file, 'Task Card input') })
       : checkTaskCard({ root, card: readJsonFile(file, 'Task Card') });
+    if (store.storeRun) process.stderr.write(`TaskCard-Run-Path: ${writeTaskCardRun({ root, card: result }).storagePath}\n`);
     return JSON.stringify(result, null, 2);
   }
   if (action === '--upgrade-task-card') {
-    const values = parseActionOptions(argv, action, { '--card': false, '--boundary-input': false, '--current-agent-identity': false, '--current-context-session-id': false, '--current-context-state': false }, ['--card', '--boundary-input']);
+    const store = extractStoreRun(argv);
+    const values = parseActionOptions(store.argv, action, { '--card': false, '--boundary-input': false, '--current-agent-identity': false, '--current-context-session-id': false, '--current-context-state': false }, ['--card', '--boundary-input']);
     const currentReuseContext = values['--current-agent-identity'].length === 0 && values['--current-context-session-id'].length === 0 && values['--current-context-state'].length === 0 ? undefined : { currentAgentIdentity: values['--current-agent-identity'][0], currentContextSessionId: values['--current-context-session-id'][0], currentContextState: values['--current-context-state'][0] };
-    return JSON.stringify(upgradeTaskCard({ root, card: readJsonFile(path.resolve(cwd, values['--card'][0]), 'Task Card'), boundaryInput: readJsonFile(path.resolve(cwd, values['--boundary-input'][0]), 'Task Card upgrade input'), currentReuseContext }), null, 2);
+    const brief = upgradeTaskCard({ root, card: readJsonFile(path.resolve(cwd, values['--card'][0]), 'Task Card'), boundaryInput: readJsonFile(path.resolve(cwd, values['--boundary-input'][0]), 'Task Card upgrade input'), currentReuseContext });
+    if (store.storeRun) process.stderr.write(`TaskBrief-Run-Path: ${writeTaskBriefRun({ root, brief }).storagePath}\n`);
+    return JSON.stringify(brief, null, 2);
   }
   if (action === '--prepare-task-brief') {
-    const values = parseActionOptions(argv, action, { '--input': false, '--current-agent-identity': false, '--current-context-session-id': false, '--current-context-state': false }, ['--input']);
+    const store = extractStoreRun(argv);
+    const values = parseActionOptions(store.argv, action, { '--input': false, '--current-agent-identity': false, '--current-context-session-id': false, '--current-context-state': false }, ['--input']);
     const currentReuseContext = values['--current-agent-identity'].length === 0 && values['--current-context-session-id'].length === 0 && values['--current-context-state'].length === 0 ? undefined : {
       currentAgentIdentity: values['--current-agent-identity'][0], currentContextSessionId: values['--current-context-session-id'][0], currentContextState: values['--current-context-state'][0],
     };
-    return JSON.stringify(prepareTaskBrief({ root, input: readJsonFile(path.resolve(cwd, values['--input'][0]), 'Task preparation input'), currentReuseContext }), null, 2);
+    const brief = prepareTaskBrief({ root, input: readJsonFile(path.resolve(cwd, values['--input'][0]), 'Task preparation input'), currentReuseContext });
+    if (store.storeRun) process.stderr.write(`TaskBrief-Run-Path: ${writeTaskBriefRun({ root, brief }).storagePath}\n`);
+    return JSON.stringify(brief, null, 2);
   }
   if (action === '--promote-task-brief') {
     const values = parseActionOptions(argv, action, { '--brief': false, '--coding-receipt': false, '--review-receipt': false, '--reuse-contexts': false }, ['--brief', '--coding-receipt', '--review-receipt']);

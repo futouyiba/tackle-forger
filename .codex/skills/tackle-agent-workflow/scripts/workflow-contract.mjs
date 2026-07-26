@@ -82,7 +82,11 @@ function requireNonEmptyStringArray(value, field) {
   if (result.length === 0) fail(`${field} must not be empty`);
   return result;
 }
-function sameSet(left, right) { return left.length === right.length && left.every((item) => right.includes(item)); }
+function sameSet(left, right) {
+  const leftSet = new Set(left);
+  const rightSet = new Set(right);
+  return leftSet.size === left.length && rightSet.size === right.length && leftSet.size === rightSet.size && [...leftSet].every((item) => rightSet.has(item));
+}
 function requireCurrentSpecHash(root, value) {
   const expected = sha256(readFileSync(path.join(root, SPEC_RELATIVE)));
   if (value !== expected) fail('specSha256 does not match the current canonical v3 specification');
@@ -249,40 +253,89 @@ function validateIdentity(root, value, field, allowWorktree = false) {
   if (allowWorktree && value === 'WORKTREE') return 'WORKTREE';
   return canonicalCommit(root, value, field);
 }
-function requireSha256OrNone(value, field, allowNone = false) {
-  if ((allowNone && value === 'none') || /^[0-9a-f]{64}$/.test(value ?? '')) return value;
-  fail(`${field} must be a lowercase SHA-256${allowNone ? ' or none' : ''}`);
-}
-function validateReuseIdentity(value, inputIdentity, field = 'validationEvidence.reuseIdentity') {
-  requireExactKeys(value, ['artifactIdentity', 'relevantInputsHash', 'dependencyLockHash', 'commandContractHash', 'environmentIdentity'], field);
-  if (value.artifactIdentity !== inputIdentity) fail(`${field}.artifactIdentity must match the validation input identity`);
-  requireSha256OrNone(value.relevantInputsHash, `${field}.relevantInputsHash`);
-  requireSha256OrNone(value.dependencyLockHash, `${field}.dependencyLockHash`, true);
-  requireSha256OrNone(value.commandContractHash, `${field}.commandContractHash`);
-  requireString(value.environmentIdentity, `${field}.environmentIdentity`);
-  return value;
-}
-export function canReuseValidation(previous, current) {
-  const previousIdentity = validateReuseIdentity(previous.reuseIdentity, previous.inputIdentity, 'previous.reuseIdentity');
-  const currentIdentity = validateReuseIdentity(current.reuseIdentity, current.inputIdentity, 'current.reuseIdentity');
-  return canonicalJson(previousIdentity) === canonicalJson(currentIdentity);
-}
-export function captureValidationSummary({ inputIdentity, reuseIdentity, results, timestamp = new Date().toISOString() }) {
-  requireString(inputIdentity, 'capture.inputIdentity');
-  validateReuseIdentity(reuseIdentity, inputIdentity, 'capture.reuseIdentity');
-  if (!Array.isArray(results) || results.length === 0) fail('capture.results must be non-empty');
-  if (Number.isNaN(Date.parse(timestamp)) || new Date(timestamp).toISOString() !== timestamp) fail('capture.timestamp must be strict ISO-8601 UTC');
+function stableHash(value) { return sha256(Buffer.from(canonicalJson(value), 'utf8')); }
+function validationArtifact(root, brief, briefResult) {
+  if (briefResult.reviewedHead === 'WORKTREE') {
+    const current = patchHash({ root, baseSha: briefResult.baseSha, ownedPaths: brief.ownedPaths });
+    return { artifactIdentity: { kind: 'worktree', commitSha: null, patchHash: current.patchHash }, inputIdentity: current.patchHash, relevantInputsHash: stableHash(current.manifest) };
+  }
+  const currentHead = git(root, ['rev-parse', 'HEAD'])?.toString('utf8').trim();
+  const porcelain = git(root, ['status', '--porcelain=v1', '-z']);
+  if (currentHead !== briefResult.reviewedHead || porcelain === null || porcelain.length !== 0) fail('Committed validation requires the current clean HEAD to equal the verdict TaskBrief reviewedHead');
+  const entries = brief.ownedPaths.map((repoPath) => {
+    const entry = baseEntry(root, briefResult.reviewedHead, repoPath);
+    if (!entry) return { path: repoPath, state: 'absent' };
+    return { path: repoPath, state: 'present', mode: entry.mode, length: entry.bytes.length, contentSha256: sha256(entry.bytes) };
+  }).sort((left, right) => compareUtf8(left.path, right.path));
   return {
-    schema: VALIDATION_SUMMARY_SCHEMA, inputIdentity, reuseIdentity,
-    results: results.map((entry, index) => {
-      requireExactKeys(entry, ['command', 'exitCode', 'durationMs', 'failureDetail'], `capture.results[${index}]`);
-      requireString(entry.command, `capture.results[${index}].command`);
-      if (!Number.isSafeInteger(entry.exitCode) || entry.exitCode < 0 || !Number.isSafeInteger(entry.durationMs) || entry.durationMs < 0) fail(`capture.results[${index}] has invalid exitCode or durationMs`);
-      if (entry.exitCode === 0 && entry.failureDetail !== null) fail(`capture.results[${index}] successful command cannot have failure detail`);
-      if (entry.exitCode !== 0 && (typeof entry.failureDetail !== 'string' || entry.failureDetail.length === 0)) fail(`capture.results[${index}] failed command requires failure detail`);
-      return { command: entry.command, inputIdentity, exitCode: entry.exitCode, result: entry.exitCode === 0 ? 'PASS' : 'FAIL', timestamp, durationMs: entry.durationMs, failureDetail: entry.failureDetail };
-    }),
+    artifactIdentity: { kind: 'commit', commitSha: briefResult.reviewedHead, patchHash: null },
+    inputIdentity: briefResult.reviewedHead,
+    relevantInputsHash: stableHash({ baseSha: briefResult.baseSha, headSha: briefResult.reviewedHead, entries }),
   };
+}
+function dependencyLockHash(root) {
+  const candidates = ['package-lock.json', 'npm-shrinkwrap.json', 'legacy-workspace/pnpm-lock.yaml'];
+  const entries = candidates.filter((relative) => existsSync(path.join(root, relative))).map((relative) => ({ path: relative, contentSha256: sha256(readFileSync(path.join(root, relative))) }));
+  return entries.length === 0 ? 'none' : stableHash(entries);
+}
+function commandSpec(briefResult, brief, command) {
+  const node = process.execPath;
+  const script = SCRIPT_RELATIVE;
+  const staticCommands = new Map([
+    [`node ${script} --check-index`, [node, [script, '--check-index']]],
+    [`node ${script} --check-policy`, [node, [script, '--check-policy']]],
+    [`node --test ${script.replace('.mjs', '.test.mjs')}`, [node, ['--test', script.replace('.mjs', '.test.mjs')]]],
+    ['npm run typecheck', ['npm', ['run', 'typecheck']]],
+    ['npm run lint', ['npm', ['run', 'lint']]],
+    ['npm test', ['npm', ['test']]],
+    ['node --test tests/package-manager-boundaries.test.mjs', [node, ['--test', 'tests/package-manager-boundaries.test.mjs']]],
+    ['pnpm --dir legacy-workspace install --frozen-lockfile', ['pnpm', ['--dir', 'legacy-workspace', 'install', '--frozen-lockfile']]],
+    ["pnpm --dir legacy-workspace --filter '@tackle-forger/*' typecheck", ['pnpm', ['--dir', 'legacy-workspace', '--filter', '@tackle-forger/*', 'typecheck']]],
+    ["pnpm --dir legacy-workspace --filter '@tackle-forger/*' lint", ['pnpm', ['--dir', 'legacy-workspace', '--filter', '@tackle-forger/*', 'lint']]],
+    ["pnpm --dir legacy-workspace --filter '@tackle-forger/*' test", ['pnpm', ['--dir', 'legacy-workspace', '--filter', '@tackle-forger/*', 'test']]],
+    ["pnpm --dir legacy-workspace --filter '@tackle-forger/*' build", ['pnpm', ['--dir', 'legacy-workspace', '--filter', '@tackle-forger/*', 'build']]],
+  ]);
+  if (staticCommands.has(command)) {
+    const [executable, args] = staticCommands.get(command);
+    return { command, executable, args };
+  }
+  if (command === dynamicDiffCommand(briefResult.baseSha, brief.ownedPaths)) return { command, executable: 'git', args: ['diff', '--check', briefResult.baseSha, '--', ...brief.ownedPaths] };
+  fail(`Validation command is not in the closed execution catalog: ${command}`);
+}
+export function validationExecutionPlan({ root = repositoryRoot(), brief }) {
+  const briefResult = checkTaskBrief({ root, brief });
+  if (briefResult.phase !== 'verdict') fail('Validation execution requires a verdict-phase TaskBrief');
+  const commands = requireNonEmptyStringArray(brief.validationPlan.requiredCommands, 'TaskBrief.validationPlan.requiredCommands');
+  const plan = commands.map((command) => commandSpec(briefResult, brief, command));
+  const artifact = validationArtifact(root, brief, briefResult);
+  return {
+    taskBriefSha256: briefResult.taskBriefSha256,
+    artifact,
+    reuseIdentity: {
+      artifactIdentity: artifact.inputIdentity,
+      relevantInputsHash: artifact.relevantInputsHash,
+      dependencyLockHash: dependencyLockHash(root),
+      commandContractHash: stableHash(plan.map(({ command, executable, args }) => ({ command, executable, args }))),
+      environmentIdentity: stableHash({ node: process.version, platform: process.platform, arch: process.arch }),
+    },
+    commands: plan,
+  };
+}
+function failureDetail(result) {
+  const output = Buffer.concat([result.stdout ?? Buffer.alloc(0), result.stderr ?? Buffer.alloc(0)]).toString('utf8').trim();
+  const detail = output.slice(0, 8192) || result.error?.message || `process exited ${result.status ?? 'without an exit status'}`;
+  return detail;
+}
+export function runValidation({ root = repositoryRoot(), brief }) {
+  const plan = validationExecutionPlan({ root, brief });
+  const results = plan.commands.map(({ command, executable, args }) => {
+    const started = new Date();
+    const result = spawnSync(executable, args, { cwd: root, encoding: null, timeout: 15 * 60 * 1000, maxBuffer: 16 * 1024 * 1024 });
+    const durationMs = Math.max(0, Date.now() - started.getTime());
+    const exitCode = result.status === 0 && !result.error ? 0 : (Number.isSafeInteger(result.status) && result.status >= 0 ? result.status : 1);
+    return { command, inputIdentity: plan.artifact.inputIdentity, exitCode, result: exitCode === 0 ? 'PASS' : 'FAIL', timestamp: started.toISOString(), durationMs, failureDetail: exitCode === 0 ? null : failureDetail(result) };
+  });
+  return { schema: VALIDATION_SUMMARY_SCHEMA, runner: 'closed_command_catalog/v1', taskBriefSha256: plan.taskBriefSha256, artifactIdentity: plan.artifact.artifactIdentity, inputIdentity: plan.artifact.inputIdentity, reuseIdentity: plan.reuseIdentity, results };
 }
 function validateBriefNarrative(brief, { legacyTouched }) {
   requireString(brief.scope, 'TaskBrief.scope');
@@ -444,7 +497,7 @@ export function checkTaskBrief({ root = repositoryRoot(), brief }) {
   return { taskBriefSha256: taskBriefHash(brief), specReceiptHashes: [...receiptHashes].sort(compareUtf8), dirtyWorktreeDisposition: disposition, baseSha, reviewedHead, phase };
 }
 export function checkVerdict({ root = repositoryRoot(), verdict, brief }) {
-  requireExactKeys(verdict, ['schema', 'taskId', 'taskBriefSha256', 'specReceiptHashes', 'dirtyWorktreeDisposition', 'specSha256', 'baseSha', 'reviewedHead', 'ownedPaths', 'artifactIdentity', 'validationEvidence', 'verdict', 'findings'], 'verdict');
+  requireExactKeys(verdict, ['schema', 'taskId', 'taskBriefSha256', 'specReceiptHashes', 'dirtyWorktreeDisposition', 'specSha256', 'baseSha', 'reviewedHead', 'ownedPaths', 'artifactIdentity', 'verdict', 'findings'], 'verdict');
   if (verdict.schema !== VERDICT_SCHEMA) fail(`verdict.schema must be ${VERDICT_SCHEMA}`);
   const briefResult = checkTaskBrief({ root, brief });
   if (briefResult.phase !== 'verdict') fail('Verdict requires a verdict-phase TaskBrief');
@@ -467,22 +520,6 @@ export function checkVerdict({ root = repositoryRoot(), verdict, brief }) {
     currentPatchHash = patchHash({ root, baseSha: briefResult.baseSha, ownedPaths: brief.ownedPaths }).patchHash;
     if (verdict.artifactIdentity.patchHash !== currentPatchHash) fail('Worktree verdict patchHash must match the recomputed current patch hash');
   } else fail('verdict.artifactIdentity.kind must be commit or worktree');
-  requireExactKeys(verdict.validationEvidence, ['schema', 'inputIdentity', 'reuseIdentity', 'results'], 'verdict.validationEvidence');
-  if (verdict.validationEvidence.schema !== VALIDATION_SUMMARY_SCHEMA) fail(`verdict.validationEvidence.schema must be ${VALIDATION_SUMMARY_SCHEMA}`);
-  if (verdict.validationEvidence.inputIdentity !== (identityKind === 'commit' ? verdict.artifactIdentity.commitSha : currentPatchHash)) fail('verdict.validationEvidence.inputIdentity must bind the reviewed artifact');
-  validateReuseIdentity(verdict.validationEvidence.reuseIdentity, verdict.validationEvidence.inputIdentity);
-  if (!Array.isArray(verdict.validationEvidence.results) || verdict.validationEvidence.results.length === 0) fail('verdict.validationEvidence.results must be non-empty');
-  const requiredCommands = brief.validationPlan.requiredCommands;
-  const summarizedCommands = verdict.validationEvidence.results.map((result) => result.command);
-  if (!sameSet(summarizedCommands, requiredCommands)) fail('validationEvidence must cover each TaskBrief required command exactly once, with no unrelated command');
-  verdict.validationEvidence.results.forEach((result, index) => {
-    requireExactKeys(result, ['command', 'inputIdentity', 'exitCode', 'result', 'timestamp', 'durationMs', 'failureDetail'], `verdict.validationEvidence.results[${index}]`);
-    requireString(result.command, `verdict.validationEvidence.results[${index}].command`);
-    const parsedTimestamp = Date.parse(result.timestamp);
-    if (result.inputIdentity !== verdict.validationEvidence.inputIdentity || !Number.isSafeInteger(result.exitCode) || result.exitCode < 0 || !['PASS', 'FAIL'].includes(result.result) || typeof result.timestamp !== 'string' || Number.isNaN(parsedTimestamp) || new Date(parsedTimestamp).toISOString() !== result.timestamp || parsedTimestamp > Date.now() + 5 * 60 * 1000 || !Number.isSafeInteger(result.durationMs) || result.durationMs < 0) fail(`verdict.validationEvidence.results[${index}] is invalid`);
-    if (result.result === 'PASS' && (result.exitCode !== 0 || result.failureDetail !== null)) fail(`verdict.validationEvidence.results[${index}] PASS must have exit 0 and no failure detail`);
-    if (result.result === 'FAIL' && (result.exitCode === 0 || typeof result.failureDetail !== 'string' || result.failureDetail.length === 0)) fail(`verdict.validationEvidence.results[${index}] FAIL must contain expandable failure detail`);
-  });
   if (!['PASS', 'FINDINGS'].includes(verdict.verdict)) fail('verdict.verdict must be PASS or FINDINGS');
   if (!Array.isArray(verdict.findings)) fail('verdict.findings must be an array');
   verdict.findings.forEach((finding, index) => {
@@ -490,7 +527,7 @@ export function checkVerdict({ root = repositoryRoot(), verdict, brief }) {
     if (!['P0', 'P1', 'P2', 'P3'].includes(finding.severity) || typeof finding.line !== 'number' || !Number.isInteger(finding.line) || finding.line < 1) fail(`verdict.findings[${index}] has invalid severity or location`);
     requireString(finding.file, `verdict.findings[${index}].file`); requireString(finding.evidence, `verdict.findings[${index}].evidence`); requireString(finding.remediation, `verdict.findings[${index}].remediation`);
   });
-  if (verdict.verdict === 'PASS' && (verdict.findings.some((finding) => ['P0', 'P1', 'P2'].includes(finding.severity)) || verdict.validationEvidence.results.some((result) => result.result === 'FAIL'))) fail('PASS verdict cannot contain P0, P1, P2 findings, or failed validation');
+  if (verdict.verdict === 'PASS' && verdict.findings.some((finding) => ['P0', 'P1', 'P2'].includes(finding.severity))) fail('PASS verdict cannot contain P0, P1, or P2 findings');
   return { artifactIdentity: verdict.artifactIdentity, taskBriefSha256: briefResult.taskBriefSha256 };
 }
 export function checkPolicy(root = repositoryRoot()) {
@@ -512,11 +549,11 @@ export function checkPolicy(root = repositoryRoot()) {
     dirtyIsolation: { issuePr: 'clean_synced', localOwnedBaseline: OWNED_BASELINE_SCHEMA },
     issue: { localReviewer: false, owner: 'agent-issue-loop', prReviewer: 'agent-pr-loop' },
     local: { independentReviewer: true, owner: 'tackle-agent-workflow' },
-    localVerdict: { artifactIdentity: { committed: 'commit_sha_only', worktree: 'base_owned_paths_patch_hash' }, required: ['taskBriefSha256', 'specReceiptHashes', 'dirtyWorktreeDisposition', 'specSha256', 'baseSha', 'reviewedHead', 'ownedPaths', 'artifactIdentity', 'validationEvidence'], schema: VERDICT_SCHEMA },
+    localVerdict: { artifactIdentity: { committed: 'commit_sha_only', worktree: 'base_owned_paths_patch_hash' }, required: ['taskBriefSha256', 'specReceiptHashes', 'dirtyWorktreeDisposition', 'specSha256', 'baseSha', 'reviewedHead', 'ownedPaths', 'artifactIdentity'], schema: VERDICT_SCHEMA },
     pullRequest: { owner: 'agent-pr-loop', reviewer: 'agent-pr-loop' },
     reviewSeverity: { passBlocking: ['P0', 'P1', 'P2'], p3: 'informational' },
     scopedEligibility: { allowedPathClasses: ['AGENTS.md', '.codex/skills/tackle-agent-workflow/**', 'docs/(workflow|agent-governance)-*.md', '.github/*.md|yml|yaml'], unknownForcesFull: true },
-    specReceipt: { schema: SPEC_READ_SCHEMA }, taskBrief: { allowedChangesEqualsOwnedPaths: true, closedSchema: true, conditionalNaApplicability: CONDITIONAL_NA_APPLICABILITY, conditionalNaCatalog: { legacyWorkspaceCi: 'legacy_workspace_ci', productRuntimeTests: 'product_runtime_tests' }, evidenceStages: { development: 'pre_dispatch_non_pr_final', localReviewHandoff: 'local_verdict', prFinal: 'pr_final_change_class' }, openDecisionCheck: true, phaseReceipts: { pre_dispatch: ['coordinator'], verdict: ['coordinator', 'coding', 'review'] }, receiptRiskAuthority: true, schema: TASK_BRIEF_SCHEMA, structuredFields: ['changeClass', 'allowedChanges', 'riskDimensions', 'validationPlan'] }, validationEvidence: { automaticSummary: 'capture_validation_cli_no_command_execution', reuseRequiresUnchanged: ['version', 'relevant_inputs', 'dependency_lock', 'command_contract', 'environment_identity'], schema: VALIDATION_SUMMARY_SCHEMA }, validationMatrix: { commandsAndScenariosSeparated: true, legacyWorkspaceCommands: LEGACY_WORKSPACE_COMMANDS, mandatoryWorkflowCommands: MANDATORY_WORKFLOW_COMMANDS, prFinalCommandsNonWaivable: ['npm run typecheck', 'npm run lint', 'npm test'], triggeredCannotBeNa: true, triggeredScenariosNonWaivable: true, userVisiblePathClassifier: 'tsx_jsx_css_scss_sass_less_html_and_ui_roots', userVisibleScenario: 'unified_visual_review_pending_or_completed', workflowMetadataDynamicDiff: true },
+    specReceipt: { schema: SPEC_READ_SCHEMA }, taskBrief: { allowedChangesEqualsOwnedPaths: true, closedSchema: true, conditionalNaApplicability: CONDITIONAL_NA_APPLICABILITY, conditionalNaCatalog: { legacyWorkspaceCi: 'legacy_workspace_ci', productRuntimeTests: 'product_runtime_tests' }, evidenceStages: { development: 'pre_dispatch_non_pr_final', localReviewHandoff: 'local_verdict', prFinal: 'pr_final_change_class' }, openDecisionCheck: true, phaseReceipts: { pre_dispatch: ['coordinator'], verdict: ['coordinator', 'coding', 'review'] }, receiptRiskAuthority: true, schema: TASK_BRIEF_SCHEMA, structuredFields: ['changeClass', 'allowedChanges', 'riskDimensions', 'validationPlan'] }, validationRunner: { closedCommandCatalog: true, formalVerdictEvidence: false, reuseRequiresUnchanged: ['artifact', 'relevant_inputs', 'dependency_lock', 'command_contract', 'environment_identity'], schema: VALIDATION_SUMMARY_SCHEMA }, validationMatrix: { commandsAndScenariosSeparated: true, legacyWorkspaceCommands: LEGACY_WORKSPACE_COMMANDS, mandatoryWorkflowCommands: MANDATORY_WORKFLOW_COMMANDS, prFinalCommandsNonWaivable: ['npm run typecheck', 'npm run lint', 'npm test'], triggeredCannotBeNa: true, triggeredScenariosNonWaivable: true, userVisiblePathClassifier: 'tsx_jsx_css_scss_sass_less_html_and_ui_roots', userVisibleScenario: 'unified_visual_review_pending_or_completed', workflowMetadataDynamicDiff: true },
     visual: { minimalSmokeCompletesReview: false, pendingMarker: '视觉与交互统一检查待执行' },
   };
   if (canonicalJson(policy) !== canonicalJson(expectedPolicy)) fail('Workflow policy drift: canonical AGENTS policy differs');
@@ -565,7 +602,7 @@ export function checkPolicy(root = repositoryRoot()) {
   return true;
 }
 function usage() {
-  return `Usage:\n  node ${SCRIPT_RELATIVE} --generate-index\n  node ${SCRIPT_RELATIVE} --check-index\n  node ${SCRIPT_RELATIVE} --check-policy\n  node ${SCRIPT_RELATIVE} --spec-read-plan --role <coordinator|coding|review> --risk <risk-profile> [--relevant <v3-section> ...]\n  node ${SCRIPT_RELATIVE} --check-read-receipt --receipt <receipt.json>\n  node ${SCRIPT_RELATIVE} --check-task-brief --brief <task-brief.json>\n  node ${SCRIPT_RELATIVE} --owned-baseline --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --capture-validation --input <executed-results.json>\n  node ${SCRIPT_RELATIVE} --check-verdict --verdict <verdict.json> --brief <task-brief.json>\n  node ${SCRIPT_RELATIVE} --patch-hash --base <sha> --owned <repo-relative-path> [--owned <path> ...]`;
+  return `Usage:\n  node ${SCRIPT_RELATIVE} --generate-index\n  node ${SCRIPT_RELATIVE} --check-index\n  node ${SCRIPT_RELATIVE} --check-policy\n  node ${SCRIPT_RELATIVE} --spec-read-plan --role <coordinator|coding|review> --risk <risk-profile> [--relevant <v3-section> ...]\n  node ${SCRIPT_RELATIVE} --check-read-receipt --receipt <receipt.json>\n  node ${SCRIPT_RELATIVE} --check-task-brief --brief <task-brief.json>\n  node ${SCRIPT_RELATIVE} --owned-baseline --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --run-validation --brief <verdict-task-brief.json>\n  node ${SCRIPT_RELATIVE} --check-verdict --verdict <verdict.json> --brief <task-brief.json>\n  node ${SCRIPT_RELATIVE} --patch-hash --base <sha> --owned <repo-relative-path> [--owned <path> ...]`;
 }
 function parseActionOptions(argv, action, allowed, required = []) {
   if (argv[0] !== action) fail(usage());
@@ -581,7 +618,7 @@ function parseActionOptions(argv, action, allowed, required = []) {
 }
 export function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
   const action = argv[0];
-  if (!['--generate-index', '--check-index', '--check-policy', '--spec-read-plan', '--check-read-receipt', '--check-task-brief', '--owned-baseline', '--capture-validation', '--check-verdict', '--patch-hash'].includes(action)) fail(usage());
+  if (!['--generate-index', '--check-index', '--check-policy', '--spec-read-plan', '--check-read-receipt', '--check-task-brief', '--owned-baseline', '--run-validation', '--check-verdict', '--patch-hash'].includes(action)) fail(usage());
   const root = repositoryRoot(cwd);
   if (action === '--generate-index' || action === '--check-index' || action === '--check-policy') {
     if (argv.length !== 1) fail(usage());
@@ -601,11 +638,9 @@ export function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
     const values = parseActionOptions(argv, action, { '--brief': false }, ['--brief']);
     return JSON.stringify(checkTaskBrief({ root, brief: readJsonFile(path.resolve(cwd, values['--brief'][0]), 'TaskBrief') }), null, 2);
   }
-  if (action === '--capture-validation') {
-    const values = parseActionOptions(argv, action, { '--input': false }, ['--input']);
-    const input = readJsonFile(path.resolve(cwd, values['--input'][0]), 'executed validation result input');
-    requireExactKeys(input, ['inputIdentity', 'reuseIdentity', 'results', 'timestamp'], 'executed validation result input');
-    return JSON.stringify(captureValidationSummary(input), null, 2);
+  if (action === '--run-validation') {
+    const values = parseActionOptions(argv, action, { '--brief': false }, ['--brief']);
+    return JSON.stringify(runValidation({ root, brief: readJsonFile(path.resolve(cwd, values['--brief'][0]), 'verdict TaskBrief') }), null, 2);
   }
   if (action === '--check-verdict') {
     const values = parseActionOptions(argv, action, { '--verdict': false, '--brief': false }, ['--verdict', '--brief']);

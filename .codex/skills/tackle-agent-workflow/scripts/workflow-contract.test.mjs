@@ -4,7 +4,7 @@ import { appendFileSync, chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { buildNavigationIndex, buildOwnedBaselineManifest, buildPatchManifest, canReuseValidation, captureValidationSummary, checkNavigationIndex, checkPolicy, checkReadReceipt, checkTaskBrief, checkVerdict, openRegistryHash, ownedBaselineHash, patchHash, receiptHash, runCli, specReadPlan, taskBriefHash, writeNavigationIndex } from './workflow-contract.mjs';
+import { buildNavigationIndex, buildOwnedBaselineManifest, buildPatchManifest, checkNavigationIndex, checkPolicy, checkReadReceipt, checkTaskBrief, checkVerdict, openRegistryHash, ownedBaselineHash, patchHash, receiptHash, runCli, specReadPlan, taskBriefHash, validationExecutionPlan, writeNavigationIndex } from './workflow-contract.mjs';
 
 function command(root, args) { return execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim(); }
 function write(root, relative, content) { const target = path.join(root, relative); mkdirSync(path.dirname(target), { recursive: true }); writeFileSync(target, content); }
@@ -42,10 +42,6 @@ function brief(root, overrides = {}) {
   };
 }
 function nonLegacyNa() { return { legacy_workspace_ci: 'No legacy-workspace path is owned.' }; }
-function reuseIdentity(inputIdentity) { return { artifactIdentity: inputIdentity, relevantInputsHash: '1'.repeat(64), dependencyLockHash: 'none', commandContractHash: '2'.repeat(64), environmentIdentity: 'node-22/linux' }; }
-function validationEvidence(taskBrief, inputIdentity) {
-  return captureValidationSummary({ inputIdentity, reuseIdentity: reuseIdentity(inputIdentity), timestamp: '2026-07-26T00:00:00.000Z', results: taskBrief.validationPlan.requiredCommands.map((command) => ({ command, exitCode: 0, durationMs: 1, failureDetail: null })) });
-}
 function taskBase(root) {
   write(root, 'docs/tackle-forger-development-spec-v3.md', '# V3\n\n## 0. Authority\n\n### 0.1 Immutable\n\n## 1. Scope\n\n### 3.1 Method and type\n\n### 5.2 Derived template\n\n## 8. Patch\n\n## 13. Snapshot\n\n## 14. Version\n\n### 18.2 Snapshot\n\n### 18.3 Patch\n\n## 19. Delivery\n\n## 20. Open\n\n### 24.11 Snapshot\n\n## 25. Export\n\n| ID | Type | Status |\n| --- | --- | --- |\n| OPEN-001 Test | x | `OPEN` |\n');
   write(root, 'AGENTS.md', 'base\n');
@@ -213,8 +209,7 @@ test('TaskBrief rejects empty shells and verdict cross-checks all durable identi
       schema: 'tackle-local-verdict/v1', taskId: verdictBrief.taskId, taskBriefSha256: checkedBrief.taskBriefSha256,
       specReceiptHashes: checkedBrief.specReceiptHashes, dirtyWorktreeDisposition: verdictBrief.dirtyWorktreeDisposition,
       specSha256: verdictBrief.specSha256, baseSha: verdictBrief.baseSha, reviewedHead: 'WORKTREE', ownedPaths: verdictBrief.ownedPaths,
-      artifactIdentity: { kind: 'worktree', commitSha: null, patchHash: patchHash({ root, baseSha: verdictBrief.baseSha, ownedPaths: verdictBrief.ownedPaths }).patchHash },
-      validationEvidence: validationEvidence(verdictBrief, patchHash({ root, baseSha: verdictBrief.baseSha, ownedPaths: verdictBrief.ownedPaths }).patchHash), verdict: 'PASS', findings: [],
+      artifactIdentity: { kind: 'worktree', commitSha: null, patchHash: patchHash({ root, baseSha: verdictBrief.baseSha, ownedPaths: verdictBrief.ownedPaths }).patchHash }, verdict: 'PASS', findings: [],
     };
     assert.equal(checkVerdict({ root, verdict, brief: verdictBrief }).taskBriefSha256, checkedBrief.taskBriefSha256);
     assert.throws(() => checkTaskBrief({ root, brief: { ...preDispatch, phase: 'verdict' } }), /requires exactly one coordinator, coding, and review/);
@@ -224,6 +219,7 @@ test('TaskBrief rejects empty shells and verdict cross-checks all durable identi
     assert.throws(() => checkReadReceipt({ root, receipt: { ...preDispatch.specReadReceipts[0], unexpected: true } }), /unknown, missing, or inapplicable keys/);
     assert.throws(() => checkVerdict({ root, verdict: { ...verdict, artifactIdentity: { ...verdict.artifactIdentity, patchHash: '0'.repeat(64) } }, brief: verdictBrief }), /recomputed current patch hash/);
     assert.throws(() => checkVerdict({ root, verdict: { ...verdict, extra: true }, brief: verdictBrief }), /unknown, missing, or inapplicable keys/);
+    assert.throws(() => checkVerdict({ root, verdict: { ...verdict, validationEvidence: { caller: 'authored' } }, brief: verdictBrief }), /unknown, missing, or inapplicable keys/);
     assert.throws(() => checkVerdict({ root, verdict: { ...verdict, findings: [{ severity: 'P1', file: 'AGENTS.md', line: 1, evidence: 'x', remediation: 'y' }] }, brief: verdictBrief }), /PASS verdict/);
     assert.throws(() => runCli(['--patch-hash', '--base', verdictBrief.baseSha, '--base', verdictBrief.baseSha, '--owned', 'AGENTS.md'], root), /Usage/);
     assert.throws(() => runCli(['--check-policy', '--unknown', 'x'], root), /Usage/);
@@ -248,23 +244,16 @@ test('derived evidence stages keep development light and freeze only the review 
       schema: 'tackle-local-verdict/v1', taskId: committedBrief.taskId, taskBriefSha256: checked.taskBriefSha256,
       specReceiptHashes: checked.specReceiptHashes, dirtyWorktreeDisposition: committedBrief.dirtyWorktreeDisposition,
       specSha256: committedBrief.specSha256, baseSha: committedBrief.baseSha, reviewedHead: identity, ownedPaths: committedBrief.ownedPaths,
-      artifactIdentity: { kind: 'commit', commitSha: identity, patchHash: null },
-      validationEvidence: validationEvidence(committedBrief, identity), verdict: 'PASS', findings: [],
+      artifactIdentity: { kind: 'commit', commitSha: identity, patchHash: null }, verdict: 'PASS', findings: [],
     };
     assert.equal(checkVerdict({ root, verdict: committedVerdict, brief: committedBrief }).artifactIdentity.commitSha, identity);
     assert.throws(() => checkVerdict({ root, verdict: { ...committedVerdict, artifactIdentity: { ...committedVerdict.artifactIdentity, patchHash: '0'.repeat(64) } }, brief: committedBrief }), /must not require a patch hash/);
-    assert.throws(() => checkVerdict({ root, verdict: { ...committedVerdict, validationEvidence: { ...committedVerdict.validationEvidence, results: [{ ...committedVerdict.validationEvidence.results[0], inputIdentity: 'other' }] } }, brief: committedBrief }), /cover each TaskBrief required command|must bind the reviewed artifact|is invalid/);
-    assert.throws(() => checkVerdict({ root, verdict: { ...committedVerdict, validationEvidence: { ...committedVerdict.validationEvidence, results: committedVerdict.validationEvidence.results.slice(1) } }, brief: committedBrief }), /cover each TaskBrief required command/);
-    assert.throws(() => checkVerdict({ root, verdict: { ...committedVerdict, validationEvidence: { ...committedVerdict.validationEvidence, results: [...committedVerdict.validationEvidence.results, { ...committedVerdict.validationEvidence.results[0] }] } }, brief: committedBrief }), /cover each TaskBrief required command/);
-    const failed = { ...committedVerdict.validationEvidence, results: committedVerdict.validationEvidence.results.map((result, index) => index === 0 ? { ...result, exitCode: 1, result: 'FAIL', failureDetail: 'test failure' } : result) };
-    assert.throws(() => checkVerdict({ root, verdict: { ...committedVerdict, validationEvidence: failed }, brief: committedBrief }), /PASS verdict cannot contain.*failed validation/);
-    assert.throws(() => checkVerdict({ root, verdict: { ...committedVerdict, validationEvidence: { ...committedVerdict.validationEvidence, results: committedVerdict.validationEvidence.results.map((result, index) => index === 0 ? { ...result, timestamp: '2100-01-01T00:00:00.000Z' } : result) } }, brief: committedBrief }), /is invalid/);
-    assert.throws(() => checkVerdict({ root, verdict: { ...committedVerdict, validationEvidence: { ...committedVerdict.validationEvidence, results: committedVerdict.validationEvidence.results.map((result, index) => index === 0 ? { ...result, exitCode: -1 } : result) } }, brief: committedBrief }), /is invalid/);
-    assert.equal(canReuseValidation(committedVerdict.validationEvidence, validationEvidence(committedBrief, identity)), true);
-    assert.equal(canReuseValidation(committedVerdict.validationEvidence, { ...validationEvidence(committedBrief, identity), reuseIdentity: { ...reuseIdentity(identity), environmentIdentity: 'node-22/macos' } }), false);
-    assert.throws(() => captureValidationSummary({ inputIdentity: identity, reuseIdentity: reuseIdentity(identity), timestamp: '2026-07-26T00:00:00.000Z', results: [{ command: 'safe', exitCode: 0, durationMs: 1.5, failureDetail: null }] }), /invalid exitCode or durationMs/);
-    write(root, 'capture.json', JSON.stringify({ inputIdentity: identity, reuseIdentity: reuseIdentity(identity), timestamp: '2026-07-26T00:00:00.000Z', results: [{ command: 'safe', exitCode: 0, durationMs: 1, failureDetail: null }] }));
-    assert.equal(JSON.parse(runCli(['--capture-validation', '--input', 'capture.json'], root)).results[0].result, 'PASS');
+    const execution = validationExecutionPlan({ root, brief: committedBrief });
+    assert.equal(execution.artifact.inputIdentity, identity);
+    assert.deepEqual(execution.commands.map((item) => item.command), committedBrief.validationPlan.requiredCommands);
+    assert.match(execution.reuseIdentity.relevantInputsHash, /^[0-9a-f]{64}$/);
+    assert.match(execution.reuseIdentity.commandContractHash, /^[0-9a-f]{64}$/);
+    assert.throws(() => runCli(['--capture-validation', '--input', 'caller-authored.json'], root), /Usage/);
   } finally { cleanup(root); }
 });
 
@@ -306,6 +295,7 @@ test('validation plan rejects command/scenario swaps, invalid N/A, and uncovered
     taskBase(root); const base = brief(root);
     assert.throws(() => checkTaskBrief({ root, brief: { ...base, validationPlan: { ...base.validationPlan, requiredCommands: ['git diff --check'], requiredScenarios: ['authority_and_scoped_diff', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-policy', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-index'] } } }), /wrong collection|omits required command/);
     assert.throws(() => checkTaskBrief({ root, brief: { ...base, validationPlan: { ...base.validationPlan, requiredCommands: [...base.validationPlan.requiredCommands, 'authority_and_scoped_diff'] } } }), /wrong collection/);
+    assert.throws(() => checkTaskBrief({ root, brief: { ...base, validationPlan: { ...base.validationPlan, requiredCommands: [base.validationPlan.requiredCommands[0], base.validationPlan.requiredCommands[0], ...base.validationPlan.requiredCommands.slice(2)] } } }), /must not contain duplicates/);
     assert.throws(() => checkTaskBrief({ root, brief: { ...base, validationPlan: { ...base.validationPlan, intentionallyNotApplicable: { 'unknown-check': 'no' } } } }), /unknown or duplicated/);
     assert.throws(() => checkTaskBrief({ root, brief: { ...base, validationPlan: { ...base.validationPlan, intentionallyNotApplicable: { 'git diff --check': 'no' } } } }), /unknown or duplicated/);
     assert.throws(() => checkTaskBrief({ root, brief: { ...base, ownedPaths: ['x.md'] } }), /allowedChanges/);

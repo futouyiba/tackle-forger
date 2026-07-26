@@ -5,6 +5,7 @@ import {
   BROWSER_EXPORT_MAPPING,
   BROWSER_FIELD_LABELS,
   filterMappingForPart,
+  nonFormalRef,
 } from "@/lib/config-export-browser-mapping";
 import type { MaterializedConfigRow } from "@/lib/config-export-mapping";
 import { materializeConfigExport } from "@/lib/config-export-mapping";
@@ -106,14 +107,34 @@ export async function POST(request: NextRequest) {
         { status: 400 },
       );
     }
+    // 检测重复 Snapshot ID
+    if (new Set(body.snapshotIds).size !== body.snapshotIds.length) {
+      return NextResponse.json(
+        { error: "请求包含重复的 Snapshot ID。" },
+        { status: 400 },
+      );
+    }
     const current = await loadWorkspaceState();
     const requested = new Set(body.snapshotIds);
     const snapshots = current.state.configurationSnapshots.filter((snapshot) =>
       requested.has(snapshot.id));
     if (snapshots.length !== requested.size) {
       return NextResponse.json(
-        { error: "请求包含不存在或重复的 ConfigurationSnapshot。" },
+        { error: "请求包含不存在的 ConfigurationSnapshot。" },
         { status: 404 },
+      );
+    }
+    // 检测同一 Model 的多个 Snapshot
+    const seenModels = new Set<string>();
+    const dupModels: string[] = [];
+    for (const s of snapshots) {
+      if (seenModels.has(s.modelId)) dupModels.push(s.modelId);
+      seenModels.add(s.modelId);
+    }
+    if (dupModels.length) {
+      return NextResponse.json(
+        { error: "不能同时导出同一 Model 的多个快照。", code: "SNAPSHOT_MODEL_DUPLICATE", modelIds: dupModels },
+        { status: 422 },
       );
     }
     // 快照数量硬上限
@@ -190,8 +211,20 @@ export async function POST(request: NextRequest) {
           { status: 422 },
         );
       }
+      // 将 modelId 转为 NON_FORMAL 符号引用
+      const nonFormalRows = allRows.map((row) => ({
+        ...row,
+        values: Object.fromEntries(
+          Object.entries(row.values).map(([key, value]) => [
+            key,
+            key === "non_formal_ref" || key === "tackle_ref" || key === "item_ref" || key === "goods_ref"
+              ? nonFormalRef(String(value), row.rowMappingId)
+              : value,
+          ]),
+        ),
+      }));
       const xlsxBytes = generatePreviewXlsx({
-        rows: allRows,
+        rows: nonFormalRows,
         mapping: BROWSER_EXPORT_MAPPING,
         labels: BROWSER_FIELD_LABELS,
       });

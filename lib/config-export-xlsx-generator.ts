@@ -14,7 +14,7 @@ import { NON_FORMAL_PREVIEW_NOTICE } from "./config-export-browser-mapping";
 
 function typeFromSource(
   source: ConfigExportMapping["rows"][number]["columns"][string],
-  firstValue: unknown,
+  allValues: unknown[],
 ): string {
   if (source.kind === "target_existing_or_constant") {
     if (typeof source.value === "boolean") return "BOOL";
@@ -23,17 +23,27 @@ function typeFromSource(
     return "STRING";
   }
   if (source.kind === "snapshot_property") {
-    // snapshot_property id/modelId/revision 等通常是字符串或整数
-    if (source.property === "id" || source.property === "modelId") return "STRING";
-    if (source.property === "version" || source.property === "modelRevision" || source.property === "skuRevision" || source.property === "seriesRevision") return "INT32";
     return "STRING";
   }
   if (source.kind === "snapshot_value") {
     if (source.scale !== undefined || source.precision !== undefined) return "FLOAT";
-    if (typeof firstValue === "number" && Number.isInteger(firstValue)) return "INT32";
-    if (typeof firstValue === "number") return "FLOAT";
+    // 扫描全部非空值确定类型
+    let sawFloat = false;
+    let sawInt = false;
+    for (const v of allValues) {
+      if (v === null || v === undefined || v === "") continue;
+      if (typeof v === "number") {
+        if (Number.isInteger(v)) sawInt = true;
+        else sawFloat = true;
+      } else {
+        return "STRING";
+      }
+    }
+    if (sawFloat) return "FLOAT";
+    if (sawInt) return "INT32";
     return "STRING";
   }
+  // constant
   if (typeof source.value === "boolean") return "BOOL";
   if (typeof source.value === "number" && Number.isInteger(source.value)) return "INT64";
   if (typeof source.value === "number") return "FLOAT";
@@ -85,9 +95,12 @@ export function generatePreviewXlsx(input: {
       const fieldNames = columns ? Object.keys(columns) : Object.keys(rows[0].values);
       if (!fieldNames.length) continue;
 
-      // Row 1: 类型行——从列来源推断
+      // Row 1: 类型行——从列来源推断，扫描全部行
       const typeRow = fieldNames.map((col) =>
-        typeFromSource(columns?.[col] ?? { kind: "constant", value: null }, rows[0].values[col]),
+        typeFromSource(
+          columns?.[col] ?? { kind: "constant", value: null },
+          rows.map((r): unknown => r.values[col]),
+        ),
       );
       // Row 2: 字段名
       const fieldRow = [...fieldNames];

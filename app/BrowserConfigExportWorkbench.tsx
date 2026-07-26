@@ -108,6 +108,17 @@ export function BrowserConfigExportWorkbench({
     return [...new Set(values)];
   }, [batch, batchConfirmed, previewAvailability, selectedSnapshotIds.length]);
 
+  // ── 选择工具栏 ──
+  const allEligibleIds = enabledProductModels.map((m) => m.id);
+  const selectionCount = selectedModelIds.length;
+  const totalCount = enabledProductModels.length;
+  const allSelected = selectionCount === totalCount && totalCount > 0;
+  const noneSelected = selectionCount === 0;
+  const selectAll = () => setSelectedModelIds([...allEligibleIds]);
+  const deselectAll = () => setSelectedModelIds([]);
+  const invertSelection = () =>
+    setSelectedModelIds(allEligibleIds.filter((id) => !selectedModelIds.includes(id)));
+
   const createBatch = () => {
     setBatch(planSnapshotBatch({
       models: state.purchasableModels,
@@ -232,6 +243,22 @@ export function BrowserConfigExportWorkbench({
           <div><span className="eyebrow">SOURCE</span><h3>选择冻结 Snapshot</h3></div>
           <PackageCheck size={18} />
         </header>
+        <div className="model-selection-toolbar">
+          <div className="toolbar-actions">
+            <button type="button" className="button button-default button-sm" disabled={allSelected} onClick={selectAll}>全选</button>
+            <button type="button" className="button button-default button-sm" disabled={noneSelected} onClick={deselectAll}>取消</button>
+            <button type="button" className="button button-default button-sm" disabled={!totalCount} onClick={invertSelection}>反选</button>
+          </div>
+          <span className="selection-count">已选 {selectionCount} / 共 {totalCount}</span>
+        </div>
+        {totalCount === 0 ? (
+          <div className="config-export-empty">
+            <span>
+              <strong>没有可导出的产品型号</strong>
+              <small>请先在 v3 流程中完成投影匹配并发布 ConfigurationSnapshot。</small>
+            </span>
+          </div>
+        ) : (
         <div className="browser-model-grid">
           {enabledProductModels.map((model) => (
             <label key={model.id} className={selectedModelIds.includes(model.id) ? "selected" : ""}>
@@ -249,6 +276,7 @@ export function BrowserConfigExportWorkbench({
             </label>
           ))}
         </div>
+        )}
         <button
           className="button button-default button-md"
           type="button"
@@ -257,6 +285,9 @@ export function BrowserConfigExportWorkbench({
         >
           生成批量预检
         </button>
+        {!selectedModelIds.length && totalCount > 0 ? (
+          <small className="hint">请至少选择一个产品型号</small>
+        ) : null}
         {batch ? (
           <div className="snapshot-batch-result">
             <div className="snapshot-batch-summary">

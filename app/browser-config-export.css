@@ -192,3 +192,30 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* ── Model 选择工具栏 ── */
+.model-selection-toolbar {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.model-selection-toolbar .toolbar-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.selection-count {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.hint {
+  color: var(--muted);
+  display: block;
+  font-size: 12px;
+  margin-top: 6px;
+}

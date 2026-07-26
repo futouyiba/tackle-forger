@@ -20,42 +20,42 @@ export const BROWSER_EXPORT_MAPPING: ConfigExportMapping = {
       workbook: "tackle.xlsx",
       sheet: "Rods",
       required: true,
-      stableBusinessKey: "id",
+      stableBusinessKey: "non_formal_ref",
       dataStartRow: 5,
     },
     reels: {
       workbook: "tackle.xlsx",
       sheet: "Reels",
       required: true,
-      stableBusinessKey: "id",
+      stableBusinessKey: "non_formal_ref",
       dataStartRow: 5,
     },
     lines: {
       workbook: "tackle.xlsx",
       sheet: "Lines",
       required: true,
-      stableBusinessKey: "id",
+      stableBusinessKey: "non_formal_ref",
       dataStartRow: 5,
     },
     item: {
       workbook: "item.xlsx",
       sheet: "Item",
       required: true,
-      stableBusinessKey: "id",
+      stableBusinessKey: "non_formal_ref",
       dataStartRow: 5,
     },
     goods_basic: {
       workbook: "store.xlsx",
       sheet: "GoodsBasic",
       required: true,
-      stableBusinessKey: "id",
+      stableBusinessKey: "non_formal_ref",
       dataStartRow: 5,
     },
     store_buy: {
       workbook: "store.xlsx",
       sheet: "StoreBuy",
       required: true,
-      stableBusinessKey: "id",
+      stableBusinessKey: "non_formal_ref",
       dataStartRow: 5,
     },
   },
@@ -64,11 +64,10 @@ export const BROWSER_EXPORT_MAPPING: ConfigExportMapping = {
     {
       rowMappingId: "rod",
       logicalTable: "rods",
-      businessKeyField: "id",
-      configNameKeyField: "name",
+      businessKeyField: "non_formal_ref",
+      configNameKeyField: "non_formal_ref",
       columns: {
-        id: { kind: "snapshot_property", property: "modelId" },
-        name: { kind: "snapshot_property", property: "modelId" },
+        non_formal_ref: { kind: "snapshot_property", property: "modelId" },
         drag: {
           kind: "snapshot_value",
           key: "杆最大拉力kgf",
@@ -112,11 +111,10 @@ export const BROWSER_EXPORT_MAPPING: ConfigExportMapping = {
     {
       rowMappingId: "reel",
       logicalTable: "reels",
-      businessKeyField: "id",
-      configNameKeyField: "name",
+      businessKeyField: "non_formal_ref",
+      configNameKeyField: "non_formal_ref",
       columns: {
-        id: { kind: "snapshot_property", property: "modelId" },
-        name: { kind: "snapshot_value", key: "轮型号", required: false, nullSentinel: "" },
+        non_formal_ref: { kind: "snapshot_property", property: "modelId" },
         drag: {
           kind: "snapshot_value",
           key: "轮最大拉力kgf",
@@ -144,11 +142,10 @@ export const BROWSER_EXPORT_MAPPING: ConfigExportMapping = {
     {
       rowMappingId: "line",
       logicalTable: "lines",
-      businessKeyField: "id",
-      configNameKeyField: "name",
+      businessKeyField: "non_formal_ref",
+      configNameKeyField: "non_formal_ref",
       columns: {
-        id: { kind: "snapshot_property", property: "modelId" },
-        name: { kind: "snapshot_value", key: "线型号", required: false, nullSentinel: "" },
+        non_formal_ref: { kind: "snapshot_property", property: "modelId" },
         drag: {
           kind: "snapshot_value",
           key: "线最大拉力kgf",
@@ -176,34 +173,32 @@ export const BROWSER_EXPORT_MAPPING: ConfigExportMapping = {
     {
       rowMappingId: "item",
       logicalTable: "item",
-      businessKeyField: "id",
-      configNameKeyField: "name",
+      businessKeyField: "non_formal_ref",
+      configNameKeyField: "non_formal_ref",
       columns: {
-        id: { kind: "snapshot_property", property: "modelId" },
-        name: { kind: "snapshot_property", property: "modelId" },
+        non_formal_ref: { kind: "snapshot_property", property: "modelId" },
+        tackle_ref: { kind: "snapshot_property", property: "modelId" },
       },
     },
     {
       rowMappingId: "goods",
       logicalTable: "goods_basic",
-      businessKeyField: "id",
-      configNameKeyField: "name",
+      businessKeyField: "non_formal_ref",
+      configNameKeyField: "non_formal_ref",
       columns: {
-        id: { kind: "snapshot_property", property: "modelId" },
-        name: { kind: "snapshot_property", property: "modelId" },
-        item_id: { kind: "snapshot_property", property: "modelId" },
+        non_formal_ref: { kind: "snapshot_property", property: "modelId" },
+        item_ref: { kind: "snapshot_property", property: "modelId" },
       },
     },
     {
       rowMappingId: "store",
       logicalTable: "store_buy",
-      businessKeyField: "id",
-      configNameKeyField: "name",
+      businessKeyField: "non_formal_ref",
+      configNameKeyField: "non_formal_ref",
       columns: {
-        id: { kind: "snapshot_property", property: "modelId" },
-        name: { kind: "snapshot_property", property: "modelId" },
-        goods_id: { kind: "snapshot_property", property: "modelId" },
-        enabled: { kind: "target_existing_or_constant", value: true },
+        non_formal_ref: { kind: "snapshot_property", property: "modelId" },
+        goods_ref: { kind: "snapshot_property", property: "modelId" },
+        enabled: { kind: "target_existing_or_constant", value: false },
       },
     },
   ],
@@ -253,8 +248,10 @@ export const BROWSER_COMPILER_TABLES: Record<
 
 /** 字段名 → 中文标签。Row 3 展示用。 */
 export const BROWSER_FIELD_LABELS: Record<string, string> = {
-  id: "ID",
-  name: "名称",
+  non_formal_ref: "NON_FORMAL 引用",
+  tackle_ref: "钓具引用",
+  item_ref: "物品引用",
+  goods_ref: "商品引用",
   drag: "拉力(g)",
   length: "长度(cm)",
   weight: "自重(g)",
@@ -267,10 +264,26 @@ export const BROWSER_FIELD_LABELS: Record<string, string> = {
   pe_max: "PE号上限",
   pe_min: "PE号下限",
   tension: "线张力指数",
-  item_id: "物品ID",
-  goods_id: "商品ID",
   enabled: "上架",
 };
+
+const OBJECT_KINDS: Record<string, string> = {
+  rod: "tackle",
+  reel: "tackle",
+  line: "tackle",
+  item: "item",
+  goods: "goods_basic",
+  store: "store_buy",
+};
+
+/**
+ * 将 modelId 转为 NON_FORMAL 符号引用。
+ * 根据 rowMappingId 确定对象种类。
+ */
+export function nonFormalRef(modelId: string, rowMappingId: string): string {
+  const kind = OBJECT_KINDS[rowMappingId] ?? rowMappingId;
+  return `NON_FORMAL:${modelId}:${kind}`;
+}
 
 /** itemPartId → 部位行映射 ID */
 const PART_ROW_IDS: Record<string, string> = {

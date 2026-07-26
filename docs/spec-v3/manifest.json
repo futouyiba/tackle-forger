@@ -6,7 +6,12 @@
     "alwaysRead": [
       "docs/spec-v3/README.md",
       "docs/spec-v3/00-authority.md",
-      "docs/spec-v3/05-open-decisions.md"
+      ".codex/skills/tackle-agent-workflow/references/v3-open-registry.json"
+    ],
+    "alwaysReadSections": [
+      "0",
+      "19",
+      "OPEN_REGISTRY"
     ],
     "selectRoutesBeforeReading": true,
     "fullReadWhen": [
@@ -123,6 +128,102 @@
       "title": "内网部署、身份与配置表交付",
       "path": "docs/spec-v3/08-deployment-and-export.md",
       "sha256": "8efd68337ae5a1e5447a60fe49f853d15558b45f249ce17f81acc7fcd5ae1895"
+    }
+  ],
+  "openRegistry": [
+    {
+      "id": "OPEN-001",
+      "moduleId": "05",
+      "subsection": "OPEN-001",
+      "title": "OPEN-001：降低型词条叠加",
+      "dependencies": [
+        "11.4",
+        "14"
+      ]
+    },
+    {
+      "id": "OPEN-002",
+      "moduleId": "05",
+      "subsection": "OPEN-002",
+      "title": "OPEN-002：性能定位派生语义（已决，待实现）",
+      "dependencies": []
+    },
+    {
+      "id": "OPEN-003",
+      "moduleId": "05",
+      "subsection": "OPEN-003",
+      "title": "OPEN-003：扩展部位启用时间",
+      "dependencies": []
+    },
+    {
+      "id": "OPEN-004",
+      "moduleId": "05",
+      "subsection": "OPEN-004",
+      "title": "OPEN-004：Patch属性偏移阈值",
+      "dependencies": [
+        "14"
+      ]
+    },
+    {
+      "id": "OPEN-005",
+      "moduleId": "06",
+      "subsection": "21",
+      "title": "21. Model五维图预览",
+      "dependencies": [
+        "22",
+        "24.6",
+        "25.3"
+      ]
+    },
+    {
+      "id": "OPEN-006",
+      "moduleId": "06",
+      "subsection": "23.6",
+      "title": "23.6 AI服务与数据边界",
+      "dependencies": []
+    },
+    {
+      "id": "OPEN-007",
+      "moduleId": "05",
+      "subsection": "20.1",
+      "title": "20.1 价值分自动定价与PricingPolicy",
+      "dependencies": []
+    },
+    {
+      "id": "OPEN-008",
+      "moduleId": "05",
+      "subsection": "OPEN-008",
+      "title": "OPEN-008：ConfigIdPolicy数字区间与命名规则",
+      "dependencies": [
+        "25"
+      ]
+    },
+    {
+      "id": "OPEN-009",
+      "moduleId": "05",
+      "subsection": "20.2",
+      "title": "20.2 OPEN-009：AI与发布工作流治理策略",
+      "dependencies": [
+        "23.6"
+      ]
+    },
+    {
+      "id": "OPEN-010",
+      "moduleId": "04",
+      "subsection": "14.4",
+      "title": "14.4 Patch台账远端schema、哈希、协作、回读与补偿契约",
+      "dependencies": [
+        "20.2"
+      ]
+    },
+    {
+      "id": "OPEN-011",
+      "moduleId": "05",
+      "subsection": "OPEN-011",
+      "title": "OPEN-011：工作区revision归档与裁剪启用",
+      "dependencies": [
+        "14.3"
+      ]
     }
   ],
   "routes": {

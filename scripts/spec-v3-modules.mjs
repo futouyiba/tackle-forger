@@ -39,6 +39,20 @@ const routes = {
   workflow_governance: ['00', '05'],
 };
 
+const openRegistry = [
+  { id: 'OPEN-001', moduleId: '05', subsection: 'OPEN-001', title: 'OPEN-001：降低型词条叠加', dependencies: ['11.4', '14'] },
+  { id: 'OPEN-002', moduleId: '05', subsection: 'OPEN-002', title: 'OPEN-002：性能定位派生语义（已决，待实现）', dependencies: [] },
+  { id: 'OPEN-003', moduleId: '05', subsection: 'OPEN-003', title: 'OPEN-003：扩展部位启用时间', dependencies: [] },
+  { id: 'OPEN-004', moduleId: '05', subsection: 'OPEN-004', title: 'OPEN-004：Patch属性偏移阈值', dependencies: ['14'] },
+  { id: 'OPEN-005', moduleId: '06', subsection: '21', title: '21. Model五维图预览', dependencies: ['22', '24.6', '25.3'] },
+  { id: 'OPEN-006', moduleId: '06', subsection: '23.6', title: '23.6 AI服务与数据边界', dependencies: [] },
+  { id: 'OPEN-007', moduleId: '05', subsection: '20.1', title: '20.1 价值分自动定价与PricingPolicy', dependencies: [] },
+  { id: 'OPEN-008', moduleId: '05', subsection: 'OPEN-008', title: 'OPEN-008：ConfigIdPolicy数字区间与命名规则', dependencies: ['25'] },
+  { id: 'OPEN-009', moduleId: '05', subsection: '20.2', title: '20.2 OPEN-009：AI与发布工作流治理策略', dependencies: ['23.6'] },
+  { id: 'OPEN-010', moduleId: '04', subsection: '14.4', title: '14.4 Patch台账远端schema、哈希、协作、回读与补偿契约', dependencies: ['20.2'] },
+  { id: 'OPEN-011', moduleId: '05', subsection: 'OPEN-011', title: 'OPEN-011：工作区revision归档与裁剪启用', dependencies: ['14.3'] },
+];
+
 function sha256(text) {
   return createHash('sha256').update(text, 'utf8').digest('hex');
 }
@@ -66,12 +80,24 @@ function moduleContent(definition, sections) {
 }
 
 function buildManifest(preamble, renderedModules) {
+  const knownSections = new Set([...renderedModules.values()].flatMap((source) => [...source.matchAll(/^#{2,6}\s+(\d+(?:\.\d+)*)(?:\.|\s)/gm)].map((match) => match[1])));
+  const knownModuleIds = new Set(modules.map((definition) => definition.id));
+  for (const entry of openRegistry) {
+    if (!knownModuleIds.has(entry.moduleId)) fail(`OPEN registry references unknown module: ${entry.id}`);
+    if (!entry.dependencies.every((section) => knownSections.has(section))) fail(`OPEN registry references unknown dependency: ${entry.id}`);
+    const source = renderedModules.get(entry.moduleId);
+    const matches = [...source.matchAll(/^#{2,6}\s+(.+?)\s*#*\s*$/gm)].filter((match) => match[1] === entry.title);
+    if (matches.length !== 1) fail(`OPEN registry canonical subsection must resolve exactly once: ${entry.id}`);
+    const locator = matches[0][1].match(/^(\d+(?:\.\d+)*)(?:\.|\s)/)?.[1] ?? matches[0][1].match(/^(OPEN-\d+)\b/)?.[1];
+    if (locator !== entry.subsection) fail(`OPEN registry subsection locator does not match its canonical heading: ${entry.id}`);
+  }
   return {
     format: 'tackle-v3-modules/v1',
     canonicalRoot: 'docs/spec-v3',
     compatibilityMirror: 'docs/tackle-forger-development-spec-v3.md',
     readingProtocol: {
-      alwaysRead: ['docs/spec-v3/README.md', 'docs/spec-v3/00-authority.md', 'docs/spec-v3/05-open-decisions.md'],
+      alwaysRead: ['docs/spec-v3/README.md', 'docs/spec-v3/00-authority.md', '.codex/skills/tackle-agent-workflow/references/v3-open-registry.json'],
+      alwaysReadSections: ['0', '19', 'OPEN_REGISTRY'],
       selectRoutesBeforeReading: true,
       fullReadWhen: ['scope_unknown', 'cross_domain_broad', 'canonical_structure_change'],
     },
@@ -81,6 +107,7 @@ function buildManifest(preamble, renderedModules) {
       path: `docs/spec-v3/${definition.file}`,
       sha256: sha256(renderedModules.get(definition.id)),
     })),
+    openRegistry,
     routes,
   };
 }
@@ -119,6 +146,8 @@ if (mode === '--split') {
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
   if (manifest.format !== 'tackle-v3-modules/v1') fail('Unsupported v3 module manifest');
   if (JSON.stringify(manifest.routes) !== JSON.stringify(routes)) fail('V3 route manifest drift');
+  if (JSON.stringify(manifest.openRegistry) !== JSON.stringify(openRegistry)) fail('V3 OPEN registry manifest drift');
+  if (JSON.stringify(manifest.readingProtocol) !== JSON.stringify(buildManifest(manifest.preamble, new Map(modules.map((definition) => [definition.id, readFileSync(path.join(moduleDir, definition.file), 'utf8')]))).readingProtocol)) fail('V3 reading protocol manifest drift');
   const expectedModules = modules.map(({ id, file, sections, title }) => ({ id, file, sections, title }));
   const actualModules = manifest.modules.map(({ id, file, sections, title }) => ({ id, file, sections, title }));
   if (JSON.stringify(actualModules) !== JSON.stringify(expectedModules)) fail('V3 module order or membership drift');

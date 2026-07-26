@@ -380,6 +380,30 @@ test("04 生产同形的 7 父级、21 分组与 57 成员规则可确定导入"
   assert.ok(sharedDraft.functionProfiles.some((profile) => profile.intensityRules.some((rule) => rule.itemPartId === "part:reel" && rule.rules.some((entry) => entry.parameterKey === "轮修理系数"))));
   assert.ok(sharedDraft.functionProfiles.some((profile) => profile.intensityRules.some((rule) => rule.itemPartId === "part:line" && rule.rules.some((entry) => entry.parameterKey === "线购买系数"))));
   assert.ok(sharedDraft.functionProfiles.every((profile) => profile.intensityRules.every((entry) => entry.rules.every((rule) => sharedDraft.parameters.filter((parameter) => parameter.key === rule.parameterKey).length === 1))));
+
+  // WQ8w 分表后共享参数头带部位前缀（如"竿维修系数"），isPartScopedShared 剥离前缀后应正确识别
+  const prefixedShared = productionShapeFixture();
+  prefixedShared.functionSources[0].values[1]![10] = "竿维修系数";
+  prefixedShared.functionSources[1].values[1]![10] = "轮购买系数";
+  prefixedShared.functionSources[2].values[1]![10] = "线最小线号";
+  const prefixedDraft = importCanonicalRuleSource({ sourceRevision: revision, ...prefixedShared, importedAt: revision.pulledAt });
+  assert.deepEqual(prefixedDraft.issues, []);
+  assert.ok(prefixedDraft.parameters.some((entry) => entry.key === "竿维修系数" && entry.itemPartId === "part:rod"));
+  assert.ok(prefixedDraft.parameters.some((entry) => entry.key === "轮购买系数" && entry.itemPartId === "part:reel"));
+  assert.ok(prefixedDraft.parameters.some((entry) => entry.key === "线最小线号" && entry.itemPartId === "part:line"));
+
+  // "线杯大小"是轮组件（线杯=spool），不应被 startsWith("线") 误判为 line 引发 CROSS_PART
+  const spoolSize = productionShapeFixture();
+  spoolSize.functionSources[1].values[1]![10] = "线杯大小";
+  const spoolDraft = importCanonicalRuleSource({ sourceRevision: revision, ...spoolSize, importedAt: revision.pulledAt });
+  assert.deepEqual(spoolDraft.issues, []);
+  assert.ok(spoolDraft.parameters.some((entry) => entry.key === "轮线杯大小" && entry.itemPartId === "part:reel"));
+
+  // 非共享、非本部位的参数头仍应被 CROSS_PART 拦截
+  const crossPart = productionShapeFixture();
+  crossPart.functionSources[0].values[1]![10] = "线自定义参数";
+  const crossDraft = importCanonicalRuleSource({ sourceRevision: revision, ...crossPart, importedAt: revision.pulledAt });
+  assert.ok(crossDraft.issues.some((issue) => issue.code === "FUNCTION_RULE_CROSS_PART_BINDING"));
 });
 
 test("钓法不兼容的类型不会套用规则，且作为硬错误返回", () => {

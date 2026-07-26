@@ -358,16 +358,22 @@ test('validation execution tiers keep routine work targeted and full CI at stabl
     'stable_pr_candidate',
     'rebase_refresh',
   ]);
-  assert.equal(VALIDATION_EXECUTION_TIERS.inspection_only.fullCi, 'forbidden');
-  assert.equal(VALIDATION_EXECUTION_TIERS.documentation_or_nonbehavior_workflow.fullCi, 'forbidden');
+  assert.equal(VALIDATION_EXECUTION_TIERS.inspection_only.iterationFullCi, 'forbidden');
+  assert.equal(VALIDATION_EXECUTION_TIERS.documentation_or_nonbehavior_workflow.iterationFullCi, 'forbidden');
   assert.deepEqual(VALIDATION_EXECUTION_TIERS.focused_script_or_rule.requiredEvidence, ['targeted_test']);
   assert.deepEqual(VALIDATION_EXECUTION_TIERS.deployment_configuration.requiredEvidence, ['config_validation', 'service_restart', 'actual_listener', 'health_check']);
   assert.deepEqual(VALIDATION_EXECUTION_TIERS.business_code.requiredEvidence, ['typecheck', 'lint', 'related_tests']);
   assert.deepEqual(VALIDATION_EXECUTION_TIERS.durable_or_external.requiredEvidence, ['boundary', 'failure_recovery', 'idempotency', 'readback']);
-  assert.equal(VALIDATION_EXECUTION_TIERS.stable_pr_candidate.fullCi, 'once_per_exact_head_base');
+  assert.equal(VALIDATION_EXECUTION_TIERS.stable_pr_candidate.candidateFullCi, 'once_per_exact_head_base');
   assert.deepEqual(VALIDATION_EXECUTION_TIERS.stable_pr_candidate.requiredEvidence, ['root_full_ci', 'applicable_historical_ci', 'windows_policy']);
-  assert.equal(VALIDATION_EXECUTION_TIERS.rebase_refresh.fullCi, 'broad_impact_only');
+  assert.equal(VALIDATION_EXECUTION_TIERS.rebase_refresh.candidateFullCi, 'broad_impact_or_new_stable_candidate');
   assert.deepEqual(VALIDATION_EXECUTION_TIERS.rebase_refresh.requiredEvidence, ['actual_diff_classification', 'affected_checks']);
+  for (const changeType of ['business_code', 'deployment_configuration', 'durable_or_external']) {
+    assert.equal(VALIDATION_EXECUTION_TIERS[changeType].iterationFullCi, 'forbidden');
+    assert.equal(VALIDATION_EXECUTION_TIERS.stable_pr_candidate.candidateFullCi, 'once_per_exact_head_base');
+  }
+  assert.equal(VALIDATION_EXECUTION_TIERS.rebase_refresh.requiredEvidence.includes('affected_checks'), true);
+  assert.equal(VALIDATION_EXECUTION_TIERS.stable_pr_candidate.requiredEvidence.includes('root_full_ci'), true);
 });
 
 test('historical CI scope includes forbidden root pnpm metadata', () => {

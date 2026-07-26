@@ -29,9 +29,14 @@ writes additionally require boundary, failure-recovery, idempotency, and readbac
 evidence. A rebase starts by classifying its actual diff and reruns only affected
 checks unless that diff is broad.
 
+These are two independent dimensions: an iteration classification that forbids
+full CI does not waive or prohibit the stable-candidate boundary. Business,
+deployment, and durable/external changes stay targeted while iterating, then still
+require one complete CI run when they become a stable exact head/base candidate.
+
 Run the complete PR CI once for a stable exact head/base candidate. A head or base
 change invalidates that identity and requires affected checks first; repeat full CI
-only when the refreshed candidate is again stable or broad impact makes the full
+when the refreshed candidate is again stable, or when broad impact makes the full
 run necessary. The live merge checker still requires one eligible exact-head/base
 run containing every canonical job; this cadence never permits missing, stale,
 partial, or cross-run evidence.

@@ -37,14 +37,14 @@ const CONDITIONAL_NA_CATALOG = ['product_runtime_tests', 'legacy_workspace_ci'];
 const LEGACY_WORKSPACE_COMMANDS = ['node --test tests/package-manager-boundaries.test.mjs', 'pnpm --dir legacy-workspace install --frozen-lockfile', "pnpm --dir legacy-workspace --filter '@tackle-forger/*' typecheck", "pnpm --dir legacy-workspace --filter '@tackle-forger/*' lint", "pnpm --dir legacy-workspace --filter '@tackle-forger/*' test", "pnpm --dir legacy-workspace --filter '@tackle-forger/*' build"];
 const CONDITIONAL_NA_APPLICABILITY = { legacyTouchedForbids: 'legacy_workspace_ci', nonLegacyRequires: 'legacy_workspace_ci', nonWorkflowForbids: 'product_runtime_tests', workflowMetadataRequires: 'product_runtime_tests' };
 export const VALIDATION_EXECUTION_TIERS = {
-  inspection_only: { fullCi: 'forbidden', requiredEvidence: ['fetch_compare_history_or_status'] },
-  documentation_or_nonbehavior_workflow: { fullCi: 'forbidden', requiredEvidence: ['format_reference_scoped_diff'] },
-  focused_script_or_rule: { fullCi: 'forbidden', requiredEvidence: ['targeted_test'] },
-  deployment_configuration: { fullCi: 'forbidden', requiredEvidence: ['config_validation', 'service_restart', 'actual_listener', 'health_check'] },
-  business_code: { fullCi: 'forbidden', requiredEvidence: ['typecheck', 'lint', 'related_tests'] },
-  durable_or_external: { fullCi: 'forbidden', requiredEvidence: ['boundary', 'failure_recovery', 'idempotency', 'readback'] },
-  stable_pr_candidate: { fullCi: 'once_per_exact_head_base', requiredEvidence: ['root_full_ci', 'applicable_historical_ci', 'windows_policy'] },
-  rebase_refresh: { fullCi: 'broad_impact_only', requiredEvidence: ['actual_diff_classification', 'affected_checks'] },
+  inspection_only: { iterationFullCi: 'forbidden', requiredEvidence: ['fetch_compare_history_or_status'] },
+  documentation_or_nonbehavior_workflow: { iterationFullCi: 'forbidden', requiredEvidence: ['format_reference_scoped_diff'] },
+  focused_script_or_rule: { iterationFullCi: 'forbidden', requiredEvidence: ['targeted_test'] },
+  deployment_configuration: { iterationFullCi: 'forbidden', requiredEvidence: ['config_validation', 'service_restart', 'actual_listener', 'health_check'] },
+  business_code: { iterationFullCi: 'forbidden', requiredEvidence: ['typecheck', 'lint', 'related_tests'] },
+  durable_or_external: { iterationFullCi: 'forbidden', requiredEvidence: ['boundary', 'failure_recovery', 'idempotency', 'readback'] },
+  stable_pr_candidate: { candidateFullCi: 'once_per_exact_head_base', requiredEvidence: ['root_full_ci', 'applicable_historical_ci', 'windows_policy'] },
+  rebase_refresh: { candidateFullCi: 'broad_impact_or_new_stable_candidate', requiredEvidence: ['actual_diff_classification', 'affected_checks'] },
 };
 const CHANGE_CLASS_MATRIX = {
   workflow_metadata: { commands: MANDATORY_WORKFLOW_COMMANDS, scenarios: ['authority_and_scoped_diff'], nonWaivableCommands: MANDATORY_WORKFLOW_COMMANDS, nonWaivableScenarios: ['authority_and_scoped_diff'] },

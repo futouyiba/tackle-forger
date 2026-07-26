@@ -1015,4 +1015,3 @@ export async function inspectCanonicalRuleWorkbookValues(input: {
     seriesParseIssues: seriesParse.issues,
   };
 }
-

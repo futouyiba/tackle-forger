@@ -2,8 +2,11 @@
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { pathToFileURL } from "node:url";
+import path from "node:path";
+import process from "node:process";
+import { fileURLToPath } from "node:url";
 
 export const REQUIRED_CURRENT_HEAD_CHECKS = [
   "Root v3 app (npm)",
@@ -17,6 +20,27 @@ export const MERGE_GATE_PROGRAM_PATH = "scripts/check-pr-merge-gate.mjs";
 export const GITHUB_DOTCOM_API_BASE = "https://api.github.com";
 const PR_RUN_NAME_PATTERN =
   /^gate-context event=pull_request pr=([1-9]\d*) head=([a-f0-9]{40}) base=([a-f0-9]{40})$/i;
+
+function normalizeNativePathForComparison(value) {
+  const normalized = path.normalize(value);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+export function isDirectExecution(importMetaUrl, argvPath = process.argv[1]) {
+  if (!argvPath) return false;
+  const modulePath = fileURLToPath(importMetaUrl);
+  const candidatePath = path.resolve(argvPath);
+  if (normalizeNativePathForComparison(candidatePath) === normalizeNativePathForComparison(modulePath)) return true;
+  try {
+    return normalizeNativePathForComparison(realpathSync.native(candidatePath))
+      === normalizeNativePathForComparison(realpathSync.native(modulePath));
+  } catch (error) {
+    if (path.basename(candidatePath).toLowerCase() === path.basename(modulePath).toLowerCase()) {
+      throw new Error(`Cannot resolve entrypoint identity for ${candidatePath}: ${error.message}`);
+    }
+    return false;
+  }
+}
 
 const DECISIVE_REVIEW_STATES = new Set([
   "APPROVED",
@@ -1006,9 +1030,7 @@ async function main(argv) {
   process.exitCode = result.ready ? 0 : 1;
 }
 
-const isEntrypoint = process.argv[1] &&
-  import.meta.url === pathToFileURL(process.argv[1]).href;
-if (isEntrypoint) {
+if (isDirectExecution(import.meta.url)) {
   main(process.argv.slice(2)).catch((error) => {
     process.stderr.write(`ERROR: ${error.message}\n`);
     process.exitCode = 2;

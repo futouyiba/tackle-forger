@@ -152,6 +152,11 @@ content with the base copy; a change returns `GATE_PROGRAM_CHANGED`. Do not copy
 the checker from the reviewed branch or use a reviewed branch's `package.json`
 command to evade this check.
 
+The command is successful evidence only when the live-base entrypoint actually
+executes and emits a non-empty first line beginning with `READY` or `BLOCKED`.
+Exit code 0 with empty output, or output without either explicit disposition,
+is an entrypoint failure and must be treated as blocked.
+
 The command reads the pull request around two complete evidence queries. It
 compares normalized CI, review, and review-thread fingerprints and retries if
 either the PR identity or any gate evidence changes. After three unstable

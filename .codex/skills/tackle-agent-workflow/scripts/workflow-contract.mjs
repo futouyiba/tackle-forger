@@ -105,7 +105,8 @@ function isScopedGovernancePath(repoPath) {
   return repoPath === 'AGENTS.md'
     || repoPath.startsWith('.codex/skills/tackle-agent-workflow/')
     || /^docs\/(?:workflow|agent-governance)-[^/]+\.md$/.test(repoPath)
-    || /^\.github\/[^/]+\.(?:md|ya?ml)$/.test(repoPath);
+    || /^\.github\/[^/]+\.(?:md|ya?ml)$/.test(repoPath)
+    || /^\.github\/workflows\/[^/]+\.ya?ml$/.test(repoPath);
 }
 export function classifyOwnedPaths(ownedPaths) {
   const unrecognized = ownedPaths.filter((repoPath) => !isScopedGovernancePath(repoPath));
@@ -858,7 +859,7 @@ export function checkPolicy(root = repositoryRoot()) {
     localVerdict: { artifactIdentity: { committed: 'commit_sha_only', worktree: 'base_owned_paths_patch_hash' }, required: ['taskBriefSha256', 'specReceiptHashes', 'dirtyWorktreeDisposition', 'specSha256', 'baseSha', 'reviewedHead', 'ownedPaths', 'artifactIdentity'], schema: VERDICT_SCHEMA },
     pullRequest: { owner: 'agent-pr-loop', reviewer: 'agent-pr-loop' },
     reviewSeverity: { passBlocking: ['P0', 'P1', 'P2'], p3: 'informational' },
-    scopedEligibility: { allowedPathClasses: ['AGENTS.md', '.codex/skills/tackle-agent-workflow/**', 'docs/(workflow|agent-governance)-*.md', '.github/*.md|yml|yaml'], unknownForcesFull: true },
+    scopedEligibility: { allowedPathClasses: ['AGENTS.md', '.codex/skills/tackle-agent-workflow/**', 'docs/(workflow|agent-governance)-*.md', '.github/*.md|yml|yaml', '.github/workflows/*.yml|yaml'], unknownForcesFull: true },
     specReceipt: { schema: SPEC_READ_SCHEMA }, taskBrief: { allowedChangesEqualsOwnedPaths: true, closedSchema: true, conditionalNaApplicability: CONDITIONAL_NA_APPLICABILITY, conditionalNaCatalog: { legacyWorkspaceCi: 'legacy_workspace_ci', productRuntimeTests: 'product_runtime_tests' }, evidenceStages: { development: 'pre_dispatch_non_pr_final', localReviewHandoff: 'local_verdict', prFinal: 'pr_final_change_class' }, openDecisionCheck: true, phaseReceipts: { pre_dispatch: ['coordinator'], verdict: ['coordinator', 'coding', 'review'] }, receiptRiskAuthority: true, schema: TASK_BRIEF_SCHEMA, structuredFields: ['changeClass', 'allowedChanges', 'riskDimensions', 'validationPlan'] }, validationRunner: { closedCommandCatalog: true, formalVerdictEvidence: false, reusableWorktree: 'committed_clean_or_worktree_owned_manifest_only', reuseRequiresUnchanged: ['artifact', 'relevant_inputs', 'dependency_lock', 'command_contract', 'toolchain', 'path_and_execution_environment', 'installed_dependency_state'], schema: VALIDATION_SUMMARY_SCHEMA }, validationMatrix: { commandsAndScenariosSeparated: true, legacyWorkspaceCommands: LEGACY_WORKSPACE_COMMANDS, mandatoryWorkflowCommands: MANDATORY_WORKFLOW_COMMANDS, prFinalCommandsNonWaivable: ['npm run typecheck', 'npm run lint', 'npm test'], triggeredCannotBeNa: true, triggeredScenariosNonWaivable: true, userVisiblePathClassifier: 'tsx_jsx_css_scss_sass_less_html_and_ui_roots', userVisibleScenario: 'unified_visual_review_pending_or_completed', workflowMetadataDynamicDiff: true },
     visual: { minimalSmokeCompletesReview: false, pendingMarker: '视觉与交互统一检查待执行' },
   };

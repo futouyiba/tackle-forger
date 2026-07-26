@@ -5,7 +5,7 @@ import { appendFileSync, chmodSync, existsSync, mkdtempSync, mkdirSync, readFile
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { buildNavigationIndex, buildOwnedBaselineManifest, buildPatchManifest, checkFullReadSession, checkNavigationIndex, checkOwnedWhitespace, checkPolicy, checkReadReceipt, checkTaskBrief, checkVerdict, fullReadSessionHash, openRegistryHash, ownedBaselineHash, patchHash, prepareTaskBrief, promoteTaskBrief, receiptHash, runCli, runValidation, specReadPlan, taskBriefHash, validationExecutionPlan, writeNavigationIndex } from './workflow-contract.mjs';
+import { buildNavigationIndex, buildOwnedBaselineManifest, buildPatchManifest, checkFullReadSession, checkNavigationIndex, checkOwnedWhitespace, checkPolicy, checkReadReceipt, checkTaskBrief, checkVerdict, classifyOwnedPaths, fullReadSessionHash, openRegistryHash, ownedBaselineHash, patchHash, prepareTaskBrief, promoteTaskBrief, receiptHash, runCli, runValidation, specReadPlan, taskBriefHash, validationExecutionPlan, writeNavigationIndex } from './workflow-contract.mjs';
 
 function command(root, args) { return execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim(); }
 function ownedWhitespaceCommand(baseSha, ownedPaths) { return `node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-owned-whitespace --base ${baseSha} ${ownedPaths.flatMap((owned) => ['--owned', owned]).join(' ')}`; }
@@ -690,6 +690,22 @@ test('SCOPED eligibility, clean Issue/PR routing, sections, OPEN IDs, and receip
   try {
     taskBase(root);
     const local = brief(root);
+    assert.deepEqual(classifyOwnedPaths(['.github/workflows/ci.yml']), { scopedEligible: true, unrecognizedPaths: [] });
+    assert.deepEqual(classifyOwnedPaths(['.github/nested/arbitrary.md']), { scopedEligible: false, unrecognizedPaths: ['.github/nested/arbitrary.md'] });
+    assert.deepEqual(classifyOwnedPaths(['.github/workflows/nested/ci.yml']), { scopedEligible: false, unrecognizedPaths: ['.github/workflows/nested/ci.yml'] });
+    const workflowOwned = {
+      ...local,
+      ownedPaths: ['.github/workflows/ci.yml'],
+      allowedChanges: ['.github/workflows/ci.yml'],
+      validationPlan: {
+        ...local.validationPlan,
+        requiredCommands: [
+          ...local.validationPlan.requiredCommands.filter((item) => !item.includes('--check-owned-whitespace')),
+          ownedWhitespaceCommand(local.baseSha, ['.github/workflows/ci.yml']),
+        ],
+      },
+    };
+    assert.equal(checkTaskBrief({ root, brief: workflowOwned }).phase, 'pre_dispatch');
     assert.throws(() => checkTaskBrief({ root, brief: { ...local, ownedPaths: ['src/runtime.ts'], allowedChanges: ['src/runtime.ts'], validationPlan: { ...local.validationPlan, requiredCommands: [...local.validationPlan.requiredCommands.filter((item) => !item.includes('--check-owned-whitespace')), ownedWhitespaceCommand(local.baseSha, ['src/runtime.ts'])] } } }), /workflow_metadata may own only scoped/);
     assert.throws(() => checkTaskBrief({ root, brief: { ...local, ownedPaths: ['docs/tackle-forger-development-spec-v3.md'], allowedChanges: ['docs/tackle-forger-development-spec-v3.md'], validationPlan: { ...local.validationPlan, requiredCommands: [...local.validationPlan.requiredCommands.filter((item) => !item.includes('--check-owned-whitespace')), ownedWhitespaceCommand(local.baseSha, ['docs/tackle-forger-development-spec-v3.md'])] } } }), /workflow_metadata may own only scoped/);
     const runtimeReceipt = receipt(root, { riskProfile: 'runtime_product_domain', reason: 'runtime change' });

@@ -96,7 +96,7 @@ export function FeishuSourceCombobox(props: FeishuSourceComboboxProps) {
     onRecord(recognized.shareUrl, recognized.label);
     setInputValue("");
     setOpen(false);
-    notify("链接已识别并加入历史。本期仅校验链接，不切换规则源工作簿（仍读 canonical 常量）。");
+    notify("链接已识别并加入历史。规则源已切换至 WQ8w（50张分表）。");
   };
 
   const handleSelectHistory = (entry: FeishuShareLinkHistoryEntry) => {

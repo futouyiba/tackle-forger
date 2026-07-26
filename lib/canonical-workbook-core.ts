@@ -901,21 +901,40 @@ export function parseSeries(input: {
 function parseSeriesTargetPulls(raw: string, id: string, sourceRow: number, issues: SeriesParseIssue[]): SeriesDefinition["targetPullSpecifications"] {
   if (!raw) return [];
   const specs: Array<{ targetPullKgf: number; skuId: string }> = [];
-  for (const pair of raw.split(";")) {
-    const trimmed = pair.trim();
-    if (!trimmed) continue;
-    const colonIdx = trimmed.indexOf(":");
-    if (colonIdx < 0) {
-      issues.push({ level: "warning", code: "SERIES_TARGET_PULL_PARSE", message: `Series ${id} 目标拉力规格对无冒号：${trimmed}，跳过。`, sheetId: SERIES_SHEET_ID, row: sourceRow });
-      continue;
+
+  // 旧格式（kgf:标签; 分号分隔），如 "1.0:轻;4.5:中;8.0:重"
+  if (raw.includes(":")) {
+    for (const pair of raw.split(";")) {
+      const trimmed = pair.trim();
+      if (!trimmed) continue;
+      const colonIdx = trimmed.indexOf(":");
+      if (colonIdx < 0) {
+        issues.push({ level: "warning", code: "SERIES_TARGET_PULL_PARSE", message: `Series ${id} 目标拉力规格对无冒号：${trimmed}，跳过。`, sheetId: SERIES_SHEET_ID, row: sourceRow });
+        continue;
+      }
+      const pullKgf = Number(trimmed.slice(0, colonIdx));
+      const skuId = trimmed.slice(colonIdx + 1).trim();
+      if (!Number.isFinite(pullKgf) || !skuId) {
+        issues.push({ level: "warning", code: "SERIES_TARGET_PULL_PARSE", message: `Series ${id} 目标拉力规格对无效：${trimmed}，跳过。`, sheetId: SERIES_SHEET_ID, row: sourceRow });
+        continue;
+      }
+      specs.push({ targetPullKgf: pullKgf, skuId });
     }
-    const pullKgf = Number(trimmed.slice(0, colonIdx));
-    const skuId = trimmed.slice(colonIdx + 1).trim();
-    if (!Number.isFinite(pullKgf) || !skuId) {
-      issues.push({ level: "warning", code: "SERIES_TARGET_PULL_PARSE", message: `Series ${id} 目标拉力规格对无效：${trimmed}，跳过。`, sheetId: SERIES_SHEET_ID, row: sourceRow });
-      continue;
+  } else {
+    // 新格式（逗号分隔纯数值），如 "1.0,4.5,8.0" — 自动生成 skuId
+    let index = 0;
+    for (const seg of raw.split(",")) {
+      const trimmed = seg.trim();
+      if (!trimmed) continue;
+      const pullKgf = Number(trimmed);
+      if (!Number.isFinite(pullKgf) || pullKgf <= 0) {
+        issues.push({ level: "warning", code: "SERIES_TARGET_PULL_PARSE", message: `Series ${id} 目标拉力值无效：${trimmed}，跳过。`, sheetId: SERIES_SHEET_ID, row: sourceRow });
+        continue;
+      }
+      index += 1;
+      const skuId = `skg_${String(index).padStart(3, "0")}`;
+      specs.push({ targetPullKgf: pullKgf, skuId });
     }
-    specs.push({ targetPullKgf: pullKgf, skuId });
   }
   return specs;
 }

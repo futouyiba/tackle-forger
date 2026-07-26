@@ -826,8 +826,22 @@ test('SCOPED eligibility, clean Issue/PR routing, sections, OPEN IDs, and receip
     taskBase(root);
     const local = brief(root);
     assert.deepEqual(classifyOwnedPaths(['.github/workflows/ci.yml']), { scopedEligible: true, unrecognizedPaths: [] });
+    for (const scopedPath of [
+      '.codex/skills/agent-project-bootstrap/SKILL.md',
+      '.codex/skills/agent-issue-loop/SKILL.md',
+      '.codex/skills/agent-pr-loop/SKILL.md',
+      '.claude/skills/agent-pr-loop/SKILL.md',
+    ]) assert.deepEqual(classifyOwnedPaths([scopedPath]), { scopedEligible: true, unrecognizedPaths: [] });
     assert.deepEqual(classifyOwnedPaths(['.github/nested/arbitrary.md']), { scopedEligible: false, unrecognizedPaths: ['.github/nested/arbitrary.md'] });
     assert.deepEqual(classifyOwnedPaths(['.github/workflows/nested/ci.yml']), { scopedEligible: false, unrecognizedPaths: ['.github/workflows/nested/ci.yml'] });
+    for (const unrecognizedPath of [
+      '.codex/skills/agent-project-bootstrapper/SKILL.md',
+      '.codex/skills/agent-issue-loop-backup/SKILL.md',
+      '.claude/skills/deploy-r730/SKILL.md',
+      '.claude/skills/agent-pr-loop-backup/SKILL.md',
+      '.claude/skill/tackle-agent-workflow/SKILL.md',
+      '.claude/skills.md',
+    ]) assert.deepEqual(classifyOwnedPaths([unrecognizedPath]), { scopedEligible: false, unrecognizedPaths: [unrecognizedPath] });
     for (const malformed of [
       '.codex/skills/tackle-agent-workflow/../../../lib/runtime.ts',
       '../evil.md',
@@ -1011,4 +1025,53 @@ test('canonical specification paths always trigger the module consistency comman
     const prepared = prepareTaskBrief({ root, input });
     assert.equal(prepared.validationPlan.requiredCommands.includes('node scripts/spec-v3-modules.mjs --check'), true);
   } finally { cleanup(root); }
+});
+
+test('post-gate policy keeps merge eligibility distinct from merge action', () => {
+  const root = process.cwd();
+  const policyPaths = [
+    'AGENTS.md',
+    '.github/merge-gates.md',
+    '.claude/skills/agent-pr-loop/SKILL.md',
+    '.codex/skills/agent-issue-loop/SKILL.md',
+    '.codex/skills/agent-pr-loop/SKILL.md',
+    '.codex/skills/agent-pr-loop/agents/openai.yaml',
+    '.codex/skills/agent-project-bootstrap/SKILL.md',
+    '.codex/skills/agent-project-bootstrap/references/daily-project-flow.md',
+    '.codex/skills/tackle-agent-workflow/SKILL.md',
+  ];
+  const prohibitedDefaults = [
+    /automatic merge is the normal completion path/i,
+    /automatically merges when every gate passes/i,
+    /automatic merge when every gate passes/i,
+    /automatically complete one PR/i,
+    /exact-head automatic-merge/i,
+    /do not ask for redundant (?:merge )?confirmation/i,
+    /all-green exact-head review and CI result supplies the normal merge decision/i,
+    /the user has authorized the merge/i,
+  ];
+  for (const relative of policyPaths) {
+    const content = readFileSync(path.join(root, relative), 'utf8');
+    for (const prohibited of prohibitedDefaults) assert.doesNotMatch(content, prohibited, relative);
+  }
+  const issueLoop = readFileSync(path.join(root, '.codex/skills/agent-issue-loop/SKILL.md'), 'utf8');
+  assert.match(issueLoop, /PR_LOOP_ACTIVE → PR_MERGE_ELIGIBLE/);
+  assert.match(issueLoop, /status: `MERGE_ELIGIBLE`, `MERGED_VERIFIED`/);
+  assert.match(issueLoop, /exact reviewed head and base SHAs plus gate evidence/);
+  assert.match(issueLoop, /leave the Issue in `In review`/);
+  assert.match(issueLoop, /Only an explicit merge request may continue through `MERGED_VERIFIED/);
+
+  const routingSources = [
+    'AGENTS.md',
+    '.claude/skills/agent-pr-loop/SKILL.md',
+    '.codex/skills/agent-project-bootstrap/SKILL.md',
+    '.codex/skills/agent-project-bootstrap/references/daily-project-flow.md',
+  ];
+  for (const relative of routingSources) {
+    const content = readFileSync(path.join(root, relative), 'utf8');
+    assert.doesNotMatch(content, /合并闭环|verified merge|merge phase/i, relative);
+  }
+  const gatePolicy = readFileSync(path.join(root, '.github/merge-gates.md'), 'utf8');
+  assert.match(gatePolicy, /owner merge authorization that explicitly names the governance\s+exception/);
+  assert.match(gatePolicy, /explicit owner authorization naming PR #63/);
 });

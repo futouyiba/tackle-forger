@@ -1,6 +1,6 @@
 ---
 name: agent-issue-loop
-description: Complete one selected GitHub Issue through readiness analysis, implementation, validation, pull-request creation, adversarial review and repair, automatic merge, and verified Issue closure. Use when the user says 开始做这个 Issue, 解决这个 Issue, 搞定 Issue, 把当前 Issue 跑完, explicitly invokes agent-issue-loop, or asks for one Issue to be delivered end to end.
+description: Complete one selected GitHub Issue through readiness analysis, implementation, validation, pull-request creation, adversarial review and repair, and merge eligibility. Use when the user says 开始做这个 Issue, 解决这个 Issue, 搞定 Issue, 把当前 Issue 跑完, explicitly invokes agent-issue-loop, or asks for one Issue to be delivered end to end.
 ---
 
 # Agent Issue Loop
@@ -21,7 +21,7 @@ Default to one delivery Issue and one primary PR. If the Issue contains independ
 The invoking main Agent remains the only coordinator. A transition into `$agent-pr-loop` is a workflow handoff, not permission to spawn a second coordinator or ask the user to carry messages.
 
 - Use one implementation Agent for code, tests, and fixes when multi-Agent execution is available. Follow repository-specific model requirements.
-- Use an independent review Agent only when the PR exists. `$agent-pr-loop` owns that reviewer, the repair loop, current-head evidence, CI, and merge.
+- Use an independent review Agent only when the PR exists. `$agent-pr-loop` owns that reviewer, the repair loop, current-head evidence, CI, and merge eligibility.
 - Let the coordinator repair routine labels, links, and Project status idempotently. Do not return work to the implementer only for metadata.
 - Prefer direct Agent messaging during an active task. Persist durable decisions, findings, evidence, and resumable state on the Issue or PR so another run can recover without chat history.
 
@@ -29,7 +29,9 @@ The invoking main Agent remains the only coordinator. A transition into `$agent-
 
 Advance only after verifying each transition:
 
-`ISSUE_SELECTED → ISSUE_READINESS → IMPLEMENTATION_PREPARED → IMPLEMENTING → LOCAL_VALIDATION → PR_PREPARED → PR_OPEN → PR_LOOP_ACTIVE → MERGED_VERIFIED → ISSUE_COMPLETION_VERIFIED → DONE`
+`ISSUE_SELECTED → ISSUE_READINESS → IMPLEMENTATION_PREPARED → IMPLEMENTING → LOCAL_VALIDATION → PR_PREPARED → PR_OPEN → PR_LOOP_ACTIVE → PR_MERGE_ELIGIBLE`
+
+`PR_MERGE_ELIGIBLE` is the terminal handoff when merge is outside the current request scope: leave the Issue in `In review`. Only an explicit merge request may continue through `MERGED_VERIFIED → ISSUE_COMPLETION_VERIFIED → DONE` after merge readback succeeds.
 
 Use explicit exception states when normal progress is unsafe:
 
@@ -79,19 +81,21 @@ Open one linked, non-draft PR when implementation and scoped validation are comp
 - dependencies and risk surfaces;
 - exact local validation commands and results.
 
-Move the linked Issue to `In review` when the PR becomes ready. Then invoke `$agent-pr-loop` for that exact PR. Do not duplicate its review protocol or ask for a separate merge confirmation.
+Move the linked Issue to `In review` when the PR becomes ready. Then invoke `$agent-pr-loop` for that exact PR.
 
 Require `$agent-pr-loop` to return a structured outcome:
 
-- status: `MERGED_VERIFIED`, `HUMAN_GATE`, `EXTERNAL_BLOCKER`, `RETRY_EXHAUSTED`, or `NOT_READY`;
+- status: `MERGE_ELIGIBLE`, `MERGED_VERIFIED`, `HUMAN_GATE`, `EXTERNAL_BLOCKER`, `RETRY_EXHAUSTED`, or `NOT_READY`;
 - Issue and PR numbers;
 - reviewed head and base SHAs;
-- merge commit SHA when merged;
-- review and CI evidence;
+- exact reviewed head and base SHAs plus gate evidence;
+- merge commit SHA only when merged;
 - unresolved findings or required decisions;
 - observed linked-Issue state.
 
 Resume implementation or CI repair only from the returned evidence. Do not treat a stale PASS, comment, or check as applying to a changed head.
+
+On `MERGE_ELIGIBLE`, record the exact head/base and gate evidence, leave the Issue in `In review`, and end the Issue loop unless the current request explicitly includes a merge.
 
 ## Verify completion after merge
 
@@ -119,4 +123,4 @@ Escalate once, with evidence and the smallest required decision, when:
 - merge triggers deployment, publication, destructive behavior, or another recorded human gate;
 - the configured retry limit is exhausted.
 
-Do not stop merely because the user has not manually approved a routine implementation, review repair, qualifying exact-head merge, or normal Issue closure.
+Do not stop merely because the user has not manually approved a routine implementation, review repair, or normal Issue closure.

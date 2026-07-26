@@ -87,10 +87,10 @@ Never require the user to supply an Issue number.
 - **记一下** — capture an uncertain idea as a Project draft item in `Backlog` when supported; do not silently turn speculation into committed work.
 - **收需求** — extract, deduplicate, and search a batch of clear items; present one compact confirmation before creating anything not already authorized.
 - **开始做 + natural-language description** — resolve the matching Issue, then delegate its complete delivery to the installed `$agent-issue-loop` Skill.
-- **搞定 Issue / agent-issue-loop + optional Issue** — delegate one selected Issue to `$agent-issue-loop`. Keep one main coordinator across readiness, implementation, validation, PR handoff, verified merge, and normal Issue closure; its single PR is completed by `$agent-pr-loop`.
-- **收尾** — inspect the linked Issue, PR, review, and CI; record evidence and move to the appropriate status, but ask before merge, deployment, deletion, or other gated actions.
+- **搞定 Issue / agent-issue-loop + optional Issue** — delegate one selected Issue to `$agent-issue-loop`. Keep one main coordinator across readiness, implementation, validation, PR handoff, and merge eligibility; its single PR is handled by `$agent-pr-loop`.
+- **收尾** — inspect the linked Issue, PR, review, and CI; record evidence and merge eligibility.
 - **合并收尾 + optional scope** — treat the user's invocation as merge authorization for this turn only. Read the integration procedure in [daily project flow](references/daily-project-flow.md), merge only qualifying PRs in the current repository, and never deploy or publish.
-- **搞定 PR / agent-pr-loop + optional PR** — delegate one selected PR to the installed `$agent-pr-loop` Skill. It reads the complete PR conversation, runs the implementation/review/current-head-CI loop, and automatically merges when every gate passes. It pauses only at explicit human gates or a current-turn no-merge instruction.
+- **搞定 PR / agent-pr-loop + optional PR** — delegate one selected PR to the installed `$agent-pr-loop` Skill. It reads the complete PR conversation and runs the implementation/review/current-head-CI loop to establish merge eligibility. It uses the safe merge/readback procedure only when the current request explicitly includes a merge.
 - **托管 + optional goal or scope** — configure or resume the bounded supervisor in [managed autopilot](references/managed-autopilot.md). With no suffix, use the current repository and current explicit goal, active Issue, or active PR. If that scope is ambiguous, ask one concise question. Consolidate any missing schedule and standing merge-policy choices into one setup confirmation, then stop requiring the user to relay routine Issue, PR, review, and CI updates. Treat `托管这个项目` and natural equivalents identically.
 
 ## Managed mode
@@ -101,7 +101,7 @@ Read [managed autopilot](references/managed-autopilot.md) completely before enab
 - On each wake-up, refresh GitHub and continue the selected goal through routine implementation, review feedback, CI repair, and re-review cycles.
 - Treat GitHub as the mailbox and source of truth. Do not depend on the user copying messages between agents.
 - Use a recurring Codex Automation as a heartbeat when available. Claude Code has no equivalent built-in heartbeat, so use an external scheduler or the optional GitHub Agentic Workflows layer instead. Do not claim a scheduled task is an event webhook or that it runs while the required local client is offline.
-- Prefer GitHub built-in workflows, required checks, automatic Codex review, and repository auto-merge for deterministic transitions. Use GitHub Agentic Workflows only as an explicit opt-in event-driven execution layer because it requires an engine credential, Actions minutes/cost, generated lock files, and a deliberate threat model.
+- Prefer GitHub built-in workflows, required checks, and automatic Codex review for deterministic eligibility evidence. Use GitHub Agentic Workflows only as an explicit opt-in event-driven execution layer because it requires an engine credential, Actions minutes/cost, generated lock files, and a deliberate threat model.
 - Stop and ask at the repository's human gates or after the configured retry limit. Record the blocker on the Issue or PR before escalating once.
 - Never let managed mode authorize deployment, publishing, deletion, destructive data changes, secret or billing changes, scope expansion, or high-risk merges unless repository policy explicitly grants that exact action.
 
@@ -134,7 +134,7 @@ Ask before:
 - changing scope or acceptance criteria;
 - closing as `Not planned`;
 - deleting records;
-- merging a PR through the generic daily flow, unless the user explicitly invoked `合并收尾` or otherwise authorized the merge for this turn. For one PR explicitly delegated to `$agent-pr-loop`, follow its exact-head automatic-merge and human-gate policy instead;
+- merging a PR through the generic daily flow, unless the current request explicitly includes a merge;
 - publishing or deploying.
 
 Repository policy may narrow this authorization. Tool and platform approval prompts still apply and cannot be bypassed.

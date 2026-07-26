@@ -1,6 +1,6 @@
 interface:
   display_name: "Agent PR Loop"
-  short_description: "用多 Agent 完成单个 PR 的评论、复审、CI 与自动合并闭环"
-  default_prompt: "Use $agent-pr-loop to resolve, review, verify, and complete the active pull request."
+  short_description: "用多 Agent 完成单个 PR 的评论、复审、CI 与合并资格闭环"
+  default_prompt: "Use $agent-pr-loop to resolve, review, and verify merge eligibility for the active pull request. If the current request explicitly includes a merge, follow its safe merge and readback procedure."
 policy:
   allow_implicit_invocation: true

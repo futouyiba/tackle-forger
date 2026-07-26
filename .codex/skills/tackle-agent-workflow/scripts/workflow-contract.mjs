@@ -1164,8 +1164,23 @@ export function checkPolicy(root = repositoryRoot()) {
   if (!skill.includes('<!-- workflow-contract-policy-ref: AGENTS.md/workflow-contract-policy/v2 -->')) fail('Workflow policy drift: Skill does not reference AGENTS policy');
   const expectedYaml = 'interface:\n  display_name: "Tackle Agent Workflow"\n  short_description: "Start with a lightweight Task Card and escalate formal reviews"\n  default_prompt: "Use $tackle-agent-workflow to start daily work with a six-field Task Card, generate mechanical route/OPEN/read-plan evidence, and prepare a full TaskBrief only at a formal review or PR boundary. Preserve the pending unified visual-review marker unless full visual work is explicitly scoped."';
   if (yaml.trimEnd() !== expectedYaml) fail('Workflow policy drift: openai.yaml is not aligned');
+  const stripHtmlComments = (markdown) => {
+    let rendered = '';
+    let cursor = 0;
+    while (cursor < markdown.length) {
+      const opener = markdown.indexOf('<!--', cursor);
+      const strayCloser = markdown.indexOf('-->', cursor);
+      if (strayCloser !== -1 && (opener === -1 || strayCloser < opener)) fail('Workflow policy drift: PR template has an unmatched HTML comment delimiter');
+      if (opener === -1) return rendered + markdown.slice(cursor);
+      rendered += markdown.slice(cursor, opener);
+      const closer = markdown.indexOf('-->', opener + 4);
+      if (closer === -1) fail('Workflow policy drift: PR template has an unmatched HTML comment delimiter');
+      cursor = closer + 3;
+    }
+    return rendered;
+  };
   const templateHeadings = ['## Linked issue', '## Summary and scope', '## Validation evidence', '## Risk triggers', '## Review and CI evidence', '## Residual risk or follow-up'];
-  const renderedTemplate = template.replace(/<!--[\s\S]*?-->/g, '');
+  const renderedTemplate = stripHtmlComments(template);
   const actualTemplateHeadings = renderedTemplate.match(/^## .+$/gm) ?? [];
   if (canonicalJson(actualTemplateHeadings) !== canonicalJson(templateHeadings)) fail('Workflow policy drift: lightweight PR template must have exactly the six canonical headings in order');
   const riskGuidance = boundedSection(template, '## Risk triggers', '## Review and CI evidence');
@@ -1178,7 +1193,7 @@ export function checkPolicy(root = repositoryRoot()) {
   ];
   for (const mapping of riskDimensionMappings) if (!riskGuidance.content.includes(mapping)) fail('Workflow policy drift: PR risk trigger mapping differs from TaskBrief riskDimensions');
   const riskTriggerLabels = ['Persisted data or migration', 'Historical or published artifacts', 'Authorization or concurrency', 'External side effects', 'User-visible UI or interaction'];
-  const renderedRiskGuidance = riskGuidance.content.replace(/<!--[\s\S]*?-->/g, '');
+  const renderedRiskGuidance = stripHtmlComments(riskGuidance.content);
   const actualRiskTriggerLabels = renderedRiskGuidance.split(/\r?\n/).flatMap((line) => {
     const match = line.match(/^- \[[ xX]\] (.+)$/);
     return match === null ? [] : [match[1]];
@@ -1197,7 +1212,7 @@ export function checkPolicy(root = repositoryRoot()) {
   const visualBoundaryContradiction = visualBoundaryStatements.some((statement) => {
     const hasMinimalSmoke = /(?:Minimal render smoke|最小渲染)/i.test(statement);
     const hasVisualReview = /(?:unified|pending|visual|视觉)/i.test(statement);
-    const completionClaims = statement.matchAll(/(?:replace(?:s|d)?|complet(?:e|es|ed)|remove(?:s|d)?|clear(?:s|ed)?|替代|完成)/gi);
+    const completionClaims = statement.matchAll(/(?:replace(?:s|d)?|complet(?:e|es|ed)|remove(?:s|d)?|clear(?:s|ed)?|satisf(?:y|ies|ied)|pass(?:es|ed)?|count(?:s|ed)?(?:\s+as)?|sufficient|替代|完成|满足|通过|算作)/gi);
     const hasUnnegatedCompletionClaim = [...completionClaims].some((match) => {
       const prefix = statement.slice(Math.max(0, match.index - 40), match.index);
       const englishNegation = /(?:does not|doesn't|cannot|can't|must not|is not|isn't|are not|aren't|will not|won't|never|not)\s+(?:(?:be|get)\s+)?$/i;

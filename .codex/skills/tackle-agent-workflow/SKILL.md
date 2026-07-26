@@ -17,7 +17,7 @@ Choose exactly one route before creating an agent:
 - **Issue delivery:** `$agent-issue-loop` owns Issue, branch, PR, closure, and handoff. Supply it this Skill's TaskBrief; do not start a local independent reviewer. Once a PR exists, `$agent-pr-loop` exclusively owns review, CI, fixes, and merge gates.
 - **Existing PR:** invoke `$agent-pr-loop` directly and supply the TaskBrief. Do not create a coding or review loop here.
 
-Never add a second independent reviewer to an Issue or PR route. This Skill never authorizes merge, publication, deployment, deletion, scope expansion, or external actions.
+Never add a second independent reviewer to an Issue or PR route. This Skill does not own PR merge action, publication, deployment, deletion, scope expansion, or other external actions.
 
 ## Start with a Task Card; create a TaskBrief at a formal boundary
 

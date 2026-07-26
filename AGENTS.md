@@ -39,8 +39,8 @@
 ## 项目级 Agent Skills
 
 - 本仓库在`.codex/skills/`内提交所需工作流Skills；克隆仓库后优先使用项目级版本，不要求预先全局安装。
-- 对一个明确Issue的端到端交付，使用`$agent-issue-loop`。由同一个主Agent完成就绪检查、实现、验证、PR交接、合并回读与正常关闭，并把单个PR阶段交给`$agent-pr-loop`。
-- 对一个已经存在的PR执行评论、独立复审、修补、当前head CI与合并闭环时，使用`$agent-pr-loop`。
+- 对一个明确Issue的端到端交付，使用`$agent-issue-loop`。由同一个主Agent完成就绪检查、实现、验证、PR交接与合并资格交接，并把单个PR阶段交给`$agent-pr-loop`。
+- 对一个已经存在的PR执行评论、独立复审、修补、当前head CI与合并资格检查时，使用`$agent-pr-loop`。
 - 需要初始化、迁移、普通语言任务发现或仓库级GitHub协作政策时，使用`$agent-project-bootstrap`。
 - 对本仓库中的实现、修复或重构，`$tackle-agent-workflow`为所有路由提供项目约束与 TaskBrief；只有本地路由使用其编码与独立本地审核。Issue 与 PR 路由仍分别遵循`$agent-issue-loop`和`$agent-pr-loop`；仓库的合并、发布和部署门禁不因项目级Skill存在而放宽。
 
@@ -110,5 +110,3 @@
   真人`APPROVED`；旧head上的较晚决定不得清除当前head的`CHANGES_REQUESTED`。同一评审者在同一当前
   head上较晚提交的精确`Agent-Review: PASS`可取代其较早的`CHANGES_REQUESTED`，普通`COMMENTED`不可。
   只有平台规则或负责人另行明确要求时，才增加真人批准门槛。
-- 检查通过只是可合并证据，不授予合并权限；合并仍需本轮用户明确授权。完整契约见
-  `.github/merge-gates.md`。

@@ -14,8 +14,7 @@ Use separate decisions for entering formal review and entering the merge path:
   Issue to `In review`.
 - A pull request is **merge-ready** only when the live checker accepts its
   current head, the repository-approved review signal is current, review
-  findings and threads are settled, dependencies and the base are current, and
-  the user has authorized the merge.
+  findings and threads are settled, and dependencies and the base are current.
 
 ## Validation cadence
 
@@ -58,7 +57,7 @@ complete implementation and scoped validation
 → remove Draft and enter formal review
 → record a current-head review signal and settle its findings
 → run the live merge checker
-→ obtain explicit merge authorization
+→ establish merge eligibility
 ```
 
 Classify blockers before changing ownership: implementation or acceptance

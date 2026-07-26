@@ -1,11 +1,11 @@
 ---
 name: agent-pr-loop
-description: 主 agent 已直接实现代码后，把 PR 走完「独立审核 → 主 agent 修 → 当前 head CI → 全门禁通过即合并」的闭环。当用户说「审完合并」「复审后合并」「合并收尾」「搞定这个 PR」「把当前 PR 跑完」时启用，尤其是应由 Codex 推断当前 PR 而不要求用户给出编号时。
+description: 主 agent 已直接实现代码后，把 PR 走完「独立审核 → 主 agent 修 → 当前 head CI → 合并资格」的闭环；仅当前请求明确包含合并时执行安全合并与回读。当用户说「审完合并」「复审后合并」「合并收尾」「搞定这个 PR」「把当前 PR 跑完」时启用，尤其是应由 Codex 推断当前 PR 而不要求用户给出编号时。
 ---
 
 ## 定位
 
-本 skill 在项目 `CLAUDE.md`「Agent 工作模式」定义的工作模式下运作（实现/修改/调查由主 agent 直接做，不 spawn 实现 agent；此处不重复）。**本 skill 只负责审核 + CI + 合并闭环。**
+本 skill 在项目 `CLAUDE.md`「Agent 工作模式」定义的工作模式下运作（实现/修改/调查由主 agent 直接做，不 spawn 实现 agent；此处不重复）。**本 skill 只负责审核 + CI + 合并资格。**
 
 主 agent 实现并 push head 后，需要独立审核时有两条路（可选其一或并行）：
 1. **输出审核清单**（见下）→ 用户粘到常驻审核 agent 窗口（省 install + 上下文重建，推荐用于敏捷迭代）；
@@ -56,7 +56,7 @@ Agent 进程可能无法跨会话存活（压缩、/model 切换、进程退出�
 
 > 合并门禁的**权威规则见 `AGENTS.md`「GitHub合并门禁」与 `.github/merge-gates.md`**（CI provenance、run-name、governance:check-pr、`Agent-Review: PASS` 信号、高风险分类等）。下文仅是本 skill 的操作摘要，冲突时以 AGENTS.md 为准。
 
-仅当某一精确 head/base 对同时满足以下全部条件，才宣布 PR 就绪并合并：
+仅当某一精确 head/base 对同时满足以下全部条件，才宣布 PR 具备合并资格：
 - 已同步到最新预期集成 base，且工作树干净；
 - 完成仓库要求的本地验证（typecheck/lint/test）并有精确结果；
 - 每个必需的 PR CI 任务在其当前 run/attempt 上成功；过期、缺失、pending 或失败的一律阻断；
@@ -64,7 +64,6 @@ Agent 进程可能无法跨会话存活（压缩、/model 切换、进程退出�
 - 有一份绑定该精确 head/base 对的实质性独立审核，含 `Agent-Review: PASS`；
 - PR 处于 open、非草稿、可合并，满足分支保护。
 
-自动合并是常规完成路径；闭环给出全部信息后不要再问冗余确认。用户当回合可覆盖（「只审不合并」「不合并」）。
 
 仅当命中显式人工关卡时才暂停请求人工决策：未决产品语义/范围、破坏性或不可逆数据变更、安全/授权边界、合并触发部署/发布、必需验证不可用、依赖或合并顺序不明、重试上限耗尽。不把普通代码质量或泛泛「再谨慎些」标成关卡。
 

@@ -14,7 +14,7 @@ import {
   RotateCcw,
   ShieldCheck,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import type { ActionAvailabilityMap } from "@/lib/interaction-contracts";
 import type { ConfigurationSnapshot, WorkspaceState } from "@/lib/types";
 
@@ -154,7 +154,11 @@ export function OperationalConfigExportWorkbench({
   const LS_BASE = "tackle-forger:companion:baseUrl";
   const [baseUrl, setBaseUrl] = useState(() => {
     if (typeof window !== "undefined") {
-      try { return localStorage.getItem(LS_BASE) ?? "http://127.0.0.1:47831"; }
+      try {
+        // 清理旧版本持久化的 token
+        localStorage.removeItem("tackle-forger:companion:token");
+        return localStorage.getItem(LS_BASE) ?? "http://127.0.0.1:47831";
+      }
       catch { return "http://127.0.0.1:47831"; }
     }
     return "http://127.0.0.1:47831";
@@ -240,15 +244,9 @@ export function OperationalConfigExportWorkbench({
   const disconnect = () => {
     setConnection("idle");
     setHealth(undefined);
+    setPairingToken("");
     setError("");
   };
-
-  // 有已保存 baseUrl 时自动尝试连接（defer 以符合 lint 规则）
-  useEffect(() => {
-    if (!pairingToken || connection !== "idle") return;
-    const timer = setTimeout(() => { connect(); }, 0);
-    return () => clearTimeout(timer);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const generatePreview = async () => {
     if (!snapshot || blockers.length) return;

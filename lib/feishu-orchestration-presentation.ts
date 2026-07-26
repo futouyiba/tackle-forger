@@ -75,7 +75,7 @@ export function orchestrationStageStateLabel(state: OrchestrationStageState): st
     DRAFTED: "草稿已就绪",
     PUBLISHING: "发布中…",
     PUBLISHED: "已发布",
-    SUPERSEDED: "已过时",
+    SUPERSEDED: "数据已更新（需重新拉取）",
     BLOCKED: "已阻断",
     FAILED: "失败",
     REMOTE_CHANGES_AVAILABLE: "远程有变更",
@@ -457,7 +457,7 @@ function buildTerminalNotice(
     return `工作簿校验发现阻断错误：${codes}。无法继续拉取或发布，请检查飞书源数据。`;
   }
   if (stage.id === "source_pull" && stage.state === "SUPERSEDED") {
-    return `检测到飞书 revision 已变化。当前展示的证据来自旧 revision，已被取代。请重新显式拉取以获取最新规则。`;
+    return `飞书工作簿的表结构或数据已变化（revision 更新）。你手上的拉取记录来自旧版本，已不能用于创建草稿或发布。请点第一步"重新检查"刷新工作簿状态，再点第二步"显式拉取"获取最新数据。`;
   }
   if (stage.state === "FAILED") {
     return `操作失败。已保留当前可用规则和 Trace 证据，不会进入成功态。请检查错误信息后重试。`;

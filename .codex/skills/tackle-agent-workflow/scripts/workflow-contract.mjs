@@ -246,6 +246,15 @@ function requireCurrentReuseContext(value) {
   if (value.currentContextState !== 'continuous') fail('currentReuseContext.currentContextState must be continuous; unknown or compacted context cannot be reused');
   return value;
 }
+function validateReuseContexts(value) {
+  if (value === undefined) return undefined;
+  if (!isPlainObject(value)) fail('reuseContexts must be an object keyed by receipt role');
+  for (const [role, context] of Object.entries(value)) {
+    if (!['coordinator', 'coding', 'review'].includes(role)) fail('reuseContexts has an unknown receipt role');
+    requireCurrentReuseContext(context);
+  }
+  return value;
+}
 export function checkFullReadSession({ root = repositoryRoot(), session }) {
   requireExactKeys(session, ['schema', 'agentIdentity', 'contextSessionId', 'contextState', 'specSha256', 'readmeSha256', 'openRegistrySha256', 'fullReadReceipt', 'createdAt'], 'fullReadSession');
   if (session.schema !== SPEC_FULL_READ_SESSION_SCHEMA) fail(`fullReadSession.schema must be ${SPEC_FULL_READ_SESSION_SCHEMA}`);
@@ -275,10 +284,12 @@ export function checkReadReceipt({ root = repositoryRoot(), receipt, currentReus
   requireString(receipt.reason, 'receipt.reason');
   requireCurrentSpecHash(root, receipt.specSha256);
   const plan = specReadPlan({ role, riskProfile, relevantSections });
-  if (profile !== plan.profile) fail(`receipt.profile must be ${plan.profile} for role/risk`);
-  if (!sameSet(requiredSections, plan.requiredSections)) fail('receipt.requiredSections does not match the required read plan');
+  const voluntaryFull = profile === 'FULL' && riskProfile === 'workflow_docs_metadata';
+  if (profile !== plan.profile && !voluntaryFull) fail(`receipt.profile must be ${plan.profile} for role/risk`);
+  const expectedSections = voluntaryFull ? [README_SECTION, FULL_V3_SECTION] : plan.requiredSections;
+  if (!sameSet(requiredSections, expectedSections)) fail('receipt.requiredSections does not match the required read plan');
   if (!requiredSections.every((section) => readSections.includes(section))) fail('receipt.readSections is missing a required section');
-  return { receiptHash: receiptHash(receipt), requiredSections: plan.requiredSections };
+  return { receiptHash: receiptHash(receipt), requiredSections: expectedSections };
 }
 function checkReusedReadReceipt({ root, receipt, currentReuseContext }) {
   requireExactKeys(receipt, ['schema', 'taskId', 'role', 'specSha256', 'profile', 'riskProfile', 'relevantSections', 'requiredSections', 'readSections', 'reason', 'reuseEvidence'], 'receipt');
@@ -421,8 +432,8 @@ function commandSpec(briefResult, brief, command) {
   if (isWorkflowWhitespaceCommand(command, briefResult.baseSha, brief.ownedPaths)) return { command, executable: node, args: [script, '--check-owned-whitespace', '--base', briefResult.baseSha, ...brief.ownedPaths.flatMap((owned) => ['--owned', owned])] };
   fail(`Validation command is not in the closed execution catalog: ${command}`);
 }
-export function validationExecutionPlan({ root = repositoryRoot(), brief, currentReuseContext }) {
-  const briefResult = checkTaskBrief({ root, brief, currentReuseContext });
+export function validationExecutionPlan({ root = repositoryRoot(), brief, currentReuseContext, reuseContexts }) {
+  const briefResult = checkTaskBrief({ root, brief, currentReuseContext, reuseContexts });
   if (briefResult.phase !== 'verdict') fail('Validation execution requires a verdict-phase TaskBrief');
   const commands = requireNonEmptyStringArray(brief.validationPlan.requiredCommands, 'TaskBrief.validationPlan.requiredCommands');
   const plan = commands.map((command) => commandSpec(briefResult, brief, command));
@@ -449,8 +460,8 @@ function failureDetail(result) {
   const detail = output.slice(0, 8192) || result.error?.message || `process exited ${result.status ?? 'without an exit status'}`;
   return detail;
 }
-export function runValidation({ root = repositoryRoot(), brief, currentReuseContext }) {
-  const plan = validationExecutionPlan({ root, brief, currentReuseContext });
+export function runValidation({ root = repositoryRoot(), brief, currentReuseContext, reuseContexts }) {
+  const plan = validationExecutionPlan({ root, brief, currentReuseContext, reuseContexts });
   const results = plan.commands.map(({ command, executable, args }) => {
     const started = new Date();
     const result = spawnSync(executable, args, { cwd: root, encoding: null, timeout: 15 * 60 * 1000, maxBuffer: 16 * 1024 * 1024 });
@@ -689,7 +700,9 @@ function checkOwnedBaselineManifest({ root, manifest, baseSha, ownedPaths, preex
   if (!sameSet(derivedPreexisting, preexistingOwnedPaths)) fail('preTaskOwnedBaselineManifest does not match preexistingOwnedPaths');
   return ownedBaselineHash(manifest);
 }
-export function checkTaskBrief({ root = repositoryRoot(), brief, currentReuseContext }) {
+export function checkTaskBrief({ root = repositoryRoot(), brief, currentReuseContext, reuseContexts }) {
+  if (currentReuseContext !== undefined && reuseContexts !== undefined) fail('TaskBrief checking accepts either currentReuseContext or role-keyed reuseContexts, not both');
+  const trustedReuseContexts = validateReuseContexts(reuseContexts);
   if (!isPlainObject(brief)) fail('TaskBrief must be an object');
   if (brief.schema !== TASK_BRIEF_SCHEMA) fail(`TaskBrief.schema must be ${TASK_BRIEF_SCHEMA}`);
   const taskId = requireString(brief.taskId, 'TaskBrief.taskId');
@@ -733,8 +746,10 @@ export function checkTaskBrief({ root = repositoryRoot(), brief, currentReuseCon
   if (!preexistingOwnedPaths.every((item) => ownedPaths.includes(item))) fail('TaskBrief.preexistingOwnedPaths must be owned paths');
   const disposition = requireString(brief.dirtyWorktreeDisposition, 'TaskBrief.dirtyWorktreeDisposition');
   if (!Array.isArray(brief.specReadReceipts) || brief.specReadReceipts.length === 0) fail('TaskBrief.specReadReceipts must be a non-empty array');
+  const reusedRoles = [];
   const receiptHashes = brief.specReadReceipts.map((receipt) => {
-    const checked = checkReadReceipt({ root, receipt, currentReuseContext });
+    const checked = checkReadReceipt({ root, receipt, currentReuseContext: trustedReuseContexts === undefined ? currentReuseContext : trustedReuseContexts[receipt.role] });
+    if (receipt.schema === SPEC_READ_REUSE_SCHEMA) reusedRoles.push(receipt.role);
     if (receipt.taskId !== taskId) fail('TaskBrief receipt taskId must match TaskBrief.taskId');
     if (receipt.specSha256 !== brief.specSha256) fail('TaskBrief receipt specSha256 must match TaskBrief.specSha256');
     if (receipt.riskProfile !== riskProfile || !sameSet(receipt.relevantSections, relevantSections)) fail('TaskBrief receipts must use TaskBrief riskProfile and relevantSections');
@@ -742,6 +757,7 @@ export function checkTaskBrief({ root = repositoryRoot(), brief, currentReuseCon
     if ((riskProfile !== 'workflow_docs_metadata' || brief.scopeHasRuntimeSemantics) && receipt.profile !== 'FULL') fail('TaskBrief risk/scope requires FULL receipts');
     return checked.receiptHash;
   });
+  if (trustedReuseContexts !== undefined && !sameSet(Object.keys(trustedReuseContexts), reusedRoles)) fail('reuseContexts must provide exactly one trusted context for each REUSE_FULL receipt role');
   if (new Set(receiptHashes).size !== receiptHashes.length) fail('TaskBrief.specReadReceipts must not contain duplicate receipt coverage');
   const roles = brief.specReadReceipts.map((receipt) => receipt.role);
   if (phase === 'pre_dispatch' && (roles.length !== 1 || roles[0] !== 'coordinator')) fail('Pre-dispatch TaskBrief requires exactly one coordinator spec-read receipt');
@@ -761,20 +777,21 @@ export function checkTaskBrief({ root = repositoryRoot(), brief, currentReuseCon
   }
   return { taskBriefSha256: taskBriefHash(brief), specReceiptHashes: [...receiptHashes].sort(compareUtf8), dirtyWorktreeDisposition: disposition, baseSha, reviewedHead, phase };
 }
-function requirePromotionReceipt({ root, receipt, role, sourceBrief, currentReuseContext }) {
-  const checked = checkReadReceipt({ root, receipt, currentReuseContext });
+function requirePromotionReceipt({ root, receipt, role, sourceBrief, currentReuseContext, reuseContexts }) {
+  const checked = checkReadReceipt({ root, receipt, currentReuseContext: reuseContexts === undefined ? currentReuseContext : reuseContexts[role] });
   if (receipt.role !== role) fail(`TaskBrief promotion receipt must have role ${role}`);
   if (receipt.taskId !== sourceBrief.taskId || receipt.specSha256 !== sourceBrief.specSha256 || receipt.riskProfile !== sourceBrief.riskProfile || !sameSet(receipt.relevantSections, sourceBrief.relevantSections)) fail('TaskBrief promotion receipt must bind the exact task, specification, risk profile, and relevant sections');
   return checked.receiptHash;
 }
-export function promoteTaskBrief({ root = repositoryRoot(), brief, codingReceipt, reviewReceipt, currentReuseContext }) {
-  const source = checkTaskBrief({ root, brief, currentReuseContext });
+export function promoteTaskBrief({ root = repositoryRoot(), brief, codingReceipt, reviewReceipt, currentReuseContext, reuseContexts }) {
+  const sourceReuseContexts = reuseContexts === undefined ? undefined : Object.fromEntries(Object.entries(reuseContexts).filter(([role]) => brief.specReadReceipts.some((receipt) => receipt.role === role && receipt.schema === SPEC_READ_REUSE_SCHEMA)));
+  const source = checkTaskBrief({ root, brief, currentReuseContext, reuseContexts: sourceReuseContexts });
   if (source.phase !== 'pre_dispatch') fail('TaskBrief promotion requires a valid pre_dispatch TaskBrief');
   if (brief.workflowMode !== 'local' || source.reviewedHead !== 'WORKTREE') fail('TaskBrief promotion supports only a local WORKTREE pre_dispatch artifact');
   if (source.baseSha !== currentHead(root)) fail('TaskBrief promotion rejects a stale base/head artifact');
   if (brief.preexistingUnownedChanges.length !== 0) fail('TaskBrief promotion rejects preexisting unowned artifacts');
   const coordinatorReceipt = brief.specReadReceipts[0];
-  const coverageHashes = [receiptHash(coordinatorReceipt), requirePromotionReceipt({ root, receipt: codingReceipt, role: 'coding', sourceBrief: brief, currentReuseContext }), requirePromotionReceipt({ root, receipt: reviewReceipt, role: 'review', sourceBrief: brief, currentReuseContext })];
+  const coverageHashes = [receiptHash(coordinatorReceipt), requirePromotionReceipt({ root, receipt: codingReceipt, role: 'coding', sourceBrief: brief, currentReuseContext, reuseContexts }), requirePromotionReceipt({ root, receipt: reviewReceipt, role: 'review', sourceBrief: brief, currentReuseContext, reuseContexts })];
   if (new Set(coverageHashes).size !== coverageHashes.length) fail('TaskBrief promotion requires unique coordinator, coding, and review receipt coverage');
   const dirtyPaths = validationStatusPaths(root);
   if (dirtyPaths.some((repoPath) => !brief.ownedPaths.includes(repoPath))) fail('TaskBrief promotion rejects dirty or unowned artifacts');
@@ -782,13 +799,13 @@ export function promoteTaskBrief({ root = repositoryRoot(), brief, codingReceipt
   const manifestDirtyPaths = manifest.entries.filter((entry) => entry.state !== 'unchanged').map((entry) => entry.path);
   if (!sameSet(dirtyPaths, manifestDirtyPaths)) fail('TaskBrief promotion current Git status does not match the owned artifact manifest');
   const promoted = { ...brief, phase: 'verdict', reviewedHead: 'WORKTREE', specReadReceipts: [coordinatorReceipt, codingReceipt, reviewReceipt], dirtyWorktreeDisposition: brief.preexistingOwnedPaths.length === 0 ? 'clean' : 'include_with_frozen_baseline' };
-  checkTaskBrief({ root, brief: promoted, currentReuseContext });
+  checkTaskBrief({ root, brief: promoted, currentReuseContext, reuseContexts });
   return promoted;
 }
-export function checkVerdict({ root = repositoryRoot(), verdict, brief, currentReuseContext }) {
+export function checkVerdict({ root = repositoryRoot(), verdict, brief, currentReuseContext, reuseContexts }) {
   requireExactKeys(verdict, ['schema', 'taskId', 'taskBriefSha256', 'specReceiptHashes', 'dirtyWorktreeDisposition', 'specSha256', 'baseSha', 'reviewedHead', 'ownedPaths', 'artifactIdentity', 'verdict', 'findings'], 'verdict');
   if (verdict.schema !== VERDICT_SCHEMA) fail(`verdict.schema must be ${VERDICT_SCHEMA}`);
-  const briefResult = checkTaskBrief({ root, brief, currentReuseContext });
+  const briefResult = checkTaskBrief({ root, brief, currentReuseContext, reuseContexts });
   if (briefResult.phase !== 'verdict') fail('Verdict requires a verdict-phase TaskBrief');
   if (requireString(verdict.taskId, 'verdict.taskId') !== brief.taskId) fail('verdict.taskId must match TaskBrief.taskId');
   if (verdict.taskBriefSha256 !== briefResult.taskBriefSha256) fail('verdict.taskBriefSha256 must match TaskBrief');
@@ -891,7 +908,7 @@ export function checkPolicy(root = repositoryRoot()) {
   return true;
 }
 function usage() {
-  return `Usage:\n  node ${SCRIPT_RELATIVE} --generate-index\n  node ${SCRIPT_RELATIVE} --check-index\n  node ${SCRIPT_RELATIVE} --check-policy\n  node ${SCRIPT_RELATIVE} --prepare-task-brief --input <semantic-input.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --promote-task-brief --brief <pre-dispatch-task-brief.json> --coding-receipt <receipt.json> --review-receipt <receipt.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --check-owned-whitespace --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --spec-read-plan --role <coordinator|coding|review> --risk <risk-profile> [--relevant <v3-section> ...]\n  node ${SCRIPT_RELATIVE} --check-read-receipt --receipt <receipt.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --check-full-read-session --session <session.json>\n  node ${SCRIPT_RELATIVE} --check-task-brief --brief <task-brief.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --owned-baseline --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --run-validation --brief <verdict-task-brief.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --check-verdict --verdict <verdict.json> --brief <task-brief.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --patch-hash --base <sha> --owned <repo-relative-path> [--owned <path> ...]`;
+  return `Usage:\n  node ${SCRIPT_RELATIVE} --generate-index\n  node ${SCRIPT_RELATIVE} --check-index\n  node ${SCRIPT_RELATIVE} --check-policy\n  node ${SCRIPT_RELATIVE} --prepare-task-brief --input <semantic-input.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --promote-task-brief --brief <pre-dispatch-task-brief.json> --coding-receipt <receipt.json> --review-receipt <receipt.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --check-owned-whitespace --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --spec-read-plan --role <coordinator|coding|review> --risk <risk-profile> [--relevant <v3-section> ...]\n  node ${SCRIPT_RELATIVE} --check-read-receipt --receipt <receipt.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --check-full-read-session --session <session.json>\n  node ${SCRIPT_RELATIVE} --check-task-brief --brief <task-brief.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --owned-baseline --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --run-validation --brief <verdict-task-brief.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --check-verdict --verdict <verdict.json> --brief <task-brief.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --patch-hash --base <sha> --owned <repo-relative-path> [--owned <path> ...]`;
 }
 function parseActionOptions(argv, action, allowed, required = []) {
   if (argv[0] !== action) fail(usage());
@@ -923,11 +940,9 @@ export function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
     return JSON.stringify(prepareTaskBrief({ root, input: readJsonFile(path.resolve(cwd, values['--input'][0]), 'Task preparation input'), currentReuseContext }), null, 2);
   }
   if (action === '--promote-task-brief') {
-    const values = parseActionOptions(argv, action, { '--brief': false, '--coding-receipt': false, '--review-receipt': false, '--current-agent-identity': false, '--current-context-session-id': false, '--current-context-state': false }, ['--brief', '--coding-receipt', '--review-receipt']);
-    const currentReuseContext = values['--current-agent-identity'].length === 0 && values['--current-context-session-id'].length === 0 && values['--current-context-state'].length === 0 ? undefined : {
-      currentAgentIdentity: values['--current-agent-identity'][0], currentContextSessionId: values['--current-context-session-id'][0], currentContextState: values['--current-context-state'][0],
-    };
-    return JSON.stringify(promoteTaskBrief({ root, brief: readJsonFile(path.resolve(cwd, values['--brief'][0]), 'pre_dispatch TaskBrief'), codingReceipt: readJsonFile(path.resolve(cwd, values['--coding-receipt'][0]), 'coding receipt'), reviewReceipt: readJsonFile(path.resolve(cwd, values['--review-receipt'][0]), 'review receipt'), currentReuseContext }), null, 2);
+    const values = parseActionOptions(argv, action, { '--brief': false, '--coding-receipt': false, '--review-receipt': false, '--reuse-contexts': false }, ['--brief', '--coding-receipt', '--review-receipt']);
+    const reuseContexts = values['--reuse-contexts'].length === 0 ? undefined : readJsonFile(path.resolve(cwd, values['--reuse-contexts'][0]), 'role-keyed reuse contexts');
+    return JSON.stringify(promoteTaskBrief({ root, brief: readJsonFile(path.resolve(cwd, values['--brief'][0]), 'pre_dispatch TaskBrief'), codingReceipt: readJsonFile(path.resolve(cwd, values['--coding-receipt'][0]), 'coding receipt'), reviewReceipt: readJsonFile(path.resolve(cwd, values['--review-receipt'][0]), 'review receipt'), reuseContexts }), null, 2);
   }
   if (action === '--check-owned-whitespace') {
     const values = parseActionOptions(argv, action, { '--base': false, '--owned': true }, ['--base']);
@@ -950,25 +965,19 @@ export function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
     return JSON.stringify(checkFullReadSession({ root, session: readJsonFile(path.resolve(cwd, values['--session'][0]), 'full read session') }), null, 2);
   }
   if (action === '--check-task-brief') {
-    const values = parseActionOptions(argv, action, { '--brief': false, '--current-agent-identity': false, '--current-context-session-id': false, '--current-context-state': false }, ['--brief']);
-    const currentReuseContext = values['--current-agent-identity'].length === 0 && values['--current-context-session-id'].length === 0 && values['--current-context-state'].length === 0 ? undefined : {
-      currentAgentIdentity: values['--current-agent-identity'][0], currentContextSessionId: values['--current-context-session-id'][0], currentContextState: values['--current-context-state'][0],
-    };
-    return JSON.stringify(checkTaskBrief({ root, brief: readJsonFile(path.resolve(cwd, values['--brief'][0]), 'TaskBrief'), currentReuseContext }), null, 2);
+    const values = parseActionOptions(argv, action, { '--brief': false, '--reuse-contexts': false }, ['--brief']);
+    const reuseContexts = values['--reuse-contexts'].length === 0 ? undefined : readJsonFile(path.resolve(cwd, values['--reuse-contexts'][0]), 'role-keyed reuse contexts');
+    return JSON.stringify(checkTaskBrief({ root, brief: readJsonFile(path.resolve(cwd, values['--brief'][0]), 'TaskBrief'), reuseContexts }), null, 2);
   }
   if (action === '--run-validation') {
-    const values = parseActionOptions(argv, action, { '--brief': false, '--current-agent-identity': false, '--current-context-session-id': false, '--current-context-state': false }, ['--brief']);
-    const currentReuseContext = values['--current-agent-identity'].length === 0 && values['--current-context-session-id'].length === 0 && values['--current-context-state'].length === 0 ? undefined : {
-      currentAgentIdentity: values['--current-agent-identity'][0], currentContextSessionId: values['--current-context-session-id'][0], currentContextState: values['--current-context-state'][0],
-    };
-    return JSON.stringify(runValidation({ root, brief: readJsonFile(path.resolve(cwd, values['--brief'][0]), 'verdict TaskBrief'), currentReuseContext }), null, 2);
+    const values = parseActionOptions(argv, action, { '--brief': false, '--reuse-contexts': false }, ['--brief']);
+    const reuseContexts = values['--reuse-contexts'].length === 0 ? undefined : readJsonFile(path.resolve(cwd, values['--reuse-contexts'][0]), 'role-keyed reuse contexts');
+    return JSON.stringify(runValidation({ root, brief: readJsonFile(path.resolve(cwd, values['--brief'][0]), 'verdict TaskBrief'), reuseContexts }), null, 2);
   }
   if (action === '--check-verdict') {
-    const values = parseActionOptions(argv, action, { '--verdict': false, '--brief': false, '--current-agent-identity': false, '--current-context-session-id': false, '--current-context-state': false }, ['--verdict', '--brief']);
-    const currentReuseContext = values['--current-agent-identity'].length === 0 && values['--current-context-session-id'].length === 0 && values['--current-context-state'].length === 0 ? undefined : {
-      currentAgentIdentity: values['--current-agent-identity'][0], currentContextSessionId: values['--current-context-session-id'][0], currentContextState: values['--current-context-state'][0],
-    };
-    return JSON.stringify(checkVerdict({ root, verdict: readJsonFile(path.resolve(cwd, values['--verdict'][0]), 'verdict'), brief: readJsonFile(path.resolve(cwd, values['--brief'][0]), 'TaskBrief'), currentReuseContext }), null, 2);
+    const values = parseActionOptions(argv, action, { '--verdict': false, '--brief': false, '--reuse-contexts': false }, ['--verdict', '--brief']);
+    const reuseContexts = values['--reuse-contexts'].length === 0 ? undefined : readJsonFile(path.resolve(cwd, values['--reuse-contexts'][0]), 'role-keyed reuse contexts');
+    return JSON.stringify(checkVerdict({ root, verdict: readJsonFile(path.resolve(cwd, values['--verdict'][0]), 'verdict'), brief: readJsonFile(path.resolve(cwd, values['--brief'][0]), 'TaskBrief'), reuseContexts }), null, 2);
   }
   const values = parseActionOptions(argv, action, { '--base': false, '--owned': true }, ['--base']);
   if (values['--owned'].length === 0) fail(usage());

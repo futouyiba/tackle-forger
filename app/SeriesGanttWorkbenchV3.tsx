@@ -876,14 +876,14 @@ function ModelDrawer({
     return registered ? [{ sheetId: sheet.sheetId, name: sheet.name || registered.expectedName }] : [];
   }) ?? [];
   const stableRulesForParameter = [
-    ...state.methodProfiles.flatMap((profile) => profile.rules.map((rule) => ({ rule, sheetId: "fATowU" }))),
-    ...state.itemTypeProfiles.flatMap((profile) => profile.rules.map((rule) => ({ rule, sheetId: "fATowU" }))),
+    ...state.methodProfiles.flatMap((profile) => profile.rules.map((rule) => ({ rule, sheetId: rule.sourceSheetId ?? "" }))),
+    ...state.itemTypeProfiles.flatMap((profile) => profile.rules.map((rule) => ({ rule, sheetId: rule.sourceSheetId ?? "" }))),
     ...state.functionProfiles.flatMap((profile) => [
-      ...profile.rules.map((rule) => ({ rule, sheetId: "vviXo0" })),
+      ...profile.rules.map((rule) => ({ rule, sheetId: rule.sourceSheetId ?? "" })),
       ...profile.intensityRules.flatMap((entry) =>
-        entry.rules.map((rule) => ({ rule, sheetId: "vviXo0" }))),
+        entry.rules.map((rule) => ({ rule, sheetId: rule.sourceSheetId ?? "" }))),
     ]),
-    ...state.qualityProfiles.flatMap((profile) => profile.rules.map((rule) => ({ rule, sheetId: "FqD4j7" }))),
+    ...state.qualityProfiles.flatMap((profile) => profile.rules.map((rule) => ({ rule, sheetId: rule.sourceSheetId ?? "" }))),
   ].filter((entry, index, rules) =>
     entry.sheetId === ruleTargetForm.sheetId
     && entry.rule.parameterKey === ruleTargetForm.parameterKey

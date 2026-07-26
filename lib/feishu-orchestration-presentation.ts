@@ -9,6 +9,7 @@
 
 import type { CanonicalRuleWorkbookInspection } from "./rule-workbook-inspection";
 import type { RuleSetVersion, WorkspaceState } from "./types";
+import { CANONICAL_FEISHU_WORKBOOK } from "./feishu-workbook";
 
 // ─── Stage identity ────────────────────────────────────────────────────────
 
@@ -349,8 +350,7 @@ export function buildFeishuOrchestrationModel(
   return {
     businessRevision: input.workspaceRevision,
     workbookName: "钓具设计工作簿",
-    workbookUrl:
-      "https://pisn3u3ony2.feishu.cn/wiki/YsEKwSUJ5i86HCkZKBVcNMw7nOh?from=from_copylink&sheet=9nE3Rx",
+    workbookUrl: CANONICAL_FEISHU_WORKBOOK.shareUrl,
     sourceRevision: inspection?.sourceRevision.sourceRevision ?? null,
     stages,
     isValid: !terminalStage,

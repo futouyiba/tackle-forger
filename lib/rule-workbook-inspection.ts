@@ -88,7 +88,7 @@ export const LEGACY_YS_EKW_IDENTITY_SHEET_SPECS: IdentitySheetSpec[] = [
   { sheetId: "9nE3Rx", range: "B1:C10", idColumnKey: "B", fixedEntityType: "SeriesArchetype", allowedEntityTypes: ["SeriesArchetype"], idPrefixesByEntityType: { SeriesArchetype: ["series_rod_", "series_reel_", "series_line_"] } },
 ];
 
-const AFFIX_SHEET_ID = "23CsXE";
+export const AFFIX_SHEET_ID = "23CsXE";
 /** 品质定义主表（区间/价格系数）；公式 26gpIF 与组合矩阵 28fQhg 由 PR2b-3 接入。 */
 const QUALITY_SHEET_ID = "27hboC";
 // The repository's Feishu reader already rejects sources over 10,000 rows.

@@ -14,6 +14,7 @@ import {
   type PricingTrialResult,
 } from "@/lib/pricing-policy";
 import type { CanonicalRuleWorkbookInspection } from "@/lib/rule-workbook-inspection";
+import { AFFIX_SHEET_ID } from "@/lib/rule-workbook-inspection";
 import { randomUUID } from "@/lib/browser-utils";
 import type { QualityValuePolicyDraft } from "@/lib/quality-value-policy";
 import type {
@@ -247,7 +248,7 @@ export function QualityValuePolicyPanel({
           <strong>{draft.combinationRules.length} 个稳定 ID 组合已解析</strong>
           <span>
             {Number.isSafeInteger(affixSheetRowCount)
-              ? `04_词条读取覆盖 zrVOxd!B2:F${affixSheetRowCount}；高行号合法词条参与同部位绑定。`
+              ? `04_词条读取覆盖 ${AFFIX_SHEET_ID}!B2:F${affixSheetRowCount}；高行号合法词条参与同部位绑定。`
               : "04_词条读取上界缺少可信元数据时会停止导入，不会沿用固定末行。"}
           </span>
         </div>

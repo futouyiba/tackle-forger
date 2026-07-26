@@ -60,11 +60,11 @@ export interface FeishuSourceRevision {
   registryHash: string;
   sheets: RemoteFeishuSheet[];
   issues: FeishuSheetRegistryIssue[];
-  /** 仅由权威 04_词条/zrVOxd 机器规则区解析；外部工作簿不得填充为运行时规则。 */
+  /** 仅由权威词条表的机器规则区解析；外部工作簿不得填充为运行时规则。 */
   reductionPolicyMachineRules?: ReductionPolicyMachineRule[];
-  /** Hash of the immutable W-band policy payload read from this exact workbook revision. */
+  /** Hash of the immutable W-band policy payload read from the canonical weight-template sheets. */
   fiveAxisWeightBandPolicyContentHash?: string;
-  /** Normalized immutable payload read from d6e928; absence is non-formal. */
+  /** Normalized immutable payload read from WQ8w weight-template sheets; absence is non-formal. */
   fiveAxisWeightBandPolicy?: FiveAxisWeightBandPolicy;
   state: "PULLED" | "RULESET_DRAFT" | "PUBLISHED";
 }
@@ -146,7 +146,7 @@ export const LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY: FeishuSheetRegistryEntry[] = [
  *
  * PR2a 地基：本 PR 仅登记新表身份与 50 张分表 registry，与既有 `CANONICAL_FEISHU_WORKBOOK`
  * （YsEKw `/wiki/`）并存；读取层、`CANONICAL_FEISHU_WORKBOOK` 与 `CANONICAL_FEISHU_SHEET_REGISTRY`
- * 全部保持不动，切流由后续 PR 跟踪（#143）。`wikiToken` 留空：`/sheets/` 直接形式不经 wiki 解析。
+ * 切流已于 PR2b 完成：CANONICAL 全部指向 WQ8w，NEW_CANONICAL_* 保留作兼容别名。
  */
 export const NEW_CANONICAL_FEISHU_WORKBOOK: FeishuWorkbookRef = {
   id: "feishu-workbook:tackle-design-new",
@@ -309,9 +309,7 @@ export function isRuleWorkbookShareUrl(input: string): boolean {
  * 解析失败时透传 `parseCanonicalWorkbookLink` 的错误，由调用方负责提示。
  * 解析成功时返回 `{ shareUrl, label }`：label 取 wikiToken 或 spreadsheetToken
  * 的前缀，作为「工作簿名」的缓存代理——真正的飞书工作簿标题需要调 API 获取，
- * 本期只做 UI + 识别 + 历史（#157），不切工作簿、不联调，因此用 token 前缀占位。
- *
- * 本函数不修改 `CANONICAL_FEISHU_WORKBOOK`、不触发读取层切流（#143）。
+ * 历史记录与选择功能（#157），不修改已登记的 workbook/registry。
  */
 export function recognizeFeishuRuleWorkbookLink(input: string): {
   shareUrl: string;

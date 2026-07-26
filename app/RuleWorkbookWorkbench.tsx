@@ -12,8 +12,10 @@ import { useEffect, useMemo, useState } from "react";
 import type { ActionAvailabilityMap } from "@/lib/interaction-contracts";
 import { randomUUID } from "@/lib/browser-utils";
 import { issueClientActionCommand } from "@/lib/client-action-command";
+import { CANONICAL_FEISHU_WORKBOOK } from "@/lib/feishu-workbook";
 import { buildFeishuOrchestrationModel } from "@/lib/feishu-orchestration-presentation";
 import type { CanonicalRuleWorkbookInspection } from "@/lib/rule-workbook-inspection";
+import { AFFIX_SHEET_ID } from "@/lib/rule-workbook-inspection";
 import type { WorkspaceState } from "@/lib/types";
 import {
   IdentityMigrationPanel,
@@ -259,8 +261,8 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
         <div>
           <span className="eyebrow">唯一通用规则源 · 整本工作簿</span>
           <h2>钓具设计工作簿</h2>
-          <p>链接中的“06_系列”只是打开位置。读取范围始终覆盖整本工作簿，工作表按稳定 ID 识别。</p>
-          <a href="https://pisn3u3ony2.feishu.cn/wiki/YsEKwSUJ5i86HCkZKBVcNMw7nOh?from=from_copylink&sheet=9nE3Rx" target="_blank" rel="noreferrer">
+          <p>链接中的工作表只是打开位置。读取范围始终覆盖整本工作簿，工作表按稳定 ID 识别。</p>
+          <a href={CANONICAL_FEISHU_WORKBOOK.shareUrl} target="_blank" rel="noreferrer">
             在飞书中查看 <ArrowRight size={14} />
           </a>
         </div>
@@ -280,8 +282,7 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
             <span className="eyebrow">设置 · 规则源地址</span>
             <h3>飞书表来源</h3>
             <p>
-              粘贴飞书分享链接（/wiki/ 或 /sheets/）或从用过的地址中选择。本期仅识别并缓存链接，
-              不切换规则源工作簿——仍读取 canonical 常量；切流由 #143 跟踪。
+              粘贴飞书分享链接（/wiki/ 或 /sheets/）或从用过的地址中选择。规则源工作簿已切至 WQ8w（50张分表）。
             </p>
           </div>
         </div>
@@ -408,7 +409,7 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
           />
           <QualityValuePolicyPanel
             draft={inspection.qualityDraft}
-            affixSheetRowCount={inspection.sourceRevision.sheets.find((sheet) => sheet.sheetId === "zrVOxd")?.rowCount}
+            affixSheetRowCount={inspection.sourceRevision.sheets.find((sheet) => sheet.sheetId === AFFIX_SHEET_ID)?.rowCount}
           />
           <PricingPolicyDraftPanel draft={inspection.pricingDraft} />
         </>

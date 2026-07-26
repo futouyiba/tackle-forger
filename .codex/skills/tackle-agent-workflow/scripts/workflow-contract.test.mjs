@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { appendFileSync, chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { appendFileSync, chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { buildNavigationIndex, buildOwnedBaselineManifest, buildPatchManifest, checkNavigationIndex, checkPolicy, checkReadReceipt, checkTaskBrief, checkVerdict, openRegistryHash, ownedBaselineHash, patchHash, receiptHash, runCli, specReadPlan, taskBriefHash, validationExecutionPlan, writeNavigationIndex } from './workflow-contract.mjs';
+import { buildNavigationIndex, buildOwnedBaselineManifest, buildPatchManifest, checkFullReadSession, checkNavigationIndex, checkPolicy, checkReadReceipt, checkTaskBrief, checkVerdict, fullReadSessionHash, openRegistryHash, ownedBaselineHash, patchHash, receiptHash, runCli, runValidation, specReadPlan, taskBriefHash, validationExecutionPlan, writeNavigationIndex } from './workflow-contract.mjs';
 
 function command(root, args) { return execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim(); }
 function write(root, relative, content) { const target = path.join(root, relative); mkdirSync(path.dirname(target), { recursive: true }); writeFileSync(target, content); }
@@ -30,6 +31,25 @@ function receipt(root, overrides = {}) {
     requiredSections: ['README', 'FULL_V3'], readSections: ['README', 'FULL_V3'], reason: 'coordination', ...overrides,
   };
 }
+function fullReadSession(root, overrides = {}) {
+  const fullReadReceipt = receipt(root);
+  return {
+    schema: 'tackle-spec-full-read-session/v1', agentIdentity: 'agent:codex-test', contextSessionId: 'context:test-1', contextState: 'continuous',
+    specSha256: specHash(root), readmeSha256: createHash('sha256').update(readFileSync(path.join(root, 'docs/README.md'))).digest('hex'),
+    openRegistrySha256: openRegistryHash(root), fullReadReceipt, createdAt: '2026-07-26T00:00:00Z', ...overrides,
+  };
+}
+function reusedReceipt(root, overrides = {}) {
+  const session = fullReadSession(root);
+  return {
+    schema: 'tackle-spec-read/v2', taskId: 'task-2', role: 'coordinator', specSha256: specHash(root), profile: 'REUSE_FULL', riskProfile: 'workflow_docs_metadata', relevantSections: ['1', '20'],
+    requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'same agent, explicit continuous context',
+    reuseEvidence: { session, sessionSha256: fullReadSessionHash(session), agentIdentity: session.agentIdentity, contextSessionId: session.contextSessionId }, ...overrides,
+  };
+}
+function currentReuseContext(session) {
+  return { currentAgentIdentity: session.agentIdentity, currentContextSessionId: session.contextSessionId, currentContextState: 'continuous' };
+}
 function brief(root, overrides = {}) {
   const coordinatorReceipt = receipt(root);
   const baseSha = command(root, ['rev-parse', 'HEAD']);
@@ -44,8 +64,24 @@ function brief(root, overrides = {}) {
 function nonLegacyNa() { return { legacy_workspace_ci: 'No legacy-workspace path is owned.' }; }
 function taskBase(root) {
   write(root, 'docs/tackle-forger-development-spec-v3.md', '# V3\n\n## 0. Authority\n\n### 0.1 Immutable\n\n## 1. Scope\n\n### 3.1 Method and type\n\n### 5.2 Derived template\n\n## 8. Patch\n\n## 13. Snapshot\n\n## 14. Version\n\n### 18.2 Snapshot\n\n### 18.3 Patch\n\n## 19. Delivery\n\n## 20. Open\n\n### 24.11 Snapshot\n\n## 25. Export\n\n| ID | Type | Status |\n| --- | --- | --- |\n| OPEN-001 Test | x | `OPEN` |\n');
+  write(root, 'docs/README.md', '# Documentation\n');
   write(root, 'AGENTS.md', 'base\n');
   commitBase(root);
+}
+function validationFixture() {
+  const root = temporaryRepo();
+  const sourceRoot = path.resolve(process.cwd());
+  try {
+    taskBase(root);
+    for (const relative of ['AGENTS.md', '.codex/skills/tackle-agent-workflow/SKILL.md', '.codex/skills/tackle-agent-workflow/agents/openai.yaml', '.github/pull_request_template.md']) write(root, relative, readFileSync(path.join(sourceRoot, relative), 'utf8'));
+    const contract = readFileSync(path.join(sourceRoot, '.codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs'), 'utf8');
+    write(root, '.codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs', `${contract}\nif (process.argv.includes('--check-policy')) writeFileSync(${JSON.stringify(path.join(root, 'validation-ran.marker'))}, 'ran\\n');\n`);
+    write(root, '.codex/skills/tackle-agent-workflow/scripts/workflow-contract.test.mjs', `import { writeFileSync } from 'node:fs';\nimport test from 'node:test';\nwriteFileSync(${JSON.stringify(path.join(root, 'validation-ran.marker'))}, 'ran\\n');\ntest('validation command ran', () => {});\n`);
+    writeNavigationIndex(root);
+    command(root, ['add', '.']);
+    command(root, ['commit', '-qm', 'validation fixture']);
+    return root;
+  } catch (error) { cleanup(root); throw error; }
 }
 
 test('patch manifest classifies explicit owned paths and is deterministic', () => {
@@ -163,6 +199,85 @@ test('spec-read receipts enforce full/scoped plans and canonical v3 hash', () =>
     }
     assert.throws(() => checkReadReceipt({ root, receipt: { ...scoped, riskProfile: 'runtime_behavior' } }), /profile must be FULL/);
   } finally { cleanup(root); }
+});
+
+test('full-read sessions reuse only exact continuous low-risk evidence', () => {
+  const root = temporaryRepo();
+  try {
+    taskBase(root);
+    const session = fullReadSession(root);
+    assert.equal(checkFullReadSession({ root, session }).sessionHash, fullReadSessionHash(session));
+    write(root, 'session.json', `${JSON.stringify(session)}\n`);
+    assert.equal(JSON.parse(runCli(['--check-full-read-session', '--session', 'session.json'], root)).sessionHash, fullReadSessionHash(session));
+    const reused = reusedReceipt(root);
+    const current = currentReuseContext(reused.reuseEvidence.session);
+    assert.equal(checkReadReceipt({ root, receipt: reused, currentReuseContext: current }).sessionHash, fullReadSessionHash(session));
+    write(root, 'reused-receipt.json', `${JSON.stringify(reused)}\n`);
+    assert.equal(JSON.parse(runCli(['--check-read-receipt', '--receipt', 'reused-receipt.json', '--current-agent-identity', current.currentAgentIdentity, '--current-context-session-id', current.currentContextSessionId, '--current-context-state', current.currentContextState], root)).sessionHash, fullReadSessionHash(session));
+    assert.equal(checkTaskBrief({ root, brief: brief(root, { taskId: 'task-2', specReadReceipts: [reused] }), currentReuseContext: current }).taskBriefSha256.length, 64);
+    assert.throws(() => checkReadReceipt({ root, receipt: reused }), /currentReuseContext/);
+    assert.throws(() => checkTaskBrief({ root, brief: brief(root, { taskId: 'task-2', specReadReceipts: [reused] }) }), /currentReuseContext/);
+    assert.throws(() => checkFullReadSession({ root, session: { ...session, contextState: 'compacted' } }), /unknown or compacted/);
+    assert.throws(() => checkReadReceipt({ root, receipt: { ...reused, reuseEvidence: { ...reused.reuseEvidence, agentIdentity: 'agent:other' } }, currentReuseContext: current }), /exact same agent/);
+    assert.throws(() => checkReadReceipt({ root, receipt: { ...reused, riskProfile: 'runtime_product_domain' }, currentReuseContext: current }), /only valid/);
+    assert.throws(() => checkReadReceipt({ root, receipt: { ...reused, readSections: ['README', '0', '19', '20'] }, currentReuseContext: current }), /explicitly read/);
+    assert.throws(() => checkReadReceipt({ root, receipt: reused, currentReuseContext: { ...current, currentAgentIdentity: 'agent:other' } }), /caller-provided/);
+    assert.throws(() => checkReadReceipt({ root, receipt: reused, currentReuseContext: { ...current, currentContextState: 'compacted' } }), /currentContextState/);
+    const copiedSession = { ...reused.reuseEvidence.session, agentIdentity: 'agent:other' };
+    const copiedReceipt = { ...reused, reuseEvidence: { ...reused.reuseEvidence, session: copiedSession, sessionSha256: fullReadSessionHash(copiedSession), agentIdentity: 'agent:other' } };
+    assert.throws(() => checkReadReceipt({ root, receipt: copiedReceipt, currentReuseContext: current }), /caller-provided/);
+    for (const invalid of ['2026-02-29T00:00:00Z', '2025-04-31T00:00:00Z', '2026-01-01T24:00:00Z', '2026-01-01T00:00:60Z', '2026-01-01T00:00:00.1Z']) assert.throws(() => checkFullReadSession({ root, session: { ...session, createdAt: invalid } }), /RFC 3339|real UTC/);
+    assert.equal(checkFullReadSession({ root, session: { ...session, createdAt: '2024-02-29T23:59:59Z' } }).sessionHash.length, 64);
+    unlinkSync(path.join(root, 'session.json'));
+    unlinkSync(path.join(root, 'reused-receipt.json'));
+    const coding = receipt(root, { taskId: 'task-2', role: 'coding', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'implementation' });
+    const review = receipt(root, { taskId: 'task-2', role: 'review', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'review' });
+    const verdictBrief = brief(root, { taskId: 'task-2', phase: 'verdict', reviewedHead: command(root, ['rev-parse', 'HEAD']), specReadReceipts: [reused, coding, review] });
+    assert.equal(validationExecutionPlan({ root, brief: verdictBrief, currentReuseContext: current }).artifact.artifactIdentity.kind, 'commit');
+    assert.throws(() => validationExecutionPlan({ root, brief: verdictBrief }), /currentReuseContext/);
+    assert.throws(() => validationExecutionPlan({ root, brief: verdictBrief, currentReuseContext: { ...current, currentContextState: 'compacted' } }), /currentContextState/);
+    assert.throws(() => validationExecutionPlan({ root, brief: verdictBrief, currentReuseContext: { ...current, currentAgentIdentity: 'agent:other' } }), /caller-provided/);
+    assert.throws(() => validationExecutionPlan({ root, brief: verdictBrief, currentReuseContext: { ...current, currentContextSessionId: 'context:other' } }), /caller-provided/);
+    write(root, 'docs/README.md', '# Changed\n');
+    assert.throws(() => checkFullReadSession({ root, session }), /README/);
+  } finally { cleanup(root); }
+});
+
+test('REUSE_FULL runValidation and CLI fail before execution without trusted current context', () => {
+  const root = validationFixture();
+  const handoff = mkdtempSync(path.join(os.tmpdir(), 'workflow-validation-handoff-'));
+  const marker = path.join(root, 'validation-ran.marker');
+  try {
+    const reused = reusedReceipt(root);
+    const current = currentReuseContext(reused.reuseEvidence.session);
+    const coding = receipt(root, { taskId: 'task-2', role: 'coding', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'implementation' });
+    const review = receipt(root, { taskId: 'task-2', role: 'review', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'review' });
+    const verdictBrief = brief(root, { taskId: 'task-2', phase: 'verdict', reviewedHead: command(root, ['rev-parse', 'HEAD']), specReadReceipts: [reused, coding, review] });
+    const briefPath = path.join(handoff, 'verdict-brief.json');
+    writeFileSync(briefPath, `${JSON.stringify(verdictBrief)}\n`);
+    for (const invalid of [undefined, { ...current, currentContextState: 'compacted' }, { ...current, currentAgentIdentity: 'agent:other' }, { ...current, currentContextSessionId: 'context:other' }]) {
+      assert.throws(() => runValidation({ root, brief: verdictBrief, currentReuseContext: invalid }), /currentReuseContext|currentContextState|caller-provided/);
+      assert.equal(existsSync(marker), false);
+    }
+    const summary = runValidation({ root, brief: verdictBrief, currentReuseContext: current });
+    assert.equal(summary.schema, 'tackle-validation-summary/v1');
+    assert.equal(summary.results.every((result) => result.result === 'PASS'), true);
+    assert.equal(existsSync(marker), true, JSON.stringify(summary.results));
+    unlinkSync(marker);
+    for (const args of [
+      ['--run-validation', '--brief', briefPath],
+      ['--run-validation', '--brief', briefPath, '--current-agent-identity', current.currentAgentIdentity, '--current-context-session-id', current.currentContextSessionId, '--current-context-state', 'compacted'],
+      ['--run-validation', '--brief', briefPath, '--current-agent-identity', 'agent:other', '--current-context-session-id', current.currentContextSessionId, '--current-context-state', 'continuous'],
+      ['--run-validation', '--brief', briefPath, '--current-agent-identity', current.currentAgentIdentity, '--current-context-session-id', 'context:other', '--current-context-state', 'continuous'],
+    ]) {
+      assert.throws(() => runCli(args, root), /currentReuseContext|currentContextState|caller-provided/);
+      assert.equal(existsSync(marker), false);
+    }
+    const cliSummary = JSON.parse(runCli(['--run-validation', '--brief', briefPath, '--current-agent-identity', current.currentAgentIdentity, '--current-context-session-id', current.currentContextSessionId, '--current-context-state', 'continuous'], root));
+    assert.equal(cliSummary.schema, 'tackle-validation-summary/v1');
+    assert.equal(cliSummary.results.every((result) => result.result === 'PASS'), true);
+    assert.equal(existsSync(marker), true);
+  } finally { cleanup(root); cleanup(handoff); }
 });
 
 test('TaskBrief enforces dirty-worktree isolation and deterministic identity', () => {

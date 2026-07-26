@@ -5,9 +5,10 @@ import { appendFileSync, chmodSync, existsSync, mkdtempSync, mkdirSync, readFile
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { buildNavigationIndex, buildOwnedBaselineManifest, buildPatchManifest, checkFullReadSession, checkNavigationIndex, checkPolicy, checkReadReceipt, checkTaskBrief, checkVerdict, fullReadSessionHash, openRegistryHash, ownedBaselineHash, patchHash, receiptHash, runCli, runValidation, specReadPlan, taskBriefHash, validationExecutionPlan, writeNavigationIndex } from './workflow-contract.mjs';
+import { buildNavigationIndex, buildOwnedBaselineManifest, buildPatchManifest, checkFullReadSession, checkNavigationIndex, checkOwnedWhitespace, checkPolicy, checkReadReceipt, checkTaskBrief, checkVerdict, fullReadSessionHash, openRegistryHash, ownedBaselineHash, patchHash, prepareTaskBrief, receiptHash, runCli, runValidation, specReadPlan, taskBriefHash, validationExecutionPlan, writeNavigationIndex } from './workflow-contract.mjs';
 
 function command(root, args) { return execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim(); }
+function ownedWhitespaceCommand(baseSha, ownedPaths) { return `node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-owned-whitespace --base ${baseSha} ${ownedPaths.flatMap((owned) => ['--owned', owned]).join(' ')}`; }
 function write(root, relative, content) { const target = path.join(root, relative); mkdirSync(path.dirname(target), { recursive: true }); writeFileSync(target, content); }
 function temporaryRepo() {
   const root = mkdtempSync(path.join(os.tmpdir(), 'workflow-contract-'));
@@ -56,7 +57,7 @@ function brief(root, overrides = {}) {
   const openIds = buildNavigationIndex(root).openRegistry.map((entry) => entry.id);
   return {
     schema: 'tackle-task-brief/v1', taskId: 'task-1', workflowMode: 'local', phase: 'pre_dispatch', specSha256: coordinatorReceipt.specSha256,
-    baseSha, reviewedHead: 'WORKTREE', scope: 'workflow hardening', relevantSections: ['1', '20'], openDecisionCheck: { registrySha256: openRegistryHash(root), checkedIds: openIds, applicableIds: openIds, noApplicableReason: null }, riskProfile: 'workflow_docs_metadata', scopeHasRuntimeSemantics: false, changeClass: 'workflow_metadata', allowedChanges: ['AGENTS.md'], acceptanceCriteria: ['contract validates'], exclusions: ['product runtime'], riskDimensions: { persistedData: false, historicalSnapshots: false, concurrency: false, authorization: false, externalSideEffects: false, userVisible: false }, validationPlan: { requiredCommands: ['node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-policy', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-index', 'node --test .codex/skills/tackle-agent-workflow/scripts/workflow-contract.test.mjs', `git diff --check ${baseSha} -- AGENTS.md`], requiredScenarios: ['authority_and_scoped_diff'], intentionallyNotApplicable: { product_runtime_tests: 'No product code changes.', legacy_workspace_ci: 'No legacy-workspace path is owned.' } },
+    baseSha, reviewedHead: 'WORKTREE', scope: 'workflow hardening', relevantSections: ['1', '20'], openDecisionCheck: { registrySha256: openRegistryHash(root), checkedIds: openIds, applicableIds: openIds, noApplicableReason: null }, riskProfile: 'workflow_docs_metadata', scopeHasRuntimeSemantics: false, changeClass: 'workflow_metadata', allowedChanges: ['AGENTS.md'], acceptanceCriteria: ['contract validates'], exclusions: ['product runtime'], riskDimensions: { persistedData: false, historicalSnapshots: false, concurrency: false, authorization: false, externalSideEffects: false, userVisible: false }, validationPlan: { requiredCommands: ['node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-policy', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-index', 'node --test .codex/skills/tackle-agent-workflow/scripts/workflow-contract.test.mjs', ownedWhitespaceCommand(baseSha, ['AGENTS.md'])], requiredScenarios: ['authority_and_scoped_diff'], intentionallyNotApplicable: { product_runtime_tests: 'No product code changes.', legacy_workspace_ci: 'No legacy-workspace path is owned.' } },
     specReadReceipts: [coordinatorReceipt], ownedPaths: ['AGENTS.md'], preexistingOwnedPaths: [],
     preexistingUnownedChanges: [], dirtyWorktreeDisposition: 'clean', ...overrides,
   };
@@ -68,6 +69,127 @@ function taskBase(root) {
   write(root, 'AGENTS.md', 'base\n');
   commitBase(root);
 }
+
+function prepareInput(root, overrides = {}) {
+  return {
+    schema: 'tackle-task-prepare-input/v1', taskId: 'prepared-task', workflowMode: 'local', baseSha: command(root, ['rev-parse', 'HEAD']),
+    scope: 'explicit workflow preparation scope', relevantSections: ['0', '19', '20'],
+    openDecisionApplicability: { applicableIds: [], noApplicableReason: 'No product OPEN decision is implemented.' },
+    riskProfile: 'workflow_docs_metadata', scopeHasRuntimeSemantics: false, changeClass: 'workflow_metadata', ownedPaths: ['AGENTS.md'],
+    acceptanceCriteria: ['The generated TaskBrief validates.'], exclusions: ['No product runtime behavior changes.'],
+    riskDimensions: { persistedData: false, historicalSnapshots: false, concurrency: false, authorization: false, externalSideEffects: false, userVisible: false },
+    coordinatorSpecReadReceipt: receipt(root, { taskId: 'prepared-task', relevantSections: ['0', '19', '20'], reason: 'Coordinator completed the required canonical reading before preparation.' }), ...overrides,
+  };
+}
+
+test('TaskBrief preparation derives only mechanical fields and immediately validates', () => {
+  const root = temporaryRepo();
+  const handoff = mkdtempSync(path.join(os.tmpdir(), 'workflow-prepare-input-'));
+  try {
+    taskBase(root);
+    const input = prepareInput(root);
+    const prepared = prepareTaskBrief({ root, input });
+    assert.equal(checkTaskBrief({ root, brief: prepared }).phase, 'pre_dispatch');
+    assert.equal(prepared.reviewedHead, 'WORKTREE');
+    assert.deepEqual(prepared.allowedChanges, input.ownedPaths);
+    assert.deepEqual(prepared.openDecisionCheck.checkedIds, ['OPEN-001']);
+    assert.equal(prepared.validationPlan.requiredCommands.includes(ownedWhitespaceCommand(input.baseSha, ['AGENTS.md'])), true);
+    assert.equal(prepared.validationPlan.intentionallyNotApplicable.product_runtime_tests.length > 0, true);
+    assert.equal(prepared.specReadReceipts[0].profile, 'FULL');
+    const inputPath = path.join(handoff, 'prepare-input.json');
+    writeFileSync(inputPath, `${JSON.stringify(input)}\n`);
+    assert.equal(JSON.parse(runCli(['--prepare-task-brief', '--input', inputPath], root)).taskId, input.taskId);
+  } finally { cleanup(root); cleanup(handoff); }
+});
+
+test('TaskBrief preparation accepts v2 reuse receipts only with trusted continuous context', () => {
+  const root = temporaryRepo();
+  const handoff = mkdtempSync(path.join(os.tmpdir(), 'workflow-prepare-reuse-'));
+  try {
+    taskBase(root);
+    const v2 = reusedReceipt(root, {
+      taskId: 'prepared-task', relevantSections: ['0', '19', '20'],
+      requiredSections: ['README', '0', '19', '20'], readSections: ['README', '0', '19', '20'],
+    });
+    const input = prepareInput(root, { coordinatorSpecReadReceipt: v2 });
+    const current = currentReuseContext(v2.reuseEvidence.session);
+    assert.equal(prepareTaskBrief({ root, input, currentReuseContext: current }).specReadReceipts[0].schema, 'tackle-spec-read/v2');
+    assert.throws(() => prepareTaskBrief({ root, input }), /currentReuseContext/);
+    assert.throws(() => prepareTaskBrief({ root, input, currentReuseContext: { ...current, currentAgentIdentity: 'agent:other' } }), /caller-provided/);
+    assert.throws(() => prepareTaskBrief({ root, input, currentReuseContext: { ...current, currentContextSessionId: 'context:other' } }), /caller-provided/);
+    assert.throws(() => prepareTaskBrief({ root, input, currentReuseContext: { ...current, currentContextState: 'compacted' } }), /currentContextState/);
+    const inputPath = path.join(handoff, 'reuse-input.json');
+    writeFileSync(inputPath, `${JSON.stringify(input)}\n`);
+    assert.throws(() => runCli(['--prepare-task-brief', '--input', inputPath], root), /currentReuseContext/);
+    assert.equal(JSON.parse(runCli(['--prepare-task-brief', '--input', inputPath, '--current-agent-identity', current.currentAgentIdentity, '--current-context-session-id', current.currentContextSessionId, '--current-context-state', 'continuous'], root)).taskId, input.taskId);
+  } finally { cleanup(root); cleanup(handoff); }
+});
+
+test('TaskBrief preparation preserves every declared risk dimension and its scenarios', () => {
+  const root = temporaryRepo();
+  try {
+    taskBase(root);
+    const dimensions = { persistedData: true, historicalSnapshots: false, concurrency: true, authorization: false, externalSideEffects: false, userVisible: true };
+    const input = prepareInput(root, {
+      riskProfile: 'durable_migration', changeClass: 'persistence_migration', scopeHasRuntimeSemantics: true, riskDimensions: dimensions,
+      coordinatorSpecReadReceipt: receipt(root, { taskId: 'prepared-task', riskProfile: 'durable_migration', relevantSections: ['0', '19', '20'] }),
+    });
+    const prepared = prepareTaskBrief({ root, input });
+    assert.deepEqual(prepared.riskDimensions, dimensions);
+    for (const scenario of ['normal_path', 'boundary', 'conflict', 'version_freeze', 'production_shape_fixture', 'unknown_field_preservation', 'second_run_noop', 'authorization_denied', 'reauthorize_at_commit', 'concurrency_conflict', 'unified_visual_review_pending_or_completed']) assert.equal(prepared.validationPlan.requiredScenarios.includes(scenario), true);
+    assert.equal(new Set(prepared.validationPlan.requiredScenarios).size, prepared.validationPlan.requiredScenarios.length);
+  } finally { cleanup(root); }
+});
+
+test('TaskBrief preparation fails closed for dirty, ambiguous, and unsupported inputs', () => {
+  const root = temporaryRepo();
+  try {
+    taskBase(root);
+    const input = prepareInput(root);
+    assert.throws(() => prepareTaskBrief({ root, input: { ...input, ownedPaths: ['../AGENTS.md'] } }), /Invalid owned path/);
+    assert.throws(() => prepareTaskBrief({ root, input: { ...input, relevantSections: ['0', '20', '999'] } }), /current v3 sections/);
+    assert.throws(() => prepareTaskBrief({ root, input: { ...input, changeClass: 'not_a_class' } }), /unsupported/);
+    assert.throws(() => prepareTaskBrief({ root, input: { ...input, baseSha: '0'.repeat(40) } }), /resolve|baseSha/);
+    assert.throws(() => prepareTaskBrief({ root, input: { ...input, coordinatorSpecReadReceipt: { ...input.coordinatorSpecReadReceipt, taskId: 'other-task' } } }), /coordinatorSpecReadReceipt/);
+    assert.throws(() => prepareTaskBrief({ root, input: { ...input, riskProfile: 'durable_migration', changeClass: 'persistence_migration', scopeHasRuntimeSemantics: true, coordinatorSpecReadReceipt: receipt(root, { taskId: 'prepared-task', riskProfile: 'durable_migration', relevantSections: ['0', '19', '20'] }) } }), /risk dimension/);
+    assert.throws(() => prepareTaskBrief({ root, input: { ...input, riskProfile: 'unknown_high_risk', changeClass: 'domain_behavior', scopeHasRuntimeSemantics: true, coordinatorSpecReadReceipt: receipt(root, { taskId: 'prepared-task', riskProfile: 'unknown_high_risk', relevantSections: ['0', '19', '20'] }) } }), /refuses unknown_high_risk/);
+    mkdirSync(path.join(root, 'directory-path'));
+    write(root, 'directory-path/child.txt', 'tracked\n');
+    command(root, ['add', 'directory-path']); command(root, ['commit', '-qm', 'track directory fixture']);
+    const currentInput = { ...input, baseSha: command(root, ['rev-parse', 'HEAD']) };
+    assert.throws(() => prepareTaskBrief({ root, input: { ...currentInput, ownedPaths: ['directory-path'] } }), /Unsupported (base-tree|current) entry/);
+    try {
+      symlinkSync('AGENTS.md', path.join(root, 'linked-path'));
+      command(root, ['add', 'linked-path']); command(root, ['commit', '-qm', 'track symlink fixture']);
+      assert.throws(() => prepareTaskBrief({ root, input: { ...currentInput, baseSha: command(root, ['rev-parse', 'HEAD']), ownedPaths: ['linked-path'] } }), /Symlink/);
+    } catch (error) { if (!['EEXIST', 'EPERM', 'EACCES'].includes(error.code)) throw error; }
+    write(root, 'dirty.txt', 'dirty\n');
+    assert.throws(() => prepareTaskBrief({ root, input }), /clean worktree/);
+  } finally { cleanup(root); }
+});
+
+test('owned whitespace checker catches a new untracked owned file', () => {
+  const root = temporaryRepo();
+  try {
+    taskBase(root);
+    const baseSha = command(root, ['rev-parse', 'HEAD']);
+    write(root, 'new-owned.md', 'trailing space \n');
+    assert.throws(() => checkOwnedWhitespace({ root, baseSha, ownedPaths: ['new-owned.md'] }), /Owned whitespace check failed.*trailing whitespace/);
+    write(root, 'new-owned.md', 'clean\n');
+    assert.deepEqual(checkOwnedWhitespace({ root, baseSha, ownedPaths: ['new-owned.md'] }).checkedPaths, ['new-owned.md']);
+    assert.deepEqual(JSON.parse(runCli(['--check-owned-whitespace', '--base', baseSha, '--owned', 'new-owned.md'], root)).checkedPaths, ['new-owned.md']);
+  } finally { cleanup(root); }
+});
+
+test('local TaskBrief preparation rejects a base before current HEAD', () => {
+  const root = temporaryRepo();
+  try {
+    taskBase(root);
+    const input = prepareInput(root);
+    write(root, 'already-committed.txt', 'later\n'); command(root, ['add', 'already-committed.txt']); command(root, ['commit', '-qm', 'later commit']);
+    assert.throws(() => prepareTaskBrief({ root, input }), /baseSha to equal current HEAD/);
+  } finally { cleanup(root); }
+});
 function validationFixture() {
   const root = temporaryRepo();
   const sourceRoot = path.resolve(process.cwd());
@@ -392,8 +514,8 @@ test('SCOPED eligibility, clean Issue/PR routing, sections, OPEN IDs, and receip
   try {
     taskBase(root);
     const local = brief(root);
-    assert.throws(() => checkTaskBrief({ root, brief: { ...local, ownedPaths: ['src/runtime.ts'], allowedChanges: ['src/runtime.ts'] } }), /workflow_metadata may own only scoped/);
-    assert.throws(() => checkTaskBrief({ root, brief: { ...local, ownedPaths: ['docs/tackle-forger-development-spec-v3.md'], allowedChanges: ['docs/tackle-forger-development-spec-v3.md'] } }), /workflow_metadata may own only scoped/);
+    assert.throws(() => checkTaskBrief({ root, brief: { ...local, ownedPaths: ['src/runtime.ts'], allowedChanges: ['src/runtime.ts'], validationPlan: { ...local.validationPlan, requiredCommands: [...local.validationPlan.requiredCommands.filter((item) => !item.includes('--check-owned-whitespace')), ownedWhitespaceCommand(local.baseSha, ['src/runtime.ts'])] } } }), /workflow_metadata may own only scoped/);
+    assert.throws(() => checkTaskBrief({ root, brief: { ...local, ownedPaths: ['docs/tackle-forger-development-spec-v3.md'], allowedChanges: ['docs/tackle-forger-development-spec-v3.md'], validationPlan: { ...local.validationPlan, requiredCommands: [...local.validationPlan.requiredCommands.filter((item) => !item.includes('--check-owned-whitespace')), ownedWhitespaceCommand(local.baseSha, ['docs/tackle-forger-development-spec-v3.md'])] } } }), /workflow_metadata may own only scoped/);
     const runtimeReceipt = receipt(root, { riskProfile: 'runtime_product_domain', reason: 'runtime change' });
     const runtimeBrief = { ...local, ownedPaths: ['src/runtime.ts'], allowedChanges: ['src/runtime.ts'], riskProfile: 'runtime_product_domain', scopeHasRuntimeSemantics: true, changeClass: 'typescript_api', validationPlan: { requiredCommands: ['npm run typecheck', 'npm run lint', 'npm test'], requiredScenarios: ['normal_path'], intentionallyNotApplicable: nonLegacyNa() }, specReadReceipts: [runtimeReceipt] };
     assert.equal(checkTaskBrief({ root, brief: runtimeBrief }).phase, 'pre_dispatch');
@@ -414,7 +536,7 @@ test('SCOPED eligibility, clean Issue/PR routing, sections, OPEN IDs, and receip
     const coding = receipt(root, { role: 'coding', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'implementation' });
     const review = receipt(root, { role: 'review', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'review' });
     const duplicateBase = command(root, ['rev-parse', 'HEAD']);
-    const duplicate = { ...local, baseSha: duplicateBase, reviewedHead: 'WORKTREE', validationPlan: { ...local.validationPlan, requiredCommands: [...local.validationPlan.requiredCommands.filter((item) => !item.startsWith('git diff --check')), `git diff --check ${duplicateBase} -- AGENTS.md`] }, phase: 'verdict', specReadReceipts: [local.specReadReceipts[0], coding, review, review] };
+    const duplicate = { ...local, baseSha: duplicateBase, reviewedHead: 'WORKTREE', validationPlan: { ...local.validationPlan, requiredCommands: [...local.validationPlan.requiredCommands.filter((item) => !item.includes('--check-owned-whitespace')), ownedWhitespaceCommand(duplicateBase, ['AGENTS.md'])] }, phase: 'verdict', specReadReceipts: [local.specReadReceipts[0], coding, review, review] };
     assert.throws(() => checkTaskBrief({ root, brief: duplicate }), /exactly one coordinator, coding, and review/);
   } finally { cleanup(root); }
 });
@@ -428,7 +550,7 @@ test('validation plan rejects command/scenario swaps, invalid N/A, and uncovered
     assert.throws(() => checkTaskBrief({ root, brief: { ...base, validationPlan: { ...base.validationPlan, requiredCommands: [base.validationPlan.requiredCommands[0], base.validationPlan.requiredCommands[0], ...base.validationPlan.requiredCommands.slice(2)] } } }), /must not contain duplicates/);
     assert.throws(() => checkTaskBrief({ root, brief: { ...base, validationPlan: { ...base.validationPlan, intentionallyNotApplicable: { 'unknown-check': 'no' } } } }), /unknown or duplicated/);
     assert.throws(() => checkTaskBrief({ root, brief: { ...base, validationPlan: { ...base.validationPlan, intentionallyNotApplicable: { 'git diff --check': 'no' } } } }), /unknown or duplicated/);
-    assert.throws(() => checkTaskBrief({ root, brief: { ...base, ownedPaths: ['x.md'] } }), /allowedChanges/);
+    assert.throws(() => checkTaskBrief({ root, brief: { ...base, ownedPaths: ['x.md'], validationPlan: { ...base.validationPlan, requiredCommands: [...base.validationPlan.requiredCommands.filter((item) => !item.includes('--check-owned-whitespace')), ownedWhitespaceCommand(base.baseSha, ['x.md'])] } } }), /allowedChanges/);
   } finally { cleanup(root); }
 });
 

@@ -14,6 +14,7 @@ const SPEC_READ_SCHEMA = 'tackle-spec-read/v1';
 const SPEC_READ_REUSE_SCHEMA = 'tackle-spec-read/v2';
 const SPEC_FULL_READ_SESSION_SCHEMA = 'tackle-spec-full-read-session/v1';
 const TASK_BRIEF_SCHEMA = 'tackle-task-brief/v1';
+const TASK_PREPARE_INPUT_SCHEMA = 'tackle-task-prepare-input/v1';
 const OWNED_BASELINE_SCHEMA = 'tackle-owned-baseline/v1';
 const VERDICT_SCHEMA = 'tackle-local-verdict/v1';
 const VALIDATION_SUMMARY_SCHEMA = 'tackle-validation-summary/v1';
@@ -417,7 +418,7 @@ function commandSpec(briefResult, brief, command) {
     const [executable, args] = staticCommands.get(command);
     return { command, executable, args };
   }
-  if (command === dynamicDiffCommand(briefResult.baseSha, brief.ownedPaths)) return { command, executable: 'git', args: ['diff', '--check', briefResult.baseSha, '--', ...brief.ownedPaths] };
+  if (isWorkflowWhitespaceCommand(command, briefResult.baseSha, brief.ownedPaths)) return { command, executable: node, args: [script, '--check-owned-whitespace', '--base', briefResult.baseSha, ...brief.ownedPaths.flatMap((owned) => ['--owned', owned])] };
   fail(`Validation command is not in the closed execution catalog: ${command}`);
 }
 export function validationExecutionPlan({ root = repositoryRoot(), brief, currentReuseContext }) {
@@ -473,11 +474,7 @@ function validateBriefNarrative(brief, { legacyTouched }) {
   const na = brief.validationPlan.intentionallyNotApplicable;
   if (!isPlainObject(na) || Object.values(na).some((reason) => typeof reason !== 'string' || reason.length === 0)) fail('TaskBrief.validationPlan.intentionallyNotApplicable must map each omitted item to a non-empty reason');
   const matrix = CHANGE_CLASS_MATRIX[brief.changeClass];
-  const riskScenarios = [];
-  if (brief.riskDimensions.persistedData || brief.riskDimensions.historicalSnapshots) riskScenarios.push(...CHANGE_CLASS_MATRIX.persistence_migration.scenarios);
-  if (brief.riskDimensions.concurrency || brief.riskDimensions.authorization) riskScenarios.push(...CHANGE_CLASS_MATRIX.authorization_shared_write.scenarios);
-  if (brief.riskDimensions.externalSideEffects) riskScenarios.push(...CHANGE_CLASS_MATRIX.external_side_effect.scenarios);
-  if (brief.riskDimensions.userVisible) riskScenarios.push('unified_visual_review_pending_or_completed');
+  const riskScenarios = requiredRiskScenarios(brief.riskDimensions);
   const nonWaivableScenarios = [...matrix.scenarios, ...riskScenarios];
   const allowedNa = new Set(CONDITIONAL_NA_CATALOG);
   for (const item of Object.keys(na)) {
@@ -492,7 +489,7 @@ function validateBriefNarrative(brief, { legacyTouched }) {
   }
   if (legacyTouched ? Object.hasOwn(na, 'legacy_workspace_ci') : !Object.hasOwn(na, 'legacy_workspace_ci')) fail(legacyTouched ? 'legacy workspace changes cannot mark legacy_workspace_ci N/A' : 'Non-legacy work requires a legacy_workspace_ci N/A reason');
   const allowedCommands = new Set([...matrix.commands, ...(legacyTouched ? LEGACY_WORKSPACE_COMMANDS : [])]);
-  if (commands.some((item) => !allowedCommands.has(item) && !(brief.changeClass === 'workflow_metadata' && /^git diff --check [0-9a-f]{40} -- .+$/.test(item))) || scenarios.some((item) => ![...matrix.scenarios, ...riskScenarios].includes(item))) fail('TaskBrief.validationPlan command/scenario is in the wrong collection');
+  if (commands.some((item) => !allowedCommands.has(item) && !(brief.changeClass === 'workflow_metadata' && isWorkflowWhitespaceCommand(item, brief.baseSha, brief.ownedPaths))) || scenarios.some((item) => ![...matrix.scenarios, ...riskScenarios].includes(item))) fail('TaskBrief.validationPlan command/scenario is in the wrong collection');
   for (const item of matrix.commands) if (!commands.includes(item) && !Object.hasOwn(na, item)) fail(`TaskBrief.validationPlan omits required command: ${item}`);
   for (const item of nonWaivableScenarios) if (!scenarios.includes(item)) fail(`TaskBrief.validationPlan scenario cannot be N/A: ${item}`);
   for (const item of matrix.nonWaivableCommands ?? []) if (!commands.includes(item)) fail(`TaskBrief.validationPlan command cannot be N/A: ${item}`);
@@ -501,14 +498,159 @@ function validateBriefNarrative(brief, { legacyTouched }) {
   if (brief.changeClass === 'authorization_shared_write' && !(brief.riskDimensions.authorization || brief.riskDimensions.concurrency)) fail('authorization_shared_write requires authorization or concurrency risk');
   if (brief.changeClass === 'external_side_effect' && !brief.riskDimensions.externalSideEffects) fail('external_side_effect requires externalSideEffects risk');
 }
+function requiredRiskScenarios(riskDimensions) {
+  const scenarios = [];
+  if (riskDimensions.persistedData || riskDimensions.historicalSnapshots) scenarios.push(...CHANGE_CLASS_MATRIX.persistence_migration.scenarios);
+  if (riskDimensions.concurrency || riskDimensions.authorization) scenarios.push(...CHANGE_CLASS_MATRIX.authorization_shared_write.scenarios);
+  if (riskDimensions.externalSideEffects) scenarios.push(...CHANGE_CLASS_MATRIX.external_side_effect.scenarios);
+  if (riskDimensions.userVisible) scenarios.push('unified_visual_review_pending_or_completed');
+  return [...new Set(scenarios)];
+}
 function isUserVisiblePath(repoPath) {
   return repoPath.startsWith('apps/web/') || repoPath.startsWith('packages/ui/') || repoPath.startsWith('legacy-workspace/apps/web/') || repoPath.startsWith('legacy-workspace/packages/ui/') || /\.(?:tsx|jsx|css|scss|sass|less|html)$/.test(repoPath);
 }
-function dynamicDiffCommand(baseSha, ownedPaths) { return `git diff --check ${baseSha} -- ${ownedPaths.join(' ')}`; }
+function dynamicDiffCommand(baseSha, ownedPaths) { return `node ${SCRIPT_RELATIVE} --check-owned-whitespace --base ${baseSha} ${ownedPaths.flatMap((owned) => ['--owned', owned]).join(' ')}`; }
+function legacyDynamicDiffCommand(baseSha, ownedPaths) { return `git diff --check ${baseSha} -- ${ownedPaths.join(' ')}`; }
+function isWorkflowWhitespaceCommand(command, baseSha, ownedPaths) { return command === dynamicDiffCommand(baseSha, ownedPaths) || command === legacyDynamicDiffCommand(baseSha, ownedPaths); }
+export function checkOwnedWhitespace({ root = repositoryRoot(), baseSha, ownedPaths }) {
+  const manifest = buildPatchManifest({ root, baseSha, ownedPaths });
+  for (const entry of manifest.entries) {
+    if (entry.state === 'unchanged') continue;
+    const args = entry.state === 'untracked'
+      ? ['diff', '--no-index', '--check', '/dev/null', entry.path]
+      : ['diff', '--check', manifest.baseSha, '--', entry.path];
+    const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 1024 * 1024 });
+    const detail = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim();
+    // git diff --no-index returns 1 for an ordinary, clean difference. --check
+    // emits diagnostics for whitespace errors, which is the only nonzero case we reject.
+    if (result.error || (entry.state !== 'untracked' && result.status !== 0) || detail.length > 0) {
+      const detailMessage = detail || result.error?.message || `git diff exited ${result.status}`;
+      fail(`Owned whitespace check failed for ${entry.path}: ${detailMessage}`);
+    }
+  }
+  return { baseSha: manifest.baseSha, checkedPaths: manifest.entries.filter((entry) => entry.state !== 'unchanged').map((entry) => entry.path) };
+}
 function sectionIdsFromNavigation(root) {
   return new Set(buildNavigationIndex(root).headings.map((heading) => heading.title.match(/^(\d+(?:\.\d+)*)(?:\.|\s)/)?.[1]).filter(Boolean));
 }
 export function openRegistryHash(root = repositoryRoot()) { return sha256(Buffer.from(canonicalJson(buildNavigationIndex(root).openRegistry), 'utf8')); }
+function currentHead(root) {
+  const head = git(root, ['rev-parse', 'HEAD'])?.toString('utf8').trim();
+  if (!head || !/^[0-9a-f]{40}$/.test(head)) fail('Cannot resolve current exact Git HEAD');
+  return head;
+}
+function requireCleanWorktree(root) {
+  const status = git(root, ['status', '--porcelain=v1', '-z']);
+  if (status === null || status.length !== 0) fail('Task preparation requires a clean worktree; preserve or isolate existing changes first');
+}
+function prepareInputKeys() {
+  return ['schema', 'taskId', 'workflowMode', 'baseSha', 'scope', 'relevantSections', 'openDecisionApplicability', 'riskProfile', 'scopeHasRuntimeSemantics', 'changeClass', 'ownedPaths', 'acceptanceCriteria', 'exclusions', 'riskDimensions', 'coordinatorSpecReadReceipt'];
+}
+function defaultNaReasons(changeClass, legacyTouched) {
+  const na = {};
+  if (changeClass === 'workflow_metadata') na.product_runtime_tests = 'No product runtime code changes are owned by this TaskBrief.';
+  if (!legacyTouched) na.legacy_workspace_ci = 'No legacy-workspace path is owned by this TaskBrief.';
+  return na;
+}
+function prepareValidationPlan({ baseSha, ownedPaths, changeClass, riskDimensions }) {
+  const matrix = CHANGE_CLASS_MATRIX[changeClass];
+  if (!matrix) fail('Task preparation changeClass is unsupported');
+  const legacyTouched = ownedPaths.some((owned) => owned.startsWith('legacy-workspace/'));
+  const requiredCommands = [...matrix.commands];
+  if (changeClass === 'workflow_metadata') requiredCommands.push(dynamicDiffCommand(baseSha, ownedPaths));
+  if (legacyTouched) requiredCommands.push(...LEGACY_WORKSPACE_COMMANDS);
+  const requiredScenarios = [...new Set([...matrix.scenarios, ...requiredRiskScenarios(riskDimensions)])];
+  return { requiredCommands, requiredScenarios, intentionallyNotApplicable: defaultNaReasons(changeClass, legacyTouched) };
+}
+function validatePreparationRisk({ riskProfile, changeClass, riskDimensions, scopeHasRuntimeSemantics }) {
+  if (riskProfile === 'unknown_high_risk') fail('Task preparation refuses unknown_high_risk; prepare an explicitly classified conservative TaskBrief instead');
+  const required = {
+    workflow_docs_metadata: { changeClasses: ['workflow_metadata'], runtime: false, dimensions: [] },
+    runtime_product_domain: { changeClasses: ['typescript_api', 'domain_behavior'], runtime: true, dimensions: [] },
+    durable_migration: { changeClasses: ['persistence_migration'], runtime: true, dimensions: ['persistedData|historicalSnapshots'] },
+    concurrency_auth: { changeClasses: ['authorization_shared_write'], runtime: true, dimensions: ['concurrency|authorization'] },
+    publication_export_external: { changeClasses: ['external_side_effect'], runtime: true, dimensions: ['externalSideEffects'] },
+  }[riskProfile];
+  if (!required) fail('Task preparation input.riskProfile is invalid');
+  if (!required.changeClasses.includes(changeClass) || scopeHasRuntimeSemantics !== required.runtime) fail('Task preparation riskProfile/changeClass/runtime-semantics combination is unsupported');
+  for (const dimension of required.dimensions) {
+    const keys = dimension.split('|');
+    if (!keys.some((key) => riskDimensions[key])) fail(`Task preparation ${riskProfile} requires risk dimension ${dimension}`);
+  }
+}
+function prepareOwnedFilePath(root, baseSha, inputPath) {
+  const validated = validatePath(root, inputPath);
+  const before = baseEntry(root, baseSha, validated.path);
+  const after = existsSync(validated.absolute) ? currentEntry(validated.absolute, validated.path) : null;
+  if (!before && !after) {
+    let parent = path.dirname(validated.absolute);
+    while (parent !== root) {
+      if (existsSync(parent)) {
+        const stat = lstatSync(parent);
+        if (stat.isSymbolicLink() || !stat.isDirectory()) fail(`New owned path parent is unsafe: ${validated.path}`);
+      }
+      parent = path.dirname(parent);
+    }
+  }
+  return validated.path;
+}
+/**
+ * Builds only fields whose values are mechanically bound to the current repository.
+ * The input intentionally carries every human/semantic decision; it is closed to avoid
+ * silently treating a new decision as machine-owned metadata.
+ */
+export function prepareTaskBrief({ root = repositoryRoot(), input, currentReuseContext }) {
+  requireExactKeys(input, prepareInputKeys(), 'Task preparation input');
+  if (input.schema !== TASK_PREPARE_INPUT_SCHEMA) fail(`Task preparation input.schema must be ${TASK_PREPARE_INPUT_SCHEMA}`);
+  requireCleanWorktree(root);
+  const taskId = requireString(input.taskId, 'Task preparation input.taskId');
+  const workflowMode = requireString(input.workflowMode, 'Task preparation input.workflowMode');
+  if (!['local', 'issue', 'pull_request'].includes(workflowMode)) fail('Task preparation input.workflowMode is invalid');
+  const baseSha = canonicalCommit(root, input.baseSha, 'Task preparation input.baseSha');
+  const head = currentHead(root);
+  if (workflowMode === 'local' && baseSha !== head) fail('Local task preparation requires baseSha to equal current HEAD');
+  if (git(root, ['merge-base', '--is-ancestor', baseSha, head]) === null) fail('Task preparation input.baseSha must be an ancestor of current HEAD');
+  const ownedPaths = requireNonEmptyStringArray(input.ownedPaths, 'Task preparation input.ownedPaths');
+  const canonicalOwnedPaths = ownedPaths.map((item) => prepareOwnedFilePath(root, baseSha, item));
+  if (new Set(canonicalOwnedPaths).size !== canonicalOwnedPaths.length) fail('Task preparation input.ownedPaths must be unique canonical repository paths');
+  const relevantSections = requireNonEmptyStringArray(input.relevantSections, 'Task preparation input.relevantSections');
+  const knownSections = sectionIdsFromNavigation(root);
+  if (!relevantSections.every((section) => knownSections.has(section)) || !relevantSections.includes('20')) fail('Task preparation input.relevantSections must name current v3 sections and include 20');
+  requireExactKeys(input.openDecisionApplicability, ['applicableIds', 'noApplicableReason'], 'Task preparation input.openDecisionApplicability');
+  const applicableIds = requireStringArray(input.openDecisionApplicability.applicableIds, 'Task preparation input.openDecisionApplicability.applicableIds');
+  const noApplicableReason = input.openDecisionApplicability.noApplicableReason;
+  if (noApplicableReason !== null && (typeof noApplicableReason !== 'string' || noApplicableReason.length === 0)) fail('Task preparation input.openDecisionApplicability.noApplicableReason must be a non-empty string or null');
+  const riskProfile = requireString(input.riskProfile, 'Task preparation input.riskProfile');
+  if (typeof input.scopeHasRuntimeSemantics !== 'boolean') fail('Task preparation input.scopeHasRuntimeSemantics must be boolean');
+  const changeClass = requireString(input.changeClass, 'Task preparation input.changeClass');
+  if (!Object.hasOwn(CHANGE_CLASS_MATRIX, changeClass)) fail('Task preparation input.changeClass is unsupported');
+  requireString(input.scope, 'Task preparation input.scope');
+  requireNonEmptyStringArray(input.acceptanceCriteria, 'Task preparation input.acceptanceCriteria');
+  requireNonEmptyStringArray(input.exclusions, 'Task preparation input.exclusions');
+  requireExactKeys(input.riskDimensions, ['persistedData', 'historicalSnapshots', 'concurrency', 'authorization', 'externalSideEffects', 'userVisible'], 'Task preparation input.riskDimensions');
+  if (Object.values(input.riskDimensions).some((value) => typeof value !== 'boolean')) fail('Task preparation input.riskDimensions values must be boolean');
+  validatePreparationRisk({ riskProfile, changeClass, riskDimensions: input.riskDimensions, scopeHasRuntimeSemantics: input.scopeHasRuntimeSemantics });
+  const registry = buildNavigationIndex(root).openRegistry;
+  const checkedIds = registry.map((entry) => entry.id);
+  if (!applicableIds.every((id) => checkedIds.includes(id))) fail('Task preparation input.openDecisionApplicability.applicableIds must be current OPEN ids');
+  if ((applicableIds.length === 0) !== (noApplicableReason !== null)) fail('Task preparation input.openDecisionApplicability must give a no-applicable reason exactly when applicableIds is empty');
+  const receipt = input.coordinatorSpecReadReceipt;
+  checkReadReceipt({ root, receipt, currentReuseContext });
+  if (receipt.taskId !== taskId || receipt.role !== 'coordinator' || receipt.specSha256 !== sha256(readFileSync(path.join(root, SPEC_RELATIVE))) || receipt.riskProfile !== riskProfile || !sameSet(receipt.relevantSections, relevantSections)) fail('Task preparation coordinatorSpecReadReceipt must bind the exact task, coordinator role, current spec, risk profile, and relevant sections');
+  const brief = {
+    schema: TASK_BRIEF_SCHEMA, taskId, workflowMode, phase: 'pre_dispatch', specSha256: receipt.specSha256,
+    baseSha, reviewedHead: workflowMode === 'local' ? 'WORKTREE' : head, scope: input.scope, relevantSections,
+    openDecisionCheck: { registrySha256: openRegistryHash(root), checkedIds, applicableIds, noApplicableReason },
+    riskProfile, scopeHasRuntimeSemantics: input.scopeHasRuntimeSemantics, changeClass, allowedChanges: canonicalOwnedPaths,
+    acceptanceCriteria: input.acceptanceCriteria, exclusions: input.exclusions, riskDimensions: input.riskDimensions,
+    validationPlan: prepareValidationPlan({ baseSha, ownedPaths: canonicalOwnedPaths, changeClass, riskDimensions: input.riskDimensions }), specReadReceipts: [receipt],
+    ownedPaths: canonicalOwnedPaths, preexistingOwnedPaths: [], preexistingUnownedChanges: [],
+    dirtyWorktreeDisposition: workflowMode === 'local' ? 'clean' : 'clean_synced',
+  };
+  // Reuse the authoritative checker rather than duplicating its risk/path matrix.
+  checkTaskBrief({ root, brief, currentReuseContext });
+  return brief;
+}
 function validateOpenDecisionCheck(root, value, relevantSections) {
   requireExactKeys(value, ['registrySha256', 'checkedIds', 'applicableIds', 'noApplicableReason'], 'TaskBrief.openDecisionCheck');
   const checkedIds = requireStringArray(value.checkedIds, 'TaskBrief.openDecisionCheck.checkedIds');
@@ -585,7 +727,7 @@ export function checkTaskBrief({ root = repositoryRoot(), brief, currentReuseCon
   if (!classification.scopedEligible && (!brief.scopeHasRuntimeSemantics || riskProfile === 'workflow_docs_metadata')) fail('TaskBrief owned paths require runtime/high-risk declaration and non-workflow riskProfile');
   if (ownedPaths.some(isUserVisiblePath) && !brief.riskDimensions.userVisible) fail('User-visible owned paths require userVisible risk');
   const dynamicDiff = dynamicDiffCommand(baseSha, ownedPaths);
-  if (brief.changeClass === 'workflow_metadata' && !brief.validationPlan.requiredCommands.includes(dynamicDiff)) fail(`TaskBrief.validationPlan command cannot be N/A: ${dynamicDiff}`);
+  if (brief.changeClass === 'workflow_metadata' && !brief.validationPlan.requiredCommands.some((command) => isWorkflowWhitespaceCommand(command, baseSha, ownedPaths))) fail(`TaskBrief.validationPlan command cannot be N/A: ${dynamicDiff}`);
   const preexistingOwnedPaths = requireStringArray(brief.preexistingOwnedPaths, 'TaskBrief.preexistingOwnedPaths');
   requireStringArray(brief.preexistingUnownedChanges, 'TaskBrief.preexistingUnownedChanges');
   if (!preexistingOwnedPaths.every((item) => ownedPaths.includes(item))) fail('TaskBrief.preexistingOwnedPaths must be owned paths');
@@ -724,7 +866,7 @@ export function checkPolicy(root = repositoryRoot()) {
   return true;
 }
 function usage() {
-  return `Usage:\n  node ${SCRIPT_RELATIVE} --generate-index\n  node ${SCRIPT_RELATIVE} --check-index\n  node ${SCRIPT_RELATIVE} --check-policy\n  node ${SCRIPT_RELATIVE} --spec-read-plan --role <coordinator|coding|review> --risk <risk-profile> [--relevant <v3-section> ...]\n  node ${SCRIPT_RELATIVE} --check-read-receipt --receipt <receipt.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --check-full-read-session --session <session.json>\n  node ${SCRIPT_RELATIVE} --check-task-brief --brief <task-brief.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --owned-baseline --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --run-validation --brief <verdict-task-brief.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --check-verdict --verdict <verdict.json> --brief <task-brief.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --patch-hash --base <sha> --owned <repo-relative-path> [--owned <path> ...]`;
+  return `Usage:\n  node ${SCRIPT_RELATIVE} --generate-index\n  node ${SCRIPT_RELATIVE} --check-index\n  node ${SCRIPT_RELATIVE} --check-policy\n  node ${SCRIPT_RELATIVE} --prepare-task-brief --input <semantic-input.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --check-owned-whitespace --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --spec-read-plan --role <coordinator|coding|review> --risk <risk-profile> [--relevant <v3-section> ...]\n  node ${SCRIPT_RELATIVE} --check-read-receipt --receipt <receipt.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --check-full-read-session --session <session.json>\n  node ${SCRIPT_RELATIVE} --check-task-brief --brief <task-brief.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --owned-baseline --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --run-validation --brief <verdict-task-brief.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --check-verdict --verdict <verdict.json> --brief <task-brief.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --patch-hash --base <sha> --owned <repo-relative-path> [--owned <path> ...]`;
 }
 function parseActionOptions(argv, action, allowed, required = []) {
   if (argv[0] !== action) fail(usage());
@@ -740,13 +882,25 @@ function parseActionOptions(argv, action, allowed, required = []) {
 }
 export function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
   const action = argv[0];
-  if (!['--generate-index', '--check-index', '--check-policy', '--spec-read-plan', '--check-read-receipt', '--check-full-read-session', '--check-task-brief', '--owned-baseline', '--run-validation', '--check-verdict', '--patch-hash'].includes(action)) fail(usage());
+  if (!['--generate-index', '--check-index', '--check-policy', '--prepare-task-brief', '--check-owned-whitespace', '--spec-read-plan', '--check-read-receipt', '--check-full-read-session', '--check-task-brief', '--owned-baseline', '--run-validation', '--check-verdict', '--patch-hash'].includes(action)) fail(usage());
   const root = repositoryRoot(cwd);
   if (action === '--generate-index' || action === '--check-index' || action === '--check-policy') {
     if (argv.length !== 1) fail(usage());
     if (action === '--generate-index') { writeNavigationIndex(root); return 'Generated navigation index'; }
     if (action === '--check-index') { checkNavigationIndex(root); return 'Navigation index is current'; }
     checkPolicy(root); return 'Workflow policy is consistent';
+  }
+  if (action === '--prepare-task-brief') {
+    const values = parseActionOptions(argv, action, { '--input': false, '--current-agent-identity': false, '--current-context-session-id': false, '--current-context-state': false }, ['--input']);
+    const currentReuseContext = values['--current-agent-identity'].length === 0 && values['--current-context-session-id'].length === 0 && values['--current-context-state'].length === 0 ? undefined : {
+      currentAgentIdentity: values['--current-agent-identity'][0], currentContextSessionId: values['--current-context-session-id'][0], currentContextState: values['--current-context-state'][0],
+    };
+    return JSON.stringify(prepareTaskBrief({ root, input: readJsonFile(path.resolve(cwd, values['--input'][0]), 'Task preparation input'), currentReuseContext }), null, 2);
+  }
+  if (action === '--check-owned-whitespace') {
+    const values = parseActionOptions(argv, action, { '--base': false, '--owned': true }, ['--base']);
+    if (values['--owned'].length === 0) fail(usage());
+    return JSON.stringify(checkOwnedWhitespace({ root, baseSha: values['--base'][0], ownedPaths: values['--owned'] }), null, 2);
   }
   if (action === '--spec-read-plan') {
     const values = parseActionOptions(argv, action, { '--role': false, '--risk': false, '--relevant': true }, ['--role', '--risk']);

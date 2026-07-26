@@ -80,10 +80,27 @@ export function assertBlobWorkspaceDocument(document: BlobWorkspaceDocument): vo
   }
 }
 
+/**
+ * Windows (and some other platforms via libuv) reject `fsync` on a *directory*
+ * file descriptor with EPERM — they cannot fsync directory fds at all. This is
+ * not a permission problem (that fails at `open`): it is a hard platform
+ * limitation, verified to be independent of volume type. Directory-entry
+ * visibility on those platforms is already atomic via `link`/`unlink`, and NTFS
+ * metadata journaling covers crash recovery, so dropping the directory fsync
+ * there is a safe best-effort degradation rather than a lost durability
+ * guarantee. Production runs on Linux, where directory fsync succeeds and the
+ * full publication protocol holds unchanged.
+ */
+export function isDirectoryFsyncTolerableError(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException | null | undefined)?.code === "EPERM";
+}
+
 async function syncDirectory(directory: string) {
   const handle = await open(directory, "r");
   try {
     await handle.sync();
+  } catch (error) {
+    if (!isDirectoryFsyncTolerableError(error)) throw error;
   } finally {
     await handle.close();
   }

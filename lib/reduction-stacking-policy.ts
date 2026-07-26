@@ -111,7 +111,7 @@ export function importReductionStackingPolicyDraft(input: {
   const { sourceRevision } = input;
   const issues: ValidationIssue[] = [];
   const rules = input.machineRules ?? [];
-  const sourceSheet = sourceRevision.sheets.find((sheet) => sheet.sheetId === "zrVOxd");
+  const sourceSheet = sourceRevision.sheets.find((sheet) => sheet.sheetId === "23CsXE");
   if (
     sourceRevision.workbookRefId !== "feishu-workbook:tackle-design"
     || !sourceSheet
@@ -119,11 +119,11 @@ export function importReductionStackingPolicyDraft(input: {
   ) {
     issues.push(issue(
       "REDUCTION_POLICY_SOURCE_MISSING",
-      "权威主工作簿 04_词条/zrVOxd 尚未提供可机器读取的 bidirectional_ratio 规则；仅允许非正式预览。",
+      "权威主工作簿 05_词条/23CsXE 尚未提供可机器读取的 bidirectional_ratio 规则；仅允许非正式预览。",
       {
         workbookRefId: sourceRevision.workbookRefId,
         sourceRevision: sourceRevision.sourceRevision,
-        requiredSheetId: "zrVOxd",
+        requiredSheetId: "23CsXE",
         machineRuleCount: rules.length,
       },
     ));
@@ -161,7 +161,7 @@ export function importReductionStackingPolicyDraft(input: {
   );
   const source = issues.length || !normalizedRules.length ? undefined : {
     workbookRefId: "feishu-workbook:tackle-design" as const,
-    sheetId: "zrVOxd" as const,
+    sheetId: "23CsXE" as const,
     sourceRevisionId: sourceRevision.id,
     sourceRevision: sourceRevision.sourceRevision,
     ruleId: normalizedRules.map((rule) => rule.ruleId).join(","),
@@ -205,7 +205,7 @@ export function publishReductionStackingPolicyVersion(input: {
   }
   if (
     input.draft.source.workbookRefId !== "feishu-workbook:tackle-design"
-    || input.draft.source.sheetId !== "zrVOxd"
+    || input.draft.source.sheetId !== "23CsXE"
     || input.draft.source.sourceRevision === "17173"
   ) {
     throw new Error("ReductionStackingPolicyVersion 发布被阻止：REDUCTION_POLICY_SOURCE_INVALID");
@@ -1082,7 +1082,7 @@ export function assertSnapshotReplayPolicyAvailable(input: {
       && stableJson(policy.operationOrder)
         === stableJson(BIDIRECTIONAL_RATIO_OPERATION_ORDER)
       && policy.source?.workbookRefId === "feishu-workbook:tackle-design"
-      && policy.source.sheetId === "zrVOxd"
+      && policy.source.sheetId === "23CsXE"
       && policy.source.sourceRevision !== "17173"
       && hasCanonicalReductionPolicyIdentity(policy)
       && policy.issues.every((entry) =>

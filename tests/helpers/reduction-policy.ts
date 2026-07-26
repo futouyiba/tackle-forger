@@ -20,7 +20,7 @@ export function testReductionPolicy(): ReductionStackingPolicyVersion {
     ] as ReductionStackingPolicyVersion["operationOrder"],
     source: {
       workbookRefId: "feishu-workbook:tackle-design" as const,
-      sheetId: "zrVOxd" as const,
+      sheetId: "23CsXE" as const,
       sourceRevisionId: "test:feishu-revision",
       sourceRevision: "test:machine-revision",
       ruleId: "OPEN-001:bidirectional-ratio",

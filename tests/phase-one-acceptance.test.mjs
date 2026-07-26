@@ -112,6 +112,8 @@ function canonicalInspection(overrides = {}) {
       ...(overrides.pricingDraft ?? {}),
     },
     pricingWeightBandPolicy: "MATCHED_STRUCTURAL_SOURCE_BAND",
+    seriesDefinitions: [],
+    seriesParseIssues: [],
     ...Object.fromEntries(
       Object.entries(overrides).filter(([key]) => ![
         "sourceRevision",

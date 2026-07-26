@@ -8,6 +8,7 @@ import {
   runCleanWorkspaceConfirmation,
 } from "@/lib/clean-workspace-confirmation";
 import { analyzePatchPatterns, appendPatchRevision, buildPatchRevision, createRuleSourceChangeDraft } from "@/lib/patch-ledger";
+import { randomUUID } from "@/lib/browser-utils";
 import { createWorkspacePatchReview, currentPatchApprovalEvidence, preparePatchOperationFromWorkspace, reviewWorkspacePatchRevision, submitWorkspacePatchRevision } from "@/lib/patch-authority";
 import type { PatchPatternSummary, PatchRevisionRecord, WorkspaceState } from "@/lib/types";
 
@@ -86,7 +87,7 @@ export function PatchLedgerWorkbench({ state, revision, dirty, getWorkspaceFresh
     const operand=draft.operation==="clear"?null:Number(draft.operand);
     if(draft.operation!=="clear"&&!Number.isFinite(operand)){notify("set/add/multiply 的操作值必须是数字。");return;}
     let record:PatchRevisionRecord;
-    const patchId="patch:"+draft.scopeType+":"+crypto.randomUUID();
+    const patchId="patch:"+draft.scopeType+":"+randomUUID();
     try{
       const prepared=preparePatchOperationFromWorkspace({state,scopeType:draft.scopeType,subjectEntityId:subject.id,parameterKey:draft.parameterKey.trim(),operation:draft.operation,operand});
       record=buildPatchRevision({

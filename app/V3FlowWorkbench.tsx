@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { useState, useMemo } from "react";
 import { hydrateV3Seed } from "@/lib/v3-seed";
+import { randomUUID } from "@/lib/browser-utils";
 import { buildSnapshotFreezeModel } from "@/lib/snapshot-freeze-presentation";
 import { SnapshotFreezePanel } from "./SnapshotFreezePanel";
 import {
@@ -183,7 +184,7 @@ export function V3FlowWorkbench({ state, mutate, notify, initialSeriesId }: V3Fl
       upgrade.reviewedAt = new Date().toISOString();
       upgrade.reviewer = "本地管理员";
       draft.governanceAuditLog.push({
-        id: "audit-" + crypto.randomUUID(),
+        id: "audit-" + randomUUID(),
         action: "review_upgrade",
         entityType: "UpgradeCandidate",
         entityId: upgrade.id,

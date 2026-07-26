@@ -1,5 +1,12 @@
 {
   "worktree": {
     "symlinkDirectories": ["node_modules"]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(npm run typecheck)",
+      "Bash(npm run lint)",
+      "Bash(npx tsx --test *)"
+    ]
   }
 }

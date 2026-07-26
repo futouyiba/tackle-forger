@@ -49,7 +49,7 @@ function sourceRevision(
     pulledBy: "tester",
     syncScope: "workbook",
     registryHash: "registry",
-    sheets: [{ sheetId: "zrVOxd", name: "04_词条" }],
+    sheets: [{ sheetId: "23CsXE", name: "05_词条" }],
     issues: [],
     reductionPolicyMachineRules: machineRules,
     state: "RULESET_DRAFT",

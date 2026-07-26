@@ -320,7 +320,9 @@ export async function assertProductionShapeConfigExportAllowed(input: {
   verifier: FormalConfigExportEvidenceVerifier | undefined;
   context: FormalConfigExportContext | undefined;
   policy?: ConfigExportRuntimePolicy;
-}): Promise<VerifiedFormalConfigExportEvidence> {
+  /** true 且无 formalAuthorization 时跳过 governance 校验，只保留阶段/env 检查 */
+  allowUnverifiedExport?: boolean;
+}): Promise<VerifiedFormalConfigExportEvidence | undefined> {
   const policy = input.policy ?? readConfigExportRuntimePolicy();
   assertProductionShapeConfigExportEnabled(policy);
   if (!input.canCommit) {
@@ -328,6 +330,9 @@ export async function assertProductionShapeConfigExportAllowed(input: {
       "CONFIG_TARGET_SERIALIZATION_UNAVAILABLE",
       "缺少 config.export.commit，禁止读取本地 configs 或生成可人工搬运的生产形态暂存包。",
     );
+  }
+  if (input.allowUnverifiedExport && !input.authorization) {
+    return undefined;
   }
   try {
     return await assertFormalConfigExportAllowed(

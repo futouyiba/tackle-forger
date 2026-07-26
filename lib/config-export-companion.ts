@@ -311,6 +311,11 @@ export class ConfigExportCompanionController {
       }
       const profile = this.registry.profiles.find((entry) => entry.profileId === profileId);
       if (!profile) throw new Error(`Profile ${profileId} 未在伴随服务登记。`);
+      const profileMapping = profile.mappingId && profile.mappingVersion
+        ? this.registry.mappings.find(
+            (m) => m.mappingId === profile.mappingId && m.version === profile.mappingVersion,
+          )
+        : undefined;
       results.push(await commitFilesystemExport({
         preview,
         snapshot: stored.snapshot,
@@ -326,6 +331,7 @@ export class ConfigExportCompanionController {
         canCommit: true,
         formalAuthorization: request.formalAuthorization,
         formalAuthorizationVerifier: this.formalAuthorizationVerifier,
+        mapping: profileMapping,
       }));
     }
     return { packageId: stored.packageId, results };

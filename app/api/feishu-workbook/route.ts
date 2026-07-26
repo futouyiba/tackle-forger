@@ -175,6 +175,12 @@ async function executeWorkbookBusinessRequest(request: NextRequest) {
       next = recordSourceIdentityMigrationReport(next, inspection.identityReport);
       next = recordQualityValuePolicyDraft(next, inspection.qualityDraft);
       next = recordPricingPolicyDraft(next, inspection.pricingDraft);
+      // #141：merge 25UnTC 解析的 SeriesDefinition（inspect 覆盖同 id seed，保留 seed 独有）。
+      if (inspection.seriesDefinitions.length) {
+        const mergedSeries = new Map(next.seriesDefinitions.map((s) => [s.id, s]));
+        for (const s of inspection.seriesDefinitions) mergedSeries.set(s.id, s);
+        next = { ...next, seriesDefinitions: [...mergedSeries.values()] };
+      }
       assertExplicitPullDidNotPublish(current.state, next);
       const saved = await saveWorkspaceState({
         state: next,

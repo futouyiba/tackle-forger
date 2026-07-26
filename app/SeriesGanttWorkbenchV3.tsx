@@ -35,6 +35,7 @@ import {
   resolveProductSelection,
 } from "@/lib/enabled-item-parts";
 import { CANONICAL_FEISHU_SHEET_REGISTRY } from "@/lib/feishu-workbook";
+import { randomUUID } from "@/lib/browser-utils";
 import { issueClientActionCommand } from "@/lib/client-action-command";
 import { calculateModelFiveAxisPreview, fiveAxisPlotRatio } from "@/lib/five-axis";
 import {
@@ -957,7 +958,7 @@ function ModelDrawer({
     setEvidenceOpen(false);
     setUserReason("");
     setPreviewState({ status: "idle" });
-    setDraftIdempotencyKey(crypto.randomUUID());
+    setDraftIdempotencyKey(randomUUID());
     setRuleTargetForm({
       sourceRevisionId: latestFeishuSourceRevisions[0]?.id ?? "",
       sheetId: "",
@@ -971,18 +972,18 @@ function ModelDrawer({
       ? current.filter((entry) => entry !== changeId)
       : [...current, changeId]);
     setPreviewState({ status: "idle" });
-    setDraftIdempotencyKey(`ai-draft:${crypto.randomUUID()}`);
+    setDraftIdempotencyKey(`ai-draft:${randomUUID()}`);
   };
 
   const updateRuleTarget = (next: AIRuleTargetForm) => {
     setRuleTargetForm(next);
     setPreviewState({ status: "idle" });
-    setDraftIdempotencyKey(`ai-draft:${crypto.randomUUID()}`);
+    setDraftIdempotencyKey(`ai-draft:${randomUUID()}`);
   };
 
   const updateUserReason = (next: string) => {
     setUserReason(next);
-    setDraftIdempotencyKey(`ai-draft:${crypto.randomUUID()}`);
+    setDraftIdempotencyKey(`ai-draft:${randomUUID()}`);
   };
 
   const requestDraftAction = async (mode: "preview" | "create") => {
@@ -1016,8 +1017,8 @@ function ModelDrawer({
             selectedChangeIds: effectiveSelectedChangeIds,
             userReason: userReason.trim(),
             idempotencyKey: mode === "preview"
-              ? `ai-preview:${crypto.randomUUID()}`
-              : draftIdempotencyKey || `ai-draft:${crypto.randomUUID()}`,
+              ? `ai-preview:${randomUUID()}`
+              : draftIdempotencyKey || `ai-draft:${randomUUID()}`,
             targetModelRef: {
               entityId: model.id,
               revisionId: String(model.revision),
@@ -1057,7 +1058,7 @@ function ModelDrawer({
           requestFingerprint,
           payload: preview,
         });
-        if (!draftIdempotencyKey) setDraftIdempotencyKey(`ai-draft:${crypto.randomUUID()}`);
+        if (!draftIdempotencyKey) setDraftIdempotencyKey(`ai-draft:${randomUUID()}`);
         notify("确定性差异预览已生成；请核对作用域、数值与校验变化。");
         return;
       }
@@ -1990,7 +1991,7 @@ export function SeriesGanttWorkbenchV3({
       (!itemPart || entry.itemPartIds.includes(itemPart.id)));
     const fn = state.functionProfiles.find((entry) => entry.enabled);
     setSeriesCreateDraft({
-      seriesId: `series:${crypto.randomUUID()}`,
+      seriesId: `series:${randomUUID()}`,
       name: "",
       concept: "",
       collectionId: "",
@@ -2164,10 +2165,10 @@ export function SeriesGanttWorkbenchV3({
       );
       if (!confirmed) return;
 
-      const replacementSkuId = `sku:${crypto.randomUUID()}`;
+      const replacementSkuId = `sku:${randomUUID()}`;
       const idempotencyKey =
         `change-sku-target-pull:${selectedSku.id}:` +
-        `${selectedSku.revision}:${crypto.randomUUID()}`;
+        `${selectedSku.revision}:${randomUUID()}`;
       const businessPayload = {
         skuId: selectedSku.id,
         expectedRevision: selectedSku.revision,

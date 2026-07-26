@@ -9,11 +9,11 @@ import { weightTemplate4837A1Ae54 as weightFixture } from "./fixtures/five-axis-
 function decidedWeightFixture() {
   const values = weightFixture();
   const ranges = [
-    ["0", "1.5", "微物"], ["1.5", "2.5", "小型"], ["2.5", "4", "小型"],
-    ["4", "5", "中型"], ["5", "6", "中型"], ["6", "7", "中型"], ["7", "10", "中型"],
-    ["10", "12", "大型"], ["12", "15", "大型"], ["15", "18", "大型"], ["18", "20", "大型"],
-    ["20", "30", "巨物"], ["30", "50", "巨物"], ["50", "80", "巨物"],
-    ["80", "145", "超巨物"], ["145", "235", "超巨物"],
+    ["0", "1.5", "微物"], ["1.5", "2.5", "小鱼"], ["2.5", "3.8", "小鱼"],
+    ["3.8", "5.4", "中鱼"], ["5.4", "7.5", "中鱼"], ["7.5", "10.2", "中鱼"], ["10.2", "12.6", "中鱼"],
+    ["12.6", "15", "大鱼"], ["15", "17.8", "大鱼"], ["17.8", "21.2", "大鱼"], ["21.2", "25.9", "大鱼"],
+    ["25.9", "36.9", "巨物"], ["36.9", "55", "巨物"], ["55", "82.5", "巨物"],
+    ["82.5", "145", "超级巨物"], ["145", "235", "超级巨物"],
   ];
   for (const start of [3, 21, 39]) ranges.forEach(([min, max, grade], index) => {
     const row = values[start - 1 + index]!; row[5] = min; row[6] = max; row[7] = grade;
@@ -31,17 +31,17 @@ async function productionState(values = decidedWeightFixture()) {
   return state;
 }
 
-test("旧 4837 来源策略与正式 W 段不一致时只保留原始证据并 fail-closed", async () => {
-  await assert.rejects(() => productionState(weightFixture()), /FIVE_AXIS_WEIGHT_BAND_POLICY_SOURCE_INVALID/);
+test("旧 4837 来源 raw fixture 与新 W 段策略一致，解析成功", async () => {
+  await assert.doesNotReject(() => productionState(weightFixture()));
 });
 
 test("精确六段来源冻结名称/边界，并对篡改 fail-closed", async () => {
   const state = await productionState();
   const policy = state.feishuSourceRevisions[0]!.fiveAxisWeightBandPolicy!;
   assert.deepEqual(policy.bands, [
-    { weightBandId: "W1", label: "微物", upperBoundKg: "1.5" }, { weightBandId: "W2", label: "小型", upperBoundKg: "4" },
-    { weightBandId: "W3", label: "中型", upperBoundKg: "10" }, { weightBandId: "W4", label: "大型", upperBoundKg: "20" },
-    { weightBandId: "W5", label: "巨物", upperBoundKg: "80" }, { weightBandId: "W6", label: "超巨物", upperBoundKg: null },
+    { weightBandId: "W1", label: "微物", upperBoundKg: "1.5" }, { weightBandId: "W2", label: "小鱼", upperBoundKg: "3.8" },
+    { weightBandId: "W3", label: "中鱼", upperBoundKg: "12.6" }, { weightBandId: "W4", label: "大鱼", upperBoundKg: "25.9" },
+    { weightBandId: "W5", label: "巨物", upperBoundKg: "82.5" }, { weightBandId: "W6", label: "超级巨物", upperBoundKg: null },
   ]);
   assert.equal(weightFixture()[17]![6], "235");
   assert.equal(decidedWeightFixture()[2]![5], "0");

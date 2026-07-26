@@ -30,6 +30,7 @@ import {
   type ExportCommitAdapter,
   type ExportCommitResult,
   type ExportFileOperation,
+  type LogicalTableData,
 } from "./config-export";
 import {
   assertSnapshotItemPartEnabled,
@@ -37,6 +38,7 @@ import {
 } from "./enabled-item-parts";
 import { assertConfigExportSnapshotReplayable } from "./config-preview-package";
 import type { ReductionStackingPolicyVersion } from "./types";
+import type { ValidationIssue } from "./types";
 import {
   assertFormalConfigExportAllowed,
   assertFormalConfigExportStageEnabled,
@@ -179,6 +181,7 @@ export async function previewFilesystemExport(input: {
         stagedHash: "PREVIEW_NOT_MATERIALIZED",
       })),
     },
+    allowUnverifiedExport: !input.formalAuthorization,
   });
   const itemPartId = snapshotItemPartId(input.snapshot)!;
   const createdAt = input.createdAt ?? new Date().toISOString();
@@ -349,6 +352,7 @@ export async function previewFilesystemExport(input: {
         stagedHash: operation.stagedHash,
       })),
     },
+    allowUnverifiedExport: !input.formalAuthorization,
   });
   const stagingRoot = path.join(
     resolved.projectRoot,
@@ -428,6 +432,8 @@ export async function commitFilesystemExport(input: {
   formalAuthorization?: FormalConfigExportAuthorization;
   formalAuthorizationVerifier?: FormalConfigExportEvidenceVerifier;
   audit?: ExportCommitResult["audit"];
+  /** 写入后重验引用完整性时使用，如不传则跳过引用校验。 */
+  mapping?: ConfigExportMapping;
 }): Promise<ExportCommitResult> {
   assertConfigExportSnapshotReplayable(input.snapshot, input.availableReductionPolicies);
   const formalExportContext: FormalConfigExportContext = {
@@ -462,11 +468,13 @@ export async function commitFilesystemExport(input: {
   }
   if (!input.canCommit) throw new Error("缺少 config.export.commit Capability。");
   if (input.preview.status !== "ready") throw new Error("暂存预览未通过，不能提交。");
-  recoverVerifiedFormalConfigExportEvidence({
-    authorization: input.formalAuthorization,
-    context: formalExportContext,
-    evidence: input.preview.formalEvidence,
-  });
+  if (input.formalAuthorization) {
+    recoverVerifiedFormalConfigExportEvidence({
+      authorization: input.formalAuthorization,
+      context: formalExportContext,
+      evidence: input.preview.formalEvidence,
+    });
+  }
   if (!input.profile.enabled || input.profile.profileId !== input.preview.profileId) {
     throw new Error("提交 Profile 未启用或与暂存目标不一致。");
   }
@@ -610,6 +618,48 @@ export async function commitFilesystemExport(input: {
         mappingVersion: formalExportContext.mappingVersion,
       },
       audit: input.audit,
+      postWriteValidator: input.mapping ? async () => {
+        // 写入后重读所有被替换的 workbook，验证跨表引用完整性
+        const issues: ValidationIssue[] = [];
+        const compilerTables = parseConfigTomlTables(
+          (await readFile(resolved.configTomlPath)).toString("utf8"),
+        );
+        const mapping = input.mapping!;
+        for (const op of input.preview.operations) {
+          let written: Uint8Array;
+          try {
+            written = await readFile(op.targetPath);
+          } catch (err) {
+            issues.push({ level: "error", code: "EXPORT_POST_WRITE_READ_FAILED", message: `写入后读取 ${op.workbook} 失败：${err instanceof Error ? err.message : String(err)}` });
+            continue;
+          }
+          const extr = extractLogicalTablesFromWorkbook({ source: written, workbookName: op.workbook, mapping });
+          for (const e of extr.issues) {
+            issues.push({ level: e.level, code: e.code, message: e.message, parameterKey: e.workbook ?? e.field });
+          }
+        }
+        if (issues.length === 0) {
+          const tables: LogicalTableData[] = [];
+          for (const op of input.preview.operations) {
+            const w = await readFile(op.targetPath);
+            tables.push(...extractLogicalTablesFromWorkbook({ source: w, workbookName: op.workbook, mapping }).tables);
+          }
+          const rels = Object.values(compilerTables).flatMap((t) =>
+            t.enums.map((r) => ({
+              sourceLogicalTable: t.logicalName,
+              field: r.field,
+              targetLogicalTables: r.targetLogicalTables,
+              referenceField: mapping.enumReferenceField,
+              allowCommaSeparatedTargets: false as const,
+            })),
+          );
+          const rr = validateLogicalTableRelations({ tables, relations: rels });
+          issues.push(...rr.filter((e) => e.level !== "info").map((e) => ({
+            level: e.level, code: e.code, message: e.message, parameterKey: e.parameterKey,
+          })));
+        }
+        return issues;
+      } : undefined,
     });
   } finally {
     await lock.close();

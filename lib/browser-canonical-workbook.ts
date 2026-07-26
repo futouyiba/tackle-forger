@@ -128,7 +128,7 @@ function decodeSheetGrid(sheet: XLSX.WorkSheet, sheetName: string) {
 
 function canonicalCellValue(cell: XLSX.CellObject | undefined, sheetName: string, address: string): unknown {
   if (!cell) return null;
-  if (cell.f && cell.v === undefined) {
+  if (cell.f && (cell.t === "z" || cell.v === undefined)) {
     throw new BrowserCanonicalWorkbookError("XLSX_FORMULA_RESULT_MISSING", `工作表“${sheetName}”单元格 ${address} 含公式但没有缓存结果；本工具不会执行 Excel 公式。`);
   }
   const value = cell.v ?? null;
@@ -189,7 +189,7 @@ export async function observeBrowserCanonicalWorkbook(input: {
   }
   let workbook: XLSX.WorkBook;
   try {
-    workbook = XLSX.read(input.bytes, { type: "array", cellDates: true, cellFormula: true, dense: false });
+    workbook = XLSX.read(input.bytes, { type: "array", cellDates: true, cellFormula: true, sheetStubs: true, dense: false });
   } catch {
     throw new BrowserCanonicalWorkbookError("XLSX_INVALID", "无法读取本地规则工作簿；请选择有效的 .xlsx 文件。");
   }

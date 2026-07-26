@@ -138,7 +138,7 @@ test("浏览器 canonical XLSX adapter 对缺失、错名和附加表 fail-close
   assert.deepEqual(observed.warnings.map((warning) => warning.sheetName), ["用户附加说明"]);
 });
 
-test("浏览器 canonical XLSX adapter 拒绝超限文件和无效工作簿", async () => {
+test("浏览器 canonical XLSX adapter 拒绝超限文件、无效工作簿和无缓存公式", async () => {
   await assert.rejects(
     observeBrowserCanonicalWorkbook({ bytes: new ArrayBuffer(20 * 1024 * 1024 + 1), fileName: "large.xlsx", observedAt: "2026-07-26T00:00:00.000Z" }),
     (error: unknown) => error instanceof BrowserCanonicalWorkbookError && error.code === "XLSX_FILE_TOO_LARGE",
@@ -147,5 +147,14 @@ test("浏览器 canonical XLSX adapter 拒绝超限文件和无效工作簿", as
   await assert.rejects(
     observeBrowserCanonicalWorkbook({ bytes: new TextEncoder().encode("not an xlsx").buffer, fileName: "invalid.xlsx", observedAt: "2026-07-26T00:00:00.000Z" }),
     (error: unknown) => error instanceof BrowserCanonicalWorkbookError && ["XLSX_INVALID", "XLSX_REQUIRED_SHEET_MISSING"].includes(error.code),
+  );
+
+  const workbook = XLSX.read(workbookBytes(), { type: "array", cellFormula: true });
+  const sheet = workbook.Sheets[CANONICAL_FEISHU_SHEET_REGISTRY.find((entry) => entry.sheetId === "27hboC")!.expectedName]!;
+  sheet.C2 = { t: "n", f: "1+1" };
+  const formulaBytes = XLSX.write(workbook, { type: "array", bookType: "xlsx" }) as ArrayBuffer;
+  await assert.rejects(
+    observeBrowserCanonicalWorkbook({ bytes: formulaBytes, fileName: "formula.xlsx", observedAt: "2026-07-26T00:00:00.000Z" }),
+    (error: unknown) => error instanceof BrowserCanonicalWorkbookError && error.code === "XLSX_FORMULA_RESULT_MISSING",
   );
 });

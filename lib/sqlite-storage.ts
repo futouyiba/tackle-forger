@@ -278,3 +278,58 @@ export async function importSqliteWorkspace(databasePath: string, document: {
     throw error;
   }
 }
+
+export type SqliteWorkspaceImportVerification = {
+  currentRevision: number;
+  revisionCount: number;
+  minRevision: number;
+  maxRevision: number;
+  revisionGaps: number[];
+};
+
+/** Read-only post-import proof used before a staged SQLite file is published. */
+export async function verifySqliteWorkspaceImport(
+  databasePath: string,
+  expected: { state: WorkspaceState; revision: number; revisions: StoredRevision[] },
+): Promise<SqliteWorkspaceImportVerification> {
+  const db = await openSqliteDatabase(databasePath);
+  const integrity = db.prepare("PRAGMA integrity_check").get() as { integrity_check?: string } | undefined;
+  if (integrity?.integrity_check !== "ok") throw new Error("SQLite integrity_check 失败，拒绝发布迁移结果。");
+  const current = db.prepare("SELECT state_json, revision FROM workspace_state WHERE id = ?").get("main") as
+    | { state_json: string; revision: number }
+    | undefined;
+  if (!current || current.revision !== expected.revision) {
+    throw new Error("SQLite 当前 revision 与迁移源不一致，拒绝发布迁移结果。");
+  }
+  const expectedState = ensureWorkflowFields(structuredClone(expected.state));
+  if (current.state_json !== JSON.stringify(expectedState)) {
+    throw new Error("SQLite 当前 state 与迁移源不一致，拒绝发布迁移结果。");
+  }
+  const rows = db.prepare("SELECT revision, state_json FROM workspace_revisions ORDER BY revision ASC").all() as Array<{
+    revision: number; state_json: string;
+  }>;
+  if (rows.length !== expected.revisions.length) {
+    throw new Error("SQLite revision 数量与迁移源不一致，拒绝发布迁移结果。");
+  }
+  const expectedByRevision = new Map(expected.revisions.map((entry) => [entry.revision, entry]));
+  for (const row of rows) {
+    const expectedEntry = expectedByRevision.get(row.revision);
+    if (!expectedEntry || row.state_json !== JSON.stringify(ensureWorkflowFields(structuredClone(expectedEntry.state)))) {
+      throw new Error("SQLite revision 历史与迁移源不一致，拒绝发布迁移结果。");
+    }
+  }
+  const revisions = rows.map((row) => row.revision);
+  const revisionGaps: number[] = [];
+  for (let index = 1; index < revisions.length; index += 1) {
+    const previous = revisions[index - 1]!;
+    const currentRevision = revisions[index]!;
+    for (let revision = previous + 1; revision < currentRevision; revision += 1) revisionGaps.push(revision);
+  }
+  return {
+    currentRevision: current.revision,
+    revisionCount: rows.length,
+    minRevision: revisions[0]!,
+    maxRevision: revisions.at(-1)!,
+    revisionGaps,
+  };
+}

@@ -12,6 +12,12 @@
 >
 > 非目标：本 ADR 不修改运行时代码、不执行历史删除，也不代表归档、恢复验证或自动裁剪已经实现或获准启用
 
+> 历史审计说明（2026-07-26）：本文保留当时关于 SQLite/D1、Vercel Blob 的调查与决策证据，
+> 不描述当前运行时。当前唯一运行权威见
+> [`../architecture/current-runtime-authority.md`](../architecture/current-runtime-authority.md)：R730 + SQLite；
+> Cloudflare、Vercel 和 OpenAI Sites 已退役。本文中的 Blob 只表示一个最多 100 条的历史可获得窗口，
+> 不能证明、也不会恢复此前已从 Blob 裁掉的 revision。
+
 ## 1. 已批准决策
 
 当前生产目标是 Dell R730 上的 SQLite。每次成功保存都会把完整 `WorkspaceState` JSON 同时写入当前态和 `workspace_revisions`，但历史表尚无获准启用的清理能力。2026-07-23 已批准方案 C“时间 + 数量混合”，完整决定如下：

@@ -14,8 +14,9 @@
 #   GIT_REF       要部署的 ref/SHA，默认 origin/main
 #   R730_ROOT     R730 部署根，默认 /opt/tackle-forger
 #   R730_SERVICE  systemd 服务名，默认 tackle-forger
+#   R730_PORT     回环健康检查端口，默认 13000；必须与 systemd/Nginx 配置对齐。
 #   NPM_REGISTRY  装包镜像，默认 https://registry.npmmirror.com
-#                 （解决 @cloudflare/workerd、sharp、esbuild 全平台原生二进制在国内的下载卡顿）
+#                 （解决 sharp、esbuild 等原生二进制在国内的下载卡顿）
 #
 # 前提：
 #   - 本机可用 ssh/scp 访问 R730_SSH，且该账号能 sudo（systemctl restart、chown 需要）。
@@ -38,6 +39,7 @@ set -euo pipefail
 : "${GIT_REF:=origin/main}"
 : "${R730_ROOT:=/opt/tackle-forger}"
 : "${R730_SERVICE:=tackle-forger}"
+: "${R730_PORT:=13000}"
 : "${NPM_REGISTRY:=https://registry.npmmirror.com}"
 
 # --- 0. 切到仓库根 ---
@@ -51,7 +53,7 @@ SHA="$(git rev-parse "$GIT_REF")"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 REL="${STAMP}-${SHA:0:8}"
 TAR="/tmp/tackle-forger-${REL}.tar.gz"
-# git archive 只打包 git 追踪文件，自动排除 node_modules/.data/dist/.wrangler/.next
+# git archive 只打包 git 追踪文件，自动排除 node_modules/.data/dist/.next
 git archive --format=tar.gz "$SHA" -o "$TAR"
 echo "    SHA=$SHA  REL=$REL  size=$(du -h "$TAR" | cut -f1)"
 
@@ -85,10 +87,34 @@ echo "REMOTE_BUILD_OK"
 REMOTE
 
 echo "==> 4/5 切 current 软链并重启服务"
-ssh "$R730_SSH" bash -s -- "$R730_ROOT" "$REL" "$R730_SERVICE" <<'REMOTE'
+ssh "$R730_SSH" bash -s -- "$R730_ROOT" "$REL" "$R730_SERVICE" "$R730_PORT" <<'REMOTE'
 set -euo pipefail
-ROOT="$1"; REL="$2"; SVC="$3"
+ROOT="$1"; REL="$2"; SVC="$3"; PORT="$4"
 DIR="$ROOT/releases/$REL"
+
+wait_for_authenticated_boundary() {
+  local attempt status
+  for attempt in $(seq 1 20); do
+    status="$(curl --connect-timeout 2 --max-time 5 -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/auth/session" || true)"
+    if [ "$status" = "401" ]; then return 0; fi
+    sleep 1
+  done
+  return 1
+}
+
+rollback_release() {
+  local restore_status
+  echo "✗ 新版本未达到 /api/auth/session=401，正在恢复上一只读 release"
+  ln -sfn "$PREV" "$ROOT/current"
+  sudo systemctl restart "$SVC"
+  if ! wait_for_authenticated_boundary; then
+    restore_status="$(curl --connect-timeout 2 --max-time 5 -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$PORT/api/auth/session" || true)"
+    echo "✗ 回滚后服务未恢复到 /api/auth/session=401（实际 $restore_status）" >&2
+    return 1
+  fi
+  echo "已恢复上一 release：$PREV" >&2
+  return 0
+}
 
 # 发布目录归属交给运行账号 tackleforger
 sudo chown -R tackleforger:tackleforger "$DIR"
@@ -96,18 +122,21 @@ sudo chown -R tackleforger:tackleforger "$DIR"
 cd "$ROOT"
 # 记录当前指向，便于回滚
 PREV="$(readlink current 2>/dev/null || true)"
+test -n "$PREV" || { echo "✗ current 没有可回滚的上一 release，拒绝切换" >&2; exit 1; }
+test -d "$PREV" || { echo "✗ current 指向的上一 release 不存在：$PREV" >&2; exit 1; }
 printf '%s\n' "$PREV" > current.prev
 ln -sfn "$DIR" current
 
 sudo systemctl restart "$SVC"
-sleep 3
-systemctl is-active "$SVC" >/dev/null || { echo "✗ 服务未起来，检查 journalctl -u $SVC"; exit 1; }
-echo "SERVICE_ACTIVE"
+if ! systemctl is-active "$SVC" >/dev/null || ! wait_for_authenticated_boundary; then
+  rollback_release || exit 1
+  exit 1
+fi
+echo "SERVICE_READY_401"
 REMOTE
 
 echo "==> 5/5 验收"
-# 用正确端口 13000（systemd ExecStart）而非 3000；容错以防 set -e 中断后续清理
-ssh "$R730_SSH" "curl -s -o /dev/null -w 'session(期望401): %{http_code}\n' http://127.0.0.1:13000/api/auth/session || true"
+ssh "$R730_SSH" "status=\$(curl --connect-timeout 2 --max-time 5 -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$R730_PORT/api/auth/session || true); test \"\$status\" = 401; printf 'session(期望401): %s\\n' \"\$status\""
 
 rm -f "$TAR"
 

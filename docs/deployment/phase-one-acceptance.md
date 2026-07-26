@@ -1,15 +1,17 @@
 # 一期内网部署与端到端验收清单
 
 > 状态：Issue #73 部署准备与证据采集手册；不表示真实环境已经通过
-> 最后对齐 v3：2026-07-23
+> 最后对齐 v3：2026-07-26
 
 本清单用于 Dell R730 一期验收。它补充
 [`r730-production.md`](./r730-production.md)和
 [`feishu-enterprise-login.md`](./feishu-enterprise-login.md)，不改变
 `docs/tackle-forger-development-spec-v3.md` 的领域与分期语义。
 
+历史 Blob→SQLite 迁移不是一期业务验收替代物：Blob 最多只提供可获得的 100 条窗口，迁移报告必须标记历史截断或未知，不能把导入后的 SQLite 表述为完整历史恢复。
+
 一期验收必须使用真实目标环境、真实公司飞书用户和权威《钓具设计工作簿》。本地测试、
-mock、Vercel 评审入口和无业务写入预检都只能作为准备证据，不能替代真实环境结论。
+mock 和无业务写入预检都只能作为准备证据，不能替代真实环境结论；Vercel、Cloudflare 与 OpenAI Sites 已退役，不属于验收路径。
 
 ## 1. 当前启动门禁
 
@@ -236,7 +238,7 @@ npm run acceptance:phase-one -- authenticated-read-only \
 - AI：入口与直接 API 都不可运行；
 - 配置导出：只能产生 `CONFIG_PREVIEW/NON_FORMAL`，文件名为 `*.preview.xlsx` 或差异报告，
   无数字 ID/正式 `configNameKey`，`commit_config_export` 必须拒绝；
-- revision：一期没有归档、retention 或 prune 定时任务；SQLite/D1 继续全量保留。
+- revision：一期没有归档、retention 或 prune 定时任务；SQLite 继续全量保留。
 
 ## 8. 备份与回滚演练
 

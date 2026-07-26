@@ -1,8 +1,8 @@
 # 当前运行时与部署权威边界
 
 > 状态：工程运行时权威说明；不定义产品或领域语义
-> 最后对齐 v3：2026-07-25
-> 实现基线：`main@03d785358efdf910d1faa8f345217380eda9bde1`
+> 最后对齐 v3：2026-07-26
+> 实现基线：`main@9596e2c01439b65a458f01429eccbd9b95ac1f48`
 
 本文件固定当前仓库的产品入口、包管理、构建、持久化与部署角色。发生冲突时，产品与领域语义仍以
 [`../tackle-forger-development-spec-v3.md`](../tackle-forger-development-spec-v3.md) 为准；本文件只解释怎样安全运行该实现。
@@ -14,13 +14,12 @@
 | 正式构建 | `npm run build`，即 `vinext build` | 不使用历史 workspace 或 `next build` 作为正式构建 |
 | 正式生产 | 单实例公司内网 Dell R730 | 不把 Vercel、Cloudflare 或 OpenAI Sites 表述为正式生产 |
 | 正式持久化 | R730 上显式 `sqlite` 后端与持久磁盘 | 不通过 token、binding 或临时文件系统隐式切换后端 |
-| Vercel | 评审构建，`npm run build:vercel`（Vinext + Nitro） | 不使用旧 `next build` 说明，不能承载正式会话或生产数据 |
-| Cloudflare / OpenAI Sites | 预览、实验或待退出的适配路径 | 不与 R730 共享“正式生产”身份 |
+| Vercel / Cloudflare / OpenAI Sites | 已退役；不再有仓库内部署或预览路径 | 不重新加入平台构建、运行时 binding 或存储分支 |
 | historical pnpm workspace | 只读历史、兼容性测试与经审计迁移边界 | 不作为新功能或正式部署的实现目标 |
 
 ## Next.js 与 Vinext
 
-根应用使用 Next.js App Router 与 React 的应用 API；Vinext 是其 Vite/Nitro 构建适配层，不是第二个产品版本。正式 R730 构建走 `vinext build`。Vercel 评审构建走同一根应用的 `npm run build:vercel`，由 Nitro 产出 Vercel Build Output；两者都不是 `next build`。
+根应用使用 Next.js App Router 与 React 的应用 API；Vinext 是其 Node/Vite 构建适配层，不是第二个产品版本。唯一部署构建是 `vinext build`，启动为 `vinext start`；不使用 `next build` 或平台专用构建器。
 
 ## 存储部署契约
 
@@ -29,11 +28,9 @@
 | 后端 | 允许的用途 | 必需条件 |
 | --- | --- | --- |
 | `sqlite` | R730 正式生产与本地持久化开发 | `WORKSPACE_DATABASE_PATH` 与持久文件目录 |
-| `blob` | Vercel 评审 | `BLOB_READ_WRITE_TOKEN`；不得宣称生产持久化或正式会话能力 |
-| `d1` | Cloudflare / OpenAI Sites 预览或实验 | D1 `DB` 与 R2 `FILES` binding；不得宣称正式生产 |
 | `ephemeral` | development/test | 进程内状态；生产一律拒绝 |
 
-生产环境缺少显式后端、后端与部署目标不匹配、或后端所需依赖缺失时必须 fail-closed。历史 Blob 到 SQLite 的迁移仍按 [`../deployment/r730-production.md`](../deployment/r730-production.md) 执行，迁移不改变历史 Snapshot 或工作区身份。
+生产环境缺少显式后端、后端与部署目标不匹配、或路径缺失时必须 fail-closed。`@vercel/blob` 仅被一次性 Blob→SQLite 迁移脚本使用；迁移先在同目录唯一临时 SQLite 导入、执行完整回读与 `integrity_check`，再以不覆盖目标的原子发布完成。迁移不改变历史 Snapshot、未知字段或工作区身份；Blob 最多只能给出 100 条的可获得窗口，报告始终标记 `historyTruncatedOrUnknown=true`，不得声称复原已裁掉历史。
 
 ## Legacy 收敛边界
 

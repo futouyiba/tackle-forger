@@ -46,19 +46,7 @@ function isDevelopmentLoopbackHttpRedirect(redirect: URL) {
     && process.env.FEISHU_ALLOW_INSECURE_HTTP?.trim().toLowerCase() === "true";
 }
 
-let sessionDeploymentTargetWarned = false;
-function warnSessionDeploymentTarget() {
-  if (sessionDeploymentTargetWarned) return;
-  sessionDeploymentTargetWarned = true;
-  if (process.env.VERCEL) {
-    console.warn(
-      "[tackle-forger] 会话存储基于本地文件锁，正式部署目标为持久磁盘的单实例服务器（Dell R730）。检测到 VERCEL 运行环境：会话不跨实例共享且重启后丢失，仅可作为评审入口，不得作为正式会话存储。",
-    );
-  }
-}
-
 export function feishuRuntimeConfig(): FeishuRuntimeConfig {
-  warnSessionDeploymentTarget();
   const ttlText = process.env.FEISHU_SESSION_TTL_SECONDS?.trim();
   const sessionTtlSeconds = ttlText ? Number.parseInt(ttlText, 10) : DEFAULT_SESSION_TTL_SECONDS;
   if (!Number.isSafeInteger(sessionTtlSeconds) || sessionTtlSeconds < 60) {

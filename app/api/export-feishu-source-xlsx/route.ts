@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requestUser } from "@/lib/auth";
-import { CANONICAL_FEISHU_SHEET_REGISTRY, CANONICAL_FEISHU_WORKBOOK, LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY, LEGACY_YS_EKW_FEISHU_WORKBOOK } from "@/lib/feishu-workbook";
+import { CANONICAL_FEISHU_SHEET_REGISTRY, CANONICAL_FEISHU_WORKBOOK } from "@/lib/feishu-workbook";
 import { readFeishuSheetRange } from "@/lib/feishu-sheets";
 import { FeishuApiError, type FeishuApiErrorInfo } from "@/lib/feishu-api-error";
 import { loadWorkspaceState } from "@/lib/storage";
@@ -55,16 +55,12 @@ export async function GET(request: NextRequest) {
   }
 
   const { state } = await loadWorkspaceState();
-  // 取 canonical 工作簿的源修订；若无，尝试最近的旧表修订（兼容历史数据）。
+  // 取 canonical 工作簿（WQ8w）的源修订。旧表 YsEKw 修订兼容已随旧表废弃移除。
   const canonicalRevisions = state.feishuSourceRevisions.filter(
     (entry) => entry.workbookRefId === CANONICAL_FEISHU_WORKBOOK.id,
   );
-  const legacyRevisions = state.feishuSourceRevisions.filter(
-    (entry) => entry.workbookRefId === LEGACY_YS_EKW_FEISHU_WORKBOOK.id,
-  );
   const sourceRevision =
     canonicalRevisions[canonicalRevisions.length - 1] ??
-    legacyRevisions[legacyRevisions.length - 1] ??
     state.feishuSourceRevisions[state.feishuSourceRevisions.length - 1];
   if (!sourceRevision) {
     return NextResponse.json(
@@ -72,9 +68,7 @@ export async function GET(request: NextRequest) {
       { status: 409 },
     );
   }
-  const registry = sourceRevision.workbookRefId === LEGACY_YS_EKW_FEISHU_WORKBOOK.id
-    ? LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY
-    : CANONICAL_FEISHU_SHEET_REGISTRY;
+  const registry = CANONICAL_FEISHU_SHEET_REGISTRY;
   const requests = buildFeishuSourceExportRequests(sourceRevision, registry);
   // 逐 sheet 读取并用 allSettled：成功的进入导出，失败的在元信息 sheet 透明化，
   // 不让单个 sheet 的权限/网络问题阻断其余 sheet 的下载。

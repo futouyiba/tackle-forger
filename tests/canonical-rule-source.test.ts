@@ -3,7 +3,7 @@ import test from "node:test";
 import { importCanonicalRuleSource } from "../lib/canonical-rule-source";
 import { calculateCandidate } from "../lib/engine";
 import { CURRENT_WORKSPACE_SCHEMA_VERSION, migrateWorkspaceState } from "../lib/migrations";
-import { identityRowsFromRanges, weightTemplateDraftFromCanonicalRuleDraft, LEGACY_YS_EKW_IDENTITY_SHEET_SPECS } from "../lib/rule-workbook-inspection";
+import { identityRowsFromRanges, weightTemplateDraftFromCanonicalRuleDraft, CANONICAL_IDENTITY_SHEET_SPECS } from "../lib/rule-workbook-inspection";
 import { createSeedState } from "../lib/seed";
 import {
   applyCanonicalRuleSourceDraft,
@@ -292,31 +292,31 @@ test("schema v15 顺序迁移保留历史状态并补 canonical 草稿集合", (
   assert.deepEqual(migrated.configurationSnapshots, current.configurationSnapshots);
 });
 
-test("重量模板稳定身份只读取精确 BG:BH 区间，不被同表完整值区覆盖", () => {
+test("重量模板稳定身份只读取精确 B:C 区间，不被同表完整值区覆盖", () => {
   const rows = identityRowsFromRanges([
-    { sheetId: "d6e928", range: "BG1:BH66", valueRange: { values: [["机器ID", "同步状态"], ["wtpl_0001", "BOUND"]] } },
-    { sheetId: "d6e928", range: "A1:BH66", valueRange: { values: [["展示名", "机器ID"], ["路亚", "wtpl_0001"]] } },
-  ], LEGACY_YS_EKW_IDENTITY_SHEET_SPECS);
+    { sheetId: "1cAihB", range: "B1:C66", valueRange: { values: [["机器ID", "同步状态"], ["wtpl_rod_0001", "BOUND"]] } },
+    { sheetId: "1cAihB", range: "A1:Z66", valueRange: { values: [["展示名", "机器ID"], ["路亚", "wtpl_rod_0001"]] } },
+  ], CANONICAL_IDENTITY_SHEET_SPECS);
   assert.equal(rows.length, 1);
-  assert.equal(rows[0]?.stableId, "wtpl_0001");
+  assert.equal(rows[0]?.stableId, "wtpl_rod_0001");
 });
 
 test("04.0 Q:S 的真实 Id 表头不作为 FunctionPartGroup 实体", () => {
   const rows = identityRowsFromRanges([{
-    sheetId: "mLpTLK",
+    sheetId: "19XKzU",
     range: "Q1:S8",
     valueRange: { values: [["rodFunctionGroupId", "reelFunctionGroupId", "lineFunctionGroupId"], ["funcgrp_rod_0001", "funcgrp_reel_0001", "funcgrp_line_0001"]] },
-  }], LEGACY_YS_EKW_IDENTITY_SHEET_SPECS);
+  }], CANONICAL_IDENTITY_SHEET_SPECS);
   assert.deepEqual(rows.map((entry) => entry.stableId), ["funcgrp_rod_0001", "funcgrp_reel_0001", "funcgrp_line_0001"]);
   assert.ok(rows.every((entry) => entry.entityType === "FunctionPartGroup"));
 });
 
 test("04.0 父级常量的真实 functionProfileId 表头不作为 FunctionProfile 实体", () => {
   const rows = identityRowsFromRanges([{
-    sheetId: "mLpTLK",
+    sheetId: "19XKzU",
     range: "A1:S8",
     valueRange: { values: [["functionProfileId（永久）", "displayName"], ["function:all_round", "泛用"]] },
-  }], LEGACY_YS_EKW_IDENTITY_SHEET_SPECS);
+  }], CANONICAL_IDENTITY_SHEET_SPECS);
   assert.deepEqual(rows.map((entry) => entry.stableId), ["function:all_round"]);
   assert.deepEqual(rows.map((entry) => entry.entityType), ["FunctionProfile"]);
 });
@@ -341,13 +341,13 @@ test("04 生产同形的 7 父级、21 分组与 57 成员规则可确定导入"
   assert.equal(second.contentHash, first.contentHash);
   assert.deepEqual(second.functionProfiles, first.functionProfiles);
   const identityRanges = [
-    { sheetId: "mLpTLK", range: "A1:S8", valueRange: { values: source.functionProfileValues } },
-    { sheetId: "mLpTLK", range: "Q1:S8", valueRange: { values: source.functionProfileValues.map((entry) => entry.slice(16, 19)) } },
+    { sheetId: "19XKzU", range: "A1:S8", valueRange: { values: source.functionProfileValues } },
+    { sheetId: "19XKzU", range: "Q1:S8", valueRange: { values: source.functionProfileValues.map((entry) => entry.slice(16, 19)) } },
   ];
-  const identities = identityRowsFromRanges(identityRanges, LEGACY_YS_EKW_IDENTITY_SHEET_SPECS);
+  const identities = identityRowsFromRanges(identityRanges, CANONICAL_IDENTITY_SHEET_SPECS);
   assert.equal(identities.filter((entry) => entry.entityType === "FunctionProfile").length, 7);
   assert.equal(identities.filter((entry) => entry.entityType === "FunctionPartGroup").length, 21);
-  assert.deepEqual(identityRowsFromRanges(identityRanges, LEGACY_YS_EKW_IDENTITY_SHEET_SPECS), identities);
+  assert.deepEqual(identityRowsFromRanges(identityRanges, CANONICAL_IDENTITY_SHEET_SPECS), identities);
 
   const invalid = productionShapeFixture();
   invalid.functionSources[0].values[2]![5] = 2;

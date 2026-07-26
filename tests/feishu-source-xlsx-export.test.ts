@@ -5,8 +5,8 @@ import { NextRequest } from "next/server";
 import { GET } from "../app/api/export-feishu-source-xlsx/route";
 import { loadWorkspaceState } from "../lib/storage";
 import {
-  LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY,
-  LEGACY_YS_EKW_FEISHU_WORKBOOK,
+  CANONICAL_FEISHU_SHEET_REGISTRY,
+  CANONICAL_FEISHU_WORKBOOK,
   type FeishuSourceRevision,
 } from "../lib/feishu-workbook";
 import {
@@ -51,18 +51,18 @@ function disableTrustedProxy() {
 function makeSourceRevision(): FeishuSourceRevision {
   return {
     id: "feishu-revision:test-42",
-    workbookRefId: LEGACY_YS_EKW_FEISHU_WORKBOOK.id,
+    workbookRefId: CANONICAL_FEISHU_WORKBOOK.id,
     sourceRevision: "42",
     spreadsheetToken: "SECRET_SHEET_TOKEN_MARKER",
     pulledAt: "2026-01-01T00:00:00Z",
     pulledBy: "tester",
-    anchorSheetId: "9nE3Rx",
+    anchorSheetId: "0iGCcx",
     syncScope: "workbook",
     registryHash: "hash-test",
     sheets: [
-      { sheetId: "d6e928", name: "01_重量模板", rowCount: 54, columnCount: 60 },
-      { sheetId: "rgFPUu", name: "02_钓法类型", rowCount: 12, columnCount: 28 },
-      { sheetId: "9nE3Rx", name: "06_系列", rowCount: 10, columnCount: 12 },
+      { sheetId: "1cAihB", name: "01.0_重量模板-竿", rowCount: 54, columnCount: 60 },
+      { sheetId: "4zXYpP", name: "02.0_钓法类型-竿", rowCount: 12, columnCount: 28 },
+      { sheetId: "25UnTC", name: "07_系列", rowCount: 10, columnCount: 12 },
     ],
     issues: [],
     state: "PULLED",
@@ -72,25 +72,25 @@ function makeSourceRevision(): FeishuSourceRevision {
 function makeReads(): FeishuSourceRangeRead[] {
   return [
     {
-      sheetId: "d6e928",
+      sheetId: "1cAihB",
       range: "A1:BH54",
-      valueRange: { revision: "42", range: "d6e928!A1:BH54", values: [["参数", "值"], ["竿拉力", "10"], ["轮拉力", "8"]] },
-      expectedName: "01_重量模板",
-      observedName: "01_重量模板",
+      valueRange: { revision: "42", range: "1cAihB!A1:BH54", values: [["参数", "值"], ["竿拉力", "10"], ["轮拉力", "8"]] },
+      expectedName: "01.0_重量模板-竿",
+      observedName: "01.0_重量模板-竿",
     },
     {
-      sheetId: "rgFPUu",
+      sheetId: "4zXYpP",
       range: "A1:AB12",
-      valueRange: { revision: "42", range: "rgFPUu!A1:AB12", values: [["钓法", "类型"], ["路亚", "竿"]] },
-      expectedName: "02_钓法类型",
-      observedName: "02_钓法类型",
+      valueRange: { revision: "42", range: "4zXYpP!A1:AB12", values: [["钓法", "类型"], ["路亚", "竿"]] },
+      expectedName: "02.0_钓法类型-竿",
+      observedName: "02.0_钓法类型-竿",
     },
     {
-      sheetId: "9nE3Rx",
+      sheetId: "25UnTC",
       range: "A1:L10",
-      valueRange: { revision: "42", range: "9nE3Rx!A1:L10", values: [["系列", "型号"], ["series_rod_01", "M1"]] },
-      expectedName: "06_系列",
-      observedName: "06_系列",
+      valueRange: { revision: "42", range: "25UnTC!A1:L10", values: [["系列", "型号"], ["series_rod_01", "M1"]] },
+      expectedName: "07_系列",
+      observedName: "07_系列",
     },
   ];
 }
@@ -132,39 +132,39 @@ test("feishuSourceSheetRange 用 grid 构造整表范围，缺 grid 回退默认
 
 test("buildFeishuSourceExportRequests 仅包含存在 grid 的 rule_source sheet，顺序遵循 registry", () => {
   const rev = makeSourceRevision();
-  const requests = buildFeishuSourceExportRequests(rev, LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY);
+  const requests = buildFeishuSourceExportRequests(rev, CANONICAL_FEISHU_SHEET_REGISTRY);
   const ids = requests.map((r) => r.sheetId);
-  // registry 中 rule_source 且在 rev.sheets 里存在的：d6e928, rgFPUu, 9nE3Rx
-  assert.deepEqual(ids, ["d6e928", "rgFPUu", "9nE3Rx"]);
+  // registry 中 rule_source 且在 rev.sheets 里存在的：1cAihB, 4zXYpP, 25UnTC
+  assert.deepEqual(ids, ["1cAihB", "4zXYpP", "25UnTC"]);
   // 缺席 sheet 不应出现。
-  assert.ok(!ids.includes("fATowU"));
+  assert.ok(!ids.includes("10TyFp"));
 });
 
 test("missingSourceSheets 列出缺席的 rule_source sheet", () => {
   const rev = makeSourceRevision();
-  const missing = missingSourceSheets(rev, LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY);
+  const missing = missingSourceSheets(rev, CANONICAL_FEISHU_SHEET_REGISTRY);
   const missingIds = missing.map((m) => m.sheetId);
   // 大量 rule_source sheet 在 rev 中缺席。
-  assert.ok(missingIds.includes("fATowU"));
-  assert.ok(missingIds.includes("zrVOxd"));
-  assert.ok(missingIds.includes("u87sRh"));
-  assert.ok(!missingIds.includes("d6e928"));
+  assert.ok(missingIds.includes("10TyFp"));
+  assert.ok(missingIds.includes("23CsXE"));
+  assert.ok(missingIds.includes("31RxeB"));
+  assert.ok(!missingIds.includes("1cAihB"));
 });
 
 test("导出含元信息 sheet 与每个 range 的数据 sheet（多 sheet）", () => {
   const input = {
     sourceRevision: makeSourceRevision(),
-    registry: LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY,
+    registry: CANONICAL_FEISHU_SHEET_REGISTRY,
     reads: makeReads(),
   };
   const workbook = buildFeishuSourceExportWorkbook(input);
   const names = new Set(workbook.SheetNames);
   assert.ok(names.has("源数据说明"));
-  assert.ok(names.has("01_重量模板"));
-  assert.ok(names.has("02_钓法类型"));
-  assert.ok(names.has("06_系列"));
+  assert.ok(names.has("01.0_重量模板-竿"));
+  assert.ok(names.has("02.0_钓法类型-竿"));
+  assert.ok(names.has("07_系列"));
   // 数据 sheet 内容为飞书原始 values（含表头）。
-  const weight = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets["01_重量模板"]!, { header: 1 });
+  const weight = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets["01.0_重量模板-竿"]!, { header: 1 });
   assert.deepEqual(weight[0], ["参数", "值"]);
   assert.deepEqual(weight[1], ["竿拉力", "10"]);
 });
@@ -172,7 +172,7 @@ test("导出含元信息 sheet 与每个 range 的数据 sheet（多 sheet）", 
 test("导出对 spreadsheetToken 脱敏，不泄露凭据", () => {
   const input = {
     sourceRevision: makeSourceRevision(),
-    registry: LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY,
+    registry: CANONICAL_FEISHU_SHEET_REGISTRY,
     reads: makeReads(),
   };
   const buffer = serializeFeishuSourceExport(input);
@@ -185,7 +185,7 @@ test("导出对 spreadsheetToken 脱敏，不泄露凭据", () => {
 test("导出确定性：相同输入产生二进制一致的输出", () => {
   const input = {
     sourceRevision: makeSourceRevision(),
-    registry: LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY,
+    registry: CANONICAL_FEISHU_SHEET_REGISTRY,
     reads: makeReads(),
   };
   const first = Buffer.from(serializeFeishuSourceExport(input));
@@ -197,7 +197,7 @@ test("导出确定性：相同输入产生二进制一致的输出", () => {
 test("文件名仅依赖源 revision，不含时间戳", () => {
   const name = feishuSourceExportFilename({
     sourceRevision: makeSourceRevision(),
-    registry: LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY,
+    registry: CANONICAL_FEISHU_SHEET_REGISTRY,
     reads: [],
   });
   assert.equal(name, "飞书源数据_r42.xlsx");
@@ -208,23 +208,23 @@ test("部分 sheet 读取失败时仍导出成功的 sheet，并在元信息透�
   const reads = makeReads().slice(0, 2);
   const input = {
     sourceRevision: makeSourceRevision(),
-    registry: LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY,
+    registry: CANONICAL_FEISHU_SHEET_REGISTRY,
     reads,
     failures: [
       {
-        sheetId: "9nE3Rx",
+        sheetId: "25UnTC",
         range: "A1:L10",
-        expectedName: "06_系列",
-        observedName: "06_系列",
+        expectedName: "07_系列",
+        observedName: "07_系列",
         error: "HTTP 403 无权限",
       },
     ],
   };
   const workbook = buildFeishuSourceExportWorkbook(input);
   const names = new Set(workbook.SheetNames);
-  assert.ok(names.has("01_重量模板"));
-  assert.ok(names.has("02_钓法类型"));
-  assert.ok(!names.has("06_系列"), "失败的 sheet 不应作为数据 sheet 出现");
+  assert.ok(names.has("01.0_重量模板-竿"));
+  assert.ok(names.has("02.0_钓法类型-竿"));
+  assert.ok(!names.has("07_系列"), "失败的 sheet 不应作为数据 sheet 出现");
   const meta = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets["源数据说明"]!, { header: 1, raw: false });
   const flat = meta.flat().map(String);
   assert.ok(flat.includes("读取失败（仍导出其余成功 sheet）"));
@@ -252,12 +252,12 @@ test("路由在工作区未记录源修订时返回 409，且不产生新 revisi
 });
 
 test("路由不触碰 canonical 规则源常量", async () => {
-  const workbookBefore = JSON.stringify(LEGACY_YS_EKW_FEISHU_WORKBOOK);
-  const registryBefore = JSON.stringify(LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY);
+  const workbookBefore = JSON.stringify(CANONICAL_FEISHU_WORKBOOK);
+  const registryBefore = JSON.stringify(CANONICAL_FEISHU_SHEET_REGISTRY);
   withTrustedProxy();
   await GET(new NextRequest("http://localhost/api/export-feishu-source-xlsx", { headers: authHeaders })).catch(() => {});
-  assert.equal(JSON.stringify(LEGACY_YS_EKW_FEISHU_WORKBOOK), workbookBefore, "LEGACY_YS_EKW_FEISHU_WORKBOOK 被修改");
-  assert.equal(JSON.stringify(LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY), registryBefore, "LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY 被修改");
+  assert.equal(JSON.stringify(CANONICAL_FEISHU_WORKBOOK), workbookBefore, "CANONICAL_FEISHU_WORKBOOK 被修改");
+  assert.equal(JSON.stringify(CANONICAL_FEISHU_SHEET_REGISTRY), registryBefore, "CANONICAL_FEISHU_SHEET_REGISTRY 被修改");
 });
 
 test("feishuEndpointPath 脱敏 spreadsheets 路径中的资源 token，保留接口语义", () => {

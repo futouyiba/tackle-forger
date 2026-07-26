@@ -17,6 +17,30 @@ const VERDICT_SCHEMA = 'tackle-local-verdict/v1';
 const README_SECTION = 'README';
 const FULL_V3_SECTION = 'FULL_V3';
 const SCOPED_BASE_SECTIONS = [README_SECTION, '0', '19', '20'];
+const NAVIGATION_DOMAINS = { export: ['20', '25'], patch: ['8', '14', '18.3', '20'], snapshot: ['13', '14', '18.2', '24.11'] };
+const NAVIGATION_INVARIANTS = [
+  { id: 'nearest-derived-template-no-interpolation', sourceSections: ['5.2'] },
+  { id: 'method-and-type-are-separate-rule-layers', sourceSections: ['3.1'] },
+  { id: 'published-snapshots-are-immutable', sourceSections: ['0.1', '14'] },
+];
+const STRICT_NAVIGATION_SECTIONS = new Set([
+  ...Object.values(NAVIGATION_DOMAINS).flat(),
+  ...NAVIGATION_INVARIANTS.flatMap((invariant) => invariant.sourceSections),
+  '20',
+]);
+const MANDATORY_WORKFLOW_COMMANDS = ['node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-index', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-policy', 'node --test .codex/skills/tackle-agent-workflow/scripts/workflow-contract.test.mjs'];
+const CONDITIONAL_NA_CATALOG = ['product_runtime_tests', 'legacy_workspace_ci'];
+const LEGACY_WORKSPACE_COMMANDS = ['node --test tests/package-manager-boundaries.test.mjs', 'pnpm --dir legacy-workspace install --frozen-lockfile', "pnpm --dir legacy-workspace --filter '@tackle-forger/*' typecheck", "pnpm --dir legacy-workspace --filter '@tackle-forger/*' lint", "pnpm --dir legacy-workspace --filter '@tackle-forger/*' test", "pnpm --dir legacy-workspace --filter '@tackle-forger/*' build"];
+const CONDITIONAL_NA_APPLICABILITY = { legacyTouchedForbids: 'legacy_workspace_ci', nonLegacyRequires: 'legacy_workspace_ci', nonWorkflowForbids: 'product_runtime_tests', workflowMetadataRequires: 'product_runtime_tests' };
+const CHANGE_CLASS_MATRIX = {
+  workflow_metadata: { commands: MANDATORY_WORKFLOW_COMMANDS, scenarios: ['authority_and_scoped_diff'], nonWaivableCommands: MANDATORY_WORKFLOW_COMMANDS, nonWaivableScenarios: ['authority_and_scoped_diff'] },
+  typescript_api: { commands: ['npm run typecheck', 'npm run lint', 'npm test'], scenarios: ['normal_path'], nonWaivableCommands: ['npm run typecheck', 'npm run lint', 'npm test'], nonWaivableScenarios: ['normal_path'] },
+  domain_behavior: { commands: ['npm run typecheck', 'npm run lint', 'npm test'], scenarios: ['normal_path', 'boundary', 'conflict', 'version_freeze'], nonWaivableCommands: ['npm run typecheck', 'npm run lint', 'npm test'], nonWaivableScenarios: ['normal_path', 'boundary', 'conflict', 'version_freeze'] },
+  persistence_migration: { commands: ['npm run typecheck', 'npm run lint', 'npm test'], scenarios: ['normal_path', 'boundary', 'conflict', 'version_freeze', 'production_shape_fixture', 'unknown_field_preservation', 'second_run_noop'], nonWaivableCommands: ['npm run typecheck', 'npm run lint', 'npm test'], nonWaivableScenarios: ['normal_path', 'boundary', 'conflict', 'version_freeze', 'production_shape_fixture', 'unknown_field_preservation', 'second_run_noop'] },
+  authorization_shared_write: { commands: ['npm run typecheck', 'npm run lint', 'npm test'], scenarios: ['authorization_denied', 'reauthorize_at_commit', 'concurrency_conflict'], nonWaivableCommands: ['npm run typecheck', 'npm run lint', 'npm test'], nonWaivableScenarios: ['authorization_denied', 'reauthorize_at_commit', 'concurrency_conflict'] },
+  external_side_effect: { commands: ['npm run typecheck', 'npm run lint', 'npm test'], scenarios: ['prepare_write_readback', 'partial_failure_recovery', 'idempotent_retry'], nonWaivableCommands: ['npm run typecheck', 'npm run lint', 'npm test'], nonWaivableScenarios: ['prepare_write_readback', 'partial_failure_recovery', 'idempotent_retry'] },
+  pr_final: { commands: ['npm run typecheck', 'npm run lint', 'npm test'], scenarios: ['ci_gate'], nonWaivableCommands: ['npm run typecheck', 'npm run lint', 'npm test'], nonWaivableScenarios: ['ci_gate'] },
+};
 
 function fail(message) { throw new Error(message); }
 function sha256(bytes) { return createHash('sha256').update(bytes).digest('hex'); }
@@ -145,13 +169,33 @@ export function buildNavigationIndex(root = repositoryRoot()) {
   const lines = source.split(/\r?\n/);
   const headings = [];
   const openRegistry = [];
+  let fenced = false;
   lines.forEach((line, index) => {
+    if (/^\s*(```|~~~)/.test(line)) { fenced = !fenced; return; }
+    if (fenced) return;
     const heading = line.match(/^(#{1,6})\s+(.+?)\s*#*\s*$/);
-    if (heading) headings.push({ line: index + 1, level: heading[1].length, title: heading[2] });
+    if (heading) {
+      const title = heading[2];
+      if (/^\d/.test(title) && !/^(\d+(?:\.\d+)*)(?:\.|\s)/.test(title)) fail(`Malformed v3 section heading at line ${index + 1}`);
+      headings.push({ line: index + 1, level: heading[1].length, title });
+    }
     const open = line.match(/^\|\s*(OPEN-\d+)\b[^|]*\|[^|]*\|\s*`?([^|`]+?)`?\s*\|/);
     if (open) openRegistry.push({ id: open[1], status: open[2].trim(), line: index + 1, raw: line });
   });
-  return { format: 'tackle-v3-navigation/v1', nonAuthoritative: true, openRegistry, source: { path: SPEC_RELATIVE, sha256: sha256(Buffer.from(source, 'utf8')) }, headings };
+  const sectionIds = new Set();
+  for (const heading of headings) {
+    const section = heading.title.match(/^(\d+(?:\.\d+)*)(?:\.|\s)/)?.[1];
+    if (!section) continue;
+    if (STRICT_NAVIGATION_SECTIONS.has(section) && heading.level !== section.split('.').length + 1) fail(`v3 section heading depth does not match Markdown level: ${section}`);
+    if (sectionIds.has(section)) fail(`Duplicate v3 section identifier: ${section}`);
+    sectionIds.add(section);
+  }
+  for (const sections of Object.values(NAVIGATION_DOMAINS)) if (!sections.every((section) => sectionIds.has(section))) fail('Navigation configuration references a v3 section that does not exist');
+  const globalInvariants = NAVIGATION_INVARIANTS.map((invariant) => {
+    if (!invariant.sourceSections.every((section) => sectionIds.has(section))) fail(`Invariant ${invariant.id} is missing an authoritative v3 heading`);
+    return { ...invariant, headingsVerified: true };
+  });
+  return { format: 'tackle-v3-navigation/v2', nonAuthoritative: true, globalInvariants, openDecisions: openRegistry, openRegistry, domains: NAVIGATION_DOMAINS, source: { path: SPEC_RELATIVE, sha256: sha256(Buffer.from(source, 'utf8')) }, headings };
 }
 export function writeNavigationIndex(root = repositoryRoot()) {
   const rendered = `${JSON.stringify(buildNavigationIndex(root), null, 2)}\n`;
@@ -204,23 +248,54 @@ function validateIdentity(root, value, field, allowWorktree = false) {
   if (allowWorktree && value === 'WORKTREE') return 'WORKTREE';
   return canonicalCommit(root, value, field);
 }
-function validateBriefNarrative(brief) {
+function validateBriefNarrative(brief, { legacyTouched }) {
   requireString(brief.scope, 'TaskBrief.scope');
   requireNonEmptyStringArray(brief.acceptanceCriteria, 'TaskBrief.acceptanceCriteria');
   requireStringArray(brief.exclusions, 'TaskBrief.exclusions');
-  requireNonEmptyStringArray(brief.risks, 'TaskBrief.risks');
-  if (!Array.isArray(brief.validation) || brief.validation.length === 0) fail('TaskBrief.validation must be a non-empty array');
-  brief.validation.forEach((item, index) => {
-    requireExactKeys(item, ['command', 'naReason'], `TaskBrief.validation[${index}]`);
-    const command = item.command;
-    const naReason = item.naReason;
-    const hasCommand = typeof command === 'string' && command.length > 0;
-    const hasNaReason = typeof naReason === 'string' && naReason.length > 0;
-    if (hasCommand === hasNaReason) fail(`TaskBrief.validation[${index}] requires exactly one command or naReason`);
-  });
+  if (!CHANGE_CLASS_MATRIX[brief.changeClass]) fail('TaskBrief.changeClass is invalid');
+  requireNonEmptyStringArray(brief.allowedChanges, 'TaskBrief.allowedChanges');
+  requireExactKeys(brief.riskDimensions, ['persistedData', 'historicalSnapshots', 'concurrency', 'authorization', 'externalSideEffects', 'userVisible'], 'TaskBrief.riskDimensions');
+  if (Object.values(brief.riskDimensions).some((value) => typeof value !== 'boolean')) fail('TaskBrief.riskDimensions values must be boolean');
+  requireExactKeys(brief.validationPlan, ['requiredCommands', 'requiredScenarios', 'intentionallyNotApplicable'], 'TaskBrief.validationPlan');
+  const commands = requireStringArray(brief.validationPlan.requiredCommands, 'TaskBrief.validationPlan.requiredCommands');
+  const scenarios = requireStringArray(brief.validationPlan.requiredScenarios, 'TaskBrief.validationPlan.requiredScenarios');
+  const na = brief.validationPlan.intentionallyNotApplicable;
+  if (!isPlainObject(na) || Object.values(na).some((reason) => typeof reason !== 'string' || reason.length === 0)) fail('TaskBrief.validationPlan.intentionallyNotApplicable must map each omitted item to a non-empty reason');
+  const matrix = CHANGE_CLASS_MATRIX[brief.changeClass];
+  const riskScenarios = [];
+  if (brief.riskDimensions.persistedData || brief.riskDimensions.historicalSnapshots) riskScenarios.push(...CHANGE_CLASS_MATRIX.persistence_migration.scenarios);
+  if (brief.riskDimensions.concurrency || brief.riskDimensions.authorization) riskScenarios.push(...CHANGE_CLASS_MATRIX.authorization_shared_write.scenarios);
+  if (brief.riskDimensions.externalSideEffects) riskScenarios.push(...CHANGE_CLASS_MATRIX.external_side_effect.scenarios);
+  if (brief.riskDimensions.userVisible) riskScenarios.push('unified_visual_review_pending_or_completed');
+  const nonWaivableScenarios = [...matrix.scenarios, ...riskScenarios];
+  const allowedNa = new Set(CONDITIONAL_NA_CATALOG);
+  for (const item of Object.keys(na)) {
+    if (matrix.commands.includes(item)) fail(`TaskBrief.validationPlan command cannot be N/A: ${item}`);
+    if (nonWaivableScenarios.includes(item)) fail(`TaskBrief.validationPlan scenario cannot be N/A: ${item}`);
+  }
+  if (Object.keys(na).some((item) => !allowedNa.has(item) || commands.includes(item) || scenarios.includes(item))) fail('TaskBrief.validationPlan.intentionallyNotApplicable contains unknown or duplicated item');
+  if (brief.changeClass === 'workflow_metadata') {
+    if (!Object.hasOwn(na, 'product_runtime_tests')) fail('workflow_metadata requires a product_runtime_tests N/A reason');
+  } else if (Object.hasOwn(na, 'product_runtime_tests')) {
+    fail('Non-workflow changeClass cannot mark product_runtime_tests N/A');
+  }
+  if (legacyTouched ? Object.hasOwn(na, 'legacy_workspace_ci') : !Object.hasOwn(na, 'legacy_workspace_ci')) fail(legacyTouched ? 'legacy workspace changes cannot mark legacy_workspace_ci N/A' : 'Non-legacy work requires a legacy_workspace_ci N/A reason');
+  const allowedCommands = new Set([...matrix.commands, ...(legacyTouched ? LEGACY_WORKSPACE_COMMANDS : [])]);
+  if (commands.some((item) => !allowedCommands.has(item) && !(brief.changeClass === 'workflow_metadata' && /^git diff --check [0-9a-f]{40} -- .+$/.test(item))) || scenarios.some((item) => ![...matrix.scenarios, ...riskScenarios].includes(item))) fail('TaskBrief.validationPlan command/scenario is in the wrong collection');
+  for (const item of matrix.commands) if (!commands.includes(item) && !Object.hasOwn(na, item)) fail(`TaskBrief.validationPlan omits required command: ${item}`);
+  for (const item of nonWaivableScenarios) if (!scenarios.includes(item)) fail(`TaskBrief.validationPlan scenario cannot be N/A: ${item}`);
+  for (const item of matrix.nonWaivableCommands ?? []) if (!commands.includes(item)) fail(`TaskBrief.validationPlan command cannot be N/A: ${item}`);
+  if (legacyTouched) for (const item of LEGACY_WORKSPACE_COMMANDS) if (!commands.includes(item)) fail(`TaskBrief.validationPlan legacy workspace command cannot be N/A: ${item}`);
+  if (brief.changeClass === 'persistence_migration' && !(brief.riskDimensions.persistedData || brief.riskDimensions.historicalSnapshots)) fail('persistence_migration requires persistedData or historicalSnapshots risk');
+  if (brief.changeClass === 'authorization_shared_write' && !(brief.riskDimensions.authorization || brief.riskDimensions.concurrency)) fail('authorization_shared_write requires authorization or concurrency risk');
+  if (brief.changeClass === 'external_side_effect' && !brief.riskDimensions.externalSideEffects) fail('external_side_effect requires externalSideEffects risk');
 }
+function isUserVisiblePath(repoPath) {
+  return repoPath.startsWith('apps/web/') || repoPath.startsWith('packages/ui/') || repoPath.startsWith('legacy-workspace/apps/web/') || repoPath.startsWith('legacy-workspace/packages/ui/') || /\.(?:tsx|jsx|css|scss|sass|less|html)$/.test(repoPath);
+}
+function dynamicDiffCommand(baseSha, ownedPaths) { return `git diff --check ${baseSha} -- ${ownedPaths.join(' ')}`; }
 function sectionIdsFromNavigation(root) {
-  return new Set(buildNavigationIndex(root).headings.map((heading) => heading.title.match(/^(\d+(?:\.\d+)*)\./)?.[1]).filter(Boolean));
+  return new Set(buildNavigationIndex(root).headings.map((heading) => heading.title.match(/^(\d+(?:\.\d+)*)(?:\.|\s)/)?.[1]).filter(Boolean));
 }
 export function openRegistryHash(root = repositoryRoot()) { return sha256(Buffer.from(canonicalJson(buildNavigationIndex(root).openRegistry), 'utf8')); }
 function validateOpenDecisionCheck(root, value, relevantSections) {
@@ -269,7 +344,7 @@ export function checkTaskBrief({ root = repositoryRoot(), brief }) {
   const phase = requireString(brief.phase, 'TaskBrief.phase');
   if (!['pre_dispatch', 'verdict'].includes(phase)) fail('TaskBrief.phase must be pre_dispatch or verdict');
   if (!['local', 'issue', 'pull_request'].includes(workflowMode)) fail('TaskBrief.workflowMode must be local, issue, or pull_request');
-  const baseKeys = ['schema', 'taskId', 'workflowMode', 'phase', 'specSha256', 'baseSha', 'reviewedHead', 'scope', 'relevantSections', 'openDecisionCheck', 'riskProfile', 'scopeHasRuntimeSemantics', 'acceptanceCriteria', 'exclusions', 'risks', 'validation', 'specReadReceipts', 'ownedPaths', 'preexistingOwnedPaths', 'preexistingUnownedChanges', 'dirtyWorktreeDisposition'];
+  const baseKeys = ['schema', 'taskId', 'workflowMode', 'phase', 'specSha256', 'baseSha', 'reviewedHead', 'scope', 'relevantSections', 'openDecisionCheck', 'riskProfile', 'scopeHasRuntimeSemantics', 'changeClass', 'allowedChanges', 'acceptanceCriteria', 'exclusions', 'riskDimensions', 'validationPlan', 'specReadReceipts', 'ownedPaths', 'preexistingOwnedPaths', 'preexistingUnownedChanges', 'dirtyWorktreeDisposition'];
   const hasPreexistingOwned = workflowMode === 'local' && Array.isArray(brief.preexistingOwnedPaths) && brief.preexistingOwnedPaths.length > 0;
   requireExactKeys(brief, hasPreexistingOwned ? [...baseKeys, 'preTaskOwnedBaselineManifest', 'preTaskOwnedBaselineHash'] : baseKeys, 'TaskBrief');
   requireCurrentSpecHash(root, brief.specSha256);
@@ -277,7 +352,9 @@ export function checkTaskBrief({ root = repositoryRoot(), brief }) {
   if (workflowMode !== 'local' && (!/^[0-9a-f]{40}$/.test(brief.reviewedHead ?? '') || !/^[0-9a-f]{40}$/.test(brief.baseSha ?? ''))) fail('Issue/PR TaskBrief baseSha and reviewedHead must be exact 40-hex commits');
   const reviewedHead = validateIdentity(root, brief.reviewedHead, 'TaskBrief.reviewedHead', true);
   if (workflowMode === 'local' && reviewedHead !== 'WORKTREE' && reviewedHead !== git(root, ['rev-parse', 'HEAD']).toString('utf8').trim()) fail('Local TaskBrief.reviewedHead must be the current HEAD or explicit WORKTREE');
-  validateBriefNarrative(brief);
+  const ownedPaths = requireStringArray(brief.ownedPaths, 'TaskBrief.ownedPaths');
+  const legacyTouched = ownedPaths.some((owned) => owned.startsWith('legacy-workspace/'));
+  validateBriefNarrative(brief, { legacyTouched });
   const relevantSections = requireNonEmptyStringArray(brief.relevantSections, 'TaskBrief.relevantSections');
   const knownSections = sectionIdsFromNavigation(root);
   if (!relevantSections.every((section) => knownSections.has(section))) fail('TaskBrief.relevantSections contains a section absent from current v3 navigation');
@@ -286,9 +363,18 @@ export function checkTaskBrief({ root = repositoryRoot(), brief }) {
   if (!['workflow_docs_metadata', 'runtime_product_domain', 'durable_migration', 'concurrency_auth', 'publication_export_external', 'unknown_high_risk'].includes(riskProfile)) fail('TaskBrief.riskProfile is invalid');
   if (typeof brief.scopeHasRuntimeSemantics !== 'boolean') fail('TaskBrief.scopeHasRuntimeSemantics must be boolean');
   if (riskProfile === 'workflow_docs_metadata' && brief.scopeHasRuntimeSemantics) fail('workflow_docs_metadata TaskBrief cannot claim runtime semantics');
-  const ownedPaths = requireStringArray(brief.ownedPaths, 'TaskBrief.ownedPaths');
+  if (!sameSet(ownedPaths, brief.allowedChanges)) fail('TaskBrief.allowedChanges must UTF-8-set exactly equal ownedPaths');
+  if (brief.changeClass === 'workflow_metadata') {
+    if (riskProfile !== 'workflow_docs_metadata' || brief.scopeHasRuntimeSemantics) fail('workflow_metadata requires workflow_docs_metadata with no runtime semantics');
+  } else if (riskProfile === 'workflow_docs_metadata' || !brief.scopeHasRuntimeSemantics) {
+    fail('Non-workflow changeClass requires a non-workflow riskProfile and runtime semantics');
+  }
   const classification = classifyOwnedPaths(ownedPaths);
+  if (brief.changeClass === 'workflow_metadata' && !classification.scopedEligible) fail('workflow_metadata may own only scoped governance paths');
   if (!classification.scopedEligible && (!brief.scopeHasRuntimeSemantics || riskProfile === 'workflow_docs_metadata')) fail('TaskBrief owned paths require runtime/high-risk declaration and non-workflow riskProfile');
+  if (ownedPaths.some(isUserVisiblePath) && !brief.riskDimensions.userVisible) fail('User-visible owned paths require userVisible risk');
+  const dynamicDiff = dynamicDiffCommand(baseSha, ownedPaths);
+  if (brief.changeClass === 'workflow_metadata' && !brief.validationPlan.requiredCommands.includes(dynamicDiff)) fail(`TaskBrief.validationPlan command cannot be N/A: ${dynamicDiff}`);
   const preexistingOwnedPaths = requireStringArray(brief.preexistingOwnedPaths, 'TaskBrief.preexistingOwnedPaths');
   requireStringArray(brief.preexistingUnownedChanges, 'TaskBrief.preexistingUnownedChanges');
   if (!preexistingOwnedPaths.every((item) => ownedPaths.includes(item))) fail('TaskBrief.preexistingOwnedPaths must be owned paths');
@@ -369,10 +455,17 @@ export function checkPolicy(root = repositoryRoot()) {
     pullRequest: { owner: 'agent-pr-loop', reviewer: 'agent-pr-loop' },
     reviewSeverity: { passBlocking: ['P0', 'P1', 'P2'], p3: 'informational' },
     scopedEligibility: { allowedPathClasses: ['AGENTS.md', '.codex/skills/tackle-agent-workflow/**', 'docs/(workflow|agent-governance)-*.md', '.github/*.md|yml|yaml'], unknownForcesFull: true },
-    specReceipt: { schema: SPEC_READ_SCHEMA }, taskBrief: { closedSchema: true, openDecisionCheck: true, phaseReceipts: { pre_dispatch: ['coordinator'], verdict: ['coordinator', 'coding', 'review'] }, receiptRiskAuthority: true, schema: TASK_BRIEF_SCHEMA },
+    specReceipt: { schema: SPEC_READ_SCHEMA }, taskBrief: { allowedChangesEqualsOwnedPaths: true, closedSchema: true, conditionalNaApplicability: CONDITIONAL_NA_APPLICABILITY, conditionalNaCatalog: { legacyWorkspaceCi: 'legacy_workspace_ci', productRuntimeTests: 'product_runtime_tests' }, openDecisionCheck: true, phaseReceipts: { pre_dispatch: ['coordinator'], verdict: ['coordinator', 'coding', 'review'] }, receiptRiskAuthority: true, schema: TASK_BRIEF_SCHEMA, structuredFields: ['changeClass', 'allowedChanges', 'riskDimensions', 'validationPlan'] }, validationMatrix: { commandsAndScenariosSeparated: true, legacyWorkspaceCommands: LEGACY_WORKSPACE_COMMANDS, mandatoryWorkflowCommands: MANDATORY_WORKFLOW_COMMANDS, prFinalCommandsNonWaivable: ['npm run typecheck', 'npm run lint', 'npm test'], triggeredCannotBeNa: true, triggeredScenariosNonWaivable: true, userVisiblePathClassifier: 'tsx_jsx_css_scss_sass_less_html_and_ui_roots', userVisibleScenario: 'unified_visual_review_pending_or_completed', workflowMetadataDynamicDiff: true },
     visual: { minimalSmokeCompletesReview: false, pendingMarker: '视觉与交互统一检查待执行' },
   };
   if (canonicalJson(policy) !== canonicalJson(expectedPolicy)) fail('Workflow policy drift: canonical AGENTS policy differs');
+  const expectedSkillTaskBriefRef = { conditionalNaApplicability: policy.taskBrief.conditionalNaApplicability, conditionalNaCatalog: policy.taskBrief.conditionalNaCatalog, legacyWorkspaceCommands: policy.validationMatrix.legacyWorkspaceCommands, triggeredCannotBeNa: policy.validationMatrix.triggeredCannotBeNa };
+  const skillTaskBrief = boundedSection(skill, '## Establish the TaskBrief', '## Spec receipts and worktree isolation');
+  const skillTaskBriefMatches = [...skillTaskBrief.content.matchAll(/<!-- workflow-contract-task-brief-ref\/v1\n([\s\S]*?)\n-->/g)];
+  if (skillTaskBriefMatches.length !== 1) fail('Workflow policy drift: Skill TaskBrief policy reference is missing or ambiguous');
+  let skillTaskBriefRef;
+  try { skillTaskBriefRef = JSON.parse(skillTaskBriefMatches[0][1]); } catch { fail('Workflow policy drift: Skill TaskBrief policy reference is invalid JSON'); }
+  if (canonicalJson(skillTaskBriefRef) !== canonicalJson(expectedSkillTaskBriefRef)) fail('Workflow policy drift: Skill TaskBrief policy reference differs from AGENTS');
   const projectSkills = boundedSection(agents, '## 项目级 Agent Skills', '## Tackle 工作流契约');
   const expectedProjectTackle = '- 对本仓库中的实现、修复或重构，`$tackle-agent-workflow`为所有路由提供项目约束与 TaskBrief；只有本地路由使用其编码与独立本地审核。Issue 与 PR 路由仍分别遵循`$agent-issue-loop`和`$agent-pr-loop`；仓库的合并、发布和部署门禁不因项目级Skill存在而放宽。';
   if (!projectSkills.content.includes(expectedProjectTackle) || projectSkills.content.includes('`$tackle-agent-workflow`编排不同的编码与只读审核Agent')) fail('Workflow policy drift: broad project Skill statement differs');

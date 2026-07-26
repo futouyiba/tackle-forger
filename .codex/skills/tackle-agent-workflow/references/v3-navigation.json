@@ -30,7 +30,7 @@
       "id": "OPEN-001",
       "status": "DECIDED_PENDING_POLICY_VERSION",
       "line": 1423,
-      "raw": "| OPEN-001 降低型词条叠加 | 产品决策 / 规则源待迁移 | `DECIDED_PENDING_POLICY_VERSION` | 全局唯一使用`bidirectional_ratio`，完整顺序为`set → 百分比 → 固定值 → clamp_add → FinalReviewPatch → ParameterDefinition`；不得按参数或词条族切换 | 权威主工作簿尚无机器可读策略行，或没有已发布`ReductionStackingPolicyVersion`时，只允许明确标记的非正式预览，产生不可waive的PUBLISH BLOCKER并禁止新Model和Snapshot发布 | 2026-07-23用户确认；外部工作簿revision `17173`仅作决策证据；将规则迁入主工作簿`04_词条/zrVOxd`的稳定机器区域，显式拉取、校验、发布策略版本并通过公式、边界、数值域、迁移和冻结回归后才能改为`RESOLVED` |"
+      "raw": "| OPEN-001 降低型词条叠加 | 产品决策 / 规则源待迁移 | `DECIDED_PENDING_POLICY_VERSION` | 全局唯一使用`bidirectional_ratio`，完整顺序为`set → 百分比 → 固定值 → clamp_add → FinalReviewPatch → ParameterDefinition`；不得按参数或词条族切换 | 权威主工作簿尚无机器可读策略行，或没有已发布`ReductionStackingPolicyVersion`时，只允许明确标记的非正式预览，产生不可waive的PUBLISH BLOCKER并禁止新Model和Snapshot发布 | 2026-07-23用户确认；外部工作簿revision `17173`仅作决策证据；将规则迁入主工作簿`04_词条`（词条表）的稳定机器区域，显式拉取、校验、发布策略版本并通过公式、边界、数值域、迁移和冻结回归后才能改为`RESOLVED` |"
     },
     {
       "id": "OPEN-002",
@@ -84,7 +84,7 @@
       "id": "OPEN-010",
       "status": "BLOCKED_ON_SOURCE_SCHEMA",
       "line": 1432,
-      "raw": "| OPEN-010 飞书Patch台账远端契约 | 外部规则源阻断 | `BLOCKED_ON_SOURCE_SCHEMA` | 已确认`Patch台账/edyFx9`、`A:AK`机器区、`AM:BA`协作事件区、哈希/并发/幂等/补偿/rebase契约；权限引用`separation-of-duties/open009-v1`；不触达飞书的契约实现/测试可继续，但本地PatchLedger、协作事件流、旧版写入/拉取及未实现动作均不得标记为符合或可用 | 本地`PatchOperationRecord`、PatchLedger schema/migration及operation/revision/Snapshot哈希完成`workspaceId`与JCS契约升级前，镜像链路保持禁用；不可变协作事件存储、事务内compare-and-append、`collaborationRevision`/幂等/冲突/`supersedesEventId`校验和action availability完成前，协作写入保持禁用；远端表头、保护边界和连接器联调完成前，真实写入/拉取保持禁用；旧版写入/拉取完成远端schema、IssueCode及ActionCode/Capability升级前保持禁用；`inspect_patch_mirror`、`repair_patch_mirror`、`rebuild_patch_mirror_from_local`、`fix_patch_mirror_schema`、`migrate_patch_subject`的服务端定义、Capability门禁和测试完成前，对应动作也保持禁用；不得伪造SYNCED | 先以版本化迁移补齐本地工作区归属和新哈希，同时保持既有revision、Snapshot引用及历史哈希证据不可变；实现本地协作事件原子追加、先本地提交后镜像及重复重试/双客户端冲突回归；按第14.4节物化远端schema并完成写入、回读、缺行、篡改、hash、跨工作区隔离和并发联调；升级写入/拉取并实现、测试全部镜像/迁移ActionCode、Capability映射、二次确认和审计证据；连接器及运行时实现使用独立Issue/PR跟踪 |"
+      "raw": "| OPEN-010 飞书Patch台账远端契约 | 外部规则源阻断 | `BLOCKED_ON_SOURCE_SCHEMA` | 已确认`Patch台账`、`A:AK`机器区、`AM:BA`协作事件区、哈希/并发/幂等/补偿/rebase契约；权限引用`separation-of-duties/open009-v1`；不触达飞书的契约实现/测试可继续，但本地PatchLedger、协作事件流、旧版写入/拉取及未实现动作均不得标记为符合或可用 | 本地`PatchOperationRecord`、PatchLedger schema/migration及operation/revision/Snapshot哈希完成`workspaceId`与JCS契约升级前，镜像链路保持禁用；不可变协作事件存储、事务内compare-and-append、`collaborationRevision`/幂等/冲突/`supersedesEventId`校验和action availability完成前，协作写入保持禁用；远端表头、保护边界和连接器联调完成前，真实写入/拉取保持禁用；旧版写入/拉取完成远端schema、IssueCode及ActionCode/Capability升级前保持禁用；`inspect_patch_mirror`、`repair_patch_mirror`、`rebuild_patch_mirror_from_local`、`fix_patch_mirror_schema`、`migrate_patch_subject`的服务端定义、Capability门禁和测试完成前，对应动作也保持禁用；不得伪造SYNCED | 先以版本化迁移补齐本地工作区归属和新哈希，同时保持既有revision、Snapshot引用及历史哈希证据不可变；实现本地协作事件原子追加、先本地提交后镜像及重复重试/双客户端冲突回归；按第14.4节物化远端schema并完成写入、回读、缺行、篡改、hash、跨工作区隔离和并发联调；升级写入/拉取并实现、测试全部镜像/迁移ActionCode、Capability映射、二次确认和审计证据；连接器及运行时实现使用独立Issue/PR跟踪 |"
     },
     {
       "id": "OPEN-011",
@@ -98,7 +98,7 @@
       "id": "OPEN-001",
       "status": "DECIDED_PENDING_POLICY_VERSION",
       "line": 1423,
-      "raw": "| OPEN-001 降低型词条叠加 | 产品决策 / 规则源待迁移 | `DECIDED_PENDING_POLICY_VERSION` | 全局唯一使用`bidirectional_ratio`，完整顺序为`set → 百分比 → 固定值 → clamp_add → FinalReviewPatch → ParameterDefinition`；不得按参数或词条族切换 | 权威主工作簿尚无机器可读策略行，或没有已发布`ReductionStackingPolicyVersion`时，只允许明确标记的非正式预览，产生不可waive的PUBLISH BLOCKER并禁止新Model和Snapshot发布 | 2026-07-23用户确认；外部工作簿revision `17173`仅作决策证据；将规则迁入主工作簿`04_词条/zrVOxd`的稳定机器区域，显式拉取、校验、发布策略版本并通过公式、边界、数值域、迁移和冻结回归后才能改为`RESOLVED` |"
+      "raw": "| OPEN-001 降低型词条叠加 | 产品决策 / 规则源待迁移 | `DECIDED_PENDING_POLICY_VERSION` | 全局唯一使用`bidirectional_ratio`，完整顺序为`set → 百分比 → 固定值 → clamp_add → FinalReviewPatch → ParameterDefinition`；不得按参数或词条族切换 | 权威主工作簿尚无机器可读策略行，或没有已发布`ReductionStackingPolicyVersion`时，只允许明确标记的非正式预览，产生不可waive的PUBLISH BLOCKER并禁止新Model和Snapshot发布 | 2026-07-23用户确认；外部工作簿revision `17173`仅作决策证据；将规则迁入主工作簿`04_词条`（词条表）的稳定机器区域，显式拉取、校验、发布策略版本并通过公式、边界、数值域、迁移和冻结回归后才能改为`RESOLVED` |"
     },
     {
       "id": "OPEN-002",
@@ -152,7 +152,7 @@
       "id": "OPEN-010",
       "status": "BLOCKED_ON_SOURCE_SCHEMA",
       "line": 1432,
-      "raw": "| OPEN-010 飞书Patch台账远端契约 | 外部规则源阻断 | `BLOCKED_ON_SOURCE_SCHEMA` | 已确认`Patch台账/edyFx9`、`A:AK`机器区、`AM:BA`协作事件区、哈希/并发/幂等/补偿/rebase契约；权限引用`separation-of-duties/open009-v1`；不触达飞书的契约实现/测试可继续，但本地PatchLedger、协作事件流、旧版写入/拉取及未实现动作均不得标记为符合或可用 | 本地`PatchOperationRecord`、PatchLedger schema/migration及operation/revision/Snapshot哈希完成`workspaceId`与JCS契约升级前，镜像链路保持禁用；不可变协作事件存储、事务内compare-and-append、`collaborationRevision`/幂等/冲突/`supersedesEventId`校验和action availability完成前，协作写入保持禁用；远端表头、保护边界和连接器联调完成前，真实写入/拉取保持禁用；旧版写入/拉取完成远端schema、IssueCode及ActionCode/Capability升级前保持禁用；`inspect_patch_mirror`、`repair_patch_mirror`、`rebuild_patch_mirror_from_local`、`fix_patch_mirror_schema`、`migrate_patch_subject`的服务端定义、Capability门禁和测试完成前，对应动作也保持禁用；不得伪造SYNCED | 先以版本化迁移补齐本地工作区归属和新哈希，同时保持既有revision、Snapshot引用及历史哈希证据不可变；实现本地协作事件原子追加、先本地提交后镜像及重复重试/双客户端冲突回归；按第14.4节物化远端schema并完成写入、回读、缺行、篡改、hash、跨工作区隔离和并发联调；升级写入/拉取并实现、测试全部镜像/迁移ActionCode、Capability映射、二次确认和审计证据；连接器及运行时实现使用独立Issue/PR跟踪 |"
+      "raw": "| OPEN-010 飞书Patch台账远端契约 | 外部规则源阻断 | `BLOCKED_ON_SOURCE_SCHEMA` | 已确认`Patch台账`、`A:AK`机器区、`AM:BA`协作事件区、哈希/并发/幂等/补偿/rebase契约；权限引用`separation-of-duties/open009-v1`；不触达飞书的契约实现/测试可继续，但本地PatchLedger、协作事件流、旧版写入/拉取及未实现动作均不得标记为符合或可用 | 本地`PatchOperationRecord`、PatchLedger schema/migration及operation/revision/Snapshot哈希完成`workspaceId`与JCS契约升级前，镜像链路保持禁用；不可变协作事件存储、事务内compare-and-append、`collaborationRevision`/幂等/冲突/`supersedesEventId`校验和action availability完成前，协作写入保持禁用；远端表头、保护边界和连接器联调完成前，真实写入/拉取保持禁用；旧版写入/拉取完成远端schema、IssueCode及ActionCode/Capability升级前保持禁用；`inspect_patch_mirror`、`repair_patch_mirror`、`rebuild_patch_mirror_from_local`、`fix_patch_mirror_schema`、`migrate_patch_subject`的服务端定义、Capability门禁和测试完成前，对应动作也保持禁用；不得伪造SYNCED | 先以版本化迁移补齐本地工作区归属和新哈希，同时保持既有revision、Snapshot引用及历史哈希证据不可变；实现本地协作事件原子追加、先本地提交后镜像及重复重试/双客户端冲突回归；按第14.4节物化远端schema并完成写入、回读、缺行、篡改、hash、跨工作区隔离和并发联调；升级写入/拉取并实现、测试全部镜像/迁移ActionCode、Capability映射、二次确认和审计证据；连接器及运行时实现使用独立Issue/PR跟踪 |"
     },
     {
       "id": "OPEN-011",
@@ -181,7 +181,7 @@
   },
   "source": {
     "path": "docs/tackle-forger-development-spec-v3.md",
-    "sha256": "69fdf3a5a9b4cbb39b31af135ce468fbf750ef093eb61fac6972a2e0a0c839c6"
+    "sha256": "6ed170f90bbce797deedcca6adf3e47f3f749bfb3f8fb78870d1e4ea8cc3e19f"
   },
   "headings": [
     {

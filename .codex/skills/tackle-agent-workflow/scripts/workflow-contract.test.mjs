@@ -5,7 +5,7 @@ import { appendFileSync, chmodSync, existsSync, mkdtempSync, mkdirSync, readFile
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { buildNavigationIndex, buildOwnedBaselineManifest, buildPatchManifest, checkFullReadSession, checkNavigationIndex, checkOwnedWhitespace, checkPolicy, checkReadReceipt, checkTaskBrief, checkVerdict, fullReadSessionHash, openRegistryHash, ownedBaselineHash, patchHash, prepareTaskBrief, promoteTaskBrief, receiptHash, runCli, runValidation, specReadPlan, taskBriefHash, validationExecutionPlan, writeNavigationIndex } from './workflow-contract.mjs';
+import { buildNavigationIndex, buildOwnedBaselineManifest, buildPatchManifest, checkFullReadSession, checkNavigationIndex, checkOwnedWhitespace, checkPolicy, checkReadReceipt, checkTaskBrief, checkVerdict, classifyOwnedPaths, fullReadSessionHash, openRegistryHash, ownedBaselineHash, patchHash, prepareTaskBrief, promoteTaskBrief, receiptHash, runCli, runValidation, specReadPlan, taskBriefHash, VALIDATION_EXECUTION_TIERS, validationExecutionPlan, writeNavigationIndex } from './workflow-contract.mjs';
 
 function command(root, args) { return execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim(); }
 function ownedWhitespaceCommand(baseSha, ownedPaths) { return `node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-owned-whitespace --base ${baseSha} ${ownedPaths.flatMap((owned) => ['--owned', owned]).join(' ')}`; }
@@ -313,10 +313,11 @@ test('policy checker detects required workflow markers', () => {
     const canonicalAgents = readFileSync(path.resolve(process.cwd(), 'AGENTS.md'), 'utf8');
     const agents = `${project}\n## Tackle 工作流契约\n- \`$tackle-agent-workflow\`提供项目约束和 TaskBrief；仅本地路由使用其编码与独立本地审核。Issue 生命周期归\`$agent-issue-loop\`，PR 审核/CI/修复归\`$agent-pr-loop\`；已有 PR 直接使用后者。不得增加第二个独立审核者。\n<!-- workflow-contract-policy/v2\n{"dirtyIsolation":{"issuePr":"clean_synced","localOwnedBaseline":"tackle-owned-baseline/v1"},"issue":{"localReviewer":false,"owner":"agent-issue-loop","prReviewer":"agent-pr-loop"},"local":{"independentReviewer":true,"owner":"tackle-agent-workflow"},"localVerdict":{"required":["taskBriefSha256","specReceiptHashes","dirtyWorktreeDisposition","specSha256","baseSha","reviewedHead","ownedPaths","patchHash"],"schema":"tackle-local-verdict/v1"},"pullRequest":{"owner":"agent-pr-loop","reviewer":"agent-pr-loop"},"reviewSeverity":{"passBlocking":["P0","P1","P2"],"p3":"informational"},"scopedEligibility":{"allowedPathClasses":["AGENTS.md",".codex/skills/tackle-agent-workflow/**","docs/(workflow|agent-governance)-*.md",".github/*.md|yml|yaml"],"unknownForcesFull":true},"specReceipt":{"schema":"tackle-spec-read/v1"},"taskBrief":{"closedSchema":true,"openDecisionCheck":true,"phaseReceipts":{"pre_dispatch":["coordinator"],"verdict":["coordinator","coding","review"]},"receiptRiskAuthority":true,"schema":"tackle-task-brief/v1","structuredFields":["changeClass","allowedChanges","riskDimensions","validationPlan"]},"validationMatrix":{"commandsAndScenariosSeparated":true,"prFinalCommandsNonWaivable":["npm run typecheck","npm run lint","npm test"],"userVisibleScenario":"unified_visual_review_pending_or_completed"},"visual":{"minimalSmokeCompletesReview":false,"pendingMarker":"视觉与交互统一检查待执行"}}\n-->\n## 本机凭据与多 worktree\n`;
     const skill = '<!-- workflow-contract-policy-ref: AGENTS.md/workflow-contract-policy/v2 -->\n\n## Route before dispatch\n\n- **Local implementation, no Issue or PR:** this Skill owns one coding agent and one independent local reviewer.\n- **Issue delivery:** `$agent-issue-loop` owns Issue, branch, PR, closure, and handoff. Supply it this Skill\'s TaskBrief; do not start a local independent reviewer. Once a PR exists, `$agent-pr-loop` exclusively owns review, CI, fixes, and merge gates.\n- **Existing PR:** invoke `$agent-pr-loop` directly and supply the TaskBrief. Do not create a coding or review loop here.\n\n## Establish the TaskBrief\n\n<!-- workflow-contract-task-brief-ref/v1\n{"conditionalNaApplicability":{"legacyTouchedForbids":"legacy_workspace_ci","nonLegacyRequires":"legacy_workspace_ci","nonWorkflowForbids":"product_runtime_tests","workflowMetadataRequires":"product_runtime_tests"},"conditionalNaCatalog":{"legacyWorkspaceCi":"legacy_workspace_ci","productRuntimeTests":"product_runtime_tests"},"evidenceStages":{"development":"pre_dispatch_non_pr_final","localReviewHandoff":"local_verdict","prFinal":"pr_final_change_class"},"legacyWorkspaceCommands":["node --test tests/package-manager-boundaries.test.mjs","pnpm --dir legacy-workspace install --frozen-lockfile","pnpm --dir legacy-workspace --filter \'@tackle-forger/*\' typecheck","pnpm --dir legacy-workspace --filter \'@tackle-forger/*\' lint","pnpm --dir legacy-workspace --filter \'@tackle-forger/*\' test","pnpm --dir legacy-workspace --filter \'@tackle-forger/*\' build"],"triggeredCannotBeNa":true}\n-->\n\n## Spec receipts and worktree isolation\n';
+    const canonicalSkill = readFileSync(path.resolve(process.cwd(), '.codex/skills/tackle-agent-workflow/SKILL.md'), 'utf8');
     const yaml = 'interface:\n  display_name: "Tackle Agent Workflow"\n  short_description: "Prepare scoped work and locally review implementation"\n  default_prompt: "Use $tackle-agent-workflow to prepare the TaskBrief, choose the correct local, Issue, or PR route, and run only the applicable workflow. Preserve the pending unified visual-review marker unless full visual work is explicitly scoped."\n';
     const template = '## Visual evidence\n\n| Unified visual and interaction review | 视觉与交互统一检查待执行 / Full visual and interaction review completed |\n| Minimal render smoke | Not run / Completed; this never changes the unified-review status |\n\n## Risks, recovery, and rollback\n';
     write(root, 'AGENTS.md', canonicalAgents);
-    write(root, '.codex/skills/tackle-agent-workflow/SKILL.md', skill);
+    write(root, '.codex/skills/tackle-agent-workflow/SKILL.md', canonicalSkill);
     write(root, '.github/pull_request_template.md', template);
     write(root, '.codex/skills/tackle-agent-workflow/agents/openai.yaml', yaml);
     assert.equal(checkPolicy(root), true);
@@ -328,22 +329,71 @@ test('policy checker detects required workflow markers', () => {
     write(root, 'AGENTS.md', canonicalAgents);
     appendFileSync(path.join(root, '.codex/skills/tackle-agent-workflow/SKILL.md'), 'Issue delivery uses a local independent reviewer.\n');
     assert.throws(() => checkPolicy(root), /contradictory normative text/);
-    write(root, '.codex/skills/tackle-agent-workflow/SKILL.md', skill);
-    write(root, '.codex/skills/tackle-agent-workflow/SKILL.md', skill.replace('"productRuntimeTests":"product_runtime_tests"', '"productRuntimeTests":"wrong_catalog_id"'));
+    write(root, '.codex/skills/tackle-agent-workflow/SKILL.md', canonicalSkill);
+    write(root, '.codex/skills/tackle-agent-workflow/SKILL.md', canonicalSkill.replace('"productRuntimeTests":"product_runtime_tests"', '"productRuntimeTests":"wrong_catalog_id"'));
     assert.throws(() => checkPolicy(root), /TaskBrief policy reference differs/);
-    write(root, '.codex/skills/tackle-agent-workflow/SKILL.md', skill.replace('node --test tests/package-manager-boundaries.test.mjs', 'node --test tests/missing-boundaries.test.mjs'));
+    write(root, '.codex/skills/tackle-agent-workflow/SKILL.md', canonicalSkill.replaceAll('node --test tests/package-manager-boundaries.test.mjs', 'node --test tests/missing-boundaries.test.mjs'));
     assert.throws(() => checkPolicy(root), /TaskBrief policy reference differs/);
-    write(root, '.codex/skills/tackle-agent-workflow/SKILL.md', skill.replace('"workflowMetadataRequires":"product_runtime_tests"', '"workflowMetadataRequires":"legacy_workspace_ci"'));
+    write(root, '.codex/skills/tackle-agent-workflow/SKILL.md', canonicalSkill.replace('"workflowMetadataRequires":"product_runtime_tests"', '"workflowMetadataRequires":"legacy_workspace_ci"'));
     assert.throws(() => checkPolicy(root), /TaskBrief policy reference differs/);
-    write(root, '.codex/skills/tackle-agent-workflow/SKILL.md', skill.replace('"triggeredCannotBeNa":true', '"triggeredCannotBeNa":false'));
+    write(root, '.codex/skills/tackle-agent-workflow/SKILL.md', canonicalSkill.replace('"triggeredCannotBeNa":true', '"triggeredCannotBeNa":false'));
     assert.throws(() => checkPolicy(root), /TaskBrief policy reference differs/);
-    write(root, '.codex/skills/tackle-agent-workflow/SKILL.md', skill);
+    write(root, '.codex/skills/tackle-agent-workflow/SKILL.md', canonicalSkill);
     appendFileSync(path.join(root, '.codex/skills/tackle-agent-workflow/agents/openai.yaml'), 'Always inspect rendered UI for every route.\n');
     assert.throws(() => checkPolicy(root), /Workflow policy drift/);
     write(root, '.codex/skills/tackle-agent-workflow/agents/openai.yaml', yaml);
     appendFileSync(path.join(root, '.github/pull_request_template.md'), 'Minimal render smoke replaces the pending unified visual review.\n');
     assert.throws(() => checkPolicy(root), /Workflow policy drift/);
   } finally { cleanup(root); }
+});
+
+test('validation execution tiers keep routine work targeted and full CI at stable boundaries', () => {
+  assert.deepEqual(Object.keys(VALIDATION_EXECUTION_TIERS), [
+    'inspection_only',
+    'documentation_or_nonbehavior_workflow',
+    'focused_script_or_rule',
+    'deployment_configuration',
+    'business_code',
+    'durable_or_external',
+    'stable_pr_candidate',
+    'rebase_refresh',
+  ]);
+  assert.equal(VALIDATION_EXECUTION_TIERS.inspection_only.iterationFullCi, 'forbidden');
+  assert.equal(VALIDATION_EXECUTION_TIERS.documentation_or_nonbehavior_workflow.iterationFullCi, 'forbidden');
+  assert.deepEqual(VALIDATION_EXECUTION_TIERS.focused_script_or_rule.requiredEvidence, ['targeted_test']);
+  assert.deepEqual(VALIDATION_EXECUTION_TIERS.deployment_configuration.requiredEvidence, ['config_validation', 'service_restart', 'actual_listener', 'health_check']);
+  assert.deepEqual(VALIDATION_EXECUTION_TIERS.business_code.requiredEvidence, ['typecheck', 'lint', 'related_tests']);
+  assert.deepEqual(VALIDATION_EXECUTION_TIERS.durable_or_external.requiredEvidence, ['boundary', 'failure_recovery', 'idempotency', 'readback']);
+  assert.equal(VALIDATION_EXECUTION_TIERS.stable_pr_candidate.candidateFullCi, 'once_per_exact_head_base');
+  assert.deepEqual(VALIDATION_EXECUTION_TIERS.stable_pr_candidate.requiredEvidence, ['root_full_ci', 'applicable_historical_ci', 'windows_policy']);
+  assert.equal(VALIDATION_EXECUTION_TIERS.rebase_refresh.candidateFullCi, 'broad_impact_or_new_stable_candidate');
+  assert.deepEqual(VALIDATION_EXECUTION_TIERS.rebase_refresh.requiredEvidence, ['actual_diff_classification', 'affected_checks']);
+  for (const changeType of ['business_code', 'deployment_configuration', 'durable_or_external']) {
+    assert.equal(VALIDATION_EXECUTION_TIERS[changeType].iterationFullCi, 'forbidden');
+    assert.equal(VALIDATION_EXECUTION_TIERS.stable_pr_candidate.candidateFullCi, 'once_per_exact_head_base');
+  }
+  assert.equal(VALIDATION_EXECUTION_TIERS.rebase_refresh.requiredEvidence.includes('affected_checks'), true);
+  assert.equal(VALIDATION_EXECUTION_TIERS.stable_pr_candidate.requiredEvidence.includes('root_full_ci'), true);
+});
+
+test('historical CI scope includes forbidden root pnpm metadata', () => {
+  const workflow = readFileSync(path.resolve(process.cwd(), '.github/workflows/ci.yml'), 'utf8');
+  const scopeBlock = workflow.match(/if git diff --quiet "\$base" "\$EXPECTED_HEAD" -- \\\n([\s\S]*?); then/);
+  assert.ok(scopeBlock, 'historical scope must use the guarded git diff invocation');
+  const pathspec = scopeBlock[1].replaceAll('\\\n', ' ').trim().split(/\s+/);
+  for (const forbiddenRootPnpmPath of ['pnpm-workspace.yaml', 'pnpm-lock.yaml']) {
+    assert.ok(pathspec.includes(forbiddenRootPnpmPath), `${forbiddenRootPnpmPath} must be in the executed pathspec`);
+    const root = temporaryRepo();
+    try {
+      write(root, 'README.md', 'base\n');
+      const base = commitBase(root);
+      write(root, forbiddenRootPnpmPath, 'packages: []\n');
+      command(root, ['add', forbiddenRootPnpmPath]);
+      command(root, ['commit', '-qm', `add ${forbiddenRootPnpmPath}`]);
+      const head = command(root, ['rev-parse', 'HEAD']);
+      assert.throws(() => command(root, ['diff', '--quiet', base, head, '--', ...pathspec]));
+    } finally { cleanup(root); }
+  }
 });
 
 test('spec-read receipts enforce full/scoped plans and canonical v3 hash', () => {
@@ -690,6 +740,33 @@ test('SCOPED eligibility, clean Issue/PR routing, sections, OPEN IDs, and receip
   try {
     taskBase(root);
     const local = brief(root);
+    assert.deepEqual(classifyOwnedPaths(['.github/workflows/ci.yml']), { scopedEligible: true, unrecognizedPaths: [] });
+    assert.deepEqual(classifyOwnedPaths(['.github/nested/arbitrary.md']), { scopedEligible: false, unrecognizedPaths: ['.github/nested/arbitrary.md'] });
+    assert.deepEqual(classifyOwnedPaths(['.github/workflows/nested/ci.yml']), { scopedEligible: false, unrecognizedPaths: ['.github/workflows/nested/ci.yml'] });
+    for (const malformed of [
+      '.codex/skills/tackle-agent-workflow/../../../lib/runtime.ts',
+      '../evil.md',
+      '.github/./workflows/ci.yml',
+      '.github//workflows/ci.yml',
+      '.github\\workflows\\ci.yml',
+      '/tmp/ci.yml',
+    ]) {
+      assert.deepEqual(classifyOwnedPaths([malformed]), { scopedEligible: false, unrecognizedPaths: [malformed] });
+      assert.throws(() => checkTaskBrief({ root, brief: { ...local, ownedPaths: [malformed], allowedChanges: [malformed] } }), /Invalid owned path/);
+    }
+    const workflowOwned = {
+      ...local,
+      ownedPaths: ['.github/workflows/ci.yml'],
+      allowedChanges: ['.github/workflows/ci.yml'],
+      validationPlan: {
+        ...local.validationPlan,
+        requiredCommands: [
+          ...local.validationPlan.requiredCommands.filter((item) => !item.includes('--check-owned-whitespace')),
+          ownedWhitespaceCommand(local.baseSha, ['.github/workflows/ci.yml']),
+        ],
+      },
+    };
+    assert.equal(checkTaskBrief({ root, brief: workflowOwned }).phase, 'pre_dispatch');
     assert.throws(() => checkTaskBrief({ root, brief: { ...local, ownedPaths: ['src/runtime.ts'], allowedChanges: ['src/runtime.ts'], validationPlan: { ...local.validationPlan, requiredCommands: [...local.validationPlan.requiredCommands.filter((item) => !item.includes('--check-owned-whitespace')), ownedWhitespaceCommand(local.baseSha, ['src/runtime.ts'])] } } }), /workflow_metadata may own only scoped/);
     assert.throws(() => checkTaskBrief({ root, brief: { ...local, ownedPaths: ['docs/tackle-forger-development-spec-v3.md'], allowedChanges: ['docs/tackle-forger-development-spec-v3.md'], validationPlan: { ...local.validationPlan, requiredCommands: [...local.validationPlan.requiredCommands.filter((item) => !item.includes('--check-owned-whitespace')), ownedWhitespaceCommand(local.baseSha, ['docs/tackle-forger-development-spec-v3.md'])] } } }), /workflow_metadata may own only scoped/);
     const runtimeReceipt = receipt(root, { riskProfile: 'runtime_product_domain', reason: 'runtime change' });

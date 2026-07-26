@@ -17,6 +17,30 @@ Use separate decisions for entering formal review and entering the merge path:
   findings and threads are settled, dependencies and the base are current, and
   the user has authorized the merge.
 
+## Validation cadence
+
+Full CI is a stable-candidate boundary, not a default development loop. Read-only
+fetch/compare/history/status work runs no CI. Documentation or non-behavioral
+workflow edits use format, reference, and scoped-diff checks; focused scripts or
+rules use targeted tests; deployment configuration uses configuration validation,
+service restart, actual-listener inspection, and a health check; business code
+uses typecheck, lint, and related tests; durable data, permission, or external
+writes additionally require boundary, failure-recovery, idempotency, and readback
+evidence. A rebase starts by classifying its actual diff and reruns only affected
+checks unless that diff is broad.
+
+These are two independent dimensions: an iteration classification that forbids
+full CI does not waive or prohibit the stable-candidate boundary. Business,
+deployment, and durable/external changes stay targeted while iterating, then still
+require one complete CI run when they become a stable exact head/base candidate.
+
+Run the complete PR CI once for a stable exact head/base candidate. A head or base
+change invalidates that identity and requires affected checks first; repeat full CI
+when the refreshed candidate is again stable, or when broad impact makes the full
+run necessary. The live merge checker still requires one eligible exact-head/base
+run containing every canonical job; this cadence never permits missing, stale,
+partial, or cross-run evidence.
+
 Do not require this merge checker to pass before removing Draft. The checker
 intentionally rejects Draft pull requests, while a high-risk review signal is
 normally collected after formal review begins. Requiring both in the opposite
@@ -113,6 +137,39 @@ prints a stable blocker code for every unmet condition and exits
 machine-readable output. Malformed pagination evidence also fails closed as an
 API error; a connection that declares another page must supply a non-empty
 cursor.
+
+### Historical workspace CI scope
+
+`Historical workspace (pnpm)` is always present in every pull-request and push
+run, so its exact job identity remains part of the merge-gate evidence. Before
+any expensive pnpm work, the job records an auditable scope decision against the
+immutable event head and base. It runs the full historical command set when a
+change touches a historical-workspace input: `apps/**`, `packages/**`,
+`legacy-workspace/**`, `tsconfig.base.json`, `vitest.workspace.config.ts`,
+`tests/package-manager-boundaries.test.mjs`, `package.json`, `package-lock.json`,
+`pnpm-workspace.yaml`, `pnpm-lock.yaml`, or `.github/workflows/ci.yml`. The
+explicit root files are the shared TypeScript and Vitest inputs plus the
+package-manager boundary test and its fixture inputs. The two root pnpm paths
+also make an attempted reintroduction of root pnpm metadata run the boundary
+test instead of receiving a false-green skip; all other direct workspace
+configuration is below the three directory prefixes.
+It also runs in full when either identity is missing, malformed, unavailable
+locally, the base is not an ancestor of the head, or Git cannot prove the path
+scope. This is intentionally fail-closed: only a proven nonlegacy diff may skip
+the expensive commands.
+
+The full command set is unchanged: boundary test, frozen-lockfile install, and
+workspace typecheck, lint, test, and build. A successful nonlegacy skip means
+only that the change cannot affect that isolated historical workspace by its
+owned path boundary; it is not evidence that the historical workspace itself
+was revalidated. Independent weekly and manually-dispatched workflow runs
+execute that full command set without also running the root npm or Windows jobs.
+
+The retained last full per-commit baseline is the immutable annotated tag
+`legacy-workspace-last-green-2026-07-26`, which resolves to
+`702938b36bed0c2ea5489238318778a18d53059f`. It is historical evidence for the
+initial scheduling change, not an override for the fail-closed event-time scope
+decision and not a substitute for weekly/manual full verification.
 
 ## Workflow governance path
 

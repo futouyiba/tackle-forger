@@ -1,0 +1,518 @@
+## 24. 交互与后端统一需求契约
+
+本节把第23节和UX定稿转成开发可直接实现的领域/API契约。“钓具系列甘特图”只是Series、SKU Drawer和Model的查询/导航投影，不新增领域实体；“AI评估与建议”只是带证据的辅助层，不新增规则裁决层。
+
+### 24.1 共同底座
+
+```ts
+interface EntityRef {
+  workspaceId: string;
+  entityType: "collection" | "series" | "sku_drawer" | "model"
+    | "configuration_snapshot" | "model_candidate" | "adjustment_patch"
+    | "upgrade_candidate" | "rule_source_change_draft" | "config_id_bundle"
+    | "config_id_policy" | "config_target_catalog" | "config_target_scan_manifest"
+    | "config_export_package";
+  entityId: string;
+  revisionId: string;
+}
+interface ActionAvailability {
+  action: ActionCode;
+  enabled: boolean;
+  requiredCapabilities: CapabilityCode[];
+  disabledReasonCode?: string;
+  disabledReasonText?: string;
+}
+type CapabilityCode =
+  | "series.read" | "series.edit" | "series.approve"
+  | "sku.read" | "sku.edit"
+  | "model.read" | "model.edit" | "model.review" | "model.publish"
+  | "candidate.generate" | "candidate.materialize" | "candidate.override_selection" | "candidate.dismiss"
+  | "model.patch.create" | "model.patch.review" | "patch.rebase"
+  | "patch.mirror.write" | "patch.mirror.pull" | "patch.mirror.inspect"
+  | "patch.mirror.repair" | "patch.mirror.rebuild_from_local" | "patch.mirror.schema.repair"
+  | "patch.subject.migrate"
+  | "snapshot.read" | "snapshot.audit_archive.download" | "snapshot.export"
+  | "ai.evaluate" | "ai.patch_draft.create" | "ai.rule_source_change_draft.create" | "ai.provider_policy.manage"
+  | "feishu.rule_change.confirm_write" | "feishu.source.pull" | "ruleset.publish"
+  | "config.id.reserve" | "config.id.policy.publish" | "config.id.legacy_import" | "config.id.ledger.correct"
+  | "config.target.scan" | "config.target.scan.approve" | "config.target.catalog.publish"
+  | "config.export.preview" | "config.export.commit"
+  | "validation.warning.acknowledge" | "pricing.warning.acknowledge"
+  | "validation.waiver.request" | "validation.waiver.approve"
+  | "validation.recompute" | "rules.source_change_draft.create"
+  | "rules.five_axis.publish" | "workspace.policy.manage";
+
+type ActionCode =
+  | "open_series" | "open_sku" | "preview_model"
+  | "edit" | "review" | "publish" | "generate_candidates"
+  | "materialize_candidates" | "override_candidate_selection" | "dismiss_candidate_run"
+  | "create_patch" | "review_patch" | "rebase_patch"
+  | "view_snapshot" | "download_snapshot_audit_archive" | "export_snapshot"
+  | "write_patch_mirror" | "pull_patch_mirror"
+  | "inspect_patch_mirror" | "repair_patch_mirror"
+  | "rebuild_patch_mirror_from_local" | "fix_patch_mirror_schema"
+  | "migrate_patch_subject"
+  | "run_ai_assessment" | "create_ai_patch_draft" | "create_ai_feishu_draft" | "manage_ai_provider_policy"
+  | "confirm_feishu_write" | "pull_feishu_source" | "publish_ruleset"
+  | "reserve_config_id_bundle" | "publish_config_id_policy"
+  | "import_legacy_config_id" | "correct_config_id_ledger_metadata"
+  | "scan_config_target" | "approve_config_target_scan" | "publish_config_target_catalog"
+  | "preview_config_export" | "commit_config_export"
+  | "acknowledge_validation_warning" | "acknowledge_price_warning"
+  | "request_validation_waiver" | "approve_validation_waiver"
+  | "recompute_validation" | "create_rule_source_change_draft"
+  | "publish_five_axis_definition" | "manage_workspace_policy";
+
+```
+
+配置身份治理、本节校验处置与Patch Rebase写动作固定映射为：
+
+| ActionCode | requiredCapabilities |
+| --- | --- |
+| `reserve_config_id_bundle` | `config.id.reserve` |
+| `publish_config_id_policy` | `config.id.policy.publish` |
+| `import_legacy_config_id` | `config.id.legacy_import` |
+| `correct_config_id_ledger_metadata` | `config.id.ledger.correct` |
+| `scan_config_target` | `config.target.scan` |
+| `approve_config_target_scan` | `config.target.scan.approve` |
+| `publish_config_target_catalog` | `config.target.catalog.publish` |
+| `preview_config_export` | `config.export.preview` |
+| `commit_config_export` | `config.export.commit` |
+| `acknowledge_validation_warning` | `validation.warning.acknowledge` |
+| `request_validation_waiver` | `validation.waiver.request` |
+| `approve_validation_waiver` | `validation.waiver.approve` |
+| `recompute_validation` | `validation.recompute` |
+| `create_rule_source_change_draft` | `rules.source_change_draft.create` |
+| `rebase_patch` | `patch.rebase` |
+
+读接口必须按当前对象、策略版本和操作者返回这些`ActionAvailability`；命令端再次校验Capability和`separationOfDutiesPolicy`。发布策略还必须校验其目标目录/Manifest覆盖，浏览器目录授权不能替代任何服务端权限。
+
+Series、SKU、Model的ID终身稳定且不复用；改名和更换默认Model不改ID。SKU修改`targetPullKg`必须遵守第6.6节：没有任何已发布后代Snapshot时保留skuId并创建新revision；已有已发布后代时原SKU的重量身份冻结，新重量创建新SKU，旧SKU可`DEPRECATED`。Revision只增不改；已批准/已发布revision不可原地改写。Snapshot ID与payload/hash永久绑定。前端不得从角色名、状态或颜色猜动作；读接口返回`ActionAvailability[]`，写接口再次鉴权。按第20.2节，所有已登录公司用户统一获得全部当前已启用业务Capability，`separationOfDutiesPolicy`使用`disabled_in_tackle_forger`；按第23.6节，`ai.provider_policy.manage`只授予部署管理员。服务端仍必须独立鉴权，功能开关关闭或未授予的Capability不得通过直接API调用。
+
+### 24.2 R1：钓具系列甘特图
+
+```ts
+interface SeriesGanttQuery {
+  text?: string;
+  collectionIds?: string[]; methodIds?: string[]; typeIds?: string[];
+  qualityIds?: string[]; functionIds?: string[]; itemPartIds?: string[];
+  lifecycleStates?: LifecycleState[]; attentionStates?: AttentionState[];
+  issueSeverities?: ValidationSeverity[]; hasUpgradeCandidate?: boolean;
+  minTargetPullKg?: number; maxTargetPullKg?: number;
+  ruleSetVersion?: string;
+  sort: "series_name" | "weight_span" | "attention" | "recently_changed";
+  cursor?: string; pageSize: number;
+}
+interface GanttNodeAggregate {
+  directLifecycle: LifecycleState;
+  directAttention: AttentionState[];
+  descendantStateCounts: Record<string, number>;
+  modelCountTotal: number; modelCountMatched: number;
+  blockingIssueCount: number; warningCount: number;
+  upgradeCandidateCount: number; hasMoreChildren: boolean;
+}
+```
+
+- 主矩阵纵轴为版本化、可配置的重量显示分段；横轴第一层固定按品质C/绿、B/蓝、A/紫、S/橙分组，第二层按当前启用的Type分组。
+- 每个Series放入其固定Quality + Type列，并以覆盖块跨越该Series离散`targetPullsKg`的最小/最大显示位置；覆盖块只是规划轮廓，不是连续SKU或插值区间。
+- 覆盖块内部只绘制真实SKU节点。显示分段或节点位置只用于布局，最近模板匹配仍使用SKU的精确targetPullKg。
+- 同字段OR、不同字段AND；文本搜索当前工作区中的ID、名称、别名。
+- 默认加载矩阵Series摘要；选中/展开Series覆盖块时，在底部摘要按重量升序加载真实SKU；展开SKU摘要时按展示顺序加载Model，使用服务端游标。
+- 聚合区分总数和当前查询命中数；`modelCountMatched`只表达筛选结果，不表达对象权限或安全裁剪。
+- 主状态优先级：硬冲突 > rebase > 待复核 > 警告 > 待发布 > 升级候选 > 已发布 > 草稿；全部计数保留。
+- 点击Series覆盖块只更新底部Series摘要；点击SKU节点选中对应SKU并展示抽屉入口，不因单Model跳级；点击Model行才打开右侧预览。“打开Series/进入SKU抽屉”使用显式动作。
+- 矩阵空白和重量分段标签不创建SKU；新建重量必须使用“添加重量规格”。
+
+正常路径：筛选矩阵，选中Series覆盖块，在底部摘要展开SKU与Model并打开预览。
+边界：单SKU仍有一个真实节点；无SKU草稿Series显示未覆盖占位，不绘制虚假跨度。
+冲突：翻页ETag变化使游标失效，不静默拼接新旧聚合。
+恢复：保留筛选、矩阵滚动和选中Series刷新；节点移除则回最近仍存在的父级。
+
+权限：按第20.2节使用全员统一的已启用Capability和功能开关；R1不得实现对象级过滤、对象级总数隐藏或部分谱系披露。功能未启用或Capability不可用时，服务端返回禁用原因且写接口再次鉴权。
+验收：Given 1.5kg与1.8kg命中同一模板，When 查看同一Series覆盖块，Then 两个精确重量以独立SKU节点显示且各自状态独立，并显示“覆盖范围不代表连续插值”。
+
+### 24.3 R2：稳定标识、面包屑和权限
+
+```ts
+interface BreadcrumbItem {
+  ref: EntityRef; label: string;
+  objectLabel: "Collection" | "Series" | "SKU 抽屉" | "Model" | "冻结快照";
+  current: boolean; navigable: boolean; unavailableReason?: string;
+}
+```
+
+谱系固定为`Collection? → Series → SKU Drawer → Model → ConfigurationSnapshot`。SKU显示拉力规格与“SKU抽屉”，Model显示型号与“Model”。Collection可缺省，其他父链不可缺失。跨父级移动是受审计迁移命令并重验不变量。只删除未引用草稿；其余只能废弃。从Snapshot返回Model默认定位快照对应revision。对象关联使用稳定entityId、revisionId、业务代码与GenerationBinding；name只能用于展示、检索和人工候选提示，不能作为唯一关联键。
+
+正常路径：逐层导航且身份标签稳定。
+边界：无Collection从Series开始；多Snapshot显式选版本。
+冲突：父链与不变量不一致产生数据完整性error。
+恢复：返回有效父级/迁移审计/修复引用，不自动猜父级。
+权限：read/edit/review/publish继续映射为独立Capability和`ActionAvailability`，但当前策略把全部已启用Capability统一授予所有已登录公司用户，不按对象、父级或业务角色裁剪。
+验收：Given 已登录公司用户深链接打开Model或Snapshot，When 服务端解析对象，Then 返回完整稳定父链；写动作只因功能开关、领域关口、revision或当前Capability未启用而禁用，并显示服务端原因，不产生“仅披露部分父链”的对象级权限分支。
+
+### 24.4 R3：“生成 Model 候选”
+
+```ts
+interface CandidateGenerationRequest {
+  requestId: string; seriesRef: EntityRef; skuRefs: EntityRef[];
+  recipeRef: EntityRef; recipeInput: Record<string, unknown>;
+  enabledVariantKeys: string[]; perSkuLimit: number;
+  minimumAffinity?: number; acceptWarnings: boolean;
+  sortDefinitionVersion: string;
+  inputHash: string; idempotencyKey: string;
+}
+interface ModelCandidate {
+  candidateId: string; runId: string; skuRef: EntityRef;
+  candidateFingerprint: string; projectionMatchRef: string;
+  proposedConfiguration: Record<string, unknown>;
+  hardCompatibility: HardCompatibilityResult; affinity: AffinityBreakdown;
+  invariantIssues: ValidationIssue[]; rank: number; rankReasons: string[];
+  state: "generated" | "shortlisted" | "selected" | "discarded" | "expired" | "superseded";
+}
+```
+
+输入冻结Series/SKU/Recipe/RuleSet/Patch revision。deny/缺require只进排除统计。权威排序为版本化字典序：配方键→warning数→Affinity降序→拉力距离升序→fingerprint；AI不得改写。结果含排除分组、枚举总数、截断、版本、hash、耗时。CandidateRun是不可变审计产物，候选不是Model。
+
+默认行为是自动物化：对每个`SKU × enabledModelVariantKey`选取排名最高的合法候选并创建或更新一个Model草稿revision。用户可通过范围、重量、启用路线、每SKU数量、最低Affinity、warning接受和`REVIEW_ON_CHANGE`检查点克制批量生成。若`skuId + modelVariantKey`唯一命中旧Model，则创建新revision；无命中新建；多重或歧义命中则跳过并报Issue，禁止按name猜测。内容hash未变化时不创建空revision。同输入、版本与算法必须产生相同结果和顺序，正常流程不使用random seed。
+
+正常路径：预览输入、生成、确定性排序并自动创建/更新Model草稿。
+边界：0结果显示排除统计；截断明确提示。
+冲突：运行中revision变化则superseded且不可选择。
+恢复：复制最新输入重跑；凭requestId恢复/重试。
+权限：generate与materialize分离，自动物化也必须由服务端重新鉴权。
+验收：Given 高Affinity候选命中deny，When 完成，Then 只在排除统计；合法低分候选仍可展示。
+
+### 24.5 R4：统一Trace
+
+```ts
+interface CalculationTraceEntry {
+  traceEntryId: string; subjectRef: EntityRef; parameterKey: string; sequence: number;
+  layer: "weight_template" | "method" | "type" | "function"
+    | "quality" | "boundary" | "attribute_affix" | "technology_affix"
+    | "series_patch" | "sku_patch" | "model_patch" | "final_review_patch"
+    | "rule_suppression" | "projection_pin";
+  sourceRef: EntityRef | { sourceType: string; sourceId: string };
+  sourceVersion: string; ruleSetVersion: string;
+  before: unknown; operation: string; operand: unknown; after: unknown; unit?: string;
+  effect: "benefit" | "cost" | "neutral" | "contextual";
+  warningIssueIds: string[]; actions: ActionLink[];
+  inputHash: string; outputHash: string;
+}
+```
+
+Trace由内核按sequence产生/重放；`sequence`是单次确定性计算Trace中的全局且唯一的执行序号，跨subject和parameter共享同一序列，持久化和查询不得按对象分组后重新编号；作用域投影可以保留原序号并出现间隙。前端不重算。formula携带formulaId/version和结构化操作数。Technology只记录成员Affix贡献。`PerformanceSummary`拥有独立的派生证据，不伪装成修改属性的Trace层。无贡献层返回no_effect摘要，不伪造执行。警告引用Issue，动作来自服务端。Snapshot冻结Trace或内容寻址引用/hash。
+
+展示例外（MOTION-03）：当且仅当同一冻结`CalculationTraceEntry`的`before`和`after`都是有限数，前端可以临时显示`after - before`作为视觉 delta。该值不得持久化，不得进入任何领域结果、hash、重放、Snapshot、校验或动作决定，也不得用于补全或解释规则语义。非数值值以及`set/clear/min/max/no_effect`等语义操作必须原样显示`before/operation/operand/after`，不得伪造数值 delta。
+
+正常路径：逐层查看来源和四段数值。
+边界：枚举/区间/非数值set使用类型化值；缺单位不猜。
+冲突：重放hash不符产生`TRACE_REPLAY_MISMATCH`并阻止发布。
+恢复：同版本重放；源缺失保留payload进入归档修复。
+权限：可看脱敏贡献但无权来源跳转禁用。
+验收：Given 多层修改一个属性，When 打开Trace，Then 顺序、版本、before/operation/operand/after、警告、动作均由后端返回。
+
+
+### 24.6 R5：五维图
+
+```ts
+interface FiveAxisAxisDefinition {
+  axisId: string; label: string; order: number;
+  sourceParameterKeys: string[]; applicablePartIds: string[];
+  direction: "higher_better" | "lower_better" | "target_range" | "contextual";
+  transformId: string; vertexSelectorId: string;
+  componentAggregationId: "per_component_no_aggregate";
+  missingPolicy: "error" | "unavailable" | "ignore_not_applicable";
+}
+interface FiveAxisViewDefinition {
+  definitionId: string; version: string;
+  semanticContractVersion: "five-axis/open005-2026-07-23/v1";
+  hashInputSchemaVersion: "five-axis-hash-input/v1";
+  projectionReferenceSelectorVersion: "projection-reference/current-sku-frozen-match/v1";
+  axes: [FiveAxisAxisDefinition, FiveAxisAxisDefinition, FiveAxisAxisDefinition, FiveAxisAxisDefinition, FiveAxisAxisDefinition];
+  weightBandPolicyVersion: string;
+  displayBandConfigId: string;
+  seriesBaselinePolicy: {
+    mode: "projection_reference";
+    selectorVersion: "projection-reference/current-sku-frozen-match/v1";
+  };
+  comparisonPolicy: {
+    minimumItems: 2;
+    maximumItems: number;
+    mixedItemPartsAllowed: true;
+    referenceRodMode: "first_rod_by_comparison_order";
+    outerRingScore: 100; visualOverflowCap: null;
+  };
+}
+```
+
+线上Schema必须把`maximumItems`校验为大于等于`minimumItems`的整数，不得在API类型中声明为字面量`5`。当前已确认定义实例为`minimumItems = 2, maximumItems = 5`；服务端对该定义强制上限5。未来只能通过新`FiveAxisViewDefinition.version`发布其他合法整数，历史定义、Snapshot和评审记录仍保留5。`publicationState=PUBLISHED`不是正式适用性的充分条件；新正式Snapshot还必须按第21.7节验证三项契约版本并解析到唯一`FORMAL_CURRENT`处置。
+
+正式视图恰好五轴，顺序为拉力、耐久、抛投、感度、操控；定义仍通过版本发布和引用，不得散落硬编码。同图共享definition、W重量段、`weightBandPolicyVersion`和`vertexSetHash`。每点返回direct/context_inherited/not_applicable/missing/error、原始值、未封顶比例、comparisonScore、officialDisplayScore、Trace和来源。not_applicable不画0，分母非正永远error。Series基准按第21.3节唯一选择器返回锚点、selectorVersion、`projectionReferenceSetHash`及竿轮线三个逐部位状态和projection ID/revision，禁止聚合、按查询顺序择一或静默回退。
+
+正常路径：以最终拉力确定W段，按发布定义计算三条部件曲线与三条Series结构投影参考线，并提供数值表。
+边界：某部位无结构投影时只省略对应参考线；轮线无参考竿时抛投为not_applicable；均不得画全0。
+冲突：规则版本、顶点hash或投影引用锚点不兼容时拒绝伪装为同一Series基准；legacy-only定义不得服务新正式Snapshot。
+恢复：发布唯一`FORMAL_CURRENT`定义、有效顶点集合或重新选择显式基准Snapshot；历史Snapshot仍用冻结版本。
+权限：发布定义需rules.five_axis.publish；临时比较不改变Series或Snapshot。
+验收：Given 两件装备来自不同W段，When 选择共同W段比较，Then 二者使用同一顶点集合；Given comparisonScore为123.7，When 绘图，Then 节点按123.7伸出100分外圈、officialDisplayScore仍为100且无视觉封顶；Given 当前定义实例，When 校验比较数量，Then `maximumItems`为整数5且第6件装备被拒绝；Given 发布新定义版本并设置另一合法整数，When 解析同一API契约，Then 无需修改字段类型且历史记录仍使用上限5；Given 旧`PUBLISHED`种子定义和符合OPEN-005的新定义并存，When 创建新正式Snapshot，Then 只接受唯一`FORMAL_CURRENT`新定义且旧定义/Snapshot hash不变；Given 同Series有多个SKU或同W段多个投影，When 读取Model Snapshot，Then 只使用其冻结SKU revision逐部位唯一ProjectionMatch并把selector、ID/revision及缺失状态写入输入hash。
+
+### 24.7 R6：AIRecommendation
+
+```ts
+interface EvidenceRef {
+  evidenceType: "trace" | "validation_issue" | "hard_compatibility" | "affinity_axis"
+    | "series_invariant" | "five_axis" | "rule" | "snapshot" | "user_note";
+  refId: string; revisionId?: string; anchor?: string; contentHash: string; excerpt?: string;
+}
+interface AIRecommendation {
+  recommendationId: string; assessmentId: string; scopeRefs: EntityRef[];
+  title: string; summary: string; evidence: EvidenceRef[];
+  assumptions: string[]; uncoveredInformation: string[];
+  impactedParameters: { subjectRef: EntityRef; parameterKey: string; before: unknown; proposedAfter?: unknown; unit?: string }[];
+  suggestedAction: "preview_only" | "create_model_patch_draft" | "create_rule_source_change_draft";
+  suggestedPatch?: SuggestedPatchPayload;
+  generatedAt: string; inputHash: string; ruleSetVersion: string;
+  fiveAxisRuleVersion?: string; promptTemplateVersion: string; promptTemplateHash: string;
+  modelDescriptor: AIModelDescriptorV1;
+  state: "fresh" | "stale" | "accepted" | "dismissed" | "superseded";
+}
+```
+
+每条建议至少一个证据；推测进assumptions。影响对象/属性显式；无作用域只能preview_only。任一输入revision、Patch、规则、五维定义、证据hash、promptTemplateVersion或promptTemplateHash变化即stale。AI不进入面板、品质、Affinity、Issue裁决、Snapshot值。刷新、模型版本记录、审核权限保持策略化。
+
+正常路径：白名单数据生成带证据建议。
+边界：证据不足只返回未覆盖信息。
+冲突：AI与确定性校验冲突时以后者为准并显示护栏。
+恢复：重新评估；旧建议只读且不可转草稿。
+权限：evaluate、patch draft、Feishu draft独立；AI只读调用者有权数据。
+验收：Given AI建议降低硬冲突，When 展示，Then 硬冲突不变且建议无覆盖动作。
+
+### 24.8 R7：AI转Model Patch草稿
+
+命令含recommendationId、assessmentInputHash、targetModelRef、selectedChanges、userReason、idempotencyKey。目标只能是未冻结Model。确认页展示作用域、before、operation/operand、确定性after、五维/Issue/Affinity/不变量差异；后四者由内核重算。保存draft并记录AI来源、创建人、理由与人工改动差异。stale、revision变化、非法operation、冻结时禁用。
+
+正常路径：确认差异后建草稿并人工审核。
+边界：部分参数移除时要求剔除，不静默忽略。
+冲突：已有未决set进入合并/rebase。
+恢复：保留表单，刷新before重算再确认。
+权限：model.patch.create与review仍是独立Capability和审计动作，但当前统一策略允许同一用户连续执行。
+
+验收：Given 建议后Model变化，When 创建，Then 阻止旧before并要求确认新差异。
+
+### 24.9 R8：AI转飞书规则修改草稿
+
+```ts
+interface RuleSourceChangeDraft {
+  changeDraftId: string;
+  originRecommendationId?: string;
+  sourceObjectRefs: EntityRef[];
+  targetRuleRef: {
+    spreadsheetToken: string;
+    sheetId: string;
+    stableRuleId: string;
+    parameterKey: string;
+    sourceRevision: string;
+  };
+  proposedChange: Record<string, unknown>;
+  evidenceRefs: EvidenceRef[];
+  impactPreview: {
+    evaluatedRuleSetVersion: string;
+    affectedSeries: number;
+    affectedSkus: number;
+    affectedModels: number;
+    newErrors: number;
+    resolvedErrors: number;
+    sampleDiffRefs: string[];
+    publishedSnapshotsChanged: 0;
+    upgradeCandidatesExpected: number;
+  };
+  state: "LOCAL_DRAFT" | "IMPACT_PREVIEW_READY" | "NEEDS_REBASE"
+    | "CONFIRMED" | "WRITING" | "WRITE_VERIFIED" | "WRITE_FAILED"
+    | "REMOTE_CHANGES_AVAILABLE" | "PULLED" | "ABSORBED"
+    | "PARTIALLY_ABSORBED" | "SUPERSEDED";
+  idempotencyKey: string;
+}
+```
+
+飞书电子表格是唯一规则源，一期、1.5期、二期和当前规划三期均不引入飞书审批。AI只能生成`LOCAL_DRAFT`，不能确认写入、执行写入、拉取或发布RuleSet。人工确认后直接写回飞书表格，并立即技术回读验证；写回成功只表示远端有变化，绝不自动激活规则。用户必须显式点击“拉取”，生成FeishuSourceRevision和RuleSet草稿，通过校验后再显式发布RuleSetVersion。
+
+影响预览使用沙盒RuleSet，Snapshot变化恒为0，潜在变化转UpgradeCandidate。写入前比较sourceRevision，变化则进入`NEEDS_REBASE`。写入超时先回读目标单元格和写回日志，以幂等键确认是否已经成功，禁止重复追加。
+
+正常路径：本地草稿→影响预览→人工确认写回→回读验证→远端变化可拉取→显式拉取→发布RuleSetVersion→重算吸收。
+边界：无法完整重算时显示覆盖率，抽样不冒充完整。
+冲突：源revision变化进入NEEDS_REBASE；部分参数吸收时保持PARTIALLY_ABSORBED。
+恢复：WRITE_FAILED保留草稿、幂等键和回读结果，可安全重试；不删除DerivationLayerPatch。
+权限：AI草稿、确认写回、拉取、RuleSet发布分别鉴权和记录；当前统一策略允许同一用户连续执行，不额外增加审核策略。
+
+验收：Given 写回请求超时但远端单元格已更新，When 回读恢复，Then 进入WRITE_VERIFIED而不重复写；未点击拉取前运行规则版本保持不变。
+
+### 24.10 R9：ValidationIssue与ActionLink
+
+```ts
+interface ValidationIssue {
+  issueId: string; fingerprint: string; code: string;
+  source: "hard_compatibility" | "affinity" | "series_invariant" | "patch"
+    | "publish" | "data_integrity" | "import" | "five_axis" | "ai_guardrail"
+    | "config_identity" | "config_relationship" | "quality" | "pricing";
+  severity: "INFO" | "WARNING" | "ERROR" | "BLOCKER";
+  gate: "NONE" | "REVIEW" | "PUBLISH" | "EXPORT";
+  subjectRef: EntityRef; affectedRefs: EntityRef[]; parameterKeys: string[];
+  title: string; message: string; evidenceRefs: EvidenceRef[]; ruleRefs: string[];
+  state: "OPEN" | "ACKNOWLEDGED" | "RESOLVED" | "WAIVED" | "STALE";
+  waiverRef?: string;
+  actions: ActionLink[];
+}
+interface ValidationWaiver {
+  waiverId: string; waiverDecisionId: string; issueFingerprint: string;
+  policyVersion: string; gate: "REVIEW" | "PUBLISH" | "EXPORT";
+  environmentId?: string; channelKey?: string;
+  scopeRef: EntityRef; reason: string; approvedBy: string; approvedAt: string;
+  expiresAt?: string; evidenceRefs: EvidenceRef[];
+}
+interface ValidationWaiverDecision {
+  waiverDecisionId: string; scopeRef: EntityRef; reason: string;
+  requestedWaivers: {
+    issueFingerprint: string; gate: "REVIEW" | "PUBLISH" | "EXPORT";
+    environmentId?: string; channelKey?: string;
+  }[];
+  approvedBy: string; approvedAt: string; waiverIds: string[];
+}
+type IssuePresentationActionCode = "navigate" | "view_evidence" | "open_help";
+interface ActionCommandPayloadRef {
+  payloadRefId: string;
+  action: ActionCode;
+  subjectRef: EntityRef;
+  expectedRevisionId?: string;
+  inputHash: string;
+  payloadHash: string;
+  idempotencyKey: string;
+  expiresAt?: string;
+}
+interface ActionLink {
+  actionId: string;
+  action: ActionCode | IssuePresentationActionCode;
+  label: string; targetRef?: EntityRef; targetRoute?: string; enabled: boolean;
+  requiredCapabilities: CapabilityCode[];
+  disabledReasonCode?: string; disabledReasonText?: string;
+  commandPayloadRef?: ActionCommandPayloadRef;
+}
+```
+
+四套语义共用壳但source独立；Severity说明问题强度，Gate说明阻断哪个关口，二者不得合并成一个持久化boolean。`NONE`只展示；`REVIEW`要求在批准前处理且约束后续发布；`PUBLISH`阻止创建/发布新Snapshot；`EXPORT`只阻止命中的环境×渠道目标。fingerprint至少由source、code、subject、规则版本和Gate构成；EXPORT fingerprint还必须包含`environmentId + channelKey`，REVIEW/PUBLISH fingerprint不得携带导出目标。`ValidationWaiver.gate`始终是单值；EXPORT Waiver必须同时具有`environmentId`和`channelKey`，REVIEW/PUBLISH Waiver不得携带或匹配导出目标。一次人工决定可以原子创建多份Waiver，但每份只能匹配自己的Issue fingerprint和Gate；仅当Gate为EXPORT时还必须匹配环境×渠道。Waiver不能跨关口复用，EXPORT Waiver也不能跨环境或渠道复用。动作由服务端生成并在执行时重新鉴权。AI数量不计Issue。
+
+`ActionLink.action`必须复用统一`ActionCode`表达任何可执行领域命令；`IssuePresentationActionCode`只能表达导航、查看证据和打开帮助，执行后不得修改数据库、文件、远端系统、Issue状态或操作记录之外的业务状态。确认warning、申请/批准waiver、重新计算校验、创建规则源变更草稿等动作分别使用`acknowledge_validation_warning`、`request_validation_waiver`、`approve_validation_waiver`、`recompute_validation`和`create_rule_source_change_draft`；重试不是独立动作码，必须复用原命令的`ActionCode`、类型化payload和幂等键。
+
+对任何会改变状态的`ActionCode`，`enabled=true`时必须返回不可篡改的`commandPayloadRef`，其`action/subjectRef/inputHash/payloadHash`必须与服务端保存的类型化payload一致。warning确认payload必须绑定Issue fingerprint、expected Issue revision/inputHash和人工理由；waiver payload必须绑定单一Gate及必要的环境×渠道；重算必须绑定待重算对象、expected revision和规则版本；规则源变更草稿必须绑定目标规则、source revision和证据hash；配置身份动作的具体字段遵循OPEN-008和第25节。客户端只提交`actionId + payloadRefId`，不得替换action、subject、expected revision或策略/Manifest引用；服务端执行前重新读取payload、校验hash/有效期、重算`ActionAvailability`并再次鉴权。
+
+旧持久化动作名只用于识别迁移候选，不能直接做字符串替换：`acknowledge_warning`、`request_waiver`、`approve_waiver`、`recompute`和`create_rule_source_change`分别以`acknowledge_validation_warning`、`request_validation_waiver`、`approve_validation_waiver`、`recompute_validation`和`create_rule_source_change_draft`为候选目标。迁移器必须从可信的服务端历史事件、命令记录和版本化对象中完整重建目标ActionCode要求的类型化payload，校验subject、expected revision/input hash、Issue fingerprint、人工理由、Gate、必要的环境×渠道、目标规则/source revision、证据hash及原幂等键，并重新计算`payloadHash`；不得从旧动作名、展示文案、客户端补传值推断或为缺失字段填默认值。
+
+`edit_rule/edit_patch/satisfy_requirement/request_permission`只有在历史证据能证明它们从未修改业务状态且能恢复明确路由时，才转换为`navigate + targetRoute`。`open_rebase`不再是现行`ActionCode`，且只允许迁移为纯导航：仅当可信历史证明该记录从未执行Rebase、只是打开页面并能恢复明确路由时，才转换为`navigate + targetRoute`。任何曾执行或可能执行Rebase、证据不足、语义冲突或无法证明纯导航的`open_rebase`记录都必须以`LEGACY_ACTION_ALIAS_UNRESOLVABLE` fail-closed，不得转换为`rebase_patch`；现行Rebase写命令只能由新`rebase_patch`记录及其完整类型化payload表达。旧`retry`同样只有能恢复原ActionCode、完整原类型化payload和原幂等键时才转换为原动作。
+
+上述任一状态写候选缺少或冲突任一必填字段时，迁移结果固定为`enabled=false`、不生成`commandPayloadRef`并记录`LEGACY_ACTION_ALIAS_UNRESOLVABLE`；直接API执行相同记录也必须以该码拒绝。任何未枚举但历史语义可能具有副作用的旧动作也默认按该码拒绝，直到迁移器为其定义完整的目标ActionCode、可信字段来源和类型化payload校验。新接口、数据库和事件不得继续写入旧别名，也不得保留绕过类型化payload的兼容执行器。
+
+缺Capability、职责分离策略不允许、expected revision过期、Manifest stale或其他关口未满足时，`ActionLink`必须返回`enabled=false + requiredCapabilities + disabledReasonCode + disabledReasonText`且不得携带`commandPayloadRef`；直接伪造命令仍返回403或领域冲突，不能依赖按钮禁用。只读导航类动作可以没有payload。`ActionAvailability`与同一subject上的`ActionLink`对相同`ActionCode`必须给出一致的enabled、requiredCapabilities和禁用原因。
+
+状态语义固定：`OPEN`表示当前有效；`ACKNOWLEDGED`只用于已记录理由的WARNING；`RESOLVED`表示同一输入版本下根因已消失；`STALE`表示输入变化后旧Issue只读留痕；`WAIVED`只用于版本化策略明确允许的ERROR。WARNING确认不得伪装成WAIVED。
+
+需要二次确认的业务阈值使用WARNING，而不是可waive ERROR。`PRICE_UPPER_THRESHOLD_CONFIRMATION_REQUIRED`的PUBLISH fingerprint必须绑定Model revision、PricingPolicyVersion、inputHash、`purchasePriceRaw/purchasePriceRounded/purchasePrice`和阈值，且不得包含`environmentId`或`channelKey`；确认后为`ACKNOWLEDGED`并允许命中的PUBLISH Gate继续。任一绑定输入变化后旧Issue与确认转`STALE`，UI重新展示确认动作。该Issue的`ActionLink.action`直接返回统一`ActionCode`中的`acknowledge_price_warning`，并绑定类型化、不可篡改的`commandPayloadRef`，要求`pricing.warning.acknowledge`能力；不得用通用`acknowledge_warning`代替真实命令。ACKNOWLEDGED只确认用户知晓超限，不得掩盖目标字段不可表示、配置断链或数值溢出等独立EXPORT BLOCKER；后者的fingerprint才包含`environmentId + channelKey`。
+
+`BLOCKER`是绝对不可waive的严重度：用于硬deny/缺失require、Snapshot完整性错误、配置断链、缺少必需版本和不可重放结果等继续执行会产生不可信产物的情况。`ERROR`是否可waive由`WaiverPolicyVersion`按source、code、gate、作用域和有效期决定；默认不可waive，只有服务端返回有效waive动作时UI才展示。Waiver必须独立保存、审计并冻结到批准/发布/导出证据；策略变化、Issue fingerprint变化或Gate变化不会自动沿用旧waiver，EXPORT还在环境×渠道变化时失效。批量决定使用`ValidationWaiverDecision`记录一次人工动作和原子目标集合，不改变每份Waiver的单Gate、单fingerprint语义。
+
+正常路径：校验器产Issue，页面按来源、Severity和Gate分区并执行后端动作。
+边界：一根因多对象用主Issue+affectedRefs。
+冲突：互斥动作执行前重验。
+恢复：失败保留Issue；重试复用原ActionCode和幂等payload，重算使用`recompute_validation`，权限帮助只提供无副作用导航。
+
+权限：可看不等于可修；无权动作说明原因。
+验收：Given deny、-3 Affinity、不变量偏离并存，When 返回，Then source、Severity、Gate、State和动作独立，Affinity不能抵消deny；Given策略未允许某ERROR waiver，When渲染动作，Then不显示可执行waive入口；Given 用户缺少`config.id.reserve`，When 返回预留Issue动作，Then `action=reserve_config_id_bundle`、`enabled=false`、列出所需Capability和禁用原因且没有payload；Given 权限和全部门禁恢复，Then 返回同一ActionCode及绑定subject、expected revision和hash的payload引用，篡改payload或revision时服务端拒绝；Given旧`approve_waiver`缺少fingerprint、reason、Gate、expected revision或EXPORT环境×渠道任一字段，When迁移或执行，Then返回`LEGACY_ACTION_ALIAS_UNRESOLVABLE`且没有payload；Given字段完整且来自可信历史，Then重建并校验不可篡改`approve_validation_waiver`payload而不是只改动作名；Given旧`open_rebase`仅有路由证据，Then只映射`navigate`且不能执行Rebase；Given旧`open_rebase`存在写语义证据、语义冲突或无法证明纯导航，Then返回`LEGACY_ACTION_ALIAS_UNRESOLVABLE`且不得转换为`rebase_patch`，现行Rebase写命令只使用新`rebase_patch`记录；Given旧`retry`记录，Then只有恢复原动作、完整payload与原幂等键时才可执行；Remediation联合中不存在任何状态写动作。
+
+### 24.11 R10：Rebase、UpgradeCandidate与Snapshot
+
+```text
+Patch revision:
+DRAFT → PENDING_REVIEW → APPROVED → ACTIVE
+DRAFT/PENDING_REVIEW → WITHDRAWN
+任意未发布状态 → SUPERSEDED
+基线变化：当前Patch revision → REBASE_REQUIRED
+rebase成功：创建新Patch revision，状态为PENDING_REVIEW
+
+UpgradeCandidate:
+generated → analyzing → blocked | rebase_required | ready_for_review
+ready_for_review → approved → published_as_new_snapshot
+generated/ready_for_review → dismissed
+任意非终态 + upstream_changed → superseded
+```
+
+Patch业务生命周期只使用第14.2节的规范大写`PatchState`；小写状态只允许出现在迁移适配器。`base_changed`是触发原因而不是持久化状态，`rebasing/REBASING`是动作执行进度而不是`PatchState`，不得写入Patch revision、账本、Snapshot引用或飞书镜像。
+
+set基线变化、参数删除/重命名、边界/公式/兼容变化必须rebase。clear在目标仍是可继承覆盖时可以确定性重放；目标删除、重命名或必填性变化时必须rebase。add/multiply自动重放最多创建`PENDING_REVIEW`的新revision。基线变化只使当前revision进入`REBASE_REQUIRED`；rebase必须通过`rebase_patch`动作创建严格递增的新`patchRevision`，不得把原revision从`REBASE_REQUIRED`原地改回`PENDING_REVIEW`。
+
+`rebase_patch`命令至少绑定`patchId + expectedHeadPatchRevision + expectedBaseRuleSetVersion + expectedBaseObjectRevision + targetBaseRuleSetVersion + targetBaseObjectRevision + inputHash + idempotencyKey`。服务端固定按以下事务执行：
+
+1. 重新鉴权并锁定Patch head，重验expected head、当前基线和目标基线；任一不一致返回revision或baseline冲突。
+2. 在事务内存中对完整有序操作组计算新before/after、Trace、Issue和hash；未解决冲突、非法操作或任何校验失败时不创建revision。
+3. 只有全部操作和证据有效时，原子写入一个新Patch revision、完整操作组、幂等记录和审计；新revision最多为`PENDING_REVIEW`，不得直接成为`APPROVED`或`ACTIVE`。
+4. 同一idempotencyKey和完整payload重试返回第一次已提交结果；同一key携带不同payload时拒绝。提交前基线或Patch head再次变化时整个事务回滚，调用方必须基于最新基线重新预览和执行。
+
+失败、超时后无法证明已提交、权限拒绝或并发基线变化均不得留下半revision、半操作组或执行中的持久化业务状态；原Patch revision、有序操作、历史Snapshot、Patch引用、`PatchSetHash`和内容hash保持不变。超时重试必须先按幂等键回读，不得猜测成功或重复追加。
+
+approved/dismissed候选不改旧Snapshot；只有发布命令新建Snapshot。SnapshotBuild可building/failed/ready；ConfigurationSnapshot创建即frozen，只允许查看、下载原样审计归档、在完整性门禁通过时正式导出、审计、复制新修订、生成升级候选，禁止原地编辑/重算/rebase/换hash/删除引用。`download_snapshot_audit_archive`只要求`snapshot.audit_archive.download`并遵守第14节的原样打包语义；`export_snapshot`要求`snapshot.export`，不可重放或缺策略引用的BLOCKER必须阻断它以及后续配置导出。
+
+正常路径：解决rebase并发布新Snapshot。
+边界：语义相同也只关闭候选，不重写hash。
+冲突：处理时Patch head或基线再变则本次rebase事务回滚，旧revision保持`REBASE_REQUIRED`，调用方基于最新基线重新预览；UpgradeCandidate按其独立状态机进入superseded。
+恢复：rebase按幂等键回读或在最新基线上重试；复制决定到最新候选；失败Build可重试且无半快照。
+权限：rebase、审核、发布分开；冻结快照无edit。
+验收：Given Patch revision 7因基线变化进入`REBASE_REQUIRED`，When `rebase_patch`重验相同head和基线并成功，Then 原子创建revision 8且状态为`PENDING_REVIEW`，revision 7及其操作/hash保持不变；Given计算、校验或写入任一步失败，Then不存在revision 8或半操作组；Given提交前基线再次变化，Then返回冲突且revision 7、历史Snapshot及`PatchSetHash`不变。Given S1已发布，When 批准升级候选，Then S1/hash不变；再次发布才生成S2。
+
+### 24.12 R11：状态与文案
+
+```ts
+type LifecycleState = "ACTIVE" | "DEPRECATED" | "ARCHIVED";
+type RevisionState = "DRAFT" | "PENDING_REVIEW" | "CHANGES_REQUESTED" | "APPROVED" | "SUPERSEDED";
+type ValidationState = "NOT_EVALUATED" | "EVALUATING" | "PASSED" | "WARNING" | "BLOCKED" | "ERROR";
+type PublicationState = "UNPUBLISHED" | "READY_TO_PUBLISH" | "PUBLISHING" | "PUBLISHED" | "PUBLISH_FAILED";
+type AttentionState = "HAS_UPGRADE_CANDIDATE" | "REBASE_REQUIRED" | "SOURCE_STALE"
+  | "IMPORT_CONFLICT" | "EXPORT_RELATION_BROKEN";
+type PrimaryDisplayState = "HARD_CONFLICT" | "REBASE_REQUIRED" | "REVIEW_REQUIRED"
+  | "WARNING" | "READY_TO_PUBLISH" | "HAS_UPGRADE_CANDIDATE" | "PUBLISHED" | "DRAFT";
+```
+
+| 后端码 | 文案 |
+| --- | --- |
+| DRAFT | 草稿 |
+| PENDING_REVIEW | 待复核 |
+| HARD_CONFLICT | 硬冲突 |
+| REBASE_REQUIRED | Patch需要rebase |
+| READY_TO_PUBLISH | 待发布 |
+| PUBLISHED | 已发布 |
+| HAS_UPGRADE_CANDIDATE | 有升级候选 |
+| WARNING | 有警告 |
+| DEPRECATED | 已废弃 |
+| ARCHIVED | 已归档 |
+| PUBLISH_FAILED | 发布失败 |
+
+生命周期、revision、校验、发布、注意状态和派生主状态分开；数据库不存UI文案。`IN_REVIEW`不是生命周期，“已计算”只是元数据。主状态按R1优先级，其他状态仍显示。“已冻结”是Snapshot固有属性；一个Model可以同时拥有有效的已发布Snapshot和被阻断的新revision。
+
+正常路径：后端返回Lifecycle、Revision、Validation、Publication和Attention状态，前端按i18n映射。
+边界：未知码显示未知状态并只读降级。
+冲突：不存在当前revision却返回RevisionState、Publication=PUBLISHED却缺少Snapshot引用等非法组合报完整性error；DRAFT与HAS_UPGRADE_CANDIDATE可以合法并存。
+恢复：重新同步或进入审计。
+权限：文案不决定动作。
+验收：Given 已发布Model有硬冲突修订和升级候选，When 聚合，Then 主标签硬冲突，同时保留已发布、升级候选和各自动作。
+
+### 24.13 R12：版本化策略与完成门槛
+
+`patchOffsetPolicy`的产品语义已经由OPEN-004完成决策并通过`patch-offset/open004-v1`发布：`PatchOffsetPolicyVersion`固定表达`mode=FINAL_RANGE_WITH_MANDATORY_REVIEW`、`offsetThresholds=NONE`和`rangeEndpoints=INCLUSIVE`，不得重新引入独立偏移阈值；状态为`RESOLVED`。`FiveAxisViewDefinition`的OPEN-005语义也已经确认，但仍须完成第21.7节迁移并发布唯一`FORMAL_CURRENT`定义；旧`PUBLISHED`定义不满足该门槛。仍保持开放、版本化且不得固化最终值的策略包括`enabledItemPartPolicy`、`qualityValueRangePolicy`、`PricingPolicy`与未来Performance扩展策略。`PerformanceSummaryDefinition`同样版本化，但只配置如何统计和展示既有结果，不得配置为属性或价值分输入，缺失时按第11.2.1节冻结`UNAVAILABLE/definition_missing`而不构成发布配置不完整。仓库当前没有可校验的已发布`enabledItemPartPolicy`版本，因此按OPEN-003的`DEFERRED_UI_DISABLED`行为fail-closed：产品流程只处理竿、轮、线，钩、漂、真饵和拟饵入口及动作全部关闭；未来策略即使加入这些部位，也必须先满足OPEN-003规定的独立产品设计前置条件，不能仅修改开关。`aiRefreshPolicy`、`aiModelRecordPolicy`、`aiReviewPolicy`和`separationOfDutiesPolicy`已由第20.2节的`open009-2026-07-23-v1`关闭，但仍以策略版本保存，未来只能通过新决策和新版本改变。一期、1.5期、二期和当前规划三期均不接飞书审批，当前不在Tackle Forger内实行职责分离。Snapshot冻结语义不是配置项，改变它必须先改权威规范并获用户明确确认。
+
+正常路径：使用已发布策略版本并记录。
+边界：配置缺失通常报配置不完整且不用页面默认；`PerformanceSummaryDefinition`是明确例外，缺失时按第11.2.1节冻结`UNAVAILABLE/definition_missing`并保持发布非阻断。历史可只读。
+冲突：草稿策略试算标草稿，不混入正式发布。
+恢复：回到有效策略或发布新版本，不回写历史快照。
+权限：策略编辑、审核和发布仍是独立动作；第20.2节当前允许同一已登录用户连续执行。Agent不得永久固化仍未确认的其他OPEN项。
+
+验收：Given OPEN-004已经完成决策但尚无可校验的已发布`PatchOffsetPolicyVersion`，When 新增Patch，Then Patch立即参与固定`FINAL_RANGE_WITH_MANDATORY_REVIEW`语义的草稿试算，但批准与发布返回`PATCH_OFFSET_POLICY_MISSING`；When 策略版本已发布，Then 人工可以在Series/SKU/Model或发布批次的整体结果页一次确认多个对象及其完整Patch集合，每个Patch revision可追溯到该冻结证据且无需逐Patch审批，只按当前关口各离散对象的累计最终值和包含端点的已发布参数合法范围校验，并覆盖批次变化失效、多离散重量、单Gate及逐环境×渠道Waiver、rebase和历史Snapshot冻结回归。独立偏移阈值不得作为可配置运行策略；迁移和反向测试可以用旧阈值输入验证其被拒绝、隔离或不影响新策略结果。Given缺少`PerformanceSummaryDefinition`，When发布Model，Then不返回配置不完整阻断，而是按第11.2.1节冻结`UNAVAILABLE/definition_missing`。
+
+### 24.14 完成标准
+
+后端必须独立表达身份、revision、状态、Trace、Issue、Action和权限；命令支持幂等、并发检查、审计、恢复；列表区分对象、投影、临时候选；确定性结果可重放且AI不裁决；R1–R12分别自动化覆盖正常、边界、冲突、恢复、权限和Given/When/Then；历史Snapshot内容/hash在所有测试中不变。

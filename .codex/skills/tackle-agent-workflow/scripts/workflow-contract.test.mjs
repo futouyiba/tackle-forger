@@ -29,7 +29,7 @@ function receipt(root, overrides = {}) {
   return {
     schema: 'tackle-spec-read/v1', taskId: 'task-1', role: 'coordinator', specSha256,
     profile: 'FULL', riskProfile: 'workflow_docs_metadata', relevantSections: ['1', '20'],
-    requiredSections: ['README', 'FULL_V3'], readSections: ['README', 'FULL_V3'], reason: 'coordination', ...overrides,
+    requiredSections: ['README', 'V3_INDEX', 'FULL_V3'], readSections: ['README', 'V3_INDEX', 'FULL_V3'], reason: 'coordination', ...overrides,
   };
 }
 function fullReadSession(root, overrides = {}) {
@@ -44,7 +44,7 @@ function reusedReceipt(root, overrides = {}) {
   const session = fullReadSession(root);
   return {
     schema: 'tackle-spec-read/v2', taskId: 'task-2', role: 'coordinator', specSha256: specHash(root), profile: 'REUSE_FULL', riskProfile: 'workflow_docs_metadata', relevantSections: ['1', '20'],
-    requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'same agent, explicit continuous context',
+    requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'same agent, explicit continuous context',
     reuseEvidence: { session, sessionSha256: fullReadSessionHash(session), agentIdentity: session.agentIdentity, contextSessionId: session.contextSessionId }, ...overrides,
   };
 }
@@ -53,7 +53,7 @@ function reusedReceiptForRole(root, role, overrides = {}) {
   const session = { ...fullReadSession(root), fullReadReceipt };
   return {
     schema: 'tackle-spec-read/v2', taskId: 'task-2', role, specSha256: specHash(root), profile: 'REUSE_FULL', riskProfile: 'workflow_docs_metadata', relevantSections: ['1', '20'],
-    requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'same agent, explicit continuous context',
+    requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'same agent, explicit continuous context',
     reuseEvidence: { session, sessionSha256: fullReadSessionHash(session), agentIdentity: session.agentIdentity, contextSessionId: session.contextSessionId }, ...overrides,
   };
 }
@@ -66,7 +66,7 @@ function brief(root, overrides = {}) {
   const openIds = buildNavigationIndex(root).openRegistry.map((entry) => entry.id);
   return {
     schema: 'tackle-task-brief/v1', taskId: 'task-1', workflowMode: 'local', phase: 'pre_dispatch', specSha256: coordinatorReceipt.specSha256,
-    baseSha, reviewedHead: 'WORKTREE', scope: 'workflow hardening', relevantSections: ['1', '20'], openDecisionCheck: { registrySha256: openRegistryHash(root), checkedIds: openIds, applicableIds: openIds, noApplicableReason: null }, riskProfile: 'workflow_docs_metadata', scopeHasRuntimeSemantics: false, changeClass: 'workflow_metadata', allowedChanges: ['AGENTS.md'], acceptanceCriteria: ['contract validates'], exclusions: ['product runtime'], riskDimensions: { persistedData: false, historicalSnapshots: false, concurrency: false, authorization: false, externalSideEffects: false, userVisible: false }, validationPlan: { requiredCommands: ['node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-policy', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-index', 'node --test .codex/skills/tackle-agent-workflow/scripts/workflow-contract.test.mjs', ownedWhitespaceCommand(baseSha, ['AGENTS.md'])], requiredScenarios: ['authority_and_scoped_diff'], intentionallyNotApplicable: { product_runtime_tests: 'No product code changes.', legacy_workspace_ci: 'No legacy-workspace path is owned.' } },
+    baseSha, reviewedHead: 'WORKTREE', scope: 'workflow hardening', relevantSections: ['1', '20'], openDecisionCheck: { registrySha256: openRegistryHash(root), checkedIds: openIds, applicableIds: openIds, noApplicableReason: null }, riskProfile: 'workflow_docs_metadata', scopeHasRuntimeSemantics: false, changeClass: 'workflow_metadata', allowedChanges: ['AGENTS.md'], acceptanceCriteria: ['contract validates'], exclusions: ['product runtime'], riskDimensions: { persistedData: false, historicalSnapshots: false, concurrency: false, authorization: false, externalSideEffects: false, userVisible: false }, validationPlan: { requiredCommands: ['node scripts/spec-v3-modules.mjs --check', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-policy', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-index', 'node --test .codex/skills/tackle-agent-workflow/scripts/workflow-contract.test.mjs', ownedWhitespaceCommand(baseSha, ['AGENTS.md'])], requiredScenarios: ['authority_and_scoped_diff'], intentionallyNotApplicable: { product_runtime_tests: 'No product code changes.', legacy_workspace_ci: 'No legacy-workspace path is owned.' } },
     specReadReceipts: [coordinatorReceipt], ownedPaths: ['AGENTS.md'], preexistingOwnedPaths: [],
     preexistingUnownedChanges: [], dirtyWorktreeDisposition: 'clean', ...overrides,
   };
@@ -75,6 +75,7 @@ function nonLegacyNa() { return { legacy_workspace_ci: 'No legacy-workspace path
 function taskBase(root) {
   write(root, 'docs/tackle-forger-development-spec-v3.md', '# V3\n\n## 0. Authority\n\n### 0.1 Immutable\n\n## 1. Scope\n\n### 3.1 Method and type\n\n### 5.2 Derived template\n\n## 8. Patch\n\n## 13. Snapshot\n\n## 14. Version\n\n### 18.2 Snapshot\n\n### 18.3 Patch\n\n## 19. Delivery\n\n## 20. Open\n\n### 24.11 Snapshot\n\n## 25. Export\n\n| ID | Type | Status |\n| --- | --- | --- |\n| OPEN-001 Test | x | `OPEN` |\n');
   write(root, 'docs/README.md', '# Documentation\n');
+  write(root, 'scripts/spec-v3-modules.mjs', "process.stdout.write('legacy fixture has no split modules\\n');\n");
   write(root, 'AGENTS.md', 'base\n');
   commitBase(root);
 }
@@ -118,7 +119,7 @@ test('TaskBrief preparation accepts v2 reuse receipts only with trusted continuo
     taskBase(root);
     const v2 = reusedReceipt(root, {
       taskId: 'prepared-task', relevantSections: ['0', '19', '20'],
-      requiredSections: ['README', '0', '19', '20'], readSections: ['README', '0', '19', '20'],
+      requiredSections: ['README', 'V3_INDEX', '0', '19', '20'], readSections: ['README', 'V3_INDEX', '0', '19', '20'],
     });
     const input = prepareInput(root, { coordinatorSpecReadReceipt: v2 });
     const current = currentReuseContext(v2.reuseEvidence.session);
@@ -230,7 +231,7 @@ test('role-keyed reuse contexts flow through validation and verdict APIs and CLI
     const coding = reuseFor('coding', 'agent:coding', 'context:coding');
     const review = reuseFor('review', 'agent:review', 'context:review');
     const contexts = { coordinator: currentReuseContext(coordinator.reuseEvidence.session), coding: currentReuseContext(coding.reuseEvidence.session), review: currentReuseContext(review.reuseEvidence.session) };
-    const source = brief(root, { taskId: 'task-2', ownedPaths: [ownedPath], allowedChanges: [ownedPath], validationPlan: { ...brief(root).validationPlan, requiredCommands: ['node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-policy', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-index', 'node --test .codex/skills/tackle-agent-workflow/scripts/workflow-contract.test.mjs', ownedWhitespaceCommand(baseSha, [ownedPath])] }, specReadReceipts: [coordinator] });
+    const source = brief(root, { taskId: 'task-2', ownedPaths: [ownedPath], allowedChanges: [ownedPath], validationPlan: { ...brief(root).validationPlan, requiredCommands: ['node scripts/spec-v3-modules.mjs --check', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-policy', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-index', 'node --test .codex/skills/tackle-agent-workflow/scripts/workflow-contract.test.mjs', ownedWhitespaceCommand(baseSha, [ownedPath])] }, specReadReceipts: [coordinator] });
     const promoted = promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review, reuseContexts: contexts });
     const checked = checkTaskBrief({ root, brief: promoted, reuseContexts: contexts });
     assert.equal(validationExecutionPlan({ root, brief: promoted, reuseContexts: contexts }).artifact.artifactIdentity.kind, 'worktree');
@@ -406,11 +407,11 @@ test('spec-read receipts enforce full/scoped plans and canonical v3 hash', () =>
     const voluntaryFullReview = receipt(root, { role: 'review' });
     assert.equal(checkReadReceipt({ root, receipt: voluntaryFullCoding }).requiredSections.includes('FULL_V3'), true);
     assert.equal(checkReadReceipt({ root, receipt: voluntaryFullReview }).requiredSections.includes('FULL_V3'), true);
-    assert.throws(() => checkReadReceipt({ root, receipt: { ...voluntaryFullCoding, requiredSections: ['README', '0', '19', '20'], readSections: ['README', '0', '19', '20'] } }), /requiredSections does not match/);
+    assert.throws(() => checkReadReceipt({ root, receipt: { ...voluntaryFullCoding, requiredSections: ['README', 'V3_INDEX', '0', '19', '20'], readSections: ['README', 'V3_INDEX', '0', '19', '20'] } }), /requiredSections does not match/);
     assert.throws(() => checkReadReceipt({ root, receipt: { ...voluntaryFullReview, readSections: ['README'] } }), /missing a required/);
     const scoped = receipt(root, {
       role: 'coding', profile: 'SCOPED', riskProfile: 'workflow_docs_metadata', relevantSections: ['21'],
-      requiredSections: ['README', '0', '19', '20', '21'], readSections: ['README', '0', '19', '20', '21'],
+      requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '21'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '21'],
     });
     assert.equal(checkReadReceipt({ root, receipt: scoped }).requiredSections.includes('21'), true);
     assert.equal(specReadPlan({ role: 'review', riskProfile: 'workflow_docs_metadata', relevantSections: ['21'] }).profile, 'SCOPED');
@@ -419,7 +420,10 @@ test('spec-read receipts enforce full/scoped plans and canonical v3 hash', () =>
       assert.throws(() => checkReadReceipt({ root, receipt: { ...scoped, readSections: scoped.readSections.filter((item) => item !== missing) } }), /missing a required/);
       assert.throws(() => checkReadReceipt({ root, receipt: { ...scoped, requiredSections: scoped.requiredSections.filter((item) => item !== missing), readSections: scoped.readSections.filter((item) => item !== missing) } }), /requiredSections does not match/);
     }
-    assert.throws(() => checkReadReceipt({ root, receipt: { ...scoped, riskProfile: 'runtime_behavior' } }), /profile must be FULL/);
+    assert.throws(() => checkReadReceipt({ root, receipt: { ...scoped, riskProfile: 'runtime_behavior' } }), /profile must be ROUTED/);
+    const routed = specReadPlan({ role: 'coordinator', riskProfile: 'runtime_product_domain', relevantSections: ['6', '20'] });
+    assert.equal(routed.profile, 'ROUTED');
+    assert.deepEqual(routed.requiredSections, ['README', 'V3_INDEX', '0', '19', '20', '6']);
   } finally { cleanup(root); }
 });
 
@@ -442,7 +446,7 @@ test('full-read sessions reuse only exact continuous low-risk evidence', () => {
     assert.throws(() => checkFullReadSession({ root, session: { ...session, contextState: 'compacted' } }), /unknown or compacted/);
     assert.throws(() => checkReadReceipt({ root, receipt: { ...reused, reuseEvidence: { ...reused.reuseEvidence, agentIdentity: 'agent:other' } }, currentReuseContext: current }), /exact same agent/);
     assert.throws(() => checkReadReceipt({ root, receipt: { ...reused, riskProfile: 'runtime_product_domain' }, currentReuseContext: current }), /only valid/);
-    assert.throws(() => checkReadReceipt({ root, receipt: { ...reused, readSections: ['README', '0', '19', '20'] }, currentReuseContext: current }), /explicitly read/);
+    assert.throws(() => checkReadReceipt({ root, receipt: { ...reused, readSections: ['README', 'V3_INDEX', '0', '19', '20'] }, currentReuseContext: current }), /explicitly read/);
     assert.throws(() => checkReadReceipt({ root, receipt: reused, currentReuseContext: { ...current, currentAgentIdentity: 'agent:other' } }), /caller-provided/);
     assert.throws(() => checkReadReceipt({ root, receipt: reused, currentReuseContext: { ...current, currentContextState: 'compacted' } }), /currentContextState/);
     const copiedSession = { ...reused.reuseEvidence.session, agentIdentity: 'agent:other' };
@@ -452,8 +456,8 @@ test('full-read sessions reuse only exact continuous low-risk evidence', () => {
     assert.equal(checkFullReadSession({ root, session: { ...session, createdAt: '2024-02-29T23:59:59Z' } }).sessionHash.length, 64);
     unlinkSync(path.join(root, 'session.json'));
     unlinkSync(path.join(root, 'reused-receipt.json'));
-    const coding = receipt(root, { taskId: 'task-2', role: 'coding', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'implementation' });
-    const review = receipt(root, { taskId: 'task-2', role: 'review', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'review' });
+    const coding = receipt(root, { taskId: 'task-2', role: 'coding', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'implementation' });
+    const review = receipt(root, { taskId: 'task-2', role: 'review', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'review' });
     const verdictBrief = brief(root, { taskId: 'task-2', phase: 'verdict', reviewedHead: command(root, ['rev-parse', 'HEAD']), specReadReceipts: [reused, coding, review] });
     assert.equal(validationExecutionPlan({ root, brief: verdictBrief, currentReuseContext: current }).artifact.artifactIdentity.kind, 'commit');
     assert.throws(() => validationExecutionPlan({ root, brief: verdictBrief }), /currentReuseContext/);
@@ -472,8 +476,8 @@ test('REUSE_FULL runValidation and CLI fail before execution without trusted cur
   try {
     const reused = reusedReceipt(root);
     const current = currentReuseContext(reused.reuseEvidence.session);
-    const coding = receipt(root, { taskId: 'task-2', role: 'coding', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'implementation' });
-    const review = receipt(root, { taskId: 'task-2', role: 'review', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'review' });
+    const coding = receipt(root, { taskId: 'task-2', role: 'coding', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'implementation' });
+    const review = receipt(root, { taskId: 'task-2', role: 'review', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'review' });
     const verdictBrief = brief(root, { taskId: 'task-2', phase: 'verdict', reviewedHead: command(root, ['rev-parse', 'HEAD']), specReadReceipts: [reused, coding, review] });
     const briefPath = path.join(handoff, 'verdict-brief.json');
     const contextsPath = path.join(handoff, 'reuse-contexts.json');
@@ -520,7 +524,7 @@ test('TaskBrief enforces dirty-worktree isolation and deterministic identity', (
     write(root, 'AGENTS.md', 'preexisting\n');
     const baseline = buildOwnedBaselineManifest({ root, baseSha: clean.baseSha, ownedPaths: ['docs/tackle-forger-development-spec-v3.md', 'AGENTS.md'] });
     assert.throws(() => checkTaskBrief({ root, brief: { ...clean, preexistingOwnedPaths: ['AGENTS.md'], dirtyWorktreeDisposition: 'include_with_frozen_baseline' } }), /unknown, missing, or inapplicable keys/);
-    const frozen = { ...clean, ownedPaths: ['AGENTS.md', 'docs/tackle-forger-development-spec-v3.md'], allowedChanges: ['AGENTS.md', 'docs/tackle-forger-development-spec-v3.md'], preexistingOwnedPaths: ['AGENTS.md'], riskProfile: 'runtime_product_domain', scopeHasRuntimeSemantics: true, changeClass: 'typescript_api', validationPlan: { requiredCommands: ['npm run typecheck', 'npm run lint', 'npm test'], requiredScenarios: ['normal_path'], intentionallyNotApplicable: nonLegacyNa() }, specReadReceipts: [receipt(root, { riskProfile: 'runtime_product_domain', reason: 'authority baseline' })], dirtyWorktreeDisposition: 'include_with_frozen_baseline', preTaskOwnedBaselineManifest: baseline, preTaskOwnedBaselineHash: ownedBaselineHash(baseline) };
+    const frozen = { ...clean, ownedPaths: ['AGENTS.md', 'docs/tackle-forger-development-spec-v3.md'], allowedChanges: ['AGENTS.md', 'docs/tackle-forger-development-spec-v3.md'], preexistingOwnedPaths: ['AGENTS.md'], riskProfile: 'runtime_product_domain', scopeHasRuntimeSemantics: true, changeClass: 'typescript_api', validationPlan: { requiredCommands: ['npm run typecheck', 'npm run lint', 'npm test', 'node scripts/spec-v3-modules.mjs --check'], requiredScenarios: ['normal_path'], intentionallyNotApplicable: nonLegacyNa() }, specReadReceipts: [receipt(root, { riskProfile: 'runtime_product_domain', reason: 'authority baseline' })], dirtyWorktreeDisposition: 'include_with_frozen_baseline', preTaskOwnedBaselineManifest: baseline, preTaskOwnedBaselineHash: ownedBaselineHash(baseline) };
     assert.equal(checkTaskBrief({ root, brief: frozen }).dirtyWorktreeDisposition, 'include_with_frozen_baseline');
     assert.equal(ownedBaselineHash(baseline), ownedBaselineHash(JSON.parse(JSON.stringify(baseline))));
     assert.throws(() => checkTaskBrief({ root, brief: { ...frozen, preTaskOwnedBaselineHash: '0'.repeat(64) } }), /must match its deterministic baseline manifest/);
@@ -540,8 +544,8 @@ test('TaskBrief rejects empty shells and verdict cross-checks all durable identi
       assert.throws(() => checkTaskBrief({ root, brief: invalid }), /TaskBrief/);
     }
     assert.throws(() => checkTaskBrief({ root, brief: { ...preDispatch, validation: [{ command: null, naReason: '' }] } }), /unknown, missing, or inapplicable keys/);
-    const coding = receipt(root, { role: 'coding', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'implementation' });
-    const review = receipt(root, { role: 'review', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'review' });
+    const coding = receipt(root, { role: 'coding', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'implementation' });
+    const review = receipt(root, { role: 'review', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'review' });
     const verdictBrief = { ...preDispatch, phase: 'verdict', specReadReceipts: [preDispatch.specReadReceipts[0], coding, review] };
     const checkedBrief = checkTaskBrief({ root, brief: verdictBrief });
     const verdict = {
@@ -580,8 +584,8 @@ test('TaskBrief promotion preserves semantics and rejects mismatched, duplicate,
   try {
     taskBase(root);
     const source = brief(root);
-    const coding = receipt(root, { role: 'coding', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'implementation coverage' });
-    const review = receipt(root, { role: 'review', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'independent review coverage' });
+    const coding = receipt(root, { role: 'coding', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'implementation coverage' });
+    const review = receipt(root, { role: 'review', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'independent review coverage' });
     write(root, 'AGENTS.md', 'task-owned change\n');
     const promoted = promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review });
     assert.equal(checkTaskBrief({ root, brief: promoted }).phase, 'verdict');
@@ -607,8 +611,8 @@ test('TaskBrief promotion rejects a source artifact made stale by a new HEAD', (
   try {
     taskBase(root);
     const source = brief(root);
-    const coding = receipt(root, { role: 'coding', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'implementation coverage' });
-    const review = receipt(root, { role: 'review', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'review coverage' });
+    const coding = receipt(root, { role: 'coding', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'implementation coverage' });
+    const review = receipt(root, { role: 'review', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'review coverage' });
     write(root, 'later.txt', 'new HEAD\n');
     command(root, ['add', 'later.txt']);
     command(root, ['commit', '-qm', 'advance HEAD']);
@@ -624,15 +628,15 @@ test('TaskBrief promotion validates frozen baselines and trusted REUSE_FULL cont
     const baseline = buildOwnedBaselineManifest({ root, baseSha: command(root, ['rev-parse', 'HEAD']), ownedPaths: ['AGENTS.md'] });
     const frozen = brief(root, { preexistingOwnedPaths: ['AGENTS.md'], dirtyWorktreeDisposition: 'include_with_frozen_baseline', preTaskOwnedBaselineManifest: baseline, preTaskOwnedBaselineHash: ownedBaselineHash(baseline) });
     write(root, 'AGENTS.md', 'post-baseline owned change\n');
-    const coding = receipt(root, { role: 'coding', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'coding coverage' });
-    const review = receipt(root, { role: 'review', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'review coverage' });
+    const coding = receipt(root, { role: 'coding', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'coding coverage' });
+    const review = receipt(root, { role: 'review', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'review coverage' });
     assert.equal(promoteTaskBrief({ root, brief: frozen, codingReceipt: coding, reviewReceipt: review }).dirtyWorktreeDisposition, 'include_with_frozen_baseline');
     assert.throws(() => promoteTaskBrief({ root, brief: { ...frozen, preTaskOwnedBaselineHash: '0'.repeat(64) }, codingReceipt: coding, reviewReceipt: review }), /must match its deterministic baseline manifest/);
 
     const coordinatorReuse = reusedReceiptForRole(root, 'coordinator');
     const reuseBrief = brief(root, { taskId: 'task-2', specReadReceipts: [coordinatorReuse] });
-    const codingReuse = receipt(root, { taskId: 'task-2', role: 'coding', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'coding scoped coverage' });
-    const reviewReuse = receipt(root, { taskId: 'task-2', role: 'review', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'review scoped coverage' });
+    const codingReuse = receipt(root, { taskId: 'task-2', role: 'coding', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'coding scoped coverage' });
+    const reviewReuse = receipt(root, { taskId: 'task-2', role: 'review', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'review scoped coverage' });
     const current = currentReuseContext(coordinatorReuse.reuseEvidence.session);
     assert.equal(promoteTaskBrief({ root, brief: reuseBrief, codingReceipt: codingReuse, reviewReceipt: reviewReuse, currentReuseContext: current }).phase, 'verdict');
     assert.throws(() => promoteTaskBrief({ root, brief: reuseBrief, codingReceipt: codingReuse, reviewReceipt: reviewReuse }), /currentReuseContext/);
@@ -676,8 +680,8 @@ test('TaskBrief promotion accepts deleted and untracked owned artifacts but reje
   try {
     taskBase(root);
     const source = brief(root);
-    const coding = receipt(root, { role: 'coding', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'coding coverage' });
-    const review = receipt(root, { role: 'review', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'review coverage' });
+    const coding = receipt(root, { role: 'coding', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'coding coverage' });
+    const review = receipt(root, { role: 'review', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'review coverage' });
     unlinkSync(path.join(root, 'AGENTS.md'));
     assert.equal(promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review }).phase, 'verdict');
     assert.throws(() => buildPatchManifest({ root, baseSha: source.baseSha, ownedPaths: ['bad\0path'] }), /Invalid owned path/);
@@ -690,9 +694,9 @@ test('TaskBrief promotion accepts an untracked scoped owned artifact', () => {
     taskBase(root);
     const ownedPath = '.codex/skills/tackle-agent-workflow/new-owned.md';
     const baseSha = command(root, ['rev-parse', 'HEAD']);
-    const source = brief(root, { ownedPaths: [ownedPath], allowedChanges: [ownedPath], validationPlan: { ...brief(root).validationPlan, requiredCommands: ['node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-policy', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-index', 'node --test .codex/skills/tackle-agent-workflow/scripts/workflow-contract.test.mjs', ownedWhitespaceCommand(baseSha, [ownedPath])] } });
-    const coding = receipt(root, { role: 'coding', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'coding coverage' });
-    const review = receipt(root, { role: 'review', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'review coverage' });
+    const source = brief(root, { ownedPaths: [ownedPath], allowedChanges: [ownedPath], validationPlan: { ...brief(root).validationPlan, requiredCommands: ['node scripts/spec-v3-modules.mjs --check', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-policy', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-index', 'node --test .codex/skills/tackle-agent-workflow/scripts/workflow-contract.test.mjs', ownedWhitespaceCommand(baseSha, [ownedPath])] } });
+    const coding = receipt(root, { role: 'coding', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'coding coverage' });
+    const review = receipt(root, { role: 'review', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'review coverage' });
     write(root, ownedPath, 'new owned artifact\n');
     assert.equal(promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review }).phase, 'verdict');
   } finally { cleanup(root); }
@@ -705,8 +709,8 @@ test('derived evidence stages keep development light and freeze only the review 
     const development = brief(root);
     assert.equal(checkTaskBrief({ root, brief: development }).phase, 'pre_dispatch');
     assert.throws(() => checkTaskBrief({ root, brief: { ...development, evidenceStage: 'local_review_handoff' } }), /unknown, missing, or inapplicable keys/);
-    const coding = receipt(root, { role: 'coding', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'implementation' });
-    const review = receipt(root, { role: 'review', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'review' });
+    const coding = receipt(root, { role: 'coding', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'implementation' });
+    const review = receipt(root, { role: 'review', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'review' });
     const committedBrief = { ...development, phase: 'verdict', reviewedHead: development.baseSha, specReadReceipts: [development.specReadReceipts[0], coding, review] };
     const checked = checkTaskBrief({ root, brief: committedBrief });
     const identity = committedBrief.reviewedHead;
@@ -772,7 +776,7 @@ test('SCOPED eligibility, clean Issue/PR routing, sections, OPEN IDs, and receip
     const runtimeReceipt = receipt(root, { riskProfile: 'runtime_product_domain', reason: 'runtime change' });
     const runtimeBrief = { ...local, ownedPaths: ['src/runtime.ts'], allowedChanges: ['src/runtime.ts'], riskProfile: 'runtime_product_domain', scopeHasRuntimeSemantics: true, changeClass: 'typescript_api', validationPlan: { requiredCommands: ['npm run typecheck', 'npm run lint', 'npm test'], requiredScenarios: ['normal_path'], intentionallyNotApplicable: nonLegacyNa() }, specReadReceipts: [runtimeReceipt] };
     assert.equal(checkTaskBrief({ root, brief: runtimeBrief }).phase, 'pre_dispatch');
-    assert.throws(() => checkTaskBrief({ root, brief: { ...runtimeBrief, specReadReceipts: [{ ...runtimeReceipt, profile: 'SCOPED' }] } }), /profile must be FULL/);
+    assert.throws(() => checkTaskBrief({ root, brief: { ...runtimeBrief, specReadReceipts: [{ ...runtimeReceipt, profile: 'SCOPED' }] } }), /profile must be ROUTED/);
     assert.throws(() => checkTaskBrief({ root, brief: { ...local, specReadReceipts: [local.specReadReceipts[0], local.specReadReceipts[0]] } }), /duplicate receipt coverage/);
     assert.throws(() => checkTaskBrief({ root, brief: { ...local, relevantSections: ['1', '20', '404'] } }), /section absent/);
     assert.throws(() => checkTaskBrief({ root, brief: { ...local, openDecisionCheck: { ...local.openDecisionCheck, checkedIds: ['OPEN-999'], applicableIds: ['OPEN-999'] } } }), /complete current v3 OPEN registry/);
@@ -786,8 +790,8 @@ test('SCOPED eligibility, clean Issue/PR routing, sections, OPEN IDs, and receip
     assert.throws(() => checkTaskBrief({ root, brief: issue }), /current HEAD|HEAD to equal baseSha/);
     const featureIssue = { ...issue, reviewedHead: command(root, ['rev-parse', 'HEAD']) };
     assert.equal(checkTaskBrief({ root, brief: featureIssue }).reviewedHead, featureIssue.reviewedHead);
-    const coding = receipt(root, { role: 'coding', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'implementation' });
-    const review = receipt(root, { role: 'review', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'review' });
+    const coding = receipt(root, { role: 'coding', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'implementation' });
+    const review = receipt(root, { role: 'review', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'review' });
     const duplicateBase = command(root, ['rev-parse', 'HEAD']);
     const duplicate = { ...local, baseSha: duplicateBase, reviewedHead: 'WORKTREE', validationPlan: { ...local.validationPlan, requiredCommands: [...local.validationPlan.requiredCommands.filter((item) => !item.includes('--check-owned-whitespace')), ownedWhitespaceCommand(duplicateBase, ['AGENTS.md'])] }, phase: 'verdict', specReadReceipts: [local.specReadReceipts[0], coding, review, review] };
     assert.throws(() => checkTaskBrief({ root, brief: duplicate }), /duplicate receipt coverage/);
@@ -888,5 +892,42 @@ test('legacy workspace requires its full CI command set and no legacy N/A', () =
     assert.equal(checkTaskBrief({ root, brief: complete }).phase, 'pre_dispatch');
     const contractSource = readFileSync(new URL('./workflow-contract.mjs', import.meta.url), 'utf8');
     assert.doesNotMatch(contractSource, /\.codex\/skills\/tackle-agent-workflow\/scripts\/package-manager-boundaries\.mjs|pnpm -r/);
+  } finally { cleanup(root); }
+});
+
+test('canonical modular routes reject incomplete runtime coverage and accept a complete route', () => {
+  const root = process.cwd();
+  assert.throws(
+    () => specReadPlan({ root, role: 'coordinator', riskProfile: 'runtime_product_domain', relevantSections: ['20'] }),
+    /complete applicable canonical v3 route/,
+  );
+  const plan = specReadPlan({
+    root,
+    role: 'coordinator',
+    riskProfile: 'runtime_product_domain',
+    relevantSections: ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '19', '20'],
+  });
+  assert.equal(plan.profile, 'ROUTED');
+  assert.equal(plan.requiredSections.includes('FULL_V3'), false);
+});
+
+test('canonical specification paths always trigger the module consistency command', () => {
+  const root = temporaryRepo();
+  try {
+    taskBase(root);
+    const input = prepareInput(root, {
+      riskProfile: 'runtime_product_domain',
+      scopeHasRuntimeSemantics: true,
+      changeClass: 'typescript_api',
+      ownedPaths: ['docs/tackle-forger-development-spec-v3.md'],
+      coordinatorSpecReadReceipt: receipt(root, {
+        taskId: 'prepared-task',
+        riskProfile: 'runtime_product_domain',
+        relevantSections: ['0', '19', '20'],
+        reason: 'Canonical specification structure change requires full authority coverage.',
+      }),
+    });
+    const prepared = prepareTaskBrief({ root, input });
+    assert.equal(prepared.validationPlan.requiredCommands.includes('node scripts/spec-v3-modules.mjs --check'), true);
   } finally { cleanup(root); }
 });

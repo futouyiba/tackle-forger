@@ -1,0 +1,228 @@
+{
+  "format": "tackle-v3-modules/v1",
+  "canonicalRoot": "docs/spec-v3",
+  "compatibilityMirror": "docs/tackle-forger-development-spec-v3.md",
+  "readingProtocol": {
+    "alwaysRead": [
+      "docs/spec-v3/README.md",
+      "docs/spec-v3/00-authority.md",
+      "docs/spec-v3/05-open-decisions.md"
+    ],
+    "selectRoutesBeforeReading": true,
+    "fullReadWhen": [
+      "scope_unknown",
+      "cross_domain_broad",
+      "canonical_structure_change"
+    ]
+  },
+  "preamble": "# Tackle Forger 产品与领域开发规范 v3\n\n> 状态：**唯一权威规范 / Canonical**  \n>首次定稿：2026-07-21  \n> 最后修订：2026-07-24\n> 适用对象：产品设计、领域建模、前后端开发、数据迁移、测试与代码审查  \n> 源数据参考：《淡水路亚杆轮线装备设计.xlsx》\n\n",
+  "modules": [
+    {
+      "id": "00",
+      "file": "00-authority.md",
+      "sections": [
+        "0"
+      ],
+      "title": "权威、固定原则与禁止事项",
+      "path": "docs/spec-v3/00-authority.md",
+      "sha256": "c83173073a3ed0060953ae4590afe7e362683b0b75d1fa5ba7c12833f866d248"
+    },
+    {
+      "id": "01",
+      "file": "01-product-foundations.md",
+      "sections": [
+        "1",
+        "2",
+        "3",
+        "4",
+        "5"
+      ],
+      "title": "产品范围、术语、生成顺序与结构匹配",
+      "path": "docs/spec-v3/01-product-foundations.md",
+      "sha256": "5e8d5ebfb6ce941f8949d054da09fdec03b30c43aed54d4d57b7878705765124"
+    },
+    {
+      "id": "02",
+      "file": "02-product-model.md",
+      "sections": [
+        "6",
+        "7",
+        "8"
+      ],
+      "title": "Collection、Series、SKU、Model 与 Patch",
+      "path": "docs/spec-v3/02-product-model.md",
+      "sha256": "05ac12c8d6b3312dc0af71f1ed19b85ce1f368066d58992c90780e0508fcc3e1"
+    },
+    {
+      "id": "03",
+      "file": "03-rules-and-validation.md",
+      "sections": [
+        "9",
+        "10",
+        "11",
+        "12",
+        "13"
+      ],
+      "title": "兼容、数值、词条、品质与校验",
+      "path": "docs/spec-v3/03-rules-and-validation.md",
+      "sha256": "b4fe1d72ec2dffc7232cdd7ad77e0d76166f03970034cf1635e6c090875b24d0"
+    },
+    {
+      "id": "04",
+      "file": "04-persistence-and-lifecycle.md",
+      "sections": [
+        "14",
+        "15",
+        "16",
+        "17",
+        "18"
+      ],
+      "title": "版本、快照、飞书、工作区与回归",
+      "path": "docs/spec-v3/04-persistence-and-lifecycle.md",
+      "sha256": "ea1131fbc38c7db9d7a316773f50b1fca8bbb03983715260289358b511340647"
+    },
+    {
+      "id": "05",
+      "file": "05-open-decisions.md",
+      "sections": [
+        "19",
+        "20"
+      ],
+      "title": "Agent 检查表与未决事项登记表",
+      "path": "docs/spec-v3/05-open-decisions.md",
+      "sha256": "859c7a68cca2067f37b2b20093926fa65c6f939ea96ebc8ea8c1e1b2c68be418"
+    },
+    {
+      "id": "06",
+      "file": "06-visualization-and-ai.md",
+      "sections": [
+        "21",
+        "22",
+        "23"
+      ],
+      "title": "五维图、比较、甘特图与 AI 建议",
+      "path": "docs/spec-v3/06-visualization-and-ai.md",
+      "sha256": "a520f95bdc3e8d3fedd05c2f41e2061d707f4e1bb297b6365aa499fafda0a6b0"
+    },
+    {
+      "id": "07",
+      "file": "07-interaction-contract.md",
+      "sections": [
+        "24"
+      ],
+      "title": "交互与后端统一需求契约",
+      "path": "docs/spec-v3/07-interaction-contract.md",
+      "sha256": "9123caddec082a1e9bbff743638fc374ae6c08ce42c05775eb7a57dd20740dc4"
+    },
+    {
+      "id": "08",
+      "file": "08-deployment-and-export.md",
+      "sections": [
+        "25"
+      ],
+      "title": "内网部署、身份与配置表交付",
+      "path": "docs/spec-v3/08-deployment-and-export.md",
+      "sha256": "8efd68337ae5a1e5447a60fe49f853d15558b45f249ce17f81acc7fcd5ae1895"
+    }
+  ],
+  "routes": {
+    "ai": [
+      "00",
+      "05",
+      "06",
+      "07"
+    ],
+    "authorization": [
+      "00",
+      "04",
+      "05",
+      "07",
+      "08"
+    ],
+    "compatibility": [
+      "00",
+      "01",
+      "02",
+      "03",
+      "05"
+    ],
+    "deployment": [
+      "00",
+      "04",
+      "05",
+      "08"
+    ],
+    "export": [
+      "00",
+      "04",
+      "05",
+      "08"
+    ],
+    "feishu": [
+      "00",
+      "03",
+      "04",
+      "05",
+      "07"
+    ],
+    "five_axis": [
+      "00",
+      "05",
+      "06",
+      "07",
+      "08"
+    ],
+    "generation": [
+      "00",
+      "01",
+      "02",
+      "03",
+      "05"
+    ],
+    "migration": [
+      "00",
+      "02",
+      "03",
+      "04",
+      "05"
+    ],
+    "model_series_sku": [
+      "00",
+      "01",
+      "02",
+      "03",
+      "05"
+    ],
+    "patch": [
+      "00",
+      "02",
+      "03",
+      "04",
+      "05"
+    ],
+    "persistence_snapshot": [
+      "00",
+      "03",
+      "04",
+      "05"
+    ],
+    "pricing_quality_affix": [
+      "00",
+      "03",
+      "04",
+      "05"
+    ],
+    "ui_workbench": [
+      "00",
+      "01",
+      "02",
+      "05",
+      "06",
+      "07"
+    ],
+    "workflow_governance": [
+      "00",
+      "05"
+    ]
+  }
+}

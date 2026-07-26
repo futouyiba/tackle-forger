@@ -159,16 +159,21 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
     if (!inspection) return [];
     const name = (sheetId?: string) => (sheetId ? (sheetNameMap.get(sheetId) ?? sheetId) : "(未知表)");
     const rows: WorkbookIssueRow[] = [];
+    // weightTemplateDraft 的 WEIGHT_TEMPLATE_* 问题继承了 canonicalRuleDraft
+    // 的同名错误并附加更丰富的 sourceCell 列坐标。先 push weightTemplateDraft，
+    // 再收集 canonicalRuleDraft 时跳过 WEIGHT_TEMPLATE_*，避免同一根因展示两遍。
+    // 不做全局去重——其他来源内部的同 code 不同位置问题应全部保留。
     for (const issue of inspection.sourceRevision.issues) {
       rows.push({ sheetId: issue.sheetId, sheetName: name(issue.sheetId), level: issue.severity, code: issue.code, message: issue.message });
-    }
-    for (const issue of inspection.canonicalRuleDraft.issues) {
-      rows.push({ sheetId: issue.sheetId ?? "", sheetName: name(issue.sheetId), row: issue.row, level: issue.level, code: issue.code, message: issue.message });
     }
     for (const issue of inspection.weightTemplateDraft.issues) {
       const cell = issue.sourceCell?.cell;
       const row = cell ? Number.parseInt(cell.replace(/^[A-Z]+/, ""), 10) || undefined : undefined;
       rows.push({ sheetId: issue.sourceCell?.sheetId ?? "", sheetName: name(issue.sourceCell?.sheetId), row, cell, level: issue.severity === "ERROR" ? "error" : "warning", code: issue.code, message: issue.message });
+    }
+    for (const issue of inspection.canonicalRuleDraft.issues) {
+      if (issue.code.startsWith("WEIGHT_TEMPLATE_")) continue;
+      rows.push({ sheetId: issue.sheetId ?? "", sheetName: name(issue.sheetId), row: issue.row, level: issue.level, code: issue.code, message: issue.message });
     }
     for (const issue of inspection.seriesParseIssues) {
       rows.push({ sheetId: issue.sheetId, sheetName: name(issue.sheetId), row: issue.row, level: issue.level, code: issue.code, message: issue.message });

@@ -42,7 +42,7 @@ import { createPerformanceSummaryDefinition } from "../lib/performance-summary";
 import type { ProjectionTraceStep } from "../lib/types";
 
 const REVISION = "2922";
-const ref = (cell: string, sheetId = "u87sRh") => ({ sheetId, cell });
+const ref = (cell: string, sheetId = "31RxeB") => ({ sheetId, cell });
 const sourced = (value: number, cell: string) => ({ value, status: "CONFIRMED" as const, source: ref(cell) });
 
 function completeInput(overrides: Partial<PricingPolicyDraft> = {}) {
@@ -62,15 +62,15 @@ function completeInput(overrides: Partial<PricingPolicyDraft> = {}) {
   return {
     sourceRevisionId: `feishu-revision:${REVISION}`,
     sourceRevision: REVISION,
-    pricingSheetId: "u87sRh" as const,
-    qualitySheetId: "FqD4j7" as const,
-    typeMaterialSheetId: "fATowU" as const,
+    pricingSheetId: "31RxeB" as const,
+    qualitySheetId: "27hboC" as const,
+    typeMaterialSheetId: "10TyFp" as const,
     businessFormulaCells: [ref("B2"), ref("B8")],
     maintenanceConsumptionRates: [{ pricingWeightBandId: "band:matched", value: sourced(12_345_678, "D23") }],
     partAllocationRatios: [{ pricingWeightBandId: "band:matched", partId: "rod", value: sourced(1, "G23") }],
-    repairCoefficients: [{ partId: "rod", typeId: "RodType:spinning", value: { ...sourced(1, "U3"), source: ref("U3", "fATowU") } }],
+    repairCoefficients: [{ partId: "rod", typeId: "RodType:spinning", value: { ...sourced(1, "U3"), source: ref("U3", "10TyFp") } }],
     totalLossTimes: [{ pricingWeightBandId: "band:matched", partId: "rod", value: sourced(1, "M23") }],
-    purchaseCoefficients: [{ partId: "rod", typeId: "RodType:spinning", value: { ...sourced(1, "V3"), source: ref("V3", "fATowU") } }],
+    purchaseCoefficients: [{ partId: "rod", typeId: "RodType:spinning", value: { ...sourced(1, "V3"), source: ref("V3", "10TyFp") } }],
     partsToWholeRatios: [{ pricingWeightBandId: "band:matched", partId: "rod", value: sourced(1, "P23") }],
     qualityMappings: [
       ["quality_c_green", "C"], ["quality_b_blue", "B"],
@@ -79,7 +79,7 @@ function completeInput(overrides: Partial<PricingPolicyDraft> = {}) {
       qualityId: qualityId as QualityId,
       sourceAlias: code,
       status: "CONFIRMED" as const,
-      source: ref(`D${5 + index}`, "FqD4j7"),
+      source: ref(`D${5 + index}`, "27hboC"),
     })),
     qualityPriceFactorRanges: [
       ["quality_c_green", 0, 20, .5, 1.1],
@@ -90,10 +90,10 @@ function completeInput(overrides: Partial<PricingPolicyDraft> = {}) {
       qualityId: qualityId as QualityId,
       minScore: Number(minScore), maxScore: Number(maxScore), maxInclusive: qualityId === "quality_s_orange",
       minFactor: Number(minFactor), maxFactor: Number(maxFactor),
-      status: "CONFIRMED" as const, source: ref(`E${5 + index}:H${5 + index}`, "FqD4j7"),
+      status: "CONFIRMED" as const, source: ref(`E${5 + index}:H${5 + index}`, "27hboC"),
     })),
     scoreInterpolation: { kind: "quality_range_linear" as const, points: [], outOfRange: "error" as const, status: "CONFIRMED" as const, source: ref("B11") },
-    performanceScoringPolicy: { enabled: false, status: "CONFIRMED" as const, source: ref("B2", "FqD4j7") },
+    performanceScoringPolicy: { enabled: false, status: "CONFIRMED" as const, source: ref("B2", "27hboC") },
     moneyPolicy,
     executionPolicy: {
       repairRoundingStage: "final_repair_output" as const,

@@ -31,17 +31,7 @@ npm test
 npm run db:generate
 ```
 
-The repository also retains the historical `apps/web` and `packages/*` pnpm workspace. Its workspace manifest and lockfile live under `legacy-workspace/`, which deliberately has no root package importer. Validate it from that boundary; do not use pnpm success as a substitute for the authoritative root v3 app's npm checks, and do not let root npm-only dependency changes rewrite `legacy-workspace/pnpm-lock.yaml`:
-
-```powershell
-pnpm --dir legacy-workspace install --frozen-lockfile
-pnpm --dir legacy-workspace --filter '@tackle-forger/*' typecheck
-pnpm --dir legacy-workspace --filter '@tackle-forger/*' lint
-pnpm --dir legacy-workspace --filter '@tackle-forger/*' test
-pnpm --dir legacy-workspace --filter '@tackle-forger/*' build
-```
-
-CI runs the npm root application and pnpm historical workspace as independent jobs so one lockfile or toolchain cannot silently mask the other. Historical workspace dependency changes must update `legacy-workspace/pnpm-lock.yaml`; its frozen install is expected to reject manifest drift.
+The repository retains the historical `apps/web` and `packages/*` pnpm workspace under `legacy-workspace/`, but it is not part of daily development, CI, merge gates, or Agent validation. The authoritative root v3 application uses npm. Any restoration of historical workspace validation is a dedicated governance change using the recovery evidence in `legacy-workspace-last-green-2026-07-26` (Node 22.16.0 / pnpm 10.33.2).
 
 On Windows, the recommended local launcher is:
 

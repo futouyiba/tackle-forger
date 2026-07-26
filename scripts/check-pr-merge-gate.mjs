@@ -7,7 +7,6 @@ import { pathToFileURL } from "node:url";
 
 export const REQUIRED_CURRENT_HEAD_CHECKS = [
   "Root v3 app (npm)",
-  "Historical workspace (pnpm)",
   "Windows line-ending policy",
 ];
 

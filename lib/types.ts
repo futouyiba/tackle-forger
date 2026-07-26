@@ -195,7 +195,7 @@ export interface CanonicalAttributeOperation {
 
 export interface ReductionStackingPolicySource {
   workbookRefId: "feishu-workbook:tackle-design";
-  sheetId: "zrVOxd";
+  sheetId: "23CsXE";
   sourceRevisionId: string;
   sourceRevision: string;
   ruleId: string;

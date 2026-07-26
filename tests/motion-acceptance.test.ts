@@ -103,7 +103,7 @@ describe("MOTION-07 playback integrity", () => {
       s1 = motionPlaybackReducer(s1, { type: "play" }, model.steps.length);
       s1 = motionPlaybackReducer(s1, { type: "skip" }, model.steps.length);
 
-      let s2 = initialMotionPlaybackState(model, true);
+      const s2 = initialMotionPlaybackState(model, true);
 
       let s3 = initialMotionPlaybackState(model, false);
       s3 = motionPlaybackReducer(s3, { type: "play" }, model.steps.length);

@@ -1190,12 +1190,19 @@ export function checkPolicy(root = repositoryRoot()) {
   const visualBoundaryParagraphs = template
     .split(/\r?\n\s*\r?\n/)
     .map((paragraph) => paragraph.replace(/\s+/g, ' '));
-  const visualBoundaryContradiction = visualBoundaryParagraphs.some((paragraph) => {
-    const hasMinimalSmoke = /(?:Minimal render smoke|最小渲染)/i.test(paragraph);
-    const hasVisualReview = /(?:unified|pending|visual|视觉)/i.test(paragraph);
-    const hasCompletionClaim = /(?:replace(?:s|d)?|complet(?:e|es|ed)|remove(?:s|d)?|clear(?:s|ed)?|替代|完成)/i.test(paragraph);
-    const negatesCompletion = /(?:does not|doesn't|cannot|can't|must not|is not|isn't|are not|aren't|will not|won't|never|不得|不能|不)\s+(?:(?:be|get)\s+)?(?:replace(?:d)?|complet(?:e|ed)|remove(?:d)?|clear(?:ed)?|替代|完成)/i.test(paragraph);
-    return hasMinimalSmoke && hasVisualReview && hasCompletionClaim && !negatesCompletion;
+  const visualBoundaryStatements = visualBoundaryParagraphs.flatMap((paragraph) => (
+    paragraph.split(/(?<=[.!?;。！？；])\s+/).map((statement) => statement.trim()).filter(Boolean)
+  ));
+  const visualBoundaryContradiction = visualBoundaryStatements.some((statement) => {
+    const hasMinimalSmoke = /(?:Minimal render smoke|最小渲染)/i.test(statement);
+    const hasVisualReview = /(?:unified|pending|visual|视觉)/i.test(statement);
+    const completionClaims = statement.matchAll(/(?:replace(?:s|d)?|complet(?:e|es|ed)|remove(?:s|d)?|clear(?:s|ed)?|替代|完成)/gi);
+    const hasUnnegatedCompletionClaim = [...completionClaims].some((match) => {
+      const prefix = statement.slice(Math.max(0, match.index - 40), match.index);
+      const englishNegation = /(?:does not|doesn't|cannot|can't|must not|is not|isn't|are not|aren't|will not|won't|never|not)\s+(?:(?:be|get)\s+)?$/i;
+      return !englishNegation.test(prefix) && !/(?:不得|不能|不)$/.test(prefix);
+    });
+    return hasMinimalSmoke && hasVisualReview && hasUnnegatedCompletionClaim;
   });
   if (visualBoundaryContradiction) fail('Workflow policy drift: minimal render smoke contradicts the unified visual review boundary');
   const contradictions = [

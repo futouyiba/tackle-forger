@@ -620,6 +620,9 @@ test('policy checker detects required workflow markers', () => {
     write(root, '.github/pull_request_template.md', canonicalTemplate);
     appendFileSync(path.join(root, '.github/pull_request_template.md'), 'The unified visual review cannot be completed by a Minimal render smoke.\n');
     assert.equal(checkPolicy(root), true);
+    write(root, '.github/pull_request_template.md', canonicalTemplate);
+    appendFileSync(path.join(root, '.github/pull_request_template.md'), 'A Minimal render smoke does not complete the unified visual review. However, the unified visual review is completed by a Minimal render smoke.\n');
+    assert.throws(() => checkPolicy(root), /minimal render smoke contradicts/);
   } finally { cleanup(root); }
 });
 

@@ -9,6 +9,22 @@
 .rule-workbook-error { align-items: center; background: #fff5f4; border-color: #f3cbc6; color: #a7352c; display: flex; gap: 10px; }
 .rule-workbook-error div { display: flex; flex-direction: column; gap: 3px; }
 .rule-workbook-error span { font-size: 10px; }
+.rule-workbook-error-message { color: #a7352c; font-weight: 500; }
+.rule-workbook-error-detail {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 3px 10px;
+  margin-top: 6px;
+  font-size: 10px;
+  color: #8b6914;
+  background: #fffdf5;
+  border: 1px solid #f3e2a6;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.rule-workbook-error-detail dt { font-weight: 600; white-space: nowrap; }
+.rule-workbook-error-detail dd { margin: 0; word-break: break-all; }
+.rule-workbook-error-detail code { font-family: var(--font-mono, monospace); background: #fef3c7; padding: 1px 4px; border-radius: 3px; }
 .rule-workbook-flow { align-items: stretch; display: grid; gap: 8px; grid-template-columns: repeat(4, minmax(210px, 1fr)); }
 .rule-workbook-flow > svg { align-self: center; color: #98a3af; justify-self: center; }
 .rule-workbook-flow > .card { display: flex; flex-direction: column; gap: 7px; min-height: 145px; min-width: 0; }
@@ -55,3 +71,22 @@
 @media (max-width: 1280px) { .rule-workbook-flow { grid-template-columns: repeat(2, minmax(210px, 1fr)); } .rule-workbook-flow > svg { display: none; } }
 @media (max-width: 980px) { .rule-workbook-grid { grid-template-columns: 1fr; } .rule-workbook-flow { grid-template-columns: 1fr; } }
 @media (max-width: 720px) { .rule-workbook-hero { align-items: flex-start; flex-direction: column; gap: 14px; min-width: 0; width: 100%; } .rule-workbook-live { align-items: flex-start; min-width: 0; width: 100%; } .rule-metrics { grid-template-columns: 1fr; } .quality-basket-map { grid-template-columns: 1fr; } .rule-boundary-card { align-items: flex-start; grid-template-columns: 22px minmax(0,1fr); } .rule-boundary-card > .rule-badge { grid-column: 2; } }
+
+/* ── 工作簿校验问题面板 ── */
+.wb-issue-toggle { align-items: center; background: none; border: none; color: var(--muted); cursor: pointer; display: flex; font-size: 12px; font-weight: 700; gap: 8px; padding: 4px 0; width: 100%; }
+.wb-issue-toggle:hover { color: var(--fg); }
+.wb-issue-toggle-hint { font-size: 10px; font-weight: 500; margin-left: auto; opacity: .55; }
+.wb-issue-list { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.wb-issue-group { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.wb-issue-group-header { align-items: center; background: #f8f9fb; border-bottom: 1px solid var(--line); display: flex; gap: 8px; padding: 7px 12px; }
+.wb-issue-sheet-name { font-size: 12px; font-weight: 750; }
+.wb-issue-sheet-count { color: var(--muted); font-size: 10px; font-weight: 500; }
+.wb-issue-rows { display: flex; flex-direction: column; gap: 0; list-style: none; margin: 0; padding: 0; }
+.wb-issue-row { align-items: baseline; border-bottom: 1px solid #f3f4f6; display: flex; flex-wrap: wrap; gap: 6px 10px; padding: 7px 12px; }
+.wb-issue-row:last-child { border-bottom: none; }
+.wb-issue-row.error { background: #fffbfb; }
+.wb-issue-row.warning { background: #fffefa; }
+.wb-issue-code { background: #f3f4f6; border-radius: 3px; color: #6b7280; flex-shrink: 0; font-size: 9px; font-weight: 600; padding: 1px 6px; }
+.wb-issue-row.error .wb-issue-code { background: #fee2e2; color: #b42318; }
+.wb-issue-location { color: var(--muted); flex-shrink: 0; font-size: 9px; font-variant-numeric: tabular-nums; }
+.wb-issue-message { color: var(--fg); font-size: 11px; line-height: 1.5; min-width: 0; word-break: break-word; }

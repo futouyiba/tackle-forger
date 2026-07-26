@@ -101,21 +101,26 @@ function readJsonFile(file, label) {
   catch { fail(`${label} must be readable JSON: ${file}`); }
 }
 function compareUtf8(left, right) { return Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8')); }
+function isCanonicalRepoRelativePath(input) {
+  if (typeof input !== 'string' || input.length === 0 || Buffer.from(input, 'utf8').toString('utf8') !== input || input.includes('\0') || path.isAbsolute(input) || input.includes('\\')) return false;
+  const parts = input.split('/');
+  return !parts.some((part) => part === '' || part === '.' || part === '..');
+}
 function isScopedGovernancePath(repoPath) {
-  return repoPath === 'AGENTS.md'
+  return isCanonicalRepoRelativePath(repoPath) && (repoPath === 'AGENTS.md'
     || repoPath.startsWith('.codex/skills/tackle-agent-workflow/')
     || /^docs\/(?:workflow|agent-governance)-[^/]+\.md$/.test(repoPath)
     || /^\.github\/[^/]+\.(?:md|ya?ml)$/.test(repoPath)
-    || /^\.github\/workflows\/[^/]+\.ya?ml$/.test(repoPath);
+    || /^\.github\/workflows\/[^/]+\.ya?ml$/.test(repoPath));
 }
 export function classifyOwnedPaths(ownedPaths) {
+  if (!Array.isArray(ownedPaths)) return { scopedEligible: false, unrecognizedPaths: [String(ownedPaths)] };
   const unrecognized = ownedPaths.filter((repoPath) => !isScopedGovernancePath(repoPath));
   return { scopedEligible: unrecognized.length === 0, unrecognizedPaths: unrecognized };
 }
 function validatePath(root, input) {
-  if (typeof input !== 'string' || input.length === 0 || Buffer.from(input, 'utf8').toString('utf8') !== input || input.includes('\0') || path.isAbsolute(input) || input.includes('\\')) fail(`Invalid owned path: ${String(input)}`);
+  if (!isCanonicalRepoRelativePath(input)) fail(`Invalid owned path: ${String(input)}`);
   const parts = input.split('/');
-  if (parts.some((part) => part === '' || part === '.' || part === '..')) fail(`Invalid owned path: ${input}`);
   const resolved = path.resolve(root, ...parts);
   const relative = path.relative(root, resolved);
   if (relative === '' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) fail(`Owned path escapes repository: ${input}`);
@@ -720,6 +725,11 @@ export function checkTaskBrief({ root = repositoryRoot(), brief, currentReuseCon
   const reviewedHead = validateIdentity(root, brief.reviewedHead, 'TaskBrief.reviewedHead', true);
   if (workflowMode === 'local' && reviewedHead !== 'WORKTREE' && reviewedHead !== git(root, ['rev-parse', 'HEAD']).toString('utf8').trim()) fail('Local TaskBrief.reviewedHead must be the current HEAD or explicit WORKTREE');
   const ownedPaths = requireStringArray(brief.ownedPaths, 'TaskBrief.ownedPaths');
+  const allowedChanges = requireNonEmptyStringArray(brief.allowedChanges, 'TaskBrief.allowedChanges');
+  const canonicalOwnedPaths = ownedPaths.map((owned) => validatePath(root, owned).path);
+  const canonicalAllowedChanges = allowedChanges.map((allowed) => validatePath(root, allowed).path);
+  if (!ownedPaths.every((owned, index) => owned === canonicalOwnedPaths[index])) fail('TaskBrief.ownedPaths must use canonical repo-relative paths');
+  if (!allowedChanges.every((allowed, index) => allowed === canonicalAllowedChanges[index])) fail('TaskBrief.allowedChanges must use canonical repo-relative paths');
   const legacyTouched = ownedPaths.some((owned) => owned.startsWith('legacy-workspace/'));
   validateBriefNarrative(brief, { legacyTouched });
   const relevantSections = requireNonEmptyStringArray(brief.relevantSections, 'TaskBrief.relevantSections');
@@ -730,7 +740,7 @@ export function checkTaskBrief({ root = repositoryRoot(), brief, currentReuseCon
   if (!['workflow_docs_metadata', 'runtime_product_domain', 'durable_migration', 'concurrency_auth', 'publication_export_external', 'unknown_high_risk'].includes(riskProfile)) fail('TaskBrief.riskProfile is invalid');
   if (typeof brief.scopeHasRuntimeSemantics !== 'boolean') fail('TaskBrief.scopeHasRuntimeSemantics must be boolean');
   if (riskProfile === 'workflow_docs_metadata' && brief.scopeHasRuntimeSemantics) fail('workflow_docs_metadata TaskBrief cannot claim runtime semantics');
-  if (!sameSet(ownedPaths, brief.allowedChanges)) fail('TaskBrief.allowedChanges must UTF-8-set exactly equal ownedPaths');
+  if (!sameSet(canonicalOwnedPaths, canonicalAllowedChanges)) fail('TaskBrief.allowedChanges must UTF-8-set exactly equal ownedPaths');
   if (brief.changeClass === 'workflow_metadata') {
     if (riskProfile !== 'workflow_docs_metadata' || brief.scopeHasRuntimeSemantics) fail('workflow_metadata requires workflow_docs_metadata with no runtime semantics');
   } else if (riskProfile === 'workflow_docs_metadata' || !brief.scopeHasRuntimeSemantics) {

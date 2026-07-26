@@ -693,6 +693,17 @@ test('SCOPED eligibility, clean Issue/PR routing, sections, OPEN IDs, and receip
     assert.deepEqual(classifyOwnedPaths(['.github/workflows/ci.yml']), { scopedEligible: true, unrecognizedPaths: [] });
     assert.deepEqual(classifyOwnedPaths(['.github/nested/arbitrary.md']), { scopedEligible: false, unrecognizedPaths: ['.github/nested/arbitrary.md'] });
     assert.deepEqual(classifyOwnedPaths(['.github/workflows/nested/ci.yml']), { scopedEligible: false, unrecognizedPaths: ['.github/workflows/nested/ci.yml'] });
+    for (const malformed of [
+      '.codex/skills/tackle-agent-workflow/../../../lib/runtime.ts',
+      '../evil.md',
+      '.github/./workflows/ci.yml',
+      '.github//workflows/ci.yml',
+      '.github\\workflows\\ci.yml',
+      '/tmp/ci.yml',
+    ]) {
+      assert.deepEqual(classifyOwnedPaths([malformed]), { scopedEligible: false, unrecognizedPaths: [malformed] });
+      assert.throws(() => checkTaskBrief({ root, brief: { ...local, ownedPaths: [malformed], allowedChanges: [malformed] } }), /Invalid owned path/);
+    }
     const workflowOwned = {
       ...local,
       ownedPaths: ['.github/workflows/ci.yml'],

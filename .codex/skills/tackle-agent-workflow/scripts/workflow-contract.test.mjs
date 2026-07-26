@@ -4,7 +4,7 @@ import { appendFileSync, chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { buildNavigationIndex, buildOwnedBaselineManifest, buildPatchManifest, checkNavigationIndex, checkPolicy, checkReadReceipt, checkTaskBrief, checkVerdict, openRegistryHash, ownedBaselineHash, patchHash, receiptHash, runCli, specReadPlan, taskBriefHash, writeNavigationIndex } from './workflow-contract.mjs';
+import { buildNavigationIndex, buildOwnedBaselineManifest, buildPatchManifest, canReuseValidation, captureValidationSummary, checkNavigationIndex, checkPolicy, checkReadReceipt, checkTaskBrief, checkVerdict, openRegistryHash, ownedBaselineHash, patchHash, receiptHash, runCli, specReadPlan, taskBriefHash, writeNavigationIndex } from './workflow-contract.mjs';
 
 function command(root, args) { return execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim(); }
 function write(root, relative, content) { const target = path.join(root, relative); mkdirSync(path.dirname(target), { recursive: true }); writeFileSync(target, content); }
@@ -42,6 +42,10 @@ function brief(root, overrides = {}) {
   };
 }
 function nonLegacyNa() { return { legacy_workspace_ci: 'No legacy-workspace path is owned.' }; }
+function reuseIdentity(inputIdentity) { return { artifactIdentity: inputIdentity, relevantInputsHash: '1'.repeat(64), dependencyLockHash: 'none', commandContractHash: '2'.repeat(64), environmentIdentity: 'node-22/linux' }; }
+function validationEvidence(taskBrief, inputIdentity) {
+  return captureValidationSummary({ inputIdentity, reuseIdentity: reuseIdentity(inputIdentity), timestamp: '2026-07-26T00:00:00.000Z', results: taskBrief.validationPlan.requiredCommands.map((command) => ({ command, exitCode: 0, durationMs: 1, failureDetail: null })) });
+}
 function taskBase(root) {
   write(root, 'docs/tackle-forger-development-spec-v3.md', '# V3\n\n## 0. Authority\n\n### 0.1 Immutable\n\n## 1. Scope\n\n### 3.1 Method and type\n\n### 5.2 Derived template\n\n## 8. Patch\n\n## 13. Snapshot\n\n## 14. Version\n\n### 18.2 Snapshot\n\n### 18.3 Patch\n\n## 19. Delivery\n\n## 20. Open\n\n### 24.11 Snapshot\n\n## 25. Export\n\n| ID | Type | Status |\n| --- | --- | --- |\n| OPEN-001 Test | x | `OPEN` |\n');
   write(root, 'AGENTS.md', 'base\n');
@@ -110,7 +114,7 @@ test('policy checker detects required workflow markers', () => {
     const project = '## 项目级 Agent Skills\n- 对本仓库中的实现、修复或重构，`$tackle-agent-workflow`为所有路由提供项目约束与 TaskBrief；只有本地路由使用其编码与独立本地审核。Issue 与 PR 路由仍分别遵循`$agent-issue-loop`和`$agent-pr-loop`；仓库的合并、发布和部署门禁不因项目级Skill存在而放宽。\n';
     const canonicalAgents = readFileSync(path.resolve(process.cwd(), 'AGENTS.md'), 'utf8');
     const agents = `${project}\n## Tackle 工作流契约\n- \`$tackle-agent-workflow\`提供项目约束和 TaskBrief；仅本地路由使用其编码与独立本地审核。Issue 生命周期归\`$agent-issue-loop\`，PR 审核/CI/修复归\`$agent-pr-loop\`；已有 PR 直接使用后者。不得增加第二个独立审核者。\n<!-- workflow-contract-policy/v2\n{"dirtyIsolation":{"issuePr":"clean_synced","localOwnedBaseline":"tackle-owned-baseline/v1"},"issue":{"localReviewer":false,"owner":"agent-issue-loop","prReviewer":"agent-pr-loop"},"local":{"independentReviewer":true,"owner":"tackle-agent-workflow"},"localVerdict":{"required":["taskBriefSha256","specReceiptHashes","dirtyWorktreeDisposition","specSha256","baseSha","reviewedHead","ownedPaths","patchHash"],"schema":"tackle-local-verdict/v1"},"pullRequest":{"owner":"agent-pr-loop","reviewer":"agent-pr-loop"},"reviewSeverity":{"passBlocking":["P0","P1","P2"],"p3":"informational"},"scopedEligibility":{"allowedPathClasses":["AGENTS.md",".codex/skills/tackle-agent-workflow/**","docs/(workflow|agent-governance)-*.md",".github/*.md|yml|yaml"],"unknownForcesFull":true},"specReceipt":{"schema":"tackle-spec-read/v1"},"taskBrief":{"closedSchema":true,"openDecisionCheck":true,"phaseReceipts":{"pre_dispatch":["coordinator"],"verdict":["coordinator","coding","review"]},"receiptRiskAuthority":true,"schema":"tackle-task-brief/v1","structuredFields":["changeClass","allowedChanges","riskDimensions","validationPlan"]},"validationMatrix":{"commandsAndScenariosSeparated":true,"prFinalCommandsNonWaivable":["npm run typecheck","npm run lint","npm test"],"userVisibleScenario":"unified_visual_review_pending_or_completed"},"visual":{"minimalSmokeCompletesReview":false,"pendingMarker":"视觉与交互统一检查待执行"}}\n-->\n## 本机凭据与多 worktree\n`;
-    const skill = '<!-- workflow-contract-policy-ref: AGENTS.md/workflow-contract-policy/v2 -->\n\n## Route before dispatch\n\n- **Local implementation, no Issue or PR:** this Skill owns one coding agent and one independent local reviewer.\n- **Issue delivery:** `$agent-issue-loop` owns Issue, branch, PR, closure, and handoff. Supply it this Skill\'s TaskBrief; do not start a local independent reviewer. Once a PR exists, `$agent-pr-loop` exclusively owns review, CI, fixes, and merge gates.\n- **Existing PR:** invoke `$agent-pr-loop` directly and supply the TaskBrief. Do not create a coding or review loop here.\n\n## Establish the TaskBrief\n\n<!-- workflow-contract-task-brief-ref/v1\n{"conditionalNaApplicability":{"legacyTouchedForbids":"legacy_workspace_ci","nonLegacyRequires":"legacy_workspace_ci","nonWorkflowForbids":"product_runtime_tests","workflowMetadataRequires":"product_runtime_tests"},"conditionalNaCatalog":{"legacyWorkspaceCi":"legacy_workspace_ci","productRuntimeTests":"product_runtime_tests"},"legacyWorkspaceCommands":["node --test tests/package-manager-boundaries.test.mjs","pnpm --dir legacy-workspace install --frozen-lockfile","pnpm --dir legacy-workspace --filter \'@tackle-forger/*\' typecheck","pnpm --dir legacy-workspace --filter \'@tackle-forger/*\' lint","pnpm --dir legacy-workspace --filter \'@tackle-forger/*\' test","pnpm --dir legacy-workspace --filter \'@tackle-forger/*\' build"],"triggeredCannotBeNa":true}\n-->\n\n## Spec receipts and worktree isolation\n';
+    const skill = '<!-- workflow-contract-policy-ref: AGENTS.md/workflow-contract-policy/v2 -->\n\n## Route before dispatch\n\n- **Local implementation, no Issue or PR:** this Skill owns one coding agent and one independent local reviewer.\n- **Issue delivery:** `$agent-issue-loop` owns Issue, branch, PR, closure, and handoff. Supply it this Skill\'s TaskBrief; do not start a local independent reviewer. Once a PR exists, `$agent-pr-loop` exclusively owns review, CI, fixes, and merge gates.\n- **Existing PR:** invoke `$agent-pr-loop` directly and supply the TaskBrief. Do not create a coding or review loop here.\n\n## Establish the TaskBrief\n\n<!-- workflow-contract-task-brief-ref/v1\n{"conditionalNaApplicability":{"legacyTouchedForbids":"legacy_workspace_ci","nonLegacyRequires":"legacy_workspace_ci","nonWorkflowForbids":"product_runtime_tests","workflowMetadataRequires":"product_runtime_tests"},"conditionalNaCatalog":{"legacyWorkspaceCi":"legacy_workspace_ci","productRuntimeTests":"product_runtime_tests"},"evidenceStages":{"development":"pre_dispatch_non_pr_final","localReviewHandoff":"local_verdict","prFinal":"pr_final_change_class"},"legacyWorkspaceCommands":["node --test tests/package-manager-boundaries.test.mjs","pnpm --dir legacy-workspace install --frozen-lockfile","pnpm --dir legacy-workspace --filter \'@tackle-forger/*\' typecheck","pnpm --dir legacy-workspace --filter \'@tackle-forger/*\' lint","pnpm --dir legacy-workspace --filter \'@tackle-forger/*\' test","pnpm --dir legacy-workspace --filter \'@tackle-forger/*\' build"],"triggeredCannotBeNa":true}\n-->\n\n## Spec receipts and worktree isolation\n';
     const yaml = 'interface:\n  display_name: "Tackle Agent Workflow"\n  short_description: "Prepare scoped work and locally review implementation"\n  default_prompt: "Use $tackle-agent-workflow to prepare the TaskBrief, choose the correct local, Issue, or PR route, and run only the applicable workflow. Preserve the pending unified visual-review marker unless full visual work is explicitly scoped."\n';
     const template = '## Visual evidence\n\n| Unified visual and interaction review | 视觉与交互统一检查待执行 / Full visual and interaction review completed |\n| Minimal render smoke | Not run / Completed; this never changes the unified-review status |\n\n## Risks, recovery, and rollback\n';
     write(root, 'AGENTS.md', canonicalAgents);
@@ -209,7 +213,8 @@ test('TaskBrief rejects empty shells and verdict cross-checks all durable identi
       schema: 'tackle-local-verdict/v1', taskId: verdictBrief.taskId, taskBriefSha256: checkedBrief.taskBriefSha256,
       specReceiptHashes: checkedBrief.specReceiptHashes, dirtyWorktreeDisposition: verdictBrief.dirtyWorktreeDisposition,
       specSha256: verdictBrief.specSha256, baseSha: verdictBrief.baseSha, reviewedHead: 'WORKTREE', ownedPaths: verdictBrief.ownedPaths,
-      patchHash: patchHash({ root, baseSha: verdictBrief.baseSha, ownedPaths: verdictBrief.ownedPaths }).patchHash, verdict: 'PASS', findings: [],
+      artifactIdentity: { kind: 'worktree', commitSha: null, patchHash: patchHash({ root, baseSha: verdictBrief.baseSha, ownedPaths: verdictBrief.ownedPaths }).patchHash },
+      validationEvidence: validationEvidence(verdictBrief, patchHash({ root, baseSha: verdictBrief.baseSha, ownedPaths: verdictBrief.ownedPaths }).patchHash), verdict: 'PASS', findings: [],
     };
     assert.equal(checkVerdict({ root, verdict, brief: verdictBrief }).taskBriefSha256, checkedBrief.taskBriefSha256);
     assert.throws(() => checkTaskBrief({ root, brief: { ...preDispatch, phase: 'verdict' } }), /requires exactly one coordinator, coding, and review/);
@@ -217,13 +222,49 @@ test('TaskBrief rejects empty shells and verdict cross-checks all durable identi
     assert.throws(() => checkTaskBrief({ root, brief: { ...preDispatch, riskProfile: 'runtime_product_domain', scopeHasRuntimeSemantics: true } }), /workflow_metadata requires/);
     assert.throws(() => checkTaskBrief({ root, brief: { ...preDispatch, unexpected: true } }), /unknown, missing, or inapplicable keys/);
     assert.throws(() => checkReadReceipt({ root, receipt: { ...preDispatch.specReadReceipts[0], unexpected: true } }), /unknown, missing, or inapplicable keys/);
-    assert.throws(() => checkVerdict({ root, verdict: { ...verdict, patchHash: '0'.repeat(64) }, brief: verdictBrief }), /recomputed current patch hash/);
+    assert.throws(() => checkVerdict({ root, verdict: { ...verdict, artifactIdentity: { ...verdict.artifactIdentity, patchHash: '0'.repeat(64) } }, brief: verdictBrief }), /recomputed current patch hash/);
     assert.throws(() => checkVerdict({ root, verdict: { ...verdict, extra: true }, brief: verdictBrief }), /unknown, missing, or inapplicable keys/);
     assert.throws(() => checkVerdict({ root, verdict: { ...verdict, findings: [{ severity: 'P1', file: 'AGENTS.md', line: 1, evidence: 'x', remediation: 'y' }] }, brief: verdictBrief }), /PASS verdict/);
     assert.throws(() => runCli(['--patch-hash', '--base', verdictBrief.baseSha, '--base', verdictBrief.baseSha, '--owned', 'AGENTS.md'], root), /Usage/);
     assert.throws(() => runCli(['--check-policy', '--unknown', 'x'], root), /Usage/);
     assert.throws(() => runCli(['--check-verdict', '--brief', 'brief.json', '--brief', 'brief.json', '--verdict', 'verdict.json'], root), /Usage/);
     assert.throws(() => runCli(['--owned-baseline', '--base', verdictBrief.baseSha], root), /Usage/);
+  } finally { cleanup(root); }
+});
+
+test('derived evidence stages keep development light and freeze only the review artifact', () => {
+  const root = temporaryRepo();
+  try {
+    taskBase(root);
+    const development = brief(root);
+    assert.equal(checkTaskBrief({ root, brief: development }).phase, 'pre_dispatch');
+    assert.throws(() => checkTaskBrief({ root, brief: { ...development, evidenceStage: 'local_review_handoff' } }), /unknown, missing, or inapplicable keys/);
+    const coding = receipt(root, { role: 'coding', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'implementation' });
+    const review = receipt(root, { role: 'review', profile: 'SCOPED', requiredSections: ['README', '0', '19', '20', '1'], readSections: ['README', '0', '19', '20', '1'], reason: 'review' });
+    const committedBrief = { ...development, phase: 'verdict', reviewedHead: development.baseSha, specReadReceipts: [development.specReadReceipts[0], coding, review] };
+    const checked = checkTaskBrief({ root, brief: committedBrief });
+    const identity = committedBrief.reviewedHead;
+    const committedVerdict = {
+      schema: 'tackle-local-verdict/v1', taskId: committedBrief.taskId, taskBriefSha256: checked.taskBriefSha256,
+      specReceiptHashes: checked.specReceiptHashes, dirtyWorktreeDisposition: committedBrief.dirtyWorktreeDisposition,
+      specSha256: committedBrief.specSha256, baseSha: committedBrief.baseSha, reviewedHead: identity, ownedPaths: committedBrief.ownedPaths,
+      artifactIdentity: { kind: 'commit', commitSha: identity, patchHash: null },
+      validationEvidence: validationEvidence(committedBrief, identity), verdict: 'PASS', findings: [],
+    };
+    assert.equal(checkVerdict({ root, verdict: committedVerdict, brief: committedBrief }).artifactIdentity.commitSha, identity);
+    assert.throws(() => checkVerdict({ root, verdict: { ...committedVerdict, artifactIdentity: { ...committedVerdict.artifactIdentity, patchHash: '0'.repeat(64) } }, brief: committedBrief }), /must not require a patch hash/);
+    assert.throws(() => checkVerdict({ root, verdict: { ...committedVerdict, validationEvidence: { ...committedVerdict.validationEvidence, results: [{ ...committedVerdict.validationEvidence.results[0], inputIdentity: 'other' }] } }, brief: committedBrief }), /cover each TaskBrief required command|must bind the reviewed artifact|is invalid/);
+    assert.throws(() => checkVerdict({ root, verdict: { ...committedVerdict, validationEvidence: { ...committedVerdict.validationEvidence, results: committedVerdict.validationEvidence.results.slice(1) } }, brief: committedBrief }), /cover each TaskBrief required command/);
+    assert.throws(() => checkVerdict({ root, verdict: { ...committedVerdict, validationEvidence: { ...committedVerdict.validationEvidence, results: [...committedVerdict.validationEvidence.results, { ...committedVerdict.validationEvidence.results[0] }] } }, brief: committedBrief }), /cover each TaskBrief required command/);
+    const failed = { ...committedVerdict.validationEvidence, results: committedVerdict.validationEvidence.results.map((result, index) => index === 0 ? { ...result, exitCode: 1, result: 'FAIL', failureDetail: 'test failure' } : result) };
+    assert.throws(() => checkVerdict({ root, verdict: { ...committedVerdict, validationEvidence: failed }, brief: committedBrief }), /PASS verdict cannot contain.*failed validation/);
+    assert.throws(() => checkVerdict({ root, verdict: { ...committedVerdict, validationEvidence: { ...committedVerdict.validationEvidence, results: committedVerdict.validationEvidence.results.map((result, index) => index === 0 ? { ...result, timestamp: '2100-01-01T00:00:00.000Z' } : result) } }, brief: committedBrief }), /is invalid/);
+    assert.throws(() => checkVerdict({ root, verdict: { ...committedVerdict, validationEvidence: { ...committedVerdict.validationEvidence, results: committedVerdict.validationEvidence.results.map((result, index) => index === 0 ? { ...result, exitCode: -1 } : result) } }, brief: committedBrief }), /is invalid/);
+    assert.equal(canReuseValidation(committedVerdict.validationEvidence, validationEvidence(committedBrief, identity)), true);
+    assert.equal(canReuseValidation(committedVerdict.validationEvidence, { ...validationEvidence(committedBrief, identity), reuseIdentity: { ...reuseIdentity(identity), environmentIdentity: 'node-22/macos' } }), false);
+    assert.throws(() => captureValidationSummary({ inputIdentity: identity, reuseIdentity: reuseIdentity(identity), timestamp: '2026-07-26T00:00:00.000Z', results: [{ command: 'safe', exitCode: 0, durationMs: 1.5, failureDetail: null }] }), /invalid exitCode or durationMs/);
+    write(root, 'capture.json', JSON.stringify({ inputIdentity: identity, reuseIdentity: reuseIdentity(identity), timestamp: '2026-07-26T00:00:00.000Z', results: [{ command: 'safe', exitCode: 0, durationMs: 1, failureDetail: null }] }));
+    assert.equal(JSON.parse(runCli(['--capture-validation', '--input', 'capture.json'], root)).results[0].result, 'PASS');
   } finally { cleanup(root); }
 });
 
@@ -276,7 +317,7 @@ test('validation matrix enforces PR, risk, user-visible, and domain-drift gates'
   try {
     taskBase(root); const base = brief(root);
     const runtimeReceipt = receipt(root, { riskProfile: 'runtime_product_domain', reason: 'runtime final gate' });
-    const pr = { ...base, riskProfile: 'runtime_product_domain', scopeHasRuntimeSemantics: true, changeClass: 'pr_final', specReadReceipts: [runtimeReceipt], validationPlan: { requiredCommands: ['npm run typecheck', 'npm run lint', 'npm test'], requiredScenarios: ['ci_gate'], intentionallyNotApplicable: nonLegacyNa() } };
+    const pr = { ...base, workflowMode: 'pull_request', reviewedHead: base.baseSha, dirtyWorktreeDisposition: 'clean_synced', riskProfile: 'runtime_product_domain', scopeHasRuntimeSemantics: true, changeClass: 'pr_final', specReadReceipts: [runtimeReceipt], validationPlan: { requiredCommands: ['npm run typecheck', 'npm run lint', 'npm test'], requiredScenarios: ['ci_gate'], intentionallyNotApplicable: nonLegacyNa() } };
     assert.equal(checkTaskBrief({ root, brief: pr }).phase, 'pre_dispatch');
     assert.throws(() => checkTaskBrief({ root, brief: { ...pr, validationPlan: { ...pr.validationPlan, requiredCommands: ['npm run typecheck', 'npm run lint'], intentionallyNotApplicable: { 'npm test': 'skip' } } } }), /cannot be N\/A/);
     const migration = { ...base, riskProfile: 'durable_migration', scopeHasRuntimeSemantics: true, changeClass: 'persistence_migration', specReadReceipts: [receipt(root, { riskProfile: 'durable_migration', reason: 'migration' })], validationPlan: { requiredCommands: ['npm run typecheck', 'npm run lint', 'npm test'], requiredScenarios: ['normal_path', 'boundary', 'conflict', 'version_freeze', 'production_shape_fixture', 'unknown_field_preservation', 'second_run_noop'], intentionallyNotApplicable: nonLegacyNa() } };

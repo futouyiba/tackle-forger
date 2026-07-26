@@ -5,7 +5,7 @@ import { appendFileSync, chmodSync, existsSync, mkdtempSync, mkdirSync, readFile
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { buildNavigationIndex, buildOwnedBaselineManifest, buildPatchManifest, checkFullReadSession, checkNavigationIndex, checkPolicy, checkReadReceipt, checkTaskBrief, checkVerdict, fullReadSessionHash, openRegistryHash, ownedBaselineHash, patchHash, receiptHash, runCli, runValidation, specReadPlan, taskBriefHash, validationExecutionPlan, writeNavigationIndex } from './workflow-contract.mjs';
+import { buildNavigationIndex, buildOwnedBaselineManifest, buildPatchManifest, checkFullReadSession, checkNavigationIndex, checkPolicy, checkReadReceipt, checkTaskBrief, checkVerdict, fullReadSessionHash, openRegistryHash, ownedBaselineHash, patchHash, prepareTaskBrief, receiptHash, runCli, runValidation, specReadPlan, taskBriefHash, validationExecutionPlan, writeNavigationIndex } from './workflow-contract.mjs';
 
 function command(root, args) { return execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim(); }
 function write(root, relative, content) { const target = path.join(root, relative); mkdirSync(path.dirname(target), { recursive: true }); writeFileSync(target, content); }
@@ -68,6 +68,103 @@ function taskBase(root) {
   write(root, 'AGENTS.md', 'base\n');
   commitBase(root);
 }
+
+function prepareInput(root, overrides = {}) {
+  return {
+    schema: 'tackle-task-prepare-input/v1', taskId: 'prepared-task', workflowMode: 'local', baseSha: command(root, ['rev-parse', 'HEAD']),
+    scope: 'explicit workflow preparation scope', relevantSections: ['0', '19', '20'],
+    openDecisionApplicability: { applicableIds: [], noApplicableReason: 'No product OPEN decision is implemented.' },
+    riskProfile: 'workflow_docs_metadata', scopeHasRuntimeSemantics: false, changeClass: 'workflow_metadata', ownedPaths: ['AGENTS.md'],
+    acceptanceCriteria: ['The generated TaskBrief validates.'], exclusions: ['No product runtime behavior changes.'],
+    riskDimensions: { persistedData: false, historicalSnapshots: false, concurrency: false, authorization: false, externalSideEffects: false, userVisible: false },
+    coordinatorSpecReadReceipt: receipt(root, { taskId: 'prepared-task', relevantSections: ['0', '19', '20'], reason: 'Coordinator completed the required canonical reading before preparation.' }), ...overrides,
+  };
+}
+
+test('TaskBrief preparation derives only mechanical fields and immediately validates', () => {
+  const root = temporaryRepo();
+  const handoff = mkdtempSync(path.join(os.tmpdir(), 'workflow-prepare-input-'));
+  try {
+    taskBase(root);
+    const input = prepareInput(root);
+    const prepared = prepareTaskBrief({ root, input });
+    assert.equal(checkTaskBrief({ root, brief: prepared }).phase, 'pre_dispatch');
+    assert.equal(prepared.reviewedHead, 'WORKTREE');
+    assert.deepEqual(prepared.allowedChanges, input.ownedPaths);
+    assert.deepEqual(prepared.openDecisionCheck.checkedIds, ['OPEN-001']);
+    assert.equal(prepared.validationPlan.requiredCommands.includes(`git diff --check ${input.baseSha} -- AGENTS.md`), true);
+    assert.equal(prepared.validationPlan.intentionallyNotApplicable.product_runtime_tests.length > 0, true);
+    assert.equal(prepared.specReadReceipts[0].profile, 'FULL');
+    const inputPath = path.join(handoff, 'prepare-input.json');
+    writeFileSync(inputPath, `${JSON.stringify(input)}\n`);
+    assert.equal(JSON.parse(runCli(['--prepare-task-brief', '--input', inputPath], root)).taskId, input.taskId);
+  } finally { cleanup(root); cleanup(handoff); }
+});
+
+test('TaskBrief preparation accepts v2 reuse receipts only with trusted continuous context', () => {
+  const root = temporaryRepo();
+  const handoff = mkdtempSync(path.join(os.tmpdir(), 'workflow-prepare-reuse-'));
+  try {
+    taskBase(root);
+    const v2 = reusedReceipt(root, {
+      taskId: 'prepared-task', relevantSections: ['0', '19', '20'],
+      requiredSections: ['README', '0', '19', '20'], readSections: ['README', '0', '19', '20'],
+    });
+    const input = prepareInput(root, { coordinatorSpecReadReceipt: v2 });
+    const current = currentReuseContext(v2.reuseEvidence.session);
+    assert.equal(prepareTaskBrief({ root, input, currentReuseContext: current }).specReadReceipts[0].schema, 'tackle-spec-read/v2');
+    assert.throws(() => prepareTaskBrief({ root, input }), /currentReuseContext/);
+    assert.throws(() => prepareTaskBrief({ root, input, currentReuseContext: { ...current, currentAgentIdentity: 'agent:other' } }), /caller-provided/);
+    assert.throws(() => prepareTaskBrief({ root, input, currentReuseContext: { ...current, currentContextSessionId: 'context:other' } }), /caller-provided/);
+    assert.throws(() => prepareTaskBrief({ root, input, currentReuseContext: { ...current, currentContextState: 'compacted' } }), /currentContextState/);
+    const inputPath = path.join(handoff, 'reuse-input.json');
+    writeFileSync(inputPath, `${JSON.stringify(input)}\n`);
+    assert.throws(() => runCli(['--prepare-task-brief', '--input', inputPath], root), /currentReuseContext/);
+    assert.equal(JSON.parse(runCli(['--prepare-task-brief', '--input', inputPath, '--current-agent-identity', current.currentAgentIdentity, '--current-context-session-id', current.currentContextSessionId, '--current-context-state', 'continuous'], root)).taskId, input.taskId);
+  } finally { cleanup(root); cleanup(handoff); }
+});
+
+test('TaskBrief preparation preserves every declared risk dimension and its scenarios', () => {
+  const root = temporaryRepo();
+  try {
+    taskBase(root);
+    const dimensions = { persistedData: true, historicalSnapshots: false, concurrency: true, authorization: false, externalSideEffects: false, userVisible: true };
+    const input = prepareInput(root, {
+      riskProfile: 'durable_migration', changeClass: 'persistence_migration', scopeHasRuntimeSemantics: true, riskDimensions: dimensions,
+      coordinatorSpecReadReceipt: receipt(root, { taskId: 'prepared-task', riskProfile: 'durable_migration', relevantSections: ['0', '19', '20'] }),
+    });
+    const prepared = prepareTaskBrief({ root, input });
+    assert.deepEqual(prepared.riskDimensions, dimensions);
+    for (const scenario of ['normal_path', 'boundary', 'conflict', 'version_freeze', 'production_shape_fixture', 'unknown_field_preservation', 'second_run_noop', 'authorization_denied', 'reauthorize_at_commit', 'concurrency_conflict', 'unified_visual_review_pending_or_completed']) assert.equal(prepared.validationPlan.requiredScenarios.includes(scenario), true);
+    assert.equal(new Set(prepared.validationPlan.requiredScenarios).size, prepared.validationPlan.requiredScenarios.length);
+  } finally { cleanup(root); }
+});
+
+test('TaskBrief preparation fails closed for dirty, ambiguous, and unsupported inputs', () => {
+  const root = temporaryRepo();
+  try {
+    taskBase(root);
+    const input = prepareInput(root);
+    assert.throws(() => prepareTaskBrief({ root, input: { ...input, ownedPaths: ['../AGENTS.md'] } }), /Invalid owned path/);
+    assert.throws(() => prepareTaskBrief({ root, input: { ...input, relevantSections: ['0', '20', '999'] } }), /current v3 sections/);
+    assert.throws(() => prepareTaskBrief({ root, input: { ...input, changeClass: 'not_a_class' } }), /unsupported/);
+    assert.throws(() => prepareTaskBrief({ root, input: { ...input, baseSha: '0'.repeat(40) } }), /resolve|baseSha/);
+    assert.throws(() => prepareTaskBrief({ root, input: { ...input, coordinatorSpecReadReceipt: { ...input.coordinatorSpecReadReceipt, taskId: 'other-task' } } }), /coordinatorSpecReadReceipt/);
+    assert.throws(() => prepareTaskBrief({ root, input: { ...input, riskProfile: 'durable_migration', changeClass: 'persistence_migration', scopeHasRuntimeSemantics: true, coordinatorSpecReadReceipt: receipt(root, { taskId: 'prepared-task', riskProfile: 'durable_migration', relevantSections: ['0', '19', '20'] }) } }), /risk dimension/);
+    assert.throws(() => prepareTaskBrief({ root, input: { ...input, riskProfile: 'unknown_high_risk', changeClass: 'domain_behavior', scopeHasRuntimeSemantics: true, coordinatorSpecReadReceipt: receipt(root, { taskId: 'prepared-task', riskProfile: 'unknown_high_risk', relevantSections: ['0', '19', '20'] }) } }), /refuses unknown_high_risk/);
+    mkdirSync(path.join(root, 'directory-path'));
+    write(root, 'directory-path/child.txt', 'tracked\n');
+    command(root, ['add', 'directory-path']); command(root, ['commit', '-qm', 'track directory fixture']);
+    assert.throws(() => prepareTaskBrief({ root, input: { ...input, ownedPaths: ['directory-path'] } }), /Unsupported current entry/);
+    try {
+      symlinkSync('AGENTS.md', path.join(root, 'linked-path'));
+      command(root, ['add', 'linked-path']); command(root, ['commit', '-qm', 'track symlink fixture']);
+      assert.throws(() => prepareTaskBrief({ root, input: { ...input, ownedPaths: ['linked-path'] } }), /Symlink/);
+    } catch (error) { if (!['EEXIST', 'EPERM', 'EACCES'].includes(error.code)) throw error; }
+    write(root, 'dirty.txt', 'dirty\n');
+    assert.throws(() => prepareTaskBrief({ root, input }), /clean worktree/);
+  } finally { cleanup(root); }
+});
 function validationFixture() {
   const root = temporaryRepo();
   const sourceRoot = path.resolve(process.cwd());

@@ -3,7 +3,7 @@ import test from "node:test";
 import * as XLSX from "xlsx";
 import { NextRequest } from "next/server";
 import { GET } from "../app/api/export-feishu-source-xlsx/route";
-import { loadWorkspaceState } from "../lib/storage";
+import { loadWorkspaceState, saveWorkspaceState } from "../lib/storage";
 import {
   CANONICAL_FEISHU_SHEET_REGISTRY,
   CANONICAL_FEISHU_WORKBOOK,
@@ -249,6 +249,26 @@ test("路由在工作区未记录源修订时返回 409，且不产生新 revisi
   assert.equal(after.revision, before.revision, "导出不得改变工作区 revision");
   // 复核：即便返回 409，也不应修改 feishuSourceRevisions 数量。
   assert.equal(after.state.feishuSourceRevisions.length, before.state.feishuSourceRevisions.length);
+});
+
+test("路由在工作区仅有非 canonical 修订时返回 409，不读取飞书", { concurrency: false }, async () => {
+  withTrustedProxy();
+  const before = await loadWorkspaceState();
+  const injected = structuredClone(before.state);
+  injected.feishuSourceRevisions = [{ ...makeSourceRevision(), workbookRefId: "feishu-workbook:non-canonical" }];
+  await saveWorkspaceState({ state: injected, baseRevision: before.revision, author: "test", message: "inject non-canonical" });
+  const originalFetch = global.fetch;
+  let fetchCalled = false;
+  global.fetch = (() => { fetchCalled = true; return Promise.resolve(new Response("{}")); }) as typeof fetch;
+  try {
+    const response = await GET(new NextRequest("http://localhost/api/export-feishu-source-xlsx", { headers: authHeaders }));
+    assert.equal(response.status, 409);
+    assert.equal(fetchCalled, false, "409 时不得调用飞书读取接口");
+  } finally {
+    global.fetch = originalFetch;
+    const after = await loadWorkspaceState();
+    await saveWorkspaceState({ state: structuredClone(before.state), baseRevision: after.revision, author: "test", message: "restore" });
+  }
 });
 
 test("路由不触碰 canonical 规则源常量", async () => {

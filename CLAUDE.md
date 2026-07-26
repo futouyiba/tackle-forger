@@ -12,7 +12,7 @@ Before implementation, refactoring, review, or test work, read these files compl
 
 The v3 specification is the sole authoritative product/domain specification. Files under `docs/2026-*` and `crystal/` are historical. If sources conflict, follow the user's latest explicit decision, update the canonical specification, and then make the implementation match it. Do not resolve open decisions by hard-coding an assumption.
 
-项目尚未正式交付，无生产环境历史 workspace state 需迁就。PR2b 切流后生产读取链默认走 WQ8w（`CANONICAL_FEISHU_WORKBOOK`）。`LEGACY_YS_EKW_*` 常量在 `lib/` 中保留作历史审计引用，供测试与迁移适配使用；新代码不得在生产读取链中直接使用。`lib/migrations.ts` 的 schema 迁移链仍需维护与测试覆盖。
+项目尚未正式交付，无生产环境历史 workspace state 需迁就。PR2b 切流后生产读取链默认走 WQ8w（`CANONICAL_FEISHU_WORKBOOK`）。旧表 YsEKw 的运行时兼容代码与 `LEGACY_YS_EKW_*` 常量已移除（历史拓扑仅 spec §14 审计文档保留）；`/wiki/` 通用解析能力保留。`lib/migrations.ts` 的 schema 迁移链仍需维护与测试覆盖。
 
 The UI and domain vocabulary are primarily Chinese. Preserve established terminology in user-facing text and tests.
 

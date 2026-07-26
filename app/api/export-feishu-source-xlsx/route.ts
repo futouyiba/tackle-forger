@@ -55,16 +55,15 @@ export async function GET(request: NextRequest) {
   }
 
   const { state } = await loadWorkspaceState();
-  // 取 canonical 工作簿（WQ8w）的源修订。旧表 YsEKw 修订兼容已随旧表废弃移除。
+  // 只导出 canonical 工作簿（WQ8w）的源修订；非 canonical 修订一律不导出，
+  // 避免拿其他工作簿的 spreadsheetToken 套用 WQ8w registry 读取非权威数据。
   const canonicalRevisions = state.feishuSourceRevisions.filter(
     (entry) => entry.workbookRefId === CANONICAL_FEISHU_WORKBOOK.id,
   );
-  const sourceRevision =
-    canonicalRevisions[canonicalRevisions.length - 1] ??
-    state.feishuSourceRevisions[state.feishuSourceRevisions.length - 1];
+  const sourceRevision = canonicalRevisions[canonicalRevisions.length - 1];
   if (!sourceRevision) {
     return NextResponse.json(
-      { error: "工作区尚未记录任何飞书源修订。请先在「飞书工作簿」页执行检视或拉取，再下载源数据。", action: "inspect_feishu_workbook" },
+      { error: "工作区尚未记录 canonical（WQ8w）飞书源修订。请先在「飞书工作簿」页执行检视或拉取，再下载源数据。", action: "inspect_feishu_workbook" },
       { status: 409 },
     );
   }

@@ -1420,7 +1420,7 @@ interface PatchSubjectMigrationResult {
 
 | ID | 类型 | 状态 | 当前可执行边界 | 未决时的必须行为 | 关闭证据/决策责任 |
 | --- | --- | --- | --- | --- | --- |
-| OPEN-001 降低型词条叠加 | 产品决策 / 规则源待迁移 | `DECIDED_PENDING_POLICY_VERSION` | 全局唯一使用`bidirectional_ratio`，完整顺序为`set → 百分比 → 固定值 → clamp_add → FinalReviewPatch → ParameterDefinition`；不得按参数或词条族切换 | 权威主工作簿尚无机器可读策略行，或没有已发布`ReductionStackingPolicyVersion`时，只允许明确标记的非正式预览，产生不可waive的PUBLISH BLOCKER并禁止新Model和Snapshot发布 | 2026-07-23用户确认；外部工作簿revision `17173`仅作决策证据；将规则迁入主工作簿`04_词条/zrVOxd`的稳定机器区域，显式拉取、校验、发布策略版本并通过公式、边界、数值域、迁移和冻结回归后才能改为`RESOLVED` |
+| OPEN-001 降低型词条叠加 | 产品决策 / 规则源待迁移 | `DECIDED_PENDING_POLICY_VERSION` | 全局唯一使用`bidirectional_ratio`，完整顺序为`set → 百分比 → 固定值 → clamp_add → FinalReviewPatch → ParameterDefinition`；不得按参数或词条族切换 | 权威主工作簿尚无机器可读策略行，或没有已发布`ReductionStackingPolicyVersion`时，只允许明确标记的非正式预览，产生不可waive的PUBLISH BLOCKER并禁止新Model和Snapshot发布 | 2026-07-23用户确认；外部工作簿revision `17173`仅作决策证据；将规则迁入主工作簿`04_词条`（词条表）的稳定机器区域，显式拉取、校验、发布策略版本并通过公式、边界、数值域、迁移和冻结回归后才能改为`RESOLVED` |
 | OPEN-002 性能定位派生语义 | 已决产品结论 | `DECIDED_IMPLEMENTATION_PENDING` | 新契约只产生只读`PerformanceSummary`；旧`PerformanceProfile/performanceId`只读保留 | 新revision不得把Performance作为配置、贡献层、评分乘数、兼容或定价输入；运行时迁移完成前不得把旧路径冒充新契约 | 2026-07-23用户决定与`open-007-pricing-semantics-adr.md`；实现由GitHub Issue #9跟踪 |
 | OPEN-003 扩展部位启用 | 延后产品决策 | `DEFERRED_UI_DISABLED` | 当前及已排定范围只启用竿、轮、线；SKU仅包含竿、轮、线 | 钩、漂、真饵和拟饵仅保留注册表与历史数据兼容；只读UI、草稿、生成、发布、Snapshot和所有环境/渠道导出全部关闭 | 2026-07-23产品确认“当前完全延期，未来另做产品设计”；存在可校验的已发布`enabledItemPartPolicy`前不得标记`RESOLVED`，未来任一部位启动前仍须另建产品设计Issue |
 | OPEN-004 Patch属性偏移阈值 | 规则策略缺口 | `RESOLVED` | 已发布`patch-offset/open004-v1`：不设置独立偏移阈值；Patch立即参与草稿试算，正式结果前必须纳入Series/SKU/Model或发布批次的整体人工复核证据；按当前关口各离散对象的累计最终值和已发布参数合法范围校验 | 缺少或损坏已发布`PatchOffsetPolicyVersion`时仍产生`PATCH_OFFSET_POLICY_MISSING`或完整性BLOCKER；范围越界ERROR只有取得匹配当前Gate的Waiver后才能继续，且仅当Gate为EXPORT时额外要求精确匹配目标环境×渠道；完整性BLOCKER永不可waive | 2026-07-23用户确认决策；Workspace schema v16发布并校验策略版本；Issue #32覆盖批量复核、多重量、Gate/渠道Waiver、rebase、迁移和Snapshot/ExportManifest冻结回归 |
@@ -1452,7 +1452,7 @@ FinalValue = applyParameterDefinition(PostReviewValue)
 
 新策略版本使受影响草稿进入`DIRTY`并通过显式重算创建新revision，不得覆盖旧revision。已发布Snapshot保持不变，只生成UpgradeCandidate；人工确认后才能从新的ModelRevision发布新Snapshot。缺少策略版本的历史Snapshot保留冻结值、证据与hash，不猜测或绑定当前策略：允许查看和下载第14节定义的原样审计归档，但`export_snapshot`及配置预览/提交必须被不可重放BLOCKER阻断；需要正式导出或新Snapshot时，必须在已发布策略下创建新的ModelRevision并发布新Snapshot。
 
-飞书规则源更新不自动激活。第14节指定的《钓具设计工作簿》仍是唯一运行时通用规则源，不为OPEN-001增加第二工作簿注册。2026-07-23回读的[《FG数值设计v3-总表》](https://pisn3u3ony2.feishu.cn/wiki/WgnfwNhjCi1VfkkU282chGBGn3b?sheet=oJO4Gi)revision `17173`及`钓具词条规则!B20:B21,B24,E24`只证明用户决策和原始公式，不得生成`FeishuSourceRevision`或发布策略。主工作簿revision `3259`的`04_词条/zrVOxd`尚不存在对应机器规则，因此当前必须产生`REDUCTION_POLICY_SOURCE_MISSING`（不可waive的`BLOCKER / PUBLISH`）。
+飞书规则源更新不自动激活。第14节指定的《钓具设计工作簿》仍是唯一运行时通用规则源，不为OPEN-001增加第二工作簿注册。2026-07-23回读的[《FG数值设计v3-总表》](https://pisn3u3ony2.feishu.cn/wiki/WgnfwNhjCi1VfkkU282chGBGn3b?sheet=oJO4Gi)revision `17173`及`钓具词条规则!B20:B21,B24,E24`只证明用户决策和原始公式，不得生成`FeishuSourceRevision`或发布策略。主工作簿`04_词条`（词条表）尚不存在对应机器规则，因此当前必须产生`REDUCTION_POLICY_SOURCE_MISSING`（不可waive的`BLOCKER / PUBLISH`）。
 
 规则负责人必须把本节公式、规范DTO版本、旧字段映射版本、完整operation顺序和数值模型版本写入主工作簿的稳定机器区域。每条机器规则以`spreadsheetToken + sheet_id + ruleId + parameterKey`唯一定位；`ruleId`与`parameterKey`必须不可变且不得用行号、名称或合并单元格替代。完成写入与技术回读后，生效链固定为：用户显式拉取主工作簿→生成新FeishuSourceRevision→校验稳定键与完整策略字段→发布ReductionStackingPolicyVersion和RuleSetVersion→显式重算。在此链闭合前不得把revision `17173`伪装成运行时规则revision。
 
@@ -1722,7 +1722,7 @@ Manifest失效后，旧`ConfigIdPolicyVersion`只保留历史审计用途，不�
 
 本节语义已经由2026-07-23用户决定，决策证据见`docs/audits/open-007-pricing-semantics-adr.md`。`OPEN-007`继续跟踪飞书机器源、schema、迁移和运行时落地，不再表示产品执行语义未决，也不得继续要求用户在阻断、封顶或性能乘数之间重复选择。
 
-定价权威来源是主工作簿`07_品质评分/FqD4j7`与`08_价格计算/u87sRh`的联合策略。revision `2869`中，07提供品质区间和品质内最小/最大价格系数；08提供业务公式、评分插值、重量段查表、零整比、货币、舍入和价格边界。两页必须按同一`FeishuSourceRevision`导入为一个`PricingPolicyDraft`，禁止跨revision拼接。
+定价权威来源是主工作簿`07_品质评分`（品质评分表）与`08_价格计算`（价格计算表）的联合策略：品质评分表提供品质区间和品质内最小/最大价格系数；价格计算表提供业务公式、评分插值、重量段查表、零整比、货币、舍入和价格边界。两页必须按同一`FeishuSourceRevision`导入为一个`PricingPolicyDraft`，禁止跨revision拼接。
 
 ```text
 维修价格(part)
@@ -1738,7 +1738,7 @@ Manifest失效后，旧`ConfigIdPolicyVersion`只保留历史审计用途，不�
 ÷ 零整比(part, pricingWeightBandId, PricingPolicyVersion)
 ```
 
-`维修系数`和`购买系数`来自`02_类型材质/fATowU`；当前竿、轮、线种子值均为`1`，仍须按普通版本化输入处理，不能在代码中省略。`pricingWeightBandId`默认取Model最近结构标杆所引用的源重量段ID，必须进入Trace，禁止按最终拉力重新做第二套隐式分段。定价查表直接按`pricingWeightBandId`与`partId`唯一定位，不再经过任何品质分组中间层；品质差异完全由各自的评分插值系数区间体现。
+`维修系数`和`购买系数`来自`02_类型材质`（类型材质表）；当前竿、轮、线种子值均为`1`，仍须按普通版本化输入处理，不能在代码中省略。`pricingWeightBandId`默认取Model最近结构标杆所引用的源重量段ID，必须进入Trace，禁止按最终拉力重新做第二套隐式分段。定价查表直接按`pricingWeightBandId`与`partId`唯一定位，不再经过任何品质分组中间层；品质差异完全由各自的评分插值系数区间体现。
 
 领域品质仍固定为`C/绿、B/蓝、A/紫、S/橙`；导入器必须通过版本化`QualityPricingMapping`显式记录每个品质在`07_品质评分`中的来源单元格，并对缺失或重复映射阻断。A与S即使落在同一重量段、同一部位，也通过各自的价格系数区间继续形成不同价格。
 

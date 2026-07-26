@@ -1,4 +1,4 @@
 interface:
   display_name: "Tackle Agent Workflow"
-  short_description: "Prepare scoped work and locally review implementation"
-  default_prompt: "Use $tackle-agent-workflow to prepare the TaskBrief, choose the correct local, Issue, or PR route, and run only the applicable workflow. Preserve the pending unified visual-review marker unless full visual work is explicitly scoped."
+  short_description: "Start with a lightweight Task Card and escalate formal reviews"
+  default_prompt: "Use $tackle-agent-workflow to start daily work with a six-field Task Card, generate mechanical route/OPEN/read-plan evidence, and prepare a full TaskBrief only at a formal review or PR boundary. Preserve the pending unified visual-review marker unless full visual work is explicitly scoped."

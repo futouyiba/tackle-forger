@@ -5,7 +5,7 @@ import { appendFileSync, chmodSync, existsSync, mkdtempSync, mkdirSync, readFile
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { buildNavigationIndex, buildOwnedBaselineManifest, buildPatchManifest, checkFullReadSession, checkNavigationIndex, checkOwnedWhitespace, checkPolicy, checkReadReceipt, checkTaskBrief, checkVerdict, classifyOwnedPaths, fullReadSessionHash, openRegistryHash, ownedBaselineHash, patchHash, prepareTaskBrief, promoteTaskBrief, receiptHash, runCli, runValidation, specReadPlan, taskBriefHash, VALIDATION_EXECUTION_TIERS, validationExecutionPlan, writeNavigationIndex } from './workflow-contract.mjs';
+import { buildNavigationIndex, buildOwnedBaselineManifest, buildPatchManifest, checkFullReadSession, checkNavigationIndex, checkOwnedWhitespace, checkPolicy, checkReadReceipt, checkTaskBrief, checkTaskCard, checkVerdict, classifyOwnedPaths, fullReadSessionHash, openRegistryHash, ownedBaselineHash, patchHash, prepareTaskBrief, prepareTaskCard, promoteTaskBrief, receiptHash, runCli, runValidation, specReadPlan, taskBriefHash, upgradeTaskCard, VALIDATION_EXECUTION_TIERS, validationExecutionPlan, writeNavigationIndex } from './workflow-contract.mjs';
 
 function command(root, args) { return execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim(); }
 function ownedWhitespaceCommand(baseSha, ownedPaths) { return `node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-owned-whitespace --base ${baseSha} ${ownedPaths.flatMap((owned) => ['--owned', owned]).join(' ')}`; }
@@ -91,6 +91,76 @@ function prepareInput(root, overrides = {}) {
     coordinatorSpecReadReceipt: receipt(root, { taskId: 'prepared-task', relevantSections: ['0', '19', '20'], reason: 'Coordinator completed the required canonical reading before preparation.' }), ...overrides,
   };
 }
+
+test('daily Task Card has exactly six semantic fields and only mechanical evidence', () => {
+  const root = temporaryRepo();
+  const handoff = mkdtempSync(path.join(os.tmpdir(), 'workflow-task-card-'));
+  try {
+    taskBase(root);
+    const input = { schema: 'tackle-task-card/v1', taskId: 'card-1', workflowMode: 'local', scope: 'Tighten workflow wording.', ownedPaths: ['AGENTS.md'], riskProfile: 'workflow_docs_metadata', changeClass: 'workflow_metadata' };
+    const card = prepareTaskCard({ root, input });
+    assert.deepEqual(Object.keys(card.semantic).sort(), ['changeClass', 'ownedPaths', 'riskProfile', 'scope', 'taskId', 'workflowMode']);
+    assert.equal(card.derived.readingAssertion, 'none_generated');
+    assert.equal(card.derived.formalTaskBriefRequiredAtBoundary, true);
+    assert.equal(card.derived.earlyEscalationRequired, false);
+    assert.deepEqual(card.derived.openDecisionCheck.checkedIds, ['OPEN-001']);
+    assert.deepEqual(card.derived.receiptDraft.readSections, []);
+    assert.equal(card.derived.receiptDraft.reason, 'Pending human completion after actual routed reading.');
+    assert.equal(checkTaskCard({ root, card }).semantic.taskId, 'card-1');
+    const cardPath = path.join(handoff, 'card.json'); writeFileSync(cardPath, `${JSON.stringify(card)}\n`);
+    assert.equal(JSON.parse(runCli(['--check-task-card', '--card', cardPath], root)).schema, 'tackle-task-card/v1');
+    assert.throws(() => prepareTaskCard({ root, input: { ...input, extra: true } }), /unknown, missing, or inapplicable keys/);
+    assert.throws(() => checkTaskCard({ root, card: { ...card, derived: { ...card.derived, baseSha: '0'.repeat(40) } } }), /stale or was not mechanically generated/);
+  } finally { cleanup(root); cleanup(handoff); }
+});
+
+test('Task Card fail-closes by requiring formal boundary escalation for runtime and external work', () => {
+  const root = temporaryRepo();
+  try {
+    taskBase(root);
+    write(root, 'src/runtime.ts', 'export {};\n'); command(root, ['add', 'src/runtime.ts']); command(root, ['commit', '-qm', 'runtime fixture']);
+    const card = prepareTaskCard({ root, input: { schema: 'tackle-task-card/v1', taskId: 'card-2', workflowMode: 'local', scope: 'Runtime change.', ownedPaths: ['src/runtime.ts'], riskProfile: 'runtime_product_domain', changeClass: 'typescript_api' } });
+    assert.equal(card.derived.formalTaskBriefRequiredAtBoundary, true);
+    assert.equal(card.derived.earlyEscalationRequired, true);
+    assert.equal(card.derived.escalationMarkers.includes('owned_paths_outside_scoped_governance'), true);
+    assert.equal(card.derived.escalationMarkers.includes('non_workflow_or_runtime_semantics'), true);
+    assert.equal(card.derived.routeSelection.status, 'formal_boundary_required');
+    assert.equal(card.derived.readPlanTemplate, null);
+    assert.throws(() => prepareTaskCard({ root, input: { ...card.semantic, schema: 'tackle-task-card/v1', riskProfile: 'unknown_high_risk' } }), /unknown or unsupported riskProfile/);
+  } finally { cleanup(root); }
+});
+
+test('exported Task Card preparation rejects dirty work even with a caller dirty override', () => {
+  const root = temporaryRepo();
+  try {
+    taskBase(root);
+    const input = { schema: 'tackle-task-card/v1', taskId: 'card-dirty', workflowMode: 'local', scope: 'Runtime routing probe.', ownedPaths: ['AGENTS.md'], riskProfile: 'workflow_docs_metadata', changeClass: 'workflow_metadata' };
+    const card = prepareTaskCard({ root, input });
+    write(root, 'dirty.txt', 'dirty\n');
+    assert.throws(() => prepareTaskCard({ root, input, allowOwnedDirty: true }), /clean worktree/);
+    assert.equal(checkTaskCard({ root, card }).semantic.taskId, 'card-dirty');
+  } finally { cleanup(root); }
+});
+
+test('Task Card upgrades dirty owned work into a formal TaskBrief and fails closed otherwise', () => {
+  const root = temporaryRepo();
+  try {
+    taskBase(root);
+    const card = prepareTaskCard({ root, input: { schema: 'tackle-task-card/v1', taskId: 'card-upgrade', workflowMode: 'local', scope: 'Workflow change.', ownedPaths: ['AGENTS.md'], riskProfile: 'workflow_docs_metadata', changeClass: 'workflow_metadata' } });
+    write(root, 'AGENTS.md', 'changed\n');
+    const baseInput = prepareInput(root, { taskId: 'card-upgrade', scope: card.semantic.scope, ownedPaths: card.semantic.ownedPaths, coordinatorSpecReadReceipt: receipt(root, { taskId: 'card-upgrade', relevantSections: ['0', '19', '20'], reason: 'Coordinator completed routed reading.' }) });
+    const boundaryInput = (({ relevantSections, openDecisionApplicability, scopeHasRuntimeSemantics, acceptanceCriteria, exclusions, riskDimensions, coordinatorSpecReadReceipt }) => ({ schema: 'tackle-task-card-upgrade-input/v1', relevantSections, openDecisionApplicability, scopeHasRuntimeSemantics, acceptanceCriteria, exclusions, riskDimensions, coordinatorSpecReadReceipt }))(baseInput);
+    const brief = upgradeTaskCard({ root, card, boundaryInput });
+    assert.equal(checkTaskBrief({ root, brief }).phase, 'pre_dispatch');
+    assert.deepEqual(brief.preexistingOwnedPaths, []);
+    assert.throws(() => prepareTaskBrief({ root, input: baseInput, allowOwnedDirty: true }), /clean worktree/);
+    write(root, 'unowned.txt', 'no\n');
+    assert.throws(() => upgradeTaskCard({ root, card, boundaryInput }), /unowned dirty paths/);
+    unlinkSync(path.join(root, 'unowned.txt'));
+    write(root, 'later.txt', 'commit\n'); command(root, ['add', 'later.txt']); command(root, ['commit', '-qm', 'advance head']);
+    assert.throws(() => upgradeTaskCard({ root, card, boundaryInput }), /stale card base\/head/);
+  } finally { cleanup(root); }
+});
 
 test('TaskBrief preparation derives only mechanical fields and immediately validates', () => {
   const root = temporaryRepo();
@@ -315,7 +385,7 @@ test('policy checker detects required workflow markers', () => {
     const agents = `${project}\n## Tackle 工作流契约\n- \`$tackle-agent-workflow\`提供项目约束和 TaskBrief；仅本地路由使用其编码与独立本地审核。Issue 生命周期归\`$agent-issue-loop\`，PR 审核/CI/修复归\`$agent-pr-loop\`；已有 PR 直接使用后者。不得增加第二个独立审核者。\n<!-- workflow-contract-policy/v2\n{"dirtyIsolation":{"issuePr":"clean_synced","localOwnedBaseline":"tackle-owned-baseline/v1"},"issue":{"localReviewer":false,"owner":"agent-issue-loop","prReviewer":"agent-pr-loop"},"local":{"independentReviewer":true,"owner":"tackle-agent-workflow"},"localVerdict":{"required":["taskBriefSha256","specReceiptHashes","dirtyWorktreeDisposition","specSha256","baseSha","reviewedHead","ownedPaths","patchHash"],"schema":"tackle-local-verdict/v1"},"pullRequest":{"owner":"agent-pr-loop","reviewer":"agent-pr-loop"},"reviewSeverity":{"passBlocking":["P0","P1","P2"],"p3":"informational"},"scopedEligibility":{"allowedPathClasses":["AGENTS.md",".codex/skills/tackle-agent-workflow/**","docs/(workflow|agent-governance)-*.md",".github/*.md|yml|yaml"],"unknownForcesFull":true},"specReceipt":{"schema":"tackle-spec-read/v1"},"taskBrief":{"closedSchema":true,"openDecisionCheck":true,"phaseReceipts":{"pre_dispatch":["coordinator"],"verdict":["coordinator","coding","review"]},"receiptRiskAuthority":true,"schema":"tackle-task-brief/v1","structuredFields":["changeClass","allowedChanges","riskDimensions","validationPlan"]},"validationMatrix":{"commandsAndScenariosSeparated":true,"prFinalCommandsNonWaivable":["npm run typecheck","npm run lint","npm test"],"userVisibleScenario":"unified_visual_review_pending_or_completed"},"visual":{"minimalSmokeCompletesReview":false,"pendingMarker":"视觉与交互统一检查待执行"}}\n-->\n## 本机凭据与多 worktree\n`;
     const skill = '<!-- workflow-contract-policy-ref: AGENTS.md/workflow-contract-policy/v2 -->\n\n## Route before dispatch\n\n- **Local implementation, no Issue or PR:** this Skill owns one coding agent and one independent local reviewer.\n- **Issue delivery:** `$agent-issue-loop` owns Issue, branch, PR, closure, and handoff. Supply it this Skill\'s TaskBrief; do not start a local independent reviewer. Once a PR exists, `$agent-pr-loop` exclusively owns review, CI, fixes, and merge gates.\n- **Existing PR:** invoke `$agent-pr-loop` directly and supply the TaskBrief. Do not create a coding or review loop here.\n\n## Establish the TaskBrief\n\n<!-- workflow-contract-task-brief-ref/v1\n{"conditionalNaApplicability":{"legacyTouchedForbids":"legacy_workspace_ci","nonLegacyRequires":"legacy_workspace_ci","nonWorkflowForbids":"product_runtime_tests","workflowMetadataRequires":"product_runtime_tests"},"conditionalNaCatalog":{"legacyWorkspaceCi":"legacy_workspace_ci","productRuntimeTests":"product_runtime_tests"},"evidenceStages":{"development":"pre_dispatch_non_pr_final","localReviewHandoff":"local_verdict","prFinal":"pr_final_change_class"},"legacyWorkspaceCommands":["node --test tests/package-manager-boundaries.test.mjs","pnpm --dir legacy-workspace install --frozen-lockfile","pnpm --dir legacy-workspace --filter \'@tackle-forger/*\' typecheck","pnpm --dir legacy-workspace --filter \'@tackle-forger/*\' lint","pnpm --dir legacy-workspace --filter \'@tackle-forger/*\' test","pnpm --dir legacy-workspace --filter \'@tackle-forger/*\' build"],"triggeredCannotBeNa":true}\n-->\n\n## Spec receipts and worktree isolation\n';
     const canonicalSkill = readFileSync(path.resolve(process.cwd(), '.codex/skills/tackle-agent-workflow/SKILL.md'), 'utf8');
-    const yaml = 'interface:\n  display_name: "Tackle Agent Workflow"\n  short_description: "Prepare scoped work and locally review implementation"\n  default_prompt: "Use $tackle-agent-workflow to prepare the TaskBrief, choose the correct local, Issue, or PR route, and run only the applicable workflow. Preserve the pending unified visual-review marker unless full visual work is explicitly scoped."\n';
+    const yaml = 'interface:\n  display_name: "Tackle Agent Workflow"\n  short_description: "Start with a lightweight Task Card and escalate formal reviews"\n  default_prompt: "Use $tackle-agent-workflow to start daily work with a six-field Task Card, generate mechanical route/OPEN/read-plan evidence, and prepare a full TaskBrief only at a formal review or PR boundary. Preserve the pending unified visual-review marker unless full visual work is explicitly scoped."\n';
     const template = '## Visual evidence\n\n| Unified visual and interaction review | 视觉与交互统一检查待执行 / Full visual and interaction review completed |\n| Minimal render smoke | Not run / Completed; this never changes the unified-review status |\n\n## Risks, recovery, and rollback\n';
     write(root, 'AGENTS.md', canonicalAgents);
     write(root, '.codex/skills/tackle-agent-workflow/SKILL.md', canonicalSkill);

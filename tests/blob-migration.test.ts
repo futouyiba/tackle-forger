@@ -7,6 +7,7 @@ import test from "node:test";
 import { createSeedState } from "../lib/seed";
 import {
   assertBlobWorkspaceDocument,
+  isDirectoryFsyncTolerableError,
   migrateBlobDocumentToSqlite,
   migrateBlobToSqlite,
   type BlobWorkspaceDocument,
@@ -250,4 +251,16 @@ test("reauthorize_at_commit：文件系统 link 是最终提交授权边界，EA
   const retried = await migrateBlobDocumentToSqlite(document, target);
   assert.equal(retried.currentRevision, document.revision);
   await closeSqliteStorage(target);
+});
+
+test("win32_dir_fsync_eperm：目录 fd 的 fsync 仅容忍 EPERM（Windows 无法 fsync 目录 fd，降级而非失败）", () => {
+  // Windows/libuv 对目录 fd 的 fsync 永远 EPERM；这是平台限制，非权限问题。
+  // 仅容忍 EPERM；EIO/ENOENT/EACCES 等真错误必须传播，避免静默吞掉。
+  assert.equal(isDirectoryFsyncTolerableError(Object.assign(new Error("operation not permitted"), { code: "EPERM" })), true);
+  assert.equal(isDirectoryFsyncTolerableError(Object.assign(new Error("i/o error"), { code: "EIO" })), false);
+  assert.equal(isDirectoryFsyncTolerableError(Object.assign(new Error("no such file"), { code: "ENOENT" })), false);
+  assert.equal(isDirectoryFsyncTolerableError(Object.assign(new Error("permission denied"), { code: "EACCES" })), false);
+  assert.equal(isDirectoryFsyncTolerableError(new Error("no errno code")), false);
+  assert.equal(isDirectoryFsyncTolerableError(undefined), false);
+  assert.equal(isDirectoryFsyncTolerableError(null), false);
 });

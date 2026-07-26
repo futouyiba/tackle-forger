@@ -1511,12 +1511,18 @@ test('machine policy preserves review boundaries without a prose mirror', () => 
 });
 
 test('merge gate document owns the complete review signal envelope', () => {
-  const gatePolicy = readFileSync(path.join(process.cwd(), '.github/merge-gates.md'), 'utf8');
+  const root = process.cwd();
+  const gatePolicy = readFileSync(path.join(root, '.github/merge-gates.md'), 'utf8');
+  const agentPolicy = readFileSync(path.join(root, 'AGENTS.md'), 'utf8');
+  const claudePolicy = readFileSync(path.join(root, 'CLAUDE.md'), 'utf8');
+  const policyConsumers = `${gatePolicy}\n${agentPolicy}\n${claudePolicy}`;
   assert.match(gatePolicy, /A current review signal is additionally required only\s+when the workflow machine policy, repository or platform policy, or the\s+high-risk merge gate requires one\./);
   assert.match(gatePolicy, /grants standing merge authorization/);
   assert.match(gatePolicy, /No additional per-turn user\s+instruction is required/);
   assert.match(gatePolicy, /A fresh exact-head\/base `READY` result activates the qualified automatic\s+merge authorization above/);
-  assert.doesNotMatch(gatePolicy, /checker is evidence, not merge authorization/);
+  assert.match(agentPolicy, /qualified auto-merge standing authorization/);
+  assert.match(claudePolicy, /qualified auto-merge standing authorization/);
+  assert.doesNotMatch(policyConsumers, /checker is evidence, not merge authorization|checker证据不自行授予合并/);
   assert.match(gatePolicy, /When a review signal is required, the canonical integrated Agent review uses/);
   for (const field of [
     'Agent-Review-Version: v1',

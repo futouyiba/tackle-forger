@@ -300,3 +300,35 @@
   .config-export-recovery { grid-template-columns: 1fr; }
   .config-export-confirmations label { grid-template-columns: 1fr; }
 }
+
+/* ── Companion 连接状态 ── */
+.connection-error {
+  align-items: center;
+  color: #b53b3b;
+  display: flex;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.companion-start-guide {
+  background: #fff8f6;
+  border: 1px solid #f3dbd6;
+  border-radius: 8px;
+  display: grid;
+  gap: 6px;
+  grid-column: 1 / -1;
+  padding: 12px;
+}
+
+.companion-start-guide small {
+  color: #7a6862;
+}
+
+.companion-start-guide code {
+  background: #fcf4f2;
+  border-radius: 4px;
+  color: #9b3628;
+  font-size: 12px;
+  padding: 5px 8px;
+  word-break: break-all;
+}

@@ -161,7 +161,7 @@ function findSourceForInspection(
 ) {
   return state.feishuSourceRevisions.find((item) =>
     item.sourceRevision === inspection.sourceRevision.sourceRevision
-    && item.workbookRefId === CANONICAL_FEISHU_WORKBOOK.id,
+    && item.spreadsheetToken === CANONICAL_FEISHU_WORKBOOK.spreadsheetToken,
   );
 }
 
@@ -191,7 +191,7 @@ export function buildFeishuOrchestrationModel(
 
   /** True when a previously-pulled source exists for the current canonical workbook but the inspection shows a different revision. */
   const hasPulledSource = state.feishuSourceRevisions.some(
-    (rev) => rev.workbookRefId === CANONICAL_FEISHU_WORKBOOK.id,
+    (rev) => rev.spreadsheetToken === CANONICAL_FEISHU_WORKBOOK.spreadsheetToken,
   );
   const inspectionShowsNewerRevision = Boolean(
     inspection &&

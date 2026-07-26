@@ -7,6 +7,7 @@ import {
   recognizeFeishuRuleWorkbookLink,
 } from "@/lib/feishu-workbook";
 import type { FeishuShareLinkHistoryEntry } from "@/lib/types";
+import { CANONICAL_FEISHU_WORKBOOK } from "@/lib/feishu-workbook";
 
 /**
  * 单条 ActionAvailability 的最小契约。与 `ActionAvailabilityMap[*]` 兼容，
@@ -96,7 +97,7 @@ export function FeishuSourceCombobox(props: FeishuSourceComboboxProps) {
     onRecord(recognized.shareUrl, recognized.label);
     setInputValue("");
     setOpen(false);
-    notify("链接已识别并加入历史。规则源已切换至 WQ8w（50张分表）。");
+    notify(`链接已识别并加入历史。规则源：${CANONICAL_FEISHU_WORKBOOK.spreadsheetToken}（50张分表）。`);
   };
 
   const handleSelectHistory = (entry: FeishuShareLinkHistoryEntry) => {

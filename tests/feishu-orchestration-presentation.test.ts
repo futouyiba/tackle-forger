@@ -39,7 +39,7 @@ function makeSourceRevision(overrides: Partial<FeishuSourceRevision> = {}): Feis
     id: overrides.id ?? "feishu-src:r1",
     workbookRefId: "feishu-workbook:tackle-design",
     sourceRevision: overrides.sourceRevision ?? "2026-07-25-r001",
-    spreadsheetToken: "sht_abc",
+    spreadsheetToken: "WQ8wstS4ch29E2tAKnVcoh5KnJg",
     pulledAt: "2026-07-25T10:00:00Z",
     pulledBy: "tester",
     syncScope: "workbook",

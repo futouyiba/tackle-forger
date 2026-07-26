@@ -94,7 +94,7 @@ function brief(root, overrides = {}) {
   const openIds = buildNavigationIndex(root).openRegistry.map((entry) => entry.id);
   return {
     schema: 'tackle-task-brief/v1', taskId: 'task-1', workflowMode: 'local', phase: 'pre_dispatch', specSha256: coordinatorReceipt.specSha256,
-    baseSha, reviewedHead: 'WORKTREE', scope: 'workflow hardening', relevantSections: ['1', '20'], openDecisionCheck: { registrySha256: openRegistryHash(root), checkedIds: openIds, applicableIds: openIds, noApplicableReason: null }, riskProfile: 'workflow_docs_metadata', scopeHasRuntimeSemantics: false, changeClass: 'workflow_metadata', allowedChanges: ['AGENTS.md'], acceptanceCriteria: ['contract validates'], exclusions: ['product runtime'], riskDimensions: { persistedData: false, historicalSnapshots: false, concurrency: false, authorization: false, externalSideEffects: false, userVisible: false }, validationPlan: { requiredCommands: ['node scripts/spec-v3-modules.mjs --check', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-policy', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-index', 'node --test .codex/skills/tackle-agent-workflow/scripts/workflow-contract.test.mjs', ownedWhitespaceCommand(baseSha, ['AGENTS.md'])], requiredScenarios: ['authority_and_scoped_diff'], intentionallyNotApplicable: { product_runtime_tests: 'No product code changes.' } },
+    baseSha, reviewedHead: 'WORKTREE', scope: 'workflow hardening', relevantSections: ['1', '20'], openDecisionCheck: { registrySha256: openRegistryHash(root), checkedIds: openIds, applicableIds: openIds, noApplicableReason: null }, riskProfile: 'workflow_docs_metadata', reviewTier: 'strict', scopeHasRuntimeSemantics: false, changeClass: 'workflow_metadata', allowedChanges: ['AGENTS.md'], acceptanceCriteria: ['contract validates'], exclusions: ['product runtime'], riskDimensions: { persistedData: false, historicalSnapshots: false, concurrency: false, authorization: false, externalSideEffects: false, userVisible: false }, validationPlan: { requiredCommands: ['node scripts/spec-v3-modules.mjs --check', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-policy', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-index', 'node --test .codex/skills/tackle-agent-workflow/scripts/workflow-contract.test.mjs', ownedWhitespaceCommand(baseSha, ['AGENTS.md'])], requiredScenarios: ['authority_and_scoped_diff'], intentionallyNotApplicable: { product_runtime_tests: 'No product code changes.' } },
     specReadReceipts: [coordinatorReceipt], ownedPaths: ['AGENTS.md'], preexistingOwnedPaths: [],
     preexistingUnownedChanges: [], dirtyWorktreeDisposition: 'clean', ...overrides,
   };
@@ -112,7 +112,7 @@ function prepareInput(root, overrides = {}) {
     schema: 'tackle-task-prepare-input/v1', taskId: 'prepared-task', workflowMode: 'local', baseSha: command(root, ['rev-parse', 'HEAD']),
     scope: 'explicit workflow preparation scope', relevantSections: ['0', '19', '20'],
     openDecisionApplicability: { applicableIds: [], noApplicableReason: 'No product OPEN decision is implemented.' },
-    riskProfile: 'workflow_docs_metadata', scopeHasRuntimeSemantics: false, changeClass: 'workflow_metadata', ownedPaths: ['AGENTS.md'],
+    riskProfile: 'workflow_docs_metadata', reviewTier: 'standard', scopeHasRuntimeSemantics: false, changeClass: 'workflow_metadata', ownedPaths: ['AGENTS.md'],
     acceptanceCriteria: ['The generated TaskBrief validates.'], exclusions: ['No product runtime behavior changes.'],
     riskDimensions: { persistedData: false, historicalSnapshots: false, concurrency: false, authorization: false, externalSideEffects: false, userVisible: false },
     coordinatorSpecReadReceipt: receipt(root, { taskId: 'prepared-task', relevantSections: ['0', '19', '20'], reason: 'Coordinator completed the required canonical reading before preparation.' }), ...overrides,
@@ -202,7 +202,7 @@ test('Task Card upgrades dirty owned work into a formal TaskBrief and fails clos
     const card = prepareTaskCard({ root, input: { schema: 'tackle-task-card/v1', taskId: 'card-upgrade', workflowMode: 'local', scope: 'Workflow change.', ownedPaths: ['AGENTS.md'], riskProfile: 'workflow_docs_metadata', changeClass: 'workflow_metadata' } });
     write(root, 'AGENTS.md', 'changed\n');
     const baseInput = prepareInput(root, { taskId: 'card-upgrade', scope: card.semantic.scope, ownedPaths: card.semantic.ownedPaths, coordinatorSpecReadReceipt: receipt(root, { taskId: 'card-upgrade', relevantSections: ['0', '19', '20'], reason: 'Coordinator completed routed reading.' }) });
-    const boundaryInput = (({ relevantSections, openDecisionApplicability, scopeHasRuntimeSemantics, acceptanceCriteria, exclusions, riskDimensions, coordinatorSpecReadReceipt }) => ({ schema: 'tackle-task-card-upgrade-input/v1', relevantSections, openDecisionApplicability, scopeHasRuntimeSemantics, acceptanceCriteria, exclusions, riskDimensions, coordinatorSpecReadReceipt }))(baseInput);
+    const boundaryInput = (({ reviewTier, relevantSections, openDecisionApplicability, scopeHasRuntimeSemantics, acceptanceCriteria, exclusions, riskDimensions, coordinatorSpecReadReceipt }) => ({ schema: 'tackle-task-card-upgrade-input/v1', reviewTier, relevantSections, openDecisionApplicability, scopeHasRuntimeSemantics, acceptanceCriteria, exclusions, riskDimensions, coordinatorSpecReadReceipt }))(baseInput);
     const brief = upgradeTaskCard({ root, card, boundaryInput });
     assert.equal(checkTaskBrief({ root, brief }).phase, 'pre_dispatch');
     assert.deepEqual(brief.preexistingOwnedPaths, []);
@@ -384,7 +384,7 @@ test('TaskBrief preparation preserves every declared risk dimension and its scen
     taskBase(root);
     const dimensions = { persistedData: true, historicalSnapshots: false, concurrency: true, authorization: false, externalSideEffects: false, userVisible: true };
     const input = prepareInput(root, {
-      riskProfile: 'durable_migration', changeClass: 'persistence_migration', scopeHasRuntimeSemantics: true, riskDimensions: dimensions,
+      riskProfile: 'durable_migration', reviewTier: 'strict', changeClass: 'persistence_migration', scopeHasRuntimeSemantics: true, riskDimensions: dimensions,
       coordinatorSpecReadReceipt: receipt(root, { taskId: 'prepared-task', riskProfile: 'durable_migration', relevantSections: ['0', '19', '20'] }),
     });
     const prepared = prepareTaskBrief({ root, input });
@@ -399,13 +399,17 @@ test('TaskBrief preparation fails closed for dirty, ambiguous, and unsupported i
   try {
     taskBase(root);
     const input = prepareInput(root);
+    assert.throws(() => runCli([], root), /Review tier safety floor: unknown_high_risk.*requires strict/s);
     assert.throws(() => prepareTaskBrief({ root, input: { ...input, ownedPaths: ['../AGENTS.md'] } }), /Invalid owned path/);
     assert.throws(() => prepareTaskBrief({ root, input: { ...input, relevantSections: ['0', '20', '999'] } }), /current v3 sections/);
     assert.throws(() => prepareTaskBrief({ root, input: { ...input, changeClass: 'not_a_class' } }), /unsupported/);
+    assert.throws(() => prepareTaskBrief({ root, input: { ...input, reviewTier: 'urgent' } }), /fast, standard, or strict/);
     assert.throws(() => prepareTaskBrief({ root, input: { ...input, baseSha: '0'.repeat(40) } }), /resolve|baseSha/);
     assert.throws(() => prepareTaskBrief({ root, input: { ...input, coordinatorSpecReadReceipt: { ...input.coordinatorSpecReadReceipt, taskId: 'other-task' } } }), /coordinatorSpecReadReceipt/);
     assert.throws(() => prepareTaskBrief({ root, input: { ...input, riskProfile: 'durable_migration', changeClass: 'persistence_migration', scopeHasRuntimeSemantics: true, coordinatorSpecReadReceipt: receipt(root, { taskId: 'prepared-task', riskProfile: 'durable_migration', relevantSections: ['0', '19', '20'] }) } }), /risk dimension/);
-    assert.throws(() => prepareTaskBrief({ root, input: { ...input, riskProfile: 'unknown_high_risk', changeClass: 'domain_behavior', scopeHasRuntimeSemantics: true, coordinatorSpecReadReceipt: receipt(root, { taskId: 'prepared-task', riskProfile: 'unknown_high_risk', relevantSections: ['0', '19', '20'] }) } }), /refuses unknown_high_risk/);
+    const unknownRiskInput = { ...input, riskProfile: 'unknown_high_risk', changeClass: 'domain_behavior', scopeHasRuntimeSemantics: true, coordinatorSpecReadReceipt: receipt(root, { taskId: 'prepared-task', riskProfile: 'unknown_high_risk', relevantSections: ['0', '19', '20'] }) };
+    assert.throws(() => prepareTaskBrief({ root, input: { ...unknownRiskInput, reviewTier: 'standard' } }), /reviewTier must be strict when riskProfile unknown_high_risk/);
+    assert.throws(() => prepareTaskBrief({ root, input: { ...unknownRiskInput, reviewTier: 'strict' } }), /refuses unknown_high_risk/);
     mkdirSync(path.join(root, 'directory-path'));
     write(root, 'directory-path/child.txt', 'tracked\n');
     command(root, ['add', 'directory-path']); command(root, ['commit', '-qm', 'track directory fixture']);
@@ -786,7 +790,7 @@ test('TaskBrief rejects empty shells and verdict cross-checks all durable identi
       artifactIdentity: { kind: 'worktree', commitSha: null, patchHash: patchHash({ root, baseSha: verdictBrief.baseSha, ownedPaths: verdictBrief.ownedPaths }).patchHash }, verdict: 'PASS', findings: [],
     };
     assert.equal(checkVerdict({ root, verdict, brief: verdictBrief }).taskBriefSha256, checkedBrief.taskBriefSha256);
-    assert.throws(() => checkTaskBrief({ root, brief: { ...preDispatch, phase: 'verdict' } }), /exactly one coordinator, coding, and review/);
+    assert.throws(() => checkTaskBrief({ root, brief: { ...preDispatch, phase: 'verdict' } }), /requires exactly these spec-read receipt roles: coordinator, coding, review/);
     assert.throws(() => checkTaskBrief({ root, brief: { ...preDispatch, specReadReceipts: [{ ...preDispatch.specReadReceipts[0], relevantSections: ['2'] }] } }), /riskProfile and relevantSections/);
     assert.throws(() => checkTaskBrief({ root, brief: { ...preDispatch, riskProfile: 'runtime_product_domain', scopeHasRuntimeSemantics: true } }), /workflow_metadata requires/);
     assert.throws(() => checkTaskBrief({ root, brief: { ...preDispatch, unexpected: true } }), /unknown, missing, or inapplicable keys/);
@@ -831,6 +835,59 @@ test('TaskBrief promotion preserves semantics and rejects mismatched, duplicate,
     assert.throws(() => promoteTaskBrief({ root, brief: { ...source, phase: 'verdict', specReadReceipts: [source.specReadReceipts[0], coding, review] }, codingReceipt: coding, reviewReceipt: review }), /requires a valid pre_dispatch/);
     write(root, 'unowned.txt', 'unowned\n');
     assert.throws(() => promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review }), /dirty or unowned/);
+  } finally {
+    cleanup(root);
+    cleanup(evidenceDir);
+  }
+});
+
+test('review tiers stay independent from riskProfile and enforce tier-specific receipt boundaries', () => {
+  const root = temporaryRepo();
+  const evidenceDir = mkdtempSync(path.join(os.tmpdir(), 'workflow-review-tier-'));
+  try {
+    taskBase(root);
+    const source = brief(root);
+    const coding = receipt(root, { role: 'coding', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'implementation coverage' });
+    const review = receipt(root, { role: 'review', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'independent review coverage' });
+    const prBase = { ...source, workflowMode: 'pull_request', reviewedHead: source.baseSha, dirtyWorktreeDisposition: 'clean_synced' };
+    const prFast = { ...prBase, phase: 'verdict', reviewTier: 'fast', specReadReceipts: [source.specReadReceipts[0], coding] };
+    assert.equal(checkTaskBrief({ root, brief: prFast }).phase, 'verdict');
+    const prStandard = { ...prFast, reviewTier: 'standard', specReadReceipts: [source.specReadReceipts[0], coding, review] };
+    assert.equal(checkTaskBrief({ root, brief: prStandard }).phase, 'verdict');
+    assert.throws(() => checkTaskBrief({ root, brief: { ...prStandard, specReadReceipts: [source.specReadReceipts[0], coding] } }), /coordinator, coding, review/);
+    assert.equal(prFast.riskProfile, prStandard.riskProfile);
+
+    write(root, 'AGENTS.md', 'task-owned change\n');
+    for (const reviewTier of ['fast', 'standard']) {
+      const tierSource = { ...source, reviewTier };
+      const promoted = promoteTaskBrief({ root, brief: tierSource, codingReceipt: coding });
+      assert.deepEqual(promoted.specReadReceipts.map((item) => item.role), ['coordinator', 'coding']);
+      assert.throws(() => promoteTaskBrief({ root, brief: tierSource, codingReceipt: coding, reviewReceipt: review }), /forbids a local review receipt/);
+    }
+    assert.throws(() => promoteTaskBrief({ root, brief: source, codingReceipt: coding }), /role review|receipt/);
+    assert.deepEqual(promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review }).specReadReceipts.map((item) => item.role), ['coordinator', 'coding', 'review']);
+
+    const fastSourcePath = path.join(evidenceDir, 'fast-brief.json');
+    const codingPath = path.join(evidenceDir, 'coding.json');
+    writeFileSync(fastSourcePath, JSON.stringify({ ...source, reviewTier: 'fast' }));
+    writeFileSync(codingPath, JSON.stringify(coding));
+    const cli = JSON.parse(runCli(['--promote-task-brief', '--brief', fastSourcePath, '--coding-receipt', codingPath], root));
+    assert.deepEqual(cli.specReadReceipts.map((item) => item.role), ['coordinator', 'coding']);
+
+    for (const dimension of ['persistedData', 'historicalSnapshots', 'concurrency', 'authorization', 'externalSideEffects']) {
+      assert.throws(
+        () => checkTaskBrief({ root, brief: { ...source, reviewTier: 'standard', riskDimensions: { ...source.riskDimensions, [dimension]: true } } }),
+        new RegExp(`reviewTier must be strict when riskDimensions\\.${dimension}`),
+      );
+    }
+    assert.throws(
+      () => checkTaskBrief({ root, brief: { ...source, riskProfile: 'unknown_high_risk', reviewTier: 'fast' } }),
+      /reviewTier must be strict when riskProfile unknown_high_risk/,
+    );
+    assert.throws(
+      () => checkTaskBrief({ root, brief: { ...source, riskProfile: 'unknown_high_risk', reviewTier: 'strict' } }),
+      /workflow_metadata requires workflow_docs_metadata/,
+    );
   } finally {
     cleanup(root);
     cleanup(evidenceDir);
@@ -1026,7 +1083,7 @@ test('SCOPED eligibility, clean Issue/PR routing, sections, OPEN IDs, and receip
     const runtimeBrief = { ...local, ownedPaths: ['src/runtime.ts'], allowedChanges: ['src/runtime.ts'], riskProfile: 'runtime_product_domain', scopeHasRuntimeSemantics: true, changeClass: 'typescript_api', validationPlan: { requiredCommands: ['npm run typecheck', 'npm run lint', 'npm test'], requiredScenarios: ['normal_path'], intentionallyNotApplicable: {} }, specReadReceipts: [runtimeReceipt] };
     assert.equal(checkTaskBrief({ root, brief: runtimeBrief }).phase, 'pre_dispatch');
     assert.throws(() => checkTaskBrief({ root, brief: { ...runtimeBrief, specReadReceipts: [{ ...runtimeReceipt, profile: 'SCOPED' }] } }), /profile must be ROUTED/);
-    assert.throws(() => checkTaskBrief({ root, brief: { ...local, specReadReceipts: [local.specReadReceipts[0], local.specReadReceipts[0]] } }), /exactly one coordinator/);
+    assert.throws(() => checkTaskBrief({ root, brief: { ...local, specReadReceipts: [local.specReadReceipts[0], local.specReadReceipts[0]] } }), /requires exactly these spec-read receipt roles: coordinator/);
     assert.throws(() => checkTaskBrief({ root, brief: { ...local, relevantSections: ['1', '20', '404'] } }), /section absent/);
     assert.throws(() => checkTaskBrief({ root, brief: { ...local, openDecisionCheck: { ...local.openDecisionCheck, checkedIds: ['OPEN-999'], applicableIds: ['OPEN-999'] } } }), /complete current v3 OPEN registry/);
     assert.equal(checkTaskBrief({ root, brief: { ...local, openDecisionCheck: { ...local.openDecisionCheck, applicableIds: [], noApplicableReason: 'No registry item affects this workflow-only change.' } } }).phase, 'pre_dispatch');
@@ -1043,7 +1100,7 @@ test('SCOPED eligibility, clean Issue/PR routing, sections, OPEN IDs, and receip
     const review = receipt(root, { role: 'review', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'review' });
     const duplicateBase = command(root, ['rev-parse', 'HEAD']);
     const duplicate = { ...local, baseSha: duplicateBase, reviewedHead: 'WORKTREE', validationPlan: { ...local.validationPlan, requiredCommands: [...local.validationPlan.requiredCommands.filter((item) => !item.includes('--check-owned-whitespace')), ownedWhitespaceCommand(duplicateBase, ['AGENTS.md'])] }, phase: 'verdict', specReadReceipts: [local.specReadReceipts[0], coding, review, review] };
-    assert.throws(() => checkTaskBrief({ root, brief: duplicate }), /exactly one coordinator, coding, and review/);
+    assert.throws(() => checkTaskBrief({ root, brief: duplicate }), /requires exactly these spec-read receipt roles: coordinator, coding, review/);
   } finally { cleanup(root); }
 });
 
@@ -1240,10 +1297,16 @@ test('adaptive reviewer governance forbids fixed reviewer and implementation pre
     assert.match(content, /exact current head\/base|当前精确head\/base|精确head\/base/);
     assert.match(content, /all assigned findings.*disposed|coordinator has disposed all findings|所有发现.*coordinator处置/);
   }
-  assert.match(claudePr, /coordinator 安排最小必要的修复容量/);
+  assert.match(claudePr, /coordinator.*安排最小必要的批量修复容量/);
+  assert.match(claudePr, /并行启动该head的GitHub PR CI与tier要求的所有独立审核范围/);
   assert.match(codexPr, /exactly one integrated substantive review signal/);
-  assert.match(local, /single `review` spec-read receipt.*coordinator-integrated review-role coverage record/);
-  assert.match(local, /each reviewer returns findings and evidence.*coordinator emits this exact single local verdict record/);
+  assert.match(codexPr, /start current-head pull-request CI and every tier-required independent review scope in parallel/);
+  assert.match(local, /at-most-one `review` spec-read receipt.*coordinator-integrated review-role coverage record/);
+  assert.match(local, /each assigned strict-tier reviewer returns findings and evidence.*coordinator emits this exact single local verdict record/);
   assert.doesNotMatch(local, /reviewer must return this exact local verdict record/);
-  assert.match(agents, /单一review receipt是coordinator整合后的review-role覆盖记录，不按reviewer逐个计数/);
+  assert.match(agents, /至多一个review receipt.*coordinator整合后的review-role覆盖记录，不按reviewer逐个计数/);
+  for (const content of [agents, claudePr, codexPr, local]) {
+    assert.match(content, /reviewTier|review tier/);
+    assert.match(content, /riskProfile|risk profile/);
+  }
 });

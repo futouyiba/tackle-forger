@@ -21,7 +21,7 @@ Default to one delivery Issue and one primary PR. If the Issue contains independ
 The invoking main Agent remains the only coordinator. A transition into `$agent-pr-loop` is a workflow handoff, not permission to spawn a second coordinator or ask the user to carry messages.
 
 - The coordinator chooses implementation capacity for code, tests, and fixes from task risk, scope, available capabilities, and resources. Follow repository-specific model requirements.
-- Independent, read-only, evidence-based review is mandatory once the PR exists. `$agent-pr-loop` owns adaptive reviewer selection, the repair loop, current-head/base evidence, and CI; every assigned scope covers the exact current head/base, and the coordinator disposes all findings before one integrated final review signal.
+- The TaskBrief selects `reviewTier: fast | standard | strict` as review intensity while `riskProfile` and `riskDimensions` remain the authoritative risk facts. `unknown_high_risk`, or any true persistence, historical-snapshot, concurrency, authorization, or external-side-effect dimension, requires `strict`; otherwise the coordinator may choose any tier. `fast` needs no independent reviewer or review receipt; `standard` defers its independent-review boundary to the final stable PR head and forbids duplicate local review; `strict` allows coordinator-scheduled early, orthogonal, and repeat scopes. `$agent-pr-loop` owns tier-aware reviewer selection, the repair loop, current-head/base evidence, and CI; every assigned scope covers the exact current head/base, and the coordinator disposes all findings before one integrated final review signal. Repository or platform gates may still require review evidence for a tier that does not require it by itself.
 - Let the coordinator repair routine labels, links, and Project status idempotently. Do not return work to the implementer only for metadata.
 - Prefer direct Agent messaging during an active task. Persist durable decisions, findings, evidence, and resumable state on the Issue or PR so another run can recover without chat history.
 
@@ -65,7 +65,7 @@ Pause in `HUMAN_DECISION_REQUIRED` when a missing choice would materially change
 
 1. Move eligible work to `In progress`, prepare a dedicated branch from the intended base, and record the base revision.
 2. Implement only the accepted scope. Preserve unknown fields, stable identities, historical artifacts, and existing user changes.
-3. Run the repository's exact validation commands and report results honestly. Re-run affected evidence after rebasing or conflict resolution.
+3. Run the repository's exact validation commands and report results honestly. Re-run affected evidence after rebasing or conflict resolution. Do not perform a local independent review for `standard`; preserve that review for the stable PR boundary.
 4. Stop at a real decision or blocked validation; do not pause for ordinary metadata repair or a redundant permission to continue the selected task.
 
 Use `NO_CODE_DELIVERY` only when the Issue is satisfied without a repository artifact. Record the reason, acceptance evidence, and why no PR is required; never use it to bypass required review or validation.

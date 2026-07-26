@@ -17,6 +17,7 @@ const SPEC_FULL_READ_SESSION_SCHEMA = 'tackle-spec-full-read-session/v1';
 const TASK_BRIEF_SCHEMA = 'tackle-task-brief/v1';
 const TASK_CARD_SCHEMA = 'tackle-task-card/v1';
 const TASK_CARD_UPGRADE_INPUT_SCHEMA = 'tackle-task-card-upgrade-input/v1';
+const REVIEW_TIERS = ['fast', 'standard', 'strict'];
 const TASK_PREPARE_INPUT_SCHEMA = 'tackle-task-prepare-input/v1';
 const OWNED_BASELINE_SCHEMA = 'tackle-owned-baseline/v1';
 const VERDICT_SCHEMA = 'tackle-local-verdict/v1';
@@ -399,6 +400,13 @@ export function specReadPlan({ root, role, riskProfile, relevantSections = [] })
   return { schema: SPEC_READ_SCHEMA, role, riskProfile, profile, requiredSections, relevantSections: relevant };
 }
 const TASK_CARD_SEMANTIC_FIELDS = ['taskId', 'workflowMode', 'scope', 'ownedPaths', 'riskProfile', 'changeClass'];
+const STRICT_REVIEW_RISK_DIMENSIONS = ['persistedData', 'historicalSnapshots', 'concurrency', 'authorization', 'externalSideEffects'];
+function validateReviewTierRiskFloor({ riskProfile, riskDimensions, reviewTier, fieldPrefix }) {
+  const strictReasons = [];
+  if (riskProfile === 'unknown_high_risk') strictReasons.push('riskProfile unknown_high_risk');
+  for (const dimension of STRICT_REVIEW_RISK_DIMENSIONS) if (riskDimensions[dimension] === true) strictReasons.push(`riskDimensions.${dimension}`);
+  if (strictReasons.length > 0 && reviewTier !== 'strict') fail(`${fieldPrefix}.reviewTier must be strict when ${strictReasons.join(' or ')}`);
+}
 function taskCardEscalation({ ownedPaths, riskProfile, changeClass }) {
   const markers = [];
   const classification = classifyOwnedPaths(ownedPaths);
@@ -701,6 +709,7 @@ function validateBriefNarrative(brief) {
   requireNonEmptyStringArray(brief.allowedChanges, 'TaskBrief.allowedChanges');
   requireExactKeys(brief.riskDimensions, ['persistedData', 'historicalSnapshots', 'concurrency', 'authorization', 'externalSideEffects', 'userVisible'], 'TaskBrief.riskDimensions');
   if (Object.values(brief.riskDimensions).some((value) => typeof value !== 'boolean')) fail('TaskBrief.riskDimensions values must be boolean');
+  validateReviewTierRiskFloor({ riskProfile: brief.riskProfile, riskDimensions: brief.riskDimensions, reviewTier: brief.reviewTier, fieldPrefix: 'TaskBrief' });
   requireExactKeys(brief.validationPlan, ['requiredCommands', 'requiredScenarios', 'intentionallyNotApplicable'], 'TaskBrief.validationPlan');
   const commands = requireStringArray(brief.validationPlan.requiredCommands, 'TaskBrief.validationPlan.requiredCommands');
   const scenarios = requireStringArray(brief.validationPlan.requiredScenarios, 'TaskBrief.validationPlan.requiredScenarios');
@@ -777,7 +786,7 @@ function requireCleanWorktree(root) {
   if (status === null || status.length !== 0) fail('Task preparation requires a clean worktree; preserve or isolate existing changes first');
 }
 function prepareInputKeys() {
-  return ['schema', 'taskId', 'workflowMode', 'baseSha', 'scope', 'relevantSections', 'openDecisionApplicability', 'riskProfile', 'scopeHasRuntimeSemantics', 'changeClass', 'ownedPaths', 'acceptanceCriteria', 'exclusions', 'riskDimensions', 'coordinatorSpecReadReceipt'];
+  return ['schema', 'taskId', 'workflowMode', 'baseSha', 'scope', 'relevantSections', 'openDecisionApplicability', 'riskProfile', 'reviewTier', 'scopeHasRuntimeSemantics', 'changeClass', 'ownedPaths', 'acceptanceCriteria', 'exclusions', 'riskDimensions', 'coordinatorSpecReadReceipt'];
 }
 function defaultNaReasons(changeClass) {
   const na = {};
@@ -857,6 +866,8 @@ function prepareTaskBriefInternal({ root = repositoryRoot(), input, currentReuse
   const noApplicableReason = input.openDecisionApplicability.noApplicableReason;
   if (noApplicableReason !== null && (typeof noApplicableReason !== 'string' || noApplicableReason.length === 0)) fail('Task preparation input.openDecisionApplicability.noApplicableReason must be a non-empty string or null');
   const riskProfile = requireString(input.riskProfile, 'Task preparation input.riskProfile');
+  const reviewTier = requireString(input.reviewTier, 'Task preparation input.reviewTier');
+  if (!REVIEW_TIERS.includes(reviewTier)) fail('Task preparation input.reviewTier must be fast, standard, or strict');
   if (typeof input.scopeHasRuntimeSemantics !== 'boolean') fail('Task preparation input.scopeHasRuntimeSemantics must be boolean');
   const changeClass = requireString(input.changeClass, 'Task preparation input.changeClass');
   if (!Object.hasOwn(CHANGE_CLASS_MATRIX, changeClass)) fail('Task preparation input.changeClass is unsupported');
@@ -865,6 +876,7 @@ function prepareTaskBriefInternal({ root = repositoryRoot(), input, currentReuse
   requireNonEmptyStringArray(input.exclusions, 'Task preparation input.exclusions');
   requireExactKeys(input.riskDimensions, ['persistedData', 'historicalSnapshots', 'concurrency', 'authorization', 'externalSideEffects', 'userVisible'], 'Task preparation input.riskDimensions');
   if (Object.values(input.riskDimensions).some((value) => typeof value !== 'boolean')) fail('Task preparation input.riskDimensions values must be boolean');
+  validateReviewTierRiskFloor({ riskProfile, riskDimensions: input.riskDimensions, reviewTier, fieldPrefix: 'Task preparation input' });
   validatePreparationRisk({ riskProfile, changeClass, riskDimensions: input.riskDimensions, scopeHasRuntimeSemantics: input.scopeHasRuntimeSemantics });
   const registry = buildNavigationIndex(root).openRegistry;
   const checkedIds = registry.map((entry) => entry.id);
@@ -877,7 +889,7 @@ function prepareTaskBriefInternal({ root = repositoryRoot(), input, currentReuse
     schema: TASK_BRIEF_SCHEMA, taskId, workflowMode, phase: 'pre_dispatch', specSha256: receipt.specSha256,
     baseSha, reviewedHead: workflowMode === 'local' ? 'WORKTREE' : head, scope: input.scope, relevantSections,
     openDecisionCheck: { registrySha256: openRegistryHash(root), checkedIds, applicableIds, noApplicableReason },
-    riskProfile, scopeHasRuntimeSemantics: input.scopeHasRuntimeSemantics, changeClass, allowedChanges: canonicalOwnedPaths,
+    riskProfile, reviewTier, scopeHasRuntimeSemantics: input.scopeHasRuntimeSemantics, changeClass, allowedChanges: canonicalOwnedPaths,
     acceptanceCriteria: input.acceptanceCriteria, exclusions: input.exclusions, riskDimensions: input.riskDimensions,
     validationPlan: prepareValidationPlan({ baseSha, ownedPaths: canonicalOwnedPaths, changeClass, riskDimensions: input.riskDimensions }), specReadReceipts: [receipt],
     ownedPaths: canonicalOwnedPaths, preexistingOwnedPaths: [], preexistingUnownedChanges: [],
@@ -893,12 +905,12 @@ export function prepareTaskBrief({ root = repositoryRoot(), input, currentReuseC
 export function upgradeTaskCard({ root = repositoryRoot(), card, boundaryInput, currentReuseContext }) {
   if (!isPlainObject(card) || !isPlainObject(card.derived) || card.derived.baseSha !== currentHead(root)) fail('Task Card upgrade rejects a stale card base/head');
   const checkedCard = checkTaskCard({ root, card });
-  requireExactKeys(boundaryInput, ['schema', 'relevantSections', 'openDecisionApplicability', 'scopeHasRuntimeSemantics', 'acceptanceCriteria', 'exclusions', 'riskDimensions', 'coordinatorSpecReadReceipt'], 'Task Card upgrade input');
+  requireExactKeys(boundaryInput, ['schema', 'reviewTier', 'relevantSections', 'openDecisionApplicability', 'scopeHasRuntimeSemantics', 'acceptanceCriteria', 'exclusions', 'riskDimensions', 'coordinatorSpecReadReceipt'], 'Task Card upgrade input');
   if (boundaryInput.schema !== TASK_CARD_UPGRADE_INPUT_SCHEMA) fail(`Task Card upgrade input.schema must be ${TASK_CARD_UPGRADE_INPUT_SCHEMA}`);
   const semantic = checkedCard.semantic;
   const input = {
     schema: TASK_PREPARE_INPUT_SCHEMA, taskId: semantic.taskId, workflowMode: semantic.workflowMode, baseSha: checkedCard.derived.baseSha,
-    scope: semantic.scope, ownedPaths: semantic.ownedPaths, riskProfile: semantic.riskProfile, changeClass: semantic.changeClass,
+    scope: semantic.scope, ownedPaths: semantic.ownedPaths, riskProfile: semantic.riskProfile, reviewTier: boundaryInput.reviewTier, changeClass: semantic.changeClass,
     relevantSections: boundaryInput.relevantSections, openDecisionApplicability: boundaryInput.openDecisionApplicability,
     scopeHasRuntimeSemantics: boundaryInput.scopeHasRuntimeSemantics, acceptanceCriteria: boundaryInput.acceptanceCriteria,
     exclusions: boundaryInput.exclusions, riskDimensions: boundaryInput.riskDimensions, coordinatorSpecReadReceipt: boundaryInput.coordinatorSpecReadReceipt,
@@ -917,6 +929,12 @@ function validateOpenDecisionCheck(root, value, relevantSections) {
   if (!applicableIds.every((id) => checkedIds.includes(id))) fail('TaskBrief.openDecisionCheck.applicableIds must be a checked OPEN subset');
   if (applicableIds.length === 0 && value.noApplicableReason === null) fail('TaskBrief.openDecisionCheck requires a reason when no checked OPEN decision applies');
   if (applicableIds.length > 0 && value.noApplicableReason !== null) fail('TaskBrief.openDecisionCheck.noApplicableReason is only allowed when applicableIds is empty');
+}
+function requiredSpecReceiptRoles({ phase, workflowMode, reviewTier }) {
+  if (phase === 'pre_dispatch') return ['coordinator'];
+  const roles = ['coordinator', 'coding'];
+  if (reviewTier === 'strict' || (reviewTier === 'standard' && workflowMode === 'pull_request')) roles.push('review');
+  return roles;
 }
 export function buildOwnedBaselineManifest({ root = repositoryRoot(), baseSha, ownedPaths }) {
   const manifest = buildPatchManifest({ root, baseSha, ownedPaths });
@@ -953,7 +971,7 @@ export function checkTaskBrief({ root = repositoryRoot(), brief, currentReuseCon
   const phase = requireString(brief.phase, 'TaskBrief.phase');
   if (!['pre_dispatch', 'verdict'].includes(phase)) fail('TaskBrief.phase must be pre_dispatch or verdict');
   if (!['local', 'issue', 'pull_request'].includes(workflowMode)) fail('TaskBrief.workflowMode must be local, issue, or pull_request');
-  const baseKeys = ['schema', 'taskId', 'workflowMode', 'phase', 'specSha256', 'baseSha', 'reviewedHead', 'scope', 'relevantSections', 'openDecisionCheck', 'riskProfile', 'scopeHasRuntimeSemantics', 'changeClass', 'allowedChanges', 'acceptanceCriteria', 'exclusions', 'riskDimensions', 'validationPlan', 'specReadReceipts', 'ownedPaths', 'preexistingOwnedPaths', 'preexistingUnownedChanges', 'dirtyWorktreeDisposition'];
+  const baseKeys = ['schema', 'taskId', 'workflowMode', 'phase', 'specSha256', 'baseSha', 'reviewedHead', 'scope', 'relevantSections', 'openDecisionCheck', 'riskProfile', 'reviewTier', 'scopeHasRuntimeSemantics', 'changeClass', 'allowedChanges', 'acceptanceCriteria', 'exclusions', 'riskDimensions', 'validationPlan', 'specReadReceipts', 'ownedPaths', 'preexistingOwnedPaths', 'preexistingUnownedChanges', 'dirtyWorktreeDisposition'];
   const hasPreexistingOwned = workflowMode === 'local' && Array.isArray(brief.preexistingOwnedPaths) && brief.preexistingOwnedPaths.length > 0;
   requireExactKeys(brief, hasPreexistingOwned ? [...baseKeys, 'preTaskOwnedBaselineManifest', 'preTaskOwnedBaselineHash'] : baseKeys, 'TaskBrief');
   requireCurrentSpecHash(root, brief.specSha256);
@@ -974,6 +992,8 @@ export function checkTaskBrief({ root = repositoryRoot(), brief, currentReuseCon
   validateOpenDecisionCheck(root, brief.openDecisionCheck, relevantSections);
   const riskProfile = requireString(brief.riskProfile, 'TaskBrief.riskProfile');
   if (!['workflow_docs_metadata', 'runtime_product_domain', 'durable_migration', 'concurrency_auth', 'publication_export_external', 'unknown_high_risk'].includes(riskProfile)) fail('TaskBrief.riskProfile is invalid');
+  const reviewTier = requireString(brief.reviewTier, 'TaskBrief.reviewTier');
+  if (!REVIEW_TIERS.includes(reviewTier)) fail('TaskBrief.reviewTier must be fast, standard, or strict');
   if (typeof brief.scopeHasRuntimeSemantics !== 'boolean') fail('TaskBrief.scopeHasRuntimeSemantics must be boolean');
   if (riskProfile === 'workflow_docs_metadata' && brief.scopeHasRuntimeSemantics) fail('workflow_docs_metadata TaskBrief cannot claim runtime semantics');
   if (!sameSet(canonicalOwnedPaths, canonicalAllowedChanges)) fail('TaskBrief.allowedChanges must UTF-8-set exactly equal ownedPaths');
@@ -1006,8 +1026,10 @@ export function checkTaskBrief({ root = repositoryRoot(), brief, currentReuseCon
   });
   if (trustedReuseContexts !== undefined && !sameSet(Object.keys(trustedReuseContexts), reusedRoles)) fail('reuseContexts must provide exactly one trusted context for each REUSE_FULL receipt role');
   const roles = brief.specReadReceipts.map((receipt) => receipt.role);
-  if (phase === 'pre_dispatch' && (roles.length !== 1 || roles[0] !== 'coordinator')) fail('Pre-dispatch TaskBrief requires exactly one coordinator spec-read receipt');
-  if (phase === 'verdict' && (!sameSet(roles, ['coordinator', 'coding', 'review']) || roles.length !== 3)) fail('Verdict-phase TaskBrief requires exactly one coordinator, coding, and review spec-read receipt');
+  const requiredRoles = requiredSpecReceiptRoles({ phase, workflowMode, reviewTier });
+  if (!sameSet(roles, requiredRoles) || roles.length !== requiredRoles.length) {
+    fail(`TaskBrief ${phase}/${workflowMode}/${reviewTier} requires exactly these spec-read receipt roles: ${requiredRoles.join(', ')}`);
+  }
   if (workflowMode === 'issue' || workflowMode === 'pull_request') {
     if (disposition !== 'clean_synced' || preexistingOwnedPaths.length !== 0) fail('Issue/PR TaskBrief requires clean_synced with no preexisting owned paths');
     const head = git(root, ['rev-parse', 'HEAD'])?.toString('utf8').trim();
@@ -1038,13 +1060,15 @@ export function promoteTaskBrief({ root = repositoryRoot(), brief, codingReceipt
   if (brief.preexistingUnownedChanges.length !== 0) fail('TaskBrief promotion rejects preexisting unowned artifacts');
   const coordinatorReceipt = brief.specReadReceipts[0];
   requirePromotionReceipt({ root, receipt: codingReceipt, role: 'coding', sourceBrief: brief, currentReuseContext, reuseContexts });
-  requirePromotionReceipt({ root, receipt: reviewReceipt, role: 'review', sourceBrief: brief, currentReuseContext, reuseContexts });
+  const needsReviewReceipt = requiredSpecReceiptRoles({ phase: 'verdict', workflowMode: brief.workflowMode, reviewTier: brief.reviewTier }).includes('review');
+  if (needsReviewReceipt) requirePromotionReceipt({ root, receipt: reviewReceipt, role: 'review', sourceBrief: brief, currentReuseContext, reuseContexts });
+  else if (reviewReceipt !== undefined) fail(`TaskBrief reviewTier ${brief.reviewTier} forbids a local review receipt`);
   const dirtyPaths = validationStatusPaths(root);
   if (dirtyPaths.some((repoPath) => !brief.ownedPaths.includes(repoPath))) fail('TaskBrief promotion rejects dirty or unowned artifacts');
   const manifest = buildPatchManifest({ root, baseSha: source.baseSha, ownedPaths: brief.ownedPaths });
   const manifestDirtyPaths = manifest.entries.filter((entry) => entry.state !== 'unchanged').map((entry) => entry.path);
   if (!sameSet(dirtyPaths, manifestDirtyPaths)) fail('TaskBrief promotion current Git status does not match the owned artifact manifest');
-  const promoted = { ...brief, phase: 'verdict', reviewedHead: 'WORKTREE', specReadReceipts: [coordinatorReceipt, codingReceipt, reviewReceipt], dirtyWorktreeDisposition: brief.preexistingOwnedPaths.length === 0 ? 'clean' : 'include_with_frozen_baseline' };
+  const promoted = { ...brief, phase: 'verdict', reviewedHead: 'WORKTREE', specReadReceipts: needsReviewReceipt ? [coordinatorReceipt, codingReceipt, reviewReceipt] : [coordinatorReceipt, codingReceipt], dirtyWorktreeDisposition: brief.preexistingOwnedPaths.length === 0 ? 'clean' : 'include_with_frozen_baseline' };
   checkTaskBrief({ root, brief: promoted, currentReuseContext, reuseContexts });
   return promoted;
 }
@@ -1099,13 +1123,14 @@ export function checkPolicy(root = repositoryRoot()) {
   try { policy = JSON.parse(policyMatches[0][1]); } catch { fail('Workflow policy drift: invalid canonical AGENTS policy JSON'); }
   const expectedPolicy = {
     dirtyIsolation: { issuePr: 'clean_synced', localOwnedBaseline: OWNED_BASELINE_SCHEMA },
-    issue: { localReviewer: false, owner: 'agent-issue-loop', prReviewer: 'agent-pr-loop' },
-    local: { independentReviewer: true, owner: 'tackle-agent-workflow' },
+    issue: { localReviewBoundaryByTier: { fast: 'none', standard: 'none', strict: 'coordinator_scheduled' }, owner: 'agent-issue-loop', prReviewer: 'agent-pr-loop' },
+    local: { owner: 'tackle-agent-workflow', reviewBoundaryByTier: { fast: 'none', standard: 'none', strict: 'coordinator_scheduled' } },
     localVerdict: { artifactIdentity: { committed: 'commit_sha_only', worktree: 'base_owned_paths_patch_hash' }, required: ['taskBriefSha256', 'specReceiptHashes', 'dirtyWorktreeDisposition', 'specSha256', 'baseSha', 'reviewedHead', 'ownedPaths', 'artifactIdentity'], schema: VERDICT_SCHEMA },
-    pullRequest: { owner: 'agent-pr-loop', reviewer: 'agent-pr-loop' },
+    pullRequest: { owner: 'agent-pr-loop', reviewBoundaryByTier: { fast: 'none', standard: 'stable_head', strict: 'coordinator_scheduled' }, stableHeadParallelStart: ['pull_request_ci', 'independent_review'] },
+    reviewTier: { authority: 'review_boundary_and_intensity_only', values: REVIEW_TIERS, riskAuthority: ['riskProfile', 'riskDimensions'], strictWhenRiskProfile: ['unknown_high_risk'], strictWhenRiskDimensions: STRICT_REVIEW_RISK_DIMENSIONS, taskCardDecision: 'formal_boundary_only' },
     reviewSeverity: { passBlocking: ['P0', 'P1', 'P2'], p3: 'informational' },
     scopedEligibility: { allowedPathClasses: ['AGENTS.md', 'CLAUDE.md', '.codex/skills/tackle-agent-workflow/**', '.codex/skills/agent-project-bootstrap/**', '.codex/skills/agent-issue-loop/**', '.codex/skills/agent-pr-loop/**', '.claude/skills/agent-pr-loop/**', 'docs/(workflow|agent-governance)-*.md', '.github/*.md|yml|yaml', '.github/workflows/*.yml|yaml'], unknownForcesFull: true },
-    specReceipt: { schema: SPEC_READ_SCHEMA }, taskCard: { dailySemanticFields: TASK_CARD_SEMANTIC_FIELDS, developmentEvidence: 'task_card_daily', formalBoundaryUpgrade: 'task_brief_only', schema: TASK_CARD_SCHEMA }, taskBrief: { allowedChangesEqualsOwnedPaths: true, closedSchema: true, conditionalNaApplicability: CONDITIONAL_NA_APPLICABILITY, conditionalNaCatalog: { productRuntimeTests: 'product_runtime_tests' }, evidenceStages: { development: 'task_card_daily', localReviewHandoff: 'local_verdict', prFinal: 'pr_final_change_class' }, openDecisionCheck: true, phaseReceipts: { pre_dispatch: ['coordinator'], verdict: ['coordinator', 'coding', 'review'] }, receiptRiskAuthority: true, schema: TASK_BRIEF_SCHEMA, structuredFields: ['changeClass', 'allowedChanges', 'riskDimensions', 'validationPlan'] }, validationRunner: { closedCommandCatalog: true, formalVerdictEvidence: false, reusableWorktree: 'committed_clean_or_worktree_owned_manifest_only', reuseRequiresUnchanged: ['artifact', 'relevant_inputs', 'dependency_lock', 'command_contract', 'toolchain', 'path_and_execution_environment', 'installed_dependency_state'], schema: VALIDATION_SUMMARY_SCHEMA }, validationMatrix: { commandsAndScenariosSeparated: true, executionTiers: VALIDATION_EXECUTION_TIERS, mandatoryWorkflowCommands: MANDATORY_WORKFLOW_COMMANDS, prFinalCommandsNonWaivable: ['npm run typecheck', 'npm run lint', 'npm test'], triggeredCannotBeNa: true, triggeredScenariosNonWaivable: true, userVisiblePathClassifier: 'tsx_jsx_css_scss_sass_less_html_and_ui_roots', userVisibleScenario: 'unified_visual_review_pending_or_completed', workflowMetadataDynamicDiff: true },
+    specReceipt: { schema: SPEC_READ_SCHEMA }, taskCard: { dailySemanticFields: TASK_CARD_SEMANTIC_FIELDS, developmentEvidence: 'task_card_daily', formalBoundaryUpgrade: 'task_brief_only', reviewTierDecision: 'formal_boundary_only', schema: TASK_CARD_SCHEMA }, taskBrief: { allowedChangesEqualsOwnedPaths: true, closedSchema: true, conditionalNaApplicability: CONDITIONAL_NA_APPLICABILITY, conditionalNaCatalog: { productRuntimeTests: 'product_runtime_tests' }, evidenceStages: { development: 'task_card_daily', localReviewHandoff: 'local_verdict', prFinal: 'pr_final_change_class' }, openDecisionCheck: true, phaseReceiptsByReviewTier: { pre_dispatch: { fast: ['coordinator'], standard: ['coordinator'], strict: ['coordinator'] }, verdict: { fast: { all: ['coordinator', 'coding'] }, standard: { local: ['coordinator', 'coding'], issue: ['coordinator', 'coding'], pull_request: ['coordinator', 'coding', 'review'] }, strict: { all: ['coordinator', 'coding', 'review'] } } }, receiptRiskAuthority: true, schema: TASK_BRIEF_SCHEMA, structuredFields: ['changeClass', 'reviewTier', 'allowedChanges', 'riskDimensions', 'validationPlan'] }, validationRunner: { closedCommandCatalog: true, formalVerdictEvidence: false, reusableWorktree: 'committed_clean_or_worktree_owned_manifest_only', reuseRequiresUnchanged: ['artifact', 'relevant_inputs', 'dependency_lock', 'command_contract', 'toolchain', 'path_and_execution_environment', 'installed_dependency_state'], schema: VALIDATION_SUMMARY_SCHEMA }, validationMatrix: { commandsAndScenariosSeparated: true, executionTiers: VALIDATION_EXECUTION_TIERS, mandatoryWorkflowCommands: MANDATORY_WORKFLOW_COMMANDS, prFinalCommandsNonWaivable: ['npm run typecheck', 'npm run lint', 'npm test'], triggeredCannotBeNa: true, triggeredScenariosNonWaivable: true, userVisiblePathClassifier: 'tsx_jsx_css_scss_sass_less_html_and_ui_roots', userVisibleScenario: 'unified_visual_review_pending_or_completed', workflowMetadataDynamicDiff: true },
     visual: { minimalSmokeCompletesReview: false, pendingMarker: '视觉与交互统一检查待执行' },
   };
   if (canonicalJson(policy) !== canonicalJson(expectedPolicy)) fail('Workflow policy drift: canonical AGENTS policy differs');
@@ -1117,11 +1142,11 @@ export function checkPolicy(root = repositoryRoot()) {
   try { skillTaskBriefRef = JSON.parse(skillTaskBriefMatches[0][1]); } catch { fail('Workflow policy drift: Skill TaskBrief policy reference is invalid JSON'); }
   if (canonicalJson(skillTaskBriefRef) !== canonicalJson(expectedSkillTaskBriefRef)) fail('Workflow policy drift: Skill TaskBrief policy reference differs from AGENTS');
   const projectSkills = boundedSection(agents, '## 项目级 Agent Skills', '## Tackle 工作流契约');
-  const expectedProjectTackle = '- 对本仓库中的实现、修复或重构，`$tackle-agent-workflow`为所有路由提供项目约束与 TaskBrief；只有本地路由使用其编码与独立本地审核。Issue 与 PR 路由仍分别遵循`$agent-issue-loop`和`$agent-pr-loop`；仓库的合并、发布和部署门禁不因项目级Skill存在而放宽。';
+  const expectedProjectTackle = '- 对本仓库中的实现、修复或重构，`$tackle-agent-workflow`为所有路由提供项目约束与 TaskBrief；本地路由按`reviewTier`决定是否需要独立审核。Issue 与 PR 路由仍分别遵循`$agent-issue-loop`和`$agent-pr-loop`；仓库的合并、发布和部署门禁不因项目级Skill存在而放宽。';
   if (!projectSkills.content.includes(expectedProjectTackle) || projectSkills.content.includes('`$tackle-agent-workflow`编排不同的编码与只读审核Agent')) fail('Workflow policy drift: broad project Skill statement differs');
   const agentsRouting = boundedSection(agents, '## Tackle 工作流契约', '## 本机凭据与多 worktree');
   if (!agentsRouting.content.includes(policyMatches[0][0])) fail('Workflow policy drift: AGENTS policy block is outside routing section');
-  const expectedTaskBriefRole = '- `$tackle-agent-workflow`日常开发先用 Task Card；所有路由要求独立、只读、基于证据的审核。coordinator按任务风险、范围、可用能力与资源决定实施容量，以及审核者数量、专长、模型、推理强度和串并行安排。每个已分配审核范围必须覆盖当前精确head/base或本地artifact；所有发现均由coordinator处置后，才整合唯一最终PR审核信号或本地verdict。Issue 生命周期归`$agent-issue-loop`，PR 审核/CI/修复归`$agent-pr-loop`；已有 PR 直接使用后者。verdict阶段的单一review receipt是coordinator整合后的review-role覆盖记录，不按reviewer逐个计数，也不证明Agent身份。';
+  const expectedTaskBriefRole = '- `$tackle-agent-workflow`日常开发先用 Task Card；正式边界另选独立的`reviewTier: fast | standard | strict`。`reviewTier`只决定审核边界与强度，不替代或重解释作为风险事实权威的`riskProfile`与`riskDimensions`。当`riskProfile=unknown_high_risk`，或`riskDimensions`中的`persistedData`、`historicalSnapshots`、`concurrency`、`authorization`、`externalSideEffects`任一为真时，`reviewTier`必须为`strict`；其他情况仍由coordinator动态选择。`fast`不要求独立Reviewer或review receipt；`standard`只在最终稳定PR head要求独立审核，禁止先做一次本地独立审核再在PR重复；`strict`允许coordinator按风险安排提前审核、多个正交范围和必要复审。coordinator仍按任务风险、范围、可用能力与资源动态决定实施容量，以及被要求或选用的审核者数量、专长、模型、推理强度和串并行安排，不写死人数或模型。每个已分配审核范围必须覆盖当前精确head/base或本地artifact；所有发现均由coordinator处置并一次性汇总后，才整合唯一最终PR审核信号或本地verdict。Issue 生命周期归`$agent-issue-loop`，PR 审核/CI/修复归`$agent-pr-loop`；已有 PR 直接使用后者。存在审核范围时，verdict阶段至多一个review receipt，且它是coordinator整合后的review-role覆盖记录，不按reviewer逐个计数，也不证明Agent身份。';
   if (!agentsRouting.content.includes(expectedTaskBriefRole)) fail('Workflow policy drift: AGENTS TaskBrief role differs');
   if (!agentsRouting.content.includes('formalTaskBriefRequiredAtBoundary: true') || !agentsRouting.content.includes('earlyEscalationRequired')) fail('Workflow policy drift: AGENTS Task Card boundary state differs');
   if (!skillTaskBrief.content.includes('formalTaskBriefRequiredAtBoundary: true') || !skillTaskBrief.content.includes('earlyEscalationRequired')) fail('Workflow policy drift: Skill Task Card boundary state differs');
@@ -1130,7 +1155,7 @@ export function checkPolicy(root = repositoryRoot()) {
   if (routeLines.length !== 1 || routeLines[0] !== expectedRoute) fail('Workflow policy drift: AGENTS route statement differs');
   const skillRouting = boundedSection(skill, '## Route before dispatch', '## Start with a Task Card; create a TaskBrief at a formal boundary');
   const expectedSkillRoutes = [
-    '- **Local implementation, no Issue or PR:** this Skill owns local implementation and the required independent read-only evidence review.',
+    '- **Local implementation, no Issue or PR:** this Skill owns local implementation and applies the TaskBrief review tier at the local evidence boundary.',
     '- **Issue delivery:** `$agent-issue-loop` owns Issue, branch, PR, closure, and handoff. Supply it this Skill\'s TaskBrief. Once a PR exists, `$agent-pr-loop` exclusively owns review, CI, fixes, and merge gates.',
     '- **Existing PR:** invoke `$agent-pr-loop` directly and supply the TaskBrief. It owns the review loop.',
   ];
@@ -1156,7 +1181,7 @@ export function checkPolicy(root = repositoryRoot()) {
   return true;
 }
 function usage() {
-  return `Usage:\n  node ${SCRIPT_RELATIVE} --generate-index\n  node ${SCRIPT_RELATIVE} --check-index\n  node ${SCRIPT_RELATIVE} --check-policy\n  node ${SCRIPT_RELATIVE} --prepare-task-card --input <six-field-card.json> [--store-run]\n  node ${SCRIPT_RELATIVE} --check-task-card --card <task-card.json>\n  node ${SCRIPT_RELATIVE} --upgrade-task-card --card <task-card.json> --boundary-input <formal-boundary.json> [--store-run] [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --prepare-task-brief --input <semantic-input.json> [--store-run] [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --promote-task-brief --brief <pre-dispatch-task-brief.json> --coding-receipt <receipt.json> --review-receipt <receipt.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --check-owned-whitespace --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --spec-read-plan --role <coordinator|coding|review> --risk <risk-profile> [--relevant <v3-section> ...]\n  node ${SCRIPT_RELATIVE} --check-read-receipt --receipt <receipt.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --check-full-read-session --session <session.json>\n  node ${SCRIPT_RELATIVE} --check-task-brief --brief <task-brief.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --owned-baseline --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --run-validation --brief <verdict-task-brief.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --check-verdict --verdict <verdict.json> --brief <task-brief.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --patch-hash --base <sha> --owned <repo-relative-path> [--owned <path> ...]`;
+  return `Usage:\n  node ${SCRIPT_RELATIVE} --generate-index\n  node ${SCRIPT_RELATIVE} --check-index\n  node ${SCRIPT_RELATIVE} --check-policy\n  node ${SCRIPT_RELATIVE} --prepare-task-card --input <six-field-card.json> [--store-run]\n  node ${SCRIPT_RELATIVE} --check-task-card --card <task-card.json>\n  node ${SCRIPT_RELATIVE} --upgrade-task-card --card <task-card.json> --boundary-input <formal-boundary-with-review-tier.json> [--store-run] [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --prepare-task-brief --input <semantic-input-with-review-tier.json> [--store-run] [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --promote-task-brief --brief <pre-dispatch-task-brief.json> --coding-receipt <receipt.json> [--review-receipt <receipt.json when tier requires>] [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --check-owned-whitespace --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --spec-read-plan --role <coordinator|coding|review> --risk <risk-profile> [--relevant <v3-section> ...]\n  node ${SCRIPT_RELATIVE} --check-read-receipt --receipt <receipt.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --check-full-read-session --session <session.json>\n  node ${SCRIPT_RELATIVE} --check-task-brief --brief <task-brief.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --owned-baseline --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --run-validation --brief <verdict-task-brief.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --check-verdict --verdict <verdict.json> --brief <task-brief.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --patch-hash --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n\nReview tier safety floor: unknown_high_risk or any persistence, historical snapshot, concurrency, authorization, or external side-effect risk dimension requires strict.`;
 }
 function parseActionOptions(argv, action, allowed, required = []) {
   if (argv[0] !== action) fail(usage());
@@ -1215,9 +1240,10 @@ export function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
     return JSON.stringify(brief, null, 2);
   }
   if (action === '--promote-task-brief') {
-    const values = parseActionOptions(argv, action, { '--brief': false, '--coding-receipt': false, '--review-receipt': false, '--reuse-contexts': false }, ['--brief', '--coding-receipt', '--review-receipt']);
+    const values = parseActionOptions(argv, action, { '--brief': false, '--coding-receipt': false, '--review-receipt': false, '--reuse-contexts': false }, ['--brief', '--coding-receipt']);
     const reuseContexts = values['--reuse-contexts'].length === 0 ? undefined : readJsonFile(path.resolve(cwd, values['--reuse-contexts'][0]), 'role-keyed reuse contexts');
-    return JSON.stringify(promoteTaskBrief({ root, brief: readJsonFile(path.resolve(cwd, values['--brief'][0]), 'pre_dispatch TaskBrief'), codingReceipt: readJsonFile(path.resolve(cwd, values['--coding-receipt'][0]), 'coding receipt'), reviewReceipt: readJsonFile(path.resolve(cwd, values['--review-receipt'][0]), 'review receipt'), reuseContexts }), null, 2);
+    const reviewReceipt = values['--review-receipt'].length === 0 ? undefined : readJsonFile(path.resolve(cwd, values['--review-receipt'][0]), 'review receipt');
+    return JSON.stringify(promoteTaskBrief({ root, brief: readJsonFile(path.resolve(cwd, values['--brief'][0]), 'pre_dispatch TaskBrief'), codingReceipt: readJsonFile(path.resolve(cwd, values['--coding-receipt'][0]), 'coding receipt'), reviewReceipt, reuseContexts }), null, 2);
   }
   if (action === '--check-owned-whitespace') {
     const values = parseActionOptions(argv, action, { '--base': false, '--owned': true }, ['--base']);

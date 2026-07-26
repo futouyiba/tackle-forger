@@ -1,6 +1,6 @@
 ---
 name: agent-pr-loop
-description: Orchestrate one GitHub pull request through all comments and review findings, minimal implementation, independent Agent review, current-head CI, integration evidence, and safe merge readback when a merge is performed. Use when the user explicitly names agent-pr-loop or $agent-pr-loop, or says “搞定 PR”, “搞定这个 PR”, “搞定当前 PR”, “把这个 PR 完成/收尾/处理掉”, “把当前 PR 跑完”, “审完修完这个 PR”, “处理 PR 的评论/review/CI”, “复审后合并”, or “合并收尾”, especially when Codex should infer the active PR instead of requiring its number.
+description: Orchestrate one GitHub pull request through comments, review-tier-aware independent Agent review, current-head CI, batched repair, integration evidence, and safe merge readback when a merge is performed. Use when the user explicitly names agent-pr-loop or $agent-pr-loop, or says “搞定 PR”, “搞定这个 PR”, “搞定当前 PR”, “把这个 PR 完成/收尾/处理掉”, “把当前 PR 跑完”, “审完修完这个 PR”, “处理 PR 的评论/review/CI”, “复审后合并”, or “合并收尾”, especially when Codex should infer the active PR instead of requiring its number.
 ---
 
 Use `$agent-project-bootstrap` in daily-flow mode for work selection and repository coordination. Keep GitHub as the current-state source of truth and obey repository instructions and canonical specifications.
@@ -26,22 +26,28 @@ Reply with the verified disposition and evidence when useful. Resolve an inline 
 
 ## Run the adaptive review loop
 
-The primary Agent is the coordinator and sole integrator. It selects implementation capacity and reviewer count, specialization, model, reasoning strength, and sequential or parallel scheduling from task risk, scope, available capabilities, and resources. Each implementation role makes only minimal in-scope code and regression-test changes; it must not merge, deploy, publish, delete, commit, push, edit PR metadata, or resolve/reply to review threads unless the coordinator explicitly delegates that action. Each independent reviewer is read-only except for publishing the final substantive GitHub review signal when authorized, and checks its assigned scope against the exact current head/base, linked Issue, canonical specification, merged dependencies, complete PR conversation, concurrency/authorization/history boundaries, and explicit exclusions. Independence means separate task role and fresh reasoning, not a distinct GitHub account. Assume one human owner and one shared GitHub identity unless repository policy says otherwise.
+The primary Agent is the coordinator and sole integrator. The TaskBrief's `reviewTier` controls only review boundary and intensity; `riskProfile` and `riskDimensions` remain the authoritative risk facts. `unknown_high_risk`, or any true persistence, historical-snapshot, concurrency, authorization, or external-side-effect dimension, requires `strict`; otherwise the coordinator may choose any tier:
+
+- `fast`: independent review and a review receipt are not required.
+- `standard`: perform one independent review only on the final stable PR head; do not repeat an earlier local independent review.
+- `strict`: the coordinator may schedule early review, multiple orthogonal scopes, and necessary re-review.
+
+The coordinator selects implementation capacity and, when review is required or chosen, reviewer count, specialization, model, reasoning strength, and sequential or parallel scheduling from task risk, scope, available capabilities, and resources. Never hard-code reviewer count or model. Each implementation role makes only minimal in-scope code and regression-test changes; it must not merge, deploy, publish, delete, commit, push, edit PR metadata, or resolve/reply to review threads unless the coordinator explicitly delegates that action. Each independent reviewer is read-only except for publishing the final substantive GitHub review signal when authorized, and checks its assigned scope against the exact current head/base, linked Issue, canonical specification, merged dependencies, complete PR conversation, concurrency/authorization/history boundaries, and explicit exclusions. Independence means separate task role and fresh reasoning, not a distinct GitHub account. Assume one human owner and one shared GitHub identity unless repository policy says otherwise.
 
 Use Agent messages for fast coordination during the active task. Route disposition-changing conclusions through the coordinator so it can serialize review, repair, push, CI, and re-review against the correct head. Direct implementation/reviewer clarification is allowed, but it never replaces coordinator awareness or durable evidence. Treat GitHub as the cross-session mailbox and source of truth.
 
-Start with parallel read-only triage when safe. Once a defect is found, serialize the cycle:
+Start with parallel read-only triage when safe. For each candidate cycle:
 
-1. Each assigned reviewer reports severity-ranked findings bound to the current head/base.
-2. Coordinator disposes each finding; implementation capacity makes the smallest in-scope fix and tests it when a repair is needed.
-3. Coordinator reviews the diff, runs repository-required full gates, commits, and pushes only the exact PR head.
-4. Coordinator reads back and verifies `local HEAD == remote PR head == GitHub PR head`.
-5. Wait for current-head pull-request CI.
-6. Coordinator schedules the necessary incremental review scopes for that exact new head/base.
+1. Coordinator disposes known findings, assigns one batch of the smallest in-scope fixes, and runs the required local checks.
+2. Coordinator reviews the combined diff, commits, pushes the stable candidate head, and verifies `local HEAD == remote PR head == GitHub PR head`.
+3. Immediately after that readback, start current-head pull-request CI and every tier-required independent review scope in parallel. `fast` may have no review branch; `standard` starts its independent-review boundary here; `strict` starts the scopes selected for this boundary.
+4. Wait for both branches to reach a terminal result. Do not serialize review behind CI or CI behind review.
+5. Coordinator performs one combined disposition pass over CI failures, review findings, actionable PR conversation, and thread state. If repair is required, batch compatible fixes into the next candidate instead of pushing one fix per finding.
+6. After a changed head is pushed, repeat from step 3 for that exact head/base. Re-run the tier-required exact-head review; `strict` may use the incremental, orthogonal, or repeat scopes the coordinator determines are needed.
 
 Never reuse a PASS, approval, CI result, or unresolved-thread disposition after the head or base changes. Preserve historical data, stable identities, and published snapshots. At durable, authorization, publication, and external-write boundaries, fail closed.
 
-After every assigned review scope has covered the exact current head/base and the coordinator has disposed all findings, emit exactly one integrated substantive review signal as a submitted COMMENT review or repository-approved equivalent containing:
+When the selected tier or repository/platform policy requires independent review, after every assigned review scope has covered the exact current head/base and the coordinator has disposed all findings, emit exactly one integrated substantive review signal as a submitted COMMENT review or repository-approved equivalent containing:
 
 ```text
 Agent-Review-Version: v1
@@ -52,7 +58,7 @@ Verdict: PASS
 Agent-Review: PASS
 ```
 
-Include reviewed scope, validation inspected, findings, comment dispositions, and residual risks when applicable. Never emit PASS while an actionable finding remains anywhere in the PR conversation. In a single-owner, shared-account workflow, publish the COMMENT as durable Agent-review evidence rather than pretending it is a GitHub Approval. Require another GitHub identity only when repository or platform policy explicitly does.
+Include reviewed scope, validation inspected, findings, comment dispositions, and residual risks when applicable. Never emit PASS while an actionable finding remains anywhere in the PR conversation. In a single-owner, shared-account workflow, publish the COMMENT as durable Agent-review evidence rather than pretending it is a GitHub Approval. Require another GitHub identity only when repository or platform policy explicitly does. `fast` with no gate-required review emits neither this signal nor a review receipt.
 
 ## Integration evidence
 
@@ -62,7 +68,7 @@ Treat integration evidence as complete only when one exact head/base pair has al
 - complete repository-required local validation with exact results;
 - every required pull-request CI job successful on its current run/attempt;
 - no unresolved actionable top-level comment, review body finding, inline comment, discussion, or relevant bot finding;
-- a substantive independent review bound to that exact head/base pair containing the required structured fields and exact line `Agent-Review: PASS`;
+- tier- and gate-required independent review evidence, if any, bound to that exact head/base pair and containing the required structured fields and exact line `Agent-Review: PASS`;
 - open, non-draft, mergeable PR plus any actually configured branch-protection approvals.
 
 Pause and request the missing human decision only for unresolved product or scope semantics; destructive data, security, authorization, secret, billing, legal, or compliance choices; merge-triggered external side effects; unavailable required validation; ambiguous dependency order; a required second GitHub identity; exhausted retries; or an untrustworthy exact-head result. Do not label ordinary code quality, a completed Agent review, or a generic desire for caution as a human gate.

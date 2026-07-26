@@ -3,7 +3,7 @@
 > 生成日期：2026-07-24
 > 基线 commit：`eebd0c74a471dcf860cff3196b8d57448b51bbaf`（`git rev-parse HEAD`）
 > 生成者：Claude 自动审计，只读现有文件
-> 2026-07-26 校对（二次）：核对至合并 `efb549c`，33IGHy 名对齐 registry（"基础维修价格和零整比"）、映射表 48 项（34KaIv/35bCfX 已不在 CANONICAL_FEISHU_SHEET_REGISTRY 登记）；v3 §14 表数同步
+> 2026-07-26 校对（二次）：核对至合并 `efb549c`，33IGHy 名对齐 registry（"基础维修价格和零整比"），34KaIv/35bCfX 已不在 CANONICAL_FEISHU_SHEET_REGISTRY 登记；v3 §14 去数量声明
 
 ## 数据源
 

@@ -106,7 +106,8 @@ echo "SERVICE_ACTIVE"
 REMOTE
 
 echo "==> 5/5 验收"
-ssh "$R730_SSH" "curl -s -o /dev/null -w 'session(期望401): %{http_code}\n' http://127.0.0.1:3000/api/auth/session"
+# 用正确端口 13000（systemd ExecStart）而非 3000；容错以防 set -e 中断后续清理
+ssh "$R730_SSH" "curl -s -o /dev/null -w 'session(期望401): %{http_code}\n' http://127.0.0.1:13000/api/auth/session || true"
 
 rm -f "$TAR"
 

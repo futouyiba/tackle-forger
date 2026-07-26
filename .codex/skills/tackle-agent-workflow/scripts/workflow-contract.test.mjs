@@ -1027,7 +1027,7 @@ test('canonical specification paths always trigger the module consistency comman
   } finally { cleanup(root); }
 });
 
-test('post-gate policy keeps merge eligibility distinct from merge action', () => {
+test('repository workflow leaves the merge decision to task-aware Agent judgment', () => {
   const root = process.cwd();
   const policyPaths = [
     'AGENTS.md',
@@ -1040,7 +1040,7 @@ test('post-gate policy keeps merge eligibility distinct from merge action', () =
     '.codex/skills/agent-project-bootstrap/references/daily-project-flow.md',
     '.codex/skills/tackle-agent-workflow/SKILL.md',
   ];
-  const prohibitedDefaults = [
+  const prohibitedPrescriptions = [
     /automatic merge is the normal completion path/i,
     /automatically merges when every gate passes/i,
     /automatic merge when every gate passes/i,
@@ -1049,17 +1049,20 @@ test('post-gate policy keeps merge eligibility distinct from merge action', () =
     /do not ask for redundant (?:merge )?confirmation/i,
     /all-green exact-head review and CI result supplies the normal merge decision/i,
     /the user has authorized the merge/i,
+    /only an explicit merge request may continue/i,
+    /unless the current request explicitly includes a merge/i,
+    /only when the current request explicitly includes a merge/i,
+    /仅当前请求明确包含合并时/i,
   ];
   for (const relative of policyPaths) {
     const content = readFileSync(path.join(root, relative), 'utf8');
-    for (const prohibited of prohibitedDefaults) assert.doesNotMatch(content, prohibited, relative);
+    for (const prohibited of prohibitedPrescriptions) assert.doesNotMatch(content, prohibited, relative);
   }
   const issueLoop = readFileSync(path.join(root, '.codex/skills/agent-issue-loop/SKILL.md'), 'utf8');
-  assert.match(issueLoop, /PR_LOOP_ACTIVE → PR_MERGE_ELIGIBLE/);
-  assert.match(issueLoop, /status: `MERGE_ELIGIBLE`, `MERGED_VERIFIED`/);
+  assert.match(issueLoop, /PR_LOOP_ACTIVE → PR_EVIDENCE_COMPLETE/);
+  assert.match(issueLoop, /status: `EVIDENCE_COMPLETE`, `MERGED_VERIFIED`/);
   assert.match(issueLoop, /exact reviewed head and base SHAs plus gate evidence/);
-  assert.match(issueLoop, /leave the Issue in `In review`/);
-  assert.match(issueLoop, /Only an explicit merge request may continue through `MERGED_VERIFIED/);
+  assert.match(issueLoop, /does not prescribe which outcome the Agent chooses/);
 
   const routingSources = [
     'AGENTS.md',
@@ -1069,7 +1072,7 @@ test('post-gate policy keeps merge eligibility distinct from merge action', () =
   ];
   for (const relative of routingSources) {
     const content = readFileSync(path.join(root, relative), 'utf8');
-    assert.doesNotMatch(content, /合并闭环|verified merge|merge phase/i, relative);
+    assert.doesNotMatch(content, /合并闭环|merge phase/i, relative);
   }
   const gatePolicy = readFileSync(path.join(root, '.github/merge-gates.md'), 'utf8');
   assert.match(gatePolicy, /owner merge authorization that explicitly names the governance\s+exception/);

@@ -57,7 +57,7 @@ complete implementation and scoped validation
 → remove Draft and enter formal review
 → record a current-head review signal and settle its findings
 → run the live merge checker
-→ establish merge eligibility
+→ establish exact-head integration evidence
 ```
 
 Classify blockers before changing ownership: implementation or acceptance

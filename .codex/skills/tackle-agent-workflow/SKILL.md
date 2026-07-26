@@ -127,4 +127,4 @@ At the limit: safely split a remaining in-scope defect into a new bounded task; 
 
 For user-visible local work outside an explicitly scoped visual review, retain `视觉与交互统一检查待执行` in the handoff. A minimal render smoke confirms only basic loadability and never removes that marker or counts as full visual acceptance. Full visual evidence is required only when visual or interaction review is explicitly in scope.
 
-The handoff includes the owned files and outcome, TaskBrief identity, reviewer verdict and resolved findings, exact validation results, N/A reasons and residual risks. Review completion is not merge authorization.
+The handoff includes the owned files and outcome, TaskBrief identity, reviewer verdict and resolved findings, exact validation results, N/A reasons and residual risks. It records evidence without deciding the subsequent integration action.

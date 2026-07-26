@@ -39,8 +39,8 @@
 ## 项目级 Agent Skills
 
 - 本仓库在`.codex/skills/`内提交所需工作流Skills；克隆仓库后优先使用项目级版本，不要求预先全局安装。
-- 对一个明确Issue的端到端交付，使用`$agent-issue-loop`。由同一个主Agent完成就绪检查、实现、验证、PR交接与合并资格交接，并把单个PR阶段交给`$agent-pr-loop`。
-- 对一个已经存在的PR执行评论、独立复审、修补、当前head CI与合并资格检查时，使用`$agent-pr-loop`。
+- 对一个明确Issue的端到端交付，使用`$agent-issue-loop`。由同一个主Agent完成就绪检查、实现、验证、PR交接与结果回读，并把单个PR阶段交给`$agent-pr-loop`。
+- 对一个已经存在的PR执行评论、独立复审、修补、当前head CI与集成证据检查时，使用`$agent-pr-loop`。
 - 需要初始化、迁移、普通语言任务发现或仓库级GitHub协作政策时，使用`$agent-project-bootstrap`。
 - 对本仓库中的实现、修复或重构，`$tackle-agent-workflow`为所有路由提供项目约束与 TaskBrief；只有本地路由使用其编码与独立本地审核。Issue 与 PR 路由仍分别遵循`$agent-issue-loop`和`$agent-pr-loop`；仓库的合并、发布和部署门禁不因项目级Skill存在而放宽。
 

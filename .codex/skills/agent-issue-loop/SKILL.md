@@ -1,6 +1,6 @@
 ---
 name: agent-issue-loop
-description: Complete one selected GitHub Issue through readiness analysis, implementation, validation, pull-request creation, adversarial review and repair, and merge eligibility. Use when the user says 开始做这个 Issue, 解决这个 Issue, 搞定 Issue, 把当前 Issue 跑完, explicitly invokes agent-issue-loop, or asks for one Issue to be delivered end to end.
+description: Complete one selected GitHub Issue through readiness analysis, implementation, validation, pull-request creation, adversarial review and repair, integration evidence, and verified closure after any merge. Use when the user says 开始做这个 Issue, 解决这个 Issue, 搞定 Issue, 把当前 Issue 跑完, explicitly invokes agent-issue-loop, or asks for one Issue to be delivered end to end.
 ---
 
 # Agent Issue Loop
@@ -21,7 +21,7 @@ Default to one delivery Issue and one primary PR. If the Issue contains independ
 The invoking main Agent remains the only coordinator. A transition into `$agent-pr-loop` is a workflow handoff, not permission to spawn a second coordinator or ask the user to carry messages.
 
 - Use one implementation Agent for code, tests, and fixes when multi-Agent execution is available. Follow repository-specific model requirements.
-- Use an independent review Agent only when the PR exists. `$agent-pr-loop` owns that reviewer, the repair loop, current-head evidence, CI, and merge eligibility.
+- Use an independent review Agent only when the PR exists. `$agent-pr-loop` owns that reviewer, the repair loop, current-head evidence, and CI.
 - Let the coordinator repair routine labels, links, and Project status idempotently. Do not return work to the implementer only for metadata.
 - Prefer direct Agent messaging during an active task. Persist durable decisions, findings, evidence, and resumable state on the Issue or PR so another run can recover without chat history.
 
@@ -29,9 +29,9 @@ The invoking main Agent remains the only coordinator. A transition into `$agent-
 
 Advance only after verifying each transition:
 
-`ISSUE_SELECTED → ISSUE_READINESS → IMPLEMENTATION_PREPARED → IMPLEMENTING → LOCAL_VALIDATION → PR_PREPARED → PR_OPEN → PR_LOOP_ACTIVE → PR_MERGE_ELIGIBLE`
+`ISSUE_SELECTED → ISSUE_READINESS → IMPLEMENTATION_PREPARED → IMPLEMENTING → LOCAL_VALIDATION → PR_PREPARED → PR_OPEN → PR_LOOP_ACTIVE → PR_EVIDENCE_COMPLETE`
 
-`PR_MERGE_ELIGIBLE` is the terminal handoff when merge is outside the current request scope: leave the Issue in `In review`. Only an explicit merge request may continue through `MERGED_VERIFIED → ISSUE_COMPLETION_VERIFIED → DONE` after merge readback succeeds.
+From `PR_EVIDENCE_COMPLETE`, a verified merge may continue through `MERGED_VERIFIED → ISSUE_COMPLETION_VERIFIED → DONE`; otherwise the exact evidence remains available for handoff. This workflow does not prescribe which outcome the Agent chooses.
 
 Use explicit exception states when normal progress is unsafe:
 
@@ -85,7 +85,7 @@ Move the linked Issue to `In review` when the PR becomes ready. Then invoke `$ag
 
 Require `$agent-pr-loop` to return a structured outcome:
 
-- status: `MERGE_ELIGIBLE`, `MERGED_VERIFIED`, `HUMAN_GATE`, `EXTERNAL_BLOCKER`, `RETRY_EXHAUSTED`, or `NOT_READY`;
+- status: `EVIDENCE_COMPLETE`, `MERGED_VERIFIED`, `HUMAN_GATE`, `EXTERNAL_BLOCKER`, `RETRY_EXHAUSTED`, or `NOT_READY`;
 - Issue and PR numbers;
 - reviewed head and base SHAs;
 - exact reviewed head and base SHAs plus gate evidence;
@@ -95,7 +95,7 @@ Require `$agent-pr-loop` to return a structured outcome:
 
 Resume implementation or CI repair only from the returned evidence. Do not treat a stale PASS, comment, or check as applying to a changed head.
 
-On `MERGE_ELIGIBLE`, record the exact head/base and gate evidence, leave the Issue in `In review`, and end the Issue loop unless the current request explicitly includes a merge.
+On `EVIDENCE_COMPLETE`, record the exact head/base and gate evidence so either a merge or a handoff can be verified from durable state.
 
 ## Verify completion after merge
 

@@ -8,6 +8,17 @@ import { fileURLToPath } from 'node:url';
 
 const SCRIPT_RELATIVE = '.codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs';
 const INDEX_RELATIVE = '.codex/skills/tackle-agent-workflow/references/v3-navigation.json';
+const POLICY_RELATIVE = '.codex/skills/tackle-agent-workflow/references/workflow-contract-policy.v2.json';
+const POLICY_SCHEMA_VERSION = 'workflow-contract-policy/v2';
+const POLICY_REFERENCE_VERSION = 'v2';
+const POLICY_REFERENCE_CONSUMERS = [
+  'AGENTS.md',
+  'CLAUDE.md',
+  '.codex/skills/tackle-agent-workflow/SKILL.md',
+  '.codex/skills/agent-pr-loop/SKILL.md',
+  '.codex/skills/agent-issue-loop/SKILL.md',
+  '.claude/skills/agent-pr-loop/SKILL.md',
+];
 const SPEC_RELATIVE = 'docs/tackle-forger-development-spec-v3.md';
 const SPEC_MODULE_MANIFEST_RELATIVE = 'docs/spec-v3/manifest.json';
 const PATCH_SCHEMA = 'tackle-local-patch/v1';
@@ -41,6 +52,21 @@ const STRICT_NAVIGATION_SECTIONS = new Set([
 const MANDATORY_WORKFLOW_COMMANDS = ['node scripts/spec-v3-modules.mjs --check', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-index', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-policy', 'node --test .codex/skills/tackle-agent-workflow/scripts/workflow-contract.test.mjs'];
 const CONDITIONAL_NA_CATALOG = ['product_runtime_tests'];
 const CONDITIONAL_NA_APPLICABILITY = { nonWorkflowForbids: 'product_runtime_tests', workflowMetadataRequires: 'product_runtime_tests' };
+const SCOPED_ALLOWED_PATH_CLASSES = [
+  'AGENTS.md',
+  'CLAUDE.md',
+  '.codex/skills/tackle-agent-workflow/**',
+  '.codex/skills/agent-project-bootstrap/**',
+  '.codex/skills/agent-issue-loop/**',
+  '.codex/skills/agent-pr-loop/**',
+  '.claude/skills/agent-pr-loop/**',
+  'docs/(workflow|agent-governance)-*.md',
+  '.github/*.md|yml|yaml',
+  '.github/workflows/*.yml|yaml',
+];
+const LOCAL_VERDICT_REQUIRED_FIELDS = ['taskBriefSha256', 'specReceiptHashes', 'dirtyWorktreeDisposition', 'specSha256', 'baseSha', 'reviewedHead', 'ownedPaths', 'artifactIdentity'];
+const REVIEW_SEVERITY_POLICY = { informational: ['P3'], passBlocking: ['P0', 'P1', 'P2'] };
+const USER_VISIBLE_SCENARIO = 'unified_visual_review_pending_or_completed';
 export const VALIDATION_EXECUTION_TIERS = {
   inspection_only: { iterationFullCi: 'forbidden', requiredEvidence: ['fetch_compare_history_or_status'] },
   documentation_or_nonbehavior_workflow: { iterationFullCi: 'forbidden', requiredEvidence: ['format_reference_scoped_diff'] },
@@ -236,27 +262,105 @@ function readJsonFile(file, label) {
   try { return JSON.parse(readFileSync(file, 'utf8')); }
   catch { fail(`${label} must be readable JSON: ${file}`); }
 }
+const WORKFLOW_POLICY_SHAPE = {
+  schemaVersion: 'string',
+  dirtyIsolation: { issuePr: 'string', localOwnedBaseline: 'string' },
+  localVerdict: { required: ['string'], schema: 'string' },
+  reviewSeverity: { informational: ['string'], passBlocking: ['string'] },
+  reviewTier: { strictWhenRiskDimensions: ['string'], strictWhenRiskProfile: ['string'], values: ['string'] },
+  scopedEligibility: { allowedPathClasses: ['string'], unknownForcesFull: 'boolean' },
+  specReceipt: { schema: 'string' },
+  taskCard: { dailySemanticFields: ['string'], schema: 'string' },
+  taskBrief: {
+    conditionalNaApplicability: { nonWorkflowForbids: 'string', workflowMetadataRequires: 'string' },
+    conditionalNaCatalog: { productRuntimeTests: 'string' },
+    phaseReceiptsByReviewTier: {
+      pre_dispatch: { fast: ['string'], standard: ['string'], strict: ['string'] },
+      verdict: {
+        fast: { all: ['string'] },
+        standard: { issue: ['string'], local: ['string'], pull_request: ['string'] },
+        strict: { all: ['string'] },
+      },
+    },
+    schema: 'string',
+  },
+  validationMatrix: {
+    executionTiers: {
+      business_code: { iterationFullCi: 'string', requiredEvidence: ['string'] },
+      deployment_configuration: { iterationFullCi: 'string', requiredEvidence: ['string'] },
+      documentation_or_nonbehavior_workflow: { iterationFullCi: 'string', requiredEvidence: ['string'] },
+      durable_or_external: { iterationFullCi: 'string', requiredEvidence: ['string'] },
+      focused_script_or_rule: { iterationFullCi: 'string', requiredEvidence: ['string'] },
+      inspection_only: { iterationFullCi: 'string', requiredEvidence: ['string'] },
+      rebase_refresh: { candidateFullCi: 'string', requiredEvidence: ['string'] },
+      stable_pr_candidate: { candidateFullCi: 'string', requiredEvidence: ['string'] },
+    },
+    mandatoryWorkflowCommands: ['string'],
+    prFinalCommandsNonWaivable: ['string'],
+    userVisibleScenario: 'string',
+  },
+  validationRunner: { schema: 'string' },
+};
+function validateClosedShape(value, shape, field) {
+  if (shape === 'string') return requireString(value, field);
+  if (shape === 'boolean') {
+    if (typeof value !== 'boolean') fail(`${field} must be a boolean`);
+    return value;
+  }
+  if (Array.isArray(shape)) return requireStringArray(value, field);
+  requireExactKeys(value, Object.keys(shape), field);
+  for (const [key, childShape] of Object.entries(shape)) validateClosedShape(value[key], childShape, `${field}.${key}`);
+  return value;
+}
+function loadWorkflowPolicy(root) {
+  const policy = readJsonFile(path.join(root, POLICY_RELATIVE), 'canonical workflow policy');
+  validateClosedShape(policy, WORKFLOW_POLICY_SHAPE, 'workflowPolicy');
+  if (policy.schemaVersion !== POLICY_SCHEMA_VERSION) fail(`workflowPolicy.schemaVersion must be ${POLICY_SCHEMA_VERSION}`);
+  if (!sameSet(policy.reviewTier.values, REVIEW_TIERS)) fail('workflowPolicy.reviewTier.values must be fast, standard, and strict');
+  if (!sameSet(policy.reviewTier.strictWhenRiskProfile, ['unknown_high_risk'])) fail('workflowPolicy cannot lower the unknown_high_risk strict-review floor');
+  if (!sameSet(policy.reviewTier.strictWhenRiskDimensions, STRICT_REVIEW_RISK_DIMENSIONS)) fail('workflowPolicy cannot lower the durable strict-review dimensions');
+  return policy;
+}
+function requirePolicyParity(actual, expected, field) {
+  if (canonicalJson(actual) !== canonicalJson(expected)) fail(`Workflow policy implementation parity failed: ${field}`);
+}
+function assertWorkflowPolicyImplementationParity(policy) {
+  requirePolicyParity(policy.dirtyIsolation, { issuePr: 'clean_synced', localOwnedBaseline: OWNED_BASELINE_SCHEMA }, 'dirtyIsolation');
+  requirePolicyParity(policy.scopedEligibility.allowedPathClasses, SCOPED_ALLOWED_PATH_CLASSES, 'scopedEligibility.allowedPathClasses');
+  if (policy.scopedEligibility.unknownForcesFull !== true) fail('Workflow policy implementation parity failed: scopedEligibility.unknownForcesFull');
+  if (policy.specReceipt.schema !== SPEC_READ_SCHEMA) fail('Workflow policy implementation parity failed: specReceipt.schema');
+  if (policy.taskCard.schema !== TASK_CARD_SCHEMA) fail('Workflow policy implementation parity failed: taskCard.schema');
+  requirePolicyParity(policy.taskCard.dailySemanticFields, TASK_CARD_SEMANTIC_FIELDS, 'taskCard.dailySemanticFields');
+  if (policy.taskBrief.schema !== TASK_BRIEF_SCHEMA) fail('Workflow policy implementation parity failed: taskBrief.schema');
+  requirePolicyParity(policy.taskBrief.conditionalNaCatalog, { productRuntimeTests: CONDITIONAL_NA_CATALOG[0] }, 'taskBrief.conditionalNaCatalog');
+  requirePolicyParity(policy.taskBrief.conditionalNaApplicability, CONDITIONAL_NA_APPLICABILITY, 'taskBrief.conditionalNaApplicability');
+  if (policy.localVerdict.schema !== VERDICT_SCHEMA) fail('Workflow policy implementation parity failed: localVerdict.schema');
+  requirePolicyParity(policy.localVerdict.required, LOCAL_VERDICT_REQUIRED_FIELDS, 'localVerdict.required');
+  requirePolicyParity(policy.reviewSeverity, REVIEW_SEVERITY_POLICY, 'reviewSeverity');
+  if (policy.validationRunner.schema !== VALIDATION_SUMMARY_SCHEMA) fail('Workflow policy implementation parity failed: validationRunner.schema');
+  requirePolicyParity(policy.validationMatrix.executionTiers, VALIDATION_EXECUTION_TIERS, 'validationMatrix.executionTiers');
+  requirePolicyParity(policy.validationMatrix.mandatoryWorkflowCommands, MANDATORY_WORKFLOW_COMMANDS, 'validationMatrix.mandatoryWorkflowCommands');
+  requirePolicyParity(policy.validationMatrix.prFinalCommandsNonWaivable, CHANGE_CLASS_MATRIX.pr_final.nonWaivableCommands, 'validationMatrix.prFinalCommandsNonWaivable');
+  if (policy.validationMatrix.userVisibleScenario !== USER_VISIBLE_SCENARIO) fail('Workflow policy implementation parity failed: validationMatrix.userVisibleScenario');
+}
 function compareUtf8(left, right) { return Buffer.compare(Buffer.from(left, 'utf8'), Buffer.from(right, 'utf8')); }
 function isCanonicalRepoRelativePath(input) {
   if (typeof input !== 'string' || input.length === 0 || Buffer.from(input, 'utf8').toString('utf8') !== input || input.includes('\0') || path.isAbsolute(input) || input.includes('\\')) return false;
   const parts = input.split('/');
   return !parts.some((part) => part === '' || part === '.' || part === '..');
 }
-function isScopedGovernancePath(repoPath) {
-  return isCanonicalRepoRelativePath(repoPath) && (repoPath === 'AGENTS.md'
-    || repoPath === 'CLAUDE.md'
-    || repoPath.startsWith('.codex/skills/tackle-agent-workflow/')
-    || repoPath.startsWith('.codex/skills/agent-project-bootstrap/')
-    || repoPath.startsWith('.codex/skills/agent-issue-loop/')
-    || repoPath.startsWith('.codex/skills/agent-pr-loop/')
-    || repoPath.startsWith('.claude/skills/agent-pr-loop/')
-    || /^docs\/(?:workflow|agent-governance)-[^/]+\.md$/.test(repoPath)
-    || /^\.github\/[^/]+\.(?:md|ya?ml)$/.test(repoPath)
-    || /^\.github\/workflows\/[^/]+\.ya?ml$/.test(repoPath));
+function matchesScopedPathClass(repoPath, pathClass) {
+  if (pathClass === 'AGENTS.md' || pathClass === 'CLAUDE.md') return repoPath === pathClass;
+  if (pathClass.endsWith('/**')) return repoPath.startsWith(pathClass.slice(0, -2));
+  if (pathClass === 'docs/(workflow|agent-governance)-*.md') return /^docs\/(?:workflow|agent-governance)-[^/]+\.md$/.test(repoPath);
+  if (pathClass === '.github/*.md|yml|yaml') return /^\.github\/[^/]+\.(?:md|ya?ml)$/.test(repoPath);
+  if (pathClass === '.github/workflows/*.yml|yaml') return /^\.github\/workflows\/[^/]+\.ya?ml$/.test(repoPath);
+  return false;
 }
-export function classifyOwnedPaths(ownedPaths) {
+export function classifyOwnedPaths(ownedPaths, root = repositoryRoot()) {
   if (!Array.isArray(ownedPaths)) return { scopedEligible: false, unrecognizedPaths: [String(ownedPaths)] };
-  const unrecognized = ownedPaths.filter((repoPath) => !isScopedGovernancePath(repoPath));
+  const allowedPathClasses = loadWorkflowPolicy(root).scopedEligibility.allowedPathClasses;
+  const unrecognized = ownedPaths.filter((repoPath) => !isCanonicalRepoRelativePath(repoPath) || !allowedPathClasses.some((pathClass) => matchesScopedPathClass(repoPath, pathClass)));
   return { scopedEligible: unrecognized.length === 0, unrecognizedPaths: unrecognized };
 }
 function validatePath(root, input) {
@@ -401,23 +505,25 @@ export function specReadPlan({ root, role, riskProfile, relevantSections = [] })
 }
 const TASK_CARD_SEMANTIC_FIELDS = ['taskId', 'workflowMode', 'scope', 'ownedPaths', 'riskProfile', 'changeClass'];
 const STRICT_REVIEW_RISK_DIMENSIONS = ['persistedData', 'historicalSnapshots', 'concurrency', 'authorization', 'externalSideEffects'];
-function validateReviewTierRiskFloor({ riskProfile, riskDimensions, reviewTier, fieldPrefix }) {
+function validateReviewTierRiskFloor({ root, riskProfile, riskDimensions, reviewTier, fieldPrefix }) {
+  const policy = loadWorkflowPolicy(root);
   const strictReasons = [];
-  if (riskProfile === 'unknown_high_risk') strictReasons.push('riskProfile unknown_high_risk');
-  for (const dimension of STRICT_REVIEW_RISK_DIMENSIONS) if (riskDimensions[dimension] === true) strictReasons.push(`riskDimensions.${dimension}`);
+  if (policy.reviewTier.strictWhenRiskProfile.includes(riskProfile)) strictReasons.push(`riskProfile ${riskProfile}`);
+  for (const dimension of policy.reviewTier.strictWhenRiskDimensions) if (riskDimensions[dimension] === true) strictReasons.push(`riskDimensions.${dimension}`);
   if (strictReasons.length > 0 && reviewTier !== 'strict') fail(`${fieldPrefix}.reviewTier must be strict when ${strictReasons.join(' or ')}`);
 }
-function taskCardEscalation({ ownedPaths, riskProfile, changeClass }) {
+function taskCardEscalation({ root, ownedPaths, riskProfile, changeClass }) {
   const markers = [];
-  const classification = classifyOwnedPaths(ownedPaths);
+  const classification = classifyOwnedPaths(ownedPaths, root);
   if (!classification.scopedEligible) markers.push('owned_paths_outside_scoped_governance');
   if (riskProfile !== 'workflow_docs_metadata' || changeClass !== 'workflow_metadata') markers.push('non_workflow_or_runtime_semantics');
   return markers;
 }
 /** Daily task cards deliberately contain no reading assertion or formal review evidence. */
 function prepareTaskCardInternal({ root = repositoryRoot(), input, allowOwnedDirty }) {
-  requireExactKeys(input, ['schema', ...TASK_CARD_SEMANTIC_FIELDS], 'Task Card input');
-  if (input.schema !== TASK_CARD_SCHEMA) fail(`Task Card input.schema must be ${TASK_CARD_SCHEMA}`);
+  const taskCardPolicy = loadWorkflowPolicy(root).taskCard;
+  requireExactKeys(input, ['schema', ...taskCardPolicy.dailySemanticFields], 'Task Card input');
+  if (input.schema !== taskCardPolicy.schema) fail(`Task Card input.schema must be ${taskCardPolicy.schema}`);
   if (!allowOwnedDirty) requireCleanWorktree(root);
   const taskId = requireString(input.taskId, 'Task Card input.taskId');
   const workflowMode = requireString(input.workflowMode, 'Task Card input.workflowMode');
@@ -430,17 +536,17 @@ function prepareTaskCardInternal({ root = repositoryRoot(), input, allowOwnedDir
   if (!Object.hasOwn(CHANGE_CLASS_MATRIX, changeClass)) fail('Task Card input.changeClass is unsupported');
   if (!['workflow_docs_metadata', 'runtime_product_domain', 'durable_migration', 'concurrency_auth', 'publication_export_external'].includes(riskProfile)) fail('Task Card rejects unknown or unsupported riskProfile; prepare a classified formal TaskBrief instead');
   const relevantSections = ['0', '19', '20'];
-  const scoped = riskProfile === 'workflow_docs_metadata' && changeClass === 'workflow_metadata' && classifyOwnedPaths(ownedPaths).scopedEligible;
+  const scoped = riskProfile === 'workflow_docs_metadata' && changeClass === 'workflow_metadata' && classifyOwnedPaths(ownedPaths, root).scopedEligible;
   if (scoped) validateRouteCoverage(root, riskProfile, relevantSections);
   const registry = buildNavigationIndex(root).openRegistry;
-  const escalationMarkers = taskCardEscalation({ ownedPaths, riskProfile, changeClass });
+  const escalationMarkers = taskCardEscalation({ root, ownedPaths, riskProfile, changeClass });
   const readPlanTemplate = scoped ? specReadPlan({ root, role: 'coding', riskProfile, relevantSections }) : null;
   const receiptDraft = scoped ? {
     schema: SPEC_READ_SCHEMA, taskId, role: 'coding', specSha256: currentSpecHash(root), profile: readPlanTemplate.profile, riskProfile,
     relevantSections, requiredSections: readPlanTemplate.requiredSections, readSections: [], reason: 'Pending human completion after actual routed reading.',
   } : null;
   return {
-    schema: TASK_CARD_SCHEMA,
+    schema: taskCardPolicy.schema,
     semantic: { taskId, workflowMode, scope, ownedPaths, riskProfile, changeClass },
     derived: {
       baseSha: currentHead(root), specSha256: currentSpecHash(root), relevantSections,
@@ -457,9 +563,10 @@ export function prepareTaskCard({ root = repositoryRoot(), input }) {
   return prepareTaskCardInternal({ root, input, allowOwnedDirty: false });
 }
 export function checkTaskCard({ root = repositoryRoot(), card }) {
+  const taskCardPolicy = loadWorkflowPolicy(root).taskCard;
   requireExactKeys(card, ['schema', 'semantic', 'derived'], 'Task Card');
-  if (card.schema !== TASK_CARD_SCHEMA) fail(`Task Card.schema must be ${TASK_CARD_SCHEMA}`);
-  const expected = prepareTaskCardInternal({ root, input: { schema: TASK_CARD_SCHEMA, ...card.semantic }, allowOwnedDirty: true });
+  if (card.schema !== taskCardPolicy.schema) fail(`Task Card.schema must be ${taskCardPolicy.schema}`);
+  const expected = prepareTaskCardInternal({ root, input: { schema: taskCardPolicy.schema, ...card.semantic }, allowOwnedDirty: true });
   if (canonicalJson(card) !== canonicalJson(expected)) fail('Task Card derived evidence is stale or was not mechanically generated');
   return expected;
 }
@@ -508,7 +615,8 @@ export function checkFullReadSession({ root = repositoryRoot(), session }) {
 export function checkReadReceipt({ root = repositoryRoot(), receipt, currentReuseContext }) {
   if (receipt?.schema === SPEC_READ_REUSE_SCHEMA) return checkReusedReadReceipt({ root, receipt, currentReuseContext });
   requireExactKeys(receipt, ['schema', 'taskId', 'role', 'specSha256', 'profile', 'riskProfile', 'relevantSections', 'requiredSections', 'readSections', 'reason'], 'receipt');
-  if (receipt.schema !== SPEC_READ_SCHEMA) fail(`receipt.schema must be ${SPEC_READ_SCHEMA}`);
+  const specReceiptSchema = loadWorkflowPolicy(root).specReceipt.schema;
+  if (receipt.schema !== specReceiptSchema) fail(`receipt.schema must be ${specReceiptSchema}`);
   requireString(receipt.taskId, 'receipt.taskId');
   const role = requireString(receipt.role, 'receipt.role');
   const riskProfile = requireString(receipt.riskProfile, 'receipt.riskProfile');
@@ -699,9 +807,10 @@ export function runValidation({ root = repositoryRoot(), brief, currentReuseCont
     const exitCode = result.status === 0 && !result.error ? 0 : (Number.isSafeInteger(result.status) && result.status >= 0 ? result.status : 1);
     return { command, inputIdentity: plan.artifact.inputIdentity, exitCode, result: exitCode === 0 ? 'PASS' : 'FAIL', timestamp: started.toISOString(), durationMs, failureDetail: exitCode === 0 ? null : failureDetail(result) };
   });
-  return { schema: VALIDATION_SUMMARY_SCHEMA, runner: 'closed_command_catalog/v1', taskBriefSha256: plan.taskBriefSha256, artifactIdentity: plan.artifact.artifactIdentity, inputIdentity: plan.artifact.inputIdentity, reuseIdentity: plan.reuseIdentity, results };
+  return { schema: loadWorkflowPolicy(root).validationRunner.schema, runner: 'closed_command_catalog/v1', taskBriefSha256: plan.taskBriefSha256, artifactIdentity: plan.artifact.artifactIdentity, inputIdentity: plan.artifact.inputIdentity, reuseIdentity: plan.reuseIdentity, results };
 }
-function validateBriefNarrative(brief) {
+function validateBriefNarrative(root, brief) {
+  const taskBriefPolicy = loadWorkflowPolicy(root).taskBrief;
   requireString(brief.scope, 'TaskBrief.scope');
   requireNonEmptyStringArray(brief.acceptanceCriteria, 'TaskBrief.acceptanceCriteria');
   requireStringArray(brief.exclusions, 'TaskBrief.exclusions');
@@ -709,7 +818,7 @@ function validateBriefNarrative(brief) {
   requireNonEmptyStringArray(brief.allowedChanges, 'TaskBrief.allowedChanges');
   requireExactKeys(brief.riskDimensions, ['persistedData', 'historicalSnapshots', 'concurrency', 'authorization', 'externalSideEffects', 'userVisible'], 'TaskBrief.riskDimensions');
   if (Object.values(brief.riskDimensions).some((value) => typeof value !== 'boolean')) fail('TaskBrief.riskDimensions values must be boolean');
-  validateReviewTierRiskFloor({ riskProfile: brief.riskProfile, riskDimensions: brief.riskDimensions, reviewTier: brief.reviewTier, fieldPrefix: 'TaskBrief' });
+  validateReviewTierRiskFloor({ root, riskProfile: brief.riskProfile, riskDimensions: brief.riskDimensions, reviewTier: brief.reviewTier, fieldPrefix: 'TaskBrief' });
   requireExactKeys(brief.validationPlan, ['requiredCommands', 'requiredScenarios', 'intentionallyNotApplicable'], 'TaskBrief.validationPlan');
   const commands = requireStringArray(brief.validationPlan.requiredCommands, 'TaskBrief.validationPlan.requiredCommands');
   const scenarios = requireStringArray(brief.validationPlan.requiredScenarios, 'TaskBrief.validationPlan.requiredScenarios');
@@ -719,16 +828,16 @@ function validateBriefNarrative(brief) {
   const canonicalSpecTouched = brief.ownedPaths.some((owned) => owned.startsWith('docs/spec-v3/') || owned === 'scripts/spec-v3-modules.mjs' || owned === SPEC_RELATIVE);
   const riskScenarios = requiredRiskScenarios(brief.riskDimensions);
   const nonWaivableScenarios = [...matrix.scenarios, ...riskScenarios];
-  const allowedNa = new Set(CONDITIONAL_NA_CATALOG);
+  const allowedNa = new Set(Object.values(taskBriefPolicy.conditionalNaCatalog));
   for (const item of Object.keys(na)) {
     if (matrix.commands.includes(item)) fail(`TaskBrief.validationPlan command cannot be N/A: ${item}`);
     if (nonWaivableScenarios.includes(item)) fail(`TaskBrief.validationPlan scenario cannot be N/A: ${item}`);
   }
   if (Object.keys(na).some((item) => !allowedNa.has(item) || commands.includes(item) || scenarios.includes(item))) fail('TaskBrief.validationPlan.intentionallyNotApplicable contains unknown or duplicated item');
   if (brief.changeClass === 'workflow_metadata') {
-    if (!Object.hasOwn(na, 'product_runtime_tests')) fail('workflow_metadata requires a product_runtime_tests N/A reason');
-  } else if (Object.hasOwn(na, 'product_runtime_tests')) {
-    fail('Non-workflow changeClass cannot mark product_runtime_tests N/A');
+    if (!Object.hasOwn(na, taskBriefPolicy.conditionalNaApplicability.workflowMetadataRequires)) fail(`workflow_metadata requires a ${taskBriefPolicy.conditionalNaApplicability.workflowMetadataRequires} N/A reason`);
+  } else if (Object.hasOwn(na, taskBriefPolicy.conditionalNaApplicability.nonWorkflowForbids)) {
+    fail(`Non-workflow changeClass cannot mark ${taskBriefPolicy.conditionalNaApplicability.nonWorkflowForbids} N/A`);
   }
   const allowedCommands = new Set([...matrix.commands, ...(canonicalSpecTouched ? ['node scripts/spec-v3-modules.mjs --check'] : [])]);
   if (commands.some((item) => !allowedCommands.has(item) && !(brief.changeClass === 'workflow_metadata' && isWorkflowWhitespaceCommand(item, brief.baseSha, brief.ownedPaths))) || scenarios.some((item) => ![...matrix.scenarios, ...riskScenarios].includes(item))) fail('TaskBrief.validationPlan command/scenario is in the wrong collection');
@@ -745,7 +854,7 @@ function requiredRiskScenarios(riskDimensions) {
   if (riskDimensions.persistedData || riskDimensions.historicalSnapshots) scenarios.push(...CHANGE_CLASS_MATRIX.persistence_migration.scenarios);
   if (riskDimensions.concurrency || riskDimensions.authorization) scenarios.push(...CHANGE_CLASS_MATRIX.authorization_shared_write.scenarios);
   if (riskDimensions.externalSideEffects) scenarios.push(...CHANGE_CLASS_MATRIX.external_side_effect.scenarios);
-  if (riskDimensions.userVisible) scenarios.push('unified_visual_review_pending_or_completed');
+  if (riskDimensions.userVisible) scenarios.push(USER_VISIBLE_SCENARIO);
   return [...new Set(scenarios)];
 }
 function isUserVisiblePath(repoPath) {
@@ -867,7 +976,7 @@ function prepareTaskBriefInternal({ root = repositoryRoot(), input, currentReuse
   if (noApplicableReason !== null && (typeof noApplicableReason !== 'string' || noApplicableReason.length === 0)) fail('Task preparation input.openDecisionApplicability.noApplicableReason must be a non-empty string or null');
   const riskProfile = requireString(input.riskProfile, 'Task preparation input.riskProfile');
   const reviewTier = requireString(input.reviewTier, 'Task preparation input.reviewTier');
-  if (!REVIEW_TIERS.includes(reviewTier)) fail('Task preparation input.reviewTier must be fast, standard, or strict');
+  if (!loadWorkflowPolicy(root).reviewTier.values.includes(reviewTier)) fail('Task preparation input.reviewTier must be fast, standard, or strict');
   if (typeof input.scopeHasRuntimeSemantics !== 'boolean') fail('Task preparation input.scopeHasRuntimeSemantics must be boolean');
   const changeClass = requireString(input.changeClass, 'Task preparation input.changeClass');
   if (!Object.hasOwn(CHANGE_CLASS_MATRIX, changeClass)) fail('Task preparation input.changeClass is unsupported');
@@ -876,7 +985,7 @@ function prepareTaskBriefInternal({ root = repositoryRoot(), input, currentReuse
   requireNonEmptyStringArray(input.exclusions, 'Task preparation input.exclusions');
   requireExactKeys(input.riskDimensions, ['persistedData', 'historicalSnapshots', 'concurrency', 'authorization', 'externalSideEffects', 'userVisible'], 'Task preparation input.riskDimensions');
   if (Object.values(input.riskDimensions).some((value) => typeof value !== 'boolean')) fail('Task preparation input.riskDimensions values must be boolean');
-  validateReviewTierRiskFloor({ riskProfile, riskDimensions: input.riskDimensions, reviewTier, fieldPrefix: 'Task preparation input' });
+  validateReviewTierRiskFloor({ root, riskProfile, riskDimensions: input.riskDimensions, reviewTier, fieldPrefix: 'Task preparation input' });
   validatePreparationRisk({ riskProfile, changeClass, riskDimensions: input.riskDimensions, scopeHasRuntimeSemantics: input.scopeHasRuntimeSemantics });
   const registry = buildNavigationIndex(root).openRegistry;
   const checkedIds = registry.map((entry) => entry.id);
@@ -930,20 +1039,21 @@ function validateOpenDecisionCheck(root, value, relevantSections) {
   if (applicableIds.length === 0 && value.noApplicableReason === null) fail('TaskBrief.openDecisionCheck requires a reason when no checked OPEN decision applies');
   if (applicableIds.length > 0 && value.noApplicableReason !== null) fail('TaskBrief.openDecisionCheck.noApplicableReason is only allowed when applicableIds is empty');
 }
-function requiredSpecReceiptRoles({ phase, workflowMode, reviewTier }) {
-  if (phase === 'pre_dispatch') return ['coordinator'];
-  const roles = ['coordinator', 'coding'];
-  if (reviewTier === 'strict' || (reviewTier === 'standard' && workflowMode === 'pull_request')) roles.push('review');
-  return roles;
+function requiredSpecReceiptRoles({ root, phase, workflowMode, reviewTier }) {
+  const receipts = loadWorkflowPolicy(root).taskBrief.phaseReceiptsByReviewTier;
+  if (phase === 'pre_dispatch') return [...receipts.pre_dispatch[reviewTier]];
+  const tierRule = receipts.verdict[reviewTier];
+  return [...(Object.hasOwn(tierRule, 'all') ? tierRule.all : tierRule[workflowMode])];
 }
 export function buildOwnedBaselineManifest({ root = repositoryRoot(), baseSha, ownedPaths }) {
   const manifest = buildPatchManifest({ root, baseSha, ownedPaths });
-  return { baseSha: manifest.baseSha, entries: manifest.entries, schemaVersion: OWNED_BASELINE_SCHEMA };
+  return { baseSha: manifest.baseSha, entries: manifest.entries, schemaVersion: loadWorkflowPolicy(root).dirtyIsolation.localOwnedBaseline };
 }
 export function ownedBaselineHash(manifest) { return sha256(Buffer.from(canonicalJson(manifest), 'utf8')); }
 function checkOwnedBaselineManifest({ root, manifest, baseSha, ownedPaths, preexistingOwnedPaths }) {
   requireExactKeys(manifest, ['schemaVersion', 'baseSha', 'entries'], 'preTaskOwnedBaselineManifest');
-  if (manifest.schemaVersion !== OWNED_BASELINE_SCHEMA) fail(`preTaskOwnedBaselineManifest.schemaVersion must be ${OWNED_BASELINE_SCHEMA}`);
+  const baselineSchema = loadWorkflowPolicy(root).dirtyIsolation.localOwnedBaseline;
+  if (manifest.schemaVersion !== baselineSchema) fail(`preTaskOwnedBaselineManifest.schemaVersion must be ${baselineSchema}`);
   const canonicalBase = canonicalCommit(root, manifest.baseSha, 'preTaskOwnedBaselineManifest.baseSha');
   if (canonicalBase !== baseSha) fail('preTaskOwnedBaselineManifest.baseSha must match TaskBrief.baseSha');
   if (!Array.isArray(manifest.entries) || manifest.entries.length !== ownedPaths.length) fail('preTaskOwnedBaselineManifest.entries must cover exactly the owned paths');
@@ -965,7 +1075,8 @@ export function checkTaskBrief({ root = repositoryRoot(), brief, currentReuseCon
   if (currentReuseContext !== undefined && reuseContexts !== undefined) fail('TaskBrief checking accepts either currentReuseContext or role-keyed reuseContexts, not both');
   const trustedReuseContexts = validateReuseContexts(reuseContexts);
   if (!isPlainObject(brief)) fail('TaskBrief must be an object');
-  if (brief.schema !== TASK_BRIEF_SCHEMA) fail(`TaskBrief.schema must be ${TASK_BRIEF_SCHEMA}`);
+  const taskBriefSchema = loadWorkflowPolicy(root).taskBrief.schema;
+  if (brief.schema !== taskBriefSchema) fail(`TaskBrief.schema must be ${taskBriefSchema}`);
   const taskId = requireString(brief.taskId, 'TaskBrief.taskId');
   const workflowMode = requireString(brief.workflowMode, 'TaskBrief.workflowMode');
   const phase = requireString(brief.phase, 'TaskBrief.phase');
@@ -985,7 +1096,7 @@ export function checkTaskBrief({ root = repositoryRoot(), brief, currentReuseCon
   const canonicalAllowedChanges = allowedChanges.map((allowed) => validatePath(root, allowed).path);
   if (!ownedPaths.every((owned, index) => owned === canonicalOwnedPaths[index])) fail('TaskBrief.ownedPaths must use canonical repo-relative paths');
   if (!allowedChanges.every((allowed, index) => allowed === canonicalAllowedChanges[index])) fail('TaskBrief.allowedChanges must use canonical repo-relative paths');
-  validateBriefNarrative(brief);
+  validateBriefNarrative(root, brief);
   const relevantSections = requireNonEmptyStringArray(brief.relevantSections, 'TaskBrief.relevantSections');
   const knownSections = sectionIdsFromNavigation(root);
   if (!relevantSections.every((section) => knownSections.has(section))) fail('TaskBrief.relevantSections contains a section absent from current v3 navigation');
@@ -993,7 +1104,7 @@ export function checkTaskBrief({ root = repositoryRoot(), brief, currentReuseCon
   const riskProfile = requireString(brief.riskProfile, 'TaskBrief.riskProfile');
   if (!['workflow_docs_metadata', 'runtime_product_domain', 'durable_migration', 'concurrency_auth', 'publication_export_external', 'unknown_high_risk'].includes(riskProfile)) fail('TaskBrief.riskProfile is invalid');
   const reviewTier = requireString(brief.reviewTier, 'TaskBrief.reviewTier');
-  if (!REVIEW_TIERS.includes(reviewTier)) fail('TaskBrief.reviewTier must be fast, standard, or strict');
+  if (!loadWorkflowPolicy(root).reviewTier.values.includes(reviewTier)) fail('TaskBrief.reviewTier must be fast, standard, or strict');
   if (typeof brief.scopeHasRuntimeSemantics !== 'boolean') fail('TaskBrief.scopeHasRuntimeSemantics must be boolean');
   if (riskProfile === 'workflow_docs_metadata' && brief.scopeHasRuntimeSemantics) fail('workflow_docs_metadata TaskBrief cannot claim runtime semantics');
   if (!sameSet(canonicalOwnedPaths, canonicalAllowedChanges)) fail('TaskBrief.allowedChanges must UTF-8-set exactly equal ownedPaths');
@@ -1002,7 +1113,7 @@ export function checkTaskBrief({ root = repositoryRoot(), brief, currentReuseCon
   } else if (riskProfile === 'workflow_docs_metadata' || !brief.scopeHasRuntimeSemantics) {
     fail('Non-workflow changeClass requires a non-workflow riskProfile and runtime semantics');
   }
-  const classification = classifyOwnedPaths(ownedPaths);
+  const classification = classifyOwnedPaths(ownedPaths, root);
   if (brief.changeClass === 'workflow_metadata' && !classification.scopedEligible) fail('workflow_metadata may own only scoped governance paths');
   if (!classification.scopedEligible && (!brief.scopeHasRuntimeSemantics || riskProfile === 'workflow_docs_metadata')) fail('TaskBrief owned paths require runtime/high-risk declaration and non-workflow riskProfile');
   if (ownedPaths.some(isUserVisiblePath) && !brief.riskDimensions.userVisible) fail('User-visible owned paths require userVisible risk');
@@ -1026,12 +1137,13 @@ export function checkTaskBrief({ root = repositoryRoot(), brief, currentReuseCon
   });
   if (trustedReuseContexts !== undefined && !sameSet(Object.keys(trustedReuseContexts), reusedRoles)) fail('reuseContexts must provide exactly one trusted context for each REUSE_FULL receipt role');
   const roles = brief.specReadReceipts.map((receipt) => receipt.role);
-  const requiredRoles = requiredSpecReceiptRoles({ phase, workflowMode, reviewTier });
+  const requiredRoles = requiredSpecReceiptRoles({ root, phase, workflowMode, reviewTier });
   if (!sameSet(roles, requiredRoles) || roles.length !== requiredRoles.length) {
     fail(`TaskBrief ${phase}/${workflowMode}/${reviewTier} requires exactly these spec-read receipt roles: ${requiredRoles.join(', ')}`);
   }
   if (workflowMode === 'issue' || workflowMode === 'pull_request') {
-    if (disposition !== 'clean_synced' || preexistingOwnedPaths.length !== 0) fail('Issue/PR TaskBrief requires clean_synced with no preexisting owned paths');
+    const requiredDisposition = loadWorkflowPolicy(root).dirtyIsolation.issuePr;
+    if (disposition !== requiredDisposition || preexistingOwnedPaths.length !== 0) fail(`Issue/PR TaskBrief requires ${requiredDisposition} with no preexisting owned paths`);
     const head = git(root, ['rev-parse', 'HEAD'])?.toString('utf8').trim();
     const porcelain = git(root, ['status', '--porcelain=v1', '-z']);
     if (!head || head !== reviewedHead || git(root, ['merge-base', '--is-ancestor', baseSha, reviewedHead]) === null) fail('Issue/PR TaskBrief clean_synced requires reviewedHead=current HEAD and baseSha to be its ancestor');
@@ -1060,7 +1172,7 @@ export function promoteTaskBrief({ root = repositoryRoot(), brief, codingReceipt
   if (brief.preexistingUnownedChanges.length !== 0) fail('TaskBrief promotion rejects preexisting unowned artifacts');
   const coordinatorReceipt = brief.specReadReceipts[0];
   requirePromotionReceipt({ root, receipt: codingReceipt, role: 'coding', sourceBrief: brief, currentReuseContext, reuseContexts });
-  const needsReviewReceipt = requiredSpecReceiptRoles({ phase: 'verdict', workflowMode: brief.workflowMode, reviewTier: brief.reviewTier }).includes('review');
+  const needsReviewReceipt = requiredSpecReceiptRoles({ root, phase: 'verdict', workflowMode: brief.workflowMode, reviewTier: brief.reviewTier }).includes('review');
   if (needsReviewReceipt) requirePromotionReceipt({ root, receipt: reviewReceipt, role: 'review', sourceBrief: brief, currentReuseContext, reuseContexts });
   else if (reviewReceipt !== undefined) fail(`TaskBrief reviewTier ${brief.reviewTier} forbids a local review receipt`);
   const dirtyPaths = validationStatusPaths(root);
@@ -1073,8 +1185,9 @@ export function promoteTaskBrief({ root = repositoryRoot(), brief, codingReceipt
   return promoted;
 }
 export function checkVerdict({ root = repositoryRoot(), verdict, brief, currentReuseContext, reuseContexts }) {
-  requireExactKeys(verdict, ['schema', 'taskId', 'taskBriefSha256', 'specReceiptHashes', 'dirtyWorktreeDisposition', 'specSha256', 'baseSha', 'reviewedHead', 'ownedPaths', 'artifactIdentity', 'verdict', 'findings'], 'verdict');
-  if (verdict.schema !== VERDICT_SCHEMA) fail(`verdict.schema must be ${VERDICT_SCHEMA}`);
+  const policy = loadWorkflowPolicy(root);
+  requireExactKeys(verdict, ['schema', 'taskId', ...policy.localVerdict.required, 'verdict', 'findings'], 'verdict');
+  if (verdict.schema !== policy.localVerdict.schema) fail(`verdict.schema must be ${policy.localVerdict.schema}`);
   const briefResult = checkTaskBrief({ root, brief, currentReuseContext, reuseContexts });
   if (briefResult.phase !== 'verdict') fail('Verdict requires a verdict-phase TaskBrief');
   if (requireString(verdict.taskId, 'verdict.taskId') !== brief.taskId) fail('verdict.taskId must match TaskBrief.taskId');
@@ -1100,119 +1213,28 @@ export function checkVerdict({ root = repositoryRoot(), verdict, brief, currentR
   if (!Array.isArray(verdict.findings)) fail('verdict.findings must be an array');
   verdict.findings.forEach((finding, index) => {
     requireExactKeys(finding, ['severity', 'file', 'line', 'evidence', 'remediation'], `verdict.findings[${index}]`);
-    if (!['P0', 'P1', 'P2', 'P3'].includes(finding.severity) || typeof finding.line !== 'number' || !Number.isInteger(finding.line) || finding.line < 1) fail(`verdict.findings[${index}] has invalid severity or location`);
+    if (![...policy.reviewSeverity.passBlocking, ...policy.reviewSeverity.informational].includes(finding.severity) || typeof finding.line !== 'number' || !Number.isInteger(finding.line) || finding.line < 1) fail(`verdict.findings[${index}] has invalid severity or location`);
     requireString(finding.file, `verdict.findings[${index}].file`); requireString(finding.evidence, `verdict.findings[${index}].evidence`); requireString(finding.remediation, `verdict.findings[${index}].remediation`);
   });
-  if (verdict.verdict === 'PASS' && verdict.findings.some((finding) => ['P0', 'P1', 'P2'].includes(finding.severity))) fail('PASS verdict cannot contain P0, P1, or P2 findings');
+  if (verdict.verdict === 'PASS' && verdict.findings.some((finding) => policy.reviewSeverity.passBlocking.includes(finding.severity))) fail(`PASS verdict cannot contain ${policy.reviewSeverity.passBlocking.join(', ')} findings`);
   return { artifactIdentity: verdict.artifactIdentity, taskBriefSha256: briefResult.taskBriefSha256 };
 }
 export function checkPolicy(root = repositoryRoot()) {
-  const agents = readFileSync(path.join(root, 'AGENTS.md'), 'utf8');
-  const skill = readFileSync(path.join(root, '.codex/skills/tackle-agent-workflow/SKILL.md'), 'utf8');
-  const yaml = readFileSync(path.join(root, '.codex/skills/tackle-agent-workflow/agents/openai.yaml'), 'utf8');
-  const template = readFileSync(path.join(root, '.github/pull_request_template.md'), 'utf8');
-  const boundedSection = (text, start, end) => {
-    const from = text.indexOf(start);
-    const to = text.indexOf(end, from + start.length);
-    if (from < 0 || to < 0) fail(`Workflow policy drift: missing bounded section ${start}`);
-    return { content: text.slice(from, to), outside: `${text.slice(0, from)}${text.slice(to)}` };
-  };
-  const policyMatches = [...agents.matchAll(/<!-- workflow-contract-policy\/v2\n([\s\S]*?)\n-->/g)];
-  if (policyMatches.length !== 1) fail('Workflow policy drift: expected one canonical AGENTS policy block');
-  let policy;
-  try { policy = JSON.parse(policyMatches[0][1]); } catch { fail('Workflow policy drift: invalid canonical AGENTS policy JSON'); }
-  const expectedPolicy = {
-    dirtyIsolation: { issuePr: 'clean_synced', localOwnedBaseline: OWNED_BASELINE_SCHEMA },
-    issue: { localReviewBoundaryByTier: { fast: 'none', standard: 'none', strict: 'coordinator_scheduled' }, owner: 'agent-issue-loop', prReviewer: 'agent-pr-loop' },
-    local: { owner: 'tackle-agent-workflow', reviewBoundaryByTier: { fast: 'none', standard: 'none', strict: 'coordinator_scheduled' } },
-    localVerdict: { artifactIdentity: { committed: 'commit_sha_only', worktree: 'base_owned_paths_patch_hash' }, required: ['taskBriefSha256', 'specReceiptHashes', 'dirtyWorktreeDisposition', 'specSha256', 'baseSha', 'reviewedHead', 'ownedPaths', 'artifactIdentity'], schema: VERDICT_SCHEMA },
-    pullRequest: { owner: 'agent-pr-loop', reviewBoundaryByTier: { fast: 'none', standard: 'stable_head', strict: 'coordinator_scheduled' }, stableHeadParallelStart: ['pull_request_ci', 'independent_review'] },
-    reviewTier: { authority: 'review_boundary_and_intensity_only', values: REVIEW_TIERS, riskAuthority: ['riskProfile', 'riskDimensions'], strictWhenRiskProfile: ['unknown_high_risk'], strictWhenRiskDimensions: STRICT_REVIEW_RISK_DIMENSIONS, taskCardDecision: 'formal_boundary_only' },
-    reviewSeverity: { passBlocking: ['P0', 'P1', 'P2'], p3: 'informational' },
-    scopedEligibility: { allowedPathClasses: ['AGENTS.md', 'CLAUDE.md', '.codex/skills/tackle-agent-workflow/**', '.codex/skills/agent-project-bootstrap/**', '.codex/skills/agent-issue-loop/**', '.codex/skills/agent-pr-loop/**', '.claude/skills/agent-pr-loop/**', 'docs/(workflow|agent-governance)-*.md', '.github/*.md|yml|yaml', '.github/workflows/*.yml|yaml'], unknownForcesFull: true },
-    specReceipt: { schema: SPEC_READ_SCHEMA }, taskCard: { dailySemanticFields: TASK_CARD_SEMANTIC_FIELDS, developmentEvidence: 'task_card_daily', formalBoundaryUpgrade: 'task_brief_only', reviewTierDecision: 'formal_boundary_only', schema: TASK_CARD_SCHEMA }, taskBrief: { allowedChangesEqualsOwnedPaths: true, closedSchema: true, conditionalNaApplicability: CONDITIONAL_NA_APPLICABILITY, conditionalNaCatalog: { productRuntimeTests: 'product_runtime_tests' }, evidenceStages: { development: 'task_card_daily', localReviewHandoff: 'local_verdict', prFinal: 'pr_final_change_class' }, openDecisionCheck: true, phaseReceiptsByReviewTier: { pre_dispatch: { fast: ['coordinator'], standard: ['coordinator'], strict: ['coordinator'] }, verdict: { fast: { all: ['coordinator', 'coding'] }, standard: { local: ['coordinator', 'coding'], issue: ['coordinator', 'coding'], pull_request: ['coordinator', 'coding', 'review'] }, strict: { all: ['coordinator', 'coding', 'review'] } } }, receiptRiskAuthority: true, schema: TASK_BRIEF_SCHEMA, structuredFields: ['changeClass', 'reviewTier', 'allowedChanges', 'riskDimensions', 'validationPlan'] }, validationRunner: { closedCommandCatalog: true, formalVerdictEvidence: false, reusableWorktree: 'committed_clean_or_worktree_owned_manifest_only', reuseRequiresUnchanged: ['artifact', 'relevant_inputs', 'dependency_lock', 'command_contract', 'toolchain', 'path_and_execution_environment', 'installed_dependency_state'], schema: VALIDATION_SUMMARY_SCHEMA }, validationMatrix: { commandsAndScenariosSeparated: true, executionTiers: VALIDATION_EXECUTION_TIERS, mandatoryWorkflowCommands: MANDATORY_WORKFLOW_COMMANDS, prFinalCommandsNonWaivable: ['npm run typecheck', 'npm run lint', 'npm test'], triggeredCannotBeNa: true, triggeredScenariosNonWaivable: true, userVisiblePathClassifier: 'tsx_jsx_css_scss_sass_less_html_and_ui_roots', userVisibleScenario: 'unified_visual_review_pending_or_completed', workflowMetadataDynamicDiff: true },
-    visual: { minimalSmokeCompletesReview: false, pendingMarker: '视觉与交互统一检查待执行' },
-  };
-  if (canonicalJson(policy) !== canonicalJson(expectedPolicy)) fail('Workflow policy drift: canonical AGENTS policy differs');
-  const expectedSkillTaskBriefRef = { conditionalNaApplicability: policy.taskBrief.conditionalNaApplicability, conditionalNaCatalog: policy.taskBrief.conditionalNaCatalog, evidenceStages: policy.taskBrief.evidenceStages, executionTiers: policy.validationMatrix.executionTiers, triggeredCannotBeNa: policy.validationMatrix.triggeredCannotBeNa };
-  const skillTaskBrief = boundedSection(skill, '## Start with a Task Card; create a TaskBrief at a formal boundary', '## Spec receipts and worktree isolation');
-  const skillTaskBriefMatches = [...skillTaskBrief.content.matchAll(/<!-- workflow-contract-task-brief-ref\/v1\n([\s\S]*?)\n-->/g)];
-  if (skillTaskBriefMatches.length !== 1) fail('Workflow policy drift: Skill TaskBrief policy reference is missing or ambiguous');
-  let skillTaskBriefRef;
-  try { skillTaskBriefRef = JSON.parse(skillTaskBriefMatches[0][1]); } catch { fail('Workflow policy drift: Skill TaskBrief policy reference is invalid JSON'); }
-  if (canonicalJson(skillTaskBriefRef) !== canonicalJson(expectedSkillTaskBriefRef)) fail('Workflow policy drift: Skill TaskBrief policy reference differs from AGENTS');
-  const projectSkills = boundedSection(agents, '## 项目级 Agent Skills', '## Tackle 工作流契约');
-  const expectedProjectTackle = '- 对本仓库中的实现、修复或重构，`$tackle-agent-workflow`为所有路由提供项目约束与 TaskBrief；本地路由按`reviewTier`决定是否需要独立审核。Issue 与 PR 路由仍分别遵循`$agent-issue-loop`和`$agent-pr-loop`；仓库的合并、发布和部署门禁不因项目级Skill存在而放宽。';
-  if (!projectSkills.content.includes(expectedProjectTackle) || projectSkills.content.includes('`$tackle-agent-workflow`编排不同的编码与只读审核Agent')) fail('Workflow policy drift: broad project Skill statement differs');
-  const agentsRouting = boundedSection(agents, '## Tackle 工作流契约', '## 本机凭据与多 worktree');
-  if (!agentsRouting.content.includes(policyMatches[0][0])) fail('Workflow policy drift: AGENTS policy block is outside routing section');
-  const expectedTaskBriefRole = '- `$tackle-agent-workflow`日常开发先用 Task Card；正式边界另选独立的`reviewTier: fast | standard | strict`。`reviewTier`只决定审核边界与强度，不替代或重解释作为风险事实权威的`riskProfile`与`riskDimensions`。当`riskProfile=unknown_high_risk`，或`riskDimensions`中的`persistedData`、`historicalSnapshots`、`concurrency`、`authorization`、`externalSideEffects`任一为真时，`reviewTier`必须为`strict`；其他情况仍由coordinator动态选择。`fast`不要求独立Reviewer或review receipt；`standard`只在最终稳定PR head要求独立审核，禁止先做一次本地独立审核再在PR重复；`strict`允许coordinator按风险安排提前审核、多个正交范围和必要复审。coordinator仍按任务风险、范围、可用能力与资源动态决定实施容量，以及被要求或选用的审核者数量、专长、模型、推理强度和串并行安排，不写死人数或模型。每个已分配审核范围必须覆盖当前精确head/base或本地artifact；所有发现均由coordinator处置并一次性汇总后，才整合唯一最终PR审核信号或本地verdict。Issue 生命周期归`$agent-issue-loop`，PR 审核/CI/修复归`$agent-pr-loop`；已有 PR 直接使用后者。存在审核范围时，verdict阶段至多一个review receipt，且它是coordinator整合后的review-role覆盖记录，不按reviewer逐个计数，也不证明Agent身份。';
-  if (!agentsRouting.content.includes(expectedTaskBriefRole)) fail('Workflow policy drift: AGENTS TaskBrief role differs');
-  if (!agentsRouting.content.includes('formalTaskBriefRequiredAtBoundary: true') || !agentsRouting.content.includes('earlyEscalationRequired')) fail('Workflow policy drift: AGENTS Task Card boundary state differs');
-  if (!skillTaskBrief.content.includes('formalTaskBriefRequiredAtBoundary: true') || !skillTaskBrief.content.includes('earlyEscalationRequired')) fail('Workflow policy drift: Skill Task Card boundary state differs');
-  const expectedRoute = expectedTaskBriefRole;
-  const routeLines = agentsRouting.content.split(/\r?\n/).filter((line) => line.includes('Issue 生命周期') || /Issue\s*路由/.test(line));
-  if (routeLines.length !== 1 || routeLines[0] !== expectedRoute) fail('Workflow policy drift: AGENTS route statement differs');
-  const skillRouting = boundedSection(skill, '## Route before dispatch', '## Start with a Task Card; create a TaskBrief at a formal boundary');
-  const expectedSkillRoutes = [
-    '- **Local implementation, no Issue or PR:** this Skill owns local implementation and applies the TaskBrief review tier at the local evidence boundary.',
-    '- **Issue delivery:** `$agent-issue-loop` owns Issue, branch, PR, closure, and handoff. Supply it this Skill\'s TaskBrief. Once a PR exists, `$agent-pr-loop` exclusively owns review, CI, fixes, and merge gates.',
-    '- **Existing PR:** invoke `$agent-pr-loop` directly and supply the TaskBrief. It owns the review loop.',
-  ];
-  for (const route of expectedSkillRoutes) if (!skillRouting.content.includes(route)) fail('Workflow policy drift: Skill route statement differs');
-  const skillRouteRemainder = expectedSkillRoutes.reduce((remaining, route) => remaining.replace(route, ''), skillRouting.content);
-  if (!skill.includes('<!-- workflow-contract-policy-ref: AGENTS.md/workflow-contract-policy/v2 -->')) fail('Workflow policy drift: Skill does not reference AGENTS policy');
-  const expectedYaml = 'interface:\n  display_name: "Tackle Agent Workflow"\n  short_description: "Start with a lightweight Task Card and escalate formal reviews"\n  default_prompt: "Use $tackle-agent-workflow to start daily work with a six-field Task Card, generate mechanical route/OPEN/read-plan evidence, and prepare a full TaskBrief only at a formal review or PR boundary. Preserve the pending unified visual-review marker unless full visual work is explicitly scoped."';
-  if (yaml.trimEnd() !== expectedYaml) fail('Workflow policy drift: openai.yaml is not aligned');
-  const stripHtmlComments = (markdown) => {
-    let rendered = '';
-    let cursor = 0;
-    while (cursor < markdown.length) {
-      const opener = markdown.indexOf('<!--', cursor);
-      const strayCloser = markdown.indexOf('-->', cursor);
-      if (strayCloser !== -1 && (opener === -1 || strayCloser < opener)) fail('Workflow policy drift: PR template has an unmatched HTML comment delimiter');
-      if (opener === -1) return rendered + markdown.slice(cursor);
-      rendered += markdown.slice(cursor, opener);
-      const closer = markdown.indexOf('-->', opener + 4);
-      if (closer === -1) fail('Workflow policy drift: PR template has an unmatched HTML comment delimiter');
-      cursor = closer + 3;
+  const policy = loadWorkflowPolicy(root);
+  assertWorkflowPolicyImplementationParity(policy);
+  const referencePattern = /<!-- workflow-contract-policy-ref\/(v\d+): ([^\r\n]+) -->/g;
+  for (const relative of POLICY_REFERENCE_CONSUMERS) {
+    const consumer = readFileSync(path.join(root, relative), 'utf8');
+    const references = [...consumer.matchAll(referencePattern)];
+    if (references.length !== 1) fail(`Workflow policy drift: ${relative} must contain exactly one versioned policy reference`);
+    if (references[0][1] !== POLICY_REFERENCE_VERSION || references[0][2] !== POLICY_RELATIVE) {
+      fail(`Workflow policy drift: ${relative} references an unsupported workflow policy`);
     }
-    return rendered;
-  };
-  const templateHeadings = ['## Linked issue', '## Summary and scope', '## Validation evidence', '## Risk triggers', '## Review and CI evidence', '## Residual risk or follow-up'];
-  const renderedTemplate = stripHtmlComments(template);
-  const actualTemplateHeadings = renderedTemplate.match(/^## .+$/gm) ?? [];
-  if (canonicalJson(actualTemplateHeadings) !== canonicalJson(templateHeadings)) fail('Workflow policy drift: lightweight PR template must have exactly the six canonical headings in order');
-  const riskGuidance = boundedSection(template, '## Risk triggers', '## Review and CI evidence');
-  const riskDimensionMappings = [
-    'persistedData → Persisted data or migration',
-    'historicalSnapshots → Historical or published artifacts',
-    'authorization or concurrency → Authorization or concurrency',
-    'externalSideEffects → External side effects',
-    'userVisible → User-visible UI or interaction',
-  ];
-  for (const mapping of riskDimensionMappings) if (!riskGuidance.content.includes(mapping)) fail('Workflow policy drift: PR risk trigger mapping differs from TaskBrief riskDimensions');
-  const riskTriggerLabels = ['Persisted data or migration', 'Historical or published artifacts', 'Authorization or concurrency', 'External side effects', 'User-visible UI or interaction'];
-  const renderedRiskGuidance = stripHtmlComments(riskGuidance.content);
-  const actualRiskTriggerLabels = renderedRiskGuidance.split(/\r?\n/).flatMap((line) => {
-    const match = line.match(/^- \[[ xX]\] (.+)$/);
-    return match === null ? [] : [match[1]];
-  });
-  // The policy owns the five labels, while checked/unchecked author state is deliberately ignored.
-  if (canonicalJson(actualRiskTriggerLabels) !== canonicalJson(riskTriggerLabels)) fail('Workflow policy drift: PR risk trigger checkboxes differ from the canonical five-field projection');
-  if (!riskGuidance.content.includes('These checkboxes do not derive or override riskProfile, reviewTier, or the merge gate\'s normal/high classification.')) fail('Workflow policy drift: PR risk triggers became an independent risk or review authority');
-  if (!renderedRiskGuidance.includes(policy.visual.pendingMarker)) fail('Workflow policy drift: PR visual pending marker must be visible when the user-visible trigger is checked');
-  const canonicalMinimalRenderBoundary = '  - Minimal render smoke: <result or `Not run — <reason>`>. A minimal render smoke does not complete the unified visual review.';
-  const visualBoundaryLines = template.split(/\r?\n/).filter((line) => /(?:minimal render smoke|unified visual review)/i.test(line));
-  if (canonicalJson(visualBoundaryLines) !== canonicalJson([canonicalMinimalRenderBoundary])) fail('Workflow policy drift: PR minimal render smoke boundary must remain the single canonical statement');
-  const contradictions = [
-    [agentsRouting.content.replace(expectedRoute, '').replace(expectedTaskBriefRole, ''), /(?:Issue\s*路由|PR\s*路由|本地\s*路由)[^\n]*(?:审核|reviewer|review)/i],
-    [agentsRouting.outside, /Issue\s*路由[^\n]*(?:审核|reviewer|review|独立审核者)/i],
-    [projectSkills.content.replace(expectedProjectTackle, ''), /tackle-agent-workflow[^\n]*(?:编码与只读审核Agent|独立审核)/i],
-    [skillRouteRemainder, /(?:Issue\s*路由|Issue delivery|Existing PR)[^\n]*(?:local independent reviewer|本地独立审核者|tackle-agent-workflow[^\n]*review)/i],
-    [skillRouting.outside, /(?:Issue\s*路由|Issue delivery|Existing PR)[^\n]*(?:local independent reviewer|本地独立审核者|tackle-agent-workflow[^\n]*review)/i],
-  ];
-  for (const [text, forbidden] of contradictions) if (forbidden.test(text)) fail(`Workflow policy drift: contradictory normative text (${forbidden})`);
+  }
+  if (policy.reviewTier.strictWhenRiskProfile[0] !== 'unknown_high_risk') fail('Workflow policy drift: unknown_high_risk must remain strict');
+  for (const dimension of STRICT_REVIEW_RISK_DIMENSIONS) {
+    if (!policy.reviewTier.strictWhenRiskDimensions.includes(dimension)) fail(`Workflow policy drift: ${dimension} must remain strict`);
+  }
   return true;
 }
 function usage() {

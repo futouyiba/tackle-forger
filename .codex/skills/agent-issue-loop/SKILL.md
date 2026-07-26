@@ -5,6 +5,8 @@ description: Complete one selected GitHub Issue through readiness analysis, impl
 
 # Agent Issue Loop
 
+<!-- workflow-contract-policy-ref/v2: .codex/skills/tackle-agent-workflow/references/workflow-contract-policy.v2.json -->
+
 Complete one delivery Issue without making the user relay routine state between Agents. Keep one primary coordinator from Issue selection through verified closure. Use `$agent-project-bootstrap` for repository policy and work discovery, and hand the resulting single PR to `$agent-pr-loop` without creating a nested coordinator.
 
 ## Establish authority and scope
@@ -21,7 +23,7 @@ Default to one delivery Issue and one primary PR. If the Issue contains independ
 The invoking main Agent remains the only coordinator. A transition into `$agent-pr-loop` is a workflow handoff, not permission to spawn a second coordinator or ask the user to carry messages.
 
 - The coordinator chooses implementation capacity for code, tests, and fixes from task risk, scope, available capabilities, and resources. Follow repository-specific model requirements.
-- The TaskBrief selects `reviewTier: fast | standard | strict` as review intensity while `riskProfile` and `riskDimensions` remain the authoritative risk facts. `unknown_high_risk`, or any true persistence, historical-snapshot, concurrency, authorization, or external-side-effect dimension, requires `strict`; otherwise the coordinator may choose any tier. `fast` needs no independent reviewer or review receipt; `standard` defers its independent-review boundary to the final stable PR head and forbids duplicate local review; `strict` allows coordinator-scheduled early, orthogonal, and repeat scopes. `$agent-pr-loop` owns tier-aware reviewer selection, the repair loop, current-head/base evidence, and CI; every assigned scope covers the exact current head/base, and the coordinator disposes all findings before one integrated final review signal. Repository or platform gates may still require review evidence for a tier that does not require it by itself.
+- Load review-tier boundaries, risk floors, and receipt roles from the versioned machine policy referenced above. This Skill owns the Issue lifecycle and PR handoff; `$agent-pr-loop` owns PR review, repair, exact-head/base evidence, CI, and merge-gate handling.
 - Let the coordinator repair routine labels, links, and Project status idempotently. Do not return work to the implementer only for metadata.
 - Prefer direct Agent messaging during an active task. Persist durable decisions, findings, evidence, and resumable state on the Issue or PR so another run can recover without chat history.
 

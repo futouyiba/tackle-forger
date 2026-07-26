@@ -7,6 +7,16 @@ import path from 'node:path';
 import test from 'node:test';
 import { buildNavigationIndex, buildOwnedBaselineManifest, buildPatchManifest, checkFullReadSession, checkNavigationIndex, checkOwnedWhitespace, checkPolicy, checkReadReceipt, checkTaskBrief, checkTaskCard, checkVerdict, classifyOwnedPaths, fullReadSessionHash, openRegistryHash, ownedBaselineHash, patchHash, prepareTaskBrief, prepareTaskCard, promoteTaskBrief, receiptHash, runCli, runValidation, specReadPlan, taskBriefHash, upgradeTaskCard, VALIDATION_EXECUTION_TIERS, validationExecutionPlan, writeNavigationIndex, writeTaskBriefRun, writeTaskCardRun, writeTaskRun } from './workflow-contract.mjs';
 
+const POLICY_RELATIVE = '.codex/skills/tackle-agent-workflow/references/workflow-contract-policy.v2.json';
+const POLICY_CONSUMERS = [
+  'AGENTS.md',
+  'CLAUDE.md',
+  '.codex/skills/tackle-agent-workflow/SKILL.md',
+  '.codex/skills/agent-pr-loop/SKILL.md',
+  '.codex/skills/agent-issue-loop/SKILL.md',
+  '.claude/skills/agent-pr-loop/SKILL.md',
+];
+
 function command(root, args) { return execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim(); }
 function canonicalJson(value) {
   if (value === null || typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') return JSON.stringify(value);
@@ -100,10 +110,11 @@ function brief(root, overrides = {}) {
   };
 }
 function taskBase(root) {
+  const sourceRoot = path.resolve(process.cwd());
   write(root, 'docs/tackle-forger-development-spec-v3.md', '# V3\n\n## 0. Authority\n\n### 0.1 Immutable\n\n## 1. Scope\n\n### 3.1 Method and type\n\n### 5.2 Derived template\n\n## 8. Patch\n\n## 13. Snapshot\n\n## 14. Version\n\n### 18.2 Snapshot\n\n### 18.3 Patch\n\n## 19. Delivery\n\n## 20. Open\n\n### 24.11 Snapshot\n\n## 25. Export\n\n| ID | Type | Status |\n| --- | --- | --- |\n| OPEN-001 Test | x | `OPEN` |\n');
   write(root, 'docs/README.md', '# Documentation\n');
   write(root, 'scripts/spec-v3-modules.mjs', "process.stdout.write('legacy fixture has no split modules\\n');\n");
-  write(root, 'AGENTS.md', 'base\n');
+  for (const relative of [POLICY_RELATIVE, ...POLICY_CONSUMERS]) write(root, relative, readFileSync(path.join(sourceRoot, relative), 'utf8'));
   commitBase(root);
 }
 
@@ -452,7 +463,6 @@ function validationFixture() {
   const sourceRoot = path.resolve(process.cwd());
   try {
     taskBase(root);
-    for (const relative of ['AGENTS.md', '.codex/skills/tackle-agent-workflow/SKILL.md', '.codex/skills/tackle-agent-workflow/agents/openai.yaml', '.github/pull_request_template.md']) write(root, relative, readFileSync(path.join(sourceRoot, relative), 'utf8'));
     const contract = readFileSync(path.join(sourceRoot, '.codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs'), 'utf8');
     write(root, '.codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs', `${contract}\nif (process.argv.includes('--check-policy')) writeFileSync(${JSON.stringify(path.join(root, 'validation-ran.marker'))}, 'ran\\n');\n`);
     write(root, '.codex/skills/tackle-agent-workflow/scripts/workflow-contract.test.mjs', `import { writeFileSync } from 'node:fs';\nimport test from 'node:test';\nwriteFileSync(${JSON.stringify(path.join(root, 'validation-ran.marker'))}, 'ran\\n');\ntest('validation command ran', () => {});\n`);
@@ -554,88 +564,74 @@ test('navigation index is generated deterministically and detects drift', () => 
   } finally { cleanup(root); }
 });
 
-test('policy checker detects required workflow markers', () => {
+test('policy checker validates the closed authority and versioned consumer references', () => {
   const root = temporaryRepo();
   try {
-    const canonicalAgents = readFileSync(path.resolve(process.cwd(), 'AGENTS.md'), 'utf8');
-    const canonicalSkill = readFileSync(path.resolve(process.cwd(), '.codex/skills/tackle-agent-workflow/SKILL.md'), 'utf8');
-    const canonicalTemplate = readFileSync(path.resolve(process.cwd(), '.github/pull_request_template.md'), 'utf8');
-    const yaml = 'interface:\n  display_name: "Tackle Agent Workflow"\n  short_description: "Start with a lightweight Task Card and escalate formal reviews"\n  default_prompt: "Use $tackle-agent-workflow to start daily work with a six-field Task Card, generate mechanical route/OPEN/read-plan evidence, and prepare a full TaskBrief only at a formal review or PR boundary. Preserve the pending unified visual-review marker unless full visual work is explicitly scoped."\n';
-    assert.match(canonicalTemplate, /No linked issue — <reason>/);
-    assert.doesNotMatch(canonicalTemplate, /## Visual evidence|## Risks, recovery, and rollback/);
-    assert.doesNotMatch(canonicalTemplate, /^- Merge gate:/m);
-    write(root, 'AGENTS.md', canonicalAgents);
-    write(root, '.codex/skills/tackle-agent-workflow/SKILL.md', canonicalSkill);
-    write(root, '.github/pull_request_template.md', canonicalTemplate);
-    write(root, '.codex/skills/tackle-agent-workflow/agents/openai.yaml', yaml);
+    const sourceRoot = path.resolve(process.cwd());
+    const consumers = ['AGENTS.md', 'CLAUDE.md', '.codex/skills/tackle-agent-workflow/SKILL.md', '.codex/skills/agent-pr-loop/SKILL.md', '.codex/skills/agent-issue-loop/SKILL.md', '.claude/skills/agent-pr-loop/SKILL.md'];
+    const policyPath = '.codex/skills/tackle-agent-workflow/references/workflow-contract-policy.v2.json';
+    const canonicalPolicy = readFileSync(path.join(sourceRoot, policyPath), 'utf8');
+    for (const relative of consumers) write(root, relative, readFileSync(path.join(sourceRoot, relative), 'utf8'));
+    write(root, policyPath, canonicalPolicy);
     assert.equal(checkPolicy(root), true);
-    write(root, 'AGENTS.md', canonicalAgents.replace('$tackle-agent-workflow', '$different-workflow'));
-    assert.throws(() => checkPolicy(root), /broad project Skill statement differs|Workflow policy drift/);
-    write(root, 'AGENTS.md', canonicalAgents);
-    appendFileSync(path.join(root, 'AGENTS.md'), 'Issue 路由也必须再创建一个本地独立审核者。\n');
-    assert.throws(() => checkPolicy(root), /Workflow policy drift/);
-    write(root, 'AGENTS.md', canonicalAgents);
-    appendFileSync(path.join(root, '.codex/skills/tackle-agent-workflow/SKILL.md'), 'Issue delivery uses a local independent reviewer.\n');
-    assert.throws(() => checkPolicy(root), /contradictory normative text/);
-    write(root, '.codex/skills/tackle-agent-workflow/SKILL.md', canonicalSkill);
-    write(root, '.codex/skills/tackle-agent-workflow/SKILL.md', canonicalSkill.replace('"productRuntimeTests":"product_runtime_tests"', '"productRuntimeTests":"wrong_catalog_id"'));
-    assert.throws(() => checkPolicy(root), /TaskBrief policy reference differs/);
-    write(root, '.codex/skills/tackle-agent-workflow/SKILL.md', canonicalSkill.replace('"workflowMetadataRequires":"product_runtime_tests"', '"workflowMetadataRequires":"wrong_catalog_id"'));
-    assert.throws(() => checkPolicy(root), /TaskBrief policy reference differs/);
-    write(root, '.codex/skills/tackle-agent-workflow/SKILL.md', canonicalSkill.replace('"triggeredCannotBeNa":true', '"triggeredCannotBeNa":false'));
-    assert.throws(() => checkPolicy(root), /TaskBrief policy reference differs/);
-    write(root, '.codex/skills/tackle-agent-workflow/SKILL.md', canonicalSkill);
-    appendFileSync(path.join(root, '.codex/skills/tackle-agent-workflow/agents/openai.yaml'), 'Always inspect rendered UI for every route.\n');
-    assert.throws(() => checkPolicy(root), /Workflow policy drift/);
-    write(root, '.codex/skills/tackle-agent-workflow/agents/openai.yaml', yaml);
-    write(root, '.github/pull_request_template.md', canonicalTemplate.replace('视觉与交互统一检查待执行', '视觉待审标记缺失'));
-    assert.throws(() => checkPolicy(root), /visual pending marker/);
-    write(root, '.github/pull_request_template.md', canonicalTemplate.replace('  - If checked: **视觉与交互统一检查待执行**', '<!--  - If checked: **视觉与交互统一检查待执行** -->'));
-    assert.throws(() => checkPolicy(root), /visual pending marker must be visible/);
-    write(root, '.github/pull_request_template.md', canonicalTemplate.replace('## Validation evidence', '<!--\n## Validation evidence\n-->'));
-    assert.throws(() => checkPolicy(root), /six canonical headings/);
-    write(root, '.github/pull_request_template.md', canonicalTemplate.replace('## Residual risk or follow-up', '<!--\n## Residual risk or follow-up'));
-    assert.throws(() => checkPolicy(root), /unmatched HTML comment delimiter|six canonical headings/);
-    write(root, '.github/pull_request_template.md', canonicalTemplate.replace('- [ ] Persisted data or migration', '<!--\n- [ ] Persisted data or migration'));
-    assert.throws(() => checkPolicy(root), /unmatched HTML comment delimiter|six canonical headings|risk trigger checkboxes/);
-    write(root, '.github/pull_request_template.md', canonicalTemplate.replace('  - If checked: **视觉与交互统一检查待执行**', '<!--  - If checked: **视觉与交互统一检查待执行**'));
-    assert.throws(() => checkPolicy(root), /unmatched HTML comment delimiter|six canonical headings|visual pending marker/);
-    write(root, '.github/pull_request_template.md', `${canonicalTemplate}<!--\n`);
-    assert.throws(() => checkPolicy(root), /unmatched HTML comment delimiter/);
-    write(root, '.github/pull_request_template.md', canonicalTemplate.replace('A minimal render smoke does not complete the unified visual review.', 'A minimal render smoke completes the unified visual review.'));
-    assert.throws(() => checkPolicy(root), /single canonical statement/);
-    const filledTemplate = canonicalTemplate
-      .replaceAll('- [ ]', '- [x]')
-      .replace('- Review:', '- Review: current-head review link')
-      .replace('- CI:', '- CI: current pull-request run link');
-    write(root, '.github/pull_request_template.md', filledTemplate);
+
+    const policy = JSON.parse(canonicalPolicy);
+    write(root, policyPath, JSON.stringify({ ...policy, extra: true }));
+    assert.throws(() => checkPolicy(root), /unknown, missing, or inapplicable keys/);
+    write(root, policyPath, JSON.stringify({ ...policy, schemaVersion: 'workflow-contract-policy/v3' }));
+    assert.throws(() => checkPolicy(root), /schemaVersion/);
+    write(root, policyPath, JSON.stringify({ ...policy, reviewTier: { ...policy.reviewTier, strictWhenRiskProfile: [] } }));
+    assert.throws(() => checkPolicy(root), /unknown_high_risk strict-review floor/);
+    write(root, policyPath, JSON.stringify({ ...policy, reviewTier: { ...policy.reviewTier, strictWhenRiskDimensions: policy.reviewTier.strictWhenRiskDimensions.filter((value) => value !== 'authorization') } }));
+    assert.throws(() => checkPolicy(root), /durable strict-review dimensions/);
+    const parityMutations = [
+      { label: 'taskCard.dailySemanticFields', value: { ...policy, taskCard: { ...policy.taskCard, dailySemanticFields: policy.taskCard.dailySemanticFields.filter((field) => field !== 'scope') } } },
+      { label: 'scopedEligibility.allowedPathClasses', value: { ...policy, scopedEligibility: { ...policy.scopedEligibility, allowedPathClasses: policy.scopedEligibility.allowedPathClasses.filter((pathClass) => pathClass !== 'AGENTS.md') } } },
+      { label: 'validationMatrix.mandatoryWorkflowCommands', value: { ...policy, validationMatrix: { ...policy.validationMatrix, mandatoryWorkflowCommands: policy.validationMatrix.mandatoryWorkflowCommands.slice(1) } } },
+      { label: 'validationMatrix.executionTiers', value: { ...policy, validationMatrix: { ...policy.validationMatrix, executionTiers: { ...policy.validationMatrix.executionTiers, focused_script_or_rule: { ...policy.validationMatrix.executionTiers.focused_script_or_rule, iterationFullCi: 'allowed' } } } } },
+      { label: 'taskBrief.conditionalNaApplicability', value: { ...policy, taskBrief: { ...policy.taskBrief, conditionalNaApplicability: { ...policy.taskBrief.conditionalNaApplicability, workflowMetadataRequires: 'different_n_a' } } } },
+      { label: 'localVerdict.schema', value: { ...policy, localVerdict: { ...policy.localVerdict, schema: 'tackle-local-verdict/v2' } } },
+    ];
+    for (const mutation of parityMutations) {
+      write(root, policyPath, JSON.stringify(mutation.value));
+      assert.throws(() => checkPolicy(root), new RegExp(mutation.label.replaceAll('.', '\\.')));
+    }
+    write(root, policyPath, canonicalPolicy);
+
+    const agents = readFileSync(path.join(root, 'AGENTS.md'), 'utf8');
+    write(root, 'AGENTS.md', agents.replace('workflow-contract-policy-ref/v2', 'workflow-contract-policy-ref/v3'));
+    assert.throws(() => checkPolicy(root), /unsupported workflow policy/);
+    write(root, 'AGENTS.md', agents.replace(/<!-- workflow-contract-policy-ref\/v2:[^\n]+ -->\n/, ''));
+    assert.throws(() => checkPolicy(root), /exactly one versioned policy reference/);
+    write(root, 'AGENTS.md', `${agents}<!-- workflow-contract-policy-ref/v2: ${policyPath} -->\n`);
+    assert.throws(() => checkPolicy(root), /exactly one versioned policy reference/);
+    write(root, 'AGENTS.md', `${agents}\nDisplay prose may change without changing the machine policy.\n`);
     assert.equal(checkPolicy(root), true);
-    write(root, '.github/pull_request_template.md', canonicalTemplate.replace('- [ ] External side effects\n', ''));
-    assert.throws(() => checkPolicy(root), /risk trigger checkboxes/);
-    const hiddenRiskCheckboxes = canonicalTemplate.replace(
-      '- [ ] Persisted data or migration\n- [ ] Historical or published artifacts\n- [ ] Authorization or concurrency\n- [ ] External side effects\n- [ ] User-visible UI or interaction',
-      '<!--\n- [ ] Persisted data or migration\n- [ ] Historical or published artifacts\n- [ ] Authorization or concurrency\n- [ ] External side effects\n- [ ] User-visible UI or interaction\n-->',
-    );
-    write(root, '.github/pull_request_template.md', hiddenRiskCheckboxes);
-    assert.throws(() => checkPolicy(root), /risk trigger checkboxes/);
-    write(root, '.github/pull_request_template.md', canonicalTemplate);
-    appendFileSync(path.join(root, '.github/pull_request_template.md'), 'Minimal render smoke replaces the pending unified visual review.\n');
-    assert.throws(() => checkPolicy(root), /single canonical statement/);
-    write(root, '.github/pull_request_template.md', canonicalTemplate);
-    appendFileSync(path.join(root, '.github/pull_request_template.md'), 'The unified visual review is completed by a Minimal render smoke.\n');
-    assert.throws(() => checkPolicy(root), /single canonical statement/);
-    write(root, '.github/pull_request_template.md', canonicalTemplate);
-    appendFileSync(path.join(root, '.github/pull_request_template.md'), 'The unified visual review\nis completed by a Minimal render smoke.\n');
-    assert.throws(() => checkPolicy(root), /single canonical statement/);
-    write(root, '.github/pull_request_template.md', canonicalTemplate);
-    appendFileSync(path.join(root, '.github/pull_request_template.md'), 'A Minimal render smoke does not complete the unified visual review. However, the unified visual review is completed by a Minimal render smoke.\n');
-    assert.throws(() => checkPolicy(root), /single canonical statement/);
-    write(root, '.github/pull_request_template.md', canonicalTemplate);
-    appendFileSync(path.join(root, '.github/pull_request_template.md'), 'A Minimal render smoke is sufficient to satisfy the unified visual review.\n');
-    assert.throws(() => checkPolicy(root), /single canonical statement/);
-    write(root, '.github/pull_request_template.md', canonicalTemplate);
-    appendFileSync(path.join(root, '.github/pull_request_template.md'), 'A Minimal render smoke does not satisfy the unified visual review. However, it is sufficient to pass the unified visual review.\n');
-    assert.throws(() => checkPolicy(root), /single canonical statement/);
+  } finally { cleanup(root); }
+});
+
+test('review-tier execution consumes the authority and display prose cannot lower the safety floor', () => {
+  const root = temporaryRepo();
+  try {
+    taskBase(root);
+    const policyPath = '.codex/skills/tackle-agent-workflow/references/workflow-contract-policy.v2.json';
+    const policy = JSON.parse(readFileSync(path.join(root, policyPath), 'utf8'));
+    policy.taskBrief.phaseReceiptsByReviewTier.verdict.fast.all = ['coordinator', 'coding', 'review'];
+    write(root, policyPath, JSON.stringify(policy));
+    command(root, ['add', policyPath]);
+    command(root, ['commit', '-qm', 'policy fixture']);
+    const coordinator = receipt(root);
+    const coding = receipt(root, { role: 'coding' });
+    const fastVerdict = brief(root, { phase: 'verdict', reviewTier: 'fast', specReadReceipts: [coordinator, coding] });
+    assert.throws(() => checkTaskBrief({ root, brief: fastVerdict }), /coordinator, coding, review/);
+
+    appendFileSync(path.join(root, 'AGENTS.md'), 'Display-only claim: unknown high risk may use fast review.\n');
+    const unsafe = brief(root, {
+      reviewTier: 'fast',
+      riskProfile: 'unknown_high_risk',
+      riskDimensions: { persistedData: false, historicalSnapshots: false, concurrency: false, authorization: false, externalSideEffects: false, userVisible: false },
+    });
+    assert.throws(() => checkTaskBrief({ root, brief: unsafe }), /reviewTier must be strict/);
   } finally { cleanup(root); }
 });
 
@@ -682,6 +678,7 @@ test('spec-read receipts enforce full/scoped plans and canonical v3 hash', () =>
   const root = temporaryRepo();
   try {
     write(root, 'docs/tackle-forger-development-spec-v3.md', '# V3\n\n## 0. Authority\n\n### 0.1 Immutable\n\n### 3.1 Method and type\n\n### 5.2 Derived template\n\n## 8. Patch\n\n## 13. Snapshot\n\n## 14. Version\n\n### 18.2 Snapshot\n\n### 18.3 Patch\n\n## 19. Risks\n\n## 20. Open\n\n## 21. Relevant\n\n### 24.11 Snapshot\n\n## 25. Export\n');
+    write(root, POLICY_RELATIVE, readFileSync(path.join(process.cwd(), POLICY_RELATIVE), 'utf8'));
     const full = receipt(root);
     assert.equal(checkReadReceipt({ root, receipt: full }).receiptHash, receiptHash(full));
     const voluntaryFullCoding = receipt(root, { role: 'coding' });
@@ -1256,103 +1253,26 @@ test('canonical specification paths always trigger the module consistency comman
   } finally { cleanup(root); }
 });
 
-test('repository workflow leaves the merge decision to task-aware Agent judgment', () => {
+test('machine policy preserves review boundaries without a prose mirror', () => {
   const root = process.cwd();
-  const policyPaths = [
-    'AGENTS.md',
-    '.github/merge-gates.md',
-    '.claude/skills/agent-pr-loop/SKILL.md',
-    '.codex/skills/agent-issue-loop/SKILL.md',
-    '.codex/skills/agent-pr-loop/SKILL.md',
-    '.codex/skills/agent-pr-loop/agents/openai.yaml',
-    '.codex/skills/agent-project-bootstrap/SKILL.md',
-    '.codex/skills/agent-project-bootstrap/references/daily-project-flow.md',
-    '.codex/skills/tackle-agent-workflow/SKILL.md',
-  ];
-  const prohibitedPrescriptions = [
-    /automatic merge is the normal completion path/i,
-    /automatically merges when every gate passes/i,
-    /automatic merge when every gate passes/i,
-    /automatically complete one PR/i,
-    /exact-head automatic-merge/i,
-    /do not ask for redundant (?:merge )?confirmation/i,
-    /all-green exact-head review and CI result supplies the normal merge decision/i,
-    /the user has authorized the merge/i,
-    /only an explicit merge request may continue/i,
-    /unless the current request explicitly includes a merge/i,
-    /only when the current request explicitly includes a merge/i,
-    /仅当前请求明确包含合并时/i,
-  ];
-  for (const relative of policyPaths) {
-    const content = readFileSync(path.join(root, relative), 'utf8');
-    for (const prohibited of prohibitedPrescriptions) assert.doesNotMatch(content, prohibited, relative);
-  }
-  const issueLoop = readFileSync(path.join(root, '.codex/skills/agent-issue-loop/SKILL.md'), 'utf8');
-  assert.match(issueLoop, /PR_LOOP_ACTIVE → PR_EVIDENCE_COMPLETE/);
-  assert.match(issueLoop, /status: `EVIDENCE_COMPLETE`, `MERGED_VERIFIED`/);
-  assert.match(issueLoop, /exact reviewed head and base SHAs plus gate evidence/);
-  assert.match(issueLoop, /does not prescribe which outcome the Agent chooses/);
-
-  const routingSources = [
-    'AGENTS.md',
-    '.claude/skills/agent-pr-loop/SKILL.md',
-    '.codex/skills/agent-project-bootstrap/SKILL.md',
-    '.codex/skills/agent-project-bootstrap/references/daily-project-flow.md',
-  ];
-  for (const relative of routingSources) {
-    const content = readFileSync(path.join(root, relative), 'utf8');
-    assert.doesNotMatch(content, /合并闭环|merge phase/i, relative);
-  }
-  const gatePolicy = readFileSync(path.join(root, '.github/merge-gates.md'), 'utf8');
-  assert.match(gatePolicy, /owner merge authorization that explicitly names the governance\s+exception/);
-  assert.match(gatePolicy, /explicit owner authorization naming PR #63/);
+  const policy = JSON.parse(readFileSync(path.join(root, POLICY_RELATIVE), 'utf8'));
+  assert.deepEqual(policy.reviewTier.values, ['fast', 'standard', 'strict']);
+  assert.deepEqual(policy.taskBrief.phaseReceiptsByReviewTier.verdict.standard.pull_request, ['coordinator', 'coding', 'review']);
+  assert.deepEqual(policy.taskBrief.phaseReceiptsByReviewTier.verdict.standard.local, ['coordinator', 'coding']);
+  assert.equal(Object.hasOwn(policy, 'pullRequest'), false);
+  assert.equal(Object.hasOwn(policy.taskBrief, 'evidenceStages'), false);
 });
 
-test('adaptive reviewer governance forbids fixed reviewer and implementation prescriptions', () => {
-  const root = process.cwd();
-  const sources = [
-    'AGENTS.md',
-    'CLAUDE.md',
-    '.claude/skills/agent-pr-loop/SKILL.md',
-    '.codex/skills/agent-issue-loop/SKILL.md',
-    '.codex/skills/agent-pr-loop/SKILL.md',
-    '.codex/skills/tackle-agent-workflow/SKILL.md',
-  ];
-  const prohibited = [
-    /one coding agent and one independent local reviewer/i,
-    /Use one implementation Agent for code, tests, and fixes/i,
-    /no more than one active implementation Agent and one active independent review Agent/i,
-    /gpt-5\.6-(?:terra|sol)/i,
-    /fixed reviewer/i,
-    /不得增加第二个独立审核者/,
-    /主 agent 已直接实现/,
-    /实现\/修改\/调查由主 agent 直接做/,
-    /主 agent 直接修复/,
-    /不 spawn 实现 agent/,
-  ];
-  for (const relative of sources) {
-    const content = readFileSync(path.join(root, relative), 'utf8');
-    for (const pattern of prohibited) assert.doesNotMatch(content, pattern, relative);
-  }
-  const agents = readFileSync(path.join(root, 'AGENTS.md'), 'utf8');
-  const claudePr = readFileSync(path.join(root, '.claude/skills/agent-pr-loop/SKILL.md'), 'utf8');
-  const codexPr = readFileSync(path.join(root, '.codex/skills/agent-pr-loop/SKILL.md'), 'utf8');
-  const local = readFileSync(path.join(root, '.codex/skills/tackle-agent-workflow/SKILL.md'), 'utf8');
-  for (const content of [agents, codexPr, local]) {
-    assert.match(content, /task risk, scope, available capabilities, and resources|任务风险、范围、可用能力与资源/);
-    assert.match(content, /exact current head\/base|当前精确head\/base|精确head\/base/);
-    assert.match(content, /all assigned findings.*disposed|coordinator has disposed all findings|所有发现.*coordinator处置/);
-  }
-  assert.match(claudePr, /coordinator.*安排最小必要的批量修复容量/);
-  assert.match(claudePr, /并行启动该head的GitHub PR CI与tier要求的所有独立审核范围/);
-  assert.match(codexPr, /exactly one integrated substantive review signal/);
-  assert.match(codexPr, /start current-head pull-request CI and every tier-required independent review scope in parallel/);
-  assert.match(local, /at-most-one `review` spec-read receipt.*coordinator-integrated review-role coverage record/);
-  assert.match(local, /each assigned strict-tier reviewer returns findings and evidence.*coordinator emits this exact single local verdict record/);
-  assert.doesNotMatch(local, /reviewer must return this exact local verdict record/);
-  assert.match(agents, /至多一个review receipt.*coordinator整合后的review-role覆盖记录，不按reviewer逐个计数/);
-  for (const content of [agents, claudePr, codexPr, local]) {
-    assert.match(content, /reviewTier|review tier/);
-    assert.match(content, /riskProfile|risk profile/);
-  }
+test('merge gate document owns the complete review signal envelope', () => {
+  const gatePolicy = readFileSync(path.join(process.cwd(), '.github/merge-gates.md'), 'utf8');
+  assert.match(gatePolicy, /A current review signal is additionally required only\s+when the workflow machine policy, repository or platform policy, or the\s+high-risk merge gate requires one\./);
+  assert.match(gatePolicy, /When a review signal is required, the canonical integrated Agent review uses/);
+  for (const field of [
+    'Agent-Review-Version: v1',
+    'Reviewer-Role: independent-review-agent',
+    'Head-SHA: <full SHA>',
+    'Base-SHA: <full SHA>',
+    'Verdict: PASS',
+    'Agent-Review: PASS',
+  ]) assert.equal(gatePolicy.split(field).length - 1 >= 1, true, field);
 });

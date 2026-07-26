@@ -397,7 +397,7 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
           <input
             ref={fileInput}
             type="file"
-            accept=".xlsx,.xls"
+            accept=".xlsx"
             style={{ display: "none" }}
             onChange={(event) => {
               const file = event.target.files?.[0];

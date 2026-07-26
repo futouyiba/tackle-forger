@@ -4,9 +4,12 @@ import {
   BROWSER_COMPILER_TABLES,
   BROWSER_EXPORT_MAPPING,
   BROWSER_FIELD_LABELS,
+  filterMappingForPart,
 } from "@/lib/config-export-browser-mapping";
+import type { MaterializedConfigRow } from "@/lib/config-export-mapping";
 import { materializeConfigExport } from "@/lib/config-export-mapping";
 import {
+  assertConfigExportSnapshotReplayable,
   ConfigPreviewSnapshotError,
   createConfigPreviewPackage,
 } from "@/lib/config-preview-package";
@@ -113,27 +116,77 @@ export async function POST(request: NextRequest) {
         { status: 404 },
       );
     }
+    // 快照数量硬上限
+    const MAX_SNAPSHOTS = 50;
+    if (snapshots.length > MAX_SNAPSHOTS) {
+      return NextResponse.json(
+        { error: `单次最多导出 ${MAX_SNAPSHOTS} 个快照，请分批下载。` },
+        { status: 413 },
+      );
+    }
     try {
-      const allRows = snapshots.flatMap((snapshot) => {
+      // 逐快照校验完整性门禁，失败即全部拒绝
+      const policies = current.state.reductionStackingPolicyVersions;
+      const gateErrors: Array<{ snapshotId: string; code: string; message: string }> = [];
+      for (const snapshot of snapshots) {
+        try {
+          assertConfigExportSnapshotReplayable(snapshot, policies);
+        } catch (err) {
+          gateErrors.push({
+            snapshotId: snapshot.id,
+            code: err instanceof ConfigPreviewSnapshotError ? err.code : "SNAPSHOT_GATE_FAILED",
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      if (gateErrors.length) {
+        return NextResponse.json(
+          { error: "部分快照未通过导出完整性校验", gateErrors },
+          { status: 422 },
+        );
+      }
+      // 逐快照物化，按部位筛选映射，失败即全部拒绝
+      const allRows: MaterializedConfigRow[] = [];
+      const materializeErrors: Array<{ snapshotId: string; code: string; message: string }> = [];
+      for (const snapshot of snapshots) {
+        const itemPartId = snapshot.projectionMatch?.itemPartId;
+        const partMapping = itemPartId
+          ? filterMappingForPart(BROWSER_EXPORT_MAPPING, itemPartId)
+          : BROWSER_EXPORT_MAPPING;
         try {
           const result = materializeConfigExport({
             snapshot,
-            availableReductionPolicies:
-              current.state.reductionStackingPolicyVersions,
-            mapping: BROWSER_EXPORT_MAPPING,
+            availableReductionPolicies: policies,
+            mapping: partMapping,
             compilerTables: BROWSER_COMPILER_TABLES,
           });
-          if (result.issues.some((i) => i.level === "error")) {
-            return [];
+          const errors = result.issues.filter((i) => i.level === "error");
+          if (errors.length) {
+            materializeErrors.push({
+              snapshotId: snapshot.id,
+              code: errors[0].code,
+              message: errors.map((e) => e.message).join("；"),
+            });
+          } else {
+            allRows.push(...result.rows);
           }
-          return result.rows;
-        } catch {
-          return [];
+        } catch (err) {
+          materializeErrors.push({
+            snapshotId: snapshot.id,
+            code: "MATERIALIZE_FAILED",
+            message: err instanceof Error ? err.message : String(err),
+          });
         }
-      });
+      }
+      if (materializeErrors.length) {
+        return NextResponse.json(
+          { error: "部分快照物化失败", materializeErrors },
+          { status: 422 },
+        );
+      }
       if (!allRows.length) {
         return NextResponse.json(
-          { error: "所选 Snapshot 经物化后无有效行；请确认已配置品质评分和定价策略。" },
+          { error: "所选快照经物化后无有效行。" },
           { status: 422 },
         );
       }
@@ -147,7 +200,7 @@ export async function POST(request: NextRequest) {
         headers: {
           "Content-Type":
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-          "Content-Disposition": `attachment; filename="config-export-${body.packageId.replace(/[^a-z0-9._-]/gi, "_")}.xlsx"`,
+          "Content-Disposition": `attachment; filename="config-export-${body.packageId.replace(/[^a-z0-9._-]/gi, "_")}.preview.xlsx"`,
         },
       });
     } catch (error) {

@@ -41,6 +41,13 @@ run necessary. The live merge checker still requires one eligible exact-head/bas
 run containing every canonical job; this cadence never permits missing, stale,
 partial, or cross-run evidence.
 
+Development branches do not trigger this workflow. Draft pull requests retain a
+remote discussion object without allocating CI runners. Moving a pull request to
+Ready for review triggers the candidate run; later candidate heads trigger fresh
+runs, while concurrency cancellation stops superseded runs for the same pull
+request. Cross-session problem tracking belongs in the lightweight Agent task
+Issue, not in an early pull request opened only to preserve context.
+
 Do not require this merge checker to pass before removing Draft. The checker
 intentionally rejects Draft pull requests, while a high-risk review signal is
 normally collected after formal review begins. Requiring both in the opposite
@@ -140,8 +147,8 @@ cursor.
 
 ### Historical workspace CI scope
 
-`Historical workspace (pnpm)` is always present in every pull-request and push
-run, so its exact job identity remains part of the merge-gate evidence. Before
+`Historical workspace (pnpm)` is present in every non-Draft pull-request
+candidate run, so its exact job identity remains part of the merge-gate evidence. Before
 any expensive pnpm work, the job records an auditable scope decision against the
 immutable event head and base. It runs the full historical command set when a
 change touches a historical-workspace input: `apps/**`, `packages/**`,

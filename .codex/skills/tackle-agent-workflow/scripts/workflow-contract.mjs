@@ -741,7 +741,7 @@ function checkReusedReadReceipt({ root, receipt, currentReuseContext, applicable
   const readSections = requireStringArray(receipt.readSections, 'receipt.readSections');
   requireString(receipt.reason, 'receipt.reason');
   requireCurrentSpecHash(root, receipt.specSha256);
-  const plan = specReadPlan({ root, role, riskProfile, relevantSections, applicableIds });
+  const plan = specReadPlan({ root, role, riskProfile, reviewTier, relevantSections, applicableIds });
   if (plan.profile !== 'SCOPED') fail('reused full-read evidence is only valid for a current low-risk SCOPED route');
   const scopedRequiredSections = plan.requiredSections;
   if (!sameSet(requiredSections, scopedRequiredSections) || !sameSet(readSections, scopedRequiredSections)) fail('reused full-read receipt must explicitly read every current scoped task section');

@@ -494,10 +494,9 @@ test('role-keyed reuse contexts flow through validation and verdict APIs and CLI
     };
     const coordinator = reuseFor('coordinator', 'agent:coordinator', 'context:coordinator');
     const coding = reuseFor('coding', 'agent:coding', 'context:coding');
-    const review = reuseFor('review', 'agent:review', 'context:review');
-    const contexts = { coordinator: currentReuseContext(coordinator.reuseEvidence.session), coding: currentReuseContext(coding.reuseEvidence.session), review: currentReuseContext(review.reuseEvidence.session) };
-    const source = brief(root, { taskId: 'task-2', ownedPaths: [ownedPath], allowedChanges: [ownedPath], validationPlan: { ...brief(root).validationPlan, requiredCommands: ['node scripts/spec-v3-modules.mjs --check', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-policy', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-index', 'node --test .codex/skills/tackle-agent-workflow/scripts/workflow-contract.test.mjs', ownedWhitespaceCommand(baseSha, [ownedPath])] }, specReadReceipts: [coordinator] });
-    const promoted = promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review, reuseContexts: contexts });
+    const contexts = { coordinator: currentReuseContext(coordinator.reuseEvidence.session), coding: currentReuseContext(coding.reuseEvidence.session) };
+    const source = brief(root, { taskId: 'task-2', reviewTier: 'standard', ownedPaths: [ownedPath], allowedChanges: [ownedPath], validationPlan: { ...brief(root).validationPlan, requiredCommands: ['node scripts/spec-v3-modules.mjs --check', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-policy', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-index', 'node --test .codex/skills/tackle-agent-workflow/scripts/workflow-contract.test.mjs', ownedWhitespaceCommand(baseSha, [ownedPath])] }, specReadReceipts: [coordinator] });
+    const promoted = promoteTaskBrief({ root, brief: source, codingReceipt: coding, reuseContexts: contexts });
     const checked = checkTaskBrief({ root, brief: promoted, reuseContexts: contexts });
     assert.equal(validationExecutionPlan({ root, brief: promoted, reuseContexts: contexts }).artifact.artifactIdentity.kind, 'worktree');
     const apiSummary = runValidation({ root, brief: promoted, reuseContexts: contexts });
@@ -509,7 +508,7 @@ test('role-keyed reuse contexts flow through validation and verdict APIs and CLI
     assert.equal(JSON.parse(runCli(['--run-validation', '--brief', path.join(handoff, 'brief.json'), '--reuse-contexts', path.join(handoff, 'contexts.json')], root)).results.every((result) => result.result === 'PASS'), true);
     assert.equal(JSON.parse(runCli(['--check-verdict', '--brief', path.join(handoff, 'brief.json'), '--verdict', path.join(handoff, 'verdict.json'), '--reuse-contexts', path.join(handoff, 'contexts.json')], root)).taskBriefSha256, checked.taskBriefSha256);
     assert.throws(() => runCli(['--run-validation', '--brief', path.join(handoff, 'brief.json')], root), /currentReuseContext/);
-    for (const bad of [{ coordinator: contexts.coordinator, coding: contexts.coding }, { ...contexts, extra: contexts.review }, { ...contexts, review: { ...contexts.review, currentAgentIdentity: 'agent:wrong' } }, { ...contexts, coding: { ...contexts.coding, currentContextSessionId: 'context:wrong' } }, { ...contexts, coordinator: { ...contexts.coordinator, currentContextState: 'compacted' } }]) {
+    for (const bad of [{ coordinator: contexts.coordinator }, { ...contexts, extra: contexts.coding }, { ...contexts, coding: { ...contexts.coding, currentContextSessionId: 'context:wrong' } }, { ...contexts, coordinator: { ...contexts.coordinator, currentContextState: 'compacted' } }]) {
       writeFileSync(path.join(handoff, 'bad-contexts.json'), JSON.stringify(bad));
       assert.throws(() => runCli(['--check-verdict', '--brief', path.join(handoff, 'brief.json'), '--verdict', path.join(handoff, 'verdict.json'), '--reuse-contexts', path.join(handoff, 'bad-contexts.json')], root), /currentReuseContext|unknown receipt role|does not match|must be continuous/);
     }
@@ -724,11 +723,13 @@ test('full-read sessions reuse only exact continuous low-risk evidence', () => {
     const reused = reusedReceipt(root);
     const current = currentReuseContext(reused.reuseEvidence.session);
     assert.equal(checkReadReceipt({ root, receipt: reused, currentReuseContext: current }).sessionHash, fullReadSessionHash(session));
+    assert.throws(() => checkReadReceipt({ root, receipt: reused, currentReuseContext: current, reviewTier: 'strict' }), /current low-risk SCOPED route/);
     write(root, 'reused-receipt.json', `${JSON.stringify(reused)}\n`);
     assert.equal(JSON.parse(runCli(['--check-read-receipt', '--receipt', 'reused-receipt.json', '--current-agent-identity', current.currentAgentIdentity, '--current-context-session-id', current.currentContextSessionId, '--current-context-state', current.currentContextState], root)).sessionHash, fullReadSessionHash(session));
-    assert.equal(checkTaskBrief({ root, brief: brief(root, { taskId: 'task-2', specReadReceipts: [reused] }), currentReuseContext: current }).taskBriefSha256.length, 64);
+    assert.equal(checkTaskBrief({ root, brief: brief(root, { taskId: 'task-2', reviewTier: 'standard', specReadReceipts: [reused] }), currentReuseContext: current }).taskBriefSha256.length, 64);
+    assert.throws(() => checkTaskBrief({ root, brief: brief(root, { taskId: 'task-2', specReadReceipts: [reused] }), currentReuseContext: current }), /current low-risk SCOPED route/);
     assert.throws(() => checkReadReceipt({ root, receipt: reused }), /currentReuseContext/);
-    assert.throws(() => checkTaskBrief({ root, brief: brief(root, { taskId: 'task-2', specReadReceipts: [reused] }) }), /currentReuseContext/);
+    assert.throws(() => checkTaskBrief({ root, brief: brief(root, { taskId: 'task-2', reviewTier: 'standard', specReadReceipts: [reused] }) }), /currentReuseContext/);
     assert.throws(() => checkFullReadSession({ root, session: { ...session, contextState: 'compacted' } }), /unknown or compacted/);
     assert.throws(() => checkReadReceipt({ root, receipt: { ...reused, reuseEvidence: { ...reused.reuseEvidence, agentIdentity: 'agent:other' } }, currentReuseContext: current }), /exact same agent/);
     assert.throws(() => checkReadReceipt({ root, receipt: { ...reused, riskProfile: 'runtime_product_domain' }, currentReuseContext: current }), /only valid/);
@@ -743,8 +744,7 @@ test('full-read sessions reuse only exact continuous low-risk evidence', () => {
     unlinkSync(path.join(root, 'session.json'));
     unlinkSync(path.join(root, 'reused-receipt.json'));
     const coding = receipt(root, { taskId: 'task-2', role: 'coding', profile: 'FULL', requiredSections: ['README', 'V3_INDEX', 'FULL_V3'], readSections: ['README', 'V3_INDEX', 'FULL_V3'], reason: 'implementation' });
-    const review = receipt(root, { taskId: 'task-2', role: 'review', profile: 'FULL', requiredSections: ['README', 'V3_INDEX', 'FULL_V3'], readSections: ['README', 'V3_INDEX', 'FULL_V3'], reason: 'review' });
-    const verdictBrief = brief(root, { taskId: 'task-2', phase: 'verdict', reviewedHead: command(root, ['rev-parse', 'HEAD']), specReadReceipts: [reused, coding, review] });
+    const verdictBrief = brief(root, { taskId: 'task-2', phase: 'verdict', reviewTier: 'standard', reviewedHead: command(root, ['rev-parse', 'HEAD']), specReadReceipts: [reused, coding] });
     assert.equal(validationExecutionPlan({ root, brief: verdictBrief, currentReuseContext: current }).artifact.artifactIdentity.kind, 'commit');
     assert.throws(() => validationExecutionPlan({ root, brief: verdictBrief }), /currentReuseContext/);
     assert.throws(() => validationExecutionPlan({ root, brief: verdictBrief, currentReuseContext: { ...current, currentContextState: 'compacted' } }), /currentContextState/);
@@ -763,8 +763,7 @@ test('REUSE_FULL runValidation and CLI fail before execution without trusted cur
     const reused = reusedReceipt(root);
     const current = currentReuseContext(reused.reuseEvidence.session);
     const coding = receipt(root, { taskId: 'task-2', role: 'coding', profile: 'FULL', requiredSections: ['README', 'V3_INDEX', 'FULL_V3'], readSections: ['README', 'V3_INDEX', 'FULL_V3'], reason: 'implementation' });
-    const review = receipt(root, { taskId: 'task-2', role: 'review', profile: 'FULL', requiredSections: ['README', 'V3_INDEX', 'FULL_V3'], readSections: ['README', 'V3_INDEX', 'FULL_V3'], reason: 'review' });
-    const verdictBrief = brief(root, { taskId: 'task-2', phase: 'verdict', reviewedHead: command(root, ['rev-parse', 'HEAD']), specReadReceipts: [reused, coding, review] });
+    const verdictBrief = brief(root, { taskId: 'task-2', phase: 'verdict', reviewTier: 'standard', reviewedHead: command(root, ['rev-parse', 'HEAD']), specReadReceipts: [reused, coding] });
     const briefPath = path.join(handoff, 'verdict-brief.json');
     const contextsPath = path.join(handoff, 'reuse-contexts.json');
     writeFileSync(briefPath, `${JSON.stringify(verdictBrief)}\n`);
@@ -973,15 +972,14 @@ test('TaskBrief promotion validates frozen baselines and trusted REUSE_FULL cont
     assert.throws(() => promoteTaskBrief({ root, brief: { ...frozen, preTaskOwnedBaselineHash: '0'.repeat(64) }, codingReceipt: coding, reviewReceipt: review }), /must match its deterministic baseline manifest/);
 
     const coordinatorReuse = reusedReceiptForRole(root, 'coordinator');
-    const reuseBrief = brief(root, { taskId: 'task-2', specReadReceipts: [coordinatorReuse] });
+    const reuseBrief = brief(root, { taskId: 'task-2', reviewTier: 'standard', specReadReceipts: [coordinatorReuse] });
     const codingReuse = receipt(root, { taskId: 'task-2', role: 'coding', profile: 'FULL', requiredSections: ['README', 'V3_INDEX', 'FULL_V3'], readSections: ['README', 'V3_INDEX', 'FULL_V3'], reason: 'coding scoped coverage' });
-    const reviewReuse = receipt(root, { taskId: 'task-2', role: 'review', profile: 'FULL', requiredSections: ['README', 'V3_INDEX', 'FULL_V3'], readSections: ['README', 'V3_INDEX', 'FULL_V3'], reason: 'review scoped coverage' });
     const current = currentReuseContext(coordinatorReuse.reuseEvidence.session);
-    assert.equal(promoteTaskBrief({ root, brief: reuseBrief, codingReceipt: codingReuse, reviewReceipt: reviewReuse, currentReuseContext: current }).phase, 'verdict');
-    assert.throws(() => promoteTaskBrief({ root, brief: reuseBrief, codingReceipt: codingReuse, reviewReceipt: reviewReuse }), /currentReuseContext/);
-    assert.throws(() => promoteTaskBrief({ root, brief: reuseBrief, codingReceipt: codingReuse, reviewReceipt: reviewReuse, currentReuseContext: { ...current, currentAgentIdentity: 'agent:other' } }), /does not match/);
-    assert.throws(() => promoteTaskBrief({ root, brief: reuseBrief, codingReceipt: codingReuse, reviewReceipt: reviewReuse, currentReuseContext: { ...current, currentContextSessionId: 'context:other' } }), /does not match/);
-    assert.throws(() => promoteTaskBrief({ root, brief: reuseBrief, codingReceipt: codingReuse, reviewReceipt: reviewReuse, currentReuseContext: { ...current, currentContextState: 'compacted' } }), /must be continuous/);
+    assert.equal(promoteTaskBrief({ root, brief: reuseBrief, codingReceipt: codingReuse, currentReuseContext: current }).phase, 'verdict');
+    assert.throws(() => promoteTaskBrief({ root, brief: reuseBrief, codingReceipt: codingReuse }), /currentReuseContext/);
+    assert.throws(() => promoteTaskBrief({ root, brief: reuseBrief, codingReceipt: codingReuse, currentReuseContext: { ...current, currentAgentIdentity: 'agent:other' } }), /does not match/);
+    assert.throws(() => promoteTaskBrief({ root, brief: reuseBrief, codingReceipt: codingReuse, currentReuseContext: { ...current, currentContextSessionId: 'context:other' } }), /does not match/);
+    assert.throws(() => promoteTaskBrief({ root, brief: reuseBrief, codingReceipt: codingReuse, currentReuseContext: { ...current, currentContextState: 'compacted' } }), /must be continuous/);
   } finally { cleanup(root); }
 });
 
@@ -997,20 +995,17 @@ test('TaskBrief promotion assigns independent trusted contexts to every REUSE_FU
     };
     const coordinator = reuseFor('coordinator', 'agent:coordinator', 'context:coordinator');
     const coding = reuseFor('coding', 'agent:coding', 'context:coding');
-    const review = reuseFor('review', 'agent:review', 'context:review');
-    const source = brief(root, { taskId: 'task-2', specReadReceipts: [coordinator] });
+    const source = brief(root, { taskId: 'task-2', reviewTier: 'standard', specReadReceipts: [coordinator] });
     const contexts = {
       coordinator: currentReuseContext(coordinator.reuseEvidence.session),
       coding: currentReuseContext(coding.reuseEvidence.session),
-      review: currentReuseContext(review.reuseEvidence.session),
     };
-    assert.equal(promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review, reuseContexts: contexts }).phase, 'verdict');
-    assert.throws(() => promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review }), /currentReuseContext/);
-    assert.throws(() => promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review, reuseContexts: { coordinator: contexts.coordinator, review: contexts.review } }), /currentReuseContext|exactly one trusted/);
-    assert.throws(() => promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review, reuseContexts: { ...contexts, coding: { ...contexts.coding, currentAgentIdentity: 'agent:wrong' } } }), /does not match/);
-    assert.throws(() => promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review, reuseContexts: { ...contexts, review: { ...contexts.review, currentContextSessionId: 'context:wrong' } } }), /does not match/);
-    assert.throws(() => promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review, reuseContexts: { ...contexts, review: { ...contexts.review, currentContextState: 'compacted' } } }), /must be continuous/);
-    assert.throws(() => promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review, reuseContexts: { ...contexts, extra: contexts.review } }), /unknown receipt role/);
+    assert.equal(promoteTaskBrief({ root, brief: source, codingReceipt: coding, reuseContexts: contexts }).phase, 'verdict');
+    assert.throws(() => promoteTaskBrief({ root, brief: source, codingReceipt: coding }), /currentReuseContext/);
+    assert.throws(() => promoteTaskBrief({ root, brief: source, codingReceipt: coding, reuseContexts: { coordinator: contexts.coordinator } }), /currentReuseContext|exactly one trusted/);
+    assert.throws(() => promoteTaskBrief({ root, brief: source, codingReceipt: coding, reuseContexts: { ...contexts, coding: { ...contexts.coding, currentAgentIdentity: 'agent:wrong' } } }), /does not match/);
+    assert.throws(() => promoteTaskBrief({ root, brief: source, codingReceipt: coding, reuseContexts: { ...contexts, coding: { ...contexts.coding, currentContextState: 'compacted' } } }), /must be continuous/);
+    assert.throws(() => promoteTaskBrief({ root, brief: source, codingReceipt: coding, reuseContexts: { ...contexts, extra: contexts.coding } }), /unknown receipt role/);
   } finally { cleanup(root); }
 });
 

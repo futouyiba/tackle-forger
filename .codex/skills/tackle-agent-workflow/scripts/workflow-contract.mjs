@@ -15,6 +15,8 @@ const SPEC_READ_SCHEMA = 'tackle-spec-read/v1';
 const SPEC_READ_REUSE_SCHEMA = 'tackle-spec-read/v2';
 const SPEC_FULL_READ_SESSION_SCHEMA = 'tackle-spec-full-read-session/v1';
 const TASK_BRIEF_SCHEMA = 'tackle-task-brief/v1';
+const TASK_CARD_SCHEMA = 'tackle-task-card/v1';
+const TASK_CARD_UPGRADE_INPUT_SCHEMA = 'tackle-task-card-upgrade-input/v1';
 const TASK_PREPARE_INPUT_SCHEMA = 'tackle-task-prepare-input/v1';
 const OWNED_BASELINE_SCHEMA = 'tackle-owned-baseline/v1';
 const VERDICT_SCHEMA = 'tackle-local-verdict/v1';
@@ -289,6 +291,64 @@ export function specReadPlan({ root, role, riskProfile, relevantSections = [] })
   const profile = scoped ? 'SCOPED' : (routed ? 'ROUTED' : 'FULL');
   const requiredSections = routed ? [...new Set([...ROUTED_BASE_SECTIONS, ...relevant])] : [README_SECTION, V3_INDEX_SECTION, FULL_V3_SECTION];
   return { schema: SPEC_READ_SCHEMA, role, riskProfile, profile, requiredSections, relevantSections: relevant };
+}
+const TASK_CARD_SEMANTIC_FIELDS = ['taskId', 'workflowMode', 'scope', 'ownedPaths', 'riskProfile', 'changeClass'];
+function taskCardEscalation({ ownedPaths, riskProfile, changeClass }) {
+  const markers = [];
+  const classification = classifyOwnedPaths(ownedPaths);
+  if (!classification.scopedEligible) markers.push('owned_paths_outside_scoped_governance');
+  if (riskProfile !== 'workflow_docs_metadata' || changeClass !== 'workflow_metadata') markers.push('non_workflow_or_runtime_semantics');
+  if (ownedPaths.some((owned) => owned.startsWith('legacy-workspace/'))) markers.push('legacy_workspace');
+  return markers;
+}
+/** Daily task cards deliberately contain no reading assertion or formal review evidence. */
+function prepareTaskCardInternal({ root = repositoryRoot(), input, allowOwnedDirty }) {
+  requireExactKeys(input, ['schema', ...TASK_CARD_SEMANTIC_FIELDS], 'Task Card input');
+  if (input.schema !== TASK_CARD_SCHEMA) fail(`Task Card input.schema must be ${TASK_CARD_SCHEMA}`);
+  if (!allowOwnedDirty) requireCleanWorktree(root);
+  const taskId = requireString(input.taskId, 'Task Card input.taskId');
+  const workflowMode = requireString(input.workflowMode, 'Task Card input.workflowMode');
+  if (!['local', 'issue', 'pull_request'].includes(workflowMode)) fail('Task Card input.workflowMode is invalid');
+  const scope = requireString(input.scope, 'Task Card input.scope');
+  const ownedPaths = requireNonEmptyStringArray(input.ownedPaths, 'Task Card input.ownedPaths').map((owned) => validatePath(root, owned).path);
+  if (new Set(ownedPaths).size !== ownedPaths.length) fail('Task Card input.ownedPaths must be unique canonical repository paths');
+  const riskProfile = requireString(input.riskProfile, 'Task Card input.riskProfile');
+  const changeClass = requireString(input.changeClass, 'Task Card input.changeClass');
+  if (!Object.hasOwn(CHANGE_CLASS_MATRIX, changeClass)) fail('Task Card input.changeClass is unsupported');
+  if (!['workflow_docs_metadata', 'runtime_product_domain', 'durable_migration', 'concurrency_auth', 'publication_export_external'].includes(riskProfile)) fail('Task Card rejects unknown or unsupported riskProfile; prepare a classified formal TaskBrief instead');
+  const relevantSections = ['0', '19', '20'];
+  const scoped = riskProfile === 'workflow_docs_metadata' && changeClass === 'workflow_metadata' && classifyOwnedPaths(ownedPaths).scopedEligible;
+  if (scoped) validateRouteCoverage(root, riskProfile, relevantSections);
+  const registry = buildNavigationIndex(root).openRegistry;
+  const escalationMarkers = taskCardEscalation({ ownedPaths, riskProfile, changeClass });
+  const readPlanTemplate = scoped ? specReadPlan({ root, role: 'coding', riskProfile, relevantSections }) : null;
+  const receiptDraft = scoped ? {
+    schema: SPEC_READ_SCHEMA, taskId, role: 'coding', specSha256: currentSpecHash(root), profile: readPlanTemplate.profile, riskProfile,
+    relevantSections, requiredSections: readPlanTemplate.requiredSections, readSections: [], reason: 'Pending human completion after actual routed reading.',
+  } : null;
+  return {
+    schema: TASK_CARD_SCHEMA,
+    semantic: { taskId, workflowMode, scope, ownedPaths, riskProfile, changeClass },
+    derived: {
+      baseSha: currentHead(root), specSha256: currentSpecHash(root), relevantSections,
+      openDecisionCheck: { registrySha256: openRegistryHash(root), checkedIds: registry.map((entry) => entry.id) },
+      routeSelection: scoped ? { status: 'resolved', relevantSections } : { status: 'formal_boundary_required', relevantSections: null },
+      readPlanTemplate, receiptDraft,
+      escalationMarkers, formalTaskBriefRequiredAtBoundary: true,
+      earlyEscalationRequired: escalationMarkers.length > 0 || workflowMode !== 'local',
+      readingAssertion: 'none_generated',
+    },
+  };
+}
+export function prepareTaskCard({ root = repositoryRoot(), input }) {
+  return prepareTaskCardInternal({ root, input, allowOwnedDirty: false });
+}
+export function checkTaskCard({ root = repositoryRoot(), card }) {
+  requireExactKeys(card, ['schema', 'semantic', 'derived'], 'Task Card');
+  if (card.schema !== TASK_CARD_SCHEMA) fail(`Task Card.schema must be ${TASK_CARD_SCHEMA}`);
+  const expected = prepareTaskCardInternal({ root, input: { schema: TASK_CARD_SCHEMA, ...card.semantic }, allowOwnedDirty: true });
+  if (canonicalJson(card) !== canonicalJson(expected)) fail('Task Card derived evidence is stale or was not mechanically generated');
+  return expected;
 }
 export function receiptHash(receipt) { return sha256(Buffer.from(canonicalJson(receipt), 'utf8')); }
 export function fullReadSessionHash(session) { return sha256(Buffer.from(canonicalJson(session), 'utf8')); }
@@ -677,10 +737,10 @@ function prepareOwnedFilePath(root, baseSha, inputPath) {
  * The input intentionally carries every human/semantic decision; it is closed to avoid
  * silently treating a new decision as machine-owned metadata.
  */
-export function prepareTaskBrief({ root = repositoryRoot(), input, currentReuseContext }) {
+function prepareTaskBriefInternal({ root = repositoryRoot(), input, currentReuseContext, allowOwnedDirty }) {
   requireExactKeys(input, prepareInputKeys(), 'Task preparation input');
   if (input.schema !== TASK_PREPARE_INPUT_SCHEMA) fail(`Task preparation input.schema must be ${TASK_PREPARE_INPUT_SCHEMA}`);
-  requireCleanWorktree(root);
+  if (!allowOwnedDirty) requireCleanWorktree(root);
   const taskId = requireString(input.taskId, 'Task preparation input.taskId');
   const workflowMode = requireString(input.workflowMode, 'Task preparation input.workflowMode');
   if (!['local', 'issue', 'pull_request'].includes(workflowMode)) fail('Task preparation input.workflowMode is invalid');
@@ -691,6 +751,10 @@ export function prepareTaskBrief({ root = repositoryRoot(), input, currentReuseC
   const ownedPaths = requireNonEmptyStringArray(input.ownedPaths, 'Task preparation input.ownedPaths');
   const canonicalOwnedPaths = ownedPaths.map((item) => prepareOwnedFilePath(root, baseSha, item));
   if (new Set(canonicalOwnedPaths).size !== canonicalOwnedPaths.length) fail('Task preparation input.ownedPaths must be unique canonical repository paths');
+  if (allowOwnedDirty) {
+    const dirtyPaths = validationStatusPaths(root);
+    if (dirtyPaths.some((repoPath) => !canonicalOwnedPaths.includes(repoPath))) fail('Task Card upgrade rejects unowned dirty paths');
+  }
   const relevantSections = requireNonEmptyStringArray(input.relevantSections, 'Task preparation input.relevantSections');
   const knownSections = sectionIdsFromNavigation(root);
   if (!relevantSections.every((section) => knownSections.has(section)) || !relevantSections.includes('20')) fail('Task preparation input.relevantSections must name current v3 sections and include 20');
@@ -728,6 +792,24 @@ export function prepareTaskBrief({ root = repositoryRoot(), input, currentReuseC
   // Reuse the authoritative checker rather than duplicating its risk/path matrix.
   checkTaskBrief({ root, brief, currentReuseContext });
   return brief;
+}
+export function prepareTaskBrief({ root = repositoryRoot(), input, currentReuseContext }) {
+  return prepareTaskBriefInternal({ root, input, currentReuseContext, allowOwnedDirty: false });
+}
+export function upgradeTaskCard({ root = repositoryRoot(), card, boundaryInput, currentReuseContext }) {
+  if (!isPlainObject(card) || !isPlainObject(card.derived) || card.derived.baseSha !== currentHead(root)) fail('Task Card upgrade rejects a stale card base/head');
+  const checkedCard = checkTaskCard({ root, card });
+  requireExactKeys(boundaryInput, ['schema', 'relevantSections', 'openDecisionApplicability', 'scopeHasRuntimeSemantics', 'acceptanceCriteria', 'exclusions', 'riskDimensions', 'coordinatorSpecReadReceipt'], 'Task Card upgrade input');
+  if (boundaryInput.schema !== TASK_CARD_UPGRADE_INPUT_SCHEMA) fail(`Task Card upgrade input.schema must be ${TASK_CARD_UPGRADE_INPUT_SCHEMA}`);
+  const semantic = checkedCard.semantic;
+  const input = {
+    schema: TASK_PREPARE_INPUT_SCHEMA, taskId: semantic.taskId, workflowMode: semantic.workflowMode, baseSha: checkedCard.derived.baseSha,
+    scope: semantic.scope, ownedPaths: semantic.ownedPaths, riskProfile: semantic.riskProfile, changeClass: semantic.changeClass,
+    relevantSections: boundaryInput.relevantSections, openDecisionApplicability: boundaryInput.openDecisionApplicability,
+    scopeHasRuntimeSemantics: boundaryInput.scopeHasRuntimeSemantics, acceptanceCriteria: boundaryInput.acceptanceCriteria,
+    exclusions: boundaryInput.exclusions, riskDimensions: boundaryInput.riskDimensions, coordinatorSpecReadReceipt: boundaryInput.coordinatorSpecReadReceipt,
+  };
+  return prepareTaskBriefInternal({ root, input, currentReuseContext, allowOwnedDirty: true });
 }
 function validateOpenDecisionCheck(root, value, relevantSections) {
   requireExactKeys(value, ['registrySha256', 'checkedIds', 'applicableIds', 'noApplicableReason'], 'TaskBrief.openDecisionCheck');
@@ -931,12 +1013,12 @@ export function checkPolicy(root = repositoryRoot()) {
     pullRequest: { owner: 'agent-pr-loop', reviewer: 'agent-pr-loop' },
     reviewSeverity: { passBlocking: ['P0', 'P1', 'P2'], p3: 'informational' },
     scopedEligibility: { allowedPathClasses: ['AGENTS.md', '.codex/skills/tackle-agent-workflow/**', 'docs/(workflow|agent-governance)-*.md', '.github/*.md|yml|yaml', '.github/workflows/*.yml|yaml'], unknownForcesFull: true },
-    specReceipt: { schema: SPEC_READ_SCHEMA }, taskBrief: { allowedChangesEqualsOwnedPaths: true, closedSchema: true, conditionalNaApplicability: CONDITIONAL_NA_APPLICABILITY, conditionalNaCatalog: { legacyWorkspaceCi: 'legacy_workspace_ci', productRuntimeTests: 'product_runtime_tests' }, evidenceStages: { development: 'pre_dispatch_non_pr_final', localReviewHandoff: 'local_verdict', prFinal: 'pr_final_change_class' }, openDecisionCheck: true, phaseReceipts: { pre_dispatch: ['coordinator'], verdict: ['coordinator', 'coding', 'review'] }, receiptRiskAuthority: true, schema: TASK_BRIEF_SCHEMA, structuredFields: ['changeClass', 'allowedChanges', 'riskDimensions', 'validationPlan'] }, validationRunner: { closedCommandCatalog: true, formalVerdictEvidence: false, reusableWorktree: 'committed_clean_or_worktree_owned_manifest_only', reuseRequiresUnchanged: ['artifact', 'relevant_inputs', 'dependency_lock', 'command_contract', 'toolchain', 'path_and_execution_environment', 'installed_dependency_state'], schema: VALIDATION_SUMMARY_SCHEMA }, validationMatrix: { commandsAndScenariosSeparated: true, executionTiers: VALIDATION_EXECUTION_TIERS, legacyWorkspaceCommands: LEGACY_WORKSPACE_COMMANDS, mandatoryWorkflowCommands: MANDATORY_WORKFLOW_COMMANDS, prFinalCommandsNonWaivable: ['npm run typecheck', 'npm run lint', 'npm test'], triggeredCannotBeNa: true, triggeredScenariosNonWaivable: true, userVisiblePathClassifier: 'tsx_jsx_css_scss_sass_less_html_and_ui_roots', userVisibleScenario: 'unified_visual_review_pending_or_completed', workflowMetadataDynamicDiff: true },
+    specReceipt: { schema: SPEC_READ_SCHEMA }, taskCard: { dailySemanticFields: TASK_CARD_SEMANTIC_FIELDS, developmentEvidence: 'task_card_daily', formalBoundaryUpgrade: 'task_brief_only', schema: TASK_CARD_SCHEMA }, taskBrief: { allowedChangesEqualsOwnedPaths: true, closedSchema: true, conditionalNaApplicability: CONDITIONAL_NA_APPLICABILITY, conditionalNaCatalog: { legacyWorkspaceCi: 'legacy_workspace_ci', productRuntimeTests: 'product_runtime_tests' }, evidenceStages: { development: 'task_card_daily', localReviewHandoff: 'local_verdict', prFinal: 'pr_final_change_class' }, openDecisionCheck: true, phaseReceipts: { pre_dispatch: ['coordinator'], verdict: ['coordinator', 'coding', 'review'] }, receiptRiskAuthority: true, schema: TASK_BRIEF_SCHEMA, structuredFields: ['changeClass', 'allowedChanges', 'riskDimensions', 'validationPlan'] }, validationRunner: { closedCommandCatalog: true, formalVerdictEvidence: false, reusableWorktree: 'committed_clean_or_worktree_owned_manifest_only', reuseRequiresUnchanged: ['artifact', 'relevant_inputs', 'dependency_lock', 'command_contract', 'toolchain', 'path_and_execution_environment', 'installed_dependency_state'], schema: VALIDATION_SUMMARY_SCHEMA }, validationMatrix: { commandsAndScenariosSeparated: true, executionTiers: VALIDATION_EXECUTION_TIERS, legacyWorkspaceCommands: LEGACY_WORKSPACE_COMMANDS, mandatoryWorkflowCommands: MANDATORY_WORKFLOW_COMMANDS, prFinalCommandsNonWaivable: ['npm run typecheck', 'npm run lint', 'npm test'], triggeredCannotBeNa: true, triggeredScenariosNonWaivable: true, userVisiblePathClassifier: 'tsx_jsx_css_scss_sass_less_html_and_ui_roots', userVisibleScenario: 'unified_visual_review_pending_or_completed', workflowMetadataDynamicDiff: true },
     visual: { minimalSmokeCompletesReview: false, pendingMarker: '视觉与交互统一检查待执行' },
   };
   if (canonicalJson(policy) !== canonicalJson(expectedPolicy)) fail('Workflow policy drift: canonical AGENTS policy differs');
   const expectedSkillTaskBriefRef = { conditionalNaApplicability: policy.taskBrief.conditionalNaApplicability, conditionalNaCatalog: policy.taskBrief.conditionalNaCatalog, evidenceStages: policy.taskBrief.evidenceStages, executionTiers: policy.validationMatrix.executionTiers, legacyWorkspaceCommands: policy.validationMatrix.legacyWorkspaceCommands, triggeredCannotBeNa: policy.validationMatrix.triggeredCannotBeNa };
-  const skillTaskBrief = boundedSection(skill, '## Establish the TaskBrief', '## Spec receipts and worktree isolation');
+  const skillTaskBrief = boundedSection(skill, '## Start with a Task Card; create a TaskBrief at a formal boundary', '## Spec receipts and worktree isolation');
   const skillTaskBriefMatches = [...skillTaskBrief.content.matchAll(/<!-- workflow-contract-task-brief-ref\/v1\n([\s\S]*?)\n-->/g)];
   if (skillTaskBriefMatches.length !== 1) fail('Workflow policy drift: Skill TaskBrief policy reference is missing or ambiguous');
   let skillTaskBriefRef;
@@ -947,12 +1029,14 @@ export function checkPolicy(root = repositoryRoot()) {
   if (!projectSkills.content.includes(expectedProjectTackle) || projectSkills.content.includes('`$tackle-agent-workflow`编排不同的编码与只读审核Agent')) fail('Workflow policy drift: broad project Skill statement differs');
   const agentsRouting = boundedSection(agents, '## Tackle 工作流契约', '## 本机凭据与多 worktree');
   if (!agentsRouting.content.includes(policyMatches[0][0])) fail('Workflow policy drift: AGENTS policy block is outside routing section');
-  const expectedTaskBriefRole = '- `$tackle-agent-workflow`提供项目约束和 TaskBrief；仅本地路由使用其编码与独立本地审核。Issue 生命周期归`$agent-issue-loop`，PR 审核/CI/修复归`$agent-pr-loop`；已有 PR 直接使用后者。不得增加第二个独立审核者。';
+  const expectedTaskBriefRole = '- `$tackle-agent-workflow`日常开发先用 Task Card；仅本地路由使用其编码与独立本地审核。Issue 生命周期归`$agent-issue-loop`，PR 审核/CI/修复归`$agent-pr-loop`；已有 PR 直接使用后者。不得增加第二个独立审核者。';
   if (!agentsRouting.content.includes(expectedTaskBriefRole)) fail('Workflow policy drift: AGENTS TaskBrief role differs');
+  if (!agentsRouting.content.includes('formalTaskBriefRequiredAtBoundary: true') || !agentsRouting.content.includes('earlyEscalationRequired')) fail('Workflow policy drift: AGENTS Task Card boundary state differs');
+  if (!skillTaskBrief.content.includes('formalTaskBriefRequiredAtBoundary: true') || !skillTaskBrief.content.includes('earlyEscalationRequired')) fail('Workflow policy drift: Skill Task Card boundary state differs');
   const expectedRoute = expectedTaskBriefRole;
   const routeLines = agentsRouting.content.split(/\r?\n/).filter((line) => line.includes('Issue 生命周期') || /Issue\s*路由/.test(line));
   if (routeLines.length !== 1 || routeLines[0] !== expectedRoute) fail('Workflow policy drift: AGENTS route statement differs');
-  const skillRouting = boundedSection(skill, '## Route before dispatch', '## Establish the TaskBrief');
+  const skillRouting = boundedSection(skill, '## Route before dispatch', '## Start with a Task Card; create a TaskBrief at a formal boundary');
   const expectedSkillRoutes = [
     '- **Local implementation, no Issue or PR:** this Skill owns one coding agent and one independent local reviewer.',
     '- **Issue delivery:** `$agent-issue-loop` owns Issue, branch, PR, closure, and handoff. Supply it this Skill\'s TaskBrief; do not start a local independent reviewer. Once a PR exists, `$agent-pr-loop` exclusively owns review, CI, fixes, and merge gates.',
@@ -961,7 +1045,7 @@ export function checkPolicy(root = repositoryRoot()) {
   for (const route of expectedSkillRoutes) if (!skillRouting.content.includes(route)) fail('Workflow policy drift: Skill route statement differs');
   const skillRouteRemainder = expectedSkillRoutes.reduce((remaining, route) => remaining.replace(route, ''), skillRouting.content);
   if (!skill.includes('<!-- workflow-contract-policy-ref: AGENTS.md/workflow-contract-policy/v2 -->')) fail('Workflow policy drift: Skill does not reference AGENTS policy');
-  const expectedYaml = 'interface:\n  display_name: "Tackle Agent Workflow"\n  short_description: "Prepare scoped work and locally review implementation"\n  default_prompt: "Use $tackle-agent-workflow to prepare the TaskBrief, choose the correct local, Issue, or PR route, and run only the applicable workflow. Preserve the pending unified visual-review marker unless full visual work is explicitly scoped."';
+  const expectedYaml = 'interface:\n  display_name: "Tackle Agent Workflow"\n  short_description: "Start with a lightweight Task Card and escalate formal reviews"\n  default_prompt: "Use $tackle-agent-workflow to start daily work with a six-field Task Card, generate mechanical route/OPEN/read-plan evidence, and prepare a full TaskBrief only at a formal review or PR boundary. Preserve the pending unified visual-review marker unless full visual work is explicitly scoped."';
   if (yaml.trimEnd() !== expectedYaml) fail('Workflow policy drift: openai.yaml is not aligned');
   const visual = boundedSection(template, '## Visual evidence', '## Risks, recovery, and rollback');
   const unified = visual.content.match(/^\| Unified visual and interaction review \| (.+) \|$/m)?.[1];
@@ -980,7 +1064,7 @@ export function checkPolicy(root = repositoryRoot()) {
   return true;
 }
 function usage() {
-  return `Usage:\n  node ${SCRIPT_RELATIVE} --generate-index\n  node ${SCRIPT_RELATIVE} --check-index\n  node ${SCRIPT_RELATIVE} --check-policy\n  node ${SCRIPT_RELATIVE} --prepare-task-brief --input <semantic-input.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --promote-task-brief --brief <pre-dispatch-task-brief.json> --coding-receipt <receipt.json> --review-receipt <receipt.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --check-owned-whitespace --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --spec-read-plan --role <coordinator|coding|review> --risk <risk-profile> [--relevant <v3-section> ...]\n  node ${SCRIPT_RELATIVE} --check-read-receipt --receipt <receipt.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --check-full-read-session --session <session.json>\n  node ${SCRIPT_RELATIVE} --check-task-brief --brief <task-brief.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --owned-baseline --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --run-validation --brief <verdict-task-brief.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --check-verdict --verdict <verdict.json> --brief <task-brief.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --patch-hash --base <sha> --owned <repo-relative-path> [--owned <path> ...]`;
+  return `Usage:\n  node ${SCRIPT_RELATIVE} --generate-index\n  node ${SCRIPT_RELATIVE} --check-index\n  node ${SCRIPT_RELATIVE} --check-policy\n  node ${SCRIPT_RELATIVE} --prepare-task-card --input <six-field-card.json>\n  node ${SCRIPT_RELATIVE} --check-task-card --card <task-card.json>\n  node ${SCRIPT_RELATIVE} --upgrade-task-card --card <task-card.json> --boundary-input <formal-boundary.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --prepare-task-brief --input <semantic-input.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --promote-task-brief --brief <pre-dispatch-task-brief.json> --coding-receipt <receipt.json> --review-receipt <receipt.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --check-owned-whitespace --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --spec-read-plan --role <coordinator|coding|review> --risk <risk-profile> [--relevant <v3-section> ...]\n  node ${SCRIPT_RELATIVE} --check-read-receipt --receipt <receipt.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --check-full-read-session --session <session.json>\n  node ${SCRIPT_RELATIVE} --check-task-brief --brief <task-brief.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --owned-baseline --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --run-validation --brief <verdict-task-brief.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --check-verdict --verdict <verdict.json> --brief <task-brief.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --patch-hash --base <sha> --owned <repo-relative-path> [--owned <path> ...]`;
 }
 function parseActionOptions(argv, action, allowed, required = []) {
   if (argv[0] !== action) fail(usage());
@@ -996,13 +1080,27 @@ function parseActionOptions(argv, action, allowed, required = []) {
 }
 export function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
   const action = argv[0];
-  if (!['--generate-index', '--check-index', '--check-policy', '--prepare-task-brief', '--promote-task-brief', '--check-owned-whitespace', '--spec-read-plan', '--check-read-receipt', '--check-full-read-session', '--check-task-brief', '--owned-baseline', '--run-validation', '--check-verdict', '--patch-hash'].includes(action)) fail(usage());
+  if (!['--generate-index', '--check-index', '--check-policy', '--prepare-task-card', '--check-task-card', '--upgrade-task-card', '--prepare-task-brief', '--promote-task-brief', '--check-owned-whitespace', '--spec-read-plan', '--check-read-receipt', '--check-full-read-session', '--check-task-brief', '--owned-baseline', '--run-validation', '--check-verdict', '--patch-hash'].includes(action)) fail(usage());
   const root = repositoryRoot(cwd);
   if (action === '--generate-index' || action === '--check-index' || action === '--check-policy') {
     if (argv.length !== 1) fail(usage());
     if (action === '--generate-index') { writeNavigationIndex(root); return 'Generated navigation index'; }
     if (action === '--check-index') { checkNavigationIndex(root); return 'Navigation index is current'; }
     checkPolicy(root); return 'Workflow policy is consistent';
+  }
+  if (action === '--prepare-task-card' || action === '--check-task-card') {
+    const flag = action === '--prepare-task-card' ? '--input' : '--card';
+    const values = parseActionOptions(argv, action, { [flag]: false }, [flag]);
+    const file = path.resolve(cwd, values[flag][0]);
+    const result = action === '--prepare-task-card'
+      ? prepareTaskCard({ root, input: readJsonFile(file, 'Task Card input') })
+      : checkTaskCard({ root, card: readJsonFile(file, 'Task Card') });
+    return JSON.stringify(result, null, 2);
+  }
+  if (action === '--upgrade-task-card') {
+    const values = parseActionOptions(argv, action, { '--card': false, '--boundary-input': false, '--current-agent-identity': false, '--current-context-session-id': false, '--current-context-state': false }, ['--card', '--boundary-input']);
+    const currentReuseContext = values['--current-agent-identity'].length === 0 && values['--current-context-session-id'].length === 0 && values['--current-context-state'].length === 0 ? undefined : { currentAgentIdentity: values['--current-agent-identity'][0], currentContextSessionId: values['--current-context-session-id'][0], currentContextState: values['--current-context-state'][0] };
+    return JSON.stringify(upgradeTaskCard({ root, card: readJsonFile(path.resolve(cwd, values['--card'][0]), 'Task Card'), boundaryInput: readJsonFile(path.resolve(cwd, values['--boundary-input'][0]), 'Task Card upgrade input'), currentReuseContext }), null, 2);
   }
   if (action === '--prepare-task-brief') {
     const values = parseActionOptions(argv, action, { '--input': false, '--current-agent-identity': false, '--current-context-session-id': false, '--current-context-state': false }, ['--input']);

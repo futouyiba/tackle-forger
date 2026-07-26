@@ -1,5 +1,10 @@
 # Agent pull request merge gate
 
+This document is the sole complete human-readable authority for Tackle Forger
+pull-request merge eligibility and the Agent review-signal format. Other
+repository instructions and Skills route work here rather than restating these
+rules.
+
 Tackle Forger currently does not use a GitHub Ruleset or branch protection as
 the merge gate. Issue #27 deliberately chose an Agent/managed-flow gate. Do not
 add required checks, status contexts, or a duplicate workflow for this policy.
@@ -13,8 +18,10 @@ Use separate decisions for entering formal review and entering the merge path:
   for a reviewer to decide. At that point, remove Draft and move the linked
   Issue to `In review`.
 - A pull request is **merge-ready** only when the live checker accepts its
-  current head, the repository-approved review signal is current, review
-  findings and threads are settled, and dependencies and the base are current.
+  current head, review findings and threads are settled, and dependencies and
+  the base are current. A current review signal is additionally required only
+  when the workflow machine policy, repository or platform policy, or the
+  high-risk merge gate requires one.
 
 ## Validation cadence
 
@@ -69,15 +76,25 @@ implementer solely to change Draft or Issue status.
 
 This repository has one accountable owner coordinating several Agents. A
 current-head `COMMENTED` review, a Bot review, or a review submitted through the
-owner's GitHub identity may therefore serve as the traceable review signal. A
-`COMMENTED` review counts only when its body contains this exact standalone
-line:
+owner's GitHub identity may therefore serve as the traceable review signal.
+When a review signal is required, the canonical integrated Agent review uses
+this complete six-field envelope, with the exact reviewed head and base:
 
 ```text
+Agent-Review-Version: v1
+Reviewer-Role: independent-review-agent
+Head-SHA: <full SHA>
+Base-SHA: <full SHA>
+Verdict: PASS
 Agent-Review: PASS
 ```
 
-An arbitrary comment or a review that only reports findings does not count.
+This envelope moves the existing review-signal contract here without changing
+the live checker's behavior: for a `COMMENTED` review, the checker mechanically
+requires the exact standalone `Agent-Review: PASS` line and binds the review to
+the current head through GitHub evidence; the remaining fields preserve the
+coordinator's exact-head/base audit context. An arbitrary comment or a review
+that only reports findings does not count.
 Unresolved threads and an active `CHANGES_REQUESTED` still block, and the
 supervising Agent must inspect the review contents and acceptance evidence
 before recording the marker. Never describe an Agent review as a human GitHub

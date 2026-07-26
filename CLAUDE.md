@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+<!-- workflow-contract-policy-ref/v2: .codex/skills/tackle-agent-workflow/references/workflow-contract-policy.v2.json -->
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Read before changing code
@@ -162,4 +164,7 @@ New domain behavior must cover normal, boundary, conflict, recovery/version-free
 
 ## Agent 工作模式
 
-实现、修改、调查由主 agent 直接做（直接 Edit/Write、跑 typecheck/lint/test、commit、push），或由coordinator按任务风险、范围、可用能力与资源安排实施容量。正式TaskBrief边界选择只决定审核强度的`reviewTier: fast | standard | strict`，`riskProfile`与`riskDimensions`仍是风险事实权威；`unknown_high_risk`，或持久化数据、历史快照、并发、授权、外部副作用任一风险维度为真时必须选择`strict`，其他情况由coordinator动态选择。`fast`不要求独立Reviewer或review receipt；`standard`只在最终稳定PR head做一次独立审核，禁止本地先审一次、PR再审一次；`strict`允许coordinator按风险安排提前审核、多个正交范围与必要复审。需要或选择审核时，审核始终只读并基于证据；coordinator按任务风险、范围、可用能力与资源决定审核者数量、专长、模型、推理强度与串并行安排，不写死人数或模型，并在拉起时输出每个审查范围自包含的「审核清单」（仓库、PR 号、head 完整 SHA、base、改动摘要、重点核实项、PASS/发现格式），以便粘贴到常驻审核 agent 窗口。稳定head push并回读后立即并行启动GitHub PR CI与tier要求的独立审核；coordinator等待两边结束后一次性汇总发现并批量修复。每个已分配范围都必须覆盖当前精确head/base；所有发现由coordinator处置后才可整合唯一最终审查信号或本地verdict。存在审核范围时至多一个review receipt，它只证明整合覆盖记录，不证明Agent身份。配套 skill 见 `.claude/skills/agent-pr-loop/SKILL.md`。
+Task Card、TaskBrief、receipt、reviewTier、风险下限、验证矩阵和审核边界统一遵循
+`.codex/skills/tackle-agent-workflow/references/workflow-contract-policy.v2.json`；本文件不维护平行规则。Claude 的PR协调、审核与修复步骤见`.claude/skills/agent-pr-loop/SKILL.md`。
+
+Pull Request合并资格、CI provenance、review signal格式和workflow治理例外统一遵循`.github/merge-gates.md`。checker证据不自行授予合并、部署或发布权限。

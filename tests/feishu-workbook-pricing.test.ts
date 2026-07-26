@@ -325,7 +325,7 @@ test("07/08/02 同 revision 导入查表与金额事实，但不猜测三项执�
   assert.equal(draft.scoreInterpolation?.kind, "quality_range_linear");
   assert.equal(draft.moneyPolicy?.unit, "金币");
   assert.equal(draft.partsToWholeRatios.length, 3);
-  assert.equal(draft.repairCoefficients[0]?.value.source.cell, "U3");
+  assert.equal(draft.repairCoefficients[0]?.value.source.cell, "T3");
   assert.equal(draft.issues.some((issue) => issue.code === "PRICING_INTERPOLATION_MISSING"), false);
   assert.equal(draft.issues.some((issue) => issue.code === "PARTS_TO_WHOLE_RATIO_MISSING"), false);
   assert.ok(draft.issues.some((issue) => issue.code === "PRICING_EXECUTION_SEMANTICS_MISSING"));

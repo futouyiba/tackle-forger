@@ -337,17 +337,29 @@ export function pricingDraftFromRanges(input: {
     : (() => { const leg: PricingLookupEntry[] = []; for (let i = 13; i < pricingValues.length; i++) { const r = pricingValues[i] ?? []; const b = text(r[9]); for (const [off, pid] of [[14, "rod"], [15, "reel"], [16, "line"]] as const) { const v = Number(r[off]); if (b && Number.isFinite(v)) leg.push({ pricingWeightBandId: `weight_band:${b}`, partId: pid, value: { value: v, status: "SOURCE", source: { sheetId: "31RxeB", cell: `${String.fromCharCode(66 + off)}${i + 10}`, rowKey: String(i + 10) } } }); } } return leg; })();
   const repairCoefficients: PricingLookupEntry[] = [];
   const purchaseCoefficients: PricingLookupEntry[] = [];
+  const typeSheetOrder = ["10TyFp", "11CfXW", "12VetE"];
+  let repairCol = 19, purchaseCol = 20, currentTypeSheet = typeSheetOrder[0]!;
+  let sheetIndex = 0;
   for (let index = 1; index < (input.typeValues ?? []).length; index += 1) {
     const row = input.typeValues?.[index] ?? [];
     const typeId = text(row[0]);
     const entityType = text(row[1]);
+    if (typeId.includes("勿改") || typeId.includes("ID")) {
+      const hi = row.findIndex((v) => text(v).includes("维修系数"));
+      const pi = row.findIndex((v) => text(v).includes("购买系数"));
+      if (hi >= 0) repairCol = hi;
+      if (pi >= 0) purchaseCol = pi;
+      if (entityType === "实体类型") { sheetIndex++; currentTypeSheet = typeSheetOrder[Math.min(sheetIndex, 2)]!; }
+      continue;
+    }
     const partId = entityType === "RodType" ? "rod" : entityType === "ReelType" ? "reel" : entityType === "LineType" ? "line" : "";
     if (!typeId || !partId) continue;
     const sheetRow = index + 2;
-    const repair = Number(row[19]);
-    const purchase = Number(row[20]);
-    if (Number.isFinite(repair)) repairCoefficients.push({ partId, typeId, value: { value: repair, status: "SOURCE", source: { sheetId: "10TyFp", cell: `U${sheetRow}`, rowKey: String(sheetRow) } } });
-    if (Number.isFinite(purchase)) purchaseCoefficients.push({ partId, typeId, value: { value: purchase, status: "SOURCE", source: { sheetId: "10TyFp", cell: `V${sheetRow}`, rowKey: String(sheetRow) } } });
+    const repair = Number(row[repairCol]);
+    const purchase = Number(row[purchaseCol]);
+    const colName = (idx: number) => String.fromCharCode(65 + idx);
+    if (Number.isFinite(repair)) repairCoefficients.push({ partId, typeId, value: { value: repair, status: "SOURCE", source: { sheetId: currentTypeSheet, cell: `${colName(repairCol)}${sheetRow}`, rowKey: String(sheetRow) } } });
+    if (Number.isFinite(purchase)) purchaseCoefficients.push({ partId, typeId, value: { value: purchase, status: "SOURCE", source: { sheetId: currentTypeSheet, cell: `${colName(purchaseCol)}${sheetRow}`, rowKey: String(sheetRow) } } });
   }
   const wq8w = input.pricingParamsValues ? parsePricingWq8wParams(input.pricingParamsValues) : { get: () => "", has: () => false, keys: () => [][Symbol.iterator]() };
   const hasWq8wParams = input.pricingParamsValues && input.pricingParamsValues.length > 1;

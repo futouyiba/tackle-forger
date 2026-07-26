@@ -6,7 +6,16 @@ import {
   BROWSER_FIELD_LABELS,
   filterMappingForPart,
   nonFormalRef,
+  OBJECT_KINDS,
 } from "@/lib/config-export-browser-mapping";
+
+/** 引用字段 → 被引用对象种类（非当前行种类） */
+const REF_KIND: Record<string, string> = {
+  non_formal_ref: "", // 由当前行 rowMappingId 决定
+  tackle_ref: "tackle",
+  item_ref: "item",
+  goods_ref: "goods_basic",
+};
 import type { MaterializedConfigRow } from "@/lib/config-export-mapping";
 import { materializeConfigExport } from "@/lib/config-export-mapping";
 import {
@@ -211,16 +220,16 @@ export async function POST(request: NextRequest) {
           { status: 422 },
         );
       }
-      // 将 modelId 转为 NON_FORMAL 符号引用
+      // 将 modelId 转为 NON_FORMAL 符号引用（引用字段使用目标种类）
       const nonFormalRows = allRows.map((row) => ({
         ...row,
         values: Object.fromEntries(
-          Object.entries(row.values).map(([key, value]) => [
-            key,
-            key === "non_formal_ref" || key === "tackle_ref" || key === "item_ref" || key === "goods_ref"
-              ? nonFormalRef(String(value), row.rowMappingId)
-              : value,
-          ]),
+          Object.entries(row.values).map(([key, value]) => {
+            const refKind = REF_KIND[key];
+            if (refKind === undefined) return [key, value];
+            const kind = refKind || OBJECT_KINDS[row.rowMappingId] || row.rowMappingId;
+            return [key, nonFormalRef(String(value), kind)];
+          }),
         ),
       }));
       const xlsxBytes = generatePreviewXlsx({

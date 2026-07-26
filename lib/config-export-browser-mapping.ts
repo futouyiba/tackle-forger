@@ -267,7 +267,7 @@ export const BROWSER_FIELD_LABELS: Record<string, string> = {
   enabled: "上架",
 };
 
-const OBJECT_KINDS: Record<string, string> = {
+export const OBJECT_KINDS: Record<string, string> = {
   rod: "tackle",
   reel: "tackle",
   line: "tackle",

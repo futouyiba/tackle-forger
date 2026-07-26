@@ -243,6 +243,7 @@ export function BrowserConfigExportWorkbench({
           <div><span className="eyebrow">SOURCE</span><h3>选择冻结 Snapshot</h3></div>
           <PackageCheck size={18} />
         </header>
+        {totalCount > 0 ? (
         <div className="model-selection-toolbar">
           <div className="toolbar-actions">
             <button type="button" className="button button-default button-sm" disabled={allSelected} onClick={selectAll}>全选</button>
@@ -251,6 +252,7 @@ export function BrowserConfigExportWorkbench({
           </div>
           <span className="selection-count">已选 {selectionCount} / 共 {totalCount}</span>
         </div>
+        ) : null}
         {totalCount === 0 ? (
           <div className="config-export-empty">
             <span>

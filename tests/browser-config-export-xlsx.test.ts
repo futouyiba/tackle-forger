@@ -10,6 +10,7 @@ import {
   BROWSER_FIELD_LABELS,
   filterMappingForPart,
   nonFormalRef,
+  OBJECT_KINDS,
 } from "../lib/config-export-browser-mapping";
 import {
   materializeConfigExport,
@@ -76,16 +77,19 @@ test("generatePreviewXlsx 生成 NON_FORMAL XLSX，身份列为符号引用", ()
     mapping: partMapping,
     compilerTables: BROWSER_COMPILER_TABLES,
   });
-  // 转换为 NON_FORMAL 引用
+  // 按字段确定引用目标种类（与 API route 一致）
+  const REF_KIND: Record<string, string> = {
+    non_formal_ref: "", tackle_ref: "tackle", item_ref: "item", goods_ref: "goods_basic",
+  };
   const nonFormalRows = materialized.rows.map((row) => ({
     ...row,
     values: Object.fromEntries(
-      Object.entries(row.values).map(([key, value]) => [
-        key,
-        key === "non_formal_ref" || key === "tackle_ref" || key === "item_ref" || key === "goods_ref"
-          ? nonFormalRef(String(value), row.rowMappingId)
-          : value,
-      ]),
+      Object.entries(row.values).map(([key, value]) => {
+        const refKind = REF_KIND[key];
+        if (refKind === undefined) return [key, value];
+        const kind = refKind || OBJECT_KINDS[row.rowMappingId] || row.rowMappingId;
+        return [key, nonFormalRef(String(value), kind)];
+      }),
     ),
   }));
   const bytes = generatePreviewXlsx({
@@ -104,6 +108,27 @@ test("generatePreviewXlsx 生成 NON_FORMAL XLSX，身份列为符号引用", ()
   const firstRef = String(rods.A5?.v ?? "");
   assert.ok(firstRef.startsWith("NON_FORMAL:"), `身份列应为 NON_FORMAL 引用，实际: ${firstRef}`);
   assert.ok(firstRef.endsWith(":tackle"));
+  // 验证关联引用链：Item→Tackle, GoodsBasic→Item, StoreBuy→GoodsBasic
+  const itemSheet = workbook.Sheets["item.xlsx>Item"] ?? workbook.Sheets.Item;
+  const goodsSheet = workbook.Sheets["store.xlsx>GoodsBasic"] ?? workbook.Sheets.GoodsBasic;
+  const storeSheet = workbook.Sheets["store.xlsx>StoreBuy"] ?? workbook.Sheets.StoreBuy;
+  assert.ok(itemSheet, "应有 Item sheet");
+  assert.ok(goodsSheet, "应有 GoodsBasic sheet");
+  assert.ok(storeSheet, "应有 StoreBuy sheet");
+  const tackleRef = String(rods.A5?.v ?? "");
+  const itemNonFormal = String(itemSheet.A5?.v ?? "");
+  const itemTackleRef = String(itemSheet.B5?.v ?? ""); // tackle_ref 在 B 列
+  const goodsNonFormal = String(goodsSheet.A5?.v ?? "");
+  const goodsItemRef = String(goodsSheet.B5?.v ?? ""); // item_ref 在 B 列
+  const storeNonFormal = String(storeSheet.A5?.v ?? "");
+  const storeGoodsRef = String(storeSheet.B5?.v ?? ""); // goods_ref 在 B 列
+  assert.ok(tackleRef.endsWith(":tackle"));
+  assert.ok(itemNonFormal.endsWith(":item"), `Item non_formal_ref: ${itemNonFormal}`);
+  assert.ok(itemTackleRef.endsWith(":tackle"), `Item tackle_ref 应指向 tackle，实际: ${itemTackleRef}`);
+  assert.ok(goodsNonFormal.endsWith(":goods_basic"), `GoodsBasic non_formal_ref: ${goodsNonFormal}`);
+  assert.ok(goodsItemRef.endsWith(":item"), `GoodsBasic item_ref 应指向 item，实际: ${goodsItemRef}`);
+  assert.ok(storeNonFormal.endsWith(":store_buy"), `StoreBuy non_formal_ref: ${storeNonFormal}`);
+  assert.ok(storeGoodsRef.endsWith(":goods_basic"), `StoreBuy goods_ref 应指向 goods_basic，实际: ${storeGoodsRef}`);
 });
 
 test("中文标签映射对已知字段均有值", () => {

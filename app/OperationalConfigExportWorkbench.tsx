@@ -150,17 +150,16 @@ export function OperationalConfigExportWorkbench({
   const [snapshotId, setSnapshotId] = useState(state.configurationSnapshots[0]?.id ?? "");
   const [profileIds, setProfileIds] = useState<string[]>([]);
 
-  // ── localStorage 持久化的连接配置 ──
+  // ── localStorage 持久化的连接配置（仅 baseUrl，token 仍限当前页面会话）──
   const LS_BASE = "tackle-forger:companion:baseUrl";
-  const LS_TOKEN = "tackle-forger:companion:token";
   const [baseUrl, setBaseUrl] = useState(() => {
-    if (typeof window !== "undefined") return localStorage.getItem(LS_BASE) ?? "http://127.0.0.1:47831";
+    if (typeof window !== "undefined") {
+      try { return localStorage.getItem(LS_BASE) ?? "http://127.0.0.1:47831"; }
+      catch { return "http://127.0.0.1:47831"; }
+    }
     return "http://127.0.0.1:47831";
   });
-  const [pairingToken, setPairingToken] = useState(() => {
-    if (typeof window !== "undefined") return localStorage.getItem(LS_TOKEN) ?? "";
-    return "";
-  });
+  const [pairingToken, setPairingToken] = useState("");
   const [connection, setConnection] = useState<ConnectionState>("idle");
   const [health, setHealth] = useState<CompanionHealth>();
   const [preview, setPreview] = useState<PreviewResponse>();
@@ -229,8 +228,7 @@ export function OperationalConfigExportWorkbench({
         result.profiles.some((profile) => profile.profileId === id && profile.enabled),
       ));
       setConnection("ready");
-      localStorage.setItem(LS_BASE, baseUrl);
-      localStorage.setItem(LS_TOKEN, pairingToken);
+      try { localStorage.setItem(LS_BASE, baseUrl); } catch { /* 存储不可用不影响连接 */ }
       notify("本地助手已连接；目录权限与映射版本以执行端登记为准。");
     } catch (caught) {
       setConnection("error");
@@ -245,9 +243,11 @@ export function OperationalConfigExportWorkbench({
     setError("");
   };
 
-  // 有已保存 token 时自动连接
+  // 有已保存 baseUrl 时自动尝试连接（defer 以符合 lint 规则）
   useEffect(() => {
-    if (pairingToken && connection === "idle") connect();
+    if (!pairingToken || connection !== "idle") return;
+    const timer = setTimeout(() => { connect(); }, 0);
+    return () => clearTimeout(timer);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const generatePreview = async () => {

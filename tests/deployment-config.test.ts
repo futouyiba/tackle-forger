@@ -19,14 +19,23 @@ test("构建路径只保留 Node/Vinext，不再声明云端部署适配", async
   }
 });
 
-test("R730 模板精确监听内网端口 0.0.0.0:13000，并以认证边界就绪或回滚收口", async () => {
-  const [service, nginx, deployScript] = await Promise.all([
+test("R730 模板精确监听所有 IPv4 接口，并将直连与 Nginx 登录来源设为互斥模式", async () => {
+  const [service, nginx, deployScript, acceptance, handbook] = await Promise.all([
     readFile(new URL("../deploy/tackle-forger.service", import.meta.url), "utf8"),
     readFile(new URL("../deploy/nginx-tackle-forger.conf.example", import.meta.url), "utf8"),
     readFile(new URL("../scripts/deploy-r730.sh", import.meta.url), "utf8"),
+    readFile(new URL("../docs/deployment/phase-one-acceptance.md", import.meta.url), "utf8"),
+    readFile(new URL("../docs/deployment/r730-production.md", import.meta.url), "utf8"),
   ]);
   assert.match(service, /--hostname 0\.0\.0\.0 --port 13000/);
   assert.match(nginx, /proxy_pass http:\/\/127\.0\.0\.1:13000/);
+  for (const source of [acceptance, handbook]) {
+    assert.match(source, /(?:全部|所有) IPv4 接口/);
+    assert.match(source, /实际可达范围.*网卡、路由、防火墙和 NAT/);
+    assert.match(source, /http:\/\/<R730_RFC1918_IP>:13000/);
+    assert.match(source, /FEISHU_ALLOW_INSECURE_HTTP=true/);
+    assert.match(source, /不得.*同时.*登录来源/);
+  }
   assert.match(deployScript, /R730_PORT:=13000/);
   assert.match(deployScript, /api\/auth\/session/);
   assert.match(deployScript, /status" = "401"/);

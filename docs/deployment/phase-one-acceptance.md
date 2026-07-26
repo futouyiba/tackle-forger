@@ -90,7 +90,9 @@ sudo -u tackleforger env PATH=/usr/local/bin:/usr/bin:/bin npm run acceptance:ph
 - 环境启用 AI、revision 裁剪或可信代理身份模式；
 - systemd 未精确监听 `0.0.0.0:13000`、未将写权限限制为 `/opt/tackle-forger/data`，或 Nginx 未清除客户端身份头。
 
-`0.0.0.0:13000` 只用于可信公司内网中的直接访问便利；它不削弱飞书租户登录、会话、服务端 Capability 校验或 Nginx 的客户端身份头清除。不得通过公网 IP、公共 DNS、端口映射或防火墙放行把该端口暴露到公共互联网。Nginx 上游仍可保持 `127.0.0.1:13000`，因为通配监听同时接受本机回环连接。
+`0.0.0.0:13000` 表示应用绑定主机的**全部 IPv4 接口**，源码和本验收脚本不能据此证明“仅内网可达”或“不会公网暴露”；实际可达范围取决于现场网卡、路由、防火墙和 NAT。它不削弱飞书租户登录、安全会话或服务端 Capability 校验。本次不新增网络设备、防火墙或公网暴露治理门禁。Nginx 上游仍可保持 `127.0.0.1:13000`，因为通配监听同时接受本机回环连接。
+
+一期选择的 canonical browser origin 是直接访问模式：`http://<R730_RFC1918_IP>:13000`。此模式必须令 `FEISHU_ALLOW_INSECURE_HTTP=true`，并在飞书开放平台将 `FEISHU_REDIRECT_URI` 逐字登记为 `http://<R730_RFC1918_IP>:13000/api/auth/feishu/callback`。Nginx HTTPS 是可选替代模式，不得与直连模式同时作为可登录来源：若启用 Nginx，则其 `https://<内网域名>` 成为唯一 canonical browser origin，`FEISHU_REDIRECT_URI` 必须改为该 HTTPS origin 的同一路径，直连 origin 不得继续用于登录。
 
 依赖满足后，在单独评审的提交中更新 `deploy/phase-one-dependencies.json`：记录固定
 Issue/PR 映射、GitHub reviewed head、唯一 merge commit、review threads 已清零、必需
@@ -115,14 +117,19 @@ BLOCKED；清单中的布尔值只是辅助证据，
 
 ### 3.2 未登录 smoke（会创建短期 OAuth pending 状态）
 
-部署完成且 Nginx/证书已生效后运行：
+按当前选择的 browser origin 完成部署后运行。当前一期直连模式使用 RFC 1918 数值 IPv4：
 
 ```bash
 sudo -u tackleforger env PATH=/usr/local/bin:/usr/bin:/bin npm run acceptance:phase-one -- public-smoke \
-  --base-url https://tackle-forger.internal.example \
+  --base-url http://<R730_RFC1918_IP>:13000 \
+  --allow-private-http \
   --env-file /opt/tackle-forger/.env.local \
   --output /secure/evidence/phase-one-public-smoke.json
 ```
+
+若明确改选 Nginx HTTPS 替代模式，才将 `--base-url` 改为该 HTTPS origin，并移除
+`--allow-private-http`；同时必须把飞书登记回调改为同一 HTTPS origin。两种模式不得混用或
+同时作为登录来源。
 
 检查项包括：
 
@@ -130,18 +137,19 @@ sudo -u tackleforger env PATH=/usr/local/bin:/usr/bin:/bin npm run acceptance:ph
 - `/api/auth/session` 未登录返回 `401 / AUTH-SESSION-001`；
 - 连续两次登录起点都返回配置的飞书授权来源和精确登记回调，state 非空且互不相同，
   每次响应只含一个对应 pending Cookie，值与各自 state 一致，并精确含
-  `Path=/ + HttpOnly + SameSite=Lax + Secure + Max-Age=600`；
+  `Path=/ + HttpOnly + SameSite=Lax + Max-Age=600`；直接 RFC 1918 HTTP 模式不含
+  `Secure`，Nginx HTTPS 替代模式必须含 `Secure`；
 - `/api/state`、`/api/revisions`、`/api/feishu-workbook` 未登录均返回 401；
 - 响应未回显环境文件中的密钥值。
 
 若会话端点返回 `503 / AUTH-CONFIG-001`，结果是 `BLOCKED`，表示真实 OAuth 尚未配置；
 不得记录为“匿名边界通过”后继续验收。
 
-只有在已批准的 RFC 1918 数值 IPv4 降级中才能追加 `--allow-private-http`。该模式必须与
-`FEISHU_ALLOW_INSECURE_HTTP=true` 和飞书登记回调 origin 一致；域名、localhost、回环地址、
+当前 direct-origin 模式必须追加 `--allow-private-http`。该模式必须与
+`FEISHU_ALLOW_INSECURE_HTTP=true` 和飞书登记回调 origin 精确一致；域名、localhost、回环地址、
 IPv6 ULA 与公网 HTTP 永远拒绝。此生产验收脚本不接受 v3 §25.2 的开发专用`127.0.0.1`例外；
 该例外仅能在`NODE_ENV=development`的本机浏览器验收中使用，不能作为部署或一期生产验收证据。
-降级时还需明确记录 File System Access API 等安全上下文能力不可用。
+direct-origin HTTP 模式还需明确记录 File System Access API 等安全上下文能力不可用。
 
 ### 3.3 已登录只读核对
 
@@ -151,11 +159,15 @@ IPv6 ULA 与公网 HTTP 永远拒绝。此生产验收脚本不接受 v3 §25.2 
 
 ```bash
 sudo -u tackleforger env PATH=/usr/local/bin:/usr/bin:/bin npm run acceptance:phase-one -- authenticated-read-only \
-  --base-url https://tackle-forger.internal.example \
+  --base-url http://<R730_RFC1918_IP>:13000 \
+  --allow-private-http \
   --cookie-file /run/user/<uid>/tackle-forger-session.cookie \
   --env-file /opt/tackle-forger/.env.local \
   --output /secure/evidence/phase-one-authenticated-read-only.json
 ```
+
+Nginx HTTPS 替代模式同样必须把此命令的 `--base-url` 改为唯一 HTTPS origin、移除
+`--allow-private-http`，并与登记回调保持逐字同源；不得用直连会话去核对 Nginx origin，或反之。
 
 临时 Cookie 也必须由 `tackleforger` 创建并保持 `0600`；不要先由部署登录账号创建再切换
 服务账号执行验收。
@@ -203,7 +215,8 @@ sudo -u tackleforger env PATH=/usr/local/bin:/usr/bin:/bin npm run acceptance:ph
 - OAuth 起点生成随机 state；回调同时匹配 pending Cookie 与 state；
 - 同一 state 第二次使用被拒绝，过期 state 被拒绝；
 - 非目标 tenant key 被拒绝，且不创建会话；
-- 成功会话 Cookie 为 opaque ID，HTTPS 下含 `HttpOnly/Secure/SameSite=Lax/Path=/`；
+- 成功会话 Cookie 为 opaque ID；direct-origin HTTP 模式含 `HttpOnly/SameSite=Lax/Path=/` 且不含
+  `Secure`，Nginx HTTPS 替代模式含 `HttpOnly/Secure/SameSite=Lax/Path=/`；
 - `/api/auth/session` 只返回最小身份和服务端 Capability，不返回 token；
 - 会话绝对过期后返回 401；退出登录后旧会话不可复用；
 - 浏览器和服务日志中没有 OAuth code、access token、应用密钥、会话 Cookie；

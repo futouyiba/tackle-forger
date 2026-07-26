@@ -10,6 +10,7 @@
     "build": "vinext build",
     "start": "vinext start",
     "config-export:companion": "tsx scripts/config-export-companion.ts",
+    "config-export:companion:build": "tsx scripts/build-companion.ts",
     "storage:migrate:blob-to-sqlite": "tsx scripts/migrate-blob-to-sqlite.ts",
     "storage:backup": "tsx scripts/backup-workspace.ts",
     "storage:verify-backup": "tsx scripts/verify-workspace-backup.ts",

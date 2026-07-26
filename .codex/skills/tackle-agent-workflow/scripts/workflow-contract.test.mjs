@@ -1000,6 +1000,7 @@ test('SCOPED eligibility, clean Issue/PR routing, sections, OPEN IDs, and receip
     taskBase(root);
     const local = brief(root);
     assert.deepEqual(classifyOwnedPaths(['.github/workflows/ci.yml']), { scopedEligible: true, unrecognizedPaths: [] });
+    assert.deepEqual(classifyOwnedPaths(['CLAUDE.md']), { scopedEligible: true, unrecognizedPaths: [] });
     for (const scopedPath of [
       '.codex/skills/agent-project-bootstrap/SKILL.md',
       '.codex/skills/agent-issue-loop/SKILL.md',
@@ -1015,6 +1016,9 @@ test('SCOPED eligibility, clean Issue/PR routing, sections, OPEN IDs, and receip
       '.claude/skills/agent-pr-loop-backup/SKILL.md',
       '.claude/skill/tackle-agent-workflow/SKILL.md',
       '.claude/skills.md',
+      'CLAUDE.md.bak',
+      'nested/CLAUDE.md',
+      '.claude/CLAUDE.md',
     ]) assert.deepEqual(classifyOwnedPaths([unrecognizedPath]), { scopedEligible: false, unrecognizedPaths: [unrecognizedPath] });
     for (const malformed of [
       '.codex/skills/tackle-agent-workflow/../../../lib/runtime.ts',

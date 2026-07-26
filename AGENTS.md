@@ -21,6 +21,10 @@
 - 已发布ConfigurationSnapshot不可被上游规则静默重算。
 - 仍在开放决策中的语义必须保持可配置，并在实现前请求确认。
 
+## 无需兼容旧表数据
+
+项目尚未正式交付，无历史 workspace state 需兼容。旧表 YsEKw 的 sheetId/URL/拓扑仅在 `docs/` 作审计文档保留。代码不维护 LEGACY 读取路径（如 `LEGACY_YS_EKW_*`），切流只做 WQ8w 新路径。修改时无需纠结 LEGACY fixture 或旧 revision 回退逻辑。
+
 ## 实现要求
 
 - 领域计算必须确定、可追踪、可重放。

@@ -12,6 +12,8 @@ Before implementation, refactoring, review, or test work, read these files compl
 
 The v3 specification is the sole authoritative product/domain specification. Files under `docs/2026-*` and `crystal/` are historical. If sources conflict, follow the user's latest explicit decision, update the canonical specification, and then make the implementation match it. Do not resolve open decisions by hard-coding an assumption.
 
+项目尚未正式交付，无历史 workspace state 需兼容。旧表 YsEKw 的 sheetId/URL/拓扑仅在 `docs/` 作审计文档保留——代码不维护 LEGACY 读取路径，切流只做 WQ8w 新路径。
+
 The UI and domain vocabulary are primarily Chinese. Preserve established terminology in user-facing text and tests.
 
 ## Commands

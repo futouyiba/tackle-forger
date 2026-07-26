@@ -114,6 +114,36 @@ machine-readable output. Malformed pagination evidence also fails closed as an
 API error; a connection that declares another page must supply a non-empty
 cursor.
 
+### Historical workspace CI scope
+
+`Historical workspace (pnpm)` is always present in every pull-request and push
+run, so its exact job identity remains part of the merge-gate evidence. Before
+any expensive pnpm work, the job records an auditable scope decision against the
+immutable event head and base. It runs the full historical command set when a
+change touches a historical-workspace input: `apps/**`, `packages/**`,
+`legacy-workspace/**`, `tsconfig.base.json`, `vitest.workspace.config.ts`,
+`tests/package-manager-boundaries.test.mjs`, `package.json`, `package-lock.json`,
+or `.github/workflows/ci.yml`. The explicit root files are the shared TypeScript
+and Vitest inputs plus the package-manager boundary test and its fixture inputs;
+all other direct workspace configuration is below the three directory prefixes.
+It also runs in full when either identity is missing, malformed, unavailable
+locally, the base is not an ancestor of the head, or Git cannot prove the path
+scope. This is intentionally fail-closed: only a proven nonlegacy diff may skip
+the expensive commands.
+
+The full command set is unchanged: boundary test, frozen-lockfile install, and
+workspace typecheck, lint, test, and build. A successful nonlegacy skip means
+only that the change cannot affect that isolated historical workspace by its
+owned path boundary; it is not evidence that the historical workspace itself
+was revalidated. Independent weekly and manually-dispatched workflow runs
+execute that full command set without also running the root npm or Windows jobs.
+
+The retained last full per-commit baseline is the immutable annotated tag
+`legacy-workspace-last-green-2026-07-26`, which resolves to
+`702938b36bed0c2ea5489238318778a18d53059f`. It is historical evidence for the
+initial scheduling change, not an override for the fail-closed event-time scope
+decision and not a substitute for weekly/manual full verification.
+
 ## Workflow governance path
 
 GitHub runs a `pull_request` workflow from the pull request merge context.

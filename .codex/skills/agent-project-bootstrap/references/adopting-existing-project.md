@@ -9,6 +9,6 @@ Use a progressive cutover:
 5. Add CI using already working local commands.
 6. Observe several successful pull requests before making CI and approvals mandatory.
 7. Remove duplicate live status from old boards and documents.
-8. Enable managed mode only after several real PRs prove that review, CI, branch rules, and escalation boundaries are reliable. Start with `per_turn` merge policy before considering qualified auto-merge.
+8. Enable managed mode only after several real PRs prove that review, CI, branch rules, and escalation boundaries are reliable. Record the repository's chosen merge policy in its sole merge authority instead of deriving it from this migration guide.
 
 Do not rewrite Git history, delete historical records, or impose a complex Project schema during the pilot. If the rollout fails, relax the new protection rules and simplify fields; preserve the Issues and PRs as useful history.

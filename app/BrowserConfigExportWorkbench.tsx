@@ -73,6 +73,7 @@ export function BrowserConfigExportWorkbench({
   const [previewPackage, setPreviewPackage] = useState<ConfigPreviewPackage>();
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [busyXlsx, setBusyXlsx] = useState(false);
 
   const previewAvailability = actionAvailabilities.preview_config_export;
   const commitAvailability = actionAvailabilities.commit_config_export;
@@ -159,6 +160,39 @@ export function BrowserConfigExportWorkbench({
       setError(caught instanceof Error ? caught.message : "生成 NON_FORMAL 预览失败");
     } finally {
       setBusy(false);
+    }
+  };
+
+  const downloadXlsx = async () => {
+    if (!batch || !selectedSnapshotIds.length) return;
+    setBusyXlsx(true);
+    setError("");
+    try {
+      const response = await fetch("/api/config-export", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "xlsx-download",
+          packageId: `config-preview-${batch.batchId}`,
+          snapshotIds: selectedSnapshotIds,
+        }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(payload?.error ?? "下载 XLSX 导出文件失败");
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `config-export-${batch.batchId.replace(/[^a-z0-9._-]/gi, "_")}.xlsx`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      notify("已下载 XLSX 配置导出文件。");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "下载 XLSX 导出文件失败");
+    } finally {
+      setBusyXlsx(false);
     }
   };
 
@@ -297,6 +331,16 @@ export function BrowserConfigExportWorkbench({
             onClick={() => downloadPreview(previewPackage)}
           >
             <Download size={15} />下载预览关系报告
+          </button>
+        ) : null}
+        {batchConfirmed && selectedSnapshotIds.length > 0 ? (
+          <button
+            type="button"
+            className="button button-primary button-md"
+            disabled={busyXlsx}
+            onClick={() => void downloadXlsx()}
+          >
+            <Download size={15} />{busyXlsx ? "生成中…" : "下载 XLSX 配置表"}
           </button>
         ) : null}
       </footer>

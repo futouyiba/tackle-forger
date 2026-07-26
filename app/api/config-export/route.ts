@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requestUser } from "@/lib/auth";
 import {
+  BROWSER_COMPILER_TABLES,
+  BROWSER_EXPORT_MAPPING,
+  BROWSER_FIELD_LABELS,
+} from "@/lib/config-export-browser-mapping";
+import { materializeConfigExport } from "@/lib/config-export-mapping";
+import {
   ConfigPreviewSnapshotError,
   createConfigPreviewPackage,
 } from "@/lib/config-preview-package";
@@ -9,6 +15,7 @@ import {
   ConfigExportStageError,
   type FormalConfigExportAuthorization,
 } from "@/lib/config-export-stage";
+import { generatePreviewXlsx } from "@/lib/config-export-xlsx-generator";
 import { loadWorkspaceState } from "@/lib/storage";
 
 export const dynamic = "force-dynamic";
@@ -16,6 +23,11 @@ export const dynamic = "force-dynamic";
 type ConfigExportRequest =
   | {
       action: "preview";
+      packageId: string;
+      snapshotIds: string[];
+    }
+  | {
+      action: "xlsx-download";
       packageId: string;
       snapshotIds: string[];
     }
@@ -33,7 +45,7 @@ export async function POST(request: NextRequest) {
     );
   }
   const body = (await request.json().catch(() => null)) as ConfigExportRequest | null;
-  if (!body || (body.action !== "preview" && body.action !== "commit")) {
+  if (!body || (body.action !== "preview" && body.action !== "commit" && body.action !== "xlsx-download")) {
     return NextResponse.json({ error: "配置导出请求无效。" }, { status: 400 });
   }
 
@@ -67,6 +79,88 @@ export async function POST(request: NextRequest) {
       },
       { status: 501 },
     );
+  }
+
+  if (body.action === "xlsx-download") {
+    const availability = user.actionAvailability.preview_config_export;
+    if (!availability.enabled) {
+      return NextResponse.json(
+        {
+          error: availability.disabledReasonText ?? "当前账号不能下载导出 XLSX。",
+          actionAvailability: availability,
+        },
+        { status: 403 },
+      );
+    }
+    if (
+      typeof body.packageId !== "string"
+      || !Array.isArray(body.snapshotIds)
+      || !body.snapshotIds.length
+      || body.snapshotIds.some((entry) => typeof entry !== "string" || !entry.trim())
+    ) {
+      return NextResponse.json(
+        { error: "XLSX 下载必须指定 packageId 和至少一个 Snapshot。" },
+        { status: 400 },
+      );
+    }
+    const current = await loadWorkspaceState();
+    const requested = new Set(body.snapshotIds);
+    const snapshots = current.state.configurationSnapshots.filter((snapshot) =>
+      requested.has(snapshot.id));
+    if (snapshots.length !== requested.size) {
+      return NextResponse.json(
+        { error: "请求包含不存在或重复的 ConfigurationSnapshot。" },
+        { status: 404 },
+      );
+    }
+    try {
+      const allRows = snapshots.flatMap((snapshot) => {
+        try {
+          const result = materializeConfigExport({
+            snapshot,
+            availableReductionPolicies:
+              current.state.reductionStackingPolicyVersions,
+            mapping: BROWSER_EXPORT_MAPPING,
+            compilerTables: BROWSER_COMPILER_TABLES,
+          });
+          if (result.issues.some((i) => i.level === "error")) {
+            return [];
+          }
+          return result.rows;
+        } catch {
+          return [];
+        }
+      });
+      if (!allRows.length) {
+        return NextResponse.json(
+          { error: "所选 Snapshot 经物化后无有效行；请确认已配置品质评分和定价策略。" },
+          { status: 422 },
+        );
+      }
+      const xlsxBytes = generatePreviewXlsx({
+        rows: allRows,
+        mapping: BROWSER_EXPORT_MAPPING,
+        labels: BROWSER_FIELD_LABELS,
+      });
+      return new NextResponse(Buffer.from(xlsxBytes), {
+        status: 200,
+        headers: {
+          "Content-Type":
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          "Content-Disposition": `attachment; filename="config-export-${body.packageId.replace(/[^a-z0-9._-]/gi, "_")}.xlsx"`,
+        },
+      });
+    } catch (error) {
+      return NextResponse.json(
+        {
+          error:
+            error instanceof Error
+              ? error.message
+              : "生成 XLSX 导出文件失败。",
+        },
+        { status: 422 },
+      );
+    }
   }
 
   const availability = user.actionAvailability.preview_config_export;

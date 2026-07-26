@@ -459,10 +459,15 @@ function parsePricingWq8wLookup(rows: unknown[][] | undefined): {
     if (Number.isFinite(maintenance)) {
       const key = `${bandId}:${partId}`;
       // WQ8w rates are quality-scoped; downstream trial expects per-(band,part).
-      // Use first encountered quality per (band, part) — data is ordered C/B/A/S.
-      if (!seenAlloc.has(key)) { seenAlloc.add(key); rates.push({ pricingWeightBandId: bandId, partId, value: { value: maintenance, status: "SOURCE", source: src } }); }
-      // part allocation and total loss baked into per-part maintenance; emit identity defaults.
-      if (!seenLoss.has(key)) { seenLoss.add(key); allocRates.push({ pricingWeightBandId: bandId, partId, value: { value: 1, status: "SOURCE" as const, source: src } }); lossTimes.push({ pricingWeightBandId: bandId, partId, value: { value: 1, status: "SOURCE" as const, source: src } }); }
+      // Only accept C quality as the base maintenance value.
+      if (!seenAlloc.has(key) && text(row[2]) === "C") {
+        seenAlloc.add(key);
+        rates.push({ pricingWeightBandId: bandId, partId, value: { value: maintenance, status: "SOURCE", source: src } });
+        // part allocation and total loss baked into per-part maintenance; emit identity defaults.
+        seenLoss.add(key);
+        allocRates.push({ pricingWeightBandId: bandId, partId, value: { value: 1, status: "SOURCE" as const, source: src } });
+        lossTimes.push({ pricingWeightBandId: bandId, partId, value: { value: 1, status: "SOURCE" as const, source: src } });
+      }
     }
     if (Number.isFinite(ratio)) {
       ratios.push({ pricingWeightBandId: bandId, partId, value: { value: ratio, status: "SOURCE", source: src } });
@@ -683,19 +688,15 @@ export function qualityDraftFromRanges(input: {
       }
     }
   }
-  const pricingScoreEndpoints = input.pricingEndpointValues.flatMap((row) => {
-    const value = Number(row[3]); // WQ8w 33IGHy: column D = maintenance price
-    return Number.isFinite(value)
-      ? [{ value, status: "SOURCE" as const, source: { sheetId: "33IGHy", cell: "D2:D193", rowKey: "2-193" } }]
-      : [];
-  });
+  // WQ8w 33IGHy: quality-scoped pricing — scoring endpoints handled per-quality at pricing layer.
+  const pricingScoreEndpoints: Array<{ value: number; status: "SOURCE"; source: { sheetId: string; cell: string; rowKey: string } }> = [];
   return importQualityValuePolicyDraft({
     sourceRevisionId: input.sourceRevision.id,
     sourceRevision: input.sourceRevision.sourceRevision,
     ranges,
     aliases,
     matrixCells,
-    qualityTableDescriptor: qualityFieldHeader ? { headerSource: sourceCell(qualityFieldHeader.rowIndex, qualityTable!.columnIndex), columns: Object.fromEntries(qualityFieldLabels.map((label, index) => [label, qualityFieldHeader.indices[index]!])) as QualityTableDescriptor["columns"], rows: descriptorRows } : undefined,
+    qualityTableDescriptor: qualityFieldHeader ? { headerSource: sourceCell(qualityFieldHeader.rowIndex, qualityFieldHeader.indices[0] ?? 0), columns: Object.fromEntries(qualityFieldLabels.map((label, index) => [label, qualityFieldHeader.indices[index]!])) as QualityTableDescriptor["columns"], rows: descriptorRows } : undefined,
     sourceIssues,
     pricingScoreEndpoints,
     performanceScoringEnabled: undefined,

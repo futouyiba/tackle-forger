@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { deflateRawSync } from "node:zlib";
 import * as XLSX from "xlsx";
 import {
   BrowserCanonicalWorkbookError,
@@ -84,7 +85,7 @@ function semanticProjection(inspection: Awaited<ReturnType<typeof inspectCanonic
 function u16le(n: number) { return [n & 0xff, (n >> 8) & 0xff]; }
 function u32le(n: number) { return [n & 0xff, (n >> 8) & 0xff, (n >> 16) & 0xff, (n >>> 24) & 0xff]; }
 
-/** 构造仅含 central directory + EOCD 的受控 ZIP 字节流，用于测 preflight（不构造 local headers）。 */
+/** 构造仅含 central directory + EOCD 的受控 ZIP 字节流，用于测预检签名级拒绝（不构造 local headers）。 */
 function buildControlledZip(entries: Array<{ uncompressed: number; name?: string }>, declaredEntries?: number): ArrayBuffer {
   const enc = new TextEncoder();
   const central: number[] = [];
@@ -96,6 +97,77 @@ function buildControlledZip(entries: Array<{ uncompressed: number; name?: string
   const declared = declaredEntries ?? entries.length;
   const eocd = [...u32le(0x06054b50), ...u16le(0), ...u16le(0), ...u16le(declared), ...u16le(declared), ...u32le(central.length), ...u32le(0), ...u16le(0)];
   return new Uint8Array([...central, ...eocd]).buffer;
+}
+
+interface RealZipEntry {
+  name: string;
+  content: Uint8Array;
+  method?: 0 | 8;
+  dataDescriptor?: boolean;
+  encrypted?: boolean;
+  /** 覆盖 local header 的压缩尺寸（central 仍写真实值），用于测 central/local 不一致。 */
+  localCszOverride?: number;
+}
+
+/** 构造真实可解压 ZIP（local header + 压缩数据 + central directory + EOCD），用于测流式 inflate 预检。 */
+function buildRealZip(entries: RealZipEntry[]): ArrayBuffer {
+  const enc = new TextEncoder();
+  const localParts: Uint8Array[] = [];
+  const centralRec: Array<{ localStart: number; name: Uint8Array; method: number; csz: number; usz: number; flags: number }> = [];
+  let localLen = 0;
+  for (const entry of entries) {
+    const localStart = localLen;
+    const name = enc.encode(entry.name);
+    const method = entry.method ?? 8;
+    const data = method === 8 ? deflateRawSync(entry.content) : entry.content;
+    const usz = entry.content.length;
+    const csz = data.length;
+    const dd = entry.dataDescriptor ?? false;
+    const flags = (dd ? 0x08 : 0) | (entry.encrypted ? 0x01 : 0);
+    const header = new Uint8Array(30);
+    const hdv = new DataView(header.buffer);
+    hdv.setUint32(0, 0x04034b50, true);
+    hdv.setUint16(4, 20, true);
+    hdv.setUint16(6, flags, true);
+    hdv.setUint16(8, method, true);
+    hdv.setUint32(18, entry.localCszOverride ?? (dd ? 0 : csz), true);
+    hdv.setUint32(22, dd ? 0 : usz, true);
+    hdv.setUint16(26, name.length, true);
+    const ddBytes = dd ? Uint8Array.of(...u32le(0x08074b50), 0, 0, 0, ...u32le(csz), ...u32le(usz)) : new Uint8Array(0);
+    localParts.push(header, name, new Uint8Array(data), ddBytes);
+    localLen += header.length + name.length + data.length + ddBytes.length;
+    centralRec.push({ localStart, name, method, csz, usz, flags });
+  }
+  const centralParts: Uint8Array[] = [];
+  let cdLen = 0;
+  for (const c of centralRec) {
+    const ch = new Uint8Array(46);
+    const cdv = new DataView(ch.buffer);
+    cdv.setUint32(0, 0x02014b50, true);
+    cdv.setUint16(4, 20, true);
+    cdv.setUint16(6, 20, true);
+    cdv.setUint16(8, c.flags, true);
+    cdv.setUint16(10, c.method, true);
+    cdv.setUint32(20, c.csz, true);
+    cdv.setUint32(24, c.usz, true);
+    cdv.setUint16(28, c.name.length, true);
+    cdv.setUint32(42, c.localStart, true);
+    centralParts.push(ch, c.name);
+    cdLen += ch.length + c.name.length;
+  }
+  const eocd = new Uint8Array(22);
+  const edv = new DataView(eocd.buffer);
+  edv.setUint32(0, 0x06054b50, true);
+  edv.setUint16(8, entries.length, true);
+  edv.setUint16(10, entries.length, true);
+  edv.setUint32(12, cdLen, true);
+  edv.setUint32(16, localLen, true);
+  const out = new Uint8Array(localLen + cdLen + 22);
+  let off = 0;
+  for (const part of localParts) { out.set(part, off); off += part.length; }
+  for (const part of centralParts) { out.set(part, off); off += part.length; }
+  out.set(eocd, off);
+  return out.buffer;
 }
 
 async function rejectsCode(promise: Promise<unknown>, code: string) {
@@ -170,11 +242,29 @@ test("浏览器 canonical XLSX adapter 拒绝超限文件、无效 ZIP 和无缓
   assert.ok(qualityRange?.valueRange.values.some((row) => row.includes(0.8)), "缓存值应被读出而非执行公式");
 });
 
-test("浏览器 canonical XLSX adapter 在 SheetJS 解包前用 ZIP central directory 预检拦截压缩炸弹", async () => {
+test("浏览器 canonical XLSX adapter 在 SheetJS 解包前用 ZIP central directory 预检拦截声明级压缩炸弹", async () => {
   await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: buildControlledZip([], 1001), fileName: "many.zip", observedAt: "x" }), "XLSX_TOO_MANY_ZIP_ENTRIES");
-  await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: buildControlledZip([{ uncompressed: 201 * 1024 * 1024 }]), fileName: "bomb.zip", observedAt: "x" }), "XLSX_UNCOMPRESSED_TOO_LARGE");
   await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: buildControlledZip([{ uncompressed: 0xffffffff }]), fileName: "zip64.zip", observedAt: "x" }), "XLSX_ZIP_INVALID");
   await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: new Uint8Array(64).buffer, fileName: "noeocd.zip", observedAt: "x" }), "XLSX_ZIP_INVALID");
+});
+
+test("ZIP 流式解压验证：拒绝 central/local 不一致、实际超预算、加密；数据描述符通过预检", async () => {
+  const ts = "2026-07-27T00:00:00.000Z";
+  // central/local 尺寸不一致（非数据描述符）→ 在 inflate 前拒绝
+  await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: buildRealZip([{ name: "a", content: new Uint8Array([1, 2, 3]), localCszOverride: 999 }]), fileName: "mismatch.zip", observedAt: ts }), "XLSX_ZIP_INVALID");
+  // 高压缩比、实际解压输出超过预算（central 声明小但 inflate 真实 210MB）→ 流式计数拒绝
+  await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: buildRealZip([{ name: "a", content: new Uint8Array(Buffer.alloc(210_000_000, 0x61)) }]), fileName: "bomb.xlsx", observedAt: ts }), "XLSX_UNCOMPRESSED_TOO_LARGE");
+  // 加密 ZIP → 拒绝
+  await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: buildRealZip([{ name: "a", content: new Uint8Array([1]), encrypted: true }]), fileName: "enc.zip", observedAt: ts }), "XLSX_ZIP_INVALID");
+  // 数据描述符通过流式预检（仅因不是合法 XLSX 才在 read 阶段失败，证明未被预检误拒）
+  await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: buildRealZip([{ name: "a", content: new Uint8Array([1, 2, 3]), dataDescriptor: true }]), fileName: "dd.zip", observedAt: ts }), "XLSX_INVALID");
+});
+
+test("浏览器 canonical XLSX adapter 接受合法长字符串单元格（≤物理上限不误伤）", async () => {
+  const sheets = fixtureSheets();
+  sheets.find(({ entry }) => entry.sheetId === "1cAihB")!.values[1]![0] = "说明".repeat(5000);
+  const observed = await observeBrowserCanonicalWorkbook({ bytes: workbookBytes(sheets), fileName: "long-ok.xlsx", observedAt: "2026-07-27T00:00:00.000Z" });
+  assert.equal(observed.sourceRevision.sheets.length, CANONICAL_FEISHU_SHEET_REGISTRY.length);
 });
 
 test("浏览器 canonical XLSX adapter 对所有工作表（含未登记）强制资源边界", async () => {

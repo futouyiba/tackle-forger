@@ -15,8 +15,8 @@
 - Series / SKU / Model 分层 Patch、冻结 ConfigurationSnapshot 与升级候选
 - 旧 SeriesRecipe、Candidate、OfficialSku 与 DetailOverride 只读归档及迁移诊断
 - 强度闭环、重量段覆盖校验和精调规则学习
-- D1 团队共享状态、版本记录与冲突保护
-- R2 保存 Excel 原始导入文件
+- 显式部署契约下的工作区状态、版本记录与冲突保护
+- 与部署后端一致的 Excel 原始导入文件持久化
 - Excel 完整导入导出
 
 ## 规则执行模型
@@ -71,6 +71,9 @@ Vercel 评审构建同样从仓库根安装 `package-lock.json`，但通过
 要求的 `.vercel/output`；`vercel.json` 不执行 `next build`、不修改源码，也不把历史
 `apps/web` 当作部署入口。
 
+当前产品入口、包管理、存储后端与各部署路径的唯一工程结论见
+[`docs/architecture/current-runtime-authority.md`](docs/architecture/current-runtime-authority.md)。
+
 ## 公司飞书登录
 
 应用不提供匿名编辑或离线冒名提交。飞书 OAuth 仅接受配置的公司租户；未登录返回 401，
@@ -86,14 +89,16 @@ Vercel 评审构建同样从仓库根安装 `package-lock.json`，但通过
 
 唯一规则源是整本工作簿：
 
-<https://pisn3u3ony2.feishu.cn/wiki/YsEKwSUJ5i86HCkZKBVcNMw7nOh?from=from_copylink&sheet=9nE3Rx>
+<https://pisn3u3ony2.feishu.cn/sheets/WQ8wstS4ch29E2tAKnVcoh5KnJg?from=from_copylink>
 
-链接中的 `sheet=9nE3Rx` 只负责打开时定位到 `06_系列`，同步边界仍是 00–17 整本工作簿。
-接入器按 v3 第 14 节登记的 `sheet_id` 定位并校验期望名称；改名只告警，同名新表不会冒充
-原表。revision 必须实时读取；2302 与 2352 都只是历史观察值，禁止硬编码为“最新”。
+链接中的 `sheet` 参数只负责打开时定位；同步边界始终是 WQ8w 的整本工作簿，而不是单个工作表。
+WQ8w 是当前权威源；概念到分表 `sheet_id` 的接入协议由 #143 跟踪，完成前以显式整本拉取和
+已验证的 workbook revision 为准。不得把 YsEKw 合并表的 `sheet_id`、块布局或“176 个稳定机器 ID”
+当作 WQ8w 的当前事实。每次拉取都必须重新读取 revision；`338` 与 YsEKw 的 `2302`、`2352` 仅是
+审计观察值，禁止硬编码为“最新”。
 
-`01_重量模板` 至 `06_系列` 当前已有 176 个稳定机器 ID。已绑定 ID 必须保留；未来缺 ID
-的新行进入 `NEW_SOURCE_ROW`，经过迁移预览、人工确认、回写和回读验证后才建立绑定。
+接入器对本次已验证 revision 中的稳定机器 ID 建立绑定；未知或缺失 ID 的新行进入
+`NEW_SOURCE_ROW`，经过迁移预览、人工确认、回写和回读验证后才建立绑定。
 检查、显式拉取、创建 `RuleSetVersion` 草稿、ID 回写和正式发布始终是彼此独立的动作。
 
 飞书应用凭证只配置在服务器环境中：

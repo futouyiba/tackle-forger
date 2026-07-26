@@ -3,7 +3,17 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { bindDeploymentWorkspaceIdentity, createBlobDocument, listRevisions, loadRevision, loadWorkspaceState, saveWorkspaceState } from "../lib/storage";
+import {
+  bindDeploymentWorkspaceIdentity,
+  createBlobDocument,
+  listRevisions,
+  loadRevision,
+  loadWorkspaceState,
+  resolveRuntimeWorkspaceStorageContract,
+  resolveWorkspaceStorageContract,
+  saveWorkspaceState,
+  workspaceSqliteDatabasePath,
+} from "../lib/storage";
 import { createSeedState } from "../lib/seed";
 import { closeSqliteStorage } from "../lib/sqlite-storage";
 
@@ -75,28 +85,134 @@ test("Blob 首次 put 前构造的 payload 已绑定部署身份", () => {
   else process.env.TACKLE_FORGER_WORKSPACE_ID = prior;
 });
 
-test("生产环境没有持久化后端时拒绝进程内临时存储", async (t) => {
+test("部署目标要求显式且匹配的存储后端，开发环境保留受控兼容", () => {
+  assert.deepEqual(
+    resolveWorkspaceStorageContract({ NODE_ENV: "production", WORKSPACE_STORAGE_BACKEND: "sqlite" }),
+    { target: "r730", backend: "sqlite", explicit: true },
+  );
+  assert.deepEqual(
+    resolveWorkspaceStorageContract({ VERCEL: "1", NODE_ENV: "production", WORKSPACE_STORAGE_BACKEND: "blob" }),
+    { target: "vercel_review", backend: "blob", explicit: true },
+  );
+  assert.deepEqual(
+    resolveWorkspaceStorageContract({ NITRO_PRESET: "cloudflare_module", NODE_ENV: "production", WORKSPACE_STORAGE_BACKEND: "d1" }),
+    { target: "cloudflare_review", backend: "d1", explicit: true },
+  );
+  assert.deepEqual(resolveWorkspaceStorageContract({ NODE_ENV: "test" }), {
+    target: "development", backend: "ephemeral", explicit: false,
+  });
+  assert.deepEqual(resolveWorkspaceStorageContract({ NODE_ENV: "test", WORKSPACE_DATABASE_PATH: ".tmp/test.sqlite" }), {
+    target: "development", backend: "sqlite", explicit: false,
+  });
+  assert.deepEqual(
+    resolveWorkspaceStorageContract({ NODE_ENV: "development", WORKSPACE_STORAGE_BACKEND: "sqlite" }),
+    { target: "development", backend: "sqlite", explicit: true },
+  );
+  assert.deepEqual(
+    resolveRuntimeWorkspaceStorageContract(
+      { NODE_ENV: "development", WORKSPACE_STORAGE_BACKEND: "sqlite" },
+      { DB: {} as D1Database },
+    ),
+    { target: "development", backend: "sqlite", explicit: true },
+  );
+  assert.throws(
+    () => resolveWorkspaceStorageContract({ NODE_ENV: "production" }),
+    /WORKSPACE_STORAGE_BACKEND_REQUIRED/,
+  );
+  assert.throws(
+    () => resolveWorkspaceStorageContract({ VERCEL: "1", WORKSPACE_STORAGE_BACKEND: "sqlite" }),
+    /WORKSPACE_STORAGE_BACKEND_TARGET_MISMATCH/,
+  );
+  assert.throws(
+    () => resolveWorkspaceStorageContract({ NODE_ENV: "test", WORKSPACE_STORAGE_BACKEND: "blob" }),
+    /WORKSPACE_STORAGE_BACKEND_TARGET_MISMATCH/,
+  );
+  assert.throws(
+    () => resolveWorkspaceStorageContract({ WORKSPACE_STORAGE_BACKEND: "memory" }),
+    /WORKSPACE_STORAGE_BACKEND_INVALID/,
+  );
+  assert.throws(
+    () => resolveRuntimeWorkspaceStorageContract(
+      { NODE_ENV: "production", NITRO_PRESET: "cloudflare_module", WORKSPACE_STORAGE_BACKEND: "d1" },
+      { DB: {} as D1Database },
+    ),
+    /WORKSPACE_STORAGE_R2_UNAVAILABLE/,
+  );
+  assert.throws(
+    () => resolveRuntimeWorkspaceStorageContract(
+      { NODE_ENV: "production", NITRO_PRESET: "cloudflare_module", WORKSPACE_STORAGE_BACKEND: "d1" },
+      { FILES: {} as R2Bucket },
+    ),
+    /WORKSPACE_STORAGE_D1_UNAVAILABLE/,
+  );
+  assert.deepEqual(
+    resolveRuntimeWorkspaceStorageContract(
+      { NODE_ENV: "production", NITRO_PRESET: "cloudflare_module", WORKSPACE_STORAGE_BACKEND: "d1" },
+      { DB: {} as D1Database, FILES: {} as R2Bucket },
+    ),
+    { target: "cloudflare_review", backend: "d1", explicit: true },
+  );
+  const unmarkedCloudflareContract = resolveRuntimeWorkspaceStorageContract(
+      { NODE_ENV: "production", WORKSPACE_STORAGE_BACKEND: "d1" },
+      { DB: {} as D1Database, FILES: {} as R2Bucket },
+  );
+  assert.deepEqual(unmarkedCloudflareContract, { target: "cloudflare_review", backend: "d1", explicit: true });
+  assert.equal(workspaceSqliteDatabasePath(unmarkedCloudflareContract), undefined);
+  assert.throws(
+    () => resolveRuntimeWorkspaceStorageContract(
+      { NODE_ENV: "production", VERCEL: "1", WORKSPACE_STORAGE_BACKEND: "d1" },
+      { DB: {} as D1Database, FILES: {} as R2Bucket },
+    ),
+    /WORKSPACE_STORAGE_BACKEND_TARGET_MISMATCH/,
+  );
+});
+
+test("生产 sqlite 要求显式路径，开发环境保留默认路径", (t) => {
+  const env = process.env as Record<string, string | undefined>;
+  const previousNodeEnv = env.NODE_ENV;
+  const previousBackend = env.WORKSPACE_STORAGE_BACKEND;
+  const previousPath = env.WORKSPACE_DATABASE_PATH;
+  t.after(() => {
+    if (previousNodeEnv === undefined) delete env.NODE_ENV; else env.NODE_ENV = previousNodeEnv;
+    if (previousBackend === undefined) delete env.WORKSPACE_STORAGE_BACKEND; else env.WORKSPACE_STORAGE_BACKEND = previousBackend;
+    if (previousPath === undefined) delete env.WORKSPACE_DATABASE_PATH; else env.WORKSPACE_DATABASE_PATH = previousPath;
+  });
+  env.NODE_ENV = "production";
+  env.WORKSPACE_STORAGE_BACKEND = "sqlite";
+  delete env.WORKSPACE_DATABASE_PATH;
+  assert.throws(() => workspaceSqliteDatabasePath(), /WORKSPACE_STORAGE_SQLITE_PATH_REQUIRED/);
+  env.WORKSPACE_DATABASE_PATH = "/opt/tackle-forger/data/workspace.sqlite";
+  assert.equal(workspaceSqliteDatabasePath(), "/opt/tackle-forger/data/workspace.sqlite");
+  env.NODE_ENV = "test";
+  delete env.WORKSPACE_DATABASE_PATH;
+  assert.equal(workspaceSqliteDatabasePath(), ".data/workspace.sqlite");
+});
+
+test("生产环境没有显式持久化后端时拒绝进程内临时存储", async (t) => {
   const env = process.env as Record<string, string | undefined>;
   const previous = {
     nodeEnv: env.NODE_ENV,
     databasePath: env.WORKSPACE_DATABASE_PATH,
     blobToken: env.BLOB_READ_WRITE_TOKEN,
     vercel: env.VERCEL,
+    storageBackend: env.WORKSPACE_STORAGE_BACKEND,
   };
   env.NODE_ENV = "production";
   delete env.WORKSPACE_DATABASE_PATH;
   delete env.BLOB_READ_WRITE_TOKEN;
-  env.VERCEL = "1";
+  delete env.VERCEL;
+  delete env.WORKSPACE_STORAGE_BACKEND;
   t.after(() => {
     if (previous.nodeEnv === undefined) delete env.NODE_ENV; else env.NODE_ENV = previous.nodeEnv;
     if (previous.databasePath === undefined) delete env.WORKSPACE_DATABASE_PATH; else env.WORKSPACE_DATABASE_PATH = previous.databasePath;
     if (previous.blobToken === undefined) delete env.BLOB_READ_WRITE_TOKEN; else env.BLOB_READ_WRITE_TOKEN = previous.blobToken;
     if (previous.vercel === undefined) delete env.VERCEL; else env.VERCEL = previous.vercel;
+    if (previous.storageBackend === undefined) delete env.WORKSPACE_STORAGE_BACKEND; else env.WORKSPACE_STORAGE_BACKEND = previous.storageBackend;
   });
 
   await assert.rejects(
     loadWorkspaceState(),
-    /生产环境未配置持久化存储/,
+    /WORKSPACE_STORAGE_BACKEND_REQUIRED/,
   );
 });
 

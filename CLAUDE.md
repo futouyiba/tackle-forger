@@ -64,7 +64,7 @@ Many test names are Chinese. `tests/rendered-html.test.mjs` inspects `dist/`, so
 
 ### Runtime and application shell
 
-- Next.js 16 App Router and React 19 are built through Vinext/Vite, not the standard Next CLI used by `vercel.json`.
+- Next.js 16 App Router and React 19 are built through Vinext/Vite. Vinext is the build adapter, not a second product application; `vercel.json` calls `npm run build:vercel` for a Nitro review build and does not use `next build`.
 - `app/page.tsx` seeds the client workbench; `app/Workbench.tsx` is the main navigation/state shell and composes focused workbenches for the v3 flow, rule workbook, series Gantt, candidate generation, and browser config export.
 - Most product logic belongs in `lib/`, not React components. Components should consume deterministic domain results and API contracts rather than reimplement calculations.
 - `worker/index.ts` is the Cloudflare Worker entry. `vite.config.ts` wires Vinext, the build plugin, and local D1/R2 bindings from `.openai/hosting.json` (`DB` and `FILES`). Wrangler/Miniflare state is intentionally kept under `.wrangler/`.
@@ -117,11 +117,7 @@ The whole canonical Feishu workbook is the sole general rule source; a URL `shee
 
 ### Persistence, concurrency, and API boundaries
 
-`lib/storage.ts` selects storage at runtime:
-
-1. Vercel Blob when `BLOB_READ_WRITE_TOKEN` is present;
-2. Cloudflare D1 for workspace/revisions plus R2 for imported files when bindings are available;
-3. an in-process seeded document for local fallback.
+`lib/storage.ts` selects storage through the explicit `WORKSPACE_STORAGE_BACKEND` deployment contract. `sqlite` is the R730 production backend, `blob` is Vercel review only, `d1` is Cloudflare/OpenAI Sites preview/experimental only, and `ephemeral` is development/test only. Production must fail closed on a missing, invalid, or deployment-mismatched backend; never infer a production backend merely from a token or binding.
 
 Workspace saves use optimistic concurrency: Blob ETags or D1 revision-checked updates. Preserve `baseRevision`/409 conflict behavior in API and UI changes.
 
@@ -170,7 +166,7 @@ New domain behavior must cover normal, boundary, conflict, recovery/version-free
 
 ## Deployment notes
 
-`npm run build` uses `vinext build`. `vercel.json` currently invokes `next build` after removing `package.json`'s ESM type and exists as a review deployment path; do not assume it represents the canonical production build. The formal target is the company intranet Dell R730 with persistent storage, company Feishu credentials, and real configuration repositories. Cloudflare/OpenAI Sites bindings and Vercel Blob remain supported runtime paths in the current code, but deployment decisions must preserve the v3 persistence and identity requirements.
+`npm run build` uses `vinext build`. `vercel.json` invokes `npm run build:vercel`, which uses Vinext + Nitro and exists only as a review deployment path. The formal target is the company intranet Dell R730 with persistent SQLite storage, company Feishu credentials, and real configuration repositories. Cloudflare/OpenAI Sites bindings and Vercel Blob are preview/experimental paths, never formal production. See `docs/architecture/current-runtime-authority.md` for the current runtime authority table.
 
 ## Agent 工作模式
 

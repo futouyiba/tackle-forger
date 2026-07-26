@@ -14,6 +14,28 @@ import {
 type StorageEnv = {
   DB?: D1Database;
   FILES?: R2Bucket;
+  WORKSPACE_STORAGE_BACKEND?: string;
+  NITRO_PRESET?: string;
+  CF_PAGES?: string;
+  VERCEL?: string;
+  NODE_ENV?: string;
+};
+
+type StorageEnvironment = Pick<
+  StorageEnv,
+  "WORKSPACE_STORAGE_BACKEND" | "NITRO_PRESET" | "CF_PAGES" | "VERCEL" | "NODE_ENV"
+> & {
+  WORKSPACE_DATABASE_PATH?: string;
+  BLOB_READ_WRITE_TOKEN?: string;
+};
+
+export type WorkspaceStorageBackend = "sqlite" | "blob" | "d1" | "ephemeral";
+export type WorkspaceDeploymentTarget = "r730" | "vercel_review" | "cloudflare_review" | "development";
+
+export type WorkspaceStorageContract = {
+  backend: WorkspaceStorageBackend;
+  target: WorkspaceDeploymentTarget;
+  explicit: boolean;
 };
 
 type StoredRevision = RevisionInfo & {
@@ -35,6 +57,79 @@ type LoadedBlobDocument = {
 const WORKSPACE_BLOB_PATH = "workspace/main.json";
 let runtimePromise: Promise<StorageEnv> | null = null;
 
+function processStorageEnvironment(): StorageEnvironment {
+  return typeof process === "undefined"
+    ? {}
+    : process.env as StorageEnvironment;
+}
+
+function configuredBackend(value: string | undefined): WorkspaceStorageBackend | undefined {
+  const normalized = value?.trim();
+  if (!normalized) return undefined;
+  if (normalized === "sqlite" || normalized === "blob" || normalized === "d1" || normalized === "ephemeral") {
+    return normalized;
+  }
+  throw new Error(
+    "WORKSPACE_STORAGE_BACKEND_INVALID：WORKSPACE_STORAGE_BACKEND 必须为 sqlite、blob、d1 或 ephemeral。",
+  );
+}
+
+function isCloudflareEnvironment(environment: StorageEnvironment) {
+  return environment.CF_PAGES === "1"
+    || environment.NITRO_PRESET?.startsWith("cloudflare") === true;
+}
+
+/**
+ * Resolve the storage authority before probing credentials or bindings. Production
+ * deployments must name their backend explicitly, so an incidental token/binding
+ * can never silently change where the authoritative workspace is persisted.
+ */
+export function resolveWorkspaceStorageContract(
+  environment: StorageEnvironment = processStorageEnvironment(),
+): WorkspaceStorageContract {
+  const backend = configuredBackend(environment.WORKSPACE_STORAGE_BACKEND);
+  const production = environment.NODE_ENV === "production";
+  const target: WorkspaceDeploymentTarget = environment.VERCEL === "1" || environment.NITRO_PRESET === "vercel"
+    ? "vercel_review"
+    : isCloudflareEnvironment(environment)
+      ? "cloudflare_review"
+      : production
+        ? "r730"
+        : "development";
+
+  const requiredBackend: WorkspaceStorageBackend | undefined = target === "r730"
+    ? "sqlite"
+    : target === "vercel_review"
+      ? "blob"
+      : target === "cloudflare_review"
+        ? "d1"
+        : undefined;
+
+  if (requiredBackend && !backend) {
+    throw new Error(
+      `WORKSPACE_STORAGE_BACKEND_REQUIRED：${target} 部署必须显式设置 WORKSPACE_STORAGE_BACKEND=${requiredBackend}。`,
+    );
+  }
+  if (requiredBackend && backend !== requiredBackend) {
+    throw new Error(
+      `WORKSPACE_STORAGE_BACKEND_TARGET_MISMATCH：${target} 仅允许 WORKSPACE_STORAGE_BACKEND=${requiredBackend}。`,
+    );
+  }
+  if (target === "development" && (backend === "blob" || backend === "d1")) {
+    throw new Error(
+      `WORKSPACE_STORAGE_BACKEND_TARGET_MISMATCH：${backend} 后端只能用于其指定的评审目标。`,
+    );
+  }
+
+  // Local tests and development can retain the old convenient SQLite setup, but
+  // production may not infer a backend from a path, token, or runtime binding.
+  if (backend) return { backend, target, explicit: true };
+  if (environment.WORKSPACE_DATABASE_PATH?.trim()) {
+    return { backend: "sqlite", target, explicit: false };
+  }
+  return { backend: "ephemeral", target, explicit: false };
+}
+
 /** Deployment-owned identity; never infer it from a mutable workspace payload. */
 export function deploymentWorkspaceId(): string | undefined {
   const explicit = process.env.TACKLE_FORGER_WORKSPACE_ID?.trim();
@@ -52,16 +147,14 @@ export function bindDeploymentWorkspaceIdentity(state: WorkspaceState): Workspac
   return state.workspaceId === deploymentId ? state : { ...state, workspaceId: deploymentId };
 }
 
-function hasVercelBlob() {
-  return typeof process !== "undefined" && Boolean(process.env.BLOB_READ_WRITE_TOKEN);
+export function workspaceSqliteDatabasePath(contract = resolveWorkspaceStorageContract()) {
+  if (contract.backend !== "sqlite") return undefined;
+  const configuredPath = process.env.WORKSPACE_DATABASE_PATH?.trim();
+  if (process.env.NODE_ENV === "production" && !configuredPath) {
+    throw new Error("WORKSPACE_STORAGE_SQLITE_PATH_REQUIRED：生产 sqlite 后端必须显式设置 WORKSPACE_DATABASE_PATH。");
+  }
+  return configuredPath || ".data/workspace.sqlite";
 }
-
-export function workspaceSqliteDatabasePath() {
-  if (typeof process === "undefined" || process.env.VERCEL) return undefined;
-  return process.env.WORKSPACE_DATABASE_PATH?.trim() || ".data/workspace.sqlite";
-}
-
-const sqliteDatabasePath = workspaceSqliteDatabasePath;
 
 function sqliteFileDataDir(databasePath: string) {
   return process.env.WORKSPACE_FILE_DATA_DIR?.trim()
@@ -84,6 +177,41 @@ async function getRuntimeStorage(): Promise<StorageEnv> {
     }
   })();
   return runtimePromise;
+}
+
+export function resolveRuntimeWorkspaceStorageContract(
+  environment: StorageEnvironment,
+  runtime: Pick<StorageEnv, "DB" | "FILES">,
+): WorkspaceStorageContract {
+  const explicitD1 = environment.WORKSPACE_STORAGE_BACKEND?.trim() === "d1";
+  const hasPlatformMarker = Boolean(environment.VERCEL || environment.CF_PAGES || environment.NITRO_PRESET);
+  const inferredCloudflareProduction = environment.NODE_ENV === "production"
+    && explicitD1
+    && !hasPlatformMarker
+    && Boolean(runtime.DB)
+    && Boolean(runtime.FILES);
+  const contract = resolveWorkspaceStorageContract(
+    inferredCloudflareProduction
+      ? { ...environment, NITRO_PRESET: "cloudflare_module" }
+      : environment,
+  );
+
+  if (contract.backend === "blob" && !environment.BLOB_READ_WRITE_TOKEN?.trim()) {
+    throw new Error("WORKSPACE_STORAGE_BLOB_UNAVAILABLE：blob 后端要求 BLOB_READ_WRITE_TOKEN。");
+  }
+  if (contract.backend === "d1" && !runtime.DB) {
+    throw new Error("WORKSPACE_STORAGE_D1_UNAVAILABLE：d1 后端要求 Cloudflare DB 绑定。");
+  }
+  if (contract.backend === "d1" && !runtime.FILES) {
+    throw new Error("WORKSPACE_STORAGE_R2_UNAVAILABLE：d1 后端要求 Cloudflare FILES 绑定。");
+  }
+  return contract;
+}
+
+async function runtimeStorageContract(): Promise<{ contract: WorkspaceStorageContract; runtime: StorageEnv }> {
+  const runtime = await getRuntimeStorage();
+  const contract = resolveRuntimeWorkspaceStorageContract(processStorageEnvironment(), runtime);
+  return { contract, runtime };
 }
 
 export function createBlobDocument(): BlobWorkspaceDocument {
@@ -110,10 +238,9 @@ function ensureLocalWorkspaceDocument() {
 }
 
 function assertEphemeralStorageAllowed(action: "读取" | "保存" | "读取版本" | "存储导入文件") {
-  if (typeof process !== "undefined" && process.env.NODE_ENV === "production") {
-    throw new Error(
-      `生产环境未配置持久化存储，无法${action}工作区。请配置 WORKSPACE_DATABASE_PATH、Vercel Blob 或 D1/R2；禁止回退到进程内临时数据。`,
-    );
+  const contract = resolveWorkspaceStorageContract();
+  if (contract.backend !== "ephemeral") {
+    throw new Error(`WORKSPACE_STORAGE_CONTRACT_VIOLATION：${action}请求未命中 ephemeral 后端。`);
   }
 }
 
@@ -168,23 +295,23 @@ export async function loadWorkspaceState(): Promise<{
   state: WorkspaceState;
   revision: number;
 }> {
-  const sqlitePath = sqliteDatabasePath();
-  if (sqlitePath) {
+  const { contract, runtime } = await runtimeStorageContract();
+  const sqlitePath = workspaceSqliteDatabasePath(contract);
+  if (contract.backend === "sqlite") {
+    if (!sqlitePath) throw new Error("WORKSPACE_STORAGE_SQLITE_UNAVAILABLE：sqlite 后端缺少数据库路径。");
     const loaded = await loadSqliteWorkspace(sqlitePath, bindDeploymentWorkspaceIdentity(createSeedState({ mode: "production" })));
     return { ...loaded, state: bindDeploymentWorkspaceIdentity(loaded.state) };
   }
 
-  if (hasVercelBlob()) {
+  if (contract.backend === "blob") {
     const current = await ensureBlobDocument();
     return {
-    state: bindDeploymentWorkspaceIdentity(ensureWorkflowFields(current.document.state)),
+      state: bindDeploymentWorkspaceIdentity(ensureWorkflowFields(current.document.state)),
       revision: current.document.revision,
     };
   }
 
-  const runtime = await getRuntimeStorage();
-  const db = runtime.DB;
-  if (!db) {
+  if (contract.backend === "ephemeral") {
     assertEphemeralStorageAllowed("读取");
     const document = ensureLocalWorkspaceDocument();
     return {
@@ -192,6 +319,7 @@ export async function loadWorkspaceState(): Promise<{
       revision: document.revision,
     };
   }
+  const db = runtime.DB!;
   await ensureSchema(db);
   const row = await db
     .prepare("SELECT state_json, revision FROM workspace_state WHERE id = ?")
@@ -229,13 +357,17 @@ export async function saveWorkspaceState(input: {
   author: string;
   message: string;
 }): Promise<{ revision: number; conflict?: boolean }> {
-  const sqlitePath = sqliteDatabasePath();
-  if (sqlitePath) return saveSqliteWorkspace(sqlitePath, {
-    ...input,
-    state: bindDeploymentWorkspaceIdentity(input.state),
-  });
+  const { contract, runtime } = await runtimeStorageContract();
+  const sqlitePath = workspaceSqliteDatabasePath(contract);
+  if (contract.backend === "sqlite") {
+    if (!sqlitePath) throw new Error("WORKSPACE_STORAGE_SQLITE_UNAVAILABLE：sqlite 后端缺少数据库路径。");
+    return saveSqliteWorkspace(sqlitePath, {
+      ...input,
+      state: bindDeploymentWorkspaceIdentity(input.state),
+    });
+  }
 
-  if (hasVercelBlob()) {
+  if (contract.backend === "blob") {
     const current = await ensureBlobDocument();
     if (current.document.revision !== input.baseRevision) {
       return { revision: current.document.revision, conflict: true };
@@ -285,9 +417,7 @@ export async function saveWorkspaceState(input: {
     }
   }
 
-  const runtime = await getRuntimeStorage();
-  const db = runtime.DB;
-  if (!db) {
+  if (contract.backend === "ephemeral") {
     assertEphemeralStorageAllowed("保存");
     const current = ensureLocalWorkspaceDocument();
     if (current.revision !== input.baseRevision) {
@@ -317,6 +447,7 @@ export async function saveWorkspaceState(input: {
     };
     return { revision };
   }
+  const db = runtime.DB!;
   await ensureSchema(db);
   const current = await db
     .prepare("SELECT revision FROM workspace_state WHERE id = ?")
@@ -350,10 +481,14 @@ export async function saveWorkspaceState(input: {
 }
 
 export async function listRevisions(): Promise<RevisionInfo[]> {
-  const sqlitePath = sqliteDatabasePath();
-  if (sqlitePath) return listSqliteRevisions(sqlitePath);
+  const { contract, runtime } = await runtimeStorageContract();
+  const sqlitePath = workspaceSqliteDatabasePath(contract);
+  if (contract.backend === "sqlite") {
+    if (!sqlitePath) throw new Error("WORKSPACE_STORAGE_SQLITE_UNAVAILABLE：sqlite 后端缺少数据库路径。");
+    return listSqliteRevisions(sqlitePath);
+  }
 
-  if (hasVercelBlob()) {
+  if (contract.backend === "blob") {
     const current = await ensureBlobDocument();
     return current.document.revisions.map((entry) => ({
       revision: entry.revision,
@@ -363,9 +498,7 @@ export async function listRevisions(): Promise<RevisionInfo[]> {
     }));
   }
 
-  const runtime = await getRuntimeStorage();
-  const db = runtime.DB;
-  if (!db) {
+  if (contract.backend === "ephemeral") {
     assertEphemeralStorageAllowed("读取版本");
     return ensureLocalWorkspaceDocument().revisions.map((entry) => ({
       revision: entry.revision,
@@ -374,6 +507,7 @@ export async function listRevisions(): Promise<RevisionInfo[]> {
       createdAt: entry.createdAt,
     }));
   }
+  const db = runtime.DB!;
   await ensureSchema(db);
   const result = await db
     .prepare(
@@ -389,22 +523,25 @@ export async function listRevisions(): Promise<RevisionInfo[]> {
 }
 
 export async function loadRevision(revision: number): Promise<WorkspaceState | null> {
-  const sqlitePath = sqliteDatabasePath();
-  if (sqlitePath) return loadSqliteRevision(sqlitePath, revision);
+  const { contract, runtime } = await runtimeStorageContract();
+  const sqlitePath = workspaceSqliteDatabasePath(contract);
+  if (contract.backend === "sqlite") {
+    if (!sqlitePath) throw new Error("WORKSPACE_STORAGE_SQLITE_UNAVAILABLE：sqlite 后端缺少数据库路径。");
+    return loadSqliteRevision(sqlitePath, revision);
+  }
 
-  if (hasVercelBlob()) {
+  if (contract.backend === "blob") {
     const current = await ensureBlobDocument();
     const entry = current.document.revisions.find((item) => item.revision === revision);
     return entry ? ensureWorkflowFields(entry.state) : null;
   }
 
-  const runtime = await getRuntimeStorage();
-  const db = runtime.DB;
-  if (!db) {
+  if (contract.backend === "ephemeral") {
     assertEphemeralStorageAllowed("读取版本");
     const entry = ensureLocalWorkspaceDocument().revisions.find((item) => item.revision === revision);
     return entry ? ensureWorkflowFields(structuredClone(entry.state)) : null;
   }
+  const db = runtime.DB!;
   await ensureSchema(db);
   const row = await db
     .prepare("SELECT state_json FROM workspace_revisions WHERE revision = ?")
@@ -416,15 +553,19 @@ export async function loadRevision(revision: number): Promise<WorkspaceState | n
 }
 
 export async function saveImportedFile(file: File, author: string) {
-  const sqlitePath = sqliteDatabasePath();
-  if (sqlitePath) return saveSqliteImportedFile(sqlitePath, sqliteFileDataDir(sqlitePath), file, author);
+  const { contract, runtime } = await runtimeStorageContract();
+  const sqlitePath = workspaceSqliteDatabasePath(contract);
+  if (contract.backend === "sqlite") {
+    if (!sqlitePath) throw new Error("WORKSPACE_STORAGE_SQLITE_UNAVAILABLE：sqlite 后端缺少数据库路径。");
+    return saveSqliteImportedFile(sqlitePath, sqliteFileDataDir(sqlitePath), file, author);
+  }
 
   const id = crypto.randomUUID();
   const safeName = file.name.replace(/[^\p{L}\p{N}._-]+/gu, "_");
   const key =
     "imports/" + new Date().toISOString().slice(0, 10) + "/" + id + "-" + safeName;
 
-  if (hasVercelBlob()) {
+  if (contract.backend === "blob") {
     await put(key, file, {
       access: "private",
       contentType: file.type || "application/octet-stream",
@@ -433,10 +574,12 @@ export async function saveImportedFile(file: File, author: string) {
     return { id, key, stored: true };
   }
 
-  const runtime = await getRuntimeStorage();
   const bucket = runtime.FILES;
-  const db = runtime.DB;
-  if (!bucket && !db) assertEphemeralStorageAllowed("存储导入文件");
+  const db = contract.backend === "d1" ? runtime.DB! : undefined;
+  if (contract.backend === "ephemeral") assertEphemeralStorageAllowed("存储导入文件");
+  if (contract.backend === "d1" && !bucket) {
+    throw new Error("WORKSPACE_STORAGE_R2_UNAVAILABLE：d1 后端存储导入文件要求 Cloudflare FILES 绑定。");
+  }
   if (bucket) {
     await bucket.put(key, await file.arrayBuffer(), {
       httpMetadata: { contentType: file.type || "application/octet-stream" },

@@ -20,8 +20,8 @@ Default to one delivery Issue and one primary PR. If the Issue contains independ
 
 The invoking main Agent remains the only coordinator. A transition into `$agent-pr-loop` is a workflow handoff, not permission to spawn a second coordinator or ask the user to carry messages.
 
-- Use one implementation Agent for code, tests, and fixes when multi-Agent execution is available. Follow repository-specific model requirements.
-- Use an independent review Agent only when the PR exists. `$agent-pr-loop` owns that reviewer, the repair loop, current-head evidence, and CI.
+- The coordinator chooses implementation capacity for code, tests, and fixes from task risk, scope, available capabilities, and resources. Follow repository-specific model requirements.
+- Independent, read-only, evidence-based review is mandatory once the PR exists. `$agent-pr-loop` owns adaptive reviewer selection, the repair loop, current-head/base evidence, and CI; every assigned scope covers the exact current head/base, and the coordinator disposes all findings before one integrated final review signal.
 - Let the coordinator repair routine labels, links, and Project status idempotently. Do not return work to the implementer only for metadata.
 - Prefer direct Agent messaging during an active task. Persist durable decisions, findings, evidence, and resumable state on the Issue or PR so another run can recover without chat history.
 

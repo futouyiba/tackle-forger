@@ -11,13 +11,13 @@ Use this Skill for project-specific constraints, task preparation, and a local i
 
 ## Route before dispatch
 
-Choose exactly one route before creating an agent:
+Choose exactly one route before dispatch. The coordinator chooses implementation capacity and reviewer count, specialization, model, reasoning strength, and scheduling from task risk, scope, available capabilities, and resources.
 
-- **Local implementation, no Issue or PR:** this Skill owns one coding agent and one independent local reviewer.
-- **Issue delivery:** `$agent-issue-loop` owns Issue, branch, PR, closure, and handoff. Supply it this Skill's TaskBrief; do not start a local independent reviewer. Once a PR exists, `$agent-pr-loop` exclusively owns review, CI, fixes, and merge gates.
-- **Existing PR:** invoke `$agent-pr-loop` directly and supply the TaskBrief. Do not create a coding or review loop here.
+- **Local implementation, no Issue or PR:** this Skill owns local implementation and the required independent read-only evidence review.
+- **Issue delivery:** `$agent-issue-loop` owns Issue, branch, PR, closure, and handoff. Supply it this Skill's TaskBrief. Once a PR exists, `$agent-pr-loop` exclusively owns review, CI, fixes, and merge gates.
+- **Existing PR:** invoke `$agent-pr-loop` directly and supply the TaskBrief. It owns the review loop.
 
-Never add a second independent reviewer to an Issue or PR route. This Skill does not own PR merge action, publication, deployment, deletion, scope expansion, or other external actions.
+For every assigned review scope, bind read-only evidence to the exact current head/base pair or local artifact. The coordinator alone disposes findings and integrates the result; after all assigned findings are disposed, emit exactly one integrated PR review signal or local verdict. The single `review` spec-read receipt in a verdict-phase TaskBrief is the coordinator-integrated review-role coverage record; it is not one receipt per reviewer and does not prove Agent identity. This Skill does not own PR merge action, publication, deployment, deletion, scope expansion, or other external actions.
 
 ## Start with a Task Card; create a TaskBrief at a formal boundary
 
@@ -62,11 +62,11 @@ Findings require severity, file/line, evidence and remediation. P0 (data loss/se
 
 ## Local implementation and review
 
-For the local route only, create one concrete coding subagent (`gpt-5.6-terra`, medium reasoning) and reuse it for rework. Give it bounded or no inherited context, the TaskBrief, and no authority beyond the scoped implementation and validation.
+For the local route, the coordinator selects implementation capacity and assigns one or more independent, read-only review scopes according to task risk, scope, available capabilities, and resources. Select reviewer specialization, model, reasoning strength, and sequential or parallel scheduling for sufficient coverage; do not prescribe them in advance. Give every participating role the TaskBrief and no authority beyond its scoped implementation, validation, or read-only review work.
 
-After inspecting the actual owned diff and validation evidence, create a different read-only reviewer (`gpt-5.6-sol`, low reasoning) with bounded or no inherited context. It reviews raw artifacts against the TaskBrief, v3, `AGENTS.md`, and historical, authorization, recovery, and regression constraints. Findings require severity, file/line, evidence, and remediation.
+After inspecting the actual owned diff and validation evidence, every assigned reviewer checks its exact local artifact against the TaskBrief, v3, `AGENTS.md`, and applicable historical, authorization, recovery, and regression constraints. Findings require severity, file/line, evidence, and remediation. The coordinator records each disposition and integrates the single local verdict only after all assigned scopes cover the unchanged artifact and all findings are disposed.
 
-At `local_review_handoff`, the reviewer must return this exact local verdict record. Committed artifacts use their exact commit SHA and never require a redundant patch hash. A still-uncommitted `WORKTREE` uses base SHA + owned paths + patch hash:
+At `local_review_handoff`, each reviewer returns findings and evidence for the assigned scope. After collecting every assigned scope and disposing all findings, the coordinator emits this exact single local verdict record. Committed artifacts use their exact commit SHA and never require a redundant patch hash. A still-uncommitted `WORKTREE` uses base SHA + owned paths + patch hash:
 
 ```text
 Tackle-Review-Version: v1

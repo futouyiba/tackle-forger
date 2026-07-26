@@ -24,27 +24,24 @@ Classify each item as actionable-current, verified-resolved, obsolete-after-new-
 
 Reply with the verified disposition and evidence when useful. Resolve an inline thread only after the code fix and regression evidence are present. Give top-level actionable comments an equally durable disposition.
 
-## Run the two-role loop
+## Run the adaptive review loop
 
-The primary Agent is the coordinator and sole integrator. Use no more than one active implementation Agent and one active independent review Agent at once.
-
-- Spawn the implementation Agent with `gpt-5.6-terra` and `medium` reasoning. It makes only minimal code and regression-test changes. It must not merge, deploy, publish, delete, commit, push, edit PR metadata, or resolve/reply to review threads unless the coordinator explicitly delegates that action.
-- Spawn the independent review Agent with `gpt-5.6-sol` and `low` reasoning. It is read-only except for publishing its final substantive GitHub review signal when authorized. It checks the exact current head against the linked Issue, canonical specification, merged dependencies, the complete PR conversation, concurrency/authorization/history boundaries, and explicit scope exclusions. Independence means separate task role and fresh reasoning, not a distinct GitHub account. Assume one human owner and one shared GitHub identity unless repository policy says otherwise.
+The primary Agent is the coordinator and sole integrator. It selects implementation capacity and reviewer count, specialization, model, reasoning strength, and sequential or parallel scheduling from task risk, scope, available capabilities, and resources. Each implementation role makes only minimal in-scope code and regression-test changes; it must not merge, deploy, publish, delete, commit, push, edit PR metadata, or resolve/reply to review threads unless the coordinator explicitly delegates that action. Each independent reviewer is read-only except for publishing the final substantive GitHub review signal when authorized, and checks its assigned scope against the exact current head/base, linked Issue, canonical specification, merged dependencies, complete PR conversation, concurrency/authorization/history boundaries, and explicit exclusions. Independence means separate task role and fresh reasoning, not a distinct GitHub account. Assume one human owner and one shared GitHub identity unless repository policy says otherwise.
 
 Use Agent messages for fast coordination during the active task. Route disposition-changing conclusions through the coordinator so it can serialize review, repair, push, CI, and re-review against the correct head. Direct implementation/reviewer clarification is allowed, but it never replaces coordinator awareness or durable evidence. Treat GitHub as the cross-session mailbox and source of truth.
 
 Start with parallel read-only triage when safe. Once a defect is found, serialize the cycle:
 
-1. Reviewer reports severity-ranked findings bound to the current SHA.
-2. Implementation Agent makes the smallest in-scope fix and tests it.
+1. Each assigned reviewer reports severity-ranked findings bound to the current head/base.
+2. Coordinator disposes each finding; implementation capacity makes the smallest in-scope fix and tests it when a repair is needed.
 3. Coordinator reviews the diff, runs repository-required full gates, commits, and pushes only the exact PR head.
 4. Coordinator reads back and verifies `local HEAD == remote PR head == GitHub PR head`.
 5. Wait for current-head pull-request CI.
-6. Reviewer performs an incremental review of that exact new head.
+6. Coordinator schedules the necessary incremental review scopes for that exact new head/base.
 
 Never reuse a PASS, approval, CI result, or unresolved-thread disposition after the head or base changes. Preserve historical data, stable identities, and published snapshots. At durable, authorization, publication, and external-write boundaries, fail closed.
 
-The final substantive review signal must be a submitted COMMENT review or repository-approved equivalent containing:
+After every assigned review scope has covered the exact current head/base and the coordinator has disposed all findings, emit exactly one integrated substantive review signal as a submitted COMMENT review or repository-approved equivalent containing:
 
 ```text
 Agent-Review-Version: v1

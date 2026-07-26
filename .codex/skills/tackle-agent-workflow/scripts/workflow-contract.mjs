@@ -1019,7 +1019,6 @@ export function checkTaskBrief({ root = repositoryRoot(), brief, currentReuseCon
     return checked.receiptHash;
   });
   if (trustedReuseContexts !== undefined && !sameSet(Object.keys(trustedReuseContexts), reusedRoles)) fail('reuseContexts must provide exactly one trusted context for each REUSE_FULL receipt role');
-  if (new Set(receiptHashes).size !== receiptHashes.length) fail('TaskBrief.specReadReceipts must not contain duplicate receipt coverage');
   const roles = brief.specReadReceipts.map((receipt) => receipt.role);
   if (phase === 'pre_dispatch' && (roles.length !== 1 || roles[0] !== 'coordinator')) fail('Pre-dispatch TaskBrief requires exactly one coordinator spec-read receipt');
   if (phase === 'verdict' && (!sameSet(roles, ['coordinator', 'coding', 'review']) || roles.length !== 3)) fail('Verdict-phase TaskBrief requires exactly one coordinator, coding, and review spec-read receipt');
@@ -1052,8 +1051,8 @@ export function promoteTaskBrief({ root = repositoryRoot(), brief, codingReceipt
   if (source.baseSha !== currentHead(root)) fail('TaskBrief promotion rejects a stale base/head artifact');
   if (brief.preexistingUnownedChanges.length !== 0) fail('TaskBrief promotion rejects preexisting unowned artifacts');
   const coordinatorReceipt = brief.specReadReceipts[0];
-  const coverageHashes = [receiptHash(coordinatorReceipt), requirePromotionReceipt({ root, receipt: codingReceipt, role: 'coding', sourceBrief: brief, currentReuseContext, reuseContexts }), requirePromotionReceipt({ root, receipt: reviewReceipt, role: 'review', sourceBrief: brief, currentReuseContext, reuseContexts })];
-  if (new Set(coverageHashes).size !== coverageHashes.length) fail('TaskBrief promotion requires unique coordinator, coding, and review receipt coverage');
+  requirePromotionReceipt({ root, receipt: codingReceipt, role: 'coding', sourceBrief: brief, currentReuseContext, reuseContexts });
+  requirePromotionReceipt({ root, receipt: reviewReceipt, role: 'review', sourceBrief: brief, currentReuseContext, reuseContexts });
   const dirtyPaths = validationStatusPaths(root);
   if (dirtyPaths.some((repoPath) => !brief.ownedPaths.includes(repoPath))) fail('TaskBrief promotion rejects dirty or unowned artifacts');
   const manifest = buildPatchManifest({ root, baseSha: source.baseSha, ownedPaths: brief.ownedPaths });
@@ -1136,7 +1135,7 @@ export function checkPolicy(root = repositoryRoot()) {
   if (!projectSkills.content.includes(expectedProjectTackle) || projectSkills.content.includes('`$tackle-agent-workflow`编排不同的编码与只读审核Agent')) fail('Workflow policy drift: broad project Skill statement differs');
   const agentsRouting = boundedSection(agents, '## Tackle 工作流契约', '## 本机凭据与多 worktree');
   if (!agentsRouting.content.includes(policyMatches[0][0])) fail('Workflow policy drift: AGENTS policy block is outside routing section');
-  const expectedTaskBriefRole = '- `$tackle-agent-workflow`日常开发先用 Task Card；仅本地路由使用其编码与独立本地审核。Issue 生命周期归`$agent-issue-loop`，PR 审核/CI/修复归`$agent-pr-loop`；已有 PR 直接使用后者。不得增加第二个独立审核者。';
+  const expectedTaskBriefRole = '- `$tackle-agent-workflow`日常开发先用 Task Card；所有路由要求独立、只读、基于证据的审核。coordinator按任务风险、范围、可用能力与资源决定实施容量，以及审核者数量、专长、模型、推理强度和串并行安排。每个已分配审核范围必须覆盖当前精确head/base或本地artifact；所有发现均由coordinator处置后，才整合唯一最终PR审核信号或本地verdict。Issue 生命周期归`$agent-issue-loop`，PR 审核/CI/修复归`$agent-pr-loop`；已有 PR 直接使用后者。verdict阶段的单一review receipt是coordinator整合后的review-role覆盖记录，不按reviewer逐个计数，也不证明Agent身份。';
   if (!agentsRouting.content.includes(expectedTaskBriefRole)) fail('Workflow policy drift: AGENTS TaskBrief role differs');
   if (!agentsRouting.content.includes('formalTaskBriefRequiredAtBoundary: true') || !agentsRouting.content.includes('earlyEscalationRequired')) fail('Workflow policy drift: AGENTS Task Card boundary state differs');
   if (!skillTaskBrief.content.includes('formalTaskBriefRequiredAtBoundary: true') || !skillTaskBrief.content.includes('earlyEscalationRequired')) fail('Workflow policy drift: Skill Task Card boundary state differs');
@@ -1145,9 +1144,9 @@ export function checkPolicy(root = repositoryRoot()) {
   if (routeLines.length !== 1 || routeLines[0] !== expectedRoute) fail('Workflow policy drift: AGENTS route statement differs');
   const skillRouting = boundedSection(skill, '## Route before dispatch', '## Start with a Task Card; create a TaskBrief at a formal boundary');
   const expectedSkillRoutes = [
-    '- **Local implementation, no Issue or PR:** this Skill owns one coding agent and one independent local reviewer.',
-    '- **Issue delivery:** `$agent-issue-loop` owns Issue, branch, PR, closure, and handoff. Supply it this Skill\'s TaskBrief; do not start a local independent reviewer. Once a PR exists, `$agent-pr-loop` exclusively owns review, CI, fixes, and merge gates.',
-    '- **Existing PR:** invoke `$agent-pr-loop` directly and supply the TaskBrief. Do not create a coding or review loop here.',
+    '- **Local implementation, no Issue or PR:** this Skill owns local implementation and the required independent read-only evidence review.',
+    '- **Issue delivery:** `$agent-issue-loop` owns Issue, branch, PR, closure, and handoff. Supply it this Skill\'s TaskBrief. Once a PR exists, `$agent-pr-loop` exclusively owns review, CI, fixes, and merge gates.',
+    '- **Existing PR:** invoke `$agent-pr-loop` directly and supply the TaskBrief. It owns the review loop.',
   ];
   for (const route of expectedSkillRoutes) if (!skillRouting.content.includes(route)) fail('Workflow policy drift: Skill route statement differs');
   const skillRouteRemainder = expectedSkillRoutes.reduce((remaining, route) => remaining.replace(route, ''), skillRouting.content);

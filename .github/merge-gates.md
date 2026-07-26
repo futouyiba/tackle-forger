@@ -14,8 +14,7 @@ Use separate decisions for entering formal review and entering the merge path:
   Issue to `In review`.
 - A pull request is **merge-ready** only when the live checker accepts its
   current head, the repository-approved review signal is current, review
-  findings and threads are settled, dependencies and the base are current, and
-  the user has authorized the merge.
+  findings and threads are settled, and dependencies and the base are current.
 
 ## Validation cadence
 
@@ -41,6 +40,13 @@ run necessary. The live merge checker still requires one eligible exact-head/bas
 run containing every canonical job; this cadence never permits missing, stale,
 partial, or cross-run evidence.
 
+Development branches do not trigger this workflow. Draft pull requests retain a
+remote discussion object without allocating CI runners. Moving a pull request to
+Ready for review triggers the candidate run; later candidate heads trigger fresh
+runs, while concurrency cancellation stops superseded runs for the same pull
+request. Cross-session problem tracking belongs in the lightweight Agent task
+Issue, not in an early pull request opened only to preserve context.
+
 Do not require this merge checker to pass before removing Draft. The checker
 intentionally rejects Draft pull requests, while a high-risk review signal is
 normally collected after formal review begins. Requiring both in the opposite
@@ -51,7 +57,7 @@ complete implementation and scoped validation
 → remove Draft and enter formal review
 → record a current-head review signal and settle its findings
 → run the live merge checker
-→ obtain explicit merge authorization
+→ establish exact-head integration evidence
 ```
 
 Classify blockers before changing ownership: implementation or acceptance
@@ -140,8 +146,8 @@ cursor.
 
 ### Historical workspace CI scope
 
-`Historical workspace (pnpm)` is always present in every pull-request and push
-run, so its exact job identity remains part of the merge-gate evidence. Before
+`Historical workspace (pnpm)` is present in every non-Draft pull-request
+candidate run, so its exact job identity remains part of the merge-gate evidence. Before
 any expensive pnpm work, the job records an auditable scope decision against the
 immutable event head and base. It runs the full historical command set when a
 change touches a historical-workspace input: `apps/**`, `packages/**`,

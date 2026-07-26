@@ -1,9 +1,9 @@
 ---
 name: agent-pr-loop
-description: Orchestrate one GitHub pull request through all comments and review findings, minimal implementation, independent Agent review, current-head CI, and automatic merge when every gate passes, pausing only at explicit human gates. Use when the user explicitly names agent-pr-loop or $agent-pr-loop, or says “搞定 PR”, “搞定这个 PR”, “搞定当前 PR”, “把这个 PR 完成/收尾/处理掉”, “把当前 PR 跑完”, “审完修完这个 PR”, “处理 PR 的评论/review/CI”, “复审后合并”, or “合并收尾”, especially when Codex should infer the active PR instead of requiring its number.
+description: Orchestrate one GitHub pull request through all comments and review findings, minimal implementation, independent Agent review, current-head CI, integration evidence, and safe merge readback when a merge is performed. Use when the user explicitly names agent-pr-loop or $agent-pr-loop, or says “搞定 PR”, “搞定这个 PR”, “搞定当前 PR”, “把这个 PR 完成/收尾/处理掉”, “把当前 PR 跑完”, “审完修完这个 PR”, “处理 PR 的评论/review/CI”, “复审后合并”, or “合并收尾”, especially when Codex should infer the active PR instead of requiring its number.
 ---
 
-Use `$agent-project-bootstrap` in daily-flow mode for work selection and repository coordination. This Skill's automatic-merge policy replaces that Skill's generic current-turn merge-confirmation rule for one selected PR; explicit repository human gates and the user's current-turn no-merge instruction still win. Keep GitHub as the current-state source of truth and obey repository instructions and canonical specifications.
+Use `$agent-project-bootstrap` in daily-flow mode for work selection and repository coordination. Keep GitHub as the current-state source of truth and obey repository instructions and canonical specifications.
 
 ## Select the PR
 
@@ -57,9 +57,9 @@ Agent-Review: PASS
 
 Include reviewed scope, validation inspected, findings, comment dispositions, and residual risks when applicable. Never emit PASS while an actionable finding remains anywhere in the PR conversation. In a single-owner, shared-account workflow, publish the COMMENT as durable Agent-review evidence rather than pretending it is a GitHub Approval. Require another GitHub identity only when repository or platform policy explicitly does.
 
-## Ready and merge gates
+## Integration evidence
 
-Declare the PR ready and merge it automatically only when one exact head/base pair has all of:
+Treat integration evidence as complete only when one exact head/base pair has all of:
 
 - synchronized latest intended integration base and clean worktree;
 - complete repository-required local validation with exact results;
@@ -68,13 +68,11 @@ Declare the PR ready and merge it automatically only when one exact head/base pa
 - a substantive independent review bound to that exact head/base pair containing the required structured fields and exact line `Agent-Review: PASS`;
 - open, non-draft, mergeable PR plus any actually configured branch-protection approvals.
 
-Automatic merge is the normal completion path; do not ask for redundant confirmation after the review/fix/CI loop has supplied all merge information. The user may override this for the current turn by saying “只审不合并”, “不要合并”, or equivalent.
-
 Pause and request the missing human decision only for unresolved product or scope semantics; destructive data, security, authorization, secret, billing, legal, or compliance choices; merge-triggered external side effects; unavailable required validation; ambiguous dependency order; a required second GitHub identity; exhausted retries; or an untrustworthy exact-head result. Do not label ordinary code quality, a completed Agent review, or a generic desire for caution as a human gate.
 
-## Publish and verify the merge
+## Publish and verify a merge
 
-Use GitHub PR merge, repository auto-merge, or its merge queue as the default merge transport. Immediately before merging, refresh GitHub and re-check the exact head/base, current-run gates, discussions, dependencies, and side effects. Respect the repository merge method and merge one qualifying PR only.
+This Skill deliberately does not prescribe whether the Agent merges or hands off a PR. If a merge is performed, use GitHub PR merge, repository auto-merge, or its merge queue as the applicable transport. Immediately before merging, refresh GitHub and re-check the exact head/base, current-run gates, discussions, dependencies, and side effects. Respect the repository merge method and merge one qualifying PR only.
 
 After GitHub reports success:
 
@@ -87,4 +85,4 @@ Do not push the PR head after merge. Do not push a stale local base after a serv
 
 If repository policy explicitly selects local integration, treat `local merge + explicit base ref push + readback` as one separate merge transport. The merge is not complete until that exact base push succeeds and is verified. Never reinterpret a local merge as permission to publish other branches.
 
-Never deploy, publish, release, delete a branch, or expand scope merely because merge is automatic.
+Never deploy, publish, release, delete a branch, or expand scope merely because integration evidence is complete.

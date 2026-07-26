@@ -1,13 +1,41 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { appendFileSync, chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { buildNavigationIndex, buildOwnedBaselineManifest, buildPatchManifest, checkFullReadSession, checkNavigationIndex, checkOwnedWhitespace, checkPolicy, checkReadReceipt, checkTaskBrief, checkTaskCard, checkVerdict, classifyOwnedPaths, fullReadSessionHash, openRegistryHash, ownedBaselineHash, patchHash, prepareTaskBrief, prepareTaskCard, promoteTaskBrief, receiptHash, runCli, runValidation, specReadPlan, taskBriefHash, upgradeTaskCard, VALIDATION_EXECUTION_TIERS, validationExecutionPlan, writeNavigationIndex } from './workflow-contract.mjs';
+import { buildNavigationIndex, buildOwnedBaselineManifest, buildPatchManifest, checkFullReadSession, checkNavigationIndex, checkOwnedWhitespace, checkPolicy, checkReadReceipt, checkTaskBrief, checkTaskCard, checkVerdict, classifyOwnedPaths, fullReadSessionHash, openRegistryHash, ownedBaselineHash, patchHash, prepareTaskBrief, prepareTaskCard, promoteTaskBrief, receiptHash, runCli, runValidation, specReadPlan, taskBriefHash, upgradeTaskCard, VALIDATION_EXECUTION_TIERS, validationExecutionPlan, writeNavigationIndex, writeTaskBriefRun, writeTaskCardRun, writeTaskRun } from './workflow-contract.mjs';
 
 function command(root, args) { return execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim(); }
+function canonicalJson(value) {
+  if (value === null || typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(',')}}`;
+}
+function taskBriefRunPath(runDirectory, brief) {
+  const taskDigest = createHash('sha256').update(brief.taskId).digest('hex');
+  const briefDigest = createHash('sha256').update(canonicalJson(brief)).digest('hex');
+  return path.join(runDirectory, `task-brief-${taskDigest}-${briefDigest}.json`);
+}
+function taskCardRunPath(runDirectory, card) {
+  const taskDigest = createHash('sha256').update(card.semantic.taskId).digest('hex');
+  const cardDigest = createHash('sha256').update(canonicalJson(card)).digest('hex');
+  return path.join(runDirectory, `task-card-${taskDigest}-${cardDigest}.json`);
+}
+function lstatMode(target) { return lstatSync(target).mode & 0o777; }
+function concurrentStore(root, brief) {
+  const moduleUrl = new URL('./workflow-contract.mjs', import.meta.url).href;
+  const source = `import { writeTaskBriefRun } from ${JSON.stringify(moduleUrl)};\nconst [root, brief] = process.argv.slice(1);\nprocess.stdout.write(JSON.stringify(writeTaskBriefRun({ root, brief: JSON.parse(brief) })));`;
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['--input-type=module', '--eval', source, root, JSON.stringify(brief)], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = ''; let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('error', reject);
+    child.on('close', (status) => status === 0 ? resolve(JSON.parse(stdout)) : reject(new Error(`concurrent store failed (${status}): ${stderr}`)));
+  });
+}
 function ownedWhitespaceCommand(baseSha, ownedPaths) { return `node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-owned-whitespace --base ${baseSha} ${ownedPaths.flatMap((owned) => ['--owned', owned]).join(' ')}`; }
 function write(root, relative, content) { const target = path.join(root, relative); mkdirSync(path.dirname(target), { recursive: true }); writeFileSync(target, content); }
 function temporaryRepo() {
@@ -130,6 +158,29 @@ test('Task Card fail-closes by requiring formal boundary escalation for runtime 
   } finally { cleanup(root); }
 });
 
+test('Task Card storage has a distinct private type, filename, and stderr report', () => {
+  const root = temporaryRepo();
+  const handoff = mkdtempSync(path.join(os.tmpdir(), 'workflow-card-store-'));
+  const originalWrite = process.stderr.write;
+  const stderr = [];
+  try {
+    taskBase(root);
+    const input = { schema: 'tackle-task-card/v1', taskId: 'card-store', workflowMode: 'local', scope: 'Persist daily routing.', ownedPaths: ['AGENTS.md'], riskProfile: 'workflow_docs_metadata', changeClass: 'workflow_metadata' };
+    const inputPath = path.join(handoff, 'card-input.json'); writeFileSync(inputPath, `${JSON.stringify(input)}\n`);
+    process.stderr.write = (chunk) => { stderr.push(String(chunk)); return true; };
+    const stdout = runCli(['--prepare-task-card', '--input', inputPath, '--store-run'], root);
+    const card = JSON.parse(stdout);
+    const storagePath = taskCardRunPath(command(root, ['rev-parse', '--path-format=absolute', '--git-path', 'codex-runs']), card);
+    assert.equal(existsSync(storagePath), true);
+    assert.equal(path.basename(storagePath).startsWith('task-card-'), true);
+    assert.match(stderr.join(''), new RegExp(`^TaskCard-Run-Path: ${storagePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n$`));
+    assert.deepEqual(JSON.parse(stdout), card);
+    assert.equal(writeTaskCardRun({ root, card }).reused, true);
+    assert.throws(() => writeTaskRun({ root, kind: 'task-brief', record: card }), /tackle-task-brief/);
+    assert.throws(() => writeTaskCardRun({ root, card: { ...card, extra: true } }), /unknown, missing, or inapplicable keys/);
+  } finally { process.stderr.write = originalWrite; cleanup(root); cleanup(handoff); }
+});
+
 test('exported Task Card preparation rejects dirty work even with a caller dirty override', () => {
   const root = temporaryRepo();
   try {
@@ -144,6 +195,9 @@ test('exported Task Card preparation rejects dirty work even with a caller dirty
 
 test('Task Card upgrades dirty owned work into a formal TaskBrief and fails closed otherwise', () => {
   const root = temporaryRepo();
+  const handoff = mkdtempSync(path.join(os.tmpdir(), 'workflow-card-upgrade-store-'));
+  const originalWrite = process.stderr.write;
+  const stderr = [];
   try {
     taskBase(root);
     const card = prepareTaskCard({ root, input: { schema: 'tackle-task-card/v1', taskId: 'card-upgrade', workflowMode: 'local', scope: 'Workflow change.', ownedPaths: ['AGENTS.md'], riskProfile: 'workflow_docs_metadata', changeClass: 'workflow_metadata' } });
@@ -153,13 +207,26 @@ test('Task Card upgrades dirty owned work into a formal TaskBrief and fails clos
     const brief = upgradeTaskCard({ root, card, boundaryInput });
     assert.equal(checkTaskBrief({ root, brief }).phase, 'pre_dispatch');
     assert.deepEqual(brief.preexistingOwnedPaths, []);
+    const cardPath = path.join(handoff, 'card.json');
+    const boundaryPath = path.join(handoff, 'boundary.json');
+    writeFileSync(cardPath, `${JSON.stringify(card)}\n`); writeFileSync(boundaryPath, `${JSON.stringify(boundaryInput)}\n`);
+    process.stderr.write = (chunk) => { stderr.push(String(chunk)); return true; };
+    const stdout = runCli(['--upgrade-task-card', '--card', cardPath, '--boundary-input', boundaryPath, '--store-run'], root);
+    const storedBrief = JSON.parse(stdout);
+    const storagePath = taskBriefRunPath(command(root, ['rev-parse', '--path-format=absolute', '--git-path', 'codex-runs']), storedBrief);
+    assert.deepEqual(storedBrief, brief);
+    assert.equal(existsSync(storagePath), true);
+    assert.equal(path.basename(storagePath).startsWith('task-brief-'), true);
+    assert.equal(path.basename(storagePath).startsWith('task-card-'), false);
+    assert.match(stderr.join(''), new RegExp(`^TaskBrief-Run-Path: ${storagePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n$`));
+    assert.equal(writeTaskBriefRun({ root, brief: storedBrief }).reused, true);
     assert.throws(() => prepareTaskBrief({ root, input: baseInput, allowOwnedDirty: true }), /clean worktree/);
     write(root, 'unowned.txt', 'no\n');
     assert.throws(() => upgradeTaskCard({ root, card, boundaryInput }), /unowned dirty paths/);
     unlinkSync(path.join(root, 'unowned.txt'));
     write(root, 'later.txt', 'commit\n'); command(root, ['add', 'later.txt']); command(root, ['commit', '-qm', 'advance head']);
     assert.throws(() => upgradeTaskCard({ root, card, boundaryInput }), /stale card base\/head/);
-  } finally { cleanup(root); }
+  } finally { process.stderr.write = originalWrite; cleanup(root); cleanup(handoff); }
 });
 
 test('TaskBrief preparation derives only mechanical fields and immediately validates', () => {
@@ -180,6 +247,113 @@ test('TaskBrief preparation derives only mechanical fields and immediately valid
     writeFileSync(inputPath, `${JSON.stringify(input)}\n`);
     assert.equal(JSON.parse(runCli(['--prepare-task-brief', '--input', inputPath], root)).taskId, input.taskId);
   } finally { cleanup(root); cleanup(handoff); }
+});
+
+test('TaskBrief preparation optionally stores a canonical Git-private run without changing stdout', () => {
+  const root = temporaryRepo();
+  const handoff = mkdtempSync(path.join(os.tmpdir(), 'workflow-prepare-store-'));
+  const originalWrite = process.stderr.write;
+  const stderr = [];
+  try {
+    taskBase(root);
+    const input = prepareInput(root);
+    const inputPath = path.join(handoff, 'prepare-input.json');
+    writeFileSync(inputPath, `${JSON.stringify(input)}\n`);
+    process.stderr.write = (chunk) => { stderr.push(String(chunk)); return true; };
+    const stdout = runCli(['--prepare-task-brief', '--input', inputPath, '--store-run'], root);
+    const prepared = JSON.parse(stdout);
+    const runDirectory = command(root, ['rev-parse', '--path-format=absolute', '--git-path', 'codex-runs']);
+    const storagePath = taskBriefRunPath(runDirectory, prepared);
+    assert.equal(existsSync(storagePath), true);
+    assert.equal(readFileSync(storagePath, 'utf8'), `${canonicalJson(prepared)}\n`, 'stored content must use canonical JSON');
+    assert.match(stderr.join(''), new RegExp(`^TaskBrief-Run-Path: ${storagePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n$`));
+    assert.deepEqual(JSON.parse(stdout), prepared);
+    assert.equal(writeTaskBriefRun({ root, brief: prepared }).reused, true);
+    const evolvedInput = prepareInput(root, { scope: 'evolved scope with the same task id' });
+    const evolved = prepareTaskBrief({ root, input: evolvedInput });
+    const evolvedRun = writeTaskBriefRun({ root, brief: evolved });
+    assert.notEqual(evolvedRun.storagePath, storagePath, 'same task ID must preserve a distinct evolved TaskBrief');
+    assert.equal(existsSync(evolvedRun.storagePath), true);
+  } finally { process.stderr.write = originalWrite; cleanup(root); cleanup(handoff); }
+});
+
+test('TaskBrief run storage is traversal-safe, per linked worktree, and fails closed on write errors', () => {
+  const root = temporaryRepo();
+  const linked = mkdtempSync(path.join(os.tmpdir(), 'workflow-linked-worktree-'));
+  try {
+    cleanup(linked);
+    taskBase(root);
+    const maliciousTaskId = '../outside/../../task';
+    const maliciousInput = prepareInput(root, { taskId: maliciousTaskId, coordinatorSpecReadReceipt: receipt(root, { taskId: maliciousTaskId, relevantSections: ['0', '19', '20'] }) });
+    const maliciousBrief = prepareTaskBrief({ root, input: maliciousInput });
+    const maliciousRun = writeTaskBriefRun({ root, brief: maliciousBrief });
+    assert.equal(maliciousRun.storagePath.includes('..'), false);
+    assert.equal(path.dirname(maliciousRun.storagePath), command(root, ['rev-parse', '--path-format=absolute', '--git-path', 'codex-runs']));
+    command(root, ['worktree', 'add', '--detach', linked, 'HEAD']);
+    const linkedInput = prepareInput(linked, { taskId: 'linked-task', coordinatorSpecReadReceipt: receipt(linked, { taskId: 'linked-task', relevantSections: ['0', '19', '20'] }) });
+    const linkedRun = writeTaskBriefRun({ root: linked, brief: prepareTaskBrief({ root: linked, input: linkedInput }) });
+    const rootRunDirectory = command(root, ['rev-parse', '--path-format=absolute', '--git-path', 'codex-runs']);
+    const linkedRunDirectory = command(linked, ['rev-parse', '--path-format=absolute', '--git-path', 'codex-runs']);
+    assert.notEqual(linkedRunDirectory, rootRunDirectory);
+    assert.equal(path.dirname(linkedRun.storagePath), linkedRunDirectory);
+    const failingRoot = temporaryRepo();
+    try {
+      taskBase(failingRoot);
+      const failingDirectory = command(failingRoot, ['rev-parse', '--path-format=absolute', '--git-path', 'codex-runs']);
+      writeFileSync(failingDirectory, 'not a directory\n');
+      assert.throws(() => writeTaskBriefRun({ root: failingRoot, brief: prepareTaskBrief({ root: failingRoot, input: prepareInput(failingRoot) }) }), /Cannot write Git-private TaskBrief run storage/);
+    } finally { cleanup(failingRoot); }
+  } finally {
+    if (existsSync(linked)) command(root, ['worktree', 'remove', '--force', linked]);
+    cleanup(root);
+  }
+});
+
+test('TaskBrief run storage publishes complete records atomically and rejects unsafe or stale artifacts', async () => {
+  const root = temporaryRepo();
+  try {
+    taskBase(root);
+    const prepared = prepareTaskBrief({ root, input: prepareInput(root) });
+    const runDirectory = command(root, ['rev-parse', '--path-format=absolute', '--git-path', 'codex-runs']);
+    mkdirSync(runDirectory, { recursive: true });
+    const storagePath = taskBriefRunPath(runDirectory, prepared);
+    const prefix = path.basename(storagePath, '.json');
+    const staleTemporary = path.join(runDirectory, `.${prefix}.tmp-abandoned`);
+    writeFileSync(staleTemporary, '{partial');
+    utimesSync(staleTemporary, 1, 1);
+    const first = writeTaskBriefRun({ root, brief: prepared });
+    assert.equal(first.reused, false);
+    assert.equal(existsSync(staleTemporary), false, 'old partial temporary artifacts are cleaned before publication');
+    assert.equal(readdirSync(runDirectory).some((name) => name.startsWith(`.${prefix}.tmp-`)), false, 'publisher cleans its own temporary file');
+    assert.equal(readFileSync(storagePath, 'utf8'), `${canonicalJson(prepared)}\n`);
+    assert.equal(writeTaskBriefRun({ root, brief: prepared }).reused, true, 'a second publisher observes only the complete final record');
+    unlinkSync(storagePath);
+    const concurrent = await Promise.all([concurrentStore(root, prepared), concurrentStore(root, prepared)]);
+    assert.equal(concurrent.filter((result) => result.reused === false).length, 1);
+    assert.equal(concurrent.filter((result) => result.reused === true).length, 1);
+    assert.equal(readFileSync(storagePath, 'utf8'), `${canonicalJson(prepared)}\n`);
+    if (process.platform !== 'win32') {
+      assert.equal(lstatMode(runDirectory), 0o700);
+      assert.equal(lstatMode(storagePath), 0o600);
+      chmodSync(storagePath, 0o644);
+      assert.throws(() => writeTaskBriefRun({ root, brief: prepared }), /mode 600/);
+      chmodSync(storagePath, 0o600);
+    }
+    unlinkSync(storagePath);
+    try {
+      symlinkSync('../outside', storagePath);
+      assert.throws(() => writeTaskBriefRun({ root, brief: prepared }), /unsafe/);
+    } catch (error) { if (!['EEXIST', 'EPERM', 'EACCES'].includes(error.code)) throw error; }
+    const unsafeRoot = temporaryRepo();
+    const unsafeTarget = mkdtempSync(path.join(os.tmpdir(), 'workflow-run-storage-target-'));
+    try {
+      taskBase(unsafeRoot);
+      const unsafeDirectory = command(unsafeRoot, ['rev-parse', '--path-format=absolute', '--git-path', 'codex-runs']);
+      symlinkSync(unsafeTarget, unsafeDirectory);
+      assert.equal(lstatSync(unsafeDirectory).isSymbolicLink(), true);
+      assert.throws(() => writeTaskBriefRun({ root: unsafeRoot, brief: prepareTaskBrief({ root: unsafeRoot, input: prepareInput(unsafeRoot) }) }), /run storage path escaped|directory is unsafe/);
+    } finally { cleanup(unsafeRoot); cleanup(unsafeTarget); }
+  } finally { cleanup(root); }
 });
 
 test('TaskBrief preparation accepts v2 reuse receipts only with trusted continuous context', () => {
@@ -465,6 +639,17 @@ test('historical CI scope includes forbidden root pnpm metadata', () => {
       assert.throws(() => command(root, ['diff', '--quiet', base, head, '--', ...pathspec]));
     } finally { cleanup(root); }
   }
+});
+
+test('CI returns a Draft transition through its PR candidate concurrency group', () => {
+  const workflow = readFileSync(path.resolve(process.cwd(), '.github/workflows/ci.yml'), 'utf8');
+  assert.doesNotMatch(workflow, /^\s{2}push:/m);
+  assert.match(workflow, /types: \[opened, reopened, synchronize, ready_for_review, converted_to_draft\]/);
+  assert.match(workflow, /group: ci-\$\{\{ github\.event\.pull_request\.number \|\| github\.ref \}\}/);
+  assert.match(workflow, /cancel-in-progress: true/);
+  assert.match(workflow, /github\.event\.pull_request\.draft == false/g);
+  assert.match(workflow, /github\.event_name == 'schedule'/);
+  assert.match(workflow, /github\.event_name == 'workflow_dispatch'/);
 });
 
 test('spec-read receipts enforce full/scoped plans and canonical v3 hash', () => {
@@ -815,8 +1000,22 @@ test('SCOPED eligibility, clean Issue/PR routing, sections, OPEN IDs, and receip
     taskBase(root);
     const local = brief(root);
     assert.deepEqual(classifyOwnedPaths(['.github/workflows/ci.yml']), { scopedEligible: true, unrecognizedPaths: [] });
+    for (const scopedPath of [
+      '.codex/skills/agent-project-bootstrap/SKILL.md',
+      '.codex/skills/agent-issue-loop/SKILL.md',
+      '.codex/skills/agent-pr-loop/SKILL.md',
+      '.claude/skills/agent-pr-loop/SKILL.md',
+    ]) assert.deepEqual(classifyOwnedPaths([scopedPath]), { scopedEligible: true, unrecognizedPaths: [] });
     assert.deepEqual(classifyOwnedPaths(['.github/nested/arbitrary.md']), { scopedEligible: false, unrecognizedPaths: ['.github/nested/arbitrary.md'] });
     assert.deepEqual(classifyOwnedPaths(['.github/workflows/nested/ci.yml']), { scopedEligible: false, unrecognizedPaths: ['.github/workflows/nested/ci.yml'] });
+    for (const unrecognizedPath of [
+      '.codex/skills/agent-project-bootstrapper/SKILL.md',
+      '.codex/skills/agent-issue-loop-backup/SKILL.md',
+      '.claude/skills/deploy-r730/SKILL.md',
+      '.claude/skills/agent-pr-loop-backup/SKILL.md',
+      '.claude/skill/tackle-agent-workflow/SKILL.md',
+      '.claude/skills.md',
+    ]) assert.deepEqual(classifyOwnedPaths([unrecognizedPath]), { scopedEligible: false, unrecognizedPaths: [unrecognizedPath] });
     for (const malformed of [
       '.codex/skills/tackle-agent-workflow/../../../lib/runtime.ts',
       '../evil.md',
@@ -1000,4 +1199,56 @@ test('canonical specification paths always trigger the module consistency comman
     const prepared = prepareTaskBrief({ root, input });
     assert.equal(prepared.validationPlan.requiredCommands.includes('node scripts/spec-v3-modules.mjs --check'), true);
   } finally { cleanup(root); }
+});
+
+test('repository workflow leaves the merge decision to task-aware Agent judgment', () => {
+  const root = process.cwd();
+  const policyPaths = [
+    'AGENTS.md',
+    '.github/merge-gates.md',
+    '.claude/skills/agent-pr-loop/SKILL.md',
+    '.codex/skills/agent-issue-loop/SKILL.md',
+    '.codex/skills/agent-pr-loop/SKILL.md',
+    '.codex/skills/agent-pr-loop/agents/openai.yaml',
+    '.codex/skills/agent-project-bootstrap/SKILL.md',
+    '.codex/skills/agent-project-bootstrap/references/daily-project-flow.md',
+    '.codex/skills/tackle-agent-workflow/SKILL.md',
+  ];
+  const prohibitedPrescriptions = [
+    /automatic merge is the normal completion path/i,
+    /automatically merges when every gate passes/i,
+    /automatic merge when every gate passes/i,
+    /automatically complete one PR/i,
+    /exact-head automatic-merge/i,
+    /do not ask for redundant (?:merge )?confirmation/i,
+    /all-green exact-head review and CI result supplies the normal merge decision/i,
+    /the user has authorized the merge/i,
+    /only an explicit merge request may continue/i,
+    /unless the current request explicitly includes a merge/i,
+    /only when the current request explicitly includes a merge/i,
+    /仅当前请求明确包含合并时/i,
+  ];
+  for (const relative of policyPaths) {
+    const content = readFileSync(path.join(root, relative), 'utf8');
+    for (const prohibited of prohibitedPrescriptions) assert.doesNotMatch(content, prohibited, relative);
+  }
+  const issueLoop = readFileSync(path.join(root, '.codex/skills/agent-issue-loop/SKILL.md'), 'utf8');
+  assert.match(issueLoop, /PR_LOOP_ACTIVE → PR_EVIDENCE_COMPLETE/);
+  assert.match(issueLoop, /status: `EVIDENCE_COMPLETE`, `MERGED_VERIFIED`/);
+  assert.match(issueLoop, /exact reviewed head and base SHAs plus gate evidence/);
+  assert.match(issueLoop, /does not prescribe which outcome the Agent chooses/);
+
+  const routingSources = [
+    'AGENTS.md',
+    '.claude/skills/agent-pr-loop/SKILL.md',
+    '.codex/skills/agent-project-bootstrap/SKILL.md',
+    '.codex/skills/agent-project-bootstrap/references/daily-project-flow.md',
+  ];
+  for (const relative of routingSources) {
+    const content = readFileSync(path.join(root, relative), 'utf8');
+    assert.doesNotMatch(content, /合并闭环|merge phase/i, relative);
+  }
+  const gatePolicy = readFileSync(path.join(root, '.github/merge-gates.md'), 'utf8');
+  assert.match(gatePolicy, /owner merge authorization that explicitly names the governance\s+exception/);
+  assert.match(gatePolicy, /explicit owner authorization naming PR #63/);
 });

@@ -7,12 +7,18 @@ run-name: >-
   base=${{ github.event.pull_request.base.sha || github.event.before }}
 
 on:
-  push:
   pull_request:
+    # A move back to Draft starts an all-skipped run in this PR's concurrency
+    # group, cancelling any in-flight candidate validation.
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
   schedule:
     # Independent full verification of the retained historical pnpm workspace.
     - cron: '23 3 * * 1'
   workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -20,7 +26,7 @@ permissions:
 jobs:
   root-v3-app:
     name: Root v3 app (npm)
-    if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -35,6 +41,10 @@ jobs:
 
   historical-workspace:
     name: Historical workspace (pnpm)
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.event.pull_request.draft == false)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -57,7 +67,6 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PUSH_BEFORE_SHA: ${{ github.event.before }}
         run: |
           set -euo pipefail
 
@@ -76,8 +85,6 @@ jobs:
           else
             if [[ "$EVENT_NAME" == "pull_request" ]]; then
               base="$PR_BASE_SHA"
-            elif [[ "$EVENT_NAME" == "push" ]]; then
-              base="$PUSH_BEFORE_SHA"
             else
               full_run=true
               reason="unsupported_event"
@@ -149,7 +156,7 @@ jobs:
 
   windows-line-endings:
     name: Windows line-ending policy
-    if: github.event_name != 'schedule' && github.event_name != 'workflow_dispatch'
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5

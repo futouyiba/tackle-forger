@@ -418,7 +418,7 @@ function commandSpec(briefResult, brief, command) {
     const [executable, args] = staticCommands.get(command);
     return { command, executable, args };
   }
-  if (command === dynamicDiffCommand(briefResult.baseSha, brief.ownedPaths)) return { command, executable: 'git', args: ['diff', '--check', briefResult.baseSha, '--', ...brief.ownedPaths] };
+  if (isWorkflowWhitespaceCommand(command, briefResult.baseSha, brief.ownedPaths)) return { command, executable: node, args: [script, '--check-owned-whitespace', '--base', briefResult.baseSha, ...brief.ownedPaths.flatMap((owned) => ['--owned', owned])] };
   fail(`Validation command is not in the closed execution catalog: ${command}`);
 }
 export function validationExecutionPlan({ root = repositoryRoot(), brief, currentReuseContext }) {
@@ -489,7 +489,7 @@ function validateBriefNarrative(brief, { legacyTouched }) {
   }
   if (legacyTouched ? Object.hasOwn(na, 'legacy_workspace_ci') : !Object.hasOwn(na, 'legacy_workspace_ci')) fail(legacyTouched ? 'legacy workspace changes cannot mark legacy_workspace_ci N/A' : 'Non-legacy work requires a legacy_workspace_ci N/A reason');
   const allowedCommands = new Set([...matrix.commands, ...(legacyTouched ? LEGACY_WORKSPACE_COMMANDS : [])]);
-  if (commands.some((item) => !allowedCommands.has(item) && !(brief.changeClass === 'workflow_metadata' && /^git diff --check [0-9a-f]{40} -- .+$/.test(item))) || scenarios.some((item) => ![...matrix.scenarios, ...riskScenarios].includes(item))) fail('TaskBrief.validationPlan command/scenario is in the wrong collection');
+  if (commands.some((item) => !allowedCommands.has(item) && !(brief.changeClass === 'workflow_metadata' && isWorkflowWhitespaceCommand(item, brief.baseSha, brief.ownedPaths))) || scenarios.some((item) => ![...matrix.scenarios, ...riskScenarios].includes(item))) fail('TaskBrief.validationPlan command/scenario is in the wrong collection');
   for (const item of matrix.commands) if (!commands.includes(item) && !Object.hasOwn(na, item)) fail(`TaskBrief.validationPlan omits required command: ${item}`);
   for (const item of nonWaivableScenarios) if (!scenarios.includes(item)) fail(`TaskBrief.validationPlan scenario cannot be N/A: ${item}`);
   for (const item of matrix.nonWaivableCommands ?? []) if (!commands.includes(item)) fail(`TaskBrief.validationPlan command cannot be N/A: ${item}`);
@@ -509,7 +509,27 @@ function requiredRiskScenarios(riskDimensions) {
 function isUserVisiblePath(repoPath) {
   return repoPath.startsWith('apps/web/') || repoPath.startsWith('packages/ui/') || repoPath.startsWith('legacy-workspace/apps/web/') || repoPath.startsWith('legacy-workspace/packages/ui/') || /\.(?:tsx|jsx|css|scss|sass|less|html)$/.test(repoPath);
 }
-function dynamicDiffCommand(baseSha, ownedPaths) { return `git diff --check ${baseSha} -- ${ownedPaths.join(' ')}`; }
+function dynamicDiffCommand(baseSha, ownedPaths) { return `node ${SCRIPT_RELATIVE} --check-owned-whitespace --base ${baseSha} ${ownedPaths.flatMap((owned) => ['--owned', owned]).join(' ')}`; }
+function legacyDynamicDiffCommand(baseSha, ownedPaths) { return `git diff --check ${baseSha} -- ${ownedPaths.join(' ')}`; }
+function isWorkflowWhitespaceCommand(command, baseSha, ownedPaths) { return command === dynamicDiffCommand(baseSha, ownedPaths) || command === legacyDynamicDiffCommand(baseSha, ownedPaths); }
+export function checkOwnedWhitespace({ root = repositoryRoot(), baseSha, ownedPaths }) {
+  const manifest = buildPatchManifest({ root, baseSha, ownedPaths });
+  for (const entry of manifest.entries) {
+    if (entry.state === 'unchanged') continue;
+    const args = entry.state === 'untracked'
+      ? ['diff', '--no-index', '--check', '/dev/null', entry.path]
+      : ['diff', '--check', manifest.baseSha, '--', entry.path];
+    const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 1024 * 1024 });
+    const detail = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim();
+    // git diff --no-index returns 1 for an ordinary, clean difference. --check
+    // emits diagnostics for whitespace errors, which is the only nonzero case we reject.
+    if (result.error || (entry.state !== 'untracked' && result.status !== 0) || detail.length > 0) {
+      const detailMessage = detail || result.error?.message || `git diff exited ${result.status}`;
+      fail(`Owned whitespace check failed for ${entry.path}: ${detailMessage}`);
+    }
+  }
+  return { baseSha: manifest.baseSha, checkedPaths: manifest.entries.filter((entry) => entry.state !== 'unchanged').map((entry) => entry.path) };
+}
 function sectionIdsFromNavigation(root) {
   return new Set(buildNavigationIndex(root).headings.map((heading) => heading.title.match(/^(\d+(?:\.\d+)*)(?:\.|\s)/)?.[1]).filter(Boolean));
 }
@@ -588,6 +608,7 @@ export function prepareTaskBrief({ root = repositoryRoot(), input, currentReuseC
   if (!['local', 'issue', 'pull_request'].includes(workflowMode)) fail('Task preparation input.workflowMode is invalid');
   const baseSha = canonicalCommit(root, input.baseSha, 'Task preparation input.baseSha');
   const head = currentHead(root);
+  if (workflowMode === 'local' && baseSha !== head) fail('Local task preparation requires baseSha to equal current HEAD');
   if (git(root, ['merge-base', '--is-ancestor', baseSha, head]) === null) fail('Task preparation input.baseSha must be an ancestor of current HEAD');
   const ownedPaths = requireNonEmptyStringArray(input.ownedPaths, 'Task preparation input.ownedPaths');
   const canonicalOwnedPaths = ownedPaths.map((item) => prepareOwnedFilePath(root, baseSha, item));
@@ -706,7 +727,7 @@ export function checkTaskBrief({ root = repositoryRoot(), brief, currentReuseCon
   if (!classification.scopedEligible && (!brief.scopeHasRuntimeSemantics || riskProfile === 'workflow_docs_metadata')) fail('TaskBrief owned paths require runtime/high-risk declaration and non-workflow riskProfile');
   if (ownedPaths.some(isUserVisiblePath) && !brief.riskDimensions.userVisible) fail('User-visible owned paths require userVisible risk');
   const dynamicDiff = dynamicDiffCommand(baseSha, ownedPaths);
-  if (brief.changeClass === 'workflow_metadata' && !brief.validationPlan.requiredCommands.includes(dynamicDiff)) fail(`TaskBrief.validationPlan command cannot be N/A: ${dynamicDiff}`);
+  if (brief.changeClass === 'workflow_metadata' && !brief.validationPlan.requiredCommands.some((command) => isWorkflowWhitespaceCommand(command, baseSha, ownedPaths))) fail(`TaskBrief.validationPlan command cannot be N/A: ${dynamicDiff}`);
   const preexistingOwnedPaths = requireStringArray(brief.preexistingOwnedPaths, 'TaskBrief.preexistingOwnedPaths');
   requireStringArray(brief.preexistingUnownedChanges, 'TaskBrief.preexistingUnownedChanges');
   if (!preexistingOwnedPaths.every((item) => ownedPaths.includes(item))) fail('TaskBrief.preexistingOwnedPaths must be owned paths');
@@ -845,7 +866,7 @@ export function checkPolicy(root = repositoryRoot()) {
   return true;
 }
 function usage() {
-  return `Usage:\n  node ${SCRIPT_RELATIVE} --generate-index\n  node ${SCRIPT_RELATIVE} --check-index\n  node ${SCRIPT_RELATIVE} --check-policy\n  node ${SCRIPT_RELATIVE} --prepare-task-brief --input <semantic-input.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --spec-read-plan --role <coordinator|coding|review> --risk <risk-profile> [--relevant <v3-section> ...]\n  node ${SCRIPT_RELATIVE} --check-read-receipt --receipt <receipt.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --check-full-read-session --session <session.json>\n  node ${SCRIPT_RELATIVE} --check-task-brief --brief <task-brief.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --owned-baseline --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --run-validation --brief <verdict-task-brief.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --check-verdict --verdict <verdict.json> --brief <task-brief.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --patch-hash --base <sha> --owned <repo-relative-path> [--owned <path> ...]`;
+  return `Usage:\n  node ${SCRIPT_RELATIVE} --generate-index\n  node ${SCRIPT_RELATIVE} --check-index\n  node ${SCRIPT_RELATIVE} --check-policy\n  node ${SCRIPT_RELATIVE} --prepare-task-brief --input <semantic-input.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --check-owned-whitespace --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --spec-read-plan --role <coordinator|coding|review> --risk <risk-profile> [--relevant <v3-section> ...]\n  node ${SCRIPT_RELATIVE} --check-read-receipt --receipt <receipt.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --check-full-read-session --session <session.json>\n  node ${SCRIPT_RELATIVE} --check-task-brief --brief <task-brief.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --owned-baseline --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --run-validation --brief <verdict-task-brief.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --check-verdict --verdict <verdict.json> --brief <task-brief.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --patch-hash --base <sha> --owned <repo-relative-path> [--owned <path> ...]`;
 }
 function parseActionOptions(argv, action, allowed, required = []) {
   if (argv[0] !== action) fail(usage());
@@ -861,7 +882,7 @@ function parseActionOptions(argv, action, allowed, required = []) {
 }
 export function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
   const action = argv[0];
-  if (!['--generate-index', '--check-index', '--check-policy', '--prepare-task-brief', '--spec-read-plan', '--check-read-receipt', '--check-full-read-session', '--check-task-brief', '--owned-baseline', '--run-validation', '--check-verdict', '--patch-hash'].includes(action)) fail(usage());
+  if (!['--generate-index', '--check-index', '--check-policy', '--prepare-task-brief', '--check-owned-whitespace', '--spec-read-plan', '--check-read-receipt', '--check-full-read-session', '--check-task-brief', '--owned-baseline', '--run-validation', '--check-verdict', '--patch-hash'].includes(action)) fail(usage());
   const root = repositoryRoot(cwd);
   if (action === '--generate-index' || action === '--check-index' || action === '--check-policy') {
     if (argv.length !== 1) fail(usage());
@@ -875,6 +896,11 @@ export function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
       currentAgentIdentity: values['--current-agent-identity'][0], currentContextSessionId: values['--current-context-session-id'][0], currentContextState: values['--current-context-state'][0],
     };
     return JSON.stringify(prepareTaskBrief({ root, input: readJsonFile(path.resolve(cwd, values['--input'][0]), 'Task preparation input'), currentReuseContext }), null, 2);
+  }
+  if (action === '--check-owned-whitespace') {
+    const values = parseActionOptions(argv, action, { '--base': false, '--owned': true }, ['--base']);
+    if (values['--owned'].length === 0) fail(usage());
+    return JSON.stringify(checkOwnedWhitespace({ root, baseSha: values['--base'][0], ownedPaths: values['--owned'] }), null, 2);
   }
   if (action === '--spec-read-plan') {
     const values = parseActionOptions(argv, action, { '--role': false, '--risk': false, '--relevant': true }, ['--role', '--risk']);

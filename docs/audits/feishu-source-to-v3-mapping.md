@@ -3,13 +3,13 @@
 > 生成日期：2026-07-24
 > 基线 commit：`eebd0c74a471dcf860cff3196b8d57448b51bbaf`（`git rev-parse HEAD`）
 > 生成者：Claude 自动审计，只读现有文件
-> 2026-07-26 校对：核对至 `d38d6a8`，pricing 区域（`33IGHy`/`34KaIv`/`35bCfX`）按 `4e77a3e` 更新；其余映射经 #191 旧表清理后仍准确。
+> 2026-07-26 校对（二次）：核对至合并 `efb549c`，33IGHy 名对齐 registry（"基础维修价格和零整比"），34KaIv/35bCfX 已不在 CANONICAL_FEISHU_SHEET_REGISTRY 登记；v3 §14 去数量声明
 
 ## 数据源
 
 1. **飞书源工作簿**（权威规则源·原始设计稿）：
    - spreadsheet-token = `WQ8wstS4ch29E2tAKnVcoh5KnJg`
-   - 50 张 sheet，按 `00_系统接入` → `19_Patch台账` 编号；竿/轮/线拆为独立子表（`01.0/01.1/01.2` 等）。
+   - 竿/轮/线拆为独立子表（`01.0/01.1/01.2` 等），按 `00_系统接入` → `19_Patch台账` 编号。本表列出 `CANONICAL_FEISHU_SHEET_REGISTRY` 登记的表，不定义表总数。
    - 每张表只读了表头 + 1~2 行样例（`A1:Z3`），未读全表。
 2. **v3 spec**：`docs/tackle-forger-development-spec-v3.md`（唯一权威规范，术语见 §2）。
 3. **代码**：仓库**根目录** `lib/*.ts`（约 95 个领域模块）、`app/**/*.tsx`（工作台）与 `app/api/**/route.ts`（API）、`tests/*.test.ts`。
@@ -61,9 +61,7 @@
 | 29 | 08.2_品质评分-词条组合 | `28fQhg` | affix × affix 组合评分矩阵（双列 `词条1/词条2`） | §12.1 combinationScore / 组合矩阵 | `quality-value-policy.ts` | ✅ | spec 称「07_品质评分 还提供竿/轮/线三张组合矩阵」。源表仅一张通用；`—` 对角线不产生组合，显式 `0` 是合法值 |
 | 30 | 09.0_价格计算-公式 | `31RxeB` | 竿/轮/线维修价格公式（基础维修价 × 维修系数 × 评分插值） | §20.1 PricingPolicy | `pricing-policy.ts` | ✅ | spec §20.1 公式更精细：维修/购买分别舍入、购买价用未舍入维修价、最低价 100 仅作用于购买价 |
 | 31 | 09.1_价格计算-参数释义 | `32BmZs` | 定价参数键释义：`score_interpolation_policy`、`rod_parts_to_whole_ratio` 等 | §20.1 PricingExecutionPolicy | `pricing-policy.ts`、`types.ts` | ✅ | spec 把执行策略显式化为 `PricingExecutionPolicy`（3 位有效数字向下取整、阈值 3 亿软确认） |
-| 32 | 09.2_价格计算-维修消耗速度 | `33IGHy` | 维修消耗速度 × 钓具大类 × 重量段 × 品质；列含「零正比」（笔误零整比） | §20.1 维修消耗速度 / 零整比 | `pricing-policy.ts`、`rule-workbook-inspection.ts` | ✅ | 源表列名「零正比」为笔误，规范为「零整比」；PR2b-3（4e77a3e）后代码从 33IGHy 读取维修价格与零整比，行格式 `(part, weight, quality, maintenance, ratio)` |
-| 33 | 09.3_价格计算-部件占比 | `34KaIv` | 部位占比（**表头为空**，未填数据） | §20.1 部位占比 | `pricing-policy.ts` | 🟡 | 34KaIv 当前为 `staging_output`、不参与导入；spec §20.1 要求「部位占比(part, pricingWeightBandId)」入定价公式与 Trace。PR2b-3（4e77a3e）：现行策略从 33IGHy 读取维修价/零整比，并为部位占比生成值=`1` 的显式身份默认项 |
-| 34 | 09.4_价格计算-各部位全损时间-零整比 | `35bCfX` | 全损时间 / 零整比（**表头为空**，未填数据） | §20.1 全损时间 / 零整比 | `pricing-policy.ts` | 🟡 | 35bCfX 当前为 `staging_output`、不参与导入；spec 明确「零整比不得为 0」。PR2b-3（4e77a3e）：现行策略从 33IGHy 读取零整比，并为全损时间生成值=`1` 的显式身份默认项 |
+| 32 | 09.2_价格计算-基础维修价格和零整比 | `33IGHy` | 维修消耗速度 × 钓具大类 × 重量段 × 品质；含零整比 | §20.1 维修消耗速度 / 零整比 | `pricing-policy.ts`、`rule-workbook-inspection.ts` | ✅ | PR2b-3（4e77a3e）后代码从 33IGHy 读取维修价格与零整比，行格式 `(part, weight, quality, maintenance, ratio)`；34KaIv/35bCfX 已不在 registry 登记，代码不导入 |
 | 35 | 10_钓具甘特图示意 | `36GGVk` | 品质 × 钓具类型 × 重量段 的系列覆盖示意（`系列 SA1…`） | §23 系列甘特图（语义不同） | `series-gantt-query.ts`、`series-pull-planning.ts`、`app/SeriesGanttWorkbenchV3.tsx`、`app/api/series-gantt/route.ts` | 📋 | spec §14（line 944）明确此类甘特表「是开发计划表/示意图，不是数据源，也不新增领域实体」。代码的系列甘特图是动态规划视图，语义不同 |
 | 36 | 11.0_校验规则-枚举 | `37YLZE` | 枚举值：鱼重等级（微物…超级巨物）、钓具大类（竿/轮/线） | §13 校验 / §10.1 ParameterDefinition / §14.3.1 枚举 | `validation-issues.ts`、`rule-kernel.ts`、`types.ts` | ✅ | |
 | 37 | 11.1_校验规则-竿组 | `38LXDQ` | 竿/轮/线 组合约束：类型、功能定位、系列匹配 | §9.1 硬兼容 Rod×Reel×Line 闭环 / §13 | `compatibility.ts`、`validation-issues.ts`、`part-constraints.ts` | ✅ | |
@@ -83,13 +81,13 @@
 
 ## 关键差异 / 缺口汇总
 
-1. **WQ8w 是当前唯一权威主工作簿**（50 张分表）。spec §14 历史引用的 YsEKw（wiki，约 18 张合并表）是切流前的旧表，§14 审计区保留其拓扑作历史证据；本表（WQ8w）映射按**概念语义**对应，不按表号或 sheet_id 对应。
+1. **WQ8w 是当前唯一权威主工作簿**（分表；本表列出 `CANONICAL_FEISHU_SHEET_REGISTRY` 登记的表）。spec §14 历史引用的 YsEKw（wiki，约 18 张合并表）是切流前的旧表，§14 审计区保留其拓扑作历史证据；本表（WQ8w）映射按**概念语义**对应，不按表号或 sheet_id 对应。
 
 2. **品质 S 区间源表过期**。源表 `08.1` 可能仍写 `[65,100)`；spec §12.1 已决 `S=[65,100]` 含 100（评分 100 属 S，>100 报 `QUALITY_SCORE_OUT_OF_RANGE`）。飞书机器源修订并显式拉取前，导入器产生 `QUALITY_RANGE_SOURCE_OUTDATED`，旧 Draft 禁止发布为新正式 `QualityValuePolicyVersion`。代码 `quality-value-policy.ts` 已按新契约。
 
 3. **02.5 / 03.5 派生模板写回未上线**。源表 `fshg_*/tppl_*` 行标记 `BOUND`，看似已持久化；但 spec §14（line 940）明确「`02.5` 专用持久化写回命令尚未提供」，当前 rev `4226→4227` 的写入与技术回读**仅是迁移证据**，不得宣称为该工作流已上线。代码侧以运行时演绎为权威。
 
-4. **09.3 部位占比 / 09.4 全损时间-零整比 当前为 staging_output**。两张表不参与导入（表头未填）；spec §20.1 把「部位占比」「全损时间」「零整比」列为定价公式必填输入。PR2b-3（4e77a3e）后，现行策略从 `33IGHy` 读取维修价/零整比，并为部位占比与全损时间生成值=`1`、`status: SOURCE` 的显式身份默认项，构造完整 lookup 输入。因输入均为 `SOURCE`（非 `CONFIRMED`），草稿 `formalStatus` 为 `TRIAL_READY`，`publishPricingPolicyDraft` 拒绝发布；当前代码无把定价输入转为 `CONFIRMED` 的治理流程。未来启用 `34KaIv/35bCfX` 时再通过独立切流替换默认项。
+4. **09.3 部位占比 / 09.4 全损时间-零整比 当前为 staging_output**。两张表不参与导入（表头未填）；spec §20.1 把「部位占比」「全损时间」「零整比」列为定价公式必填输入。PR2b-3（4e77a3e）后，现行策略从 `33IGHy` 读取维修价/零整比，并为部位占比与全损时间生成值=`1`、`status: SOURCE` 的显式身份默认项，构造完整 lookup 输入。因输入均为 `SOURCE`（非 `CONFIRMED`），草稿 `formalStatus` 为 `TRIAL_READY`，`publishPricingPolicyDraft` 拒绝发布；当前代码无把定价输入转为 `CONFIRMED` 的治理流程。注：34KaIv/35bCfX 已不在代码 CANONICAL_FEISHU_SHEET_REGISTRY 登记（pr2b-3 删除）；当前定价默认项不再依赖这两张源表。
 
 5. **10_甘特图示意 ≠ 系列甘特图领域实体**。源表名带「示意」，是品质×类型×重量段的静态系列覆盖图；spec §14（line 944）明确此类表「是开发计划表/示意图，**不是数据源，也不新增领域实体**」。代码的系列甘特图（`series-gantt-query.ts` + `SeriesGanttWorkbenchV3.tsx`）是 spec §23 定义的动态规划/导航视图，二者语义不同。
 

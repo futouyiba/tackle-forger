@@ -602,9 +602,18 @@ test('policy checker detects required workflow markers', () => {
     assert.equal(checkPolicy(root), true);
     write(root, '.github/pull_request_template.md', canonicalTemplate.replace('- [ ] External side effects\n', ''));
     assert.throws(() => checkPolicy(root), /risk trigger checkboxes/);
+    const hiddenRiskCheckboxes = canonicalTemplate.replace(
+      '- [ ] Persisted data or migration\n- [ ] Historical or published artifacts\n- [ ] Authorization or concurrency\n- [ ] External side effects\n- [ ] User-visible UI or interaction',
+      '<!--\n- [ ] Persisted data or migration\n- [ ] Historical or published artifacts\n- [ ] Authorization or concurrency\n- [ ] External side effects\n- [ ] User-visible UI or interaction\n-->',
+    );
+    write(root, '.github/pull_request_template.md', hiddenRiskCheckboxes);
+    assert.throws(() => checkPolicy(root), /risk trigger checkboxes/);
     write(root, '.github/pull_request_template.md', canonicalTemplate);
     appendFileSync(path.join(root, '.github/pull_request_template.md'), 'Minimal render smoke replaces the pending unified visual review.\n');
-    assert.throws(() => checkPolicy(root), /Workflow policy drift/);
+    assert.throws(() => checkPolicy(root), /minimal render smoke contradicts/);
+    write(root, '.github/pull_request_template.md', canonicalTemplate);
+    appendFileSync(path.join(root, '.github/pull_request_template.md'), 'The unified visual review is completed by a Minimal render smoke.\n');
+    assert.throws(() => checkPolicy(root), /minimal render smoke contradicts/);
   } finally { cleanup(root); }
 });
 

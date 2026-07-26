@@ -1177,23 +1177,30 @@ export function checkPolicy(root = repositoryRoot()) {
   ];
   for (const mapping of riskDimensionMappings) if (!riskGuidance.content.includes(mapping)) fail('Workflow policy drift: PR risk trigger mapping differs from TaskBrief riskDimensions');
   const riskTriggerLabels = ['Persisted data or migration', 'Historical or published artifacts', 'Authorization or concurrency', 'External side effects', 'User-visible UI or interaction'];
-  const actualRiskTriggerLabels = riskGuidance.content.split(/\r?\n/).flatMap((line) => {
+  const renderedRiskGuidance = riskGuidance.content.replace(/<!--[\s\S]*?-->/g, '');
+  const actualRiskTriggerLabels = renderedRiskGuidance.split(/\r?\n/).flatMap((line) => {
     const match = line.match(/^- \[[ xX]\] (.+)$/);
     return match === null ? [] : [match[1]];
   });
   // The policy owns the five labels, while checked/unchecked author state is deliberately ignored.
   if (canonicalJson(actualRiskTriggerLabels) !== canonicalJson(riskTriggerLabels)) fail('Workflow policy drift: PR risk trigger checkboxes differ from the canonical five-field projection');
   if (!riskGuidance.content.includes('These checkboxes do not derive or override riskProfile, reviewTier, or the merge gate\'s normal/high classification.')) fail('Workflow policy drift: PR risk triggers became an independent risk or review authority');
-  const renderedRiskGuidance = riskGuidance.content.replace(/<!--[\s\S]*?-->/g, '');
   if (!renderedRiskGuidance.includes(policy.visual.pendingMarker)) fail('Workflow policy drift: PR visual pending marker must be visible when the user-visible trigger is checked');
   if (!riskGuidance.content.includes('A minimal render smoke does not complete the unified visual review.')) fail('Workflow policy drift: PR minimal render smoke boundary is missing');
+  const visualBoundaryContradiction = template.split(/\r?\n/).some((line) => {
+    const hasMinimalSmoke = /(?:Minimal render smoke|最小渲染)/i.test(line);
+    const hasVisualReview = /(?:unified|pending|visual|视觉)/i.test(line);
+    const hasCompletionClaim = /(?:replace(?:s|d)?|complet(?:e|es|ed)|remove(?:s|d)?|clear(?:s|ed)?|替代|完成)/i.test(line);
+    const negatesCompletion = /(?:does not|doesn't|cannot|can't|must not|不得|不能|不)\s*(?:replace|complete|remove|clear|替代|完成)/i.test(line);
+    return hasMinimalSmoke && hasVisualReview && hasCompletionClaim && !negatesCompletion;
+  });
+  if (visualBoundaryContradiction) fail('Workflow policy drift: minimal render smoke contradicts the unified visual review boundary');
   const contradictions = [
     [agentsRouting.content.replace(expectedRoute, '').replace(expectedTaskBriefRole, ''), /(?:Issue\s*路由|PR\s*路由|本地\s*路由)[^\n]*(?:审核|reviewer|review)/i],
     [agentsRouting.outside, /Issue\s*路由[^\n]*(?:审核|reviewer|review|独立审核者)/i],
     [projectSkills.content.replace(expectedProjectTackle, ''), /tackle-agent-workflow[^\n]*(?:编码与只读审核Agent|独立审核)/i],
     [skillRouteRemainder, /(?:Issue\s*路由|Issue delivery|Existing PR)[^\n]*(?:local independent reviewer|本地独立审核者|tackle-agent-workflow[^\n]*review)/i],
     [skillRouting.outside, /(?:Issue\s*路由|Issue delivery|Existing PR)[^\n]*(?:local independent reviewer|本地独立审核者|tackle-agent-workflow[^\n]*review)/i],
-    [template, /(?:Minimal render smoke|最小渲染)[^\n]*(?:replaces|completes|removes|clears|替代|完成)[^\n]*(?:unified|pending|visual|视觉)/i],
   ];
   for (const [text, forbidden] of contradictions) if (forbidden.test(text)) fail(`Workflow policy drift: contradictory normative text (${forbidden})`);
   return true;

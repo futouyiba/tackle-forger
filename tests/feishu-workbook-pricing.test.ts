@@ -213,7 +213,7 @@ test("同一完整高行号工作簿导入保持幂等", () => {
 });
 
 test("当前整本工作簿注册表覆盖 00–19、FunctionProfile 常量与各部位分表，并包含真实 sheet_id", () => {
-  assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.length, 50);
+  assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.length, 48, "注册表登记 48 张分表（09.3/09.4 已移除）");
   assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "00_系统接入")?.sheetId, "0iGCcx");
   assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "04.00_FunctionProfile常量")?.sheetId, "19XKzU");
   assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "01.0_重量模板-竿")?.sheetId, "1cAihB");
@@ -371,7 +371,7 @@ test("WQ8w 路径（32BmZs + 33IGHy）生成完整 lookup 表并通过试算", (
     typeValues,
     importedAt: "2026-07-26T00:00:00.000Z",
   });
-  assert.equal(draft.maintenanceConsumptionRates.length, 8, "维修速度");
+  assert.equal(draft.maintenanceConsumptionRates.length, 4, "维修速度（去重后per-band+part）");
   assert.equal(draft.partAllocationRatios.length, 4, "部位占比");
   assert.equal(draft.totalLossTimes.length, 4, "全损时间");
   assert.equal(draft.partsToWholeRatios.length, 8, "零整比");

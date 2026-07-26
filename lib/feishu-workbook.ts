@@ -119,7 +119,7 @@ export const NEW_CANONICAL_FEISHU_WORKBOOK: FeishuWorkbookRef = {
  *   价格计算（公式/参数释义/维修消耗速度）、校验规则（枚举/竿组/竿/轮/线）；
  * - `historical_reference`：00_系统接入、02.5/03.5/04.5 派生模板镜像（StructuralBenchmark/
  *   DerivedProjection 派生审核镜像，只读，不得作为可导入/可提案规则源）、13 打包竿组；
- * - `staging_output`：09.3/09.4 空定价表、12.x 组合SKU 输出表（#143 结构化评估：竿ID/型号/
+ * - `staging_output`：12.x 组合SKU 输出表（#143 结构化评估：竿ID/型号/
  *   评分/品质/拉力，第一列非「机器ID（勿改）」，是输出而非规则/历史参考）、15-18 配置表 schema、
  *   19_Patch台账空镜像（均输出/源数据待补，不得作为可导入规则源或历史参考消费）；
  * - `development_plan`：10 钓具甘特图示意；`publish_control`：14 上传发布。
@@ -158,9 +158,7 @@ export const CANONICAL_FEISHU_SHEET_REGISTRY: FeishuSheetRegistryEntry[] = [
   ["28fQhg", "08.2_品质评分-词条组合", "rule_source", true, true],
   ["31RxeB", "09.0_价格计算-公式", "rule_source", true, true],
   ["32BmZs", "09.1_价格计算-参数释义", "rule_source", true, true],
-  ["33IGHy", "09.2_价格计算-维修消耗速度", "rule_source", true, true],
-  ["34KaIv", "09.3_价格计算-部件占比", "staging_output", false, false],
-  ["35bCfX", "09.4_价格计算-各部位全损时间-零整比", "staging_output", false, false],
+  ["33IGHy", "09.2_价格计算-基础维修价格和零整比", "rule_source", true, true],
   ["36GGVk", "10_钓具甘特图示意", "development_plan", false, false],
   ["37YLZE", "11.0_校验规则-枚举", "rule_source", true, true],
   ["38LXDQ", "11.1_校验规则-竿组", "rule_source", true, true],

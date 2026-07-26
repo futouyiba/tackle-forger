@@ -457,11 +457,12 @@ function parsePricingWq8wLookup(rows: unknown[][] | undefined): {
     const bandId = `weight_band:${weightBand}`;
     const src: PricingCellRef = { sheetId: "33IGHy", cell: `A${index + 1}:E${index + 1}`, rowKey: String(index + 1) };
     if (Number.isFinite(maintenance)) {
-      rates.push({ pricingWeightBandId: bandId, partId, value: { value: maintenance, status: "SOURCE", source: src } });
-      // WQ8w: part allocation and total loss baked into per-part maintenance; emit identity defaults so formulas don't break.
       const key = `${bandId}:${partId}`;
-      if (!seenAlloc.has(key)) { seenAlloc.add(key); allocRates.push({ pricingWeightBandId: bandId, partId, value: { value: 1, status: "SOURCE" as const, source: src } }); }
-      if (!seenLoss.has(key)) { seenLoss.add(key); lossTimes.push({ pricingWeightBandId: bandId, partId, value: { value: 1, status: "SOURCE" as const, source: src } }); }
+      // WQ8w rates are quality-scoped; downstream trial expects per-(band,part).
+      // Use first encountered quality per (band, part) — data is ordered C/B/A/S.
+      if (!seenAlloc.has(key)) { seenAlloc.add(key); rates.push({ pricingWeightBandId: bandId, partId, value: { value: maintenance, status: "SOURCE", source: src } }); }
+      // part allocation and total loss baked into per-part maintenance; emit identity defaults.
+      if (!seenLoss.has(key)) { seenLoss.add(key); allocRates.push({ pricingWeightBandId: bandId, partId, value: { value: 1, status: "SOURCE" as const, source: src } }); lossTimes.push({ pricingWeightBandId: bandId, partId, value: { value: 1, status: "SOURCE" as const, source: src } }); }
     }
     if (Number.isFinite(ratio)) {
       ratios.push({ pricingWeightBandId: bandId, partId, value: { value: ratio, status: "SOURCE", source: src } });
@@ -576,23 +577,32 @@ export function qualityDraftFromRanges(input: {
 
   // Only the explicit 品质区间 table is authoritative.  Do not scan the rest
   // of a workbook for isolated C/B/A/S values that happen to look like scores.
+  const qualityFieldLabels = ["品质", "代码", "≥最小评分", "<最大评分", "最小价格系数", "最大价格系数"] as const;
   const qualityTableHeaders = input.qualityValues.flatMap((row, rowIndex) => row.flatMap((value, columnIndex) => text(value) === "品质区间" ? [{ rowIndex, columnIndex }] : []));
-  if (qualityTableHeaders.length !== 1) structureIssue(
+  // WQ8w 27hboC: simple table format — row 0 = headers, rows 1-4 = C/B/A/S data, no "品质区间" marker.
+  const wq8wHeaderRow = qualityTableHeaders.length === 0 ? input.qualityValues.findIndex((row) => {
+    return qualityFieldLabels.every((label) => row.some((value) => text(value) === label));
+  }) : -1;
+  const hasWq8wQuality = wq8wHeaderRow >= 0;
+  const wq8wFieldIndices = hasWq8wQuality ? qualityFieldLabels.map((label) => input.qualityValues[wq8wHeaderRow].findIndex((value) => text(value) === label)) : [];
+  if (qualityTableHeaders.length !== 1 && !hasWq8wQuality) structureIssue(
     qualityTableHeaders.length ? "QUALITY_RANGE_TABLE_DUPLICATE" : "QUALITY_RANGE_TABLE_MISSING",
-    "07_品质评分必须且只能有一个精确的“品质区间”表头。",
+    '07_品质评分必须且只能有一个精确的”品质区间”表头。',
     qualityTableHeaders[0]?.rowIndex ?? 0, qualityTableHeaders[0]?.columnIndex ?? 0,
   );
   const qualityTable = qualityTableHeaders[0];
-  const qualityFieldLabels = ["品质", "代码", "≥最小评分", "<最大评分", "最小价格系数", "最大价格系数"] as const;
-  const qualityFieldHeaders = qualityTable ? input.qualityValues
-    .slice(qualityTable.rowIndex + 1)
-    .flatMap((row, offset) => {
-      const matches = qualityFieldLabels.map((label) => row.flatMap((value, index) => text(value) === label ? [index] : []));
-      const indices = matches.map(([index]) => index ?? -1);
-      return matches.every((fieldMatches) => fieldMatches.length === 1)
-        ? [{ rowIndex: qualityTable.rowIndex + 1 + offset, indices }] : [];
-    }) : [];
-  if (qualityTable && qualityFieldHeaders.length !== 1) structureIssue(
+  // WQ8w 27hboC: simple format with header at row 0 + data at rows 1-4
+  const qualityFieldHeaders = hasWq8wQuality
+    ? [{ rowIndex: wq8wHeaderRow, indices: wq8wFieldIndices }]
+    : (qualityTable ? input.qualityValues
+      .slice(qualityTable.rowIndex + 1)
+      .flatMap((row, offset) => {
+        const matches = qualityFieldLabels.map((label) => row.flatMap((value, index) => text(value) === label ? [index] : []));
+        const indices = matches.map(([index]) => index ?? -1);
+        return matches.every((fieldMatches) => fieldMatches.length === 1)
+          ? [{ rowIndex: qualityTable.rowIndex + 1 + offset, indices }] : [];
+      }) : []);
+  if (!hasWq8wQuality && qualityTable && qualityFieldHeaders.length !== 1) structureIssue(
     qualityFieldHeaders.length ? "QUALITY_RANGE_TABLE_HEADER_DUPLICATE" : "QUALITY_RANGE_TABLE_HEADER_MISSING",
     "品质区间必须在 marker 后且只能有一个包含全部定价字段的字段表头。",
     qualityFieldHeaders[0]?.rowIndex ?? qualityTable.rowIndex, qualityTable.columnIndex,
@@ -637,7 +647,7 @@ export function qualityDraftFromRanges(input: {
   }));
   for (const [heading, itemPartId] of matrixPartByHeader) {
     const matches = blocks.filter((block) => block.itemPartId === itemPartId);
-    if (matches.length !== 1) structureIssue(matches.length ? "QUALITY_MATRIX_BLOCK_DUPLICATE" : "QUALITY_MATRIX_BLOCK_MISSING", `组合矩阵块“${heading}”必须且只能出现一次。`, matches[0]?.rowIndex ?? 0, matches[0]?.columnIndex ?? 0, itemPartId);
+    if (matches.length !== 1) structureIssue(matches.length ? "QUALITY_MATRIX_BLOCK_DUPLICATE" : "QUALITY_MATRIX_BLOCK_MISSING", `组合矩阵块"${heading}"必须且只能出现一次。`, matches[0]?.rowIndex ?? 0, matches[0]?.columnIndex ?? 0, itemPartId);
   }
   for (const [blockIndex, block] of blocks.entries()) {
     const header = input.qualityValues[block.rowIndex] ?? [];
@@ -674,9 +684,9 @@ export function qualityDraftFromRanges(input: {
     }
   }
   const pricingScoreEndpoints = input.pricingEndpointValues.flatMap((row) => {
-    const value = Number(row[0]);
+    const value = Number(row[3]); // WQ8w 33IGHy: column D = maintenance price
     return Number.isFinite(value)
-      ? [{ value, status: "SOURCE" as const, source: { sheetId: "31RxeB", cell: "B179", rowKey: "179" } }]
+      ? [{ value, status: "SOURCE" as const, source: { sheetId: "33IGHy", cell: "D2:D193", rowKey: "2-193" } }]
       : [];
   });
   return importQualityValuePolicyDraft({

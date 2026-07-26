@@ -36,8 +36,8 @@ test("parseCanonicalWorkbookLink：新表 URL 返回 spreadsheetToken 且 wikiTo
   assert.equal(parsed.syncScope, "workbook");
 });
 
-test("NEW_CANONICAL_FEISHU_SHEET_REGISTRY：50 张分表，sheetId 全局唯一、非空、名称非空", () => {
-  assert.equal(NEW_CANONICAL_FEISHU_SHEET_REGISTRY.length, 50, "对照表登记 50 张分表");
+test("NEW_CANONICAL_FEISHU_SHEET_REGISTRY：48 张分表，sheetId 全局唯一、非空、名称非空", () => {
+  assert.equal(NEW_CANONICAL_FEISHU_SHEET_REGISTRY.length, 48, "对照表登记 48 张分表");
   const seen = new Set<string>();
   for (const entry of NEW_CANONICAL_FEISHU_SHEET_REGISTRY) {
     assert.ok(entry.sheetId.trim(), `sheet_id 不得为空：${entry.expectedName}`);
@@ -165,8 +165,6 @@ test("NEW_CANONICAL_FEISHU_SHEET_REGISTRY：逐 sheet 角色断言（派生镜�
     "31RxeB": "rule_source",
     "32BmZs": "rule_source",
     "33IGHy": "rule_source",
-    "34KaIv": "staging_output",
-    "35bCfX": "staging_output",
     "36GGVk": "development_plan",
     "37YLZE": "rule_source",
     "38LXDQ": "rule_source",

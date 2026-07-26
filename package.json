@@ -30,10 +30,6 @@
     "xlsx": "file:vendor/xlsx-0.20.3.tgz"
   },
   "overrides": {
-    "next": {
-      "postcss": "8.5.23",
-      "sharp": "0.35.3"
-    },
     "eslint@9.39.4": {
       "minimatch@3.1.5": {
         "brace-expansion": "1.1.16"

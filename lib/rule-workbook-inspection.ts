@@ -257,7 +257,7 @@ function parsePricingWq8wParams(pricingParamsValues: unknown[][]) {
     const row = pricingParamsValues[index] ?? [];
     const key = text(row[0]).trim();
     const status = text(row[1]).trim();
-    const value = text(row[3]); // WQ8w 32BmZs: B=key, C=status, D=value
+    const value = text(row[3]); // A=key, B=status, D=value
     if (key && status && status !== "设计约定") map.set(key, value);
   }
   return {
@@ -326,16 +326,12 @@ export function pricingDraftFromRanges(input: {
   const maintenanceConsumptionRates: PricingLookupEntry[] = wq8wLookup.maintenanceConsumptionRates.length
     ? wq8wLookup.maintenanceConsumptionRates
     : (() => { const leg: PricingLookupEntry[] = []; for (let i = 13; i < pricingValues.length; i++) { const r = pricingValues[i] ?? []; const b = text(r[0]); const v = Number(r[2]); if (b && Number.isFinite(v)) leg.push({ pricingWeightBandId: `weight_band:${b}`, value: { value: v, status: "SOURCE", source: { sheetId: "31RxeB", cell: `D${i + 10}`, rowKey: String(i + 10) } } }); } return leg; })();
-  // WQ8w: part allocation and total loss are baked into per-part maintenance prices (33IGHy).
-  // For legacy compatibility, default values of 1 so formulas simplify to identity without breaking.
-  const partAllocationRatios: PricingLookupEntry[] = wq8wLookup.maintenanceConsumptionRates.length
-    ? [{ partId: "rod", value: { value: 1, status: "SOURCE" as const, source: { sheetId: "33IGHy", cell: "A1", rowKey: "implicit" } } }]
+  const partAllocationRatios: PricingLookupEntry[] = wq8wLookup.partAllocationRatios.length
+    ? wq8wLookup.partAllocationRatios
     : (() => { const leg: PricingLookupEntry[] = []; for (let i = 13; i < pricingValues.length; i++) { const r = pricingValues[i] ?? []; const b = text(r[4]); for (const [off, pid] of [[5, "rod"], [6, "reel"], [7, "line"]] as const) { const v = Number(r[off]); if (b && Number.isFinite(v)) leg.push({ pricingWeightBandId: `weight_band:${b}`, partId: pid, value: { value: v, status: "SOURCE", source: { sheetId: "31RxeB", cell: `${String.fromCharCode(66 + off)}${i + 10}`, rowKey: String(i + 10) } } }); } } return leg; })();
-  const totalLossTimes: PricingLookupEntry[] = [
-    { partId: "rod", value: { value: 1, status: "SOURCE" as const, source: { sheetId: "33IGHy", cell: "A1", rowKey: "implicit" } } },
-    { partId: "reel", value: { value: 1, status: "SOURCE" as const, source: { sheetId: "33IGHy", cell: "A1", rowKey: "implicit" } } },
-    { partId: "line", value: { value: 1, status: "SOURCE" as const, source: { sheetId: "33IGHy", cell: "A1", rowKey: "implicit" } } },
-  ];
+  const totalLossTimes: PricingLookupEntry[] = wq8wLookup.totalLossTimes.length
+    ? wq8wLookup.totalLossTimes
+    : (() => { const leg: PricingLookupEntry[] = []; for (let i = 13; i < pricingValues.length; i++) { const r = pricingValues[i] ?? []; const b = text(r[9]); for (const [off, pid] of [[11, "rod"], [12, "reel"], [13, "line"]] as const) { const v = Number(r[off]); if (b && Number.isFinite(v)) leg.push({ pricingWeightBandId: `weight_band:${b}`, partId: pid, value: { value: v, status: "SOURCE", source: { sheetId: "31RxeB", cell: `${String.fromCharCode(66 + off)}${i + 10}`, rowKey: String(i + 10) } } }); } } return leg; })();
   const partsToWholeRatios: PricingLookupEntry[] = wq8wLookup.partsToWholeRatios.length
     ? wq8wLookup.partsToWholeRatios
     : (() => { const leg: PricingLookupEntry[] = []; for (let i = 13; i < pricingValues.length; i++) { const r = pricingValues[i] ?? []; const b = text(r[9]); for (const [off, pid] of [[14, "rod"], [15, "reel"], [16, "line"]] as const) { const v = Number(r[off]); if (b && Number.isFinite(v)) leg.push({ pricingWeightBandId: `weight_band:${b}`, partId: pid, value: { value: v, status: "SOURCE", source: { sheetId: "31RxeB", cell: `${String.fromCharCode(66 + off)}${i + 10}`, rowKey: String(i + 10) } } }); } } return leg; })();
@@ -440,30 +436,38 @@ export function pricingQualitySourceRowsFromDraft(
 function parsePricingWq8wLookup(rows: unknown[][] | undefined): {
   maintenanceConsumptionRates: PricingLookupEntry[];
   partsToWholeRatios: PricingLookupEntry[];
+  partAllocationRatios: PricingLookupEntry[];
+  totalLossTimes: PricingLookupEntry[];
 } {
+  const partNames: Record<string, string> = { "竿": "rod", "轮": "reel", "线": "line" };
   const rates: PricingLookupEntry[] = [];
   const ratios: PricingLookupEntry[] = [];
-  if (!rows || rows.length < 2) return { maintenanceConsumptionRates: rates, partsToWholeRatios: ratios };
+  const allocRates: PricingLookupEntry[] = [];
+  const lossTimes: PricingLookupEntry[] = [];
+  const seenAlloc = new Set<string>();
+  const seenLoss = new Set<string>();
+  if (!rows || rows.length < 2) return { maintenanceConsumptionRates: rates, partsToWholeRatios: ratios, partAllocationRatios: allocRates, totalLossTimes: lossTimes };
   for (let index = 1; index < rows.length; index += 1) {
     const row = rows[index] ?? [];
-    const partName = text(row[0]);
+    const partId = partNames[text(row[0])] ?? "";
     const weightBand = text(row[1]);
-    const quality = text(row[2]);
     const maintenance = Number(row[3]);
     const ratio = Number(row[4]);
-    const partId = partIds[partName] ?? "";
     if (!weightBand || !partId) continue;
     const bandId = `weight_band:${weightBand}`;
     const src: PricingCellRef = { sheetId: "33IGHy", cell: `A${index + 1}:E${index + 1}`, rowKey: String(index + 1) };
     if (Number.isFinite(maintenance)) {
       rates.push({ pricingWeightBandId: bandId, partId, value: { value: maintenance, status: "SOURCE", source: src } });
+      // WQ8w: part allocation and total loss baked into per-part maintenance; emit identity defaults so formulas don't break.
+      const key = `${bandId}:${partId}`;
+      if (!seenAlloc.has(key)) { seenAlloc.add(key); allocRates.push({ pricingWeightBandId: bandId, partId, value: { value: 1, status: "SOURCE" as const, source: src } }); }
+      if (!seenLoss.has(key)) { seenLoss.add(key); lossTimes.push({ pricingWeightBandId: bandId, partId, value: { value: 1, status: "SOURCE" as const, source: src } }); }
     }
     if (Number.isFinite(ratio)) {
       ratios.push({ pricingWeightBandId: bandId, partId, value: { value: ratio, status: "SOURCE", source: src } });
     }
-    void quality; // ignored — per-band lookup not quality-scoped
   }
-  return { maintenanceConsumptionRates: rates, partsToWholeRatios: ratios };
+  return { maintenanceConsumptionRates: rates, partsToWholeRatios: ratios, partAllocationRatios: allocRates, totalLossTimes: lossTimes };
 }
 
 const partIds: Record<string, string> = { "竿": "part:rod", "轮": "part:reel", "线": "part:line" };

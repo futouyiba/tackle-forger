@@ -332,6 +332,56 @@ test("07/08/02 同 revision 导入查表与金额事实，但不猜测三项执�
   assert.ok(draft.issues.some((issue) => issue.code === "PRICING_EXECUTION_SEMANTICS_MISSING"));
 });
 
+test("WQ8w 路径（32BmZs + 33IGHy）生成完整 lookup 表并通过试算", () => {
+  const sourceRevision = { id: "feishu-src:wq8w-test", workbookRefId: "feishu-workbook:tackle-design", sourceRevision: "wq8w-test", spreadsheetToken: "WQ8wstS4ch29E2tAKnVcoh5KnJg", pulledAt: "2026-07-26T00:00:00.000Z", pulledBy: "tester", syncScope: "workbook" as const, registryHash: "abc", sheets: [], issues: [], state: "PULLED" as const };
+  const params = [
+    ["参数键", "状态", "当前値", "说明"],
+    ["currency_unit", "已显式定义", "金币", ""],
+    ["rounding_mode", "已显式定义", "向下取整；3位有效数字", ""],
+    ["minimum_price", "已显式定义", "100", ""],
+    ["overflow_maximum", "已显式定义", "300000000", ""],
+  ];
+  const endpoints = [
+    ["钓具大类", "重量段", "品质", "基础维修价格", "零整比"],
+    ["竿", "1", "C", 29767, 1],
+    ["竿", "1", "B", 73018, 0.8],
+    ["竿", "2", "C", 101520, 0.96],
+    ["竿", "2", "B", 258111, 0.76],
+    ["线", "1", "C", 5000, 0.9],
+    ["线", "1", "B", 12000, 0.7],
+    ["线", "2", "C", 18000, 0.85],
+    ["线", "2", "B", 40000, 0.65],
+  ];
+  const typeValues = [
+    ["机器ID（勿改）", "实体类型", "类型"],
+    ["type_rod_0001", "RodType", "浮钓竿", ...Array.from({ length: 16 }, () => 1), 1.5, 1.2],
+    ["type_line_0001", "LineType", "尼龙线", ...Array.from({ length: 16 }, () => 1), 1.0, 0.9],
+  ];
+  const qualityRows = [
+    { code: "C", minScore: 0, maxScore: 20, minFactor: 0.5, maxFactor: 1.1, mappingCell: "B2", factorCell: "E2:H2", rowKey: "2" },
+    { code: "B", minScore: 20, maxScore: 40, minFactor: 0.8, maxFactor: 1.2, mappingCell: "B3", factorCell: "E3:H3", rowKey: "3" },
+    { code: "A", minScore: 40, maxScore: 65, minFactor: 0.7, maxFactor: 1.3, mappingCell: "B4", factorCell: "E4:H4", rowKey: "4" },
+    { code: "S", minScore: 65, maxScore: 100, minFactor: 2, maxFactor: 3, mappingCell: "B5", factorCell: "E5:H5", rowKey: "5" },
+  ];
+  const draft = pricingDraftFromRanges({
+    sourceRevision,
+    qualityValues: [], qualitySourceRows: qualityRows,
+    pricingParamsValues: params,
+    pricingEndpointValues: endpoints,
+    typeValues,
+    importedAt: "2026-07-26T00:00:00.000Z",
+  });
+  assert.equal(draft.maintenanceConsumptionRates.length, 8, "维修速度");
+  assert.equal(draft.partAllocationRatios.length, 4, "部位占比");
+  assert.equal(draft.totalLossTimes.length, 4, "全损时间");
+  assert.equal(draft.partsToWholeRatios.length, 8, "零整比");
+  assert.equal(draft.executionPolicy?.repairRoundingStage, "final_repair_output");
+  assert.equal(draft.moneyPolicy?.unit, "金币");
+  assert.equal(draft.issues.some((i) => i.code === "PARTS_TO_WHOLE_RATIO_MISSING"), false);
+  assert.equal(draft.issues.some((i) => i.code === "PRICING_MONEY_POLICY_MISSING"), false);
+  assert.equal(draft.issues.some((i) => i.code === "PRICING_EXECUTION_SEMANTICS_MISSING"), false);
+});
+
 test("工作簿按 sheet_id 校验，改名只告警，同名新表不冒充原表", async () => {
   const renamed = CANONICAL_FEISHU_SHEET_REGISTRY.map((sheet) => ({ sheetId: sheet.sheetId, name: sheet.expectedName })).map((sheet) =>
     sheet.sheetId === "25UnTC" ? { ...sheet, name: "07_系列原型" } : sheet,

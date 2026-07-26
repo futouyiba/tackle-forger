@@ -89,7 +89,7 @@ Never require the user to supply an Issue number.
 - **开始做 + natural-language description** — resolve the matching Issue, then delegate its complete delivery to the installed `$agent-issue-loop` Skill.
 - **搞定 Issue / agent-issue-loop + optional Issue** — delegate one selected Issue to `$agent-issue-loop`. Keep one main coordinator across readiness, implementation, validation, PR handoff, and durable integration evidence; its single PR is handled by `$agent-pr-loop`.
 - **收尾** — inspect the linked Issue, PR, review, and CI; record exact integration evidence and current state.
-- **合并收尾 + optional scope** — treat the user's invocation as merge authorization for this turn only. Read the integration procedure in [daily project flow](references/daily-project-flow.md), merge only qualifying PRs in the current repository, and never deploy or publish.
+- **合并收尾 + optional scope** — immediately inspect the supplied scope for qualifying PRs and apply the repository's standing merge policy. It is a convenience trigger, not a prerequisite for merge authorization. Read the integration procedure in [daily project flow](references/daily-project-flow.md), merge only qualifying PRs in the current repository, and never deploy or publish.
 - **搞定 PR / agent-pr-loop + optional PR** — delegate one selected PR to the installed `$agent-pr-loop` Skill. It reads the complete PR conversation and runs the implementation/review/current-head-CI loop, preserving exact integration evidence and safely reading back any merge that is performed.
 - **托管 + optional goal or scope** — configure or resume the bounded supervisor in [managed autopilot](references/managed-autopilot.md). With no suffix, use the current repository and current explicit goal, active Issue, or active PR. If that scope is ambiguous, ask one concise question. Consolidate any missing schedule and standing merge-policy choices into one setup confirmation, then stop requiring the user to relay routine Issue, PR, review, and CI updates. Treat `托管这个项目` and natural equivalents identically.
 
@@ -126,6 +126,7 @@ Once a task is clearly selected and repository policy adopts this workflow, the 
 - create and link a PR;
 - move it to `In review`;
 - record validation results;
+- merge one exact-head/base PR when the repository's trusted live gate returns `READY` and no recorded human gate applies;
 - close a selected Issue normally after `$agent-issue-loop` verifies its qualifying merge and acceptance evidence.
 
 Ask before:

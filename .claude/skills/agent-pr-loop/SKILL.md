@@ -7,7 +7,7 @@ description: coordinator 已组织实现并形成 PR head 后，把 PR 走完「
 
 ## 定位
 
-本 skill 在项目 `CLAUDE.md`「Agent 工作模式」定义的工作模式下运作；实施容量由 coordinator 按任务决定，此处不另行固定。**本 skill 负责审核、CI、集成证据和实际合并后的安全回读，但不规定 Agent 是否执行合并。**
+本 skill 在项目 `CLAUDE.md`「Agent 工作模式」定义的工作模式下运作；实施容量由 coordinator 按任务决定，此处不另行固定。**本 skill 负责审核、CI、集成证据和实际合并后的安全回读；是否执行合并由仓库政策决定。当前仓库在可信实时门禁对精确head/base返回`READY`且未命中人工关卡时，要求coordinator依据standing authorization直接合并一个合格PR，无需本轮用户另行授权。**
 
 reviewTier边界、receipt角色与风险安全下限只从上方版本化机器政策加载，本skill不维护平行矩阵。需要审核时，每个范围只读并绑定当前精确head/base，所有发现由coordinator处置后才整合唯一最终审核信号。独立审核有两条路（可选其一或并行）：
 1. **输出审核清单**（见下）→ 用户粘到常驻审核 agent 窗口（省 install + 上下文重建，推荐用于敏捷迭代）；
@@ -55,6 +55,8 @@ Agent 进程可能无法跨会话存活（压缩、/model 切换、进程退出�
 
 
 仅当命中显式人工关卡时才暂停请求人工决策：未决产品语义/范围、破坏性或不可逆数据变更、安全/授权边界、合并触发部署/发布、必需验证不可用、依赖或合并顺序不明、重试上限耗尽。不把普通代码质量或泛泛「再谨慎些」标成关卡。
+
+当`.github/merge-gates.md`规定的可信实时checker返回`READY`且上述人工关卡均未命中时，coordinator必须直接使用仓库正常GitHub合并方式合并一个合格PR并立即回读PR状态、merge SHA与远端base包含关系。该授权不扩张为部署、发布、删除、范围扩张或其他外部副作用权限。
 
 ## 避免 rebase + force-push
 

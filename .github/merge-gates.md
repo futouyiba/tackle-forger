@@ -23,6 +23,25 @@ Use separate decisions for entering formal review and entering the merge path:
   when the workflow machine policy, repository or platform policy, or the
   high-risk merge gate requires one.
 
+## Qualified automatic merge authorization
+
+This repository grants standing merge authorization to the first capable
+coordinating Agent or single managed supervisor when the trusted live checker
+returns `READY` for the exact current head/base. No additional per-turn user
+instruction is required. The coordinator is expected to merge one qualifying
+pull request through the repository's normal GitHub merge method and immediately
+read back the PR state, merge SHA, and remote base containment.
+
+This standing authorization does not apply when the checker is not `READY`, a
+product or scope decision remains unresolved, dependency order is ambiguous,
+required validation or identity is unavailable, retries are exhausted, or the
+merge itself triggers deployment, publishing, release, destructive data work,
+an authorization/security decision, or another external side effect. The
+workflow-governance exceptions below also continue to require the named owner
+authorization. At any such human gate, stop and request the missing decision.
+Never reinterpret merge authorization as permission to deploy, publish, delete,
+expand scope, or perform another external action.
+
 ## Validation cadence
 
 Full CI is a stable-candidate boundary, not a default development loop. Read-only
@@ -223,7 +242,8 @@ live base.
 Because repository settings do not enforce this policy, the Agent must run the
 checker again immediately before the merge decision. Any new commit, review,
 thread change, rerun, or other relevant GitHub state change invalidates the old
-result. The checker is evidence, not merge authorization.
+result. A fresh exact-head/base `READY` result activates the qualified automatic
+merge authorization above; any other result does not authorize a merge.
 
 The incident tracked by #21 remains historical evidence only. Its post-event CI
 run can never satisfy this gate for a different current head.

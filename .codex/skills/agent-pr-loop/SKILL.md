@@ -55,7 +55,7 @@ Pause and request the missing human decision only for unresolved product or scop
 
 ## Publish and verify a merge
 
-This Skill deliberately does not prescribe whether the Agent merges or hands off a PR. If a merge is performed, use GitHub PR merge, repository auto-merge, or its merge queue as the applicable transport. Immediately before merging, refresh GitHub and re-check the exact head/base, current-run gates, discussions, dependencies, and side effects. Respect the repository merge method and merge one qualifying PR only.
+Repository policy decides whether the Agent merges or hands off a PR. In this repository, a trusted live `READY` result for the exact current head/base activates qualified auto-merge standing authorization when no recorded human gate applies. The coordinator must then merge one qualifying PR without requesting a separate per-turn user instruction. Use GitHub PR merge, repository auto-merge, or its merge queue as the applicable transport. Immediately before merging, refresh GitHub and re-check the exact head/base, current-run gates, discussions, dependencies, and side effects.
 
 After GitHub reports success:
 

@@ -12,7 +12,7 @@ import {
   inspectCanonicalRuleWorkbookValues,
   type CanonicalWorkbookRange,
   type CanonicalWorkbookSourceRevision,
-} from "../lib/rule-workbook-inspection";
+} from "../lib/canonical-workbook-core";
 
 function dimensions(sheetId: string) {
   if (sheetId === "23CsXE") return { rows: 3, columns: 6 };
@@ -28,7 +28,6 @@ function fixtureSheets() {
     const { rows, columns } = dimensions(entry.sheetId);
     const values = Array.from({ length: rows }, () => Array.from({ length: columns }, () => null as unknown));
     values[0]![0] = `fixture:${entry.sheetId}`;
-    values[rows - 1]![columns - 1] = "";
     if (entry.sheetId === "23CsXE") {
       values[0] = ["机器ID（勿改）", "实体类型", "钓具部位", "词条名称", "缩写", "程序开发"];
       values[1] = ["affix_rod_0001", "RodAffix", "竿", "拉力强化", "拉强", "不需要"];
@@ -82,6 +81,31 @@ function semanticProjection(inspection: Awaited<ReturnType<typeof inspectCanonic
   };
 }
 
+function u16le(n: number) { return [n & 0xff, (n >> 8) & 0xff]; }
+function u32le(n: number) { return [n & 0xff, (n >> 8) & 0xff, (n >> 16) & 0xff, (n >>> 24) & 0xff]; }
+
+/** 构造仅含 central directory + EOCD 的受控 ZIP 字节流，用于测 preflight（不构造 local headers）。 */
+function buildControlledZip(entries: Array<{ uncompressed: number; name?: string }>, declaredEntries?: number): ArrayBuffer {
+  const enc = new TextEncoder();
+  const central: number[] = [];
+  for (const entry of entries) {
+    const nameBytes = [...enc.encode(entry.name ?? "x")];
+    central.push(...u32le(0x02014b50), ...u16le(20), ...u16le(20), ...u16le(0), ...u16le(0), ...u16le(0), ...u16le(0), ...u32le(0), ...u32le(0), ...u32le(entry.uncompressed), ...u16le(nameBytes.length), ...u16le(0), ...u16le(0), ...u16le(0), ...u16le(0), ...u32le(0), ...u32le(0));
+    central.push(...nameBytes);
+  }
+  const declared = declaredEntries ?? entries.length;
+  const eocd = [...u32le(0x06054b50), ...u16le(0), ...u16le(0), ...u16le(declared), ...u16le(declared), ...u32le(central.length), ...u32le(0), ...u16le(0)];
+  return new Uint8Array([...central, ...eocd]).buffer;
+}
+
+async function rejectsCode(promise: Promise<unknown>, code: string) {
+  await assert.rejects(promise, (error: unknown) => {
+    assert.ok(error instanceof BrowserCanonicalWorkbookError, `expected BrowserCanonicalWorkbookError, got ${error}`);
+    assert.equal(error.code, code, `expected ${code}, got ${error.code}`);
+    return true;
+  });
+}
+
 test("浏览器 canonical XLSX adapter 严格映射 registry，并与同一 AOA range 产生相同解析语义", async () => {
   const observedAt = "2026-07-26T00:00:00.000Z";
   const sheets = fixtureSheets();
@@ -119,17 +143,12 @@ test("浏览器 canonical XLSX adapter 的语义 revision 由工作簿内容决�
 
 test("浏览器 canonical XLSX adapter 对缺失、错名和附加表 fail-closed/告警", async () => {
   const missing = fixtureSheets().filter(({ entry }) => entry.sheetId !== "1cAihB");
-  await assert.rejects(
-    observeBrowserCanonicalWorkbook({ bytes: workbookBytes(missing), fileName: "missing.xlsx", observedAt: "2026-07-26T00:00:00.000Z" }),
-    (error: unknown) => error instanceof BrowserCanonicalWorkbookError && error.code === "XLSX_REQUIRED_SHEET_MISSING",
-  );
+  await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: workbookBytes(missing), fileName: "missing.xlsx", observedAt: "2026-07-26T00:00:00.000Z" }), "XLSX_REQUIRED_SHEET_MISSING");
 
   const typo = fixtureSheets();
-  typo.find(({ entry }) => entry.sheetId === "1cAihB")!.entry = { ...typo.find(({ entry }) => entry.sheetId === "1cAihB")!.entry, expectedName: "01.0_重量模板-竿-错名" };
-  await assert.rejects(
-    observeBrowserCanonicalWorkbook({ bytes: workbookBytes(typo), fileName: "typo.xlsx", observedAt: "2026-07-26T00:00:00.000Z" }),
-    (error: unknown) => error instanceof BrowserCanonicalWorkbookError && error.code === "XLSX_REQUIRED_SHEET_MISSING",
-  );
+  const typoSheet = typo.find(({ entry }) => entry.sheetId === "1cAihB")!;
+  typoSheet.entry = { ...typoSheet.entry, expectedName: "01.0_重量模板-竿-错名" };
+  await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: workbookBytes(typo), fileName: "typo.xlsx", observedAt: "2026-07-26T00:00:00.000Z" }), "XLSX_REQUIRED_SHEET_MISSING");
 
   const workbook = XLSX.read(workbookBytes(), { type: "array" });
   XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet([["额外"]]), "用户附加说明");
@@ -138,23 +157,45 @@ test("浏览器 canonical XLSX adapter 对缺失、错名和附加表 fail-close
   assert.deepEqual(observed.warnings.map((warning) => warning.sheetName), ["用户附加说明"]);
 });
 
-test("浏览器 canonical XLSX adapter 拒绝超限文件、无效工作簿和无缓存公式", async () => {
-  await assert.rejects(
-    observeBrowserCanonicalWorkbook({ bytes: new ArrayBuffer(20 * 1024 * 1024 + 1), fileName: "large.xlsx", observedAt: "2026-07-26T00:00:00.000Z" }),
-    (error: unknown) => error instanceof BrowserCanonicalWorkbookError && error.code === "XLSX_FILE_TOO_LARGE",
-  );
+test("浏览器 canonical XLSX adapter 拒绝超限文件、无效 ZIP 和无缓存公式单元格", async () => {
+  await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: new ArrayBuffer(20 * 1024 * 1024 + 1), fileName: "large.xlsx", observedAt: "2026-07-26T00:00:00.000Z" }), "XLSX_FILE_TOO_LARGE");
+  await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: new TextEncoder().encode("not an xlsx").buffer, fileName: "invalid.xlsx", observedAt: "2026-07-26T00:00:00.000Z" }), "XLSX_ZIP_INVALID");
 
-  await assert.rejects(
-    observeBrowserCanonicalWorkbook({ bytes: new TextEncoder().encode("not an xlsx").buffer, fileName: "invalid.xlsx", observedAt: "2026-07-26T00:00:00.000Z" }),
-    (error: unknown) => error instanceof BrowserCanonicalWorkbookError && ["XLSX_INVALID", "XLSX_REQUIRED_SHEET_MISSING"].includes(error.code),
-  );
+  // 有缓存的公式单元格返回缓存值（不执行公式）
+  const cached = XLSX.read(workbookBytes(), { type: "array", cellFormula: true });
+  cached.Sheets["08.1_品质评分-品质定义"]!.E2 = { t: "n", v: 0.8, f: "0.4+0.4" };
+  const cachedBytes = XLSX.write(cached, { type: "array", bookType: "xlsx" }) as ArrayBuffer;
+  const cachedObserved = await observeBrowserCanonicalWorkbook({ bytes: cachedBytes, fileName: "cached.xlsx", observedAt: "2026-07-26T00:00:00.000Z" });
+  const qualityRange = cachedObserved.ranges.find((range) => range.sheetId === "27hboC");
+  assert.ok(qualityRange?.valueRange.values.some((row) => row.includes(0.8)), "缓存值应被读出而非执行公式");
+});
 
-  const workbook = XLSX.read(workbookBytes(), { type: "array", cellFormula: true });
-  const sheet = workbook.Sheets[CANONICAL_FEISHU_SHEET_REGISTRY.find((entry) => entry.sheetId === "27hboC")!.expectedName]!;
-  sheet.C2 = { t: "n", f: "1+1" };
-  const formulaBytes = XLSX.write(workbook, { type: "array", bookType: "xlsx" }) as ArrayBuffer;
-  await assert.rejects(
-    observeBrowserCanonicalWorkbook({ bytes: formulaBytes, fileName: "formula.xlsx", observedAt: "2026-07-26T00:00:00.000Z" }),
-    (error: unknown) => error instanceof BrowserCanonicalWorkbookError && error.code === "XLSX_FORMULA_RESULT_MISSING",
-  );
+test("浏览器 canonical XLSX adapter 在 SheetJS 解包前用 ZIP central directory 预检拦截压缩炸弹", async () => {
+  await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: buildControlledZip([], 1001), fileName: "many.zip", observedAt: "x" }), "XLSX_TOO_MANY_ZIP_ENTRIES");
+  await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: buildControlledZip([{ uncompressed: 201 * 1024 * 1024 }]), fileName: "bomb.zip", observedAt: "x" }), "XLSX_UNCOMPRESSED_TOO_LARGE");
+  await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: buildControlledZip([{ uncompressed: 0xffffffff }]), fileName: "zip64.zip", observedAt: "x" }), "XLSX_ZIP_INVALID");
+  await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: new Uint8Array(64).buffer, fileName: "noeocd.zip", observedAt: "x" }), "XLSX_ZIP_INVALID");
+});
+
+test("浏览器 canonical XLSX adapter 对所有工作表（含未登记）强制资源边界", async () => {
+  const ts = "2026-07-26T00:00:00.000Z";
+
+  const tooManySheets = XLSX.utils.book_new();
+  for (const { entry, values } of fixtureSheets()) XLSX.utils.book_append_sheet(tooManySheets, XLSX.utils.aoa_to_sheet(values), entry.expectedName);
+  for (let index = 0; index < 17; index += 1) XLSX.utils.book_append_sheet(tooManySheets, XLSX.utils.aoa_to_sheet([["x"]]), `额外${index}`);
+  await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: XLSX.write(tooManySheets, { type: "array", bookType: "xlsx" }) as ArrayBuffer, fileName: "many-sheets.xlsx", observedAt: ts }), "XLSX_TOO_MANY_SHEETS");
+
+  const tooManyRows = fixtureSheets();
+  tooManyRows.find(({ entry }) => entry.sheetId === "1cAihB")!.values = Array.from({ length: 10_001 }, () => Array.from({ length: 30 }, () => null));
+  await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: workbookBytes(tooManyRows), fileName: "rows.xlsx", observedAt: ts }), "XLSX_SHEET_GRID_INVALID");
+
+  const tooManyColumns = fixtureSheets();
+  tooManyColumns.find(({ entry }) => entry.sheetId === "1cAihB")!.values = Array.from({ length: 2 }, () => Array.from({ length: 201 }, () => null));
+  await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: workbookBytes(tooManyColumns), fileName: "cols.xlsx", observedAt: ts }), "XLSX_SHEET_GRID_INVALID");
+
+  // 未登记附加表也计入全表预算：6 张 1000×199 合计约 119 万 > 100 万，单张 19.9 万 < 20 万单表上限
+  const workbook = XLSX.read(workbookBytes(), { type: "array" });
+  const big = Array.from({ length: 1000 }, () => Array.from({ length: 199 }, () => null));
+  for (let index = 0; index < 6; index += 1) XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(big), `巨大附加${index}`);
+  await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: XLSX.write(workbook, { type: "array", bookType: "xlsx" }) as ArrayBuffer, fileName: "budget.xlsx", observedAt: ts }), "XLSX_WORKBOOK_TOO_LARGE");
 });

@@ -1165,7 +1165,8 @@ export function checkPolicy(root = repositoryRoot()) {
   const expectedYaml = 'interface:\n  display_name: "Tackle Agent Workflow"\n  short_description: "Start with a lightweight Task Card and escalate formal reviews"\n  default_prompt: "Use $tackle-agent-workflow to start daily work with a six-field Task Card, generate mechanical route/OPEN/read-plan evidence, and prepare a full TaskBrief only at a formal review or PR boundary. Preserve the pending unified visual-review marker unless full visual work is explicitly scoped."';
   if (yaml.trimEnd() !== expectedYaml) fail('Workflow policy drift: openai.yaml is not aligned');
   const templateHeadings = ['## Linked issue', '## Summary and scope', '## Validation evidence', '## Risk triggers', '## Review and CI evidence', '## Residual risk or follow-up'];
-  const actualTemplateHeadings = template.match(/^## .+$/gm) ?? [];
+  const renderedTemplate = template.replace(/<!--[\s\S]*?-->/g, '');
+  const actualTemplateHeadings = renderedTemplate.match(/^## .+$/gm) ?? [];
   if (canonicalJson(actualTemplateHeadings) !== canonicalJson(templateHeadings)) fail('Workflow policy drift: lightweight PR template must have exactly the six canonical headings in order');
   const riskGuidance = boundedSection(template, '## Risk triggers', '## Review and CI evidence');
   const riskDimensionMappings = [

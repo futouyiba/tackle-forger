@@ -592,6 +592,8 @@ test('policy checker detects required workflow markers', () => {
     assert.throws(() => checkPolicy(root), /visual pending marker/);
     write(root, '.github/pull_request_template.md', canonicalTemplate.replace('  - If checked: **视觉与交互统一检查待执行**', '<!--  - If checked: **视觉与交互统一检查待执行** -->'));
     assert.throws(() => checkPolicy(root), /visual pending marker must be visible/);
+    write(root, '.github/pull_request_template.md', canonicalTemplate.replace('## Validation evidence', '<!--\n## Validation evidence\n-->'));
+    assert.throws(() => checkPolicy(root), /six canonical headings/);
     write(root, '.github/pull_request_template.md', canonicalTemplate.replace('A minimal render smoke does not complete the unified visual review.', 'A minimal render smoke completes the unified visual review.'));
     assert.throws(() => checkPolicy(root), /minimal render smoke boundary|contradictory normative text/);
     const filledTemplate = canonicalTemplate

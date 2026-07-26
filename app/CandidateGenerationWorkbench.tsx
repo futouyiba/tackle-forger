@@ -19,6 +19,10 @@ import {
   canPresentCandidateRunCompletion,
   runCandidateGenerationWorkbenchAction,
 } from "@/lib/candidate-generation-workbench";
+import {
+  buildCandidateRunPresentation,
+  candidateRunStatusLabel,
+} from "@/lib/candidate-run-presentation";
 import "./candidate-generation.css";
 
 interface Props {
@@ -184,10 +188,83 @@ export function CandidateGenerationWorkbench({ state, series, initialSkuId, acti
             <div className="candidate-rule-note"><ShieldCheck size={16} />硬 deny / 缺 require 只进排除统计；Affinity 只参与权威稳定排序，AI 不得改序。</div>
           </section>
           {error ? <div className="candidate-error"><AlertTriangle size={16} />{error}</div> : null}
-          {run ? <section className="candidate-results"><div className="candidate-run-summary"><div><span>枚举</span><strong>{run.enumerationTotal}</strong></div><div><span>合法</span><strong>{run.legalCount}</strong></div><div><span>展示</span><strong>{run.candidates.length}</strong></div><div><span>截断</span><strong>{run.truncatedCount}</strong></div></div><code>{run.inputHash}</code>{Object.entries(run.excludedByCode).map(([code, count]) => <span className="candidate-exclusion" key={code}>{code} · {count}</span>)}<div className="candidate-result-list">{run.candidates.map((candidate) => <article key={candidate.candidateId}><div><strong>#{candidate.rank} · {candidate.variant.label}</strong><small>{candidate.skuRef.entityId} · {candidate.modelVariantKey}</small></div><span>Affinity {candidate.affinity.score.toFixed(1)}</span><span>warning {candidate.warningCount}</span><code>{candidate.candidateFingerprint.slice(0, 16)}</code><p>{candidate.rankReasons.join(" · ")}</p></article>)}</div>{!run.candidates.length ? <div className="candidate-zero"><AlertTriangle size={18} />没有合法候选；请按排除统计调整范围，不会生成空 Model。</div> : null}</section> : null}
+          {run ? (
+            <section className="candidate-results">
+              <CandidateRunResult run={run} materialized={false} />
+            </section>
+          ) : null}
         </div>
         <footer><span>{run?.status === "waiting_for_review" ? "等待人工确认" : run ? "运行已冻结留痕" : generateAvailability.disabledReasonText}</span>{run?.status === "waiting_for_review" ? <button type="button" className="button button-default button-md" disabled={!materializeAvailability.enabled} onClick={() => materialize(run, true)}><CheckCircle2 size={15} />确认并物化</button> : null}<button type="button" className="button button-primary button-md" disabled={!generateAvailability.enabled} onClick={generate}><Sparkles size={15} />生成并稳定排序</button></footer>
       </section>
     </div>
+  );
+}
+
+function CandidateRunResult({ run, materialized }: { run: CandidateRun; materialized: boolean }) {
+  const model = buildCandidateRunPresentation(run, materialized);
+  return (
+    <>
+      <div className="cr-stage-pipeline">
+        {model.stages.map((stage, i) => (
+          <div key={stage.id} className={`cr-stage-card${stage.isBlocking ? " blocking" : ""}`}>
+            <span className="cr-stage-idx">{String(i + 1).padStart(2, "0")} · {stage.label}</span>
+            <span className="cr-stage-count">{stage.inputCount}→{stage.outputCount}</span>
+            <small>{stage.hint}</small>
+            {stage.isBlocking ? <span className="cr-stage-badge blocked">阻断</span> : null}
+          </div>
+        ))}
+      </div>
+
+      <div className="cr-stats">
+        <div><span>枚举</span><strong>{model.enumerationTotal}</strong></div>
+        <div><span>合法</span><strong>{model.legalCount}</strong></div>
+        <div><span>展示</span><strong>{model.candidates.length}</strong></div>
+        <div><span>截断</span><strong>{model.truncatedCount}</strong></div>
+        <div><span>耗时</span><strong>{model.durationMs}ms</strong></div>
+        <div><span>状态</span><strong className={model.status === "superseded" ? "danger" : model.status === "failed" ? "danger" : ""}>{candidateRunStatusLabel(model.status)}</strong></div>
+      </div>
+
+      {model.status === "superseded" ? (
+        <div className="cr-terminal superseded"><AlertTriangle size={16} /><span>运行已取代：输入 revision 在生成期间变化，本次结果不能用于物化或发布。请重新生成。</span></div>
+      ) : model.status === "failed" ? (
+        <div className="cr-terminal failed"><AlertTriangle size={16} /><span>运行失败。检查配方、约束和部件启用状态后重试。</span></div>
+      ) : null}
+
+      {model.excludedByCode.length ? (
+        <div className="cr-exclusions">
+          <span className="cr-section-label">排除分组</span>
+          {model.excludedByCode.map((group) => (
+            <span key={group.code} className="cr-exclusion-tag">{group.description} · {group.count}</span>
+          ))}
+        </div>
+      ) : null}
+
+      <code className="cr-hash">{model.inputHash}</code>
+
+      {model.candidates.length ? (
+        <div className="cr-candidate-list">
+          {model.candidates.map((candidate) => (
+            <article key={candidate.candidateId} className="cr-candidate">
+              <div className="cr-candidate-head">
+                <strong>#{candidate.rank} · {candidate.variant.label}</strong>
+                <small>{candidate.skuRef.entityId} · {candidate.modelVariantKey}</small>
+              </div>
+              <span>Affinity {candidate.affinity.score.toFixed(1)}</span>
+              <span>warning {candidate.warningCount}</span>
+              <code>{candidate.candidateFingerprint.slice(0, 16)}</code>
+              <p>{candidate.rankReasons.join(" · ")}</p>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <div className="cr-zero">
+          <AlertTriangle size={18} />
+          <div>
+            <strong>没有合法候选</strong>
+            <small>请按排除统计调整范围后重试。不会生成空 Model，已保留完整运行证据供审计。</small>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

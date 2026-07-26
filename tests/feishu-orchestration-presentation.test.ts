@@ -102,7 +102,7 @@ function makeInspection(overrides: Partial<CanonicalRuleWorkbookInspection> = {}
     seriesDefinitions: [],
     seriesParseIssues: [],
     ...overrides,
-  };
+  } as unknown as CanonicalRuleWorkbookInspection;
 }
 
 function input(overrides: Partial<FeishuOrchestrationInput> = {}): FeishuOrchestrationInput {

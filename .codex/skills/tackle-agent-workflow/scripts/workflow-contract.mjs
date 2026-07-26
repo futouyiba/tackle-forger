@@ -316,7 +316,7 @@ function validateIdentity(root, value, field, allowWorktree = false) {
 }
 function stableHash(value) { return sha256(Buffer.from(canonicalJson(value), 'utf8')); }
 function validationStatusPaths(root) {
-  const porcelain = git(root, ['status', '--porcelain=v1', '-z']);
+  const porcelain = git(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
   if (porcelain === null) fail('Cannot read Git worktree status for validation');
   const records = porcelain.toString('utf8').split('\0');
   records.pop();
@@ -742,6 +742,7 @@ export function checkTaskBrief({ root = repositoryRoot(), brief, currentReuseCon
     if ((riskProfile !== 'workflow_docs_metadata' || brief.scopeHasRuntimeSemantics) && receipt.profile !== 'FULL') fail('TaskBrief risk/scope requires FULL receipts');
     return checked.receiptHash;
   });
+  if (new Set(receiptHashes).size !== receiptHashes.length) fail('TaskBrief.specReadReceipts must not contain duplicate receipt coverage');
   const roles = brief.specReadReceipts.map((receipt) => receipt.role);
   if (phase === 'pre_dispatch' && (roles.length !== 1 || roles[0] !== 'coordinator')) fail('Pre-dispatch TaskBrief requires exactly one coordinator spec-read receipt');
   if (phase === 'verdict' && (!sameSet(roles, ['coordinator', 'coding', 'review']) || roles.length !== 3)) fail('Verdict-phase TaskBrief requires exactly one coordinator, coding, and review spec-read receipt');
@@ -759,6 +760,30 @@ export function checkTaskBrief({ root = repositoryRoot(), brief, currentReuseCon
     fail('Local TaskBrief without preexisting owned paths requires clean or unowned_dirty_excluded');
   }
   return { taskBriefSha256: taskBriefHash(brief), specReceiptHashes: [...receiptHashes].sort(compareUtf8), dirtyWorktreeDisposition: disposition, baseSha, reviewedHead, phase };
+}
+function requirePromotionReceipt({ root, receipt, role, sourceBrief, currentReuseContext }) {
+  const checked = checkReadReceipt({ root, receipt, currentReuseContext });
+  if (receipt.role !== role) fail(`TaskBrief promotion receipt must have role ${role}`);
+  if (receipt.taskId !== sourceBrief.taskId || receipt.specSha256 !== sourceBrief.specSha256 || receipt.riskProfile !== sourceBrief.riskProfile || !sameSet(receipt.relevantSections, sourceBrief.relevantSections)) fail('TaskBrief promotion receipt must bind the exact task, specification, risk profile, and relevant sections');
+  return checked.receiptHash;
+}
+export function promoteTaskBrief({ root = repositoryRoot(), brief, codingReceipt, reviewReceipt, currentReuseContext }) {
+  const source = checkTaskBrief({ root, brief, currentReuseContext });
+  if (source.phase !== 'pre_dispatch') fail('TaskBrief promotion requires a valid pre_dispatch TaskBrief');
+  if (brief.workflowMode !== 'local' || source.reviewedHead !== 'WORKTREE') fail('TaskBrief promotion supports only a local WORKTREE pre_dispatch artifact');
+  if (source.baseSha !== currentHead(root)) fail('TaskBrief promotion rejects a stale base/head artifact');
+  if (brief.preexistingUnownedChanges.length !== 0) fail('TaskBrief promotion rejects preexisting unowned artifacts');
+  const coordinatorReceipt = brief.specReadReceipts[0];
+  const coverageHashes = [receiptHash(coordinatorReceipt), requirePromotionReceipt({ root, receipt: codingReceipt, role: 'coding', sourceBrief: brief, currentReuseContext }), requirePromotionReceipt({ root, receipt: reviewReceipt, role: 'review', sourceBrief: brief, currentReuseContext })];
+  if (new Set(coverageHashes).size !== coverageHashes.length) fail('TaskBrief promotion requires unique coordinator, coding, and review receipt coverage');
+  const dirtyPaths = validationStatusPaths(root);
+  if (dirtyPaths.some((repoPath) => !brief.ownedPaths.includes(repoPath))) fail('TaskBrief promotion rejects dirty or unowned artifacts');
+  const manifest = buildPatchManifest({ root, baseSha: source.baseSha, ownedPaths: brief.ownedPaths });
+  const manifestDirtyPaths = manifest.entries.filter((entry) => entry.state !== 'unchanged').map((entry) => entry.path);
+  if (!sameSet(dirtyPaths, manifestDirtyPaths)) fail('TaskBrief promotion current Git status does not match the owned artifact manifest');
+  const promoted = { ...brief, phase: 'verdict', reviewedHead: 'WORKTREE', specReadReceipts: [coordinatorReceipt, codingReceipt, reviewReceipt], dirtyWorktreeDisposition: brief.preexistingOwnedPaths.length === 0 ? 'clean' : 'include_with_frozen_baseline' };
+  checkTaskBrief({ root, brief: promoted, currentReuseContext });
+  return promoted;
 }
 export function checkVerdict({ root = repositoryRoot(), verdict, brief, currentReuseContext }) {
   requireExactKeys(verdict, ['schema', 'taskId', 'taskBriefSha256', 'specReceiptHashes', 'dirtyWorktreeDisposition', 'specSha256', 'baseSha', 'reviewedHead', 'ownedPaths', 'artifactIdentity', 'verdict', 'findings'], 'verdict');
@@ -866,7 +891,7 @@ export function checkPolicy(root = repositoryRoot()) {
   return true;
 }
 function usage() {
-  return `Usage:\n  node ${SCRIPT_RELATIVE} --generate-index\n  node ${SCRIPT_RELATIVE} --check-index\n  node ${SCRIPT_RELATIVE} --check-policy\n  node ${SCRIPT_RELATIVE} --prepare-task-brief --input <semantic-input.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --check-owned-whitespace --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --spec-read-plan --role <coordinator|coding|review> --risk <risk-profile> [--relevant <v3-section> ...]\n  node ${SCRIPT_RELATIVE} --check-read-receipt --receipt <receipt.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --check-full-read-session --session <session.json>\n  node ${SCRIPT_RELATIVE} --check-task-brief --brief <task-brief.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --owned-baseline --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --run-validation --brief <verdict-task-brief.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --check-verdict --verdict <verdict.json> --brief <task-brief.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --patch-hash --base <sha> --owned <repo-relative-path> [--owned <path> ...]`;
+  return `Usage:\n  node ${SCRIPT_RELATIVE} --generate-index\n  node ${SCRIPT_RELATIVE} --check-index\n  node ${SCRIPT_RELATIVE} --check-policy\n  node ${SCRIPT_RELATIVE} --prepare-task-brief --input <semantic-input.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --promote-task-brief --brief <pre-dispatch-task-brief.json> --coding-receipt <receipt.json> --review-receipt <receipt.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --check-owned-whitespace --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --spec-read-plan --role <coordinator|coding|review> --risk <risk-profile> [--relevant <v3-section> ...]\n  node ${SCRIPT_RELATIVE} --check-read-receipt --receipt <receipt.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --check-full-read-session --session <session.json>\n  node ${SCRIPT_RELATIVE} --check-task-brief --brief <task-brief.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --owned-baseline --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --run-validation --brief <verdict-task-brief.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --check-verdict --verdict <verdict.json> --brief <task-brief.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --patch-hash --base <sha> --owned <repo-relative-path> [--owned <path> ...]`;
 }
 function parseActionOptions(argv, action, allowed, required = []) {
   if (argv[0] !== action) fail(usage());
@@ -882,7 +907,7 @@ function parseActionOptions(argv, action, allowed, required = []) {
 }
 export function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
   const action = argv[0];
-  if (!['--generate-index', '--check-index', '--check-policy', '--prepare-task-brief', '--check-owned-whitespace', '--spec-read-plan', '--check-read-receipt', '--check-full-read-session', '--check-task-brief', '--owned-baseline', '--run-validation', '--check-verdict', '--patch-hash'].includes(action)) fail(usage());
+  if (!['--generate-index', '--check-index', '--check-policy', '--prepare-task-brief', '--promote-task-brief', '--check-owned-whitespace', '--spec-read-plan', '--check-read-receipt', '--check-full-read-session', '--check-task-brief', '--owned-baseline', '--run-validation', '--check-verdict', '--patch-hash'].includes(action)) fail(usage());
   const root = repositoryRoot(cwd);
   if (action === '--generate-index' || action === '--check-index' || action === '--check-policy') {
     if (argv.length !== 1) fail(usage());
@@ -896,6 +921,13 @@ export function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
       currentAgentIdentity: values['--current-agent-identity'][0], currentContextSessionId: values['--current-context-session-id'][0], currentContextState: values['--current-context-state'][0],
     };
     return JSON.stringify(prepareTaskBrief({ root, input: readJsonFile(path.resolve(cwd, values['--input'][0]), 'Task preparation input'), currentReuseContext }), null, 2);
+  }
+  if (action === '--promote-task-brief') {
+    const values = parseActionOptions(argv, action, { '--brief': false, '--coding-receipt': false, '--review-receipt': false, '--current-agent-identity': false, '--current-context-session-id': false, '--current-context-state': false }, ['--brief', '--coding-receipt', '--review-receipt']);
+    const currentReuseContext = values['--current-agent-identity'].length === 0 && values['--current-context-session-id'].length === 0 && values['--current-context-state'].length === 0 ? undefined : {
+      currentAgentIdentity: values['--current-agent-identity'][0], currentContextSessionId: values['--current-context-session-id'][0], currentContextState: values['--current-context-state'][0],
+    };
+    return JSON.stringify(promoteTaskBrief({ root, brief: readJsonFile(path.resolve(cwd, values['--brief'][0]), 'pre_dispatch TaskBrief'), codingReceipt: readJsonFile(path.resolve(cwd, values['--coding-receipt'][0]), 'coding receipt'), reviewReceipt: readJsonFile(path.resolve(cwd, values['--review-receipt'][0]), 'review receipt'), currentReuseContext }), null, 2);
   }
   if (action === '--check-owned-whitespace') {
     const values = parseActionOptions(argv, action, { '--base': false, '--owned': true }, ['--base']);

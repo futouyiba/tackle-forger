@@ -2,7 +2,9 @@ import {
   CANONICAL_FEISHU_SHEET_REGISTRY,
   CANONICAL_FEISHU_WORKBOOK,
   pullFeishuWorkbookRevision,
+  type FeishuSheetRegistryIssue,
   type FeishuSourceRevision,
+  type RemoteFeishuSheet,
 } from "./feishu-workbook";
 import {
   createFeishuWorkbookPullAdapter,
@@ -98,7 +100,7 @@ export interface CanonicalAffixSheetRanges {
  * second, silently stale constant.  Missing or malformed grid metadata is a
  * source-structure error, not permission to truncate the import.
  */
-export function canonicalAffixSheetRanges(sourceRevision: FeishuSourceRevision): CanonicalAffixSheetRanges {
+export function canonicalAffixSheetRanges(sourceRevision: Pick<CanonicalWorkbookSourceRevision, "sheets">): CanonicalAffixSheetRanges {
   const sheet = sourceRevision.sheets.find((candidate) => candidate.sheetId === AFFIX_SHEET_ID);
   const rowCount = sheet?.rowCount;
   const columnCount = sheet?.columnCount;
@@ -126,7 +128,7 @@ function spreadsheetColumnName(index: number) {
  * 07_品质评分的可读边界由同一 source revision 的 grid 元数据决定。
  * 该表的矩阵块会随内容扩列、移动，故不能把旧 B4:N50 当作来源契约。
  */
-export function canonicalQualitySheetRange(sourceRevision: FeishuSourceRevision) {
+export function canonicalQualitySheetRange(sourceRevision: Pick<CanonicalWorkbookSourceRevision, "sheets">) {
   const sheet = sourceRevision.sheets.find((candidate) => candidate.sheetId === QUALITY_SHEET_ID);
   const rowCount = sheet?.rowCount;
   const columnCount = sheet?.columnCount;
@@ -145,7 +147,7 @@ export function canonicalQualitySheetRange(sourceRevision: FeishuSourceRevision)
  * 同 sheetId 两条 range 按 `sheetId:range` 去重保留；rowCount/columnCount 取自同 revision 的 grid 元数据，
  * 缺失/过小 fail-closed（spec §14 :944）。品质/定价三表整表读（公式读取 PR2b-3 重构）。
  */
-export function canonicalRuleWorkbookRangeRequests(sourceRevision: FeishuSourceRevision) {
+export function canonicalRuleWorkbookRangeRequests(sourceRevision: CanonicalWorkbookSourceRevision) {
   const affixRanges = canonicalAffixSheetRanges(sourceRevision);
   const dynamicRange = (sheetId: string, prefix: string, minRowCount: number, minColumns: number) => {
     const sheet = sourceRevision.sheets.find((candidate) => candidate.sheetId === sheetId);
@@ -275,7 +277,7 @@ const qualityIds: Record<string, QualityPricingMapping["qualityId"]> = {
 };
 
 export function pricingDraftFromRanges(input: {
-  sourceRevision: FeishuSourceRevision;
+  sourceRevision: CanonicalWorkbookSourceRevision;
   qualityValues: unknown[][];
   /** Exact rows selected by the quality-table parser; avoids a second layout guess. */
   qualitySourceRows?: Array<{ code: string; minScore: number; maxScore: number; minFactor: number; maxFactor: number; mappingCell: string; factorCell: string; rowKey: string }>;
@@ -499,7 +501,7 @@ export function assertCanonicalWeightTemplatePolicyDraft(draft: WeightTemplatePo
   if (draft.inputHash !== inputHash || draft.id !== `weight-template-draft:${inputHash}`) throw new Error("重量模板草稿的冻结内容、inputHash 或 ID 不一致，不能信任或发布。");
 }
 
-export function weightTemplateDraftFromCanonicalRuleDraft(input: { sourceRevision: FeishuSourceRevision; canonicalRuleDraft: CanonicalRuleSourceDraft; weightSources: PartedRuleSource[]; importedAt: string }): WeightTemplatePolicyDraft {
+export function weightTemplateDraftFromCanonicalRuleDraft(input: { sourceRevision: CanonicalWorkbookSourceRevision; canonicalRuleDraft: CanonicalRuleSourceDraft; weightSources: PartedRuleSource[]; importedAt: string }): WeightTemplatePolicyDraft {
   const issues: WeightTemplatePolicyDraft["issues"] = [];
   const templates: WeightTemplatePolicyDraft["templates"] = [];
   const seen = new Set<string>();
@@ -565,7 +567,7 @@ export function weightTemplateDraftFromCanonicalRuleDraft(input: { sourceRevisio
 }
 
 export function qualityDraftFromRanges(input: {
-  sourceRevision: FeishuSourceRevision;
+  sourceRevision: CanonicalWorkbookSourceRevision;
   qualityValues: unknown[][];
   /** A1 range returned with qualityValues; retained for direct legacy callers. */
   qualityRange?: string;
@@ -660,7 +662,10 @@ export function qualityDraftFromRanges(input: {
     const alias = text(row[4]);
     if (!affixId || !itemPartId || !alias) return [];
     const sheetRow = index + 3;
-    return [{ itemPartId, alias, affixId, source: { sheetId: "23CsXE", cell: `F${sheetRow}`, rowKey: String(sheetRow) } }];
+    return [
+      { itemPartId, alias, affixId, source: { sheetId: "23CsXE", cell: `F${sheetRow}`, rowKey: String(sheetRow) } },
+      { itemPartId, alias: affixId, affixId, source: { sheetId: "23CsXE", cell: `B${sheetRow}`, rowKey: String(sheetRow) } },
+    ];
   });
   const matrixCells: QualityCombinationSourceCell[] = [];
   const matrixSource = input.matrixValues ?? input.qualityValues;
@@ -682,7 +687,13 @@ export function qualityDraftFromRanges(input: {
     for (let ai = 1; ai < input.affixValues.length; ai += 1) {
       const fid = text(input.affixValues[ai]?.[0]); const al = text(input.affixValues[ai]?.[4]);
       const pt = partIds[text(input.affixValues[ai]?.[2])] ?? "";
-      if (fid && al) { affixIdToAlias.set(fid, al); if (pt) aliasToPart.set(al, pt); }
+      if (fid && al) {
+        affixIdToAlias.set(fid, al);
+        if (pt) {
+          aliasToPart.set(al, pt);
+          aliasToPart.set(fid, pt);
+        }
+      }
     }
     for (let rowIndex = 1; rowIndex < matrixSource.length; rowIndex += 1) {
       const row = matrixSource[rowIndex] ?? [];
@@ -691,10 +702,16 @@ export function qualityDraftFromRanges(input: {
       const src = { sheetId: "28fQhg", cell: `A${rowIndex + 1}:C${rowIndex + 1}`, rowKey: String(rowIndex + 1) };
       const la = affixIdToAlias.get(left) ?? left;
       const ra = affixIdToAlias.get(right) ?? right;
-      const lp = aliasToPart.get(la); const rp = aliasToPart.get(ra);
-      // Try both aliases for part; cross-part issues are non-blocking in flat matrix
-      const part = (lp && rp && lp !== rp ? lp : lp ?? rp ?? "part:rod") as QualityCombinationSourceCell["itemPartId"];
-      matrixCells.push({ itemPartId: part, leftAlias: la, rightAlias: ra, value: score, source: src } as QualityCombinationSourceCell);
+      const leftAffixId = affixIdToAlias.has(left) ? left : undefined;
+      const rightAffixId = affixIdToAlias.has(right) ? right : undefined;
+      const lp = leftAffixId ? (leftAffixId.startsWith("affix_rod_") ? "part:rod" : leftAffixId.startsWith("affix_reel_") ? "part:reel" : leftAffixId.startsWith("affix_line_") ? "part:line" : undefined) : aliasToPart.get(la);
+      const rp = rightAffixId ? (rightAffixId.startsWith("affix_rod_") ? "part:rod" : rightAffixId.startsWith("affix_reel_") ? "part:reel" : rightAffixId.startsWith("affix_line_") ? "part:line" : undefined) : aliasToPart.get(ra);
+      if (lp && rp && lp !== rp) {
+        structureIssue("QUALITY_COMBINATION_CROSS_PART", `组合矩阵词条跨部位：${left} × ${right}。`, rowIndex, 0, lp);
+        continue;
+      }
+      const part = (lp ?? rp ?? "part:rod") as QualityCombinationSourceCell["itemPartId"];
+      matrixCells.push({ itemPartId: part, leftAlias: leftAffixId ?? la, rightAlias: rightAffixId ?? ra, value: score, source: src } as QualityCombinationSourceCell);
     }
     // WQ8w flat matrix: verify all three parts have coverage
     const coveredParts = new Set(matrixCells.map((c) => c.itemPartId));
@@ -759,9 +776,23 @@ export function qualityDraftFromRanges(input: {
   });
 }
 
-export interface CanonicalRuleWorkbookInspection {
+export interface CanonicalWorkbookSourceRevision {
+  id: string;
+  workbookRefId: string;
+  sourceRevision: string;
+  sheets: RemoteFeishuSheet[];
+  issues: FeishuSheetRegistryIssue[];
+}
+
+export interface CanonicalWorkbookRange {
+  sheetId: string;
+  range: string;
+  valueRange: Pick<FeishuValueRange, "revision" | "range" | "values">;
+}
+
+export interface CanonicalRuleWorkbookParsedInspection {
   observedAt: string;
-  sourceRevision: FeishuSourceRevision;
+  sourceRevision: CanonicalWorkbookSourceRevision;
   identityRows: SourceIdentityRow[];
   identityReport: SourceIdentityMigrationReport;
   pricingDraft: PricingPolicyDraft;
@@ -769,9 +800,12 @@ export interface CanonicalRuleWorkbookInspection {
   canonicalRuleDraft: CanonicalRuleSourceDraft;
   weightTemplateDraft: WeightTemplatePolicyDraft;
   pricingWeightBandPolicy: "MATCHED_STRUCTURAL_SOURCE_BAND";
-  /** #141：从 25UnTC A→W 富字段解析的 SeriesDefinition（覆盖 seed）。 */
   seriesDefinitions: SeriesDefinition[];
   seriesParseIssues: SeriesParseIssue[];
+}
+
+export interface CanonicalRuleWorkbookInspection extends CanonicalRuleWorkbookParsedInspection {
+  sourceRevision: FeishuSourceRevision;
 }
 
 let testInspectionOverride: ((input: { observedAt: string; observedBy: string }) => Promise<CanonicalRuleWorkbookInspection>) | undefined;
@@ -810,7 +844,7 @@ const SERIES_STATUS_MAP: Record<string, SeriesDefinition["status"]> = {
 };
 
 export function parseSeries(input: {
-  sourceRevision: FeishuSourceRevision;
+  sourceRevision: CanonicalWorkbookSourceRevision;
   seriesValues: unknown[][];
   importedAt: string;
 }): { series: SeriesDefinition[]; issues: SeriesParseIssue[] } {
@@ -926,32 +960,21 @@ function parseSeriesSignature(raw: string, id: string, sourceRow: number, issues
   return axes;
 }
 
-export async function inspectCanonicalRuleWorkbook(input: {
+export async function inspectCanonicalRuleWorkbookValues(input: {
   observedAt: string;
-  observedBy: string;
-}): Promise<CanonicalRuleWorkbookInspection> {
-  if (testInspectionOverride) return testInspectionOverride(input);
-  const sourceRevision = await pullFeishuWorkbookRevision({
-    workbook: CANONICAL_FEISHU_WORKBOOK,
-    registry: CANONICAL_FEISHU_SHEET_REGISTRY,
-    adapter: createFeishuWorkbookPullAdapter(),
-    pulledAt: input.observedAt,
-    pulledBy: input.observedBy,
-  });
-  const requests = canonicalRuleWorkbookRangeRequests(sourceRevision);
-  const ranges = await readFeishuSheetRanges({
-    spreadsheetToken: sourceRevision.spreadsheetToken,
-    requests,
-  });
+  sourceRevision: CanonicalWorkbookSourceRevision;
+  ranges: CanonicalWorkbookRange[];
+}): Promise<CanonicalRuleWorkbookParsedInspection> {
+  const { observedAt, sourceRevision, ranges } = input;
   const identityRows = identityRowsFromRanges(ranges);
   const identityReport = prepareSourceIdentityMigration({
-    workbookRefId: CANONICAL_FEISHU_WORKBOOK.id,
+    workbookRefId: sourceRevision.workbookRefId,
     sourceRevision: sourceRevision.sourceRevision,
     mode: "CONTINUOUS_SYNC",
     rows: identityRows,
     existingEntities: [],
     identityPolicies: canonicalIdentityPolicies(),
-    generatedAt: input.observedAt,
+    generatedAt: observedAt,
   });
   const qualitySheetRange = canonicalQualitySheetRange(sourceRevision);
   const qualityRange = ranges.find((entry) => entry.sheetId === QUALITY_SHEET_ID && entry.range === qualitySheetRange);
@@ -970,7 +993,7 @@ export async function inspectCanonicalRuleWorkbook(input: {
     affixValues: affixRange?.valueRange.values ?? [],
     matrixValues: matrixRange?.valueRange.values ?? [],
     pricingEndpointValues: pricingEndpointRange?.valueRange.values ?? [],
-    importedAt: input.observedAt,
+    importedAt: observedAt,
   });
   const pricingQualityRows = pricingQualitySourceRowsFromDraft(qualityDraft);
   const pricingDraft = pricingDraftFromRanges({
@@ -979,9 +1002,9 @@ export async function inspectCanonicalRuleWorkbook(input: {
     pricingValues: pricingRange?.valueRange.values ?? [],
     pricingParamsValues: pricingParamsRange?.valueRange.values ?? [],
     pricingEndpointValues: pricingEndpointRange?.valueRange.values ?? [],
-    typeValues, importedAt: input.observedAt,
+    typeValues, importedAt: observedAt,
   });
-  const findRangeValues = (sheetId: string, rangePrefix: string) => ranges.find((entry) => entry.sheetId === sheetId && typeof entry.range === "string" && entry.range.startsWith(rangePrefix))?.valueRange.values ?? [];
+  const findRangeValues = (sheetId: string, rangePrefix: string) => ranges.find((entry) => entry.sheetId === sheetId && entry.range.startsWith(rangePrefix))?.valueRange.values ?? [];
   const partedSources = (group: "weight" | "type" | "function" | "method" | "methodTemplateReview") => CANONICAL_ITEM_PARTS.map((part) => ({ part, sheetId: CANONICAL_RULE_RANGES[group][part], values: findRangeValues(CANONICAL_RULE_RANGES[group][part], "A1:") }));
   const canonicalRuleDraft = importCanonicalRuleSource({
     sourceRevision,
@@ -991,13 +1014,12 @@ export async function inspectCanonicalRuleWorkbook(input: {
     functionProfileValues: findRangeValues(CANONICAL_RULE_RANGES.functionProfiles, "A1:S"),
     methodSources: partedSources("method"),
     methodTemplateReviewSources: partedSources("methodTemplateReview"),
-    importedAt: input.observedAt,
+    importedAt: observedAt,
   });
-  const weightTemplateDraft = weightTemplateDraftFromCanonicalRuleDraft({ sourceRevision, canonicalRuleDraft, weightSources: partedSources("weight"), importedAt: input.observedAt });
-  const seriesValues = findRangeValues(SERIES_SHEET_ID, "A1:W");
-  const seriesParse = parseSeries({ sourceRevision, seriesValues, importedAt: input.observedAt });
+  const weightTemplateDraft = weightTemplateDraftFromCanonicalRuleDraft({ sourceRevision, canonicalRuleDraft, weightSources: partedSources("weight"), importedAt: observedAt });
+  const seriesParse = parseSeries({ sourceRevision, seriesValues: findRangeValues(SERIES_SHEET_ID, "A1:W"), importedAt: observedAt });
   return {
-    observedAt: input.observedAt,
+    observedAt,
     sourceRevision,
     identityRows,
     identityReport,
@@ -1009,4 +1031,28 @@ export async function inspectCanonicalRuleWorkbook(input: {
     seriesDefinitions: seriesParse.series,
     seriesParseIssues: seriesParse.issues,
   };
+}
+
+export async function inspectCanonicalRuleWorkbook(input: {
+  observedAt: string;
+  observedBy: string;
+}): Promise<CanonicalRuleWorkbookInspection> {
+  if (testInspectionOverride) return testInspectionOverride(input);
+  const sourceRevision = await pullFeishuWorkbookRevision({
+    workbook: CANONICAL_FEISHU_WORKBOOK,
+    registry: CANONICAL_FEISHU_SHEET_REGISTRY,
+    adapter: createFeishuWorkbookPullAdapter(),
+    pulledAt: input.observedAt,
+    pulledBy: input.observedBy,
+  });
+  const ranges = await readFeishuSheetRanges({
+    spreadsheetToken: sourceRevision.spreadsheetToken,
+    requests: canonicalRuleWorkbookRangeRequests(sourceRevision),
+  });
+  const parsed = await inspectCanonicalRuleWorkbookValues({
+    observedAt: input.observedAt,
+    sourceRevision,
+    ranges,
+  });
+  return { ...parsed, sourceRevision };
 }

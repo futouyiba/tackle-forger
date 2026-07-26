@@ -1,5 +1,4 @@
 import { deterministicHash } from "./rule-kernel";
-import type { FeishuSourceRevision } from "./feishu-workbook";
 import type {
   AdjustmentRule,
   CanonicalRuleSourceDraft,
@@ -561,8 +560,13 @@ function parseFunctions(input: { sources: PartedRuleSource[]; profiles: Map<stri
   return { profiles, modifiers };
 }
 
+export interface CanonicalRuleSourceRevisionRef {
+  id: string;
+  sourceRevision: string;
+}
+
 export function importCanonicalRuleSource(input: {
-  sourceRevision: FeishuSourceRevision;
+  sourceRevision: CanonicalRuleSourceRevisionRef;
   weightSources: PartedRuleSource[];
   typeSources: PartedRuleSource[];
   functionSources: PartedRuleSource[];

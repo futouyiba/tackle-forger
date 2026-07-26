@@ -4,7 +4,7 @@
 
 所有新功能、重构、数据迁移和测试必须遵循以下层级：
 
-1. [`tackle-forger-development-spec-v3.md`](./tackle-forger-development-spec-v3.md)：唯一权威产品与领域规范。
+1. [`spec-v3/README.md`](./spec-v3/README.md)及其模块：唯一权威产品与领域规范；[`tackle-forger-development-spec-v3.md`](./tackle-forger-development-spec-v3.md)是自动生成的兼容镜像。
 2. [`ux/tackle-forger-product-design-completion-v3.md`](./ux/tackle-forger-product-design-completion-v3.md)：规范性的UI消费契约，只能表达v3，不能改变领域语义。
 3. [`ux/tackle-forger-motion-experience-requirements-v1.md`](./ux/tackle-forger-motion-experience-requirements-v1.md)：从属于v3的UI/体验消费契约，规定动效、状态过渡与可访问性体验；不得新增、重解释或覆盖领域、发布和权限语义。
 4. [`handoffs/tackle-forger-v3-implementation-handoff.md`](./handoffs/tackle-forger-v3-implementation-handoff.md)：实现导航、工作包和交付证据，不另立业务规则。
@@ -83,7 +83,7 @@ v3飞书镜像直接发布自根目录`tackle-forger-development-spec-v3.md`，�
 
 ## Agent开始开发前
 
-1. 完整阅读v3权威规范。
+1. 按[`spec-v3/README.md`](./spec-v3/README.md)完成总纲、OPEN登记表和任务相关章节的渐进读取；仅在协议规定时全文读取。
 2. 检查规范第20节“未决事项登记表”，不得擅自固定未确认语义或绕过外部规则源阻断。
 3. 对照“当前实现迁移”确认本次工作属于哪个阶段。
 4. 保持历史发布配置不可变。

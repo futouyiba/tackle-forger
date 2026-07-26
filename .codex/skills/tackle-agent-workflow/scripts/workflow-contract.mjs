@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 const SCRIPT_RELATIVE = '.codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs';
 const INDEX_RELATIVE = '.codex/skills/tackle-agent-workflow/references/v3-navigation.json';
 const SPEC_RELATIVE = 'docs/tackle-forger-development-spec-v3.md';
+const SPEC_MODULE_MANIFEST_RELATIVE = 'docs/spec-v3/manifest.json';
 const PATCH_SCHEMA = 'tackle-local-patch/v1';
 const SPEC_READ_SCHEMA = 'tackle-spec-read/v1';
 const SPEC_READ_REUSE_SCHEMA = 'tackle-spec-read/v2';
@@ -19,8 +20,10 @@ const OWNED_BASELINE_SCHEMA = 'tackle-owned-baseline/v1';
 const VERDICT_SCHEMA = 'tackle-local-verdict/v1';
 const VALIDATION_SUMMARY_SCHEMA = 'tackle-validation-summary/v1';
 const README_SECTION = 'README';
+const V3_INDEX_SECTION = 'V3_INDEX';
 const FULL_V3_SECTION = 'FULL_V3';
-const SCOPED_BASE_SECTIONS = [README_SECTION, '0', '19', '20'];
+const ROUTED_BASE_SECTIONS = [README_SECTION, V3_INDEX_SECTION, '0', '19', '20'];
+const SCOPED_BASE_SECTIONS = ROUTED_BASE_SECTIONS;
 const NAVIGATION_DOMAINS = { export: ['20', '25'], patch: ['8', '14', '18.3', '20'], snapshot: ['13', '14', '18.2', '24.11'] };
 const NAVIGATION_INVARIANTS = [
   { id: 'nearest-derived-template-no-interpolation', sourceSections: ['5.2'] },
@@ -32,7 +35,7 @@ const STRICT_NAVIGATION_SECTIONS = new Set([
   ...NAVIGATION_INVARIANTS.flatMap((invariant) => invariant.sourceSections),
   '20',
 ]);
-const MANDATORY_WORKFLOW_COMMANDS = ['node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-index', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-policy', 'node --test .codex/skills/tackle-agent-workflow/scripts/workflow-contract.test.mjs'];
+const MANDATORY_WORKFLOW_COMMANDS = ['node scripts/spec-v3-modules.mjs --check', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-index', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-policy', 'node --test .codex/skills/tackle-agent-workflow/scripts/workflow-contract.test.mjs'];
 const CONDITIONAL_NA_CATALOG = ['product_runtime_tests', 'legacy_workspace_ci'];
 const LEGACY_WORKSPACE_COMMANDS = ['node --test tests/package-manager-boundaries.test.mjs', 'pnpm --dir legacy-workspace install --frozen-lockfile', "pnpm --dir legacy-workspace --filter '@tackle-forger/*' typecheck", "pnpm --dir legacy-workspace --filter '@tackle-forger/*' lint", "pnpm --dir legacy-workspace --filter '@tackle-forger/*' test", "pnpm --dir legacy-workspace --filter '@tackle-forger/*' build"];
 const CONDITIONAL_NA_APPLICABILITY = { legacyTouchedForbids: 'legacy_workspace_ci', nonLegacyRequires: 'legacy_workspace_ci', nonWorkflowForbids: 'product_runtime_tests', workflowMetadataRequires: 'product_runtime_tests' };
@@ -100,8 +103,27 @@ function sameSet(left, right) {
   const rightSet = new Set(right);
   return leftSet.size === left.length && rightSet.size === right.length && leftSet.size === rightSet.size && [...leftSet].every((item) => rightSet.has(item));
 }
+function currentSpecHash(root) {
+  const manifestPath = path.join(root, SPEC_MODULE_MANIFEST_RELATIVE);
+  if (!existsSync(manifestPath)) return sha256(readFileSync(path.join(root, SPEC_RELATIVE)));
+  const manifestBytes = readFileSync(manifestPath);
+  const manifest = JSON.parse(manifestBytes.toString('utf8'));
+  if (!Array.isArray(manifest.modules) || manifest.modules.length === 0) fail('canonical v3 module manifest must list modules');
+  const parts = [Buffer.from('tackle-v3-canonical/v1\0'), readFileSync(path.join(root, 'docs/spec-v3/README.md')), Buffer.from('\0'), manifestBytes];
+  const mirrorParts = [];
+  for (const specModule of manifest.modules) {
+    if (typeof specModule.path !== 'string' || !specModule.path.startsWith('docs/spec-v3/')) fail('canonical v3 module path is invalid');
+    const bytes = readFileSync(path.join(root, specModule.path));
+    if (specModule.sha256 !== sha256(bytes)) fail(`canonical v3 module hash drift: ${specModule.path}`);
+    parts.push(Buffer.from('\0'), Buffer.from(specModule.path, 'utf8'), Buffer.from('\0'), bytes);
+    mirrorParts.push(bytes.toString('utf8'));
+  }
+  const expectedMirror = `${manifest.preamble}${mirrorParts.join('').replaceAll('](../', '](./')}`;
+  if (readFileSync(path.join(root, SPEC_RELATIVE), 'utf8') !== expectedMirror) fail('canonical v3 compatibility mirror drift');
+  return sha256(Buffer.concat(parts));
+}
 function requireCurrentSpecHash(root, value) {
-  const expected = sha256(readFileSync(path.join(root, SPEC_RELATIVE)));
+  const expected = currentSpecHash(root);
   if (value !== expected) fail('specSha256 does not match the current canonical v3 specification');
   return expected;
 }
@@ -220,7 +242,7 @@ export function buildNavigationIndex(root = repositoryRoot()) {
     if (!invariant.sourceSections.every((section) => sectionIds.has(section))) fail(`Invariant ${invariant.id} is missing an authoritative v3 heading`);
     return { ...invariant, headingsVerified: true };
   });
-  return { format: 'tackle-v3-navigation/v2', nonAuthoritative: true, globalInvariants, openDecisions: openRegistry, openRegistry, domains: NAVIGATION_DOMAINS, source: { path: SPEC_RELATIVE, sha256: sha256(Buffer.from(source, 'utf8')) }, headings };
+  return { format: 'tackle-v3-navigation/v2', nonAuthoritative: true, globalInvariants, openDecisions: openRegistry, openRegistry, domains: NAVIGATION_DOMAINS, source: { path: existsSync(path.join(root, SPEC_MODULE_MANIFEST_RELATIVE)) ? 'docs/spec-v3' : SPEC_RELATIVE, sha256: currentSpecHash(root) }, headings };
 }
 export function writeNavigationIndex(root = repositoryRoot()) {
   const rendered = `${JSON.stringify(buildNavigationIndex(root), null, 2)}\n`;
@@ -229,19 +251,43 @@ export function writeNavigationIndex(root = repositoryRoot()) {
   writeFileSync(target, rendered, 'utf8');
   return rendered;
 }
+function checkCanonicalModules(root) {
+  const checker = path.join(root, 'scripts/spec-v3-modules.mjs');
+  if (!existsSync(checker)) return;
+  try { execFileSync(process.execPath, [checker, '--check'], { cwd: root, stdio: 'pipe' }); }
+  catch (error) { fail(`Canonical v3 module drift: ${error.stderr?.toString('utf8').trim() || error.message}`); }
+}
 export function checkNavigationIndex(root = repositoryRoot()) {
+  checkCanonicalModules(root);
   const expected = `${JSON.stringify(buildNavigationIndex(root), null, 2)}\n`;
   const target = path.join(root, INDEX_RELATIVE);
   if (!existsSync(target) || readFileSync(target, 'utf8') !== expected) fail(`Navigation index drift: run node ${SCRIPT_RELATIVE} --generate-index`);
   return true;
 }
-export function specReadPlan({ role, riskProfile, relevantSections = [] }) {
+function validateRouteCoverage(root, riskProfile, relevant) {
+  const manifestPath = path.join(root, SPEC_MODULE_MANIFEST_RELATIVE);
+  if (!existsSync(manifestPath)) return [];
+  const manifest = readJsonFile(manifestPath, 'canonical v3 module manifest');
+  const sectionSet = new Set(relevant);
+  const resolved = Object.entries(manifest.routes).filter(([, moduleIds]) => {
+    const required = moduleIds.flatMap((id) => manifest.modules.find((module) => module.id === id)?.sections ?? []);
+    return required.every((section) => sectionSet.has(section));
+  }).map(([route]) => route);
+  const valid = riskProfile === 'workflow_docs_metadata'
+    ? resolved.includes('workflow_governance')
+    : resolved.some((route) => route !== 'workflow_governance');
+  if (!valid) fail('relevantSections do not cover any complete applicable canonical v3 route; use FULL when the task cannot be classified');
+  return resolved;
+}
+export function specReadPlan({ root, role, riskProfile, relevantSections = [] }) {
   if (!['coordinator', 'coding', 'review'].includes(role)) fail('role must be coordinator, coding, or review');
   requireString(riskProfile, 'riskProfile');
   const relevant = requireStringArray(relevantSections, 'relevantSections');
+  if (root !== undefined && relevant.length > 0) validateRouteCoverage(root, riskProfile, relevant);
   const scoped = role !== 'coordinator' && riskProfile === 'workflow_docs_metadata';
-  const profile = scoped ? 'SCOPED' : 'FULL';
-  const requiredSections = scoped ? [...new Set([...SCOPED_BASE_SECTIONS, ...relevant])] : [README_SECTION, FULL_V3_SECTION];
+  const routed = relevant.length > 0;
+  const profile = scoped ? 'SCOPED' : (routed ? 'ROUTED' : 'FULL');
+  const requiredSections = routed ? [...new Set([...ROUTED_BASE_SECTIONS, ...relevant])] : [README_SECTION, V3_INDEX_SECTION, FULL_V3_SECTION];
   return { schema: SPEC_READ_SCHEMA, role, riskProfile, profile, requiredSections, relevantSections: relevant };
 }
 export function receiptHash(receipt) { return sha256(Buffer.from(canonicalJson(receipt), 'utf8')); }
@@ -299,10 +345,10 @@ export function checkReadReceipt({ root = repositoryRoot(), receipt, currentReus
   const readSections = requireStringArray(receipt.readSections, 'receipt.readSections');
   requireString(receipt.reason, 'receipt.reason');
   requireCurrentSpecHash(root, receipt.specSha256);
-  const plan = specReadPlan({ role, riskProfile, relevantSections });
-  const voluntaryFull = profile === 'FULL' && riskProfile === 'workflow_docs_metadata';
+  const plan = specReadPlan({ root, role, riskProfile, relevantSections });
+  const voluntaryFull = profile === 'FULL';
   if (profile !== plan.profile && !voluntaryFull) fail(`receipt.profile must be ${plan.profile} for role/risk`);
-  const expectedSections = voluntaryFull ? [README_SECTION, FULL_V3_SECTION] : plan.requiredSections;
+  const expectedSections = voluntaryFull ? [README_SECTION, V3_INDEX_SECTION, FULL_V3_SECTION] : plan.requiredSections;
   if (!sameSet(requiredSections, expectedSections)) fail('receipt.requiredSections does not match the required read plan');
   if (!requiredSections.every((section) => readSections.includes(section))) fail('receipt.readSections is missing a required section');
   return { receiptHash: receiptHash(receipt), requiredSections: expectedSections };
@@ -428,6 +474,7 @@ function commandSpec(briefResult, brief, command) {
   const node = process.execPath;
   const script = SCRIPT_RELATIVE;
   const staticCommands = new Map([
+    ['node scripts/spec-v3-modules.mjs --check', [node, ['scripts/spec-v3-modules.mjs', '--check']]],
     [`node ${script} --check-index`, [node, [script, '--check-index']]],
     [`node ${script} --check-policy`, [node, [script, '--check-policy']]],
     [`node --test ${script.replace('.mjs', '.test.mjs')}`, [node, ['--test', script.replace('.mjs', '.test.mjs')]]],
@@ -501,6 +548,7 @@ function validateBriefNarrative(brief, { legacyTouched }) {
   const na = brief.validationPlan.intentionallyNotApplicable;
   if (!isPlainObject(na) || Object.values(na).some((reason) => typeof reason !== 'string' || reason.length === 0)) fail('TaskBrief.validationPlan.intentionallyNotApplicable must map each omitted item to a non-empty reason');
   const matrix = CHANGE_CLASS_MATRIX[brief.changeClass];
+  const canonicalSpecTouched = brief.ownedPaths.some((owned) => owned.startsWith('docs/spec-v3/') || owned === 'scripts/spec-v3-modules.mjs' || owned === SPEC_RELATIVE);
   const riskScenarios = requiredRiskScenarios(brief.riskDimensions);
   const nonWaivableScenarios = [...matrix.scenarios, ...riskScenarios];
   const allowedNa = new Set(CONDITIONAL_NA_CATALOG);
@@ -515,12 +563,13 @@ function validateBriefNarrative(brief, { legacyTouched }) {
     fail('Non-workflow changeClass cannot mark product_runtime_tests N/A');
   }
   if (legacyTouched ? Object.hasOwn(na, 'legacy_workspace_ci') : !Object.hasOwn(na, 'legacy_workspace_ci')) fail(legacyTouched ? 'legacy workspace changes cannot mark legacy_workspace_ci N/A' : 'Non-legacy work requires a legacy_workspace_ci N/A reason');
-  const allowedCommands = new Set([...matrix.commands, ...(legacyTouched ? LEGACY_WORKSPACE_COMMANDS : [])]);
+  const allowedCommands = new Set([...matrix.commands, ...(legacyTouched ? LEGACY_WORKSPACE_COMMANDS : []), ...(canonicalSpecTouched ? ['node scripts/spec-v3-modules.mjs --check'] : [])]);
   if (commands.some((item) => !allowedCommands.has(item) && !(brief.changeClass === 'workflow_metadata' && isWorkflowWhitespaceCommand(item, brief.baseSha, brief.ownedPaths))) || scenarios.some((item) => ![...matrix.scenarios, ...riskScenarios].includes(item))) fail('TaskBrief.validationPlan command/scenario is in the wrong collection');
   for (const item of matrix.commands) if (!commands.includes(item) && !Object.hasOwn(na, item)) fail(`TaskBrief.validationPlan omits required command: ${item}`);
   for (const item of nonWaivableScenarios) if (!scenarios.includes(item)) fail(`TaskBrief.validationPlan scenario cannot be N/A: ${item}`);
   for (const item of matrix.nonWaivableCommands ?? []) if (!commands.includes(item)) fail(`TaskBrief.validationPlan command cannot be N/A: ${item}`);
   if (legacyTouched) for (const item of LEGACY_WORKSPACE_COMMANDS) if (!commands.includes(item)) fail(`TaskBrief.validationPlan legacy workspace command cannot be N/A: ${item}`);
+  if (canonicalSpecTouched && !commands.includes('node scripts/spec-v3-modules.mjs --check')) fail('TaskBrief.validationPlan canonical v3 module command cannot be N/A');
   if (brief.changeClass === 'persistence_migration' && !(brief.riskDimensions.persistedData || brief.riskDimensions.historicalSnapshots)) fail('persistence_migration requires persistedData or historicalSnapshots risk');
   if (brief.changeClass === 'authorization_shared_write' && !(brief.riskDimensions.authorization || brief.riskDimensions.concurrency)) fail('authorization_shared_write requires authorization or concurrency risk');
   if (brief.changeClass === 'external_side_effect' && !brief.riskDimensions.externalSideEffects) fail('external_side_effect requires externalSideEffects risk');
@@ -583,9 +632,11 @@ function prepareValidationPlan({ baseSha, ownedPaths, changeClass, riskDimension
   const matrix = CHANGE_CLASS_MATRIX[changeClass];
   if (!matrix) fail('Task preparation changeClass is unsupported');
   const legacyTouched = ownedPaths.some((owned) => owned.startsWith('legacy-workspace/'));
+  const canonicalSpecTouched = ownedPaths.some((owned) => owned.startsWith('docs/spec-v3/') || owned === 'scripts/spec-v3-modules.mjs' || owned === SPEC_RELATIVE);
   const requiredCommands = [...matrix.commands];
   if (changeClass === 'workflow_metadata') requiredCommands.push(dynamicDiffCommand(baseSha, ownedPaths));
   if (legacyTouched) requiredCommands.push(...LEGACY_WORKSPACE_COMMANDS);
+  if (canonicalSpecTouched && !requiredCommands.includes('node scripts/spec-v3-modules.mjs --check')) requiredCommands.push('node scripts/spec-v3-modules.mjs --check');
   const requiredScenarios = [...new Set([...matrix.scenarios, ...requiredRiskScenarios(riskDimensions)])];
   return { requiredCommands, requiredScenarios, intentionallyNotApplicable: defaultNaReasons(changeClass, legacyTouched) };
 }
@@ -663,7 +714,7 @@ export function prepareTaskBrief({ root = repositoryRoot(), input, currentReuseC
   if ((applicableIds.length === 0) !== (noApplicableReason !== null)) fail('Task preparation input.openDecisionApplicability must give a no-applicable reason exactly when applicableIds is empty');
   const receipt = input.coordinatorSpecReadReceipt;
   checkReadReceipt({ root, receipt, currentReuseContext });
-  if (receipt.taskId !== taskId || receipt.role !== 'coordinator' || receipt.specSha256 !== sha256(readFileSync(path.join(root, SPEC_RELATIVE))) || receipt.riskProfile !== riskProfile || !sameSet(receipt.relevantSections, relevantSections)) fail('Task preparation coordinatorSpecReadReceipt must bind the exact task, coordinator role, current spec, risk profile, and relevant sections');
+  if (receipt.taskId !== taskId || receipt.role !== 'coordinator' || receipt.specSha256 !== currentSpecHash(root) || receipt.riskProfile !== riskProfile || !sameSet(receipt.relevantSections, relevantSections)) fail('Task preparation coordinatorSpecReadReceipt must bind the exact task, coordinator role, current spec, risk profile, and relevant sections');
   const brief = {
     schema: TASK_BRIEF_SCHEMA, taskId, workflowMode, phase: 'pre_dispatch', specSha256: receipt.specSha256,
     baseSha, reviewedHead: workflowMode === 'local' ? 'WORKTREE' : head, scope: input.scope, relevantSections,
@@ -775,7 +826,7 @@ export function checkTaskBrief({ root = repositoryRoot(), brief, currentReuseCon
     if (receipt.specSha256 !== brief.specSha256) fail('TaskBrief receipt specSha256 must match TaskBrief.specSha256');
     if (receipt.riskProfile !== riskProfile || !sameSet(receipt.relevantSections, relevantSections)) fail('TaskBrief receipts must use TaskBrief riskProfile and relevantSections');
     if (['SCOPED', 'REUSE_FULL'].includes(receipt.profile) && (!classification.scopedEligible || riskProfile !== 'workflow_docs_metadata' || brief.scopeHasRuntimeSemantics)) fail('TaskBrief owned paths/risk/scope do not permit SCOPED or reused receipts');
-    if ((riskProfile !== 'workflow_docs_metadata' || brief.scopeHasRuntimeSemantics) && receipt.profile !== 'FULL') fail('TaskBrief risk/scope requires FULL receipts');
+    if ((riskProfile !== 'workflow_docs_metadata' || brief.scopeHasRuntimeSemantics) && !['ROUTED', 'FULL'].includes(receipt.profile)) fail('TaskBrief risk/scope requires ROUTED or FULL receipts');
     return checked.receiptHash;
   });
   if (trustedReuseContexts !== undefined && !sameSet(Object.keys(trustedReuseContexts), reusedRoles)) fail('reuseContexts must provide exactly one trusted context for each REUSE_FULL receipt role');
@@ -972,7 +1023,7 @@ export function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
   }
   if (action === '--spec-read-plan') {
     const values = parseActionOptions(argv, action, { '--role': false, '--risk': false, '--relevant': true }, ['--role', '--risk']);
-    return JSON.stringify(specReadPlan({ role: values['--role'][0], riskProfile: values['--risk'][0], relevantSections: values['--relevant'] }), null, 2);
+    return JSON.stringify(specReadPlan({ root, role: values['--role'][0], riskProfile: values['--risk'][0], relevantSections: values['--relevant'] }), null, 2);
   }
   if (action === '--check-read-receipt') {
     const values = parseActionOptions(argv, action, { '--receipt': false, '--current-agent-identity': false, '--current-context-session-id': false, '--current-context-state': false }, ['--receipt']);

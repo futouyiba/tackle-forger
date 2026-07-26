@@ -159,8 +159,10 @@ function findSourceForInspection(
   state: WorkspaceState,
   inspection: CanonicalRuleWorkbookInspection,
 ) {
-  const revision = inspection.sourceRevision.sourceRevision;
-  return state.feishuSourceRevisions.find((item) => item.sourceRevision === revision);
+  return state.feishuSourceRevisions.find((item) =>
+    item.sourceRevision === inspection.sourceRevision.sourceRevision
+    && item.workbookRefId === CANONICAL_FEISHU_WORKBOOK.id,
+  );
 }
 
 function findRuleSetForSource(
@@ -187,8 +189,10 @@ export function buildFeishuOrchestrationModel(
     ? findSourceForInspection(state, inspection)
     : undefined;
 
-  /** True when a previously-pulled source exists but the inspection shows a different revision. */
-  const hasPulledSource = state.feishuSourceRevisions.length > 0;
+  /** True when a previously-pulled source exists for the current canonical workbook but the inspection shows a different revision. */
+  const hasPulledSource = state.feishuSourceRevisions.some(
+    (rev) => rev.workbookRefId === CANONICAL_FEISHU_WORKBOOK.id,
+  );
   const inspectionShowsNewerRevision = Boolean(
     inspection &&
     hasPulledSource &&

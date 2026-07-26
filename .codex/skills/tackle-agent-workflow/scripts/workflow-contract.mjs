@@ -1202,25 +1202,9 @@ export function checkPolicy(root = repositoryRoot()) {
   if (canonicalJson(actualRiskTriggerLabels) !== canonicalJson(riskTriggerLabels)) fail('Workflow policy drift: PR risk trigger checkboxes differ from the canonical five-field projection');
   if (!riskGuidance.content.includes('These checkboxes do not derive or override riskProfile, reviewTier, or the merge gate\'s normal/high classification.')) fail('Workflow policy drift: PR risk triggers became an independent risk or review authority');
   if (!renderedRiskGuidance.includes(policy.visual.pendingMarker)) fail('Workflow policy drift: PR visual pending marker must be visible when the user-visible trigger is checked');
-  if (!riskGuidance.content.includes('A minimal render smoke does not complete the unified visual review.')) fail('Workflow policy drift: PR minimal render smoke boundary is missing');
-  const visualBoundaryParagraphs = template
-    .split(/\r?\n\s*\r?\n/)
-    .map((paragraph) => paragraph.replace(/\s+/g, ' '));
-  const visualBoundaryStatements = visualBoundaryParagraphs.flatMap((paragraph) => (
-    paragraph.split(/(?<=[.!?;。！？；])\s+/).map((statement) => statement.trim()).filter(Boolean)
-  ));
-  const visualBoundaryContradiction = visualBoundaryStatements.some((statement) => {
-    const hasMinimalSmoke = /(?:Minimal render smoke|最小渲染)/i.test(statement);
-    const hasVisualReview = /(?:unified|pending|visual|视觉)/i.test(statement);
-    const completionClaims = statement.matchAll(/(?:replace(?:s|d)?|complet(?:e|es|ed)|remove(?:s|d)?|clear(?:s|ed)?|satisf(?:y|ies|ied)|pass(?:es|ed)?|count(?:s|ed)?(?:\s+as)?|sufficient|替代|完成|满足|通过|算作)/gi);
-    const hasUnnegatedCompletionClaim = [...completionClaims].some((match) => {
-      const prefix = statement.slice(Math.max(0, match.index - 40), match.index);
-      const englishNegation = /(?:does not|doesn't|cannot|can't|must not|is not|isn't|are not|aren't|will not|won't|never|not)\s+(?:(?:be|get)\s+)?$/i;
-      return !englishNegation.test(prefix) && !/(?:不得|不能|不)$/.test(prefix);
-    });
-    return hasMinimalSmoke && hasVisualReview && hasUnnegatedCompletionClaim;
-  });
-  if (visualBoundaryContradiction) fail('Workflow policy drift: minimal render smoke contradicts the unified visual review boundary');
+  const canonicalMinimalRenderBoundary = '  - Minimal render smoke: <result or `Not run — <reason>`>. A minimal render smoke does not complete the unified visual review.';
+  const visualBoundaryLines = template.split(/\r?\n/).filter((line) => /(?:minimal render smoke|unified visual review)/i.test(line));
+  if (canonicalJson(visualBoundaryLines) !== canonicalJson([canonicalMinimalRenderBoundary])) fail('Workflow policy drift: PR minimal render smoke boundary must remain the single canonical statement');
   const contradictions = [
     [agentsRouting.content.replace(expectedRoute, '').replace(expectedTaskBriefRole, ''), /(?:Issue\s*路由|PR\s*路由|本地\s*路由)[^\n]*(?:审核|reviewer|review)/i],
     [agentsRouting.outside, /Issue\s*路由[^\n]*(?:审核|reviewer|review|独立审核者)/i],

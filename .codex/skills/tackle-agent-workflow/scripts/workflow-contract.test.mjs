@@ -603,7 +603,7 @@ test('policy checker detects required workflow markers', () => {
     write(root, '.github/pull_request_template.md', `${canonicalTemplate}<!--\n`);
     assert.throws(() => checkPolicy(root), /unmatched HTML comment delimiter/);
     write(root, '.github/pull_request_template.md', canonicalTemplate.replace('A minimal render smoke does not complete the unified visual review.', 'A minimal render smoke completes the unified visual review.'));
-    assert.throws(() => checkPolicy(root), /minimal render smoke boundary|contradictory normative text/);
+    assert.throws(() => checkPolicy(root), /single canonical statement/);
     const filledTemplate = canonicalTemplate
       .replaceAll('- [ ]', '- [x]')
       .replace('- Review:', '- Review: current-head review link')
@@ -620,25 +620,22 @@ test('policy checker detects required workflow markers', () => {
     assert.throws(() => checkPolicy(root), /risk trigger checkboxes/);
     write(root, '.github/pull_request_template.md', canonicalTemplate);
     appendFileSync(path.join(root, '.github/pull_request_template.md'), 'Minimal render smoke replaces the pending unified visual review.\n');
-    assert.throws(() => checkPolicy(root), /minimal render smoke contradicts/);
+    assert.throws(() => checkPolicy(root), /single canonical statement/);
     write(root, '.github/pull_request_template.md', canonicalTemplate);
     appendFileSync(path.join(root, '.github/pull_request_template.md'), 'The unified visual review is completed by a Minimal render smoke.\n');
-    assert.throws(() => checkPolicy(root), /minimal render smoke contradicts/);
+    assert.throws(() => checkPolicy(root), /single canonical statement/);
     write(root, '.github/pull_request_template.md', canonicalTemplate);
     appendFileSync(path.join(root, '.github/pull_request_template.md'), 'The unified visual review\nis completed by a Minimal render smoke.\n');
-    assert.throws(() => checkPolicy(root), /minimal render smoke contradicts/);
-    write(root, '.github/pull_request_template.md', canonicalTemplate);
-    appendFileSync(path.join(root, '.github/pull_request_template.md'), 'The unified visual review cannot be completed by a Minimal render smoke.\n');
-    assert.equal(checkPolicy(root), true);
+    assert.throws(() => checkPolicy(root), /single canonical statement/);
     write(root, '.github/pull_request_template.md', canonicalTemplate);
     appendFileSync(path.join(root, '.github/pull_request_template.md'), 'A Minimal render smoke does not complete the unified visual review. However, the unified visual review is completed by a Minimal render smoke.\n');
-    assert.throws(() => checkPolicy(root), /minimal render smoke contradicts/);
+    assert.throws(() => checkPolicy(root), /single canonical statement/);
     write(root, '.github/pull_request_template.md', canonicalTemplate);
     appendFileSync(path.join(root, '.github/pull_request_template.md'), 'A Minimal render smoke is sufficient to satisfy the unified visual review.\n');
-    assert.throws(() => checkPolicy(root), /minimal render smoke contradicts/);
+    assert.throws(() => checkPolicy(root), /single canonical statement/);
     write(root, '.github/pull_request_template.md', canonicalTemplate);
-    appendFileSync(path.join(root, '.github/pull_request_template.md'), 'A Minimal render smoke does not satisfy the unified visual review.\n');
-    assert.equal(checkPolicy(root), true);
+    appendFileSync(path.join(root, '.github/pull_request_template.md'), 'A Minimal render smoke does not satisfy the unified visual review. However, it is sufficient to pass the unified visual review.\n');
+    assert.throws(() => checkPolicy(root), /single canonical statement/);
   } finally { cleanup(root); }
 });
 

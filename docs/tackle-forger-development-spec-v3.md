@@ -923,9 +923,9 @@ Snapshot的“下载审计归档”与“正式导出”是两种不同动作：
 
 历史Snapshot缺少策略引用时产生`SNAPSHOT_REPLAY_POLICY_MISSING`（不可waive的`BLOCKER / EXPORT`）；它不阻止`view_snapshot`或`download_snapshot_audit_archive`，因为二者不是正式导出Gate。冻结payload自身hash已损坏时另按Snapshot完整性BLOCKER处理，审计归档也不得伪造成功。
 
-> **2026-07-25 权威表迁移（#149 / 读取协议 #143）**：权威规则源工作簿已从 `YsEKw…`（wiki，18 张合并表）迁移到 `WQ8wstS4ch29E2tAKnVcoh5KnJg`（sheets，48 张分表，竿/轮/线独立子表）——主工作簿 URL 已于本节更新为 WQ8w。两套拓扑不同（合并表 vs 分表），概念 ↔ sheet_id 映射见 `docs/audits/feishu-source-to-v3-mapping.md`。下方 sheet_id 清单（`d6e928`/`vviXo0`/`FqD4j7`/`edyFx9`…）与详细接入契约（五维块布局 竿3–18/轮21–36/线39–54、revision 观测 `2302`/`2352`/`4226`…）仍基于 **YsEKw 历史快照**，保留作审计证据；WQ8w 分表接入契约的重写由 #143 跟踪。**目标：工作簿来源可配置**（UI 飞书导入区支持输入链接 + 历史下拉，不硬编码单一表），由独立 issue 跟踪。
+> **2026-07-25 权威表迁移（#149 / 读取协议 #143）**：权威规则源工作簿已从 `YsEKw…`（wiki，18 张合并表）迁移到 `WQ8wstS4ch29E2tAKnVcoh5KnJg`（sheets，50 张分表，竿/轮/线独立子表）——主工作簿 URL 已于本节更新为 WQ8w。两套拓扑不同（合并表 vs 分表），概念 ↔ sheet_id 映射见 `docs/audits/feishu-source-to-v3-mapping.md`。下方 sheet_id 清单（`d6e928`/`vviXo0`/`FqD4j7`/`edyFx9`…）与详细接入契约（五维块布局 竿3–18/轮21–36/线39–54、revision 观测 `2302`/`2352`/`4226`…）仍基于 **YsEKw 历史快照**，保留作审计证据；WQ8w 分表接入契约的重写由 #143 跟踪。**目标：工作簿来源可配置**（UI 飞书导入区支持输入链接 + 历史下拉，不硬编码单一表），由独立 issue 跟踪。
 
-飞书电子表格是唯一通用规则源。当前指定主工作簿为[《钓具设计工作簿》](https://pisn3u3ony2.feishu.cn/sheets/WQ8wstS4ch29E2tAKnVcoh5KnJg?from=from_copylink)（WQ8w，48 张分表）；`?sheet=` 只表示打开时定位，同步边界是链接解析后的整个工作簿，不是单个工作表。2026-07-25 迁移后首次接入基线为 revision `338`；迁移前主工作簿为 YsEKw（wiki），历史 revision `2302`/`2352` 仅作审计证据保留于本节下方。两者都只是可审计的历史观测值，不是永久版本常量；每次显式拉取必须重新取得revision并形成新的`FeishuSourceRevision`。
+飞书电子表格是唯一通用规则源。当前指定主工作簿为[《钓具设计工作簿》](https://pisn3u3ony2.feishu.cn/sheets/WQ8wstS4ch29E2tAKnVcoh5KnJg?from=from_copylink)（WQ8w，50 张分表）；`?sheet=` 只表示打开时定位，同步边界是链接解析后的整个工作簿，不是单个工作表。2026-07-25 迁移后首次接入基线为 revision `338`；迁移前主工作簿为 YsEKw（wiki），历史 revision `2302`/`2352` 仅作审计证据保留于本节下方。两者都只是可审计的历史观测值，不是永久版本常量；每次显式拉取必须重新取得revision并形成新的`FeishuSourceRevision`。
 
 当前工作簿关键稳定工作表标识为：`01_重量模板/d6e928`、`02_钓法类型/rgFPUu`、`02.5_钓法模板/m3eQCg`、`03_类型材质/fATowU`、`04_功能定位/vviXo0`、`04_词条/zrVOxd`、`05_技术/RdZv0J`、`06_系列/9nE3Rx`、`07_品质评分/FqD4j7`、`08_价格计算/u87sRh`、`10_校验规则/KZv4o2`、`11_组合SKU/eXV1dI`、`13_上传发布/M17p0j`、`14_Rods/hekdpO`、`15_Reels/oUp48w`、`16_Lines/YTYwgS`、`17_Item/VFxDxt`、`Patch台账/edyFx9`。这是 revision `4226` 的已观测拓扑；工作表名称是人类文案，接入器以`sheet_id`识别并校验期望名称，改名产生warning，不把同名新表静默当成原表。
 

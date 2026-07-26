@@ -1022,7 +1022,6 @@ test("依赖门禁绑定受版本控制的 Issue/PR 映射、唯一 commit 与�
     if (url.pathname.includes("/actions/runs/") && url.pathname.includes("/attempts/1/jobs")) {
       return json({ jobs: [
         "Root v3 app (npm)",
-        "Historical workspace (pnpm)",
         "Windows line-ending policy",
       ].map((name) => ({ name, status: "completed", conclusion: "success" })) });
     }

@@ -54,7 +54,6 @@ Closes #
 
 - [ ] Branch was synchronized with the latest `main` before final validation
 - [ ] Relevant root npm checks pass
-- [ ] Relevant historical pnpm workspace checks pass
 - [ ] GitHub Actions required checks pass
 
 ## Visual evidence

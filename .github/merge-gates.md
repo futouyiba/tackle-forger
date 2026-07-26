@@ -110,8 +110,7 @@ current head SHA, pull request number, and current base SHA:
 - the PR is not Draft;
 - the current head's `.github/workflows/ci.yml` has the same SHA-256 content as
   the file read from the live base SHA;
-- `Root v3 app (npm)`, `Historical workspace (pnpm)`, and
-  `Windows line-ending policy` are present, explicitly owned by the
+- `Root v3 app (npm)` and `Windows line-ending policy` are present, explicitly owned by the
   `github-actions` app, and successful in a `pull_request` workflow run for that
   PR, head, and base;
 - no review thread remains unresolved and no active current-head
@@ -144,38 +143,16 @@ machine-readable output. Malformed pagination evidence also fails closed as an
 API error; a connection that declares another page must supply a non-empty
 cursor.
 
-### Historical workspace CI scope
+### Historical workspace recovery evidence
 
-`Historical workspace (pnpm)` is present in every non-Draft pull-request
-candidate run, so its exact job identity remains part of the merge-gate evidence. Before
-any expensive pnpm work, the job records an auditable scope decision against the
-immutable event head and base. It runs the full historical command set when a
-change touches a historical-workspace input: `apps/**`, `packages/**`,
-`legacy-workspace/**`, `tsconfig.base.json`, `vitest.workspace.config.ts`,
-`tests/package-manager-boundaries.test.mjs`, `package.json`, `package-lock.json`,
-`pnpm-workspace.yaml`, `pnpm-lock.yaml`, or `.github/workflows/ci.yml`. The
-explicit root files are the shared TypeScript and Vitest inputs plus the
-package-manager boundary test and its fixture inputs. The two root pnpm paths
-also make an attempted reintroduction of root pnpm metadata run the boundary
-test instead of receiving a false-green skip; all other direct workspace
-configuration is below the three directory prefixes.
-It also runs in full when either identity is missing, malformed, unavailable
-locally, the base is not an ancestor of the head, or Git cannot prove the path
-scope. This is intentionally fail-closed: only a proven nonlegacy diff may skip
-the expensive commands.
-
-The full command set is unchanged: boundary test, frozen-lockfile install, and
-workspace typecheck, lint, test, and build. A successful nonlegacy skip means
-only that the change cannot affect that isolated historical workspace by its
-owned path boundary; it is not evidence that the historical workspace itself
-was revalidated. Independent weekly and manually-dispatched workflow runs
-execute that full command set without also running the root npm or Windows jobs.
-
-The retained last full per-commit baseline is the immutable annotated tag
-`legacy-workspace-last-green-2026-07-26`, which resolves to
-`702938b36bed0c2ea5489238318778a18d53059f`. It is historical evidence for the
-initial scheduling change, not an override for the fail-closed event-time scope
-decision and not a substitute for weekly/manual full verification.
+The historical pnpm workspace is outside daily CI, merge-gate evidence, and
+Agent workflow validation. It remains retained data, not a currently supported
+delivery target. The immutable annotated tag
+`legacy-workspace-last-green-2026-07-26` resolves to
+`702938b36bed0c2ea5489238318778a18d53059f` and records its last known green
+baseline with Node `22.16.0` and pnpm `10.33.2`. Any future restoration must be
+a separately reviewed governance change that explicitly re-establishes its
+commands and acceptance evidence; this tag is recovery evidence only.
 
 ## Workflow governance path
 
@@ -241,7 +218,7 @@ npm run governance:check-pr -- --fixture tests/fixtures/merge-gate/ready-high-ri
 ```
 
 A real pull request drill still requires working GitHub authentication. Verify
-at least: all three current-head/current-base PR jobs passing, old-head success
+at least: both current-head/current-base PR jobs passing, old-head success
 rejected, push-only success rejected, stale-base success rejected, Draft
 rejected, unresolved thread and active change request rejected, old-head
 review rejected, arbitrary `COMMENTED` rejected, and a current-head Agent

@@ -14,6 +14,7 @@ import {
   type PricingPolicyDraft,
   type PricingExecutionPolicy,
   type PricingLookupEntry,
+  type PricingCellRef,
   type QualityPriceFactorRange,
   type QualityPricingMapping,
 } from "./pricing-policy";
@@ -281,6 +282,8 @@ export function pricingDraftFromRanges(input: {
   pricingValues?: unknown[][];
   /** WQ8w 09.1 参数释义 (32BmZs) — B=key, D=value format replacing old machine-key layout */
   pricingParamsValues?: unknown[][];
+  /** WQ8w 09.2 维修+零整比 (33IGHy) — 行格式 (part, weight, quality, maintenance, ratio) */
+  pricingEndpointValues?: unknown[][];
   typeValues?: unknown[][];
   importedAt: string;
 }): PricingPolicyDraft {
@@ -319,43 +322,23 @@ export function pricingDraftFromRanges(input: {
     return [{ qualityId, minScore, maxScore, maxInclusive: qualityId === "quality_s_orange", minFactor, maxFactor, status: "SOURCE", source: { sheetId: "27hboC", cell: `E${sheetRow}:H${sheetRow}`, rowKey: String(sheetRow) } }];
   });
   const pricingValues = input.pricingValues ?? [];
-  const maintenanceConsumptionRates: PricingLookupEntry[] = [];
-  const partAllocationRatios: PricingLookupEntry[] = [];
-  const totalLossTimes: PricingLookupEntry[] = [];
-  const partsToWholeRatios: PricingLookupEntry[] = [];
-  for (let index = 13; index < pricingValues.length; index += 1) {
-    const row = pricingValues[index] ?? [];
-    const sheetRow = index + 10;
-    const sourceValue = (value: number, cell: string) => ({ value, status: "SOURCE" as const, source: { sheetId: "31RxeB", cell, rowKey: String(sheetRow) } });
-    const maintenanceBand = text(row[0]);
-    const maintenance = Number(row[2]);
-    if (maintenanceBand && Number.isFinite(maintenance)) {
-      maintenanceConsumptionRates.push({ pricingWeightBandId: `weight_band:${maintenanceBand}`, value: sourceValue(maintenance, `D${sheetRow}`) });
-    }
-    const allocationBand = text(row[4]);
-    for (const [offset, partId] of [[5, "rod"], [6, "reel"], [7, "line"]] as const) {
-      const value = Number(row[offset]);
-      if (allocationBand && Number.isFinite(value)) {
-        const column = String.fromCharCode("B".charCodeAt(0) + offset);
-        partAllocationRatios.push({ pricingWeightBandId: `weight_band:${allocationBand}`, partId, value: sourceValue(value, `${column}${sheetRow}`) });
-      }
-    }
-    const lossBand = text(row[9]);
-    for (const [offset, partId] of [[11, "rod"], [12, "reel"], [13, "line"]] as const) {
-      const value = Number(row[offset]);
-      if (lossBand && Number.isFinite(value)) {
-        const column = String.fromCharCode("B".charCodeAt(0) + offset);
-        totalLossTimes.push({ pricingWeightBandId: `weight_band:${lossBand}`, partId, value: sourceValue(value, `${column}${sheetRow}`) });
-      }
-    }
-    for (const [offset, partId] of [[14, "rod"], [15, "reel"], [16, "line"]] as const) {
-      const value = Number(row[offset]);
-      if (lossBand && Number.isFinite(value)) {
-        const column = String.fromCharCode("B".charCodeAt(0) + offset);
-        partsToWholeRatios.push({ pricingWeightBandId: `weight_band:${lossBand}`, partId, value: sourceValue(value, `${column}${sheetRow}`) });
-      }
-    }
-  }
+  const wq8wLookup = parsePricingWq8wLookup(input.pricingEndpointValues);
+  const maintenanceConsumptionRates: PricingLookupEntry[] = wq8wLookup.maintenanceConsumptionRates.length
+    ? wq8wLookup.maintenanceConsumptionRates
+    : (() => { const leg: PricingLookupEntry[] = []; for (let i = 13; i < pricingValues.length; i++) { const r = pricingValues[i] ?? []; const b = text(r[0]); const v = Number(r[2]); if (b && Number.isFinite(v)) leg.push({ pricingWeightBandId: `weight_band:${b}`, value: { value: v, status: "SOURCE", source: { sheetId: "31RxeB", cell: `D${i + 10}`, rowKey: String(i + 10) } } }); } return leg; })();
+  // WQ8w: part allocation and total loss are baked into per-part maintenance prices (33IGHy).
+  // For legacy compatibility, default values of 1 so formulas simplify to identity without breaking.
+  const partAllocationRatios: PricingLookupEntry[] = wq8wLookup.maintenanceConsumptionRates.length
+    ? [{ partId: "rod", value: { value: 1, status: "SOURCE" as const, source: { sheetId: "33IGHy", cell: "A1", rowKey: "implicit" } } }]
+    : (() => { const leg: PricingLookupEntry[] = []; for (let i = 13; i < pricingValues.length; i++) { const r = pricingValues[i] ?? []; const b = text(r[4]); for (const [off, pid] of [[5, "rod"], [6, "reel"], [7, "line"]] as const) { const v = Number(r[off]); if (b && Number.isFinite(v)) leg.push({ pricingWeightBandId: `weight_band:${b}`, partId: pid, value: { value: v, status: "SOURCE", source: { sheetId: "31RxeB", cell: `${String.fromCharCode(66 + off)}${i + 10}`, rowKey: String(i + 10) } } }); } } return leg; })();
+  const totalLossTimes: PricingLookupEntry[] = [
+    { partId: "rod", value: { value: 1, status: "SOURCE" as const, source: { sheetId: "33IGHy", cell: "A1", rowKey: "implicit" } } },
+    { partId: "reel", value: { value: 1, status: "SOURCE" as const, source: { sheetId: "33IGHy", cell: "A1", rowKey: "implicit" } } },
+    { partId: "line", value: { value: 1, status: "SOURCE" as const, source: { sheetId: "33IGHy", cell: "A1", rowKey: "implicit" } } },
+  ];
+  const partsToWholeRatios: PricingLookupEntry[] = wq8wLookup.partsToWholeRatios.length
+    ? wq8wLookup.partsToWholeRatios
+    : (() => { const leg: PricingLookupEntry[] = []; for (let i = 13; i < pricingValues.length; i++) { const r = pricingValues[i] ?? []; const b = text(r[9]); for (const [off, pid] of [[14, "rod"], [15, "reel"], [16, "line"]] as const) { const v = Number(r[off]); if (b && Number.isFinite(v)) leg.push({ pricingWeightBandId: `weight_band:${b}`, partId: pid, value: { value: v, status: "SOURCE", source: { sheetId: "31RxeB", cell: `${String.fromCharCode(66 + off)}${i + 10}`, rowKey: String(i + 10) } } }); } } return leg; })();
   const repairCoefficients: PricingLookupEntry[] = [];
   const purchaseCoefficients: PricingLookupEntry[] = [];
   for (let index = 1; index < (input.typeValues ?? []).length; index += 1) {
@@ -452,6 +435,35 @@ export function pricingQualitySourceRowsFromDraft(
     code: row.code, minScore: row.minScore, maxScore: row.maxScore, minFactor: row.minFactor, maxFactor: row.maxFactor,
     mappingCell: row.mappingSource.cell, factorCell: row.factorSource.cell, rowKey: row.mappingSource.rowKey ?? "",
   }));
+}
+
+function parsePricingWq8wLookup(rows: unknown[][] | undefined): {
+  maintenanceConsumptionRates: PricingLookupEntry[];
+  partsToWholeRatios: PricingLookupEntry[];
+} {
+  const rates: PricingLookupEntry[] = [];
+  const ratios: PricingLookupEntry[] = [];
+  if (!rows || rows.length < 2) return { maintenanceConsumptionRates: rates, partsToWholeRatios: ratios };
+  for (let index = 1; index < rows.length; index += 1) {
+    const row = rows[index] ?? [];
+    const partName = text(row[0]);
+    const weightBand = text(row[1]);
+    const quality = text(row[2]);
+    const maintenance = Number(row[3]);
+    const ratio = Number(row[4]);
+    const partId = partIds[partName] ?? "";
+    if (!weightBand || !partId) continue;
+    const bandId = `weight_band:${weightBand}`;
+    const src: PricingCellRef = { sheetId: "33IGHy", cell: `A${index + 1}:E${index + 1}`, rowKey: String(index + 1) };
+    if (Number.isFinite(maintenance)) {
+      rates.push({ pricingWeightBandId: bandId, partId, value: { value: maintenance, status: "SOURCE", source: src } });
+    }
+    if (Number.isFinite(ratio)) {
+      ratios.push({ pricingWeightBandId: bandId, partId, value: { value: ratio, status: "SOURCE", source: src } });
+    }
+    void quality; // ignored — per-band lookup not quality-scoped
+  }
+  return { maintenanceConsumptionRates: rates, partsToWholeRatios: ratios };
 }
 
 const partIds: Record<string, string> = { "竿": "part:rod", "轮": "part:reel", "线": "part:line" };
@@ -895,6 +907,7 @@ export async function inspectCanonicalRuleWorkbook(input: {
     qualityValues: [], qualitySourceRows: pricingQualityRows,
     pricingValues: pricingRange?.valueRange.values ?? [],
     pricingParamsValues: pricingParamsRange?.valueRange.values ?? [],
+    pricingEndpointValues: pricingEndpointRange?.valueRange.values ?? [],
     typeValues, importedAt: input.observedAt,
   });
   const findRangeValues = (sheetId: string, rangePrefix: string) => ranges.find((entry) => entry.sheetId === sheetId && typeof entry.range === "string" && entry.range.startsWith(rangePrefix))?.valueRange.values ?? [];

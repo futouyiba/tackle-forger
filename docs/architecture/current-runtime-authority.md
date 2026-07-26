@@ -2,20 +2,20 @@
 
 > 状态：工程运行时权威说明；不定义产品或领域语义
 > 最后对齐 v3：2026-07-26
-> 实现基线：`main@d01ab1005590b41c8360c66e92693e19e8dc56ee`
+> 实现基线：`main@280b15308ade17785804cb584955719add7c04e6`
 
 本文件固定当前仓库的产品入口、包管理、构建、持久化与部署角色。发生冲突时，产品与领域语义仍以
 [`../tackle-forger-development-spec-v3.md`](../tackle-forger-development-spec-v3.md) 为准；本文件只解释怎样安全运行该实现。
 
 | 事项 | 当前唯一结论 | 禁止的替代解释 |
 | --- | --- | --- |
-| 产品实现 | 仓库根目录的 v3 应用（`app/`、`lib/`、`tests/`） | 不把 `apps/web` 或 `packages/*` 当作现行产品入口 |
+| 产品实现 | 仓库根目录的 v3 应用（`app/`、`lib/`、`tests/`） | 不从历史标签恢复第二个产品入口 |
 | 包管理 | 根目录 `npm` + `package-lock.json` | 不在根目录创建 pnpm importer，也不以 pnpm 验证代替根 npm 验证 |
 | 正式构建 | `npm run build`，即 `vinext build` | 不使用历史 workspace 或 `next build` 作为正式构建 |
 | 正式生产 | 单实例公司内网 Dell R730 | 不把 Vercel、Cloudflare 或 OpenAI Sites 表述为正式生产 |
 | 正式持久化 | R730 上显式 `sqlite` 后端与持久磁盘 | 不通过 token、binding 或临时文件系统隐式切换后端 |
 | Vercel / Cloudflare / OpenAI Sites | 已退役；不再有仓库内部署或预览路径 | 不重新加入平台构建、运行时 binding 或存储分支 |
-| historical pnpm workspace | 只读历史与经审计迁移边界 | 不作为新功能、日常验证或正式部署的实现目标 |
+| historical pnpm workspace | 仅由 Git 历史与冻结标签保存 | 不恢复到 main，不作为新功能、日常验证或正式部署目标 |
 
 ## Next.js 与 Vinext
 
@@ -34,6 +34,6 @@
 
 ## Legacy 收敛边界
 
-`legacy-workspace/` 只保存 pnpm workspace 元数据与锁文件；`apps/web`、`packages/*` 保留为历史取证和经审计迁移输入。历史 workspace 已退出日常 CI、合并门禁和 Agent 验证，不再承担“始终可安装、可构建”的现行维护义务。
+历史 pnpm workspace 已从 main 文件树移除，不再形成第二套包管理、TypeScript、Vitest、Lint 或安装边界。需要取证或迁移时，只能从冻结标签建立隔离分支，不得把旧应用、PostgreSQL schema 或浏览器本地状态直接接回当前运行时。
 
-最后一次冻结安装、typecheck、lint、test、build 的恢复证据由 annotated tag `legacy-workspace-last-green-2026-07-26` 固定，使用 Node.js 22.16.0 与 pnpm 10.33.2。恢复旧 workspace 验证、修改历史目录或重新引入相关运行路径，必须作为独立治理变更审查；不得把历史目录、迁移证据或已发布快照静默解释为现行产品。
+最后一次冻结安装、typecheck、lint、test、build 的恢复证据由 annotated tag `legacy-workspace-last-green-2026-07-26` 固定；该标签解析到 commit `702938b36bed0c2ea5489238318778a18d53059f`，使用 Node.js 22.16.0 与 pnpm 10.33.2。任何恢复、迁移或重新引入都必须作为独立治理变更审查；根应用中的 schema migration、legacy product migration、历史业务数据与已发布快照不属于该归档，必须继续保留。

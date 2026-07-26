@@ -18,7 +18,7 @@
     "acceptance:phase-one": "node -- scripts/phase-one-acceptance.mjs",
     "governance:check-pr": "node scripts/check-pr-merge-gate.mjs",
     "test": "npm run build && tsx --test tests/*.test.ts && node --test tests/*.test.mjs",
-    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next --ignore-pattern apps/web --ignore-pattern packages",
+    "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate",
     "typecheck": "tsc --noEmit"
   },

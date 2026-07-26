@@ -63,7 +63,7 @@
 - 部署配置：验证配置、重启服务，并检查实际监听地址和健康状态。
 - 普通业务代码：运行`npm run typecheck`、`npm run lint`和相关测试；新增领域行为还须覆盖正常、边界、冲突和版本冻结场景。
 - 持久化、迁移、权限或外部写入：除相关代码检查外，必须验证边界、失败恢复、幂等和写后回读；迁移还须使用真实或脱敏生产形状fixture，并证明第二次执行无变化。
-- 稳定PR候选：针对同一个精确head/base只运行一次完整CI。根应用逐字运行`npm run typecheck`、`npm run lint`、`npm test`；历史pnpm workspace不再是日常CI、合并门禁或Agent工作流验证对象。恢复证据保留为`legacy-workspace-last-green-2026-07-26`（Node `22.16.0` / pnpm `10.33.2`），恢复必须另行治理变更。
+- 稳定PR候选：针对同一个精确head/base只运行一次完整CI。根应用逐字运行`npm run typecheck`、`npm run lint`、`npm test`；历史pnpm workspace已从main文件树移除，不是日常CI、合并门禁或Agent工作流验证对象。恢复证据保留为`legacy-workspace-last-green-2026-07-26`（commit `702938b36bed0c2ea5489238318778a18d53059f`，Node `22.16.0` / pnpm `10.33.2`），恢复必须从隔离分支发起独立治理变更。
 - rebase或base/head变化：先按实际diff重新分类，只重跑受影响检查；仅当影响广泛或形成新的稳定PR候选时才重跑完整CI。
 - 迭代分类与稳定候选门禁是两个正交维度：业务、部署、持久化或外部写入在迭代阶段不跑完整CI，不表示其成为稳定精确head/base候选后可以跳过一次完整CI；rebase只先触发受影响检查，形成新稳定候选后仍须取得该精确head/base的一次完整CI证据。
 

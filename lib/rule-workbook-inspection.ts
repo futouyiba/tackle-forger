@@ -73,21 +73,6 @@ export const CANONICAL_IDENTITY_SHEET_SPECS: IdentitySheetSpec[] = [
   { sheetId: "25UnTC", range: "A1:W", idColumnKey: "A", fixedEntityType: "SeriesArchetype", allowedEntityTypes: ["SeriesArchetype"], idPrefixesByEntityType: { SeriesArchetype: ["series_rod_", "series_reel_", "series_line_"] } },
 ];
 
-/**
- * 旧表 YsEKw（合并表）的身份规格（PR2b 切流后保留，spec §14 审计证据）。
- * 供历史 revision 审计、迁移适配与 legacy 回归测试使用；新读取链默认用上面的 WQ8w `CANONICAL_IDENTITY_SHEET_SPECS`。
- * 旧合并表一张含竿/轮/线块（如 d6e928 B1:C54），与新表三子表拓扑不同。
- */
-export const LEGACY_YS_EKW_IDENTITY_SHEET_SPECS: IdentitySheetSpec[] = [
-  { sheetId: "mLpTLK", range: "A1:S8", idColumnKey: "A", fixedEntityType: "FunctionProfile", allowedEntityTypes: ["FunctionProfile"], idPrefixesByEntityType: { FunctionProfile: ["function:"] } },
-  { sheetId: "d6e928", range: "BG1:BH", idColumnKey: "B", fixedEntityType: "WeightTemplate", allowedEntityTypes: ["WeightTemplate"], idPrefixesByEntityType: { WeightTemplate: ["wtpl_"] } },
-  { sheetId: "fATowU", range: "B1:C20", idColumnKey: "B", allowedEntityTypes: ["RodType", "ReelType", "LineType"], idPrefixesByEntityType: { RodType: ["type_rod_"], ReelType: ["type_reel_"], LineType: ["type_line_"] } },
-  { sheetId: "vviXo0", range: "B1:C63", idColumnKey: "B", fixedEntityType: "FunctionProfile", allowedEntityTypes: ["FunctionProfile"], idPrefixesByEntityType: { FunctionProfile: ["func_"] } },
-  { sheetId: "mLpTLK", range: "Q1:S8", idColumnKey: "Q:S", fixedEntityType: "FunctionPartGroup", allowedEntityTypes: ["FunctionPartGroup"], idPrefixesByEntityType: { FunctionPartGroup: ["funcgrp_rod_", "funcgrp_reel_", "funcgrp_line_"] } },
-  { sheetId: "zrVOxd", range: "B1:C38", idColumnKey: "B", allowedEntityTypes: ["RodAffix", "ReelAffix", "LineAffix"], idPrefixesByEntityType: { RodAffix: ["affix_rod_"], ReelAffix: ["affix_reel_"], LineAffix: ["affix_line_"] } },
-  { sheetId: "9nE3Rx", range: "B1:C10", idColumnKey: "B", fixedEntityType: "SeriesArchetype", allowedEntityTypes: ["SeriesArchetype"], idPrefixesByEntityType: { SeriesArchetype: ["series_rod_", "series_reel_", "series_line_"] } },
-];
-
 export const AFFIX_SHEET_ID = "23CsXE";
 /** 品质定义主表（区间/价格系数）；公式 26gpIF 与组合矩阵 28fQhg 由 PR2b-3 接入。 */
 const QUALITY_SHEET_ID = "27hboC";

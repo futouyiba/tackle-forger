@@ -74,10 +74,12 @@
 
 `.github/merge-gates.md`是Pull Request合并资格、CI provenance、规范review signal和workflow治理例外的唯一完整人类可读权威；`scripts/check-pr-merge-gate.mjs`只实现其中的机器检查。
 
+本仓库的managed mode为`autonomous`，作用域是当前仓库和当前明确目标；由单一有权限的coordinator/托管主管负责，活跃任务轮次或已配置唤醒作为heartbeat，当前不声称存在额外后台Automation。重试上限为3个fix-review-CI循环，自动独立review按`reviewTier`和高风险门禁执行，merge policy为`qualified_auto_merge`。人工关卡包括本任务用户显式合并暂停、未决产品/范围或依赖、安全/授权/凭据/计费/法律决定、不可逆或破坏性数据动作、必需验证或身份不可用、合并触发部署/发布/外部副作用及重试耗尽；部署和发布策略固定为`never`。
+
 合并门禁由首个有权限的Agent或单一托管主管基于实时GitHub状态执行；这是仓库的standing responsibility，不把checker通过扩张成部署、发布或其他外部副作用授权。
 
 合并决策前从干净、同步到实时base tip的目标分支工作树运行：
 
 `npm run governance:check-pr -- --repo futouyiba/tackle-forger --pr <number> --risk <normal|high>`
 
-任何相关远端状态变化后都必须刷新并重跑。不得从被审分支复制checker，也不得通过参数、评论或自身代码自行放行。实时checker对精确head/base返回`READY`，且不存在`.github/merge-gates.md`定义的人工关卡时，即激活本仓库的qualified auto-merge standing authorization：首个有权限的coordinator或单一托管主管应直接合并一个符合条件的PR，无需本轮用户另行授权，并立即回读远端合并结果。用户在本任务开始或进行中明确要求不合并、等待人工合并或合并前再次询问时，该指令建立任务级人工关卡；即使checker返回`READY`也必须等待，且只有用户后续明确授权合并才能解除，沉默、CI/review通过或新的`READY`均不能解除。checker未返回`READY`或命中其他人工关卡时也必须停止并请求决定。现行仓库不配置GitHub Ruleset、分支保护、required check或额外status context；不得新增重复workflow替代该门禁。合并授权不包括部署、发布、删除、范围扩张或其他外部副作用。
+任何相关远端状态变化后都必须刷新并重跑。不得从被审分支复制checker，也不得通过参数、评论或自身代码自行放行。实时checker对精确head/base返回`READY`，且不存在`.github/merge-gates.md`定义的人工关卡时，即激活本仓库的qualified auto-merge standing authorization：首个有权限的coordinator或单一托管主管应直接合并一个符合条件的PR，无需本轮用户另行授权，并立即回读远端合并结果。专门修改CI workflow或merge-gate program的治理PR即使因受信基线比较而保持非`READY`，在独立exact-head review明确接受全部预期治理阻断、其余阻断清零且无人工关卡时，也由同一standing authorization自动合并，不再要求owner另行授权。用户在本任务开始或进行中明确要求不合并、等待人工合并或合并前再次询问时，该指令建立任务级人工关卡；即使checker返回`READY`也必须等待，且只有用户后续明确授权合并才能解除，沉默、CI/review通过或新的`READY`均不能解除。checker未返回`READY`且未满足上述治理路径，或命中其他人工关卡时必须停止并请求决定。现行仓库不配置GitHub Ruleset、分支保护、required check或额外status context；不得新增重复workflow替代该门禁。合并授权不包括部署、发布、删除、范围扩张或其他外部副作用。

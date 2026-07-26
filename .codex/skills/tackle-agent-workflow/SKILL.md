@@ -13,7 +13,7 @@ Use this Skill for project-specific constraints, task preparation, and a local i
 
 Choose exactly one route before dispatch. The coordinator chooses implementation capacity and reviewer count, specialization, model, reasoning strength, and scheduling from task risk, scope, available capabilities, and resources.
 
-- **Local implementation, no Issue or PR:** this Skill owns local implementation and applies the TaskBrief review tier at the local evidence boundary.
+- **Local implementation, no Issue or PR:** this Skill owns local implementation. An eligible `fast` scoped workflow task may finish from its Task Card without creating a TaskBrief, receipt, local result, or reviewer; every other local evidence boundary applies the TaskBrief review tier.
 - **Issue delivery:** `$agent-issue-loop` owns Issue, branch, PR, closure, and handoff. Supply it this Skill's TaskBrief. Once a PR exists, `$agent-pr-loop` exclusively owns review, CI, fixes, and merge gates.
 - **Existing PR:** invoke `$agent-pr-loop` directly and supply the TaskBrief. It owns the review loop.
 
@@ -25,11 +25,15 @@ Before implementation, follow `docs/spec-v3/README.md`: read the index, section 
 
 Run `--prepare-task-card --input <six-field-card.json>` only from a clean worktree. Add `--store-run` when the daily card itself needs a private durable record. It mechanically binds the initial base/spec identity, workflow route, and complete OPEN registry coverage. For a resolved scoped route it also emits a read-plan template and an incomplete receipt-shaped draft (`readSections: []`); a person must complete and check the receipt after actually reading. It never generates a valid reading assertion. Every formal boundary has `formalTaskBriefRequiredAtBoundary: true`; `earlyEscalationRequired` separately flags runtime, persistence, historical snapshots, authorization, concurrency, publication/export/external effects, non-scoped paths, Issue/PR work, or uncertain classification. Non-scoped cards intentionally emit no complete route/read plan.
 
-After daily implementation changes only card-owned paths, use `--upgrade-task-card --card <task-card.json> --boundary-input <formal-boundary-with-review-tier.json>` at the formal evidence boundary. Add `--store-run` to persist the resulting formal TaskBrief, never the source card. It verifies the original card base is still current HEAD and rejects any unowned dirt, then requires the human `reviewTier` decision, complete routed sections, OPEN applicability and completed coordinator receipt before emitting the ordinary full TaskBrief. This bridge treats the dirty owned diff as the current task artifact, never as pre-existing work. A stale card, unowned dirt, unknown/high risk, invalid tier, or incomplete route fails closed.
+For a still-un-escalated `local` + `workflow_docs_metadata` + `workflow_metadata` card that is intentionally classified `fast`, run `--complete-task-card --card <task-card.json>` after the scoped validation. It checks the current card/base, owned-only dirty status, whitespace, and exact patch identity, then returns a transient `tackle-task-card-result/v1` compact handoff. Do not store it as a local verdict or manufacture receipts. Any scope, path, route, risk, or workflow-mode expansion leaves this path and requires the formal boundary below.
 
-At a formal local-review handoff, Issue dispatch, or PR boundary, create the full TaskBrief and pass its raw form to participating agents:
+After daily implementation changes only card-owned paths, use `--upgrade-task-card --card <task-card.json> --boundary-input <formal-boundary-with-review-tier.json>` at the formal evidence boundary. Add `--store-run` to persist the resulting formal TaskBrief, never the source card. It verifies the original card base is still current HEAD and rejects any unowned dirt, then requires the human `reviewTier` decision, complete routed sections, OPEN applicability and completed coordinator receipt before emitting the preferred compact `tackle-task-brief/v2`. This bridge treats the dirty owned diff as the current task artifact, never as pre-existing work. A stale card, unowned dirt, unknown/high risk, invalid tier, or incomplete route fails closed.
 
-For a clean worktree, start with `--prepare-task-brief --input <semantic-input-with-review-tier.json>`. Add optional `--store-run` to write the canonical resulting JSON to the current worktree's Git-private `codex-runs` path; this never creates a worktree file or Git-tracked artifact, reports `TaskBrief-Run-Path: <absolute-path>` only on stderr, and keeps stdout as the prepared JSON. A stored daily card instead uses the distinct `TaskCard-Run-Path` report and `task-card-...json` identity; a formal brief uses `task-brief-...json`, whether created directly or through `--upgrade-task-card --store-run`. The path is resolved by Git for the active worktree, so linked worktrees remain separate. Each immutable record identity combines its type, a SHA-256 task-ID digest (never a path component supplied by the task), and the canonical record hash: identical reruns reuse it, while a rebase or evolved record under the same task ID creates another record. Publication writes a complete same-directory temporary file and atomically hard-links it into the final no-overwrite name; a concurrent writer may only read that completed final file. This requires a filesystem with same-directory hard-link support (including normal NTFS); unsupported files fail closed. Publisher-owned temporaries are removed, abandoned old temporaries are cleaned, and unsafe directory/record/temporary symlinks or collisions stop preparation. On POSIX the storage directory and records are forced and verified as `0700`/`0600`; Windows intentionally skips POSIX mode semantics. The closed input deliberately requires the human decisions it cannot safely infer: task ID and route, base revision, scope, owned paths, acceptance criteria, exclusions, risk profile/dimensions, independent review tier, runtime-semantics declaration, relevant v3 sections (including 20), OPEN applicability/reason, and a complete closed coordinator `tackle-spec-read/v1` or `v2` receipt. The command validates and embeds that supplied receipt; it never turns a reason into a reading claim or manufactures `readSections`. A reused v2 receipt additionally requires the trusted caller context flags `--current-agent-identity`, `--current-context-session-id`, and `--current-context-state continuous`; omitted, mismatched, unknown, or compacted context fails closed, while v1 needs no such flags. Local preparation requires `baseSha` to equal the current exact HEAD, so committed changes cannot be silently absorbed as task input; Issue/PR preparation retains their exact-head ancestor rules. It derives current canonical hashes, full OPEN checked IDs, exact current head/worktree identity, allowed changes, conditional N/A reasons, and validation commands/scenarios, then immediately runs the existing TaskBrief checker. Workflow owned-file whitespace validation is a closed `--check-owned-whitespace` command: tracked/deleted files use Git's base diff and untracked files use `git diff --no-index --check /dev/null`, so later-created owned files cannot evade trailing-whitespace checks. It rejects unknown-high-risk preparation and only accepts the closed risk/profile/class/dimension combinations that imply their required scenarios; every true declared risk dimension contributes its required scenarios without changing the declared dimensions. It fails on dirty worktrees, invalid/duplicate/non-file/symlink paths, invalid current sections or OPEN IDs, unsupported risk/change combinations, non-ancestor bases, invalid review tiers, and missing semantic input. It never creates commits, branches, PRs, or a claim that the specification was understood.
+At a formal local evidence handoff, Issue dispatch, or PR boundary, create the formal TaskBrief and pass its raw form to participating agents:
+
+For a clean worktree, start with `--prepare-task-brief --input <semantic-input-with-review-tier.json>`. Add optional `--store-run` to write the canonical resulting JSON to the current worktree's Git-private `codex-runs` path; this never creates a worktree file or Git-tracked artifact, reports `TaskBrief-Run-Path: <absolute-path>` only on stderr, and keeps stdout as the prepared JSON. New preparation prefers `tackle-task-brief/v2`; the checker and immutable run storage continue to recognize exact `tackle-task-brief/v1` records without rewriting or rehashing them. V2 binds task/spec/risk/route once, stores compact role-specific reading evidence, and lets the checker recompute the full OPEN registry, allowed changes, validation plan, and mechanical disposition. The stored TaskBrief hash always covers the exact original schema record, never a normalized rewrite.
+
+A stored daily card uses the distinct `TaskCard-Run-Path` report and `task-card-...json` identity; a formal brief uses `task-brief-...json`, whether created directly or through `--upgrade-task-card --store-run`. The path is resolved by Git for the active worktree, so linked worktrees remain separate. Each immutable record identity combines its type, a SHA-256 task-ID digest (never a path component supplied by the task), and the canonical record hash: identical reruns reuse it, while a rebase or evolved record under the same task ID creates another record. Publication writes a complete same-directory temporary file and atomically hard-links it into the final no-overwrite name; a concurrent writer may only read that completed final file. Unsupported filesystems, unsafe links, collisions, stale bases, unowned dirt, invalid routes/risks, and incomplete reading evidence fail closed.
 
 ```text
 Task-ID / workflow mode (local | issue | pull_request)
@@ -41,9 +45,9 @@ Review tier: fast | standard | strict (review boundary/intensity only; independe
 Validation: required commands and scenarios; a triggered command or scenario cannot be N/A
 ```
 
-The closed `tackle-task-brief/v1` remains the formal handoff record. Its schema, receipt composition, route eligibility, evidence stages, and validation matrix come from the versioned policy and are enforced by `workflow-contract.mjs`; display prose is not a competing authority.
+The closed `tackle-task-brief/v2` is the preferred formal handoff record and `tackle-task-brief/v1` remains an accepted legacy record. Their receipt composition, route eligibility, evidence stages, and validation matrix come from the versioned policy and are enforced by `workflow-contract.mjs`; display prose is not a competing authority.
 
-To advance a local `WORKTREE` brief, use `--promote-task-brief --brief <pre-dispatch.json> --coding-receipt <coding.json> [--review-receipt <review.json when required by policy>] [--reuse-contexts <role-contexts.json>]`. The command validates receipt bindings, owned-only Git status, and the frozen baseline, then changes only phase, receipt composition, and mechanical artifact/disposition fields. It never creates a verdict, PASS, commit, or external side effect. Run `--check-task-brief` before dispatch and record its returned hashes in the local verdict.
+To advance a local `WORKTREE` brief, use `--promote-task-brief --brief <pre-dispatch.json> --coding-receipt <coding.json> [--review-receipt <review.json when required by policy>] [--reuse-contexts <role-contexts.json>]`. The command validates receipt bindings, owned-only Git status, and the frozen baseline, then changes only phase, receipt composition, and mechanical artifact/disposition fields. It never creates a result, PASS, commit, or external side effect. Run `--check-task-brief` before dispatch and bind the returned exact TaskBrief hash in the local result.
 
 Stop for user confirmation only when the authoritative specification leaves required semantics unresolved. Preserve unrelated user work and do not let it enter the owned diff.
 
@@ -61,22 +65,16 @@ Record findings and verdict fields exactly as required by the versioned policy a
 
 At the local evidence boundary, load the policy-required receipt roles and review boundary from the referenced machine authority. Give every participating role the TaskBrief and no authority beyond its scoped implementation, validation, or read-only review work.
 
-When policy requires local review, each assigned reviewer checks the exact local artifact read-only against the TaskBrief and applicable authority. The coordinator records every finding disposition and integrates the single local verdict only after all required scopes cover the unchanged artifact.
+When policy requires local review, each assigned reviewer checks the exact local artifact read-only against the TaskBrief and applicable authority. The coordinator records every finding disposition and integrates the single local result only after all required scopes cover the unchanged artifact.
 
-At `local_review_handoff`, collect any policy-required review evidence, dispose findings, and emit one local verdict record. Committed artifacts use their exact commit SHA; a still-uncommitted `WORKTREE` uses base SHA + owned paths + patch hash:
+At a formal local result boundary, collect any policy-required review evidence and dispose findings. New work emits `tackle-local-result/v2` with only the exact TaskBrief hash, artifact identity, verdict, and findings; the checker recomputes task/spec/receipt/disposition/base/head/owned-path bindings from the exact TaskBrief. Existing `tackle-local-verdict/v1` records remain accepted without mutation. Local result evidence is forbidden for Issue and PR workflow modes. Committed artifacts use their exact commit SHA; a still-uncommitted `WORKTREE` uses base SHA + owned paths + patch hash:
 
 ```text
-Tackle-Review-Version: v1
-Task-ID: ...
-Base-SHA: ...
-Reviewed-Head-SHA: ... | WORKTREE
-Owned-Paths: ...
-Artifact-Identity: commit:<exact SHA> | worktree:<base SHA + owned paths + patch hash>
-Spec-SHA256: ...
-TaskBrief-SHA256: ...
-Spec-Receipt-Hashes: ...
-Dirty-Worktree-Disposition: ...
-Verdict: PASS | FINDINGS
+schema: tackle-local-result/v2
+taskBriefSha256: ...
+artifactIdentity: commit:<exact SHA> | worktree:<base SHA + owned paths + patch hash>
+verdict: PASS | FINDINGS
+findings: [...]
 ```
 
 For a `WORKTREE`, `Patch-Hash` is SHA-256 lowercase hex of the UTF-8 RFC 8785 JCS bytes of this deterministic manifest:
@@ -100,6 +98,7 @@ node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-i
 node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-policy
 node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --prepare-task-card --input <six-field-card.json>
 node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-task-card --card <task-card.json>
+node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --complete-task-card --card <task-card.json>
 node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --upgrade-task-card --card <task-card.json> --boundary-input <formal-boundary-with-review-tier.json>
 node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --spec-read-plan --role <coordinator|coding|review> --risk <risk-profile> [--review-tier <fast|standard|strict>] [--relevant <section> ...] [--applicable <OPEN-id> ...]
 node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-read-receipt --receipt <receipt.json> [--review-tier <fast|standard|strict>] [--applicable <OPEN-id> ...]
@@ -107,6 +106,7 @@ node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-t
 node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --promote-task-brief --brief <pre-dispatch-task-brief.json> --coding-receipt <coding-receipt.json> [--review-receipt <review-receipt.json when tier requires>] [--reuse-contexts <role-contexts.json>]
 node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --owned-baseline --base <sha> --owned <repo-relative-path> [--owned <path> ...]
 node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --run-validation --brief <verdict-task-brief.json> [--reuse-contexts <role-contexts.json>]
+node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-local-result --result <result.json> --brief <task-brief.json> [--reuse-contexts <role-contexts.json>]
 node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-verdict --verdict <verdict.json> --brief <task-brief.json> [--reuse-contexts <role-contexts.json>]
 node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --patch-hash --base <base-sha> --owned <repo-relative-path> [--owned <repo-relative-path> ...] # WORKTREE review handoff only
 node --test .codex/skills/tackle-agent-workflow/scripts/workflow-contract.test.mjs

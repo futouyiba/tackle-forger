@@ -5,6 +5,17 @@
     "localOwnedBaseline": "tackle-owned-baseline/v1"
   },
   "localVerdict": {
+    "acceptedSchemas": [
+      "tackle-local-verdict/v1",
+      "tackle-local-result/v2"
+    ],
+    "compactRequired": [
+      "taskBriefSha256",
+      "artifactIdentity",
+      "verdict",
+      "findings"
+    ],
+    "preferredSchema": "tackle-local-result/v2",
     "required": [
       "taskBriefSha256",
       "specReceiptHashes",
@@ -95,6 +106,10 @@
     "schema": "tackle-task-card/v1"
   },
   "taskBrief": {
+    "acceptedSchemas": [
+      "tackle-task-brief/v1",
+      "tackle-task-brief/v2"
+    ],
     "conditionalNaApplicability": {
       "nonWorkflowForbids": "product_runtime_tests",
       "workflowMetadataRequires": "product_runtime_tests"
@@ -145,6 +160,15 @@
         }
       }
     },
+    "fastLocalCompletion": {
+      "allowedChangeClass": "workflow_metadata",
+      "allowedRiskProfile": "workflow_docs_metadata",
+      "requiresCompactHandoff": true,
+      "requiresLocalResult": false,
+      "requiresReviewer": false,
+      "requiresTaskBrief": false
+    },
+    "preferredSchema": "tackle-task-brief/v2",
     "schema": "tackle-task-brief/v1"
   },
   "validationMatrix": {

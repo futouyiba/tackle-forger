@@ -27,12 +27,15 @@ const SPEC_READ_SCHEMA = 'tackle-spec-read/v1';
 const SPEC_READ_REUSE_SCHEMA = 'tackle-spec-read/v2';
 const SPEC_FULL_READ_SESSION_SCHEMA = 'tackle-spec-full-read-session/v1';
 const TASK_BRIEF_SCHEMA = 'tackle-task-brief/v1';
+const TASK_BRIEF_V2_SCHEMA = 'tackle-task-brief/v2';
 const TASK_CARD_SCHEMA = 'tackle-task-card/v1';
+const TASK_CARD_RESULT_SCHEMA = 'tackle-task-card-result/v1';
 const TASK_CARD_UPGRADE_INPUT_SCHEMA = 'tackle-task-card-upgrade-input/v1';
 const REVIEW_TIERS = ['fast', 'standard', 'strict'];
 const TASK_PREPARE_INPUT_SCHEMA = 'tackle-task-prepare-input/v1';
 const OWNED_BASELINE_SCHEMA = 'tackle-owned-baseline/v1';
 const VERDICT_SCHEMA = 'tackle-local-verdict/v1';
+const LOCAL_RESULT_V2_SCHEMA = 'tackle-local-result/v2';
 const VALIDATION_SUMMARY_SCHEMA = 'tackle-validation-summary/v1';
 const README_SECTION = 'README';
 const V3_INDEX_SECTION = 'V3_INDEX';
@@ -203,7 +206,7 @@ export function writeTaskRun({ root = repositoryRoot(), kind, record }) {
   }
 }
 export function writeTaskBriefRun({ root = repositoryRoot(), brief }) {
-  if (brief?.schema !== TASK_BRIEF_SCHEMA) fail('TaskBrief run storage requires tackle-task-brief/v1');
+  if (![TASK_BRIEF_SCHEMA, TASK_BRIEF_V2_SCHEMA].includes(brief?.schema)) fail('TaskBrief run storage requires a supported tackle-task-brief schema');
   return writeTaskRun({ root, kind: 'task-brief', record: brief });
 }
 export function writeTaskCardRun({ root = repositoryRoot(), card }) {
@@ -268,7 +271,7 @@ function readJsonFile(file, label) {
 const WORKFLOW_POLICY_SHAPE = {
   schemaVersion: 'string',
   dirtyIsolation: { issuePr: 'string', localOwnedBaseline: 'string' },
-  localVerdict: { required: ['string'], schema: 'string' },
+  localVerdict: { acceptedSchemas: ['string'], compactRequired: ['string'], preferredSchema: 'string', required: ['string'], schema: 'string' },
   reviewSeverity: { informational: ['string'], passBlocking: ['string'] },
   reviewTier: { strictWhenRiskDimensions: ['string'], strictWhenRiskProfile: ['string'], values: ['string'] },
   scopedEligibility: { allowedPathClasses: ['string'], unknownForcesFull: 'boolean' },
@@ -282,6 +285,7 @@ const WORKFLOW_POLICY_SHAPE = {
   specReceipt: { schema: 'string' },
   taskCard: { dailySemanticFields: ['string'], schema: 'string' },
   taskBrief: {
+    acceptedSchemas: ['string'],
     conditionalNaApplicability: { nonWorkflowForbids: 'string', workflowMetadataRequires: 'string' },
     conditionalNaCatalog: { productRuntimeTests: 'string' },
     phaseReceiptsByReviewTier: {
@@ -292,6 +296,15 @@ const WORKFLOW_POLICY_SHAPE = {
         strict: { all: ['string'] },
       },
     },
+    fastLocalCompletion: {
+      allowedChangeClass: 'string',
+      allowedRiskProfile: 'string',
+      requiresCompactHandoff: 'boolean',
+      requiresLocalResult: 'boolean',
+      requiresReviewer: 'boolean',
+      requiresTaskBrief: 'boolean',
+    },
+    preferredSchema: 'string',
     schema: 'string',
   },
   validationMatrix: {
@@ -349,9 +362,22 @@ function assertWorkflowPolicyImplementationParity(policy) {
   if (policy.taskCard.schema !== TASK_CARD_SCHEMA) fail('Workflow policy implementation parity failed: taskCard.schema');
   requirePolicyParity(policy.taskCard.dailySemanticFields, TASK_CARD_SEMANTIC_FIELDS, 'taskCard.dailySemanticFields');
   if (policy.taskBrief.schema !== TASK_BRIEF_SCHEMA) fail('Workflow policy implementation parity failed: taskBrief.schema');
+  requirePolicyParity(policy.taskBrief.acceptedSchemas, [TASK_BRIEF_SCHEMA, TASK_BRIEF_V2_SCHEMA], 'taskBrief.acceptedSchemas');
+  if (policy.taskBrief.preferredSchema !== TASK_BRIEF_V2_SCHEMA) fail('Workflow policy implementation parity failed: taskBrief.preferredSchema');
+  requirePolicyParity(policy.taskBrief.fastLocalCompletion, {
+    allowedChangeClass: 'workflow_metadata',
+    allowedRiskProfile: 'workflow_docs_metadata',
+    requiresCompactHandoff: true,
+    requiresLocalResult: false,
+    requiresReviewer: false,
+    requiresTaskBrief: false,
+  }, 'taskBrief.fastLocalCompletion');
   requirePolicyParity(policy.taskBrief.conditionalNaCatalog, { productRuntimeTests: CONDITIONAL_NA_CATALOG[0] }, 'taskBrief.conditionalNaCatalog');
   requirePolicyParity(policy.taskBrief.conditionalNaApplicability, CONDITIONAL_NA_APPLICABILITY, 'taskBrief.conditionalNaApplicability');
   if (policy.localVerdict.schema !== VERDICT_SCHEMA) fail('Workflow policy implementation parity failed: localVerdict.schema');
+  requirePolicyParity(policy.localVerdict.acceptedSchemas, [VERDICT_SCHEMA, LOCAL_RESULT_V2_SCHEMA], 'localVerdict.acceptedSchemas');
+  if (policy.localVerdict.preferredSchema !== LOCAL_RESULT_V2_SCHEMA) fail('Workflow policy implementation parity failed: localVerdict.preferredSchema');
+  requirePolicyParity(policy.localVerdict.compactRequired, ['taskBriefSha256', 'artifactIdentity', 'verdict', 'findings'], 'localVerdict.compactRequired');
   requirePolicyParity(policy.localVerdict.required, LOCAL_VERDICT_REQUIRED_FIELDS, 'localVerdict.required');
   requirePolicyParity(policy.reviewSeverity, REVIEW_SEVERITY_POLICY, 'reviewSeverity');
   if (policy.validationRunner.schema !== VALIDATION_SUMMARY_SCHEMA) fail('Workflow policy implementation parity failed: validationRunner.schema');
@@ -664,6 +690,36 @@ export function checkTaskCard({ root = repositoryRoot(), card }) {
   if (canonicalJson(card) !== canonicalJson(expected)) fail('Task Card derived evidence is stale or was not mechanically generated');
   return expected;
 }
+export function completeTaskCard({ root = repositoryRoot(), card }) {
+  const checked = checkTaskCard({ root, card });
+  const policy = loadWorkflowPolicy(root).taskBrief.fastLocalCompletion;
+  if (checked.semantic.workflowMode !== 'local'
+    || checked.semantic.riskProfile !== policy.allowedRiskProfile
+    || checked.semantic.changeClass !== policy.allowedChangeClass
+    || checked.derived.earlyEscalationRequired
+    || checked.derived.routeSelection.status !== 'resolved') {
+    fail('Fast local completion requires an un-escalated local scoped workflow Task Card');
+  }
+  if (checked.derived.baseSha !== currentHead(root)) fail('Fast local completion rejects a stale Task Card base/head');
+  const dirtyPaths = validationStatusPaths(root);
+  if (dirtyPaths.length === 0) fail('Fast local completion requires a task-owned worktree artifact');
+  if (dirtyPaths.some((repoPath) => !checked.semantic.ownedPaths.includes(repoPath))) fail('Fast local completion rejects unowned dirty paths');
+  checkOwnedWhitespace({ root, baseSha: checked.derived.baseSha, ownedPaths: checked.semantic.ownedPaths });
+  const artifact = patchHash({ root, baseSha: checked.derived.baseSha, ownedPaths: checked.semantic.ownedPaths });
+  return {
+    schema: TASK_CARD_RESULT_SCHEMA,
+    taskCardSha256: sha256(Buffer.from(canonicalJson(checked), 'utf8')),
+    baseSha: checked.derived.baseSha,
+    ownedPaths: checked.semantic.ownedPaths,
+    artifactIdentity: { kind: 'worktree', commitSha: null, patchHash: artifact.patchHash },
+    requiredValidationCommands: prepareValidationPlan({
+      baseSha: checked.derived.baseSha,
+      ownedPaths: checked.semantic.ownedPaths,
+      changeClass: checked.semantic.changeClass,
+      riskDimensions: { persistedData: false, historicalSnapshots: false, concurrency: false, authorization: false, externalSideEffects: false, userVisible: false },
+    }).requiredCommands,
+  };
+}
 export function receiptHash(receipt) { return sha256(Buffer.from(canonicalJson(receipt), 'utf8')); }
 export function fullReadSessionHash(session) { return sha256(Buffer.from(canonicalJson(session), 'utf8')); }
 function requireRfc3339Utc(value, field) {
@@ -869,10 +925,11 @@ function commandSpec(briefResult, brief, command) {
 export function validationExecutionPlan({ root = repositoryRoot(), brief, currentReuseContext, reuseContexts }) {
   const briefResult = checkTaskBrief({ root, brief, currentReuseContext, reuseContexts });
   if (briefResult.phase !== 'verdict') fail('Validation execution requires a verdict-phase TaskBrief');
-  const commands = requireNonEmptyStringArray(brief.validationPlan.requiredCommands, 'TaskBrief.validationPlan.requiredCommands');
-  const plan = commands.map((command) => commandSpec(briefResult, brief, command));
-  const dirtyPaths = assertReusableValidationIsolation(root, brief, briefResult);
-  const artifact = validationArtifact(root, brief, briefResult, dirtyPaths);
+  const checkedBrief = briefResult.normalizedBrief;
+  const commands = requireNonEmptyStringArray(checkedBrief.validationPlan.requiredCommands, 'TaskBrief.validationPlan.requiredCommands');
+  const plan = commands.map((command) => commandSpec(briefResult, checkedBrief, command));
+  const dirtyPaths = assertReusableValidationIsolation(root, checkedBrief, briefResult);
+  const artifact = validationArtifact(root, checkedBrief, briefResult, dirtyPaths);
   const toolchain = toolchainIdentity(root, plan);
   const resolvedPlan = plan.map((entry) => ({ ...entry, executable: toolchain.tools.find((tool) => tool.executable === entry.executable).resolvedPath }));
   return {
@@ -969,8 +1026,10 @@ export function checkOwnedWhitespace({ root = repositoryRoot(), baseSha, ownedPa
     const result = spawnSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 1024 * 1024 });
     const detail = `${result.stdout ?? ''}${result.stderr ?? ''}`.trim();
     // git diff --no-index returns 1 for an ordinary, clean difference. --check
-    // emits diagnostics for whitespace errors, which is the only nonzero case we reject.
-    if (result.error || (entry.state !== 'untracked' && result.status !== 0) || detail.length > 0) {
+    // returns 2 for whitespace errors. Git may also emit line-ending conversion
+    // warnings on stderr while the check itself succeeds, so status is authoritative.
+    const allowedStatuses = entry.state === 'untracked' ? [0, 1] : [0];
+    if (result.error || !allowedStatuses.includes(result.status)) {
       const detailMessage = detail || result.error?.message || `git diff exited ${result.status}`;
       fail(`Owned whitespace check failed for ${entry.path}: ${detailMessage}`);
     }
@@ -1007,6 +1066,131 @@ function prepareValidationPlan({ baseSha, ownedPaths, changeClass, riskDimension
   if (canonicalSpecTouched && !requiredCommands.includes('node scripts/spec-v3-modules.mjs --check')) requiredCommands.push('node scripts/spec-v3-modules.mjs --check');
   const requiredScenarios = [...new Set([...matrix.scenarios, ...requiredRiskScenarios(riskDimensions)])];
   return { requiredCommands, requiredScenarios, intentionallyNotApplicable: defaultNaReasons(changeClass) };
+}
+function compactReceiptRole(receipt) {
+  const compact = {
+    receiptSchema: receipt.schema,
+    role: receipt.role,
+    profile: receipt.profile,
+    requiredSections: receipt.requiredSections,
+    readSections: receipt.readSections,
+    reason: receipt.reason,
+  };
+  if (receipt.schema === SPEC_READ_REUSE_SCHEMA) compact.reuseEvidence = receipt.reuseEvidence;
+  return compact;
+}
+function expandReceiptRole(brief, roleEvidence) {
+  if (!isPlainObject(roleEvidence)) fail('TaskBrief.specReadEvidence.roles entries must be objects');
+  const reused = roleEvidence.receiptSchema === SPEC_READ_REUSE_SCHEMA;
+  requireExactKeys(roleEvidence, reused
+    ? ['receiptSchema', 'role', 'profile', 'requiredSections', 'readSections', 'reason', 'reuseEvidence']
+    : ['receiptSchema', 'role', 'profile', 'requiredSections', 'readSections', 'reason'], 'TaskBrief.specReadEvidence role');
+  if (![SPEC_READ_SCHEMA, SPEC_READ_REUSE_SCHEMA].includes(roleEvidence.receiptSchema)) fail('TaskBrief.specReadEvidence role receiptSchema is unsupported');
+  return {
+    schema: roleEvidence.receiptSchema,
+    taskId: brief.taskId,
+    role: roleEvidence.role,
+    specSha256: brief.specReadEvidence.specSha256,
+    profile: roleEvidence.profile,
+    riskProfile: brief.riskProfile,
+    relevantSections: brief.relevantSections,
+    requiredSections: roleEvidence.requiredSections,
+    readSections: roleEvidence.readSections,
+    reason: roleEvidence.reason,
+    ...(reused ? { reuseEvidence: roleEvidence.reuseEvidence } : {}),
+  };
+}
+function compactTaskBriefV2(legacyBrief) {
+  const compact = {
+    schema: TASK_BRIEF_V2_SCHEMA,
+    taskId: legacyBrief.taskId,
+    workflowMode: legacyBrief.workflowMode,
+    phase: legacyBrief.phase,
+    baseSha: legacyBrief.baseSha,
+    reviewedHead: legacyBrief.reviewedHead,
+    scope: legacyBrief.scope,
+    relevantSections: legacyBrief.relevantSections,
+    openDecisionApplicability: {
+      applicableIds: legacyBrief.openDecisionCheck.applicableIds,
+      noApplicableReason: legacyBrief.openDecisionCheck.noApplicableReason,
+    },
+    riskProfile: legacyBrief.riskProfile,
+    reviewTier: legacyBrief.reviewTier,
+    scopeHasRuntimeSemantics: legacyBrief.scopeHasRuntimeSemantics,
+    changeClass: legacyBrief.changeClass,
+    acceptanceCriteria: legacyBrief.acceptanceCriteria,
+    exclusions: legacyBrief.exclusions,
+    riskDimensions: legacyBrief.riskDimensions,
+    ownedPaths: legacyBrief.ownedPaths,
+    specReadEvidence: {
+      specSha256: legacyBrief.specSha256,
+      roles: legacyBrief.specReadReceipts.map(compactReceiptRole),
+    },
+    preexistingOwnedPaths: legacyBrief.preexistingOwnedPaths,
+    preexistingUnownedChanges: legacyBrief.preexistingUnownedChanges,
+  };
+  if (legacyBrief.preTaskOwnedBaselineManifest !== undefined) {
+    compact.preTaskOwnedBaselineManifest = legacyBrief.preTaskOwnedBaselineManifest;
+    compact.preTaskOwnedBaselineHash = legacyBrief.preTaskOwnedBaselineHash;
+  }
+  return compact;
+}
+function expandTaskBriefV2(root, brief) {
+  if (!isPlainObject(brief)) fail('TaskBrief must be an object');
+  const baseKeys = [
+    'schema', 'taskId', 'workflowMode', 'phase', 'baseSha', 'reviewedHead', 'scope', 'relevantSections',
+    'openDecisionApplicability', 'riskProfile', 'reviewTier', 'scopeHasRuntimeSemantics', 'changeClass',
+    'acceptanceCriteria', 'exclusions', 'riskDimensions', 'ownedPaths', 'specReadEvidence',
+    'preexistingOwnedPaths', 'preexistingUnownedChanges',
+  ];
+  const hasBaseline = Array.isArray(brief.preexistingOwnedPaths) && brief.preexistingOwnedPaths.length > 0;
+  requireExactKeys(brief, hasBaseline ? [...baseKeys, 'preTaskOwnedBaselineManifest', 'preTaskOwnedBaselineHash'] : baseKeys, 'TaskBrief');
+  if (brief.schema !== TASK_BRIEF_V2_SCHEMA) fail(`TaskBrief.schema must be ${TASK_BRIEF_V2_SCHEMA}`);
+  requireExactKeys(brief.openDecisionApplicability, ['applicableIds', 'noApplicableReason'], 'TaskBrief.openDecisionApplicability');
+  requireExactKeys(brief.specReadEvidence, ['specSha256', 'roles'], 'TaskBrief.specReadEvidence');
+  if (!Array.isArray(brief.specReadEvidence.roles) || brief.specReadEvidence.roles.length === 0) fail('TaskBrief.specReadEvidence.roles must be a non-empty array');
+  const registry = buildNavigationIndex(root).openRegistry;
+  const ownedPaths = requireNonEmptyStringArray(brief.ownedPaths, 'TaskBrief.ownedPaths');
+  const preexistingOwnedPaths = requireStringArray(brief.preexistingOwnedPaths, 'TaskBrief.preexistingOwnedPaths');
+  const preexistingUnownedChanges = requireStringArray(brief.preexistingUnownedChanges, 'TaskBrief.preexistingUnownedChanges');
+  const dirtyWorktreeDisposition = brief.workflowMode === 'local'
+    ? (preexistingOwnedPaths.length > 0 ? 'include_with_frozen_baseline' : (preexistingUnownedChanges.length > 0 ? 'unowned_dirty_excluded' : 'clean'))
+    : 'clean_synced';
+  return {
+    schema: TASK_BRIEF_SCHEMA,
+    taskId: brief.taskId,
+    workflowMode: brief.workflowMode,
+    phase: brief.phase,
+    specSha256: brief.specReadEvidence.specSha256,
+    baseSha: brief.baseSha,
+    reviewedHead: brief.reviewedHead,
+    scope: brief.scope,
+    relevantSections: brief.relevantSections,
+    openDecisionCheck: {
+      registrySha256: openRegistryHash(root),
+      checkedIds: registry.map((entry) => entry.id),
+      applicableIds: brief.openDecisionApplicability.applicableIds,
+      noApplicableReason: brief.openDecisionApplicability.noApplicableReason,
+    },
+    riskProfile: brief.riskProfile,
+    reviewTier: brief.reviewTier,
+    scopeHasRuntimeSemantics: brief.scopeHasRuntimeSemantics,
+    changeClass: brief.changeClass,
+    allowedChanges: ownedPaths,
+    acceptanceCriteria: brief.acceptanceCriteria,
+    exclusions: brief.exclusions,
+    riskDimensions: brief.riskDimensions,
+    validationPlan: prepareValidationPlan({ baseSha: brief.baseSha, ownedPaths, changeClass: brief.changeClass, riskDimensions: brief.riskDimensions }),
+    specReadReceipts: brief.specReadEvidence.roles.map((roleEvidence) => expandReceiptRole(brief, roleEvidence)),
+    ownedPaths,
+    preexistingOwnedPaths,
+    preexistingUnownedChanges,
+    dirtyWorktreeDisposition,
+    ...(hasBaseline ? {
+      preTaskOwnedBaselineManifest: brief.preTaskOwnedBaselineManifest,
+      preTaskOwnedBaselineHash: brief.preTaskOwnedBaselineHash,
+    } : {}),
+  };
 }
 function validatePreparationRisk({ riskProfile, changeClass, riskDimensions, scopeHasRuntimeSemantics }) {
   if (riskProfile === 'unknown_high_risk') fail('Task preparation refuses unknown_high_risk; prepare an explicitly classified conservative TaskBrief instead');
@@ -1102,7 +1286,9 @@ function prepareTaskBriefInternal({ root = repositoryRoot(), input, currentReuse
   };
   // Reuse the authoritative checker rather than duplicating its risk/path matrix.
   checkTaskBrief({ root, brief, currentReuseContext });
-  return brief;
+  const compact = compactTaskBriefV2(brief);
+  checkTaskBrief({ root, brief: compact, currentReuseContext });
+  return compact;
 }
 export function prepareTaskBrief({ root = repositoryRoot(), input, currentReuseContext }) {
   return prepareTaskBriefInternal({ root, input, currentReuseContext, allowOwnedDirty: false });
@@ -1167,7 +1353,11 @@ function checkOwnedBaselineManifest({ root, manifest, baseSha, ownedPaths, preex
   if (!sameSet(derivedPreexisting, preexistingOwnedPaths)) fail('preTaskOwnedBaselineManifest does not match preexistingOwnedPaths');
   return ownedBaselineHash(manifest);
 }
-export function checkTaskBrief({ root = repositoryRoot(), brief, currentReuseContext, reuseContexts }) {
+function withNormalizedBrief(result, normalizedBrief) {
+  Object.defineProperty(result, 'normalizedBrief', { value: normalizedBrief, enumerable: false, configurable: false, writable: false });
+  return result;
+}
+function checkTaskBriefV1({ root = repositoryRoot(), brief, currentReuseContext, reuseContexts }) {
   if (currentReuseContext !== undefined && reuseContexts !== undefined) fail('TaskBrief checking accepts either currentReuseContext or role-keyed reuseContexts, not both');
   const trustedReuseContexts = validateReuseContexts(reuseContexts);
   if (!isPlainObject(brief)) fail('TaskBrief must be an object');
@@ -1257,7 +1447,15 @@ export function checkTaskBrief({ root = repositoryRoot(), brief, currentReuseCon
   } else if (!['clean', 'unowned_dirty_excluded'].includes(disposition)) {
     fail('Local TaskBrief without preexisting owned paths requires clean or unowned_dirty_excluded');
   }
-  return { taskBriefSha256: taskBriefHash(brief), specReceiptHashes: [...receiptHashes].sort(compareUtf8), dirtyWorktreeDisposition: disposition, baseSha, reviewedHead, phase };
+  return withNormalizedBrief({ taskBriefSha256: taskBriefHash(brief), specReceiptHashes: [...receiptHashes].sort(compareUtf8), dirtyWorktreeDisposition: disposition, baseSha, reviewedHead, phase }, brief);
+}
+export function checkTaskBrief({ root = repositoryRoot(), brief, currentReuseContext, reuseContexts }) {
+  if (brief?.schema === TASK_BRIEF_V2_SCHEMA) {
+    const normalizedBrief = expandTaskBriefV2(root, brief);
+    const checked = checkTaskBriefV1({ root, brief: normalizedBrief, currentReuseContext, reuseContexts });
+    return withNormalizedBrief({ ...checked, taskBriefSha256: taskBriefHash(brief) }, normalizedBrief);
+  }
+  return checkTaskBriefV1({ root, brief, currentReuseContext, reuseContexts });
 }
 function requirePromotionReceipt({ root, receipt, role, sourceBrief, currentReuseContext, reuseContexts }) {
   const checked = checkReadReceipt({
@@ -1272,49 +1470,59 @@ function requirePromotionReceipt({ root, receipt, role, sourceBrief, currentReus
   return checked.receiptHash;
 }
 export function promoteTaskBrief({ root = repositoryRoot(), brief, codingReceipt, reviewReceipt, currentReuseContext, reuseContexts }) {
-  const sourceReuseContexts = reuseContexts === undefined ? undefined : Object.fromEntries(Object.entries(reuseContexts).filter(([role]) => brief.specReadReceipts.some((receipt) => receipt.role === role && receipt.schema === SPEC_READ_REUSE_SCHEMA)));
+  const preliminaryBrief = brief?.schema === TASK_BRIEF_V2_SCHEMA ? expandTaskBriefV2(root, brief) : brief;
+  const sourceReuseContexts = reuseContexts === undefined ? undefined : Object.fromEntries(Object.entries(reuseContexts).filter(([role]) => preliminaryBrief.specReadReceipts.some((receipt) => receipt.role === role && receipt.schema === SPEC_READ_REUSE_SCHEMA)));
   const source = checkTaskBrief({ root, brief, currentReuseContext, reuseContexts: sourceReuseContexts });
+  const sourceBrief = source.normalizedBrief;
   if (source.phase !== 'pre_dispatch') fail('TaskBrief promotion requires a valid pre_dispatch TaskBrief');
-  if (brief.workflowMode !== 'local' || source.reviewedHead !== 'WORKTREE') fail('TaskBrief promotion supports only a local WORKTREE pre_dispatch artifact');
+  if (sourceBrief.workflowMode !== 'local' || source.reviewedHead !== 'WORKTREE') fail('TaskBrief promotion supports only a local WORKTREE pre_dispatch artifact');
   if (source.baseSha !== currentHead(root)) fail('TaskBrief promotion rejects a stale base/head artifact');
-  if (brief.preexistingUnownedChanges.length !== 0) fail('TaskBrief promotion rejects preexisting unowned artifacts');
-  const coordinatorReceipt = brief.specReadReceipts[0];
-  requirePromotionReceipt({ root, receipt: codingReceipt, role: 'coding', sourceBrief: brief, currentReuseContext, reuseContexts });
-  const needsReviewReceipt = requiredSpecReceiptRoles({ root, phase: 'verdict', workflowMode: brief.workflowMode, reviewTier: brief.reviewTier }).includes('review');
-  if (needsReviewReceipt) requirePromotionReceipt({ root, receipt: reviewReceipt, role: 'review', sourceBrief: brief, currentReuseContext, reuseContexts });
-  else if (reviewReceipt !== undefined) fail(`TaskBrief reviewTier ${brief.reviewTier} forbids a local review receipt`);
+  if (sourceBrief.preexistingUnownedChanges.length !== 0) fail('TaskBrief promotion rejects preexisting unowned artifacts');
+  const coordinatorReceipt = sourceBrief.specReadReceipts[0];
+  requirePromotionReceipt({ root, receipt: codingReceipt, role: 'coding', sourceBrief, currentReuseContext, reuseContexts });
+  const needsReviewReceipt = requiredSpecReceiptRoles({ root, phase: 'verdict', workflowMode: sourceBrief.workflowMode, reviewTier: sourceBrief.reviewTier }).includes('review');
+  if (needsReviewReceipt) requirePromotionReceipt({ root, receipt: reviewReceipt, role: 'review', sourceBrief, currentReuseContext, reuseContexts });
+  else if (reviewReceipt !== undefined) fail(`TaskBrief reviewTier ${sourceBrief.reviewTier} forbids a local review receipt`);
   const dirtyPaths = validationStatusPaths(root);
-  if (dirtyPaths.some((repoPath) => !brief.ownedPaths.includes(repoPath))) fail('TaskBrief promotion rejects dirty or unowned artifacts');
-  const manifest = buildPatchManifest({ root, baseSha: source.baseSha, ownedPaths: brief.ownedPaths });
+  if (dirtyPaths.some((repoPath) => !sourceBrief.ownedPaths.includes(repoPath))) fail('TaskBrief promotion rejects dirty or unowned artifacts');
+  const manifest = buildPatchManifest({ root, baseSha: source.baseSha, ownedPaths: sourceBrief.ownedPaths });
   const manifestDirtyPaths = manifest.entries.filter((entry) => entry.state !== 'unchanged').map((entry) => entry.path);
   if (!sameSet(dirtyPaths, manifestDirtyPaths)) fail('TaskBrief promotion current Git status does not match the owned artifact manifest');
-  const promoted = { ...brief, phase: 'verdict', reviewedHead: 'WORKTREE', specReadReceipts: needsReviewReceipt ? [coordinatorReceipt, codingReceipt, reviewReceipt] : [coordinatorReceipt, codingReceipt], dirtyWorktreeDisposition: brief.preexistingOwnedPaths.length === 0 ? 'clean' : 'include_with_frozen_baseline' };
+  const promotedLegacy = { ...sourceBrief, phase: 'verdict', reviewedHead: 'WORKTREE', specReadReceipts: needsReviewReceipt ? [coordinatorReceipt, codingReceipt, reviewReceipt] : [coordinatorReceipt, codingReceipt], dirtyWorktreeDisposition: sourceBrief.preexistingOwnedPaths.length === 0 ? 'clean' : 'include_with_frozen_baseline' };
+  const promoted = brief.schema === TASK_BRIEF_V2_SCHEMA ? compactTaskBriefV2(promotedLegacy) : promotedLegacy;
   checkTaskBrief({ root, brief: promoted, currentReuseContext, reuseContexts });
   return promoted;
 }
 export function checkVerdict({ root = repositoryRoot(), verdict, brief, currentReuseContext, reuseContexts }) {
   const policy = loadWorkflowPolicy(root);
-  requireExactKeys(verdict, ['schema', 'taskId', ...policy.localVerdict.required, 'verdict', 'findings'], 'verdict');
-  if (verdict.schema !== policy.localVerdict.schema) fail(`verdict.schema must be ${policy.localVerdict.schema}`);
+  const compact = verdict?.schema === LOCAL_RESULT_V2_SCHEMA;
+  requireExactKeys(verdict, compact
+    ? ['schema', ...policy.localVerdict.compactRequired]
+    : ['schema', 'taskId', ...policy.localVerdict.required, 'verdict', 'findings'], compact ? 'local result' : 'verdict');
+  if (!policy.localVerdict.acceptedSchemas.includes(verdict.schema)) fail(`verdict.schema must be one of ${policy.localVerdict.acceptedSchemas.join(', ')}`);
   const briefResult = checkTaskBrief({ root, brief, currentReuseContext, reuseContexts });
+  const checkedBrief = briefResult.normalizedBrief;
   if (briefResult.phase !== 'verdict') fail('Verdict requires a verdict-phase TaskBrief');
-  if (requireString(verdict.taskId, 'verdict.taskId') !== brief.taskId) fail('verdict.taskId must match TaskBrief.taskId');
+  if (checkedBrief.workflowMode !== 'local') fail('Local verdict/result evidence is only valid for workflowMode local');
+  if (!compact && requireString(verdict.taskId, 'verdict.taskId') !== checkedBrief.taskId) fail('verdict.taskId must match TaskBrief.taskId');
   if (verdict.taskBriefSha256 !== briefResult.taskBriefSha256) fail('verdict.taskBriefSha256 must match TaskBrief');
-  if (!Array.isArray(verdict.specReceiptHashes) || !sameSet(verdict.specReceiptHashes, briefResult.specReceiptHashes)) fail('verdict.specReceiptHashes must match TaskBrief receipt hashes');
-  if (verdict.dirtyWorktreeDisposition !== briefResult.dirtyWorktreeDisposition) fail('verdict.dirtyWorktreeDisposition must match TaskBrief');
-  if (verdict.specSha256 !== brief.specSha256) fail('verdict.specSha256 must match TaskBrief');
-  if (canonicalCommit(root, verdict.baseSha, 'verdict.baseSha') !== briefResult.baseSha) fail('verdict.baseSha must match TaskBrief');
-  if (validateIdentity(root, verdict.reviewedHead, 'verdict.reviewedHead', true) !== briefResult.reviewedHead) fail('verdict.reviewedHead must match TaskBrief (WORKTREE is explicit)');
-  if (!sameSet(requireStringArray(verdict.ownedPaths, 'verdict.ownedPaths'), brief.ownedPaths)) fail('verdict.ownedPaths must match TaskBrief');
+  if (!compact) {
+    if (!Array.isArray(verdict.specReceiptHashes) || !sameSet(verdict.specReceiptHashes, briefResult.specReceiptHashes)) fail('verdict.specReceiptHashes must match TaskBrief receipt hashes');
+    if (verdict.dirtyWorktreeDisposition !== briefResult.dirtyWorktreeDisposition) fail('verdict.dirtyWorktreeDisposition must match TaskBrief');
+    if (verdict.specSha256 !== checkedBrief.specSha256) fail('verdict.specSha256 must match TaskBrief');
+    if (canonicalCommit(root, verdict.baseSha, 'verdict.baseSha') !== briefResult.baseSha) fail('verdict.baseSha must match TaskBrief');
+    if (validateIdentity(root, verdict.reviewedHead, 'verdict.reviewedHead', true) !== briefResult.reviewedHead) fail('verdict.reviewedHead must match TaskBrief (WORKTREE is explicit)');
+    if (!sameSet(requireStringArray(verdict.ownedPaths, 'verdict.ownedPaths'), checkedBrief.ownedPaths)) fail('verdict.ownedPaths must match TaskBrief');
+  }
   requireExactKeys(verdict.artifactIdentity, ['kind', 'commitSha', 'patchHash'], 'verdict.artifactIdentity');
   const identityKind = requireString(verdict.artifactIdentity.kind, 'verdict.artifactIdentity.kind');
   let currentPatchHash = null;
   if (identityKind === 'commit') {
-    if (canonicalCommit(root, verdict.artifactIdentity.commitSha, 'verdict.artifactIdentity.commitSha') !== briefResult.reviewedHead || verdict.reviewedHead === 'WORKTREE') fail('Committed verdict artifact identity must be the reviewed commit');
+    if (canonicalCommit(root, verdict.artifactIdentity.commitSha, 'verdict.artifactIdentity.commitSha') !== briefResult.reviewedHead || briefResult.reviewedHead === 'WORKTREE') fail('Committed verdict artifact identity must be the reviewed commit');
     if (verdict.artifactIdentity.patchHash !== null) fail('Committed verdict artifact identity must not require a patch hash');
   } else if (identityKind === 'worktree') {
-    if (verdict.reviewedHead !== 'WORKTREE' || verdict.artifactIdentity.commitSha !== null) fail('Worktree verdict artifact identity must use WORKTREE without a commit SHA');
-    currentPatchHash = patchHash({ root, baseSha: briefResult.baseSha, ownedPaths: brief.ownedPaths }).patchHash;
+    if (briefResult.reviewedHead !== 'WORKTREE' || verdict.artifactIdentity.commitSha !== null) fail('Worktree verdict artifact identity must use WORKTREE without a commit SHA');
+    currentPatchHash = patchHash({ root, baseSha: briefResult.baseSha, ownedPaths: checkedBrief.ownedPaths }).patchHash;
     if (verdict.artifactIdentity.patchHash !== currentPatchHash) fail('Worktree verdict patchHash must match the recomputed current patch hash');
   } else fail('verdict.artifactIdentity.kind must be commit or worktree');
   if (!['PASS', 'FINDINGS'].includes(verdict.verdict)) fail('verdict.verdict must be PASS or FINDINGS');
@@ -1325,7 +1533,19 @@ export function checkVerdict({ root = repositoryRoot(), verdict, brief, currentR
     requireString(finding.file, `verdict.findings[${index}].file`); requireString(finding.evidence, `verdict.findings[${index}].evidence`); requireString(finding.remediation, `verdict.findings[${index}].remediation`);
   });
   if (verdict.verdict === 'PASS' && verdict.findings.some((finding) => policy.reviewSeverity.passBlocking.includes(finding.severity))) fail(`PASS verdict cannot contain ${policy.reviewSeverity.passBlocking.join(', ')} findings`);
-  return { artifactIdentity: verdict.artifactIdentity, taskBriefSha256: briefResult.taskBriefSha256 };
+  return {
+    artifactIdentity: verdict.artifactIdentity,
+    taskBriefSha256: briefResult.taskBriefSha256,
+    recomputed: {
+      taskId: checkedBrief.taskId,
+      specReceiptHashes: briefResult.specReceiptHashes,
+      dirtyWorktreeDisposition: briefResult.dirtyWorktreeDisposition,
+      specSha256: checkedBrief.specSha256,
+      baseSha: briefResult.baseSha,
+      reviewedHead: briefResult.reviewedHead,
+      ownedPaths: checkedBrief.ownedPaths,
+    },
+  };
 }
 export function checkPolicy(root = repositoryRoot()) {
   const policy = loadWorkflowPolicy(root);
@@ -1346,7 +1566,7 @@ export function checkPolicy(root = repositoryRoot()) {
   return true;
 }
 function usage() {
-  return `Usage:\n  node ${SCRIPT_RELATIVE} --generate-index\n  node ${SCRIPT_RELATIVE} --check-index\n  node ${SCRIPT_RELATIVE} --check-policy\n  node ${SCRIPT_RELATIVE} --prepare-task-card --input <six-field-card.json> [--store-run]\n  node ${SCRIPT_RELATIVE} --check-task-card --card <task-card.json>\n  node ${SCRIPT_RELATIVE} --upgrade-task-card --card <task-card.json> --boundary-input <formal-boundary-with-review-tier.json> [--store-run] [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --prepare-task-brief --input <semantic-input-with-review-tier.json> [--store-run] [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --promote-task-brief --brief <pre-dispatch-task-brief.json> --coding-receipt <receipt.json> [--review-receipt <receipt.json when tier requires>] [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --check-owned-whitespace --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --spec-read-plan --role <coordinator|coding|review> --risk <risk-profile> [--review-tier <fast|standard|strict>] [--relevant <v3-section> ...] [--applicable <OPEN-id> ...]\n  node ${SCRIPT_RELATIVE} --check-read-receipt --receipt <receipt.json> [--review-tier <fast|standard|strict>] [--applicable <OPEN-id> ...] [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --check-full-read-session --session <session.json>\n  node ${SCRIPT_RELATIVE} --check-task-brief --brief <task-brief.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --owned-baseline --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --run-validation --brief <verdict-task-brief.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --check-verdict --verdict <verdict.json> --brief <task-brief.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --patch-hash --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n\nReview tier safety floor: unknown_high_risk or any persistence, historical snapshot, concurrency, authorization, or external side-effect risk dimension requires strict.`;
+  return `Usage:\n  node ${SCRIPT_RELATIVE} --generate-index\n  node ${SCRIPT_RELATIVE} --check-index\n  node ${SCRIPT_RELATIVE} --check-policy\n  node ${SCRIPT_RELATIVE} --prepare-task-card --input <six-field-card.json> [--store-run]\n  node ${SCRIPT_RELATIVE} --check-task-card --card <task-card.json>\n  node ${SCRIPT_RELATIVE} --complete-task-card --card <task-card.json>\n  node ${SCRIPT_RELATIVE} --upgrade-task-card --card <task-card.json> --boundary-input <formal-boundary-with-review-tier.json> [--store-run] [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --prepare-task-brief --input <semantic-input-with-review-tier.json> [--store-run] [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --promote-task-brief --brief <pre-dispatch-task-brief.json> --coding-receipt <receipt.json> [--review-receipt <receipt.json when tier requires>] [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --check-owned-whitespace --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --spec-read-plan --role <coordinator|coding|review> --risk <risk-profile> [--review-tier <fast|standard|strict>] [--relevant <v3-section> ...] [--applicable <OPEN-id> ...]\n  node ${SCRIPT_RELATIVE} --check-read-receipt --receipt <receipt.json> [--review-tier <fast|standard|strict>] [--applicable <OPEN-id> ...] [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --check-full-read-session --session <session.json>\n  node ${SCRIPT_RELATIVE} --check-task-brief --brief <task-brief.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --owned-baseline --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --run-validation --brief <verdict-task-brief.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --check-local-result --result <result.json> --brief <task-brief.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --check-verdict --verdict <verdict.json> --brief <task-brief.json> [--reuse-contexts <role-contexts.json>]\n  node ${SCRIPT_RELATIVE} --patch-hash --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n\nReview tier safety floor: unknown_high_risk or any persistence, historical snapshot, concurrency, authorization, or external side-effect risk dimension requires strict.`;
 }
 function parseActionOptions(argv, action, allowed, required = []) {
   if (argv[0] !== action) fail(usage());
@@ -1367,7 +1587,7 @@ function extractStoreRun(argv) {
 }
 export function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
   const action = argv[0];
-  if (!['--generate-index', '--check-index', '--check-policy', '--prepare-task-card', '--check-task-card', '--upgrade-task-card', '--prepare-task-brief', '--promote-task-brief', '--check-owned-whitespace', '--spec-read-plan', '--check-read-receipt', '--check-full-read-session', '--check-task-brief', '--owned-baseline', '--run-validation', '--check-verdict', '--patch-hash'].includes(action)) fail(usage());
+  if (!['--generate-index', '--check-index', '--check-policy', '--prepare-task-card', '--check-task-card', '--complete-task-card', '--upgrade-task-card', '--prepare-task-brief', '--promote-task-brief', '--check-owned-whitespace', '--spec-read-plan', '--check-read-receipt', '--check-full-read-session', '--check-task-brief', '--owned-baseline', '--run-validation', '--check-local-result', '--check-verdict', '--patch-hash'].includes(action)) fail(usage());
   const root = repositoryRoot(cwd);
   if (action === '--generate-index' || action === '--check-index' || action === '--check-policy') {
     if (argv.length !== 1) fail(usage());
@@ -1375,14 +1595,16 @@ export function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
     if (action === '--check-index') { checkNavigationIndex(root); return 'Navigation index is current'; }
     checkPolicy(root); return 'Workflow policy is consistent';
   }
-  if (action === '--prepare-task-card' || action === '--check-task-card') {
+  if (action === '--prepare-task-card' || action === '--check-task-card' || action === '--complete-task-card') {
     const flag = action === '--prepare-task-card' ? '--input' : '--card';
     const store = action === '--prepare-task-card' ? extractStoreRun(argv) : { storeRun: false, argv };
     const values = parseActionOptions(store.argv, action, { [flag]: false }, [flag]);
     const file = path.resolve(cwd, values[flag][0]);
     const result = action === '--prepare-task-card'
       ? prepareTaskCard({ root, input: readJsonFile(file, 'Task Card input') })
-      : checkTaskCard({ root, card: readJsonFile(file, 'Task Card') });
+      : (action === '--check-task-card'
+        ? checkTaskCard({ root, card: readJsonFile(file, 'Task Card') })
+        : completeTaskCard({ root, card: readJsonFile(file, 'Task Card') }));
     if (store.storeRun) process.stderr.write(`TaskCard-Run-Path: ${writeTaskCardRun({ root, card: result }).storagePath}\n`);
     return JSON.stringify(result, null, 2);
   }
@@ -1440,10 +1662,11 @@ export function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
     const reuseContexts = values['--reuse-contexts'].length === 0 ? undefined : readJsonFile(path.resolve(cwd, values['--reuse-contexts'][0]), 'role-keyed reuse contexts');
     return JSON.stringify(runValidation({ root, brief: readJsonFile(path.resolve(cwd, values['--brief'][0]), 'verdict TaskBrief'), reuseContexts }), null, 2);
   }
-  if (action === '--check-verdict') {
-    const values = parseActionOptions(argv, action, { '--verdict': false, '--brief': false, '--reuse-contexts': false }, ['--verdict', '--brief']);
+  if (action === '--check-verdict' || action === '--check-local-result') {
+    const resultFlag = action === '--check-local-result' ? '--result' : '--verdict';
+    const values = parseActionOptions(argv, action, { [resultFlag]: false, '--brief': false, '--reuse-contexts': false }, [resultFlag, '--brief']);
     const reuseContexts = values['--reuse-contexts'].length === 0 ? undefined : readJsonFile(path.resolve(cwd, values['--reuse-contexts'][0]), 'role-keyed reuse contexts');
-    return JSON.stringify(checkVerdict({ root, verdict: readJsonFile(path.resolve(cwd, values['--verdict'][0]), 'verdict'), brief: readJsonFile(path.resolve(cwd, values['--brief'][0]), 'TaskBrief'), reuseContexts }), null, 2);
+    return JSON.stringify(checkVerdict({ root, verdict: readJsonFile(path.resolve(cwd, values[resultFlag][0]), action === '--check-local-result' ? 'local result' : 'verdict'), brief: readJsonFile(path.resolve(cwd, values['--brief'][0]), 'TaskBrief'), reuseContexts }), null, 2);
   }
   const values = parseActionOptions(argv, action, { '--base': false, '--owned': true }, ['--base']);
   if (values['--owned'].length === 0) fail(usage());

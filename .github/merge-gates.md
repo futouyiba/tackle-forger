@@ -51,8 +51,9 @@ product or scope decision remains unresolved, dependency order is ambiguous,
 required validation or identity is unavailable, retries are exhausted, or the
 merge itself triggers deployment, publishing, release, destructive data work,
 an authorization/security decision, or another external side effect. The
-workflow-governance exceptions below also continue to require the named owner
-authorization. At any such human gate, stop and request the missing decision.
+workflow-governance path below is a standing, independently reviewed exception
+to the checker's `READY` result and does not itself require a human decision.
+At any actual human gate, stop and request the missing decision.
 Never reinterpret merge authorization as permission to deploy, publish, delete,
 expand scope, or perform another external action.
 
@@ -215,17 +216,26 @@ Missing or malformed contents return `CI_WORKFLOW_TRUST_UNAVAILABLE`.
 
 A pull request that intentionally changes the canonical workflow or gate
 program must be a dedicated governance change. It cannot receive an automated
-exception from its own branch. Before such a change can be considered:
+exception from its own branch. Eligibility, allowed blocker codes, the review
+envelope, standing authorization, and human gates for the current pull request
+must be read from the clean live-base copy of this document, never from the
+reviewed head. Changes to this policy in the head take effect only after merge
+and only for later pull requests. Before such a change can be considered:
 
 1. keep unrelated application changes out of the pull request;
 2. inspect the exact workflow diff and the commands behind every required job;
 3. run the trusted-base checker and confirm all non-governance blockers are
    cleared;
 4. record an independent current-head review that explicitly accepts the
-   workflow change and identifies `CI_WORKFLOW_CHANGED`;
-5. obtain owner merge authorization that explicitly names the governance
-   exception;
-6. after merge, update a clean target-branch checkout and verify that the new
+   workflow or gate-program change using the closed exception envelope below;
+5. confirm the checker reports only those independently accepted governance
+   blockers and that its blocker-code set exactly equals the envelope's
+   accepted set. Extra, missing, duplicated, malformed, or free-text-only
+   blocker acceptance is ineligible. `GATE_PROGRAM_BOOTSTRAP_REQUIRED` is not
+   eligible because the live base has no trusted checker to execute;
+6. merge one qualifying governance pull request under this repository's
+   standing authorization without separate owner approval;
+7. after merge, update a clean target-branch checkout and verify that the new
    trusted checker and workflow are the live base copies.
 
 The successful Actions run on the workflow-changing pull request is
@@ -233,31 +243,32 @@ supplementary evidence only. It cannot prove its own workflow definition.
 There is no CLI flag, environment variable, review marker, or fixture field
 that turns `CI_WORKFLOW_CHANGED` or `GATE_PROGRAM_CHANGED` into `READY`.
 
-### One-time bootstrap for PR #63
+The independent review must contain the normal six-field Agent review envelope
+and append exactly these two standalone fields:
 
-PR #63 first introduces both the structured `run-name` and
-`scripts/check-pr-merge-gate.mjs`. Its base therefore has neither an identical
-workflow nor a trusted gate-program copy. The expected automated blockers are
-`CI_WORKFLOW_CHANGED` and `GATE_PROGRAM_BOOTSTRAP_REQUIRED`. This is a single,
-named bootstrap case, not a reusable allowlist:
+```text
+Governance-Exception: ACCEPTED
+Accepted-Governance-Blockers: <sorted comma-separated blocker codes>
+```
 
-- independently review the exact PR #63 workflow and gate implementation;
-- require every other normal blocker, current-head review finding, and thread
-  to be cleared;
-- record the bootstrap decision and exact reviewed head SHA in the review;
-- merge only after explicit owner authorization naming PR #63;
-- immediately after merge, run the checker from a clean updated `main`.
-
-No later pull request inherits this bootstrap treatment. A later workflow
-change follows the dedicated workflow-governance path above, and a later gate
-program change must be evaluated by the trusted program already present on its
-live base.
+The second field is a set encoded in ascending byte order with no spaces. Its
+only permitted members are `CI_WORKFLOW_CHANGED` and
+`GATE_PROGRAM_CHANGED`; it must be non-empty and exactly equal the trusted
+live-base checker's complete blocker-code set. The only valid serialized values
+are therefore `CI_WORKFLOW_CHANGED`, `GATE_PROGRAM_CHANGED`, or
+`CI_WORKFLOW_CHANGED,GATE_PROGRAM_CHANGED`. The same review already binds the
+exact head/base through the normal envelope. Free text, an ordinary
+`Agent-Review: PASS`, an extra code, or a subset/superset does not activate the
+governance exception.
 
 Because repository settings do not enforce this policy, the Agent must run the
 checker again immediately before the merge decision. Any new commit, review,
 thread change, rerun, or other relevant GitHub state change invalidates the old
 result. A fresh exact-head/base `READY` result activates the qualified automatic
-merge authorization above; any other result does not authorize a merge.
+merge authorization above. For a dedicated workflow or gate-program change,
+the fully satisfied workflow-governance path activates the same standing
+authorization even though the checker remains non-`READY`; any other result or
+unaccepted blocker does not authorize a merge.
 
 The incident tracked by #21 remains historical evidence only. Its post-event CI
 run can never satisfy this gate for a different current head.

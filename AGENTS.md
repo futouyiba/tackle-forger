@@ -21,9 +21,9 @@
 - 已发布ConfigurationSnapshot不可被上游规则静默重算。
 - 仍在开放决策中的语义必须保持可配置，并在实现前请求确认。
 
-## 无需兼容旧表数据
+## 旧表兼容说明
 
-项目尚未正式交付，无历史 workspace state 需兼容。旧表 YsEKw 的 sheetId/URL/拓扑仅在 `docs/` 作审计文档保留。代码不维护 LEGACY 读取路径（如 `LEGACY_YS_EKW_*`），切流只做 WQ8w 新路径。修改时无需纠结 LEGACY fixture 或旧 revision 回退逻辑。
+项目尚未正式交付，无生产环境历史 workspace state 需迁就。PR2b 切流后生产读取链默认走 WQ8w（`CANONICAL_FEISHU_WORKBOOK`）。旧表 YsEKw 的 sheetId/URL/拓扑以 `LEGACY_YS_EKW_*` 常量保留在 `lib/feishu-workbook.ts` 和 `lib/rule-workbook-inspection.ts`，供 5 个测试文件作历史审计 fixture。修改 LEGACY 常量或 `migrations.ts` 迁移步骤前必须同步更新对应测试。
 
 ## 实现要求
 

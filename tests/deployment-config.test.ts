@@ -1,29 +1,36 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import test from "node:test";
 
-import { isVercelNitroBuild } from "../build/deployment-target";
+test("构建路径只保留 Node/Vinext，不再声明云端部署适配", async () => {
+  const packageJson = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  assert.equal(packageJson.scripts.build, "vinext build");
+  assert.equal("build:vercel" in packageJson.scripts, false);
+  assert.equal("nitro" in packageJson.devDependencies, false);
+  assert.equal("@cloudflare/vite-plugin" in packageJson.devDependencies, false);
+  assert.equal("wrangler" in packageJson.devDependencies, false);
 
-test("Vercel review builds select the Nitro adapter", () => {
-  assert.equal(isVercelNitroBuild({ VERCEL: "1" }), true);
-  assert.equal(isVercelNitroBuild({ NITRO_PRESET: "vercel" }), true);
-  assert.equal(isVercelNitroBuild({ VERCEL: "0" }), false);
-  assert.equal(isVercelNitroBuild({ NITRO_PRESET: "cloudflare_module" }), false);
+  const viteConfig = await readFile(new URL("../vite.config.ts", import.meta.url), "utf8");
+  assert.match(viteConfig, /plugins: \[vinext\(\)\]/);
+  assert.doesNotMatch(viteConfig, /cloudflare|nitro|vercel|sites/i);
+
+  for (const relativePath of ["../vercel.json", "../.openai/hosting.json", "../worker/index.ts"]) {
+    await assert.rejects(stat(new URL(relativePath, import.meta.url)));
+  }
 });
 
-test("Vercel uses the root lockfile and Build Output API contract", async () => {
-  const [packageJsonSource, vercelJsonSource] = await Promise.all([
-    readFile(new URL("../package.json", import.meta.url), "utf8"),
-    readFile(new URL("../vercel.json", import.meta.url), "utf8"),
+test("R730 模板和部署脚本使用 13000，并以认证边界就绪或回滚收口", async () => {
+  const [service, nginx, deployScript] = await Promise.all([
+    readFile(new URL("../deploy/tackle-forger.service", import.meta.url), "utf8"),
+    readFile(new URL("../deploy/nginx-tackle-forger.conf.example", import.meta.url), "utf8"),
+    readFile(new URL("../scripts/deploy-r730.sh", import.meta.url), "utf8"),
   ]);
-  const packageJson = JSON.parse(packageJsonSource);
-  const vercelJson = JSON.parse(vercelJsonSource);
-
-  assert.equal(packageJson.scripts["build:vercel"], "vite build");
-  assert.match(packageJson.scripts.lint, /--ignore-pattern \.vercel(?:\s|$)/);
-  assert.equal(packageJson.devDependencies.nitro, "3.0.260610-beta");
-  assert.equal(vercelJson.framework, null);
-  assert.equal(vercelJson.installCommand, "npm ci");
-  assert.equal(vercelJson.buildCommand, "npm run build:vercel");
-  assert.equal("outputDirectory" in vercelJson, false);
+  assert.match(service, /--hostname 127\.0\.0\.1 --port 13000/);
+  assert.match(nginx, /proxy_pass http:\/\/127\.0\.0\.1:13000/);
+  assert.match(deployScript, /R730_PORT:=13000/);
+  assert.match(deployScript, /api\/auth\/session/);
+  assert.match(deployScript, /status" = "401"/);
+  assert.match(deployScript, /rollback_release/);
+  assert.match(deployScript, /test -n "\$PREV"/);
+  assert.match(deployScript, /ln -sfn "\$PREV" "\$ROOT\/current"/);
 });

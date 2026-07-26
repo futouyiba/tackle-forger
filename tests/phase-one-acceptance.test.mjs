@@ -683,7 +683,7 @@ test("preflight 对安全 env、源契约和 0600 权限给出可重复证据", 
     "importCanonicalRuleSource(); const canonicalRuleSource = true;\n",
   );
   await writeFile(path.join(root, "deploy/tackle-forger.service"), [
-    "ExecStart=npm run start -- --hostname 127.0.0.1 --port 3000",
+    "ExecStart=npm run start -- --hostname 127.0.0.1 --port 13000",
     "ReadWritePaths=/opt/tackle-forger/data",
   ].join("\n"));
   await writeFile(path.join(root, "deploy/nginx-tackle-forger.conf.example"), [

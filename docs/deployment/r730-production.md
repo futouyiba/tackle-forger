@@ -1,9 +1,9 @@
 # Dell R730 内网生产部署
 
 > 状态：生产运行手册；不定义领域语义
-> 最后对齐v3：2026-07-25
+> 最后对齐v3：2026-07-26
 
-本指南用于单实例内网部署。Vercel 只作为评审入口，不能替代持久磁盘、公司飞书 OAuth 凭据和真实 configs 仓库验收。
+本指南用于唯一的单实例内网部署路径。Vercel、Cloudflare 和 OpenAI Sites 已退役，不能替代持久磁盘、公司飞书 OAuth 凭据和真实 configs 仓库验收。
 
 ## 目录与账号
 
@@ -16,9 +16,8 @@
 
 不要把飞书密钥、会话文件、SQLite 数据库、导入文件或 configs 凭据放入代码发布目录。
 
-R730 必须显式设置 `WORKSPACE_STORAGE_BACKEND=sqlite`。缺少该值、设置为 `blob`、`d1` 或
-`ephemeral`，以及 SQLite 路径不可用时，应用必须拒绝启动或拒绝工作区读写；不得因环境中意外存在
-Blob token 或 Cloudflare binding 而切换后端。
+R730 必须显式设置 `WORKSPACE_STORAGE_BACKEND=sqlite`。缺少该值、设置为 `ephemeral` 或任何未知值，
+以及 SQLite 路径不可用时，应用必须拒绝启动或拒绝工作区读写；不得因 token、平台 binding 或临时文件系统切换后端。
 
 ## 发布前检查
 
@@ -29,7 +28,7 @@ Blob token 或 Cloudflare binding 而切换后端。
    核对受版本控制的 `deploy/phase-one-dependencies.json` 已由单独评审提交记录 #67、#71、
    #76 的 GitHub reviewed head、唯一 merge commit、已解决 review threads 和通过的必需 CI。
 4. 在飞书开放平台把回调逐字登记为 `https://<内网域名>/api/auth/feishu/callback`。
-5. 若从 Vercel Blob 迁移，先在空目标数据库上运行 `npm run storage:migrate:blob-to-sqlite`；脚本拒绝覆盖已有数据库。
+5. 若从历史 Vercel Blob 迁移，先在从未存在过的目标路径运行 `npm run storage:migrate:blob-to-sqlite`；脚本先导入同目录临时 SQLite、回读验证后才原子发布，目标竞争或任一失败均不会覆盖目标。迁移报告会披露可获得的 revision 数量、最小/最大值与窗口内缺口，并始终标记历史为 `historyTruncatedOrUnknown=true`：Blob 最多 100 条，不能恢复先前已裁掉的历史。
 
 ## 工作区 Revision 保留与裁剪门槛
 
@@ -37,7 +36,7 @@ Blob token 或 Cloudflare binding 而切换后端。
 
 ### 分期边界
 
-- 一期只要求工作区主流程可运行；SQLite/D1 继续保留全部完整 revision，不实现用户归档、裁剪 migration、tombstone/retention run 或自动删除。
+- 一期只要求工作区主流程可运行；SQLite 继续保留全部完整 revision，不实现用户归档、裁剪 migration、tombstone/retention run 或自动删除。
 - 归档能力缺失不阻止一期部署和非删除业务验收。现有容量诊断与整库备份可以继续使用，但不得宣称已经完成用户归档。
 - 二期归档由当前已登录工具用户主动执行，典型角色为数值策划或系统策划。优先方案是用户点击“归档”后通过浏览器保存窗口，把单一归档包写到工作 PC 自选位置。
 - 正式 Chromium + HTTPS 入口优先使用 `showSaveFilePicker()` 和可写流；普通下载只作为待验证降级。用户取消、拒绝权限、写入或校验失败时，不记录成功，也不允许裁剪。
@@ -102,7 +101,7 @@ dry-run 不得写入 tombstone、删除 revision、执行 `VACUUM` 或改变数�
 1. 将 `deploy/tackle-forger.service`、`deploy/tackle-forger-backup.service`、`deploy/tackle-forger-backup.timer`、`deploy/tackle-forger-ai-retention.service` 和 `deploy/tackle-forger-ai-retention.timer` 安装到 `/etc/systemd/system/`。
 2. 将 `deploy/nginx-tackle-forger.conf.example` 复制到 Nginx 配置并替换内网域名和公司证书路径。该示例采用“浏览器 → Nginx → 应用”的直接 OAuth 拓扑，会显式清除客户端提交的 `x-feishu-*` 与 `x-tf-proxy-secret`，并保持可信代理身份模式关闭。
 3. 重新加载 systemd，启用应用服务、每日备份 timer 和每小时 AI 留存 timer。首次启用 timer 前先手工运行一次 `npm run ai-retention:sweep`；任一备份删除未通过回读确认时任务以失败状态留待下次重试，不得手工把墓碑改为已清除。
-4. 应用仅监听 `127.0.0.1:3000`；浏览器只能通过 HTTPS 反向代理访问。
+4. 应用仅监听 `127.0.0.1:13000`；浏览器只能通过 HTTPS 反向代理访问。`deploy/tackle-forger.service`、Nginx 示例和部署脚本都以该端口为唯一权威来源；部署后必须轮询并精确验证 `/api/auth/session` 返回 `401`，否则自动切回上一只读 release 并重启服务，绝不回滚 SQLite。
 
 ## 验收与回滚
 

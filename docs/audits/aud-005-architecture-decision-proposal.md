@@ -18,7 +18,7 @@
 2. `apps/web`与`packages/{domain,db,excel,ui}`组成的pnpm/Next.js历史workspace，仍可独立构建，但使用不同的数据模型、演示登录、本地浏览器状态和旧Excel拓扑；
 3. 根应用内部仍同时暴露旧`SeriesRecipe`、旧`Candidate`、`OfficialSku`和明细页，以及v3的Series/SKU/Model工作台。
 
-当前决策是：根Vinext v3为唯一可写产品入口；历史workspace与旧产品集合只作只读追溯、兼容测试和迁移诊断。历史入口保留期限、最终归档形态以及Cloudflare预览适配是否长期保留，仍是后续运维事项，不恢复任何legacy写能力。
+当前决策是：根Vinext v3为唯一可写产品入口；历史workspace与旧产品集合只作只读追溯、兼容测试和迁移诊断。历史入口保留期限与最终归档形态仍是后续运维事项；2026-07-26 已决定退役 Cloudflare、Vercel 与 OpenAI Sites 适配，不恢复任何legacy写能力。
 
 ## 2. 不可突破的v3约束
 
@@ -68,12 +68,11 @@
 ### 3.4 部署入口也需要收敛
 
 - R730生产手册和systemd均指向根应用，生产构建步骤为`npm run build`，启动为`npm run start`。
-- Cloudflare Worker/Vite配置也包装根Vinext应用，可作为受控预览或未来部署适配层，但目前不是R730生产事实。
-- Vercel评审配置从根`package-lock.json`执行`npm ci`和`npm run build:vercel`；Vite仅在Vercel/Nitro目标中切换适配器并生成`.vercel/output` Build Output API v3产物，不再执行`next build`。
-- 常规`npm run build`继续使用原有Vinext/Cloudflare集成，Vercel专用CSS预处理只解决Nitro/RSC子环境不继承根PostCSS查找的问题，不改变业务样式源或常规构建。
+- Cloudflare Worker/Vite、Vercel 和 OpenAI Sites 配置均已退役，根应用不再保留平台专用预览或运行时 binding。
+- 根`package-lock.json`只支撑 `npm ci`、`npm run build` 和 `npm run start` 的 Node/Vinext R730 路径；不再生成 `.vercel/output` 或使用 Nitro。
 - `apps/web`自身也能执行`next build/start`，但目前没有证据表明R730或正式数据指向它。
 
-因此部署契约已经同时命名“代码入口、构建命令、数据后端、运行环境”：根Vinext是唯一应用入口，Vercel只承载无正式持久凭据的评审构建，R730仍是正式运行环境。
+因此部署契约已经收口为“代码入口、构建命令、数据后端、运行环境”：根 Vinext 是唯一应用入口，R730 + SQLite 是唯一运行环境。
 
 ## 4. 方案比较
 
@@ -137,7 +136,7 @@
 
 - 禁止创建或更新旧SeriesRecipe/Candidate/OfficialSku；所有新写入走根v3命令边界。
 - 默认导航移除旧入口，既有深链进入只读归档页或稳定重定向页；重定向必须保留可审计的旧ID。
-- 收敛部署：R730只构建和启动根应用；Vercel评审入口改用与根脚本一致的构建命令；Cloudflare适配若继续保留，明确标注为评审/实验环境。
+- 收敛部署：R730只构建和启动根应用；删除 Vercel、Cloudflare 与 OpenAI Sites 的适配、依赖和运行时存储分支。历史 Blob 仅可经一次性迁移导入 SQLite。
 - 历史workspace继续由独立CI验证，直至用户决定冻结到tag、移入archive目录或停止日常依赖升级。
 
 回滚点：可回滚根应用artifact，但不能把`apps/web`当作灾备生产入口。数据库回滚遵循R730手册：停服后从验证备份恢复到新文件，并保留原库作审计副本。
@@ -171,8 +170,7 @@
 | 根`/?page=skus`及旧明细页 | OfficialSku/override历史查看器 | 提供迁移后Series/SKU/Model链接，不执行双写 |
 | `apps/web` | 仓库内只读历史workspace | 不挂生产域名；CI只证明可构建与可取证 |
 | R730 | 根Vinext + SQLite + 飞书身份的唯一生产入口 | systemd继续执行根`npm run start` |
-| Vercel | 根应用评审入口 | 构建命令与根`npm run build`一致；不作为持久化生产 |
-| Cloudflare Worker | 明确命名的预览/实验适配层，或移除 | 未获单独批准前不宣称生产目标 |
+| Vercel / Cloudflare / OpenAI Sites | 已退役的历史部署适配 | 不再提供构建、预览、binding 或持久化路径 |
 
 ## 9. 测试与验收条件
 
@@ -204,7 +202,7 @@
 - 根应用通过`npm run typecheck`、`npm run lint`、`npm test`和生产构建。
 - 历史workspace在归档前继续通过冻结锁文件安装、类型、lint、测试和构建；这项门禁不得被解释为产品等价验收。
 - R730预发布环境完成登录、创建Series、离散SKU物化、Model选择、Snapshot发布、备份和恢复演练。
-- Vercel/预览构建不得使用与根权威脚本不同的框架命令。
+- 不得重新启用平台专用预览构建或与根权威脚本不同的框架命令。
 
 AUD-005以旧入口只读、深链与历史证据保留、整包保存禁写、v3唯一写入口和部署收敛为完成条件。AUD-026的runtime/UI消费由独立Issue验收，不再把已确认但未实现的AUD-026错误登记为AUD-005阻塞。
 
@@ -221,7 +219,7 @@ AUD-005以旧入口只读、深链与历史证据保留、整包保存禁写、v
 ## 11. 后续运维决策
 
 1. 旧根入口在只读后保留多久，是否仅管理员可见，还是所有现有用户都可查看？
-2. Cloudflare适配是否长期保留为实验环境？
+2. 已决：Cloudflare/Vercel/OpenAI Sites 已退役；未来如需外部预览，必须单独提出运行时 ADR 与迁移/回滚证据。
 3. 历史workspace最终是原地冻结、移动到archive目录，还是以tag/独立仓库保存？
 
 这些后续选择不得恢复legacy写能力、删除迁移证据或改写已发布Snapshot。任何入口下线、物理移动或历史数据删除均需独立授权。

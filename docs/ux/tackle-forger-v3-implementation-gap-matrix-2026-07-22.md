@@ -19,6 +19,8 @@
 > OPEN-010运行时差距复核：2026-07-23，代码基线`origin/main@a99801303b07700c5c7d786a9eb49025a0989bd7`；确认本地`PatchOperationRecord`、PatchLedger schema/migration及operation/revision/Snapshot哈希尚未绑定`workspaceId`；第14.4.3节不可变协作事件流、事务内compare-and-append、action availability及幂等/冲突测试也未实现，现有代码仍是旧版`PatchMirrorCollaborationEntry`/建议状态更新路径；服务端只有旧版镜像写入/拉取，尚无第14.4节的JCS哈希、远端schema/IssueCode校验和新ActionCode；检查、修复、按本地权威重建、schema修复和Patch主体迁移动作及其测试同样未实现。本次只登记实现差距，不冒充代码实现。
 > 对齐基线：v3 领域规范 > product-design-completion-v3 > implementation/requirements handoff > ux-design-v1 与 prototype 视觉证据。  
 > 状态定义：已实现、部分实现、缺失、因 v3 冲突而不采纳。
+>
+> 历史快照声明（2026-07-26）：本文件是截至标题日期的实现审计快照，后续段落中关于 SQLite/D1、Vercel 评审项目、旧 URL 与“当前部署”的陈述仅保留为带日期的历史证据，不得作为运行时结论。当前唯一运行权威见 [`../architecture/current-runtime-authority.md`](../architecture/current-runtime-authority.md)：正式路径是 R730 + SQLite，Cloudflare、Vercel 与 OpenAI Sites 已退役；Blob 最多 100 条只表示可获得历史窗口，不能恢复此前裁掉的 revision。
 
 ## 1. 功能、状态与交互
 

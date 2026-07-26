@@ -64,10 +64,10 @@ Many test names are Chinese. `tests/rendered-html.test.mjs` inspects `dist/`, so
 
 ### Runtime and application shell
 
-- Next.js 16 App Router and React 19 are built through Vinext/Vite. Vinext is the build adapter, not a second product application; `vercel.json` calls `npm run build:vercel` for a Nitro review build and does not use `next build`.
+- Next.js 16 App Router and React 19 are built through Vinext/Vite. Vinext is the build adapter, not a second product application; the only supported deployment build is `npm run build`, never `next build`.
 - `app/page.tsx` seeds the client workbench; `app/Workbench.tsx` is the main navigation/state shell and composes focused workbenches for the v3 flow, rule workbook, series Gantt, candidate generation, and browser config export.
 - Most product logic belongs in `lib/`, not React components. Components should consume deterministic domain results and API contracts rather than reimplement calculations.
-- `worker/index.ts` is the Cloudflare Worker entry. `vite.config.ts` wires Vinext, the build plugin, and local D1/R2 bindings from `.openai/hosting.json` (`DB` and `FILES`). Wrangler/Miniflare state is intentionally kept under `.wrangler/`.
+- `vite.config.ts` wires the Node/Vinext build only. Cloudflare Worker, D1/R2, Vercel and OpenAI Sites deployment adapters are retired.
 
 ### Central data model and migration
 
@@ -117,9 +117,9 @@ The whole canonical Feishu workbook is the sole general rule source; a URL `shee
 
 ### Persistence, concurrency, and API boundaries
 
-`lib/storage.ts` selects storage through the explicit `WORKSPACE_STORAGE_BACKEND` deployment contract. `sqlite` is the R730 production backend, `blob` is Vercel review only, `d1` is Cloudflare/OpenAI Sites preview/experimental only, and `ephemeral` is development/test only. Production must fail closed on a missing, invalid, or deployment-mismatched backend; never infer a production backend merely from a token or binding.
+`lib/storage.ts` selects storage through the explicit `WORKSPACE_STORAGE_BACKEND` deployment contract. `sqlite` is the only R730 production backend and `ephemeral` is development/test only. Production must fail closed on a missing, invalid, or deployment-mismatched backend. `@vercel/blob` remains isolated to the one-time Blob→SQLite migration tool.
 
-Workspace saves use optimistic concurrency: Blob ETags or D1 revision-checked updates. Preserve `baseRevision`/409 conflict behavior in API and UI changes.
+Workspace saves use SQLite revision-checked updates. Preserve `baseRevision`/409 conflict behavior in API and UI changes.
 
 Key route families under `app/api/` include:
 
@@ -131,7 +131,7 @@ Key route families under `app/api/` include:
 
 ### Authentication and authorization
 
-Authentication is company Feishu OAuth, implemented by `lib/auth-config.ts`, `lib/auth-store.ts`, `lib/feishu-oauth.ts`, and `lib/auth.ts`. The opaque `tf_session` cookie resolves to server-side session data. Production requires the variables documented in `.env.example`, especially a persistent, backed-up `FEISHU_SESSION_DATA_DIR`; a Vercel temporary filesystem is not suitable for production sessions.
+Authentication is company Feishu OAuth, implemented by `lib/auth-config.ts`, `lib/auth-store.ts`, `lib/feishu-oauth.ts`, and `lib/auth.ts`. The opaque `tf_session` cookie resolves to server-side session data. Production requires the variables documented in `.env.example`, especially a persistent, backed-up R730 `FEISHU_SESSION_DATA_DIR`.
 
 Authorization is capability/action based. Read contracts expose server-derived `ActionAvailability`, and write routes recheck capabilities. Do not infer permissions from role labels, UI state, or whether a user object exists. Trusted proxy headers are disabled unless explicitly enabled and authenticated with `FEISHU_PROXY_SHARED_SECRET`.
 
@@ -166,7 +166,7 @@ New domain behavior must cover normal, boundary, conflict, recovery/version-free
 
 ## Deployment notes
 
-`npm run build` uses `vinext build`. `vercel.json` invokes `npm run build:vercel`, which uses Vinext + Nitro and exists only as a review deployment path. The formal target is the company intranet Dell R730 with persistent SQLite storage, company Feishu credentials, and real configuration repositories. Cloudflare/OpenAI Sites bindings and Vercel Blob are preview/experimental paths, never formal production. See `docs/architecture/current-runtime-authority.md` for the current runtime authority table.
+`npm run build` uses `vinext build`. The formal target is the company intranet Dell R730 with persistent SQLite storage, company Feishu credentials, and real configuration repositories. Cloudflare, Vercel and OpenAI Sites deployment paths are retired; Vercel Blob is retained only for an explicit one-time import into SQLite. See `docs/architecture/current-runtime-authority.md` for the current runtime authority table.
 
 ## Agent 工作模式
 

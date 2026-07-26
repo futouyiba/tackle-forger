@@ -1,7 +1,7 @@
 # Dell R730 内网生产部署
 
 > 状态：生产运行手册；不定义领域语义
-> 最后对齐v3：2026-07-23
+> 最后对齐v3：2026-07-25
 
 本指南用于单实例内网部署。Vercel 只作为评审入口，不能替代持久磁盘、公司飞书 OAuth 凭据和真实 configs 仓库验收。
 
@@ -15,6 +15,10 @@
 - 将 `WORKSPACE_DATABASE_PATH`、`WORKSPACE_FILE_DATA_DIR`、`WORKSPACE_BACKUP_DIR`、`FEISHU_SESSION_DATA_DIR`、`AI_RETENTION_DATA_DIR` 和 `AI_RETENTION_TOMBSTONE_DIR` 全部指向该持久数据根内的独立目录；删除墓碑目录不得位于 AI 留存目录或备份目录内部，也不得在恢复旧工作区备份时被覆盖。示例已使用 `/opt/tackle-forger/data/*` 绝对路径，与 systemd 的 `ReadWritePaths` 一致。
 
 不要把飞书密钥、会话文件、SQLite 数据库、导入文件或 configs 凭据放入代码发布目录。
+
+R730 必须显式设置 `WORKSPACE_STORAGE_BACKEND=sqlite`。缺少该值、设置为 `blob`、`d1` 或
+`ephemeral`，以及 SQLite 路径不可用时，应用必须拒绝启动或拒绝工作区读写；不得因环境中意外存在
+Blob token 或 Cloudflare binding 而切换后端。
 
 ## 发布前检查
 

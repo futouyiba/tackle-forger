@@ -26,7 +26,7 @@ import type { ModelPricingEvaluationInput } from "../lib/types";
 
 // ─── 夹具 ────────────────────────────────────────────────────────────
 
-const ref = (cell: string, sheetId = "u87sRh") => ({ sheetId, cell });
+const ref = (cell: string, sheetId = "31RxeB") => ({ sheetId, cell });
 const sourced = (value: number, cell: string) =>
   ({ value, status: "CONFIRMED" as const, source: ref(cell) });
 
@@ -34,9 +34,9 @@ function policyInput(overrides: Partial<PricingPolicyDraft> = {}) {
   return {
     sourceRevisionId: "source:pricing-v2",
     sourceRevision: "pricing-v2",
-    pricingSheetId: "u87sRh" as const,
-    qualitySheetId: "FqD4j7" as const,
-    typeMaterialSheetId: "fATowU" as const,
+    pricingSheetId: "31RxeB" as const,
+    qualitySheetId: "27hboC" as const,
+    typeMaterialSheetId: "10TyFp" as const,
     businessFormulaCells: [ref("B2")],
     maintenanceConsumptionRates: [{ pricingWeightBandId: "w1", value: sourced(1234, "B3") }],
     partAllocationRatios: [{ pricingWeightBandId: "w1", partId: "rod", value: sourced(1, "B4") }],

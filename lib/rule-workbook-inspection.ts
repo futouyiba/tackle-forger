@@ -295,7 +295,7 @@ export function pricingDraftFromRanges(input: {
       qualityId,
       sourceAlias: text(row[5]) || code,
       status: "SOURCE",
-      source: { sheetId: "FqD4j7", cell: `D${sheetRow}`, rowKey: String(sheetRow) },
+      source: { sheetId: "27hboC", cell: `D${sheetRow}`, rowKey: String(sheetRow) },
     }];
   });
   const qualityPriceFactorRanges: QualityPriceFactorRange[] = input.qualitySourceRows
@@ -313,7 +313,7 @@ export function pricingDraftFromRanges(input: {
     const maxFactor = Number(row[6]);
     if (!qualityId || ![minScore, maxScore, minFactor, maxFactor].every(Number.isFinite)) return [];
     const sheetRow = index + 5;
-    return [{ qualityId, minScore, maxScore, maxInclusive: qualityId === "quality_s_orange", minFactor, maxFactor, status: "SOURCE", source: { sheetId: "FqD4j7", cell: `E${sheetRow}:H${sheetRow}`, rowKey: String(sheetRow) } }];
+    return [{ qualityId, minScore, maxScore, maxInclusive: qualityId === "quality_s_orange", minFactor, maxFactor, status: "SOURCE", source: { sheetId: "27hboC", cell: `E${sheetRow}:H${sheetRow}`, rowKey: String(sheetRow) } }];
   });
   const pricingValues = input.pricingValues ?? [];
   const maintenanceConsumptionRates: PricingLookupEntry[] = [];
@@ -323,7 +323,7 @@ export function pricingDraftFromRanges(input: {
   for (let index = 13; index < pricingValues.length; index += 1) {
     const row = pricingValues[index] ?? [];
     const sheetRow = index + 10;
-    const sourceValue = (value: number, cell: string) => ({ value, status: "SOURCE" as const, source: { sheetId: "u87sRh", cell, rowKey: String(sheetRow) } });
+    const sourceValue = (value: number, cell: string) => ({ value, status: "SOURCE" as const, source: { sheetId: "31RxeB", cell, rowKey: String(sheetRow) } });
     const maintenanceBand = text(row[0]);
     const maintenance = Number(row[2]);
     if (maintenanceBand && Number.isFinite(maintenance)) {
@@ -364,8 +364,8 @@ export function pricingDraftFromRanges(input: {
     const sheetRow = index + 2;
     const repair = Number(row[19]);
     const purchase = Number(row[20]);
-    if (Number.isFinite(repair)) repairCoefficients.push({ partId, typeId, value: { value: repair, status: "SOURCE", source: { sheetId: "fATowU", cell: `U${sheetRow}`, rowKey: String(sheetRow) } } });
-    if (Number.isFinite(purchase)) purchaseCoefficients.push({ partId, typeId, value: { value: purchase, status: "SOURCE", source: { sheetId: "fATowU", cell: `V${sheetRow}`, rowKey: String(sheetRow) } } });
+    if (Number.isFinite(repair)) repairCoefficients.push({ partId, typeId, value: { value: repair, status: "SOURCE", source: { sheetId: "10TyFp", cell: `U${sheetRow}`, rowKey: String(sheetRow) } } });
+    if (Number.isFinite(purchase)) purchaseCoefficients.push({ partId, typeId, value: { value: purchase, status: "SOURCE", source: { sheetId: "10TyFp", cell: `V${sheetRow}`, rowKey: String(sheetRow) } } });
   }
   const parameterValue = (sheetRow: number) => pricingValues[sheetRow - 10]?.[2];
   const executionFields = new Map<string, { value: unknown; row: number }>();
@@ -391,7 +391,7 @@ export function pricingDraftFromRanges(input: {
     upperThreshold: Number(executionValue("pricing.upperThreshold")),
     upperThresholdMode: executionValue("pricing.upperThresholdMode"),
     status: "SOURCE" as const,
-    source: { sheetId: "u87sRh", cell: `B${executionRow("pricing.repairRoundingStage") ?? 0}:D${executionRow("pricing.upperThresholdMode") ?? 0}`, rowKey: "pricing.execution.machine.v1" },
+    source: { sheetId: "31RxeB", cell: `B${executionRow("pricing.repairRoundingStage") ?? 0}:D${executionRow("pricing.upperThresholdMode") ?? 0}`, rowKey: "pricing.execution.machine.v1" },
   } as PricingExecutionPolicy : undefined;
   const moneyPolicy = pricingValues.length ? {
     unit: text(parameterValue(15)),
@@ -401,15 +401,15 @@ export function pricingDraftFromRanges(input: {
     minimumPrice: Number(parameterValue(17)),
     maximumPrice: Number(parameterValue(18)),
     status: "SOURCE" as const,
-    source: { sheetId: "u87sRh", cell: "B15:D18", rowKey: "15-18" },
+    source: { sheetId: "31RxeB", cell: "B15:D18", rowKey: "15-18" },
   } : undefined;
   return importPricingPolicyDraft({
     sourceRevisionId: input.sourceRevision.id,
     sourceRevision: input.sourceRevision.sourceRevision,
-    pricingSheetId: "u87sRh",
-    qualitySheetId: "FqD4j7",
-    typeMaterialSheetId: "fATowU",
-    businessFormulaCells: [2, 3, 4, 5, 6, 7].map((row) => ({ sheetId: "u87sRh", cell: `B${row}` })),
+    pricingSheetId: "31RxeB",
+    qualitySheetId: "27hboC",
+    typeMaterialSheetId: "10TyFp",
+    businessFormulaCells: [2, 3, 4, 5, 6, 7].map((row) => ({ sheetId: "31RxeB", cell: `B${row}` })),
     maintenanceConsumptionRates,
     partAllocationRatios,
     repairCoefficients,
@@ -418,7 +418,7 @@ export function pricingDraftFromRanges(input: {
     partsToWholeRatios,
     qualityMappings,
     qualityPriceFactorRanges,
-    scoreInterpolation: pricingValues.length ? { kind: "quality_range_linear", points: [], outOfRange: "error", status: "SOURCE", source: { sheetId: "u87sRh", cell: "B11:D11", rowKey: "11" } } : undefined,
+    scoreInterpolation: pricingValues.length ? { kind: "quality_range_linear", points: [], outOfRange: "error", status: "SOURCE", source: { sheetId: "31RxeB", cell: "B11:D11", rowKey: "11" } } : undefined,
     moneyPolicy,
     ...(executionPolicy ? { executionPolicy } : {}),
     importedAt: input.importedAt,
@@ -592,7 +592,7 @@ export function qualityDraftFromRanges(input: {
     const alias = text(row[4]);
     if (!affixId || !itemPartId || !alias) return [];
     const sheetRow = index + 3;
-    return [{ itemPartId, alias, affixId, source: { sheetId: "zrVOxd", cell: `F${sheetRow}`, rowKey: String(sheetRow) } }];
+    return [{ itemPartId, alias, affixId, source: { sheetId: "23CsXE", cell: `F${sheetRow}`, rowKey: String(sheetRow) } }];
   });
   const matrixCells: QualityCombinationSourceCell[] = [];
   const matrixPartByHeader = new Map([["竿词条", "part:rod"], ["轮词条", "part:reel"], ["线词条", "part:line"]]);
@@ -641,7 +641,7 @@ export function qualityDraftFromRanges(input: {
   const pricingScoreEndpoints = input.pricingEndpointValues.flatMap((row) => {
     const value = Number(row[0]);
     return Number.isFinite(value)
-      ? [{ value, status: "SOURCE" as const, source: { sheetId: "u87sRh", cell: "B179", rowKey: "179" } }]
+      ? [{ value, status: "SOURCE" as const, source: { sheetId: "31RxeB", cell: "B179", rowKey: "179" } }]
       : [];
   });
   return importQualityValuePolicyDraft({
@@ -654,7 +654,7 @@ export function qualityDraftFromRanges(input: {
     sourceIssues,
     pricingScoreEndpoints,
     performanceScoringEnabled: undefined,
-    performanceScoringSource: { sheetId: "FqD4j7", cell: "B2", rowKey: "2" },
+    performanceScoringSource: { sheetId: "27hboC", cell: "B2", rowKey: "2" },
     importedAt: input.importedAt,
   });
 }

@@ -109,6 +109,27 @@ echo "==> 5/5 验收"
 ssh "$R730_SSH" "curl -s -o /dev/null -w 'session(期望401): %{http_code}\n' http://127.0.0.1:3000/api/auth/session"
 
 rm -f "$TAR"
+
+echo "==> 6/6 清理旧 release（磁盘占满教训：每次部署新增~500MB node_modules，旧的不删会撑爆 35G 盘）"
+ssh "$R730_SSH" bash -s -- "$R730_ROOT" "$R730_SERVICE" <<'CLEANUP'
+set -euo pipefail
+ROOT="$1"; SVC="$2"
+cd "$ROOT/releases"
+current="$(readlink "$ROOT/current" | xargs basename 2>/dev/null || true)"
+prev="$(cat "$ROOT/current.prev" 2>/dev/null | xargs basename 2>/dev/null || true)"
+deleted=0
+for dir in */; do
+  name="$(basename "$dir")"
+  if [ "$name" = "$current" ] || [ "$name" = "$prev" ]; then continue; fi
+  rm -rf "$dir" && deleted=$((deleted + 1))
+done
+npm cache clean --force 2>/dev/null || true
+rm -f /tmp/tackle-forger-*.tar.gz 2>/dev/null || true
+rm -f /tmp/npm-* 2>/dev/null || true
+echo "清理了 $deleted 个旧 release，保留 current($current) + prev($prev)"
+df -h "$ROOT" | tail -1
+CLEANUP
+
 cat <<EOF
 
 ✔ 部署完成：$REL

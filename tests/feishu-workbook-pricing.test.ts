@@ -452,16 +452,16 @@ test("人工确认写回超时后以回读恢复，写回不等于拉取或发�
 });
 
 function sourced(value: number, cell: string, status: SourcedPricingValue<number>["status"] = "SOURCE"): SourcedPricingValue<number> {
-  return { value, status, source: { sheetId: cell.startsWith("AC") ? "fATowU" : "u87sRh", cell } };
+  return { value, status, source: { sheetId: cell.startsWith("AC") ? "10TyFp" : "31RxeB", cell } };
 }
 
 function pricingInput(overrides: Partial<PricingPolicyDraft> = {}) {
   return {
     sourceRevisionId: "feishu-revision:2352",
     sourceRevision: "2352",
-    pricingSheetId: "u87sRh" as const,
-    typeMaterialSheetId: "fATowU" as const,
-    businessFormulaCells: ["B2", "B3", "B4", "B5", "B6", "B7"].map((cell) => ({ sheetId: "u87sRh", cell })),
+    pricingSheetId: "31RxeB" as const,
+    typeMaterialSheetId: "10TyFp" as const,
+    businessFormulaCells: ["B2", "B3", "B4", "B5", "B6", "B7"].map((cell) => ({ sheetId: "31RxeB", cell })),
     maintenanceConsumptionRates: [{ pricingWeightBandId: "band:matched", value: sourced(10, "C20") }],
     partAllocationRatios: [{ pricingWeightBandId: "band:matched", partId: "rod", value: sourced(0.2, "D20") }],
     repairCoefficients: [{ pricingWeightBandId: "band:matched", partId: "rod", typeId: "RodType:spinning", value: sourced(1, "AC5") }],
@@ -473,7 +473,7 @@ function pricingInput(overrides: Partial<PricingPolicyDraft> = {}) {
       ["quality_b_blue", "B/蓝"],
       ["quality_a_purple", "A/紫"],
       ["quality_s_orange", "S/橙"],
-    ].map(([qualityId, sourceAlias], index) => ({ qualityId, sourceAlias, status: "SOURCE" as const, source: { sheetId: "u87sRh", cell: `D${5 + index}` } })),
+    ].map(([qualityId, sourceAlias], index) => ({ qualityId, sourceAlias, status: "SOURCE" as const, source: { sheetId: "31RxeB", cell: `D${5 + index}` } })),
     importedAt: "2026-07-21T10:00:00.000Z",
     ...overrides,
   } as Parameters<typeof importPricingPolicyDraft>[0];
@@ -491,8 +491,8 @@ test("revision 2352 品质映射已存在；草稿只因其余必填参数未发
 test("价格试算使用最近结构标杆源重量段，系数为 1 仍进入单元格级 Trace", () => {
   const draft = importPricingPolicyDraft(pricingInput({
     partsToWholeRatios: [{ partId: "rod", value: sourced(0.5, "Q7", "PROPOSED") }],
-    scoreInterpolation: { kind: "constant", points: [{ valueScore: 0, factor: 2 }], outOfRange: "clamp", status: "PROPOSED", source: { sheetId: "u87sRh", cell: "Q3:T3" } },
-    moneyPolicy: { unit: "未确认币种", rounding: "half_up", precision: 0, minimumPrice: 1, maximumPrice: 999999, roundingStage: "part_purchase_price", minimumPriceScope: "part_purchase_price", overflowMode: "error", status: "PROPOSED", source: { sheetId: "u87sRh", cell: "Q8:T12" } },
+    scoreInterpolation: { kind: "constant", points: [{ valueScore: 0, factor: 2 }], outOfRange: "clamp", status: "PROPOSED", source: { sheetId: "31RxeB", cell: "Q3:T3" } },
+    moneyPolicy: { unit: "未确认币种", rounding: "half_up", precision: 0, minimumPrice: 1, maximumPrice: 999999, roundingStage: "part_purchase_price", minimumPriceScope: "part_purchase_price", overflowMode: "error", status: "PROPOSED", source: { sheetId: "31RxeB", cell: "Q8:T12" } },
   }));
   const result = calculatePricingTrial({ policy: draft, partId: "rod", typeId: "RodType:spinning", pricingWeightBandId: "band:matched", valueScore: 24, qualityId: "quality_a_purple" });
   assert.equal(result.pricingWeightBandId, "band:matched");

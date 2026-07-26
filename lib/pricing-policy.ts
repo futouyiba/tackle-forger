@@ -114,9 +114,9 @@ export interface PricingPolicyDraft {
   id: string;
   sourceRevisionId: string;
   sourceRevision: string;
-  pricingSheetId: "u87sRh";
-  qualitySheetId?: "FqD4j7";
-  typeMaterialSheetId: "fATowU";
+  pricingSheetId: "31RxeB";
+  qualitySheetId?: "27hboC";
+  typeMaterialSheetId: "10TyFp";
   businessFormulaCells: PricingCellRef[];
   maintenanceConsumptionRates: PricingLookupEntry[];
   partAllocationRatios: PricingLookupEntry[];
@@ -282,9 +282,9 @@ function validExecutionPolicy(value: unknown): value is PricingExecutionPolicy {
 export function importPricingPolicyDraft(input: Omit<PricingPolicyDraft, "id" | "issues" | "formalStatus" | "inputHash">): PricingPolicyDraft {
   const issues: PricingPolicyIssue[] = [];
   if (
-    input.pricingSheetId !== "u87sRh"
-    || input.typeMaterialSheetId !== "fATowU"
-    || (input.qualitySheetId !== undefined && input.qualitySheetId !== "FqD4j7")
+    input.pricingSheetId !== "31RxeB"
+    || input.typeMaterialSheetId !== "10TyFp"
+    || (input.qualitySheetId !== undefined && input.qualitySheetId !== "27hboC")
   ) {
     issues.push({ code: "PRICING_SHEET_ID_MISMATCH", severity: "error", message: "定价草稿必须按稳定 sheet_id 联合读取 07_品质评分、08_价格计算与 02_类型材质。" });
   }

@@ -24,6 +24,7 @@ The invoking main Agent remains the only coordinator. A transition into `$agent-
 
 - The coordinator chooses implementation capacity for code, tests, and fixes from task risk, scope, available capabilities, and resources. Follow repository-specific model requirements.
 - Load review-tier boundaries, risk floors, and receipt roles from the versioned machine policy referenced above. This Skill owns the Issue lifecycle and PR handoff; `$agent-pr-loop` owns PR review, repair, exact-head/base evidence, CI, and merge-gate handling.
+- Consume the preferred compact `tackle-task-brief/v2` without copying its task/spec/risk/route fields into coordinator or coding prose. Exact legacy `tackle-task-brief/v1` inputs remain valid and must not be rewritten merely to change schema.
 - Let the coordinator repair routine labels, links, and Project status idempotently. Do not return work to the implementer only for metadata.
 - Prefer direct Agent messaging during an active task. Persist durable decisions, findings, evidence, and resumable state on the Issue or PR so another run can recover without chat history.
 
@@ -67,7 +68,7 @@ Pause in `HUMAN_DECISION_REQUIRED` when a missing choice would materially change
 
 1. Move eligible work to `In progress`, prepare a dedicated branch from the intended base, and record the base revision.
 2. Implement only the accepted scope. Preserve unknown fields, stable identities, historical artifacts, and existing user changes.
-3. Run the repository's exact validation commands and report results honestly. Re-run affected evidence after rebasing or conflict resolution. Do not perform a local independent review for `standard`; preserve that review for the stable PR boundary.
+3. Run the repository's exact validation commands and report results honestly. Re-run affected evidence after rebasing or conflict resolution. Issue implementation never emits a local verdict/result. Do not perform a local independent review for `standard`; preserve that review for the stable PR boundary, where `$agent-pr-loop` starts independent Review and CI in parallel for the same exact head/base.
 4. Stop at a real decision or blocked validation; do not pause for ordinary metadata repair or a redundant permission to continue the selected task.
 
 Use `NO_CODE_DELIVERY` only when the Issue is satisfied without a repository artifact. Record the reason, acceptance evidence, and why no PR is required; never use it to bypass required review or validation.

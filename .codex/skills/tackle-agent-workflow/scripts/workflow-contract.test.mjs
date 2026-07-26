@@ -5,7 +5,7 @@ import { appendFileSync, chmodSync, existsSync, lstatSync, mkdtempSync, mkdirSyn
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { buildNavigationIndex, buildOwnedBaselineManifest, buildPatchManifest, checkFullReadSession, checkNavigationIndex, checkOwnedWhitespace, checkPolicy, checkReadReceipt, checkTaskBrief, checkTaskCard, checkVerdict, classifyOwnedPaths, fullReadSessionHash, openRegistryHash, ownedBaselineHash, patchHash, prepareTaskBrief, prepareTaskCard, promoteTaskBrief, receiptHash, runCli, runValidation, specReadPlan, taskBriefHash, upgradeTaskCard, VALIDATION_EXECUTION_TIERS, validationExecutionPlan, writeNavigationIndex, writeTaskBriefRun, writeTaskCardRun, writeTaskRun } from './workflow-contract.mjs';
+import { buildNavigationIndex, buildOwnedBaselineManifest, buildPatchManifest, checkFullReadSession, checkNavigationIndex, checkOwnedWhitespace, checkPolicy, checkReadReceipt, checkTaskBrief, checkTaskCard, checkVerdict, classifyOwnedPaths, completeTaskCard, fullReadSessionHash, openRegistryHash, ownedBaselineHash, patchHash, prepareTaskBrief, prepareTaskCard, promoteTaskBrief, receiptHash, runCli, runValidation, specReadPlan, taskBriefHash, upgradeTaskCard, VALIDATION_EXECUTION_TIERS, validationExecutionPlan, writeNavigationIndex, writeTaskBriefRun, writeTaskCardRun, writeTaskRun } from './workflow-contract.mjs';
 
 const POLICY_RELATIVE = '.codex/skills/tackle-agent-workflow/references/workflow-contract-policy.v2.json';
 const POLICY_CONSUMERS = [
@@ -176,6 +176,26 @@ test('Task Card fail-closes by requiring formal boundary escalation for runtime 
   } finally { cleanup(root); }
 });
 
+test('fast local scoped Task Card completes with a compact artifact result and no formal evidence record', () => {
+  const root = temporaryRepo();
+  const handoff = mkdtempSync(path.join(os.tmpdir(), 'workflow-fast-card-'));
+  try {
+    taskBase(root);
+    command(root, ['config', 'core.autocrlf', 'false']);
+    const card = prepareTaskCard({ root, input: { schema: 'tackle-task-card/v1', taskId: 'fast-card', workflowMode: 'local', scope: 'Tighten scoped workflow prose.', ownedPaths: ['AGENTS.md'], riskProfile: 'workflow_docs_metadata', changeClass: 'workflow_metadata' } });
+    write(root, 'AGENTS.md', `${readFileSync(path.join(root, 'AGENTS.md'), 'utf8')}\nFast local update.\n`);
+    const result = completeTaskCard({ root, card });
+    assert.equal(result.schema, 'tackle-task-card-result/v1');
+    assert.match(result.taskCardSha256, /^[0-9a-f]{64}$/);
+    assert.match(result.artifactIdentity.patchHash, /^[0-9a-f]{64}$/);
+    assert.equal(Object.hasOwn(result, 'verdict'), false);
+    assert.equal(Object.hasOwn(result, 'specReadReceipts'), false);
+    const cardPath = path.join(handoff, 'fast-card.json');
+    writeFileSync(cardPath, `${JSON.stringify(card)}\n`);
+    assert.equal(JSON.parse(runCli(['--complete-task-card', '--card', cardPath], root)).schema, 'tackle-task-card-result/v1');
+  } finally { cleanup(root); cleanup(handoff); }
+});
+
 test('Task Card storage has a distinct private type, filename, and stderr report', () => {
   const root = temporaryRepo();
   const handoff = mkdtempSync(path.join(os.tmpdir(), 'workflow-card-store-'));
@@ -254,16 +274,98 @@ test('TaskBrief preparation derives only mechanical fields and immediately valid
     taskBase(root);
     const input = prepareInput(root);
     const prepared = prepareTaskBrief({ root, input });
-    assert.equal(checkTaskBrief({ root, brief: prepared }).phase, 'pre_dispatch');
+    const checked = checkTaskBrief({ root, brief: prepared });
+    assert.equal(checked.phase, 'pre_dispatch');
+    assert.equal(prepared.schema, 'tackle-task-brief/v2');
     assert.equal(prepared.reviewedHead, 'WORKTREE');
-    assert.deepEqual(prepared.allowedChanges, input.ownedPaths);
-    assert.deepEqual(prepared.openDecisionCheck.checkedIds, ['OPEN-001']);
-    assert.equal(prepared.validationPlan.requiredCommands.includes(ownedWhitespaceCommand(input.baseSha, ['AGENTS.md'])), true);
-    assert.equal(prepared.validationPlan.intentionallyNotApplicable.product_runtime_tests.length > 0, true);
-    assert.equal(prepared.specReadReceipts[0].profile, 'FULL');
+    assert.deepEqual(checked.normalizedBrief.allowedChanges, input.ownedPaths);
+    assert.deepEqual(checked.normalizedBrief.openDecisionCheck.checkedIds, ['OPEN-001']);
+    assert.equal(checked.normalizedBrief.validationPlan.requiredCommands.includes(ownedWhitespaceCommand(input.baseSha, ['AGENTS.md'])), true);
+    assert.equal(checked.normalizedBrief.validationPlan.intentionallyNotApplicable.product_runtime_tests.length > 0, true);
+    assert.equal(prepared.specReadEvidence.roles[0].profile, 'FULL');
+    assert.equal(Object.hasOwn(prepared, 'validationPlan'), false);
+    assert.equal(Object.hasOwn(prepared, 'allowedChanges'), false);
     const inputPath = path.join(handoff, 'prepare-input.json');
     writeFileSync(inputPath, `${JSON.stringify(input)}\n`);
     assert.equal(JSON.parse(runCli(['--prepare-task-brief', '--input', inputPath], root)).taskId, input.taskId);
+  } finally { cleanup(root); cleanup(handoff); }
+});
+
+test('TaskBrief v2 is preferred while exact v1 records remain recognizable and hash-distinct', () => {
+  const root = temporaryRepo();
+  try {
+    taskBase(root);
+    const legacy = brief(root);
+    const legacyChecked = checkTaskBrief({ root, brief: legacy });
+    assert.equal(legacyChecked.normalizedBrief, legacy);
+    assert.equal(legacyChecked.taskBriefSha256, taskBriefHash(legacy));
+    const prepared = prepareTaskBrief({ root, input: prepareInput(root) });
+    const preparedChecked = checkTaskBrief({ root, brief: prepared });
+    assert.equal(prepared.schema, 'tackle-task-brief/v2');
+    assert.notEqual(preparedChecked.taskBriefSha256, legacyChecked.taskBriefSha256);
+    assert.throws(() => checkTaskBrief({ root, brief: { ...prepared, allowedChanges: prepared.ownedPaths } }), /unknown, missing, or inapplicable keys/);
+    assert.equal(writeTaskBriefRun({ root, brief: legacy }).storagePath.includes('task-brief-'), true);
+    assert.equal(writeTaskBriefRun({ root, brief: prepared }).storagePath.includes('task-brief-'), true);
+  } finally { cleanup(root); }
+});
+
+test('TaskBrief v2 promotion compacts role evidence and preserves standard local no-review boundary', () => {
+  const root = temporaryRepo();
+  try {
+    taskBase(root);
+    const prepared = prepareTaskBrief({ root, input: prepareInput(root) });
+    write(root, 'AGENTS.md', 'changed\n');
+    const coding = receipt(root, { taskId: prepared.taskId, role: 'coding', relevantSections: prepared.relevantSections, reason: 'Coding completed the routed reading.' });
+    const promoted = promoteTaskBrief({ root, brief: prepared, codingReceipt: coding });
+    assert.equal(promoted.schema, 'tackle-task-brief/v2');
+    assert.deepEqual(promoted.specReadEvidence.roles.map((entry) => entry.role), ['coordinator', 'coding']);
+    assert.equal(Object.hasOwn(promoted, 'specReadReceipts'), false);
+    assert.equal(checkTaskBrief({ root, brief: promoted }).phase, 'verdict');
+    assert.equal(validationExecutionPlan({ root, brief: promoted }).commands.some((entry) => entry.command.includes('--check-owned-whitespace')), true);
+  } finally { cleanup(root); }
+});
+
+test('local result v2 recomputes TaskBrief bindings and Issue routes cannot publish local results', () => {
+  const root = temporaryRepo();
+  const handoff = mkdtempSync(path.join(os.tmpdir(), 'workflow-local-result-v2-'));
+  try {
+    taskBase(root);
+    const source = brief(root);
+    write(root, 'AGENTS.md', 'changed\n');
+    const coding = receipt(root, { role: 'coding', reason: 'coding' });
+    const review = receipt(root, { role: 'review', reason: 'review' });
+    const promoted = promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review });
+    const checked = checkTaskBrief({ root, brief: promoted });
+    const result = {
+      schema: 'tackle-local-result/v2',
+      taskBriefSha256: checked.taskBriefSha256,
+      artifactIdentity: { kind: 'worktree', commitSha: null, patchHash: patchHash({ root, baseSha: checked.baseSha, ownedPaths: promoted.ownedPaths }).patchHash },
+      verdict: 'PASS',
+      findings: [],
+    };
+    const verified = checkVerdict({ root, verdict: result, brief: promoted });
+    assert.equal(verified.recomputed.taskId, promoted.taskId);
+    assert.deepEqual(verified.recomputed.ownedPaths, promoted.ownedPaths);
+    const resultPath = path.join(handoff, 'result.json');
+    const briefPath = path.join(handoff, 'brief.json');
+    writeFileSync(resultPath, `${JSON.stringify(result)}\n`);
+    writeFileSync(briefPath, `${JSON.stringify(promoted)}\n`);
+    assert.equal(JSON.parse(runCli(['--check-local-result', '--result', resultPath, '--brief', briefPath], root)).recomputed.taskId, promoted.taskId);
+    assert.throws(() => checkVerdict({ root, verdict: { ...result, taskBriefSha256: '0'.repeat(64) }, brief: promoted }), /must match TaskBrief/);
+    command(root, ['checkout', '--', 'AGENTS.md']);
+    const baseSha = command(root, ['rev-parse', 'HEAD']);
+    const issue = {
+      ...source,
+      workflowMode: 'issue',
+      phase: 'verdict',
+      reviewedHead: baseSha,
+      reviewTier: 'standard',
+      dirtyWorktreeDisposition: 'clean_synced',
+      specReadReceipts: [source.specReadReceipts[0], receipt(root, { role: 'coding' })],
+    };
+    const issueChecked = checkTaskBrief({ root, brief: issue });
+    const issueResult = { ...result, taskBriefSha256: issueChecked.taskBriefSha256, artifactIdentity: { kind: 'commit', commitSha: baseSha, patchHash: null } };
+    assert.throws(() => checkVerdict({ root, verdict: issueResult, brief: issue }), /only valid for workflowMode local/);
   } finally { cleanup(root); cleanup(handoff); }
 });
 
@@ -306,14 +408,14 @@ test('TaskBrief run storage is traversal-safe, per linked worktree, and fails cl
     const maliciousBrief = prepareTaskBrief({ root, input: maliciousInput });
     const maliciousRun = writeTaskBriefRun({ root, brief: maliciousBrief });
     assert.equal(maliciousRun.storagePath.includes('..'), false);
-    assert.equal(path.dirname(maliciousRun.storagePath), command(root, ['rev-parse', '--path-format=absolute', '--git-path', 'codex-runs']));
+    assert.equal(path.resolve(path.dirname(maliciousRun.storagePath)), path.resolve(command(root, ['rev-parse', '--path-format=absolute', '--git-path', 'codex-runs'])));
     command(root, ['worktree', 'add', '--detach', linked, 'HEAD']);
     const linkedInput = prepareInput(linked, { taskId: 'linked-task', coordinatorSpecReadReceipt: receipt(linked, { taskId: 'linked-task', relevantSections: ['0', '19', '20'] }) });
     const linkedRun = writeTaskBriefRun({ root: linked, brief: prepareTaskBrief({ root: linked, input: linkedInput }) });
     const rootRunDirectory = command(root, ['rev-parse', '--path-format=absolute', '--git-path', 'codex-runs']);
     const linkedRunDirectory = command(linked, ['rev-parse', '--path-format=absolute', '--git-path', 'codex-runs']);
     assert.notEqual(linkedRunDirectory, rootRunDirectory);
-    assert.equal(path.dirname(linkedRun.storagePath), linkedRunDirectory);
+    assert.equal(path.resolve(path.dirname(linkedRun.storagePath)), path.resolve(linkedRunDirectory));
     const failingRoot = temporaryRepo();
     try {
       taskBase(failingRoot);
@@ -327,7 +429,7 @@ test('TaskBrief run storage is traversal-safe, per linked worktree, and fails cl
   }
 });
 
-test('TaskBrief run storage publishes complete records atomically and rejects unsafe or stale artifacts', async () => {
+test('TaskBrief run storage publishes complete records atomically and rejects unsafe or stale artifacts', async (t) => {
   const root = temporaryRepo();
   try {
     taskBase(root);
@@ -367,9 +469,14 @@ test('TaskBrief run storage publishes complete records atomically and rejects un
     try {
       taskBase(unsafeRoot);
       const unsafeDirectory = command(unsafeRoot, ['rev-parse', '--path-format=absolute', '--git-path', 'codex-runs']);
-      symlinkSync(unsafeTarget, unsafeDirectory);
-      assert.equal(lstatSync(unsafeDirectory).isSymbolicLink(), true);
-      assert.throws(() => writeTaskBriefRun({ root: unsafeRoot, brief: prepareTaskBrief({ root: unsafeRoot, input: prepareInput(unsafeRoot) }) }), /run storage path escaped|directory is unsafe/);
+      try {
+        symlinkSync(unsafeTarget, unsafeDirectory);
+        assert.equal(lstatSync(unsafeDirectory).isSymbolicLink(), true);
+        assert.throws(() => writeTaskBriefRun({ root: unsafeRoot, brief: prepareTaskBrief({ root: unsafeRoot, input: prepareInput(unsafeRoot) }) }), /run storage path escaped|directory is unsafe/);
+      } catch (error) {
+        if (!['EPERM', 'EACCES'].includes(error.code)) throw error;
+        t.diagnostic(`run-directory symlink unavailable: ${error.code}`);
+      }
     } finally { cleanup(unsafeRoot); cleanup(unsafeTarget); }
   } finally { cleanup(root); }
 });
@@ -385,7 +492,7 @@ test('TaskBrief preparation accepts v2 reuse receipts only with trusted continuo
     });
     const input = prepareInput(root, { coordinatorSpecReadReceipt: v2 });
     const current = currentReuseContext(v2.reuseEvidence.session);
-    assert.equal(prepareTaskBrief({ root, input, currentReuseContext: current }).specReadReceipts[0].schema, 'tackle-spec-read/v2');
+    assert.equal(prepareTaskBrief({ root, input, currentReuseContext: current }).specReadEvidence.roles[0].receiptSchema, 'tackle-spec-read/v2');
     assert.throws(() => prepareTaskBrief({ root, input }), /currentReuseContext/);
     assert.throws(() => prepareTaskBrief({ root, input, currentReuseContext: { ...current, currentAgentIdentity: 'agent:other' } }), /caller-provided/);
     assert.throws(() => prepareTaskBrief({ root, input, currentReuseContext: { ...current, currentContextSessionId: 'context:other' } }), /caller-provided/);
@@ -407,9 +514,12 @@ test('TaskBrief preparation preserves every declared risk dimension and its scen
       coordinatorSpecReadReceipt: receipt(root, { taskId: 'prepared-task', riskProfile: 'durable_migration', relevantSections: ['0', '19', '20'] }),
     });
     const prepared = prepareTaskBrief({ root, input });
+    const normalized = checkTaskBrief({ root, brief: prepared }).normalizedBrief;
     assert.deepEqual(prepared.riskDimensions, dimensions);
-    for (const scenario of ['normal_path', 'boundary', 'conflict', 'version_freeze', 'production_shape_fixture', 'unknown_field_preservation', 'second_run_noop', 'authorization_denied', 'reauthorize_at_commit', 'concurrency_conflict', 'unified_visual_review_pending_or_completed']) assert.equal(prepared.validationPlan.requiredScenarios.includes(scenario), true);
-    assert.equal(new Set(prepared.validationPlan.requiredScenarios).size, prepared.validationPlan.requiredScenarios.length);
+    assert.equal(prepared.reviewTier, 'strict');
+    assert.equal(prepared.specReadEvidence.roles[0].profile, 'FULL');
+    for (const scenario of ['normal_path', 'boundary', 'conflict', 'version_freeze', 'production_shape_fixture', 'unknown_field_preservation', 'second_run_noop', 'authorization_denied', 'reauthorize_at_commit', 'concurrency_conflict', 'unified_visual_review_pending_or_completed']) assert.equal(normalized.validationPlan.requiredScenarios.includes(scenario), true);
+    assert.equal(new Set(normalized.validationPlan.requiredScenarios).size, normalized.validationPlan.requiredScenarios.length);
   } finally { cleanup(root); }
 });
 
@@ -524,10 +634,11 @@ test('patch manifest classifies explicit owned paths and is deterministic', () =
     write(root, 'tool.sh', '#!/bin/sh\n');
     write(root, '目录/鱼.txt', '旧值\n');
     const baseSha = commitBase(root);
+    const supportsFileMode = command(root, ['config', '--bool', 'core.filemode']) === 'true';
     write(root, 'tracked.txt', 'after\n');
     unlinkSync(path.join(root, 'deleted.txt'));
     write(root, 'untracked.txt', 'new\n');
-    chmodSync(path.join(root, 'tool.sh'), 0o755);
+    if (supportsFileMode) chmodSync(path.join(root, 'tool.sh'), 0o755);
     write(root, '目录/鱼.txt', '新值\n');
     const ownedPaths = ['untracked.txt', 'tool.sh', 'unchanged.txt', 'deleted.txt', 'tracked.txt', '目录/鱼.txt'];
     const first = patchHash({ root, baseSha, ownedPaths });
@@ -535,7 +646,7 @@ test('patch manifest classifies explicit owned paths and is deterministic', () =
     assert.equal(first.patchHash, second.patchHash);
     assert.deepEqual(first.manifest.entries.map((entry) => [entry.path, entry.state, entry.mode]), [
       ['deleted.txt', 'deleted', '100644'],
-      ['tool.sh', 'tracked_changed', '100755'],
+      ['tool.sh', supportsFileMode ? 'tracked_changed' : 'unchanged', supportsFileMode ? '100755' : '100644'],
       ['tracked.txt', 'tracked_changed', '100644'],
       ['unchanged.txt', 'unchanged', '100644'],
       ['untracked.txt', 'untracked', '100644'],
@@ -954,8 +1065,47 @@ test('TaskBrief promotion rejects a source artifact made stale by a new HEAD', (
     write(root, 'later.txt', 'new HEAD\n');
     command(root, ['add', 'later.txt']);
     command(root, ['commit', '-qm', 'advance HEAD']);
-    assert.throws(() => promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review }), /stale base\/head artifact/);
+    assert.throws(() => promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review }), /stale base\/head artifact|head changes invalidate worktree evidence/);
   } finally { cleanup(root); }
+});
+
+test('WORKTREE TaskBrief and local result evidence expire when HEAD advances after promotion', () => {
+  for (const schema of ['tackle-task-brief/v1', 'tackle-task-brief/v2']) {
+    const root = temporaryRepo();
+    const handoff = mkdtempSync(path.join(os.tmpdir(), 'workflow-stale-worktree-'));
+    try {
+      taskBase(root);
+      const source = schema === 'tackle-task-brief/v1'
+        ? brief(root)
+        : prepareTaskBrief({ root, input: prepareInput(root, { reviewTier: 'standard' }) });
+      write(root, 'AGENTS.md', 'task-owned change\n');
+      const coding = receipt(root, { taskId: source.taskId, role: 'coding', riskProfile: source.riskProfile, relevantSections: source.relevantSections, reason: 'coding coverage' });
+      const review = receipt(root, { taskId: source.taskId, role: 'review', riskProfile: source.riskProfile, relevantSections: source.relevantSections, reason: 'review coverage' });
+      const promoted = promoteTaskBrief({ root, brief: source, codingReceipt: coding, ...(schema === 'tackle-task-brief/v1' ? { reviewReceipt: review } : {}) });
+      const checked = checkTaskBrief({ root, brief: promoted });
+      const result = {
+        schema: 'tackle-local-result/v2',
+        taskBriefSha256: checked.taskBriefSha256,
+        artifactIdentity: { kind: 'worktree', commitSha: null, patchHash: patchHash({ root, baseSha: checked.baseSha, ownedPaths: promoted.ownedPaths }).patchHash },
+        verdict: 'PASS',
+        findings: [],
+      };
+      const briefPath = path.join(handoff, 'brief.json');
+      const resultPath = path.join(handoff, 'result.json');
+      writeFileSync(briefPath, `${JSON.stringify(promoted)}\n`);
+      writeFileSync(resultPath, `${JSON.stringify(result)}\n`);
+      assert.equal(validationExecutionPlan({ root, brief: promoted }).artifact.artifactIdentity.kind, 'worktree');
+      assert.equal(checkVerdict({ root, verdict: result, brief: promoted }).taskBriefSha256, checked.taskBriefSha256);
+      write(root, 'later.txt', 'advance unrelated HEAD\n');
+      command(root, ['add', 'later.txt']);
+      command(root, ['commit', '-qm', 'advance unrelated HEAD']);
+      assert.throws(() => checkTaskBrief({ root, brief: promoted }), /head changes invalidate worktree evidence/);
+      assert.throws(() => validationExecutionPlan({ root, brief: promoted }), /head changes invalidate worktree evidence/);
+      assert.throws(() => runValidation({ root, brief: promoted }), /head changes invalidate worktree evidence/);
+      assert.throws(() => checkVerdict({ root, verdict: result, brief: promoted }), /head changes invalidate worktree evidence/);
+      assert.throws(() => runCli(['--check-local-result', '--result', resultPath, '--brief', briefPath], root), /head changes invalidate worktree evidence/);
+    } finally { cleanup(root); cleanup(handoff); }
+  }
 });
 
 test('TaskBrief promotion validates frozen baselines and trusted REUSE_FULL context', () => {
@@ -1340,7 +1490,7 @@ test('canonical specification paths always trigger the module consistency comman
       }),
     });
     const prepared = prepareTaskBrief({ root, input });
-    assert.equal(prepared.validationPlan.requiredCommands.includes('node scripts/spec-v3-modules.mjs --check'), true);
+    assert.equal(checkTaskBrief({ root, brief: prepared }).normalizedBrief.validationPlan.requiredCommands.includes('node scripts/spec-v3-modules.mjs --check'), true);
   } finally { cleanup(root); }
 });
 
@@ -1348,6 +1498,12 @@ test('machine policy preserves review boundaries without a prose mirror', () => 
   const root = process.cwd();
   const policy = JSON.parse(readFileSync(path.join(root, POLICY_RELATIVE), 'utf8'));
   assert.deepEqual(policy.reviewTier.values, ['fast', 'standard', 'strict']);
+  assert.deepEqual(policy.taskBrief.acceptedSchemas, ['tackle-task-brief/v1', 'tackle-task-brief/v2']);
+  assert.equal(policy.taskBrief.preferredSchema, 'tackle-task-brief/v2');
+  assert.equal(policy.taskBrief.fastLocalCompletion.requiresTaskBrief, false);
+  assert.equal(policy.taskBrief.fastLocalCompletion.requiresReviewer, false);
+  assert.deepEqual(policy.localVerdict.acceptedSchemas, ['tackle-local-verdict/v1', 'tackle-local-result/v2']);
+  assert.equal(policy.localVerdict.preferredSchema, 'tackle-local-result/v2');
   assert.deepEqual(policy.taskBrief.phaseReceiptsByReviewTier.verdict.standard.pull_request, ['coordinator', 'coding', 'review']);
   assert.deepEqual(policy.taskBrief.phaseReceiptsByReviewTier.verdict.standard.local, ['coordinator', 'coding']);
   assert.equal(Object.hasOwn(policy, 'pullRequest'), false);

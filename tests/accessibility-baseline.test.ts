@@ -38,6 +38,6 @@ test("无障碍基线提供跳至主内容、可见焦点和系统减少动态�
 
   const skipLinks = workbench.match(/<a className="skip-link" href="#main-content">跳至主内容<\/a>/g) ?? [];
   const mainTargets = workbench.match(/<main className="main" id="main-content" tabIndex=\{-1\}>/g) ?? [];
-  assert.equal(skipLinks.length, 2, "认证前后两个 Workbench 分支都必须提供跳至主内容链接");
-  assert.equal(mainTargets.length, 2, "认证前后两个 Workbench 分支都必须保留可程序聚焦的主内容目标");
+  assert.equal(skipLinks.length, 1, "Workbench 须提供跳至主内容链接");
+  assert.equal(mainTargets.length, 1, "Workbench 须保留可程序聚焦的主内容目标");
 });

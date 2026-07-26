@@ -62,6 +62,7 @@ import { ensureWorkflowFields } from "@/lib/workflow";
 import { validationIssueLevel } from "@/lib/validation-issues";
 import { createParameterId, migrateWorkspaceState } from "@/lib/migrations";
 import { mergeWorkspaceConflict } from "@/lib/workspace-conflict-merge";
+import { projectLocalRuleWorkbookSession } from "@/lib/local-rule-workbook-session";
 import {
   isProductItemPartEnabled,
   seriesItemPartId,
@@ -555,6 +556,12 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     actionAvailability: Object.fromEntries([]) as ApiStatePayload["user"]["actionAvailability"],
   });
   const [authStatus, setAuthStatus] = useState<"checking"|"authenticated"|"unauthenticated"|"error">("checking");
+  type WorkbenchSession =
+    | { mode: "anonymous" }
+    | { mode: "local_excel"; fileName: string; fileSize: number; contentHash: string; loadedAt: string }
+    | { mode: "feishu"; authenticated: false }
+    | { mode: "feishu"; authenticated: true };
+  const [session, setSession] = useState<WorkbenchSession>({ mode: "anonymous" });
   const [authMessage, setAuthMessage] = useState("");
   const [authErrorCode, setAuthErrorCode] = useState("");
   const [dirty, setDirty] = useState(false);
@@ -641,10 +648,24 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
 
   const mutate = (producer: (draft: WorkspaceState) => void, legacyRecalculationRequested = true) => {
     void legacyRecalculationRequested;
-    if (authStatus !== "authenticated") {
+    // 匿名或本地 Excel 模式：只改 React 内存 state，不保存到服务端
+    if (session.mode === "anonymous" || session.mode === "local_excel") {
+      pushUndo();
+      setState((current) => {
+        const draft = copyState(current);
+        producer(draft);
+        return preserveReadOnlyLegacyProductHistory(current, draft);
+      });
+      markWorkspaceDirty();
+      setSyncState("ready");
+      setSaveFeedback(null);
+      return;
+    }
+    if (session.mode === "feishu" && !session.authenticated) {
       notify("请先使用公司飞书账号登录；未登录状态不允许编辑。");
       return;
     }
+    // 飞书已认证的原有保存流程
     pushUndo();
     setState((current) => {
       const draft = copyState(current);
@@ -692,14 +713,28 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     fetch("/api/auth/session", { cache: "no-store" })
       .then(async (response) => {
         if (!active) return;
-        const session = (await response.json().catch(() => ({}))) as {
+        const sessionPayload = (await response.json().catch(() => ({}))) as {
           user?: ApiStatePayload["user"];
           error?: string;
           errorCode?: string;
         };
-        if (response.status === 401) { setAuthStatus("unauthenticated"); setAuthMessage(session.error || "请使用公司飞书账号登录。"); setAuthErrorCode(session.errorCode || "AUTH-SESSION-001"); return; }
-        if (!response.ok || !session.user) { setAuthStatus("error"); setAuthMessage(session.error || "登录服务暂不可用。"); setAuthErrorCode(session.errorCode || "AUTH-SERVICE-001"); return; }
-        setUser(session.user);
+        // 401 → 保持匿名本地模式，不请求 /api/state
+        if (response.status === 401) {
+          setAuthStatus("unauthenticated");
+          setAuthMessage(sessionPayload.error || "请使用公司飞书账号登录。");
+          setAuthErrorCode(sessionPayload.errorCode || "AUTH-SESSION-001");
+          setSession({ mode: "anonymous" });
+          return;
+        }
+        // 服务错误 → 仍允许匿名本地，只禁用飞书功能
+        if (!response.ok || !sessionPayload.user) {
+          setAuthStatus("error");
+          setAuthMessage(sessionPayload.error || "登录服务暂不可用。");
+          setAuthErrorCode(sessionPayload.errorCode || "AUTH-SERVICE-001");
+          setSession({ mode: "anonymous" });
+          return;
+        }
+        setUser(sessionPayload.user);
         const stateResponse = await fetch("/api/state", { cache: "no-store" });
         const payload = await stateResponse.json().catch(() => ({})) as ApiStatePayload & {
           error?: string;
@@ -710,11 +745,13 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           setAuthStatus("error");
           setAuthMessage(payload.error || fallback.error);
           setAuthErrorCode(payload.errorCode || fallback.errorCode);
+          setSession({ mode: "anonymous" });
           return;
         }
         replaceAuthoritativeWorkspace(payload.state, payload.revision);
         setUser(payload.user);
         setAuthStatus("authenticated"); setAuthMessage(""); setAuthErrorCode("");
+        setSession({ mode: "feishu", authenticated: true });
         void fetch("/api/revisions", { cache: "no-store" })
           .then(async (revisionResponse) => {
             if (!revisionResponse.ok || !active) return;
@@ -726,6 +763,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       .catch(() => {
         if (active) {
           setAuthStatus("error"); setAuthMessage("登录或共享服务暂时不可用，请检查网络后重试。"); setAuthErrorCode("AUTH-SERVICE-001");
+          setSession({ mode: "anonymous" });
         }
       });
     return () => {
@@ -733,7 +771,13 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     };
   }, [replaceAuthoritativeWorkspace]);
 
+  const isAnonymous = session.mode === "anonymous" || session.mode === "local_excel";
+
   const save = async (message = "保存配置修改") => {
+    if (isAnonymous) {
+      notify("本地会话不支持保存到服务器；连接飞书后可保存到团队工作区。");
+      return;
+    }
     const saveAvailability = user.actionAvailability.save_workspace;
     if (!saveAvailability.enabled) {
       notify(saveAvailability.disabledReasonText ?? "当前账号不能保存工作区。");
@@ -2566,9 +2610,23 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       state={state}
       revision={revision}
       dirty={dirty}
+      session={session}
       actionAvailabilities={user.actionAvailability}
       actorName={user.name}
       notify={notify}
+      onLocalExcelLoaded={(inspection, fileName, fileSize) => {
+        const contentHash = inspection.sourceRevision.sourceRevision;
+        setSession({
+          mode: "local_excel",
+          fileName,
+          fileSize,
+          contentHash,
+          loadedAt: inspection.observedAt,
+        });
+        const projected = projectLocalRuleWorkbookSession(inspection, state);
+        setState(projected);
+        baselineStateRef.current = copyState(projected);
+      }}
       onWorkspaceApplied={(nextState, nextRevision, message) => {
         replaceAuthoritativeWorkspace(nextState, nextRevision);
         notify(message);
@@ -2992,36 +3050,6 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     setRouteNonce((value) => value + 1);
   };
 
-  if (authStatus !== "authenticated") {
-    const workspaceUnavailable = authErrorCode.startsWith("WORKSPACE-");
-    return (
-      <div className="workbench">
-        <a className="skip-link" href="#main-content">跳至主内容</a>
-        <main className="main" id="main-content" tabIndex={-1}>
-          <div className="content">
-            <section className="card service-required-card">
-              <LockKeyhole size={30} />
-              <span className="eyebrow">FEISHU AUTHENTICATION</span>
-              <h2>{authStatus === "checking" ? "正在检查登录状态" : workspaceUnavailable ? "工作区暂时不可用" : "请使用公司飞书账号登录"}</h2>
-              <p>{authStatus === "checking" ? "正在读取安全会话，完成前不会启用编辑。" : authMessage}</p>
-              {authStatus !== "checking" && authErrorCode ? (
-                <code className="service-error-code">错误编号：{authErrorCode}</code>
-              ) : null}
-              {authStatus !== "checking" ? (
-                <div className="service-required-actions">
-                  {!workspaceUnavailable ? <a className="button button-primary button-md" href="/api/auth/feishu/start?return_to=%2F">使用飞书登录</a> : null}
-                  <button type="button" className="button button-default button-md" onClick={() => window.location.reload()}>重新检查</button>
-                  <button type="button" className="button button-default button-md" onClick={() => void copyServiceDiagnostic()}>复制诊断信息</button>
-                </div>
-              ) : null}
-              <small>{workspaceUnavailable ? "飞书登录已完成；请根据错误编号处理工作区服务或部署身份配置。" : "内网部署仍保留飞书登录，也支持受信任内网代理传递飞书身份。"}</small>
-            </section>
-          </div>
-        </main>
-      </div>
-    );
-  }
-
   return (
     <div className="workbench">
       <a className="skip-link" href="#main-content">跳至主内容</a>
@@ -3036,7 +3064,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           onClick={() => setPage("rulesource")}
         >
           <CloudDownload size={18} strokeWidth={1.8} />
-          <span><strong>飞书规则源</strong><small>显式拉取工作簿</small></span>
+          <span><strong>规则源</strong><small>本地 Excel 或飞书</small></span>
         </button>
         <nav>
           {navGroups.map((group) => (
@@ -3057,9 +3085,20 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         <div className="sidebar-foot">
           <div className="sync-indicator">
             <span className={cx("sync-dot", dirty ? "dirty" : "clean")} />
-            <div><strong>{dirty ? "有未保存修改" : "已同步"}</strong><span>团队版本 v{revision}</span></div>
+            <div>
+              <strong>{dirty ? "有未保存修改" : "已同步"}</strong>
+              <span>{isAnonymous ? "本地会话 · 未连接团队" : `团队版本 v${revision}`}</span>
+            </div>
           </div>
-          <div className="user-chip"><span>{user.name.slice(0, 1).toUpperCase()}</span><div><strong>{user.name}</strong><small>编辑者</small></div><button type="button" title="退出登录" onClick={() => void fetch("/api/auth/logout",{method:"POST"}).finally(()=>window.location.reload())}><LogOut size={15}/></button></div>
+          {isAnonymous ? (
+            <div className="user-chip">
+              <span>🛠</span>
+              <div><strong>本地会话</strong><small>未连接飞书</small></div>
+              <a href="/api/auth/feishu/start?return_to=%2F" title="连接飞书" className="button button-sm button-default">连接飞书</a>
+            </div>
+          ) : (
+            <div className="user-chip"><span>{user.name.slice(0, 1).toUpperCase()}</span><div><strong>{user.name}</strong><small>编辑者</small></div><button type="button" title="退出登录" onClick={() => void fetch("/api/auth/logout",{method:"POST"}).finally(()=>window.location.reload())}><LogOut size={15}/></button></div>
+          )}
         </div>
       </aside>
 

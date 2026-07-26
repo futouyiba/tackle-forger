@@ -4,13 +4,21 @@ import {
   AlertTriangle,
   ArrowRight,
   CheckCircle2,
+  CloudDownload,
+  FileSpreadsheet,
   LoaderCircle,
   RefreshCw,
   ShieldCheck,
+  Upload,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ActionAvailabilityMap } from "@/lib/interaction-contracts";
 import { randomUUID } from "@/lib/browser-utils";
+import {
+  inspectBrowserCanonicalWorkbook,
+  BrowserCanonicalWorkbookError,
+} from "@/lib/browser-canonical-workbook";
+import type { CanonicalRuleWorkbookParsedInspection } from "@/lib/canonical-workbook-core";
 import { issueClientActionCommand } from "@/lib/client-action-command";
 import { type FeishuApiErrorInfo } from "@/lib/feishu-api-error";
 import { CANONICAL_FEISHU_WORKBOOK } from "@/lib/feishu-workbook";
@@ -26,18 +34,29 @@ import {
 import { FeishuOrchestrationWorkbench } from "./FeishuOrchestrationWorkbench";
 import { FeishuSourceCombobox } from "./FeishuSourceCombobox";
 
+type WorkbenchSession =
+  | { mode: "anonymous" }
+  | { mode: "local_excel"; fileName: string; fileSize: number; contentHash: string; loadedAt: string }
+  | { mode: "feishu"; authenticated: false }
+  | { mode: "feishu"; authenticated: true };
+
+type SourceMode = "excel" | "feishu";
+
 interface RuleWorkbookWorkbenchProps {
   state: WorkspaceState;
   revision: number;
   dirty: boolean;
   actionAvailabilities: ActionAvailabilityMap;
   actorName: string;
+  session: WorkbenchSession;
   onWorkspaceApplied: (state: WorkspaceState, revision: number, message: string) => void;
   notify: (message: string) => void;
   /** 识别成功后缓存进 feishuShareLinkHistory（本地草稿，不立即保存到服务端）。 */
   onRecordShareLinkHistory: (shareUrl: string, label: string) => void;
   /** 从 feishuShareLinkHistory 移除单条（shareUrl）或清空全部（null）。 */
   onClearShareLinkHistory: (shareUrl: string | null) => void;
+  /** 本地 Excel 加载成功后回调，传入 inspection 与文件元数据。 */
+  onLocalExcelLoaded?: (inspection: CanonicalRuleWorkbookParsedInspection, fileName: string, fileSize: number) => void;
 }
 
 type ActionState = "" | "inspect" | "pull" | "draft" | "publish";
@@ -59,11 +78,44 @@ function dateTime(value?: string) {
 }
 
 export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
-  const [inspection, setInspection] = useState<CanonicalRuleWorkbookInspection | null>(null);
+  type Inspection = CanonicalRuleWorkbookInspection | CanonicalRuleWorkbookParsedInspection;
+  const [inspection, setInspection] = useState<Inspection | null>(null);
   const [action, setAction] = useState<ActionState>("");
   const [error, setError] = useState("");
   const [errorDetail, setErrorDetail] = useState<FeishuApiErrorInfo | undefined>(undefined);
   const [warningReason, setWarningReason] = useState("");
+  const sourceModeInit: SourceMode = props.session.mode === "local_excel" ? "excel" : "feishu";
+  const [sourceMode, setSourceMode] = useState<SourceMode>(sourceModeInit);
+  const [localFile, setLocalFile] = useState<{ name: string; size: number } | null>(null);
+  const [localParsing, setLocalParsing] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+
+  const handleLocalFile = async (file: File) => {
+    setLocalParsing(true);
+    setError("");
+    setErrorDetail(undefined);
+    try {
+      const buffer = await file.arrayBuffer();
+      const result = await inspectBrowserCanonicalWorkbook({
+        bytes: buffer,
+        fileName: file.name,
+        observedAt: new Date().toISOString(),
+      });
+      setInspection(result.inspection);
+      setLocalFile({ name: result.observation.fileName, size: result.observation.fileSize });
+      props.onLocalExcelLoaded?.(result.inspection, result.observation.fileName, result.observation.fileSize);
+    } catch (caught) {
+      if (caught instanceof BrowserCanonicalWorkbookError) {
+        setError(`本地工作簿解析失败：${caught.message}（${caught.code}）`);
+      } else {
+        setError(`读取文件失败：${caught instanceof Error ? caught.message : "未知错误"}`);
+      }
+      setInspection(null);
+      setLocalFile(null);
+    } finally {
+      setLocalParsing(false);
+    }
+  };
 
   const inspect = async () => {
     setAction("inspect");
@@ -89,6 +141,8 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
   };
 
   useEffect(() => {
+    if (sourceMode !== "feishu") return;
+    if (props.session.mode !== "feishu" || !props.session.authenticated) return;
     const controller = new AbortController();
     fetch("/api/feishu-workbook", { cache: "no-store", signal: controller.signal })
       .then(async (response) => {
@@ -108,17 +162,17 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
         setError(caught instanceof Error ? caught.message : "读取规则工作簿失败");
       });
     return () => controller.abort();
-  }, []);
+  }, [sourceMode, props.session]);
 
   const orchestrationModel = useMemo(
-    () => buildFeishuOrchestrationModel({
+    () => sourceMode === "feishu" ? buildFeishuOrchestrationModel({
       state: props.state,
       workspaceRevision: props.revision,
-      inspection,
+      inspection: inspection as CanonicalRuleWorkbookInspection | null,
       action,
       error,
-    }),
-    [props.state, props.revision, inspection, action, error],
+    }) : null,
+    [props.state, props.revision, inspection, action, error, sourceMode],
   );
 
   const savedSource = useMemo(() => {
@@ -305,33 +359,124 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
       setAction("");
     }
   };
+  const isLocalMode = sourceMode === "excel";
+  const feishuNeedsAuth = sourceMode === "feishu" && (props.session.mode !== "feishu" || !(props.session as { mode: "feishu"; authenticated: boolean }).authenticated);
+
   return (
-    <section className="rule-workbook-stack" aria-label="飞书唯一规则工作簿">
+    <section className="rule-workbook-stack" aria-label={isLocalMode ? "规则工作簿（本地 Excel）" : "规则工作簿"}>
+      {/* ── 来源选择条 ── */}
+      <div className="source-mode-bar">
+        <button
+          type="button"
+          className={sourceMode === "excel" ? "active" : ""}
+          onClick={() => { setSourceMode("excel"); setInspection(null); setError(""); }}
+          aria-pressed={sourceMode === "excel"}
+        >
+          <FileSpreadsheet size={16} /> 本地 Excel
+        </button>
+        <button
+          type="button"
+          className={sourceMode === "feishu" ? "active" : ""}
+          onClick={() => setSourceMode("feishu")}
+          aria-pressed={sourceMode === "feishu"}
+        >
+          <CloudDownload size={16} /> 飞书工作簿
+        </button>
+      </div>
+
+      {/* ── 本地 Excel 文件选择 ── */}
+      {isLocalMode ? (
+        <div className="card">
+          <div className="panel-title">
+            <div>
+              <span className="eyebrow">本地规则工作簿 · 纯浏览器</span>
+              <h3>选择 Excel 文件</h3>
+              <p>选择与 WQ8w registry 对齐的本地工作簿（如 钓具工具-权威.xlsx）。纯浏览器解析，不上传、不保存、刷新即失。</p>
+            </div>
+          </div>
+          <input
+            ref={fileInput}
+            type="file"
+            accept=".xlsx,.xls"
+            style={{ display: "none" }}
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void handleLocalFile(file);
+              // reset so same file can be re-selected
+              if (fileInput.current) fileInput.current.value = "";
+            }}
+          />
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <button
+              type="button"
+              className="button button-primary"
+              onClick={() => fileInput.current?.click()}
+              disabled={localParsing}
+            >
+              {localParsing ? <LoaderCircle className="spin" size={14} /> : <Upload size={14} />}
+              {" "}{localParsing ? "正在解析…" : localFile ? "重新选择文件" : "选择本地 Excel"}
+            </button>
+            {localFile ? (
+              <span style={{ fontSize: "0.875rem", color: "var(--color-muted)" }}>
+                已载入：{localFile.name}（{(localFile.size / 1024).toFixed(1)} KB）
+              </span>
+            ) : null}
+            {localFile ? (
+              <button type="button" className="button button-default button-sm" onClick={() => {
+                setInspection(null);
+                setLocalFile(null);
+                setError("");
+                setAction("");
+              }}>
+                清除
+              </button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
+      {/* ── 飞书未认证时显示 OAuth CTA ── */}
+      {feishuNeedsAuth ? (
+        <div className="card">
+          <AlertTriangle size={18} />
+          <div>
+            <strong>需要飞书登录</strong>
+            <p>需要公司飞书账号才能读取飞书工作簿。匿名模式下仍可使用本地 Excel。</p>
+          </div>
+          <a className="button button-primary" href="/api/auth/feishu/start?return_to=%2F%3Fpage%3Drulesource">使用飞书登录</a>
+        </div>
+      ) : null}
+
       <div className="card rule-workbook-hero">
         <div>
-          <span className="eyebrow">唯一通用规则源 · 整本工作簿</span>
+          <span className="eyebrow">{isLocalMode ? "本地规则工作簿 · 临时会话" : "唯一通用规则源 · 整本工作簿"}</span>
           <h2>钓具设计工作簿</h2>
-          <p>链接中的工作表只是打开位置。读取范围始终覆盖整本工作簿，工作表按稳定 ID 识别。</p>
-          <a href={CANONICAL_FEISHU_WORKBOOK.shareUrl} target="_blank" rel="noreferrer">
-            在飞书中查看 <ArrowRight size={14} />
-          </a>
+          <p>{isLocalMode ? "本地 Excel 文件解析结果，按稳定 ID 识别工作表。刷新后全部丢失。" : "链接中的工作表只是打开位置。读取范围始终覆盖整本工作簿，工作表按稳定 ID 识别。"}</p>
+          {!isLocalMode ? (
+            <a href={CANONICAL_FEISHU_WORKBOOK.shareUrl} target="_blank" rel="noreferrer">
+              在飞书中查看 <ArrowRight size={14} />
+            </a>
+          ) : null}
         </div>
         <div className="rule-workbook-live">
           <span>当前观测 revision</span>
           <strong>{inspection?.sourceRevision.sourceRevision ?? "—"}</strong>
-          <small>{action === "inspect" ? "正在读取…" : dateTime(inspection?.observedAt)}</small>
-          <button className="button button-default button-sm" type="button" onClick={() => void inspect()} disabled={Boolean(action) || !inspectAvailability.enabled} title={inspectAvailability.disabledReasonText}>
-            {action === "inspect" ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />} 重新检查
-          </button>
+          <small>{action === "inspect" ? "正在读取…" : localParsing ? "正在解析…" : dateTime(inspection?.observedAt)}</small>
+          {!isLocalMode ? (
+            <button className="button button-default button-sm" type="button" onClick={() => void inspect()} disabled={Boolean(action) || !inspectAvailability.enabled} title={inspectAvailability.disabledReasonText}>
+              {action === "inspect" ? <LoaderCircle className="spin" size={14} /> : <RefreshCw size={14} />} 重新检查
+            </button>
+          ) : null}
         </div>
       </div>
 
-      <div className="card rule-source-combobox-card">
-        <div className="panel-title">
-          <div>
-            <span className="eyebrow">设置 · 规则源地址</span>
-            <h3>飞书表来源</h3>
-            <p>
+      {!isLocalMode ? (
+        <div className="card rule-source-combobox-card">
+          <div className="panel-title">
+            <div>
+              <span className="eyebrow">设置 · 规则源地址</span>
+              <h3>飞书表来源</h3>
+              <p>
               粘贴飞书分享链接（/wiki/ 或 /sheets/）或从用过的地址中选择。规则源工作簿已切至 WQ8w（50张分表）。
             </p>
           </div>
@@ -345,6 +490,7 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
           notify={props.notify}
         />
       </div>
+      ) : null}
 
       {error ? (
         <div className="card rule-workbook-error">
@@ -372,17 +518,27 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
         </div>
       ) : null}
 
-      <FeishuOrchestrationWorkbench
-        model={orchestrationModel}
-        actionAvailabilities={props.actionAvailabilities}
-        actionState={action}
-        dirty={props.dirty}
-        publishWarningBlocked={Boolean(sourceWarnings.length && ruleSetDraft && !warningReason.trim())}
-        onInspect={() => void inspect()}
-        onPull={() => void pull()}
-        onCreateDraft={() => void createDraft()}
-        onPublish={() => void publishRuleSet()}
-      />
+      {orchestrationModel ? (
+        <FeishuOrchestrationWorkbench
+          model={orchestrationModel}
+          actionAvailabilities={props.actionAvailabilities}
+          actionState={action}
+          dirty={props.dirty}
+          publishWarningBlocked={Boolean(sourceWarnings.length && ruleSetDraft && !warningReason.trim())}
+          onInspect={() => void inspect()}
+          onPull={() => void pull()}
+          onCreateDraft={() => void createDraft()}
+          onPublish={() => void publishRuleSet()}
+        />
+      ) : (
+        <div className="card local-session-banner">
+          <AlertTriangle size={18} />
+          <div>
+            <strong>本地临时会话</strong>
+            <p>当前为本地 Excel 模式，刷新后丢失，不能正式发布。pull / RuleSet draft / publish / identity writeback 不可用。</p>
+          </div>
+        </div>
+      )}
 
       {sourceWarnings.length && ruleSetDraft ? (
         <div style={{ marginTop: 8 }}>
@@ -454,10 +610,10 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
         </div>
       </div>
 
-      {inspection ? (
+      {sourceMode === "feishu" && inspection ? (
         <>
           <IdentityMigrationPanel
-            inspection={inspection}
+            inspection={inspection as CanonicalRuleWorkbookInspection}
             baseRevision={props.revision}
             actorName={props.actorName}
             canWrite={identityWriteAvailability.enabled}

@@ -197,6 +197,64 @@ button:disabled {
   border-color: #23b5ab;
   color: #fff;
 }
+
+/* ── PR2 本地匿名会话 ── */
+
+.source-mode-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.source-mode-bar button {
+  align-items: center;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: var(--color-fg);
+  cursor: pointer;
+  display: flex;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  gap: 6px;
+  padding: 6px 14px;
+  transition: background 0.15s, border-color 0.15s;
+}
+.source-mode-bar button:hover {
+  background: var(--color-hover);
+}
+.source-mode-bar button.active {
+  background: rgba(35, 181, 171, 0.15);
+  border-color: #23b5ab;
+  color: #23b5ab;
+}
+
+.local-session-banner {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  color: var(--color-warning, #d97706);
+}
+.local-session-banner strong {
+  display: block;
+  margin-bottom: 4px;
+}
+.local-session-banner p {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--color-muted);
+}
+
+/* user-chip 匿名变体 */
+.user-chip a.button {
+  font-size: 0.75rem;
+  padding: 3px 8px;
+}
+.user-chip a.button:hover {
+  background: rgba(35, 181, 171, 0.2);
+}
+
+/* ── 原有样式继续 ── */
+
 .nav-group {
   margin-bottom: 16px;
 }

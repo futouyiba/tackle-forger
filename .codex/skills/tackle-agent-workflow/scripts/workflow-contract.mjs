@@ -11,6 +11,8 @@ const INDEX_RELATIVE = '.codex/skills/tackle-agent-workflow/references/v3-naviga
 const SPEC_RELATIVE = 'docs/tackle-forger-development-spec-v3.md';
 const PATCH_SCHEMA = 'tackle-local-patch/v1';
 const SPEC_READ_SCHEMA = 'tackle-spec-read/v1';
+const SPEC_READ_REUSE_SCHEMA = 'tackle-spec-read/v2';
+const SPEC_FULL_READ_SESSION_SCHEMA = 'tackle-spec-full-read-session/v1';
 const TASK_BRIEF_SCHEMA = 'tackle-task-brief/v1';
 const OWNED_BASELINE_SCHEMA = 'tackle-owned-baseline/v1';
 const VERDICT_SCHEMA = 'tackle-local-verdict/v1';
@@ -92,6 +94,7 @@ function requireCurrentSpecHash(root, value) {
   if (value !== expected) fail('specSha256 does not match the current canonical v3 specification');
   return expected;
 }
+function currentReadmeHash(root) { return sha256(readFileSync(path.join(root, 'docs/README.md'))); }
 function readJsonFile(file, label) {
   try { return JSON.parse(readFileSync(file, 'utf8')); }
   catch { fail(`${label} must be readable JSON: ${file}`); }
@@ -225,7 +228,40 @@ export function specReadPlan({ role, riskProfile, relevantSections = [] }) {
   return { schema: SPEC_READ_SCHEMA, role, riskProfile, profile, requiredSections, relevantSections: relevant };
 }
 export function receiptHash(receipt) { return sha256(Buffer.from(canonicalJson(receipt), 'utf8')); }
-export function checkReadReceipt({ root = repositoryRoot(), receipt }) {
+export function fullReadSessionHash(session) { return sha256(Buffer.from(canonicalJson(session), 'utf8')); }
+function requireRfc3339Utc(value, field) {
+  requireString(value, field);
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})T([01]\d|2[0-3]):([0-5]\d):([0-5]\d)Z$/);
+  if (!match) fail(`${field} must be an RFC 3339 UTC timestamp at whole-second precision (no leap second or 24:00)`);
+  const [, yearText, monthText, dayText] = match;
+  const year = Number(yearText); const month = Number(monthText); const day = Number(dayText);
+  const daysInMonth = [31, (year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (month < 1 || month > 12 || day < 1 || day > daysInMonth[month - 1]) fail(`${field} must name a real UTC calendar instant`);
+}
+function requireCurrentReuseContext(value) {
+  requireExactKeys(value, ['currentAgentIdentity', 'currentContextSessionId', 'currentContextState'], 'currentReuseContext');
+  requireString(value.currentAgentIdentity, 'currentReuseContext.currentAgentIdentity');
+  requireString(value.currentContextSessionId, 'currentReuseContext.currentContextSessionId');
+  if (value.currentContextState !== 'continuous') fail('currentReuseContext.currentContextState must be continuous; unknown or compacted context cannot be reused');
+  return value;
+}
+export function checkFullReadSession({ root = repositoryRoot(), session }) {
+  requireExactKeys(session, ['schema', 'agentIdentity', 'contextSessionId', 'contextState', 'specSha256', 'readmeSha256', 'openRegistrySha256', 'fullReadReceipt', 'createdAt'], 'fullReadSession');
+  if (session.schema !== SPEC_FULL_READ_SESSION_SCHEMA) fail(`fullReadSession.schema must be ${SPEC_FULL_READ_SESSION_SCHEMA}`);
+  requireString(session.agentIdentity, 'fullReadSession.agentIdentity');
+  requireString(session.contextSessionId, 'fullReadSession.contextSessionId');
+  if (session.contextState !== 'continuous') fail('fullReadSession.contextState must be continuous; unknown or compacted context cannot be reused');
+  requireCurrentSpecHash(root, session.specSha256);
+  if (session.readmeSha256 !== currentReadmeHash(root)) fail('fullReadSession.readmeSha256 does not match docs/README.md');
+  if (session.openRegistrySha256 !== openRegistryHash(root)) fail('fullReadSession.openRegistrySha256 does not match the current OPEN registry');
+  requireRfc3339Utc(session.createdAt, 'fullReadSession.createdAt');
+  if (!isPlainObject(session.fullReadReceipt) || session.fullReadReceipt.schema !== SPEC_READ_SCHEMA) fail('fullReadSession.fullReadReceipt must be a v1 full-read receipt');
+  const checked = checkReadReceipt({ root, receipt: session.fullReadReceipt });
+  if (session.fullReadReceipt.profile !== 'FULL') fail('fullReadSession.fullReadReceipt must record FULL reading');
+  return { sessionHash: fullReadSessionHash(session), receiptHash: checked.receiptHash };
+}
+export function checkReadReceipt({ root = repositoryRoot(), receipt, currentReuseContext }) {
+  if (receipt?.schema === SPEC_READ_REUSE_SCHEMA) return checkReusedReadReceipt({ root, receipt, currentReuseContext });
   requireExactKeys(receipt, ['schema', 'taskId', 'role', 'specSha256', 'profile', 'riskProfile', 'relevantSections', 'requiredSections', 'readSections', 'reason'], 'receipt');
   if (receipt.schema !== SPEC_READ_SCHEMA) fail(`receipt.schema must be ${SPEC_READ_SCHEMA}`);
   requireString(receipt.taskId, 'receipt.taskId');
@@ -242,6 +278,30 @@ export function checkReadReceipt({ root = repositoryRoot(), receipt }) {
   if (!sameSet(requiredSections, plan.requiredSections)) fail('receipt.requiredSections does not match the required read plan');
   if (!requiredSections.every((section) => readSections.includes(section))) fail('receipt.readSections is missing a required section');
   return { receiptHash: receiptHash(receipt), requiredSections: plan.requiredSections };
+}
+function checkReusedReadReceipt({ root, receipt, currentReuseContext }) {
+  requireExactKeys(receipt, ['schema', 'taskId', 'role', 'specSha256', 'profile', 'riskProfile', 'relevantSections', 'requiredSections', 'readSections', 'reason', 'reuseEvidence'], 'receipt');
+  if (receipt.schema !== SPEC_READ_REUSE_SCHEMA) fail(`receipt.schema must be ${SPEC_READ_REUSE_SCHEMA}`);
+  requireString(receipt.taskId, 'receipt.taskId');
+  const role = requireString(receipt.role, 'receipt.role');
+  const riskProfile = requireString(receipt.riskProfile, 'receipt.riskProfile');
+  if (riskProfile !== 'workflow_docs_metadata') fail('reused full-read evidence is only valid for workflow_docs_metadata');
+  if (receipt.profile !== 'REUSE_FULL') fail('reused full-read receipt.profile must be REUSE_FULL');
+  const relevantSections = requireStringArray(receipt.relevantSections, 'receipt.relevantSections');
+  const requiredSections = requireStringArray(receipt.requiredSections, 'receipt.requiredSections');
+  const readSections = requireStringArray(receipt.readSections, 'receipt.readSections');
+  requireString(receipt.reason, 'receipt.reason');
+  requireCurrentSpecHash(root, receipt.specSha256);
+  const scopedRequiredSections = [...new Set([...SCOPED_BASE_SECTIONS, ...relevantSections])];
+  if (!sameSet(requiredSections, scopedRequiredSections) || !sameSet(readSections, scopedRequiredSections)) fail('reused full-read receipt must explicitly read every current scoped task section');
+  requireExactKeys(receipt.reuseEvidence, ['session', 'sessionSha256', 'agentIdentity', 'contextSessionId'], 'receipt.reuseEvidence');
+  const sessionResult = checkFullReadSession({ root, session: receipt.reuseEvidence.session });
+  const current = requireCurrentReuseContext(currentReuseContext);
+  if (receipt.reuseEvidence.sessionSha256 !== sessionResult.sessionHash) fail('reused full-read evidence sessionSha256 does not match its session');
+  if (receipt.reuseEvidence.agentIdentity !== receipt.reuseEvidence.session.agentIdentity || receipt.reuseEvidence.contextSessionId !== receipt.reuseEvidence.session.contextSessionId) fail('reused full-read evidence must preserve the exact same agent and continuous context session identity');
+  if (current.currentAgentIdentity !== receipt.reuseEvidence.session.agentIdentity || current.currentContextSessionId !== receipt.reuseEvidence.session.contextSessionId) fail('reused full-read evidence does not match the caller-provided current agent/context baseline');
+  if (receipt.reuseEvidence.session.fullReadReceipt.role !== role) fail('reused full-read evidence cannot cross roles');
+  return { receiptHash: receiptHash(receipt), requiredSections: scopedRequiredSections, sessionHash: sessionResult.sessionHash };
 }
 export function taskBriefHash(brief) { return sha256(Buffer.from(canonicalJson(brief), 'utf8')); }
 function canonicalCommit(root, value, field) {
@@ -360,8 +420,8 @@ function commandSpec(briefResult, brief, command) {
   if (command === dynamicDiffCommand(briefResult.baseSha, brief.ownedPaths)) return { command, executable: 'git', args: ['diff', '--check', briefResult.baseSha, '--', ...brief.ownedPaths] };
   fail(`Validation command is not in the closed execution catalog: ${command}`);
 }
-export function validationExecutionPlan({ root = repositoryRoot(), brief }) {
-  const briefResult = checkTaskBrief({ root, brief });
+export function validationExecutionPlan({ root = repositoryRoot(), brief, currentReuseContext }) {
+  const briefResult = checkTaskBrief({ root, brief, currentReuseContext });
   if (briefResult.phase !== 'verdict') fail('Validation execution requires a verdict-phase TaskBrief');
   const commands = requireNonEmptyStringArray(brief.validationPlan.requiredCommands, 'TaskBrief.validationPlan.requiredCommands');
   const plan = commands.map((command) => commandSpec(briefResult, brief, command));
@@ -388,8 +448,8 @@ function failureDetail(result) {
   const detail = output.slice(0, 8192) || result.error?.message || `process exited ${result.status ?? 'without an exit status'}`;
   return detail;
 }
-export function runValidation({ root = repositoryRoot(), brief }) {
-  const plan = validationExecutionPlan({ root, brief });
+export function runValidation({ root = repositoryRoot(), brief, currentReuseContext }) {
+  const plan = validationExecutionPlan({ root, brief, currentReuseContext });
   const results = plan.commands.map(({ command, executable, args }) => {
     const started = new Date();
     const result = spawnSync(executable, args, { cwd: root, encoding: null, timeout: 15 * 60 * 1000, maxBuffer: 16 * 1024 * 1024 });
@@ -487,7 +547,7 @@ function checkOwnedBaselineManifest({ root, manifest, baseSha, ownedPaths, preex
   if (!sameSet(derivedPreexisting, preexistingOwnedPaths)) fail('preTaskOwnedBaselineManifest does not match preexistingOwnedPaths');
   return ownedBaselineHash(manifest);
 }
-export function checkTaskBrief({ root = repositoryRoot(), brief }) {
+export function checkTaskBrief({ root = repositoryRoot(), brief, currentReuseContext }) {
   if (!isPlainObject(brief)) fail('TaskBrief must be an object');
   if (brief.schema !== TASK_BRIEF_SCHEMA) fail(`TaskBrief.schema must be ${TASK_BRIEF_SCHEMA}`);
   const taskId = requireString(brief.taskId, 'TaskBrief.taskId');
@@ -532,11 +592,11 @@ export function checkTaskBrief({ root = repositoryRoot(), brief }) {
   const disposition = requireString(brief.dirtyWorktreeDisposition, 'TaskBrief.dirtyWorktreeDisposition');
   if (!Array.isArray(brief.specReadReceipts) || brief.specReadReceipts.length === 0) fail('TaskBrief.specReadReceipts must be a non-empty array');
   const receiptHashes = brief.specReadReceipts.map((receipt) => {
-    const checked = checkReadReceipt({ root, receipt });
+    const checked = checkReadReceipt({ root, receipt, currentReuseContext });
     if (receipt.taskId !== taskId) fail('TaskBrief receipt taskId must match TaskBrief.taskId');
     if (receipt.specSha256 !== brief.specSha256) fail('TaskBrief receipt specSha256 must match TaskBrief.specSha256');
     if (receipt.riskProfile !== riskProfile || !sameSet(receipt.relevantSections, relevantSections)) fail('TaskBrief receipts must use TaskBrief riskProfile and relevantSections');
-    if (receipt.profile === 'SCOPED' && (!classification.scopedEligible || riskProfile !== 'workflow_docs_metadata' || brief.scopeHasRuntimeSemantics)) fail('TaskBrief owned paths/risk/scope do not permit SCOPED receipts');
+    if (['SCOPED', 'REUSE_FULL'].includes(receipt.profile) && (!classification.scopedEligible || riskProfile !== 'workflow_docs_metadata' || brief.scopeHasRuntimeSemantics)) fail('TaskBrief owned paths/risk/scope do not permit SCOPED or reused receipts');
     if ((riskProfile !== 'workflow_docs_metadata' || brief.scopeHasRuntimeSemantics) && receipt.profile !== 'FULL') fail('TaskBrief risk/scope requires FULL receipts');
     return checked.receiptHash;
   });
@@ -558,10 +618,10 @@ export function checkTaskBrief({ root = repositoryRoot(), brief }) {
   }
   return { taskBriefSha256: taskBriefHash(brief), specReceiptHashes: [...receiptHashes].sort(compareUtf8), dirtyWorktreeDisposition: disposition, baseSha, reviewedHead, phase };
 }
-export function checkVerdict({ root = repositoryRoot(), verdict, brief }) {
+export function checkVerdict({ root = repositoryRoot(), verdict, brief, currentReuseContext }) {
   requireExactKeys(verdict, ['schema', 'taskId', 'taskBriefSha256', 'specReceiptHashes', 'dirtyWorktreeDisposition', 'specSha256', 'baseSha', 'reviewedHead', 'ownedPaths', 'artifactIdentity', 'verdict', 'findings'], 'verdict');
   if (verdict.schema !== VERDICT_SCHEMA) fail(`verdict.schema must be ${VERDICT_SCHEMA}`);
-  const briefResult = checkTaskBrief({ root, brief });
+  const briefResult = checkTaskBrief({ root, brief, currentReuseContext });
   if (briefResult.phase !== 'verdict') fail('Verdict requires a verdict-phase TaskBrief');
   if (requireString(verdict.taskId, 'verdict.taskId') !== brief.taskId) fail('verdict.taskId must match TaskBrief.taskId');
   if (verdict.taskBriefSha256 !== briefResult.taskBriefSha256) fail('verdict.taskBriefSha256 must match TaskBrief');
@@ -664,7 +724,7 @@ export function checkPolicy(root = repositoryRoot()) {
   return true;
 }
 function usage() {
-  return `Usage:\n  node ${SCRIPT_RELATIVE} --generate-index\n  node ${SCRIPT_RELATIVE} --check-index\n  node ${SCRIPT_RELATIVE} --check-policy\n  node ${SCRIPT_RELATIVE} --spec-read-plan --role <coordinator|coding|review> --risk <risk-profile> [--relevant <v3-section> ...]\n  node ${SCRIPT_RELATIVE} --check-read-receipt --receipt <receipt.json>\n  node ${SCRIPT_RELATIVE} --check-task-brief --brief <task-brief.json>\n  node ${SCRIPT_RELATIVE} --owned-baseline --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --run-validation --brief <verdict-task-brief.json>\n  node ${SCRIPT_RELATIVE} --check-verdict --verdict <verdict.json> --brief <task-brief.json>\n  node ${SCRIPT_RELATIVE} --patch-hash --base <sha> --owned <repo-relative-path> [--owned <path> ...]`;
+  return `Usage:\n  node ${SCRIPT_RELATIVE} --generate-index\n  node ${SCRIPT_RELATIVE} --check-index\n  node ${SCRIPT_RELATIVE} --check-policy\n  node ${SCRIPT_RELATIVE} --spec-read-plan --role <coordinator|coding|review> --risk <risk-profile> [--relevant <v3-section> ...]\n  node ${SCRIPT_RELATIVE} --check-read-receipt --receipt <receipt.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --check-full-read-session --session <session.json>\n  node ${SCRIPT_RELATIVE} --check-task-brief --brief <task-brief.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --owned-baseline --base <sha> --owned <repo-relative-path> [--owned <path> ...]\n  node ${SCRIPT_RELATIVE} --run-validation --brief <verdict-task-brief.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --check-verdict --verdict <verdict.json> --brief <task-brief.json> [--current-agent-identity <id> --current-context-session-id <id> --current-context-state continuous]\n  node ${SCRIPT_RELATIVE} --patch-hash --base <sha> --owned <repo-relative-path> [--owned <path> ...]`;
 }
 function parseActionOptions(argv, action, allowed, required = []) {
   if (argv[0] !== action) fail(usage());
@@ -680,7 +740,7 @@ function parseActionOptions(argv, action, allowed, required = []) {
 }
 export function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
   const action = argv[0];
-  if (!['--generate-index', '--check-index', '--check-policy', '--spec-read-plan', '--check-read-receipt', '--check-task-brief', '--owned-baseline', '--run-validation', '--check-verdict', '--patch-hash'].includes(action)) fail(usage());
+  if (!['--generate-index', '--check-index', '--check-policy', '--spec-read-plan', '--check-read-receipt', '--check-full-read-session', '--check-task-brief', '--owned-baseline', '--run-validation', '--check-verdict', '--patch-hash'].includes(action)) fail(usage());
   const root = repositoryRoot(cwd);
   if (action === '--generate-index' || action === '--check-index' || action === '--check-policy') {
     if (argv.length !== 1) fail(usage());
@@ -693,20 +753,36 @@ export function runCli(argv = process.argv.slice(2), cwd = process.cwd()) {
     return JSON.stringify(specReadPlan({ role: values['--role'][0], riskProfile: values['--risk'][0], relevantSections: values['--relevant'] }), null, 2);
   }
   if (action === '--check-read-receipt') {
-    const values = parseActionOptions(argv, action, { '--receipt': false }, ['--receipt']);
-    return JSON.stringify(checkReadReceipt({ root, receipt: readJsonFile(path.resolve(cwd, values['--receipt'][0]), 'receipt') }), null, 2);
+    const values = parseActionOptions(argv, action, { '--receipt': false, '--current-agent-identity': false, '--current-context-session-id': false, '--current-context-state': false }, ['--receipt']);
+    const currentReuseContext = values['--current-agent-identity'].length === 0 && values['--current-context-session-id'].length === 0 && values['--current-context-state'].length === 0 ? undefined : {
+      currentAgentIdentity: values['--current-agent-identity'][0], currentContextSessionId: values['--current-context-session-id'][0], currentContextState: values['--current-context-state'][0],
+    };
+    return JSON.stringify(checkReadReceipt({ root, receipt: readJsonFile(path.resolve(cwd, values['--receipt'][0]), 'receipt'), currentReuseContext }), null, 2);
+  }
+  if (action === '--check-full-read-session') {
+    const values = parseActionOptions(argv, action, { '--session': false }, ['--session']);
+    return JSON.stringify(checkFullReadSession({ root, session: readJsonFile(path.resolve(cwd, values['--session'][0]), 'full read session') }), null, 2);
   }
   if (action === '--check-task-brief') {
-    const values = parseActionOptions(argv, action, { '--brief': false }, ['--brief']);
-    return JSON.stringify(checkTaskBrief({ root, brief: readJsonFile(path.resolve(cwd, values['--brief'][0]), 'TaskBrief') }), null, 2);
+    const values = parseActionOptions(argv, action, { '--brief': false, '--current-agent-identity': false, '--current-context-session-id': false, '--current-context-state': false }, ['--brief']);
+    const currentReuseContext = values['--current-agent-identity'].length === 0 && values['--current-context-session-id'].length === 0 && values['--current-context-state'].length === 0 ? undefined : {
+      currentAgentIdentity: values['--current-agent-identity'][0], currentContextSessionId: values['--current-context-session-id'][0], currentContextState: values['--current-context-state'][0],
+    };
+    return JSON.stringify(checkTaskBrief({ root, brief: readJsonFile(path.resolve(cwd, values['--brief'][0]), 'TaskBrief'), currentReuseContext }), null, 2);
   }
   if (action === '--run-validation') {
-    const values = parseActionOptions(argv, action, { '--brief': false }, ['--brief']);
-    return JSON.stringify(runValidation({ root, brief: readJsonFile(path.resolve(cwd, values['--brief'][0]), 'verdict TaskBrief') }), null, 2);
+    const values = parseActionOptions(argv, action, { '--brief': false, '--current-agent-identity': false, '--current-context-session-id': false, '--current-context-state': false }, ['--brief']);
+    const currentReuseContext = values['--current-agent-identity'].length === 0 && values['--current-context-session-id'].length === 0 && values['--current-context-state'].length === 0 ? undefined : {
+      currentAgentIdentity: values['--current-agent-identity'][0], currentContextSessionId: values['--current-context-session-id'][0], currentContextState: values['--current-context-state'][0],
+    };
+    return JSON.stringify(runValidation({ root, brief: readJsonFile(path.resolve(cwd, values['--brief'][0]), 'verdict TaskBrief'), currentReuseContext }), null, 2);
   }
   if (action === '--check-verdict') {
-    const values = parseActionOptions(argv, action, { '--verdict': false, '--brief': false }, ['--verdict', '--brief']);
-    return JSON.stringify(checkVerdict({ root, verdict: readJsonFile(path.resolve(cwd, values['--verdict'][0]), 'verdict'), brief: readJsonFile(path.resolve(cwd, values['--brief'][0]), 'TaskBrief') }), null, 2);
+    const values = parseActionOptions(argv, action, { '--verdict': false, '--brief': false, '--current-agent-identity': false, '--current-context-session-id': false, '--current-context-state': false }, ['--verdict', '--brief']);
+    const currentReuseContext = values['--current-agent-identity'].length === 0 && values['--current-context-session-id'].length === 0 && values['--current-context-state'].length === 0 ? undefined : {
+      currentAgentIdentity: values['--current-agent-identity'][0], currentContextSessionId: values['--current-context-session-id'][0], currentContextState: values['--current-context-state'][0],
+    };
+    return JSON.stringify(checkVerdict({ root, verdict: readJsonFile(path.resolve(cwd, values['--verdict'][0]), 'verdict'), brief: readJsonFile(path.resolve(cwd, values['--brief'][0]), 'TaskBrief'), currentReuseContext }), null, 2);
   }
   const values = parseActionOptions(argv, action, { '--base': false, '--owned': true }, ['--base']);
   if (values['--owned'].length === 0) fail(usage());

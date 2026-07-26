@@ -684,7 +684,7 @@ test("preflight 对安全 env、源契约和 0600 权限给出可重复证据", 
     "importCanonicalRuleSource(); const canonicalRuleSource = true;\n",
   );
   await writeFile(path.join(root, "deploy/tackle-forger.service"), [
-    "ExecStart=npm run start -- --hostname 127.0.0.1 --port 13000",
+    "ExecStart=npm run start -- --hostname 0.0.0.0 --port 13000",
     "ReadWritePaths=/opt/tackle-forger/data",
   ].join("\n"));
   await writeFile(path.join(root, "deploy/nginx-tackle-forger.conf.example"), [
@@ -726,11 +726,55 @@ test("preflight 对安全 env、源契约和 0600 权限给出可重复证据", 
     "INFO",
   );
   assert.equal(
+    evidence.checks.find((item) => item.id === "systemd_isolation")?.status,
+    "PASS",
+  );
+  assert.equal(
     evidence.checks.find((item) => item.id === "production_environment_file")?.evidence
       ?.configuredKeys.includes("FEISHU_APP_SECRET"),
     true,
   );
   assert.equal(JSON.stringify(evidence).includes("s".repeat(32)), false);
+
+  await writeFile(path.join(root, "deploy/tackle-forger.service"), [
+    "ExecStart=npm run start -- --hostname 127.0.0.1 --port 13000",
+    "ReadWritePaths=/opt/tackle-forger/data",
+  ].join("\n"));
+  const loopbackListener = await runPreflight({ root, envFile });
+  assert.equal(
+    loopbackListener.checks.find((item) => item.id === "systemd_isolation")?.status,
+    "BLOCKED",
+  );
+
+  await writeFile(path.join(root, "deploy/tackle-forger.service"), [
+    "ExecStart=npm run start -- --hostname 0.0.0.0 --port 13001",
+    "ReadWritePaths=/opt/tackle-forger/data",
+  ].join("\n"));
+  const wrongPort = await runPreflight({ root, envFile });
+  assert.equal(
+    wrongPort.checks.find((item) => item.id === "systemd_isolation")?.status,
+    "BLOCKED",
+  );
+
+  await writeFile(path.join(root, "deploy/tackle-forger.service"), [
+    "ExecStart=npm run start -- --hostname 0.0.0.0 --port 13000 --hostname 0.0.0.0",
+    "ReadWritePaths=/opt/tackle-forger/data",
+  ].join("\n"));
+  const duplicateHostname = await runPreflight({ root, envFile });
+  assert.equal(
+    duplicateHostname.checks.find((item) => item.id === "systemd_isolation")?.status,
+    "BLOCKED",
+  );
+
+  await writeFile(path.join(root, "deploy/tackle-forger.service"), [
+    "ExecStart=npm run start -- --hostname 0.0.0.0 --port 13000",
+    "ReadWritePaths=/opt/tackle-forger/data /tmp",
+  ].join("\n"));
+  const extraWritablePath = await runPreflight({ root, envFile });
+  assert.equal(
+    extraWritablePath.checks.find((item) => item.id === "systemd_isolation")?.status,
+    "BLOCKED",
+  );
   await rm(root, { recursive: true, force: true });
   await rm(envDirectory, { recursive: true, force: true });
 });

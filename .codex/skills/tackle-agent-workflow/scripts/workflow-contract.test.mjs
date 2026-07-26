@@ -1519,8 +1519,9 @@ test('merge gate document owns the complete review signal envelope', () => {
   const claudePrLoop = readFileSync(path.join(root, '.claude/skills/agent-pr-loop/SKILL.md'), 'utf8');
   const dailyFlow = readFileSync(path.join(root, '.codex/skills/agent-project-bootstrap/references/daily-project-flow.md'), 'utf8');
   const managedAutopilot = readFileSync(path.join(root, '.codex/skills/agent-project-bootstrap/references/managed-autopilot.md'), 'utf8');
+  const managedSupervisor = readFileSync(path.join(root, '.codex/skills/agent-project-bootstrap/assets/codex-managed-supervisor.md'), 'utf8');
   const bootstrapMarker = readFileSync(path.join(root, '.codex/agent-project-bootstrap.yml'), 'utf8');
-  const policyConsumers = [gatePolicy, agentPolicy, claudePolicy, codexPrLoop, claudePrLoop, dailyFlow, managedAutopilot].join('\n');
+  const policyConsumers = [gatePolicy, agentPolicy, claudePolicy, codexPrLoop, claudePrLoop, dailyFlow, managedAutopilot, managedSupervisor].join('\n');
   assert.match(gatePolicy, /A current review signal is additionally required only\s+when the workflow machine policy, repository or platform policy, or the\s+high-risk merge gate requires one\./);
   assert.match(gatePolicy, /grants standing merge authorization/);
   assert.match(gatePolicy, /No additional per-turn user\s+instruction is required/);
@@ -1552,6 +1553,10 @@ test('merge gate document owns the complete review signal envelope', () => {
   assert.match(claudePolicy, /不要求owner另行授权/);
   assert.match(bootstrapMarker, /^workflow_mode: managed$/m);
   assert.match(bootstrapMarker, /^managed_mode: autonomous$/m);
+  assert.match(managedSupervisor, /High-risk pull requests require the repository's strict review and high-risk live gate/);
+  assert.match(managedSupervisor, /covered by `qualified_auto_merge` does not need separate per-turn authorization/);
+  assert.match(managedSupervisor, /task-scoped user merge hold still takes precedence/);
+  assert.doesNotMatch(managedSupervisor, /merge high-risk work[\s\S]{0,80}without explicit authorization/);
   for (const consumer of [codexPrLoop, claudePrLoop, dailyFlow, managedAutopilot]) {
     assert.match(consumer, /hold|暂停/);
     assert.match(consumer, /READY/);

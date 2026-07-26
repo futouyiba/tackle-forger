@@ -590,6 +590,8 @@ test('policy checker detects required workflow markers', () => {
     write(root, '.codex/skills/tackle-agent-workflow/agents/openai.yaml', yaml);
     write(root, '.github/pull_request_template.md', canonicalTemplate.replace('视觉与交互统一检查待执行', '视觉待审标记缺失'));
     assert.throws(() => checkPolicy(root), /visual pending marker/);
+    write(root, '.github/pull_request_template.md', canonicalTemplate.replace('  - If checked: **视觉与交互统一检查待执行**', '<!--  - If checked: **视觉与交互统一检查待执行** -->'));
+    assert.throws(() => checkPolicy(root), /visual pending marker must be visible/);
     write(root, '.github/pull_request_template.md', canonicalTemplate.replace('A minimal render smoke does not complete the unified visual review.', 'A minimal render smoke completes the unified visual review.'));
     assert.throws(() => checkPolicy(root), /minimal render smoke boundary|contradictory normative text/);
     const filledTemplate = canonicalTemplate

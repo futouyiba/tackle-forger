@@ -1184,7 +1184,8 @@ export function checkPolicy(root = repositoryRoot()) {
   // The policy owns the five labels, while checked/unchecked author state is deliberately ignored.
   if (canonicalJson(actualRiskTriggerLabels) !== canonicalJson(riskTriggerLabels)) fail('Workflow policy drift: PR risk trigger checkboxes differ from the canonical five-field projection');
   if (!riskGuidance.content.includes('These checkboxes do not derive or override riskProfile, reviewTier, or the merge gate\'s normal/high classification.')) fail('Workflow policy drift: PR risk triggers became an independent risk or review authority');
-  if (!riskGuidance.content.includes(policy.visual.pendingMarker)) fail('Workflow policy drift: PR visual pending marker is missing');
+  const renderedRiskGuidance = riskGuidance.content.replace(/<!--[\s\S]*?-->/g, '');
+  if (!renderedRiskGuidance.includes(policy.visual.pendingMarker)) fail('Workflow policy drift: PR visual pending marker must be visible when the user-visible trigger is checked');
   if (!riskGuidance.content.includes('A minimal render smoke does not complete the unified visual review.')) fail('Workflow policy drift: PR minimal render smoke boundary is missing');
   const contradictions = [
     [agentsRouting.content.replace(expectedRoute, '').replace(expectedTaskBriefRole, ''), /(?:Issue\s*路由|PR\s*路由|本地\s*路由)[^\n]*(?:审核|reviewer|review)/i],

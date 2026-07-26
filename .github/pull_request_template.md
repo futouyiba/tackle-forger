@@ -37,6 +37,7 @@ These checkboxes do not derive or override riskProfile, reviewTier, or the merge
 - [ ] Authorization or concurrency
 - [ ] External side effects
 - [ ] User-visible UI or interaction
+  - If checked: **视觉与交互统一检查待执行**
 
 <!--
 For every checked item, add only the applicable details below; delete unused prompts.
@@ -46,8 +47,8 @@ For every checked item, add only the applicable details below; delete unused pro
 - Authorization or concurrency: denied path; server-side re-authorization at commit; conflict/concurrency behavior; stale-operation protection and recovery.
 - External side effects: preparation → write → readback → activation; idempotency key; partial-failure recovery or compensation; activation/rollback boundary.
 - User-visible UI or interaction:
-  - Unified visual and interaction review: 视觉与交互统一检查待执行
-  - When completed, record rendered states, viewports, screenshot or recording links, findings, fixes, and the final recheck.
+  - Keep the visible pending marker above until the unified visual and interaction review is complete.
+  - When completed, replace it with rendered states, viewports, screenshot or recording links, findings, fixes, and the final recheck.
   - Minimal render smoke: <result or `Not run — <reason>`>. A minimal render smoke does not complete the unified visual review.
 -->
 

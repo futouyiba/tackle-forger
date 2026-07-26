@@ -221,6 +221,13 @@ test('TaskBrief rejects empty shells and verdict cross-checks all durable identi
     assert.throws(() => checkVerdict({ root, verdict: { ...verdict, extra: true }, brief: verdictBrief }), /unknown, missing, or inapplicable keys/);
     assert.throws(() => checkVerdict({ root, verdict: { ...verdict, validationEvidence: { caller: 'authored' } }, brief: verdictBrief }), /unknown, missing, or inapplicable keys/);
     assert.throws(() => checkVerdict({ root, verdict: { ...verdict, findings: [{ severity: 'P1', file: 'AGENTS.md', line: 1, evidence: 'x', remediation: 'y' }] }, brief: verdictBrief }), /PASS verdict/);
+    write(root, 'unowned.txt', 'dirty\n');
+    assert.throws(() => validationExecutionPlan({ root, brief: verdictBrief }), /only TaskBrief owned-path changes/);
+    unlinkSync(path.join(root, 'unowned.txt'));
+    write(root, 'AGENTS.md', 'task-owned change\n');
+    assert.equal(validationExecutionPlan({ root, brief: verdictBrief }).artifact.artifactIdentity.kind, 'worktree');
+    write(root, 'AGENTS.md', 'base\n');
+    assert.throws(() => validationExecutionPlan({ root, brief: { ...verdictBrief, preexistingUnownedChanges: ['unowned.txt'] } }), /no preexisting owned or unowned worktree changes/);
     assert.throws(() => runCli(['--patch-hash', '--base', verdictBrief.baseSha, '--base', verdictBrief.baseSha, '--owned', 'AGENTS.md'], root), /Usage/);
     assert.throws(() => runCli(['--check-policy', '--unknown', 'x'], root), /Usage/);
     assert.throws(() => runCli(['--check-verdict', '--brief', 'brief.json', '--brief', 'brief.json', '--verdict', 'verdict.json'], root), /Usage/);
@@ -253,6 +260,14 @@ test('derived evidence stages keep development light and freeze only the review 
     assert.deepEqual(execution.commands.map((item) => item.command), committedBrief.validationPlan.requiredCommands);
     assert.match(execution.reuseIdentity.relevantInputsHash, /^[0-9a-f]{64}$/);
     assert.match(execution.reuseIdentity.commandContractHash, /^[0-9a-f]{64}$/);
+    assert.match(execution.reuseIdentity.environmentIdentity, /^[0-9a-f]{64}$/);
+    assert.deepEqual(execution.toolchain.tools.map((tool) => tool.executable), [...execution.toolchain.tools.map((tool) => tool.executable)].sort());
+    assert.ok(execution.toolchain.tools.every((tool) => path.isAbsolute(tool.resolvedPath) && tool.version.length > 0));
+    assert.match(execution.toolchain.environment.pathHash, /^[0-9a-f]{64}$/);
+    assert.match(execution.toolchain.environment.installedDependencyHash, /^(none|[0-9a-f]{64})$/);
+    write(root, 'unowned.txt', 'dirty\n');
+    assert.throws(() => validationExecutionPlan({ root, brief: committedBrief }), /fully clean worktree/);
+    unlinkSync(path.join(root, 'unowned.txt'));
     assert.throws(() => runCli(['--capture-validation', '--input', 'caller-authored.json'], root), /Usage/);
   } finally { cleanup(root); }
 });

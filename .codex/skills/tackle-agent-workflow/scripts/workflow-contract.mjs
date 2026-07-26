@@ -254,14 +254,37 @@ function validateIdentity(root, value, field, allowWorktree = false) {
   return canonicalCommit(root, value, field);
 }
 function stableHash(value) { return sha256(Buffer.from(canonicalJson(value), 'utf8')); }
-function validationArtifact(root, brief, briefResult) {
+function validationStatusPaths(root) {
+  const porcelain = git(root, ['status', '--porcelain=v1', '-z']);
+  if (porcelain === null) fail('Cannot read Git worktree status for validation');
+  const records = porcelain.toString('utf8').split('\0');
+  records.pop();
+  const paths = [];
+  for (let index = 0; index < records.length; index += 1) {
+    const record = records[index];
+    if (record.length < 4 || record[2] !== ' ') fail('Unsupported Git worktree status record for validation');
+    const status = record.slice(0, 2);
+    if (/[RC]/.test(status)) fail('Renamed or copied worktree paths cannot produce reusable validation evidence');
+    paths.push(record.slice(3));
+  }
+  return paths;
+}
+function assertReusableValidationIsolation(root, brief, briefResult) {
+  if (brief.preexistingOwnedPaths.length !== 0 || brief.preexistingUnownedChanges.length !== 0 || !['clean', 'clean_synced'].includes(brief.dirtyWorktreeDisposition)) fail('Reusable validation requires no preexisting owned or unowned worktree changes');
+  const dirtyPaths = validationStatusPaths(root);
+  if (briefResult.reviewedHead !== 'WORKTREE' && dirtyPaths.length !== 0) fail('Committed validation requires a fully clean worktree');
+  if (briefResult.reviewedHead === 'WORKTREE' && dirtyPaths.some((repoPath) => !brief.ownedPaths.includes(repoPath))) fail('WORKTREE validation permits only TaskBrief owned-path changes');
+  return dirtyPaths;
+}
+function validationArtifact(root, brief, briefResult, dirtyPaths) {
   if (briefResult.reviewedHead === 'WORKTREE') {
     const current = patchHash({ root, baseSha: briefResult.baseSha, ownedPaths: brief.ownedPaths });
+    const manifestDirtyPaths = current.manifest.entries.filter((entry) => entry.state !== 'unchanged').map((entry) => entry.path);
+    if (!sameSet(dirtyPaths, manifestDirtyPaths)) fail('WORKTREE validation status does not match the TaskBrief owned artifact manifest');
     return { artifactIdentity: { kind: 'worktree', commitSha: null, patchHash: current.patchHash }, inputIdentity: current.patchHash, relevantInputsHash: stableHash(current.manifest) };
   }
   const currentHead = git(root, ['rev-parse', 'HEAD'])?.toString('utf8').trim();
-  const porcelain = git(root, ['status', '--porcelain=v1', '-z']);
-  if (currentHead !== briefResult.reviewedHead || porcelain === null || porcelain.length !== 0) fail('Committed validation requires the current clean HEAD to equal the verdict TaskBrief reviewedHead');
+  if (currentHead !== briefResult.reviewedHead) fail('Committed validation requires the current clean HEAD to equal the verdict TaskBrief reviewedHead');
   const entries = brief.ownedPaths.map((repoPath) => {
     const entry = baseEntry(root, briefResult.reviewedHead, repoPath);
     if (!entry) return { path: repoPath, state: 'absent' };
@@ -277,6 +300,41 @@ function dependencyLockHash(root) {
   const candidates = ['package-lock.json', 'npm-shrinkwrap.json', 'legacy-workspace/pnpm-lock.yaml'];
   const entries = candidates.filter((relative) => existsSync(path.join(root, relative))).map((relative) => ({ path: relative, contentSha256: sha256(readFileSync(path.join(root, relative))) }));
   return entries.length === 0 ? 'none' : stableHash(entries);
+}
+function installedDependencyHash(root) {
+  const candidates = ['node_modules/.package-lock.json', 'node_modules/.modules.yaml', 'node_modules/.pnpm/lock.yaml', 'legacy-workspace/node_modules/.modules.yaml'];
+  const entries = candidates.filter((relative) => existsSync(path.join(root, relative))).map((relative) => ({ path: relative, contentSha256: sha256(readFileSync(path.join(root, relative))) }));
+  return entries.length === 0 ? 'none' : stableHash(entries);
+}
+function resolveExecutable(root, executable) {
+  const candidates = path.isAbsolute(executable)
+    ? [executable]
+    : (process.env.PATH ?? '').split(path.delimiter).filter((entry) => entry.length > 0).map((entry) => path.join(entry, executable));
+  for (const candidate of candidates) {
+    try {
+      const resolved = realpathSync(candidate);
+      if (lstatSync(resolved).isFile()) return resolved;
+    } catch { /* Try the next PATH entry. */ }
+  }
+  fail(`Validation tool cannot be resolved from the current PATH: ${executable}`);
+}
+function toolchainIdentity(root, plan) {
+  const requested = [...new Set(plan.map((entry) => entry.executable))].sort(compareUtf8);
+  const tools = requested.map((executable) => {
+    const resolvedPath = resolveExecutable(root, executable);
+    const version = spawnSync(resolvedPath, ['--version'], { cwd: root, encoding: 'utf8', timeout: 30_000, maxBuffer: 64 * 1024 });
+    const versionText = `${version.stdout ?? ''}${version.stderr ?? ''}`.trim();
+    if (version.status !== 0 || version.error || versionText.length === 0) fail(`Validation tool version cannot be determined before execution: ${executable}`);
+    return { executable, resolvedPath, version: versionText };
+  });
+  const environment = {
+    pathHash: sha256(Buffer.from(process.env.PATH ?? '', 'utf8')),
+    executionEnvironmentHash: stableHash({ PATH: process.env.PATH ?? null, NODE_OPTIONS: process.env.NODE_OPTIONS ?? null, NODE_PATH: process.env.NODE_PATH ?? null, PNPM_HOME: process.env.PNPM_HOME ?? null, npm_config_userconfig: process.env.npm_config_userconfig ?? null }),
+    installedDependencyHash: installedDependencyHash(root),
+    platform: process.platform,
+    arch: process.arch,
+  };
+  return { tools, environment, environmentIdentity: stableHash({ tools, environment }) };
 }
 function commandSpec(briefResult, brief, command) {
   const node = process.execPath;
@@ -307,7 +365,10 @@ export function validationExecutionPlan({ root = repositoryRoot(), brief }) {
   if (briefResult.phase !== 'verdict') fail('Validation execution requires a verdict-phase TaskBrief');
   const commands = requireNonEmptyStringArray(brief.validationPlan.requiredCommands, 'TaskBrief.validationPlan.requiredCommands');
   const plan = commands.map((command) => commandSpec(briefResult, brief, command));
-  const artifact = validationArtifact(root, brief, briefResult);
+  const dirtyPaths = assertReusableValidationIsolation(root, brief, briefResult);
+  const artifact = validationArtifact(root, brief, briefResult, dirtyPaths);
+  const toolchain = toolchainIdentity(root, plan);
+  const resolvedPlan = plan.map((entry) => ({ ...entry, executable: toolchain.tools.find((tool) => tool.executable === entry.executable).resolvedPath }));
   return {
     taskBriefSha256: briefResult.taskBriefSha256,
     artifact,
@@ -315,10 +376,11 @@ export function validationExecutionPlan({ root = repositoryRoot(), brief }) {
       artifactIdentity: artifact.inputIdentity,
       relevantInputsHash: artifact.relevantInputsHash,
       dependencyLockHash: dependencyLockHash(root),
-      commandContractHash: stableHash(plan.map(({ command, executable, args }) => ({ command, executable, args }))),
-      environmentIdentity: stableHash({ node: process.version, platform: process.platform, arch: process.arch }),
+      commandContractHash: stableHash(resolvedPlan.map(({ command, executable, args }) => ({ command, executable, args }))),
+      environmentIdentity: toolchain.environmentIdentity,
     },
-    commands: plan,
+    toolchain,
+    commands: resolvedPlan,
   };
 }
 function failureDetail(result) {
@@ -553,7 +615,7 @@ export function checkPolicy(root = repositoryRoot()) {
     pullRequest: { owner: 'agent-pr-loop', reviewer: 'agent-pr-loop' },
     reviewSeverity: { passBlocking: ['P0', 'P1', 'P2'], p3: 'informational' },
     scopedEligibility: { allowedPathClasses: ['AGENTS.md', '.codex/skills/tackle-agent-workflow/**', 'docs/(workflow|agent-governance)-*.md', '.github/*.md|yml|yaml'], unknownForcesFull: true },
-    specReceipt: { schema: SPEC_READ_SCHEMA }, taskBrief: { allowedChangesEqualsOwnedPaths: true, closedSchema: true, conditionalNaApplicability: CONDITIONAL_NA_APPLICABILITY, conditionalNaCatalog: { legacyWorkspaceCi: 'legacy_workspace_ci', productRuntimeTests: 'product_runtime_tests' }, evidenceStages: { development: 'pre_dispatch_non_pr_final', localReviewHandoff: 'local_verdict', prFinal: 'pr_final_change_class' }, openDecisionCheck: true, phaseReceipts: { pre_dispatch: ['coordinator'], verdict: ['coordinator', 'coding', 'review'] }, receiptRiskAuthority: true, schema: TASK_BRIEF_SCHEMA, structuredFields: ['changeClass', 'allowedChanges', 'riskDimensions', 'validationPlan'] }, validationRunner: { closedCommandCatalog: true, formalVerdictEvidence: false, reuseRequiresUnchanged: ['artifact', 'relevant_inputs', 'dependency_lock', 'command_contract', 'environment_identity'], schema: VALIDATION_SUMMARY_SCHEMA }, validationMatrix: { commandsAndScenariosSeparated: true, legacyWorkspaceCommands: LEGACY_WORKSPACE_COMMANDS, mandatoryWorkflowCommands: MANDATORY_WORKFLOW_COMMANDS, prFinalCommandsNonWaivable: ['npm run typecheck', 'npm run lint', 'npm test'], triggeredCannotBeNa: true, triggeredScenariosNonWaivable: true, userVisiblePathClassifier: 'tsx_jsx_css_scss_sass_less_html_and_ui_roots', userVisibleScenario: 'unified_visual_review_pending_or_completed', workflowMetadataDynamicDiff: true },
+    specReceipt: { schema: SPEC_READ_SCHEMA }, taskBrief: { allowedChangesEqualsOwnedPaths: true, closedSchema: true, conditionalNaApplicability: CONDITIONAL_NA_APPLICABILITY, conditionalNaCatalog: { legacyWorkspaceCi: 'legacy_workspace_ci', productRuntimeTests: 'product_runtime_tests' }, evidenceStages: { development: 'pre_dispatch_non_pr_final', localReviewHandoff: 'local_verdict', prFinal: 'pr_final_change_class' }, openDecisionCheck: true, phaseReceipts: { pre_dispatch: ['coordinator'], verdict: ['coordinator', 'coding', 'review'] }, receiptRiskAuthority: true, schema: TASK_BRIEF_SCHEMA, structuredFields: ['changeClass', 'allowedChanges', 'riskDimensions', 'validationPlan'] }, validationRunner: { closedCommandCatalog: true, formalVerdictEvidence: false, reusableWorktree: 'committed_clean_or_worktree_owned_manifest_only', reuseRequiresUnchanged: ['artifact', 'relevant_inputs', 'dependency_lock', 'command_contract', 'toolchain', 'path_and_execution_environment', 'installed_dependency_state'], schema: VALIDATION_SUMMARY_SCHEMA }, validationMatrix: { commandsAndScenariosSeparated: true, legacyWorkspaceCommands: LEGACY_WORKSPACE_COMMANDS, mandatoryWorkflowCommands: MANDATORY_WORKFLOW_COMMANDS, prFinalCommandsNonWaivable: ['npm run typecheck', 'npm run lint', 'npm test'], triggeredCannotBeNa: true, triggeredScenariosNonWaivable: true, userVisiblePathClassifier: 'tsx_jsx_css_scss_sass_less_html_and_ui_roots', userVisibleScenario: 'unified_visual_review_pending_or_completed', workflowMetadataDynamicDiff: true },
     visual: { minimalSmokeCompletesReview: false, pendingMarker: '视觉与交互统一检查待执行' },
   };
   if (canonicalJson(policy) !== canonicalJson(expectedPolicy)) fail('Workflow policy drift: canonical AGENTS policy differs');

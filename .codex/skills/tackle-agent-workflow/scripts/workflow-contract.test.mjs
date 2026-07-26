@@ -830,13 +830,15 @@ test('SCOPED eligibility, clean Issue/PR routing, sections, OPEN IDs, and receip
       '.codex/skills/agent-project-bootstrap/SKILL.md',
       '.codex/skills/agent-issue-loop/SKILL.md',
       '.codex/skills/agent-pr-loop/SKILL.md',
-      '.claude/skills/tackle-agent-workflow/SKILL.md',
+      '.claude/skills/agent-pr-loop/SKILL.md',
     ]) assert.deepEqual(classifyOwnedPaths([scopedPath]), { scopedEligible: true, unrecognizedPaths: [] });
     assert.deepEqual(classifyOwnedPaths(['.github/nested/arbitrary.md']), { scopedEligible: false, unrecognizedPaths: ['.github/nested/arbitrary.md'] });
     assert.deepEqual(classifyOwnedPaths(['.github/workflows/nested/ci.yml']), { scopedEligible: false, unrecognizedPaths: ['.github/workflows/nested/ci.yml'] });
     for (const unrecognizedPath of [
       '.codex/skills/agent-project-bootstrapper/SKILL.md',
       '.codex/skills/agent-issue-loop-backup/SKILL.md',
+      '.claude/skills/deploy-r730/SKILL.md',
+      '.claude/skills/agent-pr-loop-backup/SKILL.md',
       '.claude/skill/tackle-agent-workflow/SKILL.md',
       '.claude/skills.md',
     ]) assert.deepEqual(classifyOwnedPaths([unrecognizedPath]), { scopedEligible: false, unrecognizedPaths: [unrecognizedPath] });

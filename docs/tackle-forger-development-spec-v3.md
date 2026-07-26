@@ -1284,10 +1284,10 @@ interface PatchSubjectMigrationResult {
 | --- | --- | --- |
 | Web/API | 0.5–1 CPU、1GB RAM | 1–2 CPU、2GB RAM |
 | 可选Worker | 与Web合并 | 1–2 CPU、1–2GB RAM |
-| 数据库 | 复用PostgreSQL优先 | 按并发和备份调整 |
+| 数据库 | 单实例R730使用持久SQLite | 显式路径、整库备份、完整性检查与停服恢复 |
 | 文件与快照 | 初期数GB | 配置保留和备份策略 |
 
-初期单容器即可；批量重算影响交互后再拆Worker。无需首版引入Redis。
+初期在R730由单个systemd服务进程运行；批量重算影响交互后再拆Worker。无需首版引入容器编排或Redis。
 
 ## 17. 当前实现迁移
 

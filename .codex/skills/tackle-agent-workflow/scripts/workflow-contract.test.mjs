@@ -557,16 +557,16 @@ test('navigation index is generated deterministically and detects drift', () => 
 test('policy checker detects required workflow markers', () => {
   const root = temporaryRepo();
   try {
-    const project = '## 项目级 Agent Skills\n- 对本仓库中的实现、修复或重构，`$tackle-agent-workflow`为所有路由提供项目约束与 TaskBrief；只有本地路由使用其编码与独立本地审核。Issue 与 PR 路由仍分别遵循`$agent-issue-loop`和`$agent-pr-loop`；仓库的合并、发布和部署门禁不因项目级Skill存在而放宽。\n';
     const canonicalAgents = readFileSync(path.resolve(process.cwd(), 'AGENTS.md'), 'utf8');
-    const agents = `${project}\n## Tackle 工作流契约\n- \`$tackle-agent-workflow\`提供项目约束和 TaskBrief；仅本地路由使用其编码与独立本地审核。Issue 生命周期归\`$agent-issue-loop\`，PR 审核/CI/修复归\`$agent-pr-loop\`；已有 PR 直接使用后者。不得增加第二个独立审核者。\n<!-- workflow-contract-policy/v2\n{"dirtyIsolation":{"issuePr":"clean_synced","localOwnedBaseline":"tackle-owned-baseline/v1"},"issue":{"localReviewer":false,"owner":"agent-issue-loop","prReviewer":"agent-pr-loop"},"local":{"independentReviewer":true,"owner":"tackle-agent-workflow"},"localVerdict":{"required":["taskBriefSha256","specReceiptHashes","dirtyWorktreeDisposition","specSha256","baseSha","reviewedHead","ownedPaths","patchHash"],"schema":"tackle-local-verdict/v1"},"pullRequest":{"owner":"agent-pr-loop","reviewer":"agent-pr-loop"},"reviewSeverity":{"passBlocking":["P0","P1","P2"],"p3":"informational"},"scopedEligibility":{"allowedPathClasses":["AGENTS.md",".codex/skills/tackle-agent-workflow/**","docs/(workflow|agent-governance)-*.md",".github/*.md|yml|yaml"],"unknownForcesFull":true},"specReceipt":{"schema":"tackle-spec-read/v1"},"taskBrief":{"closedSchema":true,"openDecisionCheck":true,"phaseReceipts":{"pre_dispatch":["coordinator"],"verdict":["coordinator","coding","review"]},"receiptRiskAuthority":true,"schema":"tackle-task-brief/v1","structuredFields":["changeClass","allowedChanges","riskDimensions","validationPlan"]},"validationMatrix":{"commandsAndScenariosSeparated":true,"prFinalCommandsNonWaivable":["npm run typecheck","npm run lint","npm test"],"userVisibleScenario":"unified_visual_review_pending_or_completed"},"visual":{"minimalSmokeCompletesReview":false,"pendingMarker":"视觉与交互统一检查待执行"}}\n-->\n## 本机凭据与多 worktree\n`;
-    const skill = '<!-- workflow-contract-policy-ref: AGENTS.md/workflow-contract-policy/v2 -->\n\n## Route before dispatch\n\n- **Local implementation, no Issue or PR:** this Skill owns one coding agent and one independent local reviewer.\n- **Issue delivery:** `$agent-issue-loop` owns Issue, branch, PR, closure, and handoff. Supply it this Skill\'s TaskBrief; do not start a local independent reviewer. Once a PR exists, `$agent-pr-loop` exclusively owns review, CI, fixes, and merge gates.\n- **Existing PR:** invoke `$agent-pr-loop` directly and supply the TaskBrief. Do not create a coding or review loop here.\n\n## Establish the TaskBrief\n\n<!-- workflow-contract-task-brief-ref/v1\n{"conditionalNaApplicability":{"nonWorkflowForbids":"product_runtime_tests","workflowMetadataRequires":"product_runtime_tests"},"conditionalNaCatalog":{"productRuntimeTests":"product_runtime_tests"},"evidenceStages":{"development":"pre_dispatch_non_pr_final","localReviewHandoff":"local_verdict","prFinal":"pr_final_change_class"},"triggeredCannotBeNa":true}\n-->\n\n## Spec receipts and worktree isolation\n';
     const canonicalSkill = readFileSync(path.resolve(process.cwd(), '.codex/skills/tackle-agent-workflow/SKILL.md'), 'utf8');
+    const canonicalTemplate = readFileSync(path.resolve(process.cwd(), '.github/pull_request_template.md'), 'utf8');
     const yaml = 'interface:\n  display_name: "Tackle Agent Workflow"\n  short_description: "Start with a lightweight Task Card and escalate formal reviews"\n  default_prompt: "Use $tackle-agent-workflow to start daily work with a six-field Task Card, generate mechanical route/OPEN/read-plan evidence, and prepare a full TaskBrief only at a formal review or PR boundary. Preserve the pending unified visual-review marker unless full visual work is explicitly scoped."\n';
-    const template = '## Visual evidence\n\n| Unified visual and interaction review | 视觉与交互统一检查待执行 / Full visual and interaction review completed |\n| Minimal render smoke | Not run / Completed; this never changes the unified-review status |\n\n## Risks, recovery, and rollback\n';
+    assert.match(canonicalTemplate, /No linked issue — <reason>/);
+    assert.doesNotMatch(canonicalTemplate, /## Visual evidence|## Risks, recovery, and rollback/);
+    assert.doesNotMatch(canonicalTemplate, /^- Merge gate:/m);
     write(root, 'AGENTS.md', canonicalAgents);
     write(root, '.codex/skills/tackle-agent-workflow/SKILL.md', canonicalSkill);
-    write(root, '.github/pull_request_template.md', template);
+    write(root, '.github/pull_request_template.md', canonicalTemplate);
     write(root, '.codex/skills/tackle-agent-workflow/agents/openai.yaml', yaml);
     assert.equal(checkPolicy(root), true);
     write(root, 'AGENTS.md', canonicalAgents.replace('$tackle-agent-workflow', '$different-workflow'));
@@ -588,6 +588,19 @@ test('policy checker detects required workflow markers', () => {
     appendFileSync(path.join(root, '.codex/skills/tackle-agent-workflow/agents/openai.yaml'), 'Always inspect rendered UI for every route.\n');
     assert.throws(() => checkPolicy(root), /Workflow policy drift/);
     write(root, '.codex/skills/tackle-agent-workflow/agents/openai.yaml', yaml);
+    write(root, '.github/pull_request_template.md', canonicalTemplate.replace('视觉与交互统一检查待执行', '视觉待审标记缺失'));
+    assert.throws(() => checkPolicy(root), /visual pending marker/);
+    write(root, '.github/pull_request_template.md', canonicalTemplate.replace('A minimal render smoke does not complete the unified visual review.', 'A minimal render smoke completes the unified visual review.'));
+    assert.throws(() => checkPolicy(root), /minimal render smoke boundary|contradictory normative text/);
+    const filledTemplate = canonicalTemplate
+      .replaceAll('- [ ]', '- [x]')
+      .replace('- Review:', '- Review: current-head review link')
+      .replace('- CI:', '- CI: current pull-request run link');
+    write(root, '.github/pull_request_template.md', filledTemplate);
+    assert.equal(checkPolicy(root), true);
+    write(root, '.github/pull_request_template.md', canonicalTemplate.replace('- [ ] External side effects\n', ''));
+    assert.throws(() => checkPolicy(root), /risk trigger checkboxes/);
+    write(root, '.github/pull_request_template.md', canonicalTemplate);
     appendFileSync(path.join(root, '.github/pull_request_template.md'), 'Minimal render smoke replaces the pending unified visual review.\n');
     assert.throws(() => checkPolicy(root), /Workflow policy drift/);
   } finally { cleanup(root); }

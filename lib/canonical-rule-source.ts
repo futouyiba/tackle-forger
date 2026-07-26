@@ -130,7 +130,7 @@ function columnName(index: number) {
 }
 
 function parameterKind(label: string): ItemKind {
-  if (label.startsWith("轮") || ["传动比", "饵重下限", "饵重上限", "绕线量", "线径", "积热系数", "散热系数", "摩擦截面数", "张力系数", "摩檫力系数"].includes(label)) return "reel";
+  if (label.startsWith("轮") || ["传动比", "饵重下限", "饵重上限", "绕线量", "线径", "线杯大小", "积热系数", "散热系数", "摩擦截面数", "张力系数", "摩檫力系数"].includes(label)) return "reel";
   if (label.startsWith("线")) return "line";
   return "rod";
 }
@@ -141,7 +141,7 @@ function parameterKey(label: string, kind = parameterKind(label)) {
     const prefix = kind === "rod" ? "竿" : kind === "reel" ? "轮" : "线";
     return `${prefix}${label}`;
   }
-  if (kind === "reel" && ["饵重下限", "饵重上限", "线径", "张力系数"].includes(label)) return `轮${label}`;
+  if (kind === "reel" && ["饵重下限", "饵重上限", "线径", "张力系数", "线杯大小"].includes(label)) return `轮${label}`;
   return label;
 }
 

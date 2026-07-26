@@ -4,6 +4,8 @@ import { readFileSync } from "node:fs";
 import { projectLocalRuleWorkbookSession } from "../lib/local-rule-workbook-session";
 import { createSeedState } from "../lib/seed";
 
+/* eslint-disable @typescript-eslint/no-explicit-any -- test fixtures use broad types */
+
 /**
  * 依赖边界：local-rule-workbook-session 是纯函数模块，
  * 不得导入飞书网络/鉴权/持久化模块。

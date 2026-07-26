@@ -198,8 +198,8 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
     issue.code.startsWith("QUALITY_PRICING_MAPPING_"));
   const missingPricing = inspection?.pricingDraft.issues.filter((issue) =>
     ["PRICING_INTERPOLATION_MISSING", "PARTS_TO_WHOLE_RATIO_MISSING", "PRICING_MONEY_POLICY_MISSING", "PRICING_EXECUTION_SEMANTICS_MISSING"].includes(issue.code)) ?? [];
-  const inspectAvailability = props.actionAvailabilities.inspect_feishu_workbook;
-  const identityWriteAvailability = props.actionAvailabilities.write_feishu_identity;
+  const inspectAvailability = props.actionAvailabilities.inspect_feishu_workbook ?? { enabled: false };
+  const identityWriteAvailability = props.actionAvailabilities.write_feishu_identity ?? { enabled: false };
 
   // sheetId → 人类可读标签页名（来自飞书 grid 元数据）
   const sheetNameMap = useMemo(() => {

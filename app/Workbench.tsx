@@ -779,8 +779,8 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
       return;
     }
     const saveAvailability = user.actionAvailability.save_workspace;
-    if (!saveAvailability.enabled) {
-      notify(saveAvailability.disabledReasonText ?? "当前账号不能保存工作区。");
+    if (!saveAvailability?.enabled) {
+      notify(saveAvailability?.disabledReasonText ?? "当前账号不能保存工作区。");
       return;
     }
     setSyncState("saving");
@@ -1284,7 +1284,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
   const importExcel = async (file: File) => {
     try {
       const availability = user.actionAvailability.import_excel;
-      if (!availability.enabled) throw new Error(availability.disabledReasonText ?? "当前账号不能导入 Excel。");
+      if (!availability?.enabled) throw new Error(availability?.disabledReasonText ?? "当前账号不能导入 Excel。");
       const contentHash = Array.from(
         new Uint8Array(await crypto.subtle.digest("SHA-256", await file.arrayBuffer())),
         (byte) => byte.toString(16).padStart(2, "0"),
@@ -2673,7 +2673,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
     <div className="page-stack">
       <Card className="version-hero">
         <div><span className="eyebrow">团队共享</span><h2>当前版本 v{revision}</h2><p>每次保存都会保存完整配置快照；基于旧版本保存时会触发冲突保护。</p></div>
-        <Button icon={Save} tone="primary" disabled={!user.actionAvailability.save_workspace.enabled} title={user.actionAvailability.save_workspace.disabledReasonText} onClick={() => void save("手工创建版本快照")}>保存新版本</Button>
+        <Button icon={Save} tone="primary" disabled={!user.actionAvailability.save_workspace?.enabled} title={user.actionAvailability.save_workspace?.disabledReasonText} onClick={() => void save("手工创建版本快照")}>保存新版本</Button>
       </Card>
       <Card className="flush-card">
         <SheetTable><thead><tr><th>版本</th><th>时间</th><th>作者</th><th>说明</th><th>操作</th></tr></thead>
@@ -2681,7 +2681,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           <tr key={version.revision}>
             <td><Pill tone={version.revision === revision ? "success" : "neutral"}>v{version.revision}</Pill></td>
             <td>{new Date(version.createdAt).toLocaleString("zh-CN")}</td><td>{version.author}</td><td>{version.message}</td>
-            <td><Button size="sm" icon={RotateCcw} disabled={version.revision === revision || !user.actionAvailability.view_revisions.enabled} title={user.actionAvailability.view_revisions.disabledReasonText} onClick={async () => {
+            <td><Button size="sm" icon={RotateCcw} disabled={version.revision === revision || !user.actionAvailability.view_revisions?.enabled} title={user.actionAvailability.view_revisions?.disabledReasonText} onClick={async () => {
               const response = await fetch("/api/revisions?revision=" + version.revision);
               if (!response.ok) return notify("读取历史版本失败。");
               const payload = (await response.json()) as { state: WorkspaceState };
@@ -2795,7 +2795,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         <Card className="exchange-card">
           <div className="exchange-icon"><Upload size={24} /></div><h3>导入 Excel</h3>
           <p>支持本网页导出的完整工作簿；也兼容只含“01重量模板”的旧表。原始文件会存入团队文件仓。</p>
-          <Button tone="primary" icon={Upload} disabled={!user.actionAvailability.import_excel.enabled} title={user.actionAvailability.import_excel.disabledReasonText} onClick={() => fileInput.current?.click()}>选择 Excel</Button>
+          <Button tone="primary" icon={Upload} disabled={!user.actionAvailability.import_excel?.enabled} title={user.actionAvailability.import_excel?.disabledReasonText} onClick={() => fileInput.current?.click()}>选择 Excel</Button>
         </Card>
         <Card className="exchange-card">
           <div className="exchange-icon"><Download size={24} /></div><h3>导出 Excel</h3>
@@ -2808,8 +2808,8 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           <Button
             tone="primary"
             icon={FileSpreadsheet}
-            disabled={workspaceExporting || !user.actionAvailability.view_revisions.enabled}
-            title={user.actionAvailability.view_revisions.disabledReasonText}
+            disabled={workspaceExporting || !user.actionAvailability.view_revisions?.enabled}
+            title={user.actionAvailability.view_revisions?.disabledReasonText}
             onClick={() => void exportWorkspaceXlsx()}
           >
             {workspaceExporting ? "导出中…" : "导出工作区数据为 Excel"}
@@ -2821,8 +2821,8 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           <Button
             tone="primary"
             icon={CloudDownload}
-            disabled={feishuSourceExporting || !user.actionAvailability.download_feishu_source.enabled}
-            title={user.actionAvailability.download_feishu_source.disabledReasonText}
+            disabled={feishuSourceExporting || !user.actionAvailability.download_feishu_source?.enabled}
+            title={user.actionAvailability.download_feishu_source?.disabledReasonText}
             onClick={() => void downloadFeishuSource()}
           >
             {feishuSourceExporting ? "下载中…" : "下载飞书源数据"}
@@ -2834,8 +2834,8 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
           <Button
             tone="primary"
             icon={Upload}
-            disabled={feishuSheetExporting || !user.actionAvailability.export_to_feishu_sheet.enabled}
-            title={user.actionAvailability.export_to_feishu_sheet.disabledReasonText}
+            disabled={feishuSheetExporting || !user.actionAvailability.export_to_feishu_sheet?.enabled}
+            title={user.actionAvailability.export_to_feishu_sheet?.disabledReasonText}
             onClick={() => void exportToFeishuSheet()}
           >
             {feishuSheetExporting ? "导出中…" : "导出到新飞书表"}
@@ -3124,7 +3124,7 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
               <Search size={15} aria-hidden="true" />
               <input aria-label="全局搜索可见 Series" value={globalSearch} onChange={(event) => setGlobalSearch(event.target.value)} placeholder="搜索可见 Series…" />
             </form>
-            <Button icon={Save} tone="primary" disabled={!dirty || syncState === "saving" || !user.actionAvailability.save_workspace.enabled} title={user.actionAvailability.save_workspace.disabledReasonText} onClick={() => void save()}>
+            <Button icon={Save} tone="primary" disabled={!dirty || syncState === "saving" || !user.actionAvailability.save_workspace?.enabled} title={user.actionAvailability.save_workspace?.disabledReasonText} onClick={() => void save()}>
               {syncState === "saving" ? "保存中…" : "保存版本"}
             </Button>
           </div>

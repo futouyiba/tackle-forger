@@ -21,7 +21,7 @@ The versioned policy reference above is the machine authority for review tiers, 
 
 ## Start with a Task Card; create a TaskBrief at a formal boundary
 
-Before implementation, follow `docs/spec-v3/README.md`: read the index, section 0, and sections 19–20; classify the task and read every routed section and direct dependency. Full reading is only for unknown scope, broadly cross-domain impact, or canonical-spec structure changes. Begin daily work with a closed `tackle-task-card/v1`, not a TaskBrief. Its exactly six semantic fields remain `taskId`, `workflowMode`, `scope`, `ownedPaths`, `riskProfile`, and `changeClass`; choose `reviewTier` only at the formal TaskBrief boundary.
+Before implementation, follow `docs/spec-v3/README.md`: read the index, section 0, section 19, and the generated compact OPEN registry; classify the task and read every routed section plus only the canonical OPEN subsections and explicit dependencies selected from TaskBrief `applicableIds`. Empty applicability retains the full registry hash, complete checked IDs, and a non-empty reason without loading all of section 20. Unknown/broad scope, canonical-spec structure changes, strict/high-risk work, or unreliable applicability fail closed to FULL. Begin daily work with a closed `tackle-task-card/v1`, not a TaskBrief. Its exactly six semantic fields remain `taskId`, `workflowMode`, `scope`, `ownedPaths`, `riskProfile`, and `changeClass`; choose `reviewTier` only at the formal TaskBrief boundary.
 
 Run `--prepare-task-card --input <six-field-card.json>` only from a clean worktree. Add `--store-run` when the daily card itself needs a private durable record. It mechanically binds the initial base/spec identity, workflow route, and complete OPEN registry coverage. For a resolved scoped route it also emits a read-plan template and an incomplete receipt-shaped draft (`readSections: []`); a person must complete and check the receipt after actually reading. It never generates a valid reading assertion. Every formal boundary has `formalTaskBriefRequiredAtBoundary: true`; `earlyEscalationRequired` separately flags runtime, persistence, historical snapshots, authorization, concurrency, publication/export/external effects, non-scoped paths, Issue/PR work, or uncertain classification. Non-scoped cards intentionally emit no complete route/read plan.
 
@@ -49,7 +49,7 @@ Stop for user confirmation only when the authoritative specification leaves requ
 
 ## Spec receipts and worktree isolation
 
-Follow the read plan emitted from the versioned route policy and record the resulting immutable spec receipt. Do not derive SCOPED, ROUTED, FULL, receipt roles, or required sections from this prose.
+Follow the read plan emitted from the versioned route policy and generated OPEN registry, then record the resulting immutable spec receipt. Do not derive SCOPED, ROUTED, FULL, OPEN subsection locators, dependencies, receipt roles, or required sections from prose.
 
 For receipt reuse, pass the trusted identity/session/state inputs required by the generated plan and the closed policy. The checker, not display prose, decides whether `REUSE_FULL` is valid; receipts remain auditable declarations, never proof of comprehension.
 
@@ -101,8 +101,8 @@ node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-p
 node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --prepare-task-card --input <six-field-card.json>
 node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-task-card --card <task-card.json>
 node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --upgrade-task-card --card <task-card.json> --boundary-input <formal-boundary-with-review-tier.json>
-node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --spec-read-plan --role <coordinator|coding|review> --risk <risk-profile> [--relevant <section> ...]
-node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-read-receipt --receipt <receipt.json>
+node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --spec-read-plan --role <coordinator|coding|review> --risk <risk-profile> [--review-tier <fast|standard|strict>] [--relevant <section> ...] [--applicable <OPEN-id> ...]
+node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-read-receipt --receipt <receipt.json> [--review-tier <fast|standard|strict>] [--applicable <OPEN-id> ...]
 node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-task-brief --brief <task-brief.json>
 node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --promote-task-brief --brief <pre-dispatch-task-brief.json> --coding-receipt <coding-receipt.json> [--review-receipt <review-receipt.json when tier requires>] [--reuse-contexts <role-contexts.json>]
 node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --owned-baseline --base <sha> --owned <repo-relative-path> [--owned <path> ...]

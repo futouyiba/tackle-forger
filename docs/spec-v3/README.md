@@ -6,11 +6,12 @@
 
 ## Agent 读取协议
 
-1. 每个任务先读本页、[`00-authority.md`](./00-authority.md)和[`05-open-decisions.md`](./05-open-decisions.md)。
+1. 每个任务先读本页、[`00-authority.md`](./00-authority.md)、[`05-open-decisions.md`](./05-open-decisions.md)的§19，以及机器生成并绑定完整v3 hash的[`v3-open-registry.json`](../../.codex/skills/tackle-agent-workflow/references/v3-open-registry.json)。
 2. 根据任务目标选择下面一个或多个路由；读取路由对应模块中的相关章节。
-3. 检查相关章节直接引用的跨模块章节，并补读这些依赖。
-4. 把实际读取章节记录到 TaskBrief；不得只读摘要后推断正文语义。
-5. 只有任务范围未知、跨域影响广泛，或修改本规范的结构/权威关系时才读全部模块。
+3. 按TaskBrief `applicableIds`从OPEN registry确定性定位对应canonical正文小节及其显式依赖；`applicableIds`为空时不加载完整§20正文，但必须保留完整registry hash、全量`checkedIds`与非空`noApplicableReason`。
+4. 检查相关章节直接引用的跨模块章节，并补读这些依赖。
+5. 把实际读取章节记录到 TaskBrief；不得只读摘要、显示文案或自然语言猜测后推断正文语义。
+6. 任务范围未知、跨域影响广泛、修改本规范的结构/权威关系、reviewTier为strict/high-risk，或无法可靠判断OPEN适用性时读取全部模块。
 
 ## 路由鉴别
 
@@ -28,7 +29,7 @@
 | UI工作台与交互契约 | 00、01、02、05、06、07 |
 | 身份、权限、外部写入 | 00、04、05、07、08 |
 | 部署、配置导出 | 00、04、05、08 |
-| Agent流程或治理文档 | 00、05 |
+| Agent流程或治理文档 | 00、19、OPEN registry与适用OPEN正文 |
 
 ## 模块目录
 

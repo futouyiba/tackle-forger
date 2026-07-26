@@ -1,0 +1,158 @@
+{
+  "format": "tackle-v3-open-registry/v1",
+  "source": {
+    "path": "docs/spec-v3",
+    "sha256": "04dbbe4984812627f2df2d45f96cef5a386a51b44a45025609f6307d36830315"
+  },
+  "entries": [
+    {
+      "id": "OPEN-001",
+      "status": "DECIDED_PENDING_POLICY_VERSION",
+      "moduleId": "05",
+      "path": "docs/spec-v3/05-open-decisions.md",
+      "subsection": "OPEN-001",
+      "title": "OPEN-001：降低型词条叠加",
+      "dependencies": [
+        "11.4",
+        "14"
+      ],
+      "startLine": 38,
+      "endLine": 61,
+      "contentSha256": "9c677735a703f0fdd1c114ee730cb3d6bb7bd185a1cf8cd02dc5df585eae12fc"
+    },
+    {
+      "id": "OPEN-002",
+      "status": "DECIDED_IMPLEMENTATION_PENDING",
+      "moduleId": "05",
+      "path": "docs/spec-v3/05-open-decisions.md",
+      "subsection": "OPEN-002",
+      "title": "OPEN-002：性能定位派生语义（已决，待实现）",
+      "dependencies": [],
+      "startLine": 62,
+      "endLine": 65,
+      "contentSha256": "ad66c0e06fa0d21ce066d04203c74c4218677630c1d41cc3ba6f479beeacafea"
+    },
+    {
+      "id": "OPEN-003",
+      "status": "DEFERRED_UI_DISABLED",
+      "moduleId": "05",
+      "path": "docs/spec-v3/05-open-decisions.md",
+      "subsection": "OPEN-003",
+      "title": "OPEN-003：扩展部位启用时间",
+      "dependencies": [],
+      "startLine": 66,
+      "endLine": 82,
+      "contentSha256": "eb7ca3a961f7099d530441a4b10f7145f5f2fd0482f652a4c324cc1350e61624"
+    },
+    {
+      "id": "OPEN-004",
+      "status": "RESOLVED",
+      "moduleId": "05",
+      "path": "docs/spec-v3/05-open-decisions.md",
+      "subsection": "OPEN-004",
+      "title": "OPEN-004：Patch属性偏移阈值",
+      "dependencies": [
+        "14"
+      ],
+      "startLine": 89,
+      "endLine": 188,
+      "contentSha256": "784a993012cd5cecaf0b74c68c00a673ae375847bcbbf72f5496bc6dfd0768ac"
+    },
+    {
+      "id": "OPEN-005",
+      "status": "DECIDED_PENDING_DEFINITION_VERSION",
+      "moduleId": "06",
+      "path": "docs/spec-v3/06-visualization-and-ai.md",
+      "subsection": "21",
+      "title": "21. Model五维图预览",
+      "dependencies": [
+        "22",
+        "24.6",
+        "25.3"
+      ],
+      "startLine": 1,
+      "endLine": 470,
+      "contentSha256": "c9ddbf0f476eda9ab0e111d15cb71a84b7dedf0ca96d149264dbc2ee65b4c150"
+    },
+    {
+      "id": "OPEN-006",
+      "status": "RESOLVED",
+      "moduleId": "06",
+      "path": "docs/spec-v3/06-visualization-and-ai.md",
+      "subsection": "23.6",
+      "title": "23.6 AI服务与数据边界",
+      "dependencies": [],
+      "startLine": 703,
+      "endLine": 883,
+      "contentSha256": "580842a5fc1203998007cac0a760d39fcd973071591b58d4f425f92d1ca7b50e"
+    },
+    {
+      "id": "OPEN-007",
+      "status": "DECIDED_SOURCE_UPDATE_REQUIRED",
+      "moduleId": "05",
+      "path": "docs/spec-v3/05-open-decisions.md",
+      "subsection": "20.1",
+      "title": "20.1 价值分自动定价与PricingPolicy",
+      "dependencies": [],
+      "startLine": 322,
+      "endLine": 412,
+      "contentSha256": "2e02cefa4038ca2d7e211d90fc29b1f39ce2fd8660f159ffa40458b0355f530b"
+    },
+    {
+      "id": "OPEN-008",
+      "status": "DECIDED_PENDING_POLICY_VERSION",
+      "moduleId": "05",
+      "path": "docs/spec-v3/05-open-decisions.md",
+      "subsection": "OPEN-008",
+      "title": "OPEN-008：ConfigIdPolicy数字区间与命名规则",
+      "dependencies": [
+        "25"
+      ],
+      "startLine": 189,
+      "endLine": 321,
+      "contentSha256": "bebe224fe538c6569a81ba375b4bf5530fe712472f3738d6fb8ee698fb9f7bed"
+    },
+    {
+      "id": "OPEN-009",
+      "status": "RESOLVED",
+      "moduleId": "05",
+      "path": "docs/spec-v3/05-open-decisions.md",
+      "subsection": "20.2",
+      "title": "20.2 OPEN-009：AI与发布工作流治理策略",
+      "dependencies": [
+        "23.6"
+      ],
+      "startLine": 413,
+      "endLine": 543,
+      "contentSha256": "adfa32e25ac6a66b9c365f26acff056a8a77722c3e7f96870598ec2989b7f51f"
+    },
+    {
+      "id": "OPEN-010",
+      "status": "BLOCKED_ON_SOURCE_SCHEMA",
+      "moduleId": "04",
+      "path": "docs/spec-v3/04-persistence-and-lifecycle.md",
+      "subsection": "14.4",
+      "title": "14.4 Patch台账远端schema、哈希、协作、回读与补偿契约",
+      "dependencies": [
+        "20.2"
+      ],
+      "startLine": 209,
+      "endLine": 371,
+      "contentSha256": "89dfa3769891f2820f9da2e7a259f88863dffa02a977d3f901d49ce7573a55dc"
+    },
+    {
+      "id": "OPEN-011",
+      "status": "BLOCKED_BEFORE_PRUNING",
+      "moduleId": "05",
+      "path": "docs/spec-v3/05-open-decisions.md",
+      "subsection": "OPEN-011",
+      "title": "OPEN-011：工作区revision归档与裁剪启用",
+      "dependencies": [
+        "14.3"
+      ],
+      "startLine": 83,
+      "endLine": 88,
+      "contentSha256": "bc213c1483b555f1edd9a9cb1d384521f51b4835a7b31bb63bb9f0db3ee90770"
+    }
+  ]
+}

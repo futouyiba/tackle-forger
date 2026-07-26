@@ -6,13 +6,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Read before changing code
 
-Before implementation, refactoring, review, or test work, read these files completely:
+Before implementation, refactoring, review, or test work, follow the generated read plan:
 
 - `AGENTS.md`
 - `docs/README.md`
-- `docs/tackle-forger-development-spec-v3.md`
+- `docs/spec-v3/README.md`
+- `docs/spec-v3/00-authority.md`
+- section 19 of `docs/spec-v3/05-open-decisions.md`
+- `.codex/skills/tackle-agent-workflow/references/v3-open-registry.json`
+- routed sections plus the canonical OPEN subsections and dependencies selected mechanically from TaskBrief `applicableIds`
 
-The v3 specification is the sole authoritative product/domain specification. Files under `docs/2026-*` and `crystal/` are historical. If sources conflict, follow the user's latest explicit decision, update the canonical specification, and then make the implementation match it. Do not resolve open decisions by hard-coding an assumption.
+Read the full modular v3 specification for strict/high-risk work, unknown or broad scope, canonical structure changes, or when OPEN applicability cannot be determined reliably. The generated OPEN registry is navigation evidence, not product authority. The v3 specification is the sole authoritative product/domain specification. Files under `docs/2026-*` and `crystal/` are historical. If sources conflict, follow the user's latest explicit decision, update the canonical specification, and then make the implementation match it. Do not resolve open decisions by hard-coding an assumption.
 
 项目尚未正式交付，无生产环境历史 workspace state 需迁就。PR2b 切流后生产读取链默认走 WQ8w（`CANONICAL_FEISHU_WORKBOOK`）。旧表 YsEKw 的运行时兼容代码与 `LEGACY_YS_EKW_*` 常量已移除（历史拓扑仅 spec §14 审计文档保留）；`/wiki/` 通用解析能力保留。`lib/migrations.ts` 的 schema 迁移链仍需维护与测试覆盖。
 

@@ -9,10 +9,12 @@
 - `docs/README.md`
 - `docs/spec-v3/README.md`
 - `docs/spec-v3/00-authority.md`
-- `docs/spec-v3/05-open-decisions.md`
+- `docs/spec-v3/05-open-decisions.md`中的§19
+- `.codex/skills/tackle-agent-workflow/references/v3-open-registry.json`
+- TaskBrief `applicableIds`对应的OPEN正文小节及registry声明的直接依赖
 - 任务路由命中的相关章节及其直接依赖
 
-`docs/spec-v3/`中的模块合起来是唯一权威产品与领域规范；`docs/tackle-forger-development-spec-v3.md`只是自动生成的兼容镜像。范围未知、影响广泛跨域或修改规范结构时必须读取全部模块。其他`docs/2026-*`和`crystal/*`文件均为历史材料；发生冲突时一律以v3规范为准。
+紧凑OPEN registry是机器生成的导航证据，不替代canonical OPEN正文；即使`applicableIds`为空也必须绑定完整registry hash、检查全部ID并提供非空理由。`docs/spec-v3/`中的模块合起来是唯一权威产品与领域规范；`docs/tackle-forger-development-spec-v3.md`只是自动生成的兼容镜像。范围未知、影响广泛跨域、修改规范结构、strict/high-risk或无法可靠判断OPEN适用性时必须fail-closed读取全部模块。其他`docs/2026-*`和`crystal/*`文件均为历史材料；发生冲突时一律以v3规范为准。
 
 ## 不得自行改变的结论
 
@@ -52,7 +54,7 @@
 `.codex/skills/tackle-agent-workflow/references/workflow-contract-policy.v2.json`。
 `workflow-contract.mjs`执行并校验该政策；Task Card、TaskBrief、receipt、verdict、SCOPED/ROUTED/FULL、验证矩阵与证据身份的操作流程见`$tackle-agent-workflow`，本文不维护第二份教程或JSON。
 
-`reviewTier: fast | standard | strict`只决定审核边界与强度，风险事实仍由`riskProfile`和`riskDimensions`表达。`unknown_high_risk`，或`persistedData`、`historicalSnapshots`、`concurrency`、`authorization`、`externalSideEffects`任一为真时，`reviewTier`必须为`strict`；不得由显示文案、标签或本地缓存降低该下限。
+`reviewTier: fast | standard | strict`独立决定审核边界与强度，风险事实仍由`riskProfile`和`riskDimensions`表达；`strict`同时按中央policy触发FULL规范读取。`unknown_high_risk`，或`persistedData`、`historicalSnapshots`、`concurrency`、`authorization`、`externalSideEffects`任一为真时，`reviewTier`必须为`strict`；不得由显示文案、标签或本地缓存降低该下限。
 
 工作流治理改动至少运行：
 

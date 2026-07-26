@@ -83,7 +83,7 @@ v3飞书镜像直接发布自根目录`tackle-forger-development-spec-v3.md`，�
 
 ## Agent开始开发前
 
-1. 按[`spec-v3/README.md`](./spec-v3/README.md)完成总纲、OPEN登记表和任务相关章节的渐进读取；仅在协议规定时全文读取。
+1. 按[`spec-v3/README.md`](./spec-v3/README.md)完成总纲、§19、紧凑OPEN registry、适用OPEN正文和任务相关章节的渐进读取；仅在协议规定时全文读取。
 2. 检查规范第20节“未决事项登记表”，不得擅自固定未确认语义或绕过外部规则源阻断。
 3. 对照“当前实现迁移”确认本次工作属于哪个阶段。
 4. 保持历史发布配置不可变。

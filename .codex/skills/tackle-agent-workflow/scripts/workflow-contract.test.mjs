@@ -690,6 +690,25 @@ test('patch manifest does not invent executable mode when core.filemode is false
   } finally { cleanup(root); }
 });
 
+test('patch manifest preserves an indexed executable mode when core.filemode is false', () => {
+  const root = temporaryRepo();
+  try {
+    write(root, 'base.txt', 'base\n');
+    const baseSha = commitBase(root);
+    command(root, ['config', 'core.filemode', 'false']);
+    write(root, 'indexed.sh', '#!/bin/sh\n');
+    command(root, ['add', 'indexed.sh']);
+    command(root, ['update-index', '--chmod=+x', 'indexed.sh']);
+    write(root, 'untracked.sh', '#!/bin/sh\n');
+    chmodSync(path.join(root, 'untracked.sh'), 0o755);
+    const entries = buildPatchManifest({ root, baseSha, ownedPaths: ['indexed.sh', 'untracked.sh'] }).entries;
+    assert.deepEqual(entries.map((entry) => [entry.path, entry.state, entry.mode]), [
+      ['indexed.sh', 'tracked_changed', '100755'],
+      ['untracked.sh', 'untracked', '100644'],
+    ]);
+  } finally { cleanup(root); }
+});
+
 test('patch manifest rejects traversal and symlinks', async (t) => {
   const root = temporaryRepo();
   try {

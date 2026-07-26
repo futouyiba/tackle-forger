@@ -454,19 +454,30 @@ function baseEntry(root, baseSha, repoPath) {
   if (bytes === null) fail(`Cannot read base content: ${repoPath}`);
   return { mode: match[1], bytes };
 }
-function currentEntry(root, absolute, repoPath, baseMode = null) {
+function currentEntry(root, absolute, repoPath, fallbackMode = null) {
   if (!existsSync(absolute)) return null;
   const stat = lstatSync(absolute);
   if (stat.isSymbolicLink() || !stat.isFile()) fail(`Unsupported current entry: ${repoPath}`);
   if (typeof stat.mode !== 'number') fail(`Cannot read POSIX mode: ${repoPath}`);
   const fileMode = git(root, ['config', '--bool', 'core.filemode'])?.toString('utf8').trim();
   const mode = fileMode === 'false'
-    ? (baseMode ?? '100644')
+    ? (fallbackMode ?? '100644')
     : ((stat.mode & 0o111) !== 0 ? '100755' : '100644');
   const bytes = readFileSync(absolute);
   return { mode, bytes };
 }
-function indexTracks(root, repoPath) { return git(root, ['ls-files', '--error-unmatch', '--', repoPath]) !== null; }
+function indexEntryMode(root, repoPath) {
+  const listing = git(root, ['ls-files', '--stage', '-z', '--', repoPath]);
+  if (!listing || listing.length === 0) return null;
+  const nul = listing.indexOf(0);
+  if (nul < 0 || nul !== listing.length - 1) fail(`Ambiguous index entry: ${repoPath}`);
+  const record = listing.subarray(0, nul);
+  const tab = record.indexOf(0x09);
+  if (tab < 0) fail(`Unsupported index entry: ${repoPath}`);
+  const match = record.subarray(0, tab).toString('ascii').match(/^(100644|100755) [0-9a-f]{40,64} 0$/);
+  if (!match || !record.subarray(tab + 1).equals(Buffer.from(repoPath, 'utf8'))) fail(`Unsupported index entry: ${repoPath}`);
+  return match[1];
+}
 export function buildPatchManifest({ root = repositoryRoot(), baseSha, ownedPaths }) {
   if (!/^[0-9a-f]{40,64}$/i.test(baseSha ?? '') || git(root, ['rev-parse', '--verify', `${baseSha}^{commit}`]) === null) fail('base SHA must resolve to a commit');
   if (!Array.isArray(ownedPaths) || ownedPaths.length === 0) fail('At least one --owned path is required');
@@ -474,11 +485,12 @@ export function buildPatchManifest({ root = repositoryRoot(), baseSha, ownedPath
   if (new Set(paths.map((item) => item.path)).size !== paths.length) fail('Owned paths must be unique');
   const entries = paths.map(({ path: repoPath, absolute }) => {
     const before = baseEntry(root, baseSha, repoPath);
-    const after = currentEntry(root, absolute, repoPath, before?.mode);
+    const indexMode = indexEntryMode(root, repoPath);
+    const after = currentEntry(root, absolute, repoPath, before?.mode ?? indexMode);
     if (!after && !before) fail(`Owned path is neither current nor in base: ${repoPath}`);
     if (!after) return { path: repoPath, state: 'deleted', mode: before.mode, length: before.bytes.length, contentSha256: sha256(before.bytes) };
     const same = before && before.mode === after.mode && before.bytes.equals(after.bytes);
-    const state = same ? 'unchanged' : (before || indexTracks(root, repoPath) ? 'tracked_changed' : 'untracked');
+    const state = same ? 'unchanged' : (before || indexMode !== null ? 'tracked_changed' : 'untracked');
     return { path: repoPath, state, mode: after.mode, length: after.bytes.length, contentSha256: sha256(after.bytes) };
   }).sort((left, right) => compareUtf8(left.path, right.path));
   return { baseSha: git(root, ['rev-parse', baseSha]).toString('utf8').trim(), entries, schemaVersion: PATCH_SCHEMA };
@@ -1238,7 +1250,7 @@ function validatePreparationRisk({ riskProfile, changeClass, riskDimensions, sco
 function prepareOwnedFilePath(root, baseSha, inputPath) {
   const validated = validatePath(root, inputPath);
   const before = baseEntry(root, baseSha, validated.path);
-  const after = existsSync(validated.absolute) ? currentEntry(root, validated.absolute, validated.path, before?.mode) : null;
+  const after = existsSync(validated.absolute) ? currentEntry(root, validated.absolute, validated.path, before?.mode ?? indexEntryMode(root, validated.path)) : null;
   if (!before && !after) {
     let parent = path.dirname(validated.absolute);
     while (parent !== root) {

@@ -53,8 +53,12 @@ SHA="$(git rev-parse "$GIT_REF")"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 REL="${STAMP}-${SHA:0:8}"
 TAR="/tmp/tackle-forger-${REL}.tar.gz"
+RELEASE_COMMIT_MARKER=".tackle-forger-release-commit"
+RELEASE_COMMIT_CONTENT="${SHA}"$'\n'
 # git archive 只打包 git 追踪文件，自动排除 node_modules/.data/dist/.next
-git archive --format=tar.gz "$SHA" -o "$TAR"
+# Marker is generated from the exact object being archived, not the caller's
+# working tree.  The acceptance preflight rejects archive releases without it.
+git archive --format=tar --add-virtual-file="${RELEASE_COMMIT_MARKER}:${RELEASE_COMMIT_CONTENT}" "$SHA" | gzip -n > "$TAR"
 echo "    SHA=$SHA  REL=$REL  size=$(du -h "$TAR" | cut -f1)"
 
 echo "==> 2/5 传输源码到 R730"
@@ -63,15 +67,20 @@ ssh "$R730_SSH" "mkdir -p '$R730_ROOT/releases/$REL'"
 scp -q "$TAR" "$R730_SSH:$REMOTE_TAR"
 
 echo "==> 3/5 远程 install + build（vinext build → dist）"
-ssh "$R730_SSH" bash -s -- "$R730_ROOT" "$REL" "$REMOTE_TAR" "$NPM_REGISTRY" <<'REMOTE'
+ssh "$R730_SSH" bash -s -- "$R730_ROOT" "$REL" "$REMOTE_TAR" "$NPM_REGISTRY" "$SHA" <<'REMOTE'
 set -euo pipefail
-ROOT="$1"; REL="$2"; TAR="$3"; REG="$4"
+ROOT="$1"; REL="$2"; TAR="$3"; REG="$4"; EXPECTED_SHA="$5"
 DIR="$ROOT/releases/$REL"
 
 mkdir -p "$DIR"
 tar -xzf "$TAR" -C "$DIR"
 rm -f "$TAR"
 cd "$DIR"
+
+marker=".tackle-forger-release-commit"
+test -f "$marker" && test ! -L "$marker" || { echo "✗ release commit 标记缺失或不是普通文件"; exit 1; }
+test "$(cat "$marker")" = "$EXPECTED_SHA" || { echo "✗ release commit 标记与归档 SHA 不一致"; exit 1; }
+grep -qx '[0-9a-f]\{40\}' "$marker" || { echo "✗ release commit 标记格式错误"; exit 1; }
 
 # 非交互 ssh 下补齐 nvm/node PATH
 export NVM_DIR="$HOME/.nvm"

@@ -12,6 +12,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { ActionAvailabilityMap } from "@/lib/interaction-contracts";
 import { randomUUID } from "@/lib/browser-utils";
 import { issueClientActionCommand } from "@/lib/client-action-command";
+import { type FeishuApiErrorInfo } from "@/lib/feishu-api-error";
 import { CANONICAL_FEISHU_WORKBOOK } from "@/lib/feishu-workbook";
 import { buildFeishuOrchestrationModel } from "@/lib/feishu-orchestration-presentation";
 import type { CanonicalRuleWorkbookInspection } from "@/lib/rule-workbook-inspection";
@@ -41,6 +42,17 @@ interface RuleWorkbookWorkbenchProps {
 
 type ActionState = "" | "inspect" | "pull" | "draft" | "publish";
 
+/** 所有 inspection 子对象的 issue 归一化行，按 sheet 分组供 UI 渲染。 */
+interface WorkbookIssueRow {
+  sheetId: string;
+  sheetName: string;
+  row?: number;
+  cell?: string;
+  level: "error" | "warning";
+  code: string;
+  message: string;
+}
+
 function dateTime(value?: string) {
   if (!value) return "尚未读取";
   return new Date(value).toLocaleString("zh-CN");
@@ -50,25 +62,22 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
   const [inspection, setInspection] = useState<CanonicalRuleWorkbookInspection | null>(null);
   const [action, setAction] = useState<ActionState>("");
   const [error, setError] = useState("");
-  const [errorCode, setErrorCode] = useState<number | undefined>(undefined);
-  const [errorEndpoint, setErrorEndpoint] = useState<string | undefined>(undefined);
+  const [errorDetail, setErrorDetail] = useState<FeishuApiErrorInfo | undefined>(undefined);
   const [warningReason, setWarningReason] = useState("");
 
   const inspect = async () => {
     setAction("inspect");
     setError("");
-    setErrorCode(undefined);
-    setErrorEndpoint(undefined);
+    setErrorDetail(undefined);
     try {
       const response = await fetch("/api/feishu-workbook", { cache: "no-store" });
       const payload = (await response.json()) as {
         inspection?: CanonicalRuleWorkbookInspection;
         error?: string;
-        errorInfo?: { code?: number; endpoint?: string };
+        errorInfo?: FeishuApiErrorInfo;
       };
       if (!response.ok || !payload.inspection) {
-        setErrorCode(payload.errorInfo?.code);
-        setErrorEndpoint(payload.errorInfo?.endpoint);
+        setErrorDetail(payload.errorInfo);
         throw new Error(payload.error || "读取规则工作簿失败");
       }
       setInspection(payload.inspection);
@@ -86,11 +95,10 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
         const payload = (await response.json()) as {
           inspection?: CanonicalRuleWorkbookInspection;
           error?: string;
-          errorInfo?: { code?: number; endpoint?: string };
+          errorInfo?: FeishuApiErrorInfo;
         };
         if (!response.ok || !payload.inspection) {
-          setErrorCode(payload.errorInfo?.code);
-          setErrorEndpoint(payload.errorInfo?.endpoint);
+          setErrorDetail(payload.errorInfo);
           throw new Error(payload.error || "读取规则工作簿失败");
         }
         setInspection(payload.inspection);
@@ -132,15 +140,52 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
   const identityReportRegistered = inspection
     ? props.state.sourceIdentityMigrationReports.some((item) => item.reportId === inspection.identityReport.reportId)
     : false;
-  const registryErrors = inspection?.sourceRevision.issues.filter((issue) => issue.severity === "error") ?? [];
-  const registryWarnings = inspection?.sourceRevision.issues.filter((issue) => issue.severity === "warning") ?? [];
-  const canonicalRuleErrors = inspection?.canonicalRuleDraft.issues.filter((issue) => issue.level === "error") ?? [];
   const qualityMappingIssue = inspection?.pricingDraft.issues.some((issue) =>
     issue.code.startsWith("QUALITY_PRICING_MAPPING_"));
   const missingPricing = inspection?.pricingDraft.issues.filter((issue) =>
     ["PRICING_INTERPOLATION_MISSING", "PARTS_TO_WHOLE_RATIO_MISSING", "PRICING_MONEY_POLICY_MISSING", "PRICING_EXECUTION_SEMANTICS_MISSING"].includes(issue.code)) ?? [];
   const inspectAvailability = props.actionAvailabilities.inspect_feishu_workbook;
   const identityWriteAvailability = props.actionAvailabilities.write_feishu_identity;
+
+  // sheetId → 人类可读标签页名（来自飞书 grid 元数据）
+  const sheetNameMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const sheet of inspection?.sourceRevision.sheets ?? []) map.set(sheet.sheetId, sheet.name);
+    return map;
+  }, [inspection]);
+
+  /** 把所有 inspection 子对象的 issue 归一化为统一行，按 sheet 分组供 UI 渲染。 */
+  const allWorkbookIssues = useMemo((): WorkbookIssueRow[] => {
+    if (!inspection) return [];
+    const name = (sheetId?: string) => (sheetId ? (sheetNameMap.get(sheetId) ?? sheetId) : "(未知表)");
+    const rows: WorkbookIssueRow[] = [];
+    for (const issue of inspection.sourceRevision.issues) {
+      rows.push({ sheetId: issue.sheetId, sheetName: name(issue.sheetId), level: issue.severity, code: issue.code, message: issue.message });
+    }
+    for (const issue of inspection.canonicalRuleDraft.issues) {
+      rows.push({ sheetId: issue.sheetId ?? "", sheetName: name(issue.sheetId), row: issue.row, level: issue.level, code: issue.code, message: issue.message });
+    }
+    for (const issue of inspection.weightTemplateDraft.issues) {
+      const cell = issue.sourceCell?.cell;
+      const row = cell ? Number.parseInt(cell.replace(/^[A-Z]+/, ""), 10) || undefined : undefined;
+      rows.push({ sheetId: issue.sourceCell?.sheetId ?? "", sheetName: name(issue.sourceCell?.sheetId), row, cell, level: issue.severity === "ERROR" ? "error" : "warning", code: issue.code, message: issue.message });
+    }
+    for (const issue of inspection.seriesParseIssues) {
+      rows.push({ sheetId: issue.sheetId, sheetName: name(issue.sheetId), row: issue.row, level: issue.level, code: issue.code, message: issue.message });
+    }
+    for (const issue of inspection.qualityDraft.issues) {
+      const src = issue.sourceCell;
+      rows.push({ sheetId: src?.sheetId ?? "27hboC", sheetName: src ? name(src.sheetId) : "07_品质评分", row: src?.rowKey ? Number.parseInt(src.rowKey, 10) || undefined : undefined, cell: src?.cell, level: issue.severity === "WARNING" ? "warning" : "error", code: issue.code, message: issue.message });
+    }
+    for (const issue of inspection.pricingDraft.issues) {
+      const src = issue.source;
+      rows.push({ sheetId: src?.sheetId ?? "", sheetName: src ? name(src.sheetId) : "定价草稿", row: src?.rowKey ? Number.parseInt(src.rowKey, 10) || undefined : undefined, cell: src?.cell, level: issue.severity, code: issue.code, message: issue.message });
+    }
+    return rows;
+  }, [inspection, sheetNameMap]);
+
+  const workbookIssueCount = allWorkbookIssues.length;
+  const workbookErrorCount = allWorkbookIssues.filter((i) => i.level === "error").length;
 
   const pull = async () => {
     if (!inspection) return;
@@ -301,13 +346,22 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
           <AlertTriangle size={20} />
           <div>
             <strong>暂时无法读取飞书工作簿</strong>
-            <span>{error}</span>
-            {errorCode !== undefined || errorEndpoint ? (
-              <small className="rule-workbook-error-info">
-                {errorCode !== undefined ? `飞书 code ${errorCode}` : ""}
-                {errorCode !== undefined && errorEndpoint ? " · " : ""}
-                {errorEndpoint ?? ""}
-              </small>
+            <span className="rule-workbook-error-message">{error}</span>
+            {errorDetail ? (
+              <dl className="rule-workbook-error-detail">
+                {errorDetail.httpStatus ? (
+                  <><dt>飞书 HTTP</dt><dd>{errorDetail.httpStatus}</dd></>
+                ) : null}
+                {errorDetail.code !== undefined ? (
+                  <><dt>飞书 code</dt><dd>{errorDetail.code}</dd></>
+                ) : null}
+                {errorDetail.msg ? (
+                  <><dt>飞书返回</dt><dd>{errorDetail.msg}</dd></>
+                ) : null}
+                {errorDetail.endpoint ? (
+                  <><dt>调用端点</dt><dd><code>{errorDetail.endpoint}</code></dd></>
+                ) : null}
+              </dl>
             ) : null}
           </div>
         </div>
@@ -421,10 +475,81 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
           <strong>边界已锁定</strong>
           <span>09_甘特图只作开发排期；11、12、14–17 不反向覆盖领域真相；正式配置仍由冻结 Snapshot 输出到本地 Git 配置仓库。</span>
         </div>
-        <span className={!inspection || registryErrors.length || canonicalRuleErrors.length || registryWarnings.length ? "rule-badge warning" : "rule-badge success"}>
-          {!inspection ? "等待 sheet_id 校验" : registryErrors.length ? `${registryErrors.length} 个注册表错误` : canonicalRuleErrors.length ? `${canonicalRuleErrors.length} 个规则数据错误` : registryWarnings.length ? `${registryWarnings.length} 个名称告警` : "18 张表已按 ID 校验"}
+        <span className={!inspection ? "rule-badge warning" : workbookErrorCount ? "rule-badge danger" : workbookIssueCount ? "rule-badge warning" : "rule-badge success"}>
+          {!inspection ? "等待 sheet_id 校验" : workbookErrorCount ? `${workbookErrorCount} 个错误 · ${workbookIssueCount - workbookErrorCount} 个告警` : workbookIssueCount ? `${workbookIssueCount} 个告警（无阻断错误）` : "全部校验通过"}
         </span>
       </div>
+
+      {inspection && allWorkbookIssues.length > 0 ? (
+        <WorkbookIssuePanel issues={allWorkbookIssues} />
+      ) : null}
     </section>
+  );
+}
+
+/** 按标签页分组展示全部 inspection 校验问题。 */
+function WorkbookIssuePanel({ issues }: { issues: WorkbookIssueRow[] }) {
+  const [expanded, setExpanded] = useState(false);
+
+  // 按 sheetId 分组
+  const grouped = useMemo(() => {
+    const map = new Map<string, WorkbookIssueRow[]>();
+    for (const issue of issues) {
+      const key = issue.sheetName || issue.sheetId;
+      const list = map.get(key);
+      if (list) list.push(issue);
+      else map.set(key, [issue]);
+    }
+    return [...map.entries()];
+  }, [issues]);
+
+  const errorCount = issues.filter((i) => i.level === "error").length;
+  const warningCount = issues.length - errorCount;
+
+  return (
+    <div className="card">
+      <button
+        type="button"
+        className="wb-issue-toggle"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+      >
+        <AlertTriangle size={16} />
+        <span>
+          {errorCount > 0 ? `${errorCount} 个解析错误` : ""}
+          {errorCount > 0 && warningCount > 0 ? " · " : ""}
+          {warningCount > 0 ? `${warningCount} 个结构告警` : ""}
+        </span>
+        <span className="wb-issue-toggle-hint">{expanded ? "收起" : "展开详情"}</span>
+      </button>
+      {expanded ? (
+        <div className="wb-issue-list">
+          {grouped.map(([sheetName, sheetIssues]) => (
+            <div key={sheetName} className="wb-issue-group">
+              <div className="wb-issue-group-header">
+                <span className="wb-issue-sheet-name">{sheetName}</span>
+                <span className="wb-issue-sheet-count">
+                  {sheetIssues.filter((i) => i.level === "error").length || "—"} 错误 ·{" "}
+                  {sheetIssues.filter((i) => i.level === "warning").length || "—"} 告警
+                </span>
+              </div>
+              <ul className="wb-issue-rows">
+                {sheetIssues.map((issue, index) => (
+                  <li key={index} className={`wb-issue-row ${issue.level}`}>
+                    <code className="wb-issue-code">{issue.code}</code>
+                    <span className="wb-issue-location">
+                      {issue.row ? `第 ${issue.row} 行` : null}
+                      {issue.row && issue.cell ? " · " : null}
+                      {issue.cell ? issue.cell : null}
+                    </span>
+                    <span className="wb-issue-message">{issue.message}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }

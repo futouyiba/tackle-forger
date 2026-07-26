@@ -593,6 +593,84 @@ function gitSucceeds(root, args) {
   }
 }
 
+const RELEASE_COMMIT_MARKER = ".tackle-forger-release-commit";
+
+/**
+ * Establish the sole commit identity a release may claim.  A normal checkout
+ * must be a clean Git worktree; a git-archive release has no .git directory,
+ * so it must instead carry the exact marker injected while archiving.
+ */
+export async function inspectImmutableBuildIdentity(root) {
+  let gitCommit = "";
+  try {
+    const [canonicalRoot, gitTopLevel] = await Promise.all([
+      realpath(root),
+      Promise.resolve(safeGit(root, ["rev-parse", "--show-toplevel"])),
+    ]);
+    // An unpacked release beneath another checkout must prove itself with the
+    // packaged marker, never by inheriting the parent checkout's Git HEAD.
+    if (gitTopLevel && await realpath(gitTopLevel) === canonicalRoot) {
+      gitCommit = safeGit(root, ["rev-parse", "HEAD"]);
+    }
+  } catch {
+    gitCommit = "";
+  }
+  if (gitCommit) {
+    const dirty = Boolean(safeGit(root, ["status", "--porcelain"]));
+    return {
+      commit: gitCommit,
+      checks: [
+        /^[0-9a-f]{40}$/u.test(gitCommit)
+          ? check("immutable_build_commit", "PASS", "已从干净 Git checkout 解析不可变构建 commit。", { commit: gitCommit, source: "git_head" })
+          : check("immutable_build_commit", "BLOCKED", "Git HEAD 不是有效的 40 位 commit。"),
+        dirty
+          ? check("clean_release_tree", "BLOCKED", "发布工作树存在未提交变更。")
+          : check("clean_release_tree", "PASS", "发布工作树无未提交变更。", { source: "git_head" }),
+      ],
+    };
+  }
+
+  const markerPath = path.join(root, RELEASE_COMMIT_MARKER);
+  try {
+    const markerInfo = await lstat(markerPath);
+    if (!markerInfo.isFile() || markerInfo.isSymbolicLink()) {
+      return {
+        commit: null,
+        checks: [
+          check("immutable_build_commit", "BLOCKED", "git-archive release 的 commit 标记必须是普通文件，不能是目录或符号链接。"),
+          check("clean_release_tree", "BLOCKED", "无 Git checkout 时只能接受已验证的 git-archive commit 标记。"),
+        ],
+      };
+    }
+    const marker = await readFile(markerPath, "utf8");
+    if (!/^[0-9a-f]{40}\n$/u.test(marker)) {
+      return {
+        commit: null,
+        checks: [
+          check("immutable_build_commit", "BLOCKED", "git-archive release 的 commit 标记缺失、格式错误或不完整。"),
+          check("clean_release_tree", "BLOCKED", "无 Git checkout 时只能接受已验证的 git-archive commit 标记。"),
+        ],
+      };
+    }
+    const commit = marker.slice(0, -1);
+    return {
+      commit,
+      checks: [
+        check("immutable_build_commit", "PASS", "已从 git-archive 的不可变 commit 标记解析构建身份。", { commit, source: "git_archive_marker" }),
+        check("clean_release_tree", "PASS", "git-archive release 不含可变 Git 工作树，已验证归档 commit 标记。", { source: "git_archive_marker" }),
+      ],
+    };
+  } catch {
+    return {
+      commit: null,
+      checks: [
+        check("immutable_build_commit", "BLOCKED", "无法解析 Git HEAD，且 git-archive release 缺少不可变 commit 标记。"),
+        check("clean_release_tree", "BLOCKED", "无 Git checkout 时只能接受已验证的 git-archive commit 标记。"),
+      ],
+    };
+  }
+}
+
 const GITHUB_API_ORIGIN = "https://api.github.com";
 
 function githubApiUrl(pathname) {
@@ -1174,18 +1252,12 @@ async function environmentFileChecks(envFile, root = process.cwd()) {
 export async function runPreflight({ root = process.cwd(), envFile } = {}) {
   const generatedAt = new Date().toISOString();
   const node = safeNodeVersion();
-  const gitCommit = safeGit(root, ["rev-parse", "HEAD"]);
-  const dirty = Boolean(safeGit(root, ["status", "--porcelain"]));
+  const immutableBuild = await inspectImmutableBuildIdentity(root);
   const checks = [
     node.supported
       ? check("node_version", "PASS", "Node.js 满足 22.16.0+。", { version: node.value })
       : check("node_version", "BLOCKED", "Node.js 必须为 22.16.0 或更新版本。", { version: node.value }),
-    gitCommit
-      ? check("immutable_build_commit", "PASS", "已解析不可变构建 commit。", { commit: gitCommit })
-      : check("immutable_build_commit", "BLOCKED", "无法解析不可变构建 commit。"),
-    dirty
-      ? check("clean_release_tree", "BLOCKED", "发布工作树存在未提交变更。")
-      : check("clean_release_tree", "PASS", "发布工作树无未提交变更。"),
+    ...immutableBuild.checks,
   ];
   try {
     checks.push(...inspectSourceContracts(await loadSourceContracts(root)));

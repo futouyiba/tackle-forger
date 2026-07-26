@@ -25,8 +25,10 @@ mock 和无业务写入预检都只能作为准备证据，不能替代真实环
 | #72 / PR #76 | 一期 Capability、UI、直接 API 和下载物都只允许固定 `NON_FORMAL` 预览 | 不部署到真实用户可访问环境 |
 | 其他一期领域阻断 | #43 当前清单中标记为一期门槛的子项已经完成或被明确延期，理由与 v3 一致 | 只做部署准备，不创建通过结论 |
 
-截至 2026-07-23，PR #71 和 PR #76 已合入且对应头 CI 通过；PR #71 仍有未解决 review
-threads，PR #67 仍开放。因此依赖门禁仍为 `BLOCKED`，不得开始真实环境验收。
+截至本手册更新，#67、#71、#76 的 merge commit、reviewed head 与已解决 review threads
+已记录在受版本控制的清单中。上线时仍必须由 GitHub 在线门禁重新读取 PR #71 及其余依赖的
+threads、当前头 review 和 CI；清单布尔值只是历史辅助证据，网络、认证、分页或任一实时核对失败
+都会保持 `BLOCKED`，不得开始真实环境验收。
 
 任何一项未满足都记录为 `DEPENDENCY_BLOCKED`。此状态不是代码缺陷的笼统描述，也不能用
 单元测试、手工临时开关或运维承诺消除。
@@ -55,7 +57,7 @@ Issue #73 使用三层证据，禁止互相替代：
 在待部署 commit 的干净工作树运行：
 
 ```bash
-npm run acceptance:phase-one -- preflight \
+sudo -u tackleforger env PATH=/usr/local/bin:/usr/bin:/bin npm run acceptance:phase-one -- preflight \
   --env-file /opt/tackle-forger/.env.local \
   --output /secure/evidence/phase-one-preflight.json
 ```
@@ -67,10 +69,13 @@ npm run acceptance:phase-one -- preflight \
 脚本只输出已配置的键名，不输出值；环境文件必须使用仓库外绝对路径，归服务账号所有，
 是非符号链接普通文件且权限为 `0600` 或更严格。`--output` 使用“仅新建、不覆盖”语义并
 创建 `0600` 文件，推荐写入受限证据目录，不要写入仓库。
+预检会将环境文件与持久数据路径所有者绑定到当前进程 UID，因此必须以服务账号
+`tackleforger`执行；证据目录也应先由该账号创建并仅向它开放写入。
 
 预检会显式阻断：
 
-- Node 低于 22.16.0、工作树不干净或 commit 不可解析；
+- Node 低于 22.16.0；普通 checkout 工作树不干净或 commit 不可解析；或者无`.git`的 git-archive
+  release 缺少、格式错误、内容不完整或为符号链接的`.tackle-forger-release-commit`；
 - 受版本控制的 `deploy/phase-one-dependencies.json` 未把 #66/PR #67、#68/PR #71、
   #72/PR #76 分别绑定到 GitHub 返回的 reviewed head 与唯一 merge commit，或其 review
   threads、必需 CI、PR 映射和 HEAD 祖先关系不满足；源码字符串标记只作辅助提示，不能
@@ -111,7 +116,7 @@ BLOCKED；清单中的布尔值只是辅助证据，
 部署完成且 Nginx/证书已生效后运行：
 
 ```bash
-npm run acceptance:phase-one -- public-smoke \
+sudo -u tackleforger env PATH=/usr/local/bin:/usr/bin:/bin npm run acceptance:phase-one -- public-smoke \
   --base-url https://tackle-forger.internal.example \
   --env-file /opt/tackle-forger/.env.local \
   --output /secure/evidence/phase-one-public-smoke.json
@@ -139,16 +144,19 @@ IPv6 ULA 与公网 HTTP 永远拒绝。此生产验收脚本不接受 v3 §25.2 
 ### 3.3 已登录只读核对
 
 真实用户先通过浏览器完成飞书登录。若运维选择使用脚本核对，需把当前
-`tf_session=<opaque-id>` 临时写入仓库外绝对路径、由当前执行用户拥有的 `0600` 普通文件；相对路径、仓库内
+`tf_session=<opaque-id>` 临时写入仓库外绝对路径、由服务账号 `tackleforger` 拥有的 `0600` 普通文件；相对路径、仓库内
 文件、符号链接和其他用户拥有的文件都会被拒绝。不要把 Cookie 放在命令参数、shell history、Issue、日志或聊天中：
 
 ```bash
-npm run acceptance:phase-one -- authenticated-read-only \
+sudo -u tackleforger env PATH=/usr/local/bin:/usr/bin:/bin npm run acceptance:phase-one -- authenticated-read-only \
   --base-url https://tackle-forger.internal.example \
   --cookie-file /run/user/<uid>/tackle-forger-session.cookie \
   --env-file /opt/tackle-forger/.env.local \
   --output /secure/evidence/phase-one-authenticated-read-only.json
 ```
+
+临时 Cookie 也必须由 `tackleforger` 创建并保持 `0600`；不要先由部署登录账号创建再切换
+服务账号执行验收。
 
 完成后按公司的安全流程清理临时 Cookie 文件并在浏览器退出登录。清理和退出都不是脚本
 自动动作，避免把只读核对伪装成有副作用的验收。

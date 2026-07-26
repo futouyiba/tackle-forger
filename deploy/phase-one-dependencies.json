@@ -5,12 +5,12 @@
       "id": "canonical_rule_source",
       "issue": 66,
       "pr": 67,
-      "commit": null,
-      "reviewedHeadCommit": null,
-      "merged": false,
-      "reviewThreadsResolved": false,
-      "requiredChecksPassed": false,
-      "currentHeadReviewPassed": false,
+      "commit": "b53c4172cd46eb8a3db23c4d90d983bfdbb899d4",
+      "reviewedHeadCommit": "924cc9497939f0414cd134d429ad3ccc6a485582",
+      "merged": true,
+      "reviewThreadsResolved": true,
+      "requiredChecksPassed": true,
+      "currentHeadReviewPassed": true,
       "evidenceUrl": "https://github.com/futouyiba/tackle-forger/pull/67"
     },
     {
@@ -20,9 +20,9 @@
       "commit": "55ce2dd5ba0e2d3e9855d613b09c687d8585537a",
       "reviewedHeadCommit": "b0eed77e4210739f0e87eb43ad677219231aafac",
       "merged": true,
-      "reviewThreadsResolved": false,
+      "reviewThreadsResolved": true,
       "requiredChecksPassed": true,
-      "currentHeadReviewPassed": false,
+      "currentHeadReviewPassed": true,
       "evidenceUrl": "https://github.com/futouyiba/tackle-forger/pull/71"
     },
     {
@@ -34,7 +34,7 @@
       "merged": true,
       "reviewThreadsResolved": true,
       "requiredChecksPassed": true,
-      "currentHeadReviewPassed": false,
+      "currentHeadReviewPassed": true,
       "evidenceUrl": "https://github.com/futouyiba/tackle-forger/pull/76"
     }
   ]

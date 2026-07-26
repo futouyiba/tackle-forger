@@ -9,8 +9,8 @@
 
 - 服务账号：`tackleforger`，禁止交互登录。
 - 当前版本：`/opt/tackle-forger/current`。
-- 私密环境文件：`/opt/tackle-forger/.env.local`，权限 `0600`。
-- 持久数据根：`/opt/tackle-forger/data`，仅服务账号可读写。
+- 私密环境文件：`/opt/tackle-forger/.env.local`，由`sudo install -o tackleforger -g tackleforger -m 0600`创建；必须是服务账号拥有的普通文件，不能是符号链接。
+- 持久数据根：`/opt/tackle-forger/data`，由`sudo install -d -o tackleforger -g tackleforger -m 0700`创建；已有的`auth`、`files`、`backups`等目录也必须为服务账号拥有的`0700`目录，SQLite 为服务账号拥有的`0600`普通文件。
 - 从 `deploy/tackle-forger.env.example` 创建 `/opt/tackle-forger/.env.local`，不要把通用 `.env.example` 的相对 `.data/*` 路径直接用于生产。
 - 将 `WORKSPACE_DATABASE_PATH`、`WORKSPACE_FILE_DATA_DIR`、`WORKSPACE_BACKUP_DIR`、`FEISHU_SESSION_DATA_DIR`、`AI_RETENTION_DATA_DIR` 和 `AI_RETENTION_TOMBSTONE_DIR` 全部指向该持久数据根内的独立目录；删除墓碑目录不得位于 AI 留存目录或备份目录内部，也不得在恢复旧工作区备份时被覆盖。示例已使用 `/opt/tackle-forger/data/*` 绝对路径，与 systemd 的 `ReadWritePaths` 一致。
 
@@ -27,6 +27,13 @@ R730 必须显式设置 `WORKSPACE_STORAGE_BACKEND=sqlite`。缺少该值、设�
    权威 spreadsheet token、至少 32 字节会话密钥和持久目录，并确认文件权限为 `0600`；
    核对受版本控制的 `deploy/phase-one-dependencies.json` 已由单独评审提交记录 #67、#71、
    #76 的 GitHub reviewed head、唯一 merge commit、已解决 review threads 和通过的必需 CI。
+   部署脚本使用 `git archive` 时会把精确的 40 位 SHA 写入归档根目录
+   `.tackle-forger-release-commit`；不得手工创建、修改或软链接该文件。预检在没有`.git`的只读 release
+   中只接受这个严格标记，在普通 checkout 中只接受干净的 Git HEAD。
+   真实 `preflight`、`public-smoke` 和 `authenticated-read-only` 必须使用
+   `sudo -u tackleforger env PATH=/usr/local/bin:/usr/bin:/bin ...`：验收会把环境、Cookie 与持久
+   路径所有权绑定到执行 UID。先为服务账号准备仅其可写的证据目录；已登录验收的 Cookie 也必须是
+   它拥有的 `0600` 普通文件。
 4. 在飞书开放平台把回调逐字登记为 `https://<内网域名>/api/auth/feishu/callback`。
 5. 若从历史 Vercel Blob 迁移，先在从未存在过的目标路径运行 `npm run storage:migrate:blob-to-sqlite`；脚本先导入同目录临时 SQLite、回读验证后才原子发布，目标竞争或任一失败均不会覆盖目标。迁移报告会披露可获得的 revision 数量、最小/最大值与窗口内缺口，并始终标记历史为 `historyTruncatedOrUnknown=true`：Blob 最多 100 条，不能恢复先前已裁掉的历史。
 

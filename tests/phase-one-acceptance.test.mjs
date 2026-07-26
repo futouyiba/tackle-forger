@@ -27,6 +27,7 @@ import {
   EXPECTED_CANONICAL_SHEETS,
   EXPECTED_PHASE_ONE_CAPABILITIES,
   inspectDependencyManifest,
+  inspectImmutableBuildIdentity,
   inspectRuntimePathFilesystem,
   inspectRuntimePaths,
   readSecureEnvironmentFile,
@@ -774,6 +775,105 @@ test("三种模式共用的环境 loader 拒绝仓库内、相对、symlink 与�
   );
   await rm(root, { recursive: true, force: true });
   await rm(outside, { recursive: true, force: true });
+});
+
+test("构建身份只接受干净 Git checkout 或 git-archive 的严格 commit 标记", async (t) => {
+  if (skipOnWindows(t, "git-archive release marker")) return;
+  const checkout = await mkdtemp(path.join(os.tmpdir(), "tf-phase-one-checkout-"));
+  execFileSync("git", ["init"], { cwd: checkout });
+  execFileSync("git", ["config", "user.email", "acceptance@example.invalid"], { cwd: checkout });
+  execFileSync("git", ["config", "user.name", "Acceptance Fixture"], { cwd: checkout });
+  await writeFile(path.join(checkout, "tracked.txt"), "tracked\n");
+  execFileSync("git", ["add", "tracked.txt"], { cwd: checkout });
+  execFileSync("git", ["commit", "-m", "fixture"], { cwd: checkout });
+  const checkoutIdentity = await inspectImmutableBuildIdentity(checkout);
+  assert.equal(checkoutIdentity.checks.find((item) => item.id === "immutable_build_commit")?.status, "PASS");
+  assert.equal(checkoutIdentity.checks.find((item) => item.id === "clean_release_tree")?.status, "PASS");
+  await writeFile(path.join(checkout, "tracked.txt"), "dirty\n");
+  const dirtyIdentity = await inspectImmutableBuildIdentity(checkout);
+  assert.equal(dirtyIdentity.checks.find((item) => item.id === "clean_release_tree")?.status, "BLOCKED");
+
+  const archive = await mkdtemp(path.join(os.tmpdir(), "tf-phase-one-archive-"));
+  const sha = "a".repeat(40);
+  await writeFile(path.join(archive, ".tackle-forger-release-commit"), `${sha}\n`);
+  const archiveIdentity = await inspectImmutableBuildIdentity(archive);
+  assert.equal(archiveIdentity.commit, sha);
+  assert.equal(archiveIdentity.checks.find((item) => item.id === "immutable_build_commit")?.status, "PASS");
+  const nestedArchive = path.join(checkout, "untracked-archive-release");
+  await mkdir(nestedArchive);
+  await writeFile(path.join(nestedArchive, ".tackle-forger-release-commit"), `${sha}\n`);
+  const nestedIdentity = await inspectImmutableBuildIdentity(nestedArchive);
+  assert.equal(nestedIdentity.commit, sha);
+  assert.equal(nestedIdentity.checks.find((item) => item.id === "immutable_build_commit")?.evidence?.source, "git_archive_marker");
+  await rm(path.join(nestedArchive, ".tackle-forger-release-commit"));
+  assert.equal(
+    (await inspectImmutableBuildIdentity(nestedArchive)).checks.find((item) => item.id === "immutable_build_commit")?.status,
+    "BLOCKED",
+  );
+  await writeFile(path.join(archive, ".tackle-forger-release-commit"), `${sha}x\n`);
+  assert.equal(
+    (await inspectImmutableBuildIdentity(archive)).checks.find((item) => item.id === "immutable_build_commit")?.status,
+    "BLOCKED",
+  );
+  await rm(path.join(archive, ".tackle-forger-release-commit"));
+  assert.equal(
+    (await inspectImmutableBuildIdentity(archive)).checks.find((item) => item.id === "immutable_build_commit")?.status,
+    "BLOCKED",
+  );
+  const target = path.join(archive, "marker-target");
+  await writeFile(target, `${sha}\n`);
+  await symlink(target, path.join(archive, ".tackle-forger-release-commit"));
+  assert.equal(
+    (await inspectImmutableBuildIdentity(archive)).checks.find((item) => item.id === "immutable_build_commit")?.status,
+    "BLOCKED",
+  );
+  await rm(checkout, { recursive: true, force: true });
+  await rm(archive, { recursive: true, force: true });
+});
+
+test("部署归档把精确 Git SHA 写入 release commit 标记", async (t) => {
+  if (skipOnWindows(t, "git archive virtual marker")) return;
+  const root = await mkdtemp(path.join(os.tmpdir(), "tf-phase-one-archive-tar-"));
+  const output = path.join(root, "release.tar");
+  const extracted = path.join(root, "extracted");
+  execFileSync("git", ["init"], { cwd: root });
+  execFileSync("git", ["config", "user.email", "acceptance@example.invalid"], { cwd: root });
+  execFileSync("git", ["config", "user.name", "Acceptance Fixture"], { cwd: root });
+  await writeFile(path.join(root, "tracked.txt"), "tracked\n");
+  execFileSync("git", ["add", "tracked.txt"], { cwd: root });
+  execFileSync("git", ["commit", "-m", "fixture"], { cwd: root });
+  const sha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+  const archive = execFileSync(
+    "git",
+    ["archive", "--format=tar", `--add-virtual-file=.tackle-forger-release-commit:${sha}\n`, sha],
+    { cwd: root },
+  );
+  await writeFile(output, archive);
+  await mkdir(extracted);
+  execFileSync("tar", ["-xf", output, "-C", extracted]);
+  assert.equal(await readFile(path.join(extracted, ".tackle-forger-release-commit"), "utf8"), `${sha}\n`);
+  assert.equal((await inspectImmutableBuildIdentity(extracted)).commit, sha);
+  await rm(root, { recursive: true, force: true });
+});
+
+test("部署脚本实际拒绝格式正确但与 EXPECTED_SHA 不同的归档标记", async (t) => {
+  if (skipOnWindows(t, "deployment archive marker mismatch")) return;
+  const root = await mkdtemp(path.join(os.tmpdir(), "tf-phase-one-marker-mismatch-"));
+  const source = await readFile(new URL("../scripts/deploy-r730.sh", import.meta.url), "utf8");
+  const start = source.indexOf('marker=".tackle-forger-release-commit"');
+  const end = source.indexOf("\n\n# 非交互", start);
+  assert.ok(start >= 0 && end > start, "deployment script must retain executable marker validation");
+  const markerBlock = source.slice(start, end);
+  const expectedSha = "a".repeat(40);
+  await writeFile(path.join(root, ".tackle-forger-release-commit"), `${"b".repeat(40)}\n`);
+  const result = spawnSync("bash", ["-c", markerBlock], {
+    cwd: root,
+    env: { ...process.env, EXPECTED_SHA: expectedSha },
+    encoding: "utf8",
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}${result.stderr}`, /标记与归档 SHA 不一致/u);
+  await rm(root, { recursive: true, force: true });
 });
 
 test("npm 验收命令将缺失 env-file 交给脚本并返回去敏 BLOCKED 证据", (t) => {

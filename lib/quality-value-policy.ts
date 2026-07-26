@@ -61,8 +61,8 @@ export interface QualityValuePolicyDraft {
   id: string;
   sourceRevisionId: string;
   sourceRevision: string;
-  qualitySheetId: "FqD4j7";
-  affixSheetId: "zrVOxd";
+  qualitySheetId: "27hboC";
+  affixSheetId: "23CsXE";
   ranges: QualityValueRange[];
   qualityTableDescriptor?: QualityTableDescriptor;
   combinationRules: QualityCombinationRule[];
@@ -282,8 +282,8 @@ export function importQualityValuePolicyDraft(input: {
   const content = {
     sourceRevisionId: input.sourceRevisionId,
     sourceRevision: input.sourceRevision,
-    qualitySheetId: "FqD4j7" as const,
-    affixSheetId: "zrVOxd" as const,
+    qualitySheetId: "27hboC" as const,
+    affixSheetId: "23CsXE" as const,
     ranges: structuredClone(input.ranges),
     ...(input.qualityTableDescriptor ? { qualityTableDescriptor: structuredClone(input.qualityTableDescriptor) } : {}),
     combinationRules: [...rulesByPair.values()],

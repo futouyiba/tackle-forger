@@ -88,7 +88,9 @@ sudo -u tackleforger env PATH=/usr/local/bin:/usr/bin:/bin npm run acceptance:ph
 - 权威工作簿解析后的 spreadsheet token 与服务器保存的
   `FEISHU_CANONICAL_SPREADSHEET_TOKEN` 不同；
 - 环境启用 AI、revision 裁剪或可信代理身份模式；
-- systemd 未限制回环监听/写目录，或 Nginx 未清除客户端身份头。
+- systemd 未精确监听 `0.0.0.0:13000`、未将写权限限制为 `/opt/tackle-forger/data`，或 Nginx 未清除客户端身份头。
+
+`0.0.0.0:13000` 只用于可信公司内网中的直接访问便利；它不削弱飞书租户登录、会话、服务端 Capability 校验或 Nginx 的客户端身份头清除。不得通过公网 IP、公共 DNS、端口映射或防火墙放行把该端口暴露到公共互联网。Nginx 上游仍可保持 `127.0.0.1:13000`，因为通配监听同时接受本机回环连接。
 
 依赖满足后，在单独评审的提交中更新 `deploy/phase-one-dependencies.json`：记录固定
 Issue/PR 映射、GitHub reviewed head、唯一 merge commit、review threads 已清零、必需

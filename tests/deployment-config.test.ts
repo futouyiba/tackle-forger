@@ -19,13 +19,13 @@ test("构建路径只保留 Node/Vinext，不再声明云端部署适配", async
   }
 });
 
-test("R730 模板和部署脚本使用 13000，并以认证边界就绪或回滚收口", async () => {
+test("R730 模板精确监听内网端口 0.0.0.0:13000，并以认证边界就绪或回滚收口", async () => {
   const [service, nginx, deployScript] = await Promise.all([
     readFile(new URL("../deploy/tackle-forger.service", import.meta.url), "utf8"),
     readFile(new URL("../deploy/nginx-tackle-forger.conf.example", import.meta.url), "utf8"),
     readFile(new URL("../scripts/deploy-r730.sh", import.meta.url), "utf8"),
   ]);
-  assert.match(service, /--hostname 127\.0\.0\.1 --port 13000/);
+  assert.match(service, /--hostname 0\.0\.0\.0 --port 13000/);
   assert.match(nginx, /proxy_pass http:\/\/127\.0\.0\.1:13000/);
   assert.match(deployScript, /R730_PORT:=13000/);
   assert.match(deployScript, /api\/auth\/session/);

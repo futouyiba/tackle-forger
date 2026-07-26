@@ -520,12 +520,21 @@ function inspectSourceContracts(sources) {
   const readWritePaths = systemdLines
     .filter((line) => line.startsWith("ReadWritePaths="))
     .flatMap((line) => line.slice("ReadWritePaths=".length).split(/\s+/u));
-  const serviceOk = /(?:^|\s)--hostname\s+127\.0\.0\.1(?:\s|$)/u.test(execStart)
+  const execTokens = execStart.trim().split(/\s+/u).filter(Boolean);
+  const optionValues = (option) => execTokens.flatMap((token, index) => (
+    token === option && index + 1 < execTokens.length ? [execTokens[index + 1]] : []
+  ));
+  const hostnameValues = optionValues("--hostname");
+  const portValues = optionValues("--port");
+  const serviceOk = hostnameValues.length === 1
+    && hostnameValues[0] === "0.0.0.0"
+    && portValues.length === 1
+    && portValues[0] === "13000"
     && readWritePaths.length === 1
     && readWritePaths[0] === "/opt/tackle-forger/data";
   checks.push(serviceOk
-    ? check("systemd_isolation", "PASS", "应用只监听回环地址，systemd 仅开放持久数据根写权限。")
-    : check("systemd_isolation", "BLOCKED", "systemd 模板未满足回环监听或持久目录隔离。"));
+    ? check("systemd_isolation", "PASS", "应用精确监听 0.0.0.0:13000，systemd 仅开放持久数据根写权限。")
+    : check("systemd_isolation", "BLOCKED", "systemd 模板必须各且仅有一个 --hostname 0.0.0.0 与 --port 13000，并只开放持久数据根写权限。"));
 
   const nginxHeaders = new Map(activeConfigLines(sources.nginx).flatMap((line) => {
     const match = /^proxy_set_header\s+(\S+)\s+"";$/u.exec(line);

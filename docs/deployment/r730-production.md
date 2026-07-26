@@ -108,7 +108,7 @@ dry-run 不得写入 tombstone、删除 revision、执行 `VACUUM` 或改变数�
 1. 将 `deploy/tackle-forger.service`、`deploy/tackle-forger-backup.service`、`deploy/tackle-forger-backup.timer`、`deploy/tackle-forger-ai-retention.service` 和 `deploy/tackle-forger-ai-retention.timer` 安装到 `/etc/systemd/system/`。
 2. 将 `deploy/nginx-tackle-forger.conf.example` 复制到 Nginx 配置并替换内网域名和公司证书路径。该示例采用“浏览器 → Nginx → 应用”的直接 OAuth 拓扑，会显式清除客户端提交的 `x-feishu-*` 与 `x-tf-proxy-secret`，并保持可信代理身份模式关闭。
 3. 重新加载 systemd，启用应用服务、每日备份 timer 和每小时 AI 留存 timer。首次启用 timer 前先手工运行一次 `npm run ai-retention:sweep`；任一备份删除未通过回读确认时任务以失败状态留待下次重试，不得手工把墓碑改为已清除。
-4. 应用仅监听 `127.0.0.1:13000`；浏览器只能通过 HTTPS 反向代理访问。`deploy/tackle-forger.service`、Nginx 示例和部署脚本都以该端口为唯一权威来源；部署后必须轮询并精确验证 `/api/auth/session` 返回 `401`，否则自动切回上一只读 release 并重启服务，绝不回滚 SQLite。
+4. 应用精确监听 `0.0.0.0:13000`，方便可信公司内网直接访问；这不移除飞书租户认证、安全会话或服务端 Capability 校验。该端口不得经公网 IP、公共 DNS、路由/NAT 或防火墙规则暴露到公共互联网。Nginx 仍是可选的 HTTPS 入口，其 upstream 可继续使用 `127.0.0.1:13000`，因为通配监听同时接受本机回环连接。`deploy/tackle-forger.service`、Nginx 示例和部署脚本都以该端口为唯一权威来源；部署后必须轮询并精确验证 `/api/auth/session` 返回 `401`，否则自动切回上一只读 release 并重启服务，绝不回滚 SQLite。
 
 ## 验收与回滚
 

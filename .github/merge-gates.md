@@ -123,9 +123,12 @@ immutable event head and base. It runs the full historical command set when a
 change touches a historical-workspace input: `apps/**`, `packages/**`,
 `legacy-workspace/**`, `tsconfig.base.json`, `vitest.workspace.config.ts`,
 `tests/package-manager-boundaries.test.mjs`, `package.json`, `package-lock.json`,
-or `.github/workflows/ci.yml`. The explicit root files are the shared TypeScript
-and Vitest inputs plus the package-manager boundary test and its fixture inputs;
-all other direct workspace configuration is below the three directory prefixes.
+`pnpm-workspace.yaml`, `pnpm-lock.yaml`, or `.github/workflows/ci.yml`. The
+explicit root files are the shared TypeScript and Vitest inputs plus the
+package-manager boundary test and its fixture inputs. The two root pnpm paths
+also make an attempted reintroduction of root pnpm metadata run the boundary
+test instead of receiving a false-green skip; all other direct workspace
+configuration is below the three directory prefixes.
 It also runs in full when either identity is missing, malformed, unavailable
 locally, the base is not an ancestor of the head, or Git cannot prove the path
 scope. This is intentionally fail-closed: only a proven nonlegacy diff may skip

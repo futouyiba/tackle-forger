@@ -346,6 +346,26 @@ test('policy checker detects required workflow markers', () => {
   } finally { cleanup(root); }
 });
 
+test('historical CI scope includes forbidden root pnpm metadata', () => {
+  const workflow = readFileSync(path.resolve(process.cwd(), '.github/workflows/ci.yml'), 'utf8');
+  const scopeBlock = workflow.match(/if git diff --quiet "\$base" "\$EXPECTED_HEAD" -- \\\n([\s\S]*?); then/);
+  assert.ok(scopeBlock, 'historical scope must use the guarded git diff invocation');
+  const pathspec = scopeBlock[1].replaceAll('\\\n', ' ').trim().split(/\s+/);
+  for (const forbiddenRootPnpmPath of ['pnpm-workspace.yaml', 'pnpm-lock.yaml']) {
+    assert.ok(pathspec.includes(forbiddenRootPnpmPath), `${forbiddenRootPnpmPath} must be in the executed pathspec`);
+    const root = temporaryRepo();
+    try {
+      write(root, 'README.md', 'base\n');
+      const base = commitBase(root);
+      write(root, forbiddenRootPnpmPath, 'packages: []\n');
+      command(root, ['add', forbiddenRootPnpmPath]);
+      command(root, ['commit', '-qm', `add ${forbiddenRootPnpmPath}`]);
+      const head = command(root, ['rev-parse', 'HEAD']);
+      assert.throws(() => command(root, ['diff', '--quiet', base, head, '--', ...pathspec]));
+    } finally { cleanup(root); }
+  }
+});
+
 test('spec-read receipts enforce full/scoped plans and canonical v3 hash', () => {
   const root = temporaryRepo();
   try {

@@ -100,7 +100,9 @@ jobs:
                   apps packages legacy-workspace \
                   tsconfig.base.json vitest.workspace.config.ts \
                   tests/package-manager-boundaries.test.mjs \
-                  package.json package-lock.json .github/workflows/ci.yml; then
+                  package.json package-lock.json \
+                  pnpm-workspace.yaml pnpm-lock.yaml \
+                  .github/workflows/ci.yml; then
                   :
                 else
                   diff_status=$?

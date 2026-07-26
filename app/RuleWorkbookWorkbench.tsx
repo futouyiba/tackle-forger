@@ -57,6 +57,8 @@ interface RuleWorkbookWorkbenchProps {
   onClearShareLinkHistory: (shareUrl: string | null) => void;
   /** 本地 Excel 加载成功后回调，传入 inspection 与文件元数据。 */
   onLocalExcelLoaded?: (inspection: CanonicalRuleWorkbookParsedInspection, fileName: string, fileSize: number) => void;
+  /** 已认证用户从 local Excel 切回飞书时回调；父级应恢复 feishu 会话并重新读取 server state。 */
+  onSwitchToFeishu?: () => void;
 }
 
 type ActionState = "" | "inspect" | "pull" | "draft" | "publish";
@@ -380,7 +382,10 @@ export function RuleWorkbookWorkbench(props: RuleWorkbookWorkbenchProps) {
         <button
           type="button"
           className={sourceMode === "feishu" ? "active" : ""}
-          onClick={() => setSourceMode("feishu")}
+          onClick={() => {
+            setSourceMode("feishu");
+            if (feishuAuthOk) props.onSwitchToFeishu?.();
+          }}
           aria-pressed={sourceMode === "feishu"}
         >
           <CloudDownload size={16} /> 飞书工作簿

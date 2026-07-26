@@ -2629,6 +2629,19 @@ export function Workbench({ initialState }: { initialState: WorkspaceState }) {
         setState(projected);
         baselineStateRef.current = copyState(projected);
       }}
+      onSwitchToFeishu={() => {
+        setSession({ mode: "feishu", authenticated: true });
+        // 从服务器重新读取权威 workspace，替换本地投影
+        fetch("/api/state", { cache: "no-store" })
+          .then(async (res) => {
+            const payload = await res.json().catch(() => ({})) as ApiStatePayload & { error?: string };
+            if (res.ok && payload.state && Number.isInteger(payload.revision)) {
+              replaceAuthoritativeWorkspace(payload.state, payload.revision);
+              setUser(payload.user);
+            }
+          })
+          .catch(() => undefined);
+      }}
       onWorkspaceApplied={(nextState, nextRevision, message) => {
         replaceAuthoritativeWorkspace(nextState, nextRevision);
         notify(message);

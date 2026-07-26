@@ -1164,18 +1164,53 @@ export function checkPolicy(root = repositoryRoot()) {
   if (!skill.includes('<!-- workflow-contract-policy-ref: AGENTS.md/workflow-contract-policy/v2 -->')) fail('Workflow policy drift: Skill does not reference AGENTS policy');
   const expectedYaml = 'interface:\n  display_name: "Tackle Agent Workflow"\n  short_description: "Start with a lightweight Task Card and escalate formal reviews"\n  default_prompt: "Use $tackle-agent-workflow to start daily work with a six-field Task Card, generate mechanical route/OPEN/read-plan evidence, and prepare a full TaskBrief only at a formal review or PR boundary. Preserve the pending unified visual-review marker unless full visual work is explicitly scoped."';
   if (yaml.trimEnd() !== expectedYaml) fail('Workflow policy drift: openai.yaml is not aligned');
-  const visual = boundedSection(template, '## Visual evidence', '## Risks, recovery, and rollback');
-  const unified = visual.content.match(/^\| Unified visual and interaction review \| (.+) \|$/m)?.[1];
-  const smoke = visual.content.match(/^\| Minimal render smoke \| (.+) \|$/m)?.[1];
-  if (!unified?.includes(policy.visual.pendingMarker) || !unified.includes('Full visual and interaction review completed') || !smoke?.includes('never changes the unified-review status')) fail('Workflow policy drift: PR visual fields are not aligned');
+  const stripHtmlComments = (markdown) => {
+    let rendered = '';
+    let cursor = 0;
+    while (cursor < markdown.length) {
+      const opener = markdown.indexOf('<!--', cursor);
+      const strayCloser = markdown.indexOf('-->', cursor);
+      if (strayCloser !== -1 && (opener === -1 || strayCloser < opener)) fail('Workflow policy drift: PR template has an unmatched HTML comment delimiter');
+      if (opener === -1) return rendered + markdown.slice(cursor);
+      rendered += markdown.slice(cursor, opener);
+      const closer = markdown.indexOf('-->', opener + 4);
+      if (closer === -1) fail('Workflow policy drift: PR template has an unmatched HTML comment delimiter');
+      cursor = closer + 3;
+    }
+    return rendered;
+  };
+  const templateHeadings = ['## Linked issue', '## Summary and scope', '## Validation evidence', '## Risk triggers', '## Review and CI evidence', '## Residual risk or follow-up'];
+  const renderedTemplate = stripHtmlComments(template);
+  const actualTemplateHeadings = renderedTemplate.match(/^## .+$/gm) ?? [];
+  if (canonicalJson(actualTemplateHeadings) !== canonicalJson(templateHeadings)) fail('Workflow policy drift: lightweight PR template must have exactly the six canonical headings in order');
+  const riskGuidance = boundedSection(template, '## Risk triggers', '## Review and CI evidence');
+  const riskDimensionMappings = [
+    'persistedData → Persisted data or migration',
+    'historicalSnapshots → Historical or published artifacts',
+    'authorization or concurrency → Authorization or concurrency',
+    'externalSideEffects → External side effects',
+    'userVisible → User-visible UI or interaction',
+  ];
+  for (const mapping of riskDimensionMappings) if (!riskGuidance.content.includes(mapping)) fail('Workflow policy drift: PR risk trigger mapping differs from TaskBrief riskDimensions');
+  const riskTriggerLabels = ['Persisted data or migration', 'Historical or published artifacts', 'Authorization or concurrency', 'External side effects', 'User-visible UI or interaction'];
+  const renderedRiskGuidance = stripHtmlComments(riskGuidance.content);
+  const actualRiskTriggerLabels = renderedRiskGuidance.split(/\r?\n/).flatMap((line) => {
+    const match = line.match(/^- \[[ xX]\] (.+)$/);
+    return match === null ? [] : [match[1]];
+  });
+  // The policy owns the five labels, while checked/unchecked author state is deliberately ignored.
+  if (canonicalJson(actualRiskTriggerLabels) !== canonicalJson(riskTriggerLabels)) fail('Workflow policy drift: PR risk trigger checkboxes differ from the canonical five-field projection');
+  if (!riskGuidance.content.includes('These checkboxes do not derive or override riskProfile, reviewTier, or the merge gate\'s normal/high classification.')) fail('Workflow policy drift: PR risk triggers became an independent risk or review authority');
+  if (!renderedRiskGuidance.includes(policy.visual.pendingMarker)) fail('Workflow policy drift: PR visual pending marker must be visible when the user-visible trigger is checked');
+  const canonicalMinimalRenderBoundary = '  - Minimal render smoke: <result or `Not run — <reason>`>. A minimal render smoke does not complete the unified visual review.';
+  const visualBoundaryLines = template.split(/\r?\n/).filter((line) => /(?:minimal render smoke|unified visual review)/i.test(line));
+  if (canonicalJson(visualBoundaryLines) !== canonicalJson([canonicalMinimalRenderBoundary])) fail('Workflow policy drift: PR minimal render smoke boundary must remain the single canonical statement');
   const contradictions = [
     [agentsRouting.content.replace(expectedRoute, '').replace(expectedTaskBriefRole, ''), /(?:Issue\s*路由|PR\s*路由|本地\s*路由)[^\n]*(?:审核|reviewer|review)/i],
     [agentsRouting.outside, /Issue\s*路由[^\n]*(?:审核|reviewer|review|独立审核者)/i],
     [projectSkills.content.replace(expectedProjectTackle, ''), /tackle-agent-workflow[^\n]*(?:编码与只读审核Agent|独立审核)/i],
     [skillRouteRemainder, /(?:Issue\s*路由|Issue delivery|Existing PR)[^\n]*(?:local independent reviewer|本地独立审核者|tackle-agent-workflow[^\n]*review)/i],
     [skillRouting.outside, /(?:Issue\s*路由|Issue delivery|Existing PR)[^\n]*(?:local independent reviewer|本地独立审核者|tackle-agent-workflow[^\n]*review)/i],
-    [visual.content, /(?:Minimal render smoke|最小渲染)[^\n]*(?:replaces|completes|removes|clears|替代|完成)[^\n]*(?:unified|pending|visual|视觉)/i],
-    [visual.outside, /(?:Minimal render smoke|最小渲染)[^\n]*(?:replaces|completes|removes|clears|替代|完成)[^\n]*(?:unified|pending|visual|视觉)/i],
   ];
   for (const [text, forbidden] of contradictions) if (forbidden.test(text)) fail(`Workflow policy drift: contradictory normative text (${forbidden})`);
   return true;

@@ -111,7 +111,7 @@ Published snapshots are immutable. Upstream changes create new revisions or `Upg
 
 ### Feishu rule-source governance
 
-The whole canonical Feishu workbook is the sole general rule source; a URL `sheet` parameter only selects the initially visible sheet. Synchronization identifies sheets and entities by stable IDs, not names or row positions.
+The whole canonical Feishu workbook is the sole general rule source; a URL `sheet` parameter only selects the initially visible sheet. Synchronization identifies sheets and entities by stable IDs, not names or row positions. The concept ↔ sheet ↔ code-position mapping is documented in `docs/audits/feishu-source-to-v3-mapping.md` (mapped by concept, not by sheet_id; the domain spec does not hardcode concrete table IDs — concrete IDs are registered centrally in `CANONICAL_FEISHU_SHEET_REGISTRY` and consumed by code via the registry).
 
 - `lib/feishu-workbook.ts`, `lib/feishu-sheets.ts`, and `lib/rule-workbook-inspection.ts` read and validate workbook revisions.
 - `lib/workbook-governance.ts`, `lib/source-id-migration.ts`, and `app/api/feishu-workbook/route.ts` enforce separate actions for inspection, explicit pull, draft creation, stable-ID writeback, readback verification, and publication.

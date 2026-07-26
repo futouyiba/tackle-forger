@@ -6,7 +6,7 @@ Use one durable supervisor to move a bounded goal through GitHub without making 
 
 Managed mode is an extension of daily flow, not a separate task database and not unlimited authorization.
 
-Use `supervised` when the heartbeat may continue routine work but merge still needs a per-turn decision. Use `autonomous` only for repositories that explicitly allow `qualified_auto_merge`; human gates and prohibited actions still apply. `off` disables the supervisor.
+Use `supervised` when the heartbeat may continue routine work but merge still needs a per-turn decision. Use `autonomous` only for repositories that explicitly allow `qualified_auto_merge`; human gates and prohibited actions still apply. In either mode, an explicit user instruction in the current task to not merge, wait for a human merge, or ask again before merging creates a task-scoped hold that remains until the user later explicitly authorizes merge. `off` disables the supervisor.
 
 ## Required repository policy
 
@@ -46,7 +46,7 @@ On every scheduled wake-up:
 3. Resume an active PR before selecting new `Ready` work.
 4. If actionable review feedback exists, address it on the same branch, validate, push, reply with evidence, and re-request review when supported.
 5. If required CI fails, diagnose and repair it within scope. Count a cycle only after a new attempted fix receives a new review or CI result.
-6. If the PR qualifies and merge policy is `qualified_auto_merge`, enable auto-merge or enter the merge queue. Refresh after merge before selecting dependent work.
+6. If the PR qualifies, merge policy is `qualified_auto_merge`, and the current task has no active user merge hold, enable auto-merge or enter the merge queue. A hold is not cleared by `READY`, CI/review success, retries, silence, or elapsed time. If a hold arrives after auto-merge was enabled or queue entry, immediately cancel that pending transport for the still-unmerged PR and read back its state; if safe cancellation is unavailable, report the gate and verify whether it merged. Cancellation does not clear the hold, and later explicit authorization requires a fresh exact-head/base checker run before re-entry. Refresh after merge before selecting dependent work.
 7. If no action is available, finish the heartbeat quietly; do not ask the user to relay status.
 8. If a human gate is reached or the retry limit is exhausted, record one concise blocker on the Issue or PR and notify the user once with the decision needed.
 

@@ -32,6 +32,20 @@ instruction is required. The coordinator is expected to merge one qualifying
 pull request through the repository's normal GitHub merge method and immediately
 read back the PR state, merge SHA, and remote base containment.
 
+An explicit user instruction made at the start of or during the current task
+to not merge, wait for a human merge, or ask again before merging creates a
+task-scoped human gate. `READY` does not override that hold. Only a later
+explicit user instruction authorizing the merge clears it; silence, elapsed
+time, successful CI or review, retries, and a fresh `READY` result do not.
+If that hold arrives after auto-merge was enabled or the pull request entered
+a merge queue, and the pull request is still unmerged, the coordinator must
+immediately disable auto-merge or remove only that pull request from the queue
+and read back its state. If the platform cannot safely cancel the pending
+merge, report the human gate and verify whether the pull request merged.
+Cancellation and readback do not clear the hold. After later explicit user
+authorization, refresh the exact head/base and rerun the live checker before
+entering any merge transport again.
+
 This standing authorization does not apply when the checker is not `READY`, a
 product or scope decision remains unresolved, dependency order is ambiguous,
 required validation or identity is unavailable, retries are exhausted, or the

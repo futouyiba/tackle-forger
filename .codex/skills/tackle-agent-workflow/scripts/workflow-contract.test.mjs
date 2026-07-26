@@ -467,6 +467,16 @@ test('historical CI scope includes forbidden root pnpm metadata', () => {
   }
 });
 
+test('CI runs only for review candidates and cancels superseded candidates', () => {
+  const workflow = readFileSync(path.resolve(process.cwd(), '.github/workflows/ci.yml'), 'utf8');
+  assert.doesNotMatch(workflow, /^\s{2}push:/m);
+  assert.match(workflow, /types: \[opened, reopened, synchronize, ready_for_review\]/);
+  assert.match(workflow, /cancel-in-progress: true/);
+  assert.match(workflow, /github\.event\.pull_request\.draft == false/g);
+  assert.match(workflow, /github\.event_name == 'schedule'/);
+  assert.match(workflow, /github\.event_name == 'workflow_dispatch'/);
+});
+
 test('spec-read receipts enforce full/scoped plans and canonical v3 hash', () => {
   const root = temporaryRepo();
   try {

@@ -8,7 +8,9 @@ run-name: >-
 
 on:
   pull_request:
-    types: [opened, reopened, synchronize, ready_for_review]
+    # A move back to Draft starts an all-skipped run in this PR's concurrency
+    # group, cancelling any in-flight candidate validation.
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
   schedule:
     # Independent full verification of the retained historical pnpm workspace.
     - cron: '23 3 * * 1'

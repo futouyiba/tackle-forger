@@ -1050,7 +1050,7 @@ test('SCOPED eligibility, clean Issue/PR routing, sections, OPEN IDs, and receip
     const runtimeBrief = { ...local, ownedPaths: ['src/runtime.ts'], allowedChanges: ['src/runtime.ts'], riskProfile: 'runtime_product_domain', scopeHasRuntimeSemantics: true, changeClass: 'typescript_api', validationPlan: { requiredCommands: ['npm run typecheck', 'npm run lint', 'npm test'], requiredScenarios: ['normal_path'], intentionallyNotApplicable: nonLegacyNa() }, specReadReceipts: [runtimeReceipt] };
     assert.equal(checkTaskBrief({ root, brief: runtimeBrief }).phase, 'pre_dispatch');
     assert.throws(() => checkTaskBrief({ root, brief: { ...runtimeBrief, specReadReceipts: [{ ...runtimeReceipt, profile: 'SCOPED' }] } }), /profile must be ROUTED/);
-    assert.throws(() => checkTaskBrief({ root, brief: { ...local, specReadReceipts: [local.specReadReceipts[0], local.specReadReceipts[0]] } }), /duplicate receipt coverage/);
+    assert.throws(() => checkTaskBrief({ root, brief: { ...local, specReadReceipts: [local.specReadReceipts[0], local.specReadReceipts[0]] } }), /exactly one coordinator/);
     assert.throws(() => checkTaskBrief({ root, brief: { ...local, relevantSections: ['1', '20', '404'] } }), /section absent/);
     assert.throws(() => checkTaskBrief({ root, brief: { ...local, openDecisionCheck: { ...local.openDecisionCheck, checkedIds: ['OPEN-999'], applicableIds: ['OPEN-999'] } } }), /complete current v3 OPEN registry/);
     assert.equal(checkTaskBrief({ root, brief: { ...local, openDecisionCheck: { ...local.openDecisionCheck, applicableIds: [], noApplicableReason: 'No registry item affects this workflow-only change.' } } }).phase, 'pre_dispatch');
@@ -1067,7 +1067,7 @@ test('SCOPED eligibility, clean Issue/PR routing, sections, OPEN IDs, and receip
     const review = receipt(root, { role: 'review', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'review' });
     const duplicateBase = command(root, ['rev-parse', 'HEAD']);
     const duplicate = { ...local, baseSha: duplicateBase, reviewedHead: 'WORKTREE', validationPlan: { ...local.validationPlan, requiredCommands: [...local.validationPlan.requiredCommands.filter((item) => !item.includes('--check-owned-whitespace')), ownedWhitespaceCommand(duplicateBase, ['AGENTS.md'])] }, phase: 'verdict', specReadReceipts: [local.specReadReceipts[0], coding, review, review] };
-    assert.throws(() => checkTaskBrief({ root, brief: duplicate }), /duplicate receipt coverage/);
+    assert.throws(() => checkTaskBrief({ root, brief: duplicate }), /exactly one coordinator, coding, and review/);
   } finally { cleanup(root); }
 });
 
@@ -1255,4 +1255,47 @@ test('repository workflow leaves the merge decision to task-aware Agent judgment
   const gatePolicy = readFileSync(path.join(root, '.github/merge-gates.md'), 'utf8');
   assert.match(gatePolicy, /owner merge authorization that explicitly names the governance\s+exception/);
   assert.match(gatePolicy, /explicit owner authorization naming PR #63/);
+});
+
+test('adaptive reviewer governance forbids fixed reviewer and implementation prescriptions', () => {
+  const root = process.cwd();
+  const sources = [
+    'AGENTS.md',
+    'CLAUDE.md',
+    '.claude/skills/agent-pr-loop/SKILL.md',
+    '.codex/skills/agent-issue-loop/SKILL.md',
+    '.codex/skills/agent-pr-loop/SKILL.md',
+    '.codex/skills/tackle-agent-workflow/SKILL.md',
+  ];
+  const prohibited = [
+    /one coding agent and one independent local reviewer/i,
+    /Use one implementation Agent for code, tests, and fixes/i,
+    /no more than one active implementation Agent and one active independent review Agent/i,
+    /gpt-5\.6-(?:terra|sol)/i,
+    /fixed reviewer/i,
+    /不得增加第二个独立审核者/,
+    /主 agent 已直接实现/,
+    /实现\/修改\/调查由主 agent 直接做/,
+    /主 agent 直接修复/,
+    /不 spawn 实现 agent/,
+  ];
+  for (const relative of sources) {
+    const content = readFileSync(path.join(root, relative), 'utf8');
+    for (const pattern of prohibited) assert.doesNotMatch(content, pattern, relative);
+  }
+  const agents = readFileSync(path.join(root, 'AGENTS.md'), 'utf8');
+  const claudePr = readFileSync(path.join(root, '.claude/skills/agent-pr-loop/SKILL.md'), 'utf8');
+  const codexPr = readFileSync(path.join(root, '.codex/skills/agent-pr-loop/SKILL.md'), 'utf8');
+  const local = readFileSync(path.join(root, '.codex/skills/tackle-agent-workflow/SKILL.md'), 'utf8');
+  for (const content of [agents, codexPr, local]) {
+    assert.match(content, /task risk, scope, available capabilities, and resources|任务风险、范围、可用能力与资源/);
+    assert.match(content, /exact current head\/base|当前精确head\/base|精确head\/base/);
+    assert.match(content, /all assigned findings.*disposed|coordinator has disposed all findings|所有发现.*coordinator处置/);
+  }
+  assert.match(claudePr, /coordinator 安排最小必要的修复容量/);
+  assert.match(codexPr, /exactly one integrated substantive review signal/);
+  assert.match(local, /single `review` spec-read receipt.*coordinator-integrated review-role coverage record/);
+  assert.match(local, /each reviewer returns findings and evidence.*coordinator emits this exact single local verdict record/);
+  assert.doesNotMatch(local, /reviewer must return this exact local verdict record/);
+  assert.match(agents, /单一review receipt是coordinator整合后的review-role覆盖记录，不按reviewer逐个计数/);
 });

@@ -3,8 +3,6 @@ import test from "node:test";
 import {
   CANONICAL_FEISHU_SHEET_REGISTRY,
   CANONICAL_FEISHU_WORKBOOK,
-  LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY,
-  LEGACY_YS_EKW_FEISHU_WORKBOOK,
   pullFeishuWorkbookRevision,
 } from "../lib/feishu-workbook";
 import {
@@ -21,7 +19,6 @@ import {
 } from "../lib/pricing-policy";
 import {
   CANONICAL_IDENTITY_SHEET_SPECS,
-  LEGACY_YS_EKW_IDENTITY_SHEET_SPECS,
   canonicalAffixSheetRanges,
   canonicalIdentityPolicies,
   canonicalQualitySheetRange,
@@ -215,12 +212,12 @@ test("同一完整高行号工作簿导入保持幂等", () => {
   assert.deepEqual(qualityDraftFromRanges(input), qualityDraftFromRanges(input));
 });
 
-test("当前整本工作簿注册表覆盖 00–17、FunctionProfile 常量与钓法审核表，并包含真实 sheet_id", () => {
-  assert.equal(LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY.length, 21);
-  assert.equal(LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "00_使用说明")?.sheetId, "4IfBoX");
-  assert.equal(LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "04.0_FunctionProfile常量")?.sheetId, "mLpTLK");
-  assert.equal(LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "02.5_钓法模板")?.sheetId, "m3eQCg");
-  assert.equal(LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "12_打包竿组")?.sheetId, "lf4wIM");
+test("当前整本工作簿注册表覆盖 00–19、FunctionProfile 常量与各部位分表，并包含真实 sheet_id", () => {
+  assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.length, 50);
+  assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "00_系统接入")?.sheetId, "0iGCcx");
+  assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "04.00_FunctionProfile常量")?.sheetId, "19XKzU");
+  assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "01.0_重量模板-竿")?.sheetId, "1cAihB");
+  assert.equal(CANONICAL_FEISHU_SHEET_REGISTRY.find((entry) => entry.expectedName === "05_词条")?.sheetId, "23CsXE");
 });
 
 test("历史已绑定机器 ID 在当前工作表拓扑下仍通过唯一性、前缀与实体类型校验", () => {
@@ -240,24 +237,31 @@ test("历史已绑定机器 ID 在当前工作表拓扑下仍通过唯一性、�
       ["", ""],
     ]),
   ];
+  // WQ8w 分表：竿/轮/线各独立子表，ID 带部位前缀（wtpl_rod_/func_reel_ 等）。合计 157 行身份。
   const values = new Map<string, unknown[][]>([
-    ["d6e928", sequential("wtpl_", 64, "WeightTemplate", "BOUND")],
-    ["fATowU", typed([["type_rod_", 8, "RodType"], ["type_reel_", 3, "ReelType"], ["type_line_", 3, "LineType"]])],
-    ["vviXo0", sequential("func_", 19, "FunctionProfile")],
-    ["zrVOxd", typed([["affix_rod_", 12, "RodAffix"], ["affix_reel_", 12, "ReelAffix"], ["affix_line_", 12, "LineAffix"]])],
-    ["9nE3Rx", typed([["series_rod_", 8, "SeriesArchetype"], ["series_reel_", 8, "SeriesArchetype"], ["series_line_", 8, "SeriesArchetype"]])],
+    ["1cAihB", sequential("wtpl_rod_", 22, "WeightTemplate", "BOUND")],
+    ["2KCCHR", sequential("wtpl_reel_", 21, "WeightTemplate", "BOUND")],
+    ["3FYijT", sequential("wtpl_line_", 21, "WeightTemplate", "BOUND")],
+    ["10TyFp", sequential("type_rod_", 8, "RodType")],
+    ["11CfXW", sequential("type_reel_", 3, "ReelType")],
+    ["12VetE", sequential("type_line_", 3, "LineType")],
+    ["16qYVn", sequential("func_rod_", 7, "FunctionProfile")],
+    ["17jqiE", sequential("func_reel_", 6, "FunctionProfile")],
+    ["18pjcZ", sequential("func_line_", 6, "FunctionProfile")],
+    ["23CsXE", typed([["affix_rod_", 12, "RodAffix"], ["affix_reel_", 12, "ReelAffix"], ["affix_line_", 12, "LineAffix"]])],
+    ["25UnTC", typed([["series_rod_", 8, "SeriesArchetype"], ["series_reel_", 8, "SeriesArchetype"], ["series_line_", 8, "SeriesArchetype"]])],
   ]);
-  const rows = identityRowsFromRanges(LEGACY_YS_EKW_IDENTITY_SHEET_SPECS.map((spec) => ({
+  const rows = identityRowsFromRanges(CANONICAL_IDENTITY_SHEET_SPECS.map((spec) => ({
     sheetId: spec.sheetId,
     valueRange: { values: values.get(spec.sheetId) ?? [] },
-  })), LEGACY_YS_EKW_IDENTITY_SHEET_SPECS);
+  })), CANONICAL_IDENTITY_SHEET_SPECS);
   const report = prepareSourceIdentityMigration({
-    workbookRefId: LEGACY_YS_EKW_FEISHU_WORKBOOK.id,
+    workbookRefId: CANONICAL_FEISHU_WORKBOOK.id,
     sourceRevision: "2352",
     mode: "CONTINUOUS_SYNC",
     rows,
     existingEntities: [],
-    identityPolicies: canonicalIdentityPolicies(LEGACY_YS_EKW_IDENTITY_SHEET_SPECS),
+    identityPolicies: canonicalIdentityPolicies(CANONICAL_IDENTITY_SHEET_SPECS),
     generatedAt: "2026-07-21T11:00:00.000Z",
   });
   assert.equal(rows.length, 157);
@@ -328,11 +332,61 @@ test("07/08/02 同 revision 导入查表与金额事实，但不猜测三项执�
   assert.ok(draft.issues.some((issue) => issue.code === "PRICING_EXECUTION_SEMANTICS_MISSING"));
 });
 
+test("WQ8w 路径（32BmZs + 33IGHy）生成完整 lookup 表并通过试算", () => {
+  const sourceRevision = { id: "feishu-src:wq8w-test", workbookRefId: "feishu-workbook:tackle-design", sourceRevision: "wq8w-test", spreadsheetToken: "WQ8wstS4ch29E2tAKnVcoh5KnJg", pulledAt: "2026-07-26T00:00:00.000Z", pulledBy: "tester", syncScope: "workbook" as const, registryHash: "abc", sheets: [], issues: [], state: "PULLED" as const };
+  const params = [
+    ["参数键", "状态", "当前値", "说明"],
+    ["currency_unit", "已显式定义", "金币", ""],
+    ["rounding_mode", "已显式定义", "向下取整；3位有效数字", ""],
+    ["minimum_price", "已显式定义", "100", ""],
+    ["overflow_maximum", "已显式定义", "300000000", ""],
+  ];
+  const endpoints = [
+    ["钓具大类", "重量段", "品质", "基础维修价格", "零整比"],
+    ["竿", "1", "C", 29767, 1],
+    ["竿", "1", "B", 73018, 0.8],
+    ["竿", "2", "C", 101520, 0.96],
+    ["竿", "2", "B", 258111, 0.76],
+    ["线", "1", "C", 5000, 0.9],
+    ["线", "1", "B", 12000, 0.7],
+    ["线", "2", "C", 18000, 0.85],
+    ["线", "2", "B", 40000, 0.65],
+  ];
+  const typeValues = [
+    ["机器ID（勿改）", "实体类型", "类型"],
+    ["type_rod_0001", "RodType", "浮钓竿", ...Array.from({ length: 16 }, () => 1), 1.5, 1.2],
+    ["type_line_0001", "LineType", "尼龙线", ...Array.from({ length: 16 }, () => 1), 1.0, 0.9],
+  ];
+  const qualityRows = [
+    { code: "C", minScore: 0, maxScore: 20, minFactor: 0.5, maxFactor: 1.1, mappingCell: "B2", factorCell: "E2:H2", rowKey: "2" },
+    { code: "B", minScore: 20, maxScore: 40, minFactor: 0.8, maxFactor: 1.2, mappingCell: "B3", factorCell: "E3:H3", rowKey: "3" },
+    { code: "A", minScore: 40, maxScore: 65, minFactor: 0.7, maxFactor: 1.3, mappingCell: "B4", factorCell: "E4:H4", rowKey: "4" },
+    { code: "S", minScore: 65, maxScore: 100, minFactor: 2, maxFactor: 3, mappingCell: "B5", factorCell: "E5:H5", rowKey: "5" },
+  ];
+  const draft = pricingDraftFromRanges({
+    sourceRevision,
+    qualityValues: [], qualitySourceRows: qualityRows,
+    pricingParamsValues: params,
+    pricingEndpointValues: endpoints,
+    typeValues,
+    importedAt: "2026-07-26T00:00:00.000Z",
+  });
+  assert.equal(draft.maintenanceConsumptionRates.length, 8, "维修速度");
+  assert.equal(draft.partAllocationRatios.length, 4, "部位占比");
+  assert.equal(draft.totalLossTimes.length, 4, "全损时间");
+  assert.equal(draft.partsToWholeRatios.length, 8, "零整比");
+  assert.equal(draft.executionPolicy?.repairRoundingStage, "final_repair_output");
+  assert.equal(draft.moneyPolicy?.unit, "金币");
+  assert.equal(draft.issues.some((i) => i.code === "PARTS_TO_WHOLE_RATIO_MISSING"), false);
+  assert.equal(draft.issues.some((i) => i.code === "PRICING_MONEY_POLICY_MISSING"), false);
+  assert.equal(draft.issues.some((i) => i.code === "PRICING_EXECUTION_SEMANTICS_MISSING"), false);
+});
+
 test("工作簿按 sheet_id 校验，改名只告警，同名新表不冒充原表", async () => {
-  const renamed = LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY.map((sheet) => ({ sheetId: sheet.sheetId, name: sheet.expectedName })).map((sheet) =>
-    sheet.sheetId === "9nE3Rx" ? { ...sheet, name: "06_系列原型" } : sheet,
+  const renamed = CANONICAL_FEISHU_SHEET_REGISTRY.map((sheet) => ({ sheetId: sheet.sheetId, name: sheet.expectedName })).map((sheet) =>
+    sheet.sheetId === "25UnTC" ? { ...sheet, name: "07_系列原型" } : sheet,
   );
-  renamed.push({ sheetId: "new-series-sheet", name: "06_系列" });
+  renamed.push({ sheetId: "new-series-sheet", name: "07_系列" });
   let revision = "2352";
   const adapter = {
     async resolveWorkbook() {
@@ -340,20 +394,20 @@ test("工作簿按 sheet_id 校验，改名只告警，同名新表不冒充原�
     },
   };
   const first = await pullFeishuWorkbookRevision({
-    workbook: LEGACY_YS_EKW_FEISHU_WORKBOOK, registry: LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY,
+    workbook: CANONICAL_FEISHU_WORKBOOK, registry: CANONICAL_FEISHU_SHEET_REGISTRY,
     adapter,
     pulledAt: "2026-07-21T10:00:00.000Z",
     pulledBy: "tester",
   });
   assert.equal(first.sourceRevision, "2352");
   assert.equal(first.syncScope, "workbook");
-  assert.equal(first.anchorSheetId, "9nE3Rx");
-  assert.ok(first.issues.some((issue) => issue.code === "SHEET_RENAMED" && issue.sheetId === "9nE3Rx"));
+  assert.equal(first.anchorSheetId, "0iGCcx");
+  assert.ok(first.issues.some((issue) => issue.code === "SHEET_RENAMED" && issue.sheetId === "25UnTC"));
   assert.ok(first.issues.some((issue) => issue.code === "UNREGISTERED_SHEET" && issue.sheetId === "new-series-sheet"));
 
   revision = "2353";
   const second = await pullFeishuWorkbookRevision({
-    workbook: LEGACY_YS_EKW_FEISHU_WORKBOOK, registry: LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY,
+    workbook: CANONICAL_FEISHU_WORKBOOK, registry: CANONICAL_FEISHU_SHEET_REGISTRY,
     adapter,
     pulledAt: "2026-07-21T10:01:00.000Z",
     pulledBy: "tester",

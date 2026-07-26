@@ -14,6 +14,7 @@ import {
   type PricingPolicyDraft,
   type PricingExecutionPolicy,
   type PricingLookupEntry,
+  type PricingCellRef,
   type QualityPriceFactorRange,
   type QualityPricingMapping,
 } from "./pricing-policy";
@@ -71,21 +72,6 @@ export const CANONICAL_IDENTITY_SHEET_SPECS: IdentitySheetSpec[] = [
   { sheetId: "19XKzU", range: "Q1:S", idColumnKey: "Q:S", fixedEntityType: "FunctionPartGroup", allowedEntityTypes: ["FunctionPartGroup"], idPrefixesByEntityType: { FunctionPartGroup: ["funcgrp_rod_", "funcgrp_reel_", "funcgrp_line_"] } },
   { sheetId: "23CsXE", range: "B1:C", idColumnKey: "B", allowedEntityTypes: ["RodAffix", "ReelAffix", "LineAffix"], idPrefixesByEntityType: { RodAffix: ["affix_rod_"], ReelAffix: ["affix_reel_"], LineAffix: ["affix_line_"] } },
   { sheetId: "25UnTC", range: "A1:W", idColumnKey: "A", fixedEntityType: "SeriesArchetype", allowedEntityTypes: ["SeriesArchetype"], idPrefixesByEntityType: { SeriesArchetype: ["series_rod_", "series_reel_", "series_line_"] } },
-];
-
-/**
- * 旧表 YsEKw（合并表）的身份规格（PR2b 切流后保留，spec §14 审计证据）。
- * 供历史 revision 审计、迁移适配与 legacy 回归测试使用；新读取链默认用上面的 WQ8w `CANONICAL_IDENTITY_SHEET_SPECS`。
- * 旧合并表一张含竿/轮/线块（如 d6e928 B1:C54），与新表三子表拓扑不同。
- */
-export const LEGACY_YS_EKW_IDENTITY_SHEET_SPECS: IdentitySheetSpec[] = [
-  { sheetId: "mLpTLK", range: "A1:S8", idColumnKey: "A", fixedEntityType: "FunctionProfile", allowedEntityTypes: ["FunctionProfile"], idPrefixesByEntityType: { FunctionProfile: ["function:"] } },
-  { sheetId: "d6e928", range: "BG1:BH", idColumnKey: "B", fixedEntityType: "WeightTemplate", allowedEntityTypes: ["WeightTemplate"], idPrefixesByEntityType: { WeightTemplate: ["wtpl_"] } },
-  { sheetId: "fATowU", range: "B1:C20", idColumnKey: "B", allowedEntityTypes: ["RodType", "ReelType", "LineType"], idPrefixesByEntityType: { RodType: ["type_rod_"], ReelType: ["type_reel_"], LineType: ["type_line_"] } },
-  { sheetId: "vviXo0", range: "B1:C63", idColumnKey: "B", fixedEntityType: "FunctionProfile", allowedEntityTypes: ["FunctionProfile"], idPrefixesByEntityType: { FunctionProfile: ["func_"] } },
-  { sheetId: "mLpTLK", range: "Q1:S8", idColumnKey: "Q:S", fixedEntityType: "FunctionPartGroup", allowedEntityTypes: ["FunctionPartGroup"], idPrefixesByEntityType: { FunctionPartGroup: ["funcgrp_rod_", "funcgrp_reel_", "funcgrp_line_"] } },
-  { sheetId: "zrVOxd", range: "B1:C38", idColumnKey: "B", allowedEntityTypes: ["RodAffix", "ReelAffix", "LineAffix"], idPrefixesByEntityType: { RodAffix: ["affix_rod_"], ReelAffix: ["affix_reel_"], LineAffix: ["affix_line_"] } },
-  { sheetId: "9nE3Rx", range: "B1:C10", idColumnKey: "B", fixedEntityType: "SeriesArchetype", allowedEntityTypes: ["SeriesArchetype"], idPrefixesByEntityType: { SeriesArchetype: ["series_rod_", "series_reel_", "series_line_"] } },
 ];
 
 export const AFFIX_SHEET_ID = "23CsXE";
@@ -271,7 +257,7 @@ function parsePricingWq8wParams(pricingParamsValues: unknown[][]) {
     const row = pricingParamsValues[index] ?? [];
     const key = text(row[0]).trim();
     const status = text(row[1]).trim();
-    const value = text(row[3]); // WQ8w 32BmZs: B=key, C=status, D=value
+    const value = text(row[3]); // A=key, B=status, D=value
     if (key && status && status !== "设计约定") map.set(key, value);
   }
   return {
@@ -296,6 +282,8 @@ export function pricingDraftFromRanges(input: {
   pricingValues?: unknown[][];
   /** WQ8w 09.1 参数释义 (32BmZs) — B=key, D=value format replacing old machine-key layout */
   pricingParamsValues?: unknown[][];
+  /** WQ8w 09.2 维修+零整比 (33IGHy) — 行格式 (part, weight, quality, maintenance, ratio) */
+  pricingEndpointValues?: unknown[][];
   typeValues?: unknown[][];
   importedAt: string;
 }): PricingPolicyDraft {
@@ -334,43 +322,19 @@ export function pricingDraftFromRanges(input: {
     return [{ qualityId, minScore, maxScore, maxInclusive: qualityId === "quality_s_orange", minFactor, maxFactor, status: "SOURCE", source: { sheetId: "27hboC", cell: `E${sheetRow}:H${sheetRow}`, rowKey: String(sheetRow) } }];
   });
   const pricingValues = input.pricingValues ?? [];
-  const maintenanceConsumptionRates: PricingLookupEntry[] = [];
-  const partAllocationRatios: PricingLookupEntry[] = [];
-  const totalLossTimes: PricingLookupEntry[] = [];
-  const partsToWholeRatios: PricingLookupEntry[] = [];
-  for (let index = 13; index < pricingValues.length; index += 1) {
-    const row = pricingValues[index] ?? [];
-    const sheetRow = index + 10;
-    const sourceValue = (value: number, cell: string) => ({ value, status: "SOURCE" as const, source: { sheetId: "31RxeB", cell, rowKey: String(sheetRow) } });
-    const maintenanceBand = text(row[0]);
-    const maintenance = Number(row[2]);
-    if (maintenanceBand && Number.isFinite(maintenance)) {
-      maintenanceConsumptionRates.push({ pricingWeightBandId: `weight_band:${maintenanceBand}`, value: sourceValue(maintenance, `D${sheetRow}`) });
-    }
-    const allocationBand = text(row[4]);
-    for (const [offset, partId] of [[5, "rod"], [6, "reel"], [7, "line"]] as const) {
-      const value = Number(row[offset]);
-      if (allocationBand && Number.isFinite(value)) {
-        const column = String.fromCharCode("B".charCodeAt(0) + offset);
-        partAllocationRatios.push({ pricingWeightBandId: `weight_band:${allocationBand}`, partId, value: sourceValue(value, `${column}${sheetRow}`) });
-      }
-    }
-    const lossBand = text(row[9]);
-    for (const [offset, partId] of [[11, "rod"], [12, "reel"], [13, "line"]] as const) {
-      const value = Number(row[offset]);
-      if (lossBand && Number.isFinite(value)) {
-        const column = String.fromCharCode("B".charCodeAt(0) + offset);
-        totalLossTimes.push({ pricingWeightBandId: `weight_band:${lossBand}`, partId, value: sourceValue(value, `${column}${sheetRow}`) });
-      }
-    }
-    for (const [offset, partId] of [[14, "rod"], [15, "reel"], [16, "line"]] as const) {
-      const value = Number(row[offset]);
-      if (lossBand && Number.isFinite(value)) {
-        const column = String.fromCharCode("B".charCodeAt(0) + offset);
-        partsToWholeRatios.push({ pricingWeightBandId: `weight_band:${lossBand}`, partId, value: sourceValue(value, `${column}${sheetRow}`) });
-      }
-    }
-  }
+  const wq8wLookup = parsePricingWq8wLookup(input.pricingEndpointValues);
+  const maintenanceConsumptionRates: PricingLookupEntry[] = wq8wLookup.maintenanceConsumptionRates.length
+    ? wq8wLookup.maintenanceConsumptionRates
+    : (() => { const leg: PricingLookupEntry[] = []; for (let i = 13; i < pricingValues.length; i++) { const r = pricingValues[i] ?? []; const b = text(r[0]); const v = Number(r[2]); if (b && Number.isFinite(v)) leg.push({ pricingWeightBandId: `weight_band:${b}`, value: { value: v, status: "SOURCE", source: { sheetId: "31RxeB", cell: `D${i + 10}`, rowKey: String(i + 10) } } }); } return leg; })();
+  const partAllocationRatios: PricingLookupEntry[] = wq8wLookup.partAllocationRatios.length
+    ? wq8wLookup.partAllocationRatios
+    : (() => { const leg: PricingLookupEntry[] = []; for (let i = 13; i < pricingValues.length; i++) { const r = pricingValues[i] ?? []; const b = text(r[4]); for (const [off, pid] of [[5, "rod"], [6, "reel"], [7, "line"]] as const) { const v = Number(r[off]); if (b && Number.isFinite(v)) leg.push({ pricingWeightBandId: `weight_band:${b}`, partId: pid, value: { value: v, status: "SOURCE", source: { sheetId: "31RxeB", cell: `${String.fromCharCode(66 + off)}${i + 10}`, rowKey: String(i + 10) } } }); } } return leg; })();
+  const totalLossTimes: PricingLookupEntry[] = wq8wLookup.totalLossTimes.length
+    ? wq8wLookup.totalLossTimes
+    : (() => { const leg: PricingLookupEntry[] = []; for (let i = 13; i < pricingValues.length; i++) { const r = pricingValues[i] ?? []; const b = text(r[9]); for (const [off, pid] of [[11, "rod"], [12, "reel"], [13, "line"]] as const) { const v = Number(r[off]); if (b && Number.isFinite(v)) leg.push({ pricingWeightBandId: `weight_band:${b}`, partId: pid, value: { value: v, status: "SOURCE", source: { sheetId: "31RxeB", cell: `${String.fromCharCode(66 + off)}${i + 10}`, rowKey: String(i + 10) } } }); } } return leg; })();
+  const partsToWholeRatios: PricingLookupEntry[] = wq8wLookup.partsToWholeRatios.length
+    ? wq8wLookup.partsToWholeRatios
+    : (() => { const leg: PricingLookupEntry[] = []; for (let i = 13; i < pricingValues.length; i++) { const r = pricingValues[i] ?? []; const b = text(r[9]); for (const [off, pid] of [[14, "rod"], [15, "reel"], [16, "line"]] as const) { const v = Number(r[off]); if (b && Number.isFinite(v)) leg.push({ pricingWeightBandId: `weight_band:${b}`, partId: pid, value: { value: v, status: "SOURCE", source: { sheetId: "31RxeB", cell: `${String.fromCharCode(66 + off)}${i + 10}`, rowKey: String(i + 10) } } }); } } return leg; })();
   const repairCoefficients: PricingLookupEntry[] = [];
   const purchaseCoefficients: PricingLookupEntry[] = [];
   for (let index = 1; index < (input.typeValues ?? []).length; index += 1) {
@@ -467,6 +431,43 @@ export function pricingQualitySourceRowsFromDraft(
     code: row.code, minScore: row.minScore, maxScore: row.maxScore, minFactor: row.minFactor, maxFactor: row.maxFactor,
     mappingCell: row.mappingSource.cell, factorCell: row.factorSource.cell, rowKey: row.mappingSource.rowKey ?? "",
   }));
+}
+
+function parsePricingWq8wLookup(rows: unknown[][] | undefined): {
+  maintenanceConsumptionRates: PricingLookupEntry[];
+  partsToWholeRatios: PricingLookupEntry[];
+  partAllocationRatios: PricingLookupEntry[];
+  totalLossTimes: PricingLookupEntry[];
+} {
+  const partNames: Record<string, string> = { "竿": "rod", "轮": "reel", "线": "line" };
+  const rates: PricingLookupEntry[] = [];
+  const ratios: PricingLookupEntry[] = [];
+  const allocRates: PricingLookupEntry[] = [];
+  const lossTimes: PricingLookupEntry[] = [];
+  const seenAlloc = new Set<string>();
+  const seenLoss = new Set<string>();
+  if (!rows || rows.length < 2) return { maintenanceConsumptionRates: rates, partsToWholeRatios: ratios, partAllocationRatios: allocRates, totalLossTimes: lossTimes };
+  for (let index = 1; index < rows.length; index += 1) {
+    const row = rows[index] ?? [];
+    const partId = partNames[text(row[0])] ?? "";
+    const weightBand = text(row[1]);
+    const maintenance = Number(row[3]);
+    const ratio = Number(row[4]);
+    if (!weightBand || !partId) continue;
+    const bandId = `weight_band:${weightBand}`;
+    const src: PricingCellRef = { sheetId: "33IGHy", cell: `A${index + 1}:E${index + 1}`, rowKey: String(index + 1) };
+    if (Number.isFinite(maintenance)) {
+      rates.push({ pricingWeightBandId: bandId, partId, value: { value: maintenance, status: "SOURCE", source: src } });
+      // WQ8w: part allocation and total loss baked into per-part maintenance; emit identity defaults so formulas don't break.
+      const key = `${bandId}:${partId}`;
+      if (!seenAlloc.has(key)) { seenAlloc.add(key); allocRates.push({ pricingWeightBandId: bandId, partId, value: { value: 1, status: "SOURCE" as const, source: src } }); }
+      if (!seenLoss.has(key)) { seenLoss.add(key); lossTimes.push({ pricingWeightBandId: bandId, partId, value: { value: 1, status: "SOURCE" as const, source: src } }); }
+    }
+    if (Number.isFinite(ratio)) {
+      ratios.push({ pricingWeightBandId: bandId, partId, value: { value: ratio, status: "SOURCE", source: src } });
+    }
+  }
+  return { maintenanceConsumptionRates: rates, partsToWholeRatios: ratios, partAllocationRatios: allocRates, totalLossTimes: lossTimes };
 }
 
 const partIds: Record<string, string> = { "竿": "part:rod", "轮": "part:reel", "线": "part:line" };
@@ -910,6 +911,7 @@ export async function inspectCanonicalRuleWorkbook(input: {
     qualityValues: [], qualitySourceRows: pricingQualityRows,
     pricingValues: pricingRange?.valueRange.values ?? [],
     pricingParamsValues: pricingParamsRange?.valueRange.values ?? [],
+    pricingEndpointValues: pricingEndpointRange?.valueRange.values ?? [],
     typeValues, importedAt: input.observedAt,
   });
   const findRangeValues = (sheetId: string, rangePrefix: string) => ranges.find((entry) => entry.sheetId === sheetId && typeof entry.range === "string" && entry.range.startsWith(rangePrefix))?.valueRange.values ?? [];

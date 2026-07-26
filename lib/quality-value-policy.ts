@@ -359,7 +359,7 @@ function assessModelAffixValueInternal(input: {
       sequence: trace.length + 1,
       step: "affix",
       sourceRevision: input.policy.sourceRevision,
-      source: { sheetId: "zrVOxd", cell: affix.id },
+      source: { sheetId: "23CsXE", cell: affix.id },
       subjectIds: [affix.id],
       before,
       operation: "add",

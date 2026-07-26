@@ -93,55 +93,6 @@ export const CANONICAL_FEISHU_WORKBOOK: FeishuWorkbookRef = {
 };
 
 /**
- * 旧表 YsEKw（/wiki/，18 张合并表）的历史契约（PR2b 切流后保留，spec §14 :926 审计证据）。
- *
- * PR2b 切流后 canonical 默认 WQ8w；LEGACY_YS_EKW_* 不被新读取链默认使用，
- * 但支持历史 revision 的审计、迁移适配与回归测试。旧合并表块布局
- * （竿3-18/轮21-36/线39-54）与旧 sheetId（d6e928/mLpTLK 等）只在此处保留。
- */
-export const LEGACY_YS_EKW_FEISHU_WORKBOOK: FeishuWorkbookRef = {
-  id: "feishu-workbook:tackle-design-legacy-ysekw",
-  name: "钓具设计工作簿（旧表 YsEKw·历史审计）",
-  provider: "feishu_sheets",
-  shareUrl: "https://pisn3u3ony2.feishu.cn/wiki/YsEKwSUJ5i86HCkZKBVcNMw7nOh?from=from_copylink&sheet=9nE3Rx",
-  wikiToken: "YsEKwSUJ5i86HCkZKBVcNMw7nOh",
-  anchorSheetId: "9nE3Rx",
-  syncScope: "workbook",
-  enabled: true,
-};
-
-export const LEGACY_YS_EKW_FEISHU_SHEET_REGISTRY: FeishuSheetRegistryEntry[] = [
-  ["mLpTLK", "04.0_FunctionProfile常量", "rule_source", true, true],
-  ["d6e928", "01_重量模板", "rule_source", true, true],
-  ["4IfBoX", "00_使用说明", "historical_reference", false, false],
-  ["rgFPUu", "02_钓法类型", "rule_source", true, true],
-  ["m3eQCg", "02.5_钓法模板", "historical_reference", false, false],
-  ["fATowU", "03_类型材质", "rule_source", true, true],
-  ["vviXo0", "04_功能定位", "rule_source", true, true],
-  ["zrVOxd", "04_词条", "rule_source", true, true],
-  ["RdZv0J", "05_技术", "rule_source", true, true],
-  ["9nE3Rx", "06_系列", "rule_source", true, true],
-  ["FqD4j7", "07_品质评分", "rule_source", true, true],
-  ["u87sRh", "08_价格计算", "rule_source", true, true],
-  ["wxORcd", "09_甘特图", "development_plan", false, false],
-  ["KZv4o2", "10_校验规则", "rule_source", true, true],
-  ["eXV1dI", "11_组合SKU", "historical_reference", false, false],
-  ["lf4wIM", "12_打包竿组", "historical_reference", false, false],
-  ["M17p0j", "13_上传发布", "publish_control", false, false],
-  ["hekdpO", "14_Rods", "staging_output", false, false],
-  ["oUp48w", "15_Reels", "staging_output", false, false],
-  ["YTYwgS", "16_Lines", "staging_output", false, false],
-  ["VFxDxt", "17_Item", "staging_output", false, false],
-].map(([sheetId, expectedName, role, required, importsRules]) => ({
-  sheetId: String(sheetId),
-  expectedName: String(expectedName),
-  role: role as FeishuSheetRole,
-  required: Boolean(required),
-  importsRules: Boolean(importsRules),
-  canOverwriteDomainTruth: false,
-}));
-
-/**
  * v3 §14（2026-07-25 权威表迁移）指定的新表权威规则源身份（WQ8w，`/sheets/` 直接电子表格形式）。
  *
  * PR2a 地基：本 PR 仅登记新表身份与 50 张分表 registry，与既有 `CANONICAL_FEISHU_WORKBOOK`
@@ -449,42 +400,25 @@ export async function pullFeishuWorkbookRevision(input: {
   const remote = await input.adapter.resolveWorkbook(input.workbook);
   if (!remote.sourceRevision.trim()) throw new Error("飞书未返回工作簿 revision。");
   const issues = validateSheetRegistry(registry, remote.sheets);
-  // PR2b-2（2026-07-25）：W 段策略从旧 d6e928 切到 WQ8w 三子表。
-  // WQ8w（1cAihB+2KCCHR+3FYijT 均存在）→ 读三子表 A1:AE17；
-  // LEGACY（d6e928 存在且三子表不全）→ 回退读 d6e928 A1:AE54 并去首空列对齐；
-  // 否则跳过（无 W 段策略）。
+  // PR2b-2（2026-07-25）：W 段策略读 WQ8w 三子表（1cAihB+2KCCHR+3FYijT 均存在）A1:AE17；
+  // 三子表不全则跳过（无 W 段策略）。旧 d6e928 合并表回退已随旧表废弃移除。
   const W_BAND_SHEETS = ["1cAihB", "2KCCHR", "3FYijT"] as const;
   const hasWq8wWBand = W_BAND_SHEETS.every((sid) => remote.sheets.some((s) => s.sheetId === sid));
-  const hasLegacyD6e928 = remote.sheets.some((s) => s.sheetId === "d6e928");
-  const policyRanges = (hasWq8wWBand || hasLegacyD6e928) && input.adapter.readRanges
+  const policyRanges = hasWq8wWBand && input.adapter.readRanges
     ? await input.adapter.readRanges({
         spreadsheetToken: remote.spreadsheetToken,
-        requests: hasWq8wWBand
-          ? W_BAND_SHEETS.map((sid) => ({ sheetId: sid, range: "A1:AE17" }))
-          : [{ sheetId: "d6e928", range: "A1:AE54" }],
+        requests: W_BAND_SHEETS.map((sid) => ({ sheetId: sid, range: "A1:AE17" })),
       })
     : undefined;
   const fiveAxisWeightBandPolicy: FiveAxisWeightBandPolicy | undefined = (() => {
     if (!policyRanges) return undefined;
-    if (hasWq8wWBand) {
-      const rodRng = policyRanges.find((e) => e.sheetId === "1cAihB" && e.range === "A1:AE17");
-      const reelRng = policyRanges.find((e) => e.sheetId === "2KCCHR" && e.range === "A1:AE17");
-      const lineRng = policyRanges.find((e) => e.sheetId === "3FYijT" && e.range === "A1:AE17");
-      if (!rodRng || !reelRng || !lineRng || rodRng.revision !== remote.sourceRevision || reelRng.revision !== remote.sourceRevision || lineRng.revision !== remote.sourceRevision) {
-        throw new Error("FIVE_AXIS_WEIGHT_BAND_POLICY_SOURCE_INVALID：未读取到同 revision 的三张 W 段子表。");
-      }
-      return parseFiveAxisWeightBandPolicyFromWeightTemplate({ sourceRevision: remote.sourceRevision, rodValues: rodRng.values, reelValues: reelRng.values, lineValues: lineRng.values });
+    const rodRng = policyRanges.find((e) => e.sheetId === "1cAihB" && e.range === "A1:AE17");
+    const reelRng = policyRanges.find((e) => e.sheetId === "2KCCHR" && e.range === "A1:AE17");
+    const lineRng = policyRanges.find((e) => e.sheetId === "3FYijT" && e.range === "A1:AE17");
+    if (!rodRng || !reelRng || !lineRng || rodRng.revision !== remote.sourceRevision || reelRng.revision !== remote.sourceRevision || lineRng.revision !== remote.sourceRevision) {
+      throw new Error("FIVE_AXIS_WEIGHT_BAND_POLICY_SOURCE_INVALID：未读取到同 revision 的三张 W 段子表。");
     }
-    const d6 = policyRanges.find((e) => e.sheetId === "d6e928" && e.range === "A1:AE54");
-    if (!d6 || d6.revision !== remote.sourceRevision) throw new Error("FIVE_AXIS_WEIGHT_BAND_POLICY_SOURCE_INVALID：d6e928 机器区 revision 不一致。");
-    // d6e928 合并表 A 列为空占位（B="机器ID"）→ 去首列对齐 WQ8w
-    const t = (r: unknown[]) => r.slice(1); const v = d6.values;
-    return parseFiveAxisWeightBandPolicyFromWeightTemplate({
-      sourceRevision: remote.sourceRevision,
-      rodValues: [t(v[1]!), ...v.slice(2, 18).map(t)],
-      reelValues: [t(v[19]!), ...v.slice(20, 36).map(t)],
-      lineValues: [t(v[37]!), ...v.slice(38, 54).map(t)],
-    });
+    return parseFiveAxisWeightBandPolicyFromWeightTemplate({ sourceRevision: remote.sourceRevision, rodValues: rodRng.values, reelValues: reelRng.values, lineValues: lineRng.values });
   })();
   const content = {
     workbookRefId: input.workbook.id,

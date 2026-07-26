@@ -23,7 +23,7 @@
 
 ## 旧表兼容说明
 
-项目尚未正式交付，无生产环境历史 workspace state 需迁就。PR2b 切流后生产读取链默认走 WQ8w（`CANONICAL_FEISHU_WORKBOOK`）。旧表 YsEKw 的 sheetId/URL/拓扑以 `LEGACY_YS_EKW_*` 常量保留在 `lib/feishu-workbook.ts` 和 `lib/rule-workbook-inspection.ts`，供 5 个测试文件作历史审计 fixture。修改 LEGACY 常量或 `migrations.ts` 迁移步骤前必须同步更新对应测试。
+项目尚未正式交付，无生产环境历史 workspace state 需迁就。PR2b 切流后生产读取链默认走 WQ8w（`CANONICAL_FEISHU_WORKBOOK`）。旧表 YsEKw 的 sheetId/URL/拓扑以 `LEGACY_YS_EKW_*` 常量保留在 `lib/feishu-workbook.ts` 和 `lib/rule-workbook-inspection.ts`，供相关测试作历史审计 fixture。修改 LEGACY 常量或 `migrations.ts` 迁移步骤前必须同步更新对应测试。
 
 ## 实现要求
 

@@ -39,7 +39,7 @@ test("normal-risk current-head CI is merge-ready", async () => {
   const result = evaluatePullRequestMergeGate(await fixture("ready-normal"));
 
   assert.equal(result.ready, true);
-  assert.equal(result.evidence.filter((item) => item.type === "ci").length, 3);
+  assert.equal(result.evidence.filter((item) => item.type === "ci").length, 2);
   assert.ok(
     result.evidence.some((item) => item.type === "trusted-ci-workflow"),
   );
@@ -158,7 +158,7 @@ test("successful checks from an old head do not count", async () => {
   assert.equal(result.ready, false);
   assert.deepEqual(
     result.blockers.map((blocker) => blocker.code),
-    ["CI_OLD_HEAD", "CI_OLD_HEAD", "CI_OLD_HEAD"],
+    ["CI_OLD_HEAD", "CI_OLD_HEAD"],
   );
 });
 
@@ -173,7 +173,7 @@ test("successful push jobs cannot replace this pull request's CI", async () => {
   assert.equal(result.ready, false);
   assert.deepEqual(
     result.blockers.map((blocker) => blocker.code),
-    ["CI_NOT_PULL_REQUEST", "CI_NOT_PULL_REQUEST", "CI_NOT_PULL_REQUEST"],
+    ["CI_NOT_PULL_REQUEST", "CI_NOT_PULL_REQUEST"],
   );
 });
 
@@ -185,7 +185,7 @@ test("CI collected before the pull request base changed is stale", async () => {
   assert.equal(result.ready, false);
   assert.deepEqual(
     result.blockers.map((blocker) => blocker.code),
-    ["CI_BASE_STALE", "CI_BASE_STALE", "CI_BASE_STALE"],
+    ["CI_BASE_STALE", "CI_BASE_STALE"],
   );
 });
 
@@ -248,7 +248,7 @@ test("live pull request snapshots use the repository ref tip instead of stale PR
   ]);
   assert.deepEqual(
     result.blockers.map((blocker) => blocker.code),
-    ["CI_BASE_STALE", "CI_BASE_STALE", "CI_BASE_STALE"],
+    ["CI_BASE_STALE", "CI_BASE_STALE"],
   );
 });
 
@@ -405,7 +405,6 @@ test("draft, failed or missing CI, pending CI, and unresolved threads all block"
   assert.ok(codes.includes("PR_IS_DRAFT"));
   assert.ok(codes.includes("CI_FAILED"));
   assert.ok(codes.includes("CI_PENDING"));
-  assert.ok(codes.includes("CI_MISSING"));
   assert.ok(codes.includes("REVIEW_THREADS_UNRESOLVED"));
 });
 
@@ -596,7 +595,7 @@ test("required CI only accepts checks explicitly owned by GitHub Actions", async
     result.blockers.map((blocker) => [blocker.code, blocker.check]),
     [
       ["CI_MISSING", "Root v3 app (npm)"],
-      ["CI_MISSING", "Historical workspace (pnpm)"],
+      ["CI_MISSING", "Windows line-ending policy"],
     ],
   );
 });

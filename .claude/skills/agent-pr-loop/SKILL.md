@@ -1,17 +1,17 @@
 ---
 name: agent-pr-loop
-description: 主 agent 已直接实现代码后，把 PR 走完「独立审核 → 主 agent 修 → 当前 head CI → 集成证据」的闭环，并在实际发生合并时执行安全回读。当用户说「审完合并」「复审后合并」「合并收尾」「搞定这个 PR」「把当前 PR 跑完」时启用，尤其是应由 Codex 推断当前 PR 而不要求用户给出编号时。
+description: coordinator 已组织实现并形成 PR head 后，把 PR 走完「独立审核 → 安排修复 → 当前 head CI → 集成证据」的闭环，并在实际发生合并时执行安全回读。当用户说「审完合并」「复审后合并」「合并收尾」「搞定这个 PR」「把当前 PR 跑完」时启用，尤其是应由 Codex 推断当前 PR 而不要求用户给出编号时。
 ---
 
 ## 定位
 
-本 skill 在项目 `CLAUDE.md`「Agent 工作模式」定义的工作模式下运作（实现/修改/调查由主 agent 直接做，不 spawn 实现 agent；此处不重复）。**本 skill 负责审核、CI、集成证据和实际合并后的安全回读，但不规定 Agent 是否执行合并。**
+本 skill 在项目 `CLAUDE.md`「Agent 工作模式」定义的工作模式下运作；实施容量由 coordinator 按任务决定，此处不另行固定。**本 skill 负责审核、CI、集成证据和实际合并后的安全回读，但不规定 Agent 是否执行合并。**
 
-主 agent 实现并 push head 后，需要独立审核时有两条路（可选其一或并行）：
+coordinator 组织实现并 push head 后，按任务风险、范围、可用能力与资源决定审核者数量、专长、模型、推理强度和串并行安排。每个独立审核范围都只读、基于证据，并绑定当前精确head/base；所有发现由coordinator处置后才可整合唯一最终审核信号。需要独立审核时有两条路（可选其一或并行）：
 1. **输出审核清单**（见下）→ 用户粘到常驻审核 agent 窗口（省 install + 上下文重建，推荐用于敏捷迭代）；
-2. **spawn 独立审核 agent**（只读；模型在 spawn 时按当前可用性与任务动态选定，须足够强以保证审核有效，可用 isolation:worktree 从 origin/main 干净读取避免本地落后）审当前 head。
+2. **spawn 独立审核 agent**（只读；模型与推理强度在 spawn 时按当前可用性与任务动态选定，须足够强以保证审核有效，可用 isolation:worktree 从 origin/main 干净读取避免本地落后）审当前 head。
 
-## 审核清单格式（主 agent 实现完后输出，可粘贴）
+## 审核清单格式（coordinator 形成 head 后输出，可粘贴）
 
 ```
 审查 PR #<N>（仓库 <owner/repo>，<head 分支> → <base>）。
@@ -35,7 +35,7 @@ Agent-Review: PASS
 ## 审核闭环
 
 1. 审核者报告绑定精确 head SHA 的发现（按严重度排序）。
-2. **主 agent 直接修复**（不 spawn），跑 typecheck/lint/test，push 新 head（普通 push，不 rebase+force-push）。
+2. **coordinator 安排最小必要的修复容量**，跑 typecheck/lint/test，push 新 head（普通 push，不 rebase+force-push）。
 3. 等新 head 的 PR CI。
 4. 审核者对精确新 head 增量复审。
 5. 重复至 `Agent-Review: PASS` 或达上限（默认 3 轮，超限上报用户）。

@@ -31,17 +31,7 @@ npm test
 npm run db:generate
 ```
 
-The repository also retains the historical `apps/web` and `packages/*` pnpm workspace. Its workspace manifest and lockfile live under `legacy-workspace/`, which deliberately has no root package importer. Validate it from that boundary; do not use pnpm success as a substitute for the authoritative root v3 app's npm checks, and do not let root npm-only dependency changes rewrite `legacy-workspace/pnpm-lock.yaml`:
-
-```powershell
-pnpm --dir legacy-workspace install --frozen-lockfile
-pnpm --dir legacy-workspace --filter '@tackle-forger/*' typecheck
-pnpm --dir legacy-workspace --filter '@tackle-forger/*' lint
-pnpm --dir legacy-workspace --filter '@tackle-forger/*' test
-pnpm --dir legacy-workspace --filter '@tackle-forger/*' build
-```
-
-CI runs the npm root application and pnpm historical workspace as independent jobs so one lockfile or toolchain cannot silently mask the other. Historical workspace dependency changes must update `legacy-workspace/pnpm-lock.yaml`; its frozen install is expected to reject manifest drift.
+The repository retains the historical `apps/web` and `packages/*` pnpm workspace under `legacy-workspace/`, but it is not part of daily development, CI, merge gates, or Agent validation. The authoritative root v3 application uses npm. Any restoration of historical workspace validation is a dedicated governance change using the recovery evidence in `legacy-workspace-last-green-2026-07-26` (Node 22.16.0 / pnpm 10.33.2).
 
 On Windows, the recommended local launcher is:
 
@@ -172,4 +162,4 @@ New domain behavior must cover normal, boundary, conflict, recovery/version-free
 
 ## Agent 工作模式
 
-实现、修改、调查由主 agent 直接做（直接 Edit/Write、跑 typecheck/lint/test、commit、push），不 spawn 实现 agent 或 workflow 去改代码。仅在需要独立审核时 spawn 一个 reviewer（只读；模型在 spawn 时按当前可用性与任务动态选定，须足够强以保证审核有效——具体偏好见自动记忆，不在此固定为某一型号），并在拉起的同时输出一份自包含的「审核清单」（仓库、PR 号、head 完整 SHA、base、改动摘要、重点核实项、PASS/发现格式），以便粘贴到常驻审核 agent 窗口。审核独立性靠独立 reviewer 保证，不自己审自己。配套 skill 见 `.claude/skills/agent-pr-loop/SKILL.md`。
+实现、修改、调查由主 agent 直接做（直接 Edit/Write、跑 typecheck/lint/test、commit、push），或由coordinator按任务风险、范围、可用能力与资源安排实施容量。独立审核始终只读并基于证据；coordinator按相同因素决定审核者数量、专长、模型、推理强度与串并行安排，并在拉起时输出每个审查范围自包含的「审核清单」（仓库、PR 号、head 完整 SHA、base、改动摘要、重点核实项、PASS/发现格式），以便粘贴到常驻审核 agent 窗口。每个已分配范围都必须覆盖当前精确head/base；所有发现由coordinator处置后才可整合唯一最终审查信号或本地verdict。审核独立性靠独立 reviewer 保证，不自己审自己；收据哈希只证明覆盖记录，不证明Agent身份。配套 skill 见 `.claude/skills/agent-pr-loop/SKILL.md`。

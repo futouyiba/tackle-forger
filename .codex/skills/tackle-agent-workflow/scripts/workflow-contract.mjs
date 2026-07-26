@@ -38,9 +38,8 @@ const STRICT_NAVIGATION_SECTIONS = new Set([
   '20',
 ]);
 const MANDATORY_WORKFLOW_COMMANDS = ['node scripts/spec-v3-modules.mjs --check', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-index', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-policy', 'node --test .codex/skills/tackle-agent-workflow/scripts/workflow-contract.test.mjs'];
-const CONDITIONAL_NA_CATALOG = ['product_runtime_tests', 'legacy_workspace_ci'];
-const LEGACY_WORKSPACE_COMMANDS = ['node --test tests/package-manager-boundaries.test.mjs', 'pnpm --dir legacy-workspace install --frozen-lockfile', "pnpm --dir legacy-workspace --filter '@tackle-forger/*' typecheck", "pnpm --dir legacy-workspace --filter '@tackle-forger/*' lint", "pnpm --dir legacy-workspace --filter '@tackle-forger/*' test", "pnpm --dir legacy-workspace --filter '@tackle-forger/*' build"];
-const CONDITIONAL_NA_APPLICABILITY = { legacyTouchedForbids: 'legacy_workspace_ci', nonLegacyRequires: 'legacy_workspace_ci', nonWorkflowForbids: 'product_runtime_tests', workflowMetadataRequires: 'product_runtime_tests' };
+const CONDITIONAL_NA_CATALOG = ['product_runtime_tests'];
+const CONDITIONAL_NA_APPLICABILITY = { nonWorkflowForbids: 'product_runtime_tests', workflowMetadataRequires: 'product_runtime_tests' };
 export const VALIDATION_EXECUTION_TIERS = {
   inspection_only: { iterationFullCi: 'forbidden', requiredEvidence: ['fetch_compare_history_or_status'] },
   documentation_or_nonbehavior_workflow: { iterationFullCi: 'forbidden', requiredEvidence: ['format_reference_scoped_diff'] },
@@ -48,7 +47,7 @@ export const VALIDATION_EXECUTION_TIERS = {
   deployment_configuration: { iterationFullCi: 'forbidden', requiredEvidence: ['config_validation', 'service_restart', 'actual_listener', 'health_check'] },
   business_code: { iterationFullCi: 'forbidden', requiredEvidence: ['typecheck', 'lint', 'related_tests'] },
   durable_or_external: { iterationFullCi: 'forbidden', requiredEvidence: ['boundary', 'failure_recovery', 'idempotency', 'readback'] },
-  stable_pr_candidate: { candidateFullCi: 'once_per_exact_head_base', requiredEvidence: ['root_full_ci', 'applicable_historical_ci', 'windows_policy'] },
+  stable_pr_candidate: { candidateFullCi: 'once_per_exact_head_base', requiredEvidence: ['root_full_ci', 'windows_policy'] },
   rebase_refresh: { candidateFullCi: 'broad_impact_or_new_stable_candidate', requiredEvidence: ['actual_diff_classification', 'affected_checks'] },
 };
 const CHANGE_CLASS_MATRIX = {
@@ -244,6 +243,7 @@ function isCanonicalRepoRelativePath(input) {
 }
 function isScopedGovernancePath(repoPath) {
   return isCanonicalRepoRelativePath(repoPath) && (repoPath === 'AGENTS.md'
+    || repoPath === 'CLAUDE.md'
     || repoPath.startsWith('.codex/skills/tackle-agent-workflow/')
     || repoPath.startsWith('.codex/skills/agent-project-bootstrap/')
     || repoPath.startsWith('.codex/skills/agent-issue-loop/')
@@ -404,7 +404,6 @@ function taskCardEscalation({ ownedPaths, riskProfile, changeClass }) {
   const classification = classifyOwnedPaths(ownedPaths);
   if (!classification.scopedEligible) markers.push('owned_paths_outside_scoped_governance');
   if (riskProfile !== 'workflow_docs_metadata' || changeClass !== 'workflow_metadata') markers.push('non_workflow_or_runtime_semantics');
-  if (ownedPaths.some((owned) => owned.startsWith('legacy-workspace/'))) markers.push('legacy_workspace');
   return markers;
 }
 /** Daily task cards deliberately contain no reading assertion or formal review evidence. */
@@ -597,12 +596,12 @@ function validationArtifact(root, brief, briefResult, dirtyPaths) {
   };
 }
 function dependencyLockHash(root) {
-  const candidates = ['package-lock.json', 'npm-shrinkwrap.json', 'legacy-workspace/pnpm-lock.yaml'];
+  const candidates = ['package-lock.json', 'npm-shrinkwrap.json'];
   const entries = candidates.filter((relative) => existsSync(path.join(root, relative))).map((relative) => ({ path: relative, contentSha256: sha256(readFileSync(path.join(root, relative))) }));
   return entries.length === 0 ? 'none' : stableHash(entries);
 }
 function installedDependencyHash(root) {
-  const candidates = ['node_modules/.package-lock.json', 'node_modules/.modules.yaml', 'node_modules/.pnpm/lock.yaml', 'legacy-workspace/node_modules/.modules.yaml'];
+  const candidates = ['node_modules/.package-lock.json'];
   const entries = candidates.filter((relative) => existsSync(path.join(root, relative))).map((relative) => ({ path: relative, contentSha256: sha256(readFileSync(path.join(root, relative))) }));
   return entries.length === 0 ? 'none' : stableHash(entries);
 }
@@ -647,12 +646,6 @@ function commandSpec(briefResult, brief, command) {
     ['npm run typecheck', ['npm', ['run', 'typecheck']]],
     ['npm run lint', ['npm', ['run', 'lint']]],
     ['npm test', ['npm', ['test']]],
-    ['node --test tests/package-manager-boundaries.test.mjs', [node, ['--test', 'tests/package-manager-boundaries.test.mjs']]],
-    ['pnpm --dir legacy-workspace install --frozen-lockfile', ['pnpm', ['--dir', 'legacy-workspace', 'install', '--frozen-lockfile']]],
-    ["pnpm --dir legacy-workspace --filter '@tackle-forger/*' typecheck", ['pnpm', ['--dir', 'legacy-workspace', '--filter', '@tackle-forger/*', 'typecheck']]],
-    ["pnpm --dir legacy-workspace --filter '@tackle-forger/*' lint", ['pnpm', ['--dir', 'legacy-workspace', '--filter', '@tackle-forger/*', 'lint']]],
-    ["pnpm --dir legacy-workspace --filter '@tackle-forger/*' test", ['pnpm', ['--dir', 'legacy-workspace', '--filter', '@tackle-forger/*', 'test']]],
-    ["pnpm --dir legacy-workspace --filter '@tackle-forger/*' build", ['pnpm', ['--dir', 'legacy-workspace', '--filter', '@tackle-forger/*', 'build']]],
   ]);
   if (staticCommands.has(command)) {
     const [executable, args] = staticCommands.get(command);
@@ -700,7 +693,7 @@ export function runValidation({ root = repositoryRoot(), brief, currentReuseCont
   });
   return { schema: VALIDATION_SUMMARY_SCHEMA, runner: 'closed_command_catalog/v1', taskBriefSha256: plan.taskBriefSha256, artifactIdentity: plan.artifact.artifactIdentity, inputIdentity: plan.artifact.inputIdentity, reuseIdentity: plan.reuseIdentity, results };
 }
-function validateBriefNarrative(brief, { legacyTouched }) {
+function validateBriefNarrative(brief) {
   requireString(brief.scope, 'TaskBrief.scope');
   requireNonEmptyStringArray(brief.acceptanceCriteria, 'TaskBrief.acceptanceCriteria');
   requireStringArray(brief.exclusions, 'TaskBrief.exclusions');
@@ -728,13 +721,11 @@ function validateBriefNarrative(brief, { legacyTouched }) {
   } else if (Object.hasOwn(na, 'product_runtime_tests')) {
     fail('Non-workflow changeClass cannot mark product_runtime_tests N/A');
   }
-  if (legacyTouched ? Object.hasOwn(na, 'legacy_workspace_ci') : !Object.hasOwn(na, 'legacy_workspace_ci')) fail(legacyTouched ? 'legacy workspace changes cannot mark legacy_workspace_ci N/A' : 'Non-legacy work requires a legacy_workspace_ci N/A reason');
-  const allowedCommands = new Set([...matrix.commands, ...(legacyTouched ? LEGACY_WORKSPACE_COMMANDS : []), ...(canonicalSpecTouched ? ['node scripts/spec-v3-modules.mjs --check'] : [])]);
+  const allowedCommands = new Set([...matrix.commands, ...(canonicalSpecTouched ? ['node scripts/spec-v3-modules.mjs --check'] : [])]);
   if (commands.some((item) => !allowedCommands.has(item) && !(brief.changeClass === 'workflow_metadata' && isWorkflowWhitespaceCommand(item, brief.baseSha, brief.ownedPaths))) || scenarios.some((item) => ![...matrix.scenarios, ...riskScenarios].includes(item))) fail('TaskBrief.validationPlan command/scenario is in the wrong collection');
   for (const item of matrix.commands) if (!commands.includes(item) && !Object.hasOwn(na, item)) fail(`TaskBrief.validationPlan omits required command: ${item}`);
   for (const item of nonWaivableScenarios) if (!scenarios.includes(item)) fail(`TaskBrief.validationPlan scenario cannot be N/A: ${item}`);
   for (const item of matrix.nonWaivableCommands ?? []) if (!commands.includes(item)) fail(`TaskBrief.validationPlan command cannot be N/A: ${item}`);
-  if (legacyTouched) for (const item of LEGACY_WORKSPACE_COMMANDS) if (!commands.includes(item)) fail(`TaskBrief.validationPlan legacy workspace command cannot be N/A: ${item}`);
   if (canonicalSpecTouched && !commands.includes('node scripts/spec-v3-modules.mjs --check')) fail('TaskBrief.validationPlan canonical v3 module command cannot be N/A');
   if (brief.changeClass === 'persistence_migration' && !(brief.riskDimensions.persistedData || brief.riskDimensions.historicalSnapshots)) fail('persistence_migration requires persistedData or historicalSnapshots risk');
   if (brief.changeClass === 'authorization_shared_write' && !(brief.riskDimensions.authorization || brief.riskDimensions.concurrency)) fail('authorization_shared_write requires authorization or concurrency risk');
@@ -749,7 +740,7 @@ function requiredRiskScenarios(riskDimensions) {
   return [...new Set(scenarios)];
 }
 function isUserVisiblePath(repoPath) {
-  return repoPath.startsWith('apps/web/') || repoPath.startsWith('packages/ui/') || repoPath.startsWith('legacy-workspace/apps/web/') || repoPath.startsWith('legacy-workspace/packages/ui/') || /\.(?:tsx|jsx|css|scss|sass|less|html)$/.test(repoPath);
+  return repoPath.startsWith('apps/web/') || repoPath.startsWith('packages/ui/') || /\.(?:tsx|jsx|css|scss|sass|less|html)$/.test(repoPath);
 }
 function dynamicDiffCommand(baseSha, ownedPaths) { return `node ${SCRIPT_RELATIVE} --check-owned-whitespace --base ${baseSha} ${ownedPaths.flatMap((owned) => ['--owned', owned]).join(' ')}`; }
 function legacyDynamicDiffCommand(baseSha, ownedPaths) { return `git diff --check ${baseSha} -- ${ownedPaths.join(' ')}`; }
@@ -788,23 +779,20 @@ function requireCleanWorktree(root) {
 function prepareInputKeys() {
   return ['schema', 'taskId', 'workflowMode', 'baseSha', 'scope', 'relevantSections', 'openDecisionApplicability', 'riskProfile', 'scopeHasRuntimeSemantics', 'changeClass', 'ownedPaths', 'acceptanceCriteria', 'exclusions', 'riskDimensions', 'coordinatorSpecReadReceipt'];
 }
-function defaultNaReasons(changeClass, legacyTouched) {
+function defaultNaReasons(changeClass) {
   const na = {};
   if (changeClass === 'workflow_metadata') na.product_runtime_tests = 'No product runtime code changes are owned by this TaskBrief.';
-  if (!legacyTouched) na.legacy_workspace_ci = 'No legacy-workspace path is owned by this TaskBrief.';
   return na;
 }
 function prepareValidationPlan({ baseSha, ownedPaths, changeClass, riskDimensions }) {
   const matrix = CHANGE_CLASS_MATRIX[changeClass];
   if (!matrix) fail('Task preparation changeClass is unsupported');
-  const legacyTouched = ownedPaths.some((owned) => owned.startsWith('legacy-workspace/'));
   const canonicalSpecTouched = ownedPaths.some((owned) => owned.startsWith('docs/spec-v3/') || owned === 'scripts/spec-v3-modules.mjs' || owned === SPEC_RELATIVE);
   const requiredCommands = [...matrix.commands];
   if (changeClass === 'workflow_metadata') requiredCommands.push(dynamicDiffCommand(baseSha, ownedPaths));
-  if (legacyTouched) requiredCommands.push(...LEGACY_WORKSPACE_COMMANDS);
   if (canonicalSpecTouched && !requiredCommands.includes('node scripts/spec-v3-modules.mjs --check')) requiredCommands.push('node scripts/spec-v3-modules.mjs --check');
   const requiredScenarios = [...new Set([...matrix.scenarios, ...requiredRiskScenarios(riskDimensions)])];
-  return { requiredCommands, requiredScenarios, intentionallyNotApplicable: defaultNaReasons(changeClass, legacyTouched) };
+  return { requiredCommands, requiredScenarios, intentionallyNotApplicable: defaultNaReasons(changeClass) };
 }
 function validatePreparationRisk({ riskProfile, changeClass, riskDimensions, scopeHasRuntimeSemantics }) {
   if (riskProfile === 'unknown_high_risk') fail('Task preparation refuses unknown_high_risk; prepare an explicitly classified conservative TaskBrief instead');
@@ -979,8 +967,7 @@ export function checkTaskBrief({ root = repositoryRoot(), brief, currentReuseCon
   const canonicalAllowedChanges = allowedChanges.map((allowed) => validatePath(root, allowed).path);
   if (!ownedPaths.every((owned, index) => owned === canonicalOwnedPaths[index])) fail('TaskBrief.ownedPaths must use canonical repo-relative paths');
   if (!allowedChanges.every((allowed, index) => allowed === canonicalAllowedChanges[index])) fail('TaskBrief.allowedChanges must use canonical repo-relative paths');
-  const legacyTouched = ownedPaths.some((owned) => owned.startsWith('legacy-workspace/'));
-  validateBriefNarrative(brief, { legacyTouched });
+  validateBriefNarrative(brief);
   const relevantSections = requireNonEmptyStringArray(brief.relevantSections, 'TaskBrief.relevantSections');
   const knownSections = sectionIdsFromNavigation(root);
   if (!relevantSections.every((section) => knownSections.has(section))) fail('TaskBrief.relevantSections contains a section absent from current v3 navigation');
@@ -1018,7 +1005,6 @@ export function checkTaskBrief({ root = repositoryRoot(), brief, currentReuseCon
     return checked.receiptHash;
   });
   if (trustedReuseContexts !== undefined && !sameSet(Object.keys(trustedReuseContexts), reusedRoles)) fail('reuseContexts must provide exactly one trusted context for each REUSE_FULL receipt role');
-  if (new Set(receiptHashes).size !== receiptHashes.length) fail('TaskBrief.specReadReceipts must not contain duplicate receipt coverage');
   const roles = brief.specReadReceipts.map((receipt) => receipt.role);
   if (phase === 'pre_dispatch' && (roles.length !== 1 || roles[0] !== 'coordinator')) fail('Pre-dispatch TaskBrief requires exactly one coordinator spec-read receipt');
   if (phase === 'verdict' && (!sameSet(roles, ['coordinator', 'coding', 'review']) || roles.length !== 3)) fail('Verdict-phase TaskBrief requires exactly one coordinator, coding, and review spec-read receipt');
@@ -1051,8 +1037,8 @@ export function promoteTaskBrief({ root = repositoryRoot(), brief, codingReceipt
   if (source.baseSha !== currentHead(root)) fail('TaskBrief promotion rejects a stale base/head artifact');
   if (brief.preexistingUnownedChanges.length !== 0) fail('TaskBrief promotion rejects preexisting unowned artifacts');
   const coordinatorReceipt = brief.specReadReceipts[0];
-  const coverageHashes = [receiptHash(coordinatorReceipt), requirePromotionReceipt({ root, receipt: codingReceipt, role: 'coding', sourceBrief: brief, currentReuseContext, reuseContexts }), requirePromotionReceipt({ root, receipt: reviewReceipt, role: 'review', sourceBrief: brief, currentReuseContext, reuseContexts })];
-  if (new Set(coverageHashes).size !== coverageHashes.length) fail('TaskBrief promotion requires unique coordinator, coding, and review receipt coverage');
+  requirePromotionReceipt({ root, receipt: codingReceipt, role: 'coding', sourceBrief: brief, currentReuseContext, reuseContexts });
+  requirePromotionReceipt({ root, receipt: reviewReceipt, role: 'review', sourceBrief: brief, currentReuseContext, reuseContexts });
   const dirtyPaths = validationStatusPaths(root);
   if (dirtyPaths.some((repoPath) => !brief.ownedPaths.includes(repoPath))) fail('TaskBrief promotion rejects dirty or unowned artifacts');
   const manifest = buildPatchManifest({ root, baseSha: source.baseSha, ownedPaths: brief.ownedPaths });
@@ -1118,12 +1104,12 @@ export function checkPolicy(root = repositoryRoot()) {
     localVerdict: { artifactIdentity: { committed: 'commit_sha_only', worktree: 'base_owned_paths_patch_hash' }, required: ['taskBriefSha256', 'specReceiptHashes', 'dirtyWorktreeDisposition', 'specSha256', 'baseSha', 'reviewedHead', 'ownedPaths', 'artifactIdentity'], schema: VERDICT_SCHEMA },
     pullRequest: { owner: 'agent-pr-loop', reviewer: 'agent-pr-loop' },
     reviewSeverity: { passBlocking: ['P0', 'P1', 'P2'], p3: 'informational' },
-    scopedEligibility: { allowedPathClasses: ['AGENTS.md', '.codex/skills/tackle-agent-workflow/**', '.codex/skills/agent-project-bootstrap/**', '.codex/skills/agent-issue-loop/**', '.codex/skills/agent-pr-loop/**', '.claude/skills/agent-pr-loop/**', 'docs/(workflow|agent-governance)-*.md', '.github/*.md|yml|yaml', '.github/workflows/*.yml|yaml'], unknownForcesFull: true },
-    specReceipt: { schema: SPEC_READ_SCHEMA }, taskCard: { dailySemanticFields: TASK_CARD_SEMANTIC_FIELDS, developmentEvidence: 'task_card_daily', formalBoundaryUpgrade: 'task_brief_only', schema: TASK_CARD_SCHEMA }, taskBrief: { allowedChangesEqualsOwnedPaths: true, closedSchema: true, conditionalNaApplicability: CONDITIONAL_NA_APPLICABILITY, conditionalNaCatalog: { legacyWorkspaceCi: 'legacy_workspace_ci', productRuntimeTests: 'product_runtime_tests' }, evidenceStages: { development: 'task_card_daily', localReviewHandoff: 'local_verdict', prFinal: 'pr_final_change_class' }, openDecisionCheck: true, phaseReceipts: { pre_dispatch: ['coordinator'], verdict: ['coordinator', 'coding', 'review'] }, receiptRiskAuthority: true, schema: TASK_BRIEF_SCHEMA, structuredFields: ['changeClass', 'allowedChanges', 'riskDimensions', 'validationPlan'] }, validationRunner: { closedCommandCatalog: true, formalVerdictEvidence: false, reusableWorktree: 'committed_clean_or_worktree_owned_manifest_only', reuseRequiresUnchanged: ['artifact', 'relevant_inputs', 'dependency_lock', 'command_contract', 'toolchain', 'path_and_execution_environment', 'installed_dependency_state'], schema: VALIDATION_SUMMARY_SCHEMA }, validationMatrix: { commandsAndScenariosSeparated: true, executionTiers: VALIDATION_EXECUTION_TIERS, legacyWorkspaceCommands: LEGACY_WORKSPACE_COMMANDS, mandatoryWorkflowCommands: MANDATORY_WORKFLOW_COMMANDS, prFinalCommandsNonWaivable: ['npm run typecheck', 'npm run lint', 'npm test'], triggeredCannotBeNa: true, triggeredScenariosNonWaivable: true, userVisiblePathClassifier: 'tsx_jsx_css_scss_sass_less_html_and_ui_roots', userVisibleScenario: 'unified_visual_review_pending_or_completed', workflowMetadataDynamicDiff: true },
+    scopedEligibility: { allowedPathClasses: ['AGENTS.md', 'CLAUDE.md', '.codex/skills/tackle-agent-workflow/**', '.codex/skills/agent-project-bootstrap/**', '.codex/skills/agent-issue-loop/**', '.codex/skills/agent-pr-loop/**', '.claude/skills/agent-pr-loop/**', 'docs/(workflow|agent-governance)-*.md', '.github/*.md|yml|yaml', '.github/workflows/*.yml|yaml'], unknownForcesFull: true },
+    specReceipt: { schema: SPEC_READ_SCHEMA }, taskCard: { dailySemanticFields: TASK_CARD_SEMANTIC_FIELDS, developmentEvidence: 'task_card_daily', formalBoundaryUpgrade: 'task_brief_only', schema: TASK_CARD_SCHEMA }, taskBrief: { allowedChangesEqualsOwnedPaths: true, closedSchema: true, conditionalNaApplicability: CONDITIONAL_NA_APPLICABILITY, conditionalNaCatalog: { productRuntimeTests: 'product_runtime_tests' }, evidenceStages: { development: 'task_card_daily', localReviewHandoff: 'local_verdict', prFinal: 'pr_final_change_class' }, openDecisionCheck: true, phaseReceipts: { pre_dispatch: ['coordinator'], verdict: ['coordinator', 'coding', 'review'] }, receiptRiskAuthority: true, schema: TASK_BRIEF_SCHEMA, structuredFields: ['changeClass', 'allowedChanges', 'riskDimensions', 'validationPlan'] }, validationRunner: { closedCommandCatalog: true, formalVerdictEvidence: false, reusableWorktree: 'committed_clean_or_worktree_owned_manifest_only', reuseRequiresUnchanged: ['artifact', 'relevant_inputs', 'dependency_lock', 'command_contract', 'toolchain', 'path_and_execution_environment', 'installed_dependency_state'], schema: VALIDATION_SUMMARY_SCHEMA }, validationMatrix: { commandsAndScenariosSeparated: true, executionTiers: VALIDATION_EXECUTION_TIERS, mandatoryWorkflowCommands: MANDATORY_WORKFLOW_COMMANDS, prFinalCommandsNonWaivable: ['npm run typecheck', 'npm run lint', 'npm test'], triggeredCannotBeNa: true, triggeredScenariosNonWaivable: true, userVisiblePathClassifier: 'tsx_jsx_css_scss_sass_less_html_and_ui_roots', userVisibleScenario: 'unified_visual_review_pending_or_completed', workflowMetadataDynamicDiff: true },
     visual: { minimalSmokeCompletesReview: false, pendingMarker: '视觉与交互统一检查待执行' },
   };
   if (canonicalJson(policy) !== canonicalJson(expectedPolicy)) fail('Workflow policy drift: canonical AGENTS policy differs');
-  const expectedSkillTaskBriefRef = { conditionalNaApplicability: policy.taskBrief.conditionalNaApplicability, conditionalNaCatalog: policy.taskBrief.conditionalNaCatalog, evidenceStages: policy.taskBrief.evidenceStages, executionTiers: policy.validationMatrix.executionTiers, legacyWorkspaceCommands: policy.validationMatrix.legacyWorkspaceCommands, triggeredCannotBeNa: policy.validationMatrix.triggeredCannotBeNa };
+  const expectedSkillTaskBriefRef = { conditionalNaApplicability: policy.taskBrief.conditionalNaApplicability, conditionalNaCatalog: policy.taskBrief.conditionalNaCatalog, evidenceStages: policy.taskBrief.evidenceStages, executionTiers: policy.validationMatrix.executionTiers, triggeredCannotBeNa: policy.validationMatrix.triggeredCannotBeNa };
   const skillTaskBrief = boundedSection(skill, '## Start with a Task Card; create a TaskBrief at a formal boundary', '## Spec receipts and worktree isolation');
   const skillTaskBriefMatches = [...skillTaskBrief.content.matchAll(/<!-- workflow-contract-task-brief-ref\/v1\n([\s\S]*?)\n-->/g)];
   if (skillTaskBriefMatches.length !== 1) fail('Workflow policy drift: Skill TaskBrief policy reference is missing or ambiguous');
@@ -1135,7 +1121,7 @@ export function checkPolicy(root = repositoryRoot()) {
   if (!projectSkills.content.includes(expectedProjectTackle) || projectSkills.content.includes('`$tackle-agent-workflow`编排不同的编码与只读审核Agent')) fail('Workflow policy drift: broad project Skill statement differs');
   const agentsRouting = boundedSection(agents, '## Tackle 工作流契约', '## 本机凭据与多 worktree');
   if (!agentsRouting.content.includes(policyMatches[0][0])) fail('Workflow policy drift: AGENTS policy block is outside routing section');
-  const expectedTaskBriefRole = '- `$tackle-agent-workflow`日常开发先用 Task Card；仅本地路由使用其编码与独立本地审核。Issue 生命周期归`$agent-issue-loop`，PR 审核/CI/修复归`$agent-pr-loop`；已有 PR 直接使用后者。不得增加第二个独立审核者。';
+  const expectedTaskBriefRole = '- `$tackle-agent-workflow`日常开发先用 Task Card；所有路由要求独立、只读、基于证据的审核。coordinator按任务风险、范围、可用能力与资源决定实施容量，以及审核者数量、专长、模型、推理强度和串并行安排。每个已分配审核范围必须覆盖当前精确head/base或本地artifact；所有发现均由coordinator处置后，才整合唯一最终PR审核信号或本地verdict。Issue 生命周期归`$agent-issue-loop`，PR 审核/CI/修复归`$agent-pr-loop`；已有 PR 直接使用后者。verdict阶段的单一review receipt是coordinator整合后的review-role覆盖记录，不按reviewer逐个计数，也不证明Agent身份。';
   if (!agentsRouting.content.includes(expectedTaskBriefRole)) fail('Workflow policy drift: AGENTS TaskBrief role differs');
   if (!agentsRouting.content.includes('formalTaskBriefRequiredAtBoundary: true') || !agentsRouting.content.includes('earlyEscalationRequired')) fail('Workflow policy drift: AGENTS Task Card boundary state differs');
   if (!skillTaskBrief.content.includes('formalTaskBriefRequiredAtBoundary: true') || !skillTaskBrief.content.includes('earlyEscalationRequired')) fail('Workflow policy drift: Skill Task Card boundary state differs');
@@ -1144,9 +1130,9 @@ export function checkPolicy(root = repositoryRoot()) {
   if (routeLines.length !== 1 || routeLines[0] !== expectedRoute) fail('Workflow policy drift: AGENTS route statement differs');
   const skillRouting = boundedSection(skill, '## Route before dispatch', '## Start with a Task Card; create a TaskBrief at a formal boundary');
   const expectedSkillRoutes = [
-    '- **Local implementation, no Issue or PR:** this Skill owns one coding agent and one independent local reviewer.',
-    '- **Issue delivery:** `$agent-issue-loop` owns Issue, branch, PR, closure, and handoff. Supply it this Skill\'s TaskBrief; do not start a local independent reviewer. Once a PR exists, `$agent-pr-loop` exclusively owns review, CI, fixes, and merge gates.',
-    '- **Existing PR:** invoke `$agent-pr-loop` directly and supply the TaskBrief. Do not create a coding or review loop here.',
+    '- **Local implementation, no Issue or PR:** this Skill owns local implementation and the required independent read-only evidence review.',
+    '- **Issue delivery:** `$agent-issue-loop` owns Issue, branch, PR, closure, and handoff. Supply it this Skill\'s TaskBrief. Once a PR exists, `$agent-pr-loop` exclusively owns review, CI, fixes, and merge gates.',
+    '- **Existing PR:** invoke `$agent-pr-loop` directly and supply the TaskBrief. It owns the review loop.',
   ];
   for (const route of expectedSkillRoutes) if (!skillRouting.content.includes(route)) fail('Workflow policy drift: Skill route statement differs');
   const skillRouteRemainder = expectedSkillRoutes.reduce((remaining, route) => remaining.replace(route, ''), skillRouting.content);

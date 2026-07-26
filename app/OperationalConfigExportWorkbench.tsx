@@ -149,7 +149,20 @@ export function OperationalConfigExportWorkbench({
   const [stage, setStage] = useState<ExportStage>("select");
   const [snapshotId, setSnapshotId] = useState(state.configurationSnapshots[0]?.id ?? "");
   const [profileIds, setProfileIds] = useState<string[]>([]);
-  const [baseUrl, setBaseUrl] = useState("http://127.0.0.1:47831");
+
+  // ── localStorage 持久化的连接配置（仅 baseUrl，token 仍限当前页面会话）──
+  const LS_BASE = "tackle-forger:companion:baseUrl";
+  const [baseUrl, setBaseUrl] = useState(() => {
+    if (typeof window !== "undefined") {
+      try {
+        // 清理旧版本持久化的 token
+        localStorage.removeItem("tackle-forger:companion:token");
+        return localStorage.getItem(LS_BASE) ?? "http://127.0.0.1:47831";
+      }
+      catch { return "http://127.0.0.1:47831"; }
+    }
+    return "http://127.0.0.1:47831";
+  });
   const [pairingToken, setPairingToken] = useState("");
   const [connection, setConnection] = useState<ConnectionState>("idle");
   const [health, setHealth] = useState<CompanionHealth>();
@@ -219,12 +232,20 @@ export function OperationalConfigExportWorkbench({
         result.profiles.some((profile) => profile.profileId === id && profile.enabled),
       ));
       setConnection("ready");
+      try { localStorage.setItem(LS_BASE, baseUrl); } catch { /* 存储不可用不影响连接 */ }
       notify("本地助手已连接；目录权限与映射版本以执行端登记为准。");
     } catch (caught) {
       setConnection("error");
       setHealth(undefined);
       setError(caught instanceof Error ? caught.message : String(caught));
     }
+  };
+
+  const disconnect = () => {
+    setConnection("idle");
+    setHealth(undefined);
+    setPairingToken("");
+    setError("");
   };
 
   const generatePreview = async () => {
@@ -377,22 +398,36 @@ export function OperationalConfigExportWorkbench({
           <strong>连接本地受限助手</strong>
           <small>令牌只用于本次页面会话；目标目录与映射不能由浏览器下发。</small>
         </div>
-        <label>
-          <span>助手地址</span>
-          <input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} />
-        </label>
-        <label>
-          <span>配对令牌</span>
-          <input type="password" autoComplete="off" value={pairingToken} onChange={(event) => setPairingToken(event.target.value)} />
-        </label>
-        <button type="button" className="button button-default button-md" disabled={!pairingToken || connection === "connecting"} onClick={connect}>
-          {connection === "connecting" ? <LoaderCircle className="spin" size={15} /> : <Link2 size={15} />}
-          {connection === "ready" ? "重新连接" : "连接"}
-        </button>
-        <span className={connection === "ready" ? "connection-ready" : "connection-idle"}>
-          {connection === "ready" ? <ShieldCheck size={14} /> : <HardDrive size={14} />}
-          {connection === "ready" ? `已配对 · ${health?.pairing.userId}` : "未连接"}
-        </span>
+        {connection === "ready" ? (
+          <>
+            <span className="connection-ready"><CheckCircle2 size={14} />已连接 · {health?.pairing.userId}</span>
+            <button type="button" className="button button-default button-sm" onClick={disconnect}>断开</button>
+          </>
+        ) : (
+          <>
+            <label>
+              <span>助手地址</span>
+              <input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} />
+            </label>
+            <label>
+              <span>配对令牌</span>
+              <input type="password" autoComplete="off" value={pairingToken} onChange={(event) => setPairingToken(event.target.value)} />
+            </label>
+            <button type="button" className="button button-default button-md" disabled={!pairingToken || connection === "connecting"} onClick={connect}>
+              {connection === "connecting" ? <><LoaderCircle className="spin" size={15} />连接中…</> : <><Link2 size={15} />连接助手</>}
+            </button>
+            <span className={connection === "error" ? "connection-error" : "connection-idle"}>
+              {connection === "error" ? <><AlertTriangle size={14} />未检测到本地助手</> : <><HardDrive size={14} />未连接</>}
+            </span>
+          </>
+        )}
+        {connection === "error" && (
+          <div className="companion-start-guide">
+            <small>启动本地助手后重试：</small>
+            <code>npm run config-export:companion:build</code>
+            <code>node dist/companion.js --registry config-export-registry.json</code>
+          </div>
+        )}
       </section>
 
       <section className="config-export-recovery">

@@ -1,11 +1,11 @@
 ---
 name: agent-pr-loop
-description: 主 agent 已直接实现代码后，把 PR 走完「独立审核 → 主 agent 修 → 当前 head CI → 合并资格」的闭环；仅当前请求明确包含合并时执行安全合并与回读。当用户说「审完合并」「复审后合并」「合并收尾」「搞定这个 PR」「把当前 PR 跑完」时启用，尤其是应由 Codex 推断当前 PR 而不要求用户给出编号时。
+description: 主 agent 已直接实现代码后，把 PR 走完「独立审核 → 主 agent 修 → 当前 head CI → 集成证据」的闭环，并在实际发生合并时执行安全回读。当用户说「审完合并」「复审后合并」「合并收尾」「搞定这个 PR」「把当前 PR 跑完」时启用，尤其是应由 Codex 推断当前 PR 而不要求用户给出编号时。
 ---
 
 ## 定位
 
-本 skill 在项目 `CLAUDE.md`「Agent 工作模式」定义的工作模式下运作（实现/修改/调查由主 agent 直接做，不 spawn 实现 agent；此处不重复）。**本 skill 只负责审核 + CI + 合并资格。**
+本 skill 在项目 `CLAUDE.md`「Agent 工作模式」定义的工作模式下运作（实现/修改/调查由主 agent 直接做，不 spawn 实现 agent；此处不重复）。**本 skill 负责审核、CI、集成证据和实际合并后的安全回读，但不规定 Agent 是否执行合并。**
 
 主 agent 实现并 push head 后，需要独立审核时有两条路（可选其一或并行）：
 1. **输出审核清单**（见下）→ 用户粘到常驻审核 agent 窗口（省 install + 上下文重建，推荐用于敏捷迭代）；
@@ -52,11 +52,11 @@ Agent-Review: PASS
 
 Agent 进程可能无法跨会话存活（压缩、/model 切换、进程退出）：每条改变处置的结论——发现、已验证修复、push、CI 结果、最终审核 signal——都必须**绑定精确 head/base SHA 发布到 GitHub**（PR comment 或 review），不能只存在临时消息里。中断后恢复从 GitHub（PR head、reviews、checks、threads）重建，绝不依赖记忆或陈旧本地上下文。
 
-## 就绪与合并门禁
+## 集成证据与合并门禁
 
 > 合并门禁的**权威规则见 `AGENTS.md`「GitHub合并门禁」与 `.github/merge-gates.md`**（CI provenance、run-name、governance:check-pr、`Agent-Review: PASS` 信号、高风险分类等）。下文仅是本 skill 的操作摘要，冲突时以 AGENTS.md 为准。
 
-仅当某一精确 head/base 对同时满足以下全部条件，才宣布 PR 具备合并资格：
+仅当某一精确 head/base 对同时满足以下全部条件，才认为集成证据完整：
 - 已同步到最新预期集成 base，且工作树干净；
 - 完成仓库要求的本地验证（typecheck/lint/test）并有精确结果；
 - 每个必需的 PR CI 任务在其当前 run/attempt 上成功；过期、缺失、pending 或失败的一律阻断；

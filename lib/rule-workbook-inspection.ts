@@ -592,6 +592,10 @@ export function qualityDraftFromRanges(input: {
   }) : -1;
   const hasWq8wQuality = wq8wHeaderRow >= 0;
   const wq8wFieldIndices = hasWq8wQuality ? qualityFieldLabels.map((label) => input.qualityValues[wq8wHeaderRow].findIndex((value) => text(value) === label)) : [];
+  if (hasWq8wQuality) {
+    const missing = qualityFieldLabels.filter((_label, index) => wq8wFieldIndices[index] === -1);
+    if (missing.length) structureIssue("QUALITY_RANGE_TABLE_HEADER_MISSING", `07_品质评分表头缺少字段：${missing.join("、")}。`, wq8wHeaderRow, 0);
+  }
   if (qualityTableHeaders.length !== 1 && !hasWq8wQuality) structureIssue(
     qualityTableHeaders.length ? "QUALITY_RANGE_TABLE_DUPLICATE" : "QUALITY_RANGE_TABLE_MISSING",
     '07_品质评分必须且只能有一个精确的”品质区间”表头。',
@@ -675,8 +679,16 @@ export function qualityDraftFromRanges(input: {
       const src = { sheetId: "28fQhg", cell: `A${rowIndex + 1}:C${rowIndex + 1}`, rowKey: String(rowIndex + 1) };
       const la = affixIdToAlias.get(left) ?? left;
       const ra = affixIdToAlias.get(right) ?? right;
-      const part = aliasToPart.get(la) ?? aliasToPart.get(ra) ?? "part:rod";
-      matrixCells.push({ itemPartId: part as QualityCombinationSourceCell["itemPartId"], leftAlias: la, rightAlias: ra, value: score, source: src } as QualityCombinationSourceCell);
+      const lp = aliasToPart.get(la); const rp = aliasToPart.get(ra);
+      // Try both aliases for part; cross-part issues are non-blocking in flat matrix
+      const part = (lp && rp && lp !== rp ? lp : lp ?? rp ?? "part:rod") as QualityCombinationSourceCell["itemPartId"];
+      matrixCells.push({ itemPartId: part, leftAlias: la, rightAlias: ra, value: score, source: src } as QualityCombinationSourceCell);
+    }
+    // WQ8w flat matrix: verify all three parts have coverage
+    const coveredParts = new Set(matrixCells.map((c) => c.itemPartId));
+    const allParts = ["part:rod", "part:reel", "part:line"] as const;
+    for (const p of allParts) {
+      if (!coveredParts.has(p)) structureIssue("QUALITY_MATRIX_BLOCK_MISSING", `组合矩阵块"${p}"未在 WQ8w 平表中找到任何词条。`, 0, 0, p);
     }
   } else {
   for (const [heading, itemPartId] of matrixPartByHeader) {

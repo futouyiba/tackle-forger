@@ -102,8 +102,8 @@ Read [managed autopilot](references/managed-autopilot.md) completely before enab
 - Treat GitHub as the mailbox and source of truth. Do not depend on the user copying messages between agents.
 - Use a recurring Codex Automation as a heartbeat when available. Claude Code has no equivalent built-in heartbeat, so use an external scheduler or the optional GitHub Agentic Workflows layer instead. Do not claim a scheduled task is an event webhook or that it runs while the required local client is offline.
 - Prefer GitHub built-in workflows, required checks, and automatic Codex review for deterministic eligibility evidence. Use GitHub Agentic Workflows only as an explicit opt-in event-driven execution layer because it requires an engine credential, Actions minutes/cost, generated lock files, and a deliberate threat model.
-- Stop and ask at the repository's human gates or after the configured retry limit. Record the blocker on the Issue or PR before escalating once.
-- Never let managed mode authorize deployment, publishing, deletion, destructive data changes, secret or billing changes, scope expansion, or high-risk merges unless repository policy explicitly grants that exact action.
+- Stop and ask at the repository's human gates or after the configured retry limit. Merge gates are defined only by the repository's sole merge authority; record other blockers on the Issue or PR before escalating once.
+- Never let managed mode authorize deployment, publishing, deletion, destructive data changes, secret or billing changes, or scope expansion.
 
 ### Enable event-driven GitHub handoffs only by request
 
@@ -126,7 +126,7 @@ Once a task is clearly selected and repository policy adopts this workflow, the 
 - create and link a PR;
 - move it to `In review`;
 - record validation results;
-- merge one exact-head/base PR when the repository's trusted live gate returns `READY` and no recorded human gate applies;
+- execute one qualifying merge when required by the repository's sole merge authority;
 - close a selected Issue normally after `$agent-issue-loop` verifies its qualifying merge and acceptance evidence.
 
 Ask before:

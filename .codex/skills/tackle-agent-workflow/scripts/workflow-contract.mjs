@@ -1375,6 +1375,7 @@ function checkTaskBriefV1({ root = repositoryRoot(), brief, currentReuseContext,
   const baseSha = canonicalCommit(root, brief.baseSha, 'TaskBrief.baseSha');
   if (workflowMode !== 'local' && (!/^[0-9a-f]{40}$/.test(brief.reviewedHead ?? '') || !/^[0-9a-f]{40}$/.test(brief.baseSha ?? ''))) fail('Issue/PR TaskBrief baseSha and reviewedHead must be exact 40-hex commits');
   const reviewedHead = validateIdentity(root, brief.reviewedHead, 'TaskBrief.reviewedHead', true);
+  if (reviewedHead === 'WORKTREE' && currentHead(root) !== baseSha) fail('WORKTREE TaskBrief.baseSha must equal the current HEAD; head changes invalidate worktree evidence');
   if (workflowMode === 'local' && reviewedHead !== 'WORKTREE' && reviewedHead !== git(root, ['rev-parse', 'HEAD']).toString('utf8').trim()) fail('Local TaskBrief.reviewedHead must be the current HEAD or explicit WORKTREE');
   const ownedPaths = requireStringArray(brief.ownedPaths, 'TaskBrief.ownedPaths');
   const allowedChanges = requireNonEmptyStringArray(brief.allowedChanges, 'TaskBrief.allowedChanges');

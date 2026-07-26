@@ -1065,8 +1065,47 @@ test('TaskBrief promotion rejects a source artifact made stale by a new HEAD', (
     write(root, 'later.txt', 'new HEAD\n');
     command(root, ['add', 'later.txt']);
     command(root, ['commit', '-qm', 'advance HEAD']);
-    assert.throws(() => promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review }), /stale base\/head artifact/);
+    assert.throws(() => promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review }), /stale base\/head artifact|head changes invalidate worktree evidence/);
   } finally { cleanup(root); }
+});
+
+test('WORKTREE TaskBrief and local result evidence expire when HEAD advances after promotion', () => {
+  for (const schema of ['tackle-task-brief/v1', 'tackle-task-brief/v2']) {
+    const root = temporaryRepo();
+    const handoff = mkdtempSync(path.join(os.tmpdir(), 'workflow-stale-worktree-'));
+    try {
+      taskBase(root);
+      const source = schema === 'tackle-task-brief/v1'
+        ? brief(root)
+        : prepareTaskBrief({ root, input: prepareInput(root, { reviewTier: 'standard' }) });
+      write(root, 'AGENTS.md', 'task-owned change\n');
+      const coding = receipt(root, { taskId: source.taskId, role: 'coding', riskProfile: source.riskProfile, relevantSections: source.relevantSections, reason: 'coding coverage' });
+      const review = receipt(root, { taskId: source.taskId, role: 'review', riskProfile: source.riskProfile, relevantSections: source.relevantSections, reason: 'review coverage' });
+      const promoted = promoteTaskBrief({ root, brief: source, codingReceipt: coding, ...(schema === 'tackle-task-brief/v1' ? { reviewReceipt: review } : {}) });
+      const checked = checkTaskBrief({ root, brief: promoted });
+      const result = {
+        schema: 'tackle-local-result/v2',
+        taskBriefSha256: checked.taskBriefSha256,
+        artifactIdentity: { kind: 'worktree', commitSha: null, patchHash: patchHash({ root, baseSha: checked.baseSha, ownedPaths: promoted.ownedPaths }).patchHash },
+        verdict: 'PASS',
+        findings: [],
+      };
+      const briefPath = path.join(handoff, 'brief.json');
+      const resultPath = path.join(handoff, 'result.json');
+      writeFileSync(briefPath, `${JSON.stringify(promoted)}\n`);
+      writeFileSync(resultPath, `${JSON.stringify(result)}\n`);
+      assert.equal(validationExecutionPlan({ root, brief: promoted }).artifact.artifactIdentity.kind, 'worktree');
+      assert.equal(checkVerdict({ root, verdict: result, brief: promoted }).taskBriefSha256, checked.taskBriefSha256);
+      write(root, 'later.txt', 'advance unrelated HEAD\n');
+      command(root, ['add', 'later.txt']);
+      command(root, ['commit', '-qm', 'advance unrelated HEAD']);
+      assert.throws(() => checkTaskBrief({ root, brief: promoted }), /head changes invalidate worktree evidence/);
+      assert.throws(() => validationExecutionPlan({ root, brief: promoted }), /head changes invalidate worktree evidence/);
+      assert.throws(() => runValidation({ root, brief: promoted }), /head changes invalidate worktree evidence/);
+      assert.throws(() => checkVerdict({ root, verdict: result, brief: promoted }), /head changes invalidate worktree evidence/);
+      assert.throws(() => runCli(['--check-local-result', '--result', resultPath, '--brief', briefPath], root), /head changes invalidate worktree evidence/);
+    } finally { cleanup(root); cleanup(handoff); }
+  }
 });
 
 test('TaskBrief promotion validates frozen baselines and trusted REUSE_FULL context', () => {

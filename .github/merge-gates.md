@@ -17,6 +17,25 @@ Use separate decisions for entering formal review and entering the merge path:
   findings and threads are settled, dependencies and the base are current, and
   the user has authorized the merge.
 
+## Validation cadence
+
+Full CI is a stable-candidate boundary, not a default development loop. Read-only
+fetch/compare/history/status work runs no CI. Documentation or non-behavioral
+workflow edits use format, reference, and scoped-diff checks; focused scripts or
+rules use targeted tests; deployment configuration uses configuration validation,
+service restart, actual-listener inspection, and a health check; business code
+uses typecheck, lint, and related tests; durable data, permission, or external
+writes additionally require boundary, failure-recovery, idempotency, and readback
+evidence. A rebase starts by classifying its actual diff and reruns only affected
+checks unless that diff is broad.
+
+Run the complete PR CI once for a stable exact head/base candidate. A head or base
+change invalidates that identity and requires affected checks first; repeat full CI
+only when the refreshed candidate is again stable or broad impact makes the full
+run necessary. The live merge checker still requires one eligible exact-head/base
+run containing every canonical job; this cadence never permits missing, stale,
+partial, or cross-run evidence.
+
 Do not require this merge checker to pass before removing Draft. The checker
 intentionally rejects Draft pull requests, while a high-risk review signal is
 normally collected after formal review begins. Requiring both in the opposite

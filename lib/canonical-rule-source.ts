@@ -81,6 +81,13 @@ const ESTABLISHED_PARAMETER_KEYS: Record<string, string> = {
 };
 
 const PART_SCOPED_SHARED_HEADERS = new Set(["修理系数", "购买系数", "维修系数", "购入系数"]);
+const PART_SCOPED_SHARED_SUFFIXES = ["最小线号", "最大线号"];
+function isPartScopedShared(header: string): boolean {
+  if (PART_SCOPED_SHARED_HEADERS.has(header)) return true;
+  // WQ8w 分表后表头带部位前缀，如"竿维修系数" → 去掉前缀/"竿"后再查
+  const unprefixed = header.replace(/^[竿轮线]/, "");
+  return PART_SCOPED_SHARED_HEADERS.has(unprefixed) || PART_SCOPED_SHARED_SUFFIXES.includes(unprefixed);
+}
 const FUNCTION_METADATA_LABELS = new Set(["机器ID（勿改）", "实体类型", "FunctionProfile ID（勿改）", "功能分组ID（勿改）", "功能定位", "定位/类型", "级别", "评分系数", "覆盖重量段", "适用竿类型", "适用轮类型", "适用线类型"]);
 const CANONICAL_FUNCTION_PROFILE_INTENSITIES: Record<string, FunctionIntensity[]> = {
   "function:all_round": [1],
@@ -509,7 +516,7 @@ function parseFunctions(input: { sources: PartedRuleSource[]; profiles: Map<stri
       const rules = headers.flatMap((header, column) => {
         if (!header || FUNCTION_METADATA_LABELS.has(header)) return [];
         const kind = source.part;
-        if (!PART_SCOPED_SHARED_HEADERS.has(header) && parameterKind(header) !== kind) {
+        if (!isPartScopedShared(header) && parameterKind(header) !== kind) {
           input.issues.push({ level: "error", code: "FUNCTION_RULE_CROSS_PART_BINDING", message: `功能行 ${id} 的参数 ${header} 不属于 ${itemPartId}。`, sheetId: source.sheetId, row: sourceRow });
           return [];
         }

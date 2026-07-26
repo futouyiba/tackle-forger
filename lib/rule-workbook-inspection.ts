@@ -265,6 +265,22 @@ export function canonicalIdentityPolicies(specs: IdentitySheetSpec[] = CANONICAL
   return [...grouped.values()];
 }
 
+function parsePricingWq8wParams(pricingParamsValues: unknown[][]) {
+  const map = new Map<string, string>();
+  for (let index = 1; index < pricingParamsValues.length; index += 1) {
+    const row = pricingParamsValues[index] ?? [];
+    const key = text(row[0]).trim();
+    const status = text(row[1]).trim();
+    const value = text(row[3]); // WQ8w 32BmZs: B=key, C=status, D=value
+    if (key && status && status !== "设计约定") map.set(key, value);
+  }
+  return {
+    get: (key: string) => map.get(key)?.trim() ?? "",
+    has: (key: string) => map.has(key),
+    keys: () => map.keys(),
+  };
+}
+
 const qualityIds: Record<string, QualityPricingMapping["qualityId"]> = {
   C: "quality_c_green",
   B: "quality_b_blue",
@@ -278,6 +294,8 @@ export function pricingDraftFromRanges(input: {
   /** Exact rows selected by the quality-table parser; avoids a second layout guess. */
   qualitySourceRows?: Array<{ code: string; minScore: number; maxScore: number; minFactor: number; maxFactor: number; mappingCell: string; factorCell: string; rowKey: string }>;
   pricingValues?: unknown[][];
+  /** WQ8w 09.1 参数释义 (32BmZs) — B=key, D=value format replacing old machine-key layout */
+  pricingParamsValues?: unknown[][];
   typeValues?: unknown[][];
   importedAt: string;
 }): PricingPolicyDraft {
@@ -367,39 +385,55 @@ export function pricingDraftFromRanges(input: {
     if (Number.isFinite(repair)) repairCoefficients.push({ partId, typeId, value: { value: repair, status: "SOURCE", source: { sheetId: "10TyFp", cell: `U${sheetRow}`, rowKey: String(sheetRow) } } });
     if (Number.isFinite(purchase)) purchaseCoefficients.push({ partId, typeId, value: { value: purchase, status: "SOURCE", source: { sheetId: "10TyFp", cell: `V${sheetRow}`, rowKey: String(sheetRow) } } });
   }
-  const parameterValue = (sheetRow: number) => pricingValues[sheetRow - 10]?.[2];
-  const executionFields = new Map<string, { value: unknown; row: number }>();
-  for (let index = 0; index < pricingValues.length; index += 1) {
-    const row = pricingValues[index] ?? [];
-    const key = text(row[0]).trim();
-    if (key) executionFields.set(key, { value: row[2], row: index + 10 });
-  }
-  const executionValue = (key: string) => executionFields.get(key)?.value;
-  const executionRow = (key: string) => executionFields.get(key)?.row;
-  const pricingMachineKeys = ["pricing.repairRoundingStage", "pricing.purchaseInput", "pricing.purchaseRoundingStage", "pricing.rounding", "pricing.significantDigits", "pricing.minimumPurchasePrice", "pricing.minimumPriceScope", "pricing.upperThreshold", "pricing.upperThresholdMode"] as const;
-  const hasPricingExecutionFields = pricingMachineKeys.some((k) => executionFields.has(k));
-  // These stable machine keys are deliberately required: prose/formula cells
-  // never become executable policy defaults.
-  const executionPolicy = hasPricingExecutionFields ? {
-    repairRoundingStage: executionValue("pricing.repairRoundingStage"),
-    purchaseInput: executionValue("pricing.purchaseInput"),
-    purchaseRoundingStage: executionValue("pricing.purchaseRoundingStage"),
-    rounding: executionValue("pricing.rounding"),
-    significantDigits: Number(executionValue("pricing.significantDigits")),
-    minimumPurchasePrice: Number(executionValue("pricing.minimumPurchasePrice")),
-    minimumPriceScope: executionValue("pricing.minimumPriceScope"),
-    upperThreshold: Number(executionValue("pricing.upperThreshold")),
-    upperThresholdMode: executionValue("pricing.upperThresholdMode"),
+  const wq8w = input.pricingParamsValues ? parsePricingWq8wParams(input.pricingParamsValues) : { get: () => "", has: () => false, keys: () => [][Symbol.iterator]() };
+  const hasWq8wParams = input.pricingParamsValues && input.pricingParamsValues.length > 1;
+
+  // Legacy: check for old-style machine keys in pricingValues
+  const executionFields = hasWq8wParams ? null : (() => {
+    const map = new Map<string, { value: unknown; row: number }>();
+    const pv = input.pricingValues ?? [];
+    for (let index = 0; index < pv.length; index += 1) {
+      const row = pv[index] ?? [];
+      const key = text(row[0]).trim();
+      if (key) map.set(key, { value: row[2], row: index + 10 });
+    }
+    const pricingMachineKeys = ["pricing.repairRoundingStage", "pricing.purchaseInput", "pricing.purchaseRoundingStage", "pricing.rounding", "pricing.significantDigits", "pricing.minimumPurchasePrice", "pricing.minimumPriceScope", "pricing.upperThreshold", "pricing.upperThresholdMode"] as const;
+    return pricingMachineKeys.some((k) => map.has(k)) ? map : null;
+  })();
+  const legacyExecutionValue = (key: string) => executionFields?.get(key)?.value;
+  const legacyExecutionRow = (key: string) => executionFields?.get(key)?.row;
+
+  const hasExecutionFields = hasWq8wParams || !!executionFields;
+  const executionPolicy = hasExecutionFields ? {
+    repairRoundingStage: (hasWq8wParams ? "final_repair_output" : text(legacyExecutionValue("pricing.repairRoundingStage"))) as PricingExecutionPolicy["repairRoundingStage"],
+    purchaseInput: (hasWq8wParams ? "repair_price_raw" : text(legacyExecutionValue("pricing.purchaseInput"))) as PricingExecutionPolicy["purchaseInput"],
+    purchaseRoundingStage: (hasWq8wParams ? "final_purchase_output" : text(legacyExecutionValue("pricing.purchaseRoundingStage"))) as PricingExecutionPolicy["purchaseRoundingStage"],
+    rounding: "significant_digits_floor" as const,
+    significantDigits: 3,
+    minimumPurchasePrice: hasWq8wParams ? (Number(wq8w.get("minimum_price")) || 100) : Number(legacyExecutionValue("pricing.minimumPurchasePrice")),
+    minimumPriceScope: "purchase_output_after_rounding" as const,
+    upperThreshold: hasWq8wParams ? (Number(wq8w.get("overflow_maximum")) || 300000000) : Number(legacyExecutionValue("pricing.upperThreshold")),
+    upperThresholdMode: "warning_acknowledgement" as const,
     status: "SOURCE" as const,
-    source: { sheetId: "31RxeB", cell: `B${executionRow("pricing.repairRoundingStage") ?? 0}:D${executionRow("pricing.upperThresholdMode") ?? 0}`, rowKey: "pricing.execution.machine.v1" },
+    source: { sheetId: hasWq8wParams ? "32BmZs" : "31RxeB", cell: hasWq8wParams ? "A2:E9" : `B${legacyExecutionRow("pricing.repairRoundingStage") ?? 0}:D${legacyExecutionRow("pricing.upperThresholdMode") ?? 0}`, rowKey: "pricing.execution.machine.v1" },
   } as PricingExecutionPolicy : undefined;
-  const moneyPolicy = pricingValues.length ? {
-    unit: text(parameterValue(15)),
+  const legacyParam = (sheetRow: number) => (input.pricingValues ?? [])[sheetRow - 10]?.[2];
+  const moneyPolicy = hasWq8wParams ? {
+    unit: wq8w.get("currency_unit") || "金币",
     rounding: "significant_digits_floor" as const,
     precision: 3,
     significantDigits: 3,
-    minimumPrice: Number(parameterValue(17)),
-    maximumPrice: Number(parameterValue(18)),
+    minimumPrice: Number(wq8w.get("minimum_price")) || 100,
+    maximumPrice: Number(wq8w.get("overflow_maximum")) || 300000000,
+    status: "SOURCE" as const,
+    source: { sheetId: "32BmZs", cell: "A6:D9", rowKey: "6-9" },
+  } : (input.pricingValues?.length ?? 0) > 0 ? {
+    unit: text(legacyParam(15)),
+    rounding: "significant_digits_floor" as const,
+    precision: 3,
+    significantDigits: 3,
+    minimumPrice: Number(legacyParam(17)),
+    maximumPrice: Number(legacyParam(18)),
     status: "SOURCE" as const,
     source: { sheetId: "31RxeB", cell: "B15:D18", rowKey: "15-18" },
   } : undefined;
@@ -418,7 +452,7 @@ export function pricingDraftFromRanges(input: {
     partsToWholeRatios,
     qualityMappings,
     qualityPriceFactorRanges,
-    scoreInterpolation: pricingValues.length ? { kind: "quality_range_linear", points: [], outOfRange: "error", status: "SOURCE", source: { sheetId: "31RxeB", cell: "B11:D11", rowKey: "11" } } : undefined,
+    scoreInterpolation: hasWq8wParams || (input.pricingValues?.length ?? 0) > 0 ? { kind: "quality_range_linear" as const, points: [], outOfRange: "error" as const, status: "SOURCE" as const, source: { sheetId: hasWq8wParams ? "32BmZs" : "31RxeB", cell: "A2:D2", rowKey: "2" } } : undefined,
     moneyPolicy,
     ...(executionPolicy ? { executionPolicy } : {}),
     importedAt: input.importedAt,
@@ -856,11 +890,11 @@ export async function inspectCanonicalRuleWorkbook(input: {
   const qualitySheetRange = canonicalQualitySheetRange(sourceRevision);
   const qualityRange = ranges.find((entry) => entry.sheetId === QUALITY_SHEET_ID && entry.range === qualitySheetRange);
   const affixRange = ranges.find((entry) => entry.sheetId === AFFIX_SHEET_ID && entry.range === canonicalAffixSheetRanges(sourceRevision).aliasRange);
-  // finding 2 修复（Opus MAJOR）：pricing/type lookup 切新表 sheetId，不再查永远不存在的旧 u87sRh/fATowU range。
-  // PR2b-1 只切 lookup 一致；pricing 公式（新表 31RxeB/32BmZs/33IGHy 结构）与 type 三子表拼接的精确解析由 PR2b-3 完成，
-  // 过渡期 pricingDraft 可能 NON_FORMAL（源字段缺失/结构不匹配），符合 OPEN-007。
+  // PR2b-3 收尾：pricing 执行语义从 32BmZs（参数释义）读取，维修/零整比从 33IGHy 读取。
+  // 31RxeB 只保留公式文本（businessFormulaCells），不再作为结构化机器键来源。
   const pricingEndpointRange = ranges.find((entry) => entry.sheetId === "33IGHy");
   const pricingRange = ranges.find((entry) => entry.sheetId === "31RxeB");
+  const pricingParamsRange = ranges.find((entry) => entry.sheetId === "32BmZs");
   const typeValues = ["10TyFp", "11CfXW", "12VetE"].flatMap((sheetId) => ranges.find((entry) => entry.sheetId === sheetId)?.valueRange.values ?? []);
   const qualityDraft = qualityDraftFromRanges({
     sourceRevision,
@@ -874,7 +908,9 @@ export async function inspectCanonicalRuleWorkbook(input: {
   const pricingDraft = pricingDraftFromRanges({
     sourceRevision,
     qualityValues: [], qualitySourceRows: pricingQualityRows,
-    pricingValues: pricingRange?.valueRange.values ?? [], typeValues, importedAt: input.observedAt,
+    pricingValues: pricingRange?.valueRange.values ?? [],
+    pricingParamsValues: pricingParamsRange?.valueRange.values ?? [],
+    typeValues, importedAt: input.observedAt,
   });
   const findRangeValues = (sheetId: string, rangePrefix: string) => ranges.find((entry) => entry.sheetId === sheetId && typeof entry.range === "string" && entry.range.startsWith(rangePrefix))?.valueRange.values ?? [];
   const partedSources = (group: "weight" | "type" | "function" | "method" | "methodTemplateReview") => CANONICAL_ITEM_PARTS.map((part) => ({ part, sheetId: CANONICAL_RULE_RANGES[group][part], values: findRangeValues(CANONICAL_RULE_RANGES[group][part], "A1:") }));

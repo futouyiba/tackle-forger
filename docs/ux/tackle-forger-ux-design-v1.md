@@ -2,7 +2,7 @@
 
 > 阶段：已完成——体验审查、系统设计、方向定稿、交互原型、开发 Handoff 与最终 Audit  
 > 日期：2026-07-20  
-> 最后对齐v3：2026-07-23
+> 最后对齐v3：2026-07-27
 > 设计基准：桌面端 1440 × 1024，中文优先  
 > 面向对象：游戏策划、规则维护、发布核验、数据维护、只读复盘与后续开发 Agent
 > 权威依据：docs/tackle-forger-development-spec-v3.md  
@@ -409,7 +409,7 @@ flowchart LR
 - 关键决策：是否接受 warning；是否选择当前 Model 为默认；是否推迟发布。
 - 错误与恢复：error 阻断并跳转修复；warning 未确认不能发布；哈希失败可重试，不产生半成品快照。
 - 成功反馈：显示 Snapshot ID、哈希、发布人/时间；对象转“已发布/已冻结”。
-- 动作与证据：发布动作消费服务端`ActionAvailability`；按`separation-of-duties/open009-v1`，当前不设置专用发布角色或作者回避，同一用户可在全部Gate通过后发布自己的Model，并记录操作者、理由、expectedRevision和Snapshot hash。
+- 动作与证据：发布动作消费服务端`ActionAvailability`；按`separation-of-duties/open009-v2`，当前不设置专用发布角色或作者回避，同一用户可在全部Gate通过后发布自己的Model，并记录操作者、理由、expectedRevision和Snapshot hash。
 - 最终落点：只读 ConfigurationSnapshot。
 
 ### 4.12 上游变化后比较旧快照与升级候选
@@ -762,8 +762,8 @@ flowchart LR
 
 ### 10.2 权限治理结论与剩余产品确认
 
-- 按`separation-of-duties/open009-v1`，一期、1.5期、二期和当前规划三期均不要求Series批准与Model发布职责分离，也不增加确认写回或RuleSet发布会签。
-- 最近模板pin、-3 Affinity warning复核和导出等动作继续消费服务端Capability；当前策略下所有已登录公司用户拥有全部已启用Capability，页面不得自建角色或为任何阶段预设差异权限。
+- 按`separation-of-duties/open009-v2`，一期、1.5期、二期和当前规划三期均不要求Series批准与Model发布职责分离，也不增加确认写回或RuleSet发布会签。
+- 匿名内网本地会话只可处理浏览器内存中的本地 Excel/临时态，刷新即失，且不得读写共享状态或触发服务器 Action；最近模板pin、-3 Affinity warning复核和导出等共享动作继续消费服务端 Capability。当前策略下所有已登录公司用户拥有全部已启用 Capability，页面不得自建角色、以`if user`猜测权限或为任何阶段预设差异权限。
 - -3 Affinity warning 的理由格式仍以v3动作契约为准，不因统一权限而省略理由、expectedRevision或操作记录。
 - Collection 是否首版可编辑，还是只读品牌分组。
 - 普通操作记录保留1年；导出权限按服务端已启用Capability判定。未来变化必须另建Issue并发布新策略版本。

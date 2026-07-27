@@ -82,7 +82,7 @@ Snapshot的“下载审计归档”与“正式导出”是两种不同动作：
 
 个体Patch必须进入统一汇总分析，但不得自动成为通用规则。工具按作用层、属性、钓法、类型、功能定位、重量段、修改方向和重复频率识别稳定模式；经人工归纳、跨对象影响预览和确认后，才可生成`RuleSourceChangeDraft`并写回对应通用规则页。新RuleSetVersion发布并重算后，原Patch分别进入`ABSORBED`、`PARTIALLY_ABSORBED`、继续`ACTIVE`或`REBASE_REQUIRED`，不得因规则提案或写回而提前删除。
 
-接口必须区分Patch创建、Patch审核、Patch台账写入、Patch台账拉取、镜像检查、缺行修复、按本地权威重建、远端schema修复、Patch主体迁移、规则提案创建、通用规则写回和RuleSet发布等Capability。OPEN-010只定义这些动作的安全边界，不决定人员授权；Capability分配和职责分离必须引用第20.2节当前发布的`separation-of-duties/open009-v1`，未来也只能由新的`separationOfDutiesPolicy`版本改变。当前策略下所有已登录公司用户获得全部已启用Capability，是OPEN-009的结论，不得复制为OPEN-010常量。
+接口必须区分Patch创建、Patch审核、Patch台账写入、Patch台账拉取、镜像检查、缺行修复、按本地权威重建、远端schema修复、Patch主体迁移、规则提案创建、通用规则写回和RuleSet发布等Capability。OPEN-010只定义这些动作的安全边界，不决定人员授权；Capability分配和职责分离必须引用第20.2节当前发布的`separation-of-duties/open009-v2`，未来也只能由新的`separationOfDutiesPolicy`版本改变。当前策略下所有已登录公司用户获得全部已启用Capability，是OPEN-009的结论，不得复制为OPEN-010常量。
 
 人工备注、复核意见和“建议提升为共享规则”必须通过Tackle Forger提交；飞书`Patch台账`对人工只读，仅服务身份执行远端写入。审计记录实际业务发起人的稳定飞书用户ID和时间，不能以服务身份替代业务操作者。同步失败保留本地权威记录、幂等键和远端回读结果，可安全重试。
 
@@ -329,7 +329,7 @@ syncIdempotencyKey = sha256Hex(JCS({
 
 镜像Issue的`gate=NONE`表示不阻断本地Patch重放和既有Snapshot，但对应镜像组不能显示`SYNCED`。`PATCH_SUBJECT_ORPHANED`使用`gate=REVIEW`阻止批准，并按统一Gate语义约束后续发布；重放不是Gate，服务端必须另外把该Patch的重放、rebase和普通编辑`ActionAvailability`设为禁用，只保留查看证据与`migrate_patch_subject`恢复动作，后者要求`patch.subject.migrate` Capability。既有Snapshot不受影响。行排序或移动不影响关联；隐藏和过滤行仍必须读取；删除或清空按缺行处理。
 
-镜像动作必须分别声明ActionCode与Capability：`write_patch_mirror`要求`patch.mirror.write`，`pull_patch_mirror`要求`patch.mirror.pull`，`inspect_patch_mirror`要求`patch.mirror.inspect`，`repair_patch_mirror`要求`patch.mirror.repair`，`rebuild_patch_mirror_from_local`要求`patch.mirror.rebuild_from_local`，`fix_patch_mirror_schema`要求`patch.mirror.schema.repair`，`migrate_patch_subject`要求`patch.subject.migrate`。`repair_patch_mirror`不得覆盖内容冲突；`rebuild_patch_mirror_from_local`、`fix_patch_mirror_schema`和`migrate_patch_subject`必须二次确认、记录before/after证据并在执行时重新鉴权。当前由`separation-of-duties/open009-v1`分配这些Capability；OPEN-010不得自行扩大授权。
+镜像动作必须分别声明ActionCode与Capability：`write_patch_mirror`要求`patch.mirror.write`，`pull_patch_mirror`要求`patch.mirror.pull`，`inspect_patch_mirror`要求`patch.mirror.inspect`，`repair_patch_mirror`要求`patch.mirror.repair`，`rebuild_patch_mirror_from_local`要求`patch.mirror.rebuild_from_local`，`fix_patch_mirror_schema`要求`patch.mirror.schema.repair`，`migrate_patch_subject`要求`patch.subject.migrate`。`repair_patch_mirror`不得覆盖内容冲突；`rebuild_patch_mirror_from_local`、`fix_patch_mirror_schema`和`migrate_patch_subject`必须二次确认、记录before/after证据并在执行时重新鉴权。当前由`separation-of-duties/open009-v2`分配这些Capability；OPEN-010不得自行扩大授权。
 
 “拉取”只执行镜像核对、已知协作事件同步和冲突发现，绝不以飞书机器区覆盖本地Patch、删除本地Patch或修改Snapshot。写入超时或部分失败必须先回读；保留已经成功且哈希一致的行，整组进入`WRITE_FAILED`，重试只续写缺失操作。重复、篡改或哈希冲突必须保存远端原始证据；只有用户显式执行“按本地权威重建镜像”后才可修复，并再次完整回读。补偿失败不得回滚或改变本地Patch。
 

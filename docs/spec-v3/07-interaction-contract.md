@@ -22,6 +22,18 @@ interface ActionAvailability {
   disabledReasonCode?: string;
   disabledReasonText?: string;
 }
+type LocalActionCode =
+  | "open_local_excel"
+  | "create_local_temporary_workspace"
+  | "edit_local_session"
+  | "clear_local_session";
+interface LocalActionAvailability {
+  contractVersion: "anonymous-local-actions/open009-v2";
+  action: LocalActionCode;
+  enabled: boolean;
+  disabledReasonCode?: string;
+  disabledReasonText?: string;
+}
 type CapabilityCode =
   | "series.read" | "series.edit" | "series.approve"
   | "sku.read" | "sku.edit"
@@ -87,7 +99,9 @@ type ActionCode =
 
 读接口必须按当前对象、策略版本和操作者返回这些`ActionAvailability`；命令端再次校验Capability和`separationOfDutiesPolicy`。发布策略还必须校验其目标目录/Manifest覆盖，浏览器目录授权不能替代任何服务端权限。
 
-Series、SKU、Model的ID终身稳定且不复用；改名和更换默认Model不改ID。SKU修改`targetPullKg`必须遵守第6.6节：没有任何已发布后代Snapshot时保留skuId并创建新revision；已有已发布后代时原SKU的重量身份冻结，新重量创建新SKU，旧SKU可`DEPRECATED`。Revision只增不改；已批准/已发布revision不可原地改写。Snapshot ID与payload/hash永久绑定。前端不得从角色名、状态或颜色猜动作；读接口返回`ActionAvailability[]`，写接口再次鉴权。按第20.2节，所有已登录公司用户统一获得全部当前已启用业务Capability，`separationOfDutiesPolicy`使用`disabled_in_tackle_forger`；按第23.6节，`ai.provider_policy.manage`只授予部署管理员。服务端仍必须独立鉴权，功能开关关闭或未授予的Capability不得通过直接API调用。
+`LocalActionAvailability`是`open009-2026-07-27-v2`发布的纯本地动作契约，由当前应用版本作为不可变客户端契约随静态资源一同提供，不依赖服务端、用户对象或网络响应，因此服务不可用时仍可确定性计算。它只可控制同一标签页浏览器内存中的本地Excel副本与临时态，不携带Capability、`EntityRef`或`commandPayloadRef`，也不得映射、升级或提交为任何`ActionCode`。只要动作会读取共享状态、调用服务器Action、修改导入源文件、写入SQLite、日志、IndexedDB/localStorage、发布、正式导出或触发外部副作用，就不属于`LocalActionCode`，必须使用服务端返回的`ActionAvailability`并在命令端重新鉴权。客户端可以按会话内存状态计算本地动作是否可用，但不能据此推断任何服务端动作；匿名本地运行时尚未实现前，不得用本契约声称功能已可用。
+
+Series、SKU、Model的ID终身稳定且不复用；改名和更换默认Model不改ID。SKU修改`targetPullKg`必须遵守第6.6节：没有任何已发布后代Snapshot时保留skuId并创建新revision；已有已发布后代时原SKU的重量身份冻结，新重量创建新SKU，旧SKU可`DEPRECATED`。Revision只增不改；已批准/已发布revision不可原地改写。Snapshot ID与payload/hash永久绑定。前端不得从角色名、状态或颜色猜服务端动作；读接口返回`ActionAvailability[]`，写接口再次鉴权，纯本地动作只消费上述`LocalActionAvailability`。按第20.2节，所有已登录公司用户统一获得全部当前已启用业务Capability，`separationOfDutiesPolicy`使用`disabled_in_tackle_forger`；按第23.6节，`ai.provider_policy.manage`只授予部署管理员。服务端仍必须独立鉴权，功能开关关闭或未授予的Capability不得通过直接API调用。
 
 ### 24.2 R1：钓具系列甘特图
 
@@ -503,7 +517,7 @@ type PrimaryDisplayState = "HARD_CONFLICT" | "REBASE_REQUIRED" | "REVIEW_REQUIRE
 
 ### 24.13 R12：版本化策略与完成门槛
 
-`patchOffsetPolicy`的产品语义已经由OPEN-004完成决策并通过`patch-offset/open004-v1`发布：`PatchOffsetPolicyVersion`固定表达`mode=FINAL_RANGE_WITH_MANDATORY_REVIEW`、`offsetThresholds=NONE`和`rangeEndpoints=INCLUSIVE`，不得重新引入独立偏移阈值；状态为`RESOLVED`。`FiveAxisViewDefinition`的OPEN-005语义也已经确认，但仍须完成第21.7节迁移并发布唯一`FORMAL_CURRENT`定义；旧`PUBLISHED`定义不满足该门槛。仍保持开放、版本化且不得固化最终值的策略包括`enabledItemPartPolicy`、`qualityValueRangePolicy`、`PricingPolicy`与未来Performance扩展策略。`PerformanceSummaryDefinition`同样版本化，但只配置如何统计和展示既有结果，不得配置为属性或价值分输入，缺失时按第11.2.1节冻结`UNAVAILABLE/definition_missing`而不构成发布配置不完整。仓库当前没有可校验的已发布`enabledItemPartPolicy`版本，因此按OPEN-003的`DEFERRED_UI_DISABLED`行为fail-closed：产品流程只处理竿、轮、线，钩、漂、真饵和拟饵入口及动作全部关闭；未来策略即使加入这些部位，也必须先满足OPEN-003规定的独立产品设计前置条件，不能仅修改开关。`aiRefreshPolicy`、`aiModelRecordPolicy`、`aiReviewPolicy`和`separationOfDutiesPolicy`已由第20.2节的`open009-2026-07-23-v1`关闭，但仍以策略版本保存，未来只能通过新决策和新版本改变。一期、1.5期、二期和当前规划三期均不接飞书审批，当前不在Tackle Forger内实行职责分离。Snapshot冻结语义不是配置项，改变它必须先改权威规范并获用户明确确认。
+`patchOffsetPolicy`的产品语义已经由OPEN-004完成决策并通过`patch-offset/open004-v1`发布：`PatchOffsetPolicyVersion`固定表达`mode=FINAL_RANGE_WITH_MANDATORY_REVIEW`、`offsetThresholds=NONE`和`rangeEndpoints=INCLUSIVE`，不得重新引入独立偏移阈值；状态为`RESOLVED`。`FiveAxisViewDefinition`的OPEN-005语义也已经确认，但仍须完成第21.7节迁移并发布唯一`FORMAL_CURRENT`定义；旧`PUBLISHED`定义不满足该门槛。仍保持开放、版本化且不得固化最终值的策略包括`enabledItemPartPolicy`、`qualityValueRangePolicy`、`PricingPolicy`与未来Performance扩展策略。`PerformanceSummaryDefinition`同样版本化，但只配置如何统计和展示既有结果，不得配置为属性或价值分输入，缺失时按第11.2.1节冻结`UNAVAILABLE/definition_missing`而不构成发布配置不完整。仓库当前没有可校验的已发布`enabledItemPartPolicy`版本，因此按OPEN-003的`DEFERRED_UI_DISABLED`行为fail-closed：产品流程只处理竿、轮、线，钩、漂、真饵和拟饵入口及动作全部关闭；未来策略即使加入这些部位，也必须先满足OPEN-003规定的独立产品设计前置条件，不能仅修改开关。`aiRefreshPolicy`、`aiModelRecordPolicy`、`aiReviewPolicy`和`separationOfDutiesPolicy`首次由第20.2节的`open009-2026-07-23-v1`关闭；匿名本地会话和可选飞书登录由后继`open009-2026-07-27-v2`发布，历史v1不得重解释。所有策略仍以版本保存，未来只能通过新决策和新版本改变。一期、1.5期、二期和当前规划三期均不接飞书审批，当前不在Tackle Forger内实行职责分离。Snapshot冻结语义不是配置项，改变它必须先改权威规范并获用户明确确认。
 
 正常路径：使用已发布策略版本并记录。
 边界：配置缺失通常报配置不完整且不用页面默认；`PerformanceSummaryDefinition`是明确例外，缺失时按第11.2.1节冻结`UNAVAILABLE/definition_missing`并保持发布非阻断。历史可只读。

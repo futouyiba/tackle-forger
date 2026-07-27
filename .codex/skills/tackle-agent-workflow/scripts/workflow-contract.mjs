@@ -706,10 +706,12 @@ function prepareTaskCardInternal({ root = repositoryRoot(), input, allowOwnedDir
     schema: SPEC_READ_SCHEMA, taskId, role: 'coding', specSha256: currentSpecHash(root), profile: readPlanTemplate.profile, riskProfile,
     relevantSections, requiredSections: readPlanTemplate.requiredSections, readSections: [], reason: 'Pending human completion after actual routed reading.',
   } : null;
+  const semantic = { taskId, workflowMode, scope, ownedPaths, riskProfile, changeClass };
   return {
     schema: taskCardPolicy.schema,
-    semantic: { taskId, workflowMode, scope, ownedPaths, riskProfile, changeClass },
+    semantic,
     derived: {
+      semanticSha256: sha256(Buffer.from(canonicalJson(semantic), 'utf8')),
       baseSha: currentHead(root), specSha256: currentSpecHash(root), relevantSections,
       openDecisionCheck: { registrySha256: openRegistryHash(root), checkedIds: registry.map((entry) => entry.id) },
       routeSelection: scoped ? { status: 'resolved', relevantSections } : { status: 'formal_boundary_required', relevantSections: null },

@@ -467,8 +467,15 @@ function currentEntry(root, absolute, repoPath, fallbackMode = null) {
   return { mode, bytes };
 }
 function indexEntryMode(root, repoPath) {
-  const listing = git(root, ['ls-files', '--stage', '-z', '--', repoPath]);
-  if (!listing || listing.length === 0) return null;
+  const result = spawnSync('git', ['ls-files', '--stage', '-z', '--', repoPath], {
+    cwd: root,
+    encoding: null,
+    maxBuffer: 1024 * 1024,
+  });
+  if (result.error || result.status !== 0) fail(`Cannot inspect index entry: ${repoPath}`);
+  const listing = result.stdout;
+  if (!Buffer.isBuffer(listing)) fail(`Cannot inspect index entry: ${repoPath}`);
+  if (listing.length === 0) return null;
   const nul = listing.indexOf(0);
   if (nul < 0 || nul !== listing.length - 1) fail(`Ambiguous index entry: ${repoPath}`);
   const record = listing.subarray(0, nul);

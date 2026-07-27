@@ -733,6 +733,20 @@ test('patch manifest records staged executable mode changes when core.filemode i
   } finally { cleanup(root); }
 });
 
+test('patch manifest fails closed when the Git index cannot be inspected', () => {
+  const root = temporaryRepo();
+  try {
+    write(root, 'tool.sh', '#!/bin/sh\n');
+    const baseSha = commitBase(root);
+    command(root, ['config', 'core.filemode', 'false']);
+    writeFileSync(path.join(root, '.git', 'index'), 'corrupt index');
+    assert.throws(
+      () => buildPatchManifest({ root, baseSha, ownedPaths: ['tool.sh'] }),
+      /Cannot inspect index entry: tool\.sh/,
+    );
+  } finally { cleanup(root); }
+});
+
 test('patch manifest rejects traversal and symlinks', async (t) => {
   const root = temporaryRepo();
   try {

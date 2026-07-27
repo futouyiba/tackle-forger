@@ -6,7 +6,7 @@
     "node": ">=22.16.0"
   },
   "scripts": {
-    "dev": "vinext dev",
+    "dev": "vinext dev -p 3456",
     "build": "vinext build",
     "start": "vinext start",
     "config-export:companion": "tsx scripts/config-export-companion.ts",

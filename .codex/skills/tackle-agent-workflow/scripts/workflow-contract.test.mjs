@@ -159,6 +159,7 @@ test('daily Task Card has exactly six semantic fields and only mechanical eviden
     assert.equal(card.derived.readingAssertion, 'none_generated');
     assert.equal(card.derived.formalTaskBriefRequiredAtBoundary, true);
     assert.equal(card.derived.earlyEscalationRequired, false);
+    assert.match(card.derived.semanticSha256, /^[0-9a-f]{64}$/);
     assert.deepEqual(card.derived.openDecisionCheck.checkedIds, ['OPEN-001']);
     assert.deepEqual(card.derived.receiptDraft.readSections, []);
     assert.equal(card.derived.receiptDraft.reason, 'Pending human completion after actual routed reading.');
@@ -167,6 +168,7 @@ test('daily Task Card has exactly six semantic fields and only mechanical eviden
     assert.equal(JSON.parse(runCli(['--check-task-card', '--card', cardPath], root)).schema, 'tackle-task-card/v1');
     assert.throws(() => prepareTaskCard({ root, input: { ...input, extra: true } }), /unknown, missing, or inapplicable keys/);
     assert.throws(() => checkTaskCard({ root, card: { ...card, derived: { ...card.derived, baseSha: '0'.repeat(40) } } }), /stale or was not mechanically generated/);
+    assert.throws(() => checkTaskCard({ root, card: { ...card, semantic: { ...card.semantic, scope: 'Expanded scope after preparation.' } } }), /stale or was not mechanically generated/);
   } finally { cleanup(root); cleanup(handoff); }
 });
 
@@ -203,6 +205,7 @@ test('fast local scoped Task Card completes with a compact artifact result and n
     const cardPath = path.join(handoff, 'fast-card.json');
     writeFileSync(cardPath, `${JSON.stringify(card)}\n`);
     assert.equal(JSON.parse(runCli(['--complete-task-card', '--card', cardPath], root)).schema, 'tackle-task-card-result/v1');
+    assert.throws(() => completeTaskCard({ root, card: { ...card, semantic: { ...card.semantic, scope: 'Mutated completion scope.' } } }), /stale or was not mechanically generated/);
   } finally { cleanup(root); cleanup(handoff); }
 });
 

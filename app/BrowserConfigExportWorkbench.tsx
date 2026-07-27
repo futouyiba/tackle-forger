@@ -75,8 +75,8 @@ export function BrowserConfigExportWorkbench({
   const [busy, setBusy] = useState(false);
   const [busyXlsx, setBusyXlsx] = useState(false);
 
-  const previewAvailability = actionAvailabilities.preview_config_export;
-  const commitAvailability = actionAvailabilities.commit_config_export;
+  const previewAvailability = actionAvailabilities.preview_config_export ?? { enabled: false };
+  const commitAvailability = actionAvailabilities.commit_config_export ?? { enabled: false };
   const enabledProductModels = useMemo(
     () => snapshotBatchEligibleModels({
       models: state.purchasableModels,

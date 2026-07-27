@@ -53,8 +53,8 @@ export function ConfigExportWorkbench({
   const selectedProfiles = state.exportTargetProfiles.filter((profile) =>
     profileIds.includes(profile.profileId),
   );
-  const previewAvailability = actionAvailabilities.preview_config_export;
-  const commitAvailability = actionAvailabilities.commit_config_export;
+  const previewAvailability = actionAvailabilities.preview_config_export ?? { enabled: false };
+  const commitAvailability = actionAvailabilities.commit_config_export ?? { enabled: false };
   const canPreview = previewAvailability.enabled;
   const canCommit = commitAvailability.enabled;
   const blockers = useMemo(() => {

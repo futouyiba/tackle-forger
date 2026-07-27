@@ -68,8 +68,8 @@ export function CandidateGenerationWorkbench({ state, series, initialSkuId, acti
   const [checkpointMode, setCheckpointMode] = useState<"AUTO_CONTINUE" | "REVIEW_ON_CHANGE">("AUTO_CONTINUE");
   const [run, setRun] = useState<CandidateRun>();
   const [error, setError] = useState("");
-  const generateAvailability = actionAvailabilities.generate_candidates;
-  const materializeAvailability = actionAvailabilities.materialize_candidates;
+  const generateAvailability = actionAvailabilities.generate_candidates ?? { enabled: false };
+  const materializeAvailability = actionAvailabilities.materialize_candidates ?? { enabled: false };
 
   const updateVariant = (index: number, patch: Partial<ModelVariantInput>) => {
     setVariants((current) => current.map((variant, candidateIndex) => candidateIndex === index ? { ...variant, ...patch } : variant));

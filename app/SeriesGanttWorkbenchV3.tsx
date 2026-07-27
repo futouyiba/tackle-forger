@@ -1807,17 +1807,17 @@ export function SeriesGanttWorkbenchV3({
     () => [...new Set(filterCatalog.flatMap((block) => block.aggregate.ruleSetVersions))].sort(),
     [filterCatalog],
   );
-  const generateAvailability = actionAvailabilities.generate_candidates;
-  const openSeriesAvailability = actionAvailabilities.open_series;
-  const previewModelAvailability = actionAvailabilities.preview_model;
+  const generateAvailability = actionAvailabilities.generate_candidates ?? { enabled: false };
+  const openSeriesAvailability = actionAvailabilities.open_series ?? { enabled: false };
+  const previewModelAvailability = actionAvailabilities.preview_model ?? { enabled: false };
   // 此按钮只导航到 Series/Patch 上下文，不执行 Rebase 写命令。
   // 真正的状态写只能使用 rebase_patch + 服务端命令载荷引用。
   const rebaseRouteAvailability = openSeriesAvailability;
-  const createSeriesAvailability = actionAvailabilities.create_series;
-  const updateSeriesAffixAvailability = actionAvailabilities.update_series_core_affixes;
-  const aiAvailability = actionAvailabilities.run_ai_assessment;
-  const aiPatchDraftAvailability = actionAvailabilities.create_ai_patch_draft;
-  const aiRuleDraftAvailability = actionAvailabilities.create_ai_rule_source_change_draft;
+  const createSeriesAvailability = actionAvailabilities.create_series ?? { enabled: false };
+  const updateSeriesAffixAvailability = actionAvailabilities.update_series_core_affixes ?? { enabled: false };
+  const aiAvailability = actionAvailabilities.run_ai_assessment ?? { enabled: false };
+  const aiPatchDraftAvailability = actionAvailabilities.create_ai_patch_draft ?? { enabled: false };
+  const aiRuleDraftAvailability = actionAvailabilities.create_ai_rule_source_change_draft ?? { enabled: false };
   const runAiAssessment = async (scopeType: "series" | "model", scopeId: string) => {
     const scopeKey = `${scopeType}:${scopeId}`;
     setAiAssessment({ scopeKey, status: "running" });
@@ -1887,7 +1887,7 @@ export function SeriesGanttWorkbenchV3({
     assessmentRestoreScopeType,
   ]);
   const changeSkuTargetPullAvailability =
-    actionAvailabilities.change_sku_target_pull;
+    actionAvailabilities.change_sku_target_pull ?? { enabled: false };
   const contextBreadcrumbView = buildProductBreadcrumbView({
     workspaceId,
     collection: drawerSeries?.collectionId

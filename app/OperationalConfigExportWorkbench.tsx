@@ -185,8 +185,8 @@ export function OperationalConfigExportWorkbench({
   const selectedProfiles = availableProfiles.filter((profile) =>
     profileIds.includes(profile.profileId),
   );
-  const previewAvailability = actionAvailabilities.preview_config_export;
-  const commitAvailability = actionAvailabilities.commit_config_export;
+  const previewAvailability = actionAvailabilities.preview_config_export ?? { enabled: false };
+  const commitAvailability = actionAvailabilities.commit_config_export ?? { enabled: false };
   const companionCanPreview = Boolean(health?.capabilities.includes("config.export.preview"));
   const companionCanCommit = Boolean(health?.capabilities.includes("config.export.commit"));
   const canPreview = previewAvailability.enabled && companionCanPreview;

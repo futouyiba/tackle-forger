@@ -1,7 +1,7 @@
 # Dell R730 内网生产部署
 
 > 状态：生产运行手册；不定义领域语义
-> 最后对齐v3：2026-07-26
+> 最后对齐v3：2026-07-27
 
 本指南用于唯一的单实例内网部署路径。Vercel、Cloudflare 和 OpenAI Sites 已退役，不能替代持久磁盘、公司飞书 OAuth 凭据和真实 configs 仓库验收。
 
@@ -107,7 +107,7 @@ dry-run 不得写入 tombstone、删除 revision、执行 `VACUUM` 或改变数�
 
 ### 浏览器来源模式：二选一
 
-当前一期的 canonical browser origin 是 direct-origin 模式：浏览器访问
+当前部署实现仍以共享功能的 direct-origin 模式为准：浏览器访问
 `http://<R730_RFC1918_IP>:13000`，环境文件设置`FEISHU_ALLOW_INSECURE_HTTP=true`，并将
 `FEISHU_REDIRECT_URI`逐字登记为
 `http://<R730_RFC1918_IP>:13000/api/auth/feishu/callback`。这保留飞书租户认证、安全会话和服务端
@@ -128,7 +128,7 @@ origin，`FEISHU_REDIRECT_URI`必须逐字改为该 HTTPS origin 的回调路径
 - 一期端到端验收按
   [`phase-one-acceptance.md`](./phase-one-acceptance.md)分层执行；仓库预检、未登录 smoke 和
   已登录只读核对不能替代真实用户的拉取、RuleSet、Series/SKU/Model/Snapshot 与恢复证据。
-- 验收 `/api/auth/session` 未登录返回 401，飞书登录成功后返回当前租户身份。
+- 验收当前共享部署的 `/api/auth/session` 未登录返回 401，飞书登录成功后返回当前租户身份。v3 已确定的匿名本地会话尚待独立运行时实现；落地后必须新增独立验收，证明匿名只可使用浏览器内存本地态且不能访问任何共享路由或持久化媒介。
 - 在“飞书规则源”执行检查与显式拉取，确认 revision、sheet_id 和 Trace；不要把拉取误当发布。
 - 创建一个测试 Series，确认离散拉力逐项物化 SKU，规划范围不参与生成。
 - 预览 configs 三表差异，但只有登记 Profile、映射和正式 PricingPolicy 后才允许提交。

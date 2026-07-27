@@ -20,7 +20,7 @@
       "canonical_structure_change"
     ]
   },
-  "preamble": "# Tackle Forger 产品与领域开发规范 v3\n\n> 状态：**唯一权威规范 / Canonical**  \n>首次定稿：2026-07-21  \n> 最后修订：2026-07-24\n> 适用对象：产品设计、领域建模、前后端开发、数据迁移、测试与代码审查  \n> 源数据参考：《淡水路亚杆轮线装备设计.xlsx》\n\n",
+  "preamble": "# Tackle Forger 产品与领域开发规范 v3\n\n> 状态：**唯一权威规范 / Canonical**  \n>首次定稿：2026-07-21  \n> 最后修订：2026-07-27\n> 适用对象：产品设计、领域建模、前后端开发、数据迁移、测试与代码审查  \n> 源数据参考：《淡水路亚杆轮线装备设计.xlsx》\n\n",
   "modules": [
     {
       "id": "00",
@@ -95,7 +95,7 @@
       ],
       "title": "Agent 检查表与未决事项登记表",
       "path": "docs/spec-v3/05-open-decisions.md",
-      "sha256": "859c7a68cca2067f37b2b20093926fa65c6f939ea96ebc8ea8c1e1b2c68be418"
+      "sha256": "2e65509f1272926937aaf4f66eb02d281cbb45dafa40fe2bec06bacf629e0e9c"
     },
     {
       "id": "06",
@@ -127,7 +127,7 @@
       ],
       "title": "内网部署、身份与配置表交付",
       "path": "docs/spec-v3/08-deployment-and-export.md",
-      "sha256": "8efd68337ae5a1e5447a60fe49f853d15558b45f249ce17f81acc7fcd5ae1895"
+      "sha256": "4a66b4a3006551556a1aef159de45f7ecb1199fe5d869489929cc3077b18bcd1"
     }
   ],
   "openRegistry": [

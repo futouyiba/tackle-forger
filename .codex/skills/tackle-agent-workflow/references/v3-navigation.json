@@ -145,7 +145,7 @@
       ],
       "startLine": 413,
       "endLine": 543,
-      "contentSha256": "adfa32e25ac6a66b9c365f26acff056a8a77722c3e7f96870598ec2989b7f51f"
+      "contentSha256": "96ba1162000b2aaf7704a6fd58313fd89e6126ef0f719a17a590d9c6345ba61a"
     },
     {
       "id": "OPEN-010",
@@ -296,7 +296,7 @@
       ],
       "startLine": 413,
       "endLine": 543,
-      "contentSha256": "adfa32e25ac6a66b9c365f26acff056a8a77722c3e7f96870598ec2989b7f51f"
+      "contentSha256": "96ba1162000b2aaf7704a6fd58313fd89e6126ef0f719a17a590d9c6345ba61a"
     },
     {
       "id": "OPEN-010",
@@ -347,7 +347,7 @@
   },
   "source": {
     "path": "docs/spec-v3",
-    "sha256": "04dbbe4984812627f2df2d45f96cef5a386a51b44a45025609f6307d36830315"
+    "sha256": "a43c75227b3322c3e306f3c30c7d8c3cd136bd64924ec6226e6c63e8e37eaaff"
   },
   "headings": [
     {
@@ -1171,22 +1171,22 @@
       "title": "25.1 分期边界"
     },
     {
-      "line": 3394,
+      "line": 3393,
       "level": 3,
       "title": "25.2 本机配置目录与环境/渠道边界"
     },
     {
-      "line": 3428,
+      "line": 3427,
       "level": 3,
       "title": "25.3 发布末端两步"
     },
     {
-      "line": 3478,
+      "line": 3477,
       "level": 3,
       "title": "25.4 TOML关系校验"
     },
     {
-      "line": 3501,
+      "line": 3500,
       "level": 3,
       "title": "25.5 导出场景与验收"
     }

@@ -1,9 +1,9 @@
 # 飞书企业登录部署
 
-> 状态：身份与会话运行手册；不替代Capability契约
-> 最后对齐v3：2026-07-24
+> 状态：可选飞书身份与会话运行手册；不替代 Capability 契约
+> 最后对齐v3：2026-07-27
 
-Tackle Forger 直接使用飞书网页 OAuth，不依赖 `FEISHU_LOGIN_URL` 或浏览器提交的身份头。
+Tackle Forger 的内网本地会话无需登录。飞书网页 OAuth 是共享工作区、飞书规则源和其他共享/外部动作的可选身份通道；不依赖 `FEISHU_LOGIN_URL` 或浏览器提交的身份头。匿名本地会话不得读取、保存或伪造共享工作区，完整边界以 v3 §20.2.1 与 §25.1 为准。
 
 ## 三种鉴权路径
 
@@ -11,7 +11,7 @@ Tackle Forger 直接使用飞书网页 OAuth，不依赖 `FEISHU_LOGIN_URL` 或�
 | --- | --- | --- | --- |
 | **自动化测试** | 受密钥保护的 trusted-proxy fixture（`x-tf-proxy-secret` + `x-feishu-*`） | 临时目录（`mkdtemp`），测试后自动清理 | 不访问真实飞书网络、不要求真人 OAuth；通过 `FEISHU_TRUST_PROXY_HEADERS=true` 和共享密钥启用。该通道默认关闭、**非测试专用**——显式配置共享密钥的受控内网代理部署同样使用它（见「可选可信代理模式」），只是测试用 fixture 复用了同一路径 |
 | **人工 worktree 开发验收** | 真实飞书 OAuth 重定向 | 按 worktree+端口隔离的 `.data/auth-<worktreeName>-<port>`，由 `scripts/start-dev.ps1` 自动推导 | 每个 worktree 有独立会话文件，不互相污染 |
-| **R730 正式生产** | 真实飞书 OAuth 重定向、HTTPS 代理 | 持久磁盘显式路径（`/opt/tackle-forger/data/auth`），由 systemd `EnvironmentFile` 设置 | 包含在 `npm run storage:backup` 的 auth 目录中；不可被开发脚本改写 |
+| **R730 正式生产（启用共享功能时）** | 真实飞书 OAuth 重定向、HTTPS 代理 | 持久磁盘显式路径（`/opt/tackle-forger/data/auth`），由 systemd `EnvironmentFile` 设置 | 包含在 `npm run storage:backup` 的 auth 目录中；不可被开发脚本改写。纯本地会话部署不需要此路径 |
 
 ## 自动化测试专用 fixture
 

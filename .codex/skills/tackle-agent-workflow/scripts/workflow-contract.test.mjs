@@ -709,6 +709,30 @@ test('patch manifest preserves an indexed executable mode when core.filemode is 
   } finally { cleanup(root); }
 });
 
+test('patch manifest records staged executable mode changes when core.filemode is false', () => {
+  const root = temporaryRepo();
+  try {
+    write(root, 'make-executable.sh', '#!/bin/sh\n');
+    write(root, 'make-non-executable.sh', '#!/bin/sh\n');
+    command(root, ['add', '.']);
+    command(root, ['update-index', '--chmod=+x', 'make-non-executable.sh']);
+    command(root, ['commit', '-qm', 'base']);
+    const baseSha = command(root, ['rev-parse', 'HEAD']);
+    command(root, ['config', 'core.filemode', 'false']);
+    command(root, ['update-index', '--chmod=+x', 'make-executable.sh']);
+    command(root, ['update-index', '--chmod=-x', 'make-non-executable.sh']);
+    const entries = buildPatchManifest({
+      root,
+      baseSha,
+      ownedPaths: ['make-executable.sh', 'make-non-executable.sh'],
+    }).entries;
+    assert.deepEqual(entries.map((entry) => [entry.path, entry.state, entry.mode]), [
+      ['make-executable.sh', 'tracked_changed', '100755'],
+      ['make-non-executable.sh', 'tracked_changed', '100644'],
+    ]);
+  } finally { cleanup(root); }
+});
+
 test('patch manifest rejects traversal and symlinks', async (t) => {
   const root = temporaryRepo();
   try {

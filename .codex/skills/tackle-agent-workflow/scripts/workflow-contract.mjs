@@ -486,7 +486,7 @@ export function buildPatchManifest({ root = repositoryRoot(), baseSha, ownedPath
   const entries = paths.map(({ path: repoPath, absolute }) => {
     const before = baseEntry(root, baseSha, repoPath);
     const indexMode = indexEntryMode(root, repoPath);
-    const after = currentEntry(root, absolute, repoPath, before?.mode ?? indexMode);
+    const after = currentEntry(root, absolute, repoPath, indexMode ?? before?.mode);
     if (!after && !before) fail(`Owned path is neither current nor in base: ${repoPath}`);
     if (!after) return { path: repoPath, state: 'deleted', mode: before.mode, length: before.bytes.length, contentSha256: sha256(before.bytes) };
     const same = before && before.mode === after.mode && before.bytes.equals(after.bytes);
@@ -1250,7 +1250,7 @@ function validatePreparationRisk({ riskProfile, changeClass, riskDimensions, sco
 function prepareOwnedFilePath(root, baseSha, inputPath) {
   const validated = validatePath(root, inputPath);
   const before = baseEntry(root, baseSha, validated.path);
-  const after = existsSync(validated.absolute) ? currentEntry(root, validated.absolute, validated.path, before?.mode ?? indexEntryMode(root, validated.path)) : null;
+  const after = existsSync(validated.absolute) ? currentEntry(root, validated.absolute, validated.path, indexEntryMode(root, validated.path) ?? before?.mode) : null;
   if (!before && !after) {
     let parent = path.dirname(validated.absolute);
     while (parent !== root) {

@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, chmodSync, existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { buildNavigationIndex, buildOwnedBaselineManifest, buildPatchManifest, checkFullReadSession, checkNavigationIndex, checkOwnedWhitespace, checkPolicy, checkReadReceipt, checkTaskBrief, checkTaskCard, checkVerdict, classifyOwnedPaths, completeTaskCard, fullReadSessionHash, openRegistryHash, ownedBaselineHash, patchHash, prepareTaskBrief, prepareTaskCard, promoteTaskBrief, receiptHash, runCli, runValidation, specReadPlan, taskBriefHash, upgradeTaskCard, VALIDATION_EXECUTION_TIERS, validationExecutionPlan, writeNavigationIndex, writeTaskBriefRun, writeTaskCardRun, writeTaskRun } from './workflow-contract.mjs';
+import { buildNavigationIndex, buildOwnedBaselineManifest, buildPatchManifest, checkFullReadSession, checkNavigationIndex, checkOwnedWhitespace, checkPolicy, checkReadReceipt, checkTaskBrief, checkTaskCard, checkVerdict, classifyOwnedPaths, completeTaskCard, fullReadSessionHash, isDirectExecution, isOnlyLineEndingConversionWarnings, openRegistryHash, ownedBaselineHash, patchHash, prepareTaskBrief, prepareTaskCard, promoteTaskBrief, receiptHash, runCli, runValidation, specReadPlan, taskBriefHash, upgradeTaskCard, VALIDATION_EXECUTION_TIERS, validationExecutionPlan, writeNavigationIndex, writeTaskBriefRun, writeTaskCardRun, writeTaskRun } from './workflow-contract.mjs';
 
 const POLICY_RELATIVE = '.codex/skills/tackle-agent-workflow/references/workflow-contract-policy.v2.json';
 const POLICY_CONSUMERS = [
@@ -61,6 +61,16 @@ function commitBase(root) {
   return command(root, ['rev-parse', 'HEAD']);
 }
 function cleanup(root) { rmSync(root, { recursive: true, force: true }); }
+function symlinkOrCapabilitySkip(t, target, linkPath) {
+  try {
+    symlinkSync(target, linkPath);
+    return true;
+  } catch (error) {
+    if (!['EPERM', 'EACCES'].includes(error.code)) throw error;
+    t.skip(`symlink capability unavailable: ${error.code}`);
+    return false;
+  }
+}
 function specHash(root) { return buildNavigationIndex(root).source.sha256; }
 function receipt(root, overrides = {}) {
   const specSha256 = specHash(root);
@@ -149,6 +159,7 @@ test('daily Task Card has exactly six semantic fields and only mechanical eviden
     assert.equal(card.derived.readingAssertion, 'none_generated');
     assert.equal(card.derived.formalTaskBriefRequiredAtBoundary, true);
     assert.equal(card.derived.earlyEscalationRequired, false);
+    assert.match(card.derived.semanticSha256, /^[0-9a-f]{64}$/);
     assert.deepEqual(card.derived.openDecisionCheck.checkedIds, ['OPEN-001']);
     assert.deepEqual(card.derived.receiptDraft.readSections, []);
     assert.equal(card.derived.receiptDraft.reason, 'Pending human completion after actual routed reading.');
@@ -157,6 +168,7 @@ test('daily Task Card has exactly six semantic fields and only mechanical eviden
     assert.equal(JSON.parse(runCli(['--check-task-card', '--card', cardPath], root)).schema, 'tackle-task-card/v1');
     assert.throws(() => prepareTaskCard({ root, input: { ...input, extra: true } }), /unknown, missing, or inapplicable keys/);
     assert.throws(() => checkTaskCard({ root, card: { ...card, derived: { ...card.derived, baseSha: '0'.repeat(40) } } }), /stale or was not mechanically generated/);
+    assert.throws(() => checkTaskCard({ root, card: { ...card, semantic: { ...card.semantic, scope: 'Expanded scope after preparation.' } } }), /stale or was not mechanically generated/);
   } finally { cleanup(root); cleanup(handoff); }
 });
 
@@ -193,6 +205,7 @@ test('fast local scoped Task Card completes with a compact artifact result and n
     const cardPath = path.join(handoff, 'fast-card.json');
     writeFileSync(cardPath, `${JSON.stringify(card)}\n`);
     assert.equal(JSON.parse(runCli(['--complete-task-card', '--card', cardPath], root)).schema, 'tackle-task-card-result/v1');
+    assert.throws(() => completeTaskCard({ root, card: { ...card, semantic: { ...card.semantic, scope: 'Mutated completion scope.' } } }), /stale or was not mechanically generated/);
   } finally { cleanup(root); cleanup(handoff); }
 });
 
@@ -460,23 +473,20 @@ test('TaskBrief run storage publishes complete records atomically and rejects un
       chmodSync(storagePath, 0o600);
     }
     unlinkSync(storagePath);
-    try {
-      symlinkSync('../outside', storagePath);
+    await t.test('rejects a symlink at the final run path', (symlinkTest) => {
+      if (!symlinkOrCapabilitySkip(symlinkTest, '../outside', storagePath)) return;
       assert.throws(() => writeTaskBriefRun({ root, brief: prepared }), /unsafe/);
-    } catch (error) { if (!['EEXIST', 'EPERM', 'EACCES'].includes(error.code)) throw error; }
+    });
     const unsafeRoot = temporaryRepo();
     const unsafeTarget = mkdtempSync(path.join(os.tmpdir(), 'workflow-run-storage-target-'));
     try {
       taskBase(unsafeRoot);
       const unsafeDirectory = command(unsafeRoot, ['rev-parse', '--path-format=absolute', '--git-path', 'codex-runs']);
-      try {
-        symlinkSync(unsafeTarget, unsafeDirectory);
+      await t.test('rejects a symlinked run directory', (symlinkTest) => {
+        if (!symlinkOrCapabilitySkip(symlinkTest, unsafeTarget, unsafeDirectory)) return;
         assert.equal(lstatSync(unsafeDirectory).isSymbolicLink(), true);
         assert.throws(() => writeTaskBriefRun({ root: unsafeRoot, brief: prepareTaskBrief({ root: unsafeRoot, input: prepareInput(unsafeRoot) }) }), /run storage path escaped|directory is unsafe/);
-      } catch (error) {
-        if (!['EPERM', 'EACCES'].includes(error.code)) throw error;
-        t.diagnostic(`run-directory symlink unavailable: ${error.code}`);
-      }
+      });
     } finally { cleanup(unsafeRoot); cleanup(unsafeTarget); }
   } finally { cleanup(root); }
 });
@@ -523,7 +533,7 @@ test('TaskBrief preparation preserves every declared risk dimension and its scen
   } finally { cleanup(root); }
 });
 
-test('TaskBrief preparation fails closed for dirty, ambiguous, and unsupported inputs', () => {
+test('TaskBrief preparation fails closed for dirty, ambiguous, and unsupported inputs', async (t) => {
   const root = temporaryRepo();
   try {
     taskBase(root);
@@ -544,11 +554,11 @@ test('TaskBrief preparation fails closed for dirty, ambiguous, and unsupported i
     command(root, ['add', 'directory-path']); command(root, ['commit', '-qm', 'track directory fixture']);
     const currentInput = { ...input, baseSha: command(root, ['rev-parse', 'HEAD']) };
     assert.throws(() => prepareTaskBrief({ root, input: { ...currentInput, ownedPaths: ['directory-path'] } }), /Unsupported (base-tree|current) entry/);
-    try {
-      symlinkSync('AGENTS.md', path.join(root, 'linked-path'));
+    await t.test('rejects a symlink owned path', (symlinkTest) => {
+      if (!symlinkOrCapabilitySkip(symlinkTest, 'AGENTS.md', path.join(root, 'linked-path'))) return;
       command(root, ['add', 'linked-path']); command(root, ['commit', '-qm', 'track symlink fixture']);
       assert.throws(() => prepareTaskBrief({ root, input: { ...currentInput, baseSha: command(root, ['rev-parse', 'HEAD']), ownedPaths: ['linked-path'] } }), /Symlink/);
-    } catch (error) { if (!['EEXIST', 'EPERM', 'EACCES'].includes(error.code)) throw error; }
+    });
     write(root, 'dirty.txt', 'dirty\n');
     assert.throws(() => prepareTaskBrief({ root, input }), /clean worktree/);
   } finally { cleanup(root); }
@@ -558,13 +568,29 @@ test('owned whitespace checker catches a new untracked owned file', () => {
   const root = temporaryRepo();
   try {
     taskBase(root);
+    command(root, ['config', 'core.autocrlf', 'true']);
     const baseSha = command(root, ['rev-parse', 'HEAD']);
     write(root, 'new-owned.md', 'trailing space \n');
     assert.throws(() => checkOwnedWhitespace({ root, baseSha, ownedPaths: ['new-owned.md'] }), /Owned whitespace check failed.*trailing whitespace/);
     write(root, 'new-owned.md', 'clean\n');
     assert.deepEqual(checkOwnedWhitespace({ root, baseSha, ownedPaths: ['new-owned.md'] }).checkedPaths, ['new-owned.md']);
     assert.deepEqual(JSON.parse(runCli(['--check-owned-whitespace', '--base', baseSha, '--owned', 'new-owned.md'], root)).checkedPaths, ['new-owned.md']);
+    assert.equal(isOnlyLineEndingConversionWarnings("warning: in the working copy of 'new-owned.md', LF will be replaced by CRLF the next time Git touches it\n"), true);
+    assert.equal(isOnlyLineEndingConversionWarnings("warning: credential helper failed\n"), false);
+    assert.equal(isOnlyLineEndingConversionWarnings("new-owned.md:1: trailing whitespace.\n"), false);
   } finally { cleanup(root); }
+});
+
+test('workflow CLI entrypoint executes through the canonicalized worktree path', () => {
+  const scriptPath = path.resolve('.codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs');
+  assert.equal(isDirectExecution(new URL('./workflow-contract.mjs', import.meta.url).href, scriptPath), true);
+  const result = spawnSync(process.execPath, [scriptPath, '--check-policy'], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, '');
+  assert.match(result.stdout, /^Workflow policy is consistent\r?\n$/);
 });
 
 test('local TaskBrief preparation rejects a base before current HEAD', () => {
@@ -655,19 +681,85 @@ test('patch manifest classifies explicit owned paths and is deterministic', () =
   } finally { cleanup(root); }
 });
 
-test('patch manifest rejects traversal and symlinks', (t) => {
+test('patch manifest does not invent executable mode when core.filemode is false', () => {
+  const root = temporaryRepo();
+  try {
+    write(root, 'tool.sh', '#!/bin/sh\n');
+    const baseSha = commitBase(root);
+    command(root, ['config', 'core.filemode', 'false']);
+    chmodSync(path.join(root, 'tool.sh'), 0o755);
+    const entry = buildPatchManifest({ root, baseSha, ownedPaths: ['tool.sh'] }).entries[0];
+    assert.deepEqual([entry.state, entry.mode], ['unchanged', '100644']);
+  } finally { cleanup(root); }
+});
+
+test('patch manifest preserves an indexed executable mode when core.filemode is false', () => {
+  const root = temporaryRepo();
+  try {
+    write(root, 'base.txt', 'base\n');
+    const baseSha = commitBase(root);
+    command(root, ['config', 'core.filemode', 'false']);
+    write(root, 'indexed.sh', '#!/bin/sh\n');
+    command(root, ['add', 'indexed.sh']);
+    command(root, ['update-index', '--chmod=+x', 'indexed.sh']);
+    write(root, 'untracked.sh', '#!/bin/sh\n');
+    chmodSync(path.join(root, 'untracked.sh'), 0o755);
+    const entries = buildPatchManifest({ root, baseSha, ownedPaths: ['indexed.sh', 'untracked.sh'] }).entries;
+    assert.deepEqual(entries.map((entry) => [entry.path, entry.state, entry.mode]), [
+      ['indexed.sh', 'tracked_changed', '100755'],
+      ['untracked.sh', 'untracked', '100644'],
+    ]);
+  } finally { cleanup(root); }
+});
+
+test('patch manifest records staged executable mode changes when core.filemode is false', () => {
+  const root = temporaryRepo();
+  try {
+    write(root, 'make-executable.sh', '#!/bin/sh\n');
+    write(root, 'make-non-executable.sh', '#!/bin/sh\n');
+    command(root, ['add', '.']);
+    command(root, ['update-index', '--chmod=+x', 'make-non-executable.sh']);
+    command(root, ['commit', '-qm', 'base']);
+    const baseSha = command(root, ['rev-parse', 'HEAD']);
+    command(root, ['config', 'core.filemode', 'false']);
+    command(root, ['update-index', '--chmod=+x', 'make-executable.sh']);
+    command(root, ['update-index', '--chmod=-x', 'make-non-executable.sh']);
+    const entries = buildPatchManifest({
+      root,
+      baseSha,
+      ownedPaths: ['make-executable.sh', 'make-non-executable.sh'],
+    }).entries;
+    assert.deepEqual(entries.map((entry) => [entry.path, entry.state, entry.mode]), [
+      ['make-executable.sh', 'tracked_changed', '100755'],
+      ['make-non-executable.sh', 'tracked_changed', '100644'],
+    ]);
+  } finally { cleanup(root); }
+});
+
+test('patch manifest fails closed when the Git index cannot be inspected', () => {
+  const root = temporaryRepo();
+  try {
+    write(root, 'tool.sh', '#!/bin/sh\n');
+    const baseSha = commitBase(root);
+    command(root, ['config', 'core.filemode', 'false']);
+    writeFileSync(path.join(root, '.git', 'index'), 'corrupt index');
+    assert.throws(
+      () => buildPatchManifest({ root, baseSha, ownedPaths: ['tool.sh'] }),
+      /Cannot inspect index entry: tool\.sh/,
+    );
+  } finally { cleanup(root); }
+});
+
+test('patch manifest rejects traversal and symlinks', async (t) => {
   const root = temporaryRepo();
   try {
     write(root, 'safe.txt', 'safe\n');
     const baseSha = commitBase(root);
     assert.throws(() => buildPatchManifest({ root, baseSha, ownedPaths: ['../safe.txt'] }), /Invalid owned path/);
-    try {
-      symlinkSync('safe.txt', path.join(root, 'link.txt'));
-    } catch (error) {
-      t.skip(`symlinks unavailable: ${error.code}`);
-      return;
-    }
-    assert.throws(() => buildPatchManifest({ root, baseSha, ownedPaths: ['link.txt'] }), /Symlink/);
+    await t.test('rejects a symlink entry when the platform supports creating one', (symlinkTest) => {
+      if (!symlinkOrCapabilitySkip(symlinkTest, 'safe.txt', path.join(root, 'link.txt'))) return;
+      assert.throws(() => buildPatchManifest({ root, baseSha, ownedPaths: ['link.txt'] }), /Symlink/);
+    });
   } finally { cleanup(root); }
 });
 
@@ -1520,8 +1612,10 @@ test('merge gate document owns the complete review signal envelope', () => {
   const dailyFlow = readFileSync(path.join(root, '.codex/skills/agent-project-bootstrap/references/daily-project-flow.md'), 'utf8');
   const managedAutopilot = readFileSync(path.join(root, '.codex/skills/agent-project-bootstrap/references/managed-autopilot.md'), 'utf8');
   const managedSupervisor = readFileSync(path.join(root, '.codex/skills/agent-project-bootstrap/assets/codex-managed-supervisor.md'), 'utf8');
+  const ciAndProtection = readFileSync(path.join(root, '.codex/skills/agent-project-bootstrap/references/ci-and-protection.md'), 'utf8');
+  const bootstrapSkill = readFileSync(path.join(root, '.codex/skills/agent-project-bootstrap/SKILL.md'), 'utf8');
   const bootstrapMarker = readFileSync(path.join(root, '.codex/agent-project-bootstrap.yml'), 'utf8');
-  const policyConsumers = [gatePolicy, agentPolicy, claudePolicy, codexPrLoop, claudePrLoop, dailyFlow, managedAutopilot, managedSupervisor].join('\n');
+  const mergePolicyConsumers = [agentPolicy, claudePolicy, codexPrLoop, claudePrLoop, dailyFlow, managedAutopilot, managedSupervisor, ciAndProtection, bootstrapSkill];
   assert.match(gatePolicy, /A current review signal is additionally required only\s+when the workflow machine policy, repository or platform policy, or the\s+high-risk merge gate requires one\./);
   assert.match(gatePolicy, /grants standing merge authorization/);
   assert.match(gatePolicy, /No additional per-turn user\s+instruction is required/);
@@ -1534,6 +1628,7 @@ test('merge gate document owns the complete review signal envelope', () => {
   assert.match(gatePolicy, /merge one qualifying governance pull request under this repository's\s+standing authorization without separate owner approval/);
   assert.match(gatePolicy, /the fully satisfied workflow-governance path activates the same standing\s+authorization even though the checker remains non-`READY`/);
   assert.match(gatePolicy, /`GATE_PROGRAM_BOOTSTRAP_REQUIRED` is not\s+eligible because the live base has no trusted checker to execute/);
+  assert.match(gatePolicy, /Exit code 0 with empty output[\s\S]+must be treated as blocked/);
   assert.match(gatePolicy, /must be read from the clean live-base copy of this document, never from the\s+reviewed head/);
   assert.match(gatePolicy, /Changes to this policy in the head take effect only after merge\s+and only for later pull requests/);
   assert.match(gatePolicy, /Governance-Exception: ACCEPTED/);
@@ -1543,29 +1638,18 @@ test('merge gate document owns the complete review signal envelope', () => {
   assert.match(gatePolicy, /only permitted members are `CI_WORKFLOW_CHANGED` and\s+`GATE_PROGRAM_CHANGED`/);
   assert.match(gatePolicy, /an extra code, or a subset\/superset does not activate the\s+governance exception/);
   assert.doesNotMatch(gatePolicy, /One-time bootstrap for PR #63|explicit owner authorization naming PR #63|obtain owner merge authorization|PR #63 first introduces/);
-  assert.match(agentPolicy, /qualified auto-merge standing authorization/);
-  assert.match(agentPolicy, /只有用户后续明确授权合并才能解除/);
   assert.match(agentPolicy, /managed mode为`autonomous`/);
-  assert.match(agentPolicy, /不再要求owner另行授权/);
-  assert.match(claudePolicy, /qualified auto-merge standing authorization/);
-  assert.match(claudePolicy, /只有用户后续明确授权合并才能解除/);
+  assert.match(agentPolicy, /合并资格、授权、治理例外、用户暂停和合并后的回读全部按`.github\/merge-gates\.md`执行/);
   assert.match(claudePolicy, /managed mode为`autonomous`/);
-  assert.match(claudePolicy, /不要求owner另行授权/);
+  assert.match(claudePolicy, /合并资格、CI provenance、review signal、授权、暂停、workflow治理例外和合并回读统一遵循`.github\/merge-gates\.md`/);
   assert.match(bootstrapMarker, /^workflow_mode: managed$/m);
   assert.match(bootstrapMarker, /^managed_mode: autonomous$/m);
-  assert.match(managedSupervisor, /High-risk pull requests require the repository's strict review and high-risk live gate/);
-  assert.match(managedSupervisor, /covered by `qualified_auto_merge` does not need separate per-turn authorization/);
-  assert.match(managedSupervisor, /task-scoped user merge hold still takes precedence/);
+  assert.match(managedSupervisor, /Apply the repository's sole merge authority for every merge decision/);
   assert.doesNotMatch(managedSupervisor, /merge high-risk work[\s\S]{0,80}without explicit authorization/);
-  for (const consumer of [codexPrLoop, claudePrLoop, dailyFlow, managedAutopilot]) {
-    assert.match(consumer, /hold|暂停/);
-    assert.match(consumer, /READY/);
-    assert.match(consumer, /explicit|明确/);
-    assert.match(consumer, /auto-merge/);
-    assert.match(consumer, /queue|退队/);
-    assert.match(consumer, /does not clear|不解除/);
+  for (const consumer of mergePolicyConsumers) {
+    assert.match(consumer, /\.github\/merge-gates\.md|repository's sole merge authority|仓库的唯一合并权威/);
+    assert.doesNotMatch(consumer, /No additional per-turn user|without separate owner approval|只有用户后续明确授权合并才能解除|不再要求owner另行授权|不要求owner另行授权|`READY` does not override|later explicit user instruction authorizing the merge|not merge, wait for a human merge, or ask again before merging|可信实时checker返回`READY`|Keep high-risk paths and labels outside unattended merge|qualifying low-risk PRs may use GitHub auto-merge/);
   }
-  assert.doesNotMatch(policyConsumers, /checker is evidence, not merge authorization|checker证据不自行授予合并/);
   assert.match(gatePolicy, /When a review signal is required, the canonical integrated Agent review uses/);
   for (const field of [
     'Agent-Review-Version: v1',

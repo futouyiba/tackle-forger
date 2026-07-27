@@ -7,7 +7,7 @@ description: coordinator 已组织实现并形成 PR head 后，把 PR 走完「
 
 ## 定位
 
-本 skill 在项目 `CLAUDE.md`「Agent 工作模式」定义的工作模式下运作；实施容量由 coordinator 按任务决定，此处不另行固定。**本 skill 负责审核、CI、集成证据和实际合并后的安全回读；是否执行合并由仓库政策决定。当前仓库在可信实时门禁对精确head/base返回`READY`且未命中人工关卡时，要求coordinator依据standing authorization直接合并一个合格PR，无需本轮用户另行授权；但本任务中仍有效的用户显式“不合并/等人工合并/合并前再问”指令优先于`READY`。**
+本 skill 在项目 `CLAUDE.md`「Agent 工作模式」定义的工作模式下运作；实施容量由 coordinator 按任务决定，此处不另行固定。**本 skill 负责审核、CI、集成证据和实际合并后的安全回读；`.github/merge-gates.md`唯一决定合并资格、授权、暂停和回读，本 skill 只执行该决定。**
 
 reviewTier边界、receipt角色与风险安全下限只从上方版本化机器政策加载，本skill不维护平行矩阵。是否需要独立审核也由该政策决定（`fastLocalCompletion.requiresReviewer:false`，即 `fast` 不要求审核；`standard`/`strict` 要求）；当政策要求审核时，每个范围只读并绑定当前精确head/base，所有发现由coordinator处置后才整合唯一最终审核信号，执行方式有两条路（可选其一或并行）：
 1. **输出审核清单**（见下）→ 用户粘到常驻审核 agent 窗口（省 install + 上下文重建，推荐用于敏捷迭代）；
@@ -54,9 +54,9 @@ Agent 进程可能无法跨会话存活（压缩、/model 切换、进程退出�
 `.github/merge-gates.md` 是review signal格式和PR合并资格的唯一完整人类可读权威；本skill只负责按它刷新、处置和回读，不复制资格清单。reviewTier与receipt要求仍来自上方机器政策。
 
 
-命中显式人工关卡时暂停请求人工决策：本任务开始或进行中用户明确要求不合并、等待人工合并或合并前再次询问；未决产品语义/范围；破坏性或不可逆数据变更；安全/授权边界；合并触发部署/发布；必需验证不可用；依赖或合并顺序不明；重试上限耗尽。任务级用户合并暂停只有用户后续明确授权合并才能解除，不得从沉默、CI/review通过、重试或新的`READY`推断解除。若收到暂停时PR尚未合并但已启用auto-merge或进入merge queue，立即只针对该PR禁用auto-merge或退队并回读状态；平台无法安全撤销时报告人工关卡并确认是否已合并。撤销和回读不解除暂停；后续明确授权后仍须刷新精确head/base并重跑实时checker，才能重新进入合并路径。不把普通代码质量或泛泛「再谨慎些」标成关卡。
+命中`.github/merge-gates.md`定义的人工关卡时，按其中的暂停、撤销、解除和刷新规则执行；本 skill 不维护另一份关卡清单。不把普通代码质量或泛泛「再谨慎些」自行扩张为关卡。
 
-当`.github/merge-gates.md`规定的可信实时checker返回`READY`且上述人工关卡均未命中时，coordinator必须直接使用仓库正常GitHub合并方式合并一个合格PR并立即回读PR状态、merge SHA与远端base包含关系。该授权不扩张为部署、发布、删除、范围扩张或其他外部副作用权限。
+是否合并、采用何种GitHub合并方式以及如何回读，全部执行`.github/merge-gates.md`的当前决定。本 skill 不自行授予部署、发布、删除、范围扩张或其他外部副作用权限。
 
 ## 避免 rebase + force-push
 

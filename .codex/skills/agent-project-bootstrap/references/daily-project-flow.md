@@ -76,7 +76,7 @@ Pause for scope or acceptance changes, unresolved product decisions, ambiguous d
 
 Use the separately installed `$agent-pr-loop` Skill when the user says `搞定 PR`, explicitly names that Skill, or asks to run one PR through comments, review, repair, CI, and completion. Bootstrap remains authoritative for work selection and repository policy; `agent-pr-loop` owns the single-PR state machine.
 
-For that one PR, preserve the all-green exact-head review and CI result as integration evidence. When the trusted live repository gate returns `READY` and no recorded human gate applies, merge one qualifying PR under the repository's standing authorization without requesting a separate per-turn instruction. A user instruction at task start or during the task to not merge, wait for a human merge, or ask again before merging is a recorded task-scoped human gate; keep it until the user later explicitly authorizes the merge, regardless of silence, successful CI/review, retries, or a fresh `READY`. If the hold arrives after auto-merge was enabled or the PR entered a merge queue, cancel that pending transport for the still-unmerged PR and read back its state; cancellation does not clear the hold, and later authorization requires a fresh exact-head/base checker run. Pause also at other repository-recorded human gates, missing business decisions, unavailable required validation, ambiguous dependencies, external identity requirements, merge-triggered side effects, or exhausted retries.
+For that one PR, preserve the all-green exact-head review and CI result as integration evidence. Apply the repository's sole merge authority to qualification, authorization, user holds, transport cancellation, refresh, and readback. Pause separately for missing business decisions, unavailable required validation, ambiguous dependencies, external identity requirements, merge-triggered side effects, or exhausted retries.
 
 During review and repair, push only the exact PR head and verify its remote SHA. If a merge is performed, prefer GitHub server-side PR merge, read back the result, and fetch remote refs when useful; do not push the merged PR head, push a stale local base, or run `git push --all`, `git push --mirror`, a post-merge force-push, or a bulk tag push.
 
@@ -86,7 +86,7 @@ For `收需求`, first normalize candidate items, search for duplicates, and cla
 
 ## Integrate approved pull requests
 
-The repository's qualified auto-merge policy is the standing authorization for this procedure; `合并收尾` and the expanded `/prompts:integrate` (Codex) or `/integrate` (Claude Code) shortcut merely request an immediate scan. Limit the operation to the current repository and any scope the user supplied. A trusted live `READY` result plus the absence of a recorded human gate requires the coordinator to merge one qualifying PR without a separate per-turn user instruction. Before doing so, inspect the current task for an active user merge hold; `READY` cannot clear one, and only a later explicit user authorization can.
+`合并收尾` and the expanded `/prompts:integrate` (Codex) or `/integrate` (Claude Code) shortcut request an immediate scan; they do not define authorization. Limit the operation to the current repository and any scope the user supplied, then apply its sole merge authority.
 
 1. Fetch current GitHub state; do not decide from a stale local snapshot.
 2. Select open, non-draft PRs that have all required approvals.

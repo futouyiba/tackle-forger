@@ -29,8 +29,8 @@
 | OPEN-006 AI供应方与数据出网 | 安全/产品决策 | `RESOLVED` | 使用`ai-provider/open006-v1`：Fancy Hub、`ai-request/v1`严格Schema、动态模型修订、字段级保留和分层限额 | 本决策只解除产品策略阻断；真实连接器在Issue #25完成、测试并启用前继续禁用，不得发送真实数据 | 2026-07-23用户确认本节策略；AI无批准、写回或发布能力，无需另设三方会签 |
 | OPEN-007 定价决策落地与源表一致性 | 已决产品结论/外部规则源落实 | `DECIDED_SOURCE_UPDATE_REQUIRED` | 旧实现可继续输出明确标记的`NON_FORMAL`试算；新契约按第20.1节执行 | 飞书机器源、新schema、迁移、确认记录和发布/导出尚未全部落实前，禁止把旧Draft发布成符合新契约的PricingPolicyVersion | 2026-07-23用户决定与`open-007-pricing-semantics-adr.md`；源表负责人更新机器源，GitHub Issue #9完成实现 |
 | OPEN-008 ConfigIdPolicy区间与命名 | 公司策略（已确认） | `DECIDED_PENDING_POLICY_VERSION` | 按本节确认规则实现策略版本、ledger、权威目标目录/扫描Manifest、历史导入、正式动作治理租约/受保护ref CAS和冲突预检 | `ConfigIdPolicyVersion`尚未发布，或其引用的`ConfigTargetCatalogVersion`中任一必需目标没有获批扫描Manifest时，不得正式预留ID、历史ID正式导入或正式导出；正式预留、历史ID正式导入和正式导出任一无法取得`ConfigTargetGovernanceLease`、无法对authoritative ref执行expected-old-OID CAS或返回`CONFIG_TARGET_SERIALIZATION_UNAVAILABLE`时必须fail-closed。策略发布只复验Manifest/ref/hash，不要求治理租约；禁止用“最大值+1”、示例ID、用户临时绑定或单一渠道扫描代替 | 配置治理负责人发布策略版本；权威目录和获批Manifest覆盖完整；reservation、历史导入、正式导出和分裂命中验收通过；治理租约的物理ref别名竞争、单调fencing token、受保护ref CAS、stale token与`CONFIG_TARGET_SERIALIZATION_UNAVAILABLE`失败验收通过 |
-| OPEN-009 工作流治理策略 | 产品/安全决策 | `RESOLVED` | 使用第20.2节发布的五类`open009-v1`策略；所有已登录公司用户拥有全部已启用业务Capability；AI一期禁用，二期连接器仍需独立实现准入 | 不接飞书审批、不在本工具实行职责分离；OPEN-006安全配置只由部署管理员修改；关键写操作使用工作区单写锁与单调fencing token，普通操作记录保留1年 | 2026-07-23用户确认；策略正文见第20.2节，迁移与验收见Issue #18 |
-| OPEN-010 飞书Patch台账远端契约 | 外部规则源阻断 | `BLOCKED_ON_SOURCE_SCHEMA` | 已确认`Patch台账`、`A:AK`机器区、`AM:BA`协作事件区、哈希/并发/幂等/补偿/rebase契约；权限引用`separation-of-duties/open009-v1`；不触达飞书的契约实现/测试可继续，但本地PatchLedger、协作事件流、旧版写入/拉取及未实现动作均不得标记为符合或可用 | 本地`PatchOperationRecord`、PatchLedger schema/migration及operation/revision/Snapshot哈希完成`workspaceId`与JCS契约升级前，镜像链路保持禁用；不可变协作事件存储、事务内compare-and-append、`collaborationRevision`/幂等/冲突/`supersedesEventId`校验和action availability完成前，协作写入保持禁用；远端表头、保护边界和连接器联调完成前，真实写入/拉取保持禁用；旧版写入/拉取完成远端schema、IssueCode及ActionCode/Capability升级前保持禁用；`inspect_patch_mirror`、`repair_patch_mirror`、`rebuild_patch_mirror_from_local`、`fix_patch_mirror_schema`、`migrate_patch_subject`的服务端定义、Capability门禁和测试完成前，对应动作也保持禁用；不得伪造SYNCED | 先以版本化迁移补齐本地工作区归属和新哈希，同时保持既有revision、Snapshot引用及历史哈希证据不可变；实现本地协作事件原子追加、先本地提交后镜像及重复重试/双客户端冲突回归；按第14.4节物化远端schema并完成写入、回读、缺行、篡改、hash、跨工作区隔离和并发联调；升级写入/拉取并实现、测试全部镜像/迁移ActionCode、Capability映射、二次确认和审计证据；连接器及运行时实现使用独立Issue/PR跟踪 |
+| OPEN-009 工作流治理策略 | 产品/安全决策 | `RESOLVED` | 使用第20.2节当前`open009-2026-07-27-v2`统一策略；匿名仅使用浏览器内存本地态，所有共享/服务端动作仍须飞书认证；已认证用户拥有全部已启用业务Capability；AI一期禁用，二期连接器仍需独立实现准入 | 历史`open009-2026-07-23-v1`不得重解释；不接飞书审批、不在本工具实行职责分离；OPEN-006安全配置只由部署管理员修改；关键写操作使用工作区单写锁与单调fencing token，普通操作记录保留1年 | 2026-07-23首次确认、2026-07-27发布入口边界v2；策略正文见第20.2节，运行时仍待独立实现与验收 |
+| OPEN-010 飞书Patch台账远端契约 | 外部规则源阻断 | `BLOCKED_ON_SOURCE_SCHEMA` | 已确认`Patch台账`、`A:AK`机器区、`AM:BA`协作事件区、哈希/并发/幂等/补偿/rebase契约；权限引用`separation-of-duties/open009-v2`；不触达飞书的契约实现/测试可继续，但本地PatchLedger、协作事件流、旧版写入/拉取及未实现动作均不得标记为符合或可用 | 本地`PatchOperationRecord`、PatchLedger schema/migration及operation/revision/Snapshot哈希完成`workspaceId`与JCS契约升级前，镜像链路保持禁用；不可变协作事件存储、事务内compare-and-append、`collaborationRevision`/幂等/冲突/`supersedesEventId`校验和action availability完成前，协作写入保持禁用；远端表头、保护边界和连接器联调完成前，真实写入/拉取保持禁用；旧版写入/拉取完成远端schema、IssueCode及ActionCode/Capability升级前保持禁用；`inspect_patch_mirror`、`repair_patch_mirror`、`rebuild_patch_mirror_from_local`、`fix_patch_mirror_schema`、`migrate_patch_subject`的服务端定义、Capability门禁和测试完成前，对应动作也保持禁用；不得伪造SYNCED | 先以版本化迁移补齐本地工作区归属和新哈希，同时保持既有revision、Snapshot引用及历史哈希证据不可变；实现本地协作事件原子追加、先本地提交后镜像及重复重试/双客户端冲突回归；按第14.4节物化远端schema并完成写入、回读、缺行、篡改、hash、跨工作区隔离和并发联调；升级写入/拉取并实现、测试全部镜像/迁移ActionCode、Capability映射、二次确认和审计证据；连接器及运行时实现使用独立Issue/PR跟踪 |
 | OPEN-011 工作区revision归档与裁剪启用 | 二期实施/公司策略缺口 | `BLOCKED_BEFORE_PRUNING` | 已批准“最近90天与最新100个的并集”在线保留政策；一期SQLite/D1继续全量保留，人工与自动裁剪均关闭；二期只可在独立Issue范围内实现和验证归档、恢复与只读dry-run | 归档包格式/大小/压缩/加密、恢复入口、归档保留期、RTO/RPO、团队共享与访问控制、维护窗口、删除授权或自动裁剪启用标准任一未确定或证据不可验证时，不得删除任何revision；非删除主流程不得因此被阻断 | 父Issue [#1](https://github.com/futouyiba/tackle-forger/issues/1)；发布覆盖全部实施参数的版本化`WorkspaceRevisionRetentionPolicyVersion`，完成目标浏览器归档与manifest/hash回读、隔离恢复和完整性/Snapshot hash验证，取得首次生产裁剪授权并通过回滚验收；自动裁剪另需独立启用授权 |
 
 `DECIDED_IMPLEMENTATION_PENDING`和`DECIDED_SOURCE_UPDATE_REQUIRED`表示产品选择已经完成，不得继续向用户重复提问，但运行时或外部规则源尚不能宣称完成。状态只有在决策证据进入权威规范、对应策略版本可校验且实现验收通过后才改为`RESOLVED`。代码、原型、测试种子或某次人工输入都不能单独关闭整项工作。
@@ -412,7 +412,7 @@ PricingPolicyDraft只有在以下校验全部通过后才能发布：品质区�
 
 ### 20.2 OPEN-009：AI与发布工作流治理策略
 
-OPEN-009于2026-07-23关闭，统一策略版本为`open009-2026-07-23-v1`。本节只定义Tackle Forger内部治理，不启用AI、不选择AI供应方、不接飞书审批，也不改变ConfigurationSnapshot不可变、显式拉取、确定性校验和配置关系校验。OPEN-006关闭后仍须通过独立实现Issue完成连接器准入，不能仅凭策略决策启用AI。
+OPEN-009于2026-07-23首次关闭，原统一策略版本`open009-2026-07-23-v1`冻结“公司飞书登录是产品入口门槛”的历史语义，不得原地改写。2026-07-27确认匿名本地会话与可选飞书登录后，发布后继统一策略版本`open009-2026-07-27-v2`；v2只替换入口与匿名本地能力边界，其余AI、发布、职责分离和操作记录结论继续继承本节明确引用的既有子策略版本。任何审计、Action或历史产物必须继续按其冻结的统一策略版本解析，不能把v1解释成v2。本节只定义Tackle Forger内部治理，不启用AI、不选择AI供应方、不接飞书审批，也不改变ConfigurationSnapshot不可变、显式拉取、确定性校验和配置关系校验。OPEN-006关闭后仍须通过独立实现Issue完成连接器准入，不能仅凭策略决策启用AI。
 
 #### 20.2.1 分期与责任边界
 
@@ -481,7 +481,7 @@ Tackle Forger中的“发布”只表示发布内部RuleSetVersion、冻结Confi
 
 #### 20.2.5 `separationOfDutiesPolicy`与Capability
 
-策略版本为`separation-of-duties/open009-v1`，模式固定为`disabled_in_tackle_forger`：
+当前策略版本为`separation-of-duties/open009-v2`，模式固定为`disabled_in_tackle_forger`。历史`separation-of-duties/open009-v1`继续表示“只有符合内网与公司飞书登录条件的用户才进入产品、登录后全员统一Capability”，不得用于授权匿名本地能力：
 
 - 一期、1.5期、二期和当前规划三期均不要求经办人与审核人、发布人或导出人为不同人员。
 - 不设置Operator、Publisher、Auditor等业务角色，也不建设请假代理、临时授权、代审批或应用内成员管理。

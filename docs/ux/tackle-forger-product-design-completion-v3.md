@@ -65,7 +65,7 @@ flowchart LR
 Collection（可缺省） → Series → SKU 抽屉 → Model → 冻结快照
 ```
 
-SKU 显示“精确重量 + SKU 抽屉”；Model 显示型号并标明“实际选择/购买对象”；Snapshot 显示版本、冻结时间和 hash。已登录用户打开当前工作区内可解析对象的深链接时返回完整稳定父链，不渲染脱敏父级占位或部分谱系披露；跨工作区引用必须拒绝且不得返回父链。read/edit/review/publish分别消费服务端`ActionAvailability`，按钮显示disabledReason和requiredCapabilities；动作只受功能开关、当前已启用Capability、领域Gate、revision与Manifest等契约约束。按`separation-of-duties/open009-v1`，一期、1.5期、二期和当前规划三期均由服务端返回全员统一的已启用Capability，不建设职责分离或对象级RBAC；未来只能通过新策略版本及同步修订的R1/R2契约改变权限分配，不得由页面角色判断。
+SKU 显示“精确重量 + SKU 抽屉”；Model 显示型号并标明“实际选择/购买对象”；Snapshot 显示版本、冻结时间和 hash。已登录用户打开当前工作区内可解析对象的深链接时返回完整稳定父链，不渲染脱敏父级占位或部分谱系披露；跨工作区引用必须拒绝且不得返回父链。read/edit/review/publish分别消费服务端`ActionAvailability`，按钮显示disabledReason和requiredCapabilities；动作只受功能开关、当前已启用Capability、领域Gate、revision与Manifest等契约约束。按`separation-of-duties/open009-v2`，一期、1.5期、二期和当前规划三期均由服务端返回全员统一的已启用Capability，不建设职责分离或对象级RBAC；未来只能通过新策略版本及同步修订的R1/R2契约改变权限分配，不得由页面角色判断。
 
 ## 4. 生成 Model 候选
 
@@ -181,7 +181,7 @@ UpgradeCandidate 只描述“升级会怎样”。批准不改变旧 Snapshot；
 
 ## 11. 内网、登录和配置表交付
 
-部署在公司内网 Dell R730。内网匿名入口只建立浏览器内存的本地 Excel/临时会话：不读写团队工作区，刷新即失，不得写入 SQLite、导入文件、日志、IndexedDB/localStorage 或服务器 Action。飞书登录建立共享公司会话，才可消费共享状态、飞书源和其他服务端许可的 Capability；令牌/密钥不得进入前端日志、AI 输入或导出。前端只消费服务端返回的 `ActionAvailability`，不得以是否有用户对象猜测权限。一期使用统一公司 Capability 策略且 AI 禁用；1.5期只扩展正式配置治理与本地导出，权限策略不变；二期只有OPEN-006关闭后才启用AI；当前规划三期继续统一权限，不建设细粒度RBAC、职责分离或飞书审批。关键共享写入显示锁持有人和动作；服务端可达副作用使用fenced outbox，浏览器本地配置写入不进入outbox。租约失效后旧token不能提交成功证据，本地目标显示“外部文件冲突/需要恢复”，引导重新授权、逐文件回读并按Manifest恢复。登录失败提供重试、错误编号、管理员入口；会话过期保留表单，重登后重验 Revision。
+部署在公司内网 Dell R730。内网匿名入口只建立浏览器内存的本地 Excel/临时会话：不读写团队工作区，刷新即失，不得写入 SQLite、导入文件、日志、IndexedDB/localStorage 或服务器 Action。飞书登录建立共享公司会话，才可消费共享状态、飞书源和其他服务端许可的 Capability；令牌/密钥不得进入前端日志、AI 输入或导出。纯本地按钮只消费随应用版本发布的`LocalActionAvailability`；共享或服务端按钮只消费服务端返回的`ActionAvailability`，不得以是否有用户对象、本地动作结果或离线状态猜测服务端权限。一期使用统一公司 Capability 策略且 AI 禁用；1.5期只扩展正式配置治理与本地导出，权限策略不变；二期只有OPEN-006关闭后才启用AI；当前规划三期继续统一权限，不建设细粒度RBAC、职责分离或飞书审批。关键共享写入显示锁持有人和动作；服务端可达副作用使用fenced outbox，浏览器本地配置写入不进入outbox。租约失效后旧token不能提交成功证据，本地目标显示“外部文件冲突/需要恢复”，引导重新授权、逐文件回读并按Manifest恢复。登录失败提供重试、错误编号、管理员入口；会话过期保留表单，重登后重验 Revision。
 
 配置表交付按阶段分层：一期只能生成`NON_FORMAL`预览，数字ID和正式name为空，使用不可进入生产schema的符号引用，不生成`tackle.xlsx/item.xlsx/store.xlsx`生产文件名，也不能人工搬运或提交。1.5期在正式Bundle、权威`ConfigTargetCatalogVersion`和新鲜获批`ConfigTargetScanManifest`齐备后，才进入以下两步：
 
@@ -217,7 +217,7 @@ UpgradeCandidate 只描述“升级会怎样”。批准不改变旧 Snapshot；
 
 ## 13. 策略状态与不得固化的边界
 
-本界面只消费v3第20节的唯一登记表，不自行解释状态。OPEN-001公式已经确认，界面不得继续展示`linear_subtraction/diminishing_division`切换或“等待选择公式”；在权威主工作簿机器规则与已发布`ReductionStackingPolicyVersion`缺失时，只显示`bidirectional_ratio`非正式预览及发布/正式导出阻断。OPEN-002与OPEN-007的产品语义已经确定，当前分别处于实现待完成、源表与实现待落地状态，界面不得继续向用户展示旧选项或要求重复选择。OPEN-003的产品方向已经确认“当前完全延期”，但尚无可校验的已发布`enabledItemPartPolicy`，所以继续保持`DEFERRED_UI_DISABLED`；页面不得为钩、漂、真饵或拟饵提供入口或占位。OPEN-004与OPEN-008已决但仍待可校验策略版本及实现；OPEN-005继续由版本化配置承接；OPEN-006与OPEN-009已经解决，界面分别消费`ai-provider/open006-v1`与`open009-2026-07-23-v1`系列策略，不再显示对应旧决策选项。OPEN-010在远端契约完成前保持禁用态。所有仍未决的值只能通过版本化策略或明确禁用态表达。
+本界面只消费v3第20节的唯一登记表，不自行解释状态。OPEN-001公式已经确认，界面不得继续展示`linear_subtraction/diminishing_division`切换或“等待选择公式”；在权威主工作簿机器规则与已发布`ReductionStackingPolicyVersion`缺失时，只显示`bidirectional_ratio`非正式预览及发布/正式导出阻断。OPEN-002与OPEN-007的产品语义已经确定，当前分别处于实现待完成、源表与实现待落地状态，界面不得继续向用户展示旧选项或要求重复选择。OPEN-003的产品方向已经确认“当前完全延期”，但尚无可校验的已发布`enabledItemPartPolicy`，所以继续保持`DEFERRED_UI_DISABLED`；页面不得为钩、漂、真饵或拟饵提供入口或占位。OPEN-004与OPEN-008已决但仍待可校验策略版本及实现；OPEN-005继续由版本化配置承接；OPEN-006与OPEN-009已经解决，界面分别消费`ai-provider/open006-v1`与当前`open009-2026-07-27-v2`系列策略，不再显示对应旧决策选项；历史记录仍按其冻结的`open009-2026-07-23-v1`解释。OPEN-010在远端契约完成前保持禁用态。所有仍未决的值只能通过版本化策略或明确禁用态表达。
 
 TOML枚举引用不是开放项：当前编译器契约已确定使用可读`configNameKey/name`解析到唯一数字ID，页面不得提供“按ID或name任选”的产品开关。Snapshot冻结语义也不是配置项，改变它必须先获得用户明确确认并修订v3。
 

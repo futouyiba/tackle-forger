@@ -1,6 +1,6 @@
 # Tackle Forger 需求集中交接（2026-07-21）
 
-> 最后对齐v3：2026-07-23
+> 最后对齐v3：2026-07-27
 
 ## 1. 文档定位
 
@@ -148,7 +148,7 @@ AI只允许预览、生成Model Patch草稿或飞书规则提案草稿。AI不�
 
 ## 8. 内网部署与配置交付
 
-工具部署在公司内网Dell R730，使用飞书登录。按已发布`separation-of-duties/open009-v1`，一期、1.5期、二期和当前规划三期均使用全员统一的已启用Capability，不建设细粒度RBAC、职责分离或飞书审批；未来变化必须另建Issue并发布新策略版本。关键共享写操作使用带单调fencing token的工作区租约：旧token不得提交服务端状态、启动新的服务端可达副作用或写入成功证据，进行中的未知结果必须先回读恢复；浏览器本地文件不能由服务端outbox代写，租约失效后按文件冲突与Manifest恢复处理。支持Chromium内核浏览器。一期只提供不可提交的`NON_FORMAL`预览；正式ID预留、人工搬运包和本地worktree写入属于1.5期。
+工具部署在公司内网Dell R730。按`open009-2026-07-27-v2`，匿名用户只能使用同一标签页浏览器内存中的本地Excel副本或临时态，刷新即失，且不得读写SQLite、导入源文件、日志、IndexedDB/localStorage、共享工作区、服务器Action或任何外部副作用；该入口仍待独立运行时实现。共享工作区、飞书规则源、保存、发布、正式导出和其他共享/外部动作必须飞书登录。纯本地按钮消费随应用版本发布的`LocalActionAvailability`，共享或服务端按钮消费服务端`ActionAvailability`。按当前`separation-of-duties/open009-v2`，一期、1.5期、二期和当前规划三期均对已认证用户使用全员统一的已启用Capability，不建设细粒度RBAC、职责分离或飞书审批；未来变化必须另建Issue并发布新策略版本。关键共享写操作使用带单调fencing token的工作区租约：旧token不得提交服务端状态、启动新的服务端可达副作用或写入成功证据，进行中的未知结果必须先回读恢复；浏览器本地文件不能由服务端outbox代写，租约失效后按文件冲突与Manifest恢复处理。支持Chromium内核浏览器。一期只提供不可提交的`NON_FORMAL`预览；正式ID预留、人工搬运包和本地worktree写入属于1.5期。
 
 配置目标是设计人员本地配置Git仓库：
 
@@ -193,8 +193,8 @@ AI只允许预览、生成Model Patch草稿或飞书规则提案草稿。AI不�
 - 仍开放或由配置种子承接：OPEN-003扩展部位（产品已确认完全延期；在可校验的已发布`enabledItemPartPolicy`存在前保持`DEFERRED_UI_DISABLED`）、OPEN-005五维定义；
 - 已决待落实：OPEN-001全局唯一`bidirectional_ratio`及完整阶段顺序、OPEN-002性能定位派生语义、OPEN-004 Patch最终范围与整体人工复核策略、OPEN-007价值分与定价执行语义、OPEN-008 ConfigIdPolicy；不得继续向用户重复询问旧选项；
 - 外部落实阻断：OPEN-001的主工作簿`04_词条/zrVOxd`机器规则尚未迁入，必须产生`REDUCTION_POLICY_SOURCE_MISSING`并阻断策略、Model、Snapshot与正式导出；外部revision `17173`只作决策证据，不得生成运行时`FeishuSourceRevision`。OPEN-007飞书机器源与运行时、OPEN-010飞书Patch台账远端契约继续按各自Gate阻断；
-- 已关闭产品决策：OPEN-006使用`ai-provider/open006-v1`，OPEN-009使用`open009-2026-07-23-v1`系列治理策略；真实连接器和迁移仍按各自Issue准入。
+- 已关闭产品决策：OPEN-006使用`ai-provider/open006-v1`，OPEN-009当前使用`open009-2026-07-27-v2`统一策略；历史记录继续按其冻结的`open009-2026-07-23-v1`解释，真实连接器、匿名入口运行时和迁移仍按各自Issue准入。
 
-OPEN-009已于2026-07-23解决：`ai-refresh/open009-v1`、`ai-batch-limits/open009-v1`、`ai-model-record/open009-v1`、`ai-review/open009-v1`和`separation-of-duties/open009-v1`按v3第20.2节执行，不再列为未决事项。
+OPEN-009已于2026-07-23首次解决，并于2026-07-27以`open009-2026-07-27-v2`更新入口边界；`ai-refresh/open009-v1`、`ai-batch-limits/open009-v1`、`ai-model-record/open009-v1`和`ai-review/open009-v1`继续沿用，当前职责分离策略为`separation-of-duties/open009-v2`，均按v3第20.2节执行，不再列为未决事项。
 
 未发布引用全部必需目标新鲜Manifest的`ConfigIdPolicyVersion`，或配置仓库无法用治理租约、单调fencing token和expected-old-OID CAS阻止绕过写入时，不得正式预留ID、导入永久占用或提交配置；不能用“最大值+1”、示例ID、用户临时目录绑定或重复读取ref代替。预留必须以Model expected revision加行锁原子冻结key与Bundle，历史导入必须绑定review revision、源行hash和幂等键。TOML枚举引用已经由v3确定为通过`configNameKey/name`唯一解析数字ID，不是开放决策。任何可能改变已发布Snapshot冻结语义的方案都不是配置选择，必须先由用户明确确认并修订v3。

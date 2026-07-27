@@ -2,7 +2,7 @@
   "format": "tackle-v3-open-registry/v1",
   "source": {
     "path": "docs/spec-v3",
-    "sha256": "a43c75227b3322c3e306f3c30c7d8c3cd136bd64924ec6226e6c63e8e37eaaff"
+    "sha256": "c83a073ab5b2db1e23b1c7acf62bea521fbe32632e3a46a31d8215792090d235"
   },
   "entries": [
     {
@@ -124,7 +124,7 @@
       ],
       "startLine": 413,
       "endLine": 543,
-      "contentSha256": "96ba1162000b2aaf7704a6fd58313fd89e6126ef0f719a17a590d9c6345ba61a"
+      "contentSha256": "66e26461dbafa00519b1625d79d6b1fa28a3e8c9b814d9b84d2809a37defb121"
     },
     {
       "id": "OPEN-010",
@@ -138,7 +138,7 @@
       ],
       "startLine": 209,
       "endLine": 371,
-      "contentSha256": "89dfa3769891f2820f9da2e7a259f88863dffa02a977d3f901d49ce7573a55dc"
+      "contentSha256": "a67c304a053717c3e96956a4342a62c48c06d0d335d98c8dcc5aa9aaea3f0540"
     },
     {
       "id": "OPEN-011",

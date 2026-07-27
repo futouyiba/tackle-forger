@@ -145,7 +145,7 @@
       ],
       "startLine": 413,
       "endLine": 543,
-      "contentSha256": "96ba1162000b2aaf7704a6fd58313fd89e6126ef0f719a17a590d9c6345ba61a"
+      "contentSha256": "66e26461dbafa00519b1625d79d6b1fa28a3e8c9b814d9b84d2809a37defb121"
     },
     {
       "id": "OPEN-010",
@@ -159,7 +159,7 @@
       ],
       "startLine": 209,
       "endLine": 371,
-      "contentSha256": "89dfa3769891f2820f9da2e7a259f88863dffa02a977d3f901d49ce7573a55dc"
+      "contentSha256": "a67c304a053717c3e96956a4342a62c48c06d0d335d98c8dcc5aa9aaea3f0540"
     },
     {
       "id": "OPEN-011",
@@ -296,7 +296,7 @@
       ],
       "startLine": 413,
       "endLine": 543,
-      "contentSha256": "96ba1162000b2aaf7704a6fd58313fd89e6126ef0f719a17a590d9c6345ba61a"
+      "contentSha256": "66e26461dbafa00519b1625d79d6b1fa28a3e8c9b814d9b84d2809a37defb121"
     },
     {
       "id": "OPEN-010",
@@ -310,7 +310,7 @@
       ],
       "startLine": 209,
       "endLine": 371,
-      "contentSha256": "89dfa3769891f2820f9da2e7a259f88863dffa02a977d3f901d49ce7573a55dc"
+      "contentSha256": "a67c304a053717c3e96956a4342a62c48c06d0d335d98c8dcc5aa9aaea3f0540"
     },
     {
       "id": "OPEN-011",
@@ -347,7 +347,7 @@
   },
   "source": {
     "path": "docs/spec-v3",
-    "sha256": "a43c75227b3322c3e306f3c30c7d8c3cd136bd64924ec6226e6c63e8e37eaaff"
+    "sha256": "c83a073ab5b2db1e23b1c7acf62bea521fbe32632e3a46a31d8215792090d235"
   },
   "headings": [
     {
@@ -1096,97 +1096,97 @@
       "title": "24.1 共同底座"
     },
     {
-      "line": 2944,
+      "line": 2958,
       "level": 3,
       "title": "24.2 R1：钓具系列甘特图"
     },
     {
-      "line": 2986,
+      "line": 3000,
       "level": 3,
       "title": "24.3 R2：稳定标识、面包屑和权限"
     },
     {
-      "line": 3005,
+      "line": 3019,
       "level": 3,
       "title": "24.4 R3：“生成 Model 候选”"
     },
     {
-      "line": 3037,
+      "line": 3051,
       "level": 3,
       "title": "24.5 R4：统一Trace"
     },
     {
-      "line": 3067,
+      "line": 3081,
       "level": 3,
       "title": "24.6 R5：五维图"
     },
     {
-      "line": 3111,
+      "line": 3125,
       "level": 3,
       "title": "24.7 R6：AIRecommendation"
     },
     {
-      "line": 3142,
+      "line": 3156,
       "level": 3,
       "title": "24.8 R7：AI转Model Patch草稿"
     },
     {
-      "line": 3154,
+      "line": 3168,
       "level": 3,
       "title": "24.9 R8：AI转飞书规则修改草稿"
     },
     {
-      "line": 3201,
+      "line": 3215,
       "level": 3,
       "title": "24.10 R9：ValidationIssue与ActionLink"
     },
     {
-      "line": 3281,
+      "line": 3295,
       "level": 3,
       "title": "24.11 R10：Rebase、UpgradeCandidate与Snapshot"
     },
     {
-      "line": 3320,
+      "line": 3334,
       "level": 3,
       "title": "24.12 R11：状态与文案"
     },
     {
-      "line": 3356,
+      "line": 3370,
       "level": 3,
       "title": "24.13 R12：版本化策略与完成门槛"
     },
     {
-      "line": 3368,
+      "line": 3382,
       "level": 3,
       "title": "24.14 完成标准"
     },
     {
-      "line": 3371,
+      "line": 3385,
       "level": 2,
       "title": "25. 内网部署、飞书身份与配置表交付"
     },
     {
-      "line": 3373,
+      "line": 3387,
       "level": 3,
       "title": "25.1 分期边界"
     },
     {
-      "line": 3393,
+      "line": 3407,
       "level": 3,
       "title": "25.2 本机配置目录与环境/渠道边界"
     },
     {
-      "line": 3427,
+      "line": 3441,
       "level": 3,
       "title": "25.3 发布末端两步"
     },
     {
-      "line": 3477,
+      "line": 3491,
       "level": 3,
       "title": "25.4 TOML关系校验"
     },
     {
-      "line": 3500,
+      "line": 3514,
       "level": 3,
       "title": "25.5 导出场景与验收"
     }

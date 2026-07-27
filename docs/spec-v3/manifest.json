@@ -84,7 +84,7 @@
       ],
       "title": "版本、快照、飞书、工作区与回归",
       "path": "docs/spec-v3/04-persistence-and-lifecycle.md",
-      "sha256": "7c512b17788bc1f420a4295df5b1079ad464a4eeb95d0c5c21145f522e06c718"
+      "sha256": "b0a9b976fdab229cf65ed182f9b683920baf43a84c0be44527ede8cc0b7c78bd"
     },
     {
       "id": "05",
@@ -95,7 +95,7 @@
       ],
       "title": "Agent 检查表与未决事项登记表",
       "path": "docs/spec-v3/05-open-decisions.md",
-      "sha256": "2e65509f1272926937aaf4f66eb02d281cbb45dafa40fe2bec06bacf629e0e9c"
+      "sha256": "ba501e9c74ef143b806272513d1832e750a9bf6deabd51faca2d15115fe57632"
     },
     {
       "id": "06",
@@ -117,7 +117,7 @@
       ],
       "title": "交互与后端统一需求契约",
       "path": "docs/spec-v3/07-interaction-contract.md",
-      "sha256": "9123caddec082a1e9bbff743638fc374ae6c08ce42c05775eb7a57dd20740dc4"
+      "sha256": "b2b7d00f5a9a0546de7d9db183efe53bac335fae0b9f9041d3183a2c38c455c9"
     },
     {
       "id": "08",
@@ -127,7 +127,7 @@
       ],
       "title": "内网部署、身份与配置表交付",
       "path": "docs/spec-v3/08-deployment-and-export.md",
-      "sha256": "4a66b4a3006551556a1aef159de45f7ecb1199fe5d869489929cc3077b18bcd1"
+      "sha256": "ec27f4d90a08cf8b1ac85ae8920e8df7ac7822ab4767cd91676529f39aef6ca6"
     }
   ],
   "openRegistry": [

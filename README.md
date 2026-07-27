@@ -34,10 +34,9 @@ npm run lint
 npm test
 ```
 
-`apps/web`与`packages/*`是保留的历史pnpm workspace，其声明和锁文件隔离在
-`legacy-workspace/`。它不再属于日常开发、CI、合并门禁或 Agent 验证；当前工作以根目录
-npm 应用为准。恢复历史 workspace 验证必须以
-`legacy-workspace-last-green-2026-07-26`（Node 22.16.0 / pnpm 10.33.2）为证据，另行经过治理审查。
+历史 pnpm workspace 已从 main 文件树移除；当前工作只使用根目录 npm 应用。需要取证或恢复时，
+从 annotated tag `legacy-workspace-last-green-2026-07-26`（Node 22.16.0 / pnpm 10.33.2，
+commit `702938b36bed0c2ea5489238318778a18d53059f`）建立独立分支，并另行经过治理审查。
 
 ## 本地启动
 
@@ -158,6 +157,6 @@ expected-old-OID 冻结进提交结果，不能换目标、内容或授权证据
 策略引用，或仍有未解决 EXPORT ERROR/BLOCKER 的历史 Snapshot，只能下载原样审计归档，
 不能进入配置预览或提交链；同一 Model 的多个冻结修订也不能进入同一个预览包。
 
-## 旧版工作区
+## 历史工作区归档
 
-合并前的 pnpm 多包实现仍保留在 `apps/web` 与 `packages/*`，仅用于历史追溯和经审计的数据迁移；其中的浏览器本地状态不属于正式产品数据，也不参与日常 CI、合并门禁或 Agent 验证。当前开发、验证、评审和生产部署均以仓库根目录的 v3 应用和 npm 脚本为准；恢复旧 workspace 验证必须从冻结标签 `legacy-workspace-last-green-2026-07-26` 发起独立治理变更。
+合并前的 pnpm 多包原型不属于正式产品数据，已从 main 文件树移除并由冻结标签保存。当前开发、验证、评审和生产部署均以仓库根目录的 v3 应用和 npm 脚本为准；不得把标签中的旧应用、PostgreSQL schema 或浏览器本地状态直接接回当前运行时。经审计迁移必须从标签建立隔离分支，保留来源证据，并通过当前 schema 和迁移边界导入。

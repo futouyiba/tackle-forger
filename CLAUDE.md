@@ -37,7 +37,7 @@ npm test
 npm run db:generate
 ```
 
-The repository retains the historical `apps/web` and `packages/*` pnpm workspace under `legacy-workspace/`, but it is not part of daily development, CI, merge gates, or Agent validation. The authoritative root v3 application uses npm. Any restoration of historical workspace validation is a dedicated governance change using the recovery evidence in `legacy-workspace-last-green-2026-07-26` (Node 22.16.0 / pnpm 10.33.2).
+The historical pnpm workspace has been removed from the main tree and is retained only through Git history and the annotated tag `legacy-workspace-last-green-2026-07-26` (commit `702938b36bed0c2ea5489238318778a18d53059f`, Node 22.16.0 / pnpm 10.33.2). The authoritative root v3 application uses npm. Any restoration must start on an isolated branch and pass a dedicated governance review; never reconnect the archived app, PostgreSQL schema, or browser-local state directly to the current runtime.
 
 On Windows, the recommended local launcher is:
 

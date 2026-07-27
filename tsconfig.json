@@ -37,9 +37,5 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": [
-    "node_modules",
-    "apps/web",
-    "packages"
-  ]
+  "exclude": ["node_modules"]
 }

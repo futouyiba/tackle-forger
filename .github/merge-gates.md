@@ -201,9 +201,9 @@ cursor.
 
 ### Historical workspace recovery evidence
 
-The historical pnpm workspace is outside daily CI, merge-gate evidence, and
-Agent workflow validation. It remains retained data, not a currently supported
-delivery target. The immutable annotated tag
+The historical pnpm workspace is outside the main tree, daily CI, merge-gate
+evidence, and Agent workflow validation. It is retained only in Git history,
+not as a currently supported delivery target. The immutable annotated tag
 `legacy-workspace-last-green-2026-07-26` resolves to
 `702938b36bed0c2ea5489238318778a18d53059f` and records its last known green
 baseline with Node `22.16.0` and pnpm `10.33.2`. Any future restoration must be

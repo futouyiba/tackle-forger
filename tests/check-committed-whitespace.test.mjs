@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { EMPTY_TREE_SHA, resolveCommittedWhitespaceRange } from "../scripts/check-committed-whitespace.mjs";
+import { EMPTY_TREE_SHA, isDirectExecution, resolveCommittedWhitespaceRange } from "../scripts/check-committed-whitespace.mjs";
 
 const ZERO_SHA = "0".repeat(40);
 // A syntactically valid 40-char SHA that will not exist in any test repository
@@ -34,6 +34,14 @@ async function createRepository(t) {
 function diffCheck(cwd, baseSha, headSha) {
   return spawnSync("git", ["diff", "--check", baseSha, headSha], { cwd, encoding: "utf8" });
 }
+
+test("committed-whitespace entrypoint recognizes the canonicalized script path", () => {
+  const scriptPath = path.resolve("scripts/check-committed-whitespace.mjs");
+  assert.equal(
+    isDirectExecution(new URL("../scripts/check-committed-whitespace.mjs", import.meta.url).href, scriptPath),
+    true,
+  );
+});
 
 test("新分支首次 push 从默认分支共同祖先检查，不回扫历史空白", async (t) => {
   const { cwd, mainSha } = await createRepository(t);

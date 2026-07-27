@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, chmodSync, existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { buildNavigationIndex, buildOwnedBaselineManifest, buildPatchManifest, checkFullReadSession, checkNavigationIndex, checkOwnedWhitespace, checkPolicy, checkReadReceipt, checkTaskBrief, checkTaskCard, checkVerdict, classifyOwnedPaths, completeTaskCard, fullReadSessionHash, openRegistryHash, ownedBaselineHash, patchHash, prepareTaskBrief, prepareTaskCard, promoteTaskBrief, receiptHash, runCli, runValidation, specReadPlan, taskBriefHash, upgradeTaskCard, VALIDATION_EXECUTION_TIERS, validationExecutionPlan, writeNavigationIndex, writeTaskBriefRun, writeTaskCardRun, writeTaskRun } from './workflow-contract.mjs';
+import { buildNavigationIndex, buildOwnedBaselineManifest, buildPatchManifest, checkFullReadSession, checkNavigationIndex, checkOwnedWhitespace, checkPolicy, checkReadReceipt, checkTaskBrief, checkTaskCard, checkVerdict, classifyOwnedPaths, completeTaskCard, fullReadSessionHash, isDirectExecution, isOnlyLineEndingConversionWarnings, openRegistryHash, ownedBaselineHash, patchHash, prepareTaskBrief, prepareTaskCard, promoteTaskBrief, receiptHash, runCli, runValidation, specReadPlan, taskBriefHash, upgradeTaskCard, VALIDATION_EXECUTION_TIERS, validationExecutionPlan, writeNavigationIndex, writeTaskBriefRun, writeTaskCardRun, writeTaskRun } from './workflow-contract.mjs';
 
 const POLICY_RELATIVE = '.codex/skills/tackle-agent-workflow/references/workflow-contract-policy.v2.json';
 const POLICY_CONSUMERS = [
@@ -61,6 +61,16 @@ function commitBase(root) {
   return command(root, ['rev-parse', 'HEAD']);
 }
 function cleanup(root) { rmSync(root, { recursive: true, force: true }); }
+function symlinkOrCapabilitySkip(t, target, linkPath) {
+  try {
+    symlinkSync(target, linkPath);
+    return true;
+  } catch (error) {
+    if (!['EPERM', 'EACCES'].includes(error.code)) throw error;
+    t.skip(`symlink capability unavailable: ${error.code}`);
+    return false;
+  }
+}
 function specHash(root) { return buildNavigationIndex(root).source.sha256; }
 function receipt(root, overrides = {}) {
   const specSha256 = specHash(root);
@@ -460,23 +470,20 @@ test('TaskBrief run storage publishes complete records atomically and rejects un
       chmodSync(storagePath, 0o600);
     }
     unlinkSync(storagePath);
-    try {
-      symlinkSync('../outside', storagePath);
+    await t.test('rejects a symlink at the final run path', (symlinkTest) => {
+      if (!symlinkOrCapabilitySkip(symlinkTest, '../outside', storagePath)) return;
       assert.throws(() => writeTaskBriefRun({ root, brief: prepared }), /unsafe/);
-    } catch (error) { if (!['EEXIST', 'EPERM', 'EACCES'].includes(error.code)) throw error; }
+    });
     const unsafeRoot = temporaryRepo();
     const unsafeTarget = mkdtempSync(path.join(os.tmpdir(), 'workflow-run-storage-target-'));
     try {
       taskBase(unsafeRoot);
       const unsafeDirectory = command(unsafeRoot, ['rev-parse', '--path-format=absolute', '--git-path', 'codex-runs']);
-      try {
-        symlinkSync(unsafeTarget, unsafeDirectory);
+      await t.test('rejects a symlinked run directory', (symlinkTest) => {
+        if (!symlinkOrCapabilitySkip(symlinkTest, unsafeTarget, unsafeDirectory)) return;
         assert.equal(lstatSync(unsafeDirectory).isSymbolicLink(), true);
         assert.throws(() => writeTaskBriefRun({ root: unsafeRoot, brief: prepareTaskBrief({ root: unsafeRoot, input: prepareInput(unsafeRoot) }) }), /run storage path escaped|directory is unsafe/);
-      } catch (error) {
-        if (!['EPERM', 'EACCES'].includes(error.code)) throw error;
-        t.diagnostic(`run-directory symlink unavailable: ${error.code}`);
-      }
+      });
     } finally { cleanup(unsafeRoot); cleanup(unsafeTarget); }
   } finally { cleanup(root); }
 });
@@ -523,7 +530,7 @@ test('TaskBrief preparation preserves every declared risk dimension and its scen
   } finally { cleanup(root); }
 });
 
-test('TaskBrief preparation fails closed for dirty, ambiguous, and unsupported inputs', () => {
+test('TaskBrief preparation fails closed for dirty, ambiguous, and unsupported inputs', async (t) => {
   const root = temporaryRepo();
   try {
     taskBase(root);
@@ -544,11 +551,11 @@ test('TaskBrief preparation fails closed for dirty, ambiguous, and unsupported i
     command(root, ['add', 'directory-path']); command(root, ['commit', '-qm', 'track directory fixture']);
     const currentInput = { ...input, baseSha: command(root, ['rev-parse', 'HEAD']) };
     assert.throws(() => prepareTaskBrief({ root, input: { ...currentInput, ownedPaths: ['directory-path'] } }), /Unsupported (base-tree|current) entry/);
-    try {
-      symlinkSync('AGENTS.md', path.join(root, 'linked-path'));
+    await t.test('rejects a symlink owned path', (symlinkTest) => {
+      if (!symlinkOrCapabilitySkip(symlinkTest, 'AGENTS.md', path.join(root, 'linked-path'))) return;
       command(root, ['add', 'linked-path']); command(root, ['commit', '-qm', 'track symlink fixture']);
       assert.throws(() => prepareTaskBrief({ root, input: { ...currentInput, baseSha: command(root, ['rev-parse', 'HEAD']), ownedPaths: ['linked-path'] } }), /Symlink/);
-    } catch (error) { if (!['EEXIST', 'EPERM', 'EACCES'].includes(error.code)) throw error; }
+    });
     write(root, 'dirty.txt', 'dirty\n');
     assert.throws(() => prepareTaskBrief({ root, input }), /clean worktree/);
   } finally { cleanup(root); }
@@ -558,13 +565,29 @@ test('owned whitespace checker catches a new untracked owned file', () => {
   const root = temporaryRepo();
   try {
     taskBase(root);
+    command(root, ['config', 'core.autocrlf', 'true']);
     const baseSha = command(root, ['rev-parse', 'HEAD']);
     write(root, 'new-owned.md', 'trailing space \n');
     assert.throws(() => checkOwnedWhitespace({ root, baseSha, ownedPaths: ['new-owned.md'] }), /Owned whitespace check failed.*trailing whitespace/);
     write(root, 'new-owned.md', 'clean\n');
     assert.deepEqual(checkOwnedWhitespace({ root, baseSha, ownedPaths: ['new-owned.md'] }).checkedPaths, ['new-owned.md']);
     assert.deepEqual(JSON.parse(runCli(['--check-owned-whitespace', '--base', baseSha, '--owned', 'new-owned.md'], root)).checkedPaths, ['new-owned.md']);
+    assert.equal(isOnlyLineEndingConversionWarnings("warning: in the working copy of 'new-owned.md', LF will be replaced by CRLF the next time Git touches it\n"), true);
+    assert.equal(isOnlyLineEndingConversionWarnings("warning: credential helper failed\n"), false);
+    assert.equal(isOnlyLineEndingConversionWarnings("new-owned.md:1: trailing whitespace.\n"), false);
   } finally { cleanup(root); }
+});
+
+test('workflow CLI entrypoint executes through the canonicalized worktree path', () => {
+  const scriptPath = path.resolve('.codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs');
+  assert.equal(isDirectExecution(new URL('./workflow-contract.mjs', import.meta.url).href, scriptPath), true);
+  const result = spawnSync(process.execPath, [scriptPath, '--check-policy'], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, '');
+  assert.match(result.stdout, /^Workflow policy is consistent\r?\n$/);
 });
 
 test('local TaskBrief preparation rejects a base before current HEAD', () => {
@@ -655,19 +678,85 @@ test('patch manifest classifies explicit owned paths and is deterministic', () =
   } finally { cleanup(root); }
 });
 
-test('patch manifest rejects traversal and symlinks', (t) => {
+test('patch manifest does not invent executable mode when core.filemode is false', () => {
+  const root = temporaryRepo();
+  try {
+    write(root, 'tool.sh', '#!/bin/sh\n');
+    const baseSha = commitBase(root);
+    command(root, ['config', 'core.filemode', 'false']);
+    chmodSync(path.join(root, 'tool.sh'), 0o755);
+    const entry = buildPatchManifest({ root, baseSha, ownedPaths: ['tool.sh'] }).entries[0];
+    assert.deepEqual([entry.state, entry.mode], ['unchanged', '100644']);
+  } finally { cleanup(root); }
+});
+
+test('patch manifest preserves an indexed executable mode when core.filemode is false', () => {
+  const root = temporaryRepo();
+  try {
+    write(root, 'base.txt', 'base\n');
+    const baseSha = commitBase(root);
+    command(root, ['config', 'core.filemode', 'false']);
+    write(root, 'indexed.sh', '#!/bin/sh\n');
+    command(root, ['add', 'indexed.sh']);
+    command(root, ['update-index', '--chmod=+x', 'indexed.sh']);
+    write(root, 'untracked.sh', '#!/bin/sh\n');
+    chmodSync(path.join(root, 'untracked.sh'), 0o755);
+    const entries = buildPatchManifest({ root, baseSha, ownedPaths: ['indexed.sh', 'untracked.sh'] }).entries;
+    assert.deepEqual(entries.map((entry) => [entry.path, entry.state, entry.mode]), [
+      ['indexed.sh', 'tracked_changed', '100755'],
+      ['untracked.sh', 'untracked', '100644'],
+    ]);
+  } finally { cleanup(root); }
+});
+
+test('patch manifest records staged executable mode changes when core.filemode is false', () => {
+  const root = temporaryRepo();
+  try {
+    write(root, 'make-executable.sh', '#!/bin/sh\n');
+    write(root, 'make-non-executable.sh', '#!/bin/sh\n');
+    command(root, ['add', '.']);
+    command(root, ['update-index', '--chmod=+x', 'make-non-executable.sh']);
+    command(root, ['commit', '-qm', 'base']);
+    const baseSha = command(root, ['rev-parse', 'HEAD']);
+    command(root, ['config', 'core.filemode', 'false']);
+    command(root, ['update-index', '--chmod=+x', 'make-executable.sh']);
+    command(root, ['update-index', '--chmod=-x', 'make-non-executable.sh']);
+    const entries = buildPatchManifest({
+      root,
+      baseSha,
+      ownedPaths: ['make-executable.sh', 'make-non-executable.sh'],
+    }).entries;
+    assert.deepEqual(entries.map((entry) => [entry.path, entry.state, entry.mode]), [
+      ['make-executable.sh', 'tracked_changed', '100755'],
+      ['make-non-executable.sh', 'tracked_changed', '100644'],
+    ]);
+  } finally { cleanup(root); }
+});
+
+test('patch manifest fails closed when the Git index cannot be inspected', () => {
+  const root = temporaryRepo();
+  try {
+    write(root, 'tool.sh', '#!/bin/sh\n');
+    const baseSha = commitBase(root);
+    command(root, ['config', 'core.filemode', 'false']);
+    writeFileSync(path.join(root, '.git', 'index'), 'corrupt index');
+    assert.throws(
+      () => buildPatchManifest({ root, baseSha, ownedPaths: ['tool.sh'] }),
+      /Cannot inspect index entry: tool\.sh/,
+    );
+  } finally { cleanup(root); }
+});
+
+test('patch manifest rejects traversal and symlinks', async (t) => {
   const root = temporaryRepo();
   try {
     write(root, 'safe.txt', 'safe\n');
     const baseSha = commitBase(root);
     assert.throws(() => buildPatchManifest({ root, baseSha, ownedPaths: ['../safe.txt'] }), /Invalid owned path/);
-    try {
-      symlinkSync('safe.txt', path.join(root, 'link.txt'));
-    } catch (error) {
-      t.skip(`symlinks unavailable: ${error.code}`);
-      return;
-    }
-    assert.throws(() => buildPatchManifest({ root, baseSha, ownedPaths: ['link.txt'] }), /Symlink/);
+    await t.test('rejects a symlink entry when the platform supports creating one', (symlinkTest) => {
+      if (!symlinkOrCapabilitySkip(symlinkTest, 'safe.txt', path.join(root, 'link.txt'))) return;
+      assert.throws(() => buildPatchManifest({ root, baseSha, ownedPaths: ['link.txt'] }), /Symlink/);
+    });
   } finally { cleanup(root); }
 });
 
@@ -1536,6 +1625,7 @@ test('merge gate document owns the complete review signal envelope', () => {
   assert.match(gatePolicy, /merge one qualifying governance pull request under this repository's\s+standing authorization without separate owner approval/);
   assert.match(gatePolicy, /the fully satisfied workflow-governance path activates the same standing\s+authorization even though the checker remains non-`READY`/);
   assert.match(gatePolicy, /`GATE_PROGRAM_BOOTSTRAP_REQUIRED` is not\s+eligible because the live base has no trusted checker to execute/);
+  assert.match(gatePolicy, /Exit code 0 with empty output[\s\S]+must be treated as blocked/);
   assert.match(gatePolicy, /must be read from the clean live-base copy of this document, never from the\s+reviewed head/);
   assert.match(gatePolicy, /Changes to this policy in the head take effect only after merge\s+and only for later pull requests/);
   assert.match(gatePolicy, /Governance-Exception: ACCEPTED/);

@@ -1,12 +1,34 @@
 import { spawnSync } from "node:child_process";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 export const EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 
 const ZERO_SHA = /^0{40}$/;
 const COMMIT_SHA = /^[0-9a-f]{40}$/i;
+
+function normalizeNativePathForComparison(value) {
+  const normalized = path.normalize(value);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+export function isDirectExecution(importMetaUrl, argvPath = process.argv[1]) {
+  if (!argvPath) return false;
+  const modulePath = fileURLToPath(importMetaUrl);
+  const candidatePath = path.resolve(argvPath);
+  if (normalizeNativePathForComparison(candidatePath) === normalizeNativePathForComparison(modulePath)) return true;
+  try {
+    return normalizeNativePathForComparison(realpathSync.native(candidatePath))
+      === normalizeNativePathForComparison(realpathSync.native(modulePath));
+  } catch (error) {
+    if (path.basename(candidatePath).toLowerCase() === path.basename(modulePath).toLowerCase()) {
+      throw new Error(`Cannot resolve entrypoint identity for ${candidatePath}: ${error.message}`);
+    }
+    return false;
+  }
+}
 
 function runGit(args, { cwd, inherit = false } = {}) {
   return spawnSync("git", args, {
@@ -161,10 +183,7 @@ export function checkCommittedWhitespace(environment, { cwd = process.cwd() } = 
   return range;
 }
 
-const isMainModule = process.argv[1]
-  && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
-
-if (isMainModule) {
+if (isDirectExecution(import.meta.url)) {
   try {
     checkCommittedWhitespace(process.env);
   } catch (error) {

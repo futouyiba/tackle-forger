@@ -1,84 +1,69 @@
 ## Linked issue
 
-Closes #
+<!-- Use either `Closes #123` or `No linked issue — <reason>`. A governance PR does not need a linked Issue when the reason is explicit. -->
 
-## Base and scope
+## Summary and scope
 
-- Base commit:
-- In scope:
-- Explicitly out of scope:
-- Shared contracts touched (`lib/types.ts`, migrations, publishing, v3, API contracts):
-- Dependency and merge order:
-
-## What changed and why
-
-<!-- Summarize the implementation and why it satisfies the linked issue. -->
-
-## Authority and behavior boundaries
-
-<!-- Identify the authoritative source for every changed behavior. Confirm that the frontend does not derive a second state/permission/rule model. -->
-
-- Canonical specification or ADR:
-- Server-side authority and re-authorization:
-- Open decision / fail-closed behavior:
-- External side effects and activation sequence:
+<!-- Briefly explain what changed, why, what is included, and any important exclusion. Do not copy the full TaskBrief. -->
 
 ## Validation evidence
 
-<!-- List exact commands and results. Write "Not run" with a reason instead of implying success. -->
+<!--
+Record the checks actually performed and their results. Link durable logs or runs when available.
+For anything expected but not run, write `Not run — <reason>`. Never imply success.
+Do not copy the TaskBrief validation plan, environment hashes, or full CI job inventory.
+-->
 
 | Command or check | Result | Evidence |
 | --- | --- | --- |
 |  |  |  |
 
-### Scenario coverage
-
-- [ ] Normal path
-- [ ] Boundary conditions
-- [ ] Conflict or concurrent revision change
-- [ ] Failure recovery and idempotent retry
-- [ ] Permission denial and server-side re-authorization
-- [ ] Version freeze / historical Snapshot invariants
-- [ ] Not applicable scenarios are explained below
-
-### Migration and compatibility
-
-- [ ] Existing and unknown fields are preserved
-- [ ] Stable IDs and historical references are preserved
-- [ ] Migration is idempotent when executed twice
-- [ ] A real or redacted production-shape fixture is covered
-- [ ] Published Snapshot payload and hash remain unchanged
-- [ ] Not applicable because this change has no persisted-data impact
-
-### Required gates
-
-- [ ] Branch was synchronized with the latest `main` before final validation
-- [ ] Relevant root npm checks pass
-- [ ] GitHub Actions required checks pass
-
-## Visual evidence
+## Risk triggers
 
 <!--
-For ordinary user-visible work, retain "视觉与交互统一检查待执行". A minimal render
-smoke may establish basic loadability but is not full visual acceptance and never
-removes that marker. Complete the detailed evidence below only when this PR explicitly
-scopes visual or interaction review. For a non-user-visible change, write "N/A" and
-explain why. If explicitly scoped rendering was not possible, write "Incomplete" with
-the blocker; do not claim the interface is visually complete.
+Mirror only the six TaskBrief.riskDimensions through the five checkboxes below:
+- persistedData → Persisted data or migration
+- historicalSnapshots → Historical or published artifacts
+- authorization or concurrency → Authorization or concurrency
+- externalSideEffects → External side effects
+- userVisible → User-visible UI or interaction
+
+Leave non-applicable items unchecked. Do not add N/A explanations.
+These checkboxes do not derive or override riskProfile, reviewTier, or the merge gate's normal/high classification.
 -->
 
-| Required evidence | Detail |
-| --- | --- |
-| Unified visual and interaction review | 视觉与交互统一检查待执行 / Full visual and interaction review completed / N/A (reason) / Incomplete (blocker) |
-| Minimal render smoke | Not run (reason) / Completed (path and result); this never changes the unified-review status |
-| Full-review scope and states | Required only for full review: changed path plus applicable loading, empty, error, populated, and transition states |
-| Full-review viewports and evidence | Required only for full review: exact viewport sizes and screenshots or recording links |
-| Full-review observations and recheck | Required only for full review: issues/fixes and final rendered observation |
+- [ ] Persisted data or migration
+- [ ] Historical or published artifacts
+- [ ] Authorization or concurrency
+- [ ] External side effects
+- [ ] User-visible UI or interaction
+  - If checked: **视觉与交互统一检查待执行**
 
-## Risks, recovery, and rollback
+<!--
+For every checked item, add only the applicable details below; delete unused prompts.
 
-<!-- Describe data compatibility, immutable Snapshot impact, external partial-write recovery, deployment concerns, and a safe rollback path. -->
+- Persisted data or migration: compatibility and unknown-field preservation; stable identities; production-shape fixture; second-run no-op; recovery or rollback.
+- Historical or published artifacts: artifacts and hashes that must remain frozen; replay/readback evidence; handling of unrepresentable historical data.
+- Authorization or concurrency: denied path; server-side re-authorization at commit; conflict/concurrency behavior; stale-operation protection and recovery.
+- External side effects: preparation → write → readback → activation; idempotency key; partial-failure recovery or compensation; activation/rollback boundary.
+- User-visible UI or interaction:
+  - Keep the visible pending marker above until the unified visual and interaction review is complete.
+  - When completed, replace it with rendered states, viewports, screenshot or recording links, findings, fixes, and the final recheck.
+  - Minimal render smoke: <result or `Not run — <reason>`>. A minimal render smoke does not complete the unified visual review.
+-->
 
-## Excluded follow-up work
+## Review and CI evidence
 
-<!-- Link separate Issues instead of silently expanding this pull request. -->
+<!--
+Give current Review and CI status with durable links. If evidence is unavailable, write `Pending` or `Not run — <reason>`.
+Do not copy exact head/base or the full CI job inventory into this body.
+Merge readiness is evaluated live immediately before an actual merge; do not copy a merge-gate result here because it can become stale.
+For a high-risk PR, link the substantive current-head review carrying the required `Agent-Review: PASS` signal.
+-->
+
+- Review:
+- CI:
+
+## Residual risk or follow-up
+
+<!-- Describe remaining risk, rollback constraints, blocked dependencies, or linked follow-up Issues. If none were identified, say `None identified.` -->

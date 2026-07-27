@@ -1,0 +1,251 @@
+{
+  "schemaVersion": "workflow-contract-policy/v2",
+  "dirtyIsolation": {
+    "issuePr": "clean_synced",
+    "localOwnedBaseline": "tackle-owned-baseline/v1"
+  },
+  "localVerdict": {
+    "acceptedSchemas": [
+      "tackle-local-verdict/v1",
+      "tackle-local-result/v2"
+    ],
+    "compactRequired": [
+      "taskBriefSha256",
+      "artifactIdentity",
+      "verdict",
+      "findings"
+    ],
+    "preferredSchema": "tackle-local-result/v2",
+    "required": [
+      "taskBriefSha256",
+      "specReceiptHashes",
+      "dirtyWorktreeDisposition",
+      "specSha256",
+      "baseSha",
+      "reviewedHead",
+      "ownedPaths",
+      "artifactIdentity"
+    ],
+    "schema": "tackle-local-verdict/v1"
+  },
+  "reviewSeverity": {
+    "informational": [
+      "P3"
+    ],
+    "passBlocking": [
+      "P0",
+      "P1",
+      "P2"
+    ]
+  },
+  "reviewTier": {
+    "strictWhenRiskDimensions": [
+      "persistedData",
+      "historicalSnapshots",
+      "concurrency",
+      "authorization",
+      "externalSideEffects"
+    ],
+    "strictWhenRiskProfile": [
+      "unknown_high_risk"
+    ],
+    "values": [
+      "fast",
+      "standard",
+      "strict"
+    ]
+  },
+  "scopedEligibility": {
+    "allowedPathClasses": [
+      "AGENTS.md",
+      "CLAUDE.md",
+      "docs/README.md",
+      "docs/spec-v3/README.md",
+      "docs/spec-v3/manifest.json",
+      "scripts/spec-v3-modules.mjs",
+      ".codex/skills/tackle-agent-workflow/**",
+      ".codex/skills/agent-project-bootstrap/**",
+      ".codex/skills/agent-issue-loop/**",
+      ".codex/skills/agent-pr-loop/**",
+      ".claude/skills/agent-pr-loop/**",
+      "docs/(workflow|agent-governance)-*.md",
+      ".github/*.md|yml|yaml",
+      ".github/workflows/*.yml|yaml"
+    ],
+    "unknownForcesFull": true
+  },
+  "specReading": {
+    "applicableOpenSectionPrefix": "OPEN:",
+    "fullProfileReviewTiers": [
+      "strict"
+    ],
+    "openRegistrySection": "OPEN_REGISTRY",
+    "routedBaseSections": [
+      "README",
+      "V3_INDEX",
+      "0",
+      "19",
+      "OPEN_REGISTRY"
+    ],
+    "scopedRiskProfiles": [
+      "workflow_docs_metadata"
+    ]
+  },
+  "specReceipt": {
+    "schema": "tackle-spec-read/v1"
+  },
+  "taskCard": {
+    "dailySemanticFields": [
+      "taskId",
+      "workflowMode",
+      "scope",
+      "ownedPaths",
+      "riskProfile",
+      "changeClass"
+    ],
+    "schema": "tackle-task-card/v1"
+  },
+  "taskBrief": {
+    "acceptedSchemas": [
+      "tackle-task-brief/v1",
+      "tackle-task-brief/v2"
+    ],
+    "conditionalNaApplicability": {
+      "nonWorkflowForbids": "product_runtime_tests",
+      "workflowMetadataRequires": "product_runtime_tests"
+    },
+    "conditionalNaCatalog": {
+      "productRuntimeTests": "product_runtime_tests"
+    },
+    "phaseReceiptsByReviewTier": {
+      "pre_dispatch": {
+        "fast": [
+          "coordinator"
+        ],
+        "standard": [
+          "coordinator"
+        ],
+        "strict": [
+          "coordinator"
+        ]
+      },
+      "verdict": {
+        "fast": {
+          "all": [
+            "coordinator",
+            "coding"
+          ]
+        },
+        "standard": {
+          "issue": [
+            "coordinator",
+            "coding"
+          ],
+          "local": [
+            "coordinator",
+            "coding"
+          ],
+          "pull_request": [
+            "coordinator",
+            "coding",
+            "review"
+          ]
+        },
+        "strict": {
+          "all": [
+            "coordinator",
+            "coding",
+            "review"
+          ]
+        }
+      }
+    },
+    "fastLocalCompletion": {
+      "allowedChangeClass": "workflow_metadata",
+      "allowedRiskProfile": "workflow_docs_metadata",
+      "requiresCompactHandoff": true,
+      "requiresLocalResult": false,
+      "requiresReviewer": false,
+      "requiresTaskBrief": false
+    },
+    "preferredSchema": "tackle-task-brief/v2",
+    "schema": "tackle-task-brief/v1"
+  },
+  "validationMatrix": {
+    "executionTiers": {
+      "business_code": {
+        "iterationFullCi": "forbidden",
+        "requiredEvidence": [
+          "typecheck",
+          "lint",
+          "related_tests"
+        ]
+      },
+      "deployment_configuration": {
+        "iterationFullCi": "forbidden",
+        "requiredEvidence": [
+          "config_validation",
+          "service_restart",
+          "actual_listener",
+          "health_check"
+        ]
+      },
+      "documentation_or_nonbehavior_workflow": {
+        "iterationFullCi": "forbidden",
+        "requiredEvidence": [
+          "format_reference_scoped_diff"
+        ]
+      },
+      "durable_or_external": {
+        "iterationFullCi": "forbidden",
+        "requiredEvidence": [
+          "boundary",
+          "failure_recovery",
+          "idempotency",
+          "readback"
+        ]
+      },
+      "focused_script_or_rule": {
+        "iterationFullCi": "forbidden",
+        "requiredEvidence": [
+          "targeted_test"
+        ]
+      },
+      "inspection_only": {
+        "iterationFullCi": "forbidden",
+        "requiredEvidence": [
+          "fetch_compare_history_or_status"
+        ]
+      },
+      "rebase_refresh": {
+        "candidateFullCi": "broad_impact_or_new_stable_candidate",
+        "requiredEvidence": [
+          "actual_diff_classification",
+          "affected_checks"
+        ]
+      },
+      "stable_pr_candidate": {
+        "candidateFullCi": "once_per_exact_head_base",
+        "requiredEvidence": [
+          "root_full_ci",
+          "windows_policy"
+        ]
+      }
+    },
+    "mandatoryWorkflowCommands": [
+      "node scripts/spec-v3-modules.mjs --check",
+      "node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-index",
+      "node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-policy",
+      "node --test .codex/skills/tackle-agent-workflow/scripts/workflow-contract.test.mjs"
+    ],
+    "prFinalCommandsNonWaivable": [
+      "npm run typecheck",
+      "npm run lint",
+      "npm test"
+    ],
+    "userVisibleScenario": "unified_visual_review_pending_or_completed"
+  },
+  "validationRunner": {
+    "schema": "tackle-validation-summary/v1"
+  }
+}

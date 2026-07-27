@@ -9,4 +9,4 @@ On every heartbeat:
 5. If nothing is actionable, end this heartbeat quietly. Do not ask the user to copy status from another conversation.
 6. Notify the user only when a documented human gate is reached or the configured retry limit is exhausted. First record a concise blocker and the exact decision needed on the linked Issue or PR.
 
-Stay inside the configured goal and standing authorization. Never expand scope, delete records, change acceptance criteria, handle secrets or billing, perform destructive data changes, merge high-risk work, deploy, publish, or release without explicit authorization.
+Stay inside the configured goal and standing authorization. Apply the repository's sole merge authority for every merge decision, including high-risk review, live gates, user holds, and readback. Never expand scope, delete records, change acceptance criteria, handle secrets or billing, perform destructive data changes, deploy, publish, or release without explicit authorization.

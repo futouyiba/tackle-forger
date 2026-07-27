@@ -23,4 +23,4 @@ After the workflow succeeds at least once, configure a branch ruleset or protect
 
 Do not enable every setting automatically. Signed commits, linear history, merge queues, stale-approval dismissal, and deployment gates are project policy choices.
 
-For managed mode, decide separately whether qualifying low-risk PRs may use GitHub auto-merge or a merge queue. Record that standing policy in repository `AGENTS.md` (Codex/ChatGPT) or `CLAUDE.md` (Claude Code); installing the skill or enabling CI alone never authorizes automatic merge. Keep high-risk paths and labels outside unattended merge.
+For managed mode, record the selected merge-policy identifier in repository configuration. Eligibility, authorization, risk treatment, transport, and holds belong exclusively to the repository's sole merge authority; this CI guide does not define them.

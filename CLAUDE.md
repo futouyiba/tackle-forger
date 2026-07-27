@@ -1,16 +1,22 @@
 # CLAUDE.md
 
+<!-- workflow-contract-policy-ref/v2: .codex/skills/tackle-agent-workflow/references/workflow-contract-policy.v2.json -->
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Read before changing code
 
-Before implementation, refactoring, review, or test work, read these files completely:
+Before implementation, refactoring, review, or test work, follow the generated read plan:
 
 - `AGENTS.md`
 - `docs/README.md`
-- `docs/tackle-forger-development-spec-v3.md`
+- `docs/spec-v3/README.md`
+- `docs/spec-v3/00-authority.md`
+- section 19 of `docs/spec-v3/05-open-decisions.md`
+- `.codex/skills/tackle-agent-workflow/references/v3-open-registry.json`
+- routed sections plus the canonical OPEN subsections and dependencies selected mechanically from TaskBrief `applicableIds`
 
-The v3 specification is the sole authoritative product/domain specification. Files under `docs/2026-*` and `crystal/` are historical. If sources conflict, follow the user's latest explicit decision, update the canonical specification, and then make the implementation match it. Do not resolve open decisions by hard-coding an assumption.
+Read the full modular v3 specification for strict/high-risk work, unknown or broad scope, canonical structure changes, or when OPEN applicability cannot be determined reliably. The generated OPEN registry is navigation evidence, not product authority. The v3 specification is the sole authoritative product/domain specification. Files under `docs/2026-*` and `crystal/` are historical. If sources conflict, follow the user's latest explicit decision, update the canonical specification, and then make the implementation match it. Do not resolve open decisions by hard-coding an assumption.
 
 项目尚未正式交付，无生产环境历史 workspace state 需迁就。PR2b 切流后生产读取链默认走 WQ8w（`CANONICAL_FEISHU_WORKBOOK`）。旧表 YsEKw 的运行时兼容代码与 `LEGACY_YS_EKW_*` 常量已移除（历史拓扑仅 spec §14 审计文档保留）；`/wiki/` 通用解析能力保留。`lib/migrations.ts` 的 schema 迁移链仍需维护与测试覆盖。
 
@@ -162,4 +168,9 @@ New domain behavior must cover normal, boundary, conflict, recovery/version-free
 
 ## Agent 工作模式
 
-实现、修改、调查由主 agent 直接做（直接 Edit/Write、跑 typecheck/lint/test、commit、push），或由coordinator按任务风险、范围、可用能力与资源安排实施容量。独立审核始终只读并基于证据；coordinator按相同因素决定审核者数量、专长、模型、推理强度与串并行安排，并在拉起时输出每个审查范围自包含的「审核清单」（仓库、PR 号、head 完整 SHA、base、改动摘要、重点核实项、PASS/发现格式），以便粘贴到常驻审核 agent 窗口。每个已分配范围都必须覆盖当前精确head/base；所有发现由coordinator处置后才可整合唯一最终审查信号或本地verdict。审核独立性靠独立 reviewer 保证，不自己审自己；收据哈希只证明覆盖记录，不证明Agent身份。配套 skill 见 `.claude/skills/agent-pr-loop/SKILL.md`。
+Task Card、TaskBrief、receipt、reviewTier、风险下限、验证矩阵和审核边界统一遵循
+`.codex/skills/tackle-agent-workflow/references/workflow-contract-policy.v2.json`；本文件不维护平行规则。Claude 的PR协调、审核与修复步骤见`.claude/skills/agent-pr-loop/SKILL.md`。
+
+本仓库managed mode为`autonomous`，作用域为当前仓库和当前明确目标，merge policy为`qualified_auto_merge`，重试上限为3；活跃任务轮次或已配置唤醒作为heartbeat，当前不声称存在额外后台Automation。独立review按reviewTier执行；合并资格、授权及暂停条件只由`.github/merge-gates.md`定义；部署/发布策略为`never`。
+
+Pull Request合并资格、CI provenance、review signal、授权、暂停、workflow治理例外和合并回读统一遵循`.github/merge-gates.md`，本文件不维护第二份规则。合并不扩张为部署、发布、删除、范围扩张或其他外部副作用。

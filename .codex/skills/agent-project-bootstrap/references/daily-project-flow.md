@@ -54,6 +54,7 @@ Do not ask the user to search GitHub or memorize a number when the agent can res
 | Create task branch | Automatic | Ask |
 | Open linked PR | Automatic | Ask |
 | Record tests and move to In review | Automatic | Ask |
+| Merge an exact-head/base PR accepted by the live repository gate | Automatic | Ask |
 | Create a clearly requested Issue | Allowed when repository policy says so | Ask once |
 | Change scope or acceptance criteria | Ask | Ask |
 | Close as Not planned, delete, publish, deploy | Ask | Ask |
@@ -75,7 +76,7 @@ Pause for scope or acceptance changes, unresolved product decisions, ambiguous d
 
 Use the separately installed `$agent-pr-loop` Skill when the user says `搞定 PR`, explicitly names that Skill, or asks to run one PR through comments, review, repair, CI, and completion. Bootstrap remains authoritative for work selection and repository policy; `agent-pr-loop` owns the single-PR state machine.
 
-For that one PR, preserve the all-green exact-head review and CI result as integration evidence. Pause only at repository-recorded human gates, missing business decisions, unavailable required validation, ambiguous dependencies, external identity requirements, merge-triggered side effects, or exhausted retries.
+For that one PR, preserve the all-green exact-head review and CI result as integration evidence. Apply the repository's sole merge authority to qualification, authorization, user holds, transport cancellation, refresh, and readback. Pause separately for missing business decisions, unavailable required validation, ambiguous dependencies, external identity requirements, merge-triggered side effects, or exhausted retries.
 
 During review and repair, push only the exact PR head and verify its remote SHA. If a merge is performed, prefer GitHub server-side PR merge, read back the result, and fetch remote refs when useful; do not push the merged PR head, push a stale local base, or run `git push --all`, `git push --mirror`, a post-merge force-push, or a bulk tag push.
 
@@ -85,7 +86,7 @@ For `收需求`, first normalize candidate items, search for duplicates, and cla
 
 ## Integrate approved pull requests
 
-Treat `合并收尾` and the expanded `/prompts:integrate` (Codex) or `/integrate` (Claude Code) shortcut as explicit merge authorization for the current turn only. Limit the operation to the current repository and any scope the user supplied.
+`合并收尾` and the expanded `/prompts:integrate` (Codex) or `/integrate` (Claude Code) shortcut request an immediate scan; they do not define authorization. Limit the operation to the current repository and any scope the user supplied, then apply its sole merge authority.
 
 1. Fetch current GitHub state; do not decide from a stale local snapshot.
 2. Select open, non-draft PRs that have all required approvals.

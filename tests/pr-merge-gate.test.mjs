@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import path from "node:path";
+import process from "node:process";
 import test from "node:test";
 
 import {
@@ -33,6 +36,24 @@ test("github.com merge-gate checks fail closed for a redirected API host", () =>
     () => resolveGithubApiBase("https://github-api-attacker.invalid"),
     /GITHUB_API_URL must be exactly https:\/\/api\.github\.com/,
   );
+});
+
+test("merge-gate direct entrypoint cannot exit successfully with empty output", () => {
+  const scriptPath = path.resolve("scripts/check-pr-merge-gate.mjs");
+  const fixturePath = path.resolve("tests/fixtures/merge-gate/ready-normal.json");
+  const result = spawnSync(process.execPath, [
+    scriptPath,
+    "--fixture",
+    fixturePath,
+    "--risk",
+    "normal",
+  ], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, "");
+  assert.match(result.stdout, /^READY PR #/);
 });
 
 test("normal-risk current-head CI is merge-ready", async () => {

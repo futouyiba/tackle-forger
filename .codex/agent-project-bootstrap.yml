@@ -1,0 +1,9 @@
+version: 1
+profile: worktree
+task_system: github_issues
+workflow_mode: managed
+github_project: pending
+github_project_automation: pending
+managed_mode: autonomous
+github_agentic_workflows: off
+initialized_at: 2026-07-27

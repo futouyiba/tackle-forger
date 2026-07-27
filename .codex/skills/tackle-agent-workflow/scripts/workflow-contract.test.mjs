@@ -1,11 +1,21 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, chmodSync, existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { buildNavigationIndex, buildOwnedBaselineManifest, buildPatchManifest, checkFullReadSession, checkNavigationIndex, checkOwnedWhitespace, checkPolicy, checkReadReceipt, checkTaskBrief, checkTaskCard, checkVerdict, classifyOwnedPaths, fullReadSessionHash, openRegistryHash, ownedBaselineHash, patchHash, prepareTaskBrief, prepareTaskCard, promoteTaskBrief, receiptHash, runCli, runValidation, specReadPlan, taskBriefHash, upgradeTaskCard, VALIDATION_EXECUTION_TIERS, validationExecutionPlan, writeNavigationIndex, writeTaskBriefRun, writeTaskCardRun, writeTaskRun } from './workflow-contract.mjs';
+import { buildNavigationIndex, buildOwnedBaselineManifest, buildPatchManifest, checkFullReadSession, checkNavigationIndex, checkOwnedWhitespace, checkPolicy, checkReadReceipt, checkTaskBrief, checkTaskCard, checkVerdict, classifyOwnedPaths, completeTaskCard, fullReadSessionHash, isDirectExecution, isOnlyLineEndingConversionWarnings, openRegistryHash, ownedBaselineHash, patchHash, prepareTaskBrief, prepareTaskCard, promoteTaskBrief, receiptHash, runCli, runValidation, specReadPlan, taskBriefHash, upgradeTaskCard, VALIDATION_EXECUTION_TIERS, validationExecutionPlan, writeNavigationIndex, writeTaskBriefRun, writeTaskCardRun, writeTaskRun } from './workflow-contract.mjs';
+
+const POLICY_RELATIVE = '.codex/skills/tackle-agent-workflow/references/workflow-contract-policy.v2.json';
+const POLICY_CONSUMERS = [
+  'AGENTS.md',
+  'CLAUDE.md',
+  '.codex/skills/tackle-agent-workflow/SKILL.md',
+  '.codex/skills/agent-pr-loop/SKILL.md',
+  '.codex/skills/agent-issue-loop/SKILL.md',
+  '.claude/skills/agent-pr-loop/SKILL.md',
+];
 
 function command(root, args) { return execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim(); }
 function canonicalJson(value) {
@@ -51,14 +61,30 @@ function commitBase(root) {
   return command(root, ['rev-parse', 'HEAD']);
 }
 function cleanup(root) { rmSync(root, { recursive: true, force: true }); }
+function symlinkOrCapabilitySkip(t, target, linkPath) {
+  try {
+    symlinkSync(target, linkPath);
+    return true;
+  } catch (error) {
+    if (!['EPERM', 'EACCES'].includes(error.code)) throw error;
+    t.skip(`symlink capability unavailable: ${error.code}`);
+    return false;
+  }
+}
 function specHash(root) { return buildNavigationIndex(root).source.sha256; }
 function receipt(root, overrides = {}) {
   const specSha256 = specHash(root);
-  return {
+  const result = {
     schema: 'tackle-spec-read/v1', taskId: 'task-1', role: 'coordinator', specSha256,
     profile: 'FULL', riskProfile: 'workflow_docs_metadata', relevantSections: ['1', '20'],
     requiredSections: ['README', 'V3_INDEX', 'FULL_V3'], readSections: ['README', 'V3_INDEX', 'FULL_V3'], reason: 'coordination', ...overrides,
   };
+  if (result.profile === 'SCOPED') {
+    const plan = specReadPlan({ root, role: result.role, riskProfile: result.riskProfile, relevantSections: result.relevantSections, applicableIds: [] });
+    result.requiredSections = plan.requiredSections;
+    result.readSections = plan.requiredSections;
+  }
+  return result;
 }
 function fullReadSession(root, overrides = {}) {
   const fullReadReceipt = receipt(root);
@@ -70,18 +96,20 @@ function fullReadSession(root, overrides = {}) {
 }
 function reusedReceipt(root, overrides = {}) {
   const session = fullReadSession(root);
+  const requiredSections = specReadPlan({ root, role: 'coordinator', riskProfile: 'workflow_docs_metadata', relevantSections: ['1', '20'], applicableIds: [] }).requiredSections;
   return {
     schema: 'tackle-spec-read/v2', taskId: 'task-2', role: 'coordinator', specSha256: specHash(root), profile: 'REUSE_FULL', riskProfile: 'workflow_docs_metadata', relevantSections: ['1', '20'],
-    requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'same agent, explicit continuous context',
+    requiredSections, readSections: requiredSections, reason: 'same agent, explicit continuous context',
     reuseEvidence: { session, sessionSha256: fullReadSessionHash(session), agentIdentity: session.agentIdentity, contextSessionId: session.contextSessionId }, ...overrides,
   };
 }
 function reusedReceiptForRole(root, role, overrides = {}) {
   const fullReadReceipt = receipt(root, { taskId: 'task-2', role });
   const session = { ...fullReadSession(root), fullReadReceipt };
+  const requiredSections = specReadPlan({ root, role, riskProfile: 'workflow_docs_metadata', relevantSections: ['1', '20'], applicableIds: [] }).requiredSections;
   return {
     schema: 'tackle-spec-read/v2', taskId: 'task-2', role, specSha256: specHash(root), profile: 'REUSE_FULL', riskProfile: 'workflow_docs_metadata', relevantSections: ['1', '20'],
-    requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'same agent, explicit continuous context',
+    requiredSections, readSections: requiredSections, reason: 'same agent, explicit continuous context',
     reuseEvidence: { session, sessionSha256: fullReadSessionHash(session), agentIdentity: session.agentIdentity, contextSessionId: session.contextSessionId }, ...overrides,
   };
 }
@@ -94,16 +122,17 @@ function brief(root, overrides = {}) {
   const openIds = buildNavigationIndex(root).openRegistry.map((entry) => entry.id);
   return {
     schema: 'tackle-task-brief/v1', taskId: 'task-1', workflowMode: 'local', phase: 'pre_dispatch', specSha256: coordinatorReceipt.specSha256,
-    baseSha, reviewedHead: 'WORKTREE', scope: 'workflow hardening', relevantSections: ['1', '20'], openDecisionCheck: { registrySha256: openRegistryHash(root), checkedIds: openIds, applicableIds: openIds, noApplicableReason: null }, riskProfile: 'workflow_docs_metadata', scopeHasRuntimeSemantics: false, changeClass: 'workflow_metadata', allowedChanges: ['AGENTS.md'], acceptanceCriteria: ['contract validates'], exclusions: ['product runtime'], riskDimensions: { persistedData: false, historicalSnapshots: false, concurrency: false, authorization: false, externalSideEffects: false, userVisible: false }, validationPlan: { requiredCommands: ['node scripts/spec-v3-modules.mjs --check', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-policy', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-index', 'node --test .codex/skills/tackle-agent-workflow/scripts/workflow-contract.test.mjs', ownedWhitespaceCommand(baseSha, ['AGENTS.md'])], requiredScenarios: ['authority_and_scoped_diff'], intentionallyNotApplicable: { product_runtime_tests: 'No product code changes.' } },
+    baseSha, reviewedHead: 'WORKTREE', scope: 'workflow hardening', relevantSections: ['1', '20'], openDecisionCheck: { registrySha256: openRegistryHash(root), checkedIds: openIds, applicableIds: [], noApplicableReason: 'No OPEN decision applies to this workflow-only fixture.' }, riskProfile: 'workflow_docs_metadata', reviewTier: 'strict', scopeHasRuntimeSemantics: false, changeClass: 'workflow_metadata', allowedChanges: ['AGENTS.md'], acceptanceCriteria: ['contract validates'], exclusions: ['product runtime'], riskDimensions: { persistedData: false, historicalSnapshots: false, concurrency: false, authorization: false, externalSideEffects: false, userVisible: false }, validationPlan: { requiredCommands: ['node scripts/spec-v3-modules.mjs --check', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-policy', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-index', 'node --test .codex/skills/tackle-agent-workflow/scripts/workflow-contract.test.mjs', ownedWhitespaceCommand(baseSha, ['AGENTS.md'])], requiredScenarios: ['authority_and_scoped_diff'], intentionallyNotApplicable: { product_runtime_tests: 'No product code changes.' } },
     specReadReceipts: [coordinatorReceipt], ownedPaths: ['AGENTS.md'], preexistingOwnedPaths: [],
     preexistingUnownedChanges: [], dirtyWorktreeDisposition: 'clean', ...overrides,
   };
 }
 function taskBase(root) {
+  const sourceRoot = path.resolve(process.cwd());
   write(root, 'docs/tackle-forger-development-spec-v3.md', '# V3\n\n## 0. Authority\n\n### 0.1 Immutable\n\n## 1. Scope\n\n### 3.1 Method and type\n\n### 5.2 Derived template\n\n## 8. Patch\n\n## 13. Snapshot\n\n## 14. Version\n\n### 18.2 Snapshot\n\n### 18.3 Patch\n\n## 19. Delivery\n\n## 20. Open\n\n### 24.11 Snapshot\n\n## 25. Export\n\n| ID | Type | Status |\n| --- | --- | --- |\n| OPEN-001 Test | x | `OPEN` |\n');
   write(root, 'docs/README.md', '# Documentation\n');
   write(root, 'scripts/spec-v3-modules.mjs', "process.stdout.write('legacy fixture has no split modules\\n');\n");
-  write(root, 'AGENTS.md', 'base\n');
+  for (const relative of [POLICY_RELATIVE, ...POLICY_CONSUMERS]) write(root, relative, readFileSync(path.join(sourceRoot, relative), 'utf8'));
   commitBase(root);
 }
 
@@ -112,7 +141,7 @@ function prepareInput(root, overrides = {}) {
     schema: 'tackle-task-prepare-input/v1', taskId: 'prepared-task', workflowMode: 'local', baseSha: command(root, ['rev-parse', 'HEAD']),
     scope: 'explicit workflow preparation scope', relevantSections: ['0', '19', '20'],
     openDecisionApplicability: { applicableIds: [], noApplicableReason: 'No product OPEN decision is implemented.' },
-    riskProfile: 'workflow_docs_metadata', scopeHasRuntimeSemantics: false, changeClass: 'workflow_metadata', ownedPaths: ['AGENTS.md'],
+    riskProfile: 'workflow_docs_metadata', reviewTier: 'standard', scopeHasRuntimeSemantics: false, changeClass: 'workflow_metadata', ownedPaths: ['AGENTS.md'],
     acceptanceCriteria: ['The generated TaskBrief validates.'], exclusions: ['No product runtime behavior changes.'],
     riskDimensions: { persistedData: false, historicalSnapshots: false, concurrency: false, authorization: false, externalSideEffects: false, userVisible: false },
     coordinatorSpecReadReceipt: receipt(root, { taskId: 'prepared-task', relevantSections: ['0', '19', '20'], reason: 'Coordinator completed the required canonical reading before preparation.' }), ...overrides,
@@ -130,6 +159,7 @@ test('daily Task Card has exactly six semantic fields and only mechanical eviden
     assert.equal(card.derived.readingAssertion, 'none_generated');
     assert.equal(card.derived.formalTaskBriefRequiredAtBoundary, true);
     assert.equal(card.derived.earlyEscalationRequired, false);
+    assert.match(card.derived.semanticSha256, /^[0-9a-f]{64}$/);
     assert.deepEqual(card.derived.openDecisionCheck.checkedIds, ['OPEN-001']);
     assert.deepEqual(card.derived.receiptDraft.readSections, []);
     assert.equal(card.derived.receiptDraft.reason, 'Pending human completion after actual routed reading.');
@@ -138,6 +168,7 @@ test('daily Task Card has exactly six semantic fields and only mechanical eviden
     assert.equal(JSON.parse(runCli(['--check-task-card', '--card', cardPath], root)).schema, 'tackle-task-card/v1');
     assert.throws(() => prepareTaskCard({ root, input: { ...input, extra: true } }), /unknown, missing, or inapplicable keys/);
     assert.throws(() => checkTaskCard({ root, card: { ...card, derived: { ...card.derived, baseSha: '0'.repeat(40) } } }), /stale or was not mechanically generated/);
+    assert.throws(() => checkTaskCard({ root, card: { ...card, semantic: { ...card.semantic, scope: 'Expanded scope after preparation.' } } }), /stale or was not mechanically generated/);
   } finally { cleanup(root); cleanup(handoff); }
 });
 
@@ -155,6 +186,27 @@ test('Task Card fail-closes by requiring formal boundary escalation for runtime 
     assert.equal(card.derived.readPlanTemplate, null);
     assert.throws(() => prepareTaskCard({ root, input: { ...card.semantic, schema: 'tackle-task-card/v1', riskProfile: 'unknown_high_risk' } }), /unknown or unsupported riskProfile/);
   } finally { cleanup(root); }
+});
+
+test('fast local scoped Task Card completes with a compact artifact result and no formal evidence record', () => {
+  const root = temporaryRepo();
+  const handoff = mkdtempSync(path.join(os.tmpdir(), 'workflow-fast-card-'));
+  try {
+    taskBase(root);
+    command(root, ['config', 'core.autocrlf', 'false']);
+    const card = prepareTaskCard({ root, input: { schema: 'tackle-task-card/v1', taskId: 'fast-card', workflowMode: 'local', scope: 'Tighten scoped workflow prose.', ownedPaths: ['AGENTS.md'], riskProfile: 'workflow_docs_metadata', changeClass: 'workflow_metadata' } });
+    write(root, 'AGENTS.md', `${readFileSync(path.join(root, 'AGENTS.md'), 'utf8')}\nFast local update.\n`);
+    const result = completeTaskCard({ root, card });
+    assert.equal(result.schema, 'tackle-task-card-result/v1');
+    assert.match(result.taskCardSha256, /^[0-9a-f]{64}$/);
+    assert.match(result.artifactIdentity.patchHash, /^[0-9a-f]{64}$/);
+    assert.equal(Object.hasOwn(result, 'verdict'), false);
+    assert.equal(Object.hasOwn(result, 'specReadReceipts'), false);
+    const cardPath = path.join(handoff, 'fast-card.json');
+    writeFileSync(cardPath, `${JSON.stringify(card)}\n`);
+    assert.equal(JSON.parse(runCli(['--complete-task-card', '--card', cardPath], root)).schema, 'tackle-task-card-result/v1');
+    assert.throws(() => completeTaskCard({ root, card: { ...card, semantic: { ...card.semantic, scope: 'Mutated completion scope.' } } }), /stale or was not mechanically generated/);
+  } finally { cleanup(root); cleanup(handoff); }
 });
 
 test('Task Card storage has a distinct private type, filename, and stderr report', () => {
@@ -202,7 +254,7 @@ test('Task Card upgrades dirty owned work into a formal TaskBrief and fails clos
     const card = prepareTaskCard({ root, input: { schema: 'tackle-task-card/v1', taskId: 'card-upgrade', workflowMode: 'local', scope: 'Workflow change.', ownedPaths: ['AGENTS.md'], riskProfile: 'workflow_docs_metadata', changeClass: 'workflow_metadata' } });
     write(root, 'AGENTS.md', 'changed\n');
     const baseInput = prepareInput(root, { taskId: 'card-upgrade', scope: card.semantic.scope, ownedPaths: card.semantic.ownedPaths, coordinatorSpecReadReceipt: receipt(root, { taskId: 'card-upgrade', relevantSections: ['0', '19', '20'], reason: 'Coordinator completed routed reading.' }) });
-    const boundaryInput = (({ relevantSections, openDecisionApplicability, scopeHasRuntimeSemantics, acceptanceCriteria, exclusions, riskDimensions, coordinatorSpecReadReceipt }) => ({ schema: 'tackle-task-card-upgrade-input/v1', relevantSections, openDecisionApplicability, scopeHasRuntimeSemantics, acceptanceCriteria, exclusions, riskDimensions, coordinatorSpecReadReceipt }))(baseInput);
+    const boundaryInput = (({ reviewTier, relevantSections, openDecisionApplicability, scopeHasRuntimeSemantics, acceptanceCriteria, exclusions, riskDimensions, coordinatorSpecReadReceipt }) => ({ schema: 'tackle-task-card-upgrade-input/v1', reviewTier, relevantSections, openDecisionApplicability, scopeHasRuntimeSemantics, acceptanceCriteria, exclusions, riskDimensions, coordinatorSpecReadReceipt }))(baseInput);
     const brief = upgradeTaskCard({ root, card, boundaryInput });
     assert.equal(checkTaskBrief({ root, brief }).phase, 'pre_dispatch');
     assert.deepEqual(brief.preexistingOwnedPaths, []);
@@ -235,16 +287,98 @@ test('TaskBrief preparation derives only mechanical fields and immediately valid
     taskBase(root);
     const input = prepareInput(root);
     const prepared = prepareTaskBrief({ root, input });
-    assert.equal(checkTaskBrief({ root, brief: prepared }).phase, 'pre_dispatch');
+    const checked = checkTaskBrief({ root, brief: prepared });
+    assert.equal(checked.phase, 'pre_dispatch');
+    assert.equal(prepared.schema, 'tackle-task-brief/v2');
     assert.equal(prepared.reviewedHead, 'WORKTREE');
-    assert.deepEqual(prepared.allowedChanges, input.ownedPaths);
-    assert.deepEqual(prepared.openDecisionCheck.checkedIds, ['OPEN-001']);
-    assert.equal(prepared.validationPlan.requiredCommands.includes(ownedWhitespaceCommand(input.baseSha, ['AGENTS.md'])), true);
-    assert.equal(prepared.validationPlan.intentionallyNotApplicable.product_runtime_tests.length > 0, true);
-    assert.equal(prepared.specReadReceipts[0].profile, 'FULL');
+    assert.deepEqual(checked.normalizedBrief.allowedChanges, input.ownedPaths);
+    assert.deepEqual(checked.normalizedBrief.openDecisionCheck.checkedIds, ['OPEN-001']);
+    assert.equal(checked.normalizedBrief.validationPlan.requiredCommands.includes(ownedWhitespaceCommand(input.baseSha, ['AGENTS.md'])), true);
+    assert.equal(checked.normalizedBrief.validationPlan.intentionallyNotApplicable.product_runtime_tests.length > 0, true);
+    assert.equal(prepared.specReadEvidence.roles[0].profile, 'FULL');
+    assert.equal(Object.hasOwn(prepared, 'validationPlan'), false);
+    assert.equal(Object.hasOwn(prepared, 'allowedChanges'), false);
     const inputPath = path.join(handoff, 'prepare-input.json');
     writeFileSync(inputPath, `${JSON.stringify(input)}\n`);
     assert.equal(JSON.parse(runCli(['--prepare-task-brief', '--input', inputPath], root)).taskId, input.taskId);
+  } finally { cleanup(root); cleanup(handoff); }
+});
+
+test('TaskBrief v2 is preferred while exact v1 records remain recognizable and hash-distinct', () => {
+  const root = temporaryRepo();
+  try {
+    taskBase(root);
+    const legacy = brief(root);
+    const legacyChecked = checkTaskBrief({ root, brief: legacy });
+    assert.equal(legacyChecked.normalizedBrief, legacy);
+    assert.equal(legacyChecked.taskBriefSha256, taskBriefHash(legacy));
+    const prepared = prepareTaskBrief({ root, input: prepareInput(root) });
+    const preparedChecked = checkTaskBrief({ root, brief: prepared });
+    assert.equal(prepared.schema, 'tackle-task-brief/v2');
+    assert.notEqual(preparedChecked.taskBriefSha256, legacyChecked.taskBriefSha256);
+    assert.throws(() => checkTaskBrief({ root, brief: { ...prepared, allowedChanges: prepared.ownedPaths } }), /unknown, missing, or inapplicable keys/);
+    assert.equal(writeTaskBriefRun({ root, brief: legacy }).storagePath.includes('task-brief-'), true);
+    assert.equal(writeTaskBriefRun({ root, brief: prepared }).storagePath.includes('task-brief-'), true);
+  } finally { cleanup(root); }
+});
+
+test('TaskBrief v2 promotion compacts role evidence and preserves standard local no-review boundary', () => {
+  const root = temporaryRepo();
+  try {
+    taskBase(root);
+    const prepared = prepareTaskBrief({ root, input: prepareInput(root) });
+    write(root, 'AGENTS.md', 'changed\n');
+    const coding = receipt(root, { taskId: prepared.taskId, role: 'coding', relevantSections: prepared.relevantSections, reason: 'Coding completed the routed reading.' });
+    const promoted = promoteTaskBrief({ root, brief: prepared, codingReceipt: coding });
+    assert.equal(promoted.schema, 'tackle-task-brief/v2');
+    assert.deepEqual(promoted.specReadEvidence.roles.map((entry) => entry.role), ['coordinator', 'coding']);
+    assert.equal(Object.hasOwn(promoted, 'specReadReceipts'), false);
+    assert.equal(checkTaskBrief({ root, brief: promoted }).phase, 'verdict');
+    assert.equal(validationExecutionPlan({ root, brief: promoted }).commands.some((entry) => entry.command.includes('--check-owned-whitespace')), true);
+  } finally { cleanup(root); }
+});
+
+test('local result v2 recomputes TaskBrief bindings and Issue routes cannot publish local results', () => {
+  const root = temporaryRepo();
+  const handoff = mkdtempSync(path.join(os.tmpdir(), 'workflow-local-result-v2-'));
+  try {
+    taskBase(root);
+    const source = brief(root);
+    write(root, 'AGENTS.md', 'changed\n');
+    const coding = receipt(root, { role: 'coding', reason: 'coding' });
+    const review = receipt(root, { role: 'review', reason: 'review' });
+    const promoted = promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review });
+    const checked = checkTaskBrief({ root, brief: promoted });
+    const result = {
+      schema: 'tackle-local-result/v2',
+      taskBriefSha256: checked.taskBriefSha256,
+      artifactIdentity: { kind: 'worktree', commitSha: null, patchHash: patchHash({ root, baseSha: checked.baseSha, ownedPaths: promoted.ownedPaths }).patchHash },
+      verdict: 'PASS',
+      findings: [],
+    };
+    const verified = checkVerdict({ root, verdict: result, brief: promoted });
+    assert.equal(verified.recomputed.taskId, promoted.taskId);
+    assert.deepEqual(verified.recomputed.ownedPaths, promoted.ownedPaths);
+    const resultPath = path.join(handoff, 'result.json');
+    const briefPath = path.join(handoff, 'brief.json');
+    writeFileSync(resultPath, `${JSON.stringify(result)}\n`);
+    writeFileSync(briefPath, `${JSON.stringify(promoted)}\n`);
+    assert.equal(JSON.parse(runCli(['--check-local-result', '--result', resultPath, '--brief', briefPath], root)).recomputed.taskId, promoted.taskId);
+    assert.throws(() => checkVerdict({ root, verdict: { ...result, taskBriefSha256: '0'.repeat(64) }, brief: promoted }), /must match TaskBrief/);
+    command(root, ['checkout', '--', 'AGENTS.md']);
+    const baseSha = command(root, ['rev-parse', 'HEAD']);
+    const issue = {
+      ...source,
+      workflowMode: 'issue',
+      phase: 'verdict',
+      reviewedHead: baseSha,
+      reviewTier: 'standard',
+      dirtyWorktreeDisposition: 'clean_synced',
+      specReadReceipts: [source.specReadReceipts[0], receipt(root, { role: 'coding' })],
+    };
+    const issueChecked = checkTaskBrief({ root, brief: issue });
+    const issueResult = { ...result, taskBriefSha256: issueChecked.taskBriefSha256, artifactIdentity: { kind: 'commit', commitSha: baseSha, patchHash: null } };
+    assert.throws(() => checkVerdict({ root, verdict: issueResult, brief: issue }), /only valid for workflowMode local/);
   } finally { cleanup(root); cleanup(handoff); }
 });
 
@@ -287,14 +421,14 @@ test('TaskBrief run storage is traversal-safe, per linked worktree, and fails cl
     const maliciousBrief = prepareTaskBrief({ root, input: maliciousInput });
     const maliciousRun = writeTaskBriefRun({ root, brief: maliciousBrief });
     assert.equal(maliciousRun.storagePath.includes('..'), false);
-    assert.equal(path.dirname(maliciousRun.storagePath), command(root, ['rev-parse', '--path-format=absolute', '--git-path', 'codex-runs']));
+    assert.equal(path.resolve(path.dirname(maliciousRun.storagePath)), path.resolve(command(root, ['rev-parse', '--path-format=absolute', '--git-path', 'codex-runs'])));
     command(root, ['worktree', 'add', '--detach', linked, 'HEAD']);
     const linkedInput = prepareInput(linked, { taskId: 'linked-task', coordinatorSpecReadReceipt: receipt(linked, { taskId: 'linked-task', relevantSections: ['0', '19', '20'] }) });
     const linkedRun = writeTaskBriefRun({ root: linked, brief: prepareTaskBrief({ root: linked, input: linkedInput }) });
     const rootRunDirectory = command(root, ['rev-parse', '--path-format=absolute', '--git-path', 'codex-runs']);
     const linkedRunDirectory = command(linked, ['rev-parse', '--path-format=absolute', '--git-path', 'codex-runs']);
     assert.notEqual(linkedRunDirectory, rootRunDirectory);
-    assert.equal(path.dirname(linkedRun.storagePath), linkedRunDirectory);
+    assert.equal(path.resolve(path.dirname(linkedRun.storagePath)), path.resolve(linkedRunDirectory));
     const failingRoot = temporaryRepo();
     try {
       taskBase(failingRoot);
@@ -308,7 +442,7 @@ test('TaskBrief run storage is traversal-safe, per linked worktree, and fails cl
   }
 });
 
-test('TaskBrief run storage publishes complete records atomically and rejects unsafe or stale artifacts', async () => {
+test('TaskBrief run storage publishes complete records atomically and rejects unsafe or stale artifacts', async (t) => {
   const root = temporaryRepo();
   try {
     taskBase(root);
@@ -339,18 +473,20 @@ test('TaskBrief run storage publishes complete records atomically and rejects un
       chmodSync(storagePath, 0o600);
     }
     unlinkSync(storagePath);
-    try {
-      symlinkSync('../outside', storagePath);
+    await t.test('rejects a symlink at the final run path', (symlinkTest) => {
+      if (!symlinkOrCapabilitySkip(symlinkTest, '../outside', storagePath)) return;
       assert.throws(() => writeTaskBriefRun({ root, brief: prepared }), /unsafe/);
-    } catch (error) { if (!['EEXIST', 'EPERM', 'EACCES'].includes(error.code)) throw error; }
+    });
     const unsafeRoot = temporaryRepo();
     const unsafeTarget = mkdtempSync(path.join(os.tmpdir(), 'workflow-run-storage-target-'));
     try {
       taskBase(unsafeRoot);
       const unsafeDirectory = command(unsafeRoot, ['rev-parse', '--path-format=absolute', '--git-path', 'codex-runs']);
-      symlinkSync(unsafeTarget, unsafeDirectory);
-      assert.equal(lstatSync(unsafeDirectory).isSymbolicLink(), true);
-      assert.throws(() => writeTaskBriefRun({ root: unsafeRoot, brief: prepareTaskBrief({ root: unsafeRoot, input: prepareInput(unsafeRoot) }) }), /run storage path escaped|directory is unsafe/);
+      await t.test('rejects a symlinked run directory', (symlinkTest) => {
+        if (!symlinkOrCapabilitySkip(symlinkTest, unsafeTarget, unsafeDirectory)) return;
+        assert.equal(lstatSync(unsafeDirectory).isSymbolicLink(), true);
+        assert.throws(() => writeTaskBriefRun({ root: unsafeRoot, brief: prepareTaskBrief({ root: unsafeRoot, input: prepareInput(unsafeRoot) }) }), /run storage path escaped|directory is unsafe/);
+      });
     } finally { cleanup(unsafeRoot); cleanup(unsafeTarget); }
   } finally { cleanup(root); }
 });
@@ -362,11 +498,11 @@ test('TaskBrief preparation accepts v2 reuse receipts only with trusted continuo
     taskBase(root);
     const v2 = reusedReceipt(root, {
       taskId: 'prepared-task', relevantSections: ['0', '19', '20'],
-      requiredSections: ['README', 'V3_INDEX', '0', '19', '20'], readSections: ['README', 'V3_INDEX', '0', '19', '20'],
+      requiredSections: ['README', 'V3_INDEX', '0', '19', 'OPEN_REGISTRY'], readSections: ['README', 'V3_INDEX', '0', '19', 'OPEN_REGISTRY'],
     });
     const input = prepareInput(root, { coordinatorSpecReadReceipt: v2 });
     const current = currentReuseContext(v2.reuseEvidence.session);
-    assert.equal(prepareTaskBrief({ root, input, currentReuseContext: current }).specReadReceipts[0].schema, 'tackle-spec-read/v2');
+    assert.equal(prepareTaskBrief({ root, input, currentReuseContext: current }).specReadEvidence.roles[0].receiptSchema, 'tackle-spec-read/v2');
     assert.throws(() => prepareTaskBrief({ root, input }), /currentReuseContext/);
     assert.throws(() => prepareTaskBrief({ root, input, currentReuseContext: { ...current, currentAgentIdentity: 'agent:other' } }), /caller-provided/);
     assert.throws(() => prepareTaskBrief({ root, input, currentReuseContext: { ...current, currentContextSessionId: 'context:other' } }), /caller-provided/);
@@ -384,38 +520,45 @@ test('TaskBrief preparation preserves every declared risk dimension and its scen
     taskBase(root);
     const dimensions = { persistedData: true, historicalSnapshots: false, concurrency: true, authorization: false, externalSideEffects: false, userVisible: true };
     const input = prepareInput(root, {
-      riskProfile: 'durable_migration', changeClass: 'persistence_migration', scopeHasRuntimeSemantics: true, riskDimensions: dimensions,
+      riskProfile: 'durable_migration', reviewTier: 'strict', changeClass: 'persistence_migration', scopeHasRuntimeSemantics: true, riskDimensions: dimensions,
       coordinatorSpecReadReceipt: receipt(root, { taskId: 'prepared-task', riskProfile: 'durable_migration', relevantSections: ['0', '19', '20'] }),
     });
     const prepared = prepareTaskBrief({ root, input });
+    const normalized = checkTaskBrief({ root, brief: prepared }).normalizedBrief;
     assert.deepEqual(prepared.riskDimensions, dimensions);
-    for (const scenario of ['normal_path', 'boundary', 'conflict', 'version_freeze', 'production_shape_fixture', 'unknown_field_preservation', 'second_run_noop', 'authorization_denied', 'reauthorize_at_commit', 'concurrency_conflict', 'unified_visual_review_pending_or_completed']) assert.equal(prepared.validationPlan.requiredScenarios.includes(scenario), true);
-    assert.equal(new Set(prepared.validationPlan.requiredScenarios).size, prepared.validationPlan.requiredScenarios.length);
+    assert.equal(prepared.reviewTier, 'strict');
+    assert.equal(prepared.specReadEvidence.roles[0].profile, 'FULL');
+    for (const scenario of ['normal_path', 'boundary', 'conflict', 'version_freeze', 'production_shape_fixture', 'unknown_field_preservation', 'second_run_noop', 'authorization_denied', 'reauthorize_at_commit', 'concurrency_conflict', 'unified_visual_review_pending_or_completed']) assert.equal(normalized.validationPlan.requiredScenarios.includes(scenario), true);
+    assert.equal(new Set(normalized.validationPlan.requiredScenarios).size, normalized.validationPlan.requiredScenarios.length);
   } finally { cleanup(root); }
 });
 
-test('TaskBrief preparation fails closed for dirty, ambiguous, and unsupported inputs', () => {
+test('TaskBrief preparation fails closed for dirty, ambiguous, and unsupported inputs', async (t) => {
   const root = temporaryRepo();
   try {
     taskBase(root);
     const input = prepareInput(root);
+    assert.throws(() => runCli([], root), /Review tier safety floor: unknown_high_risk.*requires strict/s);
     assert.throws(() => prepareTaskBrief({ root, input: { ...input, ownedPaths: ['../AGENTS.md'] } }), /Invalid owned path/);
     assert.throws(() => prepareTaskBrief({ root, input: { ...input, relevantSections: ['0', '20', '999'] } }), /current v3 sections/);
     assert.throws(() => prepareTaskBrief({ root, input: { ...input, changeClass: 'not_a_class' } }), /unsupported/);
+    assert.throws(() => prepareTaskBrief({ root, input: { ...input, reviewTier: 'urgent' } }), /fast, standard, or strict/);
     assert.throws(() => prepareTaskBrief({ root, input: { ...input, baseSha: '0'.repeat(40) } }), /resolve|baseSha/);
     assert.throws(() => prepareTaskBrief({ root, input: { ...input, coordinatorSpecReadReceipt: { ...input.coordinatorSpecReadReceipt, taskId: 'other-task' } } }), /coordinatorSpecReadReceipt/);
     assert.throws(() => prepareTaskBrief({ root, input: { ...input, riskProfile: 'durable_migration', changeClass: 'persistence_migration', scopeHasRuntimeSemantics: true, coordinatorSpecReadReceipt: receipt(root, { taskId: 'prepared-task', riskProfile: 'durable_migration', relevantSections: ['0', '19', '20'] }) } }), /risk dimension/);
-    assert.throws(() => prepareTaskBrief({ root, input: { ...input, riskProfile: 'unknown_high_risk', changeClass: 'domain_behavior', scopeHasRuntimeSemantics: true, coordinatorSpecReadReceipt: receipt(root, { taskId: 'prepared-task', riskProfile: 'unknown_high_risk', relevantSections: ['0', '19', '20'] }) } }), /refuses unknown_high_risk/);
+    const unknownRiskInput = { ...input, riskProfile: 'unknown_high_risk', changeClass: 'domain_behavior', scopeHasRuntimeSemantics: true, coordinatorSpecReadReceipt: receipt(root, { taskId: 'prepared-task', riskProfile: 'unknown_high_risk', relevantSections: ['0', '19', '20'] }) };
+    assert.throws(() => prepareTaskBrief({ root, input: { ...unknownRiskInput, reviewTier: 'standard' } }), /reviewTier must be strict when riskProfile unknown_high_risk/);
+    assert.throws(() => prepareTaskBrief({ root, input: { ...unknownRiskInput, reviewTier: 'strict' } }), /refuses unknown_high_risk/);
     mkdirSync(path.join(root, 'directory-path'));
     write(root, 'directory-path/child.txt', 'tracked\n');
     command(root, ['add', 'directory-path']); command(root, ['commit', '-qm', 'track directory fixture']);
     const currentInput = { ...input, baseSha: command(root, ['rev-parse', 'HEAD']) };
     assert.throws(() => prepareTaskBrief({ root, input: { ...currentInput, ownedPaths: ['directory-path'] } }), /Unsupported (base-tree|current) entry/);
-    try {
-      symlinkSync('AGENTS.md', path.join(root, 'linked-path'));
+    await t.test('rejects a symlink owned path', (symlinkTest) => {
+      if (!symlinkOrCapabilitySkip(symlinkTest, 'AGENTS.md', path.join(root, 'linked-path'))) return;
       command(root, ['add', 'linked-path']); command(root, ['commit', '-qm', 'track symlink fixture']);
       assert.throws(() => prepareTaskBrief({ root, input: { ...currentInput, baseSha: command(root, ['rev-parse', 'HEAD']), ownedPaths: ['linked-path'] } }), /Symlink/);
-    } catch (error) { if (!['EEXIST', 'EPERM', 'EACCES'].includes(error.code)) throw error; }
+    });
     write(root, 'dirty.txt', 'dirty\n');
     assert.throws(() => prepareTaskBrief({ root, input }), /clean worktree/);
   } finally { cleanup(root); }
@@ -425,13 +568,29 @@ test('owned whitespace checker catches a new untracked owned file', () => {
   const root = temporaryRepo();
   try {
     taskBase(root);
+    command(root, ['config', 'core.autocrlf', 'true']);
     const baseSha = command(root, ['rev-parse', 'HEAD']);
     write(root, 'new-owned.md', 'trailing space \n');
     assert.throws(() => checkOwnedWhitespace({ root, baseSha, ownedPaths: ['new-owned.md'] }), /Owned whitespace check failed.*trailing whitespace/);
     write(root, 'new-owned.md', 'clean\n');
     assert.deepEqual(checkOwnedWhitespace({ root, baseSha, ownedPaths: ['new-owned.md'] }).checkedPaths, ['new-owned.md']);
     assert.deepEqual(JSON.parse(runCli(['--check-owned-whitespace', '--base', baseSha, '--owned', 'new-owned.md'], root)).checkedPaths, ['new-owned.md']);
+    assert.equal(isOnlyLineEndingConversionWarnings("warning: in the working copy of 'new-owned.md', LF will be replaced by CRLF the next time Git touches it\n"), true);
+    assert.equal(isOnlyLineEndingConversionWarnings("warning: credential helper failed\n"), false);
+    assert.equal(isOnlyLineEndingConversionWarnings("new-owned.md:1: trailing whitespace.\n"), false);
   } finally { cleanup(root); }
+});
+
+test('workflow CLI entrypoint executes through the canonicalized worktree path', () => {
+  const scriptPath = path.resolve('.codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs');
+  assert.equal(isDirectExecution(new URL('./workflow-contract.mjs', import.meta.url).href, scriptPath), true);
+  const result = spawnSync(process.execPath, [scriptPath, '--check-policy'], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, '');
+  assert.match(result.stdout, /^Workflow policy is consistent\r?\n$/);
 });
 
 test('local TaskBrief preparation rejects a base before current HEAD', () => {
@@ -448,7 +607,6 @@ function validationFixture() {
   const sourceRoot = path.resolve(process.cwd());
   try {
     taskBase(root);
-    for (const relative of ['AGENTS.md', '.codex/skills/tackle-agent-workflow/SKILL.md', '.codex/skills/tackle-agent-workflow/agents/openai.yaml', '.github/pull_request_template.md']) write(root, relative, readFileSync(path.join(sourceRoot, relative), 'utf8'));
     const contract = readFileSync(path.join(sourceRoot, '.codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs'), 'utf8');
     write(root, '.codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs', `${contract}\nif (process.argv.includes('--check-policy')) writeFileSync(${JSON.stringify(path.join(root, 'validation-ran.marker'))}, 'ran\\n');\n`);
     write(root, '.codex/skills/tackle-agent-workflow/scripts/workflow-contract.test.mjs', `import { writeFileSync } from 'node:fs';\nimport test from 'node:test';\nwriteFileSync(${JSON.stringify(path.join(root, 'validation-ran.marker'))}, 'ran\\n');\ntest('validation command ran', () => {});\n`);
@@ -472,10 +630,9 @@ test('role-keyed reuse contexts flow through validation and verdict APIs and CLI
     };
     const coordinator = reuseFor('coordinator', 'agent:coordinator', 'context:coordinator');
     const coding = reuseFor('coding', 'agent:coding', 'context:coding');
-    const review = reuseFor('review', 'agent:review', 'context:review');
-    const contexts = { coordinator: currentReuseContext(coordinator.reuseEvidence.session), coding: currentReuseContext(coding.reuseEvidence.session), review: currentReuseContext(review.reuseEvidence.session) };
-    const source = brief(root, { taskId: 'task-2', ownedPaths: [ownedPath], allowedChanges: [ownedPath], validationPlan: { ...brief(root).validationPlan, requiredCommands: ['node scripts/spec-v3-modules.mjs --check', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-policy', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-index', 'node --test .codex/skills/tackle-agent-workflow/scripts/workflow-contract.test.mjs', ownedWhitespaceCommand(baseSha, [ownedPath])] }, specReadReceipts: [coordinator] });
-    const promoted = promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review, reuseContexts: contexts });
+    const contexts = { coordinator: currentReuseContext(coordinator.reuseEvidence.session), coding: currentReuseContext(coding.reuseEvidence.session) };
+    const source = brief(root, { taskId: 'task-2', reviewTier: 'standard', ownedPaths: [ownedPath], allowedChanges: [ownedPath], validationPlan: { ...brief(root).validationPlan, requiredCommands: ['node scripts/spec-v3-modules.mjs --check', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-policy', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-index', 'node --test .codex/skills/tackle-agent-workflow/scripts/workflow-contract.test.mjs', ownedWhitespaceCommand(baseSha, [ownedPath])] }, specReadReceipts: [coordinator] });
+    const promoted = promoteTaskBrief({ root, brief: source, codingReceipt: coding, reuseContexts: contexts });
     const checked = checkTaskBrief({ root, brief: promoted, reuseContexts: contexts });
     assert.equal(validationExecutionPlan({ root, brief: promoted, reuseContexts: contexts }).artifact.artifactIdentity.kind, 'worktree');
     const apiSummary = runValidation({ root, brief: promoted, reuseContexts: contexts });
@@ -487,7 +644,7 @@ test('role-keyed reuse contexts flow through validation and verdict APIs and CLI
     assert.equal(JSON.parse(runCli(['--run-validation', '--brief', path.join(handoff, 'brief.json'), '--reuse-contexts', path.join(handoff, 'contexts.json')], root)).results.every((result) => result.result === 'PASS'), true);
     assert.equal(JSON.parse(runCli(['--check-verdict', '--brief', path.join(handoff, 'brief.json'), '--verdict', path.join(handoff, 'verdict.json'), '--reuse-contexts', path.join(handoff, 'contexts.json')], root)).taskBriefSha256, checked.taskBriefSha256);
     assert.throws(() => runCli(['--run-validation', '--brief', path.join(handoff, 'brief.json')], root), /currentReuseContext/);
-    for (const bad of [{ coordinator: contexts.coordinator, coding: contexts.coding }, { ...contexts, extra: contexts.review }, { ...contexts, review: { ...contexts.review, currentAgentIdentity: 'agent:wrong' } }, { ...contexts, coding: { ...contexts.coding, currentContextSessionId: 'context:wrong' } }, { ...contexts, coordinator: { ...contexts.coordinator, currentContextState: 'compacted' } }]) {
+    for (const bad of [{ coordinator: contexts.coordinator }, { ...contexts, extra: contexts.coding }, { ...contexts, coding: { ...contexts.coding, currentContextSessionId: 'context:wrong' } }, { ...contexts, coordinator: { ...contexts.coordinator, currentContextState: 'compacted' } }]) {
       writeFileSync(path.join(handoff, 'bad-contexts.json'), JSON.stringify(bad));
       assert.throws(() => runCli(['--check-verdict', '--brief', path.join(handoff, 'brief.json'), '--verdict', path.join(handoff, 'verdict.json'), '--reuse-contexts', path.join(handoff, 'bad-contexts.json')], root), /currentReuseContext|unknown receipt role|does not match|must be continuous/);
     }
@@ -503,10 +660,11 @@ test('patch manifest classifies explicit owned paths and is deterministic', () =
     write(root, 'tool.sh', '#!/bin/sh\n');
     write(root, '目录/鱼.txt', '旧值\n');
     const baseSha = commitBase(root);
+    const supportsFileMode = command(root, ['config', '--bool', 'core.filemode']) === 'true';
     write(root, 'tracked.txt', 'after\n');
     unlinkSync(path.join(root, 'deleted.txt'));
     write(root, 'untracked.txt', 'new\n');
-    chmodSync(path.join(root, 'tool.sh'), 0o755);
+    if (supportsFileMode) chmodSync(path.join(root, 'tool.sh'), 0o755);
     write(root, '目录/鱼.txt', '新值\n');
     const ownedPaths = ['untracked.txt', 'tool.sh', 'unchanged.txt', 'deleted.txt', 'tracked.txt', '目录/鱼.txt'];
     const first = patchHash({ root, baseSha, ownedPaths });
@@ -514,7 +672,7 @@ test('patch manifest classifies explicit owned paths and is deterministic', () =
     assert.equal(first.patchHash, second.patchHash);
     assert.deepEqual(first.manifest.entries.map((entry) => [entry.path, entry.state, entry.mode]), [
       ['deleted.txt', 'deleted', '100644'],
-      ['tool.sh', 'tracked_changed', '100755'],
+      ['tool.sh', supportsFileMode ? 'tracked_changed' : 'unchanged', supportsFileMode ? '100755' : '100644'],
       ['tracked.txt', 'tracked_changed', '100644'],
       ['unchanged.txt', 'unchanged', '100644'],
       ['untracked.txt', 'untracked', '100644'],
@@ -523,19 +681,85 @@ test('patch manifest classifies explicit owned paths and is deterministic', () =
   } finally { cleanup(root); }
 });
 
-test('patch manifest rejects traversal and symlinks', (t) => {
+test('patch manifest does not invent executable mode when core.filemode is false', () => {
+  const root = temporaryRepo();
+  try {
+    write(root, 'tool.sh', '#!/bin/sh\n');
+    const baseSha = commitBase(root);
+    command(root, ['config', 'core.filemode', 'false']);
+    chmodSync(path.join(root, 'tool.sh'), 0o755);
+    const entry = buildPatchManifest({ root, baseSha, ownedPaths: ['tool.sh'] }).entries[0];
+    assert.deepEqual([entry.state, entry.mode], ['unchanged', '100644']);
+  } finally { cleanup(root); }
+});
+
+test('patch manifest preserves an indexed executable mode when core.filemode is false', () => {
+  const root = temporaryRepo();
+  try {
+    write(root, 'base.txt', 'base\n');
+    const baseSha = commitBase(root);
+    command(root, ['config', 'core.filemode', 'false']);
+    write(root, 'indexed.sh', '#!/bin/sh\n');
+    command(root, ['add', 'indexed.sh']);
+    command(root, ['update-index', '--chmod=+x', 'indexed.sh']);
+    write(root, 'untracked.sh', '#!/bin/sh\n');
+    chmodSync(path.join(root, 'untracked.sh'), 0o755);
+    const entries = buildPatchManifest({ root, baseSha, ownedPaths: ['indexed.sh', 'untracked.sh'] }).entries;
+    assert.deepEqual(entries.map((entry) => [entry.path, entry.state, entry.mode]), [
+      ['indexed.sh', 'tracked_changed', '100755'],
+      ['untracked.sh', 'untracked', '100644'],
+    ]);
+  } finally { cleanup(root); }
+});
+
+test('patch manifest records staged executable mode changes when core.filemode is false', () => {
+  const root = temporaryRepo();
+  try {
+    write(root, 'make-executable.sh', '#!/bin/sh\n');
+    write(root, 'make-non-executable.sh', '#!/bin/sh\n');
+    command(root, ['add', '.']);
+    command(root, ['update-index', '--chmod=+x', 'make-non-executable.sh']);
+    command(root, ['commit', '-qm', 'base']);
+    const baseSha = command(root, ['rev-parse', 'HEAD']);
+    command(root, ['config', 'core.filemode', 'false']);
+    command(root, ['update-index', '--chmod=+x', 'make-executable.sh']);
+    command(root, ['update-index', '--chmod=-x', 'make-non-executable.sh']);
+    const entries = buildPatchManifest({
+      root,
+      baseSha,
+      ownedPaths: ['make-executable.sh', 'make-non-executable.sh'],
+    }).entries;
+    assert.deepEqual(entries.map((entry) => [entry.path, entry.state, entry.mode]), [
+      ['make-executable.sh', 'tracked_changed', '100755'],
+      ['make-non-executable.sh', 'tracked_changed', '100644'],
+    ]);
+  } finally { cleanup(root); }
+});
+
+test('patch manifest fails closed when the Git index cannot be inspected', () => {
+  const root = temporaryRepo();
+  try {
+    write(root, 'tool.sh', '#!/bin/sh\n');
+    const baseSha = commitBase(root);
+    command(root, ['config', 'core.filemode', 'false']);
+    writeFileSync(path.join(root, '.git', 'index'), 'corrupt index');
+    assert.throws(
+      () => buildPatchManifest({ root, baseSha, ownedPaths: ['tool.sh'] }),
+      /Cannot inspect index entry: tool\.sh/,
+    );
+  } finally { cleanup(root); }
+});
+
+test('patch manifest rejects traversal and symlinks', async (t) => {
   const root = temporaryRepo();
   try {
     write(root, 'safe.txt', 'safe\n');
     const baseSha = commitBase(root);
     assert.throws(() => buildPatchManifest({ root, baseSha, ownedPaths: ['../safe.txt'] }), /Invalid owned path/);
-    try {
-      symlinkSync('safe.txt', path.join(root, 'link.txt'));
-    } catch (error) {
-      t.skip(`symlinks unavailable: ${error.code}`);
-      return;
-    }
-    assert.throws(() => buildPatchManifest({ root, baseSha, ownedPaths: ['link.txt'] }), /Symlink/);
+    await t.test('rejects a symlink entry when the platform supports creating one', (symlinkTest) => {
+      if (!symlinkOrCapabilitySkip(symlinkTest, 'safe.txt', path.join(root, 'link.txt'))) return;
+      assert.throws(() => buildPatchManifest({ root, baseSha, ownedPaths: ['link.txt'] }), /Symlink/);
+    });
   } finally { cleanup(root); }
 });
 
@@ -550,42 +774,74 @@ test('navigation index is generated deterministically and detects drift', () => 
   } finally { cleanup(root); }
 });
 
-test('policy checker detects required workflow markers', () => {
+test('policy checker validates the closed authority and versioned consumer references', () => {
   const root = temporaryRepo();
   try {
-    const project = '## 项目级 Agent Skills\n- 对本仓库中的实现、修复或重构，`$tackle-agent-workflow`为所有路由提供项目约束与 TaskBrief；只有本地路由使用其编码与独立本地审核。Issue 与 PR 路由仍分别遵循`$agent-issue-loop`和`$agent-pr-loop`；仓库的合并、发布和部署门禁不因项目级Skill存在而放宽。\n';
-    const canonicalAgents = readFileSync(path.resolve(process.cwd(), 'AGENTS.md'), 'utf8');
-    const agents = `${project}\n## Tackle 工作流契约\n- \`$tackle-agent-workflow\`提供项目约束和 TaskBrief；仅本地路由使用其编码与独立本地审核。Issue 生命周期归\`$agent-issue-loop\`，PR 审核/CI/修复归\`$agent-pr-loop\`；已有 PR 直接使用后者。不得增加第二个独立审核者。\n<!-- workflow-contract-policy/v2\n{"dirtyIsolation":{"issuePr":"clean_synced","localOwnedBaseline":"tackle-owned-baseline/v1"},"issue":{"localReviewer":false,"owner":"agent-issue-loop","prReviewer":"agent-pr-loop"},"local":{"independentReviewer":true,"owner":"tackle-agent-workflow"},"localVerdict":{"required":["taskBriefSha256","specReceiptHashes","dirtyWorktreeDisposition","specSha256","baseSha","reviewedHead","ownedPaths","patchHash"],"schema":"tackle-local-verdict/v1"},"pullRequest":{"owner":"agent-pr-loop","reviewer":"agent-pr-loop"},"reviewSeverity":{"passBlocking":["P0","P1","P2"],"p3":"informational"},"scopedEligibility":{"allowedPathClasses":["AGENTS.md",".codex/skills/tackle-agent-workflow/**","docs/(workflow|agent-governance)-*.md",".github/*.md|yml|yaml"],"unknownForcesFull":true},"specReceipt":{"schema":"tackle-spec-read/v1"},"taskBrief":{"closedSchema":true,"openDecisionCheck":true,"phaseReceipts":{"pre_dispatch":["coordinator"],"verdict":["coordinator","coding","review"]},"receiptRiskAuthority":true,"schema":"tackle-task-brief/v1","structuredFields":["changeClass","allowedChanges","riskDimensions","validationPlan"]},"validationMatrix":{"commandsAndScenariosSeparated":true,"prFinalCommandsNonWaivable":["npm run typecheck","npm run lint","npm test"],"userVisibleScenario":"unified_visual_review_pending_or_completed"},"visual":{"minimalSmokeCompletesReview":false,"pendingMarker":"视觉与交互统一检查待执行"}}\n-->\n## 本机凭据与多 worktree\n`;
-    const skill = '<!-- workflow-contract-policy-ref: AGENTS.md/workflow-contract-policy/v2 -->\n\n## Route before dispatch\n\n- **Local implementation, no Issue or PR:** this Skill owns one coding agent and one independent local reviewer.\n- **Issue delivery:** `$agent-issue-loop` owns Issue, branch, PR, closure, and handoff. Supply it this Skill\'s TaskBrief; do not start a local independent reviewer. Once a PR exists, `$agent-pr-loop` exclusively owns review, CI, fixes, and merge gates.\n- **Existing PR:** invoke `$agent-pr-loop` directly and supply the TaskBrief. Do not create a coding or review loop here.\n\n## Establish the TaskBrief\n\n<!-- workflow-contract-task-brief-ref/v1\n{"conditionalNaApplicability":{"nonWorkflowForbids":"product_runtime_tests","workflowMetadataRequires":"product_runtime_tests"},"conditionalNaCatalog":{"productRuntimeTests":"product_runtime_tests"},"evidenceStages":{"development":"pre_dispatch_non_pr_final","localReviewHandoff":"local_verdict","prFinal":"pr_final_change_class"},"triggeredCannotBeNa":true}\n-->\n\n## Spec receipts and worktree isolation\n';
-    const canonicalSkill = readFileSync(path.resolve(process.cwd(), '.codex/skills/tackle-agent-workflow/SKILL.md'), 'utf8');
-    const yaml = 'interface:\n  display_name: "Tackle Agent Workflow"\n  short_description: "Start with a lightweight Task Card and escalate formal reviews"\n  default_prompt: "Use $tackle-agent-workflow to start daily work with a six-field Task Card, generate mechanical route/OPEN/read-plan evidence, and prepare a full TaskBrief only at a formal review or PR boundary. Preserve the pending unified visual-review marker unless full visual work is explicitly scoped."\n';
-    const template = '## Visual evidence\n\n| Unified visual and interaction review | 视觉与交互统一检查待执行 / Full visual and interaction review completed |\n| Minimal render smoke | Not run / Completed; this never changes the unified-review status |\n\n## Risks, recovery, and rollback\n';
-    write(root, 'AGENTS.md', canonicalAgents);
-    write(root, '.codex/skills/tackle-agent-workflow/SKILL.md', canonicalSkill);
-    write(root, '.github/pull_request_template.md', template);
-    write(root, '.codex/skills/tackle-agent-workflow/agents/openai.yaml', yaml);
+    const sourceRoot = path.resolve(process.cwd());
+    const consumers = ['AGENTS.md', 'CLAUDE.md', '.codex/skills/tackle-agent-workflow/SKILL.md', '.codex/skills/agent-pr-loop/SKILL.md', '.codex/skills/agent-issue-loop/SKILL.md', '.claude/skills/agent-pr-loop/SKILL.md'];
+    const policyPath = '.codex/skills/tackle-agent-workflow/references/workflow-contract-policy.v2.json';
+    const canonicalPolicy = readFileSync(path.join(sourceRoot, policyPath), 'utf8');
+    for (const relative of consumers) write(root, relative, readFileSync(path.join(sourceRoot, relative), 'utf8'));
+    write(root, policyPath, canonicalPolicy);
     assert.equal(checkPolicy(root), true);
-    write(root, 'AGENTS.md', canonicalAgents.replace('$tackle-agent-workflow', '$different-workflow'));
-    assert.throws(() => checkPolicy(root), /broad project Skill statement differs|Workflow policy drift/);
-    write(root, 'AGENTS.md', canonicalAgents);
-    appendFileSync(path.join(root, 'AGENTS.md'), 'Issue 路由也必须再创建一个本地独立审核者。\n');
-    assert.throws(() => checkPolicy(root), /Workflow policy drift/);
-    write(root, 'AGENTS.md', canonicalAgents);
-    appendFileSync(path.join(root, '.codex/skills/tackle-agent-workflow/SKILL.md'), 'Issue delivery uses a local independent reviewer.\n');
-    assert.throws(() => checkPolicy(root), /contradictory normative text/);
-    write(root, '.codex/skills/tackle-agent-workflow/SKILL.md', canonicalSkill);
-    write(root, '.codex/skills/tackle-agent-workflow/SKILL.md', canonicalSkill.replace('"productRuntimeTests":"product_runtime_tests"', '"productRuntimeTests":"wrong_catalog_id"'));
-    assert.throws(() => checkPolicy(root), /TaskBrief policy reference differs/);
-    write(root, '.codex/skills/tackle-agent-workflow/SKILL.md', canonicalSkill.replace('"workflowMetadataRequires":"product_runtime_tests"', '"workflowMetadataRequires":"wrong_catalog_id"'));
-    assert.throws(() => checkPolicy(root), /TaskBrief policy reference differs/);
-    write(root, '.codex/skills/tackle-agent-workflow/SKILL.md', canonicalSkill.replace('"triggeredCannotBeNa":true', '"triggeredCannotBeNa":false'));
-    assert.throws(() => checkPolicy(root), /TaskBrief policy reference differs/);
-    write(root, '.codex/skills/tackle-agent-workflow/SKILL.md', canonicalSkill);
-    appendFileSync(path.join(root, '.codex/skills/tackle-agent-workflow/agents/openai.yaml'), 'Always inspect rendered UI for every route.\n');
-    assert.throws(() => checkPolicy(root), /Workflow policy drift/);
-    write(root, '.codex/skills/tackle-agent-workflow/agents/openai.yaml', yaml);
-    appendFileSync(path.join(root, '.github/pull_request_template.md'), 'Minimal render smoke replaces the pending unified visual review.\n');
-    assert.throws(() => checkPolicy(root), /Workflow policy drift/);
+
+    const policy = JSON.parse(canonicalPolicy);
+    write(root, policyPath, JSON.stringify({ ...policy, extra: true }));
+    assert.throws(() => checkPolicy(root), /unknown, missing, or inapplicable keys/);
+    write(root, policyPath, JSON.stringify({ ...policy, schemaVersion: 'workflow-contract-policy/v3' }));
+    assert.throws(() => checkPolicy(root), /schemaVersion/);
+    write(root, policyPath, JSON.stringify({ ...policy, reviewTier: { ...policy.reviewTier, strictWhenRiskProfile: [] } }));
+    assert.throws(() => checkPolicy(root), /unknown_high_risk strict-review floor/);
+    write(root, policyPath, JSON.stringify({ ...policy, reviewTier: { ...policy.reviewTier, strictWhenRiskDimensions: policy.reviewTier.strictWhenRiskDimensions.filter((value) => value !== 'authorization') } }));
+    assert.throws(() => checkPolicy(root), /durable strict-review dimensions/);
+    const parityMutations = [
+      { label: 'taskCard.dailySemanticFields', value: { ...policy, taskCard: { ...policy.taskCard, dailySemanticFields: policy.taskCard.dailySemanticFields.filter((field) => field !== 'scope') } } },
+      { label: 'scopedEligibility.allowedPathClasses', value: { ...policy, scopedEligibility: { ...policy.scopedEligibility, allowedPathClasses: policy.scopedEligibility.allowedPathClasses.filter((pathClass) => pathClass !== 'AGENTS.md') } } },
+      { label: 'validationMatrix.mandatoryWorkflowCommands', value: { ...policy, validationMatrix: { ...policy.validationMatrix, mandatoryWorkflowCommands: policy.validationMatrix.mandatoryWorkflowCommands.slice(1) } } },
+      { label: 'validationMatrix.executionTiers', value: { ...policy, validationMatrix: { ...policy.validationMatrix, executionTiers: { ...policy.validationMatrix.executionTiers, focused_script_or_rule: { ...policy.validationMatrix.executionTiers.focused_script_or_rule, iterationFullCi: 'allowed' } } } } },
+      { label: 'taskBrief.conditionalNaApplicability', value: { ...policy, taskBrief: { ...policy.taskBrief, conditionalNaApplicability: { ...policy.taskBrief.conditionalNaApplicability, workflowMetadataRequires: 'different_n_a' } } } },
+      { label: 'localVerdict.schema', value: { ...policy, localVerdict: { ...policy.localVerdict, schema: 'tackle-local-verdict/v2' } } },
+    ];
+    for (const mutation of parityMutations) {
+      write(root, policyPath, JSON.stringify(mutation.value));
+      assert.throws(() => checkPolicy(root), new RegExp(mutation.label.replaceAll('.', '\\.')));
+    }
+    write(root, policyPath, canonicalPolicy);
+
+    const agents = readFileSync(path.join(root, 'AGENTS.md'), 'utf8');
+    write(root, 'AGENTS.md', agents.replace('workflow-contract-policy-ref/v2', 'workflow-contract-policy-ref/v3'));
+    assert.throws(() => checkPolicy(root), /unsupported workflow policy/);
+    write(root, 'AGENTS.md', agents.replace(/<!-- workflow-contract-policy-ref\/v2:[^\n]+ -->\n/, ''));
+    assert.throws(() => checkPolicy(root), /exactly one versioned policy reference/);
+    write(root, 'AGENTS.md', `${agents}<!-- workflow-contract-policy-ref/v2: ${policyPath} -->\n`);
+    assert.throws(() => checkPolicy(root), /exactly one versioned policy reference/);
+    write(root, 'AGENTS.md', `${agents}\nDisplay prose may change without changing the machine policy.\n`);
+    assert.equal(checkPolicy(root), true);
+  } finally { cleanup(root); }
+});
+
+test('review-tier execution consumes the authority and display prose cannot lower the safety floor', () => {
+  const root = temporaryRepo();
+  try {
+    taskBase(root);
+    const policyPath = '.codex/skills/tackle-agent-workflow/references/workflow-contract-policy.v2.json';
+    const policy = JSON.parse(readFileSync(path.join(root, policyPath), 'utf8'));
+    policy.taskBrief.phaseReceiptsByReviewTier.verdict.fast.all = ['coordinator', 'coding', 'review'];
+    write(root, policyPath, JSON.stringify(policy));
+    command(root, ['add', policyPath]);
+    command(root, ['commit', '-qm', 'policy fixture']);
+    const coordinator = receipt(root);
+    const coding = receipt(root, { role: 'coding' });
+    const fastVerdict = brief(root, { phase: 'verdict', reviewTier: 'fast', specReadReceipts: [coordinator, coding] });
+    assert.throws(() => checkTaskBrief({ root, brief: fastVerdict }), /coordinator, coding, review/);
+
+    appendFileSync(path.join(root, 'AGENTS.md'), 'Display-only claim: unknown high risk may use fast review.\n');
+    const unsafe = brief(root, {
+      reviewTier: 'fast',
+      riskProfile: 'unknown_high_risk',
+      riskDimensions: { persistedData: false, historicalSnapshots: false, concurrency: false, authorization: false, externalSideEffects: false, userVisible: false },
+    });
+    assert.throws(() => checkTaskBrief({ root, brief: unsafe }), /reviewTier must be strict/);
   } finally { cleanup(root); }
 });
 
@@ -632,6 +888,7 @@ test('spec-read receipts enforce full/scoped plans and canonical v3 hash', () =>
   const root = temporaryRepo();
   try {
     write(root, 'docs/tackle-forger-development-spec-v3.md', '# V3\n\n## 0. Authority\n\n### 0.1 Immutable\n\n### 3.1 Method and type\n\n### 5.2 Derived template\n\n## 8. Patch\n\n## 13. Snapshot\n\n## 14. Version\n\n### 18.2 Snapshot\n\n### 18.3 Patch\n\n## 19. Risks\n\n## 20. Open\n\n## 21. Relevant\n\n### 24.11 Snapshot\n\n## 25. Export\n');
+    write(root, POLICY_RELATIVE, readFileSync(path.join(process.cwd(), POLICY_RELATIVE), 'utf8'));
     const full = receipt(root);
     assert.equal(checkReadReceipt({ root, receipt: full }).receiptHash, receiptHash(full));
     const voluntaryFullCoding = receipt(root, { role: 'coding' });
@@ -647,14 +904,14 @@ test('spec-read receipts enforce full/scoped plans and canonical v3 hash', () =>
     assert.equal(checkReadReceipt({ root, receipt: scoped }).requiredSections.includes('21'), true);
     assert.equal(specReadPlan({ role: 'review', riskProfile: 'workflow_docs_metadata', relevantSections: ['21'] }).profile, 'SCOPED');
     assert.throws(() => checkReadReceipt({ root, receipt: { ...scoped, specSha256: '0'.repeat(64) } }), /does not match/);
-    for (const missing of ['0', '19', '20', '21']) {
+    for (const missing of ['0', '19', 'OPEN_REGISTRY', '21']) {
       assert.throws(() => checkReadReceipt({ root, receipt: { ...scoped, readSections: scoped.readSections.filter((item) => item !== missing) } }), /missing a required/);
       assert.throws(() => checkReadReceipt({ root, receipt: { ...scoped, requiredSections: scoped.requiredSections.filter((item) => item !== missing), readSections: scoped.readSections.filter((item) => item !== missing) } }), /requiredSections does not match/);
     }
     assert.throws(() => checkReadReceipt({ root, receipt: { ...scoped, riskProfile: 'runtime_behavior' } }), /profile must be ROUTED/);
     const routed = specReadPlan({ role: 'coordinator', riskProfile: 'runtime_product_domain', relevantSections: ['6', '20'] });
     assert.equal(routed.profile, 'ROUTED');
-    assert.deepEqual(routed.requiredSections, ['README', 'V3_INDEX', '0', '19', '20', '6']);
+    assert.deepEqual(routed.requiredSections, ['README', 'V3_INDEX', '0', '19', 'OPEN_REGISTRY', '6']);
   } finally { cleanup(root); }
 });
 
@@ -669,15 +926,17 @@ test('full-read sessions reuse only exact continuous low-risk evidence', () => {
     const reused = reusedReceipt(root);
     const current = currentReuseContext(reused.reuseEvidence.session);
     assert.equal(checkReadReceipt({ root, receipt: reused, currentReuseContext: current }).sessionHash, fullReadSessionHash(session));
+    assert.throws(() => checkReadReceipt({ root, receipt: reused, currentReuseContext: current, reviewTier: 'strict' }), /current low-risk SCOPED route/);
     write(root, 'reused-receipt.json', `${JSON.stringify(reused)}\n`);
     assert.equal(JSON.parse(runCli(['--check-read-receipt', '--receipt', 'reused-receipt.json', '--current-agent-identity', current.currentAgentIdentity, '--current-context-session-id', current.currentContextSessionId, '--current-context-state', current.currentContextState], root)).sessionHash, fullReadSessionHash(session));
-    assert.equal(checkTaskBrief({ root, brief: brief(root, { taskId: 'task-2', specReadReceipts: [reused] }), currentReuseContext: current }).taskBriefSha256.length, 64);
+    assert.equal(checkTaskBrief({ root, brief: brief(root, { taskId: 'task-2', reviewTier: 'standard', specReadReceipts: [reused] }), currentReuseContext: current }).taskBriefSha256.length, 64);
+    assert.throws(() => checkTaskBrief({ root, brief: brief(root, { taskId: 'task-2', specReadReceipts: [reused] }), currentReuseContext: current }), /current low-risk SCOPED route/);
     assert.throws(() => checkReadReceipt({ root, receipt: reused }), /currentReuseContext/);
-    assert.throws(() => checkTaskBrief({ root, brief: brief(root, { taskId: 'task-2', specReadReceipts: [reused] }) }), /currentReuseContext/);
+    assert.throws(() => checkTaskBrief({ root, brief: brief(root, { taskId: 'task-2', reviewTier: 'standard', specReadReceipts: [reused] }) }), /currentReuseContext/);
     assert.throws(() => checkFullReadSession({ root, session: { ...session, contextState: 'compacted' } }), /unknown or compacted/);
     assert.throws(() => checkReadReceipt({ root, receipt: { ...reused, reuseEvidence: { ...reused.reuseEvidence, agentIdentity: 'agent:other' } }, currentReuseContext: current }), /exact same agent/);
     assert.throws(() => checkReadReceipt({ root, receipt: { ...reused, riskProfile: 'runtime_product_domain' }, currentReuseContext: current }), /only valid/);
-    assert.throws(() => checkReadReceipt({ root, receipt: { ...reused, readSections: ['README', 'V3_INDEX', '0', '19', '20'] }, currentReuseContext: current }), /explicitly read/);
+    assert.throws(() => checkReadReceipt({ root, receipt: { ...reused, readSections: ['README', 'V3_INDEX', '0', '19', 'OPEN_REGISTRY'] }, currentReuseContext: current, applicableIds: ['OPEN-001'] }), /explicitly read/);
     assert.throws(() => checkReadReceipt({ root, receipt: reused, currentReuseContext: { ...current, currentAgentIdentity: 'agent:other' } }), /caller-provided/);
     assert.throws(() => checkReadReceipt({ root, receipt: reused, currentReuseContext: { ...current, currentContextState: 'compacted' } }), /currentContextState/);
     const copiedSession = { ...reused.reuseEvidence.session, agentIdentity: 'agent:other' };
@@ -687,9 +946,8 @@ test('full-read sessions reuse only exact continuous low-risk evidence', () => {
     assert.equal(checkFullReadSession({ root, session: { ...session, createdAt: '2024-02-29T23:59:59Z' } }).sessionHash.length, 64);
     unlinkSync(path.join(root, 'session.json'));
     unlinkSync(path.join(root, 'reused-receipt.json'));
-    const coding = receipt(root, { taskId: 'task-2', role: 'coding', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'implementation' });
-    const review = receipt(root, { taskId: 'task-2', role: 'review', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'review' });
-    const verdictBrief = brief(root, { taskId: 'task-2', phase: 'verdict', reviewedHead: command(root, ['rev-parse', 'HEAD']), specReadReceipts: [reused, coding, review] });
+    const coding = receipt(root, { taskId: 'task-2', role: 'coding', profile: 'FULL', requiredSections: ['README', 'V3_INDEX', 'FULL_V3'], readSections: ['README', 'V3_INDEX', 'FULL_V3'], reason: 'implementation' });
+    const verdictBrief = brief(root, { taskId: 'task-2', phase: 'verdict', reviewTier: 'standard', reviewedHead: command(root, ['rev-parse', 'HEAD']), specReadReceipts: [reused, coding] });
     assert.equal(validationExecutionPlan({ root, brief: verdictBrief, currentReuseContext: current }).artifact.artifactIdentity.kind, 'commit');
     assert.throws(() => validationExecutionPlan({ root, brief: verdictBrief }), /currentReuseContext/);
     assert.throws(() => validationExecutionPlan({ root, brief: verdictBrief, currentReuseContext: { ...current, currentContextState: 'compacted' } }), /currentContextState/);
@@ -707,9 +965,8 @@ test('REUSE_FULL runValidation and CLI fail before execution without trusted cur
   try {
     const reused = reusedReceipt(root);
     const current = currentReuseContext(reused.reuseEvidence.session);
-    const coding = receipt(root, { taskId: 'task-2', role: 'coding', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'implementation' });
-    const review = receipt(root, { taskId: 'task-2', role: 'review', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'review' });
-    const verdictBrief = brief(root, { taskId: 'task-2', phase: 'verdict', reviewedHead: command(root, ['rev-parse', 'HEAD']), specReadReceipts: [reused, coding, review] });
+    const coding = receipt(root, { taskId: 'task-2', role: 'coding', profile: 'FULL', requiredSections: ['README', 'V3_INDEX', 'FULL_V3'], readSections: ['README', 'V3_INDEX', 'FULL_V3'], reason: 'implementation' });
+    const verdictBrief = brief(root, { taskId: 'task-2', phase: 'verdict', reviewTier: 'standard', reviewedHead: command(root, ['rev-parse', 'HEAD']), specReadReceipts: [reused, coding] });
     const briefPath = path.join(handoff, 'verdict-brief.json');
     const contextsPath = path.join(handoff, 'reuse-contexts.json');
     writeFileSync(briefPath, `${JSON.stringify(verdictBrief)}\n`);
@@ -775,8 +1032,8 @@ test('TaskBrief rejects empty shells and verdict cross-checks all durable identi
       assert.throws(() => checkTaskBrief({ root, brief: invalid }), /TaskBrief/);
     }
     assert.throws(() => checkTaskBrief({ root, brief: { ...preDispatch, validation: [{ command: null, naReason: '' }] } }), /unknown, missing, or inapplicable keys/);
-    const coding = receipt(root, { role: 'coding', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'implementation' });
-    const review = receipt(root, { role: 'review', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'review' });
+    const coding = receipt(root, { role: 'coding', profile: 'FULL', requiredSections: ['README', 'V3_INDEX', 'FULL_V3'], readSections: ['README', 'V3_INDEX', 'FULL_V3'], reason: 'implementation' });
+    const review = receipt(root, { role: 'review', profile: 'FULL', requiredSections: ['README', 'V3_INDEX', 'FULL_V3'], readSections: ['README', 'V3_INDEX', 'FULL_V3'], reason: 'review' });
     const verdictBrief = { ...preDispatch, phase: 'verdict', specReadReceipts: [preDispatch.specReadReceipts[0], coding, review] };
     const checkedBrief = checkTaskBrief({ root, brief: verdictBrief });
     const verdict = {
@@ -786,7 +1043,7 @@ test('TaskBrief rejects empty shells and verdict cross-checks all durable identi
       artifactIdentity: { kind: 'worktree', commitSha: null, patchHash: patchHash({ root, baseSha: verdictBrief.baseSha, ownedPaths: verdictBrief.ownedPaths }).patchHash }, verdict: 'PASS', findings: [],
     };
     assert.equal(checkVerdict({ root, verdict, brief: verdictBrief }).taskBriefSha256, checkedBrief.taskBriefSha256);
-    assert.throws(() => checkTaskBrief({ root, brief: { ...preDispatch, phase: 'verdict' } }), /exactly one coordinator, coding, and review/);
+    assert.throws(() => checkTaskBrief({ root, brief: { ...preDispatch, phase: 'verdict' } }), /requires exactly these spec-read receipt roles: coordinator, coding, review/);
     assert.throws(() => checkTaskBrief({ root, brief: { ...preDispatch, specReadReceipts: [{ ...preDispatch.specReadReceipts[0], relevantSections: ['2'] }] } }), /riskProfile and relevantSections/);
     assert.throws(() => checkTaskBrief({ root, brief: { ...preDispatch, riskProfile: 'runtime_product_domain', scopeHasRuntimeSemantics: true } }), /workflow_metadata requires/);
     assert.throws(() => checkTaskBrief({ root, brief: { ...preDispatch, unexpected: true } }), /unknown, missing, or inapplicable keys/);
@@ -815,8 +1072,8 @@ test('TaskBrief promotion preserves semantics and rejects mismatched, duplicate,
   try {
     taskBase(root);
     const source = brief(root);
-    const coding = receipt(root, { role: 'coding', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'implementation coverage' });
-    const review = receipt(root, { role: 'review', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'independent review coverage' });
+    const coding = receipt(root, { role: 'coding', profile: 'FULL', requiredSections: ['README', 'V3_INDEX', 'FULL_V3'], readSections: ['README', 'V3_INDEX', 'FULL_V3'], reason: 'implementation coverage' });
+    const review = receipt(root, { role: 'review', profile: 'FULL', requiredSections: ['README', 'V3_INDEX', 'FULL_V3'], readSections: ['README', 'V3_INDEX', 'FULL_V3'], reason: 'independent review coverage' });
     write(root, 'AGENTS.md', 'task-owned change\n');
     const promoted = promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review });
     assert.equal(checkTaskBrief({ root, brief: promoted }).phase, 'verdict');
@@ -837,18 +1094,110 @@ test('TaskBrief promotion preserves semantics and rejects mismatched, duplicate,
   }
 });
 
+test('review tiers stay independent from riskProfile and enforce tier-specific receipt boundaries', () => {
+  const root = temporaryRepo();
+  const evidenceDir = mkdtempSync(path.join(os.tmpdir(), 'workflow-review-tier-'));
+  try {
+    taskBase(root);
+    const source = brief(root);
+    const coding = receipt(root, { role: 'coding', profile: 'FULL', requiredSections: ['README', 'V3_INDEX', 'FULL_V3'], readSections: ['README', 'V3_INDEX', 'FULL_V3'], reason: 'implementation coverage' });
+    const review = receipt(root, { role: 'review', profile: 'FULL', requiredSections: ['README', 'V3_INDEX', 'FULL_V3'], readSections: ['README', 'V3_INDEX', 'FULL_V3'], reason: 'independent review coverage' });
+    const prBase = { ...source, workflowMode: 'pull_request', reviewedHead: source.baseSha, dirtyWorktreeDisposition: 'clean_synced' };
+    const prFast = { ...prBase, phase: 'verdict', reviewTier: 'fast', specReadReceipts: [source.specReadReceipts[0], coding] };
+    assert.equal(checkTaskBrief({ root, brief: prFast }).phase, 'verdict');
+    const prStandard = { ...prFast, reviewTier: 'standard', specReadReceipts: [source.specReadReceipts[0], coding, review] };
+    assert.equal(checkTaskBrief({ root, brief: prStandard }).phase, 'verdict');
+    assert.throws(() => checkTaskBrief({ root, brief: { ...prStandard, specReadReceipts: [source.specReadReceipts[0], coding] } }), /coordinator, coding, review/);
+    assert.equal(prFast.riskProfile, prStandard.riskProfile);
+
+    write(root, 'AGENTS.md', 'task-owned change\n');
+    for (const reviewTier of ['fast', 'standard']) {
+      const tierSource = { ...source, reviewTier };
+      const promoted = promoteTaskBrief({ root, brief: tierSource, codingReceipt: coding });
+      assert.deepEqual(promoted.specReadReceipts.map((item) => item.role), ['coordinator', 'coding']);
+      assert.throws(() => promoteTaskBrief({ root, brief: tierSource, codingReceipt: coding, reviewReceipt: review }), /forbids a local review receipt/);
+    }
+    assert.throws(() => promoteTaskBrief({ root, brief: source, codingReceipt: coding }), /role review|receipt/);
+    assert.deepEqual(promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review }).specReadReceipts.map((item) => item.role), ['coordinator', 'coding', 'review']);
+
+    const fastSourcePath = path.join(evidenceDir, 'fast-brief.json');
+    const codingPath = path.join(evidenceDir, 'coding.json');
+    writeFileSync(fastSourcePath, JSON.stringify({ ...source, reviewTier: 'fast' }));
+    writeFileSync(codingPath, JSON.stringify(coding));
+    const cli = JSON.parse(runCli(['--promote-task-brief', '--brief', fastSourcePath, '--coding-receipt', codingPath], root));
+    assert.deepEqual(cli.specReadReceipts.map((item) => item.role), ['coordinator', 'coding']);
+
+    for (const dimension of ['persistedData', 'historicalSnapshots', 'concurrency', 'authorization', 'externalSideEffects']) {
+      assert.throws(
+        () => checkTaskBrief({ root, brief: { ...source, reviewTier: 'standard', riskDimensions: { ...source.riskDimensions, [dimension]: true } } }),
+        new RegExp(`reviewTier must be strict when riskDimensions\\.${dimension}`),
+      );
+    }
+    assert.throws(
+      () => checkTaskBrief({ root, brief: { ...source, riskProfile: 'unknown_high_risk', reviewTier: 'fast' } }),
+      /reviewTier must be strict when riskProfile unknown_high_risk/,
+    );
+    assert.throws(
+      () => checkTaskBrief({ root, brief: { ...source, riskProfile: 'unknown_high_risk', reviewTier: 'strict' } }),
+      /workflow_metadata requires workflow_docs_metadata/,
+    );
+  } finally {
+    cleanup(root);
+    cleanup(evidenceDir);
+  }
+});
+
 test('TaskBrief promotion rejects a source artifact made stale by a new HEAD', () => {
   const root = temporaryRepo();
   try {
     taskBase(root);
     const source = brief(root);
-    const coding = receipt(root, { role: 'coding', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'implementation coverage' });
-    const review = receipt(root, { role: 'review', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'review coverage' });
+    const coding = receipt(root, { role: 'coding', profile: 'FULL', requiredSections: ['README', 'V3_INDEX', 'FULL_V3'], readSections: ['README', 'V3_INDEX', 'FULL_V3'], reason: 'implementation coverage' });
+    const review = receipt(root, { role: 'review', profile: 'FULL', requiredSections: ['README', 'V3_INDEX', 'FULL_V3'], readSections: ['README', 'V3_INDEX', 'FULL_V3'], reason: 'review coverage' });
     write(root, 'later.txt', 'new HEAD\n');
     command(root, ['add', 'later.txt']);
     command(root, ['commit', '-qm', 'advance HEAD']);
-    assert.throws(() => promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review }), /stale base\/head artifact/);
+    assert.throws(() => promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review }), /stale base\/head artifact|head changes invalidate worktree evidence/);
   } finally { cleanup(root); }
+});
+
+test('WORKTREE TaskBrief and local result evidence expire when HEAD advances after promotion', () => {
+  for (const schema of ['tackle-task-brief/v1', 'tackle-task-brief/v2']) {
+    const root = temporaryRepo();
+    const handoff = mkdtempSync(path.join(os.tmpdir(), 'workflow-stale-worktree-'));
+    try {
+      taskBase(root);
+      const source = schema === 'tackle-task-brief/v1'
+        ? brief(root)
+        : prepareTaskBrief({ root, input: prepareInput(root, { reviewTier: 'standard' }) });
+      write(root, 'AGENTS.md', 'task-owned change\n');
+      const coding = receipt(root, { taskId: source.taskId, role: 'coding', riskProfile: source.riskProfile, relevantSections: source.relevantSections, reason: 'coding coverage' });
+      const review = receipt(root, { taskId: source.taskId, role: 'review', riskProfile: source.riskProfile, relevantSections: source.relevantSections, reason: 'review coverage' });
+      const promoted = promoteTaskBrief({ root, brief: source, codingReceipt: coding, ...(schema === 'tackle-task-brief/v1' ? { reviewReceipt: review } : {}) });
+      const checked = checkTaskBrief({ root, brief: promoted });
+      const result = {
+        schema: 'tackle-local-result/v2',
+        taskBriefSha256: checked.taskBriefSha256,
+        artifactIdentity: { kind: 'worktree', commitSha: null, patchHash: patchHash({ root, baseSha: checked.baseSha, ownedPaths: promoted.ownedPaths }).patchHash },
+        verdict: 'PASS',
+        findings: [],
+      };
+      const briefPath = path.join(handoff, 'brief.json');
+      const resultPath = path.join(handoff, 'result.json');
+      writeFileSync(briefPath, `${JSON.stringify(promoted)}\n`);
+      writeFileSync(resultPath, `${JSON.stringify(result)}\n`);
+      assert.equal(validationExecutionPlan({ root, brief: promoted }).artifact.artifactIdentity.kind, 'worktree');
+      assert.equal(checkVerdict({ root, verdict: result, brief: promoted }).taskBriefSha256, checked.taskBriefSha256);
+      write(root, 'later.txt', 'advance unrelated HEAD\n');
+      command(root, ['add', 'later.txt']);
+      command(root, ['commit', '-qm', 'advance unrelated HEAD']);
+      assert.throws(() => checkTaskBrief({ root, brief: promoted }), /head changes invalidate worktree evidence/);
+      assert.throws(() => validationExecutionPlan({ root, brief: promoted }), /head changes invalidate worktree evidence/);
+      assert.throws(() => runValidation({ root, brief: promoted }), /head changes invalidate worktree evidence/);
+      assert.throws(() => checkVerdict({ root, verdict: result, brief: promoted }), /head changes invalidate worktree evidence/);
+      assert.throws(() => runCli(['--check-local-result', '--result', resultPath, '--brief', briefPath], root), /head changes invalidate worktree evidence/);
+    } finally { cleanup(root); cleanup(handoff); }
+  }
 });
 
 test('TaskBrief promotion validates frozen baselines and trusted REUSE_FULL context', () => {
@@ -859,21 +1208,20 @@ test('TaskBrief promotion validates frozen baselines and trusted REUSE_FULL cont
     const baseline = buildOwnedBaselineManifest({ root, baseSha: command(root, ['rev-parse', 'HEAD']), ownedPaths: ['AGENTS.md'] });
     const frozen = brief(root, { preexistingOwnedPaths: ['AGENTS.md'], dirtyWorktreeDisposition: 'include_with_frozen_baseline', preTaskOwnedBaselineManifest: baseline, preTaskOwnedBaselineHash: ownedBaselineHash(baseline) });
     write(root, 'AGENTS.md', 'post-baseline owned change\n');
-    const coding = receipt(root, { role: 'coding', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'coding coverage' });
-    const review = receipt(root, { role: 'review', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'review coverage' });
+    const coding = receipt(root, { role: 'coding', profile: 'FULL', requiredSections: ['README', 'V3_INDEX', 'FULL_V3'], readSections: ['README', 'V3_INDEX', 'FULL_V3'], reason: 'coding coverage' });
+    const review = receipt(root, { role: 'review', profile: 'FULL', requiredSections: ['README', 'V3_INDEX', 'FULL_V3'], readSections: ['README', 'V3_INDEX', 'FULL_V3'], reason: 'review coverage' });
     assert.equal(promoteTaskBrief({ root, brief: frozen, codingReceipt: coding, reviewReceipt: review }).dirtyWorktreeDisposition, 'include_with_frozen_baseline');
     assert.throws(() => promoteTaskBrief({ root, brief: { ...frozen, preTaskOwnedBaselineHash: '0'.repeat(64) }, codingReceipt: coding, reviewReceipt: review }), /must match its deterministic baseline manifest/);
 
     const coordinatorReuse = reusedReceiptForRole(root, 'coordinator');
-    const reuseBrief = brief(root, { taskId: 'task-2', specReadReceipts: [coordinatorReuse] });
-    const codingReuse = receipt(root, { taskId: 'task-2', role: 'coding', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'coding scoped coverage' });
-    const reviewReuse = receipt(root, { taskId: 'task-2', role: 'review', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'review scoped coverage' });
+    const reuseBrief = brief(root, { taskId: 'task-2', reviewTier: 'standard', specReadReceipts: [coordinatorReuse] });
+    const codingReuse = receipt(root, { taskId: 'task-2', role: 'coding', profile: 'FULL', requiredSections: ['README', 'V3_INDEX', 'FULL_V3'], readSections: ['README', 'V3_INDEX', 'FULL_V3'], reason: 'coding scoped coverage' });
     const current = currentReuseContext(coordinatorReuse.reuseEvidence.session);
-    assert.equal(promoteTaskBrief({ root, brief: reuseBrief, codingReceipt: codingReuse, reviewReceipt: reviewReuse, currentReuseContext: current }).phase, 'verdict');
-    assert.throws(() => promoteTaskBrief({ root, brief: reuseBrief, codingReceipt: codingReuse, reviewReceipt: reviewReuse }), /currentReuseContext/);
-    assert.throws(() => promoteTaskBrief({ root, brief: reuseBrief, codingReceipt: codingReuse, reviewReceipt: reviewReuse, currentReuseContext: { ...current, currentAgentIdentity: 'agent:other' } }), /does not match/);
-    assert.throws(() => promoteTaskBrief({ root, brief: reuseBrief, codingReceipt: codingReuse, reviewReceipt: reviewReuse, currentReuseContext: { ...current, currentContextSessionId: 'context:other' } }), /does not match/);
-    assert.throws(() => promoteTaskBrief({ root, brief: reuseBrief, codingReceipt: codingReuse, reviewReceipt: reviewReuse, currentReuseContext: { ...current, currentContextState: 'compacted' } }), /must be continuous/);
+    assert.equal(promoteTaskBrief({ root, brief: reuseBrief, codingReceipt: codingReuse, currentReuseContext: current }).phase, 'verdict');
+    assert.throws(() => promoteTaskBrief({ root, brief: reuseBrief, codingReceipt: codingReuse }), /currentReuseContext/);
+    assert.throws(() => promoteTaskBrief({ root, brief: reuseBrief, codingReceipt: codingReuse, currentReuseContext: { ...current, currentAgentIdentity: 'agent:other' } }), /does not match/);
+    assert.throws(() => promoteTaskBrief({ root, brief: reuseBrief, codingReceipt: codingReuse, currentReuseContext: { ...current, currentContextSessionId: 'context:other' } }), /does not match/);
+    assert.throws(() => promoteTaskBrief({ root, brief: reuseBrief, codingReceipt: codingReuse, currentReuseContext: { ...current, currentContextState: 'compacted' } }), /must be continuous/);
   } finally { cleanup(root); }
 });
 
@@ -889,20 +1237,17 @@ test('TaskBrief promotion assigns independent trusted contexts to every REUSE_FU
     };
     const coordinator = reuseFor('coordinator', 'agent:coordinator', 'context:coordinator');
     const coding = reuseFor('coding', 'agent:coding', 'context:coding');
-    const review = reuseFor('review', 'agent:review', 'context:review');
-    const source = brief(root, { taskId: 'task-2', specReadReceipts: [coordinator] });
+    const source = brief(root, { taskId: 'task-2', reviewTier: 'standard', specReadReceipts: [coordinator] });
     const contexts = {
       coordinator: currentReuseContext(coordinator.reuseEvidence.session),
       coding: currentReuseContext(coding.reuseEvidence.session),
-      review: currentReuseContext(review.reuseEvidence.session),
     };
-    assert.equal(promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review, reuseContexts: contexts }).phase, 'verdict');
-    assert.throws(() => promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review }), /currentReuseContext/);
-    assert.throws(() => promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review, reuseContexts: { coordinator: contexts.coordinator, review: contexts.review } }), /currentReuseContext|exactly one trusted/);
-    assert.throws(() => promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review, reuseContexts: { ...contexts, coding: { ...contexts.coding, currentAgentIdentity: 'agent:wrong' } } }), /does not match/);
-    assert.throws(() => promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review, reuseContexts: { ...contexts, review: { ...contexts.review, currentContextSessionId: 'context:wrong' } } }), /does not match/);
-    assert.throws(() => promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review, reuseContexts: { ...contexts, review: { ...contexts.review, currentContextState: 'compacted' } } }), /must be continuous/);
-    assert.throws(() => promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review, reuseContexts: { ...contexts, extra: contexts.review } }), /unknown receipt role/);
+    assert.equal(promoteTaskBrief({ root, brief: source, codingReceipt: coding, reuseContexts: contexts }).phase, 'verdict');
+    assert.throws(() => promoteTaskBrief({ root, brief: source, codingReceipt: coding }), /currentReuseContext/);
+    assert.throws(() => promoteTaskBrief({ root, brief: source, codingReceipt: coding, reuseContexts: { coordinator: contexts.coordinator } }), /currentReuseContext|exactly one trusted/);
+    assert.throws(() => promoteTaskBrief({ root, brief: source, codingReceipt: coding, reuseContexts: { ...contexts, coding: { ...contexts.coding, currentAgentIdentity: 'agent:wrong' } } }), /does not match/);
+    assert.throws(() => promoteTaskBrief({ root, brief: source, codingReceipt: coding, reuseContexts: { ...contexts, coding: { ...contexts.coding, currentContextState: 'compacted' } } }), /must be continuous/);
+    assert.throws(() => promoteTaskBrief({ root, brief: source, codingReceipt: coding, reuseContexts: { ...contexts, extra: contexts.coding } }), /unknown receipt role/);
   } finally { cleanup(root); }
 });
 
@@ -911,8 +1256,8 @@ test('TaskBrief promotion accepts deleted and untracked owned artifacts but reje
   try {
     taskBase(root);
     const source = brief(root);
-    const coding = receipt(root, { role: 'coding', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'coding coverage' });
-    const review = receipt(root, { role: 'review', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'review coverage' });
+    const coding = receipt(root, { role: 'coding', profile: 'FULL', requiredSections: ['README', 'V3_INDEX', 'FULL_V3'], readSections: ['README', 'V3_INDEX', 'FULL_V3'], reason: 'coding coverage' });
+    const review = receipt(root, { role: 'review', profile: 'FULL', requiredSections: ['README', 'V3_INDEX', 'FULL_V3'], readSections: ['README', 'V3_INDEX', 'FULL_V3'], reason: 'review coverage' });
     unlinkSync(path.join(root, 'AGENTS.md'));
     assert.equal(promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review }).phase, 'verdict');
     assert.throws(() => buildPatchManifest({ root, baseSha: source.baseSha, ownedPaths: ['bad\0path'] }), /Invalid owned path/);
@@ -926,8 +1271,8 @@ test('TaskBrief promotion accepts an untracked scoped owned artifact', () => {
     const ownedPath = '.codex/skills/tackle-agent-workflow/new-owned.md';
     const baseSha = command(root, ['rev-parse', 'HEAD']);
     const source = brief(root, { ownedPaths: [ownedPath], allowedChanges: [ownedPath], validationPlan: { ...brief(root).validationPlan, requiredCommands: ['node scripts/spec-v3-modules.mjs --check', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-policy', 'node .codex/skills/tackle-agent-workflow/scripts/workflow-contract.mjs --check-index', 'node --test .codex/skills/tackle-agent-workflow/scripts/workflow-contract.test.mjs', ownedWhitespaceCommand(baseSha, [ownedPath])] } });
-    const coding = receipt(root, { role: 'coding', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'coding coverage' });
-    const review = receipt(root, { role: 'review', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'review coverage' });
+    const coding = receipt(root, { role: 'coding', profile: 'FULL', requiredSections: ['README', 'V3_INDEX', 'FULL_V3'], readSections: ['README', 'V3_INDEX', 'FULL_V3'], reason: 'coding coverage' });
+    const review = receipt(root, { role: 'review', profile: 'FULL', requiredSections: ['README', 'V3_INDEX', 'FULL_V3'], readSections: ['README', 'V3_INDEX', 'FULL_V3'], reason: 'review coverage' });
     write(root, ownedPath, 'new owned artifact\n');
     assert.equal(promoteTaskBrief({ root, brief: source, codingReceipt: coding, reviewReceipt: review }).phase, 'verdict');
   } finally { cleanup(root); }
@@ -940,8 +1285,8 @@ test('derived evidence stages keep development light and freeze only the review 
     const development = brief(root);
     assert.equal(checkTaskBrief({ root, brief: development }).phase, 'pre_dispatch');
     assert.throws(() => checkTaskBrief({ root, brief: { ...development, evidenceStage: 'local_review_handoff' } }), /unknown, missing, or inapplicable keys/);
-    const coding = receipt(root, { role: 'coding', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'implementation' });
-    const review = receipt(root, { role: 'review', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'review' });
+    const coding = receipt(root, { role: 'coding', profile: 'FULL', requiredSections: ['README', 'V3_INDEX', 'FULL_V3'], readSections: ['README', 'V3_INDEX', 'FULL_V3'], reason: 'implementation' });
+    const review = receipt(root, { role: 'review', profile: 'FULL', requiredSections: ['README', 'V3_INDEX', 'FULL_V3'], readSections: ['README', 'V3_INDEX', 'FULL_V3'], reason: 'review' });
     const committedBrief = { ...development, phase: 'verdict', reviewedHead: development.baseSha, specReadReceipts: [development.specReadReceipts[0], coding, review] };
     const checked = checkTaskBrief({ root, brief: committedBrief });
     const identity = committedBrief.reviewedHead;
@@ -1025,8 +1370,8 @@ test('SCOPED eligibility, clean Issue/PR routing, sections, OPEN IDs, and receip
     const runtimeReceipt = receipt(root, { riskProfile: 'runtime_product_domain', reason: 'runtime change' });
     const runtimeBrief = { ...local, ownedPaths: ['src/runtime.ts'], allowedChanges: ['src/runtime.ts'], riskProfile: 'runtime_product_domain', scopeHasRuntimeSemantics: true, changeClass: 'typescript_api', validationPlan: { requiredCommands: ['npm run typecheck', 'npm run lint', 'npm test'], requiredScenarios: ['normal_path'], intentionallyNotApplicable: {} }, specReadReceipts: [runtimeReceipt] };
     assert.equal(checkTaskBrief({ root, brief: runtimeBrief }).phase, 'pre_dispatch');
-    assert.throws(() => checkTaskBrief({ root, brief: { ...runtimeBrief, specReadReceipts: [{ ...runtimeReceipt, profile: 'SCOPED' }] } }), /profile must be ROUTED/);
-    assert.throws(() => checkTaskBrief({ root, brief: { ...local, specReadReceipts: [local.specReadReceipts[0], local.specReadReceipts[0]] } }), /exactly one coordinator/);
+    assert.throws(() => checkTaskBrief({ root, brief: { ...runtimeBrief, specReadReceipts: [{ ...runtimeReceipt, profile: 'SCOPED' }] } }), /profile must be (?:ROUTED|FULL)/);
+    assert.throws(() => checkTaskBrief({ root, brief: { ...local, specReadReceipts: [local.specReadReceipts[0], local.specReadReceipts[0]] } }), /requires exactly these spec-read receipt roles: coordinator/);
     assert.throws(() => checkTaskBrief({ root, brief: { ...local, relevantSections: ['1', '20', '404'] } }), /section absent/);
     assert.throws(() => checkTaskBrief({ root, brief: { ...local, openDecisionCheck: { ...local.openDecisionCheck, checkedIds: ['OPEN-999'], applicableIds: ['OPEN-999'] } } }), /complete current v3 OPEN registry/);
     assert.equal(checkTaskBrief({ root, brief: { ...local, openDecisionCheck: { ...local.openDecisionCheck, applicableIds: [], noApplicableReason: 'No registry item affects this workflow-only change.' } } }).phase, 'pre_dispatch');
@@ -1039,11 +1384,11 @@ test('SCOPED eligibility, clean Issue/PR routing, sections, OPEN IDs, and receip
     assert.throws(() => checkTaskBrief({ root, brief: issue }), /current HEAD|HEAD to equal baseSha/);
     const featureIssue = { ...issue, reviewedHead: command(root, ['rev-parse', 'HEAD']) };
     assert.equal(checkTaskBrief({ root, brief: featureIssue }).reviewedHead, featureIssue.reviewedHead);
-    const coding = receipt(root, { role: 'coding', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'implementation' });
-    const review = receipt(root, { role: 'review', profile: 'SCOPED', requiredSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], readSections: ['README', 'V3_INDEX', '0', '19', '20', '1'], reason: 'review' });
+    const coding = receipt(root, { role: 'coding', profile: 'FULL', requiredSections: ['README', 'V3_INDEX', 'FULL_V3'], readSections: ['README', 'V3_INDEX', 'FULL_V3'], reason: 'implementation' });
+    const review = receipt(root, { role: 'review', profile: 'FULL', requiredSections: ['README', 'V3_INDEX', 'FULL_V3'], readSections: ['README', 'V3_INDEX', 'FULL_V3'], reason: 'review' });
     const duplicateBase = command(root, ['rev-parse', 'HEAD']);
     const duplicate = { ...local, baseSha: duplicateBase, reviewedHead: 'WORKTREE', validationPlan: { ...local.validationPlan, requiredCommands: [...local.validationPlan.requiredCommands.filter((item) => !item.includes('--check-owned-whitespace')), ownedWhitespaceCommand(duplicateBase, ['AGENTS.md'])] }, phase: 'verdict', specReadReceipts: [local.specReadReceipts[0], coding, review, review] };
-    assert.throws(() => checkTaskBrief({ root, brief: duplicate }), /exactly one coordinator, coding, and review/);
+    assert.throws(() => checkTaskBrief({ root, brief: duplicate }), /requires exactly these spec-read receipt roles: coordinator, coding, review/);
   } finally { cleanup(root); }
 });
 
@@ -1132,6 +1477,94 @@ test('canonical modular routes reject incomplete runtime coverage and accept a c
   assert.equal(plan.requiredSections.includes('FULL_V3'), false);
 });
 
+test('OPEN registry read plans are compact, applicable-only, dependency-bound, and strict-safe', () => {
+  const root = process.cwd();
+  const empty = specReadPlan({
+    root,
+    role: 'coordinator',
+    riskProfile: 'workflow_docs_metadata',
+    reviewTier: 'standard',
+    relevantSections: ['0', '19', '20'],
+    applicableIds: [],
+  });
+  assert.equal(empty.profile, 'SCOPED');
+  assert.equal(empty.requiredSections.includes('20'), false);
+  assert.equal(empty.requiredSections.includes('OPEN_REGISTRY'), true);
+  assert.equal(empty.requiredSections.some((section) => section.startsWith('OPEN:')), false);
+
+  const applicable = specReadPlan({
+    root,
+    role: 'coordinator',
+    riskProfile: 'workflow_docs_metadata',
+    reviewTier: 'standard',
+    relevantSections: ['0', '19', '20'],
+    applicableIds: ['OPEN-009'],
+  });
+  assert.equal(applicable.profile, 'SCOPED');
+  assert.equal(applicable.requiredSections.includes('OPEN:OPEN-009'), true);
+  assert.equal(applicable.requiredSections.includes('23.6'), true);
+  assert.equal(applicable.requiredSections.includes('20'), false);
+
+  const strict = specReadPlan({
+    root,
+    role: 'coordinator',
+    riskProfile: 'workflow_docs_metadata',
+    reviewTier: 'strict',
+    relevantSections: ['0', '19', '20'],
+    applicableIds: [],
+  });
+  assert.equal(strict.profile, 'FULL');
+  assert.deepEqual(strict.requiredSections, ['README', 'V3_INDEX', 'FULL_V3']);
+  assert.equal(specReadPlan({ root, role: 'coordinator', riskProfile: 'unknown_high_risk', relevantSections: [], applicableIds: [] }).profile, 'FULL');
+  assert.throws(
+    () => specReadPlan({ root, role: 'coordinator', riskProfile: 'workflow_docs_metadata', reviewTier: 'standard', relevantSections: ['0', '19', '20'], applicableIds: ['OPEN-999'] }),
+    /current OPEN registry IDs/,
+  );
+
+  const registry = buildNavigationIndex(root).openRegistry;
+  assert.equal(registry.length, 11);
+  assert.equal(new Set(registry.map((entry) => entry.id)).size, registry.length);
+  assert.equal(registry.every((entry) => entry.path.startsWith('docs/spec-v3/') && entry.startLine <= entry.endLine && entry.contentSha256.length === 64), true);
+
+  const fixture = temporaryRepo();
+  try {
+    taskBase(fixture);
+    const fixturePlan = specReadPlan({
+      root: fixture,
+      role: 'coordinator',
+      riskProfile: 'workflow_docs_metadata',
+      reviewTier: 'standard',
+      relevantSections: ['1', '20'],
+      applicableIds: ['OPEN-001'],
+    });
+    const coordinator = {
+      ...receipt(fixture),
+      profile: fixturePlan.profile,
+      requiredSections: fixturePlan.requiredSections,
+      readSections: fixturePlan.requiredSections,
+    };
+    const applicableBrief = brief(fixture, {
+      reviewTier: 'standard',
+      openDecisionCheck: {
+        registrySha256: openRegistryHash(fixture),
+        checkedIds: ['OPEN-001'],
+        applicableIds: ['OPEN-001'],
+        noApplicableReason: null,
+      },
+      specReadReceipts: [coordinator],
+    });
+    assert.equal(checkTaskBrief({ root: fixture, brief: applicableBrief }).phase, 'pre_dispatch');
+    assert.throws(
+      () => checkTaskBrief({ root: fixture, brief: { ...applicableBrief, specReadReceipts: [{ ...coordinator, requiredSections: coordinator.requiredSections.filter((section) => section !== 'OPEN:OPEN-001'), readSections: coordinator.readSections.filter((section) => section !== 'OPEN:OPEN-001') }] } }),
+      /requiredSections does not match/,
+    );
+
+    const before = openRegistryHash(fixture);
+    appendFileSync(path.join(fixture, 'docs/tackle-forger-development-spec-v3.md'), '\nSpecification identity change.\n');
+    assert.notEqual(openRegistryHash(fixture), before);
+  } finally { cleanup(fixture); }
+});
+
 test('canonical specification paths always trigger the module consistency command', () => {
   const root = temporaryRepo();
   try {
@@ -1149,101 +1582,81 @@ test('canonical specification paths always trigger the module consistency comman
       }),
     });
     const prepared = prepareTaskBrief({ root, input });
-    assert.equal(prepared.validationPlan.requiredCommands.includes('node scripts/spec-v3-modules.mjs --check'), true);
+    assert.equal(checkTaskBrief({ root, brief: prepared }).normalizedBrief.validationPlan.requiredCommands.includes('node scripts/spec-v3-modules.mjs --check'), true);
   } finally { cleanup(root); }
 });
 
-test('repository workflow leaves the merge decision to task-aware Agent judgment', () => {
+test('machine policy preserves review boundaries without a prose mirror', () => {
   const root = process.cwd();
-  const policyPaths = [
-    'AGENTS.md',
-    '.github/merge-gates.md',
-    '.claude/skills/agent-pr-loop/SKILL.md',
-    '.codex/skills/agent-issue-loop/SKILL.md',
-    '.codex/skills/agent-pr-loop/SKILL.md',
-    '.codex/skills/agent-pr-loop/agents/openai.yaml',
-    '.codex/skills/agent-project-bootstrap/SKILL.md',
-    '.codex/skills/agent-project-bootstrap/references/daily-project-flow.md',
-    '.codex/skills/tackle-agent-workflow/SKILL.md',
-  ];
-  const prohibitedPrescriptions = [
-    /automatic merge is the normal completion path/i,
-    /automatically merges when every gate passes/i,
-    /automatic merge when every gate passes/i,
-    /automatically complete one PR/i,
-    /exact-head automatic-merge/i,
-    /do not ask for redundant (?:merge )?confirmation/i,
-    /all-green exact-head review and CI result supplies the normal merge decision/i,
-    /the user has authorized the merge/i,
-    /only an explicit merge request may continue/i,
-    /unless the current request explicitly includes a merge/i,
-    /only when the current request explicitly includes a merge/i,
-    /仅当前请求明确包含合并时/i,
-  ];
-  for (const relative of policyPaths) {
-    const content = readFileSync(path.join(root, relative), 'utf8');
-    for (const prohibited of prohibitedPrescriptions) assert.doesNotMatch(content, prohibited, relative);
-  }
-  const issueLoop = readFileSync(path.join(root, '.codex/skills/agent-issue-loop/SKILL.md'), 'utf8');
-  assert.match(issueLoop, /PR_LOOP_ACTIVE → PR_EVIDENCE_COMPLETE/);
-  assert.match(issueLoop, /status: `EVIDENCE_COMPLETE`, `MERGED_VERIFIED`/);
-  assert.match(issueLoop, /exact reviewed head and base SHAs plus gate evidence/);
-  assert.match(issueLoop, /does not prescribe which outcome the Agent chooses/);
-
-  const routingSources = [
-    'AGENTS.md',
-    '.claude/skills/agent-pr-loop/SKILL.md',
-    '.codex/skills/agent-project-bootstrap/SKILL.md',
-    '.codex/skills/agent-project-bootstrap/references/daily-project-flow.md',
-  ];
-  for (const relative of routingSources) {
-    const content = readFileSync(path.join(root, relative), 'utf8');
-    assert.doesNotMatch(content, /合并闭环|merge phase/i, relative);
-  }
-  const gatePolicy = readFileSync(path.join(root, '.github/merge-gates.md'), 'utf8');
-  assert.match(gatePolicy, /owner merge authorization that explicitly names the governance\s+exception/);
-  assert.match(gatePolicy, /explicit owner authorization naming PR #63/);
+  const policy = JSON.parse(readFileSync(path.join(root, POLICY_RELATIVE), 'utf8'));
+  assert.deepEqual(policy.reviewTier.values, ['fast', 'standard', 'strict']);
+  assert.deepEqual(policy.taskBrief.acceptedSchemas, ['tackle-task-brief/v1', 'tackle-task-brief/v2']);
+  assert.equal(policy.taskBrief.preferredSchema, 'tackle-task-brief/v2');
+  assert.equal(policy.taskBrief.fastLocalCompletion.requiresTaskBrief, false);
+  assert.equal(policy.taskBrief.fastLocalCompletion.requiresReviewer, false);
+  assert.deepEqual(policy.localVerdict.acceptedSchemas, ['tackle-local-verdict/v1', 'tackle-local-result/v2']);
+  assert.equal(policy.localVerdict.preferredSchema, 'tackle-local-result/v2');
+  assert.deepEqual(policy.taskBrief.phaseReceiptsByReviewTier.verdict.standard.pull_request, ['coordinator', 'coding', 'review']);
+  assert.deepEqual(policy.taskBrief.phaseReceiptsByReviewTier.verdict.standard.local, ['coordinator', 'coding']);
+  assert.equal(Object.hasOwn(policy, 'pullRequest'), false);
+  assert.equal(Object.hasOwn(policy.taskBrief, 'evidenceStages'), false);
 });
 
-test('adaptive reviewer governance forbids fixed reviewer and implementation prescriptions', () => {
+test('merge gate document owns the complete review signal envelope', () => {
   const root = process.cwd();
-  const sources = [
-    'AGENTS.md',
-    'CLAUDE.md',
-    '.claude/skills/agent-pr-loop/SKILL.md',
-    '.codex/skills/agent-issue-loop/SKILL.md',
-    '.codex/skills/agent-pr-loop/SKILL.md',
-    '.codex/skills/tackle-agent-workflow/SKILL.md',
-  ];
-  const prohibited = [
-    /one coding agent and one independent local reviewer/i,
-    /Use one implementation Agent for code, tests, and fixes/i,
-    /no more than one active implementation Agent and one active independent review Agent/i,
-    /gpt-5\.6-(?:terra|sol)/i,
-    /fixed reviewer/i,
-    /不得增加第二个独立审核者/,
-    /主 agent 已直接实现/,
-    /实现\/修改\/调查由主 agent 直接做/,
-    /主 agent 直接修复/,
-    /不 spawn 实现 agent/,
-  ];
-  for (const relative of sources) {
-    const content = readFileSync(path.join(root, relative), 'utf8');
-    for (const pattern of prohibited) assert.doesNotMatch(content, pattern, relative);
+  const gatePolicy = readFileSync(path.join(root, '.github/merge-gates.md'), 'utf8');
+  const agentPolicy = readFileSync(path.join(root, 'AGENTS.md'), 'utf8');
+  const claudePolicy = readFileSync(path.join(root, 'CLAUDE.md'), 'utf8');
+  const codexPrLoop = readFileSync(path.join(root, '.codex/skills/agent-pr-loop/SKILL.md'), 'utf8');
+  const claudePrLoop = readFileSync(path.join(root, '.claude/skills/agent-pr-loop/SKILL.md'), 'utf8');
+  const dailyFlow = readFileSync(path.join(root, '.codex/skills/agent-project-bootstrap/references/daily-project-flow.md'), 'utf8');
+  const managedAutopilot = readFileSync(path.join(root, '.codex/skills/agent-project-bootstrap/references/managed-autopilot.md'), 'utf8');
+  const managedSupervisor = readFileSync(path.join(root, '.codex/skills/agent-project-bootstrap/assets/codex-managed-supervisor.md'), 'utf8');
+  const ciAndProtection = readFileSync(path.join(root, '.codex/skills/agent-project-bootstrap/references/ci-and-protection.md'), 'utf8');
+  const bootstrapSkill = readFileSync(path.join(root, '.codex/skills/agent-project-bootstrap/SKILL.md'), 'utf8');
+  const bootstrapMarker = readFileSync(path.join(root, '.codex/agent-project-bootstrap.yml'), 'utf8');
+  const mergePolicyConsumers = [agentPolicy, claudePolicy, codexPrLoop, claudePrLoop, dailyFlow, managedAutopilot, managedSupervisor, ciAndProtection, bootstrapSkill];
+  assert.match(gatePolicy, /A current review signal is additionally required only\s+when the workflow machine policy, repository or platform policy, or the\s+high-risk merge gate requires one\./);
+  assert.match(gatePolicy, /grants standing merge authorization/);
+  assert.match(gatePolicy, /No additional per-turn user\s+instruction is required/);
+  assert.match(gatePolicy, /A fresh exact-head\/base `READY` result activates the qualified automatic\s+merge authorization above/);
+  assert.match(gatePolicy, /An explicit user instruction made at the start of or during the current task[\s\S]+creates a\s+task-scoped human gate/);
+  assert.match(gatePolicy, /`READY` does not override that hold/);
+  assert.match(gatePolicy, /Only a later\s+explicit user instruction authorizing the merge clears it/);
+  assert.match(gatePolicy, /immediately disable auto-merge or remove only that pull request from the queue/);
+  assert.match(gatePolicy, /Cancellation and readback do not clear the hold/);
+  assert.match(gatePolicy, /merge one qualifying governance pull request under this repository's\s+standing authorization without separate owner approval/);
+  assert.match(gatePolicy, /the fully satisfied workflow-governance path activates the same standing\s+authorization even though the checker remains non-`READY`/);
+  assert.match(gatePolicy, /`GATE_PROGRAM_BOOTSTRAP_REQUIRED` is not\s+eligible because the live base has no trusted checker to execute/);
+  assert.match(gatePolicy, /Exit code 0 with empty output[\s\S]+must be treated as blocked/);
+  assert.match(gatePolicy, /must be read from the clean live-base copy of this document, never from the\s+reviewed head/);
+  assert.match(gatePolicy, /Changes to this policy in the head take effect only after merge\s+and only for later pull requests/);
+  assert.match(gatePolicy, /Governance-Exception: ACCEPTED/);
+  assert.match(gatePolicy, /Accepted-Governance-Blockers: <sorted comma-separated blocker codes>/);
+  assert.match(gatePolicy, /blocker-code set exactly equals the envelope's\s+accepted set/);
+  assert.match(gatePolicy, /Extra, missing, duplicated, malformed, or free-text-only\s+blocker acceptance is ineligible/);
+  assert.match(gatePolicy, /only permitted members are `CI_WORKFLOW_CHANGED` and\s+`GATE_PROGRAM_CHANGED`/);
+  assert.match(gatePolicy, /an extra code, or a subset\/superset does not activate the\s+governance exception/);
+  assert.doesNotMatch(gatePolicy, /One-time bootstrap for PR #63|explicit owner authorization naming PR #63|obtain owner merge authorization|PR #63 first introduces/);
+  assert.match(agentPolicy, /managed mode为`autonomous`/);
+  assert.match(agentPolicy, /合并资格、授权、治理例外、用户暂停和合并后的回读全部按`.github\/merge-gates\.md`执行/);
+  assert.match(claudePolicy, /managed mode为`autonomous`/);
+  assert.match(claudePolicy, /合并资格、CI provenance、review signal、授权、暂停、workflow治理例外和合并回读统一遵循`.github\/merge-gates\.md`/);
+  assert.match(bootstrapMarker, /^workflow_mode: managed$/m);
+  assert.match(bootstrapMarker, /^managed_mode: autonomous$/m);
+  assert.match(managedSupervisor, /Apply the repository's sole merge authority for every merge decision/);
+  assert.doesNotMatch(managedSupervisor, /merge high-risk work[\s\S]{0,80}without explicit authorization/);
+  for (const consumer of mergePolicyConsumers) {
+    assert.match(consumer, /\.github\/merge-gates\.md|repository's sole merge authority|仓库的唯一合并权威/);
+    assert.doesNotMatch(consumer, /No additional per-turn user|without separate owner approval|只有用户后续明确授权合并才能解除|不再要求owner另行授权|不要求owner另行授权|`READY` does not override|later explicit user instruction authorizing the merge|not merge, wait for a human merge, or ask again before merging|可信实时checker返回`READY`|Keep high-risk paths and labels outside unattended merge|qualifying low-risk PRs may use GitHub auto-merge/);
   }
-  const agents = readFileSync(path.join(root, 'AGENTS.md'), 'utf8');
-  const claudePr = readFileSync(path.join(root, '.claude/skills/agent-pr-loop/SKILL.md'), 'utf8');
-  const codexPr = readFileSync(path.join(root, '.codex/skills/agent-pr-loop/SKILL.md'), 'utf8');
-  const local = readFileSync(path.join(root, '.codex/skills/tackle-agent-workflow/SKILL.md'), 'utf8');
-  for (const content of [agents, codexPr, local]) {
-    assert.match(content, /task risk, scope, available capabilities, and resources|任务风险、范围、可用能力与资源/);
-    assert.match(content, /exact current head\/base|当前精确head\/base|精确head\/base/);
-    assert.match(content, /all assigned findings.*disposed|coordinator has disposed all findings|所有发现.*coordinator处置/);
-  }
-  assert.match(claudePr, /coordinator 安排最小必要的修复容量/);
-  assert.match(codexPr, /exactly one integrated substantive review signal/);
-  assert.match(local, /single `review` spec-read receipt.*coordinator-integrated review-role coverage record/);
-  assert.match(local, /each reviewer returns findings and evidence.*coordinator emits this exact single local verdict record/);
-  assert.doesNotMatch(local, /reviewer must return this exact local verdict record/);
-  assert.match(agents, /单一review receipt是coordinator整合后的review-role覆盖记录，不按reviewer逐个计数/);
+  assert.match(gatePolicy, /When a review signal is required, the canonical integrated Agent review uses/);
+  for (const field of [
+    'Agent-Review-Version: v1',
+    'Reviewer-Role: independent-review-agent',
+    'Head-SHA: <full SHA>',
+    'Base-SHA: <full SHA>',
+    'Verdict: PASS',
+    'Agent-Review: PASS',
+  ]) assert.equal(gatePolicy.split(field).length - 1 >= 1, true, field);
 });

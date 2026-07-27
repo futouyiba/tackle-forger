@@ -1,5 +1,10 @@
 # Agent pull request merge gate
 
+This document is the sole complete human-readable authority for Tackle Forger
+pull-request merge eligibility and the Agent review-signal format. Other
+repository instructions and Skills route work here rather than restating these
+rules.
+
 Tackle Forger currently does not use a GitHub Ruleset or branch protection as
 the merge gate. Issue #27 deliberately chose an Agent/managed-flow gate. Do not
 add required checks, status contexts, or a duplicate workflow for this policy.
@@ -13,8 +18,44 @@ Use separate decisions for entering formal review and entering the merge path:
   for a reviewer to decide. At that point, remove Draft and move the linked
   Issue to `In review`.
 - A pull request is **merge-ready** only when the live checker accepts its
-  current head, the repository-approved review signal is current, review
-  findings and threads are settled, and dependencies and the base are current.
+  current head, review findings and threads are settled, and dependencies and
+  the base are current. A current review signal is additionally required only
+  when the workflow machine policy, repository or platform policy, or the
+  high-risk merge gate requires one.
+
+## Qualified automatic merge authorization
+
+This repository grants standing merge authorization to the first capable
+coordinating Agent or single managed supervisor when the trusted live checker
+returns `READY` for the exact current head/base. No additional per-turn user
+instruction is required. The coordinator is expected to merge one qualifying
+pull request through the repository's normal GitHub merge method and immediately
+read back the PR state, merge SHA, and remote base containment.
+
+An explicit user instruction made at the start of or during the current task
+to not merge, wait for a human merge, or ask again before merging creates a
+task-scoped human gate. `READY` does not override that hold. Only a later
+explicit user instruction authorizing the merge clears it; silence, elapsed
+time, successful CI or review, retries, and a fresh `READY` result do not.
+If that hold arrives after auto-merge was enabled or the pull request entered
+a merge queue, and the pull request is still unmerged, the coordinator must
+immediately disable auto-merge or remove only that pull request from the queue
+and read back its state. If the platform cannot safely cancel the pending
+merge, report the human gate and verify whether the pull request merged.
+Cancellation and readback do not clear the hold. After later explicit user
+authorization, refresh the exact head/base and rerun the live checker before
+entering any merge transport again.
+
+This standing authorization does not apply when the checker is not `READY`, a
+product or scope decision remains unresolved, dependency order is ambiguous,
+required validation or identity is unavailable, retries are exhausted, or the
+merge itself triggers deployment, publishing, release, destructive data work,
+an authorization/security decision, or another external side effect. The
+workflow-governance path below is a standing, independently reviewed exception
+to the checker's `READY` result and does not itself require a human decision.
+At any actual human gate, stop and request the missing decision.
+Never reinterpret merge authorization as permission to deploy, publish, delete,
+expand scope, or perform another external action.
 
 ## Validation cadence
 
@@ -69,15 +110,25 @@ implementer solely to change Draft or Issue status.
 
 This repository has one accountable owner coordinating several Agents. A
 current-head `COMMENTED` review, a Bot review, or a review submitted through the
-owner's GitHub identity may therefore serve as the traceable review signal. A
-`COMMENTED` review counts only when its body contains this exact standalone
-line:
+owner's GitHub identity may therefore serve as the traceable review signal.
+When a review signal is required, the canonical integrated Agent review uses
+this complete six-field envelope, with the exact reviewed head and base:
 
 ```text
+Agent-Review-Version: v1
+Reviewer-Role: independent-review-agent
+Head-SHA: <full SHA>
+Base-SHA: <full SHA>
+Verdict: PASS
 Agent-Review: PASS
 ```
 
-An arbitrary comment or a review that only reports findings does not count.
+This envelope moves the existing review-signal contract here without changing
+the live checker's behavior: for a `COMMENTED` review, the checker mechanically
+requires the exact standalone `Agent-Review: PASS` line and binds the review to
+the current head through GitHub evidence; the remaining fields preserve the
+coordinator's exact-head/base audit context. An arbitrary comment or a review
+that only reports findings does not count.
 Unresolved threads and an active `CHANGES_REQUESTED` still block, and the
 supervising Agent must inspect the review contents and acceptance evidence
 before recording the marker. Never describe an Agent review as a human GitHub
@@ -100,6 +151,11 @@ returns `GATE_PROGRAM_BOOTSTRAP_REQUIRED`; any mismatch returns
 content with the base copy; a change returns `GATE_PROGRAM_CHANGED`. Do not copy
 the checker from the reviewed branch or use a reviewed branch's `package.json`
 command to evade this check.
+
+The command is successful evidence only when the live-base entrypoint actually
+executes and emits a non-empty first line beginning with `READY` or `BLOCKED`.
+Exit code 0 with empty output, or output without either explicit disposition,
+is an entrypoint failure and must be treated as blocked.
 
 The command reads the pull request around two complete evidence queries. It
 compares normalized CI, review, and review-thread fingerprints and retries if
@@ -165,17 +221,26 @@ Missing or malformed contents return `CI_WORKFLOW_TRUST_UNAVAILABLE`.
 
 A pull request that intentionally changes the canonical workflow or gate
 program must be a dedicated governance change. It cannot receive an automated
-exception from its own branch. Before such a change can be considered:
+exception from its own branch. Eligibility, allowed blocker codes, the review
+envelope, standing authorization, and human gates for the current pull request
+must be read from the clean live-base copy of this document, never from the
+reviewed head. Changes to this policy in the head take effect only after merge
+and only for later pull requests. Before such a change can be considered:
 
 1. keep unrelated application changes out of the pull request;
 2. inspect the exact workflow diff and the commands behind every required job;
 3. run the trusted-base checker and confirm all non-governance blockers are
    cleared;
 4. record an independent current-head review that explicitly accepts the
-   workflow change and identifies `CI_WORKFLOW_CHANGED`;
-5. obtain owner merge authorization that explicitly names the governance
-   exception;
-6. after merge, update a clean target-branch checkout and verify that the new
+   workflow or gate-program change using the closed exception envelope below;
+5. confirm the checker reports only those independently accepted governance
+   blockers and that its blocker-code set exactly equals the envelope's
+   accepted set. Extra, missing, duplicated, malformed, or free-text-only
+   blocker acceptance is ineligible. `GATE_PROGRAM_BOOTSTRAP_REQUIRED` is not
+   eligible because the live base has no trusted checker to execute;
+6. merge one qualifying governance pull request under this repository's
+   standing authorization without separate owner approval;
+7. after merge, update a clean target-branch checkout and verify that the new
    trusted checker and workflow are the live base copies.
 
 The successful Actions run on the workflow-changing pull request is
@@ -183,30 +248,32 @@ supplementary evidence only. It cannot prove its own workflow definition.
 There is no CLI flag, environment variable, review marker, or fixture field
 that turns `CI_WORKFLOW_CHANGED` or `GATE_PROGRAM_CHANGED` into `READY`.
 
-### One-time bootstrap for PR #63
+The independent review must contain the normal six-field Agent review envelope
+and append exactly these two standalone fields:
 
-PR #63 first introduces both the structured `run-name` and
-`scripts/check-pr-merge-gate.mjs`. Its base therefore has neither an identical
-workflow nor a trusted gate-program copy. The expected automated blockers are
-`CI_WORKFLOW_CHANGED` and `GATE_PROGRAM_BOOTSTRAP_REQUIRED`. This is a single,
-named bootstrap case, not a reusable allowlist:
+```text
+Governance-Exception: ACCEPTED
+Accepted-Governance-Blockers: <sorted comma-separated blocker codes>
+```
 
-- independently review the exact PR #63 workflow and gate implementation;
-- require every other normal blocker, current-head review finding, and thread
-  to be cleared;
-- record the bootstrap decision and exact reviewed head SHA in the review;
-- merge only after explicit owner authorization naming PR #63;
-- immediately after merge, run the checker from a clean updated `main`.
-
-No later pull request inherits this bootstrap treatment. A later workflow
-change follows the dedicated workflow-governance path above, and a later gate
-program change must be evaluated by the trusted program already present on its
-live base.
+The second field is a set encoded in ascending byte order with no spaces. Its
+only permitted members are `CI_WORKFLOW_CHANGED` and
+`GATE_PROGRAM_CHANGED`; it must be non-empty and exactly equal the trusted
+live-base checker's complete blocker-code set. The only valid serialized values
+are therefore `CI_WORKFLOW_CHANGED`, `GATE_PROGRAM_CHANGED`, or
+`CI_WORKFLOW_CHANGED,GATE_PROGRAM_CHANGED`. The same review already binds the
+exact head/base through the normal envelope. Free text, an ordinary
+`Agent-Review: PASS`, an extra code, or a subset/superset does not activate the
+governance exception.
 
 Because repository settings do not enforce this policy, the Agent must run the
 checker again immediately before the merge decision. Any new commit, review,
 thread change, rerun, or other relevant GitHub state change invalidates the old
-result. The checker is evidence, not merge authorization.
+result. A fresh exact-head/base `READY` result activates the qualified automatic
+merge authorization above. For a dedicated workflow or gate-program change,
+the fully satisfied workflow-governance path activates the same standing
+authorization even though the checker remains non-`READY`; any other result or
+unaccepted blocker does not authorize a merge.
 
 The incident tracked by #21 remains historical evidence only. Its post-event CI
 run can never satisfy this gate for a different current head.

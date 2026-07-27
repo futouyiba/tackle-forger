@@ -9,7 +9,7 @@ description: coordinator 已组织实现并形成 PR head 后，把 PR 走完「
 
 本 skill 在项目 `CLAUDE.md`「Agent 工作模式」定义的工作模式下运作；实施容量由 coordinator 按任务决定，此处不另行固定。**本 skill 负责审核、CI、集成证据和实际合并后的安全回读；`.github/merge-gates.md`唯一决定合并资格、授权、暂停和回读，本 skill 只执行该决定。**
 
-reviewTier边界、receipt角色与风险安全下限只从上方版本化机器政策加载，本skill不维护平行矩阵。是否需要独立审核也由该政策决定（`fastLocalCompletion.requiresReviewer:false`，即 `fast` 不要求审核；`standard`/`strict` 要求）；当政策要求审核时，每个范围只读并绑定当前精确head/base，所有发现由coordinator处置后才整合唯一最终审核信号，执行方式有两条路（可选其一或并行）：
+reviewTier边界、receipt角色、风险安全下限以及独立审核的适用路线只从上方版本化机器政策加载，本skill不维护平行矩阵。当政策要求审核时，每个范围只读并绑定当前精确head/base，所有发现由coordinator处置后才整合唯一最终审核信号，执行方式有两条路（可选其一或并行）：
 1. **输出审核清单**（见下）→ 用户粘到常驻审核 agent 窗口（省 install + 上下文重建，推荐用于敏捷迭代）；
 2. **spawn 独立审核 agent**（只读；模型与推理强度在 spawn 时按当前可用性与任务动态选定，须足够强以保证审核有效，可用 isolation:worktree 从 origin/main 干净读取避免本地落后）审当前 head。
 

@@ -338,6 +338,50 @@ test("replace while parsing cancels only the superseded parser and retains previ
   }]);
 });
 
+test("local replacement handle conflicts preserve the active ready resource", () => {
+  const original = withReadyLocal(anonymousState(), {
+    operationId: "original-alias",
+    readyId: "ready-alias",
+  });
+  let parsing = apply(original, {
+    type: "local_selection_requested",
+    operationId: "replacement-alias",
+  });
+  parsing = apply(parsing, {
+    type: "local_parse_started",
+    operationId: "replacement-alias",
+    selectionRef: "replacement-alias-selection",
+  });
+
+  const conflict = transitionAppShell(parsing, {
+    type: "local_parse_succeeded",
+    operationId: "replacement-alias",
+    readyId: "ready-alias",
+    session: OTHER_LOCAL_SESSION,
+  });
+  assert.equal(conflict.accepted, true);
+  assert.equal(conflict.state.source.status, "failed");
+  if (conflict.state.source.status !== "failed") throw new Error("expected failed");
+  assert.equal(conflict.state.source.code, "ready_id_conflict");
+  assert.equal(conflict.state.source.previousReady?.readyId, "ready-alias");
+  assert.deepEqual(conflict.state.authority, { status: "local_session" });
+  assert.deepEqual(conflict.effects, []);
+
+  const superseded = apply(parsing, {
+    type: "local_selection_requested",
+    operationId: "replacement-after-alias",
+  });
+  const staleAlias = transitionAppShell(superseded, {
+    type: "local_parse_succeeded",
+    operationId: "replacement-alias",
+    readyId: "ready-alias",
+    session: OTHER_LOCAL_SESSION,
+  });
+  assert.equal(staleAlias.accepted, false);
+  assert.equal(staleAlias.state, superseded);
+  assert.deepEqual(staleAlias.effects, []);
+});
+
 test("cancel and clear during parsing have different non-destructive semantics", () => {
   const original = withReadyLocal(anonymousState(), {
     operationId: "original",
@@ -848,6 +892,49 @@ test("shared-to-shared success activates the new resource before disposing the o
       resourceId: SHARED.resourceId,
     },
   ]);
+});
+
+test("shared replacement resource conflicts preserve the active shared resource", () => {
+  const current = withShared();
+  const loading = apply(current, {
+    type: "shared_open_requested",
+    operationId: "shared-alias",
+    workspaceId: "workspace-b",
+  });
+  const conflict = transitionAppShell(loading, {
+    type: "shared_load_succeeded",
+    operationId: "shared-alias",
+    resource: {
+      workspaceId: "workspace-b",
+      revision: 8,
+      resourceId: SHARED.resourceId,
+    },
+  });
+  assert.equal(conflict.accepted, true);
+  assert.deepEqual(conflict.state.authority, current.authority);
+  assert.deepEqual(conflict.state.lastSharedFailure, {
+    operationId: "shared-alias",
+    workspaceId: "workspace-b",
+    kind: "resource_identity_conflict",
+  });
+  assert.deepEqual(conflict.effects, []);
+
+  const cancelled = apply(loading, {
+    type: "shared_load_cancelled",
+    operationId: "shared-alias",
+  });
+  const staleAlias = transitionAppShell(cancelled, {
+    type: "shared_load_succeeded",
+    operationId: "shared-alias",
+    resource: {
+      workspaceId: "workspace-b",
+      revision: 8,
+      resourceId: SHARED.resourceId,
+    },
+  });
+  assert.equal(staleAlias.accepted, false);
+  assert.equal(staleAlias.state, cancelled);
+  assert.deepEqual(staleAlias.effects, []);
 });
 
 test("clear during a transactional shared load cancels the load and destroys local memory", () => {

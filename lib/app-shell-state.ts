@@ -51,7 +51,11 @@ export type SourceState =
   | {
       status: "failed";
       operationId: string;
-      code: "selection_failed" | "parse_failed" | "invalid_local_session";
+      code:
+        | "selection_failed"
+        | "parse_failed"
+        | "invalid_local_session"
+        | "ready_id_conflict";
       previousReady?: LocalReadySource;
     };
 
@@ -82,6 +86,7 @@ export type SharedLoadFailureKind =
   | "server_5xx"
   | "workspace_mismatch"
   | "invalid_resource"
+  | "resource_identity_conflict"
   | "cancelled";
 
 export interface SharedLoadFailure {
@@ -304,13 +309,46 @@ function disposeLoadedSharedResponse(
 ): AppShellTransition {
   return {
     state,
-    effects: [{
-      type: "dispose_shared_workspace",
-      resourceId: resource.resourceId,
-    }],
+    effects: sharedResourceIdInUse(state, resource.resourceId)
+      ? []
+      : [{
+          type: "dispose_shared_workspace",
+          resourceId: resource.resourceId,
+        }],
     accepted: false,
     rejectionReason: reason,
   };
+}
+
+function localReadyIdInUse(state: AppShellState, readyId: string): boolean {
+  return recoverableReady(state.source)?.readyId === readyId;
+}
+
+function sharedResourceIdInUse(state: AppShellState, resourceId: string): boolean {
+  if (state.authority.status === "shared_workspace") {
+    return state.authority.resource.resourceId === resourceId;
+  }
+  return state.authority.status === "shared_loading"
+    && state.authority.previous.status === "shared_workspace"
+    && state.authority.previous.resource.resourceId === resourceId;
+}
+
+function disposeLocalCandidate(
+  state: AppShellState,
+  readyId: string,
+): AppShellEffect[] {
+  return localReadyIdInUse(state, readyId)
+    ? []
+    : [{ type: "dispose_local_ready", readyId }];
+}
+
+function disposeSharedCandidate(
+  state: AppShellState,
+  resourceId: string,
+): AppShellEffect[] {
+  return sharedResourceIdInUse(state, resourceId)
+    ? []
+    : [{ type: "dispose_shared_workspace", resourceId }];
 }
 
 function handleLocalSelection(
@@ -550,7 +588,7 @@ export function transitionAppShell(
       ) {
         return {
           state,
-          effects: [{ type: "dispose_local_ready", readyId: event.readyId }],
+          effects: disposeLocalCandidate(state, event.readyId),
           accepted: false,
           rejectionReason: "stale_local_response",
         };
@@ -571,9 +609,21 @@ export function transitionAppShell(
           authority: previousReady
             ? { status: "local_session" }
             : { status: "none" },
-        }, [{ type: "dispose_local_ready", readyId: event.readyId }]);
+        }, disposeLocalCandidate(state, event.readyId));
       }
       const previousReady = state.source.previousReady;
+      if (previousReady?.readyId === event.readyId) {
+        return accepted({
+          ...state,
+          source: {
+            status: "failed",
+            operationId: event.operationId,
+            code: "ready_id_conflict",
+            previousReady,
+          },
+          authority: { status: "local_session" },
+        });
+      }
       const effects: AppShellEffect[] = previousReady
         ? [{ type: "dispose_local_ready", readyId: previousReady.readyId }]
         : [];
@@ -641,17 +691,29 @@ export function transitionAppShell(
       if (state.authority.workspaceId !== event.resource.workspaceId) {
         const loading = state.authority;
         return accepted({
-            ...state,
-            authority: loading.previous,
-            lastSharedFailure: {
-              operationId: event.operationId,
-              workspaceId: loading.workspaceId,
-              kind: "workspace_mismatch",
-            },
-        }, [{
-          type: "dispose_shared_workspace",
-          resourceId: event.resource.resourceId,
-        }]);
+          ...state,
+          authority: loading.previous,
+          lastSharedFailure: {
+            operationId: event.operationId,
+            workspaceId: loading.workspaceId,
+            kind: "workspace_mismatch",
+          },
+        }, disposeSharedCandidate(state, event.resource.resourceId));
+      }
+      const previous = state.authority.previous;
+      if (
+        previous.status === "shared_workspace"
+        && previous.resource.resourceId === event.resource.resourceId
+      ) {
+        return accepted({
+          ...state,
+          authority: previous,
+          lastSharedFailure: {
+            operationId: event.operationId,
+            workspaceId: state.authority.workspaceId,
+            kind: "resource_identity_conflict",
+          },
+        });
       }
       if (
         !Number.isSafeInteger(event.resource.revision)
@@ -666,12 +728,8 @@ export function transitionAppShell(
             workspaceId: loading.workspaceId,
             kind: "invalid_resource",
           },
-        }, [{
-          type: "dispose_shared_workspace",
-          resourceId: event.resource.resourceId,
-        }]);
+        }, disposeSharedCandidate(state, event.resource.resourceId));
       }
-      const previous = state.authority.previous;
       const effects: AppShellEffect[] = [{
         type: "activate_shared_workspace",
         resource: event.resource,

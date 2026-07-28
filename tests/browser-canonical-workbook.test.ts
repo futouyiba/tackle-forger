@@ -340,4 +340,34 @@ test("浏览器 canonical XLSX adapter 对所有工作表（含未登记）强�
   const big = Array.from({ length: 1000 }, () => Array.from({ length: 199 }, () => null));
   for (let index = 0; index < 6; index += 1) XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(big), `巨大附加${index}`);
   await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: XLSX.write(workbook, { type: "array", bookType: "xlsx" }) as ArrayBuffer, fileName: "budget.xlsx", observedAt: ts }), "XLSX_WORKBOOK_TOO_LARGE");
+
+  const longTextExtra = XLSX.read(workbookBytes(), { type: "array" });
+  XLSX.utils.book_append_sheet(
+    longTextExtra,
+    XLSX.utils.aoa_to_sheet([["x".repeat(16_385)]]),
+    "附加超长文本",
+  );
+  await rejectsCode(
+    observeBrowserCanonicalWorkbook({
+      bytes: XLSX.write(longTextExtra, { type: "array", bookType: "xlsx" }) as ArrayBuffer,
+      fileName: "extra-long-text.xlsx",
+      observedAt: ts,
+    }),
+    "XLSX_CELL_STRING_TOO_LONG",
+  );
+
+  const formulaExtra = XLSX.read(workbookBytes(), { type: "array", cellFormula: true });
+  XLSX.utils.book_append_sheet(
+    formulaExtra,
+    { A1: { t: "n", f: "1+1" }, "!ref": "A1" },
+    "附加无缓存公式",
+  );
+  await rejectsCode(
+    observeBrowserCanonicalWorkbook({
+      bytes: XLSX.write(formulaExtra, { type: "array", bookType: "xlsx" }) as ArrayBuffer,
+      fileName: "extra-uncached-formula.xlsx",
+      observedAt: ts,
+    }),
+    "XLSX_FORMULA_RESULT_MISSING",
+  );
 });

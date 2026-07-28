@@ -157,6 +157,19 @@ function canonicalCellValue(cell: XLSX.CellObject | undefined, sheetName: string
   return value;
 }
 
+function validateSheetCellValues(
+  sheet: XLSX.WorkSheet,
+  sheetName: string,
+  grid: { rowCount: number; columnCount: number },
+) {
+  for (let row = 0; row < grid.rowCount; row += 1) {
+    for (let column = 0; column < grid.columnCount; column += 1) {
+      const address = XLSX.utils.encode_cell({ r: row, c: column });
+      canonicalCellValue(sheet[address], sheetName, address);
+    }
+  }
+}
+
 const ZIP_LOCAL_HEADER_SIGNATURE = 0x04034b50;
 
 function bytesEqual(left: Uint8Array, right: Uint8Array) {
@@ -306,13 +319,15 @@ export async function observeBrowserCanonicalWorkbook(input: {
   } catch {
     throw new BrowserCanonicalWorkbookError("XLSX_INVALID", "无法读取本地规则工作簿；请选择有效的 .xlsx 文件。");
   }
-  // 资源预算覆盖所有工作表（含未登记附加表），在 bindings 前拒绝巨大网格。
+  // 资源与单元格内容预算覆盖所有工作表（含未登记附加表），在 bindings 前
+  // 拒绝巨大网格、无缓存公式及超长文本，避免 warning-only 附加表绕过边界。
   const gridsBySheetName = new Map<string, { rowCount: number; columnCount: number }>();
   let totalCells = 0;
   for (const sheetName of workbook.SheetNames) {
     const sheet = workbook.Sheets[sheetName];
     if (!sheet) continue;
     const grid = decodeSheetGrid(sheet, sheetName);
+    validateSheetCellValues(sheet, sheetName, grid);
     gridsBySheetName.set(sheetName, grid);
     totalCells += grid.rowCount * grid.columnCount;
     if (totalCells > MAXIMUM_WORKBOOK_CELLS) {

@@ -21,6 +21,7 @@ import {
   type LocalSessionReducerState,
 } from "@/lib/local-session-contracts";
 import { LocalSessionIdentityAllocator } from "@/lib/local-session-operation-identity";
+import { LocalSessionLoginPollScope } from "@/lib/local-session-login-poll-scope";
 import {
   LocalSessionParserError,
   LocalSessionWorkbookLoader,
@@ -28,6 +29,7 @@ import {
 import {
   deriveLocalSessionTemplate,
   parseLocalTemplateValuesJson,
+  renameLocalSessionParameterKey,
   validateLocalSessionDocument,
 } from "@/lib/local-session-rules-kernel";
 import { SharedWorkspaceLoadScope } from "@/lib/shared-workspace-load-scope";
@@ -76,6 +78,13 @@ function numericInput(value: string): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function nextLocalParameterKey(document: LocalSessionDocument): string {
+  const existing = new Set(document.parameters.map((entry) => entry.key));
+  let sequence = document.parameters.length + 1;
+  while (existing.has(`local_parameter_${sequence}`)) sequence += 1;
+  return `local_parameter_${sequence}`;
+}
+
 export function LocalSessionWorkbench() {
   const [identities] = useState(() => new LocalSessionIdentityAllocator());
   const [loader] = useState(() => new LocalSessionWorkbookLoader({
@@ -90,8 +99,7 @@ export function LocalSessionWorkbench() {
   const [notice, setNotice] = useState("本地模式不写入浏览器或服务器存储。");
   const [sharedState, setSharedState] = useState<WorkspaceState | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
-  const loginPoll = useRef<number | null>(null);
-  const loginOperation = useRef<string | null>(null);
+  const loginPoll = useRef<LocalSessionLoginPollScope<SharedPayload> | null>(null);
   const sharedLoad = useRef<SharedWorkspaceLoadScope | null>(null);
 
   useEffect(() => {
@@ -135,9 +143,8 @@ export function LocalSessionWorkbench() {
       });
     return () => {
       active = false;
-      if (loginPoll.current !== null) window.clearInterval(loginPoll.current);
+      loginPoll.current?.cancel("local_session_workbench_unmounted");
       loginPoll.current = null;
-      loginOperation.current = null;
       sharedLoad.current?.cancel("local_session_workbench_unmounted");
       sharedLoad.current = null;
       loader.clear();
@@ -288,10 +295,9 @@ export function LocalSessionWorkbench() {
     }
     identities.allocate("operation");
     loader.clear();
-    const activeLoginOperation = loginOperation.current;
-    if (loginPoll.current !== null) window.clearInterval(loginPoll.current);
+    const activeLoginOperation = loginPoll.current?.operationId ?? null;
+    loginPoll.current?.cancel("local_session_cleared");
     loginPoll.current = null;
-    loginOperation.current = null;
     setShell((state) => {
       let next = transitionAppShell(
         state,
@@ -318,44 +324,26 @@ export function LocalSessionWorkbench() {
       operationId,
     });
     if (!transition.accepted) return;
-    if (loginPoll.current !== null) window.clearInterval(loginPoll.current);
-    loginOperation.current = operationId;
+    loginPoll.current?.cancel("login_replaced");
     setShell(transition.state);
     window.open(
       "/api/auth/feishu/start?return_to=%2F%3Flocal_auth_complete%3D1",
       "tackle-forger-feishu-login",
       "popup,width=560,height=760",
     );
-    const startedAt = Date.now();
-    const timer = window.setInterval(() => {
-      void fetch("/api/auth/session", { cache: "no-store" }).then(async (response) => {
-        const timedOut = Date.now() - startedAt > 120_000;
-        if (!response.ok || timedOut) {
-          if (!timedOut) return;
-          window.clearInterval(timer);
-          loginPoll.current = null;
-          loginOperation.current = null;
-          setShell((state) => transitionAppShell(state, {
-            type: "oauth_cancelled",
-            operationId,
-          }).state);
-          return;
-        }
-        const payload = await response.json() as SharedPayload;
-        if (!payload.user?.openId) {
-          if (Date.now() - startedAt <= 120_000) return;
-          window.clearInterval(timer);
-          loginPoll.current = null;
-          loginOperation.current = null;
-          setShell((state) => transitionAppShell(state, {
-            type: "oauth_cancelled",
-            operationId,
-          }).state);
-          return;
-        }
-        window.clearInterval(timer);
+    const scope = new LocalSessionLoginPollScope<SharedPayload>(operationId, {
+      poll: async (signal) => {
+        const response = await fetch("/api/auth/session", {
+          cache: "no-store",
+          signal,
+        });
+        if (!response.ok) return null;
+        const payload = await response.json().catch(() => ({})) as SharedPayload;
+        return payload.user?.openId ? payload : null;
+      },
+      onAuthenticated: (payload) => {
+        if (loginPoll.current !== scope) return;
         loginPoll.current = null;
-        loginOperation.current = null;
         setShell((state) => transitionAppShell(state, {
           type: "login_succeeded",
           operationId,
@@ -366,18 +354,18 @@ export function LocalSessionWorkbench() {
           },
         }).state);
         setNotice("登录成功；当前本地会话权限与内容均未升级。");
-      }).catch(() => {
-        if (Date.now() - startedAt <= 120_000) return;
-        window.clearInterval(timer);
+      },
+      onTimeout: () => {
+        if (loginPoll.current !== scope) return;
         loginPoll.current = null;
-        loginOperation.current = null;
         setShell((state) => transitionAppShell(state, {
           type: "oauth_cancelled",
           operationId,
         }).state);
-      });
-    }, 1_000);
-    loginPoll.current = timer;
+        setNotice("登录等待已超时；当前本地会话权限与内容均保持不变。");
+      },
+    });
+    loginPoll.current = scope;
   };
 
   const openShared = async () => {
@@ -663,7 +651,7 @@ function EditableParameters({ document, commit, identities }: EditorProps) {
           ...document,
           parameters: [...document.parameters, {
             id: identities.allocate("resource"),
-            key: "",
+            key: nextLocalParameterKey(document),
             label: "新参数",
             itemPart: "rod",
             unit: "",
@@ -679,7 +667,16 @@ function EditableParameters({ document, commit, identities }: EditorProps) {
             {document.parameters.map((parameter, index) => (
               <tr key={parameter.id}>
                 <td><input aria-label={`参数 ${index + 1} 显示名`} value={parameter.label} onChange={(event) => commit({ ...document, parameters: document.parameters.map((entry, row) => row === index ? { ...entry, label: event.target.value } : entry) }, "编辑参数显示名")} /></td>
-                <td><input aria-label={`参数 ${index + 1} 参数键`} value={parameter.key} onChange={(event) => commit({ ...document, parameters: document.parameters.map((entry, row) => row === index ? { ...entry, key: event.target.value } : entry) }, "编辑参数键")} /></td>
+                <td>
+                  <ParameterKeyEditor
+                    key={`${parameter.id}:${parameter.key}`}
+                    document={document}
+                    parameterId={parameter.id}
+                    index={index}
+                    value={parameter.key}
+                    commit={commit}
+                  />
+                </td>
                 <td><select aria-label={`参数 ${index + 1} 部位`} value={parameter.itemPart} onChange={(event) => commit({ ...document, parameters: document.parameters.map((entry, row) => row === index ? { ...entry, itemPart: event.target.value as "rod" | "reel" | "line" } : entry) }, "编辑参数部位")}><option value="rod">竿</option><option value="reel">轮</option><option value="line">线</option></select></td>
                 <td><input aria-label={`参数 ${index + 1} 单位`} value={parameter.unit} onChange={(event) => commit({ ...document, parameters: document.parameters.map((entry, row) => row === index ? { ...entry, unit: event.target.value } : entry) }, "编辑参数单位")} /></td>
                 <td><input aria-label={`参数 ${index + 1} 精度`} type="number" min="0" step="1" value={parameter.precision} onChange={(event) => commit({ ...document, parameters: document.parameters.map((entry, row) => row === index ? { ...entry, precision: Math.max(0, Math.trunc(numericInput(event.target.value))) } : entry) }, "编辑参数精度")} /></td>
@@ -690,6 +687,64 @@ function EditableParameters({ document, commit, identities }: EditorProps) {
         </table>
       </div>
     </>
+  );
+}
+
+function ParameterKeyEditor({
+  document,
+  parameterId,
+  index,
+  value,
+  commit,
+}: {
+  document: LocalSessionDocument;
+  parameterId: string;
+  index: number;
+  value: string;
+  commit(document: LocalSessionDocument, label: string): void;
+}) {
+  const errorId = `local-parameter-key-error-${parameterId}`;
+  const [draft, setDraft] = useState(value);
+  const [error, setError] = useState("");
+  const applyRename = () => {
+    if (draft === value) {
+      setError("");
+      return;
+    }
+    try {
+      const renamed = renameLocalSessionParameterKey(document, parameterId, draft);
+      setError("");
+      commit(renamed, `原子重命名参数 ${value} → ${draft}`);
+    } catch (renameError) {
+      setError(
+        renameError instanceof Error ? renameError.message : "参数键重命名失败。",
+      );
+    }
+  };
+  return (
+    <span className="local-inline-editor">
+      <input
+        aria-label={`参数 ${index + 1} 参数键`}
+        aria-invalid={Boolean(error)}
+        aria-describedby={error ? errorId : undefined}
+        title="失焦时原子更新模板、规则与公式引用"
+        value={draft}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={applyRename}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") event.currentTarget.blur();
+          if (event.key === "Escape") {
+            setDraft(value);
+            setError("");
+          }
+        }}
+      />
+      {error && (
+        <span id={errorId} className="local-field-error" role="alert">
+          {error}
+        </span>
+      )}
+    </span>
   );
 }
 

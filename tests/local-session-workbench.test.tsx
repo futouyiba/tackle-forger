@@ -109,3 +109,32 @@ test("selected derivation issues drive the visible count and validation panel", 
   assert.match(source, /派生与校验 \$\{visibleIssues\.length\}/);
   assert.match(source, /issues=\{visibleIssues\}/);
 });
+
+test("parameter keys use atomic blur rename instead of keystroke document commits", () => {
+  const source = readFileSync(
+    new URL("../app/LocalSessionWorkbench.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /renameLocalSessionParameterKey/);
+  assert.match(source, /onBlur=\{applyRename\}/);
+  assert.match(source, /原子重命名参数/);
+  assert.doesNotMatch(
+    source,
+    /参数键`} value=\{parameter\.key\} onChange=.*key: event\.target\.value/,
+  );
+});
+
+test("login polling uses one abortable scope with independent deadline", () => {
+  const source = readFileSync(
+    new URL("../app/LocalSessionWorkbench.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /new LocalSessionLoginPollScope<SharedPayload>/);
+  assert.match(source, /signal,/);
+  assert.match(source, /loginPoll\.current\?\.cancel\("local_session_cleared"\)/);
+  assert.match(
+    source,
+    /loginPoll\.current\?\.cancel\("local_session_workbench_unmounted"\)/,
+  );
+  assert.doesNotMatch(source, /setInterval/);
+});

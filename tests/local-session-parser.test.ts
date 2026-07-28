@@ -4,6 +4,7 @@ import test from "node:test";
 
 import * as XLSX from "xlsx";
 
+import { inspectBrowserCanonicalWorkbook } from "../lib/browser-canonical-workbook";
 import { CANONICAL_FEISHU_SHEET_REGISTRY } from "../lib/feishu-workbook";
 import {
   LocalSessionParserError,
@@ -20,6 +21,11 @@ import {
 import type {
   LocalSessionParserRequest,
   LocalSessionParserWorkerResponse,
+} from "../lib/local-session-parser-protocol";
+import {
+  createLocalSessionParsedWorkbook,
+  parseLocalSessionParsedWorkbook,
+  projectLocalRulesTemplateWorkbook,
 } from "../lib/local-session-parser-protocol";
 import type {
   LocalSessionObjectUrlApi,
@@ -255,6 +261,55 @@ test("canonical File 保持不可变，ArrayBuffer 转移到 disposable worker�
     timeoutCount: 0,
   });
   assert.deepEqual(urls.revoked, []);
+});
+
+test("ignored-sheet warnings enter closed session validation with deterministic dedupe", async () => {
+  const bytes = canonicalWorkbookBytes("Scratch");
+  const parsed = await inspectBrowserCanonicalWorkbook({
+    bytes,
+    fileName: "warning.xlsx",
+    observedAt: "2026-07-28T00:00:00.000Z",
+  });
+  const warning = parsed.observation.warnings[0];
+  assert.ok(warning);
+  assert.equal(warning.code, "UNREGISTERED_SHEET");
+
+  const workbook = projectLocalRulesTemplateWorkbook({
+    inspection: parsed.inspection,
+    warnings: [warning, warning],
+  });
+  const warningIssues = workbook.editableDocument.sourceIssues.filter(
+    (issue) => issue.code === "UNREGISTERED_SHEET",
+  );
+  assert.deepEqual(warningIssues, [{
+    severity: "warning",
+    code: "UNREGISTERED_SHEET",
+    path: "canonical.unregistered-sheet.Scratch",
+    message: warning.message,
+  }]);
+
+  const result = createLocalSessionParsedWorkbook({
+    fileName: "warning.xlsx",
+    byteLength: bytes.byteLength,
+    contentSha256: "a".repeat(64),
+    inspection: parsed.inspection,
+    warnings: [warning, warning],
+  });
+  assert.deepEqual(result.session.document, result.workbook.editableDocument);
+  assert.equal(
+    result.session.document.sourceIssues.filter(
+      (issue) => issue.code === "UNREGISTERED_SHEET",
+    ).length,
+    1,
+  );
+  assert.deepEqual(parseLocalSessionParsedWorkbook(result), result);
+
+  const mismatched = structuredClone(result);
+  mismatched.workbook.editableDocument.title = "tampered";
+  assert.throws(
+    () => parseLocalSessionParsedWorkbook(mismatched),
+    /documents must match/,
+  );
 });
 
 test("operationId/resourceHandle 碰撞与 worker 身份错配均 fail-closed", async () => {

@@ -27,17 +27,17 @@ class FormulaParser {
   constructor(
     expression: string,
     private readonly variables: Record<string, number>,
+    private readonly syntaxOnly = false,
   ) {
-    this.tokens =
-      expression.match(
-        /\d+(?:\.\d+)?|[\u4e00-\u9fffA-Za-z_][\u4e00-\u9fffA-Za-z0-9_.]*|[()+\-*/^,]/g,
-      ) ?? [];
+    this.tokens = lexFormula(expression).map((token) => token.value);
   }
 
   parse(): number {
     const result = this.expression();
     if (this.index < this.tokens.length) throw new Error("公式存在无法识别的片段");
-    if (!Number.isFinite(result)) throw new Error("公式结果不是有效数字");
+    if (!this.syntaxOnly && !Number.isFinite(result)) {
+      throw new Error("公式结果不是有效数字");
+    }
     return result;
   }
 
@@ -54,7 +54,7 @@ class FormulaParser {
     while (this.peek() === "+" || this.peek() === "-") {
       const operator = this.take();
       const right = this.term();
-      value = operator === "+" ? value + right : value - right;
+      value = this.syntaxOnly ? 0 : operator === "+" ? value + right : value - right;
     }
     return value;
   }
@@ -64,7 +64,7 @@ class FormulaParser {
     while (this.peek() === "*" || this.peek() === "/") {
       const operator = this.take();
       const right = this.power();
-      value = operator === "*" ? value * right : value / right;
+      value = this.syntaxOnly ? 0 : operator === "*" ? value * right : value / right;
     }
     return value;
   }
@@ -73,7 +73,8 @@ class FormulaParser {
     let value = this.unary();
     while (this.peek() === "^") {
       this.take();
-      value = value ** this.unary();
+      const right = this.unary();
+      value = this.syntaxOnly ? 0 : value ** right;
     }
     return value;
   }
@@ -81,7 +82,8 @@ class FormulaParser {
   private unary(): number {
     if (this.peek() === "-") {
       this.take();
-      return -this.unary();
+      const value = this.unary();
+      return this.syntaxOnly ? 0 : -value;
     }
     if (this.peek() === "+") {
       this.take();
@@ -97,7 +99,7 @@ class FormulaParser {
       if (this.take() !== ")") throw new Error("公式缺少右括号");
       return value;
     }
-    if (/^\d/.test(token ?? "")) return Number(token);
+    if (/^\d/.test(token ?? "")) return this.syntaxOnly ? 0 : Number(token);
     if (!token) throw new Error("公式意外结束");
 
     if (this.peek() === "(") {
@@ -112,6 +114,11 @@ class FormulaParser {
       }
       if (this.take() !== ")") throw new Error("函数缺少右括号");
       const fn = token.toLowerCase();
+      if (this.syntaxOnly) {
+        if (fn === "min" || fn === "max" || fn === "abs"
+          || fn === "round" || fn === "sqrt") return 0;
+        throw new Error("不支持的函数：" + token);
+      }
       if (fn === "min") return Math.min(...args);
       if (fn === "max") return Math.max(...args);
       if (fn === "abs") return Math.abs(args[0] ?? 0);
@@ -120,10 +127,61 @@ class FormulaParser {
       throw new Error("不支持的函数：" + token);
     }
 
+    if (this.syntaxOnly) return 0;
     const variable = this.variables[token];
     if (variable === undefined) throw new Error("未知变量：" + token);
     return variable;
   }
+}
+
+interface FormulaToken {
+  value: string;
+  start: number;
+  end: number;
+}
+
+const FORMULA_TOKEN =
+  /\d+(?:\.\d+)?|[\u4e00-\u9fffA-Za-z_][\u4e00-\u9fffA-Za-z0-9_.]*|[()+\-*/^,]/uy;
+const FORMULA_WHITESPACE = /\s+/uy;
+
+export class FormulaSyntaxError extends Error {
+  constructor(
+    message: string,
+    readonly position: number,
+  ) {
+    super(message);
+    this.name = "FormulaSyntaxError";
+  }
+}
+
+function lexFormula(expression: string): FormulaToken[] {
+  const tokens: FormulaToken[] = [];
+  let index = 0;
+  while (index < expression.length) {
+    FORMULA_WHITESPACE.lastIndex = index;
+    const whitespace = FORMULA_WHITESPACE.exec(expression);
+    if (whitespace) {
+      index = FORMULA_WHITESPACE.lastIndex;
+      continue;
+    }
+    FORMULA_TOKEN.lastIndex = index;
+    const matched = FORMULA_TOKEN.exec(expression);
+    if (matched) {
+      tokens.push({
+        value: matched[0],
+        start: index,
+        end: FORMULA_TOKEN.lastIndex,
+      });
+      index = FORMULA_TOKEN.lastIndex;
+      continue;
+    }
+    const invalid = Array.from(expression.slice(index))[0] ?? "";
+    throw new FormulaSyntaxError(
+      `公式在位置 ${index + 1} 包含无法识别的字符：“${invalid}”。`,
+      index + 1,
+    );
+  }
+  return tokens;
 }
 
 export function evaluateFormula(
@@ -131,6 +189,26 @@ export function evaluateFormula(
   variables: Record<string, number>,
 ): number {
   return new FormulaParser(expression, variables).parse();
+}
+
+export function validateFormula(expression: string): void {
+  new FormulaParser(expression, {}, true).parse();
+}
+
+export function renameFormulaIdentifier(
+  expression: string,
+  oldIdentifier: string,
+  newIdentifier: string,
+): string {
+  const tokens = lexFormula(expression);
+  let cursor = 0;
+  let renamed = "";
+  for (const token of tokens) {
+    renamed += expression.slice(cursor, token.start);
+    renamed += token.value === oldIdentifier ? newIdentifier : token.value;
+    cursor = token.end;
+  }
+  return renamed + expression.slice(cursor);
 }
 
 function selectedOptionIds(candidate: Candidate, layer: RuleLayer): string[] {

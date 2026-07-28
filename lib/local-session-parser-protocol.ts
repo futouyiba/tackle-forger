@@ -65,7 +65,7 @@ export function projectLocalRulesTemplateWorkbook(input: {
   warnings: BrowserCanonicalWorkbookWarning[];
 }): LocalSessionRulesTemplateProjection {
   const { inspection } = input;
-  const editableDocument = editableDocumentFromInspection(inspection);
+  const editableDocument = editableDocumentFromInspection(inspection, input.warnings);
   return {
     contractVersion: LOCAL_SESSION_WORKBOOK_CONTRACT_VERSION,
     semanticRevision: inspection.sourceRevision.sourceRevision,
@@ -85,6 +85,7 @@ function localItemPart(value: string | undefined): LocalEditableItemPart {
 
 function editableDocumentFromInspection(
   inspection: CanonicalRuleWorkbookParsedInspection,
+  warnings: BrowserCanonicalWorkbookWarning[],
 ): LocalSessionDocument {
   const draft = inspection.canonicalRuleDraft;
   let sequence = 0;
@@ -139,10 +140,8 @@ function editableDocumentFromInspection(
   for (const layer of draft.layers) {
     appendRules("layer", layer.id, layer.name, layer.rules, layer.enabled);
   }
-  return {
-    title: "WQ8w 本地规则与模板",
-    notes: `仅内存编辑；源语义修订 ${inspection.sourceRevision.sourceRevision}`,
-    sourceIssues: draft.issues.map((issue) => ({
+  const sourceIssues = [
+    ...draft.issues.map((issue) => ({
       severity: issue.level,
       code: issue.code,
       path: issue.sheetId
@@ -150,6 +149,23 @@ function editableDocumentFromInspection(
         : "canonical.workbook",
       message: issue.message,
     })),
+    ...warnings.map((warning) => ({
+      severity: "warning" as const,
+      code: warning.code,
+      path: `canonical.unregistered-sheet.${warning.sheetName}`,
+      message: warning.message,
+    })),
+  ];
+  const uniqueSourceIssues = [...new Map(
+    sourceIssues.map((issue) => [
+      `${issue.severity}\u0000${issue.code}\u0000${issue.path}\u0000${issue.message}`,
+      issue,
+    ]),
+  ).values()];
+  return {
+    title: "WQ8w 本地规则与模板",
+    notes: `仅内存编辑；源语义修订 ${inspection.sourceRevision.sourceRevision}`,
+    sourceIssues: uniqueSourceIssues,
     parameters: draft.parameters.map((parameter, index) => ({
       id: parameter.id ?? `parameter:${index}:${parameter.key}`,
       key: parameter.key,
@@ -189,7 +205,7 @@ export function createLocalSessionParsedWorkbook(input: {
         byteLength: input.byteLength,
         contentSha256: input.contentSha256,
       },
-      editableDocumentFromInspection(input.inspection),
+      editableDocumentFromInspection(input.inspection, input.warnings),
     ),
   };
 }
@@ -263,10 +279,14 @@ function parseProjection(value: unknown): LocalSessionRulesTemplateProjection {
 
 export function parseLocalSessionParsedWorkbook(value: unknown): LocalSessionParsedWorkbook {
   const object = exactObject(value, ["session", "workbook"], "LocalSessionParsedWorkbook");
-  return {
-    session: parseLocalSessionModel(object.session),
-    workbook: parseProjection(object.workbook),
-  };
+  const session = parseLocalSessionModel(object.session);
+  const workbook = parseProjection(object.workbook);
+  if (JSON.stringify(session.document) !== JSON.stringify(workbook.editableDocument)) {
+    throw new TypeError(
+      "LocalSessionParsedWorkbook session and workbook documents must match.",
+    );
+  }
+  return { session, workbook };
 }
 
 export function parseLocalSessionParserWorkerResponse(

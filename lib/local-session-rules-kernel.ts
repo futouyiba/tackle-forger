@@ -1,4 +1,8 @@
-import { evaluateFormula } from "./engine";
+import {
+  evaluateFormula,
+  renameFormulaIdentifier,
+  validateFormula,
+} from "./engine";
 import type {
   LocalEditableRule,
   LocalSessionDocument,
@@ -63,6 +67,63 @@ function duplicates(values: readonly string[]): Set<string> {
   return repeated;
 }
 
+const LOCAL_PARAMETER_KEY =
+  /^[\u4e00-\u9fffA-Za-z_][\u4e00-\u9fffA-Za-z0-9_.]*$/u;
+
+function assertLocalParameterKey(
+  document: LocalSessionDocument,
+  parameterId: string,
+  nextKey: string,
+): void {
+  if (!nextKey || !LOCAL_PARAMETER_KEY.test(nextKey)) {
+    throw new TypeError("参数键必须以中文、字母或下划线开头，且只能包含中文、字母、数字、下划线或点。");
+  }
+  if (nextKey === "current") {
+    throw new TypeError("参数键“current”由公式运行时保留。");
+  }
+  if (document.parameters.some((entry) =>
+    entry.id !== parameterId && entry.key === nextKey
+  )) {
+    throw new TypeError(`参数键“${nextKey}”已存在。`);
+  }
+}
+
+export function renameLocalSessionParameterKey(
+  document: LocalSessionDocument,
+  parameterId: string,
+  nextKey: string,
+): LocalSessionDocument {
+  const parameter = document.parameters.find((entry) => entry.id === parameterId);
+  if (!parameter) throw new TypeError(`找不到参数“${parameterId}”。`);
+  assertLocalParameterKey(document, parameterId, nextKey);
+  const previousKey = parameter.key;
+  if (previousKey === nextKey) return document;
+  const templates = document.templates.map((template) => {
+    if (!Object.hasOwn(template.values, previousKey)) return template;
+    const values = Object.fromEntries(
+      Object.entries(template.values).map(([key, value]) => [
+        key === previousKey ? nextKey : key,
+        value,
+      ]),
+    );
+    return { ...template, values };
+  });
+  const rules = document.rules.map((rule) => ({
+    ...rule,
+    parameterKey: rule.parameterKey === previousKey ? nextKey : rule.parameterKey,
+    value: rule.operation === "formula" && typeof rule.value === "string"
+      ? renameFormulaIdentifier(rule.value, previousKey, nextKey)
+      : rule.value,
+  }));
+  return {
+    ...document,
+    parameters: document.parameters.map((entry) =>
+      entry.id === parameterId ? { ...entry, key: nextKey } : entry),
+    templates,
+    rules,
+  };
+}
+
 export function validateLocalSessionDocument(
   document: LocalSessionDocument,
 ): LocalSessionValidationIssue[] {
@@ -103,23 +164,41 @@ export function validateLocalSessionDocument(
     document.parameters.map((entry) => [entry.key, entry] as const),
   );
   const parameterKeys = new Set(parametersByKey.keys());
+  for (const [index, parameter] of document.parameters.entries()) {
+    if (!parameter.key || !LOCAL_PARAMETER_KEY.test(parameter.key)) {
+      issues.push({
+        severity: "error",
+        code: "INVALID_PARAMETER_KEY",
+        path: `parameters[${index}].key`,
+        message: `参数键“${parameter.key}”格式无效。`,
+      });
+    } else if (parameter.key === "current") {
+      issues.push({
+        severity: "error",
+        code: "RESERVED_PARAMETER_KEY",
+        path: `parameters[${index}].key`,
+        message: "参数键“current”由公式运行时保留。",
+      });
+    }
+  }
   for (const [index, template] of document.templates.entries()) {
     if (
-      template.targetPullMinKgf > template.nominalTargetPullKgf
+      template.targetPullMinKgf >= template.targetPullMaxKgf
+      || template.targetPullMinKgf > template.nominalTargetPullKgf
       || template.nominalTargetPullKgf > template.targetPullMaxKgf
     ) {
       issues.push({
         severity: "error",
         code: "INVALID_TEMPLATE_PULL_RANGE",
         path: `templates[${index}]`,
-        message: `模板“${template.name}”必须满足最小拉力 ≤ 标称拉力 ≤ 最大拉力。`,
+        message: `模板“${template.name}”必须满足最小拉力 < 最大拉力，且最小拉力 ≤ 标称拉力 ≤ 最大拉力。`,
       });
     }
     for (const key of Object.keys(template.values)) {
       const parameter = parametersByKey.get(key);
       if (!parameter) {
         issues.push({
-          severity: "warning",
+          severity: "error",
           code: "TEMPLATE_PARAMETER_NOT_DECLARED",
           path: `templates[${index}].values.${key}`,
           message: `模板值“${key}”没有对应的参数定义。`,
@@ -155,6 +234,27 @@ export function validateLocalSessionDocument(
         message: `规则“${rule.id}”的 ${rule.operation} 操作需要数值。`,
       });
     }
+    if (rule.operation === "formula") {
+      if (typeof rule.value !== "string") {
+        issues.push({
+          severity: "error",
+          code: "RULE_FORMULA_REQUIRED",
+          path: `rules[${index}].value`,
+          message: `规则“${rule.id}”的 formula 操作需要公式字符串。`,
+        });
+      } else {
+        try {
+          validateFormula(rule.value);
+        } catch (error) {
+          issues.push({
+            severity: "error",
+            code: "RULE_FORMULA_INVALID",
+            path: `rules[${index}].value`,
+            message: error instanceof Error ? error.message : "公式语法无效。",
+          });
+        }
+      }
+    }
   }
   return issues;
 }
@@ -164,23 +264,30 @@ function applyRuleValue(
   rule: LocalEditableRule,
   numericValues: Record<string, number>,
 ): number | string {
-  if (rule.operation === "set") return rule.value;
-  if (rule.operation === "formula") {
+  let computed: number | string;
+  if (rule.operation === "set") {
+    computed = rule.value;
+  } else if (rule.operation === "formula") {
     if (typeof rule.value !== "string") {
       throw new Error("formula 操作需要公式字符串。");
     }
-    return evaluateFormula(rule.value, {
+    computed = evaluateFormula(rule.value, {
       ...numericValues,
       current: typeof before === "number" ? before : 0,
     });
+  } else {
+    if (typeof before !== "number" || typeof rule.value !== "number") {
+      throw new Error(`${rule.operation} 操作要求当前值与操作数均为数值。`);
+    }
+    if (rule.operation === "add") computed = before + rule.value;
+    else if (rule.operation === "multiply") computed = before * rule.value;
+    else if (rule.operation === "min") computed = Math.min(before, rule.value);
+    else computed = Math.max(before, rule.value);
   }
-  if (typeof before !== "number" || typeof rule.value !== "number") {
-    throw new Error(`${rule.operation} 操作要求当前值与操作数均为数值。`);
+  if (typeof computed === "number" && !Number.isFinite(computed)) {
+    throw new Error(`${rule.operation} 操作结果不是有限数值。`);
   }
-  if (rule.operation === "add") return before + rule.value;
-  if (rule.operation === "multiply") return before * rule.value;
-  if (rule.operation === "min") return Math.min(before, rule.value);
-  return Math.max(before, rule.value);
+  return computed;
 }
 
 export function deriveLocalSessionTemplate(
@@ -211,7 +318,7 @@ export function deriveLocalSessionTemplate(
   const values = Object.fromEntries(
     Object.entries(template.values).filter(([key]) => {
       const parameter = parametersByKey.get(key);
-      return !parameter || parameter.itemPart === template.itemPart;
+      return Boolean(parameter && parameter.itemPart === template.itemPart);
     }),
   );
   const trace: LocalSessionTraceEntry[] = [];

@@ -1,10 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import type { LocalSessionDocument } from "../lib/local-session-contracts";
+import {
+  createLocalSessionModel,
+  reduceLocalSession,
+  type LocalSessionDocument,
+  type LocalSessionReducerState,
+} from "../lib/local-session-contracts";
 import {
   deriveLocalSessionTemplate,
   parseLocalTemplateValuesJson,
+  renameLocalSessionParameterKey,
   validateLocalSessionDocument,
 } from "../lib/local-session-rules-kernel";
 
@@ -98,6 +104,33 @@ test("boundary/conflict validation fails closed without interpolating templates"
   assert.ok(derived.issues.some((issue) => issue.code === "TEMPLATE_NOT_FOUND"));
 });
 
+test("template pull range requires positive width while allowing nominal boundaries", () => {
+  const zeroWidth = fixture();
+  zeroWidth.templates[0] = {
+    ...zeroWidth.templates[0]!,
+    targetPullMinKgf: 3,
+    nominalTargetPullKgf: 3,
+    targetPullMaxKgf: 3,
+  };
+  const invalid = deriveLocalSessionTemplate(zeroWidth, "t-medium");
+  assert.ok(invalid.issues.some((issue) => issue.code === "INVALID_TEMPLATE_PULL_RANGE"));
+  assert.deepEqual(invalid.trace, []);
+
+  for (const nominalTargetPullKgf of [2, 4]) {
+    const boundary = fixture();
+    boundary.templates[0] = {
+      ...boundary.templates[0]!,
+      nominalTargetPullKgf,
+    };
+    assert.equal(
+      validateLocalSessionDocument(boundary).some(
+        (issue) => issue.code === "INVALID_TEMPLATE_PULL_RANGE",
+      ),
+      false,
+    );
+  }
+});
+
 test("condition semantics are preserved but not guessed by the local kernel", () => {
   const document = fixture();
   document.rules[0] = {
@@ -175,6 +208,27 @@ test("formula receives the current numeric value", () => {
   assert.equal(derived.trace[0]?.status, "applied");
 });
 
+test("formula validation and derivation share the strict parser", () => {
+  const document = fixture();
+  document.rules = [{
+    ...document.rules[0]!,
+    id: "invalid-formula-character",
+    sequence: 0,
+    operation: "formula",
+    value: "1;",
+  }];
+  const issues = validateLocalSessionDocument(document);
+  assert.ok(
+    issues.some((issue) =>
+      issue.code === "RULE_FORMULA_INVALID"
+      && issue.message.includes("位置 2")
+    ),
+  );
+  const derived = deriveLocalSessionTemplate(document, "t-medium");
+  assert.deepEqual(derived.trace, []);
+  assert.equal(derived.values.pull, 3);
+});
+
 test("derivation exposes runtime evaluation failures as validation issues", () => {
   const document = fixture();
   document.templates[0] = {
@@ -186,6 +240,43 @@ test("derivation exposes runtime evaluation failures as validation issues", () =
   assert.ok(
     derived.issues.some((issue) => issue.code === "RULE_EVALUATION_FAILED"),
   );
+});
+
+test("non-finite arithmetic results fail closed without polluting later rules", () => {
+  for (const [operation, value] of [
+    ["add", Number.MAX_VALUE],
+    ["multiply", 2],
+  ] as const) {
+    const document = fixture();
+    document.templates[0] = {
+      ...document.templates[0]!,
+      values: { pull: Number.MAX_VALUE },
+    };
+    document.rules = [
+      {
+        ...document.rules[0]!,
+        id: `overflow-${operation}`,
+        sequence: 0,
+        operation,
+        value,
+      },
+      {
+        ...document.rules[1]!,
+        id: "after-overflow",
+        sequence: 1,
+        operation: "min",
+        value: 10,
+      },
+    ];
+    const derived = deriveLocalSessionTemplate(document, "t-medium");
+    assert.equal(derived.trace[0]?.status, "error");
+    assert.equal(derived.trace[0]?.after, Number.MAX_VALUE);
+    assert.equal(derived.values.pull, 10);
+    assert.ok(Number.isFinite(derived.values.pull as number));
+    assert.ok(
+      derived.issues.some((issue) => issue.code === "RULE_EVALUATION_FAILED"),
+    );
+  }
 });
 
 test("canonical import errors block partial documents and remain visible", () => {
@@ -273,4 +364,114 @@ test("template values from another item part fail closed before preview or formu
       issue.code === "TEMPLATE_PARAMETER_ITEM_PART_MISMATCH"
     ),
   );
+});
+
+test("undeclared template values are blocking and excluded from preview/formulas", () => {
+  for (const rogue of [99, "rogue"]) {
+    const document = fixture();
+    document.templates[0] = {
+      ...document.templates[0]!,
+      values: { ...document.templates[0]!.values, rogue },
+    };
+    document.rules = [{
+      ...document.rules[0]!,
+      id: "rogue-formula",
+      sequence: 0,
+      operation: "formula",
+      value: "rogue + current",
+    }];
+    const derived = deriveLocalSessionTemplate(document, "t-medium");
+    assert.ok(
+      derived.issues.some((issue) =>
+        issue.code === "TEMPLATE_PARAMETER_NOT_DECLARED"
+        && issue.severity === "error"
+      ),
+    );
+    assert.equal("rogue" in derived.values, false);
+    assert.deepEqual(derived.trace, []);
+  }
+});
+
+test("parameter rename atomically migrates templates, rules and formula tokens", () => {
+  const document = fixture();
+  document.parameters.push({
+    ...document.parameters[0]!,
+    id: "p-pull-extra",
+    key: "pull_extra",
+  });
+  document.templates[0] = {
+    ...document.templates[0]!,
+    values: { pull: 3, pull_extra: 7 },
+  };
+  document.rules = [{
+    ...document.rules[0]!,
+    id: "formula-rename",
+    parameterKey: "pull",
+    operation: "formula",
+    value: "pull + pull_extra + current",
+  }];
+
+  const renamed = renameLocalSessionParameterKey(document, "p-pull", "force");
+  assert.equal(document.parameters[0]?.key, "pull", "input document must stay frozen");
+  assert.equal(renamed.parameters[0]?.key, "force");
+  assert.deepEqual(renamed.templates[0]?.values, { force: 3, pull_extra: 7 });
+  assert.equal(renamed.rules[0]?.parameterKey, "force");
+  assert.equal(renamed.rules[0]?.value, "force + pull_extra + current");
+
+  let state: LocalSessionReducerState = {
+    status: "active",
+    session: createLocalSessionModel({ kind: "temporary_workspace" }, document),
+  };
+  state = reduceLocalSession(state, {
+    type: "commit_local_edit",
+    document: renamed,
+  });
+  assert.equal(state.status, "active");
+  if (state.status !== "active") assert.fail("renamed session must remain active");
+  assert.equal(state.session.history.undo.length, 1);
+  state = reduceLocalSession(state, { type: "undo_local_edit" });
+  assert.equal(state.status, "active");
+  if (state.status !== "active") assert.fail("undo must remain active");
+  assert.equal(state.session.document.parameters[0]?.key, "pull");
+  assert.equal(state.session.document.rules[0]?.value, "pull + pull_extra + current");
+  state = reduceLocalSession(state, { type: "redo_local_edit" });
+  assert.equal(state.status, "active");
+  if (state.status !== "active") assert.fail("redo must remain active");
+  assert.equal(state.session.document.parameters[0]?.key, "force");
+  assert.equal(state.session.document.rules[0]?.value, "force + pull_extra + current");
+});
+
+test("parameter rename rejects collisions, invalid/reserved keys and invalid formulas", () => {
+  const document = fixture();
+  document.parameters.push({
+    ...document.parameters[0]!,
+    id: "p-other",
+    key: "other",
+  });
+  assert.throws(
+    () => renameLocalSessionParameterKey(document, "p-pull", "other"),
+    /已存在/,
+  );
+  assert.throws(
+    () => renameLocalSessionParameterKey(document, "p-pull", ""),
+    /必须以/,
+  );
+  assert.throws(
+    () => renameLocalSessionParameterKey(document, "p-pull", "1pull"),
+    /必须以/,
+  );
+  assert.throws(
+    () => renameLocalSessionParameterKey(document, "p-pull", "current"),
+    /保留/,
+  );
+  document.rules = [{
+    ...document.rules[0]!,
+    operation: "formula",
+    value: "pull;",
+  }];
+  assert.throws(
+    () => renameLocalSessionParameterKey(document, "p-pull", "force"),
+    /位置 5/,
+  );
+  assert.equal(document.parameters[0]?.key, "pull");
 });

@@ -9,6 +9,7 @@ import {
   LocalSessionParserError,
   LocalSessionWorkbookLoader,
 } from "../lib/local-session-parser";
+import { sha256Hex as pureSha256Hex } from "../lib/five-axis-hash";
 import {
   handleLocalSessionParserRequest,
 } from "../lib/local-session-parser-worker";
@@ -232,6 +233,31 @@ test("canonical File 保持不可变，ArrayBuffer 转移到 disposable worker�
     timeoutCount: 0,
   });
   assert.deepEqual(urls.revoked, []);
+});
+
+test("非 secure context 缺少 SubtleCrypto 时使用纯浏览器 SHA-256 fallback", async () => {
+  const urls = new FakeObjectUrls();
+  const factory = workerFactory([handleLocalSessionParserRequest]);
+  const file = canonicalFile("http-fallback.xlsx");
+  const bytes = await file.arrayBuffer();
+  const expected = pureSha256Hex(new Uint8Array(bytes));
+  const nativeDigest = await crypto.subtle.digest("SHA-256", bytes);
+  assert.equal(
+    expected,
+    Buffer.from(nativeDigest).toString("hex"),
+    "fallback must match the secure-context SHA-256 path",
+  );
+
+  const loader = new LocalSessionWorkbookLoader({
+    workerFactory: factory.create,
+    objectUrlApi: urls,
+    subtleCrypto: null,
+  });
+  const ready = await loader.open(file);
+  assert.equal(ready.result.session.source.kind, "local_excel");
+  if (ready.result.session.source.kind !== "local_excel") assert.fail("expected local Excel source");
+  assert.equal(ready.result.session.source.contentSha256, expected);
+  assert.equal(factory.workers[0]!.terminated, true);
 });
 
 test("legacy _TackleForgerState 和主线程文件大小预算 fail-closed，失败资源完整释放", async () => {

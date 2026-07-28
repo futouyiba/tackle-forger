@@ -9,6 +9,7 @@ import {
   type LocalSessionObjectUrlApi,
   type LocalSessionParserWorker,
 } from "./local-session-resource-scope";
+import { sha256Hex as pureSha256Hex } from "./five-axis-hash";
 
 const LOCAL_SESSION_OBSERVED_AT = "1970-01-01T00:00:00.000Z";
 const DEFAULT_PARSE_TIMEOUT_MS = 30_000;
@@ -47,6 +48,7 @@ export interface LocalSessionWorkbookLoaderOptions {
   workerFactory?: LocalSessionParserWorkerFactory;
   objectUrlApi?: LocalSessionObjectUrlApi;
   timeoutMs?: number;
+  subtleCrypto?: SubtleCrypto | null;
 }
 
 function defaultWorkerFactory(): LocalSessionParserWorker {
@@ -56,8 +58,9 @@ function defaultWorkerFactory(): LocalSessionParserWorker {
   }) as LocalSessionParserWorker;
 }
 
-async function sha256Hex(bytes: ArrayBuffer) {
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
+async function sha256Hex(bytes: ArrayBuffer, subtleCrypto?: SubtleCrypto) {
+  if (!subtleCrypto) return pureSha256Hex(new Uint8Array(bytes));
+  const digest = await subtleCrypto.digest("SHA-256", bytes);
   return [...new Uint8Array(digest)]
     .map((value) => value.toString(16).padStart(2, "0"))
     .join("");
@@ -79,11 +82,15 @@ export class LocalSessionWorkbookLoader {
   #workerFactory: LocalSessionParserWorkerFactory;
   #objectUrlApi: LocalSessionObjectUrlApi;
   #timeoutMs: number;
+  #subtleCrypto: SubtleCrypto | undefined;
 
   constructor(options: LocalSessionWorkbookLoaderOptions = {}) {
     this.#workerFactory = options.workerFactory ?? defaultWorkerFactory;
     this.#objectUrlApi = options.objectUrlApi ?? URL;
     this.#timeoutMs = options.timeoutMs ?? DEFAULT_PARSE_TIMEOUT_MS;
+    this.#subtleCrypto = options.subtleCrypto === undefined
+      ? globalThis.crypto?.subtle
+      : options.subtleCrypto ?? undefined;
     if (!Number.isSafeInteger(this.#timeoutMs) || this.#timeoutMs < 1) {
       throw new TypeError("Local-session parser timeout must be a positive safe integer.");
     }
@@ -129,7 +136,7 @@ export class LocalSessionWorkbookLoader {
         );
       }
       scope.attachBuffer(bytes);
-      const contentSha256 = await sha256Hex(bytes);
+      const contentSha256 = await sha256Hex(bytes, this.#subtleCrypto);
       if (scope.disposed || this.#candidate !== scope) {
         throw new LocalSessionParserError(
           "LOCAL_SESSION_PARSE_CANCELLED",

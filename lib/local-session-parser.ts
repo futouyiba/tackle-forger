@@ -131,7 +131,7 @@ export class LocalSessionWorkbookLoader {
     const generation = this.#nextGeneration();
     const operationId = requestedOperationId
       ? operationAlreadyClaimed
-        ? this.#identities.assertClaimed("operation", requestedOperationId)
+        ? this.#identities.consumeClaimedOperation(requestedOperationId)
         : this.#identities.claim("operation", requestedOperationId)
       : this.#identities.allocate("operation");
     const resourceHandle = this.#identities.allocate("resource");

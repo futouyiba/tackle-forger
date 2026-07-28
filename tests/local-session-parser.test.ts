@@ -293,6 +293,10 @@ test("UI 与 loader 共用同一 ledger，并只接受显式 already-claimed ope
   assert.equal(ready.operationId, operationId);
   assert.equal(identities.has(ready.resourceHandle), true);
   await assert.rejects(
+    loader.open(canonicalFile("reused-handoff.xlsx"), operationId, true),
+    /identity collided/,
+  );
+  await assert.rejects(
     loader.open(canonicalFile("unclaimed.xlsx"), "operation:not-claimed", true),
     /identity collided/,
   );

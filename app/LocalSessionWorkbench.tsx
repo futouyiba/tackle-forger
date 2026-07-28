@@ -602,7 +602,7 @@ function EditableTemplates({ document, commit, identities }: EditorProps) {
             <label>部位<select value={template.itemPart} onChange={(event) => commit({ ...document, templates: document.templates.map((entry, row) => row === index ? { ...entry, itemPart: event.target.value as "rod" | "reel" | "line" } : entry) }, "编辑模板部位")}><option value="rod">竿</option><option value="reel">轮</option><option value="line">线</option></select></label>
             {(["targetPullMinKgf", "nominalTargetPullKgf", "targetPullMaxKgf"] as const).map((field) => <label key={field}>{field === "targetPullMinKgf" ? "最小拉力" : field === "nominalTargetPullKgf" ? "标称拉力" : "最大拉力"}<input type="number" value={template[field]} onChange={(event) => commit({ ...document, templates: document.templates.map((entry, row) => row === index ? { ...entry, [field]: numericInput(event.target.value) } : entry) }, "编辑模板拉力")} /></label>)}
             <TemplateValuesEditor
-              key={`${template.id}:${JSON.stringify(template.values)}`}
+              key={template.id}
               errorId={`local-template-json-error-${index}`}
               values={template.values}
               onCommit={(values) => commit({
@@ -629,6 +629,14 @@ function TemplateValuesEditor({
 }) {
   const [draft, setDraft] = useState(() => JSON.stringify(values, null, 2));
   const [error, setError] = useState("");
+  const lastCommitted = useRef(JSON.stringify(values));
+  useEffect(() => {
+    const external = JSON.stringify(values);
+    if (external === lastCommitted.current) return;
+    lastCommitted.current = external;
+    setDraft(JSON.stringify(values, null, 2));
+    setError("");
+  }, [values]);
   return (
     <label className="span-two">
       模板值（JSON 对象）
@@ -641,6 +649,7 @@ function TemplateValuesEditor({
           setDraft(nextDraft);
           try {
             const nextValues = parseLocalTemplateValuesJson(nextDraft);
+            lastCommitted.current = JSON.stringify(nextValues);
             setError("");
             onCommit(nextValues);
           } catch (nextError) {
@@ -714,7 +723,7 @@ function EditableRules({ document, commit, identities }: EditorProps) {
                 }}>{Object.entries(OPERATION_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></td>
                 <td>
                   <RuleValueEditor
-                    key={`${rule.id}:${rule.operation}:${typeof rule.value}:${String(rule.value)}`}
+                    key={rule.id}
                     errorId={`local-rule-value-error-${rule.id}`}
                     index={index}
                     operation={rule.operation}
@@ -754,6 +763,14 @@ function RuleValueEditor({
     && !(operation === "set" && typeof value === "string");
   const [draft, setDraft] = useState(() => String(value));
   const [error, setError] = useState("");
+  const lastCommitted = useRef({ operation, value });
+  useEffect(() => {
+    const previous = lastCommitted.current;
+    if (previous.operation === operation && Object.is(previous.value, value)) return;
+    lastCommitted.current = { operation, value };
+    setDraft(String(value));
+    setError("");
+  }, [operation, value]);
   return (
     <span className="local-inline-editor">
       <input
@@ -766,6 +783,7 @@ function RuleValueEditor({
           const nextDraft = event.target.value;
           setDraft(nextDraft);
           if (!numeric) {
+            lastCommitted.current = { operation, value: nextDraft };
             setError("");
             onCommit(nextDraft);
             return;
@@ -775,6 +793,7 @@ function RuleValueEditor({
             setError("请输入有限数值；会保留上一次有效规则值。");
             return;
           }
+          lastCommitted.current = { operation, value: nextValue };
           setError("");
           onCommit(nextValue);
         }}

@@ -20,6 +20,7 @@ export interface LocalSessionIdentityAllocatorOptions {
  */
 export class LocalSessionIdentityAllocator {
   #used = new Map<string, LocalSessionIdentityKind>();
+  #consumedOperationHandoffs = new Set<string>();
   #createId: () => string;
 
   constructor(options: LocalSessionIdentityAllocatorOptions = {}) {
@@ -43,10 +44,14 @@ export class LocalSessionIdentityAllocator {
     return this.#used.has(value);
   }
 
-  assertClaimed(kind: LocalSessionIdentityKind, value: string): string {
-    if (this.#used.get(value) !== kind) {
-      throw new LocalSessionIdentityCollisionError(kind, value);
+  consumeClaimedOperation(value: string): string {
+    if (
+      this.#used.get(value) !== "operation"
+      || this.#consumedOperationHandoffs.has(value)
+    ) {
+      throw new LocalSessionIdentityCollisionError("operation", value);
     }
+    this.#consumedOperationHandoffs.add(value);
     return value;
   }
 }

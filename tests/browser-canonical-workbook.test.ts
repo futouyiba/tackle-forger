@@ -128,8 +128,20 @@ interface RealZipEntry {
   declaredUncompressedSize?: number;
 }
 
+interface RealZipEocdOptions {
+  diskNumber?: number;
+  centralDirectoryDisk?: number;
+  entriesOnDisk?: number;
+  totalEntries?: number;
+  truncateCentralBytes?: number;
+  centralDirectorySizeOverride?: number;
+}
+
 /** 构造真实可解压 ZIP（local header + 压缩数据 + central directory + EOCD），用于测流式 inflate 预检。 */
-function buildRealZip(entries: RealZipEntry[]): ArrayBuffer {
+function buildRealZip(
+  entries: RealZipEntry[],
+  options: RealZipEocdOptions = {},
+): ArrayBuffer {
   const enc = new TextEncoder();
   const localParts: Uint8Array[] = [];
   const centralRec: Array<{ localStart: number; name: Uint8Array; method: number; csz: number; usz: number; flags: number }> = [];
@@ -175,17 +187,37 @@ function buildRealZip(entries: RealZipEntry[]): ArrayBuffer {
     centralParts.push(ch, c.name);
     cdLen += ch.length + c.name.length;
   }
+  const fullCentral = new Uint8Array(cdLen);
+  let centralOffset = 0;
+  for (const part of centralParts) {
+    fullCentral.set(part, centralOffset);
+    centralOffset += part.length;
+  }
+  const truncateCentralBytes = options.truncateCentralBytes ?? 0;
+  assert.ok(
+    Number.isSafeInteger(truncateCentralBytes)
+    && truncateCentralBytes >= 0
+    && truncateCentralBytes < fullCentral.byteLength,
+  );
+  const central = fullCentral.slice(0, fullCentral.byteLength - truncateCentralBytes);
   const eocd = new Uint8Array(22);
   const edv = new DataView(eocd.buffer);
   edv.setUint32(0, 0x06054b50, true);
-  edv.setUint16(8, entries.length, true);
-  edv.setUint16(10, entries.length, true);
-  edv.setUint32(12, cdLen, true);
+  edv.setUint16(4, options.diskNumber ?? 0, true);
+  edv.setUint16(6, options.centralDirectoryDisk ?? 0, true);
+  edv.setUint16(8, options.entriesOnDisk ?? entries.length, true);
+  edv.setUint16(10, options.totalEntries ?? entries.length, true);
+  edv.setUint32(
+    12,
+    options.centralDirectorySizeOverride ?? central.byteLength,
+    true,
+  );
   edv.setUint32(16, localLen, true);
-  const out = new Uint8Array(localLen + cdLen + 22);
+  const out = new Uint8Array(localLen + central.byteLength + 22);
   let off = 0;
   for (const part of localParts) { out.set(part, off); off += part.length; }
-  for (const part of centralParts) { out.set(part, off); off += part.length; }
+  out.set(central, off);
+  off += central.byteLength;
   out.set(eocd, off);
   return out.buffer;
 }
@@ -323,6 +355,81 @@ test("ZIP 流式解压验证：拒绝 central/local 不一致、实际超预算�
   await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: buildRealZip([{ name: "a", content: new Uint8Array([1]), encrypted: true }]), fileName: "enc.zip", observedAt: ts }), "XLSX_ZIP_INVALID");
   // 数据描述符通过流式预检（仅因不是合法 XLSX 才在 read 阶段失败，证明未被预检误拒）
   await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: buildRealZip([{ name: "a", content: new Uint8Array([1, 2, 3]), dataDescriptor: true }]), fileName: "dd.zip", observedAt: ts }), "XLSX_INVALID");
+});
+
+test("ZIP EOCD 与 central directory 的磁盘、计数和边界必须闭合一致", async () => {
+  const ts = "2026-07-28T00:00:00.000Z";
+  const entry = { name: "a", content: new Uint8Array([1, 2, 3]) };
+
+  await rejectsCode(
+    observeBrowserCanonicalWorkbook({
+      bytes: buildRealZip([entry], { entriesOnDisk: 1, totalEntries: 0 }),
+      fileName: "eocd-real-zero.xlsx",
+      observedAt: ts,
+    }),
+    "XLSX_ZIP_INVALID",
+  );
+  await rejectsCode(
+    observeBrowserCanonicalWorkbook({
+      bytes: buildRealZip([entry], { entriesOnDisk: 0, totalEntries: 1 }),
+      fileName: "eocd-zero-real.xlsx",
+      observedAt: ts,
+    }),
+    "XLSX_ZIP_INVALID",
+  );
+  await rejectsCode(
+    observeBrowserCanonicalWorkbook({
+      bytes: buildRealZip([entry], { diskNumber: 1 }),
+      fileName: "eocd-disk.xlsx",
+      observedAt: ts,
+    }),
+    "XLSX_ZIP_INVALID",
+  );
+  await rejectsCode(
+    observeBrowserCanonicalWorkbook({
+      bytes: buildRealZip([entry], { centralDirectoryDisk: 1 }),
+      fileName: "eocd-central-disk.xlsx",
+      observedAt: ts,
+    }),
+    "XLSX_ZIP_INVALID",
+  );
+  await rejectsCode(
+    observeBrowserCanonicalWorkbook({
+      bytes: buildRealZip([entry], { truncateCentralBytes: 1 }),
+      fileName: "central-truncated.xlsx",
+      observedAt: ts,
+    }),
+    "XLSX_ZIP_INVALID",
+  );
+  await rejectsCode(
+    observeBrowserCanonicalWorkbook({
+      bytes: buildRealZip(
+        [entry, { name: "b", content: new Uint8Array([4, 5, 6]) }],
+        { entriesOnDisk: 1, totalEntries: 1 },
+      ),
+      fileName: "central-extra-record.xlsx",
+      observedAt: ts,
+    }),
+    "XLSX_ZIP_INVALID",
+  );
+  await rejectsCode(
+    observeBrowserCanonicalWorkbook({
+      bytes: buildRealZip(
+        [entry],
+        { centralDirectorySizeOverride: 46 },
+      ),
+      fileName: "central-size-truncated.xlsx",
+      observedAt: ts,
+    }),
+    "XLSX_ZIP_INVALID",
+  );
+
+  const legal = await observeBrowserCanonicalWorkbook({
+    bytes: workbookBytes(),
+    fileName: "consistent-canonical.xlsx",
+    observedAt: ts,
+  });
+  assert.equal(legal.sourceRevision.sheets.length, CANONICAL_FEISHU_SHEET_REGISTRY.length);
 });
 
 test("浏览器 canonical XLSX adapter 接受合法长字符串单元格（≤物理上限不误伤）", async () => {

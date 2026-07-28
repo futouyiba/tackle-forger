@@ -198,16 +198,41 @@ async function verifyZipInflateBudget(bytes: ArrayBuffer) {
     if (view.getUint32(index, true) === ZIP_EOCD_SIGNATURE) { eocd = index; break; }
   }
   if (eocd < 0) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "未找到 ZIP 结束记录；不是有效的 .xlsx 工作簿。");
+  const diskNumber = view.getUint16(eocd + 4, true);
+  const centralDirectoryDisk = view.getUint16(eocd + 6, true);
+  const entriesOnDisk = view.getUint16(eocd + 8, true);
   const totalEntries = view.getUint16(eocd + 10, true);
+  const centralDirectorySize = view.getUint32(eocd + 12, true);
   const centralDirectoryOffset = view.getUint32(eocd + 16, true);
+  const commentLength = view.getUint16(eocd + 20, true);
+  if (eocd + 22 + commentLength !== length) {
+    throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP EOCD 注释长度或文件终止位置无效。");
+  }
+  if (
+    diskNumber !== 0
+    || centralDirectoryDisk !== 0
+    || entriesOnDisk !== totalEntries
+  ) {
+    throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "多磁盘 ZIP 或 EOCD 条目计数不一致，本工具不支持。");
+  }
+  if (totalEntries === 0) {
+    throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central directory 不能为空。");
+  }
   if (totalEntries > MAXIMUM_ZIP_ENTRIES) throw new BrowserCanonicalWorkbookError("XLSX_TOO_MANY_ZIP_ENTRIES", `工作簿包含 ${totalEntries} 个 ZIP 条目，超过上限 ${MAXIMUM_ZIP_ENTRIES}。`);
-  if (centralDirectoryOffset < 0 || centralDirectoryOffset + 46 > length) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central directory 偏移无效。");
+  const centralDirectoryEnd = centralDirectoryOffset + centralDirectorySize;
+  if (
+    !Number.isSafeInteger(centralDirectoryEnd)
+    || centralDirectoryOffset >= eocd
+    || centralDirectoryEnd !== eocd
+  ) {
+    throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central directory 边界或终止位置无效。");
+  }
   type CentralEntry = { method: number; compressedSize: number; uncompressedSize: number; localOffset: number; name: Uint8Array };
   const entries: CentralEntry[] = [];
   let cursor = centralDirectoryOffset;
   let totalDeclaredUncompressed = 0;
   for (let entry = 0; entry < totalEntries; entry += 1) {
-    if (cursor + 46 > length) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central directory 截断。");
+    if (cursor + 46 > centralDirectoryEnd) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central directory 截断。");
     if (view.getUint32(cursor, true) !== ZIP_CENTRAL_HEADER_SIGNATURE) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central directory 条目签名无效。");
     const method = view.getUint16(cursor + 10, true);
     const compressedSize = view.getUint32(cursor + 20, true);
@@ -221,9 +246,13 @@ async function verifyZipInflateBudget(bytes: ArrayBuffer) {
     const extraLength = view.getUint16(cursor + 30, true);
     const commentLength = view.getUint16(cursor + 32, true);
     const localOffset = view.getUint32(cursor + 42, true);
-    if (cursor + 46 + nameLength > length) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central directory 名称截断。");
+    const nextCursor = cursor + 46 + nameLength + extraLength + commentLength;
+    if (nextCursor > centralDirectoryEnd) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central directory 条目截断。");
     entries.push({ method, compressedSize, uncompressedSize, localOffset, name: new Uint8Array(bytes, cursor + 46, nameLength) });
-    cursor += 46 + nameLength + extraLength + commentLength;
+    cursor = nextCursor;
+  }
+  if (entries.length !== entriesOnDisk || cursor !== centralDirectoryEnd) {
+    throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central directory 实际条目数或终止位置与 EOCD 不一致。");
   }
   let totalActual = 0;
   for (const entry of entries) {
@@ -245,7 +274,7 @@ async function verifyZipInflateBudget(bytes: ArrayBuffer) {
     if (entry.localOffset + 30 + localNameLength > length) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP local header 名称截断。");
     if (!bytesEqual(new Uint8Array(bytes, entry.localOffset + 30, localNameLength), entry.name)) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central/local 名称不一致。");
     const dataStart = entry.localOffset + 30 + localNameLength + localExtraLength;
-    if (dataStart + entry.compressedSize > length) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP 压缩数据超出文件边界。");
+    if (dataStart + entry.compressedSize > centralDirectoryOffset) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP 压缩数据超出 local data 边界。");
     const compressed = bytes.slice(dataStart, dataStart + entry.compressedSize);
     const actualSize = entry.method === 0
       ? entry.compressedSize

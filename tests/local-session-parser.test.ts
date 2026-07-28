@@ -75,8 +75,13 @@ function canonicalWorkbookBytes(extraSheet?: string) {
 class FakeObjectUrls implements LocalSessionObjectUrlApi {
   created: string[] = [];
   revoked: string[] = [];
+  failNextCreate = false;
 
   createObjectURL() {
+    if (this.failNextCreate) {
+      this.failNextCreate = false;
+      throw new Error("controlled object URL failure");
+    }
     const url = `blob:test-${this.created.length + 1}`;
     this.created.push(url);
     return url;
@@ -278,6 +283,11 @@ test("replace 只在新候选成功后原子替换；失败、worker crash 和 t
   });
 
   const first = await loader.open(canonicalFile("first.xlsx"));
+  urls.failNextCreate = true;
+  await rejectsCode(loader.open(canonicalFile("url-failed.xlsx")), "LOCAL_SESSION_PARSE_FAILED");
+  assert.equal(loader.ready()?.generation, first.generation);
+  assert.equal(loader.pendingResourceSnapshot(), null);
+
   await rejectsCode(loader.open(canonicalFile("failed.xlsx")), "CONTROLLED_FAILURE");
   assert.equal(loader.ready()?.generation, first.generation);
   assert.deepEqual(urls.revoked, ["blob:test-2"]);

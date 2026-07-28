@@ -112,8 +112,9 @@ export class LocalSessionWorkbookLoader {
     const generation = this.#nextGeneration();
     const scope = new SessionResourceScope(generation, this.#objectUrlApi);
     this.#candidate = scope;
-    const sourceObjectUrl = scope.createObjectUrl(file as unknown as Blob);
+    let sourceObjectUrl: string;
     try {
+      sourceObjectUrl = scope.createObjectUrl(file as unknown as Blob);
       const bytes = await file.arrayBuffer();
       if (scope.disposed || this.#candidate !== scope) {
         throw new LocalSessionParserError(

@@ -315,7 +315,15 @@ export async function observeBrowserCanonicalWorkbook(input: {
   await verifyZipInflateBudget(input.bytes);
   let workbook: XLSX.WorkBook;
   try {
-    workbook = XLSX.read(input.bytes, { type: "array", cellDates: true, cellFormula: true, dense: false });
+    workbook = XLSX.read(input.bytes, {
+      type: "array",
+      cellDates: true,
+      cellFormula: true,
+      dense: false,
+      // 不信任 worksheet XML 声明的 dimension；按实际解析单元格重算 !ref，
+      // 使范围外单元格也进入 grid/cell/formula/text 全工作簿预算。
+      nodim: true,
+    });
   } catch {
     throw new BrowserCanonicalWorkbookError("XLSX_INVALID", "无法读取本地规则工作簿；请选择有效的 .xlsx 文件。");
   }

@@ -57,6 +57,23 @@ function workbookBytes(sheets = fixtureSheets()) {
   return output instanceof ArrayBuffer ? output : new Uint8Array(output).buffer;
 }
 
+function replaceStoredUtf8Once(bytes: ArrayBuffer, source: string, replacement: string) {
+  const from = new TextEncoder().encode(source);
+  const to = new TextEncoder().encode(replacement);
+  assert.equal(to.byteLength, from.byteLength, "ZIP 内原位替换必须保持字节长度");
+  const output = new Uint8Array(bytes.slice(0));
+  let offset = -1;
+  for (let index = 0; index <= output.byteLength - from.byteLength; index += 1) {
+    if (from.every((value, inner) => output[index + inner] === value)) {
+      assert.equal(offset, -1, "待替换 XML 片段必须唯一");
+      offset = index;
+    }
+  }
+  assert.notEqual(offset, -1, `未找到待替换 XML 片段：${source}`);
+  output.set(to, offset);
+  return output.buffer;
+}
+
 function rangeValues(values: unknown[][], rangeText: string) {
   const range = XLSX.utils.decode_range(rangeText);
   return Array.from({ length: range.e.r - range.s.r + 1 }, (_, rowOffset) =>
@@ -329,15 +346,21 @@ test("浏览器 canonical XLSX adapter 对所有工作表（含未登记）强�
 
   const tooManyRows = fixtureSheets();
   tooManyRows.find(({ entry }) => entry.sheetId === "1cAihB")!.values = Array.from({ length: 10_001 }, () => Array.from({ length: 30 }, () => null));
+  tooManyRows.find(({ entry }) => entry.sheetId === "1cAihB")!.values[10_000]![29] = "boundary";
   await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: workbookBytes(tooManyRows), fileName: "rows.xlsx", observedAt: ts }), "XLSX_SHEET_GRID_INVALID");
 
   const tooManyColumns = fixtureSheets();
   tooManyColumns.find(({ entry }) => entry.sheetId === "1cAihB")!.values = Array.from({ length: 2 }, () => Array.from({ length: 201 }, () => null));
+  tooManyColumns.find(({ entry }) => entry.sheetId === "1cAihB")!.values[1]![200] = "boundary";
   await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: workbookBytes(tooManyColumns), fileName: "cols.xlsx", observedAt: ts }), "XLSX_SHEET_GRID_INVALID");
 
   // 未登记附加表也计入全表预算：6 张 1000×199 合计约 119 万 > 100 万，单张 19.9 万 < 20 万单表上限
   const workbook = XLSX.read(workbookBytes(), { type: "array" });
-  const big = Array.from({ length: 1000 }, () => Array.from({ length: 199 }, () => null));
+  const big = Array.from(
+    { length: 1000 },
+    () => Array.from({ length: 199 }, () => null as unknown),
+  );
+  big[999]![198] = "boundary";
   for (let index = 0; index < 6; index += 1) XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(big), `巨大附加${index}`);
   await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: XLSX.write(workbook, { type: "array", bookType: "xlsx" }) as ArrayBuffer, fileName: "budget.xlsx", observedAt: ts }), "XLSX_WORKBOOK_TOO_LARGE");
 
@@ -369,5 +392,32 @@ test("浏览器 canonical XLSX adapter 对所有工作表（含未登记）强�
       observedAt: ts,
     }),
     "XLSX_FORMULA_RESULT_MISSING",
+  );
+
+  const forgedDimension = XLSX.read(workbookBytes(), { type: "array" });
+  XLSX.utils.book_append_sheet(
+    forgedDimension,
+    {
+      A1: { t: "s", v: "declared" },
+      Z99: { t: "s", v: "x".repeat(16_385) },
+      "!ref": "A1:Z99",
+    },
+    "伪造使用区域",
+  );
+  const forgedBytes = XLSX.write(
+    forgedDimension,
+    { type: "array", bookType: "xlsx" },
+  ) as ArrayBuffer;
+  await rejectsCode(
+    observeBrowserCanonicalWorkbook({
+      bytes: replaceStoredUtf8Once(
+        forgedBytes,
+        '<dimension ref="A1:Z99"/>',
+        '<dimension ref="A1:A99"/>',
+      ),
+      fileName: "forged-dimension.xlsx",
+      observedAt: ts,
+    }),
+    "XLSX_CELL_STRING_TOO_LONG",
   );
 });

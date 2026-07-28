@@ -212,7 +212,9 @@ SnapshotBatch可以跨Series、SKU和W段，但发布批次只是用户确认、
 
 Series基准固定采用`projection_reference`，不采用显式Model或已批准Model中位数。基准分别读取竿、轮、线对应的`StructuralBenchmark / DerivedProjection`，表达加入functionIntensity、Performance、Material、Affix/Technology和Patch之前的理论结构状态，并输出三条独立参考曲线。参考曲线使用与当前视图相同的W段、五维定义、规则版本和顶点集合，不得聚合；某部位投影不可用时只显示该部位基准不可用，不得自动回退到Model、中位数或其他投影。
 
-`projection_reference`的唯一选择算法固定为`projection-reference/current-sku-frozen-match/v1`：
+目标v23把Series基准锚定到Snapshot冻结的`partId + weightBandId + functionTemplateRef`；不得要求新SKU补造旧ProjectionMatch。现有`projection-reference/current-sku-frozen-match/v1`只服务v9/v22 Snapshot，v23必须发布后继选择器版本并冻结04.5引用、输入指纹与逐Part状态。两种选择器均不得按查询顺序、默认SKU或“最新”引用猜测。
+
+历史`projection-reference/current-sku-frozen-match/v1`的选择算法固定为：
 
 1. Model详情和钓组模式以待查看Snapshot冻结的`seriesId + skuId + skuRevisionId`作为引用锚点；不得读取Model当前草稿、Series默认SKU、页面上下文或查询结果第一项。
 2. 该SKU revision必须按`itemPartId`冻结竿、轮、线各零或一个`ProjectionMatch`。每个合法匹配必须显式冻结`projectionMatchId + projectionMatchRevisionId + projectionId + projectionRevisionId`；同一部位出现多个匹配是`FIVE_AXIS_PROJECTION_REFERENCE_AMBIGUOUS`，不得按创建时间、最大revision、距离、W段或数据库顺序择一。
@@ -601,11 +603,11 @@ FiveAxisComparisonView至少保存：
 
 旧“候选池”不再作为主导航和产品领域层级。CandidateSearchRecipe继续存在，但权威中文名是“候选搜索配方”，只负责枚举、过滤和排序，不承担Series、SKU或Model身份。
 
-甘特图采用纵向重量分段、横向品质与类型分栏。纵向重量分段是版本化、可配置的规划坐标，不是连续数轴；Series覆盖块只连接真实离散SKU节点。页面必须固定显示说明：
+甘特图采用纵向重量分段、横向品质与部件分栏。纵向重量分段直接使用01.x的稳定顺序和规划坐标，不是连续数轴；每个Part分别计算已选重量段的连续区间。
 
 > 覆盖范围只表达系列规划跨度，不代表连续插值。
 
-甘特条表示系列覆盖和规划范围；SKU节点表示真实离散重量；Model数量、发布状态、硬冲突和升级状态附着在SKU节点上。不得从条带长度推导连续属性，也不得自动补齐中间重量。
+同一Part相邻重量段合并显示为一个矩形；中间缺至少一个01.x重量段时拆成多个矩形。竿、轮、线分别计算，禁止跨Part合并。合并只改变展示，不合并SKU数据。点击连续矩形后必须先选择具体重量段，再进入该段现有SKU列表与“新增SKU”预览；点击矩形或重量段本身都不得创建数据。
 
 历史路由、书签或权限中使用candidate pool标识时应提供兼容别名或跳转；迁移不得删除已有Candidate、Recipe或计算轨迹。
 
@@ -885,6 +887,8 @@ JCS与哈希最低测试向量固定如下；该对象只用于canonicalization�
 
 - 旧“候选池”入口兼容跳转到钓具系列甘特图；
 - 甘特条不产生连续重量或属性插值；
+- 相邻重量段按Part合并，缺段拆分，跨Part不合并；
+- 点击合并块后先选具体重量段，点击本身不创建SKU；
 - 生成Model候选仍由CandidateSearchRecipe执行；
 - AI建议不能覆盖deny、error或硬冲突；
 - AI只能创建draft Model Patch或RuleSourceChangeDraft；

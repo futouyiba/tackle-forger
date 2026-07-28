@@ -3,10 +3,11 @@
 ```text
 Collection
 └─ Series
-   └─ SKU Drawer
-      ├─ Model
-      ├─ Model
-      └─ Model
+   ├─ Part（1～3，竿/轮/线各最多一个）
+   │  └─ WeightBand
+   │     └─ SKU Drawer（可多个）
+   │        └─ Model
+   └─ Part…
 ```
 
 ### 6.1 Collection
@@ -15,28 +16,20 @@ Collection承担品牌、视觉和营销叙事，可以跨类型或功能。例�
 
 ### 6.2 Series
 
-Series必须固定或显式约束：
+Series包含1～3个Part，竿、轮、线为任意非空组合且每种部件最多一个。Series只保存产品族、展示、排序与跨Part关系；不再统一保存钓法、功能定位、功能强度或目标拉力。
 
-- fishingMethodId；
-- typeId；
-- qualityId；
-- coreFunctionId；
-- functionIntensityPolicy；
-- requiredCoreAffixFamilyIds；
-- secondaryAffixPoolIds；
-- forbiddenAffixFamilyIds；
-- targetPullsKg；
-- SeriesSignature。
+每个Part独立保存`partType`、`fishingMethod`、`materialType`、`functionProfile`、`functionIntensity`、统一`defaultEntryIds`、`technologyIds`、已选择`weightBandIds`及自身revision/输入指纹。
 
 ### 6.3 SKU Drawer
 
-SKU是玩家界面的钓具抽屉或商品卡片入口，对应Series中的一个离散`targetPullKg`。同一Series内，归一化后的`targetPullKg`必须唯一；一个Series可以拥有1.5kg、3.5kg、8.2kg等多个不同SKU。
+SKU是玩家界面的钓具抽屉或商品卡片入口，属于一个Part和一个`weightBandId`。同一Part、同一重量段允许多个SKU；稳定SKU ID而非派生拉力承担身份。点击重量段只打开预览，不创建SKU。
 
 SKU保存：
 
-- seriesId；
-- targetPullKg；
-- `projectionMatchesByItemPartId`：竿、轮、线各零或一个带稳定ID/revision的ProjectionMatch；旧单值`ProjectionMatch`字段只作历史兼容读取，不满足OPEN-005正式投影引用门禁；
+- seriesId、partId、weightBandId；
+- 稳定`functionTemplateRef`、完整输入指纹与有效/失效状态；
+- `removedInheritedEntryIds`、`addedEntryIds`、`localEntryCopies`、`technologyIds`；
+- 推荐品质、人工实际品质及覆盖理由/状态；
 - skuPatchIds；
 - modelIds；
 - defaultModelId；
@@ -54,6 +47,8 @@ Model是玩家实际选择和购买的具体型号，保存：
 - modelPatchIds；
 - 自动定价结果、解锁和商品策略引用；
 - configurationSnapshotId。
+
+Model从SKU只读继承最终拉力；ModelPatch和任何最终值输入不得对拉力执行`set/add/multiply/clear`。Model仍可按ParameterDefinition修改调性、硬度、长度等允许规格。
 
 领域内Model是实际选择和购买对象。当前配置表没有Snapshot版本字段，因此不得宣称游戏侧购买记录已经支持`modelId + snapshotId`；Snapshot仅在Tackle Forger内部保证发布和导出的可追溯性。
 
@@ -86,14 +81,27 @@ Series的`typeId/TypeProfile`继续表达系列级Method × Type结构语义。�
 
 完整决策、旧数据复核与Snapshot冻结规则见[`AUD-026 PartConstraintSet语义ADR`](../audits/aud-026-part-constraint-semantics-adr.md)。
 
-### 6.6 稳定身份、再生成对应与重量变更
+### 6.6 稳定身份、再生成对应与重量段变更
 
 - `entityId`终身稳定；revision不可变；displayName可修改且不得作为唯一关联键。
 - 再生成对应顺序固定为：显式目标ID→持久GenerationBinding→外部稳定ID→业务身份键→name/特征仅作为人工提示。
-- SKU业务身份键为`seriesId + normalizedTargetPullKg`，但已有GenerationBinding优先。
+- SKU业务身份不使用派生拉力；以稳定skuId与GenerationBinding为准，检索上下文为`partId + weightBandId`。
 - Model可以使用可选`modelVariantKey`表达跨重量的同一路线，例如`short_fast`、`long_slow`；同一SKU内非空variantKey唯一。
-- SKU尚无任何已发布后代Snapshot时，可以保留skuId并以新revision修改targetPullKg；修改后重算匹配并使下游草稿DIRTY。
-- SKU一旦存在已发布后代Snapshot，targetPullKg不可原地改变。新拉力必须创建新SKU，旧SKU可DEPRECATED；跨父级移动遵循同样原则。
+- SKU改换Part或weightBandId属于身份迁移：没有已发布后代Snapshot时可保留skuId创建新revision并重新唯一匹配；已有已发布后代时创建新SKU，旧SKU可DEPRECATED。
+- 派生最终拉力变化只创建新SKU revision并重算下游草稿；历史Snapshot保持冻结，不以拉力变化改写身份。
+
+### 6.7 参数归属及允许操作
+
+| 参数/对象 | 权威归属 | 自动派生 | 允许人工操作 |
+| --- | --- | --- | --- |
+| Part钓法、材质、功能定位/强度 | Part | 否 | Part编辑 |
+| weightBandId | SKU | 由用户在01.x目录选择 | 显式选择/迁移；点击不创建 |
+| functionTemplateRef | SKU | 六键唯一匹配04.5 | 不允许手填或猜测 |
+| 有效词条与Technology | SKU | 继承Part并叠加SKU局部意图 | 增加、屏蔽、恢复、局部复制修改 |
+| 最终拉力 | SKU | 04.5基准 + 有效词条add/multiply | 禁止直接输入；禁止任意Patch操作 |
+| 调性、硬度、长度等具体规格 | Model | 可由模板继承 | 仅按ParameterDefinition允许的ModelPatch操作 |
+| 推荐品质 | SKU | 价值评分与08.1区间 | 只读重算 |
+| 实际品质 | SKU | 可采纳推荐 | 人工选择并在不一致时保存理由/状态 |
 
 ## 7. Series不变量
 
@@ -101,10 +109,9 @@ Series的`typeId/TypeProfile`继续表达系列级Method × Type结构语义。�
 
 以下不一致阻止Series批准或Model发布：
 
-- Method不同；
-- Type不同；
-- Quality不同；
-- Core Function不同；
+- Part数量不在1～3或部件类型重复；
+- 任一Part缺钓法、材质、功能定位或强度；
+- 任一SKU的04.5匹配为零或多匹配；
 - Series概念身份不同；
 - 缺少必需核心词条家族；
 - 包含禁用词条家族。
@@ -130,7 +137,7 @@ interface SeriesSignatureAxis {
 
 ### 7.3 重量曲线
 
-targetPullKg升高时默认要求：
+同一Part按01.x显示顺序向更高重量段推进时默认要求：
 
 - 杆、轮、线拉力不下降；
 - 安全工作拉力不下降；

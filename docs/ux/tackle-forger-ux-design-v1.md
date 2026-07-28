@@ -2,7 +2,7 @@
 
 > 阶段：已完成——体验审查、系统设计、方向定稿、交互原型、开发 Handoff 与最终 Audit  
 > 日期：2026-07-20  
-> 最后对齐v3：2026-07-27
+> 最后对齐v3：2026-07-28
 > 设计基准：桌面端 1440 × 1024，中文优先  
 > 面向对象：游戏策划、规则维护、发布核验、数据维护、只读复盘与后续开发 Agent
 > 权威依据：docs/tackle-forger-development-spec-v3.md  
@@ -12,7 +12,9 @@
 
 Tackle Forger 应从“实体表格集合”重组为一条可解释、可局部修订、可冻结发布的配置生产链：
 
-重量基础模板 → 钓法规则 → 类型规则 → 功能定位 → 最近结构标杆匹配 → functionIntensity → 材料、Patch与词条/Technology结算 → Series → SKU 抽屉 → Model → PerformanceSummary只读派生 → ConfigurationSnapshot。
+Series → 1～3个独立Part → 选择01.x重量段 → 六键唯一匹配04.5 → 继承Part词条/Technology并叠加SKU局部意图 → 派生SKU拉力与品质推荐 → Model只读继承拉力 → ConfigurationSnapshot。
+
+本文后续仍出现的`targetPullKg`、最近模板或ProjectionMatch仅用于说明Schema v9/v22现状、迁移和历史Snapshot回放；Schema v23目标态一律以重量段、04.5唯一匹配和`functionTemplateRef`/输入指纹为准。
 
 性能定位是配置完成后根据Technology、词条与最终属性统计得到的只读结果，例如“抛投+、重量-、竿度+”。它不是配置输入、独立属性贡献层或价值分乘数，不进入候选搜索、结构标杆、兼容、Affinity或定价。
 
@@ -256,14 +258,16 @@ flowchart LR
     RS --> M["MethodProfile"]
     RS --> T["TypeProfile"]
     RS --> F["FunctionProfile + functionIntensity"]
-    WT --> DP["DerivedProjection（只读）"]
-    M --> DP
-    T --> DP
-    F --> DP
-    DP --> PM["ProjectionMatch（不插值）"]
+    WT --> FT["04.5 FunctionTemplate"]
+    M --> FT
+    T --> FT
+    F --> FT
     C["Collection"] --> S["Series"]
-    S --> SKU["SKU Drawer（离散重量）"]
-    PM --> SKU
+    S --> P["Part（1～3个）"]
+    P --> WB["01.x WeightBand选择"]
+    WB --> FM["六键唯一匹配 + 输入指纹"]
+    FT --> FM
+    FM --> SKU["SKU Drawer（同Part/重量段可多个）"]
     SKU --> MD["Purchasable Model"]
     AX["Affix"] --> TECH["Technology（组合包）"]
     AX --> MD
@@ -281,8 +285,9 @@ flowchart LR
 
 | 对象 | 固定标签 | 主语义 | 默认可编辑性 |
 | --- | --- | --- | --- |
-| Series | Series | 共享身份与不变量 | 草稿可编辑；批准后变更需修订 |
-| SKU | SKU 抽屉 | 某离散targetPullKg下的Model容器，界面显示重量规格 | 可增删Model；不是购买对象 |
+| Series | Series | 组织1～3个独立Part | 草稿可编辑；批准后变更需修订 |
+| Part | 部件 | 独立钓法、材质、功能、统一词条与Technology | Series编辑区内独立编辑 |
+| SKU | SKU 抽屉 | 某Part、某weightBandId下的Model容器；同段可多个 | 可增删Model；不是购买对象 |
 | Model | Model | 实际选择与购买对象 | 草稿可编辑；发布后新建修订 |
 | Snapshot | 冻结快照 | 某次发布的不可变配置 | 永久只读 |
 | CandidateSearchRecipe | 搜索配方 | 枚举与筛选候选的工具 | 不作为产品系列身份 |
@@ -313,16 +318,13 @@ flowchart LR
 - 动作与证据：编辑、影响预览和发布通用规则是独立显式动作；当前策略允许同一已登录用户连续完成，但每步都必须重新鉴权、校验revision并记录证据。
 - 最终落点：规则草稿或影响分析。
 
-### 4.3 输入离散拉力规格并查看最近模板匹配依据
+### 4.3 点击重量段并查看04.5唯一匹配
 
-- 入口：系列设计器“添加重量 SKU”；派生模板浏览器。
-- 用户目标：为目标拉力得到确定且可解释的最近结构标杆。
-- 主路径：输入 targetPullKg → 相同部位/钓法/类型/功能定位过滤 → 排除硬不兼容 → 按拉力比例距离排序 → 查看命中标杆与备选 → 接受或显式 pin。
-- 关键决策：接受系统命中还是人工 pin；是否创建新模板。
-- 错误与恢复：无合法模板时显示被排除原因和“去修复兼容 / 新建模板”；pin 失效时要求重新确认。
-- 成功反馈：保存 ProjectionMatch；明确“未插值”与规则版本。
-- 动作与证据：创建SKU与pin模板分别消费服务端动作；pin必须填写理由并进入操作记录，不按用户角色限制。
-- 最终落点：新 SKU 抽屉。编辑已有SKU的targetPullKg时，页面必须先查询是否存在已发布后代Snapshot：没有时保存同skuId的新revision；存在时把动作明确改为“创建新重量SKU”，旧SKU重量不可原地改写且可在确认后废弃。
+- 入口：Series编辑区的Part卡片与01.x重量段。
+- 用户目标：选择重量段后看到唯一04.5功能模板及该段已有SKU。
+- 主路径：选择Part → 点击重量段 → 按`partType + weightBandId + fishingMethod + materialType + functionProfile/intensity`精确匹配 → 查看现有SKU → 显式“新增SKU”。
+- 错误与恢复：零匹配或多匹配显示输入键、候选证据和修复入口，禁止猜测或创建；点击本身不写数据。
+- 成功反馈：预览04.5基准、有效词条、派生拉力与推荐品质；拉力不提供直接输入。
 
 ### 4.4 对派生结果增加 Patch
 
@@ -338,22 +340,21 @@ flowchart LR
 ### 4.5 创建系列并定义系列不变量
 
 - 入口：系列设计器 / 新建 Series。
-- 用户目标：建立共享概念、类型、品质、核心功能与词条/技术身份。
-- 主路径：先选择Quality → 选择Collection并填写概念 → 固定Method、Type、Function → 定义必需/可选/禁用词条家族而非具体词条 → 设方向签名和拉力曲线 → 预览校验 → 保存。性能摘要在词条、Technology和最终属性结算后只读派生，不在此处选择。
+- 用户目标：建立Series并配置1～3个互不重复的竿/轮/线Part。
+- 主路径：选择Collection并填写概念 → 添加Part → 每个Part独立编辑类型、钓法、材质、功能定位/强度、统一词条和Technology → 预览校验 → 保存。
 - 关键决策：固定强度还是 weight_curve；偏移等级如何映射到可配置阈值。
 - 错误与恢复：缺失硬不变量或规则冲突时指出来源；支持返回规则实验室、修改 Series 或保存未完成草稿。
 - 成功反馈：生成 SeriesSignature 与“6/6 不变量通过”摘要。
 - 动作与证据：创建Series与批准Series是两个显式人工动作；当前策略允许同一用户连续完成，批准仍须通过硬校验、expectedRevision和操作记录。
 - 最终落点：Series 总览及 SKU 轨道。
 
-### 4.6 为系列添加多个拉力规格SKU
+### 4.6 为Part的重量段添加多个SKU
 
-- 入口：Series 设计器 / 添加重量规格。
-- 用户目标：建立多个离散拉力规格抽屉并比较覆盖、曲线与共享标杆。
-- 主路径：批量输入targetPullKg → 分别执行最近结构标杆匹配 → 查看共享标杆和独立Patch提示 → 校验拉力曲线 → 创建抽屉。
-- 关键决策：是否保留重复规格；是否为某重量 pin 模板；是否添加 SKU Patch。
-- 错误与恢复：完全重复关键属性时 warning；曲线倒退时定位参数并给出修复建议。
-- 成功反馈：Series 轨道显示各 SKU、模板、状态和 Model 数。
+- 入口：Part卡片 / 重量段预览。
+- 用户目标：在同一Part、同一重量段显式创建一个或多个SKU。
+- 主路径：选择重量段 → 查看唯一04.5与现有SKU → 新增SKU → 编辑继承屏蔽/增加/局部词条副本与Technology → 查看派生拉力和品质推荐 → 选择实际品质。
+- 错误与恢复：04.5失效时保留SKU局部意图并禁止发布；推荐与实际品质不一致时要求覆盖理由。
+- 成功反馈：Part轨道显示重量段、各SKU、派生拉力、推荐/实际品质、状态和Model数。
 - 动作与证据：Series批准前可编辑当前草稿；批准后新增SKU必须创建新修订。这是对象状态约束，不是角色授权。
 - 最终落点：Series 的 SKU 轨道。
 
@@ -443,10 +444,10 @@ flowchart LR
 | 今日工作 | 汇总阻断、待复核、rebase、待发布、升级候选 | 跨对象任务 | 直接编辑复杂规则 |
 | 全局对象搜索 | 搜索并跳转任意对象、版本、规则、参数 | 全部 | 替代工作区导航 |
 | 规则实验室 | 建立/导入模板，编辑规则层，试算与发布 RuleSetVersion | Template、Method、Type、Function、PerformanceSummaryDefinition | Series 商品身份；把Performance恢复为配置输入 |
-| 派生模板浏览器 | 输入重量、查看最近匹配、备选与完整来源 | DerivedProjection、ProjectionMatch | 直接修改派生缓存 |
+| 功能模板浏览器 | 选择部件与重量段、查看04.5唯一匹配及完整来源 | WeightBand、FunctionTemplate、FunctionTemplateMatch | 直接修改派生缓存 |
 | 兼容矩阵 | 编辑硬规则与 Affinity 轴，测试组合 | CompatibilityRule、AffinityRule | 用总分覆盖 deny |
 | 系列设计器 | 定义 Series 身份、不变量、方向签名、重量 SKU 轨道 | Collection、Series、SKU | 候选搜索配方 |
-| SKU 抽屉 | 管理单个离散重量下多个 Model | SKU、ProjectionMatch、SkuPatch | 作为购买对象发布 |
+| SKU 抽屉 | 管理单个Part/重量段下的多个SKU及其Model | SKU、FunctionTemplateMatch、SkuEntryIntent、SkuPatch | 作为购买对象发布；通过ModelPatch修改拉力 |
 | Model 工作台 | 配置实际可购买型号、属性、部件、词条、技术与 Patch | Model | 修改历史 Snapshot |
 | 词条与技术库 | 维护属性/被动词条、Technology 组合包与版本 | Affix、Technology | 执行被动模拟 |
 | Patch / Rebase 对比器 | 处理上游变化、三方比较与冲突恢复 | Patch、UpgradeCandidate | 自动吞掉冲突 |
@@ -527,7 +528,7 @@ flowchart LR
 
 匹配卡必须写出：
 
-- 目标拉力规格与目标身份。
+- weightBandId、04.5功能模板引用、派生拉力与SKU身份。
 - 命中模板、重量范围、标称重量。
 - “未插值”标识。
 - 对数距离。
@@ -784,7 +785,7 @@ flowchart LR
 ### P0：领域与交互契约
 
 1. 建立 Collection / Series / SkuDrawer / PurchasableModel / ConfigurationSnapshot 的兼容领域接口。
-2. 建立 ProjectionMatch、分层 Patch、Patch 基线与 UpgradeCandidate。
+2. 建立04.5唯一匹配、SKU词条意图、分层Patch、Patch基线与UpgradeCandidate；ProjectionMatch只保留给v9/v22历史回放。
 3. 建立统一 TraceContribution、ValidationIssue、HardCompatibilityResult、AffinityBreakdown。
 4. 完成品质映射迁移；历史已发布文案只读保留。
 5. 明确已发布 Snapshot 只读接口与哈希。
@@ -1095,7 +1096,7 @@ UX 设计完成，无需再等待视觉方向或核心交互决策。开发 Agen
 - Series覆盖块放在固定品质/类型列，跨越离散SKU的最小/最大显示位置；块内只连接真实SKU节点。
 - 搜索/筛选变化后保留仍可见的选中Series、底部摘要和矩阵滚动位置。
 - 点击Series覆盖块只更新底部摘要；摘要展开控件与“打开Series/进入SKU抽屉”动作分开。
-- SKU节点气泡至少显示精确targetPullKg、最近结构标杆/未插值、Model总数/当前查询命中数、主状态、Issue与升级数量。
+- 重量段与SKU气泡至少显示weightBandId、04.5匹配状态、SKU派生拉力、Model总数/当前查询命中数、主状态、Issue与升级数量。
 - 点击SKU节点不因单Model跳级；Model行才打开右侧预览。
 - 矩阵空白/重量分段不支持双击创建；使用明确“添加重量规格”。
 - 当前统一Capability策略始终显示服务端返回的总数与本次查询命中数，不实现“可见N个”或对象级计数隐藏；游标失效时保留筛选和滚动锚点。

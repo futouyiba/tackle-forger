@@ -162,6 +162,21 @@ type PerformanceSummarySnapshot =
 
 历史`PerformanceProfile/performanceId`不得自动映射为摘要标签；只读历史页面可以原样显示“旧性能定位”，迁移诊断必须与新`PerformanceSummary`明确区分。
 
+### 11.2.2 项目词条、SKU局部副本与有效集合
+
+项目级`AffixDefinition`、SKU局部`LocalAffixCopy`与`AffixRef`是三种不同对象；只有ID/名称的占位对象不得冒充完整定义。项目级定义保存完整业务字段和revision；局部副本在复制时冻结来源ID/revision与完整可编辑Payload，修改仅影响该SKU；引用只指向稳定ID/revision。
+
+```text
+effectiveSkuEntries
+= part.defaultEntries
+- sku.removedInheritedEntryIds
++ sku.addedEntryIds
++ sku.localEntryCopies
++ 展开(part.technologyIds + sku.technologyIds)的成员
+```
+
+实现先解析完整定义，再按稳定词条ID去重；同一词条被直接引用与Technology成员重复引用时只生效一次。SKU可以增加已有项目词条、屏蔽/恢复继承词条、复制为局部副本后修改，并挂载SKU Technology。Part更新后已有SKU自动重算，但其增加、屏蔽和局部副本意图保持。词条选择区的“新增词条”由用户主动创建完整项目级定义，不允许系统根据数值差额自动生成。
+
 ### 11.3 属性词条叠加
 
 属性词条先规范化为以下DTO。正式存储、RuleSet、ModelRevision、Snapshot和运行时只接受规范operation；旧operation名只允许出现在导入证据中：
@@ -315,7 +330,7 @@ FinalValue = applyParameterDefinition(PostReviewValue)
 
 ## 12. 品质评分、稀有度与部位
 
-### 12.1 词条价值分与已选品质校验
+### 12.1 词条价值分、品质推荐与实际品质
 
 ```text
 baseAffixScore
@@ -327,9 +342,11 @@ finalValueScore
 × FunctionProfile.scoreFactor
 ```
 
-编辑Series时先由设计人员确定Quality，再选择或生成词条与Technology。价值分只验证所选品质是否落在版本化、互斥的分数区间内，并作为自动定价输入；不得根据价值分自动改变Quality。经2026-07-23产品确认，当前正式策略为：`C/绿 [0,20)`、`B/蓝 [20,40)`、`A/紫 [40,65)`、`S/橙 [65,100]`。评分100命中S；评分大于100产生`QUALITY_SCORE_OUT_OF_RANGE`并阻止正式发布，不得夹取或外推。区间必须写入新的`QualityValuePolicyVersion`，不得硬编码为永久常量；飞书旧revision中的`[65,100)`只作为过期源证据保留，不能覆盖本规范。
+SKU每次有效词条或Part功能定位变化后立即重算最终评分，并按版本化08.1区间生成`recommendedQualityId`。词条本身没有品质字段，只保存价值评分与属性操作。当前目标区间统一为：`C/绿 [0,20)`、`B/蓝 [20,40)`、`A/紫 [40,65)`、`S/橙 [65,100)`；`finalValueScore >= 100`为越界且无推荐，不夹取、不外推。该最新决定取代“100属于S”的旧策略，但历史QualityValuePolicyVersion和既有Snapshot仍按其冻结语义读取，不得原地重解释。
 
-负分技术内专用词条参与总分；被动词条参与价值分但不进入面板。Technology只展开成员词条，不额外贡献一次价值分；同一词条同时被直接选择和Technology引用时只计算一次。`FinalReviewPatch`不改变价值分。低于或超过所选品质区间阻止Model发布，候选生成应以所选品质区间为目标，但不得自动改Quality。
+实际品质采用“推荐 + 人工选择”：用户可以采纳推荐，也可以选择其他品质。不一致时必须显著提示，并分别保存推荐结果、人工`selectedQualityId`、覆盖状态和理由。定价读取实际品质；评分Trace保存推荐依据与不一致状态。无推荐时不得自动选择S或沿用旧推荐。
+
+负分技术内专用词条参与总分；被动词条参与价值分但不进入面板。Technology只展开成员词条，不额外贡献一次价值分；同一词条同时被直接选择和Technology引用时只计算一次。`FinalReviewPatch`不改变价值分。实际品质与推荐不一致本身不自动改品质；它按版本化确认策略显示并保存覆盖理由。评分越界、策略缺失或Trace不完整仍阻止新正式发布。
 
 `07_品质评分`还提供竿、轮、线三张词条组合矩阵。组合分按以下契约导入和计算：
 
@@ -341,12 +358,15 @@ finalValueScore
 
 `FunctionProfile.scoreFactor`来自`03_功能定位`（功能定位表）的“评分系数”，按乘法应用。Performance不参与价值分：不得读取`performanceScoreFactor`、不得写入`performance_factor` Trace，也不得用一个“显式乘1”步骤伪装为新规则。历史源表或payload中的性能计分字段只作为迁移证据保留。Technology成员已经按Affix进入基础分与组合分；`PerformanceSummary`只是结算后的派生展示，二者均不得再次计分。
 
-YsEKw 历史观测 revision `2869`把S写成`[65,100)`而价格页包含评分100。该冲突的产品结论已经确定为“100属于S”；在飞书机器源修订并显式拉取前，导入器应产生`QUALITY_RANGE_SOURCE_OUTDATED`，保留旧源单元格并禁止把该旧Draft发布为新正式策略。该Issue表示规则源尚未落实已决策语义，不再表示产品结论未决。
+YsEKw历史revision与既有v22策略可能把100归入S；它们只服务历史证据和Snapshot重放。目标v23策略必须发布`[65,100)`并使100无推荐；源表或旧Draft仍宣称100属于S时产生`QUALITY_RANGE_SOURCE_OUTDATED`，不得发布为目标态新策略。
 
 ```ts
 interface ModelAffixValueAssessment {
   modelRevisionId: string;
+  recommendedQualityId: string | null;
   selectedQualityId: string;
+  qualityOverrideState: "MATCHED" | "OVERRIDDEN" | "NO_RECOMMENDATION";
+  qualityOverrideReason: string | null;
   baseAffixScore: number;
   combinationScore: number;
   functionScoreFactor: number;
@@ -364,9 +384,9 @@ interface ModelAffixValueAssessment {
 
 Quality本身不直接修改面板。属性平衡预算判断数值是否全优，价值分判断词条价值是否符合已选品质，二者不得合并。
 
-校验使用统一`ValidationIssue(source="quality")`，品质不匹配代码为`QUALITY_SCORE_OUT_OF_RANGE`、矩阵冲突为`QUALITY_COMBINATION_CONFLICT`、旧源边界未更新为`QUALITY_RANGE_SOURCE_OUTDATED`，均至少携带Model、所选Quality、最终评分、命中区间、规则版本、源单元格和`ActionLink`。规则源结构或矩阵冲突可另产生`source="data_integrity"`的父Issue；不得把品质校验问题混入价格计算问题。正常路径为选品质→选词条/Technology→组合计分→功能系数计分→品质校验→定价；边界覆盖区间端点、负分、空词条集、评分100和大于100；冲突保留草稿及Trace；源表修复后通过显式“拉取”生成新策略草稿并重算；查看、编辑词条、发布规则和发布Model分别鉴权。
+校验使用统一`ValidationIssue(source="quality")`，品质不匹配代码为`QUALITY_SCORE_OUT_OF_RANGE`、矩阵冲突为`QUALITY_COMBINATION_CONFLICT`、旧源边界未更新为`QUALITY_RANGE_SOURCE_OUTDATED`。正常路径为配置Part→编辑SKU有效词条/Technology→组合计分→功能系数计分→品质推荐→采纳或人工选择实际品质→定价；边界覆盖区间端点、负分、空词条集、评分100和大于100；冲突保留草稿及Trace。
 
-验收：Given C品质Model的去重词条分为15、组合分为3、功能评分系数为1.03，When 计算，Then 最终评分为18.54且Trace中没有Performance乘数；Given 轻量与增重同时存在，When 组合计分，Then `-20`只计一次；Given S品质评分为100且规则源已按本决策更新，When 校验，Then命中S；Given评分100.01，When校验，Then返回`QUALITY_SCORE_OUT_OF_RANGE`且不夹取或外推；Given飞书仍提供`[65,100)`，When导入，Then返回`QUALITY_RANGE_SOURCE_OUTDATED`并保留旧源证据。
+验收：Given去重词条分15、组合分3、功能系数1.03，When计算，Then最终评分18.54且推荐C，Trace没有Performance乘数；Given轻量与增重同时存在，When组合计分，Then`-20`只计一次；Given评分99.999，When推荐，Then命中S；Given评分100或更高，When推荐，Then无推荐并返回`QUALITY_SCORE_OUT_OF_RANGE`；Given用户选择与推荐不同品质，Then定价使用实际品质且保存覆盖理由，推荐与Trace不丢失。
 
 
 ### 12.2 稀有度
@@ -387,7 +407,7 @@ epic 史诗
 
 领域模型使用ItemPartDefinition，不继续把rod/reel/line写死为不可扩展联合类型。
 
-注册表预留竿、轮、线、钩、漂、真饵和拟饵，但当前产品主流程只启用竿、轮、线。`Collection → Series → SKU → Model → ConfigurationSnapshot`、`targetPullKg`、最近结构模板匹配和钓具系列甘特图均只适用于竿、轮、线；SKU不包含钩、漂、真饵或拟饵。
+注册表预留竿、轮、线、钩、漂、真饵和拟饵，但当前产品主流程只启用竿、轮、线。`Collection → Series → Part → SKU → Model → ConfigurationSnapshot`、weightBandId、04.5唯一匹配和钓具系列甘特图均只适用于竿、轮、线；SKU不包含钩、漂、真饵或拟饵。
 
 钩、漂、真饵和拟饵当前完全延期。注册表及迁移层可以保留其稳定ID和历史Payload，仅用于数据不丢失、审计和未来迁移；这不构成产品启用，也不要求提供只读UI。四类部位的专用UI、草稿、生成、发布、Snapshot和导出全部关闭，且不得用竿轮线规则、隐藏默认值或通用占位对象代替尚未完成的产品设计。具体边界见OPEN-003。
 

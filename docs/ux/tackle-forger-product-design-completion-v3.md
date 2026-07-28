@@ -11,9 +11,15 @@
 
 **“钓具系列甘特图”是界面心智模型，不是新增领域实体；“AI评估与建议”是带证据的辅助层，不是新的规则裁决层。**
 
-固定语义：有限结构标杆只由基础拉力模板×Method×Type×FunctionProfile组成；在相同身份内按拉力比例距离取最近且不插值，Affinity不参与匹配；`functionIntensity`、Material、Quality和词条均在匹配后处理；C/绿、B/蓝、A/紫、S/橙且评分100属于S；SKU是抽屉，Model是实际选择/购买对象；Technology不重复叠加成员属性或分值；性能定位是结算后只读`PerformanceSummary`，不是配置输入或评分层；被动只保存、计分、展示；已发布Snapshot永不被静默替换。
+固定语义：Series含1～3个独立竿/轮/线Part；用户点击01.x重量段后，以`partType + weightBandId + fishingMethod + materialType + functionProfile/intensity`唯一匹配04.5，零/多匹配fail-closed；SKU拉力由04.5基准和有效词条派生，Model只读继承；C/绿、B/蓝、A/紫、S/橙区间均为`[min,max)`，评分100及以上无推荐；SKU是抽屉，Model是实际选择/购买对象；Technology不重复叠加成员属性或分值；已发布Snapshot永不被静默替换。
 
-部位边界：现有Series/SKU/Model、目标拉力、甘特图和候选生成只处理竿、轮、线。钩、漂、真饵和拟饵当前完全延期；产品界面不提供注册表只读入口、“未启用”占位、草稿、生成、发布或导出动作。历史Payload只在注册表、迁移和审计层保留，未来启用必须先建立独立产品设计Issue。
+### 0.1 重量段SKU主流程
+
+Series编辑区集中展示1～3个Part卡片，每张卡独立编辑部件类型、钓法、材质、功能定位/强度、统一词条和Technology。点击重量段只打开该Part、该段现有SKU与“新增SKU”预览；不得静默创建。SKU词条区支持增加已有词条、屏蔽/恢复继承、复制为局部副本后修改、SKU Technology，以及“新增词条”完整编辑浮窗。
+
+推荐品质和人工实际品质同时显示；不一致时显示显著提示与覆盖理由。定价使用实际品质。拉力行在SKU可查看派生Trace，在Model只读，不提供最终值输入或Patch动作。
+
+部位边界：现有Series/Part/SKU/Model、重量段、甘特图和候选生成只处理竿、轮、线。钩、漂、真饵和拟饵当前完全延期；产品界面不提供注册表只读入口、“未启用”占位、草稿、生成、发布或导出动作。历史Payload只在注册表、迁移和审计层保留，未来启用必须先建立独立产品设计Issue。
 
 ```mermaid
 flowchart LR
@@ -40,26 +46,26 @@ flowchart LR
 | 发布管理 | Model、SnapshotBuild | 发布检查、冻结、升级候选 |
 | 配置表交付 | SnapshotBatch、环境×渠道目标 | 一期NON_FORMAL预览；1.5期正式包/写入与关联校验 |
 
-采用高密度数据驾驶舱。左侧稳定一级导航；顶部面包屑与全局搜索；主区优先矩阵、表格和差异；右侧 520–640px 推入层按“1 常用概览 → 2 五维与适配 → 3 来源与版本”渐进披露，并保留独立的“Patch / Rebase”和“AI评估与建议”入口。常用概览默认展示对象身份、离散目标拉力、调性/硬度、长度、发布/冻结面、品质定价和四套独立裁决；五维层才展开钓组匹配与多装备比较两个视图；来源层展示完整Trace。所有写按钮消费后端 `ActionAvailability`，前端不从角色、颜色或状态猜动作。
+采用高密度数据驾驶舱。左侧稳定一级导航；顶部面包屑与全局搜索；主区优先矩阵、表格和差异；右侧 520–640px 推入层按“1 常用概览 → 2 五维与适配 → 3 来源与版本”渐进披露，并保留独立的“Patch / Rebase”和“AI评估与建议”入口。常用概览默认展示对象身份、weightBandId与SKU派生拉力、调性/硬度、长度、发布/冻结面、推荐/实际品质和定价；五维层才展开钓组匹配与多装备比较两个视图；来源层展示完整Trace。所有写按钮消费后端 `ActionAvailability`，前端不从角色、颜色或状态猜动作。
 
 ## 2. 钓具系列甘特图
 
 查询直接使用 v3 `SeriesGanttQuery`：
 
 - 同字段 OR、不同字段 AND；文本只搜索当前工作区内服务端返回的ID、名称和别名。当前统一Capability策略不做当前工作区内的对象级过滤。
-- 支持Collection、Method、Type、品质、功能、部位、生命周期、注意状态、Issue、升级候选、精确targetPullKg、RuleSetVersion；部位筛选只返回当前主流程的竿、轮、线，不展示钩、漂、真饵或拟饵占位。
+- 支持Collection、Part、weightBandId、实际品质、功能、部位、生命周期、注意状态、Issue、升级候选、RuleSetVersion；部位筛选只返回当前主流程的竿、轮、线，不展示钩、漂、真饵或拟饵占位。
 - 筛选和排序写入 URL；刷新保留滚动和选择。对象已删除或路由过期时，只能在当前工作区内回到服务端返回的稳定父链；引用不属于当前工作区时进入不可用/错误状态，不返回或渲染其父链，并显示明确原因。
-- 纵轴是版本化重量分段；横轴先按 C/B/A/S，再按启用 Type。
-- Series 覆盖块只连接真实离散 SKU 节点。固定提示：**覆盖范围只表达系列规划跨度，不代表连续插值。**
+- 纵轴按01.x重量段顺序；横轴按Part组织，可筛选实际品质。
+- 同一Part相邻段合并矩形、缺段拆分，跨Part不合并；点击矩形后仍选择具体重量段，再进入已有SKU/新增预览。
 - 点击 Series 只更新底部摘要；点击 SKU 只进入 SKU 上下文；只有点击 Model 行才打开右侧预览。单 Model 也不得跳级。
 - 展开 Series 后 SKU 按精确重量升序；展开 SKU 后 Model 使用服务端游标。
 - 聚合返回直接生命周期、全部注意状态、后代计数、Model总数、硬阻断、warning和升级候选；当前策略不因对象权限隐藏总数或改写为“可见数”。
 - 主状态优先级：硬冲突 > rebase > 待复核 > warning > 待发布 > 升级候选 > 已发布 > 草稿；副状态与计数保留。
-- 矩阵空白和重量分段不创建 SKU；只能通过“添加重量规格”输入精确重量并预览最近模板。
+- 矩阵空白、连续矩形和重量段点击均不创建SKU；只有显式“新增SKU”写数据。
 
 ## 3. 稳定身份、面包屑和权限
 
-正式路由与命令必须携带 `EntityRef { workspaceId, entityType, entityId, revisionId }`，`revisionId`不得省略；仅搜索建议、未解析外部链接等非命令输入可以暂时没有Revision，但必须先解析成完整`EntityRef`才可执行动作。ID 终身稳定、不复用；重命名和更换默认 Model 不改 ID。SKU重量变更遵循条件化身份规则：没有任何已发布后代Snapshot时保留skuId并创建新revision；已有已发布后代时旧SKU的`targetPullKg`冻结，新重量创建新SKU，旧SKU可废弃。父链固定：
+正式路由与命令必须携带 `EntityRef { workspaceId, entityType, entityId, revisionId }`，`revisionId`不得省略。ID终身稳定、不复用；重命名和更换默认Model不改ID。SKU改换Part或weightBandId遵循条件化身份规则；派生拉力变化不是直接编辑或身份改名。父链固定：
 
 ```text
 Collection（可缺省） → Series → SKU 抽屉 → Model → 冻结快照
@@ -71,7 +77,7 @@ SKU 显示“精确重量 + SKU 抽屉”；Model 显示型号并标明“实际
 
 入口位于 Series/SKU 上下文，不是一级实体。生成前确认：
 
-- Series、SKU精确targetPullKg、最近结构标杆；
+- Series、Part、SKU weightBandId、04.5引用与派生拉力；
 - CandidateSearchRecipe/Revision、RuleSetVersion、Patch Revision；
 - 搜索空间、启用modelVariantKey、每SKU数量、最低Affinity、warning接受、排序版本、截断；
 - 明示“硬 deny/缺 require 会被排除，Affinity 只排序”。
@@ -97,7 +103,7 @@ SKU 显示“精确重量 + SKU 抽屉”；Model 显示型号并标明“实际
 
 “加入比较”写入页面级比较篮，不因混合部位阻止。轮/线按稳定比较顺序继承第一根竿的抛投并显示`context_inherited`提示，不参与排名；无竿时为`not_applicable`，不得补0。拉力、耐久、抛投使用直接比例，感度、操控使用反向比例；`officialDisplayScore`封顶100，`comparisonScore`不封顶并按真实比例伸出100分外圈，绘图区不得裁切。
 
-Series基准只允许`projection_reference`。Model/钓组视图从当前Snapshot冻结的SKU revision按`projection-reference/current-sku-frozen-match/v1`逐部位唯一读取ProjectionMatch；必须显示基准Snapshot、SKU revision、选择器版本、projectionMatch/projection ID与revision、逐部位`available/missing/error`状态和理由。同Series其他SKU、默认SKU、查询第一项、同W段其他投影及页面上下文均不得作为回退。独立多装备比较未显式选择`baselineSnapshotId`时不显示Series参考线；选择后锚点保持稳定，共同W段变化不改锚点。
+Series基准只允许`projection_reference`。Schema v23目标态的Model/钓组视图从当前Snapshot冻结的SKU revision按v23后继选择器逐部位唯一读取已冻结的04.5功能模板引用与派生结果；必须显示基准Snapshot、SKU revision、选择器版本、`functionTemplateRef`、输入指纹、逐部位`available/missing/error`状态和理由。同Series其他SKU、默认SKU、查询第一项、同重量段其他模板及页面上下文均不得作为回退。`projection-reference/current-sku-frozen-match/v1`及ProjectionMatch只用于Schema v9/v22历史Snapshot回放。独立多装备比较未显式选择`baselineSnapshotId`时不显示Series参考线；选择后锚点保持稳定，共同重量段变化不改锚点。
 
 旧`PUBLISHED`五维定义及其Snapshot只读展示并标记“历史定义”；新正式Snapshot只接受唯一`FORMAL_CURRENT`定义。若当前只有legacy定义，发布动作禁用并显示`FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE`，不得以旧种子预览冒充正式结果。
 
@@ -194,7 +200,7 @@ UpgradeCandidate 只描述“升级会怎样”。批准不改变旧 Snapshot；
 
 问题动作中，导航、查看证据和帮助是无副作用链接；确认warning、申请/批准waiver、重算、Rebase和创建规则源变更草稿必须使用统一`ActionCode`及不可篡改payload，Rebase写命令固定为`rebase_patch`。界面不得发送`approve_waiver`、`request_waiver`、`retry`、`open_rebase`等旧通用动作；旧状态写记录只有从可信历史完整重建fingerprint、revision、reason、Gate、必要环境×渠道和原幂等payload后才能启用，否则显示`LEGACY_ACTION_ALIAS_UNRESOLVABLE`。历史`open_rebase`仅在可信历史证明从未执行Rebase且可恢复明确路由时转为`navigate`；存在写语义、歧义或证据不足时固定显示`LEGACY_ACTION_ALIAS_UNRESOLVABLE`，不得转为`rebase_patch`。重试复用原ActionCode和幂等payload。
 
-价值分与定价执行语义已于2026-07-23确定，`OPEN-007`只继续跟踪飞书机器源和正式策略发布。界面按`(去重词条分 + 无序组合分) × FunctionProfile.scoreFactor`展示价值分；不展示Performance乘数。S区间为`[65,100]`，大于100报错。维修价与购买价分别在最终输出阶段做三位有效数字向下取整，购买价使用未舍入维修价，最低价100在购买价舍入后应用。`purchasePriceRaw`超过300,000,000时显示二次确认WARNING；确认后保留实际价格与超限标记，不报ERROR、不BLOCK、不CLAMP。确认卡必须显示阈值、Raw/舍入/最终价格、Model revision、PricingPolicyVersion、理由和确认人；动作由服务端返回，仅在具备`pricing.warning.acknowledge`能力时可执行，提交时重验fingerprint。任一输入变化后旧确认STALE。目标字段无法表达价格时单独显示EXPORT BLOCKER。运行时已完成新schema；在飞书机器源修订、显式拉取和正式策略发布前，旧契约只能标记为`NON_FORMAL`，不提供手填价格兜底。
+价值分与定价执行语义按2026-07-28最新决定执行，`OPEN-007`继续跟踪飞书机器源和正式策略发布。界面按`(去重词条分 + 无序组合分) × FunctionProfile.scoreFactor`展示价值分；不展示Performance乘数。S区间为`[65,100)`，100及以上无推荐并报错。维修价与购买价分别在最终输出阶段做三位有效数字向下取整，购买价使用未舍入维修价，最低价100在购买价舍入后应用。`purchasePriceRaw`超过300,000,000时显示二次确认WARNING；确认后保留实际价格与超限标记，不报ERROR、不BLOCK、不CLAMP。确认卡必须显示阈值、Raw/舍入/最终价格、Model revision、PricingPolicyVersion、理由和确认人；动作由服务端返回，仅在具备`pricing.warning.acknowledge`能力时可执行，提交时重验fingerprint。任一输入变化后旧确认STALE。目标字段无法表达价格时单独显示EXPORT BLOCKER。历史“100属于S”schema只服务旧Snapshot；目标v23与新策略发布前，旧契约只能标记为`NON_FORMAL`，不提供手填价格兜底。
 
 ## 12. 六面验收矩阵
 

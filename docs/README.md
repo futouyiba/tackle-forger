@@ -14,6 +14,8 @@
 
 工作区整包保存的默认允许边界、受治理字段到领域动作的映射，以及保存失败的交互验收，见 v3 [§14.3.7](./tackle-forger-development-spec-v3.md#1437-工作区整包保存边界issue-96)。Issue #98 的文档治理入口以该章节为准；历史审计材料只作背景，不定义该边界。
 
+2026-07-28重量段SKU目标态见v3 §5、§6、§11.2.2、§12.1、§15.1、§17、§23与§24.2.1：Series含1～3个独立Part，用户选择01.x重量段后按六键唯一匹配04.5，由有效词条派生SKU拉力与品质推荐，Model只读继承拉力。当前主线Schema为22，目标实现新增v23；Schema v9与v22仅作历史/当前实现输入，不得原地改变语义。独立实现任务书见[`handoffs/weight-band-sku-affix-derivation-implementation-brief-2026-07-28.md`](./handoffs/weight-band-sku-affix-derivation-implementation-brief-2026-07-28.md)。
+
 第2至7级文档必须在文首记录最后对齐的v3日期或版本。它们若与v3冲突，冲突段立即视为过期说明，不能继续作为开发验收依据；修复时应修改消费文档，不为了迎合旧文档反向改写v3。
 
 若代码、旧文档、工作簿示例和权威规范发生冲突：

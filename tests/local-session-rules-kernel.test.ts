@@ -159,3 +159,17 @@ test("numeric set remains numeric and composes with a later add", () => {
   assert.equal(typeof derived.values.pull, "number");
   assert.deepEqual(derived.trace.map((entry) => entry.status), ["applied", "applied"]);
 });
+
+test("formula receives the current numeric value", () => {
+  const document = fixture();
+  document.rules = [{
+    ...document.rules[0]!,
+    id: "formula-current",
+    sequence: 0,
+    operation: "formula",
+    value: "current * 1.5",
+  }];
+  const derived = deriveLocalSessionTemplate(document, "t-medium");
+  assert.equal(derived.values.pull, 4.5);
+  assert.equal(derived.trace[0]?.status, "applied");
+});

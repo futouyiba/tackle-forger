@@ -23,3 +23,23 @@ test("anonymous entry declares local create/open boundary without production obj
   assert.match(source, /不含 Series \/ SKU \/ Model/);
   assert.doesNotMatch(source, /createSeedState/);
 });
+
+test("local source actions reject shared-loading races before mutating the reducer", () => {
+  const source = readFileSync(
+    new URL("../app/LocalSessionWorkbench.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /applyAcceptedEvents/);
+  assert.match(source, /共享工作区正在加载；本地会话保持不变/);
+  assert.match(source, /disabled=\{shell\.authority\.status === "shared_loading"\}/);
+});
+
+test("selector-bound workbook profiles import disabled until explicitly chosen", () => {
+  const source = readFileSync(
+    new URL("../lib/local-session-parser-protocol.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /appendRules\("method"[\s\S]*?false\)/);
+  assert.match(source, /appendRules\("item_type"[\s\S]*?false\)/);
+  assert.match(source, /appendRules\("modifier"[\s\S]*?false\)/);
+});

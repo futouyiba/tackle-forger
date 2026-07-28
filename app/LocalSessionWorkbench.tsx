@@ -50,11 +50,17 @@ const OPERATION_LABELS: Record<LocalEditableRuleOperation, string> = {
   formula: "公式",
 };
 
-function applyEvents(state: AppShellState, events: readonly AppShellEvent[]) {
-  return events.reduce((current, event) => {
+function applyAcceptedEvents(
+  state: AppShellState,
+  events: readonly AppShellEvent[],
+): AppShellState | null {
+  let current = state;
+  for (const event of events) {
     const transition = transitionAppShell(current, event);
-    return transition.accepted ? transition.state : current;
-  }, state);
+    if (!transition.accepted) return null;
+    current = transition.state;
+  }
+  return current;
 }
 
 function authName(state: AppShellState) {
@@ -161,11 +167,15 @@ export function LocalSessionWorkbench() {
     const operationId = identities.allocate("operation");
     const readyId = identities.allocate("resource");
     const sessionModel = createLocalSessionModel({ kind: "temporary_workspace" });
-    const nextShell = applyEvents(shell, [
+    const nextShell = applyAcceptedEvents(shell, [
       { type: "local_selection_requested", operationId },
       { type: "local_parse_started", operationId, selectionRef: "temporary:blank" },
       { type: "local_parse_succeeded", operationId, readyId, session: sessionModel },
     ]);
+    if (!nextShell) {
+      setNotice("共享工作区正在加载；本地会话保持不变。");
+      return;
+    }
     setShell(nextShell);
     loader.clear();
     setLocal({ status: "active", session: sessionModel });
@@ -178,10 +188,15 @@ export function LocalSessionWorkbench() {
     event.target.value = "";
     if (!file) return;
     const operationId = identities.allocate("operation");
-    setShell((state) => applyEvents(state, [
+    const nextShell = applyAcceptedEvents(shell, [
       { type: "local_selection_requested", operationId },
       { type: "local_parse_started", operationId, selectionRef: file.name },
-    ]));
+    ]);
+    if (!nextShell) {
+      setNotice("共享工作区正在加载；已拒绝新的本地文件操作。");
+      return;
+    }
+    setShell(nextShell);
     setNotice(`正在解析 ${file.name}；现有本地会话保持可用。`);
     try {
       const ready = await loader.open(file, operationId, true);
@@ -439,10 +454,11 @@ export function LocalSessionWorkbench() {
             type="button"
             className="local-button"
             onClick={() => fileInput.current?.click()}
+            disabled={shell.authority.status === "shared_loading"}
           >
             {session ? "替换 WQ8w 工作簿" : "打开 WQ8w 工作簿"}
           </button>
-          <button type="button" className="local-button" onClick={activateBlank}>
+          <button type="button" className="local-button" onClick={activateBlank} disabled={shell.authority.status === "shared_loading"}>
             新建空白临时会话
           </button>
           <button

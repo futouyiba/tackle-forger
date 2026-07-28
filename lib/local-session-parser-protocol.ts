@@ -94,6 +94,7 @@ function editableDocumentFromInspection(
     sourceId: string,
     sourceName: string,
     entries: typeof draft.methodProfiles[number]["rules"],
+    enabled: boolean,
   ) => {
     for (const entry of entries) {
       rules.push({
@@ -106,34 +107,37 @@ function editableDocumentFromInspection(
         operation: entry.operation,
         value: entry.value,
         condition: entry.condition ?? "",
-        notes: entry.notes ?? "",
-        enabled: true,
+        notes: enabled
+          ? entry.notes ?? ""
+          : `${entry.notes ?? ""}${entry.notes ? "；" : ""}导入时未绑定选择上下文，默认停用。`,
+        enabled,
       });
       sequence += 1;
     }
   };
   for (const profile of draft.methodProfiles) {
-    appendRules("method", profile.id, profile.name, profile.rules);
+    appendRules("method", profile.id, profile.name, profile.rules, false);
   }
   for (const profile of draft.itemTypeProfiles) {
-    appendRules("item_type", profile.id, profile.name, profile.rules);
+    appendRules("item_type", profile.id, profile.name, profile.rules, false);
   }
   for (const profile of draft.functionProfiles) {
-    appendRules("function", profile.id, profile.name, profile.rules);
+    appendRules("function", profile.id, profile.name, profile.rules, false);
     for (const intensity of profile.intensityRules) {
       appendRules(
         "function",
         `${profile.id}:intensity:${intensity.intensity}:${intensity.itemPartId ?? "legacy"}`,
         `${profile.name} · 强度 ${intensity.intensity}`,
         intensity.rules,
+        false,
       );
     }
   }
   for (const modifier of draft.modifiers) {
-    appendRules("modifier", modifier.id, modifier.name, modifier.rules);
+    appendRules("modifier", modifier.id, modifier.name, modifier.rules, false);
   }
   for (const layer of draft.layers) {
-    appendRules("layer", layer.id, layer.name, layer.rules);
+    appendRules("layer", layer.id, layer.name, layer.rules, layer.enabled);
   }
   return {
     title: "WQ8w 本地规则与模板",

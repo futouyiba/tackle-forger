@@ -156,7 +156,10 @@ function applyRuleValue(
     if (typeof rule.value !== "string") {
       throw new Error("formula 操作需要公式字符串。");
     }
-    return evaluateFormula(rule.value, numericValues);
+    return evaluateFormula(rule.value, {
+      ...numericValues,
+      current: typeof before === "number" ? before : 0,
+    });
   }
   if (typeof before !== "number" || typeof rule.value !== "number") {
     throw new Error(`${rule.operation} 操作要求当前值与操作数均为数值。`);

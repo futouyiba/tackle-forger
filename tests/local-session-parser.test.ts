@@ -226,6 +226,14 @@ test("canonical File 保持不可变，ArrayBuffer 转移到 disposable worker�
   assert.equal("pricingDraft" in ready.result.workbook, false);
   assert.equal("workspaceId" in ready.result.workbook, false);
   assert.equal("configurationSnapshots" in ready.result.workbook, false);
+  const selectorBoundRules = ready.result.session.document.rules.filter(
+    (rule) => rule.sourceKind !== "layer",
+  );
+  assert.ok(
+    selectorBoundRules.every((rule) =>
+      !rule.enabled && rule.notes.includes("未绑定选择上下文")),
+    "mutually exclusive profile rules must not execute without an explicit selection",
+  );
   assert.deepEqual(loader.readyResourceSnapshot(), {
     generation: ready.generation,
     resourceHandle: ready.resourceHandle,

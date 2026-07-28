@@ -142,6 +142,14 @@ function editableDocumentFromInspection(
   return {
     title: "WQ8w 本地规则与模板",
     notes: `仅内存编辑；源语义修订 ${inspection.sourceRevision.sourceRevision}`,
+    sourceIssues: draft.issues.map((issue) => ({
+      severity: issue.level,
+      code: issue.code,
+      path: issue.sheetId
+        ? `canonical.${issue.sheetId}${issue.row ? `.row.${issue.row}` : ""}`
+        : "canonical.workbook",
+      message: issue.message,
+    })),
     parameters: draft.parameters.map((parameter, index) => ({
       id: parameter.id ?? `parameter:${index}:${parameter.key}`,
       key: parameter.key,

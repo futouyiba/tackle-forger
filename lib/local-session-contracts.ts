@@ -75,9 +75,17 @@ export interface LocalEditableRule {
   enabled: boolean;
 }
 
+export interface LocalSessionImportIssue {
+  severity: "error" | "warning";
+  code: string;
+  path: string;
+  message: string;
+}
+
 export interface LocalSessionDocument {
   title: string;
   notes: string;
+  sourceIssues: LocalSessionImportIssue[];
   parameters: LocalEditableParameter[];
   templates: LocalEditableTemplate[];
   rules: LocalEditableRule[];
@@ -327,11 +335,12 @@ function parseRevision(value: unknown, path: string): LocalEphemeralRevision {
 function parseDocument(value: unknown, path: string): LocalSessionDocument {
   const object = exactObject(
     value,
-    ["title", "notes", "parameters", "templates", "rules"],
+    ["title", "notes", "sourceIssues", "parameters", "templates", "rules"],
     path,
   );
   if (
-    !Array.isArray(object.parameters)
+    !Array.isArray(object.sourceIssues)
+    || !Array.isArray(object.parameters)
     || !Array.isArray(object.templates)
     || !Array.isArray(object.rules)
   ) {
@@ -340,6 +349,24 @@ function parseDocument(value: unknown, path: string): LocalSessionDocument {
   return {
     title: stringValue(object.title, `${path}.title`),
     notes: stringValue(object.notes, `${path}.notes`),
+    sourceIssues: object.sourceIssues.map((entry, index) => {
+      const issue = exactObject(
+        entry,
+        ["severity", "code", "path", "message"],
+        `${path}.sourceIssues[${index}]`,
+      );
+      if (issue.severity !== "error" && issue.severity !== "warning") {
+        throw new LocalSessionSchemaError(
+          `${path}.sourceIssues[${index}].severity is unsupported.`,
+        );
+      }
+      return {
+        severity: issue.severity,
+        code: stringValue(issue.code, `${path}.sourceIssues[${index}].code`),
+        path: stringValue(issue.path, `${path}.sourceIssues[${index}].path`),
+        message: stringValue(issue.message, `${path}.sourceIssues[${index}].message`),
+      };
+    }),
     parameters: object.parameters.map((entry, index) =>
       parseParameter(entry, `${path}.parameters[${index}]`)),
     templates: object.templates.map((entry, index) =>
@@ -360,7 +387,7 @@ function normalizeDocumentInput(
     && Object.keys(value).every((key) => key === "title" || key === "notes")
   ) {
     return parseDocument(
-      { ...value, parameters: [], templates: [], rules: [] },
+      { ...value, sourceIssues: [], parameters: [], templates: [], rules: [] },
       path,
     );
   }
@@ -491,6 +518,7 @@ export function createLocalSessionModel(
   document: LocalSessionDocumentInput = {
     title: "",
     notes: "",
+    sourceIssues: [],
     parameters: [],
     templates: [],
     rules: [],

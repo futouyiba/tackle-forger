@@ -141,6 +141,7 @@ export function LocalSessionWorkbench() {
   }, [bootstrapOperation, loader]);
 
   const session = local.status === "active" ? local.session : undefined;
+  const localMutationsDisabled = shell.authority.status === "shared_loading";
   const derivation = useMemo(
     () => session && selectedTemplateId
       ? deriveLocalSessionTemplate(session.document, selectedTemplateId)
@@ -156,6 +157,10 @@ export function LocalSessionWorkbench() {
   if (sharedState) return <Workbench initialState={sharedState} />;
 
   const commit = (document: LocalSessionDocument, label: string) => {
+    if (localMutationsDisabled) {
+      setNotice("共享工作区正在加载；已拒绝本地编辑并保留现有会话。");
+      return;
+    }
     const operationId = identities.allocate("operation");
     setLocal((state) => reduceLocalSession(state, {
       type: "commit_local_edit",
@@ -165,6 +170,10 @@ export function LocalSessionWorkbench() {
   };
 
   const activateBlank = () => {
+    if (localMutationsDisabled) {
+      setNotice("共享工作区正在加载；本地会话保持不变。");
+      return;
+    }
     const operationId = identities.allocate("operation");
     const readyId = identities.allocate("resource");
     const sessionModel = createLocalSessionModel({ kind: "temporary_workspace" });
@@ -188,6 +197,10 @@ export function LocalSessionWorkbench() {
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
+    if (localMutationsDisabled) {
+      setNotice("共享工作区正在加载；已拒绝新的本地文件操作。");
+      return;
+    }
     const operationId = identities.allocate("operation");
     const nextShell = applyAcceptedEvents(shell, [
       { type: "local_selection_requested", operationId },
@@ -240,6 +253,10 @@ export function LocalSessionWorkbench() {
   };
 
   const clear = () => {
+    if (localMutationsDisabled) {
+      setNotice("共享工作区正在加载；已拒绝清除并保留现有会话。");
+      return;
+    }
     identities.allocate("operation");
     loader.clear();
     const activeLoginOperation = loginOperation.current;
@@ -448,6 +465,7 @@ export function LocalSessionWorkbench() {
             ref={fileInput}
             className="local-file-input"
             type="file"
+            disabled={localMutationsDisabled}
             accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             onChange={(event) => void openWorkbook(event)}
           />
@@ -455,17 +473,17 @@ export function LocalSessionWorkbench() {
             type="button"
             className="local-button"
             onClick={() => fileInput.current?.click()}
-            disabled={shell.authority.status === "shared_loading"}
+            disabled={localMutationsDisabled}
           >
             {session ? "替换 WQ8w 工作簿" : "打开 WQ8w 工作簿"}
           </button>
-          <button type="button" className="local-button" onClick={activateBlank} disabled={shell.authority.status === "shared_loading"}>
+          <button type="button" className="local-button" onClick={activateBlank} disabled={localMutationsDisabled}>
             新建空白临时会话
           </button>
           <button
             type="button"
             className="local-button local-button-danger"
-            disabled={!session}
+            disabled={!session || localMutationsDisabled}
             onClick={clear}
           >
             清除
@@ -492,6 +510,7 @@ export function LocalSessionWorkbench() {
                 type="button"
                 key={value}
                 className={tab === value ? "active" : ""}
+                disabled={localMutationsDisabled}
                 onClick={() => setTab(value)}
               >
                 {label}
@@ -500,8 +519,9 @@ export function LocalSessionWorkbench() {
             <span className={dirty ? "dirty" : ""}>{dirty ? "未保存的内存修改" : "源数据未修改"}</span>
             <button
               type="button"
-              disabled={session.history.undo.length === 0}
+              disabled={localMutationsDisabled || session.history.undo.length === 0}
               onClick={() => {
+                if (localMutationsDisabled) return;
                 identities.allocate("operation");
                 setLocal((state) => reduceLocalSession(state, { type: "undo_local_edit" }));
               }}
@@ -510,8 +530,9 @@ export function LocalSessionWorkbench() {
             </button>
             <button
               type="button"
-              disabled={session.history.redo.length === 0}
+              disabled={localMutationsDisabled || session.history.redo.length === 0}
               onClick={() => {
+                if (localMutationsDisabled) return;
                 identities.allocate("operation");
                 setLocal((state) => reduceLocalSession(state, { type: "redo_local_edit" }));
               }}
@@ -520,7 +541,11 @@ export function LocalSessionWorkbench() {
             </button>
           </nav>
 
-          <section className="local-session-editor">
+          <fieldset
+            className="local-session-editor"
+            disabled={localMutationsDisabled}
+            aria-busy={localMutationsDisabled}
+          >
             {tab === "parameters" && (
               <EditableParameters document={document} commit={commit} identities={identities} />
             )}
@@ -539,7 +564,7 @@ export function LocalSessionWorkbench() {
                 issues={visibleIssues}
               />
             )}
-          </section>
+          </fieldset>
         </>
       )}
     </main>

@@ -66,7 +66,9 @@ function duplicates(values: readonly string[]): Set<string> {
 export function validateLocalSessionDocument(
   document: LocalSessionDocument,
 ): LocalSessionValidationIssue[] {
-  const issues: LocalSessionValidationIssue[] = [];
+  const issues: LocalSessionValidationIssue[] = document.sourceIssues.map(
+    (issue) => ({ ...issue }),
+  );
   for (const key of duplicates(document.parameters.map((entry) => entry.key))) {
     issues.push({
       severity: "error",
@@ -202,6 +204,9 @@ export function deriveLocalSessionTemplate(
       left.sequence - right.sequence
       || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
   );
+  const parametersByKey = new Map(
+    document.parameters.map((parameter) => [parameter.key, parameter]),
+  );
   for (const rule of rules) {
     const before = values[rule.parameterKey];
     const entry: LocalSessionTraceEntry = {
@@ -220,6 +225,12 @@ export function deriveLocalSessionTemplate(
     };
     if (!rule.enabled) {
       entry.message = "规则已停用。";
+      trace.push(entry);
+      continue;
+    }
+    const parameter = parametersByKey.get(rule.parameterKey);
+    if (parameter?.itemPart !== template.itemPart) {
+      entry.message = `规则部位 ${parameter?.itemPart ?? "unknown"} 与模板部位 ${template.itemPart} 不匹配。`;
       trace.push(entry);
       continue;
     }

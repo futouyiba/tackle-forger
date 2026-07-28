@@ -265,6 +265,7 @@ test("nested rules/templates allowlist rejects formal objects and unknown fields
     {
       title: "local",
       notes: "",
+      sourceIssues: [],
       parameters: [{
         id: "p-1",
         key: "pull",

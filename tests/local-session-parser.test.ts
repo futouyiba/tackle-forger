@@ -224,6 +224,12 @@ test("canonical File 保持不可变，ArrayBuffer 转移到 disposable worker�
   assert.equal(ready.result.workbook.contractVersion, "local-session-canonical-workbook/open009-v2");
   assert.equal(ready.result.workbook.semanticRevision.length, 8);
   assert.deepEqual(ready.result.workbook.editableDocument, ready.result.session.document);
+  assert.ok(
+    ready.result.session.document.sourceIssues.some(
+      (issue) => issue.severity === "error",
+    ),
+    "canonical importer errors must survive the isolated local projection",
+  );
   assert.equal("seriesDefinitions" in ready.result.workbook, false);
   assert.equal("qualityDraft" in ready.result.workbook, false);
   assert.equal("pricingDraft" in ready.result.workbook, false);

@@ -31,7 +31,32 @@ test("local source actions reject shared-loading races before mutating the reduc
   );
   assert.match(source, /applyAcceptedEvents/);
   assert.match(source, /共享工作区正在加载；本地会话保持不变/);
-  assert.match(source, /disabled=\{shell\.authority\.status === "shared_loading"\}/);
+  assert.match(source, /disabled=\{localMutationsDisabled\}/);
+});
+
+test("shared loading disables and fail-closes every local mutation surface", () => {
+  const source = readFileSync(
+    new URL("../app/LocalSessionWorkbench.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    source,
+    /const localMutationsDisabled = shell\.authority\.status === "shared_loading"/,
+  );
+  assert.match(source, /const commit = [\s\S]*?if \(localMutationsDisabled\)/);
+  assert.match(source, /const clear = [\s\S]*?if \(localMutationsDisabled\)/);
+  assert.match(
+    source,
+    /<fieldset[\s\S]*?disabled=\{localMutationsDisabled\}[\s\S]*?aria-busy=\{localMutationsDisabled\}/,
+  );
+  assert.match(
+    source,
+    /disabled=\{localMutationsDisabled \|\| session\.history\.undo\.length === 0\}/,
+  );
+  assert.match(
+    source,
+    /disabled=\{localMutationsDisabled \|\| session\.history\.redo\.length === 0\}/,
+  );
 });
 
 test("selector-bound workbook profiles import disabled until explicitly chosen", () => {

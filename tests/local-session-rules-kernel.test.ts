@@ -12,6 +12,7 @@ function fixture(): LocalSessionDocument {
   return {
     title: "fixture",
     notes: "",
+    sourceIssues: [],
     parameters: [{
       id: "p-pull",
       key: "pull",
@@ -185,4 +186,48 @@ test("derivation exposes runtime evaluation failures as validation issues", () =
   assert.ok(
     derived.issues.some((issue) => issue.code === "RULE_EVALUATION_FAILED"),
   );
+});
+
+test("canonical import errors block partial documents and remain visible", () => {
+  const document = fixture();
+  document.sourceIssues = [{
+    severity: "error",
+    code: "METHOD_ID_MISSING",
+    path: "canonical.sheet-methods.row.2",
+    message: "钓法类型缺少机器 ID。",
+  }];
+  const derived = deriveLocalSessionTemplate(document, "t-medium");
+  assert.equal(derived.values.pull, 3);
+  assert.deepEqual(derived.trace, []);
+  assert.ok(derived.issues.some((issue) => issue.code === "METHOD_ID_MISSING"));
+});
+
+test("derivation skips enabled rules belonging to another item part", () => {
+  const document = fixture();
+  document.parameters.push({
+    id: "p-drag",
+    key: "drag",
+    label: "泄力",
+    itemPart: "reel",
+    unit: "kgf",
+    precision: 2,
+    notes: "",
+  });
+  document.rules.unshift({
+    ...document.rules[0]!,
+    id: "reel-rule",
+    sequence: 0,
+    parameterKey: "drag",
+    operation: "set",
+    value: 99,
+  });
+  document.rules = document.rules.map((rule, index) => ({
+    ...rule,
+    sequence: index,
+  }));
+  const derived = deriveLocalSessionTemplate(document, "t-medium");
+  assert.equal("drag" in derived.values, false);
+  assert.equal(derived.trace[0]?.status, "skipped");
+  assert.match(derived.trace[0]?.message ?? "", /部位 reel 与模板部位 rod 不匹配/);
+  assert.equal(derived.issues.length, 0);
 });

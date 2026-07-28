@@ -2,7 +2,7 @@
 
 > 状态：**唯一权威规范 / Canonical**  
 >首次定稿：2026-07-21  
-> 最后修订：2026-07-27
+> 最后修订：2026-07-28
 > 适用对象：产品设计、领域建模、前后端开发、数据迁移、测试与代码审查  
 > 源数据参考：《淡水路亚杆轮线装备设计.xlsx》
 
@@ -826,8 +826,8 @@ SKU每次有效词条或Part功能定位变化后立即重算最终评分，并�
 YsEKw历史revision与既有v22策略可能把100归入S；它们只服务历史证据和Snapshot重放。目标v23策略必须发布`[65,100)`并使100无推荐；源表或旧Draft仍宣称100属于S时产生`QUALITY_RANGE_SOURCE_OUTDATED`，不得发布为目标态新策略。
 
 ```ts
-interface ModelAffixValueAssessment {
-  modelRevisionId: string;
+interface SkuAffixValueAssessment {
+  skuRevisionId: string;
   recommendedQualityId: string | null;
   selectedQualityId: string;
   qualityOverrideState: "MATCHED" | "OVERRIDDEN" | "NO_RECOMMENDATION";
@@ -903,7 +903,7 @@ Severity描述问题强度，Gate描述受影响关口，State描述当前处理
 - 模板：规则操作、轨迹、边界和预算；
 - 兼容：硬规则、条件要求和Affinity解释；
 - Series：身份、核心词条、方向签名和重量曲线；
-- SKU：最近匹配、共享基底和重复规格；
+- SKU：04.5六键唯一匹配、有效词条派生、同Part同重量段重复规格和失效恢复；Schema v9/v22历史回放另行校验冻结的最近匹配证据；
 - Model：部件、技术、词条、Patch和杆轮线闭环；
 - 发布：目标Gate无OPEN的BLOCKER/ERROR、warning已确认、版本链完整、快照哈希成功；被策略允许且有效的ERROR waiver必须冻结到发布证据。
 
@@ -932,7 +932,7 @@ ConfigurationSnapshot至少冻结：
 - 属性叠加轨迹，包括源词条、有序operation、归一化方向与幅度、BaseValue、B、R、PercentAdjusted、固定值增减合计、FinalBeforeBoundary、ParameterDefinition引用、规则源单元格/revision及输入输出hash；
 - 被动技能设计Payload；
 - 品质、兼容和校验报告；
-- ModelAffixValueAssessment、`PerformanceSummarySnapshot`（可为`AVAILABLE`摘要与定义引用，或`UNAVAILABLE/definition_missing`）、PricingPolicy版本、自动价格、定价Trace和价格WARNING确认引用；
+- `SkuAffixValueAssessment`及Model对其冻结SKU revision的只读引用、`PerformanceSummarySnapshot`（可为`AVAILABLE`摘要与定义引用，或`UNAVAILABLE/definition_missing`）、PricingPolicy版本、自动价格、定价Trace和价格WARNING确认引用；
 - 发布人和发布时间。
 
 上游变化生成UpgradeCandidate，不原地覆盖Snapshot。
@@ -1101,7 +1101,7 @@ revision 位于“最近 90 天”与“最新 100 个”并集之外，只表�
 
 | 受治理字段 | 原因 | 唯一写入动作/边界 |
 | --- | --- | --- |
-| `seriesDefinitions`、`skuDrawers`、`purchasableModels`、`derivedProjections`、`projectionMatches` | Series/SKU/Model身份、最近匹配和派生链 | `create_series`、`update_series_core_affixes`、`change_sku_target_pull`及Model领域ActionCode/规则重算 |
+| `seriesDefinitions`、`seriesPartRevisions`、`skuDrawers`、`purchasableModels`、`projectAffixDefinitions`、`skuLocalAffixCopies`、`derivedProjections`、`projectionMatches` | Series/Part/SKU/Model身份、词条定义/局部副本和派生链 | v23使用`create_series`、`update_part_configuration`、`preview_weight_band_skus`（只读）、`create_sku`、SKU词条意图动作、`create_project_affix`、`set_sku_actual_quality`及允许的Model领域ActionCode/规则重算；`update_series_core_affixes`、`change_sku_target_pull`只服务Schema v9/v22历史兼容，不得创建或修改v23对象 |
 | `partConstraintSets`、`candidateSearchRecipes` | v3 §6.5 的精确revision/contentHash引用；既有revision不可变 | 当前没有修改既有revision的领域命令；只读保留，创建新Series时可由`POST /api/series`物化新约束revision，Recipe专用版本化命令尚未提供 |
 | `patchLedger`、`patchReviewBatches`、`patchValidationWaivers`、`patchValidationWaiverDecisions` | Patch revision、审核和waiver证据 | Patch create/review/rebase/mirror及waiver ActionCode |
 | `projectionPatches` | 遗留 ProjectionPatch 的迁移/审计源；不得作为现行Patch命令旁路 | 当前只读保留，迁移流程处理；不得经整包保存删除、篡改或重放 |
@@ -2352,7 +2352,15 @@ interface ModelFiveAxisPreview {
     seriesId: string;
     skuId: string;
     skuRevisionId: string;
-    selectorVersion: "projection-reference/current-sku-frozen-match/v1";
+    selectorVersion:
+      | "projection-reference/current-sku-frozen-match/v1"
+      | "projection-reference/v23-function-template-frozen/v1";
+    partInputs: {
+      partId: string;
+      weightBandId: string;
+      functionTemplateRef: string;
+      functionTemplateInputFingerprint: string;
+    }[];
   };
   projectionReferenceSetHash: string;
   projectionReferenceSeries: {
@@ -2362,11 +2370,17 @@ interface ModelFiveAxisPreview {
     projectionMatchRevisionId: string | null;
     projectionId: string | null;
     projectionRevisionId: string | null;
+    partId: string | null;
+    weightBandId: string | null;
+    functionTemplateRef: string | null;
+    functionTemplateInputFingerprint: string | null;
     metrics: FiveAxisMetric[];
   }[];
   inputHash: string;
 }
 ```
+
+同一`projectionReferenceSeries`条目必须由`selectorVersion`决定闭合形状：历史选择器要求四个Projection字段并禁止四个v23字段；v23选择器要求`partId + weightBandId + functionTemplateRef + functionTemplateInputFingerprint`并禁止四个Projection字段。`partInputs`在历史选择器下必须为空，在v23选择器下按稳定Part顺序完整冻结。不得把两种引用混装或用全`null`占位通过校验。
 
 `axisId`由版本化定义提供，不得在前端联合类型、数据库列或图表组件中写死。同一个预览中的每条曲线必须与冻结的`fiveAxisDefinitionId + fiveAxisDefinitionVersion`逐项对应，缺轴按第22节状态语义返回，不能临时补0。
 
@@ -2456,7 +2470,7 @@ interface FiveAxisDefinitionDispositionCatalogRevision {
 - 旧定义原记录、publicationState、payload、definitionHash、VertexSet及引用它的ConfigurationSnapshot全部原样只读保留；不得通过改写旧定义状态或重算hash完成迁移。
 - 迁移器先解析当前目录头并计算全部已知定义应有的完整`entries`：不符合本节契约的旧定义为`LEGACY_SNAPSHOT_ONLY`。若当前头已经逐项表达相同`entries`，重复运行必须直接返回该现有修订，不得把当前头再次作为前驱追加等价修订；只有目标`entries`不同才以当前头为前驱构建后继修订。旧Snapshot继续按其冻结定义、顶点、公式和投影证据读取、审计及重放，内容/hash不变；该处置不产生旧Snapshot UpgradeCandidate。
 - `LEGACY_SNAPSHOT_ONLY`定义不得创建任何新正式ConfigurationSnapshot，不得作为新UpgradeCandidate的目标定义，也不得仅因原字段仍为`PUBLISHED`而通过发布检查。草稿预览必须明确标记legacy，不能冒充OPEN-005正式结果。
-- 新定义只有同时声明`semanticContractVersion="five-axis/open005-2026-07-23/v1"`、`hashInputSchemaVersion="five-axis-hash-input/v1"`、`projectionReferenceSelectorVersion="projection-reference/current-sku-frozen-match/v1"`，通过第21、22和24.6节完整Schema/固定向量校验，并取得唯一`FORMAL_CURRENT`处置后，才可服务新正式Snapshot。
+- 新定义只有同时声明`semanticContractVersion="five-axis/open005-2026-07-23/v1"`、`hashInputSchemaVersion="five-axis-hash-input/v1"`并使用与目标Workspace Schema一致的选择器，通过第21、22和24.6节完整Schema/固定向量校验，取得唯一`FORMAL_CURRENT`处置后，才可服务新正式Snapshot。Schema v23的新正式Snapshot必须使用`projection-reference/v23-function-template-frozen/v1`；`projection-reference/current-sku-frozen-match/v1`只允许服务v9/v22历史Snapshot，进入v23目录时其定义只能是`LEGACY_SNAPSHOT_ONLY`或`SUPERSEDED`。
 - 在不存在唯一合法`FORMAL_CURRENT`定义、处置记录缺失/冲突、迁移未完成或新定义任一必需策略版本不可校验时，发布路径返回`FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE`并fail-closed；不得回退旧`PUBLISHED`定义、种子定义或无五维证据Snapshot。
 - 新定义发布后，旧定义可继续保持`LEGACY_SNAPSHOT_ONLY`；此前符合本契约的正式定义被替换时，必须在同一个后继目录修订中把旧项写为`SUPERSEDED`、把新项写为唯一`FORMAL_CURRENT`。新定义、完整后继目录修订和目录头条件更新必须在一个数据库事务提交；并发头冲突方回滚并基于新头重算。任何替换都不修改历史定义、历史目录修订或Snapshot。
 - 新正式Snapshot必须冻结其解析使用的`catalogRevisionId + catalogHash`以及命中的处置项；历史Snapshot没有该字段时仍按原冻结定义重放，不得补写。仅目录证据revision变化而命中的定义及全部五维语义输入未变化时，不得单独造成五维UpgradeCandidate。
@@ -2920,7 +2934,7 @@ JCS与哈希最低测试向量固定如下；该对象只用于canonicalization�
 ```ts
 interface EntityRef {
   workspaceId: string;
-  entityType: "collection" | "series" | "sku_drawer" | "model"
+  entityType: "collection" | "series" | "part" | "sku_drawer" | "model"
     | "configuration_snapshot" | "model_candidate" | "adjustment_patch"
     | "upgrade_candidate" | "rule_source_change_draft" | "config_id_bundle"
     | "config_id_policy" | "config_target_catalog" | "config_target_scan_manifest"
@@ -3092,12 +3106,12 @@ Series编辑区同时展示1～3个Part卡片，每张卡独立编辑全部字�
 ```ts
 interface BreadcrumbItem {
   ref: EntityRef; label: string;
-  objectLabel: "Collection" | "Series" | "SKU 抽屉" | "Model" | "冻结快照";
+  objectLabel: "Collection" | "Series" | "Part" | "SKU 抽屉" | "Model" | "冻结快照";
   current: boolean; navigable: boolean; unavailableReason?: string;
 }
 ```
 
-谱系固定为`Collection? → Series → SKU Drawer → Model → ConfigurationSnapshot`。SKU显示拉力规格与“SKU抽屉”，Model显示型号与“Model”。Collection可缺省，其他父链不可缺失。跨父级移动是受审计迁移命令并重验不变量。只删除未引用草稿；其余只能废弃。从Snapshot返回Model默认定位快照对应revision。对象关联使用稳定entityId、revisionId、业务代码与GenerationBinding；name只能用于展示、检索和人工候选提示，不能作为唯一关联键。
+Schema v23谱系固定为`Collection? → Series → Part → SKU Drawer → Model → ConfigurationSnapshot`。SKU显示重量段与“SKU抽屉”，Model显示型号与“Model”。Collection可缺省，其他父链不可缺失；v9/v22历史对象没有Part父级时按冻结旧谱系只读回放，不补造Part。跨父级移动是受审计迁移命令并重验不变量。只删除未引用草稿；其余只能废弃。从Snapshot返回Model默认定位快照对应revision。对象关联使用稳定entityId、revisionId、业务代码与GenerationBinding；name只能用于展示、检索和人工候选提示，不能作为唯一关联键。
 
 正常路径：逐层导航且身份标签稳定。
 边界：无Collection从Series开始；多Snapshot显式选版本。
@@ -3119,7 +3133,9 @@ interface CandidateGenerationRequest {
 }
 interface ModelCandidate {
   candidateId: string; runId: string; skuRef: EntityRef;
-  candidateFingerprint: string; projectionMatchRef: string;
+  candidateFingerprint: string;
+  functionTemplateRef: string;
+  functionTemplateInputFingerprint: string;
   proposedConfiguration: Record<string, unknown>;
   hardCompatibility: HardCompatibilityResult; affinity: AffinityBreakdown;
   invariantIssues: ValidationIssue[]; rank: number; rankReasons: string[];
@@ -3127,7 +3143,7 @@ interface ModelCandidate {
 }
 ```
 
-输入冻结Series/SKU/Recipe/RuleSet/Patch revision。deny/缺require只进排除统计。权威排序为版本化字典序：配方键→warning数→Affinity降序→拉力距离升序→fingerprint；AI不得改写。结果含排除分组、枚举总数、截断、版本、hash、耗时。CandidateRun是不可变审计产物，候选不是Model。
+v23输入冻结Series/Part/SKU/Recipe/RuleSet/Patch revision及SKU的04.5引用/输入指纹。deny/缺require只进排除统计。权威排序为版本化字典序：配方键→warning数→Affinity降序→fingerprint；04.5已经由六键唯一定位，不得再以拉力距离消歧，AI不得改写。结果含排除分组、枚举总数、截断、版本、hash、耗时。CandidateRun是不可变审计产物，候选不是Model。v9/v22历史CandidateRun继续冻结并读取`projectionMatchRef`与旧排序版本，不迁写为v23形状。
 
 默认行为是自动物化：对每个`SKU × enabledModelVariantKey`选取排名最高的合法候选并创建或更新一个Model草稿revision。用户可通过范围、重量、启用路线、每SKU数量、最低Affinity、warning接受和`REVIEW_ON_CHANGE`检查点克制批量生成。若`skuId + modelVariantKey`唯一命中旧Model，则创建新revision；无命中新建；多重或歧义命中则跳过并报Issue，禁止按name猜测。内容hash未变化时不创建空revision。同输入、版本与算法必须产生相同结果和顺序，正常流程不使用random seed。
 
@@ -3183,13 +3199,17 @@ interface FiveAxisViewDefinition {
   definitionId: string; version: string;
   semanticContractVersion: "five-axis/open005-2026-07-23/v1";
   hashInputSchemaVersion: "five-axis-hash-input/v1";
-  projectionReferenceSelectorVersion: "projection-reference/current-sku-frozen-match/v1";
+  projectionReferenceSelectorVersion:
+    | "projection-reference/current-sku-frozen-match/v1"
+    | "projection-reference/v23-function-template-frozen/v1";
   axes: [FiveAxisAxisDefinition, FiveAxisAxisDefinition, FiveAxisAxisDefinition, FiveAxisAxisDefinition, FiveAxisAxisDefinition];
   weightBandPolicyVersion: string;
   displayBandConfigId: string;
   seriesBaselinePolicy: {
     mode: "projection_reference";
-    selectorVersion: "projection-reference/current-sku-frozen-match/v1";
+    selectorVersion:
+      | "projection-reference/current-sku-frozen-match/v1"
+      | "projection-reference/v23-function-template-frozen/v1";
   };
   comparisonPolicy: {
     minimumItems: 2;
@@ -3201,7 +3221,7 @@ interface FiveAxisViewDefinition {
 }
 ```
 
-线上Schema必须把`maximumItems`校验为大于等于`minimumItems`的整数，不得在API类型中声明为字面量`5`。当前已确认定义实例为`minimumItems = 2, maximumItems = 5`；服务端对该定义强制上限5。未来只能通过新`FiveAxisViewDefinition.version`发布其他合法整数，历史定义、Snapshot和评审记录仍保留5。`publicationState=PUBLISHED`不是正式适用性的充分条件；新正式Snapshot还必须按第21.7节验证三项契约版本并解析到唯一`FORMAL_CURRENT`处置。
+线上Schema必须把`maximumItems`校验为大于等于`minimumItems`的整数，不得在API类型中声明为字面量`5`。当前已确认定义实例为`minimumItems = 2, maximumItems = 5`；服务端对该定义强制上限5。未来只能通过新`FiveAxisViewDefinition.version`发布其他合法整数，历史定义、Snapshot和评审记录仍保留5。`publicationState=PUBLISHED`不是正式适用性的充分条件；新正式Snapshot还必须按第21.7节验证三项契约版本并解析到唯一`FORMAL_CURRENT`处置。v23正式定义的两个selector字段必须逐字相同且为`projection-reference/v23-function-template-frozen/v1`；旧selector只允许历史v9/v22 Snapshot。
 
 正式视图恰好五轴，顺序为拉力、耐久、抛投、感度、操控；定义仍通过版本发布和引用，不得散落硬编码。同图共享definition、W重量段、`weightBandPolicyVersion`和`vertexSetHash`。每点返回direct/context_inherited/not_applicable/missing/error、原始值、未封顶比例、comparisonScore、officialDisplayScore、Trace和来源。not_applicable不画0，分母非正永远error。Series基准按第21.3节唯一选择器返回锚点、selectorVersion、`projectionReferenceSetHash`及竿轮线三个逐部位状态和projection ID/revision，禁止聚合、按查询顺序择一或静默回退。
 

@@ -37,8 +37,8 @@
         "11.4",
         "14"
       ],
-      "startLine": 38,
-      "endLine": 61,
+      "startLine": 40,
+      "endLine": 63,
       "contentSha256": "9c677735a703f0fdd1c114ee730cb3d6bb7bd185a1cf8cd02dc5df585eae12fc"
     },
     {
@@ -49,8 +49,8 @@
       "subsection": "OPEN-002",
       "title": "OPEN-002：性能定位派生语义（已决，待实现）",
       "dependencies": [],
-      "startLine": 62,
-      "endLine": 65,
+      "startLine": 64,
+      "endLine": 67,
       "contentSha256": "ad66c0e06fa0d21ce066d04203c74c4218677630c1d41cc3ba6f479beeacafea"
     },
     {
@@ -61,8 +61,8 @@
       "subsection": "OPEN-003",
       "title": "OPEN-003：扩展部位启用时间",
       "dependencies": [],
-      "startLine": 66,
-      "endLine": 82,
+      "startLine": 68,
+      "endLine": 84,
       "contentSha256": "eb7ca3a961f7099d530441a4b10f7145f5f2fd0482f652a4c324cc1350e61624"
     },
     {
@@ -75,9 +75,9 @@
       "dependencies": [
         "14"
       ],
-      "startLine": 89,
-      "endLine": 188,
-      "contentSha256": "784a993012cd5cecaf0b74c68c00a673ae375847bcbbf72f5496bc6dfd0768ac"
+      "startLine": 91,
+      "endLine": 190,
+      "contentSha256": "8672d9d8c8978a2d21ca995cdf09aa36ef1e046c0a7900d46d92287a2aabd1bf"
     },
     {
       "id": "OPEN-005",
@@ -92,8 +92,8 @@
         "25.3"
       ],
       "startLine": 1,
-      "endLine": 470,
-      "contentSha256": "c9ddbf0f476eda9ab0e111d15cb71a84b7dedf0ca96d149264dbc2ee65b4c150"
+      "endLine": 486,
+      "contentSha256": "b0a0d53801a3fad31fe7473f64c4dcf04e6f21010e8d1990728eaaaa0f8b35e1"
     },
     {
       "id": "OPEN-006",
@@ -103,8 +103,8 @@
       "subsection": "23.6",
       "title": "23.6 AI服务与数据边界",
       "dependencies": [],
-      "startLine": 703,
-      "endLine": 883,
+      "startLine": 719,
+      "endLine": 899,
       "contentSha256": "580842a5fc1203998007cac0a760d39fcd973071591b58d4f425f92d1ca7b50e"
     },
     {
@@ -115,9 +115,9 @@
       "subsection": "20.1",
       "title": "20.1 价值分自动定价与PricingPolicy",
       "dependencies": [],
-      "startLine": 322,
-      "endLine": 412,
-      "contentSha256": "2e02cefa4038ca2d7e211d90fc29b1f39ce2fd8660f159ffa40458b0355f530b"
+      "startLine": 324,
+      "endLine": 416,
+      "contentSha256": "ec108b5048027c54fda5787c9230dcebd5ff9eb02e3e3a541ebaa9e2c5cb4661"
     },
     {
       "id": "OPEN-008",
@@ -129,8 +129,8 @@
       "dependencies": [
         "25"
       ],
-      "startLine": 189,
-      "endLine": 321,
+      "startLine": 191,
+      "endLine": 323,
       "contentSha256": "bebe224fe538c6569a81ba375b4bf5530fe712472f3738d6fb8ee698fb9f7bed"
     },
     {
@@ -143,8 +143,8 @@
       "dependencies": [
         "23.6"
       ],
-      "startLine": 413,
-      "endLine": 543,
+      "startLine": 417,
+      "endLine": 547,
       "contentSha256": "66e26461dbafa00519b1625d79d6b1fa28a3e8c9b814d9b84d2809a37defb121"
     },
     {
@@ -157,8 +157,8 @@
       "dependencies": [
         "20.2"
       ],
-      "startLine": 209,
-      "endLine": 371,
+      "startLine": 210,
+      "endLine": 372,
       "contentSha256": "a67c304a053717c3e96956a4342a62c48c06d0d335d98c8dcc5aa9aaea3f0540"
     },
     {
@@ -171,8 +171,8 @@
       "dependencies": [
         "14.3"
       ],
-      "startLine": 83,
-      "endLine": 88,
+      "startLine": 85,
+      "endLine": 90,
       "contentSha256": "bc213c1483b555f1edd9a9cb1d384521f51b4835a7b31bb63bb9f0db3ee90770"
     }
   ],
@@ -188,8 +188,8 @@
         "11.4",
         "14"
       ],
-      "startLine": 38,
-      "endLine": 61,
+      "startLine": 40,
+      "endLine": 63,
       "contentSha256": "9c677735a703f0fdd1c114ee730cb3d6bb7bd185a1cf8cd02dc5df585eae12fc"
     },
     {
@@ -200,8 +200,8 @@
       "subsection": "OPEN-002",
       "title": "OPEN-002：性能定位派生语义（已决，待实现）",
       "dependencies": [],
-      "startLine": 62,
-      "endLine": 65,
+      "startLine": 64,
+      "endLine": 67,
       "contentSha256": "ad66c0e06fa0d21ce066d04203c74c4218677630c1d41cc3ba6f479beeacafea"
     },
     {
@@ -212,8 +212,8 @@
       "subsection": "OPEN-003",
       "title": "OPEN-003：扩展部位启用时间",
       "dependencies": [],
-      "startLine": 66,
-      "endLine": 82,
+      "startLine": 68,
+      "endLine": 84,
       "contentSha256": "eb7ca3a961f7099d530441a4b10f7145f5f2fd0482f652a4c324cc1350e61624"
     },
     {
@@ -226,9 +226,9 @@
       "dependencies": [
         "14"
       ],
-      "startLine": 89,
-      "endLine": 188,
-      "contentSha256": "784a993012cd5cecaf0b74c68c00a673ae375847bcbbf72f5496bc6dfd0768ac"
+      "startLine": 91,
+      "endLine": 190,
+      "contentSha256": "8672d9d8c8978a2d21ca995cdf09aa36ef1e046c0a7900d46d92287a2aabd1bf"
     },
     {
       "id": "OPEN-005",
@@ -243,8 +243,8 @@
         "25.3"
       ],
       "startLine": 1,
-      "endLine": 470,
-      "contentSha256": "c9ddbf0f476eda9ab0e111d15cb71a84b7dedf0ca96d149264dbc2ee65b4c150"
+      "endLine": 486,
+      "contentSha256": "b0a0d53801a3fad31fe7473f64c4dcf04e6f21010e8d1990728eaaaa0f8b35e1"
     },
     {
       "id": "OPEN-006",
@@ -254,8 +254,8 @@
       "subsection": "23.6",
       "title": "23.6 AI服务与数据边界",
       "dependencies": [],
-      "startLine": 703,
-      "endLine": 883,
+      "startLine": 719,
+      "endLine": 899,
       "contentSha256": "580842a5fc1203998007cac0a760d39fcd973071591b58d4f425f92d1ca7b50e"
     },
     {
@@ -266,9 +266,9 @@
       "subsection": "20.1",
       "title": "20.1 价值分自动定价与PricingPolicy",
       "dependencies": [],
-      "startLine": 322,
-      "endLine": 412,
-      "contentSha256": "2e02cefa4038ca2d7e211d90fc29b1f39ce2fd8660f159ffa40458b0355f530b"
+      "startLine": 324,
+      "endLine": 416,
+      "contentSha256": "ec108b5048027c54fda5787c9230dcebd5ff9eb02e3e3a541ebaa9e2c5cb4661"
     },
     {
       "id": "OPEN-008",
@@ -280,8 +280,8 @@
       "dependencies": [
         "25"
       ],
-      "startLine": 189,
-      "endLine": 321,
+      "startLine": 191,
+      "endLine": 323,
       "contentSha256": "bebe224fe538c6569a81ba375b4bf5530fe712472f3738d6fb8ee698fb9f7bed"
     },
     {
@@ -294,8 +294,8 @@
       "dependencies": [
         "23.6"
       ],
-      "startLine": 413,
-      "endLine": 543,
+      "startLine": 417,
+      "endLine": 547,
       "contentSha256": "66e26461dbafa00519b1625d79d6b1fa28a3e8c9b814d9b84d2809a37defb121"
     },
     {
@@ -308,8 +308,8 @@
       "dependencies": [
         "20.2"
       ],
-      "startLine": 209,
-      "endLine": 371,
+      "startLine": 210,
+      "endLine": 372,
       "contentSha256": "a67c304a053717c3e96956a4342a62c48c06d0d335d98c8dcc5aa9aaea3f0540"
     },
     {
@@ -322,8 +322,8 @@
       "dependencies": [
         "14.3"
       ],
-      "startLine": 83,
-      "endLine": 88,
+      "startLine": 85,
+      "endLine": 90,
       "contentSha256": "bc213c1483b555f1edd9a9cb1d384521f51b4835a7b31bb63bb9f0db3ee90770"
     }
   ],
@@ -347,7 +347,7 @@
   },
   "source": {
     "path": "docs/spec-v3",
-    "sha256": "c83a073ab5b2db1e23b1c7acf62bea521fbe32632e3a46a31d8215792090d235"
+    "sha256": "86ad8ce693f3847ab3efc840f9e15ff4a000f1d3b9aed3ccb99a112ad7873a3d"
   },
   "headings": [
     {
@@ -366,827 +366,862 @@
       "title": "0.1 固定原则"
     },
     {
-      "line": 24,
+      "line": 27,
       "level": 3,
       "title": "0.2 明确禁止"
     },
     {
-      "line": 34,
+      "line": 40,
       "level": 2,
       "title": "1. 产品目标与范围"
     },
     {
-      "line": 48,
+      "line": 54,
       "level": 3,
       "title": "1.1 当前负责"
     },
     {
-      "line": 58,
+      "line": 64,
       "level": 3,
       "title": "1.2 当前不负责"
     },
     {
-      "line": 68,
+      "line": 74,
       "level": 2,
       "title": "2. 权威术语与层级"
     },
     {
-      "line": 104,
+      "line": 113,
       "level": 2,
       "title": "3. 标准生成顺序"
     },
     {
-      "line": 106,
+      "line": 115,
       "level": 3,
       "title": "3.1 模板与定位层"
     },
     {
-      "line": 130,
+      "line": 139,
       "level": 3,
       "title": "3.2 商品层"
     },
     {
-      "line": 148,
+      "line": 156,
       "level": 3,
       "title": "3.3 自动推进与阶段检查点"
     },
     {
-      "line": 163,
+      "line": 171,
       "level": 2,
       "title": "4. 品质与功能专精"
     },
     {
-      "line": 165,
+      "line": 173,
       "level": 3,
       "title": "4.1 品质唯一映射"
     },
     {
-      "line": 176,
+      "line": 184,
       "level": 3,
       "title": "4.2 功能方向与强度"
     },
     {
-      "line": 200,
+      "line": 208,
       "level": 2,
-      "title": "5. DerivedProjection与最近匹配"
+      "title": "5. 重量段、04.5功能模板与目标态SKU派生"
     },
     {
-      "line": 202,
+      "line": 210,
       "level": 3,
-      "title": "5.1 派生键"
+      "title": "5.1 目标态唯一匹配键"
     },
     {
-      "line": 214,
+      "line": 223,
       "level": 3,
-      "title": "5.2 目标拉力匹配"
+      "title": "5.2 01.x与SKU预览"
     },
     {
-      "line": 231,
+      "line": 229,
       "level": 3,
-      "title": "5.3 匹配记录"
+      "title": "5.3 匹配记录与失效"
     },
     {
-      "line": 252,
+      "line": 247,
+      "level": 3,
+      "title": "5.4 历史兼容"
+    },
+    {
+      "line": 250,
       "level": 2,
       "title": "6. Collection、Series、SKU与Model"
     },
     {
-      "line": 263,
+      "line": 262,
       "level": 3,
       "title": "6.1 Collection"
     },
     {
-      "line": 267,
+      "line": 266,
       "level": 3,
       "title": "6.2 Series"
     },
     {
-      "line": 282,
+      "line": 272,
       "level": 3,
       "title": "6.3 SKU Drawer"
     },
     {
-      "line": 298,
+      "line": 289,
       "level": 3,
       "title": "6.4 Model"
     },
     {
-      "line": 311,
+      "line": 304,
       "level": 3,
       "title": "6.5 PartConstraintSet、CandidateSearchRecipe与组件选择"
     },
     {
-      "line": 340,
+      "line": 333,
       "level": 3,
-      "title": "6.6 稳定身份、再生成对应与重量变更"
+      "title": "6.6 稳定身份、再生成对应与重量段变更"
     },
     {
-      "line": 349,
+      "line": 342,
+      "level": 3,
+      "title": "6.7 参数归属及允许操作"
+    },
+    {
+      "line": 355,
       "level": 2,
       "title": "7. Series不变量"
     },
     {
-      "line": 351,
+      "line": 357,
       "level": 3,
       "title": "7.1 硬不变量"
     },
     {
-      "line": 365,
+      "line": 370,
       "level": 3,
       "title": "7.2 方向签名"
     },
     {
-      "line": 382,
+      "line": 387,
       "level": 3,
       "title": "7.3 重量曲线"
     },
     {
-      "line": 394,
+      "line": 399,
       "level": 2,
       "title": "8. Patch"
     },
     {
-      "line": 461,
+      "line": 466,
       "level": 2,
       "title": "9. 兼容规则与Affinity Score"
     },
     {
-      "line": 463,
+      "line": 468,
       "level": 3,
       "title": "9.1 硬兼容"
     },
     {
-      "line": 476,
+      "line": 481,
       "level": 3,
       "title": "9.2 软Affinity Score"
     },
     {
-      "line": 511,
+      "line": 516,
       "level": 2,
       "title": "10. 参数、属性平衡预算与公式"
     },
     {
-      "line": 513,
+      "line": 518,
       "level": 3,
       "title": "10.1 参数元数据"
     },
     {
-      "line": 532,
+      "line": 537,
       "level": 3,
       "title": "10.2 通用规则操作"
     },
     {
-      "line": 542,
+      "line": 547,
       "level": 3,
       "title": "10.3 属性平衡预算"
     },
     {
-      "line": 560,
+      "line": 565,
       "level": 2,
       "title": "11. 词条与技术"
     },
     {
-      "line": 562,
+      "line": 567,
       "level": 3,
       "title": "11.1 词条分类"
     },
     {
-      "line": 571,
+      "line": 576,
       "level": 3,
       "title": "11.2 技术"
     },
     {
-      "line": 585,
+      "line": 590,
       "level": 3,
       "title": "11.2.1 性能定位摘要"
     },
     {
-      "line": 625,
+      "line": 630,
+      "level": 3,
+      "title": "11.2.2 项目词条、SKU局部副本与有效集合"
+    },
+    {
+      "line": 645,
       "level": 3,
       "title": "11.3 属性词条叠加"
     },
     {
-      "line": 672,
+      "line": 692,
       "level": 4,
       "title": "每个参数的确定执行顺序"
     },
     {
-      "line": 701,
+      "line": 721,
       "level": 3,
       "title": "11.4 双向百分比公式：OPEN-001决策已确认，待发布策略版本"
     },
     {
-      "line": 705,
+      "line": 725,
       "level": 4,
       "title": "表示、文案与归一化"
     },
     {
-      "line": 712,
+      "line": 732,
       "level": 4,
       "title": "数值边界"
     },
     {
-      "line": 719,
+      "line": 739,
       "level": 4,
       "title": "Severity、Gate与waiver"
     },
     {
-      "line": 732,
+      "line": 752,
       "level": 4,
       "title": "确定性数值模型"
     },
     {
-      "line": 756,
+      "line": 776,
       "level": 3,
       "title": "11.5 被动技能"
     },
     {
-      "line": 776,
+      "line": 796,
       "level": 2,
       "title": "12. 品质评分、稀有度与部位"
     },
     {
-      "line": 778,
+      "line": 798,
       "level": 3,
-      "title": "12.1 词条价值分与已选品质校验"
+      "title": "12.1 词条价值分、品质推荐与实际品质"
     },
     {
-      "line": 832,
+      "line": 857,
       "level": 3,
       "title": "12.2 稀有度"
     },
     {
-      "line": 846,
+      "line": 871,
       "level": 3,
       "title": "12.3 部位注册表"
     },
     {
-      "line": 854,
+      "line": 879,
       "level": 2,
       "title": "13. 校验与审批"
     },
     {
-      "line": 856,
+      "line": 881,
       "level": 3,
       "title": "13.1 三个人工关卡"
     },
     {
-      "line": 862,
+      "line": 887,
       "level": 3,
       "title": "13.2 严重级别"
     },
     {
-      "line": 875,
+      "line": 900,
       "level": 3,
       "title": "13.3 最低校验集合"
     },
     {
-      "line": 886,
+      "line": 911,
       "level": 2,
       "title": "14. 版本、快照与飞书治理"
     },
     {
-      "line": 960,
+      "line": 986,
       "level": 3,
       "title": "14.1 Patch权威账本与飞书Patch台账"
     },
     {
-      "line": 975,
+      "line": 1001,
       "level": 3,
       "title": "14.2 Patch状态、操作顺序、镜像同步与迁移契约"
     },
     {
-      "line": 1007,
+      "line": 1033,
       "level": 3,
       "title": "14.3 工作区 Revision 分层保留、归档与裁剪"
     },
     {
-      "line": 1011,
+      "line": 1037,
       "level": 4,
       "title": "14.3.1 对象边界"
     },
     {
-      "line": 1018,
+      "line": 1044,
       "level": 4,
       "title": "14.3.2 在线保留政策"
     },
     {
-      "line": 1031,
+      "line": 1057,
       "level": 4,
       "title": "14.3.3 分期与用户主动归档"
     },
     {
-      "line": 1044,
+      "line": 1070,
       "level": 4,
       "title": "14.3.4 允许删除的必要条件"
     },
     {
-      "line": 1057,
+      "line": 1083,
       "level": 4,
       "title": "14.3.5 确定性、幂等与审计证据"
     },
     {
-      "line": 1067,
+      "line": 1093,
       "level": 4,
       "title": "14.3.6 备份、归档与恢复边界"
     },
     {
-      "line": 1070,
+      "line": 1096,
       "level": 3,
       "title": "14.3.7 工作区整包保存边界（Issue #96）"
     },
     {
-      "line": 1094,
+      "line": 1120,
       "level": 3,
       "title": "14.4 Patch台账远端schema、哈希、协作、回读与补偿契约"
     },
     {
-      "line": 1131,
+      "line": 1157,
       "level": 4,
       "title": "14.4.1 规范化JSON与SHA-256契约"
     },
     {
-      "line": 1164,
+      "line": 1190,
       "level": 4,
       "title": "14.4.2 幂等、组级事务与镜像同步"
     },
     {
-      "line": 1184,
+      "line": 1210,
       "level": 4,
       "title": "14.4.3 协作事件原子compare-and-append"
     },
     {
-      "line": 1196,
+      "line": 1222,
       "level": 4,
       "title": "14.4.4 远端异常、恢复与Capability"
     },
     {
-      "line": 1223,
+      "line": 1249,
       "level": 4,
       "title": "14.4.5 Patch主体迁移与不可变revision"
     },
     {
-      "line": 1257,
+      "line": 1283,
       "level": 2,
       "title": "15. 工作台信息架构"
     },
     {
-      "line": 1277,
+      "line": 1303,
+      "level": 3,
+      "title": "15.1 项目数据Excel往返"
+    },
+    {
+      "line": 1314,
       "level": 2,
       "title": "16. 部署基线"
     },
     {
-      "line": 1292,
+      "line": 1329,
       "level": 2,
       "title": "17. 当前实现迁移"
     },
     {
-      "line": 1294,
+      "line": 1331,
+      "level": 3,
+      "title": "目标Schema v23：重量段SKU与词条派生"
+    },
+    {
+      "line": 1337,
       "level": 3,
       "title": "阶段1：兼容基础"
     },
     {
-      "line": 1301,
+      "line": 1344,
       "level": 3,
       "title": "阶段2：商品身份"
     },
     {
-      "line": 1308,
+      "line": 1351,
       "level": 3,
       "title": "阶段3：匹配与兼容"
     },
     {
-      "line": 1315,
+      "line": 1358,
       "level": 3,
       "title": "阶段4：词条与技术"
     },
     {
-      "line": 1323,
+      "line": 1366,
       "level": 3,
       "title": "阶段5：发布治理"
     },
     {
-      "line": 1330,
+      "line": 1373,
       "level": 2,
       "title": "18. 必须具备的回归测试"
     },
     {
-      "line": 1332,
+      "line": 1375,
       "level": 3,
       "title": "18.1 匹配"
     },
     {
-      "line": 1340,
+      "line": 1382,
       "level": 3,
       "title": "18.2 层级与身份"
     },
     {
-      "line": 1349,
+      "line": 1391,
       "level": 3,
       "title": "18.3 Patch"
     },
     {
-      "line": 1358,
+      "line": 1400,
       "level": 3,
       "title": "18.4 兼容"
     },
     {
-      "line": 1365,
+      "line": 1407,
       "level": 3,
       "title": "18.5 词条"
     },
     {
-      "line": 1382,
+      "line": 1428,
       "level": 3,
-      "title": "18.6 工作区 Revision 保留"
+      "title": "18.6 项目数据与迁移"
     },
     {
-      "line": 1395,
+      "line": 1435,
+      "level": 3,
+      "title": "18.7 工作区 Revision 保留"
+    },
+    {
+      "line": 1448,
       "level": 2,
       "title": "19. Agent交付检查表"
     },
     {
-      "line": 1412,
+      "line": 1467,
       "level": 2,
       "title": "20. 未决事项登记表"
     },
     {
-      "line": 1432,
+      "line": 1487,
       "level": 3,
       "title": "OPEN-001：降低型词条叠加"
     },
     {
-      "line": 1456,
+      "line": 1511,
       "level": 3,
       "title": "OPEN-002：性能定位派生语义（已决，待实现）"
     },
     {
-      "line": 1460,
+      "line": 1515,
       "level": 3,
       "title": "OPEN-003：扩展部位启用时间"
     },
     {
-      "line": 1477,
+      "line": 1532,
       "level": 3,
       "title": "OPEN-011：工作区revision归档与裁剪启用"
     },
     {
-      "line": 1483,
+      "line": 1538,
       "level": 3,
       "title": "OPEN-004：Patch属性偏移阈值"
     },
     {
-      "line": 1487,
+      "line": 1542,
       "level": 4,
       "title": "作用域、粒度与策略版本"
     },
     {
-      "line": 1513,
+      "line": 1568,
       "level": 4,
       "title": "计量、端点与累计"
     },
     {
-      "line": 1529,
+      "line": 1584,
       "level": 4,
       "title": "Severity、Gate与“保留意见通过”"
     },
     {
-      "line": 1558,
+      "line": 1613,
       "level": 4,
       "title": "基底变化、Rebase与STALE"
     },
     {
-      "line": 1570,
+      "line": 1625,
       "level": 4,
       "title": "迁移、Trace与Snapshot冻结"
     },
     {
-      "line": 1583,
+      "line": 1638,
       "level": 3,
       "title": "OPEN-008：ConfigIdPolicy数字区间与命名规则"
     },
     {
-      "line": 1587,
+      "line": 1642,
       "level": 4,
       "title": "对象区间与作用域"
     },
     {
-      "line": 1642,
+      "line": 1697,
       "level": 4,
       "title": "`configNameKey`格式与唯一性"
     },
     {
-      "line": 1656,
+      "line": 1711,
       "level": 4,
       "title": "Reservation ledger、生命周期与权限"
     },
     {
-      "line": 1672,
+      "line": 1727,
       "level": 4,
       "title": "Upsert、分裂命中与多目标行为"
     },
     {
-      "line": 1681,
+      "line": 1736,
       "level": 4,
       "title": "历史与未知ID导入"
     },
     {
-      "line": 1716,
+      "line": 1771,
       "level": 3,
       "title": "20.1 价值分自动定价与PricingPolicy"
     },
     {
-      "line": 1807,
+      "line": 1864,
       "level": 3,
       "title": "20.2 OPEN-009：AI与发布工作流治理策略"
     },
     {
-      "line": 1811,
+      "line": 1868,
       "level": 4,
       "title": "20.2.1 分期与责任边界"
     },
     {
-      "line": 1823,
+      "line": 1880,
       "level": 4,
       "title": "20.2.2 `aiRefreshPolicy`"
     },
     {
-      "line": 1853,
+      "line": 1910,
       "level": 4,
       "title": "20.2.3 `aiModelRecordPolicy`"
     },
     {
-      "line": 1864,
+      "line": 1921,
       "level": 4,
       "title": "20.2.4 `aiReviewPolicy`"
     },
     {
-      "line": 1876,
+      "line": 1933,
       "level": 4,
       "title": "20.2.5 `separationOfDutiesPolicy`与Capability"
     },
     {
-      "line": 1886,
+      "line": 1943,
       "level": 4,
       "title": "20.2.6 飞书审批与规则生效"
     },
     {
-      "line": 1903,
+      "line": 1960,
       "level": 4,
       "title": "20.2.7 工作区单写锁、失败恢复与轻量操作记录"
     },
     {
-      "line": 1924,
+      "line": 1981,
       "level": 4,
       "title": "20.2.8 最低验收"
     },
     {
-      "line": 1937,
+      "line": 1994,
       "level": 2,
       "title": "21. Model五维图预览"
     },
     {
-      "line": 1939,
+      "line": 1996,
       "level": 3,
       "title": "21.1 定位与权威来源"
     },
     {
-      "line": 1962,
+      "line": 2019,
       "level": 3,
       "title": "21.2 正式五轴输入、方向与变换"
     },
     {
-      "line": 2005,
+      "line": 2062,
       "level": 3,
       "title": "21.3 W重量段、顶点集合与逐件曲线"
     },
     {
-      "line": 2197,
+      "line": 2256,
       "level": 3,
       "title": "21.4 展示档位与源文档歧义"
     },
     {
-      "line": 2210,
+      "line": 2269,
       "level": 3,
       "title": "21.5 建议数据结构"
     },
     {
-      "line": 2332,
+      "line": 2405,
       "level": 3,
       "title": "21.6 必测场景"
     },
     {
-      "line": 2366,
+      "line": 2439,
       "level": 3,
       "title": "21.7 既有正式定义迁移与新发布门禁"
     },
     {
-      "line": 2407,
+      "line": 2480,
       "level": 2,
       "title": "22. 五维图双模式叠加比较"
     },
     {
-      "line": 2411,
+      "line": 2484,
       "level": 3,
       "title": "22.1 模式A：竿轮线钓组匹配"
     },
     {
-      "line": 2442,
+      "line": 2515,
       "level": 3,
       "title": "22.2 模式B：多装备比较"
     },
     {
-      "line": 2471,
+      "line": 2544,
       "level": 3,
       "title": "22.3 100上限与超顶点比较"
     },
     {
-      "line": 2481,
+      "line": 2554,
       "level": 3,
       "title": "22.4 数据契约"
     },
     {
-      "line": 2502,
+      "line": 2575,
       "level": 3,
       "title": "22.5 双模式必测场景"
     },
     {
-      "line": 2523,
+      "line": 2596,
       "level": 2,
       "title": "23. 系列甘特图与AI评估"
     },
     {
-      "line": 2525,
+      "line": 2598,
       "level": 3,
       "title": "23.1 “候选池”术语迁移"
     },
     {
-      "line": 2548,
+      "line": 2621,
       "level": 3,
       "title": "23.2 AI评估与建议的定位"
     },
     {
-      "line": 2589,
+      "line": 2662,
       "level": 3,
       "title": "23.3 建议到动作的安全链路"
     },
     {
-      "line": 2603,
+      "line": 2676,
       "level": 3,
       "title": "23.4 可追溯记录"
     },
     {
-      "line": 2624,
+      "line": 2697,
       "level": 3,
       "title": "23.5 界面入口与视觉分层"
     },
     {
-      "line": 2639,
+      "line": 2712,
       "level": 3,
       "title": "23.6 AI服务与数据边界"
     },
     {
-      "line": 2643,
+      "line": 2716,
       "level": 4,
       "title": "23.6.1 Provider、不可变模型描述与降级"
     },
     {
-      "line": 2668,
+      "line": 2741,
       "level": 4,
       "title": "23.6.2 可执行出站Schema"
     },
     {
-      "line": 2745,
+      "line": 2818,
       "level": 4,
       "title": "23.6.3 别名、脱敏与发送前检查"
     },
     {
-      "line": 2798,
+      "line": 2871,
       "level": 4,
       "title": "23.6.4 字段级保留与删除矩阵"
     },
     {
-      "line": 2810,
+      "line": 2883,
       "level": 4,
       "title": "23.6.5 硬准入与软体验阈值"
     },
     {
-      "line": 2816,
+      "line": 2889,
       "level": 4,
       "title": "23.6.6 权限与动作边界"
     },
     {
-      "line": 2820,
+      "line": 2893,
       "level": 3,
       "title": "23.7 必测场景"
     },
     {
-      "line": 2848,
+      "line": 2923,
       "level": 3,
       "title": "OPEN-006：AI供应方与数据出网策略"
     },
     {
-      "line": 2853,
+      "line": 2928,
       "level": 2,
       "title": "24. 交互与后端统一需求契约"
     },
     {
-      "line": 2857,
+      "line": 2932,
       "level": 3,
       "title": "24.1 共同底座"
     },
     {
-      "line": 2958,
+      "line": 3037,
       "level": 3,
       "title": "24.2 R1：钓具系列甘特图"
     },
     {
-      "line": 3000,
+      "line": 3079,
+      "level": 3,
+      "title": "24.2.1 Part编辑、重量段SKU预览与词条动作"
+    },
+    {
+      "line": 3104,
       "level": 3,
       "title": "24.3 R2：稳定标识、面包屑和权限"
     },
     {
-      "line": 3019,
+      "line": 3123,
       "level": 3,
       "title": "24.4 R3：“生成 Model 候选”"
     },
     {
-      "line": 3051,
+      "line": 3157,
       "level": 3,
       "title": "24.5 R4：统一Trace"
     },
     {
-      "line": 3081,
+      "line": 3187,
       "level": 3,
       "title": "24.6 R5：五维图"
     },
     {
-      "line": 3125,
+      "line": 3235,
       "level": 3,
       "title": "24.7 R6：AIRecommendation"
     },
     {
-      "line": 3156,
+      "line": 3266,
       "level": 3,
       "title": "24.8 R7：AI转Model Patch草稿"
     },
     {
-      "line": 3168,
+      "line": 3278,
       "level": 3,
       "title": "24.9 R8：AI转飞书规则修改草稿"
     },
     {
-      "line": 3215,
+      "line": 3325,
       "level": 3,
       "title": "24.10 R9：ValidationIssue与ActionLink"
     },
     {
-      "line": 3295,
+      "line": 3405,
       "level": 3,
       "title": "24.11 R10：Rebase、UpgradeCandidate与Snapshot"
     },
     {
-      "line": 3334,
+      "line": 3444,
       "level": 3,
       "title": "24.12 R11：状态与文案"
     },
     {
-      "line": 3370,
+      "line": 3480,
       "level": 3,
       "title": "24.13 R12：版本化策略与完成门槛"
     },
     {
-      "line": 3382,
+      "line": 3492,
       "level": 3,
       "title": "24.14 完成标准"
     },
     {
-      "line": 3385,
+      "line": 3495,
       "level": 2,
       "title": "25. 内网部署、飞书身份与配置表交付"
     },
     {
-      "line": 3387,
+      "line": 3499,
       "level": 3,
       "title": "25.1 分期边界"
     },
     {
-      "line": 3407,
+      "line": 3519,
       "level": 3,
       "title": "25.2 本机配置目录与环境/渠道边界"
     },
     {
-      "line": 3441,
+      "line": 3553,
       "level": 3,
       "title": "25.3 发布末端两步"
     },
     {
-      "line": 3491,
+      "line": 3603,
       "level": 3,
       "title": "25.4 TOML关系校验"
     },
     {
-      "line": 3514,
+      "line": 3626,
       "level": 3,
       "title": "25.5 导出场景与验收"
     }

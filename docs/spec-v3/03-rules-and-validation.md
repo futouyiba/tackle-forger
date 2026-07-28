@@ -361,8 +361,8 @@ SKU每次有效词条或Part功能定位变化后立即重算最终评分，并�
 YsEKw历史revision与既有v22策略可能把100归入S；它们只服务历史证据和Snapshot重放。目标v23策略必须发布`[65,100)`并使100无推荐；源表或旧Draft仍宣称100属于S时产生`QUALITY_RANGE_SOURCE_OUTDATED`，不得发布为目标态新策略。
 
 ```ts
-interface ModelAffixValueAssessment {
-  modelRevisionId: string;
+interface SkuAffixValueAssessment {
+  skuRevisionId: string;
   recommendedQualityId: string | null;
   selectedQualityId: string;
   qualityOverrideState: "MATCHED" | "OVERRIDDEN" | "NO_RECOMMENDATION";
@@ -438,7 +438,7 @@ Severity描述问题强度，Gate描述受影响关口，State描述当前处理
 - 模板：规则操作、轨迹、边界和预算；
 - 兼容：硬规则、条件要求和Affinity解释；
 - Series：身份、核心词条、方向签名和重量曲线；
-- SKU：最近匹配、共享基底和重复规格；
+- SKU：04.5六键唯一匹配、有效词条派生、同Part同重量段重复规格和失效恢复；Schema v9/v22历史回放另行校验冻结的最近匹配证据；
 - Model：部件、技术、词条、Patch和杆轮线闭环；
 - 发布：目标Gate无OPEN的BLOCKER/ERROR、warning已确认、版本链完整、快照哈希成功；被策略允许且有效的ERROR waiver必须冻结到发布证据。
 

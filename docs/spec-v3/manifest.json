@@ -20,7 +20,7 @@
       "canonical_structure_change"
     ]
   },
-  "preamble": "# Tackle Forger 产品与领域开发规范 v3\n\n> 状态：**唯一权威规范 / Canonical**  \n>首次定稿：2026-07-21  \n> 最后修订：2026-07-27\n> 适用对象：产品设计、领域建模、前后端开发、数据迁移、测试与代码审查  \n> 源数据参考：《淡水路亚杆轮线装备设计.xlsx》\n\n",
+  "preamble": "# Tackle Forger 产品与领域开发规范 v3\n\n> 状态：**唯一权威规范 / Canonical**  \n>首次定稿：2026-07-21  \n> 最后修订：2026-07-28\n> 适用对象：产品设计、领域建模、前后端开发、数据迁移、测试与代码审查  \n> 源数据参考：《淡水路亚杆轮线装备设计.xlsx》\n\n",
   "modules": [
     {
       "id": "00",
@@ -70,7 +70,7 @@
       ],
       "title": "兼容、数值、词条、品质与校验",
       "path": "docs/spec-v3/03-rules-and-validation.md",
-      "sha256": "e0a869f446a394282dc1977e01faceeb027e1cc9788f30074b0fd2a33afb5774"
+      "sha256": "25d3b5ab0f204c76df2e460a1afd67ce7ed7b2e3b6dcd6a99055c6ba4c24274f"
     },
     {
       "id": "04",
@@ -84,7 +84,7 @@
       ],
       "title": "版本、快照、飞书、工作区与回归",
       "path": "docs/spec-v3/04-persistence-and-lifecycle.md",
-      "sha256": "0d253bd7eb73db53a4a8bdf8f2ffc5211822cedc56672eb03bd20052fdea6fbc"
+      "sha256": "0859820bba7d3d09939c3af8f3311c39e4d5670dc4220356ac832d673f893418"
     },
     {
       "id": "05",
@@ -107,7 +107,7 @@
       ],
       "title": "五维图、比较、甘特图与 AI 建议",
       "path": "docs/spec-v3/06-visualization-and-ai.md",
-      "sha256": "bfc3bf8ba8ef7fc27193aa85990a0852ca081e83b2b56f2154dabffde3be305e"
+      "sha256": "89b78c3f246020f04ef363863e1b28a9eaca21ef9789e78a93c70b57153d1135"
     },
     {
       "id": "07",
@@ -117,7 +117,7 @@
       ],
       "title": "交互与后端统一需求契约",
       "path": "docs/spec-v3/07-interaction-contract.md",
-      "sha256": "adefadd3751ff9126956bb8601c9936d67f39de9998c150be1eb215ae3543f0f"
+      "sha256": "3e7cab48f865e8c515714ccd248f3d59d1a96983e2ce9ccaeb3b161ba10dec4d"
     },
     {
       "id": "08",

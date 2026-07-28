@@ -2,7 +2,7 @@
   "format": "tackle-v3-open-registry/v1",
   "source": {
     "path": "docs/spec-v3",
-    "sha256": "c83a073ab5b2db1e23b1c7acf62bea521fbe32632e3a46a31d8215792090d235"
+    "sha256": "86ad8ce693f3847ab3efc840f9e15ff4a000f1d3b9aed3ccb99a112ad7873a3d"
   },
   "entries": [
     {
@@ -16,8 +16,8 @@
         "11.4",
         "14"
       ],
-      "startLine": 38,
-      "endLine": 61,
+      "startLine": 40,
+      "endLine": 63,
       "contentSha256": "9c677735a703f0fdd1c114ee730cb3d6bb7bd185a1cf8cd02dc5df585eae12fc"
     },
     {
@@ -28,8 +28,8 @@
       "subsection": "OPEN-002",
       "title": "OPEN-002：性能定位派生语义（已决，待实现）",
       "dependencies": [],
-      "startLine": 62,
-      "endLine": 65,
+      "startLine": 64,
+      "endLine": 67,
       "contentSha256": "ad66c0e06fa0d21ce066d04203c74c4218677630c1d41cc3ba6f479beeacafea"
     },
     {
@@ -40,8 +40,8 @@
       "subsection": "OPEN-003",
       "title": "OPEN-003：扩展部位启用时间",
       "dependencies": [],
-      "startLine": 66,
-      "endLine": 82,
+      "startLine": 68,
+      "endLine": 84,
       "contentSha256": "eb7ca3a961f7099d530441a4b10f7145f5f2fd0482f652a4c324cc1350e61624"
     },
     {
@@ -54,9 +54,9 @@
       "dependencies": [
         "14"
       ],
-      "startLine": 89,
-      "endLine": 188,
-      "contentSha256": "784a993012cd5cecaf0b74c68c00a673ae375847bcbbf72f5496bc6dfd0768ac"
+      "startLine": 91,
+      "endLine": 190,
+      "contentSha256": "8672d9d8c8978a2d21ca995cdf09aa36ef1e046c0a7900d46d92287a2aabd1bf"
     },
     {
       "id": "OPEN-005",
@@ -71,8 +71,8 @@
         "25.3"
       ],
       "startLine": 1,
-      "endLine": 470,
-      "contentSha256": "c9ddbf0f476eda9ab0e111d15cb71a84b7dedf0ca96d149264dbc2ee65b4c150"
+      "endLine": 486,
+      "contentSha256": "b0a0d53801a3fad31fe7473f64c4dcf04e6f21010e8d1990728eaaaa0f8b35e1"
     },
     {
       "id": "OPEN-006",
@@ -82,8 +82,8 @@
       "subsection": "23.6",
       "title": "23.6 AI服务与数据边界",
       "dependencies": [],
-      "startLine": 703,
-      "endLine": 883,
+      "startLine": 719,
+      "endLine": 899,
       "contentSha256": "580842a5fc1203998007cac0a760d39fcd973071591b58d4f425f92d1ca7b50e"
     },
     {
@@ -94,9 +94,9 @@
       "subsection": "20.1",
       "title": "20.1 价值分自动定价与PricingPolicy",
       "dependencies": [],
-      "startLine": 322,
-      "endLine": 412,
-      "contentSha256": "2e02cefa4038ca2d7e211d90fc29b1f39ce2fd8660f159ffa40458b0355f530b"
+      "startLine": 324,
+      "endLine": 416,
+      "contentSha256": "ec108b5048027c54fda5787c9230dcebd5ff9eb02e3e3a541ebaa9e2c5cb4661"
     },
     {
       "id": "OPEN-008",
@@ -108,8 +108,8 @@
       "dependencies": [
         "25"
       ],
-      "startLine": 189,
-      "endLine": 321,
+      "startLine": 191,
+      "endLine": 323,
       "contentSha256": "bebe224fe538c6569a81ba375b4bf5530fe712472f3738d6fb8ee698fb9f7bed"
     },
     {
@@ -122,8 +122,8 @@
       "dependencies": [
         "23.6"
       ],
-      "startLine": 413,
-      "endLine": 543,
+      "startLine": 417,
+      "endLine": 547,
       "contentSha256": "66e26461dbafa00519b1625d79d6b1fa28a3e8c9b814d9b84d2809a37defb121"
     },
     {
@@ -136,8 +136,8 @@
       "dependencies": [
         "20.2"
       ],
-      "startLine": 209,
-      "endLine": 371,
+      "startLine": 210,
+      "endLine": 372,
       "contentSha256": "a67c304a053717c3e96956a4342a62c48c06d0d335d98c8dcc5aa9aaea3f0540"
     },
     {
@@ -150,8 +150,8 @@
       "dependencies": [
         "14.3"
       ],
-      "startLine": 83,
-      "endLine": 88,
+      "startLine": 85,
+      "endLine": 90,
       "contentSha256": "bc213c1483b555f1edd9a9cb1d384521f51b4835a7b31bb63bb9f0db3ee90770"
     }
   ]

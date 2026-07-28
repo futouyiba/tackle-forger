@@ -359,7 +359,15 @@ interface ModelFiveAxisPreview {
     seriesId: string;
     skuId: string;
     skuRevisionId: string;
-    selectorVersion: "projection-reference/current-sku-frozen-match/v1";
+    selectorVersion:
+      | "projection-reference/current-sku-frozen-match/v1"
+      | "projection-reference/v23-function-template-frozen/v1";
+    partInputs: {
+      partId: string;
+      weightBandId: string;
+      functionTemplateRef: string;
+      functionTemplateInputFingerprint: string;
+    }[];
   };
   projectionReferenceSetHash: string;
   projectionReferenceSeries: {
@@ -369,11 +377,17 @@ interface ModelFiveAxisPreview {
     projectionMatchRevisionId: string | null;
     projectionId: string | null;
     projectionRevisionId: string | null;
+    partId: string | null;
+    weightBandId: string | null;
+    functionTemplateRef: string | null;
+    functionTemplateInputFingerprint: string | null;
     metrics: FiveAxisMetric[];
   }[];
   inputHash: string;
 }
 ```
+
+同一`projectionReferenceSeries`条目必须由`selectorVersion`决定闭合形状：历史选择器要求四个Projection字段并禁止四个v23字段；v23选择器要求`partId + weightBandId + functionTemplateRef + functionTemplateInputFingerprint`并禁止四个Projection字段。`partInputs`在历史选择器下必须为空，在v23选择器下按稳定Part顺序完整冻结。不得把两种引用混装或用全`null`占位通过校验。
 
 `axisId`由版本化定义提供，不得在前端联合类型、数据库列或图表组件中写死。同一个预览中的每条曲线必须与冻结的`fiveAxisDefinitionId + fiveAxisDefinitionVersion`逐项对应，缺轴按第22节状态语义返回，不能临时补0。
 
@@ -463,7 +477,7 @@ interface FiveAxisDefinitionDispositionCatalogRevision {
 - 旧定义原记录、publicationState、payload、definitionHash、VertexSet及引用它的ConfigurationSnapshot全部原样只读保留；不得通过改写旧定义状态或重算hash完成迁移。
 - 迁移器先解析当前目录头并计算全部已知定义应有的完整`entries`：不符合本节契约的旧定义为`LEGACY_SNAPSHOT_ONLY`。若当前头已经逐项表达相同`entries`，重复运行必须直接返回该现有修订，不得把当前头再次作为前驱追加等价修订；只有目标`entries`不同才以当前头为前驱构建后继修订。旧Snapshot继续按其冻结定义、顶点、公式和投影证据读取、审计及重放，内容/hash不变；该处置不产生旧Snapshot UpgradeCandidate。
 - `LEGACY_SNAPSHOT_ONLY`定义不得创建任何新正式ConfigurationSnapshot，不得作为新UpgradeCandidate的目标定义，也不得仅因原字段仍为`PUBLISHED`而通过发布检查。草稿预览必须明确标记legacy，不能冒充OPEN-005正式结果。
-- 新定义只有同时声明`semanticContractVersion="five-axis/open005-2026-07-23/v1"`、`hashInputSchemaVersion="five-axis-hash-input/v1"`、`projectionReferenceSelectorVersion="projection-reference/current-sku-frozen-match/v1"`，通过第21、22和24.6节完整Schema/固定向量校验，并取得唯一`FORMAL_CURRENT`处置后，才可服务新正式Snapshot。
+- 新定义只有同时声明`semanticContractVersion="five-axis/open005-2026-07-23/v1"`、`hashInputSchemaVersion="five-axis-hash-input/v1"`并使用与目标Workspace Schema一致的选择器，通过第21、22和24.6节完整Schema/固定向量校验，取得唯一`FORMAL_CURRENT`处置后，才可服务新正式Snapshot。Schema v23的新正式Snapshot必须使用`projection-reference/v23-function-template-frozen/v1`；`projection-reference/current-sku-frozen-match/v1`只允许服务v9/v22历史Snapshot，进入v23目录时其定义只能是`LEGACY_SNAPSHOT_ONLY`或`SUPERSEDED`。
 - 在不存在唯一合法`FORMAL_CURRENT`定义、处置记录缺失/冲突、迁移未完成或新定义任一必需策略版本不可校验时，发布路径返回`FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE`并fail-closed；不得回退旧`PUBLISHED`定义、种子定义或无五维证据Snapshot。
 - 新定义发布后，旧定义可继续保持`LEGACY_SNAPSHOT_ONLY`；此前符合本契约的正式定义被替换时，必须在同一个后继目录修订中把旧项写为`SUPERSEDED`、把新项写为唯一`FORMAL_CURRENT`。新定义、完整后继目录修订和目录头条件更新必须在一个数据库事务提交；并发头冲突方回滚并基于新头重算。任何替换都不修改历史定义、历史目录修订或Snapshot。
 - 新正式Snapshot必须冻结其解析使用的`catalogRevisionId + catalogHash`以及命中的处置项；历史Snapshot没有该字段时仍按原冻结定义重放，不得补写。仅目录证据revision变化而命中的定义及全部五维语义输入未变化时，不得单独造成五维UpgradeCandidate。

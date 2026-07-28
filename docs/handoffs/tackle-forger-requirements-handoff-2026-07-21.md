@@ -84,7 +84,7 @@
 
 Model右侧预览层包含可配置五维图。正式五轴及顺序固定为拉力、耐久、抛投、感度、操控；Model以结算后的`modelFinalPullKg`进入版本化W重量段，竿、轮、线分别绘制，不生成最弱环节汇总线。多装备比较允许混合部位2–5件，轮线抛投按比较顺序继承第一根竿；无竿时为`not_applicable`，缺失或错误不得补0。正式分封顶100，未封顶`comparisonScore`按真实比例绘制到外圈之外。
 
-Series基准只采用`projection_reference`并输出竿、轮、线三条独立结构投影参考线。引用必须由`projection-reference/current-sku-frozen-match/v1`从Snapshot锚定的SKU revision逐部位唯一选择，冻结ProjectionMatch和projection ID/revision、选择器版本、缺失状态及`projectionReferenceSetHash`；不得按默认SKU、查询顺序、同W段其他投影或页面上下文回退。顶点与候选哈希使用`five-axis-hash-input/v1`的JCS/UTF-8/SHA-256闭集契约。旧五维定义和Snapshot只读保留；符合OPEN-005的新定义成为唯一`FORMAL_CURRENT`前，新正式Snapshot必须fail-closed。
+Series基准只采用`projection_reference`并输出竿、轮、线独立结构参考线。Schema v23必须由`projection-reference/v23-function-template-frozen/v1`从Snapshot锚定的SKU revision读取冻结的`partId + weightBandId + functionTemplateRef + 输入指纹`；`projection-reference/current-sku-frozen-match/v1`与ProjectionMatch只用于v9/v22历史Snapshot。两者都必须冻结选择器版本、逐部位缺失状态及`projectionReferenceSetHash`，不得按默认SKU、查询顺序、同W段其他引用或页面上下文回退。顶点与候选哈希使用`five-axis-hash-input/v1`的JCS/UTF-8/SHA-256闭集契约。旧五维定义和Snapshot只读保留；符合OPEN-005且选择器与Workspace Schema一致的新定义成为唯一`FORMAL_CURRENT`前，新正式Snapshot必须fail-closed。
 
 “Model预览”和“AI评估与建议”共用右侧层。`AIRecommendation` 记录证据、影响对象、影响属性、动作、建议Patch、生成时间和规则版本。
 

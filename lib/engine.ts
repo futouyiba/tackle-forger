@@ -203,9 +203,12 @@ export function renameFormulaIdentifier(
   const tokens = lexFormula(expression);
   let cursor = 0;
   let renamed = "";
-  for (const token of tokens) {
+  for (const [index, token] of tokens.entries()) {
     renamed += expression.slice(cursor, token.start);
-    renamed += token.value === oldIdentifier ? newIdentifier : token.value;
+    const isFunctionCall = tokens[index + 1]?.value === "(";
+    renamed += token.value === oldIdentifier && !isFunctionCall
+      ? newIdentifier
+      : token.value;
     cursor = token.end;
   }
   return renamed + expression.slice(cursor);

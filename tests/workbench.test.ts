@@ -6,6 +6,7 @@ import {
   FormulaSyntaxError,
   generateCandidatesForRecipe,
   publishCandidate,
+  renameFormulaIdentifier,
   scoreAffixes,
   validateFormula,
 } from "../lib/engine";
@@ -103,6 +104,29 @@ test("共享公式 lexer 保持合法空白、操作符、函数与变量语义"
     (error: unknown) =>
       error instanceof FormulaSyntaxError && error.position === 8,
   );
+});
+
+test("formula identifier rename preserves builtin call sites and migrates variables", () => {
+  const cases = [
+    { builtin: "min", formula: "min(current, min)", expected: "min(current, force)", force: 3, result: 2 },
+    { builtin: "max", formula: "max(current, max)", expected: "max(current, force)", force: 3, result: 3 },
+    { builtin: "abs", formula: "abs(abs)", expected: "abs(force)", force: -3, result: 3 },
+    { builtin: "round", formula: "round(round, 0)", expected: "round(force, 0)", force: 2.6, result: 3 },
+    { builtin: "sqrt", formula: "sqrt(sqrt)", expected: "sqrt(force)", force: 9, result: 3 },
+  ];
+  for (const entry of cases) {
+    const renamed = renameFormulaIdentifier(
+      entry.formula,
+      entry.builtin,
+      "force",
+    );
+    assert.equal(renamed, entry.expected);
+    assert.doesNotThrow(() => validateFormula(renamed));
+    assert.equal(
+      evaluateFormula(renamed, { current: 2, force: entry.force }),
+      entry.result,
+    );
+  }
 });
 
 test("受约束配方生成并发布规范 ID", () => {

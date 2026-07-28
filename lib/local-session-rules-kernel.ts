@@ -98,6 +98,16 @@ export function renameLocalSessionParameterKey(
   assertLocalParameterKey(document, parameterId, nextKey);
   const previousKey = parameter.key;
   if (previousKey === nextKey) return document;
+  for (const template of document.templates) {
+    if (
+      Object.hasOwn(template.values, previousKey)
+      && Object.hasOwn(template.values, nextKey)
+    ) {
+      throw new TypeError(
+        `模板“${template.name}”已同时包含参数键“${previousKey}”与“${nextKey}”；重命名已拒绝。`,
+      );
+    }
+  }
   const templates = document.templates.map((template) => {
     if (!Object.hasOwn(template.values, previousKey)) return template;
     const values = Object.fromEntries(

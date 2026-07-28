@@ -475,3 +475,27 @@ test("parameter rename rejects collisions, invalid/reserved keys and invalid for
   );
   assert.equal(document.parameters[0]?.key, "pull");
 });
+
+test("parameter rename rejects template target-key collisions without data or history loss", () => {
+  for (const existing of [7, "existing"]) {
+    const document = fixture();
+    document.templates[0] = {
+      ...document.templates[0]!,
+      values: { pull: 3, force: existing },
+    };
+    const frozen = structuredClone(document);
+    const session = createLocalSessionModel(
+      { kind: "temporary_workspace" },
+      document,
+    );
+    assert.throws(
+      () => renameLocalSessionParameterKey(document, "p-pull", "force"),
+      /已同时包含参数键/,
+    );
+    assert.deepEqual(document, frozen);
+    assert.deepEqual(session.document, frozen);
+    assert.equal(session.history.current.sequence, 0);
+    assert.deepEqual(session.history.undo, []);
+    assert.deepEqual(session.history.redo, []);
+  }
+});

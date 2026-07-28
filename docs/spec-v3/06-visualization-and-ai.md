@@ -248,6 +248,14 @@ projectionReferenceSetHash = H({
 
 `references`固定按rod、reel、line顺序；`missing`条目的五个引用字段全部为JSON `null`，`error`保留能够安全验证的冻结字段并以错误码另存Trace，错误码不进入本闭集hash。任一锚点、状态或非null引用字段变化都必须改变hash；相同闭集输入必须得到相同hash。发布`FORMAL_CURRENT`前必须提供固定向量，至少覆盖单Part、三Part、缺Part、断裂引用、指纹不符、六键多匹配、相同输入重放和仅`baselineSnapshotId`变化；固定向量未通过时返回`FIVE_AXIS_PROJECTION_REFERENCE_VECTOR_MISMATCH`。
 
+规范固定向量`projection-reference/v23-function-template-frozen/vector-001`冻结如下。Canonical JSON为下列代码块内容本身：单行、无前后空白、无末尾换行、无BOM，按UTF-8字节计算SHA-256；字段顺序已经是JCS输出，不得重新选择示例值：
+
+```json
+{"anchor":{"baselineSnapshotId":"snap-001","seriesId":"series-001","skuId":"sku-001","skuRevisionId":"sku-rev-001"},"kind":"projection_reference_set","references":[{"functionTemplateInputFingerprint":"fp-rod-001","functionTemplateRef":"ft-rod-001","functionTemplateRevisionId":"ft-rev-001","itemPartId":"rod","partId":"part-rod-001","state":"available","weightBandId":"W01"},{"functionTemplateInputFingerprint":null,"functionTemplateRef":null,"functionTemplateRevisionId":null,"itemPartId":"reel","partId":null,"state":"missing","weightBandId":null},{"functionTemplateInputFingerprint":null,"functionTemplateRef":null,"functionTemplateRevisionId":null,"itemPartId":"line","partId":null,"state":"missing","weightBandId":null}],"schemaVersion":"five-axis-hash-input/v1","selectorVersion":"projection-reference/v23-function-template-frozen/v1"}
+```
+
+期望小写十六进制摘要为`d7221f605b72dfcd97f6d00002d206cf4d308490c3599f64a24d3f239f61d600`。任何实现若不能逐字复现该摘要，不得发布或使用v23 `FORMAL_CURRENT`定义；其余必测向量必须沿用同一闭集Schema和编码规则。
+
 历史`projection-reference/current-sku-frozen-match/v1`的选择算法固定为：
 
 1. Model详情和钓组模式以待查看Snapshot冻结的`seriesId + skuId + skuRevisionId`作为引用锚点；不得读取Model当前草稿、Series默认SKU、页面上下文或查询结果第一项。

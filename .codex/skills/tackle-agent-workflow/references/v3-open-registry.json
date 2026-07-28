@@ -2,7 +2,7 @@
   "format": "tackle-v3-open-registry/v1",
   "source": {
     "path": "docs/spec-v3",
-    "sha256": "fc85c1b0835a1ed06d53a298de197de50aa9c7ed43e81c1680ae73d3f6d26846"
+    "sha256": "7f2672bcf9021a9f7dea08695eef622c17ddb05d585f4582e1ebf3efc8ec78ff"
   },
   "entries": [
     {
@@ -71,8 +71,8 @@
         "25.3"
       ],
       "startLine": 1,
-      "endLine": 522,
-      "contentSha256": "7854a925efcef2da8ac428651eb8b27f5727d2e3429feee890e5fab745f8b1a9"
+      "endLine": 530,
+      "contentSha256": "4dbf61c2c6298cfa1e8ad869657fce82a2464affb42f923d4d48843ce2753ded"
     },
     {
       "id": "OPEN-006",
@@ -82,8 +82,8 @@
       "subsection": "23.6",
       "title": "23.6 AI服务与数据边界",
       "dependencies": [],
-      "startLine": 755,
-      "endLine": 935,
+      "startLine": 763,
+      "endLine": 943,
       "contentSha256": "580842a5fc1203998007cac0a760d39fcd973071591b58d4f425f92d1ca7b50e"
     },
     {

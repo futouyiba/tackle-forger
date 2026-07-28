@@ -178,6 +178,32 @@ function bytesEqual(left: Uint8Array, right: Uint8Array) {
   return true;
 }
 
+function rejectZip64Extra(
+  bytes: ArrayBuffer,
+  start: number,
+  length: number,
+  label: string,
+) {
+  const view = new DataView(bytes);
+  const end = start + length;
+  let cursor = start;
+  while (cursor < end) {
+    if (cursor + 4 > end) {
+      throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", `${label} extra field 截断。`);
+    }
+    const headerId = view.getUint16(cursor, true);
+    const dataLength = view.getUint16(cursor + 2, true);
+    const nextCursor = cursor + 4 + dataLength;
+    if (nextCursor > end) {
+      throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", `${label} extra field 长度无效。`);
+    }
+    if (headerId === 0x0001) {
+      throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", `${label} 含 ZIP64 extra field，本工具不支持。`);
+    }
+    cursor = nextCursor;
+  }
+}
+
 /**
  * 在 SheetJS 完整解包前建立可证明的解压硬边界。SheetJS 0.20.3 的 ZIP 路径
  * 信任 local file header 并对 `_inflateRawSync` 输出无上限，因此不能把
@@ -227,13 +253,21 @@ async function verifyZipInflateBudget(bytes: ArrayBuffer) {
   ) {
     throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central directory 边界或终止位置无效。");
   }
-  type CentralEntry = { method: number; compressedSize: number; uncompressedSize: number; localOffset: number; name: Uint8Array };
+  type CentralEntry = {
+    flags: number;
+    method: number;
+    compressedSize: number;
+    uncompressedSize: number;
+    localOffset: number;
+    name: Uint8Array;
+  };
   const entries: CentralEntry[] = [];
   let cursor = centralDirectoryOffset;
   let totalDeclaredUncompressed = 0;
   for (let entry = 0; entry < totalEntries; entry += 1) {
     if (cursor + 46 > centralDirectoryEnd) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central directory 截断。");
     if (view.getUint32(cursor, true) !== ZIP_CENTRAL_HEADER_SIGNATURE) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central directory 条目签名无效。");
+    const flags = view.getUint16(cursor + 8, true);
     const method = view.getUint16(cursor + 10, true);
     const compressedSize = view.getUint32(cursor + 20, true);
     const uncompressedSize = view.getUint32(cursor + 24, true);
@@ -248,7 +282,20 @@ async function verifyZipInflateBudget(bytes: ArrayBuffer) {
     const localOffset = view.getUint32(cursor + 42, true);
     const nextCursor = cursor + 46 + nameLength + extraLength + commentLength;
     if (nextCursor > centralDirectoryEnd) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central directory 条目截断。");
-    entries.push({ method, compressedSize, uncompressedSize, localOffset, name: new Uint8Array(bytes, cursor + 46, nameLength) });
+    rejectZip64Extra(
+      bytes,
+      cursor + 46 + nameLength,
+      extraLength,
+      "ZIP central directory",
+    );
+    entries.push({
+      flags,
+      method,
+      compressedSize,
+      uncompressedSize,
+      localOffset,
+      name: new Uint8Array(bytes, cursor + 46, nameLength),
+    });
     cursor = nextCursor;
   }
   if (entries.length !== entriesOnDisk || cursor !== centralDirectoryEnd) {
@@ -260,20 +307,26 @@ async function verifyZipInflateBudget(bytes: ArrayBuffer) {
     if (entry.localOffset + 30 > length) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP local header 偏移无效。");
     if (view.getUint32(entry.localOffset, true) !== ZIP_LOCAL_HEADER_SIGNATURE) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP local header 签名无效。");
     const localFlags = view.getUint16(entry.localOffset + 6, true);
+    if (localFlags !== entry.flags) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central/local flags 不一致。");
     if ((localFlags & 0x01) !== 0) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "加密 ZIP 不被支持。");
-    const usesDataDescriptor = (localFlags & 0x08) !== 0;
+    if ((localFlags & 0x08) !== 0) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP data descriptor 不被支持。");
     const localMethod = view.getUint16(entry.localOffset + 8, true);
     const localNameLength = view.getUint16(entry.localOffset + 26, true);
     const localExtraLength = view.getUint16(entry.localOffset + 28, true);
     if (localMethod !== entry.method) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central/local 压缩方法不一致。");
-    if (!usesDataDescriptor) {
-      const localCompressedSize = view.getUint32(entry.localOffset + 18, true);
-      const localUncompressedSize = view.getUint32(entry.localOffset + 22, true);
-      if (localCompressedSize !== entry.compressedSize || localUncompressedSize !== entry.uncompressedSize) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central/local 尺寸不一致。");
-    }
-    if (entry.localOffset + 30 + localNameLength > length) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP local header 名称截断。");
+    const localCompressedSize = view.getUint32(entry.localOffset + 18, true);
+    const localUncompressedSize = view.getUint32(entry.localOffset + 22, true);
+    if (localCompressedSize !== entry.compressedSize || localUncompressedSize !== entry.uncompressedSize) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central/local 尺寸不一致。");
+    const localHeaderEnd = entry.localOffset + 30 + localNameLength + localExtraLength;
+    if (localHeaderEnd > centralDirectoryOffset) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP local header 截断。");
     if (!bytesEqual(new Uint8Array(bytes, entry.localOffset + 30, localNameLength), entry.name)) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central/local 名称不一致。");
-    const dataStart = entry.localOffset + 30 + localNameLength + localExtraLength;
+    rejectZip64Extra(
+      bytes,
+      entry.localOffset + 30 + localNameLength,
+      localExtraLength,
+      "ZIP local header",
+    );
+    const dataStart = localHeaderEnd;
     if (dataStart + entry.compressedSize > centralDirectoryOffset) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP 压缩数据超出 local data 边界。");
     const compressed = bytes.slice(dataStart, dataStart + entry.compressedSize);
     const actualSize = entry.method === 0

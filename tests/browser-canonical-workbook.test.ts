@@ -102,6 +102,16 @@ function semanticProjection(inspection: Awaited<ReturnType<typeof inspectCanonic
 function u16le(n: number) { return [n & 0xff, (n >> 8) & 0xff]; }
 function u32le(n: number) { return [n & 0xff, (n >> 8) & 0xff, (n >> 16) & 0xff, (n >>> 24) & 0xff]; }
 
+function zip64SizeExtra(size: number) {
+  const extra = new Uint8Array(12);
+  const view = new DataView(extra.buffer);
+  view.setUint16(0, 0x0001, true);
+  view.setUint16(2, 8, true);
+  view.setUint32(4, size, true);
+  view.setUint32(8, 0, true);
+  return extra;
+}
+
 /** 构造仅含 central directory + EOCD 的受控 ZIP 字节流，用于测预检签名级拒绝（不构造 local headers）。 */
 function buildControlledZip(entries: Array<{ uncompressed: number; name?: string }>, declaredEntries?: number): ArrayBuffer {
   const enc = new TextEncoder();
@@ -124,8 +134,12 @@ interface RealZipEntry {
   encrypted?: boolean;
   /** 覆盖 local header 的压缩尺寸（central 仍写真实值），用于测 central/local 不一致。 */
   localCszOverride?: number;
+  /** 覆盖 local header 的解压尺寸，用于测 data descriptor 预分配绕过。 */
+  localUszOverride?: number;
   /** 同时覆盖 central/local 的声明解压尺寸，用于测声明预算与实际输出不一致。 */
   declaredUncompressedSize?: number;
+  localExtra?: Uint8Array;
+  centralExtra?: Uint8Array;
 }
 
 interface RealZipEocdOptions {
@@ -144,7 +158,15 @@ function buildRealZip(
 ): ArrayBuffer {
   const enc = new TextEncoder();
   const localParts: Uint8Array[] = [];
-  const centralRec: Array<{ localStart: number; name: Uint8Array; method: number; csz: number; usz: number; flags: number }> = [];
+  const centralRec: Array<{
+    localStart: number;
+    name: Uint8Array;
+    method: number;
+    csz: number;
+    usz: number;
+    flags: number;
+    extra: Uint8Array;
+  }> = [];
   let localLen = 0;
   for (const entry of entries) {
     const localStart = localLen;
@@ -156,6 +178,8 @@ function buildRealZip(
     const csz = data.length;
     const dd = entry.dataDescriptor ?? false;
     const flags = (dd ? 0x08 : 0) | (entry.encrypted ? 0x01 : 0);
+    const localExtra = entry.localExtra ?? new Uint8Array(0);
+    const centralExtra = entry.centralExtra ?? new Uint8Array(0);
     const header = new Uint8Array(30);
     const hdv = new DataView(header.buffer);
     hdv.setUint32(0, 0x04034b50, true);
@@ -163,12 +187,21 @@ function buildRealZip(
     hdv.setUint16(6, flags, true);
     hdv.setUint16(8, method, true);
     hdv.setUint32(18, entry.localCszOverride ?? (dd ? 0 : csz), true);
-    hdv.setUint32(22, dd ? 0 : usz, true);
+    hdv.setUint32(22, entry.localUszOverride ?? (dd ? 0 : usz), true);
     hdv.setUint16(26, name.length, true);
+    hdv.setUint16(28, localExtra.length, true);
     const ddBytes = dd ? Uint8Array.of(...u32le(0x08074b50), 0, 0, 0, ...u32le(csz), ...u32le(usz)) : new Uint8Array(0);
-    localParts.push(header, name, new Uint8Array(data), ddBytes);
-    localLen += header.length + name.length + data.length + ddBytes.length;
-    centralRec.push({ localStart, name, method, csz, usz, flags });
+    localParts.push(header, name, localExtra, new Uint8Array(data), ddBytes);
+    localLen += header.length + name.length + localExtra.length + data.length + ddBytes.length;
+    centralRec.push({
+      localStart,
+      name,
+      method,
+      csz,
+      usz,
+      flags,
+      extra: centralExtra,
+    });
   }
   const centralParts: Uint8Array[] = [];
   let cdLen = 0;
@@ -183,9 +216,10 @@ function buildRealZip(
     cdv.setUint32(20, c.csz, true);
     cdv.setUint32(24, c.usz, true);
     cdv.setUint16(28, c.name.length, true);
+    cdv.setUint16(30, c.extra.length, true);
     cdv.setUint32(42, c.localStart, true);
-    centralParts.push(ch, c.name);
-    cdLen += ch.length + c.name.length;
+    centralParts.push(ch, c.name, c.extra);
+    cdLen += ch.length + c.name.length + c.extra.length;
   }
   const fullCentral = new Uint8Array(cdLen);
   let centralOffset = 0;
@@ -341,7 +375,7 @@ test("浏览器 canonical XLSX adapter 在 SheetJS 解包前用 ZIP central dire
   await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: new Uint8Array(64).buffer, fileName: "noeocd.zip", observedAt: "x" }), "XLSX_ZIP_INVALID");
 });
 
-test("ZIP 流式解压验证：拒绝 central/local 不一致、实际超预算、加密；数据描述符通过预检", async () => {
+test("ZIP 流式解压验证：拒绝尺寸不一致、超预算、加密、data descriptor 与 ZIP64 extra", async () => {
   const ts = "2026-07-27T00:00:00.000Z";
   // central/local 尺寸不一致（非数据描述符）→ 在 inflate 前拒绝
   await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: buildRealZip([{ name: "a", content: new Uint8Array([1, 2, 3]), localCszOverride: 999 }]), fileName: "mismatch.zip", observedAt: ts }), "XLSX_ZIP_INVALID");
@@ -353,8 +387,45 @@ test("ZIP 流式解压验证：拒绝 central/local 不一致、实际超预算�
   await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: buildRealZip([{ name: "a", content: new Uint8Array([1]), declaredUncompressedSize: 1024 }]), fileName: "declared-mismatch.xlsx", observedAt: ts }), "XLSX_ZIP_INVALID");
   // 加密 ZIP → 拒绝
   await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: buildRealZip([{ name: "a", content: new Uint8Array([1]), encrypted: true }]), fileName: "enc.zip", observedAt: ts }), "XLSX_ZIP_INVALID");
-  // 数据描述符通过流式预检（仅因不是合法 XLSX 才在 read 阶段失败，证明未被预检误拒）
-  await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: buildRealZip([{ name: "a", content: new Uint8Array([1, 2, 3]), dataDescriptor: true }]), fileName: "dd.zip", observedAt: ts }), "XLSX_INVALID");
+  // SheetJS 会在读取 descriptor 前按 local _usz 预分配，因此 data descriptor fail-closed。
+  await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: buildRealZip([{ name: "a", content: new Uint8Array([1, 2, 3]), dataDescriptor: true }]), fileName: "dd.zip", observedAt: ts }), "XLSX_ZIP_INVALID");
+  await rejectsCode(
+    observeBrowserCanonicalWorkbook({
+      bytes: buildRealZip([{
+        name: "a",
+        content: new Uint8Array([1]),
+        dataDescriptor: true,
+        localUszOverride: 300_000_000,
+      }]),
+      fileName: "dd-local-usz-bomb.xlsx",
+      observedAt: ts,
+    }),
+    "XLSX_ZIP_INVALID",
+  );
+  await rejectsCode(
+    observeBrowserCanonicalWorkbook({
+      bytes: buildRealZip([{
+        name: "a",
+        content: new Uint8Array([1]),
+        localExtra: zip64SizeExtra(300_000_000),
+      }]),
+      fileName: "local-zip64-extra.xlsx",
+      observedAt: ts,
+    }),
+    "XLSX_ZIP_INVALID",
+  );
+  await rejectsCode(
+    observeBrowserCanonicalWorkbook({
+      bytes: buildRealZip([{
+        name: "a",
+        content: new Uint8Array([1]),
+        centralExtra: zip64SizeExtra(300_000_000),
+      }]),
+      fileName: "central-zip64-extra.xlsx",
+      observedAt: ts,
+    }),
+    "XLSX_ZIP_INVALID",
+  );
 });
 
 test("ZIP EOCD 与 central directory 的磁盘、计数和边界必须闭合一致", async () => {

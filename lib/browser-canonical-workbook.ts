@@ -13,14 +13,14 @@ import {
 } from "./canonical-workbook-core";
 import { deterministicHash } from "./rule-kernel";
 
-const MAXIMUM_WORKBOOK_BYTES = 20 * 1024 * 1024;
+export const MAXIMUM_CANONICAL_WORKBOOK_BYTES = 20 * 1024 * 1024;
 const MAXIMUM_WORKBOOK_SHEETS = 64;
 const MAXIMUM_SHEET_ROWS = 10_000;
 const MAXIMUM_SHEET_COLUMNS = 200;
 const MAXIMUM_SHEET_CELLS = 200_000;
 const MAXIMUM_WORKBOOK_CELLS = 1_000_000;
-/** 单元格字符串深度防御上限：Excel 物理上限 32767，此处兜底防异常超长输入。 */
-const MAXIMUM_CELL_STRING_LENGTH = 100_000;
+/** 单元格字符串深度防御上限：低于 Excel 物理上限，避免异常长文本进入解析投影。 */
+const MAXIMUM_CELL_STRING_LENGTH = 16_384;
 /** ZIP central-directory 预检上限，在 SheetJS 完整解包前拦截压缩炸弹。 */
 const MAXIMUM_ZIP_ENTRIES = 1_000;
 const MAXIMUM_UNCOMPRESSED_BYTES = 200 * 1024 * 1024;
@@ -49,6 +49,7 @@ export class BrowserCanonicalWorkbookError extends Error {
       | "XLSX_TOO_MANY_SHEETS"
       | "XLSX_REQUIRED_SHEET_MISSING"
       | "XLSX_SHEET_NAME_DUPLICATE"
+      | "XLSX_LEGACY_WORKSPACE_EXPORT_REJECTED"
       | "XLSX_SHEET_GRID_INVALID"
       | "XLSX_WORKBOOK_TOO_LARGE"
       | "XLSX_CELL_STRING_TOO_LONG"
@@ -89,6 +90,12 @@ function workbookSheetBindings(sheetNames: string[], registry: FeishuSheetRegist
   const duplicates = [...byNormalizedName.entries()].filter(([, names]) => names.length !== 1);
   if (duplicates.length) {
     throw new BrowserCanonicalWorkbookError("XLSX_SHEET_NAME_DUPLICATE", `本地规则工作簿存在重复工作表名称：${duplicates.map(([name]) => name).join("、")}。`);
+  }
+  if (byNormalizedName.has("_TackleForgerState")) {
+    throw new BrowserCanonicalWorkbookError(
+      "XLSX_LEGACY_WORKSPACE_EXPORT_REJECTED",
+      "包含 _TackleForgerState 的旧工作区导出不属于 canonical WQ8w 工作簿，本地会话已拒绝导入。",
+    );
   }
 
   const consumedNames = new Set<string>();
@@ -289,8 +296,8 @@ export async function observeBrowserCanonicalWorkbook(input: {
   observedAt: string;
   registry?: FeishuSheetRegistryEntry[];
 }): Promise<BrowserCanonicalWorkbookObservation> {
-  if (input.bytes.byteLength > MAXIMUM_WORKBOOK_BYTES) {
-    throw new BrowserCanonicalWorkbookError("XLSX_FILE_TOO_LARGE", `本地规则工作簿不能超过 ${MAXIMUM_WORKBOOK_BYTES / 1024 / 1024}MB。`);
+  if (input.bytes.byteLength > MAXIMUM_CANONICAL_WORKBOOK_BYTES) {
+    throw new BrowserCanonicalWorkbookError("XLSX_FILE_TOO_LARGE", `本地规则工作簿不能超过 ${MAXIMUM_CANONICAL_WORKBOOK_BYTES / 1024 / 1024}MB。`);
   }
   await verifyZipInflateBudget(input.bytes);
   let workbook: XLSX.WorkBook;

@@ -227,6 +227,33 @@ test("浏览器 canonical XLSX adapter 对缺失、错名和附加表 fail-close
   const bytes = XLSX.write(workbook, { type: "array", bookType: "xlsx" }) as ArrayBuffer;
   const observed = await observeBrowserCanonicalWorkbook({ bytes, fileName: "extra.xlsx", observedAt: "2026-07-26T00:00:00.000Z" });
   assert.deepEqual(observed.warnings.map((warning) => warning.sheetName), ["用户附加说明"]);
+
+  const duplicate = XLSX.read(workbookBytes(), { type: "array" });
+  XLSX.utils.book_append_sheet(duplicate, XLSX.utils.aoa_to_sheet([["one"]]), "重复说明");
+  XLSX.utils.book_append_sheet(duplicate, XLSX.utils.aoa_to_sheet([["two"]]), " 重复说明 ");
+  await rejectsCode(
+    observeBrowserCanonicalWorkbook({
+      bytes: XLSX.write(duplicate, { type: "array", bookType: "xlsx" }) as ArrayBuffer,
+      fileName: "duplicate-normalized-sheet.xlsx",
+      observedAt: "2026-07-26T00:00:00.000Z",
+    }),
+    "XLSX_SHEET_NAME_DUPLICATE",
+  );
+
+  const legacy = XLSX.read(workbookBytes(), { type: "array" });
+  XLSX.utils.book_append_sheet(
+    legacy,
+    XLSX.utils.aoa_to_sheet([["legacy workspace payload"]]),
+    "_TackleForgerState",
+  );
+  await rejectsCode(
+    observeBrowserCanonicalWorkbook({
+      bytes: XLSX.write(legacy, { type: "array", bookType: "xlsx" }) as ArrayBuffer,
+      fileName: "legacy-workspace.xlsx",
+      observedAt: "2026-07-26T00:00:00.000Z",
+    }),
+    "XLSX_LEGACY_WORKSPACE_EXPORT_REJECTED",
+  );
 });
 
 test("浏览器 canonical XLSX adapter 拒绝超限文件、无效 ZIP 和无缓存公式单元格", async () => {
@@ -240,6 +267,20 @@ test("浏览器 canonical XLSX adapter 拒绝超限文件、无效 ZIP 和无缓
   const cachedObserved = await observeBrowserCanonicalWorkbook({ bytes: cachedBytes, fileName: "cached.xlsx", observedAt: "2026-07-26T00:00:00.000Z" });
   const qualityRange = cachedObserved.ranges.find((range) => range.sheetId === "27hboC");
   assert.ok(qualityRange?.valueRange.values.some((row) => row.includes(0.8)), "缓存值应被读出而非执行公式");
+
+  const uncached = XLSX.read(workbookBytes(), { type: "array", cellFormula: true });
+  uncached.Sheets["08.1_品质评分-品质定义"]!.E2 = {
+    t: "n",
+    f: "0.4+0.4",
+  };
+  await rejectsCode(
+    observeBrowserCanonicalWorkbook({
+      bytes: XLSX.write(uncached, { type: "array", bookType: "xlsx" }) as ArrayBuffer,
+      fileName: "uncached-formula.xlsx",
+      observedAt: "2026-07-26T00:00:00.000Z",
+    }),
+    "XLSX_FORMULA_RESULT_MISSING",
+  );
 });
 
 test("浏览器 canonical XLSX adapter 在 SheetJS 解包前用 ZIP central directory 预检拦截声明级压缩炸弹", async () => {
@@ -265,6 +306,17 @@ test("浏览器 canonical XLSX adapter 接受合法长字符串单元格（≤�
   sheets.find(({ entry }) => entry.sheetId === "1cAihB")!.values[1]![0] = "说明".repeat(5000);
   const observed = await observeBrowserCanonicalWorkbook({ bytes: workbookBytes(sheets), fileName: "long-ok.xlsx", observedAt: "2026-07-27T00:00:00.000Z" });
   assert.equal(observed.sourceRevision.sheets.length, CANONICAL_FEISHU_SHEET_REGISTRY.length);
+
+  const tooLong = fixtureSheets();
+  tooLong.find(({ entry }) => entry.sheetId === "1cAihB")!.values[1]![0] = "x".repeat(16_385);
+  await rejectsCode(
+    observeBrowserCanonicalWorkbook({
+      bytes: workbookBytes(tooLong),
+      fileName: "long-rejected.xlsx",
+      observedAt: "2026-07-27T00:00:00.000Z",
+    }),
+    "XLSX_CELL_STRING_TOO_LONG",
+  );
 });
 
 test("浏览器 canonical XLSX adapter 对所有工作表（含未登记）强制资源边界", async () => {

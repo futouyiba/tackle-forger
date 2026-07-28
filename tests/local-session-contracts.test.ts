@@ -259,6 +259,63 @@ test("closed runtime schema rejects shared-only authority fields", () => {
   }
 });
 
+test("nested rules/templates allowlist rejects formal objects and unknown fields", () => {
+  const session = createLocalSessionModel(
+    { kind: "temporary_workspace" },
+    {
+      title: "local",
+      notes: "",
+      sourceIssues: [],
+      parameters: [{
+        id: "p-1",
+        key: "pull",
+        label: "拉力",
+        itemPart: "rod",
+        unit: "kgf",
+        precision: 2,
+        notes: "",
+      }],
+      templates: [{
+        id: "t-1",
+        name: "模板",
+        itemPart: "rod",
+        targetPullMinKgf: 1,
+        targetPullMaxKgf: 3,
+        nominalTargetPullKgf: 2,
+        values: { pull: 2 },
+        notes: "",
+      }],
+      rules: [{
+        id: "r-1",
+        sourceKind: "method",
+        sourceId: "method:lure",
+        sourceName: "路亚",
+        sequence: 0,
+        parameterKey: "pull",
+        operation: "add",
+        value: 1,
+        condition: "",
+        notes: "",
+        enabled: true,
+      }],
+    },
+  );
+  assert.deepEqual(parseLocalSessionModel(session), session);
+  assert.throws(
+    () => parseLocalSessionModel({
+      ...session,
+      document: {
+        ...session.document,
+        templates: [{
+          ...session.document.templates[0],
+          seriesId: "series:forbidden",
+        }],
+      },
+    }),
+    /unknown field "seriesId"/,
+  );
+});
+
 test("WorkspaceSurface narrows none, local and shared authority without promotion", () => {
   const surface: WorkspaceSurface = {
     kind: "local",

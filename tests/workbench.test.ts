@@ -3,9 +3,12 @@ import test from "node:test";
 import {
   calculateCandidate,
   evaluateFormula,
+  FormulaSyntaxError,
   generateCandidatesForRecipe,
   publishCandidate,
+  renameFormulaIdentifier,
   scoreAffixes,
+  validateFormula,
 } from "../lib/engine";
 import {
   applyDataSourcePreview,
@@ -68,6 +71,62 @@ test("高级公式解析器不依赖 eval", () => {
     }),
     11,
   );
+});
+
+test("共享公式 lexer 消费完整输入并报告确定位置", () => {
+  for (const [formula, position] of [
+    ["1;", 2],
+    ["1💥", 2],
+    ["sqrt(4)!", 8],
+  ] as const) {
+    assert.throws(
+      () => evaluateFormula(formula, {}),
+      (error: unknown) => {
+        assert.ok(error instanceof FormulaSyntaxError);
+        assert.equal(error.position, position);
+        assert.match(error.message, new RegExp(`位置 ${position}`));
+        return true;
+      },
+    );
+  }
+});
+
+test("共享公式 lexer 保持合法空白、操作符、函数与变量语义", () => {
+  assert.equal(evaluateFormula(" \n max( 2^3, sqrt( 81 ) ) + abs(-1)\t", {}), 10);
+  assert.equal(
+    evaluateFormula("(current + 拉力值) / 2", { current: 4, 拉力值: 8 }),
+    6,
+  );
+  assert.doesNotThrow(() =>
+    validateFormula(" current / (left - right) + sqrt(candidate) "));
+  assert.throws(
+    () => validateFormula("current;"),
+    (error: unknown) =>
+      error instanceof FormulaSyntaxError && error.position === 8,
+  );
+});
+
+test("formula identifier rename preserves builtin call sites and migrates variables", () => {
+  const cases = [
+    { builtin: "min", formula: "min(current, min)", expected: "min(current, force)", force: 3, result: 2 },
+    { builtin: "max", formula: "max(current, max)", expected: "max(current, force)", force: 3, result: 3 },
+    { builtin: "abs", formula: "abs(abs)", expected: "abs(force)", force: -3, result: 3 },
+    { builtin: "round", formula: "round(round, 0)", expected: "round(force, 0)", force: 2.6, result: 3 },
+    { builtin: "sqrt", formula: "sqrt(sqrt)", expected: "sqrt(force)", force: 9, result: 3 },
+  ];
+  for (const entry of cases) {
+    const renamed = renameFormulaIdentifier(
+      entry.formula,
+      entry.builtin,
+      "force",
+    );
+    assert.equal(renamed, entry.expected);
+    assert.doesNotThrow(() => validateFormula(renamed));
+    assert.equal(
+      evaluateFormula(renamed, { current: 2, force: entry.force }),
+      entry.result,
+    );
+  }
 });
 
 test("受约束配方生成并发布规范 ID", () => {

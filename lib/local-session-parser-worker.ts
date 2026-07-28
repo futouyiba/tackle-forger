@@ -16,6 +16,8 @@ export async function handleLocalSessionParserRequest(
     return {
       type: "local_canonical_workbook_failed",
       generation: request.generation,
+      operationId: request.operationId,
+      resourceHandle: request.resourceHandle,
       error: {
         code: "LOCAL_SESSION_PARSER_PROTOCOL_INVALID",
         message: "本地工作簿解析请求协议无效。",
@@ -31,6 +33,8 @@ export async function handleLocalSessionParserRequest(
     return {
       type: "parsed_local_canonical_workbook",
       generation: request.generation,
+      operationId: request.operationId,
+      resourceHandle: request.resourceHandle,
       result: createLocalSessionParsedWorkbook({
         fileName: request.fileName,
         byteLength: request.byteLength,
@@ -43,6 +47,8 @@ export async function handleLocalSessionParserRequest(
     return {
       type: "local_canonical_workbook_failed",
       generation: request.generation,
+      operationId: request.operationId,
+      resourceHandle: request.resourceHandle,
       error: {
         code:
           error instanceof BrowserCanonicalWorkbookError

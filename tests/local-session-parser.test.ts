@@ -4,11 +4,16 @@ import test from "node:test";
 
 import * as XLSX from "xlsx";
 
+import { inspectBrowserCanonicalWorkbook } from "../lib/browser-canonical-workbook";
 import { CANONICAL_FEISHU_SHEET_REGISTRY } from "../lib/feishu-workbook";
 import {
   LocalSessionParserError,
   LocalSessionWorkbookLoader,
 } from "../lib/local-session-parser";
+import {
+  createLocalSessionSecureRandomId,
+  LocalSessionIdentityAllocator,
+} from "../lib/local-session-operation-identity";
 import { sha256Hex as pureSha256Hex } from "../lib/five-axis-hash";
 import {
   handleLocalSessionParserRequest,
@@ -16,6 +21,11 @@ import {
 import type {
   LocalSessionParserRequest,
   LocalSessionParserWorkerResponse,
+} from "../lib/local-session-parser-protocol";
+import {
+  createLocalSessionParsedWorkbook,
+  parseLocalSessionParsedWorkbook,
+  projectLocalRulesTemplateWorkbook,
 } from "../lib/local-session-parser-protocol";
 import type {
   LocalSessionObjectUrlApi,
@@ -182,7 +192,7 @@ async function rejectsCode(promise: Promise<unknown>, code: string) {
 }
 
 async function waitForRequest(worker: FakeWorker) {
-  for (let count = 0; count < 20 && !worker.request; count += 1) {
+  for (let count = 0; count < 200 && !worker.request; count += 1) {
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
   assert.ok(worker.request, "worker request was not posted");
@@ -190,7 +200,7 @@ async function waitForRequest(worker: FakeWorker) {
 }
 
 async function waitForWorker(factory: ReturnType<typeof workerFactory>, index: number) {
-  for (let count = 0; count < 20; count += 1) {
+  for (let count = 0; count < 200; count += 1) {
     const worker = factory.workers[index];
     if (worker) {
       return worker;
@@ -219,11 +229,29 @@ test("canonical File 保持不可变，ArrayBuffer 转移到 disposable worker�
   assert.equal(ready.result.session.source.kind, "local_excel");
   assert.equal(ready.result.workbook.contractVersion, "local-session-canonical-workbook/open009-v2");
   assert.equal(ready.result.workbook.semanticRevision.length, 8);
+  assert.deepEqual(ready.result.workbook.editableDocument, ready.result.session.document);
+  assert.ok(
+    ready.result.session.document.sourceIssues.some(
+      (issue) => issue.severity === "error",
+    ),
+    "canonical importer errors must survive the isolated local projection",
+  );
   assert.equal("seriesDefinitions" in ready.result.workbook, false);
+  assert.equal("qualityDraft" in ready.result.workbook, false);
+  assert.equal("pricingDraft" in ready.result.workbook, false);
   assert.equal("workspaceId" in ready.result.workbook, false);
   assert.equal("configurationSnapshots" in ready.result.workbook, false);
+  const selectorBoundRules = ready.result.session.document.rules.filter(
+    (rule) => rule.sourceKind !== "layer",
+  );
+  assert.ok(
+    selectorBoundRules.every((rule) =>
+      !rule.enabled && rule.notes.includes("未绑定选择上下文")),
+    "mutually exclusive profile rules must not execute without an explicit selection",
+  );
   assert.deepEqual(loader.readyResourceSnapshot(), {
     generation: ready.generation,
+    resourceHandle: ready.resourceHandle,
     disposed: false,
     aborted: false,
     workerOwned: false,
@@ -233,6 +261,156 @@ test("canonical File 保持不可变，ArrayBuffer 转移到 disposable worker�
     timeoutCount: 0,
   });
   assert.deepEqual(urls.revoked, []);
+});
+
+test("ignored-sheet warnings enter closed session validation with deterministic dedupe", async () => {
+  const bytes = canonicalWorkbookBytes("Scratch");
+  const parsed = await inspectBrowserCanonicalWorkbook({
+    bytes,
+    fileName: "warning.xlsx",
+    observedAt: "2026-07-28T00:00:00.000Z",
+  });
+  const warning = parsed.observation.warnings[0];
+  assert.ok(warning);
+  assert.equal(warning.code, "UNREGISTERED_SHEET");
+
+  const workbook = projectLocalRulesTemplateWorkbook({
+    inspection: parsed.inspection,
+    warnings: [warning, warning],
+  });
+  const warningIssues = workbook.editableDocument.sourceIssues.filter(
+    (issue) => issue.code === "UNREGISTERED_SHEET",
+  );
+  assert.deepEqual(warningIssues, [{
+    severity: "warning",
+    code: "UNREGISTERED_SHEET",
+    path: "canonical.unregistered-sheet.Scratch",
+    message: warning.message,
+  }]);
+
+  const result = createLocalSessionParsedWorkbook({
+    fileName: "warning.xlsx",
+    byteLength: bytes.byteLength,
+    contentSha256: "a".repeat(64),
+    inspection: parsed.inspection,
+    warnings: [warning, warning],
+  });
+  assert.deepEqual(result.session.document, result.workbook.editableDocument);
+  assert.equal(
+    result.session.document.sourceIssues.filter(
+      (issue) => issue.code === "UNREGISTERED_SHEET",
+    ).length,
+    1,
+  );
+  assert.deepEqual(parseLocalSessionParsedWorkbook(result), result);
+
+  const mismatched = structuredClone(result);
+  mismatched.workbook.editableDocument.title = "tampered";
+  assert.throws(
+    () => parseLocalSessionParsedWorkbook(mismatched),
+    /documents must match/,
+  );
+});
+
+test("operationId/resourceHandle 碰撞与 worker 身份错配均 fail-closed", async () => {
+  const urls = new FakeObjectUrls();
+  const duplicateIds = new (
+    await import("../lib/local-session-operation-identity")
+  ).LocalSessionIdentityAllocator({ createId: () => "duplicate" });
+  const collisionFactory = workerFactory([handleLocalSessionParserRequest]);
+  const collisionLoader = new LocalSessionWorkbookLoader({
+    workerFactory: collisionFactory.create,
+    objectUrlApi: urls,
+    identityAllocator: duplicateIds,
+  });
+  await collisionLoader.open(canonicalFile("first-identity.xlsx"));
+  await assert.rejects(
+    collisionLoader.open(canonicalFile("second-identity.xlsx")),
+    /identity collided/,
+  );
+
+  const mismatchFactory = workerFactory(["manual"]);
+  const mismatchLoader = new LocalSessionWorkbookLoader({
+    workerFactory: mismatchFactory.create,
+    objectUrlApi: new FakeObjectUrls(),
+  });
+  const pending = mismatchLoader.open(canonicalFile("mismatch.xlsx"));
+  const worker = await waitForWorker(mismatchFactory, 0);
+  const request = await waitForRequest(worker);
+  const valid = await handleLocalSessionParserRequest(request);
+  worker.emitMessage({
+    ...valid,
+    operationId: `${request.operationId}:wrong`,
+  });
+  await rejectsCode(pending, "LOCAL_SESSION_RESOURCE_IDENTITY_MISMATCH");
+  assert.equal(mismatchLoader.ready(), null);
+  assert.equal(worker.terminated, true);
+});
+
+test("RFC1918 insecure HTTP uses getRandomValues without weak randomness", () => {
+  assert.equal(
+    createLocalSessionSecureRandomId({
+      randomUUID: () => "native-secure-id",
+      getRandomValues() {
+        assert.fail("native randomUUID path must not request fallback bytes");
+      },
+    }),
+    "native-secure-id",
+  );
+  let seed = 0;
+  const cryptoSource = {
+    getRandomValues(array: Uint8Array) {
+      for (let index = 0; index < array.length; index += 1) {
+        array[index] = (seed + index) & 0xff;
+      }
+      seed += array.length;
+      return array;
+    },
+  };
+  assert.equal(
+    createLocalSessionSecureRandomId(cryptoSource),
+    "00010203-0405-4607-8809-0a0b0c0d0e0f",
+  );
+  const allocator = new LocalSessionIdentityAllocator({ cryptoSource });
+  const first = allocator.allocate("operation");
+  const second = allocator.allocate("operation");
+  assert.notEqual(first, second);
+  assert.match(first, /^operation:[0-9a-f-]{36}$/);
+  assert.throws(
+    () => createLocalSessionSecureRandomId({
+      getRandomValues() {
+        throw new Error("secure randomness unavailable");
+      },
+    }),
+    /secure randomness unavailable/,
+  );
+});
+
+test("UI 与 loader 共用同一 ledger，并只接受显式 already-claimed operation handoff", async () => {
+  const identities = new LocalSessionIdentityAllocator();
+  const operationId = identities.allocate("operation");
+  const urls = new FakeObjectUrls();
+  const factory = workerFactory([handleLocalSessionParserRequest]);
+  const loader = new LocalSessionWorkbookLoader({
+    workerFactory: factory.create,
+    objectUrlApi: urls,
+    identityAllocator: identities,
+  });
+  const ready = await loader.open(
+    canonicalFile("shared-ledger.xlsx"),
+    operationId,
+    true,
+  );
+  assert.equal(ready.operationId, operationId);
+  assert.equal(identities.has(ready.resourceHandle), true);
+  await assert.rejects(
+    loader.open(canonicalFile("reused-handoff.xlsx"), operationId, true),
+    /identity collided/,
+  );
+  await assert.rejects(
+    loader.open(canonicalFile("unclaimed.xlsx"), "operation:not-claimed", true),
+    /identity collided/,
+  );
 });
 
 test("非 secure context 缺少 SubtleCrypto 时使用纯浏览器 SHA-256 fallback", async () => {
@@ -296,6 +474,8 @@ test("replace 只在新候选成功后原子替换；失败、worker crash 和 t
     async (request) => ({
       type: "local_canonical_workbook_failed",
       generation: request.generation,
+      operationId: request.operationId,
+      resourceHandle: request.resourceHandle,
       error: { code: "CONTROLLED_FAILURE", message: "controlled failure" },
     }),
     "crash",

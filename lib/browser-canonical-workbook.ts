@@ -13,14 +13,14 @@ import {
 } from "./canonical-workbook-core";
 import { deterministicHash } from "./rule-kernel";
 
-const MAXIMUM_WORKBOOK_BYTES = 20 * 1024 * 1024;
+export const MAXIMUM_CANONICAL_WORKBOOK_BYTES = 20 * 1024 * 1024;
 const MAXIMUM_WORKBOOK_SHEETS = 64;
 const MAXIMUM_SHEET_ROWS = 10_000;
 const MAXIMUM_SHEET_COLUMNS = 200;
 const MAXIMUM_SHEET_CELLS = 200_000;
 const MAXIMUM_WORKBOOK_CELLS = 1_000_000;
-/** 单元格字符串深度防御上限：Excel 物理上限 32767，此处兜底防异常超长输入。 */
-const MAXIMUM_CELL_STRING_LENGTH = 100_000;
+/** 单元格字符串深度防御上限：低于 Excel 物理上限，避免异常长文本进入解析投影。 */
+const MAXIMUM_CELL_STRING_LENGTH = 16_384;
 /** ZIP central-directory 预检上限，在 SheetJS 完整解包前拦截压缩炸弹。 */
 const MAXIMUM_ZIP_ENTRIES = 1_000;
 const MAXIMUM_UNCOMPRESSED_BYTES = 200 * 1024 * 1024;
@@ -49,6 +49,7 @@ export class BrowserCanonicalWorkbookError extends Error {
       | "XLSX_TOO_MANY_SHEETS"
       | "XLSX_REQUIRED_SHEET_MISSING"
       | "XLSX_SHEET_NAME_DUPLICATE"
+      | "XLSX_LEGACY_WORKSPACE_EXPORT_REJECTED"
       | "XLSX_SHEET_GRID_INVALID"
       | "XLSX_WORKBOOK_TOO_LARGE"
       | "XLSX_CELL_STRING_TOO_LONG"
@@ -89,6 +90,12 @@ function workbookSheetBindings(sheetNames: string[], registry: FeishuSheetRegist
   const duplicates = [...byNormalizedName.entries()].filter(([, names]) => names.length !== 1);
   if (duplicates.length) {
     throw new BrowserCanonicalWorkbookError("XLSX_SHEET_NAME_DUPLICATE", `本地规则工作簿存在重复工作表名称：${duplicates.map(([name]) => name).join("、")}。`);
+  }
+  if (byNormalizedName.has("_TackleForgerState")) {
+    throw new BrowserCanonicalWorkbookError(
+      "XLSX_LEGACY_WORKSPACE_EXPORT_REJECTED",
+      "包含 _TackleForgerState 的旧工作区导出不属于 canonical WQ8w 工作簿，本地会话已拒绝导入。",
+    );
   }
 
   const consumedNames = new Set<string>();
@@ -150,6 +157,19 @@ function canonicalCellValue(cell: XLSX.CellObject | undefined, sheetName: string
   return value;
 }
 
+function validateSheetCellValues(
+  sheet: XLSX.WorkSheet,
+  sheetName: string,
+  grid: { rowCount: number; columnCount: number },
+) {
+  for (let row = 0; row < grid.rowCount; row += 1) {
+    for (let column = 0; column < grid.columnCount; column += 1) {
+      const address = XLSX.utils.encode_cell({ r: row, c: column });
+      canonicalCellValue(sheet[address], sheetName, address);
+    }
+  }
+}
+
 const ZIP_LOCAL_HEADER_SIGNATURE = 0x04034b50;
 
 function bytesEqual(left: Uint8Array, right: Uint8Array) {
@@ -158,14 +178,40 @@ function bytesEqual(left: Uint8Array, right: Uint8Array) {
   return true;
 }
 
+function rejectZip64Extra(
+  bytes: ArrayBuffer,
+  start: number,
+  length: number,
+  label: string,
+) {
+  const view = new DataView(bytes);
+  const end = start + length;
+  let cursor = start;
+  while (cursor < end) {
+    if (cursor + 4 > end) {
+      throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", `${label} extra field 截断。`);
+    }
+    const headerId = view.getUint16(cursor, true);
+    const dataLength = view.getUint16(cursor + 2, true);
+    const nextCursor = cursor + 4 + dataLength;
+    if (nextCursor > end) {
+      throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", `${label} extra field 长度无效。`);
+    }
+    if (headerId === 0x0001) {
+      throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", `${label} 含 ZIP64 extra field，本工具不支持。`);
+    }
+    cursor = nextCursor;
+  }
+}
+
 /**
  * 在 SheetJS 完整解包前建立可证明的解压硬边界。SheetJS 0.20.3 的 ZIP 路径
  * 信任 local file header 并对 `_inflateRawSync` 输出无上限，因此不能把
  * central-directory 声明当作预算。这里逐条目：
  *   1. 验证 local header 与 central 一致（签名、压缩方法、名称、压缩/解压尺寸）；
- *   2. 拒绝数据描述符（flags bit 3）、ZIP64、非 stored/deflate 方法；
+ *   2. 拒绝 ZIP64、非 stored/deflate 方法，并限制 central 声明的解压总量；
  *   3. 用 `DecompressionStream("deflate-raw")` 流式解压，累计真实输出字节，
- *      超过 `MAXIMUM_UNCOMPRESSED_BYTES` 立即终止。
+ *      超过 `MAXIMUM_UNCOMPRESSED_BYTES` 立即终止，且逐条目核对声明/实际尺寸。
  * 只有全部条目实际输出累计在预算内，才允许进入 `XLSX.read`。
  */
 async function verifyZipInflateBudget(bytes: ArrayBuffer) {
@@ -178,27 +224,82 @@ async function verifyZipInflateBudget(bytes: ArrayBuffer) {
     if (view.getUint32(index, true) === ZIP_EOCD_SIGNATURE) { eocd = index; break; }
   }
   if (eocd < 0) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "未找到 ZIP 结束记录；不是有效的 .xlsx 工作簿。");
+  const diskNumber = view.getUint16(eocd + 4, true);
+  const centralDirectoryDisk = view.getUint16(eocd + 6, true);
+  const entriesOnDisk = view.getUint16(eocd + 8, true);
   const totalEntries = view.getUint16(eocd + 10, true);
+  const centralDirectorySize = view.getUint32(eocd + 12, true);
   const centralDirectoryOffset = view.getUint32(eocd + 16, true);
+  const commentLength = view.getUint16(eocd + 20, true);
+  if (eocd + 22 + commentLength !== length) {
+    throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP EOCD 注释长度或文件终止位置无效。");
+  }
+  if (
+    diskNumber !== 0
+    || centralDirectoryDisk !== 0
+    || entriesOnDisk !== totalEntries
+  ) {
+    throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "多磁盘 ZIP 或 EOCD 条目计数不一致，本工具不支持。");
+  }
+  if (totalEntries === 0) {
+    throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central directory 不能为空。");
+  }
   if (totalEntries > MAXIMUM_ZIP_ENTRIES) throw new BrowserCanonicalWorkbookError("XLSX_TOO_MANY_ZIP_ENTRIES", `工作簿包含 ${totalEntries} 个 ZIP 条目，超过上限 ${MAXIMUM_ZIP_ENTRIES}。`);
-  if (centralDirectoryOffset < 0 || centralDirectoryOffset + 46 > length) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central directory 偏移无效。");
-  type CentralEntry = { method: number; compressedSize: number; uncompressedSize: number; localOffset: number; name: Uint8Array };
+  const centralDirectoryEnd = centralDirectoryOffset + centralDirectorySize;
+  if (
+    !Number.isSafeInteger(centralDirectoryEnd)
+    || centralDirectoryOffset >= eocd
+    || centralDirectoryEnd !== eocd
+  ) {
+    throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central directory 边界或终止位置无效。");
+  }
+  type CentralEntry = {
+    flags: number;
+    method: number;
+    compressedSize: number;
+    uncompressedSize: number;
+    localOffset: number;
+    name: Uint8Array;
+  };
   const entries: CentralEntry[] = [];
   let cursor = centralDirectoryOffset;
+  let totalDeclaredUncompressed = 0;
   for (let entry = 0; entry < totalEntries; entry += 1) {
-    if (cursor + 46 > length) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central directory 截断。");
+    if (cursor + 46 > centralDirectoryEnd) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central directory 截断。");
     if (view.getUint32(cursor, true) !== ZIP_CENTRAL_HEADER_SIGNATURE) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central directory 条目签名无效。");
+    const flags = view.getUint16(cursor + 8, true);
     const method = view.getUint16(cursor + 10, true);
     const compressedSize = view.getUint32(cursor + 20, true);
     const uncompressedSize = view.getUint32(cursor + 24, true);
     if (compressedSize === 0xffffffff || uncompressedSize === 0xffffffff) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "工作簿使用 ZIP64，本工具不支持。");
+    totalDeclaredUncompressed += uncompressedSize;
+    if (totalDeclaredUncompressed > MAXIMUM_UNCOMPRESSED_BYTES) {
+      throw new BrowserCanonicalWorkbookError("XLSX_UNCOMPRESSED_TOO_LARGE", `工作簿声明的解压后总字节超过 ${MAXIMUM_UNCOMPRESSED_BYTES}。`);
+    }
     const nameLength = view.getUint16(cursor + 28, true);
     const extraLength = view.getUint16(cursor + 30, true);
     const commentLength = view.getUint16(cursor + 32, true);
     const localOffset = view.getUint32(cursor + 42, true);
-    if (cursor + 46 + nameLength > length) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central directory 名称截断。");
-    entries.push({ method, compressedSize, uncompressedSize, localOffset, name: new Uint8Array(bytes, cursor + 46, nameLength) });
-    cursor += 46 + nameLength + extraLength + commentLength;
+    const nextCursor = cursor + 46 + nameLength + extraLength + commentLength;
+    if (nextCursor > centralDirectoryEnd) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central directory 条目截断。");
+    rejectZip64Extra(
+      bytes,
+      cursor + 46 + nameLength,
+      extraLength,
+      "ZIP central directory",
+    );
+    entries.push({
+      flags,
+      method,
+      compressedSize,
+      uncompressedSize,
+      localOffset,
+      name: new Uint8Array(bytes, cursor + 46, nameLength),
+    });
+    cursor = nextCursor;
+  }
+  if (entries.length !== entriesOnDisk || cursor !== centralDirectoryEnd) {
+    throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central directory 实际条目数或终止位置与 EOCD 不一致。");
   }
   let totalActual = 0;
   for (const entry of entries) {
@@ -206,23 +307,35 @@ async function verifyZipInflateBudget(bytes: ArrayBuffer) {
     if (entry.localOffset + 30 > length) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP local header 偏移无效。");
     if (view.getUint32(entry.localOffset, true) !== ZIP_LOCAL_HEADER_SIGNATURE) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP local header 签名无效。");
     const localFlags = view.getUint16(entry.localOffset + 6, true);
+    if (localFlags !== entry.flags) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central/local flags 不一致。");
     if ((localFlags & 0x01) !== 0) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "加密 ZIP 不被支持。");
-    const usesDataDescriptor = (localFlags & 0x08) !== 0;
+    if ((localFlags & 0x08) !== 0) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP data descriptor 不被支持。");
     const localMethod = view.getUint16(entry.localOffset + 8, true);
     const localNameLength = view.getUint16(entry.localOffset + 26, true);
     const localExtraLength = view.getUint16(entry.localOffset + 28, true);
     if (localMethod !== entry.method) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central/local 压缩方法不一致。");
-    if (!usesDataDescriptor) {
-      const localCompressedSize = view.getUint32(entry.localOffset + 18, true);
-      const localUncompressedSize = view.getUint32(entry.localOffset + 22, true);
-      if (localCompressedSize !== entry.compressedSize || localUncompressedSize !== entry.uncompressedSize) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central/local 尺寸不一致。");
-    }
-    if (entry.localOffset + 30 + localNameLength > length) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP local header 名称截断。");
+    const localCompressedSize = view.getUint32(entry.localOffset + 18, true);
+    const localUncompressedSize = view.getUint32(entry.localOffset + 22, true);
+    if (localCompressedSize !== entry.compressedSize || localUncompressedSize !== entry.uncompressedSize) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central/local 尺寸不一致。");
+    const localHeaderEnd = entry.localOffset + 30 + localNameLength + localExtraLength;
+    if (localHeaderEnd > centralDirectoryOffset) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP local header 截断。");
     if (!bytesEqual(new Uint8Array(bytes, entry.localOffset + 30, localNameLength), entry.name)) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central/local 名称不一致。");
-    const dataStart = entry.localOffset + 30 + localNameLength + localExtraLength;
-    if (dataStart + entry.compressedSize > length) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP 压缩数据超出文件边界。");
+    rejectZip64Extra(
+      bytes,
+      entry.localOffset + 30 + localNameLength,
+      localExtraLength,
+      "ZIP local header",
+    );
+    const dataStart = localHeaderEnd;
+    if (dataStart + entry.compressedSize > centralDirectoryOffset) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP 压缩数据超出 local data 边界。");
     const compressed = bytes.slice(dataStart, dataStart + entry.compressedSize);
-    totalActual += entry.method === 0 ? entry.compressedSize : await inflateCounted(compressed, MAXIMUM_UNCOMPRESSED_BYTES - totalActual);
+    const actualSize = entry.method === 0
+      ? entry.compressedSize
+      : await inflateCounted(compressed, MAXIMUM_UNCOMPRESSED_BYTES - totalActual);
+    if (actualSize !== entry.uncompressedSize) {
+      throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP 条目声明的解压尺寸与实际输出不一致。");
+    }
+    totalActual += actualSize;
     if (totalActual > MAXIMUM_UNCOMPRESSED_BYTES) throw new BrowserCanonicalWorkbookError("XLSX_UNCOMPRESSED_TOO_LARGE", `工作簿实际解压后总字节超过 ${MAXIMUM_UNCOMPRESSED_BYTES}。`);
   }
 }
@@ -289,23 +402,33 @@ export async function observeBrowserCanonicalWorkbook(input: {
   observedAt: string;
   registry?: FeishuSheetRegistryEntry[];
 }): Promise<BrowserCanonicalWorkbookObservation> {
-  if (input.bytes.byteLength > MAXIMUM_WORKBOOK_BYTES) {
-    throw new BrowserCanonicalWorkbookError("XLSX_FILE_TOO_LARGE", `本地规则工作簿不能超过 ${MAXIMUM_WORKBOOK_BYTES / 1024 / 1024}MB。`);
+  if (input.bytes.byteLength > MAXIMUM_CANONICAL_WORKBOOK_BYTES) {
+    throw new BrowserCanonicalWorkbookError("XLSX_FILE_TOO_LARGE", `本地规则工作簿不能超过 ${MAXIMUM_CANONICAL_WORKBOOK_BYTES / 1024 / 1024}MB。`);
   }
   await verifyZipInflateBudget(input.bytes);
   let workbook: XLSX.WorkBook;
   try {
-    workbook = XLSX.read(input.bytes, { type: "array", cellDates: true, cellFormula: true, dense: false });
+    workbook = XLSX.read(input.bytes, {
+      type: "array",
+      cellDates: true,
+      cellFormula: true,
+      dense: false,
+      // 不信任 worksheet XML 声明的 dimension；按实际解析单元格重算 !ref，
+      // 使范围外单元格也进入 grid/cell/formula/text 全工作簿预算。
+      nodim: true,
+    });
   } catch {
     throw new BrowserCanonicalWorkbookError("XLSX_INVALID", "无法读取本地规则工作簿；请选择有效的 .xlsx 文件。");
   }
-  // 资源预算覆盖所有工作表（含未登记附加表），在 bindings 前拒绝巨大网格。
+  // 资源与单元格内容预算覆盖所有工作表（含未登记附加表），在 bindings 前
+  // 拒绝巨大网格、无缓存公式及超长文本，避免 warning-only 附加表绕过边界。
   const gridsBySheetName = new Map<string, { rowCount: number; columnCount: number }>();
   let totalCells = 0;
   for (const sheetName of workbook.SheetNames) {
     const sheet = workbook.Sheets[sheetName];
     if (!sheet) continue;
     const grid = decodeSheetGrid(sheet, sheetName);
+    validateSheetCellValues(sheet, sheetName, grid);
     gridsBySheetName.set(sheetName, grid);
     totalCells += grid.rowCount * grid.columnCount;
     if (totalCells > MAXIMUM_WORKBOOK_CELLS) {

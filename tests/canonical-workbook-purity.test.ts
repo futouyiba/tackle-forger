@@ -18,6 +18,10 @@ const FORBIDDEN_IMPORT = [
 const PURE_MODULES = [
   "lib/canonical-workbook-core.ts",
   "lib/browser-canonical-workbook.ts",
+  "lib/local-session-parser-protocol.ts",
+  "lib/local-session-parser-worker.ts",
+  "lib/local-session-resource-scope.ts",
+  "lib/local-session-parser.ts",
   "lib/canonical-rule-source.ts",
   "lib/pricing-policy.ts",
   "lib/quality-value-policy.ts",
@@ -49,4 +53,31 @@ test("飞书规则工作簿 facade 单向依赖纯核心，纯核心不反向依
   const browser = readFileSync("lib/browser-canonical-workbook.ts", "utf8");
   assert.ok(!browser.includes('from "./rule-workbook-inspection"'), "浏览器适配器应直接依赖纯核心，而非飞书 facade");
   assert.ok(browser.includes('from "./canonical-workbook-core"'), "浏览器适配器应依赖纯核心");
+});
+
+test("本地会话 parser/worker 不依赖共享 authority、网络、存储或日志模块", () => {
+  const files = [
+    "lib/local-session-parser-protocol.ts",
+    "lib/local-session-parser-worker.ts",
+    "lib/local-session-resource-scope.ts",
+    "lib/local-session-parser.ts",
+  ];
+  const forbidden = [
+    /WorkspaceState/,
+    /FeishuSourceRevision/,
+    /RuleSetVersion/,
+    /ConfigurationSnapshot/,
+    /commandPayloadRef/,
+    /from\s+["'][^"']*(?:storage|sqlite|auth|api|logger|telemetry)[^"']*["']/,
+    /\bfetch\s*\(/,
+  ];
+  const violations: string[] = [];
+  for (const file of files) {
+    const source = readFileSync(file, "utf8");
+    for (const pattern of forbidden) {
+      const match = source.match(pattern);
+      if (match) violations.push(`${file}: ${match[0]}`);
+    }
+  }
+  assert.deepEqual(violations, [], `本地 parser authority 边界被打破:\n${violations.join("\n")}`);
 });

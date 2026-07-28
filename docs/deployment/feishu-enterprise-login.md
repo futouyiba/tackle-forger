@@ -38,13 +38,17 @@ linked worktree（`.git` 是文件而非目录），提取 worktree 名称，并
 - 该路径已包含在 `.gitignore` 的 `.data/` 规则中。
 - 若终端环境已显式设置 `FEISHU_SESSION_DATA_DIR`，脚本不做改写。
 - 生产部署路径（如 `/opt/tackle-forger/data/auth`）不会被脚本触及。
+- 直接运行 `npm run dev` 时，vinext 通过受支持的 CLI 参数固定监听
+  `3456`；运行 `scripts/start-dev.ps1 -Port <端口>` 时，该参数会作为最后一个
+  `-p` 传给 vinext，从而覆盖默认值并保持每个 worktree 的端口隔离。不能只设置
+  `PORT` 或 `vite.config.ts` 的 `server.port`，因为当前 vinext dev 不消费这两个值。
 
 关于真实 OAuth 回调的端口限制：
 
 > 飞书开放平台登记的 `FEISHU_REDIRECT_URI` 必须与回调 URL 逐字相等。
 > 每个 worktree 开发服务器运行在不同端口，因此回调 URL 中的端口也必须匹配。
-> 例如 worktree A 使用 `http://127.0.0.1:3000/api/auth/feishu/callback`，
-> worktree B 使用 `http://127.0.0.1:3001/api/auth/feishu/callback`。
+> 例如 worktree A 使用默认的 `http://127.0.0.1:3456/api/auth/feishu/callback`，
+> worktree B 使用 `http://127.0.0.1:3457/api/auth/feishu/callback`。
 > 每个开发者需在飞书开放平台为自己的开发环境登记对应的回调地址（或使用单独的应用）。
 > 本机开发使用 `127.0.0.1` loopback 例外需要 `NODE_ENV=development` 且
 > `FEISHU_ALLOW_INSECURE_HTTP=true`；公网 HTTP 始终拒绝。

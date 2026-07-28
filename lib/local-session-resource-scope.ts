@@ -19,6 +19,7 @@ export interface LocalSessionObjectUrlApi {
 
 export interface SessionResourceSnapshot {
   generation: number;
+  resourceHandle: string;
   disposed: boolean;
   aborted: boolean;
   workerOwned: boolean;
@@ -31,6 +32,7 @@ export interface SessionResourceSnapshot {
 export class SessionResourceScope {
   readonly abortController = new AbortController();
   readonly generation: number;
+  readonly resourceHandle: string;
 
   #worker: LocalSessionParserWorker | null = null;
   #buffer: ArrayBuffer | null = null;
@@ -41,11 +43,19 @@ export class SessionResourceScope {
   #disposed = false;
   #objectUrlApi: LocalSessionObjectUrlApi;
 
-  constructor(generation: number, objectUrlApi: LocalSessionObjectUrlApi = URL) {
+  constructor(
+    generation: number,
+    resourceHandle: string,
+    objectUrlApi: LocalSessionObjectUrlApi = URL,
+  ) {
     if (!Number.isSafeInteger(generation) || generation < 1) {
       throw new TypeError("SessionResourceScope generation must be a positive safe integer.");
     }
+    if (!resourceHandle.trim()) {
+      throw new TypeError("SessionResourceScope resourceHandle must not be empty.");
+    }
     this.generation = generation;
+    this.resourceHandle = resourceHandle;
     this.#objectUrlApi = objectUrlApi;
   }
 
@@ -121,6 +131,7 @@ export class SessionResourceScope {
   snapshot(): SessionResourceSnapshot {
     return {
       generation: this.generation,
+      resourceHandle: this.resourceHandle,
       disposed: this.#disposed,
       aborted: this.signal.aborted,
       workerOwned: this.#worker !== null,

@@ -4,6 +4,9 @@ import type {
 import {
   createLocalSessionModel,
   parseLocalSessionModel,
+  type LocalEditableItemPart,
+  type LocalEditableRule,
+  type LocalSessionDocument,
   type LocalSessionModel,
 } from "./local-session-contracts";
 import type { BrowserCanonicalWorkbookWarning } from "./browser-canonical-workbook";
@@ -18,11 +21,7 @@ export interface LocalSessionRulesTemplateProjection {
   warnings: BrowserCanonicalWorkbookWarning[];
   identityRows: CanonicalRuleWorkbookParsedInspection["identityRows"];
   identityReport: CanonicalRuleWorkbookParsedInspection["identityReport"];
-  canonicalRuleDraft: CanonicalRuleWorkbookParsedInspection["canonicalRuleDraft"];
-  weightTemplateDraft: CanonicalRuleWorkbookParsedInspection["weightTemplateDraft"];
-  qualityDraft: CanonicalRuleWorkbookParsedInspection["qualityDraft"];
-  pricingDraft: CanonicalRuleWorkbookParsedInspection["pricingDraft"];
-  pricingWeightBandPolicy: CanonicalRuleWorkbookParsedInspection["pricingWeightBandPolicy"];
+  editableDocument: LocalSessionDocument;
 }
 
 export interface LocalSessionParsedWorkbook {
@@ -33,6 +32,8 @@ export interface LocalSessionParsedWorkbook {
 export interface LocalSessionParserRequest {
   type: typeof LOCAL_SESSION_PARSER_REQUEST;
   generation: number;
+  operationId: string;
+  resourceHandle: string;
   fileName: string;
   byteLength: number;
   contentSha256: string;
@@ -44,11 +45,15 @@ export type LocalSessionParserWorkerResponse =
   | {
       type: "parsed_local_canonical_workbook";
       generation: number;
+      operationId: string;
+      resourceHandle: string;
       result: LocalSessionParsedWorkbook;
     }
   | {
       type: "local_canonical_workbook_failed";
       generation: number;
+      operationId: string;
+      resourceHandle: string;
       error: {
         code: string;
         message: string;
@@ -60,17 +65,99 @@ export function projectLocalRulesTemplateWorkbook(input: {
   warnings: BrowserCanonicalWorkbookWarning[];
 }): LocalSessionRulesTemplateProjection {
   const { inspection } = input;
+  const editableDocument = editableDocumentFromInspection(inspection);
   return {
     contractVersion: LOCAL_SESSION_WORKBOOK_CONTRACT_VERSION,
     semanticRevision: inspection.sourceRevision.sourceRevision,
     warnings: input.warnings,
     identityRows: inspection.identityRows,
     identityReport: inspection.identityReport,
-    canonicalRuleDraft: inspection.canonicalRuleDraft,
-    weightTemplateDraft: inspection.weightTemplateDraft,
-    qualityDraft: inspection.qualityDraft,
-    pricingDraft: inspection.pricingDraft,
-    pricingWeightBandPolicy: inspection.pricingWeightBandPolicy,
+    editableDocument,
+  };
+}
+
+function localItemPart(value: string | undefined): LocalEditableItemPart {
+  if (value === "part:reel" || value === "reel") return "reel";
+  if (value === "part:line" || value === "line") return "line";
+  if (value === "part:rod" || value === "rod") return "rod";
+  throw new TypeError("Canonical local projection is missing an explicit rod/reel/line part.");
+}
+
+function editableDocumentFromInspection(
+  inspection: CanonicalRuleWorkbookParsedInspection,
+): LocalSessionDocument {
+  const draft = inspection.canonicalRuleDraft;
+  let sequence = 0;
+  const rules: LocalEditableRule[] = [];
+  const appendRules = (
+    sourceKind: LocalEditableRule["sourceKind"],
+    sourceId: string,
+    sourceName: string,
+    entries: typeof draft.methodProfiles[number]["rules"],
+  ) => {
+    for (const entry of entries) {
+      rules.push({
+        id: `${sourceKind}:${sourceId}:${entry.id}`,
+        sourceKind,
+        sourceId,
+        sourceName,
+        sequence,
+        parameterKey: entry.parameterKey,
+        operation: entry.operation,
+        value: entry.value,
+        condition: entry.condition ?? "",
+        notes: entry.notes ?? "",
+        enabled: true,
+      });
+      sequence += 1;
+    }
+  };
+  for (const profile of draft.methodProfiles) {
+    appendRules("method", profile.id, profile.name, profile.rules);
+  }
+  for (const profile of draft.itemTypeProfiles) {
+    appendRules("item_type", profile.id, profile.name, profile.rules);
+  }
+  for (const profile of draft.functionProfiles) {
+    appendRules("function", profile.id, profile.name, profile.rules);
+    for (const intensity of profile.intensityRules) {
+      appendRules(
+        "function",
+        `${profile.id}:intensity:${intensity.intensity}:${intensity.itemPartId ?? "legacy"}`,
+        `${profile.name} · 强度 ${intensity.intensity}`,
+        intensity.rules,
+      );
+    }
+  }
+  for (const modifier of draft.modifiers) {
+    appendRules("modifier", modifier.id, modifier.name, modifier.rules);
+  }
+  for (const layer of draft.layers) {
+    appendRules("layer", layer.id, layer.name, layer.rules);
+  }
+  return {
+    title: "WQ8w 本地规则与模板",
+    notes: `仅内存编辑；源语义修订 ${inspection.sourceRevision.sourceRevision}`,
+    parameters: draft.parameters.map((parameter, index) => ({
+      id: parameter.id ?? `parameter:${index}:${parameter.key}`,
+      key: parameter.key,
+      label: parameter.label,
+      itemPart: localItemPart(parameter.itemPartId ?? parameter.itemKind),
+      unit: parameter.unit,
+      precision: parameter.precision,
+      notes: parameter.notes,
+    })),
+    templates: draft.templates.map((template) => ({
+      id: template.id,
+      name: template.name,
+      itemPart: localItemPart(template.itemPartId),
+      targetPullMinKgf: template.targetPullMinKgf ?? template.fishMinKg,
+      targetPullMaxKgf: template.targetPullMaxKgf ?? template.fishMaxKg,
+      nominalTargetPullKgf: template.nominalTargetPullKgf ?? template.nominalFishKg,
+      values: { ...template.values },
+      notes: template.notes,
+    })),
+    rules,
   };
 }
 
@@ -82,13 +169,16 @@ export function createLocalSessionParsedWorkbook(input: {
   warnings: BrowserCanonicalWorkbookWarning[];
 }): LocalSessionParsedWorkbook {
   return {
-    session: createLocalSessionModel({
-      kind: "local_excel",
-      fileName: input.fileName,
-      byteLength: input.byteLength,
-      contentSha256: input.contentSha256,
-    }),
     workbook: projectLocalRulesTemplateWorkbook(input),
+    session: createLocalSessionModel(
+      {
+        kind: "local_excel",
+        fileName: input.fileName,
+        byteLength: input.byteLength,
+        contentSha256: input.contentSha256,
+      },
+      editableDocumentFromInspection(input.inspection),
+    ),
   };
 }
 
@@ -120,11 +210,7 @@ function parseProjection(value: unknown): LocalSessionRulesTemplateProjection {
       "warnings",
       "identityRows",
       "identityReport",
-      "canonicalRuleDraft",
-      "weightTemplateDraft",
-      "qualityDraft",
-      "pricingDraft",
-      "pricingWeightBandPolicy",
+      "editableDocument",
     ],
     "LocalSessionRulesTemplateProjection",
   );
@@ -142,21 +228,25 @@ function parseProjection(value: unknown): LocalSessionRulesTemplateProjection {
   if (!Array.isArray(object.warnings) || !Array.isArray(object.identityRows)) {
     throw new TypeError("Local-session workbook arrays are invalid.");
   }
-  if (object.pricingWeightBandPolicy !== "MATCHED_STRUCTURAL_SOURCE_BAND") {
-    throw new TypeError("Local-session pricing weight-band policy is unsupported.");
-  }
-  for (const field of [
-    "identityReport",
-    "canonicalRuleDraft",
-    "weightTemplateDraft",
-    "qualityDraft",
-    "pricingDraft",
-  ] as const) {
+  for (const field of ["identityReport"] as const) {
     if (!object[field] || typeof object[field] !== "object" || Array.isArray(object[field])) {
       throw new TypeError(`LocalSessionRulesTemplateProjection.${field} must be an object.`);
     }
   }
-  return object as unknown as LocalSessionRulesTemplateProjection;
+  return {
+    ...object,
+    editableDocument: parseLocalSessionModel({
+      contractVersion: "local-session/open009-v2",
+      authority: "local",
+      source: { kind: "temporary_workspace" },
+      document: object.editableDocument,
+      history: {
+        current: { authority: "local_ephemeral", sequence: 0 },
+        undo: [],
+        redo: [],
+      },
+    }).document,
+  } as LocalSessionRulesTemplateProjection;
 }
 
 export function parseLocalSessionParsedWorkbook(value: unknown): LocalSessionParsedWorkbook {
@@ -175,18 +265,31 @@ export function parseLocalSessionParserWorkerResponse(
   }
   const type = (value as Record<string, unknown>).type;
   if (type === "parsed_local_canonical_workbook") {
-    const object = exactObject(value, ["type", "generation", "result"], "Worker response");
+    const object = exactObject(
+      value,
+      ["type", "generation", "operationId", "resourceHandle", "result"],
+      "Worker response",
+    );
     if (!Number.isSafeInteger(object.generation) || (object.generation as number) < 1) {
       throw new TypeError("Worker response generation is invalid.");
     }
     return {
       type,
       generation: object.generation as number,
+      operationId: nonEmptyString(object.operationId, "Worker response.operationId"),
+      resourceHandle: nonEmptyString(
+        object.resourceHandle,
+        "Worker response.resourceHandle",
+      ),
       result: parseLocalSessionParsedWorkbook(object.result),
     };
   }
   if (type === "local_canonical_workbook_failed") {
-    const object = exactObject(value, ["type", "generation", "error"], "Worker response");
+    const object = exactObject(
+      value,
+      ["type", "generation", "operationId", "resourceHandle", "error"],
+      "Worker response",
+    );
     const error = exactObject(object.error, ["code", "message"], "Worker response error");
     if (
       !Number.isSafeInteger(object.generation)
@@ -201,8 +304,20 @@ export function parseLocalSessionParserWorkerResponse(
     return {
       type,
       generation: object.generation as number,
+      operationId: nonEmptyString(object.operationId, "Worker response.operationId"),
+      resourceHandle: nonEmptyString(
+        object.resourceHandle,
+        "Worker response.resourceHandle",
+      ),
       error: { code: error.code, message: error.message },
     };
   }
   throw new TypeError("Worker response type is unsupported.");
+}
+
+function nonEmptyString(value: unknown, path: string): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new TypeError(`${path} must be a non-empty string.`);
+  }
+  return value;
 }

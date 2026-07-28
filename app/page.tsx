@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 import { Workbench } from "./Workbench";
 import { createSeedState } from "@/lib/seed";
+import { isLocalSessionEditorEnabled } from "@/lib/local-session-feature";
+import { LocalSessionWorkbench } from "./LocalSessionWorkbench";
+import "./local-session-workbench.css";
 
 export const metadata: Metadata = {
   title: "钓具配置工坊",
@@ -8,5 +11,10 @@ export const metadata: Metadata = {
 };
 
 export default function Home() {
+  if (isLocalSessionEditorEnabled(
+    process.env.TACKLE_FORGER_LOCAL_SESSION_EDITOR_ENABLED,
+  )) {
+    return <LocalSessionWorkbench />;
+  }
   return <Workbench initialState={createSeedState({ mode: "production" })} />;
 }

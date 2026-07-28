@@ -219,11 +219,15 @@ test("canonical File 保持不可变，ArrayBuffer 转移到 disposable worker�
   assert.equal(ready.result.session.source.kind, "local_excel");
   assert.equal(ready.result.workbook.contractVersion, "local-session-canonical-workbook/open009-v2");
   assert.equal(ready.result.workbook.semanticRevision.length, 8);
+  assert.deepEqual(ready.result.workbook.editableDocument, ready.result.session.document);
   assert.equal("seriesDefinitions" in ready.result.workbook, false);
+  assert.equal("qualityDraft" in ready.result.workbook, false);
+  assert.equal("pricingDraft" in ready.result.workbook, false);
   assert.equal("workspaceId" in ready.result.workbook, false);
   assert.equal("configurationSnapshots" in ready.result.workbook, false);
   assert.deepEqual(loader.readyResourceSnapshot(), {
     generation: ready.generation,
+    resourceHandle: ready.resourceHandle,
     disposed: false,
     aborted: false,
     workerOwned: false,
@@ -233,6 +237,41 @@ test("canonical File 保持不可变，ArrayBuffer 转移到 disposable worker�
     timeoutCount: 0,
   });
   assert.deepEqual(urls.revoked, []);
+});
+
+test("operationId/resourceHandle 碰撞与 worker 身份错配均 fail-closed", async () => {
+  const urls = new FakeObjectUrls();
+  const duplicateIds = new (
+    await import("../lib/local-session-operation-identity")
+  ).LocalSessionIdentityAllocator({ createId: () => "duplicate" });
+  const collisionFactory = workerFactory([handleLocalSessionParserRequest]);
+  const collisionLoader = new LocalSessionWorkbookLoader({
+    workerFactory: collisionFactory.create,
+    objectUrlApi: urls,
+    identityAllocator: duplicateIds,
+  });
+  await collisionLoader.open(canonicalFile("first-identity.xlsx"));
+  await assert.rejects(
+    collisionLoader.open(canonicalFile("second-identity.xlsx")),
+    /identity collided/,
+  );
+
+  const mismatchFactory = workerFactory(["manual"]);
+  const mismatchLoader = new LocalSessionWorkbookLoader({
+    workerFactory: mismatchFactory.create,
+    objectUrlApi: new FakeObjectUrls(),
+  });
+  const pending = mismatchLoader.open(canonicalFile("mismatch.xlsx"));
+  const worker = await waitForWorker(mismatchFactory, 0);
+  const request = await waitForRequest(worker);
+  const valid = await handleLocalSessionParserRequest(request);
+  worker.emitMessage({
+    ...valid,
+    operationId: `${request.operationId}:wrong`,
+  });
+  await rejectsCode(pending, "LOCAL_SESSION_RESOURCE_IDENTITY_MISMATCH");
+  assert.equal(mismatchLoader.ready(), null);
+  assert.equal(worker.terminated, true);
 });
 
 test("非 secure context 缺少 SubtleCrypto 时使用纯浏览器 SHA-256 fallback", async () => {
@@ -296,6 +335,8 @@ test("replace 只在新候选成功后原子替换；失败、worker crash 和 t
     async (request) => ({
       type: "local_canonical_workbook_failed",
       generation: request.generation,
+      operationId: request.operationId,
+      resourceHandle: request.resourceHandle,
       error: { code: "CONTROLLED_FAILURE", message: "controlled failure" },
     }),
     "crash",

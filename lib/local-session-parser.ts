@@ -10,6 +10,7 @@ import {
   type LocalSessionParserWorker,
 } from "./local-session-resource-scope";
 import { sha256Hex as pureSha256Hex } from "./five-axis-hash";
+import { LocalSessionIdentityAllocator } from "./local-session-operation-identity";
 
 const LOCAL_SESSION_OBSERVED_AT = "1970-01-01T00:00:00.000Z";
 const DEFAULT_PARSE_TIMEOUT_MS = 30_000;
@@ -36,6 +37,8 @@ export class LocalSessionParserError extends Error {
 
 export interface LocalSessionReadyWorkbook {
   generation: number;
+  operationId: string;
+  resourceHandle: string;
   sourceObjectUrl: string;
   result: LocalSessionParsedWorkbook;
 }
@@ -49,6 +52,7 @@ export interface LocalSessionWorkbookLoaderOptions {
   objectUrlApi?: LocalSessionObjectUrlApi;
   timeoutMs?: number;
   subtleCrypto?: SubtleCrypto | null;
+  identityAllocator?: LocalSessionIdentityAllocator;
 }
 
 function defaultWorkerFactory(): LocalSessionParserWorker {
@@ -70,6 +74,8 @@ function publicReady(ready: OwnedReadyWorkbook | null): LocalSessionReadyWorkboo
   if (!ready) return null;
   return {
     generation: ready.generation,
+    operationId: ready.operationId,
+    resourceHandle: ready.resourceHandle,
     sourceObjectUrl: ready.sourceObjectUrl,
     result: ready.result,
   };
@@ -83,6 +89,7 @@ export class LocalSessionWorkbookLoader {
   #objectUrlApi: LocalSessionObjectUrlApi;
   #timeoutMs: number;
   #subtleCrypto: SubtleCrypto | undefined;
+  #identities: LocalSessionIdentityAllocator;
 
   constructor(options: LocalSessionWorkbookLoaderOptions = {}) {
     this.#workerFactory = options.workerFactory ?? defaultWorkerFactory;
@@ -91,6 +98,7 @@ export class LocalSessionWorkbookLoader {
     this.#subtleCrypto = options.subtleCrypto === undefined
       ? globalThis.crypto?.subtle
       : options.subtleCrypto ?? undefined;
+    this.#identities = options.identityAllocator ?? new LocalSessionIdentityAllocator();
     if (!Number.isSafeInteger(this.#timeoutMs) || this.#timeoutMs < 1) {
       throw new TypeError("Local-session parser timeout must be a positive safe integer.");
     }
@@ -108,7 +116,10 @@ export class LocalSessionWorkbookLoader {
     return this.#ready?.scope.snapshot() ?? null;
   }
 
-  async open(file: LocalSessionFile): Promise<LocalSessionReadyWorkbook> {
+  async open(
+    file: LocalSessionFile,
+    requestedOperationId?: string,
+  ): Promise<LocalSessionReadyWorkbook> {
     this.cancelPending();
     if (file.size > MAXIMUM_LOCAL_SESSION_FILE_BYTES) {
       throw new LocalSessionParserError(
@@ -117,7 +128,15 @@ export class LocalSessionWorkbookLoader {
       );
     }
     const generation = this.#nextGeneration();
-    const scope = new SessionResourceScope(generation, this.#objectUrlApi);
+    const operationId = requestedOperationId
+      ? this.#identities.claim("operation", requestedOperationId)
+      : this.#identities.allocate("operation");
+    const resourceHandle = this.#identities.allocate("resource");
+    const scope = new SessionResourceScope(
+      generation,
+      resourceHandle,
+      this.#objectUrlApi,
+    );
     this.#candidate = scope;
     let sourceObjectUrl: string;
     try {
@@ -146,6 +165,8 @@ export class LocalSessionWorkbookLoader {
       const result = await this.#parseInWorker(scope, {
         type: LOCAL_SESSION_PARSER_REQUEST,
         generation,
+        operationId,
+        resourceHandle,
         fileName: file.name,
         byteLength: bytes.byteLength,
         contentSha256,
@@ -161,6 +182,8 @@ export class LocalSessionWorkbookLoader {
       scope.cacheParserValue(contentSha256, result.workbook);
       const nextReady: OwnedReadyWorkbook = {
         generation,
+        operationId,
+        resourceHandle,
         sourceObjectUrl,
         result,
         scope,
@@ -236,6 +259,19 @@ export class LocalSessionWorkbookLoader {
           return;
         }
         if (response.generation !== scope.generation || scope.disposed) return;
+        if (
+          response.operationId !== request.operationId
+          || response.resourceHandle !== scope.resourceHandle
+        ) {
+          finish({
+            ok: false,
+            error: new LocalSessionParserError(
+              "LOCAL_SESSION_RESOURCE_IDENTITY_MISMATCH",
+              "解析 worker 返回了不匹配的操作或资源身份。",
+            ),
+          });
+          return;
+        }
         if (response.type === "local_canonical_workbook_failed") {
           finish({
             ok: false,

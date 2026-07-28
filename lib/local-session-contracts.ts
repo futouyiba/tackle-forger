@@ -31,10 +31,61 @@ export type LocalSessionSource =
       kind: "temporary_workspace";
     };
 
+export type LocalEditableItemPart = "rod" | "reel" | "line";
+export type LocalEditableRuleOperation =
+  | "add"
+  | "multiply"
+  | "set"
+  | "min"
+  | "max"
+  | "formula";
+
+export interface LocalEditableParameter {
+  id: string;
+  key: string;
+  label: string;
+  itemPart: LocalEditableItemPart;
+  unit: string;
+  precision: number;
+  notes: string;
+}
+
+export interface LocalEditableTemplate {
+  id: string;
+  name: string;
+  itemPart: LocalEditableItemPart;
+  targetPullMinKgf: number;
+  targetPullMaxKgf: number;
+  nominalTargetPullKgf: number;
+  values: Record<string, number | string>;
+  notes: string;
+}
+
+export interface LocalEditableRule {
+  id: string;
+  sourceKind: "method" | "item_type" | "function" | "modifier" | "layer";
+  sourceId: string;
+  sourceName: string;
+  sequence: number;
+  parameterKey: string;
+  operation: LocalEditableRuleOperation;
+  value: number | string;
+  condition: string;
+  notes: string;
+  enabled: boolean;
+}
+
 export interface LocalSessionDocument {
   title: string;
   notes: string;
+  parameters: LocalEditableParameter[];
+  templates: LocalEditableTemplate[];
+  rules: LocalEditableRule[];
 }
+
+export type LocalSessionDocumentInput =
+  | LocalSessionDocument
+  | { title: string; notes: string };
 
 /**
  * A deliberately non-numeric revision token. It cannot be passed where a
@@ -74,7 +125,7 @@ export type LocalSessionReducerState =
 
 export type LocalSessionReducerAction =
   | { type: "activate_local_session"; session: LocalSessionModel }
-  | { type: "commit_local_edit"; document: LocalSessionDocument }
+  | { type: "commit_local_edit"; document: LocalSessionDocumentInput }
   | { type: "undo_local_edit" }
   | { type: "redo_local_edit" }
   | { type: "clear_local_session" };
@@ -123,6 +174,145 @@ function nonNegativeSafeInteger(value: unknown, path: string): number {
   return value as number;
 }
 
+function finiteNumber(value: unknown, path: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    throw new LocalSessionSchemaError(`${path} must be a finite number.`);
+  }
+  return value;
+}
+
+function booleanValue(value: unknown, path: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new LocalSessionSchemaError(`${path} must be a boolean.`);
+  }
+  return value;
+}
+
+function itemPart(value: unknown, path: string): LocalEditableItemPart {
+  if (value !== "rod" && value !== "reel" && value !== "line") {
+    throw new LocalSessionSchemaError(`${path} must be rod, reel or line.`);
+  }
+  return value;
+}
+
+function ruleOperation(value: unknown, path: string): LocalEditableRuleOperation {
+  if (
+    value !== "add"
+    && value !== "multiply"
+    && value !== "set"
+    && value !== "min"
+    && value !== "max"
+    && value !== "formula"
+  ) {
+    throw new LocalSessionSchemaError(`${path} is unsupported.`);
+  }
+  return value;
+}
+
+function stringOrFiniteNumber(value: unknown, path: string): string | number {
+  return typeof value === "string" ? value : finiteNumber(value, path);
+}
+
+function parseParameter(value: unknown, path: string): LocalEditableParameter {
+  const object = exactObject(
+    value,
+    ["id", "key", "label", "itemPart", "unit", "precision", "notes"],
+    path,
+  );
+  return {
+    id: stringValue(object.id, `${path}.id`),
+    key: stringValue(object.key, `${path}.key`),
+    label: stringValue(object.label, `${path}.label`),
+    itemPart: itemPart(object.itemPart, `${path}.itemPart`),
+    unit: stringValue(object.unit, `${path}.unit`),
+    precision: nonNegativeSafeInteger(object.precision, `${path}.precision`),
+    notes: stringValue(object.notes, `${path}.notes`),
+  };
+}
+
+function parseTemplate(value: unknown, path: string): LocalEditableTemplate {
+  const object = exactObject(
+    value,
+    [
+      "id",
+      "name",
+      "itemPart",
+      "targetPullMinKgf",
+      "targetPullMaxKgf",
+      "nominalTargetPullKgf",
+      "values",
+      "notes",
+    ],
+    path,
+  );
+  const rawValues = object.values;
+  if (!rawValues || typeof rawValues !== "object" || Array.isArray(rawValues)) {
+    throw new LocalSessionSchemaError(`${path}.values must be an object.`);
+  }
+  const values = Object.fromEntries(
+    Object.entries(rawValues).map(([key, entry]) => [
+      key,
+      stringOrFiniteNumber(entry, `${path}.values.${key}`),
+    ]),
+  );
+  return {
+    id: stringValue(object.id, `${path}.id`),
+    name: stringValue(object.name, `${path}.name`),
+    itemPart: itemPart(object.itemPart, `${path}.itemPart`),
+    targetPullMinKgf: finiteNumber(object.targetPullMinKgf, `${path}.targetPullMinKgf`),
+    targetPullMaxKgf: finiteNumber(object.targetPullMaxKgf, `${path}.targetPullMaxKgf`),
+    nominalTargetPullKgf: finiteNumber(
+      object.nominalTargetPullKgf,
+      `${path}.nominalTargetPullKgf`,
+    ),
+    values,
+    notes: stringValue(object.notes, `${path}.notes`),
+  };
+}
+
+function parseRule(value: unknown, path: string): LocalEditableRule {
+  const object = exactObject(
+    value,
+    [
+      "id",
+      "sourceKind",
+      "sourceId",
+      "sourceName",
+      "sequence",
+      "parameterKey",
+      "operation",
+      "value",
+      "condition",
+      "notes",
+      "enabled",
+    ],
+    path,
+  );
+  const sourceKind = object.sourceKind;
+  if (
+    sourceKind !== "method"
+    && sourceKind !== "item_type"
+    && sourceKind !== "function"
+    && sourceKind !== "modifier"
+    && sourceKind !== "layer"
+  ) {
+    throw new LocalSessionSchemaError(`${path}.sourceKind is unsupported.`);
+  }
+  return {
+    id: stringValue(object.id, `${path}.id`),
+    sourceKind,
+    sourceId: stringValue(object.sourceId, `${path}.sourceId`),
+    sourceName: stringValue(object.sourceName, `${path}.sourceName`),
+    sequence: nonNegativeSafeInteger(object.sequence, `${path}.sequence`),
+    parameterKey: stringValue(object.parameterKey, `${path}.parameterKey`),
+    operation: ruleOperation(object.operation, `${path}.operation`),
+    value: stringOrFiniteNumber(object.value, `${path}.value`),
+    condition: stringValue(object.condition, `${path}.condition`),
+    notes: stringValue(object.notes, `${path}.notes`),
+    enabled: booleanValue(object.enabled, `${path}.enabled`),
+  };
+}
+
 function parseRevision(value: unknown, path: string): LocalEphemeralRevision {
   const object = exactObject(value, ["authority", "sequence"], path);
   if (object.authority !== "local_ephemeral") {
@@ -135,11 +325,46 @@ function parseRevision(value: unknown, path: string): LocalEphemeralRevision {
 }
 
 function parseDocument(value: unknown, path: string): LocalSessionDocument {
-  const object = exactObject(value, ["title", "notes"], path);
+  const object = exactObject(
+    value,
+    ["title", "notes", "parameters", "templates", "rules"],
+    path,
+  );
+  if (
+    !Array.isArray(object.parameters)
+    || !Array.isArray(object.templates)
+    || !Array.isArray(object.rules)
+  ) {
+    throw new LocalSessionSchemaError(`${path} allowlist collections must be arrays.`);
+  }
   return {
     title: stringValue(object.title, `${path}.title`),
     notes: stringValue(object.notes, `${path}.notes`),
+    parameters: object.parameters.map((entry, index) =>
+      parseParameter(entry, `${path}.parameters[${index}]`)),
+    templates: object.templates.map((entry, index) =>
+      parseTemplate(entry, `${path}.templates[${index}]`)),
+    rules: object.rules.map((entry, index) =>
+      parseRule(entry, `${path}.rules[${index}]`)),
   };
+}
+
+function normalizeDocumentInput(
+  value: LocalSessionDocumentInput,
+  path: string,
+): LocalSessionDocument {
+  if (
+    value
+    && typeof value === "object"
+    && !Array.isArray(value)
+    && Object.keys(value).every((key) => key === "title" || key === "notes")
+  ) {
+    return parseDocument(
+      { ...value, parameters: [], templates: [], rules: [] },
+      path,
+    );
+  }
+  return parseDocument(value, path);
 }
 
 function parseSource(value: unknown): LocalSessionSource {
@@ -263,13 +488,19 @@ export function parseLocalSessionModel(value: unknown): LocalSessionModel {
 
 export function createLocalSessionModel(
   source: LocalSessionSource,
-  document: LocalSessionDocument = { title: "", notes: "" },
+  document: LocalSessionDocumentInput = {
+    title: "",
+    notes: "",
+    parameters: [],
+    templates: [],
+    rules: [],
+  },
 ): LocalSessionModel {
   return parseLocalSessionModel({
     contractVersion: LOCAL_SESSION_CONTRACT_VERSION,
     authority: "local",
     source,
-    document,
+    document: normalizeDocumentInput(document, "LocalSessionModel.document"),
     history: {
       current: { authority: "local_ephemeral", sequence: 0 },
       undo: [],
@@ -286,7 +517,7 @@ function historyEntry(session: LocalSessionModel): LocalSessionHistoryEntry {
 }
 
 function sameDocument(left: LocalSessionDocument, right: LocalSessionDocument): boolean {
-  return left.title === right.title && left.notes === right.notes;
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 export function reduceLocalSession(
@@ -304,7 +535,10 @@ export function reduceLocalSession(
   }
   const { session } = state;
   if (action.type === "commit_local_edit") {
-    const document = parseDocument(action.document, "LocalSessionReducerAction.document");
+    const document = normalizeDocumentInput(
+      action.document,
+      "LocalSessionReducerAction.document",
+    );
     if (sameDocument(session.document, document)) {
       return state;
     }

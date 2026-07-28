@@ -593,7 +593,7 @@ test("late shared success is disposed and cannot switch authority", () => {
   }]);
 });
 
-test("workspace mismatch disposes the loaded target and retains prior authority", () => {
+test("workspace mismatch disposes the target and terminally restores prior authority", () => {
   const local = withReadyLocal(authenticatedState());
   const loading = apply(local, {
     type: "shared_open_requested",
@@ -611,11 +611,111 @@ test("workspace mismatch disposes the loaded target and retains prior authority"
   });
   assert.equal(mismatch.accepted, false);
   assert.equal(mismatch.rejectionReason, "shared_workspace_mismatch");
-  assert.equal(mismatch.state, loading);
+  assert.deepEqual(mismatch.state.authority, { status: "local_session" });
+  assert.deepEqual(mismatch.state.lastSharedFailure, {
+    operationId: "shared-mismatch",
+    workspaceId: "workspace-expected",
+    kind: "workspace_mismatch",
+  });
   assert.deepEqual(mismatch.effects, [{
     type: "dispose_shared_workspace",
     resourceId: "wrong-resource",
   }]);
+  const retry = transitionAppShell(mismatch.state, {
+    type: "shared_open_requested",
+    operationId: "shared-retry",
+    workspaceId: SHARED.workspaceId,
+  });
+  assert.equal(retry.accepted, true);
+  assert.equal(retry.state.authority.status, "shared_loading");
+});
+
+test("shared activation clears every unrecoverable terminal local failure", () => {
+  const failures: Array<{
+    name: string;
+    prepare: () => AppShellState;
+  }> = [
+    {
+      name: "selection",
+      prepare: () => {
+        const selecting = apply(authenticatedState(), {
+          type: "local_selection_requested",
+          operationId: "bad-selection",
+        });
+        return apply(selecting, {
+          type: "local_selection_failed",
+          operationId: "bad-selection",
+        });
+      },
+    },
+    {
+      name: "parse",
+      prepare: () => {
+        let state = apply(authenticatedState(), {
+          type: "local_selection_requested",
+          operationId: "bad-parse",
+        });
+        state = apply(state, {
+          type: "local_parse_started",
+          operationId: "bad-parse",
+          selectionRef: "bad-parse-selection",
+        });
+        return apply(state, {
+          type: "local_parse_failed",
+          operationId: "bad-parse",
+        });
+      },
+    },
+    {
+      name: "invalid",
+      prepare: () => {
+        let state = apply(authenticatedState(), {
+          type: "local_selection_requested",
+          operationId: "bad-invalid",
+        });
+        state = apply(state, {
+          type: "local_parse_started",
+          operationId: "bad-invalid",
+          selectionRef: "bad-invalid-selection",
+        });
+        return apply(state, {
+          type: "local_parse_succeeded",
+          operationId: "bad-invalid",
+          readyId: "bad-invalid-ready",
+          session: { ...LOCAL_SESSION, workspaceId: "forbidden" } as never,
+        });
+      },
+    },
+  ];
+
+  for (const failure of failures) {
+    const failed = failure.prepare();
+    assert.equal(failed.source.status, "failed", failure.name);
+    assert.deepEqual(failed.authority, { status: "none" }, failure.name);
+
+    const operationId = `shared-after-${failure.name}`;
+    const loading = apply(failed, {
+      type: "shared_open_requested",
+      operationId,
+      workspaceId: SHARED.workspaceId,
+    });
+    const activated = transitionAppShell(loading, {
+      type: "shared_load_succeeded",
+      operationId,
+      resource: SHARED,
+    });
+
+    assert.equal(activated.accepted, true, failure.name);
+    assert.deepEqual(activated.state.source, { status: "empty" }, failure.name);
+    assert.deepEqual(activated.state.authority, {
+      status: "shared_workspace",
+      resource: SHARED,
+    }, failure.name);
+    assert.deepEqual(activated.effects, [{
+      type: "activate_shared_workspace",
+      resource: SHARED,
+    }], failure.name);
+  }
 });
 
 test("logout and revocation clear shared memory immediately without stale restoration", () => {

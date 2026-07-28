@@ -80,6 +80,7 @@ export type SharedLoadFailureKind =
   | "forbidden_403"
   | "conflict_409"
   | "server_5xx"
+  | "workspace_mismatch"
   | "cancelled";
 
 export interface SharedLoadFailure {
@@ -637,11 +638,24 @@ export function transitionAppShell(
         );
       }
       if (state.authority.workspaceId !== event.resource.workspaceId) {
-        return disposeLoadedSharedResponse(
-          state,
-          event.resource,
-          "shared_workspace_mismatch",
-        );
+        const loading = state.authority;
+        return {
+          state: {
+            ...state,
+            authority: loading.previous,
+            lastSharedFailure: {
+              operationId: event.operationId,
+              workspaceId: loading.workspaceId,
+              kind: "workspace_mismatch",
+            },
+          },
+          effects: [{
+            type: "dispose_shared_workspace",
+            resourceId: event.resource.resourceId,
+          }],
+          accepted: false,
+          rejectionReason: "shared_workspace_mismatch",
+        };
       }
       const previous = state.authority.previous;
       const effects: AppShellEffect[] = [{
@@ -659,6 +673,8 @@ export function transitionAppShell(
           type: "dispose_shared_workspace",
           resourceId: previous.resource.resourceId,
         });
+      } else if (source.status !== "empty") {
+        source = { status: "empty" };
       }
       return accepted({
         ...state,

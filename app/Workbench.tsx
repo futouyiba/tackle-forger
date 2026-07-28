@@ -58,7 +58,7 @@ import {
   showcaseTargetPulls,
   templateTensionRange,
 } from "@/lib/showcase";
-import { ensureWorkflowFields } from "@/lib/workflow";
+import { ensureSharedWorkflowFields, ensureWorkflowFields } from "@/lib/workflow";
 import { validationIssueLevel } from "@/lib/validation-issues";
 import { createParameterId, migrateWorkspaceState } from "@/lib/migrations";
 import { mergeWorkspaceConflict } from "@/lib/workspace-conflict-merge";
@@ -538,10 +538,10 @@ type SaveFeedback = {
 };
 
 export function Workbench({ initialState }: { initialState: WorkspaceState }) {
-  const [state, setState] = useState<WorkspaceState>(() => ensureWorkflowFields(initialState));
+  const [state, setState] = useState<WorkspaceState>(() => ensureSharedWorkflowFields(initialState));
   const conflictDraftRef = useRef<WorkspaceState | null>(null);
   const conflictLatestRef = useRef<WorkspaceState | null>(null);
-  const baselineStateRef = useRef<WorkspaceState>(ensureWorkflowFields(initialState));
+  const baselineStateRef = useRef<WorkspaceState>(ensureSharedWorkflowFields(initialState));
   const [page, setPage] = useState<PageKey>("overview");
   const [pageRouteReady, setPageRouteReady] = useState(false);
   const [routeNonce, setRouteNonce] = useState(0);

@@ -36,6 +36,8 @@ import {
   type LocalSessionParserWorker,
 } from "../lib/local-session-resource-scope";
 import { deterministicHash } from "../lib/rule-kernel";
+import type { WorkspaceState } from "../lib/types";
+import { ensureSharedWorkflowFields } from "../lib/workflow";
 
 function dimensions(sheetId: string) {
   if (sheetId === "23CsXE") return { rows: 3, columns: 6 };
@@ -358,7 +360,7 @@ test("resource disposal is idempotent and releases worker, URL, buffer and cache
   });
 });
 
-test("formal-looking local payload is rejected and shared snapshot evidence remains byte-stable", () => {
+test("formal-looking local payload is rejected and shared activation preserves frozen snapshots byte-for-byte", () => {
   const formalLooking = {
     contractVersion: "local-session/open009-v2",
     authority: "local",
@@ -376,13 +378,22 @@ test("formal-looking local payload is rejected and shared snapshot evidence rema
   };
   assert.throws(() => parseLocalSessionModel(formalLooking), /unknown field/u);
 
-  const sharedSnapshot = {
-    id: "snapshot:existing",
-    modelId: "model:existing",
-    contentHash: "frozen-content-hash",
-    finalPanelValues: { pull: 3 },
-  };
-  const before = deterministicHash(sharedSnapshot);
+  const sharedPayload = JSON.parse(readFileSync(
+    new URL("./fixtures/workspace-production-schema-v17.json", import.meta.url),
+    "utf8",
+  )) as WorkspaceState;
+  const frozenSnapshotsBefore = JSON.stringify(sharedPayload.configurationSnapshots);
+  const frozenSnapshotsHashBefore = deterministicHash(sharedPayload.configurationSnapshots);
+  const activatedSharedState = ensureSharedWorkflowFields(sharedPayload);
+  assert.notEqual(activatedSharedState, sharedPayload);
+  assert.equal(
+    JSON.stringify(activatedSharedState.configurationSnapshots),
+    frozenSnapshotsBefore,
+  );
+  assert.equal(
+    deterministicHash(activatedSharedState.configurationSnapshots),
+    frozenSnapshotsHashBefore,
+  );
   let shell = createInitialAppShellState("auth:bootstrap");
   const apply = (event: Parameters<typeof transitionAppShell>[1]) => {
     const transition = transitionAppShell(shell, event);
@@ -431,19 +442,25 @@ test("formal-looking local payload is rejected and shared snapshot evidence rema
     },
   });
   assert.equal(shell.authority.status, "shared_workspace");
-  assert.equal(deterministicHash(sharedSnapshot), before);
-  assert.deepEqual(sharedSnapshot, {
-    id: "snapshot:existing",
-    modelId: "model:existing",
-    contentHash: "frozen-content-hash",
-    finalPanelValues: { pull: 3 },
-  });
+  assert.equal(
+    JSON.stringify(activatedSharedState.configurationSnapshots),
+    frozenSnapshotsBefore,
+  );
+  assert.equal(
+    deterministicHash(activatedSharedState.configurationSnapshots),
+    frozenSnapshotsHashBefore,
+  );
 
   const workbench = readFileSync(
-    new URL("../app/LocalSessionWorkbench.tsx", import.meta.url),
+    new URL("../app/Workbench.tsx", import.meta.url),
     "utf8",
   );
-  assert.match(workbench, /if \(sharedState\) return <Workbench initialState=\{sharedState\} \/>;/u);
-  assert.match(workbench, /setSharedState\(payload\.state!\);/u);
-  assert.doesNotMatch(workbench, /reduceLocalSession\([^)]*sharedState/u);
+  assert.match(
+    workbench,
+    /useState<WorkspaceState>\(\(\) => ensureSharedWorkflowFields\(initialState\)\)/u,
+  );
+  assert.match(
+    workbench,
+    /useRef<WorkspaceState>\(ensureSharedWorkflowFields\(initialState\)\)/u,
+  );
 });

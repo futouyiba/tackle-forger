@@ -10,12 +10,22 @@ import {
   parseLocalSessionModel,
   reduceLocalSession,
   type LocalActionCode,
+  type LocalSessionModel,
   type LocalSessionReducerState,
 } from "../lib/local-session-contracts";
 import type { WorkspaceState } from "../lib/types";
 import type { WorkspaceSurface } from "../lib/workspace-surface";
 
 const SHA256 = "a".repeat(64);
+
+function assertActiveSessionIsParsable(state: LocalSessionReducerState): LocalSessionModel {
+  assert.equal(state.status, "active");
+  if (state.status !== "active") {
+    throw new Error("Expected an active local session.");
+  }
+  assert.deepEqual(parseLocalSessionModel(state.session), state.session);
+  return state.session;
+}
 
 test("local actions are a closed four-action contract without server capabilities", () => {
   assert.deepEqual(LOCAL_ACTION_CODES, [
@@ -53,30 +63,125 @@ test("local reducer keeps edit, undo and redo in an ephemeral history", () => {
     type: "commit_local_edit",
     document: { title: "Fixture", notes: "local only" },
   });
-  assert.equal(state.status, "active");
-  if (state.status !== "active") return;
-  assert.deepEqual(state.session.history.current, {
+  let session = assertActiveSessionIsParsable(state);
+  assert.deepEqual(session.history.current, {
     authority: "local_ephemeral",
     sequence: 1,
   });
-  assert.equal(state.session.history.undo.length, 1);
-  assert.equal(state.session.history.redo.length, 0);
+  assert.equal(session.history.undo.length, 1);
+  assert.equal(session.history.redo.length, 0);
 
   state = reduceLocalSession(state, { type: "undo_local_edit" });
-  assert.equal(state.status, "active");
-  if (state.status !== "active") return;
-  assert.equal(state.session.document.notes, "");
-  assert.equal(state.session.history.current.sequence, 0);
-  assert.equal(state.session.history.redo.length, 1);
+  session = assertActiveSessionIsParsable(state);
+  assert.equal(session.document.notes, "");
+  assert.equal(session.history.current.sequence, 0);
+  assert.equal(session.history.redo.length, 1);
 
   state = reduceLocalSession(state, { type: "redo_local_edit" });
-  assert.equal(state.status, "active");
-  if (state.status !== "active") return;
-  assert.equal(state.session.document.notes, "local only");
-  assert.equal(state.session.history.current.sequence, 1);
+  session = assertActiveSessionIsParsable(state);
+  assert.equal(session.document.notes, "local only");
+  assert.equal(session.history.current.sequence, 1);
 
   state = reduceLocalSession(state, { type: "clear_local_session" });
   assert.deepEqual(state, { status: "empty" });
+});
+
+test("closed parser rejects duplicate and incoherently ordered history revisions", () => {
+  const session = createLocalSessionModel({ kind: "temporary_workspace" });
+  const entry = (sequence: number) => ({
+    revision: { authority: "local_ephemeral" as const, sequence },
+    document: session.document,
+  });
+  const withHistory = (
+    current: number,
+    undo: readonly ReturnType<typeof entry>[],
+    redo: readonly ReturnType<typeof entry>[],
+  ) => ({
+    ...session,
+    history: {
+      current: { authority: "local_ephemeral" as const, sequence: current },
+      undo,
+      redo,
+    },
+  });
+
+  assert.throws(
+    () => parseLocalSessionModel(withHistory(1, [entry(1)], [])),
+    /revisions must be unique/,
+  );
+  assert.throws(
+    () => parseLocalSessionModel(withHistory(1, [entry(2)], [])),
+    /undo revisions must precede current/,
+  );
+  assert.throws(
+    () => parseLocalSessionModel(withHistory(3, [entry(2), entry(1)], [])),
+    /undo revisions must be strictly increasing/,
+  );
+  assert.throws(
+    () => parseLocalSessionModel(withHistory(2, [], [entry(1)])),
+    /redo revisions must follow current/,
+  );
+  assert.throws(
+    () => parseLocalSessionModel(withHistory(1, [], [entry(2), entry(3)])),
+    /redo revisions must be strictly decreasing/,
+  );
+});
+
+test("commit, undo and redo combinations always return parser-accepted history", () => {
+  let state: LocalSessionReducerState = {
+    status: "active",
+    session: createLocalSessionModel({ kind: "temporary_workspace" }),
+  };
+  const actions = [
+    { type: "commit_local_edit", document: { title: "one", notes: "" } },
+    { type: "commit_local_edit", document: { title: "two", notes: "" } },
+    { type: "undo_local_edit" },
+    { type: "undo_local_edit" },
+    { type: "redo_local_edit" },
+    { type: "commit_local_edit", document: { title: "branch", notes: "" } },
+    { type: "undo_local_edit" },
+    { type: "redo_local_edit" },
+  ] as const;
+
+  for (const action of actions) {
+    state = reduceLocalSession(state, action);
+    assertActiveSessionIsParsable(state);
+  }
+});
+
+test("revision allocation remains parser-safe at the safe-integer boundary", () => {
+  const session = createLocalSessionModel({ kind: "temporary_workspace" });
+  const nearExhaustion = parseLocalSessionModel({
+    ...session,
+    history: {
+      current: {
+        authority: "local_ephemeral",
+        sequence: Number.MAX_SAFE_INTEGER - 1,
+      },
+      undo: [],
+      redo: [],
+    },
+  });
+  const committed = reduceLocalSession(
+    { status: "active", session: nearExhaustion },
+    {
+      type: "commit_local_edit",
+      document: { title: "last revision", notes: "" },
+    },
+  );
+  const exhausted = assertActiveSessionIsParsable(committed);
+  assert.equal(exhausted.history.current.sequence, Number.MAX_SAFE_INTEGER);
+  assert.throws(
+    () =>
+      reduceLocalSession(
+        { status: "active", session: exhausted },
+        {
+          type: "commit_local_edit",
+          document: { title: "overflow", notes: "" },
+        },
+      ),
+    /revision sequence is exhausted/,
+  );
 });
 
 test("local reducer boundary actions are stable no-ops", () => {

@@ -224,6 +224,34 @@ export function parseLocalSessionModel(value: unknown): LocalSessionModel {
   if (new Set(revisions).size !== revisions.length) {
     throw new LocalSessionSchemaError("LocalSessionModel.history revisions must be unique.");
   }
+  for (let index = 0; index < history.undo.length; index += 1) {
+    const sequence = history.undo[index].revision.sequence;
+    const previousSequence = history.undo[index - 1]?.revision.sequence;
+    if (sequence >= history.current.sequence) {
+      throw new LocalSessionSchemaError(
+        "LocalSessionModel.history undo revisions must precede current.",
+      );
+    }
+    if (previousSequence !== undefined && sequence <= previousSequence) {
+      throw new LocalSessionSchemaError(
+        "LocalSessionModel.history undo revisions must be strictly increasing.",
+      );
+    }
+  }
+  for (let index = 0; index < history.redo.length; index += 1) {
+    const sequence = history.redo[index].revision.sequence;
+    const previousSequence = history.redo[index - 1]?.revision.sequence;
+    if (sequence <= history.current.sequence) {
+      throw new LocalSessionSchemaError(
+        "LocalSessionModel.history redo revisions must follow current.",
+      );
+    }
+    if (previousSequence !== undefined && sequence >= previousSequence) {
+      throw new LocalSessionSchemaError(
+        "LocalSessionModel.history redo revisions must be strictly decreasing.",
+      );
+    }
+  }
   return {
     contractVersion: LOCAL_SESSION_CONTRACT_VERSION,
     authority: "local",

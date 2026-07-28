@@ -119,6 +119,7 @@ export class LocalSessionWorkbookLoader {
   async open(
     file: LocalSessionFile,
     requestedOperationId?: string,
+    operationAlreadyClaimed = false,
   ): Promise<LocalSessionReadyWorkbook> {
     this.cancelPending();
     if (file.size > MAXIMUM_LOCAL_SESSION_FILE_BYTES) {
@@ -129,7 +130,9 @@ export class LocalSessionWorkbookLoader {
     }
     const generation = this.#nextGeneration();
     const operationId = requestedOperationId
-      ? this.#identities.claim("operation", requestedOperationId)
+      ? operationAlreadyClaimed
+        ? this.#identities.assertClaimed("operation", requestedOperationId)
+        : this.#identities.claim("operation", requestedOperationId)
       : this.#identities.allocate("operation");
     const resourceHandle = this.#identities.allocate("resource");
     const scope = new SessionResourceScope(

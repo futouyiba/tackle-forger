@@ -4,6 +4,7 @@ import test from "node:test";
 import type { LocalSessionDocument } from "../lib/local-session-contracts";
 import {
   deriveLocalSessionTemplate,
+  parseLocalTemplateValuesJson,
   validateLocalSessionDocument,
 } from "../lib/local-session-rules-kernel";
 
@@ -106,4 +107,55 @@ test("condition semantics are preserved but not guessed by the local kernel", ()
   assert.equal(derived.values.pull, 4);
   assert.equal(derived.trace[1]?.status, "skipped");
   assert.match(derived.trace[1]?.message ?? "", /不推断条件语义/);
+});
+
+test("template JSON draft parser accepts only the closed string/finite-number map", () => {
+  assert.deepEqual(
+    parseLocalTemplateValuesJson('{"pull":3,"action":"fast"}'),
+    { pull: 3, action: "fast" },
+  );
+  assert.throws(() => parseLocalTemplateValuesJson("{"), SyntaxError);
+  assert.throws(() => parseLocalTemplateValuesJson("[]"), /JSON 对象/);
+  assert.throws(
+    () => parseLocalTemplateValuesJson('{"x":true}'),
+    /只能是字符串或有限数值/,
+  );
+});
+
+test("duplicate Trace sequences fail closed before applying any rule", () => {
+  const document = fixture();
+  document.rules[1] = {
+    ...document.rules[1]!,
+    sequence: document.rules[0]!.sequence,
+  };
+  const derived = deriveLocalSessionTemplate(document, "t-medium");
+  assert.equal(derived.values.pull, 3);
+  assert.deepEqual(derived.trace, []);
+  assert.ok(
+    derived.issues.some((issue) => issue.code === "DUPLICATE_RULE_SEQUENCE"),
+  );
+});
+
+test("numeric set remains numeric and composes with a later add", () => {
+  const document = fixture();
+  document.rules = [
+    {
+      ...document.rules[0]!,
+      id: "set-number",
+      sequence: 0,
+      operation: "set",
+      value: 4,
+    },
+    {
+      ...document.rules[1]!,
+      id: "add-number",
+      sequence: 1,
+      operation: "add",
+      value: 2,
+    },
+  ];
+  const derived = deriveLocalSessionTemplate(document, "t-medium");
+  assert.equal(derived.values.pull, 6);
+  assert.equal(typeof derived.values.pull, "number");
+  assert.deepEqual(derived.trace.map((entry) => entry.status), ["applied", "applied"]);
 });

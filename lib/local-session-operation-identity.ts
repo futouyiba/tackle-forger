@@ -19,7 +19,7 @@ export interface LocalSessionIdentityAllocatorOptions {
  * clear/replace, so a late worker response cannot become valid again.
  */
 export class LocalSessionIdentityAllocator {
-  #used = new Set<string>();
+  #used = new Map<string, LocalSessionIdentityKind>();
   #createId: () => string;
 
   constructor(options: LocalSessionIdentityAllocatorOptions = {}) {
@@ -35,11 +35,18 @@ export class LocalSessionIdentityAllocator {
     if (this.#used.has(value)) {
       throw new LocalSessionIdentityCollisionError(kind, value);
     }
-    this.#used.add(value);
+    this.#used.set(value, kind);
     return value;
   }
 
   has(value: string): boolean {
     return this.#used.has(value);
+  }
+
+  assertClaimed(kind: LocalSessionIdentityKind, value: string): string {
+    if (this.#used.get(value) !== kind) {
+      throw new LocalSessionIdentityCollisionError(kind, value);
+    }
+    return value;
   }
 }

@@ -33,6 +33,26 @@ export interface LocalSessionDerivation {
   issues: LocalSessionValidationIssue[];
 }
 
+export function parseLocalTemplateValuesJson(
+  raw: string,
+): Record<string, number | string> {
+  const parsed: unknown = JSON.parse(raw);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new TypeError("模板值必须是 JSON 对象。");
+  }
+  const values: Record<string, number | string> = {};
+  for (const [key, value] of Object.entries(parsed)) {
+    if (
+      typeof value !== "string"
+      && (typeof value !== "number" || !Number.isFinite(value))
+    ) {
+      throw new TypeError(`模板值“${key}”只能是字符串或有限数值。`);
+    }
+    values[key] = value;
+  }
+  return values;
+}
+
 function duplicates(values: readonly string[]): Set<string> {
   const seen = new Set<string>();
   const repeated = new Set<string>();
@@ -65,6 +85,16 @@ export function validateLocalSessionDocument(
       code: "DUPLICATE_LOCAL_ID",
       path: id,
       message: `本地编辑对象 ID“${id}”重复。`,
+    });
+  }
+  for (const sequence of duplicates(
+    document.rules.map((entry) => String(entry.sequence)),
+  )) {
+    issues.push({
+      severity: "error",
+      code: "DUPLICATE_RULE_SEQUENCE",
+      path: `rules.sequence.${sequence}`,
+      message: `规则 Trace sequence“${sequence}”重复；派生已阻断。`,
     });
   }
   const parameterKeys = new Set(document.parameters.map((entry) => entry.key));
@@ -161,8 +191,13 @@ export function deriveLocalSessionTemplate(
   }
   const values = { ...template.values };
   const trace: LocalSessionTraceEntry[] = [];
+  if (issues.some((issue) => issue.severity === "error")) {
+    return { templateId, values, trace, issues };
+  }
   const rules = [...document.rules].sort(
-    (left, right) => left.sequence - right.sequence || left.id.localeCompare(right.id),
+    (left, right) =>
+      left.sequence - right.sequence
+      || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
   );
   for (const rule of rules) {
     const before = values[rule.parameterKey];

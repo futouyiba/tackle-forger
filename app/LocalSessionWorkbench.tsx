@@ -27,6 +27,7 @@ import {
 } from "@/lib/local-session-parser";
 import {
   deriveLocalSessionTemplate,
+  parseLocalTemplateValuesJson,
   validateLocalSessionDocument,
 } from "@/lib/local-session-rules-kernel";
 import type { WorkspaceState } from "@/lib/types";
@@ -70,7 +71,9 @@ function numericInput(value: string): number {
 
 export function LocalSessionWorkbench() {
   const [identities] = useState(() => new LocalSessionIdentityAllocator());
-  const [loader] = useState(() => new LocalSessionWorkbookLoader());
+  const [loader] = useState(() => new LocalSessionWorkbookLoader({
+    identityAllocator: identities,
+  }));
   const [bootstrapOperation] = useState(() => identities.allocate("operation"));
   const [shell, setShell] = useState(() =>
     createInitialAppShellState(bootstrapOperation));
@@ -80,6 +83,8 @@ export function LocalSessionWorkbench() {
   const [notice, setNotice] = useState("本地模式不写入浏览器或服务器存储。");
   const [sharedState, setSharedState] = useState<WorkspaceState | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  const loginPoll = useRef<number | null>(null);
+  const loginOperation = useRef<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -122,6 +127,9 @@ export function LocalSessionWorkbench() {
       });
     return () => {
       active = false;
+      if (loginPoll.current !== null) window.clearInterval(loginPoll.current);
+      loginPoll.current = null;
+      loginOperation.current = null;
       loader.clear();
     };
   }, [bootstrapOperation, loader]);
@@ -176,7 +184,7 @@ export function LocalSessionWorkbench() {
     ]));
     setNotice(`正在解析 ${file.name}；现有本地会话保持可用。`);
     try {
-      const ready = await loader.open(file, operationId);
+      const ready = await loader.open(file, operationId, true);
       let handled = false;
       setShell((state) => {
         const transition = transitionAppShell(state, {
@@ -218,8 +226,24 @@ export function LocalSessionWorkbench() {
   const clear = () => {
     identities.allocate("operation");
     loader.clear();
-    setShell((state) =>
-      transitionAppShell(state, { type: "local_source_clear_requested" }).state);
+    const activeLoginOperation = loginOperation.current;
+    if (loginPoll.current !== null) window.clearInterval(loginPoll.current);
+    loginPoll.current = null;
+    loginOperation.current = null;
+    setShell((state) => {
+      let next = transitionAppShell(
+        state,
+        { type: "local_source_clear_requested" },
+      ).state;
+      if (activeLoginOperation) {
+        const cancelled = transitionAppShell(next, {
+          type: "oauth_cancelled",
+          operationId: activeLoginOperation,
+        });
+        if (cancelled.accepted) next = cancelled.state;
+      }
+      return next;
+    });
     setLocal((state) => reduceLocalSession(state, { type: "clear_local_session" }));
     setSelectedTemplateId("");
     setNotice("本地会话及其内存资源已清除；刷新后不可恢复。");
@@ -232,6 +256,8 @@ export function LocalSessionWorkbench() {
       operationId,
     });
     if (!transition.accepted) return;
+    if (loginPoll.current !== null) window.clearInterval(loginPoll.current);
+    loginOperation.current = operationId;
     setShell(transition.state);
     window.open(
       "/api/auth/feishu/start?return_to=%2F%3Flocal_auth_complete%3D1",
@@ -241,19 +267,33 @@ export function LocalSessionWorkbench() {
     const startedAt = Date.now();
     const timer = window.setInterval(() => {
       void fetch("/api/auth/session", { cache: "no-store" }).then(async (response) => {
-        if (!response.ok) {
-          if (Date.now() - startedAt > 120_000) {
-            window.clearInterval(timer);
-            setShell((state) => transitionAppShell(state, {
-              type: "oauth_cancelled",
-              operationId,
-            }).state);
-          }
+        const timedOut = Date.now() - startedAt > 120_000;
+        if (!response.ok || timedOut) {
+          if (!timedOut) return;
+          window.clearInterval(timer);
+          loginPoll.current = null;
+          loginOperation.current = null;
+          setShell((state) => transitionAppShell(state, {
+            type: "oauth_cancelled",
+            operationId,
+          }).state);
           return;
         }
         const payload = await response.json() as SharedPayload;
-        if (!payload.user?.openId) return;
+        if (!payload.user?.openId) {
+          if (Date.now() - startedAt <= 120_000) return;
+          window.clearInterval(timer);
+          loginPoll.current = null;
+          loginOperation.current = null;
+          setShell((state) => transitionAppShell(state, {
+            type: "oauth_cancelled",
+            operationId,
+          }).state);
+          return;
+        }
         window.clearInterval(timer);
+        loginPoll.current = null;
+        loginOperation.current = null;
         setShell((state) => transitionAppShell(state, {
           type: "login_succeeded",
           operationId,
@@ -264,8 +304,18 @@ export function LocalSessionWorkbench() {
           },
         }).state);
         setNotice("登录成功；当前本地会话权限与内容均未升级。");
-      }).catch(() => undefined);
+      }).catch(() => {
+        if (Date.now() - startedAt <= 120_000) return;
+        window.clearInterval(timer);
+        loginPoll.current = null;
+        loginOperation.current = null;
+        setShell((state) => transitionAppShell(state, {
+          type: "oauth_cancelled",
+          operationId,
+        }).state);
+      });
     }, 1_000);
+    loginPoll.current = timer;
   };
 
   const openShared = async () => {
@@ -551,18 +601,65 @@ function EditableTemplates({ document, commit, identities }: EditorProps) {
             <label>名称<input value={template.name} onChange={(event) => commit({ ...document, templates: document.templates.map((entry, row) => row === index ? { ...entry, name: event.target.value } : entry) }, "编辑模板名称")} /></label>
             <label>部位<select value={template.itemPart} onChange={(event) => commit({ ...document, templates: document.templates.map((entry, row) => row === index ? { ...entry, itemPart: event.target.value as "rod" | "reel" | "line" } : entry) }, "编辑模板部位")}><option value="rod">竿</option><option value="reel">轮</option><option value="line">线</option></select></label>
             {(["targetPullMinKgf", "nominalTargetPullKgf", "targetPullMaxKgf"] as const).map((field) => <label key={field}>{field === "targetPullMinKgf" ? "最小拉力" : field === "nominalTargetPullKgf" ? "标称拉力" : "最大拉力"}<input type="number" value={template[field]} onChange={(event) => commit({ ...document, templates: document.templates.map((entry, row) => row === index ? { ...entry, [field]: numericInput(event.target.value) } : entry) }, "编辑模板拉力")} /></label>)}
-            <label className="span-two">模板值（JSON 对象）<textarea value={JSON.stringify(template.values, null, 2)} onChange={(event) => {
-              try {
-                const values = JSON.parse(event.target.value) as Record<string, number | string>;
-                commit({ ...document, templates: document.templates.map((entry, row) => row === index ? { ...entry, values } : entry) }, "编辑模板值");
-              } catch {
-                // Keep the last valid in-memory document while JSON is incomplete.
-              }
-            }} /></label>
+            <TemplateValuesEditor
+              key={`${template.id}:${JSON.stringify(template.values)}`}
+              errorId={`local-template-json-error-${index}`}
+              values={template.values}
+              onCommit={(values) => commit({
+                ...document,
+                templates: document.templates.map((entry, row) =>
+                  row === index ? { ...entry, values } : entry),
+              }, "编辑模板值")}
+            />
           </article>
         ))}
       </div>
     </>
+  );
+}
+
+function TemplateValuesEditor({
+  errorId,
+  values,
+  onCommit,
+}: {
+  errorId: string;
+  values: Record<string, number | string>;
+  onCommit(values: Record<string, number | string>): void;
+}) {
+  const [draft, setDraft] = useState(() => JSON.stringify(values, null, 2));
+  const [error, setError] = useState("");
+  return (
+    <label className="span-two">
+      模板值（JSON 对象）
+      <textarea
+        aria-invalid={Boolean(error)}
+        aria-describedby={error ? errorId : undefined}
+        value={draft}
+        onChange={(event) => {
+          const nextDraft = event.target.value;
+          setDraft(nextDraft);
+          try {
+            const nextValues = parseLocalTemplateValuesJson(nextDraft);
+            setError("");
+            onCommit(nextValues);
+          } catch (nextError) {
+            setError(
+              nextError instanceof SyntaxError
+                ? "JSON 尚未完整；会保留上一次有效模板值。"
+                : nextError instanceof Error
+                  ? nextError.message
+                  : "模板值格式无效。",
+            );
+          }
+        }}
+      />
+      {error && (
+        <span id={errorId} className="local-field-error" role="alert">
+          {error}
+        </span>
+      )}
+    </label>
   );
 }
 
@@ -598,8 +695,37 @@ function EditableRules({ document, commit, identities }: EditorProps) {
                 <td><input aria-label={`规则 ${index + 1} 启用`} type="checkbox" checked={rule.enabled} onChange={(event) => commit({ ...document, rules: document.rules.map((entry, row) => row === index ? { ...entry, enabled: event.target.checked } : entry) }, "切换规则")} /></td>
                 <td><strong>{rule.sourceName}</strong><small>{rule.sourceKind}</small></td>
                 <td><select aria-label={`规则 ${index + 1} 参数`} value={rule.parameterKey} onChange={(event) => commit({ ...document, rules: document.rules.map((entry, row) => row === index ? { ...entry, parameterKey: event.target.value } : entry) }, "编辑规则参数")}>{document.parameters.map((parameter) => <option key={parameter.id} value={parameter.key}>{parameter.label || parameter.key}</option>)}</select></td>
-                <td><select aria-label={`规则 ${index + 1} 操作`} value={rule.operation} onChange={(event) => commit({ ...document, rules: document.rules.map((entry, row) => row === index ? { ...entry, operation: event.target.value as LocalEditableRuleOperation } : entry) }, "编辑规则操作")}>{Object.entries(OPERATION_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></td>
-                <td><input aria-label={`规则 ${index + 1} 值或公式`} value={String(rule.value)} onChange={(event) => commit({ ...document, rules: document.rules.map((entry, row) => row === index ? { ...entry, value: entry.operation === "formula" || entry.operation === "set" ? event.target.value : numericInput(event.target.value) } : entry) }, "编辑规则值")} /></td>
+                <td><select aria-label={`规则 ${index + 1} 操作`} value={rule.operation} onChange={(event) => {
+                  const operation = event.target.value as LocalEditableRuleOperation;
+                  commit({
+                    ...document,
+                    rules: document.rules.map((entry, row) => row === index
+                      ? {
+                          ...entry,
+                          operation,
+                          value: operation === "formula"
+                            ? String(entry.value)
+                            : operation === "set" || typeof entry.value === "number"
+                              ? entry.value
+                              : numericInput(String(entry.value)),
+                        }
+                      : entry),
+                  }, "编辑规则操作");
+                }}>{Object.entries(OPERATION_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></td>
+                <td>
+                  <RuleValueEditor
+                    key={`${rule.id}:${rule.operation}:${typeof rule.value}:${String(rule.value)}`}
+                    errorId={`local-rule-value-error-${rule.id}`}
+                    index={index}
+                    operation={rule.operation}
+                    value={rule.value}
+                    onCommit={(value) => commit({
+                      ...document,
+                      rules: document.rules.map((entry, row) =>
+                        row === index ? { ...entry, value } : entry),
+                    }, "编辑规则值")}
+                  />
+                </td>
                 <td><input aria-label={`规则 ${index + 1} 条件`} value={rule.condition} onChange={(event) => commit({ ...document, rules: document.rules.map((entry, row) => row === index ? { ...entry, condition: event.target.value } : entry) }, "编辑规则条件")} /></td>
                 <td><input aria-label={`规则 ${index + 1} 序号`} type="number" min="0" step="1" value={rule.sequence} onChange={(event) => commit({ ...document, rules: document.rules.map((entry, row) => row === index ? { ...entry, sequence: Math.max(0, Math.trunc(numericInput(event.target.value))) } : entry) }, "编辑规则顺序")} /></td>
               </tr>
@@ -608,6 +734,57 @@ function EditableRules({ document, commit, identities }: EditorProps) {
         </table>
       </div>
     </>
+  );
+}
+
+function RuleValueEditor({
+  errorId,
+  index,
+  operation,
+  value,
+  onCommit,
+}: {
+  errorId: string;
+  index: number;
+  operation: LocalEditableRuleOperation;
+  value: number | string;
+  onCommit(value: number | string): void;
+}) {
+  const numeric = operation !== "formula"
+    && !(operation === "set" && typeof value === "string");
+  const [draft, setDraft] = useState(() => String(value));
+  const [error, setError] = useState("");
+  return (
+    <span className="local-inline-editor">
+      <input
+        aria-label={`规则 ${index + 1} 值或公式（${numeric ? "数值" : "文本"}）`}
+        aria-invalid={Boolean(error)}
+        aria-describedby={error ? errorId : undefined}
+        inputMode={numeric ? "decimal" : undefined}
+        value={draft}
+        onChange={(event) => {
+          const nextDraft = event.target.value;
+          setDraft(nextDraft);
+          if (!numeric) {
+            setError("");
+            onCommit(nextDraft);
+            return;
+          }
+          const nextValue = Number(nextDraft);
+          if (!nextDraft.trim() || !Number.isFinite(nextValue)) {
+            setError("请输入有限数值；会保留上一次有效规则值。");
+            return;
+          }
+          setError("");
+          onCommit(nextValue);
+        }}
+      />
+      {error && (
+        <span id={errorId} className="local-field-error" role="alert">
+          {error}
+        </span>
+      )}
+    </span>
   );
 }
 

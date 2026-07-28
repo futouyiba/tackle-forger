@@ -9,6 +9,7 @@ import {
   LocalSessionParserError,
   LocalSessionWorkbookLoader,
 } from "../lib/local-session-parser";
+import { LocalSessionIdentityAllocator } from "../lib/local-session-operation-identity";
 import { sha256Hex as pureSha256Hex } from "../lib/five-axis-hash";
 import {
   handleLocalSessionParserRequest,
@@ -182,7 +183,7 @@ async function rejectsCode(promise: Promise<unknown>, code: string) {
 }
 
 async function waitForRequest(worker: FakeWorker) {
-  for (let count = 0; count < 20 && !worker.request; count += 1) {
+  for (let count = 0; count < 200 && !worker.request; count += 1) {
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
   assert.ok(worker.request, "worker request was not posted");
@@ -190,7 +191,7 @@ async function waitForRequest(worker: FakeWorker) {
 }
 
 async function waitForWorker(factory: ReturnType<typeof workerFactory>, index: number) {
-  for (let count = 0; count < 20; count += 1) {
+  for (let count = 0; count < 200; count += 1) {
     const worker = factory.workers[index];
     if (worker) {
       return worker;
@@ -272,6 +273,29 @@ test("operationId/resourceHandle 碰撞与 worker 身份错配均 fail-closed", 
   await rejectsCode(pending, "LOCAL_SESSION_RESOURCE_IDENTITY_MISMATCH");
   assert.equal(mismatchLoader.ready(), null);
   assert.equal(worker.terminated, true);
+});
+
+test("UI 与 loader 共用同一 ledger，并只接受显式 already-claimed operation handoff", async () => {
+  const identities = new LocalSessionIdentityAllocator();
+  const operationId = identities.allocate("operation");
+  const urls = new FakeObjectUrls();
+  const factory = workerFactory([handleLocalSessionParserRequest]);
+  const loader = new LocalSessionWorkbookLoader({
+    workerFactory: factory.create,
+    objectUrlApi: urls,
+    identityAllocator: identities,
+  });
+  const ready = await loader.open(
+    canonicalFile("shared-ledger.xlsx"),
+    operationId,
+    true,
+  );
+  assert.equal(ready.operationId, operationId);
+  assert.equal(identities.has(ready.resourceHandle), true);
+  await assert.rejects(
+    loader.open(canonicalFile("unclaimed.xlsx"), "operation:not-claimed", true),
+    /identity collided/,
+  );
 });
 
 test("非 secure context 缺少 SubtleCrypto 时使用纯浏览器 SHA-256 fallback", async () => {

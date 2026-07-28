@@ -261,6 +261,25 @@ export function ensureWorkflowFields(input: WorkspaceState): WorkspaceState {
   };
 }
 
+/**
+ * Shared ConfigurationSnapshot records are published history. Normalizing the
+ * surrounding workspace must never migrate, enrich, reorder, or otherwise
+ * rewrite their payload because contentHash is defined over the frozen record.
+ */
+export function ensureSharedWorkflowFields(input: WorkspaceState): WorkspaceState {
+  const snapshotsBefore = Array.isArray(input.configurationSnapshots)
+    ? JSON.stringify(input.configurationSnapshots)
+    : null;
+  const normalized = ensureWorkflowFields(input);
+  if (
+    snapshotsBefore !== null
+    && JSON.stringify(normalized.configurationSnapshots) !== snapshotsBefore
+  ) {
+    throw new Error("Shared ConfigurationSnapshot payload changed during activation.");
+  }
+  return normalized;
+}
+
 function candidateForRow(state: WorkspaceState, row: GraphBatchRow): Candidate | undefined {
   return state.candidates.find((candidate) => candidate.id === row.candidateId);
 }

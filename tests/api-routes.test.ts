@@ -55,6 +55,45 @@ function withTrustedProxy() {
   process.env.FEISHU_TENANT_KEY = "tenant";
 }
 
+test("匿名本地成功不能放宽共享读取、保存、导入或 Action API", { concurrency: false }, async () => {
+  const keys = [
+    "FEISHU_TRUST_PROXY_HEADERS",
+    "FEISHU_PROXY_SHARED_SECRET",
+    "FEISHU_TENANT_KEY",
+  ] as const;
+  const original = Object.fromEntries(keys.map((key) => [key, process.env[key]]));
+  for (const key of keys) delete process.env[key];
+  try {
+    const requests = [
+      getState(new NextRequest("http://localhost/api/state")),
+      putState(new NextRequest("http://localhost/api/state", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ state: {}, baseRevision: 0 }),
+      })),
+      issueActionCommand(new NextRequest("http://localhost/api/action-commands", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      })),
+      importFile(new NextRequest("http://localhost/api/import-file", {
+        method: "POST",
+        body: new FormData(),
+      })),
+    ];
+    assert.deepEqual(
+      (await Promise.all(requests)).map((response) => response.status),
+      [401, 401, 401, 401],
+    );
+  } finally {
+    for (const key of keys) {
+      const value = original[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
 function routeAIConfiguration(dataDir: string) {
   return {
     FANCY_HUB_ENABLED: "true",

@@ -173,3 +173,16 @@ test("formula receives the current numeric value", () => {
   assert.equal(derived.values.pull, 4.5);
   assert.equal(derived.trace[0]?.status, "applied");
 });
+
+test("derivation exposes runtime evaluation failures as validation issues", () => {
+  const document = fixture();
+  document.templates[0] = {
+    ...document.templates[0]!,
+    values: { pull: "non-numeric" },
+  };
+  const derived = deriveLocalSessionTemplate(document, "t-medium");
+  assert.equal(derived.trace[0]?.status, "error");
+  assert.ok(
+    derived.issues.some((issue) => issue.code === "RULE_EVALUATION_FAILED"),
+  );
+});

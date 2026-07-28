@@ -43,3 +43,13 @@ test("selector-bound workbook profiles import disabled until explicitly chosen",
   assert.match(source, /appendRules\("item_type"[\s\S]*?false\)/);
   assert.match(source, /appendRules\("modifier"[\s\S]*?false\)/);
 });
+
+test("selected derivation issues drive the visible count and validation panel", () => {
+  const source = readFileSync(
+    new URL("../app/LocalSessionWorkbench.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /const visibleIssues = derivation\?\.issues \?\? issues/);
+  assert.match(source, /派生与校验 \$\{visibleIssues\.length\}/);
+  assert.match(source, /issues=\{visibleIssues\}/);
+});

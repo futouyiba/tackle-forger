@@ -9,7 +9,10 @@ import {
   LocalSessionParserError,
   LocalSessionWorkbookLoader,
 } from "../lib/local-session-parser";
-import { LocalSessionIdentityAllocator } from "../lib/local-session-operation-identity";
+import {
+  createLocalSessionSecureRandomId,
+  LocalSessionIdentityAllocator,
+} from "../lib/local-session-operation-identity";
 import { sha256Hex as pureSha256Hex } from "../lib/five-axis-hash";
 import {
   handleLocalSessionParserRequest,
@@ -281,6 +284,45 @@ test("operationId/resourceHandle 碰撞与 worker 身份错配均 fail-closed", 
   await rejectsCode(pending, "LOCAL_SESSION_RESOURCE_IDENTITY_MISMATCH");
   assert.equal(mismatchLoader.ready(), null);
   assert.equal(worker.terminated, true);
+});
+
+test("RFC1918 insecure HTTP uses getRandomValues without weak randomness", () => {
+  assert.equal(
+    createLocalSessionSecureRandomId({
+      randomUUID: () => "native-secure-id",
+      getRandomValues() {
+        assert.fail("native randomUUID path must not request fallback bytes");
+      },
+    }),
+    "native-secure-id",
+  );
+  let seed = 0;
+  const cryptoSource = {
+    getRandomValues(array: Uint8Array) {
+      for (let index = 0; index < array.length; index += 1) {
+        array[index] = (seed + index) & 0xff;
+      }
+      seed += array.length;
+      return array;
+    },
+  };
+  assert.equal(
+    createLocalSessionSecureRandomId(cryptoSource),
+    "00010203-0405-4607-8809-0a0b0c0d0e0f",
+  );
+  const allocator = new LocalSessionIdentityAllocator({ cryptoSource });
+  const first = allocator.allocate("operation");
+  const second = allocator.allocate("operation");
+  assert.notEqual(first, second);
+  assert.match(first, /^operation:[0-9a-f-]{36}$/);
+  assert.throws(
+    () => createLocalSessionSecureRandomId({
+      getRandomValues() {
+        throw new Error("secure randomness unavailable");
+      },
+    }),
+    /secure randomness unavailable/,
+  );
 });
 
 test("UI 与 loader 共用同一 ledger，并只接受显式 already-claimed operation handoff", async () => {

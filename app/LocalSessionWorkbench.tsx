@@ -151,6 +151,7 @@ export function LocalSessionWorkbench() {
     () => session ? validateLocalSessionDocument(session.document) : [],
     [session],
   );
+  const visibleIssues = derivation?.issues ?? issues;
 
   if (sharedState) return <Workbench initialState={sharedState} />;
 
@@ -485,7 +486,7 @@ export function LocalSessionWorkbench() {
               ["parameters", `参数 ${document.parameters.length}`],
               ["templates", `模板 ${document.templates.length}`],
               ["rules", `规则 ${document.rules.length}`],
-              ["trace", `派生与校验 ${issues.length}`],
+              ["trace", `派生与校验 ${visibleIssues.length}`],
             ] as const).map(([value, label]) => (
               <button
                 type="button"
@@ -535,7 +536,7 @@ export function LocalSessionWorkbench() {
                 selectedTemplateId={selectedTemplateId}
                 setSelectedTemplateId={setSelectedTemplateId}
                 derivation={derivation}
-                issues={issues}
+                issues={visibleIssues}
               />
             )}
           </section>

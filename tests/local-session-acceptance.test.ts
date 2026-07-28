@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
+import { File } from "node:buffer";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+import * as XLSX from "xlsx";
+
+import {
+  createInitialAppShellState,
+  transitionAppShell,
+} from "../lib/app-shell-state";
+import { CANONICAL_FEISHU_SHEET_REGISTRY } from "../lib/feishu-workbook";
 import {
   createLocalSessionModel,
   parseLocalSessionModel,
@@ -13,11 +21,100 @@ import {
   deriveLocalSessionTemplate,
 } from "../lib/local-session-rules-kernel";
 import {
+  LocalSessionWorkbookLoader,
+} from "../lib/local-session-parser";
+import {
+  handleLocalSessionParserRequest,
+} from "../lib/local-session-parser-worker";
+import type {
+  LocalSessionParserRequest,
+  LocalSessionParserWorkerResponse,
+} from "../lib/local-session-parser-protocol";
+import {
   SessionResourceScope,
   type LocalSessionObjectUrlApi,
   type LocalSessionParserWorker,
 } from "../lib/local-session-resource-scope";
 import { deterministicHash } from "../lib/rule-kernel";
+
+function dimensions(sheetId: string) {
+  if (sheetId === "23CsXE") return { rows: 3, columns: 6 };
+  if (sheetId === "27hboC") return { rows: 5, columns: 6 };
+  if (sheetId === "28fQHg") return { rows: 2, columns: 3 };
+  if (sheetId === "19XKzU") return { rows: 2, columns: 19 };
+  if (sheetId === "25UnTC") return { rows: 2, columns: 23 };
+  return { rows: 2, columns: 30 };
+}
+
+function canonicalWorkbookBytes() {
+  const workbook = XLSX.utils.book_new();
+  for (const entry of CANONICAL_FEISHU_SHEET_REGISTRY) {
+    const { rows, columns } = dimensions(entry.sheetId);
+    const values = Array.from(
+      { length: rows },
+      () => Array.from({ length: columns }, () => null as unknown),
+    );
+    values[0]![0] = `fixture:${entry.sheetId}`;
+    if (entry.sheetId === "23CsXE") {
+      values[0] = ["机器ID（勿改）", "实体类型", "钓具部位", "词条名称", "缩写", "程序开发"];
+      values[1] = ["affix_rod_0001", "RodAffix", "竿", "拉力强化", "拉强", "不需要"];
+    }
+    if (entry.sheetId === "27hboC") {
+      values[0] = ["品质", "代码", "≥最小评分", "<最大评分", "最小价格系数", "最大价格系数"];
+      values[1] = ["C/绿", "C", 0, 20, 0.8, 1];
+      values[2] = ["B/蓝", "B", 20, 40, 1, 1.2];
+      values[3] = ["A/紫", "A", 40, 65, 1.2, 1.5];
+      values[4] = ["S/橙", "S", 65, 100, 1.5, 2];
+    }
+    if (entry.sheetId === "28fQHg") {
+      values[0] = ["词条1", "词条2", "组合评分"];
+      values[1] = ["affix_rod_0001", "affix_rod_0001", 0];
+    }
+    XLSX.utils.book_append_sheet(
+      workbook,
+      XLSX.utils.aoa_to_sheet(values),
+      entry.expectedName,
+    );
+  }
+  const output = XLSX.write(workbook, { type: "array", bookType: "xlsx" });
+  if (output instanceof ArrayBuffer) return output;
+  return output.buffer.slice(output.byteOffset, output.byteOffset + output.byteLength);
+}
+
+class AcceptanceWorker implements LocalSessionParserWorker {
+  #listeners = {
+    message: new Set<(event: MessageEvent<unknown>) => void>(),
+    error: new Set<(event: ErrorEvent) => void>(),
+    messageerror: new Set<(event: MessageEvent<unknown>) => void>(),
+  };
+  terminated = 0;
+
+  postMessage(message: unknown, transfer: Transferable[]) {
+    const request = structuredClone(
+      message as LocalSessionParserRequest,
+      { transfer },
+    );
+    void handleLocalSessionParserRequest(request).then(
+      (response: LocalSessionParserWorkerResponse) => {
+        for (const listener of this.#listeners.message) {
+          listener({ data: response } as MessageEvent<unknown>);
+        }
+      },
+    );
+  }
+
+  terminate() {
+    this.terminated += 1;
+  }
+
+  addEventListener(type: "message" | "error" | "messageerror", listener: never) {
+    (this.#listeners[type] as Set<never>).add(listener);
+  }
+
+  removeEventListener(type: "message" | "error" | "messageerror", listener: never) {
+    (this.#listeners[type] as Set<never>).delete(listener);
+  }
+}
 
 function fixture(): LocalSessionDocument {
   return {
@@ -59,7 +156,7 @@ function fixture(): LocalSessionDocument {
   };
 }
 
-test("instrumented local create/edit/derive/undo/redo/clear has zero external or durable effects", () => {
+test("instrumented real canonical open plus local create/edit/derive/undo/redo/clear has zero external or durable effects", async () => {
   const calls = {
     fetch: 0,
     sendBeacon: 0,
@@ -144,6 +241,34 @@ test("instrumented local create/edit/derive/undo/redo/clear has zero external or
     state = reduceLocalSession(state, { type: "redo_local_edit" });
     state = reduceLocalSession(state, { type: "clear_local_session" });
     assert.deepEqual(state, { status: "empty" });
+
+    const workers: AcceptanceWorker[] = [];
+    const revoked: string[] = [];
+    const loader = new LocalSessionWorkbookLoader({
+      workerFactory: () => {
+        const worker = new AcceptanceWorker();
+        workers.push(worker);
+        return worker;
+      },
+      objectUrlApi: {
+        createObjectURL: () => "blob:p5-canonical",
+        revokeObjectURL: (url) => { revoked.push(url); },
+      },
+    });
+    const canonicalFile = new File(
+      [new Uint8Array(canonicalWorkbookBytes())],
+      "canonical-p5.xlsx",
+      {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      },
+    );
+    const ready = await loader.open(canonicalFile);
+    assert.equal(ready.result.session.source.kind, "local_excel");
+    assert.equal(ready.result.session.authority, "local");
+    loader.clear();
+    assert.deepEqual(workers.map((worker) => worker.terminated), [1]);
+    assert.deepEqual(revoked, ["blob:p5-canonical"]);
+
     assert.deepEqual(calls, {
       fetch: 0,
       sendBeacon: 0,
@@ -169,6 +294,7 @@ test("local runtime dependency surface contains no browser persistence, socket, 
     "lib/local-session-parser.ts",
     "lib/local-session-resource-scope.ts",
     "lib/local-session-rules-kernel.ts",
+    "lib/browser-canonical-workbook.ts",
   ];
   const source = localRuntimeFiles
     .map((path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8"))
@@ -176,6 +302,24 @@ test("local runtime dependency surface contains no browser persistence, socket, 
   assert.doesNotMatch(
     source,
     /\b(?:fetch|sendBeacon|WebSocket|indexedDB|localStorage|CacheStorage|caches|sqlite|console\.(?:log|info|warn|error))\b/u,
+  );
+
+  const workbench = readFileSync(
+    new URL("../app/LocalSessionWorkbench.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.equal([...workbench.matchAll(/\bfetch\s*\(/gu)].length, 3);
+  assert.equal(
+    [...workbench.matchAll(/fetch\("\/api\/auth\/session"/gu)].length,
+    2,
+  );
+  assert.equal(
+    [...workbench.matchAll(/fetch\("\/api\/state"/gu)].length,
+    1,
+  );
+  assert.doesNotMatch(
+    workbench,
+    /\b(?:sendBeacon|WebSocket|indexedDB|localStorage|CacheStorage|caches|sqlite|console\.(?:log|info|warn|error))\b/u,
   );
 });
 
@@ -239,6 +383,17 @@ test("formal-looking local payload is rejected and shared snapshot evidence rema
     finalPanelValues: { pull: 3 },
   };
   const before = deterministicHash(sharedSnapshot);
+  let shell = createInitialAppShellState("auth:bootstrap");
+  const apply = (event: Parameters<typeof transitionAppShell>[1]) => {
+    const transition = transitionAppShell(shell, event);
+    assert.equal(transition.accepted, true, transition.rejectionReason);
+    shell = transition.state;
+  };
+  apply({
+    type: "auth_session_authenticated",
+    operationId: "auth:bootstrap",
+    principal: { openId: "p5-user", displayName: "P5 User" },
+  });
   let local: LocalSessionReducerState = {
     status: "active",
     session: createLocalSessionModel({ kind: "temporary_workspace" }, fixture()),
@@ -247,8 +402,35 @@ test("formal-looking local payload is rejected and shared snapshot evidence rema
     type: "commit_local_edit",
     document: { ...local.session.document, notes: "local-only" },
   });
-  local = reduceLocalSession(local, { type: "clear_local_session" });
-  assert.equal(local.status, "empty");
+  assert.equal(local.status, "active");
+  if (local.status !== "active") assert.fail("local session unexpectedly cleared");
+  apply({ type: "local_selection_requested", operationId: "local:open" });
+  apply({
+    type: "local_parse_started",
+    operationId: "local:open",
+    selectionRef: "selection:canonical",
+  });
+  apply({
+    type: "local_parse_succeeded",
+    operationId: "local:open",
+    readyId: "ready:canonical",
+    session: local.session,
+  });
+  apply({
+    type: "shared_open_requested",
+    operationId: "shared:open",
+    workspaceId: "workspace:shared",
+  });
+  apply({
+    type: "shared_load_succeeded",
+    operationId: "shared:open",
+    resource: {
+      workspaceId: "workspace:shared",
+      revision: 1,
+      resourceId: "resource:shared",
+    },
+  });
+  assert.equal(shell.authority.status, "shared_workspace");
   assert.equal(deterministicHash(sharedSnapshot), before);
   assert.deepEqual(sharedSnapshot, {
     id: "snapshot:existing",

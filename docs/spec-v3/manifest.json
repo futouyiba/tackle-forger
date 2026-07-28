@@ -84,7 +84,7 @@
       ],
       "title": "版本、快照、飞书、工作区与回归",
       "path": "docs/spec-v3/04-persistence-and-lifecycle.md",
-      "sha256": "0859820bba7d3d09939c3af8f3311c39e4d5670dc4220356ac832d673f893418"
+      "sha256": "5b218b56a2c1d5fe85307a76ef56c441e0e07742e6b5c5815bc98105c29305ba"
     },
     {
       "id": "05",
@@ -107,7 +107,7 @@
       ],
       "title": "五维图、比较、甘特图与 AI 建议",
       "path": "docs/spec-v3/06-visualization-and-ai.md",
-      "sha256": "89b78c3f246020f04ef363863e1b28a9eaca21ef9789e78a93c70b57153d1135"
+      "sha256": "583e27de9d80e4eb08a9a56fd9b7686c5a6277523b9ddaa4242e498fc355dad0"
     },
     {
       "id": "07",
@@ -117,7 +117,7 @@
       ],
       "title": "交互与后端统一需求契约",
       "path": "docs/spec-v3/07-interaction-contract.md",
-      "sha256": "3e7cab48f865e8c515714ccd248f3d59d1a96983e2ce9ccaeb3b161ba10dec4d"
+      "sha256": "5a5d5a75598ed035c5a86b6d2641cb55dc1a9f60e99f53f03d0905571be6f12b"
     },
     {
       "id": "08",

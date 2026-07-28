@@ -296,7 +296,7 @@ interface FiveAxisViewDefinition {
 
 线上Schema必须把`maximumItems`校验为大于等于`minimumItems`的整数，不得在API类型中声明为字面量`5`。当前已确认定义实例为`minimumItems = 2, maximumItems = 5`；服务端对该定义强制上限5。未来只能通过新`FiveAxisViewDefinition.version`发布其他合法整数，历史定义、Snapshot和评审记录仍保留5。`publicationState=PUBLISHED`不是正式适用性的充分条件；新正式Snapshot还必须按第21.7节验证三项契约版本并解析到唯一`FORMAL_CURRENT`处置。v23正式定义的两个selector字段必须逐字相同且为`projection-reference/v23-function-template-frozen/v1`；旧selector只允许历史v9/v22 Snapshot。
 
-正式视图恰好五轴，顺序为拉力、耐久、抛投、感度、操控；定义仍通过版本发布和引用，不得散落硬编码。同图共享definition、W重量段、`weightBandPolicyVersion`和`vertexSetHash`。每点返回direct/context_inherited/not_applicable/missing/error、原始值、未封顶比例、comparisonScore、officialDisplayScore、Trace和来源。not_applicable不画0，分母非正永远error。Series基准按第21.3节唯一选择器返回锚点、selectorVersion、`projectionReferenceSetHash`及竿轮线三个逐部位状态和projection ID/revision，禁止聚合、按查询顺序择一或静默回退。
+正式视图恰好五轴，顺序为拉力、耐久、抛投、感度、操控；定义仍通过版本发布和引用，不得散落硬编码。同图共享definition、W重量段、`weightBandPolicyVersion`和`vertexSetHash`。每点返回direct/context_inherited/not_applicable/missing/error、原始值、未封顶比例、comparisonScore、officialDisplayScore、Trace和来源。not_applicable不画0，分母非正永远error。Series基准按第21.3节唯一选择器返回锚点、selectorVersion、`projectionReferenceSetHash`及竿轮线三个逐部位状态；v23返回`partId + weightBandId + functionTemplateRef/revision + 输入指纹`，v9/v22历史回放返回projectionMatch/projection ID与revision。两种形状不得混装，均禁止聚合、按查询顺序择一或静默回退。
 
 正常路径：以最终拉力确定W段，按发布定义计算三条部件曲线与三条Series结构投影参考线，并提供数值表。
 边界：某部位无结构投影时只省略对应参考线；轮线无参考竿时抛投为not_applicable；均不得画全0。

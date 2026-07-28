@@ -214,6 +214,40 @@ Series基准固定采用`projection_reference`，不采用显式Model或已批�
 
 目标v23把Series基准锚定到Snapshot冻结的`partId + weightBandId + functionTemplateRef`；不得要求新SKU补造旧ProjectionMatch。现有`projection-reference/current-sku-frozen-match/v1`只服务v9/v22 Snapshot，v23必须发布后继选择器版本并冻结04.5引用、输入指纹与逐Part状态。两种选择器均不得按查询顺序、默认SKU或“最新”引用猜测。
 
+`projection-reference/v23-function-template-frozen/v1`的选择算法固定为：
+
+1. Model详情和钓组模式以待查看Snapshot冻结的`baselineSnapshotId + seriesId + skuId + skuRevisionId`为唯一锚点。选择器只读取该Snapshot内按Part冻结的输入，不读取当前Part/SKU草稿、Series默认SKU、页面上下文或其他SKU。
+2. 锚点SKU revision必须冻结其所属`partId + partType + weightBandId + functionTemplateRef + functionTemplateRevisionId + functionTemplateInputFingerprint`。同一Series的基准集合从同一Snapshot中冻结的Part输入构建；竿、轮、线每种零或一个。重复部位、缺少必需字段或SKU/Part父链不一致返回`error`并阻止新正式Snapshot。
+3. 对每个存在的Part，按稳定引用精确读取一个04.5 revision，并重新计算其六键输入指纹。引用不存在、revision/hash不符、指纹不符或六键重新解析不是唯一同一行时返回`error`，不得按名称、区间、拉力距离、默认值或其他模板修复。Series未包含的部位返回`missing`；这不是错误，也不得补造Part。
+4. `available`参考曲线只使用冻结04.5 revision的基准参数，通过当前FiveAxisViewDefinition的相同轴顺序、transform和W段顶点计算；不得加入Part/SKU词条、Technology、品质、Patch或Model最终值，也不得生成旧ProjectionMatch。三种部位状态和参考曲线固定按竿、轮、线排序。
+5. 独立多装备比较只有在用户显式选择已发布`baselineSnapshotId`后才运行该Snapshot对应版本的选择器；未选择时三种部位均为`not_selected`。改变共同W段只改变归一化顶点，不改变锚点、04.5引用或输入指纹。
+6. 临时视图和Snapshot都冻结选择器版本、锚点、`partInputs`、逐部位状态与引用字段。选择结果按严格Schema、JCS、无BOM UTF-8和SHA-256小写十六进制计算：
+
+```text
+projectionReferenceSetHash = H({
+  schemaVersion: "five-axis-hash-input/v1",
+  kind: "projection_reference_set",
+  selectorVersion: "projection-reference/v23-function-template-frozen/v1",
+  anchor: {
+    baselineSnapshotId: string,
+    seriesId: string,
+    skuId: string,
+    skuRevisionId: string
+  },
+  references: [{
+    itemPartId: "rod" | "reel" | "line",
+    state: "available" | "missing" | "error",
+    partId: string | null,
+    weightBandId: string | null,
+    functionTemplateRef: string | null,
+    functionTemplateRevisionId: string | null,
+    functionTemplateInputFingerprint: string | null
+  }]
+})
+```
+
+`references`固定按rod、reel、line顺序；`missing`条目的五个引用字段全部为JSON `null`，`error`保留能够安全验证的冻结字段并以错误码另存Trace，错误码不进入本闭集hash。任一锚点、状态或非null引用字段变化都必须改变hash；相同闭集输入必须得到相同hash。发布`FORMAL_CURRENT`前必须提供固定向量，至少覆盖单Part、三Part、缺Part、断裂引用、指纹不符、六键多匹配、相同输入重放和仅`baselineSnapshotId`变化；固定向量未通过时返回`FIVE_AXIS_PROJECTION_REFERENCE_VECTOR_MISMATCH`。
+
 历史`projection-reference/current-sku-frozen-match/v1`的选择算法固定为：
 
 1. Model详情和钓组模式以待查看Snapshot冻结的`seriesId + skuId + skuRevisionId`作为引用锚点；不得读取Model当前草稿、Series默认SKU、页面上下文或查询结果第一项。
@@ -366,6 +400,7 @@ interface ModelFiveAxisPreview {
       partId: string;
       weightBandId: string;
       functionTemplateRef: string;
+      functionTemplateRevisionId: string;
       functionTemplateInputFingerprint: string;
     }[];
   };
@@ -380,6 +415,7 @@ interface ModelFiveAxisPreview {
     partId: string | null;
     weightBandId: string | null;
     functionTemplateRef: string | null;
+    functionTemplateRevisionId: string | null;
     functionTemplateInputFingerprint: string | null;
     metrics: FiveAxisMetric[];
   }[];
@@ -387,7 +423,7 @@ interface ModelFiveAxisPreview {
 }
 ```
 
-同一`projectionReferenceSeries`条目必须由`selectorVersion`决定闭合形状：历史选择器要求四个Projection字段并禁止四个v23字段；v23选择器要求`partId + weightBandId + functionTemplateRef + functionTemplateInputFingerprint`并禁止四个Projection字段。`partInputs`在历史选择器下必须为空，在v23选择器下按稳定Part顺序完整冻结。不得把两种引用混装或用全`null`占位通过校验。
+同一`projectionReferenceSeries`条目必须由`selectorVersion`决定闭合形状：历史选择器要求四个Projection字段并禁止五个v23字段；v23选择器要求`partId + weightBandId + functionTemplateRef + functionTemplateRevisionId + functionTemplateInputFingerprint`并禁止四个Projection字段。`partInputs`在历史选择器下必须为空，在v23选择器下按稳定Part顺序完整冻结。不得把两种引用混装或用全`null`占位通过校验。
 
 `axisId`由版本化定义提供，不得在前端联合类型、数据库列或图表组件中写死。同一个预览中的每条曲线必须与冻结的`fiveAxisDefinitionId + fiveAxisDefinitionVersion`逐项对应，缺轴按第22节状态语义返回，不能临时补0。
 

@@ -433,14 +433,15 @@ v23新增Series Part、`weightBandId`、`functionTemplateRef`/输入指纹、SKU
 
 ### 阶段2：商品身份
 
-- 增加Collection、严格Series、SkuDrawer和PurchasableModel；
+- 增加Collection、严格Series、SeriesPart、SkuDrawer和PurchasableModel；
 - SeriesRecipe改为CandidateSearchRecipe；
 - OfficialSku迁移为SKU抽屉加Model；
 - DetailOverride迁移到Model作用域。
 
 ### 阶段3：匹配与兼容
 
-- 实现最近Projection匹配；
+- v23实现Part六键04.5唯一匹配与输入指纹；零/多匹配均fail-closed；
+- v9/v22历史适配器保留最近Projection匹配，只用于旧payload迁移和Snapshot重放；
 - 建立硬CompatibilityRule；
 - 实现按轴Affinity Score；
 - 增加Series不变量和重量曲线。

@@ -628,6 +628,45 @@ test("workspace mismatch disposes the target and terminally restores prior autho
   assert.equal(retry.authority.status, "shared_loading");
 });
 
+test("malformed shared revisions are disposed and restore prior authority", () => {
+  for (const revision of [
+    -1,
+    0.5,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    Number.MAX_SAFE_INTEGER + 1,
+  ]) {
+    const local = withReadyLocal(authenticatedState());
+    const operationId = `invalid-revision:${String(revision)}`;
+    const loading = apply(local, {
+      type: "shared_open_requested",
+      operationId,
+      workspaceId: SHARED.workspaceId,
+    });
+    const result = transitionAppShell(loading, {
+      type: "shared_load_succeeded",
+      operationId,
+      resource: {
+        ...SHARED,
+        revision,
+        resourceId: `invalid-resource:${String(revision)}`,
+      },
+    });
+
+    assert.equal(result.accepted, true, String(revision));
+    assert.deepEqual(result.state.authority, { status: "local_session" });
+    assert.deepEqual(result.state.lastSharedFailure, {
+      operationId,
+      workspaceId: SHARED.workspaceId,
+      kind: "invalid_resource",
+    });
+    assert.deepEqual(result.effects, [{
+      type: "dispose_shared_workspace",
+      resourceId: `invalid-resource:${String(revision)}`,
+    }]);
+  }
+});
+
 test("shared activation clears every unrecoverable terminal local failure", () => {
   const failures: Array<{
     name: string;

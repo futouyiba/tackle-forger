@@ -81,6 +81,7 @@ export type SharedLoadFailureKind =
   | "conflict_409"
   | "server_5xx"
   | "workspace_mismatch"
+  | "invalid_resource"
   | "cancelled";
 
 export interface SharedLoadFailure {
@@ -652,6 +653,24 @@ export function transitionAppShell(
           resourceId: event.resource.resourceId,
         }]);
       }
+      if (
+        !Number.isSafeInteger(event.resource.revision)
+        || event.resource.revision < 0
+      ) {
+        const loading = state.authority;
+        return accepted({
+          ...state,
+          authority: loading.previous,
+          lastSharedFailure: {
+            operationId: event.operationId,
+            workspaceId: loading.workspaceId,
+            kind: "invalid_resource",
+          },
+        }, [{
+          type: "dispose_shared_workspace",
+          resourceId: event.resource.resourceId,
+        }]);
+      }
       const previous = state.authority.previous;
       const effects: AppShellEffect[] = [{
         type: "activate_shared_workspace",
@@ -728,8 +747,11 @@ export function assertAppShellState(state: AppShellState): void {
   }
   if (
     state.authority.status === "shared_workspace"
-    && state.authority.resource.revision < 0
+    && (
+      !Number.isSafeInteger(state.authority.resource.revision)
+      || state.authority.resource.revision < 0
+    )
   ) {
-    throw new Error("Shared workspace revision must be non-negative.");
+    throw new Error("Shared workspace revision must be a non-negative safe integer.");
   }
 }

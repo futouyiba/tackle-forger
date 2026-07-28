@@ -639,8 +639,7 @@ export function transitionAppShell(
       }
       if (state.authority.workspaceId !== event.resource.workspaceId) {
         const loading = state.authority;
-        return {
-          state: {
+        return accepted({
             ...state,
             authority: loading.previous,
             lastSharedFailure: {
@@ -648,14 +647,10 @@ export function transitionAppShell(
               workspaceId: loading.workspaceId,
               kind: "workspace_mismatch",
             },
-          },
-          effects: [{
-            type: "dispose_shared_workspace",
-            resourceId: event.resource.resourceId,
-          }],
-          accepted: false,
-          rejectionReason: "shared_workspace_mismatch",
-        };
+        }, [{
+          type: "dispose_shared_workspace",
+          resourceId: event.resource.resourceId,
+        }]);
       }
       const previous = state.authority.previous;
       const effects: AppShellEffect[] = [{

@@ -609,8 +609,7 @@ test("workspace mismatch disposes the target and terminally restores prior autho
       resourceId: "wrong-resource",
     },
   });
-  assert.equal(mismatch.accepted, false);
-  assert.equal(mismatch.rejectionReason, "shared_workspace_mismatch");
+  assert.equal(mismatch.accepted, true);
   assert.deepEqual(mismatch.state.authority, { status: "local_session" });
   assert.deepEqual(mismatch.state.lastSharedFailure, {
     operationId: "shared-mismatch",
@@ -621,13 +620,12 @@ test("workspace mismatch disposes the target and terminally restores prior autho
     type: "dispose_shared_workspace",
     resourceId: "wrong-resource",
   }]);
-  const retry = transitionAppShell(mismatch.state, {
+  const retry = apply(mismatch.state, {
     type: "shared_open_requested",
     operationId: "shared-retry",
     workspaceId: SHARED.workspaceId,
   });
-  assert.equal(retry.accepted, true);
-  assert.equal(retry.state.authority.status, "shared_loading");
+  assert.equal(retry.authority.status, "shared_loading");
 });
 
 test("shared activation clears every unrecoverable terminal local failure", () => {

@@ -124,6 +124,8 @@ interface RealZipEntry {
   encrypted?: boolean;
   /** 覆盖 local header 的压缩尺寸（central 仍写真实值），用于测 central/local 不一致。 */
   localCszOverride?: number;
+  /** 同时覆盖 central/local 的声明解压尺寸，用于测声明预算与实际输出不一致。 */
+  declaredUncompressedSize?: number;
 }
 
 /** 构造真实可解压 ZIP（local header + 压缩数据 + central directory + EOCD），用于测流式 inflate 预检。 */
@@ -137,7 +139,8 @@ function buildRealZip(entries: RealZipEntry[]): ArrayBuffer {
     const name = enc.encode(entry.name);
     const method = entry.method ?? 8;
     const data = method === 8 ? deflateRawSync(entry.content) : entry.content;
-    const usz = entry.content.length;
+    const actualUsz = entry.content.length;
+    const usz = entry.declaredUncompressedSize ?? actualUsz;
     const csz = data.length;
     const dd = entry.dataDescriptor ?? false;
     const flags = (dd ? 0x08 : 0) | (entry.encrypted ? 0x01 : 0);
@@ -310,8 +313,12 @@ test("ZIP 流式解压验证：拒绝 central/local 不一致、实际超预算�
   const ts = "2026-07-27T00:00:00.000Z";
   // central/local 尺寸不一致（非数据描述符）→ 在 inflate 前拒绝
   await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: buildRealZip([{ name: "a", content: new Uint8Array([1, 2, 3]), localCszOverride: 999 }]), fileName: "mismatch.zip", observedAt: ts }), "XLSX_ZIP_INVALID");
-  // 高压缩比、实际解压输出超过预算（central 声明小但 inflate 真实 210MB）→ 流式计数拒绝
+  // 高压缩比且声明/实际均超过预算 → 在 SheetJS 分配前按 central 声明拒绝
   await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: buildRealZip([{ name: "a", content: new Uint8Array(Buffer.alloc(210_000_000, 0x61)) }]), fileName: "bomb.xlsx", observedAt: ts }), "XLSX_UNCOMPRESSED_TOO_LARGE");
+  // central/local 同时伪造巨大声明，但实际仅输出 1 byte → 声明预算拒绝
+  await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: buildRealZip([{ name: "a", content: new Uint8Array([1]), declaredUncompressedSize: 300_000_000 }]), fileName: "declared-bomb.xlsx", observedAt: ts }), "XLSX_UNCOMPRESSED_TOO_LARGE");
+  // 声明值未超总预算也必须与实际 inflate 输出逐条目一致
+  await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: buildRealZip([{ name: "a", content: new Uint8Array([1]), declaredUncompressedSize: 1024 }]), fileName: "declared-mismatch.xlsx", observedAt: ts }), "XLSX_ZIP_INVALID");
   // 加密 ZIP → 拒绝
   await rejectsCode(observeBrowserCanonicalWorkbook({ bytes: buildRealZip([{ name: "a", content: new Uint8Array([1]), encrypted: true }]), fileName: "enc.zip", observedAt: ts }), "XLSX_ZIP_INVALID");
   // 数据描述符通过流式预检（仅因不是合法 XLSX 才在 read 阶段失败，证明未被预检误拒）

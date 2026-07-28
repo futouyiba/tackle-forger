@@ -183,9 +183,9 @@ function bytesEqual(left: Uint8Array, right: Uint8Array) {
  * 信任 local file header 并对 `_inflateRawSync` 输出无上限，因此不能把
  * central-directory 声明当作预算。这里逐条目：
  *   1. 验证 local header 与 central 一致（签名、压缩方法、名称、压缩/解压尺寸）；
- *   2. 拒绝数据描述符（flags bit 3）、ZIP64、非 stored/deflate 方法；
+ *   2. 拒绝 ZIP64、非 stored/deflate 方法，并限制 central 声明的解压总量；
  *   3. 用 `DecompressionStream("deflate-raw")` 流式解压，累计真实输出字节，
- *      超过 `MAXIMUM_UNCOMPRESSED_BYTES` 立即终止。
+ *      超过 `MAXIMUM_UNCOMPRESSED_BYTES` 立即终止，且逐条目核对声明/实际尺寸。
  * 只有全部条目实际输出累计在预算内，才允许进入 `XLSX.read`。
  */
 async function verifyZipInflateBudget(bytes: ArrayBuffer) {
@@ -205,6 +205,7 @@ async function verifyZipInflateBudget(bytes: ArrayBuffer) {
   type CentralEntry = { method: number; compressedSize: number; uncompressedSize: number; localOffset: number; name: Uint8Array };
   const entries: CentralEntry[] = [];
   let cursor = centralDirectoryOffset;
+  let totalDeclaredUncompressed = 0;
   for (let entry = 0; entry < totalEntries; entry += 1) {
     if (cursor + 46 > length) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central directory 截断。");
     if (view.getUint32(cursor, true) !== ZIP_CENTRAL_HEADER_SIGNATURE) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP central directory 条目签名无效。");
@@ -212,6 +213,10 @@ async function verifyZipInflateBudget(bytes: ArrayBuffer) {
     const compressedSize = view.getUint32(cursor + 20, true);
     const uncompressedSize = view.getUint32(cursor + 24, true);
     if (compressedSize === 0xffffffff || uncompressedSize === 0xffffffff) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "工作簿使用 ZIP64，本工具不支持。");
+    totalDeclaredUncompressed += uncompressedSize;
+    if (totalDeclaredUncompressed > MAXIMUM_UNCOMPRESSED_BYTES) {
+      throw new BrowserCanonicalWorkbookError("XLSX_UNCOMPRESSED_TOO_LARGE", `工作簿声明的解压后总字节超过 ${MAXIMUM_UNCOMPRESSED_BYTES}。`);
+    }
     const nameLength = view.getUint16(cursor + 28, true);
     const extraLength = view.getUint16(cursor + 30, true);
     const commentLength = view.getUint16(cursor + 32, true);
@@ -242,7 +247,13 @@ async function verifyZipInflateBudget(bytes: ArrayBuffer) {
     const dataStart = entry.localOffset + 30 + localNameLength + localExtraLength;
     if (dataStart + entry.compressedSize > length) throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP 压缩数据超出文件边界。");
     const compressed = bytes.slice(dataStart, dataStart + entry.compressedSize);
-    totalActual += entry.method === 0 ? entry.compressedSize : await inflateCounted(compressed, MAXIMUM_UNCOMPRESSED_BYTES - totalActual);
+    const actualSize = entry.method === 0
+      ? entry.compressedSize
+      : await inflateCounted(compressed, MAXIMUM_UNCOMPRESSED_BYTES - totalActual);
+    if (actualSize !== entry.uncompressedSize) {
+      throw new BrowserCanonicalWorkbookError("XLSX_ZIP_INVALID", "ZIP 条目声明的解压尺寸与实际输出不一致。");
+    }
+    totalActual += actualSize;
     if (totalActual > MAXIMUM_UNCOMPRESSED_BYTES) throw new BrowserCanonicalWorkbookError("XLSX_UNCOMPRESSED_TOO_LARGE", `工作簿实际解压后总字节超过 ${MAXIMUM_UNCOMPRESSED_BYTES}。`);
   }
 }

@@ -30,6 +30,7 @@ import {
   parseLocalTemplateValuesJson,
   validateLocalSessionDocument,
 } from "@/lib/local-session-rules-kernel";
+import { SharedWorkspaceLoadScope } from "@/lib/shared-workspace-load-scope";
 import type { WorkspaceState } from "@/lib/types";
 import { Workbench } from "./Workbench";
 
@@ -91,6 +92,7 @@ export function LocalSessionWorkbench() {
   const fileInput = useRef<HTMLInputElement>(null);
   const loginPoll = useRef<number | null>(null);
   const loginOperation = useRef<string | null>(null);
+  const sharedLoad = useRef<SharedWorkspaceLoadScope | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -136,12 +138,17 @@ export function LocalSessionWorkbench() {
       if (loginPoll.current !== null) window.clearInterval(loginPoll.current);
       loginPoll.current = null;
       loginOperation.current = null;
+      sharedLoad.current?.cancel("local_session_workbench_unmounted");
+      sharedLoad.current = null;
       loader.clear();
     };
   }, [bootstrapOperation, loader]);
 
   const session = local.status === "active" ? local.session : undefined;
-  const localMutationsDisabled = shell.authority.status === "shared_loading";
+  const localParsePending = shell.source.status === "selecting"
+    || shell.source.status === "parsing";
+  const localMutationsDisabled = shell.authority.status === "shared_loading"
+    || localParsePending;
   const derivation = useMemo(
     () => session && selectedTemplateId
       ? deriveLocalSessionTemplate(session.document, selectedTemplateId)
@@ -158,7 +165,7 @@ export function LocalSessionWorkbench() {
 
   const commit = (document: LocalSessionDocument, label: string) => {
     if (localMutationsDisabled) {
-      setNotice("共享工作区正在加载；已拒绝本地编辑并保留现有会话。");
+      setNotice("后台切换仍在进行；已拒绝本地编辑并保留现有会话。");
       return;
     }
     const operationId = identities.allocate("operation");
@@ -171,7 +178,7 @@ export function LocalSessionWorkbench() {
 
   const activateBlank = () => {
     if (localMutationsDisabled) {
-      setNotice("共享工作区正在加载；本地会话保持不变。");
+      setNotice("后台切换仍在进行；本地会话保持不变。");
       return;
     }
     const operationId = identities.allocate("operation");
@@ -183,7 +190,7 @@ export function LocalSessionWorkbench() {
       { type: "local_parse_succeeded", operationId, readyId, session: sessionModel },
     ]);
     if (!nextShell) {
-      setNotice("共享工作区正在加载；本地会话保持不变。");
+      setNotice("后台切换仍在进行；本地会话保持不变。");
       return;
     }
     setShell(nextShell);
@@ -198,7 +205,7 @@ export function LocalSessionWorkbench() {
     event.target.value = "";
     if (!file) return;
     if (localMutationsDisabled) {
-      setNotice("共享工作区正在加载；已拒绝新的本地文件操作。");
+      setNotice("后台切换仍在进行；已拒绝新的本地文件操作。");
       return;
     }
     const operationId = identities.allocate("operation");
@@ -207,7 +214,7 @@ export function LocalSessionWorkbench() {
       { type: "local_parse_started", operationId, selectionRef: file.name },
     ]);
     if (!nextShell) {
-      setNotice("共享工作区正在加载；已拒绝新的本地文件操作。");
+      setNotice("后台切换仍在进行；已拒绝新的本地文件操作。");
       return;
     }
     setShell(nextShell);
@@ -240,21 +247,43 @@ export function LocalSessionWorkbench() {
         return transition.state;
       });
     } catch (error) {
-      setShell((state) => transitionAppShell(state, {
-        type: "local_parse_failed",
-        operationId,
-      }).state);
-      setNotice(
-        error instanceof LocalSessionParserError
-          ? `${error.code}：${error.message}（原本地会话未变）`
-          : "本地工作簿解析失败（原本地会话未变）。",
-      );
+      let handled = false;
+      setShell((state) => {
+        const transition = transitionAppShell(state, {
+          type: "local_parse_failed",
+          operationId,
+        });
+        if (transition.accepted && !handled) {
+          handled = true;
+          queueMicrotask(() => {
+            setNotice(
+              error instanceof LocalSessionParserError
+                ? `${error.code}：${error.message}（原本地会话未变）`
+                : "本地工作簿解析失败（原本地会话未变）。",
+            );
+          });
+        }
+        return transition.state;
+      });
     }
+  };
+
+  const cancelLocalParse = () => {
+    const source = shell.source;
+    if (source.status !== "selecting" && source.status !== "parsing") return;
+    loader.cancelPending();
+    const transition = transitionAppShell(shell, {
+      type: "local_operation_cancelled",
+      operationId: source.operationId,
+    });
+    if (!transition.accepted) return;
+    setShell(transition.state);
+    setNotice("已取消工作簿解析；原本地会话及资源保持有效。");
   };
 
   const clear = () => {
     if (localMutationsDisabled) {
-      setNotice("共享工作区正在加载；已拒绝清除并保留现有会话。");
+      setNotice("后台切换仍在进行；已拒绝清除并保留现有会话。");
       return;
     }
     identities.allocate("operation");
@@ -352,6 +381,14 @@ export function LocalSessionWorkbench() {
   };
 
   const openShared = async () => {
+    if (localParsePending) {
+      setNotice("工作簿解析仍在进行；已拒绝共享切换并保留现有会话。");
+      return;
+    }
+    if (sharedLoad.current) {
+      setNotice("共享工作区加载已在进行；未启动重复操作。");
+      return;
+    }
     const operationId = identities.allocate("operation");
     const workspaceId = "canonical-shared-workspace";
     const requested = transitionAppShell(shell, {
@@ -363,11 +400,26 @@ export function LocalSessionWorkbench() {
       setNotice("需要先完成飞书登录，才能显式打开共享工作区。");
       return;
     }
+    const scope = new SharedWorkspaceLoadScope(operationId, undefined, (timedOutId) => {
+      if (sharedLoad.current !== scope) return;
+      sharedLoad.current = null;
+      setShell((state) => transitionAppShell(state, {
+        type: "shared_load_cancelled",
+        operationId: timedOutId,
+      }).state);
+      setNotice("共享工作区加载超时并已取消；原本地会话及资源保持有效。");
+    });
+    sharedLoad.current = scope;
     setShell(requested.state);
     setNotice("正在加载共享工作区；本地会话继续有效。");
     try {
-      const response = await fetch("/api/state", { cache: "no-store" });
+      const response = await fetch("/api/state", {
+        cache: "no-store",
+        signal: scope.signal,
+      });
       const payload = await response.json().catch(() => ({})) as SharedPayload;
+      if (!scope.complete()) return;
+      if (sharedLoad.current === scope) sharedLoad.current = null;
       if (!response.ok || !payload.state || !Number.isSafeInteger(payload.revision)) {
         const kind = response.status === 401
           ? "unauthorized_401"
@@ -409,6 +461,8 @@ export function LocalSessionWorkbench() {
         return transition.state;
       });
     } catch {
+      if (!scope.complete()) return;
+      if (sharedLoad.current === scope) sharedLoad.current = null;
       setShell((state) => transitionAppShell(state, {
         type: "shared_load_failed",
         operationId,
@@ -416,6 +470,17 @@ export function LocalSessionWorkbench() {
       }).state);
       setNotice("共享工作区网络加载失败；有效本地会话已保留。");
     }
+  };
+
+  const cancelSharedLoad = () => {
+    const scope = sharedLoad.current;
+    if (!scope || !scope.cancel()) return;
+    sharedLoad.current = null;
+    setShell((state) => transitionAppShell(state, {
+      type: "shared_load_cancelled",
+      operationId: scope.operationId,
+    }).state);
+    setNotice("已取消共享工作区加载；原本地会话及资源保持有效。");
   };
 
   const document = session?.document;
@@ -440,10 +505,16 @@ export function LocalSessionWorkbench() {
             className="local-button local-button-primary"
             onClick={() => void openShared()}
             disabled={shell.auth.status !== "authenticated"
-              || shell.authority.status === "shared_loading"}
+              || shell.authority.status === "shared_loading"
+              || localParsePending}
           >
             {shell.authority.status === "shared_loading" ? "加载共享中…" : "打开共享工作区"}
           </button>
+          {shell.authority.status === "shared_loading" && (
+            <button type="button" className="local-button" onClick={cancelSharedLoad}>
+              取消共享加载
+            </button>
+          )}
         </div>
       </header>
 
@@ -477,6 +548,11 @@ export function LocalSessionWorkbench() {
           >
             {session ? "替换 WQ8w 工作簿" : "打开 WQ8w 工作簿"}
           </button>
+          {localParsePending && (
+            <button type="button" className="local-button" onClick={cancelLocalParse}>
+              取消解析
+            </button>
+          )}
           <button type="button" className="local-button" onClick={activateBlank} disabled={localMutationsDisabled}>
             新建空白临时会话
           </button>

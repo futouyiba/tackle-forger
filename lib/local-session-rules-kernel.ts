@@ -99,7 +99,10 @@ export function validateLocalSessionDocument(
       message: `规则 Trace sequence“${sequence}”重复；派生已阻断。`,
     });
   }
-  const parameterKeys = new Set(document.parameters.map((entry) => entry.key));
+  const parametersByKey = new Map(
+    document.parameters.map((entry) => [entry.key, entry] as const),
+  );
+  const parameterKeys = new Set(parametersByKey.keys());
   for (const [index, template] of document.templates.entries()) {
     if (
       template.targetPullMinKgf > template.nominalTargetPullKgf
@@ -113,12 +116,20 @@ export function validateLocalSessionDocument(
       });
     }
     for (const key of Object.keys(template.values)) {
-      if (!parameterKeys.has(key)) {
+      const parameter = parametersByKey.get(key);
+      if (!parameter) {
         issues.push({
           severity: "warning",
           code: "TEMPLATE_PARAMETER_NOT_DECLARED",
           path: `templates[${index}].values.${key}`,
           message: `模板值“${key}”没有对应的参数定义。`,
+        });
+      } else if (parameter.itemPart !== template.itemPart) {
+        issues.push({
+          severity: "error",
+          code: "TEMPLATE_PARAMETER_ITEM_PART_MISMATCH",
+          path: `templates[${index}].values.${key}`,
+          message: `模板“${template.name}”的部位 ${template.itemPart} 与参数“${key}”的部位 ${parameter.itemPart} 不匹配。`,
         });
       }
     }
@@ -194,7 +205,15 @@ export function deriveLocalSessionTemplate(
       ],
     };
   }
-  const values = { ...template.values };
+  const parametersByKey = new Map(
+    document.parameters.map((entry) => [entry.key, entry] as const),
+  );
+  const values = Object.fromEntries(
+    Object.entries(template.values).filter(([key]) => {
+      const parameter = parametersByKey.get(key);
+      return !parameter || parameter.itemPart === template.itemPart;
+    }),
+  );
   const trace: LocalSessionTraceEntry[] = [];
   if (issues.some((issue) => issue.severity === "error")) {
     return { templateId, values, trace, issues };
@@ -203,9 +222,6 @@ export function deriveLocalSessionTemplate(
     (left, right) =>
       left.sequence - right.sequence
       || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
-  );
-  const parametersByKey = new Map(
-    document.parameters.map((parameter) => [parameter.key, parameter]),
   );
   for (const rule of rules) {
     const before = values[rule.parameterKey];

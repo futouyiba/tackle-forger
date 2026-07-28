@@ -231,3 +231,46 @@ test("derivation skips enabled rules belonging to another item part", () => {
   assert.match(derived.trace[0]?.message ?? "", /部位 reel 与模板部位 rod 不匹配/);
   assert.equal(derived.issues.length, 0);
 });
+
+test("template values from another item part fail closed before preview or formulas", () => {
+  const document = fixture();
+  document.parameters.push({
+    id: "p-drag",
+    key: "drag",
+    label: "泄力",
+    itemPart: "reel",
+    unit: "kgf",
+    precision: 2,
+    notes: "",
+  });
+  document.templates[0] = {
+    ...document.templates[0]!,
+    values: {
+      ...document.templates[0]!.values,
+      drag: 99,
+    },
+  };
+  document.rules.push({
+    ...document.rules[0]!,
+    id: "formula-from-cross-part",
+    sequence: 2,
+    operation: "formula",
+    value: "drag * 2",
+  });
+
+  const issues = validateLocalSessionDocument(document);
+  assert.ok(
+    issues.some((issue) =>
+      issue.code === "TEMPLATE_PARAMETER_ITEM_PART_MISMATCH"
+      && issue.path === "templates[0].values.drag"
+    ),
+  );
+  const derived = deriveLocalSessionTemplate(document, "t-medium");
+  assert.equal("drag" in derived.values, false);
+  assert.deepEqual(derived.trace, []);
+  assert.ok(
+    derived.issues.some((issue) =>
+      issue.code === "TEMPLATE_PARAMETER_ITEM_PART_MISMATCH"
+    ),
+  );
+});

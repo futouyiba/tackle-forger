@@ -30,7 +30,7 @@ test("local source actions reject shared-loading races before mutating the reduc
     "utf8",
   );
   assert.match(source, /applyAcceptedEvents/);
-  assert.match(source, /共享工作区正在加载；本地会话保持不变/);
+  assert.match(source, /后台切换仍在进行；本地会话保持不变/);
   assert.match(source, /disabled=\{localMutationsDisabled\}/);
 });
 
@@ -41,7 +41,7 @@ test("shared loading disables and fail-closes every local mutation surface", () 
   );
   assert.match(
     source,
-    /const localMutationsDisabled = shell\.authority\.status === "shared_loading"/,
+    /const localMutationsDisabled = shell\.authority\.status === "shared_loading"[\s\S]*?\|\| localParsePending/,
   );
   assert.match(source, /const commit = [\s\S]*?if \(localMutationsDisabled\)/);
   assert.match(source, /const clear = [\s\S]*?if \(localMutationsDisabled\)/);
@@ -57,6 +57,37 @@ test("shared loading disables and fail-closes every local mutation surface", () 
     source,
     /disabled=\{localMutationsDisabled \|\| session\.history\.redo\.length === 0\}/,
   );
+});
+
+test("replacement parsing disables local mutations and exposes non-destructive cancel", () => {
+  const source = readFileSync(
+    new URL("../app/LocalSessionWorkbench.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    source,
+    /const localParsePending = shell\.source\.status === "selecting"[\s\S]*?shell\.source\.status === "parsing"/,
+  );
+  assert.match(source, /const cancelLocalParse = [\s\S]*?loader\.cancelPending\(\)/);
+  assert.match(source, /type: "local_operation_cancelled"/);
+  assert.match(source, /const openShared = [\s\S]*?if \(localParsePending\)/);
+  assert.match(
+    source,
+    /disabled=\{shell\.auth\.status !== "authenticated"[\s\S]*?\|\| localParsePending\}/,
+  );
+  assert.match(source, /取消解析/);
+});
+
+test("shared loading has abortable timeout and manual recovery", () => {
+  const source = readFileSync(
+    new URL("../app/LocalSessionWorkbench.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /new SharedWorkspaceLoadScope\(operationId/);
+  assert.match(source, /signal: scope\.signal/);
+  assert.match(source, /type: "shared_load_cancelled"/);
+  assert.match(source, /取消共享加载/);
+  assert.match(source, /if \(!scope\.complete\(\)\) return/);
 });
 
 test("selector-bound workbook profiles import disabled until explicitly chosen", () => {

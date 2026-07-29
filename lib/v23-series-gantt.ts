@@ -1,8 +1,11 @@
 import type { SeriesPartRevision, SkuDrawerRevision, WorkspaceState } from "./types";
 
 export function selectCurrentPublishedWeightTemplateDraftId(state: WorkspaceState): string | undefined {
-  const published = state.ruleSetVersions.filter((entry) => entry.status === "published").sort((left, right) => right.version - left.version || left.id.localeCompare(right.id));
-  return published[0]?.weightTemplateDraftId;
+  const published = state.ruleSetVersions.filter((entry) => entry.status === "published");
+  const version = Math.max(...published.map((entry) => entry.version));
+  if (!Number.isFinite(version)) return undefined;
+  const current = published.filter((entry) => entry.version === version);
+  return current.length === 1 ? current[0]!.weightTemplateDraftId : undefined;
 }
 
 export interface V23BandBlock {

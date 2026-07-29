@@ -5,7 +5,7 @@ import { Plus, RefreshCw } from "lucide-react";
 import type { ActionAvailabilityMap } from "@/lib/interaction-contracts";
 import type { SeriesPartRevision, SkuDrawerRevision, WorkspaceState } from "@/lib/types";
 import { projectV23SeriesGantt, resolveCurrentV23Skus, selectCurrentPublishedWeightTemplateDraftId, validateV23PreviewSkuHeads, type V23BandBlock } from "@/lib/v23-series-gantt";
-import { executeV23UiAction, previewV23WeightBand } from "@/lib/v23-ui-actions";
+import { executeV23UiAction, previewV23WeightBand, v23CanApplyReadback, v23LatestGeneration, v23WritePreflight } from "@/lib/v23-ui-actions";
 import { randomUUID } from "@/lib/browser-utils";
 import { canApplyConfirmedWorkspace, DIRTY_WORKSPACE_CONFIRMATION_MESSAGE } from "@/lib/clean-workspace-confirmation";
 
@@ -17,9 +17,11 @@ function canonicalBandOrder(state: WorkspaceState) {
   const drafts = state.weightTemplatePolicyDrafts.filter((entry) => entry.id === currentId);
   if (drafts.length !== 1) return [];
   const draft = drafts[0];
-  return (draft?.templates ?? []).slice().sort((left, right) =>
-    (left.sourceRow ?? Number.MAX_SAFE_INTEGER) - (right.sourceRow ?? Number.MAX_SAFE_INTEGER) || left.id.localeCompare(right.id),
-  ).map((entry) => entry.id);
+  const templates = draft?.templates ?? [];
+  if (!templates.length || templates.some((entry) => !Number.isSafeInteger(entry.sourceRow) || entry.sourceRow! < 1)
+    || new Set(templates.map((entry) => entry.sourceRow)).size !== templates.length
+    || new Set(templates.map((entry) => entry.id)).size !== templates.length) return [];
+  return templates.slice().sort((left, right) => left.sourceRow! - right.sourceRow!).map((entry) => entry.id);
 }
 
 export function V23SeriesPartWorkbench(props: {
@@ -42,9 +44,10 @@ export function V23SeriesPartWorkbench(props: {
     const current = await response.json().catch(() => null) as { state?: WorkspaceState; revision?: number; error?: string } | null;
     if (!response.ok || !current?.state || !Number.isInteger(current.revision)) throw new Error(current?.error ?? "写入完成但无法安全回读工作区。");
     const revision = current.revision as number;
-    if (epoch !== writeEpoch.current) return;
+    if (!v23LatestGeneration(writeEpoch.current, epoch)) return;
     if (revision < expectedRevision) throw new Error("回读 revision 早于写入结果，已拒绝覆盖可见状态。");
-    const applyCheck = canApplyConfirmedWorkspace({ ...workspaceFreshness(), expectedRevision: baseline.revision });
+    const freshness = workspaceFreshness(); const applyCheck = canApplyConfirmedWorkspace({ ...freshness, expectedRevision: baseline.revision });
+    if (!v23CanApplyReadback({ current: freshness, baselineRevision: baseline.revision, returnedRevision: revision })) { notify("工作区状态已漂移，已拒绝应用回读；请重新载入。"); return; }
     if (!applyCheck.allowed) { notify(`${applyCheck.reason} 服务端命令已提交，但为保护本地未保存修改未应用回读；请重新载入。`); return; }
     onApplied(current.state, revision, message);
   };
@@ -65,8 +68,8 @@ export function V23SeriesPartWorkbench(props: {
   const write = async (action: Parameters<typeof executeV23UiAction>[0], payload: Record<string, unknown>, message: string) => {
     if (writeFlight.current) return notify("上一条写入仍在进行；为避免并发覆盖已拒绝本次操作。");
     const baseline = workspaceFreshness();
-    if (baseline.dirty) return notify(DIRTY_WORKSPACE_CONFIRMATION_MESSAGE);
-    if (payload.expectedWorkspaceRevision !== baseline.revision) return notify("工作区 revision 已变化；请刷新后重新执行该操作。");
+    const preflight = v23WritePreflight({ ...baseline, expectedWorkspaceRevision: payload.expectedWorkspaceRevision });
+    if (!preflight.allowed) return notify(preflight.reason === "dirty" ? DIRTY_WORKSPACE_CONFIRMATION_MESSAGE : "工作区 revision 已变化；请刷新后重新执行该操作。");
     const availability = actionAvailabilities[action];
     if (!availability?.enabled) return notify(availability?.disabledReasonText ?? "当前账号不能执行该动作。");
     const token = `${action}:${randomUUID()}`; const epoch = ++writeEpoch.current; writeFlight.current = true; setPending(token);

@@ -2,6 +2,18 @@ import { jcsSha256Hex } from "./canonical-json";
 import { issueClientActionCommand } from "./client-action-command";
 import type { ActionCode } from "./interaction-contracts";
 
+export function v23WritePreflight(input: { dirty: boolean; revision: number; expectedWorkspaceRevision: unknown }) {
+  if (input.dirty) return { allowed: false as const, reason: "dirty" as const };
+  if (input.expectedWorkspaceRevision !== input.revision) return { allowed: false as const, reason: "revision" as const };
+  return { allowed: true as const };
+}
+
+export function v23LatestGeneration(current: number, response: number) { return current === response; }
+
+export function v23CanApplyReadback(input: { current: { dirty: boolean; revision: number }; baselineRevision: number; returnedRevision: number }) {
+  return !input.current.dirty && input.current.revision === input.baselineRevision && input.returnedRevision >= input.baselineRevision;
+}
+
 export async function executeV23UiAction(action: Extract<ActionCode,
   "update_part_configuration" | "create_sku" | "add_sku_affix" | "remove_inherited_affix" |
   "restore_inherited_affix" | "copy_sku_local_affix" | "create_project_affix" | "set_sku_actual_quality"

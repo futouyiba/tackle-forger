@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mergeV23WeightBands, projectV23SeriesGantt, resolveCurrentV23Parts, resolveCurrentV23Skus, selectCurrentPublishedWeightTemplateDraftId, validateV23PreviewSkuHeads } from "../lib/v23-series-gantt";
+import { v23CanApplyReadback, v23LatestGeneration, v23WritePreflight } from "../lib/v23-ui-actions";
 import type { SeriesPartRevision, SkuDrawerRevision, WorkspaceState } from "../lib/types";
 
 const part = (partId: string, partType: "rod" | "reel" | "line", weightBandIds: string[]): SeriesPartRevision => ({
@@ -36,9 +37,9 @@ test("未知或重复 catalog/Part band 都 fail closed，且不改写输入", (
   assert.deepEqual(rod, input);
 });
 
-test("current published 按 version 降序并以 id 稳定决胜", () => {
+test("最高 published version 并列时 fail closed，不以 id 打破语义歧义", () => {
   const candidate = state([]); candidate.ruleSetVersions = [{ id: "z", version: 2, status: "published", settings: {}, sourceRevisionIds: [], weightTemplateDraftId: "draft:z", createdAt: "" }, { id: "a", version: 2, status: "published", settings: {}, sourceRevisionIds: [], weightTemplateDraftId: "draft:a", createdAt: "" }] as never;
-  assert.equal(selectCurrentPublishedWeightTemplateDraftId(candidate), "draft:a");
+  assert.equal(selectCurrentPublishedWeightTemplateDraftId(candidate), undefined);
 });
 
 test("preview SKU exact set 拒绝缺项、多项和重复项", () => {
@@ -65,6 +66,19 @@ test("没有 published RuleSet 时不选择任意历史数组项", () => {
 test("Part weightBandIds 重复时 projection 不产生可点击块", () => {
   const rod = part("part:rod", "rod", ["01.1", "01.1"]);
   assert.deepEqual(projectV23SeriesGantt(state([rod]), "series:one", ["01.1"]).parts, []);
+});
+
+test("写入预检拒绝 dirty、revision 漂移并仅接受精确 baseline", () => {
+  assert.deepEqual(v23WritePreflight({ dirty: true, revision: 4, expectedWorkspaceRevision: 4 }), { allowed: false, reason: "dirty" });
+  assert.deepEqual(v23WritePreflight({ dirty: false, revision: 4, expectedWorkspaceRevision: 3 }), { allowed: false, reason: "revision" });
+  assert.deepEqual(v23WritePreflight({ dirty: false, revision: 4, expectedWorkspaceRevision: 4 }), { allowed: true });
+});
+
+test("旧 generation 与 dirty/revision drift readback 不得覆盖当前状态", () => {
+  assert.equal(v23LatestGeneration(3, 2), false); assert.equal(v23LatestGeneration(3, 3), true);
+  assert.equal(v23CanApplyReadback({ current: { dirty: true, revision: 4 }, baselineRevision: 4, returnedRevision: 5 }), false);
+  assert.equal(v23CanApplyReadback({ current: { dirty: false, revision: 5 }, baselineRevision: 4, returnedRevision: 5 }), false);
+  assert.equal(v23CanApplyReadback({ current: { dirty: false, revision: 4 }, baselineRevision: 4, returnedRevision: 5 }), true);
 });
 
 test("重复或不可解析 Part head fail closed，绝不猜测最新 revision", () => {

@@ -13,5 +13,5 @@ test("v23 Part 工作台显式预览与受控动作，不在甘特块点击时�
   assert.match(source, /immutable .*partId/);
   assert.match(source, /DIRTY_WORKSPACE_CONFIRMATION_MESSAGE/);
   assert.match(source, /canApplyConfirmedWorkspace/);
-  assert.match(source, /payload\.expectedWorkspaceRevision !== baseline\.revision/);
+  assert.match(source, /v23WritePreflight/);
 });

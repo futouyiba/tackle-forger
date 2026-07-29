@@ -46,3 +46,20 @@ test("binary64 ratio rejects overflow and underflow-to-zero deterministically", 
   const halve = structuredClone(percent); halve.operations[0] = { ...halve.operations[0]!, direction: "decrease" } as never;
   assert.equal(deriveV23SkuPull(Number.MIN_VALUE, [{ ref, payload: halve }]).status, "INVALID");
 });
+
+test("v23 uses UTF-8 canonical order and binary64 left-folded percent pools", () => {
+  const make = (id: string, magnitude: number) => ({ ref: { ...ref, id }, payload: { ...payload, operations: [{ ...payload.operations[0]!, operation: "percent_adjust" as const, sourceAffixId: id, operationId: `${id}:op`, magnitude, direction: "increase" as const }] } as V23ProjectAffixPayload });
+  const entries = [make("中", 1), make("A", 1), make("!", 2 ** 53)];
+  const forward = deriveV23SkuPull(1, entries);
+  const reverse = deriveV23SkuPull(1, [...entries].reverse());
+  assert.deepEqual(reverse, forward);
+  assert.equal(forward.status, "VALID");
+  if (forward.status === "VALID") assert.equal(forward.targetPullKg, 1 + (2 ** 53 + 1 + 1));
+});
+
+test("local-copy replacement is identity-bound and input ordering is irrelevant", () => {
+  const copied = { ref: { ...ref, id: "copy-source" }, localCopyId: "copy:α", copyHash: "c".repeat(64), payload };
+  const normal = deriveV23SkuPull(5, [{ ref, payload }, copied]);
+  const reverse = deriveV23SkuPull(5, [copied, { ref, payload }]);
+  assert.deepEqual(reverse, normal);
+});

@@ -56,12 +56,13 @@ export function v23EffectiveEntries(inherited: readonly V23ResolvedAffix[], remo
 }
 
 export function deriveV23SkuPull(baselinePullKg: number, entries: readonly V23ResolvedAffix[], options: V23DerivationOptions = {}): V23SkuPullDerivation {
-  const inputHash = jcsSha256Hex({ baselinePullKg, policy: options.publishedReductionPolicy ?? null, entries: entries.map((e) => ({ ref: e.ref, localCopyId: e.localCopyId ?? null, copyHash: e.copyHash ?? null, payload: e.payload })) });
+  const canonicalEntries = [...entries].sort((left, right) => compareUtf8(left.ref.id, right.ref.id) || left.ref.revision - right.ref.revision || compareUtf8(left.localCopyId ?? "", right.localCopyId ?? ""));
+  const inputHash = jcsSha256Hex({ baselinePullKg, policy: options.publishedReductionPolicy ?? null, entries: canonicalEntries.map((e) => ({ ref: e.ref, localCopyId: e.localCopyId ?? null, copyHash: e.copyHash ?? null, payload: e.payload })) });
   if (!Number.isFinite(baselinePullKg) || baselinePullKg <= 0) return { status: "INVALID", code: "V23_TEMPLATE_PULL_INVALID", inputHash };
   if (options.formal && (!options.publishedReductionPolicy || options.publishedReductionPolicy.status !== "published" || options.publishedReductionPolicy.strategy !== "bidirectional_ratio" || options.publishedReductionPolicy.numericContract !== "ieee754-binary64-v1")) return { status: "INVALID", code: "V23_OPEN_001_POLICY_VERSION_REQUIRED", inputHash };
   let value = baselinePullKg;
   const trace: V23PullTraceStep[] = [];
-  const ordered = entries.flatMap((entry) => entry.payload.enabled && entry.payload.category === "attribute" ? entry.payload.operations.map((operation) => ({ entry, operation })) : []).sort((left, right) => compareUtf8(left.entry.ref.id, right.entry.ref.id) || left.entry.ref.revision - right.entry.ref.revision || left.operation.operationIndex - right.operation.operationIndex || compareUtf8(left.operation.operationId, right.operation.operationId));
+  const ordered = canonicalEntries.flatMap((entry) => entry.payload.enabled && entry.payload.category === "attribute" ? entry.payload.operations.map((operation) => ({ entry, operation })) : []).sort((left, right) => compareUtf8(left.entry.ref.id, right.entry.ref.id) || left.entry.ref.revision - right.entry.ref.revision || left.operation.operationIndex - right.operation.operationIndex || compareUtf8(left.operation.operationId, right.operation.operationId));
   const operationIdentity = new Set<string>();
   for (const { entry, operation } of ordered) { const identity = `${entry.ref.id}\u0000${entry.ref.revision}\u0000${operation.operationIndex}\u0000${operation.operationId}`; if (operationIdentity.has(identity)) return { status: "INVALID", code: "V23_OPERATION_IDENTITY_DUPLICATE", inputHash }; operationIdentity.add(identity); }
   let bonus = 0; let reduction = 0; let bonusExact = exact(0); let reductionExact = exact(0); const later: typeof ordered = [];
@@ -92,5 +93,5 @@ export function deriveV23SkuPull(baselinePullKg: number, entries: readonly V23Re
       if (!Number.isFinite(value) || value <= 0) return { status: "INVALID", code: "V23_PULL_DERIVATION_NON_FINITE", inputHash };
       trace.push({ affixId: entry.ref.id, operationId: numeric.operationId, operationIndex: numeric.operationIndex, operation: numeric.operation, direction: numeric.direction, magnitude: numeric.magnitude, clampMin: numeric.operation === "clamp_add" ? numeric.clampMin : null, clampMax: numeric.operation === "clamp_add" ? numeric.clampMax : null, ratioOperations: null, beforeKg, afterKg: value });
   }
-  return { status: "VALID", baselinePullKg, targetPullKg: value, effectiveEntryIds: entries.map((e) => e.ref.id), trace, inputHash: jcsSha256Hex({ inputHash, targetPullKg: value, trace }) };
+  return { status: "VALID", baselinePullKg, targetPullKg: value, effectiveEntryIds: canonicalEntries.map((e) => e.ref.id), trace, inputHash: jcsSha256Hex({ inputHash, targetPullKg: value, trace }) };
 }

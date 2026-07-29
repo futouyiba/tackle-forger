@@ -1808,8 +1808,11 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     if (![1, 2, 3].includes(entry.functionIntensity as number)) throw new Error("V23_PART_FUNCTION_INTENSITY_INVALID");
     const weightBandIds = v23Array(entry.weightBandIds, "V23_PART_WEIGHT_BANDS").map((id) => v23String(id, "V23_PART_WEIGHT_BAND_ID"));
     if (new Set(weightBandIds).size !== weightBandIds.length) throw new Error("V23_PART_WEIGHT_BAND_DUPLICATE");
+    const partDefaultEntryIds = new Set<string>();
     for (const value of v23Array(entry.defaultEntryRefs, "V23_PART_DEFAULT_ENTRIES")) {
       const ref = validateV23StableRef(value, "V23_PART_DEFAULT_ENTRY");
+      if (partDefaultEntryIds.has(ref.id)) throw new Error("V23_PART_DEFAULT_ENTRY_ID_DUPLICATE");
+      partDefaultEntryIds.add(ref.id);
       const resolved = resolveAffixRef(ref);
       if (!resolved) throw new Error("V23_PART_DEFAULT_ENTRY_UNRESOLVED");
       if (resolved.payload.itemPartId !== itemPartIdFor(entry.partType)) throw new Error("V23_PART_DEFAULT_ENTRY_ITEM_PART_MISMATCH");
@@ -1939,9 +1942,13 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     } else throw new Error("V23_SKU_MATCH_STATUS_INVALID");
     const removed = v23Array(entry.removedInheritedEntryIds, "V23_SKU_REMOVED_ENTRIES");
     if (new Set(removed.map((id) => v23String(id, "V23_SKU_REMOVED_ENTRY_ID"))).size !== removed.length) throw new Error("V23_SKU_REMOVED_ENTRY_DUPLICATE");
+    const skuAddedEntryIds = new Set<string>();
     for (const refEntry of v23Array(entry.addedEntryRefs, "V23_SKU_ADDED_ENTRY_REFS")) {
       const stableEntry = v23Record(refEntry, "V23_SKU_ADDED_ENTRY_REF");
       if (stableEntry.kind !== "STABLE_AFFIX_REF") throw new Error("V23_SKU_ADDED_ENTRY_REF_KIND_INVALID");
+      const ref = validateV23StableRef(stableEntry.ref, "V23_SKU_ADDED_ENTRY_REF_REF");
+      if (skuAddedEntryIds.has(ref.id)) throw new Error("V23_SKU_ADDED_ENTRY_REF_ID_DUPLICATE");
+      skuAddedEntryIds.add(ref.id);
       validateAffixEntry(stableEntry, "V23_SKU_ADDED_ENTRY_REF", itemPartIdFor(part.partType)!);
     }
     for (const copy of v23Array(entry.localEntryCopies, "V23_SKU_LOCAL_COPIES")) {

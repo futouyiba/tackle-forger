@@ -571,3 +571,33 @@ test("v23 closes SKU heads, affix contribution metadata, and Part weight-band me
   historicalBand.v23SkuDrawerHeads = [{ skuId: "sku:one", revision: 2 }];
   assert.doesNotThrow(() => migrateWorkspaceState(historicalBand));
 });
+
+test("v23 deduplicates stable affix IDs within each Part and SKU revision only", () => {
+  assert.doesNotThrow(() => migrateWorkspaceState(directV23State()));
+  const secondPayload = affixPayload("affix:project", 2);
+  const secondDefinition = { affixId: "affix:project", revision: 2, contentHash: hash({ affixId: "affix:project", revision: 2, payload: secondPayload }), payload: secondPayload };
+
+  const partExact = directV23State();
+  const firstRef = { id: partExact.v23AffixDefinitions[0]!.affixId, revision: 1, contentHash: partExact.v23AffixDefinitions[0]!.contentHash };
+  partExact.v23SeriesPartRevisions[0]!.defaultEntryRefs = [firstRef, structuredClone(firstRef)];
+  partExact.v23SeriesPartRevisions[0] = withPartHashes(partExact.v23SeriesPartRevisions[0]!) as SeriesPartRevision;
+  assert.throws(() => migrateWorkspaceState(partExact), /V23_PART_DEFAULT_ENTRY_ID_DUPLICATE/);
+
+  const partRevision = directV23State();
+  partRevision.v23AffixDefinitions.push(secondDefinition);
+  partRevision.v23SeriesPartRevisions[0]!.defaultEntryRefs = [{ id: "affix:project", revision: 1, contentHash: partRevision.v23AffixDefinitions[0]!.contentHash }, { id: "affix:project", revision: 2, contentHash: secondDefinition.contentHash }];
+  partRevision.v23SeriesPartRevisions[0] = withPartHashes(partRevision.v23SeriesPartRevisions[0]!) as SeriesPartRevision;
+  assert.throws(() => migrateWorkspaceState(partRevision), /V23_PART_DEFAULT_ENTRY_ID_DUPLICATE/);
+
+  const skuExact = directV23State();
+  const skuRef = { id: skuExact.v23AffixDefinitions[0]!.affixId, revision: 1, contentHash: skuExact.v23AffixDefinitions[0]!.contentHash };
+  skuExact.v23SkuDrawerRevisions[0]!.addedEntryRefs = [{ kind: "STABLE_AFFIX_REF", ref: skuRef }, { kind: "STABLE_AFFIX_REF", ref: structuredClone(skuRef) }];
+  skuExact.v23SkuDrawerRevisions[0] = withSkuHashes(skuExact.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.throws(() => migrateWorkspaceState(skuExact), /V23_SKU_ADDED_ENTRY_REF_ID_DUPLICATE/);
+
+  const skuRevision = directV23State();
+  skuRevision.v23AffixDefinitions.push(secondDefinition);
+  skuRevision.v23SkuDrawerRevisions[0]!.addedEntryRefs = [{ kind: "STABLE_AFFIX_REF", ref: { id: "affix:project", revision: 1, contentHash: skuRevision.v23AffixDefinitions[0]!.contentHash } }, { kind: "STABLE_AFFIX_REF", ref: { id: "affix:project", revision: 2, contentHash: secondDefinition.contentHash } }];
+  skuRevision.v23SkuDrawerRevisions[0] = withSkuHashes(skuRevision.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.throws(() => migrateWorkspaceState(skuRevision), /V23_SKU_ADDED_ENTRY_REF_ID_DUPLICATE/);
+});

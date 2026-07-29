@@ -1079,4 +1079,37 @@ test("v23 formal persisted derivation round-trips closed binary64 evidence", () 
   const migrated = migrateWorkspaceState(state);
   assert.equal(migrated.v23SkuDrawerRevisions[0]!.derivation?.status, "VALID");
   assert.deepEqual(migrateWorkspaceState(migrated), migrated);
+
+  const invalidState = structuredClone(state);
+  const invalidSku = invalidState.v23SkuDrawerRevisions[0]!;
+  const invalidDefinition = invalidState.v23AffixDefinitions[0]!;
+  const invalidPayload = structuredClone(invalidDefinition.payload);
+  invalidPayload.operations = [{ operationId: "op:overflow", operationIndex: 0, sourceAffixId: invalidDefinition.affixId, sourceAffixRevision: invalidDefinition.revision, parameterKey: "pull", operation: "percent_adjust", direction: "increase", magnitude: 1, publishedMagnitudeRange: { min: 0, max: 1, ruleSetVersion: "ruleset-v3-migrated-1" } }] as never;
+  invalidDefinition.payload = invalidPayload;
+  invalidDefinition.contentHash = hash({ affixId: invalidDefinition.affixId, revision: invalidDefinition.revision, payload: invalidPayload });
+  const invalidRef = { id: invalidDefinition.affixId, revision: invalidDefinition.revision, contentHash: invalidDefinition.contentHash };
+  invalidSku.addedEntryRefs[0]!.ref = invalidRef;
+  const invalidBaseline = Number.MAX_VALUE;
+  const invalidTemplateRef = { templateId: templateRef.templateId, revisionId: templateRef.revisionId, contentHash: hash({ contractVersion: "v23-function-template/v1", key, baselinePullKg: invalidBaseline }) };
+  invalidState.v23FunctionTemplates = [{ ref: invalidTemplateRef, key, baselinePullKg: invalidBaseline }];
+  const invalidSource = { ref: invalidRef, localCopyId: null, copyHash: null, payloadHash: hash(invalidPayload) };
+  const invalidReplay = deriveV23SkuPull(invalidBaseline, [{ ref: invalidRef, payload: invalidPayload }], { formal: true, publishedReductionPolicy: policy });
+  assert.equal(invalidReplay.status, "INVALID");
+  if (invalidReplay.status !== "INVALID") return;
+  const failureEvidence = { source: invalidReplay.failureEvidence.affixId === null ? null : invalidSource, operationId: invalidReplay.failureEvidence.operationId, operationIndex: invalidReplay.failureEvidence.operationIndex, stage: invalidReplay.failureEvidence.stage, numericEvidence: invalidReplay.failureEvidence.numericEvidence };
+  invalidSku.match = { status: "VALID", functionTemplateRef: invalidTemplateRef, matchedKey: key, inputFingerprint: hash(key) };
+  invalidSku.derivation = { status: "INVALID", templateRef: invalidTemplateRef, reductionPolicyRef: { id: policy.id, version: policy.version, contentHash: policy.contentHash }, effectiveEntries: [invalidSource], code: invalidReplay.code, failureEvidence, inputHash: invalidReplay.inputHash } as never;
+  invalidState.v23SkuDrawerRevisions[0] = withSkuHashes(invalidSku) as SkuDrawerRevision;
+  const invalidMigrated = migrateWorkspaceState(invalidState);
+  assert.equal(invalidMigrated.v23SkuDrawerRevisions[0]!.derivation?.status, "INVALID");
+  assert.deepEqual(migrateWorkspaceState(invalidMigrated), invalidMigrated);
+  const rejectTamper = (mutate: (derivation: Record<string, unknown>) => void) => {
+    const candidate = structuredClone(invalidState); const drawer = candidate.v23SkuDrawerRevisions[0]!; mutate(drawer.derivation as unknown as Record<string, unknown>); candidate.v23SkuDrawerRevisions[0] = withSkuHashes(drawer) as SkuDrawerRevision; assert.throws(() => migrateWorkspaceState(candidate));
+  };
+  rejectTamper((derivation) => { derivation.code = "V23_PULL_DERIVATION_NON_FINITE"; });
+  rejectTamper((derivation) => { derivation.inputHash = "0".repeat(64); });
+  for (const field of ["source", "operationId", "operationIndex", "stage"] as const) rejectTamper((derivation) => { const failure = derivation.failureEvidence as Record<string, unknown>; failure[field] = field === "source" ? null : field === "operationId" ? "tampered" : field === "operationIndex" ? 99 : "base"; });
+  for (const field of ["beforeBinary64", "afterBinary64", "exactNumerator", "exactDenominator", "anomaly"] as const) rejectTamper((derivation) => { const numeric = ((derivation.failureEvidence as Record<string, unknown>).numericEvidence as Record<string, unknown>); numeric[field] = field === "anomaly" ? "none" : "0x0000000000000000"; });
+  const changedInput = structuredClone(invalidState); const changedDefinition = changedInput.v23AffixDefinitions[0]!; (changedDefinition.payload.operations[0] as { magnitude: number }).magnitude = 0.5; changedDefinition.contentHash = hash({ affixId: changedDefinition.affixId, revision: changedDefinition.revision, payload: changedDefinition.payload }); changedInput.v23SkuDrawerRevisions[0]!.addedEntryRefs[0]!.ref.contentHash = changedDefinition.contentHash; changedInput.v23SkuDrawerRevisions[0] = withSkuHashes(changedInput.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.throws(() => migrateWorkspaceState(changedInput));
 });

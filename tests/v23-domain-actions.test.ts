@@ -292,6 +292,52 @@ test("SKU 创建采用推荐品质，人工实际品质作为新 revision 保存
   assert.equal(actual.assessment.qualityOverrideReason, "人工实测品质");
 });
 
+test("评分达到 100 后人工选择实际品质仍保留正式发布阻断", () => {
+  const withSeries = run(qualityReadyState(), "create_series", {
+    seriesId: "series:alpha",
+    collectionId: null,
+    name: "Alpha",
+    concept: "Out of range quality",
+    parts: [part],
+  }).state;
+  const withAffix = run(withSeries, "create_project_affix", {
+    affixId: "affix:score-100",
+    affixPayload: { ...attributeAffixPayload("affix:score-100"), valueScore: 100 },
+  }).state;
+  const created = run(withAffix, "create_sku", {
+    skuId: "sku:out-of-range",
+    partId: part.partId,
+    expectedPartRevision: 1,
+    weightBandId: "band:light",
+    displayOrder: 0,
+  }).state;
+  const withEntry = run(created, "add_sku_affix", {
+    skuId: "sku:out-of-range",
+    expectedSkuRevision: 1,
+    affixRef: {
+      id: "affix:score-100",
+      revision: 1,
+      contentHash: withAffix.v23AffixDefinitions[0]!.contentHash,
+    },
+  }).state;
+  const assessed = run(withEntry, "set_sku_actual_quality", {
+    skuId: "sku:out-of-range",
+    expectedSkuRevision: 2,
+    selectedQualityId: "quality_s_orange",
+    reason: "评分越界后人工实测",
+  }).state.v23SkuDrawerRevisions.at(-1)!;
+
+  assert.equal(assessed.quality.status, "ASSESSED");
+  if (assessed.quality.status !== "ASSESSED") return;
+  assert.equal(assessed.quality.assessment.recommendedQualityId, null);
+  assert.equal(assessed.quality.assessment.selectedQualityId, "quality_s_orange");
+  assert.ok(assessed.validationSummary.some(
+    (issue) => issue.code === "QUALITY_SCORE_OUT_OF_RANGE"
+      && issue.gate === "PUBLISH"
+      && issue.severity === "BLOCKER",
+  ));
+});
+
 test("part update appends immutable revisions and atomically rederives every child SKU", () => {
   const withSeries = run(state(), "create_series", {
     seriesId: "series:alpha",

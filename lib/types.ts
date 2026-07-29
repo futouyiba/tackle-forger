@@ -1976,8 +1976,7 @@ export interface AffixRuntimeEvidence {
   traceHash: string;
 }
 
-/** 客户端提交的定价评估输入——只含引用，不含计算结果。服务端据此重算并验证。 */
-export interface ModelPricingEvaluationInput {
+interface ModelPricingEvaluationInputCommon {
   modelId: string;
   modelRevision: string;
   pricingPolicyRef: string;
@@ -1985,8 +1984,29 @@ export interface ModelPricingEvaluationInput {
   valueScore: number;
   partId?: string;
   typeId?: string;
-  qualityId?: string;
 }
+
+/**
+ * v22 及更早的冻结重放输入。缺少 sourceKind 的既有记录仍可识别为历史记录，
+ * 但只能进入显式 historical replay 入口。
+ */
+export interface HistoricalModelPricingEvaluationInput extends ModelPricingEvaluationInputCommon {
+  sourceKind?: "HISTORICAL_FROZEN";
+  qualityId: QualityProfileId;
+}
+
+/** v23 当前定价只接受 SKU revision 上已冻结的实际品质评估。 */
+export interface V23ModelPricingEvaluationInput extends ModelPricingEvaluationInputCommon {
+  sourceKind: "V23_SKU_ASSESSMENT";
+  skuId: string;
+  skuRevision: number;
+  qualityAssessmentInputHash: string;
+  qualityId: QualityProfileId;
+}
+
+export type ModelPricingEvaluationInput =
+  | HistoricalModelPricingEvaluationInput
+  | V23ModelPricingEvaluationInput;
 
 /** 版本化、不可变、可重算的权威定价评估。客户端不得自报价格或 fingerprint。 */
 export interface ModelPricingEvaluation {

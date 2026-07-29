@@ -551,6 +551,15 @@ function deriveSku(
               : {}),
         });
         quality = { status: "ASSESSED", assessment };
+        if (assessment.recommendedQualityId === null) {
+          validationSummary.push({
+            code: "QUALITY_SCORE_OUT_OF_RANGE",
+            severity: "BLOCKER",
+            gate: "PUBLISH",
+            state: "OPEN",
+            message: "品质评分达到或超过 100，不生成推荐品质并阻断正式发布。",
+          });
+        }
       } catch (error) {
         if (!(error instanceof V23SkuQualityError)) throw error;
         validationSummary.push({

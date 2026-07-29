@@ -1747,6 +1747,7 @@ function validateV23ProjectAffixPayload(value: unknown, affixId: string, revisio
   }
   if (payload.category === "attribute" && (payload.passivePayload !== null || operations.length === 0)) throw new Error("V23_AFFIX_CATEGORY_PAYLOAD_MISMATCH");
   if (payload.category === "passive") { if (operations.length !== 0) throw new Error("V23_AFFIX_CATEGORY_PAYLOAD_MISMATCH"); const passive = v23Record(payload.passivePayload, "V23_AFFIX_PASSIVE"); v23ExactKeys(passive, ["skillId", "name", "itemPartId", "triggerType", "triggerDescription", "effectTarget", "effectLogicDescription", "exampleParameters", "durationDescription", "cooldownDescription", "resetDescription", "stackingDescription", "playerDescription", "simulatorReferenceKey"], "V23_AFFIX_PASSIVE"); for (const key of ["skillId","name","itemPartId","triggerType","triggerDescription","effectTarget","effectLogicDescription","durationDescription","cooldownDescription","resetDescription","stackingDescription","playerDescription"]) v23String(passive[key], "V23_AFFIX_PASSIVE_FIELD"); const parameters = v23Record(passive.exampleParameters, "V23_AFFIX_PASSIVE_PARAMETERS"); if (Object.values(parameters).some((item) => !(["string", "boolean", "number"] as const).includes(typeof item as never) || (typeof item === "number" && !Number.isFinite(item)))) throw new Error("V23_AFFIX_PASSIVE_PARAMETERS_INVALID"); if (passive.itemPartId !== payload.itemPartId || !(passive.simulatorReferenceKey === null || (typeof passive.simulatorReferenceKey === "string" && passive.simulatorReferenceKey.length > 0))) throw new Error("V23_AFFIX_PASSIVE_INVALID"); }
+  return payload;
 }
 
 function validateV23RuntimeState(state: MutableWorkspace) {
@@ -1765,21 +1766,24 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     seriesIds.add(id);
   }
 
-  const affixRefs = new Map<string, Map<number, string>>();
+  const affixRefs = new Map<string, Map<number, { contentHash: string; payload: Record<string, unknown> }>>();
   for (const value of affixes) {
     const entry = v23Record(value, "V23_AFFIX_DEFINITION");
     v23ExactKeys(entry, ["affixId", "revision", "contentHash", "payload"], "V23_AFFIX_DEFINITION");
     const id = v23String(entry.affixId, "V23_AFFIX_ID");
     const revision = v23Revision(entry.revision, "V23_AFFIX_REVISION");
-    validateV23ProjectAffixPayload(entry.payload, id, revision);
+    const payload = validateV23ProjectAffixPayload(entry.payload, id, revision);
     const hash = v23HashOf({ affixId: id, revision, payload: entry.payload }, entry.contentHash, "V23_AFFIX_CONTENT_HASH");
-    const revisions = affixRefs.get(id) ?? new Map<number, string>();
+    const revisions = affixRefs.get(id) ?? new Map<number, { contentHash: string; payload: Record<string, unknown> }>();
     if (revisions.has(revision)) throw new Error("V23_AFFIX_ID_REVISION_DUPLICATE");
-    revisions.set(revision, hash);
+    revisions.set(revision, { contentHash: hash, payload });
     affixRefs.set(id, revisions);
   }
-  const hasAffixRef = (ref: { id: string; revision: number; contentHash: string }) =>
-    affixRefs.get(ref.id)?.get(ref.revision) === ref.contentHash;
+  const resolveAffixRef = (ref: { id: string; revision: number; contentHash: string }) => {
+    const resolved = affixRefs.get(ref.id)?.get(ref.revision);
+    return resolved?.contentHash === ref.contentHash ? resolved : undefined;
+  };
+  const itemPartIdFor = (partType: unknown) => ({ rod: "part:rod", reel: "part:reel", line: "part:line" } as const)[partType as "rod" | "reel" | "line"];
   // Phase A has no immutable v23 Technology registry. Legacy Technology
   // objects cannot be JCS-parsed into an authority that resolves new refs.
   const validateTechnologyRef = (value: unknown, code: string) => {
@@ -1805,7 +1809,9 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     if (new Set(weightBandIds).size !== weightBandIds.length) throw new Error("V23_PART_WEIGHT_BAND_DUPLICATE");
     for (const value of v23Array(entry.defaultEntryRefs, "V23_PART_DEFAULT_ENTRIES")) {
       const ref = validateV23StableRef(value, "V23_PART_DEFAULT_ENTRY");
-      if (!hasAffixRef(ref)) throw new Error("V23_PART_DEFAULT_ENTRY_UNRESOLVED");
+      const resolved = resolveAffixRef(ref);
+      if (!resolved) throw new Error("V23_PART_DEFAULT_ENTRY_UNRESOLVED");
+      if (resolved.payload.itemPartId !== itemPartIdFor(entry.partType)) throw new Error("V23_PART_DEFAULT_ENTRY_ITEM_PART_MISMATCH");
     }
     for (const ref of v23Array(entry.technologyRefs, "V23_PART_TECHNOLOGIES")) validateTechnologyRef(ref, "V23_PART_TECHNOLOGY");
     const partMap = partByIdAndRevision.get(partId) ?? new Map<number, Record<string, unknown>>();
@@ -1844,12 +1850,14 @@ function validateV23RuntimeState(state: MutableWorkspace) {
   }
 
   const localCopyOwners = new Map<string, string>(); let revisionCopyIds = new Set<string>();
-  const validateAffixEntry = (value: unknown, code: string) => {
+  const validateAffixEntry = (value: unknown, code: string, expectedItemPartId: string) => {
     const entry = v23Record(value, code);
     if (entry.kind === "STABLE_AFFIX_REF") {
       v23ExactKeys(entry, ["kind", "ref"], code);
       const ref = validateV23StableRef(entry.ref, `${code}_REF`);
-      if (!hasAffixRef(ref)) throw new Error(`${code}_REF_UNRESOLVED`);
+      const resolved = resolveAffixRef(ref);
+      if (!resolved) throw new Error(`${code}_REF_UNRESOLVED`);
+      if (resolved.payload.itemPartId !== expectedItemPartId) throw new Error(`${code}_ITEM_PART_MISMATCH`);
       return;
     }
     if (entry.kind === "LOCAL_AFFIX_COPY") {
@@ -1861,8 +1869,10 @@ function validateV23RuntimeState(state: MutableWorkspace) {
       if (owner !== undefined && owner !== currentSkuId) throw new Error("V23_LOCAL_COPY_ID_OWNER_CONFLICT");
       localCopyOwners.set(copyId, currentSkuId);
       const ref = validateV23StableRef(entry.sourceRef, `${code}_SOURCE_REF`);
-      if (!hasAffixRef(ref)) throw new Error(`${code}_SOURCE_REF_UNRESOLVED`);
-      validateV23ProjectAffixPayload(entry.payload, ref.id, ref.revision);
+      const resolved = resolveAffixRef(ref);
+      if (!resolved) throw new Error(`${code}_SOURCE_REF_UNRESOLVED`);
+      const localPayload = validateV23ProjectAffixPayload(entry.payload, ref.id, ref.revision);
+      if (resolved.payload.itemPartId !== expectedItemPartId || localPayload.itemPartId !== expectedItemPartId) throw new Error(`${code}_ITEM_PART_MISMATCH`);
       v23HashOf({ localCopyId: copyId, sourceRef: ref, payload: entry.payload }, entry.copyHash, `${code}_COPY_HASH`);
       return;
     }
@@ -1930,12 +1940,12 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     for (const refEntry of v23Array(entry.addedEntryRefs, "V23_SKU_ADDED_ENTRY_REFS")) {
       const stableEntry = v23Record(refEntry, "V23_SKU_ADDED_ENTRY_REF");
       if (stableEntry.kind !== "STABLE_AFFIX_REF") throw new Error("V23_SKU_ADDED_ENTRY_REF_KIND_INVALID");
-      validateAffixEntry(stableEntry, "V23_SKU_ADDED_ENTRY_REF");
+      validateAffixEntry(stableEntry, "V23_SKU_ADDED_ENTRY_REF", itemPartIdFor(part.partType)!);
     }
     for (const copy of v23Array(entry.localEntryCopies, "V23_SKU_LOCAL_COPIES")) {
       const copyEntry = v23Record(copy, "V23_SKU_LOCAL_COPY");
       if (copyEntry.kind !== "LOCAL_AFFIX_COPY") throw new Error("V23_SKU_LOCAL_COPY_KIND_INVALID");
-      validateAffixEntry(copyEntry, "V23_SKU_LOCAL_COPY");
+      validateAffixEntry(copyEntry, "V23_SKU_LOCAL_COPY", itemPartIdFor(part.partType)!);
     }
     for (const ref of v23Array(entry.technologyRefs, "V23_SKU_TECHNOLOGIES")) validateTechnologyRef(ref, "V23_SKU_TECHNOLOGY");
     const quality = v23Record(entry.quality, "V23_SKU_QUALITY");
@@ -1959,7 +1969,8 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     const sourceSchemaVersion = v23Revision(entry.sourceSchemaVersion, "V23_SOURCE_SCHEMA_VERSION");
     if (sourceSchemaVersion >= CURRENT_WORKSPACE_SCHEMA_VERSION) throw new Error("V23_SOURCE_SCHEMA_VERSION_UNSUPPORTED");
     const raw = v23Record(entry.rawWorkspacePayload, "V23_SOURCE_PAYLOAD");
-    if (raw.schemaVersion !== sourceSchemaVersion) throw new Error("V23_SOURCE_SCHEMA_VERSION_MISMATCH");
+    const rawDeclaresSchemaVersion = Object.prototype.hasOwnProperty.call(raw, "schemaVersion");
+    if (!(sourceSchemaVersion === 1 && !rawDeclaresSchemaVersion) && raw.schemaVersion !== sourceSchemaVersion) throw new Error("V23_SOURCE_SCHEMA_VERSION_MISMATCH");
     const hash = v23String(entry.rawWorkspacePayloadHash, "V23_SOURCE_PAYLOAD_HASH");
     // Existing workspace deterministicHash is an 8-hex content contract, not
     // the new v23 64-hex stable-reference contract.

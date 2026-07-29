@@ -134,6 +134,24 @@ test("v9 original input is retained as evidence after the existing sequential ch
   assert.deepEqual(migrateWorkspaceState(migrated), migrated);
 });
 
+test("implicit schema v1 source evidence remains verbatim while forged schema declarations fail closed", () => {
+  const legacy = legacyInput(9);
+  delete legacy.schemaVersion;
+  const snapshotsBefore = structuredClone(legacy.configurationSnapshots);
+  const migrated = migrateWorkspaceState(legacy);
+  assert.equal(migrated.schemaVersion, 23);
+  assert.equal(migrated.v23MigrationSourceEvidence[0]?.sourceSchemaVersion, 1);
+  assert.deepEqual(migrated.v23MigrationSourceEvidence[0]?.rawWorkspacePayload, legacy);
+  assert.equal(Object.hasOwn(migrated.v23MigrationSourceEvidence[0]!.rawWorkspacePayload, "schemaVersion"), false);
+  assert.deepEqual(migrated.configurationSnapshots, snapshotsBefore);
+  assert.deepEqual(migrateWorkspaceState(migrated), migrated);
+
+  const forged = directV23State();
+  const raw = { schemaVersion: 2, legacy: true };
+  forged.v23MigrationSourceEvidence = [{ sourceEvidenceId: "source:v1", sourceSchemaVersion: 1, rawWorkspacePayload: raw, rawWorkspacePayloadHash: deterministicHash(raw) }];
+  assert.throws(() => migrateWorkspaceState(forged), /V23_SOURCE_SCHEMA_VERSION_MISMATCH/);
+});
+
 test("missing and duplicate legacy stable SKU identities fail closed without mutating the input", () => {
   const missing = legacyInput(22);
   delete (missing.skuDrawers as Array<Record<string, unknown>>)[0]!.id;
@@ -477,4 +495,38 @@ test("v23 Phase A keeps registry-dependent carriers closed and requires one head
   blockedLifecycle.v23SkuDrawerRevisions[0]!.validationSummary = [{ code: "block", severity: "BLOCKER", gate: "PUBLISH", state: "OPEN", message: "historical diagnostic" }];
   blockedLifecycle.v23SkuDrawerRevisions[0] = withSkuHashes(blockedLifecycle.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
   assert.doesNotThrow(() => migrateWorkspaceState(blockedLifecycle));
+});
+
+test("v23 affix references must match the authoritative Part itemPartId", () => {
+  const linePayload = { ...affixPayload("affix:line"), itemPartId: "part:line" };
+  const lineAffix = { affixId: "affix:line", revision: 1, contentHash: hash({ affixId: "affix:line", revision: 1, payload: linePayload }), payload: linePayload };
+  const lineRef = { id: lineAffix.affixId, revision: lineAffix.revision, contentHash: lineAffix.contentHash };
+
+  const partDefault = directV23State();
+  partDefault.v23AffixDefinitions.push(lineAffix);
+  partDefault.v23SeriesPartRevisions[0]!.defaultEntryRefs = [lineRef];
+  partDefault.v23SeriesPartRevisions[0] = withPartHashes(partDefault.v23SeriesPartRevisions[0]!) as SeriesPartRevision;
+  assert.throws(() => migrateWorkspaceState(partDefault), /V23_PART_DEFAULT_ENTRY_ITEM_PART_MISMATCH/);
+
+  const added = directV23State();
+  added.v23AffixDefinitions.push(lineAffix);
+  added.v23SkuDrawerRevisions[0]!.addedEntryRefs = [{ kind: "STABLE_AFFIX_REF", ref: lineRef }];
+  added.v23SkuDrawerRevisions[0] = withSkuHashes(added.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.throws(() => migrateWorkspaceState(added), /V23_SKU_ADDED_ENTRY_REF_ITEM_PART_MISMATCH/);
+
+  const localSource = directV23State();
+  localSource.v23AffixDefinitions.push(lineAffix);
+  localSource.v23SkuDrawerRevisions[0]!.localEntryCopies = [{ kind: "LOCAL_AFFIX_COPY", localCopyId: "copy:line", sourceRef: lineRef, payload: linePayload, copyHash: hash({ localCopyId: "copy:line", sourceRef: lineRef, payload: linePayload }) }];
+  localSource.v23SkuDrawerRevisions[0] = withSkuHashes(localSource.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.throws(() => migrateWorkspaceState(localSource), /V23_SKU_LOCAL_COPY_ITEM_PART_MISMATCH/);
+
+  const localPayload = directV23State();
+  const rodRef = { id: localPayload.v23AffixDefinitions[0]!.affixId, revision: 1, contentHash: localPayload.v23AffixDefinitions[0]!.contentHash };
+  localPayload.v23SkuDrawerRevisions[0]!.localEntryCopies = [{ kind: "LOCAL_AFFIX_COPY", localCopyId: "copy:payload", sourceRef: rodRef, payload: { ...affixPayload(), itemPartId: "part:line" }, copyHash: "" }];
+  const copy = localPayload.v23SkuDrawerRevisions[0]!.localEntryCopies[0]!;
+  copy.copyHash = hash({ localCopyId: copy.localCopyId, sourceRef: copy.sourceRef, payload: copy.payload });
+  localPayload.v23SkuDrawerRevisions[0] = withSkuHashes(localPayload.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.throws(() => migrateWorkspaceState(localPayload), /V23_SKU_LOCAL_COPY_ITEM_PART_MISMATCH/);
+
+  assert.doesNotThrow(() => migrateWorkspaceState(directV23State()));
 });

@@ -47,7 +47,7 @@ import {
   patchRevisionIdentityKey,
   type PatchLedgerMigrationContext,
 } from "./patch-ledger";
-import { canonicalizeAffixOperations } from "./reduction-stacking-policy";
+import { canonicalizeAffixOperations, hasCanonicalReductionPolicyIdentity } from "./reduction-stacking-policy";
 import {
   CANONICAL_PATCH_OFFSET_POLICY_ID,
   createCanonicalPatchOffsetPolicyVersion,
@@ -2179,7 +2179,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
         const policyRef = v23Record(persisted.reductionPolicyRef, "V23_SKU_DERIVATION_POLICY_REF");
         v23ExactKeys(policyRef, ["id", "version", "contentHash"], "V23_SKU_DERIVATION_POLICY_REF");
         const policies = arrayOf<WorkspaceState["reductionStackingPolicyVersions"][number]>(state.reductionStackingPolicyVersions).filter((candidate) => candidate.id === policyRef.id && candidate.version === policyRef.version && candidate.contentHash === policyRef.contentHash && candidate.status === "published");
-        if (policies.length !== 1) throw new Error("V23_OPEN_001_POLICY_UNRESOLVED"); const policy = policies[0]!;
+        if (policies.length !== 1 || !hasCanonicalReductionPolicyIdentity(policies[0]!)) throw new Error("V23_OPEN_001_POLICY_UNRESOLVED"); const policy = policies[0]!;
         const replayEntries: V23ResolvedAffix[] = [...effectiveStableEntries.values()].map((effective) => ({ ref: effective.ref, payload: effective.payload as never, localCopyId: effective.localCopyId ?? undefined, copyHash: effective.copyHash ?? undefined }));
         const replay = deriveV23SkuPull(matchedTemplateBaseline, replayEntries, { formal: true, publishedReductionPolicy: policy });
         const sourceEvidence = (id: string) => { const actual = effectiveStableEntries.get(id); if (!actual) throw new Error("V23_SKU_DERIVATION_REPLAY_SOURCE_UNRESOLVED"); return { ref: actual.ref, localCopyId: actual.localCopyId, copyHash: actual.copyHash, payloadHash: jcsSha256Hex(actual.payload) }; };

@@ -7,6 +7,7 @@ import { jcsSha256Hex } from "../lib/canonical-json";
 import { createSeedState } from "../lib/seed";
 import { migrateLegacyProductIdentity } from "../lib/legacy-product-migration";
 import { deriveV23SkuPull } from "../lib/v23-sku-derivation";
+import { importReductionStackingPolicyDraft, publishReductionStackingPolicyVersion } from "../lib/reduction-stacking-policy";
 import type {
   SeriesPartRevision,
   SkuDrawerRevision,
@@ -1063,7 +1064,7 @@ test("v23 formal persisted derivation round-trips closed binary64 evidence", () 
   const baselinePullKg = 5;
   const templateRef = { templateId: "template:one", revisionId: "r1", contentHash: hash({ contractVersion: "v23-function-template/v1", key, baselinePullKg }) };
   state.v23FunctionTemplates = [{ ref: templateRef, key, baselinePullKg }];
-  const policy = { id: "policy:one", version: "policy-v1", contentHash: "d".repeat(64), status: "published" as const, strategy: "bidirectional_ratio" as const, numericContract: "ieee754-binary64-v1" as const };
+  const policy = publishReductionStackingPolicyVersion({ draft: importReductionStackingPolicyDraft({ sourceRevision: { id: "source:1", workbookRefId: "feishu-workbook:tackle-design", sourceRevision: "99", sheets: [{ sheetId: "23CsXE" }] } as never, machineRules: [{ ruleId: "pull", parameterKey: "pull", strategy: "bidirectional_ratio", numericContract: "ieee754-binary64-v1", operationOrder: ["set", "percent_adjust", "flat_adjust", "clamp_add", "final_review_patch", "parameter_definition"] }], createdAt: "2026-01-01T00:00:00.000Z" }), publishedAt: "2026-01-01T00:00:00.000Z", publishedBy: "test" });
   state.reductionStackingPolicyVersions = [policy as never];
   const definition = state.v23AffixDefinitions[0]!;
   const ref = { id: definition.affixId, revision: definition.revision, contentHash: definition.contentHash };

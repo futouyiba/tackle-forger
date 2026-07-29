@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { deriveV23SkuPull, validateV23ModelPatchForPull, v23EffectiveEntries } from "../lib/v23-sku-derivation";
 import type { V23ProjectAffixPayload } from "../lib/types";
+import { importReductionStackingPolicyDraft, publishReductionStackingPolicyVersion } from "../lib/reduction-stacking-policy";
+const policy = () => publishReductionStackingPolicyVersion({ draft: importReductionStackingPolicyDraft({ sourceRevision: { id: "source:1", workbookRefId: "feishu-workbook:tackle-design", sourceRevision: "99", sheets: [{ sheetId: "23CsXE" }] } as never, machineRules: [{ ruleId: "pull", parameterKey: "pull", strategy: "bidirectional_ratio", numericContract: "ieee754-binary64-v1", operationOrder: ["set", "percent_adjust", "flat_adjust", "clamp_add", "final_review_patch", "parameter_definition"] }], createdAt: "2026-01-01T00:00:00.000Z" }), publishedAt: "2026-01-01T00:00:00.000Z", publishedBy: "test" });
 const ref = { id: "a", revision: 1, contentHash: "a".repeat(64) };
 const payload = { name: "p", category: "attribute" as const, itemPartId: "part:rod", semanticContributionKey: "pull", stackingPolicy: "dedupe" as const, generationPolicy: "normal" as const, rarity: "common" as const, valueScore: 0, tags: [], description: "", enabled: true, operations: [{ operationId: "op", operationIndex: 0, sourceAffixId: "a", sourceAffixRevision: 1, parameterKey: "pull", operation: "flat_adjust" as const, direction: "increase" as const, magnitude: 2, publishedMagnitudeRange: { min: 0, max: 2, ruleSetVersion: "r" } }], passivePayload: null };
 test("v23 pull derives deterministically after stable-ID settlement", () => {
@@ -27,7 +29,7 @@ test("formal decrease requires the published OPEN-001 policy version", () => {
   (decrease.operations[0]! as Extract<typeof decrease.operations[number], { direction: "increase" | "decrease" }>).direction = "decrease";
   const entries = [{ ref, payload: decrease }];
   assert.deepEqual(deriveV23SkuPull(5, entries, { formal: true }).status, "INVALID");
-  assert.equal(deriveV23SkuPull(5, entries, { formal: true, publishedReductionPolicy: { id: "policy:1", version: "v1", contentHash: "b".repeat(64), status: "published", strategy: "bidirectional_ratio", numericContract: "ieee754-binary64-v1" } }).status, "VALID");
+  assert.equal(deriveV23SkuPull(5, entries, { formal: true, publishedReductionPolicy: policy() }).status, "VALID");
 });
 
 test("percent adjustments use the published bidirectional ratio contract", () => {
@@ -62,4 +64,15 @@ test("local-copy replacement is identity-bound and input ordering is irrelevant"
   const normal = deriveV23SkuPull(5, [{ ref, payload }, copied]);
   const reverse = deriveV23SkuPull(5, [copied, { ref, payload }]);
   assert.deepEqual(reverse, normal);
+});
+
+test("flat pools settle before clamps", () => {
+  const chained = structuredClone(payload) as V23ProjectAffixPayload;
+  chained.operations = [
+    { ...payload.operations[0]!, operationId: "flat", operation: "flat_adjust", magnitude: 10, direction: "increase" },
+    { ...payload.operations[0]!, operationId: "clamp", operationIndex: 1, operation: "clamp_add", magnitude: 0, direction: "increase", clampMin: 0, clampMax: 15 },
+  ] as never;
+  const result = deriveV23SkuPull(10, [{ ref, payload: chained }]);
+  assert.equal(result.status, "VALID");
+  if (result.status === "VALID") assert.equal(result.targetPullKg, 15);
 });

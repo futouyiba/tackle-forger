@@ -134,21 +134,28 @@ const ITEM_PART_ID_BY_TYPE: Record<V23EnabledPartType, string> = {
 };
 
 function validatePartReferences(state: WorkspaceState, part: SeriesPartRevision): void {
-  const ids = new Set<string>();
-  const direct: V23ResolvedAffix[] = [];
-  for (const ref of part.defaultEntryRefs) {
-    if (ids.has(ref.id)) {
-      throw new V23DomainActionError("V23_PART_DEFAULT_AFFIX_DUPLICATE", "Part 默认词条稳定 ID 不得重复。");
-    }
-    ids.add(ref.id);
+  partInheritedEntries(state, part);
+}
+
+function partInheritedEntries(
+  state: WorkspaceState,
+  part: SeriesPartRevision,
+): V23ResolvedAffix[] {
+  const direct = part.defaultEntryRefs.map((ref) => {
     const definition = resolveDefinition(state, ref);
     if (definition.payload.itemPartId !== ITEM_PART_ID_BY_TYPE[part.partType]) {
       throw new V23DomainActionError(
         "V23_AFFIX_ITEM_PART_MISMATCH",
-        "Part 默认词条必须与 Part 类型一致。",
+        "Part 继承词条必须与 Part 类型一致。",
       );
     }
-    direct.push({ ref, payload: definition.payload });
+    return { ref, payload: definition.payload };
+  });
+  if (new Set(direct.map((entry) => entry.ref.id)).size !== direct.length) {
+    throw new V23DomainActionError(
+      "V23_PART_DEFAULT_AFFIX_DUPLICATE",
+      "Part 默认词条稳定 ID 不得重复。",
+    );
   }
   const expanded = technology(() => expandV23TechnologyRefs(
     state,
@@ -156,10 +163,10 @@ function validatePartReferences(state: WorkspaceState, part: SeriesPartRevision)
     ITEM_PART_ID_BY_TYPE[part.partType],
   ));
   try {
-    v23EffectiveEntries(direct, [], expanded, []);
+    return v23EffectiveEntries(direct, [], expanded, []);
   } catch (error) {
     if (error instanceof Error && /^V23_/u.test(error.message)) {
-      throw new V23DomainActionError(error.message, "Part 词条与 Technology 贡献冲突。");
+      throw new V23DomainActionError(error.message, "Part 继承词条贡献冲突。");
     }
     throw error;
   }
@@ -1170,6 +1177,7 @@ export function executeV23DomainAction(
   const existing = currentSku(state, text(payload.skuId, "skuId"));
   expectedEntityRevision(payload, "expectedSkuRevision", existing.revision);
   const part = currentPart(state, existing.partId);
+  const inheritedEntries = partInheritedEntries(state, part);
   let addedEntryRefs = structuredClone(existing.addedEntryRefs);
   let removedInheritedEntryIds = [...existing.removedInheritedEntryIds];
   let localEntryCopies = structuredClone(existing.localEntryCopies);
@@ -1188,7 +1196,7 @@ export function executeV23DomainAction(
     addedEntryRefs = [...addedEntryRefs, { kind: "STABLE_AFFIX_REF", ref: ref! }];
   } else if (action === "remove_inherited_affix") {
     const inheritedEntryId = text(payload.inheritedEntryId, "inheritedEntryId");
-    if (!part.defaultEntryRefs.some((entry) => entry.id === inheritedEntryId)
+    if (!inheritedEntries.some((entry) => entry.ref.id === inheritedEntryId)
       || removedInheritedEntryIds.includes(inheritedEntryId)) {
       throw new V23DomainActionError("V23_INHERITED_AFFIX_NOT_ACTIVE", "继承词条不存在或已移除。", 409);
     }
@@ -1201,20 +1209,19 @@ export function executeV23DomainAction(
     removedInheritedEntryIds = removedInheritedEntryIds.filter((id) => id !== inheritedEntryId);
   } else {
     const [sourceRef] = stableRefs([payload.affixRef], "affixRef");
-    const inherited = part.defaultEntryRefs.find(
-      (ref) => ref.id === sourceRef!.id
-        && ref.revision === sourceRef!.revision
-        && ref.contentHash === sourceRef!.contentHash,
+    const inherited = inheritedEntries.find(
+      (entry) => entry.ref.id === sourceRef!.id
+        && entry.ref.revision === sourceRef!.revision
+        && entry.ref.contentHash === sourceRef!.contentHash,
     );
     if (!inherited || existing.removedInheritedEntryIds.includes(sourceRef!.id)) {
       throw new V23DomainActionError(
         "V23_LOCAL_AFFIX_COPY_SOURCE_NOT_ACTIVE_INHERITED",
-        "本地词条副本来源必须是当前 Part 中仍 active 的继承默认词条。",
+        "本地词条副本来源必须是当前 Part 中仍 active 的继承词条。",
         409,
       );
     }
-    const source = resolveDefinition(state, sourceRef!);
-    if (source.payload.itemPartId !== ITEM_PART_ID_BY_TYPE[part.partType]) {
+    if (inherited.payload.itemPartId !== ITEM_PART_ID_BY_TYPE[part.partType]) {
       throw new V23DomainActionError("V23_AFFIX_ITEM_PART_MISMATCH", "本地词条副本来源必须与当前 Part 类型一致。");
     }
     const localCopyId = text(payload.localCopyId, "localCopyId");
@@ -1222,10 +1229,10 @@ export function executeV23DomainAction(
       || localEntryCopies.some((entry) => entry.sourceRef.id === sourceRef!.id)) {
       throw new V23DomainActionError("V23_LOCAL_AFFIX_COPY_CONFLICT", "本地词条副本身份或来源重复。", 409);
     }
-    const copyHash = jcsSha256Hex({ localCopyId, sourceRef, payload: source.payload });
+    const copyHash = jcsSha256Hex({ localCopyId, sourceRef, payload: inherited.payload });
     localEntryCopies = [
       ...localEntryCopies,
-      { kind: "LOCAL_AFFIX_COPY", localCopyId, sourceRef: sourceRef!, payload: source.payload, copyHash },
+      { kind: "LOCAL_AFFIX_COPY", localCopyId, sourceRef: sourceRef!, payload: inherited.payload, copyHash },
     ];
   }
 

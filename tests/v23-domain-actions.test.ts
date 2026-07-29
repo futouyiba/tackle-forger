@@ -1158,3 +1158,95 @@ test("Technology and local-copy controlled actions preserve exact history and re
   assert.notEqual(nextCopy.copyHash, priorCopy.copyHash);
   assert.equal(updated.v23SkuDrawerRevisions.at(-1)?.revision, 7);
 });
+
+test("Part Technology members are exact inherited sources for remove, restore, and local copy", () => {
+  let current = qualityReadyState();
+  current = run(current, "create_project_affix", {
+    affixId: "affix:technology-inherited",
+    affixPayload: attributeAffixPayload("affix:technology-inherited"),
+  }).state;
+  const affix = current.v23AffixDefinitions.at(-1)!;
+  const affixRef = { id: affix.affixId, revision: affix.revision, contentHash: affix.contentHash };
+  current = run(current, "create_series", {
+    seriesId: "series:technology-inherited", collectionId: null, name: "Inherited Technology",
+    concept: "Part Technology members are inherited",
+    parts: [{ ...part, partId: "part:technology-inherited", defaultEntryRefs: [] }],
+  }).state;
+  current = run(current, "create_sku", {
+    skuId: "sku:technology-inherited", partId: "part:technology-inherited",
+    expectedPartRevision: 1, weightBandId: "band:light", displayOrder: 0,
+  }).state;
+  for (const technologyId of ["technology:inherited:a", "technology:inherited:b"]) {
+    current = run(current, "create_technology", {
+      technologyId, itemPartId: "part:rod", name: technologyId,
+      description: "same exact inherited member", memberAffixRefs: [affixRef], enabled: true,
+    }).state;
+    const definition = current.v23TechnologyDefinitions.find(
+      (entry) => entry.technologyId === technologyId,
+    )!;
+    current = run(current, "attach_part_technology", {
+      partId: "part:technology-inherited",
+      expectedPartRevision: current.v23SeriesPartHeads.find(
+        (entry) => entry.partId === "part:technology-inherited",
+      )!.revision,
+      technologyRef: {
+        id: definition.technologyId,
+        revision: definition.revision,
+        contentHash: definition.contentHash,
+      },
+    }).state;
+  }
+  const inheritedSku = current.v23SkuDrawerRevisions.at(-1)!;
+  assert.equal(inheritedSku.derivation?.status, "VALID");
+  assert.deepEqual(
+    inheritedSku.derivation?.status === "VALID"
+      ? inheritedSku.derivation.effectiveEntries.map((entry) => entry.ref.id)
+      : null,
+    [affixRef.id],
+  );
+
+  const removed = run(current, "remove_inherited_affix", {
+    skuId: "sku:technology-inherited",
+    expectedSkuRevision: inheritedSku.revision,
+    inheritedEntryId: affixRef.id,
+  }).state;
+  const removedDerivation = removed.v23SkuDrawerRevisions.at(-1)?.derivation;
+  assert.equal(removedDerivation?.status, "VALID");
+  assert.deepEqual(
+    removedDerivation?.status === "VALID"
+      ? removedDerivation.effectiveEntries.map((entry) => entry.ref.id)
+      : null,
+    [],
+  );
+  assert.throws(
+    () => run(removed, "copy_sku_local_affix", {
+      skuId: "sku:technology-inherited",
+      expectedSkuRevision: removed.v23SkuDrawerRevisions.at(-1)!.revision,
+      affixRef,
+      localCopyId: "copy:removed-technology-member",
+    }),
+    /V23_LOCAL_AFFIX_COPY_SOURCE_NOT_ACTIVE_INHERITED/u,
+  );
+
+  const restored = run(removed, "restore_inherited_affix", {
+    skuId: "sku:technology-inherited",
+    expectedSkuRevision: removed.v23SkuDrawerRevisions.at(-1)!.revision,
+    inheritedEntryId: affixRef.id,
+  }).state;
+  const copied = run(restored, "copy_sku_local_affix", {
+    skuId: "sku:technology-inherited",
+    expectedSkuRevision: restored.v23SkuDrawerRevisions.at(-1)!.revision,
+    affixRef,
+    localCopyId: "copy:technology-member",
+  }).state;
+  assert.deepEqual(copied.v23SkuDrawerRevisions.at(-1)?.localEntryCopies[0]?.sourceRef, affixRef);
+  assert.throws(
+    () => run(restored, "copy_sku_local_affix", {
+      skuId: "sku:technology-inherited",
+      expectedSkuRevision: restored.v23SkuDrawerRevisions.at(-1)!.revision,
+      affixRef: { ...affixRef, contentHash: "f".repeat(64) },
+      localCopyId: "copy:forged-technology-member",
+    }),
+    /V23_LOCAL_AFFIX_COPY_SOURCE_NOT_ACTIVE_INHERITED/u,
+  );
+});

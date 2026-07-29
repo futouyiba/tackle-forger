@@ -15,6 +15,7 @@ import {
   importReductionStackingPolicyDraft,
   publishReductionStackingPolicyVersion,
 } from "../lib/reduction-stacking-policy";
+import { importQualityValuePolicyDraft } from "../lib/quality-value-policy";
 
 const templateKey = {
   partType: "rod" as const,
@@ -75,6 +76,40 @@ function state(): WorkspaceState {
   }];
   value.reductionStackingPolicyVersions = [publishedPolicy("99")];
   return ensureWorkflowFields(value);
+}
+
+function qualityReadyState(): WorkspaceState {
+  const value = state();
+  value.qualityValuePolicyDrafts = [importQualityValuePolicyDraft({
+    sourceRevisionId: "source:quality@500",
+    sourceRevision: "500",
+    ranges: [
+      { qualityId: "quality_c_green", minScore: 0, maxScore: 20, maxInclusive: false, source: { sheetId: "27hboC", cell: "B2" }, status: "SOURCE" },
+      { qualityId: "quality_b_blue", minScore: 20, maxScore: 40, maxInclusive: false, source: { sheetId: "27hboC", cell: "B3" }, status: "SOURCE" },
+      { qualityId: "quality_a_purple", minScore: 40, maxScore: 65, maxInclusive: false, source: { sheetId: "27hboC", cell: "B4" }, status: "SOURCE" },
+      { qualityId: "quality_s_orange", minScore: 65, maxScore: 100, maxInclusive: false, source: { sheetId: "27hboC", cell: "B5" }, status: "SOURCE" },
+    ],
+    aliases: [],
+    matrixCells: [],
+    importedAt: "2026-07-29T00:00:00.000Z",
+  })];
+  value.functionProfiles = [{
+    id: "function:cast",
+    name: "远投",
+    rules: [],
+    intensityRules: [{
+      intensity: 2,
+      itemPartId: "part:rod",
+      rules: [],
+      scoreFactor: 1.03,
+      scoreFactorSourceRef: "16qYVn!F2@source:quality@500",
+      sourceRowId: "function:cast:2",
+    }],
+    enabled: true,
+    sourceRevisionId: "source:quality@500",
+    notes: "",
+  }];
+  return value;
 }
 
 function command<T extends Record<string, unknown>>(
@@ -207,6 +242,54 @@ test("preview is read-only and create_sku supports multiple stable IDs in one Pa
     ["sku:light:a", "sku:light:b"],
   );
   assert.ok(second.v23SkuDrawerRevisions.every((entry) => entry.derivation?.status === "VALID"));
+});
+
+test("SKU 创建采用推荐品质，人工实际品质作为新 revision 保存且理由 fail closed", () => {
+  const withSeries = run(qualityReadyState(), "create_series", {
+    seriesId: "series:alpha",
+    collectionId: null,
+    name: "Alpha",
+    concept: "Quality",
+    parts: [part],
+  }).state;
+  const created = run(withSeries, "create_sku", {
+    skuId: "sku:quality",
+    partId: part.partId,
+    expectedPartRevision: 1,
+    weightBandId: "band:light",
+    displayOrder: 0,
+  }).state;
+  const initial = created.v23SkuDrawerRevisions[0]!;
+  assert.equal(initial.quality.status, "ASSESSED");
+  if (initial.quality.status !== "ASSESSED") return;
+  assert.equal(initial.quality.assessment.recommendedQualityId, "quality_c_green");
+  assert.equal(initial.quality.assessment.selectedQualityId, "quality_c_green");
+  assert.equal(initial.quality.assessment.qualityOverrideState, "MATCHED");
+
+  assert.throws(
+    () => run(created, "set_sku_actual_quality", {
+      skuId: "sku:quality",
+      expectedSkuRevision: 1,
+      selectedQualityId: "quality_b_blue",
+      reason: null,
+    }),
+    /V23_QUALITY_OVERRIDE_REASON_REQUIRED/,
+  );
+  const overridden = run(created, "set_sku_actual_quality", {
+    skuId: "sku:quality",
+    expectedSkuRevision: 1,
+    selectedQualityId: "quality_b_blue",
+    reason: "人工实测品质",
+  }).state;
+  assert.equal(overridden.v23SkuDrawerHeads[0]?.revision, 2);
+  assert.equal(overridden.v23SkuDrawerRevisions.length, 2);
+  assert.deepEqual(overridden.v23SkuDrawerRevisions[0], initial);
+  const actual = overridden.v23SkuDrawerRevisions[1]!.quality;
+  assert.equal(actual.status, "ASSESSED");
+  if (actual.status !== "ASSESSED") return;
+  assert.equal(actual.assessment.selectedQualityId, "quality_b_blue");
+  assert.equal(actual.assessment.qualityOverrideState, "OVERRIDDEN");
+  assert.equal(actual.assessment.qualityOverrideReason, "人工实测品质");
 });
 
 test("part update appends immutable revisions and atomically rederives every child SKU", () => {

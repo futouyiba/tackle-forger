@@ -11,6 +11,7 @@ import { importReductionStackingPolicyDraft, publishReductionStackingPolicyVersi
 import type {
   SeriesPartRevision,
   SkuDrawerRevision,
+  V23SkuAffixValueAssessment,
   V23AffixDefinition,
   V23LegacyReadAdapter,
 } from "../lib/types";
@@ -75,8 +76,7 @@ function directV23State(partCount = 1) {
 function assessedQuality(state: ReturnType<typeof directV23State>, overrides: Record<string, unknown> = {}) {
   const sku = state.v23SkuDrawerRevisions[0]!;
   const definition = state.v23AffixDefinitions[0]!;
-  const ref = { id: definition.affixId, revision: definition.revision, contentHash: definition.contentHash };
-  return {
+  const result = {
     status: "ASSESSED" as const,
     assessment: {
       skuRevisionId: `${sku.skuId}@${sku.revision}`,
@@ -90,13 +90,23 @@ function assessedQuality(state: ReturnType<typeof directV23State>, overrides: Re
       finalValueScore: 1,
       affixBreakdown: [{ sourceAffixId: definition.affixId, valueScore: 1, sourceRef: "quality-sheet!B2" }],
       combinationBreakdown: [],
+      trace: [
+        { sequence: 1, step: "affix", sourceRef: "quality-sheet!B2", subjectIds: [definition.affixId], before: 0, operation: "add", operand: 1, after: 1 },
+        { sequence: 2, step: "function_factor", sourceRef: "function-sheet!F2", subjectIds: ["function:cast", "2"], before: 1, operation: "multiply", operand: 1, after: 1 },
+        { sequence: 3, step: "quality_range", sourceRef: "quality:v1:quality_a_purple", subjectIds: ["quality_a_purple"], before: 1, operation: "validate", operand: 65, after: 1 },
+      ] as V23SkuAffixValueAssessment["trace"],
       qualityRangePolicyVersion: "quality:v1",
       scoringPolicyVersion: "score:v1",
       inSelectedQualityRange: true,
-      inputHash: hash({ skuRevisionId: `${sku.skuId}@${sku.revision}`, affix: ref }),
+      inputHash: "0".repeat(64),
       ...overrides,
     },
   };
+  const assessment = result.assessment as Record<string, unknown>;
+  const content = { ...assessment };
+  delete content.inputHash;
+  assessment.inputHash = hash(content);
+  return result;
 }
 
 test("v23 closed carriers express Parts, SKU drawers, and non-interchangeable affix entries", () => {
@@ -918,7 +928,7 @@ test("v23 executes semantic contribution dedupe only where Phase A defines each 
   assert.doesNotThrow(() => migrateWorkspaceState(allowedSummary));
 });
 
-test("v23 SKU quality carrier is closed, hash-bound, and unavailable before the Phase-B resolver", () => {
+test("v23 SKU quality carrier is closed and hash-bound after the Phase-D resolver", () => {
   const rehash = (state: ReturnType<typeof directV23State>) => {
     state.v23SkuDrawerRevisions[0] = withSkuHashes(state.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
   };
@@ -927,7 +937,7 @@ test("v23 SKU quality carrier is closed, hash-bound, and unavailable before the 
   const wellFormed = directV23State();
   wellFormed.v23SkuDrawerRevisions[0]!.quality = assessedQuality(wellFormed);
   rehash(wellFormed);
-  assert.throws(() => migrateWorkspaceState(wellFormed), /V23_SKU_QUALITY_RESOLVER_UNAVAILABLE/);
+  assert.doesNotThrow(() => migrateWorkspaceState(wellFormed));
   for (const [label, mutate, expected] of [
     ["missing-field", (assessment: Record<string, unknown>) => { delete assessment.inputHash; }, /V23_SKU_QUALITY_ASSESSMENT_SCHEMA_INVALID/],
     ["unknown-quality", (assessment: Record<string, unknown>) => { assessment.selectedQualityId = "quality:unknown"; }, /V23_SKU_QUALITY_ID_INVALID/],
@@ -972,7 +982,11 @@ test("v23 SKU quality carrier is closed, hash-bound, and unavailable before the 
     combinationBreakdown: [{ leftAffixId: "affix:project", rightAffixId: "affix:other", valueScore: 1, sourceRef: "quality-matrix!C4" }],
   }) as never;
   rehash(combinations);
-  assert.throws(() => migrateWorkspaceState(combinations), /V23_SKU_QUALITY_RESOLVER_UNAVAILABLE/, "real string source refs are preserved until Phase B can resolve the assessment");
+  assert.deepEqual(
+    migrateWorkspaceState(combinations).v23SkuDrawerRevisions[0]!.quality,
+    combinations.v23SkuDrawerRevisions[0]!.quality,
+    "closed, hash-bound assessment evidence is preserved without rewriting its source refs",
+  );
   const reversePair = structuredClone(combinations);
   (reversePair.v23SkuDrawerRevisions[0]!.quality as { assessment: { combinationBreakdown: unknown[] } }).assessment.combinationBreakdown.push({ leftAffixId: "affix:other", rightAffixId: "affix:project", valueScore: 1, sourceRef: "quality-matrix!C5" });
   rehash(reversePair);
@@ -982,9 +996,14 @@ test("v23 SKU quality carrier is closed, hash-bound, and unavailable before the 
   rehash(unknownCombination);
   assert.throws(() => migrateWorkspaceState(unknownCombination), /V23_SKU_COMBINATION_BREAKDOWN_INVALID/);
   const forgedInputHash = directV23State();
-  forgedInputHash.v23SkuDrawerRevisions[0]!.quality = assessedQuality(forgedInputHash, { inputHash: "f".repeat(64) }) as never;
+  forgedInputHash.v23SkuDrawerRevisions[0]!.quality = assessedQuality(forgedInputHash) as never;
+  (forgedInputHash.v23SkuDrawerRevisions[0]!.quality as { assessment: { inputHash: string } }).assessment.inputHash = "f".repeat(64);
   rehash(forgedInputHash);
-  assert.throws(() => migrateWorkspaceState(forgedInputHash), /V23_SKU_QUALITY_RESOLVER_UNAVAILABLE/, "Phase A retains a syntactically closed input hash but never accepts a self-reported assessment");
+  assert.throws(
+    () => migrateWorkspaceState(forgedInputHash),
+    /V23_SKU_QUALITY_INPUT_HASH_MISMATCH/,
+    "a self-reported assessment must remain bound to its complete closed payload",
+  );
 });
 
 test("v23 effective stable IDs dedupe before semantic contribution while retaining SKU intent", () => {

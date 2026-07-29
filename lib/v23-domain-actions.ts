@@ -8,6 +8,12 @@ import {
   type V23ResolvedAffix,
 } from "./v23-sku-derivation";
 import { hasCanonicalReductionPolicyIdentity } from "./reduction-stacking-policy";
+import {
+  deriveV23SkuQuality,
+  resolveV23TargetQualityPolicy,
+  V23SkuQualityError,
+  type V23QualityEntry,
+} from "./v23-sku-quality";
 import type {
   ReductionStackingPolicyVersion,
   SeriesDefinition,
@@ -29,7 +35,8 @@ export type V23WriteAction =
   | "add_sku_affix"
   | "remove_inherited_affix"
   | "restore_inherited_affix"
-  | "copy_sku_local_affix";
+  | "copy_sku_local_affix"
+  | "set_sku_actual_quality";
 
 export class V23DomainActionError extends Error {
   constructor(readonly code: string, message: string, readonly status = 422) {
@@ -460,6 +467,7 @@ function deriveSku(
   state: WorkspaceState,
   part: SeriesPartRevision,
   sku: Omit<SkuDrawerRevision, "match" | "derivation" | "validationSummary" | "contentHash">,
+  qualitySelection?: { selectedQualityId: "quality_c_green" | "quality_b_blue" | "quality_a_purple" | "quality_s_orange"; reason: string | null },
 ): SkuDrawerRevision {
   const mutableSku = { ...sku } as Partial<SkuDrawerRevision>;
   delete mutableSku.match;
@@ -476,6 +484,7 @@ function deriveSku(
       };
   const validationSummary: SkuDrawerRevision["validationSummary"] = [];
   let derivation: V23SkuPullDerivationEvidence = { status: "UNRESOLVED" };
+  let quality: SkuDrawerRevision["quality"] = { status: "UNASSESSED" };
   if (match.status !== "VALID") {
     validationSummary.push({
       code: match.status,
@@ -524,6 +533,34 @@ function deriveSku(
         trace: projectTrace(derived.trace, effective),
         inputHash: derived.inputHash,
       };
+      try {
+        const prior = sku.quality.status === "ASSESSED" ? sku.quality.assessment : undefined;
+        const assessment = deriveV23SkuQuality({
+          skuRevisionId: `${sku.skuId}@${sku.revision}`,
+          part,
+          entries: effective as V23QualityEntry[],
+          policy: resolveV23TargetQualityPolicy(state.qualityValuePolicyDrafts),
+          functionProfiles: state.functionProfiles,
+          ...(qualitySelection
+            ? { selectedQualityId: qualitySelection.selectedQualityId, overrideReason: qualitySelection.reason }
+            : prior
+              ? {
+                  selectedQualityId: prior.selectedQualityId,
+                  overrideReason: prior.qualityOverrideState === "MATCHED" ? null : prior.qualityOverrideReason,
+                }
+              : {}),
+        });
+        quality = { status: "ASSESSED", assessment };
+      } catch (error) {
+        if (!(error instanceof V23SkuQualityError)) throw error;
+        validationSummary.push({
+          code: error.code,
+          severity: "BLOCKER",
+          gate: "PUBLISH",
+          state: "OPEN",
+          message: error.message,
+        });
+      }
     } else {
       derivation = {
         status: "INVALID",
@@ -547,6 +584,7 @@ function deriveSku(
     ...(mutableSku as Omit<SkuDrawerRevision, "match" | "derivation" | "validationSummary" | "contentHash">),
     match,
     derivation,
+    quality,
     validationSummary,
   };
   return { ...withoutHash, contentHash: jcsSha256Hex(withoutHash) };
@@ -838,6 +876,40 @@ export function executeV23DomainAction(
     return {
       state: { ...state, v23AffixDefinitions: [...state.v23AffixDefinitions, definition] },
       result: { affixId, affixRevision: 1, contentHash: definition.contentHash },
+    };
+  }
+
+  if (action === "set_sku_actual_quality") {
+    assertKeys(payload, [
+      "expectedWorkspaceRevision", "inputHash", "skuId", "expectedSkuRevision",
+      "selectedQualityId", "reason",
+    ]);
+    const existing = currentSku(state, text(payload.skuId, "skuId"));
+    expectedEntityRevision(payload, "expectedSkuRevision", existing.revision);
+    const selectedQualityId = enumValue(payload.selectedQualityId, "selectedQualityId", [
+      "quality_c_green", "quality_b_blue", "quality_a_purple", "quality_s_orange",
+    ] as const);
+    if (!(payload.reason === null || typeof payload.reason === "string")) {
+      throw new V23DomainActionError("V23_ACTION_SCHEMA_INVALID", "reason 只允许 null 或字符串。", 400);
+    }
+    const next = deriveSku(state, currentPart(state, existing.partId), {
+      ...existing,
+      revision: existing.revision + 1,
+    }, {
+      selectedQualityId,
+      reason: typeof payload.reason === "string" ? payload.reason : null,
+    });
+    if (next.quality.status !== "ASSESSED") {
+      const issue = next.validationSummary.find((entry) => entry.code.startsWith("V23_QUALITY"));
+      throw new V23DomainActionError(issue?.code ?? "V23_QUALITY_ASSESSMENT_FAILED", issue?.message ?? "品质评估失败。");
+    }
+    return {
+      state: replaceSkuHeads(state, [next]),
+      result: {
+        skuId: next.skuId,
+        skuRevision: next.revision,
+        qualityAssessmentInputHash: next.quality.assessment.inputHash,
+      },
     };
   }
 

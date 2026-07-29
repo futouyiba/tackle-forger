@@ -2007,7 +2007,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     if (status !== "ASSESSED") throw new Error("V23_SKU_QUALITY_STATUS_INVALID");
     v23ExactKeys(quality, ["status", "assessment"], "V23_SKU_QUALITY");
     const assessment = v23Record(quality.assessment, "V23_SKU_QUALITY_ASSESSMENT");
-    v23ExactKeys(assessment, ["skuRevisionId", "recommendedQualityId", "selectedQualityId", "qualityOverrideState", "qualityOverrideReason", "baseAffixScore", "combinationScore", "functionScoreFactor", "finalValueScore", "affixBreakdown", "combinationBreakdown", "qualityRangePolicyVersion", "scoringPolicyVersion", "inSelectedQualityRange", "inputHash"], "V23_SKU_QUALITY_ASSESSMENT");
+    v23ExactKeys(assessment, ["skuRevisionId", "recommendedQualityId", "selectedQualityId", "qualityOverrideState", "qualityOverrideReason", "baseAffixScore", "combinationScore", "functionScoreFactor", "finalValueScore", "affixBreakdown", "combinationBreakdown", "trace", "qualityRangePolicyVersion", "scoringPolicyVersion", "inSelectedQualityRange", "inputHash"], "V23_SKU_QUALITY_ASSESSMENT");
     if (v23String(assessment.skuRevisionId, "V23_SKU_QUALITY_REVISION_ID") !== skuRevisionId) throw new Error("V23_SKU_QUALITY_REVISION_ID_MISMATCH");
     const recommended = assessment.recommendedQualityId;
     if (recommended !== null && !V23_QUALITY_IDS.has(v23String(recommended, "V23_RECOMMENDED_QUALITY_ID"))) throw new Error("V23_SKU_QUALITY_ID_INVALID");
@@ -2044,6 +2044,21 @@ function validateV23RuntimeState(state: MutableWorkspace) {
       if (left === right || !effectiveAffixIds.has(left) || !effectiveAffixIds.has(right) || combinationPairs.has(pair) || combinationSources.has(sourceRef) || !Number.isFinite(breakdown.valueScore)) throw new Error("V23_SKU_COMBINATION_BREAKDOWN_INVALID");
       combinationPairs.add(pair); combinationSources.add(sourceRef);
     }
+    let expectedSequence = 1;
+    for (const value of v23Array(assessment.trace, "V23_SKU_QUALITY_TRACE")) {
+      const trace = v23Record(value, "V23_SKU_QUALITY_TRACE_ENTRY");
+      v23ExactKeys(trace, ["sequence", "step", "sourceRef", "subjectIds", "before", "operation", "operand", "after"], "V23_SKU_QUALITY_TRACE_ENTRY");
+      if (trace.sequence !== expectedSequence++) throw new Error("V23_SKU_QUALITY_TRACE_SEQUENCE_INVALID");
+      if (!["affix", "combination", "function_factor", "quality_range"].includes(v23String(trace.step, "V23_SKU_QUALITY_TRACE_STEP"))
+        || !["add", "multiply", "validate"].includes(v23String(trace.operation, "V23_SKU_QUALITY_TRACE_OPERATION"))
+        || !Number.isFinite(trace.before) || !Number.isFinite(trace.operand) || !Number.isFinite(trace.after)) {
+        throw new Error("V23_SKU_QUALITY_TRACE_INVALID");
+      }
+      v23String(trace.sourceRef, "V23_SKU_QUALITY_TRACE_SOURCE");
+      v23Array(trace.subjectIds, "V23_SKU_QUALITY_TRACE_SUBJECTS").forEach((id) => v23String(id, "V23_SKU_QUALITY_TRACE_SUBJECT"));
+    }
+    const hashPayload = { ...assessment }; delete hashPayload.inputHash;
+    v23HashOf(hashPayload, assessment.inputHash, "V23_SKU_QUALITY_INPUT_HASH");
     return true;
   };
   const skuIds = new Map<string, Set<number>>(); let currentSkuId = "";
@@ -2223,7 +2238,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     for (const ref of v23Array(entry.technologyRefs, "V23_SKU_TECHNOLOGIES")) validateTechnologyRef(ref, "V23_SKU_TECHNOLOGY");
     const assessed = validateSkuAssessment(entry.quality, `${skuId}@${revision}`, new Set(effectiveStableEntries.keys()));
     v23HashOf(v23SkuInput(entry), entry.contentHash, "V23_SKU_CONTENT_HASH");
-    if (assessed) throw new Error("V23_SKU_QUALITY_RESOLVER_UNAVAILABLE");
+    void assessed;
   }
 
   const seenSkuHeads = new Set<string>();

@@ -27,6 +27,7 @@ const WRITE_ACTIONS = [
   "remove_inherited_affix",
   "restore_inherited_affix",
   "copy_sku_local_affix",
+  "set_sku_actual_quality",
 ] as const satisfies readonly V23WriteAction[];
 
 function commandErrorStatus(error: ActionCommandPayloadError): number {

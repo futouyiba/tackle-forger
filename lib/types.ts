@@ -261,6 +261,10 @@ export interface FunctionIntensityRuleSet {
   /** 仅历史迁移审计重放：旧源未表达分部件时，且同一强度恰有一条记录才可使用。 */
   legacyItemPartAgnostic?: boolean;
   rules: AdjustmentRule[];
+  /** 03_功能定位“评分系数”；品质评分只消费精确部位+强度成员。 */
+  scoreFactor?: number;
+  /** 稳定源证据，不使用列位置或展示名作为运行时身份。 */
+  scoreFactorSourceRef?: string;
   /** 飞书 03_功能定位中的稳定源行 ID（func_*）；只用于溯源，不作为聚合 FunctionProfile 的 ID。没有独立父级绑定时不得生成 FunctionProfile。 */
   sourceRowId?: string;
 }
@@ -1271,6 +1275,17 @@ export interface V23SkuCombinationValueBreakdown {
   sourceRef: string;
 }
 
+export interface V23SkuQualityTraceEntry {
+  sequence: number;
+  step: "affix" | "combination" | "function_factor" | "quality_range";
+  sourceRef: string;
+  subjectIds: string[];
+  before: number;
+  operation: "add" | "multiply" | "validate";
+  operand: number;
+  after: number;
+}
+
 /** §12.1 的 SKU revision 专属冻结载体；不复用 Model 的运行时评估。 */
 export interface V23SkuAffixValueAssessment {
   skuRevisionId: string;
@@ -1284,6 +1299,7 @@ export interface V23SkuAffixValueAssessment {
   finalValueScore: number;
   affixBreakdown: V23SkuAffixValueBreakdown[];
   combinationBreakdown: V23SkuCombinationValueBreakdown[];
+  trace: V23SkuQualityTraceEntry[];
   qualityRangePolicyVersion: string;
   scoringPolicyVersion: string;
   inSelectedQualityRange: boolean;

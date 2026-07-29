@@ -464,7 +464,7 @@ function parseFunctionProfiles(input: { values: unknown[][]; sourceRevisionId: s
 }
 
 function parseFunctions(input: { sources: PartedRuleSource[]; profiles: Map<string, { id: string; name: string; status: string; partGroupIds: Record<string, string>; supportedIntensities: FunctionIntensity[] }>; sourceRevisionId: string; issues: CanonicalRuleSourceIssue[] }) {
-  const rows: Array<{ id: string; groupId: string; intensity: FunctionIntensity; itemPartId: string; rules: AdjustmentRule[]; sourceRow: number; sourceSheetId: string }> = [];
+  const rows: Array<{ id: string; groupId: string; intensity: FunctionIntensity; itemPartId: string; rules: AdjustmentRule[]; scoreFactor: number; scoreFactorSourceRef: string; sourceRow: number; sourceSheetId: string }> = [];
   const seen = new Set<string>();
   for (const source of input.sources) {
     let headers: string[] = [];
@@ -487,6 +487,7 @@ function parseFunctions(input: { sources: PartedRuleSource[]; profiles: Map<stri
           groupId: resolve("功能分组ID（勿改）", "FUNCTION_PART_GROUP_BINDING_MISSING"),
           name: resolve("定位/类型", "FUNCTION_DISPLAY_NAME_COLUMN_INVALID"),
           intensity: resolve("级别", "FUNCTION_INTENSITY_COLUMN_INVALID"),
+          scoreFactor: resolve("评分系数", "FUNCTION_SCORE_FACTOR_COLUMN_INVALID"),
         };
         continue;
       }
@@ -494,6 +495,7 @@ function parseFunctions(input: { sources: PartedRuleSource[]; profiles: Map<stri
       const id = asText(row[columns.id ?? -1]);
       const sourceGroupId = asText(row[columns.groupId ?? -1]);
       const intensity = Number(row[columns.intensity ?? -1]);
+      const scoreFactor = Number(row[columns.scoreFactor ?? -1]);
       const name = asText(row[columns.name ?? -1]);
       const itemPartId = `part:${source.part}`;
       if (!id) {
@@ -508,7 +510,7 @@ function parseFunctions(input: { sources: PartedRuleSource[]; profiles: Map<stri
         continue;
       }
       const groupId = matches[0]!.id;
-      if (!name || ![1, 2, 3].includes(intensity)) {
+      if (!name || ![1, 2, 3].includes(intensity) || !Number.isFinite(scoreFactor) || scoreFactor <= 0) {
         input.issues.push({ level: "error", code: "FUNCTION_ROW_INVALID", message: `功能行 ${id} 的展示名或强度无效。`, sheetId: source.sheetId, row: sourceRow });
         continue;
       }
@@ -522,7 +524,17 @@ function parseFunctions(input: { sources: PartedRuleSource[]; profiles: Map<stri
         const rule = sourceRule({ id: `${id}:${columnName(column)}${sourceRow}`, header, raw: row[column], kind, sourceRevisionId: input.sourceRevisionId, sheetId: source.sheetId, row: sourceRow, column });
         return rule ? [rule] : [];
       });
-      rows.push({ id, groupId, intensity: intensity as FunctionIntensity, itemPartId, rules, sourceRow, sourceSheetId: source.sheetId });
+      rows.push({
+        id,
+        groupId,
+        intensity: intensity as FunctionIntensity,
+        itemPartId,
+        rules,
+        scoreFactor,
+        scoreFactorSourceRef: `${source.sheetId}!${columnName(columns.scoreFactor!)}${sourceRow}@${input.sourceRevisionId}`,
+        sourceRow,
+        sourceSheetId: source.sheetId,
+      });
     }
   }
   // 04_功能定位聚合校验：跨三张子表合计必须精确 57 条成员规则。取 rod 子表作聚合 issue 的代表来源。
@@ -553,7 +565,7 @@ function parseFunctions(input: { sources: PartedRuleSource[]; profiles: Map<stri
     for (const intensity of parent.supportedIntensities) for (const itemPartId of ["part:rod", "part:reel", "part:line"]) if (!rowsByPartIntensity.has(`${itemPartId}:${intensity}`)) { input.issues.push({ level: "error", code: "FUNCTION_GROUP_PART_INTENSITY_MISSING", message: `FunctionProfile ${groupId} 缺少 ${itemPartId} 强度 ${intensity}。`, sheetId: functionAggregateSheetId }); valid = false; }
     for (const row of group) if (!parent.supportedIntensities.includes(row.intensity)) { input.issues.push({ level: "error", code: "FUNCTION_INTENSITY_UNSUPPORTED", message: `FunctionProfile ${groupId} 不支持强度 ${row.intensity}。`, sheetId: row.sourceSheetId, row: row.sourceRow }); valid = false; }
     if (!valid) continue;
-    profiles.push({ id: groupId, name: parent.name, status: parent.status, supportedIntensities: parent.supportedIntensities, rules: [], intensityRules: group.map((row) => ({ intensity: row.intensity, itemPartId: row.itemPartId, rules: structuredClone(row.rules), sourceRowId: row.id })), enabled: parent.status.toUpperCase() !== "DISABLED", sourceRevisionId: input.sourceRevisionId, notes: "父级来自飞书 04.0；成员规则来自 04_功能定位。" });
+    profiles.push({ id: groupId, name: parent.name, status: parent.status, supportedIntensities: parent.supportedIntensities, rules: [], intensityRules: group.map((row) => ({ intensity: row.intensity, itemPartId: row.itemPartId, rules: structuredClone(row.rules), scoreFactor: row.scoreFactor, scoreFactorSourceRef: row.scoreFactorSourceRef, sourceRowId: row.id })), enabled: parent.status.toUpperCase() !== "DISABLED", sourceRevisionId: input.sourceRevisionId, notes: "父级来自飞书 04.0；成员规则来自 04_功能定位。" });
     for (const row of group) modifiers.push({ id: row.id, dimension: "function", name: parent.name, level: row.intensity, itemKinds: [row.itemPartId.slice(5) as ItemKind], rules: structuredClone(row.rules), notes: `来自飞书 04_功能定位第 ${row.sourceRow} 行；父级 ${groupId}。`, enabled: true });
   }
   if (!rows.length) input.issues.push({ level: "error", code: "FUNCTION_PROFILE_EMPTY", message: "04_功能定位没有可导入记录。", sheetId: input.sources[0]?.sheetId ?? CANONICAL_RULE_RANGES.function.rod });

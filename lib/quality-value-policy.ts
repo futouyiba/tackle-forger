@@ -253,31 +253,30 @@ export function importQualityValuePolicyDraft(input: {
   }
 
   const sRange = input.ranges.find((range) => range.qualityId === "quality_s_orange");
-  if (sRange && (sRange.minScore !== 65 || sRange.maxScore !== 100 || !sRange.maxInclusive)) {
+  const targetRanges: Array<[QualityId, number, number]> = [
+    ["quality_c_green", 0, 20],
+    ["quality_b_blue", 20, 40],
+    ["quality_a_purple", 40, 65],
+    ["quality_s_orange", 65, 100],
+  ];
+  if (targetRanges.some(([qualityId, min, max]) => {
+    const range = input.ranges.find((entry) => entry.qualityId === qualityId);
+    return !range || range.minScore !== min || range.maxScore !== max || range.maxInclusive;
+  })) {
     issues.push(issue({
       code: "QUALITY_RANGE_SOURCE_OUTDATED",
       severity: "ERROR",
       gate: "PUBLISH",
-      message: "正式 S 品质区间必须为 [65,100]；旧 [65,100) 源单元格只能保留为迁移证据，不能发布。",
+      message: "v23 目标品质区间必须精确为 C[0,20)、B[20,40)、A[40,65)、S[65,100)；旧含上界策略只能保留为历史证据。",
       sourceRevision: input.sourceRevision,
-      sourceCell: sRange.source,
-      relatedObjectIds: ["quality_s_orange"],
+      sourceCell: sRange?.source,
+      relatedObjectIds: targetRanges.map(([qualityId]) => qualityId),
     }));
   }
   const conflictingEndpoint = input.pricingScoreEndpoints?.find(
     (entry) => entry.value === sRange?.maxScore,
   );
-  if (sRange && !sRange.maxInclusive && conflictingEndpoint) {
-    issues.push(issue({
-      code: "QUALITY_SCORE_BOUNDARY_CONFLICT",
-      severity: "ERROR",
-      gate: "PUBLISH",
-      message: "07_品质评分的 S 区间为 [65,100)，但 08_价格计算包含 score=100；评分100不得夹取。",
-      sourceRevision: input.sourceRevision,
-      sourceCell: conflictingEndpoint.source,
-      relatedObjectIds: ["quality_s_orange"],
-    }));
-  }
+  void conflictingEndpoint;
 
   const content = {
     sourceRevisionId: input.sourceRevisionId,

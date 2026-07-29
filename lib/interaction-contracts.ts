@@ -49,6 +49,7 @@ export type ActionCode =
   | "open_series" | "create_series" | "update_series_core_affixes" | "update_part_configuration" | "preview_weight_band_skus"
   | "open_sku" | "create_sku" | "change_sku_target_pull" | "add_sku_affix" | "remove_inherited_affix"
   | "restore_inherited_affix" | "copy_sku_local_affix" | "create_project_affix" | "preview_model"
+  | "set_sku_actual_quality"
   | "edit" | "review" | "publish" | "generate_candidates" | "materialize_candidates"
   | "override_candidate_selection" | "select_candidate" | "dismiss_candidate_run"
   | "create_patch" | "review_patch" | "rebase_patch"
@@ -77,6 +78,7 @@ export const ACTION_CODES = [
   "open_series", "create_series", "update_series_core_affixes", "update_part_configuration", "preview_weight_band_skus",
   "open_sku", "create_sku", "change_sku_target_pull", "add_sku_affix", "remove_inherited_affix",
   "restore_inherited_affix", "copy_sku_local_affix", "create_project_affix", "preview_model",
+  "set_sku_actual_quality",
   "edit", "review", "publish",
   "generate_candidates", "materialize_candidates", "override_candidate_selection",
   "select_candidate", "dismiss_candidate_run",
@@ -641,6 +643,7 @@ const ACTION_CAPABILITIES = {
   restore_inherited_affix: ["sku.edit"],
   copy_sku_local_affix: ["sku.edit", "affix.read"],
   create_project_affix: ["affix.create"],
+  set_sku_actual_quality: ["sku.edit"],
   preview_model: ["model.read"],
   edit: ["model.edit"],
   review: ["model.review"],

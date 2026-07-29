@@ -38,3 +38,11 @@ test("percent adjustments use the published bidirectional ratio contract", () =>
   assert.equal(result.status, "VALID");
   if (result.status === "VALID") { assert.equal(result.targetPullKg, 10 * 2 / 1.2); assert.equal(result.trace[0]!.beforeKg, 10); assert.equal(result.trace[0]!.afterKg, result.targetPullKg); assert.equal(result.trace[0]!.ratioOperations?.length, 2); }
 });
+
+test("binary64 ratio rejects overflow and underflow-to-zero deterministically", () => {
+  const percent = structuredClone(payload) as V23ProjectAffixPayload;
+  percent.operations[0] = { ...percent.operations[0]!, operation: "percent_adjust", magnitude: 1, direction: "increase" } as never;
+  assert.equal(deriveV23SkuPull(Number.MAX_VALUE, [{ ref, payload: percent }]).status, "INVALID");
+  const halve = structuredClone(percent); halve.operations[0] = { ...halve.operations[0]!, direction: "decrease" } as never;
+  assert.equal(deriveV23SkuPull(Number.MIN_VALUE, [{ ref, payload: halve }]).status, "INVALID");
+});

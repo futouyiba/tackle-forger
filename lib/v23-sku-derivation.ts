@@ -75,6 +75,7 @@ export function deriveV23SkuPull(baselinePullKg: number, entries: readonly V23Re
   value = Number(Number(baselinePullKg * (1 + bonus)) / (1 + reduction));
   const ratioAnomaly = anomaly(ratioExact, value); if (ratioAnomaly) return { status: "INVALID", code: ratioAnomaly === "overflow" ? "V23_BINARY64_OVERFLOW" : "V23_BINARY64_UNDERFLOW_TO_ZERO", inputHash };
   if (value <= 0) return { status: "INVALID", code: "V23_PULL_DERIVATION_NON_FINITE", inputHash };
+  let currentExact = ratioExact;
   const ratioOperations = ordered.filter(({ operation }) => operation.parameterKey === "pull" || operation.parameterKey === "targetPullKg").filter(({ operation }) => operation.operation === "percent_adjust").map(({ entry, operation }) => { const percent = operation as { operationId: string; operationIndex: number; direction: "increase" | "decrease"; magnitude: number }; return { affixId: entry.ref.id, operationId: percent.operationId, operationIndex: percent.operationIndex, direction: percent.direction, magnitude: percent.magnitude }; });
   if (ratioOperations.length) {
     const first = ratioOperations[0]!;
@@ -85,8 +86,8 @@ export function deriveV23SkuPull(baselinePullKg: number, entries: readonly V23Re
       const beforeKg = value;
       const signed = numeric.direction === "increase" ? numeric.magnitude : -numeric.magnitude;
       if (op.operation === "percent_adjust") value *= 1 + signed / 100;
-      else if (op.operation === "flat_adjust") value += signed;
-      else if (op.operation === "clamp_add") value = Math.min(op.clampMax, Math.max(op.clampMin, value + signed));
+      else if (op.operation === "flat_adjust") { const nextExact = add(currentExact, exact(signed)); value = Number(value + signed); const nextAnomaly = anomaly(nextExact, value); if (nextAnomaly) return { status: "INVALID", code: nextAnomaly === "overflow" ? "V23_BINARY64_OVERFLOW" : "V23_BINARY64_UNDERFLOW_TO_ZERO", inputHash }; currentExact = nextExact; }
+      else if (op.operation === "clamp_add") { const nextExact = add(currentExact, exact(signed)); const next = Number(value + signed); const nextAnomaly = anomaly(nextExact, next); if (nextAnomaly) return { status: "INVALID", code: nextAnomaly === "overflow" ? "V23_BINARY64_OVERFLOW" : "V23_BINARY64_UNDERFLOW_TO_ZERO", inputHash }; value = Math.min(op.clampMax, Math.max(op.clampMin, next)); currentExact = value === next ? nextExact : exact(value); }
       else return { status: "INVALID", code: "V23_DIRECT_PULL_PATCH_FORBIDDEN", inputHash };
       if (!Number.isFinite(value) || value <= 0) return { status: "INVALID", code: "V23_PULL_DERIVATION_NON_FINITE", inputHash };
       trace.push({ affixId: entry.ref.id, operationId: numeric.operationId, operationIndex: numeric.operationIndex, operation: numeric.operation, direction: numeric.direction, magnitude: numeric.magnitude, clampMin: numeric.operation === "clamp_add" ? numeric.clampMin : null, clampMax: numeric.operation === "clamp_add" ? numeric.clampMax : null, ratioOperations: null, beforeKg, afterKg: value });

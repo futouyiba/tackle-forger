@@ -14,6 +14,7 @@ import {
   publishPricingPolicyDraft,
   type PricingPolicyDraft,
 } from "../lib/pricing-policy";
+import { importQualityValuePolicyDraft } from "../lib/quality-value-policy";
 import {
   acknowledgeModelPricingEvaluation,
   computeModelPricingEvaluation,
@@ -25,7 +26,9 @@ import {
   validateModelPricingEvaluation,
 } from "../lib/model-pricing-evaluation";
 import type {
+  FunctionProfile,
   HistoricalModelPricingEvaluationInput,
+  SeriesPartRevision,
   SkuDrawerRevision,
   V23SkuAffixValueAssessment,
 } from "../lib/types";
@@ -67,7 +70,7 @@ function policyInput(overrides: Partial<PricingPolicyDraft> = {}) {
       qualityId: qualityId as "quality_c_green",
       minScore,
       maxScore,
-      maxInclusive: qualityId === "quality_s_orange",
+      maxInclusive: false,
       minFactor,
       maxFactor,
       status: "CONFIRMED" as const,
@@ -138,6 +141,58 @@ const baseOptions = {
   createdBy: "test",
 };
 
+const v23Part: SeriesPartRevision = {
+  partId: "part:v23",
+  seriesId: "series:v23",
+  revision: 1,
+  partType: "rod",
+  fishingMethodId: "method:lure",
+  materialTypeId: "material:carbon",
+  functionProfileId: "function:cast",
+  functionIntensity: 2,
+  weightBandIds: ["w1"],
+  defaultEntryRefs: [],
+  technologyRefs: [],
+  inputFingerprint: "fixture",
+  contentHash: "fixture",
+};
+const v23QualityPolicy = importQualityValuePolicyDraft({
+  sourceRevisionId: "source:quality@500",
+  sourceRevision: "500",
+  ranges: [
+    ["quality_c_green", 0, 20],
+    ["quality_b_blue", 20, 40],
+    ["quality_a_purple", 40, 65],
+    ["quality_s_orange", 65, 100],
+  ].map(([qualityId, minScore, maxScore], index) => ({
+    qualityId: qualityId as "quality_c_green",
+    minScore: Number(minScore),
+    maxScore: Number(maxScore),
+    maxInclusive: false,
+    source: { sheetId: "27hboC", cell: `B${index + 2}` },
+    status: "SOURCE" as const,
+  })),
+  aliases: [],
+  matrixCells: [],
+  importedAt: "2026-07-29T00:00:00.000Z",
+});
+const v23FunctionProfiles: FunctionProfile[] = [{
+  id: "function:cast",
+  name: "远投",
+  rules: [],
+  intensityRules: [{
+    intensity: 2,
+    itemPartId: "part:rod",
+    rules: [],
+    scoreFactor: 1,
+    scoreFactorSourceRef: "16qYVn!F2@source:quality@500",
+    sourceRowId: "function:cast:2",
+  }],
+  enabled: true,
+  sourceRevisionId: "source:quality@500",
+  notes: "",
+}];
+
 function assessedSku(overrides: {
   skuId?: string;
   revision?: number;
@@ -161,8 +216,17 @@ function assessedSku(overrides: {
     finalValueScore,
     affixBreakdown: [],
     combinationBreakdown: [],
-    trace: [],
-    qualityRangePolicyVersion: "quality-policy:v23",
+    trace: [{
+      sequence: 1,
+      step: "function_factor" as const,
+      sourceRef: "16qYVn!F2@source:quality@500",
+      subjectIds: ["function:cast", "2"],
+      before: finalValueScore,
+      operation: "multiply" as const,
+      operand: 1,
+      after: finalValueScore,
+    }],
+    qualityRangePolicyVersion: v23QualityPolicy.id,
     scoringPolicyVersion: "v23-quality-scoring/open007-target-v1",
     inSelectedQualityRange: selectedQualityId === "quality_a_purple",
   };
@@ -171,7 +235,7 @@ function assessedSku(overrides: {
     skuId,
     revision,
     seriesId: "series:v23",
-    partId: "part:v23",
+    partId: v23Part.partId,
     partRevision: 1,
     weightBandId: overrides.weightBandId ?? "w1",
     match: { status: "INVALID_NO_MATCH", attemptedKey: {} as never, inputFingerprint: "fixture" },
@@ -191,6 +255,15 @@ function assessedSku(overrides: {
   };
 }
 
+function pricingContext(sku: SkuDrawerRevision) {
+  return {
+    sku,
+    part: v23Part,
+    qualityPolicy: v23QualityPolicy,
+    functionProfiles: v23FunctionProfiles,
+  };
+}
+
 // ─── 正常路径 ─────────────────────────────────────────────────────────
 
 test("v23 当前定价只从同一 SKU revision 的实际品质评估构造输入", () => {
@@ -206,7 +279,7 @@ test("v23 当前定价只从同一 SKU revision 的实际品质评估构造输�
     pricingPolicyRef: policy.id,
     partId: "rod",
     typeId: "spin",
-  }, sku, policy, baseOptions);
+  }, pricingContext(sku), policy, baseOptions);
 
   assert.equal(evaluation.input.sourceKind, "V23_SKU_ASSESSMENT");
   assert.equal(evaluation.input.qualityId, "quality_a_purple");
@@ -219,7 +292,7 @@ test("v23 当前定价只从同一 SKU revision 的实际品质评估构造输�
     evaluation.input.qualityAssessmentInputHash,
     sku.quality.status === "ASSESSED" ? sku.quality.assessment.inputHash : "",
   );
-  assert.deepEqual(validateModelPricingEvaluation(evaluation, policy, "1", sku), []);
+  assert.deepEqual(validateModelPricingEvaluation(evaluation, policy, "1", pricingContext(sku)), []);
 });
 
 test("v23 当前定价拒绝未评估、过期身份与不完整品质证据", () => {
@@ -229,7 +302,7 @@ test("v23 当前定价拒绝未评估、过期身份与不完整品质证据", (
     () => computeModelPricingEvaluation({
       modelId: "model-1", modelRevision: "1", pricingPolicyRef: policy.id,
       partId: "rod", typeId: "spin",
-    }, { ...valid, quality: { status: "UNASSESSED" } }, policy, baseOptions),
+    }, pricingContext({ ...valid, quality: { status: "UNASSESSED" } }), policy, baseOptions),
     /V23_PRICING_QUALITY_UNASSESSED/,
   );
 
@@ -240,14 +313,14 @@ test("v23 当前定价拒绝未评估、过期身份与不完整品质证据", (
     () => computeModelPricingEvaluation({
       modelId: "model-1", modelRevision: "1", pricingPolicyRef: policy.id,
       partId: "rod", typeId: "spin",
-    }, stale, policy, baseOptions),
+    }, pricingContext(stale), policy, baseOptions),
     /V23_PRICING_QUALITY_EVIDENCE_INVALID/,
   );
 
   const evaluation = computeModelPricingEvaluation({
     modelId: "model-1", modelRevision: "1", pricingPolicyRef: policy.id,
     partId: "rod", typeId: "spin",
-  }, valid, policy, baseOptions);
+  }, pricingContext(valid), policy, baseOptions);
   assert.ok(
     validateModelPricingEvaluation(evaluation, policy, "1").some(
       (issue) => issue.code === "SKU_QUALITY_EVIDENCE_REQUIRED",
@@ -258,7 +331,7 @@ test("v23 当前定价拒绝未评估、过期身份与不完整品质证据", (
       evaluation,
       policy,
       "1",
-      assessedSku({ revision: 4 }),
+      pricingContext(assessedSku({ revision: 4 })),
     ).some((issue) => issue.code === "SKU_QUALITY_EVIDENCE_STALE"),
   );
 });
@@ -275,6 +348,27 @@ test("历史重放缺失冻结 qualityId 时 fail closed，不再回退蓝色品
     ),
     /缺少冻结 qualityId/,
   );
+});
+
+test("历史闭区间 PricingPolicy 仅可显式非正式重放，不改写冻结输入", () => {
+  const current = publishedPolicy();
+  const legacy = {
+    ...current,
+    formalStatus: "LEGACY_PUBLISHED" as const,
+    qualityPriceFactorRanges: current.qualityPriceFactorRanges?.map((range) => ({
+      ...range,
+      maxInclusive: range.qualityId === "quality_s_orange",
+    })),
+  };
+  const input = baseEvalInput({
+    pricingPolicyRef: legacy.id,
+    qualityId: "quality_b_blue",
+    valueScore: 30,
+  });
+  const evaluation = computeHistoricalModelPricingEvaluation(input, legacy, baseOptions);
+  assert.equal(evaluation.status, "NON_FORMAL");
+  assert.deepEqual(evaluation.input, input);
+  assert.equal(evaluation.result.formal, false);
 });
 
 test("相同输入产生相同 evaluation（幂等），contentHash 和 inputHash 确定", () => {

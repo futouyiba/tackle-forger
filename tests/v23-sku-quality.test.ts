@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { jcsSha256Hex } from "../lib/canonical-json";
 import { importQualityValuePolicyDraft, type QualityValueRange } from "../lib/quality-value-policy";
+import type { PricingPolicyVersion } from "../lib/pricing-policy";
 import {
   deriveV23SkuQuality,
   resolveV23TargetQualityPolicy,
@@ -112,6 +113,33 @@ function entry(id: string, score: number) {
   };
 }
 
+function pricingPolicy(options: { inclusive?: boolean; legacy?: boolean } = {}) {
+  return {
+    id: "pricing:v23",
+    formalStatus: options.legacy ? "LEGACY_PUBLISHED" : "PUBLISHED",
+    qualityPriceFactorRanges: ranges.map((range) => ({
+      ...range,
+      maxInclusive: options.inclusive && range.qualityId === "quality_s_orange",
+      minFactor: 1,
+      maxFactor: 2,
+    })),
+  } as PricingPolicyVersion;
+}
+
+function pricingContext(sku: SkuDrawerRevision, options: {
+  qualityPolicy?: ReturnType<typeof policy>;
+  profiles?: FunctionProfile[];
+  pricing?: PricingPolicyVersion;
+} = {}) {
+  return {
+    sku,
+    part,
+    qualityPolicy: options.qualityPolicy ?? policy(),
+    functionProfiles: options.profiles ?? functionProfiles,
+    pricingPolicy: options.pricing ?? pricingPolicy(),
+  };
+}
+
 test("v23 SKU 品质按去重词条、同部位无序组合与精确功能系数确定性计算", () => {
   const assessment = deriveV23SkuQuality({
     skuRevisionId: "sku:one@1",
@@ -182,16 +210,110 @@ test("实际品质覆盖必须有理由，定价输入只消费实际品质与 S
     policy: policy(), functionProfiles, selectedQualityId: "quality_b_blue",
   }), /V23_QUALITY_OVERRIDE_REASON_REQUIRED/);
   const sku = {
-    skuId: "sku:one", revision: 2, weightBandId: "band:one",
+    skuId: "sku:one", revision: 2, partId: part.partId, partRevision: part.revision,
+    weightBandId: "band:one",
     quality: { status: "ASSESSED", assessment },
   } as SkuDrawerRevision;
-  assert.deepEqual(v23PricingInputFromAssessment({ sku, pricingPolicyVersion: "pricing:v23" }), {
+  assert.deepEqual(v23PricingInputFromAssessment(pricingContext(sku)), {
     qualityId: "quality_b_blue",
     finalValueScore: assessment.finalValueScore,
     pricingWeightBandId: "band:one",
     pricingPolicyVersion: "pricing:v23",
     qualityAssessmentInputHash: assessment.inputHash,
   });
+  assert.equal(assessment.inSelectedQualityRange, false, "合法 override 可位于推荐区间之外");
+});
+
+test("评分达到 100 的实际品质仍拒绝进入新的正式定价", () => {
+  const profile = structuredClone(functionProfiles);
+  profile[0]!.intensityRules[0]!.scoreFactor = 1;
+  const assessment = deriveV23SkuQuality({
+    skuRevisionId: "sku:score-100@1",
+    part,
+    entries: [entry("affix:score-100", 100)],
+    policy: policy(),
+    functionProfiles: profile,
+    selectedQualityId: "quality_s_orange",
+    overrideReason: "评分越界后人工实测",
+  });
+  const sku = {
+    skuId: "sku:score-100",
+    revision: 1,
+    partId: part.partId,
+    partRevision: part.revision,
+    weightBandId: "band:one",
+    quality: { status: "ASSESSED", assessment },
+  } as SkuDrawerRevision;
+  assert.throws(
+    () => v23PricingInputFromAssessment(pricingContext(sku, { profiles: profile })),
+    (error) => error instanceof V23SkuQualityError
+      && error.code === "V23_PRICING_QUALITY_SCORE_OUT_OF_RANGE",
+  );
+});
+
+test("当前策略、功能源 revision 或 pricing 区间变化后旧 assessment 不可定价", () => {
+  const assessment = deriveV23SkuQuality({
+    skuRevisionId: "sku:stale@1",
+    part,
+    entries: [entry("affix:a", 10)],
+    policy: policy(),
+    functionProfiles,
+  });
+  const sku = {
+    skuId: "sku:stale", revision: 1, partId: part.partId, partRevision: part.revision,
+    weightBandId: "band:one", quality: { status: "ASSESSED", assessment },
+  } as SkuDrawerRevision;
+  const changedPolicy = policy();
+  changedPolicy.sourceRevisionId = "source:quality@501";
+  assert.throws(
+    () => v23PricingInputFromAssessment(pricingContext(sku, { qualityPolicy: changedPolicy })),
+    /V23_PRICING_QUALITY_EVIDENCE_INVALID/,
+  );
+  const changedProfile = structuredClone(functionProfiles);
+  changedProfile[0]!.sourceRevisionId = "source:quality@501";
+  assert.throws(
+    () => v23PricingInputFromAssessment(pricingContext(sku, { profiles: changedProfile })),
+    /V23_PRICING_QUALITY_EVIDENCE_INVALID/,
+  );
+  const changedRef = structuredClone(functionProfiles);
+  changedRef[0]!.intensityRules[0]!.scoreFactorSourceRef = "16qYVn!F2@source:quality@501";
+  assert.throws(
+    () => v23PricingInputFromAssessment(pricingContext(sku, { profiles: changedRef })),
+    /V23_PRICING_QUALITY_EVIDENCE_INVALID/,
+  );
+  for (const pricing of [
+    pricingPolicy({ inclusive: true }),
+    pricingPolicy({ legacy: true }),
+  ]) {
+    assert.throws(
+      () => v23PricingInputFromAssessment(pricingContext(sku, { pricing })),
+      /V23_PRICING_POLICY_UNUSABLE/,
+    );
+  }
+});
+
+test("禁用 inherited、added 或 local-copy 词条及其组合均阻断评分", () => {
+  const enabled = entry("affix:a", 10);
+  const disabled = entry("affix:b", 5);
+  disabled.payload.enabled = false;
+  const withCombination = policy({ combination: 3 });
+  for (const candidate of [
+    disabled,
+    { ...disabled, localCopyId: "copy:disabled", copyHash: "f".repeat(64) },
+    { ...disabled, ref: { ...disabled.ref, id: "affix:disabled-added" } },
+  ]) {
+    assert.throws(
+      () => deriveV23SkuQuality({
+        skuRevisionId: "sku:disabled@1",
+        part,
+        entries: [enabled, candidate],
+        policy: withCombination,
+        functionProfiles,
+      }),
+      (error) => error instanceof V23SkuQualityError
+        && error.code === "V23_QUALITY_AFFIX_DISABLED",
+    );
+  }
 });
 
 test("旧含上界策略、多个目标策略与缺失评分系数均 fail closed", () => {

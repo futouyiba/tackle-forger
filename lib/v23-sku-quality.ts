@@ -1,5 +1,5 @@
 import { jcsSha256Hex } from "./canonical-json";
-import type { QualityId } from "./pricing-policy";
+import type { PricingPolicyVersion, QualityId } from "./pricing-policy";
 import type { QualityValuePolicyDraft } from "./quality-value-policy";
 import { deterministicHash } from "./rule-kernel";
 import type {
@@ -77,22 +77,27 @@ export function resolveV23TargetQualityPolicy(policies: readonly QualityValuePol
 function resolveFunctionFactor(
   profiles: readonly FunctionProfile[],
   part: SeriesPartRevision,
+  policy: QualityValuePolicyDraft,
 ) {
   const profileMatches = profiles.filter((entry) => entry.id === part.functionProfileId && entry.enabled);
   if (profileMatches.length !== 1) {
     throw new V23SkuQualityError("V23_FUNCTION_PROFILE_UNRESOLVED", "Part 功能定位必须唯一解析。");
   }
+  const profile = profileMatches[0]!;
   const itemPartId = `part:${part.partType}`;
-  const members = profileMatches[0]!.intensityRules.filter(
+  const members = profile.intensityRules.filter(
     (entry) => entry.itemPartId === itemPartId && entry.intensity === part.functionIntensity,
   );
-  if (members.length !== 1
-    || !Number.isFinite(members[0]!.scoreFactor)
-    || members[0]!.scoreFactor! <= 0
-    || !members[0]!.scoreFactorSourceRef) {
+  const member = members[0];
+  if (profile.sourceRevisionId !== policy.sourceRevisionId
+    || members.length !== 1
+    || !Number.isFinite(member?.scoreFactor)
+    || member!.scoreFactor! <= 0
+    || !member!.scoreFactorSourceRef
+    || !member!.scoreFactorSourceRef!.endsWith(`@${policy.sourceRevisionId}`)) {
     throw new V23SkuQualityError("V23_FUNCTION_SCORE_FACTOR_UNRESOLVED", "评分系数必须绑定精确部位、强度和源证据。");
   }
-  return { value: members[0]!.scoreFactor!, sourceRef: members[0]!.scoreFactorSourceRef! };
+  return { value: member!.scoreFactor!, sourceRef: member!.scoreFactorSourceRef! };
 }
 
 function recommend(score: number): QualityId | null {
@@ -107,9 +112,17 @@ export function deriveV23SkuQuality(input: {
   functionProfiles: readonly FunctionProfile[];
   selectedQualityId?: QualityId;
   overrideReason?: string | null;
+  /** 仅供当前 SKU 在上游变化后的原子重算；显式选择动作不得设置。 */
+  recomputeExistingSelection?: boolean;
 }): V23SkuAffixValueAssessment {
   assertTargetPolicy(input.policy);
-  const functionFactor = resolveFunctionFactor(input.functionProfiles, input.part);
+  const functionFactor = resolveFunctionFactor(input.functionProfiles, input.part, input.policy);
+  if (input.entries.some((entry) => !entry.payload.enabled)) {
+    throw new V23SkuQualityError(
+      "V23_QUALITY_AFFIX_DISABLED",
+      "禁用词条不得参与 SKU 品质评分或相关组合。",
+    );
+  }
   const entriesById = new Map<string, V23QualityEntry>();
   for (const entry of input.entries) {
     const existing = entriesById.get(entry.ref.id);
@@ -171,11 +184,14 @@ export function deriveV23SkuQuality(input: {
   const selectedRange = TARGET_RANGES.find((range) => range.qualityId === selectedQualityId)!;
   const inSelectedQualityRange = finalValueScore >= selectedRange.min && finalValueScore < selectedRange.max;
   trace.push({ sequence: trace.length + 1, step: "quality_range", sourceRef: `${input.policy.id}:${selectedQualityId}`, subjectIds: [selectedQualityId], before: finalValueScore, operation: "validate", operand: selectedRange.max, after: finalValueScore });
-  const reason = input.overrideReason?.trim() || null;
+  let reason = input.overrideReason?.trim() || null;
   const qualityOverrideState: V23SkuAffixValueAssessment["qualityOverrideState"] = recommendedQualityId === null
     ? "NO_RECOMMENDATION"
     : recommendedQualityId === selectedQualityId ? "MATCHED" : "OVERRIDDEN";
-  if (qualityOverrideState !== "MATCHED" && reason === null) {
+  if (input.recomputeExistingSelection && qualityOverrideState === "MATCHED") {
+    reason = null;
+  }
+  if (qualityOverrideState !== "MATCHED" && reason === null && !input.recomputeExistingSelection) {
     throw new V23SkuQualityError("V23_QUALITY_OVERRIDE_REASON_REQUIRED", "无推荐或选择非推荐品质时必须提供理由。");
   }
   if (qualityOverrideState === "MATCHED" && reason !== null) {
@@ -203,25 +219,72 @@ export function deriveV23SkuQuality(input: {
 
 export function v23PricingInputFromAssessment(input: {
   sku: SkuDrawerRevision;
-  pricingPolicyVersion: string;
+  part: SeriesPartRevision;
+  qualityPolicy: QualityValuePolicyDraft;
+  functionProfiles: readonly FunctionProfile[];
+  pricingPolicy: PricingPolicyVersion;
 }) {
   if (input.sku.quality.status !== "ASSESSED") {
     throw new V23SkuQualityError("V23_PRICING_QUALITY_UNASSESSED", "定价要求已冻结的 SKU 品质评估。");
   }
   const assessment = input.sku.quality.assessment;
-  if (assessment.skuRevisionId !== `${input.sku.skuId}@${input.sku.revision}`
+  let currentFunctionFactor: ReturnType<typeof resolveFunctionFactor>;
+  try {
+    assertTargetPolicy(input.qualityPolicy);
+    currentFunctionFactor = resolveFunctionFactor(
+      input.functionProfiles,
+      input.part,
+      input.qualityPolicy,
+    );
+  } catch {
+    throw new V23SkuQualityError(
+      "V23_PRICING_QUALITY_EVIDENCE_INVALID",
+      "当前品质策略或功能评分系数无法验证。",
+    );
+  }
+  if (input.sku.partId !== input.part.partId
+    || input.sku.partRevision !== input.part.revision
+    || assessment.skuRevisionId !== `${input.sku.skuId}@${input.sku.revision}`
     || assessment.inputHash !== jcsSha256Hex(Object.fromEntries(
       Object.entries(assessment).filter(([key]) => key !== "inputHash"),
     ))
-    || assessment.qualityRangePolicyVersion.length === 0
-    || assessment.scoringPolicyVersion !== V23_QUALITY_SCORING_POLICY_VERSION) {
+    || assessment.qualityRangePolicyVersion !== input.qualityPolicy.id
+    || assessment.scoringPolicyVersion !== V23_QUALITY_SCORING_POLICY_VERSION
+    || assessment.functionScoreFactor !== currentFunctionFactor.value
+    || !assessment.trace.some(
+      (entry) => entry.step === "function_factor"
+        && entry.sourceRef === currentFunctionFactor.sourceRef,
+    )) {
     throw new V23SkuQualityError("V23_PRICING_QUALITY_EVIDENCE_INVALID", "SKU 品质评估证据不完整或已过期。");
+  }
+  const pricingRanges = input.pricingPolicy.qualityPriceFactorRanges ?? [];
+  const pricingTargetsMatch = input.pricingPolicy.formalStatus === "PUBLISHED"
+    && TARGET_RANGES.every((target) => {
+      const matches = pricingRanges.filter((entry) => entry.qualityId === target.qualityId);
+      return matches.length === 1
+        && matches[0]!.minScore === target.min
+        && matches[0]!.maxScore === target.max
+        && !matches[0]!.maxInclusive;
+    });
+  if (!pricingTargetsMatch) {
+    throw new V23SkuQualityError(
+      "V23_PRICING_POLICY_UNUSABLE",
+      "新的 v23 定价要求已发布且精确使用 [min,max) 的目标 PricingPolicyVersion。",
+    );
+  }
+  if (assessment.recommendedQualityId === null
+    || assessment.qualityOverrideState === "NO_RECOMMENDATION"
+    || assessment.finalValueScore >= 100) {
+    throw new V23SkuQualityError(
+      "V23_PRICING_QUALITY_SCORE_OUT_OF_RANGE",
+      "品质评分达到或超过 100，不能进入新的正式定价。",
+    );
   }
   return {
     qualityId: assessment.selectedQualityId,
     finalValueScore: assessment.finalValueScore,
     pricingWeightBandId: input.sku.weightBandId,
-    pricingPolicyVersion: input.pricingPolicyVersion,
+    pricingPolicyVersion: input.pricingPolicy.id,
     qualityAssessmentInputHash: assessment.inputHash,
   };
 }

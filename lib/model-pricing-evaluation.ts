@@ -17,12 +17,15 @@ import {
 } from "./pricing-policy";
 import { v23PricingInputFromAssessment } from "./v23-sku-quality";
 import type {
+  FunctionProfile,
   HistoricalModelPricingEvaluationInput,
   ModelPricingEvaluation,
   ModelPricingEvaluationInput,
+  SeriesPartRevision,
   SkuDrawerRevision,
   V23ModelPricingEvaluationInput,
 } from "./types";
+import type { QualityValuePolicyDraft } from "./quality-value-policy";
 
 // ─── 核心 ────────────────────────────────────────────────────────────
 
@@ -45,12 +48,19 @@ export interface V23ModelPricingEvaluationRequest {
   typeId?: string;
 }
 
+export interface V23ModelPricingEvaluationContext {
+  sku: SkuDrawerRevision;
+  part: SeriesPartRevision;
+  qualityPolicy: QualityValuePolicyDraft;
+  functionProfiles: readonly FunctionProfile[];
+}
+
 /**
  * 当前 v23 入口：品质、分值和重量段只能从同一 SKU revision 的冻结评估构造。
  */
 export function computeModelPricingEvaluation(
   request: V23ModelPricingEvaluationRequest,
-  sku: SkuDrawerRevision,
+  context: V23ModelPricingEvaluationContext,
   policy: PricingPolicyVersion,
   options: ComputeEvaluationOptions,
 ): ModelPricingEvaluation {
@@ -58,8 +68,8 @@ export function computeModelPricingEvaluation(
     throw new Error("定价请求引用的策略与已解析策略不一致。");
   }
   const pricingInput = v23PricingInputFromAssessment({
-    sku,
-    pricingPolicyVersion: policy.id,
+    ...context,
+    pricingPolicy: policy,
   });
   const input: V23ModelPricingEvaluationInput = {
     sourceKind: "V23_SKU_ASSESSMENT",
@@ -68,8 +78,8 @@ export function computeModelPricingEvaluation(
     pricingPolicyRef: request.pricingPolicyRef,
     partId: request.partId,
     typeId: request.typeId,
-    skuId: sku.skuId,
-    skuRevision: sku.revision,
+    skuId: context.sku.skuId,
+    skuRevision: context.sku.revision,
     qualityAssessmentInputHash: pricingInput.qualityAssessmentInputHash,
     pricingWeightBandId: pricingInput.pricingWeightBandId,
     valueScore: pricingInput.finalValueScore,
@@ -230,7 +240,7 @@ export function validateModelPricingEvaluation(
   evaluation: ModelPricingEvaluation,
   policy: PricingPolicyVersion | undefined,
   modelRevision: string,
-  currentSku?: SkuDrawerRevision,
+  currentContext?: V23ModelPricingEvaluationContext,
 ): EvaluationValidationIssue[] {
   const issues: EvaluationValidationIssue[] = [];
 
@@ -261,7 +271,7 @@ export function validateModelPricingEvaluation(
   }
 
   if (evaluation.input.sourceKind === "V23_SKU_ASSESSMENT") {
-    if (!currentSku) {
+    if (!currentContext) {
       issues.push({
         code: "SKU_QUALITY_EVIDENCE_REQUIRED",
         severity: "error",
@@ -270,12 +280,12 @@ export function validateModelPricingEvaluation(
     } else {
       try {
         const pricingInput = v23PricingInputFromAssessment({
-          sku: currentSku,
-          pricingPolicyVersion: evaluation.pricingPolicyRef,
+          ...currentContext,
+          pricingPolicy: policy,
         });
         if (
-          currentSku.skuId !== evaluation.input.skuId
-          || currentSku.revision !== evaluation.input.skuRevision
+          currentContext.sku.skuId !== evaluation.input.skuId
+          || currentContext.sku.revision !== evaluation.input.skuRevision
           || pricingInput.qualityAssessmentInputHash !== evaluation.input.qualityAssessmentInputHash
           || pricingInput.qualityId !== evaluation.input.qualityId
           || pricingInput.finalValueScore !== evaluation.input.valueScore

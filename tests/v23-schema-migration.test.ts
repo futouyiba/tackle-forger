@@ -76,25 +76,71 @@ function directV23State(partCount = 1) {
 function assessedQuality(state: ReturnType<typeof directV23State>, overrides: Record<string, unknown> = {}) {
   const sku = state.v23SkuDrawerRevisions[0]!;
   const definition = state.v23AffixDefinitions[0]!;
+  const affixBreakdown = (overrides.affixBreakdown ?? [
+    { sourceAffixId: definition.affixId, valueScore: 1, sourceRef: "quality-sheet!B2" },
+  ]) as Array<{ sourceAffixId: string; valueScore: number; sourceRef: string }>;
+  const combinationBreakdown = (overrides.combinationBreakdown ?? []) as Array<{
+    leftAffixId: string; rightAffixId: string; valueScore: number; sourceRef: string;
+  }>;
+  const baseAffixScore = affixBreakdown.reduce((sum, entry) => sum + entry.valueScore, 0);
+  const combinationScore = combinationBreakdown.reduce((sum, entry) => sum + entry.valueScore, 0);
+  const functionScoreFactor = 1;
+  const finalValueScore = (baseAffixScore + combinationScore) * functionScoreFactor;
+  const recommendedQualityId: V23SkuAffixValueAssessment["recommendedQualityId"] = finalValueScore < 20
+    ? "quality_c_green"
+    : finalValueScore < 40
+      ? "quality_b_blue"
+      : finalValueScore < 65
+        ? "quality_a_purple"
+        : finalValueScore < 100 ? "quality_s_orange" : null;
+  let running = 0;
+  const trace: V23SkuAffixValueAssessment["trace"] = [];
+  for (const entry of affixBreakdown) {
+    trace.push({
+      sequence: trace.length + 1, step: "affix", sourceRef: entry.sourceRef,
+      subjectIds: [entry.sourceAffixId], before: running, operation: "add",
+      operand: entry.valueScore, after: running + entry.valueScore,
+    });
+    running += entry.valueScore;
+  }
+  for (const entry of combinationBreakdown) {
+    trace.push({
+      sequence: trace.length + 1, step: "combination", sourceRef: entry.sourceRef,
+      subjectIds: [entry.leftAffixId, entry.rightAffixId], before: running, operation: "add",
+      operand: entry.valueScore, after: running + entry.valueScore,
+    });
+    running += entry.valueScore;
+  }
+  trace.push({
+    sequence: trace.length + 1, step: "function_factor", sourceRef: "function-sheet!F2",
+    subjectIds: ["function:cast", "2"], before: running, operation: "multiply",
+    operand: functionScoreFactor, after: finalValueScore,
+  });
+  const selectedQualityId: V23SkuAffixValueAssessment["selectedQualityId"] =
+    recommendedQualityId ?? "quality_s_orange";
+  const selectedMax = selectedQualityId === "quality_c_green" ? 20
+    : selectedQualityId === "quality_b_blue" ? 40
+      : selectedQualityId === "quality_a_purple" ? 65 : 100;
+  trace.push({
+    sequence: trace.length + 1, step: "quality_range",
+    sourceRef: `quality:v1:${selectedQualityId}`, subjectIds: [selectedQualityId],
+    before: finalValueScore, operation: "validate", operand: selectedMax, after: finalValueScore,
+  });
   const result = {
     status: "ASSESSED" as const,
     assessment: {
       skuRevisionId: `${sku.skuId}@${sku.revision}`,
-      recommendedQualityId: "quality_a_purple" as const,
-      selectedQualityId: "quality_a_purple" as const,
+      recommendedQualityId,
+      selectedQualityId,
       qualityOverrideState: "MATCHED" as const,
       qualityOverrideReason: null,
-      baseAffixScore: 1,
-      combinationScore: 0,
-      functionScoreFactor: 1,
-      finalValueScore: 1,
-      affixBreakdown: [{ sourceAffixId: definition.affixId, valueScore: 1, sourceRef: "quality-sheet!B2" }],
-      combinationBreakdown: [],
-      trace: [
-        { sequence: 1, step: "affix", sourceRef: "quality-sheet!B2", subjectIds: [definition.affixId], before: 0, operation: "add", operand: 1, after: 1 },
-        { sequence: 2, step: "function_factor", sourceRef: "function-sheet!F2", subjectIds: ["function:cast", "2"], before: 1, operation: "multiply", operand: 1, after: 1 },
-        { sequence: 3, step: "quality_range", sourceRef: "quality:v1:quality_a_purple", subjectIds: ["quality_a_purple"], before: 1, operation: "validate", operand: 65, after: 1 },
-      ] as V23SkuAffixValueAssessment["trace"],
+      baseAffixScore,
+      combinationScore,
+      functionScoreFactor,
+      finalValueScore,
+      affixBreakdown,
+      combinationBreakdown,
+      trace,
       qualityRangePolicyVersion: "quality:v1",
       scoringPolicyVersion: "score:v1",
       inSelectedQualityRange: true,
@@ -938,6 +984,72 @@ test("v23 SKU quality carrier is closed and hash-bound after the Phase-D resolve
   wellFormed.v23SkuDrawerRevisions[0]!.quality = assessedQuality(wellFormed);
   rehash(wellFormed);
   assert.doesNotThrow(() => migrateWorkspaceState(wellFormed));
+  const arithmeticTamper = structuredClone(wellFormed);
+  const arithmeticAssessment = (
+    arithmeticTamper.v23SkuDrawerRevisions[0]!.quality as unknown as
+      { assessment: Record<string, unknown> }
+  ).assessment;
+  arithmeticAssessment.baseAffixScore = 2;
+  arithmeticAssessment.finalValueScore = 2;
+  const arithmeticPayload = { ...arithmeticAssessment };
+  delete arithmeticPayload.inputHash;
+  arithmeticAssessment.inputHash = hash(arithmeticPayload);
+  rehash(arithmeticTamper);
+  assert.throws(
+    () => migrateWorkspaceState(arithmeticTamper),
+    /V23_SKU_QUALITY_ARITHMETIC_MISMATCH/,
+    "篡改算术并重算所有自报 hash 仍须被语义重放拒绝",
+  );
+  const traceTamper = structuredClone(wellFormed);
+  const traceAssessment = (
+    traceTamper.v23SkuDrawerRevisions[0]!.quality as
+      { assessment: { trace: Array<{ after: number }>; inputHash: string } }
+  ).assessment;
+  traceAssessment.trace[0]!.after = 9;
+  const tracePayload = { ...traceAssessment } as Record<string, unknown>;
+  delete tracePayload.inputHash;
+  traceAssessment.inputHash = hash(tracePayload);
+  rehash(traceTamper);
+  assert.throws(
+    () => migrateWorkspaceState(traceTamper),
+    /V23_SKU_QUALITY_TRACE_REPLAY_MISMATCH/,
+  );
+  const summaryTamper = structuredClone(wellFormed);
+  const summaryAssessment = (
+    summaryTamper.v23SkuDrawerRevisions[0]!.quality as {
+      assessment: {
+        selectedQualityId: string;
+        qualityOverrideState: string;
+        qualityOverrideReason: string | null;
+        inSelectedQualityRange: boolean;
+        trace: Array<{ sourceRef: string; subjectIds: string[]; operand: number }>;
+        inputHash: string;
+      };
+    }
+  ).assessment;
+  summaryAssessment.selectedQualityId = "quality_b_blue";
+  summaryAssessment.qualityOverrideState = "OVERRIDDEN";
+  summaryAssessment.qualityOverrideReason = null;
+  summaryAssessment.inSelectedQualityRange = false;
+  summaryAssessment.trace.at(-1)!.sourceRef = "quality:v1:quality_b_blue";
+  summaryAssessment.trace.at(-1)!.subjectIds = ["quality_b_blue"];
+  summaryAssessment.trace.at(-1)!.operand = 40;
+  const summaryPayload = { ...summaryAssessment } as Record<string, unknown>;
+  delete summaryPayload.inputHash;
+  summaryAssessment.inputHash = hash(summaryPayload);
+  summaryTamper.v23SkuDrawerRevisions[0]!.validationSummary = [{
+    code: "V23_QUALITY_OVERRIDE_REASON_REQUIRED",
+    severity: "ERROR",
+    gate: "REVIEW",
+    state: "OPEN",
+    message: "forged weaker summary",
+  }];
+  rehash(summaryTamper);
+  assert.throws(
+    () => migrateWorkspaceState(summaryTamper),
+    /V23_SKU_QUALITY_VALIDATION_SUMMARY_MISMATCH/,
+    "品质派生摘要不能通过降级严重度、门禁或文案后重算 hash 绕过",
+  );
   for (const [label, mutate, expected] of [
     ["missing-field", (assessment: Record<string, unknown>) => { delete assessment.inputHash; }, /V23_SKU_QUALITY_ASSESSMENT_SCHEMA_INVALID/],
     ["unknown-quality", (assessment: Record<string, unknown>) => { assessment.selectedQualityId = "quality:unknown"; }, /V23_SKU_QUALITY_ID_INVALID/],

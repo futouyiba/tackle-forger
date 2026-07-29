@@ -88,7 +88,7 @@ function completeInput(overrides: Partial<PricingPolicyDraft> = {}) {
       ["quality_s_orange", 65, 100, 2, 3],
     ].map(([qualityId, minScore, maxScore, minFactor, maxFactor], index) => ({
       qualityId: qualityId as QualityId,
-      minScore: Number(minScore), maxScore: Number(maxScore), maxInclusive: qualityId === "quality_s_orange",
+      minScore: Number(minScore), maxScore: Number(maxScore), maxInclusive: false,
       minFactor: Number(minFactor), maxFactor: Number(maxFactor),
       status: "CONFIRMED" as const, source: ref(`E${5 + index}:H${5 + index}`, "27hboC"),
     })),

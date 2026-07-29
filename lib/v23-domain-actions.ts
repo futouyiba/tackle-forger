@@ -547,10 +547,23 @@ function deriveSku(
               ? {
                   selectedQualityId: prior.selectedQualityId,
                   overrideReason: prior.qualityOverrideState === "MATCHED" ? null : prior.qualityOverrideReason,
+                  recomputeExistingSelection: true,
                 }
               : {}),
         });
         quality = { status: "ASSESSED", assessment };
+        if (
+          assessment.qualityOverrideState !== "MATCHED"
+          && assessment.qualityOverrideReason === null
+        ) {
+          validationSummary.push({
+            code: "V23_QUALITY_OVERRIDE_REASON_REQUIRED",
+            severity: "BLOCKER",
+            gate: "PUBLISH",
+            state: "OPEN",
+            message: "推荐变化后实际品质偏离新推荐，必须补充覆盖理由。",
+          });
+        }
         if (assessment.recommendedQualityId === null) {
           validationSummary.push({
             code: "QUALITY_SCORE_OUT_OF_RANGE",

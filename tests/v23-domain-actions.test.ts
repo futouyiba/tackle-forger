@@ -338,6 +338,69 @@ test("评分达到 100 后人工选择实际品质仍保留正式发布阻断", 
   ));
 });
 
+test("自动重算跨推荐档位时保留 assessment，并确定性归一覆盖理由", () => {
+  const withSeries = run(qualityReadyState(), "create_series", {
+    seriesId: "series:alpha",
+    collectionId: null,
+    name: "Alpha",
+    concept: "Recommendation crossing",
+    parts: [part],
+  }).state;
+  const withAffix = run(withSeries, "create_project_affix", {
+    affixId: "affix:score-30",
+    affixPayload: { ...attributeAffixPayload("affix:score-30"), valueScore: 30 },
+  }).state;
+  const created = run(withAffix, "create_sku", {
+    skuId: "sku:crossing",
+    partId: part.partId,
+    expectedPartRevision: 1,
+    weightBandId: "band:light",
+    displayOrder: 0,
+  }).state;
+  const crossedWithoutReason = run(created, "add_sku_affix", {
+    skuId: "sku:crossing",
+    expectedSkuRevision: 1,
+    affixRef: {
+      id: "affix:score-30",
+      revision: 1,
+      contentHash: withAffix.v23AffixDefinitions[0]!.contentHash,
+    },
+  }).state.v23SkuDrawerRevisions.at(-1)!;
+  assert.equal(crossedWithoutReason.quality.status, "ASSESSED");
+  if (crossedWithoutReason.quality.status !== "ASSESSED") return;
+  assert.equal(crossedWithoutReason.quality.assessment.recommendedQualityId, "quality_b_blue");
+  assert.equal(crossedWithoutReason.quality.assessment.selectedQualityId, "quality_c_green");
+  assert.equal(crossedWithoutReason.quality.assessment.qualityOverrideReason, null);
+  assert.ok(crossedWithoutReason.validationSummary.some(
+    (issue) => issue.code === "V23_QUALITY_OVERRIDE_REASON_REQUIRED",
+  ));
+
+  const overridden = run(created, "set_sku_actual_quality", {
+    skuId: "sku:crossing",
+    expectedSkuRevision: 1,
+    selectedQualityId: "quality_b_blue",
+    reason: "先按人工目标选择",
+  }).state;
+  const crossedToMatch = run(overridden, "add_sku_affix", {
+    skuId: "sku:crossing",
+    expectedSkuRevision: 2,
+    affixRef: {
+      id: "affix:score-30",
+      revision: 1,
+      contentHash: withAffix.v23AffixDefinitions[0]!.contentHash,
+    },
+  }).state.v23SkuDrawerRevisions.at(-1)!;
+  assert.equal(crossedToMatch.quality.status, "ASSESSED");
+  if (crossedToMatch.quality.status !== "ASSESSED") return;
+  assert.equal(crossedToMatch.quality.assessment.recommendedQualityId, "quality_b_blue");
+  assert.equal(crossedToMatch.quality.assessment.selectedQualityId, "quality_b_blue");
+  assert.equal(crossedToMatch.quality.assessment.qualityOverrideState, "MATCHED");
+  assert.equal(crossedToMatch.quality.assessment.qualityOverrideReason, null);
+  assert.equal(crossedToMatch.validationSummary.some(
+    (issue) => issue.code === "V23_QUALITY_OVERRIDE_REASON_REQUIRED",
+  ), false);
+});
+
 test("part update appends immutable revisions and atomically rederives every child SKU", () => {
   const withSeries = run(state(), "create_series", {
     seriesId: "series:alpha",

@@ -298,7 +298,7 @@ export function pricingDraftFromRanges(input: {
     ? input.qualitySourceRows.flatMap((row) => {
       const qualityId = qualityIds[row.code];
       return qualityId && [row.minScore, row.maxScore, row.minFactor, row.maxFactor].every(Number.isFinite)
-        ? [{ qualityId, minScore: row.minScore, maxScore: row.maxScore, maxInclusive: qualityId === "quality_s_orange", minFactor: row.minFactor, maxFactor: row.maxFactor, status: "SOURCE" as const, source: { sheetId: QUALITY_SHEET_ID, cell: row.factorCell, rowKey: row.rowKey } }]
+        ? [{ qualityId, minScore: row.minScore, maxScore: row.maxScore, maxInclusive: false, minFactor: row.minFactor, maxFactor: row.maxFactor, status: "SOURCE" as const, source: { sheetId: QUALITY_SHEET_ID, cell: row.factorCell, rowKey: row.rowKey } }]
         : [];
     })
     : input.qualityValues.flatMap((row, index) => {
@@ -309,7 +309,7 @@ export function pricingDraftFromRanges(input: {
     const maxFactor = Number(row[6]);
     if (!qualityId || ![minScore, maxScore, minFactor, maxFactor].every(Number.isFinite)) return [];
     const sheetRow = index + 5;
-    return [{ qualityId, minScore, maxScore, maxInclusive: qualityId === "quality_s_orange", minFactor, maxFactor, status: "SOURCE", source: { sheetId: "27hboC", cell: `E${sheetRow}:H${sheetRow}`, rowKey: String(sheetRow) } }];
+    return [{ qualityId, minScore, maxScore, maxInclusive: false, minFactor, maxFactor, status: "SOURCE", source: { sheetId: "27hboC", cell: `E${sheetRow}:H${sheetRow}`, rowKey: String(sheetRow) } }];
   });
   const pricingValues = input.pricingValues ?? [];
   const wq8wLookup = parsePricingWq8wLookup(input.pricingEndpointValues);
@@ -640,7 +640,7 @@ export function qualityDraftFromRanges(input: {
     }
     const mappingSource = sourceCell(rowIndex, codeIndex); const factorSource = { sheetId: QUALITY_SHEET_ID, cell: `${sourceColumn(minFactorIndex)}${sourceRow(rowIndex)}:${sourceColumn(maxFactorIndex)}${sourceRow(rowIndex)}`, rowKey: String(sourceRow(rowIndex)) };
     descriptorRows.push({ qualityId: qualityIds[code]!, code, minScore, maxScore, minFactor, maxFactor, mappingSource, factorSource });
-    return [{ qualityId: qualityIds[code]!, minScore, maxScore, maxInclusive: qualityIds[code] === "quality_s_orange", status: "SOURCE" as const,
+    return [{ qualityId: qualityIds[code]!, minScore, maxScore, maxInclusive: false, status: "SOURCE" as const,
       source: { sheetId: QUALITY_SHEET_ID, cell: `${sourceColumn(minIndex)}${sourceRow(rowIndex)}:${sourceColumn(maxIndex)}${sourceRow(rowIndex)}`, rowKey: String(sourceRow(rowIndex)) },
     }];
   }) : [];

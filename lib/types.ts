@@ -1225,6 +1225,19 @@ export interface V23FunctionTemplateRef {
   contentHash: string;
 }
 
+/** Immutable 04.5 registry row.  The six-key is deliberately the whole
+ * lookup identity; ranges and display labels are not resolution inputs. */
+export interface V23FunctionTemplateDefinition {
+  ref: V23FunctionTemplateRef;
+  key: V23MatchedTemplateKey;
+  baselinePullKg: number;
+}
+
+export type V23SkuPullDerivationEvidence =
+  | { status: "UNRESOLVED" }
+  | { status: "VALID"; baselinePullKg: number; targetPullKg: number; effectiveEntryIds: string[]; trace: Array<{ affixId: string; operationId: string; beforeKg: number; afterKg: number }>; inputHash: string }
+  | { status: "INVALID"; code: string; inputHash: string };
+
 export interface V23MatchedTemplateKey {
   partType: V23EnabledPartType;
   weightBandId: string;
@@ -1298,6 +1311,8 @@ export interface SkuDrawerRevision {
   partRevision: number;
   weightBandId: string;
   match: V23SkuMatch;
+  /** Absent only on Phase-A persisted records; Phase B writes a closed result. */
+  derivation?: V23SkuPullDerivationEvidence;
   removedInheritedEntryIds: string[];
   addedEntryRefs: Extract<V23SkuAffixEntry, { kind: "STABLE_AFFIX_REF" }>[];
   localEntryCopies: Extract<V23SkuAffixEntry, { kind: "LOCAL_AFFIX_COPY" }>[];
@@ -2990,6 +3005,7 @@ export interface WorkspaceState {
   v23SkuDrawerRevisions: SkuDrawerRevision[];
   v23SkuDrawerHeads: V23SkuDrawerHeadRef[];
   v23AffixDefinitions: V23AffixDefinition[];
+  v23FunctionTemplates?: V23FunctionTemplateDefinition[];
   v23MigrationSourceEvidence: V23MigrationSourceEvidence[];
   v23LegacyReadAdapters: V23LegacyReadAdapter[];
   partConstraintSets: PartConstraintSet[];

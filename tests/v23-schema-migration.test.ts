@@ -464,7 +464,7 @@ test("v23 closes project affix, local copy, SKU lifecycle, and Phase-A template 
   assert.throws(() => migrateWorkspaceState(payloadExtra), /V23_AFFIX_PAYLOAD_SCHEMA_INVALID/);
   const valid = directV23State();
   valid.v23SkuDrawerRevisions[0]!.match = validMatch(); valid.v23SkuDrawerRevisions[0] = withSkuHashes(valid.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
-  assert.throws(() => migrateWorkspaceState(valid), /V23_TEMPLATE_REGISTRY_UNAVAILABLE/);
+  assert.throws(() => migrateWorkspaceState(valid), /V23_TEMPLATE_REGISTRY_NO_MATCH/);
   const defaultModel = directV23State(); defaultModel.v23SkuDrawerRevisions[0]!.defaultModelId = "model:missing"; defaultModel.v23SkuDrawerRevisions[0] = withSkuHashes(defaultModel.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
   assert.throws(() => migrateWorkspaceState(defaultModel), /V23_SKU_ASSOCIATION_RESOLVER_UNAVAILABLE/);
   const order = directV23State(); order.v23SkuDrawerRevisions[0]!.displayOrder = -1; order.v23SkuDrawerRevisions[0] = withSkuHashes(order.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;

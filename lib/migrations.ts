@@ -1828,6 +1828,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
   const skus = v23Array(state.v23SkuDrawerRevisions, "V23_SKUS");
   const skuHeads = v23Array(state.v23SkuDrawerHeads, "V23_SKU_HEADS");
   const affixes = v23Array(state.v23AffixDefinitions, "V23_AFFIX_DEFINITIONS");
+  const functionTemplates = Array.isArray(state.v23FunctionTemplates) ? state.v23FunctionTemplates : [];
   const evidence = v23Array(state.v23MigrationSourceEvidence, "V23_SOURCE_EVIDENCE");
   const adapters = v23Array(state.v23LegacyReadAdapters, "V23_LEGACY_ADAPTERS");
   const publishedRuleSetIds = new Map<string, number>();
@@ -1919,6 +1920,23 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     v23HashOf({ ...input, inputFingerprint: entry.inputFingerprint }, entry.contentHash, "V23_PART_CONTENT_HASH");
   }
   const currentPartsBySeries = new Map<string, Record<string, unknown>[]>();
+  const templatesByKey = new Map<string, Array<{ templateId: string; revisionId: string; contentHash: string; baselinePullKg: number }>>();
+  for (const value of functionTemplates) {
+    const template = v23Record(value, "V23_FUNCTION_TEMPLATE");
+    v23ExactKeys(template, ["ref", "key", "baselinePullKg"], "V23_FUNCTION_TEMPLATE");
+    const ref = v23Record(template.ref, "V23_FUNCTION_TEMPLATE_REF");
+    v23ExactKeys(ref, ["templateId", "revisionId", "contentHash"], "V23_FUNCTION_TEMPLATE_REF");
+    const templateId = v23String(ref.templateId, "V23_FUNCTION_TEMPLATE_ID");
+    const revisionId = v23String(ref.revisionId, "V23_FUNCTION_TEMPLATE_REVISION");
+    const contentHash = v23Hash(ref.contentHash, "V23_FUNCTION_TEMPLATE_HASH");
+    const key = v23Record(template.key, "V23_FUNCTION_TEMPLATE_KEY");
+    v23ExactKeys(key, ["partType", "weightBandId", "fishingMethodId", "materialTypeId", "functionProfileId", "functionIntensity"], "V23_FUNCTION_TEMPLATE_KEY");
+    if (!(["rod", "reel", "line"] as const).includes(key.partType as "rod" | "reel" | "line") || !Number.isInteger(key.functionIntensity) || !(key.functionIntensity === 1 || key.functionIntensity === 2 || key.functionIntensity === 3) || Object.values(key).some((v) => typeof v === "string" && v.length === 0) || !Number.isFinite(template.baselinePullKg) || (template.baselinePullKg as number) <= 0) throw new Error("V23_FUNCTION_TEMPLATE_INVALID");
+    const keyHash = jcsSha256Hex(key);
+    const candidates = templatesByKey.get(keyHash) ?? [];
+    if (candidates.some((candidate) => candidate.templateId === templateId && candidate.revisionId === revisionId)) throw new Error("V23_FUNCTION_TEMPLATE_DUPLICATE");
+    candidates.push({ templateId, revisionId, contentHash, baselinePullKg: template.baselinePullKg as number }); templatesByKey.set(keyHash, candidates);
+  }
   const seenHeads = new Set<string>();
   for (const value of heads) {
     const head = v23Record(value, "V23_SERIES_PART_HEAD");
@@ -2072,7 +2090,10 @@ function validateV23RuntimeState(state: MutableWorkspace) {
       v23Hash(template.contentHash, "V23_TEMPLATE_CONTENT_HASH");
       const key = validateKey(match.matchedKey, "V23_SKU_MATCHED_KEY");
       v23HashOf(key, match.inputFingerprint, "V23_SKU_INPUT_FINGERPRINT");
-      throw new Error("V23_TEMPLATE_REGISTRY_UNAVAILABLE");
+      const candidates = templatesByKey.get(jcsSha256Hex(key)) ?? [];
+      if (candidates.length !== 1) throw new Error(candidates.length === 0 ? "V23_TEMPLATE_REGISTRY_NO_MATCH" : "V23_TEMPLATE_REGISTRY_AMBIGUOUS");
+      const candidate = candidates[0]!;
+      if (candidate.templateId !== template.templateId || candidate.revisionId !== template.revisionId || candidate.contentHash !== template.contentHash) throw new Error("V23_TEMPLATE_REGISTRY_REF_MISMATCH");
     } else if (["INVALID_NO_MATCH", "INVALID_AMBIGUOUS"].includes(status)) {
       v23ExactKeys(match, ["status", "attemptedKey", "inputFingerprint"], "V23_SKU_MATCH");
       const key = validateKey(match.attemptedKey, "V23_SKU_ATTEMPTED_KEY");
@@ -2080,6 +2101,20 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     } else if (status === "NEEDS_MIGRATION_REVIEW") {
       v23ExactKeys(match, ["status"], "V23_SKU_MATCH");
     } else throw new Error("V23_SKU_MATCH_STATUS_INVALID");
+    if (entry.derivation !== undefined) {
+      const derivation = v23Record(entry.derivation, "V23_SKU_DERIVATION");
+      const derivationStatus = v23String(derivation.status, "V23_SKU_DERIVATION_STATUS");
+      if (derivationStatus === "UNRESOLVED") v23ExactKeys(derivation, ["status"], "V23_SKU_DERIVATION");
+      else if (derivationStatus === "INVALID") { v23ExactKeys(derivation, ["status", "code", "inputHash"], "V23_SKU_DERIVATION"); v23String(derivation.code, "V23_SKU_DERIVATION_CODE"); v23Hash(derivation.inputHash, "V23_SKU_DERIVATION_INPUT_HASH"); }
+      else if (derivationStatus === "VALID") {
+        v23ExactKeys(derivation, ["status", "baselinePullKg", "targetPullKg", "effectiveEntryIds", "trace", "inputHash"], "V23_SKU_DERIVATION");
+        if (!Number.isFinite(derivation.baselinePullKg) || !Number.isFinite(derivation.targetPullKg) || (derivation.baselinePullKg as number) <= 0 || (derivation.targetPullKg as number) <= 0) throw new Error("V23_SKU_DERIVATION_PULL_INVALID");
+        const ids = v23Array(derivation.effectiveEntryIds, "V23_SKU_DERIVATION_IDS").map((id) => v23String(id, "V23_SKU_DERIVATION_ID")); if (new Set(ids).size !== ids.length) throw new Error("V23_SKU_DERIVATION_ID_DUPLICATE");
+        let prior = derivation.baselinePullKg as number;
+        for (const stepValue of v23Array(derivation.trace, "V23_SKU_DERIVATION_TRACE")) { const step = v23Record(stepValue, "V23_SKU_DERIVATION_STEP"); v23ExactKeys(step, ["affixId", "operationId", "beforeKg", "afterKg"], "V23_SKU_DERIVATION_STEP"); v23String(step.affixId, "V23_SKU_DERIVATION_AFFIX"); v23String(step.operationId, "V23_SKU_DERIVATION_OPERATION"); if (!Number.isFinite(step.beforeKg) || !Number.isFinite(step.afterKg) || step.beforeKg !== prior || (step.afterKg as number) <= 0) throw new Error("V23_SKU_DERIVATION_TRACE_INVALID"); prior = step.afterKg as number; }
+        if (prior !== derivation.targetPullKg) throw new Error("V23_SKU_DERIVATION_TRACE_TERMINAL_MISMATCH"); v23Hash(derivation.inputHash, "V23_SKU_DERIVATION_INPUT_HASH");
+      } else throw new Error("V23_SKU_DERIVATION_STATUS_INVALID");
+    }
     const removed = v23Array(entry.removedInheritedEntryIds, "V23_SKU_REMOVED_ENTRIES");
     const removedEntryIds = new Set(removed.map((id) => v23String(id, "V23_SKU_REMOVED_ENTRY_ID")));
     if (removedEntryIds.size !== removed.length) throw new Error("V23_SKU_REMOVED_ENTRY_DUPLICATE");
@@ -2325,6 +2360,7 @@ function migrateV22ToV23(input: MutableWorkspace, context: MigrationContext): Mu
     v23SkuDrawerRevisions: [],
     v23SkuDrawerHeads: [],
     v23AffixDefinitions: [],
+    v23FunctionTemplates: [],
     v23MigrationSourceEvidence: evidence,
     v23LegacyReadAdapters: adapters,
     // ConfigurationSnapshot is intentionally not read, normalized, or copied

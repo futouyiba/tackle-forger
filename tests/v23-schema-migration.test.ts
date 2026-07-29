@@ -238,7 +238,8 @@ test("v23 Part heads and local copy ownership are explicit rather than inferred"
   const danglingHead = directV23State(); danglingHead.v23SeriesPartHeads[0]!.revision = 99;
   assert.throws(() => migrateWorkspaceState(danglingHead), /V23_SERIES_PART_HEAD_UNRESOLVED/);
   const copies = directV23State();
-  const copy = { kind: "LOCAL_AFFIX_COPY" as const, localCopyId: "copy:shared", sourceRef: { id: copies.v23AffixDefinitions[0]!.affixId, revision: 1, contentHash: copies.v23AffixDefinitions[0]!.contentHash }, payload: affixPayload(), copyHash: "" };
+  const copyPayload = { ...affixPayload(), semanticContributionKey: "copy:shared" };
+  const copy = { kind: "LOCAL_AFFIX_COPY" as const, localCopyId: "copy:shared", sourceRef: { id: copies.v23AffixDefinitions[0]!.affixId, revision: 1, contentHash: copies.v23AffixDefinitions[0]!.contentHash }, payload: copyPayload, copyHash: "" };
   copy.copyHash = hash({ localCopyId: copy.localCopyId, sourceRef: copy.sourceRef, payload: copy.payload });
   copies.v23SkuDrawerRevisions[0]!.localEntryCopies = [copy]; copies.v23SkuDrawerRevisions[0] = withSkuHashes(copies.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
   copies.v23SkuDrawerRevisions.push(withSkuHashes({ ...copies.v23SkuDrawerRevisions[0]!, revision: 2 }) as SkuDrawerRevision);
@@ -313,17 +314,14 @@ test("v23 identity resolution remains unambiguous when stable IDs contain old ke
     partId: "part:one",
     partType: "reel",
   });
-  const secondPayload = affixPayload("affix:project@revision:1", 1);
+  const secondPayload = { ...affixPayload("affix:project@revision:1", 1), semanticContributionKey: "second" };
   const secondAffix = { affixId: "affix:project@revision:1", revision: 1, contentHash: hash({ affixId: "affix:project@revision:1", revision: 1, payload: secondPayload }), payload: secondPayload };
   state.v23AffixDefinitions.push(secondAffix);
   state.v23SeriesPartRevisions[0]!.defaultEntryRefs = [
     { id: "affix:project", revision: 1, contentHash: state.v23AffixDefinitions[0]!.contentHash },
     { id: secondAffix.affixId, revision: secondAffix.revision, contentHash: secondAffix.contentHash },
   ];
-  state.v23SkuDrawerRevisions[0]!.addedEntryRefs = [{
-    kind: "STABLE_AFFIX_REF",
-    ref: { id: secondAffix.affixId, revision: secondAffix.revision, contentHash: secondAffix.contentHash },
-  }];
+  state.v23SkuDrawerRevisions[0]!.addedEntryRefs = [];
   state.v23SeriesPartRevisions[0] = withPartHashes(state.v23SeriesPartRevisions[0]!) as SeriesPartRevision;
   state.v23SeriesPartRevisions[1] = withPartHashes(state.v23SeriesPartRevisions[1]!) as SeriesPartRevision;
   state.v23SeriesPartHeads = state.v23SeriesPartRevisions.map((part) => ({ seriesId: part.seriesId, partId: part.partId, revision: part.revision }));
@@ -600,4 +598,103 @@ test("v23 deduplicates stable affix IDs within each Part and SKU revision only",
   skuRevision.v23SkuDrawerRevisions[0]!.addedEntryRefs = [{ kind: "STABLE_AFFIX_REF", ref: { id: "affix:project", revision: 1, contentHash: skuRevision.v23AffixDefinitions[0]!.contentHash } }, { kind: "STABLE_AFFIX_REF", ref: { id: "affix:project", revision: 2, contentHash: secondDefinition.contentHash } }];
   skuRevision.v23SkuDrawerRevisions[0] = withSkuHashes(skuRevision.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
   assert.throws(() => migrateWorkspaceState(skuRevision), /V23_SKU_ADDED_ENTRY_REF_ID_DUPLICATE/);
+});
+
+test("every legacy start rejects preloaded v23 roots and retained SKU evidence needs complete adapters", () => {
+  for (const version of [1, 9, 21, 22]) {
+    const preloaded = legacyInput(9);
+    if (version === 1) delete preloaded.schemaVersion;
+    else preloaded.schemaVersion = version;
+    preloaded.v23SkuDrawerHeads = [];
+    assert.throws(() => migrateWorkspaceState(preloaded), /V23_MIGRATION_PARTIAL_STATE_CONFLICT/);
+  }
+
+  const incomplete = directV23State();
+  const raw = { schemaVersion: 22, skuDrawers: [{ id: "legacy:one" }, { id: "legacy:two" }], officialSkus: [], seriesDefinitions: [] };
+  incomplete.v23MigrationSourceEvidence = [{ sourceEvidenceId: "source:coverage", sourceSchemaVersion: 22, rawWorkspacePayload: raw, rawWorkspacePayloadHash: deterministicHash(raw) }];
+  incomplete.v23LegacyReadAdapters = [{ adapterId: "adapter:one", kind: "LEGACY_NEEDS_REVIEW", sourceEvidenceId: "source:coverage", targetSkuId: "legacy:one", sourceKind: "LEGACY_SKU_DRAWER", sourceRecordId: "legacy:one", rawSourcePayload: raw.skuDrawers[0]!, sourceSeriesId: null, rawSeriesPayload: null, diagnosticCodes: ["V23_SERIES_UNRESOLVED"], status: "NEEDS_REVIEW" }];
+  assert.throws(() => migrateWorkspaceState(incomplete), /V23_LEGACY_ADAPTER_SOURCE_COVERAGE_INVALID/);
+
+  const complete = directV23State();
+  const sourceOne = { schemaVersion: 22, skuDrawers: [{ id: "legacy:drawer" }], officialSkus: [{ id: "legacy:official" }], seriesDefinitions: [] };
+  const sourceTwo = { schemaVersion: 21, skuDrawers: [{ id: "legacy:second" }], officialSkus: [], seriesDefinitions: [] };
+  complete.v23MigrationSourceEvidence = [
+    { sourceEvidenceId: "source:one", sourceSchemaVersion: 22, rawWorkspacePayload: sourceOne, rawWorkspacePayloadHash: deterministicHash(sourceOne) },
+    { sourceEvidenceId: "source:two", sourceSchemaVersion: 21, rawWorkspacePayload: sourceTwo, rawWorkspacePayloadHash: deterministicHash(sourceTwo) },
+  ];
+  const adapter = (adapterId: string, sourceEvidenceId: string, sourceKind: "LEGACY_SKU_DRAWER" | "LEGACY_OFFICIAL_SKU", source: { id: string }) => ({
+    adapterId, kind: "LEGACY_NEEDS_REVIEW" as const, sourceEvidenceId,
+    targetSkuId: sourceKind === "LEGACY_SKU_DRAWER" ? source.id : `legacy-sku-drawer:${deterministicHash(source.id).slice(0, 12)}`,
+    sourceKind, sourceRecordId: source.id, rawSourcePayload: source, sourceSeriesId: null, rawSeriesPayload: null,
+    diagnosticCodes: ["V23_SERIES_UNRESOLVED"] as V23LegacyReadAdapter["diagnosticCodes"], status: "NEEDS_REVIEW" as const,
+  });
+  complete.v23LegacyReadAdapters = [
+    adapter("adapter:drawer", "source:one", "LEGACY_SKU_DRAWER", sourceOne.skuDrawers[0]!),
+    adapter("adapter:official", "source:one", "LEGACY_OFFICIAL_SKU", sourceOne.officialSkus[0]!),
+    adapter("adapter:second", "source:two", "LEGACY_SKU_DRAWER", sourceTwo.skuDrawers[0]!),
+  ];
+  assert.doesNotThrow(() => migrateWorkspaceState(complete));
+  const duplicate = structuredClone(complete);
+  duplicate.v23LegacyReadAdapters.push(adapter("adapter:duplicate", "source:one", "LEGACY_SKU_DRAWER", sourceOne.skuDrawers[0]!));
+  assert.throws(() => migrateWorkspaceState(duplicate), /V23_LEGACY_ADAPTER_SOURCE_DUPLICATE/);
+});
+
+test("v23 executes semantic contribution dedupe only where Phase A defines each entry set", () => {
+  const secondPayload = affixPayload("affix:semantic-two");
+  const second = { affixId: "affix:semantic-two", revision: 1, contentHash: hash({ affixId: "affix:semantic-two", revision: 1, payload: secondPayload }), payload: secondPayload };
+
+  const part = directV23State();
+  part.v23AffixDefinitions.push(second);
+  part.v23SeriesPartRevisions[0]!.defaultEntryRefs = [{ id: "affix:project", revision: 1, contentHash: part.v23AffixDefinitions[0]!.contentHash }, { id: second.affixId, revision: 1, contentHash: second.contentHash }];
+  part.v23SeriesPartRevisions[0] = withPartHashes(part.v23SeriesPartRevisions[0]!) as SeriesPartRevision;
+  assert.throws(() => migrateWorkspaceState(part), /V23_PART_DEFAULT_ENTRY_SEMANTIC_CONTRIBUTION_CONFLICT/);
+
+  const added = directV23State();
+  added.v23AffixDefinitions.push(second);
+  added.v23SkuDrawerRevisions[0]!.addedEntryRefs = [{ kind: "STABLE_AFFIX_REF", ref: { id: "affix:project", revision: 1, contentHash: added.v23AffixDefinitions[0]!.contentHash } }, { kind: "STABLE_AFFIX_REF", ref: { id: second.affixId, revision: 1, contentHash: second.contentHash } }];
+  added.v23SkuDrawerRevisions[0] = withSkuHashes(added.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.throws(() => migrateWorkspaceState(added), /V23_SKU_ADDED_ENTRY_REF_SEMANTIC_CONTRIBUTION_CONFLICT/);
+
+  const local = directV23State();
+  const ref = { id: local.v23AffixDefinitions[0]!.affixId, revision: 1, contentHash: local.v23AffixDefinitions[0]!.contentHash };
+  local.v23SkuDrawerRevisions[0]!.localEntryCopies = ["copy:one", "copy:two"].map((localCopyId) => ({ kind: "LOCAL_AFFIX_COPY" as const, localCopyId, sourceRef: ref, payload: affixPayload(), copyHash: hash({ localCopyId, sourceRef: ref, payload: affixPayload() }) }));
+  local.v23SkuDrawerRevisions[0] = withSkuHashes(local.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.throws(() => migrateWorkspaceState(local), /V23_SKU_LOCAL_COPY_SEMANTIC_CONTRIBUTION_CONFLICT/);
+
+  const inheritedAndAdded = directV23State();
+  inheritedAndAdded.v23AffixDefinitions.push(second);
+  inheritedAndAdded.v23SeriesPartRevisions[0]!.defaultEntryRefs = [{ id: "affix:project", revision: 1, contentHash: inheritedAndAdded.v23AffixDefinitions[0]!.contentHash }];
+  inheritedAndAdded.v23SeriesPartRevisions[0] = withPartHashes(inheritedAndAdded.v23SeriesPartRevisions[0]!) as SeriesPartRevision;
+  inheritedAndAdded.v23SkuDrawerRevisions[0]!.addedEntryRefs = [{ kind: "STABLE_AFFIX_REF", ref: { id: second.affixId, revision: 1, contentHash: second.contentHash } }];
+  inheritedAndAdded.v23SkuDrawerRevisions[0] = withSkuHashes(inheritedAndAdded.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.throws(() => migrateWorkspaceState(inheritedAndAdded), /V23_SKU_ADDED_ENTRY_REF_SEMANTIC_CONTRIBUTION_CONFLICT/);
+
+  const removedInherited = structuredClone(inheritedAndAdded);
+  removedInherited.v23SkuDrawerRevisions[0]!.removedInheritedEntryIds = ["affix:project"];
+  removedInherited.v23SkuDrawerRevisions[0] = withSkuHashes(removedInherited.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.doesNotThrow(() => migrateWorkspaceState(removedInherited));
+
+  const stack = directV23State();
+  const stackOne = { ...affixPayload(), stackingPolicy: "stack" as const };
+  stack.v23AffixDefinitions[0] = { affixId: "affix:project", revision: 1, contentHash: hash({ affixId: "affix:project", revision: 1, payload: stackOne }), payload: stackOne };
+  const stackTwoPayload = { ...affixPayload("affix:stack-two"), stackingPolicy: "stack" as const };
+  const stackTwo = { affixId: "affix:stack-two", revision: 1, contentHash: hash({ affixId: "affix:stack-two", revision: 1, payload: stackTwoPayload }), payload: stackTwoPayload };
+  stack.v23AffixDefinitions.push(stackTwo);
+  stack.v23SeriesPartRevisions[0]!.defaultEntryRefs = [{ id: "affix:project", revision: 1, contentHash: stack.v23AffixDefinitions[0]!.contentHash }, { id: stackTwo.affixId, revision: 1, contentHash: stackTwo.contentHash }];
+  stack.v23SeriesPartRevisions[0] = withPartHashes(stack.v23SeriesPartRevisions[0]!) as SeriesPartRevision;
+  stack.v23SkuDrawerRevisions[0]!.addedEntryRefs = [];
+  stack.v23SkuDrawerRevisions[0] = withSkuHashes(stack.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.doesNotThrow(() => migrateWorkspaceState(stack));
+
+  const blocker = directV23State();
+  blocker.v23SkuDrawerRevisions[0]!.validationSummary = [{ code: "block", severity: "BLOCKER", gate: "PUBLISH", state: "WAIVED", message: "no waiver" }];
+  blocker.v23SkuDrawerRevisions[0] = withSkuHashes(blocker.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.throws(() => migrateWorkspaceState(blocker), /V23_SKU_VALIDATION_BLOCKER_WAIVED/);
+  const allowedSummary = directV23State();
+  allowedSummary.v23SkuDrawerRevisions[0]!.validationSummary = [
+    { code: "block-open", severity: "BLOCKER", gate: "PUBLISH", state: "OPEN", message: "blocks" },
+    { code: "error-waived", severity: "ERROR", gate: "REVIEW", state: "WAIVED", message: "allowed" },
+  ];
+  allowedSummary.v23SkuDrawerRevisions[0] = withSkuHashes(allowedSummary.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.doesNotThrow(() => migrateWorkspaceState(allowedSummary));
 });

@@ -1792,7 +1792,16 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     throw new Error("V23_TECHNOLOGY_REGISTRY_UNAVAILABLE");
   };
 
+  const assertSemanticContribution = (seen: Map<string, Set<string>>, payload: Record<string, unknown>, code: string) => {
+    const contributionKey = payload.semanticContributionKey as string;
+    const policy = payload.stackingPolicy as string;
+    const existing = seen.get(contributionKey);
+    if (existing && (policy !== "stack" || existing.has("dedupe"))) throw new Error(`${code}_SEMANTIC_CONTRIBUTION_CONFLICT`);
+    if (existing) existing.add(policy);
+    else seen.set(contributionKey, new Set([policy]));
+  };
   const partByIdAndRevision = new Map<string, Map<number, Record<string, unknown>>>();
+  const partDefaultPayloads = new Map<string, Map<string, Record<string, unknown>>>();
   const partSeriesById = new Map<string, string>();
   for (const value of parts) {
     const entry = v23Record(value, "V23_SERIES_PART");
@@ -1809,6 +1818,8 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     const weightBandIds = v23Array(entry.weightBandIds, "V23_PART_WEIGHT_BANDS").map((id) => v23String(id, "V23_PART_WEIGHT_BAND_ID"));
     if (new Set(weightBandIds).size !== weightBandIds.length) throw new Error("V23_PART_WEIGHT_BAND_DUPLICATE");
     const partDefaultEntryIds = new Set<string>();
+    const partDefaults = new Map<string, Record<string, unknown>>();
+    const partDefaultContributions = new Map<string, Set<string>>();
     for (const value of v23Array(entry.defaultEntryRefs, "V23_PART_DEFAULT_ENTRIES")) {
       const ref = validateV23StableRef(value, "V23_PART_DEFAULT_ENTRY");
       if (partDefaultEntryIds.has(ref.id)) throw new Error("V23_PART_DEFAULT_ENTRY_ID_DUPLICATE");
@@ -1816,6 +1827,8 @@ function validateV23RuntimeState(state: MutableWorkspace) {
       const resolved = resolveAffixRef(ref);
       if (!resolved) throw new Error("V23_PART_DEFAULT_ENTRY_UNRESOLVED");
       if (resolved.payload.itemPartId !== itemPartIdFor(entry.partType)) throw new Error("V23_PART_DEFAULT_ENTRY_ITEM_PART_MISMATCH");
+      assertSemanticContribution(partDefaultContributions, resolved.payload, "V23_PART_DEFAULT_ENTRY");
+      partDefaults.set(ref.id, resolved.payload);
     }
     for (const ref of v23Array(entry.technologyRefs, "V23_PART_TECHNOLOGIES")) validateTechnologyRef(ref, "V23_PART_TECHNOLOGY");
     const partMap = partByIdAndRevision.get(partId) ?? new Map<number, Record<string, unknown>>();
@@ -1824,6 +1837,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     partSeriesById.set(partId, seriesId);
     partMap.set(revision, entry);
     partByIdAndRevision.set(partId, partMap);
+    partDefaultPayloads.set(`${partId}\u0000${revision}`, partDefaults);
     const input = v23PartInput(entry);
     v23HashOf(input, entry.inputFingerprint, "V23_PART_INPUT_FINGERPRINT");
     v23HashOf({ ...input, inputFingerprint: entry.inputFingerprint }, entry.contentHash, "V23_PART_CONTENT_HASH");
@@ -1854,7 +1868,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
   }
 
   const localCopyOwners = new Map<string, string>(); let revisionCopyIds = new Set<string>();
-  const validateAffixEntry = (value: unknown, code: string, expectedItemPartId: string) => {
+  const validateAffixEntry = (value: unknown, code: string, expectedItemPartId: string): Record<string, unknown> => {
     const entry = v23Record(value, code);
     if (entry.kind === "STABLE_AFFIX_REF") {
       v23ExactKeys(entry, ["kind", "ref"], code);
@@ -1862,7 +1876,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
       const resolved = resolveAffixRef(ref);
       if (!resolved) throw new Error(`${code}_REF_UNRESOLVED`);
       if (resolved.payload.itemPartId !== expectedItemPartId) throw new Error(`${code}_ITEM_PART_MISMATCH`);
-      return;
+      return resolved.payload;
     }
     if (entry.kind === "LOCAL_AFFIX_COPY") {
       v23ExactKeys(entry, ["kind", "localCopyId", "sourceRef", "payload", "copyHash"], code);
@@ -1878,7 +1892,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
       const localPayload = validateV23ProjectAffixPayload(entry.payload, ref.id, ref.revision);
       if (resolved.payload.itemPartId !== expectedItemPartId || localPayload.itemPartId !== expectedItemPartId) throw new Error(`${code}_ITEM_PART_MISMATCH`);
       v23HashOf({ localCopyId: copyId, sourceRef: ref, payload: entry.payload }, entry.copyHash, `${code}_COPY_HASH`);
-      return;
+      return localPayload;
     }
     throw new Error(`${code}_KIND_INVALID`);
   };
@@ -1912,6 +1926,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
       v23ExactKeys(summary, ["code", "severity", "gate", "state", "message"], "V23_SKU_VALIDATION_ISSUE");
       v23String(summary.code, "V23_SKU_VALIDATION_CODE"); v23String(summary.message, "V23_SKU_VALIDATION_MESSAGE");
       if (!(["INFO", "WARNING", "ERROR", "BLOCKER"] as const).includes(summary.severity as never) || !(["NONE", "REVIEW", "PUBLISH", "EXPORT"] as const).includes(summary.gate as never) || !(["OPEN", "ACKNOWLEDGED", "RESOLVED", "WAIVED", "STALE"] as const).includes(summary.state as never)) throw new Error("V23_SKU_VALIDATION_ISSUE_INVALID");
+      if (summary.severity === "BLOCKER" && summary.state === "WAIVED") throw new Error("V23_SKU_VALIDATION_BLOCKER_WAIVED");
     }
     if (!(["draft", "approved", "published", "superseded"] as const).includes(entry.status as never)) throw new Error("V23_SKU_STATUS_INVALID");
     if (!["draft", "superseded"].includes(entry.status as string)) throw new Error("V23_SKU_LIFECYCLE_UNAVAILABLE");
@@ -1941,7 +1956,12 @@ function validateV23RuntimeState(state: MutableWorkspace) {
       v23ExactKeys(match, ["status"], "V23_SKU_MATCH");
     } else throw new Error("V23_SKU_MATCH_STATUS_INVALID");
     const removed = v23Array(entry.removedInheritedEntryIds, "V23_SKU_REMOVED_ENTRIES");
-    if (new Set(removed.map((id) => v23String(id, "V23_SKU_REMOVED_ENTRY_ID"))).size !== removed.length) throw new Error("V23_SKU_REMOVED_ENTRY_DUPLICATE");
+    const removedEntryIds = new Set(removed.map((id) => v23String(id, "V23_SKU_REMOVED_ENTRY_ID")));
+    if (removedEntryIds.size !== removed.length) throw new Error("V23_SKU_REMOVED_ENTRY_DUPLICATE");
+    const effectiveContributions = new Map<string, Set<string>>();
+    for (const [inheritedId, payload] of partDefaultPayloads.get(`${partId}\u0000${partRevision}`) ?? []) {
+      if (!removedEntryIds.has(inheritedId)) assertSemanticContribution(effectiveContributions, payload, "V23_SKU_INHERITED_ENTRY");
+    }
     const skuAddedEntryIds = new Set<string>();
     for (const refEntry of v23Array(entry.addedEntryRefs, "V23_SKU_ADDED_ENTRY_REFS")) {
       const stableEntry = v23Record(refEntry, "V23_SKU_ADDED_ENTRY_REF");
@@ -1949,12 +1969,12 @@ function validateV23RuntimeState(state: MutableWorkspace) {
       const ref = validateV23StableRef(stableEntry.ref, "V23_SKU_ADDED_ENTRY_REF_REF");
       if (skuAddedEntryIds.has(ref.id)) throw new Error("V23_SKU_ADDED_ENTRY_REF_ID_DUPLICATE");
       skuAddedEntryIds.add(ref.id);
-      validateAffixEntry(stableEntry, "V23_SKU_ADDED_ENTRY_REF", itemPartIdFor(part.partType)!);
+      assertSemanticContribution(effectiveContributions, validateAffixEntry(stableEntry, "V23_SKU_ADDED_ENTRY_REF", itemPartIdFor(part.partType)!), "V23_SKU_ADDED_ENTRY_REF");
     }
     for (const copy of v23Array(entry.localEntryCopies, "V23_SKU_LOCAL_COPIES")) {
       const copyEntry = v23Record(copy, "V23_SKU_LOCAL_COPY");
       if (copyEntry.kind !== "LOCAL_AFFIX_COPY") throw new Error("V23_SKU_LOCAL_COPY_KIND_INVALID");
-      validateAffixEntry(copyEntry, "V23_SKU_LOCAL_COPY", itemPartIdFor(part.partType)!);
+      assertSemanticContribution(effectiveContributions, validateAffixEntry(copyEntry, "V23_SKU_LOCAL_COPY", itemPartIdFor(part.partType)!), "V23_SKU_LOCAL_COPY");
     }
     for (const ref of v23Array(entry.technologyRefs, "V23_SKU_TECHNOLOGIES")) validateTechnologyRef(ref, "V23_SKU_TECHNOLOGY");
     const quality = v23Record(entry.quality, "V23_SKU_QUALITY");
@@ -2001,6 +2021,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
   }
 
   const adapterIds = new Set<string>();
+  const coveredLegacySources = new Map<string, Set<string>>();
   for (const value of adapters) {
     const entry = v23Record(value, "V23_LEGACY_ADAPTER");
     v23ExactKeys(entry, ["adapterId", "kind", "sourceEvidenceId", "targetSkuId", "sourceKind", "sourceRecordId", "rawSourcePayload", "sourceSeriesId", "rawSeriesPayload", "diagnosticCodes", "status"], "V23_LEGACY_ADAPTER");
@@ -2025,6 +2046,10 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     const sources = arrayOf<unknown>(evidencePayloads.get(sourceEvidenceId)?.[sourceCollection]).filter((candidate) => v23Record(candidate, "V23_LEGACY_SOURCE_SKU").id === sourceRecordId);
     const rawSource = v23Record(entry.rawSourcePayload, "V23_LEGACY_ADAPTER_RAW_SOURCE");
     if (sources.length !== 1 || jcsSha256Hex(sources[0]) !== jcsSha256Hex(rawSource)) throw new Error("V23_LEGACY_ADAPTER_SKU_CHAIN_INVALID");
+    const sourceIdentity = `${sourceKind}\u0000${sourceRecordId}`;
+    const covered = coveredLegacySources.get(sourceEvidenceId) ?? new Set<string>();
+    if (covered.has(sourceIdentity)) throw new Error("V23_LEGACY_ADAPTER_SOURCE_DUPLICATE");
+    covered.add(sourceIdentity); coveredLegacySources.set(sourceEvidenceId, covered);
     // Must exactly mirror legacy-product-migration.ts stableId("legacy-sku-drawer:", official.id).
     if ((sourceKind === "LEGACY_SKU_DRAWER" && targetSkuId !== sourceRecordId) || (sourceKind === "LEGACY_OFFICIAL_SKU" && targetSkuId !== `legacy-sku-drawer:${deterministicHash(sourceRecordId).slice(0, 12)}`)) throw new Error("V23_LEGACY_ADAPTER_TARGET_SKU_INVALID");
     if (entry.sourceSeriesId !== null) {
@@ -2032,6 +2057,19 @@ function validateV23RuntimeState(state: MutableWorkspace) {
       if (rawSeries.id !== entry.sourceSeriesId) throw new Error("V23_LEGACY_ADAPTER_SERIES_CHAIN_INVALID");
       const sources = arrayOf<unknown>(evidencePayloads.get(sourceEvidenceId)?.seriesDefinitions).filter((candidate) => v23Record(candidate, "V23_LEGACY_SOURCE_SERIES").id === entry.sourceSeriesId);
       if (sources.length !== 1 || jcsSha256Hex(sources[0]) !== jcsSha256Hex(rawSeries)) throw new Error("V23_LEGACY_ADAPTER_SERIES_CHAIN_INVALID");
+    }
+  }
+  for (const [evidenceId, raw] of evidencePayloads) {
+    const covered = coveredLegacySources.get(evidenceId) ?? new Set<string>();
+    for (const [collection, sourceKind] of [["skuDrawers", "LEGACY_SKU_DRAWER"], ["officialSkus", "LEGACY_OFFICIAL_SKU"]] as const) {
+      const sourceIds = new Set<string>();
+      for (const candidate of arrayOf<unknown>(raw[collection])) {
+        const source = v23Record(candidate, "V23_LEGACY_SOURCE_SKU");
+        if (typeof source.id !== "string" || source.id.length === 0) throw new Error("V23_LEGACY_ADAPTER_SOURCE_COVERAGE_INVALID");
+        if (sourceIds.has(source.id)) throw new Error("V23_LEGACY_ADAPTER_SOURCE_COVERAGE_INVALID");
+        sourceIds.add(source.id);
+        if (!covered.has(`${sourceKind}\u0000${source.id}`)) throw new Error("V23_LEGACY_ADAPTER_SOURCE_COVERAGE_INVALID");
+      }
     }
   }
 }
@@ -2056,7 +2094,7 @@ function migrateV22ToV23(input: MutableWorkspace, context: MigrationContext): Mu
   const evidence = existingEvidence.some((entry) => entry.sourceEvidenceId === sourceEvidenceId)
     ? existingEvidence
     : [...existingEvidence, sourceEvidence];
-  if (context.initialSchemaVersion === 22 && ["v23SeriesPartRevisions", "v23SeriesPartHeads", "v23SkuDrawerRevisions", "v23SkuDrawerHeads", "v23AffixDefinitions", "v23MigrationSourceEvidence", "v23LegacyReadAdapters"].some((key) => Object.prototype.hasOwnProperty.call(input, key))) {
+  if (context.initialSchemaVersion >= 1 && context.initialSchemaVersion <= 22 && ["v23SeriesPartRevisions", "v23SeriesPartHeads", "v23SkuDrawerRevisions", "v23SkuDrawerHeads", "v23AffixDefinitions", "v23MigrationSourceEvidence", "v23LegacyReadAdapters"].some((key) => Object.prototype.hasOwnProperty.call(context.originalInput, key))) {
     throw new Error("V23_MIGRATION_PARTIAL_STATE_CONFLICT");
   }
 

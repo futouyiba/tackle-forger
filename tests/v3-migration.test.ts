@@ -26,9 +26,15 @@ import { ensureWorkflowFields } from "../lib/workflow";
 import { createFormalFiveAxisVertexSet, createFormalFiveAxisViewDefinition } from "../lib/five-axis-formal";
 import { hashCandidateSemanticInput } from "../lib/five-axis-hash";
 
+const V23_RESERVED_ROOTS = ["v23SeriesPartRevisions", "v23SeriesPartHeads", "v23SkuDrawerRevisions", "v23SkuDrawerHeads", "v23AffixDefinitions", "v23MigrationSourceEvidence", "v23LegacyReadAdapters"] as const;
+function markLegacy(state: Record<string, unknown>, schemaVersion: number) {
+  state.schemaVersion = schemaVersion;
+  for (const key of V23_RESERVED_ROOTS) delete state[key];
+}
+
 function legacyV17ForPartConstraintMigration(): Record<string, unknown> {
   const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
-  legacy.schemaVersion = 17;
+  markLegacy(legacy, 17);
   legacy.partConstraintSets = [];
   legacy.migrationReviewItems = (
     legacy.migrationReviewItems as Array<{ id: string }>
@@ -51,7 +57,7 @@ test("legacy migration 不猜测 workspaceId，正式身份绑定留给存储/�
 
 test("v21 定价迁移保留旧执行 payload、未知字段与历史 Snapshot，重复执行无变化", () => {
   const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
-  legacy.schemaVersion = 20;
+  markLegacy(legacy, 20);
   legacy.pricingPolicyDrafts = [{
     id: "legacy-pricing", moneyPolicy: {
       roundingStage: "part_purchase_price", minimumPriceScope: "part_purchase_price", overflowMode: "clamp",
@@ -71,7 +77,7 @@ test("v21 定价迁移保留旧执行 payload、未知字段与历史 Snapshot�
 
 test("v21 迁移把缺 executionPolicy 的旧 PUBLISHED 策略封存为 LEGACY_PUBLISHED，规范策略保持不变", () => {
   const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
-  legacy.schemaVersion = 20;
+  markLegacy(legacy, 20);
   // 旧 PUBLISHED 版本仅有 moneyPolicy、没有 executionPolicy；v2 不能再发布它。
   const legacyVersion = {
     id: "pricing-policy:legacy-published",
@@ -133,7 +139,7 @@ test("v21 迁移把缺 executionPolicy 的旧 PUBLISHED 策略封存为 LEGACY_P
 
 test("v22 迁移初始化空 modelPricingEvaluations 且保留历史 Snapshot 不变", () => {
   const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
-  legacy.schemaVersion = 21;
+  markLegacy(legacy, 21);
   const snapshotsBefore = structuredClone(legacy.configurationSnapshots);
   const migrated = migrateWorkspaceState(legacy);
   assert.equal(migrated.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
@@ -146,7 +152,7 @@ test("v22 迁移初始化空 modelPricingEvaluations 且保留历史 Snapshot �
 
 test("v16 隔离旧独立偏移阈值、发布规范策略且不改写历史 Snapshot", () => {
   const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
-  legacy.schemaVersion = 15;
+  markLegacy(legacy, 15);
   const settings = legacy.ruleSettings as { patchOffsetLimits: { warning?: number; error?: number } };
   settings.patchOffsetLimits = { warning: 0.2, error: 0.4 };
   legacy.workspacePolicies = (legacy.workspacePolicies as Array<{ policyType: string }>)
@@ -177,7 +183,7 @@ test("v16 隔离旧独立偏移阈值、发布规范策略且不改写历史 Sna
 
 test("v14 将旧系列配方迁移为竿轮线约束且保留扁平字段", () => {
   const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
-  legacy.schemaVersion = 13;
+  markLegacy(legacy, 13);
   const recipes = legacy.recipes as Array<Record<string, unknown>>;
   const before = structuredClone(recipes[0]);
   delete recipes[0].partConstraints;
@@ -196,7 +202,7 @@ test("v14 将旧系列配方迁移为竿轮线约束且保留扁平字段", () =
 
 test("v15 保留旧五维定义并明确迁移为未发布修订", () => {
   const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
-  legacy.schemaVersion = 14;
+  markLegacy(legacy, 14);
   delete legacy.fiveAxisDispositionCatalogRevisions;
   delete legacy.currentFiveAxisDispositionCatalogRevisionId;
   legacy.fiveAxisViewDefinitions = [{
@@ -393,7 +399,7 @@ test("schema v18 对复核项 ID 碰撞、错误 resolved 状态与重复记录 
 
 test("schema v18 为已有 NEEDS_REVIEW ref 幂等补齐 pending 复核项", () => {
   const partial = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
-  partial.schemaVersion = 17;
+  markLegacy(partial, 17);
   partial.migrationReviewItems = (
     partial.migrationReviewItems as Array<{ id: string }>
   ).filter((item) => !item.id.startsWith("part-constraint-set:"));
@@ -541,7 +547,7 @@ test("schema v18 对既有 hash 一致约束集的 migrationEvidence 完整校�
 
   for (const entry of cases) {
     const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
-    legacy.schemaVersion = 17;
+    markLegacy(legacy, 17);
     const constraintSet = (legacy.partConstraintSets as Array<Record<string, unknown>>)[0]!;
     constraintSet.reviewStatus = entry.status;
     const parts = constraintSet.parts as Record<string, Record<string, unknown>>;
@@ -571,7 +577,7 @@ test("schema v18 对既有 hash 一致约束集的 migrationEvidence 完整校�
 
 test("schema v18 允许 migrationEvidence.rawPayload 为 null，只要求字段存在", () => {
   const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
-  legacy.schemaVersion = 17;
+  markLegacy(legacy, 17);
   const series = (legacy.seriesDefinitions as Array<Record<string, unknown>>)[0]!;
   const sourceRef = {
     sourceType: "series_definition" as const,
@@ -642,7 +648,7 @@ test("PartConstraintSet 稳定 ref 对缺失、重复、篡改或 hash 不符均
 
 test("schema v18 拒绝把已有 PartConstraintSet ref 复用于另一位 Series 或 Recipe 消费者", () => {
   const crossRecipe = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
-  crossRecipe.schemaVersion = 17;
+  markLegacy(crossRecipe, 17);
   const recipes = crossRecipe.candidateSearchRecipes as Array<Record<string, unknown>>;
   const sourceRecipe = recipes[0]!;
   recipes.push({
@@ -655,7 +661,7 @@ test("schema v18 拒绝把已有 PartConstraintSet ref 复用于另一位 Series
   );
 
   const crossSeries = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
-  crossSeries.schemaVersion = 17;
+  markLegacy(crossSeries, 17);
   const series = (crossSeries.seriesDefinitions as Array<Record<string, unknown>>)[0]!;
   const recipe = (crossSeries.candidateSearchRecipes as Array<Record<string, unknown>>)[0]!;
   series.partConstraintSetRef = structuredClone(recipe.partConstraintSetRef);
@@ -720,7 +726,7 @@ test("schema v18 拒绝字段容器或 set/part/trace 状态枚举非法的 v17 
 
   for (const entry of cases) {
     const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
-    legacy.schemaVersion = 17;
+    markLegacy(legacy, 17);
     const constraintSet = (
       legacy.partConstraintSets as Array<Record<string, unknown>>
     )[0];
@@ -919,7 +925,7 @@ test("新 PartConstraintSet revision 拒绝非法当前身份或 revision", () =
 
 test("D-02 OfficialSku 无损迁移为抽屉、默认 Model 与冻结快照", () => {
   const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
-  legacy.schemaVersion = 2;
+  markLegacy(legacy, 2);
   legacy.collections = [];
   legacy.seriesDefinitions = [];
   legacy.partConstraintSets = [];
@@ -998,7 +1004,7 @@ test("D-02 OfficialSku 无损迁移为抽屉、默认 Model 与冻结快照", ()
 
 test("schema v17 迁移仅适配活动对象的历史拉力字段，冻结快照保持逐字节不变", () => {
   const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
-  legacy.schemaVersion = 16;
+  markLegacy(legacy, 16);
   const sku = (legacy.skuDrawers as Array<Record<string, unknown>>)[0];
   const match = sku.projectionMatch as Record<string, unknown>;
   sku.targetWeightKg = sku.targetPullKg;
@@ -1024,7 +1030,7 @@ test("schema v17 迁移仅适配活动对象的历史拉力字段，冻结快照
 
 test("schema v17 迁移拒绝矛盾的目标拉力，绝不静默择一", () => {
   const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
-  legacy.schemaVersion = 16;
+  markLegacy(legacy, 16);
   const sku = (legacy.skuDrawers as Array<Record<string, unknown>>)[0];
   sku.targetWeightKg = Number(sku.targetPullKg) + 0.1;
   assert.throws(() => migrateWorkspaceState(legacy), /TARGET_PULL_MIGRATION_CONFLICT.*SKU/);
@@ -1032,7 +1038,7 @@ test("schema v17 迁移拒绝矛盾的目标拉力，绝不静默择一", () => 
 
 test("schema v17 归一化归档仅在 SKU 内嵌的历史 ProjectionMatch 字段", () => {
   const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
-  legacy.schemaVersion = 17;
+  markLegacy(legacy, 17);
   const sku = (legacy.skuDrawers as Array<Record<string, unknown>>)[0];
   const match = sku.projectionMatch as Record<string, unknown>;
   match.targetWeightKg = match.targetPullKg;
@@ -1115,7 +1121,7 @@ test("脱敏生产 schema v17 形态可直接读取，未知字段与已发布 S
 
 test("schema v18 补齐 AI 草稿、永久来源同步与 PerformanceSummary 定义注册表", () => {
   const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
-  legacy.schemaVersion = 17;
+  markLegacy(legacy, 17);
   delete legacy.aiRuleSourceChangeDrafts;
   delete legacy.aiArtifactProvenanceSyncRecords;
   delete legacy.performanceSummaryDefinitions;
@@ -1152,7 +1158,7 @@ test("已标记 schema v18 的分支形态会互补缺失集合且保持 Snapsho
 
 test("schema v18 升级到最新时补齐重量模板草稿与分享链接历史且不改写冻结 Snapshot", () => {
   const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
-  legacy.schemaVersion = 18;
+  markLegacy(legacy, 18);
   delete legacy.weightTemplatePolicyDrafts;
   const snapshotsBefore = structuredClone(legacy.configurationSnapshots);
   const migrated = migrateWorkspaceState(legacy);
@@ -1165,7 +1171,7 @@ test("schema v18 升级到最新时补齐重量模板草稿与分享链接历史
 
 test("旧正式五维状态只从 published Model 的当前 Snapshot 指针确定性 bootstrap，倒序与二次迁移不变", () => {
   const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
-  legacy.schemaVersion = 3;
+  markLegacy(legacy, 3);
   const definition = createFormalFiveAxisViewDefinition();
   const model = (legacy.purchasableModels as Array<Record<string, unknown>>)[0]!;
   const modelRevision = Number(model.revision);

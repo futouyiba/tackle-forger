@@ -1725,7 +1725,72 @@ function v23SkuInput(entry: Record<string, unknown>) {
 
 const V23_QUALITY_IDS = new Set(["quality_c_green", "quality_b_blue", "quality_a_purple", "quality_s_orange"]);
 
-function validateV23ProjectAffixPayload(value: unknown, affixId: string, revision: number) {
+function isKnownOfficialSkuMigratedDrawer(drawer: Record<string, unknown>, official: Record<string, unknown>, raw: Record<string, unknown>) {
+  const officialId = typeof official.id === "string" ? official.id : "";
+  const asRecord = (value: unknown) => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  const drawerMatch = asRecord(drawer.projectionMatch);
+  const drawerRuleSetVersion = drawerMatch?.ruleSetVersion;
+  const defaultModelId = drawer.defaultModelId;
+  const rawModels = arrayOf<Record<string, unknown>>(raw.purchasableModels).filter((entry) => entry.id === defaultModelId);
+  const frozenSnapshotId = rawModels.length === 1 ? rawModels[0]!.configurationSnapshotId : null;
+  const frozenSnapshots = arrayOf<Record<string, unknown>>(raw.configurationSnapshots).filter((entry) => entry.id === frozenSnapshotId);
+  const snapshotRuleSetVersion = frozenSnapshots.length === 1 ? frozenSnapshots[0]!.ruleSetVersion : null;
+  if (
+    !officialId
+    || typeof drawerRuleSetVersion !== "string" || !drawerRuleSetVersion
+    || drawerRuleSetVersion !== snapshotRuleSetVersion
+  ) return false;
+  const replayRuleSets = arrayOf<Record<string, unknown>>(raw.ruleSetVersions)
+    .filter((entry) => entry.id === drawerRuleSetVersion);
+  // 历史产物只能按其冻结时的已发布规则版本重建；后续草稿或发布版本的
+  // 插入顺序不具语义，不能改变本次重放的输入。
+  if (replayRuleSets.length !== 1 || replayRuleSets[0]!.status !== "published") return false;
+  const ruleSetVersion = drawerRuleSetVersion;
+  const rebuilt = migrateLegacyProductIdentity({
+    ...raw,
+    collections: [], seriesDefinitions: [], skuDrawers: [], purchasableModels: [],
+    configurationSnapshots: [], governanceAuditLog: [],
+  } as Partial<WorkspaceState>, ruleSetVersion);
+  // 历史 JSON 持久化不会保留 optional 字段的 undefined；重建对象中这些
+  // TypeScript 层的 undefined 不能被误当成语义差异。两侧先还原为可存储的
+  // JSON 值，再以 JCS 作完整、确定性的对象比较。
+  const canonicalJsonHash = (value: unknown) => {
+    const serialized = JSON.stringify(value);
+    if (typeof serialized !== "string") return null;
+    try {
+      return jcsSha256Hex(JSON.parse(serialized));
+    } catch {
+      return null;
+    }
+  };
+  const exactlyEqual = (left: unknown, right: unknown) => {
+    const leftHash = canonicalJsonHash(left);
+    const rightHash = canonicalJsonHash(right);
+    return leftHash !== null && leftHash === rightHash;
+  };
+  const exactOne = (entries: unknown[], predicate: (entry: Record<string, unknown>) => boolean, candidate: unknown) => {
+    const matches = entries.filter((entry) => predicate(entry as Record<string, unknown>));
+    return matches.length === 1 && exactlyEqual(matches[0], candidate);
+  };
+  const expectedDrawer = rebuilt.skuDrawers.filter((entry) => entry.id === drawer.id);
+  if (expectedDrawer.length !== 1 || !exactlyEqual(expectedDrawer[0], drawer)) return false;
+  const modelId = expectedDrawer[0]!.defaultModelId;
+  if (typeof modelId !== "string") return false;
+  const expectedModel = rebuilt.purchasableModels.filter((entry) => entry.id === modelId);
+  const rawModel = arrayOf<Record<string, unknown>>(raw.purchasableModels);
+  if (expectedModel.length !== 1 || !exactOne(rawModel, (entry) => entry.id === modelId, expectedModel[0])) return false;
+  const snapshotId = expectedModel[0]!.configurationSnapshotId;
+  if (typeof snapshotId !== "string") return false;
+  const expectedSnapshot = rebuilt.configurationSnapshots.filter((entry) => entry.id === snapshotId);
+  const rawSnapshots = arrayOf<Record<string, unknown>>(raw.configurationSnapshots);
+  if (expectedSnapshot.length !== 1 || !exactOne(rawSnapshots, (entry) => entry.id === snapshotId, expectedSnapshot[0])) return false;
+  const expectedAudit = rebuilt.governanceAuditLog.filter((entry) => entry.action === "publish_snapshot" && entry.entityId === snapshotId);
+  if (expectedAudit.length !== 1 || !exactOne(arrayOf<Record<string, unknown>>(raw.governanceAuditLog), (entry) => entry.id === expectedAudit[0]!.id, expectedAudit[0])) return false;
+  const expectedSeries = rebuilt.seriesDefinitions.filter((entry) => entry.id === expectedDrawer[0]!.seriesId);
+  return expectedSeries.length === 1 && exactOne(arrayOf<Record<string, unknown>>(raw.seriesDefinitions), (entry) => entry.id === expectedSeries[0]!.id, expectedSeries[0]);
+}
+
+function validateV23ProjectAffixPayload(value: unknown, affixId: string, revision: number, publishedRuleSetIds: Map<string, number>) {
   const payload = v23Record(value, "V23_AFFIX_PAYLOAD");
   const common = ["name", "category", "itemPartId", "semanticContributionKey", "stackingPolicy", "generationPolicy", "rarity", "valueScore", "tags", "description", "enabled", "operations", "passivePayload"];
   v23ExactKeys(payload, common, "V23_AFFIX_PAYLOAD");
@@ -1736,7 +1801,7 @@ function validateV23ProjectAffixPayload(value: unknown, affixId: string, revisio
   for (const value of operations) {
     const operation = v23Record(value, "V23_AFFIX_OPERATION");
     const kind = v23String(operation.operation, "V23_AFFIX_OPERATION_KIND");
-    const keys = kind === "set" || kind === "enum_add" ? ["operationId", "operationIndex", "sourceAffixId", "sourceAffixRevision", "parameterKey", "operation", "value"] : kind === "clamp_add" ? ["operationId", "operationIndex", "sourceAffixId", "sourceAffixRevision", "parameterKey", "operation", "direction", "magnitude", "clampMin", "clampMax"] : ["operationId", "operationIndex", "sourceAffixId", "sourceAffixRevision", "parameterKey", "operation", "direction", "magnitude"];
+    const keys = kind === "set" || kind === "enum_add" ? ["operationId", "operationIndex", "sourceAffixId", "sourceAffixRevision", "parameterKey", "operation", "value"] : kind === "clamp_add" ? ["operationId", "operationIndex", "sourceAffixId", "sourceAffixRevision", "parameterKey", "operation", "direction", "magnitude", "clampMin", "clampMax", "publishedMagnitudeRange"] : ["operationId", "operationIndex", "sourceAffixId", "sourceAffixRevision", "parameterKey", "operation", "direction", "magnitude", "publishedMagnitudeRange"];
     v23ExactKeys(operation, keys, "V23_AFFIX_OPERATION");
     const id = v23String(operation.operationId, "V23_AFFIX_OPERATION_ID"); const index = operation.operationIndex;
     if (ids.has(id) || indexes.has(index as number) || !Number.isSafeInteger(index) || (index as number) < 0 || operation.sourceAffixId !== affixId || operation.sourceAffixRevision !== revision || !["percent_adjust", "flat_adjust", "clamp_add", "enum_add", "set"].includes(kind) || typeof operation.parameterKey !== "string" || !operation.parameterKey) throw new Error("V23_AFFIX_OPERATION_INVALID");
@@ -1744,6 +1809,13 @@ function validateV23ProjectAffixPayload(value: unknown, affixId: string, revisio
     if ((kind === "set" && (!(["string", "number", "boolean"] as const).includes(typeof operation.value as never) || (typeof operation.value === "number" && !Number.isFinite(operation.value)))) || (kind === "enum_add" && (typeof operation.value !== "string" || !operation.value))) throw new Error("V23_AFFIX_OPERATION_VALUE_INVALID");
     const magnitude = operation.magnitude as number; const clampMin = operation.clampMin as number; const clampMax = operation.clampMax as number;
     if (["percent_adjust", "flat_adjust", "clamp_add"].includes(kind) && (!( ["increase", "decrease"] as const).includes(operation.direction as never) || !Number.isFinite(magnitude) || magnitude < 0 || (kind === "clamp_add" && (!Number.isFinite(clampMin) || !Number.isFinite(clampMax) || clampMin > clampMax)))) throw new Error("V23_AFFIX_OPERATION_BOUNDS_INVALID");
+    if (["percent_adjust", "flat_adjust", "clamp_add"].includes(kind)) {
+      const range = v23Record(operation.publishedMagnitudeRange, "V23_AFFIX_OPERATION_RANGE");
+      v23ExactKeys(range, ["min", "max", "ruleSetVersion"], "V23_AFFIX_OPERATION_RANGE");
+      const ruleSetVersion = v23String(range.ruleSetVersion, "V23_AFFIX_OPERATION_RANGE_RULESET");
+      const min = range.min as number; const max = range.max as number;
+      if (!Number.isFinite(min) || !Number.isFinite(max) || min < 0 || max < min || magnitude < min || magnitude > max || publishedRuleSetIds.get(ruleSetVersion) !== 1) throw new Error("V23_AFFIX_OPERATION_RANGE_INVALID");
+    }
   }
   if (payload.category === "attribute" && (payload.passivePayload !== null || operations.length === 0)) throw new Error("V23_AFFIX_CATEGORY_PAYLOAD_MISMATCH");
   if (payload.category === "passive") { if (operations.length !== 0) throw new Error("V23_AFFIX_CATEGORY_PAYLOAD_MISMATCH"); const passive = v23Record(payload.passivePayload, "V23_AFFIX_PASSIVE"); v23ExactKeys(passive, ["skillId", "name", "itemPartId", "triggerType", "triggerDescription", "effectTarget", "effectLogicDescription", "exampleParameters", "durationDescription", "cooldownDescription", "resetDescription", "stackingDescription", "playerDescription", "simulatorReferenceKey"], "V23_AFFIX_PASSIVE"); for (const key of ["skillId","name","itemPartId","triggerType","triggerDescription","effectTarget","effectLogicDescription","durationDescription","cooldownDescription","resetDescription","stackingDescription","playerDescription"]) v23String(passive[key], "V23_AFFIX_PASSIVE_FIELD"); const parameters = v23Record(passive.exampleParameters, "V23_AFFIX_PASSIVE_PARAMETERS"); if (Object.values(parameters).some((item) => !(["string", "boolean", "number"] as const).includes(typeof item as never) || (typeof item === "number" && !Number.isFinite(item)))) throw new Error("V23_AFFIX_PASSIVE_PARAMETERS_INVALID"); if (passive.itemPartId !== payload.itemPartId || !(passive.simulatorReferenceKey === null || (typeof passive.simulatorReferenceKey === "string" && passive.simulatorReferenceKey.length > 0))) throw new Error("V23_AFFIX_PASSIVE_INVALID"); }
@@ -1758,6 +1830,10 @@ function validateV23RuntimeState(state: MutableWorkspace) {
   const affixes = v23Array(state.v23AffixDefinitions, "V23_AFFIX_DEFINITIONS");
   const evidence = v23Array(state.v23MigrationSourceEvidence, "V23_SOURCE_EVIDENCE");
   const adapters = v23Array(state.v23LegacyReadAdapters, "V23_LEGACY_ADAPTERS");
+  const publishedRuleSetIds = new Map<string, number>();
+  for (const ruleSet of arrayOf<RuleSetVersion>(state.ruleSetVersions)) {
+    if (ruleSet.status === "published") publishedRuleSetIds.set(ruleSet.id, (publishedRuleSetIds.get(ruleSet.id) ?? 0) + 1);
+  }
   const seriesIds = new Set<string>();
   for (const value of arrayOf<unknown>(state.seriesDefinitions)) {
     const series = v23Record(value, "V23_SERIES");
@@ -1773,7 +1849,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     v23ExactKeys(entry, ["affixId", "revision", "contentHash", "payload"], "V23_AFFIX_DEFINITION");
     const id = v23String(entry.affixId, "V23_AFFIX_ID");
     const revision = v23Revision(entry.revision, "V23_AFFIX_REVISION");
-    const payload = validateV23ProjectAffixPayload(entry.payload, id, revision);
+    const payload = validateV23ProjectAffixPayload(entry.payload, id, revision, publishedRuleSetIds);
     const hash = v23HashOf({ affixId: id, revision, payload: entry.payload }, entry.contentHash, "V23_AFFIX_CONTENT_HASH");
     const revisions = affixRefs.get(id) ?? new Map<number, { contentHash: string; payload: Record<string, unknown> }>();
     if (revisions.has(revision)) throw new Error("V23_AFFIX_ID_REVISION_DUPLICATE");
@@ -1889,7 +1965,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
       const ref = validateV23StableRef(entry.sourceRef, `${code}_SOURCE_REF`);
       const resolved = resolveAffixRef(ref);
       if (!resolved) throw new Error(`${code}_SOURCE_REF_UNRESOLVED`);
-      const localPayload = validateV23ProjectAffixPayload(entry.payload, ref.id, ref.revision);
+      const localPayload = validateV23ProjectAffixPayload(entry.payload, ref.id, ref.revision, publishedRuleSetIds);
       if (resolved.payload.itemPartId !== expectedItemPartId || localPayload.itemPartId !== expectedItemPartId) throw new Error(`${code}_ITEM_PART_MISMATCH`);
       v23HashOf({ localCopyId: copyId, sourceRef: ref, payload: entry.payload }, entry.copyHash, `${code}_COPY_HASH`);
       return localPayload;
@@ -2025,7 +2101,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
   const coveredLegacySources = new Map<string, Set<string>>();
   for (const value of adapters) {
     const entry = v23Record(value, "V23_LEGACY_ADAPTER");
-    v23ExactKeys(entry, ["adapterId", "kind", "sourceEvidenceId", "targetSkuId", "sourceKind", "sourceRecordId", "rawSourcePayload", "sourceSeriesId", "rawSeriesPayload", "diagnosticCodes", "status"], "V23_LEGACY_ADAPTER");
+    v23ExactKeys(entry, ["adapterId", "kind", "sourceEvidenceId", "targetSkuId", "sourceKind", "sourceRecordId", "rawSourcePayload", "sourceSeriesId", "rawSeriesPayload", "lineage", "diagnosticCodes", "status"], "V23_LEGACY_ADAPTER");
     const id = v23String(entry.adapterId, "V23_LEGACY_ADAPTER_ID");
     if (adapterIds.has(id)) throw new Error("V23_LEGACY_ADAPTER_ID_DUPLICATE");
     adapterIds.add(id);
@@ -2036,6 +2112,10 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     const targetSkuId = v23String(entry.targetSkuId, "V23_LEGACY_ADAPTER_TARGET_SKU_ID");
     const sourceKind = v23String(entry.sourceKind, "V23_LEGACY_ADAPTER_SOURCE_KIND");
     const sourceRecordId = v23String(entry.sourceRecordId, "V23_LEGACY_ADAPTER_SOURCE_RECORD_ID");
+    const lineage = v23Record(entry.lineage, "V23_LEGACY_ADAPTER_LINEAGE");
+    if (lineage.kind === "SINGLE_SOURCE") v23ExactKeys(lineage, ["kind"], "V23_LEGACY_ADAPTER_LINEAGE");
+    else if (lineage.kind === "OFFICIAL_SKU_MIGRATED_DRAWER") v23ExactKeys(lineage, ["kind", "officialSourceRecordId", "officialRawSourcePayload", "officialRawSourcePayloadHash", "drawerRawSourcePayloadHash"], "V23_LEGACY_ADAPTER_LINEAGE");
+    else throw new Error("V23_LEGACY_ADAPTER_LINEAGE_INVALID");
     const diagnostics = v23Array(entry.diagnosticCodes, "V23_LEGACY_ADAPTER_DIAGNOSTICS");
     if (!diagnostics.length || new Set(diagnostics).size !== diagnostics.length) throw new Error("V23_LEGACY_ADAPTER_DIAGNOSTICS_INVALID");
     const allowed = new Set(["V23_SERIES_UNRESOLVED", "V23_PART_UNRESOLVED", "V23_WEIGHT_BAND_UNRESOLVED", "V23_FUNCTION_TEMPLATE_UNRESOLVED"]);
@@ -2051,6 +2131,14 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     const covered = coveredLegacySources.get(sourceEvidenceId) ?? new Set<string>();
     if (covered.has(sourceIdentity)) throw new Error("V23_LEGACY_ADAPTER_SOURCE_DUPLICATE");
     covered.add(sourceIdentity); coveredLegacySources.set(sourceEvidenceId, covered);
+    if (lineage.kind === "OFFICIAL_SKU_MIGRATED_DRAWER") {
+      if (sourceKind !== "LEGACY_SKU_DRAWER" || typeof lineage.officialSourceRecordId !== "string" || jcsSha256Hex(rawSource) !== lineage.drawerRawSourcePayloadHash || jcsSha256Hex(lineage.officialRawSourcePayload) !== lineage.officialRawSourcePayloadHash) throw new Error("V23_LEGACY_ADAPTER_LINEAGE_INVALID");
+      const officialSources = arrayOf<unknown>(evidencePayloads.get(sourceEvidenceId)?.officialSkus).filter((candidate) => v23Record(candidate, "V23_LEGACY_SOURCE_OFFICIAL").id === lineage.officialSourceRecordId);
+      if (officialSources.length !== 1 || jcsSha256Hex(officialSources[0]) !== lineage.officialRawSourcePayloadHash || !isKnownOfficialSkuMigratedDrawer(rawSource, v23Record(lineage.officialRawSourcePayload, "V23_LEGACY_ADAPTER_LINEAGE_OFFICIAL"), evidencePayloads.get(sourceEvidenceId)!)) throw new Error("V23_LEGACY_ADAPTER_LINEAGE_INVALID");
+      const officialIdentity = `LEGACY_OFFICIAL_SKU\u0000${lineage.officialSourceRecordId}`;
+      if (covered.has(officialIdentity)) throw new Error("V23_LEGACY_ADAPTER_SOURCE_DUPLICATE");
+      covered.add(officialIdentity); coveredLegacySources.set(sourceEvidenceId, covered);
+    }
     // Must exactly mirror legacy-product-migration.ts stableId("legacy-sku-drawer:", official.id).
     if ((sourceKind === "LEGACY_SKU_DRAWER" && targetSkuId !== sourceRecordId) || (sourceKind === "LEGACY_OFFICIAL_SKU" && targetSkuId !== `legacy-sku-drawer:${deterministicHash(sourceRecordId).slice(0, 12)}`)) throw new Error("V23_LEGACY_ADAPTER_TARGET_SKU_INVALID");
     if (adapterTargetSkuIds.has(targetSkuId)) throw new Error("V23_LEGACY_ADAPTER_TARGET_SKU_DUPLICATE");
@@ -2106,7 +2194,13 @@ function migrateV22ToV23(input: MutableWorkspace, context: MigrationContext): Mu
   const originalOfficialSkus = arrayOf<Record<string, unknown>>((context.originalInput as Record<string, unknown>).officialSkus);
   const originalSeries = arrayOf<Record<string, unknown>>((context.originalInput as Record<string, unknown>).seriesDefinitions);
   const originalSkuById = new Map(originalSkus.filter((entry) => typeof entry.id === "string" && entry.id.length > 0).map((entry) => [entry.id as string, entry]));
-  const originalOfficialSkuByDrawerId = new Map(originalOfficialSkus.filter((entry) => typeof entry.id === "string" && entry.id.length > 0).map((entry) => [`legacy-sku-drawer:${deterministicHash(entry.id as string).slice(0, 12)}`, entry]));
+  const originalOfficialSkuByDrawerId = new Map<string, Record<string, unknown>[]>();
+  for (const official of originalOfficialSkus) {
+    if (typeof official.id !== "string" || official.id.length === 0) continue;
+    const target = `legacy-sku-drawer:${deterministicHash(official.id).slice(0, 12)}`;
+    const entries = originalOfficialSkuByDrawerId.get(target) ?? [];
+    entries.push(official); originalOfficialSkuByDrawerId.set(target, entries);
+  }
   const originalSeriesById = new Map(originalSeries.filter((entry) => typeof entry.id === "string" && entry.id.length > 0).map((entry) => [entry.id as string, entry]));
   const seriesById = new Map<string, Record<string, unknown>>();
   for (const entry of series) {
@@ -2126,8 +2220,10 @@ function migrateV22ToV23(input: MutableWorkspace, context: MigrationContext): Mu
   for (const legacySku of arrayOf<Record<string, unknown>>(input.skuDrawers)) {
     const targetSkuId = requiredLegacyId(legacySku.id, "SKU");
     const drawerSource = originalSkuById.get(targetSkuId);
-    const officialSource = originalOfficialSkuByDrawerId.get(targetSkuId);
-    if ((drawerSource ? 1 : 0) + (officialSource ? 1 : 0) !== 1) throw new Error("V23_MIGRATION_SKU_SOURCE_UNRESOLVED");
+    const officialSources = originalOfficialSkuByDrawerId.get(targetSkuId) ?? [];
+    if (officialSources.length > 1) throw new Error("V23_MIGRATION_SKU_SOURCE_UNRESOLVED");
+    const officialSource = officialSources[0];
+    if ((drawerSource ? 1 : 0) + (officialSource ? 1 : 0) !== 1 && !(drawerSource && officialSource && isKnownOfficialSkuMigratedDrawer(drawerSource, officialSource, context.originalInput as Record<string, unknown>))) throw new Error("V23_MIGRATION_SKU_SOURCE_UNRESOLVED");
     const sourceKind = drawerSource ? "LEGACY_SKU_DRAWER" as const : "LEGACY_OFFICIAL_SKU" as const;
     const sourceRecord = drawerSource ?? officialSource!;
     const sourceRecordId = requiredLegacyId(sourceRecord.id, "SOURCE_SKU");
@@ -2152,6 +2248,7 @@ function migrateV22ToV23(input: MutableWorkspace, context: MigrationContext): Mu
       rawSeriesPayload: sourceSeriesId
         ? structuredClone(originalSeriesById.get(sourceSeriesId))
         : null,
+      lineage: drawerSource && officialSource ? { kind: "OFFICIAL_SKU_MIGRATED_DRAWER", officialSourceRecordId: requiredLegacyId(officialSource.id, "OFFICIAL_SOURCE_SKU"), officialRawSourcePayload: structuredClone(officialSource), officialRawSourcePayloadHash: jcsSha256Hex(officialSource), drawerRawSourcePayloadHash: jcsSha256Hex(drawerSource) } : { kind: "SINGLE_SOURCE" },
       diagnosticCodes: [
         ...(sourceSeriesId ? [] : ["V23_SERIES_UNRESOLVED" as const]),
         "V23_PART_UNRESOLVED",

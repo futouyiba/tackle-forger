@@ -1173,8 +1173,8 @@ export interface SeriesPartHeadRef { seriesId: string; partId: string; revision:
 export interface V23SkuDrawerHeadRef { skuId: string; revision: number; }
 
 export type V23ProjectAttributeOperation =
-  | { operationId: string; operationIndex: number; sourceAffixId: string; sourceAffixRevision: number; parameterKey: string; operation: "percent_adjust" | "flat_adjust"; direction: "increase" | "decrease"; magnitude: number }
-  | { operationId: string; operationIndex: number; sourceAffixId: string; sourceAffixRevision: number; parameterKey: string; operation: "clamp_add"; direction: "increase" | "decrease"; magnitude: number; clampMin: number; clampMax: number }
+  | { operationId: string; operationIndex: number; sourceAffixId: string; sourceAffixRevision: number; parameterKey: string; operation: "percent_adjust" | "flat_adjust"; direction: "increase" | "decrease"; magnitude: number; publishedMagnitudeRange: { min: number; max: number; ruleSetVersion: string } }
+  | { operationId: string; operationIndex: number; sourceAffixId: string; sourceAffixRevision: number; parameterKey: string; operation: "clamp_add"; direction: "increase" | "decrease"; magnitude: number; clampMin: number; clampMax: number; publishedMagnitudeRange: { min: number; max: number; ruleSetVersion: string } }
   | { operationId: string; operationIndex: number; sourceAffixId: string; sourceAffixRevision: number; parameterKey: string; operation: "enum_add"; value: string }
   | { operationId: string; operationIndex: number; sourceAffixId: string; sourceAffixRevision: number; parameterKey: string; operation: "set"; value: number | string | boolean };
 
@@ -1301,6 +1301,7 @@ export interface V23LegacyReadAdapter {
   rawSourcePayload: unknown;
   sourceSeriesId: string | null;
   rawSeriesPayload: unknown;
+  lineage: { kind: "SINGLE_SOURCE" } | { kind: "OFFICIAL_SKU_MIGRATED_DRAWER"; officialSourceRecordId: string; officialRawSourcePayload: unknown; officialRawSourcePayloadHash: string; drawerRawSourcePayloadHash: string };
   diagnosticCodes: Array<
     | "V23_SERIES_UNRESOLVED"
     | "V23_PART_UNRESOLVED"

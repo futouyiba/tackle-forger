@@ -5,6 +5,7 @@ import { verifySnapshotIntegrity } from "../lib/publishing";
 import { deterministicHash } from "../lib/rule-kernel";
 import { jcsSha256Hex } from "../lib/canonical-json";
 import { createSeedState } from "../lib/seed";
+import { migrateLegacyProductIdentity } from "../lib/legacy-product-migration";
 import type {
   SeriesPartRevision,
   SkuDrawerRevision,
@@ -40,7 +41,7 @@ const withSkuHashes = <T extends object>(sku: T) => {
 };
 const sixKey = (weightBandId = "band:one"): { partType: "rod"; weightBandId: string; fishingMethodId: string; materialTypeId: string; functionProfileId: string; functionIntensity: 1 | 2 | 3 } => ({ partType: "rod", weightBandId, fishingMethodId: "method:lure", materialTypeId: "material:carbon", functionProfileId: "function:cast", functionIntensity: 2 });
 const validMatch = (key = sixKey()) => ({ status: "VALID" as const, functionTemplateRef: { templateId: "template:one", revisionId: "r1", contentHash: hash("template") }, matchedKey: key, inputFingerprint: hash(key) });
-const affixPayload = (id = "affix:project", revision = 1) => ({ name: "Project", category: "attribute" as const, itemPartId: "part:rod", semanticContributionKey: "power", stackingPolicy: "dedupe" as const, generationPolicy: "normal" as const, rarity: "common" as const, valueScore: 1, tags: [], description: "project", enabled: true, operations: [{ operationId: "op:one", operationIndex: 0, sourceAffixId: id, sourceAffixRevision: revision, parameterKey: "power", operation: "flat_adjust" as const, direction: "increase" as const, magnitude: 1 }], passivePayload: null });
+const affixPayload = (id = "affix:project", revision = 1) => ({ name: "Project", category: "attribute" as const, itemPartId: "part:rod", semanticContributionKey: "power", stackingPolicy: "dedupe" as const, generationPolicy: "normal" as const, rarity: "common" as const, valueScore: 1, tags: [], description: "project", enabled: true, operations: [{ operationId: "op:one", operationIndex: 0, sourceAffixId: id, sourceAffixRevision: revision, parameterKey: "power", operation: "flat_adjust" as const, direction: "increase" as const, magnitude: 1, publishedMagnitudeRange: { min: 0, max: 1, ruleSetVersion: "ruleset-v3-migrated-1" } }], passivePayload: null });
 
 function directV23State(partCount = 1) {
   const state = migrateWorkspaceState(legacyInput(22));
@@ -292,7 +293,7 @@ test("schema v23 rejects duplicate identities and malformed adapter/source-evide
   const danglingAdapter = directV23State();
   danglingAdapter.v23LegacyReadAdapters = [{
     adapterId: "adapter:one", kind: "LEGACY_NEEDS_REVIEW", sourceEvidenceId: "source:missing", targetSkuId: "legacy:sku", sourceKind: "LEGACY_SKU_DRAWER", sourceRecordId: "legacy:sku", rawSourcePayload: { id: "legacy:sku" }, sourceSeriesId: null,
-    rawSeriesPayload: null, diagnosticCodes: ["V23_PART_UNRESOLVED"], status: "NEEDS_REVIEW",
+    rawSeriesPayload: null, lineage: { kind: "SINGLE_SOURCE" }, diagnosticCodes: ["V23_PART_UNRESOLVED"], status: "NEEDS_REVIEW",
   }];
   assert.throws(() => migrateWorkspaceState(danglingAdapter), /V23_LEGACY_ADAPTER_EVIDENCE_UNRESOLVED/);
 });
@@ -406,7 +407,7 @@ test("v23 closes quality, technology, source-evidence, and adapter chains", () =
   const evidence = directV23State();
   const raw = { schemaVersion: 22, original: true, skuDrawers: [{ id: "legacy:sku" }], seriesDefinitions: [] };
   evidence.v23MigrationSourceEvidence = [{ sourceEvidenceId: "source:one", sourceSchemaVersion: 22, rawWorkspacePayload: raw, rawWorkspacePayloadHash: deterministicHash(raw) }];
-  evidence.v23LegacyReadAdapters = [{ adapterId: "adapter:one", kind: "LEGACY_NEEDS_REVIEW", sourceEvidenceId: "source:one", targetSkuId: "legacy:sku", sourceKind: "LEGACY_SKU_DRAWER", sourceRecordId: "legacy:sku", rawSourcePayload: { id: "legacy:sku" }, sourceSeriesId: null, rawSeriesPayload: null, diagnosticCodes: ["V23_SERIES_UNRESOLVED", "V23_PART_UNRESOLVED"], status: "NEEDS_REVIEW" }];
+  evidence.v23LegacyReadAdapters = [{ adapterId: "adapter:one", kind: "LEGACY_NEEDS_REVIEW", sourceEvidenceId: "source:one", targetSkuId: "legacy:sku", sourceKind: "LEGACY_SKU_DRAWER", sourceRecordId: "legacy:sku", rawSourcePayload: { id: "legacy:sku" }, sourceSeriesId: null, rawSeriesPayload: null, lineage: { kind: "SINGLE_SOURCE" }, diagnosticCodes: ["V23_SERIES_UNRESOLVED", "V23_PART_UNRESOLVED"], status: "NEEDS_REVIEW" }];
   assert.deepEqual(migrateWorkspaceState(evidence).v23LegacyReadAdapters, evidence.v23LegacyReadAdapters);
   const rawTamper = structuredClone(evidence); rawTamper.v23LegacyReadAdapters[0]!.rawSourcePayload = { id: "legacy:sku", tampered: true };
   assert.throws(() => migrateWorkspaceState(rawTamper), /V23_LEGACY_ADAPTER_SKU_CHAIN_INVALID/);
@@ -612,7 +613,7 @@ test("every legacy start rejects preloaded v23 roots and retained SKU evidence n
   const incomplete = directV23State();
   const raw = { schemaVersion: 22, skuDrawers: [{ id: "legacy:one" }, { id: "legacy:two" }], officialSkus: [], seriesDefinitions: [] };
   incomplete.v23MigrationSourceEvidence = [{ sourceEvidenceId: "source:coverage", sourceSchemaVersion: 22, rawWorkspacePayload: raw, rawWorkspacePayloadHash: deterministicHash(raw) }];
-  incomplete.v23LegacyReadAdapters = [{ adapterId: "adapter:one", kind: "LEGACY_NEEDS_REVIEW", sourceEvidenceId: "source:coverage", targetSkuId: "legacy:one", sourceKind: "LEGACY_SKU_DRAWER", sourceRecordId: "legacy:one", rawSourcePayload: raw.skuDrawers[0]!, sourceSeriesId: null, rawSeriesPayload: null, diagnosticCodes: ["V23_SERIES_UNRESOLVED"], status: "NEEDS_REVIEW" }];
+  incomplete.v23LegacyReadAdapters = [{ adapterId: "adapter:one", kind: "LEGACY_NEEDS_REVIEW", sourceEvidenceId: "source:coverage", targetSkuId: "legacy:one", sourceKind: "LEGACY_SKU_DRAWER", sourceRecordId: "legacy:one", rawSourcePayload: raw.skuDrawers[0]!, sourceSeriesId: null, rawSeriesPayload: null, lineage: { kind: "SINGLE_SOURCE" }, diagnosticCodes: ["V23_SERIES_UNRESOLVED"], status: "NEEDS_REVIEW" }];
   assert.throws(() => migrateWorkspaceState(incomplete), /V23_LEGACY_ADAPTER_SOURCE_COVERAGE_INVALID/);
 
   const complete = directV23State();
@@ -625,7 +626,7 @@ test("every legacy start rejects preloaded v23 roots and retained SKU evidence n
   const adapter = (adapterId: string, sourceEvidenceId: string, sourceKind: "LEGACY_SKU_DRAWER" | "LEGACY_OFFICIAL_SKU", source: { id: string }) => ({
     adapterId, kind: "LEGACY_NEEDS_REVIEW" as const, sourceEvidenceId,
     targetSkuId: sourceKind === "LEGACY_SKU_DRAWER" ? source.id : `legacy-sku-drawer:${deterministicHash(source.id).slice(0, 12)}`,
-    sourceKind, sourceRecordId: source.id, rawSourcePayload: source, sourceSeriesId: null, rawSeriesPayload: null,
+    sourceKind, sourceRecordId: source.id, rawSourcePayload: source, sourceSeriesId: null, rawSeriesPayload: null, lineage: { kind: "SINGLE_SOURCE" as const },
     diagnosticCodes: ["V23_SERIES_UNRESOLVED"] as V23LegacyReadAdapter["diagnosticCodes"], status: "NEEDS_REVIEW" as const,
   });
   complete.v23LegacyReadAdapters = [
@@ -657,6 +658,104 @@ test("every legacy start rejects preloaded v23 roots and retained SKU evidence n
   crossEvidenceCollision.v23LegacyReadAdapters[0]!.sourceEvidenceId = "source:drawer";
   crossEvidenceCollision.v23LegacyReadAdapters[1]!.sourceEvidenceId = "source:official";
   assert.throws(() => migrateWorkspaceState(crossEvidenceCollision), /V23_LEGACY_ADAPTER_TARGET_SKU_DUPLICATE/);
+
+  const dualOfficial = { id: "official:lineage", candidateId: "candidate:lineage", comboId: "combo", platformId: "platform", platformPosition: "position", templateId: "template", seriesName: "series", qualityId: "A", fishMinKg: 1, fishMaxKg: 2, structureName: "structure", functionName: "function", functionLevel: "2", performanceName: "performance", performanceLevel: "standard", affixIds: [], tone: "tone", hardness: "hard", lengthM: 2, useScene: "scene", rodId: "rod", reelId: "reel", lineId: "line", priceIndex: 1, rodForce: 1, reelForce: 1, lineForce: 1, safeWorkingForce: 1, values: { power: 1 }, overrides: {}, notes: "", publishedAt: "2025-01-01T00:00:00.000Z" };
+  const dualBase = { ...structuredClone(createSeedState()), officialSkus: [dualOfficial], collections: [], seriesDefinitions: [], skuDrawers: [], purchasableModels: [], configurationSnapshots: [], governanceAuditLog: [], candidates: [], templates: [], detailOverrides: [], v3Affixes: [], technologies: [], projectionPatches: [] };
+  const dualRebuilt = migrateLegacyProductIdentity(dualBase, dualBase.ruleSetVersions[0]!.id);
+  const dualRaw = JSON.parse(JSON.stringify({ ...dualBase, ...dualRebuilt, schemaVersion: 22, officialSkus: [dualOfficial] })) as Record<string, unknown>;
+  const dualDrawer = (dualRaw.skuDrawers as Array<Record<string, unknown>>)[0]!;
+  const dualTarget = dualDrawer.id as string;
+  const dual = directV23State();
+  dual.v23MigrationSourceEvidence = [{ sourceEvidenceId: "source:dual", sourceSchemaVersion: 22, rawWorkspacePayload: dualRaw, rawWorkspacePayloadHash: deterministicHash(dualRaw) }];
+  dual.v23LegacyReadAdapters = [{ adapterId: "adapter:dual", kind: "LEGACY_NEEDS_REVIEW", sourceEvidenceId: "source:dual", targetSkuId: dualTarget, sourceKind: "LEGACY_SKU_DRAWER", sourceRecordId: dualTarget, rawSourcePayload: dualDrawer, sourceSeriesId: null, rawSeriesPayload: null, lineage: { kind: "OFFICIAL_SKU_MIGRATED_DRAWER", officialSourceRecordId: dualOfficial.id, officialRawSourcePayload: dualOfficial, officialRawSourcePayloadHash: hash(dualOfficial), drawerRawSourcePayloadHash: hash(dualDrawer) }, diagnosticCodes: ["V23_SERIES_UNRESOLVED"], status: "NEEDS_REVIEW" }];
+  const dualBefore = structuredClone(dual);
+  const dualMigrated = migrateWorkspaceState(dual);
+  assert.deepEqual(dual, dualBefore, "v23 read/validation must not mutate the retained dual-source evidence");
+  assert.deepEqual(migrateWorkspaceState(dualMigrated), dualMigrated, "a validated v23 dual lineage is idempotent");
+  const syncDualEvidence = (state: ReturnType<typeof directV23State>) => {
+    const evidence = state.v23MigrationSourceEvidence[0]!;
+    const rawPayload = evidence.rawWorkspacePayload as Record<string, unknown>;
+    const adapter = state.v23LegacyReadAdapters[0]!;
+    const sourceDrawer = (rawPayload.skuDrawers as Array<Record<string, unknown>>).find((entry) => entry.id === adapter.sourceRecordId)!;
+    const lineage = adapter.lineage as Exclude<V23LegacyReadAdapter["lineage"], { kind: "SINGLE_SOURCE" }>;
+    const sourceOfficial = (rawPayload.officialSkus as Array<Record<string, unknown>>).find((entry) => entry.id === lineage.officialSourceRecordId)!;
+    adapter.rawSourcePayload = sourceDrawer;
+    adapter.lineage = { ...lineage, officialRawSourcePayload: sourceOfficial, officialRawSourcePayloadHash: hash(sourceOfficial), drawerRawSourcePayloadHash: hash(sourceDrawer) };
+    evidence.rawWorkspacePayloadHash = deterministicHash(rawPayload);
+  };
+  const laterRuleSets = structuredClone(dual);
+  const laterRaw = laterRuleSets.v23MigrationSourceEvidence[0]!.rawWorkspacePayload as Record<string, unknown>;
+  const originalRuleSet = (laterRaw.ruleSetVersions as Array<Record<string, unknown>>)[0]!;
+  (laterRaw.ruleSetVersions as Array<Record<string, unknown>>).unshift(
+    { ...structuredClone(originalRuleSet), id: "ruleset:later-published", version: 99, status: "published" },
+    { ...structuredClone(originalRuleSet), id: "ruleset:later-draft", version: 100, status: "draft" },
+  );
+  syncDualEvidence(laterRuleSets);
+  assert.doesNotThrow(() => migrateWorkspaceState(laterRuleSets), "later draft/published insertion must not change the frozen replay version");
+  const inconsistentRuleSet = structuredClone(dual);
+  const inconsistentRaw = inconsistentRuleSet.v23MigrationSourceEvidence[0]!.rawWorkspacePayload as Record<string, unknown>;
+  ((inconsistentRaw.skuDrawers as Array<Record<string, unknown>>)[0]!.projectionMatch as Record<string, unknown>).ruleSetVersion = "ruleset:inconsistent";
+  syncDualEvidence(inconsistentRuleSet);
+  assert.throws(() => migrateWorkspaceState(inconsistentRuleSet), /V23_LEGACY_ADAPTER_LINEAGE_INVALID/);
+  const missingSnapshotVersion = structuredClone(dual);
+  delete ((missingSnapshotVersion.v23MigrationSourceEvidence[0]!.rawWorkspacePayload as Record<string, unknown>).configurationSnapshots as Array<Record<string, unknown>>)[0]!.ruleSetVersion;
+  syncDualEvidence(missingSnapshotVersion);
+  assert.throws(() => migrateWorkspaceState(missingSnapshotVersion), /V23_LEGACY_ADAPTER_LINEAGE_INVALID/);
+  const duplicateReplayVersion = structuredClone(dual);
+  const duplicateRaw = duplicateReplayVersion.v23MigrationSourceEvidence[0]!.rawWorkspacePayload as Record<string, unknown>;
+  (duplicateRaw.ruleSetVersions as Array<Record<string, unknown>>).push(structuredClone((duplicateRaw.ruleSetVersions as Array<Record<string, unknown>>)[0]!));
+  syncDualEvidence(duplicateReplayVersion);
+  assert.throws(() => migrateWorkspaceState(duplicateReplayVersion), /V23_LEGACY_ADAPTER_LINEAGE_INVALID/);
+  const laterVersionForgery = structuredClone(dual);
+  const laterForgeryRaw = laterVersionForgery.v23MigrationSourceEvidence[0]!.rawWorkspacePayload as Record<string, unknown>;
+  (laterForgeryRaw.ruleSetVersions as Array<Record<string, unknown>>).unshift({ ...structuredClone((laterForgeryRaw.ruleSetVersions as Array<Record<string, unknown>>)[0]!), id: "ruleset:later", version: 99, status: "published" });
+  ((laterForgeryRaw.skuDrawers as Array<Record<string, unknown>>)[0]!.projectionMatch as Record<string, unknown>).ruleSetVersion = "ruleset:later";
+  (laterForgeryRaw.configurationSnapshots as Array<Record<string, unknown>>)[0]!.ruleSetVersion = "ruleset:later";
+  syncDualEvidence(laterVersionForgery);
+  assert.throws(() => migrateWorkspaceState(laterVersionForgery), /V23_LEGACY_ADAPTER_LINEAGE_INVALID/, "selecting a later version without rebuilding every frozen artifact is self-inconsistent");
+  for (const [label, mutate] of [
+    ["drawer", (rawPayload: Record<string, unknown>) => { ((rawPayload.skuDrawers as Array<Record<string, unknown>>)[0]!.targetPullKg as number) += 1; }],
+    ["model", (rawPayload: Record<string, unknown>) => { ((rawPayload.purchasableModels as Array<Record<string, unknown>>)[0]!.price as number) += 1; }],
+    ["snapshot", (rawPayload: Record<string, unknown>) => { ((rawPayload.configurationSnapshots as Array<Record<string, unknown>>)[0]!.finalPanelValues as Record<string, unknown>).power = 2; }],
+    ["audit", (rawPayload: Record<string, unknown>) => { ((rawPayload.governanceAuditLog as Array<Record<string, unknown>>)[0]!.details as Record<string, unknown>).summary = "forged audit"; }],
+    ["series", (rawPayload: Record<string, unknown>) => { (rawPayload.seriesDefinitions as Array<Record<string, unknown>>)[0]!.concept = "forged series"; }],
+  ] as const) {
+    const forged = structuredClone(dual);
+    mutate(forged.v23MigrationSourceEvidence[0]!.rawWorkspacePayload as Record<string, unknown>);
+    syncDualEvidence(forged);
+    assert.throws(() => migrateWorkspaceState(forged), /V23_LEGACY_ADAPTER_LINEAGE_INVALID/, `${label} must be compared as a complete reconstructed artifact`);
+  }
+  for (const [label, key] of [["missing", "purchasableModels"], ["duplicate", "configurationSnapshots"]] as const) {
+    const forged = structuredClone(dual);
+    const rawPayload = forged.v23MigrationSourceEvidence[0]!.rawWorkspacePayload as Record<string, unknown>;
+    const entries = rawPayload[key] as Array<Record<string, unknown>>;
+    if (label === "missing") entries.splice(0, 1); else entries.push(structuredClone(entries[0]!));
+    syncDualEvidence(forged);
+    assert.throws(() => migrateWorkspaceState(forged), /V23_LEGACY_ADAPTER_LINEAGE_INVALID/, `${label} reconstructed output must fail closed`);
+  }
+  const wrongRuleSet = structuredClone(dual);
+  ((wrongRuleSet.v23MigrationSourceEvidence[0]!.rawWorkspacePayload as Record<string, unknown>).ruleSetVersions as Array<Record<string, unknown>>)[0]!.id = "ruleset:wrong";
+  syncDualEvidence(wrongRuleSet);
+  assert.throws(() => migrateWorkspaceState(wrongRuleSet), /V23_LEGACY_ADAPTER_LINEAGE_INVALID/);
+  const frozenHash = structuredClone(dual);
+  ((frozenHash.v23MigrationSourceEvidence[0]!.rawWorkspacePayload as Record<string, unknown>).configurationSnapshots as Array<Record<string, unknown>>)[0]!.contentHash = "f".repeat(64);
+  syncDualEvidence(frozenHash);
+  assert.throws(() => migrateWorkspaceState(frozenHash), /V23_LEGACY_ADAPTER_LINEAGE_INVALID/);
+  const crossEvidence = structuredClone(dual);
+  const crossRaw = crossEvidence.v23MigrationSourceEvidence[0]!.rawWorkspacePayload as Record<string, unknown>;
+  const officialOnly = { ...crossRaw, skuDrawers: [], purchasableModels: [], configurationSnapshots: [], governanceAuditLog: [], seriesDefinitions: [], officialSkus: structuredClone(crossRaw.officialSkus) };
+  crossRaw.officialSkus = [];
+  const crossAdapter = crossEvidence.v23LegacyReadAdapters[0]!;
+  const crossDrawer = (crossRaw.skuDrawers as Array<Record<string, unknown>>)[0]!;
+  const crossLineage = crossAdapter.lineage as Exclude<V23LegacyReadAdapter["lineage"], { kind: "SINGLE_SOURCE" }>;
+  crossAdapter.rawSourcePayload = crossDrawer;
+  crossAdapter.lineage = { ...crossLineage, drawerRawSourcePayloadHash: hash(crossDrawer) };
+  crossEvidence.v23MigrationSourceEvidence[0]!.rawWorkspacePayloadHash = deterministicHash(crossRaw);
+  crossEvidence.v23MigrationSourceEvidence.push({ sourceEvidenceId: "source:dual-official", sourceSchemaVersion: 22, rawWorkspacePayload: officialOnly, rawWorkspacePayloadHash: deterministicHash(officialOnly) });
+  assert.throws(() => migrateWorkspaceState(crossEvidence), /V23_LEGACY_ADAPTER_LINEAGE_INVALID/);
+  const forgedDual = structuredClone(dual);
+  forgedDual.v23LegacyReadAdapters[0]!.lineage = { ...forgedDual.v23LegacyReadAdapters[0]!.lineage as Exclude<V23LegacyReadAdapter["lineage"], { kind: "SINGLE_SOURCE" }>, drawerRawSourcePayloadHash: hash({ forged: true }) };
+  assert.throws(() => migrateWorkspaceState(forgedDual), /V23_LEGACY_ADAPTER_LINEAGE_INVALID/);
 });
 
 test("v23 executes semantic contribution dedupe only where Phase A defines each entry set", () => {
@@ -725,4 +824,110 @@ test("v23 executes semantic contribution dedupe only where Phase A defines each 
   ];
   allowedSummary.v23SkuDrawerRevisions[0] = withSkuHashes(allowedSummary.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
   assert.doesNotThrow(() => migrateWorkspaceState(allowedSummary));
+});
+
+test("v23 numeric affix carriers freeze published magnitude ranges and RuleSet evidence (mapper replay N/A)", () => {
+  const rehash = (state: ReturnType<typeof directV23State>) => {
+    const definition = state.v23AffixDefinitions[0]!;
+    definition.contentHash = hash({ affixId: definition.affixId, revision: definition.revision, payload: definition.payload });
+    state.v23SkuDrawerRevisions[0]!.addedEntryRefs[0]!.ref.contentHash = definition.contentHash;
+    state.v23SkuDrawerRevisions[0] = withSkuHashes(state.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  };
+  const missing = directV23State();
+  delete (missing.v23AffixDefinitions[0]!.payload.operations[0] as unknown as Record<string, unknown>).publishedMagnitudeRange;
+  rehash(missing);
+  assert.throws(() => migrateWorkspaceState(missing), /V23_AFFIX_OPERATION_SCHEMA_INVALID/);
+
+  const unknown = directV23State();
+  ((unknown.v23AffixDefinitions[0]!.payload.operations[0] as unknown as { publishedMagnitudeRange: { ruleSetVersion: string } }).publishedMagnitudeRange).ruleSetVersion = "ruleset:missing";
+  rehash(unknown);
+  assert.throws(() => migrateWorkspaceState(unknown), /V23_AFFIX_OPERATION_RANGE_INVALID/);
+
+  const draft = directV23State();
+  ((draft.v23AffixDefinitions[0]!.payload.operations[0] as unknown as { publishedMagnitudeRange: { ruleSetVersion: string } }).publishedMagnitudeRange).ruleSetVersion = "ruleset-v3-upgrade-candidate";
+  rehash(draft);
+  assert.throws(() => migrateWorkspaceState(draft), /V23_AFFIX_OPERATION_RANGE_INVALID/);
+
+  const endpoints = directV23State();
+  const range = (endpoints.v23AffixDefinitions[0]!.payload.operations[0] as unknown as { publishedMagnitudeRange: { min: number; max: number } }).publishedMagnitudeRange;
+  range.min = 1; range.max = 1;
+  rehash(endpoints);
+  assert.doesNotThrow(() => migrateWorkspaceState(endpoints));
+
+  for (const operation of ["percent_adjust", "flat_adjust", "clamp_add"] as const) {
+    const valid = directV23State();
+    valid.v23AffixDefinitions[0]!.payload.operations = [{
+      operationId: `op:${operation}`, operationIndex: 0, sourceAffixId: "affix:project", sourceAffixRevision: 1,
+      parameterKey: "power", operation, direction: "increase", magnitude: 1,
+      ...(operation === "clamp_add" ? { clampMin: 0, clampMax: 2 } : {}),
+      publishedMagnitudeRange: { min: 0, max: 1, ruleSetVersion: "ruleset-v3-migrated-1" },
+    } as never];
+    rehash(valid);
+    assert.doesNotThrow(() => migrateWorkspaceState(valid), `${operation} must carry an accepted frozen published range`);
+  }
+
+  for (const [label, mutate] of [
+    ["negative-min", (range: { min: number; max: number }) => { range.min = -1; }],
+    ["inverted", (range: { min: number; max: number }) => { range.max = -1; }],
+    ["outside", (range: { min: number; max: number }, operation: { magnitude: number }) => { operation.magnitude = 2; }],
+  ] as const) {
+    const invalid = directV23State();
+    const operation = invalid.v23AffixDefinitions[0]!.payload.operations[0] as unknown as { magnitude: number; publishedMagnitudeRange: { min: number; max: number } };
+    mutate(operation.publishedMagnitudeRange, operation);
+    rehash(invalid);
+    assert.throws(() => migrateWorkspaceState(invalid), /V23_AFFIX_OPERATION_RANGE_INVALID/, label);
+  }
+  for (const value of [Number.NaN, Number.POSITIVE_INFINITY]) {
+    const invalid = directV23State();
+    (invalid.v23AffixDefinitions[0]!.payload.operations[0] as unknown as { publishedMagnitudeRange: { min: number } }).publishedMagnitudeRange.min = value;
+    assert.throws(() => migrateWorkspaceState(invalid), /V23_AFFIX_OPERATION_RANGE_INVALID/, "non-finite numeric carrier is rejected before it can be accepted as published evidence");
+  }
+  for (const status of ["draft", "superseded"] as const) {
+    const invalid = directV23State();
+    invalid.ruleSetVersions[0]!.status = status;
+    rehash(invalid);
+    assert.throws(() => migrateWorkspaceState(invalid), /V23_AFFIX_OPERATION_RANGE_INVALID/, `${status} RuleSetVersion is not acceptable evidence`);
+  }
+  const duplicatePublished = directV23State();
+  duplicatePublished.ruleSetVersions.push({ ...structuredClone(duplicatePublished.ruleSetVersions[0]!), status: "published" });
+  rehash(duplicatePublished);
+  assert.throws(() => migrateWorkspaceState(duplicatePublished), /V23_AFFIX_OPERATION_RANGE_INVALID/);
+
+  const setRange = directV23State();
+  setRange.v23AffixDefinitions[0]!.payload.operations = [{ operationId: "set", operationIndex: 0, sourceAffixId: "affix:project", sourceAffixRevision: 1, parameterKey: "power", operation: "set", value: 1, publishedMagnitudeRange: { min: 0, max: 1, ruleSetVersion: "ruleset-v3-migrated-1" } } as never];
+  rehash(setRange);
+  assert.throws(() => migrateWorkspaceState(setRange), /V23_AFFIX_OPERATION_SCHEMA_INVALID/);
+  const enumRange = directV23State();
+  enumRange.v23AffixDefinitions[0]!.payload.operations = [{ operationId: "enum", operationIndex: 0, sourceAffixId: "affix:project", sourceAffixRevision: 1, parameterKey: "power", operation: "enum_add", value: "x", publishedMagnitudeRange: { min: 0, max: 1, ruleSetVersion: "ruleset-v3-migrated-1" } } as never];
+  rehash(enumRange);
+  assert.throws(() => migrateWorkspaceState(enumRange), /V23_AFFIX_OPERATION_SCHEMA_INVALID/);
+
+  const definitionHash = directV23State();
+  definitionHash.v23AffixDefinitions[0]!.payload.operations[0] = { ...definitionHash.v23AffixDefinitions[0]!.payload.operations[0]!, publishedMagnitudeRange: { min: 0, max: 1, ruleSetVersion: "ruleset-v3-migrated-1" }, magnitude: 0 } as never;
+  assert.throws(() => migrateWorkspaceState(definitionHash), /V23_AFFIX_CONTENT_HASH_MISMATCH/);
+  const versionReplacement = directV23State();
+  versionReplacement.ruleSetVersions.push({ ...structuredClone(versionReplacement.ruleSetVersions[0]!), id: "ruleset:published-replacement", version: 99, status: "published" });
+  ((versionReplacement.v23AffixDefinitions[0]!.payload.operations[0] as unknown as { publishedMagnitudeRange: { ruleSetVersion: string } }).publishedMagnitudeRange).ruleSetVersion = "ruleset:published-replacement";
+  assert.throws(() => migrateWorkspaceState(versionReplacement), /V23_AFFIX_CONTENT_HASH_MISMATCH/, "changing the published evidence without its frozen definition hash is rejected");
+
+  const localCopy = directV23State();
+  const definition = localCopy.v23AffixDefinitions[0]!;
+  const sourceRef = { id: definition.affixId, revision: definition.revision, contentHash: definition.contentHash };
+  const copyPayload = structuredClone(definition.payload);
+  const copy = { kind: "LOCAL_AFFIX_COPY" as const, localCopyId: "copy:range", sourceRef, payload: copyPayload, copyHash: hash({ localCopyId: "copy:range", sourceRef, payload: copyPayload }) };
+  localCopy.v23SkuDrawerRevisions[0]!.addedEntryRefs = [];
+  localCopy.v23SkuDrawerRevisions[0]!.localEntryCopies = [copy];
+  localCopy.v23SkuDrawerRevisions[0] = withSkuHashes(localCopy.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.doesNotThrow(() => migrateWorkspaceState(localCopy));
+  const localRange = structuredClone(localCopy);
+  const rangeOperation = localRange.v23SkuDrawerRevisions[0]!.localEntryCopies[0]!.payload.operations[0] as unknown as { publishedMagnitudeRange: { ruleSetVersion: string } };
+  rangeOperation.publishedMagnitudeRange.ruleSetVersion = "ruleset:missing";
+  const changedCopy = localRange.v23SkuDrawerRevisions[0]!.localEntryCopies[0]!;
+  changedCopy.copyHash = hash({ localCopyId: changedCopy.localCopyId, sourceRef: changedCopy.sourceRef, payload: changedCopy.payload });
+  localRange.v23SkuDrawerRevisions[0] = withSkuHashes(localRange.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.throws(() => migrateWorkspaceState(localRange), /V23_AFFIX_OPERATION_RANGE_INVALID/);
+  const copyHash = structuredClone(localCopy);
+  copyHash.v23SkuDrawerRevisions[0]!.localEntryCopies[0]!.copyHash = "0".repeat(64);
+  copyHash.v23SkuDrawerRevisions[0] = withSkuHashes(copyHash.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.throws(() => migrateWorkspaceState(copyHash), /V23_SKU_LOCAL_COPY_COPY_HASH_MISMATCH/);
 });

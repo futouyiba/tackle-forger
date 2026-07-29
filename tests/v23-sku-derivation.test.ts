@@ -22,7 +22,8 @@ test("v23 rejects every canonical ModelPatch operation only for the owning struc
 });
 
 test("formal decrease requires the published OPEN-001 policy version", () => {
-  const decrease = structuredClone(payload) as V23ProjectAffixPayload; decrease.operations[0]!.direction = "decrease";
+  const decrease = structuredClone(payload) as V23ProjectAffixPayload;
+  (decrease.operations[0]! as Extract<typeof decrease.operations[number], { direction: "increase" | "decrease" }>).direction = "decrease";
   const entries = [{ ref, payload: decrease }];
   assert.deepEqual(deriveV23SkuPull(5, entries, { formal: true }).status, "INVALID");
   assert.equal(deriveV23SkuPull(5, entries, { formal: true, publishedReductionPolicyVersion: "policy:1" }).status, "VALID");

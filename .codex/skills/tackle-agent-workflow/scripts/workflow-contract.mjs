@@ -42,7 +42,7 @@ const V3_INDEX_SECTION = 'V3_INDEX';
 const FULL_V3_SECTION = 'FULL_V3';
 const NAVIGATION_DOMAINS = { export: ['20', '25'], patch: ['8', '14', '18.3', '20'], snapshot: ['13', '14', '18.2', '24.11'] };
 const NAVIGATION_INVARIANTS = [
-  { id: 'nearest-derived-template-no-interpolation', sourceSections: ['5.2'] },
+  { id: 'v23-six-key-04-5-unique-match-and-derived-pull', sourceSections: ['5.1', '5.2', '5.4'] },
   { id: 'method-and-type-are-separate-rule-layers', sourceSections: ['3.1'] },
   { id: 'published-snapshots-are-immutable', sourceSections: ['0.1', '14'] },
 ];

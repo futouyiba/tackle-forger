@@ -129,7 +129,7 @@ function brief(root, overrides = {}) {
 }
 function taskBase(root) {
   const sourceRoot = path.resolve(process.cwd());
-  write(root, 'docs/tackle-forger-development-spec-v3.md', '# V3\n\n## 0. Authority\n\n### 0.1 Immutable\n\n## 1. Scope\n\n### 3.1 Method and type\n\n### 5.2 Derived template\n\n## 8. Patch\n\n## 13. Snapshot\n\n## 14. Version\n\n### 18.2 Snapshot\n\n### 18.3 Patch\n\n## 19. Delivery\n\n## 20. Open\n\n### 24.11 Snapshot\n\n## 25. Export\n\n| ID | Type | Status |\n| --- | --- | --- |\n| OPEN-001 Test | x | `OPEN` |\n');
+  write(root, 'docs/tackle-forger-development-spec-v3.md', '# V3\n\n## 0. Authority\n\n### 0.1 Immutable\n\n## 1. Scope\n\n### 3.1 Method and type\n\n### 5.1 Exact 04.5 match\n\n### 5.2 Weight band and SKU preview\n\n### 5.4 Historical compatibility\n\n## 8. Patch\n\n## 13. Snapshot\n\n## 14. Version\n\n### 18.2 Snapshot\n\n### 18.3 Patch\n\n## 19. Delivery\n\n## 20. Open\n\n### 24.11 Snapshot\n\n## 25. Export\n\n| ID | Type | Status |\n| --- | --- | --- |\n| OPEN-001 Test | x | `OPEN` |\n');
   write(root, 'docs/README.md', '# Documentation\n');
   write(root, 'scripts/spec-v3-modules.mjs', "process.stdout.write('legacy fixture has no split modules\\n');\n");
   for (const relative of [POLICY_RELATIVE, ...POLICY_CONSUMERS]) write(root, relative, readFileSync(path.join(sourceRoot, relative), 'utf8'));
@@ -766,7 +766,7 @@ test('patch manifest rejects traversal and symlinks', async (t) => {
 test('navigation index is generated deterministically and detects drift', () => {
   const root = temporaryRepo();
   try {
-    write(root, 'docs/tackle-forger-development-spec-v3.md', '# Title\n\n## 0. Authority\n\n### 0.1 Immutable\n\n### 3.1 Method and type\n\n### 5.2 Derived template\n\n## 8. Patch\n\n## 13. Snapshot\n\n## 14. Version\n\n### 18.2 Snapshot tests\n\n### 18.3 Patch tests\n\n## 20. Registry\n\n### 24.11 Snapshot detail\n\n## 25. Export\n\n| ID | Type | Status |\n| --- | --- | --- |\n| OPEN-001 Test | x | `OPEN` |\n');
+    write(root, 'docs/tackle-forger-development-spec-v3.md', '# Title\n\n## 0. Authority\n\n### 0.1 Immutable\n\n### 3.1 Method and type\n\n### 5.1 Exact 04.5 match\n\n### 5.2 Weight band and SKU preview\n\n### 5.4 Historical compatibility\n\n## 8. Patch\n\n## 13. Snapshot\n\n## 14. Version\n\n### 18.2 Snapshot tests\n\n### 18.3 Patch tests\n\n## 20. Registry\n\n### 24.11 Snapshot detail\n\n## 25. Export\n\n| ID | Type | Status |\n| --- | --- | --- |\n| OPEN-001 Test | x | `OPEN` |\n');
     writeNavigationIndex(root);
     assert.equal(checkNavigationIndex(root), true);
     write(root, 'docs/tackle-forger-development-spec-v3.md', '# Title changed\n');
@@ -887,7 +887,7 @@ test('CI returns a Draft transition through its PR candidate concurrency group',
 test('spec-read receipts enforce full/scoped plans and canonical v3 hash', () => {
   const root = temporaryRepo();
   try {
-    write(root, 'docs/tackle-forger-development-spec-v3.md', '# V3\n\n## 0. Authority\n\n### 0.1 Immutable\n\n### 3.1 Method and type\n\n### 5.2 Derived template\n\n## 8. Patch\n\n## 13. Snapshot\n\n## 14. Version\n\n### 18.2 Snapshot\n\n### 18.3 Patch\n\n## 19. Risks\n\n## 20. Open\n\n## 21. Relevant\n\n### 24.11 Snapshot\n\n## 25. Export\n');
+    write(root, 'docs/tackle-forger-development-spec-v3.md', '# V3\n\n## 0. Authority\n\n### 0.1 Immutable\n\n### 3.1 Method and type\n\n### 5.1 Exact 04.5 match\n\n### 5.2 Weight band and SKU preview\n\n### 5.4 Historical compatibility\n\n## 8. Patch\n\n## 13. Snapshot\n\n## 14. Version\n\n### 18.2 Snapshot\n\n### 18.3 Patch\n\n## 19. Risks\n\n## 20. Open\n\n## 21. Relevant\n\n### 24.11 Snapshot\n\n## 25. Export\n');
     write(root, POLICY_RELATIVE, readFileSync(path.join(process.cwd(), POLICY_RELATIVE), 'utf8'));
     const full = receipt(root);
     assert.equal(checkReadReceipt({ root, receipt: full }).receiptHash, receiptHash(full));
@@ -1433,8 +1433,8 @@ test('adversarial navigation and TaskBrief evidence fail closed', () => {
     const spec = readFileSync(path.join(root, 'docs/tackle-forger-development-spec-v3.md'), 'utf8');
     write(root, 'docs/tackle-forger-development-spec-v3.md', `${spec}\n\`\`\`md\n## 999. Fake heading\n\`\`\`\n## 14. Duplicate version\n`);
     assert.throws(() => buildNavigationIndex(root), /Duplicate v3 section identifier/);
-    write(root, 'docs/tackle-forger-development-spec-v3.md', spec.replace('### 5.2 Derived template\n\n', ''));
-    assert.throws(() => buildNavigationIndex(root), /Invariant nearest-derived-template-no-interpolation/);
+    write(root, 'docs/tackle-forger-development-spec-v3.md', spec.replace('### 5.2 Weight band and SKU preview\n\n', ''));
+    assert.throws(() => buildNavigationIndex(root), /Invariant v23-six-key-04-5-unique-match-and-derived-pull/);
   } finally { cleanup(root); }
 });
 

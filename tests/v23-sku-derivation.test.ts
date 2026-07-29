@@ -54,8 +54,8 @@ test("ratio failure evidence binds each rounded binary64 boundary", () => {
   const ratio = structuredClone(payload) as V23ProjectAffixPayload;
   ratio.operations[0] = { ...ratio.operations[0]!, operation: "percent_adjust", magnitude: Number.MAX_VALUE, direction: "increase" } as never;
   const factor = deriveV23SkuPull(1, [{ ref, payload: ratio }]);
-  assert.equal(factor.status, "VALID");
-  if (factor.status === "VALID") { assert.equal(factor.targetPullKg, Number.MAX_VALUE); assert.equal(factor.trace[0]!.numericEvidence.afterBinary64, numberToBinary64Hex(Number.MAX_VALUE)); }
+  assert.equal(factor.status, "INVALID");
+  if (factor.status === "INVALID") { assert.equal(factor.failureEvidence.stage, "ratio_increase_factor"); assert.equal(factor.failureEvidence.numericEvidence.beforeBinary64, numberToBinary64Hex(1)); assert.equal(factor.failureEvidence.numericEvidence.afterBinary64, numberToBinary64Hex(Number.MAX_VALUE)); assert.equal(factor.failureEvidence.numericEvidence.anomaly, "overflow"); }
   ratio.operations[0] = { ...(ratio.operations[0] as Record<string, unknown>), magnitude: 1, direction: "increase" } as never;
   const multiply = deriveV23SkuPull(Number.MAX_VALUE, [{ ref, payload: ratio }]);
   assert.equal(multiply.status, "INVALID");
@@ -63,7 +63,7 @@ test("ratio failure evidence binds each rounded binary64 boundary", () => {
   ratio.operations[0] = { ...(ratio.operations[0] as Record<string, unknown>), magnitude: Number.MAX_VALUE, direction: "decrease" } as never;
   const divide = deriveV23SkuPull(Number.MIN_VALUE, [{ ref, payload: ratio }]);
   assert.equal(divide.status, "INVALID");
-  if (divide.status === "INVALID") { assert.equal(divide.failureEvidence.stage, "ratio_divide"); assert.equal(divide.failureEvidence.numericEvidence.afterBinary64, numberToBinary64Hex(0)); assert.equal(divide.failureEvidence.numericEvidence.anomaly, "underflow_to_zero"); }
+  if (divide.status === "INVALID") { assert.equal(divide.failureEvidence.stage, "ratio_reduction_factor"); assert.equal(divide.failureEvidence.numericEvidence.afterBinary64, numberToBinary64Hex(Number.MAX_VALUE)); assert.equal(divide.failureEvidence.numericEvidence.anomaly, "overflow"); }
 });
 
 test("v23 uses UTF-8 canonical order and binary64 left-folded percent pools", () => {

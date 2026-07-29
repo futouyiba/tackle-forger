@@ -1,5 +1,5 @@
 param(
-  [int]$Port = 3000,
+  [int]$Port = 3456,
   [switch]$Foreground
 )
 
@@ -96,7 +96,7 @@ $env:PORT = [string]$Port
 if ($Foreground) {
   Push-Location $projectRoot
   try {
-    & npm.cmd run dev
+    & npm.cmd run dev -- -p $Port
     exit $LASTEXITCODE
   } finally {
     Pop-Location
@@ -105,7 +105,7 @@ if ($Foreground) {
 
 $nodePath = (Get-Command node.exe -ErrorAction Stop).Source
 $vinextCli = Join-Path $projectRoot "node_modules\vinext\dist\cli.js"
-$launchCommand = "& '$nodePath' '$vinextCli' dev"
+$launchCommand = "& '$nodePath' '$vinextCli' dev -p $Port"
 $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($launchCommand))
 
 $startedProcess = Start-Process `

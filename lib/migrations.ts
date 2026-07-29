@@ -1727,10 +1727,19 @@ const V23_QUALITY_IDS = new Set(["quality_c_green", "quality_b_blue", "quality_a
 
 function validateV23RuntimeState(state: MutableWorkspace) {
   const parts = v23Array(state.v23SeriesPartRevisions, "V23_SERIES_PARTS");
+  const heads = v23Array(state.v23SeriesPartHeads, "V23_SERIES_PART_HEADS");
   const skus = v23Array(state.v23SkuDrawerRevisions, "V23_SKUS");
   const affixes = v23Array(state.v23AffixDefinitions, "V23_AFFIX_DEFINITIONS");
   const evidence = v23Array(state.v23MigrationSourceEvidence, "V23_SOURCE_EVIDENCE");
   const adapters = v23Array(state.v23LegacyReadAdapters, "V23_LEGACY_ADAPTERS");
+  const seriesIds = new Set<string>();
+  for (const value of arrayOf<unknown>(state.seriesDefinitions)) {
+    const series = v23Record(value, "V23_SERIES");
+    if (typeof series.id !== "string" || series.id.length === 0) continue;
+    const id = series.id;
+    if (seriesIds.has(id)) throw new Error("V23_PART_SERIES_DUPLICATE");
+    seriesIds.add(id);
+  }
 
   const affixRefs = new Map<string, Map<number, string>>();
   for (const value of affixes) {
@@ -1765,15 +1774,18 @@ function validateV23RuntimeState(state: MutableWorkspace) {
   const partSeriesById = new Map<string, string>();
   for (const value of parts) {
     const entry = v23Record(value, "V23_SERIES_PART");
-    v23ExactKeys(entry, ["partId", "seriesId", "revision", "partType", "fishingMethodId", "materialTypeId", "functionProfileId", "functionIntensity", "defaultEntryRefs", "technologyRefs", "inputFingerprint", "contentHash"], "V23_SERIES_PART");
+    v23ExactKeys(entry, ["partId", "seriesId", "revision", "partType", "fishingMethodId", "materialTypeId", "functionProfileId", "functionIntensity", "weightBandIds", "defaultEntryRefs", "technologyRefs", "inputFingerprint", "contentHash"], "V23_SERIES_PART");
     const partId = v23String(entry.partId, "V23_PART_ID");
     const seriesId = v23String(entry.seriesId, "V23_PART_SERIES_ID");
+    if (!seriesIds.has(seriesId)) throw new Error("V23_PART_SERIES_UNRESOLVED");
     const revision = v23Revision(entry.revision, "V23_PART_REVISION");
     if (!(["rod", "reel", "line"] as const).includes(entry.partType as "rod" | "reel" | "line")) throw new Error("V23_PART_TYPE_INVALID");
     v23String(entry.fishingMethodId, "V23_PART_METHOD_ID");
     v23String(entry.materialTypeId, "V23_PART_MATERIAL_ID");
     v23String(entry.functionProfileId, "V23_PART_FUNCTION_ID");
     if (![1, 2, 3].includes(entry.functionIntensity as number)) throw new Error("V23_PART_FUNCTION_INTENSITY_INVALID");
+    const weightBandIds = v23Array(entry.weightBandIds, "V23_PART_WEIGHT_BANDS").map((id) => v23String(id, "V23_PART_WEIGHT_BAND_ID"));
+    if (new Set(weightBandIds).size !== weightBandIds.length) throw new Error("V23_PART_WEIGHT_BAND_DUPLICATE");
     for (const value of v23Array(entry.defaultEntryRefs, "V23_PART_DEFAULT_ENTRIES")) {
       const ref = validateV23StableRef(value, "V23_PART_DEFAULT_ENTRY");
       if (!hasAffixRef(ref)) throw new Error("V23_PART_DEFAULT_ENTRY_UNRESOLVED");
@@ -1790,19 +1802,28 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     v23HashOf({ ...input, inputFingerprint: entry.inputFingerprint }, entry.contentHash, "V23_PART_CONTENT_HASH");
   }
   const currentPartsBySeries = new Map<string, Record<string, unknown>[]>();
-  for (const revisions of partByIdAndRevision.values()) {
-    const current = [...revisions.values()].sort((left, right) => (right.revision as number) - (left.revision as number))[0]!;
-    const group = currentPartsBySeries.get(current.seriesId as string) ?? [];
-    group.push(current);
-    currentPartsBySeries.set(current.seriesId as string, group);
+  const seenHeads = new Set<string>();
+  for (const value of heads) {
+    const head = v23Record(value, "V23_SERIES_PART_HEAD");
+    v23ExactKeys(head, ["seriesId", "partId", "revision"], "V23_SERIES_PART_HEAD");
+    const seriesId = v23String(head.seriesId, "V23_SERIES_PART_HEAD_SERIES_ID");
+    const partId = v23String(head.partId, "V23_SERIES_PART_HEAD_PART_ID");
+    const revision = v23Revision(head.revision, "V23_SERIES_PART_HEAD_REVISION");
+    const identity = `${seriesId}\u0000${partId}`;
+    if (seenHeads.has(identity)) throw new Error("V23_SERIES_PART_HEAD_DUPLICATE");
+    seenHeads.add(identity);
+    const current = partByIdAndRevision.get(partId)?.get(revision);
+    if (!current || current.seriesId !== seriesId) throw new Error("V23_SERIES_PART_HEAD_UNRESOLVED");
+    const group = currentPartsBySeries.get(seriesId) ?? []; group.push(current); currentPartsBySeries.set(seriesId, group);
   }
+  if (parts.length && heads.length === 0) throw new Error("V23_SERIES_PART_HEAD_REQUIRED");
   for (const group of currentPartsBySeries.values()) {
     if (group.length < 1 || group.length > 3) throw new Error("V23_SERIES_PART_COUNT_INVALID");
     const kinds = new Set(group.map((entry) => entry.partType));
     if (kinds.size !== group.length) throw new Error("V23_SERIES_PART_TYPE_DUPLICATE");
   }
 
-  const localCopyIds = new Set<string>();
+  const localCopyOwners = new Map<string, string>(); let revisionCopyIds = new Set<string>();
   const validateAffixEntry = (value: unknown, code: string) => {
     const entry = v23Record(value, code);
     if (entry.kind === "STABLE_AFFIX_REF") {
@@ -1814,8 +1835,11 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     if (entry.kind === "LOCAL_AFFIX_COPY") {
       v23ExactKeys(entry, ["kind", "localCopyId", "sourceRef", "payload", "copyHash"], code);
       const copyId = v23String(entry.localCopyId, `${code}_COPY_ID`);
-      if (localCopyIds.has(copyId)) throw new Error("V23_LOCAL_COPY_ID_DUPLICATE");
-      localCopyIds.add(copyId);
+      if (revisionCopyIds.has(copyId)) throw new Error("V23_LOCAL_COPY_ID_DUPLICATE");
+      revisionCopyIds.add(copyId);
+      const owner = localCopyOwners.get(copyId);
+      if (owner !== undefined && owner !== currentSkuId) throw new Error("V23_LOCAL_COPY_ID_OWNER_CONFLICT");
+      localCopyOwners.set(copyId, currentSkuId);
       const ref = validateV23StableRef(entry.sourceRef, `${code}_SOURCE_REF`);
       if (!hasAffixRef(ref)) throw new Error(`${code}_SOURCE_REF_UNRESOLVED`);
       v23HashOf({ localCopyId: copyId, sourceRef: ref, payload: entry.payload }, entry.copyHash, `${code}_COPY_HASH`);
@@ -1823,11 +1847,13 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     }
     throw new Error(`${code}_KIND_INVALID`);
   };
-  const skuIds = new Map<string, Set<number>>();
+  const skuIds = new Map<string, Set<number>>(); let currentSkuId = "";
   for (const value of skus) {
     const entry = v23Record(value, "V23_SKU");
     v23ExactKeys(entry, ["skuId", "revision", "seriesId", "partId", "partRevision", "weightBandId", "match", "removedInheritedEntryIds", "addedEntryRefs", "localEntryCopies", "technologyRefs", "quality", "contentHash"], "V23_SKU");
     const skuId = v23String(entry.skuId, "V23_SKU_ID");
+    currentSkuId = skuId;
+    revisionCopyIds = new Set<string>();
     const revision = v23Revision(entry.revision, "V23_SKU_REVISION");
     const revisions = skuIds.get(skuId) ?? new Set<number>();
     if (revisions.has(revision)) throw new Error("V23_SKU_ID_REVISION_DUPLICATE");
@@ -1886,6 +1912,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
   }
 
   const evidenceIds = new Set<string>();
+  const evidencePayloads = new Map<string, Record<string, unknown>>();
   for (const value of evidence) {
     const entry = v23Record(value, "V23_SOURCE_EVIDENCE");
     v23ExactKeys(entry, ["sourceEvidenceId", "sourceSchemaVersion", "rawWorkspacePayload", "rawWorkspacePayloadHash"], "V23_SOURCE_EVIDENCE");
@@ -1900,12 +1927,13 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     // Existing workspace deterministicHash is an 8-hex content contract, not
     // the new v23 64-hex stable-reference contract.
     if (hash !== deterministicHash(entry.rawWorkspacePayload)) throw new Error("V23_SOURCE_PAYLOAD_HASH_MISMATCH");
+    evidencePayloads.set(id, raw);
   }
 
   const adapterIds = new Set<string>();
   for (const value of adapters) {
     const entry = v23Record(value, "V23_LEGACY_ADAPTER");
-    v23ExactKeys(entry, ["adapterId", "kind", "sourceEvidenceId", "sourceSeriesId", "sourceSkuId", "rawSeriesPayload", "rawSkuPayload", "diagnosticCodes", "status"], "V23_LEGACY_ADAPTER");
+    v23ExactKeys(entry, ["adapterId", "kind", "sourceEvidenceId", "targetSkuId", "sourceKind", "sourceRecordId", "rawSourcePayload", "sourceSeriesId", "rawSeriesPayload", "diagnosticCodes", "status"], "V23_LEGACY_ADAPTER");
     const id = v23String(entry.adapterId, "V23_LEGACY_ADAPTER_ID");
     if (adapterIds.has(id)) throw new Error("V23_LEGACY_ADAPTER_ID_DUPLICATE");
     adapterIds.add(id);
@@ -1913,21 +1941,27 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     const sourceEvidenceId = v23String(entry.sourceEvidenceId, "V23_LEGACY_ADAPTER_EVIDENCE_ID");
     if (!evidenceIds.has(sourceEvidenceId)) throw new Error("V23_LEGACY_ADAPTER_EVIDENCE_UNRESOLVED");
     if (entry.sourceSeriesId !== null) v23String(entry.sourceSeriesId, "V23_LEGACY_ADAPTER_SERIES_ID");
-    if (entry.sourceSkuId !== null) v23String(entry.sourceSkuId, "V23_LEGACY_ADAPTER_SKU_ID");
+    const targetSkuId = v23String(entry.targetSkuId, "V23_LEGACY_ADAPTER_TARGET_SKU_ID");
+    const sourceKind = v23String(entry.sourceKind, "V23_LEGACY_ADAPTER_SOURCE_KIND");
+    const sourceRecordId = v23String(entry.sourceRecordId, "V23_LEGACY_ADAPTER_SOURCE_RECORD_ID");
     const diagnostics = v23Array(entry.diagnosticCodes, "V23_LEGACY_ADAPTER_DIAGNOSTICS");
     if (!diagnostics.length || new Set(diagnostics).size !== diagnostics.length) throw new Error("V23_LEGACY_ADAPTER_DIAGNOSTICS_INVALID");
     const allowed = new Set(["V23_SERIES_UNRESOLVED", "V23_PART_UNRESOLVED", "V23_WEIGHT_BAND_UNRESOLVED", "V23_FUNCTION_TEMPLATE_UNRESOLVED"]);
     if (diagnostics.some((code) => typeof code !== "string" || !allowed.has(code))) throw new Error("V23_LEGACY_ADAPTER_DIAGNOSTICS_INVALID");
-    if (entry.sourceSkuId === null && entry.rawSkuPayload === null) throw new Error("V23_LEGACY_ADAPTER_SKU_CHAIN_INVALID");
     if ((entry.sourceSeriesId === null) !== (entry.rawSeriesPayload === null)) throw new Error("V23_LEGACY_ADAPTER_SERIES_CHAIN_INVALID");
     if ((entry.sourceSeriesId === null) !== diagnostics.includes("V23_SERIES_UNRESOLVED")) throw new Error("V23_LEGACY_ADAPTER_SERIES_DIAGNOSTIC_INVALID");
-    if (entry.sourceSkuId !== null) {
-      const rawSku = v23Record(entry.rawSkuPayload, "V23_LEGACY_ADAPTER_RAW_SKU");
-      if (rawSku.id !== entry.sourceSkuId) throw new Error("V23_LEGACY_ADAPTER_SKU_CHAIN_INVALID");
-    }
+    const sourceCollection = sourceKind === "LEGACY_SKU_DRAWER" ? "skuDrawers" : sourceKind === "LEGACY_OFFICIAL_SKU" ? "officialSkus" : null;
+    if (!sourceCollection) throw new Error("V23_LEGACY_ADAPTER_SOURCE_KIND_INVALID");
+    const sources = arrayOf<unknown>(evidencePayloads.get(sourceEvidenceId)?.[sourceCollection]).filter((candidate) => v23Record(candidate, "V23_LEGACY_SOURCE_SKU").id === sourceRecordId);
+    const rawSource = v23Record(entry.rawSourcePayload, "V23_LEGACY_ADAPTER_RAW_SOURCE");
+    if (sources.length !== 1 || jcsSha256Hex(sources[0]) !== jcsSha256Hex(rawSource)) throw new Error("V23_LEGACY_ADAPTER_SKU_CHAIN_INVALID");
+    // Must exactly mirror legacy-product-migration.ts stableId("legacy-sku-drawer:", official.id).
+    if ((sourceKind === "LEGACY_SKU_DRAWER" && targetSkuId !== sourceRecordId) || (sourceKind === "LEGACY_OFFICIAL_SKU" && targetSkuId !== `legacy-sku-drawer:${deterministicHash(sourceRecordId).slice(0, 12)}`)) throw new Error("V23_LEGACY_ADAPTER_TARGET_SKU_INVALID");
     if (entry.sourceSeriesId !== null) {
       const rawSeries = v23Record(entry.rawSeriesPayload, "V23_LEGACY_ADAPTER_RAW_SERIES");
       if (rawSeries.id !== entry.sourceSeriesId) throw new Error("V23_LEGACY_ADAPTER_SERIES_CHAIN_INVALID");
+      const sources = arrayOf<unknown>(evidencePayloads.get(sourceEvidenceId)?.seriesDefinitions).filter((candidate) => v23Record(candidate, "V23_LEGACY_SOURCE_SERIES").id === entry.sourceSeriesId);
+      if (sources.length !== 1 || jcsSha256Hex(sources[0]) !== jcsSha256Hex(rawSeries)) throw new Error("V23_LEGACY_ADAPTER_SERIES_CHAIN_INVALID");
     }
   }
 }
@@ -1952,16 +1986,17 @@ function migrateV22ToV23(input: MutableWorkspace, context: MigrationContext): Mu
   const evidence = existingEvidence.some((entry) => entry.sourceEvidenceId === sourceEvidenceId)
     ? existingEvidence
     : [...existingEvidence, sourceEvidence];
-  if (
-    arrayOf<unknown>(input.v23SeriesPartRevisions).length
-    || arrayOf<unknown>(input.v23SkuDrawerRevisions).length
-    || arrayOf<unknown>(input.v23AffixDefinitions).length
-    || arrayOf<unknown>(input.v23LegacyReadAdapters).length
-  ) {
+  if (context.initialSchemaVersion === 22 && ["v23SeriesPartRevisions", "v23SeriesPartHeads", "v23SkuDrawerRevisions", "v23AffixDefinitions", "v23MigrationSourceEvidence", "v23LegacyReadAdapters"].some((key) => Object.prototype.hasOwnProperty.call(input, key))) {
     throw new Error("V23_MIGRATION_PARTIAL_STATE_CONFLICT");
   }
 
   const series = arrayOf<Record<string, unknown>>(input.seriesDefinitions);
+  const originalSkus = arrayOf<Record<string, unknown>>((context.originalInput as Record<string, unknown>).skuDrawers);
+  const originalOfficialSkus = arrayOf<Record<string, unknown>>((context.originalInput as Record<string, unknown>).officialSkus);
+  const originalSeries = arrayOf<Record<string, unknown>>((context.originalInput as Record<string, unknown>).seriesDefinitions);
+  const originalSkuById = new Map(originalSkus.filter((entry) => typeof entry.id === "string" && entry.id.length > 0).map((entry) => [entry.id as string, entry]));
+  const originalOfficialSkuByDrawerId = new Map(originalOfficialSkus.filter((entry) => typeof entry.id === "string" && entry.id.length > 0).map((entry) => [`legacy-sku-drawer:${deterministicHash(entry.id as string).slice(0, 12)}`, entry]));
+  const originalSeriesById = new Map(originalSeries.filter((entry) => typeof entry.id === "string" && entry.id.length > 0).map((entry) => [entry.id as string, entry]));
   const seriesById = new Map<string, Record<string, unknown>>();
   for (const entry of series) {
     // A legacy Series without a stable identity remains readable only through
@@ -1978,26 +2013,34 @@ function migrateV22ToV23(input: MutableWorkspace, context: MigrationContext): Mu
   const adapters: V23LegacyReadAdapter[] = [];
   const adapterIds = new Set<string>();
   for (const legacySku of arrayOf<Record<string, unknown>>(input.skuDrawers)) {
-    const sourceSkuId = requiredLegacyId(legacySku.id, "SKU");
+    const targetSkuId = requiredLegacyId(legacySku.id, "SKU");
+    const drawerSource = originalSkuById.get(targetSkuId);
+    const officialSource = originalOfficialSkuByDrawerId.get(targetSkuId);
+    if ((drawerSource ? 1 : 0) + (officialSource ? 1 : 0) !== 1) throw new Error("V23_MIGRATION_SKU_SOURCE_UNRESOLVED");
+    const sourceKind = drawerSource ? "LEGACY_SKU_DRAWER" as const : "LEGACY_OFFICIAL_SKU" as const;
+    const sourceRecord = drawerSource ?? officialSource!;
+    const sourceRecordId = requiredLegacyId(sourceRecord.id, "SOURCE_SKU");
     const requestedSeriesId = typeof legacySku.seriesId === "string" && legacySku.seriesId.length > 0
       ? legacySku.seriesId
       : null;
-    const sourceSeriesId = requestedSeriesId && seriesById.has(requestedSeriesId)
+    const sourceSeriesId = requestedSeriesId && seriesById.has(requestedSeriesId) && originalSeriesById.has(requestedSeriesId)
       ? requestedSeriesId
       : null;
-    const adapterId = `v23-legacy-adapter:${sourceSkuId}`;
+    const adapterId = `v23-legacy-adapter:${targetSkuId}`;
     if (adapterIds.has(adapterId)) throw new Error("V23_MIGRATION_SKU_ID_CONFLICT");
     adapterIds.add(adapterId);
     adapters.push({
       adapterId,
       kind: "LEGACY_NEEDS_REVIEW",
       sourceEvidenceId,
+      targetSkuId,
+      sourceKind,
+      sourceRecordId,
+      rawSourcePayload: structuredClone(sourceRecord),
       sourceSeriesId,
-      sourceSkuId,
       rawSeriesPayload: sourceSeriesId
-        ? structuredClone(seriesById.get(sourceSeriesId))
+        ? structuredClone(originalSeriesById.get(sourceSeriesId))
         : null,
-      rawSkuPayload: structuredClone(legacySku),
       diagnosticCodes: [
         ...(sourceSeriesId ? [] : ["V23_SERIES_UNRESOLVED" as const]),
         "V23_PART_UNRESOLVED",
@@ -2012,6 +2055,7 @@ function migrateV22ToV23(input: MutableWorkspace, context: MigrationContext): Mu
     ...input,
     schemaVersion: 23,
     v23SeriesPartRevisions: [],
+    v23SeriesPartHeads: [],
     v23SkuDrawerRevisions: [],
     v23AffixDefinitions: [],
     v23MigrationSourceEvidence: evidence,

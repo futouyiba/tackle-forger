@@ -1162,11 +1162,14 @@ export interface SeriesPartRevision {
   materialTypeId: string;
   functionProfileId: string;
   functionIntensity: FunctionIntensity;
+  weightBandIds: string[];
   defaultEntryRefs: V23StableContentRef[];
   technologyRefs: V23StableContentRef[];
   inputFingerprint: string;
   contentHash: string;
 }
+
+export interface SeriesPartHeadRef { seriesId: string; partId: string; revision: number; }
 
 export interface V23AffixDefinition {
   affixId: string;
@@ -1249,10 +1252,12 @@ export interface V23LegacyReadAdapter {
   adapterId: string;
   kind: "LEGACY_NEEDS_REVIEW";
   sourceEvidenceId: string;
+  targetSkuId: string;
+  sourceKind: "LEGACY_SKU_DRAWER" | "LEGACY_OFFICIAL_SKU";
+  sourceRecordId: string;
+  rawSourcePayload: unknown;
   sourceSeriesId: string | null;
-  sourceSkuId: string | null;
   rawSeriesPayload: unknown;
-  rawSkuPayload: unknown;
   diagnosticCodes: Array<
     | "V23_SERIES_UNRESOLVED"
     | "V23_PART_UNRESOLVED"
@@ -2907,6 +2912,7 @@ export interface WorkspaceState {
   seriesDefinitions: SeriesDefinition[];
   /** v23 target-state carriers; v9/v22 collections remain read-only legacy data. */
   v23SeriesPartRevisions: SeriesPartRevision[];
+  v23SeriesPartHeads: SeriesPartHeadRef[];
   v23SkuDrawerRevisions: SkuDrawerRevision[];
   v23AffixDefinitions: V23AffixDefinition[];
   v23MigrationSourceEvidence: V23MigrationSourceEvidence[];

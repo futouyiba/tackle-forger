@@ -114,7 +114,7 @@ test("flat delta overflow is fail-closed before settlement", () => {
   ] as never;
   const result = deriveV23SkuPull(1, [{ ref, payload: directional }]);
   assert.equal(result.status, "INVALID");
-  if (result.status === "INVALID") { assert.equal(result.code, "V23_BINARY64_OVERFLOW"); assert.equal(result.failureEvidence.stage, "flat_settlement"); assert.equal(result.failureEvidence.numericEvidence.beforeBinary64, numberToBinary64Hex(Number.MAX_VALUE)); assert.equal(result.failureEvidence.numericEvidence.afterBinary64, numberToBinary64Hex(Number.MAX_VALUE)); assert.equal(result.failureEvidence.numericEvidence.anomaly, "overflow"); assert.notEqual(result.failureEvidence.numericEvidence.exactNumerator, "0"); assert.notEqual(result.failureEvidence.numericEvidence.exactDenominator, "0"); }
+  if (result.status === "INVALID") { assert.equal(result.code, "V23_BINARY64_OVERFLOW"); assert.equal(result.failureEvidence.stage, "flat_settlement"); assert.equal(result.failureEvidence.numericEvidence.beforeBinary64, numberToBinary64Hex(1)); assert.equal(result.failureEvidence.numericEvidence.afterBinary64, numberToBinary64Hex(Number.MAX_VALUE)); assert.equal(result.failureEvidence.numericEvidence.anomaly, "overflow"); assert.notEqual(result.failureEvidence.numericEvidence.exactNumerator, "0"); assert.notEqual(result.failureEvidence.numericEvidence.exactDenominator, "0"); }
 });
 
 test("set is a terminally connected trace step", () => {

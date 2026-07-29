@@ -1,15 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mergeV23WeightBands, projectV23SeriesGantt, resolveCurrentV23Parts, resolveCurrentV23Skus, resolveV23CatalogOrder, selectCurrentPublishedWeightTemplateDraftId, validateV23PreviewSkuHeads } from "../lib/v23-series-gantt";
+import { mergeV23WeightBands, projectV23SeriesGantt, resolveCurrentV23Parts, resolveCurrentV23Skus, resolveCurrentV23Technologies, resolveV23CatalogOrder, resolveV23InheritedAffixRefs, resolveV23TechnologySurface, selectCurrentPublishedWeightTemplateDraftId, validateV23PreviewSkuHeads } from "../lib/v23-series-gantt";
 import { v23CanApplyReadback, v23LatestGeneration, v23WritePreflight } from "../lib/v23-ui-actions";
-import type { SeriesPartRevision, SkuDrawerRevision, WorkspaceState } from "../lib/types";
+import { v23TechnologyContentHash } from "../lib/v23-technology";
+import type { SeriesPartRevision, SkuDrawerRevision, V23TechnologyDefinition, WorkspaceState } from "../lib/types";
 
 const part = (partId: string, partType: "rod" | "reel" | "line", weightBandIds: string[]): SeriesPartRevision => ({
   partId, seriesId: "series:one", revision: 1, partType, fishingMethodId: "method", materialTypeId: "material",
   functionProfileId: "function", functionIntensity: 1, weightBandIds, defaultEntryRefs: [], technologyRefs: [], inputFingerprint: "a".repeat(64), contentHash: "b".repeat(64),
 });
 function state(parts: SeriesPartRevision[], heads = parts.map((entry) => ({ seriesId: entry.seriesId, partId: entry.partId, revision: entry.revision }))) {
-  return { v23SeriesPartRevisions: parts, v23SeriesPartHeads: heads, v23SkuDrawerHeads: [], v23SkuDrawerRevisions: [] } as unknown as WorkspaceState;
+  return { v23SeriesPartRevisions: parts, v23SeriesPartHeads: heads, v23SkuDrawerHeads: [], v23SkuDrawerRevisions: [], v23AffixDefinitions: [], v23TechnologyDefinitions: [], v23TechnologyHeads: [] } as unknown as WorkspaceState;
 }
 
 test("v23 甘特仅按 01.x 顺序合并相邻重量段，缺口会分裂", () => {
@@ -94,4 +95,67 @@ test("重复或不可解析 Part head fail closed，绝不猜测最新 revision"
   const result = resolveCurrentV23Parts(state([rod], [{ seriesId: "series:one", partId: "part:rod", revision: 1 }, { seriesId: "series:one", partId: "part:rod", revision: 1 }]), "series:one");
   assert.equal(result.unresolved, true);
   assert.deepEqual(projectV23SeriesGantt(state([rod], []), "series:one", ["01.1"]).parts, []);
+});
+
+test("Technology surface 只消费唯一 current head，并仅展开稳定成员词条贡献", () => {
+  const source = state([]);
+  const memberRef = { id: "affix:member", revision: 1, contentHash: "a".repeat(64) };
+  source.v23AffixDefinitions = [{
+    affixId: memberRef.id,
+    revision: memberRef.revision,
+    contentHash: memberRef.contentHash,
+    payload: {
+      name: "稳定成员",
+      category: "passive",
+      itemPartId: "part:rod",
+      semanticContributionKey: "member:stable",
+      stackingPolicy: "dedupe",
+      generationPolicy: "technology_only",
+      rarity: "ultra_rare",
+      valueScore: 9,
+      tags: [],
+      description: "只由成员贡献",
+      enabled: true,
+      operations: [],
+      passivePayload: {
+        skillId: "skill:member", name: "稳定成员", itemPartId: "part:rod",
+        triggerType: "display", triggerDescription: "展示", effectTarget: "展示",
+        effectLogicDescription: "不执行", exampleParameters: {}, durationDescription: "不执行",
+        cooldownDescription: "不执行", resetDescription: "不执行", stackingDescription: "不执行",
+        playerDescription: "展示", simulatorReferenceKey: null,
+      },
+    },
+  }];
+  const input: Omit<V23TechnologyDefinition, "contentHash"> = {
+    technologyId: "technology:one", revision: 1, itemPartId: "part:rod",
+    name: "工艺一", description: "组合包", memberAffixRefs: [memberRef], enabled: true,
+  };
+  const technology = { ...input, contentHash: v23TechnologyContentHash(input) };
+  source.v23TechnologyDefinitions = [technology];
+  source.v23TechnologyHeads = [{ technologyId: technology.technologyId, revision: technology.revision }];
+  assert.deepEqual(resolveCurrentV23Technologies(source, "part:rod").technologies.map((entry) => entry.name), ["工艺一"]);
+  const surface = resolveV23TechnologySurface(source, [{ id: technology.technologyId, revision: technology.revision, contentHash: technology.contentHash }], "part:rod");
+  assert.equal(surface.unresolved, false);
+  assert.deepEqual(surface.members.map((entry) => entry.payload.name), ["稳定成员"]);
+  assert.equal(surface.technologies.length, 1);
+  const rod = part("part:rod", "rod", ["01.1"]);
+  rod.defaultEntryRefs = [memberRef];
+  rod.technologyRefs = [{ id: technology.technologyId, revision: technology.revision, contentHash: technology.contentHash }];
+  const inherited = resolveV23InheritedAffixRefs(source, rod);
+  assert.equal(inherited.unresolved, false);
+  assert.deepEqual(inherited.refs, [memberRef], "直接引用与 Technology 成员按稳定 affix identity 去重");
+  const conflict = structuredClone(rod);
+  conflict.defaultEntryRefs = [{ id: memberRef.id, revision: 2, contentHash: "b".repeat(64) }];
+  assert.equal(resolveV23InheritedAffixRefs(source, conflict).unresolved, true);
+});
+
+test("Technology duplicate head、错误 revision 与跨部位引用均 fail closed", () => {
+  const source = state([]);
+  source.v23TechnologyHeads = [{ technologyId: "technology:one", revision: 1 }, { technologyId: "technology:one", revision: 1 }];
+  assert.equal(resolveCurrentV23Technologies(source, "part:rod").unresolved, true);
+  assert.equal(resolveV23TechnologySurface(source, [{ id: "technology:missing", revision: 1, contentHash: "a".repeat(64) }], "part:rod").unresolved, true);
+  const rod = part("part:rod", "rod", ["01.1"]);
+  rod.technologyRefs = [{ id: "technology:missing", revision: 1, contentHash: "a".repeat(64) }];
+  assert.deepEqual(resolveV23InheritedAffixRefs(source, rod).refs, []);
+  assert.equal(resolveV23InheritedAffixRefs(source, rod).unresolved, true);
 });

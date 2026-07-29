@@ -1,4 +1,11 @@
-import type { SeriesPartRevision, SkuDrawerRevision, WorkspaceState } from "./types";
+import { expandV23TechnologyRefs, validateV23TechnologyDefinition } from "./v23-technology";
+import type {
+  SeriesPartRevision,
+  SkuDrawerRevision,
+  V23StableContentRef,
+  V23TechnologyDefinition,
+  WorkspaceState,
+} from "./types";
 
 export function selectCurrentPublishedWeightTemplateDraftId(state: WorkspaceState): string | undefined {
   const published = state.ruleSetVersions.filter((entry) => entry.status === "published");
@@ -95,4 +102,101 @@ export function validateV23PreviewSkuHeads(expected: readonly SkuDrawerRevision[
   const key = (sku: SkuDrawerRevision) => `${sku.skuId}:${sku.revision}`;
   const expectedKeys = expected.map(key).sort(); const receivedKeys = received.map((entry) => entry && typeof entry === "object" && typeof (entry as SkuDrawerRevision).skuId === "string" && Number.isInteger((entry as SkuDrawerRevision).revision) ? key(entry as SkuDrawerRevision) : "").sort();
   return receivedKeys.every(Boolean) && new Set(receivedKeys).size === receivedKeys.length && expectedKeys.length === receivedKeys.length && expectedKeys.every((item, index) => item === receivedKeys[index]);
+}
+
+export function resolveCurrentV23Technologies(
+  state: WorkspaceState,
+  itemPartId: V23TechnologyDefinition["itemPartId"],
+): { technologies: V23TechnologyDefinition[]; unresolved: boolean; reason?: string } {
+  if (new Set(state.v23TechnologyHeads.map((head) => head.technologyId)).size !== state.v23TechnologyHeads.length) {
+    return { technologies: [], unresolved: true, reason: "Technology 当前 head 不唯一" };
+  }
+  try {
+    const technologies = state.v23TechnologyHeads.map((head) => {
+      const matches = state.v23TechnologyDefinitions.filter((entry) =>
+        entry.technologyId === head.technologyId && entry.revision === head.revision);
+      if (matches.length !== 1) throw new Error("Technology immutable revision 无法唯一解析");
+      validateV23TechnologyDefinition(state, matches[0]!);
+      return matches[0]!;
+    }).filter((entry) => entry.enabled && entry.itemPartId === itemPartId);
+    return { technologies, unresolved: false };
+  } catch (error) {
+    return {
+      technologies: [],
+      unresolved: true,
+      reason: error instanceof Error ? error.message : "Technology 当前 head 无法闭合验证",
+    };
+  }
+}
+
+export function resolveV23TechnologySurface(
+  state: WorkspaceState,
+  refs: readonly V23StableContentRef[],
+  itemPartId: V23TechnologyDefinition["itemPartId"],
+): {
+  technologies: V23TechnologyDefinition[];
+  members: ReturnType<typeof expandV23TechnologyRefs>;
+  unresolved: boolean;
+  reason?: string;
+} {
+  try {
+    const technologies = refs.map((ref) => {
+      const matches = state.v23TechnologyDefinitions.filter((entry) =>
+        entry.technologyId === ref.id
+        && entry.revision === ref.revision
+        && entry.contentHash === ref.contentHash);
+      if (matches.length !== 1) throw new Error(`Technology 引用 ${ref.id}@${ref.revision} 无法唯一解析`);
+      validateV23TechnologyDefinition(state, matches[0]!);
+      if (!matches[0]!.enabled || matches[0]!.itemPartId !== itemPartId) {
+        throw new Error("Technology 已禁用或与 Part 类型不一致");
+      }
+      return matches[0]!;
+    });
+    return {
+      technologies,
+      members: expandV23TechnologyRefs(state, refs, itemPartId),
+      unresolved: false,
+    };
+  } catch (error) {
+    return {
+      technologies: [],
+      members: [],
+      unresolved: true,
+      reason: error instanceof Error ? error.message : "Technology 引用无法闭合验证",
+    };
+  }
+}
+
+export function resolveV23InheritedAffixRefs(
+  state: WorkspaceState,
+  part: SeriesPartRevision,
+): { refs: V23StableContentRef[]; unresolved: boolean; reason?: string } {
+  const technology = resolveV23TechnologySurface(
+    state,
+    part.technologyRefs,
+    `part:${part.partType}`,
+  );
+  if (technology.unresolved) {
+    return { refs: [], unresolved: true, reason: technology.reason };
+  }
+  const refs = new Map<string, V23StableContentRef>();
+  for (const ref of [...part.defaultEntryRefs, ...technology.members.map((entry) => entry.ref)]) {
+    const prior = refs.get(ref.id);
+    if (
+      prior
+      && (prior.revision !== ref.revision || prior.contentHash !== ref.contentHash)
+    ) {
+      return {
+        refs: [],
+        unresolved: true,
+        reason: `继承词条 ${ref.id} 指向冲突的 immutable revision`,
+      };
+    }
+    refs.set(ref.id, ref);
+  }
+  return {
+    refs: [...refs.values()].sort((left, right) =>
+      left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
+    unresolved: false,
+  };
 }

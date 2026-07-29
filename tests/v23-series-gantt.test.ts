@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mergeV23WeightBands, projectV23SeriesGantt, resolveCurrentV23Parts, resolveCurrentV23Skus, resolveCurrentV23Technologies, resolveV23CatalogOrder, resolveV23InheritedAffixRefs, resolveV23SkuOccupiedAffixIds, resolveV23TechnologySurface, selectCurrentPublishedWeightTemplateDraftId, validateV23PreviewSkuHeads } from "../lib/v23-series-gantt";
+import { mergeV23WeightBands, projectV23SeriesGantt, resolveCurrentV23Affixes, resolveCurrentV23Parts, resolveCurrentV23Skus, resolveCurrentV23Technologies, resolveV23CatalogOrder, resolveV23InheritedAffixRefs, resolveV23SkuOccupiedAffixIds, resolveV23TechnologySurface, selectCurrentPublishedWeightTemplateDraftId, validateV23CurrentDefaultAffixRefs, validateV23PreviewSkuHeads } from "../lib/v23-series-gantt";
 import { v23CanApplyReadback, v23LatestGeneration, v23SeriesSwitchRequestBoundary, v23WritePreflight } from "../lib/v23-ui-actions";
 import { v23TechnologyContentHash } from "../lib/v23-technology";
 import type { SeriesPartRevision, SkuDrawerRevision, V23TechnologyDefinition, WorkspaceState } from "../lib/types";
@@ -128,6 +128,32 @@ test("Series 切换终止 preview pending，迟到 resolve/reject 不覆盖且�
   const nextRequestEpoch = switched.requestEpoch + 1;
   assert.equal(v23LatestGeneration(nextRequestEpoch, nextRequestEpoch), true, "新 Series 不继承旧 pending");
   assert.equal(v23SeriesSwitchRequestBoundary(7, "update_part_configuration:token").pending, "update_part_configuration:token", "Series 切换不得伪造终止写入");
+});
+
+test("Part 默认词条按 stable ID 唯一最高 revision 解析，歧义 current fail closed", () => {
+  const source = state([]);
+  const definition = (affixId: string, revision: number, name: string, itemPartId = "part:rod", enabled = true) => ({
+    affixId,
+    revision,
+    contentHash: `${revision}`.repeat(64),
+    payload: { name, itemPartId, enabled },
+  });
+  source.v23AffixDefinitions = [
+    definition("affix:one", 1, "历史版本"),
+    definition("affix:one", 2, "当前版本"),
+    definition("affix:reel", 1, "轮词条", "part:reel"),
+    definition("affix:disabled", 1, "禁用词条", "part:rod", false),
+  ] as never;
+  const current = resolveCurrentV23Affixes(source, "part:rod");
+  assert.equal(current.unresolved, false);
+  assert.deepEqual(current.definitions.map((entry) => [entry.affixId, entry.revision]), [["affix:one", 2]]);
+  const currentRef = { id: "affix:one", revision: 2, contentHash: "2".repeat(64) };
+  assert.deepEqual(validateV23CurrentDefaultAffixRefs(source, "part:rod", [currentRef]), { valid: true });
+  assert.equal(validateV23CurrentDefaultAffixRefs(source, "part:rod", [{ ...currentRef, revision: 1, contentHash: "1".repeat(64) }]).valid, false);
+  assert.equal(validateV23CurrentDefaultAffixRefs(source, "part:rod", [currentRef, currentRef]).valid, false);
+  source.v23AffixDefinitions.push({ ...definition("affix:one", 2, "冲突 current"), contentHash: "f".repeat(64) } as never);
+  assert.equal(resolveCurrentV23Affixes(source, "part:rod").unresolved, true);
+  assert.equal(validateV23CurrentDefaultAffixRefs(source, "part:rod", [currentRef]).valid, false);
 });
 
 test("重复或不可解析 Part head fail closed，绝不猜测最新 revision", () => {

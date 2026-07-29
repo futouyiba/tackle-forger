@@ -2,6 +2,7 @@ import { expandV23TechnologyRefs, validateV23TechnologyDefinition } from "./v23-
 import type {
   SeriesPartRevision,
   SkuDrawerRevision,
+  V23AffixDefinition,
   V23EnabledPartType,
   V23StableContentRef,
   V23TechnologyDefinition,
@@ -164,6 +165,53 @@ export function resolveCurrentV23Technologies(
       reason: error instanceof Error ? error.message : "Technology 当前 head 无法闭合验证",
     };
   }
+}
+
+export function resolveCurrentV23Affixes(
+  state: Pick<WorkspaceState, "v23AffixDefinitions">,
+  itemPartId: `part:${V23EnabledPartType}`,
+): { definitions: V23AffixDefinition[]; unresolved: boolean; reason?: string } {
+  const groups = new Map<string, V23AffixDefinition[]>();
+  for (const definition of state.v23AffixDefinitions) {
+    groups.set(definition.affixId, [...(groups.get(definition.affixId) ?? []), definition]);
+  }
+  const current: V23AffixDefinition[] = [];
+  for (const [affixId, revisions] of groups) {
+    const latestRevision = Math.max(...revisions.map((entry) => entry.revision));
+    const latest = revisions.filter((entry) => entry.revision === latestRevision);
+    if (!Number.isSafeInteger(latestRevision) || latestRevision < 1 || latest.length !== 1) {
+      return { definitions: [], unresolved: true, reason: `词条 ${affixId} 的 current revision 不唯一` };
+    }
+    const definition = latest[0]!;
+    if (definition.payload.enabled && definition.payload.itemPartId === itemPartId) current.push(definition);
+  }
+  return {
+    definitions: current.sort((left, right) =>
+      left.affixId < right.affixId ? -1 : left.affixId > right.affixId ? 1 : 0),
+    unresolved: false,
+  };
+}
+
+export function validateV23CurrentDefaultAffixRefs(
+  state: Pick<WorkspaceState, "v23AffixDefinitions">,
+  itemPartId: `part:${V23EnabledPartType}`,
+  refs: readonly V23StableContentRef[],
+): { valid: boolean; reason?: string } {
+  if (new Set(refs.map((ref) => ref.id)).size !== refs.length) {
+    return { valid: false, reason: "Part 默认词条 stable ID 重复" };
+  }
+  const current = resolveCurrentV23Affixes(state, itemPartId);
+  if (current.unresolved) return { valid: false, reason: current.reason };
+  const definitions = new Map(current.definitions.map((definition) => [definition.affixId, definition]));
+  for (const ref of refs) {
+    const definition = definitions.get(ref.id);
+    if (!definition
+      || definition.revision !== ref.revision
+      || definition.contentHash !== ref.contentHash) {
+      return { valid: false, reason: `Part 默认词条 ${ref.id} 不是唯一 current enabled identity` };
+    }
+  }
+  return { valid: true };
 }
 
 export function resolveV23TechnologySurface(

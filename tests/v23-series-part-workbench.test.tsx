@@ -5,9 +5,9 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { V23SeriesPartWorkbench } from "../app/V23SeriesPartWorkbench";
 import type { ActionAvailabilityMap } from "../lib/interaction-contracts";
-import { buildV23LocalCopyPayload, v23CanCopyInheritedAffix, v23CanCreateSkuFromPreview, v23PartConfigurationDraftDirty, v23QualityReasonValid, v23SeriesSwitchRequestBoundary, v23StableRefAttachmentStatus } from "../lib/v23-ui-actions";
+import { buildV23LocalCopyPayload, v23CanCopyInheritedAffix, v23CanCreateSkuFromPreview, v23CanSavePartConfiguration, v23PartConfigurationDraftDirty, v23QualityReasonValid, v23SeriesSwitchRequestBoundary, v23StableRefAttachmentStatus } from "../lib/v23-ui-actions";
 import { v23TechnologyContentHash } from "../lib/v23-technology";
-import type { SeriesPartRevision, V23ProjectAffixPayload, V23TechnologyDefinition, WorkspaceState } from "../lib/types";
+import type { SeriesPartRevision, V23AffixDefinition, V23ProjectAffixPayload, V23TechnologyDefinition, WorkspaceState } from "../lib/types";
 
 const part = (partId: string, partType: "rod" | "reel" | "line", bands: string[]): SeriesPartRevision => ({ partId, seriesId: "series:one", revision: 1, partType, fishingMethodId: "method", materialTypeId: "material", functionProfileId: "function", functionIntensity: 2, weightBandIds: bands, defaultEntryRefs: [], technologyRefs: [], inputFingerprint: "a".repeat(64), contentHash: "b".repeat(64) });
 const availability = Object.fromEntries(["preview_weight_band_skus", "create_sku", "create_project_affix", "update_part_configuration", "add_sku_affix", "remove_inherited_affix", "restore_inherited_affix", "copy_sku_local_affix", "update_sku_local_affix_copy", "attach_part_technology", "remove_part_technology", "attach_sku_technology", "remove_sku_technology", "set_sku_actual_quality"].map((action) => [action, { enabled: false, disabledReasonText: "权限不足" }])) as ActionAvailabilityMap;
@@ -56,6 +56,11 @@ test("v23 Part 工作台显式预览与受控动作，不在甘特块点击时�
   assert.match(source, /v23PartConfigurationDraftDirty\(part, draft\)/);
   assert.match(source, /if \(draftDirty\) return notify\("Part 配置有未保存修改；请先保存 Part 配置，再操作 Technology。"\)/);
   assert.match(source, /disabled=\{pending \|\| draftDirty \|\| conflict/);
+  assert.match(source, /resolveCurrentV23Affixes\(state, `part:\$\{part\.partType\}`\)/);
+  assert.match(source, /validateV23CurrentDefaultAffixRefs/);
+  assert.match(source, /if \(!partSaveAllowed\)/);
+  assert.match(source, /Part 配置没有变化，已拒绝创建空 revision/);
+  assert.match(source, /disabled=\{pending \|\| !availability\.update_part_configuration\?\.enabled \|\| !partSaveAllowed\}/);
 });
 
 test("create SKU 只接受 VALID preview，两个 invalid 状态均不进入写入资格", () => {
@@ -120,6 +125,10 @@ test("Part 草稿 dirty 精确阻断 Technology 写入，clean 保持可操作",
   assert.equal(writes, 0, "dirty Part Technology handler 不得写入");
   if (!v23PartConfigurationDraftDirty(clean, draft)) writes += 1;
   assert.equal(writes, 1, "clean Part 仍可操作");
+  assert.equal(v23CanSavePartConfiguration({ draftDirty: false, weightBandsValid: true, defaultAffixesValid: true }), false);
+  assert.equal(v23CanSavePartConfiguration({ draftDirty: true, weightBandsValid: true, defaultAffixesValid: true }), true);
+  assert.equal(v23CanSavePartConfiguration({ draftDirty: true, weightBandsValid: false, defaultAffixesValid: true }), false);
+  assert.equal(v23CanSavePartConfiguration({ draftDirty: true, weightBandsValid: true, defaultAffixesValid: false }), false);
 });
 
 test("SSR: 唯一 Part 卡、合并块与准确重量段选择器的初始语义", () => {
@@ -132,6 +141,43 @@ test("SSR: 唯一 Part 卡、合并块与准确重量段选择器的初始语义
   assert.doesNotMatch(html, /预览 01\.1/);
   assert.match(html, /title="权限不足"/);
   assert.match(html, /aria-label="v23 Part 与 SKU 编辑器"/);
+  const saveButton = html.match(/<button[^>]*>保存 Part 配置<\/button>/)?.[0];
+  assert.ok(saveButton);
+  assert.match(saveButton, /disabled/);
+});
+
+test("SSR: 默认词条只显示唯一 current revision，重复 current 整面 fail closed", () => {
+  const candidate = fixture();
+  const affix = (revision: number, name: string, contentHash: string): V23AffixDefinition => ({
+    affixId: "affix:versioned",
+    revision,
+    contentHash,
+    payload: {
+      name, category: "passive", itemPartId: "part:rod",
+      semanticContributionKey: "versioned", stackingPolicy: "dedupe",
+      generationPolicy: "normal", rarity: "common", valueScore: 1,
+      tags: [], description: name, enabled: true, operations: [] as [],
+      passivePayload: {
+        skillId: "skill:versioned", name, itemPartId: "part:rod",
+        triggerType: "display", triggerDescription: "展示", effectTarget: "展示",
+        effectLogicDescription: "不执行", exampleParameters: {}, durationDescription: "不执行",
+        cooldownDescription: "不执行", resetDescription: "不执行", stackingDescription: "不执行",
+        playerDescription: "展示", simulatorReferenceKey: null,
+      },
+    },
+  });
+  candidate.v23AffixDefinitions = [
+    affix(1, "历史词条", "a".repeat(64)),
+    affix(2, "当前词条", "b".repeat(64)),
+  ];
+  const html = renderToStaticMarkup(createElement(V23SeriesPartWorkbench, { state: candidate, workspaceRevision: 7, actionAvailabilities: availability, notify: () => undefined, workspaceFreshness: () => ({ dirty: false, revision: 7 }), onApplied: () => undefined }));
+  assert.doesNotMatch(html, /历史词条/);
+  assert.equal((html.match(/当前词条/g) ?? []).length, 1);
+  candidate.v23AffixDefinitions.push(affix(2, "冲突 current", "c".repeat(64)));
+  const ambiguous = renderToStaticMarkup(createElement(V23SeriesPartWorkbench, { state: candidate, workspaceRevision: 7, actionAvailabilities: availability, notify: () => undefined, workspaceFreshness: () => ({ dirty: false, revision: 7 }), onApplied: () => undefined }));
+  assert.match(ambiguous, /current revision 不唯一；已禁用默认词条编辑与保存/);
+  assert.doesNotMatch(ambiguous, /当前词条/);
+  assert.doesNotMatch(ambiguous, /冲突 current/);
 });
 
 test("SSR: clean Part 的新 Technology 保持可挂载", () => {

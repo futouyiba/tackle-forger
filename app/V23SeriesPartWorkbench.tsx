@@ -4,8 +4,8 @@ import { useMemo, useRef, useState } from "react";
 import { Plus, RefreshCw } from "lucide-react";
 import type { ActionAvailabilityMap } from "@/lib/interaction-contracts";
 import type { SeriesPartRevision, SkuDrawerRevision, V23ProjectAffixPayload, V23StableContentRef, WorkspaceState } from "@/lib/types";
-import { projectV23SeriesGantt, resolveCurrentV23Skus, resolveCurrentV23Technologies, resolveV23CatalogOrder, resolveV23InheritedAffixRefs, resolveV23SkuOccupiedAffixIds, resolveV23TechnologySurface, selectCurrentPublishedWeightTemplateDraftId, v23PartWeightBandsValid, validateV23PreviewSkuHeads, type V23BandBlock, type V23CatalogOrders } from "@/lib/v23-series-gantt";
-import { buildV23LocalCopyPayload, executeV23UiAction, previewV23WeightBand, v23CanApplyReadback, v23CanCopyInheritedAffix, v23CanCreateSkuFromPreview, v23LatestGeneration, v23PartConfigurationDraftDirty, v23QualityReasonValid, v23SeriesSwitchRequestBoundary, v23StableRefAttachmentStatus, v23WritePreflight } from "@/lib/v23-ui-actions";
+import { projectV23SeriesGantt, resolveCurrentV23Affixes, resolveCurrentV23Skus, resolveCurrentV23Technologies, resolveV23CatalogOrder, resolveV23InheritedAffixRefs, resolveV23SkuOccupiedAffixIds, resolveV23TechnologySurface, selectCurrentPublishedWeightTemplateDraftId, v23PartWeightBandsValid, validateV23CurrentDefaultAffixRefs, validateV23PreviewSkuHeads, type V23BandBlock, type V23CatalogOrders } from "@/lib/v23-series-gantt";
+import { buildV23LocalCopyPayload, executeV23UiAction, previewV23WeightBand, v23CanApplyReadback, v23CanCopyInheritedAffix, v23CanCreateSkuFromPreview, v23CanSavePartConfiguration, v23LatestGeneration, v23PartConfigurationDraftDirty, v23QualityReasonValid, v23SeriesSwitchRequestBoundary, v23StableRefAttachmentStatus, v23WritePreflight } from "@/lib/v23-ui-actions";
 import { randomUUID } from "@/lib/browser-utils";
 import { canApplyConfirmedWorkspace, DIRTY_WORKSPACE_CONFIRMATION_MESSAGE } from "@/lib/clean-workspace-confirmation";
 
@@ -107,11 +107,32 @@ function PartCard({ part, bandBlocks, orderedBands, state, workspaceRevision, pe
 }) {
   const [draft, setDraft] = useState(() => ({ fishingMethodId: part.fishingMethodId, materialTypeId: part.materialTypeId, functionProfileId: part.functionProfileId, functionIntensity: part.functionIntensity, weightBandIds: part.weightBandIds, defaultEntryRefs: part.defaultEntryRefs }));
   const [openedBlock, setOpenedBlock] = useState<number>();
-  const candidates = state.v23AffixDefinitions.filter((entry) => entry.payload.itemPartId === `part:${part.partType}` && entry.payload.enabled);
+  const candidateSurface = resolveCurrentV23Affixes(state, `part:${part.partType}`);
+  const candidates = candidateSurface.definitions;
   const technologyCatalog = resolveCurrentV23Technologies(state, `part:${part.partType}`);
   const draftDirty = v23PartConfigurationDraftDirty(part, draft);
+  const defaultAffixes = validateV23CurrentDefaultAffixRefs(state, `part:${part.partType}`, draft.defaultEntryRefs);
+  const weightBandsValid = draft.weightBandIds.length > 0
+    && new Set(draft.weightBandIds).size === draft.weightBandIds.length
+    && draft.weightBandIds.every((id) => orderedBands.includes(id));
+  const partSaveAllowed = v23CanSavePartConfiguration({
+    draftDirty,
+    weightBandsValid,
+    defaultAffixesValid: defaultAffixes.valid,
+  });
   const toggleBand = (id: string) => setDraft((current) => ({ ...current, weightBandIds: current.weightBandIds.includes(id) ? current.weightBandIds.filter((value) => value !== id) : [...current.weightBandIds, id] }));
-  const toggleAffix = (id: string) => setDraft((current) => ({ ...current, defaultEntryRefs: current.defaultEntryRefs.some((ref) => ref.id === id) ? current.defaultEntryRefs.filter((ref) => ref.id !== id) : [...current.defaultEntryRefs, ...candidates.filter((entry) => entry.affixId === id).map((entry) => ({ id: entry.affixId, revision: entry.revision, contentHash: entry.contentHash }))] }));
+  const toggleAffix = (id: string) => {
+    if (candidateSurface.unresolved) return notify(candidateSurface.reason ?? "Part 默认词条 current identity 无法唯一解析。");
+    const matches = candidates.filter((entry) => entry.affixId === id);
+    if (matches.length !== 1) return notify("Part 默认词条 current identity 无法唯一解析。");
+    const selected = matches[0]!;
+    setDraft((current) => ({
+      ...current,
+      defaultEntryRefs: current.defaultEntryRefs.some((ref) => ref.id === id)
+        ? current.defaultEntryRefs.filter((ref) => ref.id !== id)
+        : [...current.defaultEntryRefs, { id: selected.affixId, revision: selected.revision, contentHash: selected.contentHash }],
+    }));
+  };
   const technologyPayload = (technologyRef: V23StableContentRef) => ({
     expectedWorkspaceRevision: workspaceRevision,
     partId: part.partId,
@@ -125,10 +146,21 @@ function PartCard({ part, bandBlocks, orderedBands, state, workspaceRevision, pe
     }
     void write(action, technologyPayload(technologyRef), message);
   };
+  const savePart = () => {
+    if (!partSaveAllowed) {
+      const reason = !draftDirty
+        ? "Part 配置没有变化，已拒绝创建空 revision。"
+        : !defaultAffixes.valid
+          ? `${defaultAffixes.reason ?? "Part 默认词条无效"}；已拒绝保存。`
+          : "Part 重量段无效，已拒绝保存。";
+      return notify(reason);
+    }
+    void onSave({ partId: part.partId, partType: part.partType, ...draft, technologyRefs: part.technologyRefs });
+  };
   return <article className={`v23-part-card v23-${part.partType}`}><header><strong>{part.partType.toUpperCase()}</strong><small>immutable {part.partId} · r{part.revision}</small></header>
     <label>钓法<input value={draft.fishingMethodId} onChange={(event) => setDraft({ ...draft, fishingMethodId: event.target.value })} /></label><label>材质<input value={draft.materialTypeId} onChange={(event) => setDraft({ ...draft, materialTypeId: event.target.value })} /></label><label>功能定位<input value={draft.functionProfileId} onChange={(event) => setDraft({ ...draft, functionProfileId: event.target.value })} /></label><label>专精强度<select value={draft.functionIntensity} onChange={(event) => setDraft({ ...draft, functionIntensity: Number(event.target.value) as 1 | 2 | 3 })}><option value={1}>1</option><option value={2}>2</option><option value={3}>3</option></select></label>
     <fieldset><legend>01.x 重量段</legend><div className="v23-band-block">{orderedBands.map((id) => <label key={id}><input type="checkbox" checked={draft.weightBandIds.includes(id)} onChange={() => toggleBand(id)} />{id}</label>)}</div></fieldset>
-    <fieldset><legend>Part 默认词条</legend>{candidates.map((entry) => <label key={entry.affixId}><input type="checkbox" checked={draft.defaultEntryRefs.some((ref) => ref.id === entry.affixId)} onChange={() => toggleAffix(entry.affixId)} />{entry.payload.name}</label>)}</fieldset>
+    <fieldset><legend>Part 默认词条</legend>{candidateSurface.unresolved ? <p className="v23-fail-closed">{candidateSurface.reason}；已禁用默认词条编辑与保存。</p> : candidates.map((entry) => <label key={entry.affixId}><input type="checkbox" checked={draft.defaultEntryRefs.some((ref) => ref.id === entry.affixId)} onChange={() => toggleAffix(entry.affixId)} />{entry.payload.name}</label>)}</fieldset>
     <TechnologySurface state={state} refs={part.technologyRefs} itemPartId={`part:${part.partType}`} label="Part Technology" />
     {technologyCatalog.unresolved ? <p className="v23-fail-closed">{technologyCatalog.reason}；已禁用 Technology 挂载。</p> : <div className="v23-technology-actions">{technologyCatalog.technologies.map((technology) => {
       const ref = { id: technology.technologyId, revision: technology.revision, contentHash: technology.contentHash };
@@ -139,7 +171,7 @@ function PartCard({ part, bandBlocks, orderedBands, state, workspaceRevision, pe
       return <button key={technology.technologyId} type="button" disabled={pending || draftDirty || conflict || !availability[action]?.enabled} title={title} onClick={() => runTechnologyAction(action, ref, attachment === "exact" ? "Part Technology 已移除并完成 SKU 重算回读。" : "Part Technology 已挂载并完成 SKU 重算回读。")}>{conflict ? "先移除旧 revision" : attachment === "exact" ? "移除" : "挂载"} {technology.name}</button>;
     })}{part.technologyRefs.filter((ref) => !technologyCatalog.technologies.some((entry) => entry.technologyId === ref.id && entry.revision === ref.revision && entry.contentHash === ref.contentHash)).map((ref) => <button key={`${ref.id}:${ref.revision}`} type="button" disabled={pending || draftDirty || !availability.remove_part_technology?.enabled} title={draftDirty ? "Part 配置有未保存修改；请先保存 Part 配置，再操作 Technology。" : availability.remove_part_technology?.disabledReasonText} onClick={() => runTechnologyAction("remove_part_technology", ref, "旧版 Part Technology 引用已精确移除并完成 SKU 重算回读。")}>移除 {ref.id}@{ref.revision}</button>)}</div>}
     <div className="v23-gantt-blocks" role="group" aria-label={`${part.partType} 合并重量段`}>{bandBlocks.map((block, index) => <div key={block.weightBandIds.join(":")}><button type="button" aria-expanded={openedBlock === index} onClick={() => setOpenedBlock((current) => current === index ? undefined : index)}>{block.weightBandIds.join(" · ")}</button>{openedBlock === index ? <div className="v23-exact-band-picker" role="group" aria-label="选择准确重量段">{block.weightBandIds.map((id) => <button key={id} type="button" disabled={pending} onClick={() => onBand(part, id)}>预览 {id}</button>)}</div> : null}</div>)}</div>
-    <button type="button" disabled={pending || !availability.update_part_configuration?.enabled || !draft.weightBandIds.length} onClick={() => void onSave({ partId: part.partId, partType: part.partType, ...draft, technologyRefs: part.technologyRefs })} title={availability.update_part_configuration?.disabledReasonText}>保存 Part 配置</button>
+    <button type="button" disabled={pending || !availability.update_part_configuration?.enabled || !partSaveAllowed} onClick={savePart} title={!draftDirty ? "Part 配置没有变化。" : !defaultAffixes.valid ? defaultAffixes.reason : !weightBandsValid ? "Part 重量段无效。" : availability.update_part_configuration?.disabledReasonText}>保存 Part 配置</button>
   </article>;
 }
 

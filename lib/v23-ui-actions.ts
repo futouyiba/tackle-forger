@@ -133,6 +133,14 @@ export function v23PartConfigurationDraftDirty(
     || !exactRefs(part.defaultEntryRefs, draft.defaultEntryRefs);
 }
 
+export function v23CanSavePartConfiguration(input: {
+  draftDirty: boolean;
+  weightBandsValid: boolean;
+  defaultAffixesValid: boolean;
+}): boolean {
+  return input.draftDirty && input.weightBandsValid && input.defaultAffixesValid;
+}
+
 export function v23SeriesSwitchRequestBoundary(
   requestEpoch: number,
   pending: string | undefined,

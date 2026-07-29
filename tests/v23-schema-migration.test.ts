@@ -637,6 +637,26 @@ test("every legacy start rejects preloaded v23 roots and retained SKU evidence n
   const duplicate = structuredClone(complete);
   duplicate.v23LegacyReadAdapters.push(adapter("adapter:duplicate", "source:one", "LEGACY_SKU_DRAWER", sourceOne.skuDrawers[0]!));
   assert.throws(() => migrateWorkspaceState(duplicate), /V23_LEGACY_ADAPTER_SOURCE_DUPLICATE/);
+
+  const officialId = "official:collision";
+  const drawerId = `legacy-sku-drawer:${deterministicHash(officialId).slice(0, 12)}`;
+  const collisionSource = { schemaVersion: 22, skuDrawers: [{ id: drawerId }], officialSkus: [{ id: officialId }], seriesDefinitions: [] };
+  const sameEvidenceCollision = directV23State();
+  sameEvidenceCollision.v23MigrationSourceEvidence = [{ sourceEvidenceId: "source:collision", sourceSchemaVersion: 22, rawWorkspacePayload: collisionSource, rawWorkspacePayloadHash: deterministicHash(collisionSource) }];
+  sameEvidenceCollision.v23LegacyReadAdapters = [
+    adapter("adapter:collision-drawer", "source:collision", "LEGACY_SKU_DRAWER", collisionSource.skuDrawers[0]!),
+    adapter("adapter:collision-official", "source:collision", "LEGACY_OFFICIAL_SKU", collisionSource.officialSkus[0]!),
+  ];
+  assert.throws(() => migrateWorkspaceState(sameEvidenceCollision), /V23_LEGACY_ADAPTER_TARGET_SKU_DUPLICATE/);
+
+  const crossEvidenceCollision = structuredClone(sameEvidenceCollision);
+  crossEvidenceCollision.v23MigrationSourceEvidence = [
+    { sourceEvidenceId: "source:drawer", sourceSchemaVersion: 22, rawWorkspacePayload: { schemaVersion: 22, skuDrawers: collisionSource.skuDrawers, officialSkus: [], seriesDefinitions: [] }, rawWorkspacePayloadHash: deterministicHash({ schemaVersion: 22, skuDrawers: collisionSource.skuDrawers, officialSkus: [], seriesDefinitions: [] }) },
+    { sourceEvidenceId: "source:official", sourceSchemaVersion: 21, rawWorkspacePayload: { schemaVersion: 21, skuDrawers: [], officialSkus: collisionSource.officialSkus, seriesDefinitions: [] }, rawWorkspacePayloadHash: deterministicHash({ schemaVersion: 21, skuDrawers: [], officialSkus: collisionSource.officialSkus, seriesDefinitions: [] }) },
+  ];
+  crossEvidenceCollision.v23LegacyReadAdapters[0]!.sourceEvidenceId = "source:drawer";
+  crossEvidenceCollision.v23LegacyReadAdapters[1]!.sourceEvidenceId = "source:official";
+  assert.throws(() => migrateWorkspaceState(crossEvidenceCollision), /V23_LEGACY_ADAPTER_TARGET_SKU_DUPLICATE/);
 });
 
 test("v23 executes semantic contribution dedupe only where Phase A defines each entry set", () => {
@@ -657,6 +677,7 @@ test("v23 executes semantic contribution dedupe only where Phase A defines each 
 
   const local = directV23State();
   const ref = { id: local.v23AffixDefinitions[0]!.affixId, revision: 1, contentHash: local.v23AffixDefinitions[0]!.contentHash };
+  local.v23SkuDrawerRevisions[0]!.addedEntryRefs = [];
   local.v23SkuDrawerRevisions[0]!.localEntryCopies = ["copy:one", "copy:two"].map((localCopyId) => ({ kind: "LOCAL_AFFIX_COPY" as const, localCopyId, sourceRef: ref, payload: affixPayload(), copyHash: hash({ localCopyId, sourceRef: ref, payload: affixPayload() }) }));
   local.v23SkuDrawerRevisions[0] = withSkuHashes(local.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
   assert.throws(() => migrateWorkspaceState(local), /V23_SKU_LOCAL_COPY_SEMANTIC_CONTRIBUTION_CONFLICT/);
@@ -685,6 +706,13 @@ test("v23 executes semantic contribution dedupe only where Phase A defines each 
   stack.v23SkuDrawerRevisions[0]!.addedEntryRefs = [];
   stack.v23SkuDrawerRevisions[0] = withSkuHashes(stack.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
   assert.doesNotThrow(() => migrateWorkspaceState(stack));
+
+  const mixedPolicy = structuredClone(stack);
+  (mixedPolicy.v23AffixDefinitions[1]!.payload as unknown as Record<string, unknown>).stackingPolicy = "dedupe";
+  mixedPolicy.v23AffixDefinitions[1]!.contentHash = hash({ affixId: mixedPolicy.v23AffixDefinitions[1]!.affixId, revision: 1, payload: mixedPolicy.v23AffixDefinitions[1]!.payload });
+  mixedPolicy.v23SeriesPartRevisions[0]!.defaultEntryRefs[1]!.contentHash = mixedPolicy.v23AffixDefinitions[1]!.contentHash;
+  mixedPolicy.v23SeriesPartRevisions[0] = withPartHashes(mixedPolicy.v23SeriesPartRevisions[0]!) as SeriesPartRevision;
+  assert.throws(() => migrateWorkspaceState(mixedPolicy), /V23_PART_DEFAULT_ENTRY_SEMANTIC_CONTRIBUTION_CONFLICT/);
 
   const blocker = directV23State();
   blocker.v23SkuDrawerRevisions[0]!.validationSummary = [{ code: "block", severity: "BLOCKER", gate: "PUBLISH", state: "WAIVED", message: "no waiver" }];

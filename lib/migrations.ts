@@ -2021,6 +2021,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
   }
 
   const adapterIds = new Set<string>();
+  const adapterTargetSkuIds = new Set<string>();
   const coveredLegacySources = new Map<string, Set<string>>();
   for (const value of adapters) {
     const entry = v23Record(value, "V23_LEGACY_ADAPTER");
@@ -2052,6 +2053,8 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     covered.add(sourceIdentity); coveredLegacySources.set(sourceEvidenceId, covered);
     // Must exactly mirror legacy-product-migration.ts stableId("legacy-sku-drawer:", official.id).
     if ((sourceKind === "LEGACY_SKU_DRAWER" && targetSkuId !== sourceRecordId) || (sourceKind === "LEGACY_OFFICIAL_SKU" && targetSkuId !== `legacy-sku-drawer:${deterministicHash(sourceRecordId).slice(0, 12)}`)) throw new Error("V23_LEGACY_ADAPTER_TARGET_SKU_INVALID");
+    if (adapterTargetSkuIds.has(targetSkuId)) throw new Error("V23_LEGACY_ADAPTER_TARGET_SKU_DUPLICATE");
+    adapterTargetSkuIds.add(targetSkuId);
     if (entry.sourceSeriesId !== null) {
       const rawSeries = v23Record(entry.rawSeriesPayload, "V23_LEGACY_ADAPTER_RAW_SERIES");
       if (rawSeries.id !== entry.sourceSeriesId) throw new Error("V23_LEGACY_ADAPTER_SERIES_CHAIN_INVALID");

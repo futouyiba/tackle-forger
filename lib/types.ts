@@ -1139,6 +1139,208 @@ export interface SkuDrawer {
   updatedAt: string;
 }
 
+/** Schema v23 only enables the currently supported product parts. */
+export type V23EnabledPartType = "rod" | "reel" | "line";
+
+export interface V23StableContentRef {
+  id: string;
+  revision: number;
+  contentHash: string;
+}
+
+/**
+ * A v23 Series is still identified only by its stable seriesId.  Parts are
+ * independent revisions so later phases can change one part without using a
+ * Series-level pull or function identity as a substitute.
+ */
+export interface SeriesPartRevision {
+  partId: string;
+  seriesId: string;
+  revision: number;
+  partType: V23EnabledPartType;
+  fishingMethodId: string;
+  materialTypeId: string;
+  functionProfileId: string;
+  functionIntensity: FunctionIntensity;
+  weightBandIds: string[];
+  defaultEntryRefs: V23StableContentRef[];
+  technologyRefs: V23StableContentRef[];
+  inputFingerprint: string;
+  contentHash: string;
+}
+
+export interface SeriesPartHeadRef { seriesId: string; partId: string; revision: number; }
+export interface V23SkuDrawerHeadRef { skuId: string; revision: number; }
+
+export type V23ProjectAttributeOperation =
+  | { operationId: string; operationIndex: number; sourceAffixId: string; sourceAffixRevision: number; parameterKey: string; operation: "percent_adjust" | "flat_adjust"; direction: "increase" | "decrease"; magnitude: number; publishedMagnitudeRange: { min: number; max: number; ruleSetVersion: string } }
+  | { operationId: string; operationIndex: number; sourceAffixId: string; sourceAffixRevision: number; parameterKey: string; operation: "clamp_add"; direction: "increase" | "decrease"; magnitude: number; clampMin: number; clampMax: number; publishedMagnitudeRange: { min: number; max: number; ruleSetVersion: string } }
+  | { operationId: string; operationIndex: number; sourceAffixId: string; sourceAffixRevision: number; parameterKey: string; operation: "enum_add"; value: string }
+  | { operationId: string; operationIndex: number; sourceAffixId: string; sourceAffixRevision: number; parameterKey: string; operation: "set"; value: number | string | boolean };
+
+export interface V23ProjectPassivePayload {
+  skillId: string;
+  name: string;
+  itemPartId: string;
+  triggerType: string;
+  triggerDescription: string;
+  effectTarget: string;
+  effectLogicDescription: string;
+  exampleParameters: Record<string, number | string | boolean>;
+  durationDescription: string;
+  cooldownDescription: string;
+  resetDescription: string;
+  stackingDescription: string;
+  playerDescription: string;
+  simulatorReferenceKey: string | null;
+}
+
+export type V23ProjectAffixPayload =
+  | { name: string; category: "attribute"; itemPartId: string; semanticContributionKey: string; stackingPolicy: "dedupe" | "stack"; generationPolicy: AffixGenerationPolicy; rarity: AffixRarity; valueScore: number; tags: string[]; description: string; enabled: boolean; operations: V23ProjectAttributeOperation[]; passivePayload: null }
+  | { name: string; category: "passive"; itemPartId: string; semanticContributionKey: string; stackingPolicy: "dedupe" | "stack"; generationPolicy: AffixGenerationPolicy; rarity: AffixRarity; valueScore: number; tags: string[]; description: string; enabled: boolean; operations: []; passivePayload: V23ProjectPassivePayload };
+
+export interface V23AffixDefinition {
+  affixId: string;
+  revision: number;
+  contentHash: string;
+  payload: V23ProjectAffixPayload;
+}
+
+export type V23SkuAffixEntry =
+  | {
+      kind: "STABLE_AFFIX_REF";
+      ref: V23StableContentRef;
+    }
+  | {
+      kind: "LOCAL_AFFIX_COPY";
+      localCopyId: string;
+      sourceRef: V23StableContentRef;
+      payload: V23ProjectAffixPayload;
+      copyHash: string;
+    };
+
+export interface V23FunctionTemplateRef {
+  templateId: string;
+  revisionId: string;
+  contentHash: string;
+}
+
+export interface V23MatchedTemplateKey {
+  partType: V23EnabledPartType;
+  weightBandId: string;
+  fishingMethodId: string;
+  materialTypeId: string;
+  functionProfileId: string;
+  functionIntensity: FunctionIntensity;
+}
+
+/** A successful 04.5 match carries every identity needed to replay it. */
+export type V23SkuMatch =
+  | { status: "VALID"; functionTemplateRef: V23FunctionTemplateRef; matchedKey: V23MatchedTemplateKey; inputFingerprint: string }
+  | { status: "INVALID_NO_MATCH"; attemptedKey: V23MatchedTemplateKey; inputFingerprint: string }
+  | { status: "INVALID_AMBIGUOUS"; attemptedKey: V23MatchedTemplateKey; inputFingerprint: string }
+  | { status: "NEEDS_MIGRATION_REVIEW" };
+
+export interface V23SkuAffixValueBreakdown {
+  sourceAffixId: string;
+  valueScore: number;
+  sourceRef: string;
+}
+
+export interface V23SkuCombinationValueBreakdown {
+  leftAffixId: string;
+  rightAffixId: string;
+  valueScore: number;
+  sourceRef: string;
+}
+
+/** §12.1 的 SKU revision 专属冻结载体；不复用 Model 的运行时评估。 */
+export interface V23SkuAffixValueAssessment {
+  skuRevisionId: string;
+  recommendedQualityId: QualityProfileId | null;
+  selectedQualityId: QualityProfileId;
+  qualityOverrideState: "MATCHED" | "OVERRIDDEN" | "NO_RECOMMENDATION";
+  qualityOverrideReason: string | null;
+  baseAffixScore: number;
+  combinationScore: number;
+  functionScoreFactor: number;
+  finalValueScore: number;
+  affixBreakdown: V23SkuAffixValueBreakdown[];
+  combinationBreakdown: V23SkuCombinationValueBreakdown[];
+  qualityRangePolicyVersion: string;
+  scoringPolicyVersion: string;
+  inSelectedQualityRange: boolean;
+  inputHash: string;
+}
+
+export type V23SkuQualityAssessment =
+  | { status: "UNASSESSED" }
+  | { status: "ASSESSED"; assessment: V23SkuAffixValueAssessment };
+
+/** v23 stores a closed current summary, not a legacy ValidationIssue union. */
+export interface V23ValidationSummaryIssue {
+  code: string;
+  severity: "INFO" | "WARNING" | "ERROR" | "BLOCKER";
+  gate: "NONE" | "REVIEW" | "PUBLISH" | "EXPORT";
+  state: "OPEN" | "ACKNOWLEDGED" | "RESOLVED" | "WAIVED" | "STALE";
+  message: string;
+}
+
+/**
+ * This is only the persistence carrier.  Phase A intentionally does not
+ * match 04.5 templates, derive pull, or calculate quality.
+ */
+export interface SkuDrawerRevision {
+  skuId: string;
+  revision: number;
+  seriesId: string;
+  partId: string;
+  partRevision: number;
+  weightBandId: string;
+  match: V23SkuMatch;
+  removedInheritedEntryIds: string[];
+  addedEntryRefs: Extract<V23SkuAffixEntry, { kind: "STABLE_AFFIX_REF" }>[];
+  localEntryCopies: Extract<V23SkuAffixEntry, { kind: "LOCAL_AFFIX_COPY" }>[];
+  technologyRefs: V23StableContentRef[];
+  quality: V23SkuQualityAssessment;
+  skuPatchIds: string[];
+  modelIds: string[];
+  defaultModelId: string | null;
+  displayOrder: number;
+  validationSummary: V23ValidationSummaryIssue[];
+  status: EntityLifecycleStatus;
+  contentHash: string;
+}
+
+/** Original inputs are retained separately so a v23 read adapter never has to
+ * infer a stable target from a name, pull range, or nearest projection. */
+export interface V23MigrationSourceEvidence {
+  sourceEvidenceId: string;
+  sourceSchemaVersion: number;
+  rawWorkspacePayload: unknown;
+  rawWorkspacePayloadHash: string;
+}
+
+export interface V23LegacyReadAdapter {
+  adapterId: string;
+  kind: "LEGACY_NEEDS_REVIEW";
+  sourceEvidenceId: string;
+  targetSkuId: string;
+  sourceKind: "LEGACY_SKU_DRAWER" | "LEGACY_OFFICIAL_SKU";
+  sourceRecordId: string;
+  rawSourcePayload: unknown;
+  sourceSeriesId: string | null;
+  rawSeriesPayload: unknown;
+  lineage: { kind: "SINGLE_SOURCE" } | { kind: "OFFICIAL_SKU_MIGRATED_DRAWER"; officialSourceRecordId: string; officialRawSourcePayload: unknown; officialRawSourcePayloadHash: string; drawerRawSourcePayloadHash: string };
+  diagnosticCodes: Array<
+    | "V23_SERIES_UNRESOLVED"
+    | "V23_PART_UNRESOLVED"
+    | "V23_WEIGHT_BAND_UNRESOLVED"
+    | "V23_FUNCTION_TEMPLATE_UNRESOLVED"
+  >;
+  status: "NEEDS_REVIEW";
+}
+
 export interface ModelComponentSelection {
   itemPartId: string;
   componentId: string;
@@ -2782,6 +2984,14 @@ export interface WorkspaceState {
   affinityAxisWeights: AffinityAxisWeights;
   collections: Collection[];
   seriesDefinitions: SeriesDefinition[];
+  /** v23 target-state carriers; v9/v22 collections remain read-only legacy data. */
+  v23SeriesPartRevisions: SeriesPartRevision[];
+  v23SeriesPartHeads: SeriesPartHeadRef[];
+  v23SkuDrawerRevisions: SkuDrawerRevision[];
+  v23SkuDrawerHeads: V23SkuDrawerHeadRef[];
+  v23AffixDefinitions: V23AffixDefinition[];
+  v23MigrationSourceEvidence: V23MigrationSourceEvidence[];
+  v23LegacyReadAdapters: V23LegacyReadAdapter[];
   partConstraintSets: PartConstraintSet[];
   skuDrawers: SkuDrawer[];
   purchasableModels: PurchasableModel[];

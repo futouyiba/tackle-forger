@@ -5,6 +5,13 @@ import { CURRENT_WORKSPACE_SCHEMA_VERSION, migrateWorkspaceState } from "../lib/
 import { createSeedState } from "../lib/seed";
 
 const now = "2026-07-22T00:00:00.000Z";
+const V23_RESERVED_ROOTS = ["v23SeriesPartRevisions", "v23SeriesPartHeads", "v23SkuDrawerRevisions", "v23SkuDrawerHeads", "v23AffixDefinitions", "v23MigrationSourceEvidence", "v23LegacyReadAdapters"] as const;
+function markLegacy<T extends object>(state: T, schemaVersion: number): T {
+  const mutable = state as Record<string, unknown>;
+  mutable.schemaVersion = schemaVersion;
+  for (const key of V23_RESERVED_ROOTS) delete mutable[key];
+  return state;
+}
 const workspaceId = "workspace:test";
 function makeRevision(overrides: Record<string, unknown> = {}) {
   return buildPatchRevision({
@@ -415,7 +422,7 @@ test("Workspace 迁移从 Snapshot 正向引用保护 revision，不依赖冗余
 });
 test("workspace v9 migrates sequentially to current ledger schema and repeated migration is idempotent", () => {
   const legacy=structuredClone(createSeedState()) as unknown as Record<string,unknown>;
-  legacy.schemaVersion=9; delete legacy.patchLedger;
+  markLegacy(legacy, 9); delete legacy.patchLedger;
   const once=migrateWorkspaceState(legacy), twice=migrateWorkspaceState(once);
   assert.equal(once.schemaVersion,CURRENT_WORKSPACE_SCHEMA_VERSION); assert.deepEqual(twice.patchLedger,once.patchLedger);
   assert.equal(twice.projectionPatches.length,once.projectionPatches.length);
@@ -436,7 +443,7 @@ test("seed patches are persisted in the ledger and runtime view is ledger-author
 
 test("legacy snapshot without revision refs is preserved and sent to migration review", () => {
   const legacy=structuredClone(createSeedState()) as unknown as Record<string,unknown>;
-  legacy.schemaVersion=9; delete legacy.patchLedger;
+  markLegacy(legacy, 9); delete legacy.patchLedger;
   const snapshots=legacy.configurationSnapshots as Array<Record<string,unknown>>;
   for(const snapshot of snapshots) delete snapshot.patchReferences;
   const before=structuredClone(snapshots);
@@ -447,7 +454,7 @@ test("legacy snapshot without revision refs is preserved and sent to migration r
 
 test("already migrated v10 workspace receives the v11 snapshot audit", () => {
   const legacy=structuredClone(createSeedState()) as unknown as Record<string,unknown>;
-  legacy.schemaVersion=10;
+  markLegacy(legacy, 10);
   const snapshots=legacy.configurationSnapshots as Array<Record<string,unknown>>;
   for(const snapshot of snapshots) delete snapshot.patchReferences;
   const ledger=legacy.patchLedger as {migrationReviewItems:Array<{id:string}>};
@@ -466,7 +473,7 @@ test("只有 ACTIVE revision 进入运行时视图，APPROVED 仍等待显式启
 
 test("v11 只把 legacy approved 迁为 ACTIVE，不误激活原生审核态", () => {
   const legacy=structuredClone(createSeedState());
-  legacy.schemaVersion=11;
+  markLegacy(legacy, 11);
   legacy.patchLedger.revisions=[
     makeRevision({patchId:"patch:legacy",state:"APPROVED",rawPayload:{status:"approved"}}),
     makeRevision({patchId:"patch:native",state:"APPROVED",rawPayload:{source:"native"}}),

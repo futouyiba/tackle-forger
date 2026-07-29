@@ -48,10 +48,15 @@ function maliciousEntry(shareUrl: string): Record<string, unknown> {
 }
 
 const ALLOWED_KEYS = ["dataset", "id", "label", "lastUsedAt", "shareUrl"];
+const V23_RESERVED_ROOTS = ["v23SeriesPartRevisions", "v23SeriesPartHeads", "v23SkuDrawerRevisions", "v23SkuDrawerHeads", "v23AffixDefinitions", "v23MigrationSourceEvidence", "v23LegacyReadAdapters"] as const;
+function markLegacy(state: Record<string, unknown>, schemaVersion: number) {
+  state.schemaVersion = schemaVersion;
+  for (const key of V23_RESERVED_ROOTS) delete state[key];
+}
 
 test("schema v19 升级到 v20 时补齐飞书分享链接历史且不改写冻结 Snapshot", () => {
   const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
-  legacy.schemaVersion = 19;
+  markLegacy(legacy, 19);
   delete legacy.feishuShareLinkHistory;
   const snapshotsBefore = structuredClone(legacy.configurationSnapshots);
   const migrated = migrateWorkspaceState(legacy);
@@ -64,7 +69,7 @@ test("schema v19 升级到 v20 时补齐飞书分享链接历史且不改写冻�
 
 test("schema v20 保留已有的飞书分享链接历史并过滤非法条目", () => {
   const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
-  legacy.schemaVersion = 19;
+  markLegacy(legacy, 19);
   const valid = entry(SAMPLE_URL_A, "A 表 · 重量模板", "weight_templates");
   const dup = entry(SAMPLE_URL_A, "重复 A 表", "weight_templates", "2026-07-02T00:00:00.000Z");
   const badDataset = { id: "x", shareUrl: SAMPLE_URL_B, label: "坏", dataset: "unknown", lastUsedAt: "2026-07-01T00:00:00.000Z" };
@@ -177,7 +182,7 @@ test("历史条目结构只含非敏感字段，绝不携带 appToken 或凭据"
 
 test("schema v19 迁移剥离历史条目上的 appToken/secret/PII 等额外字段", () => {
   const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
-  legacy.schemaVersion = 19;
+  markLegacy(legacy, 19);
   legacy.feishuShareLinkHistory = [maliciousEntry(SAMPLE_URL_A)];
   const migrated = migrateWorkspaceState(legacy);
   assert.equal(migrated.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
@@ -195,7 +200,7 @@ test("schema v20 直接保存载荷在归一时剥离历史条目上的凭据/PI
   // 当前 schema (v20) 输入会跳过顺序迁移，只走 migrateWorkspaceState 的归一段；
   // 这是保存边界，必须同样剥离客户端载荷可能夹带的敏感字段。
   const seeded = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
-  seeded.schemaVersion = 20;
+  markLegacy(seeded, 20);
   seeded.feishuShareLinkHistory = [maliciousEntry(SAMPLE_URL_A)];
   const normalized = migrateWorkspaceState(seeded);
   assert.equal(normalized.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);
@@ -209,7 +214,7 @@ test("schema v20 直接保存载荷在归一时剥离历史条目上的凭据/PI
 
 test("凭据剥离在重复迁移与归一后保持幂等", () => {
   const legacy = structuredClone(createSeedState()) as unknown as Record<string, unknown>;
-  legacy.schemaVersion = 19;
+  markLegacy(legacy, 19);
   legacy.feishuShareLinkHistory = [maliciousEntry(SAMPLE_URL_A)];
   const once = migrateWorkspaceState(legacy);
   const twice = migrateWorkspaceState(once);

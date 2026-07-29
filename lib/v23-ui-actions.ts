@@ -88,6 +88,16 @@ export function v23CanCreateSkuFromPreview(status: unknown): boolean {
   return status === "VALID";
 }
 
+export function v23SeriesSwitchRequestBoundary(
+  requestEpoch: number,
+  pending: string | undefined,
+): { requestEpoch: number; pending: string | undefined } {
+  return {
+    requestEpoch: requestEpoch + 1,
+    pending: pending?.startsWith("preview:") ? undefined : pending,
+  };
+}
+
 export function v23QualityReasonValid(
   recommendedQualityId: string | null | undefined,
   selectedQualityId: string,

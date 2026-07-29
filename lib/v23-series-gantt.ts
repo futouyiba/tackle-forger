@@ -2,6 +2,7 @@ import { expandV23TechnologyRefs, validateV23TechnologyDefinition } from "./v23-
 import type {
   SeriesPartRevision,
   SkuDrawerRevision,
+  V23EnabledPartType,
   V23StableContentRef,
   V23TechnologyDefinition,
   WorkspaceState,
@@ -18,35 +19,22 @@ export function selectCurrentPublishedWeightTemplateDraftId(state: WorkspaceStat
 export function resolveV23CatalogOrder(templates: ReadonlyArray<{
   id?: unknown; sourceRow?: unknown; itemPartId?: unknown; sourceSheetId?: unknown;
   source?: { sheetId?: unknown };
-}>): string[] | undefined {
+}>, itemPartId: `part:${V23EnabledPartType}`): string[] | undefined {
   if (!templates.length) return undefined;
-  const valid = templates.map((entry) => {
+  const scoped = templates.filter((entry) => entry.itemPartId === itemPartId);
+  if (!scoped.length) return undefined;
+  const valid = scoped.map((entry) => {
     if (typeof entry.id !== "string" || !entry.id || entry.id.trim() !== entry.id || !Number.isSafeInteger(entry.sourceRow) || (entry.sourceRow as number) < 1) return undefined;
-    const scope = typeof entry.itemPartId === "string" && entry.itemPartId
-      ? entry.itemPartId
-      : typeof entry.source?.sheetId === "string" && entry.source.sheetId
-        ? `sheet:${entry.source.sheetId}`
-        : typeof entry.sourceSheetId === "string" && entry.sourceSheetId
-          ? `sheet:${entry.sourceSheetId}`
-          : "legacy";
-    return { id: entry.id, sourceRow: entry.sourceRow as number, scope };
+    return { id: entry.id, sourceRow: entry.sourceRow as number };
   });
   if (valid.some((entry) => !entry)) return undefined;
-  const groups = new Map<string, Array<{ id: string; sourceRow: number; scope: string }>>();
-  for (const entry of valid as Array<{ id: string; sourceRow: number; scope: string }>) {
-    groups.set(entry.scope, [...(groups.get(entry.scope) ?? []), entry]);
-  }
-  const ordered: string[] = [];
-  for (const scope of [...groups.keys()].sort()) {
-    const entries = groups.get(scope)!;
-    if (new Set(entries.map((entry) => entry.id)).size !== entries.length
-      || new Set(entries.map((entry) => entry.sourceRow)).size !== entries.length) return undefined;
-    for (const entry of entries.sort((left, right) => left.sourceRow - right.sourceRow)) {
-      if (!ordered.includes(entry.id)) ordered.push(entry.id);
-    }
-  }
-  return ordered;
+  const entries = valid as Array<{ id: string; sourceRow: number }>;
+  if (new Set(entries.map((entry) => entry.id)).size !== entries.length
+    || new Set(entries.map((entry) => entry.sourceRow)).size !== entries.length) return undefined;
+  return entries.sort((left, right) => left.sourceRow - right.sourceRow).map((entry) => entry.id);
 }
+
+export type V23CatalogOrders = Readonly<Record<V23EnabledPartType, readonly string[] | undefined>>;
 
 export interface V23BandBlock {
   part: SeriesPartRevision;
@@ -112,12 +100,38 @@ export function mergeV23WeightBands(part: SeriesPartRevision, orderedWeightBandI
   return blocks.map((weightBandIds) => ({ part, weightBandIds }));
 }
 
-export function projectV23SeriesGantt(state: WorkspaceState, seriesId: string, orderedWeightBandIds: readonly string[]): V23SeriesProjection {
-  if (!orderedWeightBandIds.length || new Set(orderedWeightBandIds).size !== orderedWeightBandIds.length) return { seriesId, parts: [], unresolved: true, reason: "01.x 重量段目录为空或存在重复 ID" };
+export function projectV23SeriesGantt(state: WorkspaceState, seriesId: string, catalogOrders: V23CatalogOrders): V23SeriesProjection {
   const current = resolveCurrentV23Parts(state, seriesId);
   if (current.unresolved) return { seriesId, parts: [], unresolved: true, reason: current.reason };
-  if (current.parts.some((part) => new Set(part.weightBandIds).size !== part.weightBandIds.length || part.weightBandIds.some((id) => !orderedWeightBandIds.includes(id)))) return { seriesId, parts: [], unresolved: true, reason: "Part 重量段重复或不在当前 01.x 目录" };
-  return { seriesId, unresolved: false, parts: current.parts.map((part) => ({ part, bandBlocks: mergeV23WeightBands(part, orderedWeightBandIds) })) };
+  if (current.parts.some((part) => {
+    const order = catalogOrders[part.partType];
+    return !order?.length
+      || new Set(order).size !== order.length
+      || new Set(part.weightBandIds).size !== part.weightBandIds.length
+      || part.weightBandIds.some((id) => !order.includes(id));
+  })) return { seriesId, parts: [], unresolved: true, reason: "Part 重量段重复或不在该 Part 当前 01.x 目录" };
+  return {
+    seriesId,
+    unresolved: false,
+    parts: current.parts.map((part) => ({
+      part,
+      bandBlocks: mergeV23WeightBands(part, catalogOrders[part.partType]!),
+    })),
+  };
+}
+
+export function v23PartWeightBandsValid(
+  part: Pick<SeriesPartRevision, "partType">,
+  weightBandIds: readonly string[],
+  catalogOrders: V23CatalogOrders,
+): boolean {
+  const order = catalogOrders[part.partType];
+  return Boolean(
+    order?.length
+    && weightBandIds.length
+    && new Set(weightBandIds).size === weightBandIds.length
+    && weightBandIds.every((id) => order.includes(id)),
+  );
 }
 
 export function validateV23PreviewSkuHeads(expected: readonly SkuDrawerRevision[], received: unknown): received is SkuDrawerRevision[] {
@@ -222,4 +236,31 @@ export function resolveV23InheritedAffixRefs(
       left.id < right.id ? -1 : left.id > right.id ? 1 : 0),
     unresolved: false,
   };
+}
+
+export function resolveV23SkuOccupiedAffixIds(
+  state: WorkspaceState,
+  part: SeriesPartRevision,
+  sku: SkuDrawerRevision,
+): { ids: string[]; unresolved: boolean; reason?: string } {
+  const inherited = resolveV23InheritedAffixRefs(state, part);
+  if (inherited.unresolved) {
+    return { ids: [], unresolved: true, reason: inherited.reason };
+  }
+  const skuTechnology = resolveV23TechnologySurface(
+    state,
+    sku.technologyRefs,
+    `part:${part.partType}`,
+  );
+  if (skuTechnology.unresolved) {
+    return { ids: [], unresolved: true, reason: skuTechnology.reason };
+  }
+  const ids = new Set<string>([
+    ...inherited.refs.map((ref) => ref.id),
+    ...skuTechnology.members.map((entry) => entry.ref.id),
+    ...sku.addedEntryRefs.map((entry) => entry.ref.id),
+    ...sku.localEntryCopies.map((entry) => entry.sourceRef.id),
+    ...sku.removedInheritedEntryIds,
+  ]);
+  return { ids: [...ids].sort(), unresolved: false };
 }

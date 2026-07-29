@@ -5,14 +5,14 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { V23SeriesPartWorkbench } from "../app/V23SeriesPartWorkbench";
 import type { ActionAvailabilityMap } from "../lib/interaction-contracts";
-import { buildV23LocalCopyPayload, v23CanCreateSkuFromPreview, v23QualityReasonValid } from "../lib/v23-ui-actions";
+import { buildV23LocalCopyPayload, v23CanCreateSkuFromPreview, v23QualityReasonValid, v23SeriesSwitchRequestBoundary } from "../lib/v23-ui-actions";
 import type { SeriesPartRevision, V23ProjectAffixPayload, WorkspaceState } from "../lib/types";
 
 const part = (partId: string, partType: "rod" | "reel" | "line", bands: string[]): SeriesPartRevision => ({ partId, seriesId: "series:one", revision: 1, partType, fishingMethodId: "method", materialTypeId: "material", functionProfileId: "function", functionIntensity: 2, weightBandIds: bands, defaultEntryRefs: [], technologyRefs: [], inputFingerprint: "a".repeat(64), contentHash: "b".repeat(64) });
 const availability = Object.fromEntries(["preview_weight_band_skus", "create_sku", "create_project_affix", "update_part_configuration", "add_sku_affix", "remove_inherited_affix", "restore_inherited_affix", "copy_sku_local_affix", "update_sku_local_affix_copy", "attach_part_technology", "remove_part_technology", "attach_sku_technology", "remove_sku_technology", "set_sku_actual_quality"].map((action) => [action, { enabled: false, disabledReasonText: "权限不足" }])) as ActionAvailabilityMap;
 const fixture = (): WorkspaceState => {
   const parts = [part("part:rod", "rod", ["01.1", "01.2", "01.4"]), part("part:reel", "reel", ["01.1"]), part("part:line", "line", ["01.2"])];
-  return { seriesDefinitions: [{ id: "series:one", name: "测试系列" }], v23SeriesPartRevisions: parts, v23SeriesPartHeads: parts.map((entry) => ({ seriesId: entry.seriesId, partId: entry.partId, revision: entry.revision })), v23SkuDrawerHeads: [], v23SkuDrawerRevisions: [], v23AffixDefinitions: [], v23TechnologyDefinitions: [], v23TechnologyHeads: [], ruleSetVersions: [{ id: "rules:current", version: 2, status: "published", weightTemplateDraftId: "draft:bands" }], weightTemplatePolicyDrafts: [{ id: "draft:bands", templates: [{ id: "01.1", sourceRow: 2 }, { id: "01.2", sourceRow: 10 }, { id: "01.4", sourceRow: 20 }] }] } as unknown as WorkspaceState;
+  return { seriesDefinitions: [{ id: "series:one", name: "测试系列" }], v23SeriesPartRevisions: parts, v23SeriesPartHeads: parts.map((entry) => ({ seriesId: entry.seriesId, partId: entry.partId, revision: entry.revision })), v23SkuDrawerHeads: [], v23SkuDrawerRevisions: [], v23AffixDefinitions: [], v23TechnologyDefinitions: [], v23TechnologyHeads: [], ruleSetVersions: [{ id: "rules:current", version: 2, status: "published", weightTemplateDraftId: "draft:bands" }], weightTemplatePolicyDrafts: [{ id: "draft:bands", templates: [{ id: "01.1", itemPartId: "part:rod", sourceRow: 2 }, { id: "01.2", itemPartId: "part:rod", sourceRow: 10 }, { id: "01.4", itemPartId: "part:rod", sourceRow: 20 }, { id: "01.1", itemPartId: "part:reel", sourceRow: 2 }, { id: "01.2", itemPartId: "part:line", sourceRow: 2 }] }] } as unknown as WorkspaceState;
 };
 
 test("v23 Part 工作台显式预览与受控动作，不在甘特块点击时创建 SKU", async () => {
@@ -40,6 +40,13 @@ test("v23 Part 工作台显式预览与受控动作，不在甘特块点击时�
   assert.match(source, /DIRTY_WORKSPACE_CONFIRMATION_MESSAGE/);
   assert.match(source, /canApplyConfirmedWorkspace/);
   assert.match(source, /v23WritePreflight/);
+  assert.match(source, /v23SeriesSwitchRequestBoundary\(requestEpoch\.current, pending\)/);
+  assert.match(source, /setPending\(boundary\.pending\)/);
+  assert.match(source, /重量段不属于该 Part 当前目录，已拒绝预览/);
+  assert.match(source, /Part 重量段不属于该 Part 当前目录，已拒绝保存/);
+  assert.match(source, /resolveV23SkuOccupiedAffixIds/);
+  assert.match(source, /occupiedAffixes\.ids\.includes\(item\.affixId\)/);
+  assert.match(source, /已拒绝重复添加/);
 });
 
 test("create SKU 只接受 VALID preview，两个 invalid 状态均不进入写入资格", () => {
@@ -58,6 +65,12 @@ test("品质理由双向不变量覆盖无推荐、不匹配、匹配与非法�
   assert.equal(v23QualityReasonValid("quality_c_green", "quality_b_blue", "人工覆盖"), true);
   assert.equal(v23QualityReasonValid("quality_c_green", "quality_c_green", "多余理由"), false);
   assert.equal(v23QualityReasonValid("quality_c_green", "quality_c_green", " "), true);
+});
+
+test("Series 切换不会继承旧 preview pending，写入 pending 则保持真实状态", () => {
+  assert.deepEqual(v23SeriesSwitchRequestBoundary(2, "preview:part:rod:01.1"), { requestEpoch: 3, pending: undefined });
+  assert.deepEqual(v23SeriesSwitchRequestBoundary(2, "create_sku:token"), { requestEpoch: 3, pending: "create_sku:token" });
+  assert.deepEqual(v23SeriesSwitchRequestBoundary(2, undefined), { requestEpoch: 3, pending: undefined });
 });
 
 test("SSR: 唯一 Part 卡、合并块与准确重量段选择器的初始语义", () => {

@@ -4,20 +4,24 @@ import { useMemo, useRef, useState } from "react";
 import { Plus, RefreshCw } from "lucide-react";
 import type { ActionAvailabilityMap } from "@/lib/interaction-contracts";
 import type { SeriesPartRevision, SkuDrawerRevision, V23ProjectAffixPayload, V23StableContentRef, WorkspaceState } from "@/lib/types";
-import { projectV23SeriesGantt, resolveCurrentV23Skus, resolveCurrentV23Technologies, resolveV23CatalogOrder, resolveV23InheritedAffixRefs, resolveV23TechnologySurface, selectCurrentPublishedWeightTemplateDraftId, validateV23PreviewSkuHeads, type V23BandBlock } from "@/lib/v23-series-gantt";
-import { buildV23LocalCopyPayload, executeV23UiAction, previewV23WeightBand, v23CanApplyReadback, v23CanCreateSkuFromPreview, v23LatestGeneration, v23QualityReasonValid, v23WritePreflight } from "@/lib/v23-ui-actions";
+import { projectV23SeriesGantt, resolveCurrentV23Skus, resolveCurrentV23Technologies, resolveV23CatalogOrder, resolveV23InheritedAffixRefs, resolveV23SkuOccupiedAffixIds, resolveV23TechnologySurface, selectCurrentPublishedWeightTemplateDraftId, v23PartWeightBandsValid, validateV23PreviewSkuHeads, type V23BandBlock, type V23CatalogOrders } from "@/lib/v23-series-gantt";
+import { buildV23LocalCopyPayload, executeV23UiAction, previewV23WeightBand, v23CanApplyReadback, v23CanCreateSkuFromPreview, v23LatestGeneration, v23QualityReasonValid, v23SeriesSwitchRequestBoundary, v23WritePreflight } from "@/lib/v23-ui-actions";
 import { randomUUID } from "@/lib/browser-utils";
 import { canApplyConfirmedWorkspace, DIRTY_WORKSPACE_CONFIRMATION_MESSAGE } from "@/lib/clean-workspace-confirmation";
 
 type Preview = { part: SeriesPartRevision; weightBandId: string; skus: SkuDrawerRevision[]; match?: { status?: string } };
 
-function canonicalBandOrder(state: WorkspaceState) {
+function canonicalBandOrders(state: WorkspaceState): V23CatalogOrders {
   const currentId = selectCurrentPublishedWeightTemplateDraftId(state);
-  if (!currentId) return [];
+  if (!currentId) return { rod: undefined, reel: undefined, line: undefined };
   const drafts = state.weightTemplatePolicyDrafts.filter((entry) => entry.id === currentId);
-  if (drafts.length !== 1) return [];
+  if (drafts.length !== 1) return { rod: undefined, reel: undefined, line: undefined };
   const draft = drafts[0];
-  return resolveV23CatalogOrder(draft?.templates ?? []) ?? [];
+  return {
+    rod: resolveV23CatalogOrder(draft?.templates ?? [], "part:rod"),
+    reel: resolveV23CatalogOrder(draft?.templates ?? [], "part:reel"),
+    line: resolveV23CatalogOrder(draft?.templates ?? [], "part:line"),
+  };
 }
 
 export function V23SeriesPartWorkbench(props: {
@@ -25,16 +29,17 @@ export function V23SeriesPartWorkbench(props: {
   notify: (message: string) => void; workspaceFreshness: () => { dirty: boolean; revision: number }; onApplied: (state: WorkspaceState, revision: number, message: string) => void;
 }) {
   const { state, workspaceRevision, actionAvailabilities, notify, workspaceFreshness, onApplied } = props;
-  const order = useMemo(() => canonicalBandOrder(state), [state]);
+  const catalogOrders = useMemo(() => canonicalBandOrders(state), [state]);
   const seriesIds = useMemo(() => [...new Set(state.v23SeriesPartHeads.map((head) => head.seriesId))], [state]);
   const [seriesId, setSeriesId] = useState(seriesIds[0] ?? "");
   const [preview, setPreview] = useState<Preview>();
   const [pending, setPending] = useState<string>();
   const requestEpoch = useRef(0); const writeEpoch = useRef(0); const writeFlight = useRef(false);
   const activeSeriesId = seriesIds.includes(seriesId) ? seriesId : seriesIds[0] ?? "";
-  const projection = useMemo(() => !activeSeriesId ? undefined : !order.length
-    ? { seriesId: activeSeriesId, parts: [], unresolved: true, reason: "当前未解析到已发布 01.x 重量段目录" }
-    : projectV23SeriesGantt(state, activeSeriesId, order), [state, activeSeriesId, order]);
+  const projection = useMemo(
+    () => !activeSeriesId ? undefined : projectV23SeriesGantt(state, activeSeriesId, catalogOrders),
+    [state, activeSeriesId, catalogOrders],
+  );
   const refresh = async (expectedRevision: number, message: string, epoch: number, baseline: { dirty: boolean; revision: number }) => {
     const response = await fetch("/api/state");
     const current = await response.json().catch(() => null) as { state?: WorkspaceState; revision?: number; error?: string } | null;
@@ -48,6 +53,9 @@ export function V23SeriesPartWorkbench(props: {
     onApplied(current.state, revision, message);
   };
   const chooseBand = async (part: SeriesPartRevision, weightBandId: string) => {
+    if (!part.weightBandIds.includes(weightBandId) || !v23PartWeightBandsValid(part, [weightBandId], catalogOrders)) {
+      return notify("重量段不属于该 Part 当前目录，已拒绝预览。");
+    }
     const availability = actionAvailabilities.preview_weight_band_skus;
     if (!availability?.enabled) return notify(availability?.disabledReasonText ?? "当前账号不能预览重量段 SKU。");
     const epoch = ++requestEpoch.current;
@@ -80,10 +88,10 @@ export function V23SeriesPartWorkbench(props: {
   if (!seriesIds.length) return <section className="v23-part-workbench"><h2>v23 Part / SKU</h2><p>当前没有可唯一解析的 v23 Series head。</p></section>;
   return <section className="v23-part-workbench" aria-label="v23 Part 与 SKU 编辑器">
     <header><div><span>V23 · IMMUTABLE HEADS</span><h2>Part 与重量段 SKU</h2><p>甘特块只表示连续展示；必须选择准确重量段才会读取 SKU，绝不会自动创建。</p></div>
-      <label>Series<select value={activeSeriesId} onChange={(event) => { requestEpoch.current += 1; setSeriesId(event.target.value); setPreview(undefined); }}>{seriesIds.map((id) => <option key={id} value={id}>{state.seriesDefinitions.find((series) => series.id === id)?.name ?? id}</option>)}</select></label></header>
-    {projection?.unresolved ? <p className="v23-fail-closed">{projection.reason}；已拒绝启用编辑。</p> : <div className="v23-part-grid">{projection?.parts.map((view) => <PartCard key={`${view.part.partId}:${view.part.revision}`} part={view.part} bandBlocks={view.bandBlocks} orderedBands={order} state={state} workspaceRevision={workspaceRevision} pending={Boolean(pending)} availability={actionAvailabilities} onBand={chooseBand} write={write} onSave={(configuration) => write("update_part_configuration", { expectedWorkspaceRevision: workspaceRevision, partId: view.part.partId, expectedPartRevision: view.part.revision, configuration }, "Part 配置已受控保存并回读。")} />)}</div>}
+      <label>Series<select value={activeSeriesId} onChange={(event) => { const boundary = v23SeriesSwitchRequestBoundary(requestEpoch.current, pending); requestEpoch.current = boundary.requestEpoch; setPending(boundary.pending); setSeriesId(event.target.value); setPreview(undefined); }}>{seriesIds.map((id) => <option key={id} value={id}>{state.seriesDefinitions.find((series) => series.id === id)?.name ?? id}</option>)}</select></label></header>
+    {projection?.unresolved ? <p className="v23-fail-closed">{projection.reason}；已拒绝启用编辑。</p> : <div className="v23-part-grid">{projection?.parts.map((view) => <PartCard key={`${view.part.partId}:${view.part.revision}`} part={view.part} bandBlocks={view.bandBlocks} orderedBands={[...(catalogOrders[view.part.partType] ?? [])]} state={state} workspaceRevision={workspaceRevision} pending={Boolean(pending)} availability={actionAvailabilities} onBand={chooseBand} write={write} onSave={(configuration) => { const weightBandIds = configuration.weightBandIds; if (!Array.isArray(weightBandIds) || !weightBandIds.every((id): id is string => typeof id === "string") || !v23PartWeightBandsValid(view.part, weightBandIds, catalogOrders)) { notify("Part 重量段不属于该 Part 当前目录，已拒绝保存。"); return Promise.resolve(); } return write("update_part_configuration", { expectedWorkspaceRevision: workspaceRevision, partId: view.part.partId, expectedPartRevision: view.part.revision, configuration }, "Part 配置已受控保存并回读。"); }} />)}</div>}
     {preview ? <section className="v23-sku-preview" aria-live="polite"><header><div><span>精确重量段：{preview.weightBandId}</span><h3>{preview.part.partType.toUpperCase()} SKU 抽屉预览</h3><small>04.5 匹配：{preview.match?.status ?? "未知"}；仅显示 current immutable SKU heads。</small></div><button type="button" onClick={() => setPreview(undefined)}>关闭</button></header>
-      {preview.skus.map((sku) => <SkuCard key={`${sku.skuId}:${sku.revision}`} sku={sku} part={preview.part} state={state} workspaceRevision={workspaceRevision} availability={actionAvailabilities} pending={Boolean(pending)} write={write} />)}
+      {preview.skus.map((sku) => <SkuCard key={`${sku.skuId}:${sku.revision}`} sku={sku} part={preview.part} state={state} workspaceRevision={workspaceRevision} availability={actionAvailabilities} pending={Boolean(pending)} notify={notify} write={write} />)}
       <button className="v23-create-sku" type="button" disabled={Boolean(pending) || !actionAvailabilities.create_sku?.enabled || !v23CanCreateSkuFromPreview(preview.match?.status)} onClick={() => { if (!v23CanCreateSkuFromPreview(preview.match?.status)) return notify("04.5 唯一匹配无效，已拒绝创建 SKU。"); void write("create_sku", { expectedWorkspaceRevision: workspaceRevision, skuId: `sku:${randomUUID()}`, partId: preview.part.partId, expectedPartRevision: preview.part.revision, weightBandId: preview.weightBandId, displayOrder: preview.skus.length }, "SKU 已显式创建并回读。"); }} title={v23CanCreateSkuFromPreview(preview.match?.status) ? actionAvailabilities.create_sku?.disabledReasonText : "04.5 必须唯一匹配后才能创建 SKU"}><Plus size={15} />明确创建 SKU</button>
       {!preview.skus.length ? <p>此重量段没有 SKU；点击上方按钮才会创建。</p> : null}</section> : null}
     <ProjectAffixForm workspaceRevision={workspaceRevision} pending={Boolean(pending)} availability={actionAvailabilities.create_project_affix} write={write} />
@@ -182,12 +190,14 @@ function LocalCopyEditor({ copy, pending, availability, publishedRuleSetIds, sav
   </label>;
 }
 
-function SkuCard({ sku, part, state, workspaceRevision, availability, pending, write }: { sku: SkuDrawerRevision; part: SeriesPartRevision; state: WorkspaceState; workspaceRevision: number; availability: ActionAvailabilityMap; pending: boolean; write: (action: Parameters<typeof executeV23UiAction>[0], payload: Record<string, unknown>, message: string) => Promise<void> }) {
+function SkuCard({ sku, part, state, workspaceRevision, availability, pending, notify, write }: { sku: SkuDrawerRevision; part: SeriesPartRevision; state: WorkspaceState; workspaceRevision: number; availability: ActionAvailabilityMap; pending: boolean; notify: (message: string) => void; write: (action: Parameters<typeof executeV23UiAction>[0], payload: Record<string, unknown>, message: string) => Promise<void> }) {
   const quality = sku.quality.status === "ASSESSED" ? sku.quality.assessment : undefined;
   const [qualityId, setQualityId] = useState(quality?.selectedQualityId ?? "quality_c_green"); const [reason, setReason] = useState(quality?.qualityOverrideReason ?? "");
   const inheritedSurface = resolveV23InheritedAffixRefs(state, part);
   const inherited = inheritedSurface.refs;
   const available = state.v23AffixDefinitions.filter((definition) => definition.payload.itemPartId === `part:${part.partType}` && definition.payload.enabled);
+  const occupiedAffixes = resolveV23SkuOccupiedAffixIds(state, part, sku);
+  const addableAffixes = occupiedAffixes.unresolved ? [] : available.filter((item) => !occupiedAffixes.ids.includes(item.affixId));
   const technologyCatalog = resolveCurrentV23Technologies(state, `part:${part.partType}`);
   const base = { expectedWorkspaceRevision: workspaceRevision, skuId: sku.skuId, expectedSkuRevision: sku.revision };
   const payload = (extra: Record<string, unknown>) => ({ ...base, ...extra });
@@ -203,7 +213,8 @@ function SkuCard({ sku, part, state, workspaceRevision, availability, pending, w
     <p>品质：推荐 {quality?.recommendedQualityId ?? "无（评分 ≥100 时禁止正式目标定价）"}；实际 {quality?.selectedQualityId ?? "未评估"}；{quality?.qualityOverrideState ?? "—"}{quality?.qualityOverrideReason ? ` · 原因：${quality.qualityOverrideReason}` : ""}</p>
     {quality?.finalValueScore !== undefined && quality.finalValueScore >= 100 ? <p className="v23-fail-closed">评分 {quality.finalValueScore} ≥100：无推荐品质，正式目标定价阻断。</p> : null}
     <label>实际品质<select value={qualityId} onChange={(event) => setQualityId(event.target.value as typeof qualityId)}><option value="quality_c_green">C / 绿</option><option value="quality_b_blue">B / 蓝</option><option value="quality_a_purple">A / 紫</option><option value="quality_s_orange">S / 橙</option></select></label><label>覆盖理由（无推荐或与推荐不一致时必填；匹配时必须为空）<input value={reason} onChange={(event) => setReason(event.target.value)} /></label><button type="button" disabled={pending || !availability.set_sku_actual_quality?.enabled || !qualityReasonValid} title={qualityReasonValid ? availability.set_sku_actual_quality?.disabledReasonText : "品质与理由不符合双向不变量"} onClick={() => { if (!qualityReasonValid) return; void write("set_sku_actual_quality", payload({ selectedQualityId: qualityId, reason: reason.trim() || null }), "实际品质已受控保存并回读。"); }}>保存实际品质</button>
-    <div className="v23-affix-actions">{available.map((item) => <button key={item.affixId} type="button" disabled={pending || !availability.add_sku_affix?.enabled} title={availability.add_sku_affix?.disabledReasonText} onClick={() => void write("add_sku_affix", payload({ affixRef: { id: item.affixId, revision: item.revision, contentHash: item.contentHash } }), "SKU 词条已增加并回读。")}>添加 {item.payload.name}</button>)}</div>
+    {occupiedAffixes.unresolved ? <p className="v23-fail-closed">{occupiedAffixes.reason}；已禁用 SKU 词条添加。</p> : null}
+    <div className="v23-affix-actions">{addableAffixes.map((item) => <button key={item.affixId} type="button" disabled={pending || !availability.add_sku_affix?.enabled} title={availability.add_sku_affix?.disabledReasonText} onClick={() => { if (occupiedAffixes.unresolved || occupiedAffixes.ids.includes(item.affixId)) return notify("该词条 identity 已存在于 SKU 有效或历史来源中，已拒绝重复添加。"); void write("add_sku_affix", payload({ affixRef: { id: item.affixId, revision: item.revision, contentHash: item.contentHash } }), "SKU 词条已增加并回读。"); }}>添加 {item.payload.name}</button>)}</div>
     {inheritedSurface.unresolved ? <p className="v23-fail-closed">继承词条无法闭合解析：{inheritedSurface.reason}；屏蔽、恢复和局部复制已整组禁用。</p> : inherited.map((ref) => sku.removedInheritedEntryIds.includes(ref.id) ? <button key={ref.id} type="button" disabled={pending || !availability.restore_inherited_affix?.enabled} onClick={() => void write("restore_inherited_affix", payload({ inheritedEntryId: ref.id }), "继承词条已恢复并回读.")}><RefreshCw size={14} />恢复继承词条</button> : <span key={ref.id}><button type="button" disabled={pending || !availability.remove_inherited_affix?.enabled} onClick={() => void write("remove_inherited_affix", payload({ inheritedEntryId: ref.id }), "继承词条已屏蔽并回读。")}>屏蔽继承词条</button><button type="button" disabled={pending || !availability.copy_sku_local_affix?.enabled} onClick={() => void write("copy_sku_local_affix", payload({ affixRef: ref, localCopyId: `local:${randomUUID()}` }), "已创建 SKU 局部词条副本并回读。")}>复制为局部副本</button></span>)}
     <TechnologySurface state={state} refs={effectiveTechnologyRefs} itemPartId={`part:${part.partType}`} label="SKU 有效 Technology" />
     {technologyCatalog.unresolved ? <p className="v23-fail-closed">{technologyCatalog.reason}；已禁用 SKU Technology 挂载。</p> : <div className="v23-technology-actions">{technologyCatalog.technologies.map((technology) => {

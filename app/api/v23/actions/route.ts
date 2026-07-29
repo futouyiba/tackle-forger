@@ -27,6 +27,13 @@ const WRITE_ACTIONS = [
   "remove_inherited_affix",
   "restore_inherited_affix",
   "copy_sku_local_affix",
+  "update_sku_local_affix_copy",
+  "create_technology",
+  "update_technology",
+  "attach_part_technology",
+  "remove_part_technology",
+  "attach_sku_technology",
+  "remove_sku_technology",
   "set_sku_actual_quality",
 ] as const satisfies readonly V23WriteAction[];
 

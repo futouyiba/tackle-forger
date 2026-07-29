@@ -46,11 +46,19 @@ async function issueQualityCommand(
   idempotencyKey: string,
   payload: Record<string, unknown>,
 ) {
+  return issueCommand("set_sku_actual_quality", idempotencyKey, payload);
+}
+
+async function issueCommand(
+  action: string,
+  idempotencyKey: string,
+  payload: Record<string, unknown>,
+) {
   return issueActionCommand(new NextRequest("http://localhost/api/action-commands", {
     method: "POST",
     headers: authHeaders,
     body: JSON.stringify({
-      action: "set_sku_actual_quality",
+      action,
       idempotencyKey,
       payload,
     }),
@@ -360,6 +368,88 @@ test("v23 preview is authenticated read-only and direct write payload is rejecte
     "ACTION_COMMAND_PAYLOAD_REQUIRED",
   );
   assert.equal((await loadWorkspaceState()).revision, before.revision);
+});
+
+test("Technology write uses the issued command, atomic save, replay and readback boundary", { concurrency: false }, async () => {
+  const current = await loadWorkspaceState();
+  const affixId = "affix:v23-technology-api";
+  const affixPayload = {
+    name: "Technology API member",
+    category: "attribute",
+    itemPartId: "part:rod",
+    semanticContributionKey: "technology-api",
+    stackingPolicy: "dedupe",
+    generationPolicy: "technology_only",
+    rarity: "common",
+    valueScore: 1,
+    tags: [],
+    description: "Technology API fixture",
+    enabled: true,
+    operations: [{
+      operationId: "operation:v23-technology-api",
+      operationIndex: 0,
+      sourceAffixId: affixId,
+      sourceAffixRevision: 1,
+      parameterKey: "pull",
+      operation: "set",
+      value: 5,
+    }],
+    passivePayload: null,
+  };
+  const withAffix = executeV23DomainAction(
+    current.state,
+    current.revision,
+    "create_project_affix",
+    commandPayload(current.revision, { affixId, affixPayload }),
+  ).state;
+  const saved = await saveWorkspaceState({
+    state: withAffix,
+    baseRevision: current.revision,
+    author: "route-test",
+    message: "prepare Technology API member",
+  });
+  assert.equal(saved.conflict, undefined);
+  const prepared = await loadWorkspaceState();
+  const member = prepared.state.v23AffixDefinitions.find((entry) => entry.affixId === affixId)!;
+  const payload = commandPayload(prepared.revision, {
+    technologyId: "technology:v23-api",
+    itemPartId: "part:rod",
+    name: "Technology API",
+    description: "",
+    memberAffixRefs: [{
+      id: member.affixId,
+      revision: member.revision,
+      contentHash: member.contentHash,
+    }],
+    enabled: true,
+  });
+  const issuedResponse = await issueCommand(
+    "create_technology",
+    "v23-api-create-technology",
+    payload,
+  );
+  assert.equal(issuedResponse.status, 200);
+  const issued = await issuedResponse.json() as {
+    actionId: string;
+    commandPayloadRef: { payloadRefId: string };
+  };
+  const invocation = {
+    actionId: issued.actionId,
+    payloadRefId: issued.commandPayloadRef.payloadRefId,
+  };
+  const first = await invokeCommand(invocation);
+  assert.equal(first.status, 200);
+  assert.equal((await first.json() as { replayed?: boolean }).replayed, false);
+  const readback = await loadWorkspaceState();
+  assert.deepEqual(readback.state.v23TechnologyHeads, [{
+    technologyId: "technology:v23-api",
+    revision: 1,
+  }]);
+  assert.equal(readback.state.v23TechnologyDefinitions.length, 1);
+  const replay = await invokeCommand(invocation);
+  assert.equal(replay.status, 200);
+  assert.equal((await replay.json() as { replayed?: boolean }).replayed, true);
+  assert.equal((await loadWorkspaceState()).revision, readback.revision);
 });
 
 test("set_sku_actual_quality enforces authorization, concurrency, idempotency, recovery, and readback", { concurrency: false }, async () => {

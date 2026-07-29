@@ -77,7 +77,7 @@ import {
   type V23QualityEntry,
 } from "./v23-sku-quality";
 
-export const CURRENT_WORKSPACE_SCHEMA_VERSION = 23;
+export const CURRENT_WORKSPACE_SCHEMA_VERSION = 24;
 
 const DEFAULT_RULE_SETTINGS: WorkspaceRuleSettings = {
   reductionStackingMode: "diminishing_division",
@@ -1836,6 +1836,8 @@ function validateV23RuntimeState(state: MutableWorkspace) {
   const skus = v23Array(state.v23SkuDrawerRevisions, "V23_SKUS");
   const skuHeads = v23Array(state.v23SkuDrawerHeads, "V23_SKU_HEADS");
   const affixes = v23Array(state.v23AffixDefinitions, "V23_AFFIX_DEFINITIONS");
+  const technologies = v23Array(state.v23TechnologyDefinitions, "V23_TECHNOLOGY_DEFINITIONS");
+  const technologyHeads = v23Array(state.v23TechnologyHeads, "V23_TECHNOLOGY_HEADS");
   const functionTemplates = state.v23FunctionTemplates === undefined ? [] : v23Array(state.v23FunctionTemplates, "V23_FUNCTION_TEMPLATES");
   const evidence = v23Array(state.v23MigrationSourceEvidence, "V23_SOURCE_EVIDENCE");
   const adapters = v23Array(state.v23LegacyReadAdapters, "V23_LEGACY_ADAPTERS");
@@ -1870,13 +1872,6 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     return resolved?.contentHash === ref.contentHash ? resolved : undefined;
   };
   const itemPartIdFor = (partType: unknown) => ({ rod: "part:rod", reel: "part:reel", line: "part:line" } as const)[partType as "rod" | "reel" | "line"];
-  // Phase A has no immutable v23 Technology registry. Legacy Technology
-  // objects cannot be JCS-parsed into an authority that resolves new refs.
-  const validateTechnologyRef = (value: unknown, code: string) => {
-    validateV23StableRef(value, code);
-    throw new Error("V23_TECHNOLOGY_REGISTRY_UNAVAILABLE");
-  };
-
   const assertSemanticContribution = (seen: Map<string, Set<string>>, payload: Record<string, unknown>, code: string) => {
     const contributionKey = payload.semanticContributionKey as string;
     const policy = payload.stackingPolicy as string;
@@ -1884,6 +1879,94 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     if (existing && (policy !== "stack" || existing.has("dedupe"))) throw new Error(`${code}_SEMANTIC_CONTRIBUTION_CONFLICT`);
     if (existing) existing.add(policy);
     else seen.set(contributionKey, new Set([policy]));
+  };
+  const technologyRefs = new Map<string, Map<number, {
+    contentHash: string;
+    itemPartId: string;
+    enabled: boolean;
+    members: Array<{
+      ref: { id: string; revision: number; contentHash: string };
+      payload: Record<string, unknown>;
+    }>;
+  }>>();
+  for (const value of technologies) {
+    const entry = v23Record(value, "V23_TECHNOLOGY_DEFINITION");
+    v23ExactKeys(entry, [
+      "technologyId", "revision", "itemPartId", "name", "description",
+      "memberAffixRefs", "enabled", "contentHash",
+    ], "V23_TECHNOLOGY_DEFINITION");
+    const id = v23String(entry.technologyId, "V23_TECHNOLOGY_ID");
+    const revision = v23Revision(entry.revision, "V23_TECHNOLOGY_REVISION");
+    const itemPartId = v23String(entry.itemPartId, "V23_TECHNOLOGY_ITEM_PART");
+    if (!["part:rod", "part:reel", "part:line"].includes(itemPartId)) {
+      throw new Error("V23_TECHNOLOGY_ITEM_PART_INVALID");
+    }
+    v23String(entry.name, "V23_TECHNOLOGY_NAME");
+    if (typeof entry.description !== "string" || typeof entry.enabled !== "boolean") {
+      throw new Error("V23_TECHNOLOGY_SCHEMA_INVALID");
+    }
+    const memberIds = new Set<string>();
+    const contributions = new Map<string, Set<string>>();
+    const members = v23Array(entry.memberAffixRefs, "V23_TECHNOLOGY_MEMBERS").map((value) => {
+      const ref = validateV23StableRef(value, "V23_TECHNOLOGY_MEMBER");
+      if (memberIds.has(ref.id)) throw new Error("V23_TECHNOLOGY_MEMBER_DUPLICATE");
+      memberIds.add(ref.id);
+      const resolved = resolveAffixRef(ref);
+      if (!resolved) throw new Error("V23_TECHNOLOGY_MEMBER_UNRESOLVED");
+      if (resolved.payload.itemPartId !== itemPartId || resolved.payload.enabled !== true) {
+        throw new Error("V23_TECHNOLOGY_MEMBER_INVALID");
+      }
+      assertSemanticContribution(contributions, resolved.payload, "V23_TECHNOLOGY");
+      return { ref, payload: resolved.payload };
+    });
+    if (members.length === 0) throw new Error("V23_TECHNOLOGY_MEMBER_REQUIRED");
+    const withoutHash = {
+      technologyId: id,
+      revision,
+      itemPartId,
+      name: entry.name,
+      description: entry.description,
+      memberAffixRefs: entry.memberAffixRefs,
+      enabled: entry.enabled,
+    };
+    const contentHash = v23HashOf(
+      withoutHash,
+      entry.contentHash,
+      "V23_TECHNOLOGY_CONTENT_HASH",
+    );
+    const revisions = technologyRefs.get(id) ?? new Map();
+    if (revisions.has(revision)) throw new Error("V23_TECHNOLOGY_ID_REVISION_DUPLICATE");
+    revisions.set(revision, {
+      contentHash,
+      itemPartId,
+      enabled: entry.enabled,
+      members,
+    });
+    technologyRefs.set(id, revisions);
+  }
+  const seenTechnologyHeads = new Set<string>();
+  for (const value of technologyHeads) {
+    const head = v23Record(value, "V23_TECHNOLOGY_HEAD");
+    v23ExactKeys(head, ["technologyId", "revision"], "V23_TECHNOLOGY_HEAD");
+    const id = v23String(head.technologyId, "V23_TECHNOLOGY_HEAD_ID");
+    const revision = v23Revision(head.revision, "V23_TECHNOLOGY_HEAD_REVISION");
+    if (seenTechnologyHeads.has(id)) throw new Error("V23_TECHNOLOGY_HEAD_DUPLICATE");
+    seenTechnologyHeads.add(id);
+    if (!technologyRefs.get(id)?.has(revision)) throw new Error("V23_TECHNOLOGY_HEAD_UNRESOLVED");
+  }
+  for (const id of technologyRefs.keys()) {
+    if (!seenTechnologyHeads.has(id)) throw new Error("V23_TECHNOLOGY_HEAD_REQUIRED");
+  }
+  const resolveTechnologyRef = (value: unknown, code: string, expectedItemPartId: string) => {
+    const ref = validateV23StableRef(value, code);
+    const resolved = technologyRefs.get(ref.id)?.get(ref.revision);
+    if (
+      !resolved
+      || resolved.contentHash !== ref.contentHash
+      || !resolved.enabled
+      || resolved.itemPartId !== expectedItemPartId
+    ) throw new Error(`${code}_UNRESOLVED`);
+    return resolved.members;
   };
   const partByIdAndRevision = new Map<string, Map<number, Record<string, unknown>>>();
   const partDefaultPayloads = new Map<string, Map<string, { ref: { id: string; revision: number; contentHash: string }; payload: Record<string, unknown> }>>();
@@ -1915,7 +1998,23 @@ function validateV23RuntimeState(state: MutableWorkspace) {
       assertSemanticContribution(partDefaultContributions, resolved.payload, "V23_PART_DEFAULT_ENTRY");
       partDefaults.set(ref.id, { ref, payload: resolved.payload });
     }
-    for (const ref of v23Array(entry.technologyRefs, "V23_PART_TECHNOLOGIES")) validateTechnologyRef(ref, "V23_PART_TECHNOLOGY");
+    const technologyIds = new Set<string>();
+    for (const value of v23Array(entry.technologyRefs, "V23_PART_TECHNOLOGIES")) {
+      const ref = validateV23StableRef(value, "V23_PART_TECHNOLOGY");
+      if (technologyIds.has(ref.id)) throw new Error("V23_PART_TECHNOLOGY_DUPLICATE");
+      technologyIds.add(ref.id);
+      for (const member of resolveTechnologyRef(value, "V23_PART_TECHNOLOGY", itemPartIdFor(entry.partType)!)) {
+        const prior = partDefaults.get(member.ref.id);
+        if (prior && (
+          prior.ref.revision !== member.ref.revision
+          || prior.ref.contentHash !== member.ref.contentHash
+        )) throw new Error("V23_PART_EFFECTIVE_ENTRY_ID_CONFLICT");
+        if (!prior) {
+          assertSemanticContribution(partDefaultContributions, member.payload, "V23_PART_DEFAULT_ENTRY");
+          partDefaults.set(member.ref.id, member);
+        }
+      }
+    }
     const partMap = partByIdAndRevision.get(partId) ?? new Map<number, Record<string, unknown>>();
     if (partMap.has(revision)) throw new Error("V23_PART_ID_REVISION_DUPLICATE");
     if (partSeriesById.has(partId) && partSeriesById.get(partId) !== seriesId) throw new Error("V23_PART_SERIES_ID_UNSTABLE");
@@ -2406,6 +2505,30 @@ function validateV23RuntimeState(state: MutableWorkspace) {
       // 产生一次有效贡献，避免原项目词条与副本重复结算。
       effectiveStableEntries.set(sourceRef.id, { ref: sourceRef, payload, localCopyId: v23String(copyEntry.localCopyId, "V23_SKU_LOCAL_COPY_ID"), copyHash: v23Hash(copyEntry.copyHash, "V23_SKU_LOCAL_COPY_HASH") });
     }
+    const skuTechnologyIds = new Set<string>();
+    for (const value of v23Array(entry.technologyRefs, "V23_SKU_TECHNOLOGIES")) {
+      const ref = validateV23StableRef(value, "V23_SKU_TECHNOLOGY");
+      if (skuTechnologyIds.has(ref.id)) throw new Error("V23_SKU_TECHNOLOGY_DUPLICATE");
+      skuTechnologyIds.add(ref.id);
+      for (const member of resolveTechnologyRef(
+        value,
+        "V23_SKU_TECHNOLOGY",
+        itemPartIdFor(part.partType)!,
+      )) {
+        const prior = effectiveStableEntries.get(member.ref.id);
+        if (prior && (
+          prior.ref.revision !== member.ref.revision
+          || prior.ref.contentHash !== member.ref.contentHash
+        )) throw new Error("V23_SKU_EFFECTIVE_ENTRY_ID_CONFLICT");
+        if (!prior) {
+          effectiveStableEntries.set(member.ref.id, {
+            ...member,
+            localCopyId: null,
+            copyHash: null,
+          });
+        }
+      }
+    }
     const effectiveContributions = new Map<string, Set<string>>();
     for (const effective of effectiveStableEntries.values()) assertSemanticContribution(effectiveContributions, effective.payload, "V23_SKU_EFFECTIVE_ENTRY");
     // A persisted successful derivation must at least bind the actual settled
@@ -2435,7 +2558,6 @@ function validateV23RuntimeState(state: MutableWorkspace) {
         else { const projectedFailure = replay.status === "INVALID" ? { source: replay.failureEvidence.affixId === null ? null : sourceEvidence(replay.failureEvidence.affixId), operationId: replay.failureEvidence.operationId, operationIndex: replay.failureEvidence.operationIndex, stage: replay.failureEvidence.stage, numericEvidence: replay.failureEvidence.numericEvidence } : null; if (replay.status !== "INVALID" || replay.code !== persisted.code || jcsSha256Hex(projectedFailure) !== jcsSha256Hex(persisted.failureEvidence) || replay.inputHash !== persisted.inputHash) throw new Error("V23_SKU_DERIVATION_REPLAY_MISMATCH"); }
       }
     }
-    for (const ref of v23Array(entry.technologyRefs, "V23_SKU_TECHNOLOGIES")) validateTechnologyRef(ref, "V23_SKU_TECHNOLOGY");
     const assessed = validateSkuAssessment(
       entry.quality,
       `${skuId}@${revision}`,
@@ -2569,7 +2691,7 @@ function migrateV22ToV23(input: MutableWorkspace, context: MigrationContext): Mu
   const evidence = existingEvidence.some((entry) => entry.sourceEvidenceId === sourceEvidenceId)
     ? existingEvidence
     : [...existingEvidence, sourceEvidence];
-  if (context.initialSchemaVersion >= 1 && context.initialSchemaVersion <= 22 && ["v23SeriesPartRevisions", "v23SeriesPartHeads", "v23SkuDrawerRevisions", "v23SkuDrawerHeads", "v23AffixDefinitions", "v23MigrationSourceEvidence", "v23LegacyReadAdapters"].some((key) => Object.prototype.hasOwnProperty.call(context.originalInput, key))) {
+  if (context.initialSchemaVersion >= 1 && context.initialSchemaVersion <= 22 && ["v23SeriesPartRevisions", "v23SeriesPartHeads", "v23SkuDrawerRevisions", "v23SkuDrawerHeads", "v23AffixDefinitions", "v23TechnologyDefinitions", "v23TechnologyHeads", "v23MigrationSourceEvidence", "v23LegacyReadAdapters"].some((key) => Object.prototype.hasOwnProperty.call(context.originalInput, key))) {
     throw new Error("V23_MIGRATION_PARTIAL_STATE_CONFLICT");
   }
 
@@ -2659,6 +2781,24 @@ function migrateV22ToV23(input: MutableWorkspace, context: MigrationContext): Mu
   } as MutableWorkspace;
 }
 
+function migrateV23ToV24(input: MutableWorkspace, context: MigrationContext): MutableWorkspace {
+  if (
+    context.initialSchemaVersion === 23
+    && (
+      Object.prototype.hasOwnProperty.call(context.originalInput, "v23TechnologyDefinitions")
+      || Object.prototype.hasOwnProperty.call(context.originalInput, "v23TechnologyHeads")
+    )
+  ) {
+    throw new Error("V23_TECHNOLOGY_MIGRATION_PARTIAL_STATE_CONFLICT");
+  }
+  return {
+    ...input,
+    schemaVersion: 24,
+    v23TechnologyDefinitions: [],
+    v23TechnologyHeads: [],
+  } as MutableWorkspace;
+}
+
 const migrations: Record<number, (state: MutableWorkspace, context: MigrationContext) => MutableWorkspace> = {
   1: migrateV1ToV2,
   2: migrateV2ToV3,
@@ -2682,6 +2822,7 @@ const migrations: Record<number, (state: MutableWorkspace, context: MigrationCon
   20: migrateV20ToV21,
   21: migrateV21ToV22,
   22: migrateV22ToV23,
+  23: migrateV23ToV24,
 };
 
 export function migrateWorkspaceState(input: unknown): WorkspaceState {

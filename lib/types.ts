@@ -1210,6 +1210,22 @@ export interface V23AffixDefinition {
   payload: V23ProjectAffixPayload;
 }
 
+export interface V23TechnologyDefinition {
+  technologyId: string;
+  revision: number;
+  itemPartId: "part:rod" | "part:reel" | "part:line";
+  name: string;
+  description: string;
+  memberAffixRefs: V23StableContentRef[];
+  enabled: boolean;
+  contentHash: string;
+}
+
+export interface V23TechnologyHeadRef {
+  technologyId: string;
+  revision: number;
+}
+
 export type V23SkuAffixEntry =
   | {
       kind: "STABLE_AFFIX_REF";
@@ -3045,6 +3061,8 @@ export interface WorkspaceState {
   v23SkuDrawerRevisions: SkuDrawerRevision[];
   v23SkuDrawerHeads: V23SkuDrawerHeadRef[];
   v23AffixDefinitions: V23AffixDefinition[];
+  v23TechnologyDefinitions: V23TechnologyDefinition[];
+  v23TechnologyHeads: V23TechnologyHeadRef[];
   v23FunctionTemplates?: V23FunctionTemplateDefinition[];
   v23MigrationSourceEvidence: V23MigrationSourceEvidence[];
   v23LegacyReadAdapters: V23LegacyReadAdapter[];

@@ -708,7 +708,7 @@ test("create/update Part share closed affix and technology reference policy", ()
         concept: "reference",
         parts: [candidate],
       }),
-      /V23_(AFFIX_ITEM_PART_MISMATCH|PART_DEFAULT_AFFIX_DUPLICATE|TECHNOLOGY_REF_WRITE_UNAVAILABLE)/u,
+      /V23_(AFFIX_ITEM_PART_MISMATCH|PART_DEFAULT_AFFIX_DUPLICATE|TECHNOLOGY_REF_UNRESOLVED)/u,
     );
     assert.deepEqual(current, before);
   }
@@ -729,7 +729,7 @@ test("create/update Part share closed affix and technology reference policy", ()
         expectedPartRevision: 1,
         configuration,
       }),
-      /V23_(AFFIX_ITEM_PART_MISMATCH|TECHNOLOGY_REF_WRITE_UNAVAILABLE)/u,
+      /V23_(AFFIX_ITEM_PART_MISMATCH|TECHNOLOGY_REF_UNRESOLVED)/u,
     );
     assert.equal(current.v23SeriesPartHeads[0]?.revision, 1);
   }
@@ -1082,4 +1082,79 @@ test("local affix copy accepts only active inherited current-Part source", () =>
     ),
     /V23_AFFIX_ITEM_PART_MISMATCH/u,
   );
+});
+
+test("Technology and local-copy controlled actions preserve exact history and rederive", () => {
+  let current = qualityReadyState();
+  current = run(current, "create_project_affix", {
+    affixId: "affix:technology-pull",
+    affixPayload: attributeAffixPayload("affix:technology-pull"),
+  }).state;
+  const affix = current.v23AffixDefinitions.at(-1)!;
+  const affixRef = { id: affix.affixId, revision: affix.revision, contentHash: affix.contentHash };
+  current = run(current, "create_series", {
+    seriesId: "series:technology", collectionId: null, name: "Technology",
+    concept: "exact refs",
+    parts: [{ ...part, partId: "part:technology", defaultEntryRefs: [affixRef] }],
+  }).state;
+  current = run(current, "create_sku", {
+    skuId: "sku:technology", partId: "part:technology",
+    expectedPartRevision: 1, weightBandId: "band:light", displayOrder: 0,
+  }).state;
+  current = run(current, "create_technology", {
+    technologyId: "technology:pull", itemPartId: "part:rod", name: "Pull",
+    description: "one exact member", memberAffixRefs: [affixRef], enabled: true,
+  }).state;
+  const definition = current.v23TechnologyDefinitions[0]!;
+  const technologyRef = {
+    id: definition.technologyId,
+    revision: definition.revision,
+    contentHash: definition.contentHash,
+  };
+  const attachedSku = run(current, "attach_sku_technology", {
+    skuId: "sku:technology", expectedSkuRevision: 1, technologyRef,
+  }).state;
+  assert.deepEqual(attachedSku.v23SkuDrawerRevisions.at(-1)?.technologyRefs, [technologyRef]);
+
+  const revisedTechnology = run(attachedSku, "update_technology", {
+    technologyId: "technology:pull", expectedTechnologyRevision: 1,
+    itemPartId: "part:rod", name: "Pull revised", description: "new head",
+    memberAffixRefs: [affixRef], enabled: true,
+  }).state;
+  assert.equal(revisedTechnology.v23TechnologyHeads[0]?.revision, 2);
+  assert.deepEqual(revisedTechnology.v23SkuDrawerRevisions.at(-1)?.technologyRefs, [technologyRef]);
+
+  const removedSku = run(revisedTechnology, "remove_sku_technology", {
+    skuId: "sku:technology", expectedSkuRevision: 2, technologyRef,
+  }).state;
+  const attachedPart = run(removedSku, "attach_part_technology", {
+    partId: "part:technology", expectedPartRevision: 1, technologyRef,
+  }).state;
+  assert.equal(attachedPart.v23SeriesPartRevisions.at(-1)?.revision, 2);
+  assert.equal(attachedPart.v23SkuDrawerRevisions.at(-1)?.partRevision, 2);
+  assert.equal(attachedPart.v23SkuDrawerRevisions.at(-1)?.revision, 4);
+
+  const removedPart = run(attachedPart, "remove_part_technology", {
+    partId: "part:technology", expectedPartRevision: 2, technologyRef,
+  }).state;
+  assert.deepEqual(removedPart.v23SeriesPartRevisions.at(-1)?.technologyRefs, []);
+  assert.equal(removedPart.v23SkuDrawerRevisions.at(-1)?.partRevision, 3);
+  assert.equal(removedPart.v23SkuDrawerRevisions.at(-1)?.revision, 5);
+
+  const copied = run(removedPart, "copy_sku_local_affix", {
+    skuId: "sku:technology", expectedSkuRevision: 5,
+    affixRef, localCopyId: "local:editable",
+  }).state;
+  const priorCopy = copied.v23SkuDrawerRevisions.at(-1)!.localEntryCopies[0]!;
+  const editedPayload = attributeAffixPayload("affix:technology-pull");
+  editedPayload.operations[0]!.magnitude = 2;
+  const updated = run(copied, "update_sku_local_affix_copy", {
+    skuId: "sku:technology", expectedSkuRevision: 6,
+    localCopyId: "local:editable", affixPayload: editedPayload,
+  }).state;
+  const nextCopy = updated.v23SkuDrawerRevisions.at(-1)!.localEntryCopies[0]!;
+  assert.equal(nextCopy.localCopyId, priorCopy.localCopyId);
+  assert.deepEqual(nextCopy.sourceRef, priorCopy.sourceRef);
+  assert.notEqual(nextCopy.copyHash, priorCopy.copyHash);
+  assert.equal(updated.v23SkuDrawerRevisions.at(-1)?.revision, 7);
 });

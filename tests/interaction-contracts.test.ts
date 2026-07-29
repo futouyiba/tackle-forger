@@ -142,6 +142,13 @@ test("v23 Part、SKU 与项目词条动作使用最小能力且预览保持只�
   assert.equal(actions.preview_weight_band_skus.enabled, true);
   assert.equal(actions.create_sku.enabled, true);
   assert.equal(actions.add_sku_affix.enabled, true);
+  assert.equal(actions.update_sku_local_affix_copy.enabled, true);
+  assert.equal(actions.create_technology.enabled, true);
+  assert.equal(actions.update_technology.enabled, true);
+  assert.equal(actions.attach_part_technology.enabled, true);
+  assert.equal(actions.remove_part_technology.enabled, true);
+  assert.equal(actions.attach_sku_technology.enabled, true);
+  assert.equal(actions.remove_sku_technology.enabled, true);
   assert.equal(actions.set_sku_actual_quality.enabled, true);
   assert.equal(actions.create_project_affix.enabled, true);
   assert.equal(isStateChangingActionCode("preview_weight_band_skus"), false);
@@ -151,6 +158,8 @@ test("v23 Part、SKU 与项目词条动作使用最小能力且预览保持只�
     false,
   );
   assert.deepEqual(actions.set_sku_actual_quality.requiredCapabilities, ["sku.edit"]);
+  assert.deepEqual(actions.create_technology.requiredCapabilities, ["affix.create", "affix.read"]);
+  assert.deepEqual(actions.attach_part_technology.requiredCapabilities, ["part.edit", "affix.read"]);
 });
 
 test("R2 规则工作簿检查、拉取、建草稿与 ID 回写分别授权", () => {

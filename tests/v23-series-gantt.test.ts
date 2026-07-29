@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mergeV23WeightBands, projectV23SeriesGantt, resolveCurrentV23Parts, resolveCurrentV23Skus, selectCurrentPublishedWeightTemplateDraftId, validateV23PreviewSkuHeads } from "../lib/v23-series-gantt";
+import { mergeV23WeightBands, projectV23SeriesGantt, resolveCurrentV23Parts, resolveCurrentV23Skus, resolveV23CatalogOrder, selectCurrentPublishedWeightTemplateDraftId, validateV23PreviewSkuHeads } from "../lib/v23-series-gantt";
 import { v23CanApplyReadback, v23LatestGeneration, v23WritePreflight } from "../lib/v23-ui-actions";
 import type { SeriesPartRevision, SkuDrawerRevision, WorkspaceState } from "../lib/types";
 
@@ -79,6 +79,14 @@ test("旧 generation 与 dirty/revision drift readback 不得覆盖当前状态"
   assert.equal(v23CanApplyReadback({ current: { dirty: true, revision: 4 }, baselineRevision: 4, returnedRevision: 5 }), false);
   assert.equal(v23CanApplyReadback({ current: { dirty: false, revision: 5 }, baselineRevision: 4, returnedRevision: 5 }), false);
   assert.equal(v23CanApplyReadback({ current: { dirty: false, revision: 4 }, baselineRevision: 4, returnedRevision: 5 }), true);
+});
+
+test("01.x catalog 严格拒绝缺失、空白、重复 ID 与无效 sourceRow", () => {
+  for (const bad of [[{ sourceRow: 1 }], [{ id: "", sourceRow: 1 }], [{ id: " 01.1", sourceRow: 1 }], [{ id: "01.1", sourceRow: 1 }, { id: "01.1", sourceRow: 2 }], [{ id: "01.1" }], [{ id: "01.1", sourceRow: 0 }], [{ id: "01.1", sourceRow: 1 }, { id: "01.2", sourceRow: 1 }]]) assert.equal(resolveV23CatalogOrder(bad), undefined);
+});
+
+test("01.x catalog 按唯一正 sourceRow 排序，不按 ID 猜测", () => {
+  assert.deepEqual(resolveV23CatalogOrder([{ id: "01.10", sourceRow: 10 }, { id: "01.2", sourceRow: 2 }]), ["01.2", "01.10"]);
 });
 
 test("重复或不可解析 Part head fail closed，绝不猜测最新 revision", () => {

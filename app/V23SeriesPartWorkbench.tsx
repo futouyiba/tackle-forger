@@ -4,7 +4,7 @@ import { useMemo, useRef, useState } from "react";
 import { Plus, RefreshCw } from "lucide-react";
 import type { ActionAvailabilityMap } from "@/lib/interaction-contracts";
 import type { SeriesPartRevision, SkuDrawerRevision, WorkspaceState } from "@/lib/types";
-import { projectV23SeriesGantt, resolveCurrentV23Skus, selectCurrentPublishedWeightTemplateDraftId, validateV23PreviewSkuHeads, type V23BandBlock } from "@/lib/v23-series-gantt";
+import { projectV23SeriesGantt, resolveCurrentV23Skus, resolveV23CatalogOrder, selectCurrentPublishedWeightTemplateDraftId, validateV23PreviewSkuHeads, type V23BandBlock } from "@/lib/v23-series-gantt";
 import { executeV23UiAction, previewV23WeightBand, v23CanApplyReadback, v23LatestGeneration, v23WritePreflight } from "@/lib/v23-ui-actions";
 import { randomUUID } from "@/lib/browser-utils";
 import { canApplyConfirmedWorkspace, DIRTY_WORKSPACE_CONFIRMATION_MESSAGE } from "@/lib/clean-workspace-confirmation";
@@ -17,11 +17,7 @@ function canonicalBandOrder(state: WorkspaceState) {
   const drafts = state.weightTemplatePolicyDrafts.filter((entry) => entry.id === currentId);
   if (drafts.length !== 1) return [];
   const draft = drafts[0];
-  const templates = draft?.templates ?? [];
-  if (!templates.length || templates.some((entry) => !Number.isSafeInteger(entry.sourceRow) || entry.sourceRow! < 1)
-    || new Set(templates.map((entry) => entry.sourceRow)).size !== templates.length
-    || new Set(templates.map((entry) => entry.id)).size !== templates.length) return [];
-  return templates.slice().sort((left, right) => left.sourceRow! - right.sourceRow!).map((entry) => entry.id);
+  return resolveV23CatalogOrder(draft?.templates ?? []) ?? [];
 }
 
 export function V23SeriesPartWorkbench(props: {

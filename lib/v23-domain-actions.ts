@@ -127,6 +127,18 @@ function stableRefs(value: unknown, field: string): V23StableContentRef[] {
   });
 }
 
+function exactRefListsEqual(
+  left: readonly V23StableContentRef[],
+  right: readonly V23StableContentRef[],
+): boolean {
+  return left.length === right.length && left.every((ref, index) => {
+    const other = right[index];
+    return other?.id === ref.id
+      && other.revision === ref.revision
+      && other.contentHash === ref.contentHash;
+  });
+}
+
 const ITEM_PART_ID_BY_TYPE: Record<V23EnabledPartType, string> = {
   rod: "part:rod",
   reel: "part:reel",
@@ -878,6 +890,12 @@ export function executeV23DomainAction(
       throw new V23DomainActionError("V23_SERIES_PART_COUNT_INVALID", "Series 必须包含 1–3 个 Part。");
     }
     const parts = payload.parts.map((entry) => parsePart(entry, seriesId, 1));
+    if (parts.some((part) => part.technologyRefs.length !== 0)) {
+      throw new V23DomainActionError(
+        "V23_PART_TECHNOLOGY_ACTION_REQUIRED",
+        "创建 Series 时 Part Technology 必须为空；挂载只能使用专用动作。",
+      );
+    }
     if (new Set(parts.map((entry) => entry.partId)).size !== parts.length
       || new Set(parts.map((entry) => entry.partType)).size !== parts.length) {
       throw new V23DomainActionError("V23_SERIES_PART_DUPLICATE", "同一 Series 的 Part ID 与类型必须唯一。");
@@ -913,6 +931,12 @@ export function executeV23DomainAction(
     const nextPart = parsePart(payload.configuration, existing.seriesId, existing.revision + 1);
     if (nextPart.partId !== existing.partId || nextPart.partType !== existing.partType) {
       throw new V23DomainActionError("V23_PART_IDENTITY_IMMUTABLE", "Part 稳定 ID 与类型不可改写。");
+    }
+    if (!exactRefListsEqual(nextPart.technologyRefs, existing.technologyRefs)) {
+      throw new V23DomainActionError(
+        "V23_PART_TECHNOLOGY_ACTION_REQUIRED",
+        "Part Technology 必须精确保留；增删只能使用专用动作。",
+      );
     }
     validatePartReferences(state, nextPart);
     const withPart = replacePartHead(state, nextPart);

@@ -708,7 +708,7 @@ test("create/update Part share closed affix and technology reference policy", ()
         concept: "reference",
         parts: [candidate],
       }),
-      /V23_(AFFIX_ITEM_PART_MISMATCH|PART_DEFAULT_AFFIX_DUPLICATE|TECHNOLOGY_REF_UNRESOLVED)/u,
+      /V23_(AFFIX_ITEM_PART_MISMATCH|PART_DEFAULT_AFFIX_DUPLICATE|PART_TECHNOLOGY_ACTION_REQUIRED)/u,
     );
     assert.deepEqual(current, before);
   }
@@ -729,7 +729,7 @@ test("create/update Part share closed affix and technology reference policy", ()
         expectedPartRevision: 1,
         configuration,
       }),
-      /V23_(AFFIX_ITEM_PART_MISMATCH|TECHNOLOGY_REF_UNRESOLVED)/u,
+      /V23_(AFFIX_ITEM_PART_MISMATCH|PART_TECHNOLOGY_ACTION_REQUIRED)/u,
     );
     assert.equal(current.v23SeriesPartHeads[0]?.revision, 1);
   }
@@ -1111,6 +1111,19 @@ test("Technology and local-copy controlled actions preserve exact history and re
     revision: definition.revision,
     contentHash: definition.contentHash,
   };
+  assert.throws(
+    () => run(current, "create_series", {
+      seriesId: "series:technology-bypass", collectionId: null,
+      name: "Technology bypass", concept: "must use dedicated action",
+      parts: [{
+        ...part,
+        partId: "part:technology-bypass",
+        defaultEntryRefs: [affixRef],
+        technologyRefs: [technologyRef],
+      }],
+    }),
+    /V23_PART_TECHNOLOGY_ACTION_REQUIRED/u,
+  );
   const attachedSku = run(current, "attach_sku_technology", {
     skuId: "sku:technology", expectedSkuRevision: 1, technologyRef,
   }).state;
@@ -1133,6 +1146,34 @@ test("Technology and local-copy controlled actions preserve exact history and re
   assert.equal(attachedPart.v23SeriesPartRevisions.at(-1)?.revision, 2);
   assert.equal(attachedPart.v23SkuDrawerRevisions.at(-1)?.partRevision, 2);
   assert.equal(attachedPart.v23SkuDrawerRevisions.at(-1)?.revision, 4);
+  const preservedPartTechnology = run(attachedPart, "update_part_configuration", {
+    partId: "part:technology",
+    expectedPartRevision: 2,
+    configuration: {
+      ...part,
+      partId: "part:technology",
+      functionIntensity: 3,
+      defaultEntryRefs: [affixRef],
+      technologyRefs: [technologyRef],
+    },
+  }).state;
+  assert.deepEqual(
+    preservedPartTechnology.v23SeriesPartRevisions.at(-1)?.technologyRefs,
+    [technologyRef],
+  );
+  assert.throws(
+    () => run(attachedPart, "update_part_configuration", {
+      partId: "part:technology",
+      expectedPartRevision: 2,
+      configuration: {
+        ...part,
+        partId: "part:technology",
+        defaultEntryRefs: [affixRef],
+        technologyRefs: [],
+      },
+    }),
+    /V23_PART_TECHNOLOGY_ACTION_REQUIRED/u,
+  );
 
   const removedPart = run(attachedPart, "remove_part_technology", {
     partId: "part:technology", expectedPartRevision: 2, technologyRef,

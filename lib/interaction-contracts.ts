@@ -649,7 +649,7 @@ const ACTION_CAPABILITIES = {
   update_sku_local_affix_copy: ["sku.edit", "affix.read"],
   create_project_affix: ["affix.create"],
   create_technology: ["affix.create", "affix.read"],
-  update_technology: ["affix.create", "affix.read"],
+  update_technology: ["affix.edit", "affix.read"],
   attach_part_technology: ["part.edit", "affix.read"],
   remove_part_technology: ["part.edit"],
   attach_sku_technology: ["sku.edit", "affix.read"],

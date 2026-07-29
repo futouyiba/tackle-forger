@@ -353,6 +353,53 @@ test("schema v24 adds an empty Technology registry without inferring legacy data
   assert.throws(() => migrateWorkspaceState(duplicateHead), /V23_TECHNOLOGY_HEAD_DUPLICATE/);
 });
 
+test("real schema v23 state gains only empty Technology roots and remains byte-stable", () => {
+  const schema23 = directV23State() as unknown as Record<string, unknown>;
+  schema23.schemaVersion = 23;
+  delete schema23.v23TechnologyDefinitions;
+  delete schema23.v23TechnologyHeads;
+  const rawSource = { schemaVersion: 22, source: "preserved-v23-evidence" };
+  schema23.v23MigrationSourceEvidence = [{
+    sourceEvidenceId: "source:schema-23-fixture",
+    sourceSchemaVersion: 22,
+    rawWorkspacePayload: rawSource,
+    rawWorkspacePayloadHash: deterministicHash(rawSource),
+  }];
+  const before = structuredClone(schema23);
+  const snapshotJson = JSON.stringify(schema23.configurationSnapshots);
+  const snapshotHashes = (schema23.configurationSnapshots as unknown[]).map(deterministicHash);
+
+  const migrated = migrateWorkspaceState(schema23);
+  assert.equal(migrated.schemaVersion, 24);
+  assert.deepEqual(migrated.v23TechnologyDefinitions, []);
+  assert.deepEqual(migrated.v23TechnologyHeads, []);
+  const migratedRemainder = structuredClone(migrated) as unknown as Record<string, unknown>;
+  delete migratedRemainder.schemaVersion;
+  delete migratedRemainder.v23TechnologyDefinitions;
+  delete migratedRemainder.v23TechnologyHeads;
+  const beforeRemainder = structuredClone(before);
+  delete beforeRemainder.schemaVersion;
+  assert.equal(JSON.stringify(migratedRemainder), JSON.stringify(beforeRemainder));
+  assert.equal(deterministicHash(migratedRemainder), deterministicHash(beforeRemainder));
+  assert.equal(JSON.stringify(migrated.configurationSnapshots), snapshotJson);
+  assert.deepEqual(migrated.configurationSnapshots.map(deterministicHash), snapshotHashes);
+  assert.equal(JSON.stringify(migrateWorkspaceState(migrated)), JSON.stringify(migrated));
+
+  for (const [field, value] of [
+    ["v23TechnologyDefinitions", []],
+    ["v23TechnologyHeads", []],
+  ] as const) {
+    const partial = structuredClone(schema23);
+    partial[field] = value;
+    const unchanged = structuredClone(partial);
+    assert.throws(
+      () => migrateWorkspaceState(partial),
+      /V23_TECHNOLOGY_MIGRATION_PARTIAL_STATE_CONFLICT/u,
+    );
+    assert.deepEqual(partial, unchanged);
+  }
+});
+
 test("v9 original input is retained as evidence after the existing sequential chain reaches v23", () => {
   const legacy = legacyInput(9);
   legacy.v9OnlyUnknown = { retained: "verbatim" };

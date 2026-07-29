@@ -1236,10 +1236,11 @@ export interface V23FunctionTemplateDefinition {
 export interface V23ReductionPolicyRef { id: string; version: string; contentHash: string; }
 export interface V23SkuEffectiveEntryEvidence { ref: V23StableContentRef; localCopyId: string | null; copyHash: string | null; payloadHash: string; }
 export interface V23SkuPullTraceEvidence { source: V23SkuEffectiveEntryEvidence; operationId: string; operationIndex: number; operation: "percent_adjust" | "flat_adjust" | "clamp_add"; direction: "increase" | "decrease"; magnitude: number; clampMin: number | null; clampMax: number | null; ratioOperations: Array<{ source: V23SkuEffectiveEntryEvidence; operationId: string; operationIndex: number; direction: "increase" | "decrease"; magnitude: number }> | null; beforeKg: number; afterKg: number; numericEvidence: { beforeBinary64: string; afterBinary64: string; exactNumerator: string; exactDenominator: string; anomaly: "none" | "overflow" | "underflow_to_zero" }; }
+export interface V23SkuPullFailureEvidence { source: V23SkuEffectiveEntryEvidence | null; operationId: string | null; operationIndex: number | null; stage: "base" | "policy" | "operation_identity" | "set" | "percent_pool" | "ratio_increase_factor" | "ratio_reduction_factor" | "ratio_multiply" | "ratio_divide" | "flat_pool" | "flat_settlement" | "clamp"; numericEvidence: { beforeBinary64: string; afterBinary64: string; exactNumerator: string; exactDenominator: string; anomaly: "none" | "overflow" | "underflow_to_zero" }; }
 export type V23SkuPullDerivationEvidence =
   | { status: "UNRESOLVED" }
   | { status: "VALID"; templateRef: V23FunctionTemplateRef; reductionPolicyRef: V23ReductionPolicyRef; baselinePullKg: number; targetPullKg: number; effectiveEntries: V23SkuEffectiveEntryEvidence[]; trace: V23SkuPullTraceEvidence[]; inputHash: string }
-  | { status: "INVALID"; code: string; inputHash: string };
+  | { status: "INVALID"; templateRef: V23FunctionTemplateRef; reductionPolicyRef: V23ReductionPolicyRef; effectiveEntries: V23SkuEffectiveEntryEvidence[]; code: string; failureEvidence: V23SkuPullFailureEvidence; inputHash: string };
 
 export interface V23MatchedTemplateKey {
   partType: V23EnabledPartType;

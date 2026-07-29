@@ -1544,7 +1544,6 @@ test("v23 numeric affix carriers freeze published magnitude ranges and RuleSet e
 test("v23 formal persisted derivation round-trips closed binary64 evidence", () => {
   const state = directV23State();
   const sku = state.v23SkuDrawerRevisions[0]!;
-  const part = state.v23SeriesPartRevisions[0]!;
   const key = sixKey();
   const baselinePullKg = 5;
   const templateRef = { templateId: "template:one", revisionId: "r1", contentHash: hash({ contractVersion: "v23-function-template/v1", key, baselinePullKg }) };

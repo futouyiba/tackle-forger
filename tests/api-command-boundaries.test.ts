@@ -83,6 +83,7 @@ test("受治理边界覆盖命令、发布历史、审计与永久身份，且�
     { field: "v23SkuDrawerRevisions", action: "POST /api/v23/actions（create_sku / SKU 词条动作）" },
     { field: "v23SkuDrawerHeads", action: "POST /api/v23/actions（create_sku / SKU 词条动作）" },
     { field: "v23AffixDefinitions", action: "POST /api/v23/actions（create_project_affix）" },
+    { field: "v23FunctionTemplates", action: "只读：v23 功能模板仅由受控规则发布流程写入" },
     { field: "v23MigrationSourceEvidence", action: "只读：Phase A v23 migration evidence 仅由受控迁移写入" },
     { field: "v23LegacyReadAdapters", action: "只读：Phase A v23 legacy adapter 仅由受控迁移写入" },
     { field: "projectionPatches", action: "只读：遗留 ProjectionPatch 仅供迁移与审计" },

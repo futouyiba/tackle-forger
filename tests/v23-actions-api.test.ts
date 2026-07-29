@@ -127,6 +127,27 @@ test("v23 preview is authenticated read-only and direct write payload is rejecte
   assert.equal(preview.status, 200);
   const afterPreview = await loadWorkspaceState();
   assert.equal(afterPreview.revision, before.revision);
+  for (const extra of [
+    { unexpected: true },
+    { actionId: "action:forged" },
+    { payloadRefId: "payload:forged" },
+  ]) {
+    const rejected = await v23Actions(new NextRequest("http://localhost/api/v23/actions", {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({
+        action: "preview_weight_band_skus",
+        payload: {
+          partId: "part:v23-api:rod",
+          expectedPartRevision: 1,
+          weightBandId: "band:light",
+        },
+        ...extra,
+      }),
+    }));
+    assert.equal(rejected.status, 400);
+    assert.equal((await loadWorkspaceState()).revision, before.revision);
+  }
 
   const bypass = await v23Actions(new NextRequest("http://localhost/api/v23/actions", {
     method: "POST",

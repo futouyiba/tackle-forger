@@ -241,10 +241,15 @@ test("已认证整包 PUT 不能删除或重写 Phase A v23 治理根，并保�
   withTrustedProxy();
   const fields = [
     "v23SeriesPartRevisions", "v23SeriesPartHeads", "v23SkuDrawerRevisions", "v23SkuDrawerHeads",
-    "v23AffixDefinitions", "v23MigrationSourceEvidence", "v23LegacyReadAdapters",
+    "v23AffixDefinitions", "v23FunctionTemplates", "v23MigrationSourceEvidence", "v23LegacyReadAdapters",
   ] as const;
   for (const [index, field] of fields.entries()) {
     const current = await loadWorkspaceState();
+    const frozenEvidence = structuredClone({
+      identityAuditLog: current.state.identityAuditLog,
+      governanceAuditLog: current.state.governanceAuditLog,
+      commandIdempotencyRecords: current.state.commandIdempotencyRecords,
+    });
     const state = structuredClone(current.state) as unknown as Record<string, unknown>;
     if (index === 0) delete state[field];
     else state[field] = [{ forged: field }];
@@ -259,7 +264,49 @@ test("已认证整包 PUT 不能删除或重写 Phase A v23 治理根，并保�
     const after = await loadWorkspaceState();
     assert.equal(after.revision, current.revision, field);
     assert.deepEqual(after.state[field], current.state[field], field);
+    assert.deepEqual({
+      identityAuditLog: after.state.identityAuditLog,
+      governanceAuditLog: after.state.governanceAuditLog,
+      commandIdempotencyRecords: after.state.commandIdempotencyRecords,
+    }, frozenEvidence, field);
   }
+});
+
+test("整包 PUT 对 v23FunctionTemplates 的嵌套与混合改动原子拒绝", { concurrency: false }, async () => {
+  withTrustedProxy();
+  const current = await loadWorkspaceState();
+  const state = structuredClone(current.state);
+  state.v23FunctionTemplates = [{
+    ref: { templateId: "forged", revisionId: "forged", contentHash: "0".repeat(64) },
+    key: {
+      partType: "rod",
+      weightBandId: "forged",
+      fishingMethodId: "forged",
+      materialTypeId: "forged",
+      functionProfileId: "forged",
+      functionIntensity: 1,
+    },
+    baselinePullKg: 1,
+  }];
+  state.notes = "这一普通改动也不得部分提交";
+  const response = await issueAndInvoke({
+    action: "save_workspace",
+    url: "http://localhost/api/state",
+    method: "PUT",
+    payload: { state, baseRevision: current.revision },
+    invoke: putState,
+  });
+  assert.equal(response.status, 422);
+  const payload = await response.json() as { code?: string; governedChanges?: string[] };
+  assert.equal(payload.code, "DOMAIN_COMMAND_REQUIRED");
+  assert.deepEqual(payload.governedChanges, ["v23FunctionTemplates"]);
+  const after = await loadWorkspaceState();
+  assert.equal(after.revision, current.revision);
+  assert.equal(after.state.notes, current.state.notes);
+  assert.deepEqual(after.state.v23FunctionTemplates, current.state.v23FunctionTemplates);
+  assert.deepEqual(after.state.identityAuditLog, current.state.identityAuditLog);
+  assert.deepEqual(after.state.governanceAuditLog, current.state.governanceAuditLog);
+  assert.deepEqual(after.state.commandIdempotencyRecords, current.state.commandIdempotencyRecords);
 });
 
 test("save_workspace capability 禁用时返回403且不触发任何保存", { concurrency: false }, async () => {

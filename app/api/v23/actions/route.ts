@@ -52,6 +52,13 @@ export async function POST(request: NextRequest) {
     | { action?: unknown; payload?: unknown; actionId?: unknown; payloadRefId?: unknown }
     | null;
   if (body?.action === "preview_weight_band_skus") {
+    if (Object.keys(body).some((key) => key !== "action" && key !== "payload")
+      || !Object.prototype.hasOwnProperty.call(body, "payload")) {
+      return NextResponse.json(
+        { error: "preview 只允许 action 与 payload 顶层字段。" },
+        { status: 400 },
+      );
+    }
     const availability = user.actionAvailability.preview_weight_band_skus;
     if (!availability?.enabled) {
       return NextResponse.json(

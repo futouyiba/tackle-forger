@@ -2065,7 +2065,10 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     const part = partByIdAndRevision.get(partId)?.get(partRevision);
     if (!part || part.seriesId !== seriesId) throw new Error("V23_SKU_PART_UNRESOLVED");
     const weightBandId = v23String(entry.weightBandId, "V23_SKU_WEIGHT_BAND_ID");
-    if (!v23Array(part.weightBandIds, "V23_SKU_PART_WEIGHT_BANDS").includes(weightBandId)) throw new Error("V23_SKU_WEIGHT_BAND_UNDECLARED");
+    const weightBandDeclared = v23Array(
+      part.weightBandIds,
+      "V23_SKU_PART_WEIGHT_BANDS",
+    ).includes(weightBandId);
     const skuPatchIds = v23Array(entry.skuPatchIds, "V23_SKU_PATCH_IDS").map((id) => v23String(id, "V23_SKU_PATCH_ID"));
     if (new Set(skuPatchIds).size !== skuPatchIds.length) throw new Error("V23_SKU_PATCH_ID_DUPLICATE");
     const modelIds = v23Array(entry.modelIds, "V23_SKU_MODEL_IDS").map((id) => v23String(id, "V23_SKU_MODEL_ID"));
@@ -2073,17 +2076,27 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     if (entry.defaultModelId !== null) v23String(entry.defaultModelId, "V23_SKU_DEFAULT_MODEL_ID");
     if (skuPatchIds.length !== 0 || modelIds.length !== 0 || entry.defaultModelId !== null) throw new Error("V23_SKU_ASSOCIATION_RESOLVER_UNAVAILABLE");
     if (!Number.isSafeInteger(entry.displayOrder) || (entry.displayOrder as number) < 0) throw new Error("V23_SKU_DISPLAY_ORDER_INVALID");
+    let hasUndeclaredBandBlocker = false;
     for (const issue of v23Array(entry.validationSummary, "V23_SKU_VALIDATION_SUMMARY")) {
       const summary = v23Record(issue, "V23_SKU_VALIDATION_ISSUE");
       v23ExactKeys(summary, ["code", "severity", "gate", "state", "message"], "V23_SKU_VALIDATION_ISSUE");
       v23String(summary.code, "V23_SKU_VALIDATION_CODE"); v23String(summary.message, "V23_SKU_VALIDATION_MESSAGE");
       if (!(["INFO", "WARNING", "ERROR", "BLOCKER"] as const).includes(summary.severity as never) || !(["NONE", "REVIEW", "PUBLISH", "EXPORT"] as const).includes(summary.gate as never) || !(["OPEN", "ACKNOWLEDGED", "RESOLVED", "WAIVED", "STALE"] as const).includes(summary.state as never)) throw new Error("V23_SKU_VALIDATION_ISSUE_INVALID");
       if (summary.severity === "BLOCKER" && summary.state === "WAIVED") throw new Error("V23_SKU_VALIDATION_BLOCKER_WAIVED");
+      if (
+        summary.code === "INVALID_NO_MATCH"
+        && summary.severity === "BLOCKER"
+        && summary.gate === "PUBLISH"
+        && summary.state === "OPEN"
+      ) hasUndeclaredBandBlocker = true;
     }
     if (!(["draft", "approved", "published", "superseded"] as const).includes(entry.status as never)) throw new Error("V23_SKU_STATUS_INVALID");
     if (!["draft", "superseded"].includes(entry.status as string)) throw new Error("V23_SKU_LIFECYCLE_UNAVAILABLE");
     const match = v23Record(entry.match, "V23_SKU_MATCH");
     const status = v23String(match.status, "V23_SKU_MATCH_STATUS");
+    if (!weightBandDeclared && (status !== "INVALID_NO_MATCH" || !hasUndeclaredBandBlocker)) {
+      throw new Error("V23_SKU_WEIGHT_BAND_UNDECLARED");
+    }
     const validateKey = (value: unknown, code: string) => {
       const key = v23Record(value, code);
       v23ExactKeys(key, ["partType", "weightBandId", "fishingMethodId", "materialTypeId", "functionProfileId", "functionIntensity"], code);
@@ -2110,7 +2123,13 @@ function validateV23RuntimeState(state: MutableWorkspace) {
       const key = validateKey(match.attemptedKey, "V23_SKU_ATTEMPTED_KEY");
       v23HashOf(key, match.inputFingerprint, "V23_SKU_INPUT_FINGERPRINT");
       const candidateCount = (templatesByKey.get(jcsSha256Hex(key)) ?? []).length;
-      const expectedStatus = candidateCount === 0 ? "INVALID_NO_MATCH" : candidateCount > 1 ? "INVALID_AMBIGUOUS" : "VALID";
+      const expectedStatus = !weightBandDeclared
+        ? "INVALID_NO_MATCH"
+        : candidateCount === 0
+          ? "INVALID_NO_MATCH"
+          : candidateCount > 1
+            ? "INVALID_AMBIGUOUS"
+            : "VALID";
       if (status !== expectedStatus) throw new Error("V23_SKU_MATCH_REPLAY_MISMATCH");
     } else if (status === "NEEDS_MIGRATION_REVIEW") {
       v23ExactKeys(match, ["status"], "V23_SKU_MATCH");

@@ -17,6 +17,7 @@ import { formalConfigExportActionBlock } from "./config-export-stage";
 
 export type CapabilityCode =
   | "series.read" | "series.edit" | "series.approve"
+  | "part.read" | "part.edit" | "affix.read" | "affix.create" | "affix.edit"
   | "sku.read" | "sku.edit"
   | "model.read" | "model.edit" | "model.review" | "model.publish"
   | "candidate.generate" | "candidate.materialize" | "candidate.override_selection" | "candidate.select" | "candidate.dismiss"
@@ -45,7 +46,9 @@ export type CapabilityCode =
   | "rules.five_axis.publish" | "workspace.policy.manage" | "workspace.save";
 
 export type ActionCode =
-  | "open_series" | "create_series" | "update_series_core_affixes" | "open_sku" | "change_sku_target_pull" | "preview_model"
+  | "open_series" | "create_series" | "update_series_core_affixes" | "update_part_configuration" | "preview_weight_band_skus"
+  | "open_sku" | "create_sku" | "change_sku_target_pull" | "add_sku_affix" | "remove_inherited_affix"
+  | "restore_inherited_affix" | "copy_sku_local_affix" | "create_project_affix" | "preview_model"
   | "edit" | "review" | "publish" | "generate_candidates" | "materialize_candidates"
   | "override_candidate_selection" | "select_candidate" | "dismiss_candidate_run"
   | "create_patch" | "review_patch" | "rebase_patch"
@@ -71,7 +74,9 @@ export type ActionCode =
   | "publish_five_axis_definition" | "manage_workspace_policy" | "save_workspace";
 
 export const ACTION_CODES = [
-  "open_series", "create_series", "update_series_core_affixes", "open_sku", "change_sku_target_pull", "preview_model",
+  "open_series", "create_series", "update_series_core_affixes", "update_part_configuration", "preview_weight_band_skus",
+  "open_sku", "create_sku", "change_sku_target_pull", "add_sku_affix", "remove_inherited_affix",
+  "restore_inherited_affix", "copy_sku_local_affix", "create_project_affix", "preview_model",
   "edit", "review", "publish",
   "generate_candidates", "materialize_candidates", "override_candidate_selection",
   "select_candidate", "dismiss_candidate_run",
@@ -112,6 +117,7 @@ export const ISSUE_PRESENTATION_ACTION_CODES = [
  */
 export const READ_ONLY_ACTION_CODES = [
   "open_series",
+  "preview_weight_band_skus",
   "open_sku",
   "preview_model",
   "view_snapshot",
@@ -625,8 +631,16 @@ const ACTION_CAPABILITIES = {
   open_series: ["series.read"],
   create_series: ["series.edit"],
   update_series_core_affixes: ["series.edit"],
+  update_part_configuration: ["part.edit"],
+  preview_weight_band_skus: ["part.read", "sku.read"],
   open_sku: ["sku.read"],
+  create_sku: ["sku.edit"],
   change_sku_target_pull: ["sku.edit"],
+  add_sku_affix: ["sku.edit", "affix.read"],
+  remove_inherited_affix: ["sku.edit"],
+  restore_inherited_affix: ["sku.edit"],
+  copy_sku_local_affix: ["sku.edit", "affix.read"],
+  create_project_affix: ["affix.create"],
   preview_model: ["model.read"],
   edit: ["model.edit"],
   review: ["model.review"],

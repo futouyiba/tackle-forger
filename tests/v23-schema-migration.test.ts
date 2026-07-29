@@ -605,6 +605,62 @@ test("v23 closes SKU heads, affix contribution metadata, and Part weight-band me
   historicalBand.v23SkuDrawerRevisions.push(withSkuHashes({ ...historicalBand.v23SkuDrawerRevisions[0]!, revision: 2, partRevision: 2, weightBandId: "band:two" }) as SkuDrawerRevision);
   historicalBand.v23SkuDrawerHeads = [{ skuId: "sku:one", revision: 2 }];
   assert.doesNotThrow(() => migrateWorkspaceState(historicalBand));
+
+  const removedHistoricalBand = directV23State();
+  const nextPart = withPartHashes({
+    ...removedHistoricalBand.v23SeriesPartRevisions[0]!,
+    revision: 2,
+    weightBandIds: ["band:two"],
+  }) as SeriesPartRevision;
+  removedHistoricalBand.v23SeriesPartRevisions.push(nextPart);
+  removedHistoricalBand.v23SeriesPartHeads[0]!.revision = 2;
+  const priorSku = removedHistoricalBand.v23SkuDrawerRevisions[0]!;
+  const attemptedKey = {
+    partType: nextPart.partType,
+    weightBandId: priorSku.weightBandId,
+    fishingMethodId: nextPart.fishingMethodId,
+    materialTypeId: nextPart.materialTypeId,
+    functionProfileId: nextPart.functionProfileId,
+    functionIntensity: nextPart.functionIntensity,
+  };
+  const invalidRevision = withSkuHashes({
+    ...priorSku,
+    revision: 2,
+    partRevision: 2,
+    match: {
+      status: "INVALID_NO_MATCH",
+      attemptedKey,
+      inputFingerprint: hash(attemptedKey),
+    },
+    derivation: { status: "UNRESOLVED" },
+    validationSummary: [{
+      code: "INVALID_NO_MATCH",
+      severity: "BLOCKER",
+      gate: "PUBLISH",
+      state: "OPEN",
+      message: "historical band removed from current Part",
+    }],
+  }) as SkuDrawerRevision;
+  removedHistoricalBand.v23SkuDrawerRevisions.push(invalidRevision);
+  removedHistoricalBand.v23SkuDrawerHeads[0]!.revision = 2;
+  assert.doesNotThrow(() => migrateWorkspaceState(removedHistoricalBand));
+
+  const falselyValid = structuredClone(removedHistoricalBand);
+  falselyValid.v23SkuDrawerRevisions[1]!.match = validMatch({
+    ...attemptedKey,
+    partType: "rod",
+  });
+  falselyValid.v23SkuDrawerRevisions[1] = withSkuHashes(
+    falselyValid.v23SkuDrawerRevisions[1]!,
+  ) as SkuDrawerRevision;
+  assert.throws(() => migrateWorkspaceState(falselyValid), /V23_SKU_WEIGHT_BAND_UNDECLARED/);
+
+  const missingBlocker = structuredClone(removedHistoricalBand);
+  missingBlocker.v23SkuDrawerRevisions[1]!.validationSummary = [];
+  missingBlocker.v23SkuDrawerRevisions[1] = withSkuHashes(
+    missingBlocker.v23SkuDrawerRevisions[1]!,
+  ) as SkuDrawerRevision;
+  assert.throws(() => migrateWorkspaceState(missingBlocker), /V23_SKU_WEIGHT_BAND_UNDECLARED/);
 });
 
 test("v23 deduplicates stable affix IDs within each Part and SKU revision only", () => {

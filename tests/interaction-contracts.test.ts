@@ -10,6 +10,7 @@ import {
   createExportPreviewTarget,
   derivePrimaryDisplayState,
   legacyEntityState,
+  isStateChangingActionCode,
   normalizeEntityState,
   refreshAIRecommendationState,
   resolveProductDeepLink,
@@ -125,6 +126,28 @@ test("SKU 目标拉力变更由独立 sku.edit 能力授权", () => {
   assert.equal(
     actionAvailability("change_sku_target_pull", ["sku.edit"]).enabled,
     true,
+  );
+});
+
+test("v23 Part、SKU 与项目词条动作使用最小能力且预览保持只读", () => {
+  const actions = buildActionAvailabilityMap([
+    "part.read",
+    "part.edit",
+    "sku.read",
+    "sku.edit",
+    "affix.read",
+    "affix.create",
+  ]);
+  assert.equal(actions.update_part_configuration.enabled, true);
+  assert.equal(actions.preview_weight_band_skus.enabled, true);
+  assert.equal(actions.create_sku.enabled, true);
+  assert.equal(actions.add_sku_affix.enabled, true);
+  assert.equal(actions.create_project_affix.enabled, true);
+  assert.equal(isStateChangingActionCode("preview_weight_band_skus"), false);
+  assert.equal(isStateChangingActionCode("create_sku"), true);
+  assert.equal(
+    buildActionAvailabilityMap(["sku.edit"]).add_sku_affix.enabled,
+    false,
   );
 });
 

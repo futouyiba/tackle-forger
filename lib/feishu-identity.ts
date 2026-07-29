@@ -11,6 +11,11 @@ export interface FeishuIdentity {
 export const PHASE_ONE_CAPABILITIES = [
   "series.read",
   "series.edit",
+  "part.read",
+  "part.edit",
+  "affix.read",
+  "affix.create",
+  "affix.edit",
   "sku.read",
   "sku.edit",
   "model.read",

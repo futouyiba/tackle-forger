@@ -6,6 +6,7 @@ import { deterministicHash } from "../lib/rule-kernel";
 import { jcsSha256Hex } from "../lib/canonical-json";
 import { createSeedState } from "../lib/seed";
 import { migrateLegacyProductIdentity } from "../lib/legacy-product-migration";
+import { deriveV23SkuPull } from "../lib/v23-sku-derivation";
 import type {
   SeriesPartRevision,
   SkuDrawerRevision,
@@ -1052,4 +1053,29 @@ test("v23 numeric affix carriers freeze published magnitude ranges and RuleSet e
   copyHash.v23SkuDrawerRevisions[0]!.localEntryCopies[0]!.copyHash = "0".repeat(64);
   copyHash.v23SkuDrawerRevisions[0] = withSkuHashes(copyHash.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
   assert.throws(() => migrateWorkspaceState(copyHash), /V23_SKU_LOCAL_COPY_COPY_HASH_MISMATCH/);
+});
+
+test("v23 formal persisted derivation round-trips closed binary64 evidence", () => {
+  const state = directV23State();
+  const sku = state.v23SkuDrawerRevisions[0]!;
+  const part = state.v23SeriesPartRevisions[0]!;
+  const key = sixKey();
+  const baselinePullKg = 5;
+  const templateRef = { templateId: "template:one", revisionId: "r1", contentHash: hash({ contractVersion: "v23-function-template/v1", key, baselinePullKg }) };
+  state.v23FunctionTemplates = [{ ref: templateRef, key, baselinePullKg }];
+  const policy = { id: "policy:one", version: "policy-v1", contentHash: "d".repeat(64), status: "published" as const, strategy: "bidirectional_ratio" as const, numericContract: "ieee754-binary64-v1" as const };
+  state.reductionStackingPolicyVersions = [policy as never];
+  const definition = state.v23AffixDefinitions[0]!;
+  const ref = { id: definition.affixId, revision: definition.revision, contentHash: definition.contentHash };
+  const replay = deriveV23SkuPull(baselinePullKg, [{ ref, payload: definition.payload }], { formal: true, publishedReductionPolicy: policy });
+  assert.equal(replay.status, "VALID");
+  if (replay.status !== "VALID") return;
+  const source = { ref, localCopyId: null, copyHash: null, payloadHash: hash(definition.payload) };
+  const trace = replay.trace.map((step) => ({ source, operationId: step.operationId, operationIndex: step.operationIndex, operation: step.operation, direction: step.direction, magnitude: step.magnitude, clampMin: step.clampMin, clampMax: step.clampMax, ratioOperations: step.ratioOperations?.map((item) => ({ source, operationId: item.operationId, operationIndex: item.operationIndex, direction: item.direction, magnitude: item.magnitude })) ?? null, beforeKg: step.beforeKg, afterKg: step.afterKg, numericEvidence: step.numericEvidence }));
+  sku.match = { status: "VALID", functionTemplateRef: templateRef, matchedKey: key, inputFingerprint: hash(key) };
+  sku.derivation = { status: "VALID", templateRef, reductionPolicyRef: { id: policy.id, version: policy.version, contentHash: policy.contentHash }, baselinePullKg, targetPullKg: replay.targetPullKg, effectiveEntries: [source], trace, inputHash: replay.inputHash };
+  state.v23SkuDrawerRevisions[0] = withSkuHashes(sku) as SkuDrawerRevision;
+  const migrated = migrateWorkspaceState(state);
+  assert.equal(migrated.v23SkuDrawerRevisions[0]!.derivation?.status, "VALID");
+  assert.deepEqual(migrateWorkspaceState(migrated), migrated);
 });

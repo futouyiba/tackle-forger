@@ -44,7 +44,7 @@
       ],
       "title": "产品范围、术语、生成顺序与结构匹配",
       "path": "docs/spec-v3/01-product-foundations.md",
-      "sha256": "b45469b83b1105944eb0539ee79136728acdb82824eafe38625a57f0fb485749"
+      "sha256": "2ef5058bb8c147aad13bb164ddf0f8746ac6f9598d080708f27326c3f1d9b062"
     },
     {
       "id": "02",
@@ -56,7 +56,7 @@
       ],
       "title": "Collection、Series、SKU、Model 与 Patch",
       "path": "docs/spec-v3/02-product-model.md",
-      "sha256": "429054079e4c4e71870cd70637c813803955238d8aed62801f943d105e41214c"
+      "sha256": "62feed1b89e06654bf71460c81656242ea22afbab561c592ca3b4a8935fe6ba9"
     },
     {
       "id": "03",
@@ -70,7 +70,7 @@
       ],
       "title": "兼容、数值、词条、品质与校验",
       "path": "docs/spec-v3/03-rules-and-validation.md",
-      "sha256": "25d3b5ab0f204c76df2e460a1afd67ce7ed7b2e3b6dcd6a99055c6ba4c24274f"
+      "sha256": "584fcf440b44a33d43a9c235a5af07040cfc73bf9e0a30db3b550ac91787ba80"
     },
     {
       "id": "04",
@@ -95,7 +95,7 @@
       ],
       "title": "Agent 检查表与未决事项登记表",
       "path": "docs/spec-v3/05-open-decisions.md",
-      "sha256": "33423a4b87f0932ce84a61c69a5459cefe1d9446626bbc8a7ea547e9567de5fa"
+      "sha256": "a140220a4e62a52c2def78a63311103e7ceba0144cc1dee1d1395f3f3f9622fb"
     },
     {
       "id": "06",
@@ -107,7 +107,7 @@
       ],
       "title": "五维图、比较、甘特图与 AI 建议",
       "path": "docs/spec-v3/06-visualization-and-ai.md",
-      "sha256": "71d740ea9ba075e24f5bc93b2a49bb1e0be551337156e8548e7bb1836fbdea81"
+      "sha256": "394654899ead951b60f7ec8e8a3338f1d0deb26734245a89ce9731494e39f53c"
     },
     {
       "id": "07",

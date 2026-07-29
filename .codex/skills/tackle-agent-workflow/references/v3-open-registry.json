@@ -2,7 +2,7 @@
   "format": "tackle-v3-open-registry/v1",
   "source": {
     "path": "docs/spec-v3",
-    "sha256": "7f2672bcf9021a9f7dea08695eef622c17ddb05d585f4582e1ebf3efc8ec78ff"
+    "sha256": "88c73feb2c00bd06262bc8c3cad3b89edc95226193be762059157f613669ea83"
   },
   "entries": [
     {
@@ -41,8 +41,8 @@
       "title": "OPEN-003：扩展部位启用时间",
       "dependencies": [],
       "startLine": 68,
-      "endLine": 84,
-      "contentSha256": "eb7ca3a961f7099d530441a4b10f7145f5f2fd0482f652a4c324cc1350e61624"
+      "endLine": 85,
+      "contentSha256": "843065bc7cbe3fb3aef47948535542e9ce9f1105566ba6722ef1e4efcb196726"
     },
     {
       "id": "OPEN-004",
@@ -54,8 +54,8 @@
       "dependencies": [
         "14"
       ],
-      "startLine": 91,
-      "endLine": 190,
+      "startLine": 92,
+      "endLine": 191,
       "contentSha256": "8672d9d8c8978a2d21ca995cdf09aa36ef1e046c0a7900d46d92287a2aabd1bf"
     },
     {
@@ -94,9 +94,9 @@
       "subsection": "20.1",
       "title": "20.1 价值分自动定价与PricingPolicy",
       "dependencies": [],
-      "startLine": 324,
-      "endLine": 416,
-      "contentSha256": "ec108b5048027c54fda5787c9230dcebd5ff9eb02e3e3a541ebaa9e2c5cb4661"
+      "startLine": 325,
+      "endLine": 417,
+      "contentSha256": "b81f2163efc2c316b5082c41437a58474de8e2fbbb9f57a291b6b6b44c631f01"
     },
     {
       "id": "OPEN-008",
@@ -108,8 +108,8 @@
       "dependencies": [
         "25"
       ],
-      "startLine": 191,
-      "endLine": 323,
+      "startLine": 192,
+      "endLine": 324,
       "contentSha256": "bebe224fe538c6569a81ba375b4bf5530fe712472f3738d6fb8ee698fb9f7bed"
     },
     {
@@ -122,8 +122,8 @@
       "dependencies": [
         "23.6"
       ],
-      "startLine": 417,
-      "endLine": 547,
+      "startLine": 418,
+      "endLine": 548,
       "contentSha256": "66e26461dbafa00519b1625d79d6b1fa28a3e8c9b814d9b84d2809a37defb121"
     },
     {
@@ -150,8 +150,8 @@
       "dependencies": [
         "14.3"
       ],
-      "startLine": 85,
-      "endLine": 90,
+      "startLine": 86,
+      "endLine": 91,
       "contentSha256": "bc213c1483b555f1edd9a9cb1d384521f51b4835a7b31bb63bb9f0db3ee90770"
     }
   ]

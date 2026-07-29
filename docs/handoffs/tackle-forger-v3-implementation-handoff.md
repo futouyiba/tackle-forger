@@ -83,7 +83,7 @@ FinalValue = applyParameterDefinition(PostReviewValue)
 - 硬兼容规则和软 `Affinity Score` 必须分开：硬规则决定能不能生成，软分数决定适配程度和排序解释。
 - 人工修改使用分层Patch；共享中间层用DerivationLayerPatch，单个产品用Series/SKU/Model/FinalReview Patch；固定标杆选择用ProjectionPin。
 - 所有保存过的Patch进入工具内权威`PatchLedger`，并幂等同步到飞书单一`Patch台账`页；该页是协作镜像而非唯一运行时来源。DerivationLayerPatch或多个个体Patch的稳定共性可经人工归纳生成RuleSourceChangeDraft；单个个案不得未经归纳提升为通用规则。写回后必须回读、显式拉取并发布RuleSetVersion。
-- 先确定Series的Quality，再选择具体词条；价值分校验已选Quality并作为自动定价输入，不得反向自动改品质，Quality本身不修改面板。
+- 品质归SKU：有效词条与Part功能定位派生只读推荐品质，实际品质可由人工选择；二者不一致时必须记录理由。价值分与实际品质分别服务推荐和定价，Quality本身不修改面板。
 - 飞书唯一规则工作簿已指定为[《钓具设计工作簿》](https://pisn3u3ony2.feishu.cn/wiki/YsEKwSUJ5i86HCkZKBVcNMw7nOh?from=from_copylink&sheet=9nE3Rx)。链接锚点虽是`06_系列/9nE3Rx`，同步对象是整个工作簿；2026-07-21首次接入基线为revision `2302`，本轮源表整改后的回读revision为`2352`。两者都不得硬编码成最新版本。
 - OPEN-001外部工作簿revision `17173`不得进入运行时生效链。主工作簿revision `3259`的`04_词条/zrVOxd`尚无对应机器规则；在稳定`sheet_id + ruleId + parameterKey`规则写入、回读和显式拉取前，发布策略必须以`REDUCTION_POLICY_SOURCE_MISSING`阻断。
 - revision `2352`的历史审计确认了176个稳定机器ID：64个重量模板、14个类型、19个功能定位、19个性能定位、36个词条和24个系列原型。这仅是历史迁移基线，不是当前工作表拓扑。revision `2869`已调整为`04_词条/zrVOxd`、`05_技术/RdZv0J`，不再有独立性能定位页。接入器必须保留历史ID且每次显式拉取后重新审计当前机器区域；缺ID新行进入`NEW_SOURCE_ROW`，经人工确认后分配并回写。长期同步不得按名称、`名称|级别`、行号或显示顺序关联。
@@ -279,7 +279,7 @@ Affinity轴与v3固定为：
 核心实体：
 
 - `Collection`：可选的更高层产品集合。
-- `SeriesDefinition`：共享概念、类型、品质带和不变量。
+- `SeriesDefinition`：稳定`seriesId`、跨Part关系和不变量；品质归各SKU，不构成Series共享身份。
 - `SkuDrawer`：一个重量规格对应的钓具抽屉。
 - `PurchasableModel`：抽屉内的实际选择与购买对象。
 - `ConfigurationSnapshot`：发布时冻结的最终配置及来源。
@@ -315,7 +315,7 @@ Schema v23的每个SKU关联`partId + weightBandId + functionTemplateRef + 输�
 
 - 技术包含的词条参与属性聚合或被动展示。
 - 若技术已经通过成员词条贡献属性，技术本体不得再次贡献同名属性。
-- 编辑Series时先确定Quality，再选择词条；价值分只按原子词条成员汇总，用于校验所选Quality区间并作为自动定价输入。Technology不得重复计分，Quality本身不修改面板。
+- 编辑SKU的有效词条与实际品质；价值分只按原子词条成员汇总，派生SKU推荐品质，实际品质不一致时保存理由并作为自动定价输入。Technology不得重复计分，Quality本身不修改面板。
 - 展开技术时必须能看到成员、来源和最终贡献。
 
 验收：Technology展开后没有双重属性或价值分；被动词条可影响价值分但不改变面板；双向百分比、固定值后置、set/clamp顺序、binary64边界、ParameterDefinition执行点、异常Gate和完整Trace均与v3第11.3、11.4节一致。
@@ -552,7 +552,7 @@ docs/tackle-forger-development-spec-v3.md，以及本 handoff。
 
 - 把生产与发布主导航“候选池”迁移为“钓具系列甘特图”；
 - 甘特图按离散重量展示Series覆盖、SKU节点、Model数量和状态；
-- 页面固定说明“覆盖范围只表达系列规划跨度，不代表连续插值”；纵轴使用版本化重量分段，横轴使用品质/类型分栏；
+- 页面固定说明“覆盖范围只表达系列规划跨度，不代表连续插值”；纵轴使用版本化重量分段，横轴使用Part/类型分栏，SKU节点显示实际品质；
 - CandidateSearchRecipe保留为“候选搜索配方”；
 - 生成动作统一为“生成 Model 候选”；
 - 临时结果统一为“Model 候选”或“候选结果”；

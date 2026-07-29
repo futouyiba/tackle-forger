@@ -57,7 +57,7 @@ flowchart LR
 | FunctionProfile | 泛用、远投、障碍强攻等玩法方向 |
 | functionIntensity | 同一功能方向的专精强度1/2/3 |
 | PerformanceSummary | Series/Model完成Technology、词条与最终属性结算后派生的只读性能定位摘要，例如抛投+、重量-、竿度+；不是配置输入或数值贡献层 |
-| QualityProfile | C/绿、B/蓝、A/紫、S/橙的系列品质身份；本身不直接修改面板 |
+| QualityProfile | C/绿、B/蓝、A/紫、S/橙的SKU品质身份；本身不直接修改面板 |
 | StructuralBenchmark / DerivedProjection | 仅由基础拉力模板×钓法×类型×功能定位演绎出的只读结构标杆 |
 | Collection | 营销产品族，可包含多个严格Series |
 | Series | 组织1～3个互不重复竿/轮/线Part的系列容器；不统一保存钓法、功能定位或目标拉力 |

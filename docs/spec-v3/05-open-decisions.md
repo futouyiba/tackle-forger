@@ -25,11 +25,11 @@
 | --- | --- | --- | --- | --- | --- |
 | OPEN-001 降低型词条叠加 | 产品决策 / 规则源待迁移 | `DECIDED_PENDING_POLICY_VERSION` | 全局唯一使用`bidirectional_ratio`，完整顺序为`set → 百分比 → 固定值 → clamp_add → FinalReviewPatch → ParameterDefinition`；不得按参数或词条族切换 | 权威主工作簿尚无机器可读策略行，或没有已发布`ReductionStackingPolicyVersion`时，只允许明确标记的非正式预览，产生不可waive的PUBLISH BLOCKER并禁止新Model和Snapshot发布 | 2026-07-23用户确认；外部工作簿revision `17173`仅作决策证据；将规则迁入主工作簿`04_词条`（词条表）的稳定机器区域，显式拉取、校验、发布策略版本并通过公式、边界、数值域、迁移和冻结回归后才能改为`RESOLVED` |
 | OPEN-002 性能定位派生语义 | 已决产品结论 | `DECIDED_IMPLEMENTATION_PENDING` | 新契约只产生只读`PerformanceSummary`；旧`PerformanceProfile/performanceId`只读保留 | 新revision不得把Performance作为配置、贡献层、评分乘数、兼容或定价输入；运行时迁移完成前不得把旧路径冒充新契约 | 2026-07-23用户决定与`open-007-pricing-semantics-adr.md`；实现由GitHub Issue #9跟踪 |
-| OPEN-003 扩展部位启用 | 延后产品决策 | `DEFERRED_UI_DISABLED` | 当前及已排定范围只启用竿、轮、线；SKU仅包含竿、轮、线 | 钩、漂、真饵和拟饵仅保留注册表与历史数据兼容；只读UI、草稿、生成、发布、Snapshot和所有环境/渠道导出全部关闭 | 2026-07-23产品确认“当前完全延期，未来另做产品设计”；存在可校验的已发布`enabledItemPartPolicy`前不得标记`RESOLVED`，未来任一部位启动前仍须另建产品设计Issue |
+| OPEN-003 扩展部位启用 | 延后产品决策 | `DEFERRED_UI_DISABLED` | v23及后续目标态当前及已排定范围只启用竿、轮、线；SKU仅包含竿、轮、线 | 钩、漂、真饵和拟饵仅保留注册表与历史数据兼容；v23及后续目标态的只读UI、草稿、生成、发布、Snapshot和所有环境/渠道导出全部关闭；v9/v22按其冻结历史/当前实现语义读取，不由本项原地重写 | 2026-07-23产品确认“当前完全延期，未来另做产品设计”；存在可校验的已发布`enabledItemPartPolicy`前不得标记`RESOLVED`，未来任一部位启动前仍须另建产品设计Issue |
 | OPEN-004 Patch属性偏移阈值 | 规则策略缺口 | `RESOLVED` | 已发布`patch-offset/open004-v1`：不设置独立偏移阈值；Patch立即参与草稿试算，正式结果前必须纳入Series/SKU/Model或发布批次的整体人工复核证据；按当前关口各离散对象的累计最终值和已发布参数合法范围校验 | 缺少或损坏已发布`PatchOffsetPolicyVersion`时仍产生`PATCH_OFFSET_POLICY_MISSING`或完整性BLOCKER；范围越界ERROR只有取得匹配当前Gate的Waiver后才能继续，且仅当Gate为EXPORT时额外要求精确匹配目标环境×渠道；完整性BLOCKER永不可waive | 2026-07-23用户确认决策；Workspace schema v16发布并校验策略版本；Issue #32覆盖批量复核、多重量、Gate/渠道Waiver、rebase、迁移和Snapshot/ExportManifest冻结回归 |
 | OPEN-005 五维图定义 | 产品决策 | `DECIDED_PENDING_DEFINITION_VERSION` | 第21、22、24.6和25.3节已记录2026-07-23确认的正式语义、哈希、投影引用及候选差量/事务契约；实现仍须从版本化定义读取，不得写死在UI/数据库 | 旧五维定义即使原记录为`PUBLISHED`也只允许历史Snapshot只读重放；在符合OPEN-005的新定义进入`FORMAL_CURRENT`前，新正式Snapshot必须fail-closed | 决策证据为GitHub Issue #13及2026-07-23用户确认；完成第21.7节迁移、发布可校验的新`FiveAxisViewDefinition`并通过门禁回归后改为`RESOLVED` |
 | OPEN-006 AI供应方与数据出网 | 安全/产品决策 | `RESOLVED` | 使用`ai-provider/open006-v1`：Fancy Hub、`ai-request/v1`严格Schema、动态模型修订、字段级保留和分层限额 | 本决策只解除产品策略阻断；真实连接器在Issue #25完成、测试并启用前继续禁用，不得发送真实数据 | 2026-07-23用户确认本节策略；AI无批准、写回或发布能力，无需另设三方会签 |
-| OPEN-007 定价决策落地与源表一致性 | 已决产品结论/外部规则源落实 | `DECIDED_SOURCE_UPDATE_REQUIRED` | 旧实现可继续输出明确标记的`NON_FORMAL`试算；目标契约按第12.1与20.1节执行，品质区间均为`[min,max)`且`finalValueScore >= 100`无推荐 | 飞书机器源、新v23 schema、迁移、推荐/实际品质分离和发布/导出尚未全部落实前，禁止把旧Draft发布成符合新契约的PricingPolicyVersion；历史“100属于S”策略只服务旧Snapshot | 2026-07-28用户最新明确决定；源表负责人更新机器源，独立实现任务完成迁移与回归 |
+| OPEN-007 定价决策落地与源表一致性 | 已决产品结论/外部规则源落实 | `DECIDED_SOURCE_UPDATE_REQUIRED` | 旧实现可继续输出明确标记的`NON_FORMAL`试算；目标契约按第12.1与20.1节执行，品质区间均为`[min,max)`且`finalValueScore >= 100`无推荐 | 飞书机器源、新v23 schema、迁移、SKU推荐/实际品质分离和发布/导出尚未全部落实前，禁止把旧Draft发布成符合新契约的PricingPolicyVersion；历史“100属于S”策略只服务旧Snapshot | 2026-07-29本轮用户明确确认：品质归SKU，全部区间`[min,max)`，`finalValueScore >= 100`无推荐，实际品质可人工选择且不一致时记录理由；源表负责人更新机器源，独立实现任务完成迁移与回归 |
 | OPEN-008 ConfigIdPolicy区间与命名 | 公司策略（已确认） | `DECIDED_PENDING_POLICY_VERSION` | 按本节确认规则实现策略版本、ledger、权威目标目录/扫描Manifest、历史导入、正式动作治理租约/受保护ref CAS和冲突预检 | `ConfigIdPolicyVersion`尚未发布，或其引用的`ConfigTargetCatalogVersion`中任一必需目标没有获批扫描Manifest时，不得正式预留ID、历史ID正式导入或正式导出；正式预留、历史ID正式导入和正式导出任一无法取得`ConfigTargetGovernanceLease`、无法对authoritative ref执行expected-old-OID CAS或返回`CONFIG_TARGET_SERIALIZATION_UNAVAILABLE`时必须fail-closed。策略发布只复验Manifest/ref/hash，不要求治理租约；禁止用“最大值+1”、示例ID、用户临时绑定或单一渠道扫描代替 | 配置治理负责人发布策略版本；权威目录和获批Manifest覆盖完整；reservation、历史导入、正式导出和分裂命中验收通过；治理租约的物理ref别名竞争、单调fencing token、受保护ref CAS、stale token与`CONFIG_TARGET_SERIALIZATION_UNAVAILABLE`失败验收通过 |
 | OPEN-009 工作流治理策略 | 产品/安全决策 | `RESOLVED` | 使用第20.2节当前`open009-2026-07-27-v2`统一策略；匿名仅使用浏览器内存本地态，所有共享/服务端动作仍须飞书认证；已认证用户拥有全部已启用业务Capability；AI一期禁用，二期连接器仍需独立实现准入 | 历史`open009-2026-07-23-v1`不得重解释；不接飞书审批、不在本工具实行职责分离；OPEN-006安全配置只由部署管理员修改；关键写操作使用工作区单写锁与单调fencing token，普通操作记录保留1年 | 2026-07-23首次确认、2026-07-27发布入口边界v2；策略正文见第20.2节，运行时仍待独立实现与验收 |
 | OPEN-010 飞书Patch台账远端契约 | 外部规则源阻断 | `BLOCKED_ON_SOURCE_SCHEMA` | 已确认`Patch台账`、`A:AK`机器区、`AM:BA`协作事件区、哈希/并发/幂等/补偿/rebase契约；权限引用`separation-of-duties/open009-v2`；不触达飞书的契约实现/测试可继续，但本地PatchLedger、协作事件流、旧版写入/拉取及未实现动作均不得标记为符合或可用 | 本地`PatchOperationRecord`、PatchLedger schema/migration及operation/revision/Snapshot哈希完成`workspaceId`与JCS契约升级前，镜像链路保持禁用；不可变协作事件存储、事务内compare-and-append、`collaborationRevision`/幂等/冲突/`supersedesEventId`校验和action availability完成前，协作写入保持禁用；远端表头、保护边界和连接器联调完成前，真实写入/拉取保持禁用；旧版写入/拉取完成远端schema、IssueCode及ActionCode/Capability升级前保持禁用；`inspect_patch_mirror`、`repair_patch_mirror`、`rebuild_patch_mirror_from_local`、`fix_patch_mirror_schema`、`migrate_patch_subject`的服务端定义、Capability门禁和测试完成前，对应动作也保持禁用；不得伪造SYNCED | 先以版本化迁移补齐本地工作区归属和新哈希，同时保持既有revision、Snapshot引用及历史哈希证据不可变；实现本地协作事件原子追加、先本地提交后镜像及重复重试/双客户端冲突回归；按第14.4节物化远端schema并完成写入、回读、缺行、篡改、hash、跨工作区隔离和并发联调；升级写入/拉取并实现、测试全部镜像/迁移ActionCode、Capability映射、二次确认和审计证据；连接器及运行时实现使用独立Issue/PR跟踪 |
@@ -69,11 +69,12 @@ FinalValue = applyParameterDefinition(PostReviewValue)
 
 2026-07-23产品决策：钩、漂、真饵和拟饵当前完全延期，未安排首批或后续启用顺序。此前讨论中的任何拟饵、钩、漂、真饵预排顺序均不生效。本次只收敛“当前是否启用”的产品决策，不为未来产品形态预设答案，也不代表仓库已经发布可校验的`enabledItemPartPolicy`版本；因此OPEN-003继续保持`DEFERRED_UI_DISABLED`，不能标记`RESOLVED`。Issue #17可在决策写入权威规范后关闭，但运行时策略的实现与发布必须由后续独立Issue提供证据。
 
-当前确定边界：
+当前确定的边界仅约束v23及后续目标态；Schema v9与v22继续按冻结的历史/当前实现语义读取、迁移和重放，不由OPEN-003原地改变其部位启用语义：
 
 - 注册表和迁移层可以保留四类部位的稳定ID、原始Payload和历史引用；不得删除、改名重绑或因未启用而丢弃历史数据。
 - 不提供四类部位的产品只读入口、编辑草稿、候选生成、人工发布、Snapshot创建或配置导出。注册表中存在记录不等于已启用。
-- 四类部位不进入现有`Collection/Series/SKU/Model`谱系。现有SKU只包含竿、轮、线；不得把部位专属规格伪装成`targetPullKg`，也不得进入最近结构模板匹配、钓具系列甘特图或现有Model候选生成。
+- 在v23及后续目标态，四类部位不进入`Series → Part → weightBandId/SKU → Model`谱系，也不得进入04.5唯一匹配、钓具系列甘特图、候选生成、发布或导出；目标态SKU只包含竿、轮、线。
+- v9/v22只按冻结payload保留其历史/当前实现分支；`targetPullKg`与最近结构模板匹配仅属于该分支，不得据此创建新对象、启用或推断四类延期部位。
 - 当前不为四类部位定义参数模板、Method/Type、硬兼容、Affinity、Affix/Technology、品质、定价或配置映射，不得从竿轮线复制规则或补默认值。
 - 所有角色均不获得四类部位的草稿、生成、发布或导出动作；dev、test及所有渠道均无先行启用。现有导出不得因注册表或历史数据存在而新增、修改或删除相关配置行。
 - 竿、轮、线的生成、发布、ConfigurationSnapshot和导出行为保持不变。已发布Snapshot不得因本决策或未来扩展部位设计而被重算、改写或删除。
@@ -325,7 +326,7 @@ Manifest失效后，旧`ConfigIdPolicyVersion`只保留历史审计用途，不�
 
 本节语义已经由2026-07-23用户决定，决策证据见`docs/audits/open-007-pricing-semantics-adr.md`。`OPEN-007`继续跟踪飞书机器源、schema、迁移和运行时落地，不再表示产品执行语义未决，也不得继续要求用户在阻断、封顶或性能乘数之间重复选择。
 
-2026-07-28用户最新明确决定调整品质推荐边界：全部08.1区间统一为`[min,max)`，`finalValueScore >= 100`无品质推荐。该决定优先于2026-07-23“100属于S”的旧目标策略。历史Pricing/Quality策略与既有Snapshot继续按冻结版本解释，不得原地重算；目标实现通过Schema v23与新策略版本落地。
+2026-07-29本轮用户明确确认品质归SKU：全部08.1区间统一为`[min,max)`，`finalValueScore >= 100`无品质推荐；实际品质可人工选择，和推荐不一致时必须记录理由。该确认优先于2026-07-23“100属于S”的旧目标策略。历史Pricing/Quality策略与既有Snapshot继续按冻结版本解释，不得原地重算；目标实现通过Schema v23与新策略版本落地。
 
 定价权威来源是主工作簿`07_品质评分`（品质评分表）与`08_价格计算`（价格计算表）的联合策略：品质评分表提供品质区间和品质内最小/最大价格系数；价格计算表提供业务公式、评分插值、重量段查表、零整比、货币、舍入和价格边界。两页必须按同一`FeishuSourceRevision`导入为一个`PricingPolicyDraft`，禁止跨revision拼接。
 

@@ -3,7 +3,7 @@ import { jcsSha256Hex } from "./canonical-json";
 import { compareUtf8 } from "./reduction-stacking-policy";
 
 export interface V23ResolvedAffix { ref: V23StableContentRef; payload: V23ProjectAffixPayload; localCopyId?: string; copyHash?: string; }
-export interface V23PullTraceStep { affixId: string; operationId: string; operationIndex: number; operation: "percent_adjust" | "flat_adjust" | "clamp_add"; direction: "increase" | "decrease"; magnitude: number; clampMin: number | null; clampMax: number | null; beforeKg: number; afterKg: number; }
+export interface V23PullTraceStep { affixId: string; operationId: string; operationIndex: number; operation: "percent_adjust" | "flat_adjust" | "clamp_add"; direction: "increase" | "decrease"; magnitude: number; clampMin: number | null; clampMax: number | null; ratioOperations: Array<{ affixId: string; operationId: string; operationIndex: number; direction: "increase" | "decrease"; magnitude: number }> | null; beforeKg: number; afterKg: number; }
 export type V23SkuPullDerivation =
   | { status: "VALID"; baselinePullKg: number; targetPullKg: number; effectiveEntryIds: string[]; trace: V23PullTraceStep[]; inputHash: string }
   | { status: "INVALID"; code: string; inputHash: string };
@@ -66,6 +66,11 @@ export function deriveV23SkuPull(baselinePullKg: number, entries: readonly V23Re
   }
   value = baselinePullKg * (1 + bonus) / (1 + reduction);
   if (!Number.isFinite(value) || value <= 0) return { status: "INVALID", code: "V23_PULL_DERIVATION_NON_FINITE", inputHash };
+  const ratioOperations = ordered.filter(({ operation }) => operation.parameterKey === "pull" || operation.parameterKey === "targetPullKg").filter(({ operation }) => operation.operation === "percent_adjust").map(({ entry, operation }) => { const percent = operation as { operationId: string; operationIndex: number; direction: "increase" | "decrease"; magnitude: number }; return { affixId: entry.ref.id, operationId: percent.operationId, operationIndex: percent.operationIndex, direction: percent.direction, magnitude: percent.magnitude }; });
+  if (ratioOperations.length) {
+    const first = ratioOperations[0]!;
+    trace.push({ affixId: first.affixId, operationId: first.operationId, operationIndex: first.operationIndex, operation: "percent_adjust", direction: first.direction, magnitude: first.magnitude, clampMin: null, clampMax: null, ratioOperations, beforeKg: baselinePullKg, afterKg: value });
+  }
   for (const { entry, operation: op } of later) {
       const numeric = op as Extract<typeof op, { direction: "increase" | "decrease" }>;
       const beforeKg = value;
@@ -75,7 +80,7 @@ export function deriveV23SkuPull(baselinePullKg: number, entries: readonly V23Re
       else if (op.operation === "clamp_add") value = Math.min(op.clampMax, Math.max(op.clampMin, value + signed));
       else return { status: "INVALID", code: "V23_DIRECT_PULL_PATCH_FORBIDDEN", inputHash };
       if (!Number.isFinite(value) || value <= 0) return { status: "INVALID", code: "V23_PULL_DERIVATION_NON_FINITE", inputHash };
-      trace.push({ affixId: entry.ref.id, operationId: numeric.operationId, operationIndex: numeric.operationIndex, operation: numeric.operation, direction: numeric.direction, magnitude: numeric.magnitude, clampMin: numeric.operation === "clamp_add" ? numeric.clampMin : null, clampMax: numeric.operation === "clamp_add" ? numeric.clampMax : null, beforeKg, afterKg: value });
+      trace.push({ affixId: entry.ref.id, operationId: numeric.operationId, operationIndex: numeric.operationIndex, operation: numeric.operation, direction: numeric.direction, magnitude: numeric.magnitude, clampMin: numeric.operation === "clamp_add" ? numeric.clampMin : null, clampMax: numeric.operation === "clamp_add" ? numeric.clampMax : null, ratioOperations: null, beforeKg, afterKg: value });
   }
   return { status: "VALID", baselinePullKg, targetPullKg: value, effectiveEntryIds: entries.map((e) => e.ref.id), trace, inputHash: jcsSha256Hex({ inputHash, targetPullKg: value, trace }) };
 }

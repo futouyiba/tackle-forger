@@ -36,5 +36,5 @@ test("percent adjustments use the published bidirectional ratio contract", () =>
   const down = structuredClone(up); down.operations[0] = { ...down.operations[0]!, operationId: "op2", sourceAffixId: "b", magnitude: 0.2, direction: "decrease" } as never;
   const result = deriveV23SkuPull(10, [{ ref, payload: up }, { ref: { ...ref, id: "b" }, payload: down }]);
   assert.equal(result.status, "VALID");
-  if (result.status === "VALID") assert.equal(result.targetPullKg, 10 * 2 / 1.2);
+  if (result.status === "VALID") { assert.equal(result.targetPullKg, 10 * 2 / 1.2); assert.equal(result.trace[0]!.beforeKg, 10); assert.equal(result.trace[0]!.afterKg, result.targetPullKg); assert.equal(result.trace[0]!.ratioOperations?.length, 2); }
 });

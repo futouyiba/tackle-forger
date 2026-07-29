@@ -2122,7 +2122,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
         if (!Number.isFinite(derivation.baselinePullKg) || !Number.isFinite(derivation.targetPullKg) || (derivation.baselinePullKg as number) <= 0 || (derivation.targetPullKg as number) <= 0) throw new Error("V23_SKU_DERIVATION_PULL_INVALID");
         v23Array(derivation.effectiveEntries, "V23_SKU_DERIVATION_ENTRIES");
         let prior = derivation.baselinePullKg as number;
-        for (const stepValue of v23Array(derivation.trace, "V23_SKU_DERIVATION_TRACE")) { const step = v23Record(stepValue, "V23_SKU_DERIVATION_STEP"); if (!Number.isFinite(step.beforeKg) || !Number.isFinite(step.afterKg) || step.beforeKg !== prior || (step.afterKg as number) <= 0) throw new Error("V23_SKU_DERIVATION_TRACE_INVALID"); prior = step.afterKg as number; }
+        for (const stepValue of v23Array(derivation.trace, "V23_SKU_DERIVATION_TRACE")) { const step = v23Record(stepValue, "V23_SKU_DERIVATION_STEP"); v23ExactKeys(step, ["source", "operationId", "operationIndex", "operation", "direction", "magnitude", "clampMin", "clampMax", "ratioOperations", "beforeKg", "afterKg"], "V23_SKU_DERIVATION_STEP"); if (!Number.isFinite(step.beforeKg) || !Number.isFinite(step.afterKg) || step.beforeKg !== prior || (step.afterKg as number) <= 0) throw new Error("V23_SKU_DERIVATION_TRACE_INVALID"); prior = step.afterKg as number; }
         if (prior !== derivation.targetPullKg) throw new Error("V23_SKU_DERIVATION_TRACE_TERMINAL_MISMATCH"); v23Hash(derivation.inputHash, "V23_SKU_DERIVATION_INPUT_HASH");
       } else throw new Error("V23_SKU_DERIVATION_STATUS_INVALID");
     }
@@ -2182,7 +2182,9 @@ function validateV23RuntimeState(state: MutableWorkspace) {
         if (policies.length !== 1) throw new Error("V23_OPEN_001_POLICY_UNRESOLVED"); const policy = policies[0]!;
         const replayEntries: V23ResolvedAffix[] = [...effectiveStableEntries.values()].map((effective) => ({ ref: effective.ref, payload: effective.payload as never, localCopyId: effective.localCopyId ?? undefined, copyHash: effective.copyHash ?? undefined }));
         const replay = deriveV23SkuPull(matchedTemplateBaseline, replayEntries, { formal: true, publishedReductionPolicy: policy });
-        if (replay.status !== "VALID" || replay.baselinePullKg !== persisted.baselinePullKg || replay.targetPullKg !== persisted.targetPullKg || jcsSha256Hex(replay.trace) !== jcsSha256Hex(persisted.trace) || replay.inputHash !== persisted.inputHash) throw new Error("V23_SKU_DERIVATION_REPLAY_MISMATCH");
+        const sourceEvidence = (id: string) => { const actual = effectiveStableEntries.get(id); if (!actual) throw new Error("V23_SKU_DERIVATION_REPLAY_SOURCE_UNRESOLVED"); return { ref: actual.ref, localCopyId: actual.localCopyId, copyHash: actual.copyHash, payloadHash: jcsSha256Hex(actual.payload) }; };
+        const projectedTrace = replay.status === "VALID" ? replay.trace.map((step) => ({ source: sourceEvidence(step.affixId), operationId: step.operationId, operationIndex: step.operationIndex, operation: step.operation, direction: step.direction, magnitude: step.magnitude, clampMin: step.clampMin, clampMax: step.clampMax, ratioOperations: step.ratioOperations?.map((component) => ({ source: sourceEvidence(component.affixId), operationId: component.operationId, operationIndex: component.operationIndex, direction: component.direction, magnitude: component.magnitude })) ?? null, beforeKg: step.beforeKg, afterKg: step.afterKg })) : null;
+        if (replay.status !== "VALID" || replay.baselinePullKg !== persisted.baselinePullKg || replay.targetPullKg !== persisted.targetPullKg || jcsSha256Hex(projectedTrace) !== jcsSha256Hex(persisted.trace) || replay.inputHash !== persisted.inputHash) throw new Error("V23_SKU_DERIVATION_REPLAY_MISMATCH");
       }
     }
     for (const ref of v23Array(entry.technologyRefs, "V23_SKU_TECHNOLOGIES")) validateTechnologyRef(ref, "V23_SKU_TECHNOLOGY");

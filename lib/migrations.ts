@@ -1877,7 +1877,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     else seen.set(contributionKey, new Set([policy]));
   };
   const partByIdAndRevision = new Map<string, Map<number, Record<string, unknown>>>();
-  const partDefaultPayloads = new Map<string, Map<string, Record<string, unknown>>>();
+  const partDefaultPayloads = new Map<string, Map<string, { ref: { id: string; revision: number; contentHash: string }; payload: Record<string, unknown> }>>();
   const partSeriesById = new Map<string, string>();
   for (const value of parts) {
     const entry = v23Record(value, "V23_SERIES_PART");
@@ -1894,7 +1894,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     const weightBandIds = v23Array(entry.weightBandIds, "V23_PART_WEIGHT_BANDS").map((id) => v23String(id, "V23_PART_WEIGHT_BAND_ID"));
     if (new Set(weightBandIds).size !== weightBandIds.length) throw new Error("V23_PART_WEIGHT_BAND_DUPLICATE");
     const partDefaultEntryIds = new Set<string>();
-    const partDefaults = new Map<string, Record<string, unknown>>();
+    const partDefaults = new Map<string, { ref: { id: string; revision: number; contentHash: string }; payload: Record<string, unknown> }>();
     const partDefaultContributions = new Map<string, Set<string>>();
     for (const value of v23Array(entry.defaultEntryRefs, "V23_PART_DEFAULT_ENTRIES")) {
       const ref = validateV23StableRef(value, "V23_PART_DEFAULT_ENTRY");
@@ -1904,7 +1904,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
       if (!resolved) throw new Error("V23_PART_DEFAULT_ENTRY_UNRESOLVED");
       if (resolved.payload.itemPartId !== itemPartIdFor(entry.partType)) throw new Error("V23_PART_DEFAULT_ENTRY_ITEM_PART_MISMATCH");
       assertSemanticContribution(partDefaultContributions, resolved.payload, "V23_PART_DEFAULT_ENTRY");
-      partDefaults.set(ref.id, resolved.payload);
+      partDefaults.set(ref.id, { ref, payload: resolved.payload });
     }
     for (const ref of v23Array(entry.technologyRefs, "V23_PART_TECHNOLOGIES")) validateTechnologyRef(ref, "V23_PART_TECHNOLOGY");
     const partMap = partByIdAndRevision.get(partId) ?? new Map<number, Record<string, unknown>>();
@@ -1972,6 +1972,55 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     }
     throw new Error(`${code}_KIND_INVALID`);
   };
+  const validateSkuAssessment = (value: unknown, skuRevisionId: string, effectiveAffixIds: Set<string>) => {
+    const quality = v23Record(value, "V23_SKU_QUALITY");
+    const status = v23String(quality.status, "V23_SKU_QUALITY_STATUS");
+    if (status === "UNASSESSED") {
+      v23ExactKeys(quality, ["status"], "V23_SKU_QUALITY");
+      return false;
+    }
+    if (status !== "ASSESSED") throw new Error("V23_SKU_QUALITY_STATUS_INVALID");
+    v23ExactKeys(quality, ["status", "assessment"], "V23_SKU_QUALITY");
+    const assessment = v23Record(quality.assessment, "V23_SKU_QUALITY_ASSESSMENT");
+    v23ExactKeys(assessment, ["skuRevisionId", "recommendedQualityId", "selectedQualityId", "qualityOverrideState", "qualityOverrideReason", "baseAffixScore", "combinationScore", "functionScoreFactor", "finalValueScore", "affixBreakdown", "combinationBreakdown", "qualityRangePolicyVersion", "scoringPolicyVersion", "inSelectedQualityRange", "inputHash"], "V23_SKU_QUALITY_ASSESSMENT");
+    if (v23String(assessment.skuRevisionId, "V23_SKU_QUALITY_REVISION_ID") !== skuRevisionId) throw new Error("V23_SKU_QUALITY_REVISION_ID_MISMATCH");
+    const recommended = assessment.recommendedQualityId;
+    if (recommended !== null && !V23_QUALITY_IDS.has(v23String(recommended, "V23_RECOMMENDED_QUALITY_ID"))) throw new Error("V23_SKU_QUALITY_ID_INVALID");
+    if (!V23_QUALITY_IDS.has(v23String(assessment.selectedQualityId, "V23_SELECTED_QUALITY_ID"))) throw new Error("V23_SKU_QUALITY_ID_INVALID");
+    const overrideState = v23String(assessment.qualityOverrideState, "V23_SKU_QUALITY_OVERRIDE_STATE");
+    const reason = assessment.qualityOverrideReason;
+    if (!(reason === null || (typeof reason === "string" && reason.length > 0)) || typeof assessment.inSelectedQualityRange !== "boolean") throw new Error("V23_SKU_QUALITY_OVERRIDE_INVALID");
+    if (
+      (overrideState === "MATCHED" && (recommended === null || recommended !== assessment.selectedQualityId || reason !== null || assessment.inSelectedQualityRange !== true))
+      || (overrideState === "OVERRIDDEN" && (recommended === null || recommended === assessment.selectedQualityId || reason === null))
+      || (overrideState === "NO_RECOMMENDATION" && (recommended !== null || reason === null || assessment.inSelectedQualityRange !== false))
+      || !["MATCHED", "OVERRIDDEN", "NO_RECOMMENDATION"].includes(overrideState)
+    ) throw new Error("V23_SKU_QUALITY_OVERRIDE_INVALID");
+    for (const field of ["baseAffixScore", "combinationScore", "functionScoreFactor", "finalValueScore"] as const) if (!Number.isFinite(assessment[field])) throw new Error("V23_SKU_QUALITY_SCORE_INVALID");
+    v23String(assessment.qualityRangePolicyVersion, "V23_SKU_QUALITY_RANGE_POLICY");
+    v23String(assessment.scoringPolicyVersion, "V23_SKU_QUALITY_SCORING_POLICY");
+    v23Hash(assessment.inputHash, "V23_SKU_QUALITY_INPUT_HASH");
+    const affixIds = new Set<string>();
+    for (const value of v23Array(assessment.affixBreakdown, "V23_SKU_AFFIX_BREAKDOWN")) {
+      const breakdown = v23Record(value, "V23_SKU_AFFIX_BREAKDOWN_ENTRY");
+      v23ExactKeys(breakdown, ["sourceAffixId", "valueScore", "sourceRef"], "V23_SKU_AFFIX_BREAKDOWN_ENTRY");
+      const sourceAffixId = v23String(breakdown.sourceAffixId, "V23_SKU_AFFIX_BREAKDOWN_ID");
+      v23String(breakdown.sourceRef, "V23_SKU_AFFIX_BREAKDOWN_SOURCE_REF");
+      if (affixIds.has(sourceAffixId) || !effectiveAffixIds.has(sourceAffixId) || !Number.isFinite(breakdown.valueScore)) throw new Error("V23_SKU_AFFIX_BREAKDOWN_INVALID");
+      affixIds.add(sourceAffixId);
+    }
+    const combinationPairs = new Set<string>(); const combinationSources = new Set<string>();
+    for (const value of v23Array(assessment.combinationBreakdown, "V23_SKU_COMBINATION_BREAKDOWN")) {
+      const breakdown = v23Record(value, "V23_SKU_COMBINATION_BREAKDOWN_ENTRY");
+      v23ExactKeys(breakdown, ["leftAffixId", "rightAffixId", "valueScore", "sourceRef"], "V23_SKU_COMBINATION_BREAKDOWN_ENTRY");
+      const left = v23String(breakdown.leftAffixId, "V23_SKU_COMBINATION_LEFT_ID"); const right = v23String(breakdown.rightAffixId, "V23_SKU_COMBINATION_RIGHT_ID");
+      const sourceRef = v23String(breakdown.sourceRef, "V23_SKU_COMBINATION_SOURCE_REF");
+      const pair = [left, right].sort().join("\u0000");
+      if (left === right || !effectiveAffixIds.has(left) || !effectiveAffixIds.has(right) || combinationPairs.has(pair) || combinationSources.has(sourceRef) || !Number.isFinite(breakdown.valueScore)) throw new Error("V23_SKU_COMBINATION_BREAKDOWN_INVALID");
+      combinationPairs.add(pair); combinationSources.add(sourceRef);
+    }
+    return true;
+  };
   const skuIds = new Map<string, Set<number>>(); let currentSkuId = "";
   for (const value of skus) {
     const entry = v23Record(value, "V23_SKU");
@@ -2034,9 +2083,9 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     const removed = v23Array(entry.removedInheritedEntryIds, "V23_SKU_REMOVED_ENTRIES");
     const removedEntryIds = new Set(removed.map((id) => v23String(id, "V23_SKU_REMOVED_ENTRY_ID")));
     if (removedEntryIds.size !== removed.length) throw new Error("V23_SKU_REMOVED_ENTRY_DUPLICATE");
-    const effectiveContributions = new Map<string, Set<string>>();
-    for (const [inheritedId, payload] of partDefaultPayloads.get(`${partId}\u0000${partRevision}`) ?? []) {
-      if (!removedEntryIds.has(inheritedId)) assertSemanticContribution(effectiveContributions, payload, "V23_SKU_INHERITED_ENTRY");
+    const effectiveStableEntries = new Map<string, { ref: { id: string; revision: number; contentHash: string }; payload: Record<string, unknown> }>();
+    for (const [inheritedId, inherited] of partDefaultPayloads.get(`${partId}\u0000${partRevision}`) ?? []) {
+      if (!removedEntryIds.has(inheritedId)) effectiveStableEntries.set(inheritedId, inherited);
     }
     const skuAddedEntryIds = new Set<string>();
     for (const refEntry of v23Array(entry.addedEntryRefs, "V23_SKU_ADDED_ENTRY_REFS")) {
@@ -2045,22 +2094,31 @@ function validateV23RuntimeState(state: MutableWorkspace) {
       const ref = validateV23StableRef(stableEntry.ref, "V23_SKU_ADDED_ENTRY_REF_REF");
       if (skuAddedEntryIds.has(ref.id)) throw new Error("V23_SKU_ADDED_ENTRY_REF_ID_DUPLICATE");
       skuAddedEntryIds.add(ref.id);
-      assertSemanticContribution(effectiveContributions, validateAffixEntry(stableEntry, "V23_SKU_ADDED_ENTRY_REF", itemPartIdFor(part.partType)!), "V23_SKU_ADDED_ENTRY_REF");
+      const payload = validateAffixEntry(stableEntry, "V23_SKU_ADDED_ENTRY_REF", itemPartIdFor(part.partType)!);
+      const inherited = effectiveStableEntries.get(ref.id);
+      if (inherited && (inherited.ref.revision !== ref.revision || inherited.ref.contentHash !== ref.contentHash)) throw new Error("V23_SKU_EFFECTIVE_ENTRY_ID_CONFLICT");
+      if (!inherited) effectiveStableEntries.set(ref.id, { ref, payload });
     }
+    const localSourceIds = new Set<string>();
     for (const copy of v23Array(entry.localEntryCopies, "V23_SKU_LOCAL_COPIES")) {
       const copyEntry = v23Record(copy, "V23_SKU_LOCAL_COPY");
       if (copyEntry.kind !== "LOCAL_AFFIX_COPY") throw new Error("V23_SKU_LOCAL_COPY_KIND_INVALID");
-      assertSemanticContribution(effectiveContributions, validateAffixEntry(copyEntry, "V23_SKU_LOCAL_COPY", itemPartIdFor(part.partType)!), "V23_SKU_LOCAL_COPY");
+      const payload = validateAffixEntry(copyEntry, "V23_SKU_LOCAL_COPY", itemPartIdFor(part.partType)!);
+      const sourceRef = validateV23StableRef(copyEntry.sourceRef, "V23_SKU_LOCAL_COPY_SOURCE_REF");
+      if (localSourceIds.has(sourceRef.id)) throw new Error("V23_SKU_LOCAL_COPY_SOURCE_DUPLICATE");
+      localSourceIds.add(sourceRef.id);
+      const inherited = effectiveStableEntries.get(sourceRef.id);
+      if (inherited && (inherited.ref.revision !== sourceRef.revision || inherited.ref.contentHash !== sourceRef.contentHash)) throw new Error("V23_SKU_EFFECTIVE_ENTRY_ID_CONFLICT");
+      // 局部副本是同一稳定来源在当前 SKU 的可编辑替代，保留 copy 意图但只
+      // 产生一次有效贡献，避免原项目词条与副本重复结算。
+      effectiveStableEntries.set(sourceRef.id, { ref: sourceRef, payload });
     }
+    const effectiveContributions = new Map<string, Set<string>>();
+    for (const effective of effectiveStableEntries.values()) assertSemanticContribution(effectiveContributions, effective.payload, "V23_SKU_EFFECTIVE_ENTRY");
     for (const ref of v23Array(entry.technologyRefs, "V23_SKU_TECHNOLOGIES")) validateTechnologyRef(ref, "V23_SKU_TECHNOLOGY");
-    const quality = v23Record(entry.quality, "V23_SKU_QUALITY");
-    const qualityStatus = v23String(quality.status, "V23_SKU_QUALITY_STATUS");
-    if (qualityStatus === "UNASSESSED") v23ExactKeys(quality, ["status"], "V23_SKU_QUALITY");
-    else if (qualityStatus === "NO_RECOMMENDATION") { v23ExactKeys(quality, ["status", "qualityId", "reason"], "V23_SKU_QUALITY"); if (!V23_QUALITY_IDS.has(v23String(quality.qualityId, "V23_SELECTED_QUALITY_ID")) || !v23String(quality.reason, "V23_QUALITY_NO_RECOMMENDATION_REASON")) throw new Error("V23_SKU_QUALITY_INVALID"); }
-    else if (qualityStatus === "MATCHED") { v23ExactKeys(quality, ["status", "qualityId"], "V23_SKU_QUALITY"); if (!V23_QUALITY_IDS.has(v23String(quality.qualityId, "V23_SKU_QUALITY_ID"))) throw new Error("V23_SKU_QUALITY_ID_INVALID"); }
-    else if (qualityStatus === "OVERRIDDEN") { v23ExactKeys(quality, ["status", "recommendedQualityId", "qualityId", "reason"], "V23_SKU_QUALITY"); if (!V23_QUALITY_IDS.has(v23String(quality.recommendedQualityId, "V23_RECOMMENDED_QUALITY_ID")) || !V23_QUALITY_IDS.has(v23String(quality.qualityId, "V23_SELECTED_QUALITY_ID")) || quality.recommendedQualityId === quality.qualityId || !v23String(quality.reason, "V23_QUALITY_OVERRIDE_REASON")) throw new Error("V23_SKU_QUALITY_INVALID"); }
-    else throw new Error("V23_SKU_QUALITY_STATUS_INVALID");
+    const assessed = validateSkuAssessment(entry.quality, `${skuId}@${revision}`, new Set(effectiveStableEntries.keys()));
     v23HashOf(v23SkuInput(entry), entry.contentHash, "V23_SKU_CONTENT_HASH");
+    if (assessed) throw new Error("V23_SKU_QUALITY_RESOLVER_UNAVAILABLE");
   }
 
   const seenSkuHeads = new Set<string>();

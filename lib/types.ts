@@ -1241,11 +1241,41 @@ export type V23SkuMatch =
   | { status: "INVALID_AMBIGUOUS"; attemptedKey: V23MatchedTemplateKey; inputFingerprint: string }
   | { status: "NEEDS_MIGRATION_REVIEW" };
 
+export interface V23SkuAffixValueBreakdown {
+  sourceAffixId: string;
+  valueScore: number;
+  sourceRef: string;
+}
+
+export interface V23SkuCombinationValueBreakdown {
+  leftAffixId: string;
+  rightAffixId: string;
+  valueScore: number;
+  sourceRef: string;
+}
+
+/** §12.1 的 SKU revision 专属冻结载体；不复用 Model 的运行时评估。 */
+export interface V23SkuAffixValueAssessment {
+  skuRevisionId: string;
+  recommendedQualityId: QualityProfileId | null;
+  selectedQualityId: QualityProfileId;
+  qualityOverrideState: "MATCHED" | "OVERRIDDEN" | "NO_RECOMMENDATION";
+  qualityOverrideReason: string | null;
+  baseAffixScore: number;
+  combinationScore: number;
+  functionScoreFactor: number;
+  finalValueScore: number;
+  affixBreakdown: V23SkuAffixValueBreakdown[];
+  combinationBreakdown: V23SkuCombinationValueBreakdown[];
+  qualityRangePolicyVersion: string;
+  scoringPolicyVersion: string;
+  inSelectedQualityRange: boolean;
+  inputHash: string;
+}
+
 export type V23SkuQualityAssessment =
   | { status: "UNASSESSED" }
-  | { status: "MATCHED"; qualityId: QualityProfileId }
-  | { status: "OVERRIDDEN"; recommendedQualityId: QualityProfileId; qualityId: QualityProfileId; reason: string }
-  | { status: "NO_RECOMMENDATION"; qualityId: QualityProfileId; reason: string };
+  | { status: "ASSESSED"; assessment: V23SkuAffixValueAssessment };
 
 /** v23 stores a closed current summary, not a legacy ValidationIssue union. */
 export interface V23ValidationSummaryIssue {

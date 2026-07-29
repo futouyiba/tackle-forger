@@ -1,9 +1,9 @@
 import type { ReductionStackingPolicyVersion, V23ProjectAffixPayload, V23StableContentRef } from "./types";
 import { jcsSha256Hex } from "./canonical-json";
-import { compareUtf8 } from "./reduction-stacking-policy";
+import { compareUtf8, numberToBinary64Hex } from "./reduction-stacking-policy";
 
 export interface V23ResolvedAffix { ref: V23StableContentRef; payload: V23ProjectAffixPayload; localCopyId?: string; copyHash?: string; }
-export interface V23PullTraceStep { affixId: string; operationId: string; operationIndex: number; operation: "percent_adjust" | "flat_adjust" | "clamp_add"; direction: "increase" | "decrease"; magnitude: number; clampMin: number | null; clampMax: number | null; ratioOperations: Array<{ affixId: string; operationId: string; operationIndex: number; direction: "increase" | "decrease"; magnitude: number }> | null; beforeKg: number; afterKg: number; }
+export interface V23PullTraceStep { affixId: string; operationId: string; operationIndex: number; operation: "percent_adjust" | "flat_adjust" | "clamp_add"; direction: "increase" | "decrease"; magnitude: number; clampMin: number | null; clampMax: number | null; ratioOperations: Array<{ affixId: string; operationId: string; operationIndex: number; direction: "increase" | "decrease"; magnitude: number }> | null; beforeKg: number; afterKg: number; numericEvidence: { beforeBinary64: string; afterBinary64: string; exactNumerator: string; exactDenominator: string; anomaly: "none" | "overflow" | "underflow_to_zero" }; }
 export type V23SkuPullDerivation =
   | { status: "VALID"; baselinePullKg: number; targetPullKg: number; effectiveEntryIds: string[]; trace: V23PullTraceStep[]; inputHash: string }
   | { status: "INVALID"; code: string; inputHash: string };
@@ -22,6 +22,7 @@ function add(left: Rational, right: Rational): Rational { return { numerator: le
 function mul(left: Rational, right: Rational): Rational { return { numerator: left.numerator * right.numerator, denominator: left.denominator * right.denominator }; }
 function div(left: Rational, right: Rational): Rational { return { numerator: left.numerator * right.denominator, denominator: left.denominator * right.numerator }; }
 function anomaly(value: Rational, result: number): "overflow" | "underflow_to_zero" | null { const n = value.numerator < z ? -value.numerator : value.numerator; const d = value.denominator < z ? -value.denominator : value.denominator; if (!Number.isFinite(result) || d === z || n * maxFinite.denominator > maxFinite.numerator * d) return "overflow"; return value.numerator !== z && result === 0 ? "underflow_to_zero" : null; }
+function evidence(before: number, after: number, exactValue: Rational): V23PullTraceStep["numericEvidence"] { return { beforeBinary64: numberToBinary64Hex(before), afterBinary64: numberToBinary64Hex(after), exactNumerator: exactValue.numerator.toString(), exactDenominator: exactValue.denominator.toString(), anomaly: anomaly(exactValue, after) ?? "none" }; }
 
 /** Model patches may never turn a derived v23 structural pull into input.
  * Unknown shapes are rejected rather than assumed harmless at this boundary. */
@@ -80,7 +81,7 @@ export function deriveV23SkuPull(baselinePullKg: number, entries: readonly V23Re
   const ratioOperations = ordered.filter(({ operation }) => operation.parameterKey === "pull" || operation.parameterKey === "targetPullKg").filter(({ operation }) => operation.operation === "percent_adjust").map(({ entry, operation }) => { const percent = operation as { operationId: string; operationIndex: number; direction: "increase" | "decrease"; magnitude: number }; return { affixId: entry.ref.id, operationId: percent.operationId, operationIndex: percent.operationIndex, direction: percent.direction, magnitude: percent.magnitude }; });
   if (ratioOperations.length) {
     const first = ratioOperations[0]!;
-    trace.push({ affixId: first.affixId, operationId: first.operationId, operationIndex: first.operationIndex, operation: "percent_adjust", direction: first.direction, magnitude: first.magnitude, clampMin: null, clampMax: null, ratioOperations, beforeKg: baselinePullKg, afterKg: value });
+    trace.push({ affixId: first.affixId, operationId: first.operationId, operationIndex: first.operationIndex, operation: "percent_adjust", direction: first.direction, magnitude: first.magnitude, clampMin: null, clampMax: null, ratioOperations, beforeKg: baselinePullKg, afterKg: value, numericEvidence: evidence(baselinePullKg, value, ratioExact) });
   }
   for (const { entry, operation: op } of later) {
       const numeric = op as Extract<typeof op, { direction: "increase" | "decrease" }>;
@@ -91,7 +92,7 @@ export function deriveV23SkuPull(baselinePullKg: number, entries: readonly V23Re
       else if (op.operation === "clamp_add") { const nextExact = add(currentExact, exact(signed)); const next = Number(value + signed); const nextAnomaly = anomaly(nextExact, next); if (nextAnomaly) return { status: "INVALID", code: nextAnomaly === "overflow" ? "V23_BINARY64_OVERFLOW" : "V23_BINARY64_UNDERFLOW_TO_ZERO", inputHash }; value = Math.min(op.clampMax, Math.max(op.clampMin, next)); currentExact = value === next ? nextExact : exact(value); }
       else return { status: "INVALID", code: "V23_DIRECT_PULL_PATCH_FORBIDDEN", inputHash };
       if (!Number.isFinite(value) || value <= 0) return { status: "INVALID", code: "V23_PULL_DERIVATION_NON_FINITE", inputHash };
-      trace.push({ affixId: entry.ref.id, operationId: numeric.operationId, operationIndex: numeric.operationIndex, operation: numeric.operation, direction: numeric.direction, magnitude: numeric.magnitude, clampMin: numeric.operation === "clamp_add" ? numeric.clampMin : null, clampMax: numeric.operation === "clamp_add" ? numeric.clampMax : null, ratioOperations: null, beforeKg, afterKg: value });
+      trace.push({ affixId: entry.ref.id, operationId: numeric.operationId, operationIndex: numeric.operationIndex, operation: numeric.operation, direction: numeric.direction, magnitude: numeric.magnitude, clampMin: numeric.operation === "clamp_add" ? numeric.clampMin : null, clampMax: numeric.operation === "clamp_add" ? numeric.clampMax : null, ratioOperations: null, beforeKg, afterKg: value, numericEvidence: evidence(beforeKg, value, currentExact) });
   }
   return { status: "VALID", baselinePullKg, targetPullKg: value, effectiveEntryIds: canonicalEntries.map((e) => e.ref.id), trace, inputHash: jcsSha256Hex({ inputHash, targetPullKg: value, trace }) };
 }

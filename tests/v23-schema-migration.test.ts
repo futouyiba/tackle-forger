@@ -407,6 +407,15 @@ test("v23 closes quality, technology, source-evidence, and adapter chains", () =
   attempted.v23SkuDrawerRevisions[0]!.match = { status: "INVALID_NO_MATCH", attemptedKey: key, inputFingerprint: hash(key) };
   attempted.v23SkuDrawerRevisions[0] = withSkuHashes(attempted.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
   assert.deepEqual(migrateWorkspaceState(attempted).v23SkuDrawerRevisions, attempted.v23SkuDrawerRevisions);
+  const template = { templateId: "template:match", revisionId: "r1", contentHash: hash({ contractVersion: "v23-function-template/v1", key, baselinePullKg: 5 }) };
+  attempted.v23FunctionTemplates = [{ ref: template, key, baselinePullKg: 5 }];
+  assert.throws(() => migrateWorkspaceState(attempted), /V23_SKU_MATCH_REPLAY_MISMATCH/, "a now-unique strict template invalidates a persisted no-match");
+  attempted.v23FunctionTemplates.push({ ref: { ...template, templateId: "template:match-two" }, key, baselinePullKg: 5 });
+  attempted.v23SkuDrawerRevisions[0]!.match = { status: "INVALID_AMBIGUOUS", attemptedKey: key, inputFingerprint: hash(key) };
+  attempted.v23SkuDrawerRevisions[0] = withSkuHashes(attempted.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.doesNotThrow(() => migrateWorkspaceState(attempted), "a current two-row registry preserves true ambiguity");
+  attempted.v23FunctionTemplates.pop();
+  assert.throws(() => migrateWorkspaceState(attempted), /V23_SKU_MATCH_REPLAY_MISMATCH/, "registry drift from ambiguous to unique is rejected");
   attempted.v23SkuDrawerRevisions[0]!.match = { status: "NEEDS_MIGRATION_REVIEW", attemptedKey: key } as never;
   attempted.v23SkuDrawerRevisions[0] = withSkuHashes(attempted.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
   assert.throws(() => migrateWorkspaceState(attempted), /V23_SKU_MATCH_SCHEMA_INVALID/);

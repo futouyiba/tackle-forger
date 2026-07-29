@@ -93,3 +93,23 @@ test("flat pools settle before clamps", () => {
   assert.equal(result.status, "VALID");
   if (result.status === "VALID") assert.equal(result.targetPullKg, 15);
 });
+
+test("flat pools are directional binary64 folds with replayable operation traces", () => {
+  const directional = structuredClone(payload) as V23ProjectAffixPayload;
+  directional.operations = [
+    { ...payload.operations[0]!, operationId: "up-big", operationIndex: 0, operation: "flat_adjust", direction: "increase", magnitude: 2 ** 53 },
+    { ...payload.operations[0]!, operationId: "down-big", operationIndex: 1, operation: "flat_adjust", direction: "decrease", magnitude: 2 ** 53 },
+    { ...payload.operations[0]!, operationId: "up-one", operationIndex: 2, operation: "flat_adjust", direction: "increase", magnitude: 1 },
+  ] as never;
+  const result = deriveV23SkuPull(10, [{ ref, payload: directional }]);
+  assert.equal(result.status, "VALID");
+  if (result.status === "VALID") { assert.equal(result.targetPullKg, 10); assert.deepEqual(result.trace.map((step) => step.operationId), ["up-big", "down-big", "up-one", "v23:flat-pool-settlement"]); assert.equal(result.trace.at(-1)!.affixId, null); }
+});
+
+test("set is a terminally connected trace step", () => {
+  const set = structuredClone(payload) as V23ProjectAffixPayload;
+  set.operations = [{ operationId: "set-pull", operationIndex: 0, sourceAffixId: "a", sourceAffixRevision: 1, parameterKey: "pull", operation: "set", value: 7, publishedMagnitudeRange: { min: 0, max: 7, ruleSetVersion: "r" } }] as never;
+  const result = deriveV23SkuPull(5, [{ ref, payload: set }]);
+  assert.equal(result.status, "VALID");
+  if (result.status === "VALID") { assert.equal(result.targetPullKg, 7); assert.equal(result.trace.length, 1); assert.deepEqual(result.trace[0]!.beforeKg, 5); assert.deepEqual(result.trace[0]!.afterKg, 7); assert.equal(result.trace[0]!.operation, "set"); }
+});

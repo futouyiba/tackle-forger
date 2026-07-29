@@ -15,14 +15,37 @@ export function selectCurrentPublishedWeightTemplateDraftId(state: WorkspaceStat
   return current.length === 1 ? current[0]!.weightTemplateDraftId : undefined;
 }
 
-export function resolveV23CatalogOrder(templates: ReadonlyArray<{ id?: unknown; sourceRow?: unknown }>): string[] | undefined {
+export function resolveV23CatalogOrder(templates: ReadonlyArray<{
+  id?: unknown; sourceRow?: unknown; itemPartId?: unknown; sourceSheetId?: unknown;
+  source?: { sheetId?: unknown };
+}>): string[] | undefined {
   if (!templates.length) return undefined;
   const valid = templates.map((entry) => {
     if (typeof entry.id !== "string" || !entry.id || entry.id.trim() !== entry.id || !Number.isSafeInteger(entry.sourceRow) || (entry.sourceRow as number) < 1) return undefined;
-    return { id: entry.id, sourceRow: entry.sourceRow as number };
+    const scope = typeof entry.itemPartId === "string" && entry.itemPartId
+      ? entry.itemPartId
+      : typeof entry.source?.sheetId === "string" && entry.source.sheetId
+        ? `sheet:${entry.source.sheetId}`
+        : typeof entry.sourceSheetId === "string" && entry.sourceSheetId
+          ? `sheet:${entry.sourceSheetId}`
+          : "legacy";
+    return { id: entry.id, sourceRow: entry.sourceRow as number, scope };
   });
-  if (valid.some((entry) => !entry) || new Set(valid.map((entry) => entry!.id)).size !== valid.length || new Set(valid.map((entry) => entry!.sourceRow)).size !== valid.length) return undefined;
-  return (valid as Array<{ id: string; sourceRow: number }>).sort((left, right) => left.sourceRow - right.sourceRow).map((entry) => entry.id);
+  if (valid.some((entry) => !entry)) return undefined;
+  const groups = new Map<string, Array<{ id: string; sourceRow: number; scope: string }>>();
+  for (const entry of valid as Array<{ id: string; sourceRow: number; scope: string }>) {
+    groups.set(entry.scope, [...(groups.get(entry.scope) ?? []), entry]);
+  }
+  const ordered: string[] = [];
+  for (const scope of [...groups.keys()].sort()) {
+    const entries = groups.get(scope)!;
+    if (new Set(entries.map((entry) => entry.id)).size !== entries.length
+      || new Set(entries.map((entry) => entry.sourceRow)).size !== entries.length) return undefined;
+    for (const entry of entries.sort((left, right) => left.sourceRow - right.sourceRow)) {
+      if (!ordered.includes(entry.id)) ordered.push(entry.id);
+    }
+  }
+  return ordered;
 }
 
 export interface V23BandBlock {

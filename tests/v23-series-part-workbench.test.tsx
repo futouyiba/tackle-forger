@@ -5,7 +5,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { V23SeriesPartWorkbench } from "../app/V23SeriesPartWorkbench";
 import type { ActionAvailabilityMap } from "../lib/interaction-contracts";
-import { buildV23LocalCopyPayload } from "../lib/v23-ui-actions";
+import { buildV23LocalCopyPayload, v23CanCreateSkuFromPreview, v23QualityReasonValid } from "../lib/v23-ui-actions";
 import type { SeriesPartRevision, V23ProjectAffixPayload, WorkspaceState } from "../lib/types";
 
 const part = (partId: string, partType: "rod" | "reel" | "line", bands: string[]): SeriesPartRevision => ({ partId, seriesId: "series:one", revision: 1, partType, fishingMethodId: "method", materialTypeId: "material", functionProfileId: "function", functionIntensity: 2, weightBandIds: bands, defaultEntryRefs: [], technologyRefs: [], inputFingerprint: "a".repeat(64), contentHash: "b".repeat(64) });
@@ -30,11 +30,34 @@ test("v23 Part 工作台显式预览与受控动作，不在甘特块点击时�
   assert.match(source, /buildV23LocalCopyPayload/);
   assert.match(source, /来源：.*不可修改/);
   assert.match(source, /保存完整局部副本/);
-  assert.match(source, /覆盖理由（与推荐不一致时必填）/);
+  assert.match(source, /v23CanCreateSkuFromPreview/);
+  assert.match(source, /04\.5 唯一匹配无效，已拒绝创建 SKU/);
+  assert.match(source, /v23QualityReasonValid/);
+  assert.match(source, /覆盖理由（无推荐或与推荐不一致时必填；匹配时必须为空）/);
+  assert.match(source, /disabled=\{pending \|\| !availability\.set_sku_actual_quality\?\.enabled \|\| !qualityReasonValid\}/);
+  assert.match(source, /if \(!qualityReasonValid\) return; void write\("set_sku_actual_quality"/);
   assert.match(source, /immutable .*partId/);
   assert.match(source, /DIRTY_WORKSPACE_CONFIRMATION_MESSAGE/);
   assert.match(source, /canApplyConfirmedWorkspace/);
   assert.match(source, /v23WritePreflight/);
+});
+
+test("create SKU 只接受 VALID preview，两个 invalid 状态均不进入写入资格", () => {
+  assert.equal(v23CanCreateSkuFromPreview("VALID"), true);
+  assert.equal(v23CanCreateSkuFromPreview("INVALID_NO_MATCH"), false);
+  assert.equal(v23CanCreateSkuFromPreview("INVALID_AMBIGUOUS"), false);
+  assert.equal(v23CanCreateSkuFromPreview(undefined), false);
+});
+
+test("品质理由双向不变量覆盖无推荐、不匹配、匹配与非法多余理由", () => {
+  assert.equal(v23QualityReasonValid(undefined, "quality_s_orange", ""), false);
+  assert.equal(v23QualityReasonValid(undefined, "quality_s_orange", "未评估时也不得保存"), false);
+  assert.equal(v23QualityReasonValid(null, "quality_s_orange", ""), false);
+  assert.equal(v23QualityReasonValid(null, "quality_s_orange", "人工确认无推荐"), true);
+  assert.equal(v23QualityReasonValid("quality_c_green", "quality_b_blue", ""), false);
+  assert.equal(v23QualityReasonValid("quality_c_green", "quality_b_blue", "人工覆盖"), true);
+  assert.equal(v23QualityReasonValid("quality_c_green", "quality_c_green", "多余理由"), false);
+  assert.equal(v23QualityReasonValid("quality_c_green", "quality_c_green", " "), true);
 });
 
 test("SSR: 唯一 Part 卡、合并块与准确重量段选择器的初始语义", () => {

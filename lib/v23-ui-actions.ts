@@ -84,6 +84,20 @@ export function v23WritePreflight(input: { dirty: boolean; revision: number; exp
 
 export function v23LatestGeneration(current: number, response: number) { return current === response; }
 
+export function v23CanCreateSkuFromPreview(status: unknown): boolean {
+  return status === "VALID";
+}
+
+export function v23QualityReasonValid(
+  recommendedQualityId: string | null | undefined,
+  selectedQualityId: string,
+  reason: string,
+): boolean {
+  if (recommendedQualityId === undefined) return false;
+  const hasReason = reason.trim().length > 0;
+  return recommendedQualityId === selectedQualityId ? !hasReason : hasReason;
+}
+
 export function v23CanApplyReadback(input: { current: { dirty: boolean; revision: number }; baselineRevision: number; returnedRevision: number }) {
   return !input.current.dirty && input.current.revision === input.baselineRevision && input.returnedRevision >= input.baselineRevision;
 }

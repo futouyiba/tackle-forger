@@ -90,6 +90,19 @@ test("01.x catalog 按唯一正 sourceRow 排序，不按 ID 猜测", () => {
   assert.deepEqual(resolveV23CatalogOrder([{ id: "01.10", sourceRow: 10 }, { id: "01.2", sourceRow: 2 }]), ["01.2", "01.10"]);
 });
 
+test("01.x 分部位目录允许复用 sheet-local sourceRow，只拒绝同一作用域歧义", () => {
+  assert.deepEqual(resolveV23CatalogOrder([
+    { id: "rod:01.1", itemPartId: "part:rod", sourceRow: 2 },
+    { id: "rod:01.2", itemPartId: "part:rod", sourceRow: 3 },
+    { id: "reel:01.1", itemPartId: "part:reel", sourceRow: 2 },
+    { id: "line:01.1", source: { sheetId: "line-sheet" }, sourceRow: 2 },
+  ]), ["reel:01.1", "rod:01.1", "rod:01.2", "line:01.1"]);
+  assert.equal(resolveV23CatalogOrder([
+    { id: "rod:01.1", itemPartId: "part:rod", sourceRow: 2 },
+    { id: "rod:01.2", itemPartId: "part:rod", sourceRow: 2 },
+  ]), undefined);
+});
+
 test("重复或不可解析 Part head fail closed，绝不猜测最新 revision", () => {
   const rod = part("part:rod", "rod", ["01.1"]);
   const result = resolveCurrentV23Parts(state([rod], [{ seriesId: "series:one", partId: "part:rod", revision: 1 }, { seriesId: "series:one", partId: "part:rod", revision: 1 }]), "series:one");

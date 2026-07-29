@@ -15,7 +15,17 @@ import {
   type PricingPolicyDraft,
   type PricingPolicyVersion,
 } from "./pricing-policy";
-import type { ModelPricingEvaluation, ModelPricingEvaluationInput } from "./types";
+import { v23PricingInputFromAssessment } from "./v23-sku-quality";
+import type {
+  FunctionProfile,
+  HistoricalModelPricingEvaluationInput,
+  ModelPricingEvaluation,
+  ModelPricingEvaluationInput,
+  SeriesPartRevision,
+  SkuDrawerRevision,
+  V23ModelPricingEvaluationInput,
+} from "./types";
+import type { QualityValuePolicyDraft } from "./quality-value-policy";
 
 // ─── 核心 ────────────────────────────────────────────────────────────
 
@@ -30,7 +40,71 @@ export interface ComputeEvaluationOptions {
  * 从冻结输入和已发布策略创建新的不可变评估。
  * 客户端只能提供输入引用；价格、hash、状态完全由服务端重算。
  */
+export interface V23ModelPricingEvaluationRequest {
+  modelId: string;
+  modelRevision: string;
+  pricingPolicyRef: string;
+  partId?: string;
+  typeId?: string;
+}
+
+export interface V23ModelPricingEvaluationContext {
+  sku: SkuDrawerRevision;
+  part: SeriesPartRevision;
+  qualityPolicy: QualityValuePolicyDraft;
+  functionProfiles: readonly FunctionProfile[];
+  canonicalFunctionProfiles: readonly FunctionProfile[];
+}
+
+/**
+ * 当前 v23 入口：品质、分值和重量段只能从同一 SKU revision 的冻结评估构造。
+ */
 export function computeModelPricingEvaluation(
+  request: V23ModelPricingEvaluationRequest,
+  context: V23ModelPricingEvaluationContext,
+  policy: PricingPolicyVersion,
+  options: ComputeEvaluationOptions,
+): ModelPricingEvaluation {
+  if (request.pricingPolicyRef !== policy.id) {
+    throw new Error("定价请求引用的策略与已解析策略不一致。");
+  }
+  const pricingInput = v23PricingInputFromAssessment({
+    ...context,
+    pricingPolicy: policy,
+  });
+  const input: V23ModelPricingEvaluationInput = {
+    sourceKind: "V23_SKU_ASSESSMENT",
+    modelId: request.modelId,
+    modelRevision: request.modelRevision,
+    pricingPolicyRef: request.pricingPolicyRef,
+    partId: request.partId,
+    typeId: request.typeId,
+    skuId: context.sku.skuId,
+    skuRevision: context.sku.revision,
+    qualityAssessmentInputHash: pricingInput.qualityAssessmentInputHash,
+    pricingWeightBandId: pricingInput.pricingWeightBandId,
+    valueScore: pricingInput.finalValueScore,
+    qualityId: pricingInput.qualityId,
+  };
+  return computeFrozenEvaluation(input, policy, options);
+}
+
+/**
+ * 历史冻结记录的显式重放边界。调用者必须提供当时冻结的实际 qualityId；
+ * 缺失时拒绝，绝不补默认品质。
+ */
+export function computeHistoricalModelPricingEvaluation(
+  input: HistoricalModelPricingEvaluationInput,
+  policy: PricingPolicyVersion,
+  options: ComputeEvaluationOptions,
+): ModelPricingEvaluation {
+  if (!input.qualityId) {
+    throw new Error("历史定价重放缺少冻结 qualityId。");
+  }
+  return computeFrozenEvaluation(input, policy, options);
+}
+
+function computeFrozenEvaluation(
   input: ModelPricingEvaluationInput,
   policy: PricingPolicyVersion,
   options: ComputeEvaluationOptions,
@@ -45,7 +119,7 @@ export function computeModelPricingEvaluation(
     typeId: input.typeId ?? "",
     pricingWeightBandId: input.pricingWeightBandId,
     valueScore: input.valueScore,
-    qualityId: (input.qualityId ?? "quality_b_blue") as Parameters<typeof calculatePricingTrial>[0]["qualityId"],
+    qualityId: input.qualityId,
     modelRevisionId: `${input.modelId}@${input.modelRevision}`,
   });
 
@@ -92,7 +166,7 @@ function createNonFormalEvaluation(
     typeId: input.typeId ?? "",
     pricingWeightBandId: input.pricingWeightBandId,
     valueScore: input.valueScore,
-    qualityId: (input.qualityId ?? "quality_b_blue") as Parameters<typeof calculatePricingTrial>[0]["qualityId"],
+    qualityId: input.qualityId,
     modelRevisionId: `${input.modelId}@${input.modelRevision}`,
   });
 
@@ -122,13 +196,13 @@ function createNonFormalEvaluation(
  * 输入变化时创建新 revision，同时返回应标记为 STALE 的旧 revision（若存在）。
  * 调用方必须同时持久化 newEval 和 staleLegacy（若存在）。
  */
-export function recomputeModelPricingEvaluation(
+export function recomputeHistoricalModelPricingEvaluation(
   existing: ModelPricingEvaluation,
-  newInput: ModelPricingEvaluationInput,
+  newInput: HistoricalModelPricingEvaluationInput,
   policy: PricingPolicyVersion,
   options: Omit<ComputeEvaluationOptions, "id"> & { createdAt: string; createdBy: string },
 ): { newEval: ModelPricingEvaluation; staleLegacy?: ModelPricingEvaluation } {
-  const newEval = computeModelPricingEvaluation(newInput, policy, {
+  const newEval = computeHistoricalModelPricingEvaluation(newInput, policy, {
     id: existing.id,
     revision: existing.revision + 1,
     createdAt: options.createdAt,
@@ -167,6 +241,7 @@ export function validateModelPricingEvaluation(
   evaluation: ModelPricingEvaluation,
   policy: PricingPolicyVersion | undefined,
   modelRevision: string,
+  currentContext?: V23ModelPricingEvaluationContext,
 ): EvaluationValidationIssue[] {
   const issues: EvaluationValidationIssue[] = [];
 
@@ -196,6 +271,43 @@ export function validateModelPricingEvaluation(
     });
   }
 
+  if (evaluation.input.sourceKind === "V23_SKU_ASSESSMENT") {
+    if (!currentContext) {
+      issues.push({
+        code: "SKU_QUALITY_EVIDENCE_REQUIRED",
+        severity: "error",
+        message: "v23 定价验证缺少当前 SKU revision 证据。",
+      });
+    } else {
+      try {
+        const pricingInput = v23PricingInputFromAssessment({
+          ...currentContext,
+          pricingPolicy: policy,
+        });
+        if (
+          currentContext.sku.skuId !== evaluation.input.skuId
+          || currentContext.sku.revision !== evaluation.input.skuRevision
+          || pricingInput.qualityAssessmentInputHash !== evaluation.input.qualityAssessmentInputHash
+          || pricingInput.qualityId !== evaluation.input.qualityId
+          || pricingInput.finalValueScore !== evaluation.input.valueScore
+          || pricingInput.pricingWeightBandId !== evaluation.input.pricingWeightBandId
+        ) {
+          issues.push({
+            code: "SKU_QUALITY_EVIDENCE_STALE",
+            severity: "error",
+            message: "v23 定价绑定的 SKU 品质评估身份或内容已变化。",
+          });
+        }
+      } catch {
+        issues.push({
+          code: "SKU_QUALITY_EVIDENCE_INVALID",
+          severity: "error",
+          message: "v23 定价绑定的 SKU 品质评估不完整或不可验证。",
+        });
+      }
+    }
+  }
+
   // 重算并验证 contentHash
   if (policy.formalStatus === "PUBLISHED") {
     const trial = calculatePricingTrial({
@@ -204,7 +316,7 @@ export function validateModelPricingEvaluation(
       typeId: evaluation.input.typeId ?? "",
       pricingWeightBandId: evaluation.input.pricingWeightBandId,
       valueScore: evaluation.input.valueScore,
-      qualityId: (evaluation.input.qualityId ?? "quality_b_blue") as Parameters<typeof calculatePricingTrial>[0]["qualityId"],
+      qualityId: evaluation.input.qualityId,
       modelRevisionId: `${evaluation.modelId}@${evaluation.modelRevision}`,
     });
 

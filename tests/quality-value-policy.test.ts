@@ -191,23 +191,20 @@ test("组合诊断保留服务端部位证据，移动矩阵单元格不会改�
   assert.deepEqual(structuredClone(issue), issue);
 });
 
-test("同 revision 的定价端点 score=100 触发品质边界冲突且保留来源 Trace", () => {
+test("同 revision 的定价端点 score=100 不把目标 [65,100) 改成含上界区间", () => {
   const draft = policy({
     pricingScoreEndpoints: [{ value: 100, status: "SOURCE", source: source("u87sRh", "B179") }],
   });
-  const issue = draft.issues.find((entry) => entry.code === "QUALITY_SCORE_BOUNDARY_CONFLICT");
-  assert.equal(draft.formalStatus, "NON_FORMAL");
-  assert.equal(issue?.source, "quality");
-  assert.equal(issue?.sourceCell?.sheetId, "u87sRh");
-  assert.equal(issue?.sourceCell?.cell, "B179");
-  assert.equal(issue?.sourceRevision, REVISION);
+  assert.equal(draft.formalStatus, "READY_TO_PUBLISH");
+  assert.equal(draft.ranges.find((entry) => entry.qualityId === "quality_s_orange")?.maxInclusive, false);
+  assert.equal(draft.issues.some((entry) => entry.code === "QUALITY_SCORE_BOUNDARY_CONFLICT"), false);
 });
 
 const formalRanges: QualityValueRange[] = [
   ["quality_c_green", 0, 20, false, "E5:F5"],
   ["quality_b_blue", 20, 40, false, "E6:F6"],
   ["quality_a_purple", 40, 65, false, "E7:F7"],
-  ["quality_s_orange", 65, 100, true, "E8:F8"],
+  ["quality_s_orange", 65, 100, false, "E8:F8"],
 ].map(([qualityId, minScore, maxScore, maxInclusive, cell]) => ({
   qualityId: qualityId as QualityValueRange["qualityId"],
   minScore: Number(minScore),
@@ -231,9 +228,18 @@ test("S 品质区间下界不为 65 时阻断发布并保留来源 Trace", () =>
   assert.equal(issue?.sourceRevision, REVISION);
 });
 
-test("S 品质区间为 [65,100] 闭区间时通过校验且可正式发布", () => {
+test("S 品质区间为 [65,100) 时通过校验且可正式发布", () => {
   const draft = policy({ ranges: formalRanges });
   const outdated = draft.issues.find((entry) => entry.code === "QUALITY_RANGE_SOURCE_OUTDATED");
   assert.equal(outdated, undefined);
   assert.equal(draft.formalStatus, "READY_TO_PUBLISH");
+});
+
+test("历史 [65,100] 闭区间只能保留为旧策略证据", () => {
+  const draft = policy({
+    ranges: formalRanges.map((range) =>
+      range.qualityId === "quality_s_orange" ? { ...range, maxInclusive: true } : range),
+  });
+  assert.equal(draft.formalStatus, "NON_FORMAL");
+  assert.equal(draft.issues.some((entry) => entry.code === "QUALITY_RANGE_SOURCE_OUTDATED"), true);
 });

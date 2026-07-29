@@ -261,6 +261,10 @@ export interface FunctionIntensityRuleSet {
   /** 仅历史迁移审计重放：旧源未表达分部件时，且同一强度恰有一条记录才可使用。 */
   legacyItemPartAgnostic?: boolean;
   rules: AdjustmentRule[];
+  /** 03_功能定位“评分系数”；品质评分只消费精确部位+强度成员。 */
+  scoreFactor?: number;
+  /** 稳定源证据，不使用列位置或展示名作为运行时身份。 */
+  scoreFactorSourceRef?: string;
   /** 飞书 03_功能定位中的稳定源行 ID（func_*）；只用于溯源，不作为聚合 FunctionProfile 的 ID。没有独立父级绑定时不得生成 FunctionProfile。 */
   sourceRowId?: string;
 }
@@ -1271,6 +1275,17 @@ export interface V23SkuCombinationValueBreakdown {
   sourceRef: string;
 }
 
+export interface V23SkuQualityTraceEntry {
+  sequence: number;
+  step: "affix" | "combination" | "function_factor" | "quality_range";
+  sourceRef: string;
+  subjectIds: string[];
+  before: number;
+  operation: "add" | "multiply" | "validate";
+  operand: number;
+  after: number;
+}
+
 /** §12.1 的 SKU revision 专属冻结载体；不复用 Model 的运行时评估。 */
 export interface V23SkuAffixValueAssessment {
   skuRevisionId: string;
@@ -1284,6 +1299,7 @@ export interface V23SkuAffixValueAssessment {
   finalValueScore: number;
   affixBreakdown: V23SkuAffixValueBreakdown[];
   combinationBreakdown: V23SkuCombinationValueBreakdown[];
+  trace: V23SkuQualityTraceEntry[];
   qualityRangePolicyVersion: string;
   scoringPolicyVersion: string;
   inSelectedQualityRange: boolean;
@@ -1960,8 +1976,7 @@ export interface AffixRuntimeEvidence {
   traceHash: string;
 }
 
-/** 客户端提交的定价评估输入——只含引用，不含计算结果。服务端据此重算并验证。 */
-export interface ModelPricingEvaluationInput {
+interface ModelPricingEvaluationInputCommon {
   modelId: string;
   modelRevision: string;
   pricingPolicyRef: string;
@@ -1969,8 +1984,29 @@ export interface ModelPricingEvaluationInput {
   valueScore: number;
   partId?: string;
   typeId?: string;
-  qualityId?: string;
 }
+
+/**
+ * v22 及更早的冻结重放输入。缺少 sourceKind 的既有记录仍可识别为历史记录，
+ * 但只能进入显式 historical replay 入口。
+ */
+export interface HistoricalModelPricingEvaluationInput extends ModelPricingEvaluationInputCommon {
+  sourceKind?: "HISTORICAL_FROZEN";
+  qualityId: QualityProfileId;
+}
+
+/** v23 当前定价只接受 SKU revision 上已冻结的实际品质评估。 */
+export interface V23ModelPricingEvaluationInput extends ModelPricingEvaluationInputCommon {
+  sourceKind: "V23_SKU_ASSESSMENT";
+  skuId: string;
+  skuRevision: number;
+  qualityAssessmentInputHash: string;
+  qualityId: QualityProfileId;
+}
+
+export type ModelPricingEvaluationInput =
+  | HistoricalModelPricingEvaluationInput
+  | V23ModelPricingEvaluationInput;
 
 /** 版本化、不可变、可重算的权威定价评估。客户端不得自报价格或 fingerprint。 */
 export interface ModelPricingEvaluation {

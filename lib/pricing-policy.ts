@@ -250,13 +250,24 @@ function validateQualityRanges(ranges: QualityPriceFactorRange[], issues: Pricin
       break;
     }
   }
-  const sRange = [...ranges].find((r) => r.qualityId === "quality_s_orange");
-  if (sRange && (sRange.minScore !== 65 || sRange.maxScore !== 100 || !sRange.maxInclusive)) {
+  const targets: Array<[QualityId, number, number]> = [
+    ["quality_c_green", 0, 20],
+    ["quality_b_blue", 20, 40],
+    ["quality_a_purple", 40, 65],
+    ["quality_s_orange", 65, 100],
+  ];
+  if (targets.some(([qualityId, minScore, maxScore]) => {
+    const range = ranges.find((entry) => entry.qualityId === qualityId);
+    return !range
+      || range.minScore !== minScore
+      || range.maxScore !== maxScore
+      || range.maxInclusive;
+  })) {
     issues.push({
       code: "QUALITY_PRICE_FACTOR_INVALID",
       severity: "error",
-      message: "S/橙 品质区间必须是 [65,100] 闭区间。",
-      source: sRange.source,
+      message: "目标 v23 品质定价区间必须精确为 C[0,20)、B[20,40)、A[40,65)、S[65,100)。",
+      source: ranges.find((entry) => entry.qualityId === "quality_s_orange")?.source,
     });
   }
 }

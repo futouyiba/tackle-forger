@@ -183,6 +183,11 @@ test("多区块表头按当前区块解析，并保留稳定 ID、显示值、�
   assert.deepEqual(draft.modifiers.find((entry) => entry.id === "type_rod_0001")?.methodIds, ["method:lure"]);
   assert.equal(draft.functionProfiles.length, 7);
   assert.deepEqual(draft.functionProfiles[0]?.intensityRules.map((entry) => [entry.itemPartId, entry.intensity]), [["part:rod", 1], ["part:reel", 1], ["part:line", 1]]);
+  assert.deepEqual(
+    draft.functionProfiles[0]?.intensityRules.map((entry) => [entry.itemPartId, entry.scoreFactor]),
+    [["part:rod", 1], ["part:reel", 1], ["part:line", 1]],
+  );
+  assert.match(draft.functionProfiles[0]?.intensityRules[0]?.scoreFactorSourceRef ?? "", /^16qYVn!G\d+@/);
 });
 
 test("显式拉取只生成草稿，不发布或改写历史 Snapshot", () => {
@@ -256,6 +261,18 @@ test("FunctionProfile 只按两级稳定外键归组，并拒绝未知、重复�
   missingIntensity.functionSources[0].values.splice(4, 1);
   const missing = importCanonicalRuleSource({ sourceRevision: revision, ...missingIntensity, importedAt: revision.pulledAt });
   assert.ok(missing.issues.some((issue) => issue.code === "FUNCTION_GROUP_PART_INTENSITY_MISSING"));
+
+  const missingScoreFactor = fixture();
+  missingScoreFactor.functionSources[0].values[2]![6] = "";
+  assert.ok(importCanonicalRuleSource({
+    sourceRevision: revision, ...missingScoreFactor, importedAt: revision.pulledAt,
+  }).issues.some((issue) => issue.code === "FUNCTION_ROW_INVALID"));
+
+  const invalidScoreFactor = fixture();
+  invalidScoreFactor.functionSources[0].values[2]![6] = -1;
+  assert.ok(importCanonicalRuleSource({
+    sourceRevision: revision, ...invalidScoreFactor, importedAt: revision.pulledAt,
+  }).issues.some((issue) => issue.code === "FUNCTION_ROW_INVALID"));
 });
 
 test("02 钓法稳定行对 01 标杆生成派生模板，02.5 不反向参与计算", () => {

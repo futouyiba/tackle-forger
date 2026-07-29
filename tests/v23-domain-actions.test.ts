@@ -10,11 +10,13 @@ import {
   type V23WriteAction,
 } from "../lib/v23-domain-actions";
 import { ensureWorkflowFields } from "../lib/workflow";
+import { deterministicHash } from "../lib/rule-kernel";
 import type { WorkspaceState } from "../lib/types";
 import {
   importReductionStackingPolicyDraft,
   publishReductionStackingPolicyVersion,
 } from "../lib/reduction-stacking-policy";
+import { importQualityValuePolicyDraft } from "../lib/quality-value-policy";
 
 const templateKey = {
   partType: "rod" as const,
@@ -75,6 +77,59 @@ function state(): WorkspaceState {
   }];
   value.reductionStackingPolicyVersions = [publishedPolicy("99")];
   return ensureWorkflowFields(value);
+}
+
+function qualityReadyState(): WorkspaceState {
+  const value = state();
+  value.qualityValuePolicyDrafts = [importQualityValuePolicyDraft({
+    sourceRevisionId: "source:quality@500",
+    sourceRevision: "500",
+    ranges: [
+      { qualityId: "quality_c_green", minScore: 0, maxScore: 20, maxInclusive: false, source: { sheetId: "27hboC", cell: "B2" }, status: "SOURCE" },
+      { qualityId: "quality_b_blue", minScore: 20, maxScore: 40, maxInclusive: false, source: { sheetId: "27hboC", cell: "B3" }, status: "SOURCE" },
+      { qualityId: "quality_a_purple", minScore: 40, maxScore: 65, maxInclusive: false, source: { sheetId: "27hboC", cell: "B4" }, status: "SOURCE" },
+      { qualityId: "quality_s_orange", minScore: 65, maxScore: 100, maxInclusive: false, source: { sheetId: "27hboC", cell: "B5" }, status: "SOURCE" },
+    ],
+    aliases: [],
+    matrixCells: [],
+    importedAt: "2026-07-29T00:00:00.000Z",
+  })];
+  value.functionProfiles = [{
+    id: "function:cast",
+    name: "远投",
+    rules: [],
+    intensityRules: [{
+      intensity: 2,
+      itemPartId: "part:rod",
+      rules: [],
+      scoreFactor: 1.03,
+      scoreFactorSourceRef: "16qYVn!F2@source:quality@500",
+      sourceRowId: "function:cast:2",
+    }],
+    enabled: true,
+    sourceRevisionId: "source:quality@500",
+    notes: "",
+  }];
+  const canonicalContent = {
+    parameters: [],
+    templates: [],
+    methodProfiles: [],
+    itemTypeProfiles: [],
+    functionProfiles: structuredClone(value.functionProfiles),
+    modifiers: [],
+    layers: [],
+  };
+  const canonicalHash = deterministicHash(canonicalContent);
+  value.canonicalRuleSourceDrafts = [{
+    id: `canonical-rule-draft:source:quality@500:${canonicalHash}`,
+    sourceRevisionId: "source:quality@500",
+    sourceRevision: "500",
+    contentHash: canonicalHash,
+    importedAt: "2026-07-29T00:00:00.000Z",
+    ...canonicalContent,
+    issues: [],
+  }];
+  return value;
 }
 
 function command<T extends Record<string, unknown>>(
@@ -207,6 +262,163 @@ test("preview is read-only and create_sku supports multiple stable IDs in one Pa
     ["sku:light:a", "sku:light:b"],
   );
   assert.ok(second.v23SkuDrawerRevisions.every((entry) => entry.derivation?.status === "VALID"));
+});
+
+test("SKU 创建采用推荐品质，人工实际品质作为新 revision 保存且理由 fail closed", () => {
+  const withSeries = run(qualityReadyState(), "create_series", {
+    seriesId: "series:alpha",
+    collectionId: null,
+    name: "Alpha",
+    concept: "Quality",
+    parts: [part],
+  }).state;
+  const created = run(withSeries, "create_sku", {
+    skuId: "sku:quality",
+    partId: part.partId,
+    expectedPartRevision: 1,
+    weightBandId: "band:light",
+    displayOrder: 0,
+  }).state;
+  const initial = created.v23SkuDrawerRevisions[0]!;
+  assert.equal(initial.quality.status, "ASSESSED");
+  if (initial.quality.status !== "ASSESSED") return;
+  assert.equal(initial.quality.assessment.recommendedQualityId, "quality_c_green");
+  assert.equal(initial.quality.assessment.selectedQualityId, "quality_c_green");
+  assert.equal(initial.quality.assessment.qualityOverrideState, "MATCHED");
+
+  assert.throws(
+    () => run(created, "set_sku_actual_quality", {
+      skuId: "sku:quality",
+      expectedSkuRevision: 1,
+      selectedQualityId: "quality_b_blue",
+      reason: null,
+    }),
+    /V23_QUALITY_OVERRIDE_REASON_REQUIRED/,
+  );
+  const overridden = run(created, "set_sku_actual_quality", {
+    skuId: "sku:quality",
+    expectedSkuRevision: 1,
+    selectedQualityId: "quality_b_blue",
+    reason: "人工实测品质",
+  }).state;
+  assert.equal(overridden.v23SkuDrawerHeads[0]?.revision, 2);
+  assert.equal(overridden.v23SkuDrawerRevisions.length, 2);
+  assert.deepEqual(overridden.v23SkuDrawerRevisions[0], initial);
+  const actual = overridden.v23SkuDrawerRevisions[1]!.quality;
+  assert.equal(actual.status, "ASSESSED");
+  if (actual.status !== "ASSESSED") return;
+  assert.equal(actual.assessment.selectedQualityId, "quality_b_blue");
+  assert.equal(actual.assessment.qualityOverrideState, "OVERRIDDEN");
+  assert.equal(actual.assessment.qualityOverrideReason, "人工实测品质");
+});
+
+test("评分达到 100 后人工选择实际品质仍保留正式发布阻断", () => {
+  const withSeries = run(qualityReadyState(), "create_series", {
+    seriesId: "series:alpha",
+    collectionId: null,
+    name: "Alpha",
+    concept: "Out of range quality",
+    parts: [part],
+  }).state;
+  const withAffix = run(withSeries, "create_project_affix", {
+    affixId: "affix:score-100",
+    affixPayload: { ...attributeAffixPayload("affix:score-100"), valueScore: 100 },
+  }).state;
+  const created = run(withAffix, "create_sku", {
+    skuId: "sku:out-of-range",
+    partId: part.partId,
+    expectedPartRevision: 1,
+    weightBandId: "band:light",
+    displayOrder: 0,
+  }).state;
+  const withEntry = run(created, "add_sku_affix", {
+    skuId: "sku:out-of-range",
+    expectedSkuRevision: 1,
+    affixRef: {
+      id: "affix:score-100",
+      revision: 1,
+      contentHash: withAffix.v23AffixDefinitions[0]!.contentHash,
+    },
+  }).state;
+  const assessed = run(withEntry, "set_sku_actual_quality", {
+    skuId: "sku:out-of-range",
+    expectedSkuRevision: 2,
+    selectedQualityId: "quality_s_orange",
+    reason: "评分越界后人工实测",
+  }).state.v23SkuDrawerRevisions.at(-1)!;
+
+  assert.equal(assessed.quality.status, "ASSESSED");
+  if (assessed.quality.status !== "ASSESSED") return;
+  assert.equal(assessed.quality.assessment.recommendedQualityId, null);
+  assert.equal(assessed.quality.assessment.selectedQualityId, "quality_s_orange");
+  assert.ok(assessed.validationSummary.some(
+    (issue) => issue.code === "QUALITY_SCORE_OUT_OF_RANGE"
+      && issue.gate === "PUBLISH"
+      && issue.severity === "BLOCKER",
+  ));
+});
+
+test("自动重算跨推荐档位时保留 assessment，并确定性归一覆盖理由", () => {
+  const withSeries = run(qualityReadyState(), "create_series", {
+    seriesId: "series:alpha",
+    collectionId: null,
+    name: "Alpha",
+    concept: "Recommendation crossing",
+    parts: [part],
+  }).state;
+  const withAffix = run(withSeries, "create_project_affix", {
+    affixId: "affix:score-30",
+    affixPayload: { ...attributeAffixPayload("affix:score-30"), valueScore: 30 },
+  }).state;
+  const created = run(withAffix, "create_sku", {
+    skuId: "sku:crossing",
+    partId: part.partId,
+    expectedPartRevision: 1,
+    weightBandId: "band:light",
+    displayOrder: 0,
+  }).state;
+  const crossedWithoutReason = run(created, "add_sku_affix", {
+    skuId: "sku:crossing",
+    expectedSkuRevision: 1,
+    affixRef: {
+      id: "affix:score-30",
+      revision: 1,
+      contentHash: withAffix.v23AffixDefinitions[0]!.contentHash,
+    },
+  }).state.v23SkuDrawerRevisions.at(-1)!;
+  assert.equal(crossedWithoutReason.quality.status, "ASSESSED");
+  if (crossedWithoutReason.quality.status !== "ASSESSED") return;
+  assert.equal(crossedWithoutReason.quality.assessment.recommendedQualityId, "quality_b_blue");
+  assert.equal(crossedWithoutReason.quality.assessment.selectedQualityId, "quality_c_green");
+  assert.equal(crossedWithoutReason.quality.assessment.qualityOverrideReason, null);
+  assert.ok(crossedWithoutReason.validationSummary.some(
+    (issue) => issue.code === "V23_QUALITY_OVERRIDE_REASON_REQUIRED",
+  ));
+
+  const overridden = run(created, "set_sku_actual_quality", {
+    skuId: "sku:crossing",
+    expectedSkuRevision: 1,
+    selectedQualityId: "quality_b_blue",
+    reason: "先按人工目标选择",
+  }).state;
+  const crossedToMatch = run(overridden, "add_sku_affix", {
+    skuId: "sku:crossing",
+    expectedSkuRevision: 2,
+    affixRef: {
+      id: "affix:score-30",
+      revision: 1,
+      contentHash: withAffix.v23AffixDefinitions[0]!.contentHash,
+    },
+  }).state.v23SkuDrawerRevisions.at(-1)!;
+  assert.equal(crossedToMatch.quality.status, "ASSESSED");
+  if (crossedToMatch.quality.status !== "ASSESSED") return;
+  assert.equal(crossedToMatch.quality.assessment.recommendedQualityId, "quality_b_blue");
+  assert.equal(crossedToMatch.quality.assessment.selectedQualityId, "quality_b_blue");
+  assert.equal(crossedToMatch.quality.assessment.qualityOverrideState, "MATCHED");
+  assert.equal(crossedToMatch.quality.assessment.qualityOverrideReason, null);
+  assert.equal(crossedToMatch.validationSummary.some(
+    (issue) => issue.code === "V23_QUALITY_OVERRIDE_REASON_REQUIRED",
+  ), false);
 });
 
 test("part update appends immutable revisions and atomically rederives every child SKU", () => {

@@ -7,22 +7,31 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { jcsSha256Hex } from "../lib/canonical-json";
 import { deterministicHash } from "../lib/rule-kernel";
 import {
   importPricingPolicyDraft,
   publishPricingPolicyDraft,
   type PricingPolicyDraft,
 } from "../lib/pricing-policy";
+import { importQualityValuePolicyDraft } from "../lib/quality-value-policy";
 import {
   acknowledgeModelPricingEvaluation,
   computeModelPricingEvaluation,
+  computeHistoricalModelPricingEvaluation,
   evaluationId,
   findEvaluation,
-  recomputeModelPricingEvaluation,
+  recomputeHistoricalModelPricingEvaluation,
   staleEvaluation,
   validateModelPricingEvaluation,
 } from "../lib/model-pricing-evaluation";
-import type { ModelPricingEvaluationInput } from "../lib/types";
+import type {
+  FunctionProfile,
+  HistoricalModelPricingEvaluationInput,
+  SeriesPartRevision,
+  SkuDrawerRevision,
+  V23SkuAffixValueAssessment,
+} from "../lib/types";
 
 // ─── 夹具 ────────────────────────────────────────────────────────────
 
@@ -61,7 +70,7 @@ function policyInput(overrides: Partial<PricingPolicyDraft> = {}) {
       qualityId: qualityId as "quality_c_green",
       minScore,
       maxScore,
-      maxInclusive: qualityId === "quality_s_orange",
+      maxInclusive: false,
       minFactor,
       maxFactor,
       status: "CONFIRMED" as const,
@@ -111,8 +120,8 @@ function publishedPolicy(overrides: Partial<PricingPolicyDraft> = {}) {
 }
 
 function baseEvalInput(
-  overrides: Partial<ModelPricingEvaluationInput> = {},
-): ModelPricingEvaluationInput {
+  overrides: Partial<HistoricalModelPricingEvaluationInput> = {},
+): HistoricalModelPricingEvaluationInput {
   return {
     modelId: "model-1",
     modelRevision: "1",
@@ -132,14 +141,243 @@ const baseOptions = {
   createdBy: "test",
 };
 
+const v23Part: SeriesPartRevision = {
+  partId: "part:v23",
+  seriesId: "series:v23",
+  revision: 1,
+  partType: "rod",
+  fishingMethodId: "method:lure",
+  materialTypeId: "material:carbon",
+  functionProfileId: "function:cast",
+  functionIntensity: 2,
+  weightBandIds: ["w1"],
+  defaultEntryRefs: [],
+  technologyRefs: [],
+  inputFingerprint: "fixture",
+  contentHash: "fixture",
+};
+const v23QualityPolicy = importQualityValuePolicyDraft({
+  sourceRevisionId: "source:quality@500",
+  sourceRevision: "500",
+  ranges: [
+    ["quality_c_green", 0, 20],
+    ["quality_b_blue", 20, 40],
+    ["quality_a_purple", 40, 65],
+    ["quality_s_orange", 65, 100],
+  ].map(([qualityId, minScore, maxScore], index) => ({
+    qualityId: qualityId as "quality_c_green",
+    minScore: Number(minScore),
+    maxScore: Number(maxScore),
+    maxInclusive: false,
+    source: { sheetId: "27hboC", cell: `B${index + 2}` },
+    status: "SOURCE" as const,
+  })),
+  aliases: [],
+  matrixCells: [],
+  importedAt: "2026-07-29T00:00:00.000Z",
+});
+const v23FunctionProfiles: FunctionProfile[] = [{
+  id: "function:cast",
+  name: "远投",
+  rules: [],
+  intensityRules: [{
+    intensity: 2,
+    itemPartId: "part:rod",
+    rules: [],
+    scoreFactor: 1,
+    scoreFactorSourceRef: "16qYVn!F2@source:quality@500",
+    sourceRowId: "function:cast:2",
+  }],
+  enabled: true,
+  sourceRevisionId: "source:quality@500",
+  notes: "",
+}];
+
+function assessedSku(overrides: {
+  skuId?: string;
+  revision?: number;
+  weightBandId?: string;
+  selectedQualityId?: V23SkuAffixValueAssessment["selectedQualityId"];
+  finalValueScore?: number;
+} = {}): SkuDrawerRevision {
+  const skuId = overrides.skuId ?? "sku:v23";
+  const revision = overrides.revision ?? 3;
+  const selectedQualityId = overrides.selectedQualityId ?? "quality_a_purple";
+  const finalValueScore = overrides.finalValueScore ?? 50;
+  const content = {
+    skuRevisionId: `${skuId}@${revision}`,
+    recommendedQualityId: "quality_a_purple" as const,
+    selectedQualityId,
+    qualityOverrideState: selectedQualityId === "quality_a_purple" ? "MATCHED" as const : "OVERRIDDEN" as const,
+    qualityOverrideReason: selectedQualityId === "quality_a_purple" ? null : "测试覆盖",
+    baseAffixScore: finalValueScore,
+    combinationScore: 0,
+    functionScoreFactor: 1,
+    finalValueScore,
+    affixBreakdown: [],
+    combinationBreakdown: [],
+    trace: [{
+      sequence: 1,
+      step: "function_factor" as const,
+      sourceRef: "16qYVn!F2@source:quality@500",
+      subjectIds: ["function:cast", "2"],
+      before: finalValueScore,
+      operation: "multiply" as const,
+      operand: 1,
+      after: finalValueScore,
+    }],
+    qualityRangePolicyVersion: v23QualityPolicy.id,
+    scoringPolicyVersion: "v23-quality-scoring/open007-target-v1",
+    inSelectedQualityRange: selectedQualityId === "quality_a_purple",
+  };
+  const assessment = { ...content, inputHash: jcsSha256Hex(content) };
+  return {
+    skuId,
+    revision,
+    seriesId: "series:v23",
+    partId: v23Part.partId,
+    partRevision: 1,
+    weightBandId: overrides.weightBandId ?? "w1",
+    match: { status: "INVALID_NO_MATCH", attemptedKey: {} as never, inputFingerprint: "fixture" },
+    derivation: { status: "UNRESOLVED" },
+    removedInheritedEntryIds: [],
+    addedEntryRefs: [],
+    localEntryCopies: [],
+    technologyRefs: [],
+    quality: { status: "ASSESSED", assessment },
+    skuPatchIds: [],
+    modelIds: ["model-1"],
+    defaultModelId: "model-1",
+    displayOrder: 0,
+    validationSummary: [],
+    status: "draft",
+    contentHash: "fixture",
+  };
+}
+
+function pricingContext(sku: SkuDrawerRevision) {
+  return {
+    sku,
+    part: v23Part,
+    qualityPolicy: v23QualityPolicy,
+    functionProfiles: v23FunctionProfiles,
+    canonicalFunctionProfiles: v23FunctionProfiles,
+  };
+}
+
 // ─── 正常路径 ─────────────────────────────────────────────────────────
+
+test("v23 当前定价只从同一 SKU revision 的实际品质评估构造输入", () => {
+  const policy = publishedPolicy();
+  const sku = assessedSku({
+    selectedQualityId: "quality_a_purple",
+    finalValueScore: 50,
+    weightBandId: "w1",
+  });
+  const evaluation = computeModelPricingEvaluation({
+    modelId: "model-1",
+    modelRevision: "1",
+    pricingPolicyRef: policy.id,
+    partId: "rod",
+    typeId: "spin",
+  }, pricingContext(sku), policy, baseOptions);
+
+  assert.equal(evaluation.input.sourceKind, "V23_SKU_ASSESSMENT");
+  assert.equal(evaluation.input.qualityId, "quality_a_purple");
+  assert.equal(evaluation.input.valueScore, 50);
+  assert.equal(evaluation.input.pricingWeightBandId, "w1");
+  if (evaluation.input.sourceKind !== "V23_SKU_ASSESSMENT") return;
+  assert.equal(evaluation.input.skuId, "sku:v23");
+  assert.equal(evaluation.input.skuRevision, 3);
+  assert.equal(
+    evaluation.input.qualityAssessmentInputHash,
+    sku.quality.status === "ASSESSED" ? sku.quality.assessment.inputHash : "",
+  );
+  assert.deepEqual(validateModelPricingEvaluation(evaluation, policy, "1", pricingContext(sku)), []);
+});
+
+test("v23 当前定价拒绝未评估、过期身份与不完整品质证据", () => {
+  const policy = publishedPolicy();
+  const valid = assessedSku();
+  assert.throws(
+    () => computeModelPricingEvaluation({
+      modelId: "model-1", modelRevision: "1", pricingPolicyRef: policy.id,
+      partId: "rod", typeId: "spin",
+    }, pricingContext({ ...valid, quality: { status: "UNASSESSED" } }), policy, baseOptions),
+    /V23_PRICING_QUALITY_UNASSESSED/,
+  );
+
+  const stale = structuredClone(valid);
+  if (stale.quality.status !== "ASSESSED") return;
+  stale.quality.assessment.skuRevisionId = `${stale.skuId}@2`;
+  assert.throws(
+    () => computeModelPricingEvaluation({
+      modelId: "model-1", modelRevision: "1", pricingPolicyRef: policy.id,
+      partId: "rod", typeId: "spin",
+    }, pricingContext(stale), policy, baseOptions),
+    /V23_PRICING_QUALITY_EVIDENCE_INVALID/,
+  );
+
+  const evaluation = computeModelPricingEvaluation({
+    modelId: "model-1", modelRevision: "1", pricingPolicyRef: policy.id,
+    partId: "rod", typeId: "spin",
+  }, pricingContext(valid), policy, baseOptions);
+  assert.ok(
+    validateModelPricingEvaluation(evaluation, policy, "1").some(
+      (issue) => issue.code === "SKU_QUALITY_EVIDENCE_REQUIRED",
+    ),
+  );
+  assert.ok(
+    validateModelPricingEvaluation(
+      evaluation,
+      policy,
+      "1",
+      pricingContext(assessedSku({ revision: 4 })),
+    ).some((issue) => issue.code === "SKU_QUALITY_EVIDENCE_STALE"),
+  );
+});
+
+test("历史重放缺失冻结 qualityId 时 fail closed，不再回退蓝色品质", () => {
+  const policy = publishedPolicy();
+  const missing = { ...baseEvalInput({ pricingPolicyRef: policy.id }) } as Record<string, unknown>;
+  delete missing.qualityId;
+  assert.throws(
+    () => computeHistoricalModelPricingEvaluation(
+      missing as unknown as HistoricalModelPricingEvaluationInput,
+      policy,
+      baseOptions,
+    ),
+    /缺少冻结 qualityId/,
+  );
+});
+
+test("历史闭区间 PricingPolicy 仅可显式非正式重放，不改写冻结输入", () => {
+  const current = publishedPolicy();
+  const legacy = {
+    ...current,
+    formalStatus: "LEGACY_PUBLISHED" as const,
+    qualityPriceFactorRanges: current.qualityPriceFactorRanges?.map((range) => ({
+      ...range,
+      maxInclusive: range.qualityId === "quality_s_orange",
+    })),
+  };
+  const input = baseEvalInput({
+    pricingPolicyRef: legacy.id,
+    qualityId: "quality_b_blue",
+    valueScore: 30,
+  });
+  const evaluation = computeHistoricalModelPricingEvaluation(input, legacy, baseOptions);
+  assert.equal(evaluation.status, "NON_FORMAL");
+  assert.deepEqual(evaluation.input, input);
+  assert.equal(evaluation.result.formal, false);
+});
 
 test("相同输入产生相同 evaluation（幂等），contentHash 和 inputHash 确定", () => {
   const policy = publishedPolicy();
   const input = baseEvalInput({ pricingPolicyRef: policy.id });
 
-  const eval1 = computeModelPricingEvaluation(input, policy, baseOptions);
-  const eval2 = computeModelPricingEvaluation(input, policy, baseOptions);
+  const eval1 = computeHistoricalModelPricingEvaluation(input, policy, baseOptions);
+  const eval2 = computeHistoricalModelPricingEvaluation(input, policy, baseOptions);
 
   assert.equal(eval1.id, eval2.id);
   assert.equal(eval1.revision, 1);
@@ -153,7 +391,7 @@ test("evaluation 绑定完整输入：partId/typeId/qualityId/weightBand/valueSc
   const policy = publishedPolicy();
   const input = baseEvalInput({ pricingPolicyRef: policy.id });
 
-  const evaluation = computeModelPricingEvaluation(input, policy, baseOptions);
+  const evaluation = computeHistoricalModelPricingEvaluation(input, policy, baseOptions);
 
   assert.equal(evaluation.input.partId, "rod");
   assert.equal(evaluation.input.typeId, "spin");
@@ -167,7 +405,7 @@ test("evaluation 绑定完整输入：partId/typeId/qualityId/weightBand/valueSc
 
 test("findEvaluation 按 ID 和 revision 精确查找", () => {
   const policy = publishedPolicy();
-  const e1 = computeModelPricingEvaluation(
+  const e1 = computeHistoricalModelPricingEvaluation(
     baseEvalInput({ pricingPolicyRef: policy.id }),
     policy,
     { ...baseOptions, id: "mpe-test" },
@@ -185,7 +423,7 @@ test("策略非 PUBLISHED → evaluation 状态为 NON_FORMAL", () => {
   const draft = importPricingPolicyDraft(policyInput());
   // draft 不会是 PUBLISHED，所以应该产生 NON_FORMAL
   const nonFormalInput = baseEvalInput({ pricingPolicyRef: draft.id });
-  const evaluation = computeModelPricingEvaluation(nonFormalInput, draft as unknown as Parameters<typeof computeModelPricingEvaluation>[1], baseOptions);
+  const evaluation = computeHistoricalModelPricingEvaluation(nonFormalInput, draft as unknown as Parameters<typeof computeHistoricalModelPricingEvaluation>[1], baseOptions);
   assert.equal(evaluation.status, "NON_FORMAL");
   assert.equal(evaluation.result.formal, false);
 });
@@ -194,11 +432,11 @@ test("输入变化创建新 revision，旧 ACKNOWLEDGED 返回 staleLegacy", () 
   const policy = publishedPolicy();
   const input1 = baseEvalInput({ pricingPolicyRef: policy.id });
 
-  const eval1 = computeModelPricingEvaluation(input1, policy, baseOptions);
+  const eval1 = computeHistoricalModelPricingEvaluation(input1, policy, baseOptions);
   assert.equal(eval1.revision, 1);
 
   const input2 = { ...input1, valueScore: 31 };
-  const { newEval: eval2, staleLegacy } = recomputeModelPricingEvaluation(eval1, input2, policy, {
+  const { newEval: eval2, staleLegacy } = recomputeHistoricalModelPricingEvaluation(eval1, input2, policy, {
     createdAt: "2026-07-25T01:00:00.000Z",
     createdBy: "test",
   });
@@ -221,7 +459,7 @@ test("ACKNOWLEDGED 评估被标记 STALE 后不可再确认", () => {
     ],
   });
   const input = baseEvalInput({ pricingPolicyRef: high.id });
-  const evaluation = computeModelPricingEvaluation(input, high, baseOptions);
+  const evaluation = computeHistoricalModelPricingEvaluation(input, high, baseOptions);
   assert.equal(evaluation.status, "OPEN");
 
   const acked = acknowledgeModelPricingEvaluation(evaluation, {
@@ -253,7 +491,7 @@ test("超限评估为 OPEN 状态，确认后变 ACKNOWLEDGED", () => {
   });
   const input = baseEvalInput({ pricingPolicyRef: high.id });
 
-  const evaluation = computeModelPricingEvaluation(input, high, baseOptions);
+  const evaluation = computeHistoricalModelPricingEvaluation(input, high, baseOptions);
   assert.equal(evaluation.status, "OPEN");
   assert.equal(evaluation.result.priceUpperThresholdExceeded, true);
   assert.equal(evaluation.result.priceWarning?.state, "OPEN");
@@ -275,7 +513,7 @@ test("超限评估为 OPEN 状态，确认后变 ACKNOWLEDGED", () => {
 test("非超限评估确认时抛错", () => {
   const policy = publishedPolicy();
   const input = baseEvalInput({ pricingPolicyRef: policy.id });
-  const evaluation = computeModelPricingEvaluation(input, policy, baseOptions);
+  const evaluation = computeHistoricalModelPricingEvaluation(input, policy, baseOptions);
 
   assert.throws(
     () =>
@@ -296,7 +534,7 @@ test("非 OPEN 状态评估确认时抛错", () => {
     ],
   });
   const input = baseEvalInput({ pricingPolicyRef: high.id });
-  const evaluation = computeModelPricingEvaluation(input, high, baseOptions);
+  const evaluation = computeHistoricalModelPricingEvaluation(input, high, baseOptions);
 
   // 先确认
   const acked = acknowledgeModelPricingEvaluation(evaluation, {
@@ -324,7 +562,7 @@ test("非 OPEN 状态评估确认时抛错", () => {
 test("validateModelPricingEvaluation 捕获策略非 PUBLISHED", () => {
   const policy = publishedPolicy();
   const input = baseEvalInput({ pricingPolicyRef: policy.id });
-  const evaluation = computeModelPricingEvaluation(input, policy, baseOptions);
+  const evaluation = computeHistoricalModelPricingEvaluation(input, policy, baseOptions);
 
   // 验证时传入 undefined 策略
   const issues = validateModelPricingEvaluation(evaluation, undefined, "1");
@@ -334,7 +572,7 @@ test("validateModelPricingEvaluation 捕获策略非 PUBLISHED", () => {
 test("validateModelPricingEvaluation 捕获 modelRevision 不匹配", () => {
   const policy = publishedPolicy();
   const input = baseEvalInput({ pricingPolicyRef: policy.id });
-  const evaluation = computeModelPricingEvaluation(input, policy, baseOptions);
+  const evaluation = computeHistoricalModelPricingEvaluation(input, policy, baseOptions);
 
   const issues = validateModelPricingEvaluation(evaluation, policy, "2"); // revision 变了
   assert.ok(issues.some((i) => i.code === "MODEL_REVISION_MISMATCH"));
@@ -343,7 +581,7 @@ test("validateModelPricingEvaluation 捕获 modelRevision 不匹配", () => {
 test("validateModelPricingEvaluation 捕获 contentHash 不一致", () => {
   const policy = publishedPolicy();
   const input = baseEvalInput({ pricingPolicyRef: policy.id });
-  const evaluation = computeModelPricingEvaluation(input, policy, baseOptions);
+  const evaluation = computeHistoricalModelPricingEvaluation(input, policy, baseOptions);
 
   // 篡改 evaluation 的结果字段（价格被篡改）
   const tamperedEval = {
@@ -359,9 +597,9 @@ test("validateModelPricingEvaluation 捕获 contentHash 不一致", () => {
 test("validateModelPricingEvaluation 捕获 NON_FORMAL 状态", () => {
   const draft = importPricingPolicyDraft(policyInput());
   const nonFormalInput = baseEvalInput({ pricingPolicyRef: draft.id });
-  const evaluation = computeModelPricingEvaluation(
+  const evaluation = computeHistoricalModelPricingEvaluation(
     nonFormalInput,
-    draft as unknown as Parameters<typeof computeModelPricingEvaluation>[1],
+    draft as unknown as Parameters<typeof computeHistoricalModelPricingEvaluation>[1],
     baseOptions,
   );
   assert.equal(evaluation.status, "NON_FORMAL");
@@ -377,7 +615,7 @@ test("validateModelPricingEvaluation 捕获 NON_FORMAL 状态", () => {
 test("validateModelPricingEvaluation 捕获 STALE 状态", () => {
   const policy = publishedPolicy();
   const input = baseEvalInput({ pricingPolicyRef: policy.id });
-  const evaluation = computeModelPricingEvaluation(input, policy, baseOptions);
+  const evaluation = computeHistoricalModelPricingEvaluation(input, policy, baseOptions);
 
   const staled = { ...evaluation, status: "STALE" as const };
   const issues = validateModelPricingEvaluation(staled, policy, "1");
@@ -391,7 +629,7 @@ test("validateModelPricingEvaluation 捕获 OPEN 状态（超限未确认）", (
     ],
   });
   const input = baseEvalInput({ pricingPolicyRef: high.id });
-  const evaluation = computeModelPricingEvaluation(input, high, baseOptions);
+  const evaluation = computeHistoricalModelPricingEvaluation(input, high, baseOptions);
   assert.equal(evaluation.status, "OPEN");
 
   const issues = validateModelPricingEvaluation(evaluation, high, "1");
@@ -411,8 +649,8 @@ test("伪造 acknowledgement（跨 evaluation ID）被检测", () => {
   const input = baseEvalInput({ pricingPolicyRef: high.id });
 
   // 创建两个独立 evaluation（不同 valueScore → 不同 inputHash）
-  const eval1 = computeModelPricingEvaluation(input, high, { ...baseOptions, id: "mpe-eval1" });
-  const eval2 = computeModelPricingEvaluation(
+  const eval1 = computeHistoricalModelPricingEvaluation(input, high, { ...baseOptions, id: "mpe-eval1" });
+  const eval2 = computeHistoricalModelPricingEvaluation(
     { ...input, valueScore: 32 },
     high,
     { ...baseOptions, id: "mpe-eval2" },
@@ -436,7 +674,7 @@ test("伪造 acknowledgement（跨 evaluation ID）被检测", () => {
 test("篡改 contentHash 后验证 fail-closed", () => {
   const policy = publishedPolicy();
   const input = baseEvalInput({ pricingPolicyRef: policy.id });
-  const evaluation = computeModelPricingEvaluation(input, policy, baseOptions);
+  const evaluation = computeHistoricalModelPricingEvaluation(input, policy, baseOptions);
 
   const tampered = { ...evaluation, contentHash: "forged-hash" };
   const issues = validateModelPricingEvaluation(tampered, policy, "1");
@@ -445,12 +683,12 @@ test("篡改 contentHash 后验证 fail-closed", () => {
 
 // ─── 幂等与恢复 ───────────────────────────────────────────────────────
 
-test("computeModelPricingEvaluation 从相同输入产生确定的 inputHash", () => {
+test("computeHistoricalModelPricingEvaluation 从相同输入产生确定的 inputHash", () => {
   const policy = publishedPolicy();
   const input = baseEvalInput({ pricingPolicyRef: policy.id });
 
-  const run1 = computeModelPricingEvaluation(input, policy, baseOptions);
-  const run2 = computeModelPricingEvaluation(input, policy, baseOptions);
+  const run1 = computeHistoricalModelPricingEvaluation(input, policy, baseOptions);
+  const run2 = computeHistoricalModelPricingEvaluation(input, policy, baseOptions);
 
   assert.equal(run1.result.inputHash, run2.result.inputHash);
   assert.equal(run1.contentHash, run2.contentHash);
@@ -464,7 +702,7 @@ test("evaluation 内 priceWarning 的 issueFingerprint 绑定 inputHash", () => 
     ],
   });
   const input = baseEvalInput({ pricingPolicyRef: high.id });
-  const evaluation = computeModelPricingEvaluation(input, high, baseOptions);
+  const evaluation = computeHistoricalModelPricingEvaluation(input, high, baseOptions);
 
   assert.ok(evaluation.result.priceWarning);
   // issueFingerprint 包含 inputHash
@@ -479,12 +717,12 @@ test("evaluation 内 priceWarning 的 issueFingerprint 绑定 inputHash", () => 
 
 test("findEvaluation 返回最新 revision（不传 revision 参数时）", () => {
   const policy = publishedPolicy();
-  const e1 = computeModelPricingEvaluation(
+  const e1 = computeHistoricalModelPricingEvaluation(
     baseEvalInput({ pricingPolicyRef: policy.id }),
     policy,
     { ...baseOptions, id: "mpe-multi" },
   );
-  const { newEval: e2 } = recomputeModelPricingEvaluation(
+  const { newEval: e2 } = recomputeHistoricalModelPricingEvaluation(
     e1,
     { ...baseEvalInput({ pricingPolicyRef: policy.id }), valueScore: 35 },
     policy,

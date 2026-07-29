@@ -27,6 +27,7 @@ export const ROUTED_WORKSPACE_ACTIONS = [
   "restore_inherited_affix",
   "copy_sku_local_affix",
   "create_project_affix",
+  "set_sku_actual_quality",
   "update_series_core_affixes",
   "change_sku_target_pull",
   "save_workspace",

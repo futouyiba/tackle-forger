@@ -135,7 +135,10 @@ test("生产同形品质矩阵按显式块头解析扩展列、移动块、空�
   assert.equal(valid.issues.some((issue) => issue.code === "QUALITY_COMBINATION_ALIAS_UNKNOWN"), false);
   assert.equal(valid.combinationRules.length, 3);
   assert.equal(valid.combinationRules.find((rule) => rule.itemPartId === "part:reel")?.source.cell, "C28");
-  assert.deepEqual(valid.ranges.map((range) => [range.minScore, range.maxScore]), [[0, 20], [20, 40], [40, 65], [65, 100]]);
+  assert.deepEqual(
+    valid.ranges.map((range) => [range.minScore, range.maxScore, range.maxInclusive]),
+    [[0, 20, false], [20, 40, false], [40, 65, false], [65, 100, false]],
+  );
   const pricingQualityRows = pricingQualitySourceRowsFromDraft(valid, qualityValues);
   const pricing = pricingDraftFromRanges({
     sourceRevision,

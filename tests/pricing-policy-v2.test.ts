@@ -28,7 +28,7 @@ function policyInput(overrides: Partial<PricingPolicyDraft> = {}) {
     qualityMappings: (["quality_c_green", "quality_b_blue", "quality_a_purple", "quality_s_orange"] as const).map((qualityId, index) => ({ qualityId, sourceAlias: `basket${index}`, status: "CONFIRMED" as const, source: ref(`C${index}`) })),
     qualityPriceFactorRanges: [
       ["quality_c_green", 0, 20, .5, 1.1], ["quality_b_blue", 20, 40, .8, 1.2], ["quality_a_purple", 40, 65, .7, 1.3], ["quality_s_orange", 65, 100, 2, 3],
-    ].map(([qualityId, minScore, maxScore, minFactor, maxFactor], index) => ({ qualityId: qualityId as "quality_c_green", minScore, maxScore, maxInclusive: qualityId === "quality_s_orange", minFactor, maxFactor, status: "CONFIRMED" as const, source: ref(`D${index}`) })),
+    ].map(([qualityId, minScore, maxScore, minFactor, maxFactor], index) => ({ qualityId: qualityId as "quality_c_green", minScore, maxScore, maxInclusive: false, minFactor, maxFactor, status: "CONFIRMED" as const, source: ref(`D${index}`) })),
     scoreInterpolation: { kind: "quality_range_linear" as const, points: [], outOfRange: "error" as const, status: "CONFIRMED" as const, source: ref("B9") },
     moneyPolicy: { unit: "coin", rounding: "significant_digits_floor" as const, precision: 3, significantDigits: 3, status: "CONFIRMED" as const, source: ref("B10") },
     executionPolicy: { repairRoundingStage: "final_repair_output" as const, purchaseInput: "repair_price_raw" as const, purchaseRoundingStage: "final_purchase_output" as const, rounding: "significant_digits_floor" as const, significantDigits: 3, minimumPurchasePrice: 100, minimumPriceScope: "purchase_output_after_rounding" as const, upperThreshold: 300_000_000, upperThresholdMode: "warning_acknowledgement" as const, status: "CONFIRMED" as const, source: ref("B11") },
@@ -43,7 +43,23 @@ function published(overrides: Partial<PricingPolicyDraft> = {}) {
 }
 
 test("double-output policy rounds repair and purchase independently from raw repair", () => {
-  const result = calculatePricingTrial({ policy: published(), partId: "rod", typeId: "spin", pricingWeightBandId: "w1", qualityId: "quality_b_blue", valueScore: 30, modelRevisionId: "model@1" });
+  const policy = published();
+  assert.ok(policy.qualityPriceFactorRanges);
+  assert.deepEqual(
+    policy.qualityPriceFactorRanges.map((range) => [
+      range.qualityId,
+      range.minScore,
+      range.maxScore,
+      range.maxInclusive,
+    ]),
+    [
+      ["quality_c_green", 0, 20, false],
+      ["quality_b_blue", 20, 40, false],
+      ["quality_a_purple", 40, 65, false],
+      ["quality_s_orange", 65, 100, false],
+    ],
+  );
+  const result = calculatePricingTrial({ policy, partId: "rod", typeId: "spin", pricingWeightBandId: "w1", qualityId: "quality_b_blue", valueScore: 30, modelRevisionId: "model@1" });
   assert.equal(result.repairPriceRaw, 1234);
   assert.equal(result.repairPrice, 1230);
   assert.equal(result.purchasePriceRaw, 1851);

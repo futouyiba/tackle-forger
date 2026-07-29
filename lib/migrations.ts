@@ -31,6 +31,7 @@ import type {
   QualityProfileId,
   QualityProfile,
   RuleSetVersion,
+  SeriesPartRevision,
   WorkspaceRuleSettings,
   WorkspaceState,
   FeishuShareLinkHistoryEntry,
@@ -69,6 +70,12 @@ import { jcsSha256Hex } from "./canonical-json";
 import { projectShareLinkHistoryEntry } from "./data-sources";
 import { createFiveAxisDispositionCatalogRevision, createFormalFiveAxisVertexSet } from "./five-axis-formal";
 import { deriveV23SkuPull, type V23ResolvedAffix } from "./v23-sku-derivation";
+import {
+  deriveV23SkuQuality,
+  resolveV23CanonicalFunctionProfiles,
+  resolveV23QualityPolicyById,
+  type V23QualityEntry,
+} from "./v23-sku-quality";
 
 export const CURRENT_WORKSPACE_SCHEMA_VERSION = 23;
 
@@ -1997,7 +2004,24 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     }
     throw new Error(`${code}_KIND_INVALID`);
   };
-  const validateSkuAssessment = (value: unknown, skuRevisionId: string, effectiveAffixIds: Set<string>) => {
+  const validateSkuAssessment = (
+    value: unknown,
+    skuRevisionId: string,
+    part: SeriesPartRevision,
+    effectiveStableEntries: ReadonlyMap<string, {
+      ref: { id: string; revision: number; contentHash: string };
+      payload: Record<string, unknown>;
+      localCopyId: string | null;
+      copyHash: string | null;
+    }>,
+    validationIssues: ReadonlyMap<string, readonly {
+      severity: string;
+      gate: string;
+      state: string;
+      message: string;
+    }[]>,
+  ) => {
+    const effectiveAffixIds = new Set(effectiveStableEntries.keys());
     const quality = v23Record(value, "V23_SKU_QUALITY");
     const status = v23String(quality.status, "V23_SKU_QUALITY_STATUS");
     if (status === "UNASSESSED") {
@@ -2007,7 +2031,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     if (status !== "ASSESSED") throw new Error("V23_SKU_QUALITY_STATUS_INVALID");
     v23ExactKeys(quality, ["status", "assessment"], "V23_SKU_QUALITY");
     const assessment = v23Record(quality.assessment, "V23_SKU_QUALITY_ASSESSMENT");
-    v23ExactKeys(assessment, ["skuRevisionId", "recommendedQualityId", "selectedQualityId", "qualityOverrideState", "qualityOverrideReason", "baseAffixScore", "combinationScore", "functionScoreFactor", "finalValueScore", "affixBreakdown", "combinationBreakdown", "qualityRangePolicyVersion", "scoringPolicyVersion", "inSelectedQualityRange", "inputHash"], "V23_SKU_QUALITY_ASSESSMENT");
+    v23ExactKeys(assessment, ["skuRevisionId", "recommendedQualityId", "selectedQualityId", "qualityOverrideState", "qualityOverrideReason", "baseAffixScore", "combinationScore", "functionScoreFactor", "finalValueScore", "affixBreakdown", "combinationBreakdown", "trace", "qualityRangePolicyVersion", "scoringPolicyVersion", "inSelectedQualityRange", "inputHash"], "V23_SKU_QUALITY_ASSESSMENT");
     if (v23String(assessment.skuRevisionId, "V23_SKU_QUALITY_REVISION_ID") !== skuRevisionId) throw new Error("V23_SKU_QUALITY_REVISION_ID_MISMATCH");
     const recommended = assessment.recommendedQualityId;
     if (recommended !== null && !V23_QUALITY_IDS.has(v23String(recommended, "V23_RECOMMENDED_QUALITY_ID"))) throw new Error("V23_SKU_QUALITY_ID_INVALID");
@@ -2017,8 +2041,16 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     if (!(reason === null || (typeof reason === "string" && reason.length > 0)) || typeof assessment.inSelectedQualityRange !== "boolean") throw new Error("V23_SKU_QUALITY_OVERRIDE_INVALID");
     if (
       (overrideState === "MATCHED" && (recommended === null || recommended !== assessment.selectedQualityId || reason !== null || assessment.inSelectedQualityRange !== true))
-      || (overrideState === "OVERRIDDEN" && (recommended === null || recommended === assessment.selectedQualityId || reason === null))
-      || (overrideState === "NO_RECOMMENDATION" && (recommended !== null || reason === null || assessment.inSelectedQualityRange !== false))
+      || (overrideState === "OVERRIDDEN" && (
+        recommended === null
+        || recommended === assessment.selectedQualityId
+        || (reason === null && !validationIssues.has("V23_QUALITY_OVERRIDE_REASON_REQUIRED"))
+      ))
+      || (overrideState === "NO_RECOMMENDATION" && (
+        recommended !== null
+        || (reason === null && !validationIssues.has("V23_QUALITY_OVERRIDE_REASON_REQUIRED"))
+        || assessment.inSelectedQualityRange !== false
+      ))
       || !["MATCHED", "OVERRIDDEN", "NO_RECOMMENDATION"].includes(overrideState)
     ) throw new Error("V23_SKU_QUALITY_OVERRIDE_INVALID");
     for (const field of ["baseAffixScore", "combinationScore", "functionScoreFactor", "finalValueScore"] as const) if (!Number.isFinite(assessment[field])) throw new Error("V23_SKU_QUALITY_SCORE_INVALID");
@@ -2026,15 +2058,18 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     v23String(assessment.scoringPolicyVersion, "V23_SKU_QUALITY_SCORING_POLICY");
     v23Hash(assessment.inputHash, "V23_SKU_QUALITY_INPUT_HASH");
     const affixIds = new Set<string>();
+    const affixBreakdowns: Array<{ sourceAffixId: string; valueScore: number; sourceRef: string }> = [];
     for (const value of v23Array(assessment.affixBreakdown, "V23_SKU_AFFIX_BREAKDOWN")) {
       const breakdown = v23Record(value, "V23_SKU_AFFIX_BREAKDOWN_ENTRY");
       v23ExactKeys(breakdown, ["sourceAffixId", "valueScore", "sourceRef"], "V23_SKU_AFFIX_BREAKDOWN_ENTRY");
       const sourceAffixId = v23String(breakdown.sourceAffixId, "V23_SKU_AFFIX_BREAKDOWN_ID");
-      v23String(breakdown.sourceRef, "V23_SKU_AFFIX_BREAKDOWN_SOURCE_REF");
+      const sourceRef = v23String(breakdown.sourceRef, "V23_SKU_AFFIX_BREAKDOWN_SOURCE_REF");
       if (affixIds.has(sourceAffixId) || !effectiveAffixIds.has(sourceAffixId) || !Number.isFinite(breakdown.valueScore)) throw new Error("V23_SKU_AFFIX_BREAKDOWN_INVALID");
       affixIds.add(sourceAffixId);
+      affixBreakdowns.push({ sourceAffixId, valueScore: breakdown.valueScore as number, sourceRef });
     }
     const combinationPairs = new Set<string>(); const combinationSources = new Set<string>();
+    const combinationBreakdowns: Array<{ leftAffixId: string; rightAffixId: string; valueScore: number; sourceRef: string }> = [];
     for (const value of v23Array(assessment.combinationBreakdown, "V23_SKU_COMBINATION_BREAKDOWN")) {
       const breakdown = v23Record(value, "V23_SKU_COMBINATION_BREAKDOWN_ENTRY");
       v23ExactKeys(breakdown, ["leftAffixId", "rightAffixId", "valueScore", "sourceRef"], "V23_SKU_COMBINATION_BREAKDOWN_ENTRY");
@@ -2043,6 +2078,170 @@ function validateV23RuntimeState(state: MutableWorkspace) {
       const pair = [left, right].sort().join("\u0000");
       if (left === right || !effectiveAffixIds.has(left) || !effectiveAffixIds.has(right) || combinationPairs.has(pair) || combinationSources.has(sourceRef) || !Number.isFinite(breakdown.valueScore)) throw new Error("V23_SKU_COMBINATION_BREAKDOWN_INVALID");
       combinationPairs.add(pair); combinationSources.add(sourceRef);
+      combinationBreakdowns.push({ leftAffixId: left, rightAffixId: right, valueScore: breakdown.valueScore as number, sourceRef });
+    }
+    const traceEntries: Array<{
+      sequence: number; step: string; sourceRef: string; subjectIds: string[];
+      before: number; operation: string; operand: number; after: number;
+    }> = [];
+    let expectedSequence = 1;
+    for (const value of v23Array(assessment.trace, "V23_SKU_QUALITY_TRACE")) {
+      const trace = v23Record(value, "V23_SKU_QUALITY_TRACE_ENTRY");
+      v23ExactKeys(trace, ["sequence", "step", "sourceRef", "subjectIds", "before", "operation", "operand", "after"], "V23_SKU_QUALITY_TRACE_ENTRY");
+      if (trace.sequence !== expectedSequence++) throw new Error("V23_SKU_QUALITY_TRACE_SEQUENCE_INVALID");
+      if (!["affix", "combination", "function_factor", "quality_range"].includes(v23String(trace.step, "V23_SKU_QUALITY_TRACE_STEP"))
+        || !["add", "multiply", "validate"].includes(v23String(trace.operation, "V23_SKU_QUALITY_TRACE_OPERATION"))
+        || !Number.isFinite(trace.before) || !Number.isFinite(trace.operand) || !Number.isFinite(trace.after)) {
+        throw new Error("V23_SKU_QUALITY_TRACE_INVALID");
+      }
+      const sourceRef = v23String(trace.sourceRef, "V23_SKU_QUALITY_TRACE_SOURCE");
+      const subjectIds = v23Array(trace.subjectIds, "V23_SKU_QUALITY_TRACE_SUBJECTS")
+        .map((id) => v23String(id, "V23_SKU_QUALITY_TRACE_SUBJECT"));
+      traceEntries.push({
+        sequence: trace.sequence as number,
+        step: trace.step as string,
+        sourceRef,
+        subjectIds,
+        before: trace.before as number,
+        operation: trace.operation as string,
+        operand: trace.operand as number,
+        after: trace.after as number,
+      });
+    }
+    const baseAffixScore = affixBreakdowns.reduce((sum, entry) => sum + entry.valueScore, 0);
+    const combinationScore = combinationBreakdowns.reduce((sum, entry) => sum + entry.valueScore, 0);
+    const functionScoreFactor = assessment.functionScoreFactor as number;
+    const finalValueScore = (baseAffixScore + combinationScore) * functionScoreFactor;
+    if (
+      !Number.isFinite(baseAffixScore)
+      || !Number.isFinite(combinationScore)
+      || !Number.isFinite(finalValueScore)
+      || functionScoreFactor <= 0
+      || assessment.baseAffixScore !== baseAffixScore
+      || assessment.combinationScore !== combinationScore
+      || assessment.finalValueScore !== finalValueScore
+    ) throw new Error("V23_SKU_QUALITY_ARITHMETIC_MISMATCH");
+    const targetRanges = [
+      ["quality_c_green", 0, 20],
+      ["quality_b_blue", 20, 40],
+      ["quality_a_purple", 40, 65],
+      ["quality_s_orange", 65, 100],
+    ] as const;
+    const expectedRecommendation = targetRanges.find(
+      ([, min, max]) => finalValueScore >= min && finalValueScore < max,
+    )?.[0] ?? null;
+    const selectedRange = targetRanges.find(([qualityId]) => qualityId === assessment.selectedQualityId)!;
+    const expectedInSelectedRange = finalValueScore >= selectedRange[1]
+      && finalValueScore < selectedRange[2];
+    if (
+      recommended !== expectedRecommendation
+      || assessment.inSelectedQualityRange !== expectedInSelectedRange
+    ) throw new Error("V23_SKU_QUALITY_RANGE_MISMATCH");
+    const assertDerivedValidationIssue = (
+      code: string,
+      required: boolean,
+      message: string,
+    ) => {
+      const matches = validationIssues.get(code) ?? [];
+      if (
+        (required && (
+          matches.length !== 1
+          || matches[0]!.severity !== "BLOCKER"
+          || matches[0]!.gate !== "PUBLISH"
+          || matches[0]!.state !== "OPEN"
+          || matches[0]!.message !== message
+        ))
+        || (!required && matches.length !== 0)
+      ) throw new Error("V23_SKU_QUALITY_VALIDATION_SUMMARY_MISMATCH");
+    };
+    assertDerivedValidationIssue(
+      "QUALITY_SCORE_OUT_OF_RANGE",
+      expectedRecommendation === null,
+      "品质评分达到或超过 100，不生成推荐品质并阻断正式发布。",
+    );
+    assertDerivedValidationIssue(
+      "V23_QUALITY_OVERRIDE_REASON_REQUIRED",
+      overrideState !== "MATCHED" && reason === null,
+      "推荐变化后实际品质偏离新推荐，必须补充覆盖理由。",
+    );
+    let running = 0;
+    let traceIndex = 0;
+    const expectTrace = (
+      expected: Partial<(typeof traceEntries)[number]>,
+      code = "V23_SKU_QUALITY_TRACE_REPLAY_MISMATCH",
+    ) => {
+      const actual = traceEntries[traceIndex++];
+      if (!actual || Object.entries(expected).some(
+        ([key, expectedValue]) => jcsSha256Hex(actual[key as keyof typeof actual]) !== jcsSha256Hex(expectedValue),
+      )) throw new Error(code);
+    };
+    for (const entry of affixBreakdowns) {
+      expectTrace({
+        step: "affix", sourceRef: entry.sourceRef, subjectIds: [entry.sourceAffixId],
+        before: running, operation: "add", operand: entry.valueScore,
+        after: running + entry.valueScore,
+      });
+      running += entry.valueScore;
+    }
+    for (const entry of combinationBreakdowns) {
+      expectTrace({
+        step: "combination", sourceRef: entry.sourceRef,
+        subjectIds: [entry.leftAffixId, entry.rightAffixId],
+        before: running, operation: "add", operand: entry.valueScore,
+        after: running + entry.valueScore,
+      });
+      running += entry.valueScore;
+    }
+    const functionTrace = traceEntries[traceIndex];
+    if (!functionTrace || functionTrace.step !== "function_factor" || functionTrace.operation !== "multiply") {
+      throw new Error("V23_SKU_QUALITY_TRACE_REPLAY_MISMATCH");
+    }
+    expectTrace({
+      step: "function_factor", before: running, operation: "multiply",
+      operand: functionScoreFactor, after: finalValueScore,
+    });
+    expectTrace({
+      step: "quality_range",
+      sourceRef: `${assessment.qualityRangePolicyVersion}:${assessment.selectedQualityId}`,
+      subjectIds: [assessment.selectedQualityId as string],
+      before: finalValueScore,
+      operation: "validate",
+      operand: selectedRange[2],
+      after: finalValueScore,
+    });
+    if (traceIndex !== traceEntries.length) throw new Error("V23_SKU_QUALITY_TRACE_REPLAY_MISMATCH");
+    const hashPayload = { ...assessment }; delete hashPayload.inputHash;
+    v23HashOf(hashPayload, assessment.inputHash, "V23_SKU_QUALITY_INPUT_HASH");
+    const policy = resolveV23QualityPolicyById(
+      arrayOf<WorkspaceState["qualityValuePolicyDrafts"][number]>(state.qualityValuePolicyDrafts),
+      assessment.qualityRangePolicyVersion as string,
+    );
+    const canonicalFunctionProfiles = resolveV23CanonicalFunctionProfiles(
+      arrayOf<WorkspaceState["canonicalRuleSourceDrafts"][number]>(state.canonicalRuleSourceDrafts),
+      policy.sourceRevisionId,
+    );
+    const replayed = deriveV23SkuQuality({
+      skuRevisionId,
+      part,
+      entries: [...effectiveStableEntries.values()].map((entry): V23QualityEntry => ({
+        ref: entry.ref,
+        payload: entry.payload as unknown as V23QualityEntry["payload"],
+        ...(entry.localCopyId === null
+          ? {}
+          : {
+              localCopyId: entry.localCopyId,
+              copyHash: entry.copyHash ?? undefined,
+            }),
+      })),
+      policy,
+      functionProfiles: arrayOf<FunctionProfile>(state.functionProfiles),
+      canonicalFunctionProfiles,
+      selectedQualityId: assessment.selectedQualityId as never,
+      overrideReason: reason as string | null,
+      recomputeExistingSelection: true,
+    });
+    if (jcsSha256Hex(replayed) !== jcsSha256Hex(assessment)) {
+      throw new Error("V23_SKU_QUALITY_AUTHORITY_REPLAY_MISMATCH");
     }
     return true;
   };
@@ -2077,12 +2276,28 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     if (skuPatchIds.length !== 0 || modelIds.length !== 0 || entry.defaultModelId !== null) throw new Error("V23_SKU_ASSOCIATION_RESOLVER_UNAVAILABLE");
     if (!Number.isSafeInteger(entry.displayOrder) || (entry.displayOrder as number) < 0) throw new Error("V23_SKU_DISPLAY_ORDER_INVALID");
     let hasUndeclaredBandBlocker = false;
+    const validationIssues = new Map<string, Array<{
+      severity: string;
+      gate: string;
+      state: string;
+      message: string;
+    }>>();
     for (const issue of v23Array(entry.validationSummary, "V23_SKU_VALIDATION_SUMMARY")) {
       const summary = v23Record(issue, "V23_SKU_VALIDATION_ISSUE");
       v23ExactKeys(summary, ["code", "severity", "gate", "state", "message"], "V23_SKU_VALIDATION_ISSUE");
-      v23String(summary.code, "V23_SKU_VALIDATION_CODE"); v23String(summary.message, "V23_SKU_VALIDATION_MESSAGE");
+      const summaryCode = v23String(summary.code, "V23_SKU_VALIDATION_CODE");
+      const summaryMessage = v23String(summary.message, "V23_SKU_VALIDATION_MESSAGE");
       if (!(["INFO", "WARNING", "ERROR", "BLOCKER"] as const).includes(summary.severity as never) || !(["NONE", "REVIEW", "PUBLISH", "EXPORT"] as const).includes(summary.gate as never) || !(["OPEN", "ACKNOWLEDGED", "RESOLVED", "WAIVED", "STALE"] as const).includes(summary.state as never)) throw new Error("V23_SKU_VALIDATION_ISSUE_INVALID");
       if (summary.severity === "BLOCKER" && summary.state === "WAIVED") throw new Error("V23_SKU_VALIDATION_BLOCKER_WAIVED");
+      validationIssues.set(summaryCode, [
+        ...(validationIssues.get(summaryCode) ?? []),
+        {
+          severity: summary.severity as string,
+          gate: summary.gate as string,
+          state: summary.state as string,
+          message: summaryMessage,
+        },
+      ]);
       if (
         summary.code === "INVALID_NO_MATCH"
         && summary.severity === "BLOCKER"
@@ -2221,9 +2436,15 @@ function validateV23RuntimeState(state: MutableWorkspace) {
       }
     }
     for (const ref of v23Array(entry.technologyRefs, "V23_SKU_TECHNOLOGIES")) validateTechnologyRef(ref, "V23_SKU_TECHNOLOGY");
-    const assessed = validateSkuAssessment(entry.quality, `${skuId}@${revision}`, new Set(effectiveStableEntries.keys()));
+    const assessed = validateSkuAssessment(
+      entry.quality,
+      `${skuId}@${revision}`,
+      part as unknown as SeriesPartRevision,
+      effectiveStableEntries,
+      validationIssues,
+    );
     v23HashOf(v23SkuInput(entry), entry.contentHash, "V23_SKU_CONTENT_HASH");
-    if (assessed) throw new Error("V23_SKU_QUALITY_RESOLVER_UNAVAILABLE");
+    void assessed;
   }
 
   const seenSkuHeads = new Set<string>();

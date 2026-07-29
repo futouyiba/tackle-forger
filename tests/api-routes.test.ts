@@ -236,6 +236,31 @@ test("已认证整包 PUT 不能绕过 Series 领域命令", { concurrency: fals
   assert.deepEqual(payload.governedChanges, ["seriesDefinitions"]);
 });
 
+test("已认证整包 PUT 不能删除或重写 Phase A v23 治理根，并保持读取结果不变", { concurrency: false }, async () => {
+  withTrustedProxy();
+  const fields = [
+    "v23SeriesPartRevisions", "v23SeriesPartHeads", "v23SkuDrawerRevisions",
+    "v23AffixDefinitions", "v23MigrationSourceEvidence", "v23LegacyReadAdapters",
+  ] as const;
+  for (const [index, field] of fields.entries()) {
+    const current = await loadWorkspaceState();
+    const state = structuredClone(current.state) as unknown as Record<string, unknown>;
+    if (index === 0) delete state[field];
+    else state[field] = [{ forged: field }];
+    const response = await issueAndInvoke({
+      action: "save_workspace", url: "http://localhost/api/state", method: "PUT",
+      payload: { state, baseRevision: current.revision }, invoke: putState,
+    });
+    assert.equal(response.status, 422, field);
+    const payload = await response.json() as { code?: string; governedChanges?: string[] };
+    assert.equal(payload.code, "DOMAIN_COMMAND_REQUIRED", field);
+    assert.deepEqual(payload.governedChanges, [field], field);
+    const after = await loadWorkspaceState();
+    assert.equal(after.revision, current.revision, field);
+    assert.deepEqual(after.state[field], current.state[field], field);
+  }
+});
+
 test("save_workspace capability 禁用时返回403且不触发任何保存", { concurrency: false }, async () => {
   const current = await loadWorkspaceState();
   const forbidden = saveWorkspaceForbiddenResponse({

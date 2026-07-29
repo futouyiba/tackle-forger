@@ -32,6 +32,13 @@ const GOVERNED_STATE_FIELDS: readonly GovernedStateField[] = [
   })),
   { field: "seriesDefinitions", reason: "domain_command", action: "POST /api/series（create_series）", actionLabel: "使用创建 Series" },
   { field: "skuDrawers", reason: "domain_command", action: "POST /api/skus/target-pull（change_sku_target_pull）", actionLabel: "使用修改 SKU 目标拉力" },
+  // Phase A has no generic mutation endpoint for these revision/evidence roots.
+  { field: "v23SeriesPartRevisions", reason: "audit_or_reserved_identity", action: "只读：Phase A v23 Part revision 仅由受控迁移/后续专用命令写入", actionLabel: "保留 v23 Part revision；使用受控迁移或后续专用命令" },
+  { field: "v23SeriesPartHeads", reason: "audit_or_reserved_identity", action: "只读：Phase A v23 Part head 仅由受控迁移/后续专用命令写入", actionLabel: "保留 v23 Part head；使用受控迁移或后续专用命令" },
+  { field: "v23SkuDrawerRevisions", reason: "audit_or_reserved_identity", action: "只读：Phase A v23 SKU revision 仅由受控迁移/后续专用命令写入", actionLabel: "保留 v23 SKU revision；使用受控迁移或后续专用命令" },
+  { field: "v23AffixDefinitions", reason: "audit_or_reserved_identity", action: "只读：Phase A v23 Affix definition 仅由受控迁移/后续专用命令写入", actionLabel: "保留 v23 Affix definition；使用受控迁移或后续专用命令" },
+  { field: "v23MigrationSourceEvidence", reason: "audit_or_reserved_identity", action: "只读：Phase A v23 migration evidence 仅由受控迁移写入", actionLabel: "保留 v23 迁移证据；使用受控迁移" },
+  { field: "v23LegacyReadAdapters", reason: "audit_or_reserved_identity", action: "只读：Phase A v23 legacy adapter 仅由受控迁移写入", actionLabel: "保留 v23 遗留适配器；使用受控迁移" },
   { field: "patchLedger", reason: "domain_command", action: "Patch ActionCode（create/review/rebase/mirror）", actionLabel: "使用 Patch 创建、审核或 Rebase" },
   { field: "projectionPatches", reason: "legacy_history", action: "只读：遗留 ProjectionPatch 仅供迁移与审计", actionLabel: "保留原记录；通过迁移流程处理" },
   { field: "purchasableModels", reason: "domain_command", action: "Model ActionCode（edit/review/publish）", actionLabel: "使用 Model 编辑、审核或发布动作" },

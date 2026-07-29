@@ -383,7 +383,7 @@ test("v23 closes quality, technology, source-evidence, and adapter chains", () =
   const source = technology.technologies[0]!;
   technology.v23SeriesPartRevisions[0]!.technologyRefs = [{ id: source.id, revision: source.version, contentHash: "0".repeat(64) }];
   technology.v23SeriesPartRevisions[0] = withPartHashes(technology.v23SeriesPartRevisions[0]!) as SeriesPartRevision;
-  assert.throws(() => migrateWorkspaceState(technology), /V23_PART_TECHNOLOGY_UNRESOLVED/);
+  assert.throws(() => migrateWorkspaceState(technology), /V23_TECHNOLOGY_REGISTRY_UNAVAILABLE/);
 
   const evidence = directV23State();
   const raw = { schemaVersion: 22, original: true, skuDrawers: [{ id: "legacy:sku" }], seriesDefinitions: [] };
@@ -422,7 +422,7 @@ test("v23 closes project affix, local copy, SKU lifecycle, and Phase-A template 
   valid.v23SkuDrawerRevisions[0]!.match = validMatch(); valid.v23SkuDrawerRevisions[0] = withSkuHashes(valid.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
   assert.throws(() => migrateWorkspaceState(valid), /V23_TEMPLATE_REGISTRY_UNAVAILABLE/);
   const defaultModel = directV23State(); defaultModel.v23SkuDrawerRevisions[0]!.defaultModelId = "model:missing"; defaultModel.v23SkuDrawerRevisions[0] = withSkuHashes(defaultModel.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
-  assert.throws(() => migrateWorkspaceState(defaultModel), /V23_SKU_DEFAULT_MODEL_UNRESOLVED/);
+  assert.throws(() => migrateWorkspaceState(defaultModel), /V23_SKU_ASSOCIATION_RESOLVER_UNAVAILABLE/);
   const order = directV23State(); order.v23SkuDrawerRevisions[0]!.displayOrder = -1; order.v23SkuDrawerRevisions[0] = withSkuHashes(order.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
   assert.throws(() => migrateWorkspaceState(order), /V23_SKU_DISPLAY_ORDER_INVALID/);
   const status = directV23State(); status.v23SkuDrawerRevisions[0]!.status = "invalid" as never; status.v23SkuDrawerRevisions[0] = withSkuHashes(status.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
@@ -441,4 +441,40 @@ test("v23 closes project affix, local copy, SKU lifecycle, and Phase-A template 
   assert.throws(() => migrateWorkspaceState(passiveExtra), /V23_AFFIX_PASSIVE_SCHEMA_INVALID/);
   const setNan = directV23State(); (setNan.v23AffixDefinitions[0]!.payload as unknown as { operations: unknown[] }).operations[0] = { operationId: "op:set", operationIndex: 0, sourceAffixId: "affix:project", sourceAffixRevision: 1, parameterKey: "power", operation: "set", value: Number.NaN };
   assert.throws(() => migrateWorkspaceState(setNan), /V23_AFFIX_OPERATION_VALUE_INVALID/);
+});
+
+test("v23 Phase A keeps registry-dependent carriers closed and requires one head per Part", () => {
+  const unheaded = directV23State(2);
+  unheaded.v23SeriesPartHeads.pop();
+  assert.throws(() => migrateWorkspaceState(unheaded), /V23_SERIES_PART_HEAD_REQUIRED/);
+
+  const historical = directV23State();
+  historical.v23SeriesPartRevisions.push(withPartHashes({ ...historical.v23SeriesPartRevisions[0]!, revision: 2, functionIntensity: 3 }) as SeriesPartRevision);
+  assert.doesNotThrow(() => migrateWorkspaceState(historical));
+
+  const partTechnology = directV23State();
+  partTechnology.v23SeriesPartRevisions[0]!.technologyRefs = [{ id: "technology:one", revision: 1, contentHash: "a".repeat(64) }];
+  partTechnology.v23SeriesPartRevisions[0] = withPartHashes(partTechnology.v23SeriesPartRevisions[0]!) as SeriesPartRevision;
+  assert.throws(() => migrateWorkspaceState(partTechnology), /V23_TECHNOLOGY_REGISTRY_UNAVAILABLE/);
+
+  const skuTechnology = directV23State();
+  skuTechnology.v23SkuDrawerRevisions[0]!.technologyRefs = [{ id: "technology:one", revision: 1, contentHash: "a".repeat(64) }];
+  skuTechnology.v23SkuDrawerRevisions[0] = withSkuHashes(skuTechnology.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.throws(() => migrateWorkspaceState(skuTechnology), /V23_TECHNOLOGY_REGISTRY_UNAVAILABLE/);
+
+  const lifecycle = directV23State();
+  lifecycle.v23SkuDrawerRevisions[0]!.status = "approved";
+  lifecycle.v23SkuDrawerRevisions[0] = withSkuHashes(lifecycle.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.throws(() => migrateWorkspaceState(lifecycle), /V23_SKU_LIFECYCLE_UNAVAILABLE/);
+
+  const associations = directV23State();
+  associations.v23SkuDrawerRevisions[0]!.modelIds = ["model:one"];
+  associations.v23SkuDrawerRevisions[0] = withSkuHashes(associations.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.throws(() => migrateWorkspaceState(associations), /V23_SKU_ASSOCIATION_RESOLVER_UNAVAILABLE/);
+
+  const blockedLifecycle = directV23State();
+  blockedLifecycle.v23SkuDrawerRevisions[0]!.status = "superseded";
+  blockedLifecycle.v23SkuDrawerRevisions[0]!.validationSummary = [{ code: "block", severity: "BLOCKER", gate: "PUBLISH", state: "OPEN", message: "historical diagnostic" }];
+  blockedLifecycle.v23SkuDrawerRevisions[0] = withSkuHashes(blockedLifecycle.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.doesNotThrow(() => migrateWorkspaceState(blockedLifecycle));
 });

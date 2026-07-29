@@ -1780,19 +1780,11 @@ function validateV23RuntimeState(state: MutableWorkspace) {
   }
   const hasAffixRef = (ref: { id: string; revision: number; contentHash: string }) =>
     affixRefs.get(ref.id)?.get(ref.revision) === ref.contentHash;
-  const technologies = new Map<string, Map<number, string>>();
-  for (const value of arrayOf<unknown>(state.technologies)) {
-    const technology = v23Record(value, "V23_TECHNOLOGY");
-    const id = v23String(technology.id, "V23_TECHNOLOGY_ID");
-    const version = v23Revision(technology.version, "V23_TECHNOLOGY_VERSION");
-    const revisions = technologies.get(id) ?? new Map<number, string>();
-    if (revisions.has(version)) throw new Error("V23_TECHNOLOGY_ID_REVISION_DUPLICATE");
-    revisions.set(version, jcsSha256Hex(technology));
-    technologies.set(id, revisions);
-  }
+  // Phase A has no immutable v23 Technology registry. Legacy Technology
+  // objects cannot be JCS-parsed into an authority that resolves new refs.
   const validateTechnologyRef = (value: unknown, code: string) => {
-    const ref = validateV23StableRef(value, code);
-    if (technologies.get(ref.id)?.get(ref.revision) !== ref.contentHash) throw new Error(`${code}_UNRESOLVED`);
+    validateV23StableRef(value, code);
+    throw new Error("V23_TECHNOLOGY_REGISTRY_UNAVAILABLE");
   };
 
   const partByIdAndRevision = new Map<string, Map<number, Record<string, unknown>>>();
@@ -1842,6 +1834,9 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     const group = currentPartsBySeries.get(seriesId) ?? []; group.push(current); currentPartsBySeries.set(seriesId, group);
   }
   if (parts.length && heads.length === 0) throw new Error("V23_SERIES_PART_HEAD_REQUIRED");
+  for (const [partId, seriesId] of partSeriesById) {
+    if (!seenHeads.has(`${seriesId}\u0000${partId}`)) throw new Error("V23_SERIES_PART_HEAD_REQUIRED");
+  }
   for (const group of currentPartsBySeries.values()) {
     if (group.length < 1 || group.length > 3) throw new Error("V23_SERIES_PART_COUNT_INVALID");
     const kinds = new Set(group.map((entry) => entry.partType));
@@ -1894,7 +1889,8 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     if (new Set(skuPatchIds).size !== skuPatchIds.length) throw new Error("V23_SKU_PATCH_ID_DUPLICATE");
     const modelIds = v23Array(entry.modelIds, "V23_SKU_MODEL_IDS").map((id) => v23String(id, "V23_SKU_MODEL_ID"));
     if (new Set(modelIds).size !== modelIds.length) throw new Error("V23_SKU_MODEL_ID_DUPLICATE");
-    if (entry.defaultModelId !== null && (!modelIds.includes(v23String(entry.defaultModelId, "V23_SKU_DEFAULT_MODEL_ID")))) throw new Error("V23_SKU_DEFAULT_MODEL_UNRESOLVED");
+    if (entry.defaultModelId !== null) v23String(entry.defaultModelId, "V23_SKU_DEFAULT_MODEL_ID");
+    if (skuPatchIds.length !== 0 || modelIds.length !== 0 || entry.defaultModelId !== null) throw new Error("V23_SKU_ASSOCIATION_RESOLVER_UNAVAILABLE");
     if (!Number.isSafeInteger(entry.displayOrder) || (entry.displayOrder as number) < 0) throw new Error("V23_SKU_DISPLAY_ORDER_INVALID");
     for (const issue of v23Array(entry.validationSummary, "V23_SKU_VALIDATION_SUMMARY")) {
       const summary = v23Record(issue, "V23_SKU_VALIDATION_ISSUE");
@@ -1903,6 +1899,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
       if (!(["INFO", "WARNING", "ERROR", "BLOCKER"] as const).includes(summary.severity as never) || !(["NONE", "REVIEW", "PUBLISH", "EXPORT"] as const).includes(summary.gate as never) || !(["OPEN", "ACKNOWLEDGED", "RESOLVED", "WAIVED", "STALE"] as const).includes(summary.state as never)) throw new Error("V23_SKU_VALIDATION_ISSUE_INVALID");
     }
     if (!(["draft", "approved", "published", "superseded"] as const).includes(entry.status as never)) throw new Error("V23_SKU_STATUS_INVALID");
+    if (!["draft", "superseded"].includes(entry.status as string)) throw new Error("V23_SKU_LIFECYCLE_UNAVAILABLE");
     const match = v23Record(entry.match, "V23_SKU_MATCH");
     const status = v23String(match.status, "V23_SKU_MATCH_STATUS");
     const validateKey = (value: unknown, code: string) => {

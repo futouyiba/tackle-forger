@@ -15,6 +15,9 @@ export function v23MatchedTemplateKey(part: Pick<V23MatchedTemplateKey, "partTyp
 }
 
 export function matchV23FunctionTemplate(key: V23MatchedTemplateKey, candidates: readonly V23FunctionTemplateCandidate[]): V23SkuMatch {
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== "object" || !candidate.ref || !candidate.key || !/^[a-f0-9]{64}$/.test(candidate.ref.contentHash) || !Number.isFinite(candidate.baselinePullKg) || candidate.baselinePullKg <= 0) throw new Error("V23_FUNCTION_TEMPLATE_CANDIDATE_INVALID");
+  }
   const inputFingerprint = jcsSha256Hex(key);
   const same = candidates.filter((candidate) =>
     candidate.key.partType === key.partType && candidate.key.weightBandId === key.weightBandId &&

@@ -68,6 +68,7 @@ import { deterministicHash } from "./rule-kernel";
 import { jcsSha256Hex } from "./canonical-json";
 import { projectShareLinkHistoryEntry } from "./data-sources";
 import { createFiveAxisDispositionCatalogRevision, createFormalFiveAxisVertexSet } from "./five-axis-formal";
+import { deriveV23SkuPull, type V23ResolvedAffix } from "./v23-sku-derivation";
 
 export const CURRENT_WORKSPACE_SCHEMA_VERSION = 23;
 
@@ -1828,7 +1829,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
   const skus = v23Array(state.v23SkuDrawerRevisions, "V23_SKUS");
   const skuHeads = v23Array(state.v23SkuDrawerHeads, "V23_SKU_HEADS");
   const affixes = v23Array(state.v23AffixDefinitions, "V23_AFFIX_DEFINITIONS");
-  const functionTemplates = Array.isArray(state.v23FunctionTemplates) ? state.v23FunctionTemplates : [];
+  const functionTemplates = state.v23FunctionTemplates === undefined ? [] : v23Array(state.v23FunctionTemplates, "V23_FUNCTION_TEMPLATES");
   const evidence = v23Array(state.v23MigrationSourceEvidence, "V23_SOURCE_EVIDENCE");
   const adapters = v23Array(state.v23LegacyReadAdapters, "V23_LEGACY_ADAPTERS");
   const publishedRuleSetIds = new Map<string, number>();
@@ -1921,6 +1922,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
   }
   const currentPartsBySeries = new Map<string, Record<string, unknown>[]>();
   const templatesByKey = new Map<string, Array<{ templateId: string; revisionId: string; contentHash: string; baselinePullKg: number }>>();
+  const templateRefs = new Map<string, string>();
   for (const value of functionTemplates) {
     const template = v23Record(value, "V23_FUNCTION_TEMPLATE");
     v23ExactKeys(template, ["ref", "key", "baselinePullKg"], "V23_FUNCTION_TEMPLATE");
@@ -1933,6 +1935,10 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     v23ExactKeys(key, ["partType", "weightBandId", "fishingMethodId", "materialTypeId", "functionProfileId", "functionIntensity"], "V23_FUNCTION_TEMPLATE_KEY");
     if (!(["rod", "reel", "line"] as const).includes(key.partType as "rod" | "reel" | "line") || !Number.isInteger(key.functionIntensity) || !(key.functionIntensity === 1 || key.functionIntensity === 2 || key.functionIntensity === 3) || Object.values(key).some((v) => typeof v === "string" && v.length === 0) || !Number.isFinite(template.baselinePullKg) || (template.baselinePullKg as number) <= 0) throw new Error("V23_FUNCTION_TEMPLATE_INVALID");
     const keyHash = jcsSha256Hex(key);
+    const immutableRowHash = jcsSha256Hex({ ref: { templateId, revisionId, contentHash }, key, baselinePullKg: template.baselinePullKg });
+    const refIdentity = `${templateId}\u0000${revisionId}`;
+    if (templateRefs.has(refIdentity) && templateRefs.get(refIdentity) !== immutableRowHash) throw new Error("V23_FUNCTION_TEMPLATE_REF_CONFLICT");
+    templateRefs.set(refIdentity, immutableRowHash);
     const candidates = templatesByKey.get(keyHash) ?? [];
     if (candidates.some((candidate) => candidate.templateId === templateId && candidate.revisionId === revisionId)) throw new Error("V23_FUNCTION_TEMPLATE_DUPLICATE");
     candidates.push({ templateId, revisionId, contentHash, baselinePullKg: template.baselinePullKg as number }); templatesByKey.set(keyHash, candidates);
@@ -2081,6 +2087,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
       if (!( ["rod", "reel", "line"] as const).includes(key.partType as "rod" | "reel" | "line") || key.weightBandId !== weightBandId || key.fishingMethodId !== part.fishingMethodId || key.materialTypeId !== part.materialTypeId || key.functionProfileId !== part.functionProfileId || key.functionIntensity !== part.functionIntensity) throw new Error("V23_SKU_MATCHED_KEY_MISMATCH");
       return key;
     };
+    let matchedTemplateBaseline: number | null = null;
     if (status === "VALID") {
       v23ExactKeys(match, ["status", "functionTemplateRef", "matchedKey", "inputFingerprint"], "V23_SKU_MATCH");
       const template = v23Record(match.functionTemplateRef, "V23_TEMPLATE_REF");
@@ -2094,6 +2101,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
       if (candidates.length !== 1) throw new Error(candidates.length === 0 ? "V23_TEMPLATE_REGISTRY_NO_MATCH" : "V23_TEMPLATE_REGISTRY_AMBIGUOUS");
       const candidate = candidates[0]!;
       if (candidate.templateId !== template.templateId || candidate.revisionId !== template.revisionId || candidate.contentHash !== template.contentHash) throw new Error("V23_TEMPLATE_REGISTRY_REF_MISMATCH");
+      matchedTemplateBaseline = candidate.baselinePullKg;
     } else if (["INVALID_NO_MATCH", "INVALID_AMBIGUOUS"].includes(status)) {
       v23ExactKeys(match, ["status", "attemptedKey", "inputFingerprint"], "V23_SKU_MATCH");
       const key = validateKey(match.attemptedKey, "V23_SKU_ATTEMPTED_KEY");
@@ -2150,6 +2158,20 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     }
     const effectiveContributions = new Map<string, Set<string>>();
     for (const effective of effectiveStableEntries.values()) assertSemanticContribution(effectiveContributions, effective.payload, "V23_SKU_EFFECTIVE_ENTRY");
+    // A persisted successful derivation must at least bind the actual settled
+    // stable identities, not an arbitrary subset supplied by a caller.
+    if (entry.derivation !== undefined) {
+      const persisted = v23Record(entry.derivation, "V23_SKU_DERIVATION_REPLAY");
+      if (persisted.status === "VALID") {
+        const expectedIds = [...effectiveStableEntries.keys()].sort();
+        const actualIds = v23Array(persisted.effectiveEntryIds, "V23_SKU_DERIVATION_REPLAY_IDS").map((id) => v23String(id, "V23_SKU_DERIVATION_REPLAY_ID")).sort();
+        if (jcsSha256Hex(expectedIds) !== jcsSha256Hex(actualIds)) throw new Error("V23_SKU_DERIVATION_EFFECTIVE_IDS_MISMATCH");
+        if (matchedTemplateBaseline === null) throw new Error("V23_SKU_DERIVATION_MATCH_REQUIRED");
+        const replayEntries: V23ResolvedAffix[] = [...effectiveStableEntries.values()].map((effective) => ({ ref: effective.ref, payload: effective.payload as never }));
+        const replay = deriveV23SkuPull(matchedTemplateBaseline, replayEntries);
+        if (replay.status !== "VALID" || replay.baselinePullKg !== persisted.baselinePullKg || replay.targetPullKg !== persisted.targetPullKg || jcsSha256Hex(replay.trace) !== jcsSha256Hex(persisted.trace) || replay.inputHash !== persisted.inputHash) throw new Error("V23_SKU_DERIVATION_REPLAY_MISMATCH");
+      }
+    }
     for (const ref of v23Array(entry.technologyRefs, "V23_SKU_TECHNOLOGIES")) validateTechnologyRef(ref, "V23_SKU_TECHNOLOGY");
     const assessed = validateSkuAssessment(entry.quality, `${skuId}@${revision}`, new Set(effectiveStableEntries.keys()));
     v23HashOf(v23SkuInput(entry), entry.contentHash, "V23_SKU_CONTENT_HASH");

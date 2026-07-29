@@ -8,7 +8,7 @@ export function selectCurrentPublishedWeightTemplateDraftId(state: WorkspaceStat
   return current.length === 1 ? current[0]!.weightTemplateDraftId : undefined;
 }
 
-export function resolveV23CatalogOrder(templates: readonly Array<{ id?: unknown; sourceRow?: unknown }>): string[] | undefined {
+export function resolveV23CatalogOrder(templates: ReadonlyArray<{ id?: unknown; sourceRow?: unknown }>): string[] | undefined {
   if (!templates.length) return undefined;
   const valid = templates.map((entry) => {
     if (typeof entry.id !== "string" || !entry.id || entry.id.trim() !== entry.id || !Number.isSafeInteger(entry.sourceRow) || (entry.sourceRow as number) < 1) return undefined;

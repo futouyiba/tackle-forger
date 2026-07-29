@@ -103,7 +103,7 @@ test("flat pools are directional binary64 folds with replayable operation traces
   ] as never;
   const result = deriveV23SkuPull(10, [{ ref, payload: directional }]);
   assert.equal(result.status, "VALID");
-  if (result.status === "VALID") { assert.equal(result.targetPullKg, 10); assert.deepEqual(result.trace.map((step) => step.operationId), ["up-big", "down-big", "up-one", "v23:flat-pool-settlement"]); assert.equal(result.trace.at(-1)!.affixId, null); }
+  if (result.status === "VALID") { assert.equal(result.targetPullKg, 10); assert.deepEqual(result.trace.map((step) => step.operationId), ["v23:flat-settlement"]); assert.equal(result.trace[0]!.beforeKg, 10); assert.equal(result.trace[0]!.afterKg, 10); assert.deepEqual(result.trace[0]!.flatComponents?.map((component) => component.operationId), ["up-big", "down-big", "up-one"]); }
 });
 
 test("set is a terminally connected trace step", () => {

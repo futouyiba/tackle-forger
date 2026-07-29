@@ -2048,7 +2048,9 @@ function validateV23RuntimeState(state: MutableWorkspace) {
   const skuIds = new Map<string, Set<number>>(); let currentSkuId = "";
   for (const value of skus) {
     const entry = v23Record(value, "V23_SKU");
-    v23ExactKeys(entry, ["skuId", "revision", "seriesId", "partId", "partRevision", "weightBandId", "match", "removedInheritedEntryIds", "addedEntryRefs", "localEntryCopies", "technologyRefs", "quality", "skuPatchIds", "modelIds", "defaultModelId", "displayOrder", "validationSummary", "status", "contentHash"], "V23_SKU");
+    const skuKeys = ["skuId", "revision", "seriesId", "partId", "partRevision", "weightBandId", "match", "removedInheritedEntryIds", "addedEntryRefs", "localEntryCopies", "technologyRefs", "quality", "skuPatchIds", "modelIds", "defaultModelId", "displayOrder", "validationSummary", "status", "contentHash"];
+    if (Object.prototype.hasOwnProperty.call(entry, "derivation")) skuKeys.push("derivation");
+    v23ExactKeys(entry, skuKeys, "V23_SKU");
     const skuId = v23String(entry.skuId, "V23_SKU_ID");
     currentSkuId = skuId;
     revisionCopyIds = new Set<string>();
@@ -2115,11 +2117,11 @@ function validateV23RuntimeState(state: MutableWorkspace) {
       if (derivationStatus === "UNRESOLVED") v23ExactKeys(derivation, ["status"], "V23_SKU_DERIVATION");
       else if (derivationStatus === "INVALID") { v23ExactKeys(derivation, ["status", "code", "inputHash"], "V23_SKU_DERIVATION"); v23String(derivation.code, "V23_SKU_DERIVATION_CODE"); v23Hash(derivation.inputHash, "V23_SKU_DERIVATION_INPUT_HASH"); }
       else if (derivationStatus === "VALID") {
-        v23ExactKeys(derivation, ["status", "baselinePullKg", "targetPullKg", "effectiveEntryIds", "trace", "inputHash"], "V23_SKU_DERIVATION");
+        v23ExactKeys(derivation, ["status", "templateRef", "reductionPolicyRef", "baselinePullKg", "targetPullKg", "effectiveEntries", "trace", "inputHash"], "V23_SKU_DERIVATION");
         if (!Number.isFinite(derivation.baselinePullKg) || !Number.isFinite(derivation.targetPullKg) || (derivation.baselinePullKg as number) <= 0 || (derivation.targetPullKg as number) <= 0) throw new Error("V23_SKU_DERIVATION_PULL_INVALID");
-        const ids = v23Array(derivation.effectiveEntryIds, "V23_SKU_DERIVATION_IDS").map((id) => v23String(id, "V23_SKU_DERIVATION_ID")); if (new Set(ids).size !== ids.length) throw new Error("V23_SKU_DERIVATION_ID_DUPLICATE");
+        const entries = v23Array(derivation.effectiveEntries, "V23_SKU_DERIVATION_ENTRIES"); if (entries.length === 0) throw new Error("V23_SKU_DERIVATION_ENTRIES_INVALID");
         let prior = derivation.baselinePullKg as number;
-        for (const stepValue of v23Array(derivation.trace, "V23_SKU_DERIVATION_TRACE")) { const step = v23Record(stepValue, "V23_SKU_DERIVATION_STEP"); v23ExactKeys(step, ["affixId", "operationId", "beforeKg", "afterKg"], "V23_SKU_DERIVATION_STEP"); v23String(step.affixId, "V23_SKU_DERIVATION_AFFIX"); v23String(step.operationId, "V23_SKU_DERIVATION_OPERATION"); if (!Number.isFinite(step.beforeKg) || !Number.isFinite(step.afterKg) || step.beforeKg !== prior || (step.afterKg as number) <= 0) throw new Error("V23_SKU_DERIVATION_TRACE_INVALID"); prior = step.afterKg as number; }
+        for (const stepValue of v23Array(derivation.trace, "V23_SKU_DERIVATION_TRACE")) { const step = v23Record(stepValue, "V23_SKU_DERIVATION_STEP"); if (!Number.isFinite(step.beforeKg) || !Number.isFinite(step.afterKg) || step.beforeKg !== prior || (step.afterKg as number) <= 0) throw new Error("V23_SKU_DERIVATION_TRACE_INVALID"); prior = step.afterKg as number; }
         if (prior !== derivation.targetPullKg) throw new Error("V23_SKU_DERIVATION_TRACE_TERMINAL_MISMATCH"); v23Hash(derivation.inputHash, "V23_SKU_DERIVATION_INPUT_HASH");
       } else throw new Error("V23_SKU_DERIVATION_STATUS_INVALID");
     }
@@ -2164,11 +2166,16 @@ function validateV23RuntimeState(state: MutableWorkspace) {
       const persisted = v23Record(entry.derivation, "V23_SKU_DERIVATION_REPLAY");
       if (persisted.status === "VALID") {
         const expectedIds = [...effectiveStableEntries.keys()].sort();
-        const actualIds = v23Array(persisted.effectiveEntryIds, "V23_SKU_DERIVATION_REPLAY_IDS").map((id) => v23String(id, "V23_SKU_DERIVATION_REPLAY_ID")).sort();
+        const actualIds = v23Array(persisted.effectiveEntries, "V23_SKU_DERIVATION_REPLAY_IDS").map((value) => v23String(v23Record(value, "V23_SKU_DERIVATION_REPLAY_ENTRY").ref && v23Record(v23Record(value, "V23_SKU_DERIVATION_REPLAY_ENTRY").ref, "V23_SKU_DERIVATION_REPLAY_REF").id, "V23_SKU_DERIVATION_REPLAY_ID")).sort();
         if (jcsSha256Hex(expectedIds) !== jcsSha256Hex(actualIds)) throw new Error("V23_SKU_DERIVATION_EFFECTIVE_IDS_MISMATCH");
         if (matchedTemplateBaseline === null) throw new Error("V23_SKU_DERIVATION_MATCH_REQUIRED");
+        if (jcsSha256Hex(persisted.templateRef) !== jcsSha256Hex(match.functionTemplateRef)) throw new Error("V23_SKU_DERIVATION_TEMPLATE_MISMATCH");
+        const policyRef = v23Record(persisted.reductionPolicyRef, "V23_SKU_DERIVATION_POLICY_REF");
+        v23ExactKeys(policyRef, ["id", "version", "contentHash"], "V23_SKU_DERIVATION_POLICY_REF");
+        const policy = arrayOf<WorkspaceState["reductionStackingPolicyVersions"][number]>(state.reductionStackingPolicyVersions).find((candidate) => candidate.id === policyRef.id && candidate.version === policyRef.version && candidate.contentHash === policyRef.contentHash && candidate.status === "published");
+        if (!policy) throw new Error("V23_OPEN_001_POLICY_UNRESOLVED");
         const replayEntries: V23ResolvedAffix[] = [...effectiveStableEntries.values()].map((effective) => ({ ref: effective.ref, payload: effective.payload as never }));
-        const replay = deriveV23SkuPull(matchedTemplateBaseline, replayEntries);
+        const replay = deriveV23SkuPull(matchedTemplateBaseline, replayEntries, { formal: true, publishedReductionPolicy: policy });
         if (replay.status !== "VALID" || replay.baselinePullKg !== persisted.baselinePullKg || replay.targetPullKg !== persisted.targetPullKg || jcsSha256Hex(replay.trace) !== jcsSha256Hex(persisted.trace) || replay.inputHash !== persisted.inputHash) throw new Error("V23_SKU_DERIVATION_REPLAY_MISMATCH");
       }
     }

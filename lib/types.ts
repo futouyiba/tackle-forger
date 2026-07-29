@@ -1233,9 +1233,12 @@ export interface V23FunctionTemplateDefinition {
   baselinePullKg: number;
 }
 
+export interface V23ReductionPolicyRef { id: string; version: string; contentHash: string; }
+export interface V23SkuEffectiveEntryEvidence { ref: V23StableContentRef; localCopyId: string | null; copyHash: string | null; payloadHash: string; }
+export interface V23SkuPullTraceEvidence { source: V23SkuEffectiveEntryEvidence; operationId: string; operationIndex: number; operation: "percent_adjust" | "flat_adjust" | "clamp_add"; direction: "increase" | "decrease"; magnitude: number; clampMin: number | null; clampMax: number | null; beforeKg: number; afterKg: number; }
 export type V23SkuPullDerivationEvidence =
   | { status: "UNRESOLVED" }
-  | { status: "VALID"; baselinePullKg: number; targetPullKg: number; effectiveEntryIds: string[]; trace: Array<{ affixId: string; operationId: string; beforeKg: number; afterKg: number }>; inputHash: string }
+  | { status: "VALID"; templateRef: V23FunctionTemplateRef; reductionPolicyRef: V23ReductionPolicyRef; baselinePullKg: number; targetPullKg: number; effectiveEntries: V23SkuEffectiveEntryEvidence[]; trace: V23SkuPullTraceEvidence[]; inputHash: string }
   | { status: "INVALID"; code: string; inputHash: string };
 
 export interface V23MatchedTemplateKey {

@@ -26,5 +26,5 @@ test("formal decrease requires the published OPEN-001 policy version", () => {
   (decrease.operations[0]! as Extract<typeof decrease.operations[number], { direction: "increase" | "decrease" }>).direction = "decrease";
   const entries = [{ ref, payload: decrease }];
   assert.deepEqual(deriveV23SkuPull(5, entries, { formal: true }).status, "INVALID");
-  assert.equal(deriveV23SkuPull(5, entries, { formal: true, publishedReductionPolicyVersion: "policy:1" }).status, "VALID");
+  assert.equal(deriveV23SkuPull(5, entries, { formal: true, publishedReductionPolicy: { id: "policy:1", version: "v1", contentHash: "b".repeat(64), status: "published", strategy: "bidirectional_ratio", numericContract: "ieee754-binary64-v1" } }).status, "VALID");
 });

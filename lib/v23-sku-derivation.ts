@@ -1,15 +1,15 @@
-import type { V23ProjectAffixPayload, V23StableContentRef } from "./types";
+import type { ReductionStackingPolicyVersion, V23ProjectAffixPayload, V23StableContentRef } from "./types";
 import { jcsSha256Hex } from "./canonical-json";
 
 export interface V23ResolvedAffix { ref: V23StableContentRef; payload: V23ProjectAffixPayload; localCopyId?: string; copyHash?: string; }
-export interface V23PullTraceStep { affixId: string; operationId: string; beforeKg: number; afterKg: number; }
+export interface V23PullTraceStep { affixId: string; operationId: string; operationIndex: number; operation: "percent_adjust" | "flat_adjust" | "clamp_add"; direction: "increase" | "decrease"; magnitude: number; clampMin: number | null; clampMax: number | null; beforeKg: number; afterKg: number; }
 export type V23SkuPullDerivation =
   | { status: "VALID"; baselinePullKg: number; targetPullKg: number; effectiveEntryIds: string[]; trace: V23PullTraceStep[]; inputHash: string }
   | { status: "INVALID"; code: string; inputHash: string };
 
 export type V23CanonicalModelPatchOperation = "set" | "add" | "multiply" | "clear";
 export interface V23ModelPatchInput { operation: V23CanonicalModelPatchOperation; parameterKey: string; }
-export interface V23DerivationOptions { formal?: boolean; publishedReductionPolicyVersion?: string | null; }
+export interface V23DerivationOptions { formal?: boolean; publishedReductionPolicy?: Pick<ReductionStackingPolicyVersion, "id" | "version" | "contentHash" | "status" | "strategy" | "numericContract"> | null; }
 
 const V23_STRUCTURAL_PULL_KEYS: Record<"rod" | "reel" | "line", string> = {
   rod: "rodPullKg", reel: "reelPullKg", line: "linePullKg",
@@ -48,30 +48,31 @@ export function v23EffectiveEntries(inherited: readonly V23ResolvedAffix[], remo
 }
 
 export function deriveV23SkuPull(baselinePullKg: number, entries: readonly V23ResolvedAffix[], options: V23DerivationOptions = {}): V23SkuPullDerivation {
-  const inputHash = jcsSha256Hex({ baselinePullKg, entries: entries.map((e) => ({ ref: e.ref, localCopyId: e.localCopyId ?? null, copyHash: e.copyHash ?? null, payload: e.payload })) });
+  const inputHash = jcsSha256Hex({ baselinePullKg, policy: options.publishedReductionPolicy ?? null, entries: entries.map((e) => ({ ref: e.ref, localCopyId: e.localCopyId ?? null, copyHash: e.copyHash ?? null, payload: e.payload })) });
   if (!Number.isFinite(baselinePullKg) || baselinePullKg <= 0) return { status: "INVALID", code: "V23_TEMPLATE_PULL_INVALID", inputHash };
+  if (options.formal && (!options.publishedReductionPolicy || options.publishedReductionPolicy.status !== "published" || options.publishedReductionPolicy.strategy !== "bidirectional_ratio" || options.publishedReductionPolicy.numericContract !== "ieee754-binary64-v1")) return { status: "INVALID", code: "V23_OPEN_001_POLICY_VERSION_REQUIRED", inputHash };
   let value = baselinePullKg;
   const trace: V23PullTraceStep[] = [];
-  for (const entry of entries) {
-    if (!entry.payload.enabled || entry.payload.category !== "attribute") continue;
-    const operationIds = new Set<string>(); const indices = new Set<number>();
-    const operations = [...entry.payload.operations].sort((left, right) => left.operationIndex - right.operationIndex);
-    for (const operation of operations) {
-      if (operationIds.has(operation.operationId) || indices.has(operation.operationIndex)) return { status: "INVALID", code: "V23_OPERATION_IDENTITY_DUPLICATE", inputHash };
-      operationIds.add(operation.operationId); indices.add(operation.operationIndex);
-      const op = operation;
+  const ordered = entries.flatMap((entry) => entry.payload.enabled && entry.payload.category === "attribute" ? entry.payload.operations.map((operation) => ({ entry, operation })) : []).sort((left, right) => left.entry.ref.id.localeCompare(right.entry.ref.id) || left.entry.ref.revision - right.entry.ref.revision || left.operation.operationIndex - right.operation.operationIndex || left.operation.operationId.localeCompare(right.operation.operationId));
+  let bonus = 0; let reduction = 0; const later: typeof ordered = [];
+  for (const { entry, operation: op } of ordered) {
       if (op.parameterKey !== "pull" && op.parameterKey !== "targetPullKg") continue;
-      const beforeKg = value;
       if (op.operation === "set" || op.operation === "enum_add") return { status: "INVALID", code: "V23_DIRECT_PULL_PATCH_FORBIDDEN", inputHash };
-      if (options.formal && op.direction === "decrease" && !options.publishedReductionPolicyVersion) return { status: "INVALID", code: "V23_OPEN_001_POLICY_VERSION_REQUIRED", inputHash };
-      const signed = op.direction === "increase" ? op.magnitude : -op.magnitude;
+      if (op.operation === "percent_adjust") { if (op.direction === "increase") bonus += op.magnitude; else reduction += op.magnitude; continue; }
+      later.push({ entry, operation: op });
+  }
+  value = baselinePullKg * (1 + bonus) / (1 + reduction);
+  if (!Number.isFinite(value) || value <= 0) return { status: "INVALID", code: "V23_PULL_DERIVATION_NON_FINITE", inputHash };
+  for (const { entry, operation: op } of later) {
+      const numeric = op as Extract<typeof op, { direction: "increase" | "decrease" }>;
+      const beforeKg = value;
+      const signed = numeric.direction === "increase" ? numeric.magnitude : -numeric.magnitude;
       if (op.operation === "percent_adjust") value *= 1 + signed / 100;
       else if (op.operation === "flat_adjust") value += signed;
       else if (op.operation === "clamp_add") value = Math.min(op.clampMax, Math.max(op.clampMin, value + signed));
       else return { status: "INVALID", code: "V23_DIRECT_PULL_PATCH_FORBIDDEN", inputHash };
       if (!Number.isFinite(value) || value <= 0) return { status: "INVALID", code: "V23_PULL_DERIVATION_NON_FINITE", inputHash };
-      trace.push({ affixId: entry.ref.id, operationId: op.operationId, beforeKg, afterKg: value });
-    }
+      trace.push({ affixId: entry.ref.id, operationId: numeric.operationId, operationIndex: numeric.operationIndex, operation: numeric.operation, direction: numeric.direction, magnitude: numeric.magnitude, clampMin: numeric.operation === "clamp_add" ? numeric.clampMin : null, clampMax: numeric.operation === "clamp_add" ? numeric.clampMax : null, beforeKg, afterKg: value });
   }
   return { status: "VALID", baselinePullKg, targetPullKg: value, effectiveEntryIds: entries.map((e) => e.ref.id), trace, inputHash: jcsSha256Hex({ inputHash, targetPullKg: value, trace }) };
 }

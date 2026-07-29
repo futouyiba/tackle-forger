@@ -10,6 +10,7 @@ import { POST as importFile } from "../app/api/import-file/route";
 import { POST as accessDataSources } from "../app/api/data-sources/route";
 import { GET as inspectWorkbook } from "../app/api/feishu-workbook/route";
 import { POST as configExport } from "../app/api/config-export/route";
+import { POST as v23Actions } from "../app/api/v23/actions/route";
 import { POST as postAssessment } from "../app/api/ai/assessments/route";
 import { GET as startLogin } from "../app/api/auth/feishu/start/route";
 import { requestUser } from "../lib/auth";
@@ -355,9 +356,10 @@ test("所有业务 API 对未登录统一返回 401，而不是服务不可用",
       accessDataSources(new NextRequest("http://localhost/api/data-sources", { method: "POST" })),
       inspectWorkbook(new NextRequest("http://localhost/api/feishu-workbook")),
       configExport(new NextRequest("http://localhost/api/config-export", { method: "POST" })),
+      v23Actions(new NextRequest("http://localhost/api/v23/actions", { method: "POST" })),
     ];
     const responses = await Promise.all(requests);
-    assert.deepEqual(responses.map((response) => response.status), [401, 401, 401, 401, 401, 401]);
+    assert.deepEqual(responses.map((response) => response.status), [401, 401, 401, 401, 401, 401, 401]);
   });
 });
 

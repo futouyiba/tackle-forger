@@ -78,11 +78,11 @@ test("受治理边界覆盖命令、发布历史、审计与永久身份，且�
   const current = createSeedState();
   const cases: Array<{ field: string; action: string }> = [
     { field: "patchLedger", action: "Patch ActionCode（create/review/rebase/mirror）" },
-    { field: "v23SeriesPartRevisions", action: "只读：Phase A v23 Part revision 仅由受控迁移/后续专用命令写入" },
-    { field: "v23SeriesPartHeads", action: "只读：Phase A v23 Part head 仅由受控迁移/后续专用命令写入" },
-    { field: "v23SkuDrawerRevisions", action: "只读：Phase A v23 SKU revision 仅由受控迁移/后续专用命令写入" },
-    { field: "v23SkuDrawerHeads", action: "只读：Phase A v23 SKU head 仅由受控迁移/后续专用命令写入" },
-    { field: "v23AffixDefinitions", action: "只读：Phase A v23 Affix definition 仅由受控迁移/后续专用命令写入" },
+    { field: "v23SeriesPartRevisions", action: "POST /api/v23/actions（create_series / update_part_configuration）" },
+    { field: "v23SeriesPartHeads", action: "POST /api/v23/actions（create_series / update_part_configuration）" },
+    { field: "v23SkuDrawerRevisions", action: "POST /api/v23/actions（create_sku / SKU 词条动作）" },
+    { field: "v23SkuDrawerHeads", action: "POST /api/v23/actions（create_sku / SKU 词条动作）" },
+    { field: "v23AffixDefinitions", action: "POST /api/v23/actions（create_project_affix）" },
     { field: "v23MigrationSourceEvidence", action: "只读：Phase A v23 migration evidence 仅由受控迁移写入" },
     { field: "v23LegacyReadAdapters", action: "只读：Phase A v23 legacy adapter 仅由受控迁移写入" },
     { field: "projectionPatches", action: "只读：遗留 ProjectionPatch 仅供迁移与审计" },

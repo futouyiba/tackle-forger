@@ -10,6 +10,7 @@ import { POST as issueActionCommand } from "../app/api/action-commands/route";
 import { POST as accessDataSources } from "../app/api/data-sources/route";
 import { POST as mutateWorkbook } from "../app/api/feishu-workbook/route";
 import { POST as importFile } from "../app/api/import-file/route";
+import { POST as v23Actions } from "../app/api/v23/actions/route";
 import { POST as createSeries } from "../app/api/series/route";
 import { POST as assessWithAI } from "../app/api/ai/assessments/route";
 import { POST as changeSkuTargetPull } from "../app/api/skus/target-pull/route";
@@ -712,6 +713,17 @@ test("其余工作区与文件写入口同样拒绝缺 payload ref 的直传请�
       method: "POST",
       headers: formAuthHeaders,
       body: form,
+    })),
+    v23Actions(new NextRequest("http://localhost/api/v23/actions", {
+      method: "POST",
+      headers: authHeaders,
+      body: JSON.stringify({
+        action: "create_sku",
+        payload: {
+          skuId: "sku:raw-bypass",
+          partId: "part:raw-bypass",
+        },
+      }),
     })),
   ]);
   for (const response of responses) {

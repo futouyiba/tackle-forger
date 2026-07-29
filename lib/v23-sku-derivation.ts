@@ -54,6 +54,8 @@ export function deriveV23SkuPull(baselinePullKg: number, entries: readonly V23Re
   let value = baselinePullKg;
   const trace: V23PullTraceStep[] = [];
   const ordered = entries.flatMap((entry) => entry.payload.enabled && entry.payload.category === "attribute" ? entry.payload.operations.map((operation) => ({ entry, operation })) : []).sort((left, right) => left.entry.ref.id.localeCompare(right.entry.ref.id) || left.entry.ref.revision - right.entry.ref.revision || left.operation.operationIndex - right.operation.operationIndex || left.operation.operationId.localeCompare(right.operation.operationId));
+  const operationIdentity = new Set<string>();
+  for (const { entry, operation } of ordered) { const identity = `${entry.ref.id}\u0000${entry.ref.revision}\u0000${operation.operationIndex}\u0000${operation.operationId}`; if (operationIdentity.has(identity)) return { status: "INVALID", code: "V23_OPERATION_IDENTITY_DUPLICATE", inputHash }; operationIdentity.add(identity); }
   let bonus = 0; let reduction = 0; const later: typeof ordered = [];
   for (const { entry, operation: op } of ordered) {
       if (op.parameterKey !== "pull" && op.parameterKey !== "targetPullKg") continue;

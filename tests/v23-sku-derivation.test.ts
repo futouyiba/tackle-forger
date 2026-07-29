@@ -28,3 +28,12 @@ test("formal decrease requires the published OPEN-001 policy version", () => {
   assert.deepEqual(deriveV23SkuPull(5, entries, { formal: true }).status, "INVALID");
   assert.equal(deriveV23SkuPull(5, entries, { formal: true, publishedReductionPolicy: { id: "policy:1", version: "v1", contentHash: "b".repeat(64), status: "published", strategy: "bidirectional_ratio", numericContract: "ieee754-binary64-v1" } }).status, "VALID");
 });
+
+test("percent adjustments use the published bidirectional ratio contract", () => {
+  const up = structuredClone(payload) as V23ProjectAffixPayload;
+  up.operations[0] = { ...up.operations[0]!, operation: "percent_adjust", magnitude: 1, direction: "increase" } as never;
+  const down = structuredClone(up); down.operations[0] = { ...down.operations[0]!, operationId: "op2", sourceAffixId: "b", magnitude: 0.2, direction: "decrease" } as never;
+  const result = deriveV23SkuPull(10, [{ ref, payload: up }, { ref: { ...ref, id: "b" }, payload: down }]);
+  assert.equal(result.status, "VALID");
+  if (result.status === "VALID") assert.equal(result.targetPullKg, 10 * 2 / 1.2);
+});

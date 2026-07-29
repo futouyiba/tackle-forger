@@ -1935,6 +1935,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     v23ExactKeys(key, ["partType", "weightBandId", "fishingMethodId", "materialTypeId", "functionProfileId", "functionIntensity"], "V23_FUNCTION_TEMPLATE_KEY");
     if (!(["rod", "reel", "line"] as const).includes(key.partType as "rod" | "reel" | "line") || !Number.isInteger(key.functionIntensity) || !(key.functionIntensity === 1 || key.functionIntensity === 2 || key.functionIntensity === 3) || Object.values(key).some((v) => typeof v === "string" && v.length === 0) || !Number.isFinite(template.baselinePullKg) || (template.baselinePullKg as number) <= 0) throw new Error("V23_FUNCTION_TEMPLATE_INVALID");
     const keyHash = jcsSha256Hex(key);
+    if (contentHash !== jcsSha256Hex({ contractVersion: "v23-function-template/v1", key, baselinePullKg: template.baselinePullKg })) throw new Error("V23_FUNCTION_TEMPLATE_CONTENT_HASH_MISMATCH");
     const immutableRowHash = jcsSha256Hex({ ref: { templateId, revisionId, contentHash }, key, baselinePullKg: template.baselinePullKg });
     const refIdentity = `${templateId}\u0000${revisionId}`;
     if (templateRefs.has(refIdentity) && templateRefs.get(refIdentity) !== immutableRowHash) throw new Error("V23_FUNCTION_TEMPLATE_REF_CONFLICT");
@@ -2128,9 +2129,9 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     const removed = v23Array(entry.removedInheritedEntryIds, "V23_SKU_REMOVED_ENTRIES");
     const removedEntryIds = new Set(removed.map((id) => v23String(id, "V23_SKU_REMOVED_ENTRY_ID")));
     if (removedEntryIds.size !== removed.length) throw new Error("V23_SKU_REMOVED_ENTRY_DUPLICATE");
-    const effectiveStableEntries = new Map<string, { ref: { id: string; revision: number; contentHash: string }; payload: Record<string, unknown> }>();
+    const effectiveStableEntries = new Map<string, { ref: { id: string; revision: number; contentHash: string }; payload: Record<string, unknown>; localCopyId: string | null; copyHash: string | null }>();
     for (const [inheritedId, inherited] of partDefaultPayloads.get(`${partId}\u0000${partRevision}`) ?? []) {
-      if (!removedEntryIds.has(inheritedId)) effectiveStableEntries.set(inheritedId, inherited);
+      if (!removedEntryIds.has(inheritedId)) effectiveStableEntries.set(inheritedId, { ...inherited, localCopyId: null, copyHash: null });
     }
     const skuAddedEntryIds = new Set<string>();
     for (const refEntry of v23Array(entry.addedEntryRefs, "V23_SKU_ADDED_ENTRY_REFS")) {
@@ -2142,7 +2143,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
       const payload = validateAffixEntry(stableEntry, "V23_SKU_ADDED_ENTRY_REF", itemPartIdFor(part.partType)!);
       const inherited = effectiveStableEntries.get(ref.id);
       if (inherited && (inherited.ref.revision !== ref.revision || inherited.ref.contentHash !== ref.contentHash)) throw new Error("V23_SKU_EFFECTIVE_ENTRY_ID_CONFLICT");
-      if (!inherited) effectiveStableEntries.set(ref.id, { ref, payload });
+      if (!inherited) effectiveStableEntries.set(ref.id, { ref, payload, localCopyId: null, copyHash: null });
     }
     const localSourceIds = new Set<string>();
     for (const copy of v23Array(entry.localEntryCopies, "V23_SKU_LOCAL_COPIES")) {
@@ -2156,7 +2157,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
       if (inherited && (inherited.ref.revision !== sourceRef.revision || inherited.ref.contentHash !== sourceRef.contentHash)) throw new Error("V23_SKU_EFFECTIVE_ENTRY_ID_CONFLICT");
       // 局部副本是同一稳定来源在当前 SKU 的可编辑替代，保留 copy 意图但只
       // 产生一次有效贡献，避免原项目词条与副本重复结算。
-      effectiveStableEntries.set(sourceRef.id, { ref: sourceRef, payload });
+      effectiveStableEntries.set(sourceRef.id, { ref: sourceRef, payload, localCopyId: v23String(copyEntry.localCopyId, "V23_SKU_LOCAL_COPY_ID"), copyHash: v23Hash(copyEntry.copyHash, "V23_SKU_LOCAL_COPY_HASH") });
     }
     const effectiveContributions = new Map<string, Set<string>>();
     for (const effective of effectiveStableEntries.values()) assertSemanticContribution(effectiveContributions, effective.payload, "V23_SKU_EFFECTIVE_ENTRY");
@@ -2168,6 +2169,11 @@ function validateV23RuntimeState(state: MutableWorkspace) {
         const expectedIds = [...effectiveStableEntries.keys()].sort();
         const actualIds = v23Array(persisted.effectiveEntries, "V23_SKU_DERIVATION_REPLAY_IDS").map((value) => v23String(v23Record(value, "V23_SKU_DERIVATION_REPLAY_ENTRY").ref && v23Record(v23Record(value, "V23_SKU_DERIVATION_REPLAY_ENTRY").ref, "V23_SKU_DERIVATION_REPLAY_REF").id, "V23_SKU_DERIVATION_REPLAY_ID")).sort();
         if (jcsSha256Hex(expectedIds) !== jcsSha256Hex(actualIds)) throw new Error("V23_SKU_DERIVATION_EFFECTIVE_IDS_MISMATCH");
+        for (const value of v23Array(persisted.effectiveEntries, "V23_SKU_DERIVATION_REPLAY_ENTRIES")) {
+          const evidence = v23Record(value, "V23_SKU_DERIVATION_REPLAY_ENTRY"); v23ExactKeys(evidence, ["ref", "localCopyId", "copyHash", "payloadHash"], "V23_SKU_DERIVATION_REPLAY_ENTRY");
+          const ref = validateV23StableRef(evidence.ref, "V23_SKU_DERIVATION_REPLAY_REF"); const actual = effectiveStableEntries.get(ref.id);
+          if (!actual || actual.ref.revision !== ref.revision || actual.ref.contentHash !== ref.contentHash || evidence.localCopyId !== actual.localCopyId || evidence.copyHash !== actual.copyHash || evidence.payloadHash !== jcsSha256Hex(actual.payload)) throw new Error("V23_SKU_DERIVATION_EFFECTIVE_ENTRY_MISMATCH");
+        }
         if (matchedTemplateBaseline === null) throw new Error("V23_SKU_DERIVATION_MATCH_REQUIRED");
         if (jcsSha256Hex(persisted.templateRef) !== jcsSha256Hex(match.functionTemplateRef)) throw new Error("V23_SKU_DERIVATION_TEMPLATE_MISMATCH");
         const policyRef = v23Record(persisted.reductionPolicyRef, "V23_SKU_DERIVATION_POLICY_REF");

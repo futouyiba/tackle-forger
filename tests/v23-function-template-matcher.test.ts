@@ -4,7 +4,7 @@ import { jcsSha256Hex } from "../lib/canonical-json";
 import { matchV23FunctionTemplate } from "../lib/v23-function-template-matcher";
 
 const key = { partType: "rod" as const, weightBandId: "w:1", fishingMethodId: "m", materialTypeId: "mat", functionProfileId: "f", functionIntensity: 2 as const };
-const candidate = { ref: { templateId: "t", revisionId: "r1", contentHash: jcsSha256Hex("t") }, key, baselinePullKg: 5 };
+const candidate = { ref: { templateId: "t", revisionId: "r1", contentHash: jcsSha256Hex({ contractVersion: "v23-function-template/v1", key, baselinePullKg: 5 }) }, key, baselinePullKg: 5 };
 test("v23 matcher only accepts one exact six-key template", () => {
   assert.equal(matchV23FunctionTemplate(key, [candidate]).status, "VALID");
   assert.equal(matchV23FunctionTemplate(key, []).status, "INVALID_NO_MATCH");

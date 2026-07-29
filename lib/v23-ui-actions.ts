@@ -1,7 +1,7 @@
 import { jcsSha256Hex } from "./canonical-json";
 import { issueClientActionCommand } from "./client-action-command";
 import type { ActionCode } from "./interaction-contracts";
-import type { V23ProjectAffixPayload, V23ProjectAttributeOperation, V23ProjectPassivePayload, V23StableContentRef } from "./types";
+import type { SeriesPartRevision, SkuDrawerRevision, V23ProjectAffixPayload, V23ProjectAttributeOperation, V23ProjectPassivePayload, V23StableContentRef } from "./types";
 
 function exactKeys(value: Record<string, unknown>, expected: readonly string[]) {
   return Object.keys(value).length === expected.length
@@ -86,6 +86,51 @@ export function v23LatestGeneration(current: number, response: number) { return 
 
 export function v23CanCreateSkuFromPreview(status: unknown): boolean {
   return status === "VALID";
+}
+
+export function v23StableRefAttachmentStatus(
+  refs: readonly V23StableContentRef[],
+  candidate: V23StableContentRef,
+): "absent" | "exact" | "stable_id_conflict" {
+  const sameId = refs.filter((ref) => ref.id === candidate.id);
+  if (!sameId.length) return "absent";
+  return sameId.length === 1
+    && sameId[0]!.revision === candidate.revision
+    && sameId[0]!.contentHash === candidate.contentHash
+    ? "exact"
+    : "stable_id_conflict";
+}
+
+export function v23CanCopyInheritedAffix(
+  copies: readonly Pick<SkuDrawerRevision["localEntryCopies"][number], "sourceRef">[],
+  sourceRef: V23StableContentRef,
+): boolean {
+  return !copies.some((copy) => copy.sourceRef.id === sourceRef.id);
+}
+
+type V23PartConfigurationDraft = Pick<SeriesPartRevision,
+  "fishingMethodId" | "materialTypeId" | "functionProfileId" | "functionIntensity" |
+  "weightBandIds" | "defaultEntryRefs">;
+
+export function v23PartConfigurationDraftDirty(
+  part: V23PartConfigurationDraft,
+  draft: V23PartConfigurationDraft,
+): boolean {
+  const exactStrings = (left: readonly string[], right: readonly string[]) =>
+    left.length === right.length && left.every((value, index) => value === right[index]);
+  const exactRefs = (left: readonly V23StableContentRef[], right: readonly V23StableContentRef[]) =>
+    left.length === right.length && left.every((value, index) => {
+      const candidate = right[index];
+      return candidate?.id === value.id
+        && candidate.revision === value.revision
+        && candidate.contentHash === value.contentHash;
+    });
+  return part.fishingMethodId !== draft.fishingMethodId
+    || part.materialTypeId !== draft.materialTypeId
+    || part.functionProfileId !== draft.functionProfileId
+    || part.functionIntensity !== draft.functionIntensity
+    || !exactStrings(part.weightBandIds, draft.weightBandIds)
+    || !exactRefs(part.defaultEntryRefs, draft.defaultEntryRefs);
 }
 
 export function v23SeriesSwitchRequestBoundary(

@@ -5,8 +5,9 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { V23SeriesPartWorkbench } from "../app/V23SeriesPartWorkbench";
 import type { ActionAvailabilityMap } from "../lib/interaction-contracts";
-import { buildV23LocalCopyPayload, v23CanCreateSkuFromPreview, v23QualityReasonValid, v23SeriesSwitchRequestBoundary } from "../lib/v23-ui-actions";
-import type { SeriesPartRevision, V23ProjectAffixPayload, WorkspaceState } from "../lib/types";
+import { buildV23LocalCopyPayload, v23CanCopyInheritedAffix, v23CanCreateSkuFromPreview, v23PartConfigurationDraftDirty, v23QualityReasonValid, v23SeriesSwitchRequestBoundary, v23StableRefAttachmentStatus } from "../lib/v23-ui-actions";
+import { v23TechnologyContentHash } from "../lib/v23-technology";
+import type { SeriesPartRevision, V23ProjectAffixPayload, V23TechnologyDefinition, WorkspaceState } from "../lib/types";
 
 const part = (partId: string, partType: "rod" | "reel" | "line", bands: string[]): SeriesPartRevision => ({ partId, seriesId: "series:one", revision: 1, partType, fishingMethodId: "method", materialTypeId: "material", functionProfileId: "function", functionIntensity: 2, weightBandIds: bands, defaultEntryRefs: [], technologyRefs: [], inputFingerprint: "a".repeat(64), contentHash: "b".repeat(64) });
 const availability = Object.fromEntries(["preview_weight_band_skus", "create_sku", "create_project_affix", "update_part_configuration", "add_sku_affix", "remove_inherited_affix", "restore_inherited_affix", "copy_sku_local_affix", "update_sku_local_affix_copy", "attach_part_technology", "remove_part_technology", "attach_sku_technology", "remove_sku_technology", "set_sku_actual_quality"].map((action) => [action, { enabled: false, disabledReasonText: "权限不足" }])) as ActionAvailabilityMap;
@@ -47,6 +48,14 @@ test("v23 Part 工作台显式预览与受控动作，不在甘特块点击时�
   assert.match(source, /resolveV23SkuOccupiedAffixIds/);
   assert.match(source, /occupiedAffixes\.ids\.includes\(item\.affixId\)/);
   assert.match(source, /已拒绝重复添加/);
+  assert.match(source, /v23CanCopyInheritedAffix\(sku\.localEntryCopies, ref\)/);
+  assert.match(source, /已有局部副本，已拒绝重复复制/);
+  assert.match(source, /v23StableRefAttachmentStatus\(part\.technologyRefs, ref\)/);
+  assert.match(source, /v23StableRefAttachmentStatus\(sku\.technologyRefs, ref\)/);
+  assert.match(source, /同一 Technology 稳定 ID 已挂载；请先移除旧 revision/);
+  assert.match(source, /v23PartConfigurationDraftDirty\(part, draft\)/);
+  assert.match(source, /if \(draftDirty\) return notify\("Part 配置有未保存修改；请先保存 Part 配置，再操作 Technology。"\)/);
+  assert.match(source, /disabled=\{pending \|\| draftDirty \|\| conflict/);
 });
 
 test("create SKU 只接受 VALID preview，两个 invalid 状态均不进入写入资格", () => {
@@ -73,6 +82,46 @@ test("Series 切换不会继承旧 preview pending，写入 pending 则保持真
   assert.deepEqual(v23SeriesSwitchRequestBoundary(2, undefined), { requestEpoch: 3, pending: undefined });
 });
 
+test("局部副本来源按稳定 affix ID 去重，不同 revision 也必须先处理旧副本", () => {
+  const source = { id: "affix:source", revision: 2, contentHash: "a".repeat(64) };
+  assert.equal(v23CanCopyInheritedAffix([], source), true);
+  assert.equal(v23CanCopyInheritedAffix([{ sourceRef: source }], source), false);
+  assert.equal(v23CanCopyInheritedAffix([{ sourceRef: { ...source, revision: 1, contentHash: "b".repeat(64) } }], source), false);
+  assert.equal(v23CanCopyInheritedAffix([{ sourceRef: { ...source, id: "affix:other" } }], source), true);
+});
+
+test("Technology attach 以稳定 ID 判定 exact、旧 revision 冲突和合法新挂载", () => {
+  const current = { id: "technology:one", revision: 2, contentHash: "a".repeat(64) };
+  assert.equal(v23StableRefAttachmentStatus([], current), "absent");
+  assert.equal(v23StableRefAttachmentStatus([current], current), "exact");
+  assert.equal(v23StableRefAttachmentStatus([{ ...current, revision: 1, contentHash: "b".repeat(64) }], current), "stable_id_conflict");
+  assert.equal(v23StableRefAttachmentStatus([current, { ...current, revision: 1, contentHash: "b".repeat(64) }], current), "stable_id_conflict");
+  assert.equal(v23StableRefAttachmentStatus([{ ...current, id: "technology:other" }], current), "absent");
+});
+
+test("Part 草稿 dirty 精确阻断 Technology 写入，clean 保持可操作", () => {
+  const clean = part("part:rod", "rod", ["01.1"]);
+  const draft = {
+    fishingMethodId: clean.fishingMethodId,
+    materialTypeId: clean.materialTypeId,
+    functionProfileId: clean.functionProfileId,
+    functionIntensity: clean.functionIntensity,
+    weightBandIds: clean.weightBandIds,
+    defaultEntryRefs: clean.defaultEntryRefs,
+  };
+  assert.equal(v23PartConfigurationDraftDirty(clean, draft), false);
+  for (const dirty of [
+    { ...draft, fishingMethodId: "method:changed" },
+    { ...draft, weightBandIds: [...draft.weightBandIds, "01.2"] },
+    { ...draft, defaultEntryRefs: [{ id: "affix:one", revision: 1, contentHash: "a".repeat(64) }] },
+  ]) assert.equal(v23PartConfigurationDraftDirty(clean, dirty), true);
+  let writes = 0;
+  if (!v23PartConfigurationDraftDirty(clean, { ...draft, fishingMethodId: "method:changed" })) writes += 1;
+  assert.equal(writes, 0, "dirty Part Technology handler 不得写入");
+  if (!v23PartConfigurationDraftDirty(clean, draft)) writes += 1;
+  assert.equal(writes, 1, "clean Part 仍可操作");
+});
+
 test("SSR: 唯一 Part 卡、合并块与准确重量段选择器的初始语义", () => {
   const html = renderToStaticMarkup(createElement(V23SeriesPartWorkbench, { state: fixture(), workspaceRevision: 7, actionAvailabilities: availability, notify: () => undefined, workspaceFreshness: () => ({ dirty: false, revision: 7 }), onApplied: () => undefined }));
   assert.equal((html.match(/immutable part:rod/g) ?? []).length, 1);
@@ -83,6 +132,64 @@ test("SSR: 唯一 Part 卡、合并块与准确重量段选择器的初始语义
   assert.doesNotMatch(html, /预览 01\.1/);
   assert.match(html, /title="权限不足"/);
   assert.match(html, /aria-label="v23 Part 与 SKU 编辑器"/);
+});
+
+test("SSR: clean Part 的新 Technology 保持可挂载", () => {
+  const candidate = fixture();
+  const memberRef = { id: "affix:technology-member", revision: 1, contentHash: "a".repeat(64) };
+  candidate.v23AffixDefinitions = [{
+    affixId: memberRef.id,
+    revision: 1,
+    contentHash: memberRef.contentHash,
+    payload: {
+      name: "技术成员", category: "passive", itemPartId: "part:rod",
+      semanticContributionKey: "technology-member", stackingPolicy: "dedupe",
+      generationPolicy: "technology_only", rarity: "ultra_rare", valueScore: 1,
+      tags: [], description: "技术成员", enabled: true, operations: [] as [],
+      passivePayload: {
+        skillId: "skill:technology-member", name: "技术成员", itemPartId: "part:rod",
+        triggerType: "display", triggerDescription: "展示", effectTarget: "展示",
+        effectLogicDescription: "不执行", exampleParameters: {}, durationDescription: "不执行",
+        cooldownDescription: "不执行", resetDescription: "不执行", stackingDescription: "不执行",
+        playerDescription: "展示", simulatorReferenceKey: null,
+      },
+    },
+  }];
+  const technologyInput: Omit<V23TechnologyDefinition, "contentHash"> = {
+    technologyId: "technology:clean", revision: 2, itemPartId: "part:rod",
+    name: "Clean Technology", description: "clean", memberAffixRefs: [memberRef], enabled: true,
+  };
+  const technology = { ...technologyInput, contentHash: v23TechnologyContentHash(technologyInput) };
+  candidate.v23TechnologyDefinitions = [technology];
+  candidate.v23TechnologyHeads = [{ technologyId: technology.technologyId, revision: technology.revision }];
+  const enabled = {
+    ...availability,
+    attach_part_technology: { enabled: true, disabledReasonText: "" },
+  } as ActionAvailabilityMap;
+  const html = renderToStaticMarkup(createElement(V23SeriesPartWorkbench, { state: candidate, workspaceRevision: 7, actionAvailabilities: enabled, notify: () => undefined, workspaceFreshness: () => ({ dirty: false, revision: 7 }), onApplied: () => undefined }));
+  const button = html.match(/<button[^>]*>挂载 Clean Technology<\/button>/)?.[0];
+  assert.ok(button);
+  assert.doesNotMatch(button, /disabled/);
+
+  const oldInput = { ...technologyInput, revision: 1, name: "Old Technology" };
+  const oldTechnology = { ...oldInput, contentHash: v23TechnologyContentHash(oldInput) };
+  candidate.v23TechnologyDefinitions = [oldTechnology, technology];
+  candidate.v23TechnologyHeads = [{ technologyId: technology.technologyId, revision: technology.revision }];
+  candidate.v23SeriesPartRevisions = candidate.v23SeriesPartRevisions.map((entry) =>
+    entry.partType === "rod"
+      ? { ...entry, technologyRefs: [{ id: oldTechnology.technologyId, revision: oldTechnology.revision, contentHash: oldTechnology.contentHash }] }
+      : entry);
+  const replaceOld = {
+    ...enabled,
+    remove_part_technology: { enabled: true, disabledReasonText: "" },
+  } as ActionAvailabilityMap;
+  const conflictHtml = renderToStaticMarkup(createElement(V23SeriesPartWorkbench, { state: candidate, workspaceRevision: 7, actionAvailabilities: replaceOld, notify: () => undefined, workspaceFreshness: () => ({ dirty: false, revision: 7 }), onApplied: () => undefined }));
+  const conflictButton = conflictHtml.match(/<button[^>]*>先移除旧 revision Clean Technology<\/button>/)?.[0];
+  assert.ok(conflictButton);
+  assert.match(conflictButton, /disabled/);
+  const removeOldButton = conflictHtml.match(/<button[^>]*>移除 technology:clean@1<\/button>/)?.[0];
+  assert.ok(removeOldButton);
+  assert.doesNotMatch(removeOldButton, /disabled/);
 });
 
 test("local copy attribute editor 提交完整 closed payload 并拒绝非法中间输入/source 改写", () => {

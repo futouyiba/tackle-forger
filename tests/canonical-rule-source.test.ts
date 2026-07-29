@@ -283,6 +283,7 @@ test("02 缺少已启用部位的稳定钓法块时 fail closed", () => {
 test("schema v15 顺序迁移保留历史状态并补 canonical 草稿集合", () => {
   const current = createSeedState();
   const v15 = { ...structuredClone(current), schemaVersion: 15 } as unknown as Record<string, unknown>;
+  for (const key of ["v23SeriesPartRevisions", "v23SeriesPartHeads", "v23SkuDrawerRevisions", "v23SkuDrawerHeads", "v23AffixDefinitions", "v23MigrationSourceEvidence", "v23LegacyReadAdapters"]) delete v15[key];
   delete v15.canonicalRuleSourceDrafts;
   const migrated = migrateWorkspaceState(v15);
   assert.equal(migrated.schemaVersion, CURRENT_WORKSPACE_SCHEMA_VERSION);

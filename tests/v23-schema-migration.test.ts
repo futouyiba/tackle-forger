@@ -1089,6 +1089,36 @@ test("v23 formal persisted derivation round-trips closed binary64 evidence", () 
   assert.equal(migrated.v23SkuDrawerRevisions[0]!.derivation?.status, "VALID");
   assert.deepEqual(migrateWorkspaceState(migrated), migrated);
 
+  const assertFormalFlat = (label: string, operations: unknown[], expectedTraceLength: number) => {
+    const candidate = structuredClone(state);
+    const drawer = candidate.v23SkuDrawerRevisions[0]!;
+    const affix = candidate.v23AffixDefinitions[0]!;
+    const payload = structuredClone(affix.payload);
+    payload.operations = operations as never;
+    affix.payload = payload;
+    affix.contentHash = hash({ affixId: affix.affixId, revision: affix.revision, payload });
+    const currentRef = { id: affix.affixId, revision: affix.revision, contentHash: affix.contentHash };
+    drawer.addedEntryRefs[0]!.ref = currentRef;
+    const currentSource = { ref: currentRef, localCopyId: null, copyHash: null, payloadHash: hash(payload) };
+    const currentReplay = deriveV23SkuPull(baselinePullKg, [{ ref: currentRef, payload }], { formal: true, publishedReductionPolicy: policy });
+    assert.equal(currentReplay.status, "VALID", label);
+    if (currentReplay.status !== "VALID") return;
+    const currentTrace = currentReplay.trace.map((step) => ({ source: step.affixId === null ? null : currentSource, operationId: step.operationId, operationIndex: step.operationIndex, operation: step.operation, direction: step.direction, magnitude: step.magnitude, clampMin: step.clampMin, clampMax: step.clampMax, ratioOperations: null, flatComponents: step.flatComponents?.map((item) => ({ source: currentSource, operationId: item.operationId, operationIndex: item.operationIndex, direction: item.direction, magnitude: item.magnitude, numericEvidence: item.numericEvidence })) ?? null, beforeKg: step.beforeKg, afterKg: step.afterKg, numericEvidence: step.numericEvidence }));
+    drawer.derivation = { status: "VALID", templateRef, reductionPolicyRef: { id: policy.id, version: policy.version, contentHash: policy.contentHash }, baselinePullKg, targetPullKg: currentReplay.targetPullKg, effectiveEntries: [currentSource], trace: currentTrace, inputHash: currentReplay.inputHash } as never;
+    candidate.v23SkuDrawerRevisions[0] = withSkuHashes(drawer) as SkuDrawerRevision;
+    const accepted = migrateWorkspaceState(candidate);
+    const acceptedTrace = (accepted.v23SkuDrawerRevisions[0]!.derivation as unknown as { trace: Array<{ beforeKg: number; afterKg: number; source: unknown; flatComponents: unknown[] | null }> }).trace;
+    assert.equal(acceptedTrace.length, expectedTraceLength, label);
+    let prior = baselinePullKg; for (const step of acceptedTrace) { assert.equal(step.beforeKg, prior, label); prior = step.afterKg; if (step.flatComponents) { assert.equal(step.source, null, label); assert.ok(step.flatComponents.length > 0, label); } }
+    assert.equal(prior, currentReplay.targetPullKg, label);
+    assert.deepEqual(migrateWorkspaceState(accepted), accepted, label);
+    const tampered = structuredClone(candidate); const flatStep = (tampered.v23SkuDrawerRevisions[0]!.derivation as { trace: Array<{ flatComponents: Array<{ operationId: string }> | null }> }).trace.find((step) => step.flatComponents !== null)!; flatStep.flatComponents![0]!.operationId = "tampered"; tampered.v23SkuDrawerRevisions[0] = withSkuHashes(tampered.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision; assert.throws(() => migrateWorkspaceState(tampered), `${label} component tamper`);
+  };
+  const flat = (operationId: string, operationIndex: number, direction: "increase" | "decrease", magnitude: number) => ({ operationId, operationIndex, sourceAffixId: definition.affixId, sourceAffixRevision: definition.revision, parameterKey: "pull", operation: "flat_adjust", direction, magnitude, publishedMagnitudeRange: { min: 0, max: Math.max(1, magnitude), ruleSetVersion: "ruleset-v3-migrated-1" } });
+  assertFormalFlat("flat-only", [flat("flat:one", 0, "increase", 2)], 1);
+  assertFormalFlat("flat-interleaved", [flat("flat:up-a", 0, "increase", 2 ** 53), flat("flat:down", 1, "decrease", 2 ** 53), flat("flat:up-b", 2, "increase", 1)], 1);
+  assertFormalFlat("set-plus-flat", [{ operationId: "set:pull", operationIndex: 0, sourceAffixId: definition.affixId, sourceAffixRevision: definition.revision, parameterKey: "pull", operation: "set", value: 7 }, flat("flat:after-set", 1, "increase", 2)], 2);
+
   const invalidState = structuredClone(state);
   const invalidSku = invalidState.v23SkuDrawerRevisions[0]!;
   const invalidDefinition = invalidState.v23AffixDefinitions[0]!;

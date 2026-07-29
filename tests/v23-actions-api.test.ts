@@ -8,6 +8,7 @@ import { NextRequest } from "next/server";
 import { POST as issueActionCommand } from "../app/api/action-commands/route";
 import { POST as v23Actions } from "../app/api/v23/actions/route";
 import { jcsSha256Hex } from "../lib/canonical-json";
+import { deterministicHash } from "../lib/rule-kernel";
 import { PHASE_ONE_CAPABILITIES } from "../lib/feishu-identity";
 import { importQualityValuePolicyDraft } from "../lib/quality-value-policy";
 import {
@@ -103,6 +104,25 @@ async function prepareAssessedSku() {
     enabled: true,
     sourceRevisionId,
     notes: "",
+  }];
+  const canonicalContent = {
+    parameters: [],
+    templates: [],
+    methodProfiles: [],
+    itemTypeProfiles: [],
+    functionProfiles: structuredClone(state.functionProfiles),
+    modifiers: [],
+    layers: [],
+  };
+  const canonicalHash = deterministicHash(canonicalContent);
+  state.canonicalRuleSourceDrafts = [{
+    id: `canonical-rule-draft:${sourceRevisionId}:${canonicalHash}`,
+    sourceRevisionId,
+    sourceRevision: "1",
+    contentHash: canonicalHash,
+    importedAt: "2026-07-29T00:00:00.000Z",
+    ...canonicalContent,
+    issues: [],
   }];
   const reduction = publishReductionStackingPolicyVersion({
     draft: importReductionStackingPolicyDraft({

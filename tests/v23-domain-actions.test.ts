@@ -10,6 +10,7 @@ import {
   type V23WriteAction,
 } from "../lib/v23-domain-actions";
 import { ensureWorkflowFields } from "../lib/workflow";
+import { deterministicHash } from "../lib/rule-kernel";
 import type { WorkspaceState } from "../lib/types";
 import {
   importReductionStackingPolicyDraft,
@@ -108,6 +109,25 @@ function qualityReadyState(): WorkspaceState {
     enabled: true,
     sourceRevisionId: "source:quality@500",
     notes: "",
+  }];
+  const canonicalContent = {
+    parameters: [],
+    templates: [],
+    methodProfiles: [],
+    itemTypeProfiles: [],
+    functionProfiles: structuredClone(value.functionProfiles),
+    modifiers: [],
+    layers: [],
+  };
+  const canonicalHash = deterministicHash(canonicalContent);
+  value.canonicalRuleSourceDrafts = [{
+    id: `canonical-rule-draft:source:quality@500:${canonicalHash}`,
+    sourceRevisionId: "source:quality@500",
+    sourceRevision: "500",
+    contentHash: canonicalHash,
+    importedAt: "2026-07-29T00:00:00.000Z",
+    ...canonicalContent,
+    issues: [],
   }];
   return value;
 }

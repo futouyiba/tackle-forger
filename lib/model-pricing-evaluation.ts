@@ -53,6 +53,7 @@ export interface V23ModelPricingEvaluationContext {
   part: SeriesPartRevision;
   qualityPolicy: QualityValuePolicyDraft;
   functionProfiles: readonly FunctionProfile[];
+  canonicalFunctionProfiles: readonly FunctionProfile[];
 }
 
 /**

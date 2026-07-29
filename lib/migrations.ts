@@ -31,6 +31,7 @@ import type {
   QualityProfileId,
   QualityProfile,
   RuleSetVersion,
+  SeriesPartRevision,
   WorkspaceRuleSettings,
   WorkspaceState,
   FeishuShareLinkHistoryEntry,
@@ -69,6 +70,12 @@ import { jcsSha256Hex } from "./canonical-json";
 import { projectShareLinkHistoryEntry } from "./data-sources";
 import { createFiveAxisDispositionCatalogRevision, createFormalFiveAxisVertexSet } from "./five-axis-formal";
 import { deriveV23SkuPull, type V23ResolvedAffix } from "./v23-sku-derivation";
+import {
+  deriveV23SkuQuality,
+  resolveV23CanonicalFunctionProfiles,
+  resolveV23QualityPolicyById,
+  type V23QualityEntry,
+} from "./v23-sku-quality";
 
 export const CURRENT_WORKSPACE_SCHEMA_VERSION = 23;
 
@@ -2000,7 +2007,13 @@ function validateV23RuntimeState(state: MutableWorkspace) {
   const validateSkuAssessment = (
     value: unknown,
     skuRevisionId: string,
-    effectiveAffixIds: Set<string>,
+    part: SeriesPartRevision,
+    effectiveStableEntries: ReadonlyMap<string, {
+      ref: { id: string; revision: number; contentHash: string };
+      payload: Record<string, unknown>;
+      localCopyId: string | null;
+      copyHash: string | null;
+    }>,
     validationIssues: ReadonlyMap<string, readonly {
       severity: string;
       gate: string;
@@ -2008,6 +2021,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
       message: string;
     }[]>,
   ) => {
+    const effectiveAffixIds = new Set(effectiveStableEntries.keys());
     const quality = v23Record(value, "V23_SKU_QUALITY");
     const status = v23String(quality.status, "V23_SKU_QUALITY_STATUS");
     if (status === "UNASSESSED") {
@@ -2198,6 +2212,37 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     if (traceIndex !== traceEntries.length) throw new Error("V23_SKU_QUALITY_TRACE_REPLAY_MISMATCH");
     const hashPayload = { ...assessment }; delete hashPayload.inputHash;
     v23HashOf(hashPayload, assessment.inputHash, "V23_SKU_QUALITY_INPUT_HASH");
+    const policy = resolveV23QualityPolicyById(
+      arrayOf<WorkspaceState["qualityValuePolicyDrafts"][number]>(state.qualityValuePolicyDrafts),
+      assessment.qualityRangePolicyVersion as string,
+    );
+    const canonicalFunctionProfiles = resolveV23CanonicalFunctionProfiles(
+      arrayOf<WorkspaceState["canonicalRuleSourceDrafts"][number]>(state.canonicalRuleSourceDrafts),
+      policy.sourceRevisionId,
+    );
+    const replayed = deriveV23SkuQuality({
+      skuRevisionId,
+      part,
+      entries: [...effectiveStableEntries.values()].map((entry): V23QualityEntry => ({
+        ref: entry.ref,
+        payload: entry.payload as unknown as V23QualityEntry["payload"],
+        ...(entry.localCopyId === null
+          ? {}
+          : {
+              localCopyId: entry.localCopyId,
+              copyHash: entry.copyHash ?? undefined,
+            }),
+      })),
+      policy,
+      functionProfiles: arrayOf<FunctionProfile>(state.functionProfiles),
+      canonicalFunctionProfiles,
+      selectedQualityId: assessment.selectedQualityId as never,
+      overrideReason: reason as string | null,
+      recomputeExistingSelection: true,
+    });
+    if (jcsSha256Hex(replayed) !== jcsSha256Hex(assessment)) {
+      throw new Error("V23_SKU_QUALITY_AUTHORITY_REPLAY_MISMATCH");
+    }
     return true;
   };
   const skuIds = new Map<string, Set<number>>(); let currentSkuId = "";
@@ -2394,7 +2439,8 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     const assessed = validateSkuAssessment(
       entry.quality,
       `${skuId}@${revision}`,
-      new Set(effectiveStableEntries.keys()),
+      part as unknown as SeriesPartRevision,
+      effectiveStableEntries,
       validationIssues,
     );
     v23HashOf(v23SkuInput(entry), entry.contentHash, "V23_SKU_CONTENT_HASH");

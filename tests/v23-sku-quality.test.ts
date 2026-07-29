@@ -129,6 +129,7 @@ function pricingPolicy(options: { inclusive?: boolean; legacy?: boolean } = {}) 
 function pricingContext(sku: SkuDrawerRevision, options: {
   qualityPolicy?: ReturnType<typeof policy>;
   profiles?: FunctionProfile[];
+  canonicalProfiles?: FunctionProfile[];
   pricing?: PricingPolicyVersion;
 } = {}) {
   return {
@@ -136,6 +137,7 @@ function pricingContext(sku: SkuDrawerRevision, options: {
     part,
     qualityPolicy: options.qualityPolicy ?? policy(),
     functionProfiles: options.profiles ?? functionProfiles,
+    canonicalFunctionProfiles: options.canonicalProfiles ?? functionProfiles,
     pricingPolicy: options.pricing ?? pricingPolicy(),
   };
 }
@@ -147,6 +149,7 @@ test("v23 SKU 品质按去重词条、同部位无序组合与精确功能系数
     entries: [entry("affix:a", 10), entry("affix:b", 5), entry("affix:a", 10)],
     policy: policy({ combination: 3 }),
     functionProfiles,
+    canonicalFunctionProfiles: functionProfiles,
   });
   assert.equal(assessment.baseAffixScore, 15);
   assert.equal(assessment.combinationScore, 3);
@@ -171,6 +174,7 @@ test("v23 SKU 品质按去重词条、同部位无序组合与精确功能系数
     entries: [entry("affix:a", 10), conflictingRevision],
     policy: policy(),
     functionProfiles,
+    canonicalFunctionProfiles: functionProfiles,
   }), /V23_QUALITY_AFFIX_IDENTITY_CONFLICT/);
 });
 
@@ -183,6 +187,7 @@ test("目标 [min,max) 边界使 99.999 推荐 S，100 与更高分不推荐", (
     entries: [entry("affix:a", score)],
     policy: policy(),
     functionProfiles: profile,
+    canonicalFunctionProfiles: profile,
     ...(selectedQualityId ? { selectedQualityId, overrideReason: "评分越界后人工选择" } : {}),
   });
   assert.equal(assess(99.999).recommendedQualityId, "quality_s_orange");
@@ -200,6 +205,7 @@ test("实际品质覆盖必须有理由，定价输入只消费实际品质与 S
     entries: [entry("affix:a", 10)],
     policy: policy(),
     functionProfiles,
+    canonicalFunctionProfiles: functionProfiles,
     selectedQualityId: "quality_b_blue",
     overrideReason: "设计定位要求蓝色品质",
   });
@@ -207,7 +213,8 @@ test("实际品质覆盖必须有理由，定价输入只消费实际品质与 S
   assert.equal(assessment.selectedQualityId, "quality_b_blue");
   assert.throws(() => deriveV23SkuQuality({
     skuRevisionId: "sku:one@2", part, entries: [entry("affix:a", 10)],
-    policy: policy(), functionProfiles, selectedQualityId: "quality_b_blue",
+    policy: policy(), functionProfiles, canonicalFunctionProfiles: functionProfiles,
+    selectedQualityId: "quality_b_blue",
   }), /V23_QUALITY_OVERRIDE_REASON_REQUIRED/);
   const sku = {
     skuId: "sku:one", revision: 2, partId: part.partId, partRevision: part.revision,
@@ -233,6 +240,7 @@ test("评分达到 100 的实际品质仍拒绝进入新的正式定价", () => 
     entries: [entry("affix:score-100", 100)],
     policy: policy(),
     functionProfiles: profile,
+    canonicalFunctionProfiles: profile,
     selectedQualityId: "quality_s_orange",
     overrideReason: "评分越界后人工实测",
   });
@@ -245,7 +253,10 @@ test("评分达到 100 的实际品质仍拒绝进入新的正式定价", () => 
     quality: { status: "ASSESSED", assessment },
   } as SkuDrawerRevision;
   assert.throws(
-    () => v23PricingInputFromAssessment(pricingContext(sku, { profiles: profile })),
+    () => v23PricingInputFromAssessment(pricingContext(sku, {
+      profiles: profile,
+      canonicalProfiles: profile,
+    })),
     (error) => error instanceof V23SkuQualityError
       && error.code === "V23_PRICING_QUALITY_SCORE_OUT_OF_RANGE",
   );
@@ -258,6 +269,7 @@ test("当前策略、功能源 revision 或 pricing 区间变化后旧 assessmen
     entries: [entry("affix:a", 10)],
     policy: policy(),
     functionProfiles,
+    canonicalFunctionProfiles: functionProfiles,
   });
   const sku = {
     skuId: "sku:stale", revision: 1, partId: part.partId, partRevision: part.revision,
@@ -279,6 +291,15 @@ test("当前策略、功能源 revision 或 pricing 区间变化后旧 assessmen
   changedRef[0]!.intensityRules[0]!.scoreFactorSourceRef = "16qYVn!F2@source:quality@501";
   assert.throws(
     () => v23PricingInputFromAssessment(pricingContext(sku, { profiles: changedRef })),
+    /V23_PRICING_QUALITY_EVIDENCE_INVALID/,
+  );
+  const selfReportedFactor = structuredClone(functionProfiles);
+  selfReportedFactor[0]!.intensityRules[0]!.scoreFactor = 1.5;
+  assert.throws(
+    () => v23PricingInputFromAssessment(pricingContext(sku, {
+      profiles: selfReportedFactor,
+      canonicalProfiles: functionProfiles,
+    })),
     /V23_PRICING_QUALITY_EVIDENCE_INVALID/,
   );
   for (const pricing of [
@@ -309,6 +330,7 @@ test("禁用 inherited、added 或 local-copy 词条及其组合均阻断评分"
         entries: [enabled, candidate],
         policy: withCombination,
         functionProfiles,
+        canonicalFunctionProfiles: functionProfiles,
       }),
       (error) => error instanceof V23SkuQualityError
         && error.code === "V23_QUALITY_AFFIX_DISABLED",
@@ -323,6 +345,7 @@ test("旧含上界策略、多个目标策略与缺失评分系数均 fail close
   const noFactor = structuredClone(functionProfiles);
   delete noFactor[0]!.intensityRules[0]!.scoreFactor;
   assert.throws(() => deriveV23SkuQuality({
-    skuRevisionId: "sku:one@1", part, entries: [], policy: target, functionProfiles: noFactor,
+    skuRevisionId: "sku:one@1", part, entries: [], policy: target,
+    functionProfiles: noFactor, canonicalFunctionProfiles: functionProfiles,
   }), /V23_FUNCTION_SCORE_FACTOR_UNRESOLVED/);
 });

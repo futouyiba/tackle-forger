@@ -8,6 +8,7 @@ import { createSeedState } from "../lib/seed";
 import { migrateLegacyProductIdentity } from "../lib/legacy-product-migration";
 import { deriveV23SkuPull } from "../lib/v23-sku-derivation";
 import { importReductionStackingPolicyDraft, publishReductionStackingPolicyVersion } from "../lib/reduction-stacking-policy";
+import { importQualityValuePolicyDraft } from "../lib/quality-value-policy";
 import type {
   SeriesPartRevision,
   SkuDrawerRevision,
@@ -75,16 +76,108 @@ function directV23State(partCount = 1) {
 
 function assessedQuality(state: ReturnType<typeof directV23State>, overrides: Record<string, unknown> = {}) {
   const sku = state.v23SkuDrawerRevisions[0]!;
-  const definition = state.v23AffixDefinitions[0]!;
-  const affixBreakdown = (overrides.affixBreakdown ?? [
-    { sourceAffixId: definition.affixId, valueScore: 1, sourceRef: "quality-sheet!B2" },
-  ]) as Array<{ sourceAffixId: string; valueScore: number; sourceRef: string }>;
-  const combinationBreakdown = (overrides.combinationBreakdown ?? []) as Array<{
+  const sourceRevisionId = "source:quality@500";
+  const functionScoreFactor = Number(overrides.functionScoreFactor ?? 1);
+  state.functionProfiles = [{
+    id: "function:cast",
+    name: "远投",
+    rules: [],
+    intensityRules: [{
+      intensity: 2,
+      itemPartId: "part:rod",
+      rules: [],
+      scoreFactor: functionScoreFactor,
+      scoreFactorSourceRef: `function-sheet!F2@${sourceRevisionId}`,
+      sourceRowId: "function:cast:rod:2",
+    }],
+    enabled: true,
+    sourceRevisionId,
+    notes: "",
+  }];
+  const canonicalContent = {
+    parameters: [],
+    templates: [],
+    methodProfiles: [],
+    itemTypeProfiles: [],
+    functionProfiles: structuredClone(state.functionProfiles),
+    modifiers: [],
+    layers: [],
+  };
+  const canonicalHash = deterministicHash(canonicalContent);
+  state.canonicalRuleSourceDrafts = [{
+    id: `canonical-rule-draft:${sourceRevisionId}:${canonicalHash}`,
+    sourceRevisionId,
+    sourceRevision: "500",
+    contentHash: canonicalHash,
+    importedAt: "2026-07-29T00:00:00.000Z",
+    ...canonicalContent,
+    issues: [],
+  }];
+  const requestedCombinations = (overrides.combinationBreakdown ?? []) as Array<{
     leftAffixId: string; rightAffixId: string; valueScore: number; sourceRef: string;
   }>;
+  const aliases = state.v23AffixDefinitions.map((definition, index) => ({
+    itemPartId: "part:rod",
+    alias: `alias:${index}`,
+    affixId: definition.affixId,
+    source: { sheetId: "23CsXE", cell: `B${index + 2}` },
+  }));
+  const aliasById = new Map(aliases.map((entry) => [entry.affixId, entry.alias]));
+  const qualityPolicy = importQualityValuePolicyDraft({
+    sourceRevisionId,
+    sourceRevision: "500",
+    ranges: [
+      ["quality_c_green", 0, 20],
+      ["quality_b_blue", 20, 40],
+      ["quality_a_purple", 40, 65],
+      ["quality_s_orange", 65, 100],
+    ].map(([qualityId, minScore, maxScore], index) => ({
+      qualityId: qualityId as "quality_c_green",
+      minScore: Number(minScore),
+      maxScore: Number(maxScore),
+      maxInclusive: false,
+      source: { sheetId: "27hboC", cell: `B${index + 2}` },
+      status: "SOURCE" as const,
+    })),
+    aliases,
+    matrixCells: requestedCombinations.map((entry) => {
+      const [sheetId, cell] = entry.sourceRef.split("!");
+      return {
+        itemPartId: "part:rod",
+        leftAlias: aliasById.get(entry.leftAffixId) ?? entry.leftAffixId,
+        rightAlias: aliasById.get(entry.rightAffixId) ?? entry.rightAffixId,
+        value: entry.valueScore,
+        source: { sheetId: sheetId!, cell: cell! },
+      };
+    }),
+    importedAt: "2026-07-29T00:00:00.000Z",
+  });
+  state.qualityValuePolicyDrafts = [qualityPolicy];
+  const effectiveDefinitions = sku.addedEntryRefs.map((entry) => {
+    const definition = state.v23AffixDefinitions.find(
+      (candidate) => candidate.affixId === entry.ref.id
+        && candidate.revision === entry.ref.revision
+        && candidate.contentHash === entry.ref.contentHash,
+    )!;
+    return { definition, ref: entry.ref };
+  });
+  const affixBreakdown = (overrides.affixBreakdown ?? [
+    ...effectiveDefinitions
+      .sort((left, right) => Buffer.from(left.ref.id).compare(Buffer.from(right.ref.id)))
+      .map(({ definition, ref }) => ({
+        sourceAffixId: definition.affixId,
+        valueScore: definition.payload.valueScore,
+        sourceRef: `affix:${ref.id}@${ref.revision}#${ref.contentHash}`,
+      })),
+  ]) as Array<{ sourceAffixId: string; valueScore: number; sourceRef: string }>;
+  const combinationBreakdown = qualityPolicy.combinationRules.map((rule) => ({
+    leftAffixId: rule.leftAffixId,
+    rightAffixId: rule.rightAffixId,
+    valueScore: rule.valueScore,
+    sourceRef: `${rule.source.sheetId}!${rule.source.cell}`,
+  }));
   const baseAffixScore = affixBreakdown.reduce((sum, entry) => sum + entry.valueScore, 0);
   const combinationScore = combinationBreakdown.reduce((sum, entry) => sum + entry.valueScore, 0);
-  const functionScoreFactor = 1;
   const finalValueScore = (baseAffixScore + combinationScore) * functionScoreFactor;
   const recommendedQualityId: V23SkuAffixValueAssessment["recommendedQualityId"] = finalValueScore < 20
     ? "quality_c_green"
@@ -112,7 +205,8 @@ function assessedQuality(state: ReturnType<typeof directV23State>, overrides: Re
     running += entry.valueScore;
   }
   trace.push({
-    sequence: trace.length + 1, step: "function_factor", sourceRef: "function-sheet!F2",
+    sequence: trace.length + 1, step: "function_factor",
+    sourceRef: `function-sheet!F2@${sourceRevisionId}`,
     subjectIds: ["function:cast", "2"], before: running, operation: "multiply",
     operand: functionScoreFactor, after: finalValueScore,
   });
@@ -123,7 +217,7 @@ function assessedQuality(state: ReturnType<typeof directV23State>, overrides: Re
       : selectedQualityId === "quality_a_purple" ? 65 : 100;
   trace.push({
     sequence: trace.length + 1, step: "quality_range",
-    sourceRef: `quality:v1:${selectedQualityId}`, subjectIds: [selectedQualityId],
+    sourceRef: `${qualityPolicy.id}:${selectedQualityId}`, subjectIds: [selectedQualityId],
     before: finalValueScore, operation: "validate", operand: selectedMax, after: finalValueScore,
   });
   const result = {
@@ -141,8 +235,8 @@ function assessedQuality(state: ReturnType<typeof directV23State>, overrides: Re
       affixBreakdown,
       combinationBreakdown,
       trace,
-      qualityRangePolicyVersion: "quality:v1",
-      scoringPolicyVersion: "score:v1",
+      qualityRangePolicyVersion: qualityPolicy.id,
+      scoringPolicyVersion: "v23-quality-scoring/open007-target-v1",
       inSelectedQualityRange: true,
       inputHash: "0".repeat(64),
       ...overrides,
@@ -1022,6 +1116,7 @@ test("v23 SKU quality carrier is closed and hash-bound after the Phase-D resolve
         qualityOverrideState: string;
         qualityOverrideReason: string | null;
         inSelectedQualityRange: boolean;
+        qualityRangePolicyVersion: string;
         trace: Array<{ sourceRef: string; subjectIds: string[]; operand: number }>;
         inputHash: string;
       };
@@ -1031,7 +1126,8 @@ test("v23 SKU quality carrier is closed and hash-bound after the Phase-D resolve
   summaryAssessment.qualityOverrideState = "OVERRIDDEN";
   summaryAssessment.qualityOverrideReason = null;
   summaryAssessment.inSelectedQualityRange = false;
-  summaryAssessment.trace.at(-1)!.sourceRef = "quality:v1:quality_b_blue";
+  summaryAssessment.trace.at(-1)!.sourceRef =
+    `${summaryAssessment.qualityRangePolicyVersion}:quality_b_blue`;
   summaryAssessment.trace.at(-1)!.subjectIds = ["quality_b_blue"];
   summaryAssessment.trace.at(-1)!.operand = 40;
   const summaryPayload = { ...summaryAssessment } as Record<string, unknown>;
@@ -1049,6 +1145,98 @@ test("v23 SKU quality carrier is closed and hash-bound after the Phase-D resolve
     () => migrateWorkspaceState(summaryTamper),
     /V23_SKU_QUALITY_VALIDATION_SUMMARY_MISMATCH/,
     "品质派生摘要不能通过降级严重度、门禁或文案后重算 hash 绕过",
+  );
+  const rehashAssessment = (candidate: ReturnType<typeof directV23State>) => {
+    const assessment = (
+      candidate.v23SkuDrawerRevisions[0]!.quality as unknown as {
+        assessment: Record<string, unknown>;
+      }
+    ).assessment;
+    const content: Record<string, unknown> = { ...assessment };
+    delete content.inputHash;
+    assessment.inputHash = hash(content);
+    rehash(candidate);
+  };
+  const omittedEffectiveAffix = structuredClone(wellFormed);
+  const omittedAssessment = (
+    omittedEffectiveAffix.v23SkuDrawerRevisions[0]!.quality as {
+      assessment: {
+        affixBreakdown: unknown[];
+        baseAffixScore: number;
+        combinationScore: number;
+        finalValueScore: number;
+        trace: V23SkuAffixValueAssessment["trace"];
+      };
+    }
+  ).assessment;
+  const omittedFunctionTrace = structuredClone(omittedAssessment.trace.at(-2)!);
+  const omittedRangeTrace = structuredClone(omittedAssessment.trace.at(-1)!);
+  omittedAssessment.affixBreakdown = [];
+  omittedAssessment.baseAffixScore = 0;
+  omittedAssessment.combinationScore = 0;
+  omittedAssessment.finalValueScore = 0;
+  omittedAssessment.trace = [
+    { ...omittedFunctionTrace, sequence: 1, before: 0, operand: 1, after: 0 },
+    { ...omittedRangeTrace, sequence: 2, before: 0, after: 0 },
+  ];
+  rehashAssessment(omittedEffectiveAffix);
+  assert.throws(
+    () => migrateWorkspaceState(omittedEffectiveAffix),
+    /V23_SKU_QUALITY_AUTHORITY_REPLAY_MISMATCH/,
+    "省略一个仍启用的 effective affix 并重算所有自报 hash 仍须被权威重放拒绝",
+  );
+
+  const forgedAffixEvidence = structuredClone(wellFormed);
+  const forgedAssessment = (
+    forgedAffixEvidence.v23SkuDrawerRevisions[0]!.quality as {
+      assessment: {
+        affixBreakdown: Array<{ valueScore: number; sourceRef: string }>;
+        baseAffixScore: number;
+        finalValueScore: number;
+        trace: V23SkuAffixValueAssessment["trace"];
+      };
+    }
+  ).assessment;
+  forgedAssessment.affixBreakdown[0]!.valueScore = 2;
+  forgedAssessment.affixBreakdown[0]!.sourceRef = "forged-sheet!Z99";
+  forgedAssessment.baseAffixScore = 2;
+  forgedAssessment.finalValueScore = 2;
+  forgedAssessment.trace[0]!.sourceRef = "forged-sheet!Z99";
+  forgedAssessment.trace[0]!.operand = 2;
+  forgedAssessment.trace[0]!.after = 2;
+  forgedAssessment.trace[1]!.before = 2;
+  forgedAssessment.trace[1]!.after = 2;
+  forgedAssessment.trace[2]!.before = 2;
+  forgedAssessment.trace[2]!.after = 2;
+  rehashAssessment(forgedAffixEvidence);
+  assert.throws(
+    () => migrateWorkspaceState(forgedAffixEvidence),
+    /V23_SKU_QUALITY_AUTHORITY_REPLAY_MISMATCH/,
+    "修改 breakdown 分值与来源后重算 assessment/SKU hash 仍须被 effective entry 权威拒绝",
+  );
+
+  const forgedFunctionFactor = structuredClone(wellFormed);
+  forgedFunctionFactor.functionProfiles[0]!.intensityRules[0]!.scoreFactor = 2;
+  const forgedFactorAssessment = (
+    forgedFunctionFactor.v23SkuDrawerRevisions[0]!.quality as {
+      assessment: {
+        functionScoreFactor: number;
+        finalValueScore: number;
+        trace: V23SkuAffixValueAssessment["trace"];
+      };
+    }
+  ).assessment;
+  forgedFactorAssessment.functionScoreFactor = 2;
+  forgedFactorAssessment.finalValueScore = 2;
+  forgedFactorAssessment.trace[1]!.operand = 2;
+  forgedFactorAssessment.trace[1]!.after = 2;
+  forgedFactorAssessment.trace[2]!.before = 2;
+  forgedFactorAssessment.trace[2]!.after = 2;
+  rehashAssessment(forgedFunctionFactor);
+  assert.throws(
+    () => migrateWorkspaceState(forgedFunctionFactor),
+    /V23_FUNCTION_SCORE_FACTOR_UNRESOLVED/,
+    "同 source revision/ref 篡改当前 factor 并重算全部 hash 不能覆盖 canonical imported row",
   );
   for (const [label, mutate, expected] of [
     ["missing-field", (assessment: Record<string, unknown>) => { delete assessment.inputHash; }, /V23_SKU_QUALITY_ASSESSMENT_SCHEMA_INVALID/],
@@ -1079,7 +1267,11 @@ test("v23 SKU quality carrier is closed and hash-bound after the Phase-D resolve
   rehash(unknownAffix);
   assert.throws(() => migrateWorkspaceState(unknownAffix), /V23_SKU_AFFIX_BREAKDOWN_INVALID/);
   const combinations = directV23State();
-  const otherPayload = { ...affixPayload("affix:other"), semanticContributionKey: "other" };
+  const otherPayload = {
+    ...affixPayload("affix:other"),
+    semanticContributionKey: "other",
+    valueScore: 2,
+  };
   const other = { affixId: "affix:other", revision: 1, contentHash: hash({ affixId: "affix:other", revision: 1, payload: otherPayload }), payload: otherPayload };
   combinations.v23AffixDefinitions.push(other);
   combinations.v23SkuDrawerRevisions[0]!.addedEntryRefs = [
@@ -1087,11 +1279,12 @@ test("v23 SKU quality carrier is closed and hash-bound after the Phase-D resolve
     { kind: "STABLE_AFFIX_REF", ref: { id: other.affixId, revision: other.revision, contentHash: other.contentHash } },
   ];
   combinations.v23SkuDrawerRevisions[0]!.quality = assessedQuality(combinations, {
-    affixBreakdown: [
-      { sourceAffixId: "affix:project", valueScore: 1, sourceRef: "quality-sheet!B2" },
-      { sourceAffixId: "affix:other", valueScore: 2, sourceRef: "quality-sheet!B3" },
-    ],
-    combinationBreakdown: [{ leftAffixId: "affix:project", rightAffixId: "affix:other", valueScore: 1, sourceRef: "quality-matrix!C4" }],
+    combinationBreakdown: [{
+      leftAffixId: "affix:other",
+      rightAffixId: "affix:project",
+      valueScore: 1,
+      sourceRef: "quality-matrix!C4",
+    }],
   }) as never;
   rehash(combinations);
   assert.deepEqual(
@@ -1100,7 +1293,7 @@ test("v23 SKU quality carrier is closed and hash-bound after the Phase-D resolve
     "closed, hash-bound assessment evidence is preserved without rewriting its source refs",
   );
   const reversePair = structuredClone(combinations);
-  (reversePair.v23SkuDrawerRevisions[0]!.quality as { assessment: { combinationBreakdown: unknown[] } }).assessment.combinationBreakdown.push({ leftAffixId: "affix:other", rightAffixId: "affix:project", valueScore: 1, sourceRef: "quality-matrix!C5" });
+  (reversePair.v23SkuDrawerRevisions[0]!.quality as { assessment: { combinationBreakdown: unknown[] } }).assessment.combinationBreakdown.push({ leftAffixId: "affix:project", rightAffixId: "affix:other", valueScore: 1, sourceRef: "quality-matrix!C5" });
   rehash(reversePair);
   assert.throws(() => migrateWorkspaceState(reversePair), /V23_SKU_COMBINATION_BREAKDOWN_INVALID/);
   const unknownCombination = structuredClone(combinations);

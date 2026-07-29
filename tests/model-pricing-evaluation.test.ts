@@ -261,6 +261,7 @@ function pricingContext(sku: SkuDrawerRevision) {
     part: v23Part,
     qualityPolicy: v23QualityPolicy,
     functionProfiles: v23FunctionProfiles,
+    canonicalFunctionProfiles: v23FunctionProfiles,
   };
 }
 

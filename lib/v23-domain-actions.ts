@@ -10,6 +10,7 @@ import {
 import { hasCanonicalReductionPolicyIdentity } from "./reduction-stacking-policy";
 import {
   deriveV23SkuQuality,
+  resolveV23CanonicalFunctionProfiles,
   resolveV23TargetQualityPolicy,
   V23SkuQualityError,
   type V23QualityEntry,
@@ -535,12 +536,17 @@ function deriveSku(
       };
       try {
         const prior = sku.quality.status === "ASSESSED" ? sku.quality.assessment : undefined;
+        const qualityPolicy = resolveV23TargetQualityPolicy(state.qualityValuePolicyDrafts);
         const assessment = deriveV23SkuQuality({
           skuRevisionId: `${sku.skuId}@${sku.revision}`,
           part,
           entries: effective as V23QualityEntry[],
-          policy: resolveV23TargetQualityPolicy(state.qualityValuePolicyDrafts),
+          policy: qualityPolicy,
           functionProfiles: state.functionProfiles,
+          canonicalFunctionProfiles: resolveV23CanonicalFunctionProfiles(
+            state.canonicalRuleSourceDrafts,
+            qualityPolicy.sourceRevisionId,
+          ),
           ...(qualitySelection
             ? { selectedQualityId: qualitySelection.selectedQualityId, overrideReason: qualitySelection.reason }
             : prior

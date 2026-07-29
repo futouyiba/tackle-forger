@@ -3,6 +3,7 @@ import type { PricingPolicyVersion, QualityId } from "./pricing-policy";
 import type { QualityValuePolicyDraft } from "./quality-value-policy";
 import { deterministicHash } from "./rule-kernel";
 import type {
+  CanonicalRuleSourceDraft,
   FunctionProfile,
   SeriesPartRevision,
   SkuDrawerRevision,
@@ -61,6 +62,44 @@ function assertTargetPolicy(policy: QualityValuePolicyDraft) {
   }
 }
 
+function canonicalRuleDraftContent(draft: CanonicalRuleSourceDraft) {
+  return {
+    parameters: draft.parameters,
+    templates: draft.templates,
+    methodProfiles: draft.methodProfiles,
+    itemTypeProfiles: draft.itemTypeProfiles,
+    functionProfiles: draft.functionProfiles,
+    modifiers: draft.modifiers,
+    layers: draft.layers,
+  };
+}
+
+export function resolveV23CanonicalFunctionProfiles(
+  drafts: readonly CanonicalRuleSourceDraft[],
+  sourceRevisionId: string,
+) {
+  const matches = drafts.filter((draft) => draft.sourceRevisionId === sourceRevisionId);
+  if (matches.length !== 1) {
+    throw new V23SkuQualityError(
+      matches.length ? "V23_CANONICAL_FUNCTION_SOURCE_AMBIGUOUS" : "V23_CANONICAL_FUNCTION_SOURCE_UNAVAILABLE",
+      "品质评分必须唯一绑定同源 canonical FunctionProfile 导入证据。",
+    );
+  }
+  const draft = matches[0]!;
+  if (
+    draft.contentHash !== deterministicHash(canonicalRuleDraftContent(draft))
+    || draft.issues.some(
+      (issue) => issue.level === "error" && !issue.code.startsWith("WEIGHT_TEMPLATE_"),
+    )
+  ) {
+    throw new V23SkuQualityError(
+      "V23_CANONICAL_FUNCTION_SOURCE_INVALID",
+      "canonical FunctionProfile 导入证据哈希无效或包含阻断错误。",
+    );
+  }
+  return draft.functionProfiles;
+}
+
 export function resolveV23TargetQualityPolicy(policies: readonly QualityValuePolicyDraft[]) {
   const candidates = policies.filter((policy) => {
     try { assertTargetPolicy(policy); return true; } catch { return false; }
@@ -74,8 +113,24 @@ export function resolveV23TargetQualityPolicy(policies: readonly QualityValuePol
   return candidates[0]!;
 }
 
+export function resolveV23QualityPolicyById(
+  policies: readonly QualityValuePolicyDraft[],
+  policyId: string,
+) {
+  const matches = policies.filter((policy) => policy.id === policyId);
+  if (matches.length !== 1) {
+    throw new V23SkuQualityError(
+      matches.length ? "V23_QUALITY_POLICY_ID_AMBIGUOUS" : "V23_QUALITY_POLICY_ID_UNAVAILABLE",
+      "持久化品质评估必须精确绑定一份品质策略。",
+    );
+  }
+  assertTargetPolicy(matches[0]!);
+  return matches[0]!;
+}
+
 function resolveFunctionFactor(
   profiles: readonly FunctionProfile[],
+  canonicalProfiles: readonly FunctionProfile[],
   part: SeriesPartRevision,
   policy: QualityValuePolicyDraft,
 ) {
@@ -84,20 +139,43 @@ function resolveFunctionFactor(
     throw new V23SkuQualityError("V23_FUNCTION_PROFILE_UNRESOLVED", "Part 功能定位必须唯一解析。");
   }
   const profile = profileMatches[0]!;
+  const canonicalProfileMatches = canonicalProfiles.filter(
+    (entry) => entry.id === part.functionProfileId && entry.enabled,
+  );
+  if (canonicalProfileMatches.length !== 1) {
+    throw new V23SkuQualityError(
+      "V23_FUNCTION_SCORE_FACTOR_UNRESOLVED",
+      "评分系数无法在 canonical FunctionProfile 证据中唯一解析。",
+    );
+  }
+  const canonicalProfile = canonicalProfileMatches[0]!;
   const itemPartId = `part:${part.partType}`;
   const members = profile.intensityRules.filter(
     (entry) => entry.itemPartId === itemPartId && entry.intensity === part.functionIntensity,
   );
   const member = members[0];
+  const canonicalMembers = canonicalProfile.intensityRules.filter(
+    (entry) => entry.itemPartId === itemPartId && entry.intensity === part.functionIntensity,
+  );
+  const canonicalMember = canonicalMembers[0];
   if (profile.sourceRevisionId !== policy.sourceRevisionId
+    || canonicalProfile.sourceRevisionId !== policy.sourceRevisionId
     || members.length !== 1
-    || !Number.isFinite(member?.scoreFactor)
-    || member!.scoreFactor! <= 0
-    || !member!.scoreFactorSourceRef
-    || !member!.scoreFactorSourceRef!.endsWith(`@${policy.sourceRevisionId}`)) {
+    || canonicalMembers.length !== 1
+    || !Number.isFinite(canonicalMember?.scoreFactor)
+    || canonicalMember!.scoreFactor! <= 0
+    || !canonicalMember!.scoreFactorSourceRef
+    || !canonicalMember!.scoreFactorSourceRef!.endsWith(`@${policy.sourceRevisionId}`)
+    || !canonicalMember!.sourceRowId
+    || member?.scoreFactor !== canonicalMember!.scoreFactor
+    || member?.scoreFactorSourceRef !== canonicalMember!.scoreFactorSourceRef
+    || member?.sourceRowId !== canonicalMember!.sourceRowId) {
     throw new V23SkuQualityError("V23_FUNCTION_SCORE_FACTOR_UNRESOLVED", "评分系数必须绑定精确部位、强度和源证据。");
   }
-  return { value: member!.scoreFactor!, sourceRef: member!.scoreFactorSourceRef! };
+  return {
+    value: canonicalMember!.scoreFactor!,
+    sourceRef: canonicalMember!.scoreFactorSourceRef!,
+  };
 }
 
 function recommend(score: number): QualityId | null {
@@ -110,13 +188,19 @@ export function deriveV23SkuQuality(input: {
   entries: readonly V23QualityEntry[];
   policy: QualityValuePolicyDraft;
   functionProfiles: readonly FunctionProfile[];
+  canonicalFunctionProfiles: readonly FunctionProfile[];
   selectedQualityId?: QualityId;
   overrideReason?: string | null;
   /** 仅供当前 SKU 在上游变化后的原子重算；显式选择动作不得设置。 */
   recomputeExistingSelection?: boolean;
 }): V23SkuAffixValueAssessment {
   assertTargetPolicy(input.policy);
-  const functionFactor = resolveFunctionFactor(input.functionProfiles, input.part, input.policy);
+  const functionFactor = resolveFunctionFactor(
+    input.functionProfiles,
+    input.canonicalFunctionProfiles,
+    input.part,
+    input.policy,
+  );
   if (input.entries.some((entry) => !entry.payload.enabled)) {
     throw new V23SkuQualityError(
       "V23_QUALITY_AFFIX_DISABLED",
@@ -222,6 +306,7 @@ export function v23PricingInputFromAssessment(input: {
   part: SeriesPartRevision;
   qualityPolicy: QualityValuePolicyDraft;
   functionProfiles: readonly FunctionProfile[];
+  canonicalFunctionProfiles: readonly FunctionProfile[];
   pricingPolicy: PricingPolicyVersion;
 }) {
   if (input.sku.quality.status !== "ASSESSED") {
@@ -233,6 +318,7 @@ export function v23PricingInputFromAssessment(input: {
     assertTargetPolicy(input.qualityPolicy);
     currentFunctionFactor = resolveFunctionFactor(
       input.functionProfiles,
+      input.canonicalFunctionProfiles,
       input.part,
       input.qualityPolicy,
     );

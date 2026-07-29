@@ -15,6 +15,7 @@ import type {
   V23SkuAffixValueAssessment,
   V23AffixDefinition,
   V23LegacyReadAdapter,
+  V23TechnologyDefinition,
 } from "../lib/types";
 
 function legacyInput(version: 9 | 22) {
@@ -25,6 +26,8 @@ function legacyInput(version: 9 | 22) {
   delete state.v23SkuDrawerRevisions;
   delete state.v23SkuDrawerHeads;
   delete state.v23AffixDefinitions;
+  delete state.v23TechnologyDefinitions;
+  delete state.v23TechnologyHeads;
   delete state.v23MigrationSourceEvidence;
   delete state.v23LegacyReadAdapters;
   return state;
@@ -46,6 +49,24 @@ const withSkuHashes = <T extends object>(sku: T) => {
 const sixKey = (weightBandId = "band:one"): { partType: "rod"; weightBandId: string; fishingMethodId: string; materialTypeId: string; functionProfileId: string; functionIntensity: 1 | 2 | 3 } => ({ partType: "rod", weightBandId, fishingMethodId: "method:lure", materialTypeId: "material:carbon", functionProfileId: "function:cast", functionIntensity: 2 });
 const validMatch = (key = sixKey()) => ({ status: "VALID" as const, functionTemplateRef: { templateId: "template:one", revisionId: "r1", contentHash: hash("template") }, matchedKey: key, inputFingerprint: hash(key) });
 const affixPayload = (id = "affix:project", revision = 1) => ({ name: "Project", category: "attribute" as const, itemPartId: "part:rod", semanticContributionKey: "power", stackingPolicy: "dedupe" as const, generationPolicy: "normal" as const, rarity: "common" as const, valueScore: 1, tags: [], description: "project", enabled: true, operations: [{ operationId: "op:one", operationIndex: 0, sourceAffixId: id, sourceAffixRevision: revision, parameterKey: "power", operation: "flat_adjust" as const, direction: "increase" as const, magnitude: 1, publishedMagnitudeRange: { min: 0, max: 1, ruleSetVersion: "ruleset-v3-migrated-1" } }], passivePayload: null });
+
+function technologyDefinition(state: ReturnType<typeof directV23State>): V23TechnologyDefinition {
+  const member = state.v23AffixDefinitions[0]!;
+  const value = {
+    technologyId: "technology:one",
+    revision: 1,
+    itemPartId: "part:rod" as const,
+    name: "Technology",
+    description: "",
+    memberAffixRefs: [{
+      id: member.affixId,
+      revision: member.revision,
+      contentHash: member.contentHash,
+    }],
+    enabled: true,
+  };
+  return { ...value, contentHash: hash(value) };
+}
 
 function directV23State(partCount = 1) {
   const state = migrateWorkspaceState(legacyInput(22));
@@ -284,11 +305,13 @@ test("v22 to v23 creates explicit review adapters, preserves unknown fields, and
   const snapshotHashesBefore = (snapshotsBefore as Array<unknown>).map((snapshot) => deterministicHash(snapshot));
 
   const migrated = migrateWorkspaceState(legacy);
-  assert.equal(CURRENT_WORKSPACE_SCHEMA_VERSION, 23);
-  assert.equal(migrated.schemaVersion, 23);
+  assert.equal(CURRENT_WORKSPACE_SCHEMA_VERSION, 24);
+  assert.equal(migrated.schemaVersion, 24);
   assert.deepEqual(migrated.v23SeriesPartRevisions, []);
   assert.deepEqual(migrated.v23SkuDrawerRevisions, []);
   assert.deepEqual(migrated.v23AffixDefinitions, []);
+  assert.deepEqual(migrated.v23TechnologyDefinitions, []);
+  assert.deepEqual(migrated.v23TechnologyHeads, []);
   assert.equal(migrated.v23MigrationSourceEvidence.length, 1);
   assert.equal(migrated.v23MigrationSourceEvidence[0]?.sourceSchemaVersion, 22);
   assert.deepEqual(migrated.v23MigrationSourceEvidence[0]?.rawWorkspacePayload, legacy);
@@ -304,12 +327,85 @@ test("v22 to v23 creates explicit review adapters, preserves unknown fields, and
   assert.deepEqual(migrateWorkspaceState(migrated), migrated);
 });
 
+test("schema v24 adds an empty Technology registry without inferring legacy data and closes immutable heads", () => {
+  const legacy = legacyInput(22);
+  const legacyTechnologies = structuredClone(legacy.technologies);
+  const snapshots = structuredClone(legacy.configurationSnapshots);
+  const migrated = migrateWorkspaceState(legacy);
+  assert.equal(migrated.schemaVersion, 24);
+  assert.deepEqual(migrated.v23TechnologyDefinitions, []);
+  assert.deepEqual(migrated.v23TechnologyHeads, []);
+  assert.deepEqual(migrated.technologies, legacyTechnologies);
+  assert.deepEqual(migrated.configurationSnapshots, snapshots);
+  assert.equal(JSON.stringify(migrateWorkspaceState(migrated)), JSON.stringify(migrated));
+
+  const populated = directV23State();
+  const definition = technologyDefinition(populated);
+  populated.v23TechnologyDefinitions = [definition];
+  populated.v23TechnologyHeads = [{ technologyId: definition.technologyId, revision: 1 }];
+  assert.deepEqual(migrateWorkspaceState(populated), populated);
+
+  const tampered = structuredClone(populated);
+  tampered.v23TechnologyDefinitions[0]!.contentHash = "0".repeat(64);
+  assert.throws(() => migrateWorkspaceState(tampered), /V23_TECHNOLOGY_CONTENT_HASH/);
+  const duplicateHead = structuredClone(populated);
+  duplicateHead.v23TechnologyHeads.push(duplicateHead.v23TechnologyHeads[0]!);
+  assert.throws(() => migrateWorkspaceState(duplicateHead), /V23_TECHNOLOGY_HEAD_DUPLICATE/);
+});
+
+test("real schema v23 state gains only empty Technology roots and remains byte-stable", () => {
+  const schema23 = directV23State() as unknown as Record<string, unknown>;
+  schema23.schemaVersion = 23;
+  delete schema23.v23TechnologyDefinitions;
+  delete schema23.v23TechnologyHeads;
+  const rawSource = { schemaVersion: 22, source: "preserved-v23-evidence" };
+  schema23.v23MigrationSourceEvidence = [{
+    sourceEvidenceId: "source:schema-23-fixture",
+    sourceSchemaVersion: 22,
+    rawWorkspacePayload: rawSource,
+    rawWorkspacePayloadHash: deterministicHash(rawSource),
+  }];
+  const before = structuredClone(schema23);
+  const snapshotJson = JSON.stringify(schema23.configurationSnapshots);
+  const snapshotHashes = (schema23.configurationSnapshots as unknown[]).map(deterministicHash);
+
+  const migrated = migrateWorkspaceState(schema23);
+  assert.equal(migrated.schemaVersion, 24);
+  assert.deepEqual(migrated.v23TechnologyDefinitions, []);
+  assert.deepEqual(migrated.v23TechnologyHeads, []);
+  const migratedRemainder = structuredClone(migrated) as unknown as Record<string, unknown>;
+  delete migratedRemainder.schemaVersion;
+  delete migratedRemainder.v23TechnologyDefinitions;
+  delete migratedRemainder.v23TechnologyHeads;
+  const beforeRemainder = structuredClone(before);
+  delete beforeRemainder.schemaVersion;
+  assert.equal(JSON.stringify(migratedRemainder), JSON.stringify(beforeRemainder));
+  assert.equal(deterministicHash(migratedRemainder), deterministicHash(beforeRemainder));
+  assert.equal(JSON.stringify(migrated.configurationSnapshots), snapshotJson);
+  assert.deepEqual(migrated.configurationSnapshots.map(deterministicHash), snapshotHashes);
+  assert.equal(JSON.stringify(migrateWorkspaceState(migrated)), JSON.stringify(migrated));
+
+  for (const [field, value] of [
+    ["v23TechnologyDefinitions", []],
+    ["v23TechnologyHeads", []],
+  ] as const) {
+    const partial = structuredClone(schema23);
+    partial[field] = value;
+    const unchanged = structuredClone(partial);
+    assert.throws(
+      () => migrateWorkspaceState(partial),
+      /V23_TECHNOLOGY_MIGRATION_PARTIAL_STATE_CONFLICT/u,
+    );
+    assert.deepEqual(partial, unchanged);
+  }
+});
+
 test("v9 original input is retained as evidence after the existing sequential chain reaches v23", () => {
   const legacy = legacyInput(9);
   legacy.v9OnlyUnknown = { retained: "verbatim" };
   const snapshotsBefore = structuredClone(legacy.configurationSnapshots);
   const migrated = migrateWorkspaceState(legacy);
-  assert.equal(migrated.schemaVersion, 23);
+  assert.equal(migrated.schemaVersion, 24);
   assert.equal(migrated.v23MigrationSourceEvidence[0]?.sourceSchemaVersion, 9);
   assert.deepEqual(migrated.v23MigrationSourceEvidence[0]?.rawWorkspacePayload, legacy);
   assert.deepEqual(migrated.configurationSnapshots, snapshotsBefore);
@@ -321,7 +417,7 @@ test("implicit schema v1 source evidence remains verbatim while forged schema de
   delete legacy.schemaVersion;
   const snapshotsBefore = structuredClone(legacy.configurationSnapshots);
   const migrated = migrateWorkspaceState(legacy);
-  assert.equal(migrated.schemaVersion, 23);
+  assert.equal(migrated.schemaVersion, 24);
   assert.equal(migrated.v23MigrationSourceEvidence[0]?.sourceSchemaVersion, 1);
   assert.deepEqual(migrated.v23MigrationSourceEvidence[0]?.rawWorkspacePayload, legacy);
   assert.equal(Object.hasOwn(migrated.v23MigrationSourceEvidence[0]!.rawWorkspacePayload, "schemaVersion"), false);
@@ -355,7 +451,7 @@ test("partial v23 state on a v22 payload is rejected instead of completing a mix
   const before = structuredClone(legacy);
   assert.throws(() => migrateWorkspaceState(legacy), /V23_MIGRATION_PARTIAL_STATE_CONFLICT/);
   assert.deepEqual(legacy, before);
-  for (const [key, value] of Object.entries({ v23SeriesPartRevisions: [], v23SkuDrawerRevisions: null, v23SkuDrawerHeads: [], v23AffixDefinitions: {}, v23MigrationSourceEvidence: [], v23LegacyReadAdapters: [] })) {
+  for (const [key, value] of Object.entries({ v23SeriesPartRevisions: [], v23SkuDrawerRevisions: null, v23SkuDrawerHeads: [], v23AffixDefinitions: {}, v23TechnologyDefinitions: [], v23TechnologyHeads: [], v23MigrationSourceEvidence: [], v23LegacyReadAdapters: [] })) {
     const malformed = legacyInput(22);
     malformed[key] = value;
     const unchanged = structuredClone(malformed);
@@ -588,7 +684,7 @@ test("v23 closes quality, technology, source-evidence, and adapter chains", () =
   const source = technology.technologies[0]!;
   technology.v23SeriesPartRevisions[0]!.technologyRefs = [{ id: source.id, revision: source.version, contentHash: "0".repeat(64) }];
   technology.v23SeriesPartRevisions[0] = withPartHashes(technology.v23SeriesPartRevisions[0]!) as SeriesPartRevision;
-  assert.throws(() => migrateWorkspaceState(technology), /V23_TECHNOLOGY_REGISTRY_UNAVAILABLE/);
+  assert.throws(() => migrateWorkspaceState(technology), /V23_PART_TECHNOLOGY_UNRESOLVED/);
 
   const evidence = directV23State();
   const raw = { schemaVersion: 22, original: true, skuDrawers: [{ id: "legacy:sku" }], seriesDefinitions: [] };
@@ -660,12 +756,12 @@ test("v23 Phase A keeps registry-dependent carriers closed and requires one head
   const partTechnology = directV23State();
   partTechnology.v23SeriesPartRevisions[0]!.technologyRefs = [{ id: "technology:one", revision: 1, contentHash: "a".repeat(64) }];
   partTechnology.v23SeriesPartRevisions[0] = withPartHashes(partTechnology.v23SeriesPartRevisions[0]!) as SeriesPartRevision;
-  assert.throws(() => migrateWorkspaceState(partTechnology), /V23_TECHNOLOGY_REGISTRY_UNAVAILABLE/);
+  assert.throws(() => migrateWorkspaceState(partTechnology), /V23_PART_TECHNOLOGY_UNRESOLVED/);
 
   const skuTechnology = directV23State();
   skuTechnology.v23SkuDrawerRevisions[0]!.technologyRefs = [{ id: "technology:one", revision: 1, contentHash: "a".repeat(64) }];
   skuTechnology.v23SkuDrawerRevisions[0] = withSkuHashes(skuTechnology.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
-  assert.throws(() => migrateWorkspaceState(skuTechnology), /V23_TECHNOLOGY_REGISTRY_UNAVAILABLE/);
+  assert.throws(() => migrateWorkspaceState(skuTechnology), /V23_SKU_TECHNOLOGY_UNRESOLVED/);
 
   const lifecycle = directV23State();
   lifecycle.v23SkuDrawerRevisions[0]!.status = "approved";
@@ -1448,7 +1544,6 @@ test("v23 numeric affix carriers freeze published magnitude ranges and RuleSet e
 test("v23 formal persisted derivation round-trips closed binary64 evidence", () => {
   const state = directV23State();
   const sku = state.v23SkuDrawerRevisions[0]!;
-  const part = state.v23SeriesPartRevisions[0]!;
   const key = sixKey();
   const baselinePullKg = 5;
   const templateRef = { templateId: "template:one", revisionId: "r1", contentHash: hash({ contractVersion: "v23-function-template/v1", key, baselinePullKg }) };

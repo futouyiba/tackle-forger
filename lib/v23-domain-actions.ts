@@ -15,6 +15,15 @@ import {
   V23SkuQualityError,
   type V23QualityEntry,
 } from "./v23-sku-quality";
+import {
+  currentV23TechnologyDefinition,
+  expandV23TechnologyRefs,
+  resolveV23AffixDefinition,
+  resolveV23TechnologyDefinition,
+  validateV23TechnologyDefinition,
+  v23TechnologyContentHash,
+  V23TechnologyError,
+} from "./v23-technology";
 import type {
   ReductionStackingPolicyVersion,
   SeriesDefinition,
@@ -25,6 +34,7 @@ import type {
   V23ProjectAffixPayload,
   V23SkuPullDerivationEvidence,
   V23StableContentRef,
+  V23TechnologyDefinition,
   WorkspaceState,
 } from "./types";
 
@@ -37,6 +47,13 @@ export type V23WriteAction =
   | "remove_inherited_affix"
   | "restore_inherited_affix"
   | "copy_sku_local_affix"
+  | "update_sku_local_affix_copy"
+  | "create_technology"
+  | "update_technology"
+  | "attach_part_technology"
+  | "remove_part_technology"
+  | "attach_sku_technology"
+  | "remove_sku_technology"
   | "set_sku_actual_quality";
 
 export class V23DomainActionError extends Error {
@@ -110,6 +127,18 @@ function stableRefs(value: unknown, field: string): V23StableContentRef[] {
   });
 }
 
+function exactRefListsEqual(
+  left: readonly V23StableContentRef[],
+  right: readonly V23StableContentRef[],
+): boolean {
+  return left.length === right.length && left.every((ref, index) => {
+    const other = right[index];
+    return other?.id === ref.id
+      && other.revision === ref.revision
+      && other.contentHash === ref.contentHash;
+  });
+}
+
 const ITEM_PART_ID_BY_TYPE: Record<V23EnabledPartType, string> = {
   rod: "part:rod",
   reel: "part:reel",
@@ -117,25 +146,52 @@ const ITEM_PART_ID_BY_TYPE: Record<V23EnabledPartType, string> = {
 };
 
 function validatePartReferences(state: WorkspaceState, part: SeriesPartRevision): void {
-  if (part.technologyRefs.length) {
-    throw new V23DomainActionError(
-      "V23_TECHNOLOGY_REF_WRITE_UNAVAILABLE",
-      "当前版本尚无 Technology registry/展开器，禁止新写 Technology 引用。",
-    );
-  }
-  const ids = new Set<string>();
-  for (const ref of part.defaultEntryRefs) {
-    if (ids.has(ref.id)) {
-      throw new V23DomainActionError("V23_PART_DEFAULT_AFFIX_DUPLICATE", "Part 默认词条稳定 ID 不得重复。");
-    }
-    ids.add(ref.id);
+  partInheritedEntries(state, part);
+}
+
+function partInheritedEntries(
+  state: WorkspaceState,
+  part: SeriesPartRevision,
+): V23ResolvedAffix[] {
+  const direct = part.defaultEntryRefs.map((ref) => {
     const definition = resolveDefinition(state, ref);
     if (definition.payload.itemPartId !== ITEM_PART_ID_BY_TYPE[part.partType]) {
       throw new V23DomainActionError(
         "V23_AFFIX_ITEM_PART_MISMATCH",
-        "Part 默认词条必须与 Part 类型一致。",
+        "Part 继承词条必须与 Part 类型一致。",
       );
     }
+    return { ref, payload: definition.payload };
+  });
+  if (new Set(direct.map((entry) => entry.ref.id)).size !== direct.length) {
+    throw new V23DomainActionError(
+      "V23_PART_DEFAULT_AFFIX_DUPLICATE",
+      "Part 默认词条稳定 ID 不得重复。",
+    );
+  }
+  const expanded = technology(() => expandV23TechnologyRefs(
+    state,
+    part.technologyRefs,
+    ITEM_PART_ID_BY_TYPE[part.partType],
+  ));
+  try {
+    return v23EffectiveEntries(direct, [], expanded, []);
+  } catch (error) {
+    if (error instanceof Error && /^V23_/u.test(error.message)) {
+      throw new V23DomainActionError(error.message, "Part 继承词条贡献冲突。");
+    }
+    throw error;
+  }
+}
+
+function technology<T>(run: () => T): T {
+  try {
+    return run();
+  } catch (error) {
+    if (error instanceof V23TechnologyError) {
+      throw new V23DomainActionError(error.code, error.message);
+    }
+    throw error;
   }
 }
 
@@ -373,15 +429,7 @@ function currentSku(state: WorkspaceState, skuId: string): SkuDrawerRevision {
 }
 
 function resolveDefinition(state: WorkspaceState, ref: V23StableContentRef): V23AffixDefinition {
-  const matches = state.v23AffixDefinitions.filter(
-    (entry) => entry.affixId === ref.id
-      && entry.revision === ref.revision
-      && entry.contentHash === ref.contentHash,
-  );
-  if (matches.length !== 1) {
-    throw new V23DomainActionError("V23_AFFIX_REF_UNRESOLVED", `词条引用 ${ref.id}@${ref.revision} 无法解析。`);
-  }
-  return matches[0]!;
+  return technology(() => resolveV23AffixDefinition(state, ref));
 }
 
 function resolveEntries(
@@ -495,11 +543,22 @@ function deriveSku(
       message: "重量段必须精确匹配唯一的六键功能模板。",
     });
   } else {
-    const inherited = resolveEntries(state, part.defaultEntryRefs);
+    const inherited = [
+      ...resolveEntries(state, part.defaultEntryRefs),
+      ...technology(() => expandV23TechnologyRefs(
+        state,
+        part.technologyRefs,
+        ITEM_PART_ID_BY_TYPE[part.partType],
+      )),
+    ];
     const added = sku.addedEntryRefs.map((entry) => ({
       ref: entry.ref,
       payload: resolveDefinition(state, entry.ref).payload,
-    }));
+    })).concat(technology(() => expandV23TechnologyRefs(
+      state,
+      sku.technologyRefs,
+      ITEM_PART_ID_BY_TYPE[part.partType],
+    )));
     const copies = sku.localEntryCopies.map((entry) => ({
       ref: entry.sourceRef,
       payload: entry.payload,
@@ -765,6 +824,59 @@ export function executeV23DomainAction(
   requireInputHash(payload);
   requireWorkspaceRevision(payload, workspaceRevision);
 
+  if (action === "create_technology" || action === "update_technology") {
+    const updating = action === "update_technology";
+    assertKeys(payload, [
+      "expectedWorkspaceRevision", "inputHash", "technologyId",
+      ...(updating ? ["expectedTechnologyRevision"] : []),
+      "itemPartId", "name", "description", "memberAffixRefs", "enabled",
+    ]);
+    const technologyId = text(payload.technologyId, "technologyId");
+    const previous = updating
+      ? technology(() => currentV23TechnologyDefinition(state, technologyId))
+      : undefined;
+    if (!updating && (
+      state.v23TechnologyHeads.some((entry) => entry.technologyId === technologyId)
+      || state.v23TechnologyDefinitions.some((entry) => entry.technologyId === technologyId)
+    )) {
+      throw new V23DomainActionError("V23_TECHNOLOGY_ID_CONFLICT", "Technology 稳定 ID 已存在。", 409);
+    }
+    if (previous) expectedEntityRevision(payload, "expectedTechnologyRevision", previous.revision);
+    const itemPartId = text(payload.itemPartId, "itemPartId");
+    if (!Object.values(ITEM_PART_ID_BY_TYPE).includes(itemPartId)) {
+      throw new V23DomainActionError("V23_TECHNOLOGY_ITEM_PART_INVALID", "Technology 部位无效。", 400);
+    }
+    if (previous && previous.itemPartId !== itemPartId) {
+      throw new V23DomainActionError("V23_TECHNOLOGY_ITEM_PART_IMMUTABLE", "Technology 部位不可修改。");
+    }
+    if (typeof payload.enabled !== "boolean" || typeof payload.description !== "string") {
+      throw new V23DomainActionError("V23_TECHNOLOGY_SCHEMA_INVALID", "Technology 字段无效。", 400);
+    }
+    const revision = (previous?.revision ?? 0) + 1;
+    const withoutHash: Omit<V23TechnologyDefinition, "contentHash"> = {
+      technologyId,
+      revision,
+      itemPartId: itemPartId as V23TechnologyDefinition["itemPartId"],
+      name: text(payload.name, "name"),
+      description: payload.description,
+      memberAffixRefs: stableRefs(payload.memberAffixRefs, "memberAffixRefs"),
+      enabled: payload.enabled,
+    };
+    const definition = { ...withoutHash, contentHash: v23TechnologyContentHash(withoutHash) };
+    technology(() => validateV23TechnologyDefinition(state, definition));
+    return {
+      state: {
+        ...state,
+        v23TechnologyDefinitions: [...state.v23TechnologyDefinitions, definition],
+        v23TechnologyHeads: updating
+          ? state.v23TechnologyHeads.map((entry) =>
+            entry.technologyId === technologyId ? { technologyId, revision } : entry)
+          : [...state.v23TechnologyHeads, { technologyId, revision }],
+      },
+      result: { technologyId, technologyRevision: revision, contentHash: definition.contentHash },
+    };
+  }
+
   if (action === "create_series") {
     assertKeys(payload, [
       "expectedWorkspaceRevision", "inputHash", "seriesId", "collectionId", "name", "concept", "parts",
@@ -778,6 +890,12 @@ export function executeV23DomainAction(
       throw new V23DomainActionError("V23_SERIES_PART_COUNT_INVALID", "Series 必须包含 1–3 个 Part。");
     }
     const parts = payload.parts.map((entry) => parsePart(entry, seriesId, 1));
+    if (parts.some((part) => part.technologyRefs.length !== 0)) {
+      throw new V23DomainActionError(
+        "V23_PART_TECHNOLOGY_ACTION_REQUIRED",
+        "创建 Series 时 Part Technology 必须为空；挂载只能使用专用动作。",
+      );
+    }
     if (new Set(parts.map((entry) => entry.partId)).size !== parts.length
       || new Set(parts.map((entry) => entry.partType)).size !== parts.length) {
       throw new V23DomainActionError("V23_SERIES_PART_DUPLICATE", "同一 Series 的 Part ID 与类型必须唯一。");
@@ -813,6 +931,12 @@ export function executeV23DomainAction(
     const nextPart = parsePart(payload.configuration, existing.seriesId, existing.revision + 1);
     if (nextPart.partId !== existing.partId || nextPart.partType !== existing.partType) {
       throw new V23DomainActionError("V23_PART_IDENTITY_IMMUTABLE", "Part 稳定 ID 与类型不可改写。");
+    }
+    if (!exactRefListsEqual(nextPart.technologyRefs, existing.technologyRefs)) {
+      throw new V23DomainActionError(
+        "V23_PART_TECHNOLOGY_ACTION_REQUIRED",
+        "Part Technology 必须精确保留；增删只能使用专用动作。",
+      );
     }
     validatePartReferences(state, nextPart);
     const withPart = replacePartHead(state, nextPart);
@@ -941,6 +1065,132 @@ export function executeV23DomainAction(
     };
   }
 
+  if (action === "attach_part_technology" || action === "remove_part_technology") {
+    assertKeys(payload, [
+      "expectedWorkspaceRevision", "inputHash", "partId", "expectedPartRevision", "technologyRef",
+    ]);
+    const existing = currentPart(state, text(payload.partId, "partId"));
+    expectedEntityRevision(payload, "expectedPartRevision", existing.revision);
+    const [ref] = stableRefs([payload.technologyRef], "technologyRef");
+    const resolved = technology(() => resolveV23TechnologyDefinition(state, ref!));
+    if (resolved.itemPartId !== ITEM_PART_ID_BY_TYPE[existing.partType]) {
+      throw new V23DomainActionError("V23_TECHNOLOGY_ITEM_PART_MISMATCH", "Technology 与 Part 类型不一致。");
+    }
+    const exact = (candidate: V23StableContentRef) =>
+      candidate.id === ref!.id
+      && candidate.revision === ref!.revision
+      && candidate.contentHash === ref!.contentHash;
+    const exists = existing.technologyRefs.some(exact);
+    if (action === "attach_part_technology" ? exists : !exists) {
+      throw new V23DomainActionError("V23_PART_TECHNOLOGY_CONFLICT", "Part Technology 挂载状态冲突。", 409);
+    }
+    const technologyRefs = action === "attach_part_technology"
+      ? [...existing.technologyRefs, ref!]
+      : existing.technologyRefs.filter((entry) => !exact(entry));
+    const input = {
+      partId: existing.partId,
+      seriesId: existing.seriesId,
+      revision: existing.revision + 1,
+      partType: existing.partType,
+      fishingMethodId: existing.fishingMethodId,
+      materialTypeId: existing.materialTypeId,
+      functionProfileId: existing.functionProfileId,
+      functionIntensity: existing.functionIntensity,
+      weightBandIds: existing.weightBandIds,
+      defaultEntryRefs: existing.defaultEntryRefs,
+      technologyRefs,
+    };
+    const inputFingerprint = jcsSha256Hex(input);
+    const nextPart = { ...input, inputFingerprint, contentHash: jcsSha256Hex({ ...input, inputFingerprint }) };
+    validatePartReferences(state, nextPart);
+    const withPart = replacePartHead(state, nextPart);
+    const affected = withPart.v23SkuDrawerHeads
+      .map((head) => currentSku(withPart, head.skuId))
+      .filter((sku) => sku.partId === nextPart.partId)
+      .map((sku) => deriveSku(withPart, nextPart, {
+        ...sku,
+        revision: sku.revision + 1,
+        partRevision: nextPart.revision,
+      }));
+    return {
+      state: replaceSkuHeads(withPart, affected),
+      result: {
+        partId: nextPart.partId,
+        partRevision: nextPart.revision,
+        rederivedSkuIds: affected.map((entry) => entry.skuId),
+      },
+    };
+  }
+
+  if (
+    action === "attach_sku_technology"
+    || action === "remove_sku_technology"
+    || action === "update_sku_local_affix_copy"
+  ) {
+    assertKeys(payload, [
+      "expectedWorkspaceRevision", "inputHash", "skuId", "expectedSkuRevision",
+      ...(action === "update_sku_local_affix_copy"
+        ? ["localCopyId", "affixPayload"]
+        : ["technologyRef"]),
+    ]);
+    const existing = currentSku(state, text(payload.skuId, "skuId"));
+    expectedEntityRevision(payload, "expectedSkuRevision", existing.revision);
+    const part = currentPart(state, existing.partId);
+    let technologyRefs = structuredClone(existing.technologyRefs);
+    let localEntryCopies = structuredClone(existing.localEntryCopies);
+    if (action === "update_sku_local_affix_copy") {
+      const localCopyId = text(payload.localCopyId, "localCopyId");
+      const matches = localEntryCopies.filter((entry) => entry.localCopyId === localCopyId);
+      if (matches.length !== 1) {
+        throw new V23DomainActionError("V23_LOCAL_AFFIX_COPY_UNRESOLVED", "SKU 局部词条副本无法唯一解析。", 409);
+      }
+      const previous = matches[0]!;
+      const parsed = parseProjectAffixPayload(
+        state,
+        previous.sourceRef.id,
+        previous.sourceRef.revision,
+        payload.affixPayload,
+      );
+      if (parsed.itemPartId !== ITEM_PART_ID_BY_TYPE[part.partType]) {
+        throw new V23DomainActionError("V23_AFFIX_ITEM_PART_MISMATCH", "局部词条副本不得跨 Part。");
+      }
+      const copyHash = jcsSha256Hex({
+        localCopyId,
+        sourceRef: previous.sourceRef,
+        payload: parsed,
+      });
+      localEntryCopies = localEntryCopies.map((entry) =>
+        entry.localCopyId === localCopyId ? { ...entry, payload: parsed, copyHash } : entry);
+    } else {
+      const [ref] = stableRefs([payload.technologyRef], "technologyRef");
+      const resolved = technology(() => resolveV23TechnologyDefinition(state, ref!));
+      if (resolved.itemPartId !== ITEM_PART_ID_BY_TYPE[part.partType]) {
+        throw new V23DomainActionError("V23_TECHNOLOGY_ITEM_PART_MISMATCH", "Technology 与 SKU Part 不一致。");
+      }
+      const exact = (candidate: V23StableContentRef) =>
+        candidate.id === ref!.id
+        && candidate.revision === ref!.revision
+        && candidate.contentHash === ref!.contentHash;
+      const exists = technologyRefs.some(exact);
+      if (action === "attach_sku_technology" ? exists : !exists) {
+        throw new V23DomainActionError("V23_SKU_TECHNOLOGY_CONFLICT", "SKU Technology 挂载状态冲突。", 409);
+      }
+      technologyRefs = action === "attach_sku_technology"
+        ? [...technologyRefs, ref!]
+        : technologyRefs.filter((entry) => !exact(entry));
+    }
+    const next = deriveSku(state, part, {
+      ...existing,
+      revision: existing.revision + 1,
+      technologyRefs,
+      localEntryCopies,
+    });
+    return {
+      state: replaceSkuHeads(state, [next]),
+      result: { skuId: next.skuId, skuRevision: next.revision },
+    };
+  }
+
   const commonSkuKeys = ["expectedWorkspaceRevision", "inputHash", "skuId", "expectedSkuRevision"];
   if (action === "add_sku_affix") assertKeys(payload, [...commonSkuKeys, "affixRef"]);
   else if (action === "remove_inherited_affix" || action === "restore_inherited_affix") {
@@ -951,6 +1201,7 @@ export function executeV23DomainAction(
   const existing = currentSku(state, text(payload.skuId, "skuId"));
   expectedEntityRevision(payload, "expectedSkuRevision", existing.revision);
   const part = currentPart(state, existing.partId);
+  const inheritedEntries = partInheritedEntries(state, part);
   let addedEntryRefs = structuredClone(existing.addedEntryRefs);
   let removedInheritedEntryIds = [...existing.removedInheritedEntryIds];
   let localEntryCopies = structuredClone(existing.localEntryCopies);
@@ -969,7 +1220,7 @@ export function executeV23DomainAction(
     addedEntryRefs = [...addedEntryRefs, { kind: "STABLE_AFFIX_REF", ref: ref! }];
   } else if (action === "remove_inherited_affix") {
     const inheritedEntryId = text(payload.inheritedEntryId, "inheritedEntryId");
-    if (!part.defaultEntryRefs.some((entry) => entry.id === inheritedEntryId)
+    if (!inheritedEntries.some((entry) => entry.ref.id === inheritedEntryId)
       || removedInheritedEntryIds.includes(inheritedEntryId)) {
       throw new V23DomainActionError("V23_INHERITED_AFFIX_NOT_ACTIVE", "继承词条不存在或已移除。", 409);
     }
@@ -982,20 +1233,19 @@ export function executeV23DomainAction(
     removedInheritedEntryIds = removedInheritedEntryIds.filter((id) => id !== inheritedEntryId);
   } else {
     const [sourceRef] = stableRefs([payload.affixRef], "affixRef");
-    const inherited = part.defaultEntryRefs.find(
-      (ref) => ref.id === sourceRef!.id
-        && ref.revision === sourceRef!.revision
-        && ref.contentHash === sourceRef!.contentHash,
+    const inherited = inheritedEntries.find(
+      (entry) => entry.ref.id === sourceRef!.id
+        && entry.ref.revision === sourceRef!.revision
+        && entry.ref.contentHash === sourceRef!.contentHash,
     );
     if (!inherited || existing.removedInheritedEntryIds.includes(sourceRef!.id)) {
       throw new V23DomainActionError(
         "V23_LOCAL_AFFIX_COPY_SOURCE_NOT_ACTIVE_INHERITED",
-        "本地词条副本来源必须是当前 Part 中仍 active 的继承默认词条。",
+        "本地词条副本来源必须是当前 Part 中仍 active 的继承词条。",
         409,
       );
     }
-    const source = resolveDefinition(state, sourceRef!);
-    if (source.payload.itemPartId !== ITEM_PART_ID_BY_TYPE[part.partType]) {
+    if (inherited.payload.itemPartId !== ITEM_PART_ID_BY_TYPE[part.partType]) {
       throw new V23DomainActionError("V23_AFFIX_ITEM_PART_MISMATCH", "本地词条副本来源必须与当前 Part 类型一致。");
     }
     const localCopyId = text(payload.localCopyId, "localCopyId");
@@ -1003,10 +1253,10 @@ export function executeV23DomainAction(
       || localEntryCopies.some((entry) => entry.sourceRef.id === sourceRef!.id)) {
       throw new V23DomainActionError("V23_LOCAL_AFFIX_COPY_CONFLICT", "本地词条副本身份或来源重复。", 409);
     }
-    const copyHash = jcsSha256Hex({ localCopyId, sourceRef, payload: source.payload });
+    const copyHash = jcsSha256Hex({ localCopyId, sourceRef, payload: inherited.payload });
     localEntryCopies = [
       ...localEntryCopies,
-      { kind: "LOCAL_AFFIX_COPY", localCopyId, sourceRef: sourceRef!, payload: source.payload, copyHash },
+      { kind: "LOCAL_AFFIX_COPY", localCopyId, sourceRef: sourceRef!, payload: inherited.payload, copyHash },
     ];
   }
 

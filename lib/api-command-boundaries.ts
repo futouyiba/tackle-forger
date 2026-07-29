@@ -38,6 +38,8 @@ const GOVERNED_STATE_FIELDS: readonly GovernedStateField[] = [
   { field: "v23SkuDrawerRevisions", reason: "domain_command", action: "POST /api/v23/actions（create_sku / SKU 词条动作）", actionLabel: "使用 v23 SKU 领域动作" },
   { field: "v23SkuDrawerHeads", reason: "domain_command", action: "POST /api/v23/actions（create_sku / SKU 词条动作）", actionLabel: "使用 v23 SKU 领域动作" },
   { field: "v23AffixDefinitions", reason: "domain_command", action: "POST /api/v23/actions（create_project_affix）", actionLabel: "使用 v23 项目词条领域动作" },
+  { field: "v23TechnologyDefinitions", reason: "domain_command", action: "POST /api/v23/actions（create_technology / update_technology）", actionLabel: "使用 v23 技术定义领域动作" },
+  { field: "v23TechnologyHeads", reason: "domain_command", action: "POST /api/v23/actions（create_technology / update_technology）", actionLabel: "使用 v23 技术定义领域动作" },
   { field: "v23FunctionTemplates", reason: "audit_or_reserved_identity", action: "只读：v23 功能模板仅由受控规则发布流程写入", actionLabel: "保留 v23 功能模板；使用受控规则发布流程" },
   { field: "v23MigrationSourceEvidence", reason: "audit_or_reserved_identity", action: "只读：Phase A v23 migration evidence 仅由受控迁移写入", actionLabel: "保留 v23 迁移证据；使用受控迁移" },
   { field: "v23LegacyReadAdapters", reason: "audit_or_reserved_identity", action: "只读：Phase A v23 legacy adapter 仅由受控迁移写入", actionLabel: "保留 v23 遗留适配器；使用受控迁移" },

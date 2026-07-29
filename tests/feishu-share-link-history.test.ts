@@ -48,7 +48,7 @@ function maliciousEntry(shareUrl: string): Record<string, unknown> {
 }
 
 const ALLOWED_KEYS = ["dataset", "id", "label", "lastUsedAt", "shareUrl"];
-const V23_RESERVED_ROOTS = ["v23SeriesPartRevisions", "v23SeriesPartHeads", "v23SkuDrawerRevisions", "v23SkuDrawerHeads", "v23AffixDefinitions", "v23MigrationSourceEvidence", "v23LegacyReadAdapters"] as const;
+const V23_RESERVED_ROOTS = ["v23SeriesPartRevisions", "v23SeriesPartHeads", "v23SkuDrawerRevisions", "v23SkuDrawerHeads", "v23AffixDefinitions", "v23TechnologyDefinitions", "v23TechnologyHeads", "v23MigrationSourceEvidence", "v23LegacyReadAdapters"] as const;
 function markLegacy(state: Record<string, unknown>, schemaVersion: number) {
   state.schemaVersion = schemaVersion;
   for (const key of V23_RESERVED_ROOTS) delete state[key];

@@ -46,11 +46,19 @@ async function issueQualityCommand(
   idempotencyKey: string,
   payload: Record<string, unknown>,
 ) {
+  return issueCommand("set_sku_actual_quality", idempotencyKey, payload);
+}
+
+async function issueCommand(
+  action: string,
+  idempotencyKey: string,
+  payload: Record<string, unknown>,
+) {
   return issueActionCommand(new NextRequest("http://localhost/api/action-commands", {
     method: "POST",
     headers: authHeaders,
     body: JSON.stringify({
-      action: "set_sku_actual_quality",
+      action,
       idempotencyKey,
       payload,
     }),
@@ -360,6 +368,269 @@ test("v23 preview is authenticated read-only and direct write payload is rejecte
     "ACTION_COMMAND_PAYLOAD_REQUIRED",
   );
   assert.equal((await loadWorkspaceState()).revision, before.revision);
+});
+
+test("Technology write uses the issued command, atomic save, replay and readback boundary", { concurrency: false }, async () => {
+  const current = await loadWorkspaceState();
+  const affixId = "affix:v23-technology-api";
+  const affixPayload = {
+    name: "Technology API member",
+    category: "attribute",
+    itemPartId: "part:rod",
+    semanticContributionKey: "technology-api",
+    stackingPolicy: "dedupe",
+    generationPolicy: "technology_only",
+    rarity: "common",
+    valueScore: 1,
+    tags: [],
+    description: "Technology API fixture",
+    enabled: true,
+    operations: [{
+      operationId: "operation:v23-technology-api",
+      operationIndex: 0,
+      sourceAffixId: affixId,
+      sourceAffixRevision: 1,
+      parameterKey: "pull",
+      operation: "set",
+      value: 5,
+    }],
+    passivePayload: null,
+  };
+  const withAffix = executeV23DomainAction(
+    current.state,
+    current.revision,
+    "create_project_affix",
+    commandPayload(current.revision, { affixId, affixPayload }),
+  ).state;
+  const saved = await saveWorkspaceState({
+    state: withAffix,
+    baseRevision: current.revision,
+    author: "route-test",
+    message: "prepare Technology API member",
+  });
+  assert.equal(saved.conflict, undefined);
+  const prepared = await loadWorkspaceState();
+  const member = prepared.state.v23AffixDefinitions.find((entry) => entry.affixId === affixId)!;
+  const payload = commandPayload(prepared.revision, {
+    technologyId: "technology:v23-api",
+    itemPartId: "part:rod",
+    name: "Technology API",
+    description: "",
+    memberAffixRefs: [{
+      id: member.affixId,
+      revision: member.revision,
+      contentHash: member.contentHash,
+    }],
+    enabled: true,
+  });
+  const issuedResponse = await issueCommand(
+    "create_technology",
+    "v23-api-create-technology",
+    payload,
+  );
+  assert.equal(issuedResponse.status, 200);
+  const issued = await issuedResponse.json() as {
+    actionId: string;
+    commandPayloadRef: { payloadRefId: string };
+  };
+  const invocation = {
+    actionId: issued.actionId,
+    payloadRefId: issued.commandPayloadRef.payloadRefId,
+  };
+  const first = await invokeCommand(invocation);
+  assert.equal(first.status, 200);
+  assert.equal((await first.json() as { replayed?: boolean }).replayed, false);
+  const readback = await loadWorkspaceState();
+  assert.deepEqual(readback.state.v23TechnologyHeads, [{
+    technologyId: "technology:v23-api",
+    revision: 1,
+  }]);
+  assert.equal(readback.state.v23TechnologyDefinitions.length, 1);
+  const replay = await invokeCommand(invocation);
+  assert.equal(replay.status, 200);
+  assert.equal((await replay.json() as { replayed?: boolean }).replayed, true);
+  assert.equal((await loadWorkspaceState()).revision, readback.revision);
+
+  const updatePayload = commandPayload(readback.revision, {
+    technologyId: "technology:v23-api",
+    expectedTechnologyRevision: 1,
+    itemPartId: "part:rod",
+    name: "Technology API revised",
+    description: "requires affix.edit",
+    memberAffixRefs: [{
+      id: member.affixId,
+      revision: member.revision,
+      contentHash: member.contentHash,
+    }],
+    enabled: true,
+  });
+  const mutableCapabilities = PHASE_ONE_CAPABILITIES as unknown as string[];
+  const affixEditIndex = mutableCapabilities.indexOf("affix.edit");
+  assert.notEqual(affixEditIndex, -1);
+  mutableCapabilities.splice(affixEditIndex, 1);
+  try {
+    const deniedIssue = await issueCommand(
+      "update_technology",
+      "v23-api-update-technology-denied-at-issue",
+      updatePayload,
+    );
+    assert.equal(deniedIssue.status, 403);
+  } finally {
+    mutableCapabilities.splice(affixEditIndex, 0, "affix.edit");
+  }
+  assert.equal((await loadWorkspaceState()).revision, readback.revision);
+
+  const revalidationIssue = await issueCommand(
+    "update_technology",
+    "v23-api-update-technology-revalidate",
+    updatePayload,
+  );
+  assert.equal(revalidationIssue.status, 200);
+  const revalidationCommand = await revalidationIssue.json() as {
+    actionId: string;
+    commandPayloadRef: { payloadRefId: string };
+  };
+  mutableCapabilities.splice(affixEditIndex, 1);
+  try {
+    const deniedExecution = await invokeCommand({
+      actionId: revalidationCommand.actionId,
+      payloadRefId: revalidationCommand.commandPayloadRef.payloadRefId,
+    });
+    assert.equal(deniedExecution.status, 403);
+    assert.equal(
+      (await deniedExecution.json() as { code?: string }).code,
+      "ACTION_COMMAND_CAPABILITY_CHANGED",
+    );
+  } finally {
+    mutableCapabilities.splice(affixEditIndex, 0, "affix.edit");
+  }
+  assert.equal((await loadWorkspaceState()).revision, readback.revision);
+
+  const updateIssue = await issueCommand(
+    "update_technology",
+    "v23-api-update-technology-success",
+    updatePayload,
+  );
+  assert.equal(updateIssue.status, 200);
+  const updateCommand = await updateIssue.json() as {
+    actionId: string;
+    commandPayloadRef: { payloadRefId: string };
+  };
+  const updated = await invokeCommand({
+    actionId: updateCommand.actionId,
+    payloadRefId: updateCommand.commandPayloadRef.payloadRefId,
+  });
+  assert.equal(updated.status, 200);
+  const updatedReadback = await loadWorkspaceState();
+  assert.deepEqual(updatedReadback.state.v23TechnologyHeads, [{
+    technologyId: "technology:v23-api",
+    revision: 2,
+  }]);
+  assert.equal(updatedReadback.state.v23TechnologyDefinitions.length, 2);
+
+  const partInput = {
+    partId: "part:v23-technology-api",
+    partType: "rod",
+    fishingMethodId: "method:lure",
+    materialTypeId: "material:carbon",
+    functionProfileId: "function:cast",
+    functionIntensity: 2,
+    weightBandIds: ["band:light"],
+    defaultEntryRefs: [],
+    technologyRefs: [],
+  };
+  const withPart = executeV23DomainAction(
+    updatedReadback.state,
+    updatedReadback.revision,
+    "create_series",
+    commandPayload(updatedReadback.revision, {
+      seriesId: "series:v23-technology-api",
+      collectionId: null,
+      name: "Technology API Part",
+      concept: "dedicated attach boundary",
+      parts: [partInput],
+    }),
+  ).state;
+  const savedPart = await saveWorkspaceState({
+    state: withPart,
+    baseRevision: updatedReadback.revision,
+    author: "route-test",
+    message: "prepare Technology Part API boundary",
+  });
+  assert.equal(savedPart.conflict, undefined);
+  const preparedPart = await loadWorkspaceState();
+  const currentTechnology = preparedPart.state.v23TechnologyDefinitions.find(
+    (entry) => entry.technologyId === "technology:v23-api" && entry.revision === 2,
+  )!;
+  const currentTechnologyRef = {
+    id: currentTechnology.technologyId,
+    revision: currentTechnology.revision,
+    contentHash: currentTechnology.contentHash,
+  };
+
+  const genericUpdateIssue = await issueCommand(
+    "update_part_configuration",
+    "v23-api-part-technology-generic-bypass",
+    commandPayload(preparedPart.revision, {
+      partId: partInput.partId,
+      expectedPartRevision: 1,
+      configuration: { ...partInput, technologyRefs: [currentTechnologyRef] },
+    }),
+  );
+  assert.equal(genericUpdateIssue.status, 200);
+  const genericUpdateCommand = await genericUpdateIssue.json() as {
+    actionId: string;
+    commandPayloadRef: { payloadRefId: string };
+  };
+  const genericUpdate = await invokeCommand({
+    actionId: genericUpdateCommand.actionId,
+    payloadRefId: genericUpdateCommand.commandPayloadRef.payloadRefId,
+  });
+  assert.equal(genericUpdate.status, 422);
+  assert.equal(
+    (await genericUpdate.json() as { code?: string }).code,
+    "V23_PART_TECHNOLOGY_ACTION_REQUIRED",
+  );
+  assert.equal((await loadWorkspaceState()).revision, preparedPart.revision);
+
+  const attachPayload = commandPayload(preparedPart.revision, {
+    partId: partInput.partId,
+    expectedPartRevision: 1,
+    technologyRef: currentTechnologyRef,
+  });
+  const affixReadIndex = mutableCapabilities.indexOf("affix.read");
+  assert.notEqual(affixReadIndex, -1);
+  mutableCapabilities.splice(affixReadIndex, 1);
+  try {
+    const deniedAttachIssue = await issueCommand(
+      "attach_part_technology",
+      "v23-api-attach-part-technology-missing-affix-read",
+      attachPayload,
+    );
+    assert.equal(deniedAttachIssue.status, 403);
+  } finally {
+    mutableCapabilities.splice(affixReadIndex, 0, "affix.read");
+  }
+  const attachIssue = await issueCommand(
+    "attach_part_technology",
+    "v23-api-attach-part-technology-success",
+    attachPayload,
+  );
+  assert.equal(attachIssue.status, 200);
+  const attachCommand = await attachIssue.json() as {
+    actionId: string;
+    commandPayloadRef: { payloadRefId: string };
+  };
+  const attached = await invokeCommand({
+    actionId: attachCommand.actionId,
+    payloadRefId: attachCommand.commandPayloadRef.payloadRefId,
+  });
+  assert.equal(attached.status, 200);
+  const attachedReadback = await loadWorkspaceState();
+  assert.deepEqual(
+    attachedReadback.state.v23SeriesPartRevisions.at(-1)?.technologyRefs,
+    [currentTechnologyRef],
+  );
 });
 
 test("set_sku_actual_quality enforces authorization, concurrency, idempotency, recovery, and readback", { concurrency: false }, async () => {

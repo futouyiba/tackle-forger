@@ -34,6 +34,8 @@ import type {
   WorkspaceRuleSettings,
   WorkspaceState,
   FeishuShareLinkHistoryEntry,
+  V23LegacyReadAdapter,
+  V23MigrationSourceEvidence,
 } from "./types";
 import { defaultAffinityAxisWeights } from "./compatibility";
 import { migrateLegacyProductIdentity } from "./legacy-product-migration";
@@ -66,7 +68,7 @@ import { deterministicHash } from "./rule-kernel";
 import { projectShareLinkHistoryEntry } from "./data-sources";
 import { createFiveAxisDispositionCatalogRevision, createFormalFiveAxisVertexSet } from "./five-axis-formal";
 
-export const CURRENT_WORKSPACE_SCHEMA_VERSION = 22;
+export const CURRENT_WORKSPACE_SCHEMA_VERSION = 23;
 
 const DEFAULT_RULE_SETTINGS: WorkspaceRuleSettings = {
   reductionStackingMode: "diminishing_division",
@@ -113,6 +115,11 @@ const QUALITY_PROFILES: QualityProfile[] = [
 ];
 
 type MutableWorkspace = Record<string, unknown> & Partial<WorkspaceState>;
+
+type MigrationContext = {
+  initialSchemaVersion: number;
+  originalInput: unknown;
+};
 
 function patchLedgerMigrationContext(state:MutableWorkspace):PatchLedgerMigrationContext{
   return {
@@ -1638,7 +1645,302 @@ function migrateV21ToV22(input: MutableWorkspace): MutableWorkspace {
   } as MutableWorkspace;
 }
 
-const migrations: Record<number, (state: MutableWorkspace) => MutableWorkspace> = {
+function requiredLegacyId(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(`V23_MIGRATION_${label}_ID_INVALID`);
+  }
+  return value;
+}
+
+function sameJson(left: unknown, right: unknown) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+const V23_HASH = /^[a-f0-9]{64}$/;
+
+function v23Record(value: unknown, code: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${code}_RECORD_INVALID`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function v23ExactKeys(value: Record<string, unknown>, keys: string[], code: string) {
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
+    throw new Error(`${code}_SCHEMA_INVALID`);
+  }
+}
+
+function v23String(value: unknown, code: string) {
+  if (typeof value !== "string" || value.length === 0) throw new Error(`${code}_INVALID`);
+  return value;
+}
+
+function v23Hash(value: unknown, code: string) {
+  const hash = v23String(value, code);
+  if (!V23_HASH.test(hash)) throw new Error(`${code}_INVALID`);
+  return hash;
+}
+
+function v23Revision(value: unknown, code: string) {
+  if (!Number.isSafeInteger(value) || (value as number) < 1) throw new Error(`${code}_INVALID`);
+  return value as number;
+}
+
+function v23Array(value: unknown, code: string): unknown[] {
+  if (!Array.isArray(value)) throw new Error(`${code}_ARRAY_INVALID`);
+  return value;
+}
+
+function validateV23StableRef(value: unknown, code: string) {
+  const entry = v23Record(value, code);
+  v23ExactKeys(entry, ["id", "revision", "contentHash"], code);
+  const id = v23String(entry.id, `${code}_ID`);
+  const revision = v23Revision(entry.revision, `${code}_REVISION`);
+  const contentHash = v23Hash(entry.contentHash, `${code}_CONTENT_HASH`);
+  return { id, revision, contentHash };
+}
+
+function validateV23RuntimeState(state: MutableWorkspace) {
+  const parts = v23Array(state.v23SeriesPartRevisions, "V23_SERIES_PARTS");
+  const skus = v23Array(state.v23SkuDrawerRevisions, "V23_SKUS");
+  const affixes = v23Array(state.v23AffixDefinitions, "V23_AFFIX_DEFINITIONS");
+  const evidence = v23Array(state.v23MigrationSourceEvidence, "V23_SOURCE_EVIDENCE");
+  const adapters = v23Array(state.v23LegacyReadAdapters, "V23_LEGACY_ADAPTERS");
+
+  const affixRefs = new Map<string, Map<number, Set<string>>>();
+  for (const value of affixes) {
+    const entry = v23Record(value, "V23_AFFIX_DEFINITION");
+    v23ExactKeys(entry, ["affixId", "revision", "contentHash", "payload"], "V23_AFFIX_DEFINITION");
+    const id = v23String(entry.affixId, "V23_AFFIX_ID");
+    const revision = v23Revision(entry.revision, "V23_AFFIX_REVISION");
+    const hash = v23Hash(entry.contentHash, "V23_AFFIX_CONTENT_HASH");
+    const revisions = affixRefs.get(id) ?? new Map<number, Set<string>>();
+    const hashes = revisions.get(revision) ?? new Set<string>();
+    if (hashes.has(hash)) throw new Error("V23_AFFIX_ID_DUPLICATE");
+    hashes.add(hash);
+    revisions.set(revision, hashes);
+    affixRefs.set(id, revisions);
+  }
+  const hasAffixRef = (ref: { id: string; revision: number; contentHash: string }) =>
+    affixRefs.get(ref.id)?.get(ref.revision)?.has(ref.contentHash) === true;
+
+  const partBySeriesAndId = new Map<string, Map<string, Record<string, unknown>>>();
+  const partsBySeries = new Map<string, Record<string, unknown>[]>();
+  for (const value of parts) {
+    const entry = v23Record(value, "V23_SERIES_PART");
+    v23ExactKeys(entry, ["partId", "seriesId", "revision", "partType", "fishingMethodId", "materialTypeId", "functionProfileId", "functionIntensity", "defaultEntryRefs", "technologyRefs", "inputFingerprint", "contentHash"], "V23_SERIES_PART");
+    const partId = v23String(entry.partId, "V23_PART_ID");
+    const seriesId = v23String(entry.seriesId, "V23_PART_SERIES_ID");
+    v23Revision(entry.revision, "V23_PART_REVISION");
+    if (!(["rod", "reel", "line"] as const).includes(entry.partType as "rod" | "reel" | "line")) throw new Error("V23_PART_TYPE_INVALID");
+    v23String(entry.fishingMethodId, "V23_PART_METHOD_ID");
+    v23String(entry.materialTypeId, "V23_PART_MATERIAL_ID");
+    v23String(entry.functionProfileId, "V23_PART_FUNCTION_ID");
+    if (![1, 2, 3].includes(entry.functionIntensity as number)) throw new Error("V23_PART_FUNCTION_INTENSITY_INVALID");
+    for (const value of v23Array(entry.defaultEntryRefs, "V23_PART_DEFAULT_ENTRIES")) {
+      const ref = validateV23StableRef(value, "V23_PART_DEFAULT_ENTRY");
+      if (!hasAffixRef(ref)) throw new Error("V23_PART_DEFAULT_ENTRY_UNRESOLVED");
+    }
+    for (const ref of v23Array(entry.technologyRefs, "V23_PART_TECHNOLOGIES")) validateV23StableRef(ref, "V23_PART_TECHNOLOGY");
+    v23Hash(entry.inputFingerprint, "V23_PART_INPUT_FINGERPRINT");
+    v23Hash(entry.contentHash, "V23_PART_CONTENT_HASH");
+    const partMap = partBySeriesAndId.get(seriesId) ?? new Map<string, Record<string, unknown>>();
+    if (partMap.has(partId)) throw new Error("V23_PART_ID_DUPLICATE");
+    partMap.set(partId, entry);
+    partBySeriesAndId.set(seriesId, partMap);
+    const group = partsBySeries.get(seriesId) ?? [];
+    group.push(entry);
+    partsBySeries.set(seriesId, group);
+  }
+  for (const group of partsBySeries.values()) {
+    if (group.length < 1 || group.length > 3) throw new Error("V23_SERIES_PART_COUNT_INVALID");
+    const kinds = new Set(group.map((entry) => entry.partType));
+    if (kinds.size !== group.length) throw new Error("V23_SERIES_PART_TYPE_DUPLICATE");
+  }
+
+  const localCopyIds = new Set<string>();
+  const validateAffixEntry = (value: unknown, code: string) => {
+    const entry = v23Record(value, code);
+    if (entry.kind === "STABLE_AFFIX_REF") {
+      v23ExactKeys(entry, ["kind", "ref"], code);
+      const ref = validateV23StableRef(entry.ref, `${code}_REF`);
+      if (!hasAffixRef(ref)) throw new Error(`${code}_REF_UNRESOLVED`);
+      return;
+    }
+    if (entry.kind === "LOCAL_AFFIX_COPY") {
+      v23ExactKeys(entry, ["kind", "localCopyId", "sourceRef", "payload", "copyHash"], code);
+      const copyId = v23String(entry.localCopyId, `${code}_COPY_ID`);
+      if (localCopyIds.has(copyId)) throw new Error("V23_LOCAL_COPY_ID_DUPLICATE");
+      localCopyIds.add(copyId);
+      const ref = validateV23StableRef(entry.sourceRef, `${code}_SOURCE_REF`);
+      if (!hasAffixRef(ref)) throw new Error(`${code}_SOURCE_REF_UNRESOLVED`);
+      v23Hash(entry.copyHash, `${code}_COPY_HASH`);
+      return;
+    }
+    throw new Error(`${code}_KIND_INVALID`);
+  };
+  const skuIds = new Set<string>();
+  for (const value of skus) {
+    const entry = v23Record(value, "V23_SKU");
+    v23ExactKeys(entry, ["skuId", "revision", "seriesId", "partId", "weightBandId", "functionTemplateRef", "inputFingerprint", "validity", "removedInheritedEntryIds", "addedEntryRefs", "localEntryCopies", "technologyRefs", "recommendedQualityId", "selectedQualityId", "qualityOverrideReason", "contentHash"], "V23_SKU");
+    const skuId = v23String(entry.skuId, "V23_SKU_ID");
+    if (skuIds.has(skuId)) throw new Error("V23_SKU_ID_DUPLICATE");
+    skuIds.add(skuId);
+    v23Revision(entry.revision, "V23_SKU_REVISION");
+    const seriesId = v23String(entry.seriesId, "V23_SKU_SERIES_ID");
+    const partId = v23String(entry.partId, "V23_SKU_PART_ID");
+    if (!partBySeriesAndId.get(seriesId)?.has(partId)) throw new Error("V23_SKU_PART_UNRESOLVED");
+    v23String(entry.weightBandId, "V23_SKU_WEIGHT_BAND_ID");
+    const template = v23Record(entry.functionTemplateRef, "V23_TEMPLATE_REF");
+    v23ExactKeys(template, ["templateId", "revisionId", "contentHash"], "V23_TEMPLATE_REF");
+    v23String(template.templateId, "V23_TEMPLATE_ID");
+    v23String(template.revisionId, "V23_TEMPLATE_REVISION_ID");
+    v23Hash(template.contentHash, "V23_TEMPLATE_CONTENT_HASH");
+    v23Hash(entry.inputFingerprint, "V23_SKU_INPUT_FINGERPRINT");
+    if (!(["VALID", "INVALID_NO_MATCH", "INVALID_AMBIGUOUS", "NEEDS_MIGRATION_REVIEW"] as const).includes(entry.validity as never)) throw new Error("V23_SKU_VALIDITY_INVALID");
+    const removed = v23Array(entry.removedInheritedEntryIds, "V23_SKU_REMOVED_ENTRIES");
+    if (new Set(removed.map((id) => v23String(id, "V23_SKU_REMOVED_ENTRY_ID"))).size !== removed.length) throw new Error("V23_SKU_REMOVED_ENTRY_DUPLICATE");
+    for (const refEntry of v23Array(entry.addedEntryRefs, "V23_SKU_ADDED_ENTRY_REFS")) {
+      const stableEntry = v23Record(refEntry, "V23_SKU_ADDED_ENTRY_REF");
+      if (stableEntry.kind !== "STABLE_AFFIX_REF") throw new Error("V23_SKU_ADDED_ENTRY_REF_KIND_INVALID");
+      validateAffixEntry(stableEntry, "V23_SKU_ADDED_ENTRY_REF");
+    }
+    for (const copy of v23Array(entry.localEntryCopies, "V23_SKU_LOCAL_COPIES")) {
+      const copyEntry = v23Record(copy, "V23_SKU_LOCAL_COPY");
+      if (copyEntry.kind !== "LOCAL_AFFIX_COPY") throw new Error("V23_SKU_LOCAL_COPY_KIND_INVALID");
+      validateAffixEntry(copyEntry, "V23_SKU_LOCAL_COPY");
+    }
+    for (const ref of v23Array(entry.technologyRefs, "V23_SKU_TECHNOLOGIES")) validateV23StableRef(ref, "V23_SKU_TECHNOLOGY");
+    if (entry.recommendedQualityId !== null) v23String(entry.recommendedQualityId, "V23_RECOMMENDED_QUALITY_ID");
+    if (entry.selectedQualityId !== null) v23String(entry.selectedQualityId, "V23_SELECTED_QUALITY_ID");
+    if (entry.qualityOverrideReason !== null) v23String(entry.qualityOverrideReason, "V23_QUALITY_OVERRIDE_REASON");
+    if (entry.recommendedQualityId !== null && entry.selectedQualityId !== null && entry.recommendedQualityId !== entry.selectedQualityId && entry.qualityOverrideReason === null) throw new Error("V23_QUALITY_OVERRIDE_REASON_REQUIRED");
+    if (entry.recommendedQualityId === entry.selectedQualityId && entry.qualityOverrideReason !== null) throw new Error("V23_QUALITY_OVERRIDE_REASON_UNEXPECTED");
+    v23Hash(entry.contentHash, "V23_SKU_CONTENT_HASH");
+  }
+
+  const evidenceIds = new Set<string>();
+  for (const value of evidence) {
+    const entry = v23Record(value, "V23_SOURCE_EVIDENCE");
+    v23ExactKeys(entry, ["sourceEvidenceId", "sourceSchemaVersion", "rawWorkspacePayload", "rawWorkspacePayloadHash"], "V23_SOURCE_EVIDENCE");
+    const id = v23String(entry.sourceEvidenceId, "V23_SOURCE_EVIDENCE_ID");
+    if (evidenceIds.has(id)) throw new Error("V23_SOURCE_EVIDENCE_ID_DUPLICATE");
+    evidenceIds.add(id);
+    v23Revision(entry.sourceSchemaVersion, "V23_SOURCE_SCHEMA_VERSION");
+    const hash = v23String(entry.rawWorkspacePayloadHash, "V23_SOURCE_PAYLOAD_HASH");
+    // Existing workspace deterministicHash is an 8-hex content contract, not
+    // the new v23 64-hex stable-reference contract.
+    if (hash !== deterministicHash(entry.rawWorkspacePayload)) throw new Error("V23_SOURCE_PAYLOAD_HASH_MISMATCH");
+  }
+
+  const adapterIds = new Set<string>();
+  for (const value of adapters) {
+    const entry = v23Record(value, "V23_LEGACY_ADAPTER");
+    v23ExactKeys(entry, ["adapterId", "kind", "sourceEvidenceId", "sourceSeriesId", "sourceSkuId", "rawSeriesPayload", "rawSkuPayload", "diagnosticCodes", "status"], "V23_LEGACY_ADAPTER");
+    const id = v23String(entry.adapterId, "V23_LEGACY_ADAPTER_ID");
+    if (adapterIds.has(id)) throw new Error("V23_LEGACY_ADAPTER_ID_DUPLICATE");
+    adapterIds.add(id);
+    if (entry.kind !== "LEGACY_NEEDS_REVIEW" || entry.status !== "NEEDS_REVIEW") throw new Error("V23_LEGACY_ADAPTER_DISCRIMINANT_INVALID");
+    if (!evidenceIds.has(v23String(entry.sourceEvidenceId, "V23_LEGACY_ADAPTER_EVIDENCE_ID"))) throw new Error("V23_LEGACY_ADAPTER_EVIDENCE_UNRESOLVED");
+    if (entry.sourceSeriesId !== null) v23String(entry.sourceSeriesId, "V23_LEGACY_ADAPTER_SERIES_ID");
+    if (entry.sourceSkuId !== null) v23String(entry.sourceSkuId, "V23_LEGACY_ADAPTER_SKU_ID");
+    const diagnostics = v23Array(entry.diagnosticCodes, "V23_LEGACY_ADAPTER_DIAGNOSTICS");
+    if (!diagnostics.length || new Set(diagnostics).size !== diagnostics.length) throw new Error("V23_LEGACY_ADAPTER_DIAGNOSTICS_INVALID");
+    const allowed = new Set(["V23_SERIES_UNRESOLVED", "V23_PART_UNRESOLVED", "V23_WEIGHT_BAND_UNRESOLVED", "V23_FUNCTION_TEMPLATE_UNRESOLVED"]);
+    if (diagnostics.some((code) => typeof code !== "string" || !allowed.has(code))) throw new Error("V23_LEGACY_ADAPTER_DIAGNOSTICS_INVALID");
+  }
+}
+
+/**
+ * Phase A creates only read adapters. v22 has target-pull / nearest-projection
+ * data, but no authoritative Part, weight-band, or 04.5 template identity.
+ * Keeping that ambiguity explicit is safer than manufacturing a v23 SKU.
+ */
+function migrateV22ToV23(input: MutableWorkspace, context: MigrationContext): MutableWorkspace {
+  const sourceEvidenceId = `v23-source:schema-${context.initialSchemaVersion}`;
+  const sourceEvidence: V23MigrationSourceEvidence = {
+    sourceEvidenceId,
+    sourceSchemaVersion: context.initialSchemaVersion,
+    rawWorkspacePayload: structuredClone(context.originalInput),
+    rawWorkspacePayloadHash: deterministicHash(context.originalInput),
+  };
+  const existingEvidence = arrayOf<V23MigrationSourceEvidence>(input.v23MigrationSourceEvidence);
+  if (existingEvidence.some((entry) => entry.sourceEvidenceId === sourceEvidenceId && !sameJson(entry, sourceEvidence))) {
+    throw new Error("V23_MIGRATION_SOURCE_EVIDENCE_CONFLICT");
+  }
+  const evidence = existingEvidence.some((entry) => entry.sourceEvidenceId === sourceEvidenceId)
+    ? existingEvidence
+    : [...existingEvidence, sourceEvidence];
+  if (
+    arrayOf<unknown>(input.v23SeriesPartRevisions).length
+    || arrayOf<unknown>(input.v23SkuDrawerRevisions).length
+    || arrayOf<unknown>(input.v23AffixDefinitions).length
+    || arrayOf<unknown>(input.v23LegacyReadAdapters).length
+  ) {
+    throw new Error("V23_MIGRATION_PARTIAL_STATE_CONFLICT");
+  }
+
+  const series = arrayOf<Record<string, unknown>>(input.seriesDefinitions);
+  const seriesById = new Map<string, Record<string, unknown>>();
+  for (const entry of series) {
+    // A legacy Series without a stable identity remains readable only through
+    // an unresolved adapter; it must not prevent unrelated historical data
+    // from being inspected or be guessed into a new v23 Part.
+    if (typeof entry.id !== "string" || entry.id.length === 0) continue;
+    const id = entry.id;
+    if (seriesById.has(id) && !sameJson(seriesById.get(id), entry)) {
+      throw new Error("V23_MIGRATION_SERIES_ID_CONFLICT");
+    }
+    seriesById.set(id, entry);
+  }
+
+  const adapters: V23LegacyReadAdapter[] = [];
+  const adapterIds = new Set<string>();
+  for (const legacySku of arrayOf<Record<string, unknown>>(input.skuDrawers)) {
+    const sourceSkuId = requiredLegacyId(legacySku.id, "SKU");
+    const sourceSeriesId = typeof legacySku.seriesId === "string" && legacySku.seriesId.length > 0
+      ? legacySku.seriesId
+      : null;
+    const adapterId = `v23-legacy-adapter:${sourceSkuId}`;
+    if (adapterIds.has(adapterId)) throw new Error("V23_MIGRATION_SKU_ID_CONFLICT");
+    adapterIds.add(adapterId);
+    adapters.push({
+      adapterId,
+      kind: "LEGACY_NEEDS_REVIEW",
+      sourceEvidenceId,
+      sourceSeriesId,
+      sourceSkuId,
+      rawSeriesPayload: sourceSeriesId && seriesById.has(sourceSeriesId)
+        ? structuredClone(seriesById.get(sourceSeriesId))
+        : null,
+      rawSkuPayload: structuredClone(legacySku),
+      diagnosticCodes: [
+        ...(sourceSeriesId && seriesById.has(sourceSeriesId) ? [] : ["V23_SERIES_UNRESOLVED" as const]),
+        "V23_PART_UNRESOLVED",
+        "V23_WEIGHT_BAND_UNRESOLVED",
+        "V23_FUNCTION_TEMPLATE_UNRESOLVED",
+      ],
+      status: "NEEDS_REVIEW",
+    });
+  }
+
+  return {
+    ...input,
+    schemaVersion: 23,
+    v23SeriesPartRevisions: [],
+    v23SkuDrawerRevisions: [],
+    v23AffixDefinitions: [],
+    v23MigrationSourceEvidence: evidence,
+    v23LegacyReadAdapters: adapters,
+    // ConfigurationSnapshot is intentionally not read, normalized, or copied
+    // here. It is a published byte-sensitive payload.
+  } as MutableWorkspace;
+}
+
+const migrations: Record<number, (state: MutableWorkspace, context: MigrationContext) => MutableWorkspace> = {
   1: migrateV1ToV2,
   2: migrateV2ToV3,
   3: migrateV3ToV4,
@@ -1660,6 +1962,7 @@ const migrations: Record<number, (state: MutableWorkspace) => MutableWorkspace> 
   19: migrateV19ToV20,
   20: migrateV20ToV21,
   21: migrateV21ToV22,
+  22: migrateV22ToV23,
 };
 
 export function migrateWorkspaceState(input: unknown): WorkspaceState {
@@ -1667,12 +1970,14 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
     throw new Error("工作区状态必须是对象。");
   }
 
+  const originalInput = structuredClone(input);
   let state = structuredClone(input) as MutableWorkspace;
   let version =
     typeof state.schemaVersion === "number" ? state.schemaVersion : 1;
   if (!Number.isInteger(version) || version < 1) {
     throw new Error("工作区 schemaVersion 无效。");
   }
+  const versionAtInput = version;
   if (version > CURRENT_WORKSPACE_SCHEMA_VERSION) {
     throw new Error(
       "工作区版本 " + version + " 高于当前支持版本 " +
@@ -1685,7 +1990,7 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
     if (!migrate) {
       throw new Error("缺少从 schema v" + version + " 开始的顺序迁移。");
     }
-    state = migrate(state);
+    state = migrate(state, { initialSchemaVersion: versionAtInput, originalInput });
     const nextVersion = state.schemaVersion;
     if (typeof nextVersion !== "number" || nextVersion <= version) {
       throw new Error("schema v" + version + " 迁移没有推进版本号。");
@@ -1794,6 +2099,7 @@ export function migrateWorkspaceState(input: unknown): WorkspaceState {
     currentFiveAxisDispositionCatalogRevisionId:
       dispositionMigration.currentRevisionId,
   };
+  validateV23RuntimeState(state);
   return state as WorkspaceState;
 }
 

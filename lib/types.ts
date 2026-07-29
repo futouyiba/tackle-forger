@@ -1139,6 +1139,116 @@ export interface SkuDrawer {
   updatedAt: string;
 }
 
+/** Schema v23 only enables the currently supported product parts. */
+export type V23EnabledPartType = "rod" | "reel" | "line";
+
+export interface V23StableContentRef {
+  id: string;
+  revision: number;
+  contentHash: string;
+}
+
+/**
+ * A v23 Series is still identified only by its stable seriesId.  Parts are
+ * independent revisions so later phases can change one part without using a
+ * Series-level pull or function identity as a substitute.
+ */
+export interface SeriesPartRevision {
+  partId: string;
+  seriesId: string;
+  revision: number;
+  partType: V23EnabledPartType;
+  fishingMethodId: string;
+  materialTypeId: string;
+  functionProfileId: string;
+  functionIntensity: FunctionIntensity;
+  defaultEntryRefs: V23StableContentRef[];
+  technologyRefs: V23StableContentRef[];
+  inputFingerprint: string;
+  contentHash: string;
+}
+
+export interface V23AffixDefinition {
+  affixId: string;
+  revision: number;
+  contentHash: string;
+  payload: unknown;
+}
+
+export type V23SkuAffixEntry =
+  | {
+      kind: "STABLE_AFFIX_REF";
+      ref: V23StableContentRef;
+    }
+  | {
+      kind: "LOCAL_AFFIX_COPY";
+      localCopyId: string;
+      sourceRef: V23StableContentRef;
+      payload: unknown;
+      copyHash: string;
+    };
+
+export interface V23FunctionTemplateRef {
+  templateId: string;
+  revisionId: string;
+  contentHash: string;
+}
+
+export type V23SkuValidity =
+  | "VALID"
+  | "INVALID_NO_MATCH"
+  | "INVALID_AMBIGUOUS"
+  | "NEEDS_MIGRATION_REVIEW";
+
+/**
+ * This is only the persistence carrier.  Phase A intentionally does not
+ * match 04.5 templates, derive pull, or calculate quality.
+ */
+export interface SkuDrawerRevision {
+  skuId: string;
+  revision: number;
+  seriesId: string;
+  partId: string;
+  weightBandId: string;
+  functionTemplateRef: V23FunctionTemplateRef;
+  inputFingerprint: string;
+  validity: V23SkuValidity;
+  removedInheritedEntryIds: string[];
+  addedEntryRefs: Extract<V23SkuAffixEntry, { kind: "STABLE_AFFIX_REF" }>[];
+  localEntryCopies: Extract<V23SkuAffixEntry, { kind: "LOCAL_AFFIX_COPY" }>[];
+  technologyRefs: V23StableContentRef[];
+  recommendedQualityId: QualityProfileId | null;
+  selectedQualityId: QualityProfileId | null;
+  qualityOverrideReason: string | null;
+  contentHash: string;
+}
+
+/** Original inputs are retained separately so a v23 read adapter never has to
+ * infer a stable target from a name, pull range, or nearest projection. */
+export interface V23MigrationSourceEvidence {
+  sourceEvidenceId: string;
+  sourceSchemaVersion: number;
+  rawWorkspacePayload: unknown;
+  rawWorkspacePayloadHash: string;
+}
+
+export interface V23LegacyReadAdapter {
+  adapterId: string;
+  kind: "LEGACY_NEEDS_REVIEW";
+  sourceEvidenceId: string;
+  sourceSeriesId: string | null;
+  sourceSkuId: string | null;
+  rawSeriesPayload: unknown;
+  rawSkuPayload: unknown;
+  diagnosticCodes: Array<
+    | "V23_SERIES_UNRESOLVED"
+    | "V23_PART_UNRESOLVED"
+    | "V23_WEIGHT_BAND_UNRESOLVED"
+    | "V23_FUNCTION_TEMPLATE_UNRESOLVED"
+  >;
+  status: "NEEDS_REVIEW";
+}
+
 export interface ModelComponentSelection {
   itemPartId: string;
   componentId: string;
@@ -2782,6 +2892,12 @@ export interface WorkspaceState {
   affinityAxisWeights: AffinityAxisWeights;
   collections: Collection[];
   seriesDefinitions: SeriesDefinition[];
+  /** v23 target-state carriers; v9/v22 collections remain read-only legacy data. */
+  v23SeriesPartRevisions: SeriesPartRevision[];
+  v23SkuDrawerRevisions: SkuDrawerRevision[];
+  v23AffixDefinitions: V23AffixDefinition[];
+  v23MigrationSourceEvidence: V23MigrationSourceEvidence[];
+  v23LegacyReadAdapters: V23LegacyReadAdapter[];
   partConstraintSets: PartConstraintSet[];
   skuDrawers: SkuDrawer[];
   purchasableModels: PurchasableModel[];

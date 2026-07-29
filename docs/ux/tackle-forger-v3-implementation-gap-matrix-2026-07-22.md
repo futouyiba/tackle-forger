@@ -1,6 +1,7 @@
 # Tackle Forger v3 当前实现与 UX 原型差距矩阵
 
 > 审计日期：2026-07-23
+> 重量段SKU目标态差距复核：2026-07-28 23:44:18 +08:00，精确代码基线`ae6f782b1272efcf3ccf6feba5f81c4ca8b917bf`；只读核对确认`CURRENT_WORKSPACE_SCHEMA_VERSION = 22`，v9为历史迁移输入。本轮仅修改文档并规划v23，不冒充运行时实现或测试证据。
 > 原始实现审计代码基线：`a393c5470a73081967690dab733cf9cc5202cdc1`（2026-07-22 20:06:22 +0800）
 > 原始验证时间：2026-07-22 20:58:36 +0800
 > 本次反馈归并复核：2026-07-22 22:55:13 +0800，HEAD `ba2111c2e6021d968606cfe4ee3e839732184d71`；只复核本次五条反馈及对应代码事实，没有重跑完整测试。
@@ -29,12 +30,12 @@
 | 高密度数据驾驶舱与分组导航 | 已实现 | Workbench 分为建模、品质、生产、治理；生产构建渲染测试覆盖完整客户端和样式 | 实际部署后继续做多分辨率视觉回归 |
 | 飞书唯一规则工作簿入口 | 已实现 | 侧栏顶部固定“飞书规则源 / 显式拉取工作簿”；按 sheet_id 检查、显式拉取 revision、建 RuleSet 草稿、ID 迁移和 PricingPolicyDraft 分离 | 真实租户部署需配置飞书应用凭据并做一次线上回读 |
 | 写回、拉取、发布三步分离 | 已实现 | RuleWorkbookWorkbench 与 API 明确分成检查、显式拉取、创建草稿、人工显式发布；ruleset.publish 独立授权，过期源/error 阻断，warning 需理由，发布重试幂等且冻结审计 hash | 无 |
-| Series 规划范围与离散拉力规格 | 已实现 | 正式创建以明确离散列表为唯一必填生成输入；planningPullRange 可选且不参与生成；每个值独立匹配并物化一个 SKU | 无 |
+| Series内1～3个独立Part | 缺失 | 当前`app/api/series/route.ts`和UI仍以Series统一字段及拉力规格创建对象 | 新增Part revision；竿/轮/线任意非空且不重复；钓法、材质、功能定位/强度、统一词条和Technology归Part |
 | 连续范围自动生成 SKU | 因 v3 冲突而不采纳 | v3 固定“范围负责规划，离散拉力负责生成” | 不实现连续插值或静默补规格 |
-| 纵向重量轴、横向品质/类型泳道 | 已实现 | SeriesGanttWorkbenchV3 使用真实离散 SKU 节点与 Series 覆盖块；范围不充当实体 | 实际页面继续做视觉密度微调 |
+| 按Part合并连续重量段的甘特图 | 缺失 | 当前SeriesGanttWorkbenchV3按`targetPullKg`与Series覆盖块绘制 | 使用01.x顺序；同Part相邻合并、缺段拆分、跨Part不合并；点击合并块后再选具体段 |
 | SKU 抽屉与多个 Model | 部分实现 | SKU抽屉、多Model、候选生成与右侧预览已存在；但`SeriesGanttQuery`仍按对象可见性裁剪Series/SKU/Model并隐藏总数，R2父链仍会返回脱敏占位，与当前OPEN-009统一业务Capability契约冲突 | 按[Issue #31](https://github.com/futouyiba/tackle-forger/issues/31)移除对象级裁剪、隐藏计数和脱敏父链，改为Model总数/当前查询命中数、完整稳定父链及跨工作区明确拒绝，并补齐R1/R2回归 |
-| SKU targetPullKg变更身份保护 | 部分实现 | 已有离散拉力唯一性、稳定skuId、revision和Snapshot冻结基础 | 尚缺统一重量变更命令及回归：无已发布后代时同skuId新revision；有已发布后代时强制新SKU并可废弃旧SKU |
-| 最近结构标杆 | 已实现 | 相同部位、钓法、类型、功能内按 abs(ln(target/derived))；不插值；平局规则确定 | 无 |
+| 重量段SKU预览与显式新增 | 缺失 | 当前创建Series时按拉力自动物化SKU，且`/api/skus/target-pull/**`允许直接变更 | 点击重量段只列现有SKU并提供新增；同Part同段允许多个；保存weightBandId/functionTemplateRef/输入指纹 |
+| 04.5六键唯一匹配 | 缺失 | 当前`lib/projection-matcher.ts`按`targetPullKg`最近匹配 | 按partType+weightBandId+fishingMethod+materialType+functionProfile/intensity精确匹配，零/多均fail-closed |
 | Patch 分层与 Rebase | 已实现 | patch-engine 支持稳定层序、冲突与 rebase 差异；上游变化不改旧 Snapshot | 无 |
 | Patch操作统一契约 | 部分实现 | PatchLedger与工作台使用set/add/multiply/clear，迁移器把旧remove转换为clear | 旧ProjectionPatchOperation仍暴露remove，旧AdjustmentRule路径仍可执行min/max；需按v3规范收口适配器、冻结规范化和迁移复核 |
 | PatchLedger 权威账本 | 部分实现 | Workspace schema v15 + PatchLedger schema v4已有稳定 ID、仅 ACTIVE 重放、revision 幂等、ORPHANED、新revision式Rebase/吸收和Snapshot引用冻结 | 运行时`PatchOperationRecord`、PatchLedger schema/migration及operation/revision/Snapshot哈希尚未绑定`workspaceId`或第14.4节JCS哈希契约；须以版本化迁移补齐工作区归属与新哈希，无法安全归属的旧记录进入迁移复核，并保持既有revision、Snapshot引用及历史哈希证据不可变。还须实现不可变`PatchCollaborationEvent`存储，在同一PatchLedger事务内校验`expectedCollaborationRevision`、分配下一revision并按`collaborationEventId`幂等追加，建议接受/拒绝/撤回直接校验原始`SHARED_RULE_SUGGESTED`；远端镜像只能发生在本地提交后。至少补“两工作区复用相同Patch/revision/operation ID不碰撞”、迁移幂等、事件重复重试、两个客户端并发冲突/重读后显式重试回归 |
@@ -43,10 +44,14 @@
 | 飞书 Patch 台账镜像 | 部分实现 | 已有领域契约和旧版镜像写入/拉取命令、部分失败及回读恢复状态；已确认`Patch台账/edyFx9`、`A:AK`机器区和`AM:BA`协作事件区；旧路径仍使用不含`workspaceId`的明细键，缺少第14.4节的JCS哈希、远端schema/IssueCode校验和`write_patch_mirror`/`pull_patch_mirror` ActionCode，因此不能视为符合新契约 | 除远端表头物化、机器区/协作区保护边界和连接器联调外，服务端仍须把写入/拉取升级到工作区复合键、哈希、schema、IssueCode和ActionCode/Capability契约，并实现本地协作事件原子追加后镜像、对应action availability，以及`inspect_patch_mirror`、`repair_patch_mirror`、`rebuild_patch_mirror_from_local`、`fix_patch_mirror_schema`、`migrate_patch_subject`；全部动作均须覆盖Capability门禁、二次确认（适用时）、审计证据、重复重试、回读、缺行、篡改、hash及并发冲突测试，完成前不得标记为可用 |
 | 硬兼容与 Affinity | 已实现 | deny/require 与软分值分离；高 Affinity 不覆盖 deny；低分合法候选仍可生成 | 无 |
 | 属性词条、被动词条与 Technology | 部分实现 | Technology只展开成员、按affixId去重、被动参与价值分但不执行模拟器逻辑；但运行时仍保留`ReductionStackingMode = linear_subtraction | diminishing_division`、旧`percent_bonus/flat_bonus/reduction`字段与未冻结累加顺序 | 按[Issue #41](https://github.com/futouyiba/tackle-forger/issues/41)迁移到`direction + 非负magnitude`规范DTO、唯一`bidirectional_ratio`、完整operation顺序、binary64确定性模型、冲突隔离、Trace/hash和历史Snapshot兼容；在主工作簿规则与策略版本发布前只允许非正式预览 |
-| 品质评分 | 部分实现 | 人工选择品质、组合矩阵、Technology/Affix去重、功能系数与source=quality Trace已存在 | 2026-07-23新契约要求S包含100、>100阻断并彻底移除Performance乘数/Trace；当前内核仍有`performanceScoringEnabled/performanceScoreFactor`与旧边界冲突逻辑 |
+| SKU词条继承与局部副本 | 缺失 | 当前尚未区分项目级完整定义、SKU局部副本与引用，也无继承屏蔽/恢复意图 | 实现effectiveSkuEntries、Technology稳定ID去重、Part更新重算且保留SKU局部意图 |
+| SKU派生拉力与Model只读边界 | 缺失 | 当前可直接输入targetPullKg，Model/Patch链仍可影响拉力最终值 | 拉力只由04.5基准+有效词条派生；ModelPatch对拉力四种操作全部禁止 |
+| 品质推荐与人工实际品质 | 缺失 | 当前人工先选品质并做区间校验；旧实现把100纳入S | v23分开保存推荐/实际品质/覆盖理由；统一`[min,max)`，100及以上无推荐；定价使用实际品质 |
 | 性能定位摘要 | 缺失 | 当前Series、候选、规则内核、Affinity和UI仍把PerformanceProfile/performanceId作为显式输入或贡献 | 迁移为结算后只读PerformanceSummary；历史字段只读保留，不再参与搜索、计分、兼容、Affinity或定价 |
 | 自动定价与 NON_FORMAL | 部分实现 | 07/08 同 revision 导入、Lerp、结构源重量段、维修/购买Raw公式、Trace和旧策略发布阻断已存在 | 尚未实现维修/购买分别最终舍入、购买使用未舍入维修价、舍入后购买最低价，以及超300M的fingerprint WARNING确认；当前`error/clamp`不能代表新契约 |
 | 手填价格兜底 | 因 v3 冲突而不采纳 | 正式价格只能来自已发布 PricingPolicyVersion | 不提供绕过动作 |
+| 项目Excel完整往返 | 缺失 | 当前Excel/飞书/正式配置导出边界混有既有实现，尚无统一项目数据完整替换与稳定ID合并契约 | 项目Excel等资格CRUD；完整替换/稳定ID合并；完整导出可无损回导；与配置Git导出分离 |
+| Schema v23迁移 | 缺失 | 主线当前为v22；v9只在历史迁移链 | 新增22→23，保留未知字段与旧payload；无法唯一匹配进入失效/复核；二次执行无变化；旧Snapshot/hash不变 |
 | 五维图及双模式比较 | 部分实现 | 已有版本化ViewDefinition/VertexSet、基础逐点计算、缺失值不归零和Snapshot冻结骨架；但运行时仍是鱼重等级、`component_min_ratio`汇总、仅同部位比较、旧五轴/三种Series基准，且旧种子定义标记为`PUBLISHED`并可进入现有发布检查 | 迁移到按`modelFinalPullKg`选择W段、竿轮线逐件且无汇总线、混合部位2–5件、仅`projection_reference`唯一选择器、`five-axis-hash-input/v1`固定向量和`FORMAL_CURRENT`发布门禁；旧定义/Snapshot只读保留且hash不变。定义发布、运行时迁移、UI与自动化验收仍由Issue #13后续独立交付 |
 | AI 建议壳与草稿边界 | 已实现 | AI 默认关闭；仅草稿；不能写飞书、发布或改变裁决；证据、过期和权限契约已有测试 | 产品策略已由OPEN-006确认；真实连接器在Issue #25完成、测试并启用前保持禁用 |
 | AI 真实供应方 | 部分实现 | OPEN-006已确认Fancy Hub、动态模型修订、`ai-request/v1`字段白名单和数据出网策略；UI当前明确禁用并解释原因 | 按[Issue #25](https://github.com/futouyiba/tackle-forger/issues/25)实现连接器、契约测试、密钥扫描、失败降级、保留清理和启用准入；完成前不得发送真实数据 |

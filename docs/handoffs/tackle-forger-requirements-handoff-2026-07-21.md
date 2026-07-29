@@ -1,6 +1,6 @@
 # Tackle Forger 需求集中交接（2026-07-21）
 
-> 最后对齐v3：2026-07-27
+> 最后对齐v3：2026-07-28
 
 ## 1. 文档定位
 
@@ -13,6 +13,8 @@
 - “AI评估与建议”是带证据的辅助层，不是新的规则裁决层。
 
 ## 2. 规则层与结构标杆
+
+> 2026-07-28目标态取代本节下方的直接拉力最近匹配作为新建流程：01.x只提供重量段目录/区间/顺序/甘特坐标；用户选择重量段后按`partType + weightBandId + fishingMethod + materialType + functionProfile/intensity`唯一匹配04.5。下方旧算法只用于Schema v9/v22历史读取与旧Snapshot重放。
 
 规则层分开计算，但钓法和类型可以在同一个界面步骤编辑：
 
@@ -31,23 +33,23 @@
 
 ## 3. Series、SKU、Model与词条
 
-- 先确定Quality，再编辑Series，最后选择词条。
+- Series包含1～3个独立Part，竿/轮/线任意非空且每种最多一个。
 - Quality固定为 `C/绿、B/蓝、A/紫、S/橙`。
-- Series表达概念一致的定位、词条和产品规划，可包含多个离散目标重量。
-- 同一Series内 `targetPullKg` 必须唯一；1.5kg、3.5kg、8.2kg分别生成多个SKU。
+- 每个Part独立保存部件类型、钓法、材质、功能定位/强度、统一词条和Technology。
+- 同一Part、同一weightBandId允许多个SKU；点击重量段只预览，不创建。
 - SKU是“钓具抽屉”，Model才是玩家实际选择和购买的型号。
 - 当前Series/SKU/Model、`targetPullKg`、最近结构标杆匹配、甘特图和候选生成只处理竿、轮、线；SKU不包含钩、漂、真饵或拟饵。
 - 钩、漂、真饵和拟饵当前完全延期。产品界面不提供注册表只读入口、“未启用”占位、草稿、生成、发布、Snapshot或导出；注册表和迁移层只保留稳定ID、历史Payload和引用。未来任一部位启动前必须另建独立产品设计Issue，不得从本交接直接进入实现。
 - 一个SKU可包含快调短竿、慢调长竿等多个Model。
 - `name` 只用于显示和搜索；关联、幂等和改名前后对齐使用稳定ID与revision。
-- SKU修改`targetPullKg`时，若尚无任何已发布后代Snapshot，则保留skuId并创建新revision；若已有已发布后代，则旧SKU的重量身份冻结，新重量必须创建新SKU，旧SKU可废弃。
+- SKU保存weightBandId、稳定functionTemplateRef与输入指纹；Part变化重新匹配，零/多匹配时标失效并保留局部意图。
 - 正式路由和命令中的`EntityRef.revisionId`必填；不得用“当前最新版”隐式补齐写操作目标。
 - 飞书 `06_系列` 保存 `SeriesArchetype`，不是运行时Series、SKU或Model。
-- 词条在具体钓具阶段应用，不进入结构标杆匹配。
-- 拉力词条只改变最终Model属性、价值分、兼容性或发布结果，不反向重选标杆。
+- Part统一词条与Technology实时继承到已有SKU；SKU可增加、屏蔽/恢复、局部复制修改并保持局部意图。
+- SKU最终拉力只由04.5基准和有效词条派生；Model只读继承，ModelPatch不得修改拉力。
 - 技术是词条组合包，不得与内部词条重复提供同名属性加成。
 - 被动词条只保存、计分和展示，不执行或验证模拟器逻辑。
-- 选词条后计算并留存价值分，用于Quality区间校验和定价；不得反向自动改Quality。
+- 选词条后计算推荐品质；人工实际品质可与推荐不同并保存覆盖理由，定价使用实际品质。
 - 配置完成后按版本化定义派生`PerformanceSummary`，显示“抛投+、重量-、竿度+”等结果与证据；不得反向计分、改属性、改兼容、改Affinity或改价格。
 
 ## 4. 自动生成、人工介入与Patch
@@ -82,7 +84,7 @@
 
 Model右侧预览层包含可配置五维图。正式五轴及顺序固定为拉力、耐久、抛投、感度、操控；Model以结算后的`modelFinalPullKg`进入版本化W重量段，竿、轮、线分别绘制，不生成最弱环节汇总线。多装备比较允许混合部位2–5件，轮线抛投按比较顺序继承第一根竿；无竿时为`not_applicable`，缺失或错误不得补0。正式分封顶100，未封顶`comparisonScore`按真实比例绘制到外圈之外。
 
-Series基准只采用`projection_reference`并输出竿、轮、线三条独立结构投影参考线。引用必须由`projection-reference/current-sku-frozen-match/v1`从Snapshot锚定的SKU revision逐部位唯一选择，冻结ProjectionMatch和projection ID/revision、选择器版本、缺失状态及`projectionReferenceSetHash`；不得按默认SKU、查询顺序、同W段其他投影或页面上下文回退。顶点与候选哈希使用`five-axis-hash-input/v1`的JCS/UTF-8/SHA-256闭集契约。旧五维定义和Snapshot只读保留；符合OPEN-005的新定义成为唯一`FORMAL_CURRENT`前，新正式Snapshot必须fail-closed。
+Series基准只采用`projection_reference`并输出竿、轮、线独立结构参考线。Schema v23必须由`projection-reference/v23-function-template-frozen/v1`从Snapshot锚定的SKU revision读取冻结的`partId + weightBandId + functionTemplateRef + 输入指纹`；`projection-reference/current-sku-frozen-match/v1`与ProjectionMatch只用于v9/v22历史Snapshot。两者都必须冻结选择器版本、逐部位缺失状态及`projectionReferenceSetHash`，不得按默认SKU、查询顺序、同W段其他引用或页面上下文回退。顶点与候选哈希使用`five-axis-hash-input/v1`的JCS/UTF-8/SHA-256闭集契约。旧五维定义和Snapshot只读保留；符合OPEN-005且选择器与Workspace Schema一致的新定义成为唯一`FORMAL_CURRENT`前，新正式Snapshot必须fail-closed。
 
 “Model预览”和“AI评估与建议”共用右侧层。`AIRecommendation` 记录证据、影响对象、影响属性、动作、建议Patch、生成时间和规则版本。
 
@@ -127,8 +129,8 @@ AI只允许预览、生成Model Patch草稿或飞书规则提案草稿。AI不�
 
 品质与价值分：
 
-- 先人工选择Quality，再选择词条和Technology；系统只校验，不根据分数自动改品质。
-- 当前正式区间为C/绿`[0,20)`、B/蓝`[20,40)`、A/紫`[40,65)`、S/橙`[65,100]`；100命中S，大于100阻断，不夹取或外推。
+- 先计算推荐品质，再由用户采纳或人工选择实际品质；两者分开保存。
+- 目标区间统一为C/绿`[0,20)`、B/蓝`[20,40)`、A/紫`[40,65)`、S/橙`[65,100)`；100及以上无推荐并阻断目标态正式发布。
 - 基础分为去重后的词条价值分，加上同部位每个无序词条对只计一次的组合分；Technology只展开成员，不重复计分。
 - 三张组合矩阵中的显式0、正分和负分都是规则值；空白镜像半区不是0。缩写必须先解析为稳定affixId，运行时不得按名称关联。
 - 最终分只按功能定位评分系数相乘。Performance不参与价值分；旧源中的性能评分引用和旧payload字段只作为迁移证据，不能再产生乘1或其他`performance_factor` Trace。
@@ -137,7 +139,7 @@ AI只允许预览、生成Model Patch草稿或飞书规则提案草稿。AI不�
 
 定价重量段沿用结构标杆命中的源重量段：`MATCHED_STRUCTURAL_SOURCE_BAND`。评分插值为品质区间内线性插值。维修价与购买价全程使用未舍入中间值，购买价使用未舍入维修价，两者只在各自最终输出阶段分别做三位有效数字向下取整。最低价100只在购买价舍入后应用。300,000,000是比较`purchasePriceRaw`的软确认阈值，不是封顶值。
 
-运行时执行语义已落实：飞书仍写`[65,100)`时产生`QUALITY_RANGE_SOURCE_OUTDATED`并保留旧单元格；旧`PerformanceProfile/performanceScoringPolicy`、`roundingStage/minimumPriceScope/overflowMode`只读兼容；v20新schema表达两个独立输出、购买价输入基底、最低价顺序和超限确认。
+当前Schema v22仍实现旧边界；目标实现新增v23与新策略版本。历史“100属于S”策略、旧`PerformanceProfile/performanceScoringPolicy`及旧定价字段只读兼容，不重解释旧Snapshot。
 
 `purchasePriceRaw > 300,000,000`产生`PRICE_UPPER_THRESHOLD_CONFIRMATION_REQUIRED`，为`severity=WARNING, gate=PUBLISH`。未确认时要求二次确认；确认后`ACKNOWLEDGED`并保留实际价格与超限标记继续，不ERROR、不BLOCK、不CLAMP。确认绑定fingerprint、Model revision、PricingPolicyVersion、inputHash、Raw/舍入/最终价格、阈值、确认人、时间和理由；输入变化后旧确认STALE。目标字段无法表达真实价格时另产不可确认的EXPORT BLOCKER。
 

@@ -50,14 +50,14 @@
 | 18 | 04.1_功能定位-轮 | `17jqiE` | 同上·轮 | §2 FunctionProfile | 同上 | ✅ | 同上 |
 | 19 | 04.2_功能定位-线 | `18pjcZ` | 同上·线 | §2 FunctionProfile | 同上 | ✅ | 同上 |
 | 20 | 04.00_FunctionProfile常量 | `19XKzU` | FunctionProfile 父级定义：`function:all_round` 等，`supportedIntensities`、核心定义/优势/代价、三部位 group ID | §2 FunctionProfile / §4.2 / §14 父 ID 权威 | `model-candidate-generation.ts`、`types.ts`、`compatibility.ts` | ✅ | 源表为 2026-07-24 taxonomy review（rev 4227）产物。spec §14（line 938）：父 ID 权威，`func_*` 仅强度行，禁止按 displayName 聚组 |
-| 21 | 04.5.0_功能模板-竿 | `20OOnC` | 重量模板 × 钓法 × 类型 × 功能定位 的派生（`fcpl_rod_*`，BOUND） | §3.1 / §5 StructuralBenchmark / DerivedProjection | `projection-matcher.ts`、`engine.ts`、`calculation-trace.ts`、`types.ts` | ✅ | 源表持久化了派生结果；spec §5.1 称 StructuralBenchmark「按需计算并缓存，不预先持久化」——飞书侧为审核镜像，运行时以计算为准 |
-| 22 | 04.5.1_功能模板-轮 | `21kEvM` | 同上·轮 | §5 | 同上 | ✅ | 同上 |
-| 23 | 04.5.2_功能模板-线 | `22RAak` | 同上·线（含 `#N/A` 脏数据） | §5 | 同上 | ✅ | 源表样例第 2 行 `竿拉力=#N/A`，导入需走迁移复核 |
+| 21 | 04.5.0_功能模板-竿 | `20OOnC` | 目标态SKU数值基准；按partType + weightBandId + fishingMethod + materialType + functionProfile/intensity唯一匹配（`fcpl_rod_*`） | §5 FunctionTemplate04_5 | `projection-matcher.ts`等当前实现仍待v23迁移 | 📋 | 目标键不得加入旧typeId/targetPullKg；源表旧字段到六键的映射是实现迁移事项，零/多匹配fail-closed |
+| 22 | 04.5.1_功能模板-轮 | `21kEvM` | 同上·轮 | §5 | 同上 | 📋 | 同上 |
+| 23 | 04.5.2_功能模板-线 | `22RAak` | 同上·线（含 `#N/A` 脏数据） | §5 | 同上 | 📋 | `#N/A`不得参与匹配；保留源证据并进入复核 |
 | 24 | 05_词条 | `23CsXE` | Affix：属性/被动词条，加/减百分比，改变值（万分比），价值评分，生成稀有档位，公式说明 | §2 Affix / §11.1 分类 / §11.3 叠加 / §12.1 价值分 | `affix-engine.ts`、`reduction-stacking-policy.ts`、`quality-value-policy.ts`、`types.ts` | ✅ | spec 称 Affix；规范 operation 为 `percent_adjust/flat_adjust/clamp_add/enum_add/set`。源表「加百分比/减百分比」是旧输入别名 |
 | 25 | 06_技术 | `24YDSO` | Technology：词条命名组合包，组成词条，正/负/净分，适合功能 | §2 Technology / §11.2 | `affix-engine.ts`、`compatibility.ts`、`types.ts` | ✅ | spec 称 Technology；只展开成员 Affix 贡献属性与价值分，本身不重复计分 |
 | 26 | 07_系列 | `25UnTC` | Series 原型：入门·泛用 等，包含技术、推荐竿类型、推荐功能定位；`series_rod_*` | §2 Series / §6.2 / §7 不变量 | `product-model.ts`、`types.ts`、`seed.ts`、`v3-seed.ts` | ✅ | 源表实体类型 `SeriesArchetype`。spec §6.2 要求 Series 固定 method/type/quality/coreFunction/核心词条家族等 |
 | 27 | 08.0_品质评分-公式 | `26gpIF` | 公式：`最终评分 = (∑词条价值+∑组合评分) × 功能定位_评分系数` | §12.1 finalValueScore / baseAffixScore | `quality-value-policy.ts` | ✅ | 公式形态与 spec §12.1 一致；spec 另要求 Performance 不参与计分 |
-| 28 | 08.1_品质评分-品质定义 | `27hboC` | Quality 区间（C/绿 0-20、B/蓝 20-40…）+ 最小/最大价格系数 | §4.1 QualityProfile / §12.1 / §20.1 QualityPricingBasketMapping | `quality-value-policy.ts`、`pricing-policy.ts` | ✅ | spec §12.1 已决 S 为 `[65,100]` 含 100；若源表仍为旧 `[65,100)`，导入产生 `QUALITY_RANGE_SOURCE_OUTDATED`，飞书修订前禁止发布新策略 |
+| 28 | 08.1_品质评分-品质定义 | `27hboC` | Quality区间与最小/最大价格系数 | §4.1 / §12.1 / §20.1 | `quality-value-policy.ts`、`pricing-policy.ts` | 📋 | 2026-07-28目标区间统一`[min,max)`，S为`[65,100)`，100及以上无推荐；历史含100策略只服务旧Snapshot |
 | 29 | 08.2_品质评分-词条组合 | `28fQhg` | affix × affix 组合评分矩阵（双列 `词条1/词条2`） | §12.1 combinationScore / 组合矩阵 | `quality-value-policy.ts` | ✅ | spec 称「07_品质评分 还提供竿/轮/线三张组合矩阵」。源表仅一张通用；`—` 对角线不产生组合，显式 `0` 是合法值 |
 | 30 | 09.0_价格计算-公式 | `31RxeB` | 竿/轮/线维修价格公式（基础维修价 × 维修系数 × 评分插值） | §20.1 PricingPolicy | `pricing-policy.ts` | ✅ | spec §20.1 公式更精细：维修/购买分别舍入、购买价用未舍入维修价、最低价 100 仅作用于购买价 |
 | 31 | 09.1_价格计算-参数释义 | `32BmZs` | 定价参数键释义：`score_interpolation_policy`、`rod_parts_to_whole_ratio` 等 | §20.1 PricingExecutionPolicy | `pricing-policy.ts`、`types.ts` | ✅ | spec 把执行策略显式化为 `PricingExecutionPolicy`（3 位有效数字向下取整、阈值 3 亿软确认） |
@@ -83,7 +83,7 @@
 
 1. **WQ8w 是当前唯一权威主工作簿**（分表；本表列出 `CANONICAL_FEISHU_SHEET_REGISTRY` 登记的表）。spec §14 历史引用的 YsEKw（wiki，约 18 张合并表）是切流前的旧表，§14 审计区保留其拓扑作历史证据；本表（WQ8w）映射按**概念语义**对应，不按表号或 sheet_id 对应。
 
-2. **品质 S 区间源表过期**。源表 `08.1` 可能仍写 `[65,100)`；spec §12.1 已决 `S=[65,100]` 含 100（评分 100 属 S，>100 报 `QUALITY_SCORE_OUT_OF_RANGE`）。飞书机器源修订并显式拉取前，导入器产生 `QUALITY_RANGE_SOURCE_OUTDATED`，旧 Draft 禁止发布为新正式 `QualityValuePolicyVersion`。代码 `quality-value-policy.ts` 已按新契约。
+2. **品质边界与运行时均待v23迁移**。2026-07-28最新目标为全部区间`[min,max)`、S=`[65,100)`、评分100及以上无推荐。当前v22和历史策略可能把100归入S；不得原地改写旧策略或Snapshot，新策略与迁移按独立任务落地。
 
 3. **02.5 / 03.5 派生模板写回未上线**。源表 `fshg_*/tppl_*` 行标记 `BOUND`，看似已持久化；但 spec §14（line 940）明确「`02.5` 专用持久化写回命令尚未提供」，当前 rev `4226→4227` 的写入与技术回读**仅是迁移证据**，不得宣称为该工作流已上线。代码侧以运行时演绎为权威。
 
@@ -97,6 +97,6 @@
 
 8. **19_Patch台账 飞书镜像禁用中**。源表前 3 行全空；spec §14.4（line 1098）明确「工作表当前仍为空表；在表头、保护边界和联调完成前，真实镜像写入/拉取保持禁用，不得伪造 `SYNCED`」。运行时 `patch-ledger.ts`（64.9K，权威）已完整实现 Patch 账本语义，飞书镜像同步为 🟡 部分（命令边界、哈希契约在 `patch-authority.ts` 已定义，远端联调未开）。
 
-9. **04.5 功能模板「持久化派生」与 spec「不预先持久化」张力**。源表 `fcpl_*` 把「重量模板×钓法×类型×功能定位」的派生结果持久化为 BOUND 行；spec §5.1 称 StructuralBenchmark「按需计算并缓存，不预先持久化其他近乎无限的组合」「缓存不是人工编辑源」。代码以运行时演绎（`projection-matcher.ts`/`engine.ts`）为权威，飞书侧持久化仅作审核镜像。
+9. **04.5已成为目标态SKU数值基准，代码尚未切流**。目标态按六键唯一定位04.5行，再由有效词条派生SKU拉力；当前`projection-matcher.ts`仍以直接targetPullKg最近匹配。源表字段到六键的稳定映射、脏数据隔离和v23迁移必须独立实现并回归。
 
 10. **「性能定位」字段去功能化**。源表多处出现「性能定位」列（如 `12.x` 的「标准工艺\|1」、`08.x` 历史「性能定位」表述）；spec §2/§11.2.1 明确 `PerformanceSummary` 是「结算后的只读派生摘要，不是配置输入或数值贡献层」，不参与价值分（§12.1 禁止读 `performanceScoreFactor`）。代码 `performance-summary.ts` 为只读派生。源表的性能字段属历史/样例，不参与计分。

@@ -6,8 +6,8 @@ Tackle Forger是一套内部钓具配置生产工作台，负责：
 飞书规则源
 → 已发布规则集
 → 多维派生模板
-→ 产品族与严格系列
-→ SKU重量抽屉
+→ 产品族、Series与独立Part
+→ 重量段下的SKU抽屉
 → 具体Model
 → 配置快照
 ```
@@ -16,7 +16,7 @@ Tackle Forger是一套内部钓具配置生产工作台，负责：
 
 - 参数、重量模板、钓法、类型、功能、品质规则与性能摘要派生；
 - 属性词条、被动技能词条和技术组合；
-- 最近派生模板匹配；
+- 以重量段和Part配置唯一定位04.5功能模板；
 - 兼容、属性平衡、系列不变量和杆轮线闭环；
 - Series、SKU和Model的人工Patch；
 - 品质评分、稀有度和配置发布；
@@ -41,9 +41,9 @@ flowchart LR
     C --> D["Function Profile"]
     D --> E["Structural Benchmark"]
     E --> F["Series"]
-    F --> G["SKU Drawer / targetPullKg"]
-    G --> H["Nearest Structural Match"]
-    H --> I["Intensity + Material + Patch + Affix"]
+    F --> G["Series Part + WeightBand"]
+    G --> H["Unique 04.5 Match"]
+    H --> I["Effective SKU Entries"]
     I --> J["Purchasable Model"]
     J --> P["Derived Performance Summary"]
     P --> K["Configuration Snapshot"]
@@ -57,11 +57,14 @@ flowchart LR
 | FunctionProfile | 泛用、远投、障碍强攻等玩法方向 |
 | functionIntensity | 同一功能方向的专精强度1/2/3 |
 | PerformanceSummary | Series/Model完成Technology、词条与最终属性结算后派生的只读性能定位摘要，例如抛投+、重量-、竿度+；不是配置输入或数值贡献层 |
-| QualityProfile | C/绿、B/蓝、A/紫、S/橙的系列品质身份；本身不直接修改面板 |
+| QualityProfile | C/绿、B/蓝、A/紫、S/橙的SKU品质身份；本身不直接修改面板 |
 | StructuralBenchmark / DerivedProjection | 仅由基础拉力模板×钓法×类型×功能定位演绎出的只读结构标杆 |
 | Collection | 营销产品族，可包含多个严格Series |
-| Series | 钓法、类型、核心功能和核心词条稳定的系列；性能定位由配置结果派生，不是Series身份字段 |
-| SKU | 玩家看到的钓具抽屉，对应一个离散targetPullKg；界面可显示为重量规格 |
+| Series | 组织1～3个互不重复竿/轮/线Part的系列容器；不统一保存钓法、功能定位或目标拉力 |
+| Part | Series内独立编辑的竿、轮或线配置；拥有钓法、材质类型、功能定位/强度、统一词条与Technology |
+| WeightBand | 01.x提供的离散目录项、区间、显示顺序与甘特坐标；不是SKU最终拉力基准 |
+| FunctionTemplate04_5 | 按Part配置与weightBandId唯一匹配的04.5.0/1/2功能模板行，是SKU数值基准 |
+| SKU | 玩家看到的钓具抽屉；属于一个Part和一个weightBandId，同一Part同一重量段可以有多个SKU |
 | Model | SKU抽屉中的具体可购买型号 |
 | ConfigurationSnapshot | Model发布时冻结的最终配置 |
 | Technology | 多个原子词条的命名组合包 |
@@ -97,13 +100,12 @@ APPLY rules = [...]
 ### 3.2 商品层
 
 ```text
-StructuralBenchmark最近匹配
-→ functionIntensity显式贡献
-→ Material策略
-→ SeriesPatch
-→ SkuPatch
-→ ModelPatch
-→ Affix/Technology结算
+Part配置
+→ 用户选择01.x重量段
+→ 04.5功能模板唯一匹配
+→ Part统一词条与Technology继承
+→ SKU增加/屏蔽/局部副本与SKU Technology
+→ SKU有效词条结算
 → FinalReviewPatch
 → 最终边界校验
 → PerformanceSummary只读派生
@@ -119,8 +121,8 @@ Patch作用域越靠后，影响范围越小，优先级越高。
 1. 基础模板×Method；
 2. 基础模板×Method×Type；
 3. 基础模板×Method×Type×FunctionProfile；
-4. 目标拉力最近标杆匹配；
-5. SKU组装；
+4. 重量段选择与04.5唯一匹配；
+5. SKU预览与显式新增；
 6. Model候选与自动物化；
 7. 最终Model配置；
 8. 发布与导出。
@@ -162,57 +164,47 @@ FunctionProfile是并列类别，不是等级。例如：
 
 Quality表示完成度，functionIntensity表示偏科程度，二者独立。
 
-Series固定FunctionProfile；`functionIntensity`遵循版本化的固定值或重量曲线策略。每个`FunctionProfile × level × parameter`都必须显式定义`postMatchContributions`，不得假设统一线性倍率。它在结构标杆匹配完成后应用，数值变化不得触发重新匹配。
+Part固定FunctionProfile并显式保存`functionIntensity`。目标态中二者都是04.5唯一匹配键的一部分；任何变化都必须重新匹配并重算该Part的已有SKU，无法唯一匹配时SKU进入失效态。旧结构标杆流程中的`postMatchContributions`只用于历史v9/v22读取与旧Snapshot重放，不得反向定义新SKU主流程。
 
-## 5. DerivedProjection与最近匹配
+## 5. 重量段、04.5功能模板与目标态SKU派生
 
-### 5.1 派生键
-
-```text
-weightTemplateId
-+ methodId
-+ typeId
-+ functionProfileId
-+ ruleSetVersion
-```
-
-StructuralBenchmark按需计算并缓存，不预先持久化其他近乎无限的词条/Technology组合。缓存只存结果、来源版本和哈希，不成为人工编辑源。
-
-### 5.2 目标拉力匹配
-
-“重量段/重量规格”是面向设计人员的历史界面文案，权威计算语义是拉力段/目标拉力。匹配不插值，顺序固定为：
-
-1. itemPart、Method、Type、FunctionProfile完全相同；
-2. 排除硬不兼容标杆；
-3. 在已经交叉演绎完成的结构标杆中比较比例距离；
-4. 距离相同时优先选择`derivedPullKg`较高者；
-5. 再按版本化`templatePriority`；
-6. 最后按稳定模板ID排序。
+### 5.1 目标态唯一匹配键
 
 ```text
-pullDistance = abs(ln(targetPullKg / derivedPullKg))
+partType
++ weightBandId
++ fishingMethod
++ materialType
++ functionProfile
++ functionIntensity
 ```
 
-不得使用范围包含、Affinity、最终属性距离或随机数参与结构标杆选择。1.5kg和1.8kg可以命中同一标杆，但仍是两个独立SKU。词条、Quality、Material和后置Patch改变最终拉力时，不重新选择结构标杆；派生`PerformanceSummary`只观察最终结果，也不触发重新匹配。
+系统必须用上述六个输入精确定位对应部位的`04.5.0/04.5.1/04.5.2`功能模板行。零匹配和多匹配均fail-closed；不得加入旧`typeId`、`targetPullKg`、最近距离、区间包含或名称猜测来消歧。源表旧字段如何映射为这六个键属于v23实现迁移事项，不能改变本节目标语义。
 
-### 5.3 匹配记录
+### 5.2 01.x与SKU预览
+
+01.x只提供重量段稳定ID、区间、显示顺序及甘特图坐标。用户点击重量段后，系统先执行5.1唯一匹配；成功后进入该Part、该重量段的SKU预览，先列出现有SKU并提供“新增SKU”。点击重量段本身不得静默创建或修改任何数据。同一Part、同一重量段允许多个SKU。
+
+用户不直接填写`targetPullKg/targetKgf`或最终拉力。SKU最终拉力只由唯一04.5基准与`effectiveSkuEntries`中的属性操作确定性派生，不进行连续插值，也不通过最终值输入框补差。
+
+### 5.3 匹配记录与失效
 
 ```ts
-interface ProjectionMatch {
-  projectionMatchId: string;
-  projectionMatchRevisionId: string;
-  itemPartId: string;
-  targetPullKg: number;
-  matchedStructuralPullKg: number;
-  projectionId: string;
-  projectionRevisionId: string;
-  weightTemplateId: string;
-  ruleSetVersion: string;
-  pullDistance: number;
-  reasons: string[];
-  alternatives: string[];
-  projectionPinId?: string;
+interface FunctionTemplateMatch {
+  functionTemplateRef: { templateId: string; revisionId: string; contentHash: string };
+  partId: string;
+  weightBandId: string;
+  inputFingerprint: string;
+  status: "VALID" | "INVALID_NO_MATCH" | "INVALID_AMBIGUOUS";
+  matchedKey: {
+    partType: string; weightBandId: string; fishingMethod: string;
+    materialType: string; functionProfile: string; functionIntensity: number;
+  };
 }
 ```
 
-后端统一使用`targetPullKg/derivedPullKg/matchedStructuralPullKg/modelFinalPullKg`。历史`targetWeightKg`只通过迁移适配读取，不得删除历史字段。普通Patch不得反向影响模板选择；人工固定选择使用独立`ProjectionPin`，不是Patch。
+SKU持久化`weightBandId`、稳定`functionTemplateRef`和完整输入指纹。Part上游配置变化后，已有SKU重新匹配并重算；零/多匹配时保留SKU与用户局部意图，将其标为失效并阻止批准/发布，不得猜测模板。
+
+### 5.4 历史兼容
+
+Schema v9的`targetPullKg/ProjectionMatch/ProjectionPin`是历史迁移输入；当前主线Schema v22仍实现直接拉力与最近标杆流程。二者都只服务历史读取、迁移证据和旧Snapshot重放。目标实现必须新增Schema v23及顺序迁移，不能原地改变v9或v22语义，也不能重算既有Snapshot。

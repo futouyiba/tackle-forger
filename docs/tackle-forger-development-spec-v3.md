@@ -2,7 +2,7 @@
 
 > 状态：**唯一权威规范 / Canonical**  
 >首次定稿：2026-07-21  
-> 最后修订：2026-07-27
+> 最后修订：2026-07-28
 > 适用对象：产品设计、领域建模、前后端开发、数据迁移、测试与代码审查  
 > 源数据参考：《淡水路亚杆轮线装备设计.xlsx》
 
@@ -20,6 +20,9 @@
 6. 不以复制完整组合模板的方式解决多维规则问题。
 7. 未确认语义不得硬编码。
 8. 性能定位是配置完成后的只读派生摘要，不是配置输入或独立加成层。
+9. Series只组织1～3个互不重复的竿、轮、线Part；钓法、材质、功能定位/强度、统一词条与Technology均属于Part。
+10. SKU从用户选择的重量段与唯一04.5功能模板派生；01.x只提供重量段目录、区间、顺序和甘特图坐标，不提供SKU最终数值。
+11. SKU拉力只由04.5基准与SKU有效词条结算派生；Model只读继承该拉力。
 
 ### 0.2 明确禁止
 
@@ -31,6 +34,9 @@
 - 禁止把SKU当作玩家实际购买对象。
 - 禁止在本工具中执行或验证被动技能运行逻辑。
 - 禁止上游更新静默改写已发布配置。
+- 禁止让用户直接填写`targetPullKg`、`targetKgf`或最终拉力来创建目标态SKU。
+- 禁止用01.x区间、五维W段、最近距离、`typeId`或旧`targetPullKg`代替目标态04.5唯一匹配键。
+- 禁止ModelPatch或最终值输入框对SKU拉力执行`set/add/multiply/clear`。
 ## 1. 产品目标与范围
 
 Tackle Forger是一套内部钓具配置生产工作台，负责：
@@ -39,8 +45,8 @@ Tackle Forger是一套内部钓具配置生产工作台，负责：
 飞书规则源
 → 已发布规则集
 → 多维派生模板
-→ 产品族与严格系列
-→ SKU重量抽屉
+→ 产品族、Series与独立Part
+→ 重量段下的SKU抽屉
 → 具体Model
 → 配置快照
 ```
@@ -49,7 +55,7 @@ Tackle Forger是一套内部钓具配置生产工作台，负责：
 
 - 参数、重量模板、钓法、类型、功能、品质规则与性能摘要派生；
 - 属性词条、被动技能词条和技术组合；
-- 最近派生模板匹配；
+- 以重量段和Part配置唯一定位04.5功能模板；
 - 兼容、属性平衡、系列不变量和杆轮线闭环；
 - Series、SKU和Model的人工Patch；
 - 品质评分、稀有度和配置发布；
@@ -74,9 +80,9 @@ flowchart LR
     C --> D["Function Profile"]
     D --> E["Structural Benchmark"]
     E --> F["Series"]
-    F --> G["SKU Drawer / targetPullKg"]
-    G --> H["Nearest Structural Match"]
-    H --> I["Intensity + Material + Patch + Affix"]
+    F --> G["Series Part + WeightBand"]
+    G --> H["Unique 04.5 Match"]
+    H --> I["Effective SKU Entries"]
     I --> J["Purchasable Model"]
     J --> P["Derived Performance Summary"]
     P --> K["Configuration Snapshot"]
@@ -90,11 +96,14 @@ flowchart LR
 | FunctionProfile | 泛用、远投、障碍强攻等玩法方向 |
 | functionIntensity | 同一功能方向的专精强度1/2/3 |
 | PerformanceSummary | Series/Model完成Technology、词条与最终属性结算后派生的只读性能定位摘要，例如抛投+、重量-、竿度+；不是配置输入或数值贡献层 |
-| QualityProfile | C/绿、B/蓝、A/紫、S/橙的系列品质身份；本身不直接修改面板 |
+| QualityProfile | C/绿、B/蓝、A/紫、S/橙的SKU品质身份；本身不直接修改面板 |
 | StructuralBenchmark / DerivedProjection | 仅由基础拉力模板×钓法×类型×功能定位演绎出的只读结构标杆 |
 | Collection | 营销产品族，可包含多个严格Series |
-| Series | 钓法、类型、核心功能和核心词条稳定的系列；性能定位由配置结果派生，不是Series身份字段 |
-| SKU | 玩家看到的钓具抽屉，对应一个离散targetPullKg；界面可显示为重量规格 |
+| Series | 组织1～3个互不重复竿/轮/线Part的系列容器；不统一保存钓法、功能定位或目标拉力 |
+| Part | Series内独立编辑的竿、轮或线配置；拥有钓法、材质类型、功能定位/强度、统一词条与Technology |
+| WeightBand | 01.x提供的离散目录项、区间、显示顺序与甘特坐标；不是SKU最终拉力基准 |
+| FunctionTemplate04_5 | 按Part配置与weightBandId唯一匹配的04.5.0/1/2功能模板行，是SKU数值基准 |
+| SKU | 玩家看到的钓具抽屉；属于一个Part和一个weightBandId，同一Part同一重量段可以有多个SKU |
 | Model | SKU抽屉中的具体可购买型号 |
 | ConfigurationSnapshot | Model发布时冻结的最终配置 |
 | Technology | 多个原子词条的命名组合包 |
@@ -130,13 +139,12 @@ APPLY rules = [...]
 ### 3.2 商品层
 
 ```text
-StructuralBenchmark最近匹配
-→ functionIntensity显式贡献
-→ Material策略
-→ SeriesPatch
-→ SkuPatch
-→ ModelPatch
-→ Affix/Technology结算
+Part配置
+→ 用户选择01.x重量段
+→ 04.5功能模板唯一匹配
+→ Part统一词条与Technology继承
+→ SKU增加/屏蔽/局部副本与SKU Technology
+→ SKU有效词条结算
 → FinalReviewPatch
 → 最终边界校验
 → PerformanceSummary只读派生
@@ -152,8 +160,8 @@ Patch作用域越靠后，影响范围越小，优先级越高。
 1. 基础模板×Method；
 2. 基础模板×Method×Type；
 3. 基础模板×Method×Type×FunctionProfile；
-4. 目标拉力最近标杆匹配；
-5. SKU组装；
+4. 重量段选择与04.5唯一匹配；
+5. SKU预览与显式新增；
 6. Model候选与自动物化；
 7. 最终Model配置；
 8. 发布与导出。
@@ -195,69 +203,60 @@ FunctionProfile是并列类别，不是等级。例如：
 
 Quality表示完成度，functionIntensity表示偏科程度，二者独立。
 
-Series固定FunctionProfile；`functionIntensity`遵循版本化的固定值或重量曲线策略。每个`FunctionProfile × level × parameter`都必须显式定义`postMatchContributions`，不得假设统一线性倍率。它在结构标杆匹配完成后应用，数值变化不得触发重新匹配。
+Part固定FunctionProfile并显式保存`functionIntensity`。目标态中二者都是04.5唯一匹配键的一部分；任何变化都必须重新匹配并重算该Part的已有SKU，无法唯一匹配时SKU进入失效态。旧结构标杆流程中的`postMatchContributions`只用于历史v9/v22读取与旧Snapshot重放，不得反向定义新SKU主流程。
 
-## 5. DerivedProjection与最近匹配
+## 5. 重量段、04.5功能模板与目标态SKU派生
 
-### 5.1 派生键
-
-```text
-weightTemplateId
-+ methodId
-+ typeId
-+ functionProfileId
-+ ruleSetVersion
-```
-
-StructuralBenchmark按需计算并缓存，不预先持久化其他近乎无限的词条/Technology组合。缓存只存结果、来源版本和哈希，不成为人工编辑源。
-
-### 5.2 目标拉力匹配
-
-“重量段/重量规格”是面向设计人员的历史界面文案，权威计算语义是拉力段/目标拉力。匹配不插值，顺序固定为：
-
-1. itemPart、Method、Type、FunctionProfile完全相同；
-2. 排除硬不兼容标杆；
-3. 在已经交叉演绎完成的结构标杆中比较比例距离；
-4. 距离相同时优先选择`derivedPullKg`较高者；
-5. 再按版本化`templatePriority`；
-6. 最后按稳定模板ID排序。
+### 5.1 目标态唯一匹配键
 
 ```text
-pullDistance = abs(ln(targetPullKg / derivedPullKg))
+partType
++ weightBandId
++ fishingMethod
++ materialType
++ functionProfile
++ functionIntensity
 ```
 
-不得使用范围包含、Affinity、最终属性距离或随机数参与结构标杆选择。1.5kg和1.8kg可以命中同一标杆，但仍是两个独立SKU。词条、Quality、Material和后置Patch改变最终拉力时，不重新选择结构标杆；派生`PerformanceSummary`只观察最终结果，也不触发重新匹配。
+系统必须用上述六个输入精确定位对应部位的`04.5.0/04.5.1/04.5.2`功能模板行。零匹配和多匹配均fail-closed；不得加入旧`typeId`、`targetPullKg`、最近距离、区间包含或名称猜测来消歧。源表旧字段如何映射为这六个键属于v23实现迁移事项，不能改变本节目标语义。
 
-### 5.3 匹配记录
+### 5.2 01.x与SKU预览
+
+01.x只提供重量段稳定ID、区间、显示顺序及甘特图坐标。用户点击重量段后，系统先执行5.1唯一匹配；成功后进入该Part、该重量段的SKU预览，先列出现有SKU并提供“新增SKU”。点击重量段本身不得静默创建或修改任何数据。同一Part、同一重量段允许多个SKU。
+
+用户不直接填写`targetPullKg/targetKgf`或最终拉力。SKU最终拉力只由唯一04.5基准与`effectiveSkuEntries`中的属性操作确定性派生，不进行连续插值，也不通过最终值输入框补差。
+
+### 5.3 匹配记录与失效
 
 ```ts
-interface ProjectionMatch {
-  projectionMatchId: string;
-  projectionMatchRevisionId: string;
-  itemPartId: string;
-  targetPullKg: number;
-  matchedStructuralPullKg: number;
-  projectionId: string;
-  projectionRevisionId: string;
-  weightTemplateId: string;
-  ruleSetVersion: string;
-  pullDistance: number;
-  reasons: string[];
-  alternatives: string[];
-  projectionPinId?: string;
+interface FunctionTemplateMatch {
+  functionTemplateRef: { templateId: string; revisionId: string; contentHash: string };
+  partId: string;
+  weightBandId: string;
+  inputFingerprint: string;
+  status: "VALID" | "INVALID_NO_MATCH" | "INVALID_AMBIGUOUS";
+  matchedKey: {
+    partType: string; weightBandId: string; fishingMethod: string;
+    materialType: string; functionProfile: string; functionIntensity: number;
+  };
 }
 ```
 
-后端统一使用`targetPullKg/derivedPullKg/matchedStructuralPullKg/modelFinalPullKg`。历史`targetWeightKg`只通过迁移适配读取，不得删除历史字段。普通Patch不得反向影响模板选择；人工固定选择使用独立`ProjectionPin`，不是Patch。
+SKU持久化`weightBandId`、稳定`functionTemplateRef`和完整输入指纹。Part上游配置变化后，已有SKU重新匹配并重算；零/多匹配时保留SKU与用户局部意图，将其标为失效并阻止批准/发布，不得猜测模板。
+
+### 5.4 历史兼容
+
+Schema v9的`targetPullKg/ProjectionMatch/ProjectionPin`是历史迁移输入；当前主线Schema v22仍实现直接拉力与最近标杆流程。二者都只服务历史读取、迁移证据和旧Snapshot重放。目标实现必须新增Schema v23及顺序迁移，不能原地改变v9或v22语义，也不能重算既有Snapshot。
 ## 6. Collection、Series、SKU与Model
 
 ```text
 Collection
 └─ Series
-   └─ SKU Drawer
-      ├─ Model
-      ├─ Model
-      └─ Model
+   ├─ Part（1～3，竿/轮/线各最多一个）
+   │  └─ WeightBand
+   │     └─ SKU Drawer（可多个）
+   │        └─ Model
+   └─ Part…
 ```
 
 ### 6.1 Collection
@@ -266,28 +265,20 @@ Collection承担品牌、视觉和营销叙事，可以跨类型或功能。例�
 
 ### 6.2 Series
 
-Series必须固定或显式约束：
+Series包含1～3个Part，竿、轮、线为任意非空组合且每种部件最多一个。Series只保存产品族、展示、排序与跨Part关系；不再统一保存钓法、功能定位、功能强度或目标拉力。
 
-- fishingMethodId；
-- typeId；
-- qualityId；
-- coreFunctionId；
-- functionIntensityPolicy；
-- requiredCoreAffixFamilyIds；
-- secondaryAffixPoolIds；
-- forbiddenAffixFamilyIds；
-- targetPullsKg；
-- SeriesSignature。
+每个Part独立保存`partType`、`fishingMethod`、`materialType`、`functionProfile`、`functionIntensity`、统一`defaultEntryIds`、`technologyIds`、已选择`weightBandIds`及自身revision/输入指纹。
 
 ### 6.3 SKU Drawer
 
-SKU是玩家界面的钓具抽屉或商品卡片入口，对应Series中的一个离散`targetPullKg`。同一Series内，归一化后的`targetPullKg`必须唯一；一个Series可以拥有1.5kg、3.5kg、8.2kg等多个不同SKU。
+SKU是玩家界面的钓具抽屉或商品卡片入口，属于一个Part和一个`weightBandId`。同一Part、同一重量段允许多个SKU；稳定SKU ID而非派生拉力承担身份。点击重量段只打开预览，不创建SKU。
 
 SKU保存：
 
-- seriesId；
-- targetPullKg；
-- `projectionMatchesByItemPartId`：竿、轮、线各零或一个带稳定ID/revision的ProjectionMatch；旧单值`ProjectionMatch`字段只作历史兼容读取，不满足OPEN-005正式投影引用门禁；
+- seriesId、partId、weightBandId；
+- 稳定`functionTemplateRef`、完整输入指纹与有效/失效状态；
+- `removedInheritedEntryIds`、`addedEntryIds`、`localEntryCopies`、`technologyIds`；
+- 推荐品质、人工实际品质及覆盖理由/状态；
 - skuPatchIds；
 - modelIds；
 - defaultModelId；
@@ -305,6 +296,8 @@ Model是玩家实际选择和购买的具体型号，保存：
 - modelPatchIds；
 - 自动定价结果、解锁和商品策略引用；
 - configurationSnapshotId。
+
+Model从SKU只读继承最终拉力；ModelPatch和任何最终值输入不得对拉力执行`set/add/multiply/clear`。Model仍可按ParameterDefinition修改调性、硬度、长度等允许规格。
 
 领域内Model是实际选择和购买对象。当前配置表没有Snapshot版本字段，因此不得宣称游戏侧购买记录已经支持`modelId + snapshotId`；Snapshot仅在Tackle Forger内部保证发布和导出的可追溯性。
 
@@ -337,14 +330,27 @@ Series的`typeId/TypeProfile`继续表达系列级Method × Type结构语义。�
 
 完整决策、旧数据复核与Snapshot冻结规则见[`AUD-026 PartConstraintSet语义ADR`](./audits/aud-026-part-constraint-semantics-adr.md)。
 
-### 6.6 稳定身份、再生成对应与重量变更
+### 6.6 稳定身份、再生成对应与重量段变更
 
 - `entityId`终身稳定；revision不可变；displayName可修改且不得作为唯一关联键。
 - 再生成对应顺序固定为：显式目标ID→持久GenerationBinding→外部稳定ID→业务身份键→name/特征仅作为人工提示。
-- SKU业务身份键为`seriesId + normalizedTargetPullKg`，但已有GenerationBinding优先。
+- SKU业务身份不使用派生拉力；以稳定skuId与GenerationBinding为准，检索上下文为`partId + weightBandId`。
 - Model可以使用可选`modelVariantKey`表达跨重量的同一路线，例如`short_fast`、`long_slow`；同一SKU内非空variantKey唯一。
-- SKU尚无任何已发布后代Snapshot时，可以保留skuId并以新revision修改targetPullKg；修改后重算匹配并使下游草稿DIRTY。
-- SKU一旦存在已发布后代Snapshot，targetPullKg不可原地改变。新拉力必须创建新SKU，旧SKU可DEPRECATED；跨父级移动遵循同样原则。
+- SKU改换Part或weightBandId属于身份迁移：没有已发布后代Snapshot时可保留skuId创建新revision并重新唯一匹配；已有已发布后代时创建新SKU，旧SKU可DEPRECATED。
+- 派生最终拉力变化只创建新SKU revision并重算下游草稿；历史Snapshot保持冻结，不以拉力变化改写身份。
+
+### 6.7 参数归属及允许操作
+
+| 参数/对象 | 权威归属 | 自动派生 | 允许人工操作 |
+| --- | --- | --- | --- |
+| Part钓法、材质、功能定位/强度 | Part | 否 | Part编辑 |
+| weightBandId | SKU | 由用户在01.x目录选择 | 显式选择/迁移；点击不创建 |
+| functionTemplateRef | SKU | 六键唯一匹配04.5 | 不允许手填或猜测 |
+| 有效词条与Technology | SKU | 继承Part并叠加SKU局部意图 | 增加、屏蔽、恢复、局部复制修改 |
+| 最终拉力 | SKU | 04.5基准 + 有效词条add/multiply | 禁止直接输入；禁止任意Patch操作 |
+| 调性、硬度、长度等具体规格 | Model | 可由模板继承 | 仅按ParameterDefinition允许的ModelPatch操作 |
+| 推荐品质 | SKU | 价值评分与08.1区间 | 只读重算 |
+| 实际品质 | SKU | 可采纳推荐 | 人工选择并在不一致时保存理由/状态 |
 
 ## 7. Series不变量
 
@@ -352,15 +358,13 @@ Series的`typeId/TypeProfile`继续表达系列级Method × Type结构语义。�
 
 以下不一致阻止Series批准或Model发布：
 
-- Method不同；
-- Type不同；
-- Quality不同；
-- Core Function不同；
-- Series概念身份不同；
+- Part数量不在1～3或部件类型重复；
+- 任一Part缺钓法、材质、功能定位或强度；
+- 任一SKU的04.5匹配为零或多匹配；
 - 缺少必需核心词条家族；
 - 包含禁用词条家族。
 
-硬兼容、Affinity、Series不变量和发布检查是四套独立语义。硬兼容失败和发布版本链不完整可以阻止发布，但不得伪装成Series身份不变量。
+Series的唯一身份是稳定`seriesId`；显示名、营销概念和Part配置变化均不构成独立的“Series概念身份”硬阻断。硬兼容、Affinity、Series不变量和发布检查是四套独立语义。硬兼容失败和发布版本链不完整可以阻止发布，但不得伪装成Series不变量。
 
 ### 7.2 方向签名
 
@@ -381,7 +385,7 @@ interface SeriesSignatureAxis {
 
 ### 7.3 重量曲线
 
-targetPullKg升高时默认要求：
+同一Part按01.x显示顺序向更高重量段推进时默认要求：
 
 - 杆、轮、线拉力不下降；
 - 安全工作拉力不下降；
@@ -622,6 +626,21 @@ type PerformanceSummarySnapshot =
 
 历史`PerformanceProfile/performanceId`不得自动映射为摘要标签；只读历史页面可以原样显示“旧性能定位”，迁移诊断必须与新`PerformanceSummary`明确区分。
 
+### 11.2.2 项目词条、SKU局部副本与有效集合
+
+项目级`AffixDefinition`、SKU局部`LocalAffixCopy`与`AffixRef`是三种不同对象；只有ID/名称的占位对象不得冒充完整定义。项目级定义保存完整业务字段和revision；局部副本在复制时冻结来源ID/revision与完整可编辑Payload，修改仅影响该SKU；引用只指向稳定ID/revision。
+
+```text
+effectiveSkuEntries
+= part.defaultEntries
+- sku.removedInheritedEntryIds
++ sku.addedEntryIds
++ sku.localEntryCopies
++ 展开(part.technologyIds + sku.technologyIds)的成员
+```
+
+实现先解析完整定义，再按稳定词条ID去重；同一词条被直接引用与Technology成员重复引用时只生效一次。SKU可以增加已有项目词条、屏蔽/恢复继承词条、复制为局部副本后修改，并挂载SKU Technology。Part更新后已有SKU自动重算，但其增加、屏蔽和局部副本意图保持。词条选择区的“新增词条”由用户主动创建完整项目级定义，不允许系统根据数值差额自动生成。
+
 ### 11.3 属性词条叠加
 
 属性词条先规范化为以下DTO。正式存储、RuleSet、ModelRevision、Snapshot和运行时只接受规范operation；旧operation名只允许出现在导入证据中：
@@ -775,7 +794,7 @@ FinalValue = applyParameterDefinition(PostReviewValue)
 
 ## 12. 品质评分、稀有度与部位
 
-### 12.1 词条价值分与已选品质校验
+### 12.1 词条价值分、品质推荐与实际品质
 
 ```text
 baseAffixScore
@@ -787,9 +806,11 @@ finalValueScore
 × FunctionProfile.scoreFactor
 ```
 
-编辑Series时先由设计人员确定Quality，再选择或生成词条与Technology。价值分只验证所选品质是否落在版本化、互斥的分数区间内，并作为自动定价输入；不得根据价值分自动改变Quality。经2026-07-23产品确认，当前正式策略为：`C/绿 [0,20)`、`B/蓝 [20,40)`、`A/紫 [40,65)`、`S/橙 [65,100]`。评分100命中S；评分大于100产生`QUALITY_SCORE_OUT_OF_RANGE`并阻止正式发布，不得夹取或外推。区间必须写入新的`QualityValuePolicyVersion`，不得硬编码为永久常量；飞书旧revision中的`[65,100)`只作为过期源证据保留，不能覆盖本规范。
+SKU每次有效词条或Part功能定位变化后立即重算最终评分，并按版本化08.1区间生成`recommendedQualityId`。词条本身没有品质字段，只保存价值评分与属性操作。当前目标区间统一为：`C/绿 [0,20)`、`B/蓝 [20,40)`、`A/紫 [40,65)`、`S/橙 [65,100)`；`finalValueScore >= 100`为越界且无推荐，不夹取、不外推。该最新决定取代“100属于S”的旧策略，但历史QualityValuePolicyVersion和既有Snapshot仍按其冻结语义读取，不得原地重解释。
 
-负分技术内专用词条参与总分；被动词条参与价值分但不进入面板。Technology只展开成员词条，不额外贡献一次价值分；同一词条同时被直接选择和Technology引用时只计算一次。`FinalReviewPatch`不改变价值分。低于或超过所选品质区间阻止Model发布，候选生成应以所选品质区间为目标，但不得自动改Quality。
+实际品质采用“推荐 + 人工选择”：用户可以采纳推荐，也可以选择其他品质。不一致时必须显著提示，并分别保存推荐结果、人工`selectedQualityId`、覆盖状态和理由。定价读取实际品质；评分Trace保存推荐依据与不一致状态。无推荐时不得自动选择S或沿用旧推荐。
+
+负分技术内专用词条参与总分；被动词条参与价值分但不进入面板。Technology只展开成员词条，不额外贡献一次价值分；同一词条同时被直接选择和Technology引用时只计算一次。`FinalReviewPatch`不改变价值分。实际品质与推荐不一致本身不自动改品质；它按版本化确认策略显示并保存覆盖理由。评分越界、策略缺失或Trace不完整仍阻止新正式发布。
 
 `07_品质评分`还提供竿、轮、线三张词条组合矩阵。组合分按以下契约导入和计算：
 
@@ -801,12 +822,15 @@ finalValueScore
 
 `FunctionProfile.scoreFactor`来自`03_功能定位`（功能定位表）的“评分系数”，按乘法应用。Performance不参与价值分：不得读取`performanceScoreFactor`、不得写入`performance_factor` Trace，也不得用一个“显式乘1”步骤伪装为新规则。历史源表或payload中的性能计分字段只作为迁移证据保留。Technology成员已经按Affix进入基础分与组合分；`PerformanceSummary`只是结算后的派生展示，二者均不得再次计分。
 
-YsEKw 历史观测 revision `2869`把S写成`[65,100)`而价格页包含评分100。该冲突的产品结论已经确定为“100属于S”；在飞书机器源修订并显式拉取前，导入器应产生`QUALITY_RANGE_SOURCE_OUTDATED`，保留旧源单元格并禁止把该旧Draft发布为新正式策略。该Issue表示规则源尚未落实已决策语义，不再表示产品结论未决。
+YsEKw历史revision与既有v22策略可能把100归入S；它们只服务历史证据和Snapshot重放。目标v23策略必须发布`[65,100)`并使100无推荐；源表或旧Draft仍宣称100属于S时产生`QUALITY_RANGE_SOURCE_OUTDATED`，不得发布为目标态新策略。
 
 ```ts
-interface ModelAffixValueAssessment {
-  modelRevisionId: string;
+interface SkuAffixValueAssessment {
+  skuRevisionId: string;
+  recommendedQualityId: string | null;
   selectedQualityId: string;
+  qualityOverrideState: "MATCHED" | "OVERRIDDEN" | "NO_RECOMMENDATION";
+  qualityOverrideReason: string | null;
   baseAffixScore: number;
   combinationScore: number;
   functionScoreFactor: number;
@@ -824,9 +848,9 @@ interface ModelAffixValueAssessment {
 
 Quality本身不直接修改面板。属性平衡预算判断数值是否全优，价值分判断词条价值是否符合已选品质，二者不得合并。
 
-校验使用统一`ValidationIssue(source="quality")`，品质不匹配代码为`QUALITY_SCORE_OUT_OF_RANGE`、矩阵冲突为`QUALITY_COMBINATION_CONFLICT`、旧源边界未更新为`QUALITY_RANGE_SOURCE_OUTDATED`，均至少携带Model、所选Quality、最终评分、命中区间、规则版本、源单元格和`ActionLink`。规则源结构或矩阵冲突可另产生`source="data_integrity"`的父Issue；不得把品质校验问题混入价格计算问题。正常路径为选品质→选词条/Technology→组合计分→功能系数计分→品质校验→定价；边界覆盖区间端点、负分、空词条集、评分100和大于100；冲突保留草稿及Trace；源表修复后通过显式“拉取”生成新策略草稿并重算；查看、编辑词条、发布规则和发布Model分别鉴权。
+校验使用统一`ValidationIssue(source="quality")`，品质不匹配代码为`QUALITY_SCORE_OUT_OF_RANGE`、矩阵冲突为`QUALITY_COMBINATION_CONFLICT`、旧源边界未更新为`QUALITY_RANGE_SOURCE_OUTDATED`。正常路径为配置Part→编辑SKU有效词条/Technology→组合计分→功能系数计分→品质推荐→采纳或人工选择实际品质→定价；边界覆盖区间端点、负分、空词条集、评分100和大于100；冲突保留草稿及Trace。
 
-验收：Given C品质Model的去重词条分为15、组合分为3、功能评分系数为1.03，When 计算，Then 最终评分为18.54且Trace中没有Performance乘数；Given 轻量与增重同时存在，When 组合计分，Then `-20`只计一次；Given S品质评分为100且规则源已按本决策更新，When 校验，Then命中S；Given评分100.01，When校验，Then返回`QUALITY_SCORE_OUT_OF_RANGE`且不夹取或外推；Given飞书仍提供`[65,100)`，When导入，Then返回`QUALITY_RANGE_SOURCE_OUTDATED`并保留旧源证据。
+验收：Given去重词条分15、组合分3、功能系数1.03，When计算，Then最终评分18.54且推荐C，Trace没有Performance乘数；Given轻量与增重同时存在，When组合计分，Then`-20`只计一次；Given评分99.999，When推荐，Then命中S；Given评分100或更高，When推荐，Then无推荐并返回`QUALITY_SCORE_OUT_OF_RANGE`；Given用户选择与推荐不同品质，Then定价使用实际品质且保存覆盖理由，推荐与Trace不丢失。
 
 
 ### 12.2 稀有度
@@ -847,7 +871,7 @@ epic 史诗
 
 领域模型使用ItemPartDefinition，不继续把rod/reel/line写死为不可扩展联合类型。
 
-注册表预留竿、轮、线、钩、漂、真饵和拟饵，但当前产品主流程只启用竿、轮、线。`Collection → Series → SKU → Model → ConfigurationSnapshot`、`targetPullKg`、最近结构模板匹配和钓具系列甘特图均只适用于竿、轮、线；SKU不包含钩、漂、真饵或拟饵。
+注册表预留竿、轮、线、钩、漂、真饵和拟饵，但当前产品主流程只启用竿、轮、线。`Collection → Series → Part → SKU → Model → ConfigurationSnapshot`、weightBandId、04.5唯一匹配和钓具系列甘特图均只适用于竿、轮、线；SKU不包含钩、漂、真饵或拟饵。
 
 钩、漂、真饵和拟饵当前完全延期。注册表及迁移层可以保留其稳定ID和历史Payload，仅用于数据不丢失、审计和未来迁移；这不构成产品启用，也不要求提供只读UI。四类部位的专用UI、草稿、生成、发布、Snapshot和导出全部关闭，且不得用竿轮线规则、隐藏默认值或通用占位对象代替尚未完成的产品设计。具体边界见OPEN-003。
 
@@ -877,8 +901,8 @@ Severity描述问题强度，Gate描述受影响关口，State描述当前处理
 - 导入：ID、字段、单位、范围、重复和版本冲突；
 - 模板：规则操作、轨迹、边界和预算；
 - 兼容：硬规则、条件要求和Affinity解释；
-- Series：身份、核心词条、方向签名和重量曲线；
-- SKU：最近匹配、共享基底和重复规格；
+- Series：稳定`seriesId`、核心词条、方向签名和重量曲线；
+- SKU：04.5六键唯一匹配、有效词条派生、同Part同重量段重复规格和失效恢复；Schema v9/v22历史回放另行校验冻结的最近匹配证据；
 - Model：部件、技术、词条、Patch和杆轮线闭环；
 - 发布：目标Gate无OPEN的BLOCKER/ERROR、warning已确认、版本链完整、快照哈希成功；被策略允许且有效的ERROR waiver必须冻结到发布证据。
 
@@ -898,15 +922,16 @@ FeishuSourceRevision
 ConfigurationSnapshot至少冻结：
 
 - modelId和上游Revision；
-- RuleSetVersion和projectionId；
+- RuleSetVersion、Part revision、weightBandId、functionTemplateRef与匹配输入指纹；
 - ReductionStackingPolicyVersion；
 - PatchSetHash；
 - finalPanelValues；
 - technologyIds、attributeAffixIds、passiveAffixIds；
+- SKU继承屏蔽/增加/局部词条副本意图、有效词条集合hash、推荐品质、人工实际品质及覆盖理由/状态；
 - 属性叠加轨迹，包括源词条、有序operation、归一化方向与幅度、BaseValue、B、R、PercentAdjusted、固定值增减合计、FinalBeforeBoundary、ParameterDefinition引用、规则源单元格/revision及输入输出hash；
 - 被动技能设计Payload；
 - 品质、兼容和校验报告；
-- ModelAffixValueAssessment、`PerformanceSummarySnapshot`（可为`AVAILABLE`摘要与定义引用，或`UNAVAILABLE/definition_missing`）、PricingPolicy版本、自动价格、定价Trace和价格WARNING确认引用；
+- `SkuAffixValueAssessment`及Model对其冻结SKU revision的只读引用、`PerformanceSummarySnapshot`（可为`AVAILABLE`摘要与定义引用，或`UNAVAILABLE/definition_missing`）、PricingPolicy版本、自动价格、定价Trace和价格WARNING确认引用；
 - 发布人和发布时间。
 
 上游变化生成UpgradeCandidate，不原地覆盖Snapshot。
@@ -1075,7 +1100,7 @@ revision 位于“最近 90 天”与“最新 100 个”并集之外，只表�
 
 | 受治理字段 | 原因 | 唯一写入动作/边界 |
 | --- | --- | --- |
-| `seriesDefinitions`、`skuDrawers`、`purchasableModels`、`derivedProjections`、`projectionMatches` | Series/SKU/Model身份、最近匹配和派生链 | `create_series`、`update_series_core_affixes`、`change_sku_target_pull`及Model领域ActionCode/规则重算 |
+| `seriesDefinitions`、`seriesPartRevisions`、`skuDrawers`、`purchasableModels`、`projectAffixDefinitions`、`skuLocalAffixCopies`、`derivedProjections`、`projectionMatches` | Series/Part/SKU/Model身份、词条定义/局部副本和派生链 | v23使用`create_series`、`update_part_configuration`、`preview_weight_band_skus`（只读）、`create_sku`、SKU词条意图动作、`create_project_affix`、`set_sku_actual_quality`及允许的Model领域ActionCode/规则重算；`update_series_core_affixes`、`change_sku_target_pull`只服务Schema v9/v22历史兼容，不得创建或修改v23对象 |
 | `partConstraintSets`、`candidateSearchRecipes` | v3 §6.5 的精确revision/contentHash引用；既有revision不可变 | 当前没有修改既有revision的领域命令；只读保留，创建新Series时可由`POST /api/series`物化新约束revision，Recipe专用版本化命令尚未提供 |
 | `patchLedger`、`patchReviewBatches`、`patchValidationWaivers`、`patchValidationWaiverDecisions` | Patch revision、审核和waiver证据 | Patch create/review/rebase/mirror及waiver ActionCode |
 | `projectionPatches` | 遗留 ProjectionPatch 的迁移/审计源；不得作为现行Patch命令旁路 | 当前只读保留，迁移流程处理；不得经整包保存删除、篡改或重放 |
@@ -1274,6 +1299,17 @@ interface PatchSubjectMigrationResult {
 
 “数据源与参数注册表”中的飞书分享链接入口服务于**数据导入**（重量段模板或流派/定位系数的拉取、预览、发布与回写），与第14节的canonical规则源工作簿互不冲突：用户在数据交换页粘贴并从历史选择的是飞书多维表格（`/base/`）分享链接，经显式“识别链接”解析后仍须按现有治理分别执行预览、冲突检查、人工确认发布与回写，绝不自动发布或绕过stable ID。历史只保存shareUrl、显示名、数据类型和最近使用时间，不保存任何应用密钥、appToken凭据或个人身份信息；该入口不得用于改写canonical规则源工作簿指向。
 
+### 15.1 项目数据Excel往返
+
+Excel只是当前项目数据的导入/导出载体，不决定记录的编辑资格或计算资格。内置xlsx/JS快照仅是新项目默认基础数据与发布构建输入；用户导入、UI新增和内置记录遵循相同领域规则，不再区分“权威/自定义”资格。
+
+导入必须显式选择：
+
+- `REPLACE_PROJECT`：在完整校验、引用检查与可恢复备份后替换当前项目数据；
+- `MERGE_BY_STABLE_ID`：按稳定ID合并，引用中的ID不得因显示名变化重写。
+
+导出包含约定范围内的当前完整项目数据，并须能无损重新导入。已被引用的稳定ID不得直接改名换ID；记录的其他业务字段均可按其领域命令CRUD。该项目数据往返与第25节正式配置Git导出是两条独立链路，不能互相冒充。
+
 ## 16. 部署基线
 
 目标环境为内网Dell R730，同时运行十多个服务。系统按需计算派生模板，不预生成完整组合，资源需求较低。
@@ -1291,6 +1327,12 @@ interface PatchSubjectMigrationResult {
 
 ## 17. 当前实现迁移
 
+### 目标Schema v23：重量段SKU与词条派生
+
+审计基线`ae6f782b1272efcf3ccf6feba5f81c4ca8b917bf`中，`CURRENT_WORKSPACE_SCHEMA_VERSION = 22`。Schema v9只是历史迁移输入，v22是当前运行时语义；二者的直接`targetPullKg`、最近标杆与历史payload不得原地改写。目标实现必须新增顺序迁移`22 → 23`，并保证任意旧版本先按既有链迁到22，再进入v23。
+
+v23新增Series Part、`weightBandId`、`functionTemplateRef`/输入指纹、SKU词条局部意图、推荐/实际品质分离及失效状态。迁移必须保留未知字段与原始v9/v22 payload；不能唯一映射04.5的记录进入复核/失效态，不按名称、区间或旧拉力猜测。重复执行迁移无变化；迁移前后历史Snapshot字节、hash、旧策略与引用保持不变。
+
 ### 阶段1：兼容基础
 
 - ParameterDefinition增加效用、单位、允许操作；
@@ -1300,14 +1342,15 @@ interface PatchSubjectMigrationResult {
 
 ### 阶段2：商品身份
 
-- 增加Collection、严格Series、SkuDrawer和PurchasableModel；
+- 增加Collection、严格Series、SeriesPart、SkuDrawer和PurchasableModel；
 - SeriesRecipe改为CandidateSearchRecipe；
 - OfficialSku迁移为SKU抽屉加Model；
 - DetailOverride迁移到Model作用域。
 
 ### 阶段3：匹配与兼容
 
-- 实现最近Projection匹配；
+- v23实现Part六键04.5唯一匹配与输入指纹；零/多匹配均fail-closed；
+- v9/v22历史适配器保留最近Projection匹配，只用于旧payload迁移和Snapshot重放；
 - 建立硬CompatibilityRule；
 - 实现按轴Affinity Score；
 - 增加Series不变量和重量曲线。
@@ -1331,11 +1374,10 @@ interface PatchSubjectMigrationResult {
 
 ### 18.1 匹配
 
-- 1.5kg和1.8kg可以命中同一模板；
-- Patch不改变ProjectionMatch；
-- 用户固定模板后不自动切换；
-- 只在相同部位、钓法、类型和功能定位内按拉力比例距离匹配；
-- Affinity、范围包含和词条后的最终拉力都不参与结构标杆选择。
+- 六键精确命中唯一04.5行时进入SKU预览；
+- 零匹配和多匹配均fail-closed，且保留已有SKU与局部词条意图；
+- 点击重量段不创建SKU，同一Part同一重量段可显式创建多个SKU；
+- Part配置变化重新匹配并重算；旧`typeId/targetPullKg`、范围包含、Affinity和最终拉力不参与目标态匹配。
 
 ### 18.2 层级与身份
 
@@ -1378,8 +1420,19 @@ interface PatchSubjectMigrationResult {
 - 被动技能参与分值和品质；
 - technology_only不进入普通池；
 - S/A/B/C阈值正确。
+- Part统一词条与Technology更新后已有SKU重算，SKU增加/屏蔽/局部副本意图保持；
+- 项目定义、局部副本和引用不可互相冒充；Technology与直接引用按稳定ID去重；
+- SKU拉力只由04.5基准和有效词条派生，ModelPatch所有拉力操作均被拒绝；
+- 99.999推荐S，100及以上无推荐；人工实际品质可与推荐不同并保存覆盖理由，定价使用实际品质。
 
-### 18.6 工作区 Revision 保留
+### 18.6 项目数据与迁移
+
+- Excel完整替换和按稳定ID合并均覆盖正常、冲突、失败恢复和写后回读；
+- 导出后无损重新导入，稳定引用不因显示名或行序变化；
+- v9与v22夹具迁到v23保留原始payload，无法唯一匹配进入失效/复核；
+- `22 → 23`第二次执行无变化，历史ConfigurationSnapshot与hash保持不变。
+
+### 18.7 工作区 Revision 保留
 
 - 一期缺少归档能力时仍可跑通非删除主流程，且 SQLite/D1 不裁剪任何 revision；
 - 二期归档必须由当前已登录工具用户显式点击并选择工作 PC 保存位置；数值策划或系统策划只是典型操作者示例，不构成角色门禁；
@@ -1400,6 +1453,8 @@ interface PatchSubjectMigrationResult {
 - [ ] 没有引用历史文档中的冲突结论；
 - [ ] 没有把派生结果作为人工源数据修改；
 - [ ] 没有对重量做插值；
+- [ ] 没有让用户直接填写拉力，且04.5仅按六键唯一匹配；
+- [ ] 没有让ModelPatch修改SKU拉力；
 - [ ] 没有混淆Quality和functionIntensity；
 - [ ] 没有混淆SKU和Model；
 - [ ] 没有让Technology和Affix重复加成；
@@ -1417,11 +1472,11 @@ interface PatchSubjectMigrationResult {
 | --- | --- | --- | --- | --- | --- |
 | OPEN-001 降低型词条叠加 | 产品决策 / 规则源待迁移 | `DECIDED_PENDING_POLICY_VERSION` | 全局唯一使用`bidirectional_ratio`，完整顺序为`set → 百分比 → 固定值 → clamp_add → FinalReviewPatch → ParameterDefinition`；不得按参数或词条族切换 | 权威主工作簿尚无机器可读策略行，或没有已发布`ReductionStackingPolicyVersion`时，只允许明确标记的非正式预览，产生不可waive的PUBLISH BLOCKER并禁止新Model和Snapshot发布 | 2026-07-23用户确认；外部工作簿revision `17173`仅作决策证据；将规则迁入主工作簿`04_词条`（词条表）的稳定机器区域，显式拉取、校验、发布策略版本并通过公式、边界、数值域、迁移和冻结回归后才能改为`RESOLVED` |
 | OPEN-002 性能定位派生语义 | 已决产品结论 | `DECIDED_IMPLEMENTATION_PENDING` | 新契约只产生只读`PerformanceSummary`；旧`PerformanceProfile/performanceId`只读保留 | 新revision不得把Performance作为配置、贡献层、评分乘数、兼容或定价输入；运行时迁移完成前不得把旧路径冒充新契约 | 2026-07-23用户决定与`open-007-pricing-semantics-adr.md`；实现由GitHub Issue #9跟踪 |
-| OPEN-003 扩展部位启用 | 延后产品决策 | `DEFERRED_UI_DISABLED` | 当前及已排定范围只启用竿、轮、线；SKU仅包含竿、轮、线 | 钩、漂、真饵和拟饵仅保留注册表与历史数据兼容；只读UI、草稿、生成、发布、Snapshot和所有环境/渠道导出全部关闭 | 2026-07-23产品确认“当前完全延期，未来另做产品设计”；存在可校验的已发布`enabledItemPartPolicy`前不得标记`RESOLVED`，未来任一部位启动前仍须另建产品设计Issue |
+| OPEN-003 扩展部位启用 | 延后产品决策 | `DEFERRED_UI_DISABLED` | v23及后续目标态当前及已排定范围只启用竿、轮、线；SKU仅包含竿、轮、线 | 钩、漂、真饵和拟饵仅保留注册表与历史数据兼容；v23及后续目标态的只读UI、草稿、生成、发布、Snapshot和所有环境/渠道导出全部关闭；v9/v22按其冻结历史/当前实现语义读取，不由本项原地重写 | 2026-07-23产品确认“当前完全延期，未来另做产品设计”；存在可校验的已发布`enabledItemPartPolicy`前不得标记`RESOLVED`，未来任一部位启动前仍须另建产品设计Issue |
 | OPEN-004 Patch属性偏移阈值 | 规则策略缺口 | `RESOLVED` | 已发布`patch-offset/open004-v1`：不设置独立偏移阈值；Patch立即参与草稿试算，正式结果前必须纳入Series/SKU/Model或发布批次的整体人工复核证据；按当前关口各离散对象的累计最终值和已发布参数合法范围校验 | 缺少或损坏已发布`PatchOffsetPolicyVersion`时仍产生`PATCH_OFFSET_POLICY_MISSING`或完整性BLOCKER；范围越界ERROR只有取得匹配当前Gate的Waiver后才能继续，且仅当Gate为EXPORT时额外要求精确匹配目标环境×渠道；完整性BLOCKER永不可waive | 2026-07-23用户确认决策；Workspace schema v16发布并校验策略版本；Issue #32覆盖批量复核、多重量、Gate/渠道Waiver、rebase、迁移和Snapshot/ExportManifest冻结回归 |
 | OPEN-005 五维图定义 | 产品决策 | `DECIDED_PENDING_DEFINITION_VERSION` | 第21、22、24.6和25.3节已记录2026-07-23确认的正式语义、哈希、投影引用及候选差量/事务契约；实现仍须从版本化定义读取，不得写死在UI/数据库 | 旧五维定义即使原记录为`PUBLISHED`也只允许历史Snapshot只读重放；在符合OPEN-005的新定义进入`FORMAL_CURRENT`前，新正式Snapshot必须fail-closed | 决策证据为GitHub Issue #13及2026-07-23用户确认；完成第21.7节迁移、发布可校验的新`FiveAxisViewDefinition`并通过门禁回归后改为`RESOLVED` |
 | OPEN-006 AI供应方与数据出网 | 安全/产品决策 | `RESOLVED` | 使用`ai-provider/open006-v1`：Fancy Hub、`ai-request/v1`严格Schema、动态模型修订、字段级保留和分层限额 | 本决策只解除产品策略阻断；真实连接器在Issue #25完成、测试并启用前继续禁用，不得发送真实数据 | 2026-07-23用户确认本节策略；AI无批准、写回或发布能力，无需另设三方会签 |
-| OPEN-007 定价决策落地与源表一致性 | 已决产品结论/外部规则源落实 | `DECIDED_SOURCE_UPDATE_REQUIRED` | 旧实现可继续输出明确标记的`NON_FORMAL`试算；新契约按第20.1节执行 | 飞书机器源、新schema、迁移、确认记录和发布/导出尚未全部落实前，禁止把旧Draft发布成符合新契约的PricingPolicyVersion | 2026-07-23用户决定与`open-007-pricing-semantics-adr.md`；源表负责人更新机器源，GitHub Issue #9完成实现 |
+| OPEN-007 定价决策落地与源表一致性 | 已决产品结论/外部规则源落实 | `DECIDED_SOURCE_UPDATE_REQUIRED` | 旧实现可继续输出明确标记的`NON_FORMAL`试算；目标契约按第12.1与20.1节执行，品质区间均为`[min,max)`且`finalValueScore >= 100`无推荐 | 飞书机器源、新v23 schema、迁移、SKU推荐/实际品质分离和发布/导出尚未全部落实前，禁止把旧Draft发布成符合新契约的PricingPolicyVersion；历史“100属于S”策略只服务旧Snapshot | 2026-07-29本轮用户明确确认：品质归SKU，全部区间`[min,max)`，`finalValueScore >= 100`无推荐，实际品质可人工选择且不一致时记录理由；源表负责人更新机器源，独立实现任务完成迁移与回归 |
 | OPEN-008 ConfigIdPolicy区间与命名 | 公司策略（已确认） | `DECIDED_PENDING_POLICY_VERSION` | 按本节确认规则实现策略版本、ledger、权威目标目录/扫描Manifest、历史导入、正式动作治理租约/受保护ref CAS和冲突预检 | `ConfigIdPolicyVersion`尚未发布，或其引用的`ConfigTargetCatalogVersion`中任一必需目标没有获批扫描Manifest时，不得正式预留ID、历史ID正式导入或正式导出；正式预留、历史ID正式导入和正式导出任一无法取得`ConfigTargetGovernanceLease`、无法对authoritative ref执行expected-old-OID CAS或返回`CONFIG_TARGET_SERIALIZATION_UNAVAILABLE`时必须fail-closed。策略发布只复验Manifest/ref/hash，不要求治理租约；禁止用“最大值+1”、示例ID、用户临时绑定或单一渠道扫描代替 | 配置治理负责人发布策略版本；权威目录和获批Manifest覆盖完整；reservation、历史导入、正式导出和分裂命中验收通过；治理租约的物理ref别名竞争、单调fencing token、受保护ref CAS、stale token与`CONFIG_TARGET_SERIALIZATION_UNAVAILABLE`失败验收通过 |
 | OPEN-009 工作流治理策略 | 产品/安全决策 | `RESOLVED` | 使用第20.2节当前`open009-2026-07-27-v2`统一策略；匿名仅使用浏览器内存本地态，所有共享/服务端动作仍须飞书认证；已认证用户拥有全部已启用业务Capability；AI一期禁用，二期连接器仍需独立实现准入 | 历史`open009-2026-07-23-v1`不得重解释；不接飞书审批、不在本工具实行职责分离；OPEN-006安全配置只由部署管理员修改；关键写操作使用工作区单写锁与单调fencing token，普通操作记录保留1年 | 2026-07-23首次确认、2026-07-27发布入口边界v2；策略正文见第20.2节，运行时仍待独立实现与验收 |
 | OPEN-010 飞书Patch台账远端契约 | 外部规则源阻断 | `BLOCKED_ON_SOURCE_SCHEMA` | 已确认`Patch台账`、`A:AK`机器区、`AM:BA`协作事件区、哈希/并发/幂等/补偿/rebase契约；权限引用`separation-of-duties/open009-v2`；不触达飞书的契约实现/测试可继续，但本地PatchLedger、协作事件流、旧版写入/拉取及未实现动作均不得标记为符合或可用 | 本地`PatchOperationRecord`、PatchLedger schema/migration及operation/revision/Snapshot哈希完成`workspaceId`与JCS契约升级前，镜像链路保持禁用；不可变协作事件存储、事务内compare-and-append、`collaborationRevision`/幂等/冲突/`supersedesEventId`校验和action availability完成前，协作写入保持禁用；远端表头、保护边界和连接器联调完成前，真实写入/拉取保持禁用；旧版写入/拉取完成远端schema、IssueCode及ActionCode/Capability升级前保持禁用；`inspect_patch_mirror`、`repair_patch_mirror`、`rebuild_patch_mirror_from_local`、`fix_patch_mirror_schema`、`migrate_patch_subject`的服务端定义、Capability门禁和测试完成前，对应动作也保持禁用；不得伪造SYNCED | 先以版本化迁移补齐本地工作区归属和新哈希，同时保持既有revision、Snapshot引用及历史哈希证据不可变；实现本地协作事件原子追加、先本地提交后镜像及重复重试/双客户端冲突回归；按第14.4节物化远端schema并完成写入、回读、缺行、篡改、hash、跨工作区隔离和并发联调；升级写入/拉取并实现、测试全部镜像/迁移ActionCode、Capability映射、二次确认和审计证据；连接器及运行时实现使用独立Issue/PR跟踪 |
@@ -1461,11 +1516,12 @@ FinalValue = applyParameterDefinition(PostReviewValue)
 
 2026-07-23产品决策：钩、漂、真饵和拟饵当前完全延期，未安排首批或后续启用顺序。此前讨论中的任何拟饵、钩、漂、真饵预排顺序均不生效。本次只收敛“当前是否启用”的产品决策，不为未来产品形态预设答案，也不代表仓库已经发布可校验的`enabledItemPartPolicy`版本；因此OPEN-003继续保持`DEFERRED_UI_DISABLED`，不能标记`RESOLVED`。Issue #17可在决策写入权威规范后关闭，但运行时策略的实现与发布必须由后续独立Issue提供证据。
 
-当前确定边界：
+当前确定的边界仅约束v23及后续目标态；Schema v9与v22继续按冻结的历史/当前实现语义读取、迁移和重放，不由OPEN-003原地改变其部位启用语义：
 
 - 注册表和迁移层可以保留四类部位的稳定ID、原始Payload和历史引用；不得删除、改名重绑或因未启用而丢弃历史数据。
 - 不提供四类部位的产品只读入口、编辑草稿、候选生成、人工发布、Snapshot创建或配置导出。注册表中存在记录不等于已启用。
-- 四类部位不进入现有`Collection/Series/SKU/Model`谱系。现有SKU只包含竿、轮、线；不得把部位专属规格伪装成`targetPullKg`，也不得进入最近结构模板匹配、钓具系列甘特图或现有Model候选生成。
+- 在v23及后续目标态，四类部位不进入`Series → Part → weightBandId/SKU → Model`谱系，也不得进入04.5唯一匹配、钓具系列甘特图、候选生成、发布或导出；目标态SKU只包含竿、轮、线。
+- v9/v22只按冻结payload保留其历史/当前实现分支；`targetPullKg`与最近结构模板匹配仅属于该分支，不得据此创建新对象、启用或推断四类延期部位。
 - 当前不为四类部位定义参数模板、Method/Type、硬兼容、Affinity、Affix/Technology、品质、定价或配置映射，不得从竿轮线复制规则或补默认值。
 - 所有角色均不获得四类部位的草稿、生成、发布或导出动作；dev、test及所有渠道均无先行启用。现有导出不得因注册表或历史数据存在而新增、修改或删除相关配置行。
 - 竿、轮、线的生成、发布、ConfigurationSnapshot和导出行为保持不变。已发布Snapshot不得因本决策或未来扩展部位设计而被重算、改写或删除。
@@ -1500,15 +1556,15 @@ rangeEndpoints = INCLUSIVE
 
 策略版本只记录和冻结上述行为及其适用范围，不得重新引入未经权威规范确认的隐藏数值阈值。缺少有效策略版本时产生`PATCH_OFFSET_POLICY_MISSING`：草稿可以试算，依赖该策略的批准和发布保持阻断。
 
-最终范围必须从当前已发布RuleSetVersion中按稳定规则解析。SKU和Model使用其真实离散SKU、ProjectionMatch及对应源重量段形成校验上下文；具体选择维度由相应参数约束定义，名称和Quality不得作为隐式关联键。
+最终范围必须从当前已发布RuleSetVersion中按稳定规则解析。目标v23的SKU和Model使用真实`partId + weightBandId + functionTemplateRef`形成校验上下文；历史v9/v22继续按冻结ProjectionMatch读取。名称和Quality不得作为隐式关联键。
 
 Series没有单一`weightBandId`。SeriesPatch必须展开为以下离散校验上下文，分别累计到Series层并逐一校验：
 
-- 已存在SKU时，对Series下每个真实离散SKU分别使用其精确`targetPullKg`、ProjectionMatch和命中的源重量段；
-- SKU尚未物化时，对Series声明的每个离散`targetPullKg`分别执行权威最近标杆匹配，并使用各自Projection和源重量段；
-- 禁止选择一个代表性、默认或最重/最轻`weightBandId`代替整个Series，也禁止从最小/最大跨度推断连续中间重量。
+- 已存在SKU时，对每个Part下的真实SKU分别使用其精确`weightBandId`与唯一`functionTemplateRef`；
+- SKU尚未物化时，只对用户明确选择的Part重量段执行04.5唯一匹配，不自动补中间段或创建SKU；
+- 禁止选择一个代表性、默认或最重/最轻`weightBandId`代替整个Series。
 
-每个范围校验Issue必须定位到唯一离散上下文，至少记录`scopeType`、`itemPartId`、`parameterKey`、标准单位、对象及revision、`skuRef`或尚未物化的精确`targetPullKg`、`projectionId`、命中的`weightBandId`、约束规则引用和版本。Series关口只有在全部离散上下文分别通过、确认WARNING或取得各自有效Waiver后才能通过；一个重量的结果不得覆盖或抵消另一个重量的Issue。
+每个范围校验Issue必须定位到唯一离散上下文，至少记录`scopeType`、`partId`、`parameterKey`、标准单位、对象及revision、`skuRef`或预览中的`weightBandId`、`functionTemplateRef`、约束规则引用和版本。Series关口只有在全部离散上下文分别通过、确认WARNING或取得各自有效Waiver后才能通过。
 
 #### 计量、端点与累计
 
@@ -1578,7 +1634,7 @@ OPEN状态阻断命中的关口。只有以下条件全部满足时，该ERROR�
 - ExportManifest冻结“保留意见通过”标记及其引用，避免越界配置脱离审批上下文；
 - 策略、规则或账本迁移不得改变历史Snapshot内容或hash。
 
-验收至少覆盖：Patch新增后立即影响草稿预览但不改变已批准对象、正式配置或历史Snapshot；一次整体复核可以确认多个Series/SKU/Model及其完整Patch集合，每个Patch revision均可追溯到同一批次证据且无需逐Patch操作；批次外Patch不能借用结论，批次内某对象Patch变化只使受影响对象的覆盖关系STALE；最终值等于上下端点时通过；中间值越界但当前关口累计最终值合法时通过；Series所有真实SKU和未物化`targetPullKg`分别命中自己的Projection/重量段且任一失败都会阻断Series关口；累计最终值越界且未获Waiver时阻断；一次人工决定原子创建单Gate及逐环境×渠道Waiver且不能跨Gate/渠道复用；新增导出目标要求新Waiver；范围越界ERROR取得匹配当前Gate的“保留意见通过”后可以发布或导出且保留标记，EXPORT还必须精确匹配目标环境×渠道；不可重放或规则解析失败时产生不可waive BLOCKER；基底变化后旧复核与Waiver变为STALE；新策略和新Patch不改变任何历史Snapshot内容或hash。上述回归由Issue #32及`tests/patch-offset-policy.test.ts`持续执行；任何后续策略版本仍必须满足同一门槛。
+验收至少覆盖：Patch新增后立即影响草稿预览但不改变已批准对象、正式配置或历史Snapshot；一次整体复核可以确认多个Series/SKU/Model及其完整Patch集合；批次外Patch不能借用结论；每个真实SKU与预览重量段分别唯一命中04.5，零/多匹配阻断对应关口；累计最终值越界且未获Waiver时阻断；Waiver不能跨Gate/渠道复用；不可重放或规则解析失败产生不可waive BLOCKER；基底变化后旧复核与Waiver变为STALE；新策略和新Patch不改变任何历史Snapshot内容或hash。
 
 ### OPEN-008：ConfigIdPolicy数字区间与命名规则
 
@@ -1717,6 +1773,8 @@ Manifest失效后，旧`ConfigIdPolicyVersion`只保留历史审计用途，不�
 
 本节语义已经由2026-07-23用户决定，决策证据见`docs/audits/open-007-pricing-semantics-adr.md`。`OPEN-007`继续跟踪飞书机器源、schema、迁移和运行时落地，不再表示产品执行语义未决，也不得继续要求用户在阻断、封顶或性能乘数之间重复选择。
 
+2026-07-29本轮用户明确确认品质归SKU：全部08.1区间统一为`[min,max)`，`finalValueScore >= 100`无品质推荐；实际品质可人工选择，和推荐不一致时必须记录理由。该确认优先于2026-07-23“100属于S”的旧目标策略。历史Pricing/Quality策略与既有Snapshot继续按冻结版本解释，不得原地重算；目标实现通过Schema v23与新策略版本落地。
+
 定价权威来源是主工作簿`07_品质评分`（品质评分表）与`08_价格计算`（价格计算表）的联合策略：品质评分表提供品质区间和品质内最小/最大价格系数；价格计算表提供业务公式、评分插值、重量段查表、零整比、货币、舍入和价格边界。两页必须按同一`FeishuSourceRevision`导入为一个`PricingPolicyDraft`，禁止跨revision拼接。
 
 ```text
@@ -1733,7 +1791,7 @@ Manifest失效后，旧`ConfigIdPolicyVersion`只保留历史审计用途，不�
 ÷ 零整比(part, pricingWeightBandId, PricingPolicyVersion)
 ```
 
-`维修系数`和`购买系数`来自`02_类型材质`（类型材质表）；当前竿、轮、线种子值均为`1`，仍须按普通版本化输入处理，不能在代码中省略。`pricingWeightBandId`默认取Model最近结构标杆所引用的源重量段ID，必须进入Trace，禁止按最终拉力重新做第二套隐式分段。定价查表直接按`pricingWeightBandId`与`partId`唯一定位，不再经过任何品质分组中间层；品质差异完全由各自的评分插值系数区间体现。
+`维修系数`和`购买系数`来自`02_类型材质`（类型材质表）；当前竿、轮、线种子值均为`1`，仍须按普通版本化输入处理，不能在代码中省略。目标v23的`pricingWeightBandId`取SKU持久化的weightBandId并进入Trace；历史Snapshot仍按其冻结结构源重量段读取，禁止按最终拉力重新做第二套隐式分段。定价查表直接按`pricingWeightBandId`与`partId`唯一定位。
 
 领域品质仍固定为`C/绿、B/蓝、A/紫、S/橙`；导入器必须通过版本化`QualityPricingMapping`显式记录每个品质在`07_品质评分`中的来源单元格，并对缺失或重复映射阻断。A与S即使落在同一重量段、同一部位，也通过各自的价格系数区间继续形成不同价格。
 
@@ -1798,9 +1856,9 @@ interface PricingWarningAcknowledgement {
 
 确认记录至少冻结Issue fingerprint、Model revision、PricingPolicyVersion、inputHash、`purchasePriceRaw/purchasePriceRounded/purchasePrice`、阈值、确认人、时间和理由。输入、Model revision、PricingPolicyVersion、任一价格或fingerprint变化后旧Issue/确认转为`STALE`，不得按相同code自动沿用。确认动作必须由服务端返回`acknowledge_price_warning`，要求`pricing.warning.acknowledge`能力，并在提交时重验Issue仍为OPEN且fingerprint一致。Snapshot冻结超限标记与确认引用；导出同一冻结Snapshot时验证引用和数值一致，不重复要求确认。若目标配置字段、Excel schema或游戏编译器无法表示实际价格，则另产生`source=config_relationship|data_integrity`、`severity=BLOCKER`、`gate=EXPORT`的不可确认问题；二次确认不能绕过数据表示能力。
 
-PricingPolicyDraft只有在以下校验全部通过后才能发布：品质区间互斥且无空洞，S包含100且大于100报错；每个Quality恰有一条品质定价映射和一组价格系数；所有启用重量段×部位均能唯一查表；分母大于0；部位占比合法；不读取Performance评分输入；`PricingExecutionPolicy`完整且来源revision可追踪。飞书机器源、schema与运行时尚未落实本节新契约时，可以继续生成带`NON_FORMAL`标记的旧实现试算，但不得将其发布为符合新契约的PricingPolicyVersion。此前已经发布且输入版本完整的旧PricingPolicyVersion仍只服务其历史Snapshot，不重算。
+PricingPolicyDraft只有在以下校验全部通过后才能发布：品质区间互斥且无空洞、统一使用`[min,max)`、S上界为100且评分100无推荐；每个Quality恰有一条品质定价映射和一组价格系数；所有启用重量段×部位均能唯一查表；分母大于0；部位占比合法；不读取Performance评分输入；`PricingExecutionPolicy`完整且来源revision可追踪。飞书机器源、schema与运行时尚未落实本节新契约时，可以继续生成带`NON_FORMAL`标记的旧实现试算，但不得将其发布为符合新契约的PricingPolicyVersion。此前已经发布且输入版本完整的旧PricingPolicyVersion仍只服务其历史Snapshot，不重算。
 
-正常路径：同revision导入07/08→校验并发布PricingPolicyVersion→以Model最终价值分和结构源重量段计算两个Raw价格→检查软确认阈值→分别舍入→对购买价应用最低价→确认必要WARNING→写入Snapshot和Store预览。边界：S的100合法而大于100报错；零整比不得为0；最低价只作用于舍入后的购买价；阈值比较使用未舍入购买价。冲突：跨revision、重复映射、缺查表、过期源边界或执行策略缺失阻止新策略发布。恢复：修复飞书后显式拉取并生成新Draft，旧PricingPolicyVersion、确认和已发布Snapshot不变。权限：规则拉取、策略发布、价格超限确认、Model发布和配置导出分别鉴权。
+正常路径：同revision导入07/08→校验并发布PricingPolicyVersion→以SKU实际品质、最终价值分和定价重量段计算两个Raw价格→检查软确认阈值→分别舍入→对购买价应用最低价→确认必要WARNING→写入Snapshot和Store预览。边界：99.999可推荐S，100及以上无推荐并阻止目标态新正式定价；零整比不得为0；最低价只作用于舍入后的购买价；阈值比较使用未舍入购买价。冲突：跨revision、重复映射、缺查表、过期源边界或执行策略缺失阻止新策略发布。恢复：修复飞书后显式拉取并生成新Draft，旧PricingPolicyVersion、确认和已发布Snapshot不变。
 
 验收：Given B品质最终评分30、价格系数区间0.8至1.2，When插值，Then评分插值系数为1.0；Given A与S同重量段同部位，When计算，Then共享同一组查表基准但分别使用自己的价格系数区间；Given`repairPriceRaw=1234`且购买换算为1.5，When计算并分别舍入，Then维修价为1230、购买价使用未舍入维修价得到1850而不是1840；Given购买价舍入结果80，When应用最低价，Then最终购买价100且维修价不变；Given`purchasePriceRaw`超过300,000,000，When未确认，Then返回可执行确认的WARNING；When确认，Then保留实际价格与超限标记继续；Given随后Model revision或inputHash变化，Then旧确认STALE；Given目标字段无法表示该价格，Then独立EXPORT BLOCKER仍阻止写入。
 
@@ -2148,7 +2206,51 @@ SnapshotBatch可以跨Series、SKU和W段，但发布批次只是用户确认、
 
 Series基准固定采用`projection_reference`，不采用显式Model或已批准Model中位数。基准分别读取竿、轮、线对应的`StructuralBenchmark / DerivedProjection`，表达加入functionIntensity、Performance、Material、Affix/Technology和Patch之前的理论结构状态，并输出三条独立参考曲线。参考曲线使用与当前视图相同的W段、五维定义、规则版本和顶点集合，不得聚合；某部位投影不可用时只显示该部位基准不可用，不得自动回退到Model、中位数或其他投影。
 
-`projection_reference`的唯一选择算法固定为`projection-reference/current-sku-frozen-match/v1`：
+目标v23把Series基准锚定到Snapshot冻结的`partId + weightBandId + functionTemplateRef`；不得要求新SKU补造旧ProjectionMatch。现有`projection-reference/current-sku-frozen-match/v1`只服务v9/v22 Snapshot，v23必须发布后继选择器版本并冻结04.5引用、输入指纹与逐Part状态。两种选择器均不得按查询顺序、默认SKU或“最新”引用猜测。
+
+`projection-reference/v23-function-template-frozen/v1`的选择算法固定为：
+
+1. Model详情和钓组模式以待查看Snapshot冻结的`baselineSnapshotId + seriesId + skuId + skuRevisionId`为唯一锚点。选择器只读取该Snapshot内按Part冻结的输入，不读取当前Part/SKU草稿、Series默认SKU、页面上下文或其他SKU。
+2. 锚点SKU revision必须冻结其所属`partId + partType + weightBandId + functionTemplateRef + functionTemplateRevisionId + functionTemplateInputFingerprint`。同一Series的基准集合从同一Snapshot中冻结的Part输入构建；竿、轮、线每种零或一个。重复部位、缺少必需字段或SKU/Part父链不一致返回`error`并阻止新正式Snapshot。
+3. 对每个存在的Part，按稳定引用精确读取一个04.5 revision，并重新计算其六键输入指纹。引用不存在、revision/hash不符、指纹不符或六键重新解析不是唯一同一行时返回`error`，不得按名称、区间、拉力距离、默认值或其他模板修复。Series未包含的部位返回`missing`；这不是错误，也不得补造Part。
+4. `available`参考曲线只使用冻结04.5 revision的基准参数，通过当前FiveAxisViewDefinition的相同轴顺序、transform和W段顶点计算；不得加入Part/SKU词条、Technology、品质、Patch或Model最终值，也不得生成旧ProjectionMatch。三种部位状态和参考曲线固定按竿、轮、线排序。
+5. 独立多装备比较只有在用户显式选择已发布`baselineSnapshotId`后才运行该Snapshot对应版本的选择器；未选择时三种部位均为`not_selected`。改变共同W段只改变归一化顶点，不改变锚点、04.5引用或输入指纹。
+6. 临时视图和Snapshot都冻结选择器版本、锚点、`partInputs`、逐部位状态与引用字段。选择结果按严格Schema、JCS、无BOM UTF-8和SHA-256小写十六进制计算：
+
+```text
+projectionReferenceSetHash = H({
+  schemaVersion: "five-axis-hash-input/v1",
+  kind: "projection_reference_set",
+  selectorVersion: "projection-reference/v23-function-template-frozen/v1",
+  anchor: {
+    baselineSnapshotId: string,
+    seriesId: string,
+    skuId: string,
+    skuRevisionId: string
+  },
+  references: [{
+    itemPartId: "rod" | "reel" | "line",
+    state: "available" | "missing" | "error",
+    partId: string | null,
+    weightBandId: string | null,
+    functionTemplateRef: string | null,
+    functionTemplateRevisionId: string | null,
+    functionTemplateInputFingerprint: string | null
+  }]
+})
+```
+
+`references`固定按rod、reel、line顺序；`missing`条目的五个引用字段全部为JSON `null`，`error`保留能够安全验证的冻结字段并以错误码另存Trace，错误码不进入本闭集hash。任一锚点、状态或非null引用字段变化都必须改变hash；相同闭集输入必须得到相同hash。发布`FORMAL_CURRENT`前必须提供固定向量，至少覆盖单Part、三Part、缺Part、断裂引用、指纹不符、六键多匹配、相同输入重放和仅`baselineSnapshotId`变化；固定向量未通过时返回`FIVE_AXIS_PROJECTION_REFERENCE_VECTOR_MISMATCH`。
+
+规范固定向量`projection-reference/v23-function-template-frozen/vector-001`冻结如下。Canonical JSON为下列代码块内容本身：单行、无前后空白、无末尾换行、无BOM，按UTF-8字节计算SHA-256；字段顺序已经是JCS输出，不得重新选择示例值：
+
+```json
+{"anchor":{"baselineSnapshotId":"snap-001","seriesId":"series-001","skuId":"sku-001","skuRevisionId":"sku-rev-001"},"kind":"projection_reference_set","references":[{"functionTemplateInputFingerprint":"fp-rod-001","functionTemplateRef":"ft-rod-001","functionTemplateRevisionId":"ft-rev-001","itemPartId":"rod","partId":"part-rod-001","state":"available","weightBandId":"W01"},{"functionTemplateInputFingerprint":null,"functionTemplateRef":null,"functionTemplateRevisionId":null,"itemPartId":"reel","partId":null,"state":"missing","weightBandId":null},{"functionTemplateInputFingerprint":null,"functionTemplateRef":null,"functionTemplateRevisionId":null,"itemPartId":"line","partId":null,"state":"missing","weightBandId":null}],"schemaVersion":"five-axis-hash-input/v1","selectorVersion":"projection-reference/v23-function-template-frozen/v1"}
+```
+
+期望小写十六进制摘要为`d7221f605b72dfcd97f6d00002d206cf4d308490c3599f64a24d3f239f61d600`。任何实现若不能逐字复现该摘要，不得发布或使用v23 `FORMAL_CURRENT`定义；其余必测向量必须沿用同一闭集Schema和编码规则。
+
+历史`projection-reference/current-sku-frozen-match/v1`的选择算法固定为：
 
 1. Model详情和钓组模式以待查看Snapshot冻结的`seriesId + skuId + skuRevisionId`作为引用锚点；不得读取Model当前草稿、Series默认SKU、页面上下文或查询结果第一项。
 2. 该SKU revision必须按`itemPartId`冻结竿、轮、线各零或一个`ProjectionMatch`。每个合法匹配必须显式冻结`projectionMatchId + projectionMatchRevisionId + projectionId + projectionRevisionId`；同一部位出现多个匹配是`FIVE_AXIS_PROJECTION_REFERENCE_AMBIGUOUS`，不得按创建时间、最大revision、距离、W段或数据库顺序择一。
@@ -2293,7 +2395,16 @@ interface ModelFiveAxisPreview {
     seriesId: string;
     skuId: string;
     skuRevisionId: string;
-    selectorVersion: "projection-reference/current-sku-frozen-match/v1";
+    selectorVersion:
+      | "projection-reference/current-sku-frozen-match/v1"
+      | "projection-reference/v23-function-template-frozen/v1";
+    partInputs: {
+      partId: string;
+      weightBandId: string;
+      functionTemplateRef: string;
+      functionTemplateRevisionId: string;
+      functionTemplateInputFingerprint: string;
+    }[];
   };
   projectionReferenceSetHash: string;
   projectionReferenceSeries: {
@@ -2303,11 +2414,18 @@ interface ModelFiveAxisPreview {
     projectionMatchRevisionId: string | null;
     projectionId: string | null;
     projectionRevisionId: string | null;
+    partId: string | null;
+    weightBandId: string | null;
+    functionTemplateRef: string | null;
+    functionTemplateRevisionId: string | null;
+    functionTemplateInputFingerprint: string | null;
     metrics: FiveAxisMetric[];
   }[];
   inputHash: string;
 }
 ```
+
+同一`projectionReferenceSeries`条目必须由`selectorVersion`决定闭合形状：历史选择器要求四个Projection字段并禁止五个v23字段；v23选择器要求`partId + weightBandId + functionTemplateRef + functionTemplateRevisionId + functionTemplateInputFingerprint`并禁止四个Projection字段。`partInputs`在历史选择器下必须为空，在v23选择器下按稳定Part顺序完整冻结。不得把两种引用混装或用全`null`占位通过校验。
 
 `axisId`由版本化定义提供，不得在前端联合类型、数据库列或图表组件中写死。同一个预览中的每条曲线必须与冻结的`fiveAxisDefinitionId + fiveAxisDefinitionVersion`逐项对应，缺轴按第22节状态语义返回，不能临时补0。
 
@@ -2397,7 +2515,7 @@ interface FiveAxisDefinitionDispositionCatalogRevision {
 - 旧定义原记录、publicationState、payload、definitionHash、VertexSet及引用它的ConfigurationSnapshot全部原样只读保留；不得通过改写旧定义状态或重算hash完成迁移。
 - 迁移器先解析当前目录头并计算全部已知定义应有的完整`entries`：不符合本节契约的旧定义为`LEGACY_SNAPSHOT_ONLY`。若当前头已经逐项表达相同`entries`，重复运行必须直接返回该现有修订，不得把当前头再次作为前驱追加等价修订；只有目标`entries`不同才以当前头为前驱构建后继修订。旧Snapshot继续按其冻结定义、顶点、公式和投影证据读取、审计及重放，内容/hash不变；该处置不产生旧Snapshot UpgradeCandidate。
 - `LEGACY_SNAPSHOT_ONLY`定义不得创建任何新正式ConfigurationSnapshot，不得作为新UpgradeCandidate的目标定义，也不得仅因原字段仍为`PUBLISHED`而通过发布检查。草稿预览必须明确标记legacy，不能冒充OPEN-005正式结果。
-- 新定义只有同时声明`semanticContractVersion="five-axis/open005-2026-07-23/v1"`、`hashInputSchemaVersion="five-axis-hash-input/v1"`、`projectionReferenceSelectorVersion="projection-reference/current-sku-frozen-match/v1"`，通过第21、22和24.6节完整Schema/固定向量校验，并取得唯一`FORMAL_CURRENT`处置后，才可服务新正式Snapshot。
+- 新定义只有同时声明`semanticContractVersion="five-axis/open005-2026-07-23/v1"`、`hashInputSchemaVersion="five-axis-hash-input/v1"`并使用与目标Workspace Schema一致的选择器，通过第21、22和24.6节完整Schema/固定向量校验，取得唯一`FORMAL_CURRENT`处置后，才可服务新正式Snapshot。Schema v23的新正式Snapshot必须使用`projection-reference/v23-function-template-frozen/v1`；`projection-reference/current-sku-frozen-match/v1`只允许服务v9/v22历史Snapshot，进入v23目录时其定义只能是`LEGACY_SNAPSHOT_ONLY`或`SUPERSEDED`。
 - 在不存在唯一合法`FORMAL_CURRENT`定义、处置记录缺失/冲突、迁移未完成或新定义任一必需策略版本不可校验时，发布路径返回`FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE`并fail-closed；不得回退旧`PUBLISHED`定义、种子定义或无五维证据Snapshot。
 - 新定义发布后，旧定义可继续保持`LEGACY_SNAPSHOT_ONLY`；此前符合本契约的正式定义被替换时，必须在同一个后继目录修订中把旧项写为`SUPERSEDED`、把新项写为唯一`FORMAL_CURRENT`。新定义、完整后继目录修订和目录头条件更新必须在一个数据库事务提交；并发头冲突方回滚并基于新头重算。任何替换都不修改历史定义、历史目录修订或Snapshot。
 - 新正式Snapshot必须冻结其解析使用的`catalogRevisionId + catalogHash`以及命中的处置项；历史Snapshot没有该字段时仍按原冻结定义重放，不得补写。仅目录证据revision变化而命中的定义及全部五维语义输入未变化时，不得单独造成五维UpgradeCandidate。
@@ -2537,11 +2655,11 @@ FiveAxisComparisonView至少保存：
 
 旧“候选池”不再作为主导航和产品领域层级。CandidateSearchRecipe继续存在，但权威中文名是“候选搜索配方”，只负责枚举、过滤和排序，不承担Series、SKU或Model身份。
 
-甘特图采用纵向重量分段、横向品质与类型分栏。纵向重量分段是版本化、可配置的规划坐标，不是连续数轴；Series覆盖块只连接真实离散SKU节点。页面必须固定显示说明：
+甘特图采用纵向重量分段、横向Part分栏；SKU节点显示实际品质并可按其筛选。纵向重量分段直接使用01.x的稳定顺序和规划坐标，不是连续数轴；每个Part分别计算已选重量段的连续区间。
 
 > 覆盖范围只表达系列规划跨度，不代表连续插值。
 
-甘特条表示系列覆盖和规划范围；SKU节点表示真实离散重量；Model数量、发布状态、硬冲突和升级状态附着在SKU节点上。不得从条带长度推导连续属性，也不得自动补齐中间重量。
+同一Part相邻重量段合并显示为一个矩形；中间缺至少一个01.x重量段时拆成多个矩形。竿、轮、线分别计算，禁止跨Part合并。合并只改变展示，不合并SKU数据。点击连续矩形后必须先选择具体重量段，再进入该段现有SKU列表与“新增SKU”预览；点击矩形或重量段本身都不得创建数据。
 
 历史路由、书签或权限中使用candidate pool标识时应提供兼容别名或跳转；迁移不得删除已有Candidate、Recipe或计算轨迹。
 
@@ -2821,6 +2939,8 @@ JCS与哈希最低测试向量固定如下；该对象只用于canonicalization�
 
 - 旧“候选池”入口兼容跳转到钓具系列甘特图；
 - 甘特条不产生连续重量或属性插值；
+- 相邻重量段按Part合并，缺段拆分，跨Part不合并；
+- 点击合并块后先选具体重量段，点击本身不创建SKU；
 - 生成Model候选仍由CandidateSearchRecipe执行；
 - AI建议不能覆盖deny、error或硬冲突；
 - AI只能创建draft Model Patch或RuleSourceChangeDraft；
@@ -2859,7 +2979,7 @@ JCS与哈希最低测试向量固定如下；该对象只用于canonicalization�
 ```ts
 interface EntityRef {
   workspaceId: string;
-  entityType: "collection" | "series" | "sku_drawer" | "model"
+  entityType: "collection" | "series" | "part" | "sku_drawer" | "model"
     | "configuration_snapshot" | "model_candidate" | "adjustment_patch"
     | "upgrade_candidate" | "rule_source_change_draft" | "config_id_bundle"
     | "config_id_policy" | "config_target_catalog" | "config_target_scan_manifest"
@@ -2888,7 +3008,9 @@ interface LocalActionAvailability {
 }
 type CapabilityCode =
   | "series.read" | "series.edit" | "series.approve"
+  | "part.read" | "part.edit"
   | "sku.read" | "sku.edit"
+  | "affix.read" | "affix.create" | "affix.edit"
   | "model.read" | "model.edit" | "model.review" | "model.publish"
   | "candidate.generate" | "candidate.materialize" | "candidate.override_selection" | "candidate.dismiss"
   | "model.patch.create" | "model.patch.review" | "patch.rebase"
@@ -2908,6 +3030,8 @@ type CapabilityCode =
 
 type ActionCode =
   | "open_series" | "open_sku" | "preview_model"
+  | "select_weight_band" | "create_sku" | "create_project_affix"
+  | "add_sku_affix" | "remove_inherited_affix" | "restore_inherited_affix" | "copy_sku_local_affix"
   | "edit" | "review" | "publish" | "generate_candidates"
   | "materialize_candidates" | "override_candidate_selection" | "dismiss_candidate_run"
   | "create_patch" | "review_patch" | "rebase_patch"
@@ -2953,18 +3077,18 @@ type ActionCode =
 
 `LocalActionAvailability`是`open009-2026-07-27-v2`发布的纯本地动作契约，由当前应用版本作为不可变客户端契约随静态资源一同提供，不依赖服务端、用户对象或网络响应，因此服务不可用时仍可确定性计算。它只可控制同一标签页浏览器内存中的本地Excel副本与临时态，不携带Capability、`EntityRef`或`commandPayloadRef`，也不得映射、升级或提交为任何`ActionCode`。只要动作会读取共享状态、调用服务器Action、修改导入源文件、写入SQLite、日志、IndexedDB/localStorage、发布、正式导出或触发外部副作用，就不属于`LocalActionCode`，必须使用服务端返回的`ActionAvailability`并在命令端重新鉴权。客户端可以按会话内存状态计算本地动作是否可用，但不能据此推断任何服务端动作；匿名本地运行时尚未实现前，不得用本契约声称功能已可用。
 
-Series、SKU、Model的ID终身稳定且不复用；改名和更换默认Model不改ID。SKU修改`targetPullKg`必须遵守第6.6节：没有任何已发布后代Snapshot时保留skuId并创建新revision；已有已发布后代时原SKU的重量身份冻结，新重量创建新SKU，旧SKU可`DEPRECATED`。Revision只增不改；已批准/已发布revision不可原地改写。Snapshot ID与payload/hash永久绑定。前端不得从角色名、状态或颜色猜服务端动作；读接口返回`ActionAvailability[]`，写接口再次鉴权，纯本地动作只消费上述`LocalActionAvailability`。按第20.2节，所有已登录公司用户统一获得全部当前已启用业务Capability，`separationOfDutiesPolicy`使用`disabled_in_tackle_forger`；按第23.6节，`ai.provider_policy.manage`只授予部署管理员。服务端仍必须独立鉴权，功能开关关闭或未授予的Capability不得通过直接API调用。
+Series、Part、SKU、Model的ID终身稳定且不复用；改名和更换默认Model不改ID。SKU改换Part或weightBandId必须遵守第6.6节；派生拉力不是身份字段。Revision只增不改；已批准/已发布revision不可原地改写。Snapshot ID与payload/hash永久绑定。前端不得从角色名、状态或颜色猜服务端动作；读接口返回`ActionAvailability[]`，写接口再次鉴权，纯本地动作只消费上述`LocalActionAvailability`。
 
 ### 24.2 R1：钓具系列甘特图
 
 ```ts
 interface SeriesGanttQuery {
   text?: string;
-  collectionIds?: string[]; methodIds?: string[]; typeIds?: string[];
-  qualityIds?: string[]; functionIds?: string[]; itemPartIds?: string[];
+  collectionIds?: string[]; partTypes?: string[]; fishingMethods?: string[];
+  materialTypes?: string[]; functionProfiles?: string[]; actualQualityIds?: string[];
   lifecycleStates?: LifecycleState[]; attentionStates?: AttentionState[];
   issueSeverities?: ValidationSeverity[]; hasUpgradeCandidate?: boolean;
-  minTargetPullKg?: number; maxTargetPullKg?: number;
+  weightBandIds?: string[];
   ruleSetVersion?: string;
   sort: "series_name" | "weight_span" | "attention" | "recently_changed";
   cursor?: string; pageSize: number;
@@ -2979,15 +3103,15 @@ interface GanttNodeAggregate {
 }
 ```
 
-- 主矩阵纵轴为版本化、可配置的重量显示分段；横轴第一层固定按品质C/绿、B/蓝、A/紫、S/橙分组，第二层按当前启用的Type分组。
-- 每个Series放入其固定Quality + Type列，并以覆盖块跨越该Series离散`targetPullsKg`的最小/最大显示位置；覆盖块只是规划轮廓，不是连续SKU或插值区间。
-- 覆盖块内部只绘制真实SKU节点。显示分段或节点位置只用于布局，最近模板匹配仍使用SKU的精确targetPullKg。
+- 主矩阵纵轴使用01.x重量段显示顺序；横轴按Part组织，可附实际品质筛选，但品质不是Series统一身份。
+- 每个Part把已选重量段按01.x顺序拆成一个或多个连续集合；相邻段合并矩形，缺段拆分，竿/轮/线不得跨部件合并。
+- 覆盖块只表达展示连续性，不合并SKU数据。点击块后先选择具体weightBandId，再显示该段现有SKU和“新增SKU”。
 - 同字段OR、不同字段AND；文本搜索当前工作区中的ID、名称、别名。
 - 默认加载矩阵Series摘要；选中/展开Series覆盖块时，在底部摘要按重量升序加载真实SKU；展开SKU摘要时按展示顺序加载Model，使用服务端游标。
 - 聚合区分总数和当前查询命中数；`modelCountMatched`只表达筛选结果，不表达对象权限或安全裁剪。
 - 主状态优先级：硬冲突 > rebase > 待复核 > 警告 > 待发布 > 升级候选 > 已发布 > 草稿；全部计数保留。
-- 点击Series覆盖块只更新底部Series摘要；点击SKU节点选中对应SKU并展示抽屉入口，不因单Model跳级；点击Model行才打开右侧预览。“打开Series/进入SKU抽屉”使用显式动作。
-- 矩阵空白和重量分段标签不创建SKU；新建重量必须使用“添加重量规格”。
+- 点击Series/Part覆盖块只更新摘要；点击具体重量段执行只读`select_weight_band`并预览，只有用户显式执行`create_sku`才持久化。
+- 矩阵空白、连续矩形和重量段标签均不创建SKU。
 
 正常路径：筛选矩阵，选中Series覆盖块，在底部摘要展开SKU与Model并打开预览。
 边界：单SKU仍有一个真实节点；无SKU草稿Series显示未覆盖占位，不绘制虚假跨度。
@@ -2995,19 +3119,44 @@ interface GanttNodeAggregate {
 恢复：保留筛选、矩阵滚动和选中Series刷新；节点移除则回最近仍存在的父级。
 
 权限：按第20.2节使用全员统一的已启用Capability和功能开关；R1不得实现对象级过滤、对象级总数隐藏或部分谱系披露。功能未启用或Capability不可用时，服务端返回禁用原因且写接口再次鉴权。
-验收：Given 1.5kg与1.8kg命中同一模板，When 查看同一Series覆盖块，Then 两个精确重量以独立SKU节点显示且各自状态独立，并显示“覆盖范围不代表连续插值”。
+验收：Given同一Part选择01.x第1、2、4段，When查看甘特图，Then第1/2段合并、第4段独立；When点击合并块，Then必须再选择第1或第2段后才显示该段SKU，且没有自动创建。
+
+### 24.2.1 Part编辑、重量段SKU预览与词条动作
+
+```ts
+interface PartDraft {
+  partId: string;
+  partType: "rod" | "reel" | "line";
+  fishingMethod: string;
+  materialType: string;
+  functionProfile: string;
+  functionIntensity: number;
+  defaultEntryIds: string[];
+  technologyIds: string[];
+}
+
+interface WeightBandSkuPreview {
+  partRef: EntityRef;
+  weightBandId: string;
+  match: FunctionTemplateMatch;
+  existingSkuRefs: EntityRef[];
+  createSkuAction: ActionAvailability;
+}
+```
+
+Series编辑区同时展示1～3个Part卡片，每张卡独立编辑全部字段。保存Part后，服务端对其已有SKU重新匹配和重算；零/多匹配返回失效SKU列表而不猜测。SKU词条区分别提供增加已有词条、屏蔽/恢复继承词条、复制为局部副本后修改、挂载Technology，以及“新增词条”完整编辑浮窗。所有写动作绑定expected revision、输入hash和幂等键；“新增词条”创建项目级完整定义，不创建占位引用。
 
 ### 24.3 R2：稳定标识、面包屑和权限
 
 ```ts
 interface BreadcrumbItem {
   ref: EntityRef; label: string;
-  objectLabel: "Collection" | "Series" | "SKU 抽屉" | "Model" | "冻结快照";
+  objectLabel: "Collection" | "Series" | "Part" | "SKU 抽屉" | "Model" | "冻结快照";
   current: boolean; navigable: boolean; unavailableReason?: string;
 }
 ```
 
-谱系固定为`Collection? → Series → SKU Drawer → Model → ConfigurationSnapshot`。SKU显示拉力规格与“SKU抽屉”，Model显示型号与“Model”。Collection可缺省，其他父链不可缺失。跨父级移动是受审计迁移命令并重验不变量。只删除未引用草稿；其余只能废弃。从Snapshot返回Model默认定位快照对应revision。对象关联使用稳定entityId、revisionId、业务代码与GenerationBinding；name只能用于展示、检索和人工候选提示，不能作为唯一关联键。
+Schema v23谱系固定为`Collection? → Series → Part → SKU Drawer → Model → ConfigurationSnapshot`。SKU显示重量段与“SKU抽屉”，Model显示型号与“Model”。Collection可缺省，其他父链不可缺失；v9/v22历史对象没有Part父级时按冻结旧谱系只读回放，不补造Part。跨父级移动是受审计迁移命令并重验不变量。只删除未引用草稿；其余只能废弃。从Snapshot返回Model默认定位快照对应revision。对象关联使用稳定entityId、revisionId、业务代码与GenerationBinding；name只能用于展示、检索和人工候选提示，不能作为唯一关联键。
 
 正常路径：逐层导航且身份标签稳定。
 边界：无Collection从Series开始；多Snapshot显式选版本。
@@ -3029,7 +3178,9 @@ interface CandidateGenerationRequest {
 }
 interface ModelCandidate {
   candidateId: string; runId: string; skuRef: EntityRef;
-  candidateFingerprint: string; projectionMatchRef: string;
+  candidateFingerprint: string;
+  functionTemplateRef: string;
+  functionTemplateInputFingerprint: string;
   proposedConfiguration: Record<string, unknown>;
   hardCompatibility: HardCompatibilityResult; affinity: AffinityBreakdown;
   invariantIssues: ValidationIssue[]; rank: number; rankReasons: string[];
@@ -3037,7 +3188,7 @@ interface ModelCandidate {
 }
 ```
 
-输入冻结Series/SKU/Recipe/RuleSet/Patch revision。deny/缺require只进排除统计。权威排序为版本化字典序：配方键→warning数→Affinity降序→拉力距离升序→fingerprint；AI不得改写。结果含排除分组、枚举总数、截断、版本、hash、耗时。CandidateRun是不可变审计产物，候选不是Model。
+v23输入冻结Series/Part/SKU/Recipe/RuleSet/Patch revision及SKU的04.5引用/输入指纹。deny/缺require只进排除统计。权威排序为版本化字典序：配方键→warning数→Affinity降序→fingerprint；04.5已经由六键唯一定位，不得再以拉力距离消歧，AI不得改写。结果含排除分组、枚举总数、截断、版本、hash、耗时。CandidateRun是不可变审计产物，候选不是Model。v9/v22历史CandidateRun继续冻结并读取`projectionMatchRef`与旧排序版本，不迁写为v23形状。
 
 默认行为是自动物化：对每个`SKU × enabledModelVariantKey`选取排名最高的合法候选并创建或更新一个Model草稿revision。用户可通过范围、重量、启用路线、每SKU数量、最低Affinity、warning接受和`REVIEW_ON_CHANGE`检查点克制批量生成。若`skuId + modelVariantKey`唯一命中旧Model，则创建新revision；无命中新建；多重或歧义命中则跳过并报Issue，禁止按name猜测。内容hash未变化时不创建空revision。同输入、版本与算法必须产生相同结果和顺序，正常流程不使用random seed。
 
@@ -3093,13 +3244,17 @@ interface FiveAxisViewDefinition {
   definitionId: string; version: string;
   semanticContractVersion: "five-axis/open005-2026-07-23/v1";
   hashInputSchemaVersion: "five-axis-hash-input/v1";
-  projectionReferenceSelectorVersion: "projection-reference/current-sku-frozen-match/v1";
+  projectionReferenceSelectorVersion:
+    | "projection-reference/current-sku-frozen-match/v1"
+    | "projection-reference/v23-function-template-frozen/v1";
   axes: [FiveAxisAxisDefinition, FiveAxisAxisDefinition, FiveAxisAxisDefinition, FiveAxisAxisDefinition, FiveAxisAxisDefinition];
   weightBandPolicyVersion: string;
   displayBandConfigId: string;
   seriesBaselinePolicy: {
     mode: "projection_reference";
-    selectorVersion: "projection-reference/current-sku-frozen-match/v1";
+    selectorVersion:
+      | "projection-reference/current-sku-frozen-match/v1"
+      | "projection-reference/v23-function-template-frozen/v1";
   };
   comparisonPolicy: {
     minimumItems: 2;
@@ -3111,16 +3266,16 @@ interface FiveAxisViewDefinition {
 }
 ```
 
-线上Schema必须把`maximumItems`校验为大于等于`minimumItems`的整数，不得在API类型中声明为字面量`5`。当前已确认定义实例为`minimumItems = 2, maximumItems = 5`；服务端对该定义强制上限5。未来只能通过新`FiveAxisViewDefinition.version`发布其他合法整数，历史定义、Snapshot和评审记录仍保留5。`publicationState=PUBLISHED`不是正式适用性的充分条件；新正式Snapshot还必须按第21.7节验证三项契约版本并解析到唯一`FORMAL_CURRENT`处置。
+线上Schema必须把`maximumItems`校验为大于等于`minimumItems`的整数，不得在API类型中声明为字面量`5`。当前已确认定义实例为`minimumItems = 2, maximumItems = 5`；服务端对该定义强制上限5。未来只能通过新`FiveAxisViewDefinition.version`发布其他合法整数，历史定义、Snapshot和评审记录仍保留5。`publicationState=PUBLISHED`不是正式适用性的充分条件；新正式Snapshot还必须按第21.7节验证三项契约版本并解析到唯一`FORMAL_CURRENT`处置。v23正式定义的两个selector字段必须逐字相同且为`projection-reference/v23-function-template-frozen/v1`；旧selector只允许历史v9/v22 Snapshot。
 
-正式视图恰好五轴，顺序为拉力、耐久、抛投、感度、操控；定义仍通过版本发布和引用，不得散落硬编码。同图共享definition、W重量段、`weightBandPolicyVersion`和`vertexSetHash`。每点返回direct/context_inherited/not_applicable/missing/error、原始值、未封顶比例、comparisonScore、officialDisplayScore、Trace和来源。not_applicable不画0，分母非正永远error。Series基准按第21.3节唯一选择器返回锚点、selectorVersion、`projectionReferenceSetHash`及竿轮线三个逐部位状态和projection ID/revision，禁止聚合、按查询顺序择一或静默回退。
+正式视图恰好五轴，顺序为拉力、耐久、抛投、感度、操控；定义仍通过版本发布和引用，不得散落硬编码。同图共享definition、W重量段、`weightBandPolicyVersion`和`vertexSetHash`。每点返回direct/context_inherited/not_applicable/missing/error、原始值、未封顶比例、comparisonScore、officialDisplayScore、Trace和来源。not_applicable不画0，分母非正永远error。Series基准按第21.3节唯一选择器返回锚点、selectorVersion、`projectionReferenceSetHash`及竿轮线三个逐部位状态；v23返回`partId + weightBandId + functionTemplateRef/revision + 输入指纹`，v9/v22历史回放返回projectionMatch/projection ID与revision。两种形状不得混装，均禁止聚合、按查询顺序择一或静默回退。
 
 正常路径：以最终拉力确定W段，按发布定义计算三条部件曲线与三条Series结构投影参考线，并提供数值表。
 边界：某部位无结构投影时只省略对应参考线；轮线无参考竿时抛投为not_applicable；均不得画全0。
 冲突：规则版本、顶点hash或投影引用锚点不兼容时拒绝伪装为同一Series基准；legacy-only定义不得服务新正式Snapshot。
 恢复：发布唯一`FORMAL_CURRENT`定义、有效顶点集合或重新选择显式基准Snapshot；历史Snapshot仍用冻结版本。
 权限：发布定义需rules.five_axis.publish；临时比较不改变Series或Snapshot。
-验收：Given 两件装备来自不同W段，When 选择共同W段比较，Then 二者使用同一顶点集合；Given comparisonScore为123.7，When 绘图，Then 节点按123.7伸出100分外圈、officialDisplayScore仍为100且无视觉封顶；Given 当前定义实例，When 校验比较数量，Then `maximumItems`为整数5且第6件装备被拒绝；Given 发布新定义版本并设置另一合法整数，When 解析同一API契约，Then 无需修改字段类型且历史记录仍使用上限5；Given 旧`PUBLISHED`种子定义和符合OPEN-005的新定义并存，When 创建新正式Snapshot，Then 只接受唯一`FORMAL_CURRENT`新定义且旧定义/Snapshot hash不变；Given 同Series有多个SKU或同W段多个投影，When 读取Model Snapshot，Then 只使用其冻结SKU revision逐部位唯一ProjectionMatch并把selector、ID/revision及缺失状态写入输入hash。
+验收：Given两件装备来自不同W段，When选择共同W段比较，Then二者使用同一顶点集合；Given comparisonScore为123.7，When绘图，Then节点伸出100分外圈而officialDisplayScore仍为100；Given v23同Part同段有多个SKU，When读取Model Snapshot，Then只使用该Snapshot冻结的partId、weightBandId、functionTemplateRef与后继选择器，不读取其他SKU；历史v9/v22 Snapshot继续按冻结ProjectionMatch重放且hash不变。
 
 ### 24.7 R6：AIRecommendation
 
@@ -3384,6 +3539,8 @@ type PrimaryDisplayState = "HARD_CONFLICT" | "REBASE_REQUIRED" | "REVIEW_REQUIRE
 后端必须独立表达身份、revision、状态、Trace、Issue、Action和权限；命令支持幂等、并发检查、审计、恢复；列表区分对象、投影、临时候选；确定性结果可重放且AI不裁决；R1–R12分别自动化覆盖正常、边界、冲突、恢复、权限和Given/When/Then；历史Snapshot内容/hash在所有测试中不变。
 ## 25. 内网部署、飞书身份与配置表交付
 
+本节的配置Git导出不等于第15.1节项目数据Excel往返。项目Excel导入/导出当前完整项目数据，可选择完整替换或按稳定ID合并；本节只把冻结Snapshot映射到游戏配置目标。两条链使用不同Manifest、动作和失败恢复，不得用项目Excel绕过正式配置门禁。
+
 ### 25.1 分期边界
 
 | 阶段 | 必做 | 明确不做 |
@@ -3477,7 +3634,7 @@ SnapshotBatch预检还必须按第21.7节解析唯一`FORMAL_CURRENT`五维定�
 - 找到相同`ID + configNameKey`时更新工具负责的列；未找到时新增；同名不同ID、同ID不同名或ID/名称分裂命中时阻止该目标写入。
 - 工具不按行号关联、不整行覆盖、不删除未导出的旧行，也不自动整理顺序；未知列、人工列、样式、公式和表头必须保留。
 - `store_buy.enabled`是BOOL“上架开关”。必须同步更新所有渠道StoreBuy schema、配置编译器类型/解析、迁移、导出器和校验器。新建StoreBuy默认false；更新普通数值时保留每个环境×渠道现有值，只有用户显式修改上架状态时才改变。
-- 定价必须来自已发布`PricingPolicyVersion`。2026-07-23已确定S包含100、Performance不参与计分、两个价格分别最终舍入、购买价使用未舍入维修价、最低价100作用于舍入后的购买价，以及300,000,000为需二次确认的软阈值。飞书机器源与运行时完成新契约落地前，旧Draft不得冒充正式新策略；不得用手填价格替代。Snapshot必须冻结实际价格、超限标记和有效ACKNOWLEDGED确认引用。目标字段无法表示实际价格时仍以独立EXPORT BLOCKER阻止该目标。
+- 定价必须来自已发布`PricingPolicyVersion`并使用SKU保存的实际品质，不得把推荐品质当作实际品质。目标v23品质区间统一`[min,max)`，评分100及以上无推荐；历史“100属于S”策略只服务其冻结Snapshot。Performance不参与计分；两个价格分别最终舍入，购买价使用未舍入维修价，最低价100作用于舍入后的购买价，300,000,000为需二次确认的软阈值。飞书机器源与运行时完成新契约落地前，旧Draft不得冒充正式新策略；不得用手填价格替代。
 
 写入要求：
 

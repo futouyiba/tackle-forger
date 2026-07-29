@@ -13,15 +13,16 @@ FeishuSourceRevision
 ConfigurationSnapshot至少冻结：
 
 - modelId和上游Revision；
-- RuleSetVersion和projectionId；
+- RuleSetVersion、Part revision、weightBandId、functionTemplateRef与匹配输入指纹；
 - ReductionStackingPolicyVersion；
 - PatchSetHash；
 - finalPanelValues；
 - technologyIds、attributeAffixIds、passiveAffixIds；
+- SKU继承屏蔽/增加/局部词条副本意图、有效词条集合hash、推荐品质、人工实际品质及覆盖理由/状态；
 - 属性叠加轨迹，包括源词条、有序operation、归一化方向与幅度、BaseValue、B、R、PercentAdjusted、固定值增减合计、FinalBeforeBoundary、ParameterDefinition引用、规则源单元格/revision及输入输出hash；
 - 被动技能设计Payload；
 - 品质、兼容和校验报告；
-- ModelAffixValueAssessment、`PerformanceSummarySnapshot`（可为`AVAILABLE`摘要与定义引用，或`UNAVAILABLE/definition_missing`）、PricingPolicy版本、自动价格、定价Trace和价格WARNING确认引用；
+- `SkuAffixValueAssessment`及Model对其冻结SKU revision的只读引用、`PerformanceSummarySnapshot`（可为`AVAILABLE`摘要与定义引用，或`UNAVAILABLE/definition_missing`）、PricingPolicy版本、自动价格、定价Trace和价格WARNING确认引用；
 - 发布人和发布时间。
 
 上游变化生成UpgradeCandidate，不原地覆盖Snapshot。
@@ -190,7 +191,7 @@ revision 位于“最近 90 天”与“最新 100 个”并集之外，只表�
 
 | 受治理字段 | 原因 | 唯一写入动作/边界 |
 | --- | --- | --- |
-| `seriesDefinitions`、`skuDrawers`、`purchasableModels`、`derivedProjections`、`projectionMatches` | Series/SKU/Model身份、最近匹配和派生链 | `create_series`、`update_series_core_affixes`、`change_sku_target_pull`及Model领域ActionCode/规则重算 |
+| `seriesDefinitions`、`seriesPartRevisions`、`skuDrawers`、`purchasableModels`、`projectAffixDefinitions`、`skuLocalAffixCopies`、`derivedProjections`、`projectionMatches` | Series/Part/SKU/Model身份、词条定义/局部副本和派生链 | v23使用`create_series`、`update_part_configuration`、`preview_weight_band_skus`（只读）、`create_sku`、SKU词条意图动作、`create_project_affix`、`set_sku_actual_quality`及允许的Model领域ActionCode/规则重算；`update_series_core_affixes`、`change_sku_target_pull`只服务Schema v9/v22历史兼容，不得创建或修改v23对象 |
 | `partConstraintSets`、`candidateSearchRecipes` | v3 §6.5 的精确revision/contentHash引用；既有revision不可变 | 当前没有修改既有revision的领域命令；只读保留，创建新Series时可由`POST /api/series`物化新约束revision，Recipe专用版本化命令尚未提供 |
 | `patchLedger`、`patchReviewBatches`、`patchValidationWaivers`、`patchValidationWaiverDecisions` | Patch revision、审核和waiver证据 | Patch create/review/rebase/mirror及waiver ActionCode |
 | `projectionPatches` | 遗留 ProjectionPatch 的迁移/审计源；不得作为现行Patch命令旁路 | 当前只读保留，迁移流程处理；不得经整包保存删除、篡改或重放 |
@@ -389,6 +390,17 @@ interface PatchSubjectMigrationResult {
 
 “数据源与参数注册表”中的飞书分享链接入口服务于**数据导入**（重量段模板或流派/定位系数的拉取、预览、发布与回写），与第14节的canonical规则源工作簿互不冲突：用户在数据交换页粘贴并从历史选择的是飞书多维表格（`/base/`）分享链接，经显式“识别链接”解析后仍须按现有治理分别执行预览、冲突检查、人工确认发布与回写，绝不自动发布或绕过stable ID。历史只保存shareUrl、显示名、数据类型和最近使用时间，不保存任何应用密钥、appToken凭据或个人身份信息；该入口不得用于改写canonical规则源工作簿指向。
 
+### 15.1 项目数据Excel往返
+
+Excel只是当前项目数据的导入/导出载体，不决定记录的编辑资格或计算资格。内置xlsx/JS快照仅是新项目默认基础数据与发布构建输入；用户导入、UI新增和内置记录遵循相同领域规则，不再区分“权威/自定义”资格。
+
+导入必须显式选择：
+
+- `REPLACE_PROJECT`：在完整校验、引用检查与可恢复备份后替换当前项目数据；
+- `MERGE_BY_STABLE_ID`：按稳定ID合并，引用中的ID不得因显示名变化重写。
+
+导出包含约定范围内的当前完整项目数据，并须能无损重新导入。已被引用的稳定ID不得直接改名换ID；记录的其他业务字段均可按其领域命令CRUD。该项目数据往返与第25节正式配置Git导出是两条独立链路，不能互相冒充。
+
 ## 16. 部署基线
 
 目标环境为内网Dell R730，同时运行十多个服务。系统按需计算派生模板，不预生成完整组合，资源需求较低。
@@ -406,6 +418,12 @@ interface PatchSubjectMigrationResult {
 
 ## 17. 当前实现迁移
 
+### 目标Schema v23：重量段SKU与词条派生
+
+审计基线`ae6f782b1272efcf3ccf6feba5f81c4ca8b917bf`中，`CURRENT_WORKSPACE_SCHEMA_VERSION = 22`。Schema v9只是历史迁移输入，v22是当前运行时语义；二者的直接`targetPullKg`、最近标杆与历史payload不得原地改写。目标实现必须新增顺序迁移`22 → 23`，并保证任意旧版本先按既有链迁到22，再进入v23。
+
+v23新增Series Part、`weightBandId`、`functionTemplateRef`/输入指纹、SKU词条局部意图、推荐/实际品质分离及失效状态。迁移必须保留未知字段与原始v9/v22 payload；不能唯一映射04.5的记录进入复核/失效态，不按名称、区间或旧拉力猜测。重复执行迁移无变化；迁移前后历史Snapshot字节、hash、旧策略与引用保持不变。
+
 ### 阶段1：兼容基础
 
 - ParameterDefinition增加效用、单位、允许操作；
@@ -415,14 +433,15 @@ interface PatchSubjectMigrationResult {
 
 ### 阶段2：商品身份
 
-- 增加Collection、严格Series、SkuDrawer和PurchasableModel；
+- 增加Collection、严格Series、SeriesPart、SkuDrawer和PurchasableModel；
 - SeriesRecipe改为CandidateSearchRecipe；
 - OfficialSku迁移为SKU抽屉加Model；
 - DetailOverride迁移到Model作用域。
 
 ### 阶段3：匹配与兼容
 
-- 实现最近Projection匹配；
+- v23实现Part六键04.5唯一匹配与输入指纹；零/多匹配均fail-closed；
+- v9/v22历史适配器保留最近Projection匹配，只用于旧payload迁移和Snapshot重放；
 - 建立硬CompatibilityRule；
 - 实现按轴Affinity Score；
 - 增加Series不变量和重量曲线。
@@ -446,11 +465,10 @@ interface PatchSubjectMigrationResult {
 
 ### 18.1 匹配
 
-- 1.5kg和1.8kg可以命中同一模板；
-- Patch不改变ProjectionMatch；
-- 用户固定模板后不自动切换；
-- 只在相同部位、钓法、类型和功能定位内按拉力比例距离匹配；
-- Affinity、范围包含和词条后的最终拉力都不参与结构标杆选择。
+- 六键精确命中唯一04.5行时进入SKU预览；
+- 零匹配和多匹配均fail-closed，且保留已有SKU与局部词条意图；
+- 点击重量段不创建SKU，同一Part同一重量段可显式创建多个SKU；
+- Part配置变化重新匹配并重算；旧`typeId/targetPullKg`、范围包含、Affinity和最终拉力不参与目标态匹配。
 
 ### 18.2 层级与身份
 
@@ -493,8 +511,19 @@ interface PatchSubjectMigrationResult {
 - 被动技能参与分值和品质；
 - technology_only不进入普通池；
 - S/A/B/C阈值正确。
+- Part统一词条与Technology更新后已有SKU重算，SKU增加/屏蔽/局部副本意图保持；
+- 项目定义、局部副本和引用不可互相冒充；Technology与直接引用按稳定ID去重；
+- SKU拉力只由04.5基准和有效词条派生，ModelPatch所有拉力操作均被拒绝；
+- 99.999推荐S，100及以上无推荐；人工实际品质可与推荐不同并保存覆盖理由，定价使用实际品质。
 
-### 18.6 工作区 Revision 保留
+### 18.6 项目数据与迁移
+
+- Excel完整替换和按稳定ID合并均覆盖正常、冲突、失败恢复和写后回读；
+- 导出后无损重新导入，稳定引用不因显示名或行序变化；
+- v9与v22夹具迁到v23保留原始payload，无法唯一匹配进入失效/复核；
+- `22 → 23`第二次执行无变化，历史ConfigurationSnapshot与hash保持不变。
+
+### 18.7 工作区 Revision 保留
 
 - 一期缺少归档能力时仍可跑通非删除主流程，且 SQLite/D1 不裁剪任何 revision；
 - 二期归档必须由当前已登录工具用户显式点击并选择工作 PC 保存位置；数值策划或系统策划只是典型操作者示例，不构成角色门禁；

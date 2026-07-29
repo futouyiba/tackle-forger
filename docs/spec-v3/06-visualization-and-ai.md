@@ -212,7 +212,51 @@ SnapshotBatch可以跨Series、SKU和W段，但发布批次只是用户确认、
 
 Series基准固定采用`projection_reference`，不采用显式Model或已批准Model中位数。基准分别读取竿、轮、线对应的`StructuralBenchmark / DerivedProjection`，表达加入functionIntensity、Performance、Material、Affix/Technology和Patch之前的理论结构状态，并输出三条独立参考曲线。参考曲线使用与当前视图相同的W段、五维定义、规则版本和顶点集合，不得聚合；某部位投影不可用时只显示该部位基准不可用，不得自动回退到Model、中位数或其他投影。
 
-`projection_reference`的唯一选择算法固定为`projection-reference/current-sku-frozen-match/v1`：
+目标v23把Series基准锚定到Snapshot冻结的`partId + weightBandId + functionTemplateRef`；不得要求新SKU补造旧ProjectionMatch。现有`projection-reference/current-sku-frozen-match/v1`只服务v9/v22 Snapshot，v23必须发布后继选择器版本并冻结04.5引用、输入指纹与逐Part状态。两种选择器均不得按查询顺序、默认SKU或“最新”引用猜测。
+
+`projection-reference/v23-function-template-frozen/v1`的选择算法固定为：
+
+1. Model详情和钓组模式以待查看Snapshot冻结的`baselineSnapshotId + seriesId + skuId + skuRevisionId`为唯一锚点。选择器只读取该Snapshot内按Part冻结的输入，不读取当前Part/SKU草稿、Series默认SKU、页面上下文或其他SKU。
+2. 锚点SKU revision必须冻结其所属`partId + partType + weightBandId + functionTemplateRef + functionTemplateRevisionId + functionTemplateInputFingerprint`。同一Series的基准集合从同一Snapshot中冻结的Part输入构建；竿、轮、线每种零或一个。重复部位、缺少必需字段或SKU/Part父链不一致返回`error`并阻止新正式Snapshot。
+3. 对每个存在的Part，按稳定引用精确读取一个04.5 revision，并重新计算其六键输入指纹。引用不存在、revision/hash不符、指纹不符或六键重新解析不是唯一同一行时返回`error`，不得按名称、区间、拉力距离、默认值或其他模板修复。Series未包含的部位返回`missing`；这不是错误，也不得补造Part。
+4. `available`参考曲线只使用冻结04.5 revision的基准参数，通过当前FiveAxisViewDefinition的相同轴顺序、transform和W段顶点计算；不得加入Part/SKU词条、Technology、品质、Patch或Model最终值，也不得生成旧ProjectionMatch。三种部位状态和参考曲线固定按竿、轮、线排序。
+5. 独立多装备比较只有在用户显式选择已发布`baselineSnapshotId`后才运行该Snapshot对应版本的选择器；未选择时三种部位均为`not_selected`。改变共同W段只改变归一化顶点，不改变锚点、04.5引用或输入指纹。
+6. 临时视图和Snapshot都冻结选择器版本、锚点、`partInputs`、逐部位状态与引用字段。选择结果按严格Schema、JCS、无BOM UTF-8和SHA-256小写十六进制计算：
+
+```text
+projectionReferenceSetHash = H({
+  schemaVersion: "five-axis-hash-input/v1",
+  kind: "projection_reference_set",
+  selectorVersion: "projection-reference/v23-function-template-frozen/v1",
+  anchor: {
+    baselineSnapshotId: string,
+    seriesId: string,
+    skuId: string,
+    skuRevisionId: string
+  },
+  references: [{
+    itemPartId: "rod" | "reel" | "line",
+    state: "available" | "missing" | "error",
+    partId: string | null,
+    weightBandId: string | null,
+    functionTemplateRef: string | null,
+    functionTemplateRevisionId: string | null,
+    functionTemplateInputFingerprint: string | null
+  }]
+})
+```
+
+`references`固定按rod、reel、line顺序；`missing`条目的五个引用字段全部为JSON `null`，`error`保留能够安全验证的冻结字段并以错误码另存Trace，错误码不进入本闭集hash。任一锚点、状态或非null引用字段变化都必须改变hash；相同闭集输入必须得到相同hash。发布`FORMAL_CURRENT`前必须提供固定向量，至少覆盖单Part、三Part、缺Part、断裂引用、指纹不符、六键多匹配、相同输入重放和仅`baselineSnapshotId`变化；固定向量未通过时返回`FIVE_AXIS_PROJECTION_REFERENCE_VECTOR_MISMATCH`。
+
+规范固定向量`projection-reference/v23-function-template-frozen/vector-001`冻结如下。Canonical JSON为下列代码块内容本身：单行、无前后空白、无末尾换行、无BOM，按UTF-8字节计算SHA-256；字段顺序已经是JCS输出，不得重新选择示例值：
+
+```json
+{"anchor":{"baselineSnapshotId":"snap-001","seriesId":"series-001","skuId":"sku-001","skuRevisionId":"sku-rev-001"},"kind":"projection_reference_set","references":[{"functionTemplateInputFingerprint":"fp-rod-001","functionTemplateRef":"ft-rod-001","functionTemplateRevisionId":"ft-rev-001","itemPartId":"rod","partId":"part-rod-001","state":"available","weightBandId":"W01"},{"functionTemplateInputFingerprint":null,"functionTemplateRef":null,"functionTemplateRevisionId":null,"itemPartId":"reel","partId":null,"state":"missing","weightBandId":null},{"functionTemplateInputFingerprint":null,"functionTemplateRef":null,"functionTemplateRevisionId":null,"itemPartId":"line","partId":null,"state":"missing","weightBandId":null}],"schemaVersion":"five-axis-hash-input/v1","selectorVersion":"projection-reference/v23-function-template-frozen/v1"}
+```
+
+期望小写十六进制摘要为`d7221f605b72dfcd97f6d00002d206cf4d308490c3599f64a24d3f239f61d600`。任何实现若不能逐字复现该摘要，不得发布或使用v23 `FORMAL_CURRENT`定义；其余必测向量必须沿用同一闭集Schema和编码规则。
+
+历史`projection-reference/current-sku-frozen-match/v1`的选择算法固定为：
 
 1. Model详情和钓组模式以待查看Snapshot冻结的`seriesId + skuId + skuRevisionId`作为引用锚点；不得读取Model当前草稿、Series默认SKU、页面上下文或查询结果第一项。
 2. 该SKU revision必须按`itemPartId`冻结竿、轮、线各零或一个`ProjectionMatch`。每个合法匹配必须显式冻结`projectionMatchId + projectionMatchRevisionId + projectionId + projectionRevisionId`；同一部位出现多个匹配是`FIVE_AXIS_PROJECTION_REFERENCE_AMBIGUOUS`，不得按创建时间、最大revision、距离、W段或数据库顺序择一。
@@ -357,7 +401,16 @@ interface ModelFiveAxisPreview {
     seriesId: string;
     skuId: string;
     skuRevisionId: string;
-    selectorVersion: "projection-reference/current-sku-frozen-match/v1";
+    selectorVersion:
+      | "projection-reference/current-sku-frozen-match/v1"
+      | "projection-reference/v23-function-template-frozen/v1";
+    partInputs: {
+      partId: string;
+      weightBandId: string;
+      functionTemplateRef: string;
+      functionTemplateRevisionId: string;
+      functionTemplateInputFingerprint: string;
+    }[];
   };
   projectionReferenceSetHash: string;
   projectionReferenceSeries: {
@@ -367,11 +420,18 @@ interface ModelFiveAxisPreview {
     projectionMatchRevisionId: string | null;
     projectionId: string | null;
     projectionRevisionId: string | null;
+    partId: string | null;
+    weightBandId: string | null;
+    functionTemplateRef: string | null;
+    functionTemplateRevisionId: string | null;
+    functionTemplateInputFingerprint: string | null;
     metrics: FiveAxisMetric[];
   }[];
   inputHash: string;
 }
 ```
+
+同一`projectionReferenceSeries`条目必须由`selectorVersion`决定闭合形状：历史选择器要求四个Projection字段并禁止五个v23字段；v23选择器要求`partId + weightBandId + functionTemplateRef + functionTemplateRevisionId + functionTemplateInputFingerprint`并禁止四个Projection字段。`partInputs`在历史选择器下必须为空，在v23选择器下按稳定Part顺序完整冻结。不得把两种引用混装或用全`null`占位通过校验。
 
 `axisId`由版本化定义提供，不得在前端联合类型、数据库列或图表组件中写死。同一个预览中的每条曲线必须与冻结的`fiveAxisDefinitionId + fiveAxisDefinitionVersion`逐项对应，缺轴按第22节状态语义返回，不能临时补0。
 
@@ -461,7 +521,7 @@ interface FiveAxisDefinitionDispositionCatalogRevision {
 - 旧定义原记录、publicationState、payload、definitionHash、VertexSet及引用它的ConfigurationSnapshot全部原样只读保留；不得通过改写旧定义状态或重算hash完成迁移。
 - 迁移器先解析当前目录头并计算全部已知定义应有的完整`entries`：不符合本节契约的旧定义为`LEGACY_SNAPSHOT_ONLY`。若当前头已经逐项表达相同`entries`，重复运行必须直接返回该现有修订，不得把当前头再次作为前驱追加等价修订；只有目标`entries`不同才以当前头为前驱构建后继修订。旧Snapshot继续按其冻结定义、顶点、公式和投影证据读取、审计及重放，内容/hash不变；该处置不产生旧Snapshot UpgradeCandidate。
 - `LEGACY_SNAPSHOT_ONLY`定义不得创建任何新正式ConfigurationSnapshot，不得作为新UpgradeCandidate的目标定义，也不得仅因原字段仍为`PUBLISHED`而通过发布检查。草稿预览必须明确标记legacy，不能冒充OPEN-005正式结果。
-- 新定义只有同时声明`semanticContractVersion="five-axis/open005-2026-07-23/v1"`、`hashInputSchemaVersion="five-axis-hash-input/v1"`、`projectionReferenceSelectorVersion="projection-reference/current-sku-frozen-match/v1"`，通过第21、22和24.6节完整Schema/固定向量校验，并取得唯一`FORMAL_CURRENT`处置后，才可服务新正式Snapshot。
+- 新定义只有同时声明`semanticContractVersion="five-axis/open005-2026-07-23/v1"`、`hashInputSchemaVersion="five-axis-hash-input/v1"`并使用与目标Workspace Schema一致的选择器，通过第21、22和24.6节完整Schema/固定向量校验，取得唯一`FORMAL_CURRENT`处置后，才可服务新正式Snapshot。Schema v23的新正式Snapshot必须使用`projection-reference/v23-function-template-frozen/v1`；`projection-reference/current-sku-frozen-match/v1`只允许服务v9/v22历史Snapshot，进入v23目录时其定义只能是`LEGACY_SNAPSHOT_ONLY`或`SUPERSEDED`。
 - 在不存在唯一合法`FORMAL_CURRENT`定义、处置记录缺失/冲突、迁移未完成或新定义任一必需策略版本不可校验时，发布路径返回`FIVE_AXIS_FORMAL_DEFINITION_UNAVAILABLE`并fail-closed；不得回退旧`PUBLISHED`定义、种子定义或无五维证据Snapshot。
 - 新定义发布后，旧定义可继续保持`LEGACY_SNAPSHOT_ONLY`；此前符合本契约的正式定义被替换时，必须在同一个后继目录修订中把旧项写为`SUPERSEDED`、把新项写为唯一`FORMAL_CURRENT`。新定义、完整后继目录修订和目录头条件更新必须在一个数据库事务提交；并发头冲突方回滚并基于新头重算。任何替换都不修改历史定义、历史目录修订或Snapshot。
 - 新正式Snapshot必须冻结其解析使用的`catalogRevisionId + catalogHash`以及命中的处置项；历史Snapshot没有该字段时仍按原冻结定义重放，不得补写。仅目录证据revision变化而命中的定义及全部五维语义输入未变化时，不得单独造成五维UpgradeCandidate。
@@ -601,11 +661,11 @@ FiveAxisComparisonView至少保存：
 
 旧“候选池”不再作为主导航和产品领域层级。CandidateSearchRecipe继续存在，但权威中文名是“候选搜索配方”，只负责枚举、过滤和排序，不承担Series、SKU或Model身份。
 
-甘特图采用纵向重量分段、横向品质与类型分栏。纵向重量分段是版本化、可配置的规划坐标，不是连续数轴；Series覆盖块只连接真实离散SKU节点。页面必须固定显示说明：
+甘特图采用纵向重量分段、横向Part分栏；SKU节点显示实际品质并可按其筛选。纵向重量分段直接使用01.x的稳定顺序和规划坐标，不是连续数轴；每个Part分别计算已选重量段的连续区间。
 
 > 覆盖范围只表达系列规划跨度，不代表连续插值。
 
-甘特条表示系列覆盖和规划范围；SKU节点表示真实离散重量；Model数量、发布状态、硬冲突和升级状态附着在SKU节点上。不得从条带长度推导连续属性，也不得自动补齐中间重量。
+同一Part相邻重量段合并显示为一个矩形；中间缺至少一个01.x重量段时拆成多个矩形。竿、轮、线分别计算，禁止跨Part合并。合并只改变展示，不合并SKU数据。点击连续矩形后必须先选择具体重量段，再进入该段现有SKU列表与“新增SKU”预览；点击矩形或重量段本身都不得创建数据。
 
 历史路由、书签或权限中使用candidate pool标识时应提供兼容别名或跳转；迁移不得删除已有Candidate、Recipe或计算轨迹。
 
@@ -885,6 +945,8 @@ JCS与哈希最低测试向量固定如下；该对象只用于canonicalization�
 
 - 旧“候选池”入口兼容跳转到钓具系列甘特图；
 - 甘特条不产生连续重量或属性插值；
+- 相邻重量段按Part合并，缺段拆分，跨Part不合并；
+- 点击合并块后先选具体重量段，点击本身不创建SKU；
 - 生成Model候选仍由CandidateSearchRecipe执行；
 - AI建议不能覆盖deny、error或硬冲突；
 - AI只能创建draft Model Patch或RuleSourceChangeDraft；

@@ -20,7 +20,7 @@
       "canonical_structure_change"
     ]
   },
-  "preamble": "# Tackle Forger 产品与领域开发规范 v3\n\n> 状态：**唯一权威规范 / Canonical**  \n>首次定稿：2026-07-21  \n> 最后修订：2026-07-27\n> 适用对象：产品设计、领域建模、前后端开发、数据迁移、测试与代码审查  \n> 源数据参考：《淡水路亚杆轮线装备设计.xlsx》\n\n",
+  "preamble": "# Tackle Forger 产品与领域开发规范 v3\n\n> 状态：**唯一权威规范 / Canonical**  \n>首次定稿：2026-07-21  \n> 最后修订：2026-07-28\n> 适用对象：产品设计、领域建模、前后端开发、数据迁移、测试与代码审查  \n> 源数据参考：《淡水路亚杆轮线装备设计.xlsx》\n\n",
   "modules": [
     {
       "id": "00",
@@ -30,7 +30,7 @@
       ],
       "title": "权威、固定原则与禁止事项",
       "path": "docs/spec-v3/00-authority.md",
-      "sha256": "c83173073a3ed0060953ae4590afe7e362683b0b75d1fa5ba7c12833f866d248"
+      "sha256": "f25c40e6bbb3e6880d445275d335f09bc1dee5338897ff9c362887cfc3971b75"
     },
     {
       "id": "01",
@@ -44,7 +44,7 @@
       ],
       "title": "产品范围、术语、生成顺序与结构匹配",
       "path": "docs/spec-v3/01-product-foundations.md",
-      "sha256": "5e8d5ebfb6ce941f8949d054da09fdec03b30c43aed54d4d57b7878705765124"
+      "sha256": "2ef5058bb8c147aad13bb164ddf0f8746ac6f9598d080708f27326c3f1d9b062"
     },
     {
       "id": "02",
@@ -56,7 +56,7 @@
       ],
       "title": "Collection、Series、SKU、Model 与 Patch",
       "path": "docs/spec-v3/02-product-model.md",
-      "sha256": "05ac12c8d6b3312dc0af71f1ed19b85ce1f368066d58992c90780e0508fcc3e1"
+      "sha256": "62feed1b89e06654bf71460c81656242ea22afbab561c592ca3b4a8935fe6ba9"
     },
     {
       "id": "03",
@@ -70,7 +70,7 @@
       ],
       "title": "兼容、数值、词条、品质与校验",
       "path": "docs/spec-v3/03-rules-and-validation.md",
-      "sha256": "b4fe1d72ec2dffc7232cdd7ad77e0d76166f03970034cf1635e6c090875b24d0"
+      "sha256": "584fcf440b44a33d43a9c235a5af07040cfc73bf9e0a30db3b550ac91787ba80"
     },
     {
       "id": "04",
@@ -84,7 +84,7 @@
       ],
       "title": "版本、快照、飞书、工作区与回归",
       "path": "docs/spec-v3/04-persistence-and-lifecycle.md",
-      "sha256": "b0a9b976fdab229cf65ed182f9b683920baf43a84c0be44527ede8cc0b7c78bd"
+      "sha256": "5b218b56a2c1d5fe85307a76ef56c441e0e07742e6b5c5815bc98105c29305ba"
     },
     {
       "id": "05",
@@ -95,7 +95,7 @@
       ],
       "title": "Agent 检查表与未决事项登记表",
       "path": "docs/spec-v3/05-open-decisions.md",
-      "sha256": "ba501e9c74ef143b806272513d1832e750a9bf6deabd51faca2d15115fe57632"
+      "sha256": "a140220a4e62a52c2def78a63311103e7ceba0144cc1dee1d1395f3f3f9622fb"
     },
     {
       "id": "06",
@@ -107,7 +107,7 @@
       ],
       "title": "五维图、比较、甘特图与 AI 建议",
       "path": "docs/spec-v3/06-visualization-and-ai.md",
-      "sha256": "a520f95bdc3e8d3fedd05c2f41e2061d707f4e1bb297b6365aa499fafda0a6b0"
+      "sha256": "394654899ead951b60f7ec8e8a3338f1d0deb26734245a89ce9731494e39f53c"
     },
     {
       "id": "07",
@@ -117,7 +117,7 @@
       ],
       "title": "交互与后端统一需求契约",
       "path": "docs/spec-v3/07-interaction-contract.md",
-      "sha256": "b2b7d00f5a9a0546de7d9db183efe53bac335fae0b9f9041d3183a2c38c455c9"
+      "sha256": "5a5d5a75598ed035c5a86b6d2641cb55dc1a9f60e99f53f03d0905571be6f12b"
     },
     {
       "id": "08",
@@ -127,7 +127,7 @@
       ],
       "title": "内网部署、身份与配置表交付",
       "path": "docs/spec-v3/08-deployment-and-export.md",
-      "sha256": "ec27f4d90a08cf8b1ac85ae8920e8df7ac7822ab4767cd91676529f39aef6ca6"
+      "sha256": "310a8715cabbc4c0ed71cd375dd70d2f9101eb5ee9572136ec6bb78530cb1e17"
     }
   ],
   "openRegistry": [

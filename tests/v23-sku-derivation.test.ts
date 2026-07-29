@@ -106,6 +106,17 @@ test("flat pools are directional binary64 folds with replayable operation traces
   if (result.status === "VALID") { assert.equal(result.targetPullKg, 10); assert.deepEqual(result.trace.map((step) => step.operationId), ["v23:flat-settlement"]); assert.equal(result.trace[0]!.beforeKg, 10); assert.equal(result.trace[0]!.afterKg, 10); assert.deepEqual(result.trace[0]!.flatComponents?.map((component) => component.operationId), ["up-big", "down-big", "up-one"]); }
 });
 
+test("flat delta overflow is fail-closed before settlement", () => {
+  const directional = structuredClone(payload) as V23ProjectAffixPayload;
+  directional.operations = [
+    { ...payload.operations[0]!, operationId: "up-max", operationIndex: 0, operation: "flat_adjust", direction: "increase", magnitude: Number.MAX_VALUE },
+    { ...payload.operations[0]!, operationId: "down-one", operationIndex: 1, operation: "flat_adjust", direction: "decrease", magnitude: 1 },
+  ] as never;
+  const result = deriveV23SkuPull(1, [{ ref, payload: directional }]);
+  assert.equal(result.status, "INVALID");
+  if (result.status === "INVALID") { assert.equal(result.code, "V23_BINARY64_OVERFLOW"); assert.equal(result.failureEvidence.stage, "flat_settlement"); assert.equal(result.failureEvidence.numericEvidence.beforeBinary64, numberToBinary64Hex(Number.MAX_VALUE)); assert.equal(result.failureEvidence.numericEvidence.afterBinary64, numberToBinary64Hex(Number.MAX_VALUE)); assert.equal(result.failureEvidence.numericEvidence.anomaly, "overflow"); assert.notEqual(result.failureEvidence.numericEvidence.exactNumerator, "0"); assert.notEqual(result.failureEvidence.numericEvidence.exactDenominator, "0"); }
+});
+
 test("set is a terminally connected trace step", () => {
   const set = structuredClone(payload) as V23ProjectAffixPayload;
   set.operations = [{ operationId: "set-pull", operationIndex: 0, sourceAffixId: "a", sourceAffixRevision: 1, parameterKey: "pull", operation: "set", value: 7, publishedMagnitudeRange: { min: 0, max: 7, ruleSetVersion: "r" } }] as never;

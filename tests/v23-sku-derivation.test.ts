@@ -17,6 +17,7 @@ test("v23 rejects every canonical ModelPatch operation only for the owning struc
     for (const operation of ["set", "add", "multiply", "clear"] as const) assert.throws(() => validateV23ModelPatchForPull(partType, { operation, parameterKey }), /PULL_FORBIDDEN/);
     assert.doesNotThrow(() => validateV23ModelPatchForPull(partType, { operation: "set", parameterKey: "displayName" }));
   }
+  for (const parameterKey of ["pull", "targetPullKg", "targetPullKgf"]) assert.throws(() => validateV23ModelPatchForPull("rod", { operation: "set", parameterKey }), /PULL_FORBIDDEN/);
   assert.throws(() => validateV23ModelPatchForPull("rod", { operation: "unknown", parameterKey: "rodPullKg" }), /SCHEMA_INVALID/);
   assert.throws(() => validateV23ModelPatchForPull("rod", null), /SCHEMA_INVALID/);
 });

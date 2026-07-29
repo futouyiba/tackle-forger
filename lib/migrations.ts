@@ -2120,7 +2120,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
       else if (derivationStatus === "VALID") {
         v23ExactKeys(derivation, ["status", "templateRef", "reductionPolicyRef", "baselinePullKg", "targetPullKg", "effectiveEntries", "trace", "inputHash"], "V23_SKU_DERIVATION");
         if (!Number.isFinite(derivation.baselinePullKg) || !Number.isFinite(derivation.targetPullKg) || (derivation.baselinePullKg as number) <= 0 || (derivation.targetPullKg as number) <= 0) throw new Error("V23_SKU_DERIVATION_PULL_INVALID");
-        const entries = v23Array(derivation.effectiveEntries, "V23_SKU_DERIVATION_ENTRIES"); if (entries.length === 0) throw new Error("V23_SKU_DERIVATION_ENTRIES_INVALID");
+        v23Array(derivation.effectiveEntries, "V23_SKU_DERIVATION_ENTRIES");
         let prior = derivation.baselinePullKg as number;
         for (const stepValue of v23Array(derivation.trace, "V23_SKU_DERIVATION_TRACE")) { const step = v23Record(stepValue, "V23_SKU_DERIVATION_STEP"); if (!Number.isFinite(step.beforeKg) || !Number.isFinite(step.afterKg) || step.beforeKg !== prior || (step.afterKg as number) <= 0) throw new Error("V23_SKU_DERIVATION_TRACE_INVALID"); prior = step.afterKg as number; }
         if (prior !== derivation.targetPullKg) throw new Error("V23_SKU_DERIVATION_TRACE_TERMINAL_MISMATCH"); v23Hash(derivation.inputHash, "V23_SKU_DERIVATION_INPUT_HASH");
@@ -2178,9 +2178,9 @@ function validateV23RuntimeState(state: MutableWorkspace) {
         if (jcsSha256Hex(persisted.templateRef) !== jcsSha256Hex(match.functionTemplateRef)) throw new Error("V23_SKU_DERIVATION_TEMPLATE_MISMATCH");
         const policyRef = v23Record(persisted.reductionPolicyRef, "V23_SKU_DERIVATION_POLICY_REF");
         v23ExactKeys(policyRef, ["id", "version", "contentHash"], "V23_SKU_DERIVATION_POLICY_REF");
-        const policy = arrayOf<WorkspaceState["reductionStackingPolicyVersions"][number]>(state.reductionStackingPolicyVersions).find((candidate) => candidate.id === policyRef.id && candidate.version === policyRef.version && candidate.contentHash === policyRef.contentHash && candidate.status === "published");
-        if (!policy) throw new Error("V23_OPEN_001_POLICY_UNRESOLVED");
-        const replayEntries: V23ResolvedAffix[] = [...effectiveStableEntries.values()].map((effective) => ({ ref: effective.ref, payload: effective.payload as never }));
+        const policies = arrayOf<WorkspaceState["reductionStackingPolicyVersions"][number]>(state.reductionStackingPolicyVersions).filter((candidate) => candidate.id === policyRef.id && candidate.version === policyRef.version && candidate.contentHash === policyRef.contentHash && candidate.status === "published");
+        if (policies.length !== 1) throw new Error("V23_OPEN_001_POLICY_UNRESOLVED"); const policy = policies[0]!;
+        const replayEntries: V23ResolvedAffix[] = [...effectiveStableEntries.values()].map((effective) => ({ ref: effective.ref, payload: effective.payload as never, localCopyId: effective.localCopyId ?? undefined, copyHash: effective.copyHash ?? undefined }));
         const replay = deriveV23SkuPull(matchedTemplateBaseline, replayEntries, { formal: true, publishedReductionPolicy: policy });
         if (replay.status !== "VALID" || replay.baselinePullKg !== persisted.baselinePullKg || replay.targetPullKg !== persisted.targetPullKg || jcsSha256Hex(replay.trace) !== jcsSha256Hex(persisted.trace) || replay.inputHash !== persisted.inputHash) throw new Error("V23_SKU_DERIVATION_REPLAY_MISMATCH");
       }

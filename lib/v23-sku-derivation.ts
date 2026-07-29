@@ -1,5 +1,6 @@
 import type { ReductionStackingPolicyVersion, V23ProjectAffixPayload, V23StableContentRef } from "./types";
 import { jcsSha256Hex } from "./canonical-json";
+import { compareUtf8 } from "./reduction-stacking-policy";
 
 export interface V23ResolvedAffix { ref: V23StableContentRef; payload: V23ProjectAffixPayload; localCopyId?: string; copyHash?: string; }
 export interface V23PullTraceStep { affixId: string; operationId: string; operationIndex: number; operation: "percent_adjust" | "flat_adjust" | "clamp_add"; direction: "increase" | "decrease"; magnitude: number; clampMin: number | null; clampMax: number | null; beforeKg: number; afterKg: number; }
@@ -21,7 +22,7 @@ export function validateV23ModelPatchForPull(partType: "rod" | "reel" | "line", 
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("V23_MODEL_PATCH_SCHEMA_INVALID");
   const patch = value as Record<string, unknown>;
   if (typeof patch.operation !== "string" || !["set", "add", "multiply", "clear"].includes(patch.operation) || typeof patch.parameterKey !== "string" || patch.parameterKey.length === 0) throw new Error("V23_MODEL_PATCH_SCHEMA_INVALID");
-  if (patch.parameterKey === V23_STRUCTURAL_PULL_KEYS[partType]) throw new Error("V23_MODEL_PATCH_PULL_FORBIDDEN");
+  if (["pull", "targetPullKg", "targetPullKgf", ...Object.values(V23_STRUCTURAL_PULL_KEYS)].includes(patch.parameterKey)) throw new Error("V23_MODEL_PATCH_PULL_FORBIDDEN");
 }
 
 /** Stable ID is settled before semantic contribution; a local copy replaces
@@ -44,7 +45,7 @@ export function v23EffectiveEntries(inherited: readonly V23ResolvedAffix[], remo
     if (previous && (previous.payload.stackingPolicy === "dedupe" || entry.payload.stackingPolicy === "dedupe")) throw new Error("V23_SEMANTIC_CONTRIBUTION_CONFLICT");
     semantic.set(entry.payload.semanticContributionKey, entry);
   }
-  return [...entries.values()].sort((a, b) => a.ref.id.localeCompare(b.ref.id));
+  return [...entries.values()].sort((a, b) => compareUtf8(a.ref.id, b.ref.id));
 }
 
 export function deriveV23SkuPull(baselinePullKg: number, entries: readonly V23ResolvedAffix[], options: V23DerivationOptions = {}): V23SkuPullDerivation {
@@ -53,7 +54,7 @@ export function deriveV23SkuPull(baselinePullKg: number, entries: readonly V23Re
   if (options.formal && (!options.publishedReductionPolicy || options.publishedReductionPolicy.status !== "published" || options.publishedReductionPolicy.strategy !== "bidirectional_ratio" || options.publishedReductionPolicy.numericContract !== "ieee754-binary64-v1")) return { status: "INVALID", code: "V23_OPEN_001_POLICY_VERSION_REQUIRED", inputHash };
   let value = baselinePullKg;
   const trace: V23PullTraceStep[] = [];
-  const ordered = entries.flatMap((entry) => entry.payload.enabled && entry.payload.category === "attribute" ? entry.payload.operations.map((operation) => ({ entry, operation })) : []).sort((left, right) => left.entry.ref.id.localeCompare(right.entry.ref.id) || left.entry.ref.revision - right.entry.ref.revision || left.operation.operationIndex - right.operation.operationIndex || left.operation.operationId.localeCompare(right.operation.operationId));
+  const ordered = entries.flatMap((entry) => entry.payload.enabled && entry.payload.category === "attribute" ? entry.payload.operations.map((operation) => ({ entry, operation })) : []).sort((left, right) => compareUtf8(left.entry.ref.id, right.entry.ref.id) || left.entry.ref.revision - right.entry.ref.revision || left.operation.operationIndex - right.operation.operationIndex || compareUtf8(left.operation.operationId, right.operation.operationId));
   const operationIdentity = new Set<string>();
   for (const { entry, operation } of ordered) { const identity = `${entry.ref.id}\u0000${entry.ref.revision}\u0000${operation.operationIndex}\u0000${operation.operationId}`; if (operationIdentity.has(identity)) return { status: "INVALID", code: "V23_OPERATION_IDENTITY_DUPLICATE", inputHash }; operationIdentity.add(identity); }
   let bonus = 0; let reduction = 0; const later: typeof ordered = [];

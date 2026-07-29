@@ -15,6 +15,13 @@ export interface V23DerivationOptions { formal?: boolean; publishedReductionPoli
 const V23_STRUCTURAL_PULL_KEYS: Record<"rod" | "reel" | "line", string> = {
   rod: "rodPullKg", reel: "reelPullKg", line: "linePullKg",
 };
+type Rational = { numerator: bigint; denominator: bigint };
+const z = BigInt(0); const one = BigInt(1); const maxFinite = exact(Number.MAX_VALUE);
+function exact(value: number): Rational { const view = new DataView(new ArrayBuffer(8)); view.setFloat64(0, value, false); const bits = view.getBigUint64(0, false); const sign = bits >> BigInt(63) ? -one : one; const exponentBits = Number((bits >> BigInt(52)) & BigInt("0x7ff")); const fraction = bits & BigInt("0x000fffffffffffff"); if (exponentBits === 0x7ff) return { numerator: z, denominator: z }; if (exponentBits === 0 && fraction === z) return { numerator: z, denominator: one }; const significand = exponentBits === 0 ? fraction : (one << BigInt(52)) | fraction; const exponent = exponentBits === 0 ? -1074 : exponentBits - 1075; return exponent >= 0 ? { numerator: sign * significand * (one << BigInt(exponent)), denominator: one } : { numerator: sign * significand, denominator: one << BigInt(-exponent) }; }
+function add(left: Rational, right: Rational): Rational { return { numerator: left.numerator * right.denominator + right.numerator * left.denominator, denominator: left.denominator * right.denominator }; }
+function mul(left: Rational, right: Rational): Rational { return { numerator: left.numerator * right.numerator, denominator: left.denominator * right.denominator }; }
+function div(left: Rational, right: Rational): Rational { return { numerator: left.numerator * right.denominator, denominator: left.denominator * right.numerator }; }
+function anomaly(value: Rational, result: number): "overflow" | "underflow_to_zero" | null { const n = value.numerator < z ? -value.numerator : value.numerator; const d = value.denominator < z ? -value.denominator : value.denominator; if (!Number.isFinite(result) || d === z || n * maxFinite.denominator > maxFinite.numerator * d) return "overflow"; return value.numerator !== z && result === 0 ? "underflow_to_zero" : null; }
 
 /** Model patches may never turn a derived v23 structural pull into input.
  * Unknown shapes are rejected rather than assumed harmless at this boundary. */
@@ -57,15 +64,17 @@ export function deriveV23SkuPull(baselinePullKg: number, entries: readonly V23Re
   const ordered = entries.flatMap((entry) => entry.payload.enabled && entry.payload.category === "attribute" ? entry.payload.operations.map((operation) => ({ entry, operation })) : []).sort((left, right) => compareUtf8(left.entry.ref.id, right.entry.ref.id) || left.entry.ref.revision - right.entry.ref.revision || left.operation.operationIndex - right.operation.operationIndex || compareUtf8(left.operation.operationId, right.operation.operationId));
   const operationIdentity = new Set<string>();
   for (const { entry, operation } of ordered) { const identity = `${entry.ref.id}\u0000${entry.ref.revision}\u0000${operation.operationIndex}\u0000${operation.operationId}`; if (operationIdentity.has(identity)) return { status: "INVALID", code: "V23_OPERATION_IDENTITY_DUPLICATE", inputHash }; operationIdentity.add(identity); }
-  let bonus = 0; let reduction = 0; const later: typeof ordered = [];
+  let bonus = 0; let reduction = 0; let bonusExact = exact(0); let reductionExact = exact(0); const later: typeof ordered = [];
   for (const { entry, operation: op } of ordered) {
       if (op.parameterKey !== "pull" && op.parameterKey !== "targetPullKg") continue;
       if (op.operation === "set" || op.operation === "enum_add") return { status: "INVALID", code: "V23_DIRECT_PULL_PATCH_FORBIDDEN", inputHash };
-      if (op.operation === "percent_adjust") { if (op.direction === "increase") bonus += op.magnitude; else reduction += op.magnitude; continue; }
+      if (op.operation === "percent_adjust") { if (op.direction === "increase") { bonusExact = add(bonusExact, exact(op.magnitude)); bonus = Number(bonus + op.magnitude); if (anomaly(bonusExact, bonus)) return { status: "INVALID", code: "V23_BINARY64_OVERFLOW", inputHash }; } else { reductionExact = add(reductionExact, exact(op.magnitude)); reduction = Number(reduction + op.magnitude); if (anomaly(reductionExact, reduction)) return { status: "INVALID", code: "V23_BINARY64_OVERFLOW", inputHash }; } continue; }
       later.push({ entry, operation: op });
   }
-  value = baselinePullKg * (1 + bonus) / (1 + reduction);
-  if (!Number.isFinite(value) || value <= 0) return { status: "INVALID", code: "V23_PULL_DERIVATION_NON_FINITE", inputHash };
+  const ratioExact = div(mul(exact(baselinePullKg), add(exact(1), bonusExact)), add(exact(1), reductionExact));
+  value = Number(Number(baselinePullKg * (1 + bonus)) / (1 + reduction));
+  const ratioAnomaly = anomaly(ratioExact, value); if (ratioAnomaly) return { status: "INVALID", code: ratioAnomaly === "overflow" ? "V23_BINARY64_OVERFLOW" : "V23_BINARY64_UNDERFLOW_TO_ZERO", inputHash };
+  if (value <= 0) return { status: "INVALID", code: "V23_PULL_DERIVATION_NON_FINITE", inputHash };
   const ratioOperations = ordered.filter(({ operation }) => operation.parameterKey === "pull" || operation.parameterKey === "targetPullKg").filter(({ operation }) => operation.operation === "percent_adjust").map(({ entry, operation }) => { const percent = operation as { operationId: string; operationIndex: number; direction: "increase" | "decrease"; magnitude: number }; return { affixId: entry.ref.id, operationId: percent.operationId, operationIndex: percent.operationIndex, direction: percent.direction, magnitude: percent.magnitude }; });
   if (ratioOperations.length) {
     const first = ratioOperations[0]!;

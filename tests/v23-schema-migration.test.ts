@@ -6,6 +6,8 @@ import { deterministicHash } from "../lib/rule-kernel";
 import { jcsSha256Hex } from "../lib/canonical-json";
 import { createSeedState } from "../lib/seed";
 import { migrateLegacyProductIdentity } from "../lib/legacy-product-migration";
+import { deriveV23SkuPull } from "../lib/v23-sku-derivation";
+import { importReductionStackingPolicyDraft, publishReductionStackingPolicyVersion } from "../lib/reduction-stacking-policy";
 import type {
   SeriesPartRevision,
   SkuDrawerRevision,
@@ -405,6 +407,15 @@ test("v23 closes quality, technology, source-evidence, and adapter chains", () =
   attempted.v23SkuDrawerRevisions[0]!.match = { status: "INVALID_NO_MATCH", attemptedKey: key, inputFingerprint: hash(key) };
   attempted.v23SkuDrawerRevisions[0] = withSkuHashes(attempted.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
   assert.deepEqual(migrateWorkspaceState(attempted).v23SkuDrawerRevisions, attempted.v23SkuDrawerRevisions);
+  const template = { templateId: "template:match", revisionId: "r1", contentHash: hash({ contractVersion: "v23-function-template/v1", key, baselinePullKg: 5 }) };
+  attempted.v23FunctionTemplates = [{ ref: template, key, baselinePullKg: 5 }];
+  assert.throws(() => migrateWorkspaceState(attempted), /V23_SKU_MATCH_REPLAY_MISMATCH/, "a now-unique strict template invalidates a persisted no-match");
+  attempted.v23FunctionTemplates.push({ ref: { ...template, templateId: "template:match-two" }, key, baselinePullKg: 5 });
+  attempted.v23SkuDrawerRevisions[0]!.match = { status: "INVALID_AMBIGUOUS", attemptedKey: key, inputFingerprint: hash(key) };
+  attempted.v23SkuDrawerRevisions[0] = withSkuHashes(attempted.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.doesNotThrow(() => migrateWorkspaceState(attempted), "a current two-row registry preserves true ambiguity");
+  attempted.v23FunctionTemplates.pop();
+  assert.throws(() => migrateWorkspaceState(attempted), /V23_SKU_MATCH_REPLAY_MISMATCH/, "registry drift from ambiguous to unique is rejected");
   attempted.v23SkuDrawerRevisions[0]!.match = { status: "NEEDS_MIGRATION_REVIEW", attemptedKey: key } as never;
   attempted.v23SkuDrawerRevisions[0] = withSkuHashes(attempted.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
   assert.throws(() => migrateWorkspaceState(attempted), /V23_SKU_MATCH_SCHEMA_INVALID/);
@@ -464,7 +475,7 @@ test("v23 closes project affix, local copy, SKU lifecycle, and Phase-A template 
   assert.throws(() => migrateWorkspaceState(payloadExtra), /V23_AFFIX_PAYLOAD_SCHEMA_INVALID/);
   const valid = directV23State();
   valid.v23SkuDrawerRevisions[0]!.match = validMatch(); valid.v23SkuDrawerRevisions[0] = withSkuHashes(valid.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
-  assert.throws(() => migrateWorkspaceState(valid), /V23_TEMPLATE_REGISTRY_UNAVAILABLE/);
+  assert.throws(() => migrateWorkspaceState(valid), /V23_TEMPLATE_REGISTRY_NO_MATCH/);
   const defaultModel = directV23State(); defaultModel.v23SkuDrawerRevisions[0]!.defaultModelId = "model:missing"; defaultModel.v23SkuDrawerRevisions[0] = withSkuHashes(defaultModel.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
   assert.throws(() => migrateWorkspaceState(defaultModel), /V23_SKU_ASSOCIATION_RESOLVER_UNAVAILABLE/);
   const order = directV23State(); order.v23SkuDrawerRevisions[0]!.displayOrder = -1; order.v23SkuDrawerRevisions[0] = withSkuHashes(order.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
@@ -1052,4 +1063,93 @@ test("v23 numeric affix carriers freeze published magnitude ranges and RuleSet e
   copyHash.v23SkuDrawerRevisions[0]!.localEntryCopies[0]!.copyHash = "0".repeat(64);
   copyHash.v23SkuDrawerRevisions[0] = withSkuHashes(copyHash.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
   assert.throws(() => migrateWorkspaceState(copyHash), /V23_SKU_LOCAL_COPY_COPY_HASH_MISMATCH/);
+});
+
+test("v23 formal persisted derivation round-trips closed binary64 evidence", () => {
+  const state = directV23State();
+  const sku = state.v23SkuDrawerRevisions[0]!;
+  const part = state.v23SeriesPartRevisions[0]!;
+  const key = sixKey();
+  const baselinePullKg = 5;
+  const templateRef = { templateId: "template:one", revisionId: "r1", contentHash: hash({ contractVersion: "v23-function-template/v1", key, baselinePullKg }) };
+  state.v23FunctionTemplates = [{ ref: templateRef, key, baselinePullKg }];
+  const policy = publishReductionStackingPolicyVersion({ draft: importReductionStackingPolicyDraft({ sourceRevision: { id: "source:1", workbookRefId: "feishu-workbook:tackle-design", sourceRevision: "99", sheets: [{ sheetId: "23CsXE" }] } as never, machineRules: [{ ruleId: "pull", parameterKey: "pull", strategy: "bidirectional_ratio", numericContract: "ieee754-binary64-v1", operationOrder: ["set", "percent_adjust", "flat_adjust", "clamp_add", "final_review_patch", "parameter_definition"] }], createdAt: "2026-01-01T00:00:00.000Z" }), publishedAt: "2026-01-01T00:00:00.000Z", publishedBy: "test" });
+  state.reductionStackingPolicyVersions = [policy as never];
+  const definition = state.v23AffixDefinitions[0]!;
+  const ref = { id: definition.affixId, revision: definition.revision, contentHash: definition.contentHash };
+  const replay = deriveV23SkuPull(baselinePullKg, [{ ref, payload: definition.payload }], { formal: true, publishedReductionPolicy: policy });
+  assert.equal(replay.status, "VALID");
+  if (replay.status !== "VALID") return;
+  const source = { ref, localCopyId: null, copyHash: null, payloadHash: hash(definition.payload) };
+  const trace = replay.trace.map((step) => ({ source: step.affixId === null ? null : source, operationId: step.operationId, operationIndex: step.operationIndex, operation: step.operation, direction: step.direction, magnitude: step.magnitude, clampMin: step.clampMin, clampMax: step.clampMax, ratioOperations: step.ratioOperations?.map((item) => ({ source, operationId: item.operationId, operationIndex: item.operationIndex, direction: item.direction, magnitude: item.magnitude })) ?? null, flatComponents: step.flatComponents?.map((item) => ({ source, operationId: item.operationId, operationIndex: item.operationIndex, direction: item.direction, magnitude: item.magnitude, numericEvidence: item.numericEvidence })) ?? null, flatDeltaEvidence: step.flatDeltaEvidence, beforeKg: step.beforeKg, afterKg: step.afterKg, numericEvidence: step.numericEvidence }));
+  sku.match = { status: "VALID", functionTemplateRef: templateRef, matchedKey: key, inputFingerprint: hash(key) };
+  sku.derivation = { status: "VALID", templateRef, reductionPolicyRef: { id: policy.id, version: policy.version, contentHash: policy.contentHash }, baselinePullKg, targetPullKg: replay.targetPullKg, effectiveEntries: [source], trace, inputHash: replay.inputHash };
+  state.v23SkuDrawerRevisions[0] = withSkuHashes(sku) as SkuDrawerRevision;
+  const migrated = migrateWorkspaceState(state);
+  assert.equal(migrated.v23SkuDrawerRevisions[0]!.derivation?.status, "VALID");
+  assert.deepEqual(migrateWorkspaceState(migrated), migrated);
+
+  const assertFormalFlat = (label: string, operations: unknown[], expectedTraceLength: number) => {
+    const candidate = structuredClone(state);
+    const drawer = candidate.v23SkuDrawerRevisions[0]!;
+    const affix = candidate.v23AffixDefinitions[0]!;
+    const payload = structuredClone(affix.payload);
+    payload.operations = operations as never;
+    affix.payload = payload;
+    affix.contentHash = hash({ affixId: affix.affixId, revision: affix.revision, payload });
+    const currentRef = { id: affix.affixId, revision: affix.revision, contentHash: affix.contentHash };
+    drawer.addedEntryRefs[0]!.ref = currentRef;
+    const currentSource = { ref: currentRef, localCopyId: null, copyHash: null, payloadHash: hash(payload) };
+    const currentReplay = deriveV23SkuPull(baselinePullKg, [{ ref: currentRef, payload }], { formal: true, publishedReductionPolicy: policy });
+    assert.equal(currentReplay.status, "VALID", label);
+    if (currentReplay.status !== "VALID") return;
+    const currentTrace = currentReplay.trace.map((step) => ({ source: step.affixId === null ? null : currentSource, operationId: step.operationId, operationIndex: step.operationIndex, operation: step.operation, direction: step.direction, magnitude: step.magnitude, clampMin: step.clampMin, clampMax: step.clampMax, ratioOperations: null, flatComponents: step.flatComponents?.map((item) => ({ source: currentSource, operationId: item.operationId, operationIndex: item.operationIndex, direction: item.direction, magnitude: item.magnitude, numericEvidence: item.numericEvidence })) ?? null, flatDeltaEvidence: step.flatDeltaEvidence, beforeKg: step.beforeKg, afterKg: step.afterKg, numericEvidence: step.numericEvidence }));
+    drawer.derivation = { status: "VALID", templateRef, reductionPolicyRef: { id: policy.id, version: policy.version, contentHash: policy.contentHash }, baselinePullKg, targetPullKg: currentReplay.targetPullKg, effectiveEntries: [currentSource], trace: currentTrace, inputHash: currentReplay.inputHash } as never;
+    candidate.v23SkuDrawerRevisions[0] = withSkuHashes(drawer) as SkuDrawerRevision;
+    const accepted = migrateWorkspaceState(candidate);
+    const acceptedTrace = (accepted.v23SkuDrawerRevisions[0]!.derivation as unknown as { trace: Array<{ beforeKg: number; afterKg: number; source: unknown; flatComponents: unknown[] | null }> }).trace;
+    assert.equal(acceptedTrace.length, expectedTraceLength, label);
+    let prior = baselinePullKg; for (const step of acceptedTrace) { assert.equal(step.beforeKg, prior, label); prior = step.afterKg; if (step.flatComponents) { assert.equal(step.source, null, label); assert.ok(step.flatComponents.length > 0, label); } }
+    assert.equal(prior, currentReplay.targetPullKg, label);
+    assert.deepEqual(migrateWorkspaceState(accepted), accepted, label);
+    const tampered = structuredClone(candidate); const flatStep = (tampered.v23SkuDrawerRevisions[0]!.derivation as { trace: Array<{ flatComponents: Array<{ operationId: string }> | null }> }).trace.find((step) => step.flatComponents !== null)!; flatStep.flatComponents![0]!.operationId = "tampered"; tampered.v23SkuDrawerRevisions[0] = withSkuHashes(tampered.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision; assert.throws(() => migrateWorkspaceState(tampered), `${label} component tamper`);
+    for (const field of ["beforeBinary64", "afterBinary64", "exactNumerator", "exactDenominator", "anomaly"] as const) { const deltaTampered = structuredClone(candidate); const deltaStep = (deltaTampered.v23SkuDrawerRevisions[0]!.derivation as { trace: Array<{ flatDeltaEvidence: Record<string, unknown> | null }> }).trace.find((step) => step.flatDeltaEvidence !== null)!; deltaStep.flatDeltaEvidence![field] = field === "anomaly" ? "overflow" : "0x0000000000000000"; deltaTampered.v23SkuDrawerRevisions[0] = withSkuHashes(deltaTampered.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision; assert.throws(() => migrateWorkspaceState(deltaTampered), `${label} delta ${field} tamper`); }
+  };
+  const flat = (operationId: string, operationIndex: number, direction: "increase" | "decrease", magnitude: number) => ({ operationId, operationIndex, sourceAffixId: definition.affixId, sourceAffixRevision: definition.revision, parameterKey: "pull", operation: "flat_adjust", direction, magnitude, publishedMagnitudeRange: { min: 0, max: Math.max(1, magnitude), ruleSetVersion: "ruleset-v3-migrated-1" } });
+  assertFormalFlat("flat-only", [flat("flat:one", 0, "increase", 2)], 1);
+  assertFormalFlat("flat-interleaved", [flat("flat:up-a", 0, "increase", 2 ** 53), flat("flat:down", 1, "decrease", 2 ** 53), flat("flat:up-b", 2, "increase", 1)], 1);
+  assertFormalFlat("set-plus-flat", [{ operationId: "set:pull", operationIndex: 0, sourceAffixId: definition.affixId, sourceAffixRevision: definition.revision, parameterKey: "pull", operation: "set", value: 7 }, flat("flat:after-set", 1, "increase", 2)], 2);
+
+  const invalidState = structuredClone(state);
+  const invalidSku = invalidState.v23SkuDrawerRevisions[0]!;
+  const invalidDefinition = invalidState.v23AffixDefinitions[0]!;
+  const invalidPayload = structuredClone(invalidDefinition.payload);
+  invalidPayload.operations = [{ operationId: "op:overflow", operationIndex: 0, sourceAffixId: invalidDefinition.affixId, sourceAffixRevision: invalidDefinition.revision, parameterKey: "pull", operation: "percent_adjust", direction: "increase", magnitude: 1, publishedMagnitudeRange: { min: 0, max: 1, ruleSetVersion: "ruleset-v3-migrated-1" } }] as never;
+  invalidDefinition.payload = invalidPayload;
+  invalidDefinition.contentHash = hash({ affixId: invalidDefinition.affixId, revision: invalidDefinition.revision, payload: invalidPayload });
+  const invalidRef = { id: invalidDefinition.affixId, revision: invalidDefinition.revision, contentHash: invalidDefinition.contentHash };
+  invalidSku.addedEntryRefs[0]!.ref = invalidRef;
+  const invalidBaseline = Number.MAX_VALUE;
+  const invalidTemplateRef = { templateId: templateRef.templateId, revisionId: templateRef.revisionId, contentHash: hash({ contractVersion: "v23-function-template/v1", key, baselinePullKg: invalidBaseline }) };
+  invalidState.v23FunctionTemplates = [{ ref: invalidTemplateRef, key, baselinePullKg: invalidBaseline }];
+  const invalidSource = { ref: invalidRef, localCopyId: null, copyHash: null, payloadHash: hash(invalidPayload) };
+  const invalidReplay = deriveV23SkuPull(invalidBaseline, [{ ref: invalidRef, payload: invalidPayload }], { formal: true, publishedReductionPolicy: policy });
+  assert.equal(invalidReplay.status, "INVALID");
+  if (invalidReplay.status !== "INVALID") return;
+  const failureEvidence = { source: invalidReplay.failureEvidence.affixId === null ? null : invalidSource, operationId: invalidReplay.failureEvidence.operationId, operationIndex: invalidReplay.failureEvidence.operationIndex, stage: invalidReplay.failureEvidence.stage, numericEvidence: invalidReplay.failureEvidence.numericEvidence };
+  invalidSku.match = { status: "VALID", functionTemplateRef: invalidTemplateRef, matchedKey: key, inputFingerprint: hash(key) };
+  invalidSku.derivation = { status: "INVALID", templateRef: invalidTemplateRef, reductionPolicyRef: { id: policy.id, version: policy.version, contentHash: policy.contentHash }, effectiveEntries: [invalidSource], code: invalidReplay.code, failureEvidence, inputHash: invalidReplay.inputHash } as never;
+  invalidState.v23SkuDrawerRevisions[0] = withSkuHashes(invalidSku) as SkuDrawerRevision;
+  const invalidMigrated = migrateWorkspaceState(invalidState);
+  assert.equal(invalidMigrated.v23SkuDrawerRevisions[0]!.derivation?.status, "INVALID");
+  assert.deepEqual(migrateWorkspaceState(invalidMigrated), invalidMigrated);
+  const rejectTamper = (mutate: (derivation: Record<string, unknown>) => void) => {
+    const candidate = structuredClone(invalidState); const drawer = candidate.v23SkuDrawerRevisions[0]!; mutate(drawer.derivation as unknown as Record<string, unknown>); candidate.v23SkuDrawerRevisions[0] = withSkuHashes(drawer) as SkuDrawerRevision; assert.throws(() => migrateWorkspaceState(candidate));
+  };
+  rejectTamper((derivation) => { derivation.code = "V23_PULL_DERIVATION_NON_FINITE"; });
+  rejectTamper((derivation) => { derivation.inputHash = "0".repeat(64); });
+  for (const field of ["source", "operationId", "operationIndex", "stage"] as const) rejectTamper((derivation) => { const failure = derivation.failureEvidence as Record<string, unknown>; failure[field] = field === "source" ? null : field === "operationId" ? "tampered" : field === "operationIndex" ? 99 : "base"; });
+  for (const field of ["beforeBinary64", "afterBinary64", "exactNumerator", "exactDenominator", "anomaly"] as const) rejectTamper((derivation) => { const numeric = ((derivation.failureEvidence as Record<string, unknown>).numericEvidence as Record<string, unknown>); numeric[field] = field === "anomaly" ? "none" : "0x0000000000000000"; });
+  const changedInput = structuredClone(invalidState); const changedDefinition = changedInput.v23AffixDefinitions[0]!; (changedDefinition.payload.operations[0] as { magnitude: number }).magnitude = 0.5; changedDefinition.contentHash = hash({ affixId: changedDefinition.affixId, revision: changedDefinition.revision, payload: changedDefinition.payload }); changedInput.v23SkuDrawerRevisions[0]!.addedEntryRefs[0]!.ref.contentHash = changedDefinition.contentHash; changedInput.v23SkuDrawerRevisions[0] = withSkuHashes(changedInput.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.throws(() => migrateWorkspaceState(changedInput));
 });

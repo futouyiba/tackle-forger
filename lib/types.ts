@@ -1225,6 +1225,23 @@ export interface V23FunctionTemplateRef {
   contentHash: string;
 }
 
+/** Immutable 04.5 registry row.  The six-key is deliberately the whole
+ * lookup identity; ranges and display labels are not resolution inputs. */
+export interface V23FunctionTemplateDefinition {
+  ref: V23FunctionTemplateRef;
+  key: V23MatchedTemplateKey;
+  baselinePullKg: number;
+}
+
+export interface V23ReductionPolicyRef { id: string; version: string; contentHash: string; }
+export interface V23SkuEffectiveEntryEvidence { ref: V23StableContentRef; localCopyId: string | null; copyHash: string | null; payloadHash: string; }
+export interface V23SkuPullTraceEvidence { source: V23SkuEffectiveEntryEvidence | null; operationId: string; operationIndex: number | null; operation: "set" | "percent_adjust" | "flat_adjust" | "clamp_add"; direction: "increase" | "decrease" | null; magnitude: number; clampMin: number | null; clampMax: number | null; ratioOperations: Array<{ source: V23SkuEffectiveEntryEvidence; operationId: string; operationIndex: number; direction: "increase" | "decrease"; magnitude: number }> | null; flatComponents: Array<{ source: V23SkuEffectiveEntryEvidence; operationId: string; operationIndex: number; direction: "increase" | "decrease"; magnitude: number; numericEvidence: { beforeBinary64: string; afterBinary64: string; exactNumerator: string; exactDenominator: string; anomaly: "none" | "overflow" | "underflow_to_zero" } }> | null; flatDeltaEvidence: { beforeBinary64: string; afterBinary64: string; exactNumerator: string; exactDenominator: string; anomaly: "none" | "overflow" | "underflow_to_zero" } | null; beforeKg: number; afterKg: number; numericEvidence: { beforeBinary64: string; afterBinary64: string; exactNumerator: string; exactDenominator: string; anomaly: "none" | "overflow" | "underflow_to_zero" }; }
+export interface V23SkuPullFailureEvidence { source: V23SkuEffectiveEntryEvidence | null; operationId: string | null; operationIndex: number | null; stage: "base" | "policy" | "operation_identity" | "set" | "percent_pool" | "ratio_increase_factor" | "ratio_reduction_factor" | "ratio_multiply" | "ratio_divide" | "flat_pool" | "flat_settlement" | "clamp"; numericEvidence: { beforeBinary64: string; afterBinary64: string; exactNumerator: string; exactDenominator: string; anomaly: "none" | "overflow" | "underflow_to_zero" }; }
+export type V23SkuPullDerivationEvidence =
+  | { status: "UNRESOLVED" }
+  | { status: "VALID"; templateRef: V23FunctionTemplateRef; reductionPolicyRef: V23ReductionPolicyRef; baselinePullKg: number; targetPullKg: number; effectiveEntries: V23SkuEffectiveEntryEvidence[]; trace: V23SkuPullTraceEvidence[]; inputHash: string }
+  | { status: "INVALID"; templateRef: V23FunctionTemplateRef; reductionPolicyRef: V23ReductionPolicyRef; effectiveEntries: V23SkuEffectiveEntryEvidence[]; code: string; failureEvidence: V23SkuPullFailureEvidence; inputHash: string };
+
 export interface V23MatchedTemplateKey {
   partType: V23EnabledPartType;
   weightBandId: string;
@@ -1298,6 +1315,8 @@ export interface SkuDrawerRevision {
   partRevision: number;
   weightBandId: string;
   match: V23SkuMatch;
+  /** Absent only on Phase-A persisted records; Phase B writes a closed result. */
+  derivation?: V23SkuPullDerivationEvidence;
   removedInheritedEntryIds: string[];
   addedEntryRefs: Extract<V23SkuAffixEntry, { kind: "STABLE_AFFIX_REF" }>[];
   localEntryCopies: Extract<V23SkuAffixEntry, { kind: "LOCAL_AFFIX_COPY" }>[];
@@ -2990,6 +3009,7 @@ export interface WorkspaceState {
   v23SkuDrawerRevisions: SkuDrawerRevision[];
   v23SkuDrawerHeads: V23SkuDrawerHeadRef[];
   v23AffixDefinitions: V23AffixDefinition[];
+  v23FunctionTemplates?: V23FunctionTemplateDefinition[];
   v23MigrationSourceEvidence: V23MigrationSourceEvidence[];
   v23LegacyReadAdapters: V23LegacyReadAdapter[];
   partConstraintSets: PartConstraintSet[];

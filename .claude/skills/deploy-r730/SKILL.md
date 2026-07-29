@@ -40,7 +40,7 @@ R730_SSH=root@192.168.1.157 GIT_REF=<GIT_REF> bash scripts/deploy-r730.sh
 - **2/5** `scp` 上传 tar 包。
 - **3/5** 远程 `npm ci`(走 npmmirror 镜像)+ `npm run build`,校验 `dist/`。
 - **4/5** `chown` 给运行账号 `tackleforger` → `ln -sfn` 切 `current` → `sudo systemctl restart tackle-forger` → 校验 `is-active`。
-- **5/5** 远程本地 `curl http://127.0.0.1:3000/api/auth/session`(期望 401)。
+- **5/5** 远程本地 `curl http://127.0.0.1:13000/api/auth/session`(期望 401)。
 
 任一阶段非零退出即失败。**报告失败的阶段编号和最后几行输出**,并给出取日志命令:
 ```bash
@@ -49,7 +49,7 @@ ssh root@192.168.1.157 'journalctl -u tackle-forger -n 80 --no-pager'
 
 ## 成功后:从本机外部验收端口 13000
 
-脚本 5/5 验收的是 R730 **本地 3000**;对外暴露的是 **13000**(nginx 反代)。部署结束后**额外**从本机验证:
+脚本 5/5 验收的是 R730 **本地 13000**；应用唯一权威监听端口也是 **13000**。部署结束后**额外**从本机验证:
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' http://192.168.1.157:13000/api/auth/session
 ```

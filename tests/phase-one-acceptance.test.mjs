@@ -711,6 +711,7 @@ test("preflight 对安全 env、源契约和 0600 权限给出可重复证据", 
     "FEISHU_SESSION_TTL_SECONDS=28800",
     "FEISHU_SESSION_DATA_DIR=/opt/tackle-forger/data/auth",
     "WORKSPACE_DATABASE_PATH=/opt/tackle-forger/data/workspace.sqlite",
+    "WORKSPACE_STORAGE_BACKEND=sqlite",
     "WORKSPACE_FILE_DATA_DIR=/opt/tackle-forger/data/files",
     "WORKSPACE_BACKUP_DIR=/opt/tackle-forger/data/backups",
     "FEISHU_TRUST_PROXY_HEADERS=false",
@@ -735,6 +736,23 @@ test("preflight 对安全 env、源契约和 0600 权限给出可重复证据", 
     true,
   );
   assert.equal(JSON.stringify(evidence).includes("s".repeat(32)), false);
+  assert.equal(
+    evidence.checks.find((item) => item.id === "required_environment")?.status,
+    "PASS",
+  );
+
+  await writeFile(envFile, (await readFile(envFile, "utf8"))
+    .replace("WORKSPACE_STORAGE_BACKEND=sqlite\n", ""));
+  const missingStorageBackend = await runPreflight({ root, envFile });
+  assert.equal(
+    missingStorageBackend.checks.find((item) => item.id === "required_environment")?.status,
+    "BLOCKED",
+  );
+  assert.deepEqual(
+    missingStorageBackend.checks.find((item) => item.id === "required_environment")?.evidence
+      ?.missingKeys,
+    ["WORKSPACE_STORAGE_BACKEND"],
+  );
 
   await writeFile(path.join(root, "deploy/tackle-forger.service"), [
     "ExecStart=npm run start -- --hostname 127.0.0.1 --port 13000",

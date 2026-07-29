@@ -1171,11 +1171,38 @@ export interface SeriesPartRevision {
 
 export interface SeriesPartHeadRef { seriesId: string; partId: string; revision: number; }
 
+export type V23ProjectAttributeOperation =
+  | { operationId: string; operationIndex: number; sourceAffixId: string; sourceAffixRevision: number; parameterKey: string; operation: "percent_adjust" | "flat_adjust"; direction: "increase" | "decrease"; magnitude: number }
+  | { operationId: string; operationIndex: number; sourceAffixId: string; sourceAffixRevision: number; parameterKey: string; operation: "clamp_add"; direction: "increase" | "decrease"; magnitude: number; clampMin: number; clampMax: number }
+  | { operationId: string; operationIndex: number; sourceAffixId: string; sourceAffixRevision: number; parameterKey: string; operation: "enum_add"; value: string }
+  | { operationId: string; operationIndex: number; sourceAffixId: string; sourceAffixRevision: number; parameterKey: string; operation: "set"; value: number | string | boolean };
+
+export interface V23ProjectPassivePayload {
+  skillId: string;
+  name: string;
+  itemPartId: string;
+  triggerType: string;
+  triggerDescription: string;
+  effectTarget: string;
+  effectLogicDescription: string;
+  exampleParameters: Record<string, number | string | boolean>;
+  durationDescription: string;
+  cooldownDescription: string;
+  resetDescription: string;
+  stackingDescription: string;
+  playerDescription: string;
+  simulatorReferenceKey: string | null;
+}
+
+export type V23ProjectAffixPayload =
+  | { name: string; category: "attribute"; itemPartId: string; generationPolicy: AffixGenerationPolicy; rarity: AffixRarity; valueScore: number; tags: string[]; description: string; enabled: boolean; operations: V23ProjectAttributeOperation[]; passivePayload: null }
+  | { name: string; category: "passive"; itemPartId: string; generationPolicy: AffixGenerationPolicy; rarity: AffixRarity; valueScore: number; tags: string[]; description: string; enabled: boolean; operations: []; passivePayload: V23ProjectPassivePayload };
+
 export interface V23AffixDefinition {
   affixId: string;
   revision: number;
   contentHash: string;
-  payload: unknown;
+  payload: V23ProjectAffixPayload;
 }
 
 export type V23SkuAffixEntry =
@@ -1187,7 +1214,7 @@ export type V23SkuAffixEntry =
       kind: "LOCAL_AFFIX_COPY";
       localCopyId: string;
       sourceRef: V23StableContentRef;
-      payload: unknown;
+      payload: V23ProjectAffixPayload;
       copyHash: string;
     };
 
@@ -1219,6 +1246,15 @@ export type V23SkuQualityAssessment =
   | { status: "OVERRIDDEN"; recommendedQualityId: QualityProfileId; qualityId: QualityProfileId; reason: string }
   | { status: "NO_RECOMMENDATION"; qualityId: QualityProfileId; reason: string };
 
+/** v23 stores a closed current summary, not a legacy ValidationIssue union. */
+export interface V23ValidationSummaryIssue {
+  code: string;
+  severity: "INFO" | "WARNING" | "ERROR" | "BLOCKER";
+  gate: "NONE" | "REVIEW" | "PUBLISH" | "EXPORT";
+  state: "OPEN" | "ACKNOWLEDGED" | "RESOLVED" | "WAIVED" | "STALE";
+  message: string;
+}
+
 /**
  * This is only the persistence carrier.  Phase A intentionally does not
  * match 04.5 templates, derive pull, or calculate quality.
@@ -1236,6 +1272,12 @@ export interface SkuDrawerRevision {
   localEntryCopies: Extract<V23SkuAffixEntry, { kind: "LOCAL_AFFIX_COPY" }>[];
   technologyRefs: V23StableContentRef[];
   quality: V23SkuQualityAssessment;
+  skuPatchIds: string[];
+  modelIds: string[];
+  defaultModelId: string | null;
+  displayOrder: number;
+  validationSummary: V23ValidationSummaryIssue[];
+  status: EntityLifecycleStatus;
   contentHash: string;
 }
 

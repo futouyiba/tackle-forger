@@ -1725,6 +1725,30 @@ function v23SkuInput(entry: Record<string, unknown>) {
 
 const V23_QUALITY_IDS = new Set(["quality_c_green", "quality_b_blue", "quality_a_purple", "quality_s_orange"]);
 
+function validateV23ProjectAffixPayload(value: unknown, affixId: string, revision: number) {
+  const payload = v23Record(value, "V23_AFFIX_PAYLOAD");
+  const common = ["name", "category", "itemPartId", "generationPolicy", "rarity", "valueScore", "tags", "description", "enabled", "operations", "passivePayload"];
+  v23ExactKeys(payload, common, "V23_AFFIX_PAYLOAD");
+  v23String(payload.name, "V23_AFFIX_NAME"); v23String(payload.itemPartId, "V23_AFFIX_ITEM_PART"); v23String(payload.description, "V23_AFFIX_DESCRIPTION");
+  if (!(["attribute", "passive"] as const).includes(payload.category as never) || !(["normal", "technology_only", "style_only"] as const).includes(payload.generationPolicy as never) || !(["common", "uncommon", "rare", "ultra_rare", "epic"] as const).includes(payload.rarity as never) || !Number.isFinite(payload.valueScore) || typeof payload.enabled !== "boolean") throw new Error("V23_AFFIX_PAYLOAD_INVALID");
+  const tags = v23Array(payload.tags, "V23_AFFIX_TAGS").map((tag) => v23String(tag, "V23_AFFIX_TAG")); if (new Set(tags).size !== tags.length) throw new Error("V23_AFFIX_TAG_DUPLICATE");
+  const operations = v23Array(payload.operations, "V23_AFFIX_OPERATIONS"); const ids = new Set<string>(); const indexes = new Set<number>();
+  for (const value of operations) {
+    const operation = v23Record(value, "V23_AFFIX_OPERATION");
+    const kind = v23String(operation.operation, "V23_AFFIX_OPERATION_KIND");
+    const keys = kind === "set" || kind === "enum_add" ? ["operationId", "operationIndex", "sourceAffixId", "sourceAffixRevision", "parameterKey", "operation", "value"] : kind === "clamp_add" ? ["operationId", "operationIndex", "sourceAffixId", "sourceAffixRevision", "parameterKey", "operation", "direction", "magnitude", "clampMin", "clampMax"] : ["operationId", "operationIndex", "sourceAffixId", "sourceAffixRevision", "parameterKey", "operation", "direction", "magnitude"];
+    v23ExactKeys(operation, keys, "V23_AFFIX_OPERATION");
+    const id = v23String(operation.operationId, "V23_AFFIX_OPERATION_ID"); const index = operation.operationIndex;
+    if (ids.has(id) || indexes.has(index as number) || !Number.isSafeInteger(index) || (index as number) < 0 || operation.sourceAffixId !== affixId || operation.sourceAffixRevision !== revision || !["percent_adjust", "flat_adjust", "clamp_add", "enum_add", "set"].includes(kind) || typeof operation.parameterKey !== "string" || !operation.parameterKey) throw new Error("V23_AFFIX_OPERATION_INVALID");
+    ids.add(id); indexes.add(index as number);
+    if ((kind === "set" && (!(["string", "number", "boolean"] as const).includes(typeof operation.value as never) || (typeof operation.value === "number" && !Number.isFinite(operation.value)))) || (kind === "enum_add" && (typeof operation.value !== "string" || !operation.value))) throw new Error("V23_AFFIX_OPERATION_VALUE_INVALID");
+    const magnitude = operation.magnitude as number; const clampMin = operation.clampMin as number; const clampMax = operation.clampMax as number;
+    if (["percent_adjust", "flat_adjust", "clamp_add"].includes(kind) && (!( ["increase", "decrease"] as const).includes(operation.direction as never) || !Number.isFinite(magnitude) || magnitude < 0 || (kind === "clamp_add" && (!Number.isFinite(clampMin) || !Number.isFinite(clampMax) || clampMin > clampMax)))) throw new Error("V23_AFFIX_OPERATION_BOUNDS_INVALID");
+  }
+  if (payload.category === "attribute" && (payload.passivePayload !== null || operations.length === 0)) throw new Error("V23_AFFIX_CATEGORY_PAYLOAD_MISMATCH");
+  if (payload.category === "passive") { if (operations.length !== 0) throw new Error("V23_AFFIX_CATEGORY_PAYLOAD_MISMATCH"); const passive = v23Record(payload.passivePayload, "V23_AFFIX_PASSIVE"); v23ExactKeys(passive, ["skillId", "name", "itemPartId", "triggerType", "triggerDescription", "effectTarget", "effectLogicDescription", "exampleParameters", "durationDescription", "cooldownDescription", "resetDescription", "stackingDescription", "playerDescription", "simulatorReferenceKey"], "V23_AFFIX_PASSIVE"); for (const key of ["skillId","name","itemPartId","triggerType","triggerDescription","effectTarget","effectLogicDescription","durationDescription","cooldownDescription","resetDescription","stackingDescription","playerDescription"]) v23String(passive[key], "V23_AFFIX_PASSIVE_FIELD"); const parameters = v23Record(passive.exampleParameters, "V23_AFFIX_PASSIVE_PARAMETERS"); if (Object.values(parameters).some((item) => !(["string", "boolean", "number"] as const).includes(typeof item as never) || (typeof item === "number" && !Number.isFinite(item)))) throw new Error("V23_AFFIX_PASSIVE_PARAMETERS_INVALID"); if (passive.itemPartId !== payload.itemPartId || !(passive.simulatorReferenceKey === null || (typeof passive.simulatorReferenceKey === "string" && passive.simulatorReferenceKey.length > 0))) throw new Error("V23_AFFIX_PASSIVE_INVALID"); }
+}
+
 function validateV23RuntimeState(state: MutableWorkspace) {
   const parts = v23Array(state.v23SeriesPartRevisions, "V23_SERIES_PARTS");
   const heads = v23Array(state.v23SeriesPartHeads, "V23_SERIES_PART_HEADS");
@@ -1747,6 +1771,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     v23ExactKeys(entry, ["affixId", "revision", "contentHash", "payload"], "V23_AFFIX_DEFINITION");
     const id = v23String(entry.affixId, "V23_AFFIX_ID");
     const revision = v23Revision(entry.revision, "V23_AFFIX_REVISION");
+    validateV23ProjectAffixPayload(entry.payload, id, revision);
     const hash = v23HashOf({ affixId: id, revision, payload: entry.payload }, entry.contentHash, "V23_AFFIX_CONTENT_HASH");
     const revisions = affixRefs.get(id) ?? new Map<number, string>();
     if (revisions.has(revision)) throw new Error("V23_AFFIX_ID_REVISION_DUPLICATE");
@@ -1842,6 +1867,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
       localCopyOwners.set(copyId, currentSkuId);
       const ref = validateV23StableRef(entry.sourceRef, `${code}_SOURCE_REF`);
       if (!hasAffixRef(ref)) throw new Error(`${code}_SOURCE_REF_UNRESOLVED`);
+      validateV23ProjectAffixPayload(entry.payload, ref.id, ref.revision);
       v23HashOf({ localCopyId: copyId, sourceRef: ref, payload: entry.payload }, entry.copyHash, `${code}_COPY_HASH`);
       return;
     }
@@ -1850,7 +1876,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
   const skuIds = new Map<string, Set<number>>(); let currentSkuId = "";
   for (const value of skus) {
     const entry = v23Record(value, "V23_SKU");
-    v23ExactKeys(entry, ["skuId", "revision", "seriesId", "partId", "partRevision", "weightBandId", "match", "removedInheritedEntryIds", "addedEntryRefs", "localEntryCopies", "technologyRefs", "quality", "contentHash"], "V23_SKU");
+    v23ExactKeys(entry, ["skuId", "revision", "seriesId", "partId", "partRevision", "weightBandId", "match", "removedInheritedEntryIds", "addedEntryRefs", "localEntryCopies", "technologyRefs", "quality", "skuPatchIds", "modelIds", "defaultModelId", "displayOrder", "validationSummary", "status", "contentHash"], "V23_SKU");
     const skuId = v23String(entry.skuId, "V23_SKU_ID");
     currentSkuId = skuId;
     revisionCopyIds = new Set<string>();
@@ -1864,6 +1890,19 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     const part = partByIdAndRevision.get(partId)?.get(partRevision);
     if (!part || part.seriesId !== seriesId) throw new Error("V23_SKU_PART_UNRESOLVED");
     const weightBandId = v23String(entry.weightBandId, "V23_SKU_WEIGHT_BAND_ID");
+    const skuPatchIds = v23Array(entry.skuPatchIds, "V23_SKU_PATCH_IDS").map((id) => v23String(id, "V23_SKU_PATCH_ID"));
+    if (new Set(skuPatchIds).size !== skuPatchIds.length) throw new Error("V23_SKU_PATCH_ID_DUPLICATE");
+    const modelIds = v23Array(entry.modelIds, "V23_SKU_MODEL_IDS").map((id) => v23String(id, "V23_SKU_MODEL_ID"));
+    if (new Set(modelIds).size !== modelIds.length) throw new Error("V23_SKU_MODEL_ID_DUPLICATE");
+    if (entry.defaultModelId !== null && (!modelIds.includes(v23String(entry.defaultModelId, "V23_SKU_DEFAULT_MODEL_ID")))) throw new Error("V23_SKU_DEFAULT_MODEL_UNRESOLVED");
+    if (!Number.isSafeInteger(entry.displayOrder) || (entry.displayOrder as number) < 0) throw new Error("V23_SKU_DISPLAY_ORDER_INVALID");
+    for (const issue of v23Array(entry.validationSummary, "V23_SKU_VALIDATION_SUMMARY")) {
+      const summary = v23Record(issue, "V23_SKU_VALIDATION_ISSUE");
+      v23ExactKeys(summary, ["code", "severity", "gate", "state", "message"], "V23_SKU_VALIDATION_ISSUE");
+      v23String(summary.code, "V23_SKU_VALIDATION_CODE"); v23String(summary.message, "V23_SKU_VALIDATION_MESSAGE");
+      if (!(["INFO", "WARNING", "ERROR", "BLOCKER"] as const).includes(summary.severity as never) || !(["NONE", "REVIEW", "PUBLISH", "EXPORT"] as const).includes(summary.gate as never) || !(["OPEN", "ACKNOWLEDGED", "RESOLVED", "WAIVED", "STALE"] as const).includes(summary.state as never)) throw new Error("V23_SKU_VALIDATION_ISSUE_INVALID");
+    }
+    if (!(["draft", "approved", "published", "superseded"] as const).includes(entry.status as never)) throw new Error("V23_SKU_STATUS_INVALID");
     const match = v23Record(entry.match, "V23_SKU_MATCH");
     const status = v23String(match.status, "V23_SKU_MATCH_STATUS");
     const validateKey = (value: unknown, code: string) => {
@@ -1881,6 +1920,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
       v23Hash(template.contentHash, "V23_TEMPLATE_CONTENT_HASH");
       const key = validateKey(match.matchedKey, "V23_SKU_MATCHED_KEY");
       v23HashOf(key, match.inputFingerprint, "V23_SKU_INPUT_FINGERPRINT");
+      throw new Error("V23_TEMPLATE_REGISTRY_UNAVAILABLE");
     } else if (["INVALID_NO_MATCH", "INVALID_AMBIGUOUS"].includes(status)) {
       v23ExactKeys(match, ["status", "attemptedKey", "inputFingerprint"], "V23_SKU_MATCH");
       const key = validateKey(match.attemptedKey, "V23_SKU_ATTEMPTED_KEY");

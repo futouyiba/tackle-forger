@@ -82,7 +82,7 @@ SKU 显示“精确重量 + SKU 抽屉”；Model 显示型号并标明“实际
 - 搜索空间、启用modelVariantKey、每SKU数量、最低Affinity、warning接受、排序版本、截断；
 - 明示“硬 deny/缺 require 会被排除，Affinity 只排序”。
 
-结果按 SKU 分组、组内使用后端稳定 rank；前端和 AI 不得二次改序。候选展示 fingerprint、rankReasons、模板距离、硬兼容、Affinity 分轴、不变量偏离、warning 和 Trace。顶部展示枚举总数、合法数、排除分组、截断、输入 hash、耗时。
+结果按 SKU 分组、组内使用后端稳定 rank；前端和 AI 不得二次改序。v23候选展示 fingerprint、rankReasons、冻结的`functionTemplateRef`/输入指纹、硬兼容、Affinity 分轴、不变量偏离、warning 和 Trace；匹配、消歧和排序均不得使用模板距离。模板距离仅可在标为Schema v9/v22历史只读的迁移或Snapshot回放中展示。顶部展示枚举总数、合法数、排除分组、截断、输入 hash、耗时。
 
 默认对每个`SKU × enabledModelVariantKey`自动物化排名最高的合法候选：唯一命中旧Model时创建新revision，无命中新建Model，多重/歧义命中则跳过并报Issue，内容不变不创建空revision。用户通过范围、路线、数量、阈值或REVIEW_ON_CHANGE限制批量行为，也可显式改选/放弃。候选run保留审计；“放弃本次结果”不删除Series/SKU/Model/Trace。运行中Revision改变则superseded；失败或超时按requestId/idempotencyKey恢复。同输入、规则和算法必须同序，不使用常规random seed。
 

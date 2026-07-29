@@ -81,6 +81,7 @@ test("受治理边界覆盖命令、发布历史、审计与永久身份，且�
     { field: "v23SeriesPartRevisions", action: "只读：Phase A v23 Part revision 仅由受控迁移/后续专用命令写入" },
     { field: "v23SeriesPartHeads", action: "只读：Phase A v23 Part head 仅由受控迁移/后续专用命令写入" },
     { field: "v23SkuDrawerRevisions", action: "只读：Phase A v23 SKU revision 仅由受控迁移/后续专用命令写入" },
+    { field: "v23SkuDrawerHeads", action: "只读：Phase A v23 SKU head 仅由受控迁移/后续专用命令写入" },
     { field: "v23AffixDefinitions", action: "只读：Phase A v23 Affix definition 仅由受控迁移/后续专用命令写入" },
     { field: "v23MigrationSourceEvidence", action: "只读：Phase A v23 migration evidence 仅由受控迁移写入" },
     { field: "v23LegacyReadAdapters", action: "只读：Phase A v23 legacy adapter 仅由受控迁移写入" },

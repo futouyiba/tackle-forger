@@ -1727,10 +1727,10 @@ const V23_QUALITY_IDS = new Set(["quality_c_green", "quality_b_blue", "quality_a
 
 function validateV23ProjectAffixPayload(value: unknown, affixId: string, revision: number) {
   const payload = v23Record(value, "V23_AFFIX_PAYLOAD");
-  const common = ["name", "category", "itemPartId", "generationPolicy", "rarity", "valueScore", "tags", "description", "enabled", "operations", "passivePayload"];
+  const common = ["name", "category", "itemPartId", "semanticContributionKey", "stackingPolicy", "generationPolicy", "rarity", "valueScore", "tags", "description", "enabled", "operations", "passivePayload"];
   v23ExactKeys(payload, common, "V23_AFFIX_PAYLOAD");
-  v23String(payload.name, "V23_AFFIX_NAME"); v23String(payload.itemPartId, "V23_AFFIX_ITEM_PART"); v23String(payload.description, "V23_AFFIX_DESCRIPTION");
-  if (!(["attribute", "passive"] as const).includes(payload.category as never) || !(["normal", "technology_only", "style_only"] as const).includes(payload.generationPolicy as never) || !(["common", "uncommon", "rare", "ultra_rare", "epic"] as const).includes(payload.rarity as never) || !Number.isFinite(payload.valueScore) || typeof payload.enabled !== "boolean") throw new Error("V23_AFFIX_PAYLOAD_INVALID");
+  v23String(payload.name, "V23_AFFIX_NAME"); v23String(payload.itemPartId, "V23_AFFIX_ITEM_PART"); v23String(payload.semanticContributionKey, "V23_AFFIX_SEMANTIC_CONTRIBUTION_KEY"); v23String(payload.description, "V23_AFFIX_DESCRIPTION");
+  if (!(["attribute", "passive"] as const).includes(payload.category as never) || !(["dedupe", "stack"] as const).includes(payload.stackingPolicy as never) || !(["normal", "technology_only", "style_only"] as const).includes(payload.generationPolicy as never) || !(["common", "uncommon", "rare", "ultra_rare", "epic"] as const).includes(payload.rarity as never) || !Number.isFinite(payload.valueScore) || typeof payload.enabled !== "boolean") throw new Error("V23_AFFIX_PAYLOAD_INVALID");
   const tags = v23Array(payload.tags, "V23_AFFIX_TAGS").map((tag) => v23String(tag, "V23_AFFIX_TAG")); if (new Set(tags).size !== tags.length) throw new Error("V23_AFFIX_TAG_DUPLICATE");
   const operations = v23Array(payload.operations, "V23_AFFIX_OPERATIONS"); const ids = new Set<string>(); const indexes = new Set<number>();
   for (const value of operations) {
@@ -1754,6 +1754,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
   const parts = v23Array(state.v23SeriesPartRevisions, "V23_SERIES_PARTS");
   const heads = v23Array(state.v23SeriesPartHeads, "V23_SERIES_PART_HEADS");
   const skus = v23Array(state.v23SkuDrawerRevisions, "V23_SKUS");
+  const skuHeads = v23Array(state.v23SkuDrawerHeads, "V23_SKU_HEADS");
   const affixes = v23Array(state.v23AffixDefinitions, "V23_AFFIX_DEFINITIONS");
   const evidence = v23Array(state.v23MigrationSourceEvidence, "V23_SOURCE_EVIDENCE");
   const adapters = v23Array(state.v23LegacyReadAdapters, "V23_LEGACY_ADAPTERS");
@@ -1895,6 +1896,7 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     const part = partByIdAndRevision.get(partId)?.get(partRevision);
     if (!part || part.seriesId !== seriesId) throw new Error("V23_SKU_PART_UNRESOLVED");
     const weightBandId = v23String(entry.weightBandId, "V23_SKU_WEIGHT_BAND_ID");
+    if (!v23Array(part.weightBandIds, "V23_SKU_PART_WEIGHT_BANDS").includes(weightBandId)) throw new Error("V23_SKU_WEIGHT_BAND_UNDECLARED");
     const skuPatchIds = v23Array(entry.skuPatchIds, "V23_SKU_PATCH_IDS").map((id) => v23String(id, "V23_SKU_PATCH_ID"));
     if (new Set(skuPatchIds).size !== skuPatchIds.length) throw new Error("V23_SKU_PATCH_ID_DUPLICATE");
     const modelIds = v23Array(entry.modelIds, "V23_SKU_MODEL_IDS").map((id) => v23String(id, "V23_SKU_MODEL_ID"));
@@ -1957,6 +1959,19 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     else throw new Error("V23_SKU_QUALITY_STATUS_INVALID");
     v23HashOf(v23SkuInput(entry), entry.contentHash, "V23_SKU_CONTENT_HASH");
   }
+
+  const seenSkuHeads = new Set<string>();
+  for (const value of skuHeads) {
+    const head = v23Record(value, "V23_SKU_HEAD");
+    v23ExactKeys(head, ["skuId", "revision"], "V23_SKU_HEAD");
+    const skuId = v23String(head.skuId, "V23_SKU_HEAD_ID");
+    const revision = v23Revision(head.revision, "V23_SKU_HEAD_REVISION");
+    if (seenSkuHeads.has(skuId)) throw new Error("V23_SKU_HEAD_DUPLICATE");
+    seenSkuHeads.add(skuId);
+    if (!skuIds.get(skuId)?.has(revision)) throw new Error("V23_SKU_HEAD_UNRESOLVED");
+  }
+  if (skus.length && skuHeads.length === 0) throw new Error("V23_SKU_HEAD_REQUIRED");
+  for (const skuId of skuIds.keys()) if (!seenSkuHeads.has(skuId)) throw new Error("V23_SKU_HEAD_REQUIRED");
 
   const evidenceIds = new Set<string>();
   const evidencePayloads = new Map<string, Record<string, unknown>>();
@@ -2034,7 +2049,7 @@ function migrateV22ToV23(input: MutableWorkspace, context: MigrationContext): Mu
   const evidence = existingEvidence.some((entry) => entry.sourceEvidenceId === sourceEvidenceId)
     ? existingEvidence
     : [...existingEvidence, sourceEvidence];
-  if (context.initialSchemaVersion === 22 && ["v23SeriesPartRevisions", "v23SeriesPartHeads", "v23SkuDrawerRevisions", "v23AffixDefinitions", "v23MigrationSourceEvidence", "v23LegacyReadAdapters"].some((key) => Object.prototype.hasOwnProperty.call(input, key))) {
+  if (context.initialSchemaVersion === 22 && ["v23SeriesPartRevisions", "v23SeriesPartHeads", "v23SkuDrawerRevisions", "v23SkuDrawerHeads", "v23AffixDefinitions", "v23MigrationSourceEvidence", "v23LegacyReadAdapters"].some((key) => Object.prototype.hasOwnProperty.call(input, key))) {
     throw new Error("V23_MIGRATION_PARTIAL_STATE_CONFLICT");
   }
 
@@ -2105,6 +2120,7 @@ function migrateV22ToV23(input: MutableWorkspace, context: MigrationContext): Mu
     v23SeriesPartRevisions: [],
     v23SeriesPartHeads: [],
     v23SkuDrawerRevisions: [],
+    v23SkuDrawerHeads: [],
     v23AffixDefinitions: [],
     v23MigrationSourceEvidence: evidence,
     v23LegacyReadAdapters: adapters,

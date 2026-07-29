@@ -239,7 +239,7 @@ test("已认证整包 PUT 不能绕过 Series 领域命令", { concurrency: fals
 test("已认证整包 PUT 不能删除或重写 Phase A v23 治理根，并保持读取结果不变", { concurrency: false }, async () => {
   withTrustedProxy();
   const fields = [
-    "v23SeriesPartRevisions", "v23SeriesPartHeads", "v23SkuDrawerRevisions",
+    "v23SeriesPartRevisions", "v23SeriesPartHeads", "v23SkuDrawerRevisions", "v23SkuDrawerHeads",
     "v23AffixDefinitions", "v23MigrationSourceEvidence", "v23LegacyReadAdapters",
   ] as const;
   for (const [index, field] of fields.entries()) {

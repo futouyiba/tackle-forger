@@ -1170,6 +1170,7 @@ export interface SeriesPartRevision {
 }
 
 export interface SeriesPartHeadRef { seriesId: string; partId: string; revision: number; }
+export interface V23SkuDrawerHeadRef { skuId: string; revision: number; }
 
 export type V23ProjectAttributeOperation =
   | { operationId: string; operationIndex: number; sourceAffixId: string; sourceAffixRevision: number; parameterKey: string; operation: "percent_adjust" | "flat_adjust"; direction: "increase" | "decrease"; magnitude: number }
@@ -1195,8 +1196,8 @@ export interface V23ProjectPassivePayload {
 }
 
 export type V23ProjectAffixPayload =
-  | { name: string; category: "attribute"; itemPartId: string; generationPolicy: AffixGenerationPolicy; rarity: AffixRarity; valueScore: number; tags: string[]; description: string; enabled: boolean; operations: V23ProjectAttributeOperation[]; passivePayload: null }
-  | { name: string; category: "passive"; itemPartId: string; generationPolicy: AffixGenerationPolicy; rarity: AffixRarity; valueScore: number; tags: string[]; description: string; enabled: boolean; operations: []; passivePayload: V23ProjectPassivePayload };
+  | { name: string; category: "attribute"; itemPartId: string; semanticContributionKey: string; stackingPolicy: "dedupe" | "stack"; generationPolicy: AffixGenerationPolicy; rarity: AffixRarity; valueScore: number; tags: string[]; description: string; enabled: boolean; operations: V23ProjectAttributeOperation[]; passivePayload: null }
+  | { name: string; category: "passive"; itemPartId: string; semanticContributionKey: string; stackingPolicy: "dedupe" | "stack"; generationPolicy: AffixGenerationPolicy; rarity: AffixRarity; valueScore: number; tags: string[]; description: string; enabled: boolean; operations: []; passivePayload: V23ProjectPassivePayload };
 
 export interface V23AffixDefinition {
   affixId: string;
@@ -2956,6 +2957,7 @@ export interface WorkspaceState {
   v23SeriesPartRevisions: SeriesPartRevision[];
   v23SeriesPartHeads: SeriesPartHeadRef[];
   v23SkuDrawerRevisions: SkuDrawerRevision[];
+  v23SkuDrawerHeads: V23SkuDrawerHeadRef[];
   v23AffixDefinitions: V23AffixDefinition[];
   v23MigrationSourceEvidence: V23MigrationSourceEvidence[];
   v23LegacyReadAdapters: V23LegacyReadAdapter[];

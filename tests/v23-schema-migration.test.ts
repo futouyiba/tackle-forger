@@ -18,6 +18,7 @@ function legacyInput(version: 9 | 22) {
   delete state.v23SeriesPartRevisions;
   delete state.v23SeriesPartHeads;
   delete state.v23SkuDrawerRevisions;
+  delete state.v23SkuDrawerHeads;
   delete state.v23AffixDefinitions;
   delete state.v23MigrationSourceEvidence;
   delete state.v23LegacyReadAdapters;
@@ -39,7 +40,7 @@ const withSkuHashes = <T extends object>(sku: T) => {
 };
 const sixKey = (weightBandId = "band:one"): { partType: "rod"; weightBandId: string; fishingMethodId: string; materialTypeId: string; functionProfileId: string; functionIntensity: 1 | 2 | 3 } => ({ partType: "rod", weightBandId, fishingMethodId: "method:lure", materialTypeId: "material:carbon", functionProfileId: "function:cast", functionIntensity: 2 });
 const validMatch = (key = sixKey()) => ({ status: "VALID" as const, functionTemplateRef: { templateId: "template:one", revisionId: "r1", contentHash: hash("template") }, matchedKey: key, inputFingerprint: hash(key) });
-const affixPayload = (id = "affix:project", revision = 1) => ({ name: "Project", category: "attribute" as const, itemPartId: "part:rod", generationPolicy: "normal" as const, rarity: "common" as const, valueScore: 1, tags: [], description: "project", enabled: true, operations: [{ operationId: "op:one", operationIndex: 0, sourceAffixId: id, sourceAffixRevision: revision, parameterKey: "power", operation: "flat_adjust" as const, direction: "increase" as const, magnitude: 1 }], passivePayload: null });
+const affixPayload = (id = "affix:project", revision = 1) => ({ name: "Project", category: "attribute" as const, itemPartId: "part:rod", semanticContributionKey: "power", stackingPolicy: "dedupe" as const, generationPolicy: "normal" as const, rarity: "common" as const, valueScore: 1, tags: [], description: "project", enabled: true, operations: [{ operationId: "op:one", operationIndex: 0, sourceAffixId: id, sourceAffixRevision: revision, parameterKey: "power", operation: "flat_adjust" as const, direction: "increase" as const, magnitude: 1 }], passivePayload: null });
 
 function directV23State(partCount = 1) {
   const state = migrateWorkspaceState(legacyInput(22));
@@ -50,7 +51,7 @@ function directV23State(partCount = 1) {
   const parts = Array.from({ length: partCount }, (_, index) => withPartHashes({
     partId: `part:${index}`, seriesId, revision: 1,
     partType: (["rod", "reel", "line", "rod"] as const)[index]!,
-    fishingMethodId: "method:lure", materialTypeId: "material:carbon", functionProfileId: "function:cast", functionIntensity: 2 as const, weightBandIds: [],
+    fishingMethodId: "method:lure", materialTypeId: "material:carbon", functionProfileId: "function:cast", functionIntensity: 2 as const, weightBandIds: ["band:one"],
     defaultEntryRefs: [], technologyRefs: [], inputFingerprint: "", contentHash: "",
   }));
   state.v23SeriesPartRevisions = parts;
@@ -64,6 +65,7 @@ function directV23State(partCount = 1) {
     removedInheritedEntryIds: [], addedEntryRefs: [{ kind: "STABLE_AFFIX_REF" as const, ref }], localEntryCopies: [], technologyRefs: [],
     quality: { status: "MATCHED" as const, qualityId: "quality_a_purple" as const }, skuPatchIds: [], modelIds: [], defaultModelId: null, displayOrder: 0, validationSummary: [], status: "draft", contentHash: "",
   })];
+  state.v23SkuDrawerHeads = [{ skuId: "sku:one", revision: 1 }];
   return state;
 }
 
@@ -173,7 +175,7 @@ test("partial v23 state on a v22 payload is rejected instead of completing a mix
   const before = structuredClone(legacy);
   assert.throws(() => migrateWorkspaceState(legacy), /V23_MIGRATION_PARTIAL_STATE_CONFLICT/);
   assert.deepEqual(legacy, before);
-  for (const [key, value] of Object.entries({ v23SeriesPartRevisions: [], v23SkuDrawerRevisions: null, v23AffixDefinitions: {}, v23MigrationSourceEvidence: [], v23LegacyReadAdapters: [] })) {
+  for (const [key, value] of Object.entries({ v23SeriesPartRevisions: [], v23SkuDrawerRevisions: null, v23SkuDrawerHeads: [], v23AffixDefinitions: {}, v23MigrationSourceEvidence: [], v23LegacyReadAdapters: [] })) {
     const malformed = legacyInput(22);
     malformed[key] = value;
     const unchanged = structuredClone(malformed);
@@ -428,7 +430,7 @@ test("v23 closes project affix, local copy, SKU lifecycle, and Phase-A template 
     state.v23SkuDrawerRevisions[0] = withSkuHashes(state.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
   };
   const passivePayload = () => ({
-    name: "Passive", category: "passive" as const, itemPartId: "part:rod", generationPolicy: "normal" as const, rarity: "common" as const,
+    name: "Passive", category: "passive" as const, itemPartId: "part:rod", semanticContributionKey: "skill:one", stackingPolicy: "stack" as const, generationPolicy: "normal" as const, rarity: "common" as const,
     valueScore: 1, tags: [], description: "passive", enabled: true, operations: [] as [],
     passivePayload: { skillId: "skill:one", name: "Skill", itemPartId: "part:rod", triggerType: "manual", triggerDescription: "trigger", effectTarget: "target", effectLogicDescription: "effect", exampleParameters: { enabled: true, power: 1, label: "x" }, durationDescription: "duration", cooldownDescription: "cooldown", resetDescription: "reset", stackingDescription: "stacking", playerDescription: "player", simulatorReferenceKey: null },
   });
@@ -529,4 +531,43 @@ test("v23 affix references must match the authoritative Part itemPartId", () => 
   assert.throws(() => migrateWorkspaceState(localPayload), /V23_SKU_LOCAL_COPY_ITEM_PART_MISMATCH/);
 
   assert.doesNotThrow(() => migrateWorkspaceState(directV23State()));
+});
+
+test("v23 closes SKU heads, affix contribution metadata, and Part weight-band membership", () => {
+  const missingHead = directV23State();
+  missingHead.v23SkuDrawerHeads = [];
+  assert.throws(() => migrateWorkspaceState(missingHead), /V23_SKU_HEAD_REQUIRED/);
+
+  const duplicateHead = directV23State();
+  duplicateHead.v23SkuDrawerHeads.push({ skuId: "sku:one", revision: 1 });
+  assert.throws(() => migrateWorkspaceState(duplicateHead), /V23_SKU_HEAD_DUPLICATE/);
+
+  const danglingHead = directV23State();
+  danglingHead.v23SkuDrawerHeads[0]!.revision = 99;
+  assert.throws(() => migrateWorkspaceState(danglingHead), /V23_SKU_HEAD_UNRESOLVED/);
+
+  const historicalHead = directV23State();
+  historicalHead.v23SkuDrawerRevisions.push(withSkuHashes({ ...historicalHead.v23SkuDrawerRevisions[0]!, revision: 2 }) as SkuDrawerRevision);
+  assert.doesNotThrow(() => migrateWorkspaceState(historicalHead));
+
+  const missingContribution = directV23State();
+  delete (missingContribution.v23AffixDefinitions[0]!.payload as unknown as Record<string, unknown>).semanticContributionKey;
+  missingContribution.v23AffixDefinitions[0]!.contentHash = hash({ affixId: "affix:project", revision: 1, payload: missingContribution.v23AffixDefinitions[0]!.payload });
+  assert.throws(() => migrateWorkspaceState(missingContribution), /V23_AFFIX_PAYLOAD_SCHEMA_INVALID/);
+
+  const invalidStacking = directV23State();
+  (invalidStacking.v23AffixDefinitions[0]!.payload as unknown as Record<string, unknown>).stackingPolicy = "implicit";
+  invalidStacking.v23AffixDefinitions[0]!.contentHash = hash({ affixId: "affix:project", revision: 1, payload: invalidStacking.v23AffixDefinitions[0]!.payload });
+  assert.throws(() => migrateWorkspaceState(invalidStacking), /V23_AFFIX_PAYLOAD_INVALID/);
+
+  const missingBand = directV23State();
+  missingBand.v23SkuDrawerRevisions[0]!.weightBandId = "band:missing";
+  missingBand.v23SkuDrawerRevisions[0] = withSkuHashes(missingBand.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.throws(() => migrateWorkspaceState(missingBand), /V23_SKU_WEIGHT_BAND_UNDECLARED/);
+
+  const historicalBand = directV23State();
+  historicalBand.v23SeriesPartRevisions.push(withPartHashes({ ...historicalBand.v23SeriesPartRevisions[0]!, revision: 2, weightBandIds: ["band:two"] }) as SeriesPartRevision);
+  historicalBand.v23SkuDrawerRevisions.push(withSkuHashes({ ...historicalBand.v23SkuDrawerRevisions[0]!, revision: 2, partRevision: 2, weightBandId: "band:two" }) as SkuDrawerRevision);
+  historicalBand.v23SkuDrawerHeads = [{ skuId: "sku:one", revision: 2 }];
+  assert.doesNotThrow(() => migrateWorkspaceState(historicalBand));
 });

@@ -3,6 +3,7 @@ import test from "node:test";
 import { CURRENT_WORKSPACE_SCHEMA_VERSION, migrateWorkspaceState } from "../lib/migrations";
 import { verifySnapshotIntegrity } from "../lib/publishing";
 import { deterministicHash } from "../lib/rule-kernel";
+import { jcsSha256Hex } from "../lib/canonical-json";
 import { createSeedState } from "../lib/seed";
 import type {
   SeriesPartRevision,
@@ -22,28 +23,43 @@ function legacyInput(version: 9 | 22) {
   return state;
 }
 
-const hash = (value: string) => value.repeat(64).slice(0, 64);
+const hash = (value: unknown) => jcsSha256Hex(value);
+const withPartHashes = <T extends object>(part: T) => {
+  const input = { ...(part as Record<string, unknown>) };
+  delete input.inputFingerprint;
+  delete input.contentHash;
+  const inputFingerprint = hash(input);
+  return { ...input, inputFingerprint, contentHash: hash({ ...input, inputFingerprint }) } as T;
+};
+const withSkuHashes = <T extends object>(sku: T) => {
+  const input = { ...(sku as Record<string, unknown>) };
+  delete input.contentHash;
+  return { ...input, contentHash: hash(input) } as T;
+};
+const sixKey = (weightBandId = "band:one"): { partType: "rod"; weightBandId: string; fishingMethodId: string; materialTypeId: string; functionProfileId: string; functionIntensity: 1 | 2 | 3 } => ({ partType: "rod", weightBandId, fishingMethodId: "method:lure", materialTypeId: "material:carbon", functionProfileId: "function:cast", functionIntensity: 2 });
+const validMatch = (key = sixKey()) => ({ status: "VALID" as const, functionTemplateRef: { templateId: "template:one", revisionId: "r1", contentHash: hash("template") }, matchedKey: key, inputFingerprint: hash(key) });
 
 function directV23State(partCount = 1) {
   const state = migrateWorkspaceState(legacyInput(22));
-  const affix = { affixId: "affix:project", revision: 1, contentHash: hash("a"), payload: { preserved: true } };
+  const affixPayload = { preserved: true };
+  const affix = { affixId: "affix:project", revision: 1, contentHash: hash({ affixId: "affix:project", revision: 1, payload: affixPayload }), payload: affixPayload };
   const ref = { id: affix.affixId, revision: affix.revision, contentHash: affix.contentHash };
-  const parts = Array.from({ length: partCount }, (_, index) => ({
+  const parts = Array.from({ length: partCount }, (_, index) => withPartHashes({
     partId: `part:${index}`, seriesId: "series:one", revision: 1,
     partType: (["rod", "reel", "line", "rod"] as const)[index]!,
     fishingMethodId: "method:lure", materialTypeId: "material:carbon", functionProfileId: "function:cast", functionIntensity: 2 as const,
-    defaultEntryRefs: [], technologyRefs: [], inputFingerprint: hash("b"), contentHash: hash("c"),
+    defaultEntryRefs: [], technologyRefs: [], inputFingerprint: "", contentHash: "",
   }));
   state.v23SeriesPartRevisions = parts;
   state.v23AffixDefinitions = [affix];
   state.v23MigrationSourceEvidence = [];
   state.v23LegacyReadAdapters = [];
-  state.v23SkuDrawerRevisions = [{
+  state.v23SkuDrawerRevisions = [withSkuHashes({
     skuId: "sku:one", revision: 1, seriesId: "series:one", partId: "part:0", weightBandId: "band:one",
-    functionTemplateRef: { templateId: "template:one", revisionId: "r1", contentHash: hash("d") }, inputFingerprint: hash("e"), validity: "VALID",
-    removedInheritedEntryIds: [], addedEntryRefs: [{ kind: "STABLE_AFFIX_REF", ref }], localEntryCopies: [], technologyRefs: [],
-    recommendedQualityId: "quality_a_purple", selectedQualityId: "quality_a_purple", qualityOverrideReason: null, contentHash: hash("f"),
-  }];
+    partRevision: 1, match: validMatch(),
+    removedInheritedEntryIds: [], addedEntryRefs: [{ kind: "STABLE_AFFIX_REF" as const, ref }], localEntryCopies: [], technologyRefs: [],
+    quality: { status: "MATCHED" as const, qualityId: "quality_a_purple" as const }, contentHash: "",
+  })];
   return state;
 }
 
@@ -52,19 +68,19 @@ test("v23 closed carriers express Parts, SKU drawers, and non-interchangeable af
     partId: "part:rod", seriesId: "series:one", revision: 1, partType: "rod",
     fishingMethodId: "method:lure", materialTypeId: "material:carbon",
     functionProfileId: "function:cast", functionIntensity: 2,
-    defaultEntryRefs: [{ id: "affix:project", revision: 1, contentHash: "a".repeat(64) }],
+    defaultEntryRefs: [{ id: "affix:project", revision: 1, contentHash: hash({ affixId: "affix:project", revision: 1, payload: { preserved: true } }) }],
     technologyRefs: [], inputFingerprint: "b".repeat(64), contentHash: "c".repeat(64),
   };
   const definition: V23AffixDefinition = {
-    affixId: "affix:project", revision: 1, contentHash: "a".repeat(64), payload: { preserved: true },
+    affixId: "affix:project", revision: 1, contentHash: hash({ affixId: "affix:project", revision: 1, payload: { preserved: true } }), payload: { preserved: true },
   };
   const sku: SkuDrawerRevision = {
-    skuId: "sku:one", revision: 1, seriesId: part.seriesId, partId: part.partId,
-    weightBandId: "band:one", functionTemplateRef: { templateId: "template:one", revisionId: "r1", contentHash: "d".repeat(64) },
-    inputFingerprint: "e".repeat(64), validity: "VALID", removedInheritedEntryIds: [],
+    skuId: "sku:one", revision: 1, seriesId: part.seriesId, partId: part.partId, partRevision: 1,
+    weightBandId: "band:one", match: { status: "NEEDS_MIGRATION_REVIEW" },
+    removedInheritedEntryIds: [],
     addedEntryRefs: [{ kind: "STABLE_AFFIX_REF", ref: { id: definition.affixId, revision: definition.revision, contentHash: definition.contentHash } }],
-    localEntryCopies: [{ kind: "LOCAL_AFFIX_COPY", localCopyId: "copy:one", sourceRef: { id: definition.affixId, revision: 1, contentHash: definition.contentHash }, payload: { value: 1 }, copyHash: "f".repeat(64) }],
-    technologyRefs: [], recommendedQualityId: null, selectedQualityId: null, qualityOverrideReason: null,
+    localEntryCopies: [{ kind: "LOCAL_AFFIX_COPY", localCopyId: "copy:one", sourceRef: { id: definition.affixId, revision: 1, contentHash: definition.contentHash }, payload: { value: 1 }, copyHash: hash({ localCopyId: "copy:one", sourceRef: { id: definition.affixId, revision: 1, contentHash: definition.contentHash }, payload: { value: 1 } }) }],
+    technologyRefs: [], quality: { status: "UNASSESSED" },
     contentHash: "0".repeat(64),
   };
   assert.equal(sku.partId, part.partId);
@@ -146,18 +162,18 @@ test("schema v23 directly validates one, two, and three unique enabled Parts", (
 
 test("schema v23 rejects duplicate or overlong Part groups and a SKU without its own Series Part", () => {
   const duplicate = directV23State(2);
-  (duplicate.v23SeriesPartRevisions[1] as { partType: string }).partType = "rod";
+  duplicate.v23SeriesPartRevisions[1] = withPartHashes({ ...duplicate.v23SeriesPartRevisions[1]!, partType: "rod" as const }) as SeriesPartRevision;
   assert.throws(() => migrateWorkspaceState(duplicate), /V23_SERIES_PART_TYPE_DUPLICATE/);
 
   const overlong = directV23State(4);
   assert.throws(() => migrateWorkspaceState(overlong), /V23_SERIES_PART_COUNT_INVALID/);
 
   const missing = directV23State();
-  missing.v23SkuDrawerRevisions[0]!.partId = "part:missing";
+  missing.v23SkuDrawerRevisions[0] = withSkuHashes({ ...missing.v23SkuDrawerRevisions[0]!, partId: "part:missing", match: { status: "NEEDS_MIGRATION_REVIEW" as const } });
   assert.throws(() => migrateWorkspaceState(missing), /V23_SKU_PART_UNRESOLVED/);
 
   const crossSeries = directV23State();
-  crossSeries.v23SkuDrawerRevisions[0]!.seriesId = "series:other";
+  crossSeries.v23SkuDrawerRevisions[0] = withSkuHashes({ ...crossSeries.v23SkuDrawerRevisions[0]!, seriesId: "series:other", match: { status: "NEEDS_MIGRATION_REVIEW" as const } });
   assert.throws(() => migrateWorkspaceState(crossSeries), /V23_SKU_PART_UNRESOLVED/);
 });
 
@@ -175,8 +191,8 @@ test("schema v23 rejects malformed revisions, hashes, discriminated entries, and
   assert.throws(() => migrateWorkspaceState(union), /V23_SKU_ADDED_ENTRY_REF_SCHEMA_INVALID/);
 
   const quality = directV23State();
-  quality.v23SkuDrawerRevisions[0]!.selectedQualityId = "quality_s_orange";
-  assert.throws(() => migrateWorkspaceState(quality), /V23_QUALITY_OVERRIDE_REASON_REQUIRED/);
+  quality.v23SkuDrawerRevisions[0]!.quality = { status: "MATCHED", qualityId: "bogus" } as never;
+  assert.throws(() => migrateWorkspaceState(quality), /V23_SKU_QUALITY_ID_INVALID/);
 
   const localOnAddedPath = directV23State();
   localOnAddedPath.v23SkuDrawerRevisions[0]!.addedEntryRefs = [{
@@ -193,7 +209,7 @@ test("schema v23 rejects malformed revisions, hashes, discriminated entries, and
 test("schema v23 rejects duplicate identities and malformed adapter/source-evidence closure", () => {
   const duplicateSku = directV23State();
   duplicateSku.v23SkuDrawerRevisions.push(structuredClone(duplicateSku.v23SkuDrawerRevisions[0]!));
-  assert.throws(() => migrateWorkspaceState(duplicateSku), /V23_SKU_ID_DUPLICATE/);
+  assert.throws(() => migrateWorkspaceState(duplicateSku), /V23_SKU_ID_REVISION_DUPLICATE/);
 
   const malformedEvidence = directV23State();
   malformedEvidence.v23MigrationSourceEvidence = [{ sourceEvidenceId: "source:one", sourceSchemaVersion: 22, rawWorkspacePayload: { x: 1 }, rawWorkspacePayloadHash: hash("a"), extra: true } as never];
@@ -213,21 +229,108 @@ test("v23 identity resolution remains unambiguous when stable IDs contain old ke
   state.v23SeriesPartRevisions[0]!.partId = "beta:part:one";
   state.v23SkuDrawerRevisions[0]!.seriesId = "series:alpha";
   state.v23SkuDrawerRevisions[0]!.partId = "beta:part:one";
+  state.v23SkuDrawerRevisions[0]!.match = { status: "NEEDS_MIGRATION_REVIEW" };
   state.v23SeriesPartRevisions.push({
     ...structuredClone(state.v23SeriesPartRevisions[0]!),
     seriesId: "series:alpha:beta",
     partId: "part:one",
     partType: "reel",
   });
-  const secondAffix = { affixId: "affix:project@revision:1", revision: 1, contentHash: hash("b"), payload: { second: true } };
+  const secondPayload = { second: true };
+  const secondAffix = { affixId: "affix:project@revision:1", revision: 1, contentHash: hash({ affixId: "affix:project@revision:1", revision: 1, payload: secondPayload }), payload: secondPayload };
   state.v23AffixDefinitions.push(secondAffix);
   state.v23SeriesPartRevisions[0]!.defaultEntryRefs = [
-    { id: "affix:project", revision: 1, contentHash: hash("a") },
+    { id: "affix:project", revision: 1, contentHash: state.v23AffixDefinitions[0]!.contentHash },
     { id: secondAffix.affixId, revision: secondAffix.revision, contentHash: secondAffix.contentHash },
   ];
   state.v23SkuDrawerRevisions[0]!.addedEntryRefs = [{
     kind: "STABLE_AFFIX_REF",
     ref: { id: secondAffix.affixId, revision: secondAffix.revision, contentHash: secondAffix.contentHash },
   }];
+  state.v23SeriesPartRevisions[0] = withPartHashes(state.v23SeriesPartRevisions[0]!) as SeriesPartRevision;
+  state.v23SeriesPartRevisions[1] = withPartHashes(state.v23SeriesPartRevisions[1]!) as SeriesPartRevision;
+  state.v23SkuDrawerRevisions[0] = withSkuHashes(state.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
   assert.equal(migrateWorkspaceState(state).v23SeriesPartRevisions.length, 2);
+});
+
+test("v23 recomputes content identities and accepts only non-conflicting historical revisions", () => {
+  const tampered = directV23State();
+  (tampered.v23AffixDefinitions[0]!.payload as { preserved: boolean }).preserved = false;
+  assert.throws(() => migrateWorkspaceState(tampered), /V23_AFFIX_CONTENT_HASH_MISMATCH/);
+
+  const conflicting = directV23State();
+  conflicting.v23AffixDefinitions.push({ ...conflicting.v23AffixDefinitions[0]!, payload: { different: true }, contentHash: hash({ affixId: "affix:project", revision: 1, payload: { different: true } }) });
+  assert.throws(() => migrateWorkspaceState(conflicting), /V23_AFFIX_ID_REVISION_DUPLICATE/);
+
+  const historical = directV23State();
+  historical.v23SeriesPartRevisions.push(withPartHashes({ ...historical.v23SeriesPartRevisions[0]!, revision: 2, functionIntensity: 3 }) as SeriesPartRevision);
+  historical.v23SkuDrawerRevisions.push(withSkuHashes({ ...historical.v23SkuDrawerRevisions[0]!, revision: 2, partRevision: 2, match: validMatch({ ...sixKey(), functionIntensity: 3 }) }) as SkuDrawerRevision);
+  assert.equal(migrateWorkspaceState(historical).v23SeriesPartRevisions.length, 2);
+
+  const forgedMatch = directV23State();
+  forgedMatch.v23SkuDrawerRevisions[0]!.match = validMatch({ ...sixKey(), functionIntensity: 3 });
+  forgedMatch.v23SkuDrawerRevisions[0] = withSkuHashes(forgedMatch.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.throws(() => migrateWorkspaceState(forgedMatch), /V23_SKU_MATCHED_KEY_MISMATCH/);
+
+  const invalidWithTemplate = directV23State();
+  invalidWithTemplate.v23SkuDrawerRevisions[0]!.match = { status: "INVALID_NO_MATCH", functionTemplateRef: { templateId: "x", revisionId: "1", contentHash: hash("x") } } as never;
+  invalidWithTemplate.v23SkuDrawerRevisions[0] = withSkuHashes(invalidWithTemplate.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.throws(() => migrateWorkspaceState(invalidWithTemplate), /V23_SKU_MATCH_SCHEMA_INVALID/);
+});
+
+test("v23 closes quality, technology, source-evidence, and adapter chains", () => {
+  const fingerprintIsolation = directV23State();
+  const beforeFingerprint = (fingerprintIsolation.v23SkuDrawerRevisions[0]!.match as { inputFingerprint: string }).inputFingerprint;
+  const beforeContent = fingerprintIsolation.v23SkuDrawerRevisions[0]!.contentHash;
+  fingerprintIsolation.v23SkuDrawerRevisions[0]!.quality = { status: "NO_RECOMMENDATION", qualityId: "quality_a_purple", reason: "manual evidence" };
+  fingerprintIsolation.v23SkuDrawerRevisions[0] = withSkuHashes(fingerprintIsolation.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.equal((fingerprintIsolation.v23SkuDrawerRevisions[0]!.match as { inputFingerprint: string }).inputFingerprint, beforeFingerprint);
+  assert.notEqual(fingerprintIsolation.v23SkuDrawerRevisions[0]!.contentHash, beforeContent);
+  assert.deepEqual(migrateWorkspaceState(fingerprintIsolation).v23SkuDrawerRevisions, fingerprintIsolation.v23SkuDrawerRevisions);
+
+  const affixIsolation = directV23State();
+  const affixFingerprint = (affixIsolation.v23SkuDrawerRevisions[0]!.match as { inputFingerprint: string }).inputFingerprint;
+  affixIsolation.v23AffixDefinitions[0]!.payload = { preserved: "changed" };
+  affixIsolation.v23AffixDefinitions[0]!.contentHash = hash({ affixId: "affix:project", revision: 1, payload: affixIsolation.v23AffixDefinitions[0]!.payload });
+  affixIsolation.v23SkuDrawerRevisions[0]!.addedEntryRefs[0]!.ref.contentHash = affixIsolation.v23AffixDefinitions[0]!.contentHash;
+  affixIsolation.v23SkuDrawerRevisions[0] = withSkuHashes(affixIsolation.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.equal((affixIsolation.v23SkuDrawerRevisions[0]!.match as { inputFingerprint: string }).inputFingerprint, affixFingerprint);
+  assert.deepEqual(migrateWorkspaceState(affixIsolation).v23SkuDrawerRevisions, affixIsolation.v23SkuDrawerRevisions);
+
+  const attempted = directV23State();
+  const key = sixKey();
+  attempted.v23SkuDrawerRevisions[0]!.match = { status: "INVALID_NO_MATCH", attemptedKey: key, inputFingerprint: hash(key) };
+  attempted.v23SkuDrawerRevisions[0] = withSkuHashes(attempted.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.deepEqual(migrateWorkspaceState(attempted).v23SkuDrawerRevisions, attempted.v23SkuDrawerRevisions);
+  attempted.v23SkuDrawerRevisions[0]!.match = { status: "NEEDS_MIGRATION_REVIEW", attemptedKey: key } as never;
+  attempted.v23SkuDrawerRevisions[0] = withSkuHashes(attempted.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.throws(() => migrateWorkspaceState(attempted), /V23_SKU_MATCH_SCHEMA_INVALID/);
+
+  const quality = directV23State();
+  quality.v23SkuDrawerRevisions[0]!.quality = { status: "MATCHED", qualityId: "quality_unknown" } as never;
+  quality.v23SkuDrawerRevisions[0] = withSkuHashes(quality.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.throws(() => migrateWorkspaceState(quality), /V23_SKU_QUALITY_ID_INVALID/);
+
+  const incompleteNoRecommendation = directV23State();
+  incompleteNoRecommendation.v23SkuDrawerRevisions[0]!.quality = { status: "NO_RECOMMENDATION", qualityId: "quality_unknown", reason: "" } as never;
+  incompleteNoRecommendation.v23SkuDrawerRevisions[0] = withSkuHashes(incompleteNoRecommendation.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.throws(() => migrateWorkspaceState(incompleteNoRecommendation), /V23_SKU_QUALITY_(ID_INVALID|INVALID)/);
+  const missingNoRecommendationReason = directV23State();
+  missingNoRecommendationReason.v23SkuDrawerRevisions[0]!.quality = { status: "NO_RECOMMENDATION", qualityId: "quality_a_purple" } as never;
+  missingNoRecommendationReason.v23SkuDrawerRevisions[0] = withSkuHashes(missingNoRecommendationReason.v23SkuDrawerRevisions[0]!) as SkuDrawerRevision;
+  assert.throws(() => migrateWorkspaceState(missingNoRecommendationReason), /V23_SKU_QUALITY_SCHEMA_INVALID/);
+
+  const technology = directV23State();
+  const source = technology.technologies[0]!;
+  technology.v23SeriesPartRevisions[0]!.technologyRefs = [{ id: source.id, revision: source.version, contentHash: "0".repeat(64) }];
+  technology.v23SeriesPartRevisions[0] = withPartHashes(technology.v23SeriesPartRevisions[0]!) as SeriesPartRevision;
+  assert.throws(() => migrateWorkspaceState(technology), /V23_PART_TECHNOLOGY_UNRESOLVED/);
+
+  const evidence = directV23State();
+  const raw = { schemaVersion: 22, original: true };
+  evidence.v23MigrationSourceEvidence = [{ sourceEvidenceId: "source:one", sourceSchemaVersion: 22, rawWorkspacePayload: raw, rawWorkspacePayloadHash: deterministicHash(raw) }];
+  evidence.v23LegacyReadAdapters = [{ adapterId: "adapter:one", kind: "LEGACY_NEEDS_REVIEW", sourceEvidenceId: "source:one", sourceSeriesId: null, sourceSkuId: "legacy:sku", rawSeriesPayload: null, rawSkuPayload: { id: "legacy:sku" }, diagnosticCodes: ["V23_SERIES_UNRESOLVED", "V23_PART_UNRESOLVED"], status: "NEEDS_REVIEW" }];
+  assert.deepEqual(migrateWorkspaceState(evidence).v23LegacyReadAdapters, evidence.v23LegacyReadAdapters);
+  evidence.v23MigrationSourceEvidence[0]!.rawWorkspacePayload = { schemaVersion: 23 };
+  assert.throws(() => migrateWorkspaceState(evidence), /V23_SOURCE_SCHEMA_VERSION_MISMATCH/);
 });

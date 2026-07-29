@@ -1194,11 +1194,27 @@ export interface V23FunctionTemplateRef {
   contentHash: string;
 }
 
-export type V23SkuValidity =
-  | "VALID"
-  | "INVALID_NO_MATCH"
-  | "INVALID_AMBIGUOUS"
-  | "NEEDS_MIGRATION_REVIEW";
+export interface V23MatchedTemplateKey {
+  partType: V23EnabledPartType;
+  weightBandId: string;
+  fishingMethodId: string;
+  materialTypeId: string;
+  functionProfileId: string;
+  functionIntensity: FunctionIntensity;
+}
+
+/** A successful 04.5 match carries every identity needed to replay it. */
+export type V23SkuMatch =
+  | { status: "VALID"; functionTemplateRef: V23FunctionTemplateRef; matchedKey: V23MatchedTemplateKey; inputFingerprint: string }
+  | { status: "INVALID_NO_MATCH"; attemptedKey: V23MatchedTemplateKey; inputFingerprint: string }
+  | { status: "INVALID_AMBIGUOUS"; attemptedKey: V23MatchedTemplateKey; inputFingerprint: string }
+  | { status: "NEEDS_MIGRATION_REVIEW" };
+
+export type V23SkuQualityAssessment =
+  | { status: "UNASSESSED" }
+  | { status: "MATCHED"; qualityId: QualityProfileId }
+  | { status: "OVERRIDDEN"; recommendedQualityId: QualityProfileId; qualityId: QualityProfileId; reason: string }
+  | { status: "NO_RECOMMENDATION"; qualityId: QualityProfileId; reason: string };
 
 /**
  * This is only the persistence carrier.  Phase A intentionally does not
@@ -1209,17 +1225,14 @@ export interface SkuDrawerRevision {
   revision: number;
   seriesId: string;
   partId: string;
+  partRevision: number;
   weightBandId: string;
-  functionTemplateRef: V23FunctionTemplateRef;
-  inputFingerprint: string;
-  validity: V23SkuValidity;
+  match: V23SkuMatch;
   removedInheritedEntryIds: string[];
   addedEntryRefs: Extract<V23SkuAffixEntry, { kind: "STABLE_AFFIX_REF" }>[];
   localEntryCopies: Extract<V23SkuAffixEntry, { kind: "LOCAL_AFFIX_COPY" }>[];
   technologyRefs: V23StableContentRef[];
-  recommendedQualityId: QualityProfileId | null;
-  selectedQualityId: QualityProfileId | null;
-  qualityOverrideReason: string | null;
+  quality: V23SkuQualityAssessment;
   contentHash: string;
 }
 

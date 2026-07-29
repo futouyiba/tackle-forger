@@ -65,6 +65,7 @@ import {
   resolvePartConstraintSetRef,
 } from "./part-constraints";
 import { deterministicHash } from "./rule-kernel";
+import { jcsSha256Hex } from "./canonical-json";
 import { projectShareLinkHistoryEntry } from "./data-sources";
 import { createFiveAxisDispositionCatalogRevision, createFormalFiveAxisVertexSet } from "./five-axis-formal";
 
@@ -1703,6 +1704,27 @@ function validateV23StableRef(value: unknown, code: string) {
   return { id, revision, contentHash };
 }
 
+function v23HashOf(value: unknown, supplied: unknown, code: string) {
+  const hash = v23Hash(supplied, code);
+  if (hash !== jcsSha256Hex(value)) throw new Error(`${code}_MISMATCH`);
+  return hash;
+}
+
+function v23PartInput(entry: Record<string, unknown>) {
+  const input = { ...entry };
+  delete input.inputFingerprint;
+  delete input.contentHash;
+  return input;
+}
+
+function v23SkuInput(entry: Record<string, unknown>) {
+  const input = { ...entry };
+  delete input.contentHash;
+  return input;
+}
+
+const V23_QUALITY_IDS = new Set(["quality_c_green", "quality_b_blue", "quality_a_purple", "quality_s_orange"]);
+
 function validateV23RuntimeState(state: MutableWorkspace) {
   const parts = v23Array(state.v23SeriesPartRevisions, "V23_SERIES_PARTS");
   const skus = v23Array(state.v23SkuDrawerRevisions, "V23_SKUS");
@@ -1710,31 +1732,43 @@ function validateV23RuntimeState(state: MutableWorkspace) {
   const evidence = v23Array(state.v23MigrationSourceEvidence, "V23_SOURCE_EVIDENCE");
   const adapters = v23Array(state.v23LegacyReadAdapters, "V23_LEGACY_ADAPTERS");
 
-  const affixRefs = new Map<string, Map<number, Set<string>>>();
+  const affixRefs = new Map<string, Map<number, string>>();
   for (const value of affixes) {
     const entry = v23Record(value, "V23_AFFIX_DEFINITION");
     v23ExactKeys(entry, ["affixId", "revision", "contentHash", "payload"], "V23_AFFIX_DEFINITION");
     const id = v23String(entry.affixId, "V23_AFFIX_ID");
     const revision = v23Revision(entry.revision, "V23_AFFIX_REVISION");
-    const hash = v23Hash(entry.contentHash, "V23_AFFIX_CONTENT_HASH");
-    const revisions = affixRefs.get(id) ?? new Map<number, Set<string>>();
-    const hashes = revisions.get(revision) ?? new Set<string>();
-    if (hashes.has(hash)) throw new Error("V23_AFFIX_ID_DUPLICATE");
-    hashes.add(hash);
-    revisions.set(revision, hashes);
+    const hash = v23HashOf({ affixId: id, revision, payload: entry.payload }, entry.contentHash, "V23_AFFIX_CONTENT_HASH");
+    const revisions = affixRefs.get(id) ?? new Map<number, string>();
+    if (revisions.has(revision)) throw new Error("V23_AFFIX_ID_REVISION_DUPLICATE");
+    revisions.set(revision, hash);
     affixRefs.set(id, revisions);
   }
   const hasAffixRef = (ref: { id: string; revision: number; contentHash: string }) =>
-    affixRefs.get(ref.id)?.get(ref.revision)?.has(ref.contentHash) === true;
+    affixRefs.get(ref.id)?.get(ref.revision) === ref.contentHash;
+  const technologies = new Map<string, Map<number, string>>();
+  for (const value of arrayOf<unknown>(state.technologies)) {
+    const technology = v23Record(value, "V23_TECHNOLOGY");
+    const id = v23String(technology.id, "V23_TECHNOLOGY_ID");
+    const version = v23Revision(technology.version, "V23_TECHNOLOGY_VERSION");
+    const revisions = technologies.get(id) ?? new Map<number, string>();
+    if (revisions.has(version)) throw new Error("V23_TECHNOLOGY_ID_REVISION_DUPLICATE");
+    revisions.set(version, jcsSha256Hex(technology));
+    technologies.set(id, revisions);
+  }
+  const validateTechnologyRef = (value: unknown, code: string) => {
+    const ref = validateV23StableRef(value, code);
+    if (technologies.get(ref.id)?.get(ref.revision) !== ref.contentHash) throw new Error(`${code}_UNRESOLVED`);
+  };
 
-  const partBySeriesAndId = new Map<string, Map<string, Record<string, unknown>>>();
-  const partsBySeries = new Map<string, Record<string, unknown>[]>();
+  const partByIdAndRevision = new Map<string, Map<number, Record<string, unknown>>>();
+  const partSeriesById = new Map<string, string>();
   for (const value of parts) {
     const entry = v23Record(value, "V23_SERIES_PART");
     v23ExactKeys(entry, ["partId", "seriesId", "revision", "partType", "fishingMethodId", "materialTypeId", "functionProfileId", "functionIntensity", "defaultEntryRefs", "technologyRefs", "inputFingerprint", "contentHash"], "V23_SERIES_PART");
     const partId = v23String(entry.partId, "V23_PART_ID");
     const seriesId = v23String(entry.seriesId, "V23_PART_SERIES_ID");
-    v23Revision(entry.revision, "V23_PART_REVISION");
+    const revision = v23Revision(entry.revision, "V23_PART_REVISION");
     if (!(["rod", "reel", "line"] as const).includes(entry.partType as "rod" | "reel" | "line")) throw new Error("V23_PART_TYPE_INVALID");
     v23String(entry.fishingMethodId, "V23_PART_METHOD_ID");
     v23String(entry.materialTypeId, "V23_PART_MATERIAL_ID");
@@ -1744,18 +1778,25 @@ function validateV23RuntimeState(state: MutableWorkspace) {
       const ref = validateV23StableRef(value, "V23_PART_DEFAULT_ENTRY");
       if (!hasAffixRef(ref)) throw new Error("V23_PART_DEFAULT_ENTRY_UNRESOLVED");
     }
-    for (const ref of v23Array(entry.technologyRefs, "V23_PART_TECHNOLOGIES")) validateV23StableRef(ref, "V23_PART_TECHNOLOGY");
-    v23Hash(entry.inputFingerprint, "V23_PART_INPUT_FINGERPRINT");
-    v23Hash(entry.contentHash, "V23_PART_CONTENT_HASH");
-    const partMap = partBySeriesAndId.get(seriesId) ?? new Map<string, Record<string, unknown>>();
-    if (partMap.has(partId)) throw new Error("V23_PART_ID_DUPLICATE");
-    partMap.set(partId, entry);
-    partBySeriesAndId.set(seriesId, partMap);
-    const group = partsBySeries.get(seriesId) ?? [];
-    group.push(entry);
-    partsBySeries.set(seriesId, group);
+    for (const ref of v23Array(entry.technologyRefs, "V23_PART_TECHNOLOGIES")) validateTechnologyRef(ref, "V23_PART_TECHNOLOGY");
+    const partMap = partByIdAndRevision.get(partId) ?? new Map<number, Record<string, unknown>>();
+    if (partMap.has(revision)) throw new Error("V23_PART_ID_REVISION_DUPLICATE");
+    if (partSeriesById.has(partId) && partSeriesById.get(partId) !== seriesId) throw new Error("V23_PART_SERIES_ID_UNSTABLE");
+    partSeriesById.set(partId, seriesId);
+    partMap.set(revision, entry);
+    partByIdAndRevision.set(partId, partMap);
+    const input = v23PartInput(entry);
+    v23HashOf(input, entry.inputFingerprint, "V23_PART_INPUT_FINGERPRINT");
+    v23HashOf({ ...input, inputFingerprint: entry.inputFingerprint }, entry.contentHash, "V23_PART_CONTENT_HASH");
   }
-  for (const group of partsBySeries.values()) {
+  const currentPartsBySeries = new Map<string, Record<string, unknown>[]>();
+  for (const revisions of partByIdAndRevision.values()) {
+    const current = [...revisions.values()].sort((left, right) => (right.revision as number) - (left.revision as number))[0]!;
+    const group = currentPartsBySeries.get(current.seriesId as string) ?? [];
+    group.push(current);
+    currentPartsBySeries.set(current.seriesId as string, group);
+  }
+  for (const group of currentPartsBySeries.values()) {
     if (group.length < 1 || group.length > 3) throw new Error("V23_SERIES_PART_COUNT_INVALID");
     const kinds = new Set(group.map((entry) => entry.partType));
     if (kinds.size !== group.length) throw new Error("V23_SERIES_PART_TYPE_DUPLICATE");
@@ -1777,30 +1818,50 @@ function validateV23RuntimeState(state: MutableWorkspace) {
       localCopyIds.add(copyId);
       const ref = validateV23StableRef(entry.sourceRef, `${code}_SOURCE_REF`);
       if (!hasAffixRef(ref)) throw new Error(`${code}_SOURCE_REF_UNRESOLVED`);
-      v23Hash(entry.copyHash, `${code}_COPY_HASH`);
+      v23HashOf({ localCopyId: copyId, sourceRef: ref, payload: entry.payload }, entry.copyHash, `${code}_COPY_HASH`);
       return;
     }
     throw new Error(`${code}_KIND_INVALID`);
   };
-  const skuIds = new Set<string>();
+  const skuIds = new Map<string, Set<number>>();
   for (const value of skus) {
     const entry = v23Record(value, "V23_SKU");
-    v23ExactKeys(entry, ["skuId", "revision", "seriesId", "partId", "weightBandId", "functionTemplateRef", "inputFingerprint", "validity", "removedInheritedEntryIds", "addedEntryRefs", "localEntryCopies", "technologyRefs", "recommendedQualityId", "selectedQualityId", "qualityOverrideReason", "contentHash"], "V23_SKU");
+    v23ExactKeys(entry, ["skuId", "revision", "seriesId", "partId", "partRevision", "weightBandId", "match", "removedInheritedEntryIds", "addedEntryRefs", "localEntryCopies", "technologyRefs", "quality", "contentHash"], "V23_SKU");
     const skuId = v23String(entry.skuId, "V23_SKU_ID");
-    if (skuIds.has(skuId)) throw new Error("V23_SKU_ID_DUPLICATE");
-    skuIds.add(skuId);
-    v23Revision(entry.revision, "V23_SKU_REVISION");
+    const revision = v23Revision(entry.revision, "V23_SKU_REVISION");
+    const revisions = skuIds.get(skuId) ?? new Set<number>();
+    if (revisions.has(revision)) throw new Error("V23_SKU_ID_REVISION_DUPLICATE");
+    revisions.add(revision); skuIds.set(skuId, revisions);
     const seriesId = v23String(entry.seriesId, "V23_SKU_SERIES_ID");
     const partId = v23String(entry.partId, "V23_SKU_PART_ID");
-    if (!partBySeriesAndId.get(seriesId)?.has(partId)) throw new Error("V23_SKU_PART_UNRESOLVED");
-    v23String(entry.weightBandId, "V23_SKU_WEIGHT_BAND_ID");
-    const template = v23Record(entry.functionTemplateRef, "V23_TEMPLATE_REF");
-    v23ExactKeys(template, ["templateId", "revisionId", "contentHash"], "V23_TEMPLATE_REF");
-    v23String(template.templateId, "V23_TEMPLATE_ID");
-    v23String(template.revisionId, "V23_TEMPLATE_REVISION_ID");
-    v23Hash(template.contentHash, "V23_TEMPLATE_CONTENT_HASH");
-    v23Hash(entry.inputFingerprint, "V23_SKU_INPUT_FINGERPRINT");
-    if (!(["VALID", "INVALID_NO_MATCH", "INVALID_AMBIGUOUS", "NEEDS_MIGRATION_REVIEW"] as const).includes(entry.validity as never)) throw new Error("V23_SKU_VALIDITY_INVALID");
+    const partRevision = v23Revision(entry.partRevision, "V23_SKU_PART_REVISION");
+    const part = partByIdAndRevision.get(partId)?.get(partRevision);
+    if (!part || part.seriesId !== seriesId) throw new Error("V23_SKU_PART_UNRESOLVED");
+    const weightBandId = v23String(entry.weightBandId, "V23_SKU_WEIGHT_BAND_ID");
+    const match = v23Record(entry.match, "V23_SKU_MATCH");
+    const status = v23String(match.status, "V23_SKU_MATCH_STATUS");
+    const validateKey = (value: unknown, code: string) => {
+      const key = v23Record(value, code);
+      v23ExactKeys(key, ["partType", "weightBandId", "fishingMethodId", "materialTypeId", "functionProfileId", "functionIntensity"], code);
+      if (!( ["rod", "reel", "line"] as const).includes(key.partType as "rod" | "reel" | "line") || key.weightBandId !== weightBandId || key.fishingMethodId !== part.fishingMethodId || key.materialTypeId !== part.materialTypeId || key.functionProfileId !== part.functionProfileId || key.functionIntensity !== part.functionIntensity) throw new Error("V23_SKU_MATCHED_KEY_MISMATCH");
+      return key;
+    };
+    if (status === "VALID") {
+      v23ExactKeys(match, ["status", "functionTemplateRef", "matchedKey", "inputFingerprint"], "V23_SKU_MATCH");
+      const template = v23Record(match.functionTemplateRef, "V23_TEMPLATE_REF");
+      v23ExactKeys(template, ["templateId", "revisionId", "contentHash"], "V23_TEMPLATE_REF");
+      v23String(template.templateId, "V23_TEMPLATE_ID");
+      v23String(template.revisionId, "V23_TEMPLATE_REVISION_ID");
+      v23Hash(template.contentHash, "V23_TEMPLATE_CONTENT_HASH");
+      const key = validateKey(match.matchedKey, "V23_SKU_MATCHED_KEY");
+      v23HashOf(key, match.inputFingerprint, "V23_SKU_INPUT_FINGERPRINT");
+    } else if (["INVALID_NO_MATCH", "INVALID_AMBIGUOUS"].includes(status)) {
+      v23ExactKeys(match, ["status", "attemptedKey", "inputFingerprint"], "V23_SKU_MATCH");
+      const key = validateKey(match.attemptedKey, "V23_SKU_ATTEMPTED_KEY");
+      v23HashOf(key, match.inputFingerprint, "V23_SKU_INPUT_FINGERPRINT");
+    } else if (status === "NEEDS_MIGRATION_REVIEW") {
+      v23ExactKeys(match, ["status"], "V23_SKU_MATCH");
+    } else throw new Error("V23_SKU_MATCH_STATUS_INVALID");
     const removed = v23Array(entry.removedInheritedEntryIds, "V23_SKU_REMOVED_ENTRIES");
     if (new Set(removed.map((id) => v23String(id, "V23_SKU_REMOVED_ENTRY_ID"))).size !== removed.length) throw new Error("V23_SKU_REMOVED_ENTRY_DUPLICATE");
     for (const refEntry of v23Array(entry.addedEntryRefs, "V23_SKU_ADDED_ENTRY_REFS")) {
@@ -1813,13 +1874,15 @@ function validateV23RuntimeState(state: MutableWorkspace) {
       if (copyEntry.kind !== "LOCAL_AFFIX_COPY") throw new Error("V23_SKU_LOCAL_COPY_KIND_INVALID");
       validateAffixEntry(copyEntry, "V23_SKU_LOCAL_COPY");
     }
-    for (const ref of v23Array(entry.technologyRefs, "V23_SKU_TECHNOLOGIES")) validateV23StableRef(ref, "V23_SKU_TECHNOLOGY");
-    if (entry.recommendedQualityId !== null) v23String(entry.recommendedQualityId, "V23_RECOMMENDED_QUALITY_ID");
-    if (entry.selectedQualityId !== null) v23String(entry.selectedQualityId, "V23_SELECTED_QUALITY_ID");
-    if (entry.qualityOverrideReason !== null) v23String(entry.qualityOverrideReason, "V23_QUALITY_OVERRIDE_REASON");
-    if (entry.recommendedQualityId !== null && entry.selectedQualityId !== null && entry.recommendedQualityId !== entry.selectedQualityId && entry.qualityOverrideReason === null) throw new Error("V23_QUALITY_OVERRIDE_REASON_REQUIRED");
-    if (entry.recommendedQualityId === entry.selectedQualityId && entry.qualityOverrideReason !== null) throw new Error("V23_QUALITY_OVERRIDE_REASON_UNEXPECTED");
-    v23Hash(entry.contentHash, "V23_SKU_CONTENT_HASH");
+    for (const ref of v23Array(entry.technologyRefs, "V23_SKU_TECHNOLOGIES")) validateTechnologyRef(ref, "V23_SKU_TECHNOLOGY");
+    const quality = v23Record(entry.quality, "V23_SKU_QUALITY");
+    const qualityStatus = v23String(quality.status, "V23_SKU_QUALITY_STATUS");
+    if (qualityStatus === "UNASSESSED") v23ExactKeys(quality, ["status"], "V23_SKU_QUALITY");
+    else if (qualityStatus === "NO_RECOMMENDATION") { v23ExactKeys(quality, ["status", "qualityId", "reason"], "V23_SKU_QUALITY"); if (!V23_QUALITY_IDS.has(v23String(quality.qualityId, "V23_SELECTED_QUALITY_ID")) || !v23String(quality.reason, "V23_QUALITY_NO_RECOMMENDATION_REASON")) throw new Error("V23_SKU_QUALITY_INVALID"); }
+    else if (qualityStatus === "MATCHED") { v23ExactKeys(quality, ["status", "qualityId"], "V23_SKU_QUALITY"); if (!V23_QUALITY_IDS.has(v23String(quality.qualityId, "V23_SKU_QUALITY_ID"))) throw new Error("V23_SKU_QUALITY_ID_INVALID"); }
+    else if (qualityStatus === "OVERRIDDEN") { v23ExactKeys(quality, ["status", "recommendedQualityId", "qualityId", "reason"], "V23_SKU_QUALITY"); if (!V23_QUALITY_IDS.has(v23String(quality.recommendedQualityId, "V23_RECOMMENDED_QUALITY_ID")) || !V23_QUALITY_IDS.has(v23String(quality.qualityId, "V23_SELECTED_QUALITY_ID")) || quality.recommendedQualityId === quality.qualityId || !v23String(quality.reason, "V23_QUALITY_OVERRIDE_REASON")) throw new Error("V23_SKU_QUALITY_INVALID"); }
+    else throw new Error("V23_SKU_QUALITY_STATUS_INVALID");
+    v23HashOf(v23SkuInput(entry), entry.contentHash, "V23_SKU_CONTENT_HASH");
   }
 
   const evidenceIds = new Set<string>();
@@ -1829,7 +1892,10 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     const id = v23String(entry.sourceEvidenceId, "V23_SOURCE_EVIDENCE_ID");
     if (evidenceIds.has(id)) throw new Error("V23_SOURCE_EVIDENCE_ID_DUPLICATE");
     evidenceIds.add(id);
-    v23Revision(entry.sourceSchemaVersion, "V23_SOURCE_SCHEMA_VERSION");
+    const sourceSchemaVersion = v23Revision(entry.sourceSchemaVersion, "V23_SOURCE_SCHEMA_VERSION");
+    if (sourceSchemaVersion >= CURRENT_WORKSPACE_SCHEMA_VERSION) throw new Error("V23_SOURCE_SCHEMA_VERSION_UNSUPPORTED");
+    const raw = v23Record(entry.rawWorkspacePayload, "V23_SOURCE_PAYLOAD");
+    if (raw.schemaVersion !== sourceSchemaVersion) throw new Error("V23_SOURCE_SCHEMA_VERSION_MISMATCH");
     const hash = v23String(entry.rawWorkspacePayloadHash, "V23_SOURCE_PAYLOAD_HASH");
     // Existing workspace deterministicHash is an 8-hex content contract, not
     // the new v23 64-hex stable-reference contract.
@@ -1844,13 +1910,25 @@ function validateV23RuntimeState(state: MutableWorkspace) {
     if (adapterIds.has(id)) throw new Error("V23_LEGACY_ADAPTER_ID_DUPLICATE");
     adapterIds.add(id);
     if (entry.kind !== "LEGACY_NEEDS_REVIEW" || entry.status !== "NEEDS_REVIEW") throw new Error("V23_LEGACY_ADAPTER_DISCRIMINANT_INVALID");
-    if (!evidenceIds.has(v23String(entry.sourceEvidenceId, "V23_LEGACY_ADAPTER_EVIDENCE_ID"))) throw new Error("V23_LEGACY_ADAPTER_EVIDENCE_UNRESOLVED");
+    const sourceEvidenceId = v23String(entry.sourceEvidenceId, "V23_LEGACY_ADAPTER_EVIDENCE_ID");
+    if (!evidenceIds.has(sourceEvidenceId)) throw new Error("V23_LEGACY_ADAPTER_EVIDENCE_UNRESOLVED");
     if (entry.sourceSeriesId !== null) v23String(entry.sourceSeriesId, "V23_LEGACY_ADAPTER_SERIES_ID");
     if (entry.sourceSkuId !== null) v23String(entry.sourceSkuId, "V23_LEGACY_ADAPTER_SKU_ID");
     const diagnostics = v23Array(entry.diagnosticCodes, "V23_LEGACY_ADAPTER_DIAGNOSTICS");
     if (!diagnostics.length || new Set(diagnostics).size !== diagnostics.length) throw new Error("V23_LEGACY_ADAPTER_DIAGNOSTICS_INVALID");
     const allowed = new Set(["V23_SERIES_UNRESOLVED", "V23_PART_UNRESOLVED", "V23_WEIGHT_BAND_UNRESOLVED", "V23_FUNCTION_TEMPLATE_UNRESOLVED"]);
     if (diagnostics.some((code) => typeof code !== "string" || !allowed.has(code))) throw new Error("V23_LEGACY_ADAPTER_DIAGNOSTICS_INVALID");
+    if (entry.sourceSkuId === null && entry.rawSkuPayload === null) throw new Error("V23_LEGACY_ADAPTER_SKU_CHAIN_INVALID");
+    if ((entry.sourceSeriesId === null) !== (entry.rawSeriesPayload === null)) throw new Error("V23_LEGACY_ADAPTER_SERIES_CHAIN_INVALID");
+    if ((entry.sourceSeriesId === null) !== diagnostics.includes("V23_SERIES_UNRESOLVED")) throw new Error("V23_LEGACY_ADAPTER_SERIES_DIAGNOSTIC_INVALID");
+    if (entry.sourceSkuId !== null) {
+      const rawSku = v23Record(entry.rawSkuPayload, "V23_LEGACY_ADAPTER_RAW_SKU");
+      if (rawSku.id !== entry.sourceSkuId) throw new Error("V23_LEGACY_ADAPTER_SKU_CHAIN_INVALID");
+    }
+    if (entry.sourceSeriesId !== null) {
+      const rawSeries = v23Record(entry.rawSeriesPayload, "V23_LEGACY_ADAPTER_RAW_SERIES");
+      if (rawSeries.id !== entry.sourceSeriesId) throw new Error("V23_LEGACY_ADAPTER_SERIES_CHAIN_INVALID");
+    }
   }
 }
 
@@ -1901,8 +1979,11 @@ function migrateV22ToV23(input: MutableWorkspace, context: MigrationContext): Mu
   const adapterIds = new Set<string>();
   for (const legacySku of arrayOf<Record<string, unknown>>(input.skuDrawers)) {
     const sourceSkuId = requiredLegacyId(legacySku.id, "SKU");
-    const sourceSeriesId = typeof legacySku.seriesId === "string" && legacySku.seriesId.length > 0
+    const requestedSeriesId = typeof legacySku.seriesId === "string" && legacySku.seriesId.length > 0
       ? legacySku.seriesId
+      : null;
+    const sourceSeriesId = requestedSeriesId && seriesById.has(requestedSeriesId)
+      ? requestedSeriesId
       : null;
     const adapterId = `v23-legacy-adapter:${sourceSkuId}`;
     if (adapterIds.has(adapterId)) throw new Error("V23_MIGRATION_SKU_ID_CONFLICT");
@@ -1913,12 +1994,12 @@ function migrateV22ToV23(input: MutableWorkspace, context: MigrationContext): Mu
       sourceEvidenceId,
       sourceSeriesId,
       sourceSkuId,
-      rawSeriesPayload: sourceSeriesId && seriesById.has(sourceSeriesId)
+      rawSeriesPayload: sourceSeriesId
         ? structuredClone(seriesById.get(sourceSeriesId))
         : null,
       rawSkuPayload: structuredClone(legacySku),
       diagnosticCodes: [
-        ...(sourceSeriesId && seriesById.has(sourceSeriesId) ? [] : ["V23_SERIES_UNRESOLVED" as const]),
+        ...(sourceSeriesId ? [] : ["V23_SERIES_UNRESOLVED" as const]),
         "V23_PART_UNRESOLVED",
         "V23_WEIGHT_BAND_UNRESOLVED",
         "V23_FUNCTION_TEMPLATE_UNRESOLVED",

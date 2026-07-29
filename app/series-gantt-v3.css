@@ -746,6 +746,21 @@
   width: 100%;
 }
 
+.v23-part-workbench { background:var(--surface); border:1px solid var(--line); border-radius:14px; display:grid; gap:14px; margin:0 0 18px; padding:16px; }
+.v23-part-workbench>header,.v23-part-card>header,.v23-sku-preview>header,.v23-sku-card>header { align-items:flex-start; display:flex; gap:12px; justify-content:space-between; }
+.v23-part-workbench h2,.v23-part-workbench h3,.v23-part-workbench p { margin:0; }
+.v23-part-workbench header span,.v23-part-workbench small,.v23-part-workbench p { color:var(--muted); font-size:12px; }
+.v23-part-workbench select,.v23-part-workbench button { border:1px solid var(--line); border-radius:8px; color:var(--text); min-height:34px; padding:7px 9px; }
+.v23-part-workbench button { background:var(--surface-subtle); cursor:pointer; }.v23-part-workbench button:disabled { cursor:not-allowed; opacity:.55; }
+.v23-part-grid { display:grid; gap:12px; grid-template-columns:repeat(3,minmax(0,1fr)); }
+.v23-part-card,.v23-sku-preview,.v23-sku-card { border:1px solid var(--line); border-radius:10px; display:grid; gap:10px; padding:12px; }
+.v23-rod { border-top:3px solid #3778b7; }.v23-reel { border-top:3px solid #a86c27; }.v23-line { border-top:3px solid #43836b; }
+.v23-band-block { display:flex; flex-wrap:wrap; gap:0; }.v23-band-block button { border-radius:0; margin-left:-1px; }.v23-band-block button:first-child { border-radius:8px 0 0 8px; margin-left:0; }.v23-band-block button:last-child { border-radius:0 8px 8px 0; }
+.v23-gantt-blocks { display:flex; flex-wrap:wrap; gap:7px; }.v23-gantt-blocks>div { display:grid; gap:5px; }.v23-exact-band-picker { display:flex; flex-wrap:wrap; gap:4px; }
+.v23-fail-closed { background:#fff0f0; color:#992f2f!important; padding:10px; }.v23-sku-preview { background:color-mix(in srgb,var(--accent) 4%,var(--surface)); }
+.v23-sku-card { background:var(--surface); }.v23-sku-card span { display:flex; flex-wrap:wrap; gap:6px; }.v23-affix-actions { display:flex; flex-wrap:wrap; gap:6px; }.v23-create-sku { align-items:center; display:inline-flex; gap:6px; justify-content:center; }
+@media (max-width:820px) { .v23-part-grid { grid-template-columns:1fr; }.v23-part-workbench>header,.v23-sku-preview>header { flex-direction:column; }.v23-part-workbench>header label { width:100%; }.v23-part-workbench select { width:100%; } }
+
 .gantt-create-backdrop {
   align-items: center;
   background: rgb(16 24 40 / 48%);

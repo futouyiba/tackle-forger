@@ -86,6 +86,7 @@ import {
   type AIAssessmentUiState,
 } from "./SeriesAssessmentPanel";
 import { TraceSettlementPanel } from "./TraceSettlementPanel";
+import { V23SeriesPartWorkbench } from "./V23SeriesPartWorkbench";
 
 function isLegacyFiveAxisDefinition(
   definition: WorkspaceState["fiveAxisViewDefinitions"][number],
@@ -2222,6 +2223,14 @@ export function SeriesGanttWorkbenchV3({
   const columnCount = Math.max(1, QUALITY_ORDER.length * Math.max(1, typeIds.length));
   return (
     <div className="series-gantt-page series-gantt-page-v3">
+      <V23SeriesPartWorkbench
+        state={state}
+        workspaceRevision={workspaceFreshness().revision}
+        actionAvailabilities={actionAvailabilities}
+        notify={notify}
+        workspaceFreshness={workspaceFreshness}
+        onApplied={onWorkspaceApplied}
+      />
       <section className="gantt-toolbar">
         <div>
           <span className="eyebrow">SERIES PLANNING · QUERY STATE IN URL</span>

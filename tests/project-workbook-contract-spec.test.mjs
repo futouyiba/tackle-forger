@@ -497,6 +497,21 @@ test("machine columns reject blank, null, numeric precision, date, boolean and e
     () => validateMachineCell(payloadColumn, '{"é":1,"é":2}'),
     /NFC key collisions/,
   );
+  for (const invalid of [
+    '"\\ud800"',
+    '"\\udc00"',
+    '{"nested":{"\\ud800":1}}',
+    '{"nested":{"value":"\\udc00"}}',
+  ]) {
+    assert.throws(
+      () => validateMachineCell(payloadColumn, invalid),
+      /unpaired UTF-16 surrogate/,
+    );
+  }
+  assert.equal(
+    validateMachineCell(payloadColumn, '{"emoji":"😀","nested":{"😀":"ok"}}'),
+    true,
+  );
 });
 
 test("every closed format validates its domain and unknown formats fail closed", async () => {
@@ -646,9 +661,17 @@ test("record key JSON binds root identity arity, primitive types and preserved v
     validateMachineCell(keyColumn, '["$singleton"]', "string", {
       manifest,
       root: "notes",
-      payload: { value: "note" },
+      payload: "note",
     }),
     true,
+  );
+  assert.throws(
+    () => validateMachineCell(keyColumn, '["$singleton"]', "string", {
+      manifest,
+      root: "notes",
+      payload: { value: "note" },
+    }),
+    /canonical scalar string representation/,
   );
   assert.throws(
     () => validateMachineCell(keyColumn, '["series:1"]', "string", {
@@ -666,6 +689,41 @@ test("record key JSON binds root identity arity, primitive types and preserved v
       payload: { vertexSetId: "vertex:1" },
     }),
     /caller variant contradicts/,
+  );
+});
+
+test("notes has one canonical scalar payload representation", async () => {
+  const { manifest, roots } = await fixture();
+  const payloadColumn = manifest.workbookSchema.sheets.__TF_CURRENT.columns
+    .find((entry) => entry.name === "payload_json");
+  assert.deepEqual(manifest.recordSchemas.notes.allowedFields, ["$scalar"]);
+  assert.equal(
+    validateMachineCell(payloadColumn, '"note"', "string", {
+      manifest,
+      root: "notes",
+    }),
+    true,
+  );
+  assert.equal(
+    validateMachineCell(payloadColumn, '""', "string", {
+      manifest,
+      root: "notes",
+    }),
+    true,
+  );
+  assert.throws(
+    () => validateMachineCell(payloadColumn, '{"value":"note"}', "string", {
+      manifest,
+      root: "notes",
+    }),
+    /canonical scalar string representation/,
+  );
+
+  const objectWrapper = clone(manifest);
+  objectWrapper.recordSchemas.notes.allowedFields = ["value"];
+  assert.throws(
+    () => validateProjectWorkbookManifest(objectWrapper, roots),
+    /scalar payload|catalog drift/,
   );
 });
 
@@ -826,7 +884,7 @@ test("all diagnostic roots derive closed non-semantic subject keys from safe pay
       root: "futureDiagnosticRoot",
       payload: { id: "future:1" },
     }),
-    /no diagnostic subject-key contract|not importable or preserved/,
+    /no diagnostic subject-key contract|not importable or preserved|no record payload authority/,
   );
   assert.throws(
     () => validateMachineCell(

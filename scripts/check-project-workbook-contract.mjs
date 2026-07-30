@@ -191,7 +191,7 @@ const EXPECTED_SHEETS = {
 };
 
 const EXPECTED_RECORD_SCHEMAS_SHA256 =
-  "6ffcafa5f38daf43ca723098b33e909850911d1ac9d0783b1b9bd4377d3bd501";
+  "2ffa02b4d95a4d48fdab7daa4be03d0ee05cb1c1d26002fa037d3df7509c8c13";
 const EXPECTED_RECORD_SCHEMA_AUTHORITY_SHA256 =
   "f5e0c3babd95c21825cfd6b1c229463a019ca2fc928d37d434785bd4027abaee";
 
@@ -203,16 +203,38 @@ function sha256(source) {
   return createHash("sha256").update(source, "utf8").digest("hex");
 }
 
+function normalizeUnicodeString(value, label = "canonical JSON string") {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xD800 && codeUnit <= 0xDBFF) {
+      const next = value.charCodeAt(index + 1);
+      assert.ok(
+        next >= 0xDC00 && next <= 0xDFFF,
+        `${label} rejects unpaired UTF-16 surrogate`,
+      );
+      index += 1;
+      continue;
+    }
+    assert.ok(
+      codeUnit < 0xDC00 || codeUnit > 0xDFFF,
+      `${label} rejects unpaired UTF-16 surrogate`,
+    );
+  }
+  return value.normalize("NFC");
+}
+
 function canonicalJson(value) {
   if (value === null || typeof value === "boolean") return JSON.stringify(value);
-  if (typeof value === "string") return JSON.stringify(value.normalize("NFC"));
+  if (typeof value === "string") return JSON.stringify(normalizeUnicodeString(value));
   if (typeof value === "number") {
     assert.ok(Number.isFinite(value), "canonical JSON rejects non-finite numbers");
     return JSON.stringify(Object.is(value, -0) ? 0 : value);
   }
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   assert.equal(Object.getPrototypeOf(value), Object.prototype);
-  const normalizedEntries = Object.keys(value).map((key) => [key.normalize("NFC"), value[key]]);
+  const normalizedEntries = Object.keys(value).map(
+    (key) => [normalizeUnicodeString(key, "canonical JSON key"), value[key]],
+  );
   assert.equal(
     new Set(normalizedEntries.map(([key]) => key)).size,
     normalizedEntries.length,
@@ -261,6 +283,7 @@ function resolvePayloadVariant(manifest, root, payload, callerVariant, repositor
 }
 
 function expectedRecordSchemaId(manifest, root, payload, callerVariant, repositoryRoot) {
+  validateRecordPayloadRepresentation(manifest, root, payload);
   const importableSchema = manifest.recordSchemas[root];
   if (importableSchema) {
     assert.equal(callerVariant, undefined, `${root} does not accept a caller variant`);
@@ -276,6 +299,25 @@ function expectedRecordSchemaId(manifest, root, payload, callerVariant, reposito
     repositoryRoot,
   );
   return typeof catalog === "string" ? catalog : catalog[variant];
+}
+
+function validateRecordPayloadRepresentation(manifest, root, payload) {
+  const typeRef = manifest.recordSchemaAuthority.typeRefs[root]
+    ?? manifest.preservedRootCatalog[root]?.typeRef;
+  assert.ok(typeRef, `${root} has no record payload authority`);
+  if (typeRef === "lib/types.ts#string") {
+    assert.equal(
+      typeof payload,
+      "string",
+      `${root} payload must use its canonical scalar string representation`,
+    );
+  } else {
+    assert.ok(
+      payload && Object.getPrototypeOf(payload) === Object.prototype,
+      `${root} payload must use its canonical object representation`,
+    );
+  }
+  return true;
 }
 
 function fieldPathType(source, typeName, fieldPath) {
@@ -420,6 +462,7 @@ export function validateMachineCell(columnSchema, value, cellKind = "string", co
   } else if (format === "rfc8785-revision-scalar") {
     assert.ok(context.manifest && context.root, "record revision requires manifest and root");
     assert.ok(Object.hasOwn(context, "payload"), "record revision requires projected payload");
+    validateRecordPayloadRepresentation(context.manifest, context.root, context.payload);
     const repositoryRoot = context.repositoryRoot ?? process.cwd();
     const effectiveVariant = resolvePayloadVariant(
       context.manifest,
@@ -472,6 +515,9 @@ export function validateMachineCell(columnSchema, value, cellKind = "string", co
   } else if (format === "rfc8785-json" || format === "rfc8785-key-json") {
     const parsed = JSON.parse(value);
     assert.equal(canonicalJson(parsed), value, `${columnSchema.name} must use canonical JSON`);
+    if (format === "rfc8785-json" && context.manifest && context.root) {
+      validateRecordPayloadRepresentation(context.manifest, context.root, parsed);
+    }
     if (format === "rfc8785-key-json") {
       assert.ok(Array.isArray(parsed));
       assert.ok(context.manifest && context.root, "record key validation requires manifest and root");
@@ -487,6 +533,7 @@ export function validateMachineCell(columnSchema, value, cellKind = "string", co
         );
         return true;
       }
+      validateRecordPayloadRepresentation(context.manifest, context.root, context.payload);
       const repositoryRoot = context.repositoryRoot ?? process.cwd();
       const effectiveVariant = resolvePayloadVariant(
         context.manifest,
@@ -1070,6 +1117,11 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     assert.equal(schema.schemaId, `project-workbook/root/${root}/v1`);
     assert.ok(schema.identityFields.length > 0);
     assert.ok(schema.allowedFields.length > 0);
+    if (manifest.recordSchemaAuthority.typeRefs[root] === "lib/types.ts#string") {
+      assert.deepEqual(schema.allowedFields, ["$scalar"], `${root} must use one scalar payload`);
+    } else {
+      assert.ok(!schema.allowedFields.includes("$scalar"), `${root} cannot use scalar sentinel`);
+    }
     assert.equal(new Set(schema.allowedFields).size, schema.allowedFields.length);
     for (const field of [
       ...schema.identityFields.filter((field) => field !== "$singleton"),

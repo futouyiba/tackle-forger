@@ -282,7 +282,7 @@
     "affixScorePolicy": {"schemaId":"project-workbook/root/affixScorePolicy/v1","identityFields":["$singleton"],"revisionFields":[],"hashFields":[],"exactFields":[],"allowedFields":["sameAxisFactors","synergyBonus","conflictPenalty","passiveWeight","directWeight","notes"]},
     "seriesShowcases": {"schemaId":"project-workbook/root/seriesShowcases/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":["publishedAt"],"allowedFields":["id","seriesId","description","templateId","templateIds","structureId","structureIds","fishingMethod","functionId","performanceId","qualityId","fishMinKg","fishMaxKg","tensionMinKgf","tensionMaxKgf","targetPullsKgf","affixIds","lureMinG","lureMaxG","notes","publishedAt","updatedAt"]},
     "ruleGraphs": {"schemaId":"project-workbook/root/ruleGraphs/v1","identityFields":["id","version"],"revisionFields":["version"],"hashFields":[],"exactFields":[],"allowedFields":["id","name","description","mode","entryNodeId","nodes","edges","version","enabled"]},
-    "notes": {"schemaId":"project-workbook/root/notes/v1","identityFields":["$singleton"],"revisionFields":[],"hashFields":[],"exactFields":[],"allowedFields":["value"]}
+    "notes": {"schemaId":"project-workbook/root/notes/v1","identityFields":["$singleton"],"revisionFields":[],"hashFields":[],"exactFields":[],"allowedFields":["$scalar"]}
   },
   "preservedRootCatalog": {
     "ruleSetVersions":{"carrier":"records","typeRef":"lib/types.ts#RuleSetVersion","recordKeyFields":["id","version"],"revisionFields":["version"],"hashFields":["publicationHash"],"singleton":false,"variants":[]},

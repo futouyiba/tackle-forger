@@ -206,9 +206,7 @@
   "recordSchemaAuthority": {
     "format": "typescript-closed-projection/v1",
     "sources": [
-      {"path":"lib/types.ts","sha256":"799513ca4931557ad0519a24d6446a4d0d8384d6369af1df01992de0ac167a5d"},
-      {"path":"lib/quality-value-policy.ts","sha256":"9acc48f99b77ba1992c83c62097b00f8c96f8cff0b7e4af3baf0187e4e043360"},
-      {"path":"lib/pricing-policy.ts","sha256":"c8f88610a9dcaabcf05547fe8464161bd3ca0110eb06852af1bb8a1e4c9ae7a3"}
+      {"path":"lib/types.ts","sha256":"799513ca4931557ad0519a24d6446a4d0d8384d6369af1df01992de0ac167a5d"}
     ],
     "recursiveRules": {
       "unknownObjectFields": "REJECT",
@@ -219,14 +217,12 @@
       "excludedSourceFields": "SERVER_PRESERVE_NOT_EXPORTED"
     },
     "projectionExclusions": {
-      "skuDrawers":["projectionMatch","fiveAxisProjectionReferences","validationSummary"],
-      "qualityValuePolicyDrafts":["issues"],
-      "pricingPolicyDrafts":["issues"]
+      "skuDrawers":["projectionMatch","fiveAxisProjectionReferences","validationSummary"]
     },
     "recursiveProofRoots": [
-      "ruleSettings","itemParts","methodProfiles","itemTypeProfiles","functionProfiles","qualityProfiles","compatibilityRules","affinityRules","affinityAxisWeights","collections","seriesDefinitions","v23SeriesPartHeads","v23SkuDrawerHeads","v23AffixDefinitions","v23TechnologyDefinitions","v23TechnologyHeads","skuDrawers","purchasableModels","v3Affixes","technologies","qualityValuePolicyDrafts","pricingPolicyDrafts","parameters","templates","modifiers","layers","affixes","qualityBands","affixScorePolicy","seriesShowcases","ruleGraphs","notes"
+      "ruleSettings","itemParts","methodProfiles","itemTypeProfiles","functionProfiles","qualityProfiles","compatibilityRules","affinityRules","affinityAxisWeights","collections","seriesDefinitions","v23AffixDefinitions","v23TechnologyDefinitions","v23TechnologyHeads","skuDrawers","purchasableModels","v3Affixes","technologies","parameters","templates","modifiers","layers","affixes","qualityBands","affixScorePolicy","seriesShowcases","ruleGraphs","notes"
     ],
-    "recursiveTypeGraphSha256": "c6a61660cdc7ef4bc98ac7aeb1011e9abda9b685c724410e3803aa99cd38370e",
+    "recursiveTypeGraphSha256": "a0947c7d2d3effb670f3e450b00f57c80f3c30d7673ec343b37d41ffd65193e9",
     "typeRefs": {
       "ruleSettings":"lib/types.ts#WorkspaceRuleSettings",
       "itemParts":"lib/types.ts#ItemPartDefinition",
@@ -239,8 +235,6 @@
       "affinityAxisWeights":"lib/types.ts#AffinityAxisWeights",
       "collections":"lib/types.ts#Collection",
       "seriesDefinitions":"lib/types.ts#SeriesDefinition",
-      "v23SeriesPartHeads":"lib/types.ts#SeriesPartHeadRef",
-      "v23SkuDrawerHeads":"lib/types.ts#V23SkuDrawerHeadRef",
       "v23AffixDefinitions":"lib/types.ts#V23AffixDefinition",
       "v23TechnologyDefinitions":"lib/types.ts#V23TechnologyDefinition",
       "v23TechnologyHeads":"lib/types.ts#V23TechnologyHeadRef",
@@ -248,8 +242,6 @@
       "purchasableModels":"lib/types.ts#PurchasableModel",
       "v3Affixes":"lib/types.ts#V3Affix",
       "technologies":"lib/types.ts#Technology",
-      "qualityValuePolicyDrafts":"lib/quality-value-policy.ts#QualityValuePolicyDraft",
-      "pricingPolicyDrafts":"lib/pricing-policy.ts#PricingPolicyDraft",
       "parameters":"lib/types.ts#ParameterDefinition",
       "templates":"lib/types.ts#WeightTemplate",
       "modifiers":"lib/types.ts#ModifierOption",
@@ -274,8 +266,6 @@
     "affinityAxisWeights": {"schemaId":"project-workbook/root/affinityAxisWeights/v1","identityFields":["$singleton"],"revisionFields":[],"hashFields":[],"exactFields":[],"allowedFields":["method_type","type_weight","type_function","function_performance","material_function","quality_specialization","model_component","series_coherence"]},
     "collections": {"schemaId":"project-workbook/root/collections/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":["createdAt"],"allowedFields":["id","name","brandStory","seriesIds","notes","createdAt","updatedAt"]},
     "seriesDefinitions": {"schemaId":"project-workbook/root/seriesDefinitions/v1","identityFields":["id"],"revisionFields":["revision"],"hashFields":[],"exactFields":["createdAt"],"allowedFields":["id","collectionId","revision","name","concept","fishingMethodId","typeId","itemPartId","qualityId","coreFunctionId","functionIntensityPolicy","performanceProfileId","performanceIntensityPolicy","coreAffixIds","secondaryAffixPoolIds","forbiddenAffixIds","planningPullRange","targetPullSpecifications","signature","patchIds","partConstraintSetRef","skuIds","status","createdAt","updatedAt"]},
-    "v23SeriesPartHeads": {"schemaId":"project-workbook/root/v23SeriesPartHeads/v1","identityFields":["seriesId","partId"],"revisionFields":["revision"],"hashFields":[],"exactFields":[],"allowedFields":["seriesId","partId","revision"]},
-    "v23SkuDrawerHeads": {"schemaId":"project-workbook/root/v23SkuDrawerHeads/v1","identityFields":["skuId"],"revisionFields":["revision"],"hashFields":[],"exactFields":[],"allowedFields":["skuId","revision"]},
     "v23AffixDefinitions": {"schemaId":"project-workbook/root/v23AffixDefinitions/v1","identityFields":["affixId","revision"],"revisionFields":["revision"],"hashFields":["contentHash"],"exactFields":["revision","contentHash"],"allowedFields":["affixId","revision","contentHash","payload"]},
     "v23TechnologyDefinitions": {"schemaId":"project-workbook/root/v23TechnologyDefinitions/v1","identityFields":["technologyId","revision"],"revisionFields":["revision"],"hashFields":["contentHash"],"exactFields":["revision","contentHash"],"allowedFields":["technologyId","revision","itemPartId","name","description","memberAffixRefs","enabled","contentHash"]},
     "v23TechnologyHeads": {"schemaId":"project-workbook/root/v23TechnologyHeads/v1","identityFields":["technologyId"],"revisionFields":["revision"],"hashFields":[],"exactFields":[],"allowedFields":["technologyId","revision"]},
@@ -283,8 +273,6 @@
     "purchasableModels": {"schemaId":"project-workbook/root/purchasableModels/v1","identityFields":["id"],"revisionFields":["revision"],"hashFields":[],"exactFields":["createdAt","configurationSnapshotId"],"allowedFields":["id","revision","skuId","name","modelVariantKey","stableModelKey","configIdBundleRef","action","hardness","lengthM","fishWeightGradeId","componentSelections","technologyIds","attributeAffixIds","passiveAffixIds","patchIds","price","unlockPolicyRef","commercePolicyRef","configurationSnapshotId","status","createdAt","updatedAt"]},
     "v3Affixes": {"schemaId":"project-workbook/root/v3Affixes/v1","identityFields":["id","version"],"revisionFields":["version"],"hashFields":[],"exactFields":[],"allowedFields":["id","version","name","category","itemPartId","generationPolicy","rarity","valueScore","tags","attributeEffects","passivePayload","description","enabled"]},
     "technologies": {"schemaId":"project-workbook/root/technologies/v1","identityFields":["id","version"],"revisionFields":["version"],"hashFields":[],"exactFields":[],"allowedFields":["id","version","name","description","affixIds","compatiblePerformanceProfileIds","compatibleSeriesIds","minimumQualityId","generationPolicy","valueScorePolicy","enabled"]},
-    "qualityValuePolicyDrafts": {"schemaId":"project-workbook/root/qualityValuePolicyDrafts/v1","identityFields":["id","sourceRevision"],"revisionFields":["sourceRevision"],"hashFields":["inputHash"],"exactFields":["sourceRevisionId","sourceRevision","qualitySheetId","affixSheetId","inputHash","importedAt"],"allowedFields":["id","sourceRevisionId","sourceRevision","qualitySheetId","affixSheetId","ranges","qualityTableDescriptor","combinationRules","formalStatus","inputHash","importedAt"]},
-    "pricingPolicyDrafts": {"schemaId":"project-workbook/root/pricingPolicyDrafts/v1","identityFields":["id","sourceRevision"],"revisionFields":["sourceRevision"],"hashFields":["inputHash"],"exactFields":["sourceRevisionId","sourceRevision","pricingSheetId","qualitySheetId","typeMaterialSheetId","inputHash","importedAt"],"allowedFields":["id","sourceRevisionId","sourceRevision","pricingSheetId","qualitySheetId","typeMaterialSheetId","businessFormulaCells","maintenanceConsumptionRates","partAllocationRatios","repairCoefficients","totalLossTimes","purchaseCoefficients","partsToWholeRatios","qualityMappings","qualityPriceFactorRanges","scoreInterpolation","performanceScoringPolicy","moneyPolicy","executionPolicy","formalStatus","inputHash","importedAt"]},
     "parameters": {"schemaId":"project-workbook/root/parameters/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":["id"],"allowedFields":["id","key","label","itemKind","itemPartId","unit","precision","benefitMode","balanceWeight","normalizationScale","allowedOperations","targetRange","notes"]},
     "templates": {"schemaId":"project-workbook/root/templates/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":["sourceRevisionId","sourceSheetId","sourceRow"],"allowedFields":["id","name","fishMinKg","fishMaxKg","nominalFishKg","rangeSemantics","targetPullMinKgf","targetPullMaxKgf","nominalTargetPullKgf","templatePriority","tier","values","notes","methodId","itemPartId","sourceRevisionId","sourceSheetId","sourceRow","fishWeightLevel"]},
     "modifiers": {"schemaId":"project-workbook/root/modifiers/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":[],"allowedFields":["id","dimension","name","level","itemKinds","methodIds","rules","notes","enabled"]},
@@ -303,7 +291,6 @@
     "v23SeriesPartRevisions":{"carrier":"records","typeRef":"lib/types.ts#SeriesPartRevision","recordKeyFields":["seriesId","partId","revision"],"revisionFields":["revision"],"hashFields":["contentHash"],"singleton":false,"variants":[]},
     "v23SkuDrawerRevisions":{"carrier":"records","typeRef":"lib/types.ts#SkuDrawerRevision","recordKeyFields":["skuId","revision"],"revisionFields":["revision"],"hashFields":["contentHash"],"singleton":false,"variants":[]},
     "v23FunctionTemplates":{"carrier":"records","typeRef":"lib/types.ts#V23FunctionTemplateDefinition","recordKeyFields":["ref.templateId","ref.revisionId"],"revisionFields":["ref.revisionId"],"hashFields":["ref.contentHash"],"singleton":false,"variants":[]},
-    "partConstraintSets":{"carrier":"records","typeRef":"lib/types.ts#PartConstraintSet","recordKeyFields":["constraintSetId","revision"],"revisionFields":["revision"],"hashFields":["contentHash"],"singleton":false,"variants":[]},
     "candidateSearchRecipes":{"carrier":"records","typeRef":"lib/types.ts#CandidateSearchRecipe","recordKeyFields":["id","revision"],"revisionFields":["revision"],"hashFields":[],"singleton":false,"variants":[]},
     "configurationSnapshots":{"carrier":"records","typeRef":"lib/types.ts#ConfigurationSnapshot","recordKeyFields":["id","version"],"revisionFields":["version"],"hashFields":["contentHash"],"singleton":false,"variants":[]},
     "reductionStackingPolicyVersions":{"carrier":"records","typeRef":"lib/types.ts#ReductionStackingPolicyVersion","recordKeyFields":["id","version"],"revisionFields":["version"],"hashFields":["contentHash","inputHash"],"singleton":false,"variants":[]},
@@ -329,7 +316,6 @@
     "v23SeriesPartRevisions":"project-workbook/preserved/v23SeriesPartRevisions/v1",
     "v23SkuDrawerRevisions":"project-workbook/preserved/v23SkuDrawerRevisions/v1",
     "v23FunctionTemplates":"project-workbook/preserved/v23FunctionTemplates/v1",
-    "partConstraintSets":"project-workbook/preserved/partConstraintSets/v1",
     "candidateSearchRecipes":"project-workbook/preserved/candidateSearchRecipes/v1",
     "configurationSnapshots":"project-workbook/preserved/configurationSnapshots/v1",
     "reductionStackingPolicyVersions":"project-workbook/preserved/reductionStackingPolicyVersions/v1",
@@ -358,7 +344,7 @@
       {"path":"lib/interaction-contracts.ts","sha256":"bb176c98f55448dbfd46d9619b83325591a2e36d56aacf50342d59f7461fe5af"},
       {"path":"lib/quality-value-policy.ts","sha256":"9acc48f99b77ba1992c83c62097b00f8c96f8cff0b7e4af3baf0187e4e043360"}
     ],
-    "recursiveTypeGraphSha256":"048b5219df36b6f074a20d41e7fe7cdf4e1431d5bb45e57b8da4e65adf027444",
+    "recursiveTypeGraphSha256":"c4eaf5d9004d9cd1bee44b222ad9143af7ac1ee6b685e045ef69f4eff5a548dd",
     "dynamicValuePolicy":"OPAQUE_SERVER_EXPORT_ONLY_EXACT_COMPARE_NO_CLIENT_CONSTRUCTION"
   },
   "diagnosticRootCatalog": {
@@ -386,8 +372,6 @@
       "affinityAxisWeights",
       "collections",
       "seriesDefinitions",
-      "v23SeriesPartHeads",
-      "v23SkuDrawerHeads",
       "v23AffixDefinitions",
       "v23TechnologyDefinitions",
       "v23TechnologyHeads",
@@ -395,8 +379,6 @@
       "purchasableModels",
       "v3Affixes",
       "technologies",
-      "qualityValuePolicyDrafts",
-      "pricingPolicyDrafts",
       "parameters",
       "templates",
       "modifiers",
@@ -415,7 +397,6 @@
       "v23SeriesPartRevisions",
       "v23SkuDrawerRevisions",
       "v23FunctionTemplates",
-      "partConstraintSets",
       "candidateSearchRecipes",
       "configurationSnapshots",
       "reductionStackingPolicyVersions",
@@ -439,8 +420,13 @@
       "schemaVersion",
       "configIdGovernance",
       "patchLedger",
+      "v23SeriesPartHeads",
+      "v23SkuDrawerHeads",
+      "partConstraintSets",
       "canonicalRuleSourceDrafts",
       "weightTemplatePolicyDrafts",
+      "qualityValuePolicyDrafts",
+      "pricingPolicyDrafts",
       "workspacePolicies",
       "pricingPolicyVersions",
       "identityAuditLog",

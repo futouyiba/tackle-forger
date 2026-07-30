@@ -49,6 +49,50 @@ test("canonical project workbook contract binds all current WorkspaceState roots
   assert.match(result.manifestSha256, /^[a-f0-9]{64}$/);
 });
 
+test("F0 keeps raw constraints, revision heads and source-derived drafts server-owned", async () => {
+  const { manifest, roots } = await fixture();
+  assert.deepEqual(
+    [
+      manifest.classifications.importable_current.length,
+      manifest.classifications.preserved_frozen.length,
+      manifest.classifications.server_owned.length,
+      manifest.classifications.forbidden.length,
+      manifest.classifications.export_only_diagnostic.length,
+    ],
+    [28, 23, 17, 15, 10],
+  );
+  for (const root of [
+    "partConstraintSets",
+    "v23SeriesPartHeads",
+    "v23SkuDrawerHeads",
+    "qualityValuePolicyDrafts",
+    "pricingPolicyDrafts",
+  ]) {
+    assert.ok(manifest.classifications.server_owned.includes(root), root);
+    assert.equal(Object.hasOwn(manifest.recordSchemas, root), false, root);
+    assert.equal(Object.hasOwn(manifest.preservedRootCatalog, root), false, root);
+    assert.equal(Object.hasOwn(manifest.preservedSchemaCatalog, root), false, root);
+  }
+
+  for (const [root, unsafeTarget] of [
+    ["partConstraintSets", "preserved_frozen"],
+    ["v23SeriesPartHeads", "importable_current"],
+    ["v23SkuDrawerHeads", "importable_current"],
+    ["qualityValuePolicyDrafts", "importable_current"],
+    ["pricingPolicyDrafts", "importable_current"],
+  ]) {
+    const forged = clone(manifest);
+    forged.classifications.server_owned =
+      forged.classifications.server_owned.filter((candidate) => candidate !== root);
+    forged.classifications[unsafeTarget].push(root);
+    assert.throws(
+      () => validateProjectWorkbookManifest(forged, roots),
+      /exact expected classifications/,
+      `${root} must reject a forged ${unsafeTarget} carrier`,
+    );
+  }
+});
+
 test("root classification rejects new, missing and duplicate roots", async () => {
   const { manifest, roots } = await fixture();
   assert.equal(validateProjectWorkbookManifest(manifest, roots), true);
@@ -183,18 +227,14 @@ test("legacy, mixed-lifecycle and raw-evidence roots use safe projections", asyn
   assert.ok(manifest.classifications.server_owned.includes("canonicalRuleSourceDrafts"));
   assert.ok(manifest.classifications.server_owned.includes("weightTemplatePolicyDrafts"));
   assert.ok(manifest.classifications.server_owned.includes("pricingPolicyVersions"));
+  assert.ok(manifest.classifications.server_owned.includes("partConstraintSets"));
+  assert.ok(manifest.classifications.server_owned.includes("qualityValuePolicyDrafts"));
+  assert.ok(manifest.classifications.server_owned.includes("pricingPolicyDrafts"));
   assert.equal(Object.hasOwn(manifest.recordSchemas, "patchLedger"), false);
   assert.equal(Object.hasOwn(manifest.recordSchemas, "canonicalRuleSourceDrafts"), false);
-  assert.equal(
-    manifest.recordSchemas.pricingPolicyDrafts.allowedFields.includes("legacyExecutionPayload"),
-    false,
-  );
-  assert.equal(
-    manifest.recordSchemas.qualityValuePolicyDrafts.allowedFields.includes(
-      "legacyPerformanceScoringEvidence",
-    ),
-    false,
-  );
+  assert.equal(Object.hasOwn(manifest.recordSchemas, "partConstraintSets"), false);
+  assert.equal(Object.hasOwn(manifest.recordSchemas, "pricingPolicyDrafts"), false);
+  assert.equal(Object.hasOwn(manifest.recordSchemas, "qualityValuePolicyDrafts"), false);
 });
 
 test("versioned definitions use composite identities and every frozen root has a carrier key", async () => {

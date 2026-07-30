@@ -39,17 +39,17 @@ export const EXPECTED_ROOT_CLASSIFICATIONS = {
   importable_current: [
     "ruleSettings", "itemParts", "methodProfiles", "itemTypeProfiles", "functionProfiles",
     "qualityProfiles", "compatibilityRules", "affinityRules",
-    "affinityAxisWeights", "collections", "seriesDefinitions", "v23SeriesPartHeads",
-    "v23SkuDrawerHeads", "v23AffixDefinitions", "v23TechnologyDefinitions",
+    "affinityAxisWeights", "collections", "seriesDefinitions",
+    "v23AffixDefinitions", "v23TechnologyDefinitions",
     "v23TechnologyHeads", "skuDrawers", "purchasableModels", "v3Affixes", "technologies",
-    "qualityValuePolicyDrafts", "pricingPolicyDrafts", "parameters", "templates", "modifiers",
+    "parameters", "templates", "modifiers",
     "layers", "affixes", "qualityBands", "affixScorePolicy", "seriesShowcases",
     "ruleGraphs", "notes",
   ],
   preserved_frozen: [
     "ruleSetVersions", "performanceSummaryDefinitions", "projectionPatches",
     "v23SeriesPartRevisions", "v23SkuDrawerRevisions", "v23FunctionTemplates",
-    "partConstraintSets", "candidateSearchRecipes", "configurationSnapshots",
+    "candidateSearchRecipes", "configurationSnapshots",
     "reductionStackingPolicyVersions",
     "fiveAxisDispositionCatalogRevisions", "fiveAxisViewDefinitions", "fiveAxisVertexSets",
     "currentFiveAxisDispositionCatalogRevisionId", "patchReviewBatches",
@@ -59,7 +59,9 @@ export const EXPECTED_ROOT_CLASSIFICATIONS = {
   ],
   server_owned: [
     "workspaceId", "schemaVersion", "configIdGovernance", "patchLedger",
-    "canonicalRuleSourceDrafts", "weightTemplatePolicyDrafts", "workspacePolicies",
+    "v23SeriesPartHeads", "v23SkuDrawerHeads", "partConstraintSets",
+    "canonicalRuleSourceDrafts", "weightTemplatePolicyDrafts",
+    "qualityValuePolicyDrafts", "pricingPolicyDrafts", "workspacePolicies",
     "pricingPolicyVersions", "identityAuditLog", "commandIdempotencyRecords",
     "governanceAuditLog", "importedAt",
   ],
@@ -189,9 +191,9 @@ const EXPECTED_SHEETS = {
 };
 
 const EXPECTED_RECORD_SCHEMAS_SHA256 =
-  "038180ffbae6a7a7dde69a670cdea0d01be291fca70caf873894e41f1e70f23b";
+  "6ffcafa5f38daf43ca723098b33e909850911d1ac9d0783b1b9bd4377d3bd501";
 const EXPECTED_RECORD_SCHEMA_AUTHORITY_SHA256 =
-  "bec1fb7e3f8bde5dd82d2a6f3c9a2777bc92dd3f0000380e92bbddeee2fc5c70";
+  "f5e0c3babd95c21825cfd6b1c229463a019ca2fc928d37d434785bd4027abaee";
 
 function fail(message) {
   throw new Error(message);
@@ -1032,8 +1034,6 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     EXPECTED_ROOT_CLASSIFICATIONS.importable_current);
   assert.deepEqual(manifest.recordSchemaAuthority.projectionExclusions, {
     skuDrawers: ["projectionMatch", "fiveAxisProjectionReferences", "validationSummary"],
-    qualityValuePolicyDrafts: ["issues"],
-    pricingPolicyDrafts: ["issues"],
   });
   assert.deepEqual(
     Object.keys(manifest.recordSchemaAuthority.typeRefs),
@@ -1043,7 +1043,7 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
   for (const [root, typeRef] of Object.entries(manifest.recordSchemaAuthority.typeRefs)) {
     assert.match(
       typeRef,
-      /^lib\/(?:types|quality-value-policy|pricing-policy)\.ts#[A-Za-z][A-Za-z0-9]*$/,
+      /^lib\/types\.ts#[A-Za-z][A-Za-z0-9]*$/,
       `${root} has an invalid recursive type authority`,
     );
   }

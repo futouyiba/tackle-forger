@@ -2,7 +2,7 @@
   "format": "tackle-v3-open-registry/v1",
   "source": {
     "path": "docs/spec-v3",
-    "sha256": "97e759bd07b266901ebd013a303e587ceb201ff10b060172b3b9258772f730bb"
+    "sha256": "34434c51efd0f1534c2faaaf362581ceed2da5b2350cb63dda06f23acac43c8b"
   },
   "entries": [
     {
@@ -136,8 +136,8 @@
       "dependencies": [
         "20.2"
       ],
-      "startLine": 210,
-      "endLine": 372,
+      "startLine": 212,
+      "endLine": 374,
       "contentSha256": "a67c304a053717c3e96956a4342a62c48c06d0d335d98c8dcc5aa9aaea3f0540"
     },
     {

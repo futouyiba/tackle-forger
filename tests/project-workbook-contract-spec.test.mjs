@@ -7,6 +7,7 @@ import {
   checkProjectWorkbookContract,
   parseWorkspaceStateRoots,
   validateMachineCell,
+  validatePreservedRootCatalog,
   validateProjectWorkbookManifest,
 } from "../scripts/check-project-workbook-contract.mjs";
 
@@ -192,8 +193,26 @@ test("versioned definitions use composite identities and every frozen root has a
     manifest.recordSchemas.v23AffixDefinitions.identityFields,
     ["affixId", "revision"],
   );
+  assert.deepEqual(manifest.preservedRootCatalog.performanceSummaryDefinitions, {
+    carrier: "records",
+    typeRef: "lib/performance-summary.ts#PerformanceSummaryDefinition",
+    recordKeyFields: ["definitionId", "definitionVersion"],
+    revisionFields: ["definitionVersion"],
+    hashFields: ["definitionHash"],
+    singleton: false,
+    variants: [],
+  });
+  assert.deepEqual(
+    manifest.preservedRootCatalog.fiveAxisVertexSets.variants.map((variant) => variant.type),
+    ["LegacyFiveAxisVertexSet", "FiveAxisVertexSet"],
+  );
+  assert.equal(validatePreservedRootCatalog(manifest), true);
   for (const root of manifest.classifications.preserved_frozen) {
-    assert.ok(manifest.preservedRootCatalog[root].recordKeyFields.length > 0);
+    const catalog = manifest.preservedRootCatalog[root];
+    assert.ok(
+      catalog.recordKeyFields.length > 0
+        || catalog.variants.every((variant) => variant.recordKeyFields.length > 0),
+    );
   }
   const weakened = clone(manifest);
   delete weakened.preservedRootCatalog.performanceProfiles;
@@ -201,6 +220,19 @@ test("versioned definitions use composite identities and every frozen root has a
   const singleton = clone(manifest);
   singleton.preservedRootCatalog.currentFiveAxisDispositionCatalogRevisionId.singleton = false;
   assert.throws(() => validateProjectWorkbookManifest(singleton, roots));
+
+  const typo = clone(manifest);
+  typo.preservedRootCatalog.performanceSummaryDefinitions.hashFields = ["contentHash"];
+  assert.throws(() => validatePreservedRootCatalog(typo), /contentHash is absent/);
+
+  const missingLegacy = clone(manifest);
+  missingLegacy.preservedRootCatalog.fiveAxisVertexSets.variants.shift();
+  assert.throws(() => validatePreservedRootCatalog(missingLegacy), /every union variant/);
+
+  const legacyTypo = clone(manifest);
+  legacyTypo.preservedRootCatalog.fiveAxisVertexSets.variants[0].recordKeyFields =
+    ["vertexSetId"];
+  assert.throws(() => validatePreservedRootCatalog(legacyTypo), /vertexSetId is absent/);
 });
 
 test("safe projections rederive unresolved diagnostic payloads", async () => {
@@ -240,6 +272,106 @@ test("machine columns reject blank, null, numeric precision, date, boolean and e
     .find((entry) => entry.name === "payload_json");
   assert.equal(validateMachineCell(payloadColumn, '{"a":2,"b":1}'), true);
   assert.throws(() => validateMachineCell(payloadColumn, '{"b":1,"a":2}'), /canonical JSON/);
+  assert.throws(
+    () => validateMachineCell(payloadColumn, '{"z":1,"K":2}'),
+    /canonical JSON/,
+  );
+  assert.throws(
+    () => validateMachineCell(payloadColumn, '{"é":1,"é":2}'),
+    /NFC key collisions/,
+  );
+});
+
+test("every closed format validates its domain and unknown formats fail closed", async () => {
+  const { manifest } = await fixture();
+  const byFormat = new Map(
+    Object.values(manifest.workbookSchema.sheets)
+      .flatMap((sheet) => sheet.columns)
+      .map((entry) => [entry.format, entry]),
+  );
+  assert.equal(validateMachineCell(byFormat.get("stable-id"), "workspace:alpha-1"), true);
+  assert.throws(() => validateMachineCell(byFormat.get("stable-id"), "bad id"));
+  assert.equal(validateMachineCell(byFormat.get("stable-version"), "v1.2.3+safe"), true);
+  assert.throws(() => validateMachineCell(byFormat.get("stable-version"), "v 1"));
+  assert.equal(validateMachineCell(byFormat.get("workspace-root"), "parameters"), true);
+  assert.throws(() => validateMachineCell(byFormat.get("workspace-root"), "futureRoot"));
+  assert.equal(validateMachineCell(byFormat.get("diagnostic-severity"), "WARNING"), true);
+  assert.throws(() => validateMachineCell(byFormat.get("diagnostic-severity"), "warn"));
+  assert.equal(validateMachineCell(byFormat.get("stable-code"), "SCHEMA_CONFLICT"), true);
+  assert.throws(() => validateMachineCell(byFormat.get("stable-code"), "schema-conflict"));
+  assert.equal(validateMachineCell(byFormat.get("classification"), "preserved_frozen"), true);
+  assert.throws(() => validateMachineCell(byFormat.get("classification"), "mutable"));
+  assert.equal(validateMachineCell(byFormat.get("display-text"), "安全说明"), true);
+  assert.throws(() => validateMachineCell(byFormat.get("display-text"), "bad\u0000text"));
+  assert.throws(
+    () => validateMachineCell(
+      { name: "future", type: "string", required: true, format: "future-format" },
+      "value",
+    ),
+    /Unknown machine column format/,
+  );
+});
+
+test("record key JSON binds root identity arity, primitive types and preserved variants", async () => {
+  const { manifest } = await fixture();
+  const keyColumn = manifest.workbookSchema.sheets.__TF_CURRENT.columns
+    .find((entry) => entry.name === "record_key");
+  assert.equal(
+    validateMachineCell(keyColumn, '["tech:1",2]', "string", {
+      manifest,
+      root: "v23TechnologyDefinitions",
+    }),
+    true,
+  );
+  assert.throws(
+    () => validateMachineCell(keyColumn, '["tech:1"]', "string", {
+      manifest,
+      root: "v23TechnologyDefinitions",
+    }),
+    /arity/,
+  );
+  assert.throws(
+    () => validateMachineCell(keyColumn, '["tech:1",1.5]', "string", {
+      manifest,
+      root: "v23TechnologyDefinitions",
+    }),
+    /safe integer/,
+  );
+  assert.throws(
+    () => validateMachineCell(keyColumn, '["tech:1","2"]', "string", {
+      manifest,
+      root: "v23TechnologyDefinitions",
+    }),
+    /revision must be a safe integer/,
+  );
+  assert.equal(
+    validateMachineCell(keyColumn, '["definition:1","v1","grade:1","rules:v1"]', "string", {
+      manifest,
+      root: "fiveAxisVertexSets",
+      variant: "LegacyFiveAxisVertexSet",
+    }),
+    true,
+  );
+  assert.throws(
+    () => validateMachineCell(
+      keyColumn,
+      '["definition:1","v1",1,"rules:v1"]',
+      "string",
+      {
+        manifest,
+        root: "fiveAxisVertexSets",
+        variant: "LegacyFiveAxisVertexSet",
+      },
+    ),
+    /fishWeightGradeId must be NFC text/,
+  );
+  assert.throws(
+    () => validateMachineCell(keyColumn, '["vertex:1"]', "string", {
+      manifest,
+      root: "fiveAxisVertexSets",
+    }),
+    /explicit preserved union variant/,
+  );
 });
 
 test("forbidden roots have no content-derived hash while diagnostics are non-semantic", async () => {

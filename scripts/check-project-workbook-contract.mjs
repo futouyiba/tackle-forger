@@ -199,12 +199,66 @@ function canonicalJson(value) {
   }
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
   assert.equal(Object.getPrototypeOf(value), Object.prototype);
-  return `{${Object.keys(value).sort()
-    .map((key) => `${JSON.stringify(key.normalize("NFC"))}:${canonicalJson(value[key])}`)
+  const normalizedEntries = Object.keys(value).map((key) => [key.normalize("NFC"), value[key]]);
+  assert.equal(
+    new Set(normalizedEntries.map(([key]) => key)).size,
+    normalizedEntries.length,
+    "canonical JSON rejects NFC key collisions",
+  );
+  return `{${normalizedEntries.sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+    .map(([key, entryValue]) => `${JSON.stringify(key)}:${canonicalJson(entryValue)}`)
     .join(",")}}`;
 }
 
-export function validateMachineCell(columnSchema, value, cellKind = "string") {
+function expectedRecordKeyFields(manifest, root, variant) {
+  const schema = manifest.recordSchemas[root];
+  if (schema) return schema.identityFields;
+  const catalog = manifest.preservedRootCatalog[root];
+  assert.ok(catalog, `record key root ${root} is not importable or preserved`);
+  if (catalog.carrier !== "variant_records") return catalog.recordKeyFields;
+  const selected = catalog.variants.find((entry) => entry.type === variant);
+  assert.ok(selected, `${root} requires an explicit preserved union variant`);
+  return selected.recordKeyFields;
+}
+
+function fieldPathType(source, typeName, fieldPath) {
+  let currentType = typeName;
+  let fieldType = "";
+  for (const part of fieldPath.split(".")) {
+    const fields = interfaceFieldTypes(source, currentType);
+    assert.ok(fields, `record key type ${currentType} must resolve to an interface`);
+    fieldType = fields.get(part);
+    assert.ok(fieldType, `${typeName}.${fieldPath} is absent`);
+    currentType = fieldType.match(/\b([A-Z][A-Za-z0-9_$]*)\b/)?.[1] ?? "";
+  }
+  return fieldType;
+}
+
+function recordKeyComponentKinds(manifest, root, variant, repositoryRoot) {
+  const fields = expectedRecordKeyFields(manifest, root, variant);
+  if (fields.length === 1 && fields[0] === "$singleton") return ["singleton"];
+  const schema = manifest.recordSchemas[root];
+  const catalog = manifest.preservedRootCatalog[root];
+  const typeRef = schema
+    ? manifest.recordSchemaAuthority.typeRefs[root]
+    : catalog.typeRef;
+  const [sourcePath, defaultTypeName] = typeRef.split("#");
+  const typeName = variant ?? defaultTypeName;
+  const source = readFileSync(path.join(repositoryRoot, sourcePath), "utf8");
+  const declarations = parseTypeDeclarations(source);
+  return fields.map((field) => {
+    let type = fieldPathType(source, typeName, field);
+    const alias = type.match(/^\s*([A-Z][A-Za-z0-9_$]*)\s*$/)?.[1];
+    if (alias && declarations.has(alias)) type = declarations.get(alias);
+    const acceptsNumber = /\bnumber\b/.test(type);
+    const acceptsString = /\bstring\b/.test(type) || /["'`][^"'`]*["'`]/.test(type);
+    assert.ok(acceptsNumber || acceptsString, `${root}.${field} is not a scalar record-key type`);
+    return acceptsNumber && acceptsString ? "string-or-safe-integer"
+      : acceptsNumber ? "safe-integer" : "string";
+  });
+}
+
+export function validateMachineCell(columnSchema, value, cellKind = "string", context = {}) {
   assert.equal(cellKind, "string", `${columnSchema.name} rejects Excel ${cellKind} cells`);
   assert.equal(typeof value, "string", `${columnSchema.name} must be encoded as text`);
   assert.notEqual(value, "", `${columnSchema.name} rejects blank cells`);
@@ -215,15 +269,59 @@ export function validateMachineCell(columnSchema, value, cellKind = "string") {
   } else if (format === "lowercase-sha256") {
     assert.match(value, /^[0-9a-f]{64}$/);
   } else if (format === "canonical-revision-or-null") {
-    assert.ok(value === "null" || /^(0|[1-9][0-9]*)$/.test(value) || /^[A-Za-z0-9._:-]+$/.test(value));
+    assert.ok(value === "null" || /^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$/.test(value));
   } else if (format === "opaque-token-or-null") {
     assert.ok(value === "null" || /^opaque_[A-Za-z0-9_-]{22,}$/.test(value));
   } else if (format === "rfc8785-json" || format === "rfc8785-key-json") {
     const parsed = JSON.parse(value);
     assert.equal(canonicalJson(parsed), value, `${columnSchema.name} must use canonical JSON`);
-    if (format === "rfc8785-key-json") assert.ok(Array.isArray(parsed));
+    if (format === "rfc8785-key-json") {
+      assert.ok(Array.isArray(parsed));
+      assert.ok(context.manifest && context.root, "record key validation requires manifest and root");
+      const fields = expectedRecordKeyFields(context.manifest, context.root, context.variant);
+      const kinds = recordKeyComponentKinds(
+        context.manifest,
+        context.root,
+        context.variant,
+        context.repositoryRoot ?? process.cwd(),
+      );
+      assert.equal(parsed.length, fields.length, `${context.root} record key arity mismatch`);
+      for (const [index, component] of parsed.entries()) {
+        const isString = typeof component === "string"
+          && component.length > 0
+          && component === component.normalize("NFC");
+        const isInteger = Number.isSafeInteger(component);
+        if (kinds[index] === "singleton") assert.equal(component, "$singleton");
+        else if (kinds[index] === "string") assert.ok(isString, `${fields[index]} must be NFC text`);
+        else if (kinds[index] === "safe-integer") {
+          assert.ok(isInteger, `${fields[index]} must be a safe integer`);
+        } else {
+          assert.ok(isString || isInteger, `${fields[index]} must be NFC text or a safe integer`);
+        }
+      }
+    }
   } else if (format.startsWith("literal:")) {
     assert.equal(value, format.slice("literal:".length));
+  } else if (format === "stable-id") {
+    assert.match(value, /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/);
+  } else if (format === "stable-version") {
+    assert.match(value, /^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$/);
+  } else if (format === "workspace-root") {
+    assert.ok(
+      Object.values(EXPECTED_ROOT_CLASSIFICATIONS).flat().includes(value),
+      `${value} is not a current WorkspaceState root`,
+    );
+  } else if (format === "diagnostic-severity") {
+    assert.ok(["INFO", "WARNING", "ERROR"].includes(value));
+  } else if (format === "stable-code") {
+    assert.match(value, /^[A-Z][A-Z0-9_]{0,127}$/);
+  } else if (format === "classification") {
+    assert.ok(CLASSIFICATIONS.includes(value));
+  } else if (format === "display-text") {
+    assert.equal(value, value.normalize("NFC"));
+    assert.doesNotMatch(value, /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/);
+  } else {
+    fail(`Unknown machine column format: ${format}`);
   }
   return true;
 }
@@ -335,6 +433,44 @@ function interfaceProjectionBody(source, typeName, allowedFields) {
     }
   }
   return segments.join("");
+}
+
+function interfaceFieldTypes(source, interfaceName) {
+  const declaration = source.match(
+    new RegExp(`\\bexport\\s+interface\\s+${interfaceName}\\s*(?:extends[^\\{]+)?\\{`),
+  );
+  if (!declaration || declaration.index === undefined) return null;
+  const openingIndex = source.indexOf("{", declaration.index);
+  const body = source.slice(openingIndex + 1, matchingBrace(source, openingIndex))
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/.*$/gm, "");
+  const fields = new Map();
+  let depth = 0;
+  let segment = "";
+  for (const character of body) {
+    segment += character;
+    if ("{[(".includes(character)) depth += 1;
+    if ("}])".includes(character)) depth -= 1;
+    if (character === ";" && depth === 0) {
+      const field = segment.trim().match(
+        /^([A-Za-z_$][A-Za-z0-9_$]*)(?:\?)?:\s*([\s\S]*);$/,
+      );
+      if (field) fields.set(field[1], field[2].trim());
+      segment = "";
+    }
+  }
+  return fields;
+}
+
+function assertFieldPathExists(source, typeName, fieldPath, label) {
+  let currentType = typeName;
+  for (const part of fieldPath.split(".")) {
+    const fields = interfaceFieldTypes(source, currentType);
+    assert.ok(fields, `${label} type ${currentType} must resolve to an interface`);
+    const fieldType = fields.get(part);
+    assert.ok(fieldType, `${label}.${fieldPath} is absent from ${currentType}`);
+    currentType = fieldType.match(/\b([A-Z][A-Za-z0-9_$]*)\b/)?.[1] ?? "";
+  }
 }
 
 export function recursiveProjectionGraphHash(manifest, sourceByPath) {
@@ -621,10 +757,26 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
   );
   for (const [root, catalog] of Object.entries(manifest.preservedRootCatalog)) {
     assertExactKeys(catalog, [
-      "carrier", "recordKeyFields", "revisionFields", "hashFields", "singleton",
+      "carrier", "typeRef", "recordKeyFields", "revisionFields", "hashFields", "singleton",
+      "variants",
     ], `preserved root ${root}`);
-    assert.ok(["records", "whole_root_singleton"].includes(catalog.carrier));
-    assert.ok(catalog.recordKeyFields.length > 0, `${root} needs a stable record key`);
+    assert.ok(["records", "variant_records", "whole_root_singleton"].includes(catalog.carrier));
+    assert.match(catalog.typeRef, /^lib\/[a-z0-9-]+\.ts#[A-Za-z][A-Za-z0-9]*$/);
+    if (catalog.carrier !== "variant_records") {
+      assert.ok(catalog.recordKeyFields.length > 0, `${root} needs a stable record key`);
+      assert.deepEqual(catalog.variants, []);
+    } else {
+      assert.deepEqual(catalog.recordKeyFields, []);
+      assert.deepEqual(catalog.revisionFields, []);
+      assert.deepEqual(catalog.hashFields, []);
+      assert.ok(catalog.variants.length > 1, `${root} mixed union needs explicit variants`);
+      for (const variant of catalog.variants) {
+        assertExactKeys(variant, [
+          "type", "recordKeyFields", "revisionFields", "hashFields",
+        ], `${root}.${variant.type}`);
+        assert.ok(variant.recordKeyFields.length > 0);
+      }
+    }
     assert.equal(new Set(catalog.recordKeyFields).size, catalog.recordKeyFields.length);
     assert.equal(catalog.singleton, catalog.carrier === "whole_root_singleton");
     if (catalog.singleton) assert.deepEqual(catalog.recordKeyFields, ["$singleton"]);
@@ -680,6 +832,50 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
   return true;
 }
 
+export function validatePreservedRootCatalog(manifest, repositoryRoot = process.cwd()) {
+  for (const [rootName, catalog] of Object.entries(manifest.preservedRootCatalog)) {
+    const [sourcePath, typeName] = catalog.typeRef.split("#");
+    const source = readFileSync(path.join(repositoryRoot, sourcePath), "utf8");
+    if (catalog.carrier === "whole_root_singleton") {
+      assert.equal(typeName, "string", `${rootName} singleton type must be explicit`);
+      continue;
+    }
+    const declaration = parseTypeDeclarations(source).get(typeName);
+    assert.ok(declaration, `${rootName} typeRef ${catalog.typeRef} is unresolved`);
+    const declaredVariants = interfaceFieldTypes(source, typeName)
+      ? [typeName]
+      : [...new Set(
+        (declaration.match(/\b[A-Z][A-Za-z0-9_$]*\b/g) ?? [])
+          .filter((name) => interfaceFieldTypes(source, name)),
+      )];
+    const variantCatalog = catalog.variants.length > 0
+      ? catalog.variants
+      : declaredVariants.map((name) => ({
+        type: name,
+        recordKeyFields: catalog.recordKeyFields,
+        revisionFields: catalog.revisionFields,
+        hashFields: catalog.hashFields,
+      }));
+    if (catalog.variants.length > 0) {
+      assert.deepEqual(
+        catalog.variants.map((variant) => variant.type),
+        declaredVariants,
+        `${rootName} must enumerate every union variant exactly once`,
+      );
+    }
+    for (const variant of variantCatalog) {
+      for (const field of [
+        ...variant.recordKeyFields,
+        ...variant.revisionFields,
+        ...variant.hashFields,
+      ]) {
+        assertFieldPathExists(source, variant.type, field, `${rootName}.${variant.type}`);
+      }
+    }
+  }
+  return true;
+}
+
 export function checkProjectWorkbookContract(root = process.cwd()) {
   const manifestPath = path.join(root, "docs/spec-v3/project-workbook-v1-root-manifest.json");
   const manifestSource = readFileSync(manifestPath, "utf8");
@@ -703,6 +899,7 @@ export function checkProjectWorkbookContract(root = process.cwd()) {
     manifest.recordSchemaAuthority.recursiveTypeGraphSha256,
     "recursive closed projection graph drift",
   );
+  validatePreservedRootCatalog(manifest, root);
   for (const [rootName, typeRef] of Object.entries(manifest.recordSchemaAuthority.typeRefs)) {
     const [sourcePath, typeName] = typeRef.split("#");
     const fields = parseExportedInterfaceFields(

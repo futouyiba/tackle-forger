@@ -184,6 +184,7 @@
       "preservedSchemaAuthority",
       "diagnosticRootCatalog",
       "serverOwnedRootCatalog",
+      "importableCreatePolicies",
       "conditionalExactFieldPolicies",
       "serverOwnedInvariants",
       "classifications"
@@ -281,7 +282,7 @@
     "affinityAxisWeights": {"schemaId":"project-workbook/root/affinityAxisWeights/v1","identityFields":["$singleton"],"revisionFields":[],"hashFields":[],"exactFields":[],"allowedFields":["method_type","type_weight","type_function","function_performance","material_function","quality_specialization","model_component","series_coherence"]},
     "collections": {"schemaId":"project-workbook/root/collections/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":["createdAt"],"allowedFields":["id","name","brandStory","seriesIds","notes","createdAt","updatedAt"]},
     "v23TechnologyDefinitions": {"schemaId":"project-workbook/root/v23TechnologyDefinitions/v1","identityFields":["technologyId","revision"],"revisionFields":["revision"],"hashFields":["contentHash"],"exactFields":["revision","itemPartId","contentHash"],"allowedFields":["technologyId","revision","itemPartId","name","description","memberAffixRefs","enabled","contentHash"]},
-    "skuDrawers": {"schemaId":"project-workbook/root/skuDrawers/v1","identityFields":["id"],"revisionFields":["revision"],"hashFields":[],"exactFields":["createdAt"],"allowedFields":["id","revision","seriesId","targetPullKg","patchIds","modelIds","defaultModelId","displayOrder","status","createdAt","updatedAt"]},
+    "skuDrawers": {"schemaId":"project-workbook/root/skuDrawers/v1","identityFields":["id"],"revisionFields":["revision"],"hashFields":[],"exactFields":["id","revision","seriesId","patchIds","modelIds","defaultModelId","displayOrder","status","createdAt","updatedAt"],"allowedFields":["id","revision","seriesId","targetPullKg","patchIds","modelIds","defaultModelId","displayOrder","status","createdAt","updatedAt"]},
     "purchasableModels": {"schemaId":"project-workbook/root/purchasableModels/v1","identityFields":["id"],"revisionFields":["revision"],"hashFields":[],"exactFields":["createdAt","configurationSnapshotId"],"allowedFields":["id","revision","skuId","name","modelVariantKey","stableModelKey","configIdBundleRef","action","hardness","lengthM","fishWeightGradeId","componentSelections","technologyIds","attributeAffixIds","passiveAffixIds","patchIds","price","unlockPolicyRef","commercePolicyRef","configurationSnapshotId","status","createdAt","updatedAt"]},
     "v3Affixes": {"schemaId":"project-workbook/root/v3Affixes/v1","identityFields":["id","version"],"revisionFields":["version"],"hashFields":[],"exactFields":[],"allowedFields":["id","version","name","category","itemPartId","generationPolicy","rarity","valueScore","tags","attributeEffects","passivePayload","description","enabled"]},
     "technologies": {"schemaId":"project-workbook/root/technologies/v1","identityFields":["id","version"],"revisionFields":["version"],"hashFields":[],"exactFields":[],"allowedFields":["id","version","name","description","affixIds","compatibleSeriesIds","minimumQualityId","generationPolicy","valueScorePolicy","enabled"]},
@@ -393,6 +394,12 @@
     "commandIdempotencyRecords":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
     "governanceAuditLog":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
     "importedAt":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"}
+  },
+  "importableCreatePolicies": {
+    "skuDrawers": {
+      "policy": "REJECT",
+      "requiredActionCode": "create_sku"
+    }
   },
   "conditionalExactFieldPolicies": {
     "purchasableModels": {

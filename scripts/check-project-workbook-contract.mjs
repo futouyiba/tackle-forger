@@ -27,6 +27,7 @@ const EXPECTED_TOP_LEVEL_KEYS = [
   "preservedSchemaAuthority",
   "diagnosticRootCatalog",
   "serverOwnedRootCatalog",
+  "importableCreatePolicies",
   "conditionalExactFieldPolicies",
   "serverOwnedInvariants",
   "classifications",
@@ -131,6 +132,13 @@ const EXPECTED_CONDITIONAL_EXACT_FIELD_POLICIES = {
   },
 };
 
+const EXPECTED_IMPORTABLE_CREATE_POLICIES = {
+  skuDrawers: {
+    policy: "REJECT",
+    requiredActionCode: "create_sku",
+  },
+};
+
 const column = (name, format, type = "string") => ({ name, type, required: true, format });
 const EXPECTED_SHEETS = {
   __TF_MANIFEST: {
@@ -222,7 +230,7 @@ const EXPECTED_SHEETS = {
 };
 
 const EXPECTED_RECORD_SCHEMAS_SHA256 =
-  "8a0d59f3ee6ba9fb02a9f1fc0c4900ddf559aadcad8ea61bdf1dc8391d188d03";
+  "c6c7f41cdf3c719539b57f3d4a2043b60d9c4b4e489dc39c42811659565ca73e";
 const EXPECTED_RECORD_SCHEMA_AUTHORITY_SHA256 =
   "8f0f5aca8831899913ed52a18ec66e874400e0d5f2d9d55516d27c7e1652ac51";
 
@@ -869,7 +877,14 @@ export function validateImportableExactFields(
 ) {
   assert.ok(manifest.recordSchemas[root], `${root} is not an importable record root`);
   validateImportableRecordPayload(manifest, root, candidatePayload, repositoryRoot);
-  if (existingPayload === undefined) return true;
+  if (existingPayload === undefined) {
+    const createPolicy = manifest.importableCreatePolicies[root];
+    assert.ok(
+      !createPolicy,
+      `${root} workbook records cannot be created; use ${createPolicy?.requiredActionCode}`,
+    );
+    return true;
+  }
   validateImportableRecordPayload(manifest, root, existingPayload, repositoryRoot);
   const conditionalPolicy = manifest.conditionalExactFieldPolicies[root];
   const conditionalFields = conditionalPolicy
@@ -910,6 +925,47 @@ export function validateImportableExactFields(
       `${root}.${field} is exact-equal for an existing record`,
     );
   }
+  return true;
+}
+
+export function validateRecordSheetCardinality(manifest, currentRows, preservedRows) {
+  const validateSheet = (rows, allowedRoots, singletonRoots, sheetName) => {
+    assert.ok(Array.isArray(rows), `${sheetName} rows are required`);
+    for (const row of rows) {
+      assert.ok(
+        row && typeof row.root === "string" && allowedRoots.includes(row.root),
+        `${sheetName} contains a row for the wrong root`,
+      );
+    }
+    for (const root of singletonRoots) {
+      assert.equal(
+        rows.filter((row) => row.root === root).length,
+        1,
+        `${sheetName} singleton root ${root} requires EXACTLY_ONE row`,
+      );
+    }
+    return true;
+  };
+  const currentSingletonRoots = Object.entries(manifest.recordSchemas)
+    .filter(([, schema]) => (
+      schema.identityFields.length === 1 && schema.identityFields[0] === "$singleton"
+    ))
+    .map(([root]) => root);
+  const preservedSingletonRoots = Object.entries(manifest.preservedRootCatalog)
+    .filter(([, catalog]) => catalog.singleton === true)
+    .map(([root]) => root);
+  validateSheet(
+    currentRows,
+    manifest.classifications.importable_current,
+    currentSingletonRoots,
+    "__TF_CURRENT",
+  );
+  validateSheet(
+    preservedRows,
+    manifest.classifications.preserved_frozen,
+    preservedSingletonRoots,
+    "__TF_PRESERVED",
+  );
   return true;
 }
 
@@ -1283,6 +1339,11 @@ function validateMachineContentSheets(manifest, machineSheets, repositoryRoot) {
       (entry) => entry !== "__TF_MANIFEST_EXCEPT_MACHINE_CONTENT_SHA256",
     ),
     "machineSheets must match the declared include set exactly",
+  );
+  validateRecordSheetCardinality(
+    manifest,
+    machineSheets.__TF_CURRENT,
+    machineSheets.__TF_PRESERVED,
   );
   for (const sheetName of manifest.canonicalization.machineContentHashInput) {
     if (sheetName === "__TF_MANIFEST_EXCEPT_MACHINE_CONTENT_SHA256") continue;
@@ -2124,6 +2185,7 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     "preservedSchemaAuthority",
     "diagnosticRootCatalog",
     "serverOwnedRootCatalog",
+    "importableCreatePolicies",
     "conditionalExactFieldPolicies",
     "serverOwnedInvariants",
     "classifications",
@@ -2254,6 +2316,17 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     EXPECTED_SERVER_OWNED_ROOT_CATALOG,
     "every server-owned root must forbid raw-derived content hashes",
   );
+  assert.deepEqual(
+    manifest.importableCreatePolicies,
+    EXPECTED_IMPORTABLE_CREATE_POLICIES,
+    "importable create policies must retain command-only creation boundaries",
+  );
+  for (const [root, policy] of Object.entries(manifest.importableCreatePolicies)) {
+    assert.ok(manifest.recordSchemas[root], `${root} create policy has no record schema`);
+    assertExactKeys(policy, ["policy", "requiredActionCode"], `${root} create policy`);
+    assert.equal(policy.policy, "REJECT");
+    assert.match(policy.requiredActionCode, /^[a-z][a-z0-9_]*$/);
+  }
   assert.deepEqual(
     manifest.conditionalExactFieldPolicies,
     EXPECTED_CONDITIONAL_EXACT_FIELD_POLICIES,

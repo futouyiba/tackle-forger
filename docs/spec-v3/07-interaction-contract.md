@@ -151,6 +151,7 @@ interface GanttNodeAggregate {
 - 主状态优先级：硬冲突 > rebase > 待复核 > 警告 > 待发布 > 升级候选 > 已发布 > 草稿；全部计数保留。
 - 点击Series/Part覆盖块只更新摘要；点击具体重量段执行只读`select_weight_band`并预览，只有用户显式执行`create_sku`才持久化。
 - 矩阵空白、连续矩形和重量段标签均不创建SKU。
+- 项目工作簿不能替代`create_sku`：其中出现服务端不存在的`skuDrawers`记录必须阻断；对既有SKU只允许修改`targetPullKg`，身份、revision、Series归属、Model/Patch引用、展示顺序、状态与时间字段均保持exact-equal。
 
 正常路径：筛选矩阵，选中Series覆盖块，在底部摘要展开SKU与Model并打开预览。
 边界：单SKU仍有一个真实节点；无SKU草稿Series显示未覆盖占位，不绘制虚假跨度。

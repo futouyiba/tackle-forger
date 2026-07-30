@@ -16,6 +16,7 @@ import {
   validatePreservedRootCatalog,
   validateProjectWorkbookManifest,
   validateRecordEnvelope,
+  validateRecordSheetCardinality,
   validateRootSummary,
   validateServerRefEnvelope,
   validateWorkbookEnvelope,
@@ -80,6 +81,65 @@ function workbookSchemaHash(manifest) {
 }
 
 function workbookContext(manifest, manifestSource) {
+  const singletonPayloads = {
+    ruleSettings: { patchOffsetLimits: {} },
+    affinityAxisWeights: {
+      method_type: 1,
+      type_weight: 1,
+      type_function: 1,
+      function_performance: 1,
+      material_function: 1,
+      quality_specialization: 1,
+      model_component: 1,
+      series_coherence: 1,
+    },
+    affixScorePolicy: {
+      sameAxisFactors: [],
+      synergyBonus: 0,
+      conflictPenalty: 0,
+      passiveWeight: 1,
+      directWeight: 1,
+      notes: "",
+    },
+    notes: "",
+  };
+  const currentRows = Object.entries(manifest.recordSchemas)
+    .filter(([, schema]) => (
+      schema.identityFields.length === 1 && schema.identityFields[0] === "$singleton"
+    ))
+    .map(([root, schema]) => {
+      assert.ok(Object.hasOwn(singletonPayloads, root), `${root} needs a singleton test payload`);
+      const row = {
+        root,
+        record_schema_id: schema.schemaId,
+        record_key: '["$singleton"]',
+        record_revision: "null",
+        record_content_sha256: "0".repeat(64),
+        payload_json: canonicalPayload(singletonPayloads[root]),
+      };
+      row.record_content_sha256 = expectedRecordHash(manifest, row, "payload_json");
+      return row;
+    });
+  const preservedRows = Object.entries(manifest.preservedRootCatalog)
+    .filter(([, catalog]) => catalog.singleton === true)
+    .map(([root]) => {
+      const catalog = manifest.preservedRootCatalog[root];
+      assert.equal(catalog.typeRef, "lib/types.ts#string|null");
+      const row = {
+        root,
+        record_schema_id: manifest.preservedSchemaCatalog[root],
+        record_key: '["$singleton"]',
+        record_revision: "null",
+        record_content_sha256: "0".repeat(64),
+        opaque_canonical_payload_json: "null",
+      };
+      row.record_content_sha256 = expectedRecordHash(
+        manifest,
+        row,
+        "opaque_canonical_payload_json",
+      );
+      return row;
+    });
   const manifestFields = {
     contract_version: "project-workbook/v1",
     workspace_id: "workspace:1",
@@ -92,8 +152,8 @@ function workbookContext(manifest, manifestSource) {
     rootManifestSource: manifestSource,
     manifestFields,
     machineSheets: {
-      __TF_CURRENT: [],
-      __TF_PRESERVED: [],
+      __TF_CURRENT: currentRows,
+      __TF_PRESERVED: preservedRows,
       __TF_SERVER_REFS: manifest.classifications.server_owned.map((root) => ({
         root,
         classification: "server_owned",
@@ -568,16 +628,59 @@ test("existing importable records exact-compare every typed revision field", asy
     targetPullKg: 5,
     patchIds: [],
     modelIds: [],
+    defaultModelId: "model:1",
     displayOrder: 1,
     status: "draft",
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
   };
-  assert.equal(
-    validateImportableExactFields(manifest, "skuDrawers", { ...sku, revision: 4 }, undefined),
-    true,
-    "new records may declare their initial numeric revision",
+  assert.deepEqual(manifest.importableCreatePolicies.skuDrawers, {
+    policy: "REJECT",
+    requiredActionCode: "create_sku",
+  });
+  assert.throws(
+    () => validateImportableExactFields(manifest, "skuDrawers", sku, undefined),
+    /use create_sku/,
+    "new SKU drawers must use the v23 create_sku command path",
   );
+  assert.equal(
+    validateImportableExactFields(
+      manifest,
+      "skuDrawers",
+      { ...sku, targetPullKg: 6 },
+      sku,
+    ),
+    true,
+    "an existing SKU drawer may revise only targetPullKg",
+  );
+  const exactMutations = {
+    id: "sku:2",
+    revision: 4,
+    seriesId: "series:2",
+    patchIds: ["patch:1"],
+    modelIds: ["model:2"],
+    defaultModelId: "model:2",
+    displayOrder: 2,
+    status: "approved",
+    createdAt: "2026-02-01T00:00:00.000Z",
+    updatedAt: "2026-02-01T00:00:00.000Z",
+  };
+  assert.deepEqual(
+    manifest.recordSchemas.skuDrawers.exactFields,
+    Object.keys(exactMutations),
+  );
+  for (const [field, value] of Object.entries(exactMutations)) {
+    assert.throws(
+      () => validateImportableExactFields(
+        manifest,
+        "skuDrawers",
+        { ...sku, [field]: value },
+        sku,
+      ),
+      new RegExp(`${field} is exact-equal`),
+      `${field} must remain exact for an existing SKU drawer`,
+    );
+  }
   assert.throws(
     () => validateImportableExactFields(
       manifest,
@@ -587,6 +690,10 @@ test("existing importable records exact-compare every typed revision field", asy
     ),
     /revision is exact-equal/,
   );
+  assert.ok(manifest.classifications.preserved_frozen.includes("v23SkuDrawerRevisions"));
+  assert.ok(manifest.classifications.server_owned.includes("v23SkuDrawerHeads"));
+  assert.equal(Object.hasOwn(manifest.recordSchemas, "v23SkuDrawerRevisions"), false);
+  assert.equal(Object.hasOwn(manifest.recordSchemas, "v23SkuDrawerHeads"), false);
   const compatibility = {
     id: "compatibility:1",
     axis: "method_type",
@@ -1596,7 +1703,10 @@ test("record content hash binds the complete current and preserved row envelope"
 
 test("nullable preserved singleton binds its exact WorkspaceState scalar union", async () => {
   const { manifest, roots } = await fixture();
-  const root = "currentFiveAxisDispositionCatalogRevisionId";
+  const nullableSingletons = Object.entries(manifest.preservedRootCatalog)
+    .filter(([, catalog]) => catalog.singleton && catalog.typeRef === "lib/types.ts#string|null");
+  assert.equal(nullableSingletons.length, 1);
+  const [[root]] = nullableSingletons;
   assert.equal(
     manifest.preservedRootCatalog[root].typeRef,
     "lib/types.ts#string|null",
@@ -1610,6 +1720,20 @@ test("nullable preserved singleton binds its exact WorkspaceState scalar union",
       true,
     );
   }
+  const nullRow = {
+    root,
+    record_schema_id: manifest.preservedSchemaCatalog[root],
+    record_key: '["$singleton"]',
+    record_revision: "null",
+    record_content_sha256: "0".repeat(64),
+    opaque_canonical_payload_json: "null",
+  };
+  nullRow.record_content_sha256 = expectedRecordHash(
+    manifest,
+    nullRow,
+    "opaque_canonical_payload_json",
+  );
+  assert.equal(validateRecordEnvelope(manifest, nullRow), true);
   for (const payload of ['{"value":"revision:v1"}', "1", "undefined"]) {
     assert.throws(
       () => validateMachineCell(payloadColumn, payload, "string", { manifest, root }),
@@ -1623,6 +1747,91 @@ test("nullable preserved singleton binds its exact WorkspaceState scalar union",
     /exact WorkspaceState property element\/scalar type/,
   );
   assert.equal(validateProjectWorkbookManifest(manifest, roots), true);
+});
+
+test("every manifest-derived current and preserved singleton requires exactly one row", async () => {
+  const { manifest } = await fixture();
+  const currentSingletons = Object.entries(manifest.recordSchemas)
+    .filter(([, schema]) => (
+      schema.identityFields.length === 1 && schema.identityFields[0] === "$singleton"
+    ))
+    .map(([root]) => root);
+  const preservedSingletons = Object.entries(manifest.preservedRootCatalog)
+    .filter(([, catalog]) => catalog.singleton === true)
+    .map(([root]) => root);
+  const currentNonSingleton = Object.keys(manifest.recordSchemas)
+    .find((root) => !currentSingletons.includes(root));
+  const preservedNonSingleton = Object.keys(manifest.preservedRootCatalog)
+    .find((root) => !preservedSingletons.includes(root));
+  const currentRows = currentSingletons.map((root) => ({ root }));
+  const preservedRows = preservedSingletons.map((root) => ({ root }));
+  assert.ok(currentSingletons.length > 0);
+  assert.ok(preservedSingletons.length > 0);
+  assert.equal(
+    validateRecordSheetCardinality(manifest, currentRows, preservedRows),
+    true,
+  );
+  for (const root of currentSingletons) {
+    assert.throws(
+      () => validateRecordSheetCardinality(
+        manifest,
+        currentRows.filter((row) => row.root !== root),
+        preservedRows,
+      ),
+      new RegExp(`${root} requires EXACTLY_ONE`),
+    );
+    assert.throws(
+      () => validateRecordSheetCardinality(
+        manifest,
+        [...currentRows, { root }],
+        preservedRows,
+      ),
+      new RegExp(`${root} requires EXACTLY_ONE`),
+    );
+    assert.throws(
+      () => validateRecordSheetCardinality(
+        manifest,
+        currentRows.map((row) => row.root === root ? { root: preservedNonSingleton } : row),
+        preservedRows,
+      ),
+      /__TF_CURRENT contains a row for the wrong root/,
+    );
+  }
+  for (const root of preservedSingletons) {
+    assert.throws(
+      () => validateRecordSheetCardinality(
+        manifest,
+        currentRows,
+        preservedRows.filter((row) => row.root !== root),
+      ),
+      new RegExp(`${root} requires EXACTLY_ONE`),
+    );
+    assert.throws(
+      () => validateRecordSheetCardinality(
+        manifest,
+        currentRows,
+        [...preservedRows, { root }],
+      ),
+      new RegExp(`${root} requires EXACTLY_ONE`),
+    );
+    assert.throws(
+      () => validateRecordSheetCardinality(
+        manifest,
+        currentRows,
+        preservedRows.map((row) => row.root === root ? { root: currentNonSingleton } : row),
+      ),
+      /__TF_PRESERVED contains a row for the wrong root/,
+    );
+  }
+  assert.equal(
+    validateRecordSheetCardinality(
+      manifest,
+      [...currentRows, { root: currentNonSingleton }, { root: currentNonSingleton }],
+      [...preservedRows, { root: preservedNonSingleton }, { root: preservedNonSingleton }],
+    ),
+    true,
+    "non-singleton roots retain ZERO_OR_MORE cardinality",
+  );
 });
 
 test("all diagnostic roots derive closed non-semantic subject keys from safe payloads", async () => {

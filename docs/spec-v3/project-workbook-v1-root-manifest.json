@@ -449,6 +449,21 @@
       "hashContract": "V23_TECHNOLOGY_CONTENT_HASH_RFC8785_SHA256_V1"
     }
   },
+  "technologySuccessorPolicy": {
+    "schema":"project-workbook-technology-successor-policy/v1",
+    "f2Validator":"validateTechnologySuccessorAction",
+    "trustedContextSchema":"project-workbook-technology-successor-context/v1",
+    "requestSchema":"project-workbook-technology-successor-request/v1",
+    "actionSchema":"project-workbook-technology-successor-action/v1",
+    "requestFields":["schema","workspaceId","baseWorkspaceRevision","expectedCurrentHead"],
+    "trustedContextFields":["schema","workspaceId","baseWorkspaceRevision","technologyId","targetRevision","technologyIdExists","targetRevisionExists","currentHead"],
+    "hashContract":"V23_TECHNOLOGY_CONTENT_HASH_RFC8785_SHA256_V1",
+    "hashImplementation":"lib/v23-technology.ts#v23TechnologyContentHash",
+    "actionImplementation":"lib/v23-domain-actions.ts#executeV23DomainAction",
+    "derivedFields":["revision","contentHash"],
+    "create":{"actionCode":"create_technology","revision":1,"requiresTechnologyIdAbsent":true,"requiresTargetRevisionAbsent":true,"actionInputFields":["technologyId","itemPartId","name","description","memberAffixRefs","enabled"]},
+    "update":{"actionCode":"update_technology","revisionPolicy":"CURRENT_HEAD_PLUS_ONE","currentHeadFields":["technologyId","revision","contentHash","itemPartId"],"exactFields":["technologyId","itemPartId"],"requiresTargetRevisionAbsent":true,"actionInputFields":["technologyId","expectedTechnologyRevision","itemPartId","name","description","memberAffixRefs","enabled"]}
+  },
   "conditionalExactFieldPolicies": {
     "methodProfiles":{"mode":"CONDITIONAL_FULL_EXACT","provenancePaths":["sourceRevisionId","rules[].sourceRevisionId","rules[].sourceSheetId","rules[].sourceCell"],"selectorFields":["sourceRevisionId"],"sourceShape":"ALL_PRESENT_NON_EMPTY_NFC_TEXT","localShape":"ALL_ABSENT","sourceExactFields":"ALL_ALLOWED_FIELDS","semanticMutationAuthority":"CANONICAL_SOURCE_PUBLISH_ONLY"},
     "itemTypeProfiles":{"mode":"CONDITIONAL_FULL_EXACT","provenancePaths":["sourceRevisionId","rules[].sourceRevisionId","rules[].sourceSheetId","rules[].sourceCell"],"selectorFields":["sourceRevisionId"],"sourceShape":"ALL_PRESENT_NON_EMPTY_NFC_TEXT","localShape":"ALL_ABSENT","sourceExactFields":"ALL_ALLOWED_FIELDS","semanticMutationAuthority":"CANONICAL_SOURCE_PUBLISH_ONLY"},

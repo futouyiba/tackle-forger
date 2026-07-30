@@ -24,8 +24,9 @@ validateTrustedPreservedExactMatch,
   validateRecordSheetCardinality,
   validateRootSummary,
 validateServerRefEnvelope,
-validateSourceProvenancePolicyCatalog,
-validateWorkbookEnvelope,
+  validateSourceProvenancePolicyCatalog,
+  validateTechnologySuccessorAction,
+  validateWorkbookEnvelope,
   validateWorkbookRemovalIntentRoot,
 } from "../scripts/check-project-workbook-contract.mjs";
 
@@ -617,70 +618,155 @@ test("v23 technology uses create/update successor actions and never rewrites one
     ...technologyWithoutHash,
     contentHash: createHash("sha256").update(canonicalPayload(technologyWithoutHash)).digest("hex"),
   };
-  assert.deepEqual(manifest.importableCreatePolicies.v23TechnologyDefinitions, {
-    policy: "DERIVE_AND_VERIFY",
-    requiredActionCode: "create_technology",
-    actionInputFields: [
-      "technologyId",
-      "itemPartId",
-      "name",
-      "description",
-      "memberAffixRefs",
-      "enabled",
-    ],
-    derivedFields: ["revision", "contentHash"],
-    initialRevision: 1,
-    contentHashField: "contentHash",
-    contentHashInputFields: [
-      "technologyId",
-      "revision",
-      "itemPartId",
-      "name",
-      "description",
-      "memberAffixRefs",
-      "enabled",
-    ],
-    hashContract: "V23_TECHNOLOGY_CONTENT_HASH_RFC8785_SHA256_V1",
-  });
-  assert.equal(
-    validateImportableExactFields(
+  const request = {
+    schema: "project-workbook-technology-successor-request/v1",
+    workspaceId: "workspace:1",
+    baseWorkspaceRevision: 7,
+    expectedCurrentHead: null,
+  };
+  const trustedCreate = {
+    schema: "project-workbook-technology-successor-context/v1",
+    workspaceId: "workspace:1",
+    baseWorkspaceRevision: 7,
+    technologyId: "technology:1",
+    targetRevision: 1,
+    technologyIdExists: false,
+    targetRevisionExists: false,
+    currentHead: null,
+  };
+  assert.deepEqual(
+    validateTechnologySuccessorAction(manifest, technology, request, trustedCreate),
+    {
+      schema: "project-workbook-technology-successor-action/v1",
+      actionCode: "create_technology",
+      actionPayload: {
+        technologyId: "technology:1",
+        itemPartId: "part:rod",
+        name: "力量技术",
+        description: "",
+        memberAffixRefs: [],
+        enabled: true,
+      },
+    },
+    "F2 emits only production create action inputs and never forwards derived fields",
+  );
+  assert.throws(
+    () => validateImportableExactFields(
       manifest,
       "v23TechnologyDefinitions",
       technology,
       undefined,
     ),
-    true,
-    "a new Technology may declare its initial itemPartId",
+    /requires validateTechnologySuccessorAction trusted context/,
+    "the generic create branch cannot infer stable-ID absence from a missing composite record",
   );
   assert.throws(
-    () => validateImportableExactFields(
+    () => validateTechnologySuccessorAction(
       manifest,
-      "v23TechnologyDefinitions",
       { ...technology, revision: 2 },
-      undefined,
+      request,
+      { ...trustedCreate, targetRevision: 2 },
     ),
-    /initial revision 1/,
+    /requires revision 1/,
   );
   assert.throws(
-    () => validateImportableExactFields(
+    () => validateTechnologySuccessorAction(
       manifest,
-      "v23TechnologyDefinitions",
       { ...technology, contentHash: "a".repeat(64) },
-      undefined,
+      request,
+      trustedCreate,
     ),
     /does not match V23_TECHNOLOGY_CONTENT_HASH/,
   );
-  const incompleteTechnology = { ...technology };
-  delete incompleteTechnology.description;
-  assert.throws(
-    () => validateImportableExactFields(
-      manifest,
-      "v23TechnologyDefinitions",
-      incompleteTechnology,
-      undefined,
-    ),
-    /description is required/,
+  for (const [contextMutation, message] of [
+    [{ technologyIdExists: true }, /requires trusted Technology ID absence/],
+    [{ targetRevisionExists: true }, /target revision must not already exist/],
+    [{ workspaceId: "workspace:2" }, /workspace must match trusted context/],
+    [{ baseWorkspaceRevision: 8 }, /base revision must match trusted context/],
+  ]) {
+    assert.throws(
+      () => validateTechnologySuccessorAction(
+        manifest,
+        technology,
+        request,
+        { ...trustedCreate, ...contextMutation },
+      ),
+      message,
+    );
+  }
+
+  const currentHead = {
+    technologyId: technology.technologyId,
+    revision: technology.revision,
+    contentHash: technology.contentHash,
+    itemPartId: technology.itemPartId,
+  };
+  const updateWithoutHash = {
+    ...technologyWithoutHash,
+    revision: 2,
+    name: "力量技术（修订）",
+  };
+  const update = {
+    ...updateWithoutHash,
+    contentHash: createHash("sha256").update(canonicalPayload(updateWithoutHash)).digest("hex"),
+  };
+  const updateRequest = { ...request, expectedCurrentHead: currentHead };
+  const trustedUpdate = {
+    ...trustedCreate,
+    targetRevision: 2,
+    technologyIdExists: true,
+    currentHead,
+  };
+  assert.deepEqual(
+    validateTechnologySuccessorAction(manifest, update, updateRequest, trustedUpdate),
+    {
+      schema: "project-workbook-technology-successor-action/v1",
+      actionCode: "update_technology",
+      actionPayload: {
+        technologyId: "technology:1",
+        expectedTechnologyRevision: 1,
+        itemPartId: "part:rod",
+        name: "力量技术（修订）",
+        description: "",
+        memberAffixRefs: [],
+        enabled: true,
+      },
+    },
+    "F2 emits expectedTechnologyRevision but not candidate revision/contentHash",
   );
+  for (const [candidate, requestValue, context, message] of [
+    [
+      { ...update, revision: 3 },
+      updateRequest,
+      { ...trustedUpdate, targetRevision: 3 },
+      /current head plus one/,
+    ],
+    [{ ...update, contentHash: "a".repeat(64) }, updateRequest, trustedUpdate, /does not match/],
+    [{ ...update, itemPartId: "part:reel" }, updateRequest, trustedUpdate, /cannot change itemPartId/],
+    [
+      { ...update, technologyId: "technology:2" },
+      updateRequest,
+      { ...trustedUpdate, technologyId: "technology:2" },
+      /cannot change technologyId/,
+    ],
+    [update, updateRequest, { ...trustedUpdate, targetRevisionExists: true }, /target revision must not already exist/],
+    [update, { ...updateRequest, expectedCurrentHead: { ...currentHead, revision: 2 } }, trustedUpdate, /expected head is stale/],
+    [update, updateRequest, { ...trustedUpdate, technologyIdExists: false }, /requires an existing trusted Technology ID/],
+    [update, updateRequest, { ...trustedUpdate, currentHead: null }, /expected head is stale/],
+    [update, updateRequest, { ...trustedUpdate, technologyId: "technology:other" }, /must bind candidate technologyId/],
+    [update, updateRequest, { ...trustedUpdate, targetRevision: 3 }, /must bind candidate revision/],
+  ]) {
+    assert.throws(
+      () => validateTechnologySuccessorAction(
+        manifest,
+        candidate,
+        requestValue,
+        context,
+      ),
+      message,
+    );
+  }
+
   assert.equal(
     validateImportableExactFields(
       manifest,
@@ -689,34 +775,50 @@ test("v23 technology uses create/update successor actions and never rewrites one
       technology,
     ),
     true,
-    "an existing ID with identical immutable revision is a no-op, not a create",
+    "an existing immutable revision remains a generic no-op",
   );
-  for (const mutation of [
-    { name: "力量技术（修订）" },
-    { description: "changed" },
-    { memberAffixRefs: [{ id: "affix:1", revision: 1, contentHash: "b".repeat(64) }] },
-    { enabled: false },
-    { itemPartId: "part:reel" },
-    { contentHash: "b".repeat(64) },
-  ]) {
-    assert.throws(
-      () => validateImportableExactFields(
-        manifest,
-        "v23TechnologyDefinitions",
-        { ...technology, ...mutation },
-        technology,
-      ),
-      /is exact-equal for an existing record/,
-    );
-  }
-  const derivedCreateRoots = Object.entries(manifest.recordSchemas)
-    .filter(([, schema]) => schema.revisionFields.length > 0 || schema.hashFields.length > 0)
+  assert.throws(
+    () => validateImportableExactFields(
+      manifest,
+      "v23TechnologyDefinitions",
+      { ...technology, name: "forbidden rewrite" },
+      technology,
+    ),
+    /is exact-equal for an existing record/,
+  );
+
+  const compositeIdentityRoots = Object.entries(manifest.recordSchemas)
+    .filter(([, schema]) => schema.identityFields.length > 1)
     .map(([root]) => root);
-  assert.deepEqual(derivedCreateRoots, ["v23TechnologyDefinitions", "skuDrawers"]);
   assert.deepEqual(
-    derivedCreateRoots.filter((root) => !manifest.importableCreatePolicies[root]),
-    [],
-    "every importable root carrying server-derived revision/hash fields has a create policy",
+    compositeIdentityRoots,
+    ["v23TechnologyDefinitions"],
+    "Technology is the only importable composite-identity successor",
+  );
+  assert.equal(
+    manifest.importableCreatePolicies.skuDrawers.policy,
+    "REJECT",
+    "the other server-derived revision/hash root cannot create a successor through the workbook",
+  );
+  assert.throws(
+    () => validateTechnologySuccessorAction(
+      manifest,
+      update,
+      updateRequest,
+      { ...trustedUpdate, currentHead: { ...currentHead, contentHash: "b".repeat(64) } },
+    ),
+    /expected head is stale/,
+    "a changed current-head hash invalidates the successor request",
+  );
+  assert.throws(
+    () => validateTechnologySuccessorAction(
+      manifest,
+      update,
+      { ...updateRequest, unexpected: true },
+      trustedUpdate,
+    ),
+    /closed schema/,
+    "display or caller fields cannot bypass the closed successor request",
   );
 });
 

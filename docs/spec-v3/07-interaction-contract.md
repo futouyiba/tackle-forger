@@ -118,6 +118,8 @@ type ActionCode =
 
 Series、Part、SKU、Model的ID终身稳定且不复用；改名和更换默认Model不改ID。SKU改换Part或weightBandId必须遵守第6.6节；派生拉力不是身份字段。Revision只增不改；已批准/已发布revision不可原地改写。Snapshot ID与payload/hash永久绑定。前端不得从角色名、状态或颜色猜服务端动作；读接口返回`ActionAvailability[]`，写接口再次鉴权，纯本地动作只消费上述`LocalActionAvailability`。
 
+Technology 的F2 projection必须先以可信workspace/base及current-head回读调用清单绑定的successor validator：稳定ID不存在且revision=1才映射`create_technology`；可信head精确匹配、candidate revision=current+1、itemPartId不变且目标revision不存在才映射`update_technology`。两者都重算生产`v23TechnologyContentHash`，action payload不得携带candidate `revision/contentHash`，update只增加`expectedTechnologyRevision`；缺head、stale、重复target、伪hash、换部位或错workspace/base全部拒绝，generic composite-key比较不能替代该判定。
+
 ### 24.2 R1：钓具系列甘特图
 
 ```ts

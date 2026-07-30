@@ -30,6 +30,7 @@ const EXPECTED_TOP_LEVEL_KEYS = [
   "importableSuccessorCatalog",
   "preservedExactComparePolicy",
   "importableCreatePolicies",
+  "technologySuccessorPolicy",
   "conditionalExactFieldPolicies",
   "terminalLifecyclePolicy",
   "transportRefPolicy",
@@ -289,6 +290,59 @@ const EXPECTED_IMPORTABLE_CREATE_POLICIES = {
       "enabled",
     ],
     hashContract: "V23_TECHNOLOGY_CONTENT_HASH_RFC8785_SHA256_V1",
+  },
+};
+
+const EXPECTED_TECHNOLOGY_SUCCESSOR_POLICY = {
+  schema: "project-workbook-technology-successor-policy/v1",
+  f2Validator: "validateTechnologySuccessorAction",
+  trustedContextSchema: "project-workbook-technology-successor-context/v1",
+  requestSchema: "project-workbook-technology-successor-request/v1",
+  actionSchema: "project-workbook-technology-successor-action/v1",
+  requestFields: ["schema", "workspaceId", "baseWorkspaceRevision", "expectedCurrentHead"],
+  trustedContextFields: [
+    "schema",
+    "workspaceId",
+    "baseWorkspaceRevision",
+    "technologyId",
+    "targetRevision",
+    "technologyIdExists",
+    "targetRevisionExists",
+    "currentHead",
+  ],
+  hashContract: "V23_TECHNOLOGY_CONTENT_HASH_RFC8785_SHA256_V1",
+  hashImplementation: "lib/v23-technology.ts#v23TechnologyContentHash",
+  actionImplementation: "lib/v23-domain-actions.ts#executeV23DomainAction",
+  derivedFields: ["revision", "contentHash"],
+  create: {
+    actionCode: "create_technology",
+    revision: 1,
+    requiresTechnologyIdAbsent: true,
+    requiresTargetRevisionAbsent: true,
+    actionInputFields: [
+      "technologyId",
+      "itemPartId",
+      "name",
+      "description",
+      "memberAffixRefs",
+      "enabled",
+    ],
+  },
+  update: {
+    actionCode: "update_technology",
+    revisionPolicy: "CURRENT_HEAD_PLUS_ONE",
+    currentHeadFields: ["technologyId", "revision", "contentHash", "itemPartId"],
+    exactFields: ["technologyId", "itemPartId"],
+    requiresTargetRevisionAbsent: true,
+    actionInputFields: [
+      "technologyId",
+      "expectedTechnologyRevision",
+      "itemPartId",
+      "name",
+      "description",
+      "memberAffixRefs",
+      "enabled",
+    ],
   },
 };
 
@@ -1336,6 +1390,184 @@ export function validateSourceProvenancePolicyCatalog(
   return true;
 }
 
+function validateTechnologyHead(head, label) {
+  if (head === null) return;
+  assertExactKeys(
+    head,
+    ["technologyId", "revision", "contentHash", "itemPartId"],
+    label,
+  );
+  for (const field of ["technologyId", "itemPartId"]) {
+    assert.equal(typeof head[field], "string", `${label}.${field} must be text`);
+    assert.notEqual(head[field], "", `${label}.${field} must be non-empty`);
+    assertCanonicalDisplayText(head[field], `${label}.${field}`);
+  }
+  assert.ok(
+    Number.isSafeInteger(head.revision) && head.revision > 0,
+    `${label}.revision must be a positive safe integer`,
+  );
+  assert.match(head.contentHash, /^[0-9a-f]{64}$/, `${label}.contentHash must be lowercase sha256`);
+}
+
+function technologyActionPayload(candidatePayload, actionCode, currentHead) {
+  const payload = {
+    technologyId: candidatePayload.technologyId,
+    ...(actionCode === "update_technology"
+      ? { expectedTechnologyRevision: currentHead.revision }
+      : {}),
+    itemPartId: candidatePayload.itemPartId,
+    name: candidatePayload.name,
+    description: candidatePayload.description,
+    memberAffixRefs: candidatePayload.memberAffixRefs,
+    enabled: candidatePayload.enabled,
+  };
+  assert.equal(Object.hasOwn(payload, "revision"), false);
+  assert.equal(Object.hasOwn(payload, "contentHash"), false);
+  return payload;
+}
+
+function validateTechnologyCandidateHash(policy, candidatePayload) {
+  const hashInput = Object.fromEntries(
+    EXPECTED_IMPORTABLE_CREATE_POLICIES.v23TechnologyDefinitions.contentHashInputFields
+      .map((field) => [field, candidatePayload[field]]),
+  );
+  assert.equal(
+    candidatePayload.contentHash,
+    sha256(canonicalJson(hashInput)),
+    `v23TechnologyDefinitions.contentHash does not match ${policy.hashContract}`,
+  );
+}
+
+export function validateTechnologySuccessorAction(
+  manifest,
+  candidatePayload,
+  request,
+  trustedContext,
+  repositoryRoot = process.cwd(),
+) {
+  const policy = manifest.technologySuccessorPolicy;
+  assert.deepEqual(
+    policy,
+    EXPECTED_TECHNOLOGY_SUCCESSOR_POLICY,
+    "Technology successor policy must stay bound to the production hash and action implementations",
+  );
+  validateImportableRecordPayload(
+    manifest,
+    "v23TechnologyDefinitions",
+    candidatePayload,
+    repositoryRoot,
+  );
+  assertExactKeys(
+    request,
+    policy.requestFields,
+    "Technology successor request",
+  );
+  assert.equal(request.schema, policy.requestSchema);
+  assertExactKeys(
+    trustedContext,
+    policy.trustedContextFields,
+    "Technology successor trusted context",
+  );
+  assert.equal(trustedContext.schema, policy.trustedContextSchema);
+  for (const [label, context] of [["request", request], ["trusted context", trustedContext]]) {
+    assert.equal(typeof context.workspaceId, "string", `${label}.workspaceId must be text`);
+    assert.notEqual(context.workspaceId, "", `${label}.workspaceId must be non-empty`);
+    assertCanonicalDisplayText(context.workspaceId, `${label}.workspaceId`);
+    assert.ok(
+      Number.isSafeInteger(context.baseWorkspaceRevision) && context.baseWorkspaceRevision >= 0,
+      `${label}.baseWorkspaceRevision must be a non-negative safe integer`,
+    );
+  }
+  assert.equal(
+    request.workspaceId,
+    trustedContext.workspaceId,
+    "Technology successor workspace must match trusted context",
+  );
+  assert.equal(
+    request.baseWorkspaceRevision,
+    trustedContext.baseWorkspaceRevision,
+    "Technology successor base revision must match trusted context",
+  );
+  assert.equal(typeof trustedContext.technologyIdExists, "boolean");
+  assert.equal(typeof trustedContext.targetRevisionExists, "boolean");
+  assert.equal(
+    trustedContext.technologyId,
+    candidatePayload.technologyId,
+    "Technology successor trusted absence/head lookup must bind candidate technologyId",
+  );
+  assert.equal(
+    trustedContext.targetRevision,
+    candidatePayload.revision,
+    "Technology successor target lookup must bind candidate revision",
+  );
+  validateTechnologyHead(request.expectedCurrentHead, "Technology successor expected head");
+  validateTechnologyHead(trustedContext.currentHead, "Technology successor current head");
+  assert.deepEqual(
+    request.expectedCurrentHead,
+    trustedContext.currentHead,
+    "Technology successor expected head is stale",
+  );
+  assert.equal(
+    trustedContext.targetRevisionExists,
+    false,
+    "Technology successor target revision must not already exist",
+  );
+  if (trustedContext.currentHead === null) {
+    assert.equal(
+      trustedContext.technologyIdExists,
+      false,
+      "create_technology requires trusted Technology ID absence",
+    );
+    assert.equal(
+      candidatePayload.revision,
+      policy.create.revision,
+      `create_technology requires revision ${policy.create.revision}`,
+    );
+    validateTechnologyCandidateHash(policy, candidatePayload);
+    const actionPayload = technologyActionPayload(candidatePayload, policy.create.actionCode, null);
+    assert.deepEqual(Object.keys(actionPayload), policy.create.actionInputFields);
+    return {
+      schema: policy.actionSchema,
+      actionCode: policy.create.actionCode,
+      actionPayload,
+    };
+  }
+
+  const currentHead = trustedContext.currentHead;
+  assert.equal(
+    trustedContext.technologyIdExists,
+    true,
+    "update_technology requires an existing trusted Technology ID",
+  );
+  assert.equal(
+    candidatePayload.technologyId,
+    currentHead.technologyId,
+    "update_technology cannot change technologyId",
+  );
+  assert.equal(
+    candidatePayload.itemPartId,
+    currentHead.itemPartId,
+    "update_technology cannot change itemPartId",
+  );
+  assert.ok(
+    currentHead.revision < Number.MAX_SAFE_INTEGER,
+    "update_technology current revision cannot be incremented safely",
+  );
+  assert.equal(
+    candidatePayload.revision,
+    currentHead.revision + 1,
+    "update_technology revision must equal current head plus one",
+  );
+  validateTechnologyCandidateHash(policy, candidatePayload);
+  const actionPayload = technologyActionPayload(candidatePayload, policy.update.actionCode, currentHead);
+  assert.deepEqual(Object.keys(actionPayload), policy.update.actionInputFields);
+  return {
+    schema: policy.actionSchema,
+    actionCode: policy.update.actionCode,
+    actionPayload,
+  };
+}
+
 export function validateImportableExactFields(
   manifest,
   root,
@@ -1348,6 +1580,11 @@ export function validateImportableExactFields(
   const candidateSourceShape = validateSourceProvenanceShape(manifest, root, candidatePayload);
   validateNestedRuleProvenance(manifest, root, candidatePayload, existingPayload);
   if (existingPayload === undefined) {
+    if (root === "v23TechnologyDefinitions") {
+      assert.fail(
+        "v23TechnologyDefinitions create/update successor requires validateTechnologySuccessorAction trusted context",
+      );
+    }
     assert.notEqual(
       candidateSourceShape,
       "SOURCE",
@@ -3111,6 +3348,21 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
       `${root} carries server-derived revision/hash fields without a create policy`,
     );
   }
+  assert.deepEqual(
+    manifest.technologySuccessorPolicy,
+    EXPECTED_TECHNOLOGY_SUCCESSOR_POLICY,
+    "Technology successor planning must remain manifest-bound and explicit",
+  );
+  assert.match(
+    readFileSync(path.join(process.cwd(), "lib/v23-technology.ts"), "utf8"),
+    /export function v23TechnologyContentHash\s*\(/,
+    "Technology successor hash implementation is missing",
+  );
+  assert.match(
+    readFileSync(path.join(process.cwd(), "lib/v23-domain-actions.ts"), "utf8"),
+    /action === "create_technology" \|\| action === "update_technology"/,
+    "Technology successor action implementation is missing",
+  );
   validateSourceProvenancePolicyCatalog(manifest);
   assert.deepEqual(
     manifest.terminalLifecyclePolicy,

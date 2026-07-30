@@ -214,6 +214,8 @@ revision 位于“最近 90 天”与“最新 100 个”并集之外，只表�
 
 验收至少覆盖：新增/编辑模板、备注和多个普通字段及未来未知普通字段保存并刷新后仍在；每类表中字段的顶层和嵌套改动拒绝；普通+受治理混合原子拒绝且revision/审计/幂等不变；过期revision、未授权、旧历史和已发布Snapshot冻结；成功、治理拒绝和冲突在真实界面均有可见、可操作反馈。
 
+Technology successor另有不可省略的复合身份门禁：`v23TechnologyDefinitions`是唯一具有`technologyId + revision`复合身份的可导入根，不能因candidate composite key尚未匹配就猜作create。F2必须调用根清单绑定的`validateTechnologySuccessorAction`，以可信workspace/base/current-head/ID存在性/目标revision存在性回读区分create与update：create要求稳定ID及revision 1均不存在；update要求expected head与当前`technologyId + revision + contentHash + itemPartId`完全一致、candidate revision恰为`current + 1`、部位不变且目标revision不存在。两条路径都按生产`v23TechnologyContentHash`的RFC 8785契约重算`contentHash`；stale、缺head、伪hash、重复目标、换部位或错workspace/base均阻断。F2输出的create/update action payload只含生产动作输入，`revision/contentHash`仅校验而不得传入动作；update另携带`expectedTechnologyRevision`。generic exact validator仅保留既有同revision no-op/frozen比较，不得承担successor判定。
+
 ### 14.4 Patch台账远端schema、哈希、协作、回读与补偿契约
 
 主工作簿中的唯一`Patch台账`使用稳定 sheet_id（具体值登记在代码 `CANONICAL_FEISHU_SHEET_REGISTRY`）识别。同一工作表包含两个行号互不关联的区域：`A:AK`是“一条Patch操作一行”的机器区，`AL`为空白分隔列，`AM:BA`是“一条协作事件一行”的追加事件区。工作表当前仍为空表；在以下表头、保护边界和联调完成前，真实镜像写入/拉取保持禁用，不得伪造`SYNCED`。

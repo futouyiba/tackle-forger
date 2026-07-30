@@ -1123,6 +1123,8 @@ revision 位于“最近 90 天”与“最新 100 个”并集之外，只表�
 
 验收至少覆盖：新增/编辑模板、备注和多个普通字段及未来未知普通字段保存并刷新后仍在；每类表中字段的顶层和嵌套改动拒绝；普通+受治理混合原子拒绝且revision/审计/幂等不变；过期revision、未授权、旧历史和已发布Snapshot冻结；成功、治理拒绝和冲突在真实界面均有可见、可操作反馈。
 
+Technology successor另有不可省略的复合身份门禁：`v23TechnologyDefinitions`是唯一具有`technologyId + revision`复合身份的可导入根，不能因candidate composite key尚未匹配就猜作create。F2必须调用根清单绑定的`validateTechnologySuccessorAction`，以可信workspace/base/current-head/ID存在性/目标revision存在性回读区分create与update：create要求稳定ID及revision 1均不存在；update要求expected head与当前`technologyId + revision + contentHash + itemPartId`完全一致、candidate revision恰为`current + 1`、部位不变且目标revision不存在。两条路径都按生产`v23TechnologyContentHash`的RFC 8785契约重算`contentHash`；stale、缺head、伪hash、重复目标、换部位或错workspace/base均阻断。F2输出的create/update action payload只含生产动作输入，`revision/contentHash`仅校验而不得传入动作；update另携带`expectedTechnologyRevision`。generic exact validator仅保留既有同revision no-op/frozen比较，不得承担successor判定。
+
 ### 14.4 Patch台账远端schema、哈希、协作、回读与补偿契约
 
 主工作簿中的唯一`Patch台账`使用稳定 sheet_id（具体值登记在代码 `CANONICAL_FEISHU_SHEET_REGISTRY`）识别。同一工作表包含两个行号互不关联的区域：`A:AK`是“一条Patch操作一行”的机器区，`AL`为空白分隔列，`AM:BA`是“一条协作事件一行”的追加事件区。工作表当前仍为空表；在以下表头、保护边界和联调完成前，真实镜像写入/拉取保持禁用，不得伪造`SYNCED`。
@@ -3142,6 +3144,8 @@ type ActionCode =
 预览还必须逐行验证`ROOT_SUMMARY`的93-root完整矩阵：分类与根清单一致，current/preserved/diagnostic根的record count和closed root hash可由对应记录重算，server-owned/forbidden根的record count严格为`0`且hash严格为`null`。匹配既有importable记录时，全部schema真实`identityFields`与`revisionFields`无论是否另列于`exactFields`都必须typed exact-equal；`$singleton`仅是固定行key sentinel，不读取payload field。单字段、复合、nested或optional path缺失、number/string替换或值漂移均阻断，新建记录不执行existing比较。所有非root primary-key component统一按Unicode scalar/code point逐个比较，共享前缀较短者在前；不得依赖JavaScript UTF-16 code-unit关系运算。
 
 Series、Part、SKU、Model的ID终身稳定且不复用；改名和更换默认Model不改ID。SKU改换Part或weightBandId必须遵守第6.6节；派生拉力不是身份字段。Revision只增不改；已批准/已发布revision不可原地改写。Snapshot ID与payload/hash永久绑定。前端不得从角色名、状态或颜色猜服务端动作；读接口返回`ActionAvailability[]`，写接口再次鉴权，纯本地动作只消费上述`LocalActionAvailability`。
+
+Technology 的F2 projection必须先以可信workspace/base及current-head回读调用清单绑定的successor validator：稳定ID不存在且revision=1才映射`create_technology`；可信head精确匹配、candidate revision=current+1、itemPartId不变且目标revision不存在才映射`update_technology`。两者都重算生产`v23TechnologyContentHash`，action payload不得携带candidate `revision/contentHash`，update只增加`expectedTechnologyRevision`；缺head、stale、重复target、伪hash、换部位或错workspace/base全部拒绝，generic composite-key比较不能替代该判定。
 
 ### 24.2 R1：钓具系列甘特图
 

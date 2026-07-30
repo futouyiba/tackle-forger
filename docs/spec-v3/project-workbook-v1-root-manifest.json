@@ -58,6 +58,7 @@
         "kind": "machine",
         "columns": [
           {"name":"root","type":"string","required":true,"format":"workspace-root"},
+          {"name":"record_schema_id","type":"string","required":true,"format":"stable-id"},
           {"name":"record_key","type":"string","required":true,"format":"rfc8785-key-json"},
           {"name":"record_revision","type":"string","required":true,"format":"rfc8785-revision-scalar"},
           {"name":"record_content_sha256","type":"string","required":true,"format":"lowercase-sha256"},
@@ -175,6 +176,8 @@
       "recordSchemaAuthority",
       "recordSchemas",
       "preservedRootCatalog",
+      "preservedSchemaCatalog",
+      "preservedSchemaAuthority",
       "diagnosticRootCatalog",
       "classifications"
     ],
@@ -318,6 +321,45 @@
     "candidates":{"carrier":"records","typeRef":"lib/types.ts#Candidate","recordKeyFields":["id"],"revisionFields":[],"hashFields":[],"singleton":false,"variants":[]},
     "officialSkus":{"carrier":"records","typeRef":"lib/types.ts#OfficialSku","recordKeyFields":["id"],"revisionFields":[],"hashFields":[],"singleton":false,"variants":[]},
     "detailOverrides":{"carrier":"records","typeRef":"lib/types.ts#DetailOverride","recordKeyFields":["skuId","itemKind","model"],"revisionFields":[],"hashFields":[],"singleton":false,"variants":[]}
+  },
+  "preservedSchemaCatalog": {
+    "ruleSetVersions":"project-workbook/preserved/ruleSetVersions/v1",
+    "performanceSummaryDefinitions":"project-workbook/preserved/performanceSummaryDefinitions/v1",
+    "projectionPatches":"project-workbook/preserved/projectionPatches/v1",
+    "v23SeriesPartRevisions":"project-workbook/preserved/v23SeriesPartRevisions/v1",
+    "v23SkuDrawerRevisions":"project-workbook/preserved/v23SkuDrawerRevisions/v1",
+    "v23FunctionTemplates":"project-workbook/preserved/v23FunctionTemplates/v1",
+    "partConstraintSets":"project-workbook/preserved/partConstraintSets/v1",
+    "candidateSearchRecipes":"project-workbook/preserved/candidateSearchRecipes/v1",
+    "configurationSnapshots":"project-workbook/preserved/configurationSnapshots/v1",
+    "reductionStackingPolicyVersions":"project-workbook/preserved/reductionStackingPolicyVersions/v1",
+    "fiveAxisDispositionCatalogRevisions":"project-workbook/preserved/fiveAxisDispositionCatalogRevisions/v1",
+    "fiveAxisViewDefinitions":"project-workbook/preserved/fiveAxisViewDefinitions/v1",
+    "fiveAxisVertexSets":{"LegacyFiveAxisVertexSet":"project-workbook/preserved/fiveAxisVertexSets/legacy-v1","FiveAxisVertexSet":"project-workbook/preserved/fiveAxisVertexSets/current-v1"},
+    "currentFiveAxisDispositionCatalogRevisionId":"project-workbook/preserved/currentFiveAxisDispositionCatalogRevisionId/v1",
+    "patchReviewBatches":"project-workbook/preserved/patchReviewBatches/v1",
+    "patchValidationWaivers":"project-workbook/preserved/patchValidationWaivers/v1",
+    "patchValidationWaiverDecisions":"project-workbook/preserved/patchValidationWaiverDecisions/v1",
+    "ruleChangeProposals":"project-workbook/preserved/ruleChangeProposals/v1",
+    "revisions":"project-workbook/preserved/revisions/v1",
+    "performanceProfiles":"project-workbook/preserved/performanceProfiles/v1",
+    "recipes":"project-workbook/preserved/recipes/v1",
+    "candidates":"project-workbook/preserved/candidates/v1",
+    "officialSkus":"project-workbook/preserved/officialSkus/v1",
+    "detailOverrides":"project-workbook/preserved/detailOverrides/v1"
+  },
+  "preservedSchemaAuthority": {
+    "format":"typescript-opaque-exact-graph/v1",
+    "sources":[
+      {"path":"lib/types.ts","sha256":"799513ca4931557ad0519a24d6446a4d0d8384d6369af1df01992de0ac167a5d"},
+      {"path":"lib/performance-summary.ts","sha256":"70bd7b8687337ce40e415c6be956cd88f80f375f4a2458fb1f762caf56064069"},
+      {"path":"lib/pricing-policy.ts","sha256":"c8f88610a9dcaabcf05547fe8464161bd3ca0110eb06852af1bb8a1e4c9ae7a3"},
+      {"path":"lib/calculation-trace.ts","sha256":"f4a6fb18a373b294b6b15123d192fc1784e3e7ab1576a8c5fc93aece1ca34592"},
+      {"path":"lib/interaction-contracts.ts","sha256":"bb176c98f55448dbfd46d9619b83325591a2e36d56aacf50342d59f7461fe5af"},
+      {"path":"lib/quality-value-policy.ts","sha256":"9acc48f99b77ba1992c83c62097b00f8c96f8cff0b7e4af3baf0187e4e043360"}
+    ],
+    "recursiveTypeGraphSha256":"048b5219df36b6f074a20d41e7fe7cdf4e1431d5bb45e57b8da4e65adf027444",
+    "dynamicValuePolicy":"OPAQUE_SERVER_EXPORT_ONLY_EXACT_COMPARE_NO_CLIENT_CONSTRUCTION"
   },
   "diagnosticRootCatalog": {
     "derivedProjections":{"typeRef":"lib/types.ts#DerivedProjection","subjectProjectionFields":["id"],"keyContract":"SHA256_RFC8785_SUBJECT_PROJECTION_V1"},

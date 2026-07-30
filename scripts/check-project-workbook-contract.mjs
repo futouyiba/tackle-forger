@@ -23,6 +23,8 @@ const EXPECTED_TOP_LEVEL_KEYS = [
   "recordSchemaAuthority",
   "recordSchemas",
   "preservedRootCatalog",
+  "preservedSchemaCatalog",
+  "preservedSchemaAuthority",
   "diagnosticRootCatalog",
   "classifications",
   "modes",
@@ -90,6 +92,13 @@ const EXPECTED_ACTIONS = {
   },
 };
 
+const EXPECTED_PRESERVED_VARIANT_SCHEMA_IDS = {
+  fiveAxisVertexSets: {
+    LegacyFiveAxisVertexSet: "project-workbook/preserved/fiveAxisVertexSets/legacy-v1",
+    FiveAxisVertexSet: "project-workbook/preserved/fiveAxisVertexSets/current-v1",
+  },
+};
+
 const column = (name, format, type = "string") => ({ name, type, required: true, format });
 const EXPECTED_SHEETS = {
   __TF_MANIFEST: {
@@ -121,7 +130,8 @@ const EXPECTED_SHEETS = {
   __TF_PRESERVED: {
     kind: "machine",
     columns: [
-      column("root", "workspace-root"), column("record_key", "rfc8785-key-json"),
+      column("root", "workspace-root"), column("record_schema_id", "stable-id"),
+      column("record_key", "rfc8785-key-json"),
       column("record_revision", "rfc8785-revision-scalar"),
       column("record_content_sha256", "lowercase-sha256"),
       column("opaque_canonical_payload_json", "rfc8785-json"),
@@ -246,6 +256,24 @@ function resolvePayloadVariant(manifest, root, payload, callerVariant, repositor
     assert.equal(callerVariant, resolved, `${root} caller variant contradicts the closed payload`);
   }
   return resolved;
+}
+
+function expectedRecordSchemaId(manifest, root, payload, callerVariant, repositoryRoot) {
+  const importableSchema = manifest.recordSchemas[root];
+  if (importableSchema) {
+    assert.equal(callerVariant, undefined, `${root} does not accept a caller variant`);
+    return importableSchema.schemaId;
+  }
+  const catalog = manifest.preservedSchemaCatalog[root];
+  assert.ok(catalog, `${root} has no versioned record schema`);
+  const variant = resolvePayloadVariant(
+    manifest,
+    root,
+    payload,
+    callerVariant,
+    repositoryRoot,
+  );
+  return typeof catalog === "string" ? catalog : catalog[variant];
 }
 
 function fieldPathType(source, typeName, fieldPath) {
@@ -504,6 +532,21 @@ export function validateMachineCell(columnSchema, value, cellKind = "string", co
     assert.equal(value, format.slice("literal:".length));
   } else if (format === "stable-id") {
     assert.match(value, /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/);
+    if (columnSchema.name === "record_schema_id") {
+      assert.ok(context.manifest && context.root, "record schema id requires manifest and root");
+      assert.ok(Object.hasOwn(context, "payload"), "record schema id requires projected payload");
+      assert.equal(
+        value,
+        expectedRecordSchemaId(
+          context.manifest,
+          context.root,
+          context.payload,
+          context.variant,
+          context.repositoryRoot ?? process.cwd(),
+        ),
+        `${context.root} record schema id does not match its closed payload variant`,
+      );
+    }
   } else if (format === "stable-version") {
     assert.match(value, /^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$/);
   } else if (format === "workspace-root") {
@@ -607,6 +650,24 @@ function parseTypeDeclarations(source) {
       if (character === ";" && depth === 0) break;
     }
     declarations.set(name, source.slice(absolute + 1, end));
+  }
+  return declarations;
+}
+
+function parseConstDeclarations(source) {
+  const declarations = new Map();
+  const pattern = /^\s*(?:export\s+)?const\s+([A-Za-z_$][A-Za-z0-9_$]*)[^=]*=/gm;
+  for (const match of source.matchAll(pattern)) {
+    const start = match.index + match[0].length;
+    let depth = 0;
+    let end = start;
+    for (; end < source.length; end += 1) {
+      const character = source[end];
+      if ("{[(".includes(character)) depth += 1;
+      if ("}])".includes(character)) depth -= 1;
+      if (character === ";" && depth === 0) break;
+    }
+    declarations.set(match[1], source.slice(start, end));
   }
   return declarations;
 }
@@ -915,6 +976,8 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     "recordSchemaAuthority",
     "recordSchemas",
     "preservedRootCatalog",
+    "preservedSchemaCatalog",
+    "preservedSchemaAuthority",
     "diagnosticRootCatalog",
     "classifications",
   ]);
@@ -1063,6 +1126,42 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     if (!catalog.singleton) assert.ok(!catalog.recordKeyFields.includes("$singleton"));
   }
   assert.deepEqual(
+    Object.keys(manifest.preservedSchemaCatalog),
+    EXPECTED_ROOT_CLASSIFICATIONS.preserved_frozen,
+    "every preserved root must bind one versioned row schema",
+  );
+  for (const [root, schema] of Object.entries(manifest.preservedSchemaCatalog)) {
+    const variants = manifest.preservedRootCatalog[root].variants;
+    if (variants.length === 0) {
+      assert.equal(schema, `project-workbook/preserved/${root}/v1`);
+    } else {
+      assert.deepEqual(Object.keys(schema), variants.map((variant) => variant.type));
+      assert.deepEqual(
+        schema,
+        EXPECTED_PRESERVED_VARIANT_SCHEMA_IDS[root],
+        `${root} variant schema identities must remain stable`,
+      );
+      for (const [variant, schemaId] of Object.entries(schema)) {
+        assert.match(
+          schemaId,
+          new RegExp(`^project-workbook/preserved/${root}/[a-z0-9-]+-v1$`),
+          `${root}.${variant} needs a versioned schema id`,
+        );
+      }
+      assert.equal(new Set(Object.values(schema)).size, variants.length);
+    }
+  }
+  assertExactKeys(manifest.preservedSchemaAuthority, [
+    "format", "sources", "recursiveTypeGraphSha256", "dynamicValuePolicy",
+  ], "preserved schema authority");
+  assert.equal(manifest.preservedSchemaAuthority.format, "typescript-opaque-exact-graph/v1");
+  assert.ok(manifest.preservedSchemaAuthority.sources.length > 0);
+  assert.match(manifest.preservedSchemaAuthority.recursiveTypeGraphSha256, /^[0-9a-f]{64}$/);
+  assert.equal(
+    manifest.preservedSchemaAuthority.dynamicValuePolicy,
+    "OPAQUE_SERVER_EXPORT_ONLY_EXACT_COMPARE_NO_CLIENT_CONSTRUCTION",
+  );
+  assert.deepEqual(
     Object.keys(manifest.diagnosticRootCatalog),
     EXPECTED_ROOT_CLASSIFICATIONS.export_only_diagnostic,
     "every diagnostic root must bind one safe subject-key contract",
@@ -1201,6 +1300,80 @@ export function validateDiagnosticRootCatalog(manifest, repositoryRoot = process
   return true;
 }
 
+export function preservedTypeGraphHash(
+  manifest,
+  repositoryRoot = process.cwd(),
+  sourceOverrides = new Map(),
+) {
+  const sourceByPath = new Map();
+  for (const sourceBinding of manifest.preservedSchemaAuthority.sources) {
+    assertExactKeys(sourceBinding, ["path", "sha256"], `preserved source ${sourceBinding.path}`);
+    const source = sourceOverrides.has(sourceBinding.path)
+      ? sourceOverrides.get(sourceBinding.path)
+      : readFileSync(path.join(repositoryRoot, sourceBinding.path), "utf8");
+    assert.equal(sha256(source), sourceBinding.sha256, `preserved source hash drift: ${sourceBinding.path}`);
+    sourceByPath.set(sourceBinding.path, source);
+  }
+  const queue = Object.values(manifest.preservedRootCatalog).map((catalog) => {
+    const [sourcePath, typeName] = catalog.typeRef.split("#");
+    return { sourcePath, typeName };
+  });
+  const visited = new Set();
+  const usedSources = new Set();
+  const proof = [];
+  const ignored = new Set([
+    "Array", "ReadonlyArray", "Readonly", "Record", "Partial", "Required", "Pick", "Omit",
+    "Extract", "Exclude", "NonNullable", "Date", "Map", "ReadonlyMap", "Set",
+    "ReadonlySet", "Promise", "Uint8Array", "Object",
+  ]);
+  while (queue.length > 0) {
+    const { sourcePath, typeName } = queue.shift();
+    if (["string", "number", "boolean"].includes(typeName)) {
+      proof.push(`${sourcePath}#${typeName}:scalar`);
+      continue;
+    }
+    const identity = `${sourcePath}#${typeName}`;
+    if (visited.has(identity)) continue;
+    visited.add(identity);
+    const source = sourceByPath.get(sourcePath);
+    assert.ok(source, `${identity} source is omitted from preserved authority`);
+    usedSources.add(sourcePath);
+    const localTypes = parseTypeDeclarations(source);
+    const localConsts = parseConstDeclarations(source);
+    const declaration = localTypes.get(typeName) ?? localConsts.get(typeName);
+    assert.ok(declaration, `${identity} declaration is unresolved`);
+    const semanticBody = declaration
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/.*$/gm, "");
+    proof.push(`${identity}:${sha256(semanticBody.replace(/\s+/g, " ").trim())}`);
+    const traversalBody = semanticBody.replace(/(["'`])(?:\\.|(?!\1).)*\1/g, "");
+    const imports = importedTypeBindings(source, sourcePath);
+    for (const identifier of traversalBody.match(/\b[A-Z][A-Za-z0-9_$]*\b/g) ?? []) {
+      if (ignored.has(identifier) || identifier.length === 1) continue;
+      if (localTypes.has(identifier) || localConsts.has(identifier)) {
+        queue.push({ sourcePath, typeName: identifier });
+        continue;
+      }
+      const imported = imports.get(identifier);
+      if (imported) {
+        assert.ok(
+          sourceByPath.has(imported.path),
+          `${identity} dependency ${imported.path} is omitted from preserved authority`,
+        );
+        queue.push({ sourcePath: imported.path, typeName: imported.importedName });
+        continue;
+      }
+      fail(`${identity} dependency ${identifier} is unresolved`);
+    }
+  }
+  assert.deepEqual(
+    [...sourceByPath.keys()].sort(),
+    [...usedSources].sort(),
+    "preserved authority must list exactly the recursively reachable sources",
+  );
+  return sha256(proof.sort().join("\n"));
+}
+
 export function checkProjectWorkbookContract(root = process.cwd()) {
   const manifestPath = path.join(root, "docs/spec-v3/project-workbook-v1-root-manifest.json");
   const manifestSource = readFileSync(manifestPath, "utf8");
@@ -1226,6 +1399,11 @@ export function checkProjectWorkbookContract(root = process.cwd()) {
   );
   validatePreservedRootCatalog(manifest, root);
   validateDiagnosticRootCatalog(manifest, root);
+  assert.equal(
+    preservedTypeGraphHash(manifest, root),
+    manifest.preservedSchemaAuthority.recursiveTypeGraphSha256,
+    "preserved recursive type graph drift",
+  );
   for (const [rootName, typeRef] of Object.entries(manifest.recordSchemaAuthority.typeRefs)) {
     const [sourcePath, typeName] = typeRef.split("#");
     const fields = parseExportedInterfaceFields(

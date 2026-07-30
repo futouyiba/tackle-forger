@@ -7,6 +7,7 @@ import {
   EXPECTED_ROOT_CLASSIFICATIONS,
   checkProjectWorkbookContract,
   parseWorkspaceStateRoots,
+  preservedTypeGraphHash,
   validateMachineCell,
   validateDiagnosticRootCatalog,
   validatePreservedRootCatalog,
@@ -272,6 +273,145 @@ test("versioned definitions use composite identities and every frozen root has a
   );
 });
 
+test("preserved rows bind a versioned schema id to the closed payload variant", async () => {
+  const { manifest, roots } = await fixture();
+  const schemaColumn = manifest.workbookSchema.sheets.__TF_PRESERVED.columns
+    .find((entry) => entry.name === "record_schema_id");
+  const legacyPayload = {
+    definitionId: "definition:1",
+    definitionVersion: "v1",
+    fishWeightGradeId: "grade:1",
+    fiveAxisRuleVersion: "rules:v1",
+  };
+  const currentPayload = { vertexSetId: "vertex:1" };
+
+  assert.equal(
+    validateMachineCell(
+      schemaColumn,
+      "project-workbook/preserved/performanceProfiles/v1",
+      "string",
+      {
+        manifest,
+        root: "performanceProfiles",
+        payload: { id: "performance:1" },
+      },
+    ),
+    true,
+  );
+  assert.equal(
+    validateMachineCell(
+      schemaColumn,
+      "project-workbook/preserved/fiveAxisVertexSets/legacy-v1",
+      "string",
+      { manifest, root: "fiveAxisVertexSets", payload: legacyPayload },
+    ),
+    true,
+  );
+  assert.equal(
+    validateMachineCell(
+      schemaColumn,
+      "project-workbook/preserved/fiveAxisVertexSets/current-v1",
+      "string",
+      { manifest, root: "fiveAxisVertexSets", payload: currentPayload },
+    ),
+    true,
+  );
+  assert.throws(
+    () => validateMachineCell(
+      schemaColumn,
+      "project-workbook/preserved/fiveAxisVertexSets/current-v1",
+      "string",
+      { manifest, root: "fiveAxisVertexSets", payload: legacyPayload },
+    ),
+    /does not match its closed payload variant/,
+  );
+
+  const missingColumn = clone(manifest);
+  missingColumn.workbookSchema.sheets.__TF_PRESERVED.columns =
+    missingColumn.workbookSchema.sheets.__TF_PRESERVED.columns
+      .filter((column) => column.name !== "record_schema_id");
+  assert.throws(() => validateProjectWorkbookManifest(missingColumn, roots), /exact closed schema/);
+
+  const unhashedSchemaId = clone(manifest);
+  unhashedSchemaId.canonicalization.recordHashInput =
+    unhashedSchemaId.canonicalization.recordHashInput
+      .filter((field) => field !== "record_schema_id");
+  assert.throws(() => validateProjectWorkbookManifest(unhashedSchemaId, roots));
+
+  const swappedVariantSchemas = clone(manifest);
+  [
+    swappedVariantSchemas.preservedSchemaCatalog.fiveAxisVertexSets.LegacyFiveAxisVertexSet,
+    swappedVariantSchemas.preservedSchemaCatalog.fiveAxisVertexSets.FiveAxisVertexSet,
+  ] = [
+    swappedVariantSchemas.preservedSchemaCatalog.fiveAxisVertexSets.FiveAxisVertexSet,
+    swappedVariantSchemas.preservedSchemaCatalog.fiveAxisVertexSets.LegacyFiveAxisVertexSet,
+  ];
+  assert.throws(
+    () => validateProjectWorkbookManifest(swappedVariantSchemas, roots),
+    /variant schema identities/,
+  );
+});
+
+test("preserved opaque rows hash-bind every recursively reachable type authority", async () => {
+  const { manifest, roots } = await fixture();
+  assert.equal(
+    preservedTypeGraphHash(manifest),
+    manifest.preservedSchemaAuthority.recursiveTypeGraphSha256,
+  );
+
+  const missingExternalAuthority = clone(manifest);
+  missingExternalAuthority.preservedSchemaAuthority.sources =
+    missingExternalAuthority.preservedSchemaAuthority.sources
+      .filter((source) => source.path !== "lib/performance-summary.ts");
+  assert.throws(
+    () => preservedTypeGraphHash(missingExternalAuthority),
+    /lib\/performance-summary\.ts.*(?:source|dependency).*omitted/,
+  );
+
+  const typesSource = await readFile(workspaceStatePath, "utf8");
+  const nestedMutation = typesSource.replace(
+    "export interface ModelComponentSelection {\n  itemPartId: string;\n  componentId: string;",
+    "export interface ModelComponentSelection {\n  itemPartId: string;\n  componentId: string;\n  schemaEvidence?: string;",
+  );
+  assert.notEqual(nestedMutation, typesSource);
+  const nestedManifest = clone(manifest);
+  nestedManifest.preservedSchemaAuthority.sources
+    .find((source) => source.path === "lib/types.ts").sha256 =
+      createHash("sha256").update(nestedMutation).digest("hex");
+  assert.notEqual(
+    preservedTypeGraphHash(
+      nestedManifest,
+      process.cwd(),
+      new Map([["lib/types.ts", nestedMutation]]),
+    ),
+    manifest.preservedSchemaAuthority.recursiveTypeGraphSha256,
+  );
+
+  const externalUrl = new URL("../lib/performance-summary.ts", import.meta.url);
+  const externalSource = await readFile(externalUrl, "utf8");
+  const externalMutation = externalSource.replace(
+    "definitionHash: string;",
+    "definitionHash: string;\n  schemaEvidence?: string;",
+  );
+  assert.notEqual(externalMutation, externalSource);
+  const externalManifest = clone(manifest);
+  externalManifest.preservedSchemaAuthority.sources
+    .find((source) => source.path === "lib/performance-summary.ts").sha256 =
+      createHash("sha256").update(externalMutation).digest("hex");
+  assert.notEqual(
+    preservedTypeGraphHash(
+      externalManifest,
+      process.cwd(),
+      new Map([["lib/performance-summary.ts", externalMutation]]),
+    ),
+    manifest.preservedSchemaAuthority.recursiveTypeGraphSha256,
+  );
+
+  const weakenedDynamicBoundary = clone(manifest);
+  weakenedDynamicBoundary.preservedSchemaAuthority.dynamicValuePolicy = "ALLOW_CLIENT_CONSTRUCTION";
+  assert.throws(() => validateProjectWorkbookManifest(weakenedDynamicBoundary, roots));
+});
+
 test("safe projections rederive unresolved diagnostic payloads", async () => {
   const { manifest, roots } = await fixture();
   assert.deepEqual(manifest.recordSchemaAuthority.projectionExclusions.skuDrawers, [
@@ -326,8 +466,14 @@ test("every closed format validates its domain and unknown formats fail closed",
       .flatMap((sheet) => sheet.columns)
       .map((entry) => [entry.format, entry]),
   );
-  assert.equal(validateMachineCell(byFormat.get("stable-id"), "workspace:alpha-1"), true);
-  assert.throws(() => validateMachineCell(byFormat.get("stable-id"), "bad id"));
+  const genericStableId = {
+    name: "workspace_id",
+    type: "string",
+    required: true,
+    format: "stable-id",
+  };
+  assert.equal(validateMachineCell(genericStableId, "workspace:alpha-1"), true);
+  assert.throws(() => validateMachineCell(genericStableId, "bad id"));
   assert.equal(validateMachineCell(byFormat.get("stable-version"), "v1.2.3+safe"), true);
   assert.throws(() => validateMachineCell(byFormat.get("stable-version"), "v 1"));
   assert.equal(validateMachineCell(byFormat.get("workspace-root"), "parameters"), true);

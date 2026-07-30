@@ -4,12 +4,17 @@ import test from "node:test";
 
 import { isLocalSessionEditorEnabled } from "../lib/local-session-feature";
 
-test("feature flag is production-safe and only exact true enables", () => {
-  assert.equal(isLocalSessionEditorEnabled(undefined), false);
-  assert.equal(isLocalSessionEditorEnabled("false"), false);
-  assert.equal(isLocalSessionEditorEnabled("TRUE"), false);
-  assert.equal(isLocalSessionEditorEnabled("1"), false);
-  assert.equal(isLocalSessionEditorEnabled("true"), true);
+test("development defaults to the isolated local editor", () => {
+  assert.equal(isLocalSessionEditorEnabled(undefined, "development"), true);
+  assert.equal(isLocalSessionEditorEnabled("false", "development"), true);
+});
+
+test("production remains exact opt-in", () => {
+  assert.equal(isLocalSessionEditorEnabled(undefined, "production"), false);
+  assert.equal(isLocalSessionEditorEnabled("false", "production"), false);
+  assert.equal(isLocalSessionEditorEnabled("TRUE", "production"), false);
+  assert.equal(isLocalSessionEditorEnabled("1", "production"), false);
+  assert.equal(isLocalSessionEditorEnabled("true", "production"), true);
 });
 
 test("anonymous entry declares local create/open boundary without production objects", () => {

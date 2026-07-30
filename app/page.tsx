@@ -13,6 +13,7 @@ export const metadata: Metadata = {
 export default function Home() {
   if (isLocalSessionEditorEnabled(
     process.env.TACKLE_FORGER_LOCAL_SESSION_EDITOR_ENABLED,
+    process.env.NODE_ENV,
   )) {
     return <LocalSessionWorkbench />;
   }

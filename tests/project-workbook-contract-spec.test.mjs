@@ -12,6 +12,7 @@ import {
   validateDiagnosticRootCatalog,
   validatePreservedRootCatalog,
   validateProjectWorkbookManifest,
+  validateRecordEnvelope,
 } from "../scripts/check-project-workbook-contract.mjs";
 
 const manifestPath = new URL("../docs/spec-v3/project-workbook-v1-root-manifest.json", import.meta.url);
@@ -38,6 +39,20 @@ function canonicalPayload(value) {
   return `{${Object.keys(value).sort()
     .map((key) => `${JSON.stringify(key)}:${canonicalPayload(value[key])}`)
     .join(",")}}`;
+}
+
+function expectedRecordHash(manifest, row, payloadField) {
+  const values = {
+    root: row.root,
+    record_schema_id: row.record_schema_id,
+    record_key: JSON.parse(row.record_key),
+    record_revision: JSON.parse(row.record_revision),
+    canonical_payload: JSON.parse(row[payloadField]),
+  };
+  const input = manifest.canonicalization.recordHashInput.map(
+    (field) => [field, values[field]],
+  );
+  return createHash("sha256").update(canonicalPayload(input)).digest("hex");
 }
 
 function atPath(value, fieldPath) {
@@ -988,6 +1003,124 @@ test("record revision is typed RFC8785 scalar JSON and matches payload plus iden
     }),
     /non-empty NFC text/,
   );
+});
+
+test("record content hash binds the complete current and preserved row envelope", async () => {
+  const { manifest } = await fixture();
+  const currentPayload = {
+    id: "part:rod",
+    name: "竿",
+    activeInGeneration: true,
+    parameterKeys: ["power"],
+    notes: "",
+  };
+  const currentRow = {
+    root: "itemParts",
+    record_schema_id: manifest.recordSchemas.itemParts.schemaId,
+    record_key: '["part:rod"]',
+    record_revision: "null",
+    record_content_sha256: "0".repeat(64),
+    payload_json: canonicalPayload(currentPayload),
+  };
+  currentRow.record_content_sha256 = expectedRecordHash(manifest, currentRow, "payload_json");
+  assert.equal(validateRecordEnvelope(manifest, currentRow), true);
+  const currentHashColumn = manifest.workbookSchema.sheets.__TF_CURRENT.columns
+    .find((entry) => entry.name === "record_content_sha256");
+  assert.equal(
+    validateMachineCell(
+      currentHashColumn,
+      currentRow.record_content_sha256,
+      "string",
+      { manifest, row: currentRow },
+    ),
+    true,
+  );
+
+  for (const [mutate, pattern] of [
+    [(row) => { row.record_content_sha256 = "0".repeat(64); }, /does not match/],
+    [(row) => { row.payload_json = canonicalPayload({ ...currentPayload, name: "轮" }); }, /does not match/],
+    [(row) => { row.record_key = '["part:reel"]'; }, /record key does not match/],
+    [(row) => { row.record_revision = "1"; }, /has no revision field/],
+    [(row) => { row.record_schema_id = manifest.recordSchemas.collections.schemaId; },
+      /schema id does not match/],
+    [(row) => { row.root = "collections"; }, /schema id does not match|required|outside allowedFields/],
+  ]) {
+    const forged = clone(currentRow);
+    mutate(forged);
+    assert.throws(() => validateRecordEnvelope(manifest, forged), pattern);
+  }
+  assert.throws(
+    () => validateMachineCell(
+      currentHashColumn,
+      "0".repeat(64),
+      "string",
+      { manifest, row: currentRow },
+    ),
+    /hash cell must match|does not match/,
+  );
+  assert.throws(
+    () => validateMachineCell(currentHashColumn, currentRow.record_content_sha256),
+    /requires manifest|complete row envelope/,
+  );
+
+  const preservedPayload = {
+    fishWeightGradeId: "grade:1",
+    fiveAxisRuleVersion: "rules:v1",
+    definitionId: "definition:1",
+    definitionVersion: "v1",
+  };
+  const preservedRow = {
+    root: "fiveAxisVertexSets",
+    record_schema_id:
+      manifest.preservedSchemaCatalog.fiveAxisVertexSets.LegacyFiveAxisVertexSet,
+    record_key: '["definition:1","v1","grade:1","rules:v1"]',
+    record_revision: '"v1"',
+    record_content_sha256: "0".repeat(64),
+    opaque_canonical_payload_json: canonicalPayload(preservedPayload),
+  };
+  preservedRow.record_content_sha256 = expectedRecordHash(
+    manifest,
+    preservedRow,
+    "opaque_canonical_payload_json",
+  );
+  assert.equal(validateRecordEnvelope(manifest, preservedRow), true);
+  const preservedMutation = clone(preservedRow);
+  preservedMutation.opaque_canonical_payload_json = canonicalPayload({
+    ...preservedPayload,
+    values: {},
+  });
+  assert.throws(() => validateRecordEnvelope(manifest, preservedMutation), /does not match/);
+});
+
+test("nullable preserved singleton binds its exact WorkspaceState scalar union", async () => {
+  const { manifest, roots } = await fixture();
+  const root = "currentFiveAxisDispositionCatalogRevisionId";
+  assert.equal(
+    manifest.preservedRootCatalog[root].typeRef,
+    "lib/types.ts#string|null",
+  );
+  assert.equal(validatePreservedRootCatalog(manifest), true);
+  const payloadColumn = manifest.workbookSchema.sheets.__TF_PRESERVED.columns
+    .find((entry) => entry.name === "opaque_canonical_payload_json");
+  for (const payload of ['"revision:v1"', "null"]) {
+    assert.equal(
+      validateMachineCell(payloadColumn, payload, "string", { manifest, root }),
+      true,
+    );
+  }
+  for (const payload of ['{"value":"revision:v1"}', "1", "undefined"]) {
+    assert.throws(
+      () => validateMachineCell(payloadColumn, payload, "string", { manifest, root }),
+      /nullable string representation|JSON/,
+    );
+  }
+  const collapsed = clone(manifest);
+  collapsed.preservedRootCatalog[root].typeRef = "lib/types.ts#string";
+  assert.throws(
+    () => validatePreservedRootCatalog(collapsed),
+    /exact WorkspaceState property element\/scalar type/,
+  );
+  assert.equal(validateProjectWorkbookManifest(manifest, roots), true);
 });
 
 test("all diagnostic roots derive closed non-semantic subject keys from safe payloads", async () => {

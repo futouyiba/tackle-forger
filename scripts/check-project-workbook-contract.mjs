@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -855,6 +855,14 @@ function validateRecordPayloadAgainstSchema(
     validateImportableRecordPayload(manifest, root, payload, repositoryRoot);
     return true;
   }
+  if (typeRef === "lib/types.ts#string|null") {
+    assert.ok(
+      payload === null
+        || (typeof payload === "string" && payload === payload.normalize("NFC")),
+      `${root} payload must use its canonical nullable string representation`,
+    );
+    return true;
+  }
   if (typeRef === "lib/types.ts#string") {
     assert.equal(
       typeof payload,
@@ -874,6 +882,13 @@ function validateRecordPayloadRepresentation(manifest, root, payload) {
   const typeRef = manifest.recordSchemaAuthority.typeRefs[root]
     ?? manifest.preservedRootCatalog[root]?.typeRef;
   assert.ok(typeRef, `${root} has no record payload authority`);
+  if (typeRef === "lib/types.ts#string|null") {
+    assert.ok(
+      payload === null || typeof payload === "string",
+      `${root} payload must use its canonical nullable string representation`,
+    );
+    return true;
+  }
   if (typeRef === "lib/types.ts#string") {
     assert.equal(
       typeof payload,
@@ -1018,6 +1033,71 @@ function diagnosticSubjectHash(manifest, root, payload) {
   return sha256(canonicalJson(projection));
 }
 
+function recordEnvelopeHash(manifest, row, payloadField) {
+  const values = {
+    root: row.root,
+    record_schema_id: row.record_schema_id,
+    record_key: JSON.parse(row.record_key),
+    record_revision: JSON.parse(row.record_revision),
+    canonical_payload: JSON.parse(row[payloadField]),
+  };
+  const input = manifest.canonicalization.recordHashInput.map((field) => {
+    assert.ok(Object.hasOwn(values, field), `record hash input ${field} is unresolved`);
+    return [field, values[field]];
+  });
+  return sha256(canonicalJson(input));
+}
+
+export function validateRecordEnvelope(manifest, row, context = {}) {
+  assert.ok(row && Object.getPrototypeOf(row) === Object.prototype,
+    "record envelope must be a closed object");
+  assert.ok(typeof row.root === "string", "record envelope root must be text");
+  const isCurrent = manifest.classifications.importable_current.includes(row.root);
+  const isPreserved = manifest.classifications.preserved_frozen.includes(row.root);
+  assert.notEqual(isCurrent, isPreserved, `${row.root} is not exactly one record-envelope root`);
+  const payloadField = isCurrent ? "payload_json" : "opaque_canonical_payload_json";
+  assert.deepEqual(Object.keys(row), [
+    "root",
+    "record_schema_id",
+    "record_key",
+    "record_revision",
+    "record_content_sha256",
+    payloadField,
+  ], `${row.root} record envelope must use the closed field order`);
+  const sheet = manifest.workbookSchema.sheets[
+    isCurrent ? "__TF_CURRENT" : "__TF_PRESERVED"
+  ];
+  const column = (name) => sheet.columns.find((entry) => entry.name === name);
+  assert.ok(sheet && column(payloadField), `${row.root} record envelope sheet is unresolved`);
+  const parsedPayload = JSON.parse(row[payloadField]);
+  const commonContext = {
+    manifest,
+    root: row.root,
+    payload: parsedPayload,
+    variant: context.variant,
+    repositoryRoot: context.repositoryRoot ?? process.cwd(),
+  };
+  validateMachineCell(column("root"), row.root);
+  validateMachineCell(column(payloadField), row[payloadField], "string", commonContext);
+  validateMachineCell(column("record_schema_id"), row.record_schema_id, "string", commonContext);
+  validateMachineCell(column("record_key"), row.record_key, "string", commonContext);
+  const parsedKey = JSON.parse(row.record_key);
+  validateMachineCell(column("record_revision"), row.record_revision, "string", {
+    ...commonContext,
+    recordKey: parsedKey,
+  });
+  assert.match(row.record_content_sha256, /^[0-9a-f]{64}$/);
+  const expectedHash = recordEnvelopeHash(manifest, row, payloadField);
+  assert.ok(
+    timingSafeEqual(
+      Buffer.from(row.record_content_sha256, "hex"),
+      Buffer.from(expectedHash, "hex"),
+    ),
+    `${row.root} record_content_sha256 does not match the closed row envelope`,
+  );
+  return true;
+}
+
 export function validateMachineCell(columnSchema, value, cellKind = "string", context = {}) {
   assert.equal(cellKind, "string", `${columnSchema.name} rejects Excel ${cellKind} cells`);
   assert.equal(typeof value, "string", `${columnSchema.name} must be encoded as text`);
@@ -1028,6 +1108,16 @@ export function validateMachineCell(columnSchema, value, cellKind = "string", co
     assert.ok(BigInt(value) <= BigInt(Number.MAX_SAFE_INTEGER), `${columnSchema.name} is not safe`);
   } else if (format === "lowercase-sha256") {
     assert.match(value, /^[0-9a-f]{64}$/);
+    if (columnSchema.name === "record_content_sha256") {
+      assert.ok(context.manifest, "record content hash requires manifest");
+      assert.ok(context.row, "record content hash requires the complete row envelope");
+      assert.equal(
+        context.row.record_content_sha256,
+        value,
+        "record content hash cell must match its row envelope",
+      );
+      validateRecordEnvelope(context.manifest, context.row, context);
+    }
   } else if (format === "rfc8785-revision-scalar") {
     assert.ok(context.manifest && context.root, "record revision requires manifest and root");
     assert.ok(Object.hasOwn(context, "payload"), "record revision requires projected payload");
@@ -1416,6 +1506,10 @@ function actualWorkspaceRootTypeRef(manifest, rootName, repositoryRoot) {
   );
   const propertyType = workspaceFields?.get(rootName);
   assert.ok(propertyType, `WorkspaceState.${rootName} type is unresolved`);
+  const normalizedPropertyType = propertyType.replace(/\s+/g, "");
+  if (normalizedPropertyType === "string|null" || normalizedPropertyType === "null|string") {
+    return `${workspacePath}#string|null`;
+  }
   const identifiers = [...new Set(
     propertyType.match(/\b[A-Za-z_$][A-Za-z0-9_$]*\b/g) ?? [],
   )].filter((name) => !["Array", "ReadonlyArray", "null", "undefined"].includes(name));
@@ -1730,7 +1824,10 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
       "variants",
     ], `preserved root ${root}`);
     assert.ok(["records", "variant_records", "whole_root_singleton"].includes(catalog.carrier));
-    assert.match(catalog.typeRef, /^lib\/[a-z0-9-]+\.ts#[A-Za-z][A-Za-z0-9]*$/);
+    assert.match(
+      catalog.typeRef,
+      /^lib\/[a-z0-9-]+\.ts#(?:[A-Za-z][A-Za-z0-9]*|string\|null)$/,
+    );
     if (catalog.carrier !== "variant_records") {
       assert.ok(catalog.recordKeyFields.length > 0, `${root} needs a stable record key`);
       assert.deepEqual(catalog.variants, []);
@@ -1881,7 +1978,10 @@ export function validatePreservedRootCatalog(manifest, repositoryRoot = process.
     const [sourcePath, typeName] = catalog.typeRef.split("#");
     const source = readFileSync(path.join(repositoryRoot, sourcePath), "utf8");
     if (catalog.carrier === "whole_root_singleton") {
-      assert.equal(typeName, "string", `${rootName} singleton type must be explicit`);
+      assert.ok(
+        typeName === "string" || typeName === "string|null",
+        `${rootName} singleton type must be an explicit JSON scalar`,
+      );
       continue;
     }
     const declaration = parseTypeDeclarations(source).get(typeName);
@@ -1970,7 +2070,7 @@ export function preservedTypeGraphHash(
   ]);
   while (queue.length > 0) {
     const { sourcePath, typeName } = queue.shift();
-    if (["string", "number", "boolean"].includes(typeName)) {
+    if (["string", "number", "boolean", "string|null"].includes(typeName)) {
       proof.push(`${sourcePath}#${typeName}:scalar`);
       continue;
     }

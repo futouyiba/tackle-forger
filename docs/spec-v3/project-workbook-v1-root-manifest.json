@@ -290,7 +290,7 @@
     "fiveAxisDispositionCatalogRevisions":{"carrier":"records","typeRef":"lib/types.ts#FiveAxisDefinitionDispositionCatalogRevision","recordKeyFields":["catalogRevisionId"],"revisionFields":["catalogRevisionId"],"hashFields":["catalogHash"],"singleton":false,"variants":[]},
     "fiveAxisViewDefinitions":{"carrier":"records","typeRef":"lib/types.ts#StoredFiveAxisViewDefinition","recordKeyFields":["definitionId","version","revision"],"revisionFields":["revision"],"hashFields":["definitionHash"],"singleton":false,"variants":[]},
     "fiveAxisVertexSets":{"carrier":"variant_records","typeRef":"lib/types.ts#StoredFiveAxisVertexSet","recordKeyFields":[],"revisionFields":[],"hashFields":[],"singleton":false,"variants":[{"type":"LegacyFiveAxisVertexSet","recordKeyFields":["definitionId","definitionVersion","fishWeightGradeId","fiveAxisRuleVersion"],"revisionFields":["definitionVersion"],"hashFields":["vertexSetHash"]},{"type":"FiveAxisVertexSet","recordKeyFields":["vertexSetId"],"revisionFields":["fiveAxisDefinitionVersion"],"hashFields":["vertexSetHash","candidateSetHash","candidateEvidenceHash"]}]},
-    "currentFiveAxisDispositionCatalogRevisionId":{"carrier":"whole_root_singleton","typeRef":"lib/types.ts#string","recordKeyFields":["$singleton"],"revisionFields":[],"hashFields":[],"singleton":true,"variants":[]},
+    "currentFiveAxisDispositionCatalogRevisionId":{"carrier":"whole_root_singleton","typeRef":"lib/types.ts#string|null","recordKeyFields":["$singleton"],"revisionFields":[],"hashFields":[],"singleton":true,"variants":[]},
     "patchReviewBatches":{"carrier":"records","typeRef":"lib/types.ts#PatchReviewBatch","recordKeyFields":["batchId"],"revisionFields":["policyVersion"],"hashFields":["inputHash"],"singleton":false,"variants":[]},
     "patchValidationWaivers":{"carrier":"records","typeRef":"lib/types.ts#PatchValidationWaiver","recordKeyFields":["waiverId"],"revisionFields":["policyVersion"],"hashFields":["objectInputHash","patchSetHash"],"singleton":false,"variants":[]},
     "patchValidationWaiverDecisions":{"carrier":"records","typeRef":"lib/types.ts#PatchValidationWaiverDecision","recordKeyFields":["waiverDecisionId"],"revisionFields":[],"hashFields":["decisionHash"],"singleton":false,"variants":[]},
@@ -337,7 +337,7 @@
       {"path":"lib/interaction-contracts.ts","sha256":"bb176c98f55448dbfd46d9619b83325591a2e36d56aacf50342d59f7461fe5af"},
       {"path":"lib/quality-value-policy.ts","sha256":"9acc48f99b77ba1992c83c62097b00f8c96f8cff0b7e4af3baf0187e4e043360"}
     ],
-    "recursiveTypeGraphSha256":"c4eaf5d9004d9cd1bee44b222ad9143af7ac1ee6b685e045ef69f4eff5a548dd",
+    "recursiveTypeGraphSha256":"943b6514220a1ad06b9a54ab14b544a4d7b00fe920d4f9a114a7deb045409715",
     "dynamicValuePolicy":"OPAQUE_SERVER_EXPORT_ONLY_EXACT_COMPARE_NO_CLIENT_CONSTRUCTION"
   },
   "diagnosticRootCatalog": {

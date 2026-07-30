@@ -6,7 +6,7 @@
     {
       "id": "project-workbook/v1",
       "path": "docs/spec-v3/project-workbook-v1-root-manifest.json",
-      "sha256": "369df1df9983830cd7f6416f77609caf9c69fb337c329d182fbb8f409ac78936"
+      "sha256": "9f4fd8ff5c301b090d5283e69e7ccd2bd6175f63d620d1634f8379ba11792843"
     }
   ],
   "readingProtocol": {
@@ -91,7 +91,7 @@
       ],
       "title": "版本、快照、飞书、工作区与回归",
       "path": "docs/spec-v3/04-persistence-and-lifecycle.md",
-      "sha256": "f02fa69620dd1860b5515edfba6329913b5c3daf7d94f9ec0ddd986673cacb78"
+      "sha256": "fe912d35ee8034d07ff50b3af479515920f2c80862327f8cd2e15f6aa3c3d27a"
     },
     {
       "id": "05",
@@ -124,7 +124,7 @@
       ],
       "title": "交互与后端统一需求契约",
       "path": "docs/spec-v3/07-interaction-contract.md",
-      "sha256": "a3ad50326805ef15d941452f0229cf9896a7dce05c885fc83a3c57943f8a0520"
+      "sha256": "72dbbb1a69f85d6ba4b46238bd4eb431805f3a05e45b4e1a7b20097e8d76a094"
     },
     {
       "id": "08",

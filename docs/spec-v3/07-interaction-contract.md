@@ -114,6 +114,8 @@ type ActionCode =
 
 预览解析必须先按根清单逐列验证Excel原始cell type；机器列仅接受非空文本并执行其`type/required/format`约束，不能让Excel数字精度、日期转换、布尔值、error cell或公式参与身份、revision、hash、JSON或opaque ref解析。根清单、workbook schema与machine content三类hash必须从closed workbook context按各自唯一声明输入重算，不能只接受64位hex；machine content唯一编码为`RFC8785_ORDERED_SHEET_ROW_PAIR_ARRAY_V1`的有序`[[sheetName,rows],...]`，禁止对象、拼接、stream或重排替代；缺少上下文、表集合变化或任一Manifest/机器行篡改都先于计划生成而失败。`server_owned`根只导出不可重放opaque ref且content hash固定为`null`，尤其不得从raw/preserved/readback证据派生hash。OPEN-002历史Performance关联不得通过`technologies.compatiblePerformanceProfileIds`进入新建或既有Technology的Excel导入payload；字段缺失保持服务端历史值/重派生，不是删除。`forbidden`根只有固定遗漏标记，服务端不得把原始敏感内容或其可猜hash写入工作簿；diagnostic行必须内嵌closed canonical subject payload并独立重算subject key，即使subject ref为`null`也可验证；diagnostic message/severity只用于展示，不参与项目语义等价或提交计划hash。
 
+预览还必须逐行验证`ROOT_SUMMARY`的93-root完整矩阵：分类与根清单一致，current/preserved/diagnostic根的record count和closed root hash可由对应记录重算，server-owned/forbidden根的hash严格为`null`。匹配既有importable记录时，全部schema `revisionFields`无论是否另列于`exactFields`都必须typed exact-equal；nested或optional revision path缺失、number/string替换或值漂移均阻断，新建记录不执行existing比较。
+
 Series、Part、SKU、Model的ID终身稳定且不复用；改名和更换默认Model不改ID。SKU改换Part或weightBandId必须遵守第6.6节；派生拉力不是身份字段。Revision只增不改；已批准/已发布revision不可原地改写。Snapshot ID与payload/hash永久绑定。前端不得从角色名、状态或颜色猜服务端动作；读接口返回`ActionAvailability[]`，写接口再次鉴权，纯本地动作只消费上述`LocalActionAvailability`。
 
 ### 24.2 R1：钓具系列甘特图

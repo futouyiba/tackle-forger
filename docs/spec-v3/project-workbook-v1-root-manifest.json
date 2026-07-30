@@ -130,7 +130,7 @@
           {"name":"root","type":"string","required":true,"format":"workspace-root"},
           {"name":"classification","type":"string","required":true,"format":"classification"},
           {"name":"record_count","type":"string","required":true,"format":"safe-integer-text"},
-          {"name":"root_content_sha256","type":"string","required":true,"format":"lowercase-sha256"},
+          {"name":"root_content_sha256","type":"string","required":true,"format":"lowercase-sha256-or-null"},
           {"name":"status","type":"string","required":true,"format":"stable-code"}
         ],
         "primaryKey": [

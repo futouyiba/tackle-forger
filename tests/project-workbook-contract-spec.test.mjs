@@ -16,6 +16,7 @@ import {
   validatePreservedRootCatalog,
   validateProjectWorkbookManifest,
   validateRecordEnvelope,
+  validateRootSummary,
   validateServerRefEnvelope,
   validateWorkbookEnvelope,
 } from "../scripts/check-project-workbook-contract.mjs";
@@ -130,6 +131,27 @@ function diagnosticEvidence(manifest, row) {
   return createHash("sha256").update(canonicalPayload(
     manifest.canonicalization.diagnosticEvidenceHashInput.map((field) => [field, values[field]]),
   )).digest("hex");
+}
+
+function rootSummaryFixture(manifest) {
+  const hashedRoots = [
+    ...manifest.classifications.importable_current,
+    ...manifest.classifications.preserved_frozen,
+    ...manifest.classifications.export_only_diagnostic,
+  ];
+  const rootRecordContext = Object.fromEntries(hashedRoots.map((root) => [root, []]));
+  const rows = Object.entries(manifest.classifications).flatMap(([classification, roots]) =>
+    roots.map((root) => ({
+      root,
+      classification,
+      record_count: "0",
+      root_content_sha256:
+        classification === "server_owned" || classification === "forbidden"
+          ? "null"
+          : createHash("sha256").update("[]").digest("hex"),
+      status: "READY",
+    })));
+  return { rows, rootRecordContext };
 }
 
 test("canonical project workbook contract binds all current WorkspaceState roots", () => {
@@ -535,6 +557,116 @@ test("reserved purchasable model identity is exact while unreserved and new mode
       /is exact-equal for an existing record/,
     );
   }
+});
+
+test("existing importable records exact-compare every typed revision field", async () => {
+  const { manifest } = await fixture();
+  const sku = {
+    id: "sku:1",
+    revision: 3,
+    seriesId: "series:1",
+    targetPullKg: 5,
+    patchIds: [],
+    modelIds: [],
+    displayOrder: 1,
+    status: "draft",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  assert.equal(
+    validateImportableExactFields(manifest, "skuDrawers", { ...sku, revision: 4 }, undefined),
+    true,
+    "new records may declare their initial numeric revision",
+  );
+  assert.throws(
+    () => validateImportableExactFields(
+      manifest,
+      "skuDrawers",
+      { ...sku, revision: 4 },
+      sku,
+    ),
+    /revision is exact-equal/,
+  );
+  const compatibility = {
+    id: "compatibility:1",
+    axis: "method_type",
+    effect: "allow",
+    selector: {},
+    requirements: [],
+    priority: 1,
+    ruleSetVersion: "rules:v1",
+    reason: "test",
+    suggestion: "",
+    enabled: true,
+  };
+  assert.equal(
+    validateImportableExactFields(
+      manifest,
+      "compatibilityRules",
+      { ...compatibility },
+      compatibility,
+    ),
+    true,
+  );
+  assert.throws(
+    () => validateImportableExactFields(
+      manifest,
+      "compatibilityRules",
+      { ...compatibility, ruleSetVersion: "rules:v2" },
+      compatibility,
+    ),
+    /ruleSetVersion is exact-equal/,
+  );
+
+  const nestedManifest = clone(manifest);
+  nestedManifest.recordSchemas.purchasableModels.revisionFields =
+    ["componentSelections.0.componentId"];
+  const model = {
+    id: "model:nested",
+    revision: 1,
+    skuId: "sku:1",
+    name: "Nested",
+    action: "M",
+    hardness: "H",
+    lengthM: 2.4,
+    componentSelections: [{
+      itemPartId: "part:rod",
+      componentId: "component:1",
+      name: "组件",
+      values: {},
+    }],
+    technologyIds: [],
+    attributeAffixIds: [],
+    passiveAffixIds: [],
+    patchIds: [],
+    price: 100,
+    status: "draft",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  assert.throws(
+    () => validateImportableExactFields(
+      nestedManifest,
+      "purchasableModels",
+      {
+        ...model,
+        componentSelections: [
+          { ...model.componentSelections[0], componentId: "component:2" },
+        ],
+      },
+      model,
+    ),
+    /componentSelections\.0\.componentId is exact-equal/,
+  );
+  assert.throws(
+    () => validateImportableExactFields(
+      nestedManifest,
+      "purchasableModels",
+      { ...model, componentSelections: [] },
+      model,
+    ),
+    /candidate revision is missing/,
+  );
 });
 
 test("preserved rows bind a versioned schema id to the closed payload variant", async () => {
@@ -1671,6 +1803,61 @@ test("server-owned roots expose only opaque non-replayable refs and no raw-deriv
   assert.throws(
     () => validateProjectWorkbookManifest(weakened, roots),
     /raw-derived content hashes/,
+  );
+});
+
+test("ROOT_SUMMARY binds all 93 roots without hashing server-owned or forbidden content", async () => {
+  const { manifest } = await fixture();
+  const { rows, rootRecordContext } = rootSummaryFixture(manifest);
+  assert.equal(validateRootSummary(manifest, rows, rootRecordContext), true);
+  assert.equal(rows.length, 93);
+
+  const wrongClassification = clone(rows);
+  wrongClassification[0].classification = "server_owned";
+  assert.throws(
+    () => validateRootSummary(manifest, wrongClassification, rootRecordContext),
+    /classification mismatch/,
+  );
+  const missingRoot = rows.slice(1);
+  assert.throws(
+    () => validateRootSummary(manifest, missingRoot, rootRecordContext),
+    /exactly 93 roots/,
+  );
+  const duplicatedRoot = clone(rows);
+  duplicatedRoot[1].root = duplicatedRoot[0].root;
+  assert.throws(
+    () => validateRootSummary(manifest, duplicatedRoot, rootRecordContext),
+    /each root once/,
+  );
+
+  const hashedAsNull = clone(rows);
+  hashedAsNull.find((row) => row.classification === "importable_current")
+    .root_content_sha256 = "null";
+  assert.throws(
+    () => validateRootSummary(manifest, hashedAsNull, rootRecordContext),
+    /requires a closed root hash/,
+  );
+  const diagnosticHashMutation = clone(rows);
+  diagnosticHashMutation.find((row) => row.classification === "export_only_diagnostic")
+    .root_content_sha256 = "a".repeat(64);
+  assert.throws(
+    () => validateRootSummary(manifest, diagnosticHashMutation, rootRecordContext),
+    /does not match its closed records/,
+  );
+  for (const classification of ["server_owned", "forbidden"]) {
+    const rawHashLeak = clone(rows);
+    rawHashLeak.find((row) => row.classification === classification)
+      .root_content_sha256 = "b".repeat(64);
+    assert.throws(
+      () => validateRootSummary(manifest, rawHashLeak, rootRecordContext),
+      /must not expose a raw-derived root hash/,
+    );
+  }
+  const missingContext = clone(rootRecordContext);
+  delete missingContext[Object.keys(missingContext)[0]];
+  assert.throws(
+    () => validateRootSummary(manifest, rows, missingContext),
+    /every and only hash-bearing roots/,
   );
 });
 

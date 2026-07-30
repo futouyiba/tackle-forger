@@ -214,7 +214,7 @@ const EXPECTED_SHEETS = {
     columns: [
       column("root", "workspace-root"), column("classification", "classification"),
       column("record_count", "safe-integer-text"),
-      column("root_content_sha256", "lowercase-sha256"), column("status", "stable-code"),
+      column("root_content_sha256", "lowercase-sha256-or-null"), column("status", "stable-code"),
     ],
     primaryKey: ["root"],
     cardinality: "EXACTLY_93",
@@ -876,12 +876,26 @@ export function validateImportableExactFields(
     && valueAtFieldPath(existingPayload, conditionalPolicy.whenExistingFieldPresent) !== undefined
     ? conditionalPolicy.exactFields
     : [];
-  for (const field of [
+  const revisionFields = manifest.recordSchemas[root].revisionFields;
+  for (const field of new Set([
+    ...revisionFields,
     ...manifest.recordSchemas[root].exactFields,
     ...conditionalFields,
-  ]) {
+  ])) {
     const candidateValue = valueAtFieldPath(candidatePayload, field);
     const existingValue = valueAtFieldPath(existingPayload, field);
+    if (revisionFields.includes(field)) {
+      assert.notEqual(
+        existingValue,
+        undefined,
+        `${root}.${field} existing revision is missing`,
+      );
+      assert.notEqual(
+        candidateValue,
+        undefined,
+        `${root}.${field} candidate revision is missing`,
+      );
+    }
     if (candidateValue === undefined || existingValue === undefined) {
       assert.equal(
         candidateValue,
@@ -1409,6 +1423,89 @@ export function validateWorkbookEnvelope(
   return true;
 }
 
+export function validateRootSummary(
+  manifest,
+  rows,
+  rootRecordContext,
+  repositoryRoot = process.cwd(),
+) {
+  assert.ok(Array.isArray(rows), "ROOT_SUMMARY rows are required");
+  assert.ok(
+    rootRecordContext && Object.getPrototypeOf(rootRecordContext) === Object.prototype,
+    "ROOT_SUMMARY root record context is required",
+  );
+  const rootOrder = Object.values(manifest.classifications).flat();
+  assert.equal(rows.length, rootOrder.length, "ROOT_SUMMARY must contain exactly 93 roots");
+  assert.deepEqual(
+    rows.map((row) => row.root),
+    rootOrder,
+    "ROOT_SUMMARY must contain each root once in manifest order",
+  );
+  const hashedRoots = [
+    ...manifest.classifications.importable_current,
+    ...manifest.classifications.preserved_frozen,
+    ...manifest.classifications.export_only_diagnostic,
+  ];
+  assert.deepEqual(
+    Object.keys(rootRecordContext),
+    hashedRoots,
+    "ROOT_SUMMARY context must contain every and only hash-bearing roots",
+  );
+  const sheet = manifest.workbookSchema.sheets.ROOT_SUMMARY;
+  const classificationByRoot = new Map(
+    Object.entries(manifest.classifications).flatMap(([classification, roots]) =>
+      roots.map((root) => [root, classification])),
+  );
+  for (const row of rows) {
+    assert.ok(row && Object.getPrototypeOf(row) === Object.prototype,
+      `${row?.root ?? "unknown"} ROOT_SUMMARY row must be a closed object`);
+    assert.deepEqual(
+      Object.keys(row),
+      sheet.columns.map((entry) => entry.name),
+      `${row.root} ROOT_SUMMARY row must use the closed field order`,
+    );
+    for (const columnSchema of sheet.columns) {
+      validateMachineCell(columnSchema, row[columnSchema.name]);
+    }
+    const classification = classificationByRoot.get(row.root);
+    assert.equal(row.classification, classification, `${row.root} classification mismatch`);
+    if (classification === "server_owned" || classification === "forbidden") {
+      assert.equal(
+        row.root_content_sha256,
+        "null",
+        `${row.root} must not expose a raw-derived root hash`,
+      );
+      continue;
+    }
+    assert.match(
+      row.root_content_sha256,
+      /^[0-9a-f]{64}$/,
+      `${row.root} requires a closed root hash`,
+    );
+    const rootRecords = rootRecordContext[row.root];
+    assert.ok(Array.isArray(rootRecords), `${row.root} root records are required`);
+    assert.equal(
+      row.record_count,
+      String(rootRecords.length),
+      `${row.root} record_count does not match its closed records`,
+    );
+    for (const record of rootRecords) {
+      assert.equal(record.root, row.root, `${row.root} summary context contains another root`);
+      if (classification === "export_only_diagnostic") {
+        validateDiagnosticEnvelope(manifest, record);
+      } else {
+        validateRecordEnvelope(manifest, record, { repositoryRoot });
+      }
+    }
+    assert.equal(
+      row.root_content_sha256,
+      sha256(canonicalJson(rootRecords)),
+      `${row.root} root_content_sha256 does not match its closed records`,
+    );
+  }
+  return true;
+}
+
 export function validateMachineCell(columnSchema, value, cellKind = "string", context = {}) {
   assert.equal(cellKind, "string", `${columnSchema.name} rejects Excel ${cellKind} cells`);
   assert.equal(typeof value, "string", `${columnSchema.name} must be encoded as text`);
@@ -1429,6 +1526,8 @@ export function validateMachineCell(columnSchema, value, cellKind = "string", co
       );
       validateRecordEnvelope(context.manifest, context.row, context);
     }
+  } else if (format === "lowercase-sha256-or-null") {
+    assert.ok(value === "null" || /^[0-9a-f]{64}$/.test(value));
   } else if (format === "rfc8785-revision-scalar") {
     assert.ok(context.manifest && context.root, "record revision requires manifest and root");
     assert.ok(Object.hasOwn(context, "payload"), "record revision requires projected payload");

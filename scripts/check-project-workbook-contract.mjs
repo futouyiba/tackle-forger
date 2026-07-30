@@ -42,13 +42,11 @@ const EXPECTED_TOP_LEVEL_KEYS = [
 export const EXPECTED_ROOT_CLASSIFICATIONS = {
   importable_current: [
     "ruleSettings", "itemParts", "methodProfiles", "itemTypeProfiles", "functionProfiles",
-    "compatibilityRules", "affinityRules",
     "affinityAxisWeights", "collections",
     "v23TechnologyDefinitions",
-    "skuDrawers", "purchasableModels", "v3Affixes", "technologies",
+    "skuDrawers",
     "parameters", "templates", "modifiers",
-    "layers", "affixes", "qualityBands", "affixScorePolicy", "seriesShowcases",
-    "ruleGraphs", "notes",
+    "layers", "affixes", "affixScorePolicy", "seriesShowcases", "notes",
   ],
   preserved_frozen: [
     "ruleSetVersions", "performanceSummaryDefinitions", "projectionPatches",
@@ -69,6 +67,8 @@ export const EXPECTED_ROOT_CLASSIFICATIONS = {
     "qualityValuePolicyDrafts", "pricingPolicyDrafts", "workspacePolicies",
     "pricingPolicyVersions", "identityAuditLog", "commandIdempotencyRecords",
     "governanceAuditLog", "importedAt",
+    "compatibilityRules", "affinityRules", "purchasableModels", "v3Affixes",
+    "technologies", "qualityBands", "ruleGraphs",
   ],
   forbidden: [
     "feishuWorkbooks", "feishuSourceRevisions", "aiRuleSourceChangeDrafts",
@@ -126,10 +126,6 @@ const EXPECTED_SERVER_OWNED_ROOT_CATALOG = Object.fromEntries(
 );
 
 const EXPECTED_CONDITIONAL_EXACT_FIELD_POLICIES = {
-  purchasableModels: {
-    whenExistingFieldPresent: "configIdBundleRef",
-    exactFields: ["skuId", "stableModelKey", "configIdBundleRef"],
-  },
 };
 
 const EXPECTED_IMPORTABLE_CREATE_POLICIES = {
@@ -230,9 +226,9 @@ const EXPECTED_SHEETS = {
 };
 
 const EXPECTED_RECORD_SCHEMAS_SHA256 =
-  "c6c7f41cdf3c719539b57f3d4a2043b60d9c4b4e489dc39c42811659565ca73e";
+  "5a23b41f0eeab027b601efa271316edc4253e1542fb8d814b4741f6eecb7221e";
 const EXPECTED_RECORD_SCHEMA_AUTHORITY_SHA256 =
-  "8f0f5aca8831899913ed52a18ec66e874400e0d5f2d9d55516d27c7e1652ac51";
+  "4b77999ef7e158d7823b5917f24a7fd1dbc6a49bcaa22c9e0f6a42c2cd2bd209";
 
 function fail(message) {
   throw new Error(message);
@@ -925,6 +921,14 @@ export function validateImportableExactFields(
       `${root}.${field} is exact-equal for an existing record`,
     );
   }
+  return true;
+}
+
+export function validateWorkbookRemovalIntentRoot(manifest, root) {
+  assert.ok(
+    manifest.classifications.importable_current.includes(root),
+    `${root} is not an importable root and cannot express workbook removal intent`,
+  );
   return true;
 }
 
@@ -2256,7 +2260,6 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     EXPECTED_ROOT_CLASSIFICATIONS.importable_current);
   assert.deepEqual(manifest.recordSchemaAuthority.projectionExclusions, {
     skuDrawers: ["projectionMatch", "fiveAxisProjectionReferences", "validationSummary"],
-    technologies: ["compatiblePerformanceProfileIds"],
   });
   assert.deepEqual(
     Object.keys(manifest.recordSchemaAuthority.typeRefs),
@@ -2345,11 +2348,12 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
   }
   assert.deepEqual(manifest.recordSchemas.v23TechnologyDefinitions.identityFields,
     ["technologyId", "revision"]);
-  for (const root of ["v3Affixes", "technologies", "ruleGraphs"]) {
-    assert.ok(manifest.recordSchemas[root].identityFields.includes(
-      manifest.recordSchemas[root].revisionFields[0],
-    ), `${root} version must participate in workbook primary identity`);
-  }
+  assert.ok(
+    manifest.recordSchemas.v23TechnologyDefinitions.identityFields.includes(
+      manifest.recordSchemas.v23TechnologyDefinitions.revisionFields[0],
+    ),
+    "v23TechnologyDefinitions revision must participate in workbook primary identity",
+  );
 
   assert.deepEqual(
     Object.keys(manifest.preservedRootCatalog),

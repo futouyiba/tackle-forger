@@ -20,6 +20,7 @@ import {
   validateRootSummary,
   validateServerRefEnvelope,
   validateWorkbookEnvelope,
+  validateWorkbookRemovalIntentRoot,
 } from "../scripts/check-project-workbook-contract.mjs";
 
 const manifestPath = new URL("../docs/spec-v3/project-workbook-v1-root-manifest.json", import.meta.url);
@@ -230,7 +231,7 @@ test("F0 keeps command-only and fixed-authority roots server-owned", async () =>
       manifest.classifications.forbidden.length,
       manifest.classifications.export_only_diagnostic.length,
     ],
-    [24, 23, 21, 15, 10],
+    [17, 23, 28, 15, 10],
   );
   for (const root of [
     "partConstraintSets",
@@ -432,6 +433,18 @@ test("legacy, mixed-lifecycle and raw-evidence roots use safe projections", asyn
   assert.ok(manifest.classifications.server_owned.includes("partConstraintSets"));
   assert.ok(manifest.classifications.server_owned.includes("qualityValuePolicyDrafts"));
   assert.ok(manifest.classifications.server_owned.includes("pricingPolicyDrafts"));
+  for (const root of [
+    "compatibilityRules",
+    "affinityRules",
+    "purchasableModels",
+    "v3Affixes",
+    "technologies",
+    "qualityBands",
+    "ruleGraphs",
+  ]) {
+    assert.ok(manifest.classifications.server_owned.includes(root), root);
+    assert.equal(Object.hasOwn(manifest.recordSchemas, root), false, root);
+  }
   assert.equal(Object.hasOwn(manifest.recordSchemas, "patchLedger"), false);
   assert.equal(Object.hasOwn(manifest.recordSchemas, "canonicalRuleSourceDrafts"), false);
   assert.equal(Object.hasOwn(manifest.recordSchemas, "partConstraintSets"), false);
@@ -511,11 +524,11 @@ test("versioned definitions use composite identities and every frozen root has a
   );
 });
 
-test("existing v23 technology keeps itemPart exact while create may declare it", async () => {
+test("v23 technology uses create/update successor actions and never rewrites one revision", async () => {
   const { manifest } = await fixture();
   assert.deepEqual(
     manifest.recordSchemas.v23TechnologyDefinitions.exactFields,
-    ["revision", "itemPartId", "contentHash"],
+    manifest.recordSchemas.v23TechnologyDefinitions.allowedFields,
   );
   const technology = {
     technologyId: "technology:1",
@@ -537,86 +550,128 @@ test("existing v23 technology keeps itemPart exact while create may declare it",
     true,
     "a new Technology may declare its initial itemPartId",
   );
-  assert.equal(
-    validateImportableExactFields(
-      manifest,
-      "v23TechnologyDefinitions",
-      { ...technology, name: "力量技术（修订）" },
-      technology,
-    ),
-    true,
-    "mutable fields remain editable for an existing Technology",
-  );
-  assert.throws(
-    () => validateImportableExactFields(
-      manifest,
-      "v23TechnologyDefinitions",
-      { ...technology, itemPartId: "part:reel" },
-      technology,
-    ),
-    /itemPartId is exact-equal/,
-  );
-});
-
-test("reserved purchasable model identity is exact while unreserved and new models remain editable", async () => {
-  const { manifest } = await fixture();
-  assert.deepEqual(manifest.conditionalExactFieldPolicies.purchasableModels, {
-    whenExistingFieldPresent: "configIdBundleRef",
-    exactFields: ["skuId", "stableModelKey", "configIdBundleRef"],
-  });
-  const model = {
-    id: "model:1",
-    revision: 1,
-    skuId: "sku:1",
-    name: "Model 1",
-    stableModelKey: "model_1",
-    action: "M",
-    hardness: "H",
-    lengthM: 2.4,
-    componentSelections: [],
-    technologyIds: [],
-    attributeAffixIds: [],
-    passiveAffixIds: [],
-    patchIds: [],
-    price: 100,
-    status: "draft",
-    createdAt: "2026-01-01T00:00:00.000Z",
-    updatedAt: "2026-01-01T00:00:00.000Z",
-  };
-  assert.equal(validateImportableExactFields(
-    manifest,
-    "purchasableModels",
-    { ...model, configIdBundleRef: "bundle:1" },
-    undefined,
-  ), true, "a new model may declare its reserved identity");
-  assert.equal(validateImportableExactFields(
-    manifest,
-    "purchasableModels",
-    { ...model, skuId: "sku:2", stableModelKey: "model_2" },
-    model,
-  ), true, "an existing unreserved model may still revise pre-reservation identity");
-  const reserved = { ...model, configIdBundleRef: "bundle:1" };
-  assert.equal(validateImportableExactFields(
-    manifest,
-    "purchasableModels",
-    { ...reserved, name: "Model 1 revised" },
-    reserved,
-  ), true, "a reserved identity can be reused exactly");
   for (const mutation of [
-    { skuId: "sku:2" },
-    { stableModelKey: "model_2" },
-    { configIdBundleRef: "bundle:2" },
+    { name: "力量技术（修订）" },
+    { description: "changed" },
+    { memberAffixRefs: [{ id: "affix:1", revision: 1, contentHash: "b".repeat(64) }] },
+    { enabled: false },
+    { itemPartId: "part:reel" },
+    { contentHash: "b".repeat(64) },
   ]) {
     assert.throws(
       () => validateImportableExactFields(
         manifest,
-        "purchasableModels",
-        { ...reserved, ...mutation },
-        reserved,
+        "v23TechnologyDefinitions",
+        { ...technology, ...mutation },
+        technology,
       ),
       /is exact-equal for an existing record/,
     );
   }
+});
+
+test("parameter key is exact for existing records while new keys remain declarative", async () => {
+  const { manifest } = await fixture();
+  const parameter = {
+    id: "parameter:power",
+    key: "power",
+    label: "力量",
+    itemKind: "rod",
+    unit: "kg",
+    precision: 1,
+    notes: "",
+  };
+  assert.deepEqual(manifest.recordSchemas.parameters.exactFields, ["id", "key"]);
+  assert.equal(
+    validateImportableExactFields(manifest, "parameters", parameter, undefined),
+    true,
+    "a new parameter may declare its initial key",
+  );
+  assert.equal(
+    validateImportableExactFields(
+      manifest,
+      "parameters",
+      { ...parameter, label: "力量（显示）" },
+      parameter,
+    ),
+    true,
+  );
+  const crossRootReferences = {
+    templateValues: { power: 1 },
+    modifierRule: { parameterKey: "power", operation: "add", value: 1 },
+  };
+  const before = clone(crossRootReferences);
+  assert.throws(
+    () => validateImportableExactFields(
+      manifest,
+      "parameters",
+      { ...parameter, key: "strength" },
+      parameter,
+    ),
+    /key is exact-equal/,
+    "parameter rename requires a future dedicated cross-root migration",
+  );
+  assert.deepEqual(
+    crossRootReferences,
+    before,
+    "a rejected workbook rename cannot rewrite template or rule references",
+  );
+});
+
+test("server-owned rule, quality, legacy version and model roots reject workbook add update and removal", async () => {
+  const { manifest } = await fixture();
+  assert.deepEqual(manifest.conditionalExactFieldPolicies, {});
+  const serverOwned = [
+    "compatibilityRules",
+    "affinityRules",
+    "purchasableModels",
+    "v3Affixes",
+    "technologies",
+    "qualityBands",
+    "ruleGraphs",
+  ];
+  for (const root of serverOwned) {
+    assert.ok(manifest.classifications.server_owned.includes(root), root);
+    assert.deepEqual(manifest.serverOwnedRootCatalog[root], {
+      hashPolicy: "NO_CONTENT_HASH",
+      refPolicy: "OPAQUE_NON_REPLAYABLE",
+    });
+    assert.throws(
+      () => validateImportableExactFields(manifest, root, {}, undefined),
+      /is not an importable record root/,
+      `${root} workbook create is rejected`,
+    );
+    assert.throws(
+      () => validateImportableExactFields(manifest, root, {}, {}),
+      /is not an importable record root/,
+      `${root} workbook update is rejected`,
+    );
+    assert.throws(
+      () => validateWorkbookRemovalIntentRoot(manifest, root),
+      /cannot express workbook removal intent/,
+      `${root} workbook deletion is rejected`,
+    );
+  }
+  for (const forgedQuality of [
+    { id: "yellow", name: "黄", color: "#ffff00", minScore: 100, maxScore: null, priceIndex: 9 },
+    { id: "green", name: "绿", color: "#000000", minScore: 0, maxScore: 7.99, priceIndex: 1 },
+    { id: "green", name: "绿", color: "#43b581", minScore: 1, maxScore: 7.99, priceIndex: 1 },
+    { id: "green", name: "绿", color: "#43b581", minScore: 0, maxScore: 7.99, priceIndex: 2 },
+  ]) {
+    assert.throws(
+      () => validateImportableExactFields(manifest, "qualityBands", forgedQuality, undefined),
+      /is not an importable record root/,
+    );
+  }
+  const engineSource = await readFile(new URL("../lib/engine.ts", import.meta.url), "utf8");
+  assert.match(engineSource, /export function scoreAffixes\(/);
+  assert.match(engineSource, /finalScore >= band\.minScore/);
+  assert.match(engineSource, /band\.maxScore === null \|\| finalScore <= band\.maxScore/);
+  assert.match(
+    engineSource,
+    /qualityId: quality\?\.id \?\? "green"/,
+    "server-owning qualityBands must not alter the existing engine selection path",
+  );
 });
 
 test("existing importable records exact-compare every typed revision field", async () => {
@@ -694,86 +749,6 @@ test("existing importable records exact-compare every typed revision field", asy
   assert.ok(manifest.classifications.server_owned.includes("v23SkuDrawerHeads"));
   assert.equal(Object.hasOwn(manifest.recordSchemas, "v23SkuDrawerRevisions"), false);
   assert.equal(Object.hasOwn(manifest.recordSchemas, "v23SkuDrawerHeads"), false);
-  const compatibility = {
-    id: "compatibility:1",
-    axis: "method_type",
-    effect: "allow",
-    selector: {},
-    requirements: [],
-    priority: 1,
-    ruleSetVersion: "rules:v1",
-    reason: "test",
-    suggestion: "",
-    enabled: true,
-  };
-  assert.equal(
-    validateImportableExactFields(
-      manifest,
-      "compatibilityRules",
-      { ...compatibility },
-      compatibility,
-    ),
-    true,
-  );
-  assert.throws(
-    () => validateImportableExactFields(
-      manifest,
-      "compatibilityRules",
-      { ...compatibility, ruleSetVersion: "rules:v2" },
-      compatibility,
-    ),
-    /ruleSetVersion is exact-equal/,
-  );
-
-  const nestedManifest = clone(manifest);
-  nestedManifest.recordSchemas.purchasableModels.revisionFields =
-    ["componentSelections.0.componentId"];
-  const model = {
-    id: "model:nested",
-    revision: 1,
-    skuId: "sku:1",
-    name: "Nested",
-    action: "M",
-    hardness: "H",
-    lengthM: 2.4,
-    componentSelections: [{
-      itemPartId: "part:rod",
-      componentId: "component:1",
-      name: "组件",
-      values: {},
-    }],
-    technologyIds: [],
-    attributeAffixIds: [],
-    passiveAffixIds: [],
-    patchIds: [],
-    price: 100,
-    status: "draft",
-    createdAt: "2026-01-01T00:00:00.000Z",
-    updatedAt: "2026-01-01T00:00:00.000Z",
-  };
-  assert.throws(
-    () => validateImportableExactFields(
-      nestedManifest,
-      "purchasableModels",
-      {
-        ...model,
-        componentSelections: [
-          { ...model.componentSelections[0], componentId: "component:2" },
-        ],
-      },
-      model,
-    ),
-    /componentSelections\.0\.componentId is exact-equal/,
-  );
-  assert.throws(
-    () => validateImportableExactFields(
-      nestedManifest,
-      "purchasableModels",
-      { ...model, componentSelections: [] },
-      model,
-    ),
-    /candidate revision is missing/,
-  );
 });
 
 test("preserved rows bind a versioned schema id to the closed payload variant", async () => {
@@ -920,9 +895,6 @@ test("safe projections rederive unresolved diagnostic payloads", async () => {
   assert.deepEqual(manifest.recordSchemaAuthority.projectionExclusions.skuDrawers, [
     "projectionMatch", "fiveAxisProjectionReferences", "validationSummary",
   ]);
-  assert.deepEqual(manifest.recordSchemaAuthority.projectionExclusions.technologies, [
-    "compatiblePerformanceProfileIds",
-  ]);
   for (const [root, fields] of Object.entries(
     manifest.recordSchemaAuthority.projectionExclusions,
   )) {
@@ -932,49 +904,8 @@ test("safe projections rederive unresolved diagnostic payloads", async () => {
   weakened.recordSchemas.skuDrawers.allowedFields.push("validationSummary");
   assert.throws(() => validateProjectWorkbookManifest(weakened, roots), /allowed-field catalog drift|rederived/);
 
-  const technology = {
-    id: "technology:legacy-compatible",
-    version: 1,
-    name: "兼容技术",
-    description: "",
-    affixIds: [],
-    compatibleSeriesIds: [],
-    generationPolicy: "normal",
-    valueScorePolicy: "members_only",
-    enabled: true,
-  };
-  assert.equal(
-    validateImportableExactFields(manifest, "technologies", technology, undefined),
-    true,
-    "new Technology projection does not require historical Performance links",
-  );
-  assert.equal(
-    validateImportableExactFields(
-      manifest,
-      "technologies",
-      { ...technology, name: "兼容技术（修订）" },
-      technology,
-    ),
-    true,
-    "existing Technology remains editable without importing historical Performance links",
-  );
-  for (const existing of [undefined, technology]) {
-    assert.throws(
-      () => validateImportableExactFields(
-        manifest,
-        "technologies",
-        { ...technology, compatiblePerformanceProfileIds: ["performance:legacy"] },
-        existing,
-      ),
-      /compatiblePerformanceProfileIds is outside allowedFields/,
-    );
-  }
-  const performanceLeak = clone(manifest);
-  performanceLeak.recordSchemas.technologies.allowedFields.push("compatiblePerformanceProfileIds");
-  assert.throws(
-    () => validateProjectWorkbookManifest(performanceLeak, roots),
-    /allowed-field catalog drift|must be rederived/,
-  );
+  assert.ok(manifest.classifications.server_owned.includes("technologies"));
+  assert.equal(Object.hasOwn(manifest.recordSchemas, "technologies"), false);
 });
 
 test("machine columns reject blank, null, numeric precision, date, boolean and error confusion", async () => {
@@ -1476,32 +1407,15 @@ test("RFC8785 payloads satisfy the bound closed recursive record schema", async 
     () => validate("affinityAxisWeights", incompleteWeights),
     /complete closed record key set/,
   );
-  assert.equal(validate("v3Affixes", {
-    id: "affix:1",
-    version: 1,
-    name: "力量",
-    category: "attribute",
+  assert.equal(validate("v23TechnologyDefinitions", {
+    technologyId: "technology:1",
+    revision: 1,
     itemPartId: "part:rod",
-    generationPolicy: "normal",
-    rarity: "common",
-    valueScore: 1,
-    tags: [],
-    attributeEffects: [{
-      id: "effect:1",
-      parameterKey: "power",
-      operation: "flat_bonus",
-      value: 1,
-      publishedMagnitudeRange: {
-        min: 0,
-        max: 2,
-        ruleSetVersion: "rules:v1",
-      },
-      unit: "kg",
-      stackingGroup: "power",
-      ruleSetVersion: "rules:v1",
-    }],
+    name: "力量技术",
     description: "",
+    memberAffixRefs: [],
     enabled: true,
+    contentHash: "a".repeat(64),
   }), true);
   assert.throws(
     () => validate("itemParts", itemPart, "ForgedVariant"),

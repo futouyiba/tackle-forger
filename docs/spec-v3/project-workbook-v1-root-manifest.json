@@ -1,0 +1,702 @@
+{
+  "schema": "project-workbook-root-manifest/v1",
+  "contractVersion": "project-workbook/v1",
+  "workspaceStateSource": {
+    "path": "lib/types.ts",
+    "interface": "WorkspaceState",
+    "rootCount": 93
+  },
+  "workbookSchema": {
+    "schema": "project-workbook-machine-sheets/v1",
+    "sheetOrder": [
+      "__TF_MANIFEST",
+      "__TF_CURRENT",
+      "__TF_PRESERVED",
+      "__TF_SERVER_REFS",
+      "__TF_FORBIDDEN",
+      "__TF_DIAGNOSTICS",
+      "README",
+      "ROOT_SUMMARY"
+    ],
+    "rejectUnknownSheets": true,
+    "rejectUnknownColumns": true,
+    "rejectFormulaCellsInMachineSheets": true,
+    "sheets": {
+      "__TF_MANIFEST": {
+        "kind": "machine",
+        "columns": [
+          {"name":"contract_version","type":"string","required":true,"format":"literal:project-workbook/v1"},
+          {"name":"workspace_id","type":"string","required":true,"format":"stable-id"},
+          {"name":"base_workspace_revision","type":"string","required":true,"format":"safe-integer-text"},
+          {"name":"root_manifest_sha256","type":"string","required":true,"format":"lowercase-sha256"},
+          {"name":"workbook_schema_sha256","type":"string","required":true,"format":"lowercase-sha256"},
+          {"name":"exporter_version","type":"string","required":true,"format":"stable-version"},
+          {"name":"machine_content_sha256","type":"string","required":true,"format":"lowercase-sha256"}
+        ],
+        "primaryKey": [
+          "contract_version"
+        ],
+        "cardinality": "EXACTLY_ONE"
+      },
+      "__TF_CURRENT": {
+        "kind": "machine",
+        "columns": [
+          {"name":"root","type":"string","required":true,"format":"workspace-root"},
+          {"name":"record_schema_id","type":"string","required":true,"format":"stable-id"},
+          {"name":"record_key","type":"string","required":true,"format":"rfc8785-key-json"},
+          {"name":"record_revision","type":"string","required":true,"format":"rfc8785-revision-scalar"},
+          {"name":"record_content_sha256","type":"string","required":true,"format":"lowercase-sha256"},
+          {"name":"payload_json","type":"string","required":true,"format":"rfc8785-json"}
+        ],
+        "primaryKey": [
+          "root",
+          "record_key"
+        ],
+        "cardinality": "ZERO_OR_MORE"
+      },
+      "__TF_PRESERVED": {
+        "kind": "machine",
+        "columns": [
+          {"name":"root","type":"string","required":true,"format":"workspace-root"},
+          {"name":"record_schema_id","type":"string","required":true,"format":"stable-id"},
+          {"name":"record_key","type":"string","required":true,"format":"rfc8785-key-json"},
+          {"name":"record_revision","type":"string","required":true,"format":"rfc8785-revision-scalar"},
+          {"name":"record_content_sha256","type":"string","required":true,"format":"lowercase-sha256"},
+          {"name":"opaque_canonical_payload_json","type":"string","required":true,"format":"rfc8785-json"}
+        ],
+        "primaryKey": [
+          "root",
+          "record_key"
+        ],
+        "cardinality": "ZERO_OR_MORE"
+      },
+      "__TF_SERVER_REFS": {
+        "kind": "machine",
+        "columns": [
+          {"name":"transport_contract_version","type":"string","required":true,"format":"literal:project-workbook-server-ref-transport/v1"},
+          {"name":"workspace_id","type":"string","required":true,"format":"stable-id"},
+          {"name":"base_workspace_revision","type":"string","required":true,"format":"safe-integer-text"},
+          {"name":"root","type":"string","required":true,"format":"workspace-root"},
+          {"name":"classification","type":"string","required":true,"format":"literal:server_owned"},
+          {"name":"root_content_sha256","type":"string","required":true,"format":"literal:null"},
+          {"name":"opaque_server_ref","type":"string","required":true,"format":"opaque-token"}
+        ],
+        "primaryKey": [
+          "root"
+        ],
+        "cardinality": "EXACTLY_ALL_SERVER_OWNED_ROOTS"
+      },
+      "__TF_FORBIDDEN": {
+        "kind": "machine",
+        "columns": [
+          {"name":"root","type":"string","required":true,"format":"workspace-root"},
+          {"name":"classification","type":"string","required":true,"format":"literal:forbidden"},
+          {"name":"policy_marker","type":"string","required":true,"format":"literal:FORBIDDEN_PAYLOAD_OMITTED"}
+        ],
+        "primaryKey": ["root"],
+        "cardinality": "EXACTLY_ALL_FORBIDDEN_ROOTS"
+      },
+      "__TF_DIAGNOSTICS": {
+        "kind": "machine",
+        "columns": [
+          {"name":"root","type":"string","required":true,"format":"workspace-root"},
+          {"name":"record_key","type":"string","required":true,"format":"rfc8785-key-json"},
+          {"name":"diagnostic_schema_version","type":"string","required":true,"format":"literal:project-workbook-diagnostic/v1"},
+          {"name":"subject_payload_json","type":"string","required":true,"format":"diagnostic-subject-json"},
+          {"name":"severity","type":"string","required":true,"format":"diagnostic-severity"},
+          {"name":"code","type":"string","required":true,"format":"stable-code"},
+          {"name":"message","type":"string","required":true,"format":"display-text"},
+          {"name":"subject_ref","type":"string","required":true,"format":"opaque-token-or-null"},
+          {"name":"issue_fingerprint","type":"string","required":true,"format":"lowercase-sha256"},
+          {"name":"diagnostic_evidence_sha256","type":"string","required":true,"format":"lowercase-sha256"}
+        ],
+        "primaryKey": [
+          "root",
+          "record_key",
+          "code",
+          "issue_fingerprint"
+        ],
+        "cardinality": "ZERO_OR_MORE"
+      },
+      "README": {
+        "kind": "derived_readable",
+        "columns": [
+          {"name":"section","type":"string","required":true,"format":"display-text"},
+          {"name":"content","type":"string","required":true,"format":"display-text"}
+        ],
+        "primaryKey": [
+          "section"
+        ],
+        "cardinality": "ONE_OR_MORE"
+      },
+      "ROOT_SUMMARY": {
+        "kind": "derived_readable",
+        "columns": [
+          {"name":"root","type":"string","required":true,"format":"workspace-root"},
+          {"name":"classification","type":"string","required":true,"format":"classification"},
+          {"name":"record_count","type":"string","required":true,"format":"safe-integer-text"},
+          {"name":"root_content_sha256","type":"string","required":true,"format":"lowercase-sha256-or-null"},
+          {"name":"status","type":"string","required":true,"format":"stable-code"}
+        ],
+        "primaryKey": [
+          "root"
+        ],
+        "cardinality": "EXACTLY_93"
+      }
+    },
+    "classificationProjection": {
+      "importable_current": {
+        "sheet": "__TF_CURRENT",
+        "payloadPolicy": "CLOSED_RECORD_SCHEMA"
+      },
+      "preserved_frozen": {
+        "sheet": "__TF_PRESERVED",
+        "payloadPolicy": "OPAQUE_EXACT_SERVER_EXPORT_ONLY"
+      },
+      "server_owned": {
+        "sheet": "__TF_SERVER_REFS",
+        "payloadPolicy": "IDENTITY_BOUND_TRANSPORT_REF_ONLY_NO_CONTENT_HASH"
+      },
+      "forbidden": {
+        "sheet": "__TF_FORBIDDEN",
+        "payloadPolicy": "CONSTANT_OMISSION_MARKER_ONLY_NO_CONTENT_DERIVED_HASH_OR_REF"
+      },
+      "export_only_diagnostic": {
+        "sheet": "__TF_DIAGNOSTICS",
+        "payloadPolicy": "CLOSED_DERIVED_DIAGNOSTIC_FIELDS_ONLY"
+      }
+    }
+  },
+  "canonicalization": {
+    "textEncoding": "UTF-8",
+    "unicodeNormalization": "NFC",
+    "lineEndings": "LF",
+    "jsonCanonicalization": "RFC8785_JCS",
+    "finiteNumbersOnly": true,
+    "negativeZero": "NORMALIZE_TO_ZERO",
+    "blankAndNullDistinct": true,
+    "rowOrder": "ROOT_MANIFEST_ORDER_THEN_PRIMARY_KEY_CODEPOINT_ASC",
+    "rootManifestHashInput": [
+      "project-workbook-v1-root-manifest.json:utf8-bytes"
+    ],
+    "workbookSchemaHashInput": [
+      "workbookSchema",
+      "canonicalization",
+      "recordSchemaAuthority",
+      "recordSchemas",
+      "preservedRootCatalog",
+      "preservedSchemaCatalog",
+      "preservedSchemaAuthority",
+      "diagnosticRootCatalog",
+      "serverOwnedRootCatalog",
+      "importableSuccessorCatalog",
+      "preservedExactComparePolicy",
+      "importableCreatePolicies",
+      "conditionalExactFieldPolicies",
+      "terminalLifecyclePolicy",
+      "transportRefPolicy",
+      "serverOwnedInvariants",
+      "classifications"
+    ],
+    "recordHashInput": [
+      "root",
+      "record_schema_id",
+      "record_key",
+      "record_revision",
+      "canonical_payload"
+    ],
+    "diagnosticIssueFingerprintInput": [
+      "root",
+      "record_key",
+      "diagnostic_schema_version",
+      "subject_payload",
+      "severity",
+      "code",
+      "message",
+      "subject_ref"
+    ],
+    "diagnosticEvidenceHashInput": [
+      "root",
+      "record_key",
+      "diagnostic_schema_version",
+      "subject_payload",
+      "severity",
+      "code",
+      "message",
+      "subject_ref",
+      "issue_fingerprint"
+    ],
+    "machineContentHashEncoding": "RFC8785_ORDERED_SHEET_ROW_PAIR_ARRAY_V1",
+    "machineContentHashInput": [
+      "__TF_MANIFEST_EXCEPT_MACHINE_CONTENT_SHA256",
+      "__TF_CURRENT",
+      "__TF_PRESERVED",
+      "__TF_FORBIDDEN"
+    ],
+    "machineContentHashExcludes": [
+      "__TF_MANIFEST.machine_content_sha256",
+      "__TF_SERVER_REFS",
+      "__TF_DIAGNOSTICS",
+      "README",
+      "ROOT_SUMMARY"
+    ],
+    "transportIntegritySheets": [
+      "__TF_SERVER_REFS"
+    ],
+    "hashAlgorithm": "SHA-256",
+    "semanticEquivalence": "CANONICAL_MACHINE_CONTENT_SHA256_EQUAL"
+  },
+  "recordSchemaAuthority": {
+    "format": "typescript-closed-projection/v1",
+    "sources": [
+      {"path":"lib/types.ts","sha256":"799513ca4931557ad0519a24d6446a4d0d8384d6369af1df01992de0ac167a5d"}
+    ],
+    "recursiveRules": {
+      "unknownObjectFields": "REJECT",
+      "unknownUnionVariants": "REJECT",
+      "optionalFields": "DECLARATION_OPTIONALITY_ONLY",
+      "recordStringKeys": "ALLOW_ONLY_WHEN_DECLARATION_EXPLICITLY_USES_STRING_INDEX",
+      "unknownValues": "FORBIDDEN_IN_IMPORTABLE_PROJECTION",
+      "excludedSourceFields": "SERVER_PRESERVE_NOT_EXPORTED"
+    },
+    "projectionExclusions": {
+      "skuDrawers":["projectionMatch","fiveAxisProjectionReferences","validationSummary"]
+    },
+    "recursiveProofRoots": [
+      "ruleSettings","itemParts","methodProfiles","itemTypeProfiles","affinityAxisWeights","collections","v23TechnologyDefinitions","skuDrawers","parameters","templates","modifiers","layers","affixes","seriesShowcases","notes"
+    ],
+    "recursiveTypeGraphSha256": "27eaf5afc6d8c6eab54f031a092df47ee2fc3b0e3650f3ac5ed026264f920b45",
+    "typeRefs": {
+      "ruleSettings":"lib/types.ts#WorkspaceRuleSettings",
+      "itemParts":"lib/types.ts#ItemPartDefinition",
+      "methodProfiles":"lib/types.ts#MethodProfile",
+      "itemTypeProfiles":"lib/types.ts#ItemTypeProfile",
+      "affinityAxisWeights":"lib/types.ts#AffinityAxisWeights",
+      "collections":"lib/types.ts#Collection",
+      "v23TechnologyDefinitions":"lib/types.ts#V23TechnologyDefinition",
+      "skuDrawers":"lib/types.ts#SkuDrawer",
+      "parameters":"lib/types.ts#ParameterDefinition",
+      "templates":"lib/types.ts#WeightTemplate",
+      "modifiers":"lib/types.ts#ModifierOption",
+      "layers":"lib/types.ts#RuleLayer",
+      "affixes":"lib/types.ts#Affix",
+      "seriesShowcases":"lib/types.ts#SeriesShowcaseEntry",
+      "notes":"lib/types.ts#string"
+    }
+  },
+  "recordSchemas": {
+    "ruleSettings": {"schemaId":"project-workbook/root/ruleSettings/v1","identityFields":["$singleton"],"revisionFields":[],"hashFields":[],"exactFields":["reductionStackingMode","patchOffsetLimits"],"allowedFields":["reductionStackingMode","reductionStackingPolicyVersion","patchOffsetLimits"]},
+    "itemParts": {"schemaId":"project-workbook/root/itemParts/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":[],"allowedFields":["id","name","legacyItemKind","activeInGeneration","parameterKeys","notes"]},
+    "methodProfiles": {"schemaId":"project-workbook/root/methodProfiles/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":["sourceRevisionId"],"allowedFields":["id","name","rules","enabled","sourceRevisionId","notes"]},
+    "itemTypeProfiles": {"schemaId":"project-workbook/root/itemTypeProfiles/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":["sourceRevisionId"],"allowedFields":["id","name","methodIds","itemPartIds","rules","enabled","sourceRevisionId","notes"]},
+    "affinityAxisWeights": {"schemaId":"project-workbook/root/affinityAxisWeights/v1","identityFields":["$singleton"],"revisionFields":[],"hashFields":[],"exactFields":[],"allowedFields":["method_type","type_weight","type_function","function_performance","material_function","quality_specialization","model_component","series_coherence"]},
+    "collections": {"schemaId":"project-workbook/root/collections/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":["createdAt"],"allowedFields":["id","name","brandStory","seriesIds","notes","createdAt","updatedAt"]},
+    "v23TechnologyDefinitions": {"schemaId":"project-workbook/root/v23TechnologyDefinitions/v1","identityFields":["technologyId","revision"],"revisionFields":["revision"],"hashFields":["contentHash"],"exactFields":["technologyId","revision","itemPartId","name","description","memberAffixRefs","enabled","contentHash"],"allowedFields":["technologyId","revision","itemPartId","name","description","memberAffixRefs","enabled","contentHash"]},
+    "skuDrawers": {"schemaId":"project-workbook/root/skuDrawers/v1","identityFields":["id"],"revisionFields":["revision"],"hashFields":[],"exactFields":["id","revision","seriesId","patchIds","modelIds","defaultModelId","displayOrder","status","createdAt","updatedAt"],"allowedFields":["id","revision","seriesId","targetPullKg","patchIds","modelIds","defaultModelId","displayOrder","status","createdAt","updatedAt"]},
+    "parameters": {"schemaId":"project-workbook/root/parameters/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":["id","key"],"allowedFields":["id","key","label","itemKind","itemPartId","unit","precision","benefitMode","balanceWeight","normalizationScale","allowedOperations","targetRange","notes"]},
+    "templates": {"schemaId":"project-workbook/root/templates/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":["sourceRevisionId","sourceSheetId","sourceRow"],"allowedFields":["id","name","fishMinKg","fishMaxKg","nominalFishKg","rangeSemantics","targetPullMinKgf","targetPullMaxKgf","nominalTargetPullKgf","templatePriority","tier","values","notes","methodId","itemPartId","sourceRevisionId","sourceSheetId","sourceRow","fishWeightLevel"]},
+    "modifiers": {"schemaId":"project-workbook/root/modifiers/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":[],"allowedFields":["id","dimension","name","level","itemKinds","methodIds","rules","notes","enabled"]},
+    "layers": {"schemaId":"project-workbook/root/layers/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":[],"allowedFields":["id","name","order","enabled","mode","dimension","optionIds","rules","notes"]},
+    "affixes": {"schemaId":"project-workbook/root/affixes/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":[],"allowedFields":["id","name","category","itemKinds","score","rarity","tags","exclusiveGroup","conflicts","synergies","rules","description","notes","enabled"]},
+    "seriesShowcases": {"schemaId":"project-workbook/root/seriesShowcases/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":["publishedAt"],"allowedFields":["id","seriesId","description","templateId","templateIds","structureId","structureIds","fishingMethod","functionId","performanceId","qualityId","fishMinKg","fishMaxKg","tensionMinKgf","tensionMaxKgf","targetPullsKgf","affixIds","lureMinG","lureMaxG","notes","publishedAt","updatedAt"]},
+    "notes": {"schemaId":"project-workbook/root/notes/v1","identityFields":["$singleton"],"revisionFields":[],"hashFields":[],"exactFields":[],"allowedFields":["$scalar"]}
+  },
+  "preservedRootCatalog": {
+    "ruleSetVersions":{"carrier":"records","typeRef":"lib/types.ts#RuleSetVersion","recordKeyFields":["id","version"],"revisionFields":["version"],"hashFields":["publicationHash"],"singleton":false,"variants":[]},
+    "performanceSummaryDefinitions":{"carrier":"records","typeRef":"lib/performance-summary.ts#PerformanceSummaryDefinition","recordKeyFields":["definitionId","definitionVersion"],"revisionFields":["definitionVersion"],"hashFields":["definitionHash"],"singleton":false,"variants":[]},
+    "projectionPatches":{"carrier":"records","typeRef":"lib/types.ts#ProjectionPatchRuleSource","recordKeyFields":["id"],"revisionFields":["baseRuleSetVersion"],"hashFields":[],"singleton":false,"variants":[]},
+    "v23SeriesPartRevisions":{"carrier":"records","typeRef":"lib/types.ts#SeriesPartRevision","recordKeyFields":["seriesId","partId","revision"],"revisionFields":["revision"],"hashFields":["contentHash"],"singleton":false,"variants":[]},
+    "v23SkuDrawerRevisions":{"carrier":"records","typeRef":"lib/types.ts#SkuDrawerRevision","recordKeyFields":["skuId","revision"],"revisionFields":["revision"],"hashFields":["contentHash"],"singleton":false,"variants":[]},
+    "v23FunctionTemplates":{"carrier":"records","typeRef":"lib/types.ts#V23FunctionTemplateDefinition","recordKeyFields":["ref.templateId","ref.revisionId"],"revisionFields":["ref.revisionId"],"hashFields":["ref.contentHash"],"singleton":false,"variants":[]},
+    "candidateSearchRecipes":{"carrier":"records","typeRef":"lib/types.ts#CandidateSearchRecipe","recordKeyFields":["id","revision"],"revisionFields":["revision"],"hashFields":[],"singleton":false,"variants":[]},
+    "configurationSnapshots":{"carrier":"records","typeRef":"lib/types.ts#ConfigurationSnapshot","recordKeyFields":["id","version"],"revisionFields":["version"],"hashFields":["contentHash"],"singleton":false,"variants":[]},
+    "reductionStackingPolicyVersions":{"carrier":"records","typeRef":"lib/types.ts#ReductionStackingPolicyVersion","recordKeyFields":["id","version"],"revisionFields":["version"],"hashFields":["contentHash","inputHash"],"singleton":false,"variants":[]},
+    "fiveAxisDispositionCatalogRevisions":{"carrier":"records","typeRef":"lib/types.ts#FiveAxisDefinitionDispositionCatalogRevision","recordKeyFields":["catalogRevisionId"],"revisionFields":["catalogRevisionId"],"hashFields":["catalogHash"],"singleton":false,"variants":[]},
+    "fiveAxisViewDefinitions":{"carrier":"records","typeRef":"lib/types.ts#StoredFiveAxisViewDefinition","recordKeyFields":["definitionId","version","revision"],"revisionFields":["revision"],"hashFields":["definitionHash"],"singleton":false,"variants":[]},
+    "fiveAxisVertexSets":{"carrier":"variant_records","typeRef":"lib/types.ts#StoredFiveAxisVertexSet","recordKeyFields":[],"revisionFields":[],"hashFields":[],"singleton":false,"variants":[{"type":"LegacyFiveAxisVertexSet","recordKeyFields":["definitionId","definitionVersion","fishWeightGradeId","fiveAxisRuleVersion"],"revisionFields":["definitionVersion"],"hashFields":["vertexSetHash"]},{"type":"FiveAxisVertexSet","recordKeyFields":["vertexSetId"],"revisionFields":["fiveAxisDefinitionVersion"],"hashFields":["vertexSetHash","candidateSetHash","candidateEvidenceHash"]}]},
+    "currentFiveAxisDispositionCatalogRevisionId":{"carrier":"whole_root_singleton","typeRef":"lib/types.ts#string|null","recordKeyFields":["$singleton"],"revisionFields":[],"hashFields":[],"singleton":true,"variants":[]},
+    "patchReviewBatches":{"carrier":"records","typeRef":"lib/types.ts#PatchReviewBatch","recordKeyFields":["batchId"],"revisionFields":["policyVersion"],"hashFields":["inputHash"],"singleton":false,"variants":[]},
+    "patchValidationWaivers":{"carrier":"records","typeRef":"lib/types.ts#PatchValidationWaiver","recordKeyFields":["waiverId"],"revisionFields":["policyVersion"],"hashFields":["objectInputHash","patchSetHash"],"singleton":false,"variants":[]},
+    "patchValidationWaiverDecisions":{"carrier":"records","typeRef":"lib/types.ts#PatchValidationWaiverDecision","recordKeyFields":["waiverDecisionId"],"revisionFields":[],"hashFields":["decisionHash"],"singleton":false,"variants":[]},
+    "ruleChangeProposals":{"carrier":"records","typeRef":"lib/types.ts#RuleChangeProposal","recordKeyFields":["id"],"revisionFields":["targetRuleSetVersion"],"hashFields":[],"singleton":false,"variants":[]},
+    "revisions":{"carrier":"records","typeRef":"lib/types.ts#RevisionInfo","recordKeyFields":["revision"],"revisionFields":["revision"],"hashFields":[],"singleton":false,"variants":[]},
+    "performanceProfiles":{"carrier":"records","typeRef":"lib/types.ts#PerformanceProfile","recordKeyFields":["id"],"revisionFields":["sourceRevisionId"],"hashFields":[],"singleton":false,"variants":[]},
+    "recipes":{"carrier":"records","typeRef":"lib/types.ts#SeriesRecipe","recordKeyFields":["id"],"revisionFields":[],"hashFields":[],"singleton":false,"variants":[]},
+    "candidates":{"carrier":"records","typeRef":"lib/types.ts#Candidate","recordKeyFields":["id"],"revisionFields":[],"hashFields":[],"singleton":false,"variants":[]},
+    "officialSkus":{"carrier":"records","typeRef":"lib/types.ts#OfficialSku","recordKeyFields":["id"],"revisionFields":[],"hashFields":[],"singleton":false,"variants":[]},
+    "detailOverrides":{"carrier":"records","typeRef":"lib/types.ts#DetailOverride","recordKeyFields":["skuId","itemKind","model"],"revisionFields":[],"hashFields":[],"singleton":false,"variants":[]}
+  },
+  "preservedSchemaCatalog": {
+    "ruleSetVersions":"project-workbook/preserved/ruleSetVersions/v1",
+    "performanceSummaryDefinitions":"project-workbook/preserved/performanceSummaryDefinitions/v1",
+    "projectionPatches":"project-workbook/preserved/projectionPatches/v1",
+    "v23SeriesPartRevisions":"project-workbook/preserved/v23SeriesPartRevisions/v1",
+    "v23SkuDrawerRevisions":"project-workbook/preserved/v23SkuDrawerRevisions/v1",
+    "v23FunctionTemplates":"project-workbook/preserved/v23FunctionTemplates/v1",
+    "candidateSearchRecipes":"project-workbook/preserved/candidateSearchRecipes/v1",
+    "configurationSnapshots":"project-workbook/preserved/configurationSnapshots/v1",
+    "reductionStackingPolicyVersions":"project-workbook/preserved/reductionStackingPolicyVersions/v1",
+    "fiveAxisDispositionCatalogRevisions":"project-workbook/preserved/fiveAxisDispositionCatalogRevisions/v1",
+    "fiveAxisViewDefinitions":"project-workbook/preserved/fiveAxisViewDefinitions/v1",
+    "fiveAxisVertexSets":{"LegacyFiveAxisVertexSet":"project-workbook/preserved/fiveAxisVertexSets/legacy-v1","FiveAxisVertexSet":"project-workbook/preserved/fiveAxisVertexSets/current-v1"},
+    "currentFiveAxisDispositionCatalogRevisionId":"project-workbook/preserved/currentFiveAxisDispositionCatalogRevisionId/v1",
+    "patchReviewBatches":"project-workbook/preserved/patchReviewBatches/v1",
+    "patchValidationWaivers":"project-workbook/preserved/patchValidationWaivers/v1",
+    "patchValidationWaiverDecisions":"project-workbook/preserved/patchValidationWaiverDecisions/v1",
+    "ruleChangeProposals":"project-workbook/preserved/ruleChangeProposals/v1",
+    "revisions":"project-workbook/preserved/revisions/v1",
+    "performanceProfiles":"project-workbook/preserved/performanceProfiles/v1",
+    "recipes":"project-workbook/preserved/recipes/v1",
+    "candidates":"project-workbook/preserved/candidates/v1",
+    "officialSkus":"project-workbook/preserved/officialSkus/v1",
+    "detailOverrides":"project-workbook/preserved/detailOverrides/v1"
+  },
+  "preservedSchemaAuthority": {
+    "format":"typescript-opaque-exact-graph/v1",
+    "sources":[
+      {"path":"lib/types.ts","sha256":"799513ca4931557ad0519a24d6446a4d0d8384d6369af1df01992de0ac167a5d"},
+      {"path":"lib/performance-summary.ts","sha256":"70bd7b8687337ce40e415c6be956cd88f80f375f4a2458fb1f762caf56064069"},
+      {"path":"lib/pricing-policy.ts","sha256":"c8f88610a9dcaabcf05547fe8464161bd3ca0110eb06852af1bb8a1e4c9ae7a3"},
+      {"path":"lib/calculation-trace.ts","sha256":"f4a6fb18a373b294b6b15123d192fc1784e3e7ab1576a8c5fc93aece1ca34592"},
+      {"path":"lib/interaction-contracts.ts","sha256":"bb176c98f55448dbfd46d9619b83325591a2e36d56aacf50342d59f7461fe5af"},
+      {"path":"lib/quality-value-policy.ts","sha256":"9acc48f99b77ba1992c83c62097b00f8c96f8cff0b7e4af3baf0187e4e043360"}
+    ],
+    "recursiveTypeGraphSha256":"943b6514220a1ad06b9a54ab14b544a4d7b00fe920d4f9a114a7deb045409715",
+    "dynamicValuePolicy":"OPAQUE_SERVER_EXPORT_ONLY_EXACT_COMPARE_NO_CLIENT_CONSTRUCTION"
+  },
+  "diagnosticRootCatalog": {
+    "derivedProjections":{"typeRef":"lib/types.ts#DerivedProjection","subjectProjectionFields":["id"],"keyContract":"SHA256_RFC8785_SUBJECT_PROJECTION_V1"},
+    "projectionMatches":{"typeRef":"lib/types.ts#ProjectionMatch","subjectProjectionFields":["projectionId","itemPartId","ruleSetVersion","targetPullKg"],"keyContract":"SHA256_RFC8785_SUBJECT_PROJECTION_V1"},
+    "candidateRuns":{"typeRef":"lib/types.ts#CandidateRun","subjectProjectionFields":["runId"],"keyContract":"SHA256_RFC8785_SUBJECT_PROJECTION_V1"},
+    "candidateMaterializations":{"typeRef":"lib/types.ts#CandidateMaterializationRecord","subjectProjectionFields":["materializationId"],"keyContract":"SHA256_RFC8785_SUBJECT_PROJECTION_V1"},
+    "sourceIdentityMigrationReports":{"typeRef":"lib/source-id-migration.ts#SourceIdentityMigrationReport","subjectProjectionFields":["reportId"],"keyContract":"SHA256_RFC8785_SUBJECT_PROJECTION_V1"},
+    "modelPricingEvaluations":{"typeRef":"lib/types.ts#ModelPricingEvaluation","subjectProjectionFields":["id","revision"],"keyContract":"SHA256_RFC8785_SUBJECT_PROJECTION_V1"},
+    "aiAssessments":{"typeRef":"lib/types.ts#AIAssessmentRecord","subjectProjectionFields":["assessmentId"],"keyContract":"SHA256_RFC8785_SUBJECT_PROJECTION_V1"},
+    "upgradeCandidates":{"typeRef":"lib/types.ts#UpgradeCandidate","subjectProjectionFields":["id"],"keyContract":"SHA256_RFC8785_SUBJECT_PROJECTION_V1"},
+    "fiveAxisVertexGroupStates":{"typeRef":"lib/types.ts#FiveAxisVertexGroupState","subjectProjectionFields":["groupKey.weightBandId","groupKey.weightBandPolicyVersion","groupKey.fiveAxisDefinitionId","groupKey.fiveAxisDefinitionVersion","groupKey.fiveAxisRuleVersion"],"keyContract":"SHA256_RFC8785_SUBJECT_PROJECTION_V1"},
+    "ruleRuns":{"typeRef":"lib/types.ts#RuleGraphRun","subjectProjectionFields":["id"],"keyContract":"SHA256_RFC8785_SUBJECT_PROJECTION_V1"}
+  },
+  "serverOwnedRootCatalog": {
+    "workspaceId":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "schemaVersion":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "configIdGovernance":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "patchLedger":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "v23SeriesPartHeads":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "v23SkuDrawerHeads":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "partConstraintSets":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "qualityProfiles":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "seriesDefinitions":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "v23AffixDefinitions":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "v23TechnologyHeads":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "canonicalRuleSourceDrafts":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "weightTemplatePolicyDrafts":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "qualityValuePolicyDrafts":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "pricingPolicyDrafts":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "workspacePolicies":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "pricingPolicyVersions":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "identityAuditLog":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "commandIdempotencyRecords":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "governanceAuditLog":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "importedAt":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "compatibilityRules":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "affinityRules":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "purchasableModels":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "v3Affixes":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "technologies":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "qualityBands":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "ruleGraphs":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "functionProfiles":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "affixScorePolicy":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"}
+  },
+  "importableSuccessorCatalog": {
+    "ruleSettings":{"transportBoundary":"PUT /api/state","semanticMutationAuthority":"RULE_SETTINGS_EDITOR","specBasis":"§14.3.7"},
+    "itemParts":{"transportBoundary":"PUT /api/state","semanticMutationAuthority":"ITEM_PART_REGISTRY_EDITOR","specBasis":"§14.3.7"},
+    "methodProfiles":{"transportBoundary":"PUT /api/state","semanticMutationAuthority":"LOCAL_RULE_PROFILE_EDITOR_OR_CANONICAL_SOURCE_IMMUTABLE","specBasis":"§14.3.7"},
+    "itemTypeProfiles":{"transportBoundary":"PUT /api/state","semanticMutationAuthority":"LOCAL_RULE_PROFILE_EDITOR_OR_CANONICAL_SOURCE_IMMUTABLE","specBasis":"§14.3.7"},
+    "affinityAxisWeights":{"transportBoundary":"PUT /api/state","semanticMutationAuthority":"AFFINITY_AXIS_WEIGHT_EDITOR","specBasis":"§14.3.7"},
+    "collections":{"transportBoundary":"PUT /api/state","semanticMutationAuthority":"COLLECTION_EDITOR","specBasis":"§14.3.7"},
+    "v23TechnologyDefinitions":{"transportBoundary":"POST /api/v23/actions","semanticMutationAuthority":"DOMAIN_ACTION_CREATE_OR_UPDATE_TECHNOLOGY","specBasis":"§14.3.7"},
+    "skuDrawers":{"transportBoundary":"POST /api/skus/target-pull","semanticMutationAuthority":"DOMAIN_ACTION_CHANGE_SKU_TARGET_PULL","specBasis":"§14.3.7"},
+    "parameters":{"transportBoundary":"PUT /api/state","semanticMutationAuthority":"PARAMETER_REGISTRY_EDITOR","specBasis":"§14.3.7"},
+    "templates":{"transportBoundary":"PUT /api/state","semanticMutationAuthority":"TEMPLATE_EDITOR_PATCH_LAYER","specBasis":"§14.3.7"},
+    "modifiers":{"transportBoundary":"PUT /api/state","semanticMutationAuthority":"MODIFIER_RULE_EDITOR","specBasis":"§14.3.7"},
+    "layers":{"transportBoundary":"PUT /api/state","semanticMutationAuthority":"RULE_LAYER_EDITOR","specBasis":"§14.3.7"},
+    "affixes":{"transportBoundary":"PUT /api/state","semanticMutationAuthority":"AFFIX_LIBRARY_EDITOR","specBasis":"§14.3.7"},
+    "seriesShowcases":{"transportBoundary":"PUT /api/state","semanticMutationAuthority":"SERIES_SHOWCASE_EDITOR","specBasis":"§14.3.7"},
+    "notes":{"transportBoundary":"PUT /api/state","semanticMutationAuthority":"WORKSPACE_NOTES_EDITOR","specBasis":"§14.3.7"}
+  },
+  "preservedExactComparePolicy": {
+    "schema":"project-workbook-preserved-expected-context/v1",
+    "authority":"TRUSTED_SERVER_READBACK",
+    "lookupIdentity":["workspace_id","base_workspace_revision","root","record_key"],
+    "exactFields":["record_schema_id","record_revision","record_content_sha256","opaque_canonical_payload_json"],
+    "comparison":"CONSTANT_TIME_SHA256_AND_CANONICAL_PAYLOAD_EXACT",
+    "missingExpected":"REJECT",
+    "candidateSetComparison":"EXACT_ROOT_RECORD_KEY_SCHEMA_SET",
+    "trustedRowOmission":"REJECT",
+    "candidateExtra":"REJECT",
+    "duplicateIdentity":"REJECT"
+  },
+  "importableCreatePolicies": {
+    "seriesShowcases": {
+      "policy": "LEGACY_FIELD_ABSENT_ON_CREATE_EXACT_ON_EXISTING",
+      "legacyField": "performanceId",
+      "openDecisionId": "OPEN-002",
+      "create": "FIELD_ABSENT",
+      "existingAbsent": "FIELD_REMAINS_ABSENT",
+      "existingPresent": "FIELD_EXACT"
+    },
+    "skuDrawers": {
+      "policy": "REJECT",
+      "requiredActionCode": "create_sku"
+    },
+    "v23TechnologyDefinitions": {
+      "policy": "DERIVE_AND_VERIFY",
+      "requiredActionCode": "create_technology",
+      "actionInputFields": ["technologyId","itemPartId","name","description","memberAffixRefs","enabled"],
+      "derivedFields": ["revision","contentHash"],
+      "initialRevision": 1,
+      "contentHashField": "contentHash",
+      "contentHashInputFields": ["technologyId","revision","itemPartId","name","description","memberAffixRefs","enabled"],
+      "hashContract": "V23_TECHNOLOGY_CONTENT_HASH_RFC8785_SHA256_V1"
+    }
+  },
+  "technologySuccessorPolicy": {
+    "schema":"project-workbook-technology-successor-policy/v1",
+    "f2Validator":"validateTechnologySuccessorAction",
+    "trustedContextSchema":"project-workbook-technology-successor-context/v1",
+    "requestSchema":"project-workbook-technology-successor-request/v1",
+    "actionSchema":"project-workbook-technology-successor-action/v1",
+    "actionFields":["schema","actionCode","actionPayload"],
+    "requestFields":["schema","workspaceId","baseWorkspaceRevision","expectedCurrentHead","expectedAffixStateSha256"],
+    "trustedContextFields":["schema","workspaceId","baseWorkspaceRevision","technologyId","targetRevision","technologyIdExists","targetRevisionExists","currentHead","affixStateSha256","affixDefinitions"],
+    "hashContract":"V23_TECHNOLOGY_CONTENT_HASH_RFC8785_SHA256_V1",
+    "hashImplementation":"lib/v23-technology.ts#v23TechnologyContentHash",
+    "actionImplementation":"lib/v23-domain-actions.ts#executeV23DomainAction",
+    "inputHashContract":"V23_ACTION_INPUT_HASH_RFC8785_SHA256_V1",
+    "inputHashImplementation":"lib/v23-domain-actions.ts#v23ActionInputHash",
+    "productionMapping":"ACTION_CODE_AND_ACTION_PAYLOAD_DIRECT_TO_EXECUTE_V23_DOMAIN_ACTION",
+    "affixStateHashContract":"V23_AFFIX_DEFINITION_SET_RFC8785_SHA256_V1",
+    "affixStateFields":["affixStateSha256","affixDefinitions"],
+    "memberValidatorImplementation":"lib/v23-technology.ts#validateV23TechnologyDefinition",
+    "memberResolverImplementation":"lib/v23-technology.ts#resolveV23AffixDefinition",
+    "memberValidationRules":["NON_EMPTY","UNIQUE_STABLE_ID","EXACT_REF_RESOLVED","ENABLED","SAME_ITEM_PART","NO_DEDUPE_SEMANTIC_CONFLICT"],
+    "derivedFields":["revision","contentHash"],
+    "create":{"actionCode":"create_technology","revision":1,"requiresTechnologyIdAbsent":true,"requiresTargetRevisionAbsent":true,"actionInputFields":["expectedWorkspaceRevision","inputHash","technologyId","itemPartId","name","description","memberAffixRefs","enabled"]},
+    "update":{"actionCode":"update_technology","revisionPolicy":"CURRENT_HEAD_PLUS_ONE","currentHeadFields":["technologyId","revision","contentHash","itemPartId"],"exactFields":["technologyId","itemPartId"],"requiresTargetRevisionAbsent":true,"actionInputFields":["expectedWorkspaceRevision","inputHash","technologyId","expectedTechnologyRevision","itemPartId","name","description","memberAffixRefs","enabled"]}
+  },
+  "conditionalExactFieldPolicies": {
+    "methodProfiles":{"mode":"CONDITIONAL_FULL_EXACT","provenancePaths":["sourceRevisionId","rules[].sourceRevisionId","rules[].sourceSheetId","rules[].sourceCell"],"selectorFields":["sourceRevisionId"],"sourceShape":"ALL_PRESENT_NON_EMPTY_NFC_TEXT","localShape":"ALL_ABSENT","sourceExactFields":"ALL_ALLOWED_FIELDS","semanticMutationAuthority":"CANONICAL_SOURCE_PUBLISH_ONLY"},
+    "itemTypeProfiles":{"mode":"CONDITIONAL_FULL_EXACT","provenancePaths":["sourceRevisionId","rules[].sourceRevisionId","rules[].sourceSheetId","rules[].sourceCell"],"selectorFields":["sourceRevisionId"],"sourceShape":"ALL_PRESENT_NON_EMPTY_NFC_TEXT","localShape":"ALL_ABSENT","sourceExactFields":"ALL_ALLOWED_FIELDS","semanticMutationAuthority":"CANONICAL_SOURCE_PUBLISH_ONLY"},
+    "templates":{"mode":"AUTHORIZED_LAYERED_EDIT","provenancePaths":["sourceRevisionId","sourceSheetId","sourceRow"],"selectorFields":["sourceRevisionId","sourceSheetId","sourceRow"],"sourceShape":"ALL_PRESENT_VALID_TYPED","localShape":"ALL_ABSENT","exactFields":["sourceRevisionId","sourceSheetId","sourceRow"],"semanticMutationAuthority":"TEMPLATE_EDITOR_PATCH_LAYER"},
+    "modifiers":{"mode":"AUTHORIZED_LAYERED_EDIT","provenancePaths":["rules[].sourceRevisionId","rules[].sourceSheetId","rules[].sourceCell"],"selectorFields":[],"sourceShape":"NESTED_RULE_PROVENANCE_ALL_OR_NONE","localShape":"RULES_WITHOUT_PROVENANCE","exactFields":["rules[].sourceRevisionId","rules[].sourceSheetId","rules[].sourceCell"],"semanticMutationAuthority":"MODIFIER_RULE_EDITOR"},
+    "layers":{"mode":"AUTHORIZED_LAYERED_EDIT","provenancePaths":["rules[].sourceRevisionId","rules[].sourceSheetId","rules[].sourceCell"],"selectorFields":[],"sourceShape":"NESTED_RULE_PROVENANCE_ALL_OR_NONE","localShape":"RULES_WITHOUT_PROVENANCE","exactFields":["rules[].sourceRevisionId","rules[].sourceSheetId","rules[].sourceCell"],"semanticMutationAuthority":"RULE_LAYER_EDITOR"},
+    "affixes":{"mode":"AUTHORIZED_LAYERED_EDIT","provenancePaths":["rules[].sourceRevisionId","rules[].sourceSheetId","rules[].sourceCell"],"selectorFields":[],"sourceShape":"NESTED_RULE_PROVENANCE_ALL_OR_NONE","localShape":"RULES_WITHOUT_PROVENANCE","exactFields":["rules[].sourceRevisionId","rules[].sourceSheetId","rules[].sourceCell"],"semanticMutationAuthority":"AFFIX_LIBRARY_EDITOR"}
+  },
+  "terminalLifecyclePolicy": {
+    "schema": "project-workbook-terminal-lifecycle/v1",
+    "applicableRootDiscovery": "ALLOWED_FIELDS_SELECTOR_MATCH",
+    "applicableRoots": ["skuDrawers","seriesShowcases"],
+    "multipleSelectors": "REJECT",
+    "lifecycleFieldExact": "ALWAYS",
+    "terminalExactFields": "ALL_ALLOWED_FIELDS",
+    "selectors": [
+      {
+        "field": "status",
+        "missing": "REJECT",
+        "terminalValues": ["approved","published","superseded","deprecated","archived","frozen","APPROVED","PUBLISHED","SUPERSEDED","DEPRECATED","ARCHIVED","FROZEN"],
+        "nonTerminalValues": ["draft","active","DRAFT","ACTIVE"],
+        "unknown": "REJECT"
+      },
+      {
+        "field": "publishedAt",
+        "missing": "NON_TERMINAL",
+        "present": "TERMINAL_NON_EMPTY_NFC_TEXT"
+      }
+    ]
+  },
+  "transportRefPolicy": {
+    "schema": "project-workbook-server-ref-transport/v1",
+    "sheet": "__TF_SERVER_REFS",
+    "semanticHash": "EXCLUDED",
+    "identityFields": ["transport_contract_version","workspace_id","base_workspace_revision","root","classification"],
+    "tokenHashInput": ["transport_contract_version","workspace_id","base_workspace_revision","root","classification"],
+    "tokenFormat": "opaque_<lowercase-sha256-of-canonical-identity>",
+    "tokenSource": "DETERMINISTIC_NON_SENSITIVE_IDENTITY_ONLY",
+    "rawPayload": "FORBIDDEN"
+  },
+  "serverOwnedInvariants": {
+    "qualityProfiles": [
+      {"id":"quality_c_green","letter":"C","colorName":"绿","rank":1,"enabled":true},
+      {"id":"quality_b_blue","letter":"B","colorName":"蓝","rank":2,"enabled":true},
+      {"id":"quality_a_purple","letter":"A","colorName":"紫","rank":3,"enabled":true},
+      {"id":"quality_s_orange","letter":"S","colorName":"橙","rank":4,"enabled":true}
+    ]
+  },
+  "classifications": {
+    "importable_current": [
+      "ruleSettings",
+      "itemParts",
+      "methodProfiles",
+      "itemTypeProfiles",
+      "affinityAxisWeights",
+      "collections",
+      "v23TechnologyDefinitions",
+      "skuDrawers",
+      "parameters",
+      "templates",
+      "modifiers",
+      "layers",
+      "affixes",
+      "seriesShowcases",
+      "notes"
+    ],
+    "preserved_frozen": [
+      "ruleSetVersions",
+      "performanceSummaryDefinitions",
+      "projectionPatches",
+      "v23SeriesPartRevisions",
+      "v23SkuDrawerRevisions",
+      "v23FunctionTemplates",
+      "candidateSearchRecipes",
+      "configurationSnapshots",
+      "reductionStackingPolicyVersions",
+      "fiveAxisDispositionCatalogRevisions",
+      "fiveAxisViewDefinitions",
+      "fiveAxisVertexSets",
+      "currentFiveAxisDispositionCatalogRevisionId",
+      "patchReviewBatches",
+      "patchValidationWaivers",
+      "patchValidationWaiverDecisions",
+      "ruleChangeProposals",
+      "revisions",
+      "performanceProfiles",
+      "recipes",
+      "candidates",
+      "officialSkus",
+      "detailOverrides"
+    ],
+    "server_owned": [
+      "workspaceId",
+      "schemaVersion",
+      "configIdGovernance",
+      "patchLedger",
+      "v23SeriesPartHeads",
+      "v23SkuDrawerHeads",
+      "partConstraintSets",
+      "qualityProfiles",
+      "seriesDefinitions",
+      "v23AffixDefinitions",
+      "v23TechnologyHeads",
+      "canonicalRuleSourceDrafts",
+      "weightTemplatePolicyDrafts",
+      "qualityValuePolicyDrafts",
+      "pricingPolicyDrafts",
+      "workspacePolicies",
+      "pricingPolicyVersions",
+      "identityAuditLog",
+      "commandIdempotencyRecords",
+      "governanceAuditLog",
+      "importedAt",
+      "compatibilityRules",
+      "affinityRules",
+      "purchasableModels",
+      "v3Affixes",
+      "technologies",
+      "qualityBands",
+      "ruleGraphs",
+      "functionProfiles",
+      "affixScorePolicy"
+    ],
+    "forbidden": [
+      "feishuWorkbooks",
+      "feishuSourceRevisions",
+      "aiRuleSourceChangeDrafts",
+      "aiArtifactProvenanceSyncRecords",
+      "exportTargetProfiles",
+      "configEnvironmentProfiles",
+      "configExportMappings",
+      "dataSources",
+      "dataSourceImports",
+      "dataSourceBindings",
+      "dataSourceWritebacks",
+      "feishuShareLinkHistory",
+      "v23MigrationSourceEvidence",
+      "v23LegacyReadAdapters",
+      "migrationReviewItems"
+    ],
+    "export_only_diagnostic": [
+      "derivedProjections",
+      "projectionMatches",
+      "candidateRuns",
+      "candidateMaterializations",
+      "sourceIdentityMigrationReports",
+      "modelPricingEvaluations",
+      "aiAssessments",
+      "upgradeCandidates",
+      "fiveAxisVertexGroupStates",
+      "ruleRuns"
+    ]
+  },
+  "modes": {
+    "MERGE_BY_STABLE_ID": {
+      "missingRecord": "NO_OP",
+      "identityRule": "MATCH_STABLE_ID_ONLY"
+    },
+    "REPLACE_PROJECT": {
+      "missingRecord": "REMOVAL_INTENT",
+      "identityRule": "MATCH_STABLE_ID_ONLY"
+    }
+  },
+  "removal": {
+    "allowed": "DEDICATED_SAFE_REMOVAL_COMMAND_ONLY",
+    "unsupportedCode": "REMOVAL_NOT_SUPPORTED"
+  },
+  "conflicts": {
+    "replanAndRehash": [
+      "MUTABLE_VALUE_CONFLICT",
+      "MUTABLE_REVISION_CONFLICT"
+    ],
+    "hardBlock": [
+      "IDENTITY_CONFLICT",
+      "FROZEN_CONTENT_CONFLICT",
+      "REFERENCE_INTEGRITY_CONFLICT",
+      "SCHEMA_CONFLICT",
+      "WORKSPACE_CONFLICT"
+    ]
+  },
+  "plan": {
+    "binds": [
+      "workspaceId",
+      "baseWorkspaceRevision",
+      "workbookContentHash",
+      "rootManifestHash",
+      "mode",
+      "normalizedOperationsHash"
+    ],
+    "mutableConflictResolution": "REPLAN_REHASH_AND_REAUTHORIZE",
+    "commitRequiresExactPlanMatch": true
+  },
+  "actions": {
+    "preview": {
+      "actionCode": "preview_project_workbook_import",
+      "requiredCapability": "project.workbook.preview"
+    },
+    "commit": {
+      "actionCode": "commit_project_workbook_import",
+      "requiredCapability": "project.workbook.commit"
+    },
+    "export": {
+      "actionCode": "export_project_workbook",
+      "requiredCapability": "project.workbook.export"
+    }
+  },
+  "transaction": {
+    "authorizationAtExecution": true,
+    "atomicCommit": true,
+    "idempotentCommit": true,
+    "readbackRequired": true,
+    "sameWorkspaceOnly": true,
+    "crossWorkspaceCloneOrRestore": false
+  }
+}

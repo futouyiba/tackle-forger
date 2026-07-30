@@ -51,6 +51,7 @@ type CapabilityCode =
   | "config.id.reserve" | "config.id.policy.publish" | "config.id.legacy_import" | "config.id.ledger.correct"
   | "config.target.scan" | "config.target.scan.approve" | "config.target.catalog.publish"
   | "config.export.preview" | "config.export.commit"
+  | "project.workbook.preview" | "project.workbook.commit" | "project.workbook.export"
   | "validation.warning.acknowledge" | "pricing.warning.acknowledge"
   | "validation.waiver.request" | "validation.waiver.approve"
   | "validation.recompute" | "rules.source_change_draft.create"
@@ -74,6 +75,7 @@ type ActionCode =
   | "import_legacy_config_id" | "correct_config_id_ledger_metadata"
   | "scan_config_target" | "approve_config_target_scan" | "publish_config_target_catalog"
   | "preview_config_export" | "commit_config_export"
+  | "preview_project_workbook_import" | "commit_project_workbook_import" | "export_project_workbook"
   | "acknowledge_validation_warning" | "acknowledge_price_warning"
   | "request_validation_waiver" | "approve_validation_waiver"
   | "recompute_validation" | "create_rule_source_change_draft"
@@ -94,6 +96,9 @@ type ActionCode =
 | `publish_config_target_catalog` | `config.target.catalog.publish` |
 | `preview_config_export` | `config.export.preview` |
 | `commit_config_export` | `config.export.commit` |
+| `preview_project_workbook_import` | `project.workbook.preview` |
+| `commit_project_workbook_import` | `project.workbook.commit` |
+| `export_project_workbook` | `project.workbook.export` |
 | `acknowledge_validation_warning` | `validation.warning.acknowledge` |
 | `request_validation_waiver` | `validation.waiver.request` |
 | `approve_validation_waiver` | `validation.waiver.approve` |
@@ -105,7 +110,15 @@ type ActionCode =
 
 `LocalActionAvailability`是`open009-2026-07-27-v2`发布的纯本地动作契约，由当前应用版本作为不可变客户端契约随静态资源一同提供，不依赖服务端、用户对象或网络响应，因此服务不可用时仍可确定性计算。它只可控制同一标签页浏览器内存中的本地Excel副本与临时态，不携带Capability、`EntityRef`或`commandPayloadRef`，也不得映射、升级或提交为任何`ActionCode`。只要动作会读取共享状态、调用服务器Action、修改导入源文件、写入SQLite、日志、IndexedDB/localStorage、发布、正式导出或触发外部副作用，就不属于`LocalActionCode`，必须使用服务端返回的`ActionAvailability`并在命令端重新鉴权。客户端可以按会话内存状态计算本地动作是否可用，但不能据此推断任何服务端动作；匿名本地运行时尚未实现前，不得用本契约声称功能已可用。
 
+`project-workbook/v1`只使用三个服务端动作：`preview_project_workbook_import`解析并保存绑定工作区revision与各类hash的只读计划；`commit_project_workbook_import`只消费该计划的不可篡改payload引用与幂等键，并在执行时重新鉴权、重验计划后原子提交和回读；`export_project_workbook`从单一一致性revision生成机器Manifest与派生可读Sheet。三个动作分别要求`project.workbook.preview`、`project.workbook.commit`与`project.workbook.export`，互不蕴含；这三组ActionCode→Capability由`project-workbook-v1-root-manifest.json`逐项机器绑定，缺失、互换或复用Capability均为contract drift。预览返回`enabled=true`不能授权提交；导出文件不能作为客户端命令payload绕过服务端计划。直接提交工作簿、替换plan hash、跨工作区使用plan、计划过期或当前revision变化都必须拒绝；可解析的可变冲突按第15.1节`REPLAN_REHASH_AND_REAUTHORIZE`生成新计划，身份/冻结/引用/schema/工作区冲突不生成可提交payload。
+
+预览解析必须先按根清单逐列验证Excel原始cell type；机器列仅接受非空文本并执行其`type/required/format`约束，不能让Excel数字精度、日期转换、布尔值、error cell或公式参与身份、revision、hash、JSON或opaque ref解析。普通payload number只要求RFC 8785可表示且有限；identity、revision、record key与safe-integer文本继续要求安全整数，`Infinity/NaN`一律拒绝。所有`display-text`入口必须共享同一closed helper，输入本身已是LF/NFC才接受：LF合法，CRLF、lone CR、非NFC别名、未配对surrogate与禁止控制字符均拒绝，禁止先normalize再放行。根清单、workbook schema与machine content三类hash必须从closed workbook context按各自唯一声明输入重算，不能只接受64位hex；machine content唯一编码为`RFC8785_ORDERED_SHEET_ROW_PAIR_ARRAY_V1`的有序`[[sheetName,rows],...]`，禁止对象、拼接、stream或重排替代；缺少上下文、表集合变化或任一Manifest/机器行篡改都先于计划生成而失败。preserved行必须取得由服务端按workspace/revision/root/key回读的closed expected context；candidate与trusted rows先按root/key去重并要求完整集合及schema逐项exact，再对canonical payload与content hash作固定长度比较及exact-equal。trusted遗漏、candidate额外、重复identity或错workspace/base均在`ROOT_SUMMARY`与machine hash验收前拒绝，MERGE/REPLACE都不能删除冻结行；candidate自重算不得冒充可信expected。`__TF_SERVER_REFS`是排除于语义hash但必须独立验证的transport sheet：每行按`project-workbook-server-ref-transport/v1`绑定workspace、base revision、root与classification，token只从这些公开身份字段确定生成，不得从raw/preserved/readback或敏感payload派生；伪造、错workspace/revision、缺根或重复根均阻断。15个importable root的successor目录必须把transport boundary与semantic mutation authority分开；`PUT /api/state`只描述运输，不授权任意字段替换。schema-derived来源扫描对`methodProfiles/itemTypeProfiles`的可信来源记录执行全字段exact；templates仍由`TEMPLATE_EDITOR_PATCH_LAYER`编辑普通字段但来源三元组exact；modifier/layer/affix的来源rule只冻结其来源三元组并禁止伪造或删除，普通规则仍由各自编辑器修改。缺失、partial、unknown或未来新增但未分类的source/provenance selector都在生成计划前拒绝。`affixScorePolicy`直接参与正式评分却没有工作簿安全successor，必须保持`server_owned`并拒绝工作簿增删改；engine scoring语义不变。`functionProfiles`是canonical source派生live聚合且没有独立安全successor，连同`compatibilityRules/affinityRules/purchasableModels/v3Affixes/technologies/qualityBands/ruleGraphs`均不得由工作簿生成create/update/delete；历史`ACTIVE`或无`status`形状不进入错误的lifecycle selector。固定品质继续只认C绿、B蓝、A紫、S橙。OPEN-002要求`seriesShowcases.performanceId`只作历史兼容：新记录不得携带，既有历史值只能exact-preserve，原本缺少时不得新增；该兼容条件不改变其他字段的既有编辑器或终态全冻结语义。`parameters`既有key不得通过工作簿重命名；`v23TechnologyDefinitions`新建必须使用清单化`create_technology` projection：稳定ID此前不存在、revision固定1，contentHash按生产`v23TechnologyContentHash`同一RFC 8785输入重算；create/update都必须输出含`expectedWorkspaceRevision`和完整production payload `inputHash`的closed action mapping，可直接进入`executeV23DomainAction`，既有revision不得原地改payload，update只由领域动作派生current+1。对existing importable记录，terminal lifecycle selector从record schema字段自动发现：selector字段始终exact，missing/unknown status拒绝；approved/published/superseded/deprecated/archived/frozen或存在合法`publishedAt`时整条allowed payload exact，不能用工作簿原地改写终态；当前只扫描真实可导入生命周期根`skuDrawers`与`seriesShowcases`。`forbidden`根只有固定遗漏标记，服务端不得把原始敏感内容或其可猜hash写入工作簿；diagnostic行必须内嵌closed canonical subject payload并独立重算subject key，即使subject ref为`null`也可验证。每个issue另以完整非派生closed envelope生成`issue_fingerprint`，主键加入该fingerprint：同subject/code的不同issue保留，完全重复issue拒绝，伪fingerprint拒绝；severity只接受`INFO/WARNING/ERROR/BLOCKER`。diagnostic message/severity只用于展示，不参与项目语义等价或提交计划hash。
+
+预览还必须逐行验证`ROOT_SUMMARY`的93-root完整矩阵：分类与根清单一致，current/preserved/diagnostic根的record count和closed root hash可由对应记录重算，server-owned/forbidden根的record count严格为`0`且hash严格为`null`。匹配既有importable记录时，全部schema真实`identityFields`与`revisionFields`无论是否另列于`exactFields`都必须typed exact-equal；`$singleton`仅是固定行key sentinel，不读取payload field。单字段、复合、nested或optional path缺失、number/string替换或值漂移均阻断，新建记录不执行existing比较。所有非root primary-key component统一按Unicode scalar/code point逐个比较，共享前缀较短者在前；不得依赖JavaScript UTF-16 code-unit关系运算。
+
 Series、Part、SKU、Model的ID终身稳定且不复用；改名和更换默认Model不改ID。SKU改换Part或weightBandId必须遵守第6.6节；派生拉力不是身份字段。Revision只增不改；已批准/已发布revision不可原地改写。Snapshot ID与payload/hash永久绑定。前端不得从角色名、状态或颜色猜服务端动作；读接口返回`ActionAvailability[]`，写接口再次鉴权，纯本地动作只消费上述`LocalActionAvailability`。
+
+Technology 的F2 projection必须先以可信workspace/base及current-head回读调用清单绑定的successor validator：稳定ID不存在且revision=1才映射`create_technology`；可信head精确匹配、candidate revision=current+1、itemPartId不变且目标revision不存在才映射`update_technology`。两者还必须以`expectedAffixStateSha256`绑定服务端完整可信当前`v23AffixDefinitions`集合，并在projection前等价重放生产`validateV23TechnologyDefinition`：member非空、stable ID唯一、每个ref三元组唯一解析、enabled、同Part且无dedupe语义贡献冲突。仓库没有独立affix head表，禁止为工作簿另造head权威；集合hash或请求期望值漂移即stale并阻断。两者都重算生产`v23TechnologyContentHash`，action payload不得携带candidate `revision/contentHash`，update只增加`expectedTechnologyRevision`。closed action wrapper必须把`actionCode + actionPayload`直接映射到生产`executeV23DomainAction`；payload必须携带与request及trusted base逐值相同的`expectedWorkspaceRevision`，并按生产`v23ActionInputHash`对除`inputHash`外的完整payload计算RFC 8785 SHA-256。缺head、stale、重复target、缺失或伪造revision/hash、hash后payload变化、成员无效、换部位或错workspace/base全部拒绝，generic composite-key比较不能替代该判定。
 
 ### 24.2 R1：钓具系列甘特图
 
@@ -140,6 +153,7 @@ interface GanttNodeAggregate {
 - 主状态优先级：硬冲突 > rebase > 待复核 > 警告 > 待发布 > 升级候选 > 已发布 > 草稿；全部计数保留。
 - 点击Series/Part覆盖块只更新摘要；点击具体重量段执行只读`select_weight_band`并预览，只有用户显式执行`create_sku`才持久化。
 - 矩阵空白、连续矩形和重量段标签均不创建SKU。
+- 项目工作簿不能替代`create_sku`：其中出现服务端不存在的`skuDrawers`记录必须阻断；对既有SKU只允许修改`targetPullKg`，身份、revision、Series归属、Model/Patch引用、展示顺序、状态与时间字段均保持exact-equal。
 
 正常路径：筛选矩阵，选中Series覆盖块，在底部摘要展开SKU与Model并打开预览。
 边界：单SKU仍有一个真实节点；无SKU草稿Series显示未覆盖占位，不绘制虚假跨度。

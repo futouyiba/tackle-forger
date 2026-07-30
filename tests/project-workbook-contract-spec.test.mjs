@@ -19,7 +19,8 @@ import {
   validateImportableExactFields,
   validatePreservedRootCatalog,
   validateProjectWorkbookManifest,
-  validateRecordEnvelope,
+validateRecordEnvelope,
+validateTrustedPreservedExactMatch,
   validateRecordSheetCardinality,
   validateRootSummary,
   validateServerRefEnvelope,
@@ -115,14 +116,6 @@ function workbookContext(manifest, manifestSource) {
       model_component: 1,
       series_coherence: 1,
     },
-    affixScorePolicy: {
-      sameAxisFactors: [],
-      synergyBonus: 0,
-      conflictPenalty: 0,
-      passiveWeight: 1,
-      directWeight: 1,
-      notes: "",
-    },
     notes: "",
   };
   const currentRows = Object.entries(manifest.recordSchemas)
@@ -184,6 +177,23 @@ function workbookContext(manifest, manifestSource) {
         policy_marker: "FORBIDDEN_PAYLOAD_OMITTED",
       })),
     },
+    trustedPreservedContext: {
+      schema: manifest.preservedExactComparePolicy.schema,
+      authority: manifest.preservedExactComparePolicy.authority,
+      workspace_id: manifestFields.workspace_id,
+      base_workspace_revision: manifestFields.base_workspace_revision,
+      rows: clone(preservedRows),
+    },
+  };
+}
+
+function trustedPreservedContext(manifest, rows, workspaceId = "workspace:1", revision = "1") {
+  return {
+    schema: manifest.preservedExactComparePolicy.schema,
+    authority: manifest.preservedExactComparePolicy.authority,
+    workspace_id: workspaceId,
+    base_workspace_revision: revision,
+    rows: clone(rows),
   };
 }
 
@@ -242,7 +252,11 @@ function rootSummaryFixture(manifest) {
           : createHash("sha256").update("[]").digest("hex"),
       status: "READY",
     })));
-  return { rows, rootRecordContext };
+  return {
+    rows,
+    rootRecordContext,
+    trustedPreservedContext: trustedPreservedContext(manifest, []),
+  };
 }
 
 test("canonical project workbook contract binds all current WorkspaceState roots", () => {
@@ -261,7 +275,7 @@ test("F0 keeps command-only and fixed-authority roots server-owned", async () =>
       manifest.classifications.forbidden.length,
       manifest.classifications.export_only_diagnostic.length,
     ],
-    [16, 23, 29, 15, 10],
+    [15, 23, 30, 15, 10],
   );
   for (const root of [
     "partConstraintSets",
@@ -273,12 +287,39 @@ test("F0 keeps command-only and fixed-authority roots server-owned", async () =>
     "seriesDefinitions",
     "v23AffixDefinitions",
     "v23TechnologyHeads",
+    "affixScorePolicy",
   ]) {
     assert.ok(manifest.classifications.server_owned.includes(root), root);
     assert.equal(Object.hasOwn(manifest.recordSchemas, root), false, root);
     assert.equal(Object.hasOwn(manifest.preservedRootCatalog, root), false, root);
     assert.equal(Object.hasOwn(manifest.preservedSchemaCatalog, root), false, root);
   }
+
+  assert.deepEqual(
+    Object.keys(manifest.importableSuccessorCatalog),
+    manifest.classifications.importable_current,
+  );
+  for (const root of manifest.classifications.importable_current) {
+    const successor = manifest.importableSuccessorCatalog[root];
+    assert.ok(successor, `${root} requires a proven production successor`);
+    if (root === "skuDrawers" || root === "v23TechnologyDefinitions") {
+      assert.match(successor.mutation, /^DOMAIN_ACTION_/);
+    } else {
+      assert.deepEqual(successor, {
+        transport: "PUT /api/state",
+        mutation: "DEFAULT_ALLOW_REVISION_GUARDED",
+      });
+    }
+  }
+  assert.throws(
+    () => validateImportableExactFields(
+      manifest,
+      "affixScorePolicy",
+      { sameAxisFactors: [], synergyBonus: 0, conflictPenalty: 0 },
+      { sameAxisFactors: [], synergyBonus: 0, conflictPenalty: 0 },
+    ),
+    /not an importable record root/,
+  );
 
   for (const [root, unsafeTarget] of [
     ["partConstraintSets", "preserved_frozen"],
@@ -2044,13 +2085,34 @@ test("record content hash binds the complete current and preserved row envelope"
     preservedRow,
     "opaque_canonical_payload_json",
   );
-  assert.equal(validateRecordEnvelope(manifest, preservedRow), true);
+  const preservedContext = trustedPreservedContext(manifest, [preservedRow]);
+  assert.equal(validateRecordEnvelope(manifest, preservedRow, {
+    workspaceId: "workspace:1",
+    baseWorkspaceRevision: "1",
+    trustedPreservedContext: preservedContext,
+  }), true);
+  assert.throws(
+    () => validateRecordEnvelope(manifest, preservedRow),
+    /requires trusted server expected context/,
+  );
   const preservedMutation = clone(preservedRow);
   preservedMutation.opaque_canonical_payload_json = canonicalPayload({
     ...preservedPayload,
     values: {},
   });
-  assert.throws(() => validateRecordEnvelope(manifest, preservedMutation), /does not match/);
+  preservedMutation.record_content_sha256 = expectedRecordHash(
+    manifest,
+    preservedMutation,
+    "opaque_canonical_payload_json",
+  );
+  assert.throws(
+    () => validateRecordEnvelope(manifest, preservedMutation, {
+      workspaceId: "workspace:1",
+      baseWorkspaceRevision: "1",
+      trustedPreservedContext: preservedContext,
+    }),
+    /trusted server expected content|not exact-equal/,
+  );
 });
 
 test("nullable preserved singleton binds its exact WorkspaceState scalar union", async () => {
@@ -2085,7 +2147,11 @@ test("nullable preserved singleton binds its exact WorkspaceState scalar union",
     nullRow,
     "opaque_canonical_payload_json",
   );
-  assert.equal(validateRecordEnvelope(manifest, nullRow), true);
+  assert.equal(validateRecordEnvelope(manifest, nullRow, {
+    workspaceId: "workspace:1",
+    baseWorkspaceRevision: "1",
+    trustedPreservedContext: trustedPreservedContext(manifest, [nullRow]),
+  }), true);
   for (const payload of ['{"value":"revision:v1"}', "1", "undefined"]) {
     assert.throws(
       () => validateMachineCell(payloadColumn, payload, "string", { manifest, root }),
@@ -2099,6 +2165,98 @@ test("nullable preserved singleton binds its exact WorkspaceState scalar union",
     /exact WorkspaceState property element\/scalar type/,
   );
   assert.equal(validateProjectWorkbookManifest(manifest, roots), true);
+});
+
+test("every preserved root uses trusted workspace/revision/key exact comparison", async () => {
+  const { manifest } = await fixture();
+  for (const root of manifest.classifications.preserved_frozen) {
+    const schemaCatalog = manifest.preservedSchemaCatalog[root];
+    const schemaId = typeof schemaCatalog === "string"
+      ? schemaCatalog
+      : Object.values(schemaCatalog)[0];
+    const row = {
+      root,
+      record_schema_id: schemaId,
+      record_key: canonicalPayload([`key:${root}`]),
+      record_revision: "null",
+      record_content_sha256: "0".repeat(64),
+      opaque_canonical_payload_json: canonicalPayload({ proof: root }),
+    };
+    row.record_content_sha256 = expectedRecordHash(
+      manifest,
+      row,
+      "opaque_canonical_payload_json",
+    );
+    const trusted = trustedPreservedContext(manifest, [row]);
+    const context = {
+      workspaceId: "workspace:1",
+      baseWorkspaceRevision: "1",
+      trustedPreservedContext: trusted,
+    };
+    assert.equal(validateTrustedPreservedExactMatch(manifest, row, context), true, root);
+    assert.throws(
+      () => validateTrustedPreservedExactMatch(manifest, row, {}),
+      /requires trusted server expected context/,
+      root,
+    );
+    const wrongWorkspace = clone(trusted);
+    wrongWorkspace.workspace_id = "workspace:other";
+    assert.throws(
+      () => validateTrustedPreservedExactMatch(manifest, row, {
+        ...context,
+        trustedPreservedContext: wrongWorkspace,
+      }),
+      /another workspace/,
+      root,
+    );
+    const wrongRevision = clone(trusted);
+    wrongRevision.base_workspace_revision = "2";
+    assert.throws(
+      () => validateTrustedPreservedExactMatch(manifest, row, {
+        ...context,
+        trustedPreservedContext: wrongRevision,
+      }),
+      /another workspace revision/,
+      root,
+    );
+    const wrongKey = clone(row);
+    wrongKey.record_key = canonicalPayload([`other:${root}`]);
+    assert.throws(
+      () => validateTrustedPreservedExactMatch(manifest, wrongKey, context),
+      /missing or ambiguous/,
+      root,
+    );
+    for (const field of ["record_schema_id", "record_revision"]) {
+      const forged = clone(row);
+      forged[field] = `${row[field]}:forged`;
+      assert.throws(
+        () => validateTrustedPreservedExactMatch(manifest, forged, context),
+        new RegExp(`preserved ${field} drift`),
+        `${root}.${field}`,
+      );
+    }
+    for (const field of ["opaque_canonical_payload_json", "record_content_sha256"]) {
+      const forged = clone(row);
+      forged[field] = field === "record_content_sha256"
+        ? "f".repeat(64)
+        : canonicalPayload({ proof: `${root}:forged` });
+      assert.throws(
+        () => validateTrustedPreservedExactMatch(manifest, forged, context),
+        /trusted server expected content|not exact-equal/,
+        `${root}.${field}`,
+      );
+    }
+    const duplicate = clone(trusted);
+    duplicate.rows.push(clone(row));
+    assert.throws(
+      () => validateTrustedPreservedExactMatch(manifest, row, {
+        ...context,
+        trustedPreservedContext: duplicate,
+      }),
+      /missing or ambiguous/,
+      root,
+    );
+  }
 });
 
 test("every manifest-derived current and preserved singleton requires exactly one row", async () => {
@@ -2449,6 +2607,7 @@ test("server-owned transport refs bind public identity outside the semantic cont
   );
   const nextRevision = workbookContext(manifest, manifestSource);
   nextRevision.manifestFields.base_workspace_revision = "2";
+  nextRevision.trustedPreservedContext.base_workspace_revision = "2";
   nextRevision.machineSheets.__TF_SERVER_REFS =
     manifest.classifications.server_owned.map((root) =>
       serverRefRow(manifest, root, "workspace:1", "2"));
@@ -2472,25 +2631,50 @@ test("server-owned transport refs bind public identity outside the semantic cont
 
 test("ROOT_SUMMARY binds all 93 roots without hashing server-owned or forbidden content", async () => {
   const { manifest } = await fixture();
-  const { rows, rootRecordContext } = rootSummaryFixture(manifest);
-  assert.equal(validateRootSummary(manifest, rows, rootRecordContext), true);
+  const {
+    rows,
+    rootRecordContext,
+    trustedPreservedContext: trusted,
+  } = rootSummaryFixture(manifest);
+  const validateSummary = (candidateRows, context = rootRecordContext) =>
+    validateRootSummary(manifest, candidateRows, context, process.cwd(), trusted);
+  assert.equal(validateSummary(rows), true);
   assert.equal(rows.length, 93);
+
+  const notesRecord = {
+    root: "notes",
+    record_schema_id: manifest.recordSchemas.notes.schemaId,
+    record_key: '["$singleton"]',
+    record_revision: "null",
+    record_content_sha256: "0".repeat(64),
+    payload_json: canonicalPayload("actual note"),
+  };
+  notesRecord.record_content_sha256 = expectedRecordHash(manifest, notesRecord, "payload_json");
+  const populatedRows = clone(rows);
+  const populatedContext = clone(rootRecordContext);
+  populatedContext.notes = [notesRecord];
+  const notesSummary = populatedRows.find((row) => row.root === "notes");
+  notesSummary.record_count = "1";
+  notesSummary.root_content_sha256 = createHash("sha256")
+    .update(canonicalPayload([notesRecord]))
+    .digest("hex");
+  assert.equal(validateSummary(populatedRows, populatedContext), true);
 
   const wrongClassification = clone(rows);
   wrongClassification[0].classification = "server_owned";
   assert.throws(
-    () => validateRootSummary(manifest, wrongClassification, rootRecordContext),
+    () => validateSummary(wrongClassification),
     /classification mismatch/,
   );
   const missingRoot = rows.slice(1);
   assert.throws(
-    () => validateRootSummary(manifest, missingRoot, rootRecordContext),
+    () => validateSummary(missingRoot),
     /exactly 93 roots/,
   );
   const duplicatedRoot = clone(rows);
   duplicatedRoot[1].root = duplicatedRoot[0].root;
   assert.throws(
-    () => validateRootSummary(manifest, duplicatedRoot, rootRecordContext),
+    () => validateSummary(duplicatedRoot),
     /each root once/,
   );
 
@@ -2498,14 +2682,14 @@ test("ROOT_SUMMARY binds all 93 roots without hashing server-owned or forbidden 
   hashedAsNull.find((row) => row.classification === "importable_current")
     .root_content_sha256 = "null";
   assert.throws(
-    () => validateRootSummary(manifest, hashedAsNull, rootRecordContext),
+    () => validateSummary(hashedAsNull),
     /requires a closed root hash/,
   );
   const diagnosticHashMutation = clone(rows);
   diagnosticHashMutation.find((row) => row.classification === "export_only_diagnostic")
     .root_content_sha256 = "a".repeat(64);
   assert.throws(
-    () => validateRootSummary(manifest, diagnosticHashMutation, rootRecordContext),
+    () => validateSummary(diagnosticHashMutation),
     /does not match its closed records/,
   );
   for (const classification of ["server_owned", "forbidden"]) {
@@ -2513,15 +2697,31 @@ test("ROOT_SUMMARY binds all 93 roots without hashing server-owned or forbidden 
     rawHashLeak.find((row) => row.classification === classification)
       .root_content_sha256 = "b".repeat(64);
     assert.throws(
-      () => validateRootSummary(manifest, rawHashLeak, rootRecordContext),
+      () => validateSummary(rawHashLeak),
       /must not expose a raw-derived root hash/,
+    );
+    const nonzeroCount = clone(rows);
+    nonzeroCount.find((row) => row.classification === classification).record_count = "1";
+    assert.throws(
+      () => validateSummary(nonzeroCount),
+      /must not claim protected records/,
+    );
+    const missingCount = clone(rows);
+    delete missingCount.find((row) => row.classification === classification).record_count;
+    assert.throws(
+      () => validateSummary(missingCount),
+      /closed field order/,
     );
   }
   const missingContext = clone(rootRecordContext);
   delete missingContext[Object.keys(missingContext)[0]];
   assert.throws(
-    () => validateRootSummary(manifest, rows, missingContext),
+    () => validateSummary(rows, missingContext),
     /every and only hash-bearing roots/,
+  );
+  assert.throws(
+    () => validateRootSummary(manifest, rows, rootRecordContext),
+    /requires trusted preserved expected context/,
   );
 });
 

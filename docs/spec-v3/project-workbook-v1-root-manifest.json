@@ -189,6 +189,8 @@
       "preservedSchemaAuthority",
       "diagnosticRootCatalog",
       "serverOwnedRootCatalog",
+      "importableSuccessorCatalog",
+      "preservedExactComparePolicy",
       "importableCreatePolicies",
       "conditionalExactFieldPolicies",
       "terminalLifecyclePolicy",
@@ -261,9 +263,9 @@
       "skuDrawers":["projectionMatch","fiveAxisProjectionReferences","validationSummary"]
     },
     "recursiveProofRoots": [
-      "ruleSettings","itemParts","methodProfiles","itemTypeProfiles","affinityAxisWeights","collections","v23TechnologyDefinitions","skuDrawers","parameters","templates","modifiers","layers","affixes","affixScorePolicy","seriesShowcases","notes"
+      "ruleSettings","itemParts","methodProfiles","itemTypeProfiles","affinityAxisWeights","collections","v23TechnologyDefinitions","skuDrawers","parameters","templates","modifiers","layers","affixes","seriesShowcases","notes"
     ],
-    "recursiveTypeGraphSha256": "725e4fd87f3bad2bd087cf3d45ee2ec91a785b2eb61ff84b0d3d9d4a0c979a0c",
+    "recursiveTypeGraphSha256": "27eaf5afc6d8c6eab54f031a092df47ee2fc3b0e3650f3ac5ed026264f920b45",
     "typeRefs": {
       "ruleSettings":"lib/types.ts#WorkspaceRuleSettings",
       "itemParts":"lib/types.ts#ItemPartDefinition",
@@ -278,7 +280,6 @@
       "modifiers":"lib/types.ts#ModifierOption",
       "layers":"lib/types.ts#RuleLayer",
       "affixes":"lib/types.ts#Affix",
-      "affixScorePolicy":"lib/types.ts#AffixScorePolicy",
       "seriesShowcases":"lib/types.ts#SeriesShowcaseEntry",
       "notes":"lib/types.ts#string"
     }
@@ -297,7 +298,6 @@
     "modifiers": {"schemaId":"project-workbook/root/modifiers/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":[],"allowedFields":["id","dimension","name","level","itemKinds","methodIds","rules","notes","enabled"]},
     "layers": {"schemaId":"project-workbook/root/layers/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":[],"allowedFields":["id","name","order","enabled","mode","dimension","optionIds","rules","notes"]},
     "affixes": {"schemaId":"project-workbook/root/affixes/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":[],"allowedFields":["id","name","category","itemKinds","score","rarity","tags","exclusiveGroup","conflicts","synergies","rules","description","notes","enabled"]},
-    "affixScorePolicy": {"schemaId":"project-workbook/root/affixScorePolicy/v1","identityFields":["$singleton"],"revisionFields":[],"hashFields":[],"exactFields":[],"allowedFields":["sameAxisFactors","synergyBonus","conflictPenalty","passiveWeight","directWeight","notes"]},
     "seriesShowcases": {"schemaId":"project-workbook/root/seriesShowcases/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":["publishedAt"],"allowedFields":["id","seriesId","description","templateId","templateIds","structureId","structureIds","fishingMethod","functionId","performanceId","qualityId","fishMinKg","fishMaxKg","tensionMinKgf","tensionMaxKgf","targetPullsKgf","affixIds","lureMinG","lureMaxG","notes","publishedAt","updatedAt"]},
     "notes": {"schemaId":"project-workbook/root/notes/v1","identityFields":["$singleton"],"revisionFields":[],"hashFields":[],"exactFields":[],"allowedFields":["$scalar"]}
   },
@@ -405,7 +405,33 @@
     "technologies":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
     "qualityBands":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
     "ruleGraphs":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
-    "functionProfiles":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"}
+    "functionProfiles":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "affixScorePolicy":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"}
+  },
+  "importableSuccessorCatalog": {
+    "ruleSettings":{"transport":"PUT /api/state","mutation":"DEFAULT_ALLOW_REVISION_GUARDED"},
+    "itemParts":{"transport":"PUT /api/state","mutation":"DEFAULT_ALLOW_REVISION_GUARDED"},
+    "methodProfiles":{"transport":"PUT /api/state","mutation":"DEFAULT_ALLOW_REVISION_GUARDED"},
+    "itemTypeProfiles":{"transport":"PUT /api/state","mutation":"DEFAULT_ALLOW_REVISION_GUARDED"},
+    "affinityAxisWeights":{"transport":"PUT /api/state","mutation":"DEFAULT_ALLOW_REVISION_GUARDED"},
+    "collections":{"transport":"PUT /api/state","mutation":"DEFAULT_ALLOW_REVISION_GUARDED"},
+    "v23TechnologyDefinitions":{"transport":"POST /api/v23/actions","mutation":"DOMAIN_ACTION_CREATE_OR_UPDATE_TECHNOLOGY"},
+    "skuDrawers":{"transport":"POST /api/skus/target-pull","mutation":"DOMAIN_ACTION_CHANGE_SKU_TARGET_PULL"},
+    "parameters":{"transport":"PUT /api/state","mutation":"DEFAULT_ALLOW_REVISION_GUARDED"},
+    "templates":{"transport":"PUT /api/state","mutation":"DEFAULT_ALLOW_REVISION_GUARDED"},
+    "modifiers":{"transport":"PUT /api/state","mutation":"DEFAULT_ALLOW_REVISION_GUARDED"},
+    "layers":{"transport":"PUT /api/state","mutation":"DEFAULT_ALLOW_REVISION_GUARDED"},
+    "affixes":{"transport":"PUT /api/state","mutation":"DEFAULT_ALLOW_REVISION_GUARDED"},
+    "seriesShowcases":{"transport":"PUT /api/state","mutation":"DEFAULT_ALLOW_REVISION_GUARDED"},
+    "notes":{"transport":"PUT /api/state","mutation":"DEFAULT_ALLOW_REVISION_GUARDED"}
+  },
+  "preservedExactComparePolicy": {
+    "schema":"project-workbook-preserved-expected-context/v1",
+    "authority":"TRUSTED_SERVER_READBACK",
+    "lookupIdentity":["workspace_id","base_workspace_revision","root","record_key"],
+    "exactFields":["record_schema_id","record_revision","record_content_sha256","opaque_canonical_payload_json"],
+    "comparison":"CONSTANT_TIME_SHA256_AND_CANONICAL_PAYLOAD_EXACT",
+    "missingExpected":"REJECT"
   },
   "importableCreatePolicies": {
     "skuDrawers": {
@@ -479,7 +505,6 @@
       "modifiers",
       "layers",
       "affixes",
-      "affixScorePolicy",
       "seriesShowcases",
       "notes"
     ],
@@ -537,7 +562,8 @@
       "technologies",
       "qualityBands",
       "ruleGraphs",
-      "functionProfiles"
+      "functionProfiles",
+      "affixScorePolicy"
     ],
     "forbidden": [
       "feishuWorkbooks",

@@ -27,6 +27,8 @@ const EXPECTED_TOP_LEVEL_KEYS = [
   "preservedSchemaAuthority",
   "diagnosticRootCatalog",
   "serverOwnedRootCatalog",
+  "importableSuccessorCatalog",
+  "preservedExactComparePolicy",
   "importableCreatePolicies",
   "conditionalExactFieldPolicies",
   "terminalLifecyclePolicy",
@@ -48,7 +50,7 @@ export const EXPECTED_ROOT_CLASSIFICATIONS = {
     "v23TechnologyDefinitions",
     "skuDrawers",
     "parameters", "templates", "modifiers",
-    "layers", "affixes", "affixScorePolicy", "seriesShowcases", "notes",
+    "layers", "affixes", "seriesShowcases", "notes",
   ],
   preserved_frozen: [
     "ruleSetVersions", "performanceSummaryDefinitions", "projectionPatches",
@@ -70,7 +72,7 @@ export const EXPECTED_ROOT_CLASSIFICATIONS = {
     "pricingPolicyVersions", "identityAuditLog", "commandIdempotencyRecords",
     "governanceAuditLog", "importedAt",
     "compatibilityRules", "affinityRules", "purchasableModels", "v3Affixes",
-    "technologies", "qualityBands", "ruleGraphs", "functionProfiles",
+    "technologies", "qualityBands", "ruleGraphs", "functionProfiles", "affixScorePolicy",
   ],
   forbidden: [
     "feishuWorkbooks", "feishuSourceRevisions", "aiRuleSourceChangeDrafts",
@@ -126,6 +128,44 @@ const EXPECTED_SERVER_OWNED_ROOT_CATALOG = Object.fromEntries(
     },
   ]),
 );
+
+const EXPECTED_IMPORTABLE_SUCCESSOR_CATALOG = {
+  ruleSettings: { transport: "PUT /api/state", mutation: "DEFAULT_ALLOW_REVISION_GUARDED" },
+  itemParts: { transport: "PUT /api/state", mutation: "DEFAULT_ALLOW_REVISION_GUARDED" },
+  methodProfiles: { transport: "PUT /api/state", mutation: "DEFAULT_ALLOW_REVISION_GUARDED" },
+  itemTypeProfiles: { transport: "PUT /api/state", mutation: "DEFAULT_ALLOW_REVISION_GUARDED" },
+  affinityAxisWeights: { transport: "PUT /api/state", mutation: "DEFAULT_ALLOW_REVISION_GUARDED" },
+  collections: { transport: "PUT /api/state", mutation: "DEFAULT_ALLOW_REVISION_GUARDED" },
+  v23TechnologyDefinitions: {
+    transport: "POST /api/v23/actions",
+    mutation: "DOMAIN_ACTION_CREATE_OR_UPDATE_TECHNOLOGY",
+  },
+  skuDrawers: {
+    transport: "POST /api/skus/target-pull",
+    mutation: "DOMAIN_ACTION_CHANGE_SKU_TARGET_PULL",
+  },
+  parameters: { transport: "PUT /api/state", mutation: "DEFAULT_ALLOW_REVISION_GUARDED" },
+  templates: { transport: "PUT /api/state", mutation: "DEFAULT_ALLOW_REVISION_GUARDED" },
+  modifiers: { transport: "PUT /api/state", mutation: "DEFAULT_ALLOW_REVISION_GUARDED" },
+  layers: { transport: "PUT /api/state", mutation: "DEFAULT_ALLOW_REVISION_GUARDED" },
+  affixes: { transport: "PUT /api/state", mutation: "DEFAULT_ALLOW_REVISION_GUARDED" },
+  seriesShowcases: { transport: "PUT /api/state", mutation: "DEFAULT_ALLOW_REVISION_GUARDED" },
+  notes: { transport: "PUT /api/state", mutation: "DEFAULT_ALLOW_REVISION_GUARDED" },
+};
+
+const EXPECTED_PRESERVED_EXACT_COMPARE_POLICY = {
+  schema: "project-workbook-preserved-expected-context/v1",
+  authority: "TRUSTED_SERVER_READBACK",
+  lookupIdentity: ["workspace_id", "base_workspace_revision", "root", "record_key"],
+  exactFields: [
+    "record_schema_id",
+    "record_revision",
+    "record_content_sha256",
+    "opaque_canonical_payload_json",
+  ],
+  comparison: "CONSTANT_TIME_SHA256_AND_CANONICAL_PAYLOAD_EXACT",
+  missingExpected: "REJECT",
+};
 
 const EXPECTED_CONDITIONAL_EXACT_FIELD_POLICIES = {
 };
@@ -306,9 +346,9 @@ const EXPECTED_SHEETS = {
 };
 
 const EXPECTED_RECORD_SCHEMAS_SHA256 =
-  "64d9c2f354c68ff6f691649e976669a6e1f180665cfb77e0168f56b5a1754603";
+  "269444982811e2cdfeeeb3ed3e634658235c4bff24ca66f53c1c5d6f7f730b16";
 const EXPECTED_RECORD_SCHEMA_AUTHORITY_SHA256 =
-  "dc29a12ed576cb73958221fcceb64be06391a49c62b89acc2a0d9aa10b5765f8";
+  "1ee7065c7b51cf7e454a605001de417770959de690fe25b57e2d13670f4c9386";
 
 function fail(message) {
   throw new Error(message);
@@ -1334,6 +1374,57 @@ function recordEnvelopeHash(manifest, row, payloadField) {
   return sha256(canonicalJson(input));
 }
 
+export function validateTrustedPreservedExactMatch(manifest, row, context = {}) {
+  const trusted = context.trustedPreservedContext;
+  assert.ok(
+    trusted && Object.getPrototypeOf(trusted) === Object.prototype,
+    `${row.root} preserved record requires trusted server expected context`,
+  );
+  assert.deepEqual(Object.keys(trusted), [
+    "schema",
+    "authority",
+    "workspace_id",
+    "base_workspace_revision",
+    "rows",
+  ], "trusted preserved expected context must be closed");
+  assert.equal(trusted.schema, manifest.preservedExactComparePolicy.schema);
+  assert.equal(trusted.authority, manifest.preservedExactComparePolicy.authority);
+  assert.equal(trusted.workspace_id, context.workspaceId,
+    `${row.root} preserved expected context belongs to another workspace`);
+  assert.equal(trusted.base_workspace_revision, context.baseWorkspaceRevision,
+    `${row.root} preserved expected context belongs to another workspace revision`);
+  assert.ok(Array.isArray(trusted.rows), "trusted preserved expected rows are required");
+  const matches = trusted.rows.filter((expected) =>
+    expected?.root === row.root && expected?.record_key === row.record_key);
+  assert.equal(matches.length, 1, `${row.root} preserved expected row is missing or ambiguous`);
+  const expected = matches[0];
+  assert.deepEqual(Object.keys(expected), Object.keys(row),
+    `${row.root} trusted preserved row must use the closed envelope`);
+  for (const field of ["record_schema_id", "record_revision"]) {
+    assert.equal(row[field], expected[field], `${row.root} preserved ${field} drift`);
+  }
+  for (const field of ["record_content_sha256", "opaque_canonical_payload_json"]) {
+    const candidateDigest = field === "record_content_sha256"
+      ? Buffer.from(row[field], "hex")
+      : Buffer.from(sha256(row[field]), "hex");
+    const expectedDigest = field === "record_content_sha256"
+      ? Buffer.from(expected[field], "hex")
+      : Buffer.from(sha256(expected[field]), "hex");
+    assert.equal(candidateDigest.length, expectedDigest.length,
+      `${row.root} preserved ${field} length drift`);
+    assert.ok(timingSafeEqual(candidateDigest, expectedDigest),
+      `${row.root} preserved ${field} does not match trusted server expected content`);
+    assert.equal(row[field], expected[field],
+      `${row.root} preserved ${field} is not exact-equal`);
+  }
+  assert.equal(
+    recordEnvelopeHash(manifest, expected, "opaque_canonical_payload_json"),
+    expected.record_content_sha256,
+    `${row.root} trusted preserved expected row hash is invalid`,
+  );
+  return true;
+}
+
 export function validateRecordEnvelope(manifest, row, context = {}) {
   assert.ok(row && Object.getPrototypeOf(row) === Object.prototype,
     "record envelope must be a closed object");
@@ -1381,6 +1472,9 @@ export function validateRecordEnvelope(manifest, row, context = {}) {
     ),
     `${row.root} record_content_sha256 does not match the closed row envelope`,
   );
+  if (isPreserved) {
+    validateTrustedPreservedExactMatch(manifest, row, context);
+  }
   return true;
 }
 
@@ -1576,7 +1670,13 @@ export function compareWorkbookPrimaryKey(manifest, left, right, primaryKey) {
   return 0;
 }
 
-function validateMachineContentSheets(manifest, machineSheets, manifestFields, repositoryRoot) {
+function validateMachineContentSheets(
+  manifest,
+  machineSheets,
+  manifestFields,
+  trustedPreservedContext,
+  repositoryRoot,
+) {
   assert.ok(machineSheets && Object.getPrototypeOf(machineSheets) === Object.prototype,
     "workbook hash context requires closed machineSheets");
   const declaredMachineSheets = manifest.workbookSchema.sheetOrder.filter((sheetName) =>
@@ -1626,7 +1726,12 @@ function validateMachineContentSheets(manifest, machineSheets, manifestFields, r
     );
     for (const row of rows) {
       if (sheetName === "__TF_CURRENT" || sheetName === "__TF_PRESERVED") {
-        validateRecordEnvelope(manifest, row, { repositoryRoot });
+        validateRecordEnvelope(manifest, row, {
+          repositoryRoot,
+          workspaceId: manifestFields.workspace_id,
+          baseWorkspaceRevision: manifestFields.base_workspace_revision,
+          trustedPreservedContext,
+        });
       } else if (sheetName === "__TF_SERVER_REFS") {
         validateServerRefEnvelope(manifest, row, {
           workspaceId: manifestFields.workspace_id,
@@ -1657,7 +1762,7 @@ export function computeWorkbookHashes(
     "workbook hash context is required");
   assert.deepEqual(
     Object.keys(context),
-    ["rootManifestSource", "manifestFields", "machineSheets"],
+    ["rootManifestSource", "manifestFields", "machineSheets", "trustedPreservedContext"],
     "workbook hash context must be closed",
   );
   assert.equal(typeof context.rootManifestSource, "string", "root manifest source is required");
@@ -1687,6 +1792,7 @@ export function computeWorkbookHashes(
     manifest,
     context.machineSheets,
     context.manifestFields,
+    context.trustedPreservedContext,
     repositoryRoot,
   );
   const schemaInput = manifest.canonicalization.workbookSchemaHashInput.map((field) => {
@@ -1743,12 +1849,29 @@ export function validateRootSummary(
   rows,
   rootRecordContext,
   repositoryRoot = process.cwd(),
+  trustedPreservedContext,
 ) {
   assert.ok(Array.isArray(rows), "ROOT_SUMMARY rows are required");
   assert.ok(
     rootRecordContext && Object.getPrototypeOf(rootRecordContext) === Object.prototype,
     "ROOT_SUMMARY root record context is required",
   );
+  assert.ok(
+    trustedPreservedContext
+      && Object.getPrototypeOf(trustedPreservedContext) === Object.prototype,
+    "ROOT_SUMMARY requires trusted preserved expected context",
+  );
+  assert.deepEqual(Object.keys(trustedPreservedContext), [
+    "schema",
+    "authority",
+    "workspace_id",
+    "base_workspace_revision",
+    "rows",
+  ], "ROOT_SUMMARY trusted preserved expected context must be closed");
+  assert.equal(trustedPreservedContext.schema, manifest.preservedExactComparePolicy.schema);
+  assert.equal(trustedPreservedContext.authority, manifest.preservedExactComparePolicy.authority);
+  assert.ok(Array.isArray(trustedPreservedContext.rows),
+    "ROOT_SUMMARY trusted preserved expected rows are required");
   const rootOrder = Object.values(manifest.classifications).flat();
   assert.equal(rows.length, rootOrder.length, "ROOT_SUMMARY must contain exactly 93 roots");
   assert.deepEqual(
@@ -1785,6 +1908,7 @@ export function validateRootSummary(
     const classification = classificationByRoot.get(row.root);
     assert.equal(row.classification, classification, `${row.root} classification mismatch`);
     if (classification === "server_owned" || classification === "forbidden") {
+      assert.equal(row.record_count, "0", `${row.root} must not claim protected records`);
       assert.equal(
         row.root_content_sha256,
         "null",
@@ -1807,7 +1931,12 @@ export function validateRootSummary(
     for (const record of rootRecords) {
       assert.equal(record.root, row.root, `${row.root} summary context contains another root`);
       if (classification !== "export_only_diagnostic") {
-        validateRecordEnvelope(manifest, record, { repositoryRoot });
+        validateRecordEnvelope(manifest, record, {
+          repositoryRoot,
+          workspaceId: trustedPreservedContext?.workspace_id,
+          baseWorkspaceRevision: trustedPreservedContext?.base_workspace_revision,
+          trustedPreservedContext,
+        });
       }
     }
     if (classification === "export_only_diagnostic") {
@@ -2441,6 +2570,8 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     "preservedSchemaAuthority",
     "diagnosticRootCatalog",
     "serverOwnedRootCatalog",
+    "importableSuccessorCatalog",
+    "preservedExactComparePolicy",
     "importableCreatePolicies",
     "conditionalExactFieldPolicies",
     "terminalLifecyclePolicy",
@@ -2590,6 +2721,21 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     manifest.serverOwnedRootCatalog,
     EXPECTED_SERVER_OWNED_ROOT_CATALOG,
     "every server-owned root must forbid raw-derived content hashes",
+  );
+  assert.deepEqual(
+    manifest.importableSuccessorCatalog,
+    EXPECTED_IMPORTABLE_SUCCESSOR_CATALOG,
+    "every importable root must bind its real production successor",
+  );
+  assert.deepEqual(
+    Object.keys(manifest.importableSuccessorCatalog),
+    manifest.classifications.importable_current,
+    "importable successor catalog must cover every importable root in order",
+  );
+  assert.deepEqual(
+    manifest.preservedExactComparePolicy,
+    EXPECTED_PRESERVED_EXACT_COMPARE_POLICY,
+    "preserved records must require trusted server exact-compare context",
   );
   assert.deepEqual(
     manifest.importableCreatePolicies,

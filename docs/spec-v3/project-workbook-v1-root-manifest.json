@@ -205,6 +205,7 @@
       "message",
       "subject_ref"
     ],
+    "machineContentHashEncoding": "RFC8785_ORDERED_SHEET_ROW_PAIR_ARRAY_V1",
     "machineContentHashInput": [
       "__TF_MANIFEST_EXCEPT_MACHINE_CONTENT_SHA256",
       "__TF_CURRENT",
@@ -235,12 +236,13 @@
       "excludedSourceFields": "SERVER_PRESERVE_NOT_EXPORTED"
     },
     "projectionExclusions": {
-      "skuDrawers":["projectionMatch","fiveAxisProjectionReferences","validationSummary"]
+      "skuDrawers":["projectionMatch","fiveAxisProjectionReferences","validationSummary"],
+      "technologies":["compatiblePerformanceProfileIds"]
     },
     "recursiveProofRoots": [
       "ruleSettings","itemParts","methodProfiles","itemTypeProfiles","functionProfiles","compatibilityRules","affinityRules","affinityAxisWeights","collections","v23TechnologyDefinitions","skuDrawers","purchasableModels","v3Affixes","technologies","parameters","templates","modifiers","layers","affixes","qualityBands","affixScorePolicy","seriesShowcases","ruleGraphs","notes"
     ],
-    "recursiveTypeGraphSha256": "5d8c8e104f2e0a59d56cf888e0c55a5bdf4e1a1d6df4266a74235280fbc72cbe",
+    "recursiveTypeGraphSha256": "39e78e5a097c99c61439e9fac48de1613b339412f15e6eed6fd5d7850c90da6b",
     "typeRefs": {
       "ruleSettings":"lib/types.ts#WorkspaceRuleSettings",
       "itemParts":"lib/types.ts#ItemPartDefinition",
@@ -282,7 +284,7 @@
     "skuDrawers": {"schemaId":"project-workbook/root/skuDrawers/v1","identityFields":["id"],"revisionFields":["revision"],"hashFields":[],"exactFields":["createdAt"],"allowedFields":["id","revision","seriesId","targetPullKg","patchIds","modelIds","defaultModelId","displayOrder","status","createdAt","updatedAt"]},
     "purchasableModels": {"schemaId":"project-workbook/root/purchasableModels/v1","identityFields":["id"],"revisionFields":["revision"],"hashFields":[],"exactFields":["createdAt","configurationSnapshotId"],"allowedFields":["id","revision","skuId","name","modelVariantKey","stableModelKey","configIdBundleRef","action","hardness","lengthM","fishWeightGradeId","componentSelections","technologyIds","attributeAffixIds","passiveAffixIds","patchIds","price","unlockPolicyRef","commercePolicyRef","configurationSnapshotId","status","createdAt","updatedAt"]},
     "v3Affixes": {"schemaId":"project-workbook/root/v3Affixes/v1","identityFields":["id","version"],"revisionFields":["version"],"hashFields":[],"exactFields":[],"allowedFields":["id","version","name","category","itemPartId","generationPolicy","rarity","valueScore","tags","attributeEffects","passivePayload","description","enabled"]},
-    "technologies": {"schemaId":"project-workbook/root/technologies/v1","identityFields":["id","version"],"revisionFields":["version"],"hashFields":[],"exactFields":[],"allowedFields":["id","version","name","description","affixIds","compatiblePerformanceProfileIds","compatibleSeriesIds","minimumQualityId","generationPolicy","valueScorePolicy","enabled"]},
+    "technologies": {"schemaId":"project-workbook/root/technologies/v1","identityFields":["id","version"],"revisionFields":["version"],"hashFields":[],"exactFields":[],"allowedFields":["id","version","name","description","affixIds","compatibleSeriesIds","minimumQualityId","generationPolicy","valueScorePolicy","enabled"]},
     "parameters": {"schemaId":"project-workbook/root/parameters/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":["id"],"allowedFields":["id","key","label","itemKind","itemPartId","unit","precision","benefitMode","balanceWeight","normalizationScale","allowedOperations","targetRange","notes"]},
     "templates": {"schemaId":"project-workbook/root/templates/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":["sourceRevisionId","sourceSheetId","sourceRow"],"allowedFields":["id","name","fishMinKg","fishMaxKg","nominalFishKg","rangeSemantics","targetPullMinKgf","targetPullMaxKgf","nominalTargetPullKgf","templatePriority","tier","values","notes","methodId","itemPartId","sourceRevisionId","sourceSheetId","sourceRow","fishWeightLevel"]},
     "modifiers": {"schemaId":"project-workbook/root/modifiers/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":[],"allowedFields":["id","dimension","name","level","itemKinds","methodIds","rules","notes","enabled"]},

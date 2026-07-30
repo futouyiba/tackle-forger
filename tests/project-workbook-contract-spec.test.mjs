@@ -681,6 +681,9 @@ test("safe projections rederive unresolved diagnostic payloads", async () => {
   assert.deepEqual(manifest.recordSchemaAuthority.projectionExclusions.skuDrawers, [
     "projectionMatch", "fiveAxisProjectionReferences", "validationSummary",
   ]);
+  assert.deepEqual(manifest.recordSchemaAuthority.projectionExclusions.technologies, [
+    "compatiblePerformanceProfileIds",
+  ]);
   for (const [root, fields] of Object.entries(
     manifest.recordSchemaAuthority.projectionExclusions,
   )) {
@@ -689,6 +692,50 @@ test("safe projections rederive unresolved diagnostic payloads", async () => {
   const weakened = clone(manifest);
   weakened.recordSchemas.skuDrawers.allowedFields.push("validationSummary");
   assert.throws(() => validateProjectWorkbookManifest(weakened, roots), /allowed-field catalog drift|rederived/);
+
+  const technology = {
+    id: "technology:legacy-compatible",
+    version: 1,
+    name: "兼容技术",
+    description: "",
+    affixIds: [],
+    compatibleSeriesIds: [],
+    generationPolicy: "normal",
+    valueScorePolicy: "members_only",
+    enabled: true,
+  };
+  assert.equal(
+    validateImportableExactFields(manifest, "technologies", technology, undefined),
+    true,
+    "new Technology projection does not require historical Performance links",
+  );
+  assert.equal(
+    validateImportableExactFields(
+      manifest,
+      "technologies",
+      { ...technology, name: "兼容技术（修订）" },
+      technology,
+    ),
+    true,
+    "existing Technology remains editable without importing historical Performance links",
+  );
+  for (const existing of [undefined, technology]) {
+    assert.throws(
+      () => validateImportableExactFields(
+        manifest,
+        "technologies",
+        { ...technology, compatiblePerformanceProfileIds: ["performance:legacy"] },
+        existing,
+      ),
+      /compatiblePerformanceProfileIds is outside allowedFields/,
+    );
+  }
+  const performanceLeak = clone(manifest);
+  performanceLeak.recordSchemas.technologies.allowedFields.push("compatiblePerformanceProfileIds");
+  assert.throws(
+    () => validateProjectWorkbookManifest(performanceLeak, roots),
+    /allowed-field catalog drift|must be rederived/,
+  );
 });
 
 test("machine columns reject blank, null, numeric precision, date, boolean and error confusion", async () => {
@@ -755,10 +802,14 @@ test("machine columns reject blank, null, numeric precision, date, boolean and e
 });
 
 test("workbook manifest recomputes every declared hash from a closed workbook context", async () => {
-  const { manifest, manifestSource } = await fixture();
+  const { manifest, manifestSource, roots } = await fixture();
   const context = workbookContext(manifest, manifestSource);
   const row = workbookEnvelope(manifest, context);
   assert.equal(validateWorkbookEnvelope(manifest, row, context), true);
+  assert.equal(
+    manifest.canonicalization.machineContentHashEncoding,
+    "RFC8785_ORDERED_SHEET_ROW_PAIR_ARRAY_V1",
+  );
   assert.throws(
     () => validateWorkbookEnvelope(manifest, row),
     /context is required/,
@@ -811,6 +862,33 @@ test("workbook manifest recomputes every declared hash from a closed workbook co
       { ...context, rootManifestSource: JSON.stringify(includeMutation) },
     ),
     /include set exactly|not a declared machine-content sheet/,
+  );
+  for (const alternativeEncoding of [
+    "RFC8785_OBJECT_BY_SHEET_V1",
+    "CONCATENATED_ROWS_V1",
+    "STREAMED_SHEETS_V1",
+  ]) {
+    const encodingMutation = clone(manifest);
+    encodingMutation.canonicalization.machineContentHashEncoding = alternativeEncoding;
+    assert.throws(
+      () => computeWorkbookHashes(
+        encodingMutation,
+        { ...context, rootManifestSource: JSON.stringify(encodingMutation) },
+      ),
+      /hash encoding drift/,
+    );
+  }
+  const reorderedInput = clone(manifest);
+  [
+    reorderedInput.canonicalization.machineContentHashInput[1],
+    reorderedInput.canonicalization.machineContentHashInput[2],
+  ] = [
+    reorderedInput.canonicalization.machineContentHashInput[2],
+    reorderedInput.canonicalization.machineContentHashInput[1],
+  ];
+  assert.throws(
+    () => validateProjectWorkbookManifest(reorderedInput, roots),
+    /__TF_CURRENT|__TF_PRESERVED/,
   );
 
   const rehashedMutation = clone(context);

@@ -222,9 +222,9 @@ const EXPECTED_SHEETS = {
 };
 
 const EXPECTED_RECORD_SCHEMAS_SHA256 =
-  "7a0a04bac400c3045ff4fba4aa70f5923a06a7c2f96d904ed5bf1701fdce1571";
+  "8a0d59f3ee6ba9fb02a9f1fc0c4900ddf559aadcad8ea61bdf1dc8391d188d03";
 const EXPECTED_RECORD_SCHEMA_AUTHORITY_SHA256 =
-  "d8196415ff7b677a1371fb83842431ededf9d150993c3396069e53e7127346ab";
+  "8f0f5aca8831899913ed52a18ec66e874400e0d5f2d9d55516d27c7e1652ac51";
 
 function fail(message) {
   throw new Error(message);
@@ -1354,6 +1354,11 @@ export function computeWorkbookHashes(
     manifest.canonicalization.rootManifestHashInput,
     ["project-workbook-v1-root-manifest.json:utf8-bytes"],
   );
+  assert.equal(
+    manifest.canonicalization.machineContentHashEncoding,
+    "RFC8785_ORDERED_SHEET_ROW_PAIR_ARRAY_V1",
+    "machine content hash encoding drift",
+  );
   validateMachineContentSheets(manifest, context.machineSheets, repositoryRoot);
   const schemaInput = manifest.canonicalization.workbookSchemaHashInput.map((field) => {
     assert.ok(Object.hasOwn(manifest, field), `workbook schema hash input ${field} is unresolved`);
@@ -1999,6 +2004,7 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     "workbookSchemaHashInput",
     "recordHashInput",
     "diagnosticEvidenceHashInput",
+    "machineContentHashEncoding",
     "machineContentHashInput",
     "machineContentHashExcludes",
     "hashAlgorithm",
@@ -2040,6 +2046,10 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     "message",
     "subject_ref",
   ]);
+  assert.equal(
+    manifest.canonicalization.machineContentHashEncoding,
+    "RFC8785_ORDERED_SHEET_ROW_PAIR_ARRAY_V1",
+  );
   assert.deepEqual(manifest.canonicalization.machineContentHashInput, [
     "__TF_MANIFEST_EXCEPT_MACHINE_CONTENT_SHA256",
     "__TF_CURRENT",
@@ -2085,6 +2095,7 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     EXPECTED_ROOT_CLASSIFICATIONS.importable_current);
   assert.deepEqual(manifest.recordSchemaAuthority.projectionExclusions, {
     skuDrawers: ["projectionMatch", "fiveAxisProjectionReferences", "validationSummary"],
+    technologies: ["compatiblePerformanceProfileIds"],
   });
   assert.deepEqual(
     Object.keys(manifest.recordSchemaAuthority.typeRefs),

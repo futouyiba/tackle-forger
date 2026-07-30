@@ -344,6 +344,7 @@ test("record key JSON binds root identity arity, primitive types and preserved v
     validateMachineCell(keyColumn, '["tech:1",2]', "string", {
       manifest,
       root: "v23TechnologyDefinitions",
+      payload: { technologyId: "tech:1", revision: 2 },
     }),
     true,
   );
@@ -351,6 +352,7 @@ test("record key JSON binds root identity arity, primitive types and preserved v
     () => validateMachineCell(keyColumn, '["tech:1"]', "string", {
       manifest,
       root: "v23TechnologyDefinitions",
+      payload: { technologyId: "tech:1", revision: 2 },
     }),
     /arity/,
   );
@@ -358,6 +360,7 @@ test("record key JSON binds root identity arity, primitive types and preserved v
     () => validateMachineCell(keyColumn, '["tech:1",1.5]', "string", {
       manifest,
       root: "v23TechnologyDefinitions",
+      payload: { technologyId: "tech:1", revision: 1.5 },
     }),
     /safe integer/,
   );
@@ -365,6 +368,7 @@ test("record key JSON binds root identity arity, primitive types and preserved v
     () => validateMachineCell(keyColumn, '["tech:1","2"]', "string", {
       manifest,
       root: "v23TechnologyDefinitions",
+      payload: { technologyId: "tech:1", revision: "2" },
     }),
     /revision must be a safe integer/,
   );
@@ -373,6 +377,12 @@ test("record key JSON binds root identity arity, primitive types and preserved v
       manifest,
       root: "fiveAxisVertexSets",
       variant: "LegacyFiveAxisVertexSet",
+      payload: {
+        definitionId: "definition:1",
+        definitionVersion: "v1",
+        fishWeightGradeId: "grade:1",
+        fiveAxisRuleVersion: "rules:v1",
+      },
     }),
     true,
   );
@@ -385,16 +395,78 @@ test("record key JSON binds root identity arity, primitive types and preserved v
         manifest,
         root: "fiveAxisVertexSets",
         variant: "LegacyFiveAxisVertexSet",
+        payload: {
+          definitionId: "definition:1",
+          definitionVersion: "v1",
+          fishWeightGradeId: 1,
+          fiveAxisRuleVersion: "rules:v1",
+        },
       },
     ),
     /fishWeightGradeId must be NFC text/,
+  );
+  assert.equal(
+    validateMachineCell(keyColumn, '["vertex:1"]', "string", {
+      manifest,
+      root: "fiveAxisVertexSets",
+      payload: { vertexSetId: "vertex:1" },
+    }),
+    true,
+  );
+  assert.throws(
+    () => validateMachineCell(keyColumn, '["series:other"]', "string", {
+      manifest,
+      root: "seriesDefinitions",
+      payload: { id: "series:actual" },
+    }),
+    /record key does not match payload identity/,
+  );
+  assert.throws(
+    () => validateMachineCell(keyColumn, '["tech:other",1]', "string", {
+      manifest,
+      root: "v23TechnologyDefinitions",
+      payload: { technologyId: "tech:actual", revision: 1 },
+    }),
+    /record key does not match payload identity/,
+  );
+  assert.equal(
+    validateMachineCell(keyColumn, '["template:1","revision:2"]', "string", {
+      manifest,
+      root: "v23FunctionTemplates",
+      payload: {
+        ref: {
+          templateId: "template:1",
+          revisionId: "revision:2",
+          contentHash: "a".repeat(64),
+        },
+      },
+    }),
+    true,
+  );
+  assert.equal(
+    validateMachineCell(keyColumn, '["$singleton"]', "string", {
+      manifest,
+      root: "notes",
+      payload: { value: "note" },
+    }),
+    true,
+  );
+  assert.throws(
+    () => validateMachineCell(keyColumn, '["series:1"]', "string", {
+      manifest,
+      root: "seriesDefinitions",
+      payload: { revision: 1 },
+    }),
+    /identity is missing from payload/,
   );
   assert.throws(
     () => validateMachineCell(keyColumn, '["vertex:1"]', "string", {
       manifest,
       root: "fiveAxisVertexSets",
+      variant: "LegacyFiveAxisVertexSet",
+      payload: { vertexSetId: "vertex:1" },
     }),
-    /explicit preserved union variant/,
+    /caller variant contradicts/,
   );
 });
 
@@ -453,7 +525,12 @@ test("record revision is typed RFC8785 scalar JSON and matches payload plus iden
       manifest,
       root: "fiveAxisVertexSets",
       variant: "LegacyFiveAxisVertexSet",
-      payload: { definitionVersion: "v1" },
+      payload: {
+        definitionId: "definition:1",
+        definitionVersion: "v1",
+        fishWeightGradeId: "grade:1",
+        fiveAxisRuleVersion: "rules:v1",
+      },
       recordKey: ["definition:1", "v1", "grade:1", "rules:v1"],
     }),
     true,
@@ -463,7 +540,7 @@ test("record revision is typed RFC8785 scalar JSON and matches payload plus iden
       manifest,
       root: "fiveAxisVertexSets",
       variant: "FiveAxisVertexSet",
-      payload: { fiveAxisDefinitionVersion: "v2" },
+      payload: { vertexSetId: "vertex:1", fiveAxisDefinitionVersion: "v2" },
       recordKey: ["vertex:1"],
     }),
     true,
@@ -473,7 +550,7 @@ test("record revision is typed RFC8785 scalar JSON and matches payload plus iden
       manifest,
       root: "fiveAxisVertexSets",
       variant: "FiveAxisVertexSet",
-      payload: { fiveAxisDefinitionVersion: "v2" },
+      payload: { vertexSetId: "vertex:1", fiveAxisDefinitionVersion: "v2" },
       recordKey: ["vertex:1"],
     }),
     /non-empty NFC text/,

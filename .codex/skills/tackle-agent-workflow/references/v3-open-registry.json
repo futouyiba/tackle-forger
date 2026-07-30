@@ -2,7 +2,7 @@
   "format": "tackle-v3-open-registry/v1",
   "source": {
     "path": "docs/spec-v3",
-    "sha256": "31770e9ff5a5cff963b39ee2d0a8e30470f7f0f1990e8ff6af2f1e7231f5f55f"
+    "sha256": "4fae888abfdd60623136c83cadb4169108fb0211d48f767d8de7db6fd229a72c"
   },
   "entries": [
     {

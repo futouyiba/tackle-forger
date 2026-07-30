@@ -221,6 +221,32 @@ function expectedRecordKeyFields(manifest, root, variant) {
   return selected.recordKeyFields;
 }
 
+function resolvePayloadVariant(manifest, root, payload, callerVariant, repositoryRoot) {
+  const catalog = manifest.preservedRootCatalog[root];
+  if (!catalog || catalog.carrier !== "variant_records") {
+    assert.equal(callerVariant, undefined, `${root} does not accept a caller variant`);
+    return undefined;
+  }
+  assert.ok(payload && Object.getPrototypeOf(payload) === Object.prototype,
+    `${root} variant resolution requires an object payload`);
+  const [sourcePath] = catalog.typeRef.split("#");
+  const source = readFileSync(path.join(repositoryRoot, sourcePath), "utf8");
+  const candidates = catalog.variants.filter((variant) => {
+    const fields = interfaceFieldDefinitions(source, variant.type);
+    if (!fields) return false;
+    if (!Object.keys(payload).every((field) => fields.has(field))) return false;
+    return variant.recordKeyFields.every(
+      (field) => valueAtFieldPath(payload, field) !== undefined,
+    );
+  });
+  assert.equal(candidates.length, 1, `${root} payload must prove exactly one closed union variant`);
+  const resolved = candidates[0].type;
+  if (callerVariant !== undefined) {
+    assert.equal(callerVariant, resolved, `${root} caller variant contradicts the closed payload`);
+  }
+  return resolved;
+}
+
 function fieldPathType(source, typeName, fieldPath) {
   let currentType = typeName;
   let fieldType = "";
@@ -330,11 +356,20 @@ export function validateMachineCell(columnSchema, value, cellKind = "string", co
     assert.match(value, /^[0-9a-f]{64}$/);
   } else if (format === "rfc8785-revision-scalar") {
     assert.ok(context.manifest && context.root, "record revision requires manifest and root");
+    assert.ok(Object.hasOwn(context, "payload"), "record revision requires projected payload");
+    const repositoryRoot = context.repositoryRoot ?? process.cwd();
+    const effectiveVariant = resolvePayloadVariant(
+      context.manifest,
+      context.root,
+      context.payload,
+      context.variant,
+      repositoryRoot,
+    );
     const contract = revisionContract(
       context.manifest,
       context.root,
-      context.variant,
-      context.repositoryRoot ?? process.cwd(),
+      effectiveVariant,
+      repositoryRoot,
     );
     const parsed = JSON.parse(value);
     assert.equal(canonicalJson(parsed), value, `${columnSchema.name} must be canonical scalar JSON`);
@@ -345,7 +380,6 @@ export function validateMachineCell(columnSchema, value, cellKind = "string", co
     if (contract.field === null) {
       assert.equal(parsed, null, `${context.root} has no revision field`);
     } else {
-      assert.ok(Object.hasOwn(context, "payload"), "record revision requires projected payload");
       const payloadRevision = valueAtFieldPath(context.payload, contract.field);
       if (parsed === null) {
         assert.equal(contract.optional, true, `${context.root}.${contract.field} is required`);
@@ -378,12 +412,21 @@ export function validateMachineCell(columnSchema, value, cellKind = "string", co
     if (format === "rfc8785-key-json") {
       assert.ok(Array.isArray(parsed));
       assert.ok(context.manifest && context.root, "record key validation requires manifest and root");
-      const fields = expectedRecordKeyFields(context.manifest, context.root, context.variant);
+      assert.ok(Object.hasOwn(context, "payload"), "record key validation requires projected payload");
+      const repositoryRoot = context.repositoryRoot ?? process.cwd();
+      const effectiveVariant = resolvePayloadVariant(
+        context.manifest,
+        context.root,
+        context.payload,
+        context.variant,
+        repositoryRoot,
+      );
+      const fields = expectedRecordKeyFields(context.manifest, context.root, effectiveVariant);
       const kinds = recordKeyComponentKinds(
         context.manifest,
         context.root,
-        context.variant,
-        context.repositoryRoot ?? process.cwd(),
+        effectiveVariant,
+        repositoryRoot,
       );
       assert.equal(parsed.length, fields.length, `${context.root} record key arity mismatch`);
       for (const [index, component] of parsed.entries()) {
@@ -397,6 +440,19 @@ export function validateMachineCell(columnSchema, value, cellKind = "string", co
           assert.ok(isInteger, `${fields[index]} must be a safe integer`);
         } else {
           assert.ok(isString || isInteger, `${fields[index]} must be NFC text or a safe integer`);
+        }
+        if (fields[index] !== "$singleton") {
+          const payloadIdentity = valueAtFieldPath(context.payload, fields[index]);
+          assert.notEqual(
+            payloadIdentity,
+            undefined,
+            `${context.root}.${fields[index]} identity is missing from payload`,
+          );
+          assert.deepEqual(
+            component,
+            payloadIdentity,
+            `${context.root}.${fields[index]} record key does not match payload identity`,
+          );
         }
       }
     }

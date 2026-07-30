@@ -51,6 +51,7 @@ type CapabilityCode =
   | "config.id.reserve" | "config.id.policy.publish" | "config.id.legacy_import" | "config.id.ledger.correct"
   | "config.target.scan" | "config.target.scan.approve" | "config.target.catalog.publish"
   | "config.export.preview" | "config.export.commit"
+  | "project.workbook.preview" | "project.workbook.commit" | "project.workbook.export"
   | "validation.warning.acknowledge" | "pricing.warning.acknowledge"
   | "validation.waiver.request" | "validation.waiver.approve"
   | "validation.recompute" | "rules.source_change_draft.create"
@@ -74,6 +75,7 @@ type ActionCode =
   | "import_legacy_config_id" | "correct_config_id_ledger_metadata"
   | "scan_config_target" | "approve_config_target_scan" | "publish_config_target_catalog"
   | "preview_config_export" | "commit_config_export"
+  | "preview_project_workbook_import" | "commit_project_workbook_import" | "export_project_workbook"
   | "acknowledge_validation_warning" | "acknowledge_price_warning"
   | "request_validation_waiver" | "approve_validation_waiver"
   | "recompute_validation" | "create_rule_source_change_draft"
@@ -94,6 +96,9 @@ type ActionCode =
 | `publish_config_target_catalog` | `config.target.catalog.publish` |
 | `preview_config_export` | `config.export.preview` |
 | `commit_config_export` | `config.export.commit` |
+| `preview_project_workbook_import` | `project.workbook.preview` |
+| `commit_project_workbook_import` | `project.workbook.commit` |
+| `export_project_workbook` | `project.workbook.export` |
 | `acknowledge_validation_warning` | `validation.warning.acknowledge` |
 | `request_validation_waiver` | `validation.waiver.request` |
 | `approve_validation_waiver` | `validation.waiver.approve` |
@@ -104,6 +109,8 @@ type ActionCode =
 读接口必须按当前对象、策略版本和操作者返回这些`ActionAvailability`；命令端再次校验Capability和`separationOfDutiesPolicy`。发布策略还必须校验其目标目录/Manifest覆盖，浏览器目录授权不能替代任何服务端权限。
 
 `LocalActionAvailability`是`open009-2026-07-27-v2`发布的纯本地动作契约，由当前应用版本作为不可变客户端契约随静态资源一同提供，不依赖服务端、用户对象或网络响应，因此服务不可用时仍可确定性计算。它只可控制同一标签页浏览器内存中的本地Excel副本与临时态，不携带Capability、`EntityRef`或`commandPayloadRef`，也不得映射、升级或提交为任何`ActionCode`。只要动作会读取共享状态、调用服务器Action、修改导入源文件、写入SQLite、日志、IndexedDB/localStorage、发布、正式导出或触发外部副作用，就不属于`LocalActionCode`，必须使用服务端返回的`ActionAvailability`并在命令端重新鉴权。客户端可以按会话内存状态计算本地动作是否可用，但不能据此推断任何服务端动作；匿名本地运行时尚未实现前，不得用本契约声称功能已可用。
+
+`project-workbook/v1`只使用三个服务端动作：`preview_project_workbook_import`解析并保存绑定工作区revision与各类hash的只读计划；`commit_project_workbook_import`只消费该计划的不可篡改payload引用与幂等键，并在执行时重新鉴权、重验计划后原子提交和回读；`export_project_workbook`从单一一致性revision生成机器Manifest与派生可读Sheet。三个动作分别要求`project.workbook.preview`、`project.workbook.commit`与`project.workbook.export`，互不蕴含。预览返回`enabled=true`不能授权提交；导出文件不能作为客户端命令payload绕过服务端计划。直接提交工作簿、替换plan hash、跨工作区使用plan、计划过期或当前revision变化都必须拒绝；可解析的可变冲突按第15.1节`REPLAN_REHASH_AND_REAUTHORIZE`生成新计划，身份/冻结/引用/schema/工作区冲突不生成可提交payload。
 
 Series、Part、SKU、Model的ID终身稳定且不复用；改名和更换默认Model不改ID。SKU改换Part或weightBandId必须遵守第6.6节；派生拉力不是身份字段。Revision只增不改；已批准/已发布revision不可原地改写。Snapshot ID与payload/hash永久绑定。前端不得从角色名、状态或颜色猜服务端动作；读接口返回`ActionAvailability[]`，写接口再次鉴权，纯本地动作只消费上述`LocalActionAvailability`。
 

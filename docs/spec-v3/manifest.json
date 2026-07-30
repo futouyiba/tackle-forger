@@ -2,6 +2,13 @@
   "format": "tackle-v3-modules/v1",
   "canonicalRoot": "docs/spec-v3",
   "compatibilityMirror": "docs/tackle-forger-development-spec-v3.md",
+  "contracts": [
+    {
+      "id": "project-workbook/v1",
+      "path": "docs/spec-v3/project-workbook-v1-root-manifest.json",
+      "sha256": "de075dcbea0e565f85d7914b7e83479997ac9d7af57d83e204a9ae0b8de02f68"
+    }
+  ],
   "readingProtocol": {
     "alwaysRead": [
       "docs/spec-v3/README.md",
@@ -84,7 +91,7 @@
       ],
       "title": "版本、快照、飞书、工作区与回归",
       "path": "docs/spec-v3/04-persistence-and-lifecycle.md",
-      "sha256": "5b218b56a2c1d5fe85307a76ef56c441e0e07742e6b5c5815bc98105c29305ba"
+      "sha256": "0be474c252c8726f66a9a38d8b860c418e0d3d6a56b2517b08f8fb7bf7ca5b5d"
     },
     {
       "id": "05",
@@ -117,7 +124,7 @@
       ],
       "title": "交互与后端统一需求契约",
       "path": "docs/spec-v3/07-interaction-contract.md",
-      "sha256": "5a5d5a75598ed035c5a86b6d2641cb55dc1a9f60e99f53f03d0905571be6f12b"
+      "sha256": "1c7f0762c09ecc59e7a5c0af91dab48680f7105fc1c12e5bca872ca0382ea1fe"
     },
     {
       "id": "08",

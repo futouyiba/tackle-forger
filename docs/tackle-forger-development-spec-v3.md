@@ -1301,14 +1301,42 @@ interface PatchSubjectMigrationResult {
 
 ### 15.1 项目数据Excel往返
 
-Excel只是当前项目数据的导入/导出载体，不决定记录的编辑资格或计算资格。内置xlsx/JS快照仅是新项目默认基础数据与发布构建输入；用户导入、UI新增和内置记录遵循相同领域规则，不再区分“权威/自定义”资格。
+Excel只是当前项目数据的导入/导出载体，不决定记录的编辑资格或计算资格。内置xlsx/JS快照仅是新项目默认基础数据与发布构建输入；用户导入、UI新增和内置记录遵循相同领域规则，不再区分“权威/自定义”资格。项目工作簿不得承担跨工作区克隆、恢复、正式配置交付、凭据传递或外部绑定迁移。
 
-导入必须显式选择：
+一期项目往返契约固定为`project-workbook/v1`。机器权威是版本化根清单`docs/spec-v3/project-workbook-v1-root-manifest.json`，其完整UTF-8内容由`docs/spec-v3/manifest.json`以SHA-256绑定。清单从当前`WorkspaceState`提取93个顶层根，并要求每个根恰好属于下列一类；新增、遗漏、重复或未知分类均使契约检查失败：
 
-- `REPLACE_PROJECT`：在完整校验、引用检查与可恢复备份后替换当前项目数据；
-- `MERGE_BY_STABLE_ID`：按稳定ID合并，引用中的ID不得因显示名变化重写。
+| 分类 | 当前根数 | 工作簿语义 |
+| --- | ---: | --- |
+| `importable_current` | 48 | 可按领域命令导入的当前可变项目数据；仍须逐记录校验稳定ID、revision、引用与不变量。 |
+| `preserved_frozen` | 14 | 为同工作区无损往返携带的冻结版本、历史或治理证据；只允许内容与hash逐字节/规范化等价，不得新增解释、改写或删除。 |
+| `server_owned` | 7 | 工作区身份、schema、Config ID治理、幂等与审计等服务端权威；工作簿只绑定服务端生成的非敏感hash/reference，不能携带可回写payload。 |
+| `forbidden` | 15 | 飞书token/工作簿/源revision、AI规则源外部目标、数据源/配置导出、未知原始迁移payload等外部绑定、敏感证据或正式交付配置；不得进入工作簿机器payload，出现即阻断。 |
+| `export_only_diagnostic` | 9 | 可读且已闭合/脱敏的诊断投影；导入时不生成写操作，不能覆盖服务端重算结果。 |
 
-导出包含约定范围内的当前完整项目数据，并须能无损重新导入。已被引用的稳定ID不得直接改名换ID；记录的其他业务字段均可按其领域命令CRUD。该项目数据往返与第25节正式配置Git导出是两条独立链路，不能互相冒充。
+工作簿必须包含一个closed-schema机器Manifest，至少绑定`contractVersion=project-workbook/v1`、源`workspaceId`、导出时`workspaceRevision`、根清单hash、规范化数据hash、工作表清单及每张表的规范化hash。面向人工的目录、说明、统计、冲突预览和诊断Sheet全部由该机器Manifest与类型化记录确定性派生；它们不是第二权威，修改展示文案、排序、公式或诊断单元格不得改变机器payload。未知Sheet、未知列、重复稳定ID、重复记录键、公式未固化、hash不符或closed schema未知字段一律拒绝，不以“尽量导入”降级。`feishuWorkbooks`、`feishuSourceRevisions`、`aiRuleSourceChangeDrafts`、`dataSources`、含`rawWorkspacePayload/rawSourcePayload/preservedPayload`的迁移根及其他`forbidden`根的payload不得导出；`server_owned`与`forbidden`根如需证明一致，只能绑定服务端生成的非敏感content hash或opaque reference，不得携带`spreadsheetToken`、`wikiToken`、`appToken`、share URL、凭据、未知原始payload或可重放外部句柄。
+
+导入必须显式选择且语义固定：
+
+- `MERGE_BY_STABLE_ID`：只按稳定ID合并。工作簿中缺少当前记录表示`NO_OP`，绝不推断删除；显示名变化不得重写引用ID。
+- `REPLACE_PROJECT`：工作簿中缺少当前`importable_current`记录表示`REMOVAL_INTENT`，不是静默忽略。移除只可规划为该实体已有的专用安全删除/废弃命令，并须重新校验生命周期、引用和冻结边界；没有专用安全命令或资格不满足时返回`REMOVAL_NOT_SUPPORTED`并阻断整次提交。`preserved_frozen`、`server_owned`、`forbidden`与`export_only_diagnostic`永远不能借“缺少”表达删除。
+
+两种模式都只允许目标`workspaceId`与源工作区相同；不提供“另存为”、跨工作区克隆或历史恢复语义。稳定ID已存在但实体类型、父链或不可变身份字段不同是`IDENTITY_CONFLICT`；冻结内容/hash不同是`FROZEN_CONTENT_CONFLICT`；引用不闭合是`REFERENCE_INTEGRITY_CONFLICT`；schema/根清单不兼容是`SCHEMA_CONFLICT`；工作区不同是`WORKSPACE_CONFLICT`。这些冲突均硬阻断，不能由显示名、人工文案或“以Excel为准”覆盖。
+
+预览在只读快照上规范化工作簿并生成完整计划，计划至少绑定`workspaceId + baseWorkspaceRevision + workbookContentHash + rootManifestHash + mode + normalizedOperationsHash`，逐项列出create/update/no-op/removal intent、before/after hash、引用影响、Issue与所需Capability。若提交前仅有可解析的当前可变值或可变revision冲突，旧计划失效并固定执行`REPLAN_REHASH_AND_REAUTHORIZE`：基于最新工作区重新规划、重新计算hash、重新展示差异并重新授权；不得把旧人工确认套到新计划。上述身份、冻结、引用、schema或工作区冲突不进入自动replan，直接阻断。
+
+提交必须消费服务端保存的精确预览计划引用和幂等键，在执行时重新鉴权并重验全部绑定值。任何plan、工作簿、根清单、当前revision、引用或授权变化都不得部分执行。全部领域命令、冻结证据检查、幂等记录和审计在同一事务原子提交；任一失败整体回滚，不留下半导入、半删除或临时持久状态。成功后必须从持久层回读，证明工作区revision严格前进、操作集合与提交计划一致、冻结/服务端/禁止根未变，并生成绑定提交revision与结果hash的结果记录；超时先按幂等键回读，不能猜测成功或重复提交。
+
+导出动作同样在执行时鉴权并从单一一致性工作区revision生成机器Manifest、类型化记录和派生可读Sheet。对同一revision、根清单和导出器版本，规范化机器内容与hash必须确定一致；无并发写入的“导出→同工作区MERGE预览”必须为零写操作，“导出→同工作区REPLACE预览”不得产生删除或冻结差异。项目数据往返与第25节正式配置Git导出是两条独立链路，项目工作簿不得包含或冒充`ConfigExportPackage`、Config ID分配证据、环境凭据或已提交配置文件。
+
+正常路径：导出当前工作区，在同一工作区以`MERGE_BY_STABLE_ID`预览为零写操作；修改一个允许字段后重新预览、确认并原子提交，回读hash一致。
+
+边界：MERGE缺少记录不删除；REPLACE缺少记录只产生removal intent，没有专用安全删除命令时以`REMOVAL_NOT_SUPPORTED`阻断。
+
+冲突：可解析的当前可变冲突要求重新规划、重新hash和重新授权；身份、冻结、引用、schema与工作区冲突硬阻断。
+
+恢复：提交失败或超时按幂等键回读；无法证明完整提交时工作区及冻结历史保持原样，在最新revision上重新预览。
+
+权限：预览、提交和导出分别由第24.1节的服务端动作与Capability控制；预览许可不授权提交，下载文件不授权回写。
 
 ## 16. 部署基线
 
@@ -3023,6 +3051,7 @@ type CapabilityCode =
   | "config.id.reserve" | "config.id.policy.publish" | "config.id.legacy_import" | "config.id.ledger.correct"
   | "config.target.scan" | "config.target.scan.approve" | "config.target.catalog.publish"
   | "config.export.preview" | "config.export.commit"
+  | "project.workbook.preview" | "project.workbook.commit" | "project.workbook.export"
   | "validation.warning.acknowledge" | "pricing.warning.acknowledge"
   | "validation.waiver.request" | "validation.waiver.approve"
   | "validation.recompute" | "rules.source_change_draft.create"
@@ -3046,6 +3075,7 @@ type ActionCode =
   | "import_legacy_config_id" | "correct_config_id_ledger_metadata"
   | "scan_config_target" | "approve_config_target_scan" | "publish_config_target_catalog"
   | "preview_config_export" | "commit_config_export"
+  | "preview_project_workbook_import" | "commit_project_workbook_import" | "export_project_workbook"
   | "acknowledge_validation_warning" | "acknowledge_price_warning"
   | "request_validation_waiver" | "approve_validation_waiver"
   | "recompute_validation" | "create_rule_source_change_draft"
@@ -3066,6 +3096,9 @@ type ActionCode =
 | `publish_config_target_catalog` | `config.target.catalog.publish` |
 | `preview_config_export` | `config.export.preview` |
 | `commit_config_export` | `config.export.commit` |
+| `preview_project_workbook_import` | `project.workbook.preview` |
+| `commit_project_workbook_import` | `project.workbook.commit` |
+| `export_project_workbook` | `project.workbook.export` |
 | `acknowledge_validation_warning` | `validation.warning.acknowledge` |
 | `request_validation_waiver` | `validation.waiver.request` |
 | `approve_validation_waiver` | `validation.waiver.approve` |
@@ -3076,6 +3109,8 @@ type ActionCode =
 读接口必须按当前对象、策略版本和操作者返回这些`ActionAvailability`；命令端再次校验Capability和`separationOfDutiesPolicy`。发布策略还必须校验其目标目录/Manifest覆盖，浏览器目录授权不能替代任何服务端权限。
 
 `LocalActionAvailability`是`open009-2026-07-27-v2`发布的纯本地动作契约，由当前应用版本作为不可变客户端契约随静态资源一同提供，不依赖服务端、用户对象或网络响应，因此服务不可用时仍可确定性计算。它只可控制同一标签页浏览器内存中的本地Excel副本与临时态，不携带Capability、`EntityRef`或`commandPayloadRef`，也不得映射、升级或提交为任何`ActionCode`。只要动作会读取共享状态、调用服务器Action、修改导入源文件、写入SQLite、日志、IndexedDB/localStorage、发布、正式导出或触发外部副作用，就不属于`LocalActionCode`，必须使用服务端返回的`ActionAvailability`并在命令端重新鉴权。客户端可以按会话内存状态计算本地动作是否可用，但不能据此推断任何服务端动作；匿名本地运行时尚未实现前，不得用本契约声称功能已可用。
+
+`project-workbook/v1`只使用三个服务端动作：`preview_project_workbook_import`解析并保存绑定工作区revision与各类hash的只读计划；`commit_project_workbook_import`只消费该计划的不可篡改payload引用与幂等键，并在执行时重新鉴权、重验计划后原子提交和回读；`export_project_workbook`从单一一致性revision生成机器Manifest与派生可读Sheet。三个动作分别要求`project.workbook.preview`、`project.workbook.commit`与`project.workbook.export`，互不蕴含。预览返回`enabled=true`不能授权提交；导出文件不能作为客户端命令payload绕过服务端计划。直接提交工作簿、替换plan hash、跨工作区使用plan、计划过期或当前revision变化都必须拒绝；可解析的可变冲突按第15.1节`REPLAN_REHASH_AND_REAUTHORIZE`生成新计划，身份/冻结/引用/schema/工作区冲突不生成可提交payload。
 
 Series、Part、SKU、Model的ID终身稳定且不复用；改名和更换默认Model不改ID。SKU改换Part或weightBandId必须遵守第6.6节；派生拉力不是身份字段。Revision只增不改；已批准/已发布revision不可原地改写。Snapshot ID与payload/hash永久绑定。前端不得从角色名、状态或颜色猜服务端动作；读接口返回`ActionAvailability[]`，写接口再次鉴权，纯本地动作只消费上述`LocalActionAvailability`。
 

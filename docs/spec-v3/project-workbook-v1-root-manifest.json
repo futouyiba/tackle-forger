@@ -1,0 +1,166 @@
+{
+  "schema": "project-workbook-root-manifest/v1",
+  "contractVersion": "project-workbook/v1",
+  "workspaceStateSource": {
+    "path": "lib/types.ts",
+    "interface": "WorkspaceState",
+    "rootCount": 93
+  },
+  "classifications": {
+    "importable_current": [
+      "ruleSettings",
+      "itemParts",
+      "methodProfiles",
+      "itemTypeProfiles",
+      "functionProfiles",
+      "performanceProfiles",
+      "performanceSummaryDefinitions",
+      "qualityProfiles",
+      "projectionPatches",
+      "compatibilityRules",
+      "affinityRules",
+      "affinityAxisWeights",
+      "collections",
+      "seriesDefinitions",
+      "v23SeriesPartHeads",
+      "v23SkuDrawerHeads",
+      "v23AffixDefinitions",
+      "v23TechnologyDefinitions",
+      "v23TechnologyHeads",
+      "v23FunctionTemplates",
+      "partConstraintSets",
+      "skuDrawers",
+      "purchasableModels",
+      "candidateSearchRecipes",
+      "v3Affixes",
+      "technologies",
+      "canonicalRuleSourceDrafts",
+      "weightTemplatePolicyDrafts",
+      "qualityValuePolicyDrafts",
+      "pricingPolicyDrafts",
+      "fiveAxisViewDefinitions",
+      "fiveAxisVertexSets",
+      "currentFiveAxisDispositionCatalogRevisionId",
+      "fiveAxisVertexGroupStates",
+      "parameters",
+      "templates",
+      "modifiers",
+      "layers",
+      "affixes",
+      "qualityBands",
+      "affixScorePolicy",
+      "recipes",
+      "seriesShowcases",
+      "candidates",
+      "officialSkus",
+      "detailOverrides",
+      "ruleGraphs",
+      "notes"
+    ],
+    "preserved_frozen": [
+      "ruleSetVersions",
+      "patchLedger",
+      "v23SeriesPartRevisions",
+      "v23SkuDrawerRevisions",
+      "configurationSnapshots",
+      "pricingPolicyVersions",
+      "reductionStackingPolicyVersions",
+      "fiveAxisDispositionCatalogRevisions",
+      "workspacePolicies",
+      "patchReviewBatches",
+      "patchValidationWaivers",
+      "patchValidationWaiverDecisions",
+      "ruleChangeProposals",
+      "revisions"
+    ],
+    "server_owned": [
+      "workspaceId",
+      "schemaVersion",
+      "configIdGovernance",
+      "identityAuditLog",
+      "commandIdempotencyRecords",
+      "governanceAuditLog",
+      "importedAt"
+    ],
+    "forbidden": [
+      "feishuWorkbooks",
+      "feishuSourceRevisions",
+      "aiRuleSourceChangeDrafts",
+      "aiArtifactProvenanceSyncRecords",
+      "exportTargetProfiles",
+      "configEnvironmentProfiles",
+      "configExportMappings",
+      "dataSources",
+      "dataSourceImports",
+      "dataSourceBindings",
+      "dataSourceWritebacks",
+      "feishuShareLinkHistory",
+      "v23MigrationSourceEvidence",
+      "v23LegacyReadAdapters",
+      "migrationReviewItems"
+    ],
+    "export_only_diagnostic": [
+      "derivedProjections",
+      "projectionMatches",
+      "candidateRuns",
+      "candidateMaterializations",
+      "sourceIdentityMigrationReports",
+      "modelPricingEvaluations",
+      "aiAssessments",
+      "upgradeCandidates",
+      "ruleRuns"
+    ]
+  },
+  "modes": {
+    "MERGE_BY_STABLE_ID": {
+      "missingRecord": "NO_OP",
+      "identityRule": "MATCH_STABLE_ID_ONLY"
+    },
+    "REPLACE_PROJECT": {
+      "missingRecord": "REMOVAL_INTENT",
+      "identityRule": "MATCH_STABLE_ID_ONLY"
+    }
+  },
+  "removal": {
+    "allowed": "DEDICATED_SAFE_REMOVAL_COMMAND_ONLY",
+    "unsupportedCode": "REMOVAL_NOT_SUPPORTED"
+  },
+  "conflicts": {
+    "replanAndRehash": [
+      "MUTABLE_VALUE_CONFLICT",
+      "MUTABLE_REVISION_CONFLICT"
+    ],
+    "hardBlock": [
+      "IDENTITY_CONFLICT",
+      "FROZEN_CONTENT_CONFLICT",
+      "REFERENCE_INTEGRITY_CONFLICT",
+      "SCHEMA_CONFLICT",
+      "WORKSPACE_CONFLICT"
+    ]
+  },
+  "plan": {
+    "binds": [
+      "workspaceId",
+      "baseWorkspaceRevision",
+      "workbookContentHash",
+      "rootManifestHash",
+      "mode",
+      "normalizedOperationsHash"
+    ],
+    "mutableConflictResolution": "REPLAN_REHASH_AND_REAUTHORIZE",
+    "commitRequiresExactPlanMatch": true
+  },
+  "actions": {
+    "preview": "preview_project_workbook_import",
+    "commit": "commit_project_workbook_import",
+    "export": "export_project_workbook"
+  },
+  "transaction": {
+    "authorizationAtExecution": true,
+    "atomicCommit": true,
+    "idempotentCommit": true,
+    "readbackRequired": true,
+    "sameWorkspaceOnly": true,
+    "crossWorkspaceCloneOrRestore": false
+  }
+}

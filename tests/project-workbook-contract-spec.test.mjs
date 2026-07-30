@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
+  CLASSIFICATIONS,
+  EXPECTED_ROOT_CLASSIFICATIONS,
   checkProjectWorkbookContract,
   parseWorkspaceStateRoots,
   validateProjectWorkbookManifest,
@@ -44,15 +46,34 @@ test("root classification rejects new, missing and duplicate roots", async () =>
     missing.classifications.importable_current.filter((root) => root !== "parameters");
   assert.throws(
     () => validateProjectWorkbookManifest(missing, roots),
-    /classified exactly once/,
+    /exact expected classifications|classified exactly once/,
   );
 
   const duplicate = clone(manifest);
   duplicate.classifications.server_owned.push("parameters");
   assert.throws(
     () => validateProjectWorkbookManifest(duplicate, roots),
-    /classified more than once/,
+    /exact expected classifications|classified more than once/,
   );
+});
+
+test("every one of the 93 roots rejects movement to any other classification", async () => {
+  const { manifest, roots } = await fixture();
+  for (const [source, sourceRoots] of Object.entries(EXPECTED_ROOT_CLASSIFICATIONS)) {
+    for (const root of sourceRoots) {
+      for (const target of CLASSIFICATIONS.filter((classification) => classification !== source)) {
+        const moved = clone(manifest);
+        moved.classifications[source] =
+          moved.classifications[source].filter((candidate) => candidate !== root);
+        moved.classifications[target].push(root);
+        assert.throws(
+          () => validateProjectWorkbookManifest(moved, roots),
+          /exact expected classifications/,
+          `${root} moved from ${source} to ${target}`,
+        );
+      }
+    }
+  }
 });
 
 test("MERGE missing is no-op while REPLACE missing is removal intent", async () => {
@@ -130,6 +151,60 @@ test("sensitive and external-handle roots cannot enter preserved or importable p
   }
 });
 
+test("legacy, mixed-lifecycle and raw-evidence roots use safe projections", async () => {
+  const { manifest } = await fixture();
+  assert.ok(manifest.classifications.preserved_frozen.includes("projectionPatches"));
+  assert.ok(manifest.classifications.preserved_frozen.includes("performanceSummaryDefinitions"));
+  assert.ok(manifest.classifications.preserved_frozen.includes("fiveAxisViewDefinitions"));
+  assert.ok(manifest.classifications.preserved_frozen.includes("fiveAxisVertexSets"));
+  assert.ok(manifest.classifications.server_owned.includes("patchLedger"));
+  assert.ok(manifest.classifications.server_owned.includes("canonicalRuleSourceDrafts"));
+  assert.ok(manifest.classifications.server_owned.includes("weightTemplatePolicyDrafts"));
+  assert.ok(manifest.classifications.server_owned.includes("pricingPolicyVersions"));
+  assert.equal(Object.hasOwn(manifest.recordSchemas, "patchLedger"), false);
+  assert.equal(Object.hasOwn(manifest.recordSchemas, "canonicalRuleSourceDrafts"), false);
+  assert.equal(
+    manifest.recordSchemas.pricingPolicyDrafts.allowedFields.includes("legacyExecutionPayload"),
+    false,
+  );
+  assert.equal(
+    manifest.recordSchemas.qualityValuePolicyDrafts.allowedFields.includes(
+      "legacyPerformanceScoringEvidence",
+    ),
+    false,
+  );
+});
+
+test("machine sheet catalog, columns and record fields are closed", async () => {
+  const { manifest, roots } = await fixture();
+
+  const unknownSheet = clone(manifest);
+  unknownSheet.workbookSchema.sheets.UNKNOWN = clone(
+    unknownSheet.workbookSchema.sheets.README,
+  );
+  unknownSheet.workbookSchema.sheetOrder.push("UNKNOWN");
+  assert.throws(() => validateProjectWorkbookManifest(unknownSheet, roots), /closed schema|exact/);
+
+  const unknownColumn = clone(manifest);
+  unknownColumn.workbookSchema.sheets.__TF_CURRENT.columns.push("unknown_column");
+  assert.throws(() => validateProjectWorkbookManifest(unknownColumn, roots), /exact closed schema/);
+
+  const unknownRecordField = clone(manifest);
+  unknownRecordField.recordSchemas.parameters.allowedFields.push("unknown_field");
+  assert.throws(
+    () => validateProjectWorkbookManifest(unknownRecordField, roots),
+    /allowed-field catalog drift/,
+  );
+
+  const changedRecursiveType = clone(manifest);
+  changedRecursiveType.recordSchemaAuthority.typeRefs.parameters =
+    "lib/types.ts#Candidate";
+  assert.throws(
+    () => validateProjectWorkbookManifest(changedRecursiveType, roots),
+    /recursive record schema authority drift/,
+  );
+});
+
 test("preview, commit and export require same-workspace atomic execution boundaries", async () => {
   const { manifest, roots } = await fixture();
   assert.equal(manifest.transaction.sameWorkspaceOnly, true);
@@ -143,4 +218,26 @@ test("preview, commit and export require same-workspace atomic execution boundar
   const weakened = clone(manifest);
   weakened.transaction.atomicCommit = false;
   assert.throws(() => validateProjectWorkbookManifest(weakened, roots));
+});
+
+test("ActionCode to Capability mapping rejects deletion, swaps and reuse", async () => {
+  const { manifest, roots } = await fixture();
+
+  const missing = clone(manifest);
+  delete missing.actions.commit.requiredCapability;
+  assert.throws(() => validateProjectWorkbookManifest(missing, roots));
+
+  const swapped = clone(manifest);
+  [
+    swapped.actions.preview.requiredCapability,
+    swapped.actions.commit.requiredCapability,
+  ] = [
+    swapped.actions.commit.requiredCapability,
+    swapped.actions.preview.requiredCapability,
+  ];
+  assert.throws(() => validateProjectWorkbookManifest(swapped, roots));
+
+  const reused = clone(manifest);
+  reused.actions.commit.requiredCapability = reused.actions.preview.requiredCapability;
+  assert.throws(() => validateProjectWorkbookManifest(reused, roots));
 });

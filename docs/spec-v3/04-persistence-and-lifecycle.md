@@ -398,18 +398,26 @@ Excel只是当前项目数据的导入/导出载体，不决定记录的编辑�
 
 | 分类 | 当前根数 | 工作簿语义 |
 | --- | ---: | --- |
-| `importable_current` | 48 | 可按领域命令导入的当前可变项目数据；仍须逐记录校验稳定ID、revision、引用与不变量。 |
-| `preserved_frozen` | 14 | 为同工作区无损往返携带的冻结版本、历史或治理证据；只允许内容与hash逐字节/规范化等价，不得新增解释、改写或删除。 |
-| `server_owned` | 7 | 工作区身份、schema、Config ID治理、幂等与审计等服务端权威；工作簿只绑定服务端生成的非敏感hash/reference，不能携带可回写payload。 |
+| `importable_current` | 37 | 可按领域命令导入的当前可变项目数据；每个根必须命中机器清单中的closed record schema，逐记录校验稳定ID、revision、引用与不变量。 |
+| `preserved_frozen` | 19 | 为同工作区无损往返携带的安全冻结版本、历史或治理证据；只允许服务端导出的opaque canonical payload与hash exact-equal，不得新增解释、改写或删除。 |
+| `server_owned` | 12 | 工作区身份、schema、Config ID治理、Patch台账、含legacy raw payload的定价版本、外部拉取草稿、幂等与审计等服务端权威；工作簿只绑定服务端生成的非敏感hash/reference，不能携带可回写payload。 |
 | `forbidden` | 15 | 飞书token/工作簿/源revision、AI规则源外部目标、数据源/配置导出、未知原始迁移payload等外部绑定、敏感证据或正式交付配置；不得进入工作簿机器payload，出现即阻断。 |
-| `export_only_diagnostic` | 9 | 可读且已闭合/脱敏的诊断投影；导入时不生成写操作，不能覆盖服务端重算结果。 |
+| `export_only_diagnostic` | 10 | 可读且已闭合/脱敏的诊断投影；导入时不生成写操作，不能覆盖服务端重算结果。 |
 
-工作簿必须包含一个closed-schema机器Manifest，至少绑定`contractVersion=project-workbook/v1`、源`workspaceId`、导出时`workspaceRevision`、根清单hash、规范化数据hash、工作表清单及每张表的规范化hash。面向人工的目录、说明、统计、冲突预览和诊断Sheet全部由该机器Manifest与类型化记录确定性派生；它们不是第二权威，修改展示文案、排序、公式或诊断单元格不得改变机器payload。未知Sheet、未知列、重复稳定ID、重复记录键、公式未固化、hash不符或closed schema未知字段一律拒绝，不以“尽量导入”降级。`feishuWorkbooks`、`feishuSourceRevisions`、`aiRuleSourceChangeDrafts`、`dataSources`、含`rawWorkspacePayload/rawSourcePayload/preservedPayload`的迁移根及其他`forbidden`根的payload不得导出；`server_owned`与`forbidden`根如需证明一致，只能绑定服务端生成的非敏感content hash或opaque reference，不得携带`spreadsheetToken`、`wikiToken`、`appToken`、share URL、凭据、未知原始payload或可重放外部句柄。
+机器工作簿schema完整内嵌于根清单，Sheet集合与顺序固定为`__TF_MANIFEST`、`__TF_CURRENT`、`__TF_PRESERVED`、`__TF_ROOT_REFS`、`__TF_DIAGNOSTICS`、`README`、`ROOT_SUMMARY`；每张表的列、主键和基数均为closed schema。`__TF_MANIFEST`唯一行精确绑定`contract_version + workspace_id + base_workspace_revision + root_manifest_sha256 + workbook_schema_sha256 + exporter_version + machine_content_sha256`。`__TF_CURRENT`只承载37个可导入根，统一record envelope为`root + record_schema_id + record_key + record_revision + record_content_sha256 + payload_json`；机器清单为每个根逐项固定schema ID、稳定identity fields、revision fields、hash fields、exact-equal fields和允许的顶层payload fields，任一未知record field拒绝。清单还hash绑定`lib/types.ts`、`lib/quality-value-policy.ts`和`lib/pricing-policy.ts`的递归类型权威以及每个根的精确type ref；对象未知字段、union未知分支、未声明optional和unknown值递归拒绝，只有类型明确声明的字符串索引可以接受动态键。若F1不能从这些被hash绑定的声明生成并验证closed解析器，该根不得导出或导入，不能回退为开放JSON。
+
+`__TF_PRESERVED`只承载清单允许且不含敏感/raw evidence的冻结根；`opaque_canonical_payload_json`只能由服务器导出，并以record key、revision和content hash exact-compare，永不生成写或移除操作。`projectionPatches`、`performanceSummaryDefinitions`、`v23FunctionTemplates`、Part约束/候选Recipe revision、五维定义与vertex set均在此类，历史、`PUBLISHED/SUPERSEDED`记录及其hash/source provenance不可改。`__TF_ROOT_REFS`只为`server_owned/forbidden`根保存非敏感root hash和不可重放opaque ref；`patchLedger`、canonical/weight source drafts和workspace policy不携带整根payload。Patch台账的`rawPayload`、`preservedPayload`、mirror/readback raw evidence永不进入工作簿；服务端原台账保持原样，ref/hash不一致按冻结冲突阻断。`__TF_DIAGNOSTICS`只允许固定的`root/record_key/severity/code/message/subject_ref/content_sha256`脱敏字段。
+
+规范化固定为UTF-8、Unicode NFC、LF、RFC 8785 JCS、有限数值、`-0→0`且blank与null不同；记录按根清单顺序再按主键Unicode code point排序。`workbook_schema_sha256`精确覆盖清单中的workbook schema、canonicalization、递归record schema权威、逐根record schemas与93-root分类；record hash覆盖root、schema ID、record key、revision与canonical payload；machine content hash覆盖四张机器数据表并排除自身hash单元格及两张派生可读表。语义等价只由规范化machine content SHA-256相等决定，行序、xlsx内部ZIP顺序和派生展示样式不参与。机器Sheet中公式一律拒绝；未知Sheet、未知列、重复主键、非法/重复稳定ID、非法hash、非有限数值、未知record field或closed schema未知嵌套字段一律拒绝，不以“尽量导入”降级。`README`与`ROOT_SUMMARY`由机器内容确定性派生，不是第二权威。
+
+`feishuWorkbooks`、`feishuSourceRevisions`、`aiRuleSourceChangeDrafts`、`dataSources`、含`rawWorkspacePayload/rawSourcePayload/preservedPayload`的迁移根及其他`forbidden`根的payload不得导出；`server_owned`与`forbidden`根如需证明一致，只能绑定服务端生成的非敏感content hash或opaque reference，不得携带`spreadsheetToken`、`wikiToken`、`appToken`、share URL、凭据、未知原始payload或可重放外部句柄。
 
 导入必须显式选择且语义固定：
 
 - `MERGE_BY_STABLE_ID`：只按稳定ID合并。工作簿中缺少当前记录表示`NO_OP`，绝不推断删除；显示名变化不得重写引用ID。
 - `REPLACE_PROJECT`：工作簿中缺少当前`importable_current`记录表示`REMOVAL_INTENT`，不是静默忽略。移除只可规划为该实体已有的专用安全删除/废弃命令，并须重新校验生命周期、引用和冻结边界；没有专用安全命令或资格不满足时返回`REMOVAL_NOT_SUPPORTED`并阻断整次提交。`preserved_frozen`、`server_owned`、`forbidden`与`export_only_diagnostic`永远不能借“缺少”表达删除。
+
+即使根属于`importable_current`，其record schema列出的identity、revision、hash、source provenance、发布时间与其他`exactFields`也不能由Excel修改；它们只用于匹配、并发检查和证据比较。只有清单允许且不在`exactFields`中的字段才可经已有领域动作进入计划。根内混合生命周期时，任何已发布/已批准/已废弃/已冻结记录均自动提升为exact-equal，缺失不产生removal intent；没有安全领域动作的字段或记录返回`REMOVAL_NOT_SUPPORTED`。不得将根分类解释为直接替换`WorkspaceState[root]`。
 
 两种模式都只允许目标`workspaceId`与源工作区相同；不提供“另存为”、跨工作区克隆或历史恢复语义。稳定ID已存在但实体类型、父链或不可变身份字段不同是`IDENTITY_CONFLICT`；冻结内容/hash不同是`FROZEN_CONTENT_CONFLICT`；引用不闭合是`REFERENCE_INTEGRITY_CONFLICT`；schema/根清单不兼容是`SCHEMA_CONFLICT`；工作区不同是`WORKSPACE_CONFLICT`。这些冲突均硬阻断，不能由显示名、人工文案或“以Excel为准”覆盖。
 
@@ -428,6 +436,8 @@ Excel只是当前项目数据的导入/导出载体，不决定记录的编辑�
 恢复：提交失败或超时按幂等键回读；无法证明完整提交时工作区及冻结历史保持原样，在最新revision上重新预览。
 
 权限：预览、提交和导出分别由第24.1节的服务端动作与Capability控制；预览许可不授权提交，下载文件不授权回写。
+
+后续依赖固定为：F1只实现上述closed workbook parser/canonicalizer与恶意xlsx预算，不做写入；F2只把`__TF_CURRENT`记录翻译为已有领域动作并生成只读计划；F3实现事务提交、幂等与写后回读；F4接入显式预览/冲突解决/确认UI；F5覆盖真实同工作区导出往返、权限、并发、恢复和历史冻结验收。任一阶段不得扩展Sheet、列、root schema、Action映射或payload policy；需要扩展时先发布新的contract/schema版本并更新本节及机器清单。
 
 ## 16. 部署基线
 

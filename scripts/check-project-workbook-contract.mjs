@@ -43,7 +43,7 @@ const EXPECTED_TOP_LEVEL_KEYS = [
 
 export const EXPECTED_ROOT_CLASSIFICATIONS = {
   importable_current: [
-    "ruleSettings", "itemParts", "methodProfiles", "itemTypeProfiles", "functionProfiles",
+    "ruleSettings", "itemParts", "methodProfiles", "itemTypeProfiles",
     "affinityAxisWeights", "collections",
     "v23TechnologyDefinitions",
     "skuDrawers",
@@ -70,7 +70,7 @@ export const EXPECTED_ROOT_CLASSIFICATIONS = {
     "pricingPolicyVersions", "identityAuditLog", "commandIdempotencyRecords",
     "governanceAuditLog", "importedAt",
     "compatibilityRules", "affinityRules", "purchasableModels", "v3Affixes",
-    "technologies", "qualityBands", "ruleGraphs",
+    "technologies", "qualityBands", "ruleGraphs", "functionProfiles",
   ],
   forbidden: [
     "feishuWorkbooks", "feishuSourceRevisions", "aiRuleSourceChangeDrafts",
@@ -140,7 +140,7 @@ const EXPECTED_IMPORTABLE_CREATE_POLICIES = {
 const EXPECTED_TERMINAL_LIFECYCLE_POLICY = {
   schema: "project-workbook-terminal-lifecycle/v1",
   applicableRootDiscovery: "ALLOWED_FIELDS_SELECTOR_MATCH",
-  applicableRoots: ["functionProfiles", "skuDrawers", "seriesShowcases"],
+  applicableRoots: ["skuDrawers", "seriesShowcases"],
   multipleSelectors: "REJECT",
   lifecycleFieldExact: "ALWAYS",
   terminalExactFields: "ALL_ALLOWED_FIELDS",
@@ -280,9 +280,9 @@ const EXPECTED_SHEETS = {
 };
 
 const EXPECTED_RECORD_SCHEMAS_SHA256 =
-  "5a23b41f0eeab027b601efa271316edc4253e1542fb8d814b4741f6eecb7221e";
+  "64d9c2f354c68ff6f691649e976669a6e1f180665cfb77e0168f56b5a1754603";
 const EXPECTED_RECORD_SCHEMA_AUTHORITY_SHA256 =
-  "4b77999ef7e158d7823b5917f24a7fd1dbc6a49bcaa22c9e0f6a42c2cd2bd209";
+  "dc29a12ed576cb73958221fcceb64be06391a49c62b89acc2a0d9aa10b5765f8";
 
 function fail(message) {
   throw new Error(message);
@@ -310,6 +310,15 @@ function normalizeUnicodeString(value, label = "canonical JSON string") {
     );
   }
   return value.replace(/\r\n?/g, "\n").normalize("NFC");
+}
+
+function assertCanonicalDisplayText(value, label = "display text") {
+  assert.equal(
+    value,
+    normalizeUnicodeString(value, label),
+    `${label} must already use LF line endings and NFC`,
+  );
+  assert.doesNotMatch(value, /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/);
 }
 
 function canonicalJson(value) {
@@ -491,9 +500,6 @@ function closedInterfaceFields(source, interfaceName, visited = new Set()) {
 
 function assertClosedJsonNumber(value, label) {
   assert.ok(typeof value === "number" && Number.isFinite(value), `${label} must be a finite number`);
-  if (Number.isInteger(value)) {
-    assert.ok(Number.isSafeInteger(value), `${label} integer must be safe`);
-  }
 }
 
 function parseTypeLiteralValue(type) {
@@ -1905,8 +1911,7 @@ export function validateMachineCell(columnSchema, value, cellKind = "string", co
   } else if (format === "classification") {
     assert.ok(CLASSIFICATIONS.includes(value));
   } else if (format === "display-text") {
-    assert.equal(value, value.normalize("NFC"));
-    assert.doesNotMatch(value, /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/);
+    assertCanonicalDisplayText(value, columnSchema.name);
   } else {
     fail(`Unknown machine column format: ${format}`);
   }

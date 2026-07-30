@@ -247,7 +247,7 @@ test("F0 keeps command-only and fixed-authority roots server-owned", async () =>
       manifest.classifications.forbidden.length,
       manifest.classifications.export_only_diagnostic.length,
     ],
-    [17, 23, 28, 15, 10],
+    [16, 23, 29, 15, 10],
   );
   for (const root of [
     "partConstraintSets",
@@ -865,7 +865,6 @@ test("existing importable records exact-compare every typed revision field", asy
 test("terminal lifecycle policy freezes every applicable existing payload without root exceptions", async () => {
   const { manifest } = await fixture();
   assert.deepEqual(manifest.terminalLifecyclePolicy.applicableRoots, [
-    "functionProfiles",
     "skuDrawers",
     "seriesShowcases",
   ]);
@@ -887,51 +886,19 @@ test("terminal lifecycle policy freezes every applicable existing payload withou
     sourceRevisionId: "source:1",
     notes: "",
   };
-  assert.equal(
-    validateImportableExactFields(
-      manifest,
-      "functionProfiles",
-      { ...functionProfile, name: "远投草稿" },
-      functionProfile,
-    ),
-    true,
-    "known non-terminal records retain ordinary mutable-field behavior",
-  );
-  assert.throws(
-    () => validateImportableExactFields(
-      manifest,
-      "functionProfiles",
-      { ...functionProfile, status: "published" },
-      functionProfile,
-    ),
-    /status is exact-equal/,
-    "the lifecycle selector itself is always exact for an existing record",
-  );
-  for (const terminal of manifest.terminalLifecyclePolicy.selectors[0].terminalValues) {
-    const existing = { ...functionProfile, status: terminal };
-    assert.throws(
-      () => validateImportableExactFields(
-        manifest,
-        "functionProfiles",
-        { ...existing, name: "伪造覆盖" },
-        existing,
-      ),
-      /name is exact-equal/,
-      `${terminal} must freeze every allowed payload field`,
-    );
-  }
-  for (const invalidExisting of [
-    { ...functionProfile, status: "reviewing" },
-    Object.fromEntries(Object.entries(functionProfile).filter(([field]) => field !== "status")),
+  assert.ok(manifest.classifications.server_owned.includes("functionProfiles"));
+  assert.equal(Object.hasOwn(manifest.recordSchemas, "functionProfiles"), false);
+  assert.equal(Object.hasOwn(manifest.recordSchemaAuthority.typeRefs, "functionProfiles"), false);
+  for (const [candidate, existing] of [
+    [functionProfile, undefined],
+    [{ ...functionProfile, name: "伪造覆盖" }, functionProfile],
+    [undefined, functionProfile],
+    [{ ...functionProfile, status: "ACTIVE" }, { ...functionProfile, status: "ACTIVE" }],
   ]) {
     assert.throws(
-      () => validateImportableExactFields(
-        manifest,
-        "functionProfiles",
-        { ...invalidExisting, name: "不应导入" },
-        invalidExisting,
-      ),
-      /status (?:has unknown lifecycle value|is required)/,
+      () => validateImportableExactFields(manifest, "functionProfiles", candidate, existing),
+      /not an importable record root/,
+      "server-owned function profiles reject create, update, removal, and legacy lifecycle aliases",
     );
   }
 
@@ -1412,6 +1379,18 @@ test("every closed format validates its domain and unknown formats fail closed",
   assert.equal(validateMachineCell(byFormat.get("classification"), "preserved_frozen"), true);
   assert.throws(() => validateMachineCell(byFormat.get("classification"), "mutable"));
   assert.equal(validateMachineCell(byFormat.get("display-text"), "安全说明"), true);
+  assert.equal(validateMachineCell(byFormat.get("display-text"), "第一行\n第二行"), true);
+  assert.equal(validateMachineCell(byFormat.get("display-text"), "é"), true);
+  for (const nonCanonicalDisplayText of [
+    "第一行\r\n第二行",
+    "第一行\r第二行",
+    "e\u0301",
+  ]) {
+    assert.throws(
+      () => validateMachineCell(byFormat.get("display-text"), nonCanonicalDisplayText),
+      /already use LF line endings and NFC/,
+    );
+  }
   assert.throws(() => validateMachineCell(byFormat.get("display-text"), "bad\u0000text"));
   assert.throws(
     () => validateMachineCell(
@@ -1448,6 +1427,19 @@ test("record key JSON binds root identity arity, primitive types and preserved v
       root: "v23TechnologyDefinitions",
       payload: { technologyId: "tech:1", revision: 1.5 },
     }),
+    /safe integer/,
+  );
+  assert.throws(
+    () => validateMachineCell(
+      keyColumn,
+      `["tech:1",${Number.MAX_SAFE_INTEGER + 1}]`,
+      "string",
+      {
+        manifest,
+        root: "v23TechnologyDefinitions",
+        payload: { technologyId: "tech:1", revision: Number.MAX_SAFE_INTEGER + 1 },
+      },
+    ),
     /safe integer/,
   );
   assert.throws(
@@ -1717,6 +1709,30 @@ test("RFC8785 payloads satisfy the bound closed recursive record schema", async 
     series_coherence: 1,
   };
   assert.equal(validate("affinityAxisWeights", affinityWeights), true);
+  for (const ordinaryNumber of [
+    1e20,
+    Number.MAX_SAFE_INTEGER + 1,
+    0.125,
+  ]) {
+    assert.equal(
+      validate("affinityAxisWeights", {
+        ...affinityWeights,
+        method_type: ordinaryNumber,
+      }),
+      true,
+      "ordinary finite payload numbers are not identity/revision safe integers",
+    );
+  }
+  for (const nonFinite of [Number.POSITIVE_INFINITY, Number.NaN]) {
+    assert.throws(
+      () => validateImportableExactFields(
+        manifest,
+        "affinityAxisWeights",
+        { ...affinityWeights, method_type: nonFinite },
+      ),
+      /finite number/,
+    );
+  }
   const incompleteWeights = { ...affinityWeights };
   delete incompleteWeights.series_coherence;
   assert.throws(
@@ -1750,6 +1766,20 @@ test("record revision is typed RFC8785 scalar JSON and matches payload plus iden
     recordKey: ["sku:1"],
   };
   assert.equal(validateMachineCell(revisionColumn, "1", "string", revisionedContext), true);
+  for (const unsafeRevision of [1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(
+      () => validateMachineCell(
+        revisionColumn,
+        JSON.stringify(unsafeRevision),
+        "string",
+        {
+          ...revisionedContext,
+          payload: { id: "sku:1", revision: unsafeRevision },
+        },
+      ),
+      /safe integer/,
+    );
+  }
   for (const invalid of ["v1", "01", "null", '"1"']) {
     assert.throws(
       () => validateMachineCell(revisionColumn, invalid, "string", revisionedContext),

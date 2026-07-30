@@ -248,15 +248,14 @@
       "skuDrawers":["projectionMatch","fiveAxisProjectionReferences","validationSummary"]
     },
     "recursiveProofRoots": [
-      "ruleSettings","itemParts","methodProfiles","itemTypeProfiles","functionProfiles","affinityAxisWeights","collections","v23TechnologyDefinitions","skuDrawers","parameters","templates","modifiers","layers","affixes","affixScorePolicy","seriesShowcases","notes"
+      "ruleSettings","itemParts","methodProfiles","itemTypeProfiles","affinityAxisWeights","collections","v23TechnologyDefinitions","skuDrawers","parameters","templates","modifiers","layers","affixes","affixScorePolicy","seriesShowcases","notes"
     ],
-    "recursiveTypeGraphSha256": "d2e6b80572225079b001f98e6b2b12ed34cefb72d47396d906ed93e1958817ac",
+    "recursiveTypeGraphSha256": "725e4fd87f3bad2bd087cf3d45ee2ec91a785b2eb61ff84b0d3d9d4a0c979a0c",
     "typeRefs": {
       "ruleSettings":"lib/types.ts#WorkspaceRuleSettings",
       "itemParts":"lib/types.ts#ItemPartDefinition",
       "methodProfiles":"lib/types.ts#MethodProfile",
       "itemTypeProfiles":"lib/types.ts#ItemTypeProfile",
-      "functionProfiles":"lib/types.ts#FunctionProfile",
       "affinityAxisWeights":"lib/types.ts#AffinityAxisWeights",
       "collections":"lib/types.ts#Collection",
       "v23TechnologyDefinitions":"lib/types.ts#V23TechnologyDefinition",
@@ -276,7 +275,6 @@
     "itemParts": {"schemaId":"project-workbook/root/itemParts/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":[],"allowedFields":["id","name","legacyItemKind","activeInGeneration","parameterKeys","notes"]},
     "methodProfiles": {"schemaId":"project-workbook/root/methodProfiles/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":["sourceRevisionId"],"allowedFields":["id","name","rules","enabled","sourceRevisionId","notes"]},
     "itemTypeProfiles": {"schemaId":"project-workbook/root/itemTypeProfiles/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":["sourceRevisionId"],"allowedFields":["id","name","methodIds","itemPartIds","rules","enabled","sourceRevisionId","notes"]},
-    "functionProfiles": {"schemaId":"project-workbook/root/functionProfiles/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":["sourceRevisionId"],"allowedFields":["id","name","status","supportedIntensities","rules","intensityRules","enabled","sourceRevisionId","notes"]},
     "affinityAxisWeights": {"schemaId":"project-workbook/root/affinityAxisWeights/v1","identityFields":["$singleton"],"revisionFields":[],"hashFields":[],"exactFields":[],"allowedFields":["method_type","type_weight","type_function","function_performance","material_function","quality_specialization","model_component","series_coherence"]},
     "collections": {"schemaId":"project-workbook/root/collections/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":["createdAt"],"allowedFields":["id","name","brandStory","seriesIds","notes","createdAt","updatedAt"]},
     "v23TechnologyDefinitions": {"schemaId":"project-workbook/root/v23TechnologyDefinitions/v1","identityFields":["technologyId","revision"],"revisionFields":["revision"],"hashFields":["contentHash"],"exactFields":["technologyId","revision","itemPartId","name","description","memberAffixRefs","enabled","contentHash"],"allowedFields":["technologyId","revision","itemPartId","name","description","memberAffixRefs","enabled","contentHash"]},
@@ -393,7 +391,8 @@
     "v3Affixes":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
     "technologies":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
     "qualityBands":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
-    "ruleGraphs":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"}
+    "ruleGraphs":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "functionProfiles":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"}
   },
   "importableCreatePolicies": {
     "skuDrawers": {
@@ -405,7 +404,7 @@
   "terminalLifecyclePolicy": {
     "schema": "project-workbook-terminal-lifecycle/v1",
     "applicableRootDiscovery": "ALLOWED_FIELDS_SELECTOR_MATCH",
-    "applicableRoots": ["functionProfiles","skuDrawers","seriesShowcases"],
+    "applicableRoots": ["skuDrawers","seriesShowcases"],
     "multipleSelectors": "REJECT",
     "lifecycleFieldExact": "ALWAYS",
     "terminalExactFields": "ALL_ALLOWED_FIELDS",
@@ -448,7 +447,6 @@
       "itemParts",
       "methodProfiles",
       "itemTypeProfiles",
-      "functionProfiles",
       "affinityAxisWeights",
       "collections",
       "v23TechnologyDefinitions",
@@ -515,7 +513,8 @@
       "v3Affixes",
       "technologies",
       "qualityBands",
-      "ruleGraphs"
+      "ruleGraphs",
+      "functionProfiles"
     ],
     "forbidden": [
       "feishuWorkbooks",

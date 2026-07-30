@@ -23,6 +23,7 @@ const EXPECTED_TOP_LEVEL_KEYS = [
   "recordSchemaAuthority",
   "recordSchemas",
   "preservedRootCatalog",
+  "diagnosticRootCatalog",
   "classifications",
   "modes",
   "removal",
@@ -344,6 +345,38 @@ function valueAtFieldPath(value, fieldPath) {
   );
 }
 
+function diagnosticSubjectHash(manifest, root, payload) {
+  const catalog = manifest.diagnosticRootCatalog[root];
+  assert.ok(catalog, `${root} has no diagnostic subject-key contract`);
+  assert.ok(payload && Object.getPrototypeOf(payload) === Object.prototype,
+    `${root} diagnostic subject payload must be a closed object`);
+  const leafPaths = [];
+  const visit = (value, prefix) => {
+    assert.ok(value !== undefined, `${root}.${prefix} diagnostic subject is missing`);
+    if (value !== null && typeof value === "object") {
+      assert.equal(Object.getPrototypeOf(value), Object.prototype);
+      for (const key of Object.keys(value)) visit(value[key], prefix ? `${prefix}.${key}` : key);
+      return;
+    }
+    assert.ok(
+      (typeof value === "string" && value.length > 0 && value === value.normalize("NFC"))
+        || (typeof value === "number" && Number.isFinite(value)),
+      `${root}.${prefix} diagnostic subject must be NFC text or a finite number`,
+    );
+    leafPaths.push(prefix);
+  };
+  visit(payload, "");
+  assert.deepEqual(
+    leafPaths.sort(),
+    [...catalog.subjectProjectionFields].sort(),
+    `${root} diagnostic subject payload must contain exactly the safe projection fields`,
+  );
+  const projection = catalog.subjectProjectionFields.map(
+    (field) => [field, valueAtFieldPath(payload, field)],
+  );
+  return sha256(canonicalJson(projection));
+}
+
 export function validateMachineCell(columnSchema, value, cellKind = "string", context = {}) {
   assert.equal(cellKind, "string", `${columnSchema.name} rejects Excel ${cellKind} cells`);
   assert.equal(typeof value, "string", `${columnSchema.name} must be encoded as text`);
@@ -413,6 +446,17 @@ export function validateMachineCell(columnSchema, value, cellKind = "string", co
       assert.ok(Array.isArray(parsed));
       assert.ok(context.manifest && context.root, "record key validation requires manifest and root");
       assert.ok(Object.hasOwn(context, "payload"), "record key validation requires projected payload");
+      const diagnosticCatalog = context.manifest.diagnosticRootCatalog[context.root];
+      if (diagnosticCatalog) {
+        assert.equal(parsed.length, 1, `${context.root} diagnostic key must contain one subject hash`);
+        assert.match(parsed[0], /^[0-9a-f]{64}$/);
+        assert.equal(
+          parsed[0],
+          diagnosticSubjectHash(context.manifest, context.root, context.payload),
+          `${context.root} diagnostic key does not match the safe subject payload`,
+        );
+        return true;
+      }
       const repositoryRoot = context.repositoryRoot ?? process.cwd();
       const effectiveVariant = resolvePayloadVariant(
         context.manifest,
@@ -871,6 +915,7 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     "recordSchemaAuthority",
     "recordSchemas",
     "preservedRootCatalog",
+    "diagnosticRootCatalog",
     "classifications",
   ]);
   assert.deepEqual(manifest.canonicalization.recordHashInput, [
@@ -1017,6 +1062,24 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     if (catalog.singleton) assert.deepEqual(catalog.recordKeyFields, ["$singleton"]);
     if (!catalog.singleton) assert.ok(!catalog.recordKeyFields.includes("$singleton"));
   }
+  assert.deepEqual(
+    Object.keys(manifest.diagnosticRootCatalog),
+    EXPECTED_ROOT_CLASSIFICATIONS.export_only_diagnostic,
+    "every diagnostic root must bind one safe subject-key contract",
+  );
+  for (const [root, catalog] of Object.entries(manifest.diagnosticRootCatalog)) {
+    assertExactKeys(catalog, [
+      "typeRef", "subjectProjectionFields", "keyContract",
+    ], `diagnostic root ${root}`);
+    assert.match(catalog.typeRef, /^lib\/[a-z0-9-]+\.ts#[A-Za-z][A-Za-z0-9]*$/);
+    assert.ok(catalog.subjectProjectionFields.length > 0);
+    assert.equal(
+      new Set(catalog.subjectProjectionFields).size,
+      catalog.subjectProjectionFields.length,
+    );
+    assert.equal(catalog.keyContract, "SHA256_RFC8785_SUBJECT_PROJECTION_V1");
+    assert.equal(Object.hasOwn(manifest.recordSchemas, root), false);
+  }
 
   assert.deepEqual(manifest.modes, {
     MERGE_BY_STABLE_ID: {
@@ -1116,6 +1179,28 @@ export function validatePreservedRootCatalog(manifest, repositoryRoot = process.
   return true;
 }
 
+export function validateDiagnosticRootCatalog(manifest, repositoryRoot = process.cwd()) {
+  for (const [rootName, catalog] of Object.entries(manifest.diagnosticRootCatalog)) {
+    assert.equal(
+      catalog.typeRef,
+      actualWorkspaceRootTypeRef(manifest, rootName, repositoryRoot),
+      `${rootName} diagnostic typeRef must match WorkspaceState`,
+    );
+    const [sourcePath, typeName] = catalog.typeRef.split("#");
+    const source = readFileSync(path.join(repositoryRoot, sourcePath), "utf8");
+    assert.ok(interfaceFieldDefinitions(source, typeName), `${rootName} diagnostic type is unresolved`);
+    for (const field of catalog.subjectProjectionFields) {
+      const definition = fieldPathDefinition(source, typeName, field);
+      const type = definition.type;
+      assert.ok(
+        /\b(?:string|number)\b/.test(type) || /["'`][^"'`]*["'`]/.test(type),
+        `${rootName}.${field} diagnostic subject must be a scalar`,
+      );
+    }
+  }
+  return true;
+}
+
 export function checkProjectWorkbookContract(root = process.cwd()) {
   const manifestPath = path.join(root, "docs/spec-v3/project-workbook-v1-root-manifest.json");
   const manifestSource = readFileSync(manifestPath, "utf8");
@@ -1140,6 +1225,7 @@ export function checkProjectWorkbookContract(root = process.cwd()) {
     "recursive closed projection graph drift",
   );
   validatePreservedRootCatalog(manifest, root);
+  validateDiagnosticRootCatalog(manifest, root);
   for (const [rootName, typeRef] of Object.entries(manifest.recordSchemaAuthority.typeRefs)) {
     const [sourcePath, typeName] = typeRef.split("#");
     const fields = parseExportedInterfaceFields(

@@ -175,6 +175,7 @@
       "recordSchemaAuthority",
       "recordSchemas",
       "preservedRootCatalog",
+      "diagnosticRootCatalog",
       "classifications"
     ],
     "recordHashInput": [
@@ -317,6 +318,18 @@
     "candidates":{"carrier":"records","typeRef":"lib/types.ts#Candidate","recordKeyFields":["id"],"revisionFields":[],"hashFields":[],"singleton":false,"variants":[]},
     "officialSkus":{"carrier":"records","typeRef":"lib/types.ts#OfficialSku","recordKeyFields":["id"],"revisionFields":[],"hashFields":[],"singleton":false,"variants":[]},
     "detailOverrides":{"carrier":"records","typeRef":"lib/types.ts#DetailOverride","recordKeyFields":["skuId","itemKind","model"],"revisionFields":[],"hashFields":[],"singleton":false,"variants":[]}
+  },
+  "diagnosticRootCatalog": {
+    "derivedProjections":{"typeRef":"lib/types.ts#DerivedProjection","subjectProjectionFields":["id"],"keyContract":"SHA256_RFC8785_SUBJECT_PROJECTION_V1"},
+    "projectionMatches":{"typeRef":"lib/types.ts#ProjectionMatch","subjectProjectionFields":["projectionId","itemPartId","ruleSetVersion","targetPullKg"],"keyContract":"SHA256_RFC8785_SUBJECT_PROJECTION_V1"},
+    "candidateRuns":{"typeRef":"lib/types.ts#CandidateRun","subjectProjectionFields":["runId"],"keyContract":"SHA256_RFC8785_SUBJECT_PROJECTION_V1"},
+    "candidateMaterializations":{"typeRef":"lib/types.ts#CandidateMaterializationRecord","subjectProjectionFields":["materializationId"],"keyContract":"SHA256_RFC8785_SUBJECT_PROJECTION_V1"},
+    "sourceIdentityMigrationReports":{"typeRef":"lib/source-id-migration.ts#SourceIdentityMigrationReport","subjectProjectionFields":["reportId"],"keyContract":"SHA256_RFC8785_SUBJECT_PROJECTION_V1"},
+    "modelPricingEvaluations":{"typeRef":"lib/types.ts#ModelPricingEvaluation","subjectProjectionFields":["id","revision"],"keyContract":"SHA256_RFC8785_SUBJECT_PROJECTION_V1"},
+    "aiAssessments":{"typeRef":"lib/types.ts#AIAssessmentRecord","subjectProjectionFields":["assessmentId"],"keyContract":"SHA256_RFC8785_SUBJECT_PROJECTION_V1"},
+    "upgradeCandidates":{"typeRef":"lib/types.ts#UpgradeCandidate","subjectProjectionFields":["id"],"keyContract":"SHA256_RFC8785_SUBJECT_PROJECTION_V1"},
+    "fiveAxisVertexGroupStates":{"typeRef":"lib/types.ts#FiveAxisVertexGroupState","subjectProjectionFields":["groupKey.weightBandId","groupKey.weightBandPolicyVersion","groupKey.fiveAxisDefinitionId","groupKey.fiveAxisDefinitionVersion","groupKey.fiveAxisRuleVersion"],"keyContract":"SHA256_RFC8785_SUBJECT_PROJECTION_V1"},
+    "ruleRuns":{"typeRef":"lib/types.ts#RuleGraphRun","subjectProjectionFields":["id"],"keyContract":"SHA256_RFC8785_SUBJECT_PROJECTION_V1"}
   },
   "classifications": {
     "importable_current": [

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
@@ -7,6 +8,7 @@ import {
   checkProjectWorkbookContract,
   parseWorkspaceStateRoots,
   validateMachineCell,
+  validateDiagnosticRootCatalog,
   validatePreservedRootCatalog,
   validateProjectWorkbookManifest,
 } from "../scripts/check-project-workbook-contract.mjs";
@@ -27,6 +29,17 @@ async function fixture() {
 
 function clone(value) {
   return structuredClone(value);
+}
+
+function atPath(value, fieldPath) {
+  return fieldPath.split(".").reduce((current, part) => current[part], value);
+}
+
+function diagnosticKey(manifest, root, payload) {
+  const projection = manifest.diagnosticRootCatalog[root].subjectProjectionFields
+    .map((field) => [field, atPath(payload, field)]);
+  const hash = createHash("sha256").update(JSON.stringify(projection), "utf8").digest("hex");
+  return JSON.stringify([hash]);
 }
 
 test("canonical project workbook contract binds all current WorkspaceState roots", () => {
@@ -555,6 +568,105 @@ test("record revision is typed RFC8785 scalar JSON and matches payload plus iden
     }),
     /non-empty NFC text/,
   );
+});
+
+test("all diagnostic roots derive closed non-semantic subject keys from safe payloads", async () => {
+  const { manifest, roots } = await fixture();
+  const keyColumn = manifest.workbookSchema.sheets.__TF_DIAGNOSTICS.columns
+    .find((entry) => entry.name === "record_key");
+  const payloads = {
+    derivedProjections: { id: "projection:1" },
+    projectionMatches: {
+      projectionId: "projection:1",
+      itemPartId: "part:rod",
+      ruleSetVersion: "rules:v1",
+      targetPullKg: 2.5,
+    },
+    candidateRuns: { runId: "run:1" },
+    candidateMaterializations: { materializationId: "materialization:1" },
+    sourceIdentityMigrationReports: { reportId: "report:1" },
+    modelPricingEvaluations: { id: "pricing:1", revision: 2 },
+    aiAssessments: { assessmentId: "assessment:1" },
+    upgradeCandidates: { id: "upgrade:1" },
+    fiveAxisVertexGroupStates: {
+      groupKey: {
+        weightBandId: "band:1",
+        weightBandPolicyVersion: "bands:v1",
+        fiveAxisDefinitionId: "definition:1",
+        fiveAxisDefinitionVersion: "v1",
+        fiveAxisRuleVersion: "rules:v1",
+      },
+    },
+    ruleRuns: { id: "rule-run:1" },
+  };
+  assert.deepEqual(Object.keys(payloads), manifest.classifications.export_only_diagnostic);
+  assert.equal(validateDiagnosticRootCatalog(manifest), true);
+  for (const [root, payload] of Object.entries(payloads)) {
+    assert.equal(
+      validateMachineCell(keyColumn, diagnosticKey(manifest, root, payload), "string", {
+        manifest,
+        root,
+        payload,
+      }),
+      true,
+      root,
+    );
+  }
+
+  assert.throws(
+    () => validateMachineCell(keyColumn, '["' + "0".repeat(64) + '"]', "string", {
+      manifest,
+      root: "derivedProjections",
+      payload: payloads.derivedProjections,
+    }),
+    /does not match/,
+  );
+  assert.throws(
+    () => validateMachineCell(
+      keyColumn,
+      diagnosticKey(manifest, "derivedProjections", payloads.derivedProjections),
+      "string",
+      {
+        manifest,
+        root: "candidateRuns",
+        payload: payloads.derivedProjections,
+      },
+    ),
+    /safe projection fields/,
+  );
+  assert.throws(
+    () => validateMachineCell(keyColumn, '["' + "0".repeat(64) + '"]', "string", {
+      manifest,
+      root: "futureDiagnosticRoot",
+      payload: { id: "future:1" },
+    }),
+    /no diagnostic subject-key contract|not importable or preserved/,
+  );
+  assert.throws(
+    () => validateMachineCell(
+      keyColumn,
+      diagnosticKey(manifest, "derivedProjections", payloads.derivedProjections),
+      "string",
+      {
+        manifest,
+        root: "derivedProjections",
+        payload: { ...payloads.derivedProjections, message: "must not enter subject payload" },
+      },
+    ),
+    /safe projection fields/,
+  );
+
+  const wrongType = clone(manifest);
+  wrongType.diagnosticRootCatalog.ruleRuns.typeRef = "lib/types.ts#CandidateRun";
+  assert.throws(() => validateDiagnosticRootCatalog(wrongType), /must match WorkspaceState/);
+
+  const semanticLeak = clone(manifest);
+  semanticLeak.canonicalization.machineContentHashInput.push("__TF_DIAGNOSTICS");
+  assert.throws(() => validateProjectWorkbookManifest(semanticLeak, roots));
+
+  const importLeak = clone(manifest);
+  importLeak.recordSchemas.derivedProjections = clone(importLeak.recordSchemas.notes);
+  assert.throws(() => validateProjectWorkbookManifest(importLeak, roots));
 });
 
 test("forbidden roots have no content-derived hash while diagnostics are non-semantic", async () => {

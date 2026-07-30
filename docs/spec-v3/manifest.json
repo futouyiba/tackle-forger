@@ -84,7 +84,7 @@
       ],
       "title": "版本、快照、飞书、工作区与回归",
       "path": "docs/spec-v3/04-persistence-and-lifecycle.md",
-      "sha256": "a7c552148515fc1ed5d90b8c5f6626aa9e12b984e6be5a9684dacc27a85b0bf1"
+      "sha256": "a097b21f38c8ae69ace5f6acd3e7220a9b9dfe77b29c8fe3e3e02a49d1441729"
     },
     {
       "id": "05",
@@ -117,7 +117,7 @@
       ],
       "title": "交互与后端统一需求契约",
       "path": "docs/spec-v3/07-interaction-contract.md",
-      "sha256": "19266c27fae4f0b18ab703b770f87a8692cb27ee6536ce4244966c1704996171"
+      "sha256": "ed3693e33195569a016db4504f7b3e3df187f17ca1e1aae57e5e8d3cea190975"
     },
     {
       "id": "08",
@@ -230,7 +230,7 @@
     {
       "id": "project-workbook/v1",
       "path": "docs/spec-v3/project-workbook-v1-root-manifest.json",
-      "sha256": "f8f896ed4236abe92cd6a1ab99bd92b9db1fe1ab530c9d50daaa69594a11840a"
+      "sha256": "274620c64f93b9b4fd2362bbecfc19eee4366b3d59dc0102043cd6a3f2de7e69"
     }
   ],
   "routes": {

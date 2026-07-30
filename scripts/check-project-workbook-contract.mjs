@@ -304,7 +304,13 @@ const EXPECTED_TECHNOLOGY_SUCCESSOR_POLICY = {
   requestSchema: "project-workbook-technology-successor-request/v1",
   actionSchema: "project-workbook-technology-successor-action/v1",
   actionFields: ["schema", "actionCode", "actionPayload"],
-  requestFields: ["schema", "workspaceId", "baseWorkspaceRevision", "expectedCurrentHead"],
+  requestFields: [
+    "schema",
+    "workspaceId",
+    "baseWorkspaceRevision",
+    "expectedCurrentHead",
+    "expectedAffixStateSha256",
+  ],
   trustedContextFields: [
     "schema",
     "workspaceId",
@@ -314,6 +320,8 @@ const EXPECTED_TECHNOLOGY_SUCCESSOR_POLICY = {
     "technologyIdExists",
     "targetRevisionExists",
     "currentHead",
+    "affixStateSha256",
+    "affixDefinitions",
   ],
   hashContract: "V23_TECHNOLOGY_CONTENT_HASH_RFC8785_SHA256_V1",
   hashImplementation: "lib/v23-technology.ts#v23TechnologyContentHash",
@@ -321,6 +329,18 @@ const EXPECTED_TECHNOLOGY_SUCCESSOR_POLICY = {
   inputHashContract: "V23_ACTION_INPUT_HASH_RFC8785_SHA256_V1",
   inputHashImplementation: "lib/v23-domain-actions.ts#v23ActionInputHash",
   productionMapping: "ACTION_CODE_AND_ACTION_PAYLOAD_DIRECT_TO_EXECUTE_V23_DOMAIN_ACTION",
+  affixStateHashContract: "V23_AFFIX_DEFINITION_SET_RFC8785_SHA256_V1",
+  affixStateFields: ["affixStateSha256", "affixDefinitions"],
+  memberValidatorImplementation: "lib/v23-technology.ts#validateV23TechnologyDefinition",
+  memberResolverImplementation: "lib/v23-technology.ts#resolveV23AffixDefinition",
+  memberValidationRules: [
+    "NON_EMPTY",
+    "UNIQUE_STABLE_ID",
+    "EXACT_REF_RESOLVED",
+    "ENABLED",
+    "SAME_ITEM_PART",
+    "NO_DEDUPE_SEMANTIC_CONFLICT",
+  ],
   derivedFields: ["revision", "contentHash"],
   create: {
     actionCode: "create_technology",
@@ -1468,6 +1488,108 @@ function validateTechnologyCandidateHash(policy, candidatePayload) {
   );
 }
 
+function validateTechnologyTrustedAffixState(
+  policy,
+  candidatePayload,
+  request,
+  trustedContext,
+  repositoryRoot,
+) {
+  assert.match(
+    request.expectedAffixStateSha256,
+    /^[0-9a-f]{64}$/,
+    "Technology successor expected affix state must be lowercase sha256",
+  );
+  assert.match(
+    trustedContext.affixStateSha256,
+    /^[0-9a-f]{64}$/,
+    "Technology successor trusted affix state must be lowercase sha256",
+  );
+  assert.ok(
+    Array.isArray(trustedContext.affixDefinitions),
+    "Technology successor trusted affix definitions are required",
+  );
+  const source = readFileSync(path.join(repositoryRoot, "lib/types.ts"), "utf8");
+  assertClosedTypeValue(
+    source,
+    parseTypeDeclarations(source),
+    "V23AffixDefinition[]",
+    trustedContext.affixDefinitions,
+    "Technology successor trusted affix definitions",
+    0,
+  );
+  const definitionIdentity = (definition) =>
+    canonicalJson([definition.affixId, definition.revision, definition.contentHash]);
+  const canonicalDefinitions = [...trustedContext.affixDefinitions].sort((left, right) => {
+    const leftIdentity = definitionIdentity(left);
+    const rightIdentity = definitionIdentity(right);
+    return leftIdentity < rightIdentity ? -1 : leftIdentity > rightIdentity ? 1 : 0;
+  });
+  assert.equal(
+    canonicalJson(trustedContext.affixDefinitions),
+    canonicalJson(canonicalDefinitions),
+    "Technology successor trusted affix definitions must use canonical identity order",
+  );
+  const definitionIdentities = trustedContext.affixDefinitions.map(definitionIdentity);
+  assert.equal(
+    new Set(definitionIdentities).size,
+    definitionIdentities.length,
+    "Technology successor trusted affix definitions contain a duplicate revision identity",
+  );
+  const computedStateHash = sha256(canonicalJson(trustedContext.affixDefinitions));
+  assert.equal(
+    trustedContext.affixStateSha256,
+    computedStateHash,
+    `Technology successor trusted affix state does not match ${policy.affixStateHashContract}`,
+  );
+  assert.equal(
+    request.expectedAffixStateSha256,
+    trustedContext.affixStateSha256,
+    "Technology successor trusted affix state is stale",
+  );
+  assert.ok(
+    candidatePayload.memberAffixRefs.length > 0,
+    "Technology successor requires at least one member affix",
+  );
+  const memberIds = new Set();
+  const semanticContributions = new Map();
+  for (const ref of candidatePayload.memberAffixRefs) {
+    assert.ok(
+      !memberIds.has(ref.id),
+      "Technology successor member stable IDs must be unique",
+    );
+    memberIds.add(ref.id);
+    const matches = trustedContext.affixDefinitions.filter((definition) =>
+      definition.affixId === ref.id
+        && definition.revision === ref.revision
+        && definition.contentHash === ref.contentHash);
+    assert.equal(
+      matches.length,
+      1,
+      "Technology successor member affix reference is unresolved or ambiguous",
+    );
+    const affix = matches[0];
+    assert.equal(
+      affix.payload.enabled,
+      true,
+      "Technology successor member affix must be enabled",
+    );
+    assert.equal(
+      affix.payload.itemPartId,
+      candidatePayload.itemPartId,
+      "Technology successor member affix must use the same itemPartId",
+    );
+    const prior = semanticContributions.get(affix.payload.semanticContributionKey);
+    assert.ok(
+      !prior
+        || (prior.stackingPolicy !== "dedupe" && affix.payload.stackingPolicy !== "dedupe"),
+      "Technology successor member affixes have a dedupe semantic contribution conflict",
+    );
+    semanticContributions.set(affix.payload.semanticContributionKey, affix.payload);
+  }
+  return true;
+}
+
 export function validateTechnologyProductionAction(
   manifest,
   action,
@@ -1633,6 +1755,13 @@ export function validateTechnologySuccessorAction(
       policy.create.revision,
       `create_technology requires revision ${policy.create.revision}`,
     );
+    validateTechnologyTrustedAffixState(
+      policy,
+      candidatePayload,
+      request,
+      trustedContext,
+      repositoryRoot,
+    );
     validateTechnologyCandidateHash(policy, candidatePayload);
     const actionPayload = technologyActionPayload(
       candidatePayload,
@@ -1680,6 +1809,13 @@ export function validateTechnologySuccessorAction(
     candidatePayload.revision,
     currentHead.revision + 1,
     "update_technology revision must equal current head plus one",
+  );
+  validateTechnologyTrustedAffixState(
+    policy,
+    candidatePayload,
+    request,
+    trustedContext,
+    repositoryRoot,
   );
   validateTechnologyCandidateHash(policy, candidatePayload);
   const actionPayload = technologyActionPayload(
@@ -3624,11 +3760,40 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     EXPECTED_TECHNOLOGY_SUCCESSOR_POLICY,
     "Technology successor planning must remain manifest-bound and explicit",
   );
+  const technologySource = readFileSync(
+    path.join(process.cwd(), "lib/v23-technology.ts"),
+    "utf8",
+  );
   assert.match(
-    readFileSync(path.join(process.cwd(), "lib/v23-technology.ts"), "utf8"),
+    technologySource,
     /export function v23TechnologyContentHash\s*\(/,
     "Technology successor hash implementation is missing",
   );
+  assert.match(
+    technologySource,
+    /export function validateV23TechnologyDefinition\s*\(/,
+    "Technology successor production member validator is missing",
+  );
+  assert.match(
+    technologySource,
+    /export function resolveV23AffixDefinition\s*\(/,
+    "Technology successor production member resolver is missing",
+  );
+  for (const [pattern, message] of [
+    [/definition\.memberAffixRefs\.length === 0/, "non-empty member invariant"],
+    [/ids\.has\(ref\.id\)/, "unique member stable-ID invariant"],
+    [/resolveV23AffixDefinition\(state, ref\)/, "exact member resolution invariant"],
+    [/!affix\.payload\.enabled \|\| affix\.payload\.itemPartId !== definition\.itemPartId/,
+      "enabled same-Part invariant"],
+    [/prior\.stackingPolicy === "dedupe" \|\| affix\.payload\.stackingPolicy === "dedupe"/,
+      "semantic contribution conflict invariant"],
+  ]) {
+    assert.match(
+      technologySource,
+      pattern,
+      `Technology successor production ${message} is missing`,
+    );
+  }
   const technologyActionSource = readFileSync(
     path.join(process.cwd(), "lib/v23-domain-actions.ts"),
     "utf8",

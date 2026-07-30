@@ -59,6 +59,64 @@ function canonicalPayload(value) {
     .join(",")}}`;
 }
 
+function projectAffixDefinition(
+  affixId,
+  {
+    enabled = true,
+    itemPartId = "part:rod",
+    semanticContributionKey = affixId,
+    stackingPolicy = "dedupe",
+  } = {},
+) {
+  const payload = {
+    name: affixId,
+    category: "attribute",
+    itemPartId,
+    semanticContributionKey,
+    stackingPolicy,
+    generationPolicy: "technology_only",
+    rarity: "common",
+    valueScore: 1,
+    tags: [],
+    description: "",
+    enabled,
+    operations: [{
+      operationId: `operation:${affixId}`,
+      operationIndex: 0,
+      sourceAffixId: affixId,
+      sourceAffixRevision: 1,
+      parameterKey: "pull",
+      operation: "flat_adjust",
+      direction: "increase",
+      magnitude: 1,
+      publishedMagnitudeRange: { min: 0, max: 2, ruleSetVersion: "rules:v1" },
+    }],
+    passivePayload: null,
+  };
+  return {
+    affixId,
+    revision: 1,
+    contentHash: createHash("sha256")
+      .update(canonicalPayload({ affixId, revision: 1, payload }))
+      .digest("hex"),
+    payload,
+  };
+}
+
+function trustedAffixState(definitions) {
+  const affixDefinitions = clone(definitions).sort((left, right) => {
+    const leftIdentity = canonicalPayload([left.affixId, left.revision, left.contentHash]);
+    const rightIdentity = canonicalPayload([right.affixId, right.revision, right.contentHash]);
+    return leftIdentity < rightIdentity ? -1 : leftIdentity > rightIdentity ? 1 : 0;
+  });
+  return {
+    affixDefinitions,
+    affixStateSha256: createHash("sha256")
+      .update(canonicalPayload(affixDefinitions))
+      .digest("hex"),
+  };
+}
+
 function expectedRecordHash(manifest, row, payloadField) {
   const values = {
     root: row.root,
@@ -628,13 +686,20 @@ test("v23 technology uses create/update successor actions and never rewrites one
     manifest.recordSchemas.v23TechnologyDefinitions.exactFields,
     manifest.recordSchemas.v23TechnologyDefinitions.allowedFields,
   );
+  const member = projectAffixDefinition("affix:member");
+  const affixState = trustedAffixState([member]);
+  const memberRef = {
+    id: member.affixId,
+    revision: member.revision,
+    contentHash: member.contentHash,
+  };
   const technologyWithoutHash = {
     technologyId: "technology:1",
     revision: 1,
     itemPartId: "part:rod",
     name: "力量技术",
     description: "",
-    memberAffixRefs: [],
+    memberAffixRefs: [memberRef],
     enabled: true,
   };
   const technology = {
@@ -646,6 +711,7 @@ test("v23 technology uses create/update successor actions and never rewrites one
     workspaceId: "workspace:1",
     baseWorkspaceRevision: 7,
     expectedCurrentHead: null,
+    expectedAffixStateSha256: affixState.affixStateSha256,
   };
   const trustedCreate = {
     schema: "project-workbook-technology-successor-context/v1",
@@ -656,6 +722,8 @@ test("v23 technology uses create/update successor actions and never rewrites one
     technologyIdExists: false,
     targetRevisionExists: false,
     currentHead: null,
+    affixStateSha256: affixState.affixStateSha256,
+    affixDefinitions: affixState.affixDefinitions,
   };
   const createProductionInput = {
     expectedWorkspaceRevision: 7,
@@ -663,7 +731,7 @@ test("v23 technology uses create/update successor actions and never rewrites one
     itemPartId: "part:rod",
     name: "力量技术",
     description: "",
-    memberAffixRefs: [],
+    memberAffixRefs: [memberRef],
     enabled: true,
   };
   const createAction = validateTechnologySuccessorAction(
@@ -686,7 +754,7 @@ test("v23 technology uses create/update successor actions and never rewrites one
         itemPartId: "part:rod",
         name: "力量技术",
         description: "",
-        memberAffixRefs: [],
+        memberAffixRefs: [memberRef],
         enabled: true,
       },
     },
@@ -746,6 +814,127 @@ test("v23 technology uses create/update successor actions and never rewrites one
       message,
     );
   }
+  const technologyWithMembers = (memberAffixRefs, overrides = {}) => {
+    const withoutHash = { ...technologyWithoutHash, memberAffixRefs, ...overrides };
+    return {
+      ...withoutHash,
+      contentHash: createHash("sha256").update(canonicalPayload(withoutHash)).digest("hex"),
+    };
+  };
+  assert.throws(
+    () => validateTechnologySuccessorAction(
+      manifest,
+      technologyWithMembers([]),
+      request,
+      trustedCreate,
+    ),
+    /requires at least one member affix/,
+  );
+  assert.throws(
+    () => validateTechnologySuccessorAction(
+      manifest,
+      technologyWithMembers([memberRef, memberRef]),
+      request,
+      trustedCreate,
+    ),
+    /stable IDs must be unique/,
+  );
+  const unresolvedRef = { id: "affix:missing", revision: 1, contentHash: "f".repeat(64) };
+  assert.throws(
+    () => validateTechnologySuccessorAction(
+      manifest,
+      technologyWithMembers([unresolvedRef]),
+      request,
+      trustedCreate,
+    ),
+    /unresolved or ambiguous/,
+  );
+  for (const [invalidMember, message] of [
+    [projectAffixDefinition("affix:disabled", { enabled: false }), /must be enabled/],
+    [projectAffixDefinition("affix:cross-part", { itemPartId: "part:reel" }), /same itemPartId/],
+  ]) {
+    const invalidState = trustedAffixState([invalidMember]);
+    const invalidRef = {
+      id: invalidMember.affixId,
+      revision: invalidMember.revision,
+      contentHash: invalidMember.contentHash,
+    };
+    assert.throws(
+      () => validateTechnologySuccessorAction(
+        manifest,
+        technologyWithMembers([invalidRef]),
+        { ...request, expectedAffixStateSha256: invalidState.affixStateSha256 },
+        {
+          ...trustedCreate,
+          affixStateSha256: invalidState.affixStateSha256,
+          affixDefinitions: invalidState.affixDefinitions,
+        },
+      ),
+      message,
+    );
+  }
+  const conflictFirst = projectAffixDefinition(
+    "affix:conflict-a",
+    { semanticContributionKey: "semantic:same" },
+  );
+  const conflictSecond = projectAffixDefinition(
+    "affix:conflict-b",
+    { semanticContributionKey: "semantic:same" },
+  );
+  const conflictState = trustedAffixState([conflictFirst, conflictSecond]);
+  const conflictRefs = conflictState.affixDefinitions.map((definition) => ({
+    id: definition.affixId,
+    revision: definition.revision,
+    contentHash: definition.contentHash,
+  }));
+  assert.throws(
+    () => validateTechnologySuccessorAction(
+      manifest,
+      technologyWithMembers(conflictRefs),
+      { ...request, expectedAffixStateSha256: conflictState.affixStateSha256 },
+      {
+        ...trustedCreate,
+        affixStateSha256: conflictState.affixStateSha256,
+        affixDefinitions: conflictState.affixDefinitions,
+      },
+    ),
+    /semantic contribution conflict/,
+  );
+  const extraMember = projectAffixDefinition("affix:later");
+  const changedAffixState = trustedAffixState([member, extraMember]);
+  assert.throws(
+    () => validateTechnologySuccessorAction(
+      manifest,
+      technology,
+      request,
+      {
+        ...trustedCreate,
+        affixStateSha256: changedAffixState.affixStateSha256,
+        affixDefinitions: changedAffixState.affixDefinitions,
+      },
+    ),
+    /affix state is stale/,
+  );
+  const tamperedTrustedState = clone(trustedCreate);
+  tamperedTrustedState.affixDefinitions[0].payload.name = "tampered";
+  assert.throws(
+    () => validateTechnologySuccessorAction(
+      manifest,
+      technology,
+      request,
+      tamperedTrustedState,
+    ),
+    /trusted affix state does not match/,
+  );
+  assert.throws(
+    () => validateTechnologySuccessorAction(
+      manifest,
+      technology,
+      request,
+      { ...trustedCreate, unknownAffixState: true },
+    ),
+    /trusted context must use the closed schema/,
+  );
 
   const currentHead = {
     technologyId: technology.technologyId,
@@ -776,7 +965,7 @@ test("v23 technology uses create/update successor actions and never rewrites one
     itemPartId: "part:rod",
     name: "力量技术（修订）",
     description: "",
-    memberAffixRefs: [],
+    memberAffixRefs: [memberRef],
     enabled: true,
   };
   const updateAction = validateTechnologySuccessorAction(
@@ -800,7 +989,7 @@ test("v23 technology uses create/update successor actions and never rewrites one
         itemPartId: "part:rod",
         name: "力量技术（修订）",
         description: "",
-        memberAffixRefs: [],
+        memberAffixRefs: [memberRef],
         enabled: true,
       },
     },

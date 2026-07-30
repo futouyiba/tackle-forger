@@ -168,6 +168,10 @@ const EXPECTED_PRESERVED_EXACT_COMPARE_POLICY = {
   ],
   comparison: "CONSTANT_TIME_SHA256_AND_CANONICAL_PAYLOAD_EXACT",
   missingExpected: "REJECT",
+  candidateSetComparison: "EXACT_ROOT_RECORD_KEY_SCHEMA_SET",
+  trustedRowOmission: "REJECT",
+  candidateExtra: "REJECT",
+  duplicateIdentity: "REJECT",
 };
 
 const EXPECTED_CONDITIONAL_EXACT_FIELD_POLICIES = {
@@ -299,6 +303,7 @@ const EXPECTED_TECHNOLOGY_SUCCESSOR_POLICY = {
   trustedContextSchema: "project-workbook-technology-successor-context/v1",
   requestSchema: "project-workbook-technology-successor-request/v1",
   actionSchema: "project-workbook-technology-successor-action/v1",
+  actionFields: ["schema", "actionCode", "actionPayload"],
   requestFields: ["schema", "workspaceId", "baseWorkspaceRevision", "expectedCurrentHead"],
   trustedContextFields: [
     "schema",
@@ -313,6 +318,9 @@ const EXPECTED_TECHNOLOGY_SUCCESSOR_POLICY = {
   hashContract: "V23_TECHNOLOGY_CONTENT_HASH_RFC8785_SHA256_V1",
   hashImplementation: "lib/v23-technology.ts#v23TechnologyContentHash",
   actionImplementation: "lib/v23-domain-actions.ts#executeV23DomainAction",
+  inputHashContract: "V23_ACTION_INPUT_HASH_RFC8785_SHA256_V1",
+  inputHashImplementation: "lib/v23-domain-actions.ts#v23ActionInputHash",
+  productionMapping: "ACTION_CODE_AND_ACTION_PAYLOAD_DIRECT_TO_EXECUTE_V23_DOMAIN_ACTION",
   derivedFields: ["revision", "contentHash"],
   create: {
     actionCode: "create_technology",
@@ -320,6 +328,8 @@ const EXPECTED_TECHNOLOGY_SUCCESSOR_POLICY = {
     requiresTechnologyIdAbsent: true,
     requiresTargetRevisionAbsent: true,
     actionInputFields: [
+      "expectedWorkspaceRevision",
+      "inputHash",
       "technologyId",
       "itemPartId",
       "name",
@@ -335,6 +345,8 @@ const EXPECTED_TECHNOLOGY_SUCCESSOR_POLICY = {
     exactFields: ["technologyId", "itemPartId"],
     requiresTargetRevisionAbsent: true,
     actionInputFields: [
+      "expectedWorkspaceRevision",
+      "inputHash",
       "technologyId",
       "expectedTechnologyRevision",
       "itemPartId",
@@ -1419,8 +1431,9 @@ function validateTechnologyHead(head, label) {
   assert.match(head.contentHash, /^[0-9a-f]{64}$/, `${label}.contentHash must be lowercase sha256`);
 }
 
-function technologyActionPayload(candidatePayload, actionCode, currentHead) {
-  const payload = {
+function technologyActionPayload(candidatePayload, actionCode, currentHead, expectedWorkspaceRevision) {
+  const canonicalInput = {
+    expectedWorkspaceRevision,
     technologyId: candidatePayload.technologyId,
     ...(actionCode === "update_technology"
       ? { expectedTechnologyRevision: currentHead.revision }
@@ -1430,6 +1443,13 @@ function technologyActionPayload(candidatePayload, actionCode, currentHead) {
     description: candidatePayload.description,
     memberAffixRefs: candidatePayload.memberAffixRefs,
     enabled: candidatePayload.enabled,
+  };
+  const payload = {
+    expectedWorkspaceRevision,
+    inputHash: sha256(canonicalJson(canonicalInput)),
+    ...Object.fromEntries(
+      Object.entries(canonicalInput).filter(([field]) => field !== "expectedWorkspaceRevision"),
+    ),
   };
   assert.equal(Object.hasOwn(payload, "revision"), false);
   assert.equal(Object.hasOwn(payload, "contentHash"), false);
@@ -1446,6 +1466,86 @@ function validateTechnologyCandidateHash(policy, candidatePayload) {
     sha256(canonicalJson(hashInput)),
     `v23TechnologyDefinitions.contentHash does not match ${policy.hashContract}`,
   );
+}
+
+export function validateTechnologyProductionAction(
+  manifest,
+  action,
+  candidatePayload,
+  request,
+  trustedContext,
+) {
+  const policy = manifest.technologySuccessorPolicy;
+  assert.deepEqual(
+    policy,
+    EXPECTED_TECHNOLOGY_SUCCESSOR_POLICY,
+    "Technology successor policy must stay bound to the production action envelope",
+  );
+  assertExactKeys(action, policy.actionFields, "Technology successor action");
+  assert.equal(action.schema, policy.actionSchema);
+  const branch = trustedContext.currentHead === null ? policy.create : policy.update;
+  assert.equal(action.actionCode, branch.actionCode, "Technology successor action code is not executable");
+  assertExactKeys(
+    action.actionPayload,
+    branch.actionInputFields,
+    "Technology successor production payload",
+  );
+  assert.equal(
+    action.actionPayload.expectedWorkspaceRevision,
+    request.baseWorkspaceRevision,
+    "Technology successor production workspace revision must bind request base",
+  );
+  assert.equal(
+    action.actionPayload.expectedWorkspaceRevision,
+    trustedContext.baseWorkspaceRevision,
+    "Technology successor production workspace revision must bind trusted context",
+  );
+  for (const field of ["technologyId", "itemPartId", "name"]) {
+    assert.ok(
+      typeof action.actionPayload[field] === "string"
+        && action.actionPayload[field].length > 0
+        && action.actionPayload[field] === action.actionPayload[field].trim(),
+      `Technology successor production ${field} must be non-empty canonical text`,
+    );
+  }
+  assert.equal(
+    typeof action.actionPayload.description,
+    "string",
+    "Technology successor production description must be text",
+  );
+  assert.equal(
+    typeof action.actionPayload.enabled,
+    "boolean",
+    "Technology successor production enabled must be boolean",
+  );
+  assert.ok(
+    Array.isArray(action.actionPayload.memberAffixRefs),
+    "Technology successor production memberAffixRefs must be an array",
+  );
+  assert.match(
+    action.actionPayload.inputHash,
+    /^[0-9a-f]{64}$/,
+    "Technology successor production inputHash must be lowercase sha256",
+  );
+  const canonicalInput = { ...action.actionPayload };
+  delete canonicalInput.inputHash;
+  assert.equal(
+    action.actionPayload.inputHash,
+    sha256(canonicalJson(canonicalInput)),
+    `Technology successor production inputHash does not match ${policy.inputHashContract}`,
+  );
+  const expectedPayload = technologyActionPayload(
+    candidatePayload,
+    branch.actionCode,
+    trustedContext.currentHead,
+    request.baseWorkspaceRevision,
+  );
+  assert.deepEqual(
+    action.actionPayload,
+    expectedPayload,
+    "Technology successor production payload does not match the trusted candidate projection",
+  );
+  return true;
 }
 
 export function validateTechnologySuccessorAction(
@@ -1534,13 +1634,26 @@ export function validateTechnologySuccessorAction(
       `create_technology requires revision ${policy.create.revision}`,
     );
     validateTechnologyCandidateHash(policy, candidatePayload);
-    const actionPayload = technologyActionPayload(candidatePayload, policy.create.actionCode, null);
+    const actionPayload = technologyActionPayload(
+      candidatePayload,
+      policy.create.actionCode,
+      null,
+      request.baseWorkspaceRevision,
+    );
     assert.deepEqual(Object.keys(actionPayload), policy.create.actionInputFields);
-    return {
+    const action = {
       schema: policy.actionSchema,
       actionCode: policy.create.actionCode,
       actionPayload,
     };
+    validateTechnologyProductionAction(
+      manifest,
+      action,
+      candidatePayload,
+      request,
+      trustedContext,
+    );
+    return action;
   }
 
   const currentHead = trustedContext.currentHead;
@@ -1569,13 +1682,26 @@ export function validateTechnologySuccessorAction(
     "update_technology revision must equal current head plus one",
   );
   validateTechnologyCandidateHash(policy, candidatePayload);
-  const actionPayload = technologyActionPayload(candidatePayload, policy.update.actionCode, currentHead);
+  const actionPayload = technologyActionPayload(
+    candidatePayload,
+    policy.update.actionCode,
+    currentHead,
+    request.baseWorkspaceRevision,
+  );
   assert.deepEqual(Object.keys(actionPayload), policy.update.actionInputFields);
-  return {
+  const action = {
     schema: policy.actionSchema,
     actionCode: policy.update.actionCode,
     actionPayload,
   };
+  validateTechnologyProductionAction(
+    manifest,
+    action,
+    candidatePayload,
+    request,
+    trustedContext,
+  );
+  return action;
 }
 
 export function validateImportableExactFields(
@@ -1984,6 +2110,112 @@ export function validateTrustedPreservedExactMatch(manifest, row, context = {}) 
   return true;
 }
 
+export function validatePreservedCandidateSet(
+  manifest,
+  candidateRows,
+  trustedPreservedContext,
+  context = {},
+) {
+  assert.deepEqual(
+    manifest.preservedExactComparePolicy,
+    EXPECTED_PRESERVED_EXACT_COMPARE_POLICY,
+    "preserved exact-set policy must stay manifest-bound",
+  );
+  assert.ok(Array.isArray(candidateRows), "preserved candidate rows are required");
+  assert.ok(
+    trustedPreservedContext
+      && Object.getPrototypeOf(trustedPreservedContext) === Object.prototype,
+    "preserved candidate set requires trusted server expected context",
+  );
+  assert.deepEqual(Object.keys(trustedPreservedContext), [
+    "schema",
+    "authority",
+    "workspace_id",
+    "base_workspace_revision",
+    "rows",
+  ], "trusted preserved expected context must be closed");
+  assert.equal(
+    trustedPreservedContext.schema,
+    manifest.preservedExactComparePolicy.schema,
+  );
+  assert.equal(
+    trustedPreservedContext.authority,
+    manifest.preservedExactComparePolicy.authority,
+  );
+  assert.equal(
+    trustedPreservedContext.workspace_id,
+    context.workspaceId,
+    "preserved candidate set belongs to another workspace",
+  );
+  assert.equal(
+    trustedPreservedContext.base_workspace_revision,
+    context.baseWorkspaceRevision,
+    "preserved candidate set belongs to another workspace revision",
+  );
+  assert.ok(
+    Array.isArray(trustedPreservedContext.rows),
+    "trusted preserved expected rows are required",
+  );
+  const indexRows = (rows, label) => {
+    const indexed = new Map();
+    for (const row of rows) {
+      assert.ok(
+        row && Object.getPrototypeOf(row) === Object.prototype,
+        `${label} must contain closed row objects`,
+      );
+      assert.deepEqual(Object.keys(row), [
+        "root",
+        "record_schema_id",
+        "record_key",
+        "record_revision",
+        "record_content_sha256",
+        "opaque_canonical_payload_json",
+      ], `${label} must use the closed preserved envelope`);
+      assert.ok(
+        manifest.classifications.preserved_frozen.includes(row.root),
+        `${label} contains a non-preserved root`,
+      );
+      assert.equal(typeof row.record_schema_id, "string", `${label} schema must be text`);
+      assert.doesNotThrow(() => JSON.parse(row.record_key), `${label} record_key must be JSON`);
+      const identity = canonicalJson([row.root, JSON.parse(row.record_key)]);
+      assert.ok(!indexed.has(identity), `${label} contains a duplicate preserved root/record_key`);
+      indexed.set(identity, row);
+    }
+    return indexed;
+  };
+  const trustedByIdentity = indexRows(
+    trustedPreservedContext.rows,
+    "trusted preserved expected rows",
+  );
+  const candidateByIdentity = indexRows(candidateRows, "preserved candidate rows");
+  assert.equal(
+    candidateByIdentity.size,
+    trustedByIdentity.size,
+    "preserved candidate set must not omit or add trusted rows",
+  );
+  for (const [identity, trustedRow] of trustedByIdentity) {
+    const candidate = candidateByIdentity.get(identity);
+    assert.ok(candidate, "preserved candidate set omits a trusted row");
+    assert.equal(
+      candidate.record_schema_id,
+      trustedRow.record_schema_id,
+      `${trustedRow.root} preserved candidate schema drift`,
+    );
+    assert.equal(
+      candidate.record_revision,
+      trustedRow.record_revision,
+      `${trustedRow.root} preserved candidate revision drift`,
+    );
+  }
+  for (const identity of candidateByIdentity.keys()) {
+    assert.ok(
+      trustedByIdentity.has(identity),
+      "preserved candidate set contains an extra row",
+    );
+  }
+  return true;
+}
+
 export function validateRecordEnvelope(manifest, row, context = {}) {
   assert.ok(row && Object.getPrototypeOf(row) === Object.prototype,
     "record envelope must be a closed object");
@@ -2246,6 +2478,16 @@ function validateMachineContentSheets(
     declaredMachineSheets,
     "machineSheets must match the declared semantic and transport sets exactly",
   );
+  validatePreservedCandidateSet(
+    manifest,
+    machineSheets.__TF_PRESERVED,
+    trustedPreservedContext,
+    {
+      repositoryRoot,
+      workspaceId: manifestFields.workspace_id,
+      baseWorkspaceRevision: manifestFields.base_workspace_revision,
+    },
+  );
   validateRecordSheetCardinality(
     manifest,
     machineSheets.__TF_CURRENT,
@@ -2447,6 +2689,18 @@ export function validateRootSummary(
     Object.keys(rootRecordContext),
     hashedRoots,
     "ROOT_SUMMARY context must contain every and only hash-bearing roots",
+  );
+  validatePreservedCandidateSet(
+    manifest,
+    manifest.classifications.preserved_frozen.flatMap(
+      (root) => rootRecordContext[root],
+    ),
+    trustedPreservedContext,
+    {
+      repositoryRoot,
+      workspaceId: trustedPreservedContext.workspace_id,
+      baseWorkspaceRevision: trustedPreservedContext.base_workspace_revision,
+    },
   );
   const sheet = manifest.workbookSchema.sheets.ROOT_SUMMARY;
   const classificationByRoot = new Map(
@@ -3375,10 +3629,29 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     /export function v23TechnologyContentHash\s*\(/,
     "Technology successor hash implementation is missing",
   );
+  const technologyActionSource = readFileSync(
+    path.join(process.cwd(), "lib/v23-domain-actions.ts"),
+    "utf8",
+  );
   assert.match(
-    readFileSync(path.join(process.cwd(), "lib/v23-domain-actions.ts"), "utf8"),
+    technologyActionSource,
     /action === "create_technology" \|\| action === "update_technology"/,
     "Technology successor action implementation is missing",
+  );
+  assert.match(
+    technologyActionSource,
+    /export function v23ActionInputHash\s*\(/,
+    "Technology successor production input hash implementation is missing",
+  );
+  assert.match(
+    technologyActionSource,
+    /"expectedWorkspaceRevision", "inputHash", "technologyId"/,
+    "Technology successor production action envelope is missing revision/hash guards",
+  );
+  assert.match(
+    technologyActionSource,
+    /requireInputHash\(payload\);\s*requireWorkspaceRevision\(payload, workspaceRevision\);/,
+    "Technology successor production entry does not validate hash and workspace revision",
   );
   validateSourceProvenancePolicyCatalog(manifest);
   assert.deepEqual(

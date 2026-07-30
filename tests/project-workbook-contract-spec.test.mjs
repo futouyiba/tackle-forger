@@ -18,6 +18,7 @@ import {
   validateDiagnosticRows,
   validateImportableExactFields,
   validatePreservedRootCatalog,
+  validatePreservedCandidateSet,
   validateProjectWorkbookManifest,
 validateRecordEnvelope,
 validateTrustedPreservedExactMatch,
@@ -26,6 +27,7 @@ validateTrustedPreservedExactMatch,
 validateServerRefEnvelope,
   validateSourceProvenancePolicyCatalog,
   validateTechnologySuccessorAction,
+  validateTechnologyProductionAction,
   validateWorkbookEnvelope,
   validateWorkbookRemovalIntentRoot,
 } from "../scripts/check-project-workbook-contract.mjs";
@@ -655,12 +657,31 @@ test("v23 technology uses create/update successor actions and never rewrites one
     targetRevisionExists: false,
     currentHead: null,
   };
+  const createProductionInput = {
+    expectedWorkspaceRevision: 7,
+    technologyId: "technology:1",
+    itemPartId: "part:rod",
+    name: "力量技术",
+    description: "",
+    memberAffixRefs: [],
+    enabled: true,
+  };
+  const createAction = validateTechnologySuccessorAction(
+    manifest,
+    technology,
+    request,
+    trustedCreate,
+  );
   assert.deepEqual(
-    validateTechnologySuccessorAction(manifest, technology, request, trustedCreate),
+    createAction,
     {
       schema: "project-workbook-technology-successor-action/v1",
       actionCode: "create_technology",
       actionPayload: {
+        expectedWorkspaceRevision: 7,
+        inputHash: createHash("sha256")
+          .update(canonicalPayload(createProductionInput))
+          .digest("hex"),
         technologyId: "technology:1",
         itemPartId: "part:rod",
         name: "力量技术",
@@ -669,7 +690,17 @@ test("v23 technology uses create/update successor actions and never rewrites one
         enabled: true,
       },
     },
-    "F2 emits only production create action inputs and never forwards derived fields",
+    "F2 emits the complete production create payload and never forwards derived fields",
+  );
+  assert.equal(
+    validateTechnologyProductionAction(
+      manifest,
+      createAction,
+      technology,
+      request,
+      trustedCreate,
+    ),
+    true,
   );
   assert.throws(
     () => validateImportableExactFields(
@@ -738,12 +769,32 @@ test("v23 technology uses create/update successor actions and never rewrites one
     technologyIdExists: true,
     currentHead,
   };
+  const updateProductionInput = {
+    expectedWorkspaceRevision: 7,
+    technologyId: "technology:1",
+    expectedTechnologyRevision: 1,
+    itemPartId: "part:rod",
+    name: "力量技术（修订）",
+    description: "",
+    memberAffixRefs: [],
+    enabled: true,
+  };
+  const updateAction = validateTechnologySuccessorAction(
+    manifest,
+    update,
+    updateRequest,
+    trustedUpdate,
+  );
   assert.deepEqual(
-    validateTechnologySuccessorAction(manifest, update, updateRequest, trustedUpdate),
+    updateAction,
     {
       schema: "project-workbook-technology-successor-action/v1",
       actionCode: "update_technology",
       actionPayload: {
+        expectedWorkspaceRevision: 7,
+        inputHash: createHash("sha256")
+          .update(canonicalPayload(updateProductionInput))
+          .digest("hex"),
         technologyId: "technology:1",
         expectedTechnologyRevision: 1,
         itemPartId: "part:rod",
@@ -753,8 +804,93 @@ test("v23 technology uses create/update successor actions and never rewrites one
         enabled: true,
       },
     },
-    "F2 emits expectedTechnologyRevision but not candidate revision/contentHash",
+    "F2 emits executable revision/hash guards but not candidate revision/contentHash",
   );
+  assert.equal(
+    validateTechnologyProductionAction(
+      manifest,
+      updateAction,
+      update,
+      updateRequest,
+      trustedUpdate,
+    ),
+    true,
+  );
+  for (const [baseline, candidate, requestValue, context] of [
+    [createAction, technology, request, trustedCreate],
+    [updateAction, update, updateRequest, trustedUpdate],
+  ]) {
+    const missingRevision = clone(baseline);
+    delete missingRevision.actionPayload.expectedWorkspaceRevision;
+    assert.throws(
+      () => validateTechnologyProductionAction(
+        manifest,
+        missingRevision,
+        candidate,
+        requestValue,
+        context,
+      ),
+      /production payload/,
+    );
+    const forgedRevision = clone(baseline);
+    forgedRevision.actionPayload.expectedWorkspaceRevision += 1;
+    const withoutRevisionHash = clone(forgedRevision.actionPayload);
+    delete withoutRevisionHash.inputHash;
+    forgedRevision.actionPayload.inputHash = createHash("sha256")
+      .update(canonicalPayload(withoutRevisionHash))
+      .digest("hex");
+    assert.throws(
+      () => validateTechnologyProductionAction(
+        manifest,
+        forgedRevision,
+        candidate,
+        requestValue,
+        context,
+      ),
+      /must bind request base/,
+    );
+    const missingHash = clone(baseline);
+    delete missingHash.actionPayload.inputHash;
+    assert.throws(
+      () => validateTechnologyProductionAction(
+        manifest,
+        missingHash,
+        candidate,
+        requestValue,
+        context,
+      ),
+      /production payload/,
+    );
+    const forgedHash = clone(baseline);
+    forgedHash.actionPayload.inputHash = "f".repeat(64);
+    assert.throws(
+      () => validateTechnologyProductionAction(
+        manifest,
+        forgedHash,
+        candidate,
+        requestValue,
+        context,
+      ),
+      /inputHash does not match/,
+    );
+    const changedPayload = clone(baseline);
+    changedPayload.actionPayload.name = "篡改";
+    const changedHashInput = clone(changedPayload.actionPayload);
+    delete changedHashInput.inputHash;
+    changedPayload.actionPayload.inputHash = createHash("sha256")
+      .update(canonicalPayload(changedHashInput))
+      .digest("hex");
+    assert.throws(
+      () => validateTechnologyProductionAction(
+        manifest,
+        changedPayload,
+        candidate,
+        requestValue,
+        context,
+      ),
+      /does not match the trusted candidate projection/,
+    );
+  }
   for (const [candidate, requestValue, context, message] of [
     [
       { ...update, revision: 3 },
@@ -2655,6 +2791,110 @@ test("every preserved root uses trusted workspace/revision/key exact comparison"
       root,
     );
   }
+});
+
+test("preserved candidates equal the complete trusted root key and schema set", async () => {
+  const { manifest } = await fixture();
+  const rows = manifest.classifications.preserved_frozen.map((root) => {
+    const schemaCatalog = manifest.preservedSchemaCatalog[root];
+    const recordSchemaId = typeof schemaCatalog === "string"
+      ? schemaCatalog
+      : Object.values(schemaCatalog)[0];
+    return {
+      root,
+      record_schema_id: recordSchemaId,
+      record_key: canonicalPayload([`key:${root}`]),
+      record_revision: "null",
+      record_content_sha256: "0".repeat(64),
+      opaque_canonical_payload_json: canonicalPayload({ proof: root }),
+    };
+  });
+  const trusted = trustedPreservedContext(manifest, rows);
+  const context = {
+    workspaceId: "workspace:1",
+    baseWorkspaceRevision: "1",
+  };
+  assert.equal(validatePreservedCandidateSet(manifest, rows, trusted, context), true);
+  for (const root of manifest.classifications.preserved_frozen) {
+    assert.throws(
+      () => validatePreservedCandidateSet(
+        manifest,
+        rows.filter((row) => row.root !== root),
+        trusted,
+        context,
+      ),
+      /must not omit or add trusted rows|omits a trusted row/,
+      `${root} trusted non-singleton rows cannot disappear in MERGE or REPLACE`,
+    );
+  }
+  const duplicate = clone(rows);
+  duplicate.push(clone(rows[0]));
+  assert.throws(
+    () => validatePreservedCandidateSet(manifest, duplicate, trusted, context),
+    /duplicate preserved root\/record_key/,
+  );
+  const extra = clone(rows);
+  extra.push({ ...clone(rows[0]), record_key: canonicalPayload(["extra"]) });
+  assert.throws(
+    () => validatePreservedCandidateSet(manifest, extra, trusted, context),
+    /missing or ambiguous|must not omit or add trusted rows|extra row/,
+  );
+  const wrongRoot = clone(rows);
+  wrongRoot[0].root = manifest.classifications.importable_current[0];
+  assert.throws(
+    () => validatePreservedCandidateSet(manifest, wrongRoot, trusted, context),
+    /non-preserved root/,
+  );
+  const wrongKey = clone(rows);
+  wrongKey[0].record_key = canonicalPayload(["wrong-key"]);
+  assert.throws(
+    () => validatePreservedCandidateSet(manifest, wrongKey, trusted, context),
+    /must not omit or add trusted rows|omits a trusted row/,
+  );
+  const wrongSchema = clone(rows);
+  wrongSchema[0].record_schema_id = "project-workbook/preserved/forged/v1";
+  assert.throws(
+    () => validatePreservedCandidateSet(manifest, wrongSchema, trusted, context),
+    /schema drift/,
+  );
+  const wrongRecordRevision = clone(rows);
+  wrongRecordRevision[0].record_revision = '"forged"';
+  assert.throws(
+    () => validatePreservedCandidateSet(manifest, wrongRecordRevision, trusted, context),
+    /revision drift/,
+  );
+  assert.throws(
+    () => validatePreservedCandidateSet(
+      manifest,
+      rows,
+      { ...clone(trusted), workspace_id: "workspace:other" },
+      context,
+    ),
+    /another workspace/,
+  );
+  assert.throws(
+    () => validatePreservedCandidateSet(
+      manifest,
+      rows,
+      { ...clone(trusted), base_workspace_revision: "2" },
+      context,
+    ),
+    /another workspace revision/,
+  );
+
+  const summary = rootSummaryFixture(manifest);
+  const trustedWithOneNonSingleton = trustedPreservedContext(manifest, [rows[0]]);
+  assert.throws(
+    () => validateRootSummary(
+      manifest,
+      summary.rows,
+      summary.rootRecordContext,
+      process.cwd(),
+      trustedWithOneNonSingleton,
+    ),
+    /must not omit or add trusted rows|omits a trusted row/,
+    "ROOT_SUMMARY zero count/hash cannot bypass preserved-set omission",
+  );
 });
 
 test("every manifest-derived current and preserved singleton requires exactly one row", async () => {

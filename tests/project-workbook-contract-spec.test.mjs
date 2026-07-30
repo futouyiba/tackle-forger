@@ -398,6 +398,88 @@ test("record key JSON binds root identity arity, primitive types and preserved v
   );
 });
 
+test("record revision is typed RFC8785 scalar JSON and matches payload plus identity", async () => {
+  const { manifest } = await fixture();
+  const revisionColumn = manifest.workbookSchema.sheets.__TF_CURRENT.columns
+    .find((entry) => entry.name === "record_revision");
+  const seriesContext = {
+    manifest,
+    root: "seriesDefinitions",
+    payload: { id: "series:1", revision: 1 },
+    recordKey: ["series:1"],
+  };
+  assert.equal(validateMachineCell(revisionColumn, "1", "string", seriesContext), true);
+  for (const invalid of ["v1", "01", "null", '"1"']) {
+    assert.throws(
+      () => validateMachineCell(revisionColumn, invalid, "string", seriesContext),
+      /JSON|canonical|safe integer|required/,
+    );
+  }
+  assert.throws(
+    () => validateMachineCell(revisionColumn, "2", "string", seriesContext),
+    /payload mismatch/,
+  );
+  assert.throws(
+    () => validateMachineCell(revisionColumn, "1", "string", {
+      manifest,
+      root: "v23TechnologyDefinitions",
+      payload: { technologyId: "tech:1", revision: 1 },
+      recordKey: ["tech:1", 2],
+    }),
+    /identity mismatch/,
+  );
+
+  const optionalString = {
+    manifest,
+    root: "performanceProfiles",
+    payload: { id: "performance:1" },
+    recordKey: ["performance:1"],
+  };
+  assert.equal(validateMachineCell(revisionColumn, "null", "string", optionalString), true);
+  assert.throws(
+    () => validateMachineCell(revisionColumn, '"null"', "string", optionalString),
+    /payload mismatch/,
+  );
+  assert.equal(
+    validateMachineCell(revisionColumn, '"null"', "string", {
+      ...optionalString,
+      payload: { id: "performance:1", sourceRevisionId: "null" },
+    }),
+    true,
+  );
+
+  assert.equal(
+    validateMachineCell(revisionColumn, '"v1"', "string", {
+      manifest,
+      root: "fiveAxisVertexSets",
+      variant: "LegacyFiveAxisVertexSet",
+      payload: { definitionVersion: "v1" },
+      recordKey: ["definition:1", "v1", "grade:1", "rules:v1"],
+    }),
+    true,
+  );
+  assert.equal(
+    validateMachineCell(revisionColumn, '"v2"', "string", {
+      manifest,
+      root: "fiveAxisVertexSets",
+      variant: "FiveAxisVertexSet",
+      payload: { fiveAxisDefinitionVersion: "v2" },
+      recordKey: ["vertex:1"],
+    }),
+    true,
+  );
+  assert.throws(
+    () => validateMachineCell(revisionColumn, "2", "string", {
+      manifest,
+      root: "fiveAxisVertexSets",
+      variant: "FiveAxisVertexSet",
+      payload: { fiveAxisDefinitionVersion: "v2" },
+      recordKey: ["vertex:1"],
+    }),
+    /non-empty NFC text/,
+  );
+});
+
 test("forbidden roots have no content-derived hash while diagnostics are non-semantic", async () => {
   const { manifest, roots } = await fixture();
   assert.equal(manifest.workbookSchema.classificationProjection.forbidden.sheet, "__TF_FORBIDDEN");

@@ -110,7 +110,7 @@ const EXPECTED_SHEETS = {
     columns: [
       column("root", "workspace-root"), column("record_schema_id", "stable-id"),
       column("record_key", "rfc8785-key-json"),
-      column("record_revision", "canonical-revision-or-null"),
+      column("record_revision", "rfc8785-revision-scalar"),
       column("record_content_sha256", "lowercase-sha256"),
       column("payload_json", "rfc8785-json"),
     ],
@@ -121,7 +121,7 @@ const EXPECTED_SHEETS = {
     kind: "machine",
     columns: [
       column("root", "workspace-root"), column("record_key", "rfc8785-key-json"),
-      column("record_revision", "canonical-revision-or-null"),
+      column("record_revision", "rfc8785-revision-scalar"),
       column("record_content_sha256", "lowercase-sha256"),
       column("opaque_canonical_payload_json", "rfc8785-json"),
     ],
@@ -234,6 +234,21 @@ function fieldPathType(source, typeName, fieldPath) {
   return fieldType;
 }
 
+function fieldPathDefinition(source, typeName, fieldPath) {
+  let currentType = typeName;
+  let definition = null;
+  let optional = false;
+  for (const part of fieldPath.split(".")) {
+    const fields = interfaceFieldDefinitions(source, currentType);
+    assert.ok(fields, `revision type ${currentType} must resolve to an interface`);
+    definition = fields.get(part);
+    assert.ok(definition, `${typeName}.${fieldPath} is absent`);
+    optional ||= definition.optional;
+    currentType = definition.type.match(/\b([A-Z][A-Za-z0-9_$]*)\b/)?.[1] ?? "";
+  }
+  return { type: definition.type, optional };
+}
+
 function recordKeyComponentKinds(manifest, root, variant, repositoryRoot) {
   const fields = expectedRecordKeyFields(manifest, root, variant);
   if (fields.length === 1 && fields[0] === "$singleton") return ["singleton"];
@@ -258,6 +273,51 @@ function recordKeyComponentKinds(manifest, root, variant, repositoryRoot) {
   });
 }
 
+function revisionContract(manifest, root, variant, repositoryRoot) {
+  const schema = manifest.recordSchemas[root];
+  const catalog = manifest.preservedRootCatalog[root];
+  assert.ok(schema || catalog, `revision root ${root} is not importable or preserved`);
+  const selected = schema
+    ? schema
+    : catalog.carrier === "variant_records"
+      ? catalog.variants.find((entry) => entry.type === variant)
+      : catalog;
+  assert.ok(selected, `${root} requires an explicit preserved union variant`);
+  const typeRef = schema
+    ? manifest.recordSchemaAuthority.typeRefs[root]
+    : catalog.typeRef;
+  const [sourcePath, defaultTypeName] = typeRef.split("#");
+  const typeName = variant ?? defaultTypeName;
+  if (selected.revisionFields.length === 0) {
+    return { field: null, keyFields: selected.identityFields ?? selected.recordKeyFields };
+  }
+  assert.equal(selected.revisionFields.length, 1, `${root} row revision must be scalar`);
+  const source = readFileSync(path.join(repositoryRoot, sourcePath), "utf8");
+  const field = selected.revisionFields[0];
+  const definition = fieldPathDefinition(source, typeName, field);
+  let fieldType = definition.type;
+  const alias = fieldType.match(/^\s*([A-Z][A-Za-z0-9_$]*)\s*$/)?.[1];
+  if (alias) fieldType = parseTypeDeclarations(source).get(alias) ?? fieldType;
+  const acceptsNumber = /\bnumber\b/.test(fieldType);
+  const acceptsString = /\bstring\b/.test(fieldType) || /["'`][^"'`]*["'`]/.test(fieldType);
+  assert.notEqual(acceptsNumber, acceptsString, `${root}.${field} revision must have one scalar type`);
+  return {
+    field,
+    kind: acceptsNumber ? "safe-integer" : "string",
+    optional: definition.optional,
+    keyFields: selected.identityFields ?? selected.recordKeyFields,
+  };
+}
+
+function valueAtFieldPath(value, fieldPath) {
+  return fieldPath.split(".").reduce(
+    (current, part) => current !== null && typeof current === "object"
+      ? current[part]
+      : undefined,
+    value,
+  );
+}
+
 export function validateMachineCell(columnSchema, value, cellKind = "string", context = {}) {
   assert.equal(cellKind, "string", `${columnSchema.name} rejects Excel ${cellKind} cells`);
   assert.equal(typeof value, "string", `${columnSchema.name} must be encoded as text`);
@@ -268,8 +328,48 @@ export function validateMachineCell(columnSchema, value, cellKind = "string", co
     assert.ok(BigInt(value) <= BigInt(Number.MAX_SAFE_INTEGER), `${columnSchema.name} is not safe`);
   } else if (format === "lowercase-sha256") {
     assert.match(value, /^[0-9a-f]{64}$/);
-  } else if (format === "canonical-revision-or-null") {
-    assert.ok(value === "null" || /^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$/.test(value));
+  } else if (format === "rfc8785-revision-scalar") {
+    assert.ok(context.manifest && context.root, "record revision requires manifest and root");
+    const contract = revisionContract(
+      context.manifest,
+      context.root,
+      context.variant,
+      context.repositoryRoot ?? process.cwd(),
+    );
+    const parsed = JSON.parse(value);
+    assert.equal(canonicalJson(parsed), value, `${columnSchema.name} must be canonical scalar JSON`);
+    assert.ok(
+      parsed === null || typeof parsed === "string" || typeof parsed === "number",
+      `${columnSchema.name} must be a scalar JSON value`,
+    );
+    if (contract.field === null) {
+      assert.equal(parsed, null, `${context.root} has no revision field`);
+    } else {
+      assert.ok(Object.hasOwn(context, "payload"), "record revision requires projected payload");
+      const payloadRevision = valueAtFieldPath(context.payload, contract.field);
+      if (parsed === null) {
+        assert.equal(contract.optional, true, `${context.root}.${contract.field} is required`);
+        assert.equal(payloadRevision, undefined, `${context.root}.${contract.field} payload mismatch`);
+      } else if (contract.kind === "safe-integer") {
+        assert.ok(Number.isSafeInteger(parsed), `${context.root}.${contract.field} must be a safe integer`);
+        assert.equal(payloadRevision, parsed, `${context.root}.${contract.field} payload mismatch`);
+      } else {
+        assert.ok(
+          typeof parsed === "string" && parsed.length > 0 && parsed === parsed.normalize("NFC"),
+          `${context.root}.${contract.field} must be non-empty NFC text`,
+        );
+        assert.equal(payloadRevision, parsed, `${context.root}.${contract.field} payload mismatch`);
+      }
+      const keyIndex = contract.keyFields.indexOf(contract.field);
+      if (keyIndex >= 0) {
+        assert.ok(Array.isArray(context.recordKey), "record revision identity requires recordKey");
+        assert.equal(
+          context.recordKey[keyIndex],
+          parsed,
+          `${context.root}.${contract.field} identity mismatch`,
+        );
+      }
+    }
   } else if (format === "opaque-token-or-null") {
     assert.ok(value === "null" || /^opaque_[A-Za-z0-9_-]{22,}$/.test(value));
   } else if (format === "rfc8785-json" || format === "rfc8785-key-json") {
@@ -456,6 +556,33 @@ function interfaceFieldTypes(source, interfaceName) {
         /^([A-Za-z_$][A-Za-z0-9_$]*)(?:\?)?:\s*([\s\S]*);$/,
       );
       if (field) fields.set(field[1], field[2].trim());
+      segment = "";
+    }
+  }
+  return fields;
+}
+
+function interfaceFieldDefinitions(source, interfaceName) {
+  const declaration = source.match(
+    new RegExp(`\\bexport\\s+interface\\s+${interfaceName}\\s*(?:extends[^\\{]+)?\\{`),
+  );
+  if (!declaration || declaration.index === undefined) return null;
+  const openingIndex = source.indexOf("{", declaration.index);
+  const body = source.slice(openingIndex + 1, matchingBrace(source, openingIndex))
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/.*$/gm, "");
+  const fields = new Map();
+  let depth = 0;
+  let segment = "";
+  for (const character of body) {
+    segment += character;
+    if ("{[(".includes(character)) depth += 1;
+    if ("}])".includes(character)) depth -= 1;
+    if (character === ";" && depth === 0) {
+      const field = segment.trim().match(
+        /^([A-Za-z_$][A-Za-z0-9_$]*)(\?)?:\s*([\s\S]*);$/,
+      );
+      if (field) fields.set(field[1], { optional: field[2] === "?", type: field[3].trim() });
       segment = "";
     }
   }

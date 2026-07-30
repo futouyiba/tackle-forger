@@ -44,7 +44,7 @@
           {"name":"root","type":"string","required":true,"format":"workspace-root"},
           {"name":"record_schema_id","type":"string","required":true,"format":"stable-id"},
           {"name":"record_key","type":"string","required":true,"format":"rfc8785-key-json"},
-          {"name":"record_revision","type":"string","required":true,"format":"canonical-revision-or-null"},
+          {"name":"record_revision","type":"string","required":true,"format":"rfc8785-revision-scalar"},
           {"name":"record_content_sha256","type":"string","required":true,"format":"lowercase-sha256"},
           {"name":"payload_json","type":"string","required":true,"format":"rfc8785-json"}
         ],
@@ -59,7 +59,7 @@
         "columns": [
           {"name":"root","type":"string","required":true,"format":"workspace-root"},
           {"name":"record_key","type":"string","required":true,"format":"rfc8785-key-json"},
-          {"name":"record_revision","type":"string","required":true,"format":"canonical-revision-or-null"},
+          {"name":"record_revision","type":"string","required":true,"format":"rfc8785-revision-scalar"},
           {"name":"record_content_sha256","type":"string","required":true,"format":"lowercase-sha256"},
           {"name":"opaque_canonical_payload_json","type":"string","required":true,"format":"rfc8785-json"}
         ],

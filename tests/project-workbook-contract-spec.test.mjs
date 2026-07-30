@@ -10,6 +10,7 @@ import {
   compareWorkbookPrimaryKey,
   computeWorkbookHashes,
   importableIdentityExactFields,
+  importableLegacyCompatibilityExactFields,
   parseWorkspaceStateRoots,
   preservedTypeGraphHash,
   validateMachineCell,
@@ -1714,6 +1715,126 @@ test("existing importable records exact-compare every typed revision field", asy
   assert.ok(manifest.classifications.server_owned.includes("v23SkuDrawerHeads"));
   assert.equal(Object.hasOwn(manifest.recordSchemas, "v23SkuDrawerRevisions"), false);
   assert.equal(Object.hasOwn(manifest.recordSchemas, "v23SkuDrawerHeads"), false);
+});
+
+test("OPEN-002 forbids new performanceId while exact-preserving historical showcase data", async () => {
+  const { manifest, roots } = await fixture();
+  assert.deepEqual(manifest.importableCreatePolicies.seriesShowcases, {
+    policy: "LEGACY_FIELD_ABSENT_ON_CREATE_EXACT_ON_EXISTING",
+    legacyField: "performanceId",
+    openDecisionId: "OPEN-002",
+    create: "FIELD_ABSENT",
+    existingAbsent: "FIELD_REMAINS_ABSENT",
+    existingPresent: "FIELD_EXACT",
+  });
+  const current = {
+    id: "showcase:open002",
+    seriesId: "series:1",
+    description: "当前展示",
+    templateIds: [],
+    structureIds: [],
+    fishingMethod: "路亚",
+    functionId: "function:1",
+    qualityId: "quality_c_green",
+    fishMinKg: 0,
+    fishMaxKg: 1,
+    tensionMinKgf: 0,
+    tensionMaxKgf: 1,
+    affixIds: [],
+    notes: "",
+    publishedAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  assert.deepEqual(
+    importableLegacyCompatibilityExactFields(manifest, "seriesShowcases", current, undefined),
+    [],
+  );
+  assert.equal(
+    validateImportableExactFields(manifest, "seriesShowcases", current, undefined),
+    true,
+    "new series showcase records without performanceId remain valid",
+  );
+  assert.throws(
+    () => validateImportableExactFields(
+      manifest,
+      "seriesShowcases",
+      { ...current, performanceId: "performance:legacy" },
+      undefined,
+    ),
+    /performanceId is forbidden on new records by OPEN-002/,
+  );
+
+  const historical = { ...current, performanceId: "performance:legacy" };
+  assert.deepEqual(
+    importableLegacyCompatibilityExactFields(
+      manifest,
+      "seriesShowcases",
+      historical,
+      historical,
+    ),
+    ["performanceId"],
+  );
+  assert.equal(
+    validateImportableExactFields(manifest, "seriesShowcases", historical, historical),
+    true,
+  );
+  assert.throws(
+    () => validateImportableExactFields(
+      manifest,
+      "seriesShowcases",
+      { ...historical, performanceId: "performance:changed" },
+      historical,
+    ),
+    /performanceId is exact-equal/,
+  );
+  const removedLegacy = clone(historical);
+  delete removedLegacy.performanceId;
+  assert.throws(
+    () => validateImportableExactFields(
+      manifest,
+      "seriesShowcases",
+      removedLegacy,
+      historical,
+    ),
+    /performanceId is exact-preserved for historical OPEN-002 data/,
+  );
+
+  assert.deepEqual(
+    importableLegacyCompatibilityExactFields(manifest, "seriesShowcases", current, current),
+    [],
+    "a non-legacy record adds no compatibility-only exact fields",
+  );
+  assert.equal(
+    validateImportableExactFields(manifest, "seriesShowcases", current, current),
+    true,
+  );
+  assert.throws(
+    () => validateImportableExactFields(
+      manifest,
+      "seriesShowcases",
+      { ...current, performanceId: "performance:new" },
+      current,
+    ),
+    /performanceId cannot be added to a non-legacy existing record/,
+  );
+  assert.throws(
+    () => validateImportableExactFields(
+      manifest,
+      "seriesShowcases",
+      { ...current, description: "终态不得修改" },
+      current,
+    ),
+    /description is exact-equal/,
+    "OPEN-002 compatibility handling must not weaken the existing terminal full-exact policy",
+  );
+
+  const drift = clone(manifest);
+  drift.importableCreatePolicies.seriesShowcases.openDecisionId = "OPEN-999";
+  assert.throws(
+    () => validateProjectWorkbookManifest(drift, roots),
+    /importable create policies must retain/,
+    "display prose or an unknown OPEN id cannot weaken the machine policy",
+  );
 });
 
 test("terminal lifecycle policy freezes every applicable existing payload without root exceptions", async () => {

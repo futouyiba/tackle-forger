@@ -438,6 +438,14 @@
     "duplicateIdentity":"REJECT"
   },
   "importableCreatePolicies": {
+    "seriesShowcases": {
+      "policy": "LEGACY_FIELD_ABSENT_ON_CREATE_EXACT_ON_EXISTING",
+      "legacyField": "performanceId",
+      "openDecisionId": "OPEN-002",
+      "create": "FIELD_ABSENT",
+      "existingAbsent": "FIELD_REMAINS_ABSENT",
+      "existingPresent": "FIELD_EXACT"
+    },
     "skuDrawers": {
       "policy": "REJECT",
       "requiredActionCode": "create_sku"

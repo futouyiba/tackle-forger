@@ -266,6 +266,14 @@ const EXPECTED_CONDITIONAL_EXACT_FIELD_POLICIES = {
 };
 
 const EXPECTED_IMPORTABLE_CREATE_POLICIES = {
+  seriesShowcases: {
+    policy: "LEGACY_FIELD_ABSENT_ON_CREATE_EXACT_ON_EXISTING",
+    legacyField: "performanceId",
+    openDecisionId: "OPEN-002",
+    create: "FIELD_ABSENT",
+    existingAbsent: "FIELD_REMAINS_ABSENT",
+    existingPresent: "FIELD_EXACT",
+  },
   skuDrawers: {
     policy: "REJECT",
     requiredActionCode: "create_sku",
@@ -1840,6 +1848,35 @@ export function validateTechnologySuccessorAction(
   return action;
 }
 
+export function importableLegacyCompatibilityExactFields(
+  manifest,
+  root,
+  candidatePayload,
+  existingPayload,
+) {
+  const policy = manifest.importableCreatePolicies[root];
+  if (policy?.policy !== "LEGACY_FIELD_ABSENT_ON_CREATE_EXACT_ON_EXISTING") return [];
+  const field = policy.legacyField;
+  if (existingPayload === undefined) {
+    assert.equal(
+      Object.hasOwn(candidatePayload, field),
+      false,
+      `${root}.${field} is forbidden on new records by ${policy.openDecisionId}`,
+    );
+    return [];
+  }
+  const existingHasField = Object.hasOwn(existingPayload, field);
+  const candidateHasField = Object.hasOwn(candidatePayload, field);
+  assert.equal(
+    candidateHasField,
+    existingHasField,
+    existingHasField
+      ? `${root}.${field} is exact-preserved for historical ${policy.openDecisionId} data`
+      : `${root}.${field} cannot be added to a non-legacy existing record`,
+  );
+  return existingHasField ? [field] : [];
+}
+
 export function validateImportableExactFields(
   manifest,
   root,
@@ -1851,6 +1888,12 @@ export function validateImportableExactFields(
   validateImportableRecordPayload(manifest, root, candidatePayload, repositoryRoot);
   const candidateSourceShape = validateSourceProvenanceShape(manifest, root, candidatePayload);
   validateNestedRuleProvenance(manifest, root, candidatePayload, existingPayload);
+  const legacyCompatibilityExactFields = importableLegacyCompatibilityExactFields(
+    manifest,
+    root,
+    candidatePayload,
+    existingPayload,
+  );
   if (existingPayload === undefined) {
     if (root === "v23TechnologyDefinitions") {
       assert.fail(
@@ -1904,6 +1947,7 @@ export function validateImportableExactFields(
     ...importableIdentityExactFields(manifest.recordSchemas[root]),
     ...revisionFields,
     ...manifest.recordSchemas[root].exactFields,
+    ...legacyCompatibilityExactFields,
     ...conditionalFields,
     ...terminalLifecycleExactFields(manifest, root, existingPayload),
   ])) {
@@ -3715,6 +3759,25 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
   );
   for (const [root, policy] of Object.entries(manifest.importableCreatePolicies)) {
     assert.ok(manifest.recordSchemas[root], `${root} create policy has no record schema`);
+    if (policy.policy === "LEGACY_FIELD_ABSENT_ON_CREATE_EXACT_ON_EXISTING") {
+      assertExactKeys(policy, [
+        "policy",
+        "legacyField",
+        "openDecisionId",
+        "create",
+        "existingAbsent",
+        "existingPresent",
+      ], `${root} legacy compatibility create policy`);
+      assert.ok(
+        manifest.recordSchemas[root].allowedFields.includes(policy.legacyField),
+        `${root} legacy compatibility field is not in the closed record schema`,
+      );
+      assert.equal(policy.openDecisionId, "OPEN-002");
+      assert.equal(policy.create, "FIELD_ABSENT");
+      assert.equal(policy.existingAbsent, "FIELD_REMAINS_ABSENT");
+      assert.equal(policy.existingPresent, "FIELD_EXACT");
+      continue;
+    }
     assert.match(policy.requiredActionCode, /^[a-z][a-z0-9_]*$/);
     if (policy.policy === "REJECT") {
       assertExactKeys(policy, ["policy", "requiredActionCode"], `${root} create policy`);

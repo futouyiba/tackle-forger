@@ -349,7 +349,7 @@
   },
   "source": {
     "path": "docs/spec-v3",
-    "sha256": "87f30a2d7d8902f1eaa6333e5ecce0874f3c4532f8b1b446b1f82377a51d6bc7"
+    "sha256": "b4953e0436422466631ba3bd42cad19ab64ce66ee952b2eb6c40e09d64f06fe7"
   },
   "headings": [
     {
@@ -1128,102 +1128,102 @@
       "title": "24.1 共同底座"
     },
     {
-      "line": 3127,
+      "line": 3129,
       "level": 3,
       "title": "24.2 R1：钓具系列甘特图"
     },
     {
-      "line": 3169,
+      "line": 3171,
       "level": 3,
       "title": "24.2.1 Part编辑、重量段SKU预览与词条动作"
     },
     {
-      "line": 3194,
+      "line": 3196,
       "level": 3,
       "title": "24.3 R2：稳定标识、面包屑和权限"
     },
     {
-      "line": 3213,
+      "line": 3215,
       "level": 3,
       "title": "24.4 R3：“生成 Model 候选”"
     },
     {
-      "line": 3247,
+      "line": 3249,
       "level": 3,
       "title": "24.5 R4：统一Trace"
     },
     {
-      "line": 3277,
+      "line": 3279,
       "level": 3,
       "title": "24.6 R5：五维图"
     },
     {
-      "line": 3325,
+      "line": 3327,
       "level": 3,
       "title": "24.7 R6：AIRecommendation"
     },
     {
-      "line": 3356,
+      "line": 3358,
       "level": 3,
       "title": "24.8 R7：AI转Model Patch草稿"
     },
     {
-      "line": 3368,
+      "line": 3370,
       "level": 3,
       "title": "24.9 R8：AI转飞书规则修改草稿"
     },
     {
-      "line": 3415,
+      "line": 3417,
       "level": 3,
       "title": "24.10 R9：ValidationIssue与ActionLink"
     },
     {
-      "line": 3495,
+      "line": 3497,
       "level": 3,
       "title": "24.11 R10：Rebase、UpgradeCandidate与Snapshot"
     },
     {
-      "line": 3534,
+      "line": 3536,
       "level": 3,
       "title": "24.12 R11：状态与文案"
     },
     {
-      "line": 3570,
+      "line": 3572,
       "level": 3,
       "title": "24.13 R12：版本化策略与完成门槛"
     },
     {
-      "line": 3582,
+      "line": 3584,
       "level": 3,
       "title": "24.14 完成标准"
     },
     {
-      "line": 3585,
+      "line": 3587,
       "level": 2,
       "title": "25. 内网部署、飞书身份与配置表交付"
     },
     {
-      "line": 3589,
+      "line": 3591,
       "level": 3,
       "title": "25.1 分期边界"
     },
     {
-      "line": 3609,
+      "line": 3611,
       "level": 3,
       "title": "25.2 本机配置目录与环境/渠道边界"
     },
     {
-      "line": 3643,
+      "line": 3645,
       "level": 3,
       "title": "25.3 发布末端两步"
     },
     {
-      "line": 3693,
+      "line": 3695,
       "level": 3,
       "title": "25.4 TOML关系校验"
     },
     {
-      "line": 3716,
+      "line": 3718,
       "level": 3,
       "title": "25.5 导出场景与验收"
     }

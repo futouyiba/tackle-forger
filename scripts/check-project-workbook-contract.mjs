@@ -22,6 +22,7 @@ const EXPECTED_TOP_LEVEL_KEYS = [
   "canonicalization",
   "recordSchemaAuthority",
   "recordSchemas",
+  "preservedRootCatalog",
   "classifications",
   "modes",
   "removal",
@@ -34,13 +35,13 @@ const EXPECTED_TOP_LEVEL_KEYS = [
 export const EXPECTED_ROOT_CLASSIFICATIONS = {
   importable_current: [
     "ruleSettings", "itemParts", "methodProfiles", "itemTypeProfiles", "functionProfiles",
-    "performanceProfiles", "qualityProfiles", "compatibilityRules", "affinityRules",
+    "qualityProfiles", "compatibilityRules", "affinityRules",
     "affinityAxisWeights", "collections", "seriesDefinitions", "v23SeriesPartHeads",
     "v23SkuDrawerHeads", "v23AffixDefinitions", "v23TechnologyDefinitions",
     "v23TechnologyHeads", "skuDrawers", "purchasableModels", "v3Affixes", "technologies",
     "qualityValuePolicyDrafts", "pricingPolicyDrafts", "parameters", "templates", "modifiers",
-    "layers", "affixes", "qualityBands", "affixScorePolicy", "recipes", "seriesShowcases",
-    "candidates", "officialSkus", "detailOverrides", "ruleGraphs", "notes",
+    "layers", "affixes", "qualityBands", "affixScorePolicy", "seriesShowcases",
+    "ruleGraphs", "notes",
   ],
   preserved_frozen: [
     "ruleSetVersions", "performanceSummaryDefinitions", "projectionPatches",
@@ -50,7 +51,8 @@ export const EXPECTED_ROOT_CLASSIFICATIONS = {
     "fiveAxisDispositionCatalogRevisions", "fiveAxisViewDefinitions", "fiveAxisVertexSets",
     "currentFiveAxisDispositionCatalogRevisionId", "patchReviewBatches",
     "patchValidationWaivers", "patchValidationWaiverDecisions", "ruleChangeProposals",
-    "revisions",
+    "revisions", "performanceProfiles", "recipes", "candidates", "officialSkus",
+    "detailOverrides",
   ],
   server_owned: [
     "workspaceId", "schemaVersion", "configIdGovernance", "patchLedger",
@@ -87,12 +89,18 @@ const EXPECTED_ACTIONS = {
   },
 };
 
+const column = (name, format, type = "string") => ({ name, type, required: true, format });
 const EXPECTED_SHEETS = {
   __TF_MANIFEST: {
     kind: "machine",
     columns: [
-      "contract_version", "workspace_id", "base_workspace_revision", "root_manifest_sha256",
-      "workbook_schema_sha256", "exporter_version", "machine_content_sha256",
+      column("contract_version", "literal:project-workbook/v1"),
+      column("workspace_id", "stable-id"),
+      column("base_workspace_revision", "safe-integer-text"),
+      column("root_manifest_sha256", "lowercase-sha256"),
+      column("workbook_schema_sha256", "lowercase-sha256"),
+      column("exporter_version", "stable-version"),
+      column("machine_content_sha256", "lowercase-sha256"),
     ],
     primaryKey: ["contract_version"],
     cardinality: "EXACTLY_ONE",
@@ -100,8 +108,11 @@ const EXPECTED_SHEETS = {
   __TF_CURRENT: {
     kind: "machine",
     columns: [
-      "root", "record_schema_id", "record_key", "record_revision",
-      "record_content_sha256", "payload_json",
+      column("root", "workspace-root"), column("record_schema_id", "stable-id"),
+      column("record_key", "rfc8785-key-json"),
+      column("record_revision", "canonical-revision-or-null"),
+      column("record_content_sha256", "lowercase-sha256"),
+      column("payload_json", "rfc8785-json"),
     ],
     primaryKey: ["root", "record_key"],
     cardinality: "ZERO_OR_MORE",
@@ -109,44 +120,67 @@ const EXPECTED_SHEETS = {
   __TF_PRESERVED: {
     kind: "machine",
     columns: [
-      "root", "record_key", "record_revision", "record_content_sha256",
-      "opaque_canonical_payload_json",
+      column("root", "workspace-root"), column("record_key", "rfc8785-key-json"),
+      column("record_revision", "canonical-revision-or-null"),
+      column("record_content_sha256", "lowercase-sha256"),
+      column("opaque_canonical_payload_json", "rfc8785-json"),
     ],
     primaryKey: ["root", "record_key"],
     cardinality: "ZERO_OR_MORE",
   },
-  __TF_ROOT_REFS: {
+  __TF_SERVER_REFS: {
     kind: "machine",
-    columns: ["root", "classification", "root_content_sha256", "opaque_server_ref"],
+    columns: [
+      column("root", "workspace-root"), column("classification", "literal:server_owned"),
+      column("root_content_sha256", "lowercase-sha256"),
+      column("opaque_server_ref", "opaque-token-or-null"),
+    ],
     primaryKey: ["root"],
-    cardinality: "EXACTLY_ALL_SERVER_OWNED_AND_FORBIDDEN_ROOTS",
+    cardinality: "EXACTLY_ALL_SERVER_OWNED_ROOTS",
+  },
+  __TF_FORBIDDEN: {
+    kind: "machine",
+    columns: [
+      column("root", "workspace-root"), column("classification", "literal:forbidden"),
+      column("policy_marker", "literal:FORBIDDEN_PAYLOAD_OMITTED"),
+    ],
+    primaryKey: ["root"],
+    cardinality: "EXACTLY_ALL_FORBIDDEN_ROOTS",
   },
   __TF_DIAGNOSTICS: {
     kind: "machine",
     columns: [
-      "root", "record_key", "severity", "code", "message", "subject_ref", "content_sha256",
+      column("root", "workspace-root"), column("record_key", "rfc8785-key-json"),
+      column("diagnostic_schema_version", "literal:project-workbook-diagnostic/v1"),
+      column("severity", "diagnostic-severity"), column("code", "stable-code"),
+      column("message", "display-text"), column("subject_ref", "opaque-token-or-null"),
+      column("diagnostic_evidence_sha256", "lowercase-sha256"),
     ],
     primaryKey: ["root", "record_key", "code"],
     cardinality: "ZERO_OR_MORE",
   },
   README: {
     kind: "derived_readable",
-    columns: ["section", "content"],
+    columns: [column("section", "display-text"), column("content", "display-text")],
     primaryKey: ["section"],
     cardinality: "ONE_OR_MORE",
   },
   ROOT_SUMMARY: {
     kind: "derived_readable",
-    columns: ["root", "classification", "record_count", "root_content_sha256", "status"],
+    columns: [
+      column("root", "workspace-root"), column("classification", "classification"),
+      column("record_count", "safe-integer-text"),
+      column("root_content_sha256", "lowercase-sha256"), column("status", "stable-code"),
+    ],
     primaryKey: ["root"],
     cardinality: "EXACTLY_93",
   },
 };
 
 const EXPECTED_RECORD_SCHEMAS_SHA256 =
-  "982135f85821536056738db0dd5de56b105a5ec21767e7ad87d75cb120cea9a8";
+  "038180ffbae6a7a7dde69a670cdea0d01be291fca70caf873894e41f1e70f23b";
 const EXPECTED_RECORD_SCHEMA_AUTHORITY_SHA256 =
-  "2b3a44e11b1cf4fb2f56c4bdd9ce5a9fd19475ee8716fdbd1e99630db0f6f552";
+  "bec1fb7e3f8bde5dd82d2a6f3c9a2777bc92dd3f0000380e92bbddeee2fc5c70";
 
 function fail(message) {
   throw new Error(message);
@@ -154,6 +188,44 @@ function fail(message) {
 
 function sha256(source) {
   return createHash("sha256").update(source, "utf8").digest("hex");
+}
+
+function canonicalJson(value) {
+  if (value === null || typeof value === "boolean") return JSON.stringify(value);
+  if (typeof value === "string") return JSON.stringify(value.normalize("NFC"));
+  if (typeof value === "number") {
+    assert.ok(Number.isFinite(value), "canonical JSON rejects non-finite numbers");
+    return JSON.stringify(Object.is(value, -0) ? 0 : value);
+  }
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  assert.equal(Object.getPrototypeOf(value), Object.prototype);
+  return `{${Object.keys(value).sort()
+    .map((key) => `${JSON.stringify(key.normalize("NFC"))}:${canonicalJson(value[key])}`)
+    .join(",")}}`;
+}
+
+export function validateMachineCell(columnSchema, value, cellKind = "string") {
+  assert.equal(cellKind, "string", `${columnSchema.name} rejects Excel ${cellKind} cells`);
+  assert.equal(typeof value, "string", `${columnSchema.name} must be encoded as text`);
+  assert.notEqual(value, "", `${columnSchema.name} rejects blank cells`);
+  const format = columnSchema.format;
+  if (format === "safe-integer-text") {
+    assert.match(value, /^(0|[1-9][0-9]*)$/);
+    assert.ok(BigInt(value) <= BigInt(Number.MAX_SAFE_INTEGER), `${columnSchema.name} is not safe`);
+  } else if (format === "lowercase-sha256") {
+    assert.match(value, /^[0-9a-f]{64}$/);
+  } else if (format === "canonical-revision-or-null") {
+    assert.ok(value === "null" || /^(0|[1-9][0-9]*)$/.test(value) || /^[A-Za-z0-9._:-]+$/.test(value));
+  } else if (format === "opaque-token-or-null") {
+    assert.ok(value === "null" || /^opaque_[A-Za-z0-9_-]{22,}$/.test(value));
+  } else if (format === "rfc8785-json" || format === "rfc8785-key-json") {
+    const parsed = JSON.parse(value);
+    assert.equal(canonicalJson(parsed), value, `${columnSchema.name} must use canonical JSON`);
+    if (format === "rfc8785-key-json") assert.ok(Array.isArray(parsed));
+  } else if (format.startsWith("literal:")) {
+    assert.equal(value, format.slice("literal:".length));
+  }
+  return true;
 }
 
 function matchingBrace(source, openingIndex) {
@@ -215,6 +287,104 @@ export function parseExportedInterfaceFields(source, interfaceName) {
   return fields;
 }
 
+function parseTypeDeclarations(source) {
+  const declarations = new Map();
+  const pattern = /^\s*(?:export\s+)?(?:interface|type)\s+([A-Za-z_$][A-Za-z0-9_$]*)/gm;
+  for (const match of source.matchAll(pattern)) {
+    const name = match[1];
+    const tail = source.slice(match.index + match[0].length);
+    const opening = tail.search(/[={]/);
+    if (opening < 0) continue;
+    const absolute = match.index + match[0].length + opening;
+    if (source[absolute] === "{") {
+      declarations.set(name, source.slice(absolute + 1, matchingBrace(source, absolute)));
+      continue;
+    }
+    let depth = 0;
+    let end = absolute + 1;
+    for (; end < source.length; end += 1) {
+      const character = source[end];
+      if ("{[(".includes(character)) depth += 1;
+      if ("}])".includes(character)) depth -= 1;
+      if (character === ";" && depth === 0) break;
+    }
+    declarations.set(name, source.slice(absolute + 1, end));
+  }
+  return declarations;
+}
+
+function interfaceProjectionBody(source, typeName, allowedFields) {
+  const declaration = source.match(
+    new RegExp(`\\bexport\\s+interface\\s+${typeName}\\s*(?:extends[^\\{]+)?\\{`),
+  );
+  if (!declaration || declaration.index === undefined) return null;
+  const openingIndex = source.indexOf("{", declaration.index);
+  const body = source.slice(openingIndex + 1, matchingBrace(source, openingIndex));
+  const segments = [];
+  let depth = 0;
+  let segment = "";
+  for (const character of body) {
+    segment += character;
+    if ("{[(".includes(character)) depth += 1;
+    if ("}])".includes(character)) depth -= 1;
+    if (character === ";" && depth === 0) {
+      const name = segment.replace(/\/\*[\s\S]*?\*\//g, "").trim()
+        .match(/^([A-Za-z_$][A-Za-z0-9_$]*)(?:\?)?:/)?.[1];
+      if (name && allowedFields.includes(name)) segments.push(segment);
+      segment = "";
+    }
+  }
+  return segments.join("");
+}
+
+export function recursiveProjectionGraphHash(manifest, sourceByPath) {
+  const declarations = new Map();
+  for (const [sourcePath, source] of sourceByPath) {
+    for (const [name, body] of parseTypeDeclarations(source)) {
+      declarations.set(`${sourcePath}#${name}`, body);
+      if (!declarations.has(name)) declarations.set(name, body);
+    }
+  }
+  const proof = [];
+  for (const root of manifest.recordSchemaAuthority.recursiveProofRoots) {
+    const typeRef = manifest.recordSchemaAuthority.typeRefs[root];
+    const [sourcePath, typeName] = typeRef.split("#");
+    if (typeName === "string") {
+      proof.push(`${root}:scalar:string`);
+      continue;
+    }
+    const source = sourceByPath.get(sourcePath);
+    const projected = interfaceProjectionBody(
+      source,
+      typeName,
+      manifest.recordSchemas[root].allowedFields,
+    ) ?? declarations.get(`${sourcePath}#${typeName}`);
+    assert.ok(projected, `${root} recursive type graph is unresolved`);
+    const queue = [[`${sourcePath}#${typeName}`, projected]];
+    const visited = new Set();
+    while (queue.length > 0) {
+      const [name, body] = queue.shift();
+      if (visited.has(name)) continue;
+      visited.add(name);
+      const semanticBody = body
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .replace(/\/\/.*$/gm, "");
+      const typeTokens = semanticBody.replace(/(["'`])(?:\\.|(?!\1).)*\1/g, "");
+      assert.doesNotMatch(
+        typeTokens,
+        /\b(?:unknown|any)\b/,
+        `${root} has an unresolved dynamic value in ${name}`,
+      );
+      proof.push(`${root}:${name}:${sha256(semanticBody.replace(/\s+/g, " ").trim())}`);
+      for (const identifier of semanticBody.match(/\b[A-Z][A-Za-z0-9_$]*\b/g) ?? []) {
+        const nested = declarations.get(`${sourcePath}#${identifier}`) ?? declarations.get(identifier);
+        if (nested) queue.push([identifier, nested]);
+      }
+    }
+  }
+  return sha256(proof.sort().join("\n"));
+}
+
 function assertExactKeys(value, expected, label) {
   assert.deepEqual(Object.keys(value), expected, `${label} must use the closed schema`);
 }
@@ -273,20 +443,33 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     EXPECTED_SHEETS,
     "sheet columns, keys and cardinalities must retain their exact closed schema",
   );
-  assert.equal(new Set(manifest.workbookSchema.sheetOrder).size, 7);
+  assert.equal(new Set(manifest.workbookSchema.sheetOrder).size, 8);
   for (const [sheetName, sheet] of Object.entries(manifest.workbookSchema.sheets)) {
     assertExactKeys(sheet, ["kind", "columns", "primaryKey", "cardinality"], `sheet ${sheetName}`);
     assert.ok(["machine", "derived_readable"].includes(sheet.kind));
     assert.ok(Array.isArray(sheet.columns) && sheet.columns.length > 0);
-    assert.equal(new Set(sheet.columns).size, sheet.columns.length, `${sheetName} has duplicate columns`);
-    assert.ok(sheet.primaryKey.every((column) => sheet.columns.includes(column)));
+    assert.equal(
+      new Set(sheet.columns.map((entry) => entry.name)).size,
+      sheet.columns.length,
+      `${sheetName} has duplicate columns`,
+    );
+    for (const entry of sheet.columns) {
+      assertExactKeys(entry, ["name", "type", "required", "format"], `${sheetName}.${entry.name}`);
+      assert.equal(entry.type, "string", `${sheetName}.${entry.name} must be text-only`);
+      assert.equal(entry.required, true, `${sheetName}.${entry.name} must reject blank cells`);
+      assert.ok(entry.format.length > 0, `${sheetName}.${entry.name} needs an exact format`);
+    }
+    assert.ok(sheet.primaryKey.every((name) => sheet.columns.some((entry) => entry.name === name)));
   }
   assert.deepEqual(Object.keys(manifest.workbookSchema.classificationProjection), CLASSIFICATIONS);
   assert.deepEqual(manifest.workbookSchema.classificationProjection, {
     importable_current: { sheet: "__TF_CURRENT", payloadPolicy: "CLOSED_RECORD_SCHEMA" },
     preserved_frozen: { sheet: "__TF_PRESERVED", payloadPolicy: "OPAQUE_EXACT_SERVER_EXPORT_ONLY" },
-    server_owned: { sheet: "__TF_ROOT_REFS", payloadPolicy: "HASH_AND_OPAQUE_REF_ONLY" },
-    forbidden: { sheet: "__TF_ROOT_REFS", payloadPolicy: "HASH_AND_OPAQUE_REF_ONLY" },
+    server_owned: { sheet: "__TF_SERVER_REFS", payloadPolicy: "HASH_AND_OPAQUE_REF_ONLY" },
+    forbidden: {
+      sheet: "__TF_FORBIDDEN",
+      payloadPolicy: "CONSTANT_OMISSION_MARKER_ONLY_NO_CONTENT_DERIVED_HASH_OR_REF",
+    },
     export_only_diagnostic: {
       sheet: "__TF_DIAGNOSTICS",
       payloadPolicy: "CLOSED_DERIVED_DIAGNOSTIC_FIELDS_ONLY",
@@ -316,6 +499,7 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     "canonicalization",
     "recordSchemaAuthority",
     "recordSchemas",
+    "preservedRootCatalog",
     "classifications",
   ]);
   assert.deepEqual(manifest.canonicalization.recordHashInput, [
@@ -328,11 +512,12 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
   assert.deepEqual(manifest.canonicalization.machineContentHashInput, [
     "__TF_CURRENT",
     "__TF_PRESERVED",
-    "__TF_ROOT_REFS",
-    "__TF_DIAGNOSTICS",
+    "__TF_SERVER_REFS",
+    "__TF_FORBIDDEN",
   ]);
   assert.deepEqual(manifest.canonicalization.machineContentHashExcludes, [
     "__TF_MANIFEST.machine_content_sha256",
+    "__TF_DIAGNOSTICS",
     "README",
     "ROOT_SUMMARY",
   ]);
@@ -345,6 +530,9 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     "format",
     "sources",
     "recursiveRules",
+    "projectionExclusions",
+    "recursiveProofRoots",
+    "recursiveTypeGraphSha256",
     "typeRefs",
   ], "record schema authority");
   assert.equal(manifest.recordSchemaAuthority.format, "typescript-closed-projection/v1");
@@ -360,6 +548,13 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     recordStringKeys: "ALLOW_ONLY_WHEN_DECLARATION_EXPLICITLY_USES_STRING_INDEX",
     unknownValues: "FORBIDDEN_IN_IMPORTABLE_PROJECTION",
     excludedSourceFields: "SERVER_PRESERVE_NOT_EXPORTED",
+  });
+  assert.deepEqual(manifest.recordSchemaAuthority.recursiveProofRoots,
+    EXPECTED_ROOT_CLASSIFICATIONS.importable_current);
+  assert.deepEqual(manifest.recordSchemaAuthority.projectionExclusions, {
+    skuDrawers: ["projectionMatch", "fiveAxisProjectionReferences", "validationSummary"],
+    qualityValuePolicyDrafts: ["issues"],
+    pricingPolicyDrafts: ["issues"],
   });
   assert.deepEqual(
     Object.keys(manifest.recordSchemaAuthority.typeRefs),
@@ -405,6 +600,35 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     ]) {
       assert.ok(schema.allowedFields.includes(field), `${root}.${field} is outside allowedFields`);
     }
+    for (const excluded of manifest.recordSchemaAuthority.projectionExclusions[root] ?? []) {
+      assert.ok(!schema.allowedFields.includes(excluded), `${root}.${excluded} must be rederived`);
+    }
+  }
+  assert.deepEqual(manifest.recordSchemas.v23TechnologyDefinitions.identityFields,
+    ["technologyId", "revision"]);
+  assert.deepEqual(manifest.recordSchemas.v23AffixDefinitions.identityFields,
+    ["affixId", "revision"]);
+  for (const root of ["v3Affixes", "technologies", "ruleGraphs"]) {
+    assert.ok(manifest.recordSchemas[root].identityFields.includes(
+      manifest.recordSchemas[root].revisionFields[0],
+    ), `${root} version must participate in workbook primary identity`);
+  }
+
+  assert.deepEqual(
+    Object.keys(manifest.preservedRootCatalog),
+    EXPECTED_ROOT_CLASSIFICATIONS.preserved_frozen,
+    "every frozen root must bind one carrier and stable record identity",
+  );
+  for (const [root, catalog] of Object.entries(manifest.preservedRootCatalog)) {
+    assertExactKeys(catalog, [
+      "carrier", "recordKeyFields", "revisionFields", "hashFields", "singleton",
+    ], `preserved root ${root}`);
+    assert.ok(["records", "whole_root_singleton"].includes(catalog.carrier));
+    assert.ok(catalog.recordKeyFields.length > 0, `${root} needs a stable record key`);
+    assert.equal(new Set(catalog.recordKeyFields).size, catalog.recordKeyFields.length);
+    assert.equal(catalog.singleton, catalog.carrier === "whole_root_singleton");
+    if (catalog.singleton) assert.deepEqual(catalog.recordKeyFields, ["$singleton"]);
+    if (!catalog.singleton) assert.ok(!catalog.recordKeyFields.includes("$singleton"));
   }
 
   assert.deepEqual(manifest.modes, {
@@ -463,14 +687,22 @@ export function checkProjectWorkbookContract(root = process.cwd()) {
   const workspaceSource = readFileSync(path.join(root, manifest.workspaceStateSource.path), "utf8");
   const workspaceRoots = parseWorkspaceStateRoots(workspaceSource);
   validateProjectWorkbookManifest(manifest, workspaceRoots);
+  const sourceByPath = new Map();
   for (const source of manifest.recordSchemaAuthority.sources) {
     assertExactKeys(source, ["path", "sha256"], `record schema source ${source.path}`);
+    const sourceText = readFileSync(path.join(root, source.path), "utf8");
+    sourceByPath.set(source.path, sourceText);
     assert.equal(
-      sha256(readFileSync(path.join(root, source.path), "utf8")),
+      sha256(sourceText),
       source.sha256,
       `record schema source hash drift: ${source.path}`,
     );
   }
+  assert.equal(
+    recursiveProjectionGraphHash(manifest, sourceByPath),
+    manifest.recordSchemaAuthority.recursiveTypeGraphSha256,
+    "recursive closed projection graph drift",
+  );
   for (const [rootName, typeRef] of Object.entries(manifest.recordSchemaAuthority.typeRefs)) {
     const [sourcePath, typeName] = typeRef.split("#");
     const fields = parseExportedInterfaceFields(

@@ -12,7 +12,8 @@
       "__TF_MANIFEST",
       "__TF_CURRENT",
       "__TF_PRESERVED",
-      "__TF_ROOT_REFS",
+      "__TF_SERVER_REFS",
+      "__TF_FORBIDDEN",
       "__TF_DIAGNOSTICS",
       "README",
       "ROOT_SUMMARY"
@@ -24,13 +25,13 @@
       "__TF_MANIFEST": {
         "kind": "machine",
         "columns": [
-          "contract_version",
-          "workspace_id",
-          "base_workspace_revision",
-          "root_manifest_sha256",
-          "workbook_schema_sha256",
-          "exporter_version",
-          "machine_content_sha256"
+          {"name":"contract_version","type":"string","required":true,"format":"literal:project-workbook/v1"},
+          {"name":"workspace_id","type":"string","required":true,"format":"stable-id"},
+          {"name":"base_workspace_revision","type":"string","required":true,"format":"safe-integer-text"},
+          {"name":"root_manifest_sha256","type":"string","required":true,"format":"lowercase-sha256"},
+          {"name":"workbook_schema_sha256","type":"string","required":true,"format":"lowercase-sha256"},
+          {"name":"exporter_version","type":"string","required":true,"format":"stable-version"},
+          {"name":"machine_content_sha256","type":"string","required":true,"format":"lowercase-sha256"}
         ],
         "primaryKey": [
           "contract_version"
@@ -40,12 +41,12 @@
       "__TF_CURRENT": {
         "kind": "machine",
         "columns": [
-          "root",
-          "record_schema_id",
-          "record_key",
-          "record_revision",
-          "record_content_sha256",
-          "payload_json"
+          {"name":"root","type":"string","required":true,"format":"workspace-root"},
+          {"name":"record_schema_id","type":"string","required":true,"format":"stable-id"},
+          {"name":"record_key","type":"string","required":true,"format":"rfc8785-key-json"},
+          {"name":"record_revision","type":"string","required":true,"format":"canonical-revision-or-null"},
+          {"name":"record_content_sha256","type":"string","required":true,"format":"lowercase-sha256"},
+          {"name":"payload_json","type":"string","required":true,"format":"rfc8785-json"}
         ],
         "primaryKey": [
           "root",
@@ -56,11 +57,11 @@
       "__TF_PRESERVED": {
         "kind": "machine",
         "columns": [
-          "root",
-          "record_key",
-          "record_revision",
-          "record_content_sha256",
-          "opaque_canonical_payload_json"
+          {"name":"root","type":"string","required":true,"format":"workspace-root"},
+          {"name":"record_key","type":"string","required":true,"format":"rfc8785-key-json"},
+          {"name":"record_revision","type":"string","required":true,"format":"canonical-revision-or-null"},
+          {"name":"record_content_sha256","type":"string","required":true,"format":"lowercase-sha256"},
+          {"name":"opaque_canonical_payload_json","type":"string","required":true,"format":"rfc8785-json"}
         ],
         "primaryKey": [
           "root",
@@ -68,29 +69,40 @@
         ],
         "cardinality": "ZERO_OR_MORE"
       },
-      "__TF_ROOT_REFS": {
+      "__TF_SERVER_REFS": {
         "kind": "machine",
         "columns": [
-          "root",
-          "classification",
-          "root_content_sha256",
-          "opaque_server_ref"
+          {"name":"root","type":"string","required":true,"format":"workspace-root"},
+          {"name":"classification","type":"string","required":true,"format":"literal:server_owned"},
+          {"name":"root_content_sha256","type":"string","required":true,"format":"lowercase-sha256"},
+          {"name":"opaque_server_ref","type":"string","required":true,"format":"opaque-token-or-null"}
         ],
         "primaryKey": [
           "root"
         ],
-        "cardinality": "EXACTLY_ALL_SERVER_OWNED_AND_FORBIDDEN_ROOTS"
+        "cardinality": "EXACTLY_ALL_SERVER_OWNED_ROOTS"
+      },
+      "__TF_FORBIDDEN": {
+        "kind": "machine",
+        "columns": [
+          {"name":"root","type":"string","required":true,"format":"workspace-root"},
+          {"name":"classification","type":"string","required":true,"format":"literal:forbidden"},
+          {"name":"policy_marker","type":"string","required":true,"format":"literal:FORBIDDEN_PAYLOAD_OMITTED"}
+        ],
+        "primaryKey": ["root"],
+        "cardinality": "EXACTLY_ALL_FORBIDDEN_ROOTS"
       },
       "__TF_DIAGNOSTICS": {
         "kind": "machine",
         "columns": [
-          "root",
-          "record_key",
-          "severity",
-          "code",
-          "message",
-          "subject_ref",
-          "content_sha256"
+          {"name":"root","type":"string","required":true,"format":"workspace-root"},
+          {"name":"record_key","type":"string","required":true,"format":"rfc8785-key-json"},
+          {"name":"diagnostic_schema_version","type":"string","required":true,"format":"literal:project-workbook-diagnostic/v1"},
+          {"name":"severity","type":"string","required":true,"format":"diagnostic-severity"},
+          {"name":"code","type":"string","required":true,"format":"stable-code"},
+          {"name":"message","type":"string","required":true,"format":"display-text"},
+          {"name":"subject_ref","type":"string","required":true,"format":"opaque-token-or-null"},
+          {"name":"diagnostic_evidence_sha256","type":"string","required":true,"format":"lowercase-sha256"}
         ],
         "primaryKey": [
           "root",
@@ -102,8 +114,8 @@
       "README": {
         "kind": "derived_readable",
         "columns": [
-          "section",
-          "content"
+          {"name":"section","type":"string","required":true,"format":"display-text"},
+          {"name":"content","type":"string","required":true,"format":"display-text"}
         ],
         "primaryKey": [
           "section"
@@ -113,11 +125,11 @@
       "ROOT_SUMMARY": {
         "kind": "derived_readable",
         "columns": [
-          "root",
-          "classification",
-          "record_count",
-          "root_content_sha256",
-          "status"
+          {"name":"root","type":"string","required":true,"format":"workspace-root"},
+          {"name":"classification","type":"string","required":true,"format":"classification"},
+          {"name":"record_count","type":"string","required":true,"format":"safe-integer-text"},
+          {"name":"root_content_sha256","type":"string","required":true,"format":"lowercase-sha256"},
+          {"name":"status","type":"string","required":true,"format":"stable-code"}
         ],
         "primaryKey": [
           "root"
@@ -135,12 +147,12 @@
         "payloadPolicy": "OPAQUE_EXACT_SERVER_EXPORT_ONLY"
       },
       "server_owned": {
-        "sheet": "__TF_ROOT_REFS",
+        "sheet": "__TF_SERVER_REFS",
         "payloadPolicy": "HASH_AND_OPAQUE_REF_ONLY"
       },
       "forbidden": {
-        "sheet": "__TF_ROOT_REFS",
-        "payloadPolicy": "HASH_AND_OPAQUE_REF_ONLY"
+        "sheet": "__TF_FORBIDDEN",
+        "payloadPolicy": "CONSTANT_OMISSION_MARKER_ONLY_NO_CONTENT_DERIVED_HASH_OR_REF"
       },
       "export_only_diagnostic": {
         "sheet": "__TF_DIAGNOSTICS",
@@ -162,6 +174,7 @@
       "canonicalization",
       "recordSchemaAuthority",
       "recordSchemas",
+      "preservedRootCatalog",
       "classifications"
     ],
     "recordHashInput": [
@@ -174,11 +187,12 @@
     "machineContentHashInput": [
       "__TF_CURRENT",
       "__TF_PRESERVED",
-      "__TF_ROOT_REFS",
-      "__TF_DIAGNOSTICS"
+      "__TF_SERVER_REFS",
+      "__TF_FORBIDDEN"
     ],
     "machineContentHashExcludes": [
       "__TF_MANIFEST.machine_content_sha256",
+      "__TF_DIAGNOSTICS",
       "README",
       "ROOT_SUMMARY"
     ],
@@ -200,13 +214,21 @@
       "unknownValues": "FORBIDDEN_IN_IMPORTABLE_PROJECTION",
       "excludedSourceFields": "SERVER_PRESERVE_NOT_EXPORTED"
     },
+    "projectionExclusions": {
+      "skuDrawers":["projectionMatch","fiveAxisProjectionReferences","validationSummary"],
+      "qualityValuePolicyDrafts":["issues"],
+      "pricingPolicyDrafts":["issues"]
+    },
+    "recursiveProofRoots": [
+      "ruleSettings","itemParts","methodProfiles","itemTypeProfiles","functionProfiles","qualityProfiles","compatibilityRules","affinityRules","affinityAxisWeights","collections","seriesDefinitions","v23SeriesPartHeads","v23SkuDrawerHeads","v23AffixDefinitions","v23TechnologyDefinitions","v23TechnologyHeads","skuDrawers","purchasableModels","v3Affixes","technologies","qualityValuePolicyDrafts","pricingPolicyDrafts","parameters","templates","modifiers","layers","affixes","qualityBands","affixScorePolicy","seriesShowcases","ruleGraphs","notes"
+    ],
+    "recursiveTypeGraphSha256": "c6a61660cdc7ef4bc98ac7aeb1011e9abda9b685c724410e3803aa99cd38370e",
     "typeRefs": {
       "ruleSettings":"lib/types.ts#WorkspaceRuleSettings",
       "itemParts":"lib/types.ts#ItemPartDefinition",
       "methodProfiles":"lib/types.ts#MethodProfile",
       "itemTypeProfiles":"lib/types.ts#ItemTypeProfile",
       "functionProfiles":"lib/types.ts#FunctionProfile",
-      "performanceProfiles":"lib/types.ts#PerformanceProfile",
       "qualityProfiles":"lib/types.ts#QualityProfile",
       "compatibilityRules":"lib/types.ts#CompatibilityRule",
       "affinityRules":"lib/types.ts#AffinityRule",
@@ -231,11 +253,7 @@
       "affixes":"lib/types.ts#Affix",
       "qualityBands":"lib/types.ts#QualityBand",
       "affixScorePolicy":"lib/types.ts#AffixScorePolicy",
-      "recipes":"lib/types.ts#SeriesRecipe",
       "seriesShowcases":"lib/types.ts#SeriesShowcaseEntry",
-      "candidates":"lib/types.ts#Candidate",
-      "officialSkus":"lib/types.ts#OfficialSku",
-      "detailOverrides":"lib/types.ts#DetailOverride",
       "ruleGraphs":"lib/types.ts#RuleGraph",
       "notes":"lib/types.ts#string"
     }
@@ -246,7 +264,6 @@
     "methodProfiles": {"schemaId":"project-workbook/root/methodProfiles/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":["sourceRevisionId"],"allowedFields":["id","name","rules","enabled","sourceRevisionId","notes"]},
     "itemTypeProfiles": {"schemaId":"project-workbook/root/itemTypeProfiles/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":["sourceRevisionId"],"allowedFields":["id","name","methodIds","itemPartIds","rules","enabled","sourceRevisionId","notes"]},
     "functionProfiles": {"schemaId":"project-workbook/root/functionProfiles/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":["sourceRevisionId"],"allowedFields":["id","name","status","supportedIntensities","rules","intensityRules","enabled","sourceRevisionId","notes"]},
-    "performanceProfiles": {"schemaId":"project-workbook/root/performanceProfiles/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":["sourceRevisionId"],"allowedFields":["id","name","rules","legacyIntensityLabel","enabled","sourceRevisionId","notes"]},
     "qualityProfiles": {"schemaId":"project-workbook/root/qualityProfiles/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":[],"allowedFields":["id","letter","colorName","rank","rules","enabled","notes"]},
     "compatibilityRules": {"schemaId":"project-workbook/root/compatibilityRules/v1","identityFields":["id"],"revisionFields":["ruleSetVersion"],"hashFields":[],"exactFields":["ruleSetVersion"],"allowedFields":["id","axis","effect","selector","requirements","priority","ruleSetVersion","reason","suggestion","enabled"]},
     "affinityRules": {"schemaId":"project-workbook/root/affinityRules/v1","identityFields":["id"],"revisionFields":["ruleSetVersion"],"hashFields":[],"exactFields":["ruleSetVersion"],"allowedFields":["id","axis","selector","score","priority","ruleSetVersion","reason","enabled"]},
@@ -255,15 +272,15 @@
     "seriesDefinitions": {"schemaId":"project-workbook/root/seriesDefinitions/v1","identityFields":["id"],"revisionFields":["revision"],"hashFields":[],"exactFields":["createdAt"],"allowedFields":["id","collectionId","revision","name","concept","fishingMethodId","typeId","itemPartId","qualityId","coreFunctionId","functionIntensityPolicy","performanceProfileId","performanceIntensityPolicy","coreAffixIds","secondaryAffixPoolIds","forbiddenAffixIds","planningPullRange","targetPullSpecifications","signature","patchIds","partConstraintSetRef","skuIds","status","createdAt","updatedAt"]},
     "v23SeriesPartHeads": {"schemaId":"project-workbook/root/v23SeriesPartHeads/v1","identityFields":["seriesId","partId"],"revisionFields":["revision"],"hashFields":[],"exactFields":[],"allowedFields":["seriesId","partId","revision"]},
     "v23SkuDrawerHeads": {"schemaId":"project-workbook/root/v23SkuDrawerHeads/v1","identityFields":["skuId"],"revisionFields":["revision"],"hashFields":[],"exactFields":[],"allowedFields":["skuId","revision"]},
-    "v23AffixDefinitions": {"schemaId":"project-workbook/root/v23AffixDefinitions/v1","identityFields":["affixId"],"revisionFields":["revision"],"hashFields":["contentHash"],"exactFields":["revision","contentHash"],"allowedFields":["affixId","revision","contentHash","payload"]},
-    "v23TechnologyDefinitions": {"schemaId":"project-workbook/root/v23TechnologyDefinitions/v1","identityFields":["technologyId"],"revisionFields":["revision"],"hashFields":["contentHash"],"exactFields":["revision","contentHash"],"allowedFields":["technologyId","revision","itemPartId","name","description","memberAffixRefs","enabled","contentHash"]},
+    "v23AffixDefinitions": {"schemaId":"project-workbook/root/v23AffixDefinitions/v1","identityFields":["affixId","revision"],"revisionFields":["revision"],"hashFields":["contentHash"],"exactFields":["revision","contentHash"],"allowedFields":["affixId","revision","contentHash","payload"]},
+    "v23TechnologyDefinitions": {"schemaId":"project-workbook/root/v23TechnologyDefinitions/v1","identityFields":["technologyId","revision"],"revisionFields":["revision"],"hashFields":["contentHash"],"exactFields":["revision","contentHash"],"allowedFields":["technologyId","revision","itemPartId","name","description","memberAffixRefs","enabled","contentHash"]},
     "v23TechnologyHeads": {"schemaId":"project-workbook/root/v23TechnologyHeads/v1","identityFields":["technologyId"],"revisionFields":["revision"],"hashFields":[],"exactFields":[],"allowedFields":["technologyId","revision"]},
-    "skuDrawers": {"schemaId":"project-workbook/root/skuDrawers/v1","identityFields":["id"],"revisionFields":["revision"],"hashFields":[],"exactFields":["createdAt"],"allowedFields":["id","revision","seriesId","targetPullKg","projectionMatch","fiveAxisProjectionReferences","patchIds","modelIds","defaultModelId","displayOrder","validationSummary","status","createdAt","updatedAt"]},
+    "skuDrawers": {"schemaId":"project-workbook/root/skuDrawers/v1","identityFields":["id"],"revisionFields":["revision"],"hashFields":[],"exactFields":["createdAt"],"allowedFields":["id","revision","seriesId","targetPullKg","patchIds","modelIds","defaultModelId","displayOrder","status","createdAt","updatedAt"]},
     "purchasableModels": {"schemaId":"project-workbook/root/purchasableModels/v1","identityFields":["id"],"revisionFields":["revision"],"hashFields":[],"exactFields":["createdAt","configurationSnapshotId"],"allowedFields":["id","revision","skuId","name","modelVariantKey","stableModelKey","configIdBundleRef","action","hardness","lengthM","fishWeightGradeId","componentSelections","technologyIds","attributeAffixIds","passiveAffixIds","patchIds","price","unlockPolicyRef","commercePolicyRef","configurationSnapshotId","status","createdAt","updatedAt"]},
-    "v3Affixes": {"schemaId":"project-workbook/root/v3Affixes/v1","identityFields":["id"],"revisionFields":["version"],"hashFields":[],"exactFields":[],"allowedFields":["id","version","name","category","itemPartId","generationPolicy","rarity","valueScore","tags","attributeEffects","passivePayload","description","enabled"]},
-    "technologies": {"schemaId":"project-workbook/root/technologies/v1","identityFields":["id"],"revisionFields":["version"],"hashFields":[],"exactFields":[],"allowedFields":["id","version","name","description","affixIds","compatiblePerformanceProfileIds","compatibleSeriesIds","minimumQualityId","generationPolicy","valueScorePolicy","enabled"]},
-    "qualityValuePolicyDrafts": {"schemaId":"project-workbook/root/qualityValuePolicyDrafts/v1","identityFields":["id"],"revisionFields":["sourceRevision"],"hashFields":["inputHash"],"exactFields":["sourceRevisionId","sourceRevision","qualitySheetId","affixSheetId","issues","inputHash","importedAt"],"allowedFields":["id","sourceRevisionId","sourceRevision","qualitySheetId","affixSheetId","ranges","qualityTableDescriptor","combinationRules","issues","formalStatus","inputHash","importedAt"]},
-    "pricingPolicyDrafts": {"schemaId":"project-workbook/root/pricingPolicyDrafts/v1","identityFields":["id"],"revisionFields":["sourceRevision"],"hashFields":["inputHash"],"exactFields":["sourceRevisionId","sourceRevision","pricingSheetId","qualitySheetId","typeMaterialSheetId","issues","inputHash","importedAt"],"allowedFields":["id","sourceRevisionId","sourceRevision","pricingSheetId","qualitySheetId","typeMaterialSheetId","businessFormulaCells","maintenanceConsumptionRates","partAllocationRatios","repairCoefficients","totalLossTimes","purchaseCoefficients","partsToWholeRatios","qualityMappings","qualityPriceFactorRanges","scoreInterpolation","performanceScoringPolicy","moneyPolicy","executionPolicy","issues","formalStatus","inputHash","importedAt"]},
+    "v3Affixes": {"schemaId":"project-workbook/root/v3Affixes/v1","identityFields":["id","version"],"revisionFields":["version"],"hashFields":[],"exactFields":[],"allowedFields":["id","version","name","category","itemPartId","generationPolicy","rarity","valueScore","tags","attributeEffects","passivePayload","description","enabled"]},
+    "technologies": {"schemaId":"project-workbook/root/technologies/v1","identityFields":["id","version"],"revisionFields":["version"],"hashFields":[],"exactFields":[],"allowedFields":["id","version","name","description","affixIds","compatiblePerformanceProfileIds","compatibleSeriesIds","minimumQualityId","generationPolicy","valueScorePolicy","enabled"]},
+    "qualityValuePolicyDrafts": {"schemaId":"project-workbook/root/qualityValuePolicyDrafts/v1","identityFields":["id","sourceRevision"],"revisionFields":["sourceRevision"],"hashFields":["inputHash"],"exactFields":["sourceRevisionId","sourceRevision","qualitySheetId","affixSheetId","inputHash","importedAt"],"allowedFields":["id","sourceRevisionId","sourceRevision","qualitySheetId","affixSheetId","ranges","qualityTableDescriptor","combinationRules","formalStatus","inputHash","importedAt"]},
+    "pricingPolicyDrafts": {"schemaId":"project-workbook/root/pricingPolicyDrafts/v1","identityFields":["id","sourceRevision"],"revisionFields":["sourceRevision"],"hashFields":["inputHash"],"exactFields":["sourceRevisionId","sourceRevision","pricingSheetId","qualitySheetId","typeMaterialSheetId","inputHash","importedAt"],"allowedFields":["id","sourceRevisionId","sourceRevision","pricingSheetId","qualitySheetId","typeMaterialSheetId","businessFormulaCells","maintenanceConsumptionRates","partAllocationRatios","repairCoefficients","totalLossTimes","purchaseCoefficients","partsToWholeRatios","qualityMappings","qualityPriceFactorRanges","scoreInterpolation","performanceScoringPolicy","moneyPolicy","executionPolicy","formalStatus","inputHash","importedAt"]},
     "parameters": {"schemaId":"project-workbook/root/parameters/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":["id"],"allowedFields":["id","key","label","itemKind","itemPartId","unit","precision","benefitMode","balanceWeight","normalizationScale","allowedOperations","targetRange","notes"]},
     "templates": {"schemaId":"project-workbook/root/templates/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":["sourceRevisionId","sourceSheetId","sourceRow"],"allowedFields":["id","name","fishMinKg","fishMaxKg","nominalFishKg","rangeSemantics","targetPullMinKgf","targetPullMaxKgf","nominalTargetPullKgf","templatePriority","tier","values","notes","methodId","itemPartId","sourceRevisionId","sourceSheetId","sourceRow","fishWeightLevel"]},
     "modifiers": {"schemaId":"project-workbook/root/modifiers/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":[],"allowedFields":["id","dimension","name","level","itemKinds","methodIds","rules","notes","enabled"]},
@@ -271,13 +288,35 @@
     "affixes": {"schemaId":"project-workbook/root/affixes/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":[],"allowedFields":["id","name","category","itemKinds","score","rarity","tags","exclusiveGroup","conflicts","synergies","rules","description","notes","enabled"]},
     "qualityBands": {"schemaId":"project-workbook/root/qualityBands/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":[],"allowedFields":["id","name","color","minScore","maxScore","priceIndex","notes"]},
     "affixScorePolicy": {"schemaId":"project-workbook/root/affixScorePolicy/v1","identityFields":["$singleton"],"revisionFields":[],"hashFields":[],"exactFields":[],"allowedFields":["sameAxisFactors","synergyBonus","conflictPenalty","passiveWeight","directWeight","notes"]},
-    "recipes": {"schemaId":"project-workbook/root/recipes/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":[],"allowedFields":["id","name","platformId","platformPosition","templateIds","structureIds","functionIds","performanceIds","technologyIds","requiredAffixIds","optionalAffixPoolIds","partConstraints","optionalSlots","qualityTarget","fishMinKg","fishMaxKg","useScene","maxCandidates","notes","enabled"]},
     "seriesShowcases": {"schemaId":"project-workbook/root/seriesShowcases/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":["publishedAt"],"allowedFields":["id","seriesId","description","templateId","templateIds","structureId","structureIds","fishingMethod","functionId","performanceId","qualityId","fishMinKg","fishMaxKg","tensionMinKgf","tensionMaxKgf","targetPullsKgf","affixIds","lureMinG","lureMaxG","notes","publishedAt","updatedAt"]},
-    "candidates": {"schemaId":"project-workbook/root/candidates/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":["createdAt"],"allowedFields":["id","recipeId","comboId","platformId","platformPosition","seriesName","templateId","fishMinKg","fishMaxKg","selections","affixIds","useScene","toneOverride","hardnessOverride","lengthOverride","overrides","status","calculated","notes","createdAt","updatedAt"]},
-    "officialSkus": {"schemaId":"project-workbook/root/officialSkus/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":["publishedAt"],"allowedFields":["id","candidateId","comboId","platformId","platformPosition","templateId","seriesName","qualityId","fishMinKg","fishMaxKg","structureName","functionName","functionLevel","performanceName","performanceLevel","affixIds","tone","hardness","lengthM","useScene","rodId","reelId","lineId","priceIndex","rodForce","reelForce","lineForce","safeWorkingForce","values","overrides","notes","publishedAt"]},
-    "detailOverrides": {"schemaId":"project-workbook/root/detailOverrides/v1","identityFields":["skuId","itemKind","model"],"revisionFields":[],"hashFields":[],"exactFields":[],"allowedFields":["skuId","itemKind","model","name","values","notes"]},
-    "ruleGraphs": {"schemaId":"project-workbook/root/ruleGraphs/v1","identityFields":["id"],"revisionFields":["version"],"hashFields":[],"exactFields":[],"allowedFields":["id","name","description","mode","entryNodeId","nodes","edges","version","enabled"]},
+    "ruleGraphs": {"schemaId":"project-workbook/root/ruleGraphs/v1","identityFields":["id","version"],"revisionFields":["version"],"hashFields":[],"exactFields":[],"allowedFields":["id","name","description","mode","entryNodeId","nodes","edges","version","enabled"]},
     "notes": {"schemaId":"project-workbook/root/notes/v1","identityFields":["$singleton"],"revisionFields":[],"hashFields":[],"exactFields":[],"allowedFields":["value"]}
+  },
+  "preservedRootCatalog": {
+    "ruleSetVersions":{"carrier":"records","recordKeyFields":["id","version"],"revisionFields":["version"],"hashFields":["publicationHash"],"singleton":false},
+    "performanceSummaryDefinitions":{"carrier":"records","recordKeyFields":["id","version"],"revisionFields":["version"],"hashFields":["contentHash"],"singleton":false},
+    "projectionPatches":{"carrier":"records","recordKeyFields":["id"],"revisionFields":["baseRuleSetVersion"],"hashFields":[],"singleton":false},
+    "v23SeriesPartRevisions":{"carrier":"records","recordKeyFields":["seriesId","partId","revision"],"revisionFields":["revision"],"hashFields":["contentHash"],"singleton":false},
+    "v23SkuDrawerRevisions":{"carrier":"records","recordKeyFields":["skuId","revision"],"revisionFields":["revision"],"hashFields":["contentHash"],"singleton":false},
+    "v23FunctionTemplates":{"carrier":"records","recordKeyFields":["ref.templateId","ref.revisionId"],"revisionFields":["ref.revisionId"],"hashFields":["ref.contentHash"],"singleton":false},
+    "partConstraintSets":{"carrier":"records","recordKeyFields":["constraintSetId","revision"],"revisionFields":["revision"],"hashFields":["contentHash"],"singleton":false},
+    "candidateSearchRecipes":{"carrier":"records","recordKeyFields":["id","revision"],"revisionFields":["revision"],"hashFields":[],"singleton":false},
+    "configurationSnapshots":{"carrier":"records","recordKeyFields":["id","version"],"revisionFields":["version"],"hashFields":["contentHash"],"singleton":false},
+    "reductionStackingPolicyVersions":{"carrier":"records","recordKeyFields":["id","version"],"revisionFields":["version"],"hashFields":["contentHash","inputHash"],"singleton":false},
+    "fiveAxisDispositionCatalogRevisions":{"carrier":"records","recordKeyFields":["catalogRevisionId"],"revisionFields":["catalogRevisionId"],"hashFields":["catalogHash"],"singleton":false},
+    "fiveAxisViewDefinitions":{"carrier":"records","recordKeyFields":["definitionId","version","revision"],"revisionFields":["revision"],"hashFields":["definitionHash"],"singleton":false},
+    "fiveAxisVertexSets":{"carrier":"records","recordKeyFields":["vertexSetId"],"revisionFields":["fiveAxisDefinitionVersion"],"hashFields":["vertexSetHash","candidateSetHash","candidateEvidenceHash"],"singleton":false},
+    "currentFiveAxisDispositionCatalogRevisionId":{"carrier":"whole_root_singleton","recordKeyFields":["$singleton"],"revisionFields":[],"hashFields":[],"singleton":true},
+    "patchReviewBatches":{"carrier":"records","recordKeyFields":["batchId"],"revisionFields":["policyVersion"],"hashFields":["inputHash"],"singleton":false},
+    "patchValidationWaivers":{"carrier":"records","recordKeyFields":["waiverId"],"revisionFields":["policyVersion"],"hashFields":["objectInputHash","patchSetHash"],"singleton":false},
+    "patchValidationWaiverDecisions":{"carrier":"records","recordKeyFields":["waiverDecisionId"],"revisionFields":[],"hashFields":["decisionHash"],"singleton":false},
+    "ruleChangeProposals":{"carrier":"records","recordKeyFields":["id"],"revisionFields":["targetRuleSetVersion"],"hashFields":[],"singleton":false},
+    "revisions":{"carrier":"records","recordKeyFields":["revision"],"revisionFields":["revision"],"hashFields":[],"singleton":false},
+    "performanceProfiles":{"carrier":"records","recordKeyFields":["id"],"revisionFields":["sourceRevisionId"],"hashFields":[],"singleton":false},
+    "recipes":{"carrier":"records","recordKeyFields":["id"],"revisionFields":[],"hashFields":[],"singleton":false},
+    "candidates":{"carrier":"records","recordKeyFields":["id"],"revisionFields":[],"hashFields":[],"singleton":false},
+    "officialSkus":{"carrier":"records","recordKeyFields":["id"],"revisionFields":[],"hashFields":[],"singleton":false},
+    "detailOverrides":{"carrier":"records","recordKeyFields":["skuId","itemKind","model"],"revisionFields":[],"hashFields":[],"singleton":false}
   },
   "classifications": {
     "importable_current": [
@@ -286,7 +325,6 @@
       "methodProfiles",
       "itemTypeProfiles",
       "functionProfiles",
-      "performanceProfiles",
       "qualityProfiles",
       "compatibilityRules",
       "affinityRules",
@@ -311,11 +349,7 @@
       "affixes",
       "qualityBands",
       "affixScorePolicy",
-      "recipes",
       "seriesShowcases",
-      "candidates",
-      "officialSkus",
-      "detailOverrides",
       "ruleGraphs",
       "notes"
     ],
@@ -338,7 +372,12 @@
       "patchValidationWaivers",
       "patchValidationWaiverDecisions",
       "ruleChangeProposals",
-      "revisions"
+      "revisions",
+      "performanceProfiles",
+      "recipes",
+      "candidates",
+      "officialSkus",
+      "detailOverrides"
     ],
     "server_owned": [
       "workspaceId",

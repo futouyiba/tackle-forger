@@ -6,6 +6,7 @@ import {
   EXPECTED_ROOT_CLASSIFICATIONS,
   checkProjectWorkbookContract,
   parseWorkspaceStateRoots,
+  validateMachineCell,
   validateProjectWorkbookManifest,
 } from "../scripts/check-project-workbook-contract.mjs";
 
@@ -157,6 +158,12 @@ test("legacy, mixed-lifecycle and raw-evidence roots use safe projections", asyn
   assert.ok(manifest.classifications.preserved_frozen.includes("performanceSummaryDefinitions"));
   assert.ok(manifest.classifications.preserved_frozen.includes("fiveAxisViewDefinitions"));
   assert.ok(manifest.classifications.preserved_frozen.includes("fiveAxisVertexSets"));
+  for (const root of [
+    "performanceProfiles", "recipes", "candidates", "officialSkus", "detailOverrides",
+  ]) {
+    assert.ok(manifest.classifications.preserved_frozen.includes(root));
+    assert.equal(Object.hasOwn(manifest.recordSchemas, root), false);
+  }
   assert.ok(manifest.classifications.server_owned.includes("patchLedger"));
   assert.ok(manifest.classifications.server_owned.includes("canonicalRuleSourceDrafts"));
   assert.ok(manifest.classifications.server_owned.includes("weightTemplatePolicyDrafts"));
@@ -173,6 +180,81 @@ test("legacy, mixed-lifecycle and raw-evidence roots use safe projections", asyn
     ),
     false,
   );
+});
+
+test("versioned definitions use composite identities and every frozen root has a carrier key", async () => {
+  const { manifest, roots } = await fixture();
+  assert.deepEqual(
+    manifest.recordSchemas.v23TechnologyDefinitions.identityFields,
+    ["technologyId", "revision"],
+  );
+  assert.deepEqual(
+    manifest.recordSchemas.v23AffixDefinitions.identityFields,
+    ["affixId", "revision"],
+  );
+  for (const root of manifest.classifications.preserved_frozen) {
+    assert.ok(manifest.preservedRootCatalog[root].recordKeyFields.length > 0);
+  }
+  const weakened = clone(manifest);
+  delete weakened.preservedRootCatalog.performanceProfiles;
+  assert.throws(() => validateProjectWorkbookManifest(weakened, roots), /frozen root/);
+  const singleton = clone(manifest);
+  singleton.preservedRootCatalog.currentFiveAxisDispositionCatalogRevisionId.singleton = false;
+  assert.throws(() => validateProjectWorkbookManifest(singleton, roots));
+});
+
+test("safe projections rederive unresolved diagnostic payloads", async () => {
+  const { manifest, roots } = await fixture();
+  assert.deepEqual(manifest.recordSchemaAuthority.projectionExclusions.skuDrawers, [
+    "projectionMatch", "fiveAxisProjectionReferences", "validationSummary",
+  ]);
+  for (const [root, fields] of Object.entries(
+    manifest.recordSchemaAuthority.projectionExclusions,
+  )) {
+    assert.ok(fields.every((field) => !manifest.recordSchemas[root].allowedFields.includes(field)));
+  }
+  const weakened = clone(manifest);
+  weakened.recordSchemas.skuDrawers.allowedFields.push("validationSummary");
+  assert.throws(() => validateProjectWorkbookManifest(weakened, roots), /allowed-field catalog drift|rederived/);
+});
+
+test("machine columns reject blank, null, numeric precision, date, boolean and error confusion", async () => {
+  const { manifest } = await fixture();
+  const columns = Object.fromEntries(
+    manifest.workbookSchema.sheets.__TF_MANIFEST.columns.map((entry) => [entry.name, entry]),
+  );
+  assert.equal(validateMachineCell(columns.base_workspace_revision, "9007199254740991"), true);
+  assert.throws(() => validateMachineCell(columns.base_workspace_revision, 1, "number"), /rejects/);
+  assert.throws(
+    () => validateMachineCell(columns.base_workspace_revision, "9007199254740993"),
+    /not safe/,
+  );
+  for (const kind of ["date", "boolean", "error", "formula"]) {
+    assert.throws(() => validateMachineCell(columns.workspace_id, "x", kind), /rejects/);
+  }
+  assert.throws(() => validateMachineCell(columns.workspace_id, ""), /blank/);
+  assert.throws(() => validateMachineCell(columns.workspace_id, null), /text/);
+  assert.equal(validateMachineCell(columns.machine_content_sha256, "a".repeat(64)), true);
+  assert.throws(() => validateMachineCell(columns.machine_content_sha256, "A".repeat(64)));
+  const payloadColumn = manifest.workbookSchema.sheets.__TF_CURRENT.columns
+    .find((entry) => entry.name === "payload_json");
+  assert.equal(validateMachineCell(payloadColumn, '{"a":2,"b":1}'), true);
+  assert.throws(() => validateMachineCell(payloadColumn, '{"b":1,"a":2}'), /canonical JSON/);
+});
+
+test("forbidden roots have no content-derived hash while diagnostics are non-semantic", async () => {
+  const { manifest, roots } = await fixture();
+  assert.equal(manifest.workbookSchema.classificationProjection.forbidden.sheet, "__TF_FORBIDDEN");
+  assert.deepEqual(
+    manifest.workbookSchema.sheets.__TF_FORBIDDEN.columns.map((entry) => entry.name),
+    ["root", "classification", "policy_marker"],
+  );
+  assert.ok(!manifest.canonicalization.machineContentHashInput.includes("__TF_DIAGNOSTICS"));
+  assert.ok(manifest.canonicalization.machineContentHashExcludes.includes("__TF_DIAGNOSTICS"));
+  const weakened = clone(manifest);
+  weakened.workbookSchema.classificationProjection.forbidden =
+    { sheet: "__TF_SERVER_REFS", payloadPolicy: "HASH_AND_OPAQUE_REF_ONLY" };
+  assert.throws(() => validateProjectWorkbookManifest(weakened, roots));
 });
 
 test("machine sheet catalog, columns and record fields are closed", async () => {

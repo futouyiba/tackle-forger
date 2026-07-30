@@ -6,7 +6,10 @@ import {
   CLASSIFICATIONS,
   EXPECTED_ROOT_CLASSIFICATIONS,
   checkProjectWorkbookContract,
+  compareUnicodeScalarStrings,
+  compareWorkbookPrimaryKey,
   computeWorkbookHashes,
+  importableIdentityExactFields,
   parseWorkspaceStateRoots,
   preservedTypeGraphHash,
   validateMachineCell,
@@ -570,6 +573,101 @@ test("v23 technology uses create/update successor actions and never rewrites one
     { enabled: false },
     { itemPartId: "part:reel" },
     { contentHash: "b".repeat(64) },
+  ]) {
+    assert.throws(
+      () => validateImportableExactFields(
+        manifest,
+        "v23TechnologyDefinitions",
+        { ...technology, ...mutation },
+        technology,
+      ),
+      /is exact-equal for an existing record/,
+    );
+  }
+});
+
+test("every importable existing record exact-compares its complete schema identity", async () => {
+  const { manifest } = await fixture();
+  for (const [root, schema] of Object.entries(manifest.recordSchemas)) {
+    const expected = schema.identityFields[0] === "$singleton" ? [] : schema.identityFields;
+    assert.deepEqual(
+      importableIdentityExactFields(schema),
+      expected,
+      `${root} must derive existing exact fields from every identity path`,
+    );
+  }
+  assert.deepEqual(
+    importableIdentityExactFields({ identityFields: ["owner.id", "revision"] }),
+    ["owner.id", "revision"],
+    "future nested and composite identity paths remain exact without root-specific logic",
+  );
+  assert.deepEqual(
+    importableIdentityExactFields(manifest.recordSchemas.ruleSettings),
+    [],
+    "$singleton is a row identity sentinel, not a payload path",
+  );
+  assert.throws(
+    () => importableIdentityExactFields({ identityFields: ["$singleton", "id"] }),
+    /\$singleton cannot be combined/,
+  );
+  assert.equal(
+    validateImportableExactFields(
+      manifest,
+      "ruleSettings",
+      { patchOffsetLimits: {}, reductionStackingPolicyVersion: "policy:2" },
+      { patchOffsetLimits: {}, reductionStackingPolicyVersion: "policy:1" },
+    ),
+    true,
+    "singleton pseudo identity must not trigger a missing payload field comparison",
+  );
+
+  const itemPart = {
+    id: "part:rod",
+    name: "竿",
+    activeInGeneration: true,
+    parameterKeys: [],
+    notes: "",
+  };
+  assert.deepEqual(manifest.recordSchemas.itemParts.exactFields, []);
+  assert.throws(
+    () => validateImportableExactFields(
+      manifest,
+      "itemParts",
+      { ...itemPart, id: "part:reel" },
+      itemPart,
+    ),
+    /id is exact-equal/,
+    "an existing itemPart cannot escape matching by changing its id",
+  );
+  const missingId = clone(itemPart);
+  delete missingId.id;
+  assert.throws(
+    () => validateImportableExactFields(manifest, "itemParts", missingId, itemPart),
+    /itemParts payload\.id is required/,
+  );
+  assert.throws(
+    () => validateImportableExactFields(
+      manifest,
+      "itemParts",
+      { ...itemPart, id: 1 },
+      itemPart,
+    ),
+    /itemParts payload\.id must be NFC text/,
+  );
+
+  const technology = {
+    technologyId: "technology:1",
+    revision: 1,
+    itemPartId: "part:rod",
+    name: "技术",
+    description: "",
+    memberAffixRefs: [],
+    enabled: true,
+    contentHash: "a".repeat(64),
+  };
+  for (const mutation of [
+    { technologyId: "technology:2" },
+    { revision: 2 },
   ]) {
     assert.throws(
       () => validateImportableExactFields(
@@ -1204,6 +1302,87 @@ test("workbook manifest recomputes every declared hash from a closed workbook co
   assert.throws(
     () => computeWorkbookHashes(manifest, rehashedMutation),
     /every forbidden root exactly once/,
+  );
+});
+
+test("all workbook primary keys use Unicode scalar lexicographic order", async () => {
+  const { manifest, manifestSource } = await fixture();
+  const privateUse = "\uE000";
+  const supplementary = "\u{10000}";
+  assert.equal(compareUnicodeScalarStrings(privateUse, supplementary), -1);
+  assert.equal(compareUnicodeScalarStrings(supplementary, privateUse), 1);
+  assert.equal(compareUnicodeScalarStrings("前缀", "前缀甲"), -1);
+  assert.equal(compareUnicodeScalarStrings("甲乙", "甲申"), -1);
+  assert.equal(compareUnicodeScalarStrings("é", "ê"), -1);
+  assert.equal(compareUnicodeScalarStrings("é", "e\u0301"), 1,
+    "the comparator is scalar-based; machine-cell validation separately enforces NFC");
+
+  const nonRootPrimaryKeyFields = [...new Set(
+    Object.values(manifest.workbookSchema.sheets)
+      .flatMap((sheet) => sheet.primaryKey)
+      .filter((field) => field !== "root"),
+  )];
+  for (const field of nonRootPrimaryKeyFields) {
+    assert.equal(
+      compareWorkbookPrimaryKey(
+        manifest,
+        { [field]: `shared${privateUse}` },
+        { [field]: `shared${supplementary}` },
+        [field],
+      ),
+      -1,
+      `${field} must use Unicode scalar order`,
+    );
+  }
+  assert.equal(
+    compareWorkbookPrimaryKey(
+      manifest,
+      { root: "ruleSettings" },
+      { root: "itemParts" },
+      ["root"],
+    ),
+    -1,
+    "root ordering remains the manifest order rather than Unicode order",
+  );
+
+  const context = workbookContext(manifest, manifestSource);
+  const itemPartRow = (id) => {
+    const payload = {
+      id,
+      name: id,
+      activeInGeneration: true,
+      parameterKeys: [],
+      notes: "",
+    };
+    const row = {
+      root: "itemParts",
+      record_schema_id: manifest.recordSchemas.itemParts.schemaId,
+      record_key: canonicalPayload([id]),
+      record_revision: "null",
+      record_content_sha256: "0".repeat(64),
+      payload_json: canonicalPayload(payload),
+    };
+    row.record_content_sha256 = expectedRecordHash(manifest, row, "payload_json");
+    return row;
+  };
+  context.machineSheets.__TF_CURRENT.splice(
+    1,
+    0,
+    itemPartRow(`item:${privateUse}`),
+    itemPartRow(`item:${supplementary}`),
+  );
+  assert.doesNotThrow(() => computeWorkbookHashes(manifest, context));
+  const reversed = clone(context);
+  [
+    reversed.machineSheets.__TF_CURRENT[1],
+    reversed.machineSheets.__TF_CURRENT[2],
+  ] = [
+    reversed.machineSheets.__TF_CURRENT[2],
+    reversed.machineSheets.__TF_CURRENT[1],
+  ];
+  assert.throws(
+    () => computeWorkbookHashes(manifest, reversed),
+    /canonical primary-key order/,
   );
 });
 

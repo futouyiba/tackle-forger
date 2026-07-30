@@ -950,6 +950,19 @@ function terminalLifecycleExactFields(manifest, root, existingPayload) {
   return schema.allowedFields;
 }
 
+export function importableIdentityExactFields(schema) {
+  assert.ok(schema && Array.isArray(schema.identityFields), "record schema identityFields are required");
+  if (schema.identityFields.includes("$singleton")) {
+    assert.deepEqual(
+      schema.identityFields,
+      ["$singleton"],
+      "$singleton cannot be combined with payload identity fields",
+    );
+    return [];
+  }
+  return [...schema.identityFields];
+}
+
 export function validateImportableExactFields(
   manifest,
   root,
@@ -975,6 +988,7 @@ export function validateImportableExactFields(
     : [];
   const revisionFields = manifest.recordSchemas[root].revisionFields;
   for (const field of new Set([
+    ...importableIdentityExactFields(manifest.recordSchemas[root]),
     ...revisionFields,
     ...manifest.recordSchemas[root].exactFields,
     ...conditionalFields,
@@ -1433,7 +1447,20 @@ export function validateDiagnosticEnvelope(manifest, row) {
   return true;
 }
 
-function comparePrimaryKey(manifest, left, right, primaryKey) {
+export function compareUnicodeScalarStrings(left, right) {
+  assert.equal(typeof left, "string", "left primary-key component must be text");
+  assert.equal(typeof right, "string", "right primary-key component must be text");
+  const leftScalars = [...left].map((character) => character.codePointAt(0));
+  const rightScalars = [...right].map((character) => character.codePointAt(0));
+  const sharedLength = Math.min(leftScalars.length, rightScalars.length);
+  for (let index = 0; index < sharedLength; index += 1) {
+    const comparison = leftScalars[index] - rightScalars[index];
+    if (comparison !== 0) return comparison < 0 ? -1 : 1;
+  }
+  return leftScalars.length - rightScalars.length;
+}
+
+export function compareWorkbookPrimaryKey(manifest, left, right, primaryKey) {
   for (const field of primaryKey) {
     if (field === "root") {
       const rootOrder = Object.values(manifest.classifications).flat();
@@ -1441,7 +1468,7 @@ function comparePrimaryKey(manifest, left, right, primaryKey) {
       if (comparison !== 0) return comparison;
       continue;
     }
-    const comparison = left[field] < right[field] ? -1 : left[field] > right[field] ? 1 : 0;
+    const comparison = compareUnicodeScalarStrings(left[field], right[field]);
     if (comparison !== 0) return comparison;
   }
   return 0;
@@ -1482,7 +1509,7 @@ function validateMachineContentSheets(manifest, machineSheets, manifestFields, r
       );
     }
     const canonicalRows = [...rows].sort((left, right) =>
-      comparePrimaryKey(manifest, left, right, sheet.primaryKey));
+      compareWorkbookPrimaryKey(manifest, left, right, sheet.primaryKey));
     const primaryKeys = rows.map((row) =>
       canonicalJson(sheet.primaryKey.map((field) => row[field])));
     assert.equal(
@@ -2428,14 +2455,18 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     } else {
       assert.ok(!schema.allowedFields.includes("$scalar"), `${root} cannot use scalar sentinel`);
     }
+    importableIdentityExactFields(schema);
     assert.equal(new Set(schema.allowedFields).size, schema.allowedFields.length);
     for (const field of [
       ...schema.identityFields.filter((field) => field !== "$singleton"),
-      ...schema.revisionFields.filter((field) => !field.includes(".")),
+      ...schema.revisionFields,
       ...schema.hashFields,
       ...schema.exactFields,
     ]) {
-      assert.ok(schema.allowedFields.includes(field), `${root}.${field} is outside allowedFields`);
+      assert.ok(
+        schema.allowedFields.includes(field.split(".")[0]),
+        `${root}.${field} is outside allowedFields`,
+      );
     }
     for (const excluded of manifest.recordSchemaAuthority.projectionExclusions[root] ?? []) {
       assert.ok(!schema.allowedFields.includes(excluded), `${root}.${excluded} must be rederived`);

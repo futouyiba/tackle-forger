@@ -26,6 +26,8 @@ const EXPECTED_TOP_LEVEL_KEYS = [
   "preservedSchemaCatalog",
   "preservedSchemaAuthority",
   "diagnosticRootCatalog",
+  "serverOwnedRootCatalog",
+  "conditionalExactFieldPolicies",
   "serverOwnedInvariants",
   "classifications",
   "modes",
@@ -112,6 +114,23 @@ const EXPECTED_SERVER_OWNED_INVARIANTS = {
   ],
 };
 
+const EXPECTED_SERVER_OWNED_ROOT_CATALOG = Object.fromEntries(
+  EXPECTED_ROOT_CLASSIFICATIONS.server_owned.map((root) => [
+    root,
+    {
+      hashPolicy: "NO_CONTENT_HASH",
+      refPolicy: "OPAQUE_NON_REPLAYABLE",
+    },
+  ]),
+);
+
+const EXPECTED_CONDITIONAL_EXACT_FIELD_POLICIES = {
+  purchasableModels: {
+    whenExistingFieldPresent: "configIdBundleRef",
+    exactFields: ["skuId", "stableModelKey", "configIdBundleRef"],
+  },
+};
+
 const column = (name, format, type = "string") => ({ name, type, required: true, format });
 const EXPECTED_SHEETS = {
   __TF_MANIFEST: {
@@ -156,8 +175,8 @@ const EXPECTED_SHEETS = {
     kind: "machine",
     columns: [
       column("root", "workspace-root"), column("classification", "literal:server_owned"),
-      column("root_content_sha256", "lowercase-sha256"),
-      column("opaque_server_ref", "opaque-token-or-null"),
+      column("root_content_sha256", "literal:null"),
+      column("opaque_server_ref", "opaque-token"),
     ],
     primaryKey: ["root"],
     cardinality: "EXACTLY_ALL_SERVER_OWNED_ROOTS",
@@ -176,6 +195,7 @@ const EXPECTED_SHEETS = {
     columns: [
       column("root", "workspace-root"), column("record_key", "rfc8785-key-json"),
       column("diagnostic_schema_version", "literal:project-workbook-diagnostic/v1"),
+      column("subject_payload_json", "diagnostic-subject-json"),
       column("severity", "diagnostic-severity"), column("code", "stable-code"),
       column("message", "display-text"), column("subject_ref", "opaque-token-or-null"),
       column("diagnostic_evidence_sha256", "lowercase-sha256"),
@@ -851,7 +871,15 @@ export function validateImportableExactFields(
   validateImportableRecordPayload(manifest, root, candidatePayload, repositoryRoot);
   if (existingPayload === undefined) return true;
   validateImportableRecordPayload(manifest, root, existingPayload, repositoryRoot);
-  for (const field of manifest.recordSchemas[root].exactFields) {
+  const conditionalPolicy = manifest.conditionalExactFieldPolicies[root];
+  const conditionalFields = conditionalPolicy
+    && valueAtFieldPath(existingPayload, conditionalPolicy.whenExistingFieldPresent) !== undefined
+    ? conditionalPolicy.exactFields
+    : [];
+  for (const field of [
+    ...manifest.recordSchemas[root].exactFields,
+    ...conditionalFields,
+  ]) {
     const candidateValue = valueAtFieldPath(candidatePayload, field);
     const existingValue = valueAtFieldPath(existingPayload, field);
     if (candidateValue === undefined || existingValue === undefined) {
@@ -1129,6 +1157,253 @@ export function validateRecordEnvelope(manifest, row, context = {}) {
   return true;
 }
 
+export function validateServerRefEnvelope(manifest, row) {
+  assert.ok(row && Object.getPrototypeOf(row) === Object.prototype,
+    "server ref envelope must be a closed object");
+  assert.deepEqual(Object.keys(row), [
+    "root",
+    "classification",
+    "root_content_sha256",
+    "opaque_server_ref",
+  ], "server ref envelope must use the closed field order");
+  const catalog = manifest.serverOwnedRootCatalog[row.root];
+  assert.ok(catalog, `${row.root} has no server-owned root policy`);
+  assert.deepEqual(catalog, {
+    hashPolicy: "NO_CONTENT_HASH",
+    refPolicy: "OPAQUE_NON_REPLAYABLE",
+  }, `${row.root} server-owned policy may not expose raw-derived hashes`);
+  const sheet = manifest.workbookSchema.sheets.__TF_SERVER_REFS;
+  for (const columnSchema of sheet.columns) {
+    validateMachineCell(columnSchema, row[columnSchema.name]);
+  }
+  return true;
+}
+
+function diagnosticEvidenceHash(manifest, row) {
+  const values = {
+    root: row.root,
+    record_key: JSON.parse(row.record_key),
+    diagnostic_schema_version: row.diagnostic_schema_version,
+    subject_payload: JSON.parse(row.subject_payload_json),
+    severity: row.severity,
+    code: row.code,
+    message: row.message,
+    subject_ref: row.subject_ref === "null" ? null : row.subject_ref,
+  };
+  return sha256(canonicalJson(
+    manifest.canonicalization.diagnosticEvidenceHashInput.map((field) => {
+      assert.ok(Object.hasOwn(values, field), `diagnostic hash input ${field} is unresolved`);
+      return [field, values[field]];
+    }),
+  ));
+}
+
+export function validateDiagnosticEnvelope(manifest, row) {
+  assert.ok(row && Object.getPrototypeOf(row) === Object.prototype,
+    "diagnostic envelope must be a closed object");
+  assert.deepEqual(Object.keys(row), [
+    "root",
+    "record_key",
+    "diagnostic_schema_version",
+    "subject_payload_json",
+    "severity",
+    "code",
+    "message",
+    "subject_ref",
+    "diagnostic_evidence_sha256",
+  ], "diagnostic envelope must use the closed field order");
+  const sheet = manifest.workbookSchema.sheets.__TF_DIAGNOSTICS;
+  const column = (name) => sheet.columns.find((entry) => entry.name === name);
+  const payload = JSON.parse(row.subject_payload_json);
+  validateMachineCell(column("root"), row.root);
+  validateMachineCell(column("subject_payload_json"), row.subject_payload_json, "string", {
+    manifest,
+    root: row.root,
+  });
+  validateMachineCell(column("record_key"), row.record_key, "string", {
+    manifest,
+    root: row.root,
+    payload,
+  });
+  for (const name of [
+    "diagnostic_schema_version",
+    "severity",
+    "code",
+    "message",
+    "subject_ref",
+    "diagnostic_evidence_sha256",
+  ]) {
+    validateMachineCell(column(name), row[name]);
+  }
+  const expectedHash = diagnosticEvidenceHash(manifest, row);
+  assert.ok(
+    timingSafeEqual(
+      Buffer.from(row.diagnostic_evidence_sha256, "hex"),
+      Buffer.from(expectedHash, "hex"),
+    ),
+    `${row.root} diagnostic_evidence_sha256 does not match the closed row envelope`,
+  );
+  return true;
+}
+
+function comparePrimaryKey(manifest, left, right, primaryKey) {
+  for (const field of primaryKey) {
+    if (field === "root") {
+      const rootOrder = Object.values(manifest.classifications).flat();
+      const comparison = rootOrder.indexOf(left.root) - rootOrder.indexOf(right.root);
+      if (comparison !== 0) return comparison;
+      continue;
+    }
+    const comparison = left[field] < right[field] ? -1 : left[field] > right[field] ? 1 : 0;
+    if (comparison !== 0) return comparison;
+  }
+  return 0;
+}
+
+function validateMachineContentSheets(manifest, machineSheets, repositoryRoot) {
+  assert.ok(machineSheets && Object.getPrototypeOf(machineSheets) === Object.prototype,
+    "workbook hash context requires closed machineSheets");
+  assert.deepEqual(
+    Object.keys(machineSheets),
+    manifest.canonicalization.machineContentHashInput.filter(
+      (entry) => entry !== "__TF_MANIFEST_EXCEPT_MACHINE_CONTENT_SHA256",
+    ),
+    "machineSheets must match the declared include set exactly",
+  );
+  for (const sheetName of manifest.canonicalization.machineContentHashInput) {
+    if (sheetName === "__TF_MANIFEST_EXCEPT_MACHINE_CONTENT_SHA256") continue;
+    const sheet = manifest.workbookSchema.sheets[sheetName];
+    const rows = machineSheets[sheetName];
+    assert.ok(sheet?.kind === "machine" && Array.isArray(rows), `${sheetName} rows are required`);
+    if (sheetName === "__TF_SERVER_REFS") {
+      assert.deepEqual(
+        rows.map((row) => row.root),
+        manifest.classifications.server_owned,
+        "__TF_SERVER_REFS must contain every server-owned root exactly once",
+      );
+    }
+    if (sheetName === "__TF_FORBIDDEN") {
+      assert.deepEqual(
+        rows.map((row) => row.root),
+        manifest.classifications.forbidden,
+        "__TF_FORBIDDEN must contain every forbidden root exactly once",
+      );
+    }
+    const canonicalRows = [...rows].sort((left, right) =>
+      comparePrimaryKey(manifest, left, right, sheet.primaryKey));
+    const primaryKeys = rows.map((row) =>
+      canonicalJson(sheet.primaryKey.map((field) => row[field])));
+    assert.equal(
+      new Set(primaryKeys).size,
+      primaryKeys.length,
+      `${sheetName} contains a duplicate primary key`,
+    );
+    assert.equal(
+      canonicalJson(rows),
+      canonicalJson(canonicalRows),
+      `${sheetName} rows must use canonical primary-key order`,
+    );
+    for (const row of rows) {
+      if (sheetName === "__TF_CURRENT" || sheetName === "__TF_PRESERVED") {
+        validateRecordEnvelope(manifest, row, { repositoryRoot });
+      } else if (sheetName === "__TF_SERVER_REFS") {
+        validateServerRefEnvelope(manifest, row);
+      } else if (sheetName === "__TF_FORBIDDEN") {
+        assert.deepEqual(
+          Object.keys(row),
+          sheet.columns.map((entry) => entry.name),
+          `${sheetName} row must use the closed field order`,
+        );
+        for (const columnSchema of sheet.columns) {
+          validateMachineCell(columnSchema, row[columnSchema.name]);
+        }
+      } else {
+        fail(`${sheetName} is not a declared machine-content sheet`);
+      }
+    }
+  }
+}
+
+export function computeWorkbookHashes(
+  manifest,
+  context,
+  repositoryRoot = process.cwd(),
+) {
+  assert.ok(context && Object.getPrototypeOf(context) === Object.prototype,
+    "workbook hash context is required");
+  assert.deepEqual(
+    Object.keys(context),
+    ["rootManifestSource", "manifestFields", "machineSheets"],
+    "workbook hash context must be closed",
+  );
+  assert.equal(typeof context.rootManifestSource, "string", "root manifest source is required");
+  assert.deepEqual(Object.keys(context.manifestFields), [
+    "contract_version",
+    "workspace_id",
+    "base_workspace_revision",
+    "root_manifest_sha256",
+    "workbook_schema_sha256",
+    "exporter_version",
+  ], "manifestFields must exclude only machine_content_sha256");
+  assert.deepEqual(
+    JSON.parse(context.rootManifestSource),
+    manifest,
+    "root manifest context does not match the active manifest",
+  );
+  assert.deepEqual(
+    manifest.canonicalization.rootManifestHashInput,
+    ["project-workbook-v1-root-manifest.json:utf8-bytes"],
+  );
+  validateMachineContentSheets(manifest, context.machineSheets, repositoryRoot);
+  const schemaInput = manifest.canonicalization.workbookSchemaHashInput.map((field) => {
+    assert.ok(Object.hasOwn(manifest, field), `workbook schema hash input ${field} is unresolved`);
+    return [field, manifest[field]];
+  });
+  const machineInput = manifest.canonicalization.machineContentHashInput.map((sheetName) => [
+    sheetName,
+    sheetName === "__TF_MANIFEST_EXCEPT_MACHINE_CONTENT_SHA256"
+      ? context.manifestFields
+      : context.machineSheets[sheetName],
+  ]);
+  return {
+    rootManifestSha256: sha256(context.rootManifestSource),
+    workbookSchemaSha256: sha256(canonicalJson(schemaInput)),
+    machineContentSha256: sha256(canonicalJson(machineInput)),
+  };
+}
+
+export function validateWorkbookEnvelope(
+  manifest,
+  row,
+  context,
+  repositoryRoot = process.cwd(),
+) {
+  assert.ok(row && Object.getPrototypeOf(row) === Object.prototype,
+    "workbook manifest envelope must be a closed object");
+  const sheet = manifest.workbookSchema.sheets.__TF_MANIFEST;
+  assert.deepEqual(
+    Object.keys(row),
+    sheet.columns.map((entry) => entry.name),
+    "workbook manifest envelope must use the closed field order",
+  );
+  for (const columnSchema of sheet.columns) {
+    validateMachineCell(columnSchema, row[columnSchema.name]);
+  }
+  const hashes = computeWorkbookHashes(manifest, context, repositoryRoot);
+  assert.equal(row.root_manifest_sha256, hashes.rootManifestSha256,
+    "root_manifest_sha256 does not match its declared input");
+  assert.equal(row.workbook_schema_sha256, hashes.workbookSchemaSha256,
+    "workbook_schema_sha256 does not match its declared inputs");
+  assert.deepEqual(
+    context.manifestFields,
+    Object.fromEntries(Object.entries(row).filter(([field]) => field !== "machine_content_sha256")),
+    "workbook hash context manifestFields do not match the row",
+  );
+  assert.equal(row.machine_content_sha256, hashes.machineContentSha256,
+    "machine_content_sha256 does not match its declared sheets");
+  return true;
+}
+
 export function validateMachineCell(columnSchema, value, cellKind = "string", context = {}) {
   assert.equal(cellKind, "string", `${columnSchema.name} rejects Excel ${cellKind} cells`);
   assert.equal(typeof value, "string", `${columnSchema.name} must be encoded as text`);
@@ -1202,6 +1477,13 @@ export function validateMachineCell(columnSchema, value, cellKind = "string", co
     }
   } else if (format === "opaque-token-or-null") {
     assert.ok(value === "null" || /^opaque_[A-Za-z0-9_-]{22,}$/.test(value));
+  } else if (format === "opaque-token") {
+    assert.match(value, /^opaque_[A-Za-z0-9_-]{22,}$/);
+  } else if (format === "diagnostic-subject-json") {
+    const parsed = JSON.parse(value);
+    assert.equal(canonicalJson(parsed), value, `${columnSchema.name} must use canonical JSON`);
+    assert.ok(context.manifest && context.root, "diagnostic subject requires manifest and root");
+    diagnosticSubjectHash(context.manifest, context.root, parsed);
   } else if (format === "rfc8785-json" || format === "rfc8785-key-json") {
     const parsed = JSON.parse(value);
     assert.equal(canonicalJson(parsed), value, `${columnSchema.name} must use canonical JSON`);
@@ -1690,7 +1972,10 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
   assert.deepEqual(manifest.workbookSchema.classificationProjection, {
     importable_current: { sheet: "__TF_CURRENT", payloadPolicy: "CLOSED_RECORD_SCHEMA" },
     preserved_frozen: { sheet: "__TF_PRESERVED", payloadPolicy: "OPAQUE_EXACT_SERVER_EXPORT_ONLY" },
-    server_owned: { sheet: "__TF_SERVER_REFS", payloadPolicy: "HASH_AND_OPAQUE_REF_ONLY" },
+    server_owned: {
+      sheet: "__TF_SERVER_REFS",
+      payloadPolicy: "OPAQUE_NON_REPLAYABLE_REF_ONLY_NO_CONTENT_HASH",
+    },
     forbidden: {
       sheet: "__TF_FORBIDDEN",
       payloadPolicy: "CONSTANT_OMISSION_MARKER_ONLY_NO_CONTENT_DERIVED_HASH_OR_REF",
@@ -1710,8 +1995,10 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     "negativeZero",
     "blankAndNullDistinct",
     "rowOrder",
+    "rootManifestHashInput",
     "workbookSchemaHashInput",
     "recordHashInput",
+    "diagnosticEvidenceHashInput",
     "machineContentHashInput",
     "machineContentHashExcludes",
     "hashAlgorithm",
@@ -1719,6 +2006,9 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
   ], "canonicalization");
   assert.equal(manifest.canonicalization.jsonCanonicalization, "RFC8785_JCS");
   assert.equal(manifest.canonicalization.hashAlgorithm, "SHA-256");
+  assert.deepEqual(manifest.canonicalization.rootManifestHashInput, [
+    "project-workbook-v1-root-manifest.json:utf8-bytes",
+  ]);
   assert.deepEqual(manifest.canonicalization.workbookSchemaHashInput, [
     "workbookSchema",
     "canonicalization",
@@ -1728,6 +2018,8 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     "preservedSchemaCatalog",
     "preservedSchemaAuthority",
     "diagnosticRootCatalog",
+    "serverOwnedRootCatalog",
+    "conditionalExactFieldPolicies",
     "serverOwnedInvariants",
     "classifications",
   ]);
@@ -1738,7 +2030,18 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     "record_revision",
     "canonical_payload",
   ]);
+  assert.deepEqual(manifest.canonicalization.diagnosticEvidenceHashInput, [
+    "root",
+    "record_key",
+    "diagnostic_schema_version",
+    "subject_payload",
+    "severity",
+    "code",
+    "message",
+    "subject_ref",
+  ]);
   assert.deepEqual(manifest.canonicalization.machineContentHashInput, [
+    "__TF_MANIFEST_EXCEPT_MACHINE_CONTENT_SHA256",
     "__TF_CURRENT",
     "__TF_PRESERVED",
     "__TF_SERVER_REFS",
@@ -1834,6 +2137,27 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     }
     for (const excluded of manifest.recordSchemaAuthority.projectionExclusions[root] ?? []) {
       assert.ok(!schema.allowedFields.includes(excluded), `${root}.${excluded} must be rederived`);
+    }
+  }
+  assert.deepEqual(
+    manifest.serverOwnedRootCatalog,
+    EXPECTED_SERVER_OWNED_ROOT_CATALOG,
+    "every server-owned root must forbid raw-derived content hashes",
+  );
+  assert.deepEqual(
+    manifest.conditionalExactFieldPolicies,
+    EXPECTED_CONDITIONAL_EXACT_FIELD_POLICIES,
+    "conditional exact-field policies must retain reserved identities",
+  );
+  for (const [root, policy] of Object.entries(manifest.conditionalExactFieldPolicies)) {
+    assert.ok(manifest.recordSchemas[root], `${root} conditional exact policy has no record schema`);
+    assert.ok(
+      manifest.recordSchemas[root].allowedFields.includes(policy.whenExistingFieldPresent),
+      `${root}.${policy.whenExistingFieldPresent} conditional exact predicate is not importable`,
+    );
+    for (const field of policy.exactFields) {
+      assert.ok(manifest.recordSchemas[root].allowedFields.includes(field),
+        `${root}.${field} conditional exact field is not importable`);
     }
   }
   assert.deepEqual(manifest.recordSchemas.v23TechnologyDefinitions.identityFields,

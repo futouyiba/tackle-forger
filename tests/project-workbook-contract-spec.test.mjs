@@ -6,14 +6,18 @@ import {
   CLASSIFICATIONS,
   EXPECTED_ROOT_CLASSIFICATIONS,
   checkProjectWorkbookContract,
+  computeWorkbookHashes,
   parseWorkspaceStateRoots,
   preservedTypeGraphHash,
   validateMachineCell,
   validateDiagnosticRootCatalog,
+  validateDiagnosticEnvelope,
   validateImportableExactFields,
   validatePreservedRootCatalog,
   validateProjectWorkbookManifest,
   validateRecordEnvelope,
+  validateServerRefEnvelope,
+  validateWorkbookEnvelope,
 } from "../scripts/check-project-workbook-contract.mjs";
 
 const manifestPath = new URL("../docs/spec-v3/project-workbook-v1-root-manifest.json", import.meta.url);
@@ -25,6 +29,7 @@ async function fixture() {
     readFile(workspaceStatePath, "utf8"),
   ]);
   return {
+    manifestSource,
     manifest: JSON.parse(manifestSource),
     roots: parseWorkspaceStateRoots(workspaceSource),
   };
@@ -65,6 +70,66 @@ function diagnosticKey(manifest, root, payload) {
     .map((field) => [field, atPath(payload, field)]);
   const hash = createHash("sha256").update(JSON.stringify(projection), "utf8").digest("hex");
   return JSON.stringify([hash]);
+}
+
+function workbookSchemaHash(manifest) {
+  return createHash("sha256").update(canonicalPayload(
+    manifest.canonicalization.workbookSchemaHashInput.map((field) => [field, manifest[field]]),
+  )).digest("hex");
+}
+
+function workbookContext(manifest, manifestSource) {
+  const manifestFields = {
+    contract_version: "project-workbook/v1",
+    workspace_id: "workspace:1",
+    base_workspace_revision: "1",
+    root_manifest_sha256: createHash("sha256").update(manifestSource).digest("hex"),
+    workbook_schema_sha256: workbookSchemaHash(manifest),
+    exporter_version: "v1",
+  };
+  return {
+    rootManifestSource: manifestSource,
+    manifestFields,
+    machineSheets: {
+      __TF_CURRENT: [],
+      __TF_PRESERVED: [],
+      __TF_SERVER_REFS: manifest.classifications.server_owned.map((root) => ({
+        root,
+        classification: "server_owned",
+        root_content_sha256: "null",
+        opaque_server_ref: `opaque_${createHash("sha256").update(root).digest("hex")}`,
+      })),
+      __TF_FORBIDDEN: manifest.classifications.forbidden.map((root) => ({
+        root,
+        classification: "forbidden",
+        policy_marker: "FORBIDDEN_PAYLOAD_OMITTED",
+      })),
+    },
+  };
+}
+
+function workbookEnvelope(manifest, context) {
+  const hashes = computeWorkbookHashes(manifest, context);
+  return {
+    ...context.manifestFields,
+    machine_content_sha256: hashes.machineContentSha256,
+  };
+}
+
+function diagnosticEvidence(manifest, row) {
+  const values = {
+    root: row.root,
+    record_key: JSON.parse(row.record_key),
+    diagnostic_schema_version: row.diagnostic_schema_version,
+    subject_payload: JSON.parse(row.subject_payload_json),
+    severity: row.severity,
+    code: row.code,
+    message: row.message,
+    subject_ref: row.subject_ref === "null" ? null : row.subject_ref,
+  };
+  return createHash("sha256").update(canonicalPayload(
+    manifest.canonicalization.diagnosticEvidenceHashInput.map((field) => [field, values[field]]),
+  )).digest("hex");
 }
 
 test("canonical project workbook contract binds all current WorkspaceState roots", () => {
@@ -411,6 +476,67 @@ test("existing v23 technology keeps itemPart exact while create may declare it",
   );
 });
 
+test("reserved purchasable model identity is exact while unreserved and new models remain editable", async () => {
+  const { manifest } = await fixture();
+  assert.deepEqual(manifest.conditionalExactFieldPolicies.purchasableModels, {
+    whenExistingFieldPresent: "configIdBundleRef",
+    exactFields: ["skuId", "stableModelKey", "configIdBundleRef"],
+  });
+  const model = {
+    id: "model:1",
+    revision: 1,
+    skuId: "sku:1",
+    name: "Model 1",
+    stableModelKey: "model_1",
+    action: "M",
+    hardness: "H",
+    lengthM: 2.4,
+    componentSelections: [],
+    technologyIds: [],
+    attributeAffixIds: [],
+    passiveAffixIds: [],
+    patchIds: [],
+    price: 100,
+    status: "draft",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  assert.equal(validateImportableExactFields(
+    manifest,
+    "purchasableModels",
+    { ...model, configIdBundleRef: "bundle:1" },
+    undefined,
+  ), true, "a new model may declare its reserved identity");
+  assert.equal(validateImportableExactFields(
+    manifest,
+    "purchasableModels",
+    { ...model, skuId: "sku:2", stableModelKey: "model_2" },
+    model,
+  ), true, "an existing unreserved model may still revise pre-reservation identity");
+  const reserved = { ...model, configIdBundleRef: "bundle:1" };
+  assert.equal(validateImportableExactFields(
+    manifest,
+    "purchasableModels",
+    { ...reserved, name: "Model 1 revised" },
+    reserved,
+  ), true, "a reserved identity can be reused exactly");
+  for (const mutation of [
+    { skuId: "sku:2" },
+    { stableModelKey: "model_2" },
+    { configIdBundleRef: "bundle:2" },
+  ]) {
+    assert.throws(
+      () => validateImportableExactFields(
+        manifest,
+        "purchasableModels",
+        { ...reserved, ...mutation },
+        reserved,
+      ),
+      /is exact-equal for an existing record/,
+    );
+  }
+});
+
 test("preserved rows bind a versioned schema id to the closed payload variant", async () => {
   const { manifest, roots } = await fixture();
   const schemaColumn = manifest.workbookSchema.sheets.__TF_PRESERVED.columns
@@ -625,6 +751,74 @@ test("machine columns reject blank, null, numeric precision, date, boolean and e
   assert.throws(
     () => validateMachineCell(payloadColumn, '{"é\\r\\n":1,"é\\n":2}'),
     /NFC key collisions/,
+  );
+});
+
+test("workbook manifest recomputes every declared hash from a closed workbook context", async () => {
+  const { manifest, manifestSource } = await fixture();
+  const context = workbookContext(manifest, manifestSource);
+  const row = workbookEnvelope(manifest, context);
+  assert.equal(validateWorkbookEnvelope(manifest, row, context), true);
+  assert.throws(
+    () => validateWorkbookEnvelope(manifest, row),
+    /context is required/,
+  );
+
+  const fieldMutation = clone(row);
+  fieldMutation.workspace_id = "workspace:2";
+  assert.throws(
+    () => validateWorkbookEnvelope(manifest, fieldMutation, context),
+    /manifestFields do not match/,
+  );
+  const schemaMutation = clone(row);
+  schemaMutation.workbook_schema_sha256 = "0".repeat(64);
+  assert.throws(
+    () => validateWorkbookEnvelope(manifest, schemaMutation, context),
+    /workbook_schema_sha256 does not match/,
+  );
+  const rootManifestMutation = clone(row);
+  rootManifestMutation.root_manifest_sha256 = "0".repeat(64);
+  assert.throws(
+    () => validateWorkbookEnvelope(manifest, rootManifestMutation, context),
+    /root_manifest_sha256 does not match/,
+  );
+
+  const rowMutationContext = clone(context);
+  rowMutationContext.machineSheets.__TF_FORBIDDEN[0].policy_marker = "FORGED";
+  assert.throws(
+    () => validateWorkbookEnvelope(manifest, row, rowMutationContext),
+    /FORBIDDEN_PAYLOAD_OMITTED/,
+  );
+  const validRowMutation = clone(context);
+  validRowMutation.machineSheets.__TF_SERVER_REFS[0].opaque_server_ref =
+    `opaque_${"f".repeat(64)}`;
+  assert.throws(
+    () => validateWorkbookEnvelope(manifest, row, validRowMutation),
+    /machine_content_sha256 does not match/,
+  );
+  const omittedSheet = clone(context);
+  delete omittedSheet.machineSheets.__TF_SERVER_REFS;
+  assert.throws(
+    () => validateWorkbookEnvelope(manifest, row, omittedSheet),
+    /include set exactly/,
+  );
+  const includeMutation = clone(manifest);
+  includeMutation.canonicalization.machineContentHashInput.push("__TF_DIAGNOSTICS");
+  assert.throws(
+    () => validateWorkbookEnvelope(
+      includeMutation,
+      row,
+      { ...context, rootManifestSource: JSON.stringify(includeMutation) },
+    ),
+    /include set exactly|not a declared machine-content sheet/,
+  );
+
+  const rehashedMutation = clone(context);
+  rehashedMutation.machineSheets.__TF_FORBIDDEN[0].root =
+    rehashedMutation.machineSheets.__TF_FORBIDDEN[1].root;
+  assert.throws(
+    () => computeWorkbookHashes(manifest, rehashedMutation),
+    /every forbidden root exactly once/,
   );
 });
 
@@ -1263,6 +1457,36 @@ test("all diagnostic roots derive closed non-semantic subject keys from safe pay
       root,
     );
   }
+  const diagnosticRow = {
+    root: "derivedProjections",
+    record_key: diagnosticKey(manifest, "derivedProjections", payloads.derivedProjections),
+    diagnostic_schema_version: "project-workbook-diagnostic/v1",
+    subject_payload_json: canonicalPayload(payloads.derivedProjections),
+    severity: "WARNING",
+    code: "PROJECTION_STALE",
+    message: "派生结果已过期",
+    subject_ref: "null",
+    diagnostic_evidence_sha256: "",
+  };
+  diagnosticRow.diagnostic_evidence_sha256 = diagnosticEvidence(manifest, diagnosticRow);
+  assert.equal(validateDiagnosticEnvelope(manifest, diagnosticRow), true);
+  const subjectMutation = {
+    ...diagnosticRow,
+    subject_payload_json: canonicalPayload({ id: "projection:2" }),
+  };
+  assert.throws(
+    () => validateDiagnosticEnvelope(manifest, subjectMutation),
+    /does not match the safe subject payload/,
+  );
+  const evidenceMutation = { ...diagnosticRow, message: "被篡改的显示信息" };
+  assert.throws(
+    () => validateDiagnosticEnvelope(manifest, evidenceMutation),
+    /diagnostic_evidence_sha256 does not match/,
+  );
+  assert.throws(
+    () => validateDiagnosticEnvelope(manifest, { ...diagnosticRow, extra: "forbidden" }),
+    /closed field order/,
+  );
 
   assert.throws(
     () => validateMachineCell(keyColumn, '["' + "0".repeat(64) + '"]', "string", {
@@ -1333,6 +1557,43 @@ test("forbidden roots have no content-derived hash while diagnostics are non-sem
   weakened.workbookSchema.classificationProjection.forbidden =
     { sheet: "__TF_SERVER_REFS", payloadPolicy: "HASH_AND_OPAQUE_REF_ONLY" };
   assert.throws(() => validateProjectWorkbookManifest(weakened, roots));
+});
+
+test("server-owned roots expose only opaque non-replayable refs and no raw-derived hash", async () => {
+  const { manifest, roots } = await fixture();
+  assert.deepEqual(
+    Object.keys(manifest.serverOwnedRootCatalog),
+    manifest.classifications.server_owned,
+  );
+  for (const root of manifest.classifications.server_owned) {
+    assert.deepEqual(manifest.serverOwnedRootCatalog[root], {
+      hashPolicy: "NO_CONTENT_HASH",
+      refPolicy: "OPAQUE_NON_REPLAYABLE",
+    });
+    assert.equal(validateServerRefEnvelope(manifest, {
+      root,
+      classification: "server_owned",
+      root_content_sha256: "null",
+      opaque_server_ref: `opaque_${createHash("sha256").update(root).digest("hex")}`,
+    }), true);
+  }
+  for (const rawRoot of ["patchLedger", "partConstraintSets", "configIdGovernance"]) {
+    assert.throws(
+      () => validateServerRefEnvelope(manifest, {
+        root: rawRoot,
+        classification: "server_owned",
+        root_content_sha256: "a".repeat(64),
+        opaque_server_ref: `opaque_${"b".repeat(64)}`,
+      }),
+      /null/,
+    );
+  }
+  const weakened = clone(manifest);
+  weakened.serverOwnedRootCatalog.patchLedger.hashPolicy = "HASH_RAW_PAYLOAD";
+  assert.throws(
+    () => validateProjectWorkbookManifest(weakened, roots),
+    /raw-derived content hashes/,
+  );
 });
 
 test("machine sheet catalog, columns and record fields are closed", async () => {

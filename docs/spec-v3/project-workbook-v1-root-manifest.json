@@ -75,8 +75,8 @@
         "columns": [
           {"name":"root","type":"string","required":true,"format":"workspace-root"},
           {"name":"classification","type":"string","required":true,"format":"literal:server_owned"},
-          {"name":"root_content_sha256","type":"string","required":true,"format":"lowercase-sha256"},
-          {"name":"opaque_server_ref","type":"string","required":true,"format":"opaque-token-or-null"}
+          {"name":"root_content_sha256","type":"string","required":true,"format":"literal:null"},
+          {"name":"opaque_server_ref","type":"string","required":true,"format":"opaque-token"}
         ],
         "primaryKey": [
           "root"
@@ -99,6 +99,7 @@
           {"name":"root","type":"string","required":true,"format":"workspace-root"},
           {"name":"record_key","type":"string","required":true,"format":"rfc8785-key-json"},
           {"name":"diagnostic_schema_version","type":"string","required":true,"format":"literal:project-workbook-diagnostic/v1"},
+          {"name":"subject_payload_json","type":"string","required":true,"format":"diagnostic-subject-json"},
           {"name":"severity","type":"string","required":true,"format":"diagnostic-severity"},
           {"name":"code","type":"string","required":true,"format":"stable-code"},
           {"name":"message","type":"string","required":true,"format":"display-text"},
@@ -149,7 +150,7 @@
       },
       "server_owned": {
         "sheet": "__TF_SERVER_REFS",
-        "payloadPolicy": "HASH_AND_OPAQUE_REF_ONLY"
+        "payloadPolicy": "OPAQUE_NON_REPLAYABLE_REF_ONLY_NO_CONTENT_HASH"
       },
       "forbidden": {
         "sheet": "__TF_FORBIDDEN",
@@ -170,6 +171,9 @@
     "negativeZero": "NORMALIZE_TO_ZERO",
     "blankAndNullDistinct": true,
     "rowOrder": "ROOT_MANIFEST_ORDER_THEN_PRIMARY_KEY_CODEPOINT_ASC",
+    "rootManifestHashInput": [
+      "project-workbook-v1-root-manifest.json:utf8-bytes"
+    ],
     "workbookSchemaHashInput": [
       "workbookSchema",
       "canonicalization",
@@ -179,6 +183,8 @@
       "preservedSchemaCatalog",
       "preservedSchemaAuthority",
       "diagnosticRootCatalog",
+      "serverOwnedRootCatalog",
+      "conditionalExactFieldPolicies",
       "serverOwnedInvariants",
       "classifications"
     ],
@@ -189,7 +195,18 @@
       "record_revision",
       "canonical_payload"
     ],
+    "diagnosticEvidenceHashInput": [
+      "root",
+      "record_key",
+      "diagnostic_schema_version",
+      "subject_payload",
+      "severity",
+      "code",
+      "message",
+      "subject_ref"
+    ],
     "machineContentHashInput": [
+      "__TF_MANIFEST_EXCEPT_MACHINE_CONTENT_SHA256",
       "__TF_CURRENT",
       "__TF_PRESERVED",
       "__TF_SERVER_REFS",
@@ -351,6 +368,35 @@
     "upgradeCandidates":{"typeRef":"lib/types.ts#UpgradeCandidate","subjectProjectionFields":["id"],"keyContract":"SHA256_RFC8785_SUBJECT_PROJECTION_V1"},
     "fiveAxisVertexGroupStates":{"typeRef":"lib/types.ts#FiveAxisVertexGroupState","subjectProjectionFields":["groupKey.weightBandId","groupKey.weightBandPolicyVersion","groupKey.fiveAxisDefinitionId","groupKey.fiveAxisDefinitionVersion","groupKey.fiveAxisRuleVersion"],"keyContract":"SHA256_RFC8785_SUBJECT_PROJECTION_V1"},
     "ruleRuns":{"typeRef":"lib/types.ts#RuleGraphRun","subjectProjectionFields":["id"],"keyContract":"SHA256_RFC8785_SUBJECT_PROJECTION_V1"}
+  },
+  "serverOwnedRootCatalog": {
+    "workspaceId":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
+    "schemaVersion":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
+    "configIdGovernance":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
+    "patchLedger":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
+    "v23SeriesPartHeads":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
+    "v23SkuDrawerHeads":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
+    "partConstraintSets":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
+    "qualityProfiles":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
+    "seriesDefinitions":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
+    "v23AffixDefinitions":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
+    "v23TechnologyHeads":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
+    "canonicalRuleSourceDrafts":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
+    "weightTemplatePolicyDrafts":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
+    "qualityValuePolicyDrafts":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
+    "pricingPolicyDrafts":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
+    "workspacePolicies":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
+    "pricingPolicyVersions":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
+    "identityAuditLog":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
+    "commandIdempotencyRecords":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
+    "governanceAuditLog":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
+    "importedAt":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"}
+  },
+  "conditionalExactFieldPolicies": {
+    "purchasableModels": {
+      "whenExistingFieldPresent": "configIdBundleRef",
+      "exactFields": ["skuId","stableModelKey","configIdBundleRef"]
+    }
   },
   "serverOwnedInvariants": {
     "qualityProfiles": [

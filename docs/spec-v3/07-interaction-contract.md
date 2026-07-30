@@ -112,7 +112,7 @@ type ActionCode =
 
 `project-workbook/v1`只使用三个服务端动作：`preview_project_workbook_import`解析并保存绑定工作区revision与各类hash的只读计划；`commit_project_workbook_import`只消费该计划的不可篡改payload引用与幂等键，并在执行时重新鉴权、重验计划后原子提交和回读；`export_project_workbook`从单一一致性revision生成机器Manifest与派生可读Sheet。三个动作分别要求`project.workbook.preview`、`project.workbook.commit`与`project.workbook.export`，互不蕴含；这三组ActionCode→Capability由`project-workbook-v1-root-manifest.json`逐项机器绑定，缺失、互换或复用Capability均为contract drift。预览返回`enabled=true`不能授权提交；导出文件不能作为客户端命令payload绕过服务端计划。直接提交工作簿、替换plan hash、跨工作区使用plan、计划过期或当前revision变化都必须拒绝；可解析的可变冲突按第15.1节`REPLAN_REHASH_AND_REAUTHORIZE`生成新计划，身份/冻结/引用/schema/工作区冲突不生成可提交payload。
 
-预览解析必须先按根清单逐列验证Excel原始cell type；机器列仅接受非空文本并执行其`type/required/format`约束，不能让Excel数字精度、日期转换、布尔值、error cell或公式参与身份、revision、hash、JSON或opaque ref解析。`forbidden`根只有固定遗漏标记，服务端不得把原始敏感内容或其可猜hash写入工作簿；diagnostic message/severity只用于展示，不参与项目语义等价或提交计划hash。
+预览解析必须先按根清单逐列验证Excel原始cell type；机器列仅接受非空文本并执行其`type/required/format`约束，不能让Excel数字精度、日期转换、布尔值、error cell或公式参与身份、revision、hash、JSON或opaque ref解析。根清单、workbook schema与machine content三类hash必须从closed workbook context按各自唯一声明输入重算，不能只接受64位hex；缺少上下文、表集合变化或任一Manifest/机器行篡改都先于计划生成而失败。`server_owned`根只导出不可重放opaque ref且content hash固定为`null`，尤其不得从raw/preserved/readback证据派生hash。`forbidden`根只有固定遗漏标记，服务端不得把原始敏感内容或其可猜hash写入工作簿；diagnostic行必须内嵌closed canonical subject payload并独立重算subject key，即使subject ref为`null`也可验证；diagnostic message/severity只用于展示，不参与项目语义等价或提交计划hash。
 
 Series、Part、SKU、Model的ID终身稳定且不复用；改名和更换默认Model不改ID。SKU改换Part或weightBandId必须遵守第6.6节；派生拉力不是身份字段。Revision只增不改；已批准/已发布revision不可原地改写。Snapshot ID与payload/hash永久绑定。前端不得从角色名、状态或颜色猜服务端动作；读接口返回`ActionAvailability[]`，写接口再次鉴权，纯本地动作只消费上述`LocalActionAvailability`。
 

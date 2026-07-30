@@ -221,9 +221,9 @@
       "skuDrawers":["projectionMatch","fiveAxisProjectionReferences","validationSummary"]
     },
     "recursiveProofRoots": [
-      "ruleSettings","itemParts","methodProfiles","itemTypeProfiles","functionProfiles","compatibilityRules","affinityRules","affinityAxisWeights","collections","v23TechnologyDefinitions","v23TechnologyHeads","skuDrawers","purchasableModels","v3Affixes","technologies","parameters","templates","modifiers","layers","affixes","qualityBands","affixScorePolicy","seriesShowcases","ruleGraphs","notes"
+      "ruleSettings","itemParts","methodProfiles","itemTypeProfiles","functionProfiles","compatibilityRules","affinityRules","affinityAxisWeights","collections","v23TechnologyDefinitions","skuDrawers","purchasableModels","v3Affixes","technologies","parameters","templates","modifiers","layers","affixes","qualityBands","affixScorePolicy","seriesShowcases","ruleGraphs","notes"
     ],
-    "recursiveTypeGraphSha256": "754f0e50a0b50ec9ef5219cef4cc9fea56e3f98e13bb0310f918cc8aefbf9667",
+    "recursiveTypeGraphSha256": "5d8c8e104f2e0a59d56cf888e0c55a5bdf4e1a1d6df4266a74235280fbc72cbe",
     "typeRefs": {
       "ruleSettings":"lib/types.ts#WorkspaceRuleSettings",
       "itemParts":"lib/types.ts#ItemPartDefinition",
@@ -235,7 +235,6 @@
       "affinityAxisWeights":"lib/types.ts#AffinityAxisWeights",
       "collections":"lib/types.ts#Collection",
       "v23TechnologyDefinitions":"lib/types.ts#V23TechnologyDefinition",
-      "v23TechnologyHeads":"lib/types.ts#V23TechnologyHeadRef",
       "skuDrawers":"lib/types.ts#SkuDrawer",
       "purchasableModels":"lib/types.ts#PurchasableModel",
       "v3Affixes":"lib/types.ts#V3Affix",
@@ -263,7 +262,6 @@
     "affinityAxisWeights": {"schemaId":"project-workbook/root/affinityAxisWeights/v1","identityFields":["$singleton"],"revisionFields":[],"hashFields":[],"exactFields":[],"allowedFields":["method_type","type_weight","type_function","function_performance","material_function","quality_specialization","model_component","series_coherence"]},
     "collections": {"schemaId":"project-workbook/root/collections/v1","identityFields":["id"],"revisionFields":[],"hashFields":[],"exactFields":["createdAt"],"allowedFields":["id","name","brandStory","seriesIds","notes","createdAt","updatedAt"]},
     "v23TechnologyDefinitions": {"schemaId":"project-workbook/root/v23TechnologyDefinitions/v1","identityFields":["technologyId","revision"],"revisionFields":["revision"],"hashFields":["contentHash"],"exactFields":["revision","contentHash"],"allowedFields":["technologyId","revision","itemPartId","name","description","memberAffixRefs","enabled","contentHash"]},
-    "v23TechnologyHeads": {"schemaId":"project-workbook/root/v23TechnologyHeads/v1","identityFields":["technologyId"],"revisionFields":["revision"],"hashFields":[],"exactFields":[],"allowedFields":["technologyId","revision"]},
     "skuDrawers": {"schemaId":"project-workbook/root/skuDrawers/v1","identityFields":["id"],"revisionFields":["revision"],"hashFields":[],"exactFields":["createdAt"],"allowedFields":["id","revision","seriesId","targetPullKg","patchIds","modelIds","defaultModelId","displayOrder","status","createdAt","updatedAt"]},
     "purchasableModels": {"schemaId":"project-workbook/root/purchasableModels/v1","identityFields":["id"],"revisionFields":["revision"],"hashFields":[],"exactFields":["createdAt","configurationSnapshotId"],"allowedFields":["id","revision","skuId","name","modelVariantKey","stableModelKey","configIdBundleRef","action","hardness","lengthM","fishWeightGradeId","componentSelections","technologyIds","attributeAffixIds","passiveAffixIds","patchIds","price","unlockPolicyRef","commercePolicyRef","configurationSnapshotId","status","createdAt","updatedAt"]},
     "v3Affixes": {"schemaId":"project-workbook/root/v3Affixes/v1","identityFields":["id","version"],"revisionFields":["version"],"hashFields":[],"exactFields":[],"allowedFields":["id","version","name","category","itemPartId","generationPolicy","rarity","valueScore","tags","attributeEffects","passivePayload","description","enabled"]},
@@ -374,7 +372,6 @@
       "affinityAxisWeights",
       "collections",
       "v23TechnologyDefinitions",
-      "v23TechnologyHeads",
       "skuDrawers",
       "purchasableModels",
       "v3Affixes",
@@ -426,6 +423,7 @@
       "qualityProfiles",
       "seriesDefinitions",
       "v23AffixDefinitions",
+      "v23TechnologyHeads",
       "canonicalRuleSourceDrafts",
       "weightTemplatePolicyDrafts",
       "qualityValuePolicyDrafts",

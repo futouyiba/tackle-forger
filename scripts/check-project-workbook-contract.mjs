@@ -42,7 +42,7 @@ export const EXPECTED_ROOT_CLASSIFICATIONS = {
     "compatibilityRules", "affinityRules",
     "affinityAxisWeights", "collections",
     "v23TechnologyDefinitions",
-    "v23TechnologyHeads", "skuDrawers", "purchasableModels", "v3Affixes", "technologies",
+    "skuDrawers", "purchasableModels", "v3Affixes", "technologies",
     "parameters", "templates", "modifiers",
     "layers", "affixes", "qualityBands", "affixScorePolicy", "seriesShowcases",
     "ruleGraphs", "notes",
@@ -61,7 +61,7 @@ export const EXPECTED_ROOT_CLASSIFICATIONS = {
   server_owned: [
     "workspaceId", "schemaVersion", "configIdGovernance", "patchLedger",
     "v23SeriesPartHeads", "v23SkuDrawerHeads", "partConstraintSets",
-    "qualityProfiles", "seriesDefinitions", "v23AffixDefinitions",
+    "qualityProfiles", "seriesDefinitions", "v23AffixDefinitions", "v23TechnologyHeads",
     "canonicalRuleSourceDrafts", "weightTemplatePolicyDrafts",
     "qualityValuePolicyDrafts", "pricingPolicyDrafts", "workspacePolicies",
     "pricingPolicyVersions", "identityAuditLog", "commandIdempotencyRecords",
@@ -202,9 +202,9 @@ const EXPECTED_SHEETS = {
 };
 
 const EXPECTED_RECORD_SCHEMAS_SHA256 =
-  "55dd8645bf6b7743263a63999190b02150d58cdeda5263ad6f3ccac70b2fdd27";
+  "70b575a631ff6bdddd577293176736d93576817d7dfa1bb051a890906a14818e";
 const EXPECTED_RECORD_SCHEMA_AUTHORITY_SHA256 =
-  "6cc411e2519e02bcd9f0c857d561fa0c9462824a5bd3ae00c77a6c897382063b";
+  "d8196415ff7b677a1371fb83842431ededf9d150993c3396069e53e7127346ab";
 
 function fail(message) {
   throw new Error(message);
@@ -310,6 +310,564 @@ function expectedRecordSchemaId(manifest, root, payload, callerVariant, reposito
     repositoryRoot,
   );
   return typeof catalog === "string" ? catalog : catalog[variant];
+}
+
+function splitTopLevelType(source, delimiter) {
+  const parts = [];
+  let depth = 0;
+  let quote = "";
+  let start = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (quote) {
+      if (character === "\\") index += 1;
+      else if (character === quote) quote = "";
+      continue;
+    }
+    if (character === "'" || character === '"' || character === "`") {
+      quote = character;
+      continue;
+    }
+    if ("{[(<".includes(character)) depth += 1;
+    else if ("}])>".includes(character)) depth -= 1;
+    else if (character === delimiter && depth === 0) {
+      parts.push(source.slice(start, index).trim());
+      start = index + 1;
+    }
+  }
+  parts.push(source.slice(start).trim());
+  return parts;
+}
+
+function stripOuterTypeParentheses(type) {
+  let current = type.trim();
+  while (current.startsWith("(") && current.endsWith(")")) {
+    let depth = 0;
+    let closesAtEnd = false;
+    for (let index = 0; index < current.length; index += 1) {
+      if (current[index] === "(") depth += 1;
+      else if (current[index] === ")") {
+        depth -= 1;
+        if (depth === 0) {
+          closesAtEnd = index === current.length - 1;
+          break;
+        }
+      }
+    }
+    if (!closesAtEnd) break;
+    current = current.slice(1, -1).trim();
+  }
+  return current;
+}
+
+function inlineFieldDefinitions(body) {
+  const cleaned = body
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/\/\/.*$/gm, "");
+  const fields = new Map();
+  let depth = 0;
+  let segment = "";
+  for (const character of cleaned) {
+    segment += character;
+    if ("{[(".includes(character)) depth += 1;
+    if ("}])".includes(character)) depth -= 1;
+    if (character === ";" && depth === 0) {
+      const field = segment.trim().match(
+        /^(?:readonly\s+)?([A-Za-z_$][A-Za-z0-9_$]*)(\?)?:\s*([\s\S]*);$/,
+      );
+      assert.ok(field, `closed record schema cannot parse field declaration: ${segment.trim()}`);
+      fields.set(field[1], { optional: field[2] === "?", type: field[3].trim() });
+      segment = "";
+    }
+  }
+  if (segment.trim()) {
+    const field = `${segment.trim()};`.match(
+      /^(?:readonly\s+)?([A-Za-z_$][A-Za-z0-9_$]*)(\?)?:\s*([\s\S]*);$/,
+    );
+    assert.ok(field, `closed record schema cannot parse final field: ${segment.trim()}`);
+    fields.set(field[1], { optional: field[2] === "?", type: field[3].trim() });
+  }
+  return fields;
+}
+
+function closedInterfaceFields(source, interfaceName, visited = new Set()) {
+  assert.ok(!visited.has(interfaceName), `closed record schema has cyclic interface ${interfaceName}`);
+  const own = interfaceFieldDefinitions(source, interfaceName);
+  if (!own) return null;
+  const fields = new Map();
+  const declaration = source.match(
+    new RegExp(`\\bexport\\s+interface\\s+${interfaceName}\\s*(?:extends\\s+([^\\{]+))?\\{`),
+  );
+  const nextVisited = new Set(visited).add(interfaceName);
+  for (const base of splitTopLevelType(declaration?.[1] ?? "", ",")) {
+    if (!base) continue;
+    const baseName = base.match(/^([A-Za-z_$][A-Za-z0-9_$]*)$/)?.[1];
+    assert.ok(baseName, `${interfaceName} has an unsupported generic interface base ${base}`);
+    const inherited = closedInterfaceFields(source, baseName, nextVisited);
+    assert.ok(inherited, `${interfaceName} base ${baseName} is unresolved`);
+    for (const [name, definition] of inherited) fields.set(name, definition);
+  }
+  for (const [name, definition] of own) fields.set(name, definition);
+  return fields;
+}
+
+function assertClosedJsonNumber(value, label) {
+  assert.ok(typeof value === "number" && Number.isFinite(value), `${label} must be a finite number`);
+  if (Number.isInteger(value)) {
+    assert.ok(Number.isSafeInteger(value), `${label} integer must be safe`);
+  }
+}
+
+function parseTypeLiteralValue(type) {
+  if (type === "true") return true;
+  if (type === "false") return false;
+  if (type === "null") return null;
+  if (/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/.test(type)) return Number(type);
+  if (/^"(?:\\.|[^"\\])*"$/.test(type)) return JSON.parse(type);
+  if (/^'(?:\\.|[^'\\])*'$/.test(type)) {
+    return type.slice(1, -1).replace(/\\'/g, "'").replace(/\\\\/g, "\\");
+  }
+  return undefined;
+}
+
+function stringKeyContract(source, declarations, keyType, label, depth) {
+  const type = stripOuterTypeParentheses(keyType);
+  if (type === "string") return { dynamic: true, keys: [] };
+  const members = splitTopLevelType(type, "|").filter(Boolean);
+  if (members.length > 1) {
+    const keys = members.map((member) => {
+      const literal = parseTypeLiteralValue(member);
+      assert.equal(typeof literal, "string", `${label} record key union must contain only strings`);
+      return literal;
+    });
+    return { dynamic: false, keys };
+  }
+  const alias = declarations.get(type);
+  assert.ok(alias && depth < 64, `${label} record key type ${type} is unresolved`);
+  return stringKeyContract(source, declarations, alias, label, depth + 1);
+}
+
+function closedFieldsForType(source, declarations, rawType, visited = new Set()) {
+  const type = stripOuterTypeParentheses(rawType);
+  const intersection = splitTopLevelType(type, "&").filter(Boolean);
+  if (intersection.length > 1) {
+    const combined = new Map();
+    for (const member of intersection) {
+      const fields = closedFieldsForType(source, declarations, member, visited);
+      if (!fields) return null;
+      for (const [name, definition] of fields) combined.set(name, definition);
+    }
+    return combined;
+  }
+  if (type.startsWith("{") && type.endsWith("}")) {
+    return inlineFieldDefinitions(type.slice(1, -1));
+  }
+  const interfaceFields = closedInterfaceFields(source, type);
+  if (interfaceFields) return interfaceFields;
+  if (visited.has(type)) return null;
+  const alias = declarations.get(type);
+  if (!alias) return null;
+  return closedFieldsForType(source, declarations, alias, new Set(visited).add(type));
+}
+
+function assertClosedTypeGrammar(source, declarations, rawType, label, visited = new Set()) {
+  const type = stripOuterTypeParentheses(rawType.replace(/^readonly\s+/, "").trim());
+  const union = splitTopLevelType(type, "|").filter(Boolean);
+  if (union.length > 1) {
+    for (const member of union) {
+      assertClosedTypeGrammar(source, declarations, member, label, visited);
+    }
+    return;
+  }
+  const intersection = splitTopLevelType(type, "&").filter(Boolean);
+  if (intersection.length > 1) {
+    const fields = closedFieldsForType(source, declarations, type);
+    assert.ok(fields, `${label} intersection must resolve to closed object fields`);
+    for (const [name, definition] of fields) {
+      assertClosedTypeGrammar(source, declarations, definition.type, `${label}.${name}`, visited);
+    }
+    return;
+  }
+  if (type.endsWith("[]")) {
+    assertClosedTypeGrammar(source, declarations, type.slice(0, -2), `${label}[]`, visited);
+    return;
+  }
+  const propertyAccess = type.match(
+    /^([A-Za-z_$][A-Za-z0-9_$]*)\s*\[\s*["']([A-Za-z_$][A-Za-z0-9_$]*)["']\s*\]$/,
+  );
+  if (propertyAccess) {
+    const fields = closedFieldsForType(source, declarations, propertyAccess[1]);
+    const definition = fields?.get(propertyAccess[2]);
+    assert.ok(definition, `${label} indexed property ${type} is unresolved`);
+    assertClosedTypeGrammar(source, declarations, definition.type, label, visited);
+    return;
+  }
+  const arrayElementAccess = type.match(/^([A-Za-z_$][A-Za-z0-9_$]*)\s*\[\s*number\s*\]$/);
+  if (arrayElementAccess) {
+    const alias = declarations.get(arrayElementAccess[1]);
+    assert.ok(alias, `${label} indexed array ${type} is unresolved`);
+    const arrayType = stripOuterTypeParentheses(alias);
+    const elementType = arrayType.endsWith("[]")
+      ? arrayType.slice(0, -2)
+      : arrayType.match(/^(?:Array|ReadonlyArray)\s*<([\s\S]+)>$/)?.[1];
+    assert.ok(elementType, `${label} indexed array ${type} is not an array alias`);
+    assertClosedTypeGrammar(source, declarations, elementType, label, visited);
+    return;
+  }
+  const generic = type.match(/^([A-Za-z_$][A-Za-z0-9_$]*)\s*<([\s\S]+)>$/);
+  if (generic) {
+    const parameters = splitTopLevelType(generic[2], ",");
+    if (generic[1] === "Array" || generic[1] === "ReadonlyArray") {
+      assert.equal(parameters.length, 1, `${label} array type arity mismatch`);
+      assertClosedTypeGrammar(source, declarations, parameters[0], `${label}[]`, visited);
+      return;
+    }
+    if (generic[1] === "Record") {
+      assert.equal(parameters.length, 2, `${label} record type arity mismatch`);
+      stringKeyContract(source, declarations, parameters[0], label, 0);
+      assert.doesNotMatch(
+        parameters[1].replace(/(["'`])(?:\\.|(?!\1).)*\1/g, ""),
+        /\b(?:unknown|any)\b/,
+        `${label} dynamic values are forbidden in importable payloads`,
+      );
+      assertClosedTypeGrammar(source, declarations, parameters[1], `${label}.*`, visited);
+      return;
+    }
+    if (generic[1] === "Partial" || generic[1] === "Readonly") {
+      assert.equal(parameters.length, 1, `${label} ${generic[1]} type arity mismatch`);
+      assertClosedTypeGrammar(source, declarations, parameters[0], label, visited);
+      return;
+    }
+    assert.fail(`${label} uses unsupported generic type ${generic[1]}`);
+  }
+  if (type.startsWith("[") && type.endsWith("]")) {
+    for (const [index, element] of splitTopLevelType(type.slice(1, -1), ",").entries()) {
+      assertClosedTypeGrammar(source, declarations, element, `${label}[${index}]`, visited);
+    }
+    return;
+  }
+  if (type.startsWith("{") && type.endsWith("}")) {
+    for (const [name, definition] of inlineFieldDefinitions(type.slice(1, -1))) {
+      assertClosedTypeGrammar(source, declarations, definition.type, `${label}.${name}`, visited);
+    }
+    return;
+  }
+  if (["string", "number", "boolean", "null", "undefined", "void"].includes(type)) return;
+  if (parseTypeLiteralValue(type) !== undefined) return;
+  assert.doesNotMatch(
+    type,
+    /^(?:unknown|any|object)$/,
+    `${label} dynamic type ${type} is forbidden in importable payloads`,
+  );
+  if (visited.has(type)) return;
+  const fields = closedInterfaceFields(source, type);
+  const nextVisited = new Set(visited).add(type);
+  if (fields) {
+    for (const [name, definition] of fields) {
+      assertClosedTypeGrammar(source, declarations, definition.type, `${label}.${name}`, nextVisited);
+    }
+    return;
+  }
+  const alias = declarations.get(type);
+  assert.ok(alias, `${label} type ${type} is unresolved`);
+  assertClosedTypeGrammar(source, declarations, alias, label, nextVisited);
+}
+
+function assertClosedTypeValue(
+  source,
+  declarations,
+  rawType,
+  value,
+  label,
+  depth = 0,
+  { optionalAll = false } = {},
+) {
+  assert.ok(depth < 64, `${label} exceeds the closed recursive type depth`);
+  let type = stripOuterTypeParentheses(rawType.replace(/^readonly\s+/, "").trim());
+  const union = splitTopLevelType(type, "|").filter(Boolean);
+  if (union.length > 1) {
+    const matches = [];
+    for (const member of union) {
+      try {
+        assertClosedTypeValue(source, declarations, member, value, label, depth + 1);
+        matches.push(member);
+      } catch {
+        // A closed union is accepted only when the payload proves exactly one member.
+      }
+    }
+    assert.equal(matches.length, 1, `${label} must prove exactly one closed union variant`);
+    return;
+  }
+  const intersection = splitTopLevelType(type, "&").filter(Boolean);
+  if (intersection.length > 1) {
+    const fields = closedFieldsForType(source, declarations, type);
+    assert.ok(fields, `${label} intersection must resolve to closed object fields`);
+    assertClosedObjectFields(source, declarations, fields, value, label, depth + 1);
+    return;
+  }
+  if (type.endsWith("[]")) {
+    assert.ok(Array.isArray(value), `${label} must be an array`);
+    const elementType = type.slice(0, -2).trim();
+    value.forEach((entry, index) => {
+      assertClosedTypeValue(source, declarations, elementType, entry, `${label}[${index}]`, depth + 1);
+    });
+    return;
+  }
+  const propertyAccess = type.match(
+    /^([A-Za-z_$][A-Za-z0-9_$]*)\s*\[\s*["']([A-Za-z_$][A-Za-z0-9_$]*)["']\s*\]$/,
+  );
+  if (propertyAccess) {
+    const fields = closedFieldsForType(source, declarations, propertyAccess[1]);
+    const definition = fields?.get(propertyAccess[2]);
+    assert.ok(definition, `${label} indexed property ${type} is unresolved`);
+    assertClosedTypeValue(
+      source,
+      declarations,
+      definition.type,
+      value,
+      label,
+      depth + 1,
+    );
+    return;
+  }
+  const arrayElementAccess = type.match(/^([A-Za-z_$][A-Za-z0-9_$]*)\s*\[\s*number\s*\]$/);
+  if (arrayElementAccess) {
+    const alias = declarations.get(arrayElementAccess[1]);
+    assert.ok(alias, `${label} indexed array ${type} is unresolved`);
+    const arrayType = stripOuterTypeParentheses(alias);
+    const elementType = arrayType.endsWith("[]")
+      ? arrayType.slice(0, -2)
+      : arrayType.match(/^(?:Array|ReadonlyArray)\s*<([\s\S]+)>$/)?.[1];
+    assert.ok(elementType, `${label} indexed array ${type} is not an array alias`);
+    assertClosedTypeValue(source, declarations, elementType, value, label, depth + 1);
+    return;
+  }
+  const generic = type.match(/^([A-Za-z_$][A-Za-z0-9_$]*)\s*<([\s\S]+)>$/);
+  if (generic) {
+    const parameters = splitTopLevelType(generic[2], ",");
+    if (generic[1] === "Array" || generic[1] === "ReadonlyArray") {
+      assert.equal(parameters.length, 1, `${label} array type arity mismatch`);
+      assert.ok(Array.isArray(value), `${label} must be an array`);
+      value.forEach((entry, index) => {
+        assertClosedTypeValue(
+          source,
+          declarations,
+          parameters[0],
+          entry,
+          `${label}[${index}]`,
+          depth + 1,
+        );
+      });
+      return;
+    }
+    if (generic[1] === "Record") {
+      assert.equal(parameters.length, 2, `${label} record type arity mismatch`);
+      assert.ok(value && Object.getPrototypeOf(value) === Object.prototype,
+        `${label} must be a closed record object`);
+      const keyContract = stringKeyContract(
+        source,
+        declarations,
+        parameters[0],
+        label,
+        depth + 1,
+      );
+      const actualKeys = Object.keys(value);
+      for (const key of actualKeys) {
+        assert.equal(key, key.normalize("NFC"), `${label} record key must be NFC text`);
+      }
+      if (!keyContract.dynamic) {
+        assert.deepEqual(
+          [...actualKeys].sort(),
+          [...keyContract.keys].sort(),
+          `${label} must contain the complete closed record key set`,
+        );
+      }
+      assert.doesNotMatch(
+        parameters[1].replace(/(["'`])(?:\\.|(?!\1).)*\1/g, ""),
+        /\b(?:unknown|any)\b/,
+        `${label} dynamic values are forbidden in importable payloads`,
+      );
+      for (const key of actualKeys) {
+        assertClosedTypeValue(
+          source,
+          declarations,
+          parameters[1],
+          value[key],
+          `${label}.${key}`,
+          depth + 1,
+        );
+      }
+      return;
+    }
+    if (generic[1] === "Partial" || generic[1] === "Readonly") {
+      assert.equal(parameters.length, 1, `${label} ${generic[1]} type arity mismatch`);
+      assertClosedTypeValue(
+        source,
+        declarations,
+        parameters[0],
+        value,
+        label,
+        depth + 1,
+        { optionalAll: generic[1] === "Partial" },
+      );
+      return;
+    }
+    assert.fail(`${label} uses unsupported generic type ${generic[1]}`);
+  }
+  if (type.startsWith("[") && type.endsWith("]")) {
+    const elements = splitTopLevelType(type.slice(1, -1), ",");
+    assert.ok(Array.isArray(value), `${label} must be a tuple`);
+    assert.equal(value.length, elements.length, `${label} tuple arity mismatch`);
+    elements.forEach((element, index) => {
+      assertClosedTypeValue(source, declarations, element, value[index], `${label}[${index}]`, depth + 1);
+    });
+    return;
+  }
+  if (type.startsWith("{") && type.endsWith("}")) {
+    assertClosedObjectFields(
+      source,
+      declarations,
+      inlineFieldDefinitions(type.slice(1, -1)),
+      value,
+      label,
+      depth + 1,
+      { optionalAll },
+    );
+    return;
+  }
+  if (type === "string") {
+    assert.ok(typeof value === "string" && value === value.normalize("NFC"), `${label} must be NFC text`);
+    return;
+  }
+  if (type === "number") {
+    assertClosedJsonNumber(value, label);
+    return;
+  }
+  if (type === "boolean") {
+    assert.equal(typeof value, "boolean", `${label} must be boolean`);
+    return;
+  }
+  if (type === "undefined" || type === "void") {
+    assert.fail(`${label} cannot encode undefined in canonical JSON`);
+  }
+  if (type === "unknown" || type === "any" || type === "object") {
+    assert.fail(`${label} dynamic type ${type} is forbidden in importable payloads`);
+  }
+  const literal = parseTypeLiteralValue(type);
+  if (literal !== undefined || type === "null") {
+    assert.equal(value, literal, `${label} must equal the declared literal`);
+    return;
+  }
+  const fields = closedInterfaceFields(source, type);
+  if (fields) {
+    assertClosedObjectFields(
+      source,
+      declarations,
+      fields,
+      value,
+      label,
+      depth + 1,
+      { optionalAll },
+    );
+    return;
+  }
+  const alias = declarations.get(type);
+  assert.ok(alias, `${label} type ${type} is unresolved`);
+  assertClosedTypeValue(source, declarations, alias, value, label, depth + 1);
+}
+
+function assertClosedObjectFields(
+  source,
+  declarations,
+  fields,
+  value,
+  label,
+  depth,
+  { allowedFields, optionalAll = false } = {},
+) {
+  assert.ok(value && Object.getPrototypeOf(value) === Object.prototype,
+    `${label} must be a closed object`);
+  const selectedNames = allowedFields ?? [...fields.keys()];
+  for (const name of selectedNames) {
+    assert.ok(fields.has(name), `${label}.${name} is absent from the bound TypeScript schema`);
+  }
+  const actualNames = Object.keys(value);
+  for (const name of actualNames) {
+    assert.ok(selectedNames.includes(name), `${label}.${name} is outside allowedFields`);
+  }
+  for (const name of selectedNames) {
+    const definition = fields.get(name);
+    if (!Object.hasOwn(value, name)) {
+      assert.ok(optionalAll || definition.optional, `${label}.${name} is required`);
+      continue;
+    }
+    assertClosedTypeValue(
+      source,
+      declarations,
+      definition.type,
+      value[name],
+      `${label}.${name}`,
+      depth + 1,
+    );
+  }
+}
+
+function validateImportableRecordPayload(manifest, root, payload, repositoryRoot) {
+  const typeRef = manifest.recordSchemaAuthority.typeRefs[root];
+  const schema = manifest.recordSchemas[root];
+  assert.ok(typeRef && schema, `${root} has no importable record schema authority`);
+  const [sourcePath, typeName] = typeRef.split("#");
+  if (typeName === "string") {
+    assert.equal(typeof payload, "string", `${root} payload must use its canonical scalar string representation`);
+    assert.equal(payload, payload.normalize("NFC"), `${root} payload must be NFC text`);
+    return;
+  }
+  const source = readFileSync(path.join(repositoryRoot, sourcePath), "utf8");
+  const declarations = parseTypeDeclarations(source);
+  const fields = closedInterfaceFields(source, typeName);
+  if (fields) {
+    assertClosedObjectFields(
+      source,
+      declarations,
+      fields,
+      payload,
+      `${root} payload`,
+      0,
+      { allowedFields: schema.allowedFields },
+    );
+    return;
+  }
+  assertClosedTypeValue(source, declarations, typeName, payload, `${root} payload`);
+}
+
+function validateRecordPayloadAgainstSchema(
+  manifest,
+  root,
+  payload,
+  repositoryRoot = process.cwd(),
+  callerVariant,
+) {
+  const typeRef = manifest.recordSchemaAuthority.typeRefs[root]
+    ?? manifest.preservedRootCatalog[root]?.typeRef;
+  assert.ok(typeRef, `${root} has no record payload authority`);
+  if (manifest.recordSchemas[root]) {
+    assert.equal(callerVariant, undefined, `${root} does not accept a caller variant`);
+    validateImportableRecordPayload(manifest, root, payload, repositoryRoot);
+    return true;
+  }
+  if (typeRef === "lib/types.ts#string") {
+    assert.equal(
+      typeof payload,
+      "string",
+      `${root} payload must use its canonical scalar string representation`,
+    );
+  } else {
+    assert.ok(
+      payload && Object.getPrototypeOf(payload) === Object.prototype,
+      `${root} payload must use its canonical object representation`,
+    );
+  }
+  return true;
 }
 
 function validateRecordPayloadRepresentation(manifest, root, payload) {
@@ -527,7 +1085,13 @@ export function validateMachineCell(columnSchema, value, cellKind = "string", co
     const parsed = JSON.parse(value);
     assert.equal(canonicalJson(parsed), value, `${columnSchema.name} must use canonical JSON`);
     if (format === "rfc8785-json" && context.manifest && context.root) {
-      validateRecordPayloadRepresentation(context.manifest, context.root, parsed);
+      validateRecordPayloadAgainstSchema(
+        context.manifest,
+        context.root,
+        parsed,
+        context.repositoryRoot ?? process.cwd(),
+        context.variant,
+      );
     }
     if (format === "rfc8785-key-json") {
       assert.ok(Array.isArray(parsed));
@@ -1484,20 +2048,29 @@ export function checkProjectWorkbookContract(root = process.cwd()) {
   );
   for (const [rootName, typeRef] of Object.entries(manifest.recordSchemaAuthority.typeRefs)) {
     const [sourcePath, typeName] = typeRef.split("#");
-    const fields = parseExportedInterfaceFields(
-      readFileSync(path.join(root, sourcePath), "utf8"),
-      typeName,
-    );
+    const source = readFileSync(path.join(root, sourcePath), "utf8");
+    const declarations = parseTypeDeclarations(source);
+    const fields = parseExportedInterfaceFields(source, typeName);
     if (fields === null) {
-      assert.ok(
-        (rootName === "affinityAxisWeights" && typeName === "AffinityAxisWeights")
-          || (rootName === "notes" && typeName === "string"),
+      if (rootName === "notes" && typeName === "string") continue;
+      assert.equal(
+        rootName,
+        "affinityAxisWeights",
         `${rootName} must resolve to an exported interface or an explicit scalar/map exception`,
       );
+      assertClosedTypeGrammar(source, declarations, typeName, `${rootName} payload`);
       continue;
     }
     for (const field of manifest.recordSchemas[rootName].allowedFields) {
       assert.ok(fields.includes(field), `${rootName}.${field} is absent from ${typeRef}`);
+      const definition = closedInterfaceFields(source, typeName)?.get(field);
+      assert.ok(definition, `${rootName}.${field} has no closed type definition`);
+      assertClosedTypeGrammar(
+        source,
+        declarations,
+        definition.type,
+        `${rootName} payload.${field}`,
+      );
     }
   }
 

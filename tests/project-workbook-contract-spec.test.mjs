@@ -32,6 +32,14 @@ function clone(value) {
   return structuredClone(value);
 }
 
+function canonicalPayload(value) {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalPayload).join(",")}]`;
+  return `{${Object.keys(value).sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalPayload(value[key])}`)
+    .join(",")}}`;
+}
+
 function atPath(value, fieldPath) {
   return fieldPath.split(".").reduce((current, part) => current[part], value);
 }
@@ -59,7 +67,7 @@ test("F0 keeps command-only and fixed-authority roots server-owned", async () =>
       manifest.classifications.forbidden.length,
       manifest.classifications.export_only_diagnostic.length,
     ],
-    [25, 23, 20, 15, 10],
+    [24, 23, 21, 15, 10],
   );
   for (const root of [
     "partConstraintSets",
@@ -70,6 +78,7 @@ test("F0 keeps command-only and fixed-authority roots server-owned", async () =>
     "qualityProfiles",
     "seriesDefinitions",
     "v23AffixDefinitions",
+    "v23TechnologyHeads",
   ]) {
     assert.ok(manifest.classifications.server_owned.includes(root), root);
     assert.equal(Object.hasOwn(manifest.recordSchemas, root), false, root);
@@ -86,6 +95,7 @@ test("F0 keeps command-only and fixed-authority roots server-owned", async () =>
     ["qualityProfiles", "importable_current"],
     ["seriesDefinitions", "importable_current"],
     ["v23AffixDefinitions", "importable_current"],
+    ["v23TechnologyHeads", "importable_current"],
   ]) {
     const forged = clone(manifest);
     forged.classifications.server_owned =
@@ -749,6 +759,147 @@ test("notes has one canonical scalar payload representation", async () => {
   assert.throws(
     () => validateProjectWorkbookManifest(objectWrapper, roots),
     /scalar payload|catalog drift/,
+  );
+});
+
+test("RFC8785 payloads satisfy the bound closed recursive record schema", async () => {
+  const { manifest } = await fixture();
+  const payloadColumn = manifest.workbookSchema.sheets.__TF_CURRENT.columns
+    .find((entry) => entry.name === "payload_json");
+  const validate = (root, payload, variant) => validateMachineCell(
+    payloadColumn,
+    canonicalPayload(payload),
+    "string",
+    { manifest, root, variant },
+  );
+  const itemPart = {
+    id: "part:rod",
+    name: "竿",
+    activeInGeneration: true,
+    parameterKeys: ["power"],
+    notes: "",
+  };
+  assert.equal(validate("itemParts", itemPart), true);
+  assert.equal(validate("itemParts", { ...itemPart, legacyItemKind: "rod" }), true);
+
+  for (const [payload, pattern] of [
+    [{ ...itemPart, rawPayload: { secret: "x" } }, /outside allowedFields/],
+    [{ id: itemPart.id, rawPayload: { secret: "x" } }, /outside allowedFields|required/],
+    [{
+      id: itemPart.id,
+      activeInGeneration: true,
+      parameterKeys: ["power"],
+      notes: "",
+    }, /name is required/],
+    [{ ...itemPart, activeInGeneration: "true" }, /must be boolean/],
+    [{ ...itemPart, parameterKeys: [1] }, /must be NFC text/],
+    [{ ...itemPart, name: "e\u0301" }, /canonical JSON|must be NFC text/],
+  ]) {
+    assert.throws(() => validate("itemParts", payload), pattern);
+  }
+
+  const methodProfile = {
+    id: "method:float",
+    name: "浮钓",
+    rules: [{
+      id: "rule:1",
+      parameterKey: "power",
+      operation: "add",
+      value: 1.5,
+      condition: "enabled",
+    }],
+    enabled: true,
+    notes: "",
+  };
+  assert.equal(validate("methodProfiles", methodProfile), true);
+  assert.equal(
+    validate("methodProfiles", {
+      ...methodProfile,
+      rules: [{ ...methodProfile.rules[0], value: "current * 2" }],
+    }),
+    true,
+  );
+  assert.throws(
+    () => validate("methodProfiles", {
+      ...methodProfile,
+      rules: [{ ...methodProfile.rules[0], hidden: "server" }],
+    }),
+    /outside allowedFields/,
+  );
+  assert.throws(
+    () => validate("methodProfiles", {
+      ...methodProfile,
+      rules: [{ ...methodProfile.rules[0], value: false }],
+    }),
+    /closed union variant/,
+  );
+  assert.throws(
+    () => validate("methodProfiles", { ...methodProfile, rules: {} }),
+    /must be an array/,
+  );
+
+  const template = {
+    id: "template:1",
+    name: "模板",
+    fishMinKg: 1,
+    fishMaxKg: 2,
+    nominalFishKg: 1.5,
+    tier: "A",
+    values: { power: 1, label: "normal" },
+    notes: "",
+  };
+  assert.equal(validate("templates", template), true);
+  assert.throws(
+    () => validate("templates", { ...template, values: { power: true } }),
+    /closed union variant/,
+  );
+  const affinityWeights = {
+    method_type: 1,
+    type_weight: 1,
+    type_function: 1,
+    function_performance: 1,
+    material_function: 1,
+    quality_specialization: 1,
+    model_component: 1,
+    series_coherence: 1,
+  };
+  assert.equal(validate("affinityAxisWeights", affinityWeights), true);
+  const incompleteWeights = { ...affinityWeights };
+  delete incompleteWeights.series_coherence;
+  assert.throws(
+    () => validate("affinityAxisWeights", incompleteWeights),
+    /complete closed record key set/,
+  );
+  assert.equal(validate("v3Affixes", {
+    id: "affix:1",
+    version: 1,
+    name: "力量",
+    category: "attribute",
+    itemPartId: "part:rod",
+    generationPolicy: "normal",
+    rarity: "common",
+    valueScore: 1,
+    tags: [],
+    attributeEffects: [{
+      id: "effect:1",
+      parameterKey: "power",
+      operation: "flat_bonus",
+      value: 1,
+      publishedMagnitudeRange: {
+        min: 0,
+        max: 2,
+        ruleSetVersion: "rules:v1",
+      },
+      unit: "kg",
+      stackingGroup: "power",
+      ruleSetVersion: "rules:v1",
+    }],
+    description: "",
+    enabled: true,
+  }), true);
+  assert.throws(
+    () => validate("itemParts", itemPart, "ForgedVariant"),
+    /does not accept a caller variant/,
   );
 });
 

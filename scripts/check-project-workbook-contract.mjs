@@ -130,27 +130,29 @@ const EXPECTED_SERVER_OWNED_ROOT_CATALOG = Object.fromEntries(
 );
 
 const EXPECTED_IMPORTABLE_SUCCESSOR_CATALOG = {
-  ruleSettings: { transport: "PUT /api/state", mutation: "DEFAULT_ALLOW_REVISION_GUARDED" },
-  itemParts: { transport: "PUT /api/state", mutation: "DEFAULT_ALLOW_REVISION_GUARDED" },
-  methodProfiles: { transport: "PUT /api/state", mutation: "DEFAULT_ALLOW_REVISION_GUARDED" },
-  itemTypeProfiles: { transport: "PUT /api/state", mutation: "DEFAULT_ALLOW_REVISION_GUARDED" },
-  affinityAxisWeights: { transport: "PUT /api/state", mutation: "DEFAULT_ALLOW_REVISION_GUARDED" },
-  collections: { transport: "PUT /api/state", mutation: "DEFAULT_ALLOW_REVISION_GUARDED" },
+  ruleSettings: { transportBoundary: "PUT /api/state", semanticMutationAuthority: "RULE_SETTINGS_EDITOR", specBasis: "§14.3.7" },
+  itemParts: { transportBoundary: "PUT /api/state", semanticMutationAuthority: "ITEM_PART_REGISTRY_EDITOR", specBasis: "§14.3.7" },
+  methodProfiles: { transportBoundary: "PUT /api/state", semanticMutationAuthority: "LOCAL_RULE_PROFILE_EDITOR_OR_CANONICAL_SOURCE_IMMUTABLE", specBasis: "§14.3.7" },
+  itemTypeProfiles: { transportBoundary: "PUT /api/state", semanticMutationAuthority: "LOCAL_RULE_PROFILE_EDITOR_OR_CANONICAL_SOURCE_IMMUTABLE", specBasis: "§14.3.7" },
+  affinityAxisWeights: { transportBoundary: "PUT /api/state", semanticMutationAuthority: "AFFINITY_AXIS_WEIGHT_EDITOR", specBasis: "§14.3.7" },
+  collections: { transportBoundary: "PUT /api/state", semanticMutationAuthority: "COLLECTION_EDITOR", specBasis: "§14.3.7" },
   v23TechnologyDefinitions: {
-    transport: "POST /api/v23/actions",
-    mutation: "DOMAIN_ACTION_CREATE_OR_UPDATE_TECHNOLOGY",
+    transportBoundary: "POST /api/v23/actions",
+    semanticMutationAuthority: "DOMAIN_ACTION_CREATE_OR_UPDATE_TECHNOLOGY",
+    specBasis: "§14.3.7",
   },
   skuDrawers: {
-    transport: "POST /api/skus/target-pull",
-    mutation: "DOMAIN_ACTION_CHANGE_SKU_TARGET_PULL",
+    transportBoundary: "POST /api/skus/target-pull",
+    semanticMutationAuthority: "DOMAIN_ACTION_CHANGE_SKU_TARGET_PULL",
+    specBasis: "§14.3.7",
   },
-  parameters: { transport: "PUT /api/state", mutation: "DEFAULT_ALLOW_REVISION_GUARDED" },
-  templates: { transport: "PUT /api/state", mutation: "DEFAULT_ALLOW_REVISION_GUARDED" },
-  modifiers: { transport: "PUT /api/state", mutation: "DEFAULT_ALLOW_REVISION_GUARDED" },
-  layers: { transport: "PUT /api/state", mutation: "DEFAULT_ALLOW_REVISION_GUARDED" },
-  affixes: { transport: "PUT /api/state", mutation: "DEFAULT_ALLOW_REVISION_GUARDED" },
-  seriesShowcases: { transport: "PUT /api/state", mutation: "DEFAULT_ALLOW_REVISION_GUARDED" },
-  notes: { transport: "PUT /api/state", mutation: "DEFAULT_ALLOW_REVISION_GUARDED" },
+  parameters: { transportBoundary: "PUT /api/state", semanticMutationAuthority: "PARAMETER_REGISTRY_EDITOR", specBasis: "§14.3.7" },
+  templates: { transportBoundary: "PUT /api/state", semanticMutationAuthority: "TEMPLATE_EDITOR_PATCH_LAYER", specBasis: "§14.3.7" },
+  modifiers: { transportBoundary: "PUT /api/state", semanticMutationAuthority: "MODIFIER_RULE_EDITOR", specBasis: "§14.3.7" },
+  layers: { transportBoundary: "PUT /api/state", semanticMutationAuthority: "RULE_LAYER_EDITOR", specBasis: "§14.3.7" },
+  affixes: { transportBoundary: "PUT /api/state", semanticMutationAuthority: "AFFIX_LIBRARY_EDITOR", specBasis: "§14.3.7" },
+  seriesShowcases: { transportBoundary: "PUT /api/state", semanticMutationAuthority: "SERIES_SHOWCASE_EDITOR", specBasis: "§14.3.7" },
+  notes: { transportBoundary: "PUT /api/state", semanticMutationAuthority: "WORKSPACE_NOTES_EDITOR", specBasis: "§14.3.7" },
 };
 
 const EXPECTED_PRESERVED_EXACT_COMPARE_POLICY = {
@@ -168,6 +170,94 @@ const EXPECTED_PRESERVED_EXACT_COMPARE_POLICY = {
 };
 
 const EXPECTED_CONDITIONAL_EXACT_FIELD_POLICIES = {
+  methodProfiles: {
+    mode: "CONDITIONAL_FULL_EXACT",
+    provenancePaths: [
+      "sourceRevisionId",
+      "rules[].sourceRevisionId",
+      "rules[].sourceSheetId",
+      "rules[].sourceCell",
+    ],
+    selectorFields: ["sourceRevisionId"],
+    sourceShape: "ALL_PRESENT_NON_EMPTY_NFC_TEXT",
+    localShape: "ALL_ABSENT",
+    sourceExactFields: "ALL_ALLOWED_FIELDS",
+    semanticMutationAuthority: "CANONICAL_SOURCE_PUBLISH_ONLY",
+  },
+  itemTypeProfiles: {
+    mode: "CONDITIONAL_FULL_EXACT",
+    provenancePaths: [
+      "sourceRevisionId",
+      "rules[].sourceRevisionId",
+      "rules[].sourceSheetId",
+      "rules[].sourceCell",
+    ],
+    selectorFields: ["sourceRevisionId"],
+    sourceShape: "ALL_PRESENT_NON_EMPTY_NFC_TEXT",
+    localShape: "ALL_ABSENT",
+    sourceExactFields: "ALL_ALLOWED_FIELDS",
+    semanticMutationAuthority: "CANONICAL_SOURCE_PUBLISH_ONLY",
+  },
+  templates: {
+    mode: "AUTHORIZED_LAYERED_EDIT",
+    provenancePaths: ["sourceRevisionId", "sourceSheetId", "sourceRow"],
+    selectorFields: ["sourceRevisionId", "sourceSheetId", "sourceRow"],
+    sourceShape: "ALL_PRESENT_VALID_TYPED",
+    localShape: "ALL_ABSENT",
+    exactFields: ["sourceRevisionId", "sourceSheetId", "sourceRow"],
+    semanticMutationAuthority: "TEMPLATE_EDITOR_PATCH_LAYER",
+  },
+  modifiers: {
+    mode: "AUTHORIZED_LAYERED_EDIT",
+    provenancePaths: [
+      "rules[].sourceRevisionId",
+      "rules[].sourceSheetId",
+      "rules[].sourceCell",
+    ],
+    selectorFields: [],
+    sourceShape: "NESTED_RULE_PROVENANCE_ALL_OR_NONE",
+    localShape: "RULES_WITHOUT_PROVENANCE",
+    exactFields: [
+      "rules[].sourceRevisionId",
+      "rules[].sourceSheetId",
+      "rules[].sourceCell",
+    ],
+    semanticMutationAuthority: "MODIFIER_RULE_EDITOR",
+  },
+  layers: {
+    mode: "AUTHORIZED_LAYERED_EDIT",
+    provenancePaths: [
+      "rules[].sourceRevisionId",
+      "rules[].sourceSheetId",
+      "rules[].sourceCell",
+    ],
+    selectorFields: [],
+    sourceShape: "NESTED_RULE_PROVENANCE_ALL_OR_NONE",
+    localShape: "RULES_WITHOUT_PROVENANCE",
+    exactFields: [
+      "rules[].sourceRevisionId",
+      "rules[].sourceSheetId",
+      "rules[].sourceCell",
+    ],
+    semanticMutationAuthority: "RULE_LAYER_EDITOR",
+  },
+  affixes: {
+    mode: "AUTHORIZED_LAYERED_EDIT",
+    provenancePaths: [
+      "rules[].sourceRevisionId",
+      "rules[].sourceSheetId",
+      "rules[].sourceCell",
+    ],
+    selectorFields: [],
+    sourceShape: "NESTED_RULE_PROVENANCE_ALL_OR_NONE",
+    localShape: "RULES_WITHOUT_PROVENANCE",
+    exactFields: [
+      "rules[].sourceRevisionId",
+      "rules[].sourceSheetId",
+      "rules[].sourceCell",
+    ],
+    semanticMutationAuthority: "AFFIX_LIBRARY_EDITOR",
+  },
 };
 
 const EXPECTED_IMPORTABLE_CREATE_POLICIES = {
@@ -1035,6 +1125,217 @@ export function importableIdentityExactFields(schema) {
   return [...schema.identityFields];
 }
 
+function validateSourceProvenanceShape(manifest, root, payload) {
+  const policy = manifest.conditionalExactFieldPolicies[root];
+  if (!policy) return "NO_SELECTOR";
+  const present = policy.selectorFields.filter(
+    (field) => valueAtFieldPath(payload, field) !== undefined,
+  );
+  if (present.length === 0) return "LOCAL";
+  assert.equal(
+    present.length,
+    policy.selectorFields.length,
+    `${root} source provenance must be all-present or all-absent`,
+  );
+  for (const field of policy.selectorFields) {
+    const value = valueAtFieldPath(payload, field);
+    if (field === "sourceRow") {
+      assert.ok(
+        Number.isSafeInteger(value) && value > 0,
+        `${root}.${field} source provenance must be a positive safe integer`,
+      );
+      continue;
+    }
+    assert.equal(typeof value, "string", `${root}.${field} source provenance must be text`);
+    assert.notEqual(value, "", `${root}.${field} source provenance must be non-empty`);
+    assertCanonicalDisplayText(value, `${root}.${field}`);
+  }
+  return "SOURCE";
+}
+
+function nestedTypeNames(type) {
+  return [...type.matchAll(/\b([A-Z][A-Za-z0-9_$]*)\b/g)]
+    .map((match) => match[1])
+    .filter((name) => !["Array", "Record", "Readonly", "ReadonlyArray"].includes(name));
+}
+
+function discoverProvenancePathsInType(source, typeName, prefix, ancestry) {
+  if (ancestry.has(typeName)) return [];
+  const fields = closedInterfaceFields(source, typeName);
+  if (!fields) return [];
+  const nextAncestry = new Set(ancestry).add(typeName);
+  const paths = [];
+  for (const [field, definition] of fields) {
+    const array = /\[\]|(?:Array|ReadonlyArray)\s*</.test(definition.type);
+    const path = `${prefix}${field}${array ? "[]" : ""}`;
+    if (/source|provenance/i.test(field)) paths.push(path);
+    for (const nestedType of nestedTypeNames(definition.type)) {
+      paths.push(...discoverProvenancePathsInType(
+        source,
+        nestedType,
+        `${path}.`,
+        nextAncestry,
+      ));
+    }
+  }
+  return paths;
+}
+
+export function discoverImportableProvenancePaths(
+  manifest,
+  repositoryRoot = process.cwd(),
+) {
+  const source = readFileSync(path.join(repositoryRoot, "lib/types.ts"), "utf8");
+  return Object.fromEntries(Object.entries(manifest.recordSchemas).flatMap(([root, schema]) => {
+    const typeRef = manifest.recordSchemaAuthority.typeRefs[root];
+    const typeName = typeRef?.match(/#([A-Za-z_$][A-Za-z0-9_$]*)$/)?.[1];
+    if (!typeName || typeName === "string") {
+      const directPaths = schema.allowedFields.filter((field) => /source|provenance/i.test(field));
+      return directPaths.length > 0 ? [[root, directPaths]] : [];
+    }
+    const fields = closedInterfaceFields(source, typeName);
+    if (!fields) {
+      const directPaths = schema.allowedFields.filter((field) => /source|provenance/i.test(field));
+      return directPaths.length > 0 ? [[root, directPaths]] : [];
+    }
+    const paths = [];
+    for (const field of schema.allowedFields) {
+      const definition = fields.get(field);
+      assert.ok(definition, `${root}.${field} is missing from ${typeName}`);
+      const array = /\[\]|(?:Array|ReadonlyArray)\s*</.test(definition.type);
+      const path = `${field}${array ? "[]" : ""}`;
+      if (/source|provenance/i.test(field)) paths.push(path);
+      for (const nestedType of nestedTypeNames(definition.type)) {
+        paths.push(...discoverProvenancePathsInType(
+          source,
+          nestedType,
+          `${path}.`,
+          new Set([typeName]),
+        ));
+      }
+    }
+    const ordered = [...new Set(paths)].sort(
+      (left, right) => left.split(".").length - right.split(".").length
+        || left.localeCompare(right, "en"),
+    );
+    return ordered.length > 0 ? [[root, ordered]] : [];
+  }));
+}
+
+function nestedRuleProvenanceState(root, rule) {
+  const fields = ["sourceRevisionId", "sourceSheetId", "sourceCell"];
+  const present = fields.filter((field) => rule[field] !== undefined);
+  if (present.length === 0) return "LOCAL";
+  assert.equal(
+    present.length,
+    fields.length,
+    `${root} rule source provenance must be all-present or all-absent`,
+  );
+  for (const field of fields) {
+    assert.equal(typeof rule[field], "string", `${root}.rules[].${field} must be text`);
+    assert.notEqual(rule[field], "", `${root}.rules[].${field} must be non-empty`);
+    assertCanonicalDisplayText(rule[field], `${root}.rules[].${field}`);
+  }
+  return "SOURCE";
+}
+
+function validateNestedRuleProvenance(manifest, root, candidatePayload, existingPayload) {
+  const policy = manifest.conditionalExactFieldPolicies[root];
+  if (!policy?.provenancePaths.some((path) => path.startsWith("rules[]."))) return;
+  const candidateRules = candidatePayload.rules ?? [];
+  const existingRules = existingPayload?.rules ?? [];
+  const existingById = new Map(existingRules.map((rule) => [rule.id, rule]));
+  const candidateById = new Map(candidateRules.map((rule) => [rule.id, rule]));
+  for (const rule of candidateRules) {
+    if (nestedRuleProvenanceState(root, rule) !== "SOURCE") continue;
+    const existing = existingById.get(rule.id);
+    assert.ok(
+      existing && nestedRuleProvenanceState(root, existing) === "SOURCE",
+      `${root} workbook mutation cannot fabricate trusted rule source provenance`,
+    );
+  }
+  for (const rule of existingRules) {
+    if (nestedRuleProvenanceState(root, rule) !== "SOURCE") continue;
+    const candidate = candidateById.get(rule.id);
+    assert.ok(candidate, `${root} cannot remove a source-derived rule`);
+    for (const field of ["sourceRevisionId", "sourceSheetId", "sourceCell"]) {
+      assert.deepEqual(
+        candidate[field],
+        rule[field],
+        `${root}.rules[].${field} is exact-equal for a source-derived rule`,
+      );
+    }
+  }
+}
+
+export function validateSourceProvenancePolicyCatalog(
+  manifest,
+  repositoryRoot = process.cwd(),
+) {
+  const discovered = discoverImportableProvenancePaths(manifest, repositoryRoot);
+  const discoveredProvenanceRoots = Object.keys(discovered);
+  assert.deepEqual(
+    Object.keys(manifest.conditionalExactFieldPolicies),
+    discoveredProvenanceRoots,
+    "every source/provenance-bearing importable root needs an explicit semantic policy",
+  );
+  assert.deepEqual(
+    manifest.conditionalExactFieldPolicies,
+    EXPECTED_CONDITIONAL_EXACT_FIELD_POLICIES,
+    "conditional exact-field policies must retain canonical source identities",
+  );
+  for (const [root, policy] of Object.entries(manifest.conditionalExactFieldPolicies)) {
+    assert.ok(manifest.recordSchemas[root], `${root} conditional exact policy has no record schema`);
+    assert.deepEqual(
+      [...policy.provenancePaths].sort(),
+      [...discovered[root]].sort(),
+      `${root} provenance path catalog must be schema-derived and complete`,
+    );
+    assert.ok(
+      ["CONDITIONAL_FULL_EXACT", "AUTHORIZED_LAYERED_EDIT"].includes(policy.mode),
+      `${root} has an unknown source provenance policy`,
+    );
+    if (policy.mode === "CONDITIONAL_FULL_EXACT") {
+      assertExactKeys(policy, [
+        "mode",
+        "provenancePaths",
+        "selectorFields",
+        "sourceShape",
+        "localShape",
+        "sourceExactFields",
+        "semanticMutationAuthority",
+      ], `${root} conditional full-exact policy`);
+      assert.equal(policy.sourceShape, "ALL_PRESENT_NON_EMPTY_NFC_TEXT");
+      assert.equal(policy.sourceExactFields, "ALL_ALLOWED_FIELDS");
+      assert.equal(policy.semanticMutationAuthority, "CANONICAL_SOURCE_PUBLISH_ONLY");
+      continue;
+    }
+    assertExactKeys(policy, [
+      "mode",
+      "provenancePaths",
+      "selectorFields",
+      "sourceShape",
+      "localShape",
+      "exactFields",
+      "semanticMutationAuthority",
+    ], `${root} authorized layered-edit policy`);
+    if (policy.selectorFields.length > 0) {
+      assert.equal(policy.sourceShape, "ALL_PRESENT_VALID_TYPED");
+      assert.equal(policy.localShape, "ALL_ABSENT");
+      assert.deepEqual(policy.exactFields, policy.selectorFields);
+    } else {
+      assert.equal(policy.sourceShape, "NESTED_RULE_PROVENANCE_ALL_OR_NONE");
+      assert.equal(policy.localShape, "RULES_WITHOUT_PROVENANCE");
+      assert.deepEqual(policy.exactFields, policy.provenancePaths);
+    }
+    assert.equal(
+      policy.semanticMutationAuthority,
+      manifest.importableSuccessorCatalog[root].semanticMutationAuthority,
+    );
+  }
+  return true;
+}
+
 export function validateImportableExactFields(
   manifest,
   root,
@@ -1044,7 +1345,14 @@ export function validateImportableExactFields(
 ) {
   assert.ok(manifest.recordSchemas[root], `${root} is not an importable record root`);
   validateImportableRecordPayload(manifest, root, candidatePayload, repositoryRoot);
+  const candidateSourceShape = validateSourceProvenanceShape(manifest, root, candidatePayload);
+  validateNestedRuleProvenance(manifest, root, candidatePayload, existingPayload);
   if (existingPayload === undefined) {
+    assert.notEqual(
+      candidateSourceShape,
+      "SOURCE",
+      `${root} workbook create cannot fabricate trusted source provenance`,
+    );
     const createPolicy = manifest.importableCreatePolicies[root];
     if (createPolicy?.policy === "REJECT") {
       assert.fail(`${root} workbook records cannot be created; use ${createPolicy.requiredActionCode}`);
@@ -1073,11 +1381,15 @@ export function validateImportableExactFields(
     return true;
   }
   validateImportableRecordPayload(manifest, root, existingPayload, repositoryRoot);
+  const existingSourceShape = validateSourceProvenanceShape(manifest, root, existingPayload);
   const conditionalPolicy = manifest.conditionalExactFieldPolicies[root];
-  const conditionalFields = conditionalPolicy
-    && valueAtFieldPath(existingPayload, conditionalPolicy.whenExistingFieldPresent) !== undefined
-    ? conditionalPolicy.exactFields
-    : [];
+  const conditionalFields = !conditionalPolicy
+    ? []
+    : conditionalPolicy.mode === "CONDITIONAL_FULL_EXACT" && existingSourceShape === "SOURCE"
+      ? manifest.recordSchemas[root].allowedFields
+      : conditionalPolicy.mode === "AUTHORIZED_LAYERED_EDIT"
+        ? conditionalPolicy.exactFields.filter((field) => !field.includes("[]"))
+        : [];
   const revisionFields = manifest.recordSchemas[root].revisionFields;
   for (const field of new Set([
     ...importableIdentityExactFields(manifest.recordSchemas[root]),
@@ -2732,6 +3044,21 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     manifest.classifications.importable_current,
     "importable successor catalog must cover every importable root in order",
   );
+  for (const [root, successor] of Object.entries(manifest.importableSuccessorCatalog)) {
+    assertExactKeys(
+      successor,
+      ["transportBoundary", "semanticMutationAuthority", "specBasis"],
+      `${root} importable successor`,
+    );
+    assert.match(successor.transportBoundary, /^(PUT|POST) \/api\//);
+    assert.match(successor.semanticMutationAuthority, /^[A-Z][A-Z0-9_]+$/);
+    assert.notEqual(
+      successor.semanticMutationAuthority,
+      "DEFAULT_ALLOW_REVISION_GUARDED",
+      `${root} transport alone is not semantic mutation authority`,
+    );
+    assert.equal(successor.specBasis, "§14.3.7");
+  }
   assert.deepEqual(
     manifest.preservedExactComparePolicy,
     EXPECTED_PRESERVED_EXACT_COMPARE_POLICY,
@@ -2784,22 +3111,7 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
       `${root} carries server-derived revision/hash fields without a create policy`,
     );
   }
-  assert.deepEqual(
-    manifest.conditionalExactFieldPolicies,
-    EXPECTED_CONDITIONAL_EXACT_FIELD_POLICIES,
-    "conditional exact-field policies must retain reserved identities",
-  );
-  for (const [root, policy] of Object.entries(manifest.conditionalExactFieldPolicies)) {
-    assert.ok(manifest.recordSchemas[root], `${root} conditional exact policy has no record schema`);
-    assert.ok(
-      manifest.recordSchemas[root].allowedFields.includes(policy.whenExistingFieldPresent),
-      `${root}.${policy.whenExistingFieldPresent} conditional exact predicate is not importable`,
-    );
-    for (const field of policy.exactFields) {
-      assert.ok(manifest.recordSchemas[root].allowedFields.includes(field),
-        `${root}.${field} conditional exact field is not importable`);
-    }
-  }
+  validateSourceProvenancePolicyCatalog(manifest);
   assert.deepEqual(
     manifest.terminalLifecyclePolicy,
     EXPECTED_TERMINAL_LIFECYCLE_POLICY,

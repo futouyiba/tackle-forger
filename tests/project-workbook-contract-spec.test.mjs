@@ -23,8 +23,9 @@ validateRecordEnvelope,
 validateTrustedPreservedExactMatch,
   validateRecordSheetCardinality,
   validateRootSummary,
-  validateServerRefEnvelope,
-  validateWorkbookEnvelope,
+validateServerRefEnvelope,
+validateSourceProvenancePolicyCatalog,
+validateWorkbookEnvelope,
   validateWorkbookRemovalIntentRoot,
 } from "../scripts/check-project-workbook-contract.mjs";
 
@@ -303,13 +304,15 @@ test("F0 keeps command-only and fixed-authority roots server-owned", async () =>
     const successor = manifest.importableSuccessorCatalog[root];
     assert.ok(successor, `${root} requires a proven production successor`);
     if (root === "skuDrawers" || root === "v23TechnologyDefinitions") {
-      assert.match(successor.mutation, /^DOMAIN_ACTION_/);
+      assert.match(successor.semanticMutationAuthority, /^DOMAIN_ACTION_/);
     } else {
-      assert.deepEqual(successor, {
-        transport: "PUT /api/state",
-        mutation: "DEFAULT_ALLOW_REVISION_GUARDED",
-      });
+      assert.equal(successor.transportBoundary, "PUT /api/state");
+      assert.notEqual(
+        successor.semanticMutationAuthority,
+        "DEFAULT_ALLOW_REVISION_GUARDED",
+      );
     }
+    assert.equal(successor.specBasis, "§14.3.7");
   }
   assert.throws(
     () => validateImportableExactFields(
@@ -860,9 +863,281 @@ test("parameter key is exact for existing records while new keys remain declarat
   );
 });
 
+test("source-derived profiles freeze fully while templates retain authorized layered edits", async () => {
+  const { manifest } = await fixture();
+  assert.equal(validateSourceProvenancePolicyCatalog(manifest), true);
+  const rule = {
+    id: "rule:1",
+    parameterKey: "power",
+    operation: "add",
+    value: 1,
+  };
+  const method = {
+    id: "method:float",
+    name: "浮钓",
+    rules: [rule],
+    enabled: true,
+    sourceRevisionId: "source:1",
+    notes: "",
+  };
+  const methodMutations = {
+    id: "method:other",
+    name: "其他",
+    rules: [{ ...rule, value: 2 }],
+    enabled: false,
+    sourceRevisionId: "source:2",
+    notes: "changed",
+  };
+  assert.equal(
+    validateImportableExactFields(manifest, "methodProfiles", method, method),
+    true,
+  );
+  for (const [field, value] of Object.entries(methodMutations)) {
+    assert.throws(
+      () => validateImportableExactFields(
+        manifest,
+        "methodProfiles",
+        { ...method, [field]: value },
+        method,
+      ),
+      /is exact-equal/,
+      `source-derived methodProfiles.${field} must be fully exact`,
+    );
+  }
+
+  const itemType = {
+    id: "type:spinning",
+    name: "纺车",
+    methodIds: ["method:float"],
+    itemPartIds: ["part:rod"],
+    rules: [rule],
+    enabled: true,
+    sourceRevisionId: "source:1",
+    notes: "",
+  };
+  const itemTypeMutations = {
+    id: "type:other",
+    name: "其他",
+    methodIds: ["method:other"],
+    itemPartIds: ["part:reel"],
+    rules: [{ ...rule, value: 2 }],
+    enabled: false,
+    sourceRevisionId: "source:2",
+    notes: "changed",
+  };
+  assert.equal(
+    validateImportableExactFields(manifest, "itemTypeProfiles", itemType, itemType),
+    true,
+  );
+  for (const [field, value] of Object.entries(itemTypeMutations)) {
+    assert.throws(
+      () => validateImportableExactFields(
+        manifest,
+        "itemTypeProfiles",
+        { ...itemType, [field]: value },
+        itemType,
+      ),
+      /is exact-equal/,
+      `source-derived itemTypeProfiles.${field} must be fully exact`,
+    );
+  }
+
+  const localMethod = { ...method };
+  delete localMethod.sourceRevisionId;
+  assert.equal(
+    validateImportableExactFields(
+      manifest,
+      "methodProfiles",
+      { ...localMethod, rules: [{ ...rule, value: 3 }] },
+      localMethod,
+    ),
+    true,
+    "a schema-declared local profile remains normally editable",
+  );
+  assert.throws(
+    () => validateImportableExactFields(
+      manifest,
+      "methodProfiles",
+      method,
+      undefined,
+    ),
+    /cannot fabricate trusted source provenance/,
+  );
+  assert.throws(
+    () => validateImportableExactFields(
+      manifest,
+      "methodProfiles",
+      { ...method, sourceRevisionId: "" },
+      method,
+    ),
+    /must be non-empty/,
+  );
+
+  const template = {
+    id: "template:1",
+    name: "模板",
+    fishMinKg: 1,
+    fishMaxKg: 2,
+    nominalFishKg: 1.5,
+    tier: "A",
+    values: { power: 1 },
+    notes: "",
+    sourceRevisionId: "source:1",
+    sourceSheetId: "sheet:1",
+    sourceRow: 2,
+  };
+  assert.equal(
+    validateImportableExactFields(
+      manifest,
+      "templates",
+      { ...template, name: "模板 Patch", values: { power: 2 } },
+      template,
+    ),
+    true,
+    "§14.3.7 template values remain editable through the declared patch layer",
+  );
+  for (const [field, value] of [
+    ["sourceRevisionId", "source:2"],
+    ["sourceSheetId", "sheet:2"],
+    ["sourceRow", 3],
+  ]) {
+    assert.throws(
+      () => validateImportableExactFields(
+        manifest,
+        "templates",
+        { ...template, [field]: value },
+        template,
+      ),
+      /is exact-equal/,
+      `templates.${field} remains exact`,
+    );
+  }
+  const missingSheet = { ...template };
+  delete missingSheet.sourceSheetId;
+  const missingRow = { ...template };
+  delete missingRow.sourceRow;
+  for (const partial of [missingSheet, missingRow, { ...template, sourceRow: 0 }]) {
+    assert.throws(
+      () => validateImportableExactFields(manifest, "templates", partial, template),
+      /all-present or all-absent|positive safe integer/,
+    );
+  }
+  const localTemplate = { ...template };
+  delete localTemplate.sourceRevisionId;
+  delete localTemplate.sourceSheetId;
+  delete localTemplate.sourceRow;
+  assert.equal(
+    validateImportableExactFields(
+      manifest,
+      "templates",
+      { ...localTemplate, values: { power: 4 } },
+      localTemplate,
+    ),
+    true,
+  );
+  assert.throws(
+    () => validateImportableExactFields(manifest, "templates", template, undefined),
+    /cannot fabricate trusted source provenance/,
+  );
+  assert.throws(
+    () => validateImportableExactFields(
+      manifest,
+      "templates",
+      { ...localTemplate, provenanceToken: "forged" },
+      localTemplate,
+    ),
+    /outside allowedFields/,
+  );
+
+  const sourcedRule = {
+    ...rule,
+    sourceRevisionId: "source:1",
+    sourceSheetId: "sheet:1",
+    sourceCell: "C2",
+  };
+  const layeredRoots = {
+    modifiers: {
+      id: "modifier:1",
+      dimension: "structure",
+      name: "结构",
+      level: 1,
+      itemKinds: ["rod"],
+      rules: [sourcedRule],
+      notes: "",
+      enabled: true,
+    },
+    layers: {
+      id: "layer:1",
+      name: "规则层",
+      order: 1,
+      enabled: true,
+      mode: "global",
+      optionIds: [],
+      rules: [sourcedRule],
+      notes: "",
+    },
+    affixes: {
+      id: "affix:1",
+      name: "词条",
+      category: "stat",
+      itemKinds: ["rod"],
+      score: 1,
+      rarity: "common",
+      tags: [],
+      conflicts: [],
+      synergies: [],
+      rules: [sourcedRule],
+      description: "",
+      notes: "",
+      enabled: true,
+    },
+  };
+  for (const [root, existing] of Object.entries(layeredRoots)) {
+    const edited = clone(existing);
+    edited.rules[0].value = 2;
+    assert.equal(
+      validateImportableExactFields(manifest, root, edited, existing),
+      true,
+      `${root} retains its §14.3.7 editor while preserving rule provenance`,
+    );
+    const changedSource = clone(edited);
+    changedSource.rules[0].sourceCell = "D2";
+    assert.throws(
+      () => validateImportableExactFields(manifest, root, changedSource, existing),
+      /sourceCell is exact-equal/,
+    );
+    const partialRule = clone(edited);
+    delete partialRule.rules[0].sourceSheetId;
+    assert.throws(
+      () => validateImportableExactFields(manifest, root, partialRule, existing),
+      /all-present or all-absent/,
+    );
+    const removedRule = clone(existing);
+    removedRule.rules = [];
+    assert.throws(
+      () => validateImportableExactFields(manifest, root, removedRule, existing),
+      /cannot remove a source-derived rule/,
+    );
+    assert.throws(
+      () => validateImportableExactFields(manifest, root, existing, undefined),
+      /cannot fabricate trusted rule source provenance/,
+    );
+  }
+
+  const futureSelector = clone(manifest);
+  futureSelector.recordSchemas.notes.allowedFields.push("sourceArtifactId");
+  assert.throws(
+    () => validateSourceProvenancePolicyCatalog(futureSelector),
+    /needs an explicit semantic policy/,
+  );
+});
+
 test("server-owned rule, quality, legacy version and model roots reject workbook add update and removal", async () => {
   const { manifest } = await fixture();
-  assert.deepEqual(manifest.conditionalExactFieldPolicies, {});
+  assert.deepEqual(
+    Object.keys(manifest.conditionalExactFieldPolicies),
+    ["methodProfiles", "itemTypeProfiles", "templates", "modifiers", "layers", "affixes"],
+  );
   const serverOwned = [
     "compatibilityRules",
     "affinityRules",

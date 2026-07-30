@@ -409,21 +409,21 @@
     "affixScorePolicy":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"}
   },
   "importableSuccessorCatalog": {
-    "ruleSettings":{"transport":"PUT /api/state","mutation":"DEFAULT_ALLOW_REVISION_GUARDED"},
-    "itemParts":{"transport":"PUT /api/state","mutation":"DEFAULT_ALLOW_REVISION_GUARDED"},
-    "methodProfiles":{"transport":"PUT /api/state","mutation":"DEFAULT_ALLOW_REVISION_GUARDED"},
-    "itemTypeProfiles":{"transport":"PUT /api/state","mutation":"DEFAULT_ALLOW_REVISION_GUARDED"},
-    "affinityAxisWeights":{"transport":"PUT /api/state","mutation":"DEFAULT_ALLOW_REVISION_GUARDED"},
-    "collections":{"transport":"PUT /api/state","mutation":"DEFAULT_ALLOW_REVISION_GUARDED"},
-    "v23TechnologyDefinitions":{"transport":"POST /api/v23/actions","mutation":"DOMAIN_ACTION_CREATE_OR_UPDATE_TECHNOLOGY"},
-    "skuDrawers":{"transport":"POST /api/skus/target-pull","mutation":"DOMAIN_ACTION_CHANGE_SKU_TARGET_PULL"},
-    "parameters":{"transport":"PUT /api/state","mutation":"DEFAULT_ALLOW_REVISION_GUARDED"},
-    "templates":{"transport":"PUT /api/state","mutation":"DEFAULT_ALLOW_REVISION_GUARDED"},
-    "modifiers":{"transport":"PUT /api/state","mutation":"DEFAULT_ALLOW_REVISION_GUARDED"},
-    "layers":{"transport":"PUT /api/state","mutation":"DEFAULT_ALLOW_REVISION_GUARDED"},
-    "affixes":{"transport":"PUT /api/state","mutation":"DEFAULT_ALLOW_REVISION_GUARDED"},
-    "seriesShowcases":{"transport":"PUT /api/state","mutation":"DEFAULT_ALLOW_REVISION_GUARDED"},
-    "notes":{"transport":"PUT /api/state","mutation":"DEFAULT_ALLOW_REVISION_GUARDED"}
+    "ruleSettings":{"transportBoundary":"PUT /api/state","semanticMutationAuthority":"RULE_SETTINGS_EDITOR","specBasis":"§14.3.7"},
+    "itemParts":{"transportBoundary":"PUT /api/state","semanticMutationAuthority":"ITEM_PART_REGISTRY_EDITOR","specBasis":"§14.3.7"},
+    "methodProfiles":{"transportBoundary":"PUT /api/state","semanticMutationAuthority":"LOCAL_RULE_PROFILE_EDITOR_OR_CANONICAL_SOURCE_IMMUTABLE","specBasis":"§14.3.7"},
+    "itemTypeProfiles":{"transportBoundary":"PUT /api/state","semanticMutationAuthority":"LOCAL_RULE_PROFILE_EDITOR_OR_CANONICAL_SOURCE_IMMUTABLE","specBasis":"§14.3.7"},
+    "affinityAxisWeights":{"transportBoundary":"PUT /api/state","semanticMutationAuthority":"AFFINITY_AXIS_WEIGHT_EDITOR","specBasis":"§14.3.7"},
+    "collections":{"transportBoundary":"PUT /api/state","semanticMutationAuthority":"COLLECTION_EDITOR","specBasis":"§14.3.7"},
+    "v23TechnologyDefinitions":{"transportBoundary":"POST /api/v23/actions","semanticMutationAuthority":"DOMAIN_ACTION_CREATE_OR_UPDATE_TECHNOLOGY","specBasis":"§14.3.7"},
+    "skuDrawers":{"transportBoundary":"POST /api/skus/target-pull","semanticMutationAuthority":"DOMAIN_ACTION_CHANGE_SKU_TARGET_PULL","specBasis":"§14.3.7"},
+    "parameters":{"transportBoundary":"PUT /api/state","semanticMutationAuthority":"PARAMETER_REGISTRY_EDITOR","specBasis":"§14.3.7"},
+    "templates":{"transportBoundary":"PUT /api/state","semanticMutationAuthority":"TEMPLATE_EDITOR_PATCH_LAYER","specBasis":"§14.3.7"},
+    "modifiers":{"transportBoundary":"PUT /api/state","semanticMutationAuthority":"MODIFIER_RULE_EDITOR","specBasis":"§14.3.7"},
+    "layers":{"transportBoundary":"PUT /api/state","semanticMutationAuthority":"RULE_LAYER_EDITOR","specBasis":"§14.3.7"},
+    "affixes":{"transportBoundary":"PUT /api/state","semanticMutationAuthority":"AFFIX_LIBRARY_EDITOR","specBasis":"§14.3.7"},
+    "seriesShowcases":{"transportBoundary":"PUT /api/state","semanticMutationAuthority":"SERIES_SHOWCASE_EDITOR","specBasis":"§14.3.7"},
+    "notes":{"transportBoundary":"PUT /api/state","semanticMutationAuthority":"WORKSPACE_NOTES_EDITOR","specBasis":"§14.3.7"}
   },
   "preservedExactComparePolicy": {
     "schema":"project-workbook-preserved-expected-context/v1",
@@ -449,7 +449,14 @@
       "hashContract": "V23_TECHNOLOGY_CONTENT_HASH_RFC8785_SHA256_V1"
     }
   },
-  "conditionalExactFieldPolicies": {},
+  "conditionalExactFieldPolicies": {
+    "methodProfiles":{"mode":"CONDITIONAL_FULL_EXACT","provenancePaths":["sourceRevisionId","rules[].sourceRevisionId","rules[].sourceSheetId","rules[].sourceCell"],"selectorFields":["sourceRevisionId"],"sourceShape":"ALL_PRESENT_NON_EMPTY_NFC_TEXT","localShape":"ALL_ABSENT","sourceExactFields":"ALL_ALLOWED_FIELDS","semanticMutationAuthority":"CANONICAL_SOURCE_PUBLISH_ONLY"},
+    "itemTypeProfiles":{"mode":"CONDITIONAL_FULL_EXACT","provenancePaths":["sourceRevisionId","rules[].sourceRevisionId","rules[].sourceSheetId","rules[].sourceCell"],"selectorFields":["sourceRevisionId"],"sourceShape":"ALL_PRESENT_NON_EMPTY_NFC_TEXT","localShape":"ALL_ABSENT","sourceExactFields":"ALL_ALLOWED_FIELDS","semanticMutationAuthority":"CANONICAL_SOURCE_PUBLISH_ONLY"},
+    "templates":{"mode":"AUTHORIZED_LAYERED_EDIT","provenancePaths":["sourceRevisionId","sourceSheetId","sourceRow"],"selectorFields":["sourceRevisionId","sourceSheetId","sourceRow"],"sourceShape":"ALL_PRESENT_VALID_TYPED","localShape":"ALL_ABSENT","exactFields":["sourceRevisionId","sourceSheetId","sourceRow"],"semanticMutationAuthority":"TEMPLATE_EDITOR_PATCH_LAYER"},
+    "modifiers":{"mode":"AUTHORIZED_LAYERED_EDIT","provenancePaths":["rules[].sourceRevisionId","rules[].sourceSheetId","rules[].sourceCell"],"selectorFields":[],"sourceShape":"NESTED_RULE_PROVENANCE_ALL_OR_NONE","localShape":"RULES_WITHOUT_PROVENANCE","exactFields":["rules[].sourceRevisionId","rules[].sourceSheetId","rules[].sourceCell"],"semanticMutationAuthority":"MODIFIER_RULE_EDITOR"},
+    "layers":{"mode":"AUTHORIZED_LAYERED_EDIT","provenancePaths":["rules[].sourceRevisionId","rules[].sourceSheetId","rules[].sourceCell"],"selectorFields":[],"sourceShape":"NESTED_RULE_PROVENANCE_ALL_OR_NONE","localShape":"RULES_WITHOUT_PROVENANCE","exactFields":["rules[].sourceRevisionId","rules[].sourceSheetId","rules[].sourceCell"],"semanticMutationAuthority":"RULE_LAYER_EDITOR"},
+    "affixes":{"mode":"AUTHORIZED_LAYERED_EDIT","provenancePaths":["rules[].sourceRevisionId","rules[].sourceSheetId","rules[].sourceCell"],"selectorFields":[],"sourceShape":"NESTED_RULE_PROVENANCE_ALL_OR_NONE","localShape":"RULES_WITHOUT_PROVENANCE","exactFields":["rules[].sourceRevisionId","rules[].sourceSheetId","rules[].sourceCell"],"semanticMutationAuthority":"AFFIX_LIBRARY_EDITOR"}
+  },
   "terminalLifecyclePolicy": {
     "schema": "project-workbook-terminal-lifecycle/v1",
     "applicableRootDiscovery": "ALLOWED_FIELDS_SELECTOR_MATCH",

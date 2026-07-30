@@ -346,6 +346,16 @@ const EXPECTED_TECHNOLOGY_SUCCESSOR_POLICY = {
   },
 };
 
+const EXPECTED_CANONICALIZATION_FIXED_VALUES = {
+  textEncoding: "UTF-8",
+  unicodeNormalization: "NFC",
+  lineEndings: "LF",
+  finiteNumbersOnly: true,
+  negativeZero: "NORMALIZE_TO_ZERO",
+  blankAndNullDistinct: true,
+  rowOrder: "ROOT_MANIFEST_ORDER_THEN_PRIMARY_KEY_CODEPOINT_ASC",
+};
+
 const EXPECTED_TERMINAL_LIFECYCLE_POLICY = {
   schema: "project-workbook-terminal-lifecycle/v1",
   applicableRootDiscovery: "ALLOWED_FIELDS_SELECTOR_MATCH",
@@ -3104,6 +3114,13 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     "hashAlgorithm",
     "semanticEquivalence",
   ], "canonicalization");
+  for (const [field, expected] of Object.entries(EXPECTED_CANONICALIZATION_FIXED_VALUES)) {
+    assert.deepEqual(
+      manifest.canonicalization[field],
+      expected,
+      `canonicalization.${field} must retain its authoritative fixed value`,
+    );
+  }
   assert.equal(manifest.canonicalization.jsonCanonicalization, "RFC8785_JCS");
   assert.equal(manifest.canonicalization.hashAlgorithm, "SHA-256");
   assert.deepEqual(manifest.canonicalization.rootManifestHashInput, [

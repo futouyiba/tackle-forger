@@ -267,6 +267,27 @@ test("canonical project workbook contract binds all current WorkspaceState roots
   assert.match(result.manifestSha256, /^[a-f0-9]{64}$/);
 });
 
+test("canonicalization fixed values reject every display or machine mutation", async () => {
+  const { manifest, roots } = await fixture();
+  for (const [field, mutation] of Object.entries({
+    textEncoding: "UTF-16",
+    unicodeNormalization: "NFD",
+    lineEndings: "CRLF",
+    finiteNumbersOnly: false,
+    negativeZero: "PRESERVE",
+    blankAndNullDistinct: false,
+    rowOrder: "CALLER_ORDER",
+  })) {
+    const changed = clone(manifest);
+    changed.canonicalization[field] = mutation;
+    assert.throws(
+      () => validateProjectWorkbookManifest(changed, roots),
+      new RegExp(`canonicalization\\.${field}`),
+      `${field} must be exact and cannot be changed by display prose`,
+    );
+  }
+});
+
 test("F0 keeps command-only and fixed-authority roots server-owned", async () => {
   const { manifest, roots } = await fixture();
   assert.deepEqual(

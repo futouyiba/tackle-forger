@@ -10,6 +10,7 @@ import {
   preservedTypeGraphHash,
   validateMachineCell,
   validateDiagnosticRootCatalog,
+  validateImportableExactFields,
   validatePreservedRootCatalog,
   validateProjectWorkbookManifest,
   validateRecordEnvelope,
@@ -363,6 +364,53 @@ test("versioned definitions use composite identities and every frozen root has a
   );
 });
 
+test("existing v23 technology keeps itemPart exact while create may declare it", async () => {
+  const { manifest } = await fixture();
+  assert.deepEqual(
+    manifest.recordSchemas.v23TechnologyDefinitions.exactFields,
+    ["revision", "itemPartId", "contentHash"],
+  );
+  const technology = {
+    technologyId: "technology:1",
+    revision: 1,
+    itemPartId: "part:rod",
+    name: "力量技术",
+    description: "",
+    memberAffixRefs: [],
+    enabled: true,
+    contentHash: "a".repeat(64),
+  };
+  assert.equal(
+    validateImportableExactFields(
+      manifest,
+      "v23TechnologyDefinitions",
+      technology,
+      undefined,
+    ),
+    true,
+    "a new Technology may declare its initial itemPartId",
+  );
+  assert.equal(
+    validateImportableExactFields(
+      manifest,
+      "v23TechnologyDefinitions",
+      { ...technology, name: "力量技术（修订）" },
+      technology,
+    ),
+    true,
+    "mutable fields remain editable for an existing Technology",
+  );
+  assert.throws(
+    () => validateImportableExactFields(
+      manifest,
+      "v23TechnologyDefinitions",
+      { ...technology, itemPartId: "part:reel" },
+      technology,
+    ),
+    /itemPartId is exact-equal/,
+  );
+});
+
 test("preserved rows bind a versioned schema id to the closed payload variant", async () => {
   const { manifest, roots } = await fixture();
   const schemaColumn = manifest.workbookSchema.sheets.__TF_PRESERVED.columns
@@ -561,6 +609,22 @@ test("machine columns reject blank, null, numeric precision, date, boolean and e
   assert.equal(
     validateMachineCell(payloadColumn, '{"emoji":"😀","nested":{"😀":"ok"}}'),
     true,
+  );
+  assert.equal(validateMachineCell(payloadColumn, '"line1\\nline2"'), true);
+  for (const nonLf of [
+    '"line1\\r\\nline2"',
+    '"line1\\rline2"',
+    '{"nested":{"note":"line1\\r\\nline2"}}',
+  ]) {
+    assert.throws(() => validateMachineCell(payloadColumn, nonLf), /canonical JSON/);
+  }
+  assert.throws(
+    () => validateMachineCell(payloadColumn, '{"a\\r\\nb":1,"a\\nb":2}'),
+    /NFC key collisions/,
+  );
+  assert.throws(
+    () => validateMachineCell(payloadColumn, '{"é\\r\\n":1,"é\\n":2}'),
+    /NFC key collisions/,
   );
 });
 
@@ -761,6 +825,22 @@ test("notes has one canonical scalar payload representation", async () => {
     }),
     true,
   );
+  assert.equal(
+    validateMachineCell(payloadColumn, '"line1\\nline2"', "string", {
+      manifest,
+      root: "notes",
+    }),
+    true,
+  );
+  for (const nonLf of ['"line1\\r\\nline2"', '"line1\\rline2"']) {
+    assert.throws(
+      () => validateMachineCell(payloadColumn, nonLf, "string", {
+        manifest,
+        root: "notes",
+      }),
+      /canonical JSON/,
+    );
+  }
   assert.throws(
     () => validateMachineCell(payloadColumn, '{"value":"note"}', "string", {
       manifest,
@@ -1057,6 +1137,24 @@ test("record content hash binds the complete current and preserved row envelope"
       { manifest, row: currentRow },
     ),
     /hash cell must match|does not match/,
+  );
+  const lfReplay = {
+    ...currentRow,
+    payload_json: canonicalPayload({ ...currentPayload, notes: "line1\nline2" }),
+  };
+  const crlfHashInput = {
+    ...lfReplay,
+    payload_json: canonicalPayload({ ...currentPayload, notes: "line1\r\nline2" }),
+  };
+  lfReplay.record_content_sha256 = expectedRecordHash(
+    manifest,
+    crlfHashInput,
+    "payload_json",
+  );
+  assert.throws(
+    () => validateRecordEnvelope(manifest, lfReplay),
+    /does not match/,
+    "a pre-normalization CRLF hash cannot replay against the canonical LF row",
   );
   assert.throws(
     () => validateMachineCell(currentHashColumn, currentRow.record_content_sha256),

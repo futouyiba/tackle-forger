@@ -202,7 +202,7 @@ const EXPECTED_SHEETS = {
 };
 
 const EXPECTED_RECORD_SCHEMAS_SHA256 =
-  "70b575a631ff6bdddd577293176736d93576817d7dfa1bb051a890906a14818e";
+  "7a0a04bac400c3045ff4fba4aa70f5923a06a7c2f96d904ed5bf1701fdce1571";
 const EXPECTED_RECORD_SCHEMA_AUTHORITY_SHA256 =
   "d8196415ff7b677a1371fb83842431ededf9d150993c3396069e53e7127346ab";
 
@@ -231,7 +231,7 @@ function normalizeUnicodeString(value, label = "canonical JSON string") {
       `${label} rejects unpaired UTF-16 surrogate`,
     );
   }
-  return value.normalize("NFC");
+  return value.replace(/\r\n?/g, "\n").normalize("NFC");
 }
 
 function canonicalJson(value) {
@@ -838,6 +838,37 @@ function validateImportableRecordPayload(manifest, root, payload, repositoryRoot
     return;
   }
   assertClosedTypeValue(source, declarations, typeName, payload, `${root} payload`);
+}
+
+export function validateImportableExactFields(
+  manifest,
+  root,
+  candidatePayload,
+  existingPayload,
+  repositoryRoot = process.cwd(),
+) {
+  assert.ok(manifest.recordSchemas[root], `${root} is not an importable record root`);
+  validateImportableRecordPayload(manifest, root, candidatePayload, repositoryRoot);
+  if (existingPayload === undefined) return true;
+  validateImportableRecordPayload(manifest, root, existingPayload, repositoryRoot);
+  for (const field of manifest.recordSchemas[root].exactFields) {
+    const candidateValue = valueAtFieldPath(candidatePayload, field);
+    const existingValue = valueAtFieldPath(existingPayload, field);
+    if (candidateValue === undefined || existingValue === undefined) {
+      assert.equal(
+        candidateValue,
+        existingValue,
+        `${root}.${field} is exact-equal for an existing record`,
+      );
+      continue;
+    }
+    assert.equal(
+      canonicalJson(candidateValue),
+      canonicalJson(existingValue),
+      `${root}.${field} is exact-equal for an existing record`,
+    );
+  }
+  return true;
 }
 
 function validateRecordPayloadAgainstSchema(

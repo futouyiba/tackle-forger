@@ -81,6 +81,23 @@ function workbookSchemaHash(manifest) {
   )).digest("hex");
 }
 
+function serverRefRow(manifest, root, workspaceId = "workspace:1", baseRevision = "1") {
+  const row = {
+    transport_contract_version: manifest.transportRefPolicy.schema,
+    workspace_id: workspaceId,
+    base_workspace_revision: baseRevision,
+    root,
+    classification: "server_owned",
+    root_content_sha256: "null",
+    opaque_server_ref: "",
+  };
+  const identity = manifest.transportRefPolicy.tokenHashInput
+    .map((field) => [field, row[field]]);
+  row.opaque_server_ref =
+    `opaque_${createHash("sha256").update(canonicalPayload(identity)).digest("hex")}`;
+  return row;
+}
+
 function workbookContext(manifest, manifestSource) {
   const singletonPayloads = {
     ruleSettings: { patchOffsetLimits: {} },
@@ -155,12 +172,8 @@ function workbookContext(manifest, manifestSource) {
     machineSheets: {
       __TF_CURRENT: currentRows,
       __TF_PRESERVED: preservedRows,
-      __TF_SERVER_REFS: manifest.classifications.server_owned.map((root) => ({
-        root,
-        classification: "server_owned",
-        root_content_sha256: "null",
-        opaque_server_ref: `opaque_${createHash("sha256").update(root).digest("hex")}`,
-      })),
+      __TF_SERVER_REFS: manifest.classifications.server_owned.map((root) =>
+        serverRefRow(manifest, root)),
       __TF_FORBIDDEN: manifest.classifications.forbidden.map((root) => ({
         root,
         classification: "forbidden",
@@ -634,7 +647,7 @@ test("server-owned rule, quality, legacy version and model roots reject workbook
     assert.ok(manifest.classifications.server_owned.includes(root), root);
     assert.deepEqual(manifest.serverOwnedRootCatalog[root], {
       hashPolicy: "NO_CONTENT_HASH",
-      refPolicy: "OPAQUE_NON_REPLAYABLE",
+      refPolicy: "DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE",
     });
     assert.throws(
       () => validateImportableExactFields(manifest, root, {}, undefined),
@@ -749,6 +762,130 @@ test("existing importable records exact-compare every typed revision field", asy
   assert.ok(manifest.classifications.server_owned.includes("v23SkuDrawerHeads"));
   assert.equal(Object.hasOwn(manifest.recordSchemas, "v23SkuDrawerRevisions"), false);
   assert.equal(Object.hasOwn(manifest.recordSchemas, "v23SkuDrawerHeads"), false);
+});
+
+test("terminal lifecycle policy freezes every applicable existing payload without root exceptions", async () => {
+  const { manifest } = await fixture();
+  assert.deepEqual(manifest.terminalLifecyclePolicy.applicableRoots, [
+    "functionProfiles",
+    "skuDrawers",
+    "seriesShowcases",
+  ]);
+  const discovered = Object.entries(manifest.recordSchemas)
+    .filter(([, schema]) => manifest.terminalLifecyclePolicy.selectors.some(
+      (selector) => schema.allowedFields.includes(selector.field),
+    ))
+    .map(([root]) => root);
+  assert.deepEqual(discovered, manifest.terminalLifecyclePolicy.applicableRoots);
+
+  const functionProfile = {
+    id: "function:1",
+    name: "远投",
+    status: "draft",
+    supportedIntensities: [1],
+    rules: [],
+    intensityRules: [],
+    enabled: true,
+    sourceRevisionId: "source:1",
+    notes: "",
+  };
+  assert.equal(
+    validateImportableExactFields(
+      manifest,
+      "functionProfiles",
+      { ...functionProfile, name: "远投草稿" },
+      functionProfile,
+    ),
+    true,
+    "known non-terminal records retain ordinary mutable-field behavior",
+  );
+  assert.throws(
+    () => validateImportableExactFields(
+      manifest,
+      "functionProfiles",
+      { ...functionProfile, status: "published" },
+      functionProfile,
+    ),
+    /status is exact-equal/,
+    "the lifecycle selector itself is always exact for an existing record",
+  );
+  for (const terminal of manifest.terminalLifecyclePolicy.selectors[0].terminalValues) {
+    const existing = { ...functionProfile, status: terminal };
+    assert.throws(
+      () => validateImportableExactFields(
+        manifest,
+        "functionProfiles",
+        { ...existing, name: "伪造覆盖" },
+        existing,
+      ),
+      /name is exact-equal/,
+      `${terminal} must freeze every allowed payload field`,
+    );
+  }
+  for (const invalidExisting of [
+    { ...functionProfile, status: "reviewing" },
+    Object.fromEntries(Object.entries(functionProfile).filter(([field]) => field !== "status")),
+  ]) {
+    assert.throws(
+      () => validateImportableExactFields(
+        manifest,
+        "functionProfiles",
+        { ...invalidExisting, name: "不应导入" },
+        invalidExisting,
+      ),
+      /status (?:has unknown lifecycle value|is required)/,
+    );
+  }
+
+  const terminalSku = {
+    id: "sku:terminal",
+    revision: 1,
+    seriesId: "series:1",
+    targetPullKg: 5,
+    patchIds: [],
+    modelIds: [],
+    displayOrder: 1,
+    status: "approved",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  assert.throws(
+    () => validateImportableExactFields(
+      manifest,
+      "skuDrawers",
+      { ...terminalSku, targetPullKg: 6 },
+      terminalSku,
+    ),
+    /targetPullKg is exact-equal/,
+  );
+
+  const showcase = {
+    id: "showcase:1",
+    seriesId: "series:1",
+    description: "已发布",
+    templateIds: [],
+    structureIds: [],
+    fishingMethod: "路亚",
+    functionId: "function:1",
+    qualityId: "quality_c_green",
+    fishMinKg: 0,
+    fishMaxKg: 1,
+    tensionMinKgf: 0,
+    tensionMaxKgf: 1,
+    affixIds: [],
+    notes: "",
+    publishedAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  assert.throws(
+    () => validateImportableExactFields(
+      manifest,
+      "seriesShowcases",
+      { ...showcase, description: "伪造覆盖" },
+      showcase,
+    ),
+    /description is exact-equal/,
+  );
 });
 
 test("preserved rows bind a versioned schema id to the closed payload variant", async () => {
@@ -1015,13 +1152,13 @@ test("workbook manifest recomputes every declared hash from a closed workbook co
     `opaque_${"f".repeat(64)}`;
   assert.throws(
     () => validateWorkbookEnvelope(manifest, row, validRowMutation),
-    /machine_content_sha256 does not match/,
+    /transport identity/,
   );
   const omittedSheet = clone(context);
   delete omittedSheet.machineSheets.__TF_SERVER_REFS;
   assert.throws(
     () => validateWorkbookEnvelope(manifest, row, omittedSheet),
-    /include set exactly/,
+    /semantic and transport sets exactly/,
   );
   const includeMutation = clone(manifest);
   includeMutation.canonicalization.machineContentHashInput.push("__TF_DIAGNOSTICS");
@@ -1031,7 +1168,7 @@ test("workbook manifest recomputes every declared hash from a closed workbook co
       row,
       { ...context, rootManifestSource: JSON.stringify(includeMutation) },
     ),
-    /include set exactly|not a declared machine-content sheet/,
+    /semantic and transport sets exactly|not a declared machine-content sheet/,
   );
   for (const alternativeEncoding of [
     "RFC8785_OBJECT_BY_SHEET_V1",
@@ -1892,35 +2029,90 @@ test("forbidden roots have no content-derived hash while diagnostics are non-sem
   assert.throws(() => validateProjectWorkbookManifest(weakened, roots));
 });
 
-test("server-owned roots expose only opaque non-replayable refs and no raw-derived hash", async () => {
-  const { manifest, roots } = await fixture();
+test("server-owned transport refs bind public identity outside the semantic content hash", async () => {
+  const { manifest, manifestSource, roots } = await fixture();
   assert.deepEqual(
     Object.keys(manifest.serverOwnedRootCatalog),
     manifest.classifications.server_owned,
   );
+  assert.ok(!manifest.canonicalization.machineContentHashInput.includes("__TF_SERVER_REFS"));
+  assert.ok(manifest.canonicalization.machineContentHashExcludes.includes("__TF_SERVER_REFS"));
+  assert.deepEqual(manifest.canonicalization.transportIntegritySheets, ["__TF_SERVER_REFS"]);
   for (const root of manifest.classifications.server_owned) {
     assert.deepEqual(manifest.serverOwnedRootCatalog[root], {
       hashPolicy: "NO_CONTENT_HASH",
-      refPolicy: "OPAQUE_NON_REPLAYABLE",
+      refPolicy: "DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE",
     });
-    assert.equal(validateServerRefEnvelope(manifest, {
-      root,
-      classification: "server_owned",
-      root_content_sha256: "null",
-      opaque_server_ref: `opaque_${createHash("sha256").update(root).digest("hex")}`,
+    const row = serverRefRow(manifest, root);
+    assert.equal(validateServerRefEnvelope(manifest, row, {
+      workspaceId: "workspace:1",
+      baseWorkspaceRevision: "1",
     }), true);
+    assert.equal(
+      row.opaque_server_ref,
+      serverRefRow(manifest, root).opaque_server_ref,
+      "the same public transport identity must reproduce the same non-sensitive token",
+    );
   }
   for (const rawRoot of ["patchLedger", "partConstraintSets", "configIdGovernance"]) {
+    const forged = serverRefRow(manifest, rawRoot);
+    forged.root_content_sha256 = "a".repeat(64);
     assert.throws(
-      () => validateServerRefEnvelope(manifest, {
-        root: rawRoot,
-        classification: "server_owned",
-        root_content_sha256: "a".repeat(64),
-        opaque_server_ref: `opaque_${"b".repeat(64)}`,
+      () => validateServerRefEnvelope(manifest, forged, {
+        workspaceId: "workspace:1",
+        baseWorkspaceRevision: "1",
       }),
       /null/,
     );
   }
+  const forgedToken = serverRefRow(manifest, "patchLedger");
+  forgedToken.opaque_server_ref = `opaque_${"b".repeat(64)}`;
+  assert.throws(
+    () => validateServerRefEnvelope(manifest, forgedToken, {
+      workspaceId: "workspace:1",
+      baseWorkspaceRevision: "1",
+    }),
+    /transport identity/,
+  );
+  assert.throws(
+    () => validateServerRefEnvelope(
+      manifest,
+      serverRefRow(manifest, "patchLedger", "workspace:2"),
+      { workspaceId: "workspace:1", baseWorkspaceRevision: "1" },
+    ),
+    /another workspace/,
+  );
+  assert.throws(
+    () => validateServerRefEnvelope(
+      manifest,
+      serverRefRow(manifest, "patchLedger", "workspace:1", "2"),
+      { workspaceId: "workspace:1", baseWorkspaceRevision: "1" },
+    ),
+    /another workspace revision/,
+  );
+
+  const first = workbookContext(manifest, manifestSource);
+  const repeated = workbookContext(manifest, manifestSource);
+  assert.equal(
+    computeWorkbookHashes(manifest, first).machineContentSha256,
+    computeWorkbookHashes(manifest, repeated).machineContentSha256,
+    "repeated export of one semantic state must retain one semantic hash",
+  );
+  const nextRevision = workbookContext(manifest, manifestSource);
+  nextRevision.manifestFields.base_workspace_revision = "2";
+  nextRevision.machineSheets.__TF_SERVER_REFS =
+    manifest.classifications.server_owned.map((root) =>
+      serverRefRow(manifest, root, "workspace:1", "2"));
+  assert.notEqual(
+    computeWorkbookHashes(manifest, first).machineContentSha256,
+    computeWorkbookHashes(manifest, nextRevision).machineContentSha256,
+    "the manifest revision boundary remains semantic even though transport refs are excluded",
+  );
+  assert.deepEqual(
+    Object.keys(serverRefRow(manifest, "patchLedger")),
+    manifest.workbookSchema.sheets.__TF_SERVER_REFS.columns.map((column) => column.name),
+    "the closed transport row has no raw or sensitive payload input",
+  );
   const weakened = clone(manifest);
   weakened.serverOwnedRootCatalog.patchLedger.hashPolicy = "HASH_RAW_PAYLOAD";
   assert.throws(

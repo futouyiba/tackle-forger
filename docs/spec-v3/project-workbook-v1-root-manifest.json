@@ -73,6 +73,9 @@
       "__TF_SERVER_REFS": {
         "kind": "machine",
         "columns": [
+          {"name":"transport_contract_version","type":"string","required":true,"format":"literal:project-workbook-server-ref-transport/v1"},
+          {"name":"workspace_id","type":"string","required":true,"format":"stable-id"},
+          {"name":"base_workspace_revision","type":"string","required":true,"format":"safe-integer-text"},
           {"name":"root","type":"string","required":true,"format":"workspace-root"},
           {"name":"classification","type":"string","required":true,"format":"literal:server_owned"},
           {"name":"root_content_sha256","type":"string","required":true,"format":"literal:null"},
@@ -150,7 +153,7 @@
       },
       "server_owned": {
         "sheet": "__TF_SERVER_REFS",
-        "payloadPolicy": "OPAQUE_NON_REPLAYABLE_REF_ONLY_NO_CONTENT_HASH"
+        "payloadPolicy": "IDENTITY_BOUND_TRANSPORT_REF_ONLY_NO_CONTENT_HASH"
       },
       "forbidden": {
         "sheet": "__TF_FORBIDDEN",
@@ -186,6 +189,8 @@
       "serverOwnedRootCatalog",
       "importableCreatePolicies",
       "conditionalExactFieldPolicies",
+      "terminalLifecyclePolicy",
+      "transportRefPolicy",
       "serverOwnedInvariants",
       "classifications"
     ],
@@ -211,14 +216,17 @@
       "__TF_MANIFEST_EXCEPT_MACHINE_CONTENT_SHA256",
       "__TF_CURRENT",
       "__TF_PRESERVED",
-      "__TF_SERVER_REFS",
       "__TF_FORBIDDEN"
     ],
     "machineContentHashExcludes": [
       "__TF_MANIFEST.machine_content_sha256",
+      "__TF_SERVER_REFS",
       "__TF_DIAGNOSTICS",
       "README",
       "ROOT_SUMMARY"
+    ],
+    "transportIntegritySheets": [
+      "__TF_SERVER_REFS"
     ],
     "hashAlgorithm": "SHA-256",
     "semanticEquivalence": "CANONICAL_MACHINE_CONTENT_SHA256_EQUAL"
@@ -358,34 +366,34 @@
     "ruleRuns":{"typeRef":"lib/types.ts#RuleGraphRun","subjectProjectionFields":["id"],"keyContract":"SHA256_RFC8785_SUBJECT_PROJECTION_V1"}
   },
   "serverOwnedRootCatalog": {
-    "workspaceId":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
-    "schemaVersion":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
-    "configIdGovernance":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
-    "patchLedger":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
-    "v23SeriesPartHeads":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
-    "v23SkuDrawerHeads":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
-    "partConstraintSets":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
-    "qualityProfiles":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
-    "seriesDefinitions":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
-    "v23AffixDefinitions":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
-    "v23TechnologyHeads":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
-    "canonicalRuleSourceDrafts":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
-    "weightTemplatePolicyDrafts":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
-    "qualityValuePolicyDrafts":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
-    "pricingPolicyDrafts":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
-    "workspacePolicies":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
-    "pricingPolicyVersions":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
-    "identityAuditLog":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
-    "commandIdempotencyRecords":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
-    "governanceAuditLog":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
-    "importedAt":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
-    "compatibilityRules":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
-    "affinityRules":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
-    "purchasableModels":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
-    "v3Affixes":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
-    "technologies":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
-    "qualityBands":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"},
-    "ruleGraphs":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"OPAQUE_NON_REPLAYABLE"}
+    "workspaceId":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "schemaVersion":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "configIdGovernance":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "patchLedger":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "v23SeriesPartHeads":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "v23SkuDrawerHeads":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "partConstraintSets":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "qualityProfiles":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "seriesDefinitions":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "v23AffixDefinitions":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "v23TechnologyHeads":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "canonicalRuleSourceDrafts":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "weightTemplatePolicyDrafts":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "qualityValuePolicyDrafts":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "pricingPolicyDrafts":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "workspacePolicies":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "pricingPolicyVersions":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "identityAuditLog":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "commandIdempotencyRecords":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "governanceAuditLog":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "importedAt":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "compatibilityRules":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "affinityRules":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "purchasableModels":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "v3Affixes":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "technologies":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "qualityBands":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"},
+    "ruleGraphs":{"hashPolicy":"NO_CONTENT_HASH","refPolicy":"DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE"}
   },
   "importableCreatePolicies": {
     "skuDrawers": {
@@ -394,6 +402,38 @@
     }
   },
   "conditionalExactFieldPolicies": {},
+  "terminalLifecyclePolicy": {
+    "schema": "project-workbook-terminal-lifecycle/v1",
+    "applicableRootDiscovery": "ALLOWED_FIELDS_SELECTOR_MATCH",
+    "applicableRoots": ["functionProfiles","skuDrawers","seriesShowcases"],
+    "multipleSelectors": "REJECT",
+    "lifecycleFieldExact": "ALWAYS",
+    "terminalExactFields": "ALL_ALLOWED_FIELDS",
+    "selectors": [
+      {
+        "field": "status",
+        "missing": "REJECT",
+        "terminalValues": ["approved","published","superseded","deprecated","archived","frozen","APPROVED","PUBLISHED","SUPERSEDED","DEPRECATED","ARCHIVED","FROZEN"],
+        "nonTerminalValues": ["draft","active","DRAFT","ACTIVE"],
+        "unknown": "REJECT"
+      },
+      {
+        "field": "publishedAt",
+        "missing": "NON_TERMINAL",
+        "present": "TERMINAL_NON_EMPTY_NFC_TEXT"
+      }
+    ]
+  },
+  "transportRefPolicy": {
+    "schema": "project-workbook-server-ref-transport/v1",
+    "sheet": "__TF_SERVER_REFS",
+    "semanticHash": "EXCLUDED",
+    "identityFields": ["transport_contract_version","workspace_id","base_workspace_revision","root","classification"],
+    "tokenHashInput": ["transport_contract_version","workspace_id","base_workspace_revision","root","classification"],
+    "tokenFormat": "opaque_<lowercase-sha256-of-canonical-identity>",
+    "tokenSource": "DETERMINISTIC_NON_SENSITIVE_IDENTITY_ONLY",
+    "rawPayload": "FORBIDDEN"
+  },
   "serverOwnedInvariants": {
     "qualityProfiles": [
       {"id":"quality_c_green","letter":"C","colorName":"绿","rank":1,"enabled":true},

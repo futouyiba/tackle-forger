@@ -29,6 +29,8 @@ const EXPECTED_TOP_LEVEL_KEYS = [
   "serverOwnedRootCatalog",
   "importableCreatePolicies",
   "conditionalExactFieldPolicies",
+  "terminalLifecyclePolicy",
+  "transportRefPolicy",
   "serverOwnedInvariants",
   "classifications",
   "modes",
@@ -120,7 +122,7 @@ const EXPECTED_SERVER_OWNED_ROOT_CATALOG = Object.fromEntries(
     root,
     {
       hashPolicy: "NO_CONTENT_HASH",
-      refPolicy: "OPAQUE_NON_REPLAYABLE",
+      refPolicy: "DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE",
     },
   ]),
 );
@@ -133,6 +135,55 @@ const EXPECTED_IMPORTABLE_CREATE_POLICIES = {
     policy: "REJECT",
     requiredActionCode: "create_sku",
   },
+};
+
+const EXPECTED_TERMINAL_LIFECYCLE_POLICY = {
+  schema: "project-workbook-terminal-lifecycle/v1",
+  applicableRootDiscovery: "ALLOWED_FIELDS_SELECTOR_MATCH",
+  applicableRoots: ["functionProfiles", "skuDrawers", "seriesShowcases"],
+  multipleSelectors: "REJECT",
+  lifecycleFieldExact: "ALWAYS",
+  terminalExactFields: "ALL_ALLOWED_FIELDS",
+  selectors: [
+    {
+      field: "status",
+      missing: "REJECT",
+      terminalValues: [
+        "approved", "published", "superseded", "deprecated", "archived", "frozen",
+        "APPROVED", "PUBLISHED", "SUPERSEDED", "DEPRECATED", "ARCHIVED", "FROZEN",
+      ],
+      nonTerminalValues: ["draft", "active", "DRAFT", "ACTIVE"],
+      unknown: "REJECT",
+    },
+    {
+      field: "publishedAt",
+      missing: "NON_TERMINAL",
+      present: "TERMINAL_NON_EMPTY_NFC_TEXT",
+    },
+  ],
+};
+
+const EXPECTED_TRANSPORT_REF_POLICY = {
+  schema: "project-workbook-server-ref-transport/v1",
+  sheet: "__TF_SERVER_REFS",
+  semanticHash: "EXCLUDED",
+  identityFields: [
+    "transport_contract_version",
+    "workspace_id",
+    "base_workspace_revision",
+    "root",
+    "classification",
+  ],
+  tokenHashInput: [
+    "transport_contract_version",
+    "workspace_id",
+    "base_workspace_revision",
+    "root",
+    "classification",
+  ],
+  tokenFormat: "opaque_<lowercase-sha256-of-canonical-identity>",
+  tokenSource: "DETERMINISTIC_NON_SENSITIVE_IDENTITY_ONLY",
+  rawPayload: "FORBIDDEN",
 };
 
 const column = (name, format, type = "string") => ({ name, type, required: true, format });
@@ -178,6 +229,9 @@ const EXPECTED_SHEETS = {
   __TF_SERVER_REFS: {
     kind: "machine",
     columns: [
+      column("transport_contract_version", "literal:project-workbook-server-ref-transport/v1"),
+      column("workspace_id", "stable-id"),
+      column("base_workspace_revision", "safe-integer-text"),
       column("root", "workspace-root"), column("classification", "literal:server_owned"),
       column("root_content_sha256", "literal:null"),
       column("opaque_server_ref", "opaque-token"),
@@ -864,6 +918,38 @@ function validateImportableRecordPayload(manifest, root, payload, repositoryRoot
   assertClosedTypeValue(source, declarations, typeName, payload, `${root} payload`);
 }
 
+function terminalLifecycleExactFields(manifest, root, existingPayload) {
+  const schema = manifest.recordSchemas[root];
+  const policy = manifest.terminalLifecyclePolicy;
+  const selectors = policy.selectors.filter((selector) =>
+    schema.allowedFields.includes(selector.field));
+  if (selectors.length === 0) return [];
+  assert.equal(
+    selectors.length,
+    1,
+    `${root} matches multiple terminal lifecycle selectors`,
+  );
+  const selector = selectors[0];
+  const value = valueAtFieldPath(existingPayload, selector.field);
+  if (selector.field === "status") {
+    assert.notEqual(value, undefined, `${root}.status is required for lifecycle-safe import`);
+    assert.equal(typeof value, "string", `${root}.status must be text`);
+    if (selector.terminalValues.includes(value)) return schema.allowedFields;
+    assert.ok(
+      selector.nonTerminalValues.includes(value),
+      `${root}.status has unknown lifecycle value`,
+    );
+    return [selector.field];
+  }
+  assert.equal(selector.field, "publishedAt", `${root} has an unknown lifecycle selector`);
+  if (value === undefined) return [selector.field];
+  assert.ok(
+    typeof value === "string" && value.length > 0 && value === value.normalize("NFC"),
+    `${root}.publishedAt must be non-empty NFC text`,
+  );
+  return schema.allowedFields;
+}
+
 export function validateImportableExactFields(
   manifest,
   root,
@@ -892,6 +978,7 @@ export function validateImportableExactFields(
     ...revisionFields,
     ...manifest.recordSchemas[root].exactFields,
     ...conditionalFields,
+    ...terminalLifecycleExactFields(manifest, root, existingPayload),
   ])) {
     const candidateValue = valueAtFieldPath(candidatePayload, field);
     const existingValue = valueAtFieldPath(existingPayload, field);
@@ -1231,10 +1318,21 @@ export function validateRecordEnvelope(manifest, row, context = {}) {
   return true;
 }
 
-export function validateServerRefEnvelope(manifest, row) {
+function expectedServerRefToken(manifest, row) {
+  const identity = manifest.transportRefPolicy.tokenHashInput.map((field) => {
+    assert.ok(Object.hasOwn(row, field), `server ref identity ${field} is missing`);
+    return [field, row[field]];
+  });
+  return `opaque_${sha256(canonicalJson(identity))}`;
+}
+
+export function validateServerRefEnvelope(manifest, row, context = {}) {
   assert.ok(row && Object.getPrototypeOf(row) === Object.prototype,
     "server ref envelope must be a closed object");
   assert.deepEqual(Object.keys(row), [
+    "transport_contract_version",
+    "workspace_id",
+    "base_workspace_revision",
     "root",
     "classification",
     "root_content_sha256",
@@ -1244,12 +1342,27 @@ export function validateServerRefEnvelope(manifest, row) {
   assert.ok(catalog, `${row.root} has no server-owned root policy`);
   assert.deepEqual(catalog, {
     hashPolicy: "NO_CONTENT_HASH",
-    refPolicy: "OPAQUE_NON_REPLAYABLE",
+    refPolicy: "DETERMINISTIC_IDENTITY_BOUND_NON_SENSITIVE",
   }, `${row.root} server-owned policy may not expose raw-derived hashes`);
   const sheet = manifest.workbookSchema.sheets.__TF_SERVER_REFS;
   for (const columnSchema of sheet.columns) {
     validateMachineCell(columnSchema, row[columnSchema.name]);
   }
+  assert.equal(
+    row.workspace_id,
+    context.workspaceId,
+    `${row.root} server ref belongs to another workspace`,
+  );
+  assert.equal(
+    row.base_workspace_revision,
+    context.baseWorkspaceRevision,
+    `${row.root} server ref belongs to another workspace revision`,
+  );
+  assert.equal(
+    row.opaque_server_ref,
+    expectedServerRefToken(manifest, row),
+    `${row.root} server ref token does not match its transport identity`,
+  );
   return true;
 }
 
@@ -1334,23 +1447,23 @@ function comparePrimaryKey(manifest, left, right, primaryKey) {
   return 0;
 }
 
-function validateMachineContentSheets(manifest, machineSheets, repositoryRoot) {
+function validateMachineContentSheets(manifest, machineSheets, manifestFields, repositoryRoot) {
   assert.ok(machineSheets && Object.getPrototypeOf(machineSheets) === Object.prototype,
     "workbook hash context requires closed machineSheets");
+  const declaredMachineSheets = manifest.workbookSchema.sheetOrder.filter((sheetName) =>
+    manifest.canonicalization.machineContentHashInput.includes(sheetName)
+      || manifest.canonicalization.transportIntegritySheets.includes(sheetName));
   assert.deepEqual(
     Object.keys(machineSheets),
-    manifest.canonicalization.machineContentHashInput.filter(
-      (entry) => entry !== "__TF_MANIFEST_EXCEPT_MACHINE_CONTENT_SHA256",
-    ),
-    "machineSheets must match the declared include set exactly",
+    declaredMachineSheets,
+    "machineSheets must match the declared semantic and transport sets exactly",
   );
   validateRecordSheetCardinality(
     manifest,
     machineSheets.__TF_CURRENT,
     machineSheets.__TF_PRESERVED,
   );
-  for (const sheetName of manifest.canonicalization.machineContentHashInput) {
-    if (sheetName === "__TF_MANIFEST_EXCEPT_MACHINE_CONTENT_SHA256") continue;
+  for (const sheetName of declaredMachineSheets) {
     const sheet = manifest.workbookSchema.sheets[sheetName];
     const rows = machineSheets[sheetName];
     assert.ok(sheet?.kind === "machine" && Array.isArray(rows), `${sheetName} rows are required`);
@@ -1386,7 +1499,10 @@ function validateMachineContentSheets(manifest, machineSheets, repositoryRoot) {
       if (sheetName === "__TF_CURRENT" || sheetName === "__TF_PRESERVED") {
         validateRecordEnvelope(manifest, row, { repositoryRoot });
       } else if (sheetName === "__TF_SERVER_REFS") {
-        validateServerRefEnvelope(manifest, row);
+        validateServerRefEnvelope(manifest, row, {
+          workspaceId: manifestFields.workspace_id,
+          baseWorkspaceRevision: manifestFields.base_workspace_revision,
+        });
       } else if (sheetName === "__TF_FORBIDDEN") {
         assert.deepEqual(
           Object.keys(row),
@@ -1438,7 +1554,12 @@ export function computeWorkbookHashes(
     "RFC8785_ORDERED_SHEET_ROW_PAIR_ARRAY_V1",
     "machine content hash encoding drift",
   );
-  validateMachineContentSheets(manifest, context.machineSheets, repositoryRoot);
+  validateMachineContentSheets(
+    manifest,
+    context.machineSheets,
+    context.manifestFields,
+    repositoryRoot,
+  );
   const schemaInput = manifest.canonicalization.workbookSchemaHashInput.map((field) => {
     assert.ok(Object.hasOwn(manifest, field), `workbook schema hash input ${field} is unresolved`);
     return [field, manifest[field]];
@@ -2143,7 +2264,7 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     preserved_frozen: { sheet: "__TF_PRESERVED", payloadPolicy: "OPAQUE_EXACT_SERVER_EXPORT_ONLY" },
     server_owned: {
       sheet: "__TF_SERVER_REFS",
-      payloadPolicy: "OPAQUE_NON_REPLAYABLE_REF_ONLY_NO_CONTENT_HASH",
+      payloadPolicy: "IDENTITY_BOUND_TRANSPORT_REF_ONLY_NO_CONTENT_HASH",
     },
     forbidden: {
       sheet: "__TF_FORBIDDEN",
@@ -2171,6 +2292,7 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     "machineContentHashEncoding",
     "machineContentHashInput",
     "machineContentHashExcludes",
+    "transportIntegritySheets",
     "hashAlgorithm",
     "semanticEquivalence",
   ], "canonicalization");
@@ -2191,6 +2313,8 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     "serverOwnedRootCatalog",
     "importableCreatePolicies",
     "conditionalExactFieldPolicies",
+    "terminalLifecyclePolicy",
+    "transportRefPolicy",
     "serverOwnedInvariants",
     "classifications",
   ]);
@@ -2219,14 +2343,17 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     "__TF_MANIFEST_EXCEPT_MACHINE_CONTENT_SHA256",
     "__TF_CURRENT",
     "__TF_PRESERVED",
-    "__TF_SERVER_REFS",
     "__TF_FORBIDDEN",
   ]);
   assert.deepEqual(manifest.canonicalization.machineContentHashExcludes, [
     "__TF_MANIFEST.machine_content_sha256",
+    "__TF_SERVER_REFS",
     "__TF_DIAGNOSTICS",
     "README",
     "ROOT_SUMMARY",
+  ]);
+  assert.deepEqual(manifest.canonicalization.transportIntegritySheets, [
+    "__TF_SERVER_REFS",
   ]);
   assert.equal(
     manifest.canonicalization.semanticEquivalence,
@@ -2346,6 +2473,32 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
         `${root}.${field} conditional exact field is not importable`);
     }
   }
+  assert.deepEqual(
+    manifest.terminalLifecyclePolicy,
+    EXPECTED_TERMINAL_LIFECYCLE_POLICY,
+    "terminal lifecycle policy must retain its closed fail-closed semantics",
+  );
+  const discoveredLifecycleRoots = Object.entries(manifest.recordSchemas)
+    .filter(([, schema]) => manifest.terminalLifecyclePolicy.selectors.some(
+      (selector) => schema.allowedFields.includes(selector.field),
+    ))
+    .map(([root]) => root);
+  assert.deepEqual(
+    discoveredLifecycleRoots,
+    manifest.terminalLifecyclePolicy.applicableRoots,
+    "terminal lifecycle applicable roots must be derived from allowed fields",
+  );
+  for (const root of discoveredLifecycleRoots) {
+    const selectorCount = manifest.terminalLifecyclePolicy.selectors.filter(
+      (selector) => manifest.recordSchemas[root].allowedFields.includes(selector.field),
+    ).length;
+    assert.equal(selectorCount, 1, `${root} must bind exactly one lifecycle selector`);
+  }
+  assert.deepEqual(
+    manifest.transportRefPolicy,
+    EXPECTED_TRANSPORT_REF_POLICY,
+    "server ref transport policy must retain its identity-only boundary",
+  );
   assert.deepEqual(manifest.recordSchemas.v23TechnologyDefinitions.identityFields,
     ["technologyId", "revision"]);
   assert.ok(

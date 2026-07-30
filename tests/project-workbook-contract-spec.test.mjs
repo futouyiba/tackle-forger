@@ -49,7 +49,7 @@ test("canonical project workbook contract binds all current WorkspaceState roots
   assert.match(result.manifestSha256, /^[a-f0-9]{64}$/);
 });
 
-test("F0 keeps raw constraints, revision heads and source-derived drafts server-owned", async () => {
+test("F0 keeps command-only and fixed-authority roots server-owned", async () => {
   const { manifest, roots } = await fixture();
   assert.deepEqual(
     [
@@ -59,7 +59,7 @@ test("F0 keeps raw constraints, revision heads and source-derived drafts server-
       manifest.classifications.forbidden.length,
       manifest.classifications.export_only_diagnostic.length,
     ],
-    [28, 23, 17, 15, 10],
+    [25, 23, 20, 15, 10],
   );
   for (const root of [
     "partConstraintSets",
@@ -67,6 +67,9 @@ test("F0 keeps raw constraints, revision heads and source-derived drafts server-
     "v23SkuDrawerHeads",
     "qualityValuePolicyDrafts",
     "pricingPolicyDrafts",
+    "qualityProfiles",
+    "seriesDefinitions",
+    "v23AffixDefinitions",
   ]) {
     assert.ok(manifest.classifications.server_owned.includes(root), root);
     assert.equal(Object.hasOwn(manifest.recordSchemas, root), false, root);
@@ -80,6 +83,9 @@ test("F0 keeps raw constraints, revision heads and source-derived drafts server-
     ["v23SkuDrawerHeads", "importable_current"],
     ["qualityValuePolicyDrafts", "importable_current"],
     ["pricingPolicyDrafts", "importable_current"],
+    ["qualityProfiles", "importable_current"],
+    ["seriesDefinitions", "importable_current"],
+    ["v23AffixDefinitions", "importable_current"],
   ]) {
     const forged = clone(manifest);
     forged.classifications.server_owned =
@@ -89,6 +95,29 @@ test("F0 keeps raw constraints, revision heads and source-derived drafts server-
       () => validateProjectWorkbookManifest(forged, roots),
       /exact expected classifications/,
       `${root} must reject a forged ${unsafeTarget} carrier`,
+    );
+  }
+
+  assert.deepEqual(manifest.serverOwnedInvariants.qualityProfiles, [
+    { id: "quality_c_green", letter: "C", colorName: "绿", rank: 1, enabled: true },
+    { id: "quality_b_blue", letter: "B", colorName: "蓝", rank: 2, enabled: true },
+    { id: "quality_a_purple", letter: "A", colorName: "紫", rank: 3, enabled: true },
+    { id: "quality_s_orange", letter: "S", colorName: "橙", rank: 4, enabled: true },
+  ]);
+  for (const mutate of [
+    (profiles) => {
+      [profiles[0].colorName, profiles[1].colorName] =
+        [profiles[1].colorName, profiles[0].colorName];
+    },
+    (profiles) => { profiles[2].enabled = false; },
+    (profiles) => { profiles.pop(); },
+    (profiles) => { profiles.push(clone(profiles[0])); },
+  ]) {
+    const forged = clone(manifest);
+    mutate(forged.serverOwnedInvariants.qualityProfiles);
+    assert.throws(
+      () => validateProjectWorkbookManifest(forged, roots),
+      /fixed invariants|unique/,
     );
   }
 });
@@ -242,10 +271,6 @@ test("versioned definitions use composite identities and every frozen root has a
   assert.deepEqual(
     manifest.recordSchemas.v23TechnologyDefinitions.identityFields,
     ["technologyId", "revision"],
-  );
-  assert.deepEqual(
-    manifest.recordSchemas.v23AffixDefinitions.identityFields,
-    ["affixId", "revision"],
   );
   assert.deepEqual(manifest.preservedRootCatalog.performanceSummaryDefinitions, {
     carrier: "records",
@@ -628,10 +653,10 @@ test("record key JSON binds root identity arity, primitive types and preserved v
     true,
   );
   assert.throws(
-    () => validateMachineCell(keyColumn, '["series:other"]', "string", {
+    () => validateMachineCell(keyColumn, '["collection:other"]', "string", {
       manifest,
-      root: "seriesDefinitions",
-      payload: { id: "series:actual" },
+      root: "collections",
+      payload: { id: "collection:actual" },
     }),
     /record key does not match payload identity/,
   );
@@ -674,10 +699,10 @@ test("record key JSON binds root identity arity, primitive types and preserved v
     /canonical scalar string representation/,
   );
   assert.throws(
-    () => validateMachineCell(keyColumn, '["series:1"]', "string", {
+    () => validateMachineCell(keyColumn, '["collection:1"]', "string", {
       manifest,
-      root: "seriesDefinitions",
-      payload: { revision: 1 },
+      root: "collections",
+      payload: { name: "missing identity" },
     }),
     /identity is missing from payload/,
   );
@@ -731,21 +756,21 @@ test("record revision is typed RFC8785 scalar JSON and matches payload plus iden
   const { manifest } = await fixture();
   const revisionColumn = manifest.workbookSchema.sheets.__TF_CURRENT.columns
     .find((entry) => entry.name === "record_revision");
-  const seriesContext = {
+  const revisionedContext = {
     manifest,
-    root: "seriesDefinitions",
-    payload: { id: "series:1", revision: 1 },
-    recordKey: ["series:1"],
+    root: "skuDrawers",
+    payload: { id: "sku:1", revision: 1 },
+    recordKey: ["sku:1"],
   };
-  assert.equal(validateMachineCell(revisionColumn, "1", "string", seriesContext), true);
+  assert.equal(validateMachineCell(revisionColumn, "1", "string", revisionedContext), true);
   for (const invalid of ["v1", "01", "null", '"1"']) {
     assert.throws(
-      () => validateMachineCell(revisionColumn, invalid, "string", seriesContext),
+      () => validateMachineCell(revisionColumn, invalid, "string", revisionedContext),
       /JSON|canonical|safe integer|required/,
     );
   }
   assert.throws(
-    () => validateMachineCell(revisionColumn, "2", "string", seriesContext),
+    () => validateMachineCell(revisionColumn, "2", "string", revisionedContext),
     /payload mismatch/,
   );
   assert.throws(

@@ -6,7 +6,7 @@
     {
       "id": "project-workbook/v1",
       "path": "docs/spec-v3/project-workbook-v1-root-manifest.json",
-      "sha256": "bdafda629289d6e9fdb8ac5e9ce2753d9fd8366ee269e3402141073b2470b912"
+      "sha256": "07b6a57ae04415da9fd12c472d0e7e7538db7438016388785179b0a5a882c3a1"
     }
   ],
   "readingProtocol": {
@@ -91,7 +91,7 @@
       ],
       "title": "版本、快照、飞书、工作区与回归",
       "path": "docs/spec-v3/04-persistence-and-lifecycle.md",
-      "sha256": "db46e8b4b30d5bd309621b66f73b9a5e3644159bd0f7f415621370665954499a"
+      "sha256": "409f767fd2e78e5cdb36ff36135e4167e6b5db7773fedfefbe090ed1478ff359"
     },
     {
       "id": "05",

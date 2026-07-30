@@ -26,6 +26,7 @@ const EXPECTED_TOP_LEVEL_KEYS = [
   "preservedSchemaCatalog",
   "preservedSchemaAuthority",
   "diagnosticRootCatalog",
+  "serverOwnedInvariants",
   "classifications",
   "modes",
   "removal",
@@ -38,9 +39,9 @@ const EXPECTED_TOP_LEVEL_KEYS = [
 export const EXPECTED_ROOT_CLASSIFICATIONS = {
   importable_current: [
     "ruleSettings", "itemParts", "methodProfiles", "itemTypeProfiles", "functionProfiles",
-    "qualityProfiles", "compatibilityRules", "affinityRules",
-    "affinityAxisWeights", "collections", "seriesDefinitions",
-    "v23AffixDefinitions", "v23TechnologyDefinitions",
+    "compatibilityRules", "affinityRules",
+    "affinityAxisWeights", "collections",
+    "v23TechnologyDefinitions",
     "v23TechnologyHeads", "skuDrawers", "purchasableModels", "v3Affixes", "technologies",
     "parameters", "templates", "modifiers",
     "layers", "affixes", "qualityBands", "affixScorePolicy", "seriesShowcases",
@@ -60,6 +61,7 @@ export const EXPECTED_ROOT_CLASSIFICATIONS = {
   server_owned: [
     "workspaceId", "schemaVersion", "configIdGovernance", "patchLedger",
     "v23SeriesPartHeads", "v23SkuDrawerHeads", "partConstraintSets",
+    "qualityProfiles", "seriesDefinitions", "v23AffixDefinitions",
     "canonicalRuleSourceDrafts", "weightTemplatePolicyDrafts",
     "qualityValuePolicyDrafts", "pricingPolicyDrafts", "workspacePolicies",
     "pricingPolicyVersions", "identityAuditLog", "commandIdempotencyRecords",
@@ -99,6 +101,15 @@ const EXPECTED_PRESERVED_VARIANT_SCHEMA_IDS = {
     LegacyFiveAxisVertexSet: "project-workbook/preserved/fiveAxisVertexSets/legacy-v1",
     FiveAxisVertexSet: "project-workbook/preserved/fiveAxisVertexSets/current-v1",
   },
+};
+
+const EXPECTED_SERVER_OWNED_INVARIANTS = {
+  qualityProfiles: [
+    { id: "quality_c_green", letter: "C", colorName: "绿", rank: 1, enabled: true },
+    { id: "quality_b_blue", letter: "B", colorName: "蓝", rank: 2, enabled: true },
+    { id: "quality_a_purple", letter: "A", colorName: "紫", rank: 3, enabled: true },
+    { id: "quality_s_orange", letter: "S", colorName: "橙", rank: 4, enabled: true },
+  ],
 };
 
 const column = (name, format, type = "string") => ({ name, type, required: true, format });
@@ -191,9 +202,9 @@ const EXPECTED_SHEETS = {
 };
 
 const EXPECTED_RECORD_SCHEMAS_SHA256 =
-  "2ffa02b4d95a4d48fdab7daa4be03d0ee05cb1c1d26002fa037d3df7509c8c13";
+  "55dd8645bf6b7743263a63999190b02150d58cdeda5263ad6f3ccac70b2fdd27";
 const EXPECTED_RECORD_SCHEMA_AUTHORITY_SHA256 =
-  "f5e0c3babd95c21825cfd6b1c229463a019ca2fc928d37d434785bd4027abaee";
+  "6cc411e2519e02bcd9f0c857d561fa0c9462824a5bd3ae00c77a6c897382063b";
 
 function fail(message) {
   throw new Error(message);
@@ -1028,6 +1039,7 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     "preservedSchemaCatalog",
     "preservedSchemaAuthority",
     "diagnosticRootCatalog",
+    "serverOwnedInvariants",
     "classifications",
   ]);
   assert.deepEqual(manifest.canonicalization.recordHashInput, [
@@ -1137,8 +1149,6 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
   }
   assert.deepEqual(manifest.recordSchemas.v23TechnologyDefinitions.identityFields,
     ["technologyId", "revision"]);
-  assert.deepEqual(manifest.recordSchemas.v23AffixDefinitions.identityFields,
-    ["affixId", "revision"]);
   for (const root of ["v3Affixes", "technologies", "ruleGraphs"]) {
     assert.ok(manifest.recordSchemas[root].identityFields.includes(
       manifest.recordSchemas[root].revisionFields[0],
@@ -1231,6 +1241,22 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     assert.equal(catalog.keyContract, "SHA256_RFC8785_SUBJECT_PROJECTION_V1");
     assert.equal(Object.hasOwn(manifest.recordSchemas, root), false);
   }
+
+  assert.deepEqual(
+    manifest.serverOwnedInvariants,
+    EXPECTED_SERVER_OWNED_INVARIANTS,
+    "server-owned fixed invariants must remain complete, unique and canonical",
+  );
+  assert.equal(
+    new Set(manifest.serverOwnedInvariants.qualityProfiles.map((profile) => profile.id)).size,
+    4,
+    "quality profile invariant ids must be unique",
+  );
+  assert.equal(
+    new Set(manifest.serverOwnedInvariants.qualityProfiles.map((profile) => profile.letter)).size,
+    4,
+    "quality profile invariant letters must be unique",
+  );
 
   assert.deepEqual(manifest.modes, {
     MERGE_BY_STABLE_ID: {

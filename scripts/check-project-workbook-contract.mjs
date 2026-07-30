@@ -473,6 +473,58 @@ function assertFieldPathExists(source, typeName, fieldPath, label) {
   }
 }
 
+function importedTypeBindings(source, sourcePath) {
+  const bindings = new Map();
+  const pattern = /import\s+type\s*\{([\s\S]*?)\}\s*from\s*["']([^"']+)["']/g;
+  for (const match of source.matchAll(pattern)) {
+    let importedPath = match[2];
+    if (!importedPath.endsWith(".ts")) importedPath += ".ts";
+    const resolvedPath = path.posix.normalize(
+      path.posix.join(path.posix.dirname(sourcePath.replaceAll("\\", "/")), importedPath),
+    );
+    for (const rawBinding of match[1].split(",")) {
+      const binding = rawBinding.trim().replace(/^type\s+/, "");
+      if (!binding) continue;
+      const [importedName, localName = importedName] = binding.split(/\s+as\s+/);
+      bindings.set(localName.trim(), {
+        path: resolvedPath,
+        importedName: importedName.trim(),
+      });
+    }
+  }
+  return bindings;
+}
+
+function actualWorkspaceRootTypeRef(manifest, rootName, repositoryRoot) {
+  const workspacePath = manifest.workspaceStateSource.path;
+  const workspaceSource = readFileSync(path.join(repositoryRoot, workspacePath), "utf8");
+  const workspaceFields = interfaceFieldTypes(
+    workspaceSource,
+    manifest.workspaceStateSource.interface,
+  );
+  const propertyType = workspaceFields?.get(rootName);
+  assert.ok(propertyType, `WorkspaceState.${rootName} type is unresolved`);
+  const identifiers = [...new Set(
+    propertyType.match(/\b[A-Za-z_$][A-Za-z0-9_$]*\b/g) ?? [],
+  )].filter((name) => !["Array", "ReadonlyArray", "null", "undefined"].includes(name));
+  assert.equal(identifiers.length, 1, `WorkspaceState.${rootName} must expose one element/scalar alias`);
+  const typeName = identifiers[0];
+  if (["string", "number", "boolean"].includes(typeName)) {
+    return `${workspacePath}#${typeName}`;
+  }
+  if (parseTypeDeclarations(workspaceSource).has(typeName)) {
+    return `${workspacePath}#${typeName}`;
+  }
+  const imported = importedTypeBindings(workspaceSource, workspacePath).get(typeName);
+  assert.ok(imported, `WorkspaceState.${rootName} imported type ${typeName} is unresolved`);
+  assert.equal(
+    imported.importedName,
+    typeName,
+    `WorkspaceState.${rootName} aliased imports require an explicit canonical binding`,
+  );
+  return `${imported.path}#${imported.importedName}`;
+}
+
 export function recursiveProjectionGraphHash(manifest, sourceByPath) {
   const declarations = new Map();
   for (const [sourcePath, source] of sourceByPath) {
@@ -834,6 +886,11 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
 
 export function validatePreservedRootCatalog(manifest, repositoryRoot = process.cwd()) {
   for (const [rootName, catalog] of Object.entries(manifest.preservedRootCatalog)) {
+    assert.equal(
+      catalog.typeRef,
+      actualWorkspaceRootTypeRef(manifest, rootName, repositoryRoot),
+      `${rootName} typeRef must match the exact WorkspaceState property element/scalar type`,
+    );
     const [sourcePath, typeName] = catalog.typeRef.split("#");
     const source = readFileSync(path.join(repositoryRoot, sourcePath), "utf8");
     if (catalog.carrier === "whole_root_singleton") {

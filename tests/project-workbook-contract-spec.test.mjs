@@ -233,6 +233,30 @@ test("versioned definitions use composite identities and every frozen root has a
   legacyTypo.preservedRootCatalog.fiveAxisVertexSets.variants[0].recordKeyFields =
     ["vertexSetId"];
   assert.throws(() => validatePreservedRootCatalog(legacyTypo), /vertexSetId is absent/);
+
+  const structurallyPlausibleWrongRoot = clone(manifest);
+  structurallyPlausibleWrongRoot.preservedRootCatalog.recipes.typeRef =
+    "lib/types.ts#Candidate";
+  assert.throws(
+    () => validatePreservedRootCatalog(structurallyPlausibleWrongRoot),
+    /exact WorkspaceState property element\/scalar type/,
+  );
+
+  const wrongUnion = clone(manifest);
+  wrongUnion.preservedRootCatalog.fiveAxisVertexSets.typeRef =
+    "lib/types.ts#StoredFiveAxisViewDefinition";
+  assert.throws(
+    () => validatePreservedRootCatalog(wrongUnion),
+    /exact WorkspaceState property element\/scalar type/,
+  );
+
+  const wrongImportedBinding = clone(manifest);
+  wrongImportedBinding.preservedRootCatalog.performanceSummaryDefinitions.typeRef =
+    "lib/performance-summary.ts#PerformanceSummarySnapshot";
+  assert.throws(
+    () => validatePreservedRootCatalog(wrongImportedBinding),
+    /exact WorkspaceState property element\/scalar type/,
+  );
 });
 
 test("safe projections rederive unresolved diagnostic payloads", async () => {

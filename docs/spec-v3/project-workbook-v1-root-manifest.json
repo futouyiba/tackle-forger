@@ -107,12 +107,14 @@
           {"name":"code","type":"string","required":true,"format":"stable-code"},
           {"name":"message","type":"string","required":true,"format":"display-text"},
           {"name":"subject_ref","type":"string","required":true,"format":"opaque-token-or-null"},
+          {"name":"issue_fingerprint","type":"string","required":true,"format":"lowercase-sha256"},
           {"name":"diagnostic_evidence_sha256","type":"string","required":true,"format":"lowercase-sha256"}
         ],
         "primaryKey": [
           "root",
           "record_key",
-          "code"
+          "code",
+          "issue_fingerprint"
         ],
         "cardinality": "ZERO_OR_MORE"
       },
@@ -201,7 +203,7 @@
       "record_revision",
       "canonical_payload"
     ],
-    "diagnosticEvidenceHashInput": [
+    "diagnosticIssueFingerprintInput": [
       "root",
       "record_key",
       "diagnostic_schema_version",
@@ -210,6 +212,17 @@
       "code",
       "message",
       "subject_ref"
+    ],
+    "diagnosticEvidenceHashInput": [
+      "root",
+      "record_key",
+      "diagnostic_schema_version",
+      "subject_payload",
+      "severity",
+      "code",
+      "message",
+      "subject_ref",
+      "issue_fingerprint"
     ],
     "machineContentHashEncoding": "RFC8785_ORDERED_SHEET_ROW_PAIR_ARRAY_V1",
     "machineContentHashInput": [
@@ -398,6 +411,16 @@
     "skuDrawers": {
       "policy": "REJECT",
       "requiredActionCode": "create_sku"
+    },
+    "v23TechnologyDefinitions": {
+      "policy": "DERIVE_AND_VERIFY",
+      "requiredActionCode": "create_technology",
+      "actionInputFields": ["technologyId","itemPartId","name","description","memberAffixRefs","enabled"],
+      "derivedFields": ["revision","contentHash"],
+      "initialRevision": 1,
+      "contentHashField": "contentHash",
+      "contentHashInputFields": ["technologyId","revision","itemPartId","name","description","memberAffixRefs","enabled"],
+      "hashContract": "V23_TECHNOLOGY_CONTENT_HASH_RFC8785_SHA256_V1"
     }
   },
   "conditionalExactFieldPolicies": {},

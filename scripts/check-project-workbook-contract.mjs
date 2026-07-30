@@ -135,6 +135,31 @@ const EXPECTED_IMPORTABLE_CREATE_POLICIES = {
     policy: "REJECT",
     requiredActionCode: "create_sku",
   },
+  v23TechnologyDefinitions: {
+    policy: "DERIVE_AND_VERIFY",
+    requiredActionCode: "create_technology",
+    actionInputFields: [
+      "technologyId",
+      "itemPartId",
+      "name",
+      "description",
+      "memberAffixRefs",
+      "enabled",
+    ],
+    derivedFields: ["revision", "contentHash"],
+    initialRevision: 1,
+    contentHashField: "contentHash",
+    contentHashInputFields: [
+      "technologyId",
+      "revision",
+      "itemPartId",
+      "name",
+      "description",
+      "memberAffixRefs",
+      "enabled",
+    ],
+    hashContract: "V23_TECHNOLOGY_CONTENT_HASH_RFC8785_SHA256_V1",
+  },
 };
 
 const EXPECTED_TERMINAL_LIFECYCLE_POLICY = {
@@ -256,9 +281,10 @@ const EXPECTED_SHEETS = {
       column("subject_payload_json", "diagnostic-subject-json"),
       column("severity", "diagnostic-severity"), column("code", "stable-code"),
       column("message", "display-text"), column("subject_ref", "opaque-token-or-null"),
+      column("issue_fingerprint", "lowercase-sha256"),
       column("diagnostic_evidence_sha256", "lowercase-sha256"),
     ],
-    primaryKey: ["root", "record_key", "code"],
+    primaryKey: ["root", "record_key", "code", "issue_fingerprint"],
     cardinality: "ZERO_OR_MORE",
   },
   README: {
@@ -980,10 +1006,30 @@ export function validateImportableExactFields(
   validateImportableRecordPayload(manifest, root, candidatePayload, repositoryRoot);
   if (existingPayload === undefined) {
     const createPolicy = manifest.importableCreatePolicies[root];
-    assert.ok(
-      !createPolicy,
-      `${root} workbook records cannot be created; use ${createPolicy?.requiredActionCode}`,
-    );
+    if (createPolicy?.policy === "REJECT") {
+      assert.fail(`${root} workbook records cannot be created; use ${createPolicy.requiredActionCode}`);
+    }
+    if (createPolicy?.policy === "DERIVE_AND_VERIFY") {
+      assert.equal(
+        candidatePayload.revision,
+        createPolicy.initialRevision,
+        `${root} new records must use initial revision ${createPolicy.initialRevision}`,
+      );
+      const hashInput = Object.fromEntries(
+        createPolicy.contentHashInputFields.map((field) => {
+          assert.ok(
+            Object.hasOwn(candidatePayload, field),
+            `${root} create payload is missing hash input ${field}`,
+          );
+          return [field, candidatePayload[field]];
+        }),
+      );
+      assert.equal(
+        candidatePayload[createPolicy.contentHashField],
+        sha256(canonicalJson(hashInput)),
+        `${root}.${createPolicy.contentHashField} does not match ${createPolicy.hashContract}`,
+      );
+    }
     return true;
   }
   validateImportableRecordPayload(manifest, root, existingPayload, repositoryRoot);
@@ -1386,8 +1432,8 @@ export function validateServerRefEnvelope(manifest, row, context = {}) {
   return true;
 }
 
-function diagnosticEvidenceHash(manifest, row) {
-  const values = {
+function diagnosticEnvelopeValues(row) {
+  return {
     root: row.root,
     record_key: JSON.parse(row.record_key),
     diagnostic_schema_version: row.diagnostic_schema_version,
@@ -1396,13 +1442,35 @@ function diagnosticEvidenceHash(manifest, row) {
     code: row.code,
     message: row.message,
     subject_ref: row.subject_ref === "null" ? null : row.subject_ref,
+    issue_fingerprint: row.issue_fingerprint,
   };
+}
+
+function diagnosticHashFromFields(manifest, values, fields, label) {
   return sha256(canonicalJson(
-    manifest.canonicalization.diagnosticEvidenceHashInput.map((field) => {
-      assert.ok(Object.hasOwn(values, field), `diagnostic hash input ${field} is unresolved`);
+    fields.map((field) => {
+      assert.ok(Object.hasOwn(values, field), `${label} hash input ${field} is unresolved`);
       return [field, values[field]];
     }),
   ));
+}
+
+function diagnosticIssueFingerprint(manifest, row) {
+  return diagnosticHashFromFields(
+    manifest,
+    diagnosticEnvelopeValues(row),
+    manifest.canonicalization.diagnosticIssueFingerprintInput,
+    "diagnostic issue fingerprint",
+  );
+}
+
+function diagnosticEvidenceHash(manifest, row) {
+  return diagnosticHashFromFields(
+    manifest,
+    diagnosticEnvelopeValues(row),
+    manifest.canonicalization.diagnosticEvidenceHashInput,
+    "diagnostic evidence",
+  );
 }
 
 export function validateDiagnosticEnvelope(manifest, row) {
@@ -1417,6 +1485,7 @@ export function validateDiagnosticEnvelope(manifest, row) {
     "code",
     "message",
     "subject_ref",
+    "issue_fingerprint",
     "diagnostic_evidence_sha256",
   ], "diagnostic envelope must use the closed field order");
   const sheet = manifest.workbookSchema.sheets.__TF_DIAGNOSTICS;
@@ -1438,10 +1507,16 @@ export function validateDiagnosticEnvelope(manifest, row) {
     "code",
     "message",
     "subject_ref",
+    "issue_fingerprint",
     "diagnostic_evidence_sha256",
   ]) {
     validateMachineCell(column(name), row[name]);
   }
+  assert.equal(
+    row.issue_fingerprint,
+    diagnosticIssueFingerprint(manifest, row),
+    `${row.root} issue_fingerprint does not match the closed diagnostic issue`,
+  );
   const expectedHash = diagnosticEvidenceHash(manifest, row);
   assert.ok(
     timingSafeEqual(
@@ -1449,6 +1524,27 @@ export function validateDiagnosticEnvelope(manifest, row) {
       Buffer.from(expectedHash, "hex"),
     ),
     `${row.root} diagnostic_evidence_sha256 does not match the closed row envelope`,
+  );
+  return true;
+}
+
+export function validateDiagnosticRows(manifest, rows) {
+  assert.ok(Array.isArray(rows), "diagnostic rows are required");
+  const sheet = manifest.workbookSchema.sheets.__TF_DIAGNOSTICS;
+  for (const row of rows) validateDiagnosticEnvelope(manifest, row);
+  const canonicalRows = [...rows].sort((left, right) =>
+    compareWorkbookPrimaryKey(manifest, left, right, sheet.primaryKey));
+  const primaryKeys = rows.map((row) =>
+    canonicalJson(sheet.primaryKey.map((field) => row[field])));
+  assert.equal(
+    new Set(primaryKeys).size,
+    primaryKeys.length,
+    "__TF_DIAGNOSTICS contains a duplicate primary key",
+  );
+  assert.equal(
+    canonicalJson(rows),
+    canonicalJson(canonicalRows),
+    "__TF_DIAGNOSTICS rows must use canonical primary-key order",
   );
   return true;
 }
@@ -1710,11 +1806,12 @@ export function validateRootSummary(
     );
     for (const record of rootRecords) {
       assert.equal(record.root, row.root, `${row.root} summary context contains another root`);
-      if (classification === "export_only_diagnostic") {
-        validateDiagnosticEnvelope(manifest, record);
-      } else {
+      if (classification !== "export_only_diagnostic") {
         validateRecordEnvelope(manifest, record, { repositoryRoot });
       }
+    }
+    if (classification === "export_only_diagnostic") {
+      validateDiagnosticRows(manifest, rootRecords);
     }
     assert.equal(
       row.root_content_sha256,
@@ -1905,7 +2002,7 @@ export function validateMachineCell(columnSchema, value, cellKind = "string", co
       `${value} is not a current WorkspaceState root`,
     );
   } else if (format === "diagnostic-severity") {
-    assert.ok(["INFO", "WARNING", "ERROR"].includes(value));
+    assert.ok(["INFO", "WARNING", "ERROR", "BLOCKER"].includes(value));
   } else if (format === "stable-code") {
     assert.match(value, /^[A-Z][A-Z0-9_]{0,127}$/);
   } else if (format === "classification") {
@@ -2320,6 +2417,7 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     "rootManifestHashInput",
     "workbookSchemaHashInput",
     "recordHashInput",
+    "diagnosticIssueFingerprintInput",
     "diagnosticEvidenceHashInput",
     "machineContentHashEncoding",
     "machineContentHashInput",
@@ -2357,6 +2455,16 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     "record_revision",
     "canonical_payload",
   ]);
+  assert.deepEqual(manifest.canonicalization.diagnosticIssueFingerprintInput, [
+    "root",
+    "record_key",
+    "diagnostic_schema_version",
+    "subject_payload",
+    "severity",
+    "code",
+    "message",
+    "subject_ref",
+  ]);
   assert.deepEqual(manifest.canonicalization.diagnosticEvidenceHashInput, [
     "root",
     "record_key",
@@ -2366,6 +2474,7 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
     "code",
     "message",
     "subject_ref",
+    "issue_fingerprint",
   ]);
   assert.equal(
     manifest.canonicalization.machineContentHashEncoding,
@@ -2489,9 +2598,45 @@ export function validateProjectWorkbookManifest(manifest, workspaceRoots) {
   );
   for (const [root, policy] of Object.entries(manifest.importableCreatePolicies)) {
     assert.ok(manifest.recordSchemas[root], `${root} create policy has no record schema`);
-    assertExactKeys(policy, ["policy", "requiredActionCode"], `${root} create policy`);
-    assert.equal(policy.policy, "REJECT");
     assert.match(policy.requiredActionCode, /^[a-z][a-z0-9_]*$/);
+    if (policy.policy === "REJECT") {
+      assertExactKeys(policy, ["policy", "requiredActionCode"], `${root} create policy`);
+      continue;
+    }
+    assert.equal(policy.policy, "DERIVE_AND_VERIFY", `${root} create policy is unsupported`);
+    assertExactKeys(policy, [
+      "policy",
+      "requiredActionCode",
+      "actionInputFields",
+      "derivedFields",
+      "initialRevision",
+      "contentHashField",
+      "contentHashInputFields",
+      "hashContract",
+    ], `${root} create policy`);
+    assert.ok(Number.isSafeInteger(policy.initialRevision) && policy.initialRevision > 0);
+    assert.deepEqual(
+      [...policy.actionInputFields, ...policy.derivedFields].sort(),
+      [...manifest.recordSchemas[root].allowedFields].sort(),
+      `${root} create projection must classify every allowed field as action input or derived`,
+    );
+    assert.deepEqual(policy.derivedFields, ["revision", policy.contentHashField]);
+    assert.equal(policy.contentHashField, "contentHash");
+    assert.deepEqual(
+      policy.contentHashInputFields,
+      manifest.recordSchemas[root].allowedFields.filter((field) => field !== policy.contentHashField),
+      `${root} create content hash must bind every non-hash payload field in schema order`,
+    );
+    assert.deepEqual(manifest.recordSchemas[root].revisionFields, ["revision"]);
+    assert.deepEqual(manifest.recordSchemas[root].hashFields, [policy.contentHashField]);
+    assert.match(policy.hashContract, /^[A-Z][A-Z0-9_]+$/);
+  }
+  for (const [root, schema] of Object.entries(manifest.recordSchemas)) {
+    if (schema.revisionFields.length === 0 && schema.hashFields.length === 0) continue;
+    assert.ok(
+      manifest.importableCreatePolicies[root],
+      `${root} carries server-derived revision/hash fields without a create policy`,
+    );
   }
   assert.deepEqual(
     manifest.conditionalExactFieldPolicies,

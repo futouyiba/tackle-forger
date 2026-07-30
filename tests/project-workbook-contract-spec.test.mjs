@@ -15,6 +15,7 @@ import {
   validateMachineCell,
   validateDiagnosticRootCatalog,
   validateDiagnosticEnvelope,
+  validateDiagnosticRows,
   validateImportableExactFields,
   validatePreservedRootCatalog,
   validateProjectWorkbookManifest,
@@ -194,8 +195,8 @@ function workbookEnvelope(manifest, context) {
   };
 }
 
-function diagnosticEvidence(manifest, row) {
-  const values = {
+function diagnosticEnvelopeValues(row) {
+  return {
     root: row.root,
     record_key: JSON.parse(row.record_key),
     diagnostic_schema_version: row.diagnostic_schema_version,
@@ -204,10 +205,23 @@ function diagnosticEvidence(manifest, row) {
     code: row.code,
     message: row.message,
     subject_ref: row.subject_ref === "null" ? null : row.subject_ref,
+    issue_fingerprint: row.issue_fingerprint,
   };
+}
+
+function diagnosticHash(manifest, row, inputField) {
+  const values = diagnosticEnvelopeValues(row);
   return createHash("sha256").update(canonicalPayload(
-    manifest.canonicalization.diagnosticEvidenceHashInput.map((field) => [field, values[field]]),
+    manifest.canonicalization[inputField].map((field) => [field, values[field]]),
   )).digest("hex");
+}
+
+function diagnosticFingerprint(manifest, row) {
+  return diagnosticHash(manifest, row, "diagnosticIssueFingerprintInput");
+}
+
+function diagnosticEvidence(manifest, row) {
+  return diagnosticHash(manifest, row, "diagnosticEvidenceHashInput");
 }
 
 function rootSummaryFixture(manifest) {
@@ -546,7 +560,7 @@ test("v23 technology uses create/update successor actions and never rewrites one
     manifest.recordSchemas.v23TechnologyDefinitions.exactFields,
     manifest.recordSchemas.v23TechnologyDefinitions.allowedFields,
   );
-  const technology = {
+  const technologyWithoutHash = {
     technologyId: "technology:1",
     revision: 1,
     itemPartId: "part:rod",
@@ -554,8 +568,36 @@ test("v23 technology uses create/update successor actions and never rewrites one
     description: "",
     memberAffixRefs: [],
     enabled: true,
-    contentHash: "a".repeat(64),
   };
+  const technology = {
+    ...technologyWithoutHash,
+    contentHash: createHash("sha256").update(canonicalPayload(technologyWithoutHash)).digest("hex"),
+  };
+  assert.deepEqual(manifest.importableCreatePolicies.v23TechnologyDefinitions, {
+    policy: "DERIVE_AND_VERIFY",
+    requiredActionCode: "create_technology",
+    actionInputFields: [
+      "technologyId",
+      "itemPartId",
+      "name",
+      "description",
+      "memberAffixRefs",
+      "enabled",
+    ],
+    derivedFields: ["revision", "contentHash"],
+    initialRevision: 1,
+    contentHashField: "contentHash",
+    contentHashInputFields: [
+      "technologyId",
+      "revision",
+      "itemPartId",
+      "name",
+      "description",
+      "memberAffixRefs",
+      "enabled",
+    ],
+    hashContract: "V23_TECHNOLOGY_CONTENT_HASH_RFC8785_SHA256_V1",
+  });
   assert.equal(
     validateImportableExactFields(
       manifest,
@@ -565,6 +607,45 @@ test("v23 technology uses create/update successor actions and never rewrites one
     ),
     true,
     "a new Technology may declare its initial itemPartId",
+  );
+  assert.throws(
+    () => validateImportableExactFields(
+      manifest,
+      "v23TechnologyDefinitions",
+      { ...technology, revision: 2 },
+      undefined,
+    ),
+    /initial revision 1/,
+  );
+  assert.throws(
+    () => validateImportableExactFields(
+      manifest,
+      "v23TechnologyDefinitions",
+      { ...technology, contentHash: "a".repeat(64) },
+      undefined,
+    ),
+    /does not match V23_TECHNOLOGY_CONTENT_HASH/,
+  );
+  const incompleteTechnology = { ...technology };
+  delete incompleteTechnology.description;
+  assert.throws(
+    () => validateImportableExactFields(
+      manifest,
+      "v23TechnologyDefinitions",
+      incompleteTechnology,
+      undefined,
+    ),
+    /description is required/,
+  );
+  assert.equal(
+    validateImportableExactFields(
+      manifest,
+      "v23TechnologyDefinitions",
+      technology,
+      technology,
+    ),
+    true,
+    "an existing ID with identical immutable revision is a no-op, not a create",
   );
   for (const mutation of [
     { name: "力量技术（修订）" },
@@ -584,6 +665,15 @@ test("v23 technology uses create/update successor actions and never rewrites one
       /is exact-equal for an existing record/,
     );
   }
+  const derivedCreateRoots = Object.entries(manifest.recordSchemas)
+    .filter(([, schema]) => schema.revisionFields.length > 0 || schema.hashFields.length > 0)
+    .map(([root]) => root);
+  assert.deepEqual(derivedCreateRoots, ["v23TechnologyDefinitions", "skuDrawers"]);
+  assert.deepEqual(
+    derivedCreateRoots.filter((root) => !manifest.importableCreatePolicies[root]),
+    [],
+    "every importable root carrying server-derived revision/hash fields has a create policy",
+  );
 });
 
 test("every importable existing record exact-compares its complete schema identity", async () => {
@@ -1373,7 +1463,9 @@ test("every closed format validates its domain and unknown formats fail closed",
   assert.equal(validateMachineCell(byFormat.get("workspace-root"), "parameters"), true);
   assert.throws(() => validateMachineCell(byFormat.get("workspace-root"), "futureRoot"));
   assert.equal(validateMachineCell(byFormat.get("diagnostic-severity"), "WARNING"), true);
+  assert.equal(validateMachineCell(byFormat.get("diagnostic-severity"), "BLOCKER"), true);
   assert.throws(() => validateMachineCell(byFormat.get("diagnostic-severity"), "warn"));
+  assert.throws(() => validateMachineCell(byFormat.get("diagnostic-severity"), "CRITICAL"));
   assert.equal(validateMachineCell(byFormat.get("stable-code"), "SCHEMA_CONFLICT"), true);
   assert.throws(() => validateMachineCell(byFormat.get("stable-code"), "schema-conflict"));
   assert.equal(validateMachineCell(byFormat.get("classification"), "preserved_frozen"), true);
@@ -2145,10 +2237,50 @@ test("all diagnostic roots derive closed non-semantic subject keys from safe pay
     code: "PROJECTION_STALE",
     message: "派生结果已过期",
     subject_ref: "null",
+    issue_fingerprint: "",
     diagnostic_evidence_sha256: "",
   };
+  diagnosticRow.issue_fingerprint = diagnosticFingerprint(manifest, diagnosticRow);
   diagnosticRow.diagnostic_evidence_sha256 = diagnosticEvidence(manifest, diagnosticRow);
   assert.equal(validateDiagnosticEnvelope(manifest, diagnosticRow), true);
+  const blockerRow = {
+    ...diagnosticRow,
+    severity: "BLOCKER",
+    message: "派生结果不可重放",
+    issue_fingerprint: "",
+    diagnostic_evidence_sha256: "",
+  };
+  blockerRow.issue_fingerprint = diagnosticFingerprint(manifest, blockerRow);
+  blockerRow.diagnostic_evidence_sha256 = diagnosticEvidence(manifest, blockerRow);
+  const diagnosticRows = [blockerRow, diagnosticRow].sort((left, right) =>
+    compareWorkbookPrimaryKey(
+      manifest,
+      left,
+      right,
+      manifest.workbookSchema.sheets.__TF_DIAGNOSTICS.primaryKey,
+    ));
+  assert.equal(
+    validateDiagnosticRows(manifest, diagnosticRows),
+    true,
+    "same subject and code retain distinct issues through their closed fingerprint",
+  );
+  assert.throws(
+    () => validateDiagnosticRows(manifest, [...diagnosticRows].reverse()),
+    /canonical primary-key order/,
+  );
+  assert.notEqual(blockerRow.issue_fingerprint, diagnosticRow.issue_fingerprint);
+  assert.throws(
+    () => validateDiagnosticRows(manifest, [diagnosticRow, { ...diagnosticRow }]),
+    /duplicate primary key/,
+    "an exact duplicate issue is rejected deterministically",
+  );
+  assert.throws(
+    () => validateDiagnosticEnvelope(manifest, {
+      ...diagnosticRow,
+      issue_fingerprint: "f".repeat(64),
+    }),
+    /issue_fingerprint does not match/,
+  );
   const subjectMutation = {
     ...diagnosticRow,
     subject_payload_json: canonicalPayload({ id: "projection:2" }),
@@ -2157,7 +2289,15 @@ test("all diagnostic roots derive closed non-semantic subject keys from safe pay
     () => validateDiagnosticEnvelope(manifest, subjectMutation),
     /does not match the safe subject payload/,
   );
-  const evidenceMutation = { ...diagnosticRow, message: "被篡改的显示信息" };
+  const issueMutation = { ...diagnosticRow, message: "被篡改的显示信息" };
+  assert.throws(
+    () => validateDiagnosticEnvelope(manifest, issueMutation),
+    /issue_fingerprint does not match/,
+  );
+  const evidenceMutation = {
+    ...diagnosticRow,
+    diagnostic_evidence_sha256: "e".repeat(64),
+  };
   assert.throws(
     () => validateDiagnosticEnvelope(manifest, evidenceMutation),
     /diagnostic_evidence_sha256 does not match/,
